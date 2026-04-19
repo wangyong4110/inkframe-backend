@@ -33,12 +33,12 @@ func (s *TenantService) CreateTenant(req *CreateTenantRequest) (*model.Tenant, e
 	}
 
 	tenant := &model.Tenant{
-		Name:      req.Name,
-		Code:      req.Code,
-		Plan:      req.Plan,
-		Status:    "active",
+		Name:         req.Name,
+		Code:         req.Code,
+		Plan:         req.Plan,
+		Status:       "active",
 		MaxProjects:  req.MaxProjects,
-		MaxUsers:    req.MaxUsers,
+		MaxUsers:     req.MaxUsers,
 		MaxStorageMB: req.MaxStorageMB,
 	}
 
@@ -166,9 +166,9 @@ func (s *TenantService) UpdateUsage(tenantID uint, projectDelta, userDelta, stor
 
 // ProjectService 项目服务
 type ProjectService struct {
-	tenantRepo *TenantRepository
+	tenantRepo  *TenantRepository
 	projectRepo *ProjectRepository
-	novelRepo  *NovelRepository
+	novelRepo   *NovelRepository
 }
 
 func NewProjectService(
@@ -177,9 +177,9 @@ func NewProjectService(
 	novelRepo *NovelRepository,
 ) *ProjectService {
 	return &ProjectService{
-		tenantRepo: tenantRepo,
+		tenantRepo:  tenantRepo,
 		projectRepo: projectRepo,
-		novelRepo:  novelRepo,
+		novelRepo:   novelRepo,
 	}
 }
 
@@ -288,7 +288,7 @@ func (s *ProjectService) GetProjectStats(tenantID, projectID uint) (*ProjectStat
 	if project.ProjectType == "novel" {
 		novels, _ := s.novelRepo.ListByTenantAndProject(tenantID, projectID)
 		stats.NovelCount = len(novels)
-		
+
 		totalWords := 0
 		for _, novel := range novels {
 			totalWords += novel.TotalWords
@@ -306,19 +306,19 @@ func (s *ProjectService) GetProjectStats(tenantID, projectID uint) (*ProjectStat
 // 创建租户请求
 type CreateTenantRequest struct {
 	Name         string                 `json:"name" binding:"required"`
-	Code        string                 `json:"code" binding:"required"`
-	Plan        string                 `json:"plan"`
-	MaxProjects int                    `json:"max_projects"`
-	MaxUsers    int                    `json:"max_users"`
-	MaxStorageMB int                   `json:"max_storage_mb"`
-	Settings    map[string]interface{} `json:"settings"`
+	Code         string                 `json:"code" binding:"required"`
+	Plan         string                 `json:"plan"`
+	MaxProjects  int                    `json:"max_projects"`
+	MaxUsers     int                    `json:"max_users"`
+	MaxStorageMB int                    `json:"max_storage_mb"`
+	Settings     map[string]interface{} `json:"settings"`
 }
 
 // 更新租户请求
 type UpdateTenantRequest struct {
-	Name        string `json:"name"`
-	Logo       string `json:"logo"`
-	Description string `json:"description"`
+	Name         string `json:"name"`
+	Logo         string `json:"logo"`
+	Description  string `json:"description"`
 	ContactEmail string `json:"contact_email"`
 	ContactPhone string `json:"contact_phone"`
 }
@@ -346,8 +346,8 @@ type UpdateProjectRequest struct {
 
 // 配额信息
 type QuotaInfo struct {
-	Projects   Quota `json:"projects"`
-	Users      Quota `json:"users"`
+	Projects  Quota `json:"projects"`
+	Users     Quota `json:"users"`
 	StorageMB Quota `json:"storage_mb"`
 }
 
@@ -358,7 +358,7 @@ type Quota struct {
 
 // 项目统计
 type ProjectStats struct {
-	Project     *model.TenantProject `json:"project"`
+	Project    *model.TenantProject `json:"project"`
 	NovelCount int                  `json:"novel_count"`
 	TotalWords int                  `json:"total_words"`
 }
@@ -398,13 +398,4 @@ type UserRepository interface {
 	GetByEmail(email string) (*model.User, error)
 	Update(user *model.User) error
 	Delete(id uint) error
-}
-
-// NovelRepository 小说仓库扩展接口
-type NovelRepository interface {
-	Create(novel *model.Novel) error
-	GetByID(id uint) (*model.Novel, error)
-	Update(novel *model.Novel) error
-	Delete(id uint) error
-	ListByTenantAndProject(tenantID, projectID uint) ([]*model.Novel, error)
 }

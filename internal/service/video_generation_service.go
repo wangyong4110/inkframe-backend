@@ -14,66 +14,48 @@ import (
 
 // VideoGenerationRequest 视频生成请求
 type VideoGenerationRequest struct {
-	NovelID        uint     `json:"novel_id"`
-	ChapterID      uint     `json:"chapter_id"`
-	Title          string   `json:"title"`
-	Resolution     string   `json:"resolution"`      // 720p, 1080p, 4k
-	FrameRate      int      `json:"frame_rate"`      // 24, 30, 60
-	AspectRatio    string   `json:"aspect_ratio"`    // 16:9, 9:16, 1:1
-	ArtStyle       string   `json:"art_style"`       // realistic, anime, cartoon
-	ColorGrade     string   `json:"color_grade"`    // cinematic, vintage, vibrant
+	NovelID     uint   `json:"novel_id"`
+	ChapterID   uint   `json:"chapter_id"`
+	Title       string `json:"title"`
+	Resolution  string `json:"resolution"`   // 720p, 1080p, 4k
+	FrameRate   int    `json:"frame_rate"`   // 24, 30, 60
+	AspectRatio string `json:"aspect_ratio"` // 16:9, 9:16, 1:1
+	ArtStyle    string `json:"art_style"`    // realistic, anime, cartoon
+	ColorGrade  string `json:"color_grade"`  // cinematic, vintage, vibrant
 }
 
 // VideoGenerationResult 视频生成结果
 type VideoGenerationResult struct {
-	VideoID       uint   `json:"video_id"`
-	Status        string `json:"status"`        // planning, storyboard, generating, rendering, completed
-	Progress      float64 `json:"progress"`   // 0-100
-	TotalShots    int    `json:"total_shots"`
-	GeneratedShots int    `json:"generated_shots"`
-	ErrorMessage  string `json:"error_message,omitempty"`
+	VideoID        uint    `json:"video_id"`
+	Status         string  `json:"status"`   // planning, storyboard, generating, rendering, completed
+	Progress       float64 `json:"progress"` // 0-100
+	TotalShots     int     `json:"total_shots"`
+	GeneratedShots int     `json:"generated_shots"`
+	ErrorMessage   string  `json:"error_message,omitempty"`
 }
 
 // ============================================
 // 1. 智能分镜生成器
 // ============================================
 
-
 const (
-	ShotWide       ShotType = "wide"        // 远景
-	ShotMedium     ShotType = "medium"      // 中景
-	ShotCloseUp    ShotType = "close_up"   // 近景
-	ShotExtreme    ShotType = "extreme"     // 特写
-	ShotPOV        ShotType = "pov"         // 主观镜头
+	ShotWide    ShotType = "wide"     // 远景
+	ShotMedium  ShotType = "medium"   // 中景
+	ShotCloseUp ShotType = "close_up" // 近景
+	ShotExtreme ShotType = "extreme"  // 特写
+	ShotPOV     ShotType = "pov"      // 主观镜头
 )
 
+type CameraMovement string
 
 const (
-	AngleEyeLevel  ShotAngle = "eye_level"   // 平视
-	AngleLow       ShotAngle = "low"         // 仰视
-	AngleHigh      ShotAngle = "high"       // 俯视
-	AngleDutch     ShotAngle = "dutch"       // 荷兰角
+	CamStatic CameraMovement = "static" // 静止
+	CamPan    CameraMovement = "pan"    // 摇镜
+	CamTilt   CameraMovement = "tilt"   // 俯仰
+	CamZoom   CameraMovement = "zoom"   // 变焦
+	CamDolly  CameraMovement = "dolly"  // 推拉
+	CamTrack  CameraMovement = "track"  // 跟踪
 )
-
-
-const (
-	CamStatic  CameraMovement = "static"   // 静止
-	CamPan     CameraMovement = "pan"      // 摇镜
-	CamTilt    CameraMovement = "tilt"     // 俯仰
-	CamZoom    CameraMovement = "zoom"     // 变焦
-	CamDolly   CameraMovement = "dolly"    // 推拉
-	CamTrack   CameraMovement = "track"    // 跟踪
-)
-
-
-
-
-// NewIntelligentStoryboardService 创建智能分镜服务
-func NewIntelligentStoryboardService(aiService *AIService) *IntelligentStoryboardService {
-	return &IntelligentStoryboardService{
-		aiService: aiService,
-	}
-}
 
 // GenerateStoryboard 生成分镜
 func (s *IntelligentStoryboardService) GenerateStoryboard(chapter *model.Chapter, characters []*model.Character, config *VideoGenerationRequest) ([]*StoryboardShot, error) {
@@ -103,15 +85,15 @@ func (s *IntelligentStoryboardService) GenerateStoryboard(chapter *model.Chapter
 
 // SceneAnalysis 场景分析
 type SceneAnalysis struct {
-	Type         string   `json:"type"`          // dialogue, action, description, transition
-	Description  string   `json:"description"`
-	Dialogue     string   `json:"dialogue,omitempty"`
-	Characters   []string `json:"characters"`
-	Location     string   `json:"location"`
-	TimeOfDay    string   `json:"time_of_day"`
-	Emotion      string   `json:"emotion"`
-	Intensity    float64  `json:"intensity"`     // 0-1
-	Pacing       string   `json:"pacing"`         // fast, medium, slow
+	Type        string   `json:"type"` // dialogue, action, description, transition
+	Description string   `json:"description"`
+	Dialogue    string   `json:"dialogue,omitempty"`
+	Characters  []string `json:"characters"`
+	Location    string   `json:"location"`
+	TimeOfDay   string   `json:"time_of_day"`
+	Emotion     string   `json:"emotion"`
+	Intensity   float64  `json:"intensity"` // 0-1
+	Pacing      string   `json:"pacing"`    // fast, medium, slow
 }
 
 // 分析章节场景
@@ -122,9 +104,9 @@ func (s *IntelligentStoryboardService) analyzeChapterScenes(content string) []*S
 	paragraphs := strings.Split(content, "\n\n")
 
 	currentScene := &SceneAnalysis{
-		Type:        "description",
-		Intensity:  0.5,
-		Pacing:     "medium",
+		Type:      "description",
+		Intensity: 0.5,
+		Pacing:    "medium",
 	}
 
 	for _, para := range paragraphs {
@@ -134,7 +116,7 @@ func (s *IntelligentStoryboardService) analyzeChapterScenes(content string) []*S
 		}
 
 		// 检测对话
-		if strings.Contains(para, "」) {
+		if strings.Contains(para, "」") {
 			dialogues := s.extractDialogues(para)
 			for _, d := range dialogues {
 				if len(d) > 10 {
@@ -165,9 +147,9 @@ func (s *IntelligentStoryboardService) analyzeChapterScenes(content string) []*S
 		if len(scenes) > 0 && len(scenes[len(scenes)-1].Description) > 0 {
 			scenes = append(scenes, currentScene)
 			currentScene = &SceneAnalysis{
-				Type:        "description",
-				Intensity:  0.5,
-				Pacing:     "medium",
+				Type:      "description",
+				Intensity: 0.5,
+				Pacing:    "medium",
 			}
 		}
 	}
@@ -411,11 +393,11 @@ func (s *IntelligentStoryboardService) estimateDuration(scene *SceneAnalysis) fl
 // 确定表情
 func (s *IntelligentStoryboardService) determineExpression(emotion string) string {
 	emotionMap := map[string]string{
-		"紧张":  "worried",
-		"愤怒":  "angry",
-		"悲伤":  "sad",
-		"快乐":  "happy",
-		"平静":  "calm",
+		"紧张":      "worried",
+		"愤怒":      "angry",
+		"悲伤":      "sad",
+		"快乐":      "happy",
+		"平静":      "calm",
 		"neutral": "neutral",
 	}
 
@@ -524,24 +506,14 @@ func (s *IntelligentStoryboardService) buildPrompt(shot *StoryboardShot, config 
 // 2. 视频增强服务
 // ============================================
 
-
 const (
 	EnhanceFrameInterpolation EnhancementType = "frame_interpolation" // 帧插值
 	EnhanceSuperResolution    EnhancementType = "super_resolution"    // 超分辨率
 	EnhanceColorCorrection    EnhancementType = "color_correction"    // 色彩校正
-	EnhanceStabilization      EnhancementType = "stabilization"      // 稳定化
-	EnhanceDenoising          EnhancementType = "denoising"          // 降噪
-	EnhanceStyleTransfer      EnhancementType = "style_transfer"     // 风格迁移
+	EnhanceStabilization      EnhancementType = "stabilization"       // 稳定化
+	EnhanceDenoising          EnhancementType = "denoising"           // 降噪
+	EnhanceStyleTransfer      EnhancementType = "style_transfer"      // 风格迁移
 )
-
-
-
-// NewVideoEnhancementService 创建视频增强服务
-func NewVideoEnhancementService(aiService *AIService) *VideoEnhancementService {
-	return &VideoEnhancementService{
-		aiService: aiService,
-	}
-}
 
 // GetDefaultEnhancements 获取默认增强配置
 func (s *VideoEnhancementService) GetDefaultEnhancements() []*EnhancementConfig {
@@ -553,9 +525,9 @@ func (s *VideoEnhancementService) GetDefaultEnhancements() []*EnhancementConfig 
 			TargetFPS: 60,
 		},
 		{
-			Type:      EnhanceSuperResolution,
-			Enabled:   true,
-			Intensity: 0.8,
+			Type:        EnhanceSuperResolution,
+			Enabled:     true,
+			Intensity:   0.8,
 			ScaleFactor: 1.5,
 		},
 		{
@@ -656,36 +628,36 @@ func (s *VideoEnhancementService) applyStabilization(video *model.Video, config 
 
 // FrameGenerationRequest 帧生成请求
 type FrameGenerationRequest struct {
-	Shot          *StoryboardShot      `json:"shot"`
-	Characters    []*CharacterVisual   `json:"characters"`
-	SceneVisual   *SceneVisual        `json:"scene_visual"`
+	Shot              *StoryboardShot    `json:"shot"`
+	Characters        []*CharacterVisual `json:"characters"`
+	SceneVisual       *SceneVisual       `json:"scene_visual"`
 	ConsistencyConfig *ConsistencyConfig `json:"consistency_config"`
 }
 
 // CharacterVisual 角色视觉
 type CharacterVisual struct {
-	CharacterID    uint    `json:"character_id"`
-	Name           string  `json:"name"`
-	BaseImageURL   string  `json:"base_image_url"`
-	LoraModelID    string  `json:"lora_model_id,omitempty"`
-	LoraWeight     float64 `json:"lora_weight"`
+	CharacterID      uint              `json:"character_id"`
+	Name             string            `json:"name"`
+	BaseImageURL     string            `json:"base_image_url"`
+	LoraModelID      string            `json:"lora_model_id,omitempty"`
+	LoraWeight       float64           `json:"lora_weight"`
 	ExpressionImages map[string]string `json:"expression_images"`
 }
 
 // SceneVisual 场景视觉
 type SceneVisual struct {
-	SceneID        uint    `json:"scene_id"`
-	Name           string  `json:"name"`
-	BaseImageURL   string  `json:"base_image_url"`
-	LoraModelID    string  `json:"lora_model_id,omitempty"`
-	LoraWeight     float64 `json:"lora_weight"`
+	SceneID      uint    `json:"scene_id"`
+	Name         string  `json:"name"`
+	BaseImageURL string  `json:"base_image_url"`
+	LoraModelID  string  `json:"lora_model_id,omitempty"`
+	LoraWeight   float64 `json:"lora_weight"`
 }
 
 // ConsistencyConfig 一致性配置
 type ConsistencyConfig struct {
-	UseLora        bool    `json:"use_lora"`
-	UseIPAdapter   bool    `json:"use_ip_adapter"`
-	UseControlNet  bool    `json:"use_control_net"`
+	UseLora         bool    `json:"use_lora"`
+	UseIPAdapter    bool    `json:"use_ip_adapter"`
+	UseControlNet   bool    `json:"use_control_net"`
 	ReferenceWeight float64 `json:"reference_weight"` // 0-1
 	LoraWeight      float64 `json:"lora_weight"`
 }
@@ -711,11 +683,11 @@ func (s *FrameGeneratorService) GenerateFrame(req *FrameGenerationRequest) (*Gen
 
 	// 2. 设置生成选项
 	options := &ImageGenerationOptions{
-		Prompt:          prompt,
-		NegativePrompt:   req.Shot.NegativePrompt,
-		Size:            "1920x1080",
-		Steps:           50,
-		CFGScale:        7.5,
+		Prompt:         prompt,
+		NegativePrompt: req.Shot.NegativePrompt,
+		Size:           "1920x1080",
+		Steps:          50,
+		CFGScale:       7.5,
 	}
 
 	// 3. 应用一致性控制
@@ -775,9 +747,9 @@ func (s *FrameGeneratorService) buildFramePrompt(req *FrameGenerationRequest) st
 
 // GeneratedFrame 生成的帧
 type GeneratedFrame struct {
-	FrameNo     int    `json:"frame_no"`
-	ImageURL    string `json:"image_url"`
-	Prompt      string `json:"prompt"`
+	FrameNo     int       `json:"frame_no"`
+	ImageURL    string    `json:"image_url"`
+	Prompt      string    `json:"prompt"`
 	GeneratedAt time.Time `json:"generated_at"`
 }
 
@@ -789,7 +761,7 @@ type GeneratedFrame struct {
 type ImageGenerationOptions struct {
 	Prompt          string      `json:"prompt"`
 	NegativePrompt  string      `json:"negative_prompt,omitempty"`
-	Size            string      `json:"size,omitempty"`      // 512x512, 1024x1024, etc.
+	Size            string      `json:"size,omitempty"` // 512x512, 1024x1024, etc.
 	Steps           int         `json:"steps,omitempty"`
 	CFGScale        float64     `json:"cfg_scale,omitempty"`
 	LoraModels      []LoraModel `json:"lora_models,omitempty"`
@@ -805,10 +777,10 @@ type LoraModel struct {
 
 // GeneratedImage 生成的图像
 type GeneratedImage struct {
-	URL     string  `json:"url"`
-	Width   int     `json:"width"`
-	Height  int     `json:"height"`
-	Seed    int64   `json:"seed,omitempty"`
+	URL    string `json:"url"`
+	Width  int    `json:"width"`
+	Height int    `json:"height"`
+	Seed   int64  `json:"seed,omitempty"`
 }
 
 // ============================================
@@ -817,19 +789,19 @@ type GeneratedImage struct {
 
 // ConsistencyValidationResult 一致性验证结果
 type ConsistencyValidationResult struct {
-	OverallScore     float64              `json:"overall_score"`
-	CharacterScores  map[uint]float64     `json:"character_scores"`  // character_id -> score
-	SceneScore       float64              `json:"scene_score"`
-	Issues           []ConsistencyIssue   `json:"issues"`
+	OverallScore    float64            `json:"overall_score"`
+	CharacterScores map[uint]float64   `json:"character_scores"` // character_id -> score
+	SceneScore      float64            `json:"scene_score"`
+	Issues          []ConsistencyIssue `json:"issues"`
 }
 
 // ConsistencyIssue 一致性问题
 type ConsistencyIssue struct {
-	Type        string  `json:"type"`         // appearance_drift, missing_element, style_drift
-	Severity    string  `json:"severity"`     // high, medium, low
-	Description string  `json:"description"`
-	Location    string  `json:"location"`
-	Suggestion  string  `json:"suggestion"`
+	Type        string `json:"type"`     // appearance_drift, missing_element, style_drift
+	Severity    string `json:"severity"` // high, medium, low
+	Description string `json:"description"`
+	Location    string `json:"location"`
+	Suggestion  string `json:"suggestion"`
 }
 
 // ConsistencyValidatorService 一致性验证服务

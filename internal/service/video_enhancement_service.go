@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/inkframe/inkframe-backend/internal/ai"
 	"math"
-	"sort"
 	"strings"
+	"time"
 )
 
 // ============================================
@@ -14,7 +15,7 @@ import (
 // ============================================
 
 type IntelligentStoryboardService struct {
-	aiService   *AIService
+	aiService    *AIService
 	imageService *ImageService
 }
 
@@ -29,11 +30,11 @@ func NewIntelligentStoryboardService(aiService *AIService, imageService *ImageSe
 type ShotType string
 
 const (
-	ShotStatic  ShotType = "static"  // 静态镜头
-	ShotPan     ShotType = "pan"     // 平移
-	ShotZoom    ShotType = "zoom"    // 缩放
-	ShotTrack   ShotType = "tracking" // 跟拍
-	ShotDolly  ShotType = "dolly"   // 推拉
+	ShotStatic ShotType = "static"   // 静态镜头
+	ShotPan    ShotType = "pan"      // 平移
+	ShotZoom   ShotType = "zoom"     // 缩放
+	ShotTrack  ShotType = "tracking" // 跟拍
+	ShotDolly  ShotType = "dolly"    // 推拉
 	ShotCrane  ShotType = "crane"    // 升降
 )
 
@@ -41,62 +42,62 @@ const (
 type ShotSize string
 
 const (
-	SizeExtremeWide ShotSize = "extreme_wide" // 大远景
-	SizeWide       ShotSize = "wide"        // 远景
-	SizeFull      ShotSize = "full"        // 全景
-	SizeMedium    ShotSize = "medium"      // 中景
-	SizeCloseUp   ShotSize = "close_up"    // 近景
-	SizeExtreme   ShotSize = "extreme_close_up" // 特写
+	SizeExtremeWide ShotSize = "extreme_wide"     // 大远景
+	SizeWide        ShotSize = "wide"             // 远景
+	SizeFull        ShotSize = "full"             // 全景
+	SizeMedium      ShotSize = "medium"           // 中景
+	SizeCloseUp     ShotSize = "close_up"         // 近景
+	SizeExtreme     ShotSize = "extreme_close_up" // 特写
 )
 
 // ShotAngle 镜头角度
 type ShotAngle string
 
 const (
-	AngleEyeLevel  ShotAngle = "eye_level"  // 平视
-	AngleHigh      ShotAngle = "high"      // 俯视
-	AngleLow       ShotAngle = "low"       // 仰视
-	AngleDutch     ShotAngle = "dutch"     // 倾斜
-	AngleOverhead  ShotAngle = "overhead"  // 顶摄
+	AngleEyeLevel ShotAngle = "eye_level" // 平视
+	AngleHigh     ShotAngle = "high"      // 俯视
+	AngleLow      ShotAngle = "low"       // 仰视
+	AngleDutch    ShotAngle = "dutch"     // 倾斜
+	AngleOverhead ShotAngle = "overhead"  // 顶摄
 	AnglePOV      ShotAngle = "POV"       // 主观视角
 )
 
 // StoryboardShot 智能分镜
 type StoryboardShot struct {
-	ShotNo        int       `json:"shot_no"`
-	Description   string    `json:"description"`
-	Emotion       string    `json:"emotion"`      // 情感标签
-	Beat          string    `json:"beat"`         // 节奏点
-	ShotType      ShotType  `json:"shot_type"`
-	ShotSize      ShotSize  `json:"shot_size"`
-	ShotAngle     ShotAngle `json:"shot_angle"`
-	Duration      float64   `json:"duration"`     // 秒
-	Characters    []string  `json:"characters"`
-	Location      string    `json:"location"`
-	TimeOfDay     string    `json:"time_of_day"`
-	Weather       string    `json:"weather"`
-	Lighting      string    `json:"lighting"`
-	Dialogue      string    `json:"dialogue,omitempty"`
-	Action        string    `json:"action,omitempty"`
-	CameraMovement string   `json:"camera_movement,omitempty"`
-	Transition    string    `json:"transition"`    // 转场方式
-	VisualNotes   string    `json:"visual_notes"`   // 视觉备注
+	ShotNo         int       `json:"shot_no"`
+	Description    string    `json:"description"`
+	Emotion        string    `json:"emotion"` // 情感标签
+	Beat           string    `json:"beat"`    // 节奏点
+	ShotType       ShotType  `json:"shot_type"`
+	ShotSize       ShotSize  `json:"shot_size"`
+	ShotAngle      ShotAngle `json:"shot_angle"`
+	Duration       float64   `json:"duration"` // 秒
+	Characters     []string  `json:"characters"`
+	Location       string    `json:"location"`
+	TimeOfDay      string    `json:"time_of_day"`
+	Weather        string    `json:"weather"`
+	Lighting       string    `json:"lighting"`
+	Dialogue       string    `json:"dialogue,omitempty"`
+	Action         string    `json:"action,omitempty"`
+	CameraMovement string    `json:"camera_movement,omitempty"`
+	Transition     string    `json:"transition"`   // 转场方式
+	VisualNotes    string    `json:"visual_notes"` // 视觉备注
 }
 
 // EmotionBeat 情感节奏分析结果
 type EmotionBeat struct {
-	Position     int     `json:"position"`     // 在章节中的位置(0-1)
-	Emotion      string  `json:"emotion"`      // 主导情感
-	Intensity    float64 `json:"intensity"`    // 情感强度(0-1)
+	Position     int     `json:"position"`      // 在章节中的位置(0-1)
+	Emotion      string  `json:"emotion"`       // 主导情感
+	Intensity    float64 `json:"intensity"`     // 情感强度(0-1)
 	RhythmChange string  `json:"rhythm_change"` // 节奏变化
 }
 
 // EmotionalAnalysis 情感分析结果
 type EmotionalAnalysis struct {
-	OverallEmotion string       `json:"overall_emotion"` // 整体情感
-	EmotionCurve  []EmotionBeat `json:"emotion_curve"` // 情感曲线
-	PeakMoments   []int        `json:"peak_moments"`   // 高潮点位置
-	CalmMoments   []int        `json:"calm_moments"`   // 平静点位置
+	OverallEmotion string        `json:"overall_emotion"` // 整体情感
+	EmotionCurve   []EmotionBeat `json:"emotion_curve"`   // 情感曲线
+	PeakMoments    []int         `json:"peak_moments"`    // 高潮点位置
+	CalmMoments    []int         `json:"calm_moments"`    // 平静点位置
 }
 
 // AnalyzeEmotions 分析章节情感
@@ -136,9 +137,9 @@ func (s *IntelligentStoryboardService) AnalyzeEmotions(content string) (*Emotion
 		// 返回默认分析
 		return &EmotionalAnalysis{
 			OverallEmotion: "neutral",
-			EmotionCurve:  []EmotionBeat{},
-			PeakMoments:   []int{},
-			CalmMoments:   []int{},
+			EmotionCurve:   []EmotionBeat{},
+			PeakMoments:    []int{},
+			CalmMoments:    []int{},
 		}, nil
 	}
 
@@ -147,13 +148,13 @@ func (s *IntelligentStoryboardService) AnalyzeEmotions(content string) (*Emotion
 
 // DetectActionBeats 检测动作节奏点
 func (s *IntelligentStoryboardService) DetectActionBeats(content string) ([]struct {
-	Position  int    `json:"position"`
-	Type     string `json:"type"` // action/dialogue/description
+	Position  int     `json:"position"`
+	Type      string  `json:"type"` // action/dialogue/description
 	Intensity float64 `json:"intensity"`
 }, error) {
 	// 简化实现
 	return []struct {
-		Position   int     `json:"position"`
+		Position  int     `json:"position"`
 		Type      string  `json:"type"`
 		Intensity float64 `json:"intensity"`
 	}{
@@ -195,7 +196,11 @@ func (s *IntelligentStoryboardService) GenerateIntelligentShots(
 // optimizeShotSequence 优化镜头序列
 func (s *IntelligentStoryboardService) optimizeShotSequence(
 	emotions *EmotionalAnalysis,
-	beats []struct{ Position int; Type string; Intensity float64 },
+	beats []struct {
+		Position  int
+		Type      string
+		Intensity float64
+	},
 	dialogues []string,
 	characters []string,
 	scene string,
@@ -311,7 +316,7 @@ func (s *IntelligentStoryboardService) extractDialogues(content string) []string
 
 type CharacterConsistencyService struct {
 	imageService *ImageService
-	loraService *LoRAService
+	loraService  *LoRAService
 }
 
 func NewCharacterConsistencyService(imageService *ImageService, loraService *LoRAService) *CharacterConsistencyService {
@@ -338,15 +343,15 @@ type ConsistencyLevel struct {
 
 // LoRAConfig LoRA配置
 type LoRAConfig struct {
-	ModelID          string  `json:"model_id"`
-	Weight           float64 `json:"weight"`            // 0.6-0.9
+	ModelID         string  `json:"model_id"`
+	Weight          float64 `json:"weight"`           // 0.6-0.9
 	InjectionMethod string  `json:"injection_method"` // Attention/LoRA/LyCORIS
 }
 
 // IPAdapterConfig IP-Adapter配置
 type IPAdapterConfig struct {
-	Weight         float64 `json:"weight"`          // 0.5-0.8
-	StyleTemplate string `json:"style_template"` // IP-Adapter/IP-Adapter Plus
+	Weight        float64 `json:"weight"`         // 0.5-0.8
+	StyleTemplate string  `json:"style_template"` // IP-Adapter/IP-Adapter Plus
 }
 
 // ControlNetConfig ControlNet配置
@@ -359,7 +364,7 @@ type ControlNetConfig struct {
 // HumanReviewConfig 人工审核配置
 type HumanReviewConfig struct {
 	AutoApproveThreshold float64 `json:"auto_approve_threshold"` // 超过阈值自动通过
-	RequireApproval     bool    `json:"require_approval"`
+	RequireApproval      bool    `json:"require_approval"`
 }
 
 // GetDefaultConsistencyLevel 获取默认一致性配置
@@ -370,7 +375,7 @@ func (s *CharacterConsistencyService) GetDefaultConsistencyLevel() *ConsistencyL
 			InjectionMethod: "LoRA",
 		},
 		IPAdapter: &IPAdapterConfig{
-			Weight:         0.7,
+			Weight:        0.7,
 			StyleTemplate: "IP-Adapter",
 		},
 		ControlNet: &ControlNetConfig{
@@ -380,7 +385,7 @@ func (s *CharacterConsistencyService) GetDefaultConsistencyLevel() *ConsistencyL
 		},
 		HumanReview: &HumanReviewConfig{
 			AutoApproveThreshold: 0.9,
-			RequireApproval:     false,
+			RequireApproval:      false,
 		},
 	}
 }
@@ -388,8 +393,8 @@ func (s *CharacterConsistencyService) GetDefaultConsistencyLevel() *ConsistencyL
 // ConsistencyScore 一致性评分
 type ConsistencyScore struct {
 	OverallScore    float64 `json:"overall_score"`
-	VisualScore     float64 `json:"visual_score"`    // 视觉一致性
-	FeatureScore    float64 `json:"feature_score"`   // 特征一致性
+	VisualScore     float64 `json:"visual_score"`     // 视觉一致性
+	FeatureScore    float64 `json:"feature_score"`    // 特征一致性
 	ExpressionScore float64 `json:"expression_score"` // 表情一致性
 }
 
@@ -400,9 +405,9 @@ func (s *CharacterConsistencyService) CalculateConsistencyScore(
 ) (*ConsistencyScore, error) {
 	// 简化实现：返回模拟评分
 	scores := &ConsistencyScore{
-		OverallScore:     0.85,
-		VisualScore:      0.88,
-		FeatureScore:     0.82,
+		OverallScore:    0.85,
+		VisualScore:     0.88,
+		FeatureScore:    0.82,
 		ExpressionScore: 0.85,
 	}
 
@@ -426,23 +431,23 @@ func NewImageService(provider AIProvider) *ImageService {
 
 // ImageGenerationRequest 图像生成请求
 type ImageGenerationRequest struct {
-	Prompt           string                 `json:"prompt"`
-	NegativePrompt   string                 `json:"negative_prompt,omitempty"`
-	Size             string                 `json:"size"`        // 512x512, 1024x1024
-	Steps            int                    `json:"steps"`
-	CFGScale         float64               `json:"cfg_scale"`
-	Seed            int64                 `json:"seed"`
-	Style            string                 `json:"style"`       // realistic, anime, cartoon
-	ReferenceImage   string                 `json:"reference_image,omitempty"`
-	ConsistencyLevel *ConsistencyLevel     `json:"consistency_level,omitempty"`
-	ControlNet       *ControlNetRequest     `json:"control_net,omitempty"`
+	Prompt           string             `json:"prompt"`
+	NegativePrompt   string             `json:"negative_prompt,omitempty"`
+	Size             string             `json:"size"` // 512x512, 1024x1024
+	Steps            int                `json:"steps"`
+	CFGScale         float64            `json:"cfg_scale"`
+	Seed             int64              `json:"seed"`
+	Style            string             `json:"style"` // realistic, anime, cartoon
+	ReferenceImage   string             `json:"reference_image,omitempty"`
+	ConsistencyLevel *ConsistencyLevel  `json:"consistency_level,omitempty"`
+	ControlNet       *ControlNetRequest `json:"control_net,omitempty"`
 }
 
 // ControlNetRequest ControlNet请求
 type ControlNetRequest struct {
-	Type    string `json:"type"`    // canny, depth, pose, etc.
-	Image   string `json:"image"`   // 图像URL或base64
-	Weight  float64 `json:"weight"`
+	Type   string  `json:"type"`  // canny, depth, pose, etc.
+	Image  string  `json:"image"` // 图像URL或base64
+	Weight float64 `json:"weight"`
 }
 
 // GenerateCharacterImage 生成角色图像
@@ -458,10 +463,10 @@ func (s *ImageService) GenerateCharacterImage(
 	req := &ImageGenerationRequest{
 		Prompt:         prompt,
 		NegativePrompt: "blurry, low quality, bad anatomy, distorted face",
-		Size:          "1024x1024",
-		Steps:         30,
-		CFGScale:      7.5,
-		Style:         "realistic",
+		Size:           "1024x1024",
+		Steps:          30,
+		CFGScale:       7.5,
+		Style:          "realistic",
 	}
 
 	// 应用一致性控制
@@ -471,7 +476,7 @@ func (s *ImageService) GenerateCharacterImage(
 
 	// 调用图像生成API
 	result, err := s.provider.ImageGenerate(context.Background(), &ImageGenerateRequest{
-		Model:   "stable-diffusion-xl",
+		Model:  "stable-diffusion-xl",
 		Prompt: req.Prompt,
 	})
 
@@ -525,7 +530,7 @@ func (s *ImageService) GenerateSceneImage(
 	prompt := sb.String()
 
 	result, err := s.provider.ImageGenerate(context.Background(), &ImageGenerateRequest{
-		Model:   "stable-diffusion-xl",
+		Model:  "stable-diffusion-xl",
 		Prompt: prompt,
 	})
 
@@ -595,8 +600,8 @@ func (s *LoRAService) GetCharacterLoRA(characterID uint) (*LoRAModel, error) {
 
 // AIProvider AI提供者接口
 type AIProvider interface {
-	Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error)
-	ImageGenerate(ctx context.Context, req *ImageGenerateRequest) (*ImageResponse, error)
+	Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error)
+	ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error)
 }
 
 // ============================================
@@ -616,10 +621,10 @@ type EnhancementType string
 
 const (
 	FrameInterpolation EnhancementType = "frame_interpolation" // 帧插值
-	SuperResolution   EnhancementType = "super_resolution"   // 超分辨率
-	VideoStabilize   EnhancementType = "video_stabilize"    // 视频稳定
-	ColorGrading     EnhancementType = "color_grading"      // 色彩增强
-	StyleTransfer    EnhancementType = "style_transfer"     // 风格迁移
+	SuperResolution    EnhancementType = "super_resolution"    // 超分辨率
+	VideoStabilize     EnhancementType = "video_stabilize"     // 视频稳定
+	ColorGrading       EnhancementType = "color_grading"       // 色彩增强
+	StyleTransfer      EnhancementType = "style_transfer"      // 风格迁移
 )
 
 // EnhancementConfig 增强配置
@@ -641,15 +646,15 @@ type EnhancementConfig struct {
 
 // EnhancementJob 增强任务
 type EnhancementJob struct {
-	ID          string             `json:"id"`
-	VideoID     uint              `json:"video_id"`
-	Type       EnhancementType    `json:"type"`
-	Config     *EnhancementConfig `json:"config"`
-	Status     string            `json:"status"` // pending/processing/completed/failed
-	Progress   float64           `json:"progress"`
-	ResultURL  string            `json:"result_url,omitempty"`
-	Error      string            `json:"error,omitempty"`
-	CreatedAt string            `json:"created_at"`
+	ID        string             `json:"id"`
+	VideoID   uint               `json:"video_id"`
+	Type      EnhancementType    `json:"type"`
+	Config    *EnhancementConfig `json:"config"`
+	Status    string             `json:"status"` // pending/processing/completed/failed
+	Progress  float64            `json:"progress"`
+	ResultURL string             `json:"result_url,omitempty"`
+	Error     string             `json:"error,omitempty"`
+	CreatedAt string             `json:"created_at"`
 }
 
 // EnhanceVideo 增强视频
@@ -738,15 +743,6 @@ func min(a, b int) int {
 }
 
 // AiService getter (for compatibility)
-func (s *IntelligentStoryboardService) AiService *IntelligentStoryboardService {
+func (s *IntelligentStoryboardService) AiService() *IntelligentStoryboardService {
 	return s
-}
-
-// DetectActionBeats getter (for compatibility)
-func (s *IntelligentStoryboardService) DetectActionBeats(content string) ([]struct {
-	Position  int
-	Type     string
-	Intensity float64
-}, error) {
-	return s.DetectActionBeats(content)
 }
