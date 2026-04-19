@@ -7,7 +7,6 @@ import (
 	"text/template"
 )
 
-//go:embed
 //go:embed prompts/chapter.tmpl
 //go:embed prompts/character.tmpl
 //go:embed prompts/novel_outline.tmpl
@@ -113,33 +112,33 @@ type NovelOutlineTemplateData struct {
 
 // ChapterTemplateData 章节模板数据
 type ChapterTemplateData struct {
-	Novel         NovelInfo
-	Chapter       ChapterInfo
-	ChapterNo     int
-	WordCount     int
-	Style         string
-	UserPrompt    string
+	Novel          NovelInfo
+	Chapter        ChapterInfo
+	ChapterNo      int
+	WordCount      int
+	Style          string
+	UserPrompt     string
 	RecentChapters []ChapterInfo
 }
 
 // CharacterTemplateData 角色模板数据
 type CharacterTemplateData struct {
-	NovelTitle       string
-	NovelGenre       string
-	NovelTheme       string
-	Role             string
-	PersonalityHint  string
-	RoleDescription  string
+	NovelTitle      string
+	NovelGenre      string
+	NovelTheme      string
+	Role            string
+	PersonalityHint string
+	RoleDescription string
 }
 
 // SceneTemplateData 场景模板数据
 type SceneTemplateData struct {
-	NovelTitle    string
-	NovelGenre    string
-	SceneType     string
-	Mood          string
-	TimeSetting   string
-	Requirements  string
+	NovelTitle   string
+	NovelGenre   string
+	SceneType    string
+	Mood         string
+	TimeSetting  string
+	Requirements string
 }
 
 // StoryboardTemplateData 分镜头模板数据
