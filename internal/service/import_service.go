@@ -9,11 +9,13 @@ import (
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"github.com/PuerkitoBio/goquery"
 	"strings"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/crawler"
 	"github.com/inkframe/inkframe-backend/internal/model"
+	"github.com/inkframe/inkframe-backend/internal/repository"
 )
 
 // ============================================
@@ -66,15 +68,15 @@ type ImportResult struct {
 
 // NovelImportService 小说导入服务
 type NovelImportService struct {
-	novelRepo   *NovelRepository
-	chapterRepo *ChapterRepository
+	novelRepo   *repository.NovelRepository
+	chapterRepo *repository.ChapterRepository
 	crawler     *crawler.NovelCrawler
 }
 
 // NewNovelImportService 创建小说导入服务
 func NewNovelImportService(
 	novelRepo *NovelRepository,
-	chapterRepo *ChapterRepository,
+	chapterRepo *repository.ChapterRepository,
 	crawler *crawler.NovelCrawler,
 ) *NovelImportService {
 	return &NovelImportService{
@@ -188,12 +190,49 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 
 	// 解析URL获取站点
 	siteName := s.detectSiteFromURL(req.URL)
-	parser := crawler.NovelParser{SiteName: siteName}
+	var parser crawler.NovelParser
+	switch siteName {
+	case "qidian":
+		parser = crawler.NewQidianParser()
+	case "jjwxc":
+		parser = crawler.NewJjwxcParser()
+	case "zongheng":
+		parser = crawler.NewZonghengParser()
+	default:
+		return nil, fmt.Errorf("unsupported site: %s", siteName)
+	}
 
-	// 爬取小说详情
-	novelDetail, chapters, err := s.crawler.CrawlNovel(context.Background(), req.URL)
+	// 爬取小说详情（创建小说记录）
+	novelDetail, err := s.crawler.CrawlNovel(context.Background(), req.URL)
 	if err != nil {
 		return nil, fmt.Errorf("crawl novel failed: %w", err)
+	}
+
+	// 同步爬取章节列表
+	html, err := crawler.NewHTTPClient().Get(context.Background(), req.URL)
+	if err != nil {
+		return nil, fmt.Errorf("get page failed: %w", err)
+	}
+
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	if err != nil {
+		return nil, fmt.Errorf("parse page failed: %w", err)
+	}
+
+	chapterInfos, err := parser.ParseChapterList(doc)
+	if err != nil {
+		return nil, fmt.Errorf("parse chapters failed: %w", err)
+	}
+
+	// 转换为 Chapter 数组
+	chapters := make([]*model.Chapter, len(chapterInfos))
+	for i, info := range chapterInfos {
+		chapters[i] = &model.Chapter{
+			Title: info.Title,
+			ChapterNo: info.ChapterNo,
+			Summary: fmt.Sprintf("爬取自: %s", info.URL),
+			Content: "",
+		}
 	}
 
 	// 创建小说
@@ -578,7 +617,7 @@ func NewNovelToVideoService(
 	videoEnhancement *VideoEnhancementService,
 	consistencyValidator *ConsistencyValidatorService,
 	novelRepo *NovelRepository,
-	chapterRepo *ChapterRepository,
+	chapterRepo *repository.ChapterRepository,
 	videoRepo *VideoRepository,
 ) *NovelToVideoService {
 	return &NovelToVideoService{
@@ -726,30 +765,6 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 // ============================================
 // 辅助类型
 // ============================================
-
-// NovelRepository 小说仓库接口
-type NovelRepository interface {
-	Create(novel *model.Novel) error
-	GetByID(id uint) (*model.Novel, error)
-	Update(novel *model.Novel) error
-	Delete(id uint) error
-}
-
-// ChapterRepository 章节仓库接口
-type ChapterRepository interface {
-	Create(chapter *model.Chapter) error
-	GetByID(id uint) (*model.Chapter, error)
-	List(novelID uint) ([]*model.Chapter, error)
-	ListByRange(novelID uint, start, end int) ([]*model.Chapter, error)
-}
-
-// VideoRepository 视频仓库接口
-type VideoRepository interface {
-	Create(video *model.Video) error
-	GetByID(id uint) (*model.Video, error)
-	Update(video *model.Video) error
-	Delete(id uint) error
-}
 
 // json解析辅助
 func jsonMarshal(v interface{}) ([]byte, error) {
