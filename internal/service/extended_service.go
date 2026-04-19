@@ -422,9 +422,6 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 }
 
 
-func NewQualityControlService(aiClient *ai.ModelManager) *QualityControlService {
-	return &QualityControlService{aiClient: aiClient}
-}
 
 
 
