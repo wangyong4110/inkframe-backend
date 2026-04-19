@@ -381,17 +381,6 @@ func (r *AIModelRepository) GetAvailableByTaskType(taskType string) ([]*model.AI
 	return suitableModels, nil
 }
 
-// GetActiveModels 获取所有活跃模型
-func (r *AIModelRepository) GetActiveModels() ([]*model.AIModel, error) {
-	var models []*model.AIModel
-	if err := r.db.Preload("Provider").
-		Where("is_active = ?", true).
-		Find(&models).Error; err != nil {
-		return nil, err
-	}
-	return models, nil
-}
-
 // GetByID 根据ID获取模型
 func (r *AIModelRepository) GetByID(id uint) (*model.AIModel, error) {
 	var model model.AIModel
@@ -853,166 +842,62 @@ func (r *ModelComparisonRepository) GetResults(experimentID uint) ([]*model.Expe
 	return results, nil
 }
 
-
 // ============================================
-// TenantRepository 租户仓库
+// Review Task Repository
 // ============================================
 
-type TenantRepository struct {
+// ReviewTaskRepository 审核任务仓库
+type ReviewTaskRepository struct {
 	db *gorm.DB
 }
 
-func NewTenantRepository(db *gorm.DB) *TenantRepository {
-	return &TenantRepository{db: db}
+func NewReviewTaskRepository(db *gorm.DB) *ReviewTaskRepository {
+	return &ReviewTaskRepository{db: db}
 }
 
-func (r *TenantRepository) Create(tenant *model.Tenant) error {
-	return r.db.Create(tenant).Error
+// Create 创建审核任务
+func (r *ReviewTaskRepository) Create(task *model.ReviewTask) error {
+	return r.db.Create(task).Error
 }
 
-func (r *TenantRepository) GetByID(id uint) (*model.Tenant, error) {
-	var tenant model.Tenant
-	if err := r.db.First(&tenant, id).Error; err != nil {
+// GetByID 根据ID获取审核任务
+func (r *ReviewTaskRepository) GetByID(id uint) (*model.ReviewTask, error) {
+	var task model.ReviewTask
+	if err := r.db.First(&task, id).Error; err != nil {
 		return nil, err
 	}
-	return &tenant, nil
+	return &task, nil
 }
 
-func (r *TenantRepository) GetByCode(code string) (*model.Tenant, error) {
-	var tenant model.Tenant
-	if err := r.db.Where("code = ?", code).First(&tenant).Error; err != nil {
+// ListPending 获取待处理的审核任务
+func (r *ReviewTaskRepository) ListPending(priority string, limit int) ([]*model.ReviewTask, error) {
+	var tasks []*model.ReviewTask
+	query := r.db.Where("status = ?", "pending")
+
+	if priority != "" {
+		query = query.Where("priority = ?", priority)
+	}
+
+	if err := query.Order("CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END").
+		Limit(limit).
+		Find(&tasks).Error; err != nil {
 		return nil, err
 	}
-	return &tenant, nil
+
+	return tasks, nil
 }
 
-func (r *TenantRepository) Update(tenant *model.Tenant) error {
-	return r.db.Save(tenant).Error
-}
-
-func (r *TenantRepository) Delete(id uint) error {
-	return r.db.Delete(&model.Tenant{}, id).Error
-}
-
-func (r *TenantRepository) List(page, pageSize int) ([]*model.Tenant, int64, error) {
-	var tenants []*model.Tenant
-	var total int64
-
-	r.db.Model(&model.Tenant{}).Count(&total)
-	offset := (page - 1) * pageSize
-	if err := r.db.Offset(offset).Limit(pageSize).Order("id DESC").Find(&tenants).Error; err != nil {
-		return nil, 0, err
+// UpdateStatus 更新审核任务状态
+func (r *ReviewTaskRepository) UpdateStatus(id uint, status string, note string) error {
+	updates := map[string]interface{}{
+		"status": status,
 	}
-	return tenants, total, nil
-}
-
-func (r *TenantRepository) AddMember(member *model.TenantUser) error {
-	return r.db.Create(member).Error
-}
-
-func (r *TenantRepository) RemoveMember(tenantID, userID uint) error {
-	return r.db.Where("tenant_id = ? AND user_id = ?", tenantID, userID).Delete(&model.TenantUser{}).Error
-}
-
-func (r *TenantRepository) GetMembers(tenantID uint) ([]*model.TenantUser, error) {
-	var members []*model.TenantUser
-	if err := r.db.Where("tenant_id = ?", tenantID).Find(&members).Error; err != nil {
-		return nil, err
+	if note != "" {
+		updates["reviewer_note"] = note
 	}
-	return members, nil
-}
-
-func (r *TenantRepository) UpdateMemberRole(tenantID, userID uint, role string) error {
-	return r.db.Model(&model.TenantUser{}).
-		Where("tenant_id = ? AND user_id = ?", tenantID, userID).
-		Update("role", role).Error
-}
-
-func (r *TenantRepository) UpdateUsage(tenantID uint, projectDelta, userDelta, storageDelta int) error {
-	return r.db.Model(&model.Tenant{}).Where("id = ?", tenantID).
-		Updates(map[string]interface{}{
-			"used_projects":   gorm.Expr("used_projects + ?", projectDelta),
-			"used_users":      gorm.Expr("used_users + ?", userDelta),
-			"used_storage_mb": gorm.Expr("used_storage_mb + ?", storageDelta),
-		}).Error
-}
-
-// ============================================
-// ProjectRepository 项目仓库
-// ============================================
-
-type ProjectRepository struct {
-	db *gorm.DB
-}
-
-func NewProjectRepository(db *gorm.DB) *ProjectRepository {
-	return &ProjectRepository{db: db}
-}
-
-func (r *ProjectRepository) Create(project *model.TenantProject) error {
-	return r.db.Create(project).Error
-}
-
-func (r *ProjectRepository) GetByID(tenantID, id uint) (*model.TenantProject, error) {
-	var project model.TenantProject
-	if err := r.db.Where("tenant_id = ? AND id = ?", tenantID, id).First(&project).Error; err != nil {
-		return nil, err
+	if status == "completed" || status == "rejected" {
+		now := time.Now()
+		updates["completed_at"] = &now
 	}
-	return &project, nil
-}
-
-func (r *ProjectRepository) Update(project *model.TenantProject) error {
-	return r.db.Save(project).Error
-}
-
-func (r *ProjectRepository) Delete(id uint) error {
-	return r.db.Delete(&model.TenantProject{}, id).Error
-}
-
-func (r *ProjectRepository) ListByTenant(tenantID uint) ([]*model.TenantProject, error) {
-	var projects []*model.TenantProject
-	if err := r.db.Where("tenant_id = ?", tenantID).Find(&projects).Error; err != nil {
-		return nil, err
-	}
-	return projects, nil
-}
-
-// ============================================
-// UserRepository 用户仓库
-// ============================================
-
-type UserRepository struct {
-	db *gorm.DB
-}
-
-func NewUserRepository(db *gorm.DB) *UserRepository {
-	return &UserRepository{db: db}
-}
-
-func (r *UserRepository) Create(user *model.User) error {
-	return r.db.Create(user).Error
-}
-
-func (r *UserRepository) GetByID(id uint) (*model.User, error) {
-	var user model.User
-	if err := r.db.First(&user, id).Error; err != nil {
-		return nil, err
-	}
-	return &user, nil
-}
-
-func (r *UserRepository) GetByEmail(email string) (*model.User, error) {
-	var user model.User
-	if err := r.db.Where("email = ?", email).First(&user).Error; err != nil {
-		return nil, err
-	}
-	return &user, nil
-}
-
-func (r *UserRepository) Update(user *model.User) error {
-	return r.db.Save(user).Error
-}
-
-func (r *UserRepository) Delete(id uint) error {
-	return r.db.Delete(&model.User{}, id).Error
+	return r.db.Model(&model.ReviewTask{}).Where("id = ?", id).Updates(updates).Error
 }

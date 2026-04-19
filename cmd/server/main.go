@@ -63,9 +63,6 @@ func main() {
 	// 9. 初始化处理器
 	handlers := initHandlers(services)
 
-	// 初始化租户处理器
-	tenantHandler := handler.NewTenantHandler(services.TenantService, services.ProjectService)
-
 	// 10. 设置路由
 	r := router.SetupRouter(&router.Config{
 		NovelHandler:      handlers.NovelHandler,
@@ -75,7 +72,6 @@ func main() {
 		ModelHandler:    handlers.ModelHandler,
 		StyleHandler:    handlers.StyleHandler,
 		ContextHandler:  handlers.ContextHandler,
-		TenantHandler:   tenantHandler,
 	})
 
 	// 11. 设置Gin模式
@@ -165,12 +161,6 @@ func initDatabase(cfg *config.Config) (*gorm.DB, error) {
 // autoMigrate 自动迁移
 func autoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
-		// 多租户相关
-		&model.Tenant{},
-		&model.TenantUser{},
-		&model.TenantProject{},
-		&model.User{},
-		// 小说相关
 		&model.Novel{},
 		&model.Chapter{},
 		&model.PlotPoint{},
@@ -291,9 +281,6 @@ type Repositories struct {
 	ModelComparisonRepo   *repository.ModelComparisonRepository
 	ReviewTaskRepo        *repository.ReviewTaskRepository
 	ChapterVersionRepo    *repository.ChapterVersionRepository
-	TenantRepo            *repository.TenantRepository
-	ProjectRepo           *repository.ProjectRepository
-	UserRepo              *repository.UserRepository
 }
 
 // initRepositories 初始化仓库层
@@ -312,52 +299,40 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		ModelComparisonRepo:  repository.NewModelComparisonRepository(db),
 		ReviewTaskRepo:       repository.NewReviewTaskRepository(db),
 		ChapterVersionRepo:   repository.NewChapterVersionRepository(db),
-		TenantRepo:           repository.NewTenantRepository(db),
-		ProjectRepo:          repository.NewProjectRepository(db),
-		UserRepo:             repository.NewUserRepository(db),
 	}
 }
 
 // Services 服务层
 type Services struct {
-	TenantService               *service.TenantService
-	ProjectService              *service.ProjectService
-	NovelService               *service.NovelService
-	ChapterService             *service.ChapterService
-	CharacterService           *service.CharacterService
-	WorldviewService           *service.WorldviewService
-	QualityService             *service.QualityService
-	
-	VideoService               *service.VideoService
-	ModelService               *service.ModelService
-	PromptService              *service.PromptService
+	NovelService              *service.NovelService
+	ChapterService            *service.ChapterService
+	CharacterService          *service.CharacterService
+	WorldviewService          *service.WorldviewService
+	QualityService            *service.QualityControlService
+	QualityControlService      *service.QualityControlService
+	VideoService              *service.VideoService
+	ModelService              *service.ModelService
+	PromptService             *service.PromptService
 	ContinuityService         *service.ContinuityService
-	KnowledgeService           *service.KnowledgeService
+	KnowledgeService          *service.KnowledgeService
 	ReviewTaskService         *service.ReviewTaskService
-	ChapterVersionService      *service.ChapterVersionService
+	ChapterVersionService     *service.ChapterVersionService
 	ForeshadowService         *service.ForeshadowService
-	TimelineService            *service.TimelineService
+	TimelineService           *service.TimelineService
 	CharacterArcService       *service.CharacterArcService
 	StyleService              *service.StyleService
-	GenerationContextService   *service.GenerationContextService
-	ImageGenerationService     *service.ImageGenerationService
-	StoryboardService          *service.IntelligentStoryboardService
-	VideoEnhancementService    *service.VideoEnhancementService
-	FrameGeneratorService      *service.FrameGeneratorService
+	GenerationContextService  *service.GenerationContextService
+	ImageGenerationService    *service.ImageGenerationService
+	StoryboardService         *service.IntelligentStoryboardService
+	VideoEnhancementService   *service.VideoEnhancementService
+	VideoGenerationService     *service.VideoEnhancementService
+	FrameGeneratorService     *service.FrameGeneratorService
 	ConsistencyValidatorService *service.ConsistencyValidatorService
-	CrawlerService             *crawler.NovelCrawler
-	ImportService             *service.NovelImportService
-	NovelToVideoService        *service.NovelToVideoService
+	CrawlerService            *crawler.NovelCrawler
 }
 
 // initServices 初始化服务层
 func initServices(repos *Repositories, aiManager *ai.ModelManager, vectorStore *vector.StoreManager) *Services {
-	// 租户服务
-	tenantService := service.NewTenantService(repos.TenantRepo, repos.UserRepo)
-
-	// 项目服务
-	projectService := service.NewProjectService(repos.TenantRepo, repos.ProjectRepo, repos.NovelRepo)
-
 	// AI服务
 	aiService := service.NewAIService(repos.AIModelRepo, repos.TaskModelConfigRepo)
 
@@ -374,7 +349,7 @@ func initServices(repos *Repositories, aiManager *ai.ModelManager, vectorStore *
 	worldviewService := service.NewWorldviewService(repos.WorldviewRepo, aiService)
 
 	// 质量控制服务
-	qualityService := service.NewQualityService(aiManager)
+	qualityService := service.NewQualityControlService(aiManager)
 
 	// 视频服务
 	videoService := service.NewVideoService(repos.VideoRepo, repos.StoryboardRepo, repos.ChapterRepo, aiService)
@@ -439,72 +414,48 @@ func initServices(repos *Repositories, aiManager *ai.ModelManager, vectorStore *
 	consistencyValidatorService := service.NewConsistencyValidatorService(aiService)
 
 	// 质量控制服务（详细版）
-	qualityControlService := service.NewQualityService(aiService)
+	qualityControlService := service.NewQualityControlService(aiService)
 
 	// 爬虫服务
 	crawlerService := crawler.NewNovelCrawler(nil)
 
-	// 导入服务
-	importService := service.NewNovelImportService(
-		repos.NovelRepo,
-		repos.ChapterRepo,
-		crawlerService,
-	)
-
-	// 小说转视频服务
-	novelToVideoService := service.NewNovelToVideoService(
-		importService,
-		storyboardService,
-		frameGeneratorService,
-		videoEnhancementService,
-		consistencyValidatorService,
-		repos.NovelRepo,
-		repos.ChapterRepo,
-		repos.VideoRepo,
-	)
-
 	return &Services{
-		TenantService:               tenantService,
-		ProjectService:              projectService,
 		NovelService:               novelService,
 		ChapterService:             chapterService,
 		CharacterService:           characterService,
 		WorldviewService:           worldviewService,
 		QualityService:             qualityService,
-		QCService:      qualityControlService,
-		VideoService:              videoService,
-		ModelService:              modelService,
-		PromptService:             promptService,
-		ContinuityService:         continuityService,
-		KnowledgeService:          knowledgeService,
-		ReviewTaskService:         reviewTaskService,
-		ChapterVersionService:     chapterVersionService,
-		ForeshadowService:        foreshadowService,
-		TimelineService:           timelineService,
-		CharacterArcService:      characterArcService,
-		StyleService:              styleService,
-		GenerationContextService:  generationContextService,
-		ImageGenerationService:    imageGenerationService,
-		StoryboardService:         storyboardService,
-		VideoEnhancementService:  videoEnhancementService,
-		FrameGeneratorService:    frameGeneratorService,
+		QualityControlService:      qualityControlService,
+		VideoService:               videoService,
+		ModelService:               modelService,
+		PromptService:              promptService,
+		ContinuityService:          continuityService,
+		KnowledgeService:           knowledgeService,
+		ReviewTaskService:          reviewTaskService,
+		ChapterVersionService:      chapterVersionService,
+		ForeshadowService:         foreshadowService,
+		TimelineService:            timelineService,
+		CharacterArcService:        characterArcService,
+		StyleService:               styleService,
+		GenerationContextService:    generationContextService,
+		ImageGenerationService:     imageGenerationService,
+		StoryboardService:          storyboardService,
+		VideoEnhancementService:   videoEnhancementService,
+		FrameGeneratorService:     frameGeneratorService,
 		ConsistencyValidatorService: consistencyValidatorService,
-		CrawlerService:            crawlerService,
-		ImportService:            importService,
-		NovelToVideoService:      novelToVideoService,
+		CrawlerService:             crawlerService,
 	}
 }
 
 // Handlers 处理器
 type Handlers struct {
-	NovelHandler       *handler.NovelHandler
-	ChapterHandler     *handler.ChapterHandler
-	CharacterHandler   *handler.CharacterHandler
-	VideoHandler       *handler.VideoHandler
-	ModelHandler       *handler.ModelHandler
-	StyleHandler       *handler.StyleHandler
-	ContextHandler     *handler.ContextHandler
-	ImportHandler      *handler.ImportHandler
+	NovelHandler      *handler.NovelHandler
+	ChapterHandler    *handler.ChapterHandler
+	CharacterHandler  *handler.CharacterHandler
+	VideoHandler      *handler.VideoHandler
+	ModelHandler      *handler.ModelHandler
+	StyleHandler      *handler.StyleHandler
+	ContextHandler    *handler.ContextHandler
 }
 
 // initHandlers 初始化处理器
@@ -534,7 +485,6 @@ func initHandlers(services *Services) *Handlers {
 		ModelHandler: handler.NewModelHandler(services.ModelService),
 		StyleHandler: handler.NewStyleHandler(services.StyleService),
 		ContextHandler: handler.NewContextHandler(services.GenerationContextService),
-		ImportHandler: handler.NewImportHandler(services.ImportService, services.NovelToVideoService),
 	}
 }
 

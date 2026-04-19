@@ -439,7 +439,21 @@ func NewQualityService(
 	}
 }
 
+// QualityReport 质量报告
+type QualityReport struct {
+	OverallScore float64           `json:"overall_score"`
+	Issues      []QualityIssue    `json:"issues"`
+	Suggestions []string          `json:"suggestions"`
+}
 
+// QualityIssue 质量问题
+type QualityIssue struct {
+	Type        string `json:"type"`
+	Severity    string `json:"severity"`
+	Description string `json:"description"`
+	Location     string `json:"location"`
+	Suggestion  string `json:"suggestion"`
+}
 
 // CheckChapterQuality 检查章节质量
 func (s *QualityService) CheckChapterQuality(chapterID uint) (*QualityReport, error) {
@@ -738,6 +752,22 @@ func NewModelService(
 		taskRepo:  taskRepo,
 		experimentRepo: experimentRepo,
 	}
+}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
 	var best *model.AIModel
 	bestScore := 0.0
 
