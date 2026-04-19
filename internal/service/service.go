@@ -774,6 +774,15 @@ func (s *ModelService) SelectBestModel(strategy string) (*model.AIModel, error) 
 		selected = selectBalanced(models)
 	}
 
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
 
 	return selected, nil
 }
