@@ -1,15 +1,14 @@
 package service
 
 import (
+	"context"
 	"fmt"
+	"github.com/PuerkitoBio/goquery"
 	"io"
 	"log"
-	"mime/multipart"
-	"context"
 	"net/http"
 	"path/filepath"
 	"regexp"
-	"github.com/PuerkitoBio/goquery"
 	"strings"
 	"time"
 
@@ -26,44 +25,44 @@ import (
 type ImportSource string
 
 const (
-	SourceFile   ImportSource = "file"    // 本地文件
-	SourceURL   ImportSource = "url"     // URL链接
-	SourceCrawl ImportSource = "crawl"   // 爬取
-	SourceAPI   ImportSource = "api"     // API导入
+	SourceFile  ImportSource = "file"  // 本地文件
+	SourceURL   ImportSource = "url"   // URL链接
+	SourceCrawl ImportSource = "crawl" // 爬取
+	SourceAPI   ImportSource = "api"   // API导入
 )
 
 // ImportFormat 支持的文件格式
 type ImportFormat string
 
 const (
-	FormatTxt   ImportFormat = "txt"
-	FormatEpub  ImportFormat = "epub"
-	FormatDocx  ImportFormat = "docx"
-	FormatHtml  ImportFormat = "html"
-	FormatJson  ImportFormat = "json"
-	FormatMd    ImportFormat = "md"
+	FormatTxt  ImportFormat = "txt"
+	FormatEpub ImportFormat = "epub"
+	FormatDocx ImportFormat = "docx"
+	FormatHtml ImportFormat = "html"
+	FormatJson ImportFormat = "json"
+	FormatMd   ImportFormat = "md"
 )
 
 // ImportRequest 导入请求
 type ImportRequest struct {
-	Source     ImportSource `json:"source"`
-	URL        string       `json:"url,omitempty"`        // 导入URL
-	FileData   []byte       `json:"file_data,omitempty"`  // 文件数据
-	FileName   string       `json:"file_name,omitempty"`   // 文件名
-	Format     ImportFormat `json:"format,omitempty"`      // 文件格式
-	SiteName   string       `json:"site_name,omitempty"`  // 站点名称（爬取时）
-	NovelID    uint         `json:"novel_id,omitempty"`   // 已有小说ID（追加时）
+	Source   ImportSource `json:"source"`
+	URL      string       `json:"url,omitempty"`       // 导入URL
+	FileData []byte       `json:"file_data,omitempty"` // 文件数据
+	FileName string       `json:"file_name,omitempty"` // 文件名
+	Format   ImportFormat `json:"format,omitempty"`    // 文件格式
+	SiteName string       `json:"site_name,omitempty"` // 站点名称（爬取时）
+	NovelID  uint         `json:"novel_id,omitempty"`  // 已有小说ID（追加时）
 }
 
 // ImportResult 导入结果
 type ImportResult struct {
-	NovelID       uint       `json:"novel_id"`
-	Title         string     `json:"title"`
-	TotalChapters int        `json:"total_chapters"`
-	ImportedChapters int    `json:"imported_chapters"`
-	FailedChapters int      `json:"failed_chapters"`
-	Duration      float64    `json:"duration"` // 秒
-	Errors        []string   `json:"errors,omitempty"`
+	NovelID          uint     `json:"novel_id"`
+	Title            string   `json:"title"`
+	TotalChapters    int      `json:"total_chapters"`
+	ImportedChapters int      `json:"imported_chapters"`
+	FailedChapters   int      `json:"failed_chapters"`
+	Duration         float64  `json:"duration"` // 秒
+	Errors           []string `json:"errors,omitempty"`
 }
 
 // NovelImportService 小说导入服务
@@ -75,7 +74,7 @@ type NovelImportService struct {
 
 // NewNovelImportService 创建小说导入服务
 func NewNovelImportService(
-	novelRepo *NovelRepository,
+	novelRepo *repository.NovelRepository,
 	chapterRepo *repository.ChapterRepository,
 	crawler *crawler.NovelCrawler,
 ) *NovelImportService {
@@ -228,10 +227,10 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 	chapters := make([]*model.Chapter, len(chapterInfos))
 	for i, info := range chapterInfos {
 		chapters[i] = &model.Chapter{
-			Title: info.Title,
+			Title:     info.Title,
 			ChapterNo: info.ChapterNo,
-			Summary: fmt.Sprintf("爬取自: %s", info.URL),
-			Content: "",
+			Summary:   fmt.Sprintf("爬取自: %s", info.URL),
+			Content:   "",
 		}
 	}
 
@@ -265,12 +264,12 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 		}
 
 		chapter := &model.Chapter{
-			NovelID:     novel.ID,
-			ChapterNo:   i + 1,
-			Title:       content.Title,
-			Content:     content.Content,
-			WordCount:   len([]rune(content.Content)),
-			Status:      "published",
+			NovelID:   novel.ID,
+			ChapterNo: i + 1,
+			Title:     content.Title,
+			Content:   content.Content,
+			WordCount: len([]rune(content.Content)),
+			Status:    "published",
 		}
 
 		if err := s.chapterRepo.Create(chapter); err != nil {
@@ -342,10 +341,10 @@ func (s *NovelImportService) parseTxtFile(data []byte, fileName string) (*model.
 	}
 
 	novel := &model.Novel{
-		Title:   title,
-		Genre:   "unknown",
-		Status:  "completed",
-		Source:  string(SourceFile),
+		Title:  title,
+		Genre:  "unknown",
+		Status: "completed",
+		Source: string(SourceFile),
 	}
 
 	// 按章节分割
@@ -369,10 +368,10 @@ func (s *NovelImportService) parseMarkdownFile(data []byte, fileName string) (*m
 	}
 
 	novel := &model.Novel{
-		Title:   title,
-		Genre:   "unknown",
-		Status:  "completed",
-		Source:  string(SourceFile),
+		Title:  title,
+		Genre:  "unknown",
+		Status: "completed",
+		Source: string(SourceFile),
 	}
 
 	// 合并内容并按章节分割
@@ -444,10 +443,10 @@ func (s *NovelImportService) parseHtmlFile(data []byte) (*model.Novel, []*model.
 	cleanContent := s.stripHtmlTags(content)
 
 	novel := &model.Novel{
-		Title:   title,
-		Genre:   "unknown",
-		Status:  "completed",
-		Source:  string(SourceFile),
+		Title:  title,
+		Genre:  "unknown",
+		Status: "completed",
+		Source: string(SourceFile),
 	}
 
 	chapters := s.splitByChapters(cleanContent, title)
@@ -486,11 +485,11 @@ func (s *NovelImportService) splitByChapters(content, novelTitle string) []*mode
 
 	// 尝试多种章节分割模式
 	patterns := []string{
-		`第[一二三四五六七八九十百千\d]+章[^\n]*`,                           // 中文章节
-		`第[0-9]+章[^\n]*`,                                                  // 数字章节
-		`Chapter\s+[0-9]+[^\n]*`,                                           // English chapter
-		`ch\.\s*[0-9]+[^\n]*`,                                              // ch.1
-		`\[第[0-9]+章\]`,                                                    // [第1章]
+		`第[一二三四五六七八九十百千\d]+章[^\n]*`, // 中文章节
+		`第[0-9]+章[^\n]*`,         // 数字章节
+		`Chapter\s+[0-9]+[^\n]*`, // English chapter
+		`ch\.\s*[0-9]+[^\n]*`,    // ch.1
+		`\[第[0-9]+章\]`,           // [第1章]
 	}
 
 	var splits []int
@@ -575,38 +574,38 @@ func (s *NovelImportService) splitByLength(content, title string, chunkSize int)
 
 // NovelToVideoRequest 小说转视频请求
 type NovelToVideoRequest struct {
-	NovelID       uint     `json:"novel_id"`
-	ChapterRange []int    `json:"chapter_range,omitempty"` // [start, end]，nil表示全部
-	StartChapter int      `json:"start_chapter,omitempty"`
-	EndChapter   int      `json:"end_chapter,omitempty"`
-	Resolution   string   `json:"resolution"`    // 720p, 1080p, 4k
-	FrameRate    int      `json:"frame_rate"`   // 24, 30, 60
-	AspectRatio  string   `json:"aspect_ratio"` // 16:9, 9:16, 1:1
-	ArtStyle     string   `json:"art_style"`    // realistic, anime, cartoon
-	AutoImport   bool     `json:"auto_import"`  // 是否自动导入小说
+	NovelID      uint   `json:"novel_id"`
+	ChapterRange []int  `json:"chapter_range,omitempty"` // [start, end]，nil表示全部
+	StartChapter int    `json:"start_chapter,omitempty"`
+	EndChapter   int    `json:"end_chapter,omitempty"`
+	Resolution   string `json:"resolution"`   // 720p, 1080p, 4k
+	FrameRate    int    `json:"frame_rate"`   // 24, 30, 60
+	AspectRatio  string `json:"aspect_ratio"` // 16:9, 9:16, 1:1
+	ArtStyle     string `json:"art_style"`    // realistic, anime, cartoon
+	AutoImport   bool   `json:"auto_import"`  // 是否自动导入小说
 }
 
 // NovelToVideoResult 小说转视频结果
 type NovelToVideoResult struct {
-	NovelID       uint      `json:"novel_id"`
-	VideoID       uint      `json:"video_id"`
-	Status        string    `json:"status"`
-	ChaptersProcessed int   `json:"chapters_processed"`
-	ShotsGenerated int      `json:"shots_generated"`
-	Duration      float64   `json:"duration"` // 秒
-	Errors        []string  `json:"errors,omitempty"`
+	NovelID           uint     `json:"novel_id"`
+	VideoID           uint     `json:"video_id"`
+	Status            string   `json:"status"`
+	ChaptersProcessed int      `json:"chapters_processed"`
+	ShotsGenerated    int      `json:"shots_generated"`
+	Duration          float64  `json:"duration"` // 秒
+	Errors            []string `json:"errors,omitempty"`
 }
 
 // NovelToVideoService 小说转视频服务
 type NovelToVideoService struct {
-	importService         *NovelImportService
+	importService        *NovelImportService
 	storyboardService    *IntelligentStoryboardService
 	frameGenerator       *FrameGeneratorService
 	videoEnhancement     *VideoEnhancementService
 	consistencyValidator *ConsistencyValidatorService
-	novelRepo            *NovelRepository
-	chapterRepo          *ChapterRepository
-	videoRepo            *VideoRepository
+	novelRepo            *repository.NovelRepository
+	chapterRepo          *repository.ChapterRepository
+	videoRepo            *repository.VideoRepository
 }
 
 // NewNovelToVideoService 创建小说转视频服务
@@ -616,12 +615,12 @@ func NewNovelToVideoService(
 	frameGenerator *FrameGeneratorService,
 	videoEnhancement *VideoEnhancementService,
 	consistencyValidator *ConsistencyValidatorService,
-	novelRepo *NovelRepository,
+	novelRepo *repository.NovelRepository,
 	chapterRepo *repository.ChapterRepository,
-	videoRepo *VideoRepository,
+	videoRepo *repository.VideoRepository,
 ) *NovelToVideoService {
 	return &NovelToVideoService{
-		importService:         importService,
+		importService:        importService,
 		storyboardService:    storyboardService,
 		frameGenerator:       frameGenerator,
 		videoEnhancement:     videoEnhancement,
@@ -704,7 +703,7 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 		Title:       fmt.Sprintf("%s 视频", novel.Title),
 		Description: fmt.Sprintf("基于《%s》第%d-%d章生成的视频", novel.Title, startCh, startCh+len(chapters)-1),
 		Type:        "image_sequence",
-		Resolution: req.Resolution,
+		Resolution:  req.Resolution,
 		FrameRate:   req.FrameRate,
 		AspectRatio: req.AspectRatio,
 		ArtStyle:    req.ArtStyle,

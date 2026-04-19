@@ -3,6 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/inkframe/inkframe-backend/internal/repository"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
@@ -168,13 +169,13 @@ func (s *TenantService) UpdateUsage(tenantID uint, projectDelta, userDelta, stor
 type ProjectService struct {
 	tenantRepo  *TenantRepository
 	projectRepo *ProjectRepository
-	novelRepo   *NovelRepository
+	novelRepo   *repository.NovelRepository
 }
 
 func NewProjectService(
 	tenantRepo *TenantRepository,
 	projectRepo *ProjectRepository,
-	novelRepo *NovelRepository,
+	novelRepo *repository.NovelRepository,
 ) *ProjectService {
 	return &ProjectService{
 		tenantRepo:  tenantRepo,
