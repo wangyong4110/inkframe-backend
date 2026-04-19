@@ -37,7 +37,6 @@ func (s *PromptService) RenderPrompt(templateID uint, variables map[string]inter
 
 // BuildOutlinePrompt 构建大纲提示词
 func (s *PromptService) BuildOutlinePrompt(novel *model.Novel, req *GenerateOutlineRequest) string {
-	var sb strings.Builder
 
 	// 系统提示
 	sb.WriteString("你是一位专业的小说作家，擅长创作中长篇小说。\n\n")
@@ -74,7 +73,6 @@ func (s *PromptService) BuildOutlinePrompt(novel *model.Novel, req *GenerateOutl
 
 // BuildChapterPrompt 构建章节提示词
 func (s *PromptService) BuildChapterPrompt(novel *model.Novel, chapter *model.Chapter, recentChapters []*model.Chapter, characters []*model.Character) string {
-	var sb strings.Builder
 
 	// 系统提示
 	sb.WriteString("你是一位专业的小说作家，创作内容需要：\n")
@@ -240,7 +238,6 @@ func (s *ContinuityService) CheckContinuity(novelID uint, chapterNo int, content
 }
 
 func (s *ContinuityService) checkCharacterConsistency(character *model.Character, content string) []CharacterIssue {
-	var issues []CharacterIssue
 
 	// 检查角色名出现次数
 	nameCount := strings.Count(content, character.Name)
@@ -271,7 +268,6 @@ func (s *ContinuityService) checkCharacterConsistency(character *model.Character
 }
 
 func (s *ContinuityService) checkPlotContinuity(novelID uint, chapterNo int, content string) []PlotIssue {
-	var issues []PlotIssue
 
 	// 获取前几章
 	recentChapters, err := s.chapterRepo.GetRecent(novelID, chapterNo, 3)
@@ -293,7 +289,6 @@ func (s *ContinuityService) checkPlotContinuity(novelID uint, chapterNo int, con
 }
 
 func (s *ContinuityService) generateSuggestions(report *ContinuityReport) []string {
-	var suggestions []string
 
 	if len(report.CharacterIssues) > 0 {
 		suggestions = append(suggestions, "建议检查角色在章节中的表现是否与其设定一致")
@@ -389,7 +384,6 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 	}
 
 	// 解析结果
-	var result struct {
 		PlotPoints []struct {
 			Type        string   `json:"type"`
 			Description string   `json:"description"`
@@ -557,9 +551,4 @@ func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter
 	return suggestions
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
+

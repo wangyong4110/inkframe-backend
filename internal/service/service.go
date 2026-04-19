@@ -132,7 +132,6 @@ type ChapterOutline struct {
 
 // buildOutlinePrompt 构建大纲提示词
 func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutlineRequest) string {
-	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("请为小说《%s》生成一个详细的大纲。\n\n", novel.Title))
 
@@ -222,7 +221,6 @@ func (s *NovelService) GenerateChapter(req *GenerateChapterRequest) (*model.Chap
 
 // buildChapterPrompt 构建章节提示词
 func (s *NovelService) buildChapterPrompt(novel *model.Novel, req *GenerateChapterRequest, recentChapters []*model.Chapter) string {
-	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("请为小说《%s》撰写第%d章。\n\n", novel.Title, req.ChapterNo))
 
@@ -280,7 +278,6 @@ func countChineseChars(text string) int {
 func (s *NovelService) updateNovelStats(novelID uint) {
 	chapters, _ := s.chapterRepo.ListByNovel(novelID)
 
-	var totalWords int
 	for _, ch := range chapters {
 		totalWords += ch.WordCount
 	}
@@ -317,7 +314,6 @@ func (s *NovelService) extractPlotPoints(chapter *model.Chapter) {
 		return
 	}
 
-	var plotResult struct {
 		PlotPoints []struct {
 			Type        string   `json:"type"`
 			Description string   `json:"description"`
@@ -632,7 +628,6 @@ func (s *VideoService) GenerateStoryboard(videoID uint) ([]*model.StoryboardShot
 		return nil, err
 	}
 
-	var content string
 	if video.ChapterID != nil {
 		chapter, _ := s.chapterRepo.GetByID(*video.ChapterID)
 		if chapter != nil {
@@ -669,7 +664,6 @@ func (s *VideoService) GenerateStoryboard(videoID uint) ([]*model.StoryboardShot
 
 // buildStoryboardPrompt 构建分镜提示词
 func (s *VideoService) buildStoryboardPrompt(video *model.Video, content string) string {
-	var sb strings.Builder
 
 	sb.WriteString("请根据以下内容生成分镜脚本：\n\n")
 
@@ -735,4 +729,3 @@ func NewModelService(
 		experimentRepo: experimentRepo,
 	}
 }
-
