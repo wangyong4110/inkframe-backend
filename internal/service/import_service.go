@@ -391,10 +391,8 @@ func (s *NovelImportService) parseJsonFile(data []byte) (*model.Novel, []*model.
 
 	novel := &model.Novel{
 		Title:  structured.Title,
-		Author: structured.Author,
 		Genre:  structured.Genre,
 		Status: "completed",
-		Source: string(SourceFile),
 	}
 
 	var chapters []*model.Chapter

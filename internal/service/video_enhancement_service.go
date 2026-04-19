@@ -469,7 +469,7 @@ func (s *ImageService) GenerateCharacterImage(
 	}
 
 	// 调用图像生成API
-	result, err := s.provider.ImageGenerate(context.Background(), &GenerateRequest{
+	result, err := s.provider.ImageGenerate(context.Background(), &ai.GenerateRequest{
 		Model:  "stable-diffusion-xl",
 		Prompt: req.Prompt,
 	})
@@ -523,7 +523,7 @@ func (s *ImageService) GenerateSceneImage(
 
 	prompt := sb.String()
 
-	result, err := s.provider.ImageGenerate(context.Background(), &GenerateRequest{
+	result, err := s.provider.ImageGenerate(context.Background(), &ai.GenerateRequest{
 		Model:  "stable-diffusion-xl",
 		Prompt: prompt,
 	})
@@ -594,8 +594,8 @@ func (s *LoRAService) GetCharacterLoRA(characterID uint) (*LoRAModel, error) {
 
 // AIProvider AI提供者接口
 type AIProvider interface {
-	Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error)
-	ImageGenerate(ctx context.Context, req *ai.GenerateRequest) (*ai.ImageResponse, error)
+	Generate(ctx context.Context, req *ai.ai.GenerateRequest) (*ai.GenerateResponse, error)
+	ImageGenerate(ctx context.Context, req *ai.ai.GenerateRequest) (*ai.ImageResponse, error)
 }
 
 // ============================================
