@@ -754,6 +754,14 @@ func NewModelService(
 	}
 }
 
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
 	var selected *model.AIModel
 	switch strategy {
 	case "quality_first":
