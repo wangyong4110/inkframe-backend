@@ -455,7 +455,6 @@ func (s *ImageService) GenerateCharacterImage(
 	prompt := s.buildCharacterPrompt(charName, expression, pose)
 
 	req := &ImageGenerationRequest{
-		Prompt:         prompt,
 		NegativePrompt: "blurry, low quality, bad anatomy, distorted face",
 		Size:           "1024x1024",
 		Steps:          30,
@@ -471,7 +470,6 @@ func (s *ImageService) GenerateCharacterImage(
 	// 调用图像生成API
 	result, err := s.provider.ImageGenerate(context.Background(), &ai.GenerateRequest{
 		Model:  "stable-diffusion-xl",
-		Prompt: req.Prompt,
 	})
 
 	if err != nil {
@@ -525,7 +523,6 @@ func (s *ImageService) GenerateSceneImage(
 
 	result, err := s.provider.ImageGenerate(context.Background(), &ai.GenerateRequest{
 		Model:  "stable-diffusion-xl",
-		Prompt: prompt,
 	})
 
 	if err != nil {
