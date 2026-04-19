@@ -752,7 +752,17 @@ func NewModelService(
 		taskRepo:  taskRepo,
 		experimentRepo: experimentRepo,
 	}
-}
+
+
+// SelectBestModel 选择最佳模型
+func (s *ModelService) SelectBestModel(strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetActiveModels()
+	if err != nil {
+		return nil, err
+	}
+	if len(models) == 0 {
+		return nil, fmt.Errorf("no available models")
+	}
 
 	var selected *model.AIModel
 	switch strategy {
@@ -763,6 +773,7 @@ func NewModelService(
 	default: // balanced
 		selected = selectBalanced(models)
 	}
+
 
 	return selected, nil
 }
