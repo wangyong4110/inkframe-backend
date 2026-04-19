@@ -15,6 +15,7 @@ type Config struct {
 	ModelHandler      *handler.ModelHandler
 	StyleHandler      *handler.StyleHandler
 	ContextHandler    *handler.ContextHandler
+	ImportHandler     *handler.ImportHandler
 }
 
 // SetupRouter 配置路由
@@ -56,6 +57,9 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.GET("/:id/context", cfg.ContextHandler.GetContext)
 			novels.GET("/:id/context/preview", cfg.ContextHandler.PreviewContext)
 			novels.POST("/:id/prompt", cfg.ContextHandler.BuildPrompt)
+
+			// 从小说生成视频
+			novels.POST("/:id/generate-video", cfg.ImportHandler.GenerateVideoFromNovel)
 
 			// 章节
 			novels.GET("/:novel_id/chapters", cfg.ChapterHandler.ListChapters)
@@ -171,6 +175,17 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			styles.POST("/prompt", cfg.StyleHandler.BuildStylePrompt)
 			styles.GET("/presets", cfg.StyleHandler.GetStylePresets)
 			styles.POST("/presets/:name/apply", cfg.StyleHandler.ApplyStylePreset)
+		}
+
+		// 导入相关
+		import := v1.Group("/import")
+		{
+			import.POST("/novel", cfg.ImportHandler.ImportNovel)
+			import.POST("/novel/file", cfg.ImportHandler.ImportFromFile)
+			import.POST("/novel/url", cfg.ImportHandler.ImportFromURL)
+			import.POST("/novel/crawl", cfg.ImportHandler.ImportFromCrawl)
+			import.POST("/novel/video", cfg.ImportHandler.ImportAndGenerate)
+			import.GET("/status/:task_id", cfg.ImportHandler.GetImportStatus)
 		}
 	}
 
