@@ -126,8 +126,8 @@ func (s *PromptService) BuildChapterPrompt(novel *model.Novel, chapter *model.Ch
 	sb.WriteString(fmt.Sprintf("- 章节标题：%s\n", chapter.Title))
 	sb.WriteString(fmt.Sprintf("- 字数要求：2000-3000字\n"))
 
-	if req.Prompt, ok := interface{}(nil).(string); ok && req.Prompt != "" {
-		sb.WriteString(fmt.Sprintf("- 创作要求：%s\n", req.Prompt))
+	if request.Prompt, ok := interface{}(nil).(string); ok && request.Prompt != "" {
+		sb.WriteString(fmt.Sprintf("- 创作要求：%s\n", request.Prompt))
 	}
 
 	return sb.String()

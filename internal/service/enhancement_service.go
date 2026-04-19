@@ -434,9 +434,9 @@ func (s *CharacterArcService) determineArcType(snapshots []*model.CharacterState
 	first := snapshots[0].PowerLevel
 	last := snapshots[len(snapshots)-1].PowerLevel
 
-	if last > first*1.5 {
+	if last > int(first * 1.5) {
 		return "growth"
-	} else if last < first*0.5 {
+	} else if last < int(first * 0.5) {
 		return "fall"
 	}
 	return "flat"
@@ -612,7 +612,7 @@ func (s *StyleService) GetDefaultStyle() *StyleConfig {
 
 type GenerationContextService struct {
 	novelRepo    interface{ GetByID(id uint) (*model.Novel, error) }
-	chapterRepo  interface{ GetRecent(novelID uint, chapterNo, count int) ([]*model.Chapter, error) }
+	chapterRepo  interface{ GetByID(id uint) (*model.Chapter, error); GetRecent(novelID uint, chapterNo, count int) ([]*model.Chapter, error); ListByNovel(novelID uint) ([]*model.Chapter, error) }
 	charRepo     interface{ ListByNovel(novelID uint) ([]*model.Character, error) }
 	snapshotSvc *CharacterArcService
 	foreshadowSvc *ForeshadowService
