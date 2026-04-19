@@ -854,28 +854,6 @@ func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIM
 	}
 
 
-// SelectBestModel 选择最佳模型
-func (s *ModelService) SelectBestModel(strategy string) (*model.AIModel, error) {
-	models, err := s.modelRepo.GetActiveModels()
-	if err != nil {
-		return nil, err
-	}
-	if len(models) == 0 {
-		return nil, fmt.Errorf("no available models")
-	}
-
-	var selected *model.AIModel
-	switch strategy {
-	case "quality_first":
-		selected = selectByQuality(models)
-	case "cost_first":
-		selected = selectByCost(models)
-	default: // balanced
-		selected = selectBalanced(models)
-	}
-
-	return selected, nil
-}
 
 func selectByQuality(models []*model.AIModel) *model.AIModel {
 	var best *model.AIModel
