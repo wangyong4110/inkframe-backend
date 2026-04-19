@@ -170,7 +170,7 @@ func (s *IntelligentStoryboardService) analyzeChapterScenes(content string) []*S
 		}
 
 		// 检测对话
-		if strings.Contains(para, """) {
+		if strings.Contains(para, "「") || strings.Contains(para, "」") || strings.Contains(para, "\"") {
 			dialogues := s.extractDialogues(para)
 			for _, d := range dialogues {
 				if len(d) > 10 {

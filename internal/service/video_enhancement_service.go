@@ -738,7 +738,7 @@ func min(a, b int) int {
 }
 
 // AiService getter (for compatibility)
-func (s *IntelligentStoryboardService) AiService *IntelligentStoryboardService {
+func (s *IntelligentStoryboardService) GetAiService() *IntelligentStoryboardService {
 	return s
 }
 
