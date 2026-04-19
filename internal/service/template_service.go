@@ -8,11 +8,11 @@ import (
 )
 
 //go:embed
-//go:embed ../../config/prompts/chapter.tmpl
-//go:embed ../../config/prompts/character.tmpl
-//go:embed ../../config/prompts/novel_outline.tmpl
-//go:embed ../../config/prompts/scene.tmpl
-//go:embed ../../config/prompts/storyboard.tmpl
+//go:embed prompts/chapter.tmpl
+//go:embed prompts/character.tmpl
+//go:embed prompts/novel_outline.tmpl
+//go:embed prompts/scene.tmpl
+//go:embed prompts/storyboard.tmpl
 
 var promptTemplates embed.FS
 
@@ -28,7 +28,7 @@ func NewTemplateService() (*TemplateService, error) {
 	}
 
 	// 加载所有模板文件
-	entries, err := promptTemplates.ReadDir("config/prompts")
+	entries, err := promptTemplates.ReadDir("prompts")
 	if err != nil {
 		return nil, fmt.Errorf("failed to read templates directory: %w", err)
 	}

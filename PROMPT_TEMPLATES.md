@@ -2,7 +2,7 @@
 
 ## 概述
 
-本系统使用 Go 标准库 `text/template` 替代 Python Jinja2，实现提示词模板化管理。所有提示词模板位于 `config/prompts/` 目录下。
+本系统使用 Go 标准库 `text/template` 替代 Python Jinja2，实现提示词模板化管理。所有提示词模板位于 `internal/service/prompts/` 目录下。
 
 ## 快速开始
 
@@ -57,10 +57,10 @@ prompt += fmt.Sprintf("类型：%s，章节数：%d...", novel.Genre, chapterCou
 
 ### 步骤 2: 创建或选择模板
 
-在 `config/prompts/` 中创建对应的 `.tmpl` 文件：
+在 `internal/service/prompts/` 中创建对应的 `.tmpl` 文件：
 
 ```go
-// ✅ 新的模板方式（config/prompts/novel_outline.tmpl）
+// ✅ 新的模板方式（internal/service/prompts/novel_outline.tmpl）
 你是一位专业的小说作家和策划，擅长创作精彩的小说大纲。
 
 # 任务
@@ -128,14 +128,14 @@ if err != nil {
 ### 1. 创建模板文件
 
 ```bash
-# 在 config/prompts/ 目录下创建
-touch config/prompts/my_template.tmpl
+# 在 internal/service/prompts/ 目录下创建
+touch internal/service/prompts/my_template.tmpl
 ```
 
 ### 2. 编写模板内容
 
 ```go
-// config/prompts/my_template.tmpl
+// internal/service/prompts/my_template.tmpl
 你是{{.Role}}，请完成以下任务：
 
 任务：{{.Task}}

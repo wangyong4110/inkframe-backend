@@ -12,7 +12,7 @@
 
 ```
 inkframe-backend/
-├── config/prompts/          # 提示词模板目录
+├── internal/service/prompts/          # 提示词模板目录
 │   ├── novel_outline.tmpl   # 小说大纲生成
 │   ├── chapter.tmpl          # 章节内容生成
 │   ├── character.tmpl        # 角色设计
@@ -125,13 +125,13 @@ func (s *NovelService) GenerateOutline(req *GenerateOutlineRequest) (*NovelOutli
 ### 1. 创建模板文件
 
 ```bash
-touch config/prompts/my_template.tmpl
+touch internal/service/prompts/my_template.tmpl
 ```
 
 ### 2. 编写模板内容
 
 ```go
-// config/prompts/my_template.tmpl
+// internal/service/prompts/my_template.tmpl
 你是{{.Role}}，请完成以下任务：
 
 任务：{{.Task}}
@@ -222,7 +222,7 @@ go test ./internal/service -run TestTemplateService -v
 - **迁移指南**: `MIGRATION_GUIDE.md`
 - **代码示例**: `internal/service/template_service_example.go`
 - **快速开始**: `examples/template_quickstart.go`
-- **模板说明**: `config/prompts/README.md`
+- **模板说明**: `internal/service/prompts/README.md`
 
 ## ❓ 常见问题
 
@@ -230,7 +230,7 @@ go test ./internal/service -run TestTemplateService -v
 A: 当前版本是的，因为模板使用 embed 嵌入。未来可以支持热加载。
 
 ### Q: 如何支持多语言提示词？
-A: 创建子目录（如 `config/prompts/en/`, `config/prompts/zh/`），在模板服务中根据语言选择。
+A: 创建子目录（如 `internal/service/prompts/en/`, `internal/service/prompts/zh/`），在模板服务中根据语言选择。
 
 ### Q: 模板语法和 Jinja2 一样吗？
 A: 不完全一样。本项目使用 Go text/template，语法略有不同。参见 Go 官方文档。
@@ -241,7 +241,7 @@ A: 可以！使用 `{{template "other_template" .}}` 语法。
 ## 🤝 贡献
 
 添加新模板时：
-1. 在 `config/prompts/` 创建 `.tmpl` 文件
+1. 在 `internal/service/prompts/` 创建 `.tmpl` 文件
 2. 在 `template_service.go` 添加数据结构
 3. 在 `template_service.go` 添加渲染方法
 4. 添加单元测试

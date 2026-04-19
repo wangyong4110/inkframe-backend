@@ -12,7 +12,7 @@
 
 ## 目标状态
 
-✅ 所有提示词模板化管理在 `config/prompts/` 目录
+✅ 所有提示词模板化管理在 `internal/service/prompts/` 目录
 ✅ 提示词修改无需重新编译代码（通过配置文件）
 ✅ 提示词版本通过 Git 追踪
 ✅ 支持模板继承和复用
@@ -22,7 +22,7 @@
 
 ### Phase 1: 创建模板系统（已完成）✅
 
-- [x] 创建 `config/prompts/` 目录
+- [x] 创建 `internal/service/prompts/` 目录
 - [x] 实现 `TemplateService` 服务
 - [x] 创建基础模板文件：
   - [x] `novel_outline.tmpl` - 小说大纲
@@ -172,7 +172,7 @@ enable_template_prompts: true
 ## 后续优化
 
 1. **支持多语言提示词**
-   - 创建 `config/prompts/en/`、`config/prompts/zh/` 子目录
+   - 创建 `internal/service/prompts/en/`、`internal/service/prompts/zh/` 子目录
    - 根据用户语言选择对应模板
 
 2. **支持提示词变体**
