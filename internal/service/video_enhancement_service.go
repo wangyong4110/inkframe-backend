@@ -419,7 +419,6 @@ func (s *CharacterConsistencyService) CalculateConsistencyScore(
 // ============================================
 
 type ImageService struct {
-	sdClient *StableDiffusionClient
 	provider AIProvider
 }
 

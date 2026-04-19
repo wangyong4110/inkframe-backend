@@ -214,6 +214,7 @@ func (s *ForeshadowService) MarkFulfilled(novelID uint, foreshadowID uint, fulfi
 type TimelineService struct {
 	chapterRepo interface {
 		ListByNovel(novelID uint) ([]*model.Chapter, error)
+		GetByID(id uint) (*model.Chapter, error)
 	}
 }
 
@@ -340,7 +341,7 @@ func (s *TimelineService) detectConflicts(timeline *Timeline) []TimelineConflict
 type CharacterArcService struct {
 	charRepo interface {
 		GetByID(id uint) (*model.Character, error)
-		GetByNovel(novelID uint) ([]*model.Character, error)
+		ListByNovel(novelID uint) ([]*model.Character, error)
 	}
 	snapshotRepo interface {
 		Create(snapshot *model.CharacterStateSnapshot) error
