@@ -381,6 +381,17 @@ func (r *AIModelRepository) GetAvailableByTaskType(taskType string) ([]*model.AI
 	return suitableModels, nil
 }
 
+// GetActiveModels 获取所有活跃模型
+func (r *AIModelRepository) GetActiveModels() ([]*model.AIModel, error) {
+	var models []*model.AIModel
+	if err := r.db.Preload("Provider").
+		Where("is_active = ?", true).
+		Find(&models).Error; err != nil {
+		return nil, err
+	}
+	return models, nil
+}
+
 // GetByID 根据ID获取模型
 func (r *AIModelRepository) GetByID(id uint) (*model.AIModel, error) {
 	var model model.AIModel
