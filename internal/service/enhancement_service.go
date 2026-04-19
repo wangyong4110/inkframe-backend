@@ -1,13 +1,11 @@
 package service
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
 
@@ -24,13 +22,13 @@ type ForeshadowService struct {
 	aiService *AIService
 }
 
-func NewForeshadowService(kbRepo interface{
-		Create(kb *model.KnowledgeBase) error
-		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
-		Update(kb *model.KnowledgeBase) error
-	}, aiService *AIService) *ForeshadowService {
+func NewForeshadowService(kbRepo interface {
+	Create(kb *model.KnowledgeBase) error
+	GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
+	Update(kb *model.KnowledgeBase) error
+}, aiService *AIService) *ForeshadowService {
 	return &ForeshadowService{
-		kbRepo:   kbRepo,
+		kbRepo:    kbRepo,
 		aiService: aiService,
 	}
 }
@@ -42,10 +40,10 @@ type ForeshadowItem struct {
 	ChapterNo   int    `json:"chapter_no"`
 	Type        string `json:"type"` // object/person/event/ability/revelation
 	Description string `json:"description"`
-	Hint        string `json:"hint"`        // 暗示内容
+	Hint        string `json:"hint"`         // 暗示内容
 	Resolution  string `json:"resolution"`   // 回收说明
-	IsFulfilled bool   `json:"is_fulfilled"`  // 是否已回收
-	FulfilledIn *uint `json:"fulfilled_in"` // 在哪一章回收
+	IsFulfilled bool   `json:"is_fulfilled"` // 是否已回收
+	FulfilledIn *uint  `json:"fulfilled_in"` // 在哪一章回收
 	FulfilledAt string `json:"fulfilled_at"`
 }
 
@@ -222,38 +220,38 @@ type TimelineService struct {
 	}
 }
 
-func NewTimelineService(chapterRepo interface{
-		GetByID(id uint) (*model.Chapter, error)
-		ListByNovel(novelID uint) ([]*model.Chapter, error)
-	}) *TimelineService {
+func NewTimelineService(chapterRepo interface {
+	GetByID(id uint) (*model.Chapter, error)
+	ListByNovel(novelID uint) ([]*model.Chapter, error)
+}) *TimelineService {
 	return &TimelineService{chapterRepo: chapterRepo}
 }
 
 // TimelineEvent 时间线事件
 type TimelineEvent struct {
-	ChapterNo    int    `json:"chapter_no"`
+	ChapterNo   int    `json:"chapter_no"`
 	Title       string `json:"title"`
-	TimePoint   string `json:"time_point"`    // 故事内时间
-	DayOffset   int    `json:"day_offset"`    // 相对于起始日的天数偏移
+	TimePoint   string `json:"time_point"` // 故事内时间
+	DayOffset   int    `json:"day_offset"` // 相对于起始日的天数偏移
 	Description string `json:"description"`
-	Type        string `json:"type"`         // plot/character/world
+	Type        string `json:"type"` // plot/character/world
 }
 
 // Timeline 时间线
 type Timeline struct {
-	NovelID    uint             `json:"novel_id"`
-	StartDate  string           `json:"start_date"`
-	EndDate    string           `json:"end_date"`
-	Events     []*TimelineEvent `json:"events"`
-	Conflicts  []TimelineConflict `json:"conflicts"`
+	NovelID   uint               `json:"novel_id"`
+	StartDate string             `json:"start_date"`
+	EndDate   string             `json:"end_date"`
+	Events    []*TimelineEvent   `json:"events"`
+	Conflicts []TimelineConflict `json:"conflicts"`
 }
 
 // TimelineConflict 时间线冲突
 type TimelineConflict struct {
-	Event1 *TimelineEvent `json:"event1"`
-	Event2 *TimelineEvent `json:"event2"`
-	Type   string         `json:"type"` // overlap_gap_contradiction
-	Description string    `json:"description"`
+	Event1      *TimelineEvent `json:"event1"`
+	Event2      *TimelineEvent `json:"event2"`
+	Type        string         `json:"type"` // overlap_gap_contradiction
+	Description string         `json:"description"`
 }
 
 // BuildTimeline 构建时间线
@@ -302,7 +300,7 @@ func (s *TimelineService) extractTimeInfo(content string) (string, int) {
 
 	timeKeywords := map[string]int{
 		"第二天": 1,
-		"次日":   1,
+		"次日":  1,
 		"几天后": 3,
 		"数日后": 7,
 		"一周后": 7,
@@ -327,9 +325,9 @@ func (s *TimelineService) detectConflicts(timeline *Timeline) []TimelineConflict
 	for i := 1; i < len(timeline.Events); i++ {
 		if timeline.Events[i].DayOffset < timeline.Events[i-1].DayOffset {
 			conflicts = append(conflicts, TimelineConflict{
-				Event1:      timeline.Events[i-1],
-				Event2:      timeline.Events[i],
-				Type:        "time_regression",
+				Event1: timeline.Events[i-1],
+				Event2: timeline.Events[i],
+				Type:   "time_regression",
 				Description: fmt.Sprintf("时间倒退：从第%d章的第%d天回到第%d天",
 					timeline.Events[i].ChapterNo,
 					timeline.Events[i-1].DayOffset,
@@ -356,13 +354,13 @@ type CharacterArcService struct {
 	}
 }
 
-func NewCharacterArcService(charRepo interface{
-		GetByID(id uint) (*model.Character, error)
-		ListByNovel(novelID uint) ([]*model.Character, error)
-	}, snapshotRepo interface{
-		Create(snapshot *model.CharacterStateSnapshot) error
-		ListByCharacter(characterID uint) ([]*model.CharacterStateSnapshot, error)
-	}) *CharacterArcService {
+func NewCharacterArcService(charRepo interface {
+	GetByID(id uint) (*model.Character, error)
+	ListByNovel(novelID uint) ([]*model.Character, error)
+}, snapshotRepo interface {
+	Create(snapshot *model.CharacterStateSnapshot) error
+	ListByCharacter(characterID uint) ([]*model.CharacterStateSnapshot, error)
+}) *CharacterArcService {
 	return &CharacterArcService{
 		charRepo:     charRepo,
 		snapshotRepo: snapshotRepo,
@@ -371,22 +369,22 @@ func NewCharacterArcService(charRepo interface{
 
 // CharacterArc 角色弧光
 type CharacterArc struct {
-	CharacterID   uint                     `json:"character_id"`
-	CharacterName string                   `json:"character_name"`
-	ArcType       string                   `json:"arc_type"` // growth/fall/redemption
-	Stages        []*CharacterArcStage      `json:"stages"`
-	CurrentStage  int                      `json:"current_stage"`
+	CharacterID   uint                 `json:"character_id"`
+	CharacterName string               `json:"character_name"`
+	ArcType       string               `json:"arc_type"` // growth/fall/redemption
+	Stages        []*CharacterArcStage `json:"stages"`
+	CurrentStage  int                  `json:"current_stage"`
 }
 
 // CharacterArcStage 角色弧光阶段
 type CharacterArcStage struct {
-	ChapterNo     int     `json:"chapter_no"`
-	Title         string  `json:"title"`
-	State         string  `json:"state"` // 心态/状态描述
-	PowerLevel    int     `json:"power_level"`
-	Mood          string  `json:"mood"`
-	Relationships string  `json:"relationships"`
-	Note          string  `json:"note"`
+	ChapterNo     int    `json:"chapter_no"`
+	Title         string `json:"title"`
+	State         string `json:"state"` // 心态/状态描述
+	PowerLevel    int    `json:"power_level"`
+	Mood          string `json:"mood"`
+	Relationships string `json:"relationships"`
+	Note          string `json:"note"`
 }
 
 // GetCharacterArc 获取角色弧光
@@ -404,8 +402,8 @@ func (s *CharacterArcService) GetCharacterArc(novelID, characterID uint) (*Chara
 	arc := &CharacterArc{
 		CharacterID:   char.ID,
 		CharacterName: char.Name,
-		ArcType:      s.determineArcType(snapshots),
-		Stages:       make([]*CharacterArcStage, 0),
+		ArcType:       s.determineArcType(snapshots),
+		Stages:        make([]*CharacterArcStage, 0),
 	}
 
 	for _, snap := range snapshots {
@@ -432,11 +430,11 @@ func (s *CharacterArcService) determineArcType(snapshots []*model.CharacterState
 
 	// 简化：根据能力等级变化判断
 	first := snapshots[0].PowerLevel
-	last := snapshots[len(snapshots)-1].PowerLevel
+	last := float64(snapshots[len(snapshots)-1].PowerLevel)
 
-	if last > int(first * 1.5) {
+	if last > (float64(first) * 1.5) {
 		return "growth"
-	} else if last < int(first * 0.5) {
+	} else if last < (float64(first) * 0.5) {
 		return "fall"
 	}
 	return "flat"
@@ -452,7 +450,7 @@ func (s *CharacterArcService) estimateChapterFromSnapshot(s *model.CharacterStat
 func (s *CharacterArcService) CreateSnapshot(chapterID uint, characterID uint, content string) error {
 	// 简化实现
 	snapshot := &model.CharacterStateSnapshot{
-		CharacterID:   characterID,
+		CharacterID:  characterID,
 		ChapterID:    chapterID,
 		SnapshotTime: time.Now(),
 	}
@@ -470,9 +468,9 @@ type StyleService struct {
 	}
 }
 
-func NewStyleService(repo interface{
-		GetByGenreAndStage(genre string, stage string) (*model.PromptTemplate, error)
-	}) *StyleService {
+func NewStyleService(repo interface {
+	GetByGenreAndStage(genre string, stage string) (*model.PromptTemplate, error)
+}) *StyleService {
 	return &StyleService{templateRepo: repo}
 }
 
@@ -499,9 +497,9 @@ type StyleConfig struct {
 
 // NarrativeVoicePrompts 叙事视角提示词
 var NarrativeVoicePrompts = map[string]string{
-	"first_person":       "使用第一人称「我」叙述，让读者代入主角视角",
-	"third_limited":      "使用第三人称有限视角，聚焦于主角的所见所感",
-	"third_omniscient":    "使用全知视角，可以自由描述任何角色的内心和背景",
+	"first_person":     "使用第一人称「我」叙述，让读者代入主角视角",
+	"third_limited":    "使用第三人称有限视角，聚焦于主角的所见所感",
+	"third_omniscient": "使用全知视角，可以自由描述任何角色的内心和背景",
 }
 
 // NarrativeDistancePrompts 叙事距离提示词
@@ -513,9 +511,9 @@ var NarrativeDistancePrompts = map[string]string{
 
 // EmotionalTonePrompts 情感温度提示词
 var EmotionalTonePrompts = map[string]string{
-	"warm":   "温暖的情感基调，充满人情味和温情",
+	"warm":    "温暖的情感基调，充满人情味和温情",
 	"neutral": "中性的情感基调，客观冷静的叙述",
-	"cold":   "冷淡的情感基调，克制内敛的描写",
+	"cold":    "冷淡的情感基调，克制内敛的描写",
 }
 
 // SentenceComplexityPrompts 句式复杂度提示词
@@ -529,7 +527,7 @@ var SentenceComplexityPrompts = map[string]string{
 var DescriptionDensityPrompts = map[string]string{
 	"minimal":  "简洁描写，只保留必要信息，节奏紧凑",
 	"moderate": "适度描写，有细节但不冗长",
-	"rich":    "细腻丰富的描写，环境、动作、心理全方位展现",
+	"rich":     "细腻丰富的描写，环境、动作、心理全方位展现",
 }
 
 // BuildStylePrompt 构建风格提示词
@@ -558,7 +556,7 @@ func (s *StyleService) BuildStylePrompt(config *StyleConfig) string {
 
 	// 对话比例
 	if config.DialogueRatio > 0 {
-		prompts = append(prompts, fmt.Sprintf("对话比例约占%d%%", int(int(config.DialogueRatio * 100))))
+		prompts = append(prompts, fmt.Sprintf("对话比例约占%d%%", int(int(config.DialogueRatio*100))))
 	}
 
 	return strings.Join(prompts, "。") + "。"
@@ -597,12 +595,12 @@ func (s *StyleService) MergeStyleConfig(base, override *StyleConfig) *StyleConfi
 // GetDefaultStyle 获取默认风格
 func (s *StyleService) GetDefaultStyle() *StyleConfig {
 	return &StyleConfig{
-		NarrativeVoice:      "third_limited",
-		NarrativeDistance:   "medium",
+		NarrativeVoice:     "third_limited",
+		NarrativeDistance:  "medium",
 		EmotionalTone:      "neutral",
-		SentenceComplexity:  "moderate",
-		DialogueRatio:       0.3,
-		DescriptionDensity:  "moderate",
+		SentenceComplexity: "moderate",
+		DialogueRatio:      0.3,
+		DescriptionDensity: "moderate",
 	}
 }
 
@@ -611,23 +609,31 @@ func (s *StyleService) GetDefaultStyle() *StyleConfig {
 // ============================================
 
 type GenerationContextService struct {
-	novelRepo    interface{ GetByID(id uint) (*model.Novel, error) }
-	chapterRepo  interface{ GetByID(id uint) (*model.Chapter, error); GetRecent(novelID uint, chapterNo, count int) ([]*model.Chapter, error); ListByNovel(novelID uint) ([]*model.Chapter, error) }
-	charRepo     interface{ ListByNovel(novelID uint) ([]*model.Character, error) }
-	snapshotSvc *CharacterArcService
+	novelRepo interface {
+		GetByID(id uint) (*model.Novel, error)
+	}
+	chapterRepo interface {
+		GetByID(id uint) (*model.Chapter, error)
+		GetRecent(novelID uint, chapterNo, count int) ([]*model.Chapter, error)
+		ListByNovel(novelID uint) ([]*model.Chapter, error)
+	}
+	charRepo interface {
+		ListByNovel(novelID uint) ([]*model.Character, error)
+	}
+	snapshotSvc   *CharacterArcService
 	foreshadowSvc *ForeshadowService
 }
 
 func NewGenerationContextService(
-	novelRepo interface{
+	novelRepo interface {
 		GetByID(id uint) (*model.Novel, error)
 	},
-	chapterRepo interface{
+	chapterRepo interface {
 		GetByID(id uint) (*model.Chapter, error)
 		GetRecent(novelID uint, chapterNo int, count int) ([]*model.Chapter, error)
 		ListByNovel(novelID uint) ([]*model.Chapter, error)
 	},
-	charRepo interface{
+	charRepo interface {
 		GetByID(id uint) (*model.Character, error)
 		ListByNovel(novelID uint) ([]*model.Character, error)
 	},
@@ -638,20 +644,20 @@ func NewGenerationContextService(
 		novelRepo:     novelRepo,
 		chapterRepo:   chapterRepo,
 		charRepo:      charRepo,
-		snapshotSvc:  snapshotSvc,
+		snapshotSvc:   snapshotSvc,
 		foreshadowSvc: foreshadowSvc,
 	}
 }
 
 // GenerationContext 生成上下文
 type GenerationContext struct {
-	Novel    *model.Novel   `json:"novel"`
-	Characters []*model.Character `json:"characters"`
-	RecentChapters []*model.Chapter `json:"recent_chapters"`
+	Novel          *model.Novel       `json:"novel"`
+	Characters     []*model.Character `json:"characters"`
+	RecentChapters []*model.Chapter   `json:"recent_chapters"`
 
 	// 新增：增强上下文
-	Foreshadows []*ForeshadowItem        `json:"foreshadows"`
-	Timeline   *Timeline                `json:"timeline"`
+	Foreshadows   []*ForeshadowItem      `json:"foreshadows"`
+	Timeline      *Timeline              `json:"timeline"`
 	CharacterArcs map[uint]*CharacterArc `json:"character_arcs"`
 
 	// 全局摘要
