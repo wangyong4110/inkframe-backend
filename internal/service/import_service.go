@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
 	"io"
@@ -253,13 +254,13 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 	// 创建章节（稍后异步爬取内容）
 	for i, chapterInfo := range chapters {
 		chapter := &model.Chapter{
-			NovelID:    novel.ID,
-			ChapterNo:  i + 1,
-			Title:      chapterInfo.Title,
-			Summary:    fmt.Sprintf("爬取自: %s", req.URL),
-			Content:    "", // 稍后异步爬取
-			WordCount:  0,
-			Status:     "draft",
+			NovelID:   novel.ID,
+			ChapterNo: i + 1,
+			Title:     chapterInfo.Title,
+			Summary:   fmt.Sprintf("爬取自: %s", req.URL),
+			Content:   "", // 稍后异步爬取
+			WordCount: 0,
+			Status:    "draft",
 		}
 
 		if err := s.chapterRepo.Create(chapter); err != nil {
