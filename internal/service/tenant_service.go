@@ -14,11 +14,11 @@ import (
 
 // TenantService 租户服务
 type TenantService struct {
-	tenantRepo *TenantRepository
-	userRepo   *UserRepository
+	tenantRepo *repository.TenantRepository
+	userRepo   *repository.UserRepository
 }
 
-func NewTenantService(tenantRepo *TenantRepository, userRepo *UserRepository) *TenantService {
+func NewTenantService(tenantRepo *repository.TenantRepository, userRepo *repository.UserRepository) *TenantService {
 	return &TenantService{
 		tenantRepo: tenantRepo,
 		userRepo:   userRepo,
@@ -167,14 +167,14 @@ func (s *TenantService) UpdateUsage(tenantID uint, projectDelta, userDelta, stor
 
 // ProjectService 项目服务
 type ProjectService struct {
-	tenantRepo  *TenantRepository
-	projectRepo *ProjectRepository
+	tenantRepo  *repository.TenantRepository
+	projectRepo *repository.ProjectRepository
 	novelRepo   *repository.NovelRepository
 }
 
 func NewProjectService(
-	tenantRepo *TenantRepository,
-	projectRepo *ProjectRepository,
+	tenantRepo *repository.TenantRepository,
+	projectRepo *repository.ProjectRepository,
 	novelRepo *repository.NovelRepository,
 ) *ProjectService {
 	return &ProjectService{
