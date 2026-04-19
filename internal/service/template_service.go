@@ -7,7 +7,13 @@ import (
 	"text/template"
 )
 
-//go:embed ../../config/prompts/*.tmpl
+//go:embed
+//go:embed ../../config/prompts/chapter.tmpl
+//go:embed ../../config/prompts/character.tmpl
+//go:embed ../../config/prompts/novel_outline.tmpl
+//go:embed ../../config/prompts/scene.tmpl
+//go:embed ../../config/prompts/storyboard.tmpl
+
 var promptTemplates embed.FS
 
 // TemplateService 模板服务
