@@ -3,6 +3,7 @@ module github.com/inkframe/inkframe-backend
 go 1.21
 
 require (
+	github.com/PuerkitoBio/goquery v1.9.1
 	github.com/gin-gonic/gin v1.9.1
 	github.com/spf13/viper v1.18.2
 	gorm.io/driver/mysql v1.5.2
