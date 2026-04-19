@@ -740,14 +740,6 @@ func NewModelService(
 	}
 }
 
-	var selected *model.AIModel
-	switch strategy {
-	case "quality_first":
-		selected = selectByQuality(models)
-	case "cost_first":
-		selected = selectByCost(models)
-	default: // balanced
-		selected = selectBalanced(models)
 	}
 
 	return selected, nil
