@@ -8,14 +8,15 @@ import (
 
 // Config 路由配置
 type Config struct {
-	NovelHandler       *handler.NovelHandler
-	ChapterHandler    *handler.ChapterHandler
-	CharacterHandler  *handler.CharacterHandler
-	VideoHandler      *handler.VideoHandler
-	ModelHandler      *handler.ModelHandler
-	StyleHandler      *handler.StyleHandler
-	ContextHandler    *handler.ContextHandler
-	ImportHandler     *handler.ImportHandler
+	NovelHandler    *handler.NovelHandler
+	ChapterHandler  *handler.ChapterHandler
+	CharacterHandler *handler.CharacterHandler
+	VideoHandler   *handler.VideoHandler
+	ModelHandler   *handler.ModelHandler
+	StyleHandler   *handler.StyleHandler
+	ContextHandler *handler.ContextHandler
+	ImportHandler  *handler.ImportHandler
+	TenantHandler  *handler.TenantHandler
 }
 
 // SetupRouter 配置路由
@@ -35,7 +36,40 @@ func SetupRouter(cfg *Config) *gin.Engine {
 	// API v1
 	v1 := r.Group("/api/v1")
 	{
-		// 小说相关
+		// ========================================
+		// 租户/多项目管理 API
+		// ========================================
+		tenants := v1.Group("/tenants")
+		{
+			// 租户管理
+			tenants.GET("", cfg.TenantHandler.ListTenants)
+			tenants.POST("", cfg.TenantHandler.CreateTenant)
+			tenants.GET("/:id", cfg.TenantHandler.GetTenant)
+			tenants.PUT("/:id", cfg.TenantHandler.UpdateTenant)
+			tenants.DELETE("/:id", cfg.TenantHandler.DeleteTenant)
+			tenants.GET("/:id/quota", cfg.TenantHandler.GetQuota)
+
+			// 租户成员管理
+			tenants.GET("/:id/members", cfg.TenantHandler.GetMembers)
+			tenants.POST("/:id/members", cfg.TenantHandler.AddMember)
+			tenants.PUT("/:id/members/:user_id", cfg.TenantHandler.UpdateMemberRole)
+			tenants.DELETE("/:id/members/:user_id", cfg.TenantHandler.RemoveMember)
+
+			// 项目管理
+			tenants.GET("/:id/projects", cfg.TenantHandler.ListProjects)
+			tenants.POST("/:id/projects", cfg.TenantHandler.CreateProject)
+			tenants.GET("/:id/projects/:project_id", cfg.TenantHandler.GetProject)
+			tenants.PUT("/:id/projects/:project_id", cfg.TenantHandler.UpdateProject)
+			tenants.DELETE("/:id/projects/:project_id", cfg.TenantHandler.DeleteProject)
+			tenants.GET("/:id/projects/:project_id/stats", cfg.TenantHandler.GetProjectStats)
+		}
+
+		// 通过编码获取租户（用于公开访问）
+		v1.GET("/tenants/code/:code", cfg.TenantHandler.GetTenantByCode)
+
+		// ========================================
+		// 小说管理 API（支持多租户）
+		// ========================================
 		novels := v1.Group("/novels")
 		{
 			novels.GET("", cfg.NovelHandler.ListNovels)
@@ -119,7 +153,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		storyboard := v1.Group("/storyboard")
 		{
 			storyboard.POST("/generate", func(c *gin.Context) {
-				// 转发到 video handler
 				cfg.VideoHandler.GenerateStoryboard(c)
 			})
 			storyboard.POST("/analyze-emotions", cfg.VideoHandler.AnalyzeEmotions)

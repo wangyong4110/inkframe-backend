@@ -8,6 +8,16 @@ import (
 type Novel struct {
 	ID          uint      `json:"id" gorm:"primaryKey"`
 	UUID        string    `json:"uuid" gorm:"uniqueIndex;size:36"`
+	
+	// 多租户支持
+	TenantID    uint      `json:"tenant_id" gorm:"index;not null;default:0"`
+	Tenant       *Tenant   `json:"tenant,omitempty" gorm:"foreignKey:TenantID"`
+	
+	// 项目支持
+	ProjectID   uint      `json:"project_id" gorm:"index;default:0"`
+	Project     *TenantProject `json:"project,omitempty" gorm:"foreignKey:TenantID,ProjectID"`
+	
+	// 基本信息
 	Title       string    `json:"title" gorm:"size:255;not null"`
 	Description string    `json:"description" gorm:"type:text"`
 	Genre       string    `json:"genre" gorm:"size:50;index"`
@@ -20,6 +30,7 @@ type Novel struct {
 	TotalWords   int       `json:"total_words" gorm:"default:0"`
 	ChapterCount int       `json:"chapter_count" gorm:"default:0"`
 	ViewCount    int       `json:"view_count" gorm:"default:0"`
+	LikeCount    int       `json:"like_count" gorm:"default:0"`
 
 	// 关联
 	WorldviewID  *uint      `json:"worldview_id"`
@@ -31,6 +42,13 @@ type Novel struct {
 	Temperature  float64 `json:"temperature" gorm:"type:decimal(3,2);default:0.7"`
 	MaxTokens    int     `json:"max_tokens" gorm:"default:4096"`
 	StylePrompt  string  `json:"style_prompt" gorm:"type:text"`
+	
+	// 可见性
+	IsPublic     bool    `json:"is_public" gorm:"default:false;comment:是否公开"`
+	AccessCode   string  `json:"access_code" gorm:"size:100;comment:访问密码"`
+	
+	// 存储
+	StorageSize int64   `json:"storage_size" gorm:"default:0;comment:存储大小字节"`
 
 	// 时间戳
 	CreatedAt time.Time `json:"created_at"`

@@ -529,3 +529,139 @@ CREATE TABLE IF NOT EXISTS `ink_feedback_record` (
   INDEX `idx_chapter_id` (`chapter_id`),
   INDEX `idx_type` (`type`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='反馈记录表';
+
+-- ============================================
+-- Multi-tenant support tables (Multi-tenancy)
+-- ============================================
+
+-- Tenant table (租户/组织)
+CREATE TABLE IF NOT EXISTS `tenants` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `name` VARCHAR(100) NOT NULL COMMENT '租户名称',
+  `code` VARCHAR(50) NOT NULL UNIQUE COMMENT '租户代码',
+  `logo` VARCHAR(500) COMMENT 'Logo URL',
+  `settings` TEXT COMMENT '租户配置JSON',
+  `plan` VARCHAR(20) NOT NULL DEFAULT 'free' COMMENT '套餐: free/pro/enterprise',
+  `status` VARCHAR(20) NOT NULL DEFAULT 'active' COMMENT '状态: active/suspended/banned',
+  
+  -- Quotas
+  `max_projects` INT NOT NULL DEFAULT 5 COMMENT '最大项目数',
+  `max_users` INT NOT NULL DEFAULT 3 COMMENT '最大用户数',
+  `max_storage_mb` INT NOT NULL DEFAULT 1000 COMMENT '最大存储MB',
+  `used_projects` INT NOT NULL DEFAULT 0 COMMENT '已用项目数',
+  `used_users` INT NOT NULL DEFAULT 0 COMMENT '已用用户数',
+  `used_storage_mb` INT NOT NULL DEFAULT 0 COMMENT '已用存储MB',
+  
+  -- Billing
+  `billing_cycle` VARCHAR(20) NOT NULL DEFAULT 'monthly' COMMENT '计费周期',
+  `expires_at` DATETIME COMMENT '到期时间',
+  
+  -- Contact
+  `description` VARCHAR(500) COMMENT '描述',
+  `contact_email` VARCHAR(100) COMMENT '联系邮箱',
+  `contact_phone` VARCHAR(20) COMMENT '联系电话',
+  
+  -- SEO
+  `meta_title` VARCHAR(200) COMMENT 'SEO标题',
+  `meta_keywords` VARCHAR(500) COMMENT 'SEO关键词',
+  `meta_desc` VARCHAR(500) COMMENT 'SEO描述',
+  
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX `idx_code` (`code`),
+  INDEX `idx_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='租户表';
+
+-- TenantUser table (租户用户关联)
+CREATE TABLE IF NOT EXISTS `tenant_users` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `tenant_id` BIGINT UNSIGNED NOT NULL COMMENT '租户ID',
+  `user_id` BIGINT UNSIGNED NOT NULL COMMENT '用户ID',
+  `role` VARCHAR(20) NOT NULL DEFAULT 'member' COMMENT '角色: owner/admin/member/viewer',
+  `nickname` VARCHAR(50) COMMENT '在租户内的昵称',
+  `avatar` VARCHAR(500) COMMENT '头像',
+  `status` VARCHAR(20) NOT NULL DEFAULT 'active' COMMENT '状态',
+  `permissions` TEXT COMMENT '自定义权限JSON',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY `uk_tenant_user` (`tenant_id`, `user_id`),
+  INDEX `idx_tenant_id` (`tenant_id`),
+  INDEX `idx_user_id` (`user_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='租户用户关联表';
+
+-- TenantProject table (租户项目)
+CREATE TABLE IF NOT EXISTS `tenant_projects` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `tenant_id` BIGINT UNSIGNED NOT NULL COMMENT '租户ID',
+  `project_id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT COMMENT '项目ID',
+  `project_type` VARCHAR(20) NOT NULL DEFAULT 'novel' COMMENT '项目类型: novel/custom',
+  `name` VARCHAR(100) NOT NULL COMMENT '项目名称',
+  `status` VARCHAR(20) NOT NULL DEFAULT 'active' COMMENT '状态',
+  `members` TEXT COMMENT '成员列表JSON',
+  `settings` TEXT COMMENT '项目设置JSON',
+  `tags` TEXT COMMENT '标签JSON',
+  `storage_used` BIGINT NOT NULL DEFAULT 0 COMMENT '已用存储字节',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX `idx_tenant_id` (`tenant_id`),
+  INDEX `idx_project_id` (`project_id`),
+  UNIQUE KEY `uk_tenant_project` (`tenant_id`, `project_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='租户项目表';
+
+-- User table (用户)
+CREATE TABLE IF NOT EXISTS `users` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `uuid` VARCHAR(36) NOT NULL UNIQUE COMMENT 'UUID',
+  `username` VARCHAR(50) NOT NULL UNIQUE COMMENT '用户名',
+  `email` VARCHAR(100) NOT NULL UNIQUE COMMENT '邮箱',
+  `phone` VARCHAR(20) COMMENT '手机号',
+  `password` VARCHAR(100) NOT NULL COMMENT '密码哈希',
+  `nickname` VARCHAR(50) COMMENT '昵称',
+  `avatar` VARCHAR(500) COMMENT '头像',
+  `status` VARCHAR(20) NOT NULL DEFAULT 'active' COMMENT '状态',
+  `role` VARCHAR(20) NOT NULL DEFAULT 'user' COMMENT '系统角色: admin/user',
+  
+  -- OAuth
+  `oauth_provider` VARCHAR(20) COMMENT 'OAuth提供商',
+  `oauth_id` VARCHAR(100) COMMENT 'OAuth ID',
+  
+  -- Settings
+  `settings` TEXT COMMENT '用户设置JSON',
+  `preferences` TEXT COMMENT '偏好设置JSON',
+  
+  -- Stats
+  `total_projects` INT NOT NULL DEFAULT 0 COMMENT '总项目数',
+  `total_novels` INT NOT NULL DEFAULT 0 COMMENT '总小说数',
+  `total_words` INT NOT NULL DEFAULT 0 COMMENT '总字数',
+  
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `last_login_at` DATETIME COMMENT '最后登录时间',
+  INDEX `idx_email` (`email`),
+  INDEX `idx_phone` (`phone`),
+  INDEX `idx_status` (`status`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
+
+-- ============================================
+-- Add tenant_id to existing tables
+-- ============================================
+
+-- Add tenant_id and project_id to ink_novel
+ALTER TABLE `ink_novel` 
+  ADD COLUMN `tenant_id` BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '租户ID' AFTER `uuid`,
+  ADD COLUMN `project_id` BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '项目ID' AFTER `tenant_id`,
+  ADD COLUMN `is_public` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否公开' AFTER `style_prompt`,
+  ADD COLUMN `access_code` VARCHAR(100) COMMENT '访问密码' AFTER `is_public`,
+  ADD COLUMN `storage_size` BIGINT NOT NULL DEFAULT 0 COMMENT '存储大小字节' AFTER `access_code`,
+  ADD INDEX `idx_tenant_id` (`tenant_id`),
+  ADD INDEX `idx_project_id` (`project_id`);
+
+-- Add tenant_id to ink_chapter
+ALTER TABLE `ink_chapter` 
+  ADD COLUMN `tenant_id` BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '租户ID' AFTER `novel_id`,
+  ADD INDEX `idx_tenant_id` (`tenant_id`);
+
+-- Add tenant_id to ink_character
+ALTER TABLE `ink_character` 
+  ADD COLUMN `tenant_id` BIGINT UNSIGNED NOT NULL DEFAULT 0 COMMENT '租户ID' AFTER `novel_id`,
+  ADD INDEX `idx_tenant_id` (`tenant_id`);
