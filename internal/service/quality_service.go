@@ -655,14 +655,6 @@ type PlotLogicReport struct {
 	 Suggestions []string     `json:"suggestions"`
 }
 
-// PlotIssue 剧情问题
-type PlotIssue struct {
-	Type        string   `json:"type"` // causality, motivation, knowledge, etc.
-	Severity    string   `json:"severity"`
-	Description string   `json:"description"`
-	Location    string   `json:"location"`
-	Suggestion  string   `json:"suggestion"`
-}
 
 // CheckPlotLogic 检查剧情逻辑
 func (s *QualityControlService) CheckPlotLogic(novelID uint, chapterNo int, content string) *PlotLogicReport {
