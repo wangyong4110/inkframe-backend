@@ -38,7 +38,6 @@ type VideoGenerationResult struct {
 // 1. 智能分镜生成器
 // ============================================
 
-}
 
 // GenerateStoryboard 生成分镜
 func (s *IntelligentStoryboardService) GenerateStoryboard(chapter *model.Chapter, characters []*model.Character, config *VideoGenerationRequest) ([]*StoryboardShot, error) {
