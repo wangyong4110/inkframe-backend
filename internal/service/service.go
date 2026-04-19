@@ -885,3 +885,4 @@ func selectBalanced(models []*model.AIModel) *model.AIModel {
 	}
 
 	return best
+}
