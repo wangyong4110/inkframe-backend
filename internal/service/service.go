@@ -738,22 +738,6 @@ func NewModelService(
 		taskRepo:  taskRepo,
 		experimentRepo: experimentRepo,
 	}
-}
-
-	var selected *model.AIModel
-	switch strategy {
-	case "quality_first":
-		selected = selectByQuality(models)
-	case "cost_first":
-		selected = selectByCost(models)
-	default: // balanced
-		selected = selectBalanced(models)
-	}
-
-	return selected, nil
-}
-
-func selectByQuality(models []*model.AIModel) *model.AIModel {
 	var best *model.AIModel
 	bestScore := 0.0
 

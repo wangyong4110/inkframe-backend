@@ -1,8 +1,8 @@
 package service
 
 import (
-	"github.com/inkframe/inkframe-backend/internal/model"
 	"context"
+	"github.com/inkframe/inkframe-backend/internal/model"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -11,7 +11,7 @@ import (
 )
 
 // ============================================
-// Character Consistency)
+// Character Consistency
 // ============================================
 // Character Consistency Service - 角色一致性控制
 // ============================================
@@ -442,18 +442,3 @@ func min(a, b int) int {
 		return a
 	}
 	return b
-}
-
-// AiService getter (for compatibility)
-func (s *IntelligentStoryboardService) AiService *IntelligentStoryboardService {
-	return s
-}
-
-// DetectActionBeats getter (for compatibility)
-func (s *IntelligentStoryboardService) DetectActionBeats(content string) ([]struct {
-	Position  int
-	Type     string
-	Intensity float64
-}, error) {
-	return s.DetectActionBeats(content)
-}
