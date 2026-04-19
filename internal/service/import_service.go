@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"mime/multipart"
+	"context"
 	"net/http"
 	"path/filepath"
 	"regexp"
@@ -187,13 +188,10 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 
 	// 解析URL获取站点
 	siteName := s.detectSiteFromURL(req.URL)
-	parser, ok := s.crawler.GetParser(siteName)
-	if !ok {
-		return nil, fmt.Errorf("unsupported site: %s", siteName)
-	}
+	parser := crawler.NovelParser{SiteName: siteName}
 
 	// 爬取小说详情
-	novelDetail, chapters, err := s.crawler.CrawlNovel(req.URL, parser)
+	novelDetail, chapters, err := s.crawler.CrawlNovel(context.Background(), req.URL)
 	if err != nil {
 		return nil, fmt.Errorf("crawl novel failed: %w", err)
 	}

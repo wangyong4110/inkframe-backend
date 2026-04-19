@@ -130,8 +130,8 @@ func (s *PromptService) BuildChapterPrompt(novel *model.Novel, chapter *model.Ch
 	sb.WriteString(fmt.Sprintf("- 章节标题：%s\n", chapter.Title))
 	sb.WriteString(fmt.Sprintf("- 字数要求：2000-3000字\n"))
 
-	if request != nil && request.Prompt != "" {
-		sb.WriteString(fmt.Sprintf("- 创作要求：%s\n", request.Prompt))
+	if req != nil && req.Prompt != "" {
+		sb.WriteString(fmt.Sprintf("- 创作要求：%s\n", req.Prompt))
 	}
 
 	return sb.String()
@@ -322,7 +322,11 @@ type KnowledgeService struct {
 	vectorStore *vector.StoreManager
 }
 
-func NewKnowledgeService(kbRepo interface{}, vectorStore *vector.StoreManager) *KnowledgeService {
+func NewKnowledgeService(kbRepo interface{
+		Create(kb *model.KnowledgeBase) error
+		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
+		Search(keyword string, limit int) ([]*model.KnowledgeBase, error)
+	}, vectorStore *vector.StoreManager) *KnowledgeService {
 	return &KnowledgeService{
 		kbRepo:      kbRepo,
 		vectorStore: vectorStore,
