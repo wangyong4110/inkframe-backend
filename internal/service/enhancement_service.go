@@ -24,7 +24,11 @@ type ForeshadowService struct {
 	aiService *AIService
 }
 
-func NewForeshadowService(kbRepo interface{}, aiService *AIService) *ForeshadowService {
+func NewForeshadowService(kbRepo interface{
+		Create(kb *model.KnowledgeBase) error
+		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
+		Update(kb *model.KnowledgeBase) error
+	}, aiService *AIService) *ForeshadowService {
 	return &ForeshadowService{
 		kbRepo:   kbRepo,
 		aiService: aiService,
@@ -218,7 +222,10 @@ type TimelineService struct {
 	}
 }
 
-func NewTimelineService(chapterRepo interface{}) *TimelineService {
+func NewTimelineService(chapterRepo interface{
+		GetByID(id uint) (*model.Chapter, error)
+		ListByNovel(novelID uint) ([]*model.Chapter, error)
+	}) *TimelineService {
 	return &TimelineService{chapterRepo: chapterRepo}
 }
 
@@ -349,7 +356,13 @@ type CharacterArcService struct {
 	}
 }
 
-func NewCharacterArcService(charRepo, snapshotRepo interface{}) *CharacterArcService {
+func NewCharacterArcService(charRepo interface{
+		GetByID(id uint) (*model.Character, error)
+		ListByNovel(novelID uint) ([]*model.Character, error)
+	}, snapshotRepo interface{
+		Create(snapshot *model.CharacterStateSnapshot) error
+		ListByCharacter(characterID uint) ([]*model.CharacterStateSnapshot, error)
+	}) *CharacterArcService {
 	return &CharacterArcService{
 		charRepo:     charRepo,
 		snapshotRepo: snapshotRepo,
@@ -457,7 +470,9 @@ type StyleService struct {
 	}
 }
 
-func NewStyleService(repo interface{}) *StyleService {
+func NewStyleService(repo interface{
+		GetByGenreAndStage(genre string, stage string) (*model.PromptTemplate, error)
+	}) *StyleService {
 	return &StyleService{templateRepo: repo}
 }
 
@@ -604,9 +619,18 @@ type GenerationContextService struct {
 }
 
 func NewGenerationContextService(
-	novelRepo interface{},
-	chapterRepo interface{},
-	charRepo interface{},
+	novelRepo interface{
+		GetByID(id uint) (*model.Novel, error)
+	},
+	chapterRepo interface{
+		GetByID(id uint) (*model.Chapter, error)
+		GetRecent(novelID uint, chapterNo int, count int) ([]*model.Chapter, error)
+		ListByNovel(novelID uint) ([]*model.Chapter, error)
+	},
+	charRepo interface{
+		GetByID(id uint) (*model.Character, error)
+		ListByNovel(novelID uint) ([]*model.Character, error)
+	},
 	snapshotSvc *CharacterArcService,
 	foreshadowSvc *ForeshadowService,
 ) *GenerationContextService {
