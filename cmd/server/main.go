@@ -124,7 +124,7 @@ func main() {
 
 // initDatabase 初始化数据库
 func initDatabase(cfg *config.Config) (*gorm.DB, error) {
-	dsn := "root:password@tcp(localhost:3306)/inkframe?charset=utf8mb4&parseTime=True&loc=Local"
+	dsn := cfg.Database.GetDSN()
 
 	gormLogger := logger.New(
 		log.New(os.Stdout, "\r\n", log.LstdFlags),
@@ -277,40 +277,42 @@ type Repositories struct {
 	KnowledgeBaseRepo    *repository.KnowledgeBaseRepository
 	ModelProviderRepo    *repository.ModelProviderRepository
 	ModelComparisonRepo  *repository.ModelComparisonRepository
+	ReviewTaskRepo       *repository.ReviewTaskRepository
 }
 
 // initRepositories 初始化仓库层
 func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 	return &Repositories{
 		NovelRepo:            repository.NewNovelRepository(db, redis),
-		ChapterRepo:         repository.NewChapterRepository(db, redis),
-		CharacterRepo:       repository.NewCharacterRepository(db),
-		WorldviewRepo:       repository.NewWorldviewRepository(db),
-		AIModelRepo:         repository.NewAIModelRepository(db),
-		TaskModelConfigRepo: repository.NewTaskModelConfigRepository(db),
-		VideoRepo:           repository.NewVideoRepository(db),
-		StoryboardRepo:      repository.NewStoryboardRepository(db),
-		KnowledgeBaseRepo:   repository.NewKnowledgeBaseRepository(db),
-		ModelProviderRepo:   repository.NewModelProviderRepository(db),
-		ModelComparisonRepo: repository.NewModelComparisonRepository(db),
+		ChapterRepo:          repository.NewChapterRepository(db, redis),
+		CharacterRepo:        repository.NewCharacterRepository(db),
+		WorldviewRepo:        repository.NewWorldviewRepository(db),
+		AIModelRepo:          repository.NewAIModelRepository(db),
+		TaskModelConfigRepo:  repository.NewTaskModelConfigRepository(db),
+		VideoRepo:            repository.NewVideoRepository(db),
+		StoryboardRepo:       repository.NewStoryboardRepository(db),
+		KnowledgeBaseRepo:    repository.NewKnowledgeBaseRepository(db),
+		ModelProviderRepo:    repository.NewModelProviderRepository(db),
+		ModelComparisonRepo:  repository.NewModelComparisonRepository(db),
+		ReviewTaskRepo:       repository.NewReviewTaskRepository(db),
 	}
 }
 
 // Services 服务层
 type Services struct {
-	NovelService          *service.NovelService
-	ChapterService       *service.ChapterService
-	CharacterService     *service.CharacterService
-	WorldviewService     *service.WorldviewService
-	QualityService       *service.QualityControlService
-	VideoService         *service.VideoService
-	ModelService         *service.ModelService
-	PromptService        *service.PromptService
-	ContinuityService    *service.ContinuityService
-	KnowledgeService     *service.KnowledgeService
-	ReviewTaskService    *service.ReviewTaskService
+	NovelService           *service.NovelService
+	ChapterService        *service.ChapterService
+	CharacterService      *service.CharacterService
+	WorldviewService      *service.WorldviewService
+	QualityService        *service.QualityControlService
+	VideoService          *service.VideoService
+	ModelService          *service.ModelService
+	PromptService         *service.PromptService
+	ContinuityService     *service.ContinuityService
+	KnowledgeService      *service.KnowledgeService
+	ReviewTaskService     *service.ReviewTaskService
 	ChapterVersionService *service.ChapterVersionService
-	CrawlerService       *crawler.NovelCrawler
+	CrawlerService        *crawler.NovelCrawler
 }
 
 // initServices 初始化服务层
@@ -354,7 +356,7 @@ func initServices(repos *Repositories, aiManager *ai.ModelManager, vectorStore *
 	knowledgeService := service.NewKnowledgeService(repos.KnowledgeBaseRepo, vectorStore)
 
 	// 审核任务服务
-	reviewTaskService := service.NewReviewTaskService(repos.KnowledgeBaseRepo)
+	reviewTaskService := service.NewReviewTaskService(repos.ReviewTaskRepo)
 
 	// 章节版本服务
 	chapterVersionService := service.NewChapterVersionService(repos.KnowledgeBaseRepo, repos.ChapterRepo)
@@ -363,19 +365,19 @@ func initServices(repos *Repositories, aiManager *ai.ModelManager, vectorStore *
 	crawlerService := crawler.NewNovelCrawler(nil)
 
 	return &Services{
-		NovelService:          novelService,
-		ChapterService:       chapterService,
-		CharacterService:     characterService,
-		WorldviewService:     worldviewService,
-		QualityService:       qualityService,
-		VideoService:         videoService,
-		ModelService:         modelService,
-		PromptService:        promptService,
-		ContinuityService:    continuityService,
-		KnowledgeService:     knowledgeService,
-		ReviewTaskService:    reviewTaskService,
+		NovelService:           novelService,
+		ChapterService:        chapterService,
+		CharacterService:      characterService,
+		WorldviewService:      worldviewService,
+		QualityService:        qualityService,
+		VideoService:          videoService,
+		ModelService:          modelService,
+		PromptService:         promptService,
+		ContinuityService:     continuityService,
+		KnowledgeService:      knowledgeService,
+		ReviewTaskService:     reviewTaskService,
 		ChapterVersionService: chapterVersionService,
-		CrawlerService:       crawlerService,
+		CrawlerService:        crawlerService,
 	}
 }
 

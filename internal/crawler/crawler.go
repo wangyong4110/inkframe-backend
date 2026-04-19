@@ -2,7 +2,10 @@ package crawler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"regexp"
 	"strings"
 	"sync"
@@ -273,10 +276,6 @@ func (c *HTTPClient) Get(ctx context.Context, url string) (string, error) {
 }
 
 // 导入需要的包
-import (
-	"io"
-	"net/http"
-)
 
 // QidianParser 起点中文网解析器
 type QidianParser struct{}
