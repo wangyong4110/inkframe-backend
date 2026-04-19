@@ -414,7 +414,6 @@ func (s *CharacterConsistencyService) CalculateConsistencyScore(
 // ============================================
 
 type ImageService struct {
-	sdClient *StableDiffusionClient
 	provider AIProvider
 }
 
@@ -730,23 +729,4 @@ func (s *VideoEnhancementService) RecommendEnhancements(videoInfo *struct {
 // Helper Functions
 // ============================================
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
 
-// AiService getter (for compatibility)
-func (s *IntelligentStoryboardService) GetAiService() *IntelligentStoryboardService {
-	return s
-}
-
-// DetectActionBeats getter (for compatibility)
-func (s *IntelligentStoryboardService) DetectActionBeats(content string) ([]struct {
-	Position  int
-	Type     string
-	Intensity float64
-}, error) {
-	return s.DetectActionBeats(content)
-}

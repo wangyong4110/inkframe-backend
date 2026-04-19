@@ -439,7 +439,21 @@ func NewQualityService(
 	}
 }
 
+// QualityReport 质量报告
+type QualityReport struct {
+	OverallScore float64           `json:"overall_score"`
+	Issues      []QualityIssue    `json:"issues"`
+	Suggestions []string          `json:"suggestions"`
+}
 
+// QualityIssue 质量问题
+type QualityIssue struct {
+	Type        string `json:"type"`
+	Severity    string `json:"severity"`
+	Description string `json:"description"`
+	Location     string `json:"location"`
+	Suggestion  string `json:"suggestion"`
+}
 
 // CheckChapterQuality 检查章节质量
 func (s *QualityService) CheckChapterQuality(chapterID uint) (*QualityReport, error) {
@@ -740,95 +754,6 @@ func NewModelService(
 	}
 }
 
-// ModelProviderRepository 模型提供商仓库
-type ModelProviderRepository struct {
-	db *gorm.DB
-}
-
-func NewModelProviderRepository(db *gorm.DB) *ModelProviderRepository {
-	return &ModelProviderRepository{db: db}
-}
-
-// List 获取提供商列表
-func (r *ModelProviderRepository) List() ([]*model.ModelProvider, error) {
-	var providers []*model.ModelProvider
-	if err := r.db.Find(&providers).Error; err != nil {
-		return nil, err
-	}
-	return providers, nil
-}
-
-// Create 创建提供商
-func (r *ModelProviderRepository) Create(provider *model.ModelProvider) error {
-	return r.db.Create(provider).Error
-}
-
-// UpdateHealthStatus 更新健康状态
-func (r *ModelProviderRepository) UpdateHealthStatus(id uint, status string) error {
-	return r.db.Model(&model.ModelProvider{}).Where("id = ?", id).
-		Update("health_check", status).Error
-}
-
-// ModelComparisonRepository 模型对比仓库
-type ModelComparisonRepository struct {
-	db *gorm.DB
-}
-
-func NewModelComparisonRepository(db *gorm.DB) *ModelComparisonRepository {
-	return &ModelComparisonRepository{db: db}
-}
-
-// Create 创建对比实验
-func (r *ModelComparisonRepository) Create(exp *model.ModelComparisonExperiment) error {
-	return r.db.Create(exp).Error
-}
-
-// GetByID 获取实验
-func (r *ModelComparisonRepository) GetByID(id uint) (*model.ModelComparisonExperiment, error) {
-	var exp model.ModelComparisonExperiment
-	if err := r.db.First(&exp, id).Error; err != nil {
-		return nil, err
-	}
-	return &exp, nil
-}
-
-// Update 更新实验
-func (r *ModelComparisonRepository) Update(exp *model.ModelComparisonExperiment) error {
-	return r.db.Save(exp).Error
-}
-
-// List 获取实验列表
-func (r *ModelComparisonRepository) List(limit int) ([]*model.ModelComparisonExperiment, error) {
-	var experiments []*model.ModelComparisonExperiment
-	if err := r.db.Order("created_at DESC").Limit(limit).Find(&experiments).Error; err != nil {
-		return nil, err
-	}
-	return experiments, nil
-}
-
-// AddResult 添加实验结果
-func (r *ModelComparisonRepository) AddResult(result *model.ExperimentResult) error {
-	return r.db.Create(result).Error
-}
-
-// GetResults 获取实验结果
-func (r *ModelComparisonRepository) GetResults(experimentID uint) ([]*model.ExperimentResult, error) {
-	var results []*model.ExperimentResult
-	if err := r.db.Preload("Model").Where("experiment_id = ?", experimentID).Find(&results).Error; err != nil {
-		return nil, err
-	}
-	return results, nil
-}
-
-// SelectModel 选择模型
-func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
-	// 获取可用模型
-	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
-	if err != nil || len(models) == 0 {
-		return nil, fmt.Errorf("no available models for task: %s", taskType)
-	}
-
-	// 根据策略选择
 	var selected *model.AIModel
 	switch strategy {
 	case "quality_first":
@@ -886,3 +811,4 @@ func selectBalanced(models []*model.AIModel) *model.AIModel {
 
 	return best
 }
+
