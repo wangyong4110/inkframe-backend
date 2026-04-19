@@ -365,13 +365,6 @@ func (s *AIService) logUsage(config *model.TaskModelConfig, prompt, result strin
 	s.modelRepo.LogUsage(log)
 }
 
-// min 返回较小值
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
 
 // QualityService 质量服务
 type QualityService struct {
@@ -395,21 +388,7 @@ func NewQualityService(
 	}
 }
 
-// QualityReport 质量报告
-type QualityReport struct {
-	OverallScore float64         `json:"overall_score"`
-	Issues      []QualityIssue `json:"issues"`
-	Suggestions []string        `json:"suggestions"`
-}
 
-// QualityIssue 质量问题
-type QualityIssue struct {
-	Type        string `json:"type"`
-	Severity    string `json:"severity"`
-	Description string `json:"description"`
-	Location    string `json:"location"`
-	Suggestion  string `json:"suggestion"`
-}
 
 // CheckChapterQuality 检查章节质量
 func (s *QualityService) CheckChapterQuality(chapterID uint) (*QualityReport, error) {

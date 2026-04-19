@@ -400,11 +400,3 @@ type UserRepository interface {
 	Delete(id uint) error
 }
 
-// NovelRepository 小说仓库扩展接口
-type NovelRepository interface {
-	Create(novel *model.Novel) error
-	GetByID(id uint) (*model.Novel, error)
-	Update(novel *model.Novel) error
-	Delete(id uint) error
-	ListByTenantAndProject(tenantID, projectID uint) ([]*model.Novel, error)
-}

@@ -7,6 +7,9 @@ import (
 	"math"
 	"sort"
 	"strings"
+
+	"github.com/inkframe/inkframe-backend/internal/ai"
+	"github.com/inkframe/inkframe-backend/internal/model"
 )
 
 // ============================================
@@ -595,8 +598,8 @@ func (s *LoRAService) GetCharacterLoRA(characterID uint) (*LoRAModel, error) {
 
 // AIProvider AI提供者接口
 type AIProvider interface {
-	Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error)
-	ImageGenerate(ctx context.Context, req *ImageGenerateRequest) (*ImageResponse, error)
+	Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error)
+	ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error)
 }
 
 // ============================================
@@ -730,10 +733,17 @@ func (s *VideoEnhancementService) RecommendEnhancements(videoInfo *struct {
 // Helper Functions
 // ============================================
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
+
+// AiService getter (for compatibility)
+func (s *IntelligentStoryboardService) AiService *IntelligentStoryboardService {
+	return s
 }
 
+// DetectActionBeats getter (for compatibility)
+func (s *IntelligentStoryboardService) DetectActionBeats(content string) ([]struct {
+	Position  int
+	Type     string
+	Intensity float64
+}, error) {
+	return s.DetectActionBeats(content)
+}

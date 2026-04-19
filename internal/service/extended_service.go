@@ -422,7 +422,9 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 }
 
 
-
+func NewQualityControlService(aiClient *ai.ModelManager) *QualityControlService {
+	return &QualityControlService{aiClient: aiClient}
+}
 
 
 
@@ -526,7 +528,7 @@ func (s *QualityControlService) checkStyle(ctx context.Context, chapter *model.C
 	issues := []QualityIssue{}
 
 	// 检查对话比例
-	dialogueCount := strings.Count(chapter.Content, "「") + strings.Count(chapter.Content, "」")
+	dialogueCount := strings.Count(chapter.Content, "「") + strings.Count(chapter.Content, """)
 	totalChars := len(chapter.Content)
 	dialogueRatio := float64(dialogueCount*10) / float64(totalChars)
 
@@ -567,9 +569,3 @@ func (s *QualityControlService) generateSuggestions(report *QualityReport) []str
 	return suggestions
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
