@@ -812,7 +812,6 @@ func selectBalanced(models []*model.AIModel) *model.AIModel {
 	return best
 }
 
-
 // SelectModel 选择模型
 func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
 	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
@@ -876,3 +875,4 @@ func selectBalanced(models []*model.AIModel) *model.AIModel {
 
 	return best
 }
+
