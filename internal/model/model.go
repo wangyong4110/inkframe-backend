@@ -877,5 +877,3 @@ func (FeedbackRecord) TableName() string {
 	return "ink_feedback_record"
 }
 
-// Import built-in GORM deleted_at
-import "gorm.io/gorm"
