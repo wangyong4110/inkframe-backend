@@ -730,10 +730,15 @@ func (s *VideoEnhancementService) RecommendEnhancements(videoInfo *struct {
 // Helper Functions
 // ============================================
 
-
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 
 // AiService getter (for compatibility)
-func (s *IntelligentStoryboardService) GetAiService() *IntelligentStoryboardService {
+func (s *IntelligentStoryboardService) AiService *IntelligentStoryboardService {
 	return s
 }
 
