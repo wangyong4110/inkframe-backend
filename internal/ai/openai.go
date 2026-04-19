@@ -127,7 +127,8 @@ func (p *OpenAIProvider) Generate(ctx context.Context, req *GenerateRequest) (*G
 	return &GenerateResponse{
 		Content:    openaiResp.Choices[0].Message.Content,
 		Model:      openaiResp.Model,
-		Tokens:     openaiResp.Choices[0].FinishReason == "stop" || openaiResp.Choices[0].FinishReason == "length",
+		Tokens:     0, // Token统计需要从usage字段获取
+		InputTokens: openaiResp.Usage.PromptTokens,
 		StopReason: openaiResp.Choices[0].FinishReason,
 		FinishTime: time.Since(start).Milliseconds(),
 	}, nil
@@ -140,7 +141,7 @@ func (p *OpenAIProvider) GenerateStream(ctx context.Context, req *GenerateReques
 		defer close(ch)
 
 		openaiReq := p.buildRequest(req)
-		openaiReq.Stream = true
+		openaiReq["stream"] = true
 
 		body, _ := json.Marshal(openaiReq)
 

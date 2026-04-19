@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
-
-	"github.com/inkframe/inkframe-backend/internal/model"
 )
 
 // AIProvider AI提供者接口

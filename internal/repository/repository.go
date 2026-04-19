@@ -842,65 +842,6 @@ func (r *ModelComparisonRepository) GetResults(experimentID uint) ([]*model.Expe
 	return results, nil
 }
 
-// ============================================
-// Review Task Repository
-// ============================================
-
-// ReviewTaskRepository 审核任务仓库
-type ReviewTaskRepository struct {
-	db *gorm.DB
-}
-
-func NewReviewTaskRepository(db *gorm.DB) *ReviewTaskRepository {
-	return &ReviewTaskRepository{db: db}
-}
-
-// Create 创建审核任务
-func (r *ReviewTaskRepository) Create(task *model.ReviewTask) error {
-	return r.db.Create(task).Error
-}
-
-// GetByID 根据ID获取审核任务
-func (r *ReviewTaskRepository) GetByID(id uint) (*model.ReviewTask, error) {
-	var task model.ReviewTask
-	if err := r.db.First(&task, id).Error; err != nil {
-		return nil, err
-	}
-	return &task, nil
-}
-
-// ListPending 获取待处理的审核任务
-func (r *ReviewTaskRepository) ListPending(priority string, limit int) ([]*model.ReviewTask, error) {
-	var tasks []*model.ReviewTask
-	query := r.db.Where("status = ?", "pending")
-
-	if priority != "" {
-		query = query.Where("priority = ?", priority)
-	}
-
-	if err := query.Order("CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END").
-		Limit(limit).
-		Find(&tasks).Error; err != nil {
-		return nil, err
-	}
-
-	return tasks, nil
-}
-
-// UpdateStatus 更新审核任务状态
-func (r *ReviewTaskRepository) UpdateStatus(id uint, status string, note string) error {
-	updates := map[string]interface{}{
-		"status": status,
-	}
-	if note != "" {
-		updates["reviewer_note"] = note
-	}
-	if status == "completed" || status == "rejected" {
-		now := time.Now()
-		updates["completed_at"] = &now
-	}
-	return r.db.Model(&model.ReviewTask{}).Where("id = ?", id).Updates(updates).Error
-}
 
 // ============================================
 // TenantRepository 租户仓库
@@ -979,8 +920,8 @@ func (r *TenantRepository) UpdateMemberRole(tenantID, userID uint, role string) 
 func (r *TenantRepository) UpdateUsage(tenantID uint, projectDelta, userDelta, storageDelta int) error {
 	return r.db.Model(&model.Tenant{}).Where("id = ?", tenantID).
 		Updates(map[string]interface{}{
-			"used_projects":  gorm.Expr("used_projects + ?", projectDelta),
-			"used_users":     gorm.Expr("used_users + ?", userDelta),
+			"used_projects":   gorm.Expr("used_projects + ?", projectDelta),
+			"used_users":      gorm.Expr("used_users + ?", userDelta),
 			"used_storage_mb": gorm.Expr("used_storage_mb + ?", storageDelta),
 		}).Error
 }
