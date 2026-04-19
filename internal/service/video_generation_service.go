@@ -48,12 +48,6 @@ const (
 )
 
 
-const (
-	AngleEyeLevel  ShotAngle = "eye_level"   // 平视
-	AngleLow       ShotAngle = "low"         // 仰视
-	AngleHigh      ShotAngle = "high"       // 俯视
-	AngleDutch     ShotAngle = "dutch"       // 荷兰角
-)
 
 
 const (
