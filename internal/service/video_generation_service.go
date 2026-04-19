@@ -79,7 +79,7 @@ func NewIntelligentStoryboardService(aiService *AIService) *IntelligentStoryboar
 func (s *IntelligentStoryboardService) GenerateStoryboard(chapter *model.Chapter, characters []*model.Character, config *VideoGenerationRequest) ([]*StoryboardShot, error) {
 	shots := []*StoryboardShot{}
 
-	// 1. 分析章节内容,提取场景
+	// 1. 分析章节内容，提取场景
 	scenes := s.analyzeChapterScenes(chapter.Content)
 
 	// 2. 分析情感曲线
@@ -118,7 +118,7 @@ type SceneAnalysis struct {
 func (s *IntelligentStoryboardService) analyzeChapterScenes(content string) []*SceneAnalysis {
 	scenes := []*SceneAnalysis{}
 
-	// 简化实现:按段落分割
+	// 简化实现：按段落分割
 	paragraphs := strings.Split(content, "\n\n")
 
 	currentScene := &SceneAnalysis{
