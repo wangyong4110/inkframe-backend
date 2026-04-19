@@ -7,7 +7,7 @@ import (
 	"text/template"
 )
 
-//go:embed ../config/prompts/*.tmpl
+//go:embed ../../config/prompts/*.tmpl
 var promptTemplates embed.FS
 
 // TemplateService 模板服务
