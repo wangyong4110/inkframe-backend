@@ -421,9 +421,34 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 	return nil
 }
 
+// QualityControlService 质量控制服务
+type QualityControlService struct {
+	aiClient *ai.ModelManager
+}
 
+func NewQualityControlService(aiClient *ai.ModelManager) *QualityControlService {
+	return &QualityControlService{aiClient: aiClient}
+}
 
+// QualityReport 质量报告
+type QualityReport struct {
+	OverallScore    float64           `json:"overall_score"`
+	ConsistencyScore float64          `json:"consistency_score"`
+	QualityScore    float64           `json:"quality_score"`
+	LogicScore      float64           `json:"logic_score"`
+	StyleScore      float64           `json:"style_score"`
+	Issues          []QualityIssue    `json:"issues"`
+	Suggestions     []string          `json:"suggestions"`
+}
 
+// QualityIssue 质量问题
+type QualityIssue struct {
+	Type        string `json:"type"` // consistency, quality, logic, style
+	Severity    string `json:"severity"` // high, medium, low
+	Description string `json:"description"`
+	Location    string `json:"location"`
+	Suggestion  string `json:"suggestion"`
+}
 
 // CheckChapterQuality 检查章节质量
 func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter *model.Chapter, novel *model.Novel) (*QualityReport, error) {
@@ -525,7 +550,7 @@ func (s *QualityControlService) checkStyle(ctx context.Context, chapter *model.C
 	issues := []QualityIssue{}
 
 	// 检查对话比例
-	dialogueCount := strings.Count(chapter.Content, "「") + strings.Count(chapter.Content, "」")
+	dialogueCount := strings.Count(chapter.Content, "「") + strings.Count(chapter.Content, """)
 	totalChars := len(chapter.Content)
 	dialogueRatio := float64(dialogueCount*10) / float64(totalChars)
 
@@ -566,3 +591,9 @@ func (s *QualityControlService) generateSuggestions(report *QualityReport) []str
 	return suggestions
 }
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

@@ -1,313 +1,17 @@
 package service
 
 import (
+	"github.com/inkframe/inkframe-backend/internal/model"
 	"context"
 	"encoding/json"
 	"fmt"
 	"math"
 	"sort"
 	"strings"
-
-	"github.com/inkframe/inkframe-backend/internal/ai"
-	"github.com/inkframe/inkframe-backend/internal/model"
 )
 
 // ============================================
-// Intelligent Storyboard Generator - 智能分镜生成器
-// ============================================
-
-type IntelligentStoryboardService struct {
-	aiService   *AIService
-	imageService *ImageService
-}
-
-func NewIntelligentStoryboardService(aiService *AIService, imageService *ImageService) *IntelligentStoryboardService {
-	return &IntelligentStoryboardService{
-		aiService:    aiService,
-		imageService: imageService,
-	}
-}
-
-// ShotType 镜头类型
-type ShotType string
-
-const (
-	ShotStatic  ShotType = "static"  // 静态镜头
-	ShotPan     ShotType = "pan"     // 平移
-	ShotZoom    ShotType = "zoom"    // 缩放
-	ShotTrack   ShotType = "tracking" // 跟拍
-	ShotDolly  ShotType = "dolly"   // 推拉
-	ShotCrane  ShotType = "crane"    // 升降
-)
-
-// ShotSize 镜头尺寸
-type ShotSize string
-
-const (
-	SizeExtremeWide ShotSize = "extreme_wide" // 大远景
-	SizeWide       ShotSize = "wide"        // 远景
-	SizeFull      ShotSize = "full"        // 全景
-	SizeMedium    ShotSize = "medium"      // 中景
-	SizeCloseUp   ShotSize = "close_up"    // 近景
-	SizeExtreme   ShotSize = "extreme_close_up" // 特写
-)
-
-// ShotAngle 镜头角度
-type ShotAngle string
-
-const (
-	AngleEyeLevel  ShotAngle = "eye_level"  // 平视
-	AngleHigh      ShotAngle = "high"      // 俯视
-	AngleLow       ShotAngle = "low"       // 仰视
-	AngleDutch     ShotAngle = "dutch"     // 倾斜
-	AngleOverhead  ShotAngle = "overhead"  // 顶摄
-	AnglePOV      ShotAngle = "POV"       // 主观视角
-)
-
-// StoryboardShot 智能分镜
-type StoryboardShot struct {
-	ShotNo        int       `json:"shot_no"`
-	Description   string    `json:"description"`
-	Emotion       string    `json:"emotion"`      // 情感标签
-	Beat          string    `json:"beat"`         // 节奏点
-	ShotType      ShotType  `json:"shot_type"`
-	ShotSize      ShotSize  `json:"shot_size"`
-	ShotAngle     ShotAngle `json:"shot_angle"`
-	Duration      float64   `json:"duration"`     // 秒
-	Characters    []string  `json:"characters"`
-	Location      string    `json:"location"`
-	TimeOfDay     string    `json:"time_of_day"`
-	Weather       string    `json:"weather"`
-	Lighting      string    `json:"lighting"`
-	Dialogue      string    `json:"dialogue,omitempty"`
-	Action        string    `json:"action,omitempty"`
-	CameraMovement string   `json:"camera_movement,omitempty"`
-	Transition    string    `json:"transition"`    // 转场方式
-	VisualNotes   string    `json:"visual_notes"`   // 视觉备注
-}
-
-// EmotionBeat 情感节奏分析结果
-type EmotionBeat struct {
-	Position     int     `json:"position"`     // 在章节中的位置(0-1)
-	Emotion      string  `json:"emotion"`      // 主导情感
-	Intensity    float64 `json:"intensity"`    // 情感强度(0-1)
-	RhythmChange string  `json:"rhythm_change"` // 节奏变化
-}
-
-// EmotionalAnalysis 情感分析结果
-type EmotionalAnalysis struct {
-	OverallEmotion string       `json:"overall_emotion"` // 整体情感
-	EmotionCurve  []EmotionBeat `json:"emotion_curve"` // 情感曲线
-	PeakMoments   []int        `json:"peak_moments"`   // 高潮点位置
-	CalmMoments   []int        `json:"calm_moments"`   // 平静点位置
-}
-
-// AnalyzeEmotions 分析章节情感
-func (s *IntelligentStoryboardService) AnalyzeEmotions(content string) (*EmotionalAnalysis, error) {
-	prompt := fmt.Sprintf(`请分析以下小说章节的情感节奏，返回JSON格式：
-
-分析要求：
-1. 识别章节中的情感变化
-2. 标记情感高潮和低谷点
-3. 评估整体情感基调
-
-章节内容（摘要）：
-%s
-
-请返回JSON格式：
-{
-  "overall_emotion": "整体情感基调（如：紧张、温馨、悬疑）",
-  "emotion_curve": [
-    {
-      "position": 0.0-1.0之间的位置,
-      "emotion": "此时的主导情感",
-      "intensity": 0-1的情感强度,
-      "rhythm_change": "此时节奏是加快/减慢/保持"
-    }
-  ],
-  "peak_moments": [高潮点位置列表],
-  "calm_moments": [平静点位置列表]
-}`, content[:min(len(content), 3000)])
-
-	result, err := s.aiService.Generate(0, "emotion_analysis", prompt)
-	if err != nil {
-		return nil, err
-	}
-
-	var analysis EmotionalAnalysis
-	if err := json.Unmarshal([]byte(result), &analysis); err != nil {
-		// 返回默认分析
-		return &EmotionalAnalysis{
-			OverallEmotion: "neutral",
-			EmotionCurve:  []EmotionBeat{},
-			PeakMoments:   []int{},
-			CalmMoments:   []int{},
-		}, nil
-	}
-
-	return &analysis, nil
-}
-
-// DetectActionBeats 检测动作节奏点
-func (s *IntelligentStoryboardService) DetectActionBeats(content string) ([]struct {
-	Position  int    `json:"position"`
-	Type     string `json:"type"` // action/dialogue/description
-	Intensity float64 `json:"intensity"`
-}, error) {
-	// 简化实现
-	return []struct {
-		Position   int     `json:"position"`
-		Type      string  `json:"type"`
-		Intensity float64 `json:"intensity"`
-	}{
-		{Position: 0, Type: "description", Intensity: 0.3},
-		{Position: 25, Type: "action", Intensity: 0.7},
-		{Position: 50, Type: "dialogue", Intensity: 0.5},
-		{Position: 75, Type: "action", Intensity: 0.9},
-		{Position: 100, Type: "description", Intensity: 0.2},
-	}, nil
-}
-
-// GenerateIntelligentShots 智能生成分镜
-func (s *IntelligentStoryboardService) GenerateIntelligentShots(
-	content string,
-	characters []string,
-	scene string,
-) ([]*StoryboardShot, error) {
-	// 1. 情感分析
-	emotionAnalysis, err := s.AiService.AnalyzeEmotions(content)
-	if err != nil {
-		return nil, err
-	}
-
-	// 2. 动作节奏检测
-	beats, err := s.DetectActionBeats(content)
-	if err != nil {
-		return nil, err
-	}
-
-	// 3. 提取对话
-	dialogues := s.extractDialogues(content)
-
-	// 4. 生成镜头序列
-	shots := s.optimizeShotSequence(emotionAnalysis, beats, dialogues, characters, scene)
-
-	return shots, nil
-}
-
-// optimizeShotSequence 优化镜头序列
-func (s *IntelligentStoryboardService) optimizeShotSequence(
-	emotions *EmotionalAnalysis,
-	beats []struct{ Position int; Type string; Intensity float64 },
-	dialogues []string,
-	characters []string,
-	scene string,
-) []*StoryboardShot {
-	shots := make([]*StoryboardShot, 0)
-
-	// 根据情感曲线确定镜头数量
-	numShots := 5 + len(emotions.PeakMoments)*2
-
-	for i := 0; i < numShots; i++ {
-		position := float64(i) / float64(numShots)
-		shot := &StoryboardShot{
-			ShotNo: i + 1,
-		}
-
-		// 查找对应的情感点
-		var currentEmotion string = "neutral"
-		var intensity float64 = 0.5
-		for _, eb := range emotions.EmotionCurve {
-			if math.Abs(eb.Position-position) < 0.15 {
-				currentEmotion = eb.Emotion
-				intensity = eb.Intensity
-				break
-			}
-		}
-		shot.Emotion = currentEmotion
-
-		// 根据情感和强度选择镜头参数
-		shot.ShotType, shot.ShotSize, shot.Duration = s.selectShotParams(intensity, currentEmotion)
-
-		// 根据位置和内容确定其他参数
-		if i == 0 {
-			shot.ShotSize = SizeWide // 开场通常是远景
-			shot.Description = fmt.Sprintf("场景全景：%s", scene)
-		} else if i == numShots-1 {
-			shot.Description = fmt.Sprintf("场景收尾：%s", scene)
-			shot.Transition = "fade_out"
-		}
-
-		// 添加对话
-		if len(dialogues) > i {
-			shot.Dialogue = dialogues[i]
-		}
-
-		// 添加转场
-		if i > 0 {
-			shot.Transition = s.selectTransition(shots[i-1].Emotion, currentEmotion)
-		}
-
-		shots = append(shots, shot)
-	}
-
-	return shots
-}
-
-// selectShotParams 根据情感选择镜头参数
-func (s *IntelligentStoryboardService) selectShotParams(intensity float64, emotion string) (ShotType, ShotSize, float64) {
-	// 情感高潮 → 特写/快速切换
-	if intensity > 0.7 {
-		if emotion == "紧张" || emotion == "恐惧" {
-			return ShotZoom, SizeExtreme, 2.0
-		}
-		return ShotStatic, SizeCloseUp, 3.0
-	}
-
-	// 情感低谷 → 远景/缓慢平移
-	if intensity < 0.3 {
-		return ShotPan, SizeWide, 6.0
-	}
-
-	// 中等情感 → 中景/标准节奏
-	return ShotStatic, SizeMedium, 4.0
-}
-
-// selectTransition 选择转场
-func (s *IntelligentStoryboardService) selectTransition(fromEmotion, toEmotion string) string {
-	// 紧张→平静：渐慢
-	if (fromEmotion == "紧张" || fromEmotion == "恐惧") && toEmotion == "平静" {
-		return "fade"
-	}
-
-	// 平静→紧张：硬切
-	if fromEmotion == "平静" && (toEmotion == "紧张" || toEmotion == "震惊") {
-		return "hard_cut"
-	}
-
-	// 默认
-	return "dissolve"
-}
-
-// extractDialogues 提取对话
-func (s *IntelligentStoryboardService) extractDialogues(content string) []string {
-	// 简化实现：使用引号提取
-	dialogues := make([]string, 0)
-
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "「") || strings.HasPrefix(line, "\"") {
-			// 移除引号
-			if len(line) > 2 {
-				dialogues = append(dialogues, line)
-			}
-		}
-	}
-
-	return dialogues
-}
-
+// Character Consistency)
 // ============================================
 // Character Consistency Service - 角色一致性控制
 // ============================================
@@ -417,7 +121,7 @@ func (s *CharacterConsistencyService) CalculateConsistencyScore(
 // ============================================
 
 type ImageService struct {
-	// sdClient *StableDiffusionClient // TODO: remove if not used
+	sdClient *StableDiffusionClient
 	provider AIProvider
 }
 
@@ -598,8 +302,8 @@ func (s *LoRAService) GetCharacterLoRA(characterID uint) (*LoRAModel, error) {
 
 // AIProvider AI提供者接口
 type AIProvider interface {
-	Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error)
-	ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error)
+	Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error)
+	ImageGenerate(ctx context.Context, req *ImageGenerateRequest) (*ImageResponse, error)
 }
 
 // ============================================
@@ -733,4 +437,23 @@ func (s *VideoEnhancementService) RecommendEnhancements(videoInfo *struct {
 // Helper Functions
 // ============================================
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 
+// AiService getter (for compatibility)
+func (s *IntelligentStoryboardService) AiService *IntelligentStoryboardService {
+	return s
+}
+
+// DetectActionBeats getter (for compatibility)
+func (s *IntelligentStoryboardService) DetectActionBeats(content string) ([]struct {
+	Position  int
+	Type     string
+	Intensity float64
+}, error) {
+	return s.DetectActionBeats(content)
+}
