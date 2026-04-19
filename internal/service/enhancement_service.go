@@ -24,7 +24,7 @@ type ForeshadowService struct {
 	aiService *AIService
 }
 
-func NewForeshadowService(kbRepo interface{}, aiService *AIService) *ForeshadowService {
+func NewForeshadowService(kbRepo KnowledgeBaseRepo, aiService *AIService) *ForeshadowService {
 	return &ForeshadowService{
 		kbRepo:   kbRepo,
 		aiService: aiService,
@@ -217,7 +217,7 @@ type TimelineService struct {
 	}
 }
 
-func NewTimelineService(chapterRepo interface{}) *TimelineService {
+func NewTimelineService(chapterRepo ChapterRepo) *TimelineService {
 	return &TimelineService{chapterRepo: chapterRepo}
 }
 
@@ -348,7 +348,7 @@ type CharacterArcService struct {
 	}
 }
 
-func NewCharacterArcService(charRepo, snapshotRepo interface{}) *CharacterArcService {
+func NewCharacterArcService(charRepo, snapshotRepo SnapshotRepo) *CharacterArcService {
 	return &CharacterArcService{
 		charRepo:     charRepo,
 		snapshotRepo: snapshotRepo,
@@ -429,7 +429,7 @@ func (s *CharacterArcService) determineArcType(snapshots []*model.CharacterState
 }
 
 // estimateChapterFromSnapshot 从快照估算章节
-func (s *CharacterArcService) estimateChapterFromSnapshot(s *model.CharacterStateSnapshot) int {
+func (s *CharacterArcService) estimateChapterFromSnapshot(snapshot *model.CharacterStateSnapshot) int {
 	// 简化实现
 	return 1
 }
@@ -604,8 +604,8 @@ type GenerationContextService struct {
 
 func NewGenerationContextService(
 	novelRepo interface{},
-	chapterRepo interface{},
-	charRepo interface{},
+	chapterRepo ChapterRepo,
+	charRepo CharacterRepo,
 	snapshotSvc *CharacterArcService,
 	foreshadowSvc *ForeshadowService,
 ) *GenerationContextService {

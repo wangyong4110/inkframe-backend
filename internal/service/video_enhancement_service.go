@@ -7,6 +7,9 @@ import (
 	"math"
 	"sort"
 	"strings"
+
+	"github.com/inkframe/inkframe-backend/internal/ai"
+	"github.com/inkframe/inkframe-backend/internal/model"
 )
 
 // ============================================
@@ -594,8 +597,8 @@ func (s *LoRAService) GetCharacterLoRA(characterID uint) (*LoRAModel, error) {
 
 // AIProvider AI提供者接口
 type AIProvider interface {
-	Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error)
-	ImageGenerate(ctx context.Context, req *ImageGenerateRequest) (*ImageResponse, error)
+	Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error)
+	ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error)
 }
 
 // ============================================
