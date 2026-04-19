@@ -248,7 +248,7 @@ func (s *IntelligentStoryboardService) generateShot(
 	shot.ShotAngle = s.selectShotAngle(scene, index)
 
 	// 确定摄像机运动
-	shot.CameraMovement = s.selectCameraMovement(scene)
+	shot.CameraMovement = "static"
 
 	// 确定时长
 	shot.Duration = s.estimateDuration(scene)

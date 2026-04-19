@@ -490,8 +490,8 @@ func (s *NovelImportService) splitByChapters(content, novelTitle string) []*mode
 			splits = []int{}
 			chapterTitles = []string{}
 			for _, match := range matches {
-				splits = append(splits, strconv.Itoa(match[0]))
-				chapterTitles = append(chapterTitles, strconv.Itoa(match[0]))
+				splits = append(splits, match[0])
+				chapterTitles = append(chapterTitles, match[0])
 			}
 		}
 	}

@@ -102,7 +102,6 @@ type EmotionalAnalysis struct {
 
 // AnalyzeEmotions 分析章节情感
 func (s *IntelligentStoryboardService) AnalyzeEmotions(content string) (*EmotionalAnalysis, error) {
-	prompt := fmt.Sprintf(`请分析以下小说章节的情感节奏，返回JSON格式：
 
 分析要求：
 1. 识别章节中的情感变化
@@ -452,7 +451,6 @@ func (s *ImageService) GenerateCharacterImage(
 	config *ConsistencyLevel,
 ) (string, error) {
 	// 构建提示词
-	prompt := s.buildCharacterPrompt(charName, expression, pose)
 
 	req := &ImageGenerationRequest{
 		NegativePrompt: "blurry, low quality, bad anatomy, distorted face",
@@ -519,7 +517,6 @@ func (s *ImageService) GenerateSceneImage(
 		sb.WriteString(fmt.Sprintf(", with %s in the scene", strings.Join(characters, ", ")))
 	}
 
-	prompt := sb.String()
 
 	result, err := s.provider.ImageGenerate(context.Background(), &ai.GenerateRequest{
 		Model:  "stable-diffusion-xl",
