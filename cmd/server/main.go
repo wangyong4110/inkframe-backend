@@ -304,27 +304,31 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 
 // Services 服务层
 type Services struct {
-	NovelService           *service.NovelService
-	ChapterService         *service.ChapterService
-	CharacterService       *service.CharacterService
-	WorldviewService       *service.WorldviewService
-	QualityService         *service.QualityControlService
-	VideoService           *service.VideoService
-	ModelService           *service.ModelService
-	PromptService          *service.PromptService
-	ContinuityService      *service.ContinuityService
-	KnowledgeService       *service.KnowledgeService
-	ReviewTaskService      *service.ReviewTaskService
-	ChapterVersionService  *service.ChapterVersionService
-	ForeshadowService      *service.ForeshadowService
-	TimelineService        *service.TimelineService
-	CharacterArcService    *service.CharacterArcService
-	StyleService           *service.StyleService
-	GenerationContextService *service.GenerationContextService
-	ImageGenerationService *service.ImageGenerationService
-	StoryboardService      *service.StoryboardService
-	VideoEnhancementService *service.VideoEnhancementService
-	CrawlerService         *crawler.NovelCrawler
+	NovelService              *service.NovelService
+	ChapterService            *service.ChapterService
+	CharacterService          *service.CharacterService
+	WorldviewService          *service.WorldviewService
+	QualityService            *service.QualityControlService
+	QualityControlService      *service.QualityControlService
+	VideoService              *service.VideoService
+	ModelService              *service.ModelService
+	PromptService             *service.PromptService
+	ContinuityService         *service.ContinuityService
+	KnowledgeService          *service.KnowledgeService
+	ReviewTaskService         *service.ReviewTaskService
+	ChapterVersionService     *service.ChapterVersionService
+	ForeshadowService         *service.ForeshadowService
+	TimelineService           *service.TimelineService
+	CharacterArcService       *service.CharacterArcService
+	StyleService              *service.StyleService
+	GenerationContextService  *service.GenerationContextService
+	ImageGenerationService    *service.ImageGenerationService
+	StoryboardService         *service.IntelligentStoryboardService
+	VideoEnhancementService   *service.VideoEnhancementService
+	VideoGenerationService     *service.VideoEnhancementService
+	FrameGeneratorService     *service.FrameGeneratorService
+	ConsistencyValidatorService *service.ConsistencyValidatorService
+	CrawlerService            *crawler.NovelCrawler
 }
 
 // initServices 初始化服务层
@@ -398,36 +402,48 @@ func initServices(repos *Repositories, aiManager *ai.ModelManager, vectorStore *
 	imageGenerationService := service.NewImageGenerationService(aiManager)
 
 	// 分镜服务
-	storyboardService := service.NewStoryboardService(aiManager)
+	storyboardService := service.NewIntelligentStoryboardService(aiService)
 
 	// 视频增强服务
-	videoEnhancementService := service.NewVideoEnhancementService(aiManager)
+	videoEnhancementService := service.NewVideoEnhancementService(aiService)
+
+	// 帧生成服务
+	frameGeneratorService := service.NewFrameGeneratorService(aiService)
+
+	// 一致性验证服务
+	consistencyValidatorService := service.NewConsistencyValidatorService(aiService)
+
+	// 质量控制服务（详细版）
+	qualityControlService := service.NewQualityControlService(aiService)
 
 	// 爬虫服务
 	crawlerService := crawler.NewNovelCrawler(nil)
 
 	return &Services{
-		NovelService:            novelService,
-		ChapterService:          chapterService,
-		CharacterService:        characterService,
-		WorldviewService:        worldviewService,
-		QualityService:          qualityService,
-		VideoService:            videoService,
-		ModelService:            modelService,
-		PromptService:           promptService,
-		ContinuityService:       continuityService,
-		KnowledgeService:        knowledgeService,
-		ReviewTaskService:       reviewTaskService,
-		ChapterVersionService:   chapterVersionService,
-		ForeshadowService:       foreshadowService,
-		TimelineService:         timelineService,
-		CharacterArcService:     characterArcService,
-		StyleService:            styleService,
-		GenerationContextService: generationContextService,
-		ImageGenerationService:   imageGenerationService,
-		StoryboardService:       storyboardService,
-		VideoEnhancementService: videoEnhancementService,
-		CrawlerService:          crawlerService,
+		NovelService:               novelService,
+		ChapterService:             chapterService,
+		CharacterService:           characterService,
+		WorldviewService:           worldviewService,
+		QualityService:             qualityService,
+		QualityControlService:      qualityControlService,
+		VideoService:               videoService,
+		ModelService:               modelService,
+		PromptService:              promptService,
+		ContinuityService:          continuityService,
+		KnowledgeService:           knowledgeService,
+		ReviewTaskService:          reviewTaskService,
+		ChapterVersionService:      chapterVersionService,
+		ForeshadowService:         foreshadowService,
+		TimelineService:            timelineService,
+		CharacterArcService:        characterArcService,
+		StyleService:               styleService,
+		GenerationContextService:    generationContextService,
+		ImageGenerationService:     imageGenerationService,
+		StoryboardService:          storyboardService,
+		VideoEnhancementService:   videoEnhancementService,
+		FrameGeneratorService:     frameGeneratorService,
+		ConsistencyValidatorService: consistencyValidatorService,
+		CrawlerService:             crawlerService,
 	}
 }
 
