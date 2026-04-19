@@ -558,7 +558,7 @@ func (s *StyleService) BuildStylePrompt(config *StyleConfig) string {
 
 	// 对话比例
 	if config.DialogueRatio > 0 {
-		prompts = append(prompts, fmt.Sprintf("对话比例约占%d%%", int(config.DialogueRatio*100)))
+		prompts = append(prompts, fmt.Sprintf("对话比例约占%d%%", int(int(config.DialogueRatio * 100))))
 	}
 
 	return strings.Join(prompts, "。") + "。"
