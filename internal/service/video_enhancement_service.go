@@ -195,11 +195,7 @@ func (s *IntelligentStoryboardService) GenerateIntelligentShots(
 
 // optimizeShotSequence 优化镜头序列
 func (s *IntelligentStoryboardService) optimizeShotSequence(
-	emotions *EmotionalAnalysis []struct {
-		Position  int
-		Type      string
-		Intensity float64
-	},
+	emotions *EmotionalAnalysis,
 	dialogues []string,
 	characters []string,
 	scene string,
