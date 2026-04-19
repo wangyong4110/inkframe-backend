@@ -12,12 +12,12 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/ai"
-	"github.com/inkframe/inkframe-backend/internal/api"
-	"github.com/inkframe/inkframe-backend/internal/api/handler"
 	"github.com/inkframe/inkframe-backend/internal/config"
 	"github.com/inkframe/inkframe-backend/internal/crawler"
+	"github.com/inkframe/inkframe-backend/internal/handler"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
+	"github.com/inkframe/inkframe-backend/internal/router"
 	"github.com/inkframe/inkframe-backend/internal/service"
 	"github.com/inkframe/inkframe-backend/internal/vector"
 	"github.com/redis/go-redis/v9"
@@ -64,13 +64,15 @@ func main() {
 	handlers := initHandlers(services)
 
 	// 10. 设置路由
-	router := api.SetupRouter(
-		handlers.novelHandler,
-		handlers.chapterHandler,
-		handlers.modelHandler,
-		handlers.videoHandler,
-		handlers.healthHandler,
-	)
+	r := router.SetupRouter(&router.Config{
+		NovelHandler:      handlers.NovelHandler,
+		ChapterHandler:   handlers.ChapterHandler,
+		CharacterHandler: handlers.CharacterHandler,
+		VideoHandler:    handlers.VideoHandler,
+		ModelHandler:    handlers.ModelHandler,
+		StyleHandler:    handlers.StyleHandler,
+		ContextHandler:  handlers.ContextHandler,
+	})
 
 	// 11. 设置Gin模式
 	if cfg.Server.Mode == "release" {
@@ -80,7 +82,7 @@ func main() {
 	// 12. 创建服务器
 	srv := &http.Server{
 		Addr:           ":8080",
-		Handler:        router,
+		Handler:        r,
 		ReadTimeout:    30 * time.Second,
 		WriteTimeout:   30 * time.Second,
 		MaxHeaderBytes: 1 << 20,
@@ -267,17 +269,18 @@ func initVectorStore(cfg *config.Config) *vector.StoreManager {
 // Repositories 仓库层
 type Repositories struct {
 	NovelRepo             *repository.NovelRepository
-	ChapterRepo          *repository.ChapterRepository
-	CharacterRepo        *repository.CharacterRepository
-	WorldviewRepo        *repository.WorldviewRepository
-	AIModelRepo          *repository.AIModelRepository
-	TaskModelConfigRepo  *repository.TaskModelConfigRepository
-	VideoRepo            *repository.VideoRepository
-	StoryboardRepo       *repository.StoryboardRepository
-	KnowledgeBaseRepo    *repository.KnowledgeBaseRepository
-	ModelProviderRepo    *repository.ModelProviderRepository
-	ModelComparisonRepo  *repository.ModelComparisonRepository
-	ReviewTaskRepo       *repository.ReviewTaskRepository
+	ChapterRepo           *repository.ChapterRepository
+	CharacterRepo         *repository.CharacterRepository
+	WorldviewRepo         *repository.WorldviewRepository
+	AIModelRepo           *repository.AIModelRepository
+	TaskModelConfigRepo   *repository.TaskModelConfigRepository
+	VideoRepo             *repository.VideoRepository
+	StoryboardRepo        *repository.StoryboardRepository
+	KnowledgeBaseRepo     *repository.KnowledgeBaseRepository
+	ModelProviderRepo     *repository.ModelProviderRepository
+	ModelComparisonRepo   *repository.ModelComparisonRepository
+	ReviewTaskRepo        *repository.ReviewTaskRepository
+	ChapterVersionRepo    *repository.ChapterVersionRepository
 }
 
 // initRepositories 初始化仓库层
@@ -295,24 +298,33 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		ModelProviderRepo:    repository.NewModelProviderRepository(db),
 		ModelComparisonRepo:  repository.NewModelComparisonRepository(db),
 		ReviewTaskRepo:       repository.NewReviewTaskRepository(db),
+		ChapterVersionRepo:   repository.NewChapterVersionRepository(db),
 	}
 }
 
 // Services 服务层
 type Services struct {
 	NovelService           *service.NovelService
-	ChapterService        *service.ChapterService
-	CharacterService      *service.CharacterService
-	WorldviewService      *service.WorldviewService
-	QualityService        *service.QualityControlService
-	VideoService          *service.VideoService
-	ModelService          *service.ModelService
-	PromptService         *service.PromptService
-	ContinuityService     *service.ContinuityService
-	KnowledgeService      *service.KnowledgeService
-	ReviewTaskService     *service.ReviewTaskService
-	ChapterVersionService *service.ChapterVersionService
-	CrawlerService        *crawler.NovelCrawler
+	ChapterService         *service.ChapterService
+	CharacterService       *service.CharacterService
+	WorldviewService       *service.WorldviewService
+	QualityService         *service.QualityControlService
+	VideoService           *service.VideoService
+	ModelService           *service.ModelService
+	PromptService          *service.PromptService
+	ContinuityService      *service.ContinuityService
+	KnowledgeService       *service.KnowledgeService
+	ReviewTaskService      *service.ReviewTaskService
+	ChapterVersionService  *service.ChapterVersionService
+	ForeshadowService      *service.ForeshadowService
+	TimelineService        *service.TimelineService
+	CharacterArcService    *service.CharacterArcService
+	StyleService           *service.StyleService
+	GenerationContextService *service.GenerationContextService
+	ImageGenerationService *service.ImageGenerationService
+	StoryboardService      *service.StoryboardService
+	VideoEnhancementService *service.VideoEnhancementService
+	CrawlerService         *crawler.NovelCrawler
 }
 
 // initServices 初始化服务层
@@ -361,43 +373,102 @@ func initServices(repos *Repositories, aiManager *ai.ModelManager, vectorStore *
 	// 章节版本服务
 	chapterVersionService := service.NewChapterVersionService(repos.KnowledgeBaseRepo, repos.ChapterRepo)
 
+	// 伏笔服务
+	foreshadowService := service.NewForeshadowService()
+
+	// 时间线服务
+	timelineService := service.NewTimelineService()
+
+	// 角色弧光服务
+	characterArcService := service.NewCharacterArcService()
+
+	// 风格服务
+	styleService := service.NewStyleService()
+
+	// 生成上下文服务
+	generationContextService := service.NewGenerationContextService(
+		novelService,
+		chapterService,
+		foreshadowService,
+		timelineService,
+		characterArcService,
+	)
+
+	// 图像生成服务
+	imageGenerationService := service.NewImageGenerationService(aiManager)
+
+	// 分镜服务
+	storyboardService := service.NewStoryboardService(aiManager)
+
+	// 视频增强服务
+	videoEnhancementService := service.NewVideoEnhancementService(aiManager)
+
 	// 爬虫服务
 	crawlerService := crawler.NewNovelCrawler(nil)
 
 	return &Services{
-		NovelService:           novelService,
-		ChapterService:        chapterService,
-		CharacterService:      characterService,
-		WorldviewService:      worldviewService,
-		QualityService:        qualityService,
-		VideoService:          videoService,
-		ModelService:          modelService,
-		PromptService:         promptService,
-		ContinuityService:     continuityService,
-		KnowledgeService:      knowledgeService,
-		ReviewTaskService:     reviewTaskService,
-		ChapterVersionService: chapterVersionService,
-		CrawlerService:        crawlerService,
+		NovelService:            novelService,
+		ChapterService:          chapterService,
+		CharacterService:        characterService,
+		WorldviewService:        worldviewService,
+		QualityService:          qualityService,
+		VideoService:            videoService,
+		ModelService:            modelService,
+		PromptService:           promptService,
+		ContinuityService:       continuityService,
+		KnowledgeService:        knowledgeService,
+		ReviewTaskService:       reviewTaskService,
+		ChapterVersionService:   chapterVersionService,
+		ForeshadowService:       foreshadowService,
+		TimelineService:         timelineService,
+		CharacterArcService:     characterArcService,
+		StyleService:            styleService,
+		GenerationContextService: generationContextService,
+		ImageGenerationService:   imageGenerationService,
+		StoryboardService:       storyboardService,
+		VideoEnhancementService: videoEnhancementService,
+		CrawlerService:          crawlerService,
 	}
 }
 
 // Handlers 处理器
 type Handlers struct {
-	novelHandler   *handler.NovelHandler
-	chapterHandler *handler.ChapterHandler
-	modelHandler  *handler.ModelHandler
-	videoHandler  *handler.VideoHandler
-	healthHandler *handler.HealthHandler
+	NovelHandler      *handler.NovelHandler
+	ChapterHandler    *handler.ChapterHandler
+	CharacterHandler  *handler.CharacterHandler
+	VideoHandler      *handler.VideoHandler
+	ModelHandler      *handler.ModelHandler
+	StyleHandler      *handler.StyleHandler
+	ContextHandler    *handler.ContextHandler
 }
 
 // initHandlers 初始化处理器
 func initHandlers(services *Services) *Handlers {
 	return &Handlers{
-		novelHandler:   handler.NewNovelHandler(services.NovelService),
-		chapterHandler: handler.NewChapterHandler(services.NovelService),
-		modelHandler:  handler.NewModelHandler(services.ModelService),
-		videoHandler:  handler.NewVideoHandler(services.VideoService),
-		healthHandler: handler.NewHealthHandler(),
+		NovelHandler:     handler.NewNovelHandler(
+			services.NovelService,
+			services.ChapterService,
+			services.ForeshadowService,
+			services.TimelineService,
+		),
+		ChapterHandler: handler.NewChapterHandler(
+			services.ChapterService,
+			services.ChapterVersionService,
+			services.QualityService,
+		),
+		CharacterHandler: handler.NewCharacterHandler(
+			services.CharacterService,
+			services.CharacterArcService,
+			services.ImageGenerationService,
+		),
+		VideoHandler: handler.NewVideoHandler(
+			services.VideoService,
+			services.StoryboardService,
+			services.VideoEnhancementService,
+		),
+		ModelHandler: handler.NewModelHandler(services.ModelService),
+		StyleHandler: handler.NewStyleHandler(services.StyleService),
+		ContextHandler: handler.NewContextHandler(services.GenerationContextService),
 	}
 }
 
