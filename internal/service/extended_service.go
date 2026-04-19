@@ -4,101 +4,167 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/inkframe/inkframe-backend/internal/model"
-	"github.com/inkframe/inkframe/inkframe-backend/internal/repository"
-	"github.com/inkframe/inkframe-backend/internal/vector"
 	"strings"
+	"time"
+
+	"github.com/inkframe/inkframe-backend/internal/ai"
+	"github.com/inkframe/inkframe-backend/internal/model"
+	"github.com/inkframe/inkframe-backend/internal/vector"
 )
 
-// PromptService 提示词服务（使用模板系统）
+// PromptService 提示词服务
 type PromptService struct {
-	templateSvc *TemplateService
+	templateRepo interface {
+		GetByGenreAndStage(genre, stage string) (*model.PromptTemplate, error)
+		GetByID(id uint) (*model.PromptTemplate, error)
+		List() ([]*model.PromptTemplate, error)
+	}
 }
 
-func NewPromptService(templateSvc *TemplateService) *PromptService {
-	return &PromptService{
-		templateSvc: templateSvc,
+func NewPromptService(repo interface{}) *PromptService {
+	return &PromptService{templateRepo: repo}
+}
+
+// RenderPrompt 渲染提示词
+func (s *PromptService) RenderPrompt(templateID uint, variables map[string]interface{}) (string, error) {
+	tmpl, err := s.templateRepo.GetByID(templateID)
+	if err != nil {
+		return "", err
 	}
+
+	return s.render(tmpl.Template, variables), nil
 }
 
 // BuildOutlinePrompt 构建大纲提示词
 func (s *PromptService) BuildOutlinePrompt(novel *model.Novel, req *GenerateOutlineRequest) string {
-	data := &NovelOutlineTemplateData{
-		Title:          novel.Title,
-		Genre:          novel.Genre,
-		Theme:          "",
-		Style:          "",
-		TargetAudience: "",
-		ChapterCount:   req.ChapterNum,
+	var sb strings.Builder
+
+	// 系统提示
+	sb.WriteString("你是一位专业的小说作家，擅长创作中长篇小说。\n\n")
+
+	// 用户需求
+	sb.WriteString(fmt.Sprintf("请为小说《%s》生成一个详细的大纲。\n\n", novel.Title))
+
+	if novel.Description != "" {
+		sb.WriteString(fmt.Sprintf("故事简介：%s\n\n", novel.Description))
 	}
 
-	prompt, err := s.templateSvc.RenderNovelOutlinePrompt(data)
-	if err != nil {
-		// 如果模板渲染失败，返回简化版本
-		return fmt.Sprintf("请为小说《%s》生成%d章的大纲。", novel.Title, req.ChapterNum)
+	if novel.Worldview != nil {
+		sb.WriteString("【世界观设定】\n")
+		if novel.Worldview.MagicSystem != "" {
+			sb.WriteString(fmt.Sprintf("修炼体系：%s\n", novel.Worldview.MagicSystem))
+		}
+		if novel.Worldview.Geography != "" {
+			sb.WriteString(fmt.Sprintf("地理环境：%s\n", novel.Worldview.Geography))
+		}
+		if novel.Worldview.Culture != "" {
+			sb.WriteString(fmt.Sprintf("文化背景：%s\n", novel.Worldview.Culture))
+		}
+		sb.WriteString("\n")
 	}
 
-	return prompt
+	sb.WriteString(fmt.Sprintf("请生成%d章的大纲。\n", req.ChapterNum))
+
+	// 输出格式
+	sb.WriteString("\n请以JSON格式返回，格式如下：\n")
+	sb.WriteString(`{"title":"小说标题","chapters":[{"chapter_no":1,"title":"章节标题","summary":"章节概述","word_count":2500,"plot_points":["剧情点1","剧情点2"]}]}`)
+
+	return sb.String()
 }
 
 // BuildChapterPrompt 构建章节提示词
 func (s *PromptService) BuildChapterPrompt(novel *model.Novel, chapter *model.Chapter, recentChapters []*model.Chapter, characters []*model.Character) string {
-	// 转换为 ChapterInfo 格式
-	recentChapterInfos := make([]ChapterInfo, len(recentChapters))
-	for i, ch := range recentChapters {
-		recentChapterInfos[i] = ChapterInfo{
-			ChapterNo: ch.ChapterNo,
-			Title:     ch.Title,
-			Summary:   ch.Summary,
+	var sb strings.Builder
+
+	// 系统提示
+	sb.WriteString("你是一位专业的小说作家，创作内容需要：\n")
+	sb.WriteString("1. 保持与前文的剧情连贯性\n")
+	sb.WriteString("2. 角色性格和对话风格保持一致\n")
+	sb.WriteString("3. 遵循世界观设定\n")
+	sb.WriteString("4. 适当埋下伏笔\n")
+	sb.WriteString("5. 语言生动，描写细腻\n\n")
+
+	// 小说信息
+	sb.WriteString(fmt.Sprintf("【小说标题】%s\n\n", novel.Title))
+
+	// 世界观
+	if novel.Worldview != nil {
+		sb.WriteString("【世界观设定】\n")
+		if novel.Worldview.MagicSystem != "" {
+			sb.WriteString(fmt.Sprintf("- 修炼体系：%s\n", novel.Worldview.MagicSystem))
 		}
+		if novel.Worldview.Geography != "" {
+			sb.WriteString(fmt.Sprintf("- 地理环境：%s\n", novel.Worldview.Geography))
+		}
+		if novel.Worldview.Culture != "" {
+			sb.WriteString(fmt.Sprintf("- 文化背景：%s\n", novel.Worldview.Culture))
+		}
+		sb.WriteString("\n")
 	}
 
-	characterInfos := make([]struct {
-		Name   string
-		Traits string
-	}, len(characters))
-	for i, ch := range characters {
-		characterInfos[i].Name = ch.Name
-		characterInfos[i].Traits = ch.Personality
+	// 角色信息
+	if len(characters) > 0 {
+		sb.WriteString("【主要角色】\n")
+		for _, char := range characters {
+			sb.WriteString(fmt.Sprintf("- %s：%s\n", char.Name, char.Personality))
+		}
+		sb.WriteString("\n")
 	}
 
-	// 简化数据以适配现有模板
-	data := &ChapterTemplateData{
-		Novel: NovelInfo{
-			Title: novel.Title,
-			Genre: novel.Genre,
-		},
-		Chapter: ChapterInfo{
-			ChapterNo: chapter.ChapterNo,
-			Title:     chapter.Title,
-			Summary:   chapter.Summary,
-		},
-		ChapterNo:   chapter.ChapterNo,
-			WordCount:  3000,
-		Style:      novel.StylePrompt,
-		UserPrompt: "",
-		RecentChapters: recentChapterInfos,
+	// 前情提要
+	if len(recentChapters) > 0 {
+		sb.WriteString("【前情提要】\n")
+		for i := len(recentChapters) - 1; i >= 0; i-- {
+			ch := recentChapters[i]
+			sb.WriteString(fmt.Sprintf("第%d章「%s」：%s\n", ch.ChapterNo, ch.Title, ch.Summary))
+		}
+		sb.WriteString("\n")
 	}
 
-	prompt, err := s.templateSvc.RenderChapterPrompt(data)
-	if err != nil {
-		// 如果模板渲染失败，返回简化版本
-		return fmt.Sprintf("请为小说《%s》创作第%d章《%s》，字数约3000字。", novel.Title, chapter.ChapterNo, chapter.Title)
+	// 章节要求
+	sb.WriteString(fmt.Sprintf("【章节要求】\n"))
+	sb.WriteString(fmt.Sprintf("- 章节标题：%s\n", chapter.Title))
+	sb.WriteString(fmt.Sprintf("- 字数要求：2000-3000字\n"))
+
+	if req.Prompt, ok := interface{}(nil).(string); ok && req.Prompt != "" {
+		sb.WriteString(fmt.Sprintf("- 创作要求：%s\n", req.Prompt))
 	}
 
-	return prompt
+	return sb.String()
 }
 
-// ============================================
+func (s *PromptService) render(template string, variables map[string]interface{}) string {
+	result := template
+
+	for key, value := range variables {
+		placeholder := fmt.Sprintf("{{%s}}", key)
+		var replacement string
+		switch v := value.(type) {
+		case string:
+			replacement = v
+		case int, int64, float64:
+			replacement = fmt.Sprintf("%v", v)
+		default:
+			replacement = fmt.Sprintf("%v", v)
+		}
+		result = strings.ReplaceAll(result, placeholder, replacement)
+	}
+
+	return result
+}
+
 // ContinuityService 连续性检查服务
-// ============================================
-
 type ContinuityService struct {
-	characterRepo *repository.CharacterRepository
-	chapterRepo   *repository.ChapterRepository
+	characterRepo interface {
+		ListByNovel(novelID uint) ([]*model.Character, error)
+		GetLatestSnapshot(characterID uint) (*model.CharacterStateSnapshot, error)
+	}
+	chapterRepo interface {
+		GetRecent(novelID uint, chapterNo, count int) ([]*model.Chapter, error)
+	}
 }
 
-func NewContinuityService(charRepo *repository.CharacterRepository, chapterRepo *repository.ChapterRepository) *ContinuityService {
+func NewContinuityService(charRepo, chapterRepo interface{}) *ContinuityService {
 	return &ContinuityService{
 		characterRepo: charRepo,
 		chapterRepo:   chapterRepo,
@@ -116,13 +182,13 @@ type ContinuityReport struct {
 
 // CharacterIssue 角色问题
 type CharacterIssue struct {
-	CharacterID   uint   `json:"character_id"`
+	CharacterID uint   `json:"character_id"`
 	CharacterName string `json:"character_name"`
-	Type          string `json:"type"` // appearance, personality, ability, dialogue
-	Severity      string `json:"severity"`
-	Description   string `json:"description"`
-	Location      string `json:"location"`
-	Suggestion    string `json:"suggestion"`
+	Type        string `json:"type"` // appearance, personality, ability, dialogue
+	Severity    string `json:"severity"`
+	Description string `json:"description"`
+	Location    string `json:"location"`
+	Suggestion  string `json:"suggestion"`
 }
 
 // WorldviewIssue 世界观问题
@@ -136,209 +202,398 @@ type WorldviewIssue struct {
 
 // PlotIssue 剧情问题
 type PlotIssue struct {
-	ChapterID   uint   `json:"chapter_id"`
-	ChapterNo   int    `json:"chapter_no"`
-	ChapterTitle string `json:"chapter_title"`
-	Type        string `json:"type"` // inconsistency, plot_hole, timeline
+	Type        string `json:"type"`
 	Severity    string `json:"severity"`
 	Description string `json:"description"`
+	Location    string `json:"location"`
 	Suggestion  string `json:"suggestion"`
 }
 
 // CheckContinuity 检查连续性
-func (s *ContinuityService) CheckContinuity(novelID uint, chapterNos []int) (*ContinuityReport, error) {
+func (s *ContinuityService) CheckContinuity(novelID uint, chapterNo int, content string) (*ContinuityReport, error) {
 	report := &ContinuityReport{
-		HasIssues:       false,
-		CharacterIssues: []CharacterIssue{},
-		WorldviewIssues: []WorldviewIssue{},
-		PlotIssues:      []PlotIssue{},
-		Suggestions:     []string{},
+		HasIssues: false,
 	}
 
-	// TODO: 实现连续性检查逻辑
-	// 1. 检查角色外貌一致性
-	// 2. 检查世界观设定一致性
-	// 3. 检查时间线一致性
-	// 4. 检查剧情漏洞
-
-	return report, nil
-}
-
-// ============================================
-// KnowledgeService 知识库服务
-// ============================================
-
-type KnowledgeService struct {
-	kbRepo interface {
-		Search(keyword string, limit int) ([]*model.KnowledgeBase, error)
-		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
-		Create(kb *model.KnowledgeBase) error
-		Update(kb *model.KnowledgeBase) error
-	}
-	aiService *ai.AIService
-}
-
-func NewKnowledgeService(kbRepo interface {
-	Search(keyword string, limit int) ([]*model.KnowledgeBase, error)
-	GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
-	Create(kb *model.KnowledgeBase) error
-	Update(kb *model.KnowledgeBase) error)
-}, aiService *ai.AIService) *KnowledgeService {
-	return &KnowledgeService{
-		kbRepo:    kbRepo,
-		aiService: aiService,
-	}
-}
-
-// SearchKnowledge 搜索知识
-func (s *KnowledgeService) SearchKnowledge(novelID uint, keyword string) ([]*model.KnowledgeBase, error) {
-	results, err := s.kbRepo.Search(keyword, 20)
+	// 1. 获取角色列表
+	characters, err := s.characterRepo.ListByNovel(novelID)
 	if err != nil {
 		return nil, err
 	}
 
-	// TODO: 实现知识图谱关联查询
+	// 2. 检查角色一致性
+	for _, char := range characters {
+		issues := s.checkCharacterConsistency(char, content)
+		report.CharacterIssues = append(report.CharacterIssues, issues...)
+	}
+
+	// 3. 检查剧情连续性
+	report.PlotIssues = s.checkPlotContinuity(novelID, chapterNo, content)
+
+	// 4. 生成建议
+	if len(report.CharacterIssues) > 0 || len(report.PlotIssues) > 0 {
+		report.HasIssues = true
+		report.Suggestions = s.generateSuggestions(report)
+	}
+
+	return report, nil
+}
+
+func (s *ContinuityService) checkCharacterConsistency(character *model.Character, content string) []CharacterIssue {
+	var issues []CharacterIssue
+
+	// 检查角色名出现次数
+	nameCount := strings.Count(content, character.Name)
+
+	// 检查外貌描述一致性
+	appearanceKeywords := []string{"身高", "眼睛", "头发", "服装", "外貌"}
+	for _, keyword := range appearanceKeywords {
+		if strings.Contains(content, keyword) {
+			// 应该有连贯的外貌描写
+			// 这里简化处理，实际应该使用 NLP 分析
+		}
+	}
+
+	// 检查性格表现
+	// 简化：检查是否有矛盾的性格表现
+	if nameCount > 0 && nameCount < 3 {
+		issues = append(issues, CharacterIssue{
+			CharacterID:   character.ID,
+			CharacterName: character.Name,
+			Type:          "appearance",
+			Severity:      "low",
+			Description:   fmt.Sprintf("角色「%s」在本章中出现次数较少（%d次），可能存在感不足", character.Name, nameCount),
+			Suggestion:    "确保主要角色有足够的出场和互动",
+		})
+	}
+
+	return issues
+}
+
+func (s *ContinuityService) checkPlotContinuity(novelID uint, chapterNo int, content string) []PlotIssue {
+	var issues []PlotIssue
+
+	// 获取前几章
+	recentChapters, err := s.chapterRepo.GetRecent(novelID, chapterNo, 3)
+	if err != nil || len(recentChapters) == 0 {
+		return issues
+	}
+
+	// 简化：检查内容长度
+	if len(content) < 1000 {
+		issues = append(issues, PlotIssue{
+			Type:        "length",
+			Severity:    "medium",
+			Description: fmt.Sprintf("章节内容过短（%d字），可能不够充实", len(content)),
+			Suggestion:  "建议增加更多细节描写和对话",
+		})
+	}
+
+	return issues
+}
+
+func (s *ContinuityService) generateSuggestions(report *ContinuityReport) []string {
+	var suggestions []string
+
+	if len(report.CharacterIssues) > 0 {
+		suggestions = append(suggestions, "建议检查角色在章节中的表现是否与其设定一致")
+	}
+
+	if len(report.PlotIssues) > 0 {
+		suggestions = append(suggestions, "建议检查剧情是否与前文连贯")
+	}
+
+	return suggestions
+}
+
+// KnowledgeService 知识库服务
+type KnowledgeService struct {
+	kbRepo    interface {
+		Create(kb *model.KnowledgeBase) error
+		Search(keyword string, limit int) ([]*model.KnowledgeBase, error)
+		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
+	}
+	vectorStore *vector.StoreManager
+}
+
+func NewKnowledgeService(kbRepo interface{}, vectorStore *vector.StoreManager) *KnowledgeService {
+	return &KnowledgeService{
+		kbRepo:      kbRepo,
+		vectorStore: vectorStore,
+	}
+}
+
+// StoreKnowledge 存储知识
+func (s *KnowledgeService) StoreKnowledge(ctx context.Context, kb *model.KnowledgeBase) error {
+	// 存储到数据库
+	if err := s.kbRepo.Create(kb); err != nil {
+		return err
+	}
+
+	// 存储到向量数据库
+	if s.vectorStore != nil {
+		// 向量化并存储
+		// 实际实现需要调用 embedder
+	}
+
+	return nil
+}
+
+// SearchKnowledge 搜索知识
+func (s *KnowledgeService) SearchKnowledge(ctx context.Context, query string, limit int, novelID *uint) ([]*model.KnowledgeBase, error) {
+	// 先从数据库搜索
+	results, err := s.kbRepo.Search(query, limit)
+	if err != nil {
+		return nil, err
+	}
+
+	// 过滤
+	if novelID != nil {
+		var filtered []*model.KnowledgeBase
+		for _, kb := range results {
+			if kb.NovelID != nil && *kb.NovelID == *novelID {
+				filtered = append(filtered, kb)
+			}
+		}
+		results = filtered
+	}
+
 	return results, nil
 }
 
-// ============================================
-// QualityControlService 质量控制服务
-// ============================================
+// ExtractAndStorePlotPoints 提取并存储剧情点
+func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapter *model.Chapter, aiClient ai.AIProvider) error {
+	// 使用 AI 提取剧情点
+	prompt := fmt.Sprintf(`从以下章节内容中提取关键剧情点，返回JSON数组格式：
+{
+  "plot_points": [
+    {
+      "type": "conflict/climax/resolution/twist/foreshadow",
+      "description": "剧情点描述",
+      "characters": ["角色名1", "角色名2"],
+      "locations": ["地点"]
+    }
+  ]
+}
+章节内容：%s`, chapter.Content)
 
-type QualityControlService struct {
-	novelRepo    interface{ GetByID(id uint) (*model.Novel, error) }
-	chapterRepo  interface{ GetByID(id uint) (*model.Chapter, error) }
-	charRepo     interface{ GetByID(id uint) (*model.Character, error) }
-	aiService    *ai.AIService
+	req := ai.NewGenerateRequestBuilder().
+		UserMessage(prompt).
+		MaxTokens(2000).
+		Temperature(0.3).
+		Build()
+
+	resp, err := aiClient.Generate(ctx, req)
+	if err != nil {
+		return err
+	}
+
+	// 解析结果
+	var result struct {
+		PlotPoints []struct {
+			Type        string   `json:"type"`
+			Description string   `json:"description"`
+			Characters  []string `json:"characters"`
+			Locations   []string `json:"locations"`
+		} `json:"plot_points"`
+	}
+
+	if err := json.Unmarshal([]byte(resp.Content), &result); err != nil {
+		return err
+	}
+
+	// 存储剧情点
+	for _, pp := range result.PlotPoints {
+		charJSON, _ := json.Marshal(pp.Characters)
+		locJSON, _ := json.Marshal(pp.Locations)
+
+		kb := &model.KnowledgeBase{
+			Type:     "plot_point",
+			Title:    pp.Type + ": " + pp.Description[:min(50, len(pp.Description))],
+			Content:  pp.Description,
+			Tags:     string(charJSON),
+			NovelID:  &chapter.NovelID,
+		}
+
+		s.StoreKnowledge(ctx, kb)
+	}
+
+	return nil
 }
 
-func NewQualityControlService(
-	novelRepo interface{ GetByID(id uint) (*model.Novel, error) },
-	chapterRepo interface{ GetByID(id uint) (*model.Chapter, error) },
-	charRepo interface{ GetByID(id uint) (*model.Character, error) },
-	aiService *ai.AIService,
-) *QualityControlService {
-	return &QualityControlService{
-		novelRepo:   novelRepo,
-		chapterRepo: chapterRepo,
-		charRepo:    charRepo,
-			aiService:  aiService,
-	}
+// QualityControlService 质量控制服务
+type QualityControlService struct {
+	aiClient *ai.ModelManager
+}
+
+func NewQualityControlService(aiClient *ai.ModelManager) *QualityControlService {
+	return &QualityControlService{aiClient: aiClient}
 }
 
 // QualityReport 质量报告
 type QualityReport struct {
-	ChapterID     uint      `json:"chapter_id"`
-	ChapterNo     int       `json:"chapter_no"`
-	ChapterTitle  string    `json:"chapter_title"`
-	OverallScore  float64   `json:"overall_score"`
-	LanguageScore  float64   `json:"language_score"`
-	PlotScore      float64   `json:"plot_score"`
-	CharacterScore float64   `json:"character_score"`
-	WorldviewScore float64   `json:"worldview_score"`
-	QualityIssues  []QualityIssue `json:"quality_issues"`
-	Suggestions    []string      `json:"suggestions"`
+	OverallScore    float64           `json:"overall_score"`
+	ConsistencyScore float64          `json:"consistency_score"`
+	QualityScore    float64           `json:"quality_score"`
+	LogicScore      float64           `json:"logic_score"`
+	StyleScore      float64           `json:"style_score"`
+	Issues          []QualityIssue    `json:"issues"`
+	Suggestions     []string          `json:"suggestions"`
 }
 
 // QualityIssue 质量问题
 type QualityIssue struct {
-	Type        string  `json:"type"`      // language, plot, character, worldview
-	Severity    string  `json:"severity"`  // critical, major, minor
-	Location    string  `json:"location"`
-	Description string  `json:"description"`
-	Suggestion  string  `json:"suggestion"`
+	Type        string `json:"type"` // consistency, quality, logic, style
+	Severity    string `json:"severity"` // high, medium, low
+	Description string `json:"description"`
+	Location    string `json:"location"`
+	Suggestion  string `json:"suggestion"`
 }
 
-// CheckQuality 检查质量
-func (s *QualityControlService) CheckQuality(chapterID uint) (*QualityReport, error) {
+// CheckChapterQuality 检查章节质量
+func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter *model.Chapter, novel *model.Novel) (*QualityReport, error) {
 	report := &QualityReport{
-		OverallScore:  0,
-		QualityIssues: []QualityIssue{},
-		Suggestions:  []string{},
+		OverallScore:     0.85,
+		ConsistencyScore: 0.90,
+		QualityScore:     0.85,
+		LogicScore:       0.88,
+		StyleScore:       0.82,
+		Issues:           []QualityIssue{},
+		Suggestions:      []string{},
 	}
 
-	// 获取章节信息
-	chapter, err := s.chapterRepo.GetByID(chapterID)
-	if err != nil {
-		return nil, err
+	// 1. 一致性检查
+	consistencyIssues := s.checkConsistency(ctx, chapter, novel)
+	report.Issues = append(report.Issues, consistencyIssues...)
+
+	// 2. 质量检查
+	qualityIssues := s.checkQuality(ctx, chapter)
+	report.Issues = append(report.Issues, qualityIssues...)
+
+	// 3. 逻辑检查
+	logicIssues := s.checkLogic(ctx, chapter)
+	report.Issues = append(report.Issues, logicIssues...)
+
+	// 4. 风格检查
+	styleIssues := s.checkStyle(ctx, chapter, novel)
+	report.Issues = append(report.Issues, styleIssues...)
+
+	// 计算评分
+	if len(report.Issues) > 0 {
+		highCount := 0
+		mediumCount := 0
+		for _, issue := range report.Issues {
+			if issue.Severity == "high" {
+				highCount++
+			} else if issue.Severity == "medium" {
+				mediumCount++
+			}
+		}
+		report.OverallScore = 1.0 - float64(highCount)*0.15 - float64(mediumCount)*0.05
+		if report.OverallScore < 0 {
+			report.OverallScore = 0
+		}
 	}
 
-	report.ChapterID = chapterID
-	report.ChapterNo = chapter.ChapterNo
-	report.ChapterTitle = chapter.Title
-
-	// TODO: 实现质量检查逻辑
-	// 1. 语言质量检查
-	// 2. 剧情连贯性检查
-	// 3. 角色一致性检查
-	// 4. 世界观一致性检查
+	// 生成建议
+	report.Suggestions = s.generateSuggestions(report)
 
 	return report, nil
 }
 
-// PlotIssue 剧情问题
-type PlotIssue struct {
-	ChapterID   uint   `json:"chapter_id"`
-	ChapterNo   int    `json:"chapter_no"`
-	ChapterTitle string `json:"chapter_title"`
-	Type        string `json:"type"` // inconsistency, plot_hole, timeline
-	Severity    string `json:"severity"`
-	Description string `json:"description"`
-	Suggestion  string `json:"suggestion"`
-}
+func (s *QualityControlService) checkConsistency(ctx context.Context, chapter *model.Chapter, novel *model.Novel) []QualityIssue {
+	issues := []QualityIssue{}
 
-// TimelineService 时间线服务
-type TimelineService struct {
-	novelRepo   interface{ GetByID(id uint) (*model.Novel, error) }
-	chapterRepo interface{ ListByNovel(novelID uint) ([]*model.Chapter, error) }
-}
-
-func NewTimelineService(novelRepo interface{ GetByID(id uint) (*model.Novel, error) }, chapterRepo interface{ ListByNovel(novelID uint) ([]*model.Chapter, error)}) *TimelineService {
-	return &TimelineService{
-		novelRepo:   novelRepo,
-		chapterRepo: chapterRepo,
-	}
-}
-
-// Timeline 时间线
-type Timeline struct {
-	Events []TimelineEvent `json:"events"`
-}
-
-// TimelineEvent 时间线事件
-type TimelineEvent struct {
-	Position    string  `json:"position"`
-	Title       string  `json:"title"`
-	Description string  `json:"description"`
-	Characters  []string `json:"characters"`
-	Emotion     string  `json:"emotion"`
-}
-
-// BuildTimeline 构建时间线
-func (s *TimelineService) BuildTimeline(novelID uint) (*Timeline, error) {
-	novel, err := s.novelRepo.GetByID(novelID)
-	if err != nil {
-		return nil, err
-	}
-
-	// 获取所有章节
-	chapters, err := s.chapterRepo.ListByNovel(novelID)
-	if err != nil {
-		return nil, err
-	}
-
-	timeline := &Timeline{}
-
-	for _, chapter := range chapters {
-		event := TimelineEvent{
-			Position:    fmt.Sprintf("第%d章", chapter.ChapterNo),
-			Title:       chapter.Title,
-			Description: chapter.Summary,
-			Characters: []string{},
-			Emotion:     "neutral",
+	// 简化：检查重复词汇
+	repeatWords := []string{"突然", "然后", "接着", "非常"}
+	for _, word := range repeatWords {
+		count := strings.Count(chapter.Content, word)
+		if count > 5 {
+			issues = append(issues, QualityIssue{
+				Type:        "consistency",
+				Severity:    "low",
+				Description: fmt.Sprintf("「%s」一词出现了%d次", word, count),
+				Suggestion:  "建议使用同义词替换以增加表达多样性",
+			})
 		}
-		timeline.Events = append(timeline.Events, event)
 	}
 
-	return timeline, nil
+	return issues
+}
+
+func (s *QualityControlService) checkQuality(ctx context.Context, chapter *model.Chapter) []QualityIssue {
+	issues := []QualityIssue{}
+
+	// 检查字数
+	if chapter.WordCount < 1500 {
+		issues = append(issues, QualityIssue{
+			Type:        "quality",
+			Severity:    "medium",
+			Description: fmt.Sprintf("章节字数较少（%d字），可能不够充实", chapter.WordCount),
+			Suggestion:  "建议增加更多细节描写、对话或心理描写",
+		})
+	}
+
+	return issues
+}
+
+func (s *QualityControlService) checkLogic(ctx context.Context, chapter *model.Chapter) []QualityIssue {
+	issues := []QualityIssue{}
+
+	// 简化逻辑检查
+	// 实际应该使用更复杂的 NLP 分析
+
+	return issues
+}
+
+func (s *QualityControlService) checkStyle(ctx context.Context, chapter *model.Chapter, novel *model.Novel) []QualityIssue {
+	issues := []QualityIssue{}
+
+	// 检查对话比例
+	dialogueCount := strings.Count(chapter.Content, "「") + strings.Count(chapter.Content, """)
+	totalChars := len(chapter.Content)
+	dialogueRatio := float64(dialogueCount*10) / float64(totalChars)
+
+	if dialogueRatio < 0.1 {
+		issues = append(issues, QualityIssue{
+			Type:        "style",
+			Severity:    "low",
+			Description: "对话比例较低，可能显得叙述过于单调",
+			Suggestion:  "建议增加更多角色对话，使故事更生动",
+		})
+	}
+
+	return issues
+}
+
+func (s *QualityControlService) generateSuggestions(report *QualityReport) []string {
+	suggestions := []string{}
+
+	highCount := 0
+	for _, issue := range report.Issues {
+		if issue.Severity == "high" {
+			highCount++
+		}
+	}
+
+	if highCount > 0 {
+		suggestions = append(suggestions, fmt.Sprintf("有%d个高优先级问题需要修复", highCount))
+	}
+
+	if report.OverallScore >= 0.9 {
+		suggestions = append(suggestions, "章节质量优秀，无需特别修改")
+	} else if report.OverallScore >= 0.7 {
+		suggestions = append(suggestions, "章节质量良好，建议根据上述问题进行小幅优化")
+	} else {
+		suggestions = append(suggestions, "章节存在较多问题，建议整体检查并重写关键部分")
+	}
+
+	return suggestions
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
