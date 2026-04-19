@@ -20,6 +20,70 @@ type NovelService struct {
 	aiService  *AIService
 }
 
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
 func NewNovelService(
 	novelRepo *repository.NovelRepository,
 	chapterRepo *repository.ChapterRepository,
@@ -32,12 +96,140 @@ func NewNovelService(
 	}
 }
 
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
 // CreateNovelRequest 创建小说请求
 type CreateNovelRequest struct {
 	Title       string  `json:"title" binding:"required"`
 	Description string  `json:"description"`
 	Genre       string  `json:"genre" binding:"required"`
 	WorldviewID *uint   `json:"worldview_id"`
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
 }
 
 // Create 创建小说
@@ -58,9 +250,137 @@ func (s *NovelService) Create(req *CreateNovelRequest) (*model.Novel, error) {
 	return novel, nil
 }
 
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
 // GetNovel 获取小说
 func (s *NovelService) GetNovel(id uint) (*model.Novel, error) {
 	return s.novelRepo.GetByID(id)
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
 }
 
 // ListNovels 获取小说列表
@@ -68,14 +388,206 @@ func (s *NovelService) ListNovels(page, pageSize int, filters map[string]interfa
 	return s.novelRepo.List(page, pageSize, filters)
 }
 
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
 // UpdateNovel 更新小说
 func (s *NovelService) UpdateNovel(novel *model.Novel) error {
 	return s.novelRepo.Update(novel)
 }
 
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
 // DeleteNovel 删除小说
 func (s *NovelService) DeleteNovel(id uint) error {
 	return s.novelRepo.Delete(id)
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
 }
 
 // GenerateOutlineRequest 生成大纲请求
@@ -84,6 +596,70 @@ type GenerateOutlineRequest struct {
 	Prompt     string   `json:"prompt"`
 	ChapterNum int      `json:"chapter_num" binding:"required"`
 	Keywords   []string `json:"keywords"`
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
 }
 
 // GenerateOutline 生成大纲
@@ -115,10 +691,138 @@ func (s *NovelService) GenerateOutline(req *GenerateOutlineRequest) (*OutlineRes
 	return outline, nil
 }
 
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
 // OutlineResult 大纲结果
 type OutlineResult struct {
 	Title    string           `json:"title"`
 	Chapters []ChapterOutline `json:"chapters"`
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
 }
 
 // ChapterOutline 章节大纲
@@ -128,6 +832,70 @@ type ChapterOutline struct {
 	Summary   string `json:"summary"`
 	WordCount int    `json:"word_count"`
 	PlotPoints []string `json:"plot_points"`
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
 }
 
 // buildOutlinePrompt 构建大纲提示词
@@ -156,12 +924,140 @@ func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutli
 	return sb.String()
 }
 
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
 // GenerateChapterRequest 生成章节请求
 type GenerateChapterRequest struct {
 	NovelID   uint    `json:"novel_id" binding:"required"`
 	ChapterNo int     `json:"chapter_no" binding:"required"`
 	Prompt    string  `json:"prompt"`
 	MaxTokens int     `json:"max_tokens"`
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
 }
 
 // GenerateChapter 生成章节
@@ -220,6 +1116,70 @@ func (s *NovelService) GenerateChapter(req *GenerateChapterRequest) (*model.Chap
 	return chapter, nil
 }
 
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
 // buildChapterPrompt 构建章节提示词
 func (s *NovelService) buildChapterPrompt(novel *model.Novel, req *GenerateChapterRequest, recentChapters []*model.Chapter) string {
 	var sb strings.Builder
@@ -265,6 +1225,70 @@ func (s *NovelService) buildChapterPrompt(novel *model.Novel, req *GenerateChapt
 	return sb.String()
 }
 
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
 // countChineseChars 统计中文字符数
 func countChineseChars(text string) int {
 	count := 0
@@ -274,6 +1298,70 @@ func countChineseChars(text string) int {
 		}
 	}
 	return count
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
 }
 
 // updateNovelStats 更新小说统计
@@ -297,6 +1385,70 @@ func (s *NovelService) updateNovelStats(novelID uint) {
 	s.novelRepo.Update(&model.Novel{ID: novelID})
 }
 
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
 // extractPlotPoints 提取剧情点
 func (s *NovelService) extractPlotPoints(chapter *model.Chapter) {
 	prompt := fmt.Sprintf(`请从以下章节内容中提取关键剧情点，返回JSON数组格式：
@@ -309,6 +1461,70 @@ func (s *NovelService) extractPlotPoints(chapter *model.Chapter) {
       "locations": ["地点"]
     }
   ]
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
 }
 章节内容：%s`, chapter.Content)
 
@@ -334,10 +1550,138 @@ func (s *NovelService) extractPlotPoints(chapter *model.Chapter) {
 	_ = plotResult
 }
 
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
 // AIService AI服务
 type AIService struct {
 	modelRepo *repository.AIModelRepository
 	taskRepo  *repository.TaskModelConfigRepository
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
 }
 
 func NewAIService(
@@ -348,6 +1692,70 @@ func NewAIService(
 		modelRepo: modelRepo,
 		taskRepo:  taskRepo,
 	}
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
 }
 
 // Generate 生成内容
@@ -371,6 +1779,70 @@ func (s *AIService) Generate(novelID uint, taskType string, prompt string) (stri
 	return result, nil
 }
 
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
 // mockAIGenerate 模拟AI生成
 func (s *AIService) mockAIGenerate(prompt string) string {
 	// 这里应该是真实的API调用
@@ -388,6 +1860,70 @@ func (s *AIService) mockAIGenerate(prompt string) string {
 
 	// 返回模拟章节内容
 	return fmt.Sprintf("第X章\n\n这是一个由AI生成的章节内容。\n\n%s\n\n（正文内容约2000字）\n\n本章完。", prompt[:min(100, len(prompt))])
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
 }
 
 // logUsage 记录使用
@@ -409,6 +1945,70 @@ func (s *AIService) logUsage(config *model.TaskModelConfig, prompt, result strin
 	s.modelRepo.LogUsage(log)
 }
 
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
 // min 返回较小值
 func min(a, b int) int {
 	if a < b {
@@ -417,12 +2017,140 @@ func min(a, b int) int {
 	return b
 }
 
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
 // QualityService 质量服务
 type QualityService struct {
 	novelRepo    *repository.NovelRepository
 	chapterRepo   *repository.ChapterRepository
 	characterRepo *repository.CharacterRepository
 	aiService     *AIService
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
 }
 
 func NewQualityService(
@@ -439,11 +2167,139 @@ func NewQualityService(
 	}
 }
 
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
 // QualityReport 质量报告
 type QualityReport struct {
 	OverallScore float64           `json:"overall_score"`
 	Issues      []QualityIssue    `json:"issues"`
 	Suggestions []string          `json:"suggestions"`
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
 }
 
 // QualityIssue 质量问题
@@ -453,6 +2309,70 @@ type QualityIssue struct {
 	Description string `json:"description"`
 	Location     string `json:"location"`
 	Suggestion  string `json:"suggestion"`
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
 }
 
 // CheckChapterQuality 检查章节质量
@@ -505,254 +2425,12 @@ func (s *QualityService) CheckChapterQuality(chapterID uint) (*QualityReport, er
 	return report, nil
 }
 
-// checkCharacterConsistency 检查角色一致性
-func (s *QualityService) checkCharacterConsistency(chapter *model.Chapter, novel *model.Novel) []QualityIssue {
-	issues := []QualityIssue{}
-
-	characters, _ := s.characterRepo.ListByNovel(novel.ID)
-	if len(characters) == 0 {
-		return issues
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
 	}
-
-	// 模拟检查（实际应该使用AI分析）
-	// 这里简化处理
-	for _, char := range characters {
-		if len(chapter.Content) > 1000 && rand.Float32() < 0.1 {
-			issues = append(issues, QualityIssue{
-				Type:        "character_consistency",
-				Severity:    "medium",
-				Description: fmt.Sprintf("角色「%s」在章节中的表现可能与设定不符", char.Name),
-				Location:    "第1段",
-				Suggestion:  fmt.Sprintf("请检查角色「%s」的行为是否符合其性格设定", char.Name),
-			})
-		}
-	}
-
-	return issues
-}
-
-// checkWorldviewConsistency 检查世界观一致性
-func (s *QualityService) checkWorldviewConsistency(chapter *model.Chapter, novel *model.Novel) []QualityIssue {
-	issues := []QualityIssue{}
-
-	if novel.Worldview == nil {
-		return issues
-	}
-
-	// 模拟检查
-	if rand.Float32() < 0.05 {
-		issues = append(issues, QualityIssue{
-			Type:        "worldview_consistency",
-			Severity:    "low",
-			Description: "可能存在轻微的世界观不一致",
-			Location:    "第3段",
-			Suggestion:  "请检查描述是否符合世界观设定",
-		})
-	}
-
-	return issues
-}
-
-// checkRepetition 检查重复性
-func (s *QualityService) checkRepetition(chapter *model.Chapter) []QualityIssue {
-	issues := []QualityIssue{}
-
-	// 检查重复词汇
-	words := []string{"突然", "然后", "接着"}
-	for _, word := range words {
-		count := strings.Count(chapter.Content, word)
-		if count > 5 {
-			issues = append(issues, QualityIssue{
-				Type:        "repetition",
-				Severity:    "low",
-				Description: fmt.Sprintf("「%s」一词出现了%d次", word, count),
-				Location:    "全文",
-				Suggestion:  "建议使用同义词替换以增加表达多样性",
-			})
-		}
-	}
-
-	return issues
-}
-
-// generateSuggestions 生成建议
-func (s *QualityService) generateSuggestions(issues []QualityIssue) []string {
-	suggestions := []string{}
-
-	highCount := 0
-	for _, issue := range issues {
-		if issue.Severity == "high" {
-			highCount++
-		}
-	}
-
-	if highCount > 0 {
-		suggestions = append(suggestions, fmt.Sprintf("有%d个高优先级问题需要修复", highCount))
-	}
-
-	if len(issues) > 10 {
-		suggestions = append(suggestions, "章节存在较多问题，建议整体重写或大幅修改")
-	}
-
-	if len(suggestions) == 0 {
-		suggestions = append(suggestions, "章节质量良好，无需特别修改")
-	}
-
-	return suggestions
-}
-
-// VideoService 视频服务
-type VideoService struct {
-	videoRepo       *repository.VideoRepository
-	storyboardRepo *repository.StoryboardRepository
-	chapterRepo    *repository.ChapterRepository
-	aiService      *AIService
-}
-
-func NewVideoService(
-	videoRepo *repository.VideoRepository,
-	storyboardRepo *repository.StoryboardRepository,
-	chapterRepo *repository.ChapterRepository,
-	aiService *AIService,
-) *VideoService {
-	return &VideoService{
-		videoRepo:       videoRepo,
-		storyboardRepo: storyboardRepo,
-		chapterRepo:    chapterRepo,
-		aiService:      aiService,
-	}
-}
-
-// CreateVideo 创建视频
-func (s *VideoService) CreateVideo(novelID uint, chapterID *uint) (*model.Video, error) {
-	video := &model.Video{
-		UUID:       uuid.New().String(),
-		NovelID:    novelID,
-		ChapterID:  chapterID,
-		Title:      "新视频",
-		Status:     "planning",
-		FrameRate:  24,
-		Resolution: "1080p",
-		AspectRatio: "16:9",
-	}
-
-	if err := s.videoRepo.Create(video); err != nil {
-		return nil, err
-	}
-
-	return video, nil
-}
-
-// GenerateStoryboard 生成分镜
-func (s *VideoService) GenerateStoryboard(videoID uint) ([]*model.StoryboardShot, error) {
-	video, err := s.videoRepo.GetByID(videoID)
-	if err != nil {
-		return nil, err
-	}
-
-	var content string
-	if video.ChapterID != nil {
-		chapter, _ := s.chapterRepo.GetByID(*video.ChapterID)
-		if chapter != nil {
-			content = chapter.Content
-		}
-	}
-
-	// 构建分镜提示词
-	prompt := s.buildStoryboardPrompt(video, content)
-
-	// 调用AI生成分镜
-	result, err := s.aiService.Generate(video.NovelID, "storyboard", prompt)
-	if err != nil {
-		return nil, err
-	}
-
-	// 解析分镜
-	shots := s.parseStoryboardResult(videoID, result)
-
-	// 保存分镜
-	for _, shot := range shots {
-		if err := s.storyboardRepo.Create(shot); err != nil {
-			return nil, err
-		}
-	}
-
-	// 更新视频状态
-	video.TotalShots = len(shots)
-	video.Status = "storyboard"
-	s.videoRepo.Update(video)
-
-	return shots, nil
-}
-
-// buildStoryboardPrompt 构建分镜提示词
-func (s *VideoService) buildStoryboardPrompt(video *model.Video, content string) string {
-	var sb strings.Builder
-
-	sb.WriteString("请根据以下内容生成分镜脚本：\n\n")
-
-	if content != "" {
-		sb.WriteString("【原始内容】\n")
-		sb.WriteString(content)
-		sb.WriteString("\n\n")
-	}
-
-	sb.WriteString("请将内容分解为多个分镜，每个分镜包括：\n")
-	sb.WriteString("- 镜头编号和时长\n")
-	sb.WriteString("- 场景描述\n")
-	sb.WriteString("- 对话内容（如有）\n")
-	sb.WriteString("- 摄像机类型（静态/平移/缩放/跟拍）\n")
-	sb.WriteString("- 镜头尺寸（远景/中景/近景/特写）\n")
-	sb.WriteString("- 涉及的角色的表情和动作\n\n")
-
-	sb.WriteString("请以JSON格式返回分镜数组")
-
-	return sb.String()
-}
-
-// parseStoryboardResult 解析分镜结果
-func (s *VideoService) parseStoryboardResult(videoID uint, result string) []*model.StoryboardShot {
-	shots := []*model.StoryboardShot{}
-
-	// 简化解析（实际应该更复杂）
-	for i := 1; i <= 5; i++ {
-		shot := &model.StoryboardShot{
-			UUID:       uuid.New().String(),
-			VideoID:    videoID,
-			ShotNo:     i,
-			CameraType: "static",
-			CameraAngle: "eye_level",
-			ShotSize:   "medium",
-			Duration:   5.0,
-			Status:     "pending",
-		}
-		shots = append(shots, shot)
-	}
-
-	return shots
-}
-
-// ModelService 模型服务
-type ModelService struct {
-	modelRepo *repository.AIModelRepository
-	providerRepo *repository.ModelProviderRepository
-	taskRepo  *repository.TaskModelConfigRepository
-	experimentRepo *repository.ModelComparisonRepository
-}
-
-func NewModelService(
-	modelRepo *repository.AIModelRepository,
-	providerRepo *repository.ModelProviderRepository,
-	taskRepo *repository.TaskModelConfigRepository,
-	experimentRepo *repository.ModelComparisonRepository,
-) *ModelService {
-	return &ModelService{
-		modelRepo: modelRepo,
-		providerRepo: providerRepo,
-		taskRepo:  taskRepo,
-		experimentRepo: experimentRepo,
-	}
-}
 
 	var selected *model.AIModel
 	switch strategy {
@@ -801,7 +2479,1337 @@ func selectBalanced(models []*model.AIModel) *model.AIModel {
 	bestScore := 0.0
 
 	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+// checkCharacterConsistency 检查角色一致性
+func (s *QualityService) checkCharacterConsistency(chapter *model.Chapter, novel *model.Novel) []QualityIssue {
+	issues := []QualityIssue{}
+
+	characters, _ := s.characterRepo.ListByNovel(novel.ID)
+	if len(characters) == 0 {
+		return issues
+	}
+
+	// 模拟检查（实际应该使用AI分析）
+	// 这里简化处理
+	for _, char := range characters {
+		if len(chapter.Content) > 1000 && rand.Float32() < 0.1 {
+			issues = append(issues, QualityIssue{
+				Type:        "character_consistency",
+				Severity:    "medium",
+				Description: fmt.Sprintf("角色「%s」在章节中的表现可能与设定不符", char.Name),
+				Location:    "第1段",
+				Suggestion:  fmt.Sprintf("请检查角色「%s」的行为是否符合其性格设定", char.Name),
+			})
+		}
+	}
+
+	return issues
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+// checkWorldviewConsistency 检查世界观一致性
+func (s *QualityService) checkWorldviewConsistency(chapter *model.Chapter, novel *model.Novel) []QualityIssue {
+	issues := []QualityIssue{}
+
+	if novel.Worldview == nil {
+		return issues
+	}
+
+	// 模拟检查
+	if rand.Float32() < 0.05 {
+		issues = append(issues, QualityIssue{
+			Type:        "worldview_consistency",
+			Severity:    "low",
+			Description: "可能存在轻微的世界观不一致",
+			Location:    "第3段",
+			Suggestion:  "请检查描述是否符合世界观设定",
+		})
+	}
+
+	return issues
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+// checkRepetition 检查重复性
+func (s *QualityService) checkRepetition(chapter *model.Chapter) []QualityIssue {
+	issues := []QualityIssue{}
+
+	// 检查重复词汇
+	words := []string{"突然", "然后", "接着"}
+	for _, word := range words {
+		count := strings.Count(chapter.Content, word)
+		if count > 5 {
+			issues = append(issues, QualityIssue{
+				Type:        "repetition",
+				Severity:    "low",
+				Description: fmt.Sprintf("「%s」一词出现了%d次", word, count),
+				Location:    "全文",
+				Suggestion:  "建议使用同义词替换以增加表达多样性",
+			})
+		}
+	}
+
+	return issues
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+// generateSuggestions 生成建议
+func (s *QualityService) generateSuggestions(issues []QualityIssue) []string {
+	suggestions := []string{}
+
+	highCount := 0
+	for _, issue := range issues {
+		if issue.Severity == "high" {
+			highCount++
+		}
+	}
+
+	if highCount > 0 {
+		suggestions = append(suggestions, fmt.Sprintf("有%d个高优先级问题需要修复", highCount))
+	}
+
+	if len(issues) > 10 {
+		suggestions = append(suggestions, "章节存在较多问题，建议整体重写或大幅修改")
+	}
+
+	if len(suggestions) == 0 {
+		suggestions = append(suggestions, "章节质量良好，无需特别修改")
+	}
+
+	return suggestions
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+// VideoService 视频服务
+type VideoService struct {
+	videoRepo       *repository.VideoRepository
+	storyboardRepo *repository.StoryboardRepository
+	chapterRepo    *repository.ChapterRepository
+	aiService      *AIService
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func NewVideoService(
+	videoRepo *repository.VideoRepository,
+	storyboardRepo *repository.StoryboardRepository,
+	chapterRepo *repository.ChapterRepository,
+	aiService *AIService,
+) *VideoService {
+	return &VideoService{
+		videoRepo:       videoRepo,
+		storyboardRepo: storyboardRepo,
+		chapterRepo:    chapterRepo,
+		aiService:      aiService,
+	}
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+// CreateVideo 创建视频
+func (s *VideoService) CreateVideo(novelID uint, chapterID *uint) (*model.Video, error) {
+	video := &model.Video{
+		UUID:       uuid.New().String(),
+		NovelID:    novelID,
+		ChapterID:  chapterID,
+		Title:      "新视频",
+		Status:     "planning",
+		FrameRate:  24,
+		Resolution: "1080p",
+		AspectRatio: "16:9",
+	}
+
+	if err := s.videoRepo.Create(video); err != nil {
+		return nil, err
+	}
+
+	return video, nil
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+// GenerateStoryboard 生成分镜
+func (s *VideoService) GenerateStoryboard(videoID uint) ([]*model.StoryboardShot, error) {
+	video, err := s.videoRepo.GetByID(videoID)
+	if err != nil {
+		return nil, err
+	}
+
+	var content string
+	if video.ChapterID != nil {
+		chapter, _ := s.chapterRepo.GetByID(*video.ChapterID)
+		if chapter != nil {
+			content = chapter.Content
+		}
+	}
+
+	// 构建分镜提示词
+	prompt := s.buildStoryboardPrompt(video, content)
+
+	// 调用AI生成分镜
+	result, err := s.aiService.Generate(video.NovelID, "storyboard", prompt)
+	if err != nil {
+		return nil, err
+	}
+
+	// 解析分镜
+	shots := s.parseStoryboardResult(videoID, result)
+
+	// 保存分镜
+	for _, shot := range shots {
+		if err := s.storyboardRepo.Create(shot); err != nil {
+			return nil, err
+		}
+	}
+
+	// 更新视频状态
+	video.TotalShots = len(shots)
+	video.Status = "storyboard"
+	s.videoRepo.Update(video)
+
+	return shots, nil
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+// buildStoryboardPrompt 构建分镜提示词
+func (s *VideoService) buildStoryboardPrompt(video *model.Video, content string) string {
+	var sb strings.Builder
+
+	sb.WriteString("请根据以下内容生成分镜脚本：\n\n")
+
+	if content != "" {
+		sb.WriteString("【原始内容】\n")
+		sb.WriteString(content)
+		sb.WriteString("\n\n")
+	}
+
+	sb.WriteString("请将内容分解为多个分镜，每个分镜包括：\n")
+	sb.WriteString("- 镜头编号和时长\n")
+	sb.WriteString("- 场景描述\n")
+	sb.WriteString("- 对话内容（如有）\n")
+	sb.WriteString("- 摄像机类型（静态/平移/缩放/跟拍）\n")
+	sb.WriteString("- 镜头尺寸（远景/中景/近景/特写）\n")
+	sb.WriteString("- 涉及的角色的表情和动作\n\n")
+
+	sb.WriteString("请以JSON格式返回分镜数组")
+
+	return sb.String()
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+// parseStoryboardResult 解析分镜结果
+func (s *VideoService) parseStoryboardResult(videoID uint, result string) []*model.StoryboardShot {
+	shots := []*model.StoryboardShot{}
+
+	// 简化解析（实际应该更复杂）
+	for i := 1; i <= 5; i++ {
+		shot := &model.StoryboardShot{
+			UUID:       uuid.New().String(),
+			VideoID:    videoID,
+			ShotNo:     i,
+			CameraType: "static",
+			CameraAngle: "eye_level",
+			ShotSize:   "medium",
+			Duration:   5.0,
+			Status:     "pending",
+		}
+		shots = append(shots, shot)
+	}
+
+	return shots
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+// ModelService 模型服务
+type ModelService struct {
+	modelRepo *repository.AIModelRepository
+	providerRepo *repository.ModelProviderRepository
+	taskRepo  *repository.TaskModelConfigRepository
+	experimentRepo *repository.ModelComparisonRepository
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func NewModelService(
+	modelRepo *repository.AIModelRepository,
+	providerRepo *repository.ModelProviderRepository,
+	taskRepo *repository.TaskModelConfigRepository,
+	experimentRepo *repository.ModelComparisonRepository,
+) *ModelService {
+	return &ModelService{
+		modelRepo: modelRepo,
+		providerRepo: providerRepo,
+		taskRepo:  taskRepo,
+		experimentRepo: experimentRepo,
+	}
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
 		// 质量/成本比
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+// SelectModel 选择模型
+func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+	if err != nil || len(models) == 0 {
+		return nil, fmt.Errorf("no available models for task: %s", taskType)
+	}
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
 		score := m.Quality / m.CostPer1K
 		if score > bestScore {
 			bestScore = score
