@@ -63,6 +63,9 @@ func main() {
 	// 9. 初始化处理器
 	handlers := initHandlers(services)
 
+	// 初始化租户处理器
+	tenantHandler := handler.NewTenantHandler(services.TenantService)
+
 	// 10. 设置路由
 	r := router.SetupRouter(&router.Config{
 		NovelHandler:      handlers.NovelHandler,
@@ -72,6 +75,7 @@ func main() {
 		ModelHandler:    handlers.ModelHandler,
 		StyleHandler:    handlers.StyleHandler,
 		ContextHandler:  handlers.ContextHandler,
+		TenantHandler:   tenantHandler,
 	})
 
 	// 11. 设置Gin模式
@@ -304,6 +308,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 
 // Services 服务层
 type Services struct {
+	TenantService               *service.TenantService
 	NovelService               *service.NovelService
 	ChapterService             *service.ChapterService
 	CharacterService           *service.CharacterService
@@ -334,6 +339,9 @@ type Services struct {
 
 // initServices 初始化服务层
 func initServices(repos *Repositories, aiManager *ai.ModelManager, vectorStore *vector.StoreManager) *Services {
+	// 租户服务
+	tenantService := service.NewTenantService()
+
 	// AI服务
 	aiService := service.NewAIService(repos.AIModelRepo, repos.TaskModelConfigRepo)
 
@@ -440,6 +448,7 @@ func initServices(repos *Repositories, aiManager *ai.ModelManager, vectorStore *
 	)
 
 	return &Services{
+		TenantService:               tenantService,
 		NovelService:               novelService,
 		ChapterService:             chapterService,
 		CharacterService:           characterService,
