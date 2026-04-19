@@ -64,7 +64,7 @@ func main() {
 	handlers := initHandlers(services)
 
 	// 初始化租户处理器
-	tenantHandler := handler.NewTenantHandler(services.TenantService)
+	tenantHandler := handler.NewTenantHandler(services.TenantService, services.ProjectService)
 
 	// 10. 设置路由
 	r := router.SetupRouter(&router.Config{
@@ -165,6 +165,12 @@ func initDatabase(cfg *config.Config) (*gorm.DB, error) {
 // autoMigrate 自动迁移
 func autoMigrate(db *gorm.DB) error {
 	return db.AutoMigrate(
+		// 多租户相关
+		&model.Tenant{},
+		&model.TenantUser{},
+		&model.TenantProject{},
+		&model.User{},
+		// 小说相关
 		&model.Novel{},
 		&model.Chapter{},
 		&model.PlotPoint{},
@@ -285,6 +291,9 @@ type Repositories struct {
 	ModelComparisonRepo   *repository.ModelComparisonRepository
 	ReviewTaskRepo        *repository.ReviewTaskRepository
 	ChapterVersionRepo    *repository.ChapterVersionRepository
+	TenantRepo            *repository.TenantRepository
+	ProjectRepo           *repository.ProjectRepository
+	UserRepo              *repository.UserRepository
 }
 
 // initRepositories 初始化仓库层
@@ -303,12 +312,16 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		ModelComparisonRepo:  repository.NewModelComparisonRepository(db),
 		ReviewTaskRepo:       repository.NewReviewTaskRepository(db),
 		ChapterVersionRepo:   repository.NewChapterVersionRepository(db),
+		TenantRepo:           repository.NewTenantRepository(db),
+		ProjectRepo:          repository.NewProjectRepository(db),
+		UserRepo:             repository.NewUserRepository(db),
 	}
 }
 
 // Services 服务层
 type Services struct {
 	TenantService               *service.TenantService
+	ProjectService              *service.ProjectService
 	NovelService               *service.NovelService
 	ChapterService             *service.ChapterService
 	CharacterService           *service.CharacterService
@@ -340,7 +353,10 @@ type Services struct {
 // initServices 初始化服务层
 func initServices(repos *Repositories, aiManager *ai.ModelManager, vectorStore *vector.StoreManager) *Services {
 	// 租户服务
-	tenantService := service.NewTenantService()
+	tenantService := service.NewTenantService(repos.TenantRepo, repos.UserRepo)
+
+	// 项目服务
+	projectService := service.NewProjectService(repos.TenantRepo, repos.ProjectRepo, repos.NovelRepo)
 
 	// AI服务
 	aiService := service.NewAIService(repos.AIModelRepo, repos.TaskModelConfigRepo)
@@ -449,6 +465,7 @@ func initServices(repos *Repositories, aiManager *ai.ModelManager, vectorStore *
 
 	return &Services{
 		TenantService:               tenantService,
+		ProjectService:              projectService,
 		NovelService:               novelService,
 		ChapterService:             chapterService,
 		CharacterService:           characterService,

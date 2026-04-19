@@ -901,3 +901,166 @@ func (r *ReviewTaskRepository) UpdateStatus(id uint, status string, note string)
 	}
 	return r.db.Model(&model.ReviewTask{}).Where("id = ?", id).Updates(updates).Error
 }
+
+// ============================================
+// TenantRepository 租户仓库
+// ============================================
+
+type TenantRepository struct {
+	db *gorm.DB
+}
+
+func NewTenantRepository(db *gorm.DB) *TenantRepository {
+	return &TenantRepository{db: db}
+}
+
+func (r *TenantRepository) Create(tenant *model.Tenant) error {
+	return r.db.Create(tenant).Error
+}
+
+func (r *TenantRepository) GetByID(id uint) (*model.Tenant, error) {
+	var tenant model.Tenant
+	if err := r.db.First(&tenant, id).Error; err != nil {
+		return nil, err
+	}
+	return &tenant, nil
+}
+
+func (r *TenantRepository) GetByCode(code string) (*model.Tenant, error) {
+	var tenant model.Tenant
+	if err := r.db.Where("code = ?", code).First(&tenant).Error; err != nil {
+		return nil, err
+	}
+	return &tenant, nil
+}
+
+func (r *TenantRepository) Update(tenant *model.Tenant) error {
+	return r.db.Save(tenant).Error
+}
+
+func (r *TenantRepository) Delete(id uint) error {
+	return r.db.Delete(&model.Tenant{}, id).Error
+}
+
+func (r *TenantRepository) List(page, pageSize int) ([]*model.Tenant, int64, error) {
+	var tenants []*model.Tenant
+	var total int64
+
+	r.db.Model(&model.Tenant{}).Count(&total)
+	offset := (page - 1) * pageSize
+	if err := r.db.Offset(offset).Limit(pageSize).Order("id DESC").Find(&tenants).Error; err != nil {
+		return nil, 0, err
+	}
+	return tenants, total, nil
+}
+
+func (r *TenantRepository) AddMember(member *model.TenantUser) error {
+	return r.db.Create(member).Error
+}
+
+func (r *TenantRepository) RemoveMember(tenantID, userID uint) error {
+	return r.db.Where("tenant_id = ? AND user_id = ?", tenantID, userID).Delete(&model.TenantUser{}).Error
+}
+
+func (r *TenantRepository) GetMembers(tenantID uint) ([]*model.TenantUser, error) {
+	var members []*model.TenantUser
+	if err := r.db.Where("tenant_id = ?", tenantID).Find(&members).Error; err != nil {
+		return nil, err
+	}
+	return members, nil
+}
+
+func (r *TenantRepository) UpdateMemberRole(tenantID, userID uint, role string) error {
+	return r.db.Model(&model.TenantUser{}).
+		Where("tenant_id = ? AND user_id = ?", tenantID, userID).
+		Update("role", role).Error
+}
+
+func (r *TenantRepository) UpdateUsage(tenantID uint, projectDelta, userDelta, storageDelta int) error {
+	return r.db.Model(&model.Tenant{}).Where("id = ?", tenantID).
+		Updates(map[string]interface{}{
+			"used_projects":  gorm.Expr("used_projects + ?", projectDelta),
+			"used_users":     gorm.Expr("used_users + ?", userDelta),
+			"used_storage_mb": gorm.Expr("used_storage_mb + ?", storageDelta),
+		}).Error
+}
+
+// ============================================
+// ProjectRepository 项目仓库
+// ============================================
+
+type ProjectRepository struct {
+	db *gorm.DB
+}
+
+func NewProjectRepository(db *gorm.DB) *ProjectRepository {
+	return &ProjectRepository{db: db}
+}
+
+func (r *ProjectRepository) Create(project *model.TenantProject) error {
+	return r.db.Create(project).Error
+}
+
+func (r *ProjectRepository) GetByID(tenantID, id uint) (*model.TenantProject, error) {
+	var project model.TenantProject
+	if err := r.db.Where("tenant_id = ? AND id = ?", tenantID, id).First(&project).Error; err != nil {
+		return nil, err
+	}
+	return &project, nil
+}
+
+func (r *ProjectRepository) Update(project *model.TenantProject) error {
+	return r.db.Save(project).Error
+}
+
+func (r *ProjectRepository) Delete(id uint) error {
+	return r.db.Delete(&model.TenantProject{}, id).Error
+}
+
+func (r *ProjectRepository) ListByTenant(tenantID uint) ([]*model.TenantProject, error) {
+	var projects []*model.TenantProject
+	if err := r.db.Where("tenant_id = ?", tenantID).Find(&projects).Error; err != nil {
+		return nil, err
+	}
+	return projects, nil
+}
+
+// ============================================
+// UserRepository 用户仓库
+// ============================================
+
+type UserRepository struct {
+	db *gorm.DB
+}
+
+func NewUserRepository(db *gorm.DB) *UserRepository {
+	return &UserRepository{db: db}
+}
+
+func (r *UserRepository) Create(user *model.User) error {
+	return r.db.Create(user).Error
+}
+
+func (r *UserRepository) GetByID(id uint) (*model.User, error) {
+	var user model.User
+	if err := r.db.First(&user, id).Error; err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *UserRepository) GetByEmail(email string) (*model.User, error) {
+	var user model.User
+	if err := r.db.Where("email = ?", email).First(&user).Error; err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *UserRepository) Update(user *model.User) error {
+	return r.db.Save(user).Error
+}
+
+func (r *UserRepository) Delete(id uint) error {
+	return r.db.Delete(&model.User{}, id).Error
+}
