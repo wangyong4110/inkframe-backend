@@ -103,17 +103,17 @@ type EmotionalAnalysis struct {
 // AnalyzeEmotions 分析章节情感
 func (s *IntelligentStoryboardService) AnalyzeEmotions(content string) (*EmotionalAnalysis, error) {
 
-分析要求：
+分析要求:
 1. 识别章节中的情感变化
 2. 标记情感高潮和低谷点
 3. 评估整体情感基调
 
-章节内容（摘要）：
+章节内容(摘要):
 %s
 
-请返回JSON格式：
+请返回JSON格式:
 {
-  "overall_emotion": "整体情感基调（如：紧张、温馨、悬疑）",
+  "overall_emotion": "整体情感基调(如:紧张、温馨、悬疑)",
   "emotion_curve": [
     {
       "position": 0.0-1.0之间的位置,
@@ -228,9 +228,9 @@ func (s *IntelligentStoryboardService) optimizeShotSequence(
 		// 根据位置和内容确定其他参数
 		if i == 0 {
 			shot.ShotSize = SizeWide // 开场通常是远景
-			shot.Description = fmt.Sprintf("场景全景：%s", scene)
+			shot.Description = fmt.Sprintf("场景全景:%s", scene)
 		} else if i == numShots-1 {
-			shot.Description = fmt.Sprintf("场景收尾：%s", scene)
+			shot.Description = fmt.Sprintf("场景收尾:%s", scene)
 			shot.Transition = "fade_out"
 		}
 
@@ -271,12 +271,12 @@ func (s *IntelligentStoryboardService) selectShotParams(intensity float64, emoti
 
 // selectTransition 选择转场
 func (s *IntelligentStoryboardService) selectTransition(fromEmotion, toEmotion string) string {
-	// 紧张→平静：渐慢
+	// 紧张→平静:渐慢
 	if (fromEmotion == "紧张" || fromEmotion == "恐惧") && toEmotion == "平静" {
 		return "fade"
 	}
 
-	// 平静→紧张：硬切
+	// 平静→紧张:硬切
 	if fromEmotion == "平静" && (toEmotion == "紧张" || toEmotion == "震惊") {
 		return "hard_cut"
 	}
@@ -287,13 +287,13 @@ func (s *IntelligentStoryboardService) selectTransition(fromEmotion, toEmotion s
 
 // extractDialogues 提取对话
 func (s *IntelligentStoryboardService) extractDialogues(content string) []string {
-	// 简化实现：使用引号提取
+	// 简化实现:使用引号提取
 	dialogues := make([]string, 0)
 
 	lines := strings.Split(content, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "「") || strings.HasPrefix(line, "\"") {
+		if strings.HasPrefix(line, """) || strings.HasPrefix(line, "\"") {
 			// 移除引号
 			if len(line) > 2 {
 				dialogues = append(dialogues, line)
@@ -397,7 +397,7 @@ func (s *CharacterConsistencyService) CalculateConsistencyScore(
 	referenceImage string,
 	generatedImages []string,
 ) (*ConsistencyScore, error) {
-	// 简化实现：返回模拟评分
+	// 简化实现:返回模拟评分
 	scores := &ConsistencyScore{
 		OverallScore:    0.85,
 		VisualScore:     0.88,
@@ -559,7 +559,7 @@ func (s *LoRAService) TrainCharacterLoRA(
 	characterName string,
 	trainingImages []string,
 ) (*LoRAModel, error) {
-	// 简化实现：创建LoRA模型记录
+	// 简化实现:创建LoRA模型记录
 	model := &LoRAModel{
 		ID:          fmt.Sprintf("lora_%d_%d", characterID, time.Now().Unix()),
 		CharacterID: characterID,
