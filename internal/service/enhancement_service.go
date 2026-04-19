@@ -441,7 +441,7 @@ func (s *CharacterArcService) determineArcType(snapshots []*model.CharacterState
 }
 
 // estimateChapterFromSnapshot 从快照估算章节
-func (s *CharacterArcService) estimateChapterFromSnapshot(s *model.CharacterStateSnapshot) int {
+func (s *CharacterArcService) estimateChapterFromSnapshot(_ *model.CharacterStateSnapshot) int {
 	// 简化实现
 	return 1
 }

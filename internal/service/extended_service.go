@@ -4,12 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
-	"time"
-
 	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/model"
+	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/vector"
+	"strings"
 )
 
 // PromptService 提示词服务
@@ -21,11 +20,11 @@ type PromptService struct {
 	}
 }
 
-func NewPromptService(repo interface{
-		GetByGenreAndStage(genre string, stage string) (*model.PromptTemplate, error)
-		GetByID(id uint) (*model.PromptTemplate, error)
-		List() ([]*model.PromptTemplate, error)
-	}) *PromptService {
+func NewPromptService(repo interface {
+	GetByGenreAndStage(genre string, stage string) (*model.PromptTemplate, error)
+	GetByID(id uint) (*model.PromptTemplate, error)
+	List() ([]*model.PromptTemplate, error)
+}) *PromptService {
 	return &PromptService{templateRepo: repo}
 }
 
@@ -159,18 +158,11 @@ func (s *PromptService) render(template string, variables map[string]interface{}
 
 // ContinuityService 连续性检查服务
 type ContinuityService struct {
-	characterRepo interface {
-		ListByNovel(novelID uint) ([]*model.Character, error)
-		GetLatestSnapshot(characterID uint) (*model.CharacterStateSnapshot, error)
-	}
-	chapterRepo interface {
-		GetRecent(novelID uint, chapterNo, count int) ([]*model.Chapter, error)
-	}
+	characterRepo *repository.CharacterRepository
+	chapterRepo   *repository.ChapterRepository
 }
 
-func NewContinuityService(charRepo, chapterRepo interface{
-		GetRecent(novelID uint, chapterNo int, count int) ([]*model.Chapter, error)
-	}) *ContinuityService {
+func NewContinuityService(charRepo *repository.CharacterRepository, chapterRepo *repository.ChapterRepository) *ContinuityService {
 	return &ContinuityService{
 		characterRepo: charRepo,
 		chapterRepo:   chapterRepo,
@@ -188,13 +180,13 @@ type ContinuityReport struct {
 
 // CharacterIssue 角色问题
 type CharacterIssue struct {
-	CharacterID uint   `json:"character_id"`
+	CharacterID   uint   `json:"character_id"`
 	CharacterName string `json:"character_name"`
-	Type        string `json:"type"` // appearance, personality, ability, dialogue
-	Severity    string `json:"severity"`
-	Description string `json:"description"`
-	Location    string `json:"location"`
-	Suggestion  string `json:"suggestion"`
+	Type          string `json:"type"` // appearance, personality, ability, dialogue
+	Severity      string `json:"severity"`
+	Description   string `json:"description"`
+	Location      string `json:"location"`
+	Suggestion    string `json:"suggestion"`
 }
 
 // WorldviewIssue 世界观问题
@@ -314,7 +306,7 @@ func (s *ContinuityService) generateSuggestions(report *ContinuityReport) []stri
 
 // KnowledgeService 知识库服务
 type KnowledgeService struct {
-	kbRepo    interface {
+	kbRepo interface {
 		Create(kb *model.KnowledgeBase) error
 		Search(keyword string, limit int) ([]*model.KnowledgeBase, error)
 		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
@@ -414,11 +406,11 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 		locJSON, _ := json.Marshal(pp.Locations)
 
 		kb := &model.KnowledgeBase{
-			Type:     "plot_point",
-			Title:    pp.Type + ": " + pp.Description[:min(50, len(pp.Description))],
-			Content:  pp.Description,
-			Tags:     string(charJSON),
-			NovelID:  &chapter.NovelID,
+			Type:    "plot_point",
+			Title:   pp.Type + ": " + pp.Description[:min(50, len(pp.Description))],
+			Content: pp.Description,
+			Tags:    string(charJSON),
+			NovelID: &chapter.NovelID,
 		}
 
 		s.StoreKnowledge(ctx, kb)
@@ -438,18 +430,18 @@ func NewQualityControlService(aiClient *ai.ModelManager) *QualityControlService 
 
 // QualityReport 质量报告
 type QualityReport struct {
-	OverallScore    float64           `json:"overall_score"`
-	ConsistencyScore float64          `json:"consistency_score"`
-	QualityScore    float64           `json:"quality_score"`
-	LogicScore      float64           `json:"logic_score"`
-	StyleScore      float64           `json:"style_score"`
-	Issues          []QualityIssue    `json:"issues"`
-	Suggestions     []string          `json:"suggestions"`
+	OverallScore     float64        `json:"overall_score"`
+	ConsistencyScore float64        `json:"consistency_score"`
+	QualityScore     float64        `json:"quality_score"`
+	LogicScore       float64        `json:"logic_score"`
+	StyleScore       float64        `json:"style_score"`
+	Issues           []QualityIssue `json:"issues"`
+	Suggestions      []string       `json:"suggestions"`
 }
 
 // QualityIssue 质量问题
 type QualityIssue struct {
-	Type        string `json:"type"` // consistency, quality, logic, style
+	Type        string `json:"type"`     // consistency, quality, logic, style
 	Severity    string `json:"severity"` // high, medium, low
 	Description string `json:"description"`
 	Location    string `json:"location"`
