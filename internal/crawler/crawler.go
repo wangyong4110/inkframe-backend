@@ -2,7 +2,6 @@ package crawler
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
