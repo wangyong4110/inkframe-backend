@@ -920,8 +920,3 @@ func selectBalanced(models []*model.AIModel) *model.AIModel {
 	}
 
 	return best
-}
-
-// Import GORM
-import "gorm.io/gorm"
-import "github.com/redis/go-redis/v9"
