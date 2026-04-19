@@ -252,20 +252,14 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 
 	// 创建章节（稍后异步爬取内容）
 	for i, chapterInfo := range chapters {
-		content := "" // 稍后异步爬取
-		if
-			result.FailedChapters++
-			result.Errors = append(result.Errors, fmt.Sprintf("chapter %d failed: %v", i+1, err))
-			continue
-		}
-
 		chapter := &model.Chapter{
-			NovelID:   novel.ID,
-			ChapterNo: i + 1,
-			Title:     content.Title,
-			Content:   content.Content,
-			WordCount: len([]rune(content.Content)),
-			Status:    "published",
+			NovelID:    novel.ID,
+			ChapterNo:  i + 1,
+			Title:      chapterInfo.Title,
+			Summary:    fmt.Sprintf("爬取自: %s", req.URL),
+			Content:    "", // 稍后异步爬取
+			WordCount:  0,
+			Status:     "draft",
 		}
 
 		if err := s.chapterRepo.Create(chapter); err != nil {
