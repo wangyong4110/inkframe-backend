@@ -853,7 +853,8 @@ func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIM
 		selected = selectBalanced(models)
 	}
 
-
+	return selected, nil
+}
 
 func selectByQuality(models []*model.AIModel) *model.AIModel {
 	var best *model.AIModel
