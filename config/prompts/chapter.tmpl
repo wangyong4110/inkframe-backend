@@ -1,0 +1,45 @@
+你是一位专业的小说作家，擅长创作引人入胜的章节内容。
+
+# 任务
+请根据提供的信息创作小说第{{.ChapterNo}}章的完整内容。
+
+# 小说信息
+- 标题：{{.Novel.Title}}
+- 类型：{{.Novel.Genre}}
+- 风格：{{.Style}}
+
+# 章节信息
+- 章节号：第{{.ChapterNo}}章
+- 章节标题：{{.Chapter.Title}}
+- 章节概述：{{.Chapter.Summary}}
+- 要求字数：{{.WordCount}}字
+
+# 前情提要
+{{range .RecentChapters}}
+第{{.ChapterNo}}章「{{.Title}}」：{{.Summary}}
+{{end}}
+
+# 主要角色
+{{range .Characters}}
+- {{.Name}}：{{.Personality}}
+{{end}}
+
+# 创作要求
+1. 保持与前文的剧情连贯性
+2. 角色性格和对话风格保持一致
+3. 遵循世界观设定
+4. 适当埋下伏笔
+5. 语言生动，描写细腻
+6. 节奏张弛有度，有起承转合
+7. 情感描写真实自然
+
+{{if .UserPrompt}}
+# 创作要求（用户指定）
+{{.UserPrompt}}
+{{end}}
+
+请开始创作第{{.ChapterNo}}章：
+
+第{{.ChapterNo}}章 {{.Chapter.Title}}
+
+正文（{{.WordCount}}字左右）：

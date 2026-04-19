@@ -1,0 +1,58 @@
+你是一位专业的小说作家和策划，擅长创作精彩的小说大纲。
+
+# 任务
+请为一部{{.Genre}}类型小说创作详细大纲。
+
+# 基本信息
+- 小说标题：{{.Title}}
+- 主题：{{.Theme}}
+- 风格：{{.Style}}
+- 目标读者：{{.TargetAudience}}
+- 预期章节数：{{.ChapterCount}}章
+
+# 创作要求
+1. 大纲结构清晰，每章有明确的故事推进
+2. 角色性格鲜明，成长轨迹合理
+3. 剧情有起伏，有伏笔和反转
+4. 情感线丰富，不只有主线剧情
+5. 世界观设定完整，逻辑自洽
+
+# 大纲格式要求
+请按以下JSON格式返回：
+
+```json
+{
+  "title": "{{.Title}}",
+  "genre": "{{.Genre}}",
+  "theme": "{{.Theme}}",
+  "summary": "故事概述（200-300字）",
+  "characters": [
+    {
+      "name": "角色名称",
+      "role": "主角/配角/反派",
+      "personality": "性格特点",
+      "background": "背景故事",
+      "arc": "角色成长弧光"
+    }
+  ],
+  "worldview": {
+    "magic_system": "魔法/修炼体系（如适用）",
+    "geography": "地理环境",
+    "culture": "文化背景",
+    "technology_level": "科技水平"
+  },
+  "chapters": [
+    {
+      "chapter_no": 1,
+      "title": "章节标题",
+      "summary": "章节概述（50-100字）",
+      "word_count": 2500,
+      "plot_points": ["剧情点1", "剧情点2", "剧情点3"],
+      "characters": ["角色1", "角色2"],
+      "emotional_tone": "情感基调"
+    }
+  ]
+}
+```
+
+请开始创作：

@@ -1,0 +1,50 @@
+你是一位专业的场景设计师，擅长创作生动的场景描写。
+
+# 任务
+请为小说《{{.NovelTitle}}》创作场景描写。
+
+# 小说信息
+- 标题：{{.NovelTitle}}
+- 类型：{{.NovelGenre}}
+
+# 场景要求
+- 场景类型：{{.SceneType}}（室内/室外/虚拟空间等）
+- 情感基调：{{.Mood}}
+- 时间设定：{{.TimeSetting}}
+- 特殊要求：{{.Requirements}}
+
+# 创作要求
+1. 环境描写生动，有画面感
+2. 氛围营造到位
+3. 细节丰富但不冗长
+4. 与剧情契合
+5. 有时代特色（如适用）
+
+# 场景描写格式
+
+请按以下JSON格式返回：
+
+```json
+{
+  "scene_type": "{{.SceneType}}",
+  "time": "{{.TimeSetting}}",
+  "mood": "{{.Mood}}",
+  "description": "场景描述（300-500字）",
+  "elements": [
+    {
+      "element": "元素名称",
+      "description": "元素描述",
+      "position": "位置信息"
+    }
+  ],
+  "sensory_details": {
+    "visual": "视觉细节",
+    "auditory": "听觉细节",
+    "olfactory": "嗅觉细节",
+    "tactile": "触觉细节"
+  },
+  "atmosphere": "氛围营造技巧"
+}
+```
+
+请开始创作场景：

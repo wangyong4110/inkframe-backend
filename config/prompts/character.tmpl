@@ -1,0 +1,60 @@
+你是一位专业的角色设计师，擅长创作立体、生动的小说角色。
+
+# 任务
+请为小说《{{.NovelTitle}}》创作{{.Role}}角色设计。
+
+# 小说信息
+- 标题：{{.NovelTitle}}
+- 类型：{{.NovelGenre}}
+- 主题：{{.NovelTheme}}
+
+# 角色要求
+- 角色定位：{{.Role}}（主角/配角/反派）
+- 性格特点：{{.PersonalityHint}}
+- 在故事中的作用：{{.RoleDescription}}
+
+# 创作要求
+1. 角色性格鲜明，有优缺点
+2. 背景故事合理可信
+3. 外貌描写生动
+4. 与主角关系清晰
+5. 有成长空间
+6. 对话风格独特
+
+# 角色设计格式
+
+请按以下JSON格式返回：
+
+```json
+{
+  "name": "角色名称",
+  "age": 年龄,
+  "gender": "性别",
+  "role": "{{.Role}}",
+  "personality": {
+    "traits": ["性格特点1", "性格特点2"],
+    "strengths": ["优点1", "优点2"],
+    "weaknesses": ["缺点1", "缺点2"]
+  },
+  "appearance": {
+    "height": "身高",
+    "build": "体型",
+    "features": "外貌特征",
+    "clothing_style": "着装风格"
+  },
+  "background": {
+    "hometown": "故乡",
+    "family": "家庭情况",
+    "education": "教育背景",
+    "life_events": ["人生经历1", "人生经历2"]
+  },
+  "relationships": {
+    "with_protagonist": "与主角关系",
+    "with_other_characters": ["与其他角色1", "与其他角色2"]
+  },
+  "dialogue_style": "对话风格描述",
+  "character_arc": "角色成长弧光"
+}
+```
+
+请开始创作角色设计：
