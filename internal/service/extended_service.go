@@ -405,7 +405,6 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 	// 存储剧情点
 	for _, pp := range result.PlotPoints {
 		charJSON, _ := json.Marshal(pp.Characters)
-		locJSON, _ := json.Marshal(pp.Locations)
 
 		kb := &model.KnowledgeBase{
 			Type:    "plot_point",

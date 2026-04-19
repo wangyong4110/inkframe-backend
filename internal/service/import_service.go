@@ -237,13 +237,9 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 	// 创建小说
 	novel := &model.Novel{
 		Title:       novelDetail.Title,
-		Author:      novelDetail.Author,
-		Description: novelDetail.Description,
+		Description: "",
 		Genre:       novelDetail.Genre,
-		Status:      novelDetail.Status,
-		Source:      string(SourceCrawl),
-		SourceURL:   req.URL,
-		CoverURL:    novelDetail.CoverURL,
+		Status:      "importing", // 正在导入
 	}
 
 	if err := s.novelRepo.Create(novel); err != nil {
@@ -254,10 +250,10 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 	result.Title = novel.Title
 	result.TotalChapters = len(chapters)
 
-	// 爬取并保存章节
+	// 创建章节（稍后异步爬取内容）
 	for i, chapterInfo := range chapters {
-		content, err := s.crawler.CrawlChapter(chapterInfo.URL, parser)
-		if err != nil {
+		content := "" // 稍后异步爬取
+		if
 			result.FailedChapters++
 			result.Errors = append(result.Errors, fmt.Sprintf("chapter %d failed: %v", i+1, err))
 			continue
@@ -344,7 +340,6 @@ func (s *NovelImportService) parseTxtFile(data []byte, fileName string) (*model.
 		Title:  title,
 		Genre:  "unknown",
 		Status: "completed",
-		Source: string(SourceFile),
 	}
 
 	// 按章节分割
@@ -371,7 +366,6 @@ func (s *NovelImportService) parseMarkdownFile(data []byte, fileName string) (*m
 		Title:  title,
 		Genre:  "unknown",
 		Status: "completed",
-		Source: string(SourceFile),
 	}
 
 	// 合并内容并按章节分割
@@ -446,7 +440,6 @@ func (s *NovelImportService) parseHtmlFile(data []byte) (*model.Novel, []*model.
 		Title:  title,
 		Genre:  "unknown",
 		Status: "completed",
-		Source: string(SourceFile),
 	}
 
 	chapters := s.splitByChapters(cleanContent, title)
