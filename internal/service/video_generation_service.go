@@ -235,12 +235,10 @@ func (s *IntelligentStoryboardService) generateShot(
 	config *VideoGenerationRequest,
 ) *StoryboardShot {
 	shot := &StoryboardShot{
-		ID:          uint(shotNo),
 		ShotNo:      shotNo,
 		Description: scene.Description,
 		Dialogue:    scene.Dialogue,
 		Emotion:     scene.Emotion,
-		Status:      "pending",
 	}
 
 	// 确定镜头类型

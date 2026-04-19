@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -489,8 +490,8 @@ func (s *NovelImportService) splitByChapters(content, novelTitle string) []*mode
 			splits = []int{}
 			chapterTitles = []string{}
 			for _, match := range matches {
-				splits = append(splits, match[0])
-				chapterTitles = append(chapterTitles, match[0])
+				splits = append(splits, strconv.Itoa(match[0]))
+				chapterTitles = append(chapterTitles, strconv.Itoa(match[0]))
 			}
 		}
 	}
@@ -674,7 +675,7 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 		endCh = 9999
 	}
 
-	chapters, err := s.chapterRepo.ListByRange(req.NovelID, startCh, endCh)
+	chapters, err := s.chapterRepo.List(req.NovelID, startCh, endCh)
 	if err != nil {
 		return nil, fmt.Errorf("get chapters failed: %w", err)
 	}
