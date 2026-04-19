@@ -228,6 +228,47 @@ func (CharacterAppearance) TableName() string {
 	return "ink_character_appearance"
 }
 
+// CharacterStateSnapshot 角色状态快照
+type CharacterStateSnapshot struct {
+	ID          uint      `json:"id" gorm:"primaryKey"`
+	CharacterID uint      `json:"character_id" gorm:"index;not null"`
+	ChapterID   uint      `json:"chapter_id" gorm:"index"`
+
+	// 物理状态
+	Age         float64   `json:"age"`
+	Height      float64   `json:"height"` // 单位：米
+	Weight      float64   `json:"weight"` // 单位：公斤
+	Health      string    `json:"health"` // healthy, injured, critical
+	Injuries    string    `json:"injuries" gorm:"type:text"` // JSON: [{part, severity, description}]
+
+	// 能力状态
+	PowerLevel  int       `json:"power_level"`
+	Abilities   string    `json:"abilities" gorm:"type:text"` // JSON
+	Equipment   string    `json:"equipment" gorm:"type:text"` // JSON
+
+	// 心理状态
+	Mood        string    `json:"mood"`
+	Motivation  string    `json:"motivation"`
+	Goals       string    `json:"goals" gorm:"type:text"` // JSON
+	Fears       string    `json:"fears" gorm:"type:text"` // JSON
+
+	// 位置状态
+	Location    string    `json:"location"`
+	KnownLocations string `json:"known_locations" gorm:"type:text"` // JSON
+
+	// 关系状态
+	Relations   string    `json:"relations" gorm:"type:text"` // JSON: [{character_id, attitude, recent_interaction}]
+
+	SnapshotTime time.Time `json:"snapshot_time"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (CharacterStateSnapshot) TableName() string {
+	return "ink_character_state_snapshot"
+}
+
 // ReferenceNovel 参考小说
 type ReferenceNovel struct {
 	ID         uint      `json:"id" gorm:"primaryKey"`
