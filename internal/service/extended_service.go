@@ -528,7 +528,7 @@ func (s *QualityControlService) checkStyle(ctx context.Context, chapter *model.C
 	issues := []QualityIssue{}
 
 	// 检查对话比例
-	dialogueCount := strings.Count(chapter.Content, "「") + strings.Count(chapter.Content, """)
+	dialogueCount := strings.Count(chapter.Content, "「") + strings.Count(chapter.Content, "」")
 	totalChars := len(chapter.Content)
 	dialogueRatio := float64(dialogueCount*10) / float64(totalChars)
 

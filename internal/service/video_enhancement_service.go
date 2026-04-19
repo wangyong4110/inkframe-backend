@@ -734,16 +734,3 @@ func (s *VideoEnhancementService) RecommendEnhancements(videoInfo *struct {
 // ============================================
 
 
-// AiService getter (for compatibility)
-func (s *IntelligentStoryboardService) AiService *IntelligentStoryboardService {
-	return s
-}
-
-// DetectActionBeats getter (for compatibility)
-func (s *IntelligentStoryboardService) DetectActionBeats(content string) ([]struct {
-	Position  int
-	Type     string
-	Intensity float64
-}, error) {
-	return s.DetectActionBeats(content)
-}
