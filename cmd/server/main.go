@@ -326,8 +326,8 @@ type Services struct {
 	ChapterService             *service.ChapterService
 	CharacterService           *service.CharacterService
 	WorldviewService           *service.WorldviewService
-	QualityService             *service.QCService
-	QCService      *service.QCService
+	QualityService             *service.QualityService
+	
 	VideoService               *service.VideoService
 	ModelService               *service.ModelService
 	PromptService              *service.PromptService
@@ -374,7 +374,7 @@ func initServices(repos *Repositories, aiManager *ai.ModelManager, vectorStore *
 	worldviewService := service.NewWorldviewService(repos.WorldviewRepo, aiService)
 
 	// 质量控制服务
-	qualityService := service.NewQCService(aiManager)
+	qualityService := service.NewQualityService(aiManager)
 
 	// 视频服务
 	videoService := service.NewVideoService(repos.VideoRepo, repos.StoryboardRepo, repos.ChapterRepo, aiService)
@@ -439,7 +439,7 @@ func initServices(repos *Repositories, aiManager *ai.ModelManager, vectorStore *
 	consistencyValidatorService := service.NewConsistencyValidatorService(aiService)
 
 	// 质量控制服务（详细版）
-	qualityControlService := service.NewQCService(aiService)
+	qualityControlService := service.NewQualityService(aiService)
 
 	// 爬虫服务
 	crawlerService := crawler.NewNovelCrawler(nil)
