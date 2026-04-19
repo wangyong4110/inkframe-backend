@@ -38,12 +38,12 @@ type Repetition struct {
 }
 
 // QualityControlService 质量控制服务
-type QualityControlService struct {
+type QCService struct {
 	aiService *AIService
 }
 
-// NewQualityControlService 创建质量控制服务
-func NewQualityControlService(aiService *AIService) *QualityControlService {
+// NewQCService 创建质量控制服务
+func NewQCService(aiService *AIService) *QualityControlService {
 	return &QualityControlService{
 		aiService: aiService,
 	}
@@ -54,7 +54,7 @@ func NewQualityControlService(aiService *AIService) *QualityControlService {
 // ============================================
 
 // DetectRepetition 检测重复内容
-func (s *QualityControlService) DetectRepetition(content string) *RepetitionReport {
+func (s *QCService) DetectRepetition(content string) *RepetitionReport {
 	report := &RepetitionReport{
 		Repetitions:    []Repetition{},
 		DiversityScore: 1.0,
@@ -80,7 +80,7 @@ func (s *QualityControlService) DetectRepetition(content string) *RepetitionRepo
 }
 
 // 检测句子模式重复
-func (s *QualityControlService) detectSentenceRepetition(content string) []Repetition {
+func (s *QCService) detectSentenceRepetition(content string) []Repetition {
 	repetitions := []Repetition{}
 
 	// 简单按句号分割
@@ -126,7 +126,7 @@ func (s *QualityControlService) detectSentenceRepetition(content string) []Repet
 }
 
 // 检测词汇重复
-func (s *QualityControlService) detectWordRepetition(content string) []Repetition {
+func (s *QCService) detectWordRepetition(content string) []Repetition {
 	repetitions := []Repetition{}
 
 	// 高频词汇表
@@ -166,7 +166,7 @@ func (s *QualityControlService) detectWordRepetition(content string) []Repetitio
 }
 
 // 检测段落结构重复
-func (s *QualityControlService) detectParagraphRepetition(content string) []Repetition {
+func (s *QCService) detectParagraphRepetition(content string) []Repetition {
 	repetitions := []Repetition{}
 
 	paragraphs := strings.Split(content, "\n\n")
@@ -210,7 +210,7 @@ func (s *QualityControlService) detectParagraphRepetition(content string) []Repe
 }
 
 // 计算多样性得分
-func (s *QualityControlService) calculateDiversityScore(content string, repetitionCount int) float64 {
+func (s *QCService) calculateDiversityScore(content string, repetitionCount int) float64 {
 	// 基于内容长度和重复次数计算得分
 	totalChars := len(content)
 	if totalChars == 0 {
@@ -254,7 +254,7 @@ type DialogueIssue struct {
 }
 
 // AnalyzeDialogue 分析对话质量
-func (s *QualityControlService) AnalyzeDialogue(content string, character *model.Character) *DialogueAnalysis {
+func (s *QCService) AnalyzeDialogue(content string, character *model.Character) *DialogueAnalysis {
 	analysis := &DialogueAnalysis{
 		Issues: []DialogueIssue{},
 	}
@@ -286,7 +286,7 @@ func (s *QualityControlService) AnalyzeDialogue(content string, character *model
 }
 
 // 提取对话
-func (s *QualityControlService) extractDialogues(content string) []string {
+func (s *QCService) extractDialogues(content string) []string {
 	dialogues := []string{}
 
 	// 简单提取引号内的内容
@@ -311,7 +311,7 @@ func (s *QualityControlService) extractDialogues(content string) []string {
 }
 
 // 检查对话自然度
-func (s *QualityControlService) checkDialogueNaturalness(dialogues []string) float64 {
+func (s *QCService) checkDialogueNaturalness(dialogues []string) float64 {
 	score := 1.0
 
 	// 书面语标记
@@ -352,7 +352,7 @@ func (s *QualityControlService) checkDialogueNaturalness(dialogues []string) flo
 }
 
 // 检查角色对话独特性
-func (s *QualityControlService) checkCharacterDialogueUniqueness(dialogues []string, character *model.Character) float64 {
+func (s *QCService) checkCharacterDialogueUniqueness(dialogues []string, character *model.Character) float64 {
 	if character == nil || character.Personality == "" {
 		return 0.8
 	}
@@ -391,7 +391,7 @@ func (s *QualityControlService) checkCharacterDialogueUniqueness(dialogues []str
 }
 
 // 检测对话问题
-func (s *QualityControlService) detectDialogueIssues(dialogues []string) []DialogueIssue {
+func (s *QCService) detectDialogueIssues(dialogues []string) []DialogueIssue {
 	issues := []DialogueIssue{}
 
 	for i, dialogue := range dialogues {
@@ -439,7 +439,7 @@ func (s *QualityControlService) detectDialogueIssues(dialogues []string) []Dialo
 }
 
 // 计算对话独特性
-func (s *QualityControlService) calculateDialogueUniqueness(dialogues []string) float64 {
+func (s *QCService) calculateDialogueUniqueness(dialogues []string) float64 {
 	if len(dialogues) < 2 {
 		return 1.0
 	}
@@ -490,7 +490,7 @@ type StyleIssue struct {
 }
 
 // CheckStyleConsistency 检查风格一致性
-func (s *QualityControlService) CheckStyleConsistency(novelID uint, currentContent string, previousContents []string) *StyleCheckResult {
+func (s *QCService) CheckStyleConsistency(novelID uint, currentContent string, previousContents []string) *StyleCheckResult {
 	result := &StyleCheckResult{
 		Issues: []StyleIssue{},
 	}
@@ -538,7 +538,7 @@ type StyleFeatures struct {
 }
 
 // 分析风格特征
-func (s *QualityControlService) analyzeStyle(content string) *StyleFeatures {
+func (s *QCService) analyzeStyle(content string) *StyleFeatures {
 	features := &StyleFeatures{}
 
 	// 统计句子
@@ -574,7 +574,7 @@ func (s *QualityControlService) analyzeStyle(content string) *StyleFeatures {
 }
 
 // 计算风格一致性
-func (s *QualityControlService) calculateStyleConsistency(current *StyleFeatures, historical []*StyleFeatures) float64 {
+func (s *QCService) calculateStyleConsistency(current *StyleFeatures, historical []*StyleFeatures) float64 {
 	if len(historical) == 0 {
 		return 1.0
 	}
@@ -609,7 +609,7 @@ func (s *QualityControlService) calculateStyleConsistency(current *StyleFeatures
 }
 
 // 检测风格漂移方面
-func (s *QualityControlService) detectStyleDrift(current *StyleFeatures, historical []*StyleFeatures) []string {
+func (s *QCService) detectStyleDrift(current *StyleFeatures, historical []*StyleFeatures) []string {
 	drifts := []string{}
 
 	// 计算历史平均值
@@ -655,9 +655,17 @@ type PlotLogicReport struct {
 	 Suggestions []string     `json:"suggestions"`
 }
 
+// PlotIssue 剧情问题
+type PlotIssue struct {
+	Type        string   `json:"type"` // causality, motivation, knowledge, etc.
+	Severity    string   `json:"severity"`
+	Description string   `json:"description"`
+	Location    string   `json:"location"`
+	Suggestion  string   `json:"suggestion"`
+}
 
 // CheckPlotLogic 检查剧情逻辑
-func (s *QualityControlService) CheckPlotLogic(novelID uint, chapterNo int, content string) *PlotLogicReport {
+func (s *QCService) CheckPlotLogic(novelID uint, chapterNo int, content string) *PlotLogicReport {
 	report := &PlotLogicReport{
 		Issues:       []PlotIssue{},
 		Suggestions: []string{},
@@ -695,7 +703,7 @@ func (s *QualityControlService) CheckPlotLogic(novelID uint, chapterNo int, cont
 }
 
 // 检查因果关系
-func (s *QualityControlService) checkCausality(content string) []PlotIssue {
+func (s *QCService) checkCausality(content string) []PlotIssue {
 	issues := []PlotIssue{}
 
 	// 检测突然的行动（缺少铺垫）
@@ -732,7 +740,7 @@ func (s *QualityControlService) checkCausality(content string) []PlotIssue {
 }
 
 // 检查动机问题
-func (s *QualityControlService) checkMotivation(content string) []PlotIssue {
+func (s *QCService) checkMotivation(content string) []PlotIssue {
 	issues := []PlotIssue{}
 
 	// 检测角色说的话和行动不匹配
@@ -742,7 +750,7 @@ func (s *QualityControlService) checkMotivation(content string) []PlotIssue {
 }
 
 // 检查知识合理性问题
-func (s *QualityControlService) checkKnowledge合理性(content string) []PlotIssue {
+func (s *QCService) checkKnowledge合理性(content string) []PlotIssue {
 	issues := []PlotIssue{}
 
 	// 检测角色可能不应该知道的知识被使用
@@ -752,7 +760,7 @@ func (s *QualityControlService) checkKnowledge合理性(content string) []PlotIs
 }
 
 // 生成剧情建议
-func (s *QualityControlService) generatePlotSuggestions(issues []PlotIssue) []string {
+func (s *QCService) generatePlotSuggestions(issues []PlotIssue) []string {
 	suggestions := []string{}
 
 	for _, issue := range issues {
@@ -794,7 +802,7 @@ type ComprehensiveQualityReport struct {
 }
 
 // GenerateComprehensiveReport 生成综合质量报告
-func (s *QualityControlService) GenerateComprehensiveReport(
+func (s *QCService) GenerateComprehensiveReport(
 	novelID uint,
 	chapterNo int,
 	currentContent string,

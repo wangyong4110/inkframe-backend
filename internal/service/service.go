@@ -1,9 +1,9 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"gorm.io/gorm"
 	"math/rand"
 	"strings"
 	"time"
@@ -439,7 +439,21 @@ func NewQualityService(
 	}
 }
 
+// QualityReport 质量报告
+type QualityReport struct {
+	OverallScore float64           `json:"overall_score"`
+	Issues      []QualityIssue    `json:"issues"`
+	Suggestions []string          `json:"suggestions"`
+}
 
+// QualityIssue 质量问题
+type QualityIssue struct {
+	Type        string `json:"type"`
+	Severity    string `json:"severity"`
+	Description string `json:"description"`
+	Location     string `json:"location"`
+	Suggestion  string `json:"suggestion"`
+}
 
 // CheckChapterQuality 检查章节质量
 func (s *QualityService) CheckChapterQuality(chapterID uint) (*QualityReport, error) {
@@ -587,6 +601,13 @@ func (s *QualityService) generateSuggestions(issues []QualityIssue) []string {
 	return suggestions
 }
 
+// VideoService 视频服务
+type VideoService struct {
+	videoRepo       *repository.VideoRepository
+	storyboardRepo *repository.StoryboardRepository
+	chapterRepo    *repository.ChapterRepository
+	aiService      *AIService
+}
 
 func NewVideoService(
 	videoRepo *repository.VideoRepository,
@@ -732,14 +753,6 @@ func NewModelService(
 		experimentRepo: experimentRepo,
 	}
 }
-
-
-// SelectModel 选择模型
-func (s *ModelService) SelectModel(taskType string, strategy string) (*model.AIModel, error) {
-	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
-	if err != nil || len(models) == 0 {
-		return nil, fmt.Errorf("no available models for task: %s", taskType)
-	}
 
 	var selected *model.AIModel
 	switch strategy {

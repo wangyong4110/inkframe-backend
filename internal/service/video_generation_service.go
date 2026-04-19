@@ -9,26 +9,26 @@ import (
 )
 
 // ============================================
-// 视频生成服务 - Video Generation Service
+// 视频生成请求和结果
 // ============================================
 
 // VideoGenerationRequest 视频生成请求
 type VideoGenerationRequest struct {
-	NovelID        uint   `json:"novel_id"`
-	ChapterID      uint   `json:"chapter_id"`
-	Title          string `json:"title"`
-	Resolution     string `json:"resolution"`      // 720p, 1080p, 4k
-	FrameRate      int    `json:"frame_rate"`     // 24, 30, 60
-	AspectRatio    string `json:"aspect_ratio"`   // 16:9, 9:16, 1:1
-	ArtStyle       string `json:"art_style"`      // realistic, anime, cartoon
-	ColorGrade     string `json:"color_grade"`     // cinematic, vintage, vibrant
+	NovelID     uint   `json:"novel_id"`
+	ChapterID   uint   `json:"chapter_id"`
+	Title       string `json:"title"`
+	Resolution  string `json:"resolution"`     // 720p, 1080p, 4k
+	FrameRate   int    `json:"frame_rate"`    // 24, 30, 60
+	AspectRatio string `json:"aspect_ratio"`  // 16:9, 9:16, 1:1
+	ArtStyle    string `json:"art_style"`    // realistic, anime, cartoon
+	ColorGrade  string `json:"color_grade"`  // cinematic, vintage, vibrant
 }
 
 // VideoGenerationResult 视频生成结果
 type VideoGenerationResult struct {
 	VideoID        uint     `json:"video_id"`
-	Status         string   `json:"status"`           // planning, storyboard, generating, rendering, completed
-	Progress       float64  `json:"progress"`          // 0-100
+	Status         string   `json:"status"`
+	Progress       float64  `json:"progress"`
 	TotalShots     int      `json:"total_shots"`
 	GeneratedShots int      `json:"generated_shots"`
 	ErrorMessage   string   `json:"error_message,omitempty"`
@@ -40,15 +40,15 @@ type VideoGenerationResult struct {
 
 // SceneAnalysis 场景分析
 type SceneAnalysis struct {
-	Type        string   `json:"type"`          // dialogue, action, description
+	Type        string   `json:"type"`
 	Description string   `json:"description"`
 	Dialogue    string   `json:"dialogue,omitempty"`
 	Characters  []string `json:"characters"`
 	Location    string   `json:"location"`
 	TimeOfDay   string   `json:"time_of_day"`
 	Emotion     string   `json:"emotion"`
-	Intensity   float64  `json:"intensity"`    // 0-1
-	Pacing      string   `json:"pacing"`        // fast, medium, slow
+	Intensity   float64  `json:"intensity"`
+	Pacing      string   `json:"pacing"`
 }
 
 // ============================================
@@ -72,7 +72,6 @@ func (s *FrameGeneratorService) GenerateFrame(shot *model.StoryboardShot, charac
 		Prompt:      shot.Description,
 		GeneratedAt: time.Now(),
 	}
-
 	return frame, nil
 }
 
@@ -113,7 +112,6 @@ func (s *ConsistencyValidatorService) ValidateConsistency(frames []*GeneratedFra
 		Score:      0.95,
 		Issues:     []ConsistencyIssue{},
 	}
-
 	return result, nil
 }
 
