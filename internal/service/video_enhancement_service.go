@@ -173,7 +173,7 @@ func (s *IntelligentStoryboardService) GenerateIntelligentShots(
 	scene string,
 ) ([]*StoryboardShot, error) {
 	// 1. 情感分析
-	emotionAnalysis, err := s.AiService.AnalyzeEmotions(content)
+	emotionAnalysis, err := s.AiService().AnalyzeEmotions(content)
 	if err != nil {
 		return nil, err
 	}
@@ -188,15 +188,14 @@ func (s *IntelligentStoryboardService) GenerateIntelligentShots(
 	dialogues := s.extractDialogues(content)
 
 	// 4. 生成镜头序列
-	shots := s.optimizeShotSequence(emotionAnalysis, beats, dialogues, characters, scene)
+	shots := s.optimizeShotSequence(emotionAnalysis, dialogues, characters, scene)
 
 	return shots, nil
 }
 
 // optimizeShotSequence 优化镜头序列
 func (s *IntelligentStoryboardService) optimizeShotSequence(
-	emotions *EmotionalAnalysis,
-	beats []struct {
+	emotions *EmotionalAnalysis []struct {
 		Position  int
 		Type      string
 		Intensity float64
@@ -474,7 +473,7 @@ func (s *ImageService) GenerateCharacterImage(
 	}
 
 	// 调用图像生成API
-	result, err := s.provider.ImageGenerate(context.Background(), &ImageGenerateRequest{
+	result, err := s.provider.ImageGenerate(context.Background(), &GenerateRequest{
 		Model:  "stable-diffusion-xl",
 		Prompt: req.Prompt,
 	})
@@ -528,7 +527,7 @@ func (s *ImageService) GenerateSceneImage(
 
 	prompt := sb.String()
 
-	result, err := s.provider.ImageGenerate(context.Background(), &ImageGenerateRequest{
+	result, err := s.provider.ImageGenerate(context.Background(), &GenerateRequest{
 		Model:  "stable-diffusion-xl",
 		Prompt: prompt,
 	})
@@ -600,7 +599,7 @@ func (s *LoRAService) GetCharacterLoRA(characterID uint) (*LoRAModel, error) {
 // AIProvider AI提供者接口
 type AIProvider interface {
 	Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error)
-	ImageGenerate(ctx context.Context, req *ai.ImageGenerateRequest) (*ai.ImageResponse, error)
+	ImageGenerate(ctx context.Context, req *ai.GenerateRequest) (*ai.ImageResponse, error)
 }
 
 // ============================================
