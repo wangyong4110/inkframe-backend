@@ -46,19 +46,19 @@ func (s *PromptService) BuildOutlinePrompt(novel *model.Novel, req *GenerateOutl
 	sb.WriteString(fmt.Sprintf("请为小说《%s》生成一个详细的大纲。\n\n", novel.Title))
 
 	if novel.Description != "" {
-		sb.WriteString(fmt.Sprintf("故事简介：%s\n\n", novel.Description))
+		sb.WriteString(fmt.Sprintf("故事简介:%s\n\n", novel.Description))
 	}
 
 	if novel.Worldview != nil {
 		sb.WriteString("【世界观设定】\n")
 		if novel.Worldview.MagicSystem != "" {
-			sb.WriteString(fmt.Sprintf("修炼体系：%s\n", novel.Worldview.MagicSystem))
+			sb.WriteString(fmt.Sprintf("修炼体系:%s\n", novel.Worldview.MagicSystem))
 		}
 		if novel.Worldview.Geography != "" {
-			sb.WriteString(fmt.Sprintf("地理环境：%s\n", novel.Worldview.Geography))
+			sb.WriteString(fmt.Sprintf("地理环境:%s\n", novel.Worldview.Geography))
 		}
 		if novel.Worldview.Culture != "" {
-			sb.WriteString(fmt.Sprintf("文化背景：%s\n", novel.Worldview.Culture))
+			sb.WriteString(fmt.Sprintf("文化背景:%s\n", novel.Worldview.Culture))
 		}
 		sb.WriteString("\n")
 	}
@@ -66,7 +66,7 @@ func (s *PromptService) BuildOutlinePrompt(novel *model.Novel, req *GenerateOutl
 	sb.WriteString(fmt.Sprintf("请生成%d章的大纲。\n", req.ChapterNum))
 
 	// 输出格式
-	sb.WriteString("\n请以JSON格式返回，格式如下：\n")
+	sb.WriteString("\n请以JSON格式返回，格式如下:\n")
 	sb.WriteString(`{"title":"小说标题","chapters":[{"chapter_no":1,"title":"章节标题","summary":"章节概述","word_count":2500,"plot_points":["剧情点1","剧情点2"]}]}`)
 
 	return sb.String()
@@ -77,7 +77,7 @@ func (s *PromptService) BuildChapterPrompt(novel *model.Novel, chapter *model.Ch
 	var sb strings.Builder
 
 	// 系统提示
-	sb.WriteString("你是一位专业的小说作家，创作内容需要：\n")
+	sb.WriteString("你是一位专业的小说作家，创作内容需要:\n")
 	sb.WriteString("1. 保持与前文的剧情连贯性\n")
 	sb.WriteString("2. 角色性格和对话风格保持一致\n")
 	sb.WriteString("3. 遵循世界观设定\n")
@@ -91,13 +91,13 @@ func (s *PromptService) BuildChapterPrompt(novel *model.Novel, chapter *model.Ch
 	if novel.Worldview != nil {
 		sb.WriteString("【世界观设定】\n")
 		if novel.Worldview.MagicSystem != "" {
-			sb.WriteString(fmt.Sprintf("- 修炼体系：%s\n", novel.Worldview.MagicSystem))
+			sb.WriteString(fmt.Sprintf("- 修炼体系:%s\n", novel.Worldview.MagicSystem))
 		}
 		if novel.Worldview.Geography != "" {
-			sb.WriteString(fmt.Sprintf("- 地理环境：%s\n", novel.Worldview.Geography))
+			sb.WriteString(fmt.Sprintf("- 地理环境:%s\n", novel.Worldview.Geography))
 		}
 		if novel.Worldview.Culture != "" {
-			sb.WriteString(fmt.Sprintf("- 文化背景：%s\n", novel.Worldview.Culture))
+			sb.WriteString(fmt.Sprintf("- 文化背景:%s\n", novel.Worldview.Culture))
 		}
 		sb.WriteString("\n")
 	}
@@ -106,7 +106,7 @@ func (s *PromptService) BuildChapterPrompt(novel *model.Novel, chapter *model.Ch
 	if len(characters) > 0 {
 		sb.WriteString("【主要角色】\n")
 		for _, char := range characters {
-			sb.WriteString(fmt.Sprintf("- %s：%s\n", char.Name, char.Personality))
+			sb.WriteString(fmt.Sprintf("- %s:%s\n", char.Name, char.Personality))
 		}
 		sb.WriteString("\n")
 	}
@@ -116,18 +116,18 @@ func (s *PromptService) BuildChapterPrompt(novel *model.Novel, chapter *model.Ch
 		sb.WriteString("【前情提要】\n")
 		for i := len(recentChapters) - 1; i >= 0; i-- {
 			ch := recentChapters[i]
-			sb.WriteString(fmt.Sprintf("第%d章「%s」：%s\n", ch.ChapterNo, ch.Title, ch.Summary))
+			sb.WriteString(fmt.Sprintf("第%d章"%s":%s\n", ch.ChapterNo, ch.Title, ch.Summary))
 		}
 		sb.WriteString("\n")
 	}
 
 	// 章节要求
 	sb.WriteString(fmt.Sprintf("【章节要求】\n"))
-	sb.WriteString(fmt.Sprintf("- 章节标题：%s\n", chapter.Title))
-	sb.WriteString(fmt.Sprintf("- 字数要求：2000-3000字\n"))
+	sb.WriteString(fmt.Sprintf("- 章节标题:%s\n", chapter.Title))
+	sb.WriteString(fmt.Sprintf("- 字数要求:2000-3000字\n"))
 
 	if req.Prompt, ok := interface{}(nil).(string); ok && req.Prompt != "" {
-		sb.WriteString(fmt.Sprintf("- 创作要求：%s\n", req.Prompt))
+		sb.WriteString(fmt.Sprintf("- 创作要求:%s\n", req.Prompt))
 	}
 
 	return sb.String()
@@ -255,14 +255,14 @@ func (s *ContinuityService) checkCharacterConsistency(character *model.Character
 	}
 
 	// 检查性格表现
-	// 简化：检查是否有矛盾的性格表现
+	// 简化:检查是否有矛盾的性格表现
 	if nameCount > 0 && nameCount < 3 {
 		issues = append(issues, CharacterIssue{
 			CharacterID:   character.ID,
 			CharacterName: character.Name,
 			Type:          "appearance",
 			Severity:      "low",
-			Description:   fmt.Sprintf("角色「%s」在本章中出现次数较少（%d次），可能存在感不足", character.Name, nameCount),
+			Description:   fmt.Sprintf("角色"%s"在本章中出现次数较少（%d次），可能存在感不足", character.Name, nameCount),
 			Suggestion:    "确保主要角色有足够的出场和互动",
 		})
 	}
@@ -279,7 +279,7 @@ func (s *ContinuityService) checkPlotContinuity(novelID uint, chapterNo int, con
 		return issues
 	}
 
-	// 简化：检查内容长度
+	// 简化:检查内容长度
 	if len(content) < 1000 {
 		issues = append(issues, PlotIssue{
 			Type:        "length",
@@ -364,7 +364,7 @@ func (s *KnowledgeService) SearchKnowledge(ctx context.Context, query string, li
 // ExtractAndStorePlotPoints 提取并存储剧情点
 func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapter *model.Chapter, aiClient ai.AIProvider) error {
 	// 使用 AI 提取剧情点
-	prompt := fmt.Sprintf(`从以下章节内容中提取关键剧情点，返回JSON数组格式：
+	prompt := fmt.Sprintf(`从以下章节内容中提取关键剧情点，返回JSON数组格式:
 {
   "plot_points": [
     {
@@ -375,7 +375,7 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
     }
   ]
 }
-章节内容：%s`, chapter.Content)
+章节内容:%s`, chapter.Content)
 
 	req := ai.NewGenerateRequestBuilder().
 		UserMessage(prompt).
@@ -504,7 +504,7 @@ func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter
 func (s *QualityControlService) checkConsistency(ctx context.Context, chapter *model.Chapter, novel *model.Novel) []QualityIssue {
 	issues := []QualityIssue{}
 
-	// 简化：检查重复词汇
+	// 简化:检查重复词汇
 	repeatWords := []string{"突然", "然后", "接着", "非常"}
 	for _, word := range repeatWords {
 		count := strings.Count(chapter.Content, word)
@@ -512,7 +512,7 @@ func (s *QualityControlService) checkConsistency(ctx context.Context, chapter *m
 			issues = append(issues, QualityIssue{
 				Type:        "consistency",
 				Severity:    "low",
-				Description: fmt.Sprintf("「%s」一词出现了%d次", word, count),
+				Description: fmt.Sprintf(""%s"一词出现了%d次", word, count),
 				Suggestion:  "建议使用同义词替换以增加表达多样性",
 			})
 		}
@@ -550,7 +550,7 @@ func (s *QualityControlService) checkStyle(ctx context.Context, chapter *model.C
 	issues := []QualityIssue{}
 
 	// 检查对话比例
-	dialogueCount := strings.Count(chapter.Content, "「") + strings.Count(chapter.Content, ""」")
+	dialogueCount := strings.Count(chapter.Content, """) + strings.Count(chapter.Content, """")
 	totalChars := len(chapter.Content)
 	dialogueRatio := float64(dialogueCount*10) / float64(totalChars)
 

@@ -1,11 +1,11 @@
 package service
 
 import (
-	"fmt"
-	"strings"
-	"time"
+	\\"fmt\\"
+	\\"strings\\"
+	\\"time\\"
 
-	"github.com/inkframe/inkframe-backend/internal/model"
+	\\"github.com/inkframe/inkframe-backend/internal/model\\"
 )
 
 // ============================================
@@ -14,24 +14,24 @@ import (
 
 // VideoGenerationRequest 视频生成请求
 type VideoGenerationRequest struct {
-	NovelID        uint     `json:"novel_id"`
-	ChapterID      uint     `json:"chapter_id"`
-	Title          string   `json:"title"`
-	Resolution     string   `json:"resolution"`      // 720p, 1080p, 4k
-	FrameRate      int      `json:"frame_rate"`      // 24, 30, 60
-	AspectRatio    string   `json:"aspect_ratio"`    // 16:9, 9:16, 1:1
-	ArtStyle       string   `json:"art_style"`       // realistic, anime, cartoon
-	ColorGrade     string   `json:"color_grade"`    // cinematic, vintage, vibrant
+	NovelID        uint     `json:\\"novel_id\\"`
+	ChapterID      uint     `json:\\"chapter_id\\"`
+	Title          string   `json:\\"title\\"`
+	Resolution     string   `json:\\"resolution\\"`      // 720p, 1080p, 4k
+	FrameRate      int      `json:\\"frame_rate\\"`      // 24, 30, 60
+	AspectRatio    string   `json:\\"aspect_ratio\\"`    // 16:9, 9:16, 1:1
+	ArtStyle       string   `json:\\"art_style\\"`       // realistic, anime, cartoon
+	ColorGrade     string   `json:\\"color_grade\\"`    // cinematic, vintage, vibrant
 }
 
 // VideoGenerationResult 视频生成结果
 type VideoGenerationResult struct {
-	VideoID       uint   `json:"video_id"`
-	Status        string `json:"status"`        // planning, storyboard, generating, rendering, completed
-	Progress      float64 `json:"progress"`   // 0-100
-	TotalShots    int    `json:"total_shots"`
-	GeneratedShots int    `json:"generated_shots"`
-	ErrorMessage  string `json:"error_message,omitempty"`
+	VideoID       uint   `json:\\"video_id\\"`
+	Status        string `json:\\"status\\"`        // planning, storyboard, generating, rendering, completed
+	Progress      float64 `json:\\"progress\\"`   // 0-100
+	TotalShots    int    `json:\\"total_shots\\"`
+	GeneratedShots int    `json:\\"generated_shots\\"`
+	ErrorMessage  string `json:\\"error_message,omitempty\\"`
 }
 
 // ============================================
@@ -42,61 +42,61 @@ type VideoGenerationResult struct {
 type ShotType string
 
 const (
-	ShotWide       ShotType = "wide"        // 远景
-	ShotMedium     ShotType = "medium"      // 中景
-	ShotCloseUp    ShotType = "close_up"   // 近景
-	ShotExtreme    ShotType = "extreme"     // 特写
-	ShotPOV        ShotType = "pov"         // 主观镜头
+	ShotWide       ShotType = \\"wide\\"        // 远景
+	ShotMedium     ShotType = \\"medium\\"      // 中景
+	ShotCloseUp    ShotType = \\"close_up\\"   // 近景
+	ShotExtreme    ShotType = \\"extreme\\"     // 特写
+	ShotPOV        ShotType = \\"pov\\"         // 主观镜头
 )
 
 // ShotAngle 镜头角度
 type ShotAngle string
 
 const (
-	AngleEyeLevel  ShotAngle = "eye_level"   // 平视
-	AngleLow       ShotAngle = "low"         // 仰视
-	AngleHigh      ShotAngle = "high"       // 俯视
-	AngleDutch     ShotAngle = "dutch"       // 荷兰角
+	AngleEyeLevel  ShotAngle = \\"eye_level\\"   // 平视
+	AngleLow       ShotAngle = \\"low\\"         // 仰视
+	AngleHigh      ShotAngle = \\"high\\"       // 俯视
+	AngleDutch     ShotAngle = \\"dutch\\"       // 荷兰角
 )
 
 // CameraMovement 摄像机运动
 type CameraMovement string
 
 const (
-	CamStatic  CameraMovement = "static"   // 静止
-	CamPan     CameraMovement = "pan"      // 摇镜
-	CamTilt    CameraMovement = "tilt"     // 俯仰
-	CamZoom    CameraMovement = "zoom"     // 变焦
-	CamDolly   CameraMovement = "dolly"    // 推拉
-	CamTrack   CameraMovement = "track"    // 跟踪
+	CamStatic  CameraMovement = \\"static\\"   // 静止
+	CamPan     CameraMovement = \\"pan\\"      // 摇镜
+	CamTilt    CameraMovement = \\"tilt\\"     // 俯仰
+	CamZoom    CameraMovement = \\"zoom\\"     // 变焦
+	CamDolly   CameraMovement = \\"dolly\\"    // 推拉
+	CamTrack   CameraMovement = \\"track\\"    // 跟踪
 )
 
 // StoryboardShot 分镜
 type StoryboardShot struct {
-	ID             uint              `json:"id"`
-	ShotNo         int               `json:"shot_no"`
-	Description    string            `json:"description"`
-	Dialogue       string            `json:"dialogue,omitempty"`
-	ShotType       ShotType          `json:"shot_type"`
-	ShotAngle      ShotAngle         `json:"shot_angle"`
-	CameraMovement CameraMovement    `json:"camera_movement"`
-	Duration       float64           `json:"duration"`       // 秒
-	Characters     []ShotCharacter    `json:"characters"`
-	Scene          string            `json:"scene"`
-	Lighting       string            `json:"lighting"`
-	Emotion        string            `json:"emotion"`
-	Prompt         string            `json:"prompt"`         // 图像生成提示词
-	NegativePrompt string            `json:"negative_prompt"`
-	Status         string            `json:"status"`         // pending, generating, completed, failed
+	ID             uint              `json:\\"id\\"`
+	ShotNo         int               `json:\\"shot_no\\"`
+	Description    string            `json:\\"description\\"`
+	Dialogue       string            `json:\\"dialogue,omitempty\\"`
+	ShotType       ShotType          `json:\\"shot_type\\"`
+	ShotAngle      ShotAngle         `json:\\"shot_angle\\"`
+	CameraMovement CameraMovement    `json:\\"camera_movement\\"`
+	Duration       float64           `json:\\"duration\\"`       // 秒
+	Characters     []ShotCharacter    `json:\\"characters\\"`
+	Scene          string            `json:\\"scene\\"`
+	Lighting       string            `json:\\"lighting\\"`
+	Emotion        string            `json:\\"emotion\\"`
+	Prompt         string            `json:\\"prompt\\"`         // 图像生成提示词
+	NegativePrompt string            `json:\\"negative_prompt\\"`
+	Status         string            `json:\\"status\\"`         // pending, generating, completed, failed
 }
 
 // ShotCharacter 分镜中的角色
 type ShotCharacter struct {
-	CharacterID uint   `json:"character_id"`
-	Name        string `json:"name"`
-	Expression  string `json:"expression"` // happy, sad, angry, etc.
-	Pose        string `json:"pose"`       // standing, sitting, fighting, etc.
-	Position     string `json:"position"`   // left, center, right
+	CharacterID uint   `json:\\"character_id\\"`
+	Name        string `json:\\"name\\"`
+	Expression  string `json:\\"expression\\"` // happy, sad, angry, etc.
+	Pose        string `json:\\"pose\\"`       // standing, sitting, fighting, etc.
+	Position     string `json:\\"position\\"`   // left, center, right
 }
 
 // IntelligentStoryboardService 智能分镜服务
@@ -139,28 +139,28 @@ func (s *IntelligentStoryboardService) GenerateStoryboard(chapter *model.Chapter
 
 // SceneAnalysis 场景分析
 type SceneAnalysis struct {
-	Type         string   `json:"type"`          // dialogue, action, description, transition
-	Description  string   `json:"description"`
-	Dialogue     string   `json:"dialogue,omitempty"`
-	Characters   []string `json:"characters"`
-	Location     string   `json:"location"`
-	TimeOfDay    string   `json:"time_of_day"`
-	Emotion      string   `json:"emotion"`
-	Intensity    float64  `json:"intensity"`     // 0-1
-	Pacing       string   `json:"pacing"`         // fast, medium, slow
+	Type         string   `json:\\"type\\"`          // dialogue, action, description, transition
+	Description  string   `json:\\"description\\"`
+	Dialogue     string   `json:\\"dialogue,omitempty\\"`
+	Characters   []string `json:\\"characters\\"`
+	Location     string   `json:\\"location\\"`
+	TimeOfDay    string   `json:\\"time_of_day\\"`
+	Emotion      string   `json:\\"emotion\\"`
+	Intensity    float64  `json:\\"intensity\\"`     // 0-1
+	Pacing       string   `json:\\"pacing\\"`         // fast, medium, slow
 }
 
 // 分析章节场景
 func (s *IntelligentStoryboardService) analyzeChapterScenes(content string) []*SceneAnalysis {
 	scenes := []*SceneAnalysis{}
 
-	// 简化实现：按段落分割
-	paragraphs := strings.Split(content, "\n\n")
+	// 简化实现:按段落分割
+	paragraphs := strings.Split(content, \\"\n\n\\")
 
 	currentScene := &SceneAnalysis{
-		Type:        "description",
+		Type:        \\"description\\",
 		Intensity:  0.5,
-		Pacing:     "medium",
+		Pacing:     \\"medium\\",
 	}
 
 	for _, para := range paragraphs {
@@ -170,11 +170,11 @@ func (s *IntelligentStoryboardService) analyzeChapterScenes(content string) []*S
 		}
 
 		// 检测对话
-		if strings.Contains(para, """) {
+		if strings.Contains(para, \\"\\"\\") {
 			dialogues := s.extractDialogues(para)
 			for _, d := range dialogues {
 				if len(d) > 10 {
-					currentScene.Type = "dialogue"
+					currentScene.Type = \\"dialogue\\"
 					currentScene.Dialogue = d
 					currentScene.Intensity = 0.6
 				}
@@ -182,18 +182,18 @@ func (s *IntelligentStoryboardService) analyzeChapterScenes(content string) []*S
 		}
 
 		// 检测动作
-		actionMarkers := []string{"打", "跑", "跳", "走", "飞", "攻击", "战斗"}
+		actionMarkers := []string{\\"打\\", \\"跑\\", \\"跳\\", \\"走\\", \\"飞\\", \\"攻击\\", \\"战斗\\"}
 		for _, marker := range actionMarkers {
 			if strings.Contains(para, marker) {
-				currentScene.Type = "action"
+				currentScene.Type = \\"action\\"
 				currentScene.Intensity = 0.9
-				currentScene.Pacing = "fast"
+				currentScene.Pacing = \\"fast\\"
 				break
 			}
 		}
 
 		// 检测场景描述
-		if currentScene.Type == "description" && len(para) > 50 {
+		if currentScene.Type == \\"description\\" && len(para) > 50 {
 			currentScene.Description = para
 		}
 
@@ -201,15 +201,15 @@ func (s *IntelligentStoryboardService) analyzeChapterScenes(content string) []*S
 		if len(scenes) > 0 && len(scenes[len(scenes)-1].Description) > 0 {
 			scenes = append(scenes, currentScene)
 			currentScene = &SceneAnalysis{
-				Type:        "description",
+				Type:        \\"description\\",
 				Intensity:  0.5,
-				Pacing:     "medium",
+				Pacing:     \\"medium\\",
 			}
 		}
 	}
 
 	// 添加最后一个场景
-	if len(currentScene.Description) > 0 || currentScene.Dialogue != "" {
+	if len(currentScene.Description) > 0 || currentScene.Dialogue != \\"\\" {
 		scenes = append(scenes, currentScene)
 	}
 
@@ -222,14 +222,14 @@ func (s *IntelligentStoryboardService) analyzeEmotions(content string) []string 
 
 	// 简化情感分析
 	emotionMarkers := map[string][]string{
-		"紧张": {"紧张", "心跳", "害怕", "恐惧", "担忧"},
-		"愤怒": {"愤怒", "生气", "怒火", "气愤"},
-		"悲伤": {"悲伤", "难过", "伤心", "痛苦", "哭泣"},
-		"快乐": {"高兴", "开心", "快乐", "喜悦", "欢笑"},
-		"平静": {"平静", "宁静", "安静", "祥和"},
+		\\"紧张\\": {\\"紧张\\", \\"心跳\\", \\"害怕\\", \\"恐惧\\", \\"担忧\\"},
+		\\"愤怒\\": {\\"愤怒\\", \\"生气\\", \\"怒火\\", \\"气愤\\"},
+		\\"悲伤\\": {\\"悲伤\\", \\"难过\\", \\"伤心\\", \\"痛苦\\", \\"哭泣\\"},
+		\\"快乐\\": {\\"高兴\\", \\"开心\\", \\"快乐\\", \\"喜悦\\", \\"欢笑\\"},
+		\\"平静\\": {\\"平静\\", \\"宁静\\", \\"安静\\", \\"祥和\\"},
 	}
 
-	paragraphs := strings.Split(content, "\n\n")
+	paragraphs := strings.Split(content, \\"\n\n\\")
 	for _, para := range paragraphs {
 		found := false
 		for emotion, markers := range emotionMarkers {
@@ -245,7 +245,7 @@ func (s *IntelligentStoryboardService) analyzeEmotions(content string) []string 
 			}
 		}
 		if !found {
-			emotions = append(emotions, "neutral")
+			emotions = append(emotions, \\"neutral\\")
 		}
 	}
 
@@ -258,11 +258,11 @@ func (s *IntelligentStoryboardService) determineShotCount(scene *SceneAnalysis, 
 
 	// 根据场景类型调整
 	switch scene.Type {
-	case "action":
+	case \\"action\\":
 		baseCount = 3 // 动作场景需要更多镜头
-	case "dialogue":
+	case \\"dialogue\\":
 		baseCount = 2 // 对话场景需要切换镜头
-	case "description":
+	case \\"description\\":
 		baseCount = 1 // 描述场景可以少一些镜头
 	}
 
@@ -272,7 +272,7 @@ func (s *IntelligentStoryboardService) determineShotCount(scene *SceneAnalysis, 
 	}
 
 	// 根据节奏调整
-	if scene.Pacing == "fast" {
+	if scene.Pacing == \\"fast\\" {
 		baseCount++
 	}
 
@@ -294,7 +294,7 @@ func (s *IntelligentStoryboardService) generateShot(
 		Description: scene.Description,
 		Dialogue:    scene.Dialogue,
 		Emotion:     scene.Emotion,
-		Status:      "pending",
+		Status:      \\"pending\\",
 	}
 
 	// 确定镜头类型
@@ -329,7 +329,7 @@ func (s *IntelligentStoryboardService) generateShot(
 
 	// 生成提示词
 	shot.Prompt = s.buildPrompt(shot, config)
-	shot.NegativePrompt = "ugly, deformed, extra limbs, blurry, bad anatomy, low quality"
+	shot.NegativePrompt = \\"ugly, deformed, extra limbs, blurry, bad anatomy, low quality\\"
 
 	return shot
 }
@@ -342,7 +342,7 @@ func (s *IntelligentStoryboardService) selectShotType(scene *SceneAnalysis, inde
 	}
 
 	// 对话场景
-	if scene.Type == "dialogue" {
+	if scene.Type == \\"dialogue\\" {
 		if index%2 == 0 {
 			return ShotMedium
 		}
@@ -350,7 +350,7 @@ func (s *IntelligentStoryboardService) selectShotType(scene *SceneAnalysis, inde
 	}
 
 	// 动作场景
-	if scene.Type == "action" {
+	if scene.Type == \\"action\\" {
 		if scene.Intensity > 0.8 {
 			return ShotExtreme
 		}
@@ -364,14 +364,14 @@ func (s *IntelligentStoryboardService) selectShotType(scene *SceneAnalysis, inde
 // 选择镜头角度
 func (s *IntelligentStoryboardService) selectShotAngle(scene *SceneAnalysis, index int) ShotAngle {
 	// 紧张场景可以用荷兰角
-	if scene.Emotion == "紧张" || scene.Emotion == "愤怒" {
+	if scene.Emotion == \\"紧张\\" || scene.Emotion == \\"愤怒\\" {
 		if scene.Intensity > 0.7 {
 			return AngleDutch
 		}
 	}
 
 	// 平静场景用平视
-	if scene.Emotion == "平静" || scene.Emotion == "快乐" {
+	if scene.Emotion == \\"平静\\" || scene.Emotion == \\"快乐\\" {
 		return AngleEyeLevel
 	}
 
@@ -388,11 +388,11 @@ func (s *IntelligentStoryboardService) selectShotAngle(scene *SceneAnalysis, ind
 
 // 选择摄像机运动
 func (s *IntelligentStoryboardService) selectCameraMovement(scene *SceneAnalysis) CameraMovement {
-	if scene.Type == "action" && scene.Intensity > 0.7 {
+	if scene.Type == \\"action\\" && scene.Intensity > 0.7 {
 		return CamTrack
 	}
 
-	if scene.Type == "dialogue" {
+	if scene.Type == \\"dialogue\\" {
 		return CamStatic // 对话场景通常保持稳定
 	}
 
@@ -409,9 +409,9 @@ func (s *IntelligentStoryboardService) estimateDuration(scene *SceneAnalysis) fl
 
 	// 根据场景类型调整
 	switch scene.Type {
-	case "action":
+	case \\"action\\":
 		baseDuration = 3.0
-	case "dialogue":
+	case \\"dialogue\\":
 		baseDuration = 5.0
 	}
 
@@ -423,14 +423,14 @@ func (s *IntelligentStoryboardService) estimateDuration(scene *SceneAnalysis) fl
 	}
 
 	// 根据节奏调整
-	if scene.Pacing == "fast" {
+	if scene.Pacing == \\"fast\\" {
 		baseDuration -= 0.5
-	} else if scene.Pacing == "slow" {
+	} else if scene.Pacing == \\"slow\\" {
 		baseDuration += 1.0
 	}
 
 	// 根据对话长度调整
-	if scene.Dialogue != "" {
+	if scene.Dialogue != \\"\\" {
 		// 假设每秒可以说10个字
 		baseDuration = float64(len(scene.Dialogue)) / 10.0
 		if baseDuration < 3.0 {
@@ -447,110 +447,110 @@ func (s *IntelligentStoryboardService) estimateDuration(scene *SceneAnalysis) fl
 // 确定表情
 func (s *IntelligentStoryboardService) determineExpression(emotion string) string {
 	emotionMap := map[string]string{
-		"紧张":  "worried",
-		"愤怒":  "angry",
-		"悲伤":  "sad",
-		"快乐":  "happy",
-		"平静":  "calm",
-		"neutral": "neutral",
+		\\"紧张\\":  \\"worried\\",
+		\\"愤怒\\":  \\"angry\\",
+		\\"悲伤\\":  \\"sad\\",
+		\\"快乐\\":  \\"happy\\",
+		\\"平静\\":  \\"calm\\",
+		\\"neutral\\": \\"neutral\\",
 	}
 
 	if expr, ok := emotionMap[emotion]; ok {
 		return expr
 	}
-	return "neutral"
+	return \\"neutral\\"
 }
 
 // 确定姿态
 func (s *IntelligentStoryboardService) determinePose(scene *SceneAnalysis) string {
 	switch scene.Type {
-	case "action":
-		return "standing"
-	case "dialogue":
-		return "standing"
+	case \\"action\\":
+		return \\"standing\\"
+	case \\"dialogue\\":
+		return \\"standing\\"
 	default:
-		return "standing"
+		return \\"standing\\"
 	}
 }
 
 // 确定位置
 func (s *IntelligentStoryboardService) determinePosition(index, total int) string {
 	if total == 1 {
-		return "center"
+		return \\"center\\"
 	}
 	if total == 2 {
 		if index == 0 {
-			return "left"
+			return \\"left\\"
 		}
-		return "right"
+		return \\"right\\"
 	}
-	positions := []string{"left", "center", "right"}
+	positions := []string{\\"left\\", \\"center\\", \\"right\\"}
 	return positions[index%3]
 }
 
 // 确定灯光
 func (s *IntelligentStoryboardService) determineLighting(scene *SceneAnalysis) string {
 	switch scene.Emotion {
-	case "紧张", "恐惧":
-		return "dramatic"
-	case "快乐", "平静":
-		return "soft"
-	case "愤怒":
-		return "high_contrast"
+	case \\"紧张\\", \\"恐惧\\":
+		return \\"dramatic\\"
+	case \\"快乐\\", \\"平静\\":
+		return \\"soft\\"
+	case \\"愤怒\\":
+		return \\"high_contrast\\"
 	default:
-		return "natural"
+		return \\"natural\\"
 	}
 }
 
 // 构建提示词
 func (s *IntelligentStoryboardService) buildPrompt(shot *StoryboardShot, config *VideoGenerationRequest) string {
-	prompt := ""
+	prompt := \\"\\"
 
 	// 添加场景描述
-	prompt += shot.Description + ", "
+	prompt += shot.Description + \\", \\"
 
 	// 添加镜头信息
-	prompt += fmt.Sprintf("%s shot, %s angle, ", shot.ShotType, shot.ShotAngle)
+	prompt += fmt.Sprintf(\\"%s shot, %s angle, \\", shot.ShotType, shot.ShotAngle)
 
 	// 添加摄像机运动
 	if shot.CameraMovement != CamStatic {
-		prompt += fmt.Sprintf("camera %s, ", shot.CameraMovement)
+		prompt += fmt.Sprintf(\\"camera %s, \\", shot.CameraMovement)
 	}
 
 	// 添加角色
 	for _, char := range shot.Characters {
-		prompt += fmt.Sprintf("%s with %s expression, %s pose, ", char.Name, char.Expression, char.Pose)
+		prompt += fmt.Sprintf(\\"%s with %s expression, %s pose, \\", char.Name, char.Expression, char.Pose)
 	}
 
 	// 添加灯光
-	prompt += fmt.Sprintf("%s lighting, ", shot.Lighting)
+	prompt += fmt.Sprintf(\\"%s lighting, \\", shot.Lighting)
 
 	// 添加场景
-	if shot.Scene != "" {
-		prompt += fmt.Sprintf("in %s, ", shot.Scene)
+	if shot.Scene != \\"\\" {
+		prompt += fmt.Sprintf(\\"in %s, \\", shot.Scene)
 	}
 
 	// 添加情感
-	prompt += fmt.Sprintf("%s atmosphere, ", shot.Emotion)
+	prompt += fmt.Sprintf(\\"%s atmosphere, \\", shot.Emotion)
 
 	// 添加风格和质量
 	switch config.ArtStyle {
-	case "anime":
-		prompt += "anime style, vibrant colors, detailed"
-	case "cartoon":
-		prompt += "cartoon style, playful"
+	case \\"anime\\":
+		prompt += \\"anime style, vibrant colors, detailed\\"
+	case \\"cartoon\\":
+		prompt += \\"cartoon style, playful\\"
 	default:
-		prompt += "cinematic, highly detailed, photorealistic"
+		prompt += \\"cinematic, highly detailed, photorealistic\\"
 	}
 
 	// 添加分辨率和质量
 	switch config.Resolution {
-	case "4k":
-		prompt += ", 4k, ultra detailed"
-	case "1080p":
-		prompt += ", 1080p, high quality"
+	case \\"4k\\":
+		prompt += \\", 4k, ultra detailed\\"
+	case \\"1080p\\":
+		prompt += \\", 1080p, high quality\\"
 	default:
-		prompt += ", 720p"
+		prompt += \\", 720p\\"
 	}
 
 	return prompt
@@ -564,22 +564,22 @@ func (s *IntelligentStoryboardService) buildPrompt(shot *StoryboardShot, config 
 type EnhancementType string
 
 const (
-	EnhanceFrameInterpolation EnhancementType = "frame_interpolation" // 帧插值
-	EnhanceSuperResolution    EnhancementType = "super_resolution"    // 超分辨率
-	EnhanceColorCorrection    EnhancementType = "color_correction"    // 色彩校正
-	EnhanceStabilization      EnhancementType = "stabilization"      // 稳定化
-	EnhanceDenoising          EnhancementType = "denoising"          // 降噪
-	EnhanceStyleTransfer      EnhancementType = "style_transfer"     // 风格迁移
+	EnhanceFrameInterpolation EnhancementType = \\"frame_interpolation\\" // 帧插值
+	EnhanceSuperResolution    EnhancementType = \\"super_resolution\\"    // 超分辨率
+	EnhanceColorCorrection    EnhancementType = \\"color_correction\\"    // 色彩校正
+	EnhanceStabilization      EnhancementType = \\"stabilization\\"      // 稳定化
+	EnhanceDenoising          EnhancementType = \\"denoising\\"          // 降噪
+	EnhanceStyleTransfer      EnhancementType = \\"style_transfer\\"     // 风格迁移
 )
 
 // EnhancementConfig 增强配置
 type EnhancementConfig struct {
-	Type          EnhancementType `json:"type"`
-	Enabled       bool           `json:"enabled"`
-	Intensity     float64        `json:"intensity"` // 0-1
-	TargetFPS     int            `json:"target_fps,omitempty"`
-	ScaleFactor   float64        `json:"scale_factor,omitempty"`
-	StylePreset   string         `json:"style_preset,omitempty"`
+	Type          EnhancementType `json:\\"type\\"`
+	Enabled       bool           `json:\\"enabled\\"`
+	Intensity     float64        `json:\\"intensity\\"` // 0-1
+	TargetFPS     int            `json:\\"target_fps,omitempty\\"`
+	ScaleFactor   float64        `json:\\"scale_factor,omitempty\\"`
+	StylePreset   string         `json:\\"style_preset,omitempty\\"`
 }
 
 // VideoEnhancementService 视频增强服务
@@ -628,13 +628,13 @@ func (s *VideoEnhancementService) GetRecommendedEnhancements(videoInfo *model.Vi
 
 	// 根据分辨率调整
 	switch videoInfo.Resolution {
-	case "720p":
+	case \\"720p\\":
 		for _, cfg := range configs {
 			if cfg.Type == EnhanceSuperResolution {
 				cfg.ScaleFactor = 2.0
 			}
 		}
-	case "4k":
+	case \\"4k\\":
 		for _, cfg := range configs {
 			if cfg.Type == EnhanceSuperResolution {
 				cfg.Enabled = false
@@ -707,38 +707,38 @@ func (s *VideoEnhancementService) applyStabilization(video *model.Video, config 
 
 // FrameGenerationRequest 帧生成请求
 type FrameGenerationRequest struct {
-	Shot          *StoryboardShot      `json:"shot"`
-	Characters    []*CharacterVisual   `json:"characters"`
-	SceneVisual   *SceneVisual        `json:"scene_visual"`
-	ConsistencyConfig *ConsistencyConfig `json:"consistency_config"`
+	Shot          *StoryboardShot      `json:\\"shot\\"`
+	Characters    []*CharacterVisual   `json:\\"characters\\"`
+	SceneVisual   *SceneVisual        `json:\\"scene_visual\\"`
+	ConsistencyConfig *ConsistencyConfig `json:\\"consistency_config\\"`
 }
 
 // CharacterVisual 角色视觉
 type CharacterVisual struct {
-	CharacterID    uint    `json:"character_id"`
-	Name           string  `json:"name"`
-	BaseImageURL   string  `json:"base_image_url"`
-	LoraModelID    string  `json:"lora_model_id,omitempty"`
-	LoraWeight     float64 `json:"lora_weight"`
-	ExpressionImages map[string]string `json:"expression_images"`
+	CharacterID    uint    `json:\\"character_id\\"`
+	Name           string  `json:\\"name\\"`
+	BaseImageURL   string  `json:\\"base_image_url\\"`
+	LoraModelID    string  `json:\\"lora_model_id,omitempty\\"`
+	LoraWeight     float64 `json:\\"lora_weight\\"`
+	ExpressionImages map[string]string `json:\\"expression_images\\"`
 }
 
 // SceneVisual 场景视觉
 type SceneVisual struct {
-	SceneID        uint    `json:"scene_id"`
-	Name           string  `json:"name"`
-	BaseImageURL   string  `json:"base_image_url"`
-	LoraModelID    string  `json:"lora_model_id,omitempty"`
-	LoraWeight     float64 `json:"lora_weight"`
+	SceneID        uint    `json:\\"scene_id\\"`
+	Name           string  `json:\\"name\\"`
+	BaseImageURL   string  `json:\\"base_image_url\\"`
+	LoraModelID    string  `json:\\"lora_model_id,omitempty\\"`
+	LoraWeight     float64 `json:\\"lora_weight\\"`
 }
 
 // ConsistencyConfig 一致性配置
 type ConsistencyConfig struct {
-	UseLora        bool    `json:"use_lora"`
-	UseIPAdapter   bool    `json:"use_ip_adapter"`
-	UseControlNet  bool    `json:"use_control_net"`
-	ReferenceWeight float64 `json:"reference_weight"` // 0-1
-	LoraWeight      float64 `json:"lora_weight"`
+	UseLora        bool    `json:\\"use_lora\\"`
+	UseIPAdapter   bool    `json:\\"use_ip_adapter\\"`
+	UseControlNet  bool    `json:\\"use_control_net\\"`
+	ReferenceWeight float64 `json:\\"reference_weight\\"` // 0-1
+	LoraWeight      float64 `json:\\"lora_weight\\"`
 }
 
 // FrameGeneratorService 帧生成服务
@@ -764,7 +764,7 @@ func (s *FrameGeneratorService) GenerateFrame(req *FrameGenerationRequest) (*Gen
 	options := &ImageGenerationOptions{
 		Prompt:          prompt,
 		NegativePrompt:   req.Shot.NegativePrompt,
-		Size:            "1920x1080",
+		Size:            \\"1920x1080\\",
 		Steps:           50,
 		CFGScale:        7.5,
 	}
@@ -774,7 +774,7 @@ func (s *FrameGeneratorService) GenerateFrame(req *FrameGenerationRequest) (*Gen
 		// 使用 LoRA
 		if req.ConsistencyConfig.UseLora && len(req.Characters) > 0 {
 			for _, char := range req.Characters {
-				if char.LoraModelID != "" {
+				if char.LoraModelID != \\"\\" {
 					options.LoraModels = append(options.LoraModels, LoraModel{
 						ID:     char.LoraModelID,
 						Weight: req.ConsistencyConfig.LoraWeight * char.LoraWeight,
@@ -787,7 +787,7 @@ func (s *FrameGeneratorService) GenerateFrame(req *FrameGenerationRequest) (*Gen
 		if req.ConsistencyConfig.UseIPAdapter && len(req.Characters) > 0 {
 			options.ReferenceImages = []string{}
 			for _, char := range req.Characters {
-				if char.BaseImageURL != "" {
+				if char.BaseImageURL != \\"\\" {
 					options.ReferenceImages = append(options.ReferenceImages, char.BaseImageURL)
 				}
 			}
@@ -813,12 +813,12 @@ func (s *FrameGeneratorService) buildFramePrompt(req *FrameGenerationRequest) st
 
 	// 添加摄像机运动信息
 	if req.Shot.CameraMovement != CamStatic {
-		prompt += fmt.Sprintf(", camera %s movement", req.Shot.CameraMovement)
+		prompt += fmt.Sprintf(\\", camera %s movement\\", req.Shot.CameraMovement)
 	}
 
 	// 添加角色详细信息
 	for _, char := range req.Characters {
-		prompt += fmt.Sprintf(", %s with consistent appearance", char.Name)
+		prompt += fmt.Sprintf(\\", %s with consistent appearance\\", char.Name)
 	}
 
 	return prompt
@@ -826,10 +826,10 @@ func (s *FrameGeneratorService) buildFramePrompt(req *FrameGenerationRequest) st
 
 // GeneratedFrame 生成的帧
 type GeneratedFrame struct {
-	FrameNo     int    `json:"frame_no"`
-	ImageURL    string `json:"image_url"`
-	Prompt      string `json:"prompt"`
-	GeneratedAt time.Time `json:"generated_at"`
+	FrameNo     int    `json:\\"frame_no\\"`
+	ImageURL    string `json:\\"image_url\\"`
+	Prompt      string `json:\\"prompt\\"`
+	GeneratedAt time.Time `json:\\"generated_at\\"`
 }
 
 // ============================================
@@ -838,28 +838,28 @@ type GeneratedFrame struct {
 
 // ImageGenerationOptions 图像生成选项
 type ImageGenerationOptions struct {
-	Prompt          string      `json:"prompt"`
-	NegativePrompt  string      `json:"negative_prompt,omitempty"`
-	Size            string      `json:"size,omitempty"`      // 512x512, 1024x1024, etc.
-	Steps           int         `json:"steps,omitempty"`
-	CFGScale        float64     `json:"cfg_scale,omitempty"`
-	LoraModels      []LoraModel `json:"lora_models,omitempty"`
-	ReferenceImages []string    `json:"reference_images,omitempty"`
-	ReferenceWeight float64     `json:"reference_weight,omitempty"`
+	Prompt          string      `json:\\"prompt\\"`
+	NegativePrompt  string      `json:\\"negative_prompt,omitempty\\"`
+	Size            string      `json:\\"size,omitempty\\"`      // 512x512, 1024x1024, etc.
+	Steps           int         `json:\\"steps,omitempty\\"`
+	CFGScale        float64     `json:\\"cfg_scale,omitempty\\"`
+	LoraModels      []LoraModel `json:\\"lora_models,omitempty\\"`
+	ReferenceImages []string    `json:\\"reference_images,omitempty\\"`
+	ReferenceWeight float64     `json:\\"reference_weight,omitempty\\"`
 }
 
 // LoraModel LoRA模型
 type LoraModel struct {
-	ID     string  `json:"id"`
-	Weight float64 `json:"weight"`
+	ID     string  `json:\\"id\\"`
+	Weight float64 `json:\\"weight\\"`
 }
 
 // GeneratedImage 生成的图像
 type GeneratedImage struct {
-	URL     string  `json:"url"`
-	Width   int     `json:"width"`
-	Height  int     `json:"height"`
-	Seed    int64   `json:"seed,omitempty"`
+	URL     string  `json:\\"url\\"`
+	Width   int     `json:\\"width\\"`
+	Height  int     `json:\\"height\\"`
+	Seed    int64   `json:\\"seed,omitempty\\"`
 }
 
 // ============================================
@@ -868,19 +868,19 @@ type GeneratedImage struct {
 
 // ConsistencyValidationResult 一致性验证结果
 type ConsistencyValidationResult struct {
-	OverallScore     float64              `json:"overall_score"`
-	CharacterScores  map[uint]float64     `json:"character_scores"`  // character_id -> score
-	SceneScore       float64              `json:"scene_score"`
-	Issues           []ConsistencyIssue   `json:"issues"`
+	OverallScore     float64              `json:\\"overall_score\\"`
+	CharacterScores  map[uint]float64     `json:\\"character_scores\\"`  // character_id -> score
+	SceneScore       float64              `json:\\"scene_score\\"`
+	Issues           []ConsistencyIssue   `json:\\"issues\\"`
 }
 
 // ConsistencyIssue 一致性问题
 type ConsistencyIssue struct {
-	Type        string  `json:"type"`         // appearance_drift, missing_element, style_drift
-	Severity    string  `json:"severity"`     // high, medium, low
-	Description string  `json:"description"`
-	Location    string  `json:"location"`
-	Suggestion  string  `json:"suggestion"`
+	Type        string  `json:\\"type\\"`         // appearance_drift, missing_element, style_drift
+	Severity    string  `json:\\"severity\\"`     // high, medium, low
+	Description string  `json:\\"description\\"`
+	Location    string  `json:\\"location\\"`
+	Suggestion  string  `json:\\"suggestion\\"`
 }
 
 // ConsistencyValidatorService 一致性验证服务
@@ -913,10 +913,10 @@ func (s *ConsistencyValidatorService) ValidateConsistency(
 
 		if score < 0.8 {
 			result.Issues = append(result.Issues, ConsistencyIssue{
-				Type:        "appearance_drift",
-				Severity:    "medium",
-				Description: fmt.Sprintf("角色 %s 的外观一致性不足 (%.2f)", char.Name, score),
-				Suggestion:  "使用更高的 LoRA 权重或参考图像权重",
+				Type:        \\"appearance_drift\\",
+				Severity:    \\"medium\\",
+				Description: fmt.Sprintf(\\"角色 %s 的外观一致性不足 (%.2f)\\", char.Name, score),
+				Suggestion:  \\"使用更高的 LoRA 权重或参考图像权重\\",
 			})
 		}
 	}
@@ -927,10 +927,10 @@ func (s *ConsistencyValidatorService) ValidateConsistency(
 
 		if result.SceneScore < 0.7 {
 			result.Issues = append(result.Issues, ConsistencyIssue{
-				Type:        "style_drift",
-				Severity:    "medium",
-				Description: fmt.Sprintf("场景一致性不足 (%.2f)", result.SceneScore),
-				Suggestion:  "使用场景 LoRA 或调整提示词",
+				Type:        \\"style_drift\\",
+				Severity:    \\"medium\\",
+				Description: fmt.Sprintf(\\"场景一致性不足 (%.2f)\\", result.SceneScore),
+				Suggestion:  \\"使用场景 LoRA 或调整提示词\\",
 			})
 		}
 	}
