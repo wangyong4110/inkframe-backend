@@ -131,6 +131,7 @@ func (s *IntelligentStoryboardService) AnalyzeEmotions(content string) (*Emotion
 		return nil, err
 	}
 
+	var analysis EmotionalAnalysis
 	if err := json.Unmarshal([]byte(result), &analysis); err != nil {
 		// 返回默认分析
 		return &EmotionalAnalysis{
@@ -483,6 +484,7 @@ func (s *ImageService) GenerateCharacterImage(
 
 // buildCharacterPrompt 构建角色提示词
 func (s *ImageService) buildCharacterPrompt(charName, expression, pose string) string {
+	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("portrait of %s", charName))
 	sb.WriteString(fmt.Sprintf(", expression: %s", expression))
@@ -500,6 +502,7 @@ func (s *ImageService) GenerateSceneImage(
 	lighting string,
 	characters []string,
 ) (string, error) {
+	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("%s", location))
 
@@ -726,4 +729,24 @@ func (s *VideoEnhancementService) RecommendEnhancements(videoInfo *struct {
 // ============================================
 // Helper Functions
 // ============================================
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+// AiService getter (for compatibility)
+func (s *IntelligentStoryboardService) GetAiService() *IntelligentStoryboardService {
+	return s
+}
+
+// DetectActionBeats getter (for compatibility)
+func (s *IntelligentStoryboardService) DetectActionBeats(content string) ([]struct {
+	Position  int
+	Type     string
+	Intensity float64
+}, error) {
+	return s.DetectActionBeats(content)
 }

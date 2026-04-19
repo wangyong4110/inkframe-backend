@@ -37,6 +37,7 @@ func (s *PromptService) RenderPrompt(templateID uint, variables map[string]inter
 
 // BuildOutlinePrompt 构建大纲提示词
 func (s *PromptService) BuildOutlinePrompt(novel *model.Novel, req *GenerateOutlineRequest) string {
+	var sb strings.Builder
 
 	// 系统提示
 	sb.WriteString("你是一位专业的小说作家，擅长创作中长篇小说。\n\n")
@@ -73,6 +74,7 @@ func (s *PromptService) BuildOutlinePrompt(novel *model.Novel, req *GenerateOutl
 
 // BuildChapterPrompt 构建章节提示词
 func (s *PromptService) BuildChapterPrompt(novel *model.Novel, chapter *model.Chapter, recentChapters []*model.Chapter, characters []*model.Character) string {
+	var sb strings.Builder
 
 	// 系统提示
 	sb.WriteString("你是一位专业的小说作家，创作内容需要：\n")
@@ -238,6 +240,7 @@ func (s *ContinuityService) CheckContinuity(novelID uint, chapterNo int, content
 }
 
 func (s *ContinuityService) checkCharacterConsistency(character *model.Character, content string) []CharacterIssue {
+	var issues []CharacterIssue
 
 	// 检查角色名出现次数
 	nameCount := strings.Count(content, character.Name)
@@ -268,6 +271,7 @@ func (s *ContinuityService) checkCharacterConsistency(character *model.Character
 }
 
 func (s *ContinuityService) checkPlotContinuity(novelID uint, chapterNo int, content string) []PlotIssue {
+	var issues []PlotIssue
 
 	// 获取前几章
 	recentChapters, err := s.chapterRepo.GetRecent(novelID, chapterNo, 3)
@@ -289,6 +293,7 @@ func (s *ContinuityService) checkPlotContinuity(novelID uint, chapterNo int, con
 }
 
 func (s *ContinuityService) generateSuggestions(report *ContinuityReport) []string {
+	var suggestions []string
 
 	if len(report.CharacterIssues) > 0 {
 		suggestions = append(suggestions, "建议检查角色在章节中的表现是否与其设定一致")
@@ -384,6 +389,7 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 	}
 
 	// 解析结果
+	var result struct {
 		PlotPoints []struct {
 			Type        string   `json:"type"`
 			Description string   `json:"description"`
@@ -415,10 +421,34 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 	return nil
 }
 
-
+// QualityControlService 质量控制服务
+type QualityControlService struct {
+	aiClient *ai.ModelManager
 }
 
+func NewQualityControlService(aiClient *ai.ModelManager) *QualityControlService {
+	return &QualityControlService{aiClient: aiClient}
+}
 
+// QualityReport 质量报告
+type QualityReport struct {
+	OverallScore    float64           `json:"overall_score"`
+	ConsistencyScore float64          `json:"consistency_score"`
+	QualityScore    float64           `json:"quality_score"`
+	LogicScore      float64           `json:"logic_score"`
+	StyleScore      float64           `json:"style_score"`
+	Issues          []QualityIssue    `json:"issues"`
+	Suggestions     []string          `json:"suggestions"`
+}
+
+// QualityIssue 质量问题
+type QualityIssue struct {
+	Type        string `json:"type"` // consistency, quality, logic, style
+	Severity    string `json:"severity"` // high, medium, low
+	Description string `json:"description"`
+	Location    string `json:"location"`
+	Suggestion  string `json:"suggestion"`
+}
 
 // CheckChapterQuality 检查章节质量
 func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter *model.Chapter, novel *model.Novel) (*QualityReport, error) {
@@ -471,6 +501,8 @@ func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter
 	return report, nil
 }
 
+func (s *QualityControlService) checkConsistency(ctx context.Context, chapter *model.Chapter, novel *model.Novel) []QualityIssue {
+	issues := []QualityIssue{}
 
 	// 简化：检查重复词汇
 	repeatWords := []string{"突然", "然后", "接着", "非常"}
@@ -489,6 +521,8 @@ func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter
 	return issues
 }
 
+func (s *QualityControlService) checkQuality(ctx context.Context, chapter *model.Chapter) []QualityIssue {
+	issues := []QualityIssue{}
 
 	// 检查字数
 	if chapter.WordCount < 1500 {
@@ -503,6 +537,8 @@ func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter
 	return issues
 }
 
+func (s *QualityControlService) checkLogic(ctx context.Context, chapter *model.Chapter) []QualityIssue {
+	issues := []QualityIssue{}
 
 	// 简化逻辑检查
 	// 实际应该使用更复杂的 NLP 分析
@@ -510,9 +546,11 @@ func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter
 	return issues
 }
 
+func (s *QualityControlService) checkStyle(ctx context.Context, chapter *model.Chapter, novel *model.Novel) []QualityIssue {
+	issues := []QualityIssue{}
 
 	// 检查对话比例
-	dialogueCount := strings.Count(chapter.Content, "「") + strings.Count(chapter.Content, "」")
+	dialogueCount := strings.Count(chapter.Content, "「") + strings.Count(chapter.Content, ""」")
 	totalChars := len(chapter.Content)
 	dialogueRatio := float64(dialogueCount*10) / float64(totalChars)
 
@@ -528,6 +566,8 @@ func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter
 	return issues
 }
 
+func (s *QualityControlService) generateSuggestions(report *QualityReport) []string {
+	suggestions := []string{}
 
 	highCount := 0
 	for _, issue := range report.Issues {
@@ -551,4 +591,9 @@ func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter
 	return suggestions
 }
 
-
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}

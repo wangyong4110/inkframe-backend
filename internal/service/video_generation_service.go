@@ -38,6 +38,8 @@ type VideoGenerationResult struct {
 // 1. 智能分镜生成器
 // ============================================
 
+// ShotType 镜头类型
+type ShotType string
 
 const (
 	ShotWide       ShotType = "wide"        // 远景
@@ -47,8 +49,18 @@ const (
 	ShotPOV        ShotType = "pov"         // 主观镜头
 )
 
+// ShotAngle 镜头角度
+type ShotAngle string
 
+const (
+	AngleEyeLevel  ShotAngle = "eye_level"   // 平视
+	AngleLow       ShotAngle = "low"         // 仰视
+	AngleHigh      ShotAngle = "high"       // 俯视
+	AngleDutch     ShotAngle = "dutch"       // 荷兰角
+)
 
+// CameraMovement 摄像机运动
+type CameraMovement string
 
 const (
 	CamStatic  CameraMovement = "static"   // 静止
@@ -59,8 +71,38 @@ const (
 	CamTrack   CameraMovement = "track"    // 跟踪
 )
 
+// StoryboardShot 分镜
+type StoryboardShot struct {
+	ID             uint              `json:"id"`
+	ShotNo         int               `json:"shot_no"`
+	Description    string            `json:"description"`
+	Dialogue       string            `json:"dialogue,omitempty"`
+	ShotType       ShotType          `json:"shot_type"`
+	ShotAngle      ShotAngle         `json:"shot_angle"`
+	CameraMovement CameraMovement    `json:"camera_movement"`
+	Duration       float64           `json:"duration"`       // 秒
+	Characters     []ShotCharacter    `json:"characters"`
+	Scene          string            `json:"scene"`
+	Lighting       string            `json:"lighting"`
+	Emotion        string            `json:"emotion"`
+	Prompt         string            `json:"prompt"`         // 图像生成提示词
+	NegativePrompt string            `json:"negative_prompt"`
+	Status         string            `json:"status"`         // pending, generating, completed, failed
+}
 
+// ShotCharacter 分镜中的角色
+type ShotCharacter struct {
+	CharacterID uint   `json:"character_id"`
+	Name        string `json:"name"`
+	Expression  string `json:"expression"` // happy, sad, angry, etc.
+	Pose        string `json:"pose"`       // standing, sitting, fighting, etc.
+	Position     string `json:"position"`   // left, center, right
+}
 
+// IntelligentStoryboardService 智能分镜服务
+type IntelligentStoryboardService struct {
+	aiService *AIService
+}
 
 // NewIntelligentStoryboardService 创建智能分镜服务
 func NewIntelligentStoryboardService(aiService *AIService) *IntelligentStoryboardService {
@@ -128,7 +170,7 @@ func (s *IntelligentStoryboardService) analyzeChapterScenes(content string) []*S
 		}
 
 		// 检测对话
-		if strings.Contains(para, "「") {
+		if strings.Contains(para, """) {
 			dialogues := s.extractDialogues(para)
 			for _, d := range dialogues {
 				if len(d) > 10 {
@@ -518,6 +560,8 @@ func (s *IntelligentStoryboardService) buildPrompt(shot *StoryboardShot, config 
 // 2. 视频增强服务
 // ============================================
 
+// EnhancementType 增强类型
+type EnhancementType string
 
 const (
 	EnhanceFrameInterpolation EnhancementType = "frame_interpolation" // 帧插值
@@ -528,7 +572,20 @@ const (
 	EnhanceStyleTransfer      EnhancementType = "style_transfer"     // 风格迁移
 )
 
+// EnhancementConfig 增强配置
+type EnhancementConfig struct {
+	Type          EnhancementType `json:"type"`
+	Enabled       bool           `json:"enabled"`
+	Intensity     float64        `json:"intensity"` // 0-1
+	TargetFPS     int            `json:"target_fps,omitempty"`
+	ScaleFactor   float64        `json:"scale_factor,omitempty"`
+	StylePreset   string         `json:"style_preset,omitempty"`
+}
 
+// VideoEnhancementService 视频增强服务
+type VideoEnhancementService struct {
+	aiService *AIService
+}
 
 // NewVideoEnhancementService 创建视频增强服务
 func NewVideoEnhancementService(aiService *AIService) *VideoEnhancementService {

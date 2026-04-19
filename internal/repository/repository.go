@@ -634,3 +634,211 @@ type ReviewTaskRepository struct {
 	db *gorm.DB
 }
 
+func NewReviewTaskRepository(db *gorm.DB) *ReviewTaskRepository {
+	return &ReviewTaskRepository{db: db}
+}
+
+// Create 创建审核任务
+func (r *ReviewTaskRepository) Create(task *model.ReviewTask) error {
+	return r.db.Create(task).Error
+}
+
+// GetByID 根据ID获取审核任务
+func (r *ReviewTaskRepository) GetByID(id uint) (*model.ReviewTask, error) {
+	var task model.ReviewTask
+	if err := r.db.First(&task, id).Error; err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+// ListPending 获取待处理的审核任务
+func (r *ReviewTaskRepository) ListPending(priority string, limit int) ([]*model.ReviewTask, error) {
+	var tasks []*model.ReviewTask
+	query := r.db.Where("status = ?", "pending")
+
+	if priority != "" {
+		query = query.Where("priority = ?", priority)
+	}
+
+	if err := query.Order("CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END").
+		Limit(limit).
+		Find(&tasks).Error; err != nil {
+		return nil, err
+	}
+
+	return tasks, nil
+}
+
+// UpdateStatus 更新审核任务状态
+func (r *ReviewTaskRepository) UpdateStatus(id uint, status string, note string) error {
+	updates := map[string]interface{}{
+		"status": status,
+	}
+	if note != "" {
+		updates["reviewer_note"] = note
+	}
+	if status == "completed" || status == "rejected" {
+		now := time.Now()
+		updates["completed_at"] = &now
+	}
+	return r.db.Model(&model.ReviewTask{}).Where("id = ?", id).Updates(updates).Error
+}
+
+// ChapterVersionRepository 章节版本仓库
+type ChapterVersionRepository struct {
+	db *gorm.DB
+}
+
+func NewChapterVersionRepository(db *gorm.DB) *ChapterVersionRepository {
+	return &ChapterVersionRepository{db: db}
+}
+
+// Create 创建版本
+func (r *ChapterVersionRepository) Create(version *model.ChapterVersion) error {
+	return r.db.Create(version).Error
+}
+
+// GetLatest 获取最新版本
+func (r *ChapterVersionRepository) GetLatest(chapterID uint) (*model.ChapterVersion, error) {
+	var version model.ChapterVersion
+	if err := r.db.Where("chapter_id = ?", chapterID).
+		Order("version_no DESC").
+		First(&version).Error; err != nil {
+		return nil, err
+	}
+	return &version, nil
+}
+
+// GetVersion 获取指定版本
+func (r *ChapterVersionRepository) GetVersion(chapterID uint, versionNo int) (*model.ChapterVersion, error) {
+	var version model.ChapterVersion
+	if err := r.db.Where("chapter_id = ? AND version_no = ?", chapterID, versionNo).First(&version).Error; err != nil {
+		return nil, err
+	}
+	return &version, nil
+}
+
+// List 获取章节所有版本
+func (r *ChapterVersionRepository) List(chapterID uint) ([]*model.ChapterVersion, error) {
+	var versions []*model.ChapterVersion
+	if err := r.db.Where("chapter_id = ?", chapterID).
+		Order("version_no DESC").
+		Find(&versions).Error; err != nil {
+		return nil, err
+	}
+	return versions, nil
+}
+
+// GetNextVersionNo 获取下一个版本号
+func (r *ChapterVersionRepository) GetNextVersionNo(chapterID uint) (int, error) {
+	var version model.ChapterVersion
+	if err := r.db.Where("chapter_id = ?", chapterID).
+		Order("version_no DESC").
+		First(&version).Error; err != nil {
+		if err == gorm.ErrRecordNotFound {
+			return 1, nil
+		}
+		return 0, err
+	}
+	return version.VersionNo + 1, nil
+}
+
+// ============================================
+// Model Repositories
+// ============================================
+
+// ModelProviderRepository 模型提供商仓库
+type ModelProviderRepository struct {
+	db *gorm.DB
+}
+
+func NewModelProviderRepository(db *gorm.DB) *ModelProviderRepository {
+	return &ModelProviderRepository{db: db}
+}
+
+// List 获取提供商列表
+func (r *ModelProviderRepository) List() ([]*model.ModelProvider, error) {
+	var providers []*model.ModelProvider
+	if err := r.db.Find(&providers).Error; err != nil {
+		return nil, err
+	}
+	return providers, nil
+}
+
+// GetByID 根据ID获取提供商
+func (r *ModelProviderRepository) GetByID(id uint) (*model.ModelProvider, error) {
+	var provider model.ModelProvider
+	if err := r.db.First(&provider, id).Error; err != nil {
+		return nil, err
+	}
+	return &provider, nil
+}
+
+// Create 创建提供商
+func (r *ModelProviderRepository) Create(provider *model.ModelProvider) error {
+	return r.db.Create(provider).Error
+}
+
+// Update 更新提供商
+func (r *ModelProviderRepository) Update(provider *model.ModelProvider) error {
+	return r.db.Save(provider).Error
+}
+
+// UpdateHealthStatus 更新健康状态
+func (r *ModelProviderRepository) UpdateHealthStatus(id uint, status string) error {
+	return r.db.Model(&model.ModelProvider{}).Where("id = ?", id).
+		Update("health_check", status).Error
+}
+
+// ModelComparisonRepository 模型对比仓库
+type ModelComparisonRepository struct {
+	db *gorm.DB
+}
+
+func NewModelComparisonRepository(db *gorm.DB) *ModelComparisonRepository {
+	return &ModelComparisonRepository{db: db}
+}
+
+// Create 创建对比实验
+func (r *ModelComparisonRepository) Create(exp *model.ModelComparisonExperiment) error {
+	return r.db.Create(exp).Error
+}
+
+// GetByID 获取实验
+func (r *ModelComparisonRepository) GetByID(id uint) (*model.ModelComparisonExperiment, error) {
+	var exp model.ModelComparisonExperiment
+	if err := r.db.First(&exp, id).Error; err != nil {
+		return nil, err
+	}
+	return &exp, nil
+}
+
+// Update 更新实验
+func (r *ModelComparisonRepository) Update(exp *model.ModelComparisonExperiment) error {
+	return r.db.Save(exp).Error
+}
+
+// List 获取实验列表
+func (r *ModelComparisonRepository) List(limit int) ([]*model.ModelComparisonExperiment, error) {
+	var experiments []*model.ModelComparisonExperiment
+	if err := r.db.Order("created_at DESC").Limit(limit).Find(&experiments).Error; err != nil {
+		return nil, err
+	}
+	return experiments, nil
+}
+
+// AddResult 添加实验结果
+func (r *ModelComparisonRepository) AddResult(result *model.ExperimentResult) error {
+	return r.db.Create(result).Error
+}
+
+// GetResults 获取实验结果
+func (r *ModelComparisonRepository) GetResults(experimentID uint) ([]*model.ExperimentResult, error) {
+	var results []*model.ExperimentResult
+	if err := r.db.Preload("Model").Where("experiment_id = ?", experimentID).Find(&results).Error; err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+

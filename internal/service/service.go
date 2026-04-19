@@ -132,6 +132,7 @@ type ChapterOutline struct {
 
 // buildOutlinePrompt 构建大纲提示词
 func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutlineRequest) string {
+	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("请为小说《%s》生成一个详细的大纲。\n\n", novel.Title))
 
@@ -221,6 +222,7 @@ func (s *NovelService) GenerateChapter(req *GenerateChapterRequest) (*model.Chap
 
 // buildChapterPrompt 构建章节提示词
 func (s *NovelService) buildChapterPrompt(novel *model.Novel, req *GenerateChapterRequest, recentChapters []*model.Chapter) string {
+	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("请为小说《%s》撰写第%d章。\n\n", novel.Title, req.ChapterNo))
 
@@ -278,6 +280,7 @@ func countChineseChars(text string) int {
 func (s *NovelService) updateNovelStats(novelID uint) {
 	chapters, _ := s.chapterRepo.ListByNovel(novelID)
 
+	var totalWords int
 	for _, ch := range chapters {
 		totalWords += ch.WordCount
 	}
@@ -314,6 +317,7 @@ func (s *NovelService) extractPlotPoints(chapter *model.Chapter) {
 		return
 	}
 
+	var plotResult struct {
 		PlotPoints []struct {
 			Type        string   `json:"type"`
 			Description string   `json:"description"`
@@ -406,6 +410,10 @@ func (s *AIService) logUsage(config *model.TaskModelConfig, prompt, result strin
 }
 
 // min 返回较小值
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
 	return b
 }
 
@@ -431,7 +439,21 @@ func NewQualityService(
 	}
 }
 
+// QualityReport 质量报告
+type QualityReport struct {
+	OverallScore float64           `json:"overall_score"`
+	Issues      []QualityIssue    `json:"issues"`
+	Suggestions []string          `json:"suggestions"`
+}
 
+// QualityIssue 质量问题
+type QualityIssue struct {
+	Type        string `json:"type"`
+	Severity    string `json:"severity"`
+	Description string `json:"description"`
+	Location     string `json:"location"`
+	Suggestion  string `json:"suggestion"`
+}
 
 // CheckChapterQuality 检查章节质量
 func (s *QualityService) CheckChapterQuality(chapterID uint) (*QualityReport, error) {
@@ -628,6 +650,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint) ([]*model.StoryboardShot
 		return nil, err
 	}
 
+	var content string
 	if video.ChapterID != nil {
 		chapter, _ := s.chapterRepo.GetByID(*video.ChapterID)
 		if chapter != nil {
@@ -664,6 +687,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint) ([]*model.StoryboardShot
 
 // buildStoryboardPrompt 构建分镜提示词
 func (s *VideoService) buildStoryboardPrompt(video *model.Video, content string) string {
+	var sb strings.Builder
 
 	sb.WriteString("请根据以下内容生成分镜脚本：\n\n")
 
@@ -729,3 +753,62 @@ func NewModelService(
 		experimentRepo: experimentRepo,
 	}
 }
+
+	var selected *model.AIModel
+	switch strategy {
+	case "quality_first":
+		selected = selectByQuality(models)
+	case "cost_first":
+		selected = selectByCost(models)
+	default: // balanced
+		selected = selectBalanced(models)
+	}
+
+	return selected, nil
+}
+
+func selectByQuality(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		score := m.Quality
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectByCost(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestCost := 999999.0
+
+	for _, m := range models {
+		if m.CostPer1K < bestCost {
+			bestCost = m.CostPer1K
+			best = m
+		}
+	}
+
+	return best
+}
+
+func selectBalanced(models []*model.AIModel) *model.AIModel {
+	var best *model.AIModel
+	bestScore := 0.0
+
+	for _, m := range models {
+		// 质量/成本比
+		score := m.Quality / m.CostPer1K
+		if score > bestScore {
+			bestScore = score
+			best = m
+		}
+	}
+
+	return best
+}
+
