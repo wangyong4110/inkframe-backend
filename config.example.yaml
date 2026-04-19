@@ -1,0 +1,79 @@
+# InkFrame Server Configuration
+
+# 服务器配置
+server:
+  host: "0.0.0.0"
+  port: 8080
+  mode: "debug"  # debug, release, test
+  read_timeout: 30s
+  write_timeout: 30s
+  max_header_bytes: 1048576
+  shutdown_timeout: 10s
+
+# 数据库配置
+database:
+  driver: "mysql"
+  host: "localhost"
+  port: 3306
+  database: "inkframe"
+  username: "root"
+  password: "password"
+  charset: "utf8mb4"
+  max_idle_conns: 10
+  max_open_conns: 100
+  conn_max_lifetime: 3600s
+  table_prefix: "ink_"
+
+# Redis配置
+redis:
+  host: "localhost"
+  port: 6379
+  password: ""
+  db: 0
+  pool_size: 100
+
+# AI模型配置
+ai:
+  openai:
+    api_key: ""
+    endpoint: "https://api.openai.com/v1"
+    model: "gpt-4"
+    max_tokens: 4096
+  
+  anthropic:
+    api_key: ""
+    endpoint: "https://api.anthropic.com/v1"
+    model: "claude-3-opus"
+  
+  google:
+    api_key: ""
+    endpoint: "https://generativelanguage.googleapis.com/v1"
+    model: "gemini-pro"
+  
+  default:
+    temperature: 0.7
+    top_p: 0.9
+    top_k: 40
+
+# 文件存储配置
+storage:
+  type: "minio"  # minio, local, s3
+  endpoint: "localhost:9000"
+  access_key: "minioadmin"
+  secret_key: "minioadmin"
+  bucket: "inkframe"
+  region: "us-east-1"
+  base_url: "http://localhost:9000"
+
+# 向量数据库配置
+vector_db:
+  type: "weaviate"  # weaviate, qdrant, chromadb
+  endpoint: "localhost:8080"
+  api_key: ""
+  index_name: "inkframe"
+
+# 日志配置
+logger:
+  level: "info"  # debug, info, warn, error
+  format: "json"  # json, text
+  output_path: "stdout"
