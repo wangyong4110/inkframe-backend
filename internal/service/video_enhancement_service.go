@@ -594,8 +594,8 @@ func (s *LoRAService) GetCharacterLoRA(characterID uint) (*LoRAModel, error) {
 
 // AIProvider AI提供者接口
 type AIProvider interface {
-	Generate(ctx context.Context, req *ai.ai.GenerateRequest) (*ai.GenerateResponse, error)
-	ImageGenerate(ctx context.Context, req *ai.ai.GenerateRequest) (*ai.ImageResponse, error)
+	Generate(ctx context.Context, req *ai.GenerateRequest) (*ai.GenerateResponse, error)
+	ImageGenerate(ctx context.Context, req *ai.GenerateRequest) (*ai.ImageResponse, error)
 }
 
 // ============================================
