@@ -1,9 +1,9 @@
 package service
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
+	"gorm.io/gorm"
 	"math/rand"
 	"strings"
 	"time"
@@ -17,7 +17,7 @@ import (
 type NovelService struct {
 	novelRepo   *repository.NovelRepository
 	chapterRepo *repository.ChapterRepository
-	aiService  *AIService
+	aiService   *AIService
 }
 
 func NewNovelService(
@@ -28,16 +28,16 @@ func NewNovelService(
 	return &NovelService{
 		novelRepo:   novelRepo,
 		chapterRepo: chapterRepo,
-		aiService:  aiService,
+		aiService:   aiService,
 	}
 }
 
 // CreateNovelRequest 创建小说请求
 type CreateNovelRequest struct {
-	Title       string  `json:"title" binding:"required"`
-	Description string  `json:"description"`
-	Genre       string  `json:"genre" binding:"required"`
-	WorldviewID *uint   `json:"worldview_id"`
+	Title       string `json:"title" binding:"required"`
+	Description string `json:"description"`
+	Genre       string `json:"genre" binding:"required"`
+	WorldviewID *uint  `json:"worldview_id"`
 }
 
 // Create 创建小说
@@ -80,7 +80,7 @@ func (s *NovelService) DeleteNovel(id uint) error {
 
 // GenerateOutlineRequest 生成大纲请求
 type GenerateOutlineRequest struct {
-	NovelID     uint     `json:"novel_id" binding:"required"`
+	NovelID    uint     `json:"novel_id" binding:"required"`
 	Prompt     string   `json:"prompt"`
 	ChapterNum int      `json:"chapter_num" binding:"required"`
 	Keywords   []string `json:"keywords"`
@@ -123,10 +123,10 @@ type OutlineResult struct {
 
 // ChapterOutline 章节大纲
 type ChapterOutline struct {
-	ChapterNo int    `json:"chapter_no"`
-	Title     string `json:"title"`
-	Summary   string `json:"summary"`
-	WordCount int    `json:"word_count"`
+	ChapterNo  int      `json:"chapter_no"`
+	Title      string   `json:"title"`
+	Summary    string   `json:"summary"`
+	WordCount  int      `json:"word_count"`
 	PlotPoints []string `json:"plot_points"`
 }
 
@@ -158,10 +158,10 @@ func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutli
 
 // GenerateChapterRequest 生成章节请求
 type GenerateChapterRequest struct {
-	NovelID   uint    `json:"novel_id" binding:"required"`
-	ChapterNo int     `json:"chapter_no" binding:"required"`
-	Prompt    string  `json:"prompt"`
-	MaxTokens int     `json:"max_tokens"`
+	NovelID   uint   `json:"novel_id" binding:"required"`
+	ChapterNo int    `json:"chapter_no" binding:"required"`
+	Prompt    string `json:"prompt"`
+	MaxTokens int    `json:"max_tokens"`
 }
 
 // GenerateChapter 生成章节
@@ -396,14 +396,14 @@ func (s *AIService) logUsage(config *model.TaskModelConfig, prompt, result strin
 	outputTokens := countChineseChars(result)
 
 	log := &model.ModelUsageLog{
-		ModelID:     config.PrimaryModelID,
-		TaskType:    "generation",
-		InputTokens: inputTokens,
+		ModelID:      config.PrimaryModelID,
+		TaskType:     "generation",
+		InputTokens:  inputTokens,
 		OutputTokens: outputTokens,
-		TotalTokens: inputTokens + outputTokens,
-		Cost:        float64(inputTokens+outputTokens) / 1000 * 0.01,
-		Latency:     1.5,
-		Success:     true,
+		TotalTokens:  inputTokens + outputTokens,
+		Cost:         float64(inputTokens+outputTokens) / 1000 * 0.01,
+		Latency:      1.5,
+		Success:      true,
 	}
 
 	s.modelRepo.LogUsage(log)
@@ -419,7 +419,7 @@ func min(a, b int) int {
 
 // QualityService 质量服务
 type QualityService struct {
-	novelRepo    *repository.NovelRepository
+	novelRepo     *repository.NovelRepository
 	chapterRepo   *repository.ChapterRepository
 	characterRepo *repository.CharacterRepository
 	aiService     *AIService
@@ -432,18 +432,18 @@ func NewQualityService(
 	aiService *AIService,
 ) *QualityService {
 	return &QualityService{
-		novelRepo:    novelRepo,
-		chapterRepo: chapterRepo,
+		novelRepo:     novelRepo,
+		chapterRepo:   chapterRepo,
 		characterRepo: characterRepo,
-		aiService:   aiService,
+		aiService:     aiService,
 	}
 }
 
 // QualityReport 质量报告
 type QualityReport struct {
-	OverallScore float64           `json:"overall_score"`
-	Issues      []QualityIssue    `json:"issues"`
-	Suggestions []string          `json:"suggestions"`
+	OverallScore float64        `json:"overall_score"`
+	Issues       []QualityIssue `json:"issues"`
+	Suggestions  []string       `json:"suggestions"`
 }
 
 // QualityIssue 质量问题
@@ -451,7 +451,7 @@ type QualityIssue struct {
 	Type        string `json:"type"`
 	Severity    string `json:"severity"`
 	Description string `json:"description"`
-	Location     string `json:"location"`
+	Location    string `json:"location"`
 	Suggestion  string `json:"suggestion"`
 }
 
@@ -469,8 +469,8 @@ func (s *QualityService) CheckChapterQuality(chapterID uint) (*QualityReport, er
 
 	report := &QualityReport{
 		OverallScore: 0.85,
-		Issues:      []QualityIssue{},
-		Suggestions: []string{},
+		Issues:       []QualityIssue{},
+		Suggestions:  []string{},
 	}
 
 	// 1. 检查角色一致性
@@ -603,7 +603,7 @@ func (s *QualityService) generateSuggestions(issues []QualityIssue) []string {
 
 // VideoService 视频服务
 type VideoService struct {
-	videoRepo       *repository.VideoRepository
+	videoRepo      *repository.VideoRepository
 	storyboardRepo *repository.StoryboardRepository
 	chapterRepo    *repository.ChapterRepository
 	aiService      *AIService
@@ -616,7 +616,7 @@ func NewVideoService(
 	aiService *AIService,
 ) *VideoService {
 	return &VideoService{
-		videoRepo:       videoRepo,
+		videoRepo:      videoRepo,
 		storyboardRepo: storyboardRepo,
 		chapterRepo:    chapterRepo,
 		aiService:      aiService,
@@ -626,13 +626,13 @@ func NewVideoService(
 // CreateVideo 创建视频
 func (s *VideoService) CreateVideo(novelID uint, chapterID *uint) (*model.Video, error) {
 	video := &model.Video{
-		UUID:       uuid.New().String(),
-		NovelID:    novelID,
-		ChapterID:  chapterID,
-		Title:      "新视频",
-		Status:     "planning",
-		FrameRate:  24,
-		Resolution: "1080p",
+		UUID:        uuid.New().String(),
+		NovelID:     novelID,
+		ChapterID:   chapterID,
+		Title:       "新视频",
+		Status:      "planning",
+		FrameRate:   24,
+		Resolution:  "1080p",
 		AspectRatio: "16:9",
 	}
 
@@ -717,14 +717,14 @@ func (s *VideoService) parseStoryboardResult(videoID uint, result string) []*mod
 	// 简化解析（实际应该更复杂）
 	for i := 1; i <= 5; i++ {
 		shot := &model.StoryboardShot{
-			UUID:       uuid.New().String(),
-			VideoID:    videoID,
-			ShotNo:     i,
-			CameraType: "static",
+			UUID:        uuid.New().String(),
+			VideoID:     videoID,
+			ShotNo:      i,
+			CameraType:  "static",
 			CameraAngle: "eye_level",
-			ShotSize:   "medium",
-			Duration:   5.0,
-			Status:     "pending",
+			ShotSize:    "medium",
+			Duration:    5.0,
+			Status:      "pending",
 		}
 		shots = append(shots, shot)
 	}
@@ -734,9 +734,9 @@ func (s *VideoService) parseStoryboardResult(videoID uint, result string) []*mod
 
 // ModelService 模型服务
 type ModelService struct {
-	modelRepo *repository.AIModelRepository
-	providerRepo *repository.ModelProviderRepository
-	taskRepo  *repository.TaskModelConfigRepository
+	modelRepo      *repository.AIModelRepository
+	providerRepo   *repository.ModelProviderRepository
+	taskRepo       *repository.TaskModelConfigRepository
 	experimentRepo *repository.ModelComparisonRepository
 }
 
@@ -747,9 +747,9 @@ func NewModelService(
 	experimentRepo *repository.ModelComparisonRepository,
 ) *ModelService {
 	return &ModelService{
-		modelRepo: modelRepo,
-		providerRepo: providerRepo,
-		taskRepo:  taskRepo,
+		modelRepo:      modelRepo,
+		providerRepo:   providerRepo,
+		taskRepo:       taskRepo,
 		experimentRepo: experimentRepo,
 	}
 }
@@ -899,3 +899,4 @@ func selectBalanced(models []*model.AIModel) *model.AIModel {
 	}
 
 	return best
+}
