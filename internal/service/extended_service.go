@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/inkframe/inkframe-backend/internal/model"
-	"github.com/inkframe/inkframe/inkframe-backend/internal/repository"
+	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/vector"
 	"strings"
 )
