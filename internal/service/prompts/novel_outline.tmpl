@@ -10,22 +10,64 @@
 - 目标读者：{{.TargetAudience}}
 - 预期章节数：{{.ChapterCount}}章
 
+# 叙事结构要求
+请严格遵循三幕结构设计：
+- **第一幕（铺垫期）**：约占总章节数的 25%，建立世界观、介绍主要角色、引出核心冲突
+- **第二幕（发展期）**：约占总章节数的 50%，冲突升级、角色成长、多线并进
+- **第三幕（高潮+结局）**：约占总章节数的 25%，矛盾总爆发、高潮、解决与结局
+
+# 张力曲线要求
+- 每章需标注情感张力值（1-10），整体应形成有起伏的曲线
+- 第一幕：张力从 3-5 逐步上升
+- 第二幕：多个小高潮（张力 7-8），中间有低谷（4-5）用于喘息
+- 第三幕高潮章节：张力达到 9-10
+- 结局章节：张力回落至 3-4
+
+# 伏笔映射要求
+- 每个在某章埋下的伏笔，必须对应一个未来章节的兑现点
+- 至少设计 3 个贯穿全文的伏笔
+- 伏笔类型：object（神秘物品）/ person（神秘人物）/ event（重大事件）/ ability（隐藏能力）/ revelation（真相揭示）
+
+# 章节钩子要求
+- 每章末尾必须有一个悬念钩子（Hook），驱动读者继续阅读
+- 钩子类型：question（疑问悬念）/ cliffhanger（悬崖钩子）/ revelation（信息揭示）/ threat（威胁降临）
+
+# 冲突设计要求
+请设计三个层次的冲突并标注发展阶段：
+- **internal**（内心冲突）：角色内心的矛盾与成长
+- **interpersonal**（人际冲突）：角色之间的对立与博弈
+- **social**（社会/环境冲突）：与更大外部力量的对抗
+
 # 创作要求
 1. 大纲结构清晰，每章有明确的故事推进
-2. 角色性格鲜明，成长轨迹合理
-3. 剧情有起伏，有伏笔和反转
-4. 情感线丰富，不只有主线剧情
+2. 角色性格鲜明，成长轨迹符合三幕结构
+3. 剧情有起伏，伏笔与反转精心设计
+4. 情感线丰富，与主线剧情相互交织
 5. 世界观设定完整，逻辑自洽
 
 # 大纲格式要求
-请按以下JSON格式返回：
+请按以下JSON格式返回，不要包含任何 markdown 代码块（```）：
 
-```json
 {
   "title": "{{.Title}}",
   "genre": "{{.Genre}}",
   "theme": "{{.Theme}}",
   "summary": "故事概述（200-300字）",
+  "structure": {
+    "act1_end_chapter": 章节号,
+    "act2_start_chapter": 章节号,
+    "climax_chapter": 章节号,
+    "act3_start_chapter": 章节号
+  },
+  "foreshadow_map": [
+    {
+      "id": 1,
+      "type": "object/person/event/ability/revelation",
+      "description": "伏笔描述",
+      "plant_chapter": 埋下的章节号,
+      "payoff_chapter": 兑现的章节号
+    }
+  ],
   "characters": [
     {
       "name": "角色名称",
@@ -49,10 +91,14 @@
       "word_count": 2500,
       "plot_points": ["剧情点1", "剧情点2", "剧情点3"],
       "characters": ["角色1", "角色2"],
-      "emotional_tone": "情感基调"
+      "emotional_tone": "情感基调",
+      "tension_level": 3,
+      "hook": "章末悬念钩子描述",
+      "hook_type": "question/cliffhanger/revelation/threat",
+      "conflict_type": "internal/interpersonal/social",
+      "act": 1
     }
   ]
 }
-```
 
 请开始创作：

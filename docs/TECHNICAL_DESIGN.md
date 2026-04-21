@@ -1794,3 +1794,179 @@ GET    /api/model-performance/:model_id/trends  # 获取性能趋势
 
 **InkFrame v2.0** - 完整的产品文档和用户体验设计 📘✨
 
+---
+
+## 🔌 MCP 工具管理系统
+
+### 概述
+
+MCP（Model Context Protocol）是 Anthropic 提出的开放协议，用于统一 AI 模型与外部工具/服务的连接方式。InkFrame 实现了完整的 MCP 工具注册、管理和模型绑定功能。
+
+### 数据模型
+
+```go
+// MCP 工具注册表
+type McpTool struct {
+    ID            uint   `json:"id" gorm:"primaryKey"`
+    Name          string `json:"name" gorm:"uniqueIndex;not null"`
+    DisplayName   string `json:"display_name"`
+    Description   string `json:"description"`
+    TransportType string `json:"transport_type"` // http | sse | stdio
+    Endpoint      string `json:"endpoint"`
+    Headers       string `json:"headers"`        // JSON 字符串
+    Env           string `json:"env"`             // JSON 字符串
+    Timeout       int    `json:"timeout" gorm:"default:30"` // 秒
+    IsActive      bool   `json:"is_active"`
+    IsSystem      bool   `json:"is_system"`       // 系统内置工具不可删除
+    Schema        string `json:"schema"`          // JSON Schema 描述
+}
+
+// 模型-工具绑定关系（多对多）
+type ModelMcpBinding struct {
+    ID        uint `json:"id" gorm:"primaryKey"`
+    ModelID   uint `json:"model_id" gorm:"uniqueIndex:idx_model_mcp"`
+    McpToolID uint `json:"mcp_tool_id" gorm:"uniqueIndex:idx_model_mcp"`
+    Enabled   bool `json:"enabled"`
+}
+```
+
+### 传输类型
+
+| 类型 | 说明 | 适用场景 |
+|------|------|---------|
+| `http` | 标准 HTTP REST 接口 | Web API 工具 |
+| `sse` | Server-Sent Events 流式 | 实时推送工具 |
+| `stdio` | 标准输入输出 | 本地命令行工具 |
+
+### API 接口
+
+```
+GET    /api/v1/mcp-tools               # 列出所有工具
+POST   /api/v1/mcp-tools               # 注册工具
+PUT    /api/v1/mcp-tools/:id           # 更新工具
+DELETE /api/v1/mcp-tools/:id           # 删除（系统工具不可删）
+POST   /api/v1/mcp-tools/:id/test      # 连通性探测
+GET    /api/v1/mcp-tools/:id/models    # 获取绑定此工具的模型
+
+GET    /api/v1/models/:id/mcp-tools           # 获取模型绑定的工具
+POST   /api/v1/models/:id/mcp-tools           # 绑定工具到模型（幂等）
+DELETE /api/v1/models/:id/mcp-tools/:tool_id  # 解绑
+```
+
+### 连通性测试
+
+对 `http` / `sse` 工具发送 GET 探测请求，返回延迟和状态；`stdio` 工具直接返回 ok（无法远程探测）。
+
+```go
+// 探测逻辑（mcp_service.go）
+client := &http.Client{Timeout: time.Duration(tool.Timeout) * time.Second}
+resp, err := client.Get(tool.Endpoint)
+// 返回 { status: "ok"|"error", latency_ms: N }
+```
+
+### 安全约束
+
+- 系统内置工具（`is_system=true`）不可删除
+- 删除工具时先级联删除所有绑定关系，保持数据完整性
+- Timeout 存储单位为**秒**（前端 UI 单位为毫秒，转换在前端完成）
+
+---
+
+## 🎬 视频质量档位与镜头生成模式
+
+### 质量档位（QualityTier）
+
+视频创建时可指定质量档位，影响后续图像/视频生成的分辨率和质量参数：
+
+| 档位 | 值 | 说明 |
+|------|----|------|
+| 草稿 | `draft` | 快速预览，低分辨率，成本最低 |
+| 预览 | `preview` | 标准质量，默认选项 |
+| 正式 | `final` | 最高质量，用于最终交付 |
+
+```go
+type Video struct {
+    // ...
+    QualityTier string `json:"quality_tier" gorm:"default:preview"`
+}
+
+type CreateVideoRequest struct {
+    // ...
+    QualityTier string `json:"quality_tier"` // draft | preview | final
+    ChapterID   *uint  `json:"chapter_id"`
+}
+```
+
+### 镜头生成模式（GenerationMode）
+
+每个分镜镜头可独立指定生成方式：
+
+| 模式 | 值 | 说明 |
+|------|----|------|
+| 静态 | `static` | 图像 + Ken Burns 效果，成本低 |
+| 视频 | `video` | AI 视频生成（Kling/Seedance），成本高 |
+
+```go
+type StoryboardShot struct {
+    // ...
+    GenerationMode string `json:"generation_mode"` // static | video
+    ImageURL       string `json:"image_url"`
+    VideoURL       string `json:"video_url"`
+}
+```
+
+### 镜头生成 API
+
+```
+# 单镜头异步生成
+POST /api/v1/videos/:id/shots/:shot_id/generate
+
+# 批量异步生成（支持质量档位覆盖）
+POST /api/v1/videos/:id/shots/batch-generate
+Body: { "shot_ids": [1,2,3], "quality_tier": "preview" }
+```
+
+生成任务以 goroutine 异步执行，HTTP 立即返回 202 Accepted，前端通过轮询 `/videos/:id/shots` 获取状态。
+
+---
+
+## 🖥️ 前端 UX 增强
+
+### 全局 Toast 通知
+
+模块级 `ref` 单例（无需 Pinia），在 `composables/useToast.ts` 中实现：
+
+```typescript
+// 四类通知，自动消失（error 5s，其余 3s）
+toast.success('章节已保存')
+toast.error('保存失败：' + e.message)
+toast.warning('...')
+toast.info('...')
+```
+
+`AppToast.vue` 使用 `<Teleport to="body">` + `<TransitionGroup>` 挂载到 body，避免 z-index 问题。
+
+### 未保存离开保护
+
+`composables/useUnsavedGuard.ts` 同时处理：
+- Vue Router `onBeforeRouteLeave` 钩子
+- 浏览器 `beforeunload` 事件（刷新/关闭标签页）
+
+### 防抖自动保存
+
+`composables/useAutosave.ts`：
+- 监听指定数据源变化，防抖 2s 后触发保存
+- `{ immediate: false }` 避免初始化时误触发
+- 返回 `lastSavedAt`（上次保存时间）和 `autoSaving`（保存中状态）
+
+### AbortController 请求超时
+
+`composables/useApi.ts` 中所有请求内置 120 秒超时（AI 生成任务可能较慢），超时后抛出 AbortError 并由全局 Toast 展示错误信息。
+
+### 键盘快捷键
+
+| 快捷键 | 功能 |
+|--------|------|
+| `Ctrl+S` / `Cmd+S` | 章节编辑器立即保存 |
+| `Escape` | 关闭弹出对话框 |
+

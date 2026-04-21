@@ -530,8 +530,8 @@ var DescriptionDensityPrompts = map[string]string{
 	"rich":     "细腻丰富的描写，环境、动作、心理全方位展现",
 }
 
-// BuildStylePrompt 构建风格提示词
-func (s *StyleService) BuildStylePrompt(config *StyleConfig) string {
+// buildStylePromptInternal 构建风格提示词（内部）
+func (s *StyleService) buildStylePromptInternal(config *StyleConfig) string {
 	var prompts []string
 
 	if voice, ok := NarrativeVoicePrompts[config.NarrativeVoice]; ok {
@@ -592,8 +592,8 @@ func (s *StyleService) MergeStyleConfig(base, override *StyleConfig) *StyleConfi
 	return &result
 }
 
-// GetDefaultStyle 获取默认风格
-func (s *StyleService) GetDefaultStyle() *StyleConfig {
+// getDefaultStyleConfig 获取默认风格配置（内部）
+func (s *StyleService) getDefaultStyleConfig() *StyleConfig {
 	return &StyleConfig{
 		NarrativeVoice:     "third_limited",
 		NarrativeDistance:  "medium",
@@ -757,8 +757,8 @@ func (s *GenerationContextService) generateGlobalSummary(ctx *GenerationContext)
 	return sb.String()
 }
 
-// BuildGenerationPrompt 构建带上下文的生成提示词
-func (s *GenerationContextService) BuildGenerationPrompt(ctx *GenerationContext, chapterNo int, style *StyleConfig, extraPrompt string) string {
+// buildGenerationPrompt 构建带上下文的生成提示词（内部）
+func (s *GenerationContextService) buildGenerationPrompt(ctx *GenerationContext, chapterNo int, style *StyleConfig, extraPrompt string) string {
 	var sb strings.Builder
 
 	// 1. 全局摘要
@@ -769,7 +769,7 @@ func (s *GenerationContextService) BuildGenerationPrompt(ctx *GenerationContext,
 	if style != nil {
 		styleSvc := NewStyleService(nil)
 		sb.WriteString("【风格要求】\n")
-		sb.WriteString(styleSvc.BuildStylePrompt(style))
+		sb.WriteString(styleSvc.buildStylePromptInternal(style))
 		sb.WriteString("\n")
 	}
 

@@ -49,7 +49,30 @@ ai:
     api_key: ""
     endpoint: "https://generativelanguage.googleapis.com/v1"
     model: "gemini-pro"
-  
+
+  # 豆包（字节跳动火山引擎 Ark），图像生成使用 Seedream
+  doubao:
+    api_key: ""
+    endpoint: "https://ark.volces.com/api/v3"
+    model: "doubao-pro-32k"
+
+  # DeepSeek
+  deepseek:
+    api_key: ""
+    endpoint: "https://api.deepseek.com/v1"
+    model: "deepseek-chat"
+
+  # 通义千问（阿里云百炼/DashScope），图像生成使用 Wan 万象
+  qianwen:
+    api_key: ""
+    endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    model: "qwen-plus"
+
+  # Seedance 视频生成（字节跳动火山引擎 Ark）
+  seedance:
+    api_key: ""      # 与豆包共用同一个 Volcengine API Key
+    endpoint: "https://ark.volces.com/api/v3"
+
   default:
     temperature: 0.7
     top_p: 0.9

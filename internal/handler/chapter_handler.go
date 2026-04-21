@@ -157,16 +157,27 @@ func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 		return
 	}
 
-	chapter, err := h.chapterService.GenerateChapter(req.NovelID, &req)
+	// 支持通过 Header 临时覆盖 AI 模型/provider
+	if override := c.GetHeader("X-Model-Override"); override != "" && req.ModelOverride == "" {
+		req.ModelOverride = override
+	}
+
+	chapter, err := h.chapterService.GenerateChapter(getTenantID(c), req.NovelID, &req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
+	modelUsed := req.ModelOverride
+	if modelUsed == "" {
+		modelUsed = h.chapterService.GetDefaultProviderName()
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    chapter,
+		"code":       0,
+		"message":    "success",
+		"data":       chapter,
+		"model_used": modelUsed,
 	})
 }
 
@@ -187,7 +198,7 @@ func (h *ChapterHandler) RegenerateChapter(c *gin.Context) {
 		return
 	}
 
-	chapter, err := h.chapterService.RegenerateChapter(uint(id), req.Prompt)
+	chapter, err := h.chapterService.RegenerateChapter(getTenantID(c), uint(id), req.Prompt)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -225,8 +236,16 @@ func (h *ChapterHandler) GetVersions(c *gin.Context) {
 // RestoreVersion 恢复版本
 // POST /api/v1/chapters/:id/versions/:version_no/restore
 func (h *ChapterHandler) RestoreVersion(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 32)
-	versionNo, _ := strconv.Atoi(c.Param("version_no"))
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chapter id"})
+		return
+	}
+	versionNo, err := strconv.Atoi(c.Param("version_no"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid version no"})
+		return
+	}
 
 	chapter, err := h.versionService.RestoreVersion(uint(id), versionNo)
 	if err != nil {
@@ -238,6 +257,113 @@ func (h *ChapterHandler) RestoreVersion(c *gin.Context) {
 		"code":    0,
 		"message": "success",
 		"data":    chapter,
+	})
+}
+
+// GetChapterByNo 根据章节号获取章节
+// GET /api/v1/novels/:novel_id/chapters/:chapter_no
+func (h *ChapterHandler) GetChapterByNo(c *gin.Context) {
+	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chapter no"})
+		return
+	}
+
+	chapter, err := h.chapterService.GetChapterByNo(uint(novelId), chapterNo)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "chapter not found"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data":    chapter,
+	})
+}
+
+// UpdateChapterByNo 根据章节号更新章节
+// PUT /api/v1/novels/:novel_id/chapters/:chapter_no
+func (h *ChapterHandler) UpdateChapterByNo(c *gin.Context) {
+	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chapter no"})
+		return
+	}
+
+	var req model.UpdateChapterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	chapter, err := h.chapterService.UpdateChapterByNo(uint(novelId), chapterNo, &req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data":    chapter,
+	})
+}
+
+// DeleteChapterByNo 根据章节号删除章节
+// DELETE /api/v1/novels/:novel_id/chapters/:chapter_no
+func (h *ChapterHandler) DeleteChapterByNo(c *gin.Context) {
+	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chapter no"})
+		return
+	}
+
+	if err := h.chapterService.DeleteChapterByNo(uint(novelId), chapterNo); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+	})
+}
+
+// GetQualityReport 获取质量报告
+// GET /api/v1/chapters/:id/quality-report
+func (h *ChapterHandler) GetQualityReport(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chapter id"})
+		return
+	}
+
+	report, err := h.qualityService.CheckChapter(uint(id))
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data":    report,
 	})
 }
 
@@ -275,7 +401,7 @@ func (h *ChapterHandler) ApproveChapter(c *gin.Context) {
 	var req struct {
 		Comment string `json:"comment"`
 	}
-	c.ShouldBindJSON(&req)
+	_ = c.ShouldBindJSON(&req) // comment is optional; ignore bind errors
 
 	if err := h.chapterService.ApproveChapter(uint(id), req.Comment); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})

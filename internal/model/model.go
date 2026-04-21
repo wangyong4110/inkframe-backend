@@ -9,12 +9,13 @@ import (
 type Novel struct {
 	ID          uint   `json:"id" gorm:"primaryKey"`
 	UUID        string `json:"uuid" gorm:"uniqueIndex;size:36"`
+	TenantID    uint   `json:"tenant_id" gorm:"index;index:idx_novel_tenant_status,priority:1;not null;default:1"`
 	Title       string `json:"title" gorm:"size:255;not null"`
 	Description string `json:"description" gorm:"type:text"`
 	Genre       string `json:"genre" gorm:"size:50;index"`
 
 	// 状态
-	Status string `json:"status" gorm:"size:20;index;default:planning"`
+	Status string `json:"status" gorm:"size:20;index;index:idx_novel_tenant_status,priority:2;default:planning"`
 	// planning=规划中, writing=创作中, paused=暂停, completed=已完成, archived=已归档
 
 	// 统计
@@ -33,6 +34,10 @@ type Novel struct {
 	MaxTokens   int     `json:"max_tokens" gorm:"default:4096"`
 	StylePrompt string  `json:"style_prompt" gorm:"type:text"`
 
+	// 风格配置
+	ImageStyle     string `json:"image_style" gorm:"size:50"`        // 视觉/图片风格，如 anime/realistic/ink_painting
+	ReferenceStyle string `json:"reference_style" gorm:"type:text"`  // 参考作品（书名、URL 或描述）
+
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -46,10 +51,10 @@ func (Novel) TableName() string {
 // Chapter 章节
 type Chapter struct {
 	ID        uint   `json:"id" gorm:"primaryKey"`
-	NovelID   uint   `json:"novel_id" gorm:"index;not null"`
+	NovelID   uint   `json:"novel_id" gorm:"index;uniqueIndex:idx_chapter_novel_no,priority:1;not null"`
 	Novel     *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
 	UUID      string `json:"uuid" gorm:"uniqueIndex;size:36"`
-	ChapterNo int    `json:"chapter_no" gorm:"not null"`
+	ChapterNo int    `json:"chapter_no" gorm:"uniqueIndex:idx_chapter_novel_no,priority:2;not null"`
 	Title     string `json:"title" gorm:"size:255"`
 
 	// 内容
@@ -181,8 +186,9 @@ type Character struct {
 	Background  string `json:"background" gorm:"type:text"`
 
 	// 能力与属性
-	Abilities  string `json:"abilities" gorm:"type:text"`  // JSON
-	Attributes string `json:"attributes" gorm:"type:text"` // JSON
+	Abilities       string `json:"abilities" gorm:"type:text"`        // JSON array [{name,level,description}]
+	PersonalityTags string `json:"personality_tags" gorm:"type:text"` // JSON array of tag strings
+	Attributes      string `json:"attributes" gorm:"type:text"`       // JSON
 
 	// 角色关系（JSON）
 	Relations string `json:"relations" gorm:"type:text"`
@@ -193,7 +199,13 @@ type Character struct {
 	// 视觉设计
 	VisualDesign string `json:"visual_design" gorm:"type:text"` // JSON: 包含图像URL、表情库等
 
-	// 封面
+	// 三视图（正面、侧面、背面参考图）
+	ThreeViewFront string `json:"three_view_front" gorm:"size:1000"`
+	ThreeViewSide  string `json:"three_view_side" gorm:"size:1000"`
+	ThreeViewBack  string `json:"three_view_back" gorm:"size:1000"`
+
+	// 封面 / 头像
+	Portrait   string `json:"portrait" gorm:"size:1000"`
 	CoverImage string `json:"cover_image" gorm:"size:500"`
 
 	// 状态
@@ -397,7 +409,8 @@ func (PromptTemplate) TableName() string {
 // ModelProvider 模型提供商
 type ModelProvider struct {
 	ID          uint   `json:"id" gorm:"primaryKey"`
-	Name        string `json:"name" gorm:"size:50;uniqueIndex;not null"`
+	TenantID    uint   `json:"tenant_id" gorm:"index;default:0;comment:0=系统级,>0=租户私有;uniqueIndex:idx_provider_name_tenant"`
+	Name        string `json:"name" gorm:"size:50;not null;uniqueIndex:idx_provider_name_tenant"`
 	DisplayName string `json:"display_name" gorm:"size:100"`
 	Type        string `json:"type" gorm:"size:20"`
 	// cloud=云端, local=本地
@@ -405,7 +418,7 @@ type ModelProvider struct {
 	// API配置
 	APIEndpoint string `json:"api_endpoint" gorm:"size:500"`
 	APIKey      string `json:"api_key" gorm:"type:text"`
-	APIVersion  string `json:"api_version" gorm:"size:50"`
+	APIVersion  string `json:"api_version" gorm:"size:50"` // 也用于存储默认模型名称
 
 	// 限制
 	RateLimit int     `json:"rate_limit"` // 请求/分钟
@@ -627,8 +640,18 @@ type Video struct {
 	Status   string  `json:"status" gorm:"size:20;default:planning"`
 	Progress float64 `json:"progress" gorm:"type:decimal(5,2);default:0"`
 
+	// 质量档位
+	QualityTier string `json:"quality_tier" gorm:"size:20;default:preview"`
+	// draft=草稿(静图+Pan), preview=预览(720p短片), final=正式(1080p+)
+
 	// 成本
 	GenerationCost float64 `json:"generation_cost" gorm:"type:decimal(10,2)"`
+
+	// 异步任务追踪
+	ProviderName string `json:"provider_name" gorm:"size:50"`           // kling/seedance
+	TaskID       string `json:"task_id" gorm:"size:255;index"`           // 外部 API 任务 ID
+	ErrorMessage string `json:"error_message,omitempty" gorm:"type:text"` // 生成失败原因
+	RetryCount   int    `json:"retry_count" gorm:"default:0"`            // 已重试次数
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -641,7 +664,7 @@ func (Video) TableName() string {
 // StoryboardShot 分镜
 type StoryboardShot struct {
 	ID        uint     `json:"id" gorm:"primaryKey"`
-	VideoID   uint     `json:"video_id" gorm:"index;not null"`
+	VideoID   uint     `json:"video_id" gorm:"index;index:idx_shot_video_status,priority:1;not null"`
 	Video     *Video   `json:"video,omitempty" gorm:"foreignKey:VideoID"`
 	UUID      string   `json:"uuid" gorm:"uniqueIndex;size:36"`
 	ShotNo    int      `json:"shot_no" gorm:"not null"`
@@ -673,11 +696,30 @@ type StoryboardShot struct {
 	Frames         string `json:"frames" gorm:"type:text"` // JSON数组
 
 	// 状态
-	Status   string  `json:"status" gorm:"size:20;default:pending"`
+	Status   string  `json:"status" gorm:"size:20;index:idx_shot_video_status,priority:2;default:pending"`
 	Progress float64 `json:"progress" gorm:"type:decimal(5,2);default:0"`
 
 	// 文件
 	ClipPath string `json:"clip_path" gorm:"size:500"`
+
+	// per-shot 视频生成
+	ShotTaskID       string  `json:"shot_task_id" gorm:"size:255;index"`
+	ShotProviderName string  `json:"shot_provider_name" gorm:"size:50"`
+	ConsistencyScore float64 `json:"consistency_score" gorm:"type:decimal(4,3)"`
+	AudioPath        string  `json:"audio_path" gorm:"size:500"`
+	RetryCount       int     `json:"retry_count" gorm:"default:0"`
+
+	// 生成模式
+	GenerationMode string `json:"generation_mode" gorm:"size:20;default:static"`
+	// static=静图+Ken Burns效果, video=AI视频生成
+
+	// AI 生成结果 URL（前端展示用）
+	ImageURL string `json:"image_url" gorm:"size:1000"` // AI生成图片URL
+	VideoURL string `json:"video_url" gorm:"size:1000"` // AI生成视频URL
+
+	// 时序连贯与参考帧
+	ReferenceImageURL string `json:"reference_image_url" gorm:"size:500"` // 前一镜头最后一帧URL，用于时序连贯
+	FrameImageURL     string `json:"frame_image_url" gorm:"size:500"`      // 本镜头AI图像生成结果URL，传给Kling image-to-video
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -876,4 +918,228 @@ type FeedbackRecord struct {
 
 func (FeedbackRecord) TableName() string {
 	return "ink_feedback_record"
+}
+
+// ============================================
+// Request / Response types (used by handlers)
+// ============================================
+
+type CreateNovelRequest struct {
+	Title       string `json:"title" binding:"required"`
+	Description string `json:"description"`
+	Genre       string `json:"genre" binding:"required"`
+	WorldviewID *uint  `json:"worldview_id"`
+}
+
+type UpdateNovelRequest struct {
+	Title       string   `json:"title"`
+	Description string   `json:"description"`
+	Genre       string   `json:"genre"`
+	Status      string   `json:"status"`
+	WorldviewID *uint    `json:"worldview_id"`
+	CoverImage  string   `json:"cover_image"`
+	AIModel     string   `json:"ai_model"`
+	Temperature *float64 `json:"temperature"`
+	MaxTokens   *int     `json:"max_tokens"`
+	StylePrompt string   `json:"style_prompt"`
+}
+
+type CreateChapterRequest struct {
+	ChapterNo int    `json:"chapter_no"`
+	Title     string `json:"title"`
+	Content   string `json:"content"`
+}
+
+type UpdateChapterRequest struct {
+	Title   string `json:"title"`
+	Content string `json:"content"`
+}
+
+type GenerateChapterRequest struct {
+	NovelID       uint   `json:"novel_id" binding:"required"`
+	ChapterNo     int    `json:"chapter_no" binding:"required"`
+	Prompt        string `json:"prompt"`
+	MaxTokens     int    `json:"max_tokens"`
+	ModelOverride string `json:"model,omitempty"` // 可选：指定使用的 AI 模型/provider
+}
+
+type CreateCharacterRequest struct {
+	Name        string `json:"name" binding:"required"`
+	Role        string `json:"role"`
+	Archetype   string `json:"archetype"`
+	Background  string `json:"background"`
+	Appearance  string `json:"appearance"`
+	Personality string `json:"personality"`
+}
+
+type UpdateCharacterRequest struct {
+	Name            string        `json:"name"`
+	Role            string        `json:"role"`
+	Archetype       string        `json:"archetype"`
+	Background      string        `json:"background"`
+	Appearance      string        `json:"appearance"`
+	Personality     string        `json:"personality"`
+	CharacterArc    string        `json:"character_arc"`
+	// nil = field absent (don't update); non-nil empty = clear; non-empty = update
+	PersonalityTags []string      `json:"personality_tags"`
+	Abilities       []interface{} `json:"abilities"` // [{name,level,description}]
+	ThreeViewFront  string        `json:"three_view_front"`
+	ThreeViewSide   string        `json:"three_view_side"`
+	ThreeViewBack   string        `json:"three_view_back"`
+	Portrait        string        `json:"portrait"`
+	CoverImage      string        `json:"cover_image"`
+}
+
+type GenerateImageRequest struct {
+	Subject     string `json:"subject"`
+	Description string `json:"description"`
+	Type        string `json:"type"`
+	Emotion     string `json:"emotion"`
+	Action      string `json:"action"`
+	Style       string `json:"style"`
+}
+
+type CreateVideoRequest struct {
+	Title       string `json:"title"`
+	Resolution  string `json:"resolution"`
+	FrameRate   int    `json:"frame_rate"`
+	AspectRatio string `json:"aspect_ratio"`
+	ArtStyle    string `json:"art_style"`
+	QualityTier string `json:"quality_tier"` // draft/preview/final
+	ChapterID   *uint  `json:"chapter_id"`
+}
+
+type UpdateVideoRequest struct {
+	Title       string `json:"title"`
+	Resolution  string `json:"resolution"`
+	FrameRate   int    `json:"frame_rate"`
+	AspectRatio string `json:"aspect_ratio"`
+	ArtStyle    string `json:"art_style"`
+}
+
+type EnhancementConfig struct {
+	Type      string  `json:"type"`
+	Enabled   bool    `json:"enabled"`
+	Intensity float64 `json:"intensity,omitempty"`
+}
+
+type CreateModelProviderRequest struct {
+	Name     string `json:"name" binding:"required"`
+	Type     string `json:"type" binding:"required"`
+	BaseURL  string `json:"base_url"`
+	APIKey   string `json:"api_key"`
+	IsActive bool   `json:"is_active"`
+}
+
+type UpdateModelProviderRequest struct {
+	Name     string `json:"name"`
+	BaseURL  string `json:"base_url"`
+	APIKey   string `json:"api_key"`
+	IsActive *bool  `json:"is_active"`
+}
+
+type CreateAIModelRequest struct {
+	ProviderID uint    `json:"provider_id" binding:"required"`
+	ModelID    string  `json:"model_id" binding:"required"`
+	Name       string  `json:"name" binding:"required"`
+	TaskTypes  string  `json:"task_types"`
+	MaxTokens  int     `json:"max_tokens"`
+	CostPer1K  float64 `json:"cost_per_1k"`
+	IsDefault  bool    `json:"is_default"`
+}
+
+type UpdateAIModelRequest struct {
+	Name      string  `json:"name"`
+	TaskTypes string  `json:"task_types"`
+	MaxTokens int     `json:"max_tokens"`
+	CostPer1K float64 `json:"cost_per_1k"`
+	IsDefault *bool   `json:"is_default"`
+}
+
+type UpdateTaskConfigRequest struct {
+	PrimaryModelID   uint    `json:"primary_model_id"`
+	FallbackModelIDs string  `json:"fallback_model_ids"`
+	MaxTokens        int     `json:"max_tokens"`
+	Temperature      float64 `json:"temperature"`
+	TopP             float64 `json:"top_p"`
+}
+
+type CreateModelComparisonRequest struct {
+	Name       string `json:"name" binding:"required"`
+	TaskType   string `json:"task_type" binding:"required"`
+	ModelIDs   []uint `json:"model_ids"`
+	TestPrompt string `json:"test_prompt"`
+	Iterations int    `json:"iterations"`
+}
+
+// ─── MCP Tools ────────────────────────────────────────────────────────────────
+
+// McpTool MCP 工具配置
+type McpTool struct {
+	ID           uint   `json:"id" gorm:"primaryKey"`
+	TenantID     uint   `json:"tenant_id" gorm:"index;not null;default:1"`
+	Name         string `json:"name" gorm:"size:100;uniqueIndex"`
+	DisplayName  string `json:"display_name" gorm:"size:100"`
+	Description  string `json:"description" gorm:"type:text"`
+	TransportType string `json:"transport_type" gorm:"size:20"` // http, sse, stdio
+	Endpoint     string `json:"endpoint" gorm:"size:500"`
+	Headers      string `json:"headers" gorm:"type:text"`      // JSON map[string]string
+	Env          string `json:"env" gorm:"type:text"`          // JSON map[string]string (stdio only)
+	Timeout      int    `json:"timeout" gorm:"default:30"`
+	IsActive     bool   `json:"is_active" gorm:"default:true"`
+	IsSystem     bool   `json:"is_system" gorm:"default:false"` // 系统内置工具不可删除
+	Schema       string `json:"schema" gorm:"type:text"`        // JSON 工具能力描述
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (McpTool) TableName() string {
+	return "ink_mcp_tool"
+}
+
+// ModelMcpBinding 模型 <-> MCP 工具绑定关系
+type ModelMcpBinding struct {
+	ID        uint `json:"id" gorm:"primaryKey"`
+	ModelID   uint `json:"model_id" gorm:"index;uniqueIndex:idx_model_mcp,priority:1;not null"`
+	McpToolID uint `json:"tool_id" gorm:"index;uniqueIndex:idx_model_mcp,priority:2;not null"`
+	Enabled   bool `json:"enabled" gorm:"default:true"`
+
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (ModelMcpBinding) TableName() string {
+	return "ink_model_mcp_binding"
+}
+
+// ─── MCP Request/Response DTOs ────────────────────────────────────────────────
+
+type CreateMcpToolRequest struct {
+	Name          string            `json:"name" binding:"required"`
+	DisplayName   string            `json:"display_name"`
+	Description   string            `json:"description"`
+	TransportType string            `json:"transport_type" binding:"required"` // http/sse/stdio
+	Endpoint      string            `json:"endpoint" binding:"required"`
+	Headers       map[string]string `json:"headers"`
+	Env           map[string]string `json:"env"`
+	Timeout       int               `json:"timeout"`
+	IsActive      bool              `json:"is_active"`
+}
+
+type UpdateMcpToolRequest struct {
+	DisplayName   string            `json:"display_name"`
+	Description   string            `json:"description"`
+	TransportType string            `json:"transport_type"`
+	Endpoint      string            `json:"endpoint"`
+	Headers       map[string]string `json:"headers"`
+	Env           map[string]string `json:"env"`
+	Timeout       int               `json:"timeout"`
+	IsActive      *bool             `json:"is_active"`
+}
+
+// ─── Per-shot generation DTOs ─────────────────────────────────────────────────
+
+type BatchGenerateShotsRequest struct {
+	ShotIDs     []uint `json:"shot_ids" binding:"required"`
+	QualityTier string `json:"quality_tier"` // override; empty = use video's quality_tier
 }

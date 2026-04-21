@@ -40,6 +40,8 @@ type ServerConfig struct {
 	WriteTimeout    time.Duration `mapstructure:"write_timeout"`
 	MaxHeaderBytes  int           `mapstructure:"max_header_bytes"`
 	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
+	JWTSecret       string        `mapstructure:"jwt_secret"`
+	JWTExpiry       time.Duration `mapstructure:"jwt_expiry"`
 }
 
 // DatabaseConfig 数据库配置
@@ -77,6 +79,18 @@ type AIConfig struct {
 	// Google配置
 	Google GoogleConfig `mapstructure:"google"`
 
+	// 豆包配置（字节跳动火山引擎 Ark，含 Seedream 图像）
+	Doubao DoubaoConfig `mapstructure:"doubao"`
+
+	// DeepSeek配置
+	DeepSeek DeepSeekConfig `mapstructure:"deepseek"`
+
+	// 通义千问配置（阿里云百炼/DashScope，含 Wan 图像）
+	Qianwen QianwenConfig `mapstructure:"qianwen"`
+
+	// Seedance视频配置（字节跳动火山引擎 Ark）
+	Seedance SeedanceConfig `mapstructure:"seedance"`
+
 	// 默认配置
 	Default DefaultAIConfig `mapstructure:"default"`
 }
@@ -101,6 +115,33 @@ type GoogleConfig struct {
 	APIKey   string `mapstructure:"api_key"`
 	Endpoint string `mapstructure:"endpoint"`
 	Model    string `mapstructure:"model"`
+}
+
+// DoubaoConfig 豆包配置
+type DoubaoConfig struct {
+	APIKey   string `mapstructure:"api_key"`
+	Endpoint string `mapstructure:"endpoint"`
+	Model    string `mapstructure:"model"`
+}
+
+// DeepSeekConfig DeepSeek配置
+type DeepSeekConfig struct {
+	APIKey   string `mapstructure:"api_key"`
+	Endpoint string `mapstructure:"endpoint"`
+	Model    string `mapstructure:"model"`
+}
+
+// QianwenConfig 通义千问配置
+type QianwenConfig struct {
+	APIKey   string `mapstructure:"api_key"`
+	Endpoint string `mapstructure:"endpoint"`
+	Model    string `mapstructure:"model"`
+}
+
+// SeedanceConfig Seedance视频配置
+type SeedanceConfig struct {
+	APIKey   string `mapstructure:"api_key"`
+	Endpoint string `mapstructure:"endpoint"`
 }
 
 // DefaultAIConfig 默认AI配置
@@ -167,6 +208,8 @@ func setDefaults() {
 	viper.SetDefault("server.write_timeout", 30*time.Second)
 	viper.SetDefault("server.max_header_bytes", 1<<20)
 	viper.SetDefault("server.shutdown_timeout", 10*time.Second)
+	viper.SetDefault("server.jwt_secret", "change-me-in-production")
+	viper.SetDefault("server.jwt_expiry", 24*time.Hour)
 
 	// 数据库默认值
 	viper.SetDefault("database.driver", "mysql")
@@ -205,4 +248,47 @@ func (c *ServerConfig) GetAddr() string {
 // GetRedisAddr 获取Redis地址
 func (c *RedisConfig) GetRedisAddr() string {
 	return fmt.Sprintf("%s:%d", c.Host, c.Port)
+}
+
+// DefaultConfig 返回默认配置
+func DefaultConfig() *Config {
+	return &Config{
+		Server: ServerConfig{
+			Host:            "0.0.0.0",
+			Port:            8080,
+			Mode:            "debug",
+			ReadTimeout:     30 * time.Second,
+			WriteTimeout:    30 * time.Second,
+			MaxHeaderBytes:  1 << 20,
+			ShutdownTimeout: 10 * time.Second,
+			JWTSecret:       "change-me-in-production",
+			JWTExpiry:       24 * time.Hour,
+		},
+		Database: DatabaseConfig{
+			Driver:          "mysql",
+			Charset:         "utf8mb4",
+			MaxIdleConns:    10,
+			MaxOpenConns:    100,
+			ConnMaxLifetime: time.Hour,
+			TablePrefix:     "ink_",
+		},
+		Redis: RedisConfig{
+			Host:     "localhost",
+			Port:     6379,
+			DB:       0,
+			PoolSize: 100,
+		},
+		AI: AIConfig{
+			Default: DefaultAIConfig{
+				Temperature: 0.7,
+				TopP:        0.9,
+				TopK:        40,
+			},
+		},
+		Logger: LoggerConfig{
+			Level:      "info",
+			Format:     "json",
+			OutputPath: "stdout",
+		},
+	}
 }

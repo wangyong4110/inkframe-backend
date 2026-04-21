@@ -38,7 +38,7 @@ func NewTemplateService() (*TemplateService, error) {
 		}
 
 		// 读取模板文件
-		content, err := promptTemplates.ReadFile("config/prompts/" + entry.Name())
+		content, err := promptTemplates.ReadFile("prompts/" + entry.Name())
 		if err != nil {
 			return nil, fmt.Errorf("failed to read template %s: %w", entry.Name(), err)
 		}
@@ -112,13 +112,22 @@ type NovelOutlineTemplateData struct {
 
 // ChapterTemplateData 章节模板数据
 type ChapterTemplateData struct {
-	Novel          NovelInfo
-	Chapter        ChapterInfo
-	ChapterNo      int
-	WordCount      int
-	Style          string
-	UserPrompt     string
-	RecentChapters []ChapterInfo
+	Novel           NovelInfo
+	Chapter         ChapterInfo
+	ChapterNo       int
+	WordCount       int
+	Style           string
+	UserPrompt      string
+	RecentChapters  []ChapterInfo
+	Characters      []CharacterInfo
+	CharacterStates string // 角色当前状态快照（格式化文本）
+	Foreshadows     string // 待兑现伏笔列表（格式化文本）
+}
+
+// CharacterInfo 角色信息
+type CharacterInfo struct {
+	Name        string
+	Personality string
 }
 
 // CharacterTemplateData 角色模板数据
@@ -141,11 +150,24 @@ type SceneTemplateData struct {
 	Requirements string
 }
 
+// StoryboardCharacterInfo 分镜角色外貌信息
+type StoryboardCharacterInfo struct {
+	Name      string
+	Appearance string
+	HairColor  string
+	Outfit     string
+	Features   string
+}
+
 // StoryboardTemplateData 分镜头模板数据
 type StoryboardTemplateData struct {
 	NovelTitle     string
 	ChapterNo      int
 	ChapterContent string
+	Characters     []StoryboardCharacterInfo // 角色外貌参考
+	ArtStyle       string                    // 视觉风格
+	ColorTone      string                    // 色彩基调
+	LightingStyle  string                    // 光影风格
 }
 
 // NovelInfo 小说信息

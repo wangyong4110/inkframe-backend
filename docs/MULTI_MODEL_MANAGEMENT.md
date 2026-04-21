@@ -1548,3 +1548,82 @@ InkFrame 多模型管理系统提供了：
 ---
 
 **InkFrame Multi-Model** - 灵活、智能、高效的模型管理平台 🤖✨
+
+---
+
+## 🔌 MCP 工具集成
+
+### 什么是 MCP
+
+Model Context Protocol（MCP）是 Anthropic 发布的开放标准协议，用于统一 AI 模型与外部工具/数据源的连接方式。InkFrame 支持将任意 MCP 兼容工具注册并绑定到指定模型，让模型在推理时可以调用外部能力（搜索、数据库、API 等）。
+
+### 工具注册与管理
+
+```go
+// 工具表：ink_mcp_tool
+type McpTool struct {
+    ID            uint   `json:"id"`
+    Name          string `json:"name" gorm:"uniqueIndex"` // 全局唯一标识
+    DisplayName   string `json:"display_name"`
+    Description   string `json:"description"`
+    TransportType string `json:"transport_type"` // http | sse | stdio
+    Endpoint      string `json:"endpoint"`
+    Headers       string `json:"headers"`        // JSON {"Authorization": "Bearer xxx"}
+    Env           string `json:"env"`             // JSON {"KEY": "value"}
+    Timeout       int    `json:"timeout"`         // 超时秒数，默认 30
+    IsActive      bool   `json:"is_active"`
+    IsSystem      bool   `json:"is_system"`       // true = 系统内置，不可删除
+    Schema        string `json:"schema"`          // JSON Schema 描述工具能力
+}
+```
+
+### 模型-工具绑定
+
+一个模型可绑定多个 MCP 工具，一个工具也可被多个模型共享：
+
+```go
+// 绑定表：ink_model_mcp_binding（唯一索引：model_id + mcp_tool_id）
+type ModelMcpBinding struct {
+    ID        uint `json:"id"`
+    ModelID   uint `json:"model_id"`
+    McpToolID uint `json:"mcp_tool_id"`
+    Enabled   bool `json:"enabled"`
+}
+```
+
+绑定操作是**幂等**的：若记录已存在，会确保 `enabled=true`；不存在则创建。
+
+### API 接口
+
+```
+# MCP 工具 CRUD
+GET    /api/v1/mcp-tools
+POST   /api/v1/mcp-tools
+PUT    /api/v1/mcp-tools/:id
+DELETE /api/v1/mcp-tools/:id           # 系统工具不可删，级联删除绑定关系
+POST   /api/v1/mcp-tools/:id/test      # 连通性探测（http/sse 发 GET，stdio 直接返回 ok）
+GET    /api/v1/mcp-tools/:id/models    # 获取使用该工具的所有模型
+
+# 模型侧管理
+GET    /api/v1/models/:id/mcp-tools           # 获取模型绑定的工具列表
+POST   /api/v1/models/:id/mcp-tools           # 绑定工具（body: {"tool_id": N}）
+DELETE /api/v1/models/:id/mcp-tools/:tool_id  # 解绑
+```
+
+### 前端管理界面
+
+`/model` 页面集成 MCP 工具管理标签页，支持：
+
+- 查看所有已注册工具（传输类型、在线状态、绑定模型数）
+- 新建/编辑工具（表单：名称、传输类型、Endpoint、Headers、超时时间）
+- 一键连通性测试（显示延迟 ms）
+- 为每个模型勾选/取消绑定工具
+- 系统内置工具不可删除（标记 🔒）
+
+### 传输类型对比
+
+| 类型 | 协议 | 适用场景 | 连通性测试 |
+|------|------|---------|-----------|
+| `http` | REST HTTP | Web API / OpenAPI 服务 | GET 探测，检查 5xx |
+| `sse` | Server-Sent Events | 实时流式工具 | GET 探测，检查连接 |
+| `stdio` | 标准输入输出 | 本地 CLI 工具、脚本 | 直接返回 ok |

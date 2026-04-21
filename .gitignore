@@ -64,3 +64,5 @@ weaviate_data/
 
 # Node (if frontend in same repo)
 node_modules/
+CLAUDE.md
+.claude

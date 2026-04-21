@@ -3227,3 +3227,110 @@ func (c *ColorGradingSystem) buildColorFilter(profile *ColorGradingProfile) stri
 ---
 
 **InkFrame Video Generation v2.0** - 通过系统化的问题解决方案，提供高质量、一致性的视频生成能力 🎬✨
+
+---
+
+## 🎯 视频质量档位系统
+
+### 概述
+
+视频创建时可选择质量档位，平衡生成成本与输出质量。档位会影响图像分辨率、视频码率以及使用的生成模型参数。
+
+### 三档质量
+
+| 档位 | API 值 | 说明 | 适用阶段 |
+|------|--------|------|---------|
+| 草稿 | `draft` | 快速预览，低分辨率（512px），成本最低 | 创作初期验证 |
+| 预览 | `preview` | 标准质量（1024px），默认档位 | 日常创作与分享 |
+| 正式 | `final` | 最高质量（2048px+），全参数生成 | 最终交付 |
+
+### 数据模型变更
+
+```go
+// Video.QualityTier 新增字段
+type Video struct {
+    // ...
+    QualityTier string `json:"quality_tier" gorm:"default:preview"`
+}
+
+// CreateVideoRequest 支持档位指定
+type CreateVideoRequest struct {
+    NovelID     uint   `json:"novel_id"`
+    ChapterID   *uint  `json:"chapter_id"`
+    Title       string `json:"title"`
+    QualityTier string `json:"quality_tier"` // draft | preview | final，为空时默认 preview
+}
+```
+
+### 创建视频示例
+
+```bash
+POST /api/v1/novels/:novel_id/videos
+{
+  "title": "第一章视频",
+  "chapter_id": 1,
+  "quality_tier": "final"
+}
+```
+
+---
+
+## 🎬 镜头生成模式
+
+### 概述
+
+分镜脚本中每个镜头可独立选择生成方式，实现质量与成本的精细控制。
+
+### 两种模式
+
+| 模式 | API 值 | 说明 | 技术实现 |
+|------|--------|------|---------|
+| 静态图像 | `static` | AI 生成静态图像，配合 Ken Burns 效果形成动感 | Stable Diffusion / SDXL |
+| AI 视频 | `video` | 直接生成动态视频片段 | Kling / Seedance |
+
+### 镜头数据模型变更
+
+```go
+type StoryboardShot struct {
+    // ...
+    GenerationMode string `json:"generation_mode"` // static | video
+    ImageURL       string `json:"image_url"`        // 静态模式生成的图像 URL
+    VideoURL       string `json:"video_url"`        // 视频模式生成的视频 URL
+}
+```
+
+### 单镜头生成
+
+```bash
+# 对指定镜头启动异步生成
+POST /api/v1/videos/:id/shots/:shot_id/generate
+# 响应：202 Accepted，镜头状态变为 generating
+```
+
+### 批量生成
+
+```bash
+POST /api/v1/videos/:id/shots/batch-generate
+{
+  "shot_ids": [1, 2, 3, 5],
+  "quality_tier": "preview"   # 可覆盖视频的默认质量档位
+}
+# 响应：202 Accepted，所有指定镜头状态变为 generating
+```
+
+### 镜头状态流转
+
+```
+pending → generating → completed
+                    ↘ failed
+```
+
+前端通过轮询 `GET /api/v1/videos/:id/shots` 获取最新状态和生成结果 URL。
+
+### 成本建议
+
+| 场景 | 推荐策略 |
+|------|---------|
+| 全视频预览 | 全部 `static` + `draft` |
+| 重点场景精修 | 关键镜头 `video` + `final`，其余 `static` + `preview` |
+| 最终交付 | 全部 `video` + `final` |

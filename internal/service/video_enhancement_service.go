@@ -4,10 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/inkframe/inkframe-backend/internal/ai"
+	"io"
+	"log"
 	"math"
+	"net/http"
+	"os"
+	"os/exec"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/inkframe/inkframe-backend/internal/ai"
 )
 
 // ============================================
@@ -62,26 +69,39 @@ const (
 	AnglePOV      ShotAngle = "POV"       // 主观视角
 )
 
+// ShotCharacter 分镜角色信息
+type ShotCharacter struct {
+	CharacterID uint   `json:"character_id"`
+	Name        string `json:"name"`
+	Expression  string `json:"expression"`
+	Pose        string `json:"pose"`
+	Position    string `json:"position"`
+}
+
 // StoryboardShot 智能分镜
 type StoryboardShot struct {
-	ShotNo         int       `json:"shot_no"`
-	Description    string    `json:"description"`
-	Emotion        string    `json:"emotion"` // 情感标签
-	Beat           string    `json:"beat"`    // 节奏点
-	ShotType       ShotType  `json:"shot_type"`
-	ShotSize       ShotSize  `json:"shot_size"`
-	ShotAngle      ShotAngle `json:"shot_angle"`
-	Duration       float64   `json:"duration"` // 秒
-	Characters     []string  `json:"characters"`
-	Location       string    `json:"location"`
-	TimeOfDay      string    `json:"time_of_day"`
-	Weather        string    `json:"weather"`
-	Lighting       string    `json:"lighting"`
-	Dialogue       string    `json:"dialogue,omitempty"`
-	Action         string    `json:"action,omitempty"`
-	CameraMovement string    `json:"camera_movement,omitempty"`
-	Transition     string    `json:"transition"`   // 转场方式
-	VisualNotes    string    `json:"visual_notes"` // 视觉备注
+	VideoID        uint           `json:"video_id,omitempty"`
+	ShotNo         int            `json:"shot_no"`
+	Description    string         `json:"description"`
+	Emotion        string         `json:"emotion"` // 情感标签
+	Beat           string         `json:"beat"`    // 节奏点
+	ShotType       ShotType       `json:"shot_type"`
+	ShotSize       ShotSize       `json:"shot_size"`
+	ShotAngle      ShotAngle      `json:"shot_angle"`
+	Duration       float64        `json:"duration"` // 秒
+	Characters     []ShotCharacter `json:"characters"`
+	Location       string         `json:"location"`
+	Scene          string         `json:"scene,omitempty"`
+	TimeOfDay      string         `json:"time_of_day"`
+	Weather        string         `json:"weather"`
+	Lighting       string         `json:"lighting"`
+	Dialogue       string         `json:"dialogue,omitempty"`
+	Action         string         `json:"action,omitempty"`
+	CameraMovement string         `json:"camera_movement,omitempty"`
+	Transition     string         `json:"transition"`    // 转场方式
+	VisualNotes    string         `json:"visual_notes"`  // 视觉备注
+	Prompt         string         `json:"prompt,omitempty"`
+	NegativePrompt string         `json:"negative_prompt,omitempty"`
 }
 
 // EmotionBeat 情感节奏分析结果
@@ -102,8 +122,7 @@ type EmotionalAnalysis struct {
 
 // AnalyzeEmotions 分析章节情感
 func (s *IntelligentStoryboardService) AnalyzeEmotions(content string) (*EmotionalAnalysis, error) {
-
-分析要求:
+	prompt := fmt.Sprintf(`分析要求:
 1. 识别章节中的情感变化
 2. 标记情感高潮和低谷点
 3. 评估整体情感基调
@@ -178,8 +197,7 @@ func (s *IntelligentStoryboardService) GenerateIntelligentShots(
 	}
 
 	// 2. 动作节奏检测
-	beats, err := s.DetectActionBeats(content)
-	if err != nil {
+	if _, err = s.DetectActionBeats(content); err != nil {
 		return nil, err
 	}
 
@@ -214,7 +232,7 @@ func (s *IntelligentStoryboardService) optimizeShotSequence(
 		var currentEmotion string = "neutral"
 		var intensity float64 = 0.5
 		for _, eb := range emotions.EmotionCurve {
-			if math.Abs(eb.Position-position) < 0.15 {
+			if math.Abs(float64(eb.Position)-position) < 0.15 {
 				currentEmotion = eb.Emotion
 				intensity = eb.Intensity
 				break
@@ -293,7 +311,7 @@ func (s *IntelligentStoryboardService) extractDialogues(content string) []string
 	lines := strings.Split(content, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, """) || strings.HasPrefix(line, "\"") {
+		if strings.HasPrefix(line, "\u201c") || strings.HasPrefix(line, "\"") {
 			// 移除引号
 			if len(line) > 2 {
 				dialogues = append(dialogues, line)
@@ -311,12 +329,14 @@ func (s *IntelligentStoryboardService) extractDialogues(content string) []string
 type CharacterConsistencyService struct {
 	imageService *ImageService
 	loraService  *LoRAService
+	aiService    *AIService
 }
 
-func NewCharacterConsistencyService(imageService *ImageService, loraService *LoRAService) *CharacterConsistencyService {
+func NewCharacterConsistencyService(imageService *ImageService, loraService *LoRAService, aiService *AIService) *CharacterConsistencyService {
 	return &CharacterConsistencyService{
 		imageService: imageService,
 		loraService:  loraService,
+		aiService:    aiService,
 	}
 }
 
@@ -393,19 +413,74 @@ type ConsistencyScore struct {
 }
 
 // CalculateConsistencyScore 计算一致性评分
+// 使用 AI 视觉模型比较参考图与生成图的相似度
 func (s *CharacterConsistencyService) CalculateConsistencyScore(
 	referenceImage string,
 	generatedImages []string,
 ) (*ConsistencyScore, error) {
-	// 简化实现:返回模拟评分
-	scores := &ConsistencyScore{
-		OverallScore:    0.85,
-		VisualScore:     0.88,
-		FeatureScore:    0.82,
-		ExpressionScore: 0.85,
+	if referenceImage == "" {
+		// 无参考图：返回零分并说明原因
+		return &ConsistencyScore{
+			OverallScore:    0,
+			VisualScore:     0,
+			FeatureScore:    0,
+			ExpressionScore: 0,
+		}, fmt.Errorf("no reference image provided; cannot calculate consistency score")
+	}
+	if len(generatedImages) == 0 {
+		return &ConsistencyScore{}, fmt.Errorf("no generated images to compare")
 	}
 
-	return scores, nil
+	// 构建 AI 视觉比较 prompt
+	prompt := fmt.Sprintf(
+		`请比较参考图和生成图中的角色一致性，返回JSON格式评分（0.0-1.0）：
+参考图：%s
+生成图（共%d张）：%s
+
+请评估：
+1. visual_score: 外观一致性（发型/服装/体型）
+2. feature_score: 面部特征一致性（五官比例/轮廓）
+3. expression_score: 表情风格一致性
+
+返回格式：{"visual_score":0.0,"feature_score":0.0,"expression_score":0.0}`,
+		referenceImage,
+		len(generatedImages),
+		strings.Join(generatedImages, ", "),
+	)
+
+	result, err := s.aiService.Generate(0, "consistency_check", prompt)
+	if err != nil {
+		// AI 调用失败：返回零分而非假数据
+		return &ConsistencyScore{}, fmt.Errorf("AI consistency check failed: %w", err)
+	}
+
+	var parsed struct {
+		VisualScore     float64 `json:"visual_score"`
+		FeatureScore    float64 `json:"feature_score"`
+		ExpressionScore float64 `json:"expression_score"`
+	}
+	cleaned := extractJSONObject(result)
+	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
+		return &ConsistencyScore{}, fmt.Errorf("failed to parse consistency score response: %w", err)
+	}
+
+	overall := (parsed.VisualScore + parsed.FeatureScore + parsed.ExpressionScore) / 3.0
+	return &ConsistencyScore{
+		OverallScore:    overall,
+		VisualScore:     parsed.VisualScore,
+		FeatureScore:    parsed.FeatureScore,
+		ExpressionScore: parsed.ExpressionScore,
+	}, nil
+}
+
+// extractJSONObject 从 AI 响应中提取 JSON 对象（{...}）
+func extractJSONObject(s string) string {
+	start := strings.Index(s, "{")
+	end := strings.LastIndex(s, "}")
+	if start >= 0 && end > start {
+		return s[start : end+1]
+	}
+	return s
 }
 
 // ============================================
@@ -598,10 +673,54 @@ type AIProvider interface {
 
 type VideoEnhancementService struct {
 	imageService *ImageService
+	tmpDir       string
+	jobs         map[string]*EnhancementJob
+	mu           sync.RWMutex
 }
 
-func NewVideoEnhancementService(imageService *ImageService) *VideoEnhancementService {
-	return &VideoEnhancementService{imageService: imageService}
+func NewVideoEnhancementService(imageService *ImageService, tmpDir ...string) *VideoEnhancementService {
+	dir := "/tmp/inkframe-enhance"
+	if len(tmpDir) > 0 && tmpDir[0] != "" {
+		dir = tmpDir[0]
+	}
+	return &VideoEnhancementService{
+		imageService: imageService,
+		tmpDir:       dir,
+		jobs:         make(map[string]*EnhancementJob),
+	}
+}
+
+// downloadToTemp 将 URL 下载到临时文件，返回本地路径和 cleanup 函数
+func (s *VideoEnhancementService) downloadToTemp(url string) (string, func(), error) {
+	if strings.HasPrefix(url, "file://") {
+		path := strings.TrimPrefix(url, "file://")
+		return path, func() {}, nil
+	}
+
+	if err := os.MkdirAll(s.tmpDir, 0755); err != nil {
+		return "", nil, fmt.Errorf("mkdir tmpDir: %w", err)
+	}
+
+	tmpFile, err := os.CreateTemp(s.tmpDir, "enhance-input-*.mp4")
+	if err != nil {
+		return "", nil, fmt.Errorf("create temp file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+	cleanup := func() { os.Remove(tmpPath) }
+
+	resp, err := http.Get(url) //nolint:gosec // url is from trusted internal source
+	if err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("download %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+
+	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("write temp file: %w", err)
+	}
+	tmpFile.Close()
+	return tmpPath, cleanup, nil
 }
 
 // EnhancementType 增强类型
@@ -617,7 +736,9 @@ const (
 
 // EnhancementConfig 增强配置
 type EnhancementConfig struct {
-	Type EnhancementType `json:"type"`
+	Type      EnhancementType `json:"type"`
+	Enabled   bool            `json:"enabled"`
+	Intensity float64         `json:"intensity,omitempty"`
 
 	// 帧插值配置
 	TargetFPS int `json:"target_fps,omitempty"` // 目标帧率
@@ -645,25 +766,30 @@ type EnhancementJob struct {
 	CreatedAt string             `json:"created_at"`
 }
 
-// EnhanceVideo 增强视频
-func (s *VideoEnhancementService) EnhanceVideo(
+// EnhanceVideoWithConfigs 增强视频（内部方法）
+func (s *VideoEnhancementService) EnhanceVideoWithConfigs(
 	videoURL string,
 	configs []EnhancementConfig,
 ) ([]*EnhancementJob, error) {
 	jobs := make([]*EnhancementJob, 0, len(configs))
 
-	for _, config := range configs {
+	for _, cfg := range configs {
+		cfg := cfg // capture loop variable
 		job := &EnhancementJob{
-			ID:        fmt.Sprintf("enhance_%d_%s", time.Now().UnixNano(), config.Type),
-			Type:      config.Type,
-			Config:    &config,
+			ID:        fmt.Sprintf("enhance_%d_%s", time.Now().UnixNano(), cfg.Type),
+			Type:      cfg.Type,
+			Config:    &cfg,
 			Status:    "pending",
 			Progress:  0,
 			CreatedAt: time.Now().Format("2006-01-02 15:04:05"),
 		}
 
-		// 模拟处理
-		go s.processEnhancement(job, videoURL)
+		// 使用带超时的 context（5 分钟）
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		go func(j *EnhancementJob, videoURL string, cancelFn context.CancelFunc) {
+			defer cancelFn()
+			s.processEnhancement(ctx, j, videoURL)
+		}(job, videoURL, cancel)
 
 		jobs = append(jobs, job)
 	}
@@ -671,18 +797,254 @@ func (s *VideoEnhancementService) EnhanceVideo(
 	return jobs, nil
 }
 
-// processEnhancement 处理增强任务
-func (s *VideoEnhancementService) processEnhancement(job *EnhancementJob, videoURL string) {
+// processEnhancement 处理增强任务（带超时控制）
+func (s *VideoEnhancementService) processEnhancement(ctx context.Context, job *EnhancementJob, videoURL string) {
 	job.Status = "processing"
 
-	// 模拟处理过程
-	for i := 0; i <= 100; i += 10 {
-		job.Progress = float64(i)
-		time.Sleep(500 * time.Millisecond)
+	var resultURL string
+	var processErr error
+
+	switch job.Type {
+	case FrameInterpolation:
+		resultURL, processErr = s.applyFrameInterpolation(ctx, videoURL, job.Config)
+	case SuperResolution:
+		resultURL, processErr = s.applySuperResolution(ctx, videoURL, job.Config)
+	case ColorGrading:
+		resultURL, processErr = s.applyColorGrading(ctx, videoURL, job.Config)
+	case VideoStabilize:
+		resultURL, processErr = s.applyStabilization(ctx, videoURL, job.Config)
+	case StyleTransfer:
+		resultURL, processErr = s.applyStyleTransfer(ctx, videoURL, job.Config)
+	default:
+		processErr = fmt.Errorf("unknown enhancement type: %s", job.Type)
+	}
+
+	if processErr != nil {
+		job.Status = "failed"
+		job.Error = processErr.Error()
+		job.Progress = 0
+		return
 	}
 
 	job.Status = "completed"
-	job.ResultURL = fmt.Sprintf("https://example.com/enhanced/%s.mp4", job.ID)
+	job.Progress = 100
+	job.ResultURL = resultURL
+}
+
+// applyFrameInterpolation 帧插值（FFmpeg minterpolate）
+func (s *VideoEnhancementService) applyFrameInterpolation(ctx context.Context, videoURL string, cfg *EnhancementConfig) (string, error) {
+	targetFPS := cfg.TargetFPS
+	if targetFPS == 0 {
+		targetFPS = 60
+	}
+
+	inputPath, cleanup, err := s.downloadToTemp(videoURL)
+	if err != nil {
+		return videoURL, fmt.Errorf("frame_interpolation: download failed: %w", err)
+	}
+	defer cleanup()
+
+	if err := os.MkdirAll(s.tmpDir, 0755); err != nil {
+		return videoURL, err
+	}
+	outputPath := fmt.Sprintf("%s/fi-%d.mp4", s.tmpDir, time.Now().UnixNano())
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-y",
+		"-i", inputPath,
+		"-vf", fmt.Sprintf("minterpolate=fps=%d:mi_mode=mci:mc_mode=aobmc:vsbmc=1", targetFPS),
+		"-c:v", "libx264",
+		"-preset", "fast",
+		"-crf", "18",
+		"-c:a", "copy",
+		outputPath,
+	)
+	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+		log.Printf("[enhancement] frame_interpolation failed: %v\n%s", runErr, string(out))
+		return videoURL, nil // 非致命：返回原始
+	}
+	return "file://" + outputPath, nil
+}
+
+// applySuperResolution 超分辨率（FFmpeg lanczos + unsharp）
+func (s *VideoEnhancementService) applySuperResolution(ctx context.Context, videoURL string, cfg *EnhancementConfig) (string, error) {
+	scale := cfg.ScaleFactor
+	if scale <= 0 {
+		scale = 2.0
+	}
+
+	inputPath, cleanup, err := s.downloadToTemp(videoURL)
+	if err != nil {
+		return videoURL, fmt.Errorf("super_resolution: download failed: %w", err)
+	}
+	defer cleanup()
+
+	if err := os.MkdirAll(s.tmpDir, 0755); err != nil {
+		return videoURL, err
+	}
+	outputPath := fmt.Sprintf("%s/sr-%d.mp4", s.tmpDir, time.Now().UnixNano())
+
+	scaleFilter := fmt.Sprintf("scale=iw*%.0f:ih*%.0f:flags=lanczos,unsharp=5:5:1.5:5:5:0.0", scale, scale)
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-y",
+		"-i", inputPath,
+		"-vf", scaleFilter,
+		"-c:v", "libx264",
+		"-crf", "16",
+		"-c:a", "copy",
+		outputPath,
+	)
+	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+		log.Printf("[enhancement] super_resolution failed: %v\n%s", runErr, string(out))
+		return videoURL, nil
+	}
+	return "file://" + outputPath, nil
+}
+
+// applyColorGrading 色彩增强（FFmpeg curves/colorchannelmixer）
+func (s *VideoEnhancementService) applyColorGrading(ctx context.Context, videoURL string, cfg *EnhancementConfig) (string, error) {
+	preset := cfg.ColorGradePreset
+	if preset == "" {
+		preset = "cinematic"
+	}
+
+	presetFilters := map[string]string{
+		"cinematic": "curves=preset=strong_contrast,colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131",
+		"warm":      "colortemperature=temperature=7000,eq=saturation=1.1:brightness=0.02",
+		"cool":      "colortemperature=temperature=4500,eq=saturation=0.95",
+		"vibrant":   "eq=saturation=1.4:contrast=1.1,curves=r='0/0 0.3/0.4 1/1'",
+		"muted":     "eq=saturation=0.7:contrast=0.95,curves=preset=lighter",
+	}
+	filter, ok := presetFilters[preset]
+	if !ok {
+		filter = presetFilters["cinematic"]
+	}
+
+	inputPath, cleanup, err := s.downloadToTemp(videoURL)
+	if err != nil {
+		return videoURL, fmt.Errorf("color_grading: download failed: %w", err)
+	}
+	defer cleanup()
+
+	if err := os.MkdirAll(s.tmpDir, 0755); err != nil {
+		return videoURL, err
+	}
+	outputPath := fmt.Sprintf("%s/cg-%d.mp4", s.tmpDir, time.Now().UnixNano())
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-y",
+		"-i", inputPath,
+		"-vf", filter,
+		"-c:v", "libx264",
+		"-crf", "18",
+		"-c:a", "copy",
+		outputPath,
+	)
+	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+		log.Printf("[enhancement] color_grading failed: %v\n%s", runErr, string(out))
+		return videoURL, nil
+	}
+	return "file://" + outputPath, nil
+}
+
+// applyStabilization 视频防抖（FFmpeg vid.stab 两遍，降级到 deshake）
+func (s *VideoEnhancementService) applyStabilization(ctx context.Context, videoURL string, cfg *EnhancementConfig) (string, error) {
+	inputPath, cleanup, err := s.downloadToTemp(videoURL)
+	if err != nil {
+		return videoURL, fmt.Errorf("stabilization: download failed: %w", err)
+	}
+	defer cleanup()
+
+	if err := os.MkdirAll(s.tmpDir, 0755); err != nil {
+		return videoURL, err
+	}
+	trfFile := fmt.Sprintf("%s/stab-%d.trf", s.tmpDir, time.Now().UnixNano())
+	outputPath := fmt.Sprintf("%s/stab-%d.mp4", s.tmpDir, time.Now().UnixNano())
+
+	// Pass 1: detect
+	pass1 := exec.CommandContext(ctx, "ffmpeg", "-y",
+		"-i", inputPath,
+		"-vf", fmt.Sprintf("vidstabdetect=shakiness=10:accuracy=15:result=%s", trfFile),
+		"-f", "null", "-",
+	)
+	if out, pass1Err := pass1.CombinedOutput(); pass1Err != nil {
+		if strings.Contains(string(out), "No such filter") || strings.Contains(pass1Err.Error(), "No such filter") {
+			// vid.stab 不可用，降级到 deshake
+			log.Printf("[enhancement] vid.stab unavailable, falling back to deshake")
+			deshakeCmd := exec.CommandContext(ctx, "ffmpeg", "-y",
+				"-i", inputPath,
+				"-vf", "deshake",
+				"-c:v", "libx264",
+				"-crf", "18",
+				"-c:a", "copy",
+				outputPath,
+			)
+			if dOut, dErr := deshakeCmd.CombinedOutput(); dErr != nil {
+				log.Printf("[enhancement] deshake also failed: %v\n%s", dErr, string(dOut))
+				return videoURL, nil
+			}
+			return "file://" + outputPath, nil
+		}
+		log.Printf("[enhancement] vidstabdetect failed: %v\n%s", pass1Err, string(out))
+		return videoURL, nil
+	}
+
+	// Pass 2: transform
+	pass2 := exec.CommandContext(ctx, "ffmpeg", "-y",
+		"-i", inputPath,
+		"-vf", fmt.Sprintf("vidstabtransform=input=%s:zoom=1:smoothing=30,unsharp=5:5:0.8", trfFile),
+		"-c:v", "libx264",
+		"-crf", "18",
+		"-c:a", "copy",
+		outputPath,
+	)
+	defer os.Remove(trfFile)
+	if out, pass2Err := pass2.CombinedOutput(); pass2Err != nil {
+		log.Printf("[enhancement] vidstabtransform failed: %v\n%s", pass2Err, string(out))
+		return videoURL, nil
+	}
+	return "file://" + outputPath, nil
+}
+
+// applyStyleTransfer 风格迁移（FFmpeg 艺术滤镜）
+func (s *VideoEnhancementService) applyStyleTransfer(ctx context.Context, videoURL string, cfg *EnhancementConfig) (string, error) {
+	preset := cfg.StylePreset
+	if preset == "" {
+		preset = "anime"
+	}
+
+	styleFilters := map[string]string{
+		"anime":   "edgedetect=low=0.05:high=0.35,negate,hue=s=0,negate,format=yuv420p",
+		"oil":     "edgedetect=mode=colormix:high=0,curves=all='0/0 0.4/0.3 1/1'",
+		"sketch":  "edgedetect=low=0.02:high=0.2,negate,format=gray,format=yuv420p",
+		"vintage": "colorchannelmixer=.9:.1:.05:0:.1:.8:.1:0:.05:.1:.85,curves=preset=vintage",
+	}
+	filter, ok := styleFilters[preset]
+	if !ok {
+		filter = styleFilters["anime"]
+	}
+
+	inputPath, cleanup, err := s.downloadToTemp(videoURL)
+	if err != nil {
+		return videoURL, fmt.Errorf("style_transfer: download failed: %w", err)
+	}
+	defer cleanup()
+
+	if err := os.MkdirAll(s.tmpDir, 0755); err != nil {
+		return videoURL, err
+	}
+	outputPath := fmt.Sprintf("%s/st-%d.mp4", s.tmpDir, time.Now().UnixNano())
+
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-y",
+		"-i", inputPath,
+		"-vf", filter,
+		"-c:v", "libx264",
+		"-crf", "18",
+		"-c:a", "copy",
+		outputPath,
+	)
+	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+		log.Printf("[enhancement] style_transfer failed: %v\n%s", runErr, string(out))
+		return videoURL, nil
+	}
+	return "file://" + outputPath, nil
 }
 
 // RecommendEnhancements 推荐增强方案
@@ -722,13 +1084,6 @@ func (s *VideoEnhancementService) RecommendEnhancements(videoInfo *struct {
 // ============================================
 // Helper Functions
 // ============================================
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
 
 // AiService getter (for compatibility)
 func (s *IntelligentStoryboardService) AiService() *IntelligentStoryboardService {

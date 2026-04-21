@@ -1,9 +1,13 @@
 package vector
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
@@ -125,7 +129,7 @@ func (m *StoreManager) StoreAndSearch(ctx context.Context, collection string, te
 	}
 
 	// 存储
-	id := fmt.Sprintf("%d", timeNow().UnixNano())
+	id := fmt.Sprintf("%d", time.Now().UnixNano())
 	_, err = store.Store(ctx, &StoreRequest{
 		Collection: collection,
 		ID:         id,
@@ -144,58 +148,193 @@ func (m *StoreManager) StoreAndSearch(ctx context.Context, collection string, te
 	})
 }
 
-// timeNow 获取当前时间
-func timeNow() interface{ UnixNano() int64 } {
-	return &timeWrapper{}
-}
 
-type timeWrapper struct{}
-
-func (t *timeWrapper) UnixNano() int64 {
-	return int64(0) // 实际使用 time.Now().UnixNano()
-}
-
-// QdrantStore Qdrant 向量数据库实现
+// QdrantStore Qdrant 向量数据库实现（真实 HTTP API）
 type QdrantStore struct {
 	endpoint string
 	apiKey   string
+	client   *http.Client
 }
 
 func NewQdrantStore(endpoint, apiKey string) *QdrantStore {
 	return &QdrantStore{
 		endpoint: endpoint,
 		apiKey:   apiKey,
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+		},
 	}
 }
 
+func (s *QdrantStore) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {
+	var reqBody io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, 0, err
+		}
+		reqBody = bytes.NewReader(b)
+	}
+
+	url := s.endpoint + path
+	httpReq, err := http.NewRequestWithContext(ctx, method, url, reqBody)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	if s.apiKey != "" {
+		httpReq.Header.Set("api-key", s.apiKey)
+	}
+
+	resp, err := s.client.Do(httpReq)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	return respBody, resp.StatusCode, err
+}
+
 func (s *QdrantStore) HealthCheck(ctx context.Context) error {
-	// 简化实现
+	_, status, err := s.doRequest(ctx, "GET", "/", nil)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("qdrant health check failed: status %d", status)
+	}
 	return nil
 }
 
+// Store 通过 Qdrant PUT /collections/{collection}/points 存储向量
 func (s *QdrantStore) Store(ctx context.Context, req *StoreRequest) (*StoreResponse, error) {
-	// 实现 Qdrant 存储逻辑
-	// 实际需要调用 Qdrant REST API
+	point := map[string]interface{}{
+		"id":      req.ID,
+		"vector":  req.Vector,
+		"payload": req.Payload,
+	}
+	body := map[string]interface{}{
+		"points": []interface{}{point},
+	}
+
+	path := fmt.Sprintf("/collections/%s/points", req.Collection)
+	respBody, status, err := s.doRequest(ctx, "PUT", path, body)
+	if err != nil {
+		return nil, fmt.Errorf("qdrant store request failed: %w", err)
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("qdrant store failed: status %d, body: %s", status, string(respBody))
+	}
+
 	return &StoreResponse{
 		ID:     req.ID,
 		Status: "stored",
 	}, nil
 }
 
+// Search 通过 Qdrant POST /collections/{collection}/points/search 语义搜索
 func (s *QdrantStore) Search(ctx context.Context, req *SearchRequest) ([]*SearchResult, error) {
-	// 实现 Qdrant 搜索逻辑
-	// 实际需要调用 Qdrant REST API
-	return []*SearchResult{}, nil
+	body := map[string]interface{}{
+		"vector":      req.Vector,
+		"limit":       req.Limit,
+		"with_payload": true,
+		"score_threshold": req.MinScore,
+	}
+
+	if len(req.Filters) > 0 {
+		mustConditions := []map[string]interface{}{}
+		for k, v := range req.Filters {
+			mustConditions = append(mustConditions, map[string]interface{}{
+				"key":   k,
+				"match": map[string]interface{}{"value": v},
+			})
+		}
+		body["filter"] = map[string]interface{}{
+			"must": mustConditions,
+		}
+	}
+
+	path := fmt.Sprintf("/collections/%s/points/search", req.Collection)
+	respBody, status, err := s.doRequest(ctx, "POST", path, body)
+	if err != nil {
+		return nil, fmt.Errorf("qdrant search request failed: %w", err)
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("qdrant search failed: status %d, body: %s", status, string(respBody))
+	}
+
+	var qdrantResp struct {
+		Result []struct {
+			ID      interface{}            `json:"id"`
+			Score   float32                `json:"score"`
+			Payload map[string]interface{} `json:"payload"`
+		} `json:"result"`
+	}
+
+	if err := json.Unmarshal(respBody, &qdrantResp); err != nil {
+		return nil, fmt.Errorf("qdrant search parse failed: %w", err)
+	}
+
+	results := make([]*SearchResult, 0, len(qdrantResp.Result))
+	for _, r := range qdrantResp.Result {
+		results = append(results, &SearchResult{
+			ID:      fmt.Sprintf("%v", r.ID),
+			Score:   r.Score,
+			Payload: r.Payload,
+		})
+	}
+	return results, nil
 }
 
+// Delete 通过 Qdrant POST /collections/{collection}/points/delete 删除向量
 func (s *QdrantStore) Delete(ctx context.Context, id string) error {
-	// 实现 Qdrant 删除逻辑
+	body := map[string]interface{}{
+		"points": []string{id},
+	}
+	path := fmt.Sprintf("/collections/%s/points/delete", "knowledge_base")
+	_, status, err := s.doRequest(ctx, "POST", path, body)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("qdrant delete failed: status %d", status)
+	}
 	return nil
 }
 
+// Get 通过 Qdrant GET /collections/{collection}/points/{id} 获取向量
 func (s *QdrantStore) Get(ctx context.Context, id string) (*VectorItem, error) {
-	// 实现 Qdrant 获取逻辑
-	return nil, nil
+	path := fmt.Sprintf("/collections/%s/points/%s", "knowledge_base", id)
+	respBody, status, err := s.doRequest(ctx, "GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusNotFound {
+		return nil, nil
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("qdrant get failed: status %d", status)
+	}
+
+	var result struct {
+		Result struct {
+			ID      interface{}            `json:"id"`
+			Vector  []float32              `json:"vector"`
+			Payload map[string]interface{} `json:"payload"`
+		} `json:"result"`
+	}
+
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, err
+	}
+
+	return &VectorItem{
+		ID:      fmt.Sprintf("%v", result.Result.ID),
+		Vector:  result.Result.Vector,
+		Payload: result.Result.Payload,
+	}, nil
 }
 
 // ChromaStore Chroma 向量数据库实现

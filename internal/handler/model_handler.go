@@ -21,16 +21,46 @@ func NewModelHandler(modelService *service.ModelService) *ModelHandler {
 // ListProviders 获取提供商列表
 // GET /api/v1/model-providers
 func (h *ModelHandler) ListProviders(c *gin.Context) {
-	providers, err := h.modelService.ListProviders()
+	providers, err := h.modelService.ListProviders(getTenantID(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+
+	// Mask API keys before returning
+	if list, ok := providers.([]*model.ModelProvider); ok {
+		for _, p := range list {
+			p.APIKey = maskAPIKey(p.APIKey)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "success",
 		"data":    providers,
+	})
+}
+
+// GetProvider 获取单个提供商
+// GET /api/v1/model-providers/:id
+func (h *ModelHandler) GetProvider(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
+		return
+	}
+
+	provider, err := h.modelService.GetProvider(uint(id), getTenantID(c))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "provider not found"})
+		return
+	}
+
+	provider.APIKey = maskAPIKey(provider.APIKey)
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data":    provider,
 	})
 }
 
@@ -43,12 +73,13 @@ func (h *ModelHandler) CreateProvider(c *gin.Context) {
 		return
 	}
 
-	provider, err := h.modelService.CreateProvider(&req)
+	provider, err := h.modelService.CreateProvider(&req, getTenantID(c))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
+	provider.APIKey = maskAPIKey(provider.APIKey)
 	c.JSON(http.StatusCreated, gin.H{
 		"code":    0,
 		"message": "success",
@@ -71,12 +102,13 @@ func (h *ModelHandler) UpdateProvider(c *gin.Context) {
 		return
 	}
 
-	provider, err := h.modelService.UpdateProvider(uint(id), &req)
+	provider, err := h.modelService.UpdateProvider(uint(id), getTenantID(c), &req)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
+	provider.APIKey = maskAPIKey(provider.APIKey)
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "success",
@@ -93,7 +125,7 @@ func (h *ModelHandler) DeleteProvider(c *gin.Context) {
 		return
 	}
 
-	if err := h.modelService.DeleteProvider(uint(id)); err != nil {
+	if err := h.modelService.DeleteProvider(uint(id), getTenantID(c)); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
@@ -113,7 +145,7 @@ func (h *ModelHandler) TestProvider(c *gin.Context) {
 		return
 	}
 
-	result, err := h.modelService.TestProvider(uint(id))
+	result, err := h.modelService.TestProvider(uint(id), getTenantID(c))
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    0,
@@ -254,6 +286,49 @@ func (h *ModelHandler) TestModel(c *gin.Context) {
 		"code":    0,
 		"message": "success",
 		"data":    result,
+	})
+}
+
+// GetAvailableModels 获取任务可用模型
+// GET /api/v1/models/available/:task_type
+func (h *ModelHandler) GetAvailableModels(c *gin.Context) {
+	taskType := c.Param("task_type")
+
+	models, err := h.modelService.GetAvailableModels(taskType)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data":    models,
+	})
+}
+
+// SelectModel 选择模型
+// POST /api/v1/models/select
+func (h *ModelHandler) SelectModel(c *gin.Context) {
+	var req struct {
+		TaskType string `json:"task_type" binding:"required"`
+		Strategy string `json:"strategy"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	selected, err := h.modelService.SelectModel(req.TaskType, req.Strategy)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data":    selected,
 	})
 }
 

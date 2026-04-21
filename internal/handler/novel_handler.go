@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -11,10 +12,11 @@ import (
 
 // NovelHandler 小说处理器
 type NovelHandler struct {
-	novelService      *service.NovelService
-	chapterService    *service.ChapterService
-	foreshadowService *service.ForeshadowService
-	timelineService   *service.TimelineService
+	novelService          *service.NovelService
+	chapterService        *service.ChapterService
+	foreshadowService     *service.ForeshadowService
+	timelineService       *service.TimelineService
+	qualityControlService *service.QualityControlService
 }
 
 func NewNovelHandler(
@@ -22,12 +24,14 @@ func NewNovelHandler(
 	chapterService *service.ChapterService,
 	foreshadowService *service.ForeshadowService,
 	timelineService *service.TimelineService,
+	qualityControlService *service.QualityControlService,
 ) *NovelHandler {
 	return &NovelHandler{
-		novelService:      novelService,
-		chapterService:    chapterService,
-		foreshadowService: foreshadowService,
-		timelineService:   timelineService,
+		novelService:          novelService,
+		chapterService:        chapterService,
+		foreshadowService:     foreshadowService,
+		timelineService:       timelineService,
+		qualityControlService: qualityControlService,
 	}
 }
 
@@ -80,8 +84,27 @@ func (h *NovelHandler) GetNovel(c *gin.Context) {
 func (h *NovelHandler) ListNovels(c *gin.Context) {
 	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 1
+	} else if pageSize > 100 {
+		pageSize = 100
+	}
 
-	novels, total, err := h.novelService.ListNovels(page, pageSize)
+	filters := map[string]interface{}{}
+	if tenantID, ok := c.Get("tenant_id"); ok {
+		filters["tenant_id"] = tenantID
+	}
+	if status := c.Query("status"); status != "" {
+		filters["status"] = status
+	}
+	if genre := c.Query("genre"); genre != "" {
+		filters["genre"] = genre
+	}
+
+	novels, total, err := h.novelService.ListNovelsFiltered(page, pageSize, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -95,7 +118,7 @@ func (h *NovelHandler) ListNovels(c *gin.Context) {
 			"total":      total,
 			"page":       page,
 			"page_size":  pageSize,
-			"total_page": (total + pageSize - 1) / pageSize,
+			"total_page": (int(total) + pageSize - 1) / pageSize,
 		},
 	})
 }
@@ -163,7 +186,64 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 		return
 	}
 
-	chapter, err := h.chapterService.GenerateChapter(uint(novelId), &req)
+	// 支持通过 Header 临时覆盖 AI 模型/provider
+	if override := c.GetHeader("X-Model-Override"); override != "" && req.ModelOverride == "" {
+		req.ModelOverride = override
+	}
+
+	chapter, err := h.chapterService.GenerateChapter(getTenantID(c), uint(novelId), &req)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	// Async post-generation: foreshadow extraction + quality check (non-blocking)
+	go func(ch *model.Chapter) {
+		if _, err := h.foreshadowService.ExtractForeshadows(ch, ch.NovelID); err != nil {
+			fmt.Printf("GenerateChapter: foreshadow extraction failed (ch %d): %v\n", ch.ID, err)
+		}
+	}(chapter)
+	go func(chID uint) {
+		if _, err := h.qualityControlService.CheckChapter(chID); err != nil {
+			fmt.Printf("GenerateChapter: quality check failed (ch %d): %v\n", chID, err)
+		}
+	}(chapter.ID)
+
+	modelUsed := req.ModelOverride
+	if modelUsed == "" {
+		modelUsed = h.novelService.GetAIService().GetDefaultProviderName()
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":       0,
+		"message":    "success",
+		"data":       chapter,
+		"model_used": modelUsed,
+	})
+}
+
+// GenerateOutline 生成大纲
+// POST /api/v1/novels/:id/outline
+func (h *NovelHandler) GenerateOutline(c *gin.Context) {
+	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		return
+	}
+
+	var req struct {
+		ChapterNum int      `json:"chapter_num"`
+		Prompt     string   `json:"prompt"`
+		Keywords   []string `json:"keywords"`
+	}
+	c.ShouldBindJSON(&req)
+
+	result, err := h.novelService.GenerateOutline(getTenantID(c), &service.GenerateOutlineRequest{
+		NovelID:    uint(novelId),
+		ChapterNum: req.ChapterNum,
+		Prompt:     req.Prompt,
+		Keywords:   req.Keywords,
+	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -172,7 +252,7 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "success",
-		"data":    chapter,
+		"data":    result,
 	})
 }
 
@@ -214,7 +294,7 @@ func (h *NovelHandler) MarkForeshadowFulfilled(c *gin.Context) {
 		return
 	}
 
-	if err := h.foreshadowService.MarkFulfilled(uint(novelId), uint(foreshadowId), req.ChapterID); err != nil {
+	if err := h.foreshadowService.MarkFulfilledByID(uint(novelId), uint(foreshadowId), req.ChapterID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}

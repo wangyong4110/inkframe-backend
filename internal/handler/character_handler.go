@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -8,6 +9,52 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
+
+// characterResponse converts a Character model to a response map, parsing JSON
+// string fields (abilities, personality_tags) into proper JSON arrays so the
+// frontend receives typed data rather than raw JSON strings.
+func characterResponse(c *model.Character) gin.H {
+	resp := gin.H{
+		"id":               c.ID,
+		"novel_id":         c.NovelID,
+		"uuid":             c.UUID,
+		"name":             c.Name,
+		"role":             c.Role,
+		"archetype":        c.Archetype,
+		"appearance":       c.Appearance,
+		"personality":      c.Personality,
+		"background":       c.Background,
+		"character_arc":    c.CharacterArc,
+		"three_view_front": c.ThreeViewFront,
+		"three_view_side":  c.ThreeViewSide,
+		"three_view_back":  c.ThreeViewBack,
+		"portrait":         c.Portrait,
+		"cover_image":      c.CoverImage,
+		"status":           c.Status,
+		"created_at":       c.CreatedAt,
+		"updated_at":       c.UpdatedAt,
+	}
+	// Parse JSON-stored array fields
+	if c.Abilities != "" {
+		var v interface{}
+		if err := json.Unmarshal([]byte(c.Abilities), &v); err == nil {
+			resp["abilities"] = v
+		}
+	}
+	if c.PersonalityTags != "" {
+		var v interface{}
+		if err := json.Unmarshal([]byte(c.PersonalityTags), &v); err == nil {
+			resp["personality_tags"] = v
+		}
+	}
+	if c.VisualDesign != "" {
+		var v interface{}
+		if err := json.Unmarshal([]byte(c.VisualDesign), &v); err == nil {
+			resp["visual_design"] = v
+		}
+	}
+	return resp
+}
 
 // CharacterHandler 角色处理器
 type CharacterHandler struct {
@@ -52,7 +99,7 @@ func (h *CharacterHandler) CreateCharacter(c *gin.Context) {
 	c.JSON(http.StatusCreated, gin.H{
 		"code":    0,
 		"message": "success",
-		"data":    character,
+		"data":    characterResponse(character),
 	})
 }
 
@@ -74,7 +121,7 @@ func (h *CharacterHandler) GetCharacter(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "success",
-		"data":    character,
+		"data":    characterResponse(character),
 	})
 }
 
@@ -93,10 +140,14 @@ func (h *CharacterHandler) ListCharacters(c *gin.Context) {
 		return
 	}
 
+	resp := make([]gin.H, 0, len(characters))
+	for _, ch := range characters {
+		resp = append(resp, characterResponse(ch))
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "success",
-		"data":    characters,
+		"data":    resp,
 	})
 }
 
@@ -124,7 +175,7 @@ func (h *CharacterHandler) UpdateCharacter(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "success",
-		"data":    character,
+		"data":    characterResponse(character),
 	})
 }
 
@@ -168,7 +219,11 @@ func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 		return
 	}
 
-	character, _ := h.characterService.GetCharacter(uint(id))
+	character, err := h.characterService.GetCharacter(uint(id))
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "character not found"})
+		return
+	}
 
 	image, err := h.imageGenService.GenerateCharacterImage(&model.GenerateImageRequest{
 		Subject:     character.Name,
@@ -187,6 +242,36 @@ func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 		"code":    0,
 		"message": "success",
 		"data":    image,
+	})
+}
+
+// GenerateCharacterProfile AI生成角色档案
+// POST /api/v1/novels/:novel_id/characters/generate
+func (h *CharacterHandler) GenerateCharacterProfile(c *gin.Context) {
+	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		return
+	}
+
+	var req struct {
+		Description string `json:"description" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	character, err := h.characterService.GenerateProfile(getTenantID(c), uint(novelId), req.Description)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code":    0,
+		"message": "success",
+		"data":    character,
 	})
 }
 

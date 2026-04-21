@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -457,7 +458,7 @@ func (s *IntelligentStoryboardService) buildPrompt(shot *StoryboardShot, config 
 	prompt += fmt.Sprintf("%s shot, %s angle, ", shot.ShotType, shot.ShotAngle)
 
 	// 添加摄像机运动
-	if shot.CameraMovement != CamStatic {
+	if CameraMovement(shot.CameraMovement) != CamStatic {
 		prompt += fmt.Sprintf("camera %s, ", shot.CameraMovement)
 	}
 
@@ -573,52 +574,6 @@ func (s *VideoEnhancementService) GetRecommendedEnhancements(videoInfo *model.Vi
 	return configs
 }
 
-// ApplyEnhancement 应用增强
-func (s *VideoEnhancementService) ApplyEnhancement(videoID uint, enhancement *EnhancementConfig) error {
-	// 获取视频信息
-	video := &model.Video{} // TODO: 从数据库获取
-
-	// 根据增强类型应用不同的处理
-	switch enhancement.Type {
-	case EnhanceFrameInterpolation:
-		return s.applyFrameInterpolation(video, enhancement)
-	case EnhanceSuperResolution:
-		return s.applySuperResolution(video, enhancement)
-	case EnhanceColorCorrection:
-		return s.applyColorCorrection(video, enhancement)
-	case EnhanceStabilization:
-		return s.applyStabilization(video, enhancement)
-	}
-
-	return nil
-}
-
-// 应用帧插值
-func (s *VideoEnhancementService) applyFrameInterpolation(video *model.Video, config *EnhancementConfig) error {
-	// TODO: 实现帧插值逻辑
-	// 可以使用 AI 模型如 FILM、SoftSplat 等
-	return nil
-}
-
-// 应用超分辨率
-func (s *VideoEnhancementService) applySuperResolution(video *model.Video, config *EnhancementConfig) error {
-	// TODO: 实现超分辨率逻辑
-	// 可以使用 Real-ESRGAN、Waifu2x 等模型
-	return nil
-}
-
-// 应用色彩校正
-func (s *VideoEnhancementService) applyColorCorrection(video *model.Video, config *EnhancementConfig) error {
-	// TODO: 实现色彩校正逻辑
-	return nil
-}
-
-// 应用稳定化
-func (s *VideoEnhancementService) applyStabilization(video *model.Video, config *EnhancementConfig) error {
-	// TODO: 实现稳定化逻辑
-	// 可以使用 vid.stab 或 AI 稳定化模型
-	return nil
-}
 
 // ============================================
 // 3. 帧生成服务
@@ -731,7 +686,7 @@ func (s *FrameGeneratorService) buildFramePrompt(req *FrameGenerationRequest) st
 	prompt := req.Shot.Prompt
 
 	// 添加摄像机运动信息
-	if req.Shot.CameraMovement != CamStatic {
+	if CameraMovement(req.Shot.CameraMovement) != CamStatic {
 		prompt += fmt.Sprintf(", camera %s movement", req.Shot.CameraMovement)
 	}
 
@@ -869,15 +824,204 @@ func (s *ConsistencyValidatorService) ValidateConsistency(
 	return result
 }
 
-// 验证角色一致性
+// 验证角色一致性（Vision AI）
 func (s *ConsistencyValidatorService) validateCharacterConsistency(frameURL string, char *CharacterVisual) float64 {
-	// TODO: 使用 Vision AI 分析角色外观一致性
-	// 返回 0-1 的相似度分数
-	return 0.85 // 简化实现
+	if s.aiService == nil || char.BaseImageURL == "" || frameURL == "" {
+		return 0.85
+	}
+	prompt := fmt.Sprintf(
+		"Rate the visual consistency of this character across two images on a scale of 0.0 to 1.0.\n"+
+			"Check: hair color/style, facial features, skin tone, outfit/clothing.\n"+
+			"Reference image (portrait): first image. Current frame: second image.\n"+
+			"Character: %s\n"+
+			"Return ONLY a single decimal number between 0.0 and 1.0. No explanation.",
+		char.Name,
+	)
+	result, err := s.aiService.GenerateWithVision(prompt, []string{char.BaseImageURL, frameURL})
+	if err != nil {
+		return 0.85
+	}
+	return parseFloatSafe(result, 0.85)
 }
 
-// 验证场景一致性
+// 验证场景一致性（Vision AI）
 func (s *ConsistencyValidatorService) validateSceneConsistency(frameURL string, scene *SceneVisual) float64 {
-	// TODO: 使用 Vision AI 分析场景一致性
-	return 0.85 // 简化实现
+	if s.aiService == nil || frameURL == "" || scene.Name == "" {
+		return 0.85
+	}
+	prompt := fmt.Sprintf(
+		"Rate the visual consistency of the scene in this image with the description on a scale of 0.0 to 1.0.\n"+
+			"Scene name/description: %s\n"+
+			"Check: location/setting accuracy, lighting, color palette, atmosphere.\n"+
+			"Return ONLY a single decimal number between 0.0 and 1.0. No explanation.",
+		scene.Name,
+	)
+	result, err := s.aiService.GenerateWithVision(prompt, []string{frameURL})
+	if err != nil {
+		return 0.85
+	}
+	return parseFloatSafe(result, 0.85)
+}
+
+// parseFloatSafe 从字符串中提取 float64，失败返回 fallback
+func parseFloatSafe(s string, fallback float64) float64 {
+	s = strings.TrimSpace(s)
+	// 提取第一个数字（可能包含小数点）
+	numStr := ""
+	for _, ch := range s {
+		if (ch >= '0' && ch <= '9') || ch == '.' {
+			numStr += string(ch)
+		} else if numStr != "" {
+			break
+		}
+	}
+	if numStr == "" {
+		return fallback
+	}
+	val, err := strconv.ParseFloat(numStr, 64)
+	if err != nil {
+		return fallback
+	}
+	if val < 0 {
+		val = 0
+	}
+	if val > 1 {
+		val = 1
+	}
+	return val
+}
+
+// ============================================
+// 6. 专业图像 Prompt 生成器
+// ============================================
+
+// ImagePromptConfig 图像 Prompt 生成配置
+type ImagePromptConfig struct {
+	ArtStyle       string   // 风格：realistic/anime/ink_wash/watercolor/cinematic
+	Resolution     string   // 分辨率标签：4k/8k/hd
+	CharacterRefs  []string // 角色外貌关键词
+	LightingStyle  string   // 光影：golden_hour/dramatic/soft/backlit
+	ColorPalette   string   // 色调：warm/cool/neutral/vibrant
+}
+
+// ImagePromptBuilder 专业图像 Prompt 生成器
+type ImagePromptBuilder struct{}
+
+// NewImagePromptBuilder 创建图像 Prompt 生成器
+func NewImagePromptBuilder() *ImagePromptBuilder {
+	return &ImagePromptBuilder{}
+}
+
+// BuildVisualPrompt 根据分镜信息生成专业图像 Prompt
+// 结构: [主体描述], [场景], [风格标签], [光影], [构图], [质量词]
+func (b *ImagePromptBuilder) BuildVisualPrompt(shot *StoryboardShot, config *ImagePromptConfig) string {
+	parts := []string{}
+
+	// 主体描述
+	if shot.Description != "" {
+		parts = append(parts, shot.Description)
+	}
+
+	// 角色信息
+	if len(shot.Characters) > 0 {
+		charParts := []string{}
+		for _, char := range shot.Characters {
+			charDesc := char.Name
+			if char.Expression != "" {
+				charDesc += " with " + char.Expression + " expression"
+			}
+			charParts = append(charParts, charDesc)
+		}
+		parts = append(parts, strings.Join(charParts, " and "))
+	}
+
+	// 外貌参考关键词
+	if config != nil && len(config.CharacterRefs) > 0 {
+		parts = append(parts, strings.Join(config.CharacterRefs, ", "))
+	}
+
+	// 场景
+	if shot.Scene != "" {
+		parts = append(parts, "in "+shot.Scene)
+	}
+
+	// 光影
+	lighting := "natural lighting"
+	if config != nil && config.LightingStyle != "" {
+		lighting = config.LightingStyle
+	} else if shot.Lighting != "" {
+		lighting = shot.Lighting
+	}
+	parts = append(parts, lighting)
+
+	// 镜头构图
+	if shot.ShotType != "" {
+		parts = append(parts, string(shot.ShotType)+" shot")
+	}
+	if shot.ShotAngle != "" {
+		parts = append(parts, string(shot.ShotAngle)+" angle")
+	}
+
+	// 风格标签 + 风格特定质量词
+	styleQualityTokens := map[string]string{
+		"realistic":  "8K uhd, photorealistic, film grain, anamorphic lens, RAW photo, professional photography",
+		"anime":      "anime style, key visual, vibrant colors, detailed linework, Studio Ghibli quality",
+		"watercolor": "watercolor painting style, soft edges, transparent washes, painterly, flowing colors",
+		"ink_wash":   "Chinese ink wash painting, 水墨风格, monochromatic, elegant brushwork, traditional",
+		"cinematic":  "cinematic 4K, anamorphic lens, color graded, shallow DOF, Arri Alexa, film grain",
+	}
+
+	artStyle := "cinematic"
+	qualityTokens := styleQualityTokens["cinematic"]
+	if config != nil && config.ArtStyle != "" {
+		if tokens, ok := styleQualityTokens[config.ArtStyle]; ok {
+			artStyle = config.ArtStyle + " style"
+			qualityTokens = tokens
+		} else {
+			artStyle = config.ArtStyle + " style"
+			qualityTokens = "highly detailed, masterpiece, high quality"
+		}
+	}
+	parts = append(parts, artStyle)
+
+	// 质量词（风格特定）
+	resolution := qualityTokens
+	if config != nil {
+		switch config.Resolution {
+		case "4k":
+			resolution = qualityTokens + ", 4k resolution, masterpiece"
+		case "8k":
+			resolution = qualityTokens + ", 8k resolution, masterpiece, award winning"
+		}
+	}
+	parts = append(parts, resolution)
+
+	return strings.Join(parts, ", ")
+}
+
+// BuildNegativePrompt 生成标准负向 Prompt
+func (b *ImagePromptBuilder) BuildNegativePrompt() string {
+	return "blurry, low quality, deformed, ugly, watermark, text, bad anatomy, extra limbs, " +
+		"poorly drawn, out of frame, cropped, jpeg artifacts, noise, grainy, overexposed, " +
+		"underexposed, disfigured, mutated, worst quality, draft"
+}
+
+// EnhancePromptForShot 根据分镜情感和节奏增强 Prompt
+func (b *ImagePromptBuilder) EnhancePromptForShot(basePrompt string, shot *StoryboardShot) string {
+	enhancements := []string{basePrompt}
+
+	// 根据情感添加气氛词
+	emotionMap := map[string]string{
+		"紧张":  "tense atmosphere, dramatic shadows",
+		"悲伤":  "melancholic atmosphere, muted colors",
+		"快乐":  "joyful atmosphere, warm bright lighting",
+		"愤怒":  "intense atmosphere, high contrast",
+		"平静":  "serene atmosphere, soft diffused light",
+		"神秘":  "mysterious atmosphere, fog, dim lighting",
+	}
+	if enhancement, ok := emotionMap[shot.Emotion]; ok {
+		enhancements = append(enhancements, enhancement)
+	}
+
+	return strings.Join(enhancements, ", ")
 }

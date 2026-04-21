@@ -76,6 +76,9 @@ func (r *NovelRepository) List(page, pageSize int, filters map[string]interface{
 	query := r.db.Model(&model.Novel{})
 
 	// 应用过滤
+	if tenantID, ok := filters["tenant_id"]; ok {
+		query = query.Where("tenant_id = ?", tenantID)
+	}
 	if status, ok := filters["status"]; ok {
 		query = query.Where("status = ?", status)
 	}
@@ -107,6 +110,15 @@ func (r *NovelRepository) Update(novel *model.Novel) error {
 		return err
 	}
 	r.invalidateCache(novel.ID)
+	return nil
+}
+
+// UpdateFields 更新小说指定字段（避免 Save 写零值导致数据丢失）
+func (r *NovelRepository) UpdateFields(id uint, fields map[string]interface{}) error {
+	if err := r.db.Model(&model.Novel{}).Where("id = ?", id).Updates(fields).Error; err != nil {
+		return err
+	}
+	r.invalidateCache(id)
 	return nil
 }
 
@@ -267,6 +279,8 @@ func NewWorldviewRepository(db *gorm.DB) *WorldviewRepository {
 	return &WorldviewRepository{db: db}
 }
 
+func (r *WorldviewRepository) DB() *gorm.DB { return r.db }
+
 // Create 创建世界观
 func (r *WorldviewRepository) Create(worldview *model.Worldview) error {
 	return r.db.Create(worldview).Error
@@ -415,6 +429,11 @@ func (r *AIModelRepository) Update(model *model.AIModel) error {
 	return r.db.Save(model).Error
 }
 
+// Delete 删除AI模型
+func (r *AIModelRepository) Delete(id uint) error {
+	return r.db.Delete(&model.AIModel{}, id).Error
+}
+
 // UpdateHealthStatus 更新健康状态
 func (r *AIModelRepository) UpdateHealthStatus(providerID uint, status string) error {
 	return r.db.Model(&model.ModelProvider{}).Where("id = ?", providerID).
@@ -533,6 +552,11 @@ func (r *KnowledgeBaseRepository) GetByNovel(novelID uint) ([]*model.KnowledgeBa
 	return results, nil
 }
 
+// Update 更新知识库
+func (r *KnowledgeBaseRepository) Update(kb *model.KnowledgeBase) error {
+	return r.db.Save(kb).Error
+}
+
 // IncrementUsageCount 增加使用次数
 func (r *KnowledgeBaseRepository) IncrementUsageCount(id uint) error {
 	return r.db.Model(&model.KnowledgeBase{}).Where("id = ?", id).
@@ -592,6 +616,11 @@ func (r *VideoRepository) Update(video *model.Video) error {
 	return r.db.Save(video).Error
 }
 
+// DeleteByID 删除视频
+func (r *VideoRepository) DeleteByID(id uint) error {
+	return r.db.Delete(&model.Video{}, id).Error
+}
+
 // StoryboardRepository 分镜仓库
 type StoryboardRepository struct {
 	db *gorm.DB
@@ -619,6 +648,15 @@ func (r *StoryboardRepository) GetByID(id uint) (*model.StoryboardShot, error) {
 func (r *StoryboardRepository) ListByVideo(videoID uint) ([]*model.StoryboardShot, error) {
 	var shots []*model.StoryboardShot
 	if err := r.db.Where("video_id = ?", videoID).Order("shot_no ASC").Find(&shots).Error; err != nil {
+		return nil, err
+	}
+	return shots, nil
+}
+
+// ListByVideoAndStatus 按视频ID和状态获取分镜
+func (r *StoryboardRepository) ListByVideoAndStatus(videoID uint, status string) ([]*model.StoryboardShot, error) {
+	var shots []*model.StoryboardShot
+	if err := r.db.Where("video_id = ? AND status = ?", videoID, status).Order("shot_no ASC").Find(&shots).Error; err != nil {
 		return nil, err
 	}
 	return shots, nil
@@ -683,6 +721,25 @@ func (r *ReviewTaskRepository) UpdateStatus(id uint, status string, note string)
 		updates["completed_at"] = &now
 	}
 	return r.db.Model(&model.ReviewTask{}).Where("id = ?", id).Updates(updates).Error
+}
+
+// CharacterStateSnapshotRepository 角色状态快照仓库
+type CharacterStateSnapshotRepository struct {
+	db *gorm.DB
+}
+
+func NewCharacterStateSnapshotRepository(db *gorm.DB) *CharacterStateSnapshotRepository {
+	return &CharacterStateSnapshotRepository{db: db}
+}
+
+func (r *CharacterStateSnapshotRepository) Create(snapshot *model.CharacterStateSnapshot) error {
+	return r.db.Create(snapshot).Error
+}
+
+func (r *CharacterStateSnapshotRepository) ListByCharacter(characterID uint) ([]*model.CharacterStateSnapshot, error) {
+	var snapshots []*model.CharacterStateSnapshot
+	err := r.db.Where("character_id = ?", characterID).Order("created_at DESC").Find(&snapshots).Error
+	return snapshots, err
 }
 
 // ChapterVersionRepository 章节版本仓库
@@ -766,10 +823,37 @@ func (r *ModelProviderRepository) List() ([]*model.ModelProvider, error) {
 	return providers, nil
 }
 
+// ListByTenant 获取租户提供商列表（含系统级 tenant_id=0）
+func (r *ModelProviderRepository) ListByTenant(tenantID uint) ([]*model.ModelProvider, error) {
+	var providers []*model.ModelProvider
+	if err := r.db.Where("tenant_id = ? OR tenant_id = 0", tenantID).Find(&providers).Error; err != nil {
+		return nil, err
+	}
+	return providers, nil
+}
+
 // GetByID 根据ID获取提供商
 func (r *ModelProviderRepository) GetByID(id uint) (*model.ModelProvider, error) {
 	var provider model.ModelProvider
 	if err := r.db.First(&provider, id).Error; err != nil {
+		return nil, err
+	}
+	return &provider, nil
+}
+
+// GetByIDAndTenant 根据ID和租户获取提供商（仅租户自己的或系统级）
+func (r *ModelProviderRepository) GetByIDAndTenant(id uint, tenantID uint) (*model.ModelProvider, error) {
+	var provider model.ModelProvider
+	if err := r.db.Where("id = ? AND (tenant_id = ? OR tenant_id = 0)", id, tenantID).First(&provider).Error; err != nil {
+		return nil, err
+	}
+	return &provider, nil
+}
+
+// GetSystemProvider 获取系统级提供商（tenant_id=0）
+func (r *ModelProviderRepository) GetSystemProvider(name string) (*model.ModelProvider, error) {
+	var provider model.ModelProvider
+	if err := r.db.Where("name = ? AND tenant_id = 0", name).First(&provider).Error; err != nil {
 		return nil, err
 	}
 	return &provider, nil
@@ -783,6 +867,11 @@ func (r *ModelProviderRepository) Create(provider *model.ModelProvider) error {
 // Update 更新提供商
 func (r *ModelProviderRepository) Update(provider *model.ModelProvider) error {
 	return r.db.Save(provider).Error
+}
+
+// Delete 删除模型提供商
+func (r *ModelProviderRepository) Delete(id uint) error {
+	return r.db.Delete(&model.ModelProvider{}, id).Error
 }
 
 // UpdateHealthStatus 更新健康状态

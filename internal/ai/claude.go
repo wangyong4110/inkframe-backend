@@ -1,12 +1,14 @@
 package ai
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -49,7 +51,10 @@ func (p *AnthropicProvider) GetModels() []string {
 }
 
 func (p *AnthropicProvider) HealthCheck(ctx context.Context) error {
-	req, _ := http.NewRequestWithContext(ctx, "GET", p.endpoint+"/messages", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", p.endpoint+"/messages", nil)
+	if err != nil {
+		return err
+	}
 	req.Header.Set("x-api-key", p.apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
 
@@ -70,13 +75,37 @@ func (p *AnthropicProvider) HealthCheck(ctx context.Context) error {
 func (p *AnthropicProvider) Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
 	start := time.Now()
 
-	// 构建 Anthropic 请求
-	messages := []map[string]string{}
+	// 构建 Anthropic 请求（支持 Vision 多模态）
+	messages := []map[string]interface{}{}
 	for _, msg := range req.Messages {
-		messages = append(messages, map[string]string{
-			"role":    msg.Role,
-			"content": msg.Content,
-		})
+		if len(msg.ImageURLs) > 0 {
+			// 多模态消息：content 为 content blocks
+			contentBlocks := []map[string]interface{}{}
+			for _, imgURL := range msg.ImageURLs {
+				contentBlocks = append(contentBlocks, map[string]interface{}{
+					"type": "image",
+					"source": map[string]string{
+						"type": "url",
+						"url":  imgURL,
+					},
+				})
+			}
+			if msg.Content != "" {
+				contentBlocks = append(contentBlocks, map[string]interface{}{
+					"type": "text",
+					"text": msg.Content,
+				})
+			}
+			messages = append(messages, map[string]interface{}{
+				"role":    msg.Role,
+				"content": contentBlocks,
+			})
+		} else {
+			messages = append(messages, map[string]interface{}{
+				"role":    msg.Role,
+				"content": msg.Content,
+			})
+		}
 	}
 
 	anthropicReq := map[string]interface{}{
@@ -95,7 +124,10 @@ func (p *AnthropicProvider) Generate(ctx context.Context, req *GenerateRequest) 
 		anthropicReq["system"] = req.SystemPrompt
 	}
 
-	body, _ := json.Marshal(anthropicReq)
+	body, err := json.Marshal(anthropicReq)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint+"/messages", bytes.NewReader(body))
 	if err != nil {
@@ -112,11 +144,14 @@ func (p *AnthropicProvider) Generate(ctx context.Context, req *GenerateRequest) 
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response body: %w", err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return &GenerateResponse{
-			Error:     fmt.Sprintf("Claude API error: %s", string(respBody)),
+			Error:      fmt.Sprintf("Claude API error: %s", string(respBody)),
 			FinishTime: time.Since(start).Milliseconds(),
 		}, nil
 	}
@@ -126,13 +161,20 @@ func (p *AnthropicProvider) Generate(ctx context.Context, req *GenerateRequest) 
 		return nil, err
 	}
 
+	if len(claudeResp.Content) == 0 {
+		return &GenerateResponse{
+			Error:      "no content in response",
+			FinishTime: time.Since(start).Milliseconds(),
+		}, nil
+	}
+
 	return &GenerateResponse{
-		Content:    claudeResp.Content[0].Text,
-		Model:      claudeResp.Model,
-		Tokens:     claudeResp.Usage.OutputTokens,
+		Content:     claudeResp.Content[0].Text,
+		Model:       claudeResp.Model,
+		Tokens:      claudeResp.Usage.OutputTokens,
 		InputTokens: claudeResp.Usage.InputTokens,
-		StopReason: claudeResp.StopReason,
-		FinishTime: time.Since(start).Milliseconds(),
+		StopReason:  claudeResp.StopReason,
+		FinishTime:  time.Since(start).Milliseconds(),
 	}, nil
 }
 
@@ -142,12 +184,35 @@ func (p *AnthropicProvider) GenerateStream(ctx context.Context, req *GenerateReq
 	go func() {
 		defer close(ch)
 
-		messages := []map[string]string{}
+		messages := []map[string]interface{}{}
 		for _, msg := range req.Messages {
-			messages = append(messages, map[string]string{
-				"role":    msg.Role,
-				"content": msg.Content,
-			})
+			if len(msg.ImageURLs) > 0 {
+				contentBlocks := []map[string]interface{}{}
+				for _, imgURL := range msg.ImageURLs {
+					contentBlocks = append(contentBlocks, map[string]interface{}{
+						"type": "image",
+						"source": map[string]string{
+							"type": "url",
+							"url":  imgURL,
+						},
+					})
+				}
+				if msg.Content != "" {
+					contentBlocks = append(contentBlocks, map[string]interface{}{
+						"type": "text",
+						"text": msg.Content,
+					})
+				}
+				messages = append(messages, map[string]interface{}{
+					"role":    msg.Role,
+					"content": contentBlocks,
+				})
+			} else {
+				messages = append(messages, map[string]interface{}{
+					"role":    msg.Role,
+					"content": msg.Content,
+				})
+			}
 		}
 
 		anthropicReq := map[string]interface{}{
@@ -162,7 +227,11 @@ func (p *AnthropicProvider) GenerateStream(ctx context.Context, req *GenerateReq
 			anthropicReq["system"] = req.SystemPrompt
 		}
 
-		body, _ := json.Marshal(anthropicReq)
+		body, marshalErr := json.Marshal(anthropicReq)
+		if marshalErr != nil {
+			ch <- &GenerateResponse{Error: marshalErr.Error()}
+			return
+		}
 
 		httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint+"/messages", bytes.NewReader(body))
 		if err != nil {
@@ -306,7 +375,10 @@ func (p *GoogleProvider) GetModels() []string {
 
 func (p *GoogleProvider) HealthCheck(ctx context.Context) error {
 	url := fmt.Sprintf("%s/models?key=%s", p.endpoint, p.apiKey)
-	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return err
+	}
 
 	resp, err := p.client.Do(req)
 	if err != nil {
@@ -416,10 +488,110 @@ func (p *GoogleProvider) GenerateStream(ctx context.Context, req *GenerateReques
 
 	go func() {
 		defer close(ch)
-		// 实现流式生成
+
+		// 构建请求体（与 Generate 相同）
+		contents := []map[string]interface{}{}
+		for _, msg := range req.Messages {
+			role := "user"
+			if msg.Role == "assistant" {
+				role = "model"
+			}
+			contents = append(contents, map[string]interface{}{
+				"role": role,
+				"parts": []map[string]string{
+					{"text": msg.Content},
+				},
+			})
+		}
+
+		generationConfig := map[string]interface{}{
+			"temperature":     req.Temperature,
+			"maxOutputTokens": req.MaxTokens,
+		}
+		if req.TopP > 0 {
+			generationConfig["topP"] = req.TopP
+		}
+
+		googleReq := map[string]interface{}{
+			"contents":         contents,
+			"generationConfig": generationConfig,
+		}
+		if req.SystemPrompt != "" {
+			googleReq["systemInstruction"] = map[string]interface{}{
+				"parts": []map[string]string{{"text": req.SystemPrompt}},
+			}
+		}
+
+		body, _ := json.Marshal(googleReq)
+
+		model := p.model
+		if req.Model != "" {
+			model = req.Model
+		}
+		// 使用 SSE 流式端点（?alt=sse）
+		url := fmt.Sprintf("%s/models/%s:streamGenerateContent?key=%s&alt=sse", p.endpoint, model, p.apiKey)
+
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
+		if err != nil {
+			ch <- &GenerateResponse{Error: err.Error()}
+			return
+		}
+		httpReq.Header.Set("Content-Type", "application/json")
+
+		resp, err := p.client.Do(httpReq)
+		if err != nil {
+			ch <- &GenerateResponse{Error: err.Error()}
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			errBody, _ := io.ReadAll(resp.Body)
+			ch <- &GenerateResponse{Error: fmt.Sprintf("Gemini stream error %d: %s", resp.StatusCode, string(errBody))}
+			return
+		}
+
+		// 解析 SSE 数据行（每行格式：data: {...json...}）
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if data == "" || data == "[DONE]" {
+				continue
+			}
+
+			var chunk GeminiStreamChunk
+			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+				continue
+			}
+
+			for _, candidate := range chunk.Candidates {
+				for _, part := range candidate.Content.Parts {
+					if part.Text != "" {
+						ch <- &GenerateResponse{Content: part.Text}
+					}
+				}
+			}
+		}
 	}()
 
 	return ch, nil
+}
+
+// GeminiStreamChunk Gemini 流式响应块
+type GeminiStreamChunk struct {
+	Candidates []struct {
+		Content struct {
+			Parts []struct {
+				Text string `json:"text"`
+			} `json:"parts"`
+			Role string `json:"role"`
+		} `json:"content"`
+		FinishReason string `json:"finishReason"`
+	} `json:"candidates"`
 }
 
 func (p *GoogleProvider) Embed(ctx context.Context, text string) ([]float32, error) {

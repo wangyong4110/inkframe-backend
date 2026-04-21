@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/PuerkitoBio/goquery"
+	"github.com/google/uuid"
 	"io"
 	"log"
 	"net/http"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -90,19 +90,24 @@ func NewNovelImportService(
 // Import 执行导入
 func (s *NovelImportService) Import(req *ImportRequest) (*ImportResult, error) {
 	start := time.Now()
-	result := &ImportResult{}
+
+	var result *ImportResult
+	var err error
 
 	switch req.Source {
 	case SourceFile:
-		return s.importFromFile(req)
+		result, err = s.importFromFile(req)
 	case SourceURL:
-		return s.importFromURL(req)
+		result, err = s.importFromURL(req)
 	case SourceCrawl:
-		return s.importFromCrawl(req)
+		result, err = s.importFromCrawl(req)
 	default:
 		return nil, fmt.Errorf("unsupported import source: %s", req.Source)
 	}
 
+	if err != nil || result == nil {
+		return result, err
+	}
 	result.Duration = time.Since(start).Seconds()
 	return result, nil
 }
@@ -326,10 +331,13 @@ func (s *NovelImportService) parseTxtFile(data []byte, fileName string) (*model.
 
 	// 提取标题（从文件名或内容第一行）
 	title := strings.TrimSuffix(filepath.Base(fileName), filepath.Ext(fileName))
-	titleLine := strings.Split(content, "\n")[0]
-	if len(titleLine) < 50 && len(titleLine) > 0 {
-		title = titleLine
-		content = strings.Join(strings.Split(content, "\n")[1:], "\n")
+	lines := strings.Split(content, "\n")
+	if len(lines) > 0 {
+		titleLine := lines[0]
+		if len(titleLine) > 0 && len(titleLine) < 50 {
+			title = titleLine
+			content = strings.Join(lines[1:], "\n")
+		}
 	}
 
 	novel := &model.Novel{
@@ -491,7 +499,7 @@ func (s *NovelImportService) splitByChapters(content, novelTitle string) []*mode
 			chapterTitles = []string{}
 			for _, match := range matches {
 				splits = append(splits, match[0])
-				chapterTitles = append(chapterTitles, match[0])
+				chapterTitles = append(chapterTitles, content[match[0]:match[1]])
 			}
 		}
 	}
@@ -593,6 +601,7 @@ type NovelToVideoService struct {
 	novelRepo            *repository.NovelRepository
 	chapterRepo          *repository.ChapterRepository
 	videoRepo            *repository.VideoRepository
+	storyboardRepo       *repository.StoryboardRepository
 }
 
 // NewNovelToVideoService 创建小说转视频服务
@@ -605,6 +614,7 @@ func NewNovelToVideoService(
 	novelRepo *repository.NovelRepository,
 	chapterRepo *repository.ChapterRepository,
 	videoRepo *repository.VideoRepository,
+	storyboardRepo *repository.StoryboardRepository,
 ) *NovelToVideoService {
 	return &NovelToVideoService{
 		importService:        importService,
@@ -615,6 +625,7 @@ func NewNovelToVideoService(
 		novelRepo:            novelRepo,
 		chapterRepo:          chapterRepo,
 		videoRepo:            videoRepo,
+		storyboardRepo:       storyboardRepo,
 	}
 }
 
@@ -675,9 +686,15 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 		endCh = 9999
 	}
 
-	chapters, err := s.chapterRepo.List(req.NovelID, startCh, endCh)
+	allChapters, err := s.chapterRepo.ListByNovel(req.NovelID)
 	if err != nil {
 		return nil, fmt.Errorf("get chapters failed: %w", err)
+	}
+	var chapters []*model.Chapter
+	for _, ch := range allChapters {
+		if ch.ChapterNo >= startCh && ch.ChapterNo <= endCh {
+			chapters = append(chapters, ch)
+		}
 	}
 
 	if len(chapters) == 0 {
@@ -721,10 +738,27 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 			continue
 		}
 
-		// 保存分镜
-		for _, shot := range shots {
-			shot.VideoID = video.ID
-			// TODO: 保存到数据库
+		// 保存分镜到数据库
+		for idx, shot := range shots {
+			dbShot := &model.StoryboardShot{
+				VideoID:     video.ID,
+				UUID:        uuid.New().String(),
+				ShotNo:      idx + 1,
+				ChapterID:   &chapter.ID,
+				Description: shot.Description,
+				Dialogue:    shot.Dialogue,
+				CameraType:  string(shot.CameraMovement),
+				CameraAngle: string(shot.ShotAngle),
+				ShotSize:    string(shot.ShotSize),
+				Duration:    shot.Duration,
+				Prompt:      shot.Prompt,
+				Status:      "pending",
+			}
+			if s.storyboardRepo != nil {
+				if err := s.storyboardRepo.Create(dbShot); err != nil {
+					log.Printf("save storyboard shot failed (chapter %d, shot %d): %v", chapter.ChapterNo, idx+1, err)
+				}
+			}
 			totalShots++
 		}
 

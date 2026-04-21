@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
-	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -22,7 +22,13 @@ type PromptService struct {
 }
 
 func NewPromptService(repo interface{}) *PromptService {
-	return &PromptService{templateRepo: repo}
+	type templateRepoI interface {
+		GetByGenreAndStage(genre, stage string) (*model.PromptTemplate, error)
+		GetByID(id uint) (*model.PromptTemplate, error)
+		List() ([]*model.PromptTemplate, error)
+	}
+	r, _ := repo.(templateRepoI)
+	return &PromptService{templateRepo: r}
 }
 
 // RenderPrompt 渲染提示词
@@ -73,7 +79,14 @@ func (s *PromptService) BuildOutlinePrompt(novel *model.Novel, req *GenerateOutl
 }
 
 // BuildChapterPrompt 构建章节提示词
-func (s *PromptService) BuildChapterPrompt(novel *model.Novel, chapter *model.Chapter, recentChapters []*model.Chapter, characters []*model.Character) string {
+func (s *PromptService) BuildChapterPrompt(
+	novel *model.Novel,
+	chapter *model.Chapter,
+	recentChapters []*model.Chapter,
+	characters []*model.Character,
+	characterSnapshots []*model.CharacterStateSnapshot,
+	unfulfilledForeshadows []*model.KnowledgeBase,
+) string {
 	var sb strings.Builder
 
 	// 系统提示
@@ -81,7 +94,7 @@ func (s *PromptService) BuildChapterPrompt(novel *model.Novel, chapter *model.Ch
 	sb.WriteString("1. 保持与前文的剧情连贯性\n")
 	sb.WriteString("2. 角色性格和对话风格保持一致\n")
 	sb.WriteString("3. 遵循世界观设定\n")
-	sb.WriteString("4. 适当埋下伏笔\n")
+	sb.WriteString("4. 适当埋下伏笔并呼应已有伏笔\n")
 	sb.WriteString("5. 语言生动，描写细腻\n\n")
 
 	// 小说信息
@@ -104,11 +117,21 @@ func (s *PromptService) BuildChapterPrompt(novel *model.Novel, chapter *model.Ch
 
 	// 角色信息
 	if len(characters) > 0 {
-		sb.WriteString("【主要角色】\n")
+		sb.WriteString("【主要角色设定】\n")
 		for _, char := range characters {
 			sb.WriteString(fmt.Sprintf("- %s：%s\n", char.Name, char.Personality))
 		}
 		sb.WriteString("\n")
+	}
+
+	// 角色当前状态快照
+	if len(characterSnapshots) > 0 {
+		sb.WriteString("【角色当前状态（上章末）】\n")
+		for _, snap := range characterSnapshots {
+			sb.WriteString(fmt.Sprintf("- 角色ID[%d]：位置=%s，情绪=%s，目标=%s，能力等级=%d\n",
+				snap.CharacterID, snap.Location, snap.Mood, snap.Motivation, snap.PowerLevel))
+		}
+		sb.WriteString("⚠️ 本章角色行为必须与上述状态保持连续性\n\n")
 	}
 
 	// 前情提要
@@ -121,14 +144,19 @@ func (s *PromptService) BuildChapterPrompt(novel *model.Novel, chapter *model.Ch
 		sb.WriteString("\n")
 	}
 
-	// 章节要求
-	sb.WriteString(fmt.Sprintf("【章节要求】\n"))
-	sb.WriteString(fmt.Sprintf("- 章节标题：%s\n", chapter.Title))
-	sb.WriteString(fmt.Sprintf("- 字数要求：2000-3000字\n"))
-
-	if req.Prompt, ok := interface{}(nil).(string); ok && req.Prompt != "" {
-		sb.WriteString(fmt.Sprintf("- 创作要求：%s\n", req.Prompt))
+	// 未兑现伏笔
+	if len(unfulfilledForeshadows) > 0 {
+		sb.WriteString("【待兑现伏笔（可酌情呼应）】\n")
+		for _, kb := range unfulfilledForeshadows {
+			sb.WriteString(fmt.Sprintf("- %s：%s\n", kb.Title, kb.Content))
+		}
+		sb.WriteString("\n")
 	}
+
+	// 章节要求
+	sb.WriteString("【章节要求】\n")
+	sb.WriteString(fmt.Sprintf("- 章节标题：%s\n", chapter.Title))
+	sb.WriteString("- 字数要求：2000-3000字\n")
 
 	return sb.String()
 }
@@ -165,9 +193,18 @@ type ContinuityService struct {
 }
 
 func NewContinuityService(charRepo, chapterRepo interface{}) *ContinuityService {
+	type charRepoI interface {
+		ListByNovel(novelID uint) ([]*model.Character, error)
+		GetLatestSnapshot(characterID uint) (*model.CharacterStateSnapshot, error)
+	}
+	type chapterRepoI interface {
+		GetRecent(novelID uint, chapterNo, count int) ([]*model.Chapter, error)
+	}
+	cr, _ := charRepo.(charRepoI)
+	cpr, _ := chapterRepo.(chapterRepoI)
 	return &ContinuityService{
-		characterRepo: charRepo,
-		chapterRepo:   chapterRepo,
+		characterRepo: cr,
+		chapterRepo:   cpr,
 	}
 }
 
@@ -312,42 +349,122 @@ type KnowledgeService struct {
 		Create(kb *model.KnowledgeBase) error
 		Search(keyword string, limit int) ([]*model.KnowledgeBase, error)
 		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
+		GetByID(id uint) (*model.KnowledgeBase, error)
 	}
 	vectorStore *vector.StoreManager
+	aiClient    ai.AIProvider
 }
 
-func NewKnowledgeService(kbRepo interface{}, vectorStore *vector.StoreManager) *KnowledgeService {
+func NewKnowledgeService(kbRepo interface{}, vectorStore *vector.StoreManager, aiClient ai.AIProvider) *KnowledgeService {
+	type kbRepoI interface {
+		Create(kb *model.KnowledgeBase) error
+		Search(keyword string, limit int) ([]*model.KnowledgeBase, error)
+		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
+		GetByID(id uint) (*model.KnowledgeBase, error)
+	}
+	r, _ := kbRepo.(kbRepoI)
 	return &KnowledgeService{
-		kbRepo:      kbRepo,
+		kbRepo:      r,
 		vectorStore: vectorStore,
+		aiClient:    aiClient,
 	}
 }
 
-// StoreKnowledge 存储知识
+// StoreKnowledge 存储知识（含向量化）
 func (s *KnowledgeService) StoreKnowledge(ctx context.Context, kb *model.KnowledgeBase) error {
 	// 存储到数据库
 	if err := s.kbRepo.Create(kb); err != nil {
 		return err
 	}
 
-	// 存储到向量数据库
-	if s.vectorStore != nil {
-		// 向量化并存储
-		// 实际实现需要调用 embedder
+	// 向量化并存入向量库
+	if s.vectorStore != nil && s.aiClient != nil {
+		text := kb.Title + " " + kb.Content
+		vec, err := s.aiClient.Embed(ctx, text)
+		if err != nil {
+			log.Printf("KnowledgeService.StoreKnowledge: embed error for kb %d: %v", kb.ID, err)
+			// 不因为向量化失败就整体失败，降级处理
+		} else {
+			store := s.vectorStore.DefaultStore()
+			if store != nil {
+				payload := map[string]interface{}{
+					"id":       kb.ID,
+					"type":     kb.Type,
+					"title":    kb.Title,
+					"content":  kb.Content,
+					"novel_id": kb.NovelID,
+				}
+				_, storeErr := store.Store(ctx, &vector.StoreRequest{
+					Collection: "knowledge_base",
+					ID:         fmt.Sprintf("%d", kb.ID),
+					Vector:     vec,
+					Payload:    payload,
+				})
+				if storeErr != nil {
+					log.Printf("KnowledgeService.StoreKnowledge: vector store error for kb %d: %v", kb.ID, storeErr)
+				}
+			}
+		}
 	}
 
 	return nil
 }
 
-// SearchKnowledge 搜索知识
+// SearchKnowledge 搜索知识（优先向量语义搜索，降级到关键词）
 func (s *KnowledgeService) SearchKnowledge(ctx context.Context, query string, limit int, novelID *uint) ([]*model.KnowledgeBase, error) {
-	// 先从数据库搜索
+	// 尝试向量语义搜索
+	if s.vectorStore != nil && s.aiClient != nil {
+		vec, err := s.aiClient.Embed(ctx, query)
+		if err == nil {
+			store := s.vectorStore.DefaultStore()
+			if store != nil {
+				filters := map[string]interface{}{}
+				if novelID != nil {
+					filters["novel_id"] = *novelID
+				}
+				vectorResults, searchErr := store.Search(ctx, &vector.SearchRequest{
+					Collection: "knowledge_base",
+					Vector:     vec,
+					Limit:      limit,
+					Filters:    filters,
+					MinScore:   0.6,
+				})
+				if searchErr == nil && len(vectorResults) > 0 {
+					// 从向量结果中获取 KB 对象
+					kbs := make([]*model.KnowledgeBase, 0, len(vectorResults))
+					for _, vr := range vectorResults {
+						if idVal, ok := vr.Payload["id"]; ok {
+							var id uint
+							switch v := idVal.(type) {
+							case float64:
+								id = uint(v)
+							case uint:
+								id = v
+							}
+							if id > 0 {
+								kb, kbErr := s.kbRepo.GetByID(id)
+								if kbErr == nil {
+									kbs = append(kbs, kb)
+								}
+							}
+						}
+					}
+					if len(kbs) > 0 {
+						return kbs, nil
+					}
+				}
+			}
+		}
+		// 向量搜索失败，降级到关键词搜索
+		log.Printf("KnowledgeService.SearchKnowledge: vector search failed, fallback to keyword: %v", err)
+	}
+
+	// 关键词搜索降级
 	results, err := s.kbRepo.Search(query, limit)
 	if err != nil {
 		return nil, err
 	}
 
-	// 过滤
 	if novelID != nil {
 		var filtered []*model.KnowledgeBase
 		for _, kb := range results {
@@ -405,7 +522,7 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 	// 存储剧情点
 	for _, pp := range result.PlotPoints {
 		charJSON, _ := json.Marshal(pp.Characters)
-		locJSON, _ := json.Marshal(pp.Locations)
+		_, _ = json.Marshal(pp.Locations)
 
 		kb := &model.KnowledgeBase{
 			Type:     "plot_point",
@@ -421,13 +538,88 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 	return nil
 }
 
-// QualityControlService 质量控制服务
-type QualityControlService struct {
-	aiClient *ai.ModelManager
+// AIQualityScores AI质检评分结果
+type AIQualityScores struct {
+	Logic       float64  `json:"logic"`
+	Character   float64  `json:"character"`
+	Writing     float64  `json:"writing"`
+	Pacing      float64  `json:"pacing"`
+	Issues      []string `json:"issues"`
+	Suggestions []string `json:"suggestions"`
 }
 
-func NewQualityControlService(aiClient *ai.ModelManager) *QualityControlService {
-	return &QualityControlService{aiClient: aiClient}
+// QualityControlService 质量控制服务
+type QualityControlService struct {
+	aiClient    *ai.ModelManager
+	chapterRepo interface {
+		GetByID(id uint) (*model.Chapter, error)
+	}
+	novelRepo interface {
+		GetByID(id uint) (*model.Novel, error)
+	}
+}
+
+func NewQualityControlService(
+	aiClient *ai.ModelManager,
+	chapterRepo interface {
+		GetByID(id uint) (*model.Chapter, error)
+	},
+	novelRepo interface {
+		GetByID(id uint) (*model.Novel, error)
+	},
+) *QualityControlService {
+	return &QualityControlService{aiClient: aiClient, chapterRepo: chapterRepo, novelRepo: novelRepo}
+}
+
+// runAIQualityCheck 调用 AI 对章节内容进行综合质检，返回各维度评分（0-10分制）
+func (s *QualityControlService) runAIQualityCheck(ctx context.Context, chapter *model.Chapter, novel *model.Novel) (*AIQualityScores, error) {
+	if s.aiClient == nil {
+		return nil, fmt.Errorf("AI client not initialized")
+	}
+	provider, err := s.aiClient.GetProvider("")
+	if err != nil {
+		return nil, fmt.Errorf("get AI provider: %w", err)
+	}
+
+	novelInfo := fmt.Sprintf("小说：《%s》，类型：%s", novel.Title, novel.Genre)
+	contentPreview := chapter.Content
+	if len(contentPreview) > 3000 {
+		contentPreview = contentPreview[:3000] + "...(已截断)"
+	}
+
+	prompt := fmt.Sprintf(`请从以下维度评估这段章节内容（0-10分制），并以JSON返回：
+1. logic（逻辑连贯性）：情节是否自洽，因果关系是否合理
+2. character（角色一致性）：角色行为是否符合其性格设定
+3. writing（文笔质量）：语言是否生动，描写是否细腻，是否有重复词汇
+4. pacing（节奏把控）：场景切换是否流畅，节奏是否合理，有无张力
+
+%s
+章节标题：%s
+章节内容：
+%s
+
+请只返回以下JSON格式，不要包含任何markdown或说明文字：
+{"logic":8,"character":7,"writing":9,"pacing":8,"issues":["问题1","问题2"],"suggestions":["建议1","建议2"]}`,
+		novelInfo, chapter.Title, contentPreview)
+
+	req := &ai.GenerateRequest{
+		Messages:    []ai.ChatMessage{{Role: "user", Content: prompt}},
+		MaxTokens:   1000,
+		Temperature: 0.3,
+	}
+
+	resp, err := provider.Generate(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("AI quality check failed: %w", err)
+	}
+
+	content := extractJSONContent(resp.Content)
+	var scores AIQualityScores
+	if err := json.Unmarshal([]byte(content), &scores); err != nil {
+		return nil, fmt.Errorf("parse AI quality scores: %w (raw: %s)", err, content)
+	}
+
+	return &scores, nil
 }
 
 // QualityReport 质量报告
@@ -450,61 +642,126 @@ type QualityIssue struct {
 	Suggestion  string `json:"suggestion"`
 }
 
-// CheckChapterQuality 检查章节质量
+// CheckChapterQuality 检查章节质量（AI评分 + 规则检查）
 func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter *model.Chapter, novel *model.Novel) (*QualityReport, error) {
 	report := &QualityReport{
-		OverallScore:     0.85,
-		ConsistencyScore: 0.90,
-		QualityScore:     0.85,
-		LogicScore:       0.88,
-		StyleScore:       0.82,
-		Issues:           []QualityIssue{},
-		Suggestions:      []string{},
+		Issues:      []QualityIssue{},
+		Suggestions: []string{},
 	}
 
-	// 1. 一致性检查
-	consistencyIssues := s.checkConsistency(ctx, chapter, novel)
-	report.Issues = append(report.Issues, consistencyIssues...)
-
-	// 2. 质量检查
-	qualityIssues := s.checkQuality(ctx, chapter)
-	report.Issues = append(report.Issues, qualityIssues...)
-
-	// 3. 逻辑检查
-	logicIssues := s.checkLogic(ctx, chapter)
-	report.Issues = append(report.Issues, logicIssues...)
-
-	// 4. 风格检查
-	styleIssues := s.checkStyle(ctx, chapter, novel)
-	report.Issues = append(report.Issues, styleIssues...)
-
-	// 计算评分
-	if len(report.Issues) > 0 {
-		highCount := 0
-		mediumCount := 0
-		for _, issue := range report.Issues {
-			if issue.Severity == "high" {
-				highCount++
-			} else if issue.Severity == "medium" {
-				mediumCount++
-			}
-		}
-		report.OverallScore = 1.0 - float64(highCount)*0.15 - float64(mediumCount)*0.05
-		if report.OverallScore < 0 {
-			report.OverallScore = 0
-		}
+	// 1. AI 综合质检（获取真实分数）
+	aiScores, err := s.runAIQualityCheck(ctx, chapter, novel)
+	if err != nil {
+		log.Printf("QualityControlService: AI quality check failed: %v, falling back to rule-based", err)
+		// AI 失败时降级到规则检查
+		aiScores = nil
 	}
 
-	// 生成建议
-	report.Suggestions = s.generateSuggestions(report)
+	if aiScores != nil {
+		// 将 AI 返回的 0-10 分转为 0-1
+		report.LogicScore = aiScores.Logic / 10.0
+		report.ConsistencyScore = aiScores.Character / 10.0
+		report.QualityScore = aiScores.Writing / 10.0
+		report.StyleScore = aiScores.Pacing / 10.0
+
+		// 将 AI 发现的问题加入报告
+		for _, issue := range aiScores.Issues {
+			report.Issues = append(report.Issues, QualityIssue{
+				Type:        "ai_detected",
+				Severity:    "medium",
+				Description: issue,
+				Suggestion:  "请根据AI建议进行修改",
+			})
+		}
+		report.Suggestions = append(report.Suggestions, aiScores.Suggestions...)
+	} else {
+		// 降级：规则检查
+		report.ConsistencyScore = s.calcConsistencyScore(chapter)
+		report.QualityScore = s.calcQualityScore(chapter)
+		report.LogicScore = 0.7 // 规则无法检查逻辑，给中性分
+		report.StyleScore = s.calcStyleScore(chapter)
+
+		report.Issues = append(report.Issues, s.checkConsistency(chapter)...)
+		report.Issues = append(report.Issues, s.checkQuality(chapter)...)
+		report.Issues = append(report.Issues, s.checkStyle(chapter)...)
+	}
+
+	// 计算综合总分（加权平均）
+	report.OverallScore = (report.LogicScore*0.3 + report.ConsistencyScore*0.25 + report.QualityScore*0.25 + report.StyleScore*0.2)
+	if report.OverallScore > 1.0 {
+		report.OverallScore = 1.0
+	}
+	if report.OverallScore < 0 {
+		report.OverallScore = 0
+	}
+
+	// 追加通用建议
+	report.Suggestions = append(report.Suggestions, s.generateQualitySuggestions(report)...)
 
 	return report, nil
 }
 
-func (s *QualityControlService) checkConsistency(ctx context.Context, chapter *model.Chapter, novel *model.Novel) []QualityIssue {
-	issues := []QualityIssue{}
+// calcConsistencyScore 基于规则计算一致性分数
+func (s *QualityControlService) calcConsistencyScore(chapter *model.Chapter) float64 {
+	score := 1.0
+	repeatWords := []string{"突然", "然后", "接着", "非常", "十分"}
+	for _, word := range repeatWords {
+		count := strings.Count(chapter.Content, word)
+		if count > 8 {
+			score -= 0.1
+		} else if count > 5 {
+			score -= 0.05
+		}
+	}
+	if score < 0 {
+		score = 0
+	}
+	return score
+}
 
-	// 简化：检查重复词汇
+// calcQualityScore 基于规则计算质量分数
+func (s *QualityControlService) calcQualityScore(chapter *model.Chapter) float64 {
+	if chapter.WordCount < 1000 {
+		return 0.5
+	} else if chapter.WordCount < 1500 {
+		return 0.7
+	}
+	return 0.85
+}
+
+// calcStyleScore 基于规则计算风格分数
+func (s *QualityControlService) calcStyleScore(chapter *model.Chapter) float64 {
+	score := 0.8
+	dialogueCount := strings.Count(chapter.Content, "「") + strings.Count(chapter.Content, "\u201c")
+	totalChars := len([]rune(chapter.Content))
+	if totalChars > 0 {
+		dialogueRatio := float64(dialogueCount*20) / float64(totalChars)
+		if dialogueRatio < 0.05 {
+			score -= 0.15
+		}
+	}
+	// 检查句式多样性（粗略：以句号结尾的句子平均长度）
+	sentences := strings.Split(chapter.Content, "。")
+	if len(sentences) > 5 {
+		totalLen := 0
+		for _, s := range sentences {
+			totalLen += len([]rune(s))
+		}
+		avgLen := totalLen / len(sentences)
+		if avgLen < 10 {
+			score -= 0.1 // 句子过短，缺乏描写
+		} else if avgLen > 80 {
+			score -= 0.05 // 句子过长，节奏沉闷
+		}
+	}
+	if score < 0 {
+		score = 0
+	}
+	return score
+}
+
+func (s *QualityControlService) checkConsistency(chapter *model.Chapter) []QualityIssue {
+	issues := []QualityIssue{}
 	repeatWords := []string{"突然", "然后", "接着", "非常"}
 	for _, word := range repeatWords {
 		count := strings.Count(chapter.Content, word)
@@ -517,14 +774,11 @@ func (s *QualityControlService) checkConsistency(ctx context.Context, chapter *m
 			})
 		}
 	}
-
 	return issues
 }
 
-func (s *QualityControlService) checkQuality(ctx context.Context, chapter *model.Chapter) []QualityIssue {
+func (s *QualityControlService) checkQuality(chapter *model.Chapter) []QualityIssue {
 	issues := []QualityIssue{}
-
-	// 检查字数
 	if chapter.WordCount < 1500 {
 		issues = append(issues, QualityIssue{
 			Type:        "quality",
@@ -533,53 +787,38 @@ func (s *QualityControlService) checkQuality(ctx context.Context, chapter *model
 			Suggestion:  "建议增加更多细节描写、对话或心理描写",
 		})
 	}
-
 	return issues
 }
 
-func (s *QualityControlService) checkLogic(ctx context.Context, chapter *model.Chapter) []QualityIssue {
+func (s *QualityControlService) checkStyle(chapter *model.Chapter) []QualityIssue {
 	issues := []QualityIssue{}
-
-	// 简化逻辑检查
-	// 实际应该使用更复杂的 NLP 分析
-
-	return issues
-}
-
-func (s *QualityControlService) checkStyle(ctx context.Context, chapter *model.Chapter, novel *model.Novel) []QualityIssue {
-	issues := []QualityIssue{}
-
-	// 检查对话比例
-	dialogueCount := strings.Count(chapter.Content, "「") + strings.Count(chapter.Content, """)
+	dialogueCount := strings.Count(chapter.Content, "「") + strings.Count(chapter.Content, "\u201c")
 	totalChars := len(chapter.Content)
-	dialogueRatio := float64(dialogueCount*10) / float64(totalChars)
-
-	if dialogueRatio < 0.1 {
-		issues = append(issues, QualityIssue{
-			Type:        "style",
-			Severity:    "low",
-			Description: "对话比例较低，可能显得叙述过于单调",
-			Suggestion:  "建议增加更多角色对话，使故事更生动",
-		})
+	if totalChars > 0 {
+		dialogueRatio := float64(dialogueCount*10) / float64(totalChars)
+		if dialogueRatio < 0.05 {
+			issues = append(issues, QualityIssue{
+				Type:        "style",
+				Severity:    "low",
+				Description: "对话比例较低，可能显得叙述过于单调",
+				Suggestion:  "建议增加更多角色对话，使故事更生动",
+			})
+		}
 	}
-
 	return issues
 }
 
-func (s *QualityControlService) generateSuggestions(report *QualityReport) []string {
+func (s *QualityControlService) generateQualitySuggestions(report *QualityReport) []string {
 	suggestions := []string{}
-
 	highCount := 0
 	for _, issue := range report.Issues {
 		if issue.Severity == "high" {
 			highCount++
 		}
 	}
-
 	if highCount > 0 {
 		suggestions = append(suggestions, fmt.Sprintf("有%d个高优先级问题需要修复", highCount))
 	}
-
 	if report.OverallScore >= 0.9 {
 		suggestions = append(suggestions, "章节质量优秀，无需特别修改")
 	} else if report.OverallScore >= 0.7 {
@@ -587,13 +826,44 @@ func (s *QualityControlService) generateSuggestions(report *QualityReport) []str
 	} else {
 		suggestions = append(suggestions, "章节存在较多问题，建议整体检查并重写关键部分")
 	}
-
 	return suggestions
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
+// extractJSONContent 从 AI 返回内容中提取纯 JSON（去除 markdown 代码块包裹）
+func extractJSONContent(content string) string {
+	content = strings.TrimSpace(content)
+	if idx := strings.Index(content, "```json"); idx != -1 {
+		content = content[idx+7:]
+		if end := strings.Index(content, "```"); end != -1 {
+			content = content[:end]
+		}
+	} else if idx := strings.Index(content, "```"); idx != -1 {
+		content = content[idx+3:]
+		if end := strings.Index(content, "```"); end != -1 {
+			content = content[:end]
+		}
 	}
-	return b
+	content = strings.TrimSpace(content)
+	start := strings.IndexAny(content, "{[")
+	if start == -1 {
+		return content
+	}
+	openChar := content[start]
+	closeChar := byte('}')
+	if openChar == '[' {
+		closeChar = ']'
+	}
+	depth := 0
+	for i := start; i < len(content); i++ {
+		if content[i] == openChar {
+			depth++
+		} else if content[i] == closeChar {
+			depth--
+			if depth == 0 {
+				return content[start : i+1]
+			}
+		}
+	}
+	return content[start:]
 }
+

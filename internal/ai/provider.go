@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"net/http"
+	"strings"
 	"time"
-
 )
 
 // AIProvider AI提供者接口
@@ -51,9 +53,10 @@ type GenerateRequest struct {
 
 // ChatMessage 聊天消息
 type ChatMessage struct {
-	Role    string `json:"role"`    // system, user, assistant
-	Content string `json:"content"`
-	Name    string `json:"name,omitempty"`
+	Role      string   `json:"role"`                 // system, user, assistant
+	Content   string   `json:"content"`
+	Name      string   `json:"name,omitempty"`
+	ImageURLs []string `json:"image_urls,omitempty"` // Vision多模态：图片URL列表
 }
 
 // GenerateResponse 生成响应
@@ -496,4 +499,165 @@ func (f *FallbackManager) GetNext(current string) string {
 func FormatJSON(v interface{}) string {
 	b, _ := json.MarshalIndent(v, "", "  ")
 	return string(b)
+}
+
+// RetryProvider 带指数退避重试的 AI Provider 包装器
+type RetryProvider struct {
+	provider   AIProvider
+	maxRetries int
+	baseDelay  time.Duration // 基础等待时间，默认 500ms
+}
+
+// NewRetryProvider 创建重试包装器（最多重试 maxRetries 次，基础延迟 baseDelay）
+func NewRetryProvider(provider AIProvider, maxRetries int, baseDelay time.Duration) *RetryProvider {
+	if maxRetries <= 0 {
+		maxRetries = 3
+	}
+	if baseDelay <= 0 {
+		baseDelay = 500 * time.Millisecond
+	}
+	return &RetryProvider{
+		provider:   provider,
+		maxRetries: maxRetries,
+		baseDelay:  baseDelay,
+	}
+}
+
+// isRetryable 判断错误是否值得重试
+func isRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	retryKeywords := []string{"timeout", "connection refused", "temporary", "429", "502", "503", "rate limit", "overloaded"}
+	for _, kw := range retryKeywords {
+		if strings.Contains(msg, kw) {
+			return true
+		}
+	}
+	return false
+}
+
+// isRetryableStatus 判断 HTTP 状态码是否值得重试
+func isRetryableStatus(statusCode int) bool {
+	return statusCode == http.StatusTooManyRequests ||
+		statusCode == http.StatusBadGateway ||
+		statusCode == http.StatusServiceUnavailable ||
+		statusCode == http.StatusGatewayTimeout
+}
+
+func (p *RetryProvider) Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
+	var lastErr error
+	for attempt := 0; attempt < p.maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := p.baseDelay * time.Duration(1<<uint(attempt-1))
+			log.Printf("RetryProvider.Generate: attempt %d, waiting %v", attempt+1, delay)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		resp, err := p.provider.Generate(ctx, req)
+		if err != nil {
+			if isRetryable(err) {
+				lastErr = err
+				continue
+			}
+			return nil, err
+		}
+		// 检查响应中是否包含可重试错误
+		if resp != nil && resp.Error != "" {
+			if isRetryable(fmt.Errorf(resp.Error)) {
+				lastErr = fmt.Errorf(resp.Error)
+				continue
+			}
+			return resp, nil
+		}
+		return resp, nil
+	}
+	return nil, fmt.Errorf("RetryProvider.Generate failed after %d attempts: %w", p.maxRetries, lastErr)
+}
+
+func (p *RetryProvider) GenerateStream(ctx context.Context, req *GenerateRequest) (<-chan *GenerateResponse, error) {
+	var lastErr error
+	for attempt := 0; attempt < p.maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := p.baseDelay * time.Duration(1<<uint(attempt-1))
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		ch, err := p.provider.GenerateStream(ctx, req)
+		if err != nil {
+			if isRetryable(err) {
+				lastErr = err
+				continue
+			}
+			return nil, err
+		}
+		return ch, nil
+	}
+	return nil, fmt.Errorf("RetryProvider.GenerateStream failed after %d attempts: %w", p.maxRetries, lastErr)
+}
+
+func (p *RetryProvider) Embed(ctx context.Context, text string) ([]float32, error) {
+	var lastErr error
+	for attempt := 0; attempt < p.maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := p.baseDelay * time.Duration(1<<uint(attempt-1))
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		result, err := p.provider.Embed(ctx, text)
+		if err != nil {
+			if isRetryable(err) {
+				lastErr = err
+				continue
+			}
+			return nil, err
+		}
+		return result, nil
+	}
+	return nil, fmt.Errorf("RetryProvider.Embed failed after %d attempts: %w", p.maxRetries, lastErr)
+}
+
+func (p *RetryProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRequest) (*ImageResponse, error) {
+	return p.provider.ImageGenerate(ctx, req)
+}
+
+func (p *RetryProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRequest) (*AudioResponse, error) {
+	return p.provider.AudioGenerate(ctx, req)
+}
+
+func (p *RetryProvider) GetName() string      { return p.provider.GetName() }
+func (p *RetryProvider) GetModels() []string  { return p.provider.GetModels() }
+func (p *RetryProvider) HealthCheck(ctx context.Context) error { return p.provider.HealthCheck(ctx) }
+
+// SwitchProvider 在 ModelManager 中动态切换某个任务类型的默认 Provider
+func (m *ModelManager) SwitchProvider(providerName string) error {
+	if _, ok := m.providers[providerName]; !ok {
+		return fmt.Errorf("provider not found: %s", providerName)
+	}
+	m.defaultProvider = providerName
+	return nil
+}
+
+// WrapWithRetry 将已注册的 Provider 包装为 RetryProvider
+func (m *ModelManager) WrapWithRetry(name string, maxRetries int, baseDelay time.Duration) error {
+	provider, ok := m.providers[name]
+	if !ok {
+		return fmt.Errorf("provider not found: %s", name)
+	}
+	// 避免重复包装
+	if _, already := provider.(*RetryProvider); already {
+		return nil
+	}
+	m.providers[name] = NewRetryProvider(provider, maxRetries, baseDelay)
+	return nil
 }

@@ -6,20 +6,36 @@
 # 章节内容
 {{.ChapterContent}}
 
+{{if .Characters}}
+# 角色外貌参考
+以下是主要角色的外貌描述，生成分镜时必须保持角色外貌的一致性：
+{{range .Characters}}
+- {{.Name}}：{{.Appearance}}（发色：{{.HairColor}}，服装：{{.Outfit}}，特征：{{.Features}}）
+{{end}}
+{{end}}
+
+{{if .ArtStyle}}
+# 视觉风格设定
+- 整体风格：{{.ArtStyle}}
+- 色彩基调：{{.ColorTone}}
+- 光影风格：{{.LightingStyle}}
+{{end}}
+
 # 创作要求
-1. 镜头序列逻辑清晰
-2. 画面感强，易于可视化
-3. 节奏把控合理
-4. 符合视频制作需求
-5. 镜头语言专业
+1. 镜头序列逻辑清晰，画面感强，易于可视化
+2. 节奏把控合理，动作/对话/描述场景镜头数量适配
+3. 符合视频制作需求，镜头语言专业
+4. **镜头连续性**：相邻镜头的光线方向、色彩基调、时间状态（白天/夜晚）必须保持一致
+5. 角色外貌在所有镜头中保持一致，不得改变发色、服装等特征
+6. 每个 shot 必须包含专为图像生成优化的英文提示词（visual_prompt）
 
 # 分镜头格式要求
 
-请按以下JSON格式返回：
+请按以下JSON格式返回（不要包含任何 markdown 代码块）：
 
-```json
 {
   "chapter_no": {{.ChapterNo}},
+  "art_style": "{{.ArtStyle}}",
   "shots": [
     {
       "shot_no": 1,
@@ -28,13 +44,17 @@
       "duration": 2.5,
       "camera_movement": "镜头运动（静态/推拉摇移/跟拍/升降）",
       "angle": "拍摄角度（平视/俯视/仰视/荷兰角）",
-      "description": "画面描述",
+      "description": "画面描述（中文）",
       "dialogue": "对话内容（如有）",
       "emotion": "情感基调",
-      "transition": "转场方式（硬切/淡入淡出/溶解/划像等）"
+      "transition": "转场方式（硬切/淡入淡出/溶解/划像等）",
+      "lighting": "光源方向和类型（如：侧逆光、黄昏暖光）",
+      "color_palette": "色调描述（如：冷蓝色调、暖金色调）",
+      "visual_prompt": "professional photo, [subject], [setting], [art style] style, [lighting], [composition], highly detailed, 4k resolution",
+      "negative_prompt": "blurry, low quality, deformed, ugly, watermark, text, bad anatomy, extra limbs, poorly drawn",
+      "character_refs": ["角色外貌关键词1", "角色外貌关键词2"]
     }
   ]
 }
-```
 
 请开始创作分镜头脚本：

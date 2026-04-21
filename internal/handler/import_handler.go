@@ -1,18 +1,48 @@
 package handler
 
 import (
+	"fmt"
+	"io"
 	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
 
+// importTaskStatus 导入任务状态
+type importTaskStatus struct {
+	TaskID    string  `json:"task_id"`
+	Status    string  `json:"status"`   // pending, running, completed, failed
+	Progress  int     `json:"progress"` // 0-100
+	Message   string  `json:"message,omitempty"`
+	CreatedAt int64   `json:"created_at"`
+	UpdatedAt int64   `json:"updated_at"`
+}
+
+// importTaskStore 全局任务状态存储
+var importTaskStore sync.Map
+
+func setImportTask(id string, status *importTaskStatus) {
+	status.UpdatedAt = time.Now().Unix()
+	importTaskStore.Store(id, status)
+}
+
+func getImportTask(id string) (*importTaskStatus, bool) {
+	v, ok := importTaskStore.Load(id)
+	if !ok {
+		return nil, false
+	}
+	return v.(*importTaskStatus), true
+}
+
 // ImportHandler 导入处理器
 type ImportHandler struct {
-	importService *service.NovelImportService
+	importService       *service.NovelImportService
 	novelToVideoService *service.NovelToVideoService
 }
 
@@ -35,16 +65,41 @@ func (h *ImportHandler) ImportNovel(c *gin.Context) {
 		return
 	}
 
-	result, err := h.importService.Import(&req)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
+	taskID := fmt.Sprintf("import-%d", time.Now().UnixNano())
+	now := time.Now().Unix()
+	setImportTask(taskID, &importTaskStatus{
+		TaskID:    taskID,
+		Status:    "running",
+		Progress:  0,
+		Message:   "导入中",
+		CreatedAt: now,
+	})
 
-	c.JSON(http.StatusOK, gin.H{
+	go func(r service.ImportRequest) {
+		result, err := h.importService.Import(&r)
+		if err != nil {
+			setImportTask(taskID, &importTaskStatus{
+				TaskID:    taskID,
+				Status:    "failed",
+				Progress:  0,
+				Message:   err.Error(),
+				CreatedAt: now,
+			})
+			return
+		}
+		setImportTask(taskID, &importTaskStatus{
+			TaskID:    taskID,
+			Status:    "completed",
+			Progress:  100,
+			Message:   fmt.Sprintf("导入完成，共 %d 章", result.ImportedChapters),
+			CreatedAt: now,
+		})
+	}(req)
+
+	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
-		"message": "success",
-		"data":    result,
+		"message": "import started",
+		"data":    gin.H{"task_id": taskID},
 	})
 }
 
@@ -59,9 +114,15 @@ func (h *ImportHandler) ImportFromFile(c *gin.Context) {
 	}
 	defer file.Close()
 
-	// 读取文件内容
-	data := make([]byte, header.Size)
-	_, err = file.Read(data)
+	// 限制文件大小防止 OOM（最大 50MB）
+	const maxFileSize = 50 * 1024 * 1024
+	if header.Size > maxFileSize {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file too large (max 50MB)"})
+		return
+	}
+
+	// ReadAll 保证读取完整内容（file.Read 可能返回部分数据）
+	data, err := io.ReadAll(file)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "read file failed"})
 		return
@@ -244,17 +305,18 @@ func (h *ImportHandler) GenerateVideoFromNovel(c *gin.Context) {
 // GetImportStatus 获取导入状态
 // GET /api/v1/import/status/:task_id
 func (h *ImportHandler) GetImportStatus(c *gin.Context) {
-	taskId := c.Param("task_id")
+	taskID := c.Param("task_id")
 
-	// TODO: 实现任务状态查询
+	task, ok := getImportTask(taskID)
+	if !ok {
+		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "success",
-		"data": gin.H{
-			"task_id":    taskId,
-			"status":     "completed",
-			"progress":   100,
-		},
+		"data":    task,
 	})
 }
 

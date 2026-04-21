@@ -3,10 +3,13 @@ package ai
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -54,7 +57,10 @@ func (p *OpenAIProvider) GetModels() []string {
 }
 
 func (p *OpenAIProvider) HealthCheck(ctx context.Context) error {
-	req, _ := http.NewRequestWithContext(ctx, "GET", p.endpoint+"/models", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", p.endpoint+"/models", nil)
+	if err != nil {
+		return err
+	}
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
 
 	resp, err := p.client.Do(req)
@@ -143,7 +149,11 @@ func (p *OpenAIProvider) GenerateStream(ctx context.Context, req *GenerateReques
 		openaiReq := p.buildRequest(req)
 		openaiReq["stream"] = true
 
-		body, _ := json.Marshal(openaiReq)
+		body, marshalErr := json.Marshal(openaiReq)
+		if marshalErr != nil {
+			ch <- &GenerateResponse{Error: marshalErr.Error()}
+			return
+		}
 
 		url := p.endpoint + "/chat/completions"
 		httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
@@ -198,7 +208,10 @@ func (p *OpenAIProvider) Embed(ctx context.Context, text string) ([]float32, err
 		"input": text,
 	}
 
-	body, _ := json.Marshal(req)
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal embed request: %w", err)
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint+"/embeddings", bytes.NewReader(body))
 	if err != nil {
@@ -214,7 +227,10 @@ func (p *OpenAIProvider) Embed(ctx context.Context, text string) ([]float32, err
 	}
 	defer resp.Body.Close()
 
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read embed response: %w", err)
+	}
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("embedding error: %s", string(respBody))
@@ -331,41 +347,97 @@ func (p *OpenAIProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRe
 		}, nil
 	}
 
-	// 返回音频URL（实际应用中需要上传到存储服务）
+	// Read audio bytes and save to temp file
+	audioData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return &AudioResponse{
+			Error:     fmt.Sprintf("TTS read body error: %s", err.Error()),
+			LatencyMs: time.Since(start).Milliseconds(),
+		}, nil
+	}
+
+	idBytes := make([]byte, 8)
+	rand.Read(idBytes) //nolint:errcheck
+	tmpPath := fmt.Sprintf("/tmp/inkframe-tts-%s.mp3", hex.EncodeToString(idBytes))
+	if err := os.WriteFile(tmpPath, audioData, 0644); err != nil {
+		return &AudioResponse{
+			Error:     fmt.Sprintf("TTS write file error: %s", err.Error()),
+			LatencyMs: time.Since(start).Milliseconds(),
+		}, nil
+	}
+
 	return &AudioResponse{
+		URL:       "file://" + tmpPath,
 		Format:    "mp3",
-		Duration:  float64(len(req.Text)) / 10.0, // 估算
+		Duration:  float64(len(req.Text)) / 10.0, // estimate
 		LatencyMs: time.Since(start).Milliseconds(),
 	}, nil
 }
 
 func (p *OpenAIProvider) buildRequest(req *GenerateRequest) map[string]interface{} {
-	messages := []map[string]string{}
+	// 判断是否有 Vision 消息
+	hasVision := false
+	for _, msg := range req.Messages {
+		if len(msg.ImageURLs) > 0 {
+			hasVision = true
+			break
+		}
+	}
+
+	// 构建消息列表（支持 Vision 多模态）
+	messages := []map[string]interface{}{}
 
 	if req.SystemPrompt != "" {
-		messages = append(messages, map[string]string{
+		messages = append(messages, map[string]interface{}{
 			"role":    "system",
 			"content": req.SystemPrompt,
 		})
 	}
 
 	for _, msg := range req.Messages {
-		messages = append(messages, map[string]string{
-			"role":    msg.Role,
-			"content": msg.Content,
-		})
+		if len(msg.ImageURLs) > 0 {
+			// 多模态消息：content 为 array
+			contentParts := []map[string]interface{}{}
+			for _, imgURL := range msg.ImageURLs {
+				contentParts = append(contentParts, map[string]interface{}{
+					"type": "image_url",
+					"image_url": map[string]string{
+						"url": imgURL,
+					},
+				})
+			}
+			if msg.Content != "" {
+				contentParts = append(contentParts, map[string]interface{}{
+					"type": "text",
+					"text": msg.Content,
+				})
+			}
+			messages = append(messages, map[string]interface{}{
+				"role":    msg.Role,
+				"content": contentParts,
+			})
+		} else {
+			messages = append(messages, map[string]interface{}{
+				"role":    msg.Role,
+				"content": msg.Content,
+			})
+		}
+	}
+
+	// Vision 请求自动升级到支持视觉的模型
+	model := req.Model
+	if model == "" {
+		model = p.model
+	}
+	if hasVision && model != "gpt-4o" && model != "gpt-4-vision-preview" && model != "gpt-4-turbo" {
+		model = "gpt-4o"
 	}
 
 	openaiReq := map[string]interface{}{
-		"model": func() string {
-			if req.Model != "" {
-				return req.Model
-			}
-			return p.model
-		}(),
-		"messages":   messages,
+		"model":       model,
+		"messages":    messages,
 		"temperature": req.Temperature,
-		"max_tokens": req.MaxTokens,
+		"max_tokens":  req.MaxTokens,
 	}
 
 	if req.TopP > 0 {
