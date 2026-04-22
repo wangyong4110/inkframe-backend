@@ -62,9 +62,16 @@ type Chapter struct {
 	Summary   string `json:"summary" gorm:"type:text"`
 	WordCount int    `json:"word_count" gorm:"default:0"`
 
-	// 大纲
-	Outline    string `json:"outline" gorm:"type:text"`
-	PlotPoints string `json:"plot_points" gorm:"type:text"` // JSON数组
+	// 大纲与场景结构
+	Outline     string `json:"outline" gorm:"type:text"`
+	SceneOutline string `json:"scene_outline" gorm:"type:text"` // JSON: 场景级大纲（3-5个场景）
+	PlotPoints  string `json:"plot_points" gorm:"type:text"`   // JSON数组
+
+	// 叙事元数据（来自小说大纲）
+	TensionLevel int    `json:"tension_level" gorm:"default:0"` // 0-10 张力值
+	ActNo        int    `json:"act_no" gorm:"default:0"`        // 所属幕次（1/2/3）
+	EmotionalTone string `json:"emotional_tone" gorm:"size:50"`  // 情感基调
+	HookType     string `json:"hook_type" gorm:"size:30"`        // 章末钩子类型
 
 	// 状态
 	Status string `json:"status" gorm:"size:20;default:draft"`
@@ -195,6 +202,9 @@ type Character struct {
 
 	// 角色弧光
 	CharacterArc string `json:"character_arc" gorm:"type:text"`
+
+	// 对话风格（AI提取的说话习惯、用词偏好、禁忌表达）
+	DialogueStyle string `json:"dialogue_style" gorm:"type:text"` // JSON: {patterns, vocabulary_level, speech_habits, forbidden_phrases}
 
 	// 视觉设计
 	VisualDesign string `json:"visual_design" gorm:"type:text"` // JSON: 包含图像URL、表情库等
@@ -918,6 +928,41 @@ type FeedbackRecord struct {
 
 func (FeedbackRecord) TableName() string {
 	return "ink_feedback_record"
+}
+
+// ArcSummary 弧光摘要（每10章自动生成一次，用于长篇小说的层次化记忆）
+// arc 1 = chapters 1-10, arc 2 = chapters 11-20, ...
+type ArcSummary struct {
+	ID      uint   `json:"id" gorm:"primaryKey"`
+	NovelID uint   `json:"novel_id" gorm:"index;not null;uniqueIndex:idx_arc_novel_no"`
+	Novel   *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
+	ArcNo   int    `json:"arc_no" gorm:"not null;uniqueIndex:idx_arc_novel_no"` // 1, 2, 3...
+
+	StartChapter int `json:"start_chapter" gorm:"not null"` // 起始章节号
+	EndChapter   int `json:"end_chapter" gorm:"not null"`   // 结束章节号
+
+	// 摘要内容（~200字，供后续章节生成使用）
+	Summary string `json:"summary" gorm:"type:text"`
+
+	// 关键事件 JSON: [{"chapter": N, "event": "..."}]
+	KeyEvents string `json:"key_events" gorm:"type:text"`
+
+	// 角色变化 JSON: {"角色名": "变化描述"}
+	CharacterChanges string `json:"character_changes" gorm:"type:text"`
+
+	// 未解决的伏笔 JSON: ["伏笔描述"]
+	OpenForeshadows string `json:"open_foreshadows" gorm:"type:text"`
+
+	// 张力曲线（本弧最高/最低张力点）
+	PeakTension int `json:"peak_tension" gorm:"default:0"`
+	LowTension  int `json:"low_tension" gorm:"default:0"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (ArcSummary) TableName() string {
+	return "ink_arc_summary"
 }
 
 // ============================================

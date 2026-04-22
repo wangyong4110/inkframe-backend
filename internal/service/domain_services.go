@@ -1,11 +1,13 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
+	"text/template"
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -17,10 +19,11 @@ import (
 // ============================================
 
 type ChapterService struct {
-	chapterRepo *repository.ChapterRepository
-	novelRepo   *repository.NovelRepository
-	aiService   *AIService
-	contextSvc  *GenerationContextService
+	chapterRepo   *repository.ChapterRepository
+	novelRepo     *repository.NovelRepository
+	aiService     *AIService
+	contextSvc    *GenerationContextService
+	narrativeSvc  *NarrativeMemoryService // 层次化记忆 + 摘要 + 标题 + 精修
 }
 
 func NewChapterService(
@@ -35,6 +38,12 @@ func NewChapterService(
 		aiService:   aiService,
 		contextSvc:  contextSvc,
 	}
+}
+
+// WithNarrativeMemory 注入层次化记忆服务（可选）
+func (s *ChapterService) WithNarrativeMemory(svc *NarrativeMemoryService) *ChapterService {
+	s.narrativeSvc = svc
+	return s
 }
 
 // GetDefaultProviderName 返回默认 AI provider 名称
@@ -109,45 +118,430 @@ func (s *ChapterService) DeleteChapterByNo(novelID uint, chapterNo int) error {
 	return s.chapterRepo.Delete(chapter.ID)
 }
 
+// GenerateChapter 专业级章节生成流水线：
+//
+//  Step 1  构建层次化上下文（近章详摘 + 弧摘要 + 全局概述）
+//  Step 2  生成场景大纲（3-5 个场景，含节拍、情绪、钩子）
+//  Step 3  按场景大纲生成完整章节内容
+//  Step 4  存储章节（包含场景大纲、叙事元数据）
+//  Step 5  异步后处理：摘要生成、标题生成、精修、角色状态提取、弧摘要触发
 func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model.GenerateChapterRequest) (*model.Chapter, error) {
 	novel, err := s.novelRepo.GetByID(novelID)
 	if err != nil {
 		return nil, err
 	}
 
-	// Build rich generation prompt using context service (novel summary, recent chapters,
-	// character states, foreshadows, character arcs, timeline).
-	var prompt string
-	if s.contextSvc != nil {
-		prompt, err = s.contextSvc.BuildGenerationPrompt(novelID, req.ChapterNo, "", req.Prompt, 8000)
-		if err != nil {
-			// Log and fall back to simple prompt rather than aborting generation.
-			fmt.Printf("GenerateChapter: context build failed (novel %d ch %d): %v — using fallback prompt\n", novelID, req.ChapterNo, err)
-			prompt = ""
-		}
-	}
-	if prompt == "" {
-		prompt = fmt.Sprintf("请为小说《%s》生成第%d章内容。", novel.Title, req.ChapterNo)
-		if req.Prompt != "" {
-			prompt += "\n" + req.Prompt
-		}
-	}
+	// ── Step 1: 层次化上下文 ──────────────────────────────
+	globalCtx := s.buildGlobalContext(novelID, req.ChapterNo, novel)
 
-	content, err := s.aiService.GenerateWithProvider(tenantID, novelID, "chapter", prompt, req.ModelOverride)
+	// 从小说大纲获取本章元数据（张力值、幕次、情感基调等）
+	chapterMeta := s.extractChapterMeta(novelID, req.ChapterNo)
+
+	// ── Step 2: 生成场景大纲 ──────────────────────────────
+	sceneOutlineJSON, suggestedTitle := s.generateSceneOutline(
+		tenantID, novelID, req, novel, globalCtx, chapterMeta,
+	)
+
+	// ── Step 3: 按场景大纲生成章节内容 ───────────────────
+	content, err := s.generateFromSceneOutline(
+		tenantID, novelID, req, novel, sceneOutlineJSON, globalCtx, chapterMeta,
+	)
 	if err != nil {
 		return nil, err
 	}
-	chapter := &model.Chapter{
-		UUID:      uuid.New().String(),
-		NovelID:   novelID,
-		ChapterNo: req.ChapterNo,
-		Title:     fmt.Sprintf("第%d章", req.ChapterNo),
-		Content:   content,
-		WordCount: countChineseChars(content),
-		Status:    "completed",
+
+	// ── Step 4: 存储章节 ──────────────────────────────────
+	title := suggestedTitle
+	if title == "" {
+		title = fmt.Sprintf("第%d章", req.ChapterNo)
 	}
-	return chapter, s.chapterRepo.Create(chapter)
+	chapter := &model.Chapter{
+		UUID:          uuid.New().String(),
+		NovelID:       novelID,
+		ChapterNo:     req.ChapterNo,
+		Title:         title,
+		Content:       content,
+		WordCount:     countChineseChars(content),
+		SceneOutline:  sceneOutlineJSON,
+		TensionLevel:  chapterMeta.tensionLevel,
+		ActNo:         chapterMeta.actNo,
+		EmotionalTone: chapterMeta.emotionalTone,
+		HookType:      chapterMeta.hookType,
+		Status:        "completed",
+	}
+	if err := s.chapterRepo.Create(chapter); err != nil {
+		return nil, err
+	}
+
+	// ── Step 5: 异步后处理 ───────────────────────────────
+	go s.postProcessChapter(tenantID, chapter, novel)
+
+	return chapter, nil
 }
+
+// chapterOutlineMeta 从小说大纲中提取的章节叙事元数据
+type chapterOutlineMeta struct {
+	tensionLevel  int
+	actNo         int
+	emotionalTone string
+	hookType      string
+	summary       string // 大纲中的章节概述
+}
+
+func (s *ChapterService) extractChapterMeta(novelID uint, chapterNo int) chapterOutlineMeta {
+	// 尝试从小说 Outline 字段中解析章节元数据
+	novel, err := s.novelRepo.GetByID(novelID)
+	if err != nil {
+		return chapterOutlineMeta{}
+	}
+	if novel.StylePrompt == "" {
+		return chapterOutlineMeta{}
+	}
+	// 解析存储在 StylePrompt 中的大纲 JSON（大纲生成后存储在此）
+	var outline struct {
+		Chapters []struct {
+			ChapterNo     int    `json:"chapter_no"`
+			TensionLevel  int    `json:"tension_level"`
+			Act           int    `json:"act"`
+			EmotionalTone string `json:"emotional_tone"`
+			HookType      string `json:"hook_type"`
+			Summary       string `json:"summary"`
+		} `json:"chapters"`
+	}
+	if err := json.Unmarshal([]byte(novel.StylePrompt), &outline); err != nil {
+		return chapterOutlineMeta{}
+	}
+	for _, ch := range outline.Chapters {
+		if ch.ChapterNo == chapterNo {
+			return chapterOutlineMeta{
+				tensionLevel:  ch.TensionLevel,
+				actNo:         ch.Act,
+				emotionalTone: ch.EmotionalTone,
+				hookType:      ch.HookType,
+				summary:       ch.Summary,
+			}
+		}
+	}
+	return chapterOutlineMeta{}
+}
+
+// buildGlobalContext 构建层次化全局上下文（优先使用 NarrativeMemoryService）
+func (s *ChapterService) buildGlobalContext(novelID uint, chapterNo int, novel *model.Novel) string {
+	// 优先使用层次化记忆
+	if s.narrativeSvc != nil {
+		ctx, err := s.narrativeSvc.BuildHierarchicalContext(novelID, chapterNo)
+		if err == nil && ctx != "" {
+			return ctx
+		}
+		log.Printf("GenerateChapter: hierarchical context failed: %v — fallback", err)
+	}
+	// 降级到原 GenerationContextService
+	if s.contextSvc != nil {
+		ctx, err := s.contextSvc.BuildGenerationPrompt(novelID, chapterNo, "", "", 8000)
+		if err == nil {
+			return ctx
+		}
+	}
+	// 最终降级
+	return fmt.Sprintf("【故事概要】\n%s", novel.Description)
+}
+
+// generateSceneOutline 调用 AI 生成场景级大纲，返回 JSON 字符串和建议标题
+func (s *ChapterService) generateSceneOutline(
+	tenantID, novelID uint,
+	req *model.GenerateChapterRequest,
+	novel *model.Novel,
+	globalCtx string,
+	meta chapterOutlineMeta,
+) (sceneOutlineJSON, suggestedTitle string) {
+
+	// 获取角色状态
+	charStateStr := s.buildCharacterStateString(novelID)
+
+	// 构建伏笔提示
+	foreshadowHints := s.buildForeshadowHints(novelID, req.ChapterNo)
+
+	// 获取上一章结尾（供连贯性参考）
+	prevEnding := s.getPreviousChapterEnding(novelID, req.ChapterNo)
+
+	// 获取角色列表
+	characters := s.getCharactersForPrompt(novelID)
+
+	hookType := meta.hookType
+	if hookType == "" {
+		hookType = "cliffhanger"
+	}
+	emotionalTone := meta.emotionalTone
+	if emotionalTone == "" {
+		emotionalTone = "紧张"
+	}
+	tensionLevel := meta.tensionLevel
+	if tensionLevel == 0 {
+		tensionLevel = 6
+	}
+	actNo := meta.actNo
+	if actNo == 0 {
+		actNo = 1
+	}
+	chapterSummary := meta.summary
+	if chapterSummary == "" && req.Prompt != "" {
+		chapterSummary = req.Prompt
+	}
+
+	tmplStr := loadPromptTemplate("chapter_scene_outline.tmpl")
+	tmpl, err := template.New("scene_outline").Parse(tmplStr)
+	if err != nil {
+		log.Printf("GenerateChapter: parse scene_outline.tmpl: %v", err)
+		return "", ""
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, map[string]interface{}{
+		"NovelTitle":            novel.Title,
+		"ChapterNo":             req.ChapterNo,
+		"GlobalContext":         globalCtx,
+		"ChapterSummary":        chapterSummary,
+		"TensionLevel":          tensionLevel,
+		"ActNo":                 actNo,
+		"EmotionalTone":         emotionalTone,
+		"HookType":              hookType,
+		"PreviousChapterEnding": prevEnding,
+		"Characters":            characters,
+		"ForeshadowHints":       foreshadowHints,
+		"CharacterStates":       charStateStr,
+	}); err != nil {
+		log.Printf("GenerateChapter: execute scene_outline.tmpl: %v", err)
+		return "", ""
+	}
+
+	resp, err := s.aiService.GenerateWithProvider(tenantID, novelID, "scene_outline", buf.String(), req.ModelOverride)
+	if err != nil {
+		log.Printf("GenerateChapter: scene outline AI call failed: %v", err)
+		return "", ""
+	}
+
+	resp = extractJSON(strings.TrimSpace(resp))
+
+	// 提取建议标题
+	var outlineResult struct {
+		ChapterTitle string `json:"chapter_title"`
+	}
+	if err := json.Unmarshal([]byte(resp), &outlineResult); err == nil {
+		suggestedTitle = outlineResult.ChapterTitle
+	}
+
+	return resp, suggestedTitle
+}
+
+// generateFromSceneOutline 根据场景大纲生成章节正文
+func (s *ChapterService) generateFromSceneOutline(
+	tenantID, novelID uint,
+	req *model.GenerateChapterRequest,
+	novel *model.Novel,
+	sceneOutlineJSON string,
+	globalCtx string,
+	meta chapterOutlineMeta,
+) (string, error) {
+
+	// MaxTokens 约等于字数（中文约1token/字）；未设置时默认3000字
+	wordCount := req.MaxTokens
+	if wordCount <= 0 {
+		wordCount = 3000
+	}
+
+	// 解析场景大纲以注入模板
+	var outlineData struct {
+		ChapterTitle string `json:"chapter_title"`
+		HookSetup    string `json:"hook_setup"`
+		ChapterArc   string `json:"chapter_arc"`
+		Scenes       []struct {
+			SceneNo       int      `json:"scene_no"`
+			Location      string   `json:"location"`
+			TimeOfDay     string   `json:"time_of_day"`
+			Characters    []string `json:"characters"`
+			Goal          string   `json:"goal"`
+			OpeningBeat   string   `json:"opening_beat"`
+			KeyBeats      []string `json:"key_beats"`
+			ClosingBeat   string   `json:"closing_beat"`
+			EmotionalShift string  `json:"emotional_shift"`
+			POVCharacter  string   `json:"pov_character"`
+			Tension       int      `json:"tension"`
+		} `json:"scenes"`
+	}
+	_ = json.Unmarshal([]byte(sceneOutlineJSON), &outlineData)
+
+	// 获取角色对话风格
+	characterVoices := s.getCharacterVoices(novelID)
+
+	// 峰值张力
+	peakTension := 0
+	for _, sc := range outlineData.Scenes {
+		if sc.Tension > peakTension {
+			peakTension = sc.Tension
+		}
+	}
+
+	chapterTitle := outlineData.ChapterTitle
+	if chapterTitle == "" {
+		chapterTitle = fmt.Sprintf("第%d章", req.ChapterNo)
+	}
+
+	// 如果没有场景大纲，降级到简单 prompt
+	if sceneOutlineJSON == "" || len(outlineData.Scenes) == 0 {
+		return s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
+	}
+
+	tmplStr := loadPromptTemplate("chapter_from_outline.tmpl")
+	tmpl, err := template.New("chapter_from_outline").Parse(tmplStr)
+	if err != nil {
+		return s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
+	}
+
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, map[string]interface{}{
+		"NovelTitle":    novel.Title,
+		"ChapterNo":     req.ChapterNo,
+		"ChapterTitle":  chapterTitle,
+		"WordCount":     wordCount,
+		"GlobalContext": globalCtx,
+		"Scenes":        outlineData.Scenes,
+		"HookSetup":     outlineData.HookSetup,
+		"PeakTension":   peakTension,
+		"Characters":    characterVoices,
+		"UserPrompt":    req.Prompt,
+	}); err != nil {
+		return s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
+	}
+
+	return s.aiService.GenerateWithProvider(tenantID, novelID, "chapter", buf.String(), req.ModelOverride)
+}
+
+// generateFallbackChapter 场景大纲失败时的降级生成
+func (s *ChapterService) generateFallbackChapter(tenantID, novelID uint, req *model.GenerateChapterRequest, novel *model.Novel, globalCtx string) (string, error) {
+	log.Printf("GenerateChapter: using fallback (no scene outline) for novel %d ch %d", novelID, req.ChapterNo)
+	wc := req.MaxTokens
+	if wc <= 0 {
+		wc = 3000
+	}
+	prompt := globalCtx + fmt.Sprintf("\n\n请为小说《%s》生成第%d章内容，字数约%d字。", novel.Title, req.ChapterNo, wc)
+	if req.Prompt != "" {
+		prompt += "\n\n创作要求：" + req.Prompt
+	}
+	return s.aiService.GenerateWithProvider(tenantID, novelID, "chapter", prompt, req.ModelOverride)
+}
+
+// postProcessChapter 异步后处理：生成摘要→生成标题→精修→提取角色状态→触发弧摘要
+func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapter, novel *model.Novel) {
+	// 1. 生成摘要（最重要：供后续章节的上下文使用）
+	if s.narrativeSvc != nil && chapter.Summary == "" {
+		if summary, err := s.narrativeSvc.GenerateChapterSummary(tenantID, chapter, novel.Title); err == nil {
+			chapter.Summary = summary
+			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
+				log.Printf("postProcessChapter: update chapter %d [摘要]: %v", chapter.ID, updateErr)
+			}
+		} else {
+			log.Printf("postProcess: summary ch%d: %v", chapter.ChapterNo, err)
+		}
+	}
+
+	// 2. 如果标题仍是"第N章"，生成创意标题
+	defaultTitle := fmt.Sprintf("第%d章", chapter.ChapterNo)
+	if s.narrativeSvc != nil && chapter.Title == defaultTitle && chapter.Summary != "" {
+		if title, err := s.narrativeSvc.GenerateChapterTitle(tenantID, chapter, novel.Genre, chapter.EmotionalTone); err == nil && title != "" {
+			chapter.Title = fmt.Sprintf("第%d章 %s", chapter.ChapterNo, title)
+			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
+				log.Printf("postProcessChapter: update chapter %d [标题]: %v", chapter.ID, updateErr)
+			}
+		}
+	}
+
+	// 3. 精修（检测并修复重复词、AI惯用句等）
+	if s.narrativeSvc != nil {
+		if refined, err := s.narrativeSvc.RefineChapterContent(tenantID, chapter, novel.Title); err == nil && refined != chapter.Content {
+			chapter.Content = refined
+			chapter.WordCount = countChineseChars(refined)
+			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
+				log.Printf("postProcessChapter: update chapter %d [精修]: %v", chapter.ID, updateErr)
+			}
+		}
+	}
+
+	// 4. 提取角色状态快照（原有逻辑）
+	novelSvc := &NovelService{novelRepo: s.novelRepo, chapterRepo: s.chapterRepo, aiService: s.aiService}
+	novelSvc.writeCharacterSnapshots(chapter)
+
+	// 5. 触发弧摘要（每 arcSize 章触发一次）
+	if s.narrativeSvc != nil {
+		s.narrativeSvc.TriggerArcSummaryIfNeeded(tenantID, novel.ID, chapter.ChapterNo)
+	}
+}
+
+// ──────────────────────────────────────────────
+// Context helpers for GenerateChapter
+// ──────────────────────────────────────────────
+
+type characterForPrompt struct {
+	Name         string
+	Role         string
+	CurrentState string
+	DialogueStyle string
+}
+
+func (s *ChapterService) getCharactersForPrompt(novelID uint) []characterForPrompt {
+	// ChapterService 没有直接访问 charRepo，通过 novelSvc 的快照机制获取
+	// 这里返回空列表，实际角色信息通过 globalCtx 已包含
+	return nil
+}
+
+func (s *ChapterService) getCharacterVoices(novelID uint) []characterForPrompt {
+	return nil
+}
+
+func (s *ChapterService) buildCharacterStateString(novelID uint) string {
+	return ""
+}
+
+func (s *ChapterService) buildForeshadowHints(novelID uint, chapterNo int) string {
+	if s.contextSvc == nil || s.contextSvc.foreshadowSvc == nil {
+		return ""
+	}
+	foreshadows, err := s.contextSvc.foreshadowSvc.CheckForeshadowStatus(novelID, chapterNo)
+	if err != nil {
+		return ""
+	}
+	var hints strings.Builder
+	count := 0
+	for _, fs := range foreshadows {
+		if !fs.IsFulfilled && chapterNo-fs.ChapterNo >= 3 {
+			hints.WriteString(fmt.Sprintf("- 请考虑回收伏笔：「%s」（第%d章埋设）\n", fs.Description, fs.ChapterNo))
+			count++
+			if count >= 3 {
+				break
+			}
+		}
+	}
+	return hints.String()
+}
+
+func (s *ChapterService) getPreviousChapterEnding(novelID uint, chapterNo int) string {
+	if chapterNo <= 1 {
+		return "（本章为开篇）"
+	}
+	prev, err := s.chapterRepo.GetByNovelAndChapterNo(novelID, chapterNo-1)
+	if err != nil || prev == nil {
+		return ""
+	}
+	if prev.Summary != "" {
+		return prev.Summary
+	}
+	// 从内容末尾截取约200字
+	content := []rune(prev.Content)
+	if len(content) > 200 {
+		content = content[len(content)-200:]
+	}
+	return string(content)
+}
+
 
 func (s *ChapterService) RegenerateChapter(tenantID uint, id uint, prompt string) (*model.Chapter, error) {
 	chapter, err := s.chapterRepo.GetByID(id)

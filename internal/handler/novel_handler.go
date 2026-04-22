@@ -40,21 +40,17 @@ func NewNovelHandler(
 func (h *NovelHandler) CreateNovel(c *gin.Context) {
 	var req model.CreateNovelRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	novel, err := h.novelService.CreateNovel(&req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    novel,
-	})
+	respondCreated(c, novel)
 }
 
 // GetNovel 获取小说详情
@@ -62,36 +58,23 @@ func (h *NovelHandler) CreateNovel(c *gin.Context) {
 func (h *NovelHandler) GetNovel(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 
 	novel, err := h.novelService.GetNovel(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "novel not found"})
+		respondErr(c, http.StatusNotFound, "novel not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    novel,
-	})
+	respondOK(c, novel)
 }
 
 // ListNovels 获取小说列表
 // GET /api/v1/novels
 func (h *NovelHandler) ListNovels(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 {
-		pageSize = 1
-	} else if pageSize > 100 {
-		pageSize = 100
-	}
+	p := parsePagination(c)
 
 	filters := map[string]interface{}{}
 	if tenantID, ok := c.Get("tenant_id"); ok {
@@ -104,22 +87,18 @@ func (h *NovelHandler) ListNovels(c *gin.Context) {
 		filters["genre"] = genre
 	}
 
-	novels, total, err := h.novelService.ListNovelsFiltered(page, pageSize, filters)
+	novels, total, err := h.novelService.ListNovelsFiltered(p.Page, p.PageSize, filters)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data": gin.H{
-			"items":      novels,
-			"total":      total,
-			"page":       page,
-			"page_size":  pageSize,
-			"total_page": (int(total) + pageSize - 1) / pageSize,
-		},
+	respondOK(c, gin.H{
+		"items":      novels,
+		"total":      total,
+		"page":       p.Page,
+		"page_size":  p.PageSize,
+		"total_page": (int(total) + p.PageSize - 1) / p.PageSize,
 	})
 }
 
@@ -128,27 +107,23 @@ func (h *NovelHandler) ListNovels(c *gin.Context) {
 func (h *NovelHandler) UpdateNovel(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 
 	var req model.UpdateNovelRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	novel, err := h.novelService.UpdateNovel(uint(id), &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    novel,
-	})
+	respondOK(c, novel)
 }
 
 // DeleteNovel 删除小说
@@ -156,12 +131,12 @@ func (h *NovelHandler) UpdateNovel(c *gin.Context) {
 func (h *NovelHandler) DeleteNovel(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 
 	if err := h.novelService.DeleteNovel(uint(id)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -176,13 +151,13 @@ func (h *NovelHandler) DeleteNovel(c *gin.Context) {
 func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 
 	var req model.GenerateChapterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
@@ -193,7 +168,7 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 
 	chapter, err := h.chapterService.GenerateChapter(getTenantID(c), uint(novelId), &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -227,7 +202,7 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 func (h *NovelHandler) GenerateOutline(c *gin.Context) {
 	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 
@@ -245,15 +220,11 @@ func (h *NovelHandler) GenerateOutline(c *gin.Context) {
 		Keywords:   req.Keywords,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    result,
-	})
+	respondOK(c, result)
 }
 
 // GetForeshadows 获取伏笔列表
@@ -261,7 +232,7 @@ func (h *NovelHandler) GenerateOutline(c *gin.Context) {
 func (h *NovelHandler) GetForeshadows(c *gin.Context) {
 	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 
@@ -269,15 +240,11 @@ func (h *NovelHandler) GetForeshadows(c *gin.Context) {
 
 	foreshadows, err := h.foreshadowService.GetForeshadows(uint(novelId), chapterNo)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    foreshadows,
-	})
+	respondOK(c, foreshadows)
 }
 
 // MarkForeshadowFulfilled 标记伏笔已回收
@@ -290,12 +257,12 @@ func (h *NovelHandler) MarkForeshadowFulfilled(c *gin.Context) {
 		ChapterID uint `json:"chapter_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	if err := h.foreshadowService.MarkFulfilledByID(uint(novelId), uint(foreshadowId), req.ChapterID); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -310,21 +277,17 @@ func (h *NovelHandler) MarkForeshadowFulfilled(c *gin.Context) {
 func (h *NovelHandler) GetTimeline(c *gin.Context) {
 	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 
 	timeline, err := h.timelineService.GetTimeline(uint(novelId))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    timeline,
-	})
+	respondOK(c, timeline)
 }
 
 // BuildTimeline 构建时间线
@@ -332,19 +295,15 @@ func (h *NovelHandler) GetTimeline(c *gin.Context) {
 func (h *NovelHandler) BuildTimeline(c *gin.Context) {
 	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 
 	timeline, err := h.timelineService.BuildTimeline(uint(novelId))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    timeline,
-	})
+	respondOK(c, timeline)
 }

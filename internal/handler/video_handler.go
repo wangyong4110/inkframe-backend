@@ -36,27 +36,23 @@ func NewVideoHandler(
 func (h *VideoHandler) CreateVideo(c *gin.Context) {
 	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 
 	var req model.CreateVideoRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	video, err := h.videoService.CreateVideo(uint(novelId), &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    video,
-	})
+	respondCreated(c, video)
 }
 
 // GetVideo 获取视频详情
@@ -64,21 +60,17 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 func (h *VideoHandler) GetVideo(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid video id"})
+		respondBadRequest(c, "invalid video id")
 		return
 	}
 
 	video, err := h.videoService.GetVideo(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "video not found"})
+		respondErr(c, http.StatusNotFound, "video not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    video,
-	})
+	respondOK(c, video)
 }
 
 // ListVideos 获取视频列表
@@ -94,33 +86,20 @@ func (h *VideoHandler) ListVideos(c *gin.Context) {
 	}
 
 	status := c.Query("status")
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 {
-		pageSize = 1
-	} else if pageSize > 100 {
-		pageSize = 100
-	}
+	p := parsePagination(c)
 
-	videos, total, err := h.videoService.ListVideos(novelId, status, page, pageSize)
+	videos, total, err := h.videoService.ListVideos(novelId, status, p.Page, p.PageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data": gin.H{
-			"items":      videos,
-			"total":      total,
-			"page":       page,
-			"page_size":  pageSize,
-			"total_page": (total + pageSize - 1) / pageSize,
-		},
+	respondOK(c, gin.H{
+		"items":      videos,
+		"total":      total,
+		"page":       p.Page,
+		"page_size":  p.PageSize,
+		"total_page": (total + p.PageSize - 1) / p.PageSize,
 	})
 }
 
@@ -129,27 +108,23 @@ func (h *VideoHandler) ListVideos(c *gin.Context) {
 func (h *VideoHandler) UpdateVideo(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid video id"})
+		respondBadRequest(c, "invalid video id")
 		return
 	}
 
 	var req model.UpdateVideoRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	video, err := h.videoService.UpdateVideo(uint(id), &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    video,
-	})
+	respondOK(c, video)
 }
 
 // DeleteVideo 删除视频
@@ -157,12 +132,12 @@ func (h *VideoHandler) UpdateVideo(c *gin.Context) {
 func (h *VideoHandler) DeleteVideo(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid video id"})
+		respondBadRequest(c, "invalid video id")
 		return
 	}
 
 	if err := h.videoService.DeleteVideo(uint(id)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -177,7 +152,7 @@ func (h *VideoHandler) DeleteVideo(c *gin.Context) {
 func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 	videoId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid video id"})
+		respondBadRequest(c, "invalid video id")
 		return
 	}
 
@@ -187,21 +162,17 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 		Style      string   `json:"style,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	result, err := h.storyboardService.GenerateStoryboard(uint(videoId), req.ChapterID, req.Characters, req.Style)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    result,
-	})
+	respondOK(c, result)
 }
 
 // GetStoryboard 获取分镜列表
@@ -209,21 +180,17 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 func (h *VideoHandler) GetStoryboard(c *gin.Context) {
 	videoId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid video id"})
+		respondBadRequest(c, "invalid video id")
 		return
 	}
 
 	shots, err := h.videoService.GetStoryboard(uint(videoId))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    shots,
-	})
+	respondOK(c, shots)
 }
 
 // UpdateStoryboardShot 更新分镜
@@ -231,27 +198,23 @@ func (h *VideoHandler) GetStoryboard(c *gin.Context) {
 func (h *VideoHandler) UpdateStoryboardShot(c *gin.Context) {
 	shotId, err := strconv.ParseUint(c.Param("shot_id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid shot id"})
+		respondBadRequest(c, "invalid shot id")
 		return
 	}
 
 	var req model.StoryboardShot
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	shot, err := h.videoService.UpdateShot(uint(shotId), &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    shot,
-	})
+	respondOK(c, shot)
 }
 
 // AnalyzeEmotions 情感分析
@@ -261,21 +224,17 @@ func (h *VideoHandler) AnalyzeEmotions(c *gin.Context) {
 		Content string `json:"content" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	result, err := h.storyboardService.AnalyzeEmotions(req.Content)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    result,
-	})
+	respondOK(c, result)
 }
 
 // EnhanceVideo 增强视频
@@ -286,21 +245,17 @@ func (h *VideoHandler) EnhanceVideo(c *gin.Context) {
 		Enhancements  []model.EnhancementConfig `json:"enhancements"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	result, err := h.enhancementService.EnhanceVideo(req.VideoURL, req.Enhancements)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    result,
-	})
+	respondOK(c, result)
 }
 
 // GetEnhancementRecommendations 获取增强建议
@@ -313,21 +268,17 @@ func (h *VideoHandler) GetEnhancementRecommendations(c *gin.Context) {
 		Style      string `json:"style"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	result, err := h.enhancementService.GetRecommendations(req.FPS, req.Resolution, req.Duration, req.Style)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    result,
-	})
+	respondOK(c, result)
 }
 
 // StartVideoGeneration 开始视频生成
@@ -335,22 +286,18 @@ func (h *VideoHandler) GetEnhancementRecommendations(c *gin.Context) {
 func (h *VideoHandler) StartVideoGeneration(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid video id"})
+		respondBadRequest(c, "invalid video id")
 		return
 	}
 
 	taskId, err := h.videoService.StartGeneration(uint(id))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data": gin.H{
-			"task_id": taskId,
-		},
+	respondOK(c, gin.H{
+		"task_id": taskId,
 	})
 }
 
@@ -359,21 +306,17 @@ func (h *VideoHandler) StartVideoGeneration(c *gin.Context) {
 func (h *VideoHandler) GetVideoStatus(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid video id"})
+		respondBadRequest(c, "invalid video id")
 		return
 	}
 
 	status, err := h.videoService.GetStatus(uint(id))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    status,
-	})
+	respondOK(c, status)
 }
 
 // GenerateShotVideos 提交所有分镜视频生成任务，并后台轮询拼接
@@ -381,12 +324,12 @@ func (h *VideoHandler) GetVideoStatus(c *gin.Context) {
 func (h *VideoHandler) GenerateShotVideos(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid video id"})
+		respondBadRequest(c, "invalid video id")
 		return
 	}
 
 	if err := h.videoService.GenerateAllShotVideos(uint(id)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -403,21 +346,17 @@ func (h *VideoHandler) GenerateShotVideos(c *gin.Context) {
 func (h *VideoHandler) ListShots(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid video id"})
+		respondBadRequest(c, "invalid video id")
 		return
 	}
 
 	shots, err := h.videoService.GetStoryboard(uint(id))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    shots,
-	})
+	respondOK(c, shots)
 }
 
 // StitchVideoHandler 手动触发视频拼接
@@ -425,22 +364,18 @@ func (h *VideoHandler) ListShots(c *gin.Context) {
 func (h *VideoHandler) StitchVideoHandler(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid video id"})
+		respondBadRequest(c, "invalid video id")
 		return
 	}
 
 	outputPath, err := h.videoService.StitchVideo(uint(id))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "stitch completed",
-		"data": gin.H{
-			"output_path": outputPath,
-		},
+	respondOK(c, gin.H{
+		"output_path": outputPath,
 	})
 }
 
@@ -449,18 +384,18 @@ func (h *VideoHandler) StitchVideoHandler(c *gin.Context) {
 func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 	videoID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid video id"})
+		respondBadRequest(c, "invalid video id")
 		return
 	}
 	shotID, err := strconv.ParseUint(c.Param("shot_id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid shot id"})
+		respondBadRequest(c, "invalid shot id")
 		return
 	}
 
 	shot, err := h.videoService.GenerateSingleShot(uint(videoID), uint(shotID))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -476,19 +411,19 @@ func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 	videoID, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid video id"})
+		respondBadRequest(c, "invalid video id")
 		return
 	}
 
 	var req model.BatchGenerateShotsRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	shots, err := h.videoService.BatchGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -503,22 +438,18 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 // GET /api/v1/consistency/default
 func (h *VideoHandler) GetDefaultConsistencyConfig(c *gin.Context) {
 	if h.consistencyService == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "consistency service unavailable"})
+		respondErr(c, http.StatusServiceUnavailable, "consistency service unavailable")
 		return
 	}
 	level := h.consistencyService.GetDefaultConsistencyLevel()
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    level,
-	})
+	respondOK(c, level)
 }
 
 // CalculateConsistencyScore 计算一致性评分
 // POST /api/v1/consistency/score
 func (h *VideoHandler) CalculateConsistencyScore(c *gin.Context) {
 	if h.consistencyService == nil {
-		c.JSON(http.StatusServiceUnavailable, gin.H{"error": "consistency service unavailable"})
+		respondErr(c, http.StatusServiceUnavailable, "consistency service unavailable")
 		return
 	}
 
@@ -527,20 +458,15 @@ func (h *VideoHandler) CalculateConsistencyScore(c *gin.Context) {
 		GeneratedImages []string `json:"generated_images"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	score, err := h.consistencyService.CalculateConsistencyScore(req.ReferenceImage, req.GeneratedImages)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    score,
-	})
+	respondOK(c, score)
 }
-

@@ -80,27 +80,23 @@ func NewCharacterHandler(
 func (h *CharacterHandler) CreateCharacter(c *gin.Context) {
 	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 
 	var req model.CreateCharacterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	character, err := h.characterService.CreateCharacter(uint(novelId), &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    characterResponse(character),
-	})
+	respondCreated(c, characterResponse(character))
 }
 
 // GetCharacter 获取角色详情
@@ -108,21 +104,17 @@ func (h *CharacterHandler) CreateCharacter(c *gin.Context) {
 func (h *CharacterHandler) GetCharacter(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid character id"})
+		respondBadRequest(c, "invalid character id")
 		return
 	}
 
 	character, err := h.characterService.GetCharacter(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "character not found"})
+		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    characterResponse(character),
-	})
+	respondOK(c, characterResponse(character))
 }
 
 // ListCharacters 获取角色列表
@@ -130,13 +122,13 @@ func (h *CharacterHandler) GetCharacter(c *gin.Context) {
 func (h *CharacterHandler) ListCharacters(c *gin.Context) {
 	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 
 	characters, err := h.characterService.ListCharacters(uint(novelId))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -144,11 +136,7 @@ func (h *CharacterHandler) ListCharacters(c *gin.Context) {
 	for _, ch := range characters {
 		resp = append(resp, characterResponse(ch))
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    resp,
-	})
+	respondOK(c, resp)
 }
 
 // UpdateCharacter 更新角色
@@ -156,27 +144,23 @@ func (h *CharacterHandler) ListCharacters(c *gin.Context) {
 func (h *CharacterHandler) UpdateCharacter(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid character id"})
+		respondBadRequest(c, "invalid character id")
 		return
 	}
 
 	var req model.UpdateCharacterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	character, err := h.characterService.UpdateCharacter(uint(id), &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    characterResponse(character),
-	})
+	respondOK(c, characterResponse(character))
 }
 
 // DeleteCharacter 删除角色
@@ -184,12 +168,12 @@ func (h *CharacterHandler) UpdateCharacter(c *gin.Context) {
 func (h *CharacterHandler) DeleteCharacter(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid character id"})
+		respondBadRequest(c, "invalid character id")
 		return
 	}
 
 	if err := h.characterService.DeleteCharacter(uint(id)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -204,7 +188,7 @@ func (h *CharacterHandler) DeleteCharacter(c *gin.Context) {
 func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid character id"})
+		respondBadRequest(c, "invalid character id")
 		return
 	}
 
@@ -215,13 +199,13 @@ func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 		Style    string `json:"style,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	character, err := h.characterService.GetCharacter(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "character not found"})
+		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
 
@@ -234,15 +218,11 @@ func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 		Style:       req.Style,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    image,
-	})
+	respondOK(c, image)
 }
 
 // GenerateCharacterProfile AI生成角色档案
@@ -250,7 +230,7 @@ func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 func (h *CharacterHandler) GenerateCharacterProfile(c *gin.Context) {
 	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 
@@ -258,21 +238,17 @@ func (h *CharacterHandler) GenerateCharacterProfile(c *gin.Context) {
 		Description string `json:"description" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	character, err := h.characterService.GenerateProfile(getTenantID(c), uint(novelId), req.Description)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    character,
-	})
+	respondOK(c, character)
 }
 
 // GetCharacterArc 获取角色弧光
@@ -283,15 +259,11 @@ func (h *CharacterHandler) GetCharacterArc(c *gin.Context) {
 
 	arc, err := h.arcService.GetCharacterArc(uint(novelId), uint(characterId))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    arc,
-	})
+	respondOK(c, arc)
 }
 
 // GetAllCharacterArcs 获取所有角色弧光
@@ -299,21 +271,17 @@ func (h *CharacterHandler) GetCharacterArc(c *gin.Context) {
 func (h *CharacterHandler) GetAllCharacterArcs(c *gin.Context) {
 	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 
 	arcs, err := h.arcService.GetAllArcs(uint(novelId))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    arcs,
-	})
+	respondOK(c, arcs)
 }
 
 // UpdateCharacterArc 更新角色弧光
@@ -327,21 +295,17 @@ func (h *CharacterHandler) UpdateCharacterArc(c *gin.Context) {
 		Note         string `json:"note,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	arc, err := h.arcService.UpdateArc(uint(novelId), uint(characterId), req.CurrentStage, req.Note)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    arc,
-	})
+	respondOK(c, arc)
 }
 
 // AnalyzeCharacterConsistency 分析角色一致性
@@ -349,7 +313,7 @@ func (h *CharacterHandler) UpdateCharacterArc(c *gin.Context) {
 func (h *CharacterHandler) AnalyzeCharacterConsistency(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid character id"})
+		respondBadRequest(c, "invalid character id")
 		return
 	}
 
@@ -357,19 +321,15 @@ func (h *CharacterHandler) AnalyzeCharacterConsistency(c *gin.Context) {
 		Images []string `json:"images" binding:"required,min=1"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	result, err := h.characterService.AnalyzeConsistency(uint(id), req.Images)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    result,
-	})
+	respondOK(c, result)
 }

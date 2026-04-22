@@ -21,15 +21,11 @@ func NewStyleHandler(styleService *service.StyleService) *StyleHandler {
 func (h *StyleHandler) GetDefaultStyle(c *gin.Context) {
 	style, err := h.styleService.GetDefaultStyle()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    style,
-	})
+	respondOK(c, style)
 }
 
 // BuildStylePrompt 构建风格提示词
@@ -44,22 +40,18 @@ func (h *StyleHandler) BuildStylePrompt(c *gin.Context) {
 		DialogueRatio        float64 `json:"dialogue_ratio"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	prompt, err := h.styleService.BuildStylePrompt(&req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data": gin.H{
-			"prompt": prompt,
-		},
+	respondOK(c, gin.H{
+		"prompt": prompt,
 	})
 }
 
@@ -68,11 +60,7 @@ func (h *StyleHandler) BuildStylePrompt(c *gin.Context) {
 func (h *StyleHandler) GetStylePresets(c *gin.Context) {
 	presets := h.styleService.GetStylePresets()
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    presets,
-	})
+	respondOK(c, presets)
 }
 
 // ApplyStylePreset 应用风格预设
@@ -82,13 +70,9 @@ func (h *StyleHandler) ApplyStylePreset(c *gin.Context) {
 
 	style, err := h.styleService.ApplyPreset(name)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "preset not found"})
+		respondErr(c, http.StatusNotFound, "preset not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    style,
-	})
+	respondOK(c, style)
 }

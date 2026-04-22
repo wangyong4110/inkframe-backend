@@ -33,27 +33,23 @@ func NewChapterHandler(
 func (h *ChapterHandler) CreateChapter(c *gin.Context) {
 	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 
 	var req model.CreateChapterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	chapter, err := h.chapterService.CreateChapter(uint(novelId), &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    chapter,
-	})
+	respondCreated(c, chapter)
 }
 
 // GetChapter 获取章节详情
@@ -61,21 +57,17 @@ func (h *ChapterHandler) CreateChapter(c *gin.Context) {
 func (h *ChapterHandler) GetChapter(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chapter id"})
+		respondBadRequest(c, "invalid chapter id")
 		return
 	}
 
 	chapter, err := h.chapterService.GetChapter(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "chapter not found"})
+		respondErr(c, http.StatusNotFound, "chapter not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    chapter,
-	})
+	respondOK(c, chapter)
 }
 
 // ListChapters 获取章节列表
@@ -83,21 +75,17 @@ func (h *ChapterHandler) GetChapter(c *gin.Context) {
 func (h *ChapterHandler) ListChapters(c *gin.Context) {
 	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 
 	chapters, err := h.chapterService.ListChapters(uint(novelId))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    chapters,
-	})
+	respondOK(c, chapters)
 }
 
 // UpdateChapter 更新章节
@@ -105,27 +93,23 @@ func (h *ChapterHandler) ListChapters(c *gin.Context) {
 func (h *ChapterHandler) UpdateChapter(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chapter id"})
+		respondBadRequest(c, "invalid chapter id")
 		return
 	}
 
 	var req model.UpdateChapterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	chapter, err := h.chapterService.UpdateChapter(uint(id), &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    chapter,
-	})
+	respondOK(c, chapter)
 }
 
 // DeleteChapter 删除章节
@@ -133,12 +117,12 @@ func (h *ChapterHandler) UpdateChapter(c *gin.Context) {
 func (h *ChapterHandler) DeleteChapter(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chapter id"})
+		respondBadRequest(c, "invalid chapter id")
 		return
 	}
 
 	if err := h.chapterService.DeleteChapter(uint(id)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -153,7 +137,7 @@ func (h *ChapterHandler) DeleteChapter(c *gin.Context) {
 func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 	var req model.GenerateChapterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
@@ -164,7 +148,7 @@ func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 
 	chapter, err := h.chapterService.GenerateChapter(getTenantID(c), req.NovelID, &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -186,7 +170,7 @@ func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 func (h *ChapterHandler) RegenerateChapter(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chapter id"})
+		respondBadRequest(c, "invalid chapter id")
 		return
 	}
 
@@ -194,21 +178,17 @@ func (h *ChapterHandler) RegenerateChapter(c *gin.Context) {
 		Prompt string `json:"prompt"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	chapter, err := h.chapterService.RegenerateChapter(getTenantID(c), uint(id), req.Prompt)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    chapter,
-	})
+	respondOK(c, chapter)
 }
 
 // GetVersions 获取章节版本历史
@@ -216,21 +196,17 @@ func (h *ChapterHandler) RegenerateChapter(c *gin.Context) {
 func (h *ChapterHandler) GetVersions(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chapter id"})
+		respondBadRequest(c, "invalid chapter id")
 		return
 	}
 
 	versions, err := h.versionService.GetVersions(uint(id))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    versions,
-	})
+	respondOK(c, versions)
 }
 
 // RestoreVersion 恢复版本
@@ -238,26 +214,22 @@ func (h *ChapterHandler) GetVersions(c *gin.Context) {
 func (h *ChapterHandler) RestoreVersion(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chapter id"})
+		respondBadRequest(c, "invalid chapter id")
 		return
 	}
 	versionNo, err := strconv.Atoi(c.Param("version_no"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid version no"})
+		respondBadRequest(c, "invalid version no")
 		return
 	}
 
 	chapter, err := h.versionService.RestoreVersion(uint(id), versionNo)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    chapter,
-	})
+	respondOK(c, chapter)
 }
 
 // GetChapterByNo 根据章节号获取章节
@@ -265,26 +237,22 @@ func (h *ChapterHandler) RestoreVersion(c *gin.Context) {
 func (h *ChapterHandler) GetChapterByNo(c *gin.Context) {
 	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chapter no"})
+		respondBadRequest(c, "invalid chapter no")
 		return
 	}
 
 	chapter, err := h.chapterService.GetChapterByNo(uint(novelId), chapterNo)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "chapter not found"})
+		respondErr(c, http.StatusNotFound, "chapter not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    chapter,
-	})
+	respondOK(c, chapter)
 }
 
 // UpdateChapterByNo 根据章节号更新章节
@@ -292,32 +260,28 @@ func (h *ChapterHandler) GetChapterByNo(c *gin.Context) {
 func (h *ChapterHandler) UpdateChapterByNo(c *gin.Context) {
 	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chapter no"})
+		respondBadRequest(c, "invalid chapter no")
 		return
 	}
 
 	var req model.UpdateChapterRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	chapter, err := h.chapterService.UpdateChapterByNo(uint(novelId), chapterNo, &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    chapter,
-	})
+	respondOK(c, chapter)
 }
 
 // DeleteChapterByNo 根据章节号删除章节
@@ -325,17 +289,17 @@ func (h *ChapterHandler) UpdateChapterByNo(c *gin.Context) {
 func (h *ChapterHandler) DeleteChapterByNo(c *gin.Context) {
 	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chapter no"})
+		respondBadRequest(c, "invalid chapter no")
 		return
 	}
 
 	if err := h.chapterService.DeleteChapterByNo(uint(novelId), chapterNo); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -350,21 +314,17 @@ func (h *ChapterHandler) DeleteChapterByNo(c *gin.Context) {
 func (h *ChapterHandler) GetQualityReport(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chapter id"})
+		respondBadRequest(c, "invalid chapter id")
 		return
 	}
 
 	report, err := h.qualityService.CheckChapter(uint(id))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    report,
-	})
+	respondOK(c, report)
 }
 
 // QualityCheck 质量检查
@@ -372,21 +332,17 @@ func (h *ChapterHandler) GetQualityReport(c *gin.Context) {
 func (h *ChapterHandler) QualityCheck(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chapter id"})
+		respondBadRequest(c, "invalid chapter id")
 		return
 	}
 
 	report, err := h.qualityService.CheckChapter(uint(id))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    report,
-	})
+	respondOK(c, report)
 }
 
 // ApproveChapter 审核通过章节
@@ -394,7 +350,7 @@ func (h *ChapterHandler) QualityCheck(c *gin.Context) {
 func (h *ChapterHandler) ApproveChapter(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chapter id"})
+		respondBadRequest(c, "invalid chapter id")
 		return
 	}
 
@@ -404,7 +360,7 @@ func (h *ChapterHandler) ApproveChapter(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req) // comment is optional; ignore bind errors
 
 	if err := h.chapterService.ApproveChapter(uint(id), req.Comment); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -419,7 +375,7 @@ func (h *ChapterHandler) ApproveChapter(c *gin.Context) {
 func (h *ChapterHandler) RejectChapter(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid chapter id"})
+		respondBadRequest(c, "invalid chapter id")
 		return
 	}
 
@@ -427,12 +383,12 @@ func (h *ChapterHandler) RejectChapter(c *gin.Context) {
 		Reason string `json:"reason" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	if err := h.chapterService.RejectChapter(uint(id), req.Reason); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 

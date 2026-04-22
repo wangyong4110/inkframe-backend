@@ -1,23 +1,32 @@
 # InkFrame Server Configuration
+#
+# 使用方式：cp config.example.yaml config.yaml，填写 [必填] 项
+#
+# AI API Key 等通过环境变量传入（不写入此文件）：
+#   OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_API_KEY
+#   DOUBAO_API_KEY / DEEPSEEK_API_KEY / QIANWEN_API_KEY
+#   KLING_API_KEY / SEEDANCE_API_KEY
+#   QDRANT_ENDPOINT / QDRANT_API_KEY / CHROMA_ENDPOINT
 
 # 服务器配置
 server:
   host: "0.0.0.0"
   port: 8080
-  mode: "debug"  # debug, release, test
+  mode: "debug"            # debug | release | test
+  jwt_secret: ""           # [必填] 生产环境填入随机长字符串
+  jwt_expiry: 24h
   read_timeout: 30s
   write_timeout: 30s
   max_header_bytes: 1048576
   shutdown_timeout: 10s
 
-# 数据库配置
+# 数据库配置（必填）
 database:
-  driver: "mysql"
-  host: "localhost"
+  host: "localhost"        # [必填]
   port: 3306
-  database: "inkframe"
-  username: "root"
-  password: "password"
+  database: "inkframe"     # [必填] 需提前创建
+  username: "root"         # [必填]
+  password: ""             # [必填]
   charset: "utf8mb4"
   max_idle_conns: 10
   max_open_conns: 100
@@ -32,45 +41,41 @@ redis:
   db: 0
   pool_size: 100
 
-# AI模型配置
+# AI模型配置（Key 均从环境变量读取，此处只配置 Endpoint / Model）
 ai:
+  # $OPENAI_API_KEY
   openai:
-    api_key: ""
     endpoint: "https://api.openai.com/v1"
     model: "gpt-4"
     max_tokens: 4096
-  
+
+  # $ANTHROPIC_API_KEY
   anthropic:
-    api_key: ""
     endpoint: "https://api.anthropic.com/v1"
-    model: "claude-3-opus"
-  
+    model: "claude-3-opus-20240229"
+
+  # $GOOGLE_API_KEY
   google:
-    api_key: ""
     endpoint: "https://generativelanguage.googleapis.com/v1"
     model: "gemini-pro"
 
-  # 豆包（字节跳动火山引擎 Ark），图像生成使用 Seedream
+  # $DOUBAO_API_KEY — 火山引擎 Ark，含 Seedream 图像生成
   doubao:
-    api_key: ""
     endpoint: "https://ark.volces.com/api/v3"
     model: "doubao-pro-32k"
 
-  # DeepSeek
+  # $DEEPSEEK_API_KEY
   deepseek:
-    api_key: ""
     endpoint: "https://api.deepseek.com/v1"
     model: "deepseek-chat"
 
-  # 通义千问（阿里云百炼/DashScope），图像生成使用 Wan 万象
+  # $QIANWEN_API_KEY — 阿里云 DashScope，含 Wan 万象图像生成
   qianwen:
-    api_key: ""
     endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     model: "qwen-plus"
 
-  # Seedance 视频生成（字节跳动火山引擎 Ark）
+  # $SEEDANCE_API_KEY — 火山引擎 Ark，通常与豆包共用同一 Key
   seedance:
-    api_key: ""      # 与豆包共用同一个 Volcengine API Key
     endpoint: "https://ark.volces.com/api/v3"
 
   default:
@@ -78,25 +83,26 @@ ai:
     top_p: 0.9
     top_k: 40
 
-# 文件存储配置
+# 文件存储配置（可选，不配置则跳过资产上传）
 storage:
-  type: "minio"  # minio, local, s3
-  endpoint: "localhost:9000"
-  access_key: "minioadmin"
-  secret_key: "minioadmin"
+  type: "oss"              # oss（阿里云）| minio | local
+  endpoint: ""             # 示例：https://oss-cn-hangzhou.aliyuncs.com
+  access_key: ""           # OSS AccessKey ID
+  secret_key: ""           # OSS AccessKey Secret
   bucket: "inkframe"
-  region: "us-east-1"
-  base_url: "http://localhost:9000"
+  region: "oss-cn-hangzhou"
+  base_url: ""             # 公开访问域名，如 https://cdn.example.com
 
-# 向量数据库配置
+# 向量数据库配置（可选，不配置则禁用语义检索）
+# Endpoint/Key 也可通过 $QDRANT_ENDPOINT / $QDRANT_API_KEY 传入
 vector_db:
-  type: "weaviate"  # weaviate, qdrant, chromadb
-  endpoint: "localhost:8080"
+  type: "qdrant"           # qdrant | chroma
+  endpoint: "http://localhost:6333"
   api_key: ""
   index_name: "inkframe"
 
 # 日志配置
 logger:
-  level: "info"  # debug, info, warn, error
-  format: "json"  # json, text
+  level: "info"            # debug | info | warn | error
+  format: "json"           # json | text
   output_path: "stdout"

@@ -459,7 +459,7 @@ func (s *CharacterConsistencyService) CalculateConsistencyScore(
 		FeatureScore    float64 `json:"feature_score"`
 		ExpressionScore float64 `json:"expression_score"`
 	}
-	cleaned := extractJSONObject(result)
+	cleaned := extractJSON(result)
 	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
 		return &ConsistencyScore{}, fmt.Errorf("failed to parse consistency score response: %w", err)
 	}
@@ -473,15 +473,6 @@ func (s *CharacterConsistencyService) CalculateConsistencyScore(
 	}, nil
 }
 
-// extractJSONObject 从 AI 响应中提取 JSON 对象（{...}）
-func extractJSONObject(s string) string {
-	start := strings.Index(s, "{")
-	end := strings.LastIndex(s, "}")
-	if start >= 0 && end > start {
-		return s[start : end+1]
-	}
-	return s
-}
 
 // ============================================
 // Image Generation Service - 图像生成服务

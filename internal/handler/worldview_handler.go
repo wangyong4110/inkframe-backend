@@ -22,34 +22,21 @@ func NewWorldviewHandler(worldviewService *service.WorldviewService) *WorldviewH
 // ListWorldviews 获取世界观列表
 // GET /api/v1/worldviews
 func (h *WorldviewHandler) ListWorldviews(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 {
-		pageSize = 1
-	} else if pageSize > 100 {
-		pageSize = 100
-	}
+	p := parsePagination(c)
 	genre := c.Query("genre")
 
-	worldviews, total, err := h.worldviewService.ListWorldviews(page, pageSize, genre)
+	worldviews, total, err := h.worldviewService.ListWorldviews(p.Page, p.PageSize, genre)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data": gin.H{
-			"items":      worldviews,
-			"total":      total,
-			"page":       page,
-			"page_size":  pageSize,
-			"total_page": (int(total) + pageSize - 1) / pageSize,
-		},
+	respondOK(c, gin.H{
+		"items":      worldviews,
+		"total":      total,
+		"page":       p.Page,
+		"page_size":  p.PageSize,
+		"total_page": (int(total) + p.PageSize - 1) / p.PageSize,
 	})
 }
 
@@ -58,21 +45,17 @@ func (h *WorldviewHandler) ListWorldviews(c *gin.Context) {
 func (h *WorldviewHandler) GetWorldview(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid worldview id"})
+		respondBadRequest(c, "invalid worldview id")
 		return
 	}
 
 	worldview, err := h.worldviewService.GetWorldview(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "worldview not found"})
+		respondErr(c, http.StatusNotFound, "worldview not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    worldview,
-	})
+	respondOK(c, worldview)
 }
 
 // CreateWorldview 创建世界观
@@ -89,7 +72,7 @@ func (h *WorldviewHandler) CreateWorldview(c *gin.Context) {
 		Technology  string `json:"technology"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
@@ -106,15 +89,11 @@ func (h *WorldviewHandler) CreateWorldview(c *gin.Context) {
 	}
 
 	if err := h.worldviewService.CreateWorldview(worldview); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    worldview,
-	})
+	respondCreated(c, worldview)
 }
 
 // UpdateWorldview 更新世界观
@@ -122,13 +101,13 @@ func (h *WorldviewHandler) CreateWorldview(c *gin.Context) {
 func (h *WorldviewHandler) UpdateWorldview(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid worldview id"})
+		respondBadRequest(c, "invalid worldview id")
 		return
 	}
 
 	worldview, err := h.worldviewService.GetWorldview(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "worldview not found"})
+		respondErr(c, http.StatusNotFound, "worldview not found")
 		return
 	}
 
@@ -144,7 +123,7 @@ func (h *WorldviewHandler) UpdateWorldview(c *gin.Context) {
 		Rules       *string `json:"rules"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
@@ -177,15 +156,11 @@ func (h *WorldviewHandler) UpdateWorldview(c *gin.Context) {
 	}
 
 	if err := h.worldviewService.UpdateWorldview(worldview); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    worldview,
-	})
+	respondOK(c, worldview)
 }
 
 // DeleteWorldview 删除世界观
@@ -193,12 +168,12 @@ func (h *WorldviewHandler) UpdateWorldview(c *gin.Context) {
 func (h *WorldviewHandler) DeleteWorldview(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid worldview id"})
+		respondBadRequest(c, "invalid worldview id")
 		return
 	}
 
 	if err := h.worldviewService.DeleteWorldview(uint(id)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -216,26 +191,22 @@ func (h *WorldviewHandler) GenerateWorldview(c *gin.Context) {
 		Hints []string `json:"hints"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	worldview, err := h.worldviewService.GenerateWorldview(getTenantID(c), req.Genre, req.Hints)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	if err := h.worldviewService.CreateWorldview(worldview); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    worldview,
-	})
+	respondOK(c, worldview)
 }
 
 // ============================================
@@ -247,15 +218,15 @@ func (h *WorldviewHandler) GenerateWorldview(c *gin.Context) {
 func (h *WorldviewHandler) ListEntities(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid worldview id"})
+		respondBadRequest(c, "invalid worldview id")
 		return
 	}
 	entities, err := h.worldviewService.GetEntities(uint(id))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": entities})
+	respondOK(c, entities)
 }
 
 // CreateEntity 创建世界观实体
@@ -263,7 +234,7 @@ func (h *WorldviewHandler) ListEntities(c *gin.Context) {
 func (h *WorldviewHandler) CreateEntity(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid worldview id"})
+		respondBadRequest(c, "invalid worldview id")
 		return
 	}
 	var req struct {
@@ -273,7 +244,7 @@ func (h *WorldviewHandler) CreateEntity(c *gin.Context) {
 		ImageURL    string `json:"image_url"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 	entity := &model.WorldviewEntity{
@@ -284,10 +255,10 @@ func (h *WorldviewHandler) CreateEntity(c *gin.Context) {
 		ImageURL:    req.ImageURL,
 	}
 	if err := h.worldviewService.CreateEntity(entity); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	c.JSON(http.StatusCreated, gin.H{"code": 0, "message": "success", "data": entity})
+	respondCreated(c, entity)
 }
 
 // UpdateEntity 更新世界观实体
@@ -295,12 +266,12 @@ func (h *WorldviewHandler) CreateEntity(c *gin.Context) {
 func (h *WorldviewHandler) UpdateEntity(c *gin.Context) {
 	entityID, err := strconv.ParseUint(c.Param("entity_id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid entity id"})
+		respondBadRequest(c, "invalid entity id")
 		return
 	}
 	entity, err := h.worldviewService.GetEntity(uint(entityID))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "entity not found"})
+		respondErr(c, http.StatusNotFound, "entity not found")
 		return
 	}
 	var req struct {
@@ -310,7 +281,7 @@ func (h *WorldviewHandler) UpdateEntity(c *gin.Context) {
 		ImageURL    *string `json:"image_url"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 	if req.Type != nil {
@@ -326,10 +297,10 @@ func (h *WorldviewHandler) UpdateEntity(c *gin.Context) {
 		entity.ImageURL = *req.ImageURL
 	}
 	if err := h.worldviewService.UpdateEntity(entity); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": entity})
+	respondOK(c, entity)
 }
 
 // DeleteEntity 删除世界观实体
@@ -337,11 +308,11 @@ func (h *WorldviewHandler) UpdateEntity(c *gin.Context) {
 func (h *WorldviewHandler) DeleteEntity(c *gin.Context) {
 	entityID, err := strconv.ParseUint(c.Param("entity_id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid entity id"})
+		respondBadRequest(c, "invalid entity id")
 		return
 	}
 	if err := h.worldviewService.DeleteEntity(uint(entityID)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})

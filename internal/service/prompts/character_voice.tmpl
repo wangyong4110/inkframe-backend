@@ -1,0 +1,32 @@
+请分析以下小说角色的对话风格，提取其语言特征，用于后续写作时保持角色声音的一致性。
+
+# 角色信息
+- 姓名：{{.Name}}
+- 类型：{{.Role}}
+- 性格：{{.Personality}}
+- 背景：{{.Background}}
+
+# 该角色的对话样本（来自已生成的章节）
+{{.DialogueSamples}}
+
+# 分析维度
+请提取以下特征：
+1. **vocabulary_level**: 用词水平（文雅/平实/粗俗/学者型/江湖气）
+2. **sentence_length**: 句子长短倾向（简短有力/冗长复杂/混合）
+3. **speech_habits**: 口头禅、惯用句式（具体列出）
+4. **emotional_expression**: 情绪表达方式（直接爆发/隐忍内敛/用行动代替语言）
+5. **topic_preferences**: 喜欢谈论什么，回避什么
+6. **forbidden_phrases**: 这个角色绝对不会说的话（与性格不符的表达）
+7. **signature_expressions**: 标志性表达方式（1-3个）
+
+# 输出格式（JSON，不要markdown代码块）
+{
+  "vocabulary_level": "文雅",
+  "sentence_length": "简短有力",
+  "speech_habits": ["习惯句式1", "习惯句式2"],
+  "emotional_expression": "隐忍内敛，用行动代替语言",
+  "topic_preferences": "喜欢谈武道，回避家族话题",
+  "forbidden_phrases": ["绝对不会说1", "绝对不会说2"],
+  "signature_expressions": ["标志性表达1", "标志性表达2"],
+  "overall_voice": "对这个角色说话风格的一句话总结"
+}

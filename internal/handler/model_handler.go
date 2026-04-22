@@ -23,7 +23,7 @@ func NewModelHandler(modelService *service.ModelService) *ModelHandler {
 func (h *ModelHandler) ListProviders(c *gin.Context) {
 	providers, err := h.modelService.ListProviders(getTenantID(c))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -34,11 +34,7 @@ func (h *ModelHandler) ListProviders(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    providers,
-	})
+	respondOK(c, providers)
 }
 
 // GetProvider 获取单个提供商
@@ -46,22 +42,18 @@ func (h *ModelHandler) ListProviders(c *gin.Context) {
 func (h *ModelHandler) GetProvider(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
+		respondBadRequest(c, "invalid provider id")
 		return
 	}
 
 	provider, err := h.modelService.GetProvider(uint(id), getTenantID(c))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "provider not found"})
+		respondErr(c, http.StatusNotFound, "provider not found")
 		return
 	}
 
 	provider.APIKey = maskAPIKey(provider.APIKey)
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    provider,
-	})
+	respondOK(c, provider)
 }
 
 // CreateProvider 创建提供商
@@ -69,22 +61,18 @@ func (h *ModelHandler) GetProvider(c *gin.Context) {
 func (h *ModelHandler) CreateProvider(c *gin.Context) {
 	var req model.CreateModelProviderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	provider, err := h.modelService.CreateProvider(&req, getTenantID(c))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	provider.APIKey = maskAPIKey(provider.APIKey)
-	c.JSON(http.StatusCreated, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    provider,
-	})
+	respondCreated(c, provider)
 }
 
 // UpdateProvider 更新提供商
@@ -92,28 +80,24 @@ func (h *ModelHandler) CreateProvider(c *gin.Context) {
 func (h *ModelHandler) UpdateProvider(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
+		respondBadRequest(c, "invalid provider id")
 		return
 	}
 
 	var req model.UpdateModelProviderRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	provider, err := h.modelService.UpdateProvider(uint(id), getTenantID(c), &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	provider.APIKey = maskAPIKey(provider.APIKey)
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    provider,
-	})
+	respondOK(c, provider)
 }
 
 // DeleteProvider 删除提供商
@@ -121,12 +105,12 @@ func (h *ModelHandler) UpdateProvider(c *gin.Context) {
 func (h *ModelHandler) DeleteProvider(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
+		respondBadRequest(c, "invalid provider id")
 		return
 	}
 
 	if err := h.modelService.DeleteProvider(uint(id), getTenantID(c)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -141,7 +125,7 @@ func (h *ModelHandler) DeleteProvider(c *gin.Context) {
 func (h *ModelHandler) TestProvider(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid provider id"})
+		respondBadRequest(c, "invalid provider id")
 		return
 	}
 
@@ -158,11 +142,7 @@ func (h *ModelHandler) TestProvider(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    result,
-	})
+	respondOK(c, result)
 }
 
 // ListModels 获取模型列表
@@ -179,15 +159,11 @@ func (h *ModelHandler) ListModels(c *gin.Context) {
 
 	models, err := h.modelService.ListModels(providerId)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    models,
-	})
+	respondOK(c, models)
 }
 
 // CreateModel 创建模型
@@ -195,21 +171,17 @@ func (h *ModelHandler) ListModels(c *gin.Context) {
 func (h *ModelHandler) CreateModel(c *gin.Context) {
 	var req model.CreateAIModelRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	modelEntity, err := h.modelService.CreateModel(&req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    modelEntity,
-	})
+	respondCreated(c, modelEntity)
 }
 
 // UpdateModel 更新模型
@@ -217,27 +189,23 @@ func (h *ModelHandler) CreateModel(c *gin.Context) {
 func (h *ModelHandler) UpdateModel(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model id"})
+		respondBadRequest(c, "invalid model id")
 		return
 	}
 
 	var req model.UpdateAIModelRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	modelEntity, err := h.modelService.UpdateModel(uint(id), &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    modelEntity,
-	})
+	respondOK(c, modelEntity)
 }
 
 // DeleteModel 删除模型
@@ -245,12 +213,12 @@ func (h *ModelHandler) UpdateModel(c *gin.Context) {
 func (h *ModelHandler) DeleteModel(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model id"})
+		respondBadRequest(c, "invalid model id")
 		return
 	}
 
 	if err := h.modelService.DeleteModel(uint(id)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -265,7 +233,7 @@ func (h *ModelHandler) DeleteModel(c *gin.Context) {
 func (h *ModelHandler) TestModel(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid model id"})
+		respondBadRequest(c, "invalid model id")
 		return
 	}
 
@@ -282,11 +250,7 @@ func (h *ModelHandler) TestModel(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    result,
-	})
+	respondOK(c, result)
 }
 
 // GetAvailableModels 获取任务可用模型
@@ -296,15 +260,11 @@ func (h *ModelHandler) GetAvailableModels(c *gin.Context) {
 
 	models, err := h.modelService.GetAvailableModels(taskType)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    models,
-	})
+	respondOK(c, models)
 }
 
 // SelectModel 选择模型
@@ -315,21 +275,17 @@ func (h *ModelHandler) SelectModel(c *gin.Context) {
 		Strategy string `json:"strategy"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	selected, err := h.modelService.SelectModel(req.TaskType, req.Strategy)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    selected,
-	})
+	respondOK(c, selected)
 }
 
 // GetTaskConfig 获取任务配置
@@ -339,15 +295,11 @@ func (h *ModelHandler) GetTaskConfig(c *gin.Context) {
 
 	config, err := h.modelService.GetTaskConfig(task)
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "task config not found"})
+		respondErr(c, http.StatusNotFound, "task config not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    config,
-	})
+	respondOK(c, config)
 }
 
 // UpdateTaskConfig 更新任务配置
@@ -357,21 +309,17 @@ func (h *ModelHandler) UpdateTaskConfig(c *gin.Context) {
 
 	var req model.UpdateTaskConfigRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	config, err := h.modelService.UpdateTaskConfig(task, &req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    config,
-	})
+	respondOK(c, config)
 }
 
 // ListExperiments 获取对比实验列表
@@ -379,15 +327,11 @@ func (h *ModelHandler) UpdateTaskConfig(c *gin.Context) {
 func (h *ModelHandler) ListExperiments(c *gin.Context) {
 	experiments, err := h.modelService.ListExperiments()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    experiments,
-	})
+	respondOK(c, experiments)
 }
 
 // CreateExperiment 创建对比实验
@@ -395,21 +339,17 @@ func (h *ModelHandler) ListExperiments(c *gin.Context) {
 func (h *ModelHandler) CreateExperiment(c *gin.Context) {
 	var req model.CreateModelComparisonRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	experiment, err := h.modelService.CreateExperiment(&req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    experiment,
-	})
+	respondCreated(c, experiment)
 }
 
 // GetExperiment 获取实验详情
@@ -417,21 +357,17 @@ func (h *ModelHandler) CreateExperiment(c *gin.Context) {
 func (h *ModelHandler) GetExperiment(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid experiment id"})
+		respondBadRequest(c, "invalid experiment id")
 		return
 	}
 
 	experiment, err := h.modelService.GetExperiment(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "experiment not found"})
+		respondErr(c, http.StatusNotFound, "experiment not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    experiment,
-	})
+	respondOK(c, experiment)
 }
 
 // StartExperiment 开始实验
@@ -439,12 +375,12 @@ func (h *ModelHandler) GetExperiment(c *gin.Context) {
 func (h *ModelHandler) StartExperiment(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid experiment id"})
+		respondBadRequest(c, "invalid experiment id")
 		return
 	}
 
 	if err := h.modelService.StartExperiment(uint(id)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 

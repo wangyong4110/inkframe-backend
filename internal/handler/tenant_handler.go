@@ -21,33 +21,20 @@ func NewTenantHandler(tenantService *service.TenantService) *TenantHandler {
 // ListTenants 获取租户列表
 // GET /api/v1/tenants
 func (h *TenantHandler) ListTenants(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 {
-		pageSize = 1
-	} else if pageSize > 100 {
-		pageSize = 100
-	}
+	p := parsePagination(c)
 
-	tenants, total, err := h.tenantService.ListTenants(page, pageSize)
+	tenants, total, err := h.tenantService.ListTenants(p.Page, p.PageSize)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data": gin.H{
-			"items":      tenants,
-			"total":      total,
-			"page":       page,
-			"page_size":  pageSize,
-			"total_page": (int(total) + pageSize - 1) / pageSize,
-		},
+	respondOK(c, gin.H{
+		"items":      tenants,
+		"total":      total,
+		"page":       p.Page,
+		"page_size":  p.PageSize,
+		"total_page": (int(total) + p.PageSize - 1) / p.PageSize,
 	})
 }
 
@@ -56,21 +43,17 @@ func (h *TenantHandler) ListTenants(c *gin.Context) {
 func (h *TenantHandler) GetTenant(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tenant id"})
+		respondBadRequest(c, "invalid tenant id")
 		return
 	}
 
 	tenant, err := h.tenantService.GetTenant(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "tenant not found"})
+		respondErr(c, http.StatusNotFound, "tenant not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    tenant,
-	})
+	respondOK(c, tenant)
 }
 
 // CreateTenant 创建租户
@@ -85,7 +68,7 @@ func (h *TenantHandler) CreateTenant(c *gin.Context) {
 		ContactEmail string `json:"contact_email"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
@@ -106,15 +89,11 @@ func (h *TenantHandler) CreateTenant(c *gin.Context) {
 	}
 
 	if err := h.tenantService.CreateTenant(tenant); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    tenant,
-	})
+	respondCreated(c, tenant)
 }
 
 // UpdateTenant 更新租户
@@ -122,13 +101,13 @@ func (h *TenantHandler) CreateTenant(c *gin.Context) {
 func (h *TenantHandler) UpdateTenant(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tenant id"})
+		respondBadRequest(c, "invalid tenant id")
 		return
 	}
 
 	tenant, err := h.tenantService.GetTenant(uint(id))
 	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{"error": "tenant not found"})
+		respondErr(c, http.StatusNotFound, "tenant not found")
 		return
 	}
 
@@ -141,7 +120,7 @@ func (h *TenantHandler) UpdateTenant(c *gin.Context) {
 		ContactEmail string `json:"contact_email"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
@@ -165,15 +144,11 @@ func (h *TenantHandler) UpdateTenant(c *gin.Context) {
 	}
 
 	if err := h.tenantService.UpdateTenant(tenant); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    tenant,
-	})
+	respondOK(c, tenant)
 }
 
 // DeleteTenant 删除租户
@@ -181,12 +156,12 @@ func (h *TenantHandler) UpdateTenant(c *gin.Context) {
 func (h *TenantHandler) DeleteTenant(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tenant id"})
+		respondBadRequest(c, "invalid tenant id")
 		return
 	}
 
 	if err := h.tenantService.DeleteTenant(uint(id)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -201,21 +176,17 @@ func (h *TenantHandler) DeleteTenant(c *gin.Context) {
 func (h *TenantHandler) GetQuota(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tenant id"})
+		respondBadRequest(c, "invalid tenant id")
 		return
 	}
 
 	quota, err := h.tenantService.GetQuota(uint(id))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    quota,
-	})
+	respondOK(c, quota)
 }
 
 // ListMembers 获取租户成员列表
@@ -223,21 +194,17 @@ func (h *TenantHandler) GetQuota(c *gin.Context) {
 func (h *TenantHandler) ListMembers(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tenant id"})
+		respondBadRequest(c, "invalid tenant id")
 		return
 	}
 
 	members, err := h.tenantService.ListMembers(uint(id))
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    members,
-	})
+	respondOK(c, members)
 }
 
 // AddMember 添加租户成员
@@ -245,7 +212,7 @@ func (h *TenantHandler) ListMembers(c *gin.Context) {
 func (h *TenantHandler) AddMember(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tenant id"})
+		respondBadRequest(c, "invalid tenant id")
 		return
 	}
 
@@ -254,7 +221,7 @@ func (h *TenantHandler) AddMember(c *gin.Context) {
 		Role   string `json:"role"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 	if req.Role == "" {
@@ -262,7 +229,7 @@ func (h *TenantHandler) AddMember(c *gin.Context) {
 	}
 
 	if err := h.tenantService.AddMember(uint(id), req.UserID, req.Role); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -277,17 +244,17 @@ func (h *TenantHandler) AddMember(c *gin.Context) {
 func (h *TenantHandler) RemoveMember(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tenant id"})
+		respondBadRequest(c, "invalid tenant id")
 		return
 	}
 	userId, err := strconv.ParseUint(c.Param("user_id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
+		respondBadRequest(c, "invalid user id")
 		return
 	}
 
 	if err := h.tenantService.RemoveMember(uint(id), uint(userId)); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -302,12 +269,12 @@ func (h *TenantHandler) RemoveMember(c *gin.Context) {
 func (h *TenantHandler) UpdateMemberRole(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid tenant id"})
+		respondBadRequest(c, "invalid tenant id")
 		return
 	}
 	userId, err := strconv.ParseUint(c.Param("user_id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid user id"})
+		respondBadRequest(c, "invalid user id")
 		return
 	}
 
@@ -315,12 +282,12 @@ func (h *TenantHandler) UpdateMemberRole(c *gin.Context) {
 		Role string `json:"role" binding:"required"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
 	if err := h.tenantService.UpdateMemberRole(uint(id), uint(userId), req.Role); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 

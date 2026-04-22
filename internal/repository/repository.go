@@ -552,6 +552,15 @@ func (r *KnowledgeBaseRepository) GetByNovel(novelID uint) ([]*model.KnowledgeBa
 	return results, nil
 }
 
+// GetByID 根据ID获取知识库条目
+func (r *KnowledgeBaseRepository) GetByID(id uint) (*model.KnowledgeBase, error) {
+	var kb model.KnowledgeBase
+	if err := r.db.First(&kb, id).Error; err != nil {
+		return nil, err
+	}
+	return &kb, nil
+}
+
 // Update 更新知识库
 func (r *KnowledgeBaseRepository) Update(kb *model.KnowledgeBase) error {
 	return r.db.Save(kb).Error

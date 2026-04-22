@@ -7,13 +7,18 @@ import (
 	"text/template"
 )
 
-//go:embed prompts/chapter.tmpl
-//go:embed prompts/character.tmpl
-//go:embed prompts/novel_outline.tmpl
-//go:embed prompts/scene.tmpl
-//go:embed prompts/storyboard.tmpl
-
+//go:embed prompts/*
 var promptTemplates embed.FS
+
+// loadPromptTemplate reads a template file from the embedded FS.
+// Returns empty string on error (callers should handle gracefully).
+func loadPromptTemplate(name string) string {
+	data, err := promptTemplates.ReadFile("prompts/" + name)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
 
 // TemplateService 模板服务
 type TemplateService struct {

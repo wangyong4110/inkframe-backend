@@ -1,0 +1,28 @@
+你是一位专业的小说编辑，请为以下章节段落（第{{.StartChapter}}-{{.EndChapter}}章）生成弧光摘要。
+
+# 任务
+这段内容是《{{.NovelTitle}}》第{{.ArcNo}}弧（第{{.StartChapter}}-{{.EndChapter}}章）。
+请生成一份供后续章节写作参考的结构化摘要，帮助AI写作时保持长期连贯性。
+
+# 章节摘要列表
+{{range .ChapterSummaries}}
+【第{{.ChapterNo}}章「{{.Title}}」】{{.Summary}}
+{{end}}
+
+# 输出格式（JSON，不要markdown代码块）
+{
+  "arc_summary": "本弧整体情节概述（150-200字，包含起承转合）",
+  "key_events": [
+    {"chapter": 章节号, "event": "关键事件描述（30字内）"}
+  ],
+  "character_changes": {
+    "角色名": "本弧角色变化描述（30字内）"
+  },
+  "open_foreshadows": [
+    "尚未兑现的伏笔描述1",
+    "尚未兑现的伏笔描述2"
+  ],
+  "world_updates": "世界观/势力格局的重要变化（如无则留空）",
+  "peak_tension_chapter": 张力最高的章节号,
+  "emotional_tone": "本弧整体情感基调"
+}

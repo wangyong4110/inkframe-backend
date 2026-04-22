@@ -61,7 +61,7 @@ func NewImportHandler(
 func (h *ImportHandler) ImportNovel(c *gin.Context) {
 	var req service.ImportRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
@@ -109,7 +109,7 @@ func (h *ImportHandler) ImportFromFile(c *gin.Context) {
 	// 获取上传的文件
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no file uploaded"})
+		respondBadRequest(c, "no file uploaded")
 		return
 	}
 	defer file.Close()
@@ -117,14 +117,14 @@ func (h *ImportHandler) ImportFromFile(c *gin.Context) {
 	// 限制文件大小防止 OOM（最大 50MB）
 	const maxFileSize = 50 * 1024 * 1024
 	if header.Size > maxFileSize {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "file too large (max 50MB)"})
+		respondBadRequest(c, "file too large (max 50MB)")
 		return
 	}
 
 	// ReadAll 保证读取完整内容（file.Read 可能返回部分数据）
 	data, err := io.ReadAll(file)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "read file failed"})
+		respondErr(c, http.StatusInternalServerError, "read file failed")
 		return
 	}
 
@@ -143,15 +143,11 @@ func (h *ImportHandler) ImportFromFile(c *gin.Context) {
 
 	result, err := h.importService.Import(req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    result,
-	})
+	respondOK(c, result)
 }
 
 // ImportFromURL URL导入小说
@@ -162,7 +158,7 @@ func (h *ImportHandler) ImportFromURL(c *gin.Context) {
 		SiteName string `json:"site_name,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
@@ -174,15 +170,11 @@ func (h *ImportHandler) ImportFromURL(c *gin.Context) {
 
 	result, err := h.importService.Import(importReq)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    result,
-	})
+	respondOK(c, result)
 }
 
 // ImportFromCrawl 爬取导入小说
@@ -193,7 +185,7 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 		SiteName string `json:"site_name,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
@@ -205,15 +197,11 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 
 	result, err := h.importService.Import(importReq)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    result,
-	})
+	respondOK(c, result)
 }
 
 // ImportAndGenerate 导入小说并生成视频
@@ -237,7 +225,7 @@ func (h *ImportHandler) ImportAndGenerate(c *gin.Context) {
 		ArtStyle    string `json:"art_style,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
@@ -261,15 +249,11 @@ func (h *ImportHandler) ImportAndGenerate(c *gin.Context) {
 
 	result, err := h.novelToVideoService.ImportAndGenerate(importReq, videoReq)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    result,
-	})
+	respondOK(c, result)
 }
 
 // GenerateVideoFromNovel 从已有小说生成视频
@@ -277,13 +261,13 @@ func (h *ImportHandler) ImportAndGenerate(c *gin.Context) {
 func (h *ImportHandler) GenerateVideoFromNovel(c *gin.Context) {
 	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid novel id"})
+		respondBadRequest(c, "invalid novel id")
 		return
 	}
 
 	var req service.NovelToVideoRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		respondBadRequest(c, err.Error())
 		return
 	}
 
@@ -291,15 +275,11 @@ func (h *ImportHandler) GenerateVideoFromNovel(c *gin.Context) {
 
 	result, err := h.novelToVideoService.GenerateVideo(&req)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    result,
-	})
+	respondOK(c, result)
 }
 
 // GetImportStatus 获取导入状态
@@ -309,15 +289,11 @@ func (h *ImportHandler) GetImportStatus(c *gin.Context) {
 
 	task, ok := getImportTask(taskID)
 	if !ok {
-		c.JSON(http.StatusNotFound, gin.H{"error": "task not found"})
+		respondErr(c, http.StatusNotFound, "task not found")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"data":    task,
-	})
+	respondOK(c, task)
 }
 
 // 检测文件格式

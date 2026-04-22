@@ -57,9 +57,6 @@ func main() {
 	// 7. 初始化仓库层
 	repos := initRepositories(db, redisClient)
 
-	// 7.5. 种子系统级 AI provider（tenant_id=0），用于租户无私有配置时的兜底
-	seedSystemProviders(repos.ModelProviderRepo, cfg)
-
 	// 8. 初始化服务层
 	services := initServices(db, repos, aiManager, vectorStore, cfg)
 
@@ -202,6 +199,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.FeedbackRecord{},
 		&model.McpTool{},
 		&model.ModelMcpBinding{},
+		&model.ArcSummary{},
 	)
 }
 
@@ -227,60 +225,50 @@ func initRedis(cfg *config.Config) *redis.Client {
 	return client
 }
 
-// initAIModule 初始化AI模块
+// initAIModule 初始化AI模块（兜底层）
+// 生产环境：租户通过模型管理页面配置各自的 AK/SK，env var 不需要设置。
+// 开发/测试：设置 OPENAI_API_KEY 等 env var 可跳过 DB 配置直接使用。
+// 仅注册 key 非空的 provider，避免用空 key 发起 API 请求返回 401。
 func initAIModule(cfg *config.Config) *ai.ModelManager {
 	manager := ai.NewModelManager()
+	firstRegistered := ""
 
-	// 注册 OpenAI
-	openaiProvider := ai.NewOpenAIProvider(
-		getEnv("OPENAI_API_KEY", ""),
-		"",
-		"gpt-4",
-	)
-	manager.RegisterProvider("openai", openaiProvider)
-
-	// 注册 Claude
-	claudeProvider := ai.NewAnthropicProvider(
-		getEnv("ANTHROPIC_API_KEY", ""),
-		"",
-		"claude-3-opus-20240229",
-	)
-	manager.RegisterProvider("anthropic", claudeProvider)
-
-	// 注册 Google
-	googleProvider := ai.NewGoogleProvider(
-		getEnv("GOOGLE_API_KEY", ""),
-		"",
-		"gemini-pro",
-	)
-	manager.RegisterProvider("google", googleProvider)
-
-	// 注册豆包（含 Seedream 图像）
-	doubaoProvider := ai.NewDoubaoProvider(
-		getEnv("DOUBAO_API_KEY", ""),
-		cfg.AI.Doubao.Endpoint,
-		cfg.AI.Doubao.Model,
-	)
-	manager.RegisterProvider("doubao", doubaoProvider)
-
-	// 注册 DeepSeek
-	deepseekProvider := ai.NewDeepSeekProvider(
-		getEnv("DEEPSEEK_API_KEY", ""),
-		cfg.AI.DeepSeek.Endpoint,
-		cfg.AI.DeepSeek.Model,
-	)
-	manager.RegisterProvider("deepseek", deepseekProvider)
-
-	// 注册通义千问（含 Wan 图像）
-	qianwenProvider := ai.NewQianwenProvider(
-		getEnv("QIANWEN_API_KEY", ""),
-		cfg.AI.Qianwen.Endpoint,
-		cfg.AI.Qianwen.Model,
-	)
-	manager.RegisterProvider("qianwen", qianwenProvider)
-
-	// 设置默认
-	manager.SetDefault("openai")
+	type providerDef struct {
+		name     string
+		key      string
+		endpoint string
+		model    string
+		factory  func(key, endpoint, model string) ai.AIProvider
+	}
+	defs := []providerDef{
+		{"openai", getEnv("OPENAI_API_KEY", ""), cfg.AI.OpenAI.Endpoint, cfg.AI.OpenAI.Model,
+			func(k, e, m string) ai.AIProvider { return ai.NewOpenAIProvider(k, e, m) }},
+		{"anthropic", getEnv("ANTHROPIC_API_KEY", ""), cfg.AI.Anthropic.Endpoint, cfg.AI.Anthropic.Model,
+			func(k, e, m string) ai.AIProvider { return ai.NewAnthropicProvider(k, e, m) }},
+		{"google", getEnv("GOOGLE_API_KEY", ""), cfg.AI.Google.Endpoint, cfg.AI.Google.Model,
+			func(k, e, m string) ai.AIProvider { return ai.NewGoogleProvider(k, e, m) }},
+		{"doubao", getEnv("DOUBAO_API_KEY", ""), cfg.AI.Doubao.Endpoint, cfg.AI.Doubao.Model,
+			func(k, e, m string) ai.AIProvider { return ai.NewDoubaoProvider(k, e, m) }},
+		{"deepseek", getEnv("DEEPSEEK_API_KEY", ""), cfg.AI.DeepSeek.Endpoint, cfg.AI.DeepSeek.Model,
+			func(k, e, m string) ai.AIProvider { return ai.NewDeepSeekProvider(k, e, m) }},
+		{"qianwen", getEnv("QIANWEN_API_KEY", ""), cfg.AI.Qianwen.Endpoint, cfg.AI.Qianwen.Model,
+			func(k, e, m string) ai.AIProvider { return ai.NewQianwenProvider(k, e, m) }},
+	}
+	for _, d := range defs {
+		if d.key == "" {
+			continue
+		}
+		manager.RegisterProvider(d.name, d.factory(d.key, d.endpoint, d.model))
+		if firstRegistered == "" {
+			firstRegistered = d.name
+		}
+	}
+	if firstRegistered != "" {
+		manager.SetDefault(firstRegistered)
+	}
+	if len(manager.ListProviders()) == 0 {
+		log.Println("initAIModule: no AI API keys in env — providers will be loaded from DB per-tenant")
+	}
 
 	// 为所有 Provider 包装指数退避重试（最多 3 次，基础延迟 500ms）
 	for _, name := range manager.ListProviders() {
@@ -352,6 +340,7 @@ type Repositories struct {
 	UserRepo              *repository.UserRepository
 	TenantRepo            *repository.TenantRepository
 	TenantUserRepo        *repository.TenantUserRepository
+	ArcSummaryRepo        *repository.ArcSummaryRepository
 }
 
 // initRepositories 初始化仓库层
@@ -374,6 +363,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		UserRepo:             repository.NewUserRepository(db),
 		TenantRepo:           repository.NewTenantRepository(db),
 		TenantUserRepo:       repository.NewTenantUserRepository(db),
+		ArcSummaryRepo:       repository.NewArcSummaryRepository(db),
 	}
 }
 
@@ -492,8 +482,18 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		foreshadowService,
 	)
 
+	// 层次化叙事记忆服务（摘要、创意标题、精修、弧光记忆）
+	narrativeMemoryService := service.NewNarrativeMemoryService(
+		repos.NovelRepo,
+		repos.ChapterRepo,
+		repos.CharacterRepo,
+		repos.ArcSummaryRepo,
+		aiService,
+	)
+
 	// 章节服务（需要 generationContextService 以构建富上下文 prompt）
-	chapterService := service.NewChapterService(repos.ChapterRepo, repos.NovelRepo, aiService, generationContextService)
+	chapterService := service.NewChapterService(repos.ChapterRepo, repos.NovelRepo, aiService, generationContextService).
+		WithNarrativeMemory(narrativeMemoryService)
 
 	// 图像生成服务
 	imageGenerationService := service.NewImageGenerationService(aiService)
@@ -653,50 +653,3 @@ func getEnv(key, defaultValue string) string {
 	return defaultValue
 }
 
-// seedSystemProviders 将 env/config 中的 AI provider 配置写入 DB（tenant_id=0 系统级）。
-// 使用 upsert 语义：仅在 API key 非空时写入，已存在则更新。
-func seedSystemProviders(providerRepo *repository.ModelProviderRepository, cfg *config.Config) {
-	type providerSeed struct {
-		name     string
-		endpoint string
-		apiKey   string
-		model    string
-	}
-	seeds := []providerSeed{
-		{"openai", cfg.AI.OpenAI.Endpoint, cfg.AI.OpenAI.APIKey, cfg.AI.OpenAI.Model},
-		{"anthropic", cfg.AI.Anthropic.Endpoint, cfg.AI.Anthropic.APIKey, cfg.AI.Anthropic.Model},
-		{"google", cfg.AI.Google.Endpoint, cfg.AI.Google.APIKey, cfg.AI.Google.Model},
-		{"doubao", cfg.AI.Doubao.Endpoint, cfg.AI.Doubao.APIKey, cfg.AI.Doubao.Model},
-		{"deepseek", cfg.AI.DeepSeek.Endpoint, cfg.AI.DeepSeek.APIKey, cfg.AI.DeepSeek.Model},
-		{"qianwen", cfg.AI.Qianwen.Endpoint, cfg.AI.Qianwen.APIKey, cfg.AI.Qianwen.Model},
-	}
-	for _, s := range seeds {
-		if s.apiKey == "" {
-			continue
-		}
-		existing, _ := providerRepo.GetSystemProvider(s.name)
-		if existing != nil {
-			existing.APIEndpoint = s.endpoint
-			existing.APIKey = s.apiKey
-			existing.APIVersion = s.model
-			existing.IsActive = true
-			if err := providerRepo.Update(existing); err != nil {
-				log.Printf("seedSystemProviders: update %s failed: %v", s.name, err)
-			}
-		} else {
-			p := &model.ModelProvider{
-				TenantID:    0,
-				Name:        s.name,
-				DisplayName: s.name,
-				Type:        "llm",
-				APIEndpoint: s.endpoint,
-				APIKey:      s.apiKey,
-				APIVersion:  s.model,
-				IsActive:    true,
-			}
-			if err := providerRepo.Create(p); err != nil {
-				log.Printf("seedSystemProviders: create %s failed: %v", s.name, err)
-			}
-		}
-	}
-}
