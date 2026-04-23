@@ -67,9 +67,9 @@ HTTP Request → Handler → Service → Repository → MySQL (GORM)
 - `PromptService` — constructs context-aware prompts for AI generation by assembling worldview, character state snapshots, and recent chapter context.
 - `QualityControlService` — AI-based scoring (Logic 30%, Consistency 25%, Quality 25%, Style 20%) with rule-based fallback (repeat word detection, dialogue ratio, sentence variance).
 - `VideoService`, `VideoEnhancementService` — video generation via Kling or Seedance providers.
-- `TemplateService` — `text/template`-based prompt rendering. Templates live in `internal/service/prompts/*.tmpl` (arc_summary, chapter_summary, chapter_title, character_voice, refinement_pass, chapter_from_outline, chapter_scene_outline).
+- `TemplateService` — `text/template`-based prompt rendering. Templates live in `internal/service/prompts/*.tmpl`: arc_summary, chapter_summary, chapter_title, character_voice, refinement_pass, chapter_from_outline, chapter_scene_outline, novel_outline, chapter, character, scene, storyboard.
 
-**`internal/ai/`** — `AIProvider` interface covers `Generate`, `GenerateStream`, `Embed`, `ImageGenerate`, `AudioGenerate`. Concrete implementations: `openai.go`, `claude.go`, `doubao.go`, `deepseek.go`, `qianwen.go`. All providers are wrapped with `RetryProvider` (exponential backoff, 3 retries, 500ms base delay). `VideoProvider` interface (`kling_provider.go`, `seedance_provider.go`) handles video separately. `ModelManager` exposes `RegisterProvider`, `WrapWithRetry`, `SwitchProvider`.
+**`internal/ai/`** — `AIProvider` interface covers `Generate`, `GenerateStream`, `Embed`, `ImageGenerate`, `AudioGenerate`. Concrete implementations: `openai.go`, `claude.go`, `doubao.go`, `deepseek.go`, `qianwen.go`. All providers are wrapped with `RetryProvider` (exponential backoff, 3 retries, 500ms base delay) — retries on HTTP 429/502/503/504 and connection errors. `VideoProvider` interface (`kling_provider.go`, `seedance_provider.go`) handles video separately. `ModelManager` exposes `RegisterProvider`, `WrapWithRetry`, `SwitchProvider`. Also provides `FallbackManager` for primary/fallback provider chains and `GenerateRequestBuilder` (fluent builder, defaults: temp=0.7, maxTokens=4096).
 
 **`internal/vector/`** — `VectorStore` interface with Qdrant and Chroma backends. Managed by `StoreManager`.
 
@@ -77,7 +77,11 @@ HTTP Request → Handler → Service → Repository → MySQL (GORM)
 
 **`internal/router/`** — All routes under `/api/v1/`. `GET /health` is the health check endpoint.
 
-**`internal/middleware/`** — CORS (allow-all), structured logger, panic recovery. JWT auth middleware is applied to all `/api/v1/` routes except auth endpoints.
+**`internal/middleware/`** — CORS (allow-all), structured logger, panic recovery. JWT auth middleware applied to all `/api/v1/` routes except `/api/v1/auth/register|login|refresh`. Rate limiting via token bucket per IP (60 capacity, 10 tokens/second) applied to all protected routes.
+
+**`internal/crawler/`** — Novel crawlers for Chinese platforms: Qidian, Jjwxc (晋江), Zongheng. Used by `ImportService` for `POST /api/v1/import/novel/crawl`.
+
+**`internal/oss/`** — Aliyun OSS client (HMAC-SHA256 signed uploads). Used for cover images, generated images, video files.
 
 ## Chapter Generation Pipeline
 
@@ -89,8 +93,15 @@ Three-step pipeline for high-quality chapter output:
 
 Context injected at generation time comes from `NarrativeMemoryService.BuildHierarchicalContext()` which renders a markdown-formatted prompt section combining global, arc, and recent chapter summaries.
 
+## Dependency Injection Pattern
+
+Services use functional option methods for optional dependencies (e.g., `ChapterService.WithNarrativeMemory()`, `NovelService.WithCharacterRepos()`). All wiring is done in `cmd/server/main.go`'s `initServices()`.
+
+## Multi-Tenant
+
+All core models include `TenantID`. `model/tenant.go` defines `Tenant` and `User` models. Auth flow: register → login → JWT → all protected routes read `TenantID` from claims.
+
 ## Known TODOs
 
-- Auth rate-limit middleware not implemented.
 - Test coverage is sparse — only `internal/service/template_service_test.go` exists.
 - `PromptService` repo dependency is currently `nil` (template DB not yet wired).
