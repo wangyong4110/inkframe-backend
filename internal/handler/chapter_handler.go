@@ -126,10 +126,7 @@ func (h *ChapterHandler) DeleteChapter(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-	})
+	respondOK(c, nil)
 }
 
 // GenerateChapter 生成章节内容

@@ -8,7 +8,9 @@
       "Bash(go test:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(go version:*)",
+      "Bash(go env:*)"
     ]
   }
 }

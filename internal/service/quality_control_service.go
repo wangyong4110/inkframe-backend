@@ -266,7 +266,7 @@ func (s *QualityControlService) checkQuality(chapter *model.Chapter) []QualityIs
 func (s *QualityControlService) checkStyle(chapter *model.Chapter) []QualityIssue {
 	issues := []QualityIssue{}
 	dialogueCount := strings.Count(chapter.Content, "「") + strings.Count(chapter.Content, "\u201c")
-	totalChars := len(chapter.Content)
+	totalChars := len([]rune(chapter.Content))
 	if totalChars > 0 {
 		dialogueRatio := float64(dialogueCount*10) / float64(totalChars)
 		if dialogueRatio < 0.05 {
