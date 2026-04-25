@@ -34,7 +34,7 @@ func NewVideoHandler(
 // CreateVideo 创建视频项目
 // POST /api/v1/novels/:novel_id/videos
 func (h *VideoHandler) CreateVideo(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
+	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		respondBadRequest(c, "invalid novel id")
 		return

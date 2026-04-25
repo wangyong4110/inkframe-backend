@@ -78,7 +78,7 @@ func NewCharacterHandler(
 // CreateCharacter 创建角色
 // POST /api/v1/novels/:novel_id/characters
 func (h *CharacterHandler) CreateCharacter(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
+	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		respondBadRequest(c, "invalid novel id")
 		return
@@ -120,7 +120,7 @@ func (h *CharacterHandler) GetCharacter(c *gin.Context) {
 // ListCharacters 获取角色列表
 // GET /api/v1/novels/:novel_id/characters
 func (h *CharacterHandler) ListCharacters(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
+	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		respondBadRequest(c, "invalid novel id")
 		return
@@ -228,7 +228,7 @@ func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 // GenerateCharacterProfile AI生成角色档案
 // POST /api/v1/novels/:novel_id/characters/generate
 func (h *CharacterHandler) GenerateCharacterProfile(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
+	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		respondBadRequest(c, "invalid novel id")
 		return
@@ -254,7 +254,7 @@ func (h *CharacterHandler) GenerateCharacterProfile(c *gin.Context) {
 // GetCharacterArc 获取角色弧光
 // GET /api/v1/novels/:novel_id/character-arcs/:character_id
 func (h *CharacterHandler) GetCharacterArc(c *gin.Context) {
-	novelId, _ := strconv.ParseUint(c.Param("novel_id"), 10, 32)
+	novelId, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 	characterId, _ := strconv.ParseUint(c.Param("character_id"), 10, 32)
 
 	arc, err := h.arcService.GetCharacterArc(uint(novelId), uint(characterId))
@@ -269,7 +269,7 @@ func (h *CharacterHandler) GetCharacterArc(c *gin.Context) {
 // GetAllCharacterArcs 获取所有角色弧光
 // GET /api/v1/novels/:novel_id/character-arcs
 func (h *CharacterHandler) GetAllCharacterArcs(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
+	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		respondBadRequest(c, "invalid novel id")
 		return
@@ -287,7 +287,7 @@ func (h *CharacterHandler) GetAllCharacterArcs(c *gin.Context) {
 // UpdateCharacterArc 更新角色弧光
 // PUT /api/v1/novels/:novel_id/character-arcs/:character_id
 func (h *CharacterHandler) UpdateCharacterArc(c *gin.Context) {
-	novelId, _ := strconv.ParseUint(c.Param("novel_id"), 10, 32)
+	novelId, _ := strconv.ParseUint(c.Param("id"), 10, 32)
 	characterId, _ := strconv.ParseUint(c.Param("character_id"), 10, 32)
 
 	var req struct {

@@ -88,28 +88,28 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.POST("/:id/prompt", cfg.ContextHandler.BuildPrompt)
 
 			// 章节
-			novels.GET("/:novel_id/chapters", cfg.ChapterHandler.ListChapters)
-			novels.POST("/:novel_id/chapters", cfg.ChapterHandler.CreateChapter)
-			novels.GET("/:novel_id/chapters/:chapter_no", cfg.ChapterHandler.GetChapterByNo)
-			novels.PUT("/:novel_id/chapters/:chapter_no", cfg.ChapterHandler.UpdateChapterByNo)
-			novels.DELETE("/:novel_id/chapters/:chapter_no", cfg.ChapterHandler.DeleteChapterByNo)
+			novels.GET("/:id/chapters", cfg.ChapterHandler.ListChapters)
+			novels.POST("/:id/chapters", cfg.ChapterHandler.CreateChapter)
+			novels.GET("/:id/chapters/:chapter_no", cfg.ChapterHandler.GetChapterByNo)
+			novels.PUT("/:id/chapters/:chapter_no", cfg.ChapterHandler.UpdateChapterByNo)
+			novels.DELETE("/:id/chapters/:chapter_no", cfg.ChapterHandler.DeleteChapterByNo)
 
 			// 大纲
 			novels.POST("/:id/outline", cfg.NovelHandler.GenerateOutline)
 
 			// 角色
-			novels.GET("/:novel_id/characters", cfg.CharacterHandler.ListCharacters)
-			novels.POST("/:novel_id/characters", cfg.CharacterHandler.CreateCharacter)
-			novels.POST("/:novel_id/characters/generate", cfg.CharacterHandler.GenerateCharacterProfile)
+			novels.GET("/:id/characters", cfg.CharacterHandler.ListCharacters)
+			novels.POST("/:id/characters", cfg.CharacterHandler.CreateCharacter)
+			novels.POST("/:id/characters/generate", cfg.CharacterHandler.GenerateCharacterProfile)
 
 			// 角色弧光
-			novels.GET("/:novel_id/character-arcs", cfg.CharacterHandler.GetAllCharacterArcs)
-			novels.GET("/:novel_id/character-arcs/:character_id", cfg.CharacterHandler.GetCharacterArc)
-			novels.PUT("/:novel_id/character-arcs/:character_id", cfg.CharacterHandler.UpdateCharacterArc)
+			novels.GET("/:id/character-arcs", cfg.CharacterHandler.GetAllCharacterArcs)
+			novels.GET("/:id/character-arcs/:character_id", cfg.CharacterHandler.GetCharacterArc)
+			novels.PUT("/:id/character-arcs/:character_id", cfg.CharacterHandler.UpdateCharacterArc)
 
 			// 视频
-			novels.GET("/:novel_id/videos", cfg.VideoHandler.ListVideos)
-			novels.POST("/:novel_id/videos", cfg.VideoHandler.CreateVideo)
+			novels.GET("/:id/videos", cfg.VideoHandler.ListVideos)
+			novels.POST("/:id/videos", cfg.VideoHandler.CreateVideo)
 
 			// 从已有小说生成视频
 			novels.POST("/:id/generate-video", cfg.ImportHandler.GenerateVideoFromNovel)

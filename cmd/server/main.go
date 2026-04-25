@@ -40,10 +40,10 @@ func main() {
 		log.Fatalf("Failed to init database: %v", err)
 	}
 
-	// 3. 自动迁移
-	if err := autoMigrate(db); err != nil {
-		log.Fatalf("Failed to migrate database: %v", err)
-	}
+	// 3. 自动迁移（已禁用，表结构由外部管理）
+	// if err := autoMigrate(db); err != nil {
+	// 	log.Fatalf("Failed to migrate database: %v", err)
+	// }
 
 	// 4. 初始化Redis
 	redisClient := initRedis(cfg)

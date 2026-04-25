@@ -31,7 +31,7 @@ func NewChapterHandler(
 // CreateChapter 创建章节
 // POST /api/v1/novels/:novel_id/chapters
 func (h *ChapterHandler) CreateChapter(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
+	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		respondBadRequest(c, "invalid novel id")
 		return
@@ -73,7 +73,7 @@ func (h *ChapterHandler) GetChapter(c *gin.Context) {
 // ListChapters 获取章节列表
 // GET /api/v1/novels/:novel_id/chapters
 func (h *ChapterHandler) ListChapters(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
+	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		respondBadRequest(c, "invalid novel id")
 		return
@@ -232,7 +232,7 @@ func (h *ChapterHandler) RestoreVersion(c *gin.Context) {
 // GetChapterByNo 根据章节号获取章节
 // GET /api/v1/novels/:novel_id/chapters/:chapter_no
 func (h *ChapterHandler) GetChapterByNo(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
+	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		respondBadRequest(c, "invalid novel id")
 		return
@@ -255,7 +255,7 @@ func (h *ChapterHandler) GetChapterByNo(c *gin.Context) {
 // UpdateChapterByNo 根据章节号更新章节
 // PUT /api/v1/novels/:novel_id/chapters/:chapter_no
 func (h *ChapterHandler) UpdateChapterByNo(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
+	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		respondBadRequest(c, "invalid novel id")
 		return
@@ -284,7 +284,7 @@ func (h *ChapterHandler) UpdateChapterByNo(c *gin.Context) {
 // DeleteChapterByNo 根据章节号删除章节
 // DELETE /api/v1/novels/:novel_id/chapters/:chapter_no
 func (h *ChapterHandler) DeleteChapterByNo(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("novel_id"), 10, 32)
+	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		respondBadRequest(c, "invalid novel id")
 		return
