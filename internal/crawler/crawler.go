@@ -95,6 +95,7 @@ func NewNovelCrawler(db *gorm.DB) *NovelCrawler {
 	crawler.parsers["qidian"] = NewQidianParser()
 	crawler.parsers["jjwxc"] = NewJjwxcParser()
 	crawler.parsers["zongheng"] = NewZonghengParser()
+	crawler.parsers["qimao"] = NewQimaoParser()
 
 	return crawler
 }
@@ -234,6 +235,9 @@ func (c *NovelCrawler) identifySite(url string) string {
 	}
 	if strings.Contains(url, "zongheng.com") {
 		return "zongheng"
+	}
+	if strings.Contains(url, "qimao.com") {
+		return "qimao"
 	}
 	return "unknown"
 }
@@ -431,6 +435,139 @@ func (p *ZonghengParser) ParseChapterList(doc *goquery.Document) ([]*ChapterInfo
 
 func (p *ZonghengParser) ParseChapter(doc *goquery.Document) (*ChapterContent, error) {
 	return &ChapterContent{}, nil
+}
+
+// QimaoParser 七猫小说解析器
+// 书籍详情页: https://www.qimao.com/shuku/{id}/
+// 章节阅读页: https://www.qimao.com/shuku/{id}/{chapter_id}.html
+type QimaoParser struct{}
+
+func NewQimaoParser() *QimaoParser {
+	return &QimaoParser{}
+}
+
+func (p *QimaoParser) GetSiteName() string {
+	return "七猫小说"
+}
+
+func (p *QimaoParser) ParseNovelList(doc *goquery.Document) ([]*NovelInfo, error) {
+	var novels []*NovelInfo
+
+	doc.Find(".book-item, .novel-item, .book-list li").Each(func(i int, s *goquery.Selection) {
+		title := strings.TrimSpace(s.Find(".book-name, .title, h3").First().Text())
+		author := strings.TrimSpace(s.Find(".author, .writer").First().Text())
+		url, _ := s.Find("a").First().Attr("href")
+		cover, _ := s.Find("img").First().Attr("src")
+
+		if title != "" {
+			novels = append(novels, &NovelInfo{
+				Title:    title,
+				Author:   author,
+				URL:      url,
+				CoverURL: cover,
+			})
+		}
+	})
+
+	return novels, nil
+}
+
+func (p *QimaoParser) ParseNovelDetail(doc *goquery.Document, url string) (*NovelDetail, error) {
+	detail := &NovelDetail{}
+
+	// 书名: <h1 class="book-title"> 或 <h1 class="name">
+	detail.Title = strings.TrimSpace(doc.Find("h1.book-title, h1.name, .detail-title h1").First().Text())
+	if detail.Title == "" {
+		detail.Title = strings.TrimSpace(doc.Find("h1").First().Text())
+	}
+
+	// 作者
+	detail.Author = strings.TrimSpace(doc.Find(".author-name, .author a, .writer").First().Text())
+
+	// 简介
+	detail.Description = strings.TrimSpace(doc.Find(".book-intro, .desc, .intro, .summary").First().Text())
+
+	// 封面
+	detail.CoverURL, _ = doc.Find(".book-cover img, .cover img").First().Attr("src")
+
+	// 类型/标签
+	doc.Find(".tag-item, .book-tag, .label").Each(func(i int, s *goquery.Selection) {
+		tag := strings.TrimSpace(s.Text())
+		if tag != "" {
+			detail.Tags = append(detail.Tags, tag)
+		}
+	})
+	if len(detail.Tags) > 0 {
+		detail.Genre = detail.Tags[0]
+	}
+
+	// 状态
+	statusText := strings.TrimSpace(doc.Find(".status, .book-status").First().Text())
+	if strings.Contains(statusText, "完") || strings.Contains(statusText, "完结") {
+		detail.Status = "completed"
+	} else {
+		detail.Status = "ongoing"
+	}
+
+	// 章节数
+	chapterText := doc.Find(".chapter-count, .total-chapter, .chapter-num").First().Text()
+	detail.TotalChapters = extractNumber(chapterText)
+
+	return detail, nil
+}
+
+func (p *QimaoParser) ParseChapterList(doc *goquery.Document) ([]*ChapterInfo, error) {
+	var chapters []*ChapterInfo
+
+	// 七猫章节列表常见选择器
+	doc.Find(".chapter-list a, .catalog-list a, .chapter-item a, ul.list a").Each(func(i int, s *goquery.Selection) {
+		title := strings.TrimSpace(s.Text())
+		chapterURL, _ := s.Attr("href")
+
+		if title == "" || chapterURL == "" {
+			return
+		}
+
+		// 补全相对路径
+		if strings.HasPrefix(chapterURL, "/") {
+			chapterURL = "https://www.qimao.com" + chapterURL
+		}
+
+		chapters = append(chapters, &ChapterInfo{
+			Title:     title,
+			URL:       chapterURL,
+			ChapterNo: i + 1,
+		})
+	})
+
+	return chapters, nil
+}
+
+func (p *QimaoParser) ParseChapter(doc *goquery.Document) (*ChapterContent, error) {
+	content := &ChapterContent{}
+
+	// 章节标题
+	content.Title = strings.TrimSpace(doc.Find(".chapter-title, .read-title, h1.title").First().Text())
+
+	// 正文内容: 七猫正文一般在 #chapter-content 或 .chapter-content
+	contentSel := doc.Find("#chapter-content, .chapter-content, .read-content, .content")
+	if contentSel.Length() == 0 {
+		contentSel = doc.Find("article")
+	}
+	content.Content = cleanText(contentSel.First().Text())
+
+	// 上一章 / 下一章链接
+	content.PrevURL, _ = doc.Find(".prev-chapter a, .btn-prev, a.prev").First().Attr("href")
+	content.NextURL, _ = doc.Find(".next-chapter a, .btn-next, a.next").First().Attr("href")
+
+	if strings.HasPrefix(content.PrevURL, "/") {
+		content.PrevURL = "https://www.qimao.com" + content.PrevURL
+	}
+	if strings.HasPrefix(content.NextURL, "/") {
+		content.NextURL = "https://www.qimao.com" + content.NextURL
+	}
+
+	return content, nil
 }
 
 // Helper Functions

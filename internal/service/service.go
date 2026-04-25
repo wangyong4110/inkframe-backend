@@ -54,23 +54,35 @@ func (s *NovelService) GetAIService() *AIService {
 
 // CreateNovelRequest 创建小说请求
 type CreateNovelRequest struct {
-	Title       string `json:"title" binding:"required"`
-	Description string `json:"description"`
-	Genre       string `json:"genre" binding:"required"`
-	WorldviewID *uint  `json:"worldview_id"`
-	CoverImage  string `json:"cover_image"`
+	Title           string `json:"title" binding:"required"`
+	Description     string `json:"description"`
+	Genre           string `json:"genre" binding:"required"`
+	WorldviewID     *uint  `json:"worldview_id"`
+	CoverImage      string `json:"cover_image"`
+	Channel         string `json:"channel"`
+	TargetWordCount int    `json:"target_word_count"`
+	TargetChapters  int    `json:"target_chapters"`
+	TenantID        uint
 }
 
 // Create 创建小说
 func (s *NovelService) Create(req *CreateNovelRequest) (*model.Novel, error) {
+	tenantID := req.TenantID
+	if tenantID == 0 {
+		tenantID = 1
+	}
 	novel := &model.Novel{
-		UUID:        uuid.New().String(),
-		Title:       req.Title,
-		Description: req.Description,
-		Genre:       req.Genre,
-		Status:      "planning",
-		WorldviewID: req.WorldviewID,
-		CoverImage:  req.CoverImage,
+		UUID:            uuid.New().String(),
+		TenantID:        tenantID,
+		Title:           req.Title,
+		Description:     req.Description,
+		Genre:           req.Genre,
+		Status:          "planning",
+		WorldviewID:     req.WorldviewID,
+		CoverImage:      req.CoverImage,
+		Channel:         req.Channel,
+		TargetWordCount: req.TargetWordCount,
+		TargetChapters:  req.TargetChapters,
 	}
 
 	if err := s.novelRepo.Create(novel); err != nil {
@@ -109,11 +121,15 @@ func (s *NovelService) DeleteNovel(id uint) error {
 // CreateNovel handler-compatible wrapper
 func (s *NovelService) CreateNovel(req *model.CreateNovelRequest) (*model.Novel, error) {
 	return s.Create(&CreateNovelRequest{
-		Title:       req.Title,
-		Description: req.Description,
-		Genre:       req.Genre,
-		WorldviewID: req.WorldviewID,
-		CoverImage:  req.CoverImage,
+		Title:           req.Title,
+		Description:     req.Description,
+		Genre:           req.Genre,
+		WorldviewID:     req.WorldviewID,
+		CoverImage:      req.CoverImage,
+		Channel:         req.Channel,
+		TargetWordCount: req.TargetWordCount,
+		TargetChapters:  req.TargetChapters,
+		TenantID:        req.TenantID,
 	})
 }
 
@@ -410,6 +426,193 @@ func (s *NovelService) writeCharacterSnapshots(chapter *model.Chapter) {
 	}
 }
 
+// SyncCharacterSnapshots 为章节同步角色状态快照
+// characterIDs: 要处理的角色 ID 列表（空表示全部角色）
+// reusePrevious: true=复用上章快照, false=基于本章内容 AI 重新生成
+func (s *NovelService) SyncCharacterSnapshots(
+	tenantID uint,
+	chapter *model.Chapter,
+	characterIDs []uint,
+	reusePrevious bool,
+) error {
+	if s.characterRepo == nil || s.snapshotRepo == nil {
+		return fmt.Errorf("character repos not wired")
+	}
+
+	// 获取目标角色列表
+	var chars []*model.Character
+	var err error
+	if len(characterIDs) == 0 {
+		chars, err = s.characterRepo.ListByNovel(chapter.NovelID)
+	} else {
+		all, e := s.characterRepo.ListByNovel(chapter.NovelID)
+		if e != nil {
+			return fmt.Errorf("list characters: %w", e)
+		}
+		idSet := make(map[uint]bool, len(characterIDs))
+		for _, id := range characterIDs {
+			idSet[id] = true
+		}
+		for _, c := range all {
+			if idSet[c.ID] {
+				chars = append(chars, c)
+			}
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("list characters: %w", err)
+	}
+	if len(chars) == 0 {
+		return nil
+	}
+
+	// 查找上一章节记录（chapter_no - 1）
+	var prevChapter *model.Chapter
+	if chapter.ChapterNo > 1 {
+		prevChapter, _ = s.chapterRepo.GetByNovelAndChapterNo(chapter.NovelID, chapter.ChapterNo-1)
+	}
+
+	if reusePrevious {
+		// 复用上章快照：复制到本章
+		for _, char := range chars {
+			var prevSnap *model.CharacterStateSnapshot
+			if prevChapter != nil {
+				prevSnap, _ = s.snapshotRepo.GetByChapterAndCharacter(prevChapter.ID, char.ID)
+			}
+			if prevSnap == nil {
+				// 没有上章快照就跳过
+				continue
+			}
+			snap := &model.CharacterStateSnapshot{
+				CharacterID:    char.ID,
+				ChapterID:      chapter.ID,
+				Age:            prevSnap.Age,
+				Height:         prevSnap.Height,
+				Weight:         prevSnap.Weight,
+				Health:         prevSnap.Health,
+				Injuries:       prevSnap.Injuries,
+				PowerLevel:     prevSnap.PowerLevel,
+				Abilities:      prevSnap.Abilities,
+				Equipment:      prevSnap.Equipment,
+				Mood:           prevSnap.Mood,
+				Motivation:     prevSnap.Motivation,
+				Goals:          prevSnap.Goals,
+				Fears:          prevSnap.Fears,
+				Location:       prevSnap.Location,
+				KnownLocations: prevSnap.KnownLocations,
+				Relations:      prevSnap.Relations,
+				SnapshotTime:   chapter.CreatedAt,
+			}
+			if e := s.snapshotRepo.Create(snap); e != nil {
+				log.Printf("SyncCharacterSnapshots: copy snapshot char %d: %v", char.ID, e)
+			}
+		}
+		return nil
+	}
+
+	// 重新生成：结合上章快照 + 本章内容，调用 AI
+	contentPreview := chapter.Content
+	if len(contentPreview) > 3000 {
+		contentPreview = contentPreview[:3000] + "..."
+	}
+
+	for _, char := range chars {
+		// 构建上章角色状态上下文
+		var prevCtx string
+		if prevChapter != nil {
+			if ps, _ := s.snapshotRepo.GetByChapterAndCharacter(prevChapter.ID, char.ID); ps != nil {
+				prevCtx = fmt.Sprintf(
+					"上章末状态：情绪=%s, 位置=%s, 动机=%s, 战力=%d, 健康=%s",
+					ps.Mood, ps.Location, ps.Motivation, ps.PowerLevel, ps.Health,
+				)
+			}
+		}
+		if prevCtx == "" {
+			if ls, _ := s.snapshotRepo.GetLatestForCharacter(char.ID); ls != nil {
+				prevCtx = fmt.Sprintf(
+					"最近状态：情绪=%s, 位置=%s, 动机=%s, 战力=%d, 健康=%s",
+					ls.Mood, ls.Location, ls.Motivation, ls.PowerLevel, ls.Health,
+				)
+			}
+		}
+		if prevCtx == "" {
+			prevCtx = fmt.Sprintf("角色背景：%s。性格：%s。", char.Background, char.Personality)
+		}
+
+		prompt := fmt.Sprintf(
+			`根据角色「%s」的背景信息和本章内容，提取该角色在本章末尾的状态，以JSON格式返回。
+
+角色信息：
+%s
+
+本章内容（节选）：
+%s
+
+请返回以下JSON格式：
+{"mood":"情绪状态","location":"当前位置","motivation":"当前动机","power_level":5,"health":"healthy|injured|critical","abilities":"能力描述（若有变化）"}`,
+			char.Name, prevCtx, contentPreview,
+		)
+
+		result, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "character_state", prompt, "")
+		if err != nil {
+			log.Printf("SyncCharacterSnapshots: AI failed for char %d: %v", char.ID, err)
+			continue
+		}
+
+		var state struct {
+			Mood       string `json:"mood"`
+			Location   string `json:"location"`
+			Motivation string `json:"motivation"`
+			PowerLevel int    `json:"power_level"`
+			Health     string `json:"health"`
+			Abilities  string `json:"abilities"`
+		}
+		cleaned := extractJSON(strings.TrimSpace(result))
+		if e := json.Unmarshal([]byte(cleaned), &state); e != nil {
+			log.Printf("SyncCharacterSnapshots: parse failed char %d: %v", char.ID, e)
+			continue
+		}
+
+		// 沿用上章快照中的静态字段（身高体重等）
+		var baseAbilities, baseEquipment string
+		var age, height, weight float64
+		if prevChapter != nil {
+			if ps, _ := s.snapshotRepo.GetByChapterAndCharacter(prevChapter.ID, char.ID); ps != nil {
+				age, height, weight = ps.Age, ps.Height, ps.Weight
+				baseEquipment = ps.Equipment
+			}
+		}
+		abilities := state.Abilities
+		if abilities == "" {
+			abilities = baseAbilities
+		}
+		health := state.Health
+		if health == "" {
+			health = "healthy"
+		}
+
+		snap := &model.CharacterStateSnapshot{
+			CharacterID:  char.ID,
+			ChapterID:    chapter.ID,
+			Age:          age,
+			Height:       height,
+			Weight:       weight,
+			Health:       health,
+			PowerLevel:   state.PowerLevel,
+			Abilities:    abilities,
+			Equipment:    baseEquipment,
+			Mood:         state.Mood,
+			Motivation:   state.Motivation,
+			Location:     state.Location,
+			SnapshotTime: chapter.CreatedAt,
+		}
+		if e := s.snapshotRepo.Create(snap); e != nil {
+			log.Printf("SyncCharacterSnapshots: create snapshot char %d: %v", char.ID, e)
+		}
+	}
+	return nil
+}
+
 // buildChapterPrompt 构建章节提示词
 func (s *NovelService) buildChapterPrompt(novel *model.Novel, req *GenerateChapterRequest, recentChapters []*model.Chapter) string {
 	var sb strings.Builder
@@ -628,6 +831,12 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		return s.aiManager.GetProvider(providerName)
 	}
 
+	// DB 记录存在但 API Key 未填写 → 不可用，降级到内存 aiManager
+	if strings.TrimSpace(matched.APIKey) == "" {
+		log.Printf("getTenantProvider: DB provider %q has no API key, falling back to in-memory manager", matched.Name)
+		return s.aiManager.GetProvider(providerName)
+	}
+
 	// 按 Name 实例化对应的 AIProvider
 	var provider ai.AIProvider
 	switch matched.Name {
@@ -643,6 +852,8 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		provider = ai.NewDeepSeekProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion)
 	case "qianwen":
 		provider = ai.NewQianwenProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion)
+	case "azure":
+		provider = ai.NewAzureProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, "")
 	default:
 		return s.aiManager.GetProvider(providerName)
 	}
@@ -888,6 +1099,39 @@ func (s *AIService) GenerateImage(prompt string, options *ImageGenerationOptions
 		Width:  resp.Width,
 		Height: resp.Height,
 	}, nil
+}
+
+// GenerateCharacterThreeView 使用图像生成 API 生成角色视图图像。
+// 优先使用 openai（支持 dall-e-3），若不可用则尝试默认 provider。
+// 失败时返回空字符串 + error，调用方应将其视为非致命错误。
+func (s *AIService) GenerateCharacterThreeView(ctx context.Context, prompt string) (string, error) {
+	if s.aiManager == nil {
+		return "", fmt.Errorf("AI manager not initialized")
+	}
+	var provider ai.AIProvider
+	var err error
+	// 优先 openai（支持 DALL-E），失败则用默认
+	for _, name := range []string{"openai", ""} {
+		provider, err = s.aiManager.GetProvider(name)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		return "", fmt.Errorf("no image provider available: %w", err)
+	}
+	resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
+		Model:  "dall-e-3",
+		Prompt: prompt,
+		Size:   "1024x1024",
+	})
+	if err != nil {
+		return "", err
+	}
+	if resp.Error != "" {
+		return "", fmt.Errorf("image generation failed: %s", resp.Error)
+	}
+	return resp.URL, nil
 }
 
 // AudioGenerate 调用默认 AI provider 生成 TTS 音频，返回本地文件路径（file:// URL）

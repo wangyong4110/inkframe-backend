@@ -58,9 +58,10 @@ func characterResponse(c *model.Character) gin.H {
 
 // CharacterHandler 角色处理器
 type CharacterHandler struct {
-	characterService  *service.CharacterService
-	arcService        *service.CharacterArcService
-	imageGenService   *service.ImageGenerationService
+	characterService *service.CharacterService
+	arcService       *service.CharacterArcService
+	imageGenService  *service.ImageGenerationService
+	chapterSvc       *service.ChapterService
 }
 
 func NewCharacterHandler(
@@ -69,10 +70,15 @@ func NewCharacterHandler(
 	imageGenService *service.ImageGenerationService,
 ) *CharacterHandler {
 	return &CharacterHandler{
-		characterService:  characterService,
-		arcService:        arcService,
-		imageGenService:   imageGenService,
+		characterService: characterService,
+		arcService:       arcService,
+		imageGenService:  imageGenService,
 	}
+}
+
+func (h *CharacterHandler) WithChapterService(svc *service.ChapterService) *CharacterHandler {
+	h.chapterSvc = svc
+	return h
 }
 
 // CreateCharacter 创建角色
@@ -332,4 +338,94 @@ func (h *CharacterHandler) AnalyzeCharacterConsistency(c *gin.Context) {
 	}
 
 	respondOK(c, result)
+}
+
+// ListEffectiveCharacters GET /novels/:id/chapters/:chapter_no/characters
+func (h *CharacterHandler) ListEffectiveCharacters(c *gin.Context) {
+	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid novel id")
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+	chapter, err := h.chapterSvc.GetChapterByNo(uint(novelID), chapterNo)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	chars, err := h.characterService.ListEffectiveCharacters(uint(novelID), chapter.ID)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, chars)
+}
+
+// UpsertChapterCharacter POST /novels/:id/chapters/:chapter_no/characters/:character_id
+func (h *CharacterHandler) UpsertChapterCharacter(c *gin.Context) {
+	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid novel id")
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+	characterID, err := strconv.ParseUint(c.Param("character_id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid character id")
+		return
+	}
+	chapter, err := h.chapterSvc.GetChapterByNo(uint(novelID), chapterNo)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	var req model.UpsertChapterCharacterRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	cc, err := h.characterService.UpsertChapterCharacter(uint(novelID), chapter.ID, uint(characterID), &req)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, cc)
+}
+
+// DeleteChapterCharacter DELETE /novels/:id/chapters/:chapter_no/characters/:character_id
+func (h *CharacterHandler) DeleteChapterCharacter(c *gin.Context) {
+	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid novel id")
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+	characterID, err := strconv.ParseUint(c.Param("character_id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid character id")
+		return
+	}
+	chapter, err := h.chapterSvc.GetChapterByNo(uint(novelID), chapterNo)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	if err := h.characterService.DeleteChapterCharacter(chapter.ID, uint(characterID)); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	_ = novelID
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
 }

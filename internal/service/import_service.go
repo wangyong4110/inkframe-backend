@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/crawler"
@@ -54,6 +55,7 @@ type ImportRequest struct {
 	Format   ImportFormat `json:"format,omitempty"`    // 文件格式
 	SiteName string       `json:"site_name,omitempty"` // 站点名称（爬取时）
 	NovelID  uint         `json:"novel_id,omitempty"`  // 已有小说ID（追加时）
+	TenantID uint         `json:"tenant_id,omitempty"` // 租户ID（用于去重）
 }
 
 // ImportResult 导入结果
@@ -67,11 +69,23 @@ type ImportResult struct {
 	Errors           []string `json:"errors,omitempty"`
 }
 
+// CrawlProgress 爬取进度
+type CrawlProgress struct {
+	NovelID uint   `json:"novel_id"`
+	Status  string `json:"status"`   // running / paused / completed / failed
+	Total   int    `json:"total"`
+	Done    int    `json:"done"`
+	Failed  int    `json:"failed"`
+	Current string `json:"current"` // 当前正在爬取的章节标题
+}
+
 // NovelImportService 小说导入服务
 type NovelImportService struct {
-	novelRepo   *repository.NovelRepository
-	chapterRepo *repository.ChapterRepository
-	crawler     *crawler.NovelCrawler
+	novelRepo       *repository.NovelRepository
+	chapterRepo     *repository.ChapterRepository
+	crawler         *crawler.NovelCrawler
+	narrativeMemory *NarrativeMemoryService
+	crawlProgress   sync.Map // novelID(uint) → *CrawlProgress
 }
 
 // NewNovelImportService 创建小说导入服务
@@ -84,6 +98,196 @@ func NewNovelImportService(
 		novelRepo:   novelRepo,
 		chapterRepo: chapterRepo,
 		crawler:     crawler,
+	}
+}
+
+// WithNarrativeMemory 注入叙事记忆服务（用于爬取后自动生成摘要）
+func (s *NovelImportService) WithNarrativeMemory(nm *NarrativeMemoryService) *NovelImportService {
+	s.narrativeMemory = nm
+	return s
+}
+
+// GetCrawlProgress 获取爬取进度（先查内存，再查数据库）
+func (s *NovelImportService) GetCrawlProgress(novelID uint) (*CrawlProgress, error) {
+	if v, ok := s.crawlProgress.Load(novelID); ok {
+		return v.(*CrawlProgress), nil
+	}
+	// 内存中无记录，查询数据库判断是否有待爬取章节
+	pending, err := s.chapterRepo.ListPendingCrawl(novelID)
+	if err != nil {
+		return nil, err
+	}
+	if len(pending) == 0 {
+		return nil, nil // 无爬取任务
+	}
+	total, _ := s.chapterRepo.CountByNovel(novelID)
+	done := int(total) - len(pending)
+	progress := &CrawlProgress{
+		NovelID: novelID,
+		Status:  "paused", // 内存中无记录说明服务器重启过，状态为 paused
+		Total:   int(total),
+		Done:    done,
+		Failed:  0,
+	}
+	return progress, nil
+}
+
+// ResumeCrawl 从断点继续爬取
+func (s *NovelImportService) ResumeCrawl(novelID uint) error {
+	// 检查是否已有运行中的任务
+	if v, ok := s.crawlProgress.Load(novelID); ok {
+		p := v.(*CrawlProgress)
+		if p.Status == "running" {
+			return fmt.Errorf("crawl already running for novel %d", novelID)
+		}
+	}
+
+	novel, err := s.novelRepo.GetByID(novelID)
+	if err != nil {
+		return fmt.Errorf("novel not found: %w", err)
+	}
+
+	pending, err := s.chapterRepo.ListPendingCrawl(novelID)
+	if err != nil || len(pending) == 0 {
+		return fmt.Errorf("no pending chapters to crawl")
+	}
+
+	// 从第一个待爬取章节的 URL 推断解析器
+	firstURL := strings.TrimPrefix(pending[0].Outline, "crawl:")
+	parser, err := s.getParserForURL(firstURL)
+	if err != nil {
+		return fmt.Errorf("cannot identify site parser: %w", err)
+	}
+
+	total, _ := s.chapterRepo.CountByNovel(novelID)
+	done := int(total) - len(pending)
+	progress := &CrawlProgress{
+		NovelID: novelID,
+		Status:  "running",
+		Total:   int(total),
+		Done:    done,
+	}
+	s.crawlProgress.Store(novelID, progress)
+
+	go s.crawlChaptersBackground(context.Background(), novelID, novel.Title, parser, pending, progress)
+	return nil
+}
+
+// crawlChaptersBackground 后台爬取章节内容（带进度追踪 + AI 摘要生成）
+func (s *NovelImportService) crawlChaptersBackground(
+	ctx context.Context,
+	novelID uint,
+	novelTitle string,
+	parser crawler.NovelParser,
+	chapters []*model.Chapter,
+	progress *CrawlProgress,
+) {
+	httpClient := crawler.NewHTTPClient()
+	const rateLimit = 2 * time.Second
+
+	for _, ch := range chapters {
+		select {
+		case <-ctx.Done():
+			progress.Status = "paused"
+			return
+		default:
+		}
+
+		chapterURL := strings.TrimPrefix(ch.Outline, "crawl:")
+		if chapterURL == "" {
+			progress.Done++
+			continue
+		}
+
+		progress.Current = ch.Title
+
+		// 爬取页面
+		html, err := httpClient.Get(ctx, chapterURL)
+		if err != nil {
+			log.Printf("[Crawl] chapter %d fetch error: %v", ch.ChapterNo, err)
+			progress.Failed++
+			time.Sleep(rateLimit)
+			continue
+		}
+
+		doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+		if err != nil {
+			log.Printf("[Crawl] chapter %d parse html error: %v", ch.ChapterNo, err)
+			progress.Failed++
+			time.Sleep(rateLimit)
+			continue
+		}
+
+		content, err := parser.ParseChapter(doc)
+		if err != nil || content.Content == "" {
+			log.Printf("[Crawl] chapter %d parse content error: %v", ch.ChapterNo, err)
+			progress.Failed++
+			time.Sleep(rateLimit)
+			continue
+		}
+
+		// 使用爬取到的标题（若非空）
+		title := ch.Title
+		if strings.TrimSpace(content.Title) != "" {
+			title = strings.TrimSpace(content.Title)
+		}
+		wordCount := len([]rune(content.Content))
+
+		// 写回数据库
+		if err := s.chapterRepo.UpdateCrawledContent(ch.ID, title, content.Content, wordCount); err != nil {
+			log.Printf("[Crawl] chapter %d save error: %v", ch.ChapterNo, err)
+			progress.Failed++
+			time.Sleep(rateLimit)
+			continue
+		}
+
+		progress.Done++
+		log.Printf("[Crawl] novel=%d chapter=%d/%d done", novelID, progress.Done, progress.Total)
+
+		// 爬取完成后自动生成 AI 摘要
+		if s.narrativeMemory != nil {
+			ch.Title = title
+			ch.Content = content.Content
+			summary, err := s.narrativeMemory.GenerateChapterSummary(0, ch, novelTitle)
+			if err != nil {
+				log.Printf("[Crawl] chapter %d summary error: %v", ch.ChapterNo, err)
+			} else {
+				ch.Summary = summary
+				s.chapterRepo.Update(ch)
+			}
+		}
+
+		time.Sleep(rateLimit)
+	}
+
+	// 收尾
+	if progress.Failed == 0 {
+		progress.Status = "completed"
+		s.novelRepo.UpdateFields(novelID, map[string]interface{}{"status": "writing"})
+	} else if progress.Done == 0 {
+		progress.Status = "failed"
+	} else {
+		progress.Status = "completed"
+		s.novelRepo.UpdateFields(novelID, map[string]interface{}{"status": "writing"})
+	}
+	progress.Current = ""
+	log.Printf("[Crawl] novel=%d finished: done=%d failed=%d", novelID, progress.Done, progress.Failed)
+}
+
+// getParserForURL 根据 URL 返回对应解析器
+func (s *NovelImportService) getParserForURL(url string) (crawler.NovelParser, error) {
+	site := s.detectSiteFromURL(url)
+	switch site {
+	case "qidian":
+		return crawler.NewQidianParser(), nil
+	case "jjwxc":
+		return crawler.NewJjwxcParser(), nil
+	case "zongheng":
+		return crawler.NewZonghengParser(), nil
+	case "qimao":
+		return crawler.NewQimaoParser(), nil
+	default:
+		return nil, fmt.Errorf("unsupported site: %s", site)
 	}
 }
 
@@ -143,20 +347,42 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 		return nil, fmt.Errorf("parse file failed: %w", err)
 	}
 
-	// 保存小说
+	// 追加模式：使用已有小说，跳过创建
+	chapterOffset := 0
 	if req.NovelID > 0 {
-		novel.ID = req.NovelID
-	}
-	if err := s.novelRepo.Create(novel); err != nil {
-		return nil, fmt.Errorf("save novel failed: %w", err)
+		existing, err := s.novelRepo.GetByID(req.NovelID)
+		if err != nil {
+			return nil, fmt.Errorf("novel not found: %w", err)
+		}
+		novel = existing
+		count, _ := s.chapterRepo.CountByNovel(req.NovelID)
+		chapterOffset = int(count)
+	} else {
+		// 按标题去重：同 tenant 下同名小说直接追加章节，不新建项目
+		if req.TenantID > 0 {
+			if existing, err := s.novelRepo.FindByTitle(novel.Title, req.TenantID); err == nil && existing != nil {
+				novel = existing
+				count, _ := s.chapterRepo.CountByNovel(existing.ID)
+				chapterOffset = int(count)
+				log.Printf("[Import] novel %q already exists (id=%d), appending chapters from offset %d", novel.Title, novel.ID, chapterOffset)
+			}
+		}
+		// 仍需新建（无同名小说）
+		if novel.ID == 0 {
+			novel.UUID = uuid.New().String()
+			novel.TenantID = req.TenantID
+			if err := s.novelRepo.Create(novel); err != nil {
+				return nil, fmt.Errorf("save novel failed: %w", err)
+			}
+		}
 	}
 	result.NovelID = novel.ID
 	result.Title = novel.Title
 
-	// 保存章节
+	// 保存章节（追加时序号从已有数量后续）
 	for i, chapter := range chapters {
 		chapter.NovelID = novel.ID
-		chapter.ChapterNo = i + 1
+		chapter.ChapterNo = chapterOffset + i + 1
 		if err := s.chapterRepo.Create(chapter); err != nil {
 			result.FailedChapters++
 			result.Errors = append(result.Errors, fmt.Sprintf("chapter %d failed: %v", i+1, err))
@@ -194,28 +420,15 @@ func (s *NovelImportService) importFromURL(req *ImportRequest) (*ImportResult, e
 func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult, error) {
 	result := &ImportResult{}
 
-	// 解析URL获取站点
-	siteName := s.detectSiteFromURL(req.URL)
-	var parser crawler.NovelParser
-	switch siteName {
-	case "qidian":
-		parser = crawler.NewQidianParser()
-	case "jjwxc":
-		parser = crawler.NewJjwxcParser()
-	case "zongheng":
-		parser = crawler.NewZonghengParser()
-	default:
-		return nil, fmt.Errorf("unsupported site: %s", siteName)
-	}
-
-	// 爬取小说详情（创建小说记录）
-	novelDetail, err := s.crawler.CrawlNovel(context.Background(), req.URL)
+	parser, err := s.getParserForURL(req.URL)
 	if err != nil {
-		return nil, fmt.Errorf("crawl novel failed: %w", err)
+		return nil, fmt.Errorf("unsupported site: %w", err)
 	}
 
-	// 同步爬取章节列表
-	html, err := crawler.NewHTTPClient().Get(context.Background(), req.URL)
+	httpClient := crawler.NewHTTPClient()
+
+	// 下载小说目录页
+	html, err := httpClient.Get(context.Background(), req.URL)
 	if err != nil {
 		return nil, fmt.Errorf("get page failed: %w", err)
 	}
@@ -225,62 +438,76 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 		return nil, fmt.Errorf("parse page failed: %w", err)
 	}
 
+	// 解析小说详情
+	detail, err := parser.ParseNovelDetail(doc, req.URL)
+	if err != nil {
+		return nil, fmt.Errorf("parse novel detail failed: %w", err)
+	}
+
+	// 解析章节列表
 	chapterInfos, err := parser.ParseChapterList(doc)
 	if err != nil {
-		return nil, fmt.Errorf("parse chapters failed: %w", err)
+		return nil, fmt.Errorf("parse chapter list failed: %w", err)
 	}
 
-	// 转换为 Chapter 数组
-	chapters := make([]*model.Chapter, len(chapterInfos))
-	for i, info := range chapterInfos {
-		chapters[i] = &model.Chapter{
-			Title:     info.Title,
-			ChapterNo: info.ChapterNo,
-			Summary:   fmt.Sprintf("爬取自: %s", info.URL),
-			Content:   "",
+	// 按标题去重：同 tenant 下同名小说直接追加，不新建项目
+	var novel *model.Novel
+	chapterOffset := 0
+	if req.TenantID > 0 {
+		if existing, err := s.novelRepo.FindByTitle(detail.Title, req.TenantID); err == nil && existing != nil {
+			novel = existing
+			count, _ := s.chapterRepo.CountByNovel(existing.ID)
+			chapterOffset = int(count)
+			log.Printf("[Import] crawl: novel %q already exists (id=%d), appending from offset %d", novel.Title, novel.ID, chapterOffset)
 		}
 	}
-
-	// 创建小说
-	novel := &model.Novel{
-		Title:       novelDetail.Title,
-		Description: "",
-		Genre:       novelDetail.Genre,
-		Status:      "importing", // 正在导入
-	}
-
-	if err := s.novelRepo.Create(novel); err != nil {
-		return nil, fmt.Errorf("save novel failed: %w", err)
+	if novel == nil {
+		novel = &model.Novel{
+			UUID:        uuid.New().String(),
+			TenantID:    req.TenantID,
+			Title:       detail.Title,
+			Description: detail.Description,
+			Genre:       detail.Genre,
+			Status:      "importing",
+		}
+		if err := s.novelRepo.Create(novel); err != nil {
+			return nil, fmt.Errorf("save novel failed: %w", err)
+		}
 	}
 
 	result.NovelID = novel.ID
 	result.Title = novel.Title
-	result.TotalChapters = len(chapters)
+	result.TotalChapters = len(chapterInfos)
 
-	// 创建章节（稍后异步爬取内容）
-	for i, chapterInfo := range chapters {
+	// 创建章节存根，Outline 存储章节爬取 URL（用于断点续爬）
+	var pendingChapters []*model.Chapter
+	for i, info := range chapterInfos {
 		chapter := &model.Chapter{
 			NovelID:   novel.ID,
-			ChapterNo: i + 1,
-			Title:     chapterInfo.Title,
-			Summary:   fmt.Sprintf("爬取自: %s", req.URL),
-			Content:   "", // 稍后异步爬取
-			WordCount: 0,
+			ChapterNo: chapterOffset + i + 1,
+			Title:     info.Title,
+			Content:   "",
+			Outline:   "crawl:" + info.URL,
 			Status:    "draft",
 		}
-
 		if err := s.chapterRepo.Create(chapter); err != nil {
 			result.FailedChapters++
 			result.Errors = append(result.Errors, fmt.Sprintf("chapter %d save failed: %v", i+1, err))
 		} else {
 			result.ImportedChapters++
-		}
-
-		// 进度限制
-		if i%10 == 0 {
-			log.Printf("Crawling progress: %d/%d", i+1, len(chapters))
+			pendingChapters = append(pendingChapters, chapter)
 		}
 	}
+
+	// 初始化进度并启动后台爬取
+	progress := &CrawlProgress{
+		NovelID: novel.ID,
+		Status:  "running",
+		Total:   len(pendingChapters),
+		Done:    0,
+	}
+	s.crawlProgress.Store(novel.ID, progress)
+	go s.crawlChaptersBackground(context.Background(), novel.ID, novel.Title, parser, pendingChapters, progress)
 
 	return result, nil
 }
@@ -321,6 +548,9 @@ func (s *NovelImportService) detectSiteFromURL(url string) string {
 	}
 	if strings.Contains(url, "zongheng.com") {
 		return "zongheng"
+	}
+	if strings.Contains(url, "qimao.com") {
+		return "qimao"
 	}
 	return "default"
 }

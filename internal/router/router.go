@@ -21,6 +21,7 @@ type Config struct {
 	ImportHandler    *handler.ImportHandler
 	WorldviewHandler *handler.WorldviewHandler
 	TenantHandler    *handler.TenantHandler
+	ItemHandler      *handler.ItemHandler
 }
 
 // SetupRouter 配置路由
@@ -98,6 +99,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.GET("/:id/chapters/:chapter_no", cfg.ChapterHandler.GetChapterByNo)
 			novels.PUT("/:id/chapters/:chapter_no", cfg.ChapterHandler.UpdateChapterByNo)
 			novels.DELETE("/:id/chapters/:chapter_no", cfg.ChapterHandler.DeleteChapterByNo)
+			novels.POST("/:id/chapters/:chapter_no/character-snapshots", cfg.NovelHandler.SyncCharacterSnapshots)
 
 			// 大纲
 			novels.POST("/:id/outline", cfg.NovelHandler.GenerateOutline)
@@ -118,6 +120,40 @@ func SetupRouter(cfg *Config) *gin.Engine {
 
 			// 从已有小说生成视频
 			novels.POST("/:id/generate-video", cfg.ImportHandler.GenerateVideoFromNovel)
+
+			// 分析导入的小说
+			novels.POST("/:id/analyze", cfg.ImportHandler.StartAnalysis)
+			novels.GET("/:id/analyze/status", cfg.ImportHandler.GetAnalysisStatus)
+
+			// 爬取进度
+			novels.GET("/:id/crawl/status", cfg.ImportHandler.GetCrawlStatus)
+			novels.POST("/:id/crawl/resume", cfg.ImportHandler.ResumeCrawl)
+
+			// 物品（项目级）
+			if cfg.ItemHandler != nil {
+				novels.GET("/:id/items", cfg.ItemHandler.ListItems)
+				novels.POST("/:id/items", cfg.ItemHandler.CreateItem)
+				// 章节级物品（有效列表 + 覆盖）
+				novels.GET("/:id/chapters/:chapter_no/items", cfg.ItemHandler.ListEffectiveItems)
+				novels.POST("/:id/chapters/:chapter_no/items/:item_id", cfg.ItemHandler.UpsertChapterItem)
+				novels.DELETE("/:id/chapters/:chapter_no/items/:item_id", cfg.ItemHandler.DeleteChapterItem)
+			}
+
+			// 章节级角色（有效列表 + 覆盖）
+			novels.GET("/:id/chapters/:chapter_no/characters", cfg.CharacterHandler.ListEffectiveCharacters)
+			novels.POST("/:id/chapters/:chapter_no/characters/:character_id", cfg.CharacterHandler.UpsertChapterCharacter)
+			novels.DELETE("/:id/chapters/:chapter_no/characters/:character_id", cfg.CharacterHandler.DeleteChapterCharacter)
+		}
+
+		// 物品（单个物品操作）
+		if cfg.ItemHandler != nil {
+			items := v1.Group("/items")
+			{
+				items.GET("/:id", cfg.ItemHandler.GetItem)
+				items.PUT("/:id", cfg.ItemHandler.UpdateItem)
+				items.DELETE("/:id", cfg.ItemHandler.DeleteItem)
+				items.POST("/:id/images", cfg.ItemHandler.GenerateItemImage)
+			}
 		}
 
 		// 章节相关
@@ -162,6 +198,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.POST("/:id/shots/batch-generate", cfg.VideoHandler.BatchGenerateShots)
 			videos.POST("/:id/shots/:shot_id/generate", cfg.VideoHandler.GenerateSingleShot)
 			videos.POST("/:id/stitch", cfg.VideoHandler.StitchVideoHandler)
+			videos.GET("/:id/export/capcut", cfg.VideoHandler.ExportCapCutDraft)
 		}
 
 		// 分镜

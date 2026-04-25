@@ -68,6 +68,16 @@ func (r *NovelRepository) GetByUUID(uuid string) (*model.Novel, error) {
 	return &novel, nil
 }
 
+// FindByTitle 按标题和 tenantID 查找小说（用于导入去重）
+func (r *NovelRepository) FindByTitle(title string, tenantID uint) (*model.Novel, error) {
+	var novel model.Novel
+	err := r.db.Where("title = ? AND tenant_id = ? AND deleted_at IS NULL", title, tenantID).First(&novel).Error
+	if err != nil {
+		return nil, err
+	}
+	return &novel, nil
+}
+
 // List 获取小说列表
 func (r *NovelRepository) List(page, pageSize int, filters map[string]interface{}) ([]*model.Novel, int64, error) {
 	var novels []*model.Novel
@@ -210,6 +220,25 @@ func (r *ChapterRepository) CountByNovel(novelID uint) (int64, error) {
 		return 0, err
 	}
 	return count, nil
+}
+
+// ListPendingCrawl 获取待爬取章节（outline 以 "crawl:" 开头且 content 为空）
+func (r *ChapterRepository) ListPendingCrawl(novelID uint) ([]*model.Chapter, error) {
+	var chapters []*model.Chapter
+	err := r.db.Where("novel_id = ? AND outline LIKE 'crawl:%' AND (content = '' OR content IS NULL)", novelID).
+		Order("chapter_no ASC").Find(&chapters).Error
+	return chapters, err
+}
+
+// UpdateCrawledContent 将爬取完成的内容写回章节
+func (r *ChapterRepository) UpdateCrawledContent(id uint, title, content string, wordCount int) error {
+	return r.db.Model(&model.Chapter{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"title":      title,
+		"content":    content,
+		"outline":    "",
+		"word_count": wordCount,
+		"status":     "published",
+	}).Error
 }
 
 // CharacterRepository 角色仓库
@@ -751,6 +780,26 @@ func (r *CharacterStateSnapshotRepository) ListByCharacter(characterID uint) ([]
 	return snapshots, err
 }
 
+// GetByChapterAndCharacter 获取指定章节中特定角色的快照
+func (r *CharacterStateSnapshotRepository) GetByChapterAndCharacter(chapterID, characterID uint) (*model.CharacterStateSnapshot, error) {
+	var s model.CharacterStateSnapshot
+	err := r.db.Where("chapter_id = ? AND character_id = ?", chapterID, characterID).First(&s).Error
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// GetLatestForCharacter 获取某角色最新的快照（可选：只找 chapterID 之前创建的）
+func (r *CharacterStateSnapshotRepository) GetLatestForCharacter(characterID uint) (*model.CharacterStateSnapshot, error) {
+	var s model.CharacterStateSnapshot
+	err := r.db.Where("character_id = ?", characterID).Order("created_at DESC").First(&s).Error
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
 // ChapterVersionRepository 章节版本仓库
 type ChapterVersionRepository struct {
 	db *gorm.DB
@@ -940,3 +989,135 @@ func (r *ModelComparisonRepository) GetResults(experimentID uint) ([]*model.Expe
 	return results, nil
 }
 
+
+// ============================================
+// ItemRepository 物品仓库
+// ============================================
+
+type ItemRepository struct {
+	db *gorm.DB
+}
+
+func NewItemRepository(db *gorm.DB) *ItemRepository {
+	return &ItemRepository{db: db}
+}
+
+func (r *ItemRepository) Create(item *model.Item) error {
+	return r.db.Create(item).Error
+}
+
+func (r *ItemRepository) GetByID(id uint) (*model.Item, error) {
+	var item model.Item
+	if err := r.db.First(&item, id).Error; err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
+func (r *ItemRepository) ListByNovel(novelID uint) ([]*model.Item, error) {
+	var items []*model.Item
+	if err := r.db.Where("novel_id = ?", novelID).Order("created_at ASC").Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (r *ItemRepository) Update(item *model.Item) error {
+	return r.db.Save(item).Error
+}
+
+func (r *ItemRepository) Delete(id uint) error {
+	return r.db.Delete(&model.Item{}, id).Error
+}
+
+// ============================================
+// ChapterItemRepository 章节物品覆盖仓库
+// ============================================
+
+type ChapterItemRepository struct {
+	db *gorm.DB
+}
+
+func NewChapterItemRepository(db *gorm.DB) *ChapterItemRepository {
+	return &ChapterItemRepository{db: db}
+}
+
+func (r *ChapterItemRepository) Upsert(ci *model.ChapterItem) error {
+	var existing model.ChapterItem
+	err := r.db.Where("chapter_id = ? AND item_id = ?", ci.ChapterID, ci.ItemID).First(&existing).Error
+	if err == nil {
+		// update
+		existing.Location = ci.Location
+		existing.Owner = ci.Owner
+		existing.Condition = ci.Condition
+		existing.Notes = ci.Notes
+		return r.db.Save(&existing).Error
+	}
+	return r.db.Create(ci).Error
+}
+
+func (r *ChapterItemRepository) GetByChapterAndItem(chapterID, itemID uint) (*model.ChapterItem, error) {
+	var ci model.ChapterItem
+	if err := r.db.Where("chapter_id = ? AND item_id = ?", chapterID, itemID).First(&ci).Error; err != nil {
+		return nil, err
+	}
+	return &ci, nil
+}
+
+func (r *ChapterItemRepository) ListByChapter(chapterID uint) ([]*model.ChapterItem, error) {
+	var items []*model.ChapterItem
+	if err := r.db.Where("chapter_id = ?", chapterID).Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+func (r *ChapterItemRepository) Delete(chapterID, itemID uint) error {
+	return r.db.Where("chapter_id = ? AND item_id = ?", chapterID, itemID).Delete(&model.ChapterItem{}).Error
+}
+
+// ============================================
+// ChapterCharacterRepository 章节角色覆盖仓库
+// ============================================
+
+type ChapterCharacterRepository struct {
+	db *gorm.DB
+}
+
+func NewChapterCharacterRepository(db *gorm.DB) *ChapterCharacterRepository {
+	return &ChapterCharacterRepository{db: db}
+}
+
+func (r *ChapterCharacterRepository) Upsert(cc *model.ChapterCharacter) error {
+	var existing model.ChapterCharacter
+	err := r.db.Where("chapter_id = ? AND character_id = ?", cc.ChapterID, cc.CharacterID).First(&existing).Error
+	if err == nil {
+		existing.Appearance = cc.Appearance
+		existing.Personality = cc.Personality
+		existing.Status = cc.Status
+		existing.Location = cc.Location
+		existing.Notes = cc.Notes
+		return r.db.Save(&existing).Error
+	}
+	return r.db.Create(cc).Error
+}
+
+func (r *ChapterCharacterRepository) GetByChapterAndCharacter(chapterID, characterID uint) (*model.ChapterCharacter, error) {
+	var cc model.ChapterCharacter
+	if err := r.db.Where("chapter_id = ? AND character_id = ?", chapterID, characterID).First(&cc).Error; err != nil {
+		return nil, err
+	}
+	return &cc, nil
+}
+
+func (r *ChapterCharacterRepository) ListByChapter(chapterID uint) ([]*model.ChapterCharacter, error) {
+	var records []*model.ChapterCharacter
+	if err := r.db.Where("chapter_id = ?", chapterID).Find(&records).Error; err != nil {
+		return nil, err
+	}
+	return records, nil
+}
+
+func (r *ChapterCharacterRepository) Delete(chapterID, characterID uint) error {
+	return r.db.Where("chapter_id = ? AND character_id = ?", chapterID, characterID).Delete(&model.ChapterCharacter{}).Error
+}

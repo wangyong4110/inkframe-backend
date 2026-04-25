@@ -18,6 +18,11 @@ type Novel struct {
 	Status string `json:"status" gorm:"size:20;index;index:idx_novel_tenant_status,priority:2;default:planning"`
 	// planning=规划中, writing=创作中, paused=暂停, completed=已完成, archived=已归档
 
+	// 频道与分类（创作目标）
+	Channel        string `json:"channel" gorm:"size:50"`          // female=女生原创, male=男生原创, publish=出版图书
+	TargetWordCount int   `json:"target_word_count" gorm:"default:0"` // 目标字数（万字）
+	TargetChapters  int   `json:"target_chapters" gorm:"default:0"`   // 目标章节数
+
 	// 统计
 	TotalWords   int `json:"total_words" gorm:"default:0"`
 	ChapterCount int `json:"chapter_count" gorm:"default:0"`
@@ -974,16 +979,66 @@ func (ArcSummary) TableName() string {
 	return "ink_arc_summary"
 }
 
+// Item 物品（项目级别，贯穿整部小说）
+type Item struct {
+	ID      uint   `json:"id" gorm:"primaryKey"`
+	NovelID uint   `json:"novel_id" gorm:"index;not null"`
+	UUID    string `json:"uuid" gorm:"uniqueIndex;size:36"`
+
+	Name     string `json:"name" gorm:"size:100;not null"`
+	Category string `json:"category" gorm:"size:50"` // weapon/treasure/tool/document/artifact/other
+
+	Description  string `json:"description" gorm:"type:text"`
+	Appearance   string `json:"appearance" gorm:"type:text"` // 外观描述
+	Location     string `json:"location" gorm:"size:200"`    // 当前/最后已知位置
+	Owner        string `json:"owner" gorm:"size:100"`       // 当前持有者
+	Significance string `json:"significance" gorm:"type:text"` // 在故事中的重要性
+	Abilities    string `json:"abilities" gorm:"type:text"`  // JSON: [{name, description}]
+
+	ImageURL     string `json:"image_url" gorm:"size:1000"`
+	VisualPrompt string `json:"visual_prompt" gorm:"type:text"` // 用于 AI 图像生成的英文提示词
+
+	Status string `json:"status" gorm:"size:20;default:active"` // active/lost/destroyed/unknown
+
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
+}
+
+func (Item) TableName() string { return "ink_item" }
+
+// ChapterItem 章节级别的物品状态（覆盖项目级别）
+type ChapterItem struct {
+	ID        uint `json:"id" gorm:"primaryKey"`
+	ItemID    uint `json:"item_id" gorm:"uniqueIndex:uniq_chapter_item;not null"`
+	ChapterID uint `json:"chapter_id" gorm:"uniqueIndex:uniq_chapter_item;not null"`
+	NovelID   uint `json:"novel_id" gorm:"index;not null"`
+
+	Location  string `json:"location" gorm:"size:200"` // 本章节中物品所在位置（覆盖项目级）
+	Owner     string `json:"owner" gorm:"size:100"`    // 本章节中持有者（覆盖项目级）
+	Condition string `json:"condition" gorm:"size:50"` // intact/damaged/broken/destroyed
+	Notes     string `json:"notes" gorm:"type:text"`   // 本章节备注
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (ChapterItem) TableName() string { return "ink_chapter_item" }
+
 // ============================================
 // Request / Response types (used by handlers)
 // ============================================
 
 type CreateNovelRequest struct {
-	Title       string `json:"title" binding:"required"`
-	Description string `json:"description"`
-	Genre       string `json:"genre" binding:"required"`
-	WorldviewID *uint  `json:"worldview_id"`
-	CoverImage  string `json:"cover_image"`
+	Title           string `json:"title" binding:"required"`
+	Description     string `json:"description"`
+	Genre           string `json:"genre" binding:"required"`
+	WorldviewID     *uint  `json:"worldview_id"`
+	CoverImage      string `json:"cover_image"`
+	Channel         string `json:"channel"`
+	TargetWordCount int    `json:"target_word_count"`
+	TargetChapters  int    `json:"target_chapters"`
+	TenantID        uint   `json:"-"`
 }
 
 type UpdateNovelRequest struct {
@@ -1079,18 +1134,22 @@ type EnhancementConfig struct {
 }
 
 type CreateModelProviderRequest struct {
-	Name     string `json:"name" binding:"required"`
-	Type     string `json:"type" binding:"required"`
-	BaseURL  string `json:"base_url"`
-	APIKey   string `json:"api_key"`
-	IsActive bool   `json:"is_active"`
+	Name        string `json:"name" binding:"required"`
+	DisplayName string `json:"display_name"`
+	Type        string `json:"type" binding:"required"`
+	APIEndpoint string `json:"api_endpoint"`
+	APIKey      string `json:"api_key"`
+	APIVersion  string `json:"api_version"`
+	IsActive    bool   `json:"is_active"`
 }
 
 type UpdateModelProviderRequest struct {
-	Name     string `json:"name"`
-	BaseURL  string `json:"base_url"`
-	APIKey   string `json:"api_key"`
-	IsActive *bool  `json:"is_active"`
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+	APIEndpoint string `json:"api_endpoint"`
+	APIKey      string `json:"api_key"`
+	APIVersion  string `json:"api_version"`
+	IsActive    *bool  `json:"is_active"`
 }
 
 type CreateAIModelRequest struct {
@@ -1191,6 +1250,69 @@ type UpdateMcpToolRequest struct {
 	Env           map[string]string `json:"env"`
 	Timeout       int               `json:"timeout"`
 	IsActive      *bool             `json:"is_active"`
+}
+
+// ─── Item DTOs ─────────────────────────────────────────────────────────────────
+
+type CreateItemRequest struct {
+	Name         string `json:"name" binding:"required"`
+	Category     string `json:"category"`
+	Description  string `json:"description"`
+	Appearance   string `json:"appearance"`
+	Location     string `json:"location"`
+	Owner        string `json:"owner"`
+	Significance string `json:"significance"`
+	Abilities    string `json:"abilities"`
+	VisualPrompt string `json:"visual_prompt"`
+	Status       string `json:"status"`
+}
+
+type UpdateItemRequest struct {
+	Name         string `json:"name"`
+	Category     string `json:"category"`
+	Description  string `json:"description"`
+	Appearance   string `json:"appearance"`
+	Location     string `json:"location"`
+	Owner        string `json:"owner"`
+	Significance string `json:"significance"`
+	Abilities    string `json:"abilities"`
+	VisualPrompt string `json:"visual_prompt"`
+	ImageURL     string `json:"image_url"`
+	Status       string `json:"status"`
+}
+
+type UpsertChapterItemRequest struct {
+	Location  string `json:"location"`
+	Owner     string `json:"owner"`
+	Condition string `json:"condition"`
+	Notes     string `json:"notes"`
+}
+
+// ChapterCharacter 章节级角色状态覆盖
+type ChapterCharacter struct {
+	ID          uint `json:"id" gorm:"primaryKey"`
+	CharacterID uint `json:"character_id" gorm:"uniqueIndex:uniq_chapter_char;not null"`
+	ChapterID   uint `json:"chapter_id" gorm:"uniqueIndex:uniq_chapter_char;not null"`
+	NovelID     uint `json:"novel_id" gorm:"index;not null"`
+
+	Appearance  string `json:"appearance" gorm:"type:text"`  // 本章外观（覆盖项目级）
+	Personality string `json:"personality" gorm:"type:text"` // 本章性格变化
+	Status      string `json:"status" gorm:"size:50"`         // alive/dead/missing/injured/imprisoned
+	Location    string `json:"location" gorm:"size:200"`      // 本章所在位置
+	Notes       string `json:"notes" gorm:"type:text"`        // 本章备注
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (ChapterCharacter) TableName() string { return "ink_chapter_character" }
+
+type UpsertChapterCharacterRequest struct {
+	Appearance  string `json:"appearance"`
+	Personality string `json:"personality"`
+	Status      string `json:"status"`
+	Location    string `json:"location"`
+	Notes       string `json:"notes"`
 }
 
 // ─── Per-shot generation DTOs ─────────────────────────────────────────────────

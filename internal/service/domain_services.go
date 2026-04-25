@@ -615,9 +615,20 @@ func (s *ChapterVersionService) RestoreVersion(chapterID uint, versionNo int) (*
 // CharacterService 角色服务
 // ============================================
 
+// EffectiveCharacter 有效角色（合并项目级与章节级覆盖）
+type EffectiveCharacter struct {
+	model.Character
+	ChapterOverride      *model.ChapterCharacter `json:"chapter_override,omitempty"`
+	EffectiveAppearance  string                  `json:"effective_appearance"`
+	EffectivePersonality string                  `json:"effective_personality"`
+	EffectiveStatus      string                  `json:"effective_status"`
+	EffectiveLocation    string                  `json:"effective_location"`
+}
+
 type CharacterService struct {
-	characterRepo *repository.CharacterRepository
-	aiService     *AIService
+	characterRepo        *repository.CharacterRepository
+	chapterCharacterRepo *repository.ChapterCharacterRepository
+	aiService            *AIService
 }
 
 func NewCharacterService(
@@ -628,6 +639,12 @@ func NewCharacterService(
 		characterRepo: characterRepo,
 		aiService:     aiService,
 	}
+}
+
+// WithChapterCharacterRepo 注入章节角色覆盖仓库（可选）
+func (s *CharacterService) WithChapterCharacterRepo(r *repository.ChapterCharacterRepository) *CharacterService {
+	s.chapterCharacterRepo = r
+	return s
 }
 
 func (s *CharacterService) CreateCharacter(novelID uint, req *model.CreateCharacterRequest) (*model.Character, error) {
@@ -711,6 +728,83 @@ func (s *CharacterService) UpdateCharacter(id uint, req *model.UpdateCharacterRe
 
 func (s *CharacterService) DeleteCharacter(id uint) error {
 	return s.characterRepo.Delete(id)
+}
+
+// ListEffectiveCharacters 获取章节的有效角色列表（章节级覆盖优先）
+func (s *CharacterService) ListEffectiveCharacters(novelID, chapterID uint) ([]*EffectiveCharacter, error) {
+	chars, err := s.characterRepo.ListByNovel(novelID)
+	if err != nil {
+		return nil, err
+	}
+	overrideMap := make(map[uint]*model.ChapterCharacter)
+	if s.chapterCharacterRepo != nil {
+		overrides, _ := s.chapterCharacterRepo.ListByChapter(chapterID)
+		for _, o := range overrides {
+			overrideMap[o.CharacterID] = o
+		}
+	}
+	result := make([]*EffectiveCharacter, 0, len(chars))
+	for _, ch := range chars {
+		ec := &EffectiveCharacter{Character: *ch}
+		if o, ok := overrideMap[ch.ID]; ok {
+			ec.ChapterOverride = o
+			if o.Appearance != "" {
+				ec.EffectiveAppearance = o.Appearance
+			} else {
+				ec.EffectiveAppearance = ch.Appearance
+			}
+			if o.Personality != "" {
+				ec.EffectivePersonality = o.Personality
+			} else {
+				ec.EffectivePersonality = ch.Personality
+			}
+			if o.Status != "" {
+				ec.EffectiveStatus = o.Status
+			} else {
+				ec.EffectiveStatus = ch.Status
+			}
+			ec.EffectiveLocation = o.Location
+		} else {
+			ec.EffectiveAppearance = ch.Appearance
+			ec.EffectivePersonality = ch.Personality
+			ec.EffectiveStatus = ch.Status
+		}
+		result = append(result, ec)
+	}
+	return result, nil
+}
+
+// UpsertChapterCharacter 创建或更新章节级角色覆盖
+func (s *CharacterService) UpsertChapterCharacter(novelID, chapterID, characterID uint, req *model.UpsertChapterCharacterRequest) (*model.ChapterCharacter, error) {
+	if s.chapterCharacterRepo == nil {
+		return nil, fmt.Errorf("chapter character repository not configured")
+	}
+	cc := &model.ChapterCharacter{
+		CharacterID: characterID,
+		ChapterID:   chapterID,
+		NovelID:     novelID,
+		Appearance:  req.Appearance,
+		Personality: req.Personality,
+		Status:      req.Status,
+		Location:    req.Location,
+		Notes:       req.Notes,
+	}
+	if err := s.chapterCharacterRepo.Upsert(cc); err != nil {
+		return nil, err
+	}
+	saved, err := s.chapterCharacterRepo.GetByChapterAndCharacter(chapterID, characterID)
+	if err != nil {
+		return cc, nil
+	}
+	return saved, nil
+}
+
+// DeleteChapterCharacter 删除章节级角色覆盖（回退到项目级）
+func (s *CharacterService) DeleteChapterCharacter(chapterID, characterID uint) error {
+	if s.chapterCharacterRepo == nil {
+		return fmt.Errorf("chapter character repository not configured")
+	}
+	return s.chapterCharacterRepo.Delete(chapterID, characterID)
 }
 
 func (s *CharacterService) GenerateProfile(tenantID uint, novelID uint, description string) (*model.Character, error) {
@@ -1002,9 +1096,11 @@ func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, ten
 	provider := &model.ModelProvider{
 		TenantID:    tenantID,
 		Name:        req.Name,
+		DisplayName: req.DisplayName,
 		Type:        req.Type,
-		APIEndpoint: req.BaseURL,
+		APIEndpoint: req.APIEndpoint,
 		APIKey:      req.APIKey,
+		APIVersion:  req.APIVersion,
 		IsActive:    req.IsActive,
 	}
 	return provider, s.providerRepo.Create(provider)
@@ -1018,11 +1114,17 @@ func (s *ModelService) UpdateProvider(id uint, tenantID uint, req *model.UpdateM
 	if req.Name != "" {
 		provider.Name = req.Name
 	}
-	if req.BaseURL != "" {
-		provider.APIEndpoint = req.BaseURL
+	if req.DisplayName != "" {
+		provider.DisplayName = req.DisplayName
+	}
+	if req.APIEndpoint != "" {
+		provider.APIEndpoint = req.APIEndpoint
 	}
 	if req.APIKey != "" {
 		provider.APIKey = req.APIKey
+	}
+	if req.APIVersion != "" {
+		provider.APIVersion = req.APIVersion
 	}
 	if req.IsActive != nil {
 		provider.IsActive = *req.IsActive

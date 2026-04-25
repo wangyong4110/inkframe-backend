@@ -1,0 +1,47 @@
+请从以下小说内容中提取所有主要角色，生成详细的角色档案。
+
+# 小说信息
+- 标题：《{{.NovelTitle}}》
+- 类型：{{.Genre}}
+
+# 内容概要
+{{.Summaries}}
+
+# 要求
+1. 提取所有有名字的主要角色（主角、反派、重要配角），配角最多5个
+2. role 只能是：protagonist / antagonist / supporting
+3. archetype 角色原型，如：英雄、智者、导师、反派、守护者、叛逆者等
+4. appearance：详细外貌描述，必须包含：身高体型、发色发型、眼睛颜色神态、面部特征、常见服装/着装风格、标志性外观细节
+5. personality：深度性格描述，包含核心性格特质、行为模式、情感倾向、内在矛盾
+6. personality_tags：3-5个短标签，每个不超过4字，如["孤傲冷峻","腹黑算计","外冷内热"]
+7. background：详细背景，包含出身、成长经历、重要转折、与其他角色的关系
+8. character_arc：角色成长轨迹，描述起点、关键转变、最终归宿
+9. abilities：角色的核心能力或技能，每项包含 name 和 description
+10. dialogue_style：说话风格，包含 vocabulary_level（文言/武侠/现代白话/都市）、patterns（2-4条说话习惯）、speech_habits（一句话总结）
+11. visual_prompt：英文图像生成提示词，描述角色外貌特征用于AI绘图，需包含：性别、年龄感、发型发色、眼睛、体型、服装风格、气质，不超过150词
+12. 若内容不足以判断，结合小说类型和角色定位合理推断，不要留空
+13. 严格输出 JSON 数组，不含任何说明文字
+
+# 输出格式（JSON 数组）
+[
+  {
+    "name": "角色名",
+    "role": "protagonist",
+    "archetype": "英雄",
+    "appearance": "身高约1.82米，体型精瘦而有力，一头乌黑长发用白玉簪束起，剑眉斜飞入鬓，漆黑的眼眸深邃如夜空，面容冷峻线条分明，常着白色绣银纹修仙长袍，腰间悬挂一柄古朴长剑，气质出尘飘逸",
+    "personality": "外表冷漠疏离，内心实则热忱，因早年背叛而筑起心墙，对陌生人充满戒心，但对认可之人极度忠诚。做事果决，鲜少流露情绪，却在关键时刻会为弱者挺身而出。内心深处渴望归属，却又主动推开靠近的人。",
+    "personality_tags": ["孤傲冷峻", "外冷内热", "腹黑深谋", "守护者"],
+    "background": "背景故事，包含出身和经历",
+    "character_arc": "从孤立的复仇者逐渐开放心扉，最终成为守护众人的存在",
+    "abilities": [
+      {"name": "剑诀·天罚", "description": "凌厉的剑法招式，以速度和准确性著称"},
+      {"name": "元神感知", "description": "感知周围数百米内的气机变化"}
+    ],
+    "dialogue_style": {
+      "vocabulary_level": "武侠",
+      "patterns": ["惜字如金，非必要不开口", "语气平淡，不带情绪起伏", "偶尔引用古语"],
+      "speech_habits": "简短直接，冷淡疏离，绝不废话"
+    },
+    "visual_prompt": "young male cultivator, early 20s, tall slender athletic build, long black hair tied with white jade pin, sharp sword-like eyebrows, deep dark eyes with cold distant gaze, elegant white cultivation robes with silver embroidery, ancient sword at waist, ethereal otherworldly aura, high detail, anime art style"
+  }
+]

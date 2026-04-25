@@ -44,6 +44,7 @@ func getImportTask(id string) (*importTaskStatus, bool) {
 type ImportHandler struct {
 	importService       *service.NovelImportService
 	novelToVideoService *service.NovelToVideoService
+	analysisService     *service.NovelAnalysisService
 }
 
 func NewImportHandler(
@@ -54,6 +55,11 @@ func NewImportHandler(
 		importService:       importService,
 		novelToVideoService: novelToVideoService,
 	}
+}
+
+// SetAnalysisService 注入分析服务
+func (h *ImportHandler) SetAnalysisService(svc *service.NovelAnalysisService) {
+	h.analysisService = svc
 }
 
 // ImportNovel 导入小说
@@ -139,6 +145,14 @@ func (h *ImportHandler) ImportFromFile(c *gin.Context) {
 		FileData: data,
 		FileName: header.Filename,
 		Format:   service.ImportFormat(format),
+		TenantID: getTenantID(c),
+	}
+
+	// 追加模式：前端可传 novel_id 将章节追加到已有小说
+	if novelIDStr := c.PostForm("novel_id"); novelIDStr != "" {
+		if novelID, err := strconv.ParseUint(novelIDStr, 10, 32); err == nil {
+			req.NovelID = uint(novelID)
+		}
 	}
 
 	result, err := h.importService.Import(req)
@@ -156,6 +170,7 @@ func (h *ImportHandler) ImportFromURL(c *gin.Context) {
 	var req struct {
 		URL      string `json:"url" binding:"required"`
 		SiteName string `json:"site_name,omitempty"`
+		NovelID  uint   `json:"novel_id,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respondBadRequest(c, err.Error())
@@ -166,6 +181,8 @@ func (h *ImportHandler) ImportFromURL(c *gin.Context) {
 		Source:   service.SourceURL,
 		URL:      req.URL,
 		SiteName: req.SiteName,
+		NovelID:  req.NovelID,
+		TenantID: getTenantID(c),
 	}
 
 	result, err := h.importService.Import(importReq)
@@ -183,6 +200,7 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 	var req struct {
 		URL      string `json:"url" binding:"required"`
 		SiteName string `json:"site_name,omitempty"`
+		NovelID  uint   `json:"novel_id,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respondBadRequest(c, err.Error())
@@ -193,6 +211,8 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 		Source:   service.SourceCrawl,
 		URL:      req.URL,
 		SiteName: req.SiteName,
+		NovelID:  req.NovelID,
+		TenantID: getTenantID(c),
 	}
 
 	result, err := h.importService.Import(importReq)
@@ -293,6 +313,91 @@ func (h *ImportHandler) GetImportStatus(c *gin.Context) {
 		return
 	}
 
+	respondOK(c, task)
+}
+
+// StartAnalysis 触发小说分析 Pipeline
+// POST /api/v1/novels/:id/analyze
+func (h *ImportHandler) StartAnalysis(c *gin.Context) {
+	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid novel id")
+		return
+	}
+	if h.analysisService == nil {
+		respondErr(c, http.StatusInternalServerError, "analysis service not available")
+		return
+	}
+	var body struct {
+		CreateChapterOutlines bool `json:"create_chapter_outlines"`
+	}
+	c.ShouldBindJSON(&body)
+
+	tenantID := getTenantID(c)
+	taskID, err := h.analysisService.StartAnalysis(tenantID, uint(novelID), body.CreateChapterOutlines)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "analysis started",
+		"data":    gin.H{"task_id": taskID},
+	})
+}
+
+// GetCrawlStatus 查询爬取进度
+// GET /api/v1/novels/:id/crawl/status
+func (h *ImportHandler) GetCrawlStatus(c *gin.Context) {
+	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid novel id")
+		return
+	}
+	progress, err := h.importService.GetCrawlProgress(uint(novelID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if progress == nil {
+		respondErr(c, http.StatusNotFound, "no crawl task found")
+		return
+	}
+	respondOK(c, progress)
+}
+
+// ResumeCrawl 从断点继续爬取
+// POST /api/v1/novels/:id/crawl/resume
+func (h *ImportHandler) ResumeCrawl(c *gin.Context) {
+	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid novel id")
+		return
+	}
+	if err := h.importService.ResumeCrawl(uint(novelID)); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"message": "crawl resumed"})
+}
+
+// GetAnalysisStatus 查询分析任务状态
+// GET /api/v1/novels/:id/analyze/status?task_id=xxx
+func (h *ImportHandler) GetAnalysisStatus(c *gin.Context) {
+	taskID := c.Query("task_id")
+	if taskID == "" {
+		respondBadRequest(c, "task_id required")
+		return
+	}
+	if h.analysisService == nil {
+		respondErr(c, http.StatusInternalServerError, "analysis service not available")
+		return
+	}
+	task, err := h.analysisService.GetStatus(taskID)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "task not found")
+		return
+	}
 	respondOK(c, task)
 }
 

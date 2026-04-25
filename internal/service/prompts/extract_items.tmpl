@@ -1,0 +1,37 @@
+请从以下小说内容中提取所有重要物品/道具，生成详细的物品档案。
+
+# 小说信息
+- 标题：《{{.NovelTitle}}》
+- 类型：{{.Genre}}
+
+# 内容概要
+{{.Summaries}}
+
+# 要求
+1. 提取故事中出现的所有有名称的重要物品（武器、宝物、道具、典籍、神器等）
+2. category 只能是：weapon（武器）/ treasure（宝物）/ tool（道具）/ document（典籍/文书）/ artifact（神器/法宝）/ other（其他）
+3. appearance：外观描述，包含材质、颜色、形态、尺寸、特殊标志等细节
+4. location：物品当前所处位置或最后出现的地点
+5. owner：当前持有者或归属（若无主人则留空字符串）
+6. significance：在故事中的重要性和作用（情节推动、象征意义等）
+7. abilities：物品的特殊能力或用途，每项包含 name 和 description
+8. visual_prompt：英文图像生成提示词，描述物品外观，用于 AI 绘图，不超过100词
+9. 若信息不足，结合小说类型合理推断，不要留空
+10. 严格输出 JSON 数组，不含任何说明文字
+
+# 输出格式（JSON 数组）
+[
+  {
+    "name": "物品名称",
+    "category": "weapon",
+    "appearance": "一柄三尺长剑，剑身由寒铁铸造，剑格嵌有一颗幽蓝宝石，剑鞘用黑龙皮包裹，剑身上篆刻着古老的符文，寒气逼人",
+    "location": "主角腰间",
+    "owner": "主角名",
+    "significance": "主角的传家宝剑，据说是上古剑仙遗留，能斩断任何束缚，在故事中是主角突破境界的关键道具",
+    "abilities": [
+      {"name": "寒气凝固", "description": "可在方圆三丈内降温，冻结敌人行动"},
+      {"name": "符文共鸣", "description": "与特定阵法共鸣时，威力倍增"}
+    ],
+    "visual_prompt": "ancient Chinese longsword, three-foot blade of black cold iron, blue gemstone on guard, black dragon leather sheath, ancient runes carved on blade, icy ethereal aura, fantasy concept art, high detail, dark background"
+  }
+]

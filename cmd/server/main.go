@@ -40,10 +40,12 @@ func main() {
 		log.Fatalf("Failed to init database: %v", err)
 	}
 
-	// 3. 自动迁移（已禁用，表结构由外部管理）
-	// if err := autoMigrate(db); err != nil {
-	// 	log.Fatalf("Failed to migrate database: %v", err)
-	// }
+	// 3. 自动迁移（GORM AutoMigrate 只增列不删列，开发环境安全运行）
+	// 迁移前清理会阻塞唯一索引的无效行
+	//preMigrateCleanup(db)
+	//if err := autoMigrate(db); err != nil {
+	//	log.Fatalf("Failed to migrate database: %v", err)
+	//}
 
 	// 4. 初始化Redis
 	redisClient := initRedis(cfg)
@@ -83,6 +85,7 @@ func main() {
 		ImportHandler:    handlers.ImportHandler,
 		WorldviewHandler: handlers.WorldviewHandler,
 		TenantHandler:    handlers.TenantHandler,
+		ItemHandler:      handlers.ItemHandler,
 	})
 
 	// 11. 设置Gin模式
@@ -143,9 +146,9 @@ func initDatabase(cfg *config.Config) (*gorm.DB, error) {
 		log.New(os.Stdout, "\r\n", log.LstdFlags),
 		logger.Config{
 			SlowThreshold:             200 * time.Millisecond,
-			LogLevel:                 logger.Info,
+			LogLevel:                  logger.Info,
 			IgnoreRecordNotFoundError: true,
-			Colorful:                 true,
+			Colorful:                  true,
 		},
 	)
 
@@ -171,9 +174,10 @@ func initDatabase(cfg *config.Config) (*gorm.DB, error) {
 
 // seedDefaultUser 创建默认测试账户（幂等，已存在则跳过）
 // 账户信息通过环境变量配置：
-//   SEED_TEST_EMAIL    默认 test@inkframe.dev
-//   SEED_TEST_PASSWORD 必须设置，未设置则跳过
-//   SEED_TEST_USERNAME 默认 testuser
+//
+//	SEED_TEST_EMAIL    默认 test@inkframe.dev
+//	SEED_TEST_PASSWORD 必须设置，未设置则跳过
+//	SEED_TEST_USERNAME 默认 testuser
 func seedDefaultUser(services *Services) {
 	password := os.Getenv("SEED_TEST_PASSWORD")
 	if password == "" {
@@ -207,6 +211,12 @@ func seedDefaultUser(services *Services) {
 		return
 	}
 	log.Printf("[seed] default test user created: %s", email)
+}
+
+// preMigrateCleanup 清理会阻塞 AutoMigrate 唯一索引迁移的无效行
+func preMigrateCleanup(db *gorm.DB) {
+	// ink_task_model_config.task_type 为 UNIQUE NOT NULL，旧空行会导致 Duplicate entry '' 错误
+	db.Exec("DELETE FROM ink_task_model_config WHERE task_type = '' OR task_type IS NULL")
 }
 
 // autoMigrate 自动迁移
@@ -245,6 +255,9 @@ func autoMigrate(db *gorm.DB) error {
 		&model.McpTool{},
 		&model.ModelMcpBinding{},
 		&model.ArcSummary{},
+		&model.Item{},
+		&model.ChapterItem{},
+		&model.ChapterCharacter{},
 	)
 }
 
@@ -379,85 +392,93 @@ func initVectorStore(cfg *config.Config) *vector.StoreManager {
 
 // Repositories 仓库层
 type Repositories struct {
-	NovelRepo             *repository.NovelRepository
-	ChapterRepo           *repository.ChapterRepository
-	CharacterRepo         *repository.CharacterRepository
-	WorldviewRepo         *repository.WorldviewRepository
-	AIModelRepo           *repository.AIModelRepository
-	TaskModelConfigRepo   *repository.TaskModelConfigRepository
-	VideoRepo             *repository.VideoRepository
-	StoryboardRepo        *repository.StoryboardRepository
-	KnowledgeBaseRepo     *repository.KnowledgeBaseRepository
-	ModelProviderRepo     *repository.ModelProviderRepository
-	ModelComparisonRepo   *repository.ModelComparisonRepository
-	ReviewTaskRepo        *repository.ReviewTaskRepository
-	ChapterVersionRepo    *repository.ChapterVersionRepository
-	SnapshotRepo          *repository.CharacterStateSnapshotRepository
-	UserRepo              *repository.UserRepository
-	TenantRepo            *repository.TenantRepository
-	TenantUserRepo        *repository.TenantUserRepository
-	ArcSummaryRepo        *repository.ArcSummaryRepository
+	NovelRepo           *repository.NovelRepository
+	ChapterRepo         *repository.ChapterRepository
+	CharacterRepo       *repository.CharacterRepository
+	WorldviewRepo       *repository.WorldviewRepository
+	AIModelRepo         *repository.AIModelRepository
+	TaskModelConfigRepo *repository.TaskModelConfigRepository
+	VideoRepo           *repository.VideoRepository
+	StoryboardRepo      *repository.StoryboardRepository
+	KnowledgeBaseRepo   *repository.KnowledgeBaseRepository
+	ModelProviderRepo   *repository.ModelProviderRepository
+	ModelComparisonRepo *repository.ModelComparisonRepository
+	ReviewTaskRepo      *repository.ReviewTaskRepository
+	ChapterVersionRepo  *repository.ChapterVersionRepository
+	SnapshotRepo        *repository.CharacterStateSnapshotRepository
+	UserRepo            *repository.UserRepository
+	TenantRepo          *repository.TenantRepository
+	TenantUserRepo      *repository.TenantUserRepository
+	ArcSummaryRepo      *repository.ArcSummaryRepository
+	ItemRepo                 *repository.ItemRepository
+	ChapterItemRepo          *repository.ChapterItemRepository
+	ChapterCharacterRepo     *repository.ChapterCharacterRepository
 }
 
 // initRepositories 初始化仓库层
 func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 	return &Repositories{
-		NovelRepo:            repository.NewNovelRepository(db, redis),
-		ChapterRepo:          repository.NewChapterRepository(db, redis),
-		CharacterRepo:        repository.NewCharacterRepository(db),
-		WorldviewRepo:        repository.NewWorldviewRepository(db),
-		AIModelRepo:          repository.NewAIModelRepository(db),
-		TaskModelConfigRepo:  repository.NewTaskModelConfigRepository(db),
-		VideoRepo:            repository.NewVideoRepository(db),
-		StoryboardRepo:       repository.NewStoryboardRepository(db),
-		KnowledgeBaseRepo:    repository.NewKnowledgeBaseRepository(db),
-		ModelProviderRepo:    repository.NewModelProviderRepository(db),
-		ModelComparisonRepo:  repository.NewModelComparisonRepository(db),
-		ReviewTaskRepo:       repository.NewReviewTaskRepository(db),
-		ChapterVersionRepo:   repository.NewChapterVersionRepository(db),
-		SnapshotRepo:         repository.NewCharacterStateSnapshotRepository(db),
-		UserRepo:             repository.NewUserRepository(db),
-		TenantRepo:           repository.NewTenantRepository(db),
-		TenantUserRepo:       repository.NewTenantUserRepository(db),
-		ArcSummaryRepo:       repository.NewArcSummaryRepository(db),
+		NovelRepo:           repository.NewNovelRepository(db, redis),
+		ChapterRepo:         repository.NewChapterRepository(db, redis),
+		CharacterRepo:       repository.NewCharacterRepository(db),
+		WorldviewRepo:       repository.NewWorldviewRepository(db),
+		AIModelRepo:         repository.NewAIModelRepository(db),
+		TaskModelConfigRepo: repository.NewTaskModelConfigRepository(db),
+		VideoRepo:           repository.NewVideoRepository(db),
+		StoryboardRepo:      repository.NewStoryboardRepository(db),
+		KnowledgeBaseRepo:   repository.NewKnowledgeBaseRepository(db),
+		ModelProviderRepo:   repository.NewModelProviderRepository(db),
+		ModelComparisonRepo: repository.NewModelComparisonRepository(db),
+		ReviewTaskRepo:      repository.NewReviewTaskRepository(db),
+		ChapterVersionRepo:  repository.NewChapterVersionRepository(db),
+		SnapshotRepo:        repository.NewCharacterStateSnapshotRepository(db),
+		UserRepo:            repository.NewUserRepository(db),
+		TenantRepo:          repository.NewTenantRepository(db),
+		TenantUserRepo:      repository.NewTenantUserRepository(db),
+		ArcSummaryRepo:      repository.NewArcSummaryRepository(db),
+		ItemRepo:                 repository.NewItemRepository(db),
+		ChapterItemRepo:          repository.NewChapterItemRepository(db),
+		ChapterCharacterRepo:     repository.NewChapterCharacterRepository(db),
 	}
 }
 
 // Services 服务层
 type Services struct {
-	McpService                *service.McpService
-	NovelService              *service.NovelService
-	ChapterService            *service.ChapterService
-	CharacterService          *service.CharacterService
-	WorldviewService          *service.WorldviewService
-	QualityControlService     *service.QualityControlService
-	VideoService              *service.VideoService
-	ModelService              *service.ModelService
-	PromptService             *service.PromptService
-	ContinuityService         *service.ContinuityService
-	KnowledgeService          *service.KnowledgeService
-	ReviewTaskService         *service.ReviewTaskService
-	ChapterVersionService     *service.ChapterVersionService
-	ForeshadowService         *service.ForeshadowService
-	TimelineService           *service.TimelineService
-	CharacterArcService       *service.CharacterArcService
-	StyleService              *service.StyleService
-	GenerationContextService  *service.GenerationContextService
-	ImageGenerationService    *service.ImageGenerationService
-	StoryboardService         *service.StoryboardService
-	VideoEnhancementService        *service.VideoEnhancementService
-	CharacterConsistencyService    *service.CharacterConsistencyService
-	FrameGeneratorService          *service.FrameGeneratorService
-	ConsistencyValidatorService    *service.ConsistencyValidatorService
-	BGMService                *service.BGMService
-	CrawlerService            *crawler.NovelCrawler
-	NovelImportService        *service.NovelImportService
-	NovelToVideoService       *service.NovelToVideoService
-	AuthService               *service.AuthService
-	TenantService             *service.TenantService
-	SMSService                *service.SMSService
-	OAuthService              *service.OAuthService
-	FrontendURL               string
+	NovelAnalysisService        *service.NovelAnalysisService
+	McpService                  *service.McpService
+	NovelService                *service.NovelService
+	ChapterService              *service.ChapterService
+	CharacterService            *service.CharacterService
+	WorldviewService            *service.WorldviewService
+	QualityControlService       *service.QualityControlService
+	VideoService                *service.VideoService
+	ModelService                *service.ModelService
+	PromptService               *service.PromptService
+	ContinuityService           *service.ContinuityService
+	KnowledgeService            *service.KnowledgeService
+	ReviewTaskService           *service.ReviewTaskService
+	ChapterVersionService       *service.ChapterVersionService
+	ForeshadowService           *service.ForeshadowService
+	TimelineService             *service.TimelineService
+	CharacterArcService         *service.CharacterArcService
+	StyleService                *service.StyleService
+	GenerationContextService    *service.GenerationContextService
+	ImageGenerationService      *service.ImageGenerationService
+	StoryboardService           *service.StoryboardService
+	VideoEnhancementService     *service.VideoEnhancementService
+	CharacterConsistencyService *service.CharacterConsistencyService
+	FrameGeneratorService       *service.FrameGeneratorService
+	ConsistencyValidatorService *service.ConsistencyValidatorService
+	BGMService                  *service.BGMService
+	CrawlerService              *crawler.NovelCrawler
+	NovelImportService          *service.NovelImportService
+	NovelToVideoService         *service.NovelToVideoService
+	AuthService                 *service.AuthService
+	TenantService               *service.TenantService
+	SMSService                  *service.SMSService
+	OAuthService                *service.OAuthService
+	FrontendURL                 string
+	ItemService                 *service.ItemService
 }
 
 // initServices 初始化服务层
@@ -473,7 +494,8 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	// chapterService is wired after generationContextService is built (see below)
 
 	// 角色服务
-	characterService := service.NewCharacterService(repos.CharacterRepo, aiService)
+	characterService := service.NewCharacterService(repos.CharacterRepo, aiService).
+		WithChapterCharacterRepo(repos.ChapterCharacterRepo)
 
 	// 世界观服务
 	worldviewService := service.NewWorldviewService(repos.WorldviewRepo, aiService)
@@ -586,8 +608,9 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	// 爬虫服务
 	crawlerService := crawler.NewNovelCrawler(nil)
 
-	// 导入服务
-	novelImportService := service.NewNovelImportService(repos.NovelRepo, repos.ChapterRepo, crawlerService)
+	// 导入服务（注入叙事记忆服务，爬取后自动生成章节摘要）
+	novelImportService := service.NewNovelImportService(repos.NovelRepo, repos.ChapterRepo, crawlerService).
+		WithNarrativeMemory(narrativeMemoryService)
 
 	// 小说转视频服务
 	novelToVideoService := service.NewNovelToVideoService(
@@ -624,63 +647,79 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	// MCP 服务（直接注入 db，轻量无依赖）
 	mcpService := service.NewMcpService(db)
 
+	// 物品服务
+	itemService := service.NewItemService(repos.ItemRepo, repos.ChapterItemRepo, repos.ChapterRepo, aiService)
+
+	// 小说分析服务
+	novelAnalysisService := service.NewNovelAnalysisService(
+		repos.NovelRepo,
+		repos.ChapterRepo,
+		repos.CharacterRepo,
+		repos.WorldviewRepo,
+		novelService,
+		aiService,
+	).WithItemRepo(repos.ItemRepo)
+
 	return &Services{
-		McpService:                 mcpService,
-		NovelService:               novelService,
-		ChapterService:             chapterService,
-		CharacterService:           characterService,
-		WorldviewService:           worldviewService,
-		QualityControlService:      qualityControlService,
-		VideoService:               videoService,
-		ModelService:               modelService,
-		PromptService:              promptService,
-		ContinuityService:          continuityService,
-		KnowledgeService:           knowledgeService,
-		ReviewTaskService:          reviewTaskService,
-		ChapterVersionService:      chapterVersionService,
-		ForeshadowService:         foreshadowService,
-		TimelineService:            timelineService,
-		CharacterArcService:        characterArcService,
-		StyleService:               styleService,
+		NovelAnalysisService:        novelAnalysisService,
+		McpService:                  mcpService,
+		NovelService:                novelService,
+		ChapterService:              chapterService,
+		CharacterService:            characterService,
+		WorldviewService:            worldviewService,
+		QualityControlService:       qualityControlService,
+		VideoService:                videoService,
+		ModelService:                modelService,
+		PromptService:               promptService,
+		ContinuityService:           continuityService,
+		KnowledgeService:            knowledgeService,
+		ReviewTaskService:           reviewTaskService,
+		ChapterVersionService:       chapterVersionService,
+		ForeshadowService:           foreshadowService,
+		TimelineService:             timelineService,
+		CharacterArcService:         characterArcService,
+		StyleService:                styleService,
 		GenerationContextService:    generationContextService,
-		ImageGenerationService:     imageGenerationService,
-		StoryboardService:          storyboardService,
+		ImageGenerationService:      imageGenerationService,
+		StoryboardService:           storyboardService,
 		VideoEnhancementService:     videoEnhancementService,
 		CharacterConsistencyService: characterConsistencyService,
 		FrameGeneratorService:       frameGeneratorService,
 		ConsistencyValidatorService: consistencyValidatorService,
-		BGMService:                 bgmService,
-		CrawlerService:             crawlerService,
-		NovelImportService:         novelImportService,
-		NovelToVideoService:        novelToVideoService,
-		AuthService:                authService,
-		TenantService:              tenantService,
-		SMSService:                 smsService,
-		OAuthService:               oauthService,
-		FrontendURL:                cfg.Server.FrontendURL,
+		BGMService:                  bgmService,
+		CrawlerService:              crawlerService,
+		NovelImportService:          novelImportService,
+		NovelToVideoService:         novelToVideoService,
+		AuthService:                 authService,
+		TenantService:               tenantService,
+		SMSService:                  smsService,
+		OAuthService:                oauthService,
+		FrontendURL:                 cfg.Server.FrontendURL,
+		ItemService:                 itemService,
 	}
 }
 
 // Handlers 处理器
 type Handlers struct {
-	NovelHandler      *handler.NovelHandler
-	ChapterHandler    *handler.ChapterHandler
-	CharacterHandler  *handler.CharacterHandler
-	VideoHandler      *handler.VideoHandler
-	ModelHandler      *handler.ModelHandler
-	McpHandler        *handler.McpHandler
-	StyleHandler      *handler.StyleHandler
-	ContextHandler    *handler.ContextHandler
-	AuthHandler       *handler.AuthHandler
-	ImportHandler     *handler.ImportHandler
-	WorldviewHandler  *handler.WorldviewHandler
-	TenantHandler     *handler.TenantHandler
+	NovelHandler     *handler.NovelHandler
+	ChapterHandler   *handler.ChapterHandler
+	CharacterHandler *handler.CharacterHandler
+	VideoHandler     *handler.VideoHandler
+	ModelHandler     *handler.ModelHandler
+	McpHandler       *handler.McpHandler
+	StyleHandler     *handler.StyleHandler
+	ContextHandler   *handler.ContextHandler
+	AuthHandler      *handler.AuthHandler
+	ImportHandler    *handler.ImportHandler
+	WorldviewHandler *handler.WorldviewHandler
+	TenantHandler    *handler.TenantHandler
+	ItemHandler      *handler.ItemHandler
 }
 
 // initHandlers 初始化处理器
 func initHandlers(services *Services) *Handlers {
 	return &Handlers{
-		NovelHandler:     handler.NewNovelHandler(
+		NovelHandler: handler.NewNovelHandler(
 			services.NovelService,
 			services.ChapterService,
 			services.ForeshadowService,
@@ -696,24 +735,29 @@ func initHandlers(services *Services) *Handlers {
 			services.CharacterService,
 			services.CharacterArcService,
 			services.ImageGenerationService,
-		),
+		).WithChapterService(services.ChapterService),
 		VideoHandler: handler.NewVideoHandler(
 			services.VideoService,
 			services.StoryboardService,
 			services.VideoEnhancementService,
 			services.CharacterConsistencyService,
 		),
-		ModelHandler: handler.NewModelHandler(services.ModelService),
-		McpHandler:   handler.NewMcpHandler(services.McpService),
-		StyleHandler: handler.NewStyleHandler(services.StyleService),
+		ModelHandler:   handler.NewModelHandler(services.ModelService),
+		McpHandler:     handler.NewMcpHandler(services.McpService),
+		StyleHandler:   handler.NewStyleHandler(services.StyleService),
 		ContextHandler: handler.NewContextHandler(services.GenerationContextService),
 		AuthHandler: handler.NewAuthHandler(services.AuthService).
 			WithSMSService(services.SMSService).
 			WithOAuthService(services.OAuthService).
 			WithFrontendURL(services.FrontendURL),
-		ImportHandler:    handler.NewImportHandler(services.NovelImportService, services.NovelToVideoService),
+		ImportHandler: func() *handler.ImportHandler {
+			h := handler.NewImportHandler(services.NovelImportService, services.NovelToVideoService)
+			h.SetAnalysisService(services.NovelAnalysisService)
+			return h
+		}(),
 		WorldviewHandler: handler.NewWorldviewHandler(services.WorldviewService),
 		TenantHandler:    handler.NewTenantHandler(services.TenantService),
+		ItemHandler:      handler.NewItemHandler(services.ItemService, services.ChapterService),
 	}
 }
 
@@ -724,4 +768,3 @@ func getEnv(key, defaultValue string) string {
 	}
 	return defaultValue
 }
-

@@ -43,6 +43,7 @@ func (h *NovelHandler) CreateNovel(c *gin.Context) {
 		respondBadRequest(c, err.Error())
 		return
 	}
+	req.TenantID = getTenantID(c)
 
 	novel, err := h.novelService.CreateNovel(&req)
 	if err != nil {
@@ -306,4 +307,43 @@ func (h *NovelHandler) BuildTimeline(c *gin.Context) {
 	}
 
 	respondOK(c, timeline)
+}
+
+// SyncCharacterSnapshots 同步章节角色状态快照
+// POST /api/v1/novels/:id/chapters/:chapter_no/character-snapshots
+func (h *NovelHandler) SyncCharacterSnapshots(c *gin.Context) {
+	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid novel id")
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+
+	var req struct {
+		CharacterIDs  []uint `json:"character_ids"`
+		ReusePrevious bool   `json:"reuse_previous"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+
+	chapter, err := h.chapterService.GetChapterByNo(uint(novelId), chapterNo)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+
+	if err := h.novelService.SyncCharacterSnapshots(
+		getTenantID(c), chapter, req.CharacterIDs, req.ReusePrevious,
+	); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondOK(c, gin.H{"message": "character snapshots synced"})
 }

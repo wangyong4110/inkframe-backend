@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -15,6 +16,7 @@ type VideoHandler struct {
 	storyboardService   *service.StoryboardService
 	enhancementService  *service.VideoEnhancementService
 	consistencyService  *service.CharacterConsistencyService
+	capcutService       *service.CapCutService
 }
 
 func NewVideoHandler(
@@ -28,6 +30,7 @@ func NewVideoHandler(
 		storyboardService:  storyboardService,
 		enhancementService: enhancementService,
 		consistencyService: consistencyService,
+		capcutService:      service.NewCapCutService(),
 	}
 }
 
@@ -469,4 +472,37 @@ func (h *VideoHandler) CalculateConsistencyScore(c *gin.Context) {
 	}
 
 	respondOK(c, score)
+}
+
+// ExportCapCutDraft 导出剪映草稿 ZIP
+// GET /api/v1/videos/:id/export/capcut
+func (h *VideoHandler) ExportCapCutDraft(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid video id")
+		return
+	}
+
+	video, err := h.videoService.GetVideo(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "video not found")
+		return
+	}
+
+	shots, err := h.videoService.GetStoryboard(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	result, err := h.capcutService.ExportCapCutDraft(video, shots)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, result.Filename))
+	c.Header("Content-Type", "application/zip")
+	c.Header("Content-Length", strconv.Itoa(len(result.Data)))
+	c.Data(http.StatusOK, "application/zip", result.Data)
 }
