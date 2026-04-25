@@ -94,11 +94,14 @@ storage:
   base_url: ""             # 公开访问域名，如 https://cdn.example.com
 
 # 向量数据库配置（可选，不配置则禁用语义检索）
-# Endpoint/Key 也可通过 $QDRANT_ENDPOINT / $QDRANT_API_KEY 传入
+# type 可选：qdrant | chroma | dashvector
+#   qdrant:      本地/自托管，Endpoint 也可通过 $QDRANT_ENDPOINT / $QDRANT_API_KEY 传入
+#   chroma:      本地开发首选，docker run -p 8000:8000 chromadb/chroma
+#   dashvector:  阿里云全托管向量检索服务，API Key 建议通过 $DASHVECTOR_API_KEY 传入
 vector_db:
-  type: "qdrant"           # qdrant | chroma
+  type: "qdrant"           # qdrant | chroma | dashvector
   endpoint: "http://localhost:6333"
-  api_key: ""
+  api_key: ""              # dashvector 建议留空，改用 $DASHVECTOR_API_KEY 环境变量
   index_name: "inkframe"
 
 # 日志配置

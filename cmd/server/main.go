@@ -302,30 +302,31 @@ func initVideoProviders(cfg *config.Config) map[string]ai.VideoProvider {
 }
 
 // initVectorStore 初始化向量存储
+// 优先使用 config.yaml 的 vector_db 配置；API Key 敏感字段走环境变量。
 func initVectorStore(cfg *config.Config) *vector.StoreManager {
 	manager := vector.NewStoreManager(nil)
 
-	// 注册 Qdrant
-	qdrantStore := vector.NewQdrantStore(
-		getEnv("QDRANT_ENDPOINT", "localhost:6333"),
-		getEnv("QDRANT_API_KEY", ""),
-	)
-	manager.RegisterStore("qdrant", qdrantStore)
-
-	// 注册 Chroma
-	chromaStore := vector.NewChromaStore(
-		getEnv("CHROMA_ENDPOINT", "localhost:8000"),
-	)
-	manager.RegisterStore("chroma", chromaStore)
-
-	// 注册 DashVector（阿里云向量检索服务，配置环境变量后生效）
-	if dashEndpoint := getEnv("DASHVECTOR_ENDPOINT", ""); dashEndpoint != "" {
-		dashStore := vector.NewDashVectorStore(
-			dashEndpoint,
-			getEnv("DASHVECTOR_API_KEY", ""),
-		)
+	switch cfg.VectorDB.Type {
+	case "dashvector":
+		apiKey := getEnv("DASHVECTOR_API_KEY", cfg.VectorDB.APIKey)
+		dashStore := vector.NewDashVectorStore(cfg.VectorDB.Endpoint, apiKey)
 		manager.RegisterStore("dashvector", dashStore)
-		log.Printf("DashVector registered: %s", dashEndpoint)
+		log.Printf("VectorStore: DashVector @ %s", cfg.VectorDB.Endpoint)
+
+	case "chroma":
+		chromaStore := vector.NewChromaStore(cfg.VectorDB.Endpoint)
+		manager.RegisterStore("chroma", chromaStore)
+		log.Printf("VectorStore: Chroma @ %s", cfg.VectorDB.Endpoint)
+
+	default: // "qdrant" 或未填，向后兼容
+		endpoint := getEnv("QDRANT_ENDPOINT", cfg.VectorDB.Endpoint)
+		if endpoint == "" {
+			endpoint = "localhost:6333"
+		}
+		apiKey := getEnv("QDRANT_API_KEY", cfg.VectorDB.APIKey)
+		qdrantStore := vector.NewQdrantStore(endpoint, apiKey)
+		manager.RegisterStore("qdrant", qdrantStore)
+		log.Printf("VectorStore: Qdrant @ %s", endpoint)
 	}
 
 	return manager
