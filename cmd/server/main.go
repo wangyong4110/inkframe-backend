@@ -318,6 +318,16 @@ func initVectorStore(cfg *config.Config) *vector.StoreManager {
 	)
 	manager.RegisterStore("chroma", chromaStore)
 
+	// 注册 DashVector（阿里云向量检索服务，配置环境变量后生效）
+	if dashEndpoint := getEnv("DASHVECTOR_ENDPOINT", ""); dashEndpoint != "" {
+		dashStore := vector.NewDashVectorStore(
+			dashEndpoint,
+			getEnv("DASHVECTOR_API_KEY", ""),
+		)
+		manager.RegisterStore("dashvector", dashStore)
+		log.Printf("DashVector registered: %s", dashEndpoint)
+	}
+
 	return manager
 }
 
