@@ -58,12 +58,17 @@ func main() {
 	repos := initRepositories(db, redisClient)
 
 	// 8. 初始化服务层
-	services := initServices(db, repos, aiManager, vectorStore, cfg)
+	services := initServices(db, repos, aiManager, vectorStore, cfg, redisClient)
 
-	// 9. 初始化处理器
+	// 9. 初始化默认测试账户（仅开发模式）
+	if cfg.Server.Mode != "release" {
+		seedDefaultUser(services)
+	}
+
+	// 10. 初始化处理器
 	handlers := initHandlers(services)
 
-	// 10. 设置路由
+	// 11. 设置路由
 	r := router.SetupRouter(&router.Config{
 		JWTSecret:        cfg.Server.JWTSecret,
 		NovelHandler:     handlers.NovelHandler,
@@ -162,6 +167,46 @@ func initDatabase(cfg *config.Config) (*gorm.DB, error) {
 	sqlDB.SetConnMaxLifetime(time.Hour)
 
 	return db, nil
+}
+
+// seedDefaultUser 创建默认测试账户（幂等，已存在则跳过）
+// 账户信息通过环境变量配置：
+//   SEED_TEST_EMAIL    默认 test@inkframe.dev
+//   SEED_TEST_PASSWORD 必须设置，未设置则跳过
+//   SEED_TEST_USERNAME 默认 testuser
+func seedDefaultUser(services *Services) {
+	password := os.Getenv("SEED_TEST_PASSWORD")
+	if password == "" {
+		log.Println("[seed] SEED_TEST_PASSWORD not set, skipping default user creation")
+		return
+	}
+
+	email := os.Getenv("SEED_TEST_EMAIL")
+	if email == "" {
+		email = "test@inkframe.dev"
+	}
+	username := os.Getenv("SEED_TEST_USERNAME")
+	if username == "" {
+		username = "testuser"
+	}
+
+	_, err := services.AuthService.Register(&service.RegisterRequest{
+		Username:   username,
+		Email:      email,
+		Password:   password,
+		Nickname:   "测试用户",
+		TenantName: "测试租户",
+	})
+	if err != nil {
+		// "email already registered" 表示已存在，不视为错误
+		if err.Error() == "email already registered" {
+			log.Printf("[seed] default user already exists (%s)", email)
+		} else {
+			log.Printf("[seed] failed to create default user: %v", err)
+		}
+		return
+	}
+	log.Printf("[seed] default test user created: %s", email)
 }
 
 // autoMigrate 自动迁移
@@ -410,10 +455,13 @@ type Services struct {
 	NovelToVideoService       *service.NovelToVideoService
 	AuthService               *service.AuthService
 	TenantService             *service.TenantService
+	SMSService                *service.SMSService
+	OAuthService              *service.OAuthService
+	FrontendURL               string
 }
 
 // initServices 初始化服务层
-func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, vectorStore *vector.StoreManager, cfg *config.Config) *Services {
+func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, vectorStore *vector.StoreManager, cfg *config.Config, redisClient *redis.Client) *Services {
 	// AI服务（注入 providerRepo 以支持按租户加载 AK/SK）
 	aiService := service.NewAIService(repos.AIModelRepo, repos.TaskModelConfigRepo, aiManager, repos.ModelProviderRepo)
 
@@ -554,14 +602,21 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		repos.StoryboardRepo,
 	)
 
+	// 短信服务
+	smsService := service.NewSMSService(redisClient, cfg.SMS)
+
+	// OAuth服务
+	oauthService := service.NewOAuthService(cfg.OAuth)
+
 	// 认证服务
 	authService := service.NewAuthService(
+		db,
 		repos.UserRepo,
 		repos.TenantRepo,
 		repos.TenantUserRepo,
 		cfg.Server.JWTSecret,
 		cfg.Server.JWTExpiry,
-	)
+	).WithSMSService(smsService)
 
 	// 租户服务
 	tenantService := service.NewTenantService(repos.TenantRepo, repos.TenantUserRepo)
@@ -600,6 +655,9 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		NovelToVideoService:        novelToVideoService,
 		AuthService:                authService,
 		TenantService:              tenantService,
+		SMSService:                 smsService,
+		OAuthService:               oauthService,
+		FrontendURL:                cfg.Server.FrontendURL,
 	}
 }
 
@@ -649,7 +707,10 @@ func initHandlers(services *Services) *Handlers {
 		McpHandler:   handler.NewMcpHandler(services.McpService),
 		StyleHandler: handler.NewStyleHandler(services.StyleService),
 		ContextHandler: handler.NewContextHandler(services.GenerationContextService),
-		AuthHandler:      handler.NewAuthHandler(services.AuthService),
+		AuthHandler: handler.NewAuthHandler(services.AuthService).
+			WithSMSService(services.SMSService).
+			WithOAuthService(services.OAuthService).
+			WithFrontendURL(services.FrontendURL),
 		ImportHandler:    handler.NewImportHandler(services.NovelImportService, services.NovelToVideoService),
 		WorldviewHandler: handler.NewWorldviewHandler(services.WorldviewService),
 		TenantHandler:    handler.NewTenantHandler(services.TenantService),

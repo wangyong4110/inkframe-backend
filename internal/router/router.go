@@ -43,6 +43,11 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		auth.POST("/register", cfg.AuthHandler.Register)
 		auth.POST("/login", cfg.AuthHandler.Login)
 		auth.POST("/refresh", cfg.AuthHandler.RefreshToken)
+		auth.POST("/sms/send", cfg.AuthHandler.SendSMSCode)
+		auth.POST("/phone/register", cfg.AuthHandler.PhoneRegister)
+		auth.POST("/phone/login", cfg.AuthHandler.PhoneLogin)
+		auth.GET("/oauth/:provider/url", cfg.AuthHandler.OAuthURL)
+		auth.GET("/oauth/:provider/callback", cfg.AuthHandler.OAuthCallback)
 	}
 
 	// 受保护路由（需要JWT）

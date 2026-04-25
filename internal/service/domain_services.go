@@ -1345,9 +1345,10 @@ func (s *TenantService) GetQuota(id uint) (interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
+	quota := tenant.GetQuota()
 	return map[string]interface{}{
 		"tenant_id":  tenant.ID,
-		"max_users":  tenant.MaxUsers,
+		"max_users":  quota.MaxUsers,
 		"used_users": tenant.UsedUsers,
 	}, nil
 }

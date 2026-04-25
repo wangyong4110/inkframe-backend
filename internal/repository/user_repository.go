@@ -43,6 +43,18 @@ func (r *UserRepository) UpdateLastLogin(id uint) error {
 		Update("last_login_at", time.Now()).Error
 }
 
+func (r *UserRepository) GetByPhone(phone string) (*model.User, error) {
+	var user model.User
+	err := r.db.Where("phone = ?", phone).First(&user).Error
+	return &user, err
+}
+
+func (r *UserRepository) GetByOAuth(provider, oauthID string) (*model.User, error) {
+	var user model.User
+	err := r.db.Where("oauth_provider = ? AND oauth_id = ?", provider, oauthID).First(&user).Error
+	return &user, err
+}
+
 // TenantRepository 租户仓库
 type TenantRepository struct {
 	db *gorm.DB

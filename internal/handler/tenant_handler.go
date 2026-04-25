@@ -72,21 +72,30 @@ func (h *TenantHandler) CreateTenant(c *gin.Context) {
 		return
 	}
 
+	if req.Plan == "" {
+		req.Plan = "free"
+	}
+
 	tenant := &model.Tenant{
-		Name:         req.Name,
-		Code:         req.Code,
-		Plan:         req.Plan,
-		MaxUsers:     req.MaxUsers,
+		Name:   req.Name,
+		Code:   req.Code,
+		Plan:   req.Plan,
+		Status: "active",
+	}
+	quota := model.TenantQuota{
+		MaxProjects:  5,
+		MaxStorageMB: 1000,
+		MaxUsers:     3,
+		BillingCycle: "monthly",
+	}
+	if req.MaxUsers > 0 {
+		quota.MaxUsers = req.MaxUsers
+	}
+	tenant.SetQuota(quota)
+	tenant.SetProfile(model.TenantProfile{
 		Description:  req.Description,
 		ContactEmail: req.ContactEmail,
-		Status:       "active",
-	}
-	if tenant.Plan == "" {
-		tenant.Plan = "free"
-	}
-	if tenant.MaxUsers == 0 {
-		tenant.MaxUsers = 3
-	}
+	})
 
 	if err := h.tenantService.CreateTenant(tenant); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
@@ -133,14 +142,21 @@ func (h *TenantHandler) UpdateTenant(c *gin.Context) {
 	if req.Status != "" {
 		tenant.Status = req.Status
 	}
-	if req.MaxUsers > 0 {
-		tenant.MaxUsers = req.MaxUsers
-	}
-	if req.Description != "" {
-		tenant.Description = req.Description
-	}
-	if req.ContactEmail != "" {
-		tenant.ContactEmail = req.ContactEmail
+	if req.MaxUsers > 0 || req.Description != "" || req.ContactEmail != "" {
+		quota := tenant.GetQuota()
+		if req.MaxUsers > 0 {
+			quota.MaxUsers = req.MaxUsers
+		}
+		tenant.SetQuota(quota)
+
+		profile := tenant.GetProfile()
+		if req.Description != "" {
+			profile.Description = req.Description
+		}
+		if req.ContactEmail != "" {
+			profile.ContactEmail = req.ContactEmail
+		}
+		tenant.SetProfile(profile)
 	}
 
 	if err := h.tenantService.UpdateTenant(tenant); err != nil {

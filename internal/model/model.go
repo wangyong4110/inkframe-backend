@@ -85,9 +85,10 @@ type Chapter struct {
 	QualityScore float64 `json:"quality_score" gorm:"type:decimal(5,4)"`
 
 	// 时间戳
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	PublishedAt *time.Time `json:"published_at,omitempty"`
+	CreatedAt   time.Time      `json:"created_at"`
+	UpdatedAt   time.Time      `json:"updated_at"`
+	PublishedAt *time.Time     `json:"published_at,omitempty"`
+	DeletedAt   gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (Chapter) TableName() string {
@@ -166,8 +167,9 @@ type WorldviewEntity struct {
 	Relations   string `json:"relations" gorm:"type:text"`  // JSON
 	ImageURL    string `json:"image_url" gorm:"size:500"`
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (WorldviewEntity) TableName() string {
@@ -222,8 +224,9 @@ type Character struct {
 	Status string `json:"status" gorm:"size:20;default:active"`
 
 	// 时间戳
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (Character) TableName() string {
@@ -322,9 +325,9 @@ type ReferenceNovel struct {
 	CoverImage string `json:"cover_image" gorm:"size:500"`
 
 	// 时间戳
-	CrawledAt time.Time `json:"crawled_at"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CrawledAt *time.Time `json:"crawled_at"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
 }
 
 func (ReferenceNovel) TableName() string {
@@ -374,8 +377,9 @@ type KnowledgeBase struct {
 	// 统计
 	UsageCount int `json:"usage_count" gorm:"default:0"`
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (KnowledgeBase) TableName() string {
@@ -408,8 +412,9 @@ type PromptTemplate struct {
 	IsDefault bool `json:"is_default" gorm:"default:false"`
 	IsActive  bool `json:"is_active" gorm:"default:true"`
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (PromptTemplate) TableName() string {
@@ -440,10 +445,11 @@ type ModelProvider struct {
 	HealthCheck string `json:"health_check" gorm:"size:20;default:ok"`
 	// ok=正常, degraded=降级, down=宕机
 
-	LastChecked time.Time `json:"last_checked"`
+	LastChecked *time.Time `json:"last_checked"`
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (ModelProvider) TableName() string {
@@ -482,8 +488,9 @@ type AIModel struct {
 	IsActive    bool `json:"is_active" gorm:"default:true"`
 	IsAvailable bool `json:"is_available" gorm:"default:true"`
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (AIModel) TableName() string {
@@ -663,8 +670,9 @@ type Video struct {
 	ErrorMessage string `json:"error_message,omitempty" gorm:"type:text"` // 生成失败原因
 	RetryCount   int    `json:"retry_count" gorm:"default:0"`            // 已重试次数
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (Video) TableName() string {
@@ -731,8 +739,9 @@ type StoryboardShot struct {
 	ReferenceImageURL string `json:"reference_image_url" gorm:"size:500"` // 前一镜头最后一帧URL，用于时序连贯
 	FrameImageURL     string `json:"frame_image_url" gorm:"size:500"`      // 本镜头AI图像生成结果URL，传给Kling image-to-video
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (StoryboardShot) TableName() string {
@@ -974,6 +983,7 @@ type CreateNovelRequest struct {
 	Description string `json:"description"`
 	Genre       string `json:"genre" binding:"required"`
 	WorldviewID *uint  `json:"worldview_id"`
+	CoverImage  string `json:"cover_image"`
 }
 
 type UpdateNovelRequest struct {
@@ -1135,8 +1145,9 @@ type McpTool struct {
 	IsSystem     bool   `json:"is_system" gorm:"default:false"` // 系统内置工具不可删除
 	Schema       string `json:"schema" gorm:"type:text"`        // JSON 工具能力描述
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (McpTool) TableName() string {

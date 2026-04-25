@@ -29,6 +29,12 @@ type Config struct {
 
 	// 日志配置
 	Logger LoggerConfig `mapstructure:"logger"`
+
+	// 短信配置
+	SMS SMSConfig `mapstructure:"sms"`
+
+	// OAuth配置
+	OAuth OAuthConfig `mapstructure:"oauth"`
 }
 
 // ServerConfig 服务器配置
@@ -42,6 +48,7 @@ type ServerConfig struct {
 	ShutdownTimeout time.Duration `mapstructure:"shutdown_timeout"`
 	JWTSecret       string        `mapstructure:"jwt_secret"`
 	JWTExpiry       time.Duration `mapstructure:"jwt_expiry"`
+	FrontendURL     string        `mapstructure:"frontend_url"`
 }
 
 // DatabaseConfig 数据库配置
@@ -177,6 +184,36 @@ type LoggerConfig struct {
 	OutputPath string `mapstructure:"output_path"`
 }
 
+// SMSConfig 阿里云短信配置
+type SMSConfig struct {
+	AccessKeyID     string `mapstructure:"access_key_id"`
+	AccessKeySecret string `mapstructure:"access_key_secret"`
+	SignName        string `mapstructure:"sign_name"`
+	TemplateCode    string `mapstructure:"template_code"`
+}
+
+// OAuthProviderConfig OAuth提供商配置
+type OAuthProviderConfig struct {
+	AppID       string `mapstructure:"app_id"`
+	AppSecret   string `mapstructure:"app_secret"`
+	RedirectURI string `mapstructure:"redirect_uri"`
+}
+
+// AlipayConfig 支付宝OAuth配置
+type AlipayConfig struct {
+	AppID       string `mapstructure:"app_id"`
+	PrivateKey  string `mapstructure:"private_key"`
+	PublicKey   string `mapstructure:"public_key"`
+	RedirectURI string `mapstructure:"redirect_uri"`
+}
+
+// OAuthConfig OAuth配置
+type OAuthConfig struct {
+	Wechat OAuthProviderConfig `mapstructure:"wechat"`
+	Alipay AlipayConfig        `mapstructure:"alipay"`
+	Douyin OAuthProviderConfig `mapstructure:"douyin"`
+}
+
 // Load 加载配置
 func Load(configPath string) (*Config, error) {
 	viper.SetConfigFile(configPath)
@@ -210,6 +247,7 @@ func setDefaults() {
 	viper.SetDefault("server.shutdown_timeout", 10*time.Second)
 	viper.SetDefault("server.jwt_secret", "change-me-in-production")
 	viper.SetDefault("server.jwt_expiry", 24*time.Hour)
+	viper.SetDefault("server.frontend_url", "http://localhost:3000")
 
 	// 数据库默认值
 	viper.SetDefault("database.driver", "mysql")

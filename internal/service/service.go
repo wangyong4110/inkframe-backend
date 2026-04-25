@@ -58,6 +58,7 @@ type CreateNovelRequest struct {
 	Description string `json:"description"`
 	Genre       string `json:"genre" binding:"required"`
 	WorldviewID *uint  `json:"worldview_id"`
+	CoverImage  string `json:"cover_image"`
 }
 
 // Create 创建小说
@@ -69,6 +70,7 @@ func (s *NovelService) Create(req *CreateNovelRequest) (*model.Novel, error) {
 		Genre:       req.Genre,
 		Status:      "planning",
 		WorldviewID: req.WorldviewID,
+		CoverImage:  req.CoverImage,
 	}
 
 	if err := s.novelRepo.Create(novel); err != nil {
@@ -111,6 +113,7 @@ func (s *NovelService) CreateNovel(req *model.CreateNovelRequest) (*model.Novel,
 		Description: req.Description,
 		Genre:       req.Genre,
 		WorldviewID: req.WorldviewID,
+		CoverImage:  req.CoverImage,
 	})
 }
 
@@ -1691,7 +1694,7 @@ func (s *VideoService) checkTenantAccess(novelID uint) error {
 	if tenant.Status != "active" {
 		return fmt.Errorf("tenant account is %s", tenant.Status)
 	}
-	if !tenant.ExpiresAt.IsZero() && time.Now().After(tenant.ExpiresAt) {
+	if tenant.ExpiresAt != nil && !tenant.ExpiresAt.IsZero() && time.Now().After(*tenant.ExpiresAt) {
 		return fmt.Errorf("tenant account has expired")
 	}
 	return nil

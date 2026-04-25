@@ -19,38 +19,30 @@ CREATE TABLE `tenants` (
   `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
   `name` VARCHAR(100) NOT NULL COMMENT '租户名称',
   `code` VARCHAR(50) NOT NULL UNIQUE COMMENT '租户代码(唯一标识)',
-  `logo` VARCHAR(500) COMMENT 'Logo URL',
-  `settings` TEXT COMMENT '租户配置JSON',
-  `plan` VARCHAR(20) NOT NULL DEFAULT 'free' COMMENT '套餐: free/pro/enterprise',
   `status` VARCHAR(20) NOT NULL DEFAULT 'active' COMMENT '状态: active/suspended/banned',
-  
-  -- Quotas (配额)
-  `max_projects` INT NOT NULL DEFAULT 5 COMMENT '最大项目数',
-  `max_users` INT NOT NULL DEFAULT 3 COMMENT '最大用户数',
-  `max_storage_mb` INT NOT NULL DEFAULT 1000 COMMENT '最大存储MB',
-  `used_projects` INT NOT NULL DEFAULT 0 COMMENT '已用项目数',
-  `used_users` INT NOT NULL DEFAULT 0 COMMENT '已用用户数',
+  `plan` VARCHAR(20) NOT NULL DEFAULT 'free' COMMENT '套餐: free/pro/enterprise',
+  `expires_at` DATETIME COMMENT '到期时间(NULL=永不过期)',
+
+  -- 使用量（需要原子 UPDATE，保留独立列）
+  `used_projects`   INT NOT NULL DEFAULT 0 COMMENT '已用项目数',
   `used_storage_mb` INT NOT NULL DEFAULT 0 COMMENT '已用存储MB',
-  
-  -- Billing (计费)
-  `billing_cycle` VARCHAR(20) NOT NULL DEFAULT 'monthly' COMMENT '计费周期: monthly/yearly',
-  `expires_at` DATETIME COMMENT '到期时间',
-  
-  -- Contact (联系信息)
-  `description` VARCHAR(500) COMMENT '描述',
-  `contact_email` VARCHAR(100) COMMENT '联系邮箱',
-  `contact_phone` VARCHAR(20) COMMENT '联系电话',
-  
-  -- SEO
-  `meta_title` VARCHAR(200) COMMENT 'SEO标题',
-  `meta_keywords` VARCHAR(500) COMMENT 'SEO关键词',
-  `meta_desc` VARCHAR(500) COMMENT 'SEO描述',
-  
+  `used_users`      INT NOT NULL DEFAULT 0 COMMENT '已用用户数',
+
+  -- 配额上限 + 计费（配置性，合并为 JSON）
+  -- {"max_projects":5,"max_storage_mb":1000,"max_users":3,"billing_cycle":"monthly"}
+  `quota` TEXT COMMENT '配额配置JSON',
+
+  -- 展示信息：logo/描述/联系方式/SEO（合并为 JSON）
+  -- {"logo":"","description":"","contact_email":"","contact_phone":"","meta_title":"","meta_keywords":"","meta_desc":""}
+  `profile` TEXT COMMENT '租户展示信息JSON',
+
+  `deleted_at` DATETIME COMMENT '软删除时间',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  
+
   INDEX `idx_code` (`code`),
-  INDEX `idx_status` (`status`)
+  INDEX `idx_status` (`status`),
+  INDEX `idx_deleted_at` (`deleted_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='租户表';
 
 -- TenantUser table (租户用户关联)
@@ -122,13 +114,15 @@ CREATE TABLE `users` (
   `total_novels` INT NOT NULL DEFAULT 0 COMMENT '总小说数',
   `total_words` INT NOT NULL DEFAULT 0 COMMENT '总字数',
   
+  `deleted_at` DATETIME COMMENT '软删除时间',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `last_login_at` DATETIME COMMENT '最后登录时间',
   
   INDEX `idx_email` (`email`),
   INDEX `idx_phone` (`phone`),
-  INDEX `idx_status` (`status`)
+  INDEX `idx_status` (`status`),
+  INDEX `idx_deleted_at` (`deleted_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表';
 
 -- ============================================
@@ -201,6 +195,7 @@ CREATE TABLE `ink_chapter` (
   `previous_chapter_id` BIGINT UNSIGNED COMMENT '上一章ID',
   `next_chapter_id` BIGINT UNSIGNED COMMENT '下一章ID',
   `quality_score` DECIMAL(5,4) COMMENT '质量评分',
+  `deleted_at` DATETIME COMMENT '软删除时间',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   `published_at` DATETIME COMMENT '发布时间',
@@ -208,7 +203,8 @@ CREATE TABLE `ink_chapter` (
   INDEX `idx_novel_id` (`novel_id`),
   INDEX `idx_tenant_id` (`tenant_id`),
   INDEX `idx_chapter_no` (`chapter_no`),
-  UNIQUE KEY `uk_novel_chapter` (`novel_id`, `chapter_no`)
+  UNIQUE KEY `uk_novel_chapter` (`novel_id`, `chapter_no`),
+  INDEX `idx_deleted_at` (`deleted_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='章节表';
 
 -- PlotPoint table (剧情点)
@@ -264,11 +260,13 @@ CREATE TABLE `ink_character` (
   `background` TEXT COMMENT '背景故事',
   `abilities` TEXT COMMENT '能力JSON数组',
   `character_arc` TEXT COMMENT '角色弧光',
+  `deleted_at` DATETIME COMMENT '软删除时间',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   
   INDEX `idx_novel_id` (`novel_id`),
-  INDEX `idx_tenant_id` (`tenant_id`)
+  INDEX `idx_tenant_id` (`tenant_id`),
+  INDEX `idx_deleted_at` (`deleted_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='角色表';
 
 -- CharacterAppearance table (角色外貌变体)
@@ -354,10 +352,12 @@ CREATE TABLE `ink_worldview_entity` (
   `history` TEXT COMMENT '历史',
   `relationships` TEXT COMMENT '关系JSON',
   `founded_at` VARCHAR(50) COMMENT '创立时间',
+  `deleted_at` DATETIME COMMENT '软删除时间',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   
-  INDEX `idx_worldview_id` (`worldview_id`)
+  INDEX `idx_worldview_id` (`worldview_id`),
+  INDEX `idx_deleted_at` (`deleted_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='世界观实体表';
 
 -- ============================================
@@ -386,12 +386,14 @@ CREATE TABLE `ink_video` (
   `duration` INT COMMENT '时长(秒)',
   `file_size` BIGINT COMMENT '文件大小(字节)',
   `error_message` TEXT COMMENT '错误信息',
+  `deleted_at` DATETIME COMMENT '软删除时间',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   
   INDEX `idx_novel_id` (`novel_id`),
   INDEX `idx_chapter_id` (`chapter_id`),
-  INDEX `idx_status` (`status`)
+  INDEX `idx_status` (`status`),
+  INDEX `idx_deleted_at` (`deleted_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='视频表';
 
 -- StoryboardShot table (分镜)
@@ -415,10 +417,12 @@ CREATE TABLE `ink_storyboard_shot` (
   `negative_prompt` TEXT COMMENT '负面提示词',
   `image_url` VARCHAR(500) COMMENT '生成图片URL',
   `status` VARCHAR(50) NOT NULL DEFAULT 'pending' COMMENT '状态',
+  `deleted_at` DATETIME COMMENT '软删除时间',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   
   INDEX `idx_video_id` (`video_id`),
-  UNIQUE KEY `uk_video_shot` (`video_id`, `shot_no`)
+  UNIQUE KEY `uk_video_shot` (`video_id`, `shot_no`),
+  INDEX `idx_deleted_at` (`deleted_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='分镜表';
 
 -- CharacterVisualDesign table (角色视觉设计)
@@ -473,12 +477,15 @@ CREATE TABLE `ink_model_provider` (
   `health_status` VARCHAR(20) NOT NULL DEFAULT 'unknown' COMMENT '健康状态',
   `health_check_url` VARCHAR(500) COMMENT '健康检查URL',
   `is_enabled` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+  `last_checked` DATETIME COMMENT '最后健康检查时间',
   `settings` TEXT COMMENT '其他设置JSON',
+  `deleted_at` DATETIME COMMENT '软删除时间',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   
   INDEX `idx_type` (`type`),
-  INDEX `idx_health_status` (`health_status`)
+  INDEX `idx_health_status` (`health_status`),
+  INDEX `idx_deleted_at` (`deleted_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型提供商表';
 
 -- AIModel table (AI模型)
@@ -497,12 +504,14 @@ CREATE TABLE `ink_ai_model` (
   `is_active` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
   `is_default` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否默认',
   `settings` TEXT COMMENT '其他设置JSON',
+  `deleted_at` DATETIME COMMENT '软删除时间',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   
   INDEX `idx_provider_id` (`provider_id`),
   INDEX `idx_type` (`type`),
-  INDEX `idx_is_active` (`is_active`)
+  INDEX `idx_is_active` (`is_active`),
+  INDEX `idx_deleted_at` (`deleted_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI模型表';
 
 -- TaskModelConfig table (任务模型配置)
@@ -665,12 +674,14 @@ CREATE TABLE `ink_knowledge_base` (
   `source` VARCHAR(100) COMMENT '来源',
   `tags` TEXT COMMENT '标签JSON',
   `embedding` TEXT COMMENT '向量嵌入',
+  `deleted_at` DATETIME COMMENT '软删除时间',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   
   INDEX `idx_novel_id` (`novel_id`),
   INDEX `idx_tenant_id` (`tenant_id`),
-  INDEX `idx_type` (`type`)
+  INDEX `idx_type` (`type`),
+  INDEX `idx_deleted_at` (`deleted_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='知识库表';
 
 -- PromptTemplate table (提示词模板)
@@ -685,11 +696,13 @@ CREATE TABLE `ink_prompt_template` (
   `is_public` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否公开',
   `created_by` BIGINT UNSIGNED COMMENT '创建人',
   `usage_count` INT NOT NULL DEFAULT 0 COMMENT '使用次数',
+  `deleted_at` DATETIME COMMENT '软删除时间',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   
   INDEX `idx_type` (`type`),
-  INDEX `idx_is_public` (`is_public`)
+  INDEX `idx_is_public` (`is_public`),
+  INDEX `idx_deleted_at` (`deleted_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='提示词模板表';
 
 -- ReferenceNovel table (参考小说)
@@ -704,8 +717,9 @@ CREATE TABLE `ink_reference_novel` (
   `description` TEXT COMMENT '描述',
   `relevance` DECIMAL(3,2) COMMENT '相关度',
   `notes` TEXT COMMENT '备注',
+  `crawled_at` DATETIME COMMENT '抓取时间',
   `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  
+
   INDEX `idx_novel_id` (`novel_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='参考小说表';
 
@@ -766,6 +780,44 @@ INSERT INTO `ink_task_model_config` (`task`, `strategy`, `temperature`, `max_tok
 ('worldview_generation', 'quality_first', 0.8, 8192, 1),
 ('character_generation', 'balanced', 0.75, 4096, 1),
 ('storyboard_generation', 'balanced', 0.7, 4096, 1);
+
+-- MCP Tool table
+DROP TABLE IF EXISTS `ink_mcp_tool`;
+CREATE TABLE `ink_mcp_tool` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `tenant_id` BIGINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '租户ID',
+  `name` VARCHAR(100) NOT NULL UNIQUE COMMENT '工具名称',
+  `display_name` VARCHAR(100) COMMENT '显示名称',
+  `description` TEXT COMMENT '工具描述',
+  `transport_type` VARCHAR(20) COMMENT '传输类型: http/sse/stdio',
+  `endpoint` VARCHAR(500) COMMENT '端点地址',
+  `headers` TEXT COMMENT '请求头JSON',
+  `env` TEXT COMMENT '环境变量JSON(stdio)',
+  `timeout` INT NOT NULL DEFAULT 30 COMMENT '超时秒数',
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+  `is_system` TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否系统内置',
+  `schema` TEXT COMMENT '工具能力描述JSON',
+  `deleted_at` DATETIME COMMENT '软删除时间',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+  INDEX `idx_tenant_id` (`tenant_id`),
+  INDEX `idx_deleted_at` (`deleted_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='MCP工具配置表';
+
+-- MCP Binding table
+DROP TABLE IF EXISTS `ink_model_mcp_binding`;
+CREATE TABLE `ink_model_mcp_binding` (
+  `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  `model_id` BIGINT UNSIGNED NOT NULL COMMENT '模型ID',
+  `tool_id` BIGINT UNSIGNED NOT NULL COMMENT 'MCP工具ID',
+  `enabled` TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+  `created_at` DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+  UNIQUE KEY `uk_model_mcp` (`model_id`, `tool_id`),
+  INDEX `idx_model_id` (`model_id`),
+  INDEX `idx_tool_id` (`tool_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='模型MCP工具绑定表';
 
 -- ============================================
 -- Migration Complete
