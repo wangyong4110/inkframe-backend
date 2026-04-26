@@ -101,6 +101,7 @@ func main() {
 		ItemHandler:      handlers.ItemHandler,
 		SkillHandler:     handlers.SkillHandler,
 		UploadHandler:    handlers.UploadHandler,
+		PlotPointHandler: handlers.PlotPointHandler,
 	})
 
 	// 11. 设置Gin模式
@@ -466,6 +467,7 @@ type Repositories struct {
 	ChapterItemRepo      *repository.ChapterItemRepository
 	ChapterCharacterRepo *repository.ChapterCharacterRepository
 	SkillRepo            *repository.SkillRepository
+	PlotPointRepo        *repository.PlotPointRepository
 }
 
 // initRepositories 初始化仓库层
@@ -493,6 +495,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		ChapterItemRepo:      repository.NewChapterItemRepository(db),
 		ChapterCharacterRepo: repository.NewChapterCharacterRepository(db),
 		SkillRepo:            repository.NewSkillRepository(db),
+		PlotPointRepo:        repository.NewPlotPointRepository(db),
 	}
 }
 
@@ -534,6 +537,7 @@ type Services struct {
 	FrontendURL                 string
 	ItemService                 *service.ItemService
 	SkillService                *service.SkillService
+	PlotPointService            *service.PlotPointService
 }
 
 // initServices 初始化服务层
@@ -541,9 +545,13 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	// AI服务（注入 providerRepo 以支持按租户加载 AK/SK）
 	aiService := service.NewAIService(repos.AIModelRepo, repos.TaskModelConfigRepo, aiManager, repos.ModelProviderRepo)
 
+	// 剧情点服务
+	plotPointService := service.NewPlotPointService(repos.PlotPointRepo, aiService)
+
 	// 小说服务
 	novelService := service.NewNovelService(repos.NovelRepo, repos.ChapterRepo, aiService).
-		WithCharacterRepos(repos.CharacterRepo, repos.SnapshotRepo)
+		WithCharacterRepos(repos.CharacterRepo, repos.SnapshotRepo).
+		WithPlotPointService(plotPointService)
 
 	// 章节服务
 	// chapterService is wired after generationContextService is built (see below)
@@ -756,6 +764,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		FrontendURL:                 cfg.Server.FrontendURL,
 		ItemService:                 itemService,
 		SkillService:                skillService,
+		PlotPointService:            plotPointService,
 	}
 }
 
@@ -776,6 +785,7 @@ type Handlers struct {
 	ItemHandler      *handler.ItemHandler
 	SkillHandler     *handler.SkillHandler
 	UploadHandler    *handler.UploadHandler
+	PlotPointHandler *handler.PlotPointHandler
 }
 
 // initHandlers 初始化处理器
@@ -819,9 +829,10 @@ func initHandlers(services *Services, storageSvc storage.Service) *Handlers {
 		}(),
 		WorldviewHandler: handler.NewWorldviewHandler(services.WorldviewService),
 		TenantHandler:    handler.NewTenantHandler(services.TenantService),
-		ItemHandler:      handler.NewItemHandler(services.ItemService, services.ChapterService),
+		ItemHandler:      handler.NewItemHandler(services.ItemService, services.ChapterService).WithStorage(storageSvc),
 		SkillHandler:     handler.NewSkillHandler(services.SkillService),
 		UploadHandler:    handler.NewUploadHandler(storageSvc),
+		PlotPointHandler: handler.NewPlotPointHandler(services.PlotPointService).WithChapterService(services.ChapterService),
 	}
 }
 

@@ -14,6 +14,9 @@ import (
 	"time"
 )
 
+// ProviderNameVolcengineVisual is the canonical name for the Volcengine Visual AI provider.
+const ProviderNameVolcengineVisual = "volcengine-visual"
+
 // 火山引擎 Visual API 常量
 const (
 	volcengineVisualEndpoint = "https://visual.volcengineapi.com"
@@ -65,7 +68,7 @@ func NewVolcengineVisualProvider(accessKey, secretKey string) *VolcengineVisualP
 	}
 }
 
-func (p *VolcengineVisualProvider) GetName() string { return "volcengine-visual" }
+func (p *VolcengineVisualProvider) GetName() string { return ProviderNameVolcengineVisual }
 
 func (p *VolcengineVisualProvider) GetModels() []string {
 	return []string{

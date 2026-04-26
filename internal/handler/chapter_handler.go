@@ -306,6 +306,32 @@ func (h *ChapterHandler) DeleteChapterByNo(c *gin.Context) {
 	})
 }
 
+// GenerateChapterOutline 为章节生成 AI 大纲
+// POST /api/v1/novels/:id/chapters/:chapter_no/outline
+func (h *ChapterHandler) GenerateChapterOutline(c *gin.Context) {
+	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid novel id")
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		respondBadRequest(c, "invalid chapter no")
+		return
+	}
+	var req struct {
+		Prompt string `json:"prompt"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	chapter, err := h.chapterService.GenerateChapterOutline(getTenantID(c), uint(novelID), chapterNo, req.Prompt)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, chapter)
+}
+
 // GetQualityReport 获取质量报告
 // GET /api/v1/chapters/:id/quality-report
 func (h *ChapterHandler) GetQualityReport(c *gin.Context) {

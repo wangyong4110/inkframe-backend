@@ -264,7 +264,7 @@ func (s *SkillService) GenerateSkillEffect(id uint) (*model.Skill, error) {
 		prompt = buildSkillEffectPrompt(skill)
 	}
 
-	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), 0, "", prompt)
+	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), 0, "", prompt, "")
 	if err != nil {
 		return nil, fmt.Errorf("generate effect image failed: %w", err)
 	}

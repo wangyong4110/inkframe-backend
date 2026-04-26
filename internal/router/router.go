@@ -24,6 +24,7 @@ type Config struct {
 	ItemHandler      *handler.ItemHandler
 	SkillHandler     *handler.SkillHandler
 	UploadHandler    *handler.UploadHandler
+	PlotPointHandler *handler.PlotPointHandler
 }
 
 // SetupRouter 配置路由
@@ -110,6 +111,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.GET("/:id/chapters/:chapter_no", cfg.ChapterHandler.GetChapterByNo)
 			novels.PUT("/:id/chapters/:chapter_no", cfg.ChapterHandler.UpdateChapterByNo)
 			novels.DELETE("/:id/chapters/:chapter_no", cfg.ChapterHandler.DeleteChapterByNo)
+			novels.POST("/:id/chapters/:chapter_no/outline", cfg.ChapterHandler.GenerateChapterOutline)
 			novels.POST("/:id/chapters/:chapter_no/character-snapshots", cfg.NovelHandler.SyncCharacterSnapshots)
 
 			// 大纲
@@ -161,6 +163,11 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				novels.POST("/:id/skills", cfg.SkillHandler.CreateSkill)
 				novels.POST("/:id/skills/generate", cfg.SkillHandler.GenerateSkills)
 			}
+
+			// 剧情点（小说级）
+			if cfg.PlotPointHandler != nil {
+				novels.GET("/:id/plot-points", cfg.PlotPointHandler.ListByNovel)
+			}
 		}
 
 		// 技能（单个技能操作）
@@ -181,8 +188,10 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				items.GET("/:id", cfg.ItemHandler.GetItem)
 				items.PUT("/:id", cfg.ItemHandler.UpdateItem)
 				items.DELETE("/:id", cfg.ItemHandler.DeleteItem)
+				items.POST("/:id/image/upload", cfg.ItemHandler.UploadItemImage)
 				items.POST("/:id/images", cfg.ItemHandler.GenerateItemImage)
 				items.GET("/:id/images/:task_id", cfg.ItemHandler.GetItemImageTaskStatus)
+				items.POST("/:id/reference/upload", cfg.ItemHandler.UploadItemReference)
 			}
 		}
 
@@ -199,6 +208,23 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			chapters.GET("/:id/quality-report", cfg.ChapterHandler.GetQualityReport)
 			chapters.POST("/:id/approve", cfg.ChapterHandler.ApproveChapter)
 			chapters.POST("/:id/reject", cfg.ChapterHandler.RejectChapter)
+
+			// 剧情点（章节级）
+			if cfg.PlotPointHandler != nil {
+				chapters.GET("/:id/plot-points", cfg.PlotPointHandler.ListByChapter)
+				chapters.POST("/:id/plot-points", cfg.PlotPointHandler.Create)
+				chapters.POST("/:id/plot-points/extract", cfg.PlotPointHandler.ExtractFromChapter)
+			}
+		}
+
+		// 剧情点（单条操作）
+		if cfg.PlotPointHandler != nil {
+			plotPoints := v1.Group("/plot-points")
+			{
+				plotPoints.PUT("/:id", cfg.PlotPointHandler.Update)
+				plotPoints.PUT("/:id/resolve", cfg.PlotPointHandler.MarkResolved)
+				plotPoints.DELETE("/:id", cfg.PlotPointHandler.Delete)
+			}
 		}
 
 		// 角色相关

@@ -21,11 +21,12 @@ import (
 
 // NovelService 小说服务
 type NovelService struct {
-	novelRepo     *repository.NovelRepository
-	chapterRepo   *repository.ChapterRepository
-	aiService     *AIService
-	characterRepo *repository.CharacterRepository
-	snapshotRepo  *repository.CharacterStateSnapshotRepository
+	novelRepo        *repository.NovelRepository
+	chapterRepo      *repository.ChapterRepository
+	aiService        *AIService
+	characterRepo    *repository.CharacterRepository
+	snapshotRepo     *repository.CharacterStateSnapshotRepository
+	plotPointService *PlotPointService
 }
 
 func NewNovelService(
@@ -44,6 +45,12 @@ func NewNovelService(
 func (s *NovelService) WithCharacterRepos(characterRepo *repository.CharacterRepository, snapshotRepo *repository.CharacterStateSnapshotRepository) *NovelService {
 	s.characterRepo = characterRepo
 	s.snapshotRepo = snapshotRepo
+	return s
+}
+
+// WithPlotPointService 注入剧情点服务（用于AI提取后保存）
+func (s *NovelService) WithPlotPointService(svc *PlotPointService) *NovelService {
+	s.plotPointService = svc
 	return s
 }
 
@@ -699,41 +706,14 @@ func (s *NovelService) updateNovelStats(novelID uint) {
 	}
 }
 
-// extractPlotPoints 提取剧情点
+// extractPlotPoints 提取剧情点并保存到数据库
 func (s *NovelService) extractPlotPoints(chapter *model.Chapter) {
-	prompt := fmt.Sprintf(`请从以下章节内容中提取关键剧情点，返回JSON数组格式：
-{
-  "plot_points": [
-    {
-      "type": "conflict/climax/resolution/twist/foreshadow",
-      "description": "剧情点描述",
-      "characters": ["角色名1", "角色名2"],
-      "locations": ["地点"]
-    }
-  ]
-}
-章节内容：%s`, chapter.Content)
-
-	result, err := s.aiService.Generate(chapter.NovelID, "plot_extraction", prompt)
-	if err != nil {
+	if s.plotPointService == nil {
 		return
 	}
-
-	var plotResult struct {
-		PlotPoints []struct {
-			Type        string   `json:"type"`
-			Description string   `json:"description"`
-			Characters  []string `json:"characters"`
-			Locations   []string `json:"locations"`
-		} `json:"plot_points"`
+	if _, err := s.plotPointService.ExtractFromChapter(0, chapter); err != nil {
+		log.Printf("extractPlotPoints chapter %d: %v", chapter.ID, err)
 	}
-
-	if err := json.Unmarshal([]byte(result), &plotResult); err != nil {
-		return
-	}
-
-	// 这里可以存储剧情点到数据库
-	_ = plotResult
 }
 
 // providerCacheEntry 提供商缓存条目
@@ -834,15 +814,17 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		return s.aiManager.GetProvider(providerName)
 	}
 
-	// DB 记录存在但 API Key 未填写 → 不可用，降级到内存 aiManager
-	if strings.TrimSpace(matched.APIKey) == "" {
-		log.Printf("getTenantProvider: DB provider %q has no API key, falling back to in-memory manager", matched.Name)
+	// Validate credentials before constructing the provider.
+	if !providerHasCredentials(matched) {
+		log.Printf("getTenantProvider: DB provider %q missing credentials, falling back to in-memory manager", matched.Name)
 		return s.aiManager.GetProvider(providerName)
 	}
 
-	// 按 Name 实例化对应的 AIProvider
+	// Instantiate the provider.
 	var provider ai.AIProvider
 	switch matched.Name {
+	case ai.ProviderNameVolcengineVisual:
+		provider = ai.NewVolcengineVisualProvider(matched.APIKey, matched.APISecretKey)
 	case "openai":
 		provider = ai.NewOpenAIProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion)
 	case "anthropic":
@@ -1109,6 +1091,17 @@ var knownImageCapableProviders = []ai.ImageProviderEntry{
 	{ProviderName: "doubao", Model: "seedream-3-0-t2i-250415", Size: "1024x1024"},
 	{ProviderName: "qianwen", Model: "wanx2.1-t2i-turbo", Size: "1024x1024"},
 	{ProviderName: "openai", Model: "dall-e-3", Size: "1024x1024"},
+	{ProviderName: "volcengine-visual", Model: ai.VolcModelText2ImgV3, Size: "1328x1328"},
+}
+
+// selectImageModel returns the model to use for the given entry. When a reference image
+// is provided for volcengine-visual, DreamO (which supports reference images) is used
+// instead of the default text-to-image model.
+func selectImageModel(entry ai.ImageProviderEntry, referenceImage string) string {
+	if referenceImage != "" && entry.ProviderName == ai.ProviderNameVolcengineVisual {
+		return ai.VolcModelDreamO
+	}
+	return entry.Model
 }
 
 // GenerateCharacterThreeView 使用图像生成 API 生成角色视图图像。
@@ -1116,8 +1109,9 @@ var knownImageCapableProviders = []ai.ImageProviderEntry{
 // knownImageCapableProviders 依次从 DB 动态加载提供者尝试。
 // tenantID=0 表示使用系统级配置。
 // providerName 非空时强制使用该提供者（不再遍历其他候选）。
+// referenceImage 非空时作为参考图传给提供者（用于角色一致性控制）。
 // 失败时返回空字符串 + error，调用方应将其视为非致命错误。
-func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uint, providerName string, prompt string) (string, error) {
+func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uint, providerName, prompt, referenceImage string) (string, error) {
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
 	}
@@ -1153,9 +1147,10 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 			}
 		}
 		resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
-			Model:  entry.Model,
-			Prompt: prompt,
-			Size:   entry.Size,
+			Model:          selectImageModel(*entry, referenceImage),
+			Prompt:         prompt,
+			Size:           entry.Size,
+			ReferenceImage: referenceImage,
 		})
 		if err != nil {
 			return "", err
@@ -1193,9 +1188,10 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 			continue
 		}
 		resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
-			Model:  e.Model,
-			Prompt: prompt,
-			Size:   e.Size,
+			Model:          selectImageModel(e, referenceImage),
+			Prompt:         prompt,
+			Size:           e.Size,
+			ReferenceImage: referenceImage,
 		})
 		if err != nil {
 			lastErr = err
@@ -1873,21 +1869,11 @@ type VideoProvider struct {
 	DisplayName string `json:"display_name"`
 }
 
-// videoProviderDisplayNames maps known provider names to human-readable labels.
-var videoProviderDisplayNames = map[string]string{
-	"kling":    "可灵 (Kling)",
-	"seedance": "Seedance",
-}
-
 // ListVideoProviders returns configured video providers with display names.
 func (s *VideoService) ListVideoProviders() []VideoProvider {
 	result := make([]VideoProvider, 0, len(s.videoProviders))
 	for name := range s.videoProviders {
-		dn := videoProviderDisplayNames[name]
-		if dn == "" {
-			dn = name
-		}
-		result = append(result, VideoProvider{Name: name, DisplayName: dn})
+		result = append(result, VideoProvider{Name: name, DisplayName: capableProviderDisplayName(name, "")})
 	}
 	return result
 }

@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"fmt"
+	"log"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -107,6 +109,9 @@ func (s *ItemService) UpdateItem(id uint, req *model.UpdateItemRequest) (*model.
 	if req.ImageURL != "" {
 		item.ImageURL = req.ImageURL
 	}
+	if req.ReferenceImageURL != "" {
+		item.ReferenceImageURL = req.ReferenceImageURL
+	}
 	if req.Status != "" {
 		item.Status = req.Status
 	}
@@ -119,23 +124,32 @@ func (s *ItemService) DeleteItem(id uint) error {
 }
 
 // GenerateItemImage 为物品生成图像
-// referenceImageURL 可选：用户上传的参考图 URL，会附加到 prompt 供 AI 参考
+// referenceImageURL 可选：用户上传的参考图 URL（已存入 OSS），作为 AI 参考图使用
 // provider 可选：指定使用的图像生成提供者，空字符串 = 自动选择
-func (s *ItemService) GenerateItemImage(id uint, referenceImageURL, provider string) (*model.Item, error) {
+func (s *ItemService) GenerateItemImage(tenantID, id uint, referenceImageURL, provider string) (*model.Item, error) {
 	item, err := s.itemRepo.GetByID(id)
 	if err != nil {
 		return nil, fmt.Errorf("item not found: %w", err)
 	}
 	prompt := item.VisualPrompt
 	if prompt == "" {
-		prompt = fmt.Sprintf("%s, %s, fantasy item illustration, high detail, concept art", item.Name, item.Appearance)
+		prompt = fmt.Sprintf("%s，%s，奇幻物品插画，精细细节，概念艺术", item.Name, item.Appearance)
 	}
+	// Persist new reference URL; fall back to previously saved one.
 	if referenceImageURL != "" {
-		// 将参考图 URL 持久化到 item，供后续查看；同时附加到 prompt 提示词
-		item.VisualPrompt = prompt
-		prompt = fmt.Sprintf("%s, based on reference image: %s", prompt, referenceImageURL)
+		item.ReferenceImageURL = referenceImageURL
 	}
-	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), 0, provider, prompt+", item design, no background, studio lighting")
+	// Only absolute HTTP(S) URLs can be fetched by remote AI APIs; skip local/relative paths.
+	aiRefURL := item.ReferenceImageURL
+	if !strings.HasPrefix(aiRefURL, "http://") && !strings.HasPrefix(aiRefURL, "https://") {
+		aiRefURL = ""
+	}
+	if aiRefURL != "" {
+		log.Printf("GenerateItemImage: item=%d using reference image %s", id, aiRefURL)
+	} else {
+		log.Printf("GenerateItemImage: item=%d no valid reference image, generating without reference", id)
+	}
+	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL)
 	if err != nil {
 		return nil, fmt.Errorf("generate image failed: %w", err)
 	}

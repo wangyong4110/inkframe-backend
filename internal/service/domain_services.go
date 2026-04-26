@@ -89,6 +89,9 @@ func (s *ChapterService) UpdateChapter(id uint, req *model.UpdateChapterRequest)
 	if req.ChapterHook != "" {
 		chapter.ChapterHook = req.ChapterHook
 	}
+	if req.Outline != "" {
+		chapter.Outline = req.Outline
+	}
 	return chapter, s.chapterRepo.Update(chapter)
 }
 
@@ -115,7 +118,66 @@ func (s *ChapterService) UpdateChapterByNo(novelID uint, chapterNo int, req *mod
 	if req.ChapterHook != "" {
 		chapter.ChapterHook = req.ChapterHook
 	}
+	if req.Outline != "" {
+		chapter.Outline = req.Outline
+	}
 	return chapter, s.chapterRepo.Update(chapter)
+}
+
+// GenerateChapterOutline 用 AI 为指定章节生成大纲（概述性文字，非场景 JSON）
+func (s *ChapterService) GenerateChapterOutline(tenantID, novelID uint, chapterNo int, extraPrompt string) (*model.Chapter, error) {
+	novel, err := s.novelRepo.GetByID(novelID)
+	if err != nil {
+		return nil, err
+	}
+	chapter, err := s.chapterRepo.GetByNovelAndChapterNo(novelID, chapterNo)
+	if err != nil {
+		return nil, err
+	}
+
+	// 构建上下文：近期章节摘要
+	var recentCtx string
+	if s.narrativeSvc != nil {
+		if ctx, err := s.narrativeSvc.BuildHierarchicalContext(novelID, chapterNo); err == nil {
+			recentCtx = ctx
+		}
+	}
+
+	recentCtxSection := ""
+	if recentCtx != "" {
+		recentCtxSection = "叙事上下文：\n" + recentCtx
+	}
+	extraPromptSection := ""
+	if extraPrompt != "" {
+		extraPromptSection = "补充要求：" + extraPrompt
+	}
+
+	prompt := fmt.Sprintf(`请为小说《%s》第%d章生成一段简洁的章节大纲（200字以内）。
+
+小说简介：%s
+章节标题：%s
+%s
+%s
+
+要求：
+- 概述本章的核心情节和转折
+- 点明主要人物行动与目标
+- 语言简练，不超过200字
+- 直接输出大纲文本，不要加前缀或说明`,
+		novel.Title, chapterNo, novel.Description, chapter.Title,
+		recentCtxSection, extraPromptSection,
+	)
+
+	outline, err := s.aiService.GenerateWithProvider(tenantID, novelID, "chapter_outline", prompt, "")
+	if err != nil {
+		return nil, err
+	}
+
+	chapter.Outline = strings.TrimSpace(outline)
+	if err := s.chapterRepo.Update(chapter); err != nil {
+		return nil, err
+	}
+	return chapter, nil
 }
 
 func (s *ChapterService) DeleteChapterByNo(novelID uint, chapterNo int) error {
@@ -951,11 +1013,11 @@ func (s *ImageGenerationService) GenerateCharacterImage(req *model.GenerateImage
 // viewType: "front" | "side" | "back"
 // referenceImage: 肖像参考图 URL（用于 IP-Adapter 保持面部一致性，可为空）
 // provider: 指定图像生成提供者（可为空，空时自动选择）
-func (s *ImageGenerationService) GenerateThreeViewImage(name, appearance, viewType, style, referenceImage, provider string) (*GeneratedCharacterImage, error) {
+func (s *ImageGenerationService) GenerateThreeViewImage(tenantID uint, name, appearance, viewType, style, referenceImage, provider string) (*GeneratedCharacterImage, error) {
 	viewDesc := map[string]string{
-		"front": "front view, facing forward, full body, character reference sheet",
-		"side":  "side view, profile view, full body, character reference sheet",
-		"back":  "back view, facing away, full body, character reference sheet",
+		"front": "正面，面朝前方，全身，角色设定参考图",
+		"side":  "侧面，侧身视角，全身，角色设定参考图",
+		"back":  "背面，背对观察者，全身，角色设定参考图",
 	}
 	angleDesc, ok := viewDesc[viewType]
 	if !ok {
@@ -963,13 +1025,20 @@ func (s *ImageGenerationService) GenerateThreeViewImage(name, appearance, viewTy
 	}
 	styleStr := style
 	if styleStr == "" {
-		styleStr = "anime"
+		styleStr = "动漫"
 	}
-	prompt := fmt.Sprintf("%s, %s, %s, %s style, white background, clean lines, high quality", name, appearance, angleDesc, styleStr)
-	if referenceImage != "" {
-		prompt += ", consistent with reference portrait"
+	prompt := fmt.Sprintf("%s，%s，%s，%s风格，白色背景，线条清晰，高品质", name, appearance, angleDesc, styleStr)
+	// Only pass an absolute HTTP(S) URL to the AI — local/relative paths cannot be fetched by remote APIs.
+	aiRef := referenceImage
+	if !strings.HasPrefix(aiRef, "http://") && !strings.HasPrefix(aiRef, "https://") {
+		aiRef = ""
 	}
-	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), 0, provider, prompt)
+	if aiRef != "" {
+		log.Printf("GenerateThreeViewImage: %s/%s using reference image %s", name, viewType, aiRef)
+	} else {
+		log.Printf("GenerateThreeViewImage: %s/%s no valid reference image", name, viewType)
+	}
+	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, prompt, aiRef)
 	if err != nil {
 		return nil, err
 	}
@@ -1189,21 +1258,72 @@ type CapableProvider struct {
 	DisplayName string `json:"display_name"`
 }
 
+// providerDisplayNames maps well-known provider names to human-readable labels.
+var providerDisplayNames = map[string]string{
+	"openai":            "OpenAI",
+	"claude":            "Claude (Anthropic)",
+	"anthropic":         "Claude (Anthropic)",
+	"deepseek":          "DeepSeek",
+	"doubao":            "豆包 (Doubao)",
+	"qianwen":           "通义千问 (Qianwen)",
+	"gemini":            "Gemini (Google)",
+	"google":            "Gemini (Google)",
+	"kling":             "可灵 (Kling)",
+	"seedance":          "Seedance",
+	ai.ProviderNameVolcengineVisual: "火山引擎图像",
+}
+
+// providerHasCredentials reports whether p has all required credentials.
+// volcengine-visual uses AK/SK (two fields); all other providers use a single APIKey.
+func providerHasCredentials(p *model.ModelProvider) bool {
+	if p.Name == ai.ProviderNameVolcengineVisual {
+		return strings.TrimSpace(p.APIKey) != "" && strings.TrimSpace(p.APISecretKey) != ""
+	}
+	return strings.TrimSpace(p.APIKey) != ""
+}
+
+func capableProviderDisplayName(providerName, dbDisplayName string) string {
+	if dbDisplayName != "" {
+		return dbDisplayName
+	}
+	if dn := providerDisplayNames[providerName]; dn != "" {
+		return dn
+	}
+	return providerName
+}
+
 // listCapableProviders fetches all active, key-bearing providers for the tenant
 // and returns those whose name appears in the capableNames set.
+// It merges DB-configured providers with providers registered via env vars in aiManager.
 func (s *ModelService) listCapableProviders(tenantID uint, capableNames map[string]bool) ([]CapableProvider, error) {
 	providers, err := s.providerRepo.ListByTenant(tenantID)
 	if err != nil {
 		return nil, err
 	}
+	seen := make(map[string]bool)
 	var result []CapableProvider
 	for _, p := range providers {
-		if capableNames[p.Name] && p.IsActive && strings.TrimSpace(p.APIKey) != "" {
-			name := p.DisplayName
-			if name == "" {
-				name = p.Name
+		if !capableNames[p.Name] || !p.IsActive {
+			continue
+		}
+		if providerHasCredentials(p) {
+			result = append(result, CapableProvider{
+				Name:        p.Name,
+				DisplayName: capableProviderDisplayName(p.Name, p.DisplayName),
+			})
+			seen[p.Name] = true
+		}
+	}
+	// Also include providers registered at startup via env vars (aiManager).
+	if s.aiService != nil && s.aiService.aiManager != nil {
+		for _, name := range s.aiService.aiManager.ListProviders() {
+			if capableNames[name] && !seen[name] {
+				result = append(result, CapableProvider{
+					Name:        name,
+					DisplayName: capableProviderDisplayName(name, ""),
+				})
+				seen[name] = true
 			}
-			result = append(result, CapableProvider{Name: p.Name, DisplayName: name})
 		}
 	}
 	return result, nil
@@ -1220,7 +1340,7 @@ func (s *ModelService) ListLLMCapableProviders(tenantID uint) ([]CapableProvider
 // ListImageCapableProviders returns active, key-bearing providers that support image generation.
 func (s *ModelService) ListImageCapableProviders(tenantID uint) ([]CapableProvider, error) {
 	return s.listCapableProviders(tenantID, map[string]bool{
-		"openai": true, "doubao": true, "qianwen": true, "volcengine-visual": true,
+		"openai": true, "doubao": true, "qianwen": true, ai.ProviderNameVolcengineVisual: true,
 	})
 }
 

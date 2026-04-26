@@ -6,17 +6,26 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
+	"github.com/inkframe/inkframe-backend/internal/storage"
 )
 
 // ItemHandler 物品处理器
 type ItemHandler struct {
 	itemService *service.ItemService
 	chapterSvc  *service.ChapterService
+	storageSvc  storage.Service
 }
 
 func NewItemHandler(itemService *service.ItemService, chapterSvc *service.ChapterService) *ItemHandler {
 	return &ItemHandler{itemService: itemService, chapterSvc: chapterSvc}
+}
+
+// WithStorage 注入存储服务（可选，用于参考图上传）
+func (h *ItemHandler) WithStorage(svc storage.Service) *ItemHandler {
+	h.storageSvc = svc
+	return h
 }
 
 // ListItems GET /novels/:id/items
@@ -122,6 +131,7 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 	taskID := newTaskID("img")
 	itemID := uint(id)
 	refURL, provider := req.ReferenceImageURL, req.Provider
+	tenantID := getTenantID(c)
 
 	task := &AsyncTask{TaskID: taskID, Status: taskStatusPending, CreatedAt: time.Now().Unix()}
 	itemImageTasks.store(task)
@@ -129,7 +139,7 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 	go func() {
 		task.Status = taskStatusRunning
 		itemImageTasks.store(task)
-		item, err := h.itemService.GenerateItemImage(itemID, refURL, provider)
+		item, err := h.itemService.GenerateItemImage(tenantID, itemID, refURL, provider)
 		if err != nil {
 			task.Status = taskStatusFailed
 			task.Error = err.Error()
@@ -246,4 +256,52 @@ func (h *ItemHandler) DeleteChapterItem(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"message": "chapter item deleted"})
+}
+
+// UploadItemImage 上传物品图片到 OSS，保存 URL 到 item.ImageURL
+// POST /api/v1/items/:id/image/upload
+func (h *ItemHandler) UploadItemImage(c *gin.Context) {
+	if h.storageSvc == nil {
+		respondErr(c, http.StatusServiceUnavailable, "storage not configured")
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid item id")
+		return
+	}
+	imgURL, ok := receiveAndUpload(c, "item-images", h.storageSvc)
+	if !ok {
+		return
+	}
+	item, err := h.itemService.UpdateItem(uint(id), &model.UpdateItemRequest{ImageURL: imgURL})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to save image url")
+		return
+	}
+	respondOK(c, gin.H{"url": imgURL, "item": item})
+}
+
+// UploadItemReference 上传物品参考图到 OSS，保存 URL 到 item.ReferenceImageURL
+// POST /api/v1/items/:id/reference/upload
+func (h *ItemHandler) UploadItemReference(c *gin.Context) {
+	if h.storageSvc == nil {
+		respondErr(c, http.StatusServiceUnavailable, "storage not configured")
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid item id")
+		return
+	}
+	refURL, ok := receiveAndUpload(c, "item-references", h.storageSvc)
+	if !ok {
+		return
+	}
+	item, err := h.itemService.UpdateItem(uint(id), &model.UpdateItemRequest{ReferenceImageURL: refURL})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to save reference image url")
+		return
+	}
+	respondOK(c, gin.H{"url": refURL, "item": item})
 }

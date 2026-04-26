@@ -2,17 +2,12 @@ package handler
 
 import (
 	"encoding/json"
-	"fmt"
-	"mime"
 	"net/http"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 	"github.com/inkframe/inkframe-backend/internal/storage"
@@ -299,6 +294,7 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 	task := &AsyncTask{TaskID: taskID, Status: taskStatusPending, CreatedAt: time.Now().Unix()}
 	threeViewTasks.store(task)
 
+	tenantID := getTenantID(c)
 	go func(charID uint, char *model.Character, viewType, style, provider string) {
 		task.Status = taskStatusRunning
 		threeViewTasks.store(task)
@@ -320,7 +316,7 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 			wg.Add(1)
 			go func(v string) {
 				defer wg.Done()
-				img, err := h.imageGenService.GenerateThreeViewImage(char.Name, char.Appearance, v, style, char.Portrait, provider)
+				img, err := h.imageGenService.GenerateThreeViewImage(tenantID, char.Name, char.Appearance, v, style, char.Portrait, provider)
 				if err != nil {
 					resultCh <- viewResult{view: v, err: err}
 					return
@@ -392,29 +388,8 @@ func (h *CharacterHandler) UploadPortrait(c *gin.Context) {
 		return
 	}
 
-	file, header, err := c.Request.FormFile("file")
-	if err != nil {
-		respondBadRequest(c, "no file uploaded")
-		return
-	}
-	defer file.Close()
-
-	ext := strings.ToLower(filepath.Ext(header.Filename))
-	allowed := map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".webp": true}
-	if !allowed[ext] {
-		respondBadRequest(c, "only jpg/png/webp images are allowed")
-		return
-	}
-
-	contentType := mime.TypeByExtension(ext)
-	if contentType == "" {
-		contentType = "image/jpeg"
-	}
-
-	objectKey := fmt.Sprintf("portraits/%s%s", uuid.New().String(), ext)
-	portraitURL, err := h.storageSvc.Upload(c.Request.Context(), objectKey, file, header.Size, contentType)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to upload portrait")
+	portraitURL, ok := receiveAndUpload(c, "portraits", h.storageSvc)
+	if !ok {
 		return
 	}
 

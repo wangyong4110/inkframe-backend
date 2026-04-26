@@ -104,6 +104,8 @@ func (Chapter) TableName() string {
 // PlotPoint 剧情点
 type PlotPoint struct {
 	ID        uint     `json:"id" gorm:"primaryKey"`
+	TenantID  uint     `json:"tenant_id" gorm:"index"`
+	NovelID   uint     `json:"novel_id" gorm:"index;not null"`
 	ChapterID uint     `json:"chapter_id" gorm:"index;not null"`
 	Chapter   *Chapter `json:"chapter,omitempty" gorm:"foreignKey:ChapterID"`
 	Type      string   `json:"type" gorm:"size:50"`
@@ -118,6 +120,16 @@ type PlotPoint struct {
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// UpdatePlotPointRequest 更新剧情点请求
+type UpdatePlotPointRequest struct {
+	Type        string   `json:"type"`
+	Description string   `json:"description"`
+	Characters  []string `json:"characters"`
+	Locations   []string `json:"locations"`
+	IsResolved  *bool    `json:"is_resolved"`
+	ResolvedIn  *uint    `json:"resolved_in"`
 }
 
 func (PlotPoint) TableName() string {
@@ -997,8 +1009,9 @@ type Item struct {
 	Significance string `json:"significance" gorm:"type:text"` // 在故事中的重要性
 	Abilities    string `json:"abilities" gorm:"type:text"`  // JSON: [{name, description}]
 
-	ImageURL     string `json:"image_url" gorm:"size:1000"`
-	VisualPrompt string `json:"visual_prompt" gorm:"type:text"` // 用于 AI 图像生成的英文提示词
+	ImageURL         string `json:"image_url" gorm:"size:1000"`
+	VisualPrompt     string `json:"visual_prompt" gorm:"type:text"` // 用于 AI 图像生成的英文提示词
+	ReferenceImageURL string `json:"reference_image_url" gorm:"size:1000"` // 参考图 URL（已上传到 OSS）
 
 	Status string `json:"status" gorm:"size:20;default:active"` // active/lost/destroyed/unknown
 
@@ -1066,6 +1079,7 @@ type UpdateChapterRequest struct {
 	Title       string `json:"title"`
 	Content     string `json:"content"`
 	ChapterHook string `json:"chapter_hook"`
+	Outline     string `json:"outline"`
 }
 
 type GenerateChapterRequest struct {
@@ -1283,9 +1297,10 @@ type UpdateItemRequest struct {
 	Owner        string `json:"owner"`
 	Significance string `json:"significance"`
 	Abilities    string `json:"abilities"`
-	VisualPrompt string `json:"visual_prompt"`
-	ImageURL     string `json:"image_url"`
-	Status       string `json:"status"`
+	VisualPrompt      string `json:"visual_prompt"`
+	ImageURL          string `json:"image_url"`
+	ReferenceImageURL string `json:"reference_image_url"`
+	Status            string `json:"status"`
 }
 
 type UpsertChapterItemRequest struct {
