@@ -22,6 +22,7 @@ type Config struct {
 	WorldviewHandler *handler.WorldviewHandler
 	TenantHandler    *handler.TenantHandler
 	ItemHandler      *handler.ItemHandler
+	SkillHandler     *handler.SkillHandler
 }
 
 // SetupRouter 配置路由
@@ -143,6 +144,23 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.GET("/:id/chapters/:chapter_no/characters", cfg.CharacterHandler.ListEffectiveCharacters)
 			novels.POST("/:id/chapters/:chapter_no/characters/:character_id", cfg.CharacterHandler.UpsertChapterCharacter)
 			novels.DELETE("/:id/chapters/:chapter_no/characters/:character_id", cfg.CharacterHandler.DeleteChapterCharacter)
+
+			// 技能管理
+			if cfg.SkillHandler != nil {
+				novels.GET("/:id/skills", cfg.SkillHandler.ListSkills)
+				novels.POST("/:id/skills", cfg.SkillHandler.CreateSkill)
+				novels.POST("/:id/skills/generate", cfg.SkillHandler.GenerateSkills)
+			}
+		}
+
+		// 技能（单个技能操作）
+		if cfg.SkillHandler != nil {
+			skills := v1.Group("/skills")
+			{
+				skills.GET("/:skillId", cfg.SkillHandler.GetSkill)
+				skills.PUT("/:skillId", cfg.SkillHandler.UpdateSkill)
+				skills.DELETE("/:skillId", cfg.SkillHandler.DeleteSkill)
+			}
 		}
 
 		// 物品（单个物品操作）

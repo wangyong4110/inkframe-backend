@@ -86,6 +86,7 @@ func main() {
 		WorldviewHandler: handlers.WorldviewHandler,
 		TenantHandler:    handlers.TenantHandler,
 		ItemHandler:      handlers.ItemHandler,
+		SkillHandler:     handlers.SkillHandler,
 	})
 
 	// 11. 设置Gin模式
@@ -258,6 +259,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.Item{},
 		&model.ChapterItem{},
 		&model.ChapterCharacter{},
+		&model.Skill{},
 	)
 }
 
@@ -413,6 +415,7 @@ type Repositories struct {
 	ItemRepo                 *repository.ItemRepository
 	ChapterItemRepo          *repository.ChapterItemRepository
 	ChapterCharacterRepo     *repository.ChapterCharacterRepository
+	SkillRepo                *repository.SkillRepository
 }
 
 // initRepositories 初始化仓库层
@@ -439,6 +442,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		ItemRepo:                 repository.NewItemRepository(db),
 		ChapterItemRepo:          repository.NewChapterItemRepository(db),
 		ChapterCharacterRepo:     repository.NewChapterCharacterRepository(db),
+		SkillRepo:                repository.NewSkillRepository(db),
 	}
 }
 
@@ -479,6 +483,7 @@ type Services struct {
 	OAuthService                *service.OAuthService
 	FrontendURL                 string
 	ItemService                 *service.ItemService
+	SkillService                *service.SkillService
 }
 
 // initServices 初始化服务层
@@ -650,6 +655,9 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	// 物品服务
 	itemService := service.NewItemService(repos.ItemRepo, repos.ChapterItemRepo, repos.ChapterRepo, aiService)
 
+	// 技能服务
+	skillService := service.NewSkillService(repos.SkillRepo, repos.CharacterRepo, repos.NovelRepo, aiService)
+
 	// 小说分析服务
 	novelAnalysisService := service.NewNovelAnalysisService(
 		repos.NovelRepo,
@@ -658,7 +666,8 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		repos.WorldviewRepo,
 		novelService,
 		aiService,
-	).WithItemRepo(repos.ItemRepo)
+	).WithItemRepo(repos.ItemRepo).
+		WithSkillService(skillService)
 
 	return &Services{
 		NovelAnalysisService:        novelAnalysisService,
@@ -696,6 +705,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		OAuthService:                oauthService,
 		FrontendURL:                 cfg.Server.FrontendURL,
 		ItemService:                 itemService,
+		SkillService:                skillService,
 	}
 }
 
@@ -714,6 +724,7 @@ type Handlers struct {
 	WorldviewHandler *handler.WorldviewHandler
 	TenantHandler    *handler.TenantHandler
 	ItemHandler      *handler.ItemHandler
+	SkillHandler     *handler.SkillHandler
 }
 
 // initHandlers 初始化处理器
@@ -758,6 +769,7 @@ func initHandlers(services *Services) *Handlers {
 		WorldviewHandler: handler.NewWorldviewHandler(services.WorldviewService),
 		TenantHandler:    handler.NewTenantHandler(services.TenantService),
 		ItemHandler:      handler.NewItemHandler(services.ItemService, services.ChapterService),
+		SkillHandler:     handler.NewSkillHandler(services.SkillService),
 	}
 }
 

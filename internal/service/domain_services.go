@@ -150,27 +150,44 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		return nil, err
 	}
 
-	// ── Step 4: 存储章节 ──────────────────────────────────
+	// ── Step 4: 存储章节 (upsert: update if placeholder exists) ──────────────
 	title := suggestedTitle
 	if title == "" {
 		title = fmt.Sprintf("第%d章", req.ChapterNo)
 	}
-	chapter := &model.Chapter{
-		UUID:          uuid.New().String(),
-		NovelID:       novelID,
-		ChapterNo:     req.ChapterNo,
-		Title:         title,
-		Content:       content,
-		WordCount:     countChineseChars(content),
-		SceneOutline:  sceneOutlineJSON,
-		TensionLevel:  chapterMeta.tensionLevel,
-		ActNo:         chapterMeta.actNo,
-		EmotionalTone: chapterMeta.emotionalTone,
-		HookType:      chapterMeta.hookType,
-		Status:        "completed",
-	}
-	if err := s.chapterRepo.Create(chapter); err != nil {
-		return nil, err
+	var chapter *model.Chapter
+	if existing, _ := s.chapterRepo.GetByNovelAndChapterNo(novelID, req.ChapterNo); existing != nil {
+		existing.Title = title
+		existing.Content = content
+		existing.WordCount = countChineseChars(content)
+		existing.SceneOutline = sceneOutlineJSON
+		existing.TensionLevel = chapterMeta.tensionLevel
+		existing.ActNo = chapterMeta.actNo
+		existing.EmotionalTone = chapterMeta.emotionalTone
+		existing.HookType = chapterMeta.hookType
+		existing.Status = "completed"
+		if err := s.chapterRepo.Update(existing); err != nil {
+			return nil, err
+		}
+		chapter = existing
+	} else {
+		chapter = &model.Chapter{
+			UUID:          uuid.New().String(),
+			NovelID:       novelID,
+			ChapterNo:     req.ChapterNo,
+			Title:         title,
+			Content:       content,
+			WordCount:     countChineseChars(content),
+			SceneOutline:  sceneOutlineJSON,
+			TensionLevel:  chapterMeta.tensionLevel,
+			ActNo:         chapterMeta.actNo,
+			EmotionalTone: chapterMeta.emotionalTone,
+			HookType:      chapterMeta.hookType,
+			Status:        "completed",
+		}
+		if err := s.chapterRepo.Create(chapter); err != nil {
+			return nil, err
+		}
 	}
 
 	// ── Step 5: 异步后处理 ───────────────────────────────

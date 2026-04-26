@@ -1315,6 +1315,95 @@ type UpsertChapterCharacterRequest struct {
 	Notes       string `json:"notes"`
 }
 
+// ─── Skill 技能 ─────────────────────────────────────────────────────────────────
+
+// Skill 技能（归属于角色，或作为世界级别的公共技能）
+// category: 武技/法术/身法/心法/阵法/神通/秘法/特性
+// skill_type: active(主动)/passive(被动)/toggle(切换)/ultimate(绝技)
+// status: active/sealed(封印)/lost(失传)/disabled(禁用)
+type Skill struct {
+	ID          uint   `json:"id" gorm:"primaryKey"`
+	NovelID     uint   `json:"novel_id" gorm:"index;not null"`
+	CharacterID *uint  `json:"character_id" gorm:"index"` // nil = 世界/未分配技能
+	ParentID    *uint  `json:"parent_id" gorm:"index"`    // 前置技能（技能树）
+
+	Name       string `json:"name" gorm:"size:100;not null"`
+	Category   string `json:"category" gorm:"size:50"`  // 武技/法术/身法/心法/阵法/神通/秘法/特性
+	SkillType  string `json:"skill_type" gorm:"size:30"` // active/passive/toggle/ultimate
+	Level      int    `json:"level" gorm:"default:1"`
+	MaxLevel   int    `json:"max_level" gorm:"default:10"`
+	Realm      string `json:"realm" gorm:"size:50"` // 修炼境界要求：练气/筑基/金丹/元婴…
+
+	Description string `json:"description" gorm:"type:text"` // 技能概述
+	Effect      string `json:"effect" gorm:"type:text"`      // 效果详情
+	FlavorText  string `json:"flavor_text" gorm:"type:text"` // 世界观文字（小说内描述）
+
+	Cost     string `json:"cost" gorm:"size:100"`     // 消耗（法力/灵力/体力等）
+	Cooldown string `json:"cooldown" gorm:"size:50"`  // 冷却时间
+	Tags     string `json:"tags" gorm:"size:200"`     // 逗号分隔标签
+
+	AcquiredChapterNo *int   `json:"acquired_chapter_no"` // 获得技能的章节号
+	AcquiredDesc      string `json:"acquired_desc" gorm:"type:text"` // 获得方式描述
+
+	Status string `json:"status" gorm:"size:20;default:active"` // active/sealed/lost/disabled
+	Notes  string `json:"notes" gorm:"type:text"`               // 作者内部备注
+
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
+}
+
+func (Skill) TableName() string { return "ink_skill" }
+
+// ─── Skill DTOs ────────────────────────────────────────────────────────────────
+
+type CreateSkillRequest struct {
+	CharacterID *uint  `json:"character_id"`
+	ParentID    *uint  `json:"parent_id"`
+	Name        string `json:"name" binding:"required"`
+	Category    string `json:"category"`
+	SkillType   string `json:"skill_type"`
+	Level       int    `json:"level"`
+	MaxLevel    int    `json:"max_level"`
+	Realm       string `json:"realm"`
+	Description string `json:"description"`
+	Effect      string `json:"effect"`
+	FlavorText  string `json:"flavor_text"`
+	Cost        string `json:"cost"`
+	Cooldown    string `json:"cooldown"`
+	Tags        string `json:"tags"`
+	AcquiredChapterNo *int   `json:"acquired_chapter_no"`
+	AcquiredDesc      string `json:"acquired_desc"`
+	Notes       string `json:"notes"`
+}
+
+type UpdateSkillRequest struct {
+	CharacterID *uint  `json:"character_id"`
+	ParentID    *uint  `json:"parent_id"`
+	Name        string `json:"name"`
+	Category    string `json:"category"`
+	SkillType   string `json:"skill_type"`
+	Level       int    `json:"level"`
+	MaxLevel    int    `json:"max_level"`
+	Realm       string `json:"realm"`
+	Description string `json:"description"`
+	Effect      string `json:"effect"`
+	FlavorText  string `json:"flavor_text"`
+	Cost        string `json:"cost"`
+	Cooldown    string `json:"cooldown"`
+	Tags        string `json:"tags"`
+	AcquiredChapterNo *int   `json:"acquired_chapter_no"`
+	AcquiredDesc      string `json:"acquired_desc"`
+	Status      string `json:"status"`
+	Notes       string `json:"notes"`
+}
+
+type GenerateSkillsRequest struct {
+	CharacterID *uint  `json:"character_id"`
+	Count       int    `json:"count"` // 生成数量，默认3，最大10
+	Hints       string `json:"hints"` // 额外生成提示
+}
+
 // ─── Per-shot generation DTOs ─────────────────────────────────────────────────
 
 type BatchGenerateShotsRequest struct {

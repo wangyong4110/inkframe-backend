@@ -33,6 +33,7 @@ type NovelAnalysisService struct {
 	characterRepo *repository.CharacterRepository
 	worldviewRepo *repository.WorldviewRepository
 	itemRepo      *repository.ItemRepository
+	skillService  *SkillService
 	novelService  *NovelService
 	aiService     *AIService
 	tasks         sync.Map // taskID(string) → *AnalysisTask
@@ -59,6 +60,12 @@ func NewNovelAnalysisService(
 // WithItemRepo 注入物品仓库（可选，支持物品提取步骤）
 func (s *NovelAnalysisService) WithItemRepo(itemRepo *repository.ItemRepository) *NovelAnalysisService {
 	s.itemRepo = itemRepo
+	return s
+}
+
+// WithSkillService 注入技能服务（可选，支持技能自动生成步骤）
+func (s *NovelAnalysisService) WithSkillService(skillService *SkillService) *NovelAnalysisService {
+	s.skillService = skillService
 	return s
 }
 
@@ -129,8 +136,17 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 		}
 	}
 
-	// Step 3: 提取/生成世界观 (62→78)
+	// Step 2.75: 生成技能数据 (62→68)
 	task.Progress = 62
+	task.Step = "正在生成技能数据..."
+	if s.skillService != nil {
+		if err := s.stepGenerateSkills(ctx, task, novel); err != nil {
+			log.Printf("NovelAnalysis[%d]: stepGenerateSkills warn: %v", novel.ID, err)
+		}
+	}
+
+	// Step 3: 提取/生成世界观 (68→75)
+	task.Progress = 68
 	task.Step = "正在生成世界观..."
 	if err := s.stepExtractWorldview(ctx, task, tenantID, novel, chapters); err != nil {
 		log.Printf("NovelAnalysis[%d]: stepExtractWorldview warn: %v", novel.ID, err)
@@ -406,21 +422,50 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 	if err != nil {
 		return fmt.Errorf("AI extract_worldview: %w", err)
 	}
+	log.Printf("NovelAnalysis[%d]: stepExtractWorldview raw response (first 300): %.300s", novel.ID, result)
 
-	type wvJSON struct {
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		MagicSystem string `json:"magic_system"`
-		Geography   string `json:"geography"`
-		History     string `json:"history"`
-		Culture     string `json:"culture"`
-		Technology  string `json:"technology"`
-		Rules       string `json:"rules"`
+	type wvRaw struct {
+		Name        json.RawMessage `json:"name"`
+		Description json.RawMessage `json:"description"`
+		MagicSystem json.RawMessage `json:"magic_system"`
+		Geography   json.RawMessage `json:"geography"`
+		History     json.RawMessage `json:"history"`
+		Culture     json.RawMessage `json:"culture"`
+		Technology  json.RawMessage `json:"technology"`
+		Rules       json.RawMessage `json:"rules"`
 	}
-	var wv wvJSON
+	var raw wvRaw
 	cleaned := extractJSON(strings.TrimSpace(result))
-	if err := json.Unmarshal([]byte(cleaned), &wv); err != nil {
+	if err := json.Unmarshal([]byte(cleaned), &raw); err != nil {
+		log.Printf("NovelAnalysis[%d]: worldview JSON parse failed, cleaned: %.500s", novel.ID, cleaned)
 		return fmt.Errorf("parse worldview JSON: %w", err)
+	}
+	parseField := func(data json.RawMessage) string {
+		if len(data) == 0 {
+			return ""
+		}
+		var s string
+		if err := json.Unmarshal(data, &s); err == nil {
+			return s
+		}
+		var arr []string
+		if err := json.Unmarshal(data, &arr); err == nil {
+			return strings.Join(arr, "；")
+		}
+		return strings.Trim(string(data), `"`)
+	}
+	type wvParsed struct {
+		Name, Description, MagicSystem, Geography, History, Culture, Technology, Rules string
+	}
+	wv := wvParsed{
+		Name:        parseField(raw.Name),
+		Description: parseField(raw.Description),
+		MagicSystem: parseField(raw.MagicSystem),
+		Geography:   parseField(raw.Geography),
+		History:     parseField(raw.History),
+		Culture:     parseField(raw.Culture),
+		Technology:  parseField(raw.Technology),
+		Rules:       parseField(raw.Rules),
 	}
 
 	if wv.Name == "" {
@@ -439,6 +484,7 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 		Technology:  wv.Technology,
 		Rules:       wv.Rules,
 	}
+	log.Printf("NovelAnalysis[%d]: creating worldview %q", novel.ID, worldview.Name)
 	if err := s.worldviewRepo.Create(worldview); err != nil {
 		return fmt.Errorf("save worldview: %w", err)
 	}
@@ -601,6 +647,53 @@ func (s *NovelAnalysisService) generateThreeViewsAsync(ctx context.Context, char
 			}
 		}
 	}
+}
+
+// stepGenerateSkills 自动生成技能数据；结果可为空，失败不影响 pipeline
+func (s *NovelAnalysisService) stepGenerateSkills(
+	ctx context.Context, task *AnalysisTask, novel *model.Novel,
+) error {
+	// 若已有技能则跳过
+	existing, _ := s.skillService.ListSkills(novel.ID, repository.ListSkillsOpts{})
+	if len(existing) > 0 {
+		log.Printf("NovelAnalysis[%d]: skills already exist (%d), skip generation", novel.ID, len(existing))
+		task.Progress = 68
+		return nil
+	}
+
+	// 生成世界级技能（不绑定角色）
+	worldReq := &model.GenerateSkillsRequest{
+		Count: 5,
+		Hints: fmt.Sprintf("请根据小说类型(%s)设计核心技能体系，涵盖不同类别，数量5个左右。", novel.Genre),
+	}
+	worldSkills, err := s.skillService.GenerateSkills(novel.ID, worldReq)
+	if err != nil {
+		log.Printf("NovelAnalysis[%d]: world skills gen warn: %v", novel.ID, err)
+	} else {
+		log.Printf("NovelAnalysis[%d]: generated %d world skills", novel.ID, len(worldSkills))
+	}
+	task.Progress = 65
+
+	// 为主角/反派各生成专属技能
+	chars, _ := s.characterRepo.ListByNovel(novel.ID)
+	for _, char := range chars {
+		if char.Role != "protagonist" && char.Role != "antagonist" {
+			continue
+		}
+		charReq := &model.GenerateSkillsRequest{
+			CharacterID: &char.ID,
+			Count:       3,
+			Hints:       fmt.Sprintf("根据角色【%s】的背景和能力，设计专属技能，要有鲜明个性。", char.Name),
+		}
+		charSkills, err := s.skillService.GenerateSkills(novel.ID, charReq)
+		if err != nil {
+			log.Printf("NovelAnalysis[%d]: char %q skills gen warn: %v", novel.ID, char.Name, err)
+			continue
+		}
+		log.Printf("NovelAnalysis[%d]: generated %d skills for char %q", novel.ID, len(charSkills), char.Name)
+	}
+	task.Progress = 68
+	return nil
 }
 
 // stepExtractItems 从章节摘要/小说描述提取物品信息

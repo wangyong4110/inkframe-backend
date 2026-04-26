@@ -1121,3 +1121,66 @@ func (r *ChapterCharacterRepository) ListByChapter(chapterID uint) ([]*model.Cha
 func (r *ChapterCharacterRepository) Delete(chapterID, characterID uint) error {
 	return r.db.Where("chapter_id = ? AND character_id = ?", chapterID, characterID).Delete(&model.ChapterCharacter{}).Error
 }
+
+// ============================================
+// SkillRepository 技能仓库
+// ============================================
+
+// ListSkillsOpts 技能查询选项
+type ListSkillsOpts struct {
+	CharacterID *uint
+	Category    string
+	Status      string
+}
+
+type SkillRepository struct {
+	db *gorm.DB
+}
+
+func NewSkillRepository(db *gorm.DB) *SkillRepository {
+	return &SkillRepository{db: db}
+}
+
+func (r *SkillRepository) Create(skill *model.Skill) error {
+	return r.db.Create(skill).Error
+}
+
+func (r *SkillRepository) GetByID(id uint) (*model.Skill, error) {
+	var skill model.Skill
+	if err := r.db.First(&skill, id).Error; err != nil {
+		return nil, err
+	}
+	return &skill, nil
+}
+
+func (r *SkillRepository) ListByNovel(novelID uint, opts ListSkillsOpts) ([]*model.Skill, error) {
+	q := r.db.Where("novel_id = ?", novelID)
+	if opts.CharacterID != nil {
+		q = q.Where("character_id = ?", *opts.CharacterID)
+	}
+	if opts.Category != "" {
+		q = q.Where("category = ?", opts.Category)
+	}
+	if opts.Status != "" {
+		q = q.Where("status = ?", opts.Status)
+	}
+	var skills []*model.Skill
+	err := q.Order("character_id, created_at ASC").Find(&skills).Error
+	return skills, err
+}
+
+func (r *SkillRepository) ListByCharacter(characterID uint) ([]*model.Skill, error) {
+	var skills []*model.Skill
+	if err := r.db.Where("character_id = ?", characterID).Order("created_at ASC").Find(&skills).Error; err != nil {
+		return nil, err
+	}
+	return skills, nil
+}
+
+func (r *SkillRepository) Update(skill *model.Skill) error {
+	return r.db.Save(skill).Error
+}
+
+func (r *SkillRepository) Delete(id uint) error {
+	return r.db.Delete(&model.Skill{}, id).Error
+}
