@@ -14,19 +14,27 @@ import (
 // DashVectorStore 阿里云 DashVector 向量数据库实现
 // API 文档: https://help.aliyun.com/zh/dashvector/
 type DashVectorStore struct {
-	endpoint string // e.g. https://vrs-cn-xxx.dashvector.cn-hangzhou.aliyuncs.com
-	apiKey   string
-	client   *http.Client
+	endpoint          string // e.g. https://vrs-cn-xxx.dashvector.cn-hangzhou.aliyuncs.com
+	apiKey            string
+	defaultCollection string // Delete/Get 接口不携带 collection，使用此默认值
+	client            *http.Client
 }
 
 func NewDashVectorStore(endpoint, apiKey string) *DashVectorStore {
 	return &DashVectorStore{
-		endpoint: strings.TrimRight(endpoint, "/"),
-		apiKey:   apiKey,
+		endpoint:          strings.TrimRight(endpoint, "/"),
+		apiKey:            apiKey,
+		defaultCollection: "knowledge_base",
 		client: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 	}
+}
+
+// WithDefaultCollection 覆盖 Delete/Get 使用的默认 collection 名称
+func (s *DashVectorStore) WithDefaultCollection(name string) *DashVectorStore {
+	s.defaultCollection = name
+	return s
 }
 
 // dashResponse DashVector 统一响应结构
@@ -165,19 +173,18 @@ func (s *DashVectorStore) Search(ctx context.Context, req *SearchRequest) ([]*Se
 // Delete 删除向量
 // DELETE /v1/collections/{collection}/docs  body: {"ids": [...]}
 func (s *DashVectorStore) Delete(ctx context.Context, id string) error {
-	// DashVector 的 Delete 需要 collection 名称，但接口只传 id
-	// 此处默认使用 knowledge_base，与 KnowledgeBaseVector 保持一致
 	body := map[string]interface{}{
 		"ids": []string{id},
 	}
-	_, err := s.doRequest(ctx, "DELETE", "/collections/knowledge_base/docs", body)
+	path := fmt.Sprintf("/collections/%s/docs", s.defaultCollection)
+	_, err := s.doRequest(ctx, "DELETE", path, body)
 	return err
 }
 
 // Get 获取单条向量
 // GET /v1/collections/{collection}/docs/{id}
 func (s *DashVectorStore) Get(ctx context.Context, id string) (*VectorItem, error) {
-	path := fmt.Sprintf("/collections/knowledge_base/docs/%s", id)
+	path := fmt.Sprintf("/collections/%s/docs/%s", s.defaultCollection, id)
 	resp, err := s.doRequest(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("dashvector get failed: %w", err)

@@ -213,7 +213,7 @@ skill_type 可选值：active/passive/toggle/ultimate
 		return nil, fmt.Errorf("failed to parse AI response: %w", err)
 	}
 
-	var skills []*model.Skill
+	skills := make([]*model.Skill, 0, len(rawSkills))
 	for _, rs := range rawSkills {
 		level := rs.Level
 		if level <= 0 {
@@ -223,7 +223,7 @@ skill_type 可选值：active/passive/toggle/ultimate
 		if maxLevel <= 0 {
 			maxLevel = 10
 		}
-		skill := &model.Skill{
+		skills = append(skills, &model.Skill{
 			NovelID:     novelID,
 			CharacterID: req.CharacterID,
 			Name:        rs.Name,
@@ -239,12 +239,10 @@ skill_type 可选值：active/passive/toggle/ultimate
 			Cooldown:    rs.Cooldown,
 			Tags:        rs.Tags,
 			Status:      "active",
-		}
-		if err := s.skillRepo.Create(skill); err != nil {
-			log.Printf("SkillService.GenerateSkills: save skill %q failed: %v", rs.Name, err)
-			continue
-		}
-		skills = append(skills, skill)
+		})
+	}
+	if err := s.skillRepo.BatchCreate(skills); err != nil {
+		return nil, fmt.Errorf("save skills: %w", err)
 	}
 	return skills, nil
 }

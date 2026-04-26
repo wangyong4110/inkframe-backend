@@ -100,7 +100,7 @@ func (h *ItemHandler) DeleteItem(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
+	respondOK(c, gin.H{"message": "item deleted"})
 }
 
 // GenerateItemImage POST /items/:id/images
@@ -204,6 +204,5 @@ func (h *ItemHandler) DeleteChapterItem(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
-	_ = novelID
+	respondOK(c, gin.H{"message": "chapter item deleted"})
 }

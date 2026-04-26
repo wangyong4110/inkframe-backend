@@ -1184,3 +1184,10 @@ func (r *SkillRepository) Update(skill *model.Skill) error {
 func (r *SkillRepository) Delete(id uint) error {
 	return r.db.Delete(&model.Skill{}, id).Error
 }
+
+func (r *SkillRepository) BatchCreate(skills []*model.Skill) error {
+	if len(skills) == 0 {
+		return nil
+	}
+	return r.db.CreateInBatches(skills, 100).Error
+}
