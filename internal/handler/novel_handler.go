@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -147,8 +148,9 @@ func (h *NovelHandler) DeleteNovel(c *gin.Context) {
 	})
 }
 
-// GenerateChapter 生成章节
+// GenerateChapter 生成章节（异步任务）
 // POST /api/v1/novels/:id/chapters/generate
+// 立即返回 202 + task_id，轮询 GET /:id/chapters/generate/:task_id 获取结果
 func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
@@ -161,41 +163,72 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 		respondBadRequest(c, err.Error())
 		return
 	}
+	// NovelID 从 URL 路径参数注入（body 中可不传）
+	req.NovelID = uint(novelId)
 
 	// 支持通过 Header 临时覆盖 AI 模型/provider
 	if override := c.GetHeader("X-Model-Override"); override != "" && req.ModelOverride == "" {
 		req.ModelOverride = override
 	}
 
-	chapter, err := h.chapterService.GenerateChapter(getTenantID(c), uint(novelId), &req)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
+	taskID := newTaskID("gen")
+	tenantID := getTenantID(c)
+	now := time.Now().Unix()
+
+	task := &AsyncTask{TaskID: taskID, Status: taskStatusPending, CreatedAt: now}
+	chapterGenTasks.store(task)
+
+	go func() {
+		task.Status = taskStatusRunning
+		chapterGenTasks.store(task)
+
+		chapter, err := h.chapterService.GenerateChapter(tenantID, uint(novelId), &req)
+		if err != nil {
+			task.Status = taskStatusFailed
+			task.Error = err.Error()
+			chapterGenTasks.store(task)
+			fmt.Printf("GenerateChapter task %s failed: %v\n", taskID, err)
+			return
+		}
+
+		modelUsed := req.ModelOverride
+		if modelUsed == "" {
+			modelUsed = h.novelService.GetAIService().GetDefaultProviderName()
+		}
+		task.Status = taskStatusCompleted
+		task.Data = map[string]interface{}{"chapter": chapter, "model_used": modelUsed}
+		chapterGenTasks.store(task)
+
+		// 后处理：伏笔提取 + 质量检查（非阻塞）
+		go func(ch *model.Chapter) {
+			if _, err := h.foreshadowService.ExtractForeshadows(ch, ch.NovelID); err != nil {
+				fmt.Printf("GenerateChapter: foreshadow extraction failed (ch %d): %v\n", ch.ID, err)
+			}
+		}(chapter)
+		go func(chID uint) {
+			if _, err := h.qualityControlService.CheckChapter(chID); err != nil {
+				fmt.Printf("GenerateChapter: quality check failed (ch %d): %v\n", chID, err)
+			}
+		}(chapter.ID)
+	}()
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "章节生成任务已提交",
+		"data":    gin.H{"task_id": taskID},
+	})
+}
+
+// GetChapterGenStatus 查询章节生成任务状态
+// GET /api/v1/novels/:id/chapters/generate/:task_id
+func (h *NovelHandler) GetChapterGenStatus(c *gin.Context) {
+	taskID := c.Param("task_id")
+	task, ok := chapterGenTasks.load(taskID)
+	if !ok {
+		respondErr(c, http.StatusNotFound, "task not found")
 		return
 	}
-
-	// Async post-generation: foreshadow extraction + quality check (non-blocking)
-	go func(ch *model.Chapter) {
-		if _, err := h.foreshadowService.ExtractForeshadows(ch, ch.NovelID); err != nil {
-			fmt.Printf("GenerateChapter: foreshadow extraction failed (ch %d): %v\n", ch.ID, err)
-		}
-	}(chapter)
-	go func(chID uint) {
-		if _, err := h.qualityControlService.CheckChapter(chID); err != nil {
-			fmt.Printf("GenerateChapter: quality check failed (ch %d): %v\n", chID, err)
-		}
-	}(chapter.ID)
-
-	modelUsed := req.ModelOverride
-	if modelUsed == "" {
-		modelUsed = h.novelService.GetAIService().GetDefaultProviderName()
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":       0,
-		"message":    "success",
-		"data":       chapter,
-		"model_used": modelUsed,
-	})
+	respondOK(c, task)
 }
 
 // GenerateOutline 生成大纲

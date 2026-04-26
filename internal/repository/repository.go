@@ -705,6 +705,11 @@ func (r *StoryboardRepository) Update(shot *model.StoryboardShot) error {
 	return r.db.Save(shot).Error
 }
 
+// DeleteByVideoID 删除视频的所有分镜（重新生成时使用）
+func (r *StoryboardRepository) DeleteByVideoID(videoID uint) error {
+	return r.db.Where("video_id = ?", videoID).Delete(&model.StoryboardShot{}).Error
+}
+
 // ReviewTaskRepository 审核任务仓库
 type ReviewTaskRepository struct {
 	db *gorm.DB

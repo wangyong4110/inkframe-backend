@@ -353,6 +353,9 @@ func (s *NovelService) GenerateChapter(req *GenerateChapterRequest) (*model.Chap
 
 // writeCharacterSnapshots 从章节内容中提取角色状态并写入快照
 func (s *NovelService) writeCharacterSnapshots(chapter *model.Chapter) {
+	if s.characterRepo == nil || s.snapshotRepo == nil {
+		return
+	}
 	characters, err := s.characterRepo.ListByNovel(chapter.NovelID)
 	if err != nil || len(characters) == 0 {
 		return
@@ -1101,37 +1104,110 @@ func (s *AIService) GenerateImage(prompt string, options *ImageGenerationOptions
 	}, nil
 }
 
+// knownImageCapableProviders 已知支持图像生成的提供者及其默认模型，用于 DB 动态加载的回退路径。
+var knownImageCapableProviders = []ai.ImageProviderEntry{
+	{ProviderName: "doubao", Model: "seedream-3-0-t2i-250415", Size: "1024x1024"},
+	{ProviderName: "qianwen", Model: "wanx2.1-t2i-turbo", Size: "1024x1024"},
+	{ProviderName: "openai", Model: "dall-e-3", Size: "1024x1024"},
+}
+
 // GenerateCharacterThreeView 使用图像生成 API 生成角色视图图像。
-// 优先使用 openai（支持 dall-e-3），若不可用则尝试默认 provider。
+// 优先使用启动时注册的静态图像提供者；若无静态注册（仅通过 DB 配置），则按
+// knownImageCapableProviders 依次从 DB 动态加载提供者尝试。
+// tenantID=0 表示使用系统级配置。
+// providerName 非空时强制使用该提供者（不再遍历其他候选）。
 // 失败时返回空字符串 + error，调用方应将其视为非致命错误。
-func (s *AIService) GenerateCharacterThreeView(ctx context.Context, prompt string) (string, error) {
+func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uint, providerName string, prompt string) (string, error) {
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
 	}
-	var provider ai.AIProvider
-	var err error
-	// 优先 openai（支持 DALL-E），失败则用默认
-	for _, name := range []string{"openai", ""} {
-		provider, err = s.aiManager.GetProvider(name)
-		if err == nil {
-			break
+
+	// 指定提供者时：直接加载并调用，不走遍历逻辑
+	if providerName != "" {
+		// 找到对应的 entry（model/size）
+		var entry *ai.ImageProviderEntry
+		for _, e := range knownImageCapableProviders {
+			if e.ProviderName == providerName {
+				entry = &e
+				break
+			}
 		}
+		// 也在静态注册列表里找
+		if entry == nil {
+			for _, e := range s.aiManager.GetImageProviders() {
+				if e.ProviderName == providerName {
+					entry = &e
+					break
+				}
+			}
+		}
+		if entry == nil {
+			return "", fmt.Errorf("unknown image provider: %s", providerName)
+		}
+		provider, err := s.aiManager.GetProvider(providerName)
+		if err != nil {
+			// 静态 manager 无此 provider，尝试 DB
+			provider, err = s.getTenantProvider(tenantID, providerName)
+			if err != nil {
+				return "", fmt.Errorf("image provider %q not available: %w", providerName, err)
+			}
+		}
+		resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
+			Model:  entry.Model,
+			Prompt: prompt,
+			Size:   entry.Size,
+		})
+		if err != nil {
+			return "", err
+		}
+		if resp.Error != "" {
+			return "", fmt.Errorf("image generation failed: %s", resp.Error)
+		}
+		return resp.URL, nil
 	}
-	if err != nil {
-		return "", fmt.Errorf("no image provider available: %w", err)
+
+	entries := s.aiManager.GetImageProviders()
+
+	// 若无静态注册的图像提供者（未通过环境变量配置），回退到 DB 动态加载路径
+	useDB := len(entries) == 0 && s.providerRepo != nil
+	if useDB {
+		entries = knownImageCapableProviders
 	}
-	resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
-		Model:  "dall-e-3",
-		Prompt: prompt,
-		Size:   "1024x1024",
-	})
-	if err != nil {
-		return "", err
+
+	if len(entries) == 0 {
+		return "", fmt.Errorf("no image providers configured")
 	}
-	if resp.Error != "" {
-		return "", fmt.Errorf("image generation failed: %s", resp.Error)
+
+	var lastErr error
+	for _, e := range entries {
+		var provider ai.AIProvider
+		var err error
+		if useDB {
+			// 从 DB 动态加载提供者（带租户感知和缓存）
+			provider, err = s.getTenantProvider(tenantID, e.ProviderName)
+		} else {
+			provider, err = s.aiManager.GetProvider(e.ProviderName)
+		}
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
+			Model:  e.Model,
+			Prompt: prompt,
+			Size:   e.Size,
+		})
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.Error != "" {
+			lastErr = fmt.Errorf("image generation failed: %s", resp.Error)
+			continue
+		}
+		return resp.URL, nil
 	}
-	return resp.URL, nil
+	return "", fmt.Errorf("no image provider available: %w", lastErr)
 }
 
 // AudioGenerate 调用默认 AI provider 生成 TTS 音频，返回本地文件路径（file:// URL）
@@ -1412,7 +1488,7 @@ func (s *VideoService) CreateVideo(novelID uint, req *model.CreateVideoRequest) 
 }
 
 // GenerateStoryboard 生成分镜
-func (s *VideoService) GenerateStoryboard(videoID uint, chapterIDOverride ...*uint) ([]*model.StoryboardShot, error) {
+func (s *VideoService) GenerateStoryboard(videoID uint, provider string, chapterIDOverride ...*uint) ([]*model.StoryboardShot, error) {
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
 		return nil, err
@@ -1438,8 +1514,14 @@ func (s *VideoService) GenerateStoryboard(videoID uint, chapterIDOverride ...*ui
 	// 构建分镜提示词
 	prompt := s.buildStoryboardPrompt(video, content)
 
+	// 获取租户 ID（供 getTenantProvider 查租户私有配置）
+	var tenantID uint
+	if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil {
+		tenantID = novel.TenantID
+	}
+
 	// 调用AI生成分镜
-	result, err := s.aiService.Generate(video.NovelID, "storyboard", prompt)
+	result, err := s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", prompt, provider)
 	if err != nil {
 		return nil, err
 	}
@@ -1447,7 +1529,10 @@ func (s *VideoService) GenerateStoryboard(videoID uint, chapterIDOverride ...*ui
 	// 解析分镜（传入 chapterID，供每个 shot 继承）
 	shots := s.parseStoryboardResult(videoID, chapterID, result)
 
-	// 保存分镜
+	// 删除旧分镜，再插入新分镜（避免 uk_video_shot 唯一键冲突）
+	if err := s.storyboardRepo.DeleteByVideoID(videoID); err != nil {
+		return nil, err
+	}
 	for _, shot := range shots {
 		if err := s.storyboardRepo.Create(shot); err != nil {
 			return nil, err
@@ -1782,6 +1867,31 @@ func (s *VideoService) StartGeneration(id uint) (string, error) {
 	return task.TaskID, nil
 }
 
+// VideoProvider is a minimal video provider descriptor used by the listing endpoint.
+type VideoProvider struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+}
+
+// videoProviderDisplayNames maps known provider names to human-readable labels.
+var videoProviderDisplayNames = map[string]string{
+	"kling":    "可灵 (Kling)",
+	"seedance": "Seedance",
+}
+
+// ListVideoProviders returns configured video providers with display names.
+func (s *VideoService) ListVideoProviders() []VideoProvider {
+	result := make([]VideoProvider, 0, len(s.videoProviders))
+	for name := range s.videoProviders {
+		dn := videoProviderDisplayNames[name]
+		if dn == "" {
+			dn = name
+		}
+		result = append(result, VideoProvider{Name: name, DisplayName: dn})
+	}
+	return result
+}
+
 // GetStoryboard 获取分镜列表
 func (s *VideoService) GetStoryboard(videoID uint) ([]*model.StoryboardShot, error) {
 	return s.storyboardRepo.ListByVideo(videoID)
@@ -1815,7 +1925,7 @@ func (s *VideoService) UpdateShot(id uint, req *model.StoryboardShot) (*model.St
 }
 
 // GenerateSingleShot 触发单个分镜生成（异步）
-func (s *VideoService) GenerateSingleShot(videoID, shotID uint) (*model.StoryboardShot, error) {
+func (s *VideoService) GenerateSingleShot(videoID, shotID uint, provider ...string) (*model.StoryboardShot, error) {
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
 		return nil, err
@@ -1830,7 +1940,7 @@ func (s *VideoService) GenerateSingleShot(videoID, shotID uint) (*model.Storyboa
 	shot.Status = "generating"
 	s.storyboardRepo.Update(shot) //nolint:errcheck
 	go func() {
-		if err := s.GenerateShotVideo(shot, video.AspectRatio); err != nil {
+		if err := s.GenerateShotVideo(shot, video.AspectRatio, provider...); err != nil {
 			log.Printf("GenerateSingleShot: shot %d failed: %v", shot.ShotNo, err)
 		}
 	}()
@@ -1838,7 +1948,7 @@ func (s *VideoService) GenerateSingleShot(videoID, shotID uint) (*model.Storyboa
 }
 
 // BatchGenerateShots 批量触发指定分镜生成（异步）
-func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityTierOverride string) ([]*model.StoryboardShot, error) {
+func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityTierOverride string, provider ...string) ([]*model.StoryboardShot, error) {
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
 		return nil, err
@@ -1856,7 +1966,7 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 		s.storyboardRepo.Update(shot) //nolint:errcheck
 		queued = append(queued, shot)
 		go func(sh *model.StoryboardShot) {
-			if err := s.GenerateShotVideo(sh, video.AspectRatio); err != nil {
+			if err := s.GenerateShotVideo(sh, video.AspectRatio, provider...); err != nil {
 				log.Printf("BatchGenerateShots: shot %d failed: %v", sh.ShotNo, err)
 			}
 		}(shot)
@@ -2018,12 +2128,20 @@ func (s *VideoService) extractLastFrame(clipPath string) (string, error) {
 }
 
 // GenerateShotVideo 为单个分镜提交视频生成任务
-func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspectRatio string) error {
+func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspectRatio string, providerOverride ...string) error {
 	providerName := "kling"
+	if len(providerOverride) > 0 && providerOverride[0] != "" {
+		providerName = providerOverride[0]
+	}
 	provider, ok := s.videoProviders[providerName]
 	if !ok {
-		providerName = "seedance"
-		provider, ok = s.videoProviders[providerName]
+		// fallback to any available
+		for name, p := range s.videoProviders {
+			providerName = name
+			provider = p
+			ok = true
+			break
+		}
 	}
 	if !ok {
 		return fmt.Errorf("no video provider configured")

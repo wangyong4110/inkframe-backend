@@ -19,6 +19,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/router"
 	"github.com/inkframe/inkframe-backend/internal/service"
+	"github.com/inkframe/inkframe-backend/internal/storage"
 	"github.com/inkframe/inkframe-backend/internal/vector"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/mysql"
@@ -41,8 +42,7 @@ func main() {
 	}
 
 	// 3. 自动迁移（GORM AutoMigrate 只增列不删列，开发环境安全运行）
-	// 迁移前清理会阻塞唯一索引的无效行
-	//preMigrateCleanup(db)
+	// 注意：列重命名需先执行 migrations/001_fix_model_provider_columns.sql
 	//if err := autoMigrate(db); err != nil {
 	//	log.Fatalf("Failed to migrate database: %v", err)
 	//}
@@ -50,7 +50,7 @@ func main() {
 	// 4. 初始化Redis
 	redisClient := initRedis(cfg)
 
-	// 5. 初始化AI模块
+	// 5. 初始化AI模块（含图像生成提供者注册）
 	aiManager := initAIModule(cfg)
 
 	// 6. 初始化向量存储
@@ -67,10 +67,23 @@ func main() {
 		seedDefaultUser(services)
 	}
 
-	// 10. 初始化处理器
-	handlers := initHandlers(services)
+	// 10. 初始化存储服务
+	storageSvc := storage.New(storage.Config{
+		Type:      cfg.Storage.Type,
+		Endpoint:  cfg.Storage.Endpoint,
+		AccessKey: getEnv("OSS_ACCESS_KEY", cfg.Storage.AccessKey),
+		SecretKey: getEnv("OSS_SECRET_KEY", cfg.Storage.SecretKey),
+		Bucket:    cfg.Storage.Bucket,
+		BaseURL:   cfg.Storage.BaseURL,
+		LocalDir:  "./uploads",
+		LocalBase: "/uploads",
+	})
+	log.Printf("Storage: type=%s", cfg.Storage.Type)
 
-	// 11. 设置路由
+	// 11. 初始化处理器
+	handlers := initHandlers(services, storageSvc)
+
+	// 12. 设置路由
 	r := router.SetupRouter(&router.Config{
 		JWTSecret:        cfg.Server.JWTSecret,
 		NovelHandler:     handlers.NovelHandler,
@@ -87,6 +100,7 @@ func main() {
 		TenantHandler:    handlers.TenantHandler,
 		ItemHandler:      handlers.ItemHandler,
 		SkillHandler:     handlers.SkillHandler,
+		UploadHandler:    handlers.UploadHandler,
 	})
 
 	// 11. 设置Gin模式
@@ -217,11 +231,17 @@ func seedDefaultUser(services *Services) {
 // preMigrateCleanup 清理会阻塞 AutoMigrate 唯一索引迁移的无效行
 func preMigrateCleanup(db *gorm.DB) {
 	// ink_task_model_config.task_type 为 UNIQUE NOT NULL，旧空行会导致 Duplicate entry '' 错误
-	db.Exec("DELETE FROM ink_task_model_config WHERE task_type = '' OR task_type IS NULL")
+	// 若 task_type 列尚不存在，DELETE WHERE task_type='' 会报错，此时直接清空整张表
+	if err := db.Exec("DELETE FROM ink_task_model_config WHERE task_type = '' OR task_type IS NULL").Error; err != nil {
+		db.Exec("DELETE FROM ink_task_model_config")
+	}
 }
 
 // autoMigrate 自动迁移
 func autoMigrate(db *gorm.DB) error {
+	// 禁用外键约束创建：避免手动加列类型不匹配、循环依赖等问题
+	// AutoMigrate 只负责同步列定义，外键由应用层保证一致性
+	db.DisableForeignKeyConstraintWhenMigrating = true
 	return db.AutoMigrate(
 		&model.Tenant{},
 		&model.User{},
@@ -300,6 +320,14 @@ func initAIModule(cfg *config.Config) *ai.ModelManager {
 		model    string
 		factory  func(key, endpoint, model string) ai.AIProvider
 	}
+	// imageProviderModels 记录各提供者用于图像生成的模型和尺寸
+	type imageProviderMeta struct{ model, size string }
+	imageProviders := map[string]imageProviderMeta{
+		"openai":  {"dall-e-3", "1024x1024"},
+		"doubao":  {"seedream-3-0-t2i-250415", "1024x1024"},
+		"qianwen": {"wanx2.1-t2i-turbo", "1024x1024"},
+	}
+
 	defs := []providerDef{
 		{"openai", getEnv("OPENAI_API_KEY", ""), cfg.AI.OpenAI.Endpoint, cfg.AI.OpenAI.Model,
 			func(k, e, m string) ai.AIProvider { return ai.NewOpenAIProvider(k, e, m) }},
@@ -322,12 +350,22 @@ func initAIModule(cfg *config.Config) *ai.ModelManager {
 		if firstRegistered == "" {
 			firstRegistered = d.name
 		}
+		// 注册图像生成能力（仅当该 provider 实际可用时）
+		if meta, ok := imageProviders[d.name]; ok {
+			manager.RegisterImageProvider(d.name, meta.model, meta.size)
+		}
 	}
 	if firstRegistered != "" {
 		manager.SetDefault(firstRegistered)
 	}
 	if len(manager.ListProviders()) == 0 {
 		log.Println("initAIModule: no AI API keys in env — providers will be loaded from DB per-tenant")
+	}
+
+	// 即梦AI Visual API（AK/SK 鉴权图像生成）
+	if vvp := initVolcengineVisual(); vvp != nil {
+		manager.RegisterProvider("volcengine-visual", vvp)
+		manager.RegisterImageProvider("volcengine-visual", ai.VolcModelText2ImgV3, "1328x1328")
 	}
 
 	// 为所有 Provider 包装指数退避重试（最多 3 次，基础延迟 500ms）
@@ -359,6 +397,18 @@ func initVideoProviders(cfg *config.Config) map[string]ai.VideoProvider {
 
 	log.Printf("Initialized video providers: %d registered", len(providers))
 	return providers
+}
+
+// initVolcengineVisual 初始化火山引擎即梦AI图像提供者（AK/SK 鉴权）
+// 环境变量：VOLCENGINE_ACCESS_KEY、VOLCENGINE_SECRET_KEY
+func initVolcengineVisual() *ai.VolcengineVisualProvider {
+	ak := getEnv("VOLCENGINE_ACCESS_KEY", "")
+	sk := getEnv("VOLCENGINE_SECRET_KEY", "")
+	if ak == "" || sk == "" {
+		return nil
+	}
+	log.Println("VolcengineVisual (即梦AI) provider initialized")
+	return ai.NewVolcengineVisualProvider(ak, sk)
 }
 
 // initVectorStore 初始化向量存储
@@ -394,55 +444,55 @@ func initVectorStore(cfg *config.Config) *vector.StoreManager {
 
 // Repositories 仓库层
 type Repositories struct {
-	NovelRepo           *repository.NovelRepository
-	ChapterRepo         *repository.ChapterRepository
-	CharacterRepo       *repository.CharacterRepository
-	WorldviewRepo       *repository.WorldviewRepository
-	AIModelRepo         *repository.AIModelRepository
-	TaskModelConfigRepo *repository.TaskModelConfigRepository
-	VideoRepo           *repository.VideoRepository
-	StoryboardRepo      *repository.StoryboardRepository
-	KnowledgeBaseRepo   *repository.KnowledgeBaseRepository
-	ModelProviderRepo   *repository.ModelProviderRepository
-	ModelComparisonRepo *repository.ModelComparisonRepository
-	ReviewTaskRepo      *repository.ReviewTaskRepository
-	ChapterVersionRepo  *repository.ChapterVersionRepository
-	SnapshotRepo        *repository.CharacterStateSnapshotRepository
-	UserRepo            *repository.UserRepository
-	TenantRepo          *repository.TenantRepository
-	TenantUserRepo      *repository.TenantUserRepository
-	ArcSummaryRepo      *repository.ArcSummaryRepository
-	ItemRepo                 *repository.ItemRepository
-	ChapterItemRepo          *repository.ChapterItemRepository
-	ChapterCharacterRepo     *repository.ChapterCharacterRepository
-	SkillRepo                *repository.SkillRepository
+	NovelRepo            *repository.NovelRepository
+	ChapterRepo          *repository.ChapterRepository
+	CharacterRepo        *repository.CharacterRepository
+	WorldviewRepo        *repository.WorldviewRepository
+	AIModelRepo          *repository.AIModelRepository
+	TaskModelConfigRepo  *repository.TaskModelConfigRepository
+	VideoRepo            *repository.VideoRepository
+	StoryboardRepo       *repository.StoryboardRepository
+	KnowledgeBaseRepo    *repository.KnowledgeBaseRepository
+	ModelProviderRepo    *repository.ModelProviderRepository
+	ModelComparisonRepo  *repository.ModelComparisonRepository
+	ReviewTaskRepo       *repository.ReviewTaskRepository
+	ChapterVersionRepo   *repository.ChapterVersionRepository
+	SnapshotRepo         *repository.CharacterStateSnapshotRepository
+	UserRepo             *repository.UserRepository
+	TenantRepo           *repository.TenantRepository
+	TenantUserRepo       *repository.TenantUserRepository
+	ArcSummaryRepo       *repository.ArcSummaryRepository
+	ItemRepo             *repository.ItemRepository
+	ChapterItemRepo      *repository.ChapterItemRepository
+	ChapterCharacterRepo *repository.ChapterCharacterRepository
+	SkillRepo            *repository.SkillRepository
 }
 
 // initRepositories 初始化仓库层
 func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 	return &Repositories{
-		NovelRepo:           repository.NewNovelRepository(db, redis),
-		ChapterRepo:         repository.NewChapterRepository(db, redis),
-		CharacterRepo:       repository.NewCharacterRepository(db),
-		WorldviewRepo:       repository.NewWorldviewRepository(db),
-		AIModelRepo:         repository.NewAIModelRepository(db),
-		TaskModelConfigRepo: repository.NewTaskModelConfigRepository(db),
-		VideoRepo:           repository.NewVideoRepository(db),
-		StoryboardRepo:      repository.NewStoryboardRepository(db),
-		KnowledgeBaseRepo:   repository.NewKnowledgeBaseRepository(db),
-		ModelProviderRepo:   repository.NewModelProviderRepository(db),
-		ModelComparisonRepo: repository.NewModelComparisonRepository(db),
-		ReviewTaskRepo:      repository.NewReviewTaskRepository(db),
-		ChapterVersionRepo:  repository.NewChapterVersionRepository(db),
-		SnapshotRepo:        repository.NewCharacterStateSnapshotRepository(db),
-		UserRepo:            repository.NewUserRepository(db),
-		TenantRepo:          repository.NewTenantRepository(db),
-		TenantUserRepo:      repository.NewTenantUserRepository(db),
-		ArcSummaryRepo:      repository.NewArcSummaryRepository(db),
-		ItemRepo:                 repository.NewItemRepository(db),
-		ChapterItemRepo:          repository.NewChapterItemRepository(db),
-		ChapterCharacterRepo:     repository.NewChapterCharacterRepository(db),
-		SkillRepo:                repository.NewSkillRepository(db),
+		NovelRepo:            repository.NewNovelRepository(db, redis),
+		ChapterRepo:          repository.NewChapterRepository(db, redis),
+		CharacterRepo:        repository.NewCharacterRepository(db),
+		WorldviewRepo:        repository.NewWorldviewRepository(db),
+		AIModelRepo:          repository.NewAIModelRepository(db),
+		TaskModelConfigRepo:  repository.NewTaskModelConfigRepository(db),
+		VideoRepo:            repository.NewVideoRepository(db),
+		StoryboardRepo:       repository.NewStoryboardRepository(db),
+		KnowledgeBaseRepo:    repository.NewKnowledgeBaseRepository(db),
+		ModelProviderRepo:    repository.NewModelProviderRepository(db),
+		ModelComparisonRepo:  repository.NewModelComparisonRepository(db),
+		ReviewTaskRepo:       repository.NewReviewTaskRepository(db),
+		ChapterVersionRepo:   repository.NewChapterVersionRepository(db),
+		SnapshotRepo:         repository.NewCharacterStateSnapshotRepository(db),
+		UserRepo:             repository.NewUserRepository(db),
+		TenantRepo:           repository.NewTenantRepository(db),
+		TenantUserRepo:       repository.NewTenantUserRepository(db),
+		ArcSummaryRepo:       repository.NewArcSummaryRepository(db),
+		ItemRepo:             repository.NewItemRepository(db),
+		ChapterItemRepo:      repository.NewChapterItemRepository(db),
+		ChapterCharacterRepo: repository.NewChapterCharacterRepository(db),
+		SkillRepo:            repository.NewSkillRepository(db),
 	}
 }
 
@@ -725,10 +775,11 @@ type Handlers struct {
 	TenantHandler    *handler.TenantHandler
 	ItemHandler      *handler.ItemHandler
 	SkillHandler     *handler.SkillHandler
+	UploadHandler    *handler.UploadHandler
 }
 
 // initHandlers 初始化处理器
-func initHandlers(services *Services) *Handlers {
+func initHandlers(services *Services, storageSvc storage.Service) *Handlers {
 	return &Handlers{
 		NovelHandler: handler.NewNovelHandler(
 			services.NovelService,
@@ -746,7 +797,7 @@ func initHandlers(services *Services) *Handlers {
 			services.CharacterService,
 			services.CharacterArcService,
 			services.ImageGenerationService,
-		).WithChapterService(services.ChapterService),
+		).WithChapterService(services.ChapterService).WithStorage(storageSvc),
 		VideoHandler: handler.NewVideoHandler(
 			services.VideoService,
 			services.StoryboardService,
@@ -770,6 +821,7 @@ func initHandlers(services *Services) *Handlers {
 		TenantHandler:    handler.NewTenantHandler(services.TenantService),
 		ItemHandler:      handler.NewItemHandler(services.ItemService, services.ChapterService),
 		SkillHandler:     handler.NewSkillHandler(services.SkillService),
+		UploadHandler:    handler.NewUploadHandler(storageSvc),
 	}
 }
 

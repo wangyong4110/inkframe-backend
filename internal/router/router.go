@@ -23,6 +23,7 @@ type Config struct {
 	TenantHandler    *handler.TenantHandler
 	ItemHandler      *handler.ItemHandler
 	SkillHandler     *handler.SkillHandler
+	UploadHandler    *handler.UploadHandler
 }
 
 // SetupRouter 配置路由
@@ -38,6 +39,9 @@ func SetupRouter(cfg *Config) *gin.Engine {
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
 	})
+
+	// 本地上传文件静态服务
+	r.Static("/uploads", "./uploads")
 
 	// 公开认证路由（不需要JWT）
 	auth := r.Group("/api/v1/auth")
@@ -60,6 +64,11 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		// 当前用户信息
 		v1.GET("/auth/me", cfg.AuthHandler.GetCurrentUser)
 
+		// 通用图片上传
+		if cfg.UploadHandler != nil {
+			v1.POST("/upload/image", cfg.UploadHandler.UploadImage)
+		}
+
 		// 导入
 		importGroup := v1.Group("/import")
 		{
@@ -80,6 +89,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.PUT("/:id", cfg.NovelHandler.UpdateNovel)
 			novels.DELETE("/:id", cfg.NovelHandler.DeleteNovel)
 			novels.POST("/:id/chapters/generate", cfg.NovelHandler.GenerateChapter)
+			novels.GET("/:id/chapters/generate/:task_id", cfg.NovelHandler.GetChapterGenStatus)
 
 			// 伏笔
 			novels.GET("/:id/foreshadows", cfg.NovelHandler.GetForeshadows)
@@ -160,6 +170,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				skills.GET("/:skillId", cfg.SkillHandler.GetSkill)
 				skills.PUT("/:skillId", cfg.SkillHandler.UpdateSkill)
 				skills.DELETE("/:skillId", cfg.SkillHandler.DeleteSkill)
+				skills.POST("/:skillId/effect-image", cfg.SkillHandler.GenerateSkillEffect)
 			}
 		}
 
@@ -171,6 +182,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				items.PUT("/:id", cfg.ItemHandler.UpdateItem)
 				items.DELETE("/:id", cfg.ItemHandler.DeleteItem)
 				items.POST("/:id/images", cfg.ItemHandler.GenerateItemImage)
+				items.GET("/:id/images/:task_id", cfg.ItemHandler.GetItemImageTaskStatus)
 			}
 		}
 
@@ -196,6 +208,9 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			characters.PUT("/:id", cfg.CharacterHandler.UpdateCharacter)
 			characters.DELETE("/:id", cfg.CharacterHandler.DeleteCharacter)
 			characters.POST("/:id/images", cfg.CharacterHandler.GenerateCharacterImage)
+			characters.POST("/:id/three-view", cfg.CharacterHandler.GenerateThreeView)
+			characters.GET("/:id/three-view/:task_id", cfg.CharacterHandler.GetThreeViewTaskStatus)
+			characters.POST("/:id/portrait/upload", cfg.CharacterHandler.UploadPortrait)
 			characters.POST("/:id/analyze-consistency", cfg.CharacterHandler.AnalyzeCharacterConsistency)
 		}
 
@@ -203,12 +218,14 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		videos := v1.Group("/videos")
 		{
 			videos.GET("", cfg.VideoHandler.ListVideos)
+			videos.GET("/providers", cfg.VideoHandler.ListVideoProviders)
 			videos.GET("/:id", cfg.VideoHandler.GetVideo)
 			videos.PUT("/:id", cfg.VideoHandler.UpdateVideo)
 			videos.DELETE("/:id", cfg.VideoHandler.DeleteVideo)
 			videos.GET("/:id/storyboard", cfg.VideoHandler.GetStoryboard)
 			videos.PUT("/:id/storyboard/:shot_id", cfg.VideoHandler.UpdateStoryboardShot)
 			videos.POST("/:id/storyboard/generate", cfg.VideoHandler.GenerateStoryboard)
+			videos.GET("/:id/storyboard/generate/:task_id", cfg.VideoHandler.GetStoryboardGenStatus)
 			videos.POST("/:id/generate", cfg.VideoHandler.StartVideoGeneration)
 			videos.GET("/:id/status", cfg.VideoHandler.GetVideoStatus)
 			videos.GET("/:id/shots", cfg.VideoHandler.ListShots)
@@ -247,6 +264,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		{
 			modelProviders.GET("", cfg.ModelHandler.ListProviders)
 			modelProviders.POST("", cfg.ModelHandler.CreateProvider)
+			modelProviders.GET("/image-capable", cfg.ModelHandler.ListImageCapableProviders)
+			modelProviders.GET("/llm-capable", cfg.ModelHandler.ListLLMCapableProviders)
 			modelProviders.GET("/:id", cfg.ModelHandler.GetProvider)
 			modelProviders.PUT("/:id", cfg.ModelHandler.UpdateProvider)
 			modelProviders.DELETE("/:id", cfg.ModelHandler.DeleteProvider)

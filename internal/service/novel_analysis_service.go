@@ -699,7 +699,7 @@ func (s *NovelAnalysisService) generateThreeViewsAsync(ctx context.Context, char
 		changed := false
 		for _, v := range views {
 			prompt := basePrompt + ", " + v.suffix
-			url, err := s.aiService.GenerateCharacterThreeView(ctx, prompt)
+			url, err := s.aiService.GenerateCharacterThreeView(ctx, 0, "", prompt)
 			if err != nil {
 				log.Printf("NovelAnalysis: three-view %q for char %d: %v", v.suffix, char.ID, err)
 				continue
@@ -869,7 +869,7 @@ func (s *NovelAnalysisService) stepExtractItems(
 			if prompt == "" {
 				prompt = fmt.Sprintf("%s, %s, fantasy item illustration, high detail", i.Name, i.Appearance)
 			}
-			url, err := s.aiService.GenerateCharacterThreeView(ctx, prompt+", item concept art, no background")
+			url, err := s.aiService.GenerateCharacterThreeView(ctx, 0, "", prompt+", item concept art, no background")
 			if err != nil {
 				log.Printf("NovelAnalysis: item image gen %q: %v", i.Name, err)
 				return

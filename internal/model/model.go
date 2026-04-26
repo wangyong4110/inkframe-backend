@@ -73,10 +73,11 @@ type Chapter struct {
 	PlotPoints  string `json:"plot_points" gorm:"type:text"`   // JSON数组
 
 	// 叙事元数据（来自小说大纲）
-	TensionLevel int    `json:"tension_level" gorm:"default:0"` // 0-10 张力值
-	ActNo        int    `json:"act_no" gorm:"default:0"`        // 所属幕次（1/2/3）
-	EmotionalTone string `json:"emotional_tone" gorm:"size:50"`  // 情感基调
-	HookType     string `json:"hook_type" gorm:"size:30"`        // 章末钩子类型
+	TensionLevel  int    `json:"tension_level" gorm:"default:0"`  // 0-10 张力值
+	ActNo         int    `json:"act_no" gorm:"default:0"`         // 所属幕次（1/2/3）
+	EmotionalTone string `json:"emotional_tone" gorm:"size:50"`   // 情感基调
+	HookType      string `json:"hook_type" gorm:"size:30"`         // 章末钩子类型
+	ChapterHook   string `json:"chapter_hook" gorm:"type:text"`   // 章末钩子正文（供下一章生成时使用）
 
 	// 状态
 	Status string `json:"status" gorm:"size:20;default:draft"`
@@ -438,6 +439,7 @@ type ModelProvider struct {
 	// API配置
 	APIEndpoint string `json:"api_endpoint" gorm:"size:500"`
 	APIKey      string `json:"api_key" gorm:"type:text"`
+	APISecretKey string `json:"api_secret_key" gorm:"type:text"` // AK/SK 鉴权的 SecretKey（如火山引擎即梦AI）
 	APIVersion  string `json:"api_version" gorm:"size:50"` // 也用于存储默认模型名称
 
 	// 限制
@@ -1061,16 +1063,18 @@ type CreateChapterRequest struct {
 }
 
 type UpdateChapterRequest struct {
-	Title   string `json:"title"`
-	Content string `json:"content"`
+	Title       string `json:"title"`
+	Content     string `json:"content"`
+	ChapterHook string `json:"chapter_hook"`
 }
 
 type GenerateChapterRequest struct {
-	NovelID       uint   `json:"novel_id" binding:"required"`
-	ChapterNo     int    `json:"chapter_no" binding:"required"`
+	NovelID       uint   `json:"novel_id"`
+	ChapterNo     int    `json:"chapter_no" binding:"required,min=1"`
 	Prompt        string `json:"prompt"`
 	MaxTokens     int    `json:"max_tokens"`
-	ModelOverride string `json:"model,omitempty"` // 可选：指定使用的 AI 模型/provider
+	ModelOverride string `json:"model,omitempty"`  // 可选：指定使用的 AI 模型/provider
+	IsStandalone  bool   `json:"is_standalone"`    // true=最终章，要求故事完整收尾；可显式传入，也会由系统根据 chapter_no >= target_chapters 自动推断
 }
 
 type CreateCharacterRequest struct {
@@ -1134,22 +1138,25 @@ type EnhancementConfig struct {
 }
 
 type CreateModelProviderRequest struct {
-	Name        string `json:"name" binding:"required"`
-	DisplayName string `json:"display_name"`
-	Type        string `json:"type" binding:"required"`
-	APIEndpoint string `json:"api_endpoint"`
-	APIKey      string `json:"api_key"`
-	APIVersion  string `json:"api_version"`
-	IsActive    bool   `json:"is_active"`
+	Name         string `json:"name" binding:"required"`
+	DisplayName  string `json:"display_name"`
+	Type         string `json:"type" binding:"required"`
+	APIEndpoint  string `json:"api_endpoint"`
+	APIKey       string `json:"api_key"`
+	APISecretKey string `json:"api_secret_key"`
+	APIVersion   string `json:"api_version"`
+	IsActive     bool   `json:"is_active"`
 }
 
 type UpdateModelProviderRequest struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name"`
-	APIEndpoint string `json:"api_endpoint"`
-	APIKey      string `json:"api_key"`
-	APIVersion  string `json:"api_version"`
-	IsActive    *bool  `json:"is_active"`
+	Name         string `json:"name"`
+	DisplayName  string `json:"display_name"`
+	Type         string `json:"type"`
+	APIEndpoint  string `json:"api_endpoint"`
+	APIKey       string `json:"api_key"`
+	APISecretKey string `json:"api_secret_key"`
+	APIVersion   string `json:"api_version"`
+	IsActive     *bool  `json:"is_active"`
 }
 
 type CreateAIModelRequest struct {
@@ -1348,6 +1355,9 @@ type Skill struct {
 	Status string `json:"status" gorm:"size:20;default:active"` // active/sealed/lost/disabled
 	Notes  string `json:"notes" gorm:"type:text"`               // 作者内部备注
 
+	EffectImageURL     string `json:"effect_image_url" gorm:"size:1000"`   // AI 生成的技能特效图片
+	EffectVisualPrompt string `json:"effect_visual_prompt" gorm:"type:text"` // 特效图片生成提示词
+
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
@@ -1392,10 +1402,11 @@ type UpdateSkillRequest struct {
 	Cost        string `json:"cost"`
 	Cooldown    string `json:"cooldown"`
 	Tags        string `json:"tags"`
-	AcquiredChapterNo *int   `json:"acquired_chapter_no"`
-	AcquiredDesc      string `json:"acquired_desc"`
-	Status      string `json:"status"`
-	Notes       string `json:"notes"`
+	AcquiredChapterNo  *int   `json:"acquired_chapter_no"`
+	AcquiredDesc       string `json:"acquired_desc"`
+	Status             string `json:"status"`
+	Notes              string `json:"notes"`
+	EffectVisualPrompt string `json:"effect_visual_prompt"`
 }
 
 type GenerateSkillsRequest struct {
@@ -1409,4 +1420,5 @@ type GenerateSkillsRequest struct {
 type BatchGenerateShotsRequest struct {
 	ShotIDs     []uint `json:"shot_ids" binding:"required"`
 	QualityTier string `json:"quality_tier"` // override; empty = use video's quality_tier
+	Provider    string `json:"provider"`     // video provider override (e.g. "kling", "seedance")
 }

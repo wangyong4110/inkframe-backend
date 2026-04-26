@@ -8,8 +8,10 @@ import (
 	"log"
 	"strings"
 	"text/template"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
@@ -84,6 +86,9 @@ func (s *ChapterService) UpdateChapter(id uint, req *model.UpdateChapterRequest)
 		chapter.Content = req.Content
 		chapter.WordCount = countChineseChars(req.Content)
 	}
+	if req.ChapterHook != "" {
+		chapter.ChapterHook = req.ChapterHook
+	}
 	return chapter, s.chapterRepo.Update(chapter)
 }
 
@@ -106,6 +111,9 @@ func (s *ChapterService) UpdateChapterByNo(novelID uint, chapterNo int, req *mod
 	if req.Content != "" {
 		chapter.Content = req.Content
 		chapter.WordCount = countChineseChars(req.Content)
+	}
+	if req.ChapterHook != "" {
+		chapter.ChapterHook = req.ChapterHook
 	}
 	return chapter, s.chapterRepo.Update(chapter)
 }
@@ -134,6 +142,12 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	// ── Step 1: 层次化上下文 ──────────────────────────────
 	globalCtx := s.buildGlobalContext(novelID, req.ChapterNo, novel)
 
+	// 自动检测最终章：当前章节号达到小说目标章节数时，确保故事完整收尾
+	// 用户也可通过 is_standalone=true 显式触发（如临时想提前收尾）
+	if !req.IsStandalone && novel.TargetChapters > 0 && req.ChapterNo >= novel.TargetChapters {
+		req.IsStandalone = true
+	}
+
 	// 从小说大纲获取本章元数据（张力值、幕次、情感基调等）
 	chapterMeta := s.extractChapterMeta(novelID, req.ChapterNo)
 
@@ -143,7 +157,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	)
 
 	// ── Step 3: 按场景大纲生成章节内容 ───────────────────
-	content, err := s.generateFromSceneOutline(
+	content, chapterHook, err := s.generateFromSceneOutline(
 		tenantID, novelID, req, novel, sceneOutlineJSON, globalCtx, chapterMeta,
 	)
 	if err != nil {
@@ -165,6 +179,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		existing.ActNo = chapterMeta.actNo
 		existing.EmotionalTone = chapterMeta.emotionalTone
 		existing.HookType = chapterMeta.hookType
+		existing.ChapterHook = chapterHook
 		existing.Status = "completed"
 		if err := s.chapterRepo.Update(existing); err != nil {
 			return nil, err
@@ -183,6 +198,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 			ActNo:         chapterMeta.actNo,
 			EmotionalTone: chapterMeta.emotionalTone,
 			HookType:      chapterMeta.hookType,
+			ChapterHook:   chapterHook,
 			Status:        "completed",
 		}
 		if err := s.chapterRepo.Create(chapter); err != nil {
@@ -286,7 +302,11 @@ func (s *ChapterService) generateSceneOutline(
 
 	hookType := meta.hookType
 	if hookType == "" {
-		hookType = "cliffhanger"
+		if req.IsStandalone {
+			hookType = "大结局" // 独立故事：圆满/震撼收尾，不留悬念
+		} else {
+			hookType = "cliffhanger"
+		}
 	}
 	emotionalTone := meta.emotionalTone
 	if emotionalTone == "" {
@@ -322,6 +342,7 @@ func (s *ChapterService) generateSceneOutline(
 		"ActNo":                 actNo,
 		"EmotionalTone":         emotionalTone,
 		"HookType":              hookType,
+		"IsStandalone":          req.IsStandalone,
 		"PreviousChapterEnding": prevEnding,
 		"Characters":            characters,
 		"ForeshadowHints":       foreshadowHints,
@@ -351,6 +372,8 @@ func (s *ChapterService) generateSceneOutline(
 }
 
 // generateFromSceneOutline 根据场景大纲生成章节正文
+// 返回 (正文内容, 章末钩子, error)
+// AI 输出中「【章末钩子】」标记后的内容会被提取为独立钩子字段
 func (s *ChapterService) generateFromSceneOutline(
 	tenantID, novelID uint,
 	req *model.GenerateChapterRequest,
@@ -358,7 +381,7 @@ func (s *ChapterService) generateFromSceneOutline(
 	sceneOutlineJSON string,
 	globalCtx string,
 	meta chapterOutlineMeta,
-) (string, error) {
+) (string, string, error) {
 
 	// MaxTokens 约等于字数（中文约1token/字）；未设置时默认3000字
 	wordCount := req.MaxTokens
@@ -405,13 +428,15 @@ func (s *ChapterService) generateFromSceneOutline(
 
 	// 如果没有场景大纲，降级到简单 prompt
 	if sceneOutlineJSON == "" || len(outlineData.Scenes) == 0 {
-		return s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
+		content, err := s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
+		return content, "", err
 	}
 
 	tmplStr := loadPromptTemplate("chapter_from_outline.tmpl")
 	tmpl, err := template.New("chapter_from_outline").Parse(tmplStr)
 	if err != nil {
-		return s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
+		content, err := s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
+		return content, "", err
 	}
 
 	var buf bytes.Buffer
@@ -426,11 +451,18 @@ func (s *ChapterService) generateFromSceneOutline(
 		"PeakTension":   peakTension,
 		"Characters":    characterVoices,
 		"UserPrompt":    req.Prompt,
+		"IsStandalone":  req.IsStandalone,
 	}); err != nil {
-		return s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
+		content, err := s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
+		return content, "", err
 	}
 
-	return s.aiService.GenerateWithProvider(tenantID, novelID, "chapter", buf.String(), req.ModelOverride)
+	raw, err := s.aiService.GenerateWithProvider(tenantID, novelID, "chapter", buf.String(), req.ModelOverride)
+	if err != nil {
+		return "", "", err
+	}
+	content, hook := extractChapterHook(raw)
+	return content, hook, nil
 }
 
 // generateFallbackChapter 场景大纲失败时的降级生成
@@ -548,6 +580,10 @@ func (s *ChapterService) getPreviousChapterEnding(novelID uint, chapterNo int) s
 	if err != nil || prev == nil {
 		return ""
 	}
+	// 优先使用独立保存的章末钩子
+	if prev.ChapterHook != "" {
+		return prev.ChapterHook
+	}
 	if prev.Summary != "" {
 		return prev.Summary
 	}
@@ -557,6 +593,19 @@ func (s *ChapterService) getPreviousChapterEnding(novelID uint, chapterNo int) s
 		content = content[len(content)-200:]
 	}
 	return string(content)
+}
+
+// extractChapterHook 从 AI 生成的原始内容中分离正文与章末钩子。
+// AI 应在正文后输出「【章末钩子】」标记，之后的内容即为钩子正文。
+func extractChapterHook(raw string) (content, hook string) {
+	const marker = "【章末钩子】"
+	idx := strings.Index(raw, marker)
+	if idx < 0 {
+		return strings.TrimSpace(raw), ""
+	}
+	content = strings.TrimSpace(raw[:idx])
+	hook = strings.TrimSpace(raw[idx+len(marker):])
+	return
 }
 
 
@@ -886,9 +935,9 @@ type GeneratedCharacterImage struct {
 
 func (s *ImageGenerationService) GenerateCharacterImage(req *model.GenerateImageRequest) (*GeneratedCharacterImage, error) {
 	options := &ImageGenerationOptions{
-		Prompt:  fmt.Sprintf("%s, %s, %s style", req.Subject, req.Description, req.Style),
-		Size:    "512x512",
-		Steps:   50,
+		Prompt:   fmt.Sprintf("%s, %s, %s style", req.Subject, req.Description, req.Style),
+		Size:     "512x512",
+		Steps:    50,
 		CFGScale: 7.5,
 	}
 	image, err := s.aiService.GenerateImage(options.Prompt, options)
@@ -896,6 +945,35 @@ func (s *ImageGenerationService) GenerateCharacterImage(req *model.GenerateImage
 		return nil, err
 	}
 	return &GeneratedCharacterImage{URL: image.URL, Description: req.Description}, nil
+}
+
+// GenerateThreeViewImage 生成单个视角的角色三视图
+// viewType: "front" | "side" | "back"
+// referenceImage: 肖像参考图 URL（用于 IP-Adapter 保持面部一致性，可为空）
+// provider: 指定图像生成提供者（可为空，空时自动选择）
+func (s *ImageGenerationService) GenerateThreeViewImage(name, appearance, viewType, style, referenceImage, provider string) (*GeneratedCharacterImage, error) {
+	viewDesc := map[string]string{
+		"front": "front view, facing forward, full body, character reference sheet",
+		"side":  "side view, profile view, full body, character reference sheet",
+		"back":  "back view, facing away, full body, character reference sheet",
+	}
+	angleDesc, ok := viewDesc[viewType]
+	if !ok {
+		return nil, fmt.Errorf("invalid view type: %s", viewType)
+	}
+	styleStr := style
+	if styleStr == "" {
+		styleStr = "anime"
+	}
+	prompt := fmt.Sprintf("%s, %s, %s, %s style, white background, clean lines, high quality", name, appearance, angleDesc, styleStr)
+	if referenceImage != "" {
+		prompt += ", consistent with reference portrait"
+	}
+	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), 0, provider, prompt)
+	if err != nil {
+		return nil, err
+	}
+	return &GeneratedCharacterImage{URL: url, Description: fmt.Sprintf("%s %s", name, viewType)}, nil
 }
 
 // ============================================
@@ -911,12 +989,12 @@ func NewStoryboardService(videoService *VideoService, aiService *AIService) *Sto
 	return &StoryboardService{videoService: videoService, aiService: aiService}
 }
 
-func (s *StoryboardService) GenerateStoryboard(videoID, chapterID uint, characters []string, style string) (interface{}, error) {
+func (s *StoryboardService) GenerateStoryboard(videoID, chapterID uint, characters []string, style, provider string) (interface{}, error) {
 	var chapterIDPtr *uint
 	if chapterID != 0 {
 		chapterIDPtr = &chapterID
 	}
-	shots, err := s.videoService.GenerateStoryboard(videoID, chapterIDPtr)
+	shots, err := s.videoService.GenerateStoryboard(videoID, provider, chapterIDPtr)
 	if err != nil {
 		return nil, err
 	}
@@ -1105,20 +1183,62 @@ func (s *ModelService) ListProviders(tenantID uint) (interface{}, error) {
 	return providers, err
 }
 
+// CapableProvider is a minimal provider descriptor returned by capability-filtered listing endpoints.
+type CapableProvider struct {
+	Name        string `json:"name"`
+	DisplayName string `json:"display_name"`
+}
+
+// listCapableProviders fetches all active, key-bearing providers for the tenant
+// and returns those whose name appears in the capableNames set.
+func (s *ModelService) listCapableProviders(tenantID uint, capableNames map[string]bool) ([]CapableProvider, error) {
+	providers, err := s.providerRepo.ListByTenant(tenantID)
+	if err != nil {
+		return nil, err
+	}
+	var result []CapableProvider
+	for _, p := range providers {
+		if capableNames[p.Name] && p.IsActive && strings.TrimSpace(p.APIKey) != "" {
+			name := p.DisplayName
+			if name == "" {
+				name = p.Name
+			}
+			result = append(result, CapableProvider{Name: p.Name, DisplayName: name})
+		}
+	}
+	return result, nil
+}
+
+// ListLLMCapableProviders returns active, key-bearing providers that support LLM text generation.
+func (s *ModelService) ListLLMCapableProviders(tenantID uint) ([]CapableProvider, error) {
+	return s.listCapableProviders(tenantID, map[string]bool{
+		"openai": true, "claude": true, "anthropic": true, "deepseek": true,
+		"doubao": true, "qianwen": true, "gemini": true, "google": true,
+	})
+}
+
+// ListImageCapableProviders returns active, key-bearing providers that support image generation.
+func (s *ModelService) ListImageCapableProviders(tenantID uint) ([]CapableProvider, error) {
+	return s.listCapableProviders(tenantID, map[string]bool{
+		"openai": true, "doubao": true, "qianwen": true, "volcengine-visual": true,
+	})
+}
+
 func (s *ModelService) GetProvider(id uint, tenantID uint) (*model.ModelProvider, error) {
 	return s.providerRepo.GetByIDAndTenant(id, tenantID)
 }
 
 func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, tenantID uint) (*model.ModelProvider, error) {
 	provider := &model.ModelProvider{
-		TenantID:    tenantID,
-		Name:        req.Name,
-		DisplayName: req.DisplayName,
-		Type:        req.Type,
-		APIEndpoint: req.APIEndpoint,
-		APIKey:      req.APIKey,
-		APIVersion:  req.APIVersion,
-		IsActive:    req.IsActive,
+		TenantID:     tenantID,
+		Name:         req.Name,
+		DisplayName:  req.DisplayName,
+		Type:         req.Type,
+		APIEndpoint:  req.APIEndpoint,
+		APIKey:       req.APIKey,
+		APISecretKey: req.APISecretKey,
+		APIVersion:   req.APIVersion,
+		IsActive:     req.IsActive,
 	}
 	return provider, s.providerRepo.Create(provider)
 }
@@ -1134,11 +1254,17 @@ func (s *ModelService) UpdateProvider(id uint, tenantID uint, req *model.UpdateM
 	if req.DisplayName != "" {
 		provider.DisplayName = req.DisplayName
 	}
+	if req.Type != "" {
+		provider.Type = req.Type
+	}
 	if req.APIEndpoint != "" {
 		provider.APIEndpoint = req.APIEndpoint
 	}
 	if req.APIKey != "" {
 		provider.APIKey = req.APIKey
+	}
+	if req.APISecretKey != "" {
+		provider.APISecretKey = req.APISecretKey
 	}
 	if req.APIVersion != "" {
 		provider.APIVersion = req.APIVersion
@@ -1166,6 +1292,21 @@ func (s *ModelService) TestProvider(id uint, tenantID uint) (interface{}, error)
 	if err != nil {
 		return nil, err
 	}
+
+	// 即梦AI Visual API（AK/SK 鉴权）：直接构造 provider 进行健康检查
+	if provider.Name == "volcengine-visual" {
+		if provider.APIKey == "" || provider.APISecretKey == "" {
+			return map[string]interface{}{"status": "error", "error": "AccessKey 和 SecretKey 均不能为空", "provider_id": id}, nil
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		vp := ai.NewVolcengineVisualProvider(provider.APIKey, provider.APISecretKey)
+		if checkErr := vp.HealthCheck(ctx); checkErr != nil {
+			return map[string]interface{}{"status": "error", "error": checkErr.Error(), "provider_id": id}, nil
+		}
+		return map[string]interface{}{"status": "ok", "provider_id": id}, nil
+	}
+
 	if s.aiService != nil {
 		if _, loadErr := s.aiService.getTenantProvider(tenantID, provider.Name); loadErr != nil {
 			return map[string]interface{}{"status": "error", "error": loadErr.Error(), "provider_id": id}, nil

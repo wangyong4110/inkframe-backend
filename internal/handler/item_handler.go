@@ -3,9 +3,9 @@ package handler
 import (
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
 
@@ -103,19 +103,60 @@ func (h *ItemHandler) DeleteItem(c *gin.Context) {
 	respondOK(c, gin.H{"message": "item deleted"})
 }
 
-// GenerateItemImage POST /items/:id/images
+// GenerateItemImage 生成物品图像（异步任务）
+// POST /api/v1/items/:id/images
+// 立即返回 202 + task_id，轮询 GET /items/:id/images/:task_id 获取结果
 func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
 		respondBadRequest(c, "invalid item id")
 		return
 	}
-	item, err := h.itemService.GenerateItemImage(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
+	var req struct {
+		ReferenceImageURL string `json:"reference_image_url"`
+		Provider          string `json:"provider,omitempty"` // 指定图像生成提供者
+	}
+	// 忽略解析错误（body 可为空）
+	_ = c.ShouldBindJSON(&req)
+
+	taskID := newTaskID("img")
+	itemID := uint(id)
+	refURL, provider := req.ReferenceImageURL, req.Provider
+
+	task := &AsyncTask{TaskID: taskID, Status: taskStatusPending, CreatedAt: time.Now().Unix()}
+	itemImageTasks.store(task)
+
+	go func() {
+		task.Status = taskStatusRunning
+		itemImageTasks.store(task)
+		item, err := h.itemService.GenerateItemImage(itemID, refURL, provider)
+		if err != nil {
+			task.Status = taskStatusFailed
+			task.Error = err.Error()
+		} else {
+			task.Status = taskStatusCompleted
+			task.Data = item
+		}
+		itemImageTasks.store(task)
+	}()
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "图像生成任务已提交",
+		"data":    gin.H{"task_id": taskID},
+	})
+}
+
+// GetItemImageTaskStatus 查询物品图像生成任务状态
+// GET /api/v1/items/:id/images/:task_id
+func (h *ItemHandler) GetItemImageTaskStatus(c *gin.Context) {
+	taskID := c.Param("task_id")
+	task, ok := itemImageTasks.load(taskID)
+	if !ok {
+		respondErr(c, http.StatusNotFound, "task not found")
 		return
 	}
-	respondOK(c, item)
+	respondOK(c, task)
 }
 
 // ListEffectiveItems GET /novels/:id/chapters/:chapter_no/items

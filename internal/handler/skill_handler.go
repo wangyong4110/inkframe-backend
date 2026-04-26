@@ -132,3 +132,18 @@ func (h *SkillHandler) GenerateSkills(c *gin.Context) {
 	}
 	respondCreated(c, gin.H{"skills": skills, "count": len(skills)})
 }
+
+// GenerateSkillEffect POST /skills/:skillId/effect-image
+func (h *SkillHandler) GenerateSkillEffect(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("skillId"), 10, 64)
+	if err != nil {
+		respondErr(c, http.StatusBadRequest, "invalid skill id")
+		return
+	}
+	skill, err := h.skillService.GenerateSkillEffect(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, skill)
+}

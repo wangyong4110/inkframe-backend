@@ -2,13 +2,42 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
+	"mime"
 	"net/http"
+	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
+	"github.com/inkframe/inkframe-backend/internal/storage"
 )
+
+// characterToUpdateReq copies string fields from a Character into an
+// UpdateCharacterRequest, preserving existing values before a partial update.
+// Slice fields (PersonalityTags, Abilities) are left nil so the service
+// leaves them unchanged.
+func characterToUpdateReq(c *model.Character) *model.UpdateCharacterRequest {
+	return &model.UpdateCharacterRequest{
+		Name:           c.Name,
+		Role:           c.Role,
+		Archetype:      c.Archetype,
+		Appearance:     c.Appearance,
+		Personality:    c.Personality,
+		Background:     c.Background,
+		CharacterArc:   c.CharacterArc,
+		Portrait:       c.Portrait,
+		ThreeViewFront: c.ThreeViewFront,
+		ThreeViewSide:  c.ThreeViewSide,
+		ThreeViewBack:  c.ThreeViewBack,
+		CoverImage:     c.CoverImage,
+	}
+}
 
 // characterResponse converts a Character model to a response map, parsing JSON
 // string fields (abilities, personality_tags) into proper JSON arrays so the
@@ -62,6 +91,7 @@ type CharacterHandler struct {
 	arcService       *service.CharacterArcService
 	imageGenService  *service.ImageGenerationService
 	chapterSvc       *service.ChapterService
+	storageSvc       storage.Service
 }
 
 func NewCharacterHandler(
@@ -74,6 +104,11 @@ func NewCharacterHandler(
 		arcService:       arcService,
 		imageGenService:  imageGenService,
 	}
+}
+
+func (h *CharacterHandler) WithStorage(svc storage.Service) *CharacterHandler {
+	h.storageSvc = svc
+	return h
 }
 
 func (h *CharacterHandler) WithChapterService(svc *service.ChapterService) *CharacterHandler {
@@ -229,6 +264,174 @@ func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 	}
 
 	respondOK(c, image)
+}
+
+// GenerateThreeView AI生成角色三视图（异步任务）
+// POST /api/v1/characters/:id/three-view
+// 立即返回 202 + task_id，轮询 GET /characters/:id/three-view/:task_id 获取结果
+func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid character id")
+		return
+	}
+
+	var req struct {
+		ViewType string `json:"view_type"` // "front" | "side" | "back" | "all"
+		Style    string `json:"style,omitempty"`
+		Provider string `json:"provider,omitempty"` // 指定图像生成提供者，可为空
+	}
+	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	if req.ViewType == "" {
+		req.ViewType = "all"
+	}
+
+	character, err := h.characterService.GetCharacter(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+
+	taskID := newTaskID("tv")
+	task := &AsyncTask{TaskID: taskID, Status: taskStatusPending, CreatedAt: time.Now().Unix()}
+	threeViewTasks.store(task)
+
+	go func(charID uint, char *model.Character, viewType, style, provider string) {
+		task.Status = taskStatusRunning
+		threeViewTasks.store(task)
+
+		views := []string{viewType}
+		if viewType == "all" {
+			views = []string{"front", "side", "back"}
+		}
+
+		// Generate all views in parallel.
+		type viewResult struct {
+			view string
+			url  string
+			err  error
+		}
+		resultCh := make(chan viewResult, len(views))
+		var wg sync.WaitGroup
+		for _, v := range views {
+			wg.Add(1)
+			go func(v string) {
+				defer wg.Done()
+				img, err := h.imageGenService.GenerateThreeViewImage(char.Name, char.Appearance, v, style, char.Portrait, provider)
+				if err != nil {
+					resultCh <- viewResult{view: v, err: err}
+					return
+				}
+				resultCh <- viewResult{view: v, url: img.URL}
+			}(v)
+		}
+		wg.Wait()
+		close(resultCh)
+
+		generated := map[string]string{}
+		updateReq := characterToUpdateReq(char)
+		for r := range resultCh {
+			if r.err != nil {
+				task.Status = taskStatusFailed
+				task.Error = "generate " + r.view + " view failed: " + r.err.Error()
+				threeViewTasks.store(task)
+				return
+			}
+			generated[r.view] = r.url
+			switch r.view {
+			case "front":
+				updateReq.ThreeViewFront = r.url
+			case "side":
+				updateReq.ThreeViewSide = r.url
+			case "back":
+				updateReq.ThreeViewBack = r.url
+			}
+		}
+
+		updated, err := h.characterService.UpdateCharacter(charID, updateReq)
+		if err != nil {
+			task.Status = taskStatusFailed
+			task.Error = "save three view failed: " + err.Error()
+			threeViewTasks.store(task)
+			return
+		}
+
+		task.Status = taskStatusCompleted
+		task.Data = map[string]interface{}{"character": updated, "generated": generated}
+		threeViewTasks.store(task)
+	}(uint(id), character, req.ViewType, req.Style, req.Provider)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "三视图生成任务已提交",
+		"data":    gin.H{"task_id": taskID},
+	})
+}
+
+// GetThreeViewTaskStatus 查询三视图生成任务状态
+// GET /api/v1/characters/:id/three-view/:task_id
+func (h *CharacterHandler) GetThreeViewTaskStatus(c *gin.Context) {
+	taskID := c.Param("task_id")
+	task, ok := threeViewTasks.load(taskID)
+	if !ok {
+		respondErr(c, http.StatusNotFound, "task not found")
+		return
+	}
+	respondOK(c, task)
+}
+
+// UploadPortrait 上传角色肖像图片（远端 OSS 或本地存储兜底），用作三视图生成参考图
+// POST /api/v1/characters/:id/portrait/upload
+func (h *CharacterHandler) UploadPortrait(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid character id")
+		return
+	}
+
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		respondBadRequest(c, "no file uploaded")
+		return
+	}
+	defer file.Close()
+
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	allowed := map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".webp": true}
+	if !allowed[ext] {
+		respondBadRequest(c, "only jpg/png/webp images are allowed")
+		return
+	}
+
+	contentType := mime.TypeByExtension(ext)
+	if contentType == "" {
+		contentType = "image/jpeg"
+	}
+
+	objectKey := fmt.Sprintf("portraits/%s%s", uuid.New().String(), ext)
+	portraitURL, err := h.storageSvc.Upload(c.Request.Context(), objectKey, file, header.Size, contentType)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to upload portrait")
+		return
+	}
+
+	character, err := h.characterService.GetCharacter(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+	updateReq := characterToUpdateReq(character)
+	updateReq.Portrait = portraitURL
+	updated, err := h.characterService.UpdateCharacter(uint(id), updateReq)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to update portrait")
+		return
+	}
+
+	respondOK(c, gin.H{"url": portraitURL, "character": updated})
 }
 
 // GenerateCharacterProfile AI生成角色档案

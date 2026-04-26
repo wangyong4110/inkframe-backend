@@ -119,7 +119,9 @@ func (s *ItemService) DeleteItem(id uint) error {
 }
 
 // GenerateItemImage 为物品生成图像
-func (s *ItemService) GenerateItemImage(id uint) (*model.Item, error) {
+// referenceImageURL 可选：用户上传的参考图 URL，会附加到 prompt 供 AI 参考
+// provider 可选：指定使用的图像生成提供者，空字符串 = 自动选择
+func (s *ItemService) GenerateItemImage(id uint, referenceImageURL, provider string) (*model.Item, error) {
 	item, err := s.itemRepo.GetByID(id)
 	if err != nil {
 		return nil, fmt.Errorf("item not found: %w", err)
@@ -128,7 +130,12 @@ func (s *ItemService) GenerateItemImage(id uint) (*model.Item, error) {
 	if prompt == "" {
 		prompt = fmt.Sprintf("%s, %s, fantasy item illustration, high detail, concept art", item.Name, item.Appearance)
 	}
-	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), prompt+", item design, no background, studio lighting")
+	if referenceImageURL != "" {
+		// 将参考图 URL 持久化到 item，供后续查看；同时附加到 prompt 提示词
+		item.VisualPrompt = prompt
+		prompt = fmt.Sprintf("%s, based on reference image: %s", prompt, referenceImageURL)
+	}
+	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), 0, provider, prompt+", item design, no background, studio lighting")
 	if err != nil {
 		return nil, fmt.Errorf("generate image failed: %w", err)
 	}

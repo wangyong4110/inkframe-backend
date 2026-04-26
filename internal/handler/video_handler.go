@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -32,6 +33,12 @@ func NewVideoHandler(
 		consistencyService: consistencyService,
 		capcutService:      service.NewCapCutService(),
 	}
+}
+
+// ListVideoProviders 列出已配置的视频生成提供者
+// GET /api/v1/videos/providers
+func (h *VideoHandler) ListVideoProviders(c *gin.Context) {
+	respondOK(c, h.videoService.ListVideoProviders())
 }
 
 // CreateVideo 创建视频项目
@@ -150,8 +157,9 @@ func (h *VideoHandler) DeleteVideo(c *gin.Context) {
 	})
 }
 
-// GenerateStoryboard 生成分镜
+// GenerateStoryboard 生成分镜（异步任务）
 // POST /api/v1/videos/:id/storyboard/generate
+// 立即返回 202 + task_id，轮询 GET /:id/storyboard/generate/:task_id 获取结果
 func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 	videoId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
@@ -163,19 +171,52 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 		ChapterID  uint     `json:"chapter_id"`
 		Characters []string `json:"characters"`
 		Style      string   `json:"style,omitempty"`
+		Provider   string   `json:"provider,omitempty"` // 指定 LLM 提供者，可为空
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
+	// 所有字段均可选，body 为空时忽略 EOF
+	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
 		respondBadRequest(c, err.Error())
 		return
 	}
 
-	result, err := h.storyboardService.GenerateStoryboard(uint(videoId), req.ChapterID, req.Characters, req.Style)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
+	taskID := newTaskID("sb")
+	task := &AsyncTask{TaskID: taskID, Status: taskStatusPending, CreatedAt: time.Now().Unix()}
+	storyboardTasks.store(task)
+
+	go func() {
+		task.Status = taskStatusRunning
+		storyboardTasks.store(task)
+
+		result, err := h.storyboardService.GenerateStoryboard(uint(videoId), req.ChapterID, req.Characters, req.Style, req.Provider)
+		if err != nil {
+			task.Status = taskStatusFailed
+			task.Error = err.Error()
+			storyboardTasks.store(task)
+			fmt.Printf("GenerateStoryboard task %s failed: %v\n", taskID, err)
+			return
+		}
+		task.Status = taskStatusCompleted
+		task.Data = result
+		storyboardTasks.store(task)
+	}()
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "分镜生成任务已提交",
+		"data":    gin.H{"task_id": taskID},
+	})
+}
+
+// GetStoryboardGenStatus 查询分镜生成任务状态
+// GET /api/v1/videos/:id/storyboard/generate/:task_id
+func (h *VideoHandler) GetStoryboardGenStatus(c *gin.Context) {
+	taskID := c.Param("task_id")
+	task, ok := storyboardTasks.load(taskID)
+	if !ok {
+		respondErr(c, http.StatusNotFound, "task not found")
 		return
 	}
-
-	respondOK(c, result)
+	respondOK(c, task)
 }
 
 // GetStoryboard 获取分镜列表
@@ -396,7 +437,12 @@ func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 		return
 	}
 
-	shot, err := h.videoService.GenerateSingleShot(uint(videoID), uint(shotID))
+	var req struct {
+		Provider string `json:"provider"`
+	}
+	c.ShouldBindJSON(&req) //nolint:errcheck — optional body
+
+	shot, err := h.videoService.GenerateSingleShot(uint(videoID), uint(shotID), req.Provider)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -424,7 +470,7 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 		return
 	}
 
-	shots, err := h.videoService.BatchGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier)
+	shots, err := h.videoService.BatchGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, req.Provider)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return

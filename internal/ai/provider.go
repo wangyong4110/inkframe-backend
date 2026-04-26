@@ -122,16 +122,35 @@ type AudioResponse struct {
 	Error     string `json:"error,omitempty"`
 }
 
+// ImageProviderEntry 图像生成提供者入口
+type ImageProviderEntry struct {
+	ProviderName string
+	Model        string
+	Size         string
+}
+
 // ModelManager 模型管理器
 type ModelManager struct {
-	providers map[string]AIProvider
+	providers       map[string]AIProvider
 	defaultProvider string
+	imageProviders  []ImageProviderEntry
 }
 
 func NewModelManager() *ModelManager {
 	return &ModelManager{
 		providers: make(map[string]AIProvider),
 	}
+}
+
+// RegisterImageProvider 注册图像生成提供者候选列表（按调用顺序尝试）。
+// provider 不需要在注册时已存在；实际可用性在请求时由 GetProvider 决定。
+func (m *ModelManager) RegisterImageProvider(name, model, size string) {
+	m.imageProviders = append(m.imageProviders, ImageProviderEntry{name, model, size})
+}
+
+// GetImageProviders 返回已注册的图像生成提供者列表
+func (m *ModelManager) GetImageProviders() []ImageProviderEntry {
+	return m.imageProviders
 }
 
 // RegisterProvider 注册AI提供者

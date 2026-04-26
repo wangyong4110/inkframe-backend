@@ -47,9 +47,10 @@ func (p *DoubaoProvider) GetModels() []string {
 		"doubao-lite-4k",
 		"doubao-lite-32k",
 		"doubao-lite-128k",
-		// Seedream 图像模型
+		// Seedream / SeedEdit 图像模型（火山方舟 Ark 平台）
 		"seedream-3-0-t2i-250415",
 		"seedream-xl-t2i-250415",
+		"seededit-3-0-t2i-250428",
 	}
 }
 

@@ -1,9 +1,11 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -126,6 +128,9 @@ func (s *SkillService) UpdateSkill(id uint, req *model.UpdateSkillRequest) (*mod
 	if req.Notes != "" {
 		skill.Notes = req.Notes
 	}
+	if req.EffectVisualPrompt != "" {
+		skill.EffectVisualPrompt = req.EffectVisualPrompt
+	}
 	// nullable fields — always overwrite (allow clearing)
 	skill.CharacterID = req.CharacterID
 	skill.ParentID = req.ParentID
@@ -245,4 +250,66 @@ skill_type 可选值：active/passive/toggle/ultimate
 		return nil, fmt.Errorf("save skills: %w", err)
 	}
 	return skills, nil
+}
+
+// GenerateSkillEffect 为技能生成释放特效图片
+func (s *SkillService) GenerateSkillEffect(id uint) (*model.Skill, error) {
+	skill, err := s.skillRepo.GetByID(id)
+	if err != nil {
+		return nil, fmt.Errorf("skill not found: %w", err)
+	}
+
+	prompt := skill.EffectVisualPrompt
+	if prompt == "" {
+		prompt = buildSkillEffectPrompt(skill)
+	}
+
+	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), 0, "", prompt)
+	if err != nil {
+		return nil, fmt.Errorf("generate effect image failed: %w", err)
+	}
+
+	skill.EffectImageURL = url
+	return skill, s.skillRepo.Update(skill)
+}
+
+// buildSkillEffectPrompt 根据技能属性自动构建特效图片提示词
+func buildSkillEffectPrompt(skill *model.Skill) string {
+	parts := []string{}
+
+	// Category-specific visual style
+	categoryVisuals := map[string]string{
+		"武技": "martial arts energy burst, sword aura, physical force wave",
+		"法术": "magical spell effect, arcane glow, mystical runes",
+		"身法": "speed blur, movement afterimage, agile silhouette",
+		"心法": "inner energy swirl, golden qi circulation, meditation aura",
+		"阵法": "formation array, geometric patterns, barrier glow",
+		"神通": "divine power manifestation, heavenly light, godly aura",
+		"秘法": "forbidden dark magic, mysterious shadow tendrils, ancient runes",
+		"特性": "special ability glow, unique power field",
+	}
+	if vis, ok := categoryVisuals[skill.Category]; ok {
+		parts = append(parts, vis)
+	}
+
+	parts = append(parts, fmt.Sprintf("skill name: %s", skill.Name))
+
+	if skill.Effect != "" && len(skill.Effect) < 100 {
+		parts = append(parts, skill.Effect)
+	}
+
+	// Skill type visual hints
+	typeVisuals := map[string]string{
+		"active":   "active release, dynamic explosion",
+		"passive":  "subtle aura glow, passive energy field",
+		"toggle":   "transformation effect, state change",
+		"ultimate": "ultimate technique, massive energy release, climactic visual",
+	}
+	if tv, ok := typeVisuals[skill.SkillType]; ok {
+		parts = append(parts, tv)
+	}
+
+	parts = append(parts, "fantasy art, concept art, dramatic lighting, vivid colors, high detail, no background text")
+
+	return strings.Join(parts, ", ")
 }
