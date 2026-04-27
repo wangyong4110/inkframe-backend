@@ -445,8 +445,11 @@ func (s *ChapterService) generateFromSceneOutline(
 	meta chapterOutlineMeta,
 ) (string, string, error) {
 
-	// MaxTokens 约等于字数（中文约1token/字）；未设置时默认3000字
+	// MaxTokens 约等于字数（中文约1token/字）；优先用请求参数，其次小说项目配置，最后默认3000字
 	wordCount := req.MaxTokens
+	if wordCount <= 0 {
+		wordCount = novel.MaxTokens
+	}
 	if wordCount <= 0 {
 		wordCount = 3000
 	}
@@ -531,6 +534,9 @@ func (s *ChapterService) generateFromSceneOutline(
 func (s *ChapterService) generateFallbackChapter(tenantID, novelID uint, req *model.GenerateChapterRequest, novel *model.Novel, globalCtx string) (string, error) {
 	log.Printf("GenerateChapter: using fallback (no scene outline) for novel %d ch %d", novelID, req.ChapterNo)
 	wc := req.MaxTokens
+	if wc <= 0 {
+		wc = novel.MaxTokens
+	}
 	if wc <= 0 {
 		wc = 3000
 	}
@@ -850,6 +856,18 @@ func (s *CharacterService) UpdateCharacter(id uint, req *model.UpdateCharacterRe
 	}
 	if req.CoverImage != "" {
 		character.CoverImage = req.CoverImage
+	}
+	if req.VoiceID != "" {
+		character.VoiceID = req.VoiceID
+	}
+	if req.VoiceSpeed != nil {
+		character.VoiceSpeed = *req.VoiceSpeed
+	}
+	if req.VoiceStyle != "" {
+		character.VoiceStyle = req.VoiceStyle
+	}
+	if req.VoiceSample != "" {
+		character.VoiceSample = req.VoiceSample
 	}
 	return character, s.characterRepo.Update(character)
 }
@@ -1292,18 +1310,15 @@ func capableProviderDisplayName(providerName, dbDisplayName string) string {
 	return providerName
 }
 
-// listCapableProviders fetches all active, key-bearing providers for the tenant
-// and returns those whose name appears in the capableNames set.
-// It merges DB-configured providers with providers registered via env vars in aiManager.
-func (s *ModelService) listCapableProviders(tenantID uint, capableNames map[string]bool) ([]CapableProvider, error) {
+// listCapableProviders returns active, key-bearing providers whose Type field matches typeFilter.
+func (s *ModelService) listCapableProviders(tenantID uint, typeFilter string) ([]CapableProvider, error) {
 	providers, err := s.providerRepo.ListByTenant(tenantID)
 	if err != nil {
 		return nil, err
 	}
-	seen := make(map[string]bool)
 	var result []CapableProvider
 	for _, p := range providers {
-		if !capableNames[p.Name] || !p.IsActive {
+		if !p.IsActive || !strings.EqualFold(p.Type, typeFilter) {
 			continue
 		}
 		if providerHasCredentials(p) {
@@ -1311,37 +1326,14 @@ func (s *ModelService) listCapableProviders(tenantID uint, capableNames map[stri
 				Name:        p.Name,
 				DisplayName: capableProviderDisplayName(p.Name, p.DisplayName),
 			})
-			seen[p.Name] = true
-		}
-	}
-	// Also include providers registered at startup via env vars (aiManager).
-	if s.aiService != nil && s.aiService.aiManager != nil {
-		for _, name := range s.aiService.aiManager.ListProviders() {
-			if capableNames[name] && !seen[name] {
-				result = append(result, CapableProvider{
-					Name:        name,
-					DisplayName: capableProviderDisplayName(name, ""),
-				})
-				seen[name] = true
-			}
 		}
 	}
 	return result, nil
 }
 
-// ListLLMCapableProviders returns active, key-bearing providers that support LLM text generation.
-func (s *ModelService) ListLLMCapableProviders(tenantID uint) ([]CapableProvider, error) {
-	return s.listCapableProviders(tenantID, map[string]bool{
-		"openai": true, "claude": true, "anthropic": true, "deepseek": true,
-		"doubao": true, "qianwen": true, "gemini": true, "google": true,
-	})
-}
-
-// ListImageCapableProviders returns active, key-bearing providers that support image generation.
-func (s *ModelService) ListImageCapableProviders(tenantID uint) ([]CapableProvider, error) {
-	return s.listCapableProviders(tenantID, map[string]bool{
-		"openai": true, "doubao": true, "qianwen": true, ai.ProviderNameVolcengineVisual: true,
-	})
+// ListCapableProviders returns active, credentialed providers matching the given type (e.g. "LLM", "IMAGE").
+func (s *ModelService) ListCapableProviders(tenantID uint, providerType string) ([]CapableProvider, error) {
+	return s.listCapableProviders(tenantID, providerType)
 }
 
 func (s *ModelService) GetProvider(id uint, tenantID uint) (*model.ModelProvider, error) {
@@ -1575,10 +1567,18 @@ func (s *TimelineService) GetTimeline(novelID uint) (*Timeline, error) {
 type WorldviewService struct {
 	worldviewRepo *repository.WorldviewRepository
 	aiService     *AIService
+	novelRepo     *repository.NovelRepository
+	chapterRepo   *repository.ChapterRepository
 }
 
 func NewWorldviewService(worldviewRepo *repository.WorldviewRepository, aiService *AIService) *WorldviewService {
 	return &WorldviewService{worldviewRepo: worldviewRepo, aiService: aiService}
+}
+
+func (s *WorldviewService) WithNovelRepos(novelRepo *repository.NovelRepository, chapterRepo *repository.ChapterRepository) *WorldviewService {
+	s.novelRepo = novelRepo
+	s.chapterRepo = chapterRepo
+	return s
 }
 
 func (s *WorldviewService) CreateWorldview(worldview *model.Worldview) error {
@@ -1628,12 +1628,61 @@ func (s *WorldviewService) DeleteEntity(id uint) error {
 }
 
 // GenerateWorldview AI生成世界观
-func (s *WorldviewService) GenerateWorldview(tenantID uint, genre string, hints []string) (*model.Worldview, error) {
-	prompt := fmt.Sprintf("请为%s类型的小说生成一个完整的世界观设定。", genre)
-	if len(hints) > 0 {
-		prompt += fmt.Sprintf("参考提示：%s。", strings.Join(hints, "、"))
+func (s *WorldviewService) GenerateWorldview(tenantID uint, novelID uint, genre string, hints []string) (*model.Worldview, error) {
+	prompt := fmt.Sprintf(`请为【%s】类型的小说生成一个完整、详细的世界观设定。`, genre)
+
+	// 若传入 novelID，优先从小说数据构建上下文
+	if novelID > 0 && s.novelRepo != nil {
+		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+			prompt = fmt.Sprintf("请根据以下小说信息，为该小说生成一个完整、详细且与之高度契合的世界观设定。\n")
+			prompt += fmt.Sprintf("【小说名称】%s\n", novel.Title)
+			prompt += fmt.Sprintf("【题材类型】%s\n", novel.Genre)
+			if novel.Description != "" {
+				prompt += fmt.Sprintf("【小说简介】%s\n", novel.Description)
+			}
+			if novel.StylePrompt != "" {
+				prompt += fmt.Sprintf("【写作风格】%s\n", novel.StylePrompt)
+			}
+			genre = novel.Genre
+			// 附加前几章内容摘要作为上下文
+			if s.chapterRepo != nil {
+				if chapters, err := s.chapterRepo.ListByNovel(novelID); err == nil && len(chapters) > 0 {
+					limit := 3
+					if len(chapters) < limit {
+						limit = len(chapters)
+					}
+					prompt += "【已有章节摘要】\n"
+					for i := 0; i < limit; i++ {
+						ch := chapters[i]
+						if ch.Summary != "" {
+							prompt += fmt.Sprintf("第%d章《%s》摘要：%s\n", ch.ChapterNo, ch.Title, ch.Summary)
+						} else if ch.Content != "" {
+							content := ch.Content
+							if len(content) > 300 {
+								content = content[:300] + "..."
+							}
+							prompt += fmt.Sprintf("第%d章《%s》内容节选：%s\n", ch.ChapterNo, ch.Title, content)
+						}
+					}
+				}
+			}
+		}
+	} else if len(hints) > 0 {
+		prompt += fmt.Sprintf("\n背景参考：%s", strings.Join(hints, "\n"))
 	}
-	prompt += "\n以JSON格式返回：{\"magic_system\":\"修炼体系描述\",\"geography\":\"地理环境描述\",\"culture\":\"文化背景描述\"}"
+	prompt += `
+
+请严格按以下 JSON 格式返回，所有字段均需填写，内容尽量详实（每字段不少于100字）：
+{
+  "name": "世界观名称（富有特色的专有名词，非类型名）",
+  "description": "世界观总体概述，包括核心世界观念、整体氛围和主要冲突主题",
+  "magic_system": "修炼/魔法/异能体系的详细描述，包括力量来源、境界划分、修炼方式、天花板设定",
+  "geography": "世界地理格局描述，包括主要大陆/区域、重要城市/圣地、地理特征与禁区",
+  "history": "世界历史背景，包括重大历史事件、时代更迭、上古传说、现存历史遗留问题",
+  "culture": "世界的文化风俗，包括种族/文明构成、宗教信仰、礼仪习俗、价值观念",
+  "technology": "世界的科技/炼器/阵法水平，与修炼体系的关系，普通人与修炼者的生活差异",
+  "rules": "世界运行的核心规则与禁忌，包括天道法则、禁术禁地、不可违背的世界规律"
+}`
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, 0, "worldview", prompt, "")
 	if err != nil {
@@ -1641,21 +1690,35 @@ func (s *WorldviewService) GenerateWorldview(tenantID uint, genre string, hints 
 	}
 
 	var data struct {
+		Name        string `json:"name"`
+		Description string `json:"description"`
 		MagicSystem string `json:"magic_system"`
 		Geography   string `json:"geography"`
+		History     string `json:"history"`
 		Culture     string `json:"culture"`
+		Technology  string `json:"technology"`
+		Rules       string `json:"rules"`
 	}
 	if err := json.Unmarshal([]byte(extractJSON(result)), &data); err != nil {
-		log.Printf("GenerateWorldview: failed to parse AI response: %v", err)
+		log.Printf("GenerateWorldview: failed to parse AI response: %v, raw: %.300s", err, result)
+	}
+
+	name := data.Name
+	if name == "" {
+		name = genre + "世界"
 	}
 
 	return &model.Worldview{
 		UUID:        uuid.New().String(),
-		Name:        genre + "世界观",
+		Name:        name,
 		Genre:       genre,
+		Description: data.Description,
 		MagicSystem: data.MagicSystem,
 		Geography:   data.Geography,
+		History:     data.History,
 		Culture:     data.Culture,
+		Technology:  data.Technology,
+		Rules:       data.Rules,
 	}, nil
 }
 

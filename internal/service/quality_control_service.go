@@ -282,22 +282,70 @@ func (s *QualityControlService) checkStyle(chapter *model.Chapter) []QualityIssu
 }
 
 func (s *QualityControlService) generateQualitySuggestions(report *QualityReport) []string {
+	seen := map[string]bool{}
 	suggestions := []string{}
-	highCount := 0
+
+	// Collect per-issue suggestions (skip generic fallback)
 	for _, issue := range report.Issues {
-		if issue.Severity == "high" {
-			highCount++
+		sg := strings.TrimSpace(issue.Suggestion)
+		if sg != "" && sg != "请根据AI建议进行修改" && !seen[sg] {
+			seen[sg] = true
+			suggestions = append(suggestions, sg)
 		}
 	}
-	if highCount > 0 {
-		suggestions = append(suggestions, fmt.Sprintf("有%d个高优先级问题需要修复", highCount))
-	}
+
+	// Append summary based on score
 	if report.OverallScore >= 0.9 {
-		suggestions = append(suggestions, "章节质量优秀，无需特别修改")
+		suggestions = append(suggestions, "章节质量优秀，可适当润色句式增加表现力")
 	} else if report.OverallScore >= 0.7 {
 		suggestions = append(suggestions, "章节质量良好，建议根据上述问题进行小幅优化")
 	} else {
 		suggestions = append(suggestions, "章节存在较多问题，建议整体检查并重写关键部分")
 	}
 	return suggestions
+}
+
+// RefineWithSuggestions 按照指定改进建议对章节内容进行 AI 精修，返回改进后的文本（不保存）
+func (s *QualityControlService) RefineWithSuggestions(chapterID uint, suggestions []string) (string, error) {
+	if s.aiClient == nil {
+		return "", fmt.Errorf("AI client not initialized")
+	}
+	chapter, err := s.chapterRepo.GetByID(chapterID)
+	if err != nil {
+		return "", fmt.Errorf("chapter not found: %w", err)
+	}
+	if chapter.Content == "" {
+		return "", fmt.Errorf("chapter has no content")
+	}
+	if len(suggestions) == 0 {
+		return chapter.Content, nil
+	}
+
+	var sb strings.Builder
+	for i, sg := range suggestions {
+		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, sg))
+	}
+
+	prompt := fmt.Sprintf(`你是一位专业的小说编辑。请根据以下改进建议，对章节内容进行精修。
+要求：保持原有情节、人物和对话不变，只优化写作质量；不添加任何解释说明，直接返回修改后的完整内容。
+
+改进建议：
+%s
+原始内容：
+%s`, sb.String(), chapter.Content)
+
+	provider, err := s.aiClient.GetProvider("")
+	if err != nil {
+		return "", fmt.Errorf("get AI provider: %w", err)
+	}
+	req := &ai.GenerateRequest{
+		Messages:    []ai.ChatMessage{{Role: "user", Content: prompt}},
+		MaxTokens:   4096,
+		Temperature: 0.4,
+	}
+	resp, err := provider.Generate(context.Background(), req)
+	if err != nil {
+		return "", fmt.Errorf("AI refine failed: %w", err)
+	}
+	return strings.TrimSpace(resp.Content), nil
 }

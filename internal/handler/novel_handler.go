@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -18,6 +17,7 @@ type NovelHandler struct {
 	foreshadowService     *service.ForeshadowService
 	timelineService       *service.TimelineService
 	qualityControlService *service.QualityControlService
+	taskSvc               *service.TaskService
 }
 
 func NewNovelHandler(
@@ -34,6 +34,11 @@ func NewNovelHandler(
 		timelineService:       timelineService,
 		qualityControlService: qualityControlService,
 	}
+}
+
+func (h *NovelHandler) WithTaskService(svc *service.TaskService) *NovelHandler {
+	h.taskSvc = svc
+	return h
 }
 
 // CreateNovel 创建小说
@@ -171,22 +176,19 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 		req.ModelOverride = override
 	}
 
-	taskID := newTaskID("gen")
 	tenantID := getTenantID(c)
-	now := time.Now().Unix()
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterGen, "章节生成", "chapter", 0)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 
-	task := &AsyncTask{TaskID: taskID, Status: taskStatusPending, CreatedAt: now}
-	chapterGenTasks.store(task)
-
-	go func() {
-		task.Status = taskStatusRunning
-		chapterGenTasks.store(task)
+	go func(taskID string) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 
 		chapter, err := h.chapterService.GenerateChapter(tenantID, uint(novelId), &req)
 		if err != nil {
-			task.Status = taskStatusFailed
-			task.Error = err.Error()
-			chapterGenTasks.store(task)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			fmt.Printf("GenerateChapter task %s failed: %v\n", taskID, err)
 			return
 		}
@@ -195,9 +197,7 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 		if modelUsed == "" {
 			modelUsed = h.novelService.GetAIService().GetDefaultProviderName()
 		}
-		task.Status = taskStatusCompleted
-		task.Data = map[string]interface{}{"chapter": chapter, "model_used": modelUsed}
-		chapterGenTasks.store(task)
+		h.taskSvc.Complete(taskID, map[string]interface{}{"chapter": chapter, "model_used": modelUsed}) //nolint:errcheck
 
 		// 后处理：伏笔提取 + 质量检查（非阻塞）
 		go func(ch *model.Chapter) {
@@ -210,12 +210,12 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 				fmt.Printf("GenerateChapter: quality check failed (ch %d): %v\n", chID, err)
 			}
 		}(chapter.ID)
-	}()
+	}(task.TaskID)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
 		"message": "章节生成任务已提交",
-		"data":    gin.H{"task_id": taskID},
+		"data":    gin.H{"task_id": task.TaskID},
 	})
 }
 
@@ -223,8 +223,8 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 // GET /api/v1/novels/:id/chapters/generate/:task_id
 func (h *NovelHandler) GetChapterGenStatus(c *gin.Context) {
 	taskID := c.Param("task_id")
-	task, ok := chapterGenTasks.load(taskID)
-	if !ok {
+	task, err := h.taskSvc.Get(taskID)
+	if err != nil {
 		respondErr(c, http.StatusNotFound, "task not found")
 		return
 	}

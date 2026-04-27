@@ -1,9 +1,57 @@
 package model
 
 import (
+	"encoding/json"
 	"gorm.io/gorm"
 	"time"
 )
+
+// AsyncTask 统一异步任务（DB 持久化，页面刷新后仍可恢复）
+type AsyncTask struct {
+	ID         uint           `json:"id" gorm:"primaryKey"`
+	TaskID     string         `json:"task_id" gorm:"uniqueIndex;size:64;not null"`
+	TenantID   uint           `json:"tenant_id" gorm:"index;not null;default:1"`
+	Type       string         `json:"type" gorm:"size:50;index;not null"`
+	Status     string         `json:"status" gorm:"size:20;index;not null;default:pending"`
+	Title      string         `json:"title" gorm:"size:255"`
+	EntityType string         `json:"entity_type" gorm:"size:50"`
+	EntityID   uint           `json:"entity_id" gorm:"index"`
+	ResultJSON string         `json:"-" gorm:"column:result;type:text"`
+	Error      string         `json:"error,omitempty" gorm:"type:text"`
+	Progress   int            `json:"progress" gorm:"default:0"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	DeletedAt  gorm.DeletedAt `json:"-" gorm:"index"`
+}
+
+func (AsyncTask) TableName() string { return "ink_async_task" }
+
+// MarshalJSON exposes ResultJSON as 'data' in the API response.
+func (t AsyncTask) MarshalJSON() ([]byte, error) {
+	m := map[string]interface{}{
+		"id":          t.ID,
+		"task_id":     t.TaskID,
+		"tenant_id":   t.TenantID,
+		"type":        t.Type,
+		"status":      t.Status,
+		"title":       t.Title,
+		"entity_type": t.EntityType,
+		"entity_id":   t.EntityID,
+		"progress":    t.Progress,
+		"created_at":  t.CreatedAt,
+		"updated_at":  t.UpdatedAt,
+	}
+	if t.Error != "" {
+		m["error"] = t.Error
+	}
+	if t.ResultJSON != "" {
+		var data interface{}
+		if err := json.Unmarshal([]byte(t.ResultJSON), &data); err == nil {
+			m["data"] = data
+		}
+	}
+	return json.Marshal(m)
+}
 
 // Novel 小说
 type Novel struct {
@@ -33,9 +81,11 @@ type Novel struct {
 	Worldview   *Worldview `json:"worldview,omitempty" gorm:"foreignKey:WorldviewID"`
 	CoverImage  string     `json:"cover_image" gorm:"size:500"`
 
-	// AI配置
+	// AI配置（项目级，作为所有生成操作的默认参数）
 	AIModel     string  `json:"ai_model" gorm:"size:100"`
 	Temperature float64 `json:"temperature" gorm:"type:decimal(3,2);default:0.7"`
+	TopP        float64 `json:"top_p" gorm:"type:decimal(3,2);default:0.9"`
+	TopK        int     `json:"top_k" gorm:"default:40"`
 	MaxTokens   int     `json:"max_tokens" gorm:"default:4096"`
 	StylePrompt string  `json:"style_prompt" gorm:"type:text"`
 
@@ -151,8 +201,15 @@ type Worldview struct {
 	Culture     string `json:"culture" gorm:"type:text"`
 	Technology  string `json:"technology" gorm:"type:text"`
 
-	// 约束规则（JSON）
+	// 约束规则
 	Rules string `json:"rules" gorm:"type:text"`
+
+	// 扩展世界观元素
+	Factions           string `json:"factions" gorm:"type:text"`            // 势力格局
+	CoreConflicts      string `json:"core_conflicts" gorm:"type:text"`       // 核心矛盾
+	CharacterArchetypes string `json:"character_archetypes" gorm:"type:text"` // 典型人物原型
+	Religion           string `json:"religion" gorm:"type:text"`             // 宗教与信仰
+	Glossary           string `json:"glossary" gorm:"type:text"`             // 术语词汇表
 
 	// 封面
 	CoverImage string `json:"cover_image" gorm:"size:500"`
@@ -237,6 +294,12 @@ type Character struct {
 	// 封面 / 头像
 	Portrait   string `json:"portrait" gorm:"size:1000"`
 	CoverImage string `json:"cover_image" gorm:"size:500"`
+
+	// 配音设置
+	VoiceID     string  `json:"voice_id" gorm:"size:100"`                         // 声音ID/名称（如 alloy/echo/nova 等）
+	VoiceSpeed  float64 `json:"voice_speed" gorm:"type:decimal(4,2);default:1.0"` // 语速 0.25–4.0
+	VoiceStyle  string  `json:"voice_style" gorm:"size:100"`                      // 语音风格（如 calm/excited/sad）
+	VoiceSample string  `json:"voice_sample" gorm:"size:1000"`                    // 试听样本 URL
 
 	// 状态
 	Status string `json:"status" gorm:"size:20;default:active"`
@@ -416,12 +479,8 @@ type PromptTemplate struct {
 	// 模板内容
 	Template string `json:"template" gorm:"type:text;not null"`
 
-	// AI参数
-	SystemPrompt string  `json:"system_prompt" gorm:"type:text"`
-	Temperature  float64 `json:"temperature" gorm:"type:decimal(3,2)"`
-	MaxTokens    int     `json:"max_tokens" gorm:"default:4096"`
-	TopP         float64 `json:"top_p" gorm:"type:decimal(3,2)"`
-	TopK         int     `json:"top_k" gorm:"default:40"`
+	// AI系统提示（AI参数从小说项目配置继承）
+	SystemPrompt string `json:"system_prompt" gorm:"type:text"`
 
 	// 使用统计
 	UsageCount int `json:"usage_count" gorm:"default:0"`
@@ -657,6 +716,9 @@ type Video struct {
 	Type string `json:"type" gorm:"size:50;default:image_sequence"`
 	// image_sequence=图片序列, animation=动画, live_action=真人
 
+	Mode string `json:"mode" gorm:"size:20;default:'video'"`
+	// video=AI视频生成（Kling/Seedance）, slideshow=图片解说（图片+Ken Burns效果）
+
 	Resolution  string `json:"resolution" gorm:"size:20;default:1080p"`
 	FrameRate   int    `json:"frame_rate" gorm:"default:24"`
 	AspectRatio string `json:"aspect_ratio" gorm:"size:10;default:16:9"`
@@ -673,7 +735,9 @@ type Video struct {
 	Thumbnail string `json:"thumbnail" gorm:"size:500"`
 
 	// 状态
-	Status   string  `json:"status" gorm:"size:20;default:planning"`
+	Status       string  `json:"status" gorm:"size:20;default:planning"`
+	ScriptStatus string  `json:"script_status" gorm:"size:20;default:draft"`
+	// draft=脚本草稿（可编辑），confirmed=脚本已确认（可生成素材）
 	Progress float64 `json:"progress" gorm:"type:decimal(5,2);default:0"`
 
 	// 质量档位
@@ -721,7 +785,8 @@ type StoryboardShot struct {
 	ShotSize string `json:"shot_size" gorm:"size:50;default:medium"`
 	// wide=远景, medium=中景, close_up=近景, extreme_close_up=特写
 
-	Duration float64 `json:"duration" gorm:"type:decimal(5,2);default:5.0"`
+	Duration      float64 `json:"duration" gorm:"type:decimal(5,2);default:5.0"`
+	EmotionalTone string  `json:"emotional_tone" gorm:"size:100"` // 情绪基调，如：紧张、浪漫、压抑→释怀
 
 	// 角色和场景（JSON）
 	Characters string `json:"characters" gorm:"type:text"`
@@ -1065,6 +1130,8 @@ type UpdateNovelRequest struct {
 	CoverImage  string   `json:"cover_image"`
 	AIModel     string   `json:"ai_model"`
 	Temperature *float64 `json:"temperature"`
+	TopP        *float64 `json:"top_p"`
+	TopK        *int     `json:"top_k"`
 	MaxTokens   *int     `json:"max_tokens"`
 	StylePrompt string   `json:"style_prompt"`
 }
@@ -1116,6 +1183,11 @@ type UpdateCharacterRequest struct {
 	ThreeViewBack   string        `json:"three_view_back"`
 	Portrait        string        `json:"portrait"`
 	CoverImage      string        `json:"cover_image"`
+	// 配音设置
+	VoiceID     string   `json:"voice_id"`
+	VoiceSpeed  *float64 `json:"voice_speed"` // nil = absent (don't update)
+	VoiceStyle  string   `json:"voice_style"`
+	VoiceSample string   `json:"voice_sample"` // 试听样本存储路径（file:// 或 URL）
 }
 
 type GenerateImageRequest struct {
@@ -1135,14 +1207,16 @@ type CreateVideoRequest struct {
 	ArtStyle    string `json:"art_style"`
 	QualityTier string `json:"quality_tier"` // draft/preview/final
 	ChapterID   *uint  `json:"chapter_id"`
+	Mode        string `json:"mode"` // video/slideshow
 }
 
 type UpdateVideoRequest struct {
-	Title       string `json:"title"`
-	Resolution  string `json:"resolution"`
-	FrameRate   int    `json:"frame_rate"`
-	AspectRatio string `json:"aspect_ratio"`
-	ArtStyle    string `json:"art_style"`
+	Title        string `json:"title"`
+	Resolution   string `json:"resolution"`
+	FrameRate    int    `json:"frame_rate"`
+	AspectRatio  string `json:"aspect_ratio"`
+	ArtStyle     string `json:"art_style"`
+	ScriptStatus string `json:"script_status"` // draft/confirmed
 }
 
 type EnhancementConfig struct {

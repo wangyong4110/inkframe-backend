@@ -37,21 +37,11 @@ func (h *ModelHandler) ListProviders(c *gin.Context) {
 	respondOK(c, providers)
 }
 
-// ListImageCapableProviders 获取已配置图像生成能力的提供者列表
-// GET /api/v1/model-providers/image-capable
-func (h *ModelHandler) ListImageCapableProviders(c *gin.Context) {
-	providers, err := h.modelService.ListImageCapableProviders(getTenantID(c))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondOK(c, providers)
-}
-
-// ListLLMCapableProviders 获取已配置 LLM 文本生成能力的提供者列表
-// GET /api/v1/model-providers/llm-capable
-func (h *ModelHandler) ListLLMCapableProviders(c *gin.Context) {
-	providers, err := h.modelService.ListLLMCapableProviders(getTenantID(c))
+// ListCapableProviders returns providers matching ?type= (e.g. LLM, IMAGE).
+// GET /api/v1/model-providers/capable?type=LLM
+func (h *ModelHandler) ListCapableProviders(c *gin.Context) {
+	providerType := c.Query("type")
+	providers, err := h.modelService.ListCapableProviders(getTenantID(c), providerType)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return

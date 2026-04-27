@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -169,6 +170,12 @@ func (s *NovelService) UpdateNovel(id uint, req *model.UpdateNovelRequest) (*mod
 	}
 	if req.Temperature != nil {
 		novel.Temperature = *req.Temperature
+	}
+	if req.TopP != nil {
+		novel.TopP = *req.TopP
+	}
+	if req.TopK != nil {
+		novel.TopK = *req.TopK
 	}
 	if req.MaxTokens != nil {
 		novel.MaxTokens = *req.MaxTokens
@@ -728,6 +735,7 @@ type AIService struct {
 	taskRepo     *repository.TaskModelConfigRepository
 	aiManager    *ai.ModelManager
 	providerRepo *repository.ModelProviderRepository
+	novelRepo    *repository.NovelRepository
 	providerCache sync.Map // key: "tenantID:providerName" → providerCacheEntry
 }
 
@@ -746,6 +754,12 @@ func NewAIService(
 		svc.providerRepo = providerRepo[0]
 	}
 	return svc
+}
+
+// WithNovelRepo 注入小说仓库，用于在生成时读取小说级 AI 配置
+func (s *AIService) WithNovelRepo(repo *repository.NovelRepository) *AIService {
+	s.novelRepo = repo
+	return s
 }
 
 // Generate 生成内容（使用系统级提供商，tenantID=0）
@@ -856,24 +870,45 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 }
 
 // GenerateWithProvider 使用指定 Provider 生成内容（providerName 为空则使用默认）
+// 参数优先级：小说项目配置 > 任务配置 > 内置默认值
 func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType string, prompt string, providerName string) (string, error) {
-	// 获取任务配置
-	config, err := s.taskRepo.GetByTaskType(taskType)
+	// 获取任务配置（基础层）
+	base, err := s.taskRepo.GetByTaskType(taskType)
 	if err != nil {
-		config = &model.TaskModelConfig{
+		base = &model.TaskModelConfig{
 			Temperature: 0.7,
 			MaxTokens:   4096,
 		}
 	}
+	// 复制一份避免污染缓存
+	config := *base
+
+	// 应用小说项目级 AI 配置（覆盖任务默认值）
+	if novelID > 0 && s.novelRepo != nil {
+		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+			if novel.Temperature > 0 {
+				config.Temperature = novel.Temperature
+			}
+			if novel.TopP > 0 {
+				config.TopP = novel.TopP
+			}
+			if novel.TopK > 0 {
+				config.TopK = novel.TopK
+			}
+			if novel.MaxTokens > 0 {
+				config.MaxTokens = novel.MaxTokens
+			}
+		}
+	}
 
 	// 调用真实AI API
-	result, err := s.callAIWithProvider(tenantID, prompt, config, providerName)
+	result, err := s.callAIWithProvider(tenantID, prompt, &config, providerName)
 	if err != nil {
 		return "", fmt.Errorf("AI generation failed: %w", err)
 	}
 
 	// 记录使用
-	s.logUsage(config, prompt, result)
+	s.logUsage(&config, prompt, result)
 
 	return result, nil
 }
@@ -1208,6 +1243,11 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 
 // AudioGenerate 调用默认 AI provider 生成 TTS 音频，返回本地文件路径（file:// URL）
 func (s *AIService) AudioGenerate(ctx context.Context, text, voice string) (string, error) {
+	return s.AudioGenerateWithOptions(ctx, text, voice, 1.0, "")
+}
+
+// AudioGenerateWithOptions 支持语速和风格的 TTS 生成
+func (s *AIService) AudioGenerateWithOptions(ctx context.Context, text, voice string, speed float64, style string) (string, error) {
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
 	}
@@ -1218,10 +1258,14 @@ func (s *AIService) AudioGenerate(ctx context.Context, text, voice string) (stri
 	if voice == "" {
 		voice = "alloy"
 	}
+	if speed <= 0 {
+		speed = 1.0
+	}
 	resp, err := provider.AudioGenerate(ctx, &ai.AudioGenerateRequest{
-		Text:  text,
-		Voice: voice,
-		Speed: 1.0,
+		Text:    text,
+		Voice:   voice,
+		Speed:   speed,
+		Emotion: style,
 	})
 	if err != nil {
 		return "", err
@@ -1582,7 +1626,7 @@ func (s *VideoService) buildStoryboardPrompt(video *model.Video, content string)
 [
   {
     "shot_no": 1,
-    "description": "场景描述（英文，用于图像生成）",
+    "description": "场景描述（中文）",
     "dialogue": "对话内容（如无则留空）",
     "camera_type": "static|pan|zoom|tracking|dolly|crane",
     "camera_angle": "eye_level|high|low|dutch|overhead|POV",
@@ -1761,6 +1805,9 @@ func (s *VideoService) CreateVideoFromReq(novelID uint, req *model.CreateVideoRe
 	if video.QualityTier == "" {
 		video.QualityTier = "preview"
 	}
+	if video.Mode == "" {
+		video.Mode = "video"
+	}
 	return video, s.videoRepo.Create(video)
 }
 
@@ -1770,8 +1817,8 @@ func (s *VideoService) GetVideo(id uint) (*model.Video, error) {
 }
 
 // ListVideos 获取视频列表
-func (s *VideoService) ListVideos(novelId *uint, status string, page, pageSize int) ([]*model.Video, int, error) {
-	videos, total, err := s.videoRepo.List(novelId, page, pageSize)
+func (s *VideoService) ListVideos(novelId *uint, chapterID *uint, status string, page, pageSize int) ([]*model.Video, int, error) {
+	videos, total, err := s.videoRepo.List(novelId, chapterID, page, pageSize)
 	return videos, int(total), err
 }
 
@@ -1795,6 +1842,9 @@ func (s *VideoService) UpdateVideo(id uint, req *model.UpdateVideoRequest) (*mod
 	}
 	if req.ArtStyle != "" {
 		video.ArtStyle = req.ArtStyle
+	}
+	if req.ScriptStatus != "" {
+		video.ScriptStatus = req.ScriptStatus
 	}
 	return video, s.videoRepo.Update(video)
 }
@@ -1883,6 +1933,11 @@ func (s *VideoService) GetStoryboard(videoID uint) ([]*model.StoryboardShot, err
 	return s.storyboardRepo.ListByVideo(videoID)
 }
 
+// GetShot 根据 ID 获取单个分镜
+func (s *VideoService) GetShot(id uint) (*model.StoryboardShot, error) {
+	return s.storyboardRepo.GetByID(id)
+}
+
 // UpdateShot 更新分镜
 func (s *VideoService) UpdateShot(id uint, req *model.StoryboardShot) (*model.StoryboardShot, error) {
 	shot, err := s.storyboardRepo.GetByID(id)
@@ -1911,6 +1966,17 @@ func (s *VideoService) UpdateShot(id uint, req *model.StoryboardShot) (*model.St
 }
 
 // GenerateSingleShot 触发单个分镜生成（异步）
+func (s *VideoService) GetShotByID(videoID, shotID uint) (*model.StoryboardShot, error) {
+	shot, err := s.storyboardRepo.GetByID(shotID)
+	if err != nil {
+		return nil, err
+	}
+	if shot.VideoID != videoID {
+		return nil, fmt.Errorf("shot %d does not belong to video %d", shotID, videoID)
+	}
+	return shot, nil
+}
+
 func (s *VideoService) GenerateSingleShot(videoID, shotID uint, provider ...string) (*model.StoryboardShot, error) {
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
@@ -2268,7 +2334,7 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 	return nil
 }
 
-// GenerateShotAudio 为单个分镜生成 TTS 音频
+// GenerateShotAudio 为单个分镜生成 TTS 音频，优先使用角色声音设置
 func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot) error {
 	if shot.Dialogue == "" {
 		return nil
@@ -2276,7 +2342,8 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	audioURL, err := s.aiService.AudioGenerate(ctx, shot.Dialogue, "alloy")
+	voice, speed, style := s.resolveVoiceForShot(shot)
+	audioURL, err := s.aiService.AudioGenerateWithOptions(ctx, shot.Dialogue, voice, speed, style)
 	if err != nil {
 		log.Printf("GenerateShotAudio: shot %d failed: %v", shot.ID, err)
 		return nil // non-fatal
@@ -2286,6 +2353,47 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot) error {
 		s.storyboardRepo.Update(shot) //nolint:errcheck
 	}
 	return nil
+}
+
+// resolveVoiceForShot 从对话文本中解析发言角色并返回其配音设置（voice, speed, style）
+func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot) (voice string, speed float64, style string) {
+	voice = "alloy"
+	speed = 1.0
+
+	// 从对话中解析发言角色（格式：角色名：对话内容 或 角色名:对话内容）
+	speakerName := ""
+	for _, sep := range []string{"：", ":"} {
+		if idx := strings.Index(shot.Dialogue, sep); idx > 0 && idx < 20 {
+			speakerName = strings.TrimSpace(shot.Dialogue[:idx])
+			break
+		}
+	}
+	if speakerName == "" {
+		return
+	}
+
+	video, err := s.videoRepo.GetByID(shot.VideoID)
+	if err != nil || video.NovelID == 0 {
+		return
+	}
+
+	characters, err := s.characterRepo.ListByNovel(video.NovelID)
+	if err != nil {
+		return
+	}
+	for _, c := range characters {
+		if strings.EqualFold(c.Name, speakerName) {
+			if c.VoiceID != "" {
+				voice = c.VoiceID
+			}
+			if c.VoiceSpeed > 0 {
+				speed = c.VoiceSpeed
+			}
+			style = c.VoiceStyle
+			return
+		}
+	}
+	return
 }
 
 // downloadFile 下载 HTTP URL 到本地路径
@@ -2428,19 +2536,178 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 	return outputPath, nil
 }
 
+// downloadToTemp 将 URL 下载到 /tmp 临时文件，返回本地路径
+func downloadToTemp(url, prefix, ext string) (string, error) {
+	resp, err := http.Get(url) //nolint:noctx
+	if err != nil {
+		return "", fmt.Errorf("download %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	tmpFile, err := os.CreateTemp("", prefix+"*"+ext)
+	if err != nil {
+		return "", err
+	}
+	defer tmpFile.Close()
+	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+		os.Remove(tmpFile.Name())
+		return "", err
+	}
+	return tmpFile.Name(), nil
+}
+
+// generateKenBurnsClip 使用 FFmpeg zoompan 滤镜将静图制作成 Ken Burns 动效短片
+func (s *VideoService) generateKenBurnsClip(shot *model.StoryboardShot, localImagePath string, duration float64, aspectRatio string) (string, error) {
+	if duration <= 0 {
+		duration = 5.0
+	}
+	fps := 30
+	totalFrames := int(duration * float64(fps))
+
+	resolution := "1920:1080"
+	switch aspectRatio {
+	case "9:16":
+		resolution = "1080:1920"
+	case "1:1":
+		resolution = "1080:1080"
+	case "4:3":
+		resolution = "1440:1080"
+	}
+
+	// 根据摄像机类型选择 zoompan 动效
+	var zoompan string
+	switch shot.CameraType {
+	case "zoom":
+		// 明显放大
+		zoompan = fmt.Sprintf("zoompan=z='min(zoom+0.002,1.5)':d=%d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'", totalFrames)
+	case "pan":
+		// 水平平移（从左向右）
+		zoompan = fmt.Sprintf("zoompan=z=1.3:d=%d:x='trunc(iw/2-(iw/zoom/2)+t*((iw-(iw/zoom))/%.1f))':y='ih/2-(ih/zoom/2)'", totalFrames, duration)
+	default:
+		// 默认轻微放大（Ken Burns 经典效果）
+		zoompan = fmt.Sprintf("zoompan=z='min(zoom+0.0008,1.2)':d=%d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'", totalFrames)
+	}
+
+	outPath := fmt.Sprintf("/tmp/inkframe-slideshow-%d-%d.mp4", shot.ID, time.Now().UnixNano())
+	vf := fmt.Sprintf("scale=8000:-1,%s,scale=%s,setsar=1", zoompan, resolution)
+
+	cmd := exec.Command("ffmpeg", "-y",
+		"-loop", "1",
+		"-t", fmt.Sprintf("%.2f", duration),
+		"-i", localImagePath,
+		"-vf", vf,
+		"-c:v", "libx264",
+		"-pix_fmt", "yuv420p",
+		"-r", fmt.Sprintf("%d", fps),
+		outPath,
+	)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("ffmpeg ken burns: %v — %s", err, stderr.String())
+	}
+	return outPath, nil
+}
+
+// GenerateSlideshowShotVideo 为单个分镜生成图片+Ken Burns短片（图片解说模式）
+func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, aspectRatio string) error {
+	duration := shot.Duration
+	if duration <= 0 {
+		duration = 5.0
+	}
+
+	shot.GenerationMode = "static"
+	shot.Status = "generating"
+	s.storyboardRepo.Update(shot) //nolint:errcheck
+
+	// 1. 生成图片
+	imageURL := s.generateShotReferenceImage(shot)
+	if imageURL == "" {
+		shot.Status = "failed"
+		return s.storyboardRepo.Update(shot)
+	}
+	shot.ImageURL = imageURL
+
+	// 2. 下载图片到本地临时文件
+	localImage, err := downloadToTemp(imageURL, fmt.Sprintf("inkframe-img-%d-", shot.ID), ".jpg")
+	if err != nil {
+		log.Printf("GenerateSlideshowShotVideo: download image failed for shot %d: %v", shot.ShotNo, err)
+		shot.Status = "failed"
+		return s.storyboardRepo.Update(shot)
+	}
+	defer os.Remove(localImage)
+
+	// 3. Ken Burns 动效
+	clipPath, err := s.generateKenBurnsClip(shot, localImage, duration, aspectRatio)
+	if err != nil {
+		log.Printf("GenerateSlideshowShotVideo: ken burns failed for shot %d: %v", shot.ShotNo, err)
+		shot.Status = "failed"
+		return s.storyboardRepo.Update(shot)
+	}
+
+	shot.ClipPath = "file://" + clipPath
+	shot.Status = "completed"
+	shot.Progress = 100
+	return s.storyboardRepo.Update(shot)
+}
+
+// runSlideshowPipeline 异步处理图片解说模式的所有分镜，完成后自动拼接
+func (s *VideoService) runSlideshowPipeline(videoID uint) {
+	video, err := s.videoRepo.GetByID(videoID)
+	if err != nil {
+		log.Printf("runSlideshowPipeline: get video %d failed: %v", videoID, err)
+		return
+	}
+
+	shots, err := s.storyboardRepo.ListByVideoAndStatus(videoID, "pending")
+	if err != nil || len(shots) == 0 {
+		log.Printf("runSlideshowPipeline: no pending shots for video %d", videoID)
+		return
+	}
+
+	for _, shot := range shots {
+		if err := s.GenerateSlideshowShotVideo(shot, video.AspectRatio); err != nil {
+			log.Printf("runSlideshowPipeline: shot %d failed: %v", shot.ShotNo, err)
+		}
+		go s.GenerateShotAudio(shot) //nolint:errcheck
+	}
+
+	// 拼接
+	if _, err := s.StitchVideo(videoID); err != nil {
+		log.Printf("runSlideshowPipeline: stitch video %d failed: %v", videoID, err)
+		if v, _ := s.videoRepo.GetByID(videoID); v != nil {
+			v.Status = "failed"
+			v.ErrorMessage = err.Error()
+			s.videoRepo.Update(v) //nolint:errcheck
+		}
+	}
+}
+
 // GenerateAllShotVideos 提交所有待生成分镜的视频任务
 func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
+	video, err := s.videoRepo.GetByID(videoID)
+	if err != nil {
+		return err
+	}
+
+	// 图片解说模式：异步处理图片+Ken Burns，完成后自动拼接
+	if video.Mode == "slideshow" {
+		shots, err := s.storyboardRepo.ListByVideoAndStatus(videoID, "pending")
+		if err != nil || len(shots) == 0 {
+			return fmt.Errorf("no pending shots found for video %d (generate storyboard first)", videoID)
+		}
+		video.Status = "generating"
+		video.ErrorMessage = ""
+		s.videoRepo.Update(video) //nolint:errcheck
+		go s.runSlideshowPipeline(videoID)
+		return nil
+	}
+
 	shots, err := s.storyboardRepo.ListByVideoAndStatus(videoID, "pending")
 	if err != nil {
 		return err
 	}
 	if len(shots) == 0 {
 		return fmt.Errorf("no pending shots found for video %d (generate storyboard first)", videoID)
-	}
-
-	video, err := s.videoRepo.GetByID(videoID)
-	if err != nil {
-		return err
 	}
 
 	// 更新状态，让用户可以通过 GetStatus 感知进度

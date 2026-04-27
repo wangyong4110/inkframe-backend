@@ -368,6 +368,36 @@ func (h *ChapterHandler) QualityCheck(c *gin.Context) {
 	respondOK(c, report)
 }
 
+// RefineChapter 应用改进建议精修章节（返回改进后内容，不自动保存）
+// POST /api/v1/chapters/:id/improve
+func (h *ChapterHandler) RefineChapter(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid chapter id")
+		return
+	}
+
+	var req struct {
+		Suggestions []string `json:"suggestions"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	if len(req.Suggestions) == 0 {
+		respondBadRequest(c, "suggestions required")
+		return
+	}
+
+	content, err := h.qualityService.RefineWithSuggestions(uint(id), req.Suggestions)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondOK(c, gin.H{"content": content})
+}
+
 // ApproveChapter 审核通过章节
 // POST /api/v1/chapters/:id/approve
 func (h *ChapterHandler) ApproveChapter(c *gin.Context) {

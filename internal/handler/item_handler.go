@@ -3,7 +3,6 @@ package handler
 import (
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -16,15 +15,20 @@ type ItemHandler struct {
 	itemService *service.ItemService
 	chapterSvc  *service.ChapterService
 	storageSvc  storage.Service
+	taskSvc     *service.TaskService
 }
 
 func NewItemHandler(itemService *service.ItemService, chapterSvc *service.ChapterService) *ItemHandler {
 	return &ItemHandler{itemService: itemService, chapterSvc: chapterSvc}
 }
 
-// WithStorage 注入存储服务（可选，用于参考图上传）
 func (h *ItemHandler) WithStorage(svc storage.Service) *ItemHandler {
 	h.storageSvc = svc
+	return h
+}
+
+func (h *ItemHandler) WithTaskService(svc *service.TaskService) *ItemHandler {
+	h.taskSvc = svc
 	return h
 }
 
@@ -128,32 +132,30 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 	// 忽略解析错误（body 可为空）
 	_ = c.ShouldBindJSON(&req)
 
-	taskID := newTaskID("img")
 	itemID := uint(id)
 	refURL, provider := req.ReferenceImageURL, req.Provider
 	tenantID := getTenantID(c)
 
-	task := &AsyncTask{TaskID: taskID, Status: taskStatusPending, CreatedAt: time.Now().Unix()}
-	itemImageTasks.store(task)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImageGen, "物品图像生成", "item", itemID)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 
-	go func() {
-		task.Status = taskStatusRunning
-		itemImageTasks.store(task)
+	go func(taskID string) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		item, err := h.itemService.GenerateItemImage(tenantID, itemID, refURL, provider)
 		if err != nil {
-			task.Status = taskStatusFailed
-			task.Error = err.Error()
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
-			task.Status = taskStatusCompleted
-			task.Data = item
+			h.taskSvc.Complete(taskID, item) //nolint:errcheck
 		}
-		itemImageTasks.store(task)
-	}()
+	}(task.TaskID)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
 		"message": "图像生成任务已提交",
-		"data":    gin.H{"task_id": taskID},
+		"data":    gin.H{"task_id": task.TaskID},
 	})
 }
 
@@ -161,8 +163,8 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 // GET /api/v1/items/:id/images/:task_id
 func (h *ItemHandler) GetItemImageTaskStatus(c *gin.Context) {
 	taskID := c.Param("task_id")
-	task, ok := itemImageTasks.load(taskID)
-	if !ok {
+	task, err := h.taskSvc.Get(taskID)
+	if err != nil {
 		respondErr(c, http.StatusNotFound, "task not found")
 		return
 	}

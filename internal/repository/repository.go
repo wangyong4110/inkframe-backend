@@ -625,13 +625,16 @@ func (r *VideoRepository) GetByID(id uint) (*model.Video, error) {
 }
 
 // List 获取视频列表
-func (r *VideoRepository) List(novelID *uint, page, pageSize int) ([]*model.Video, int64, error) {
+func (r *VideoRepository) List(novelID *uint, chapterID *uint, page, pageSize int) ([]*model.Video, int64, error) {
 	var videos []*model.Video
 	var total int64
 
 	query := r.db.Model(&model.Video{})
 	if novelID != nil {
 		query = query.Where("novel_id = ?", *novelID)
+	}
+	if chapterID != nil {
+		query = query.Where("chapter_id = ?", *chapterID)
 	}
 
 	if err := query.Count(&total).Error; err != nil {

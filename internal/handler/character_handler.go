@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -31,6 +32,9 @@ func characterToUpdateReq(c *model.Character) *model.UpdateCharacterRequest {
 		ThreeViewSide:  c.ThreeViewSide,
 		ThreeViewBack:  c.ThreeViewBack,
 		CoverImage:     c.CoverImage,
+		VoiceID:        c.VoiceID,
+		VoiceSpeed:     &c.VoiceSpeed,
+		VoiceStyle:     c.VoiceStyle,
 	}
 }
 
@@ -54,6 +58,10 @@ func characterResponse(c *model.Character) gin.H {
 		"three_view_back":  c.ThreeViewBack,
 		"portrait":         c.Portrait,
 		"cover_image":      c.CoverImage,
+		"voice_id":         c.VoiceID,
+		"voice_speed":      c.VoiceSpeed,
+		"voice_style":      c.VoiceStyle,
+		"voice_sample":     c.VoiceSample,
 		"status":           c.Status,
 		"created_at":       c.CreatedAt,
 		"updated_at":       c.UpdatedAt,
@@ -87,6 +95,8 @@ type CharacterHandler struct {
 	imageGenService  *service.ImageGenerationService
 	chapterSvc       *service.ChapterService
 	storageSvc       storage.Service
+	taskSvc          *service.TaskService
+	aiService        *service.AIService
 }
 
 func NewCharacterHandler(
@@ -101,8 +111,18 @@ func NewCharacterHandler(
 	}
 }
 
+func (h *CharacterHandler) WithAIService(svc *service.AIService) *CharacterHandler {
+	h.aiService = svc
+	return h
+}
+
 func (h *CharacterHandler) WithStorage(svc storage.Service) *CharacterHandler {
 	h.storageSvc = svc
+	return h
+}
+
+func (h *CharacterHandler) WithTaskService(svc *service.TaskService) *CharacterHandler {
+	h.taskSvc = svc
 	return h
 }
 
@@ -290,21 +310,21 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 		return
 	}
 
-	taskID := newTaskID("tv")
-	task := &AsyncTask{TaskID: taskID, Status: taskStatusPending, CreatedAt: time.Now().Unix()}
-	threeViewTasks.store(task)
-
 	tenantID := getTenantID(c)
-	go func(charID uint, char *model.Character, viewType, style, provider string) {
-		task.Status = taskStatusRunning
-		threeViewTasks.store(task)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeThreeView, "角色三视图生成", "character", uint(id))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+
+	go func(taskID string, charID uint, char *model.Character, viewType, style, provider string) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 
 		views := []string{viewType}
 		if viewType == "all" {
 			views = []string{"front", "side", "back"}
 		}
 
-		// Generate all views in parallel.
 		type viewResult struct {
 			view string
 			url  string
@@ -331,9 +351,7 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 		updateReq := characterToUpdateReq(char)
 		for r := range resultCh {
 			if r.err != nil {
-				task.Status = taskStatusFailed
-				task.Error = "generate " + r.view + " view failed: " + r.err.Error()
-				threeViewTasks.store(task)
+				h.taskSvc.Fail(taskID, "generate "+r.view+" view failed: "+r.err.Error()) //nolint:errcheck
 				return
 			}
 			generated[r.view] = r.url
@@ -349,21 +367,17 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 
 		updated, err := h.characterService.UpdateCharacter(charID, updateReq)
 		if err != nil {
-			task.Status = taskStatusFailed
-			task.Error = "save three view failed: " + err.Error()
-			threeViewTasks.store(task)
+			h.taskSvc.Fail(taskID, "save three view failed: "+err.Error()) //nolint:errcheck
 			return
 		}
 
-		task.Status = taskStatusCompleted
-		task.Data = map[string]interface{}{"character": updated, "generated": generated}
-		threeViewTasks.store(task)
-	}(uint(id), character, req.ViewType, req.Style, req.Provider)
+		h.taskSvc.Complete(taskID, map[string]interface{}{"character": updated, "generated": generated}) //nolint:errcheck
+	}(task.TaskID, uint(id), character, req.ViewType, req.Style, req.Provider)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
 		"message": "三视图生成任务已提交",
-		"data":    gin.H{"task_id": taskID},
+		"data":    gin.H{"task_id": task.TaskID},
 	})
 }
 
@@ -371,8 +385,8 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 // GET /api/v1/characters/:id/three-view/:task_id
 func (h *CharacterHandler) GetThreeViewTaskStatus(c *gin.Context) {
 	taskID := c.Param("task_id")
-	task, ok := threeViewTasks.load(taskID)
-	if !ok {
+	task, err := h.taskSvc.Get(taskID)
+	if err != nil {
 		respondErr(c, http.StatusNotFound, "task not found")
 		return
 	}
@@ -606,4 +620,84 @@ func (h *CharacterHandler) DeleteChapterCharacter(c *gin.Context) {
 	}
 	_ = novelID
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
+}
+
+// PreviewVoice 试听角色声音
+// POST /api/v1/characters/:id/voice/preview
+func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid character id")
+		return
+	}
+	if h.aiService == nil {
+		respondErr(c, http.StatusServiceUnavailable, "AI service not available")
+		return
+	}
+
+	character, err := h.characterService.GetCharacter(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+
+	var req struct {
+		Text string `json:"text"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	if req.Text == "" {
+		req.Text = "大家好，我是" + character.Name + "，很高兴认识你们。"
+	}
+
+	voice := character.VoiceID
+	if voice == "" {
+		voice = "alloy"
+	}
+	speed := character.VoiceSpeed
+	if speed <= 0 {
+		speed = 1.0
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	rawURL, err := h.aiService.AudioGenerateWithOptions(ctx, req.Text, voice, speed, character.VoiceStyle)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "voice generation failed: "+err.Error())
+		return
+	}
+
+	// Store raw path for serving; return API endpoint if local file
+	playURL := rawURL
+	if len(rawURL) > 7 && rawURL[:7] == "file://" {
+		playURL = "/api/v1/characters/" + c.Param("id") + "/voice/sample"
+	}
+	h.characterService.UpdateCharacter(uint(id), &model.UpdateCharacterRequest{ //nolint:errcheck
+		Name:        character.Name,
+		VoiceSample: rawURL,
+	})
+
+	respondOK(c, gin.H{"audio_url": playURL, "voice_id": voice, "voice_speed": speed})
+}
+
+// ServeVoiceSample 播放角色声音样本（file:// 路径转 HTTP 流）
+// GET /api/v1/characters/:id/voice/sample
+func (h *CharacterHandler) ServeVoiceSample(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid character id")
+		return
+	}
+	character, err := h.characterService.GetCharacter(uint(id))
+	if err != nil || character.VoiceSample == "" {
+		respondErr(c, http.StatusNotFound, "no voice sample available")
+		return
+	}
+	filePath := character.VoiceSample
+	if len(filePath) > 7 && filePath[:7] == "file://" {
+		filePath = filePath[7:]
+	}
+	c.Header("Content-Type", "audio/mpeg")
+	c.Header("Cache-Control", "public, max-age=86400")
+	c.File(filePath)
 }

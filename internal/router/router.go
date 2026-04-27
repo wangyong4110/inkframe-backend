@@ -25,6 +25,7 @@ type Config struct {
 	SkillHandler     *handler.SkillHandler
 	UploadHandler    *handler.UploadHandler
 	PlotPointHandler *handler.PlotPointHandler
+	TaskHandler      *handler.TaskHandler
 }
 
 // SetupRouter 配置路由
@@ -64,6 +65,15 @@ func SetupRouter(cfg *Config) *gin.Engine {
 	{
 		// 当前用户信息
 		v1.GET("/auth/me", cfg.AuthHandler.GetCurrentUser)
+
+		// 统一异步任务
+		if cfg.TaskHandler != nil {
+			tasks := v1.Group("/tasks")
+			{
+				tasks.GET("", cfg.TaskHandler.ListTasks)
+				tasks.GET("/:task_id", cfg.TaskHandler.GetTask)
+			}
+		}
 
 		// 通用图片上传
 		if cfg.UploadHandler != nil {
@@ -206,6 +216,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			chapters.POST("/:id/versions/:version_no/restore", cfg.ChapterHandler.RestoreVersion)
 			chapters.POST("/:id/quality-check", cfg.ChapterHandler.QualityCheck)
 			chapters.GET("/:id/quality-report", cfg.ChapterHandler.GetQualityReport)
+			chapters.POST("/:id/improve", cfg.ChapterHandler.RefineChapter)
 			chapters.POST("/:id/approve", cfg.ChapterHandler.ApproveChapter)
 			chapters.POST("/:id/reject", cfg.ChapterHandler.RejectChapter)
 
@@ -238,6 +249,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			characters.GET("/:id/three-view/:task_id", cfg.CharacterHandler.GetThreeViewTaskStatus)
 			characters.POST("/:id/portrait/upload", cfg.CharacterHandler.UploadPortrait)
 			characters.POST("/:id/analyze-consistency", cfg.CharacterHandler.AnalyzeCharacterConsistency)
+			characters.POST("/:id/voice/preview", cfg.CharacterHandler.PreviewVoice)
+			characters.GET("/:id/voice/sample", cfg.CharacterHandler.ServeVoiceSample)
 		}
 
 		// 视频相关
@@ -258,6 +271,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.POST("/:id/shots/generate", cfg.VideoHandler.GenerateShotVideos)
 			videos.POST("/:id/shots/batch-generate", cfg.VideoHandler.BatchGenerateShots)
 			videos.POST("/:id/shots/:shot_id/generate", cfg.VideoHandler.GenerateSingleShot)
+			videos.POST("/:id/storyboard/:shot_id/voice", cfg.VideoHandler.GenerateShotVoice)
+			videos.GET("/:id/storyboard/:shot_id/audio", cfg.VideoHandler.ServeAudio)
 			videos.POST("/:id/stitch", cfg.VideoHandler.StitchVideoHandler)
 			videos.GET("/:id/export/capcut", cfg.VideoHandler.ExportCapCutDraft)
 		}
@@ -290,8 +305,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		{
 			modelProviders.GET("", cfg.ModelHandler.ListProviders)
 			modelProviders.POST("", cfg.ModelHandler.CreateProvider)
-			modelProviders.GET("/image-capable", cfg.ModelHandler.ListImageCapableProviders)
-			modelProviders.GET("/llm-capable", cfg.ModelHandler.ListLLMCapableProviders)
+			modelProviders.GET("/capable", cfg.ModelHandler.ListCapableProviders)
 			modelProviders.GET("/:id", cfg.ModelHandler.GetProvider)
 			modelProviders.PUT("/:id", cfg.ModelHandler.UpdateProvider)
 			modelProviders.DELETE("/:id", cfg.ModelHandler.DeleteProvider)

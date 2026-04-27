@@ -187,15 +187,20 @@ func (h *WorldviewHandler) DeleteWorldview(c *gin.Context) {
 // POST /api/v1/worldviews/generate
 func (h *WorldviewHandler) GenerateWorldview(c *gin.Context) {
 	var req struct {
-		Genre string   `json:"genre" binding:"required"`
-		Hints []string `json:"hints"`
+		Genre   string   `json:"genre"`
+		Hints   []string `json:"hints"`
+		NovelID uint     `json:"novel_id"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respondBadRequest(c, err.Error())
 		return
 	}
+	if req.Genre == "" && req.NovelID == 0 {
+		respondBadRequest(c, "genre or novel_id is required")
+		return
+	}
 
-	worldview, err := h.worldviewService.GenerateWorldview(getTenantID(c), req.Genre, req.Hints)
+	worldview, err := h.worldviewService.GenerateWorldview(getTenantID(c), req.NovelID, req.Genre, req.Hints)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
