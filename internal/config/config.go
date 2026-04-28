@@ -62,7 +62,7 @@ type DatabaseConfig struct {
 	Charset         string        `mapstructure:"charset"`
 	MaxIdleConns    int           `mapstructure:"max_idle_conns"`
 	MaxOpenConns    int           `mapstructure:"max_open_conns"`
-	ConnMaxLifetime  time.Duration `mapstructure:"conn_max_lifetime"`
+	ConnMaxLifetime time.Duration `mapstructure:"conn_max_lifetime"`
 	TablePrefix     string        `mapstructure:"table_prefix"`
 }
 
@@ -77,29 +77,17 @@ type RedisConfig struct {
 
 // AIConfig AI模型配置
 type AIConfig struct {
-	// OpenAI配置
-	OpenAI OpenAIConfig `mapstructure:"openai"`
-
-	// Anthropic配置
-	Anthropic AnthropicConfig `mapstructure:"anthropic"`
-
-	// Google配置
-	Google GoogleConfig `mapstructure:"google"`
-
-	// 豆包配置（字节跳动火山引擎 Ark，含 Seedream 图像）
-	Doubao DoubaoConfig `mapstructure:"doubao"`
-
-	// DeepSeek配置
-	DeepSeek DeepSeekConfig `mapstructure:"deepseek"`
-
-	// 通义千问配置（阿里云百炼/DashScope，含 Wan 图像）
-	Qianwen QianwenConfig `mapstructure:"qianwen"`
-
-	// Seedance视频配置（字节跳动火山引擎 Ark）
-	Seedance SeedanceConfig `mapstructure:"seedance"`
-
-	// 默认配置
-	Default DefaultAIConfig `mapstructure:"default"`
+	OpenAI           OpenAIConfig           `mapstructure:"openai"`
+	Anthropic        AnthropicConfig        `mapstructure:"anthropic"`
+	Google           GoogleConfig           `mapstructure:"google"`
+	Doubao           DoubaoConfig           `mapstructure:"doubao"`
+	DeepSeek         DeepSeekConfig         `mapstructure:"deepseek"`
+	Qianwen          QianwenConfig          `mapstructure:"qianwen"`
+	Seedance         SeedanceConfig         `mapstructure:"seedance"`
+	Kling            KlingConfig            `mapstructure:"kling"`
+	VolcengineVisual VolcengineVisualConfig `mapstructure:"volcengine_visual"`
+	Tasks            TasksConfig            `mapstructure:"tasks"`
+	Default          DefaultAIConfig        `mapstructure:"default"`
 }
 
 // OpenAIConfig OpenAI配置
@@ -151,6 +139,28 @@ type SeedanceConfig struct {
 	Endpoint string `mapstructure:"endpoint"`
 }
 
+// KlingConfig 快手可灵视频配置
+type KlingConfig struct {
+	APIKey   string `mapstructure:"api_key"`
+	Endpoint string `mapstructure:"endpoint"`
+}
+
+// VolcengineVisualConfig 火山引擎即梦AI图像配置（AK/SK 鉴权）
+type VolcengineVisualConfig struct {
+	AccessKey string `mapstructure:"access_key"`
+	SecretKey string `mapstructure:"secret_key"`
+}
+
+// TasksConfig 各任务类型使用的 provider 名称，留空时使用系统默认或 DB 配置
+type TasksConfig struct {
+	ChapterGen   string `mapstructure:"chapter_gen"`   // 章节生成：openai/anthropic/doubao/deepseek/qianwen
+	QualityCheck string `mapstructure:"quality_check"` // 质量检查
+	TTS          string `mapstructure:"tts"`           // 语音合成：openai
+	ImageGen     string `mapstructure:"image_gen"`     // 图像生成：openai/doubao/qianwen/volcengine-visual
+	VideoGen     string `mapstructure:"video_gen"`     // 视频生成：kling/seedance
+	Embedding    string `mapstructure:"embedding"`     // 向量嵌入：openai
+}
+
 // DefaultAIConfig 默认AI配置
 type DefaultAIConfig struct {
 	Temperature float64 `mapstructure:"temperature"`
@@ -160,21 +170,21 @@ type DefaultAIConfig struct {
 
 // StorageConfig 文件存储配置
 type StorageConfig struct {
-	Type       string `mapstructure:"type"`
-	Endpoint   string `mapstructure:"endpoint"`
-	AccessKey  string `mapstructure:"access_key"`
-	SecretKey  string `mapstructure:"secret_key"`
-	Bucket     string `mapstructure:"bucket"`
-	Region     string `mapstructure:"region"`
-	BaseURL    string `mapstructure:"base_url"`
+	Type      string `mapstructure:"type"`
+	Endpoint  string `mapstructure:"endpoint"`
+	AccessKey string `mapstructure:"access_key"`
+	SecretKey string `mapstructure:"secret_key"`
+	Bucket    string `mapstructure:"bucket"`
+	Region    string `mapstructure:"region"`
+	BaseURL   string `mapstructure:"base_url"`
 }
 
 // VectorDBConfig 向量数据库配置
 type VectorDBConfig struct {
-	Type       string `mapstructure:"type"`
-	Endpoint   string `mapstructure:"endpoint"`
-	APIKey     string `mapstructure:"api_key"`
-	IndexName  string `mapstructure:"index_name"`
+	Type      string `mapstructure:"type"`
+	Endpoint  string `mapstructure:"endpoint"`
+	APIKey    string `mapstructure:"api_key"`
+	IndexName string `mapstructure:"index_name"`
 }
 
 // LoggerConfig 日志配置

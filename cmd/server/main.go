@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -49,6 +50,7 @@ func main() {
 
 	// 3b. 预置默认数据（INSERT IGNORE，幂等安全）
 	seedDefaultData(db)
+	seedAIModels(db)
 
 	// 4. 初始化Redis
 	redisClient := initRedis(cfg)
@@ -70,7 +72,7 @@ func main() {
 		seedDefaultUser(services)
 	}
 
-	// 10. 初始化存储服务
+	// 10. 初始化存储服务（OSS 优先；未配置 OSS 时存 DB；均无时退回本地文件）
 	storageSvc := storage.New(storage.Config{
 		Type:      cfg.Storage.Type,
 		Endpoint:  cfg.Storage.Endpoint,
@@ -80,11 +82,15 @@ func main() {
 		BaseURL:   cfg.Storage.BaseURL,
 		LocalDir:  "./uploads",
 		LocalBase: "/uploads",
-	})
+	}, db)
 	log.Printf("Storage: type=%s", cfg.Storage.Type)
 
+	// 注入存储服务
+	services.VideoService.WithStorage(storageSvc)
+	services.AIService.WithStorage(storageSvc)
+
 	// 11. 初始化处理器
-	handlers := initHandlers(services, storageSvc)
+	handlers := initHandlers(services, storageSvc, db)
 
 	// 12. 设置路由
 	r := router.SetupRouter(&router.Config{
@@ -106,6 +112,7 @@ func main() {
 		UploadHandler:    handlers.UploadHandler,
 		PlotPointHandler: handlers.PlotPointHandler,
 		TaskHandler:      handlers.TaskHandler,
+		MediaHandler:     handlers.MediaHandler,
 	})
 
 	// 11. 设置Gin模式
@@ -427,6 +434,109 @@ func seedDefaultData(db *gorm.DB) {
 	}
 }
 
+// seedAIModels 预置系统级模型提供商和 AI 模型（幂等，FirstOrCreate）
+// 仅创建元数据（名称/适用任务等），API Key 留空由用户通过模型管理页面填写。
+func seedAIModels(db *gorm.DB) {
+	type providerSeed struct {
+		name        string
+		displayName string
+		provType    string
+		endpoint    string
+	}
+	type modelSeed struct {
+		providerName string
+		name         string
+		displayName  string
+		tasks        []string // suitable_tasks
+		quality      float64
+		maxTokens    int
+	}
+
+	providers := []providerSeed{
+		{"openai", "OpenAI", "cloud", "https://api.openai.com/v1"},
+		{"anthropic", "Anthropic", "cloud", "https://api.anthropic.com/v1"},
+		{"google", "Google", "cloud", "https://generativelanguage.googleapis.com/v1"},
+		{"doubao", "豆包（火山引擎 Ark）", "cloud", "https://ark.volces.com/api/v3"},
+		{"deepseek", "DeepSeek", "cloud", "https://api.deepseek.com/v1"},
+		{"qianwen", "通义千问（DashScope）", "cloud", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		{"volcengine-visual", "即梦AI（火山引擎）", "cloud", ""},
+		{"kling", "可灵（快手）", "cloud", ""},
+		{"seedance", "Seedance（字节跳动）", "cloud", "https://ark.volces.com/api/v3"},
+	}
+
+	llmTasks := []string{"chapter", "outline", "storyboard", "quality_check"}
+	models := []modelSeed{
+		// OpenAI
+		{"openai", "gpt-4o", "GPT-4o", llmTasks, 0.95, 4096},
+		{"openai", "gpt-4o-mini", "GPT-4o Mini", llmTasks, 0.85, 4096},
+		{"openai", "tts-1", "TTS-1", []string{"voice_gen"}, 0.9, 0},
+		{"openai", "tts-1-hd", "TTS-1 HD", []string{"voice_gen"}, 0.95, 0},
+		{"openai", "dall-e-3", "DALL-E 3", []string{"image_gen"}, 0.95, 0},
+		// Anthropic
+		{"anthropic", "claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet", llmTasks, 0.97, 8192},
+		{"anthropic", "claude-3-haiku-20240307", "Claude 3 Haiku", llmTasks, 0.88, 4096},
+		// Google
+		{"google", "gemini-2.0-flash", "Gemini 2.0 Flash", llmTasks, 0.9, 8192},
+		{"google", "gemini-1.5-pro", "Gemini 1.5 Pro", llmTasks, 0.93, 8192},
+		// 豆包
+		{"doubao", "doubao-pro-32k", "豆包 Pro 32K", llmTasks, 0.88, 4096},
+		{"doubao", "doubao-lite-32k", "豆包 Lite 32K", llmTasks, 0.75, 4096},
+		{"doubao", "seedream-3-0-t2i-250415", "Seedream 3.0 文生图", []string{"image_gen"}, 0.9, 0},
+		// DeepSeek
+		{"deepseek", "deepseek-chat", "DeepSeek Chat", llmTasks, 0.88, 4096},
+		{"deepseek", "deepseek-reasoner", "DeepSeek R1", llmTasks, 0.92, 8192},
+		// 通义千问
+		{"qianwen", "qwen-plus", "通义千问 Plus", llmTasks, 0.85, 4096},
+		{"qianwen", "qwen-max", "通义千问 Max", llmTasks, 0.92, 4096},
+		{"qianwen", "wanx2.1-t2i-turbo", "万象 2.1 文生图 Turbo", []string{"image_gen"}, 0.85, 0},
+		// 即梦AI
+		{"volcengine-visual", "general_v3.0", "即梦AI 文生图 V3", []string{"image_gen"}, 0.9, 0},
+		// 视频
+		{"kling", "kling-v1-6", "可灵 v1.6", []string{"video_gen"}, 0.9, 0},
+		{"seedance", "seedance-01-lite", "Seedance 01 Lite", []string{"video_gen"}, 0.88, 0},
+	}
+
+	// 1. 确保 provider 记录存在（tenant_id=0 系统级）
+	providerIDs := map[string]uint{}
+	for _, p := range providers {
+		var prov model.ModelProvider
+		result := db.Where("name = ? AND tenant_id = 0", p.name).FirstOrCreate(&prov, model.ModelProvider{
+			Name:        p.name,
+			DisplayName: p.displayName,
+			Type:        p.provType,
+			APIEndpoint: p.endpoint,
+			TenantID:    0,
+			IsActive:    true,
+		})
+		if result.Error != nil {
+			log.Printf("seedAIModels: provider %q: %v", p.name, result.Error)
+			continue
+		}
+		providerIDs[p.name] = prov.ID
+	}
+
+	// 2. 确保 model 记录存在
+	for _, m := range models {
+		provID, ok := providerIDs[m.providerName]
+		if !ok {
+			continue
+		}
+		tasksJSON, _ := json.Marshal(m.tasks)
+		var aiModel model.AIModel
+		db.Where("provider_id = ? AND name = ?", provID, m.name).FirstOrCreate(&aiModel, model.AIModel{
+			ProviderID:    provID,
+			Name:          m.name,
+			DisplayName:   m.displayName,
+			SuitableTasks: string(tasksJSON),
+			Quality:       m.quality,
+			MaxTokens:     m.maxTokens,
+			IsActive:      true,
+			IsAvailable:   true,
+		})
+	}
+	log.Printf("seedAIModels: %d providers, %d models ready", len(providerIDs), len(models))
+}
+
 // autoMigrate 自动迁移
 func autoMigrate(db *gorm.DB) error {
 	preMigrateCleanup(db)
@@ -472,6 +582,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.ChapterCharacter{},
 		&model.Skill{},
 		&model.AsyncTask{},
+		&model.MediaAsset{},
 	)
 }
 
@@ -520,18 +631,19 @@ func initAIModule(cfg *config.Config) *ai.ModelManager {
 		"qianwen": {"wanx2.1-t2i-turbo", "1024x1024"},
 	}
 
+	// env var 优先，config.yaml 作为备选（两者均可配置 API key）
 	defs := []providerDef{
-		{"openai", getEnv("OPENAI_API_KEY", ""), cfg.AI.OpenAI.Endpoint, cfg.AI.OpenAI.Model,
+		{"openai", getEnv("OPENAI_API_KEY", cfg.AI.OpenAI.APIKey), cfg.AI.OpenAI.Endpoint, cfg.AI.OpenAI.Model,
 			func(k, e, m string) ai.AIProvider { return ai.NewOpenAIProvider(k, e, m) }},
-		{"anthropic", getEnv("ANTHROPIC_API_KEY", ""), cfg.AI.Anthropic.Endpoint, cfg.AI.Anthropic.Model,
+		{"anthropic", getEnv("ANTHROPIC_API_KEY", cfg.AI.Anthropic.APIKey), cfg.AI.Anthropic.Endpoint, cfg.AI.Anthropic.Model,
 			func(k, e, m string) ai.AIProvider { return ai.NewAnthropicProvider(k, e, m) }},
-		{"google", getEnv("GOOGLE_API_KEY", ""), cfg.AI.Google.Endpoint, cfg.AI.Google.Model,
+		{"google", getEnv("GOOGLE_API_KEY", cfg.AI.Google.APIKey), cfg.AI.Google.Endpoint, cfg.AI.Google.Model,
 			func(k, e, m string) ai.AIProvider { return ai.NewGoogleProvider(k, e, m) }},
-		{"doubao", getEnv("DOUBAO_API_KEY", ""), cfg.AI.Doubao.Endpoint, cfg.AI.Doubao.Model,
+		{"doubao", getEnv("DOUBAO_API_KEY", cfg.AI.Doubao.APIKey), cfg.AI.Doubao.Endpoint, cfg.AI.Doubao.Model,
 			func(k, e, m string) ai.AIProvider { return ai.NewDoubaoProvider(k, e, m) }},
-		{"deepseek", getEnv("DEEPSEEK_API_KEY", ""), cfg.AI.DeepSeek.Endpoint, cfg.AI.DeepSeek.Model,
+		{"deepseek", getEnv("DEEPSEEK_API_KEY", cfg.AI.DeepSeek.APIKey), cfg.AI.DeepSeek.Endpoint, cfg.AI.DeepSeek.Model,
 			func(k, e, m string) ai.AIProvider { return ai.NewDeepSeekProvider(k, e, m) }},
-		{"qianwen", getEnv("QIANWEN_API_KEY", ""), cfg.AI.Qianwen.Endpoint, cfg.AI.Qianwen.Model,
+		{"qianwen", getEnv("QIANWEN_API_KEY", cfg.AI.Qianwen.APIKey), cfg.AI.Qianwen.Endpoint, cfg.AI.Qianwen.Model,
 			func(k, e, m string) ai.AIProvider { return ai.NewQianwenProvider(k, e, m) }},
 	}
 	for _, d := range defs {
@@ -555,7 +667,7 @@ func initAIModule(cfg *config.Config) *ai.ModelManager {
 	}
 
 	// 即梦AI Visual API（AK/SK 鉴权图像生成）
-	if vvp := initVolcengineVisual(); vvp != nil {
+	if vvp := initVolcengineVisual(cfg); vvp != nil {
 		manager.RegisterProvider("volcengine-visual", vvp)
 		manager.RegisterImageProvider("volcengine-visual", ai.VolcModelText2ImgV3, "1328x1328")
 	}
@@ -575,10 +687,10 @@ func initAIModule(cfg *config.Config) *ai.ModelManager {
 func initVideoProviders(cfg *config.Config) map[string]ai.VideoProvider {
 	providers := make(map[string]ai.VideoProvider)
 
-	// Kling 快手可灵
-	klingKey := getEnv("KLING_API_KEY", "")
+	// Kling 快手可灵（env var 优先，config.yaml ai.kling 作为备选）
+	klingKey := getEnv("KLING_API_KEY", cfg.AI.Kling.APIKey)
 	if klingKey != "" {
-		providers["kling"] = ai.NewKlingProvider(klingKey, "")
+		providers["kling"] = ai.NewKlingProvider(klingKey, cfg.AI.Kling.Endpoint)
 	}
 
 	// Seedance 字节跳动火山引擎
@@ -592,10 +704,10 @@ func initVideoProviders(cfg *config.Config) map[string]ai.VideoProvider {
 }
 
 // initVolcengineVisual 初始化火山引擎即梦AI图像提供者（AK/SK 鉴权）
-// 环境变量：VOLCENGINE_ACCESS_KEY、VOLCENGINE_SECRET_KEY
-func initVolcengineVisual() *ai.VolcengineVisualProvider {
-	ak := getEnv("VOLCENGINE_ACCESS_KEY", "")
-	sk := getEnv("VOLCENGINE_SECRET_KEY", "")
+// env var 优先，config.yaml ai.volcengine_visual 作为备选
+func initVolcengineVisual(cfg *config.Config) *ai.VolcengineVisualProvider {
+	ak := getEnv("VOLCENGINE_ACCESS_KEY", cfg.AI.VolcengineVisual.AccessKey)
+	sk := getEnv("VOLCENGINE_SECRET_KEY", cfg.AI.VolcengineVisual.SecretKey)
 	if ak == "" || sk == "" {
 		return nil
 	}
@@ -737,14 +849,23 @@ type Services struct {
 func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, vectorStore *vector.StoreManager, cfg *config.Config, redisClient *redis.Client) *Services {
 	// AI服务（注入 providerRepo 以支持按租户加载 AK/SK，注入 novelRepo 以读取小说项目级 AI 配置）
 	aiService := service.NewAIService(repos.AIModelRepo, repos.TaskModelConfigRepo, aiManager, repos.ModelProviderRepo).
-		WithNovelRepo(repos.NovelRepo)
+		WithNovelRepo(repos.NovelRepo).
+		WithTaskRouting(service.TaskRouting{
+			ChapterGen:   cfg.AI.Tasks.ChapterGen,
+			QualityCheck: cfg.AI.Tasks.QualityCheck,
+			TTS:          cfg.AI.Tasks.TTS,
+			ImageGen:     cfg.AI.Tasks.ImageGen,
+			VideoGen:     cfg.AI.Tasks.VideoGen,
+			Embedding:    cfg.AI.Tasks.Embedding,
+		})
 
 	// 异步任务服务
 	taskRepo := repository.NewTaskRepository(db)
 	taskService := service.NewTaskService(taskRepo)
 
 	// 剧情点服务
-	plotPointService := service.NewPlotPointService(repos.PlotPointRepo, aiService)
+	plotPointService := service.NewPlotPointService(repos.PlotPointRepo, aiService).
+		WithChapterRepo(repos.ChapterRepo)
 
 	// 小说服务
 	novelService := service.NewNovelService(repos.NovelRepo, repos.ChapterRepo, aiService).
@@ -756,14 +877,16 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 
 	// 角色服务
 	characterService := service.NewCharacterService(repos.CharacterRepo, aiService).
-		WithChapterCharacterRepo(repos.ChapterCharacterRepo)
+		WithChapterCharacterRepo(repos.ChapterCharacterRepo).
+		WithNovelRepo(repos.NovelRepo).
+		WithChapterRepo(repos.ChapterRepo)
 
 	// 世界观服务
 	worldviewService := service.NewWorldviewService(repos.WorldviewRepo, aiService).
 		WithNovelRepos(repos.NovelRepo, repos.ChapterRepo)
 
-	// 质量控制服务
-	qualityControlService := service.NewQualityControlService(aiManager, repos.ChapterRepo, repos.NovelRepo)
+	// 质量控制服务（使用 AIService 以支持 DB provider 和 task routing）
+	qualityControlService := service.NewQualityControlService(aiService, repos.ChapterRepo, repos.NovelRepo)
 
 	// 视频服务
 	videoProviders := initVideoProviders(cfg)
@@ -988,10 +1111,11 @@ type Handlers struct {
 	UploadHandler    *handler.UploadHandler
 	PlotPointHandler *handler.PlotPointHandler
 	TaskHandler      *handler.TaskHandler
+	MediaHandler     *handler.MediaHandler
 }
 
 // initHandlers 初始化处理器
-func initHandlers(services *Services, storageSvc storage.Service) *Handlers {
+func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB) *Handlers {
 	return &Handlers{
 		NovelHandler: handler.NewNovelHandler(
 			services.NovelService,
@@ -1034,8 +1158,9 @@ func initHandlers(services *Services, storageSvc storage.Service) *Handlers {
 		ItemHandler:      handler.NewItemHandler(services.ItemService, services.ChapterService).WithStorage(storageSvc).WithTaskService(services.TaskService),
 		SkillHandler:     handler.NewSkillHandler(services.SkillService),
 		UploadHandler:    handler.NewUploadHandler(storageSvc),
-		PlotPointHandler: handler.NewPlotPointHandler(services.PlotPointService).WithChapterService(services.ChapterService),
+		PlotPointHandler: handler.NewPlotPointHandler(services.PlotPointService).WithChapterService(services.ChapterService).WithTaskService(services.TaskService),
 		TaskHandler:      handler.NewTaskHandler(services.TaskService),
+		MediaHandler:     handler.NewMediaHandler(db),
 	}
 }
 

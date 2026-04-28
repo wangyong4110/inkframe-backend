@@ -341,29 +341,20 @@ func (p *OpenAIProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRe
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return &AudioResponse{
-			Error:     fmt.Sprintf("TTS error: %s", string(respBody)),
-			LatencyMs: time.Since(start).Milliseconds(),
-		}, nil
+		return nil, fmt.Errorf("TTS API error %d: %s", resp.StatusCode, string(respBody))
 	}
 
 	// Read audio bytes and save to temp file
 	audioData, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return &AudioResponse{
-			Error:     fmt.Sprintf("TTS read body error: %s", err.Error()),
-			LatencyMs: time.Since(start).Milliseconds(),
-		}, nil
+		return nil, fmt.Errorf("TTS read body error: %w", err)
 	}
 
 	idBytes := make([]byte, 8)
 	rand.Read(idBytes) //nolint:errcheck
 	tmpPath := fmt.Sprintf("/tmp/inkframe-tts-%s.mp3", hex.EncodeToString(idBytes))
 	if err := os.WriteFile(tmpPath, audioData, 0644); err != nil {
-		return &AudioResponse{
-			Error:     fmt.Sprintf("TTS write file error: %s", err.Error()),
-			LatencyMs: time.Since(start).Milliseconds(),
-		}, nil
+		return nil, fmt.Errorf("TTS write file error: %w", err)
 	}
 
 	return &AudioResponse{

@@ -10,9 +10,14 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/inkframe/inkframe-backend/internal/model"
+	"gorm.io/gorm"
 )
 
 // Service is the abstraction for file storage.
@@ -34,10 +39,13 @@ type Config struct {
 }
 
 // New returns an OSS-backed Service when credentials are present,
-// otherwise falls back to local filesystem storage.
-func New(cfg Config) Service {
+// a DB-backed Service when a *gorm.DB is provided, otherwise falls back to local filesystem.
+func New(cfg Config, db ...*gorm.DB) Service {
 	if cfg.Type == "oss" && cfg.AccessKey != "" && cfg.SecretKey != "" && cfg.Bucket != "" {
 		return newOSSService(cfg)
+	}
+	if len(db) > 0 && db[0] != nil {
+		return &dbStorageService{db: db[0]}
 	}
 	dir := cfg.LocalDir
 	if dir == "" {
@@ -48,6 +56,12 @@ func New(cfg Config) Service {
 		base = "/uploads"
 	}
 	return &localService{dir: dir, base: base}
+}
+
+// BuildKey constructs the canonical storage key for a media asset.
+// Format: novels/{novelID}/chapters/{chapterID}/{mediaType}/{filename}
+func BuildKey(novelID, chapterID uint, mediaType, filename string) string {
+	return fmt.Sprintf("novels/%d/chapters/%d/%s/%s", novelID, chapterID, mediaType, filename)
 }
 
 // ─── OSS (Aliyun Object Storage, V1 signature) ──────────────────────────────
@@ -142,4 +156,64 @@ func (s *localService) Upload(_ context.Context, key string, r io.Reader, _ int6
 		return "", fmt.Errorf("storage: write file: %w", err)
 	}
 	return strings.TrimRight(s.base, "/") + "/" + key, nil
+}
+
+// ─── DB storage backend ──────────────────────────────────────────────────────
+
+type dbStorageService struct{ db *gorm.DB }
+
+func (s *dbStorageService) Upload(_ context.Context, key string, r io.Reader, _ int64, contentType string) (string, error) {
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return "", fmt.Errorf("storage: read body: %w", err)
+	}
+	mediaType := parseKeySegmentStr(key, 4) // novels/{id}/chapters/{id}/{type}/...
+	if mediaType == "" {
+		mediaType = mediaTypeFromContentType(contentType)
+	}
+	asset := &model.MediaAsset{
+		NovelID:     parseKeySegment(key, 1),
+		ChapterID:   parseKeySegment(key, 3),
+		MediaType:   mediaType,
+		Filename:    path.Base(key),
+		ContentType: contentType,
+		Size:        int64(len(data)),
+		Data:        data,
+	}
+	if err := s.db.Create(asset).Error; err != nil {
+		return "", fmt.Errorf("storage: db create: %w", err)
+	}
+	return fmt.Sprintf("/api/v1/media/%d", asset.ID), nil
+}
+
+func mediaTypeFromContentType(ct string) string {
+	switch {
+	case strings.HasPrefix(ct, "image/"):
+		return "image"
+	case strings.HasPrefix(ct, "audio/"):
+		return "audio"
+	case strings.HasPrefix(ct, "video/"):
+		return "video"
+	default:
+		return "file"
+	}
+}
+
+// parseKeySegment splits the storage key by "/" and parses the segment at idx as uint.
+// Key format: novels/{1}/chapters/{3}/{4:type}/{5:filename}
+func parseKeySegment(key string, idx int) uint {
+	parts := strings.Split(key, "/")
+	if idx >= len(parts) {
+		return 0
+	}
+	v, _ := strconv.ParseUint(parts[idx], 10, 64)
+	return uint(v)
+}
+
+func parseKeySegmentStr(key string, idx int) string {
+	parts := strings.Split(key, "/")
+	if idx >= len(parts) {
+		return ""
+	}
+	return parts[idx]
 }

@@ -29,6 +29,16 @@ func respondErr(c *gin.Context, status int, msg string) {
 	c.JSON(status, gin.H{"error": msg})
 }
 
+// respondAccepted writes a 202 Accepted response with a task_id payload.
+// Used by all async AI endpoints that submit background tasks.
+func respondAccepted(c *gin.Context, taskID, message string) {
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": message,
+		"data":    gin.H{"task_id": taskID},
+	})
+}
+
 // receiveAndUpload validates the uploaded image file and stores it under keyPrefix.
 // On success it returns (url, true); on failure it writes the HTTP response and returns ("", false).
 func receiveAndUpload(c *gin.Context, keyPrefix string, storageSvc storage.Service) (string, bool) {

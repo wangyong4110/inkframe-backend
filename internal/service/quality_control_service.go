@@ -7,7 +7,6 @@ import (
 	"log"
 	"strings"
 
-	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
 
@@ -23,7 +22,7 @@ type AIQualityScores struct {
 
 // QualityControlService 质量控制服务
 type QualityControlService struct {
-	aiClient    *ai.ModelManager
+	aiSvc       *AIService
 	chapterRepo interface {
 		GetByID(id uint) (*model.Chapter, error)
 	}
@@ -33,7 +32,7 @@ type QualityControlService struct {
 }
 
 func NewQualityControlService(
-	aiClient *ai.ModelManager,
+	aiSvc *AIService,
 	chapterRepo interface {
 		GetByID(id uint) (*model.Chapter, error)
 	},
@@ -41,17 +40,13 @@ func NewQualityControlService(
 		GetByID(id uint) (*model.Novel, error)
 	},
 ) *QualityControlService {
-	return &QualityControlService{aiClient: aiClient, chapterRepo: chapterRepo, novelRepo: novelRepo}
+	return &QualityControlService{aiSvc: aiSvc, chapterRepo: chapterRepo, novelRepo: novelRepo}
 }
 
 // runAIQualityCheck 调用 AI 对章节内容进行综合质检，返回各维度评分（0-10分制）
-func (s *QualityControlService) runAIQualityCheck(ctx context.Context, chapter *model.Chapter, novel *model.Novel) (*AIQualityScores, error) {
-	if s.aiClient == nil {
-		return nil, fmt.Errorf("AI client not initialized")
-	}
-	provider, err := s.aiClient.GetProvider("")
-	if err != nil {
-		return nil, fmt.Errorf("get AI provider: %w", err)
+func (s *QualityControlService) runAIQualityCheck(chapter *model.Chapter, novel *model.Novel) (*AIQualityScores, error) {
+	if s.aiSvc == nil {
+		return nil, fmt.Errorf("AI service not initialized")
 	}
 
 	novelInfo := fmt.Sprintf("小说：《%s》，类型：%s", novel.Title, novel.Genre)
@@ -75,18 +70,12 @@ func (s *QualityControlService) runAIQualityCheck(ctx context.Context, chapter *
 {"logic":8,"character":7,"writing":9,"pacing":8,"issues":["问题1","问题2"],"suggestions":["建议1","建议2"]}`,
 		novelInfo, chapter.Title, contentPreview)
 
-	req := &ai.GenerateRequest{
-		Messages:    []ai.ChatMessage{{Role: "user", Content: prompt}},
-		MaxTokens:   1000,
-		Temperature: 0.3,
-	}
-
-	resp, err := provider.Generate(ctx, req)
+	result, err := s.aiSvc.GenerateWithProvider(0, 0, "quality_check", prompt, s.aiSvc.taskRouting.QualityCheck)
 	if err != nil {
 		return nil, fmt.Errorf("AI quality check failed: %w", err)
 	}
 
-	content := extractJSON(resp.Content)
+	content := extractJSON(result)
 	var scores AIQualityScores
 	if err := json.Unmarshal([]byte(content), &scores); err != nil {
 		return nil, fmt.Errorf("parse AI quality scores: %w (raw: %s)", err, content)
@@ -123,7 +112,7 @@ func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter
 	}
 
 	// 1. AI 综合质检（获取真实分数）
-	aiScores, err := s.runAIQualityCheck(ctx, chapter, novel)
+	aiScores, err := s.runAIQualityCheck(chapter, novel)
 	if err != nil {
 		log.Printf("QualityControlService: AI quality check failed: %v, falling back to rule-based", err)
 		// AI 失败时降级到规则检查
@@ -307,7 +296,7 @@ func (s *QualityControlService) generateQualitySuggestions(report *QualityReport
 
 // RefineWithSuggestions 按照指定改进建议对章节内容进行 AI 精修，返回改进后的文本（不保存）
 func (s *QualityControlService) RefineWithSuggestions(chapterID uint, suggestions []string) (string, error) {
-	if s.aiClient == nil {
+	if s.aiSvc == nil {
 		return "", fmt.Errorf("AI client not initialized")
 	}
 	chapter, err := s.chapterRepo.GetByID(chapterID)
@@ -334,18 +323,9 @@ func (s *QualityControlService) RefineWithSuggestions(chapterID uint, suggestion
 原始内容：
 %s`, sb.String(), chapter.Content)
 
-	provider, err := s.aiClient.GetProvider("")
-	if err != nil {
-		return "", fmt.Errorf("get AI provider: %w", err)
-	}
-	req := &ai.GenerateRequest{
-		Messages:    []ai.ChatMessage{{Role: "user", Content: prompt}},
-		MaxTokens:   4096,
-		Temperature: 0.4,
-	}
-	resp, err := provider.Generate(context.Background(), req)
+	result, err := s.aiSvc.GenerateWithProvider(0, 0, "quality_check", prompt, "")
 	if err != nil {
 		return "", fmt.Errorf("AI refine failed: %w", err)
 	}
-	return strings.TrimSpace(resp.Content), nil
+	return strings.TrimSpace(result), nil
 }

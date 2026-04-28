@@ -13,6 +13,7 @@ import (
 type PlotPointHandler struct {
 	svc        *service.PlotPointService
 	chapterSvc *service.ChapterService
+	taskSvc    *service.TaskService
 }
 
 func NewPlotPointHandler(svc *service.PlotPointService) *PlotPointHandler {
@@ -22,6 +23,11 @@ func NewPlotPointHandler(svc *service.PlotPointService) *PlotPointHandler {
 // WithChapterService 注入章节服务（用于 ExtractFromChapter 时服务端加载章节内容）
 func (h *PlotPointHandler) WithChapterService(svc *service.ChapterService) *PlotPointHandler {
 	h.chapterSvc = svc
+	return h
+}
+
+func (h *PlotPointHandler) WithTaskService(svc *service.TaskService) *PlotPointHandler {
+	h.taskSvc = svc
 	return h
 }
 
@@ -155,4 +161,33 @@ func (h *PlotPointHandler) Delete(c *gin.Context) {
 		return
 	}
 	respondOK(c, nil)
+}
+
+// AIExtractFromNovel POST /novels/:id/plot-points/ai-extract
+func (h *PlotPointHandler) AIExtractFromNovel(c *gin.Context) {
+	if h.taskSvc == nil {
+		respondErr(c, http.StatusServiceUnavailable, "task service not configured")
+		return
+	}
+	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid novel id")
+		return
+	}
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypePlotExtract, "AI提取剧情点", "novel", uint(novelID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+	go func(taskID string) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		pps, err := h.svc.AIExtractFromNovel(tenantID, uint(novelID))
+		if err != nil {
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+		} else {
+			h.taskSvc.Complete(taskID, map[string]interface{}{"plot_points": pps, "count": len(pps)}) //nolint:errcheck
+		}
+	}(task.TaskID)
+	respondAccepted(c, task.TaskID, "剧情点提取任务已提交")
 }

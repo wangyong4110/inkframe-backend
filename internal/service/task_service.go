@@ -18,6 +18,9 @@ const (
 	TaskTypeVoiceGen      = "voice_gen"
 	TaskTypeImageGen      = "image_gen"
 	TaskTypeThreeView     = "three_view"
+	TaskTypeCharGen     = "char_gen"
+	TaskTypeItemExtract = "item_extract"
+	TaskTypePlotExtract = "plot_extract"
 )
 
 // TaskService manages persistent async tasks.

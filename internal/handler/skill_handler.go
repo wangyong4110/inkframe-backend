@@ -125,7 +125,7 @@ func (h *SkillHandler) GenerateSkills(c *gin.Context) {
 		respondErr(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	skills, err := h.skillService.GenerateSkills(uint(novelID), &req)
+	skills, err := h.skillService.GenerateSkills(getTenantID(c), uint(novelID), &req)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to generate skills: "+err.Error())
 		return

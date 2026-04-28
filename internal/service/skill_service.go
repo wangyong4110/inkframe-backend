@@ -149,7 +149,7 @@ func (s *SkillService) DeleteSkill(id uint) error {
 }
 
 // GenerateSkills 使用AI批量生成技能
-func (s *SkillService) GenerateSkills(novelID uint, req *model.GenerateSkillsRequest) ([]*model.Skill, error) {
+func (s *SkillService) GenerateSkills(tenantID, novelID uint, req *model.GenerateSkillsRequest) ([]*model.Skill, error) {
 	novel, err := s.novelRepo.GetByID(novelID)
 	if err != nil {
 		return nil, fmt.Errorf("novel not found: %w", err)
@@ -190,7 +190,7 @@ skill_type 可选值：active/passive/toggle/ultimate
 		charSection, req.Hints, count,
 	)
 
-	resp, err := s.aiService.Generate(novelID, "skill_generation", prompt)
+	resp, err := s.aiService.GenerateWithProvider(tenantID, novelID, "skill_generation", prompt, "")
 	if err != nil {
 		return nil, fmt.Errorf("AI generation failed: %w", err)
 	}

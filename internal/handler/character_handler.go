@@ -232,11 +232,7 @@ func (h *CharacterHandler) DeleteCharacter(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-	})
+	respondOK(c, nil)
 }
 
 // GenerateCharacterImage 生成角色图像
@@ -249,10 +245,10 @@ func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 	}
 
 	var req struct {
-		Type     string `json:"type"` // portrait, expression, pose
-		Emotion  string `json:"emotion,omitempty"`
-		Action   string `json:"action,omitempty"`
-		Style    string `json:"style,omitempty"`
+		Type    string `json:"type"` // portrait, expression, pose
+		Emotion string `json:"emotion,omitempty"`
+		Action  string `json:"action,omitempty"`
+		Style   string `json:"style,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respondBadRequest(c, err.Error())
@@ -374,11 +370,7 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 		h.taskSvc.Complete(taskID, map[string]interface{}{"character": updated, "generated": generated}) //nolint:errcheck
 	}(task.TaskID, uint(id), character, req.ViewType, req.Style, req.Provider)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "三视图生成任务已提交",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "三视图生成任务已提交")
 }
 
 // GetThreeViewTaskStatus 查询三视图生成任务状态
@@ -421,6 +413,32 @@ func (h *CharacterHandler) UploadPortrait(c *gin.Context) {
 	}
 
 	respondOK(c, gin.H{"url": portraitURL, "character": updated})
+}
+
+// AIBatchGenerate AI批量生成/更新角色（异步任务）
+// POST /api/v1/novels/:id/characters/ai-batch
+func (h *CharacterHandler) AIBatchGenerate(c *gin.Context) {
+	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid novel id")
+		return
+	}
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeCharGen, "批量生成角色", "novel", uint(novelID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+	go func(taskID string) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		chars, err := h.characterService.AIBatchGenerate(tenantID, uint(novelID))
+		if err != nil {
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+		} else {
+			h.taskSvc.Complete(taskID, map[string]interface{}{"characters": chars, "count": len(chars)}) //nolint:errcheck
+		}
+	}(task.TaskID)
+	respondAccepted(c, task.TaskID, "角色批量生成任务已提交")
 }
 
 // GenerateCharacterProfile AI生成角色档案
@@ -618,8 +636,7 @@ func (h *CharacterHandler) DeleteChapterCharacter(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	_ = novelID
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
+	respondOK(c, nil)
 }
 
 // PreviewVoice 试听角色声音

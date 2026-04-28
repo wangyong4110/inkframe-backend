@@ -2,11 +2,14 @@
 #
 # 使用方式：cp config.example.yaml config.yaml，填写 [必填] 项
 #
-# AI API Key 等通过环境变量传入（不写入此文件）：
-#   OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_API_KEY
-#   DOUBAO_API_KEY / DEEPSEEK_API_KEY / QIANWEN_API_KEY
-#   KLING_API_KEY / SEEDANCE_API_KEY
-#   QDRANT_ENDPOINT / QDRANT_API_KEY / CHROMA_ENDPOINT
+# AI API Key 支持两种方式（环境变量优先，config.yaml 作为备选）：
+#   方式一：直接写入本文件（适合开发/单机部署）
+#   方式二：通过环境变量传入（适合容器/生产部署，优先级更高）
+#     OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_API_KEY
+#     DOUBAO_API_KEY / DEEPSEEK_API_KEY / QIANWEN_API_KEY
+#     KLING_API_KEY / SEEDANCE_API_KEY
+#     VOLCENGINE_ACCESS_KEY / VOLCENGINE_SECRET_KEY
+#     QDRANT_ENDPOINT / QDRANT_API_KEY / CHROMA_ENDPOINT
 
 # 服务器配置
 server:
@@ -41,42 +44,66 @@ redis:
   db: 0
   pool_size: 100
 
-# AI模型配置（Key 均从环境变量读取，此处只配置 Endpoint / Model）
+# AI模型配置
+# api_key 可直接填写（env var 优先级更高，可留空改用环境变量）
 ai:
-  # $OPENAI_API_KEY
   openai:
+    api_key: ""                      # 或通过 $OPENAI_API_KEY 传入
     endpoint: "https://api.openai.com/v1"
-    model: "gpt-4"
+    model: "gpt-4o"
     max_tokens: 4096
 
-  # $ANTHROPIC_API_KEY
   anthropic:
+    api_key: ""                      # 或通过 $ANTHROPIC_API_KEY 传入
     endpoint: "https://api.anthropic.com/v1"
-    model: "claude-3-opus-20240229"
+    model: "claude-3-5-sonnet-20241022"
 
-  # $GOOGLE_API_KEY
   google:
+    api_key: ""                      # 或通过 $GOOGLE_API_KEY 传入
     endpoint: "https://generativelanguage.googleapis.com/v1"
     model: "gemini-pro"
 
-  # $DOUBAO_API_KEY — 火山引擎 Ark，含 Seedream 图像生成
+  # 豆包（字节跳动火山引擎 Ark，含 Seedream 图像生成）
   doubao:
+    api_key: ""                      # 或通过 $DOUBAO_API_KEY 传入
     endpoint: "https://ark.volces.com/api/v3"
     model: "doubao-pro-32k"
 
-  # $DEEPSEEK_API_KEY
   deepseek:
+    api_key: ""                      # 或通过 $DEEPSEEK_API_KEY 传入
     endpoint: "https://api.deepseek.com/v1"
     model: "deepseek-chat"
 
-  # $QIANWEN_API_KEY — 阿里云 DashScope，含 Wan 万象图像生成
+  # 通义千问（阿里云 DashScope，含 Wan 万象图像生成）
   qianwen:
+    api_key: ""                      # 或通过 $QIANWEN_API_KEY 传入
     endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     model: "qwen-plus"
 
-  # $SEEDANCE_API_KEY — 火山引擎 Ark，通常与豆包共用同一 Key
+  # Seedance 视频生成（火山引擎 Ark，通常与豆包共用同一 Key）
   seedance:
+    api_key: ""                      # 或通过 $SEEDANCE_API_KEY 传入
     endpoint: "https://ark.volces.com/api/v3"
+
+  # 快手可灵视频生成
+  kling:
+    api_key: ""                      # 或通过 $KLING_API_KEY 传入
+    endpoint: ""
+
+  # 火山引擎即梦AI图像生成（AK/SK 鉴权）
+  volcengine_visual:
+    access_key: ""                   # 或通过 $VOLCENGINE_ACCESS_KEY 传入
+    secret_key: ""                   # 或通过 $VOLCENGINE_SECRET_KEY 传入
+
+  # 各任务类型使用的 provider（留空则自动选择可用 provider）
+  # 可选值：openai / anthropic / doubao / deepseek / qianwen / volcengine-visual / kling / seedance
+  tasks:
+    chapter_gen: ""        # 章节生成
+    quality_check: ""      # 质量检查
+    tts: ""                # 语音合成（仅 openai 支持）
+    image_gen: ""          # 图像生成
+    video_gen: ""          # 视频生成
+    embedding: ""          # 向量嵌入
 
   default:
     temperature: 0.7

@@ -1,10 +1,8 @@
 package handler
 
 import (
-	"encoding/base64"
 	"fmt"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 
@@ -15,12 +13,12 @@ import (
 
 // VideoHandler 视频处理器
 type VideoHandler struct {
-	videoService        *service.VideoService
-	storyboardService   *service.StoryboardService
-	enhancementService  *service.VideoEnhancementService
-	consistencyService  *service.CharacterConsistencyService
-	capcutService       *service.CapCutService
-	taskSvc             *service.TaskService
+	videoService       *service.VideoService
+	storyboardService  *service.StoryboardService
+	enhancementService *service.VideoEnhancementService
+	consistencyService *service.CharacterConsistencyService
+	capcutService      *service.CapCutService
+	taskSvc            *service.TaskService
 }
 
 func NewVideoHandler(
@@ -287,7 +285,7 @@ func (h *VideoHandler) GetStoryboard(c *gin.Context) {
 	respondOK(c, result)
 }
 
-// ServeAudio 供前端播放本地生成的配音文件
+// ServeAudio 供前端播放配音文件
 // GET /api/v1/videos/:id/storyboard/:shot_id/audio
 func (h *VideoHandler) ServeAudio(c *gin.Context) {
 	shotID, err := strconv.ParseUint(c.Param("shot_id"), 10, 32)
@@ -302,13 +300,24 @@ func (h *VideoHandler) ServeAudio(c *gin.Context) {
 		return
 	}
 
-	if !strings.HasPrefix(shot.AudioPath, "file://") {
-		respondErr(c, http.StatusNotFound, "no local audio for this shot")
+	if shot.AudioPath == "" {
+		respondErr(c, http.StatusNotFound, "no audio for this shot")
 		return
 	}
-	filePath := strings.TrimPrefix(shot.AudioPath, "file://")
-	c.Header("Cache-Control", "public, max-age=86400")
-	c.File(filePath)
+	// HTTP/HTTPS URL（OSS 或 DB media endpoint）— 重定向
+	if strings.HasPrefix(shot.AudioPath, "http://") || strings.HasPrefix(shot.AudioPath, "https://") {
+		c.Redirect(http.StatusFound, shot.AudioPath)
+		return
+	}
+	// file:// 本地路径（兼容未配置存储服务的情况）
+	if strings.HasPrefix(shot.AudioPath, "file://") {
+		filePath := strings.TrimPrefix(shot.AudioPath, "file://")
+		c.Header("Cache-Control", "public, max-age=86400")
+		c.File(filePath)
+		return
+	}
+	// /api/v1/media/:id 相对路径 — 重定向
+	c.Redirect(http.StatusFound, shot.AudioPath)
 }
 
 // UpdateStoryboardShot 更新分镜
@@ -359,8 +368,8 @@ func (h *VideoHandler) AnalyzeEmotions(c *gin.Context) {
 // POST /api/v1/video/enhance
 func (h *VideoHandler) EnhanceVideo(c *gin.Context) {
 	var req struct {
-		VideoURL      string                   `json:"video_url" binding:"required"`
-		Enhancements  []model.EnhancementConfig `json:"enhancements"`
+		VideoURL     string                    `json:"video_url" binding:"required"`
+		Enhancements []model.EnhancementConfig `json:"enhancements"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respondBadRequest(c, err.Error())
@@ -607,17 +616,7 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 			return
 		}
 
-		audioDataURL := ""
-		if strings.HasPrefix(shot.AudioPath, "file://") {
-			filePath := strings.TrimPrefix(shot.AudioPath, "file://")
-			if data, readErr := os.ReadFile(filePath); readErr == nil {
-				audioDataURL = "data:audio/mpeg;base64," + base64.StdEncoding.EncodeToString(data)
-			}
-		} else if shot.AudioPath != "" {
-			audioDataURL = shot.AudioPath
-		}
-
-		h.taskSvc.Complete(taskID, gin.H{"audio_url": audioDataURL, "shot_id": shot.ID}) //nolint:errcheck
+		h.taskSvc.Complete(taskID, gin.H{"audio_url": shot.AudioPath, "shot_id": shot.ID}) //nolint:errcheck
 	}(task.TaskID, shot)
 
 	c.JSON(http.StatusAccepted, gin.H{

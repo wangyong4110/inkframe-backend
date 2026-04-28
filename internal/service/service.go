@@ -18,6 +18,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
+	"github.com/inkframe/inkframe-backend/internal/storage"
 )
 
 // NovelService 小说服务
@@ -168,6 +169,9 @@ func (s *NovelService) UpdateNovel(id uint, req *model.UpdateNovelRequest) (*mod
 	if req.AIModel != "" {
 		novel.AIModel = req.AIModel
 	}
+	novel.ImageModel = req.ImageModel
+	novel.VideoModel = req.VideoModel
+	novel.TTSModel = req.TTSModel
 	if req.Temperature != nil {
 		novel.Temperature = *req.Temperature
 	}
@@ -188,7 +192,6 @@ func (s *NovelService) UpdateNovel(id uint, req *model.UpdateNovelRequest) (*mod
 	}
 	return novel, nil
 }
-
 
 // GenerateOutlineRequest 生成大纲请求
 type GenerateOutlineRequest struct {
@@ -238,11 +241,11 @@ type OutlineStructure struct {
 
 // ForeshadowMapItem 伏笔映射条目
 type ForeshadowMapItem struct {
-	ID           int    `json:"id"`
-	Type         string `json:"type"`
-	Description  string `json:"description"`
-	PlantChapter int    `json:"plant_chapter"`
-	PayoffChapter int   `json:"payoff_chapter"`
+	ID            int    `json:"id"`
+	Type          string `json:"type"`
+	Description   string `json:"description"`
+	PlantChapter  int    `json:"plant_chapter"`
+	PayoffChapter int    `json:"payoff_chapter"`
 }
 
 // OutlineResult 大纲结果
@@ -729,13 +732,27 @@ type providerCacheEntry struct {
 	expiresAt time.Time
 }
 
+// TaskRouting specifies which provider to prefer for each task type.
+// Provider names match registered names: "openai", "anthropic", "doubao", etc.
+// Empty string means use the system default or DB-configured provider.
+type TaskRouting struct {
+	ChapterGen   string
+	QualityCheck string
+	TTS          string
+	ImageGen     string
+	VideoGen     string
+	Embedding    string
+}
+
 // AIService AI服务
 type AIService struct {
-	modelRepo    *repository.AIModelRepository
-	taskRepo     *repository.TaskModelConfigRepository
-	aiManager    *ai.ModelManager
-	providerRepo *repository.ModelProviderRepository
-	novelRepo    *repository.NovelRepository
+	modelRepo     *repository.AIModelRepository
+	taskRepo      *repository.TaskModelConfigRepository
+	aiManager     *ai.ModelManager
+	providerRepo  *repository.ModelProviderRepository
+	novelRepo     *repository.NovelRepository
+	storageSvc    storage.Service
+	taskRouting   TaskRouting
 	providerCache sync.Map // key: "tenantID:providerName" → providerCacheEntry
 }
 
@@ -759,6 +776,18 @@ func NewAIService(
 // WithNovelRepo 注入小说仓库，用于在生成时读取小说级 AI 配置
 func (s *AIService) WithNovelRepo(repo *repository.NovelRepository) *AIService {
 	s.novelRepo = repo
+	return s
+}
+
+// WithStorage 注入媒体存储服务，供图片生成后持久化使用
+func (s *AIService) WithStorage(svc storage.Service) *AIService {
+	s.storageSvc = svc
+	return s
+}
+
+// WithTaskRouting 设置各任务类型优先使用的 provider（来自 config.yaml ai.tasks）
+func (s *AIService) WithTaskRouting(tr TaskRouting) *AIService {
+	s.taskRouting = tr
 	return s
 }
 
@@ -1246,15 +1275,42 @@ func (s *AIService) AudioGenerate(ctx context.Context, text, voice string) (stri
 	return s.AudioGenerateWithOptions(ctx, text, voice, 1.0, "")
 }
 
-// AudioGenerateWithOptions 支持语速和风格的 TTS 生成
+// AudioGenerateWithOptions 支持语速和风格的 TTS 生成。
+// Provider 选取顺序：
+//  1. config.yaml ai.tasks.tts 指定的 provider
+//  2. env var 注册的默认 provider
+//  3. DB 中配置的 provider（tenant_id=0 系统级 或 tenant_id=1 默认租户）
 func (s *AIService) AudioGenerateWithOptions(ctx context.Context, text, voice string, speed float64, style string) (string, error) {
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
 	}
-	provider, err := s.aiManager.GetProvider("")
-	if err != nil {
-		return "", fmt.Errorf("get AI provider failed: %w", err)
+
+	var provider ai.AIProvider
+	// 1. config.yaml task routing
+	if s.taskRouting.TTS != "" {
+		if p, err := s.aiManager.GetProvider(s.taskRouting.TTS); err == nil {
+			provider = p
+		}
 	}
+	// 2. env-var default
+	if provider == nil {
+		if p, err := s.aiManager.GetProvider(""); err == nil {
+			provider = p
+		}
+	}
+	// 3. DB fallback
+	if provider == nil {
+		pn := s.taskRouting.TTS
+		if pn == "" {
+			pn = "openai"
+		}
+		p, err := s.getTenantProvider(1, pn)
+		if err != nil {
+			return "", fmt.Errorf("no TTS provider available (set ai.tasks.tts or configure %q): %w", pn, err)
+		}
+		provider = p
+	}
+
 	if voice == "" {
 		voice = "alloy"
 	}
@@ -1456,16 +1512,17 @@ func (s *QualityService) generateSuggestions(issues []QualityIssue) []string {
 
 // VideoService 视频服务
 type VideoService struct {
-	videoRepo           *repository.VideoRepository
-	storyboardRepo      *repository.StoryboardRepository
-	chapterRepo         *repository.ChapterRepository
-	characterRepo       *repository.CharacterRepository
-	novelRepo           *repository.NovelRepository
-	tenantRepo          *repository.TenantRepository
-	aiService           *AIService
-	videoProviders      map[string]ai.VideoProvider
-	consistencyService  *CharacterConsistencyService
-	bgmService          *BGMService
+	videoRepo          *repository.VideoRepository
+	storyboardRepo     *repository.StoryboardRepository
+	chapterRepo        *repository.ChapterRepository
+	characterRepo      *repository.CharacterRepository
+	novelRepo          *repository.NovelRepository
+	tenantRepo         *repository.TenantRepository
+	aiService          *AIService
+	videoProviders     map[string]ai.VideoProvider
+	consistencyService *CharacterConsistencyService
+	bgmService         *BGMService
+	storageSvc         storage.Service
 }
 
 func NewVideoService(
@@ -1499,6 +1556,12 @@ func (s *VideoService) WithConsistencyService(cs *CharacterConsistencyService) *
 // WithBGMService 设置BGM服务（选填）
 func (s *VideoService) WithBGMService(bgm *BGMService) *VideoService {
 	s.bgmService = bgm
+	return s
+}
+
+// WithStorage 注入媒体存储服务（选填；配置 OSS 时上传至 OSS，否则存 DB）
+func (s *VideoService) WithStorage(svc storage.Service) *VideoService {
+	s.storageSvc = svc
 	return s
 }
 
@@ -2334,7 +2397,8 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 	return nil
 }
 
-// GenerateShotAudio 为单个分镜生成 TTS 音频，优先使用角色声音设置
+// GenerateShotAudio 为单个分镜生成 TTS 音频，优先使用角色声音设置。
+// 若注入了 storageSvc，将音频上传至 OSS 或 DB，并更新 shot.AudioPath 为持久 URL。
 func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot) error {
 	if shot.Dialogue == "" {
 		return nil
@@ -2345,14 +2409,65 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot) error {
 	voice, speed, style := s.resolveVoiceForShot(shot)
 	audioURL, err := s.aiService.AudioGenerateWithOptions(ctx, shot.Dialogue, voice, speed, style)
 	if err != nil {
-		log.Printf("GenerateShotAudio: shot %d failed: %v", shot.ID, err)
-		return nil // non-fatal
+		return fmt.Errorf("TTS generation failed: %w", err)
 	}
-	if audioURL != "" {
-		shot.AudioPath = audioURL
-		s.storyboardRepo.Update(shot) //nolint:errcheck
+	if audioURL == "" {
+		return fmt.Errorf("TTS returned empty audio URL")
 	}
+
+	// 若配置了存储服务，将音频上传至持久存储
+	if s.storageSvc != nil {
+		persistURL, uploadErr := s.uploadAudioToStorage(ctx, shot, audioURL)
+		if uploadErr != nil {
+			log.Printf("GenerateShotAudio: storage upload failed (falling back to local): %v", uploadErr)
+		} else {
+			audioURL = persistURL
+			// 删除 /tmp 临时文件（file:// 前缀）
+			if strings.HasPrefix(shot.AudioPath, "file://") {
+				os.Remove(strings.TrimPrefix(shot.AudioPath, "file://")) //nolint:errcheck
+			}
+		}
+	}
+
+	shot.AudioPath = audioURL
+	s.storyboardRepo.Update(shot) //nolint:errcheck
 	return nil
+}
+
+// uploadAudioToStorage 读取 TTS 输出（file:// 路径或 HTTP URL），上传并返回持久 URL。
+func (s *VideoService) uploadAudioToStorage(ctx context.Context, shot *model.StoryboardShot, audioURL string) (string, error) {
+	var data []byte
+	var readErr error
+
+	if strings.HasPrefix(audioURL, "file://") {
+		data, readErr = os.ReadFile(strings.TrimPrefix(audioURL, "file://"))
+	} else if strings.HasPrefix(audioURL, "http://") || strings.HasPrefix(audioURL, "https://") {
+		resp, err := http.Get(audioURL) //nolint:gosec
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
+		data, readErr = io.ReadAll(resp.Body)
+	} else {
+		return "", fmt.Errorf("unsupported audio URL scheme: %s", audioURL)
+	}
+	if readErr != nil {
+		return "", readErr
+	}
+
+	video, err := s.videoRepo.GetByID(shot.VideoID)
+	if err != nil {
+		return "", err
+	}
+	novelID := video.NovelID
+	var chapterID uint
+	if video.ChapterID != nil {
+		chapterID = *video.ChapterID
+	}
+
+	filename := fmt.Sprintf("shot-%d.mp3", shot.ID)
+	key := storage.BuildKey(novelID, chapterID, "audio", filename)
+	return s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), "audio/mpeg")
 }
 
 // resolveVoiceForShot 从对话文本中解析发言角色并返回其配音设置（voice, speed, style）

@@ -26,6 +26,7 @@ type Config struct {
 	UploadHandler    *handler.UploadHandler
 	PlotPointHandler *handler.PlotPointHandler
 	TaskHandler      *handler.TaskHandler
+	MediaHandler     *handler.MediaHandler
 }
 
 // SetupRouter 配置路由
@@ -44,6 +45,11 @@ func SetupRouter(cfg *Config) *gin.Engine {
 
 	// 本地上传文件静态服务
 	r.Static("/uploads", "./uploads")
+
+	// 媒体素材下载（DB 存储后端；无需登录，可嵌入 <audio>/<img>）
+	if cfg.MediaHandler != nil {
+		r.GET("/api/v1/media/:id", cfg.MediaHandler.ServeMedia)
+	}
 
 	// 公开认证路由（不需要JWT）
 	auth := r.Group("/api/v1/auth")
@@ -131,6 +137,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.GET("/:id/characters", cfg.CharacterHandler.ListCharacters)
 			novels.POST("/:id/characters", cfg.CharacterHandler.CreateCharacter)
 			novels.POST("/:id/characters/generate", cfg.CharacterHandler.GenerateCharacterProfile)
+			novels.POST("/:id/characters/ai-batch", cfg.CharacterHandler.AIBatchGenerate)
 
 			// 角色弧光
 			novels.GET("/:id/character-arcs", cfg.CharacterHandler.GetAllCharacterArcs)
@@ -156,6 +163,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			if cfg.ItemHandler != nil {
 				novels.GET("/:id/items", cfg.ItemHandler.ListItems)
 				novels.POST("/:id/items", cfg.ItemHandler.CreateItem)
+				novels.POST("/:id/items/ai-extract", cfg.ItemHandler.AIExtractFromNovel)
 				// 章节级物品（有效列表 + 覆盖）
 				novels.GET("/:id/chapters/:chapter_no/items", cfg.ItemHandler.ListEffectiveItems)
 				novels.POST("/:id/chapters/:chapter_no/items/:item_id", cfg.ItemHandler.UpsertChapterItem)
@@ -177,6 +185,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			// 剧情点（小说级）
 			if cfg.PlotPointHandler != nil {
 				novels.GET("/:id/plot-points", cfg.PlotPointHandler.ListByNovel)
+				novels.POST("/:id/plot-points/ai-extract", cfg.PlotPointHandler.AIExtractFromNovel)
 			}
 		}
 

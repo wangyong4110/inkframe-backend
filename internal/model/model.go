@@ -26,6 +26,22 @@ type AsyncTask struct {
 
 func (AsyncTask) TableName() string { return "ink_async_task" }
 
+// MediaAsset 媒体素材（图片/音频/视频/字幕），OSS 未配置时存 DB
+type MediaAsset struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	TenantID    uint      `gorm:"index" json:"tenant_id"`
+	NovelID     uint      `gorm:"index" json:"novel_id"`
+	ChapterID   uint      `gorm:"index" json:"chapter_id"`
+	MediaType   string    `gorm:"size:20;index" json:"media_type"` // image/audio/video/subtitle
+	Filename    string    `gorm:"size:255" json:"filename"`
+	ContentType string    `gorm:"size:100" json:"content_type"`
+	Size        int64     `json:"size"`
+	Data        []byte    `gorm:"type:longblob" json:"-"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+func (MediaAsset) TableName() string { return "ink_media_asset" }
+
 // MarshalJSON exposes ResultJSON as 'data' in the API response.
 func (t AsyncTask) MarshalJSON() ([]byte, error) {
 	m := map[string]interface{}{
@@ -67,9 +83,9 @@ type Novel struct {
 	// planning=规划中, writing=创作中, paused=暂停, completed=已完成, archived=已归档
 
 	// 频道与分类（创作目标）
-	Channel        string `json:"channel" gorm:"size:50"`          // female=女生原创, male=男生原创, publish=出版图书
-	TargetWordCount int   `json:"target_word_count" gorm:"default:0"` // 目标字数（万字）
-	TargetChapters  int   `json:"target_chapters" gorm:"default:0"`   // 目标章节数
+	Channel         string `json:"channel" gorm:"size:50"`             // female=女生原创, male=男生原创, publish=出版图书
+	TargetWordCount int    `json:"target_word_count" gorm:"default:0"` // 目标字数（万字）
+	TargetChapters  int    `json:"target_chapters" gorm:"default:0"`   // 目标章节数
 
 	// 统计
 	TotalWords   int `json:"total_words" gorm:"default:0"`
@@ -82,7 +98,10 @@ type Novel struct {
 	CoverImage  string     `json:"cover_image" gorm:"size:500"`
 
 	// AI配置（项目级，作为所有生成操作的默认参数）
-	AIModel     string  `json:"ai_model" gorm:"size:100"`
+	AIModel     string  `json:"ai_model" gorm:"size:100"`    // LLM 模型（章节生成等文本任务）
+	ImageModel  string  `json:"image_model" gorm:"size:100"` // 图片生成模型
+	VideoModel  string  `json:"video_model" gorm:"size:100"` // 视频生成模型
+	TTSModel    string  `json:"tts_model" gorm:"size:100"`   // 语音合成模型
 	Temperature float64 `json:"temperature" gorm:"type:decimal(3,2);default:0.7"`
 	TopP        float64 `json:"top_p" gorm:"type:decimal(3,2);default:0.9"`
 	TopK        int     `json:"top_k" gorm:"default:40"`
@@ -90,8 +109,8 @@ type Novel struct {
 	StylePrompt string  `json:"style_prompt" gorm:"type:text"`
 
 	// 风格配置
-	ImageStyle     string `json:"image_style" gorm:"size:50"`        // 视觉/图片风格，如 anime/realistic/ink_painting
-	ReferenceStyle string `json:"reference_style" gorm:"type:text"`  // 参考作品（书名、URL 或描述）
+	ImageStyle     string `json:"image_style" gorm:"size:50"`       // 视觉/图片风格，如 anime/realistic/ink_painting
+	ReferenceStyle string `json:"reference_style" gorm:"type:text"` // 参考作品（书名、URL 或描述）
 
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`
@@ -118,16 +137,16 @@ type Chapter struct {
 	WordCount int    `json:"word_count" gorm:"default:0"`
 
 	// 大纲与场景结构
-	Outline     string `json:"outline" gorm:"type:text"`
+	Outline      string `json:"outline" gorm:"type:text"`
 	SceneOutline string `json:"scene_outline" gorm:"type:text"` // JSON: 场景级大纲（3-5个场景）
-	PlotPoints  string `json:"plot_points" gorm:"type:text"`   // JSON数组
+	PlotPoints   string `json:"plot_points" gorm:"type:text"`   // JSON数组
 
 	// 叙事元数据（来自小说大纲）
-	TensionLevel  int    `json:"tension_level" gorm:"default:0"`  // 0-10 张力值
-	ActNo         int    `json:"act_no" gorm:"default:0"`         // 所属幕次（1/2/3）
-	EmotionalTone string `json:"emotional_tone" gorm:"size:50"`   // 情感基调
-	HookType      string `json:"hook_type" gorm:"size:30"`         // 章末钩子类型
-	ChapterHook   string `json:"chapter_hook" gorm:"type:text"`   // 章末钩子正文（供下一章生成时使用）
+	TensionLevel  int    `json:"tension_level" gorm:"default:0"` // 0-10 张力值
+	ActNo         int    `json:"act_no" gorm:"default:0"`        // 所属幕次（1/2/3）
+	EmotionalTone string `json:"emotional_tone" gorm:"size:50"`  // 情感基调
+	HookType      string `json:"hook_type" gorm:"size:30"`       // 章末钩子类型
+	ChapterHook   string `json:"chapter_hook" gorm:"type:text"`  // 章末钩子正文（供下一章生成时使用）
 
 	// 状态
 	Status string `json:"status" gorm:"size:20;default:draft"`
@@ -205,11 +224,11 @@ type Worldview struct {
 	Rules string `json:"rules" gorm:"type:text"`
 
 	// 扩展世界观元素
-	Factions           string `json:"factions" gorm:"type:text"`            // 势力格局
-	CoreConflicts      string `json:"core_conflicts" gorm:"type:text"`       // 核心矛盾
+	Factions            string `json:"factions" gorm:"type:text"`             // 势力格局
+	CoreConflicts       string `json:"core_conflicts" gorm:"type:text"`       // 核心矛盾
 	CharacterArchetypes string `json:"character_archetypes" gorm:"type:text"` // 典型人物原型
-	Religion           string `json:"religion" gorm:"type:text"`             // 宗教与信仰
-	Glossary           string `json:"glossary" gorm:"type:text"`             // 术语词汇表
+	Religion            string `json:"religion" gorm:"type:text"`             // 宗教与信仰
+	Glossary            string `json:"glossary" gorm:"type:text"`             // 术语词汇表
 
 	// 封面
 	CoverImage string `json:"cover_image" gorm:"size:500"`
@@ -508,10 +527,10 @@ type ModelProvider struct {
 	// cloud=云端, local=本地
 
 	// API配置
-	APIEndpoint string `json:"api_endpoint" gorm:"size:500"`
-	APIKey      string `json:"api_key" gorm:"type:text"`
+	APIEndpoint  string `json:"api_endpoint" gorm:"size:500"`
+	APIKey       string `json:"api_key" gorm:"type:text"`
 	APISecretKey string `json:"api_secret_key" gorm:"type:text"` // AK/SK 鉴权的 SecretKey（如火山引擎即梦AI）
-	APIVersion  string `json:"api_version" gorm:"size:50"` // 也用于存储默认模型名称
+	APIVersion   string `json:"api_version" gorm:"size:50"`      // 也用于存储默认模型名称
 
 	// 限制
 	RateLimit int     `json:"rate_limit"` // 请求/分钟
@@ -735,8 +754,8 @@ type Video struct {
 	Thumbnail string `json:"thumbnail" gorm:"size:500"`
 
 	// 状态
-	Status       string  `json:"status" gorm:"size:20;default:planning"`
-	ScriptStatus string  `json:"script_status" gorm:"size:20;default:draft"`
+	Status       string `json:"status" gorm:"size:20;default:planning"`
+	ScriptStatus string `json:"script_status" gorm:"size:20;default:draft"`
 	// draft=脚本草稿（可编辑），confirmed=脚本已确认（可生成素材）
 	Progress float64 `json:"progress" gorm:"type:decimal(5,2);default:0"`
 
@@ -748,10 +767,10 @@ type Video struct {
 	GenerationCost float64 `json:"generation_cost" gorm:"type:decimal(10,2)"`
 
 	// 异步任务追踪
-	ProviderName string `json:"provider_name" gorm:"size:50"`           // kling/seedance
-	TaskID       string `json:"task_id" gorm:"size:255;index"`           // 外部 API 任务 ID
+	ProviderName string `json:"provider_name" gorm:"size:50"`             // kling/seedance
+	TaskID       string `json:"task_id" gorm:"size:255;index"`            // 外部 API 任务 ID
 	ErrorMessage string `json:"error_message,omitempty" gorm:"type:text"` // 生成失败原因
-	RetryCount   int    `json:"retry_count" gorm:"default:0"`            // 已重试次数
+	RetryCount   int    `json:"retry_count" gorm:"default:0"`             // 已重试次数
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -821,7 +840,7 @@ type StoryboardShot struct {
 
 	// 时序连贯与参考帧
 	ReferenceImageURL string `json:"reference_image_url" gorm:"size:500"` // 前一镜头最后一帧URL，用于时序连贯
-	FrameImageURL     string `json:"frame_image_url" gorm:"size:500"`      // 本镜头AI图像生成结果URL，传给Kling image-to-video
+	FrameImageURL     string `json:"frame_image_url" gorm:"size:500"`     // 本镜头AI图像生成结果URL，传给Kling image-to-video
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -1068,14 +1087,14 @@ type Item struct {
 	Category string `json:"category" gorm:"size:50"` // weapon/treasure/tool/document/artifact/other
 
 	Description  string `json:"description" gorm:"type:text"`
-	Appearance   string `json:"appearance" gorm:"type:text"` // 外观描述
-	Location     string `json:"location" gorm:"size:200"`    // 当前/最后已知位置
-	Owner        string `json:"owner" gorm:"size:100"`       // 当前持有者
+	Appearance   string `json:"appearance" gorm:"type:text"`   // 外观描述
+	Location     string `json:"location" gorm:"size:200"`      // 当前/最后已知位置
+	Owner        string `json:"owner" gorm:"size:100"`         // 当前持有者
 	Significance string `json:"significance" gorm:"type:text"` // 在故事中的重要性
-	Abilities    string `json:"abilities" gorm:"type:text"`  // JSON: [{name, description}]
+	Abilities    string `json:"abilities" gorm:"type:text"`    // JSON: [{name, description}]
 
-	ImageURL         string `json:"image_url" gorm:"size:1000"`
-	VisualPrompt     string `json:"visual_prompt" gorm:"type:text"` // 用于 AI 图像生成的英文提示词
+	ImageURL          string `json:"image_url" gorm:"size:1000"`
+	VisualPrompt      string `json:"visual_prompt" gorm:"type:text"`       // 用于 AI 图像生成的英文提示词
 	ReferenceImageURL string `json:"reference_image_url" gorm:"size:1000"` // 参考图 URL（已上传到 OSS）
 
 	Status string `json:"status" gorm:"size:20;default:active"` // active/lost/destroyed/unknown
@@ -1129,6 +1148,9 @@ type UpdateNovelRequest struct {
 	WorldviewID *uint    `json:"worldview_id"`
 	CoverImage  string   `json:"cover_image"`
 	AIModel     string   `json:"ai_model"`
+	ImageModel  string   `json:"image_model"`
+	VideoModel  string   `json:"video_model"`
+	TTSModel    string   `json:"tts_model"`
 	Temperature *float64 `json:"temperature"`
 	TopP        *float64 `json:"top_p"`
 	TopK        *int     `json:"top_k"`
@@ -1154,8 +1176,8 @@ type GenerateChapterRequest struct {
 	ChapterNo     int    `json:"chapter_no" binding:"required,min=1"`
 	Prompt        string `json:"prompt"`
 	MaxTokens     int    `json:"max_tokens"`
-	ModelOverride string `json:"model,omitempty"`  // 可选：指定使用的 AI 模型/provider
-	IsStandalone  bool   `json:"is_standalone"`    // true=最终章，要求故事完整收尾；可显式传入，也会由系统根据 chapter_no >= target_chapters 自动推断
+	ModelOverride string `json:"model,omitempty"` // 可选：指定使用的 AI 模型/provider
+	IsStandalone  bool   `json:"is_standalone"`   // true=最终章，要求故事完整收尾；可显式传入，也会由系统根据 chapter_no >= target_chapters 自动推断
 }
 
 type CreateCharacterRequest struct {
@@ -1168,13 +1190,13 @@ type CreateCharacterRequest struct {
 }
 
 type UpdateCharacterRequest struct {
-	Name            string        `json:"name"`
-	Role            string        `json:"role"`
-	Archetype       string        `json:"archetype"`
-	Background      string        `json:"background"`
-	Appearance      string        `json:"appearance"`
-	Personality     string        `json:"personality"`
-	CharacterArc    string        `json:"character_arc"`
+	Name         string `json:"name"`
+	Role         string `json:"role"`
+	Archetype    string `json:"archetype"`
+	Background   string `json:"background"`
+	Appearance   string `json:"appearance"`
+	Personality  string `json:"personality"`
+	CharacterArc string `json:"character_arc"`
 	// nil = field absent (don't update); non-nil empty = clear; non-empty = update
 	PersonalityTags []string      `json:"personality_tags"`
 	Abilities       []interface{} `json:"abilities"` // [{name,level,description}]
@@ -1285,19 +1307,19 @@ type CreateModelComparisonRequest struct {
 
 // McpTool MCP 工具配置
 type McpTool struct {
-	ID           uint   `json:"id" gorm:"primaryKey"`
-	TenantID     uint   `json:"tenant_id" gorm:"index;not null;default:1"`
-	Name         string `json:"name" gorm:"size:100;uniqueIndex"`
-	DisplayName  string `json:"display_name" gorm:"size:100"`
-	Description  string `json:"description" gorm:"type:text"`
+	ID            uint   `json:"id" gorm:"primaryKey"`
+	TenantID      uint   `json:"tenant_id" gorm:"index;not null;default:1"`
+	Name          string `json:"name" gorm:"size:100;uniqueIndex"`
+	DisplayName   string `json:"display_name" gorm:"size:100"`
+	Description   string `json:"description" gorm:"type:text"`
 	TransportType string `json:"transport_type" gorm:"size:20"` // http, sse, stdio
-	Endpoint     string `json:"endpoint" gorm:"size:500"`
-	Headers      string `json:"headers" gorm:"type:text"`      // JSON map[string]string
-	Env          string `json:"env" gorm:"type:text"`          // JSON map[string]string (stdio only)
-	Timeout      int    `json:"timeout" gorm:"default:30"`
-	IsActive     bool   `json:"is_active" gorm:"default:true"`
-	IsSystem     bool   `json:"is_system" gorm:"default:false"` // 系统内置工具不可删除
-	Schema       string `json:"schema" gorm:"type:text"`        // JSON 工具能力描述
+	Endpoint      string `json:"endpoint" gorm:"size:500"`
+	Headers       string `json:"headers" gorm:"type:text"` // JSON map[string]string
+	Env           string `json:"env" gorm:"type:text"`     // JSON map[string]string (stdio only)
+	Timeout       int    `json:"timeout" gorm:"default:30"`
+	IsActive      bool   `json:"is_active" gorm:"default:true"`
+	IsSystem      bool   `json:"is_system" gorm:"default:false"` // 系统内置工具不可删除
+	Schema        string `json:"schema" gorm:"type:text"`        // JSON 工具能力描述
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -1363,14 +1385,14 @@ type CreateItemRequest struct {
 }
 
 type UpdateItemRequest struct {
-	Name         string `json:"name"`
-	Category     string `json:"category"`
-	Description  string `json:"description"`
-	Appearance   string `json:"appearance"`
-	Location     string `json:"location"`
-	Owner        string `json:"owner"`
-	Significance string `json:"significance"`
-	Abilities    string `json:"abilities"`
+	Name              string `json:"name"`
+	Category          string `json:"category"`
+	Description       string `json:"description"`
+	Appearance        string `json:"appearance"`
+	Location          string `json:"location"`
+	Owner             string `json:"owner"`
+	Significance      string `json:"significance"`
+	Abilities         string `json:"abilities"`
 	VisualPrompt      string `json:"visual_prompt"`
 	ImageURL          string `json:"image_url"`
 	ReferenceImageURL string `json:"reference_image_url"`
@@ -1393,9 +1415,9 @@ type ChapterCharacter struct {
 
 	Appearance  string `json:"appearance" gorm:"type:text"`  // 本章外观（覆盖项目级）
 	Personality string `json:"personality" gorm:"type:text"` // 本章性格变化
-	Status      string `json:"status" gorm:"size:50"`         // alive/dead/missing/injured/imprisoned
-	Location    string `json:"location" gorm:"size:200"`      // 本章所在位置
-	Notes       string `json:"notes" gorm:"type:text"`        // 本章备注
+	Status      string `json:"status" gorm:"size:50"`        // alive/dead/missing/injured/imprisoned
+	Location    string `json:"location" gorm:"size:200"`     // 本章所在位置
+	Notes       string `json:"notes" gorm:"type:text"`       // 本章备注
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -1418,33 +1440,33 @@ type UpsertChapterCharacterRequest struct {
 // skill_type: active(主动)/passive(被动)/toggle(切换)/ultimate(绝技)
 // status: active/sealed(封印)/lost(失传)/disabled(禁用)
 type Skill struct {
-	ID          uint   `json:"id" gorm:"primaryKey"`
-	NovelID     uint   `json:"novel_id" gorm:"index;not null"`
-	CharacterID *uint  `json:"character_id" gorm:"index"` // nil = 世界/未分配技能
-	ParentID    *uint  `json:"parent_id" gorm:"index"`    // 前置技能（技能树）
+	ID          uint  `json:"id" gorm:"primaryKey"`
+	NovelID     uint  `json:"novel_id" gorm:"index;not null"`
+	CharacterID *uint `json:"character_id" gorm:"index"` // nil = 世界/未分配技能
+	ParentID    *uint `json:"parent_id" gorm:"index"`    // 前置技能（技能树）
 
-	Name       string `json:"name" gorm:"size:100;not null"`
-	Category   string `json:"category" gorm:"size:50"`  // 武技/法术/身法/心法/阵法/神通/秘法/特性
-	SkillType  string `json:"skill_type" gorm:"size:30"` // active/passive/toggle/ultimate
-	Level      int    `json:"level" gorm:"default:1"`
-	MaxLevel   int    `json:"max_level" gorm:"default:10"`
-	Realm      string `json:"realm" gorm:"size:50"` // 修炼境界要求：练气/筑基/金丹/元婴…
+	Name      string `json:"name" gorm:"size:100;not null"`
+	Category  string `json:"category" gorm:"size:50"`   // 武技/法术/身法/心法/阵法/神通/秘法/特性
+	SkillType string `json:"skill_type" gorm:"size:30"` // active/passive/toggle/ultimate
+	Level     int    `json:"level" gorm:"default:1"`
+	MaxLevel  int    `json:"max_level" gorm:"default:10"`
+	Realm     string `json:"realm" gorm:"size:50"` // 修炼境界要求：练气/筑基/金丹/元婴…
 
 	Description string `json:"description" gorm:"type:text"` // 技能概述
 	Effect      string `json:"effect" gorm:"type:text"`      // 效果详情
 	FlavorText  string `json:"flavor_text" gorm:"type:text"` // 世界观文字（小说内描述）
 
-	Cost     string `json:"cost" gorm:"size:100"`     // 消耗（法力/灵力/体力等）
-	Cooldown string `json:"cooldown" gorm:"size:50"`  // 冷却时间
-	Tags     string `json:"tags" gorm:"size:200"`     // 逗号分隔标签
+	Cost     string `json:"cost" gorm:"size:100"`    // 消耗（法力/灵力/体力等）
+	Cooldown string `json:"cooldown" gorm:"size:50"` // 冷却时间
+	Tags     string `json:"tags" gorm:"size:200"`    // 逗号分隔标签
 
-	AcquiredChapterNo *int   `json:"acquired_chapter_no"` // 获得技能的章节号
+	AcquiredChapterNo *int   `json:"acquired_chapter_no"`            // 获得技能的章节号
 	AcquiredDesc      string `json:"acquired_desc" gorm:"type:text"` // 获得方式描述
 
 	Status string `json:"status" gorm:"size:20;default:active"` // active/sealed/lost/disabled
 	Notes  string `json:"notes" gorm:"type:text"`               // 作者内部备注
 
-	EffectImageURL     string `json:"effect_image_url" gorm:"size:1000"`   // AI 生成的技能特效图片
+	EffectImageURL     string `json:"effect_image_url" gorm:"size:1000"`     // AI 生成的技能特效图片
 	EffectVisualPrompt string `json:"effect_visual_prompt" gorm:"type:text"` // 特效图片生成提示词
 
 	CreatedAt time.Time      `json:"created_at"`
@@ -1457,40 +1479,40 @@ func (Skill) TableName() string { return "ink_skill" }
 // ─── Skill DTOs ────────────────────────────────────────────────────────────────
 
 type CreateSkillRequest struct {
-	CharacterID *uint  `json:"character_id"`
-	ParentID    *uint  `json:"parent_id"`
-	Name        string `json:"name" binding:"required"`
-	Category    string `json:"category"`
-	SkillType   string `json:"skill_type"`
-	Level       int    `json:"level"`
-	MaxLevel    int    `json:"max_level"`
-	Realm       string `json:"realm"`
-	Description string `json:"description"`
-	Effect      string `json:"effect"`
-	FlavorText  string `json:"flavor_text"`
-	Cost        string `json:"cost"`
-	Cooldown    string `json:"cooldown"`
-	Tags        string `json:"tags"`
+	CharacterID       *uint  `json:"character_id"`
+	ParentID          *uint  `json:"parent_id"`
+	Name              string `json:"name" binding:"required"`
+	Category          string `json:"category"`
+	SkillType         string `json:"skill_type"`
+	Level             int    `json:"level"`
+	MaxLevel          int    `json:"max_level"`
+	Realm             string `json:"realm"`
+	Description       string `json:"description"`
+	Effect            string `json:"effect"`
+	FlavorText        string `json:"flavor_text"`
+	Cost              string `json:"cost"`
+	Cooldown          string `json:"cooldown"`
+	Tags              string `json:"tags"`
 	AcquiredChapterNo *int   `json:"acquired_chapter_no"`
 	AcquiredDesc      string `json:"acquired_desc"`
-	Notes       string `json:"notes"`
+	Notes             string `json:"notes"`
 }
 
 type UpdateSkillRequest struct {
-	CharacterID *uint  `json:"character_id"`
-	ParentID    *uint  `json:"parent_id"`
-	Name        string `json:"name"`
-	Category    string `json:"category"`
-	SkillType   string `json:"skill_type"`
-	Level       int    `json:"level"`
-	MaxLevel    int    `json:"max_level"`
-	Realm       string `json:"realm"`
-	Description string `json:"description"`
-	Effect      string `json:"effect"`
-	FlavorText  string `json:"flavor_text"`
-	Cost        string `json:"cost"`
-	Cooldown    string `json:"cooldown"`
-	Tags        string `json:"tags"`
+	CharacterID        *uint  `json:"character_id"`
+	ParentID           *uint  `json:"parent_id"`
+	Name               string `json:"name"`
+	Category           string `json:"category"`
+	SkillType          string `json:"skill_type"`
+	Level              int    `json:"level"`
+	MaxLevel           int    `json:"max_level"`
+	Realm              string `json:"realm"`
+	Description        string `json:"description"`
+	Effect             string `json:"effect"`
+	FlavorText         string `json:"flavor_text"`
+	Cost               string `json:"cost"`
+	Cooldown           string `json:"cooldown"`
+	Tags               string `json:"tags"`
 	AcquiredChapterNo  *int   `json:"acquired_chapter_no"`
 	AcquiredDesc       string `json:"acquired_desc"`
 	Status             string `json:"status"`

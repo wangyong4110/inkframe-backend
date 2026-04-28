@@ -9,14 +9,22 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
 
+
 // PlotPointService 剧情点服务
 type PlotPointService struct {
-	repo      *repository.PlotPointRepository
-	aiService *AIService
+	repo        *repository.PlotPointRepository
+	aiService   *AIService
+	chapterRepo *repository.ChapterRepository // optional, for AIExtractFromNovel
 }
 
 func NewPlotPointService(repo *repository.PlotPointRepository, aiService *AIService) *PlotPointService {
 	return &PlotPointService{repo: repo, aiService: aiService}
+}
+
+// WithChapterRepo 注入章节仓库（可选，用于 AIExtractFromNovel）
+func (s *PlotPointService) WithChapterRepo(r *repository.ChapterRepository) *PlotPointService {
+	s.chapterRepo = r
+	return s
 }
 
 // List 获取章节的所有剧情点
@@ -91,6 +99,37 @@ func (s *PlotPointService) MarkResolved(id uint, resolvedInChapterID uint) (*mod
 	return pp, nil
 }
 
+// AIExtractFromNovel 从小说所有章节中提取剧情点（跳过已有剧情点的章节）
+func (s *PlotPointService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.PlotPoint, error) {
+	if s.chapterRepo == nil {
+		return nil, fmt.Errorf("chapter repository not configured")
+	}
+	chapters, err := s.chapterRepo.ListByNovel(novelID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load chapters: %w", err)
+	}
+
+	var all []*model.PlotPoint
+	for _, ch := range chapters {
+		if ch.Content == "" {
+			continue
+		}
+		// 跳过已有剧情点的章节
+		existing, _ := s.repo.ListByChapter(ch.ID)
+		if len(existing) > 0 {
+			all = append(all, existing...)
+			continue
+		}
+		pps, err := s.ExtractFromChapter(tenantID, ch)
+		if err != nil {
+			log.Printf("PlotPointService.AIExtractFromNovel: chapter %d: %v", ch.ID, err)
+			continue
+		}
+		all = append(all, pps...)
+	}
+	return all, nil
+}
+
 // ExtractFromChapter 使用AI从章节内容提取剧情点并保存
 func (s *PlotPointService) ExtractFromChapter(tenantID uint, chapter *model.Chapter) ([]*model.PlotPoint, error) {
 	if chapter.Content == "" {
@@ -110,7 +149,7 @@ func (s *PlotPointService) ExtractFromChapter(tenantID uint, chapter *model.Chap
 }
 章节内容：%s`, chapter.Content)
 
-	result, err := s.aiService.Generate(chapter.NovelID, "plot_extraction", prompt)
+	result, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "plot_extraction", prompt, "")
 	if err != nil {
 		return nil, fmt.Errorf("AI extraction failed: %w", err)
 	}
@@ -124,21 +163,15 @@ func (s *PlotPointService) ExtractFromChapter(tenantID uint, chapter *model.Chap
 		} `json:"plot_points"`
 	}
 
-	if err := json.Unmarshal([]byte(result), &plotResult); err != nil {
+	if err := json.Unmarshal([]byte(extractJSON(result)), &plotResult); err != nil {
 		log.Printf("PlotPointService.ExtractFromChapter: parse error: %v, raw: %.200s", err, result)
 		return nil, fmt.Errorf("failed to parse AI response")
 	}
 
 	pps := make([]*model.PlotPoint, 0, len(plotResult.PlotPoints))
 	for _, p := range plotResult.PlotPoints {
-		chars, err := json.Marshal(p.Characters)
-		if err != nil {
-			chars = []byte("[]")
-		}
-		locs, err := json.Marshal(p.Locations)
-		if err != nil {
-			locs = []byte("[]")
-		}
+		chars, _ := json.Marshal(p.Characters)
+		locs, _ := json.Marshal(p.Locations)
 		pps = append(pps, &model.PlotPoint{
 			TenantID:    tenantID,
 			NovelID:     chapter.NovelID,

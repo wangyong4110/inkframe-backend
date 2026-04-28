@@ -16,6 +16,60 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
 
+// ─── AI upsert helpers ───────────────────────────────────────────────────────
+
+// fillIfEmpty returns (ai, true) when existing is blank and ai is non-blank;
+// otherwise returns (existing, false). Used to avoid overwriting user-curated data.
+func fillIfEmpty(existing, ai string) (string, bool) {
+	if existing == "" && ai != "" {
+		return ai, true
+	}
+	return existing, false
+}
+
+// collectContent joins chapter content up to maxChapters chapters and maxRunes runes total.
+func collectContent(chapters []*model.Chapter, maxChapters, maxRunes int) string {
+	var sb strings.Builder
+	runeCount := 0
+	for i, ch := range chapters {
+		if i >= maxChapters || runeCount >= maxRunes {
+			break
+		}
+		if ch.Content == "" {
+			continue
+		}
+		runes := []rune(ch.Content)
+		if runeCount > 0 {
+			sb.WriteString("\n\n")
+			runeCount += 2
+		}
+		remaining := maxRunes - runeCount
+		if len(runes) > remaining {
+			runes = runes[:remaining]
+		}
+		sb.WriteString(string(runes))
+		runeCount += len(runes)
+	}
+	return sb.String()
+}
+
+// marshalExistingNames serialises a slice of items via transform and returns a compact JSON array string.
+// Returns "" when items is empty.
+func marshalExistingNames[T any](items []T, transform func(T) any) string {
+	if len(items) == 0 {
+		return ""
+	}
+	arr := make([]any, len(items))
+	for i, it := range items {
+		arr[i] = transform(it)
+	}
+	b, err := json.Marshal(arr)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
 // ============================================
 // ChapterService 章节服务
 // ============================================
@@ -74,11 +128,8 @@ func (s *ChapterService) ListChapters(novelID uint) ([]*model.Chapter, error) {
 	return s.chapterRepo.ListByNovel(novelID)
 }
 
-func (s *ChapterService) UpdateChapter(id uint, req *model.UpdateChapterRequest) (*model.Chapter, error) {
-	chapter, err := s.chapterRepo.GetByID(id)
-	if err != nil {
-		return nil, err
-	}
+// applyChapterUpdate patches non-zero request fields onto a chapter in place.
+func applyChapterUpdate(chapter *model.Chapter, req *model.UpdateChapterRequest) {
 	if req.Title != "" {
 		chapter.Title = req.Title
 	}
@@ -92,6 +143,14 @@ func (s *ChapterService) UpdateChapter(id uint, req *model.UpdateChapterRequest)
 	if req.Outline != "" {
 		chapter.Outline = req.Outline
 	}
+}
+
+func (s *ChapterService) UpdateChapter(id uint, req *model.UpdateChapterRequest) (*model.Chapter, error) {
+	chapter, err := s.chapterRepo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	applyChapterUpdate(chapter, req)
 	return chapter, s.chapterRepo.Update(chapter)
 }
 
@@ -108,19 +167,7 @@ func (s *ChapterService) UpdateChapterByNo(novelID uint, chapterNo int, req *mod
 	if err != nil {
 		return nil, err
 	}
-	if req.Title != "" {
-		chapter.Title = req.Title
-	}
-	if req.Content != "" {
-		chapter.Content = req.Content
-		chapter.WordCount = countChineseChars(req.Content)
-	}
-	if req.ChapterHook != "" {
-		chapter.ChapterHook = req.ChapterHook
-	}
-	if req.Outline != "" {
-		chapter.Outline = req.Outline
-	}
+	applyChapterUpdate(chapter, req)
 	return chapter, s.chapterRepo.Update(chapter)
 }
 
@@ -763,6 +810,8 @@ type CharacterService struct {
 	characterRepo        *repository.CharacterRepository
 	chapterCharacterRepo *repository.ChapterCharacterRepository
 	aiService            *AIService
+	novelRepo            *repository.NovelRepository  // optional, for AIBatchGenerate
+	chapterRepo          *repository.ChapterRepository // optional, for AIBatchGenerate
 }
 
 func NewCharacterService(
@@ -778,6 +827,16 @@ func NewCharacterService(
 // WithChapterCharacterRepo 注入章节角色覆盖仓库（可选）
 func (s *CharacterService) WithChapterCharacterRepo(r *repository.ChapterCharacterRepository) *CharacterService {
 	s.chapterCharacterRepo = r
+	return s
+}
+
+func (s *CharacterService) WithNovelRepo(r *repository.NovelRepository) *CharacterService {
+	s.novelRepo = r
+	return s
+}
+
+func (s *CharacterService) WithChapterRepo(r *repository.ChapterRepository) *CharacterService {
+	s.chapterRepo = r
 	return s
 }
 
@@ -986,6 +1045,109 @@ func (s *CharacterService) GenerateProfile(tenantID uint, novelID uint, descript
 		Appearance: profile.Appearance,
 		Status:     "active",
 	}, nil
+}
+
+// AIBatchGenerate 使用 AI 批量生成/更新小说角色（按 novel_id+name upsert，仅补填空字段）
+func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Character, error) {
+	if s.chapterRepo == nil {
+		return nil, fmt.Errorf("chapter repository not configured")
+	}
+
+	existing, _ := s.characterRepo.ListByNovel(novelID)
+	byName := make(map[string]*model.Character, len(existing))
+	for _, c := range existing {
+		byName[c.Name] = c
+	}
+
+	chapters, err := s.chapterRepo.ListByNovel(novelID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load chapters: %w", err)
+	}
+
+	novelContext := collectContent(chapters, 3, 3000)
+	existingJSON := marshalExistingNames(existing, func(c *model.Character) any {
+		return struct {
+			Name string `json:"name"`
+			Role string `json:"role"`
+		}{c.Name, c.Role}
+	})
+
+	var existingHint string
+	if existingJSON != "" {
+		existingHint = "已有角色（必须使用完全相同的 name 字段，不得改名或创建重名角色）：\n" + existingJSON + "\n"
+	}
+
+	prompt := fmt.Sprintf(`请根据以下小说内容提取或补充主要角色，以 JSON 数组格式返回：
+[
+  {"name":"角色名","role":"protagonist/antagonist/supporting","appearance":"外貌描述","personality":"性格特点","background":"背景故事"}
+]
+%s规则：
+1. 已有角色必须保留原名，直接复用，不得改名。
+2. 仅当小说中出现了已有角色列表之外的重要角色时，才新增条目。
+3. 只返回 JSON 数组，不要添加任何说明文字。
+小说内容：%s`, existingHint, novelContext)
+
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "character_profile", prompt, "")
+	if err != nil {
+		return nil, fmt.Errorf("AI generation failed: %w", err)
+	}
+
+	var profiles []struct {
+		Name        string `json:"name"`
+		Role        string `json:"role"`
+		Appearance  string `json:"appearance"`
+		Personality string `json:"personality"`
+		Background  string `json:"background"`
+	}
+	if err := json.Unmarshal([]byte(extractJSON(result)), &profiles); err != nil {
+		log.Printf("CharacterService.AIBatchGenerate: parse error: %v, raw: %.200s", err, result)
+		return nil, fmt.Errorf("failed to parse AI response")
+	}
+
+	upserted := make([]*model.Character, 0, len(profiles))
+	for _, p := range profiles {
+		if p.Name == "" {
+			continue
+		}
+		if ch, ok := byName[p.Name]; ok {
+			req := &model.UpdateCharacterRequest{
+				Name: ch.Name, Role: ch.Role,
+				Appearance: ch.Appearance, Personality: ch.Personality, Background: ch.Background,
+			}
+			var changed bool
+			if v, ok := fillIfEmpty(ch.Role, p.Role); ok { req.Role = v; changed = true }
+			if v, ok := fillIfEmpty(ch.Appearance, p.Appearance); ok { req.Appearance = v; changed = true }
+			if v, ok := fillIfEmpty(ch.Personality, p.Personality); ok { req.Personality = v; changed = true }
+			if v, ok := fillIfEmpty(ch.Background, p.Background); ok { req.Background = v; changed = true }
+			if !changed {
+				upserted = append(upserted, ch)
+				continue
+			}
+			updated, err := s.UpdateCharacter(ch.ID, req)
+			if err != nil {
+				log.Printf("CharacterService.AIBatchGenerate: update %s: %v", ch.Name, err)
+				continue
+			}
+			upserted = append(upserted, updated)
+		} else {
+			character := &model.Character{
+				UUID:        uuid.New().String(),
+				NovelID:     novelID,
+				Name:        p.Name,
+				Role:        p.Role,
+				Appearance:  p.Appearance,
+				Personality: p.Personality,
+				Background:  p.Background,
+				Status:      "active",
+			}
+			if err := s.characterRepo.Create(character); err != nil {
+				log.Printf("CharacterService.AIBatchGenerate: create %s: %v", p.Name, err)
+				continue
+			}
+			upserted = append(upserted, character)
+		}
+	}
+	return upserted, nil
 }
 
 func (s *CharacterService) AnalyzeConsistency(id uint, images []string) (interface{}, error) {

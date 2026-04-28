@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -157,6 +158,99 @@ func (s *ItemService) GenerateItemImage(tenantID, id uint, referenceImageURL, pr
 	return item, s.itemRepo.Update(item)
 }
 
+// AIExtractFromNovel 使用 AI 从章节内容中提取物品（按 novel_id+name upsert）
+func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item, error) {
+	chapters, err := s.chapterRepo.ListByNovel(novelID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load chapters: %w", err)
+	}
+	novelContent := collectContent(chapters, len(chapters), 8000)
+	if novelContent == "" {
+		return nil, fmt.Errorf("no chapter content available")
+	}
+
+	existing, _ := s.itemRepo.ListByNovel(novelID)
+	byName := make(map[string]*model.Item, len(existing))
+	for _, it := range existing {
+		byName[it.Name] = it
+	}
+
+	existingJSON := marshalExistingNames(existing, func(it *model.Item) any {
+		return struct {
+			Name     string `json:"name"`
+			Category string `json:"category"`
+		}{it.Name, it.Category}
+	})
+	var existingSection string
+	if existingJSON != "" {
+		existingSection = "\n已有物品（必须使用完全相同的 name 字段，不得改名或创建重名物品）：" + existingJSON + "\n仅当小说中出现了已有物品之外的重要物品时，才新增条目。\n"
+	}
+
+	prompt := fmt.Sprintf(`请从以下小说内容中提取出现的重要物品/道具，以 JSON 数组格式返回：
+[
+  {"name":"物品名","category":"weapon/armor/treasure/artifact/tool/document/consumable/other","description":"物品描述","owner":"持有者","significance":"重要性"}
+]
+%s只返回 JSON 数组，不要添加任何说明文字。
+小说内容：%s`, existingSection, novelContent)
+
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "item_extraction", prompt, "")
+	if err != nil {
+		return nil, fmt.Errorf("AI extraction failed: %w", err)
+	}
+
+	var extracted []struct {
+		Name         string `json:"name"`
+		Category     string `json:"category"`
+		Description  string `json:"description"`
+		Owner        string `json:"owner"`
+		Significance string `json:"significance"`
+	}
+	if err := json.Unmarshal([]byte(extractJSON(result)), &extracted); err != nil {
+		log.Printf("ItemService.AIExtractFromNovel: parse error: %v, raw: %.200s", err, result)
+		return nil, fmt.Errorf("failed to parse AI response")
+	}
+
+	upserted := make([]*model.Item, 0, len(extracted))
+	for _, e := range extracted {
+		if e.Name == "" {
+			continue
+		}
+		if it, ok := byName[e.Name]; ok {
+			req := &model.UpdateItemRequest{
+				Category: it.Category, Description: it.Description,
+				Owner: it.Owner, Significance: it.Significance,
+			}
+			var changed bool
+			if v, ok := fillIfEmpty(it.Category, e.Category); ok { req.Category = v; changed = true }
+			if v, ok := fillIfEmpty(it.Description, e.Description); ok { req.Description = v; changed = true }
+			if v, ok := fillIfEmpty(it.Owner, e.Owner); ok { req.Owner = v; changed = true }
+			if v, ok := fillIfEmpty(it.Significance, e.Significance); ok { req.Significance = v; changed = true }
+			if !changed {
+				upserted = append(upserted, it)
+				continue
+			}
+			updated, err := s.UpdateItem(it.ID, req)
+			if err != nil {
+				log.Printf("ItemService.AIExtractFromNovel: update %s: %v", e.Name, err)
+				continue
+			}
+			upserted = append(upserted, updated)
+		} else {
+			item := &model.Item{
+				NovelID: novelID, UUID: uuid.New().String(), Name: e.Name,
+				Category: e.Category, Description: e.Description,
+				Owner: e.Owner, Significance: e.Significance, Status: "active",
+			}
+			if err := s.itemRepo.Create(item); err != nil {
+				log.Printf("ItemService.AIExtractFromNovel: create %s: %v", e.Name, err)
+				continue
+			}
+			upserted = append(upserted, item)
+		}
+	}
+	return upserted, nil
+}
+
 // UpsertChapterItem 创建或更新章节级物品覆盖
 func (s *ItemService) UpsertChapterItem(novelID, chapterID, itemID uint, req *model.UpsertChapterItemRequest) (*model.ChapterItem, error) {
 	ci := &model.ChapterItem{
@@ -203,23 +297,19 @@ func (s *ItemService) ListEffectiveItems(novelID uint, chapterID uint) ([]*Effec
 
 	result := make([]*EffectiveItem, 0, len(items))
 	for _, item := range items {
-		ei := &EffectiveItem{Item: *item}
+		ei := &EffectiveItem{
+			Item:              *item,
+			EffectiveLocation: item.Location,
+			EffectiveOwner:    item.Owner,
+		}
 		if override, ok := overrideMap[item.ID]; ok {
 			ei.ChapterOverride = override
-			// 章节级优先
 			if override.Location != "" {
 				ei.EffectiveLocation = override.Location
-			} else {
-				ei.EffectiveLocation = item.Location
 			}
 			if override.Owner != "" {
 				ei.EffectiveOwner = override.Owner
-			} else {
-				ei.EffectiveOwner = item.Owner
 			}
-		} else {
-			ei.EffectiveLocation = item.Location
-			ei.EffectiveOwner = item.Owner
 		}
 		result = append(result, ei)
 	}

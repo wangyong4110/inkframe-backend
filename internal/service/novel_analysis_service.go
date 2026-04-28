@@ -737,7 +737,7 @@ func (s *NovelAnalysisService) stepGenerateSkills(
 		Count: 5,
 		Hints: fmt.Sprintf("请根据小说类型(%s)设计核心技能体系，涵盖不同类别，数量5个左右。", novel.Genre),
 	}
-	worldSkills, err := s.skillService.GenerateSkills(novel.ID, worldReq)
+	worldSkills, err := s.skillService.GenerateSkills(novel.TenantID, novel.ID, worldReq)
 	if err != nil {
 		log.Printf("NovelAnalysis[%d]: world skills gen warn: %v", novel.ID, err)
 	} else {
@@ -761,7 +761,7 @@ func (s *NovelAnalysisService) stepGenerateSkills(
 				Count:       3,
 				Hints:       fmt.Sprintf("根据角色【%s】的背景和能力，设计专属技能，要有鲜明个性。", char.Name),
 			}
-			charSkills, err := s.skillService.GenerateSkills(novel.ID, charReq)
+			charSkills, err := s.skillService.GenerateSkills(novel.TenantID, novel.ID, charReq)
 			if err != nil {
 				log.Printf("NovelAnalysis[%d]: char %q skills gen warn: %v", novel.ID, char.Name, err)
 				return
