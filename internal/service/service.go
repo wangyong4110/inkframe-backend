@@ -1473,43 +1473,43 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 
 // AudioGenerate 调用默认 AI provider 生成 TTS 音频，返回本地文件路径（file:// URL）
 func (s *AIService) AudioGenerate(ctx context.Context, text, voice string) (string, error) {
-	return s.AudioGenerateWithOptions(ctx, text, voice, 1.0, "")
+	return s.AudioGenerateWithOptions(ctx, 0, text, voice, 1.0, "")
 }
 
 // AudioGenerateWithOptions 支持语速和风格的 TTS 生成。
-// Provider 选取顺序：
-//  1. config.yaml ai.tasks.tts 指定的 provider
-//  2. env var 注册的默认 provider
-//  3. DB 中配置的 provider（tenant_id=0 系统级 或 tenant_id=1 默认租户）
-func (s *AIService) AudioGenerateWithOptions(ctx context.Context, text, voice string, speed float64, style string) (string, error) {
+// Provider 选取顺序（DB 模式优先，与图像生成保持一致）：
+//  1. DB 中租户配置的 voice/tts 类型 provider
+//  2. config.yaml ai.tasks.tts 指定的 provider（静态模式兜底）
+//  3. env-var 注册的默认 provider（静态模式兜底）
+func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint, text, voice string, speed float64, style string) (string, error) {
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
 	}
 
 	var provider ai.AIProvider
-	// 1. config.yaml task routing
-	if s.taskRouting.TTS != "" {
+
+	// 1. DB 模式：扫描 voice/tts 类型的 provider（与图像生成逻辑对称）
+	if s.providerRepo != nil {
+		if p, err := s.loadDBVoiceProvider(tenantID); err == nil && p != nil {
+			provider = p
+		}
+	}
+
+	// 2. 静态模式：config.yaml task routing
+	if provider == nil && s.taskRouting.TTS != "" {
 		if p, err := s.aiManager.GetProvider(s.taskRouting.TTS); err == nil {
 			provider = p
 		}
 	}
-	// 2. env-var default
+	// 3. 静态模式：env-var 默认 provider
 	if provider == nil {
 		if p, err := s.aiManager.GetProvider(""); err == nil {
 			provider = p
 		}
 	}
-	// 3. DB fallback
+
 	if provider == nil {
-		pn := s.taskRouting.TTS
-		if pn == "" {
-			pn = "openai"
-		}
-		p, err := s.getTenantProvider(1, pn)
-		if err != nil {
-			return "", fmt.Errorf("no TTS provider available (set ai.tasks.tts or configure %q): %w", pn, err)
-		}
-		provider = p
+		return "", fmt.Errorf("no TTS provider available — please add a voice provider in 模型管理")
 	}
 
 	if voice == "" {
@@ -1528,6 +1528,35 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, text, voice st
 		return "", err
 	}
 	return resp.URL, nil
+}
+
+// loadDBVoiceProvider 从 DB 中取第一个有效的 voice/tts 类型提供商。
+func (s *AIService) loadDBVoiceProvider(tenantID uint) (ai.AIProvider, error) {
+	providers, err := s.providerRepo.ListByTenant(tenantID)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range providers {
+		if !p.IsActive {
+			continue
+		}
+		t := strings.ToLower(p.Type)
+		if t != "voice" && t != "tts" {
+			continue
+		}
+		if !providerHasCredentials(p) {
+			log.Printf("loadDBVoiceProvider: skip voice provider %q (missing credentials)", p.Name)
+			continue
+		}
+		provider, err := s.getTenantProvider(tenantID, p.Name)
+		if err != nil {
+			log.Printf("loadDBVoiceProvider: failed to instantiate provider %q: %v", p.Name, err)
+			continue
+		}
+		log.Printf("loadDBVoiceProvider: using voice provider %q model=%q", p.Name, p.APIVersion)
+		return provider, nil
+	}
+	return nil, fmt.Errorf("no voice providers configured in DB")
 }
 
 // QualityService 质量服务
@@ -2963,7 +2992,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot) error {
 	defer cancel()
 
 	voice, speed, style := s.resolveVoiceForShot(shot)
-	audioURL, err := s.aiService.AudioGenerateWithOptions(ctx, shot.Dialogue, voice, speed, style)
+	audioURL, err := s.aiService.AudioGenerateWithOptions(ctx, 0, shot.Dialogue, voice, speed, style)
 	if err != nil {
 		return fmt.Errorf("TTS generation failed: %w", err)
 	}

@@ -3,10 +3,13 @@ package ai
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -317,6 +320,66 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 	}, nil
 }
 
-func (p *DoubaoProvider) AudioGenerate(_ context.Context, _ *AudioGenerateRequest) (*AudioResponse, error) {
-	return nil, fmt.Errorf("豆包暂不支持音频生成")
+// AudioGenerate 使用火山方舟 TTS（音频合成）API，兼容 OpenAI /audio/speech 格式。
+// model 字段使用配置的推理接入点 ID（如 2eTp7Le-...），endpoint 需指向 Ark API 地址。
+func (p *DoubaoProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRequest) (*AudioResponse, error) {
+	start := time.Now()
+
+	model := req.Model
+	if model == "" {
+		model = p.model
+	}
+
+	speed := req.Speed
+	if speed <= 0 {
+		speed = 1.0
+	}
+
+	ttsReq := map[string]interface{}{
+		"model":           model,
+		"input":           req.Text,
+		"response_format": "mp3",
+		"speed":           speed,
+	}
+	if req.Voice != "" {
+		ttsReq["voice"] = req.Voice
+	}
+
+	body, _ := json.Marshal(ttsReq)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint+"/audio/speech", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("豆包 TTS 错误 %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	audioData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("豆包 TTS 读取响应失败: %w", err)
+	}
+
+	idBytes := make([]byte, 8)
+	rand.Read(idBytes) //nolint:errcheck
+	tmpPath := fmt.Sprintf("/tmp/inkframe-tts-%s.mp3", hex.EncodeToString(idBytes))
+	if err := os.WriteFile(tmpPath, audioData, 0644); err != nil {
+		return nil, fmt.Errorf("豆包 TTS 写入临时文件失败: %w", err)
+	}
+
+	return &AudioResponse{
+		URL:       "file://" + tmpPath,
+		Format:    "mp3",
+		Duration:  float64(len(req.Text)) / 10.0,
+		LatencyMs: time.Since(start).Milliseconds(),
+	}, nil
 }

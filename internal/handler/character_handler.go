@@ -708,7 +708,7 @@ func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	rawURL, err := h.aiService.AudioGenerateWithOptions(ctx, req.Text, voice, speed, character.VoiceStyle)
+	rawURL, err := h.aiService.AudioGenerateWithOptions(ctx, getTenantID(c), req.Text, voice, speed, character.VoiceStyle)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "voice generation failed: "+err.Error())
 		return
