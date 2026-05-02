@@ -28,6 +28,8 @@ type Config struct {
 	TaskHandler        *handler.TaskHandler
 	MediaHandler       *handler.MediaHandler
 	SceneAnchorHandler *handler.SceneAnchorHandler
+	SystemHandler      *handler.SystemHandler
+	FsHandler          *handler.FsHandler
 }
 
 // SetupRouter 配置路由
@@ -79,6 +81,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			{
 				tasks.GET("", cfg.TaskHandler.ListTasks)
 				tasks.GET("/:task_id", cfg.TaskHandler.GetTask)
+				tasks.POST("/:task_id/cancel", cfg.TaskHandler.CancelTask)
 			}
 		}
 
@@ -92,6 +95,9 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		{
 			importGroup.POST("/novel", cfg.ImportHandler.ImportNovel)
 			importGroup.POST("/novel/file", cfg.ImportHandler.ImportFromFile)
+			importGroup.POST("/novel/file/init", cfg.ImportHandler.InitChunkedUpload)
+			importGroup.PUT("/novel/file/chunk", cfg.ImportHandler.UploadChunk)
+			importGroup.POST("/novel/file/complete", cfg.ImportHandler.CompleteChunkedUpload)
 			importGroup.POST("/novel/url", cfg.ImportHandler.ImportFromURL)
 			importGroup.POST("/novel/crawl", cfg.ImportHandler.ImportFromCrawl)
 			importGroup.POST("/novel/video", cfg.ImportHandler.ImportAndGenerate)
@@ -165,22 +171,25 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				novels.GET("/:id/items", cfg.ItemHandler.ListItems)
 				novels.POST("/:id/items", cfg.ItemHandler.CreateItem)
 				novels.POST("/:id/items/ai-extract", cfg.ItemHandler.AIExtractFromNovel)
-				// 章节级物品（有效列表 + 覆盖）
+				// 章节级物品（有效列表 + 覆盖 + AI提取）
 				novels.GET("/:id/chapters/:chapter_no/items", cfg.ItemHandler.ListEffectiveItems)
 				novels.POST("/:id/chapters/:chapter_no/items/:item_id", cfg.ItemHandler.UpsertChapterItem)
 				novels.DELETE("/:id/chapters/:chapter_no/items/:item_id", cfg.ItemHandler.DeleteChapterItem)
+				novels.POST("/:id/chapters/:chapter_no/items/ai-extract", cfg.ItemHandler.AIExtractChapterItems)
 			}
 
-			// 章节级角色（有效列表 + 覆盖）
+			// 章节级角色（有效列表 + 覆盖 + AI提取次要角色）
 			novels.GET("/:id/chapters/:chapter_no/characters", cfg.CharacterHandler.ListEffectiveCharacters)
 			novels.POST("/:id/chapters/:chapter_no/characters/:character_id", cfg.CharacterHandler.UpsertChapterCharacter)
 			novels.DELETE("/:id/chapters/:chapter_no/characters/:character_id", cfg.CharacterHandler.DeleteChapterCharacter)
+			novels.POST("/:id/chapters/:chapter_no/characters/ai-extract", cfg.CharacterHandler.AIExtractMinorCharacters)
 
 			// 技能管理
 			if cfg.SkillHandler != nil {
 				novels.GET("/:id/skills", cfg.SkillHandler.ListSkills)
 				novels.POST("/:id/skills", cfg.SkillHandler.CreateSkill)
 				novels.POST("/:id/skills/generate", cfg.SkillHandler.GenerateSkills)
+				novels.POST("/:id/chapters/:chapter_no/skills/ai-extract", cfg.SkillHandler.AIExtractChapterSkills)
 			}
 
 			// 剧情点（小说级）
@@ -195,6 +204,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				novels.GET("/:id/scene-anchors", cfg.SceneAnchorHandler.ListSceneAnchors)
 				novels.POST("/:id/scene-anchors", cfg.SceneAnchorHandler.CreateSceneAnchor)
 				novels.POST("/:id/scene-anchors/extract", cfg.SceneAnchorHandler.ExtractSceneAnchors)
+				novels.POST("/:id/scene-anchors/ai-extract", cfg.SceneAnchorHandler.AIExtractFromNovel)
+				novels.POST("/:id/chapters/:chapter_no/scene-anchors/ai-extract", cfg.SceneAnchorHandler.AIExtractChapterAnchors)
 			}
 		}
 
@@ -428,6 +439,17 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			styles.POST("/prompt", cfg.StyleHandler.BuildStylePrompt)
 			styles.GET("/presets", cfg.StyleHandler.GetStylePresets)
 			styles.POST("/presets/:name/apply", cfg.StyleHandler.ApplyStylePreset)
+		}
+
+		system := v1.Group("/system")
+		{
+			system.GET("/settings", cfg.SystemHandler.ListSettings)
+			system.PUT("/settings/:key", cfg.SystemHandler.UpdateSetting)
+		}
+
+		// 本地文件系统浏览（本地部署工具专用）
+		if cfg.FsHandler != nil {
+			v1.GET("/fs/browse", cfg.FsHandler.Browse)
 		}
 	}
 

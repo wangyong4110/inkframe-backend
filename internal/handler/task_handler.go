@@ -47,3 +47,13 @@ func (h *TaskHandler) GetTask(c *gin.Context) {
 	}
 	respondOK(c, task)
 }
+
+// CancelTask POST /api/v1/tasks/:task_id/cancel
+func (h *TaskHandler) CancelTask(c *gin.Context) {
+	taskID := c.Param("task_id")
+	if err := h.taskSvc.Cancel(taskID); err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to cancel task")
+		return
+	}
+	respondOK(c, nil)
+}

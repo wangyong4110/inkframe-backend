@@ -13,10 +13,16 @@ import (
 // SkillHandler HTTP 技能管理处理器
 type SkillHandler struct {
 	skillService *service.SkillService
+	chapterSvc   *service.ChapterService
 }
 
 func NewSkillHandler(skillService *service.SkillService) *SkillHandler {
 	return &SkillHandler{skillService: skillService}
+}
+
+func (h *SkillHandler) WithChapterService(svc *service.ChapterService) *SkillHandler {
+	h.chapterSvc = svc
+	return h
 }
 
 // ListSkills GET /novels/:id/skills
@@ -131,6 +137,35 @@ func (h *SkillHandler) GenerateSkills(c *gin.Context) {
 		return
 	}
 	respondCreated(c, gin.H{"skills": skills, "count": len(skills)})
+}
+
+// AIExtractChapterSkills POST /novels/:id/chapters/:chapter_no/skills/ai-extract
+func (h *SkillHandler) AIExtractChapterSkills(c *gin.Context) {
+	if h.chapterSvc == nil {
+		respondErr(c, http.StatusServiceUnavailable, "chapter service not configured")
+		return
+	}
+	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondErr(c, http.StatusBadRequest, "invalid novel id")
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		respondErr(c, http.StatusBadRequest, "invalid chapter_no")
+		return
+	}
+	chapter, err := h.chapterSvc.GetChapterByNo(uint(novelID), chapterNo)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	skills, err := h.skillService.AIExtractChapterSkills(getTenantID(c), uint(novelID), chapter.ID, chapterNo)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to extract chapter skills: "+err.Error())
+		return
+	}
+	respondOK(c, gin.H{"skills": skills, "count": len(skills)})
 }
 
 // GenerateSkillEffect POST /skills/:skillId/effect-image

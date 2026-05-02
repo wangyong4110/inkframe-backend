@@ -99,12 +99,13 @@ func (h *PlotPointHandler) ListByNovel(c *gin.Context) {
 	}
 	ppType := c.Query("type")
 	onlyUnresolved := c.Query("unresolved") == "true" || c.Query("unresolved") == "1"
-	pps, err := h.svc.ListByNovel(uint(novelID), ppType, onlyUnresolved)
+	p := parsePagination(c)
+	pps, total, err := h.svc.ListByNovelPaged(uint(novelID), ppType, onlyUnresolved, p.Page, p.PageSize)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to list plot points")
 		return
 	}
-	respondOK(c, gin.H{"plot_points": pps, "total": len(pps)})
+	respondOK(c, gin.H{"plot_points": pps, "total": total, "page": p.Page, "page_size": p.PageSize})
 }
 
 // Update PUT /plot-points/:id

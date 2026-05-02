@@ -153,14 +153,20 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 		if req.CFGScale > 0 {
 			params["scale"] = req.CFGScale
 		}
+		if req.NegativePrompt != "" {
+			params["negative_prompt"] = req.NegativePrompt
+		}
 
 	case VolcModelPortraitPhoto:
-		// 人像写真：image_input（单 URL 字符串）+ 可选 prompt
+		// 人像写真：image_input（单 URL 字符串）+ 可选 prompt + negative_prompt
 		if req.ReferenceImage != "" {
 			params["image_input"] = req.ReferenceImage
 		}
 		if req.Prompt != "" {
 			params["prompt"] = req.Prompt
+		}
+		if req.NegativePrompt != "" {
+			params["negative_prompt"] = req.NegativePrompt
 		}
 		params["width"] = width
 		params["height"] = height

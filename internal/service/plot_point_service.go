@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sync"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -35,6 +36,11 @@ func (s *PlotPointService) List(chapterID uint) ([]*model.PlotPoint, error) {
 // ListByNovel 获取小说级剧情点（可按类型/未解决过滤）
 func (s *PlotPointService) ListByNovel(novelID uint, ppType string, onlyUnresolved bool) ([]*model.PlotPoint, error) {
 	return s.repo.ListByNovel(novelID, ppType, onlyUnresolved)
+}
+
+// ListByNovelPaged 分页获取小说级剧情点
+func (s *PlotPointService) ListByNovelPaged(novelID uint, ppType string, onlyUnresolved bool, page, pageSize int) ([]*model.PlotPoint, int64, error) {
+	return s.repo.ListByNovelPaged(novelID, ppType, onlyUnresolved, page, pageSize)
 }
 
 // Create 手动创建剧情点
@@ -99,8 +105,10 @@ func (s *PlotPointService) MarkResolved(id uint, resolvedInChapterID uint) (*mod
 	return pp, nil
 }
 
-// AIExtractFromNovel 从小说所有章节中提取剧情点（跳过已有剧情点的章节）
+// AIExtractFromNovel 从小说所有章节中并发提取剧情点（跳过已有剧情点的章节）
 func (s *PlotPointService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.PlotPoint, error) {
+	const maxConcurrent = 3
+
 	if s.chapterRepo == nil {
 		return nil, fmt.Errorf("chapter repository not configured")
 	}
@@ -109,24 +117,47 @@ func (s *PlotPointService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.
 		return nil, fmt.Errorf("failed to load chapters: %w", err)
 	}
 
-	var all []*model.PlotPoint
+	// 一次查询获取小说全部已有剧情点，构建 chapterID→[]PlotPoint map，避免逐章 N+1 查询
+	allExisting, _ := s.repo.ListByNovel(novelID, "", false)
+	existingByChapter := make(map[uint][]*model.PlotPoint, len(chapters))
+	for _, pp := range allExisting {
+		existingByChapter[pp.ChapterID] = append(existingByChapter[pp.ChapterID], pp)
+	}
+
+	var (
+		mu  sync.Mutex
+		all []*model.PlotPoint
+		wg  sync.WaitGroup
+		sem = make(chan struct{}, maxConcurrent)
+	)
+
 	for _, ch := range chapters {
 		if ch.Content == "" {
 			continue
 		}
-		// 跳过已有剧情点的章节
-		existing, _ := s.repo.ListByChapter(ch.ID)
-		if len(existing) > 0 {
+		// 已有剧情点的章节直接收集，不再请求 AI
+		if existing := existingByChapter[ch.ID]; len(existing) > 0 {
+			mu.Lock()
 			all = append(all, existing...)
+			mu.Unlock()
 			continue
 		}
-		pps, err := s.ExtractFromChapter(tenantID, ch)
-		if err != nil {
-			log.Printf("PlotPointService.AIExtractFromNovel: chapter %d: %v", ch.ID, err)
-			continue
-		}
-		all = append(all, pps...)
+		ch := ch
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			pps, err := s.ExtractFromChapter(tenantID, ch)
+			if err != nil {
+				log.Printf("PlotPointService.AIExtractFromNovel: chapter %d: %v", ch.ID, err)
+				return
+			}
+			mu.Lock()
+			all = append(all, pps...)
+			mu.Unlock()
+		}()
 	}
+	wg.Wait()
 	return all, nil
 }
 
@@ -134,6 +165,12 @@ func (s *PlotPointService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.
 func (s *PlotPointService) ExtractFromChapter(tenantID uint, chapter *model.Chapter) ([]*model.PlotPoint, error) {
 	if chapter.Content == "" {
 		return nil, fmt.Errorf("chapter content is empty")
+	}
+
+	// 优先用摘要（已浓缩，token 少，速度快），无摘要则截断正文，减少 prompt 体积
+	textForAI := chapter.Summary
+	if textForAI == "" {
+		textForAI = truncateForPrompt(chapter.Content, 3000)
 	}
 
 	prompt := fmt.Sprintf(`请从以下章节内容中提取关键剧情点，返回JSON数组格式：
@@ -147,7 +184,7 @@ func (s *PlotPointService) ExtractFromChapter(tenantID uint, chapter *model.Chap
     }
   ]
 }
-章节内容：%s`, chapter.Content)
+章节内容：%s`, textForAI)
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "plot_extraction", prompt, "")
 	if err != nil {

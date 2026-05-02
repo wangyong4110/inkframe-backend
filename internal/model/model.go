@@ -151,6 +151,7 @@ type Novel struct {
 	VideoFPS               int     `json:"video_fps" gorm:"default:30"`                        // 帧率：24/30/60
 	VideoAspectRatio       string  `json:"video_aspect_ratio" gorm:"size:10;default:'16:9'"`   // 宽高比：16:9/9:16/1:1/4:3
 	CharConsistencyWeight  float64 `json:"char_consistency_weight" gorm:"type:decimal(3,2);default:1.0"` // 角色一致性权重 0-1
+	AssetExportPath        string  `json:"asset_export_path" gorm:"size:500"`                             // 素材导出路径
 
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`
@@ -165,7 +166,7 @@ func (Novel) TableName() string {
 // Chapter 章节
 type Chapter struct {
 	ID        uint   `json:"id" gorm:"primaryKey"`
-	NovelID   uint   `json:"novel_id" gorm:"index;uniqueIndex:idx_chapter_novel_no,priority:1;not null"`
+	NovelID   uint   `json:"novel_id" gorm:"index;uniqueIndex:idx_chapter_novel_no,priority:1;index:idx_chapter_novel_status,priority:1;not null"`
 	Novel     *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
 	UUID      string `json:"uuid" gorm:"uniqueIndex;size:36"`
 	ChapterNo int    `json:"chapter_no" gorm:"uniqueIndex:idx_chapter_novel_no,priority:2;not null"`
@@ -189,7 +190,7 @@ type Chapter struct {
 	ChapterHook   string `json:"chapter_hook" gorm:"type:text"`  // 章末钩子正文（供下一章生成时使用）
 
 	// 状态
-	Status string `json:"status" gorm:"size:20;default:draft"`
+	Status string `json:"status" gorm:"size:20;index:idx_chapter_novel_status,priority:2;default:draft"`
 	// draft=草稿, generating=生成中, completed=已完成, published=已发布
 
 	// 关联
@@ -320,9 +321,10 @@ type Character struct {
 	Novel   *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
 	UUID    string `json:"uuid" gorm:"uniqueIndex;size:36"`
 
-	Name string `json:"name" gorm:"size:100;not null"`
-	Role string `json:"role" gorm:"size:50"`
+	Name   string `json:"name" gorm:"size:100;not null"`
+	Role   string `json:"role" gorm:"size:50"`
 	// protagonist=主角, antagonist=反派, supporting=配角, minor=龙套
+	Gender string `json:"gender" gorm:"size:20"` // "male" | "female" | "neutral"
 
 	Archetype string `json:"archetype" gorm:"size:50"` // 角色原型
 
@@ -1207,12 +1209,17 @@ type UpdateNovelRequest struct {
 	TopK        *int     `json:"top_k"`
 	MaxTokens   *int     `json:"max_tokens"`
 	StylePrompt string   `json:"style_prompt"`
+	ImageStyle  string   `json:"image_style"`
+	// 创作目标
+	TargetWordCount *int `json:"target_word_count"`
+	TargetChapters  *int `json:"target_chapters"`
 	// 视频配置
 	VideoType             string   `json:"video_type"`
 	VideoResolution       string   `json:"video_resolution"`
 	VideoFPS              *int     `json:"video_fps"`
 	VideoAspectRatio      string   `json:"video_aspect_ratio"`
 	CharConsistencyWeight *float64 `json:"char_consistency_weight"`
+	AssetExportPath       string   `json:"asset_export_path"`
 }
 
 type CreateChapterRequest struct {
@@ -1239,6 +1246,7 @@ type GenerateChapterRequest struct {
 
 type CreateCharacterRequest struct {
 	Name        string `json:"name" binding:"required"`
+	Gender      string `json:"gender"`   // "male" | "female" | "neutral"
 	Role        string `json:"role"`
 	Archetype   string `json:"archetype"`
 	Background  string `json:"background"`
@@ -1248,6 +1256,7 @@ type CreateCharacterRequest struct {
 
 type UpdateCharacterRequest struct {
 	Name         string `json:"name"`
+	Gender       string `json:"gender"`    // "male" | "female" | "neutral"
 	Role         string `json:"role"`
 	Archetype    string `json:"archetype"`
 	Background   string `json:"background"`
@@ -1713,3 +1722,13 @@ type SceneConsistencyLog struct {
 }
 
 func (SceneConsistencyLog) TableName() string { return "ink_scene_consistency_log" }
+
+// SystemSetting 系统全局配置（key-value）
+type SystemSetting struct {
+	Key         string    `gorm:"primaryKey;type:varchar(64)" json:"key"`
+	Value       string    `gorm:"type:text"                   json:"value"`
+	Description string    `gorm:"type:varchar(255)"           json:"description"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+func (SystemSetting) TableName() string { return "ink_system_setting" }

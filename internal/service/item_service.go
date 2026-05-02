@@ -1,11 +1,13 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
+	"text/template"
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -25,6 +27,7 @@ type ItemService struct {
 	itemRepo        *repository.ItemRepository
 	chapterItemRepo *repository.ChapterItemRepository
 	chapterRepo     *repository.ChapterRepository
+	novelRepo       *repository.NovelRepository // optional, for title/genre in AI prompts
 	aiService       *AIService
 }
 
@@ -40,6 +43,12 @@ func NewItemService(
 		chapterRepo:     chapterRepo,
 		aiService:       aiService,
 	}
+}
+
+// WithNovelRepo 注入小说仓库（可选，用于 AI 提示词中携带标题/类型）
+func (s *ItemService) WithNovelRepo(r *repository.NovelRepository) *ItemService {
+	s.novelRepo = r
+	return s
 }
 
 // CreateItem 创建项目级物品
@@ -150,7 +159,7 @@ func (s *ItemService) GenerateItemImage(tenantID, id uint, referenceImageURL, pr
 	} else {
 		log.Printf("GenerateItemImage: item=%d no valid reference image, generating without reference", id)
 	}
-	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL, "")
+	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL, "", "")
 	if err != nil {
 		return nil, fmt.Errorf("generate image failed: %w", err)
 	}
@@ -164,9 +173,24 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 	if err != nil {
 		return nil, fmt.Errorf("failed to load chapters: %w", err)
 	}
-	novelContent := collectContent(chapters, len(chapters), 8000)
-	if novelContent == "" {
-		return nil, fmt.Errorf("no chapter content available")
+
+	// 优先使用章节摘要（前 15 章，8000 字），无摘要时降级用原始内容
+	summariesText := buildChapterSummariesText(chapters, 15, 8000)
+	if summariesText == "" {
+		summariesText = collectContent(chapters, 5, 5000)
+	}
+
+	// 获取小说标题/类型
+	novelTitle := "本小说"
+	novelGenre := ""
+	if s.novelRepo != nil {
+		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+			novelTitle = novel.Title
+			novelGenre = novel.Genre
+		}
+	}
+	if summariesText == "" {
+		summariesText = fmt.Sprintf("这是一部%s类型的小说《%s》，请根据类型惯例设计主要物品道具。", novelGenre, novelTitle)
 	}
 
 	existing, _ := s.itemRepo.ListByNovel(novelID)
@@ -181,31 +205,32 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 			Category string `json:"category"`
 		}{it.Name, it.Category}
 	})
-	var existingSection string
+
+	// 使用与分析流程相同的富格式 extract_items.tmpl
+	tmplStr := loadPromptTemplate("extract_items.tmpl")
 	if existingJSON != "" {
-		existingSection = "\n已有物品（必须使用完全相同的 name 字段，不得改名或创建重名物品）：" + existingJSON + "\n仅当小说中出现了已有物品之外的重要物品时，才新增条目。\n"
+		tmplStr += "\n\n注意：已有物品如下，必须复用原名，不得改名或重复创建：\n" + existingJSON
+	}
+	tmpl, err := template.New("extract_items").Parse(tmplStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse extract_items.tmpl: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, map[string]interface{}{
+		"NovelTitle": novelTitle,
+		"Genre":      novelGenre,
+		"Summaries":  summariesText,
+	}); err != nil {
+		return nil, fmt.Errorf("render extract_items.tmpl: %w", err)
 	}
 
-	prompt := fmt.Sprintf(`请从以下小说内容中提取出现的重要物品/道具，以 JSON 数组格式返回：
-[
-  {"name":"物品名","category":"weapon/armor/treasure/artifact/tool/document/consumable/other","description":"物品描述","owner":"持有者","significance":"重要性"}
-]
-%s只返回 JSON 数组，不要添加任何说明文字。
-小说内容：%s`, existingSection, novelContent)
-
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "item_extraction", prompt, "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_items", buf.String(), "")
 	if err != nil {
 		return nil, fmt.Errorf("AI extraction failed: %w", err)
 	}
 
-	var extracted []struct {
-		Name         string `json:"name"`
-		Category     string `json:"category"`
-		Description  string `json:"description"`
-		Owner        string `json:"owner"`
-		Significance string `json:"significance"`
-	}
-	if err := json.Unmarshal([]byte(extractJSON(result)), &extracted); err != nil {
+	var extracted []analysisItemJSON
+	if err := json.Unmarshal([]byte(extractJSON(strings.TrimSpace(result))), &extracted); err != nil {
 		log.Printf("ItemService.AIExtractFromNovel: parse error: %v, raw: %.200s", err, result)
 		return nil, fmt.Errorf("failed to parse AI response")
 	}
@@ -215,31 +240,51 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 		if e.Name == "" {
 			continue
 		}
-		if it, ok := byName[e.Name]; ok {
-			req := &model.UpdateItemRequest{
-				Category: it.Category, Description: it.Description,
-				Owner: it.Owner, Significance: it.Significance,
+		// 序列化 abilities JSON
+		abilitiesJSON := ""
+		if len(e.Abilities) > 0 {
+			if b, err := json.Marshal(e.Abilities); err == nil {
+				abilitiesJSON = string(b)
 			}
+		}
+		// 校正 category
+		validCat := map[string]bool{"weapon": true, "treasure": true, "tool": true, "document": true, "artifact": true, "other": true}
+		if !validCat[e.Category] {
+			e.Category = "other"
+		}
+
+		if it, ok := byName[e.Name]; ok {
+			// 更新：用 AI 数据填充空缺字段
 			var changed bool
-			if v, ok := fillIfEmpty(it.Category, e.Category); ok { req.Category = v; changed = true }
-			if v, ok := fillIfEmpty(it.Description, e.Description); ok { req.Description = v; changed = true }
-			if v, ok := fillIfEmpty(it.Owner, e.Owner); ok { req.Owner = v; changed = true }
-			if v, ok := fillIfEmpty(it.Significance, e.Significance); ok { req.Significance = v; changed = true }
+			if v, ok := fillIfEmpty(it.Category, e.Category); ok { it.Category = v; changed = true }
+			if v, ok := fillIfEmpty(it.Appearance, e.Appearance); ok { it.Appearance = v; changed = true }
+			if v, ok := fillIfEmpty(it.Location, e.Location); ok { it.Location = v; changed = true }
+			if v, ok := fillIfEmpty(it.Owner, e.Owner); ok { it.Owner = v; changed = true }
+			if v, ok := fillIfEmpty(it.Significance, e.Significance); ok { it.Significance = v; changed = true }
+			if v, ok := fillIfEmpty(it.Abilities, abilitiesJSON); ok { it.Abilities = v; changed = true }
+			if v, ok := fillIfEmpty(it.VisualPrompt, e.VisualPrompt); ok { it.VisualPrompt = v; changed = true }
 			if !changed {
 				upserted = append(upserted, it)
 				continue
 			}
-			updated, err := s.UpdateItem(it.ID, req)
-			if err != nil {
+			if err := s.itemRepo.Update(it); err != nil {
 				log.Printf("ItemService.AIExtractFromNovel: update %s: %v", e.Name, err)
 				continue
 			}
-			upserted = append(upserted, updated)
+			upserted = append(upserted, it)
 		} else {
 			item := &model.Item{
-				NovelID: novelID, UUID: uuid.New().String(), Name: e.Name,
-				Category: e.Category, Description: e.Description,
-				Owner: e.Owner, Significance: e.Significance, Status: "active",
+				NovelID:      novelID,
+				UUID:         uuid.New().String(),
+				Name:         e.Name,
+				Category:     e.Category,
+				Appearance:   e.Appearance,
+				Location:     e.Location,
+				Owner:        e.Owner,
+				Significance: e.Significance,
+				Abilities:    abilitiesJSON,
+				VisualPrompt: e.VisualPrompt,
+				Status:       "active",
 			}
 			if err := s.itemRepo.Create(item); err != nil {
 				log.Printf("ItemService.AIExtractFromNovel: create %s: %v", e.Name, err)
@@ -314,4 +359,124 @@ func (s *ItemService) ListEffectiveItems(novelID uint, chapterID uint) ([]*Effec
 		result = append(result, ei)
 	}
 	return result, nil
+}
+
+// AIExtractChapterItems 从单章内容中提取物品，写入 ink_item + ink_chapter_item
+func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint) ([]*model.Item, error) {
+	chapter, err := s.chapterRepo.GetByID(chapterID)
+	if err != nil {
+		return nil, fmt.Errorf("chapter not found: %w", err)
+	}
+	content := chapter.Content
+	if content == "" {
+		content = chapter.Summary
+	}
+	if content == "" {
+		return nil, fmt.Errorf("chapter has no content")
+	}
+
+	novelTitle := "本小说"
+	novelGenre := ""
+	if s.novelRepo != nil {
+		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
+			novelTitle = novel.Title
+			novelGenre = novel.Genre
+		}
+	}
+
+	existing, _ := s.itemRepo.ListByNovel(novelID)
+	existingNames := make([]string, 0, len(existing))
+	existingNameSet := make(map[string]bool, len(existing))
+	for _, it := range existing {
+		existingNames = append(existingNames, it.Name)
+		existingNameSet[strings.ToLower(it.Name)] = true
+	}
+
+	tmplStr := loadPromptTemplate("extract_chapter_items.tmpl")
+	tmpl, err := template.New("extract_chapter_items").Parse(tmplStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse template: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, map[string]interface{}{
+		"NovelTitle":    novelTitle,
+		"Genre":         novelGenre,
+		"ExistingNames": existingNames,
+		"Content":       content,
+	}); err != nil {
+		return nil, err
+	}
+
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_chapter_items", buf.String(), "")
+	if err != nil {
+		return nil, fmt.Errorf("AI extract chapter items: %w", err)
+	}
+
+	type itemJSON struct {
+		Name         string `json:"name"`
+		Category     string `json:"category"`
+		Appearance   string `json:"appearance"`
+		Location     string `json:"location"`
+		Owner        string `json:"owner"`
+		Significance string `json:"significance"`
+		Abilities    []struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		} `json:"abilities"`
+		VisualPrompt string `json:"visual_prompt"`
+	}
+	var items []itemJSON
+	cleaned := extractJSON(strings.TrimSpace(result))
+	if err := json.Unmarshal([]byte(cleaned), &items); err != nil {
+		return nil, fmt.Errorf("parse items JSON: %w", err)
+	}
+
+	validCats := map[string]bool{"weapon": true, "treasure": true, "tool": true, "document": true, "artifact": true, "other": true}
+	var created []*model.Item
+	for _, it := range items {
+		if it.Name == "" || existingNameSet[strings.ToLower(it.Name)] {
+			continue
+		}
+		cat := it.Category
+		if !validCats[cat] {
+			cat = "other"
+		}
+		abilities := ""
+		if len(it.Abilities) > 0 {
+			if ab, e := json.Marshal(it.Abilities); e == nil {
+				abilities = string(ab)
+			}
+		}
+		item := &model.Item{
+			NovelID:      novelID,
+			UUID:         uuid.New().String(),
+			Name:         it.Name,
+			Category:     cat,
+			Appearance:   it.Appearance,
+			Location:     it.Location,
+			Owner:        it.Owner,
+			Significance: it.Significance,
+			Abilities:    abilities,
+			VisualPrompt: it.VisualPrompt,
+			Status:       "active",
+		}
+		if e := s.itemRepo.Create(item); e != nil {
+			log.Printf("ItemService.AIExtractChapterItems: create %q: %v", it.Name, e)
+			continue
+		}
+		existingNameSet[strings.ToLower(it.Name)] = true
+		// 关联章节
+		ci := &model.ChapterItem{
+			ItemID:    item.ID,
+			ChapterID: chapterID,
+			NovelID:   novelID,
+			Location:  it.Location,
+			Owner:     it.Owner,
+		}
+		if e := s.chapterItemRepo.Upsert(ci); e != nil {
+			log.Printf("ItemService.AIExtractChapterItems: link chapter: %v", e)
+		}
+		created = append(created, item)
+	}
+	return created, nil
 }

@@ -44,9 +44,9 @@ func main() {
 
 	// 3. 自动迁移（GORM AutoMigrate 只增列不删列，开发环境安全运行）
 	// 注意：列重命名需先执行 migrations/001_fix_model_provider_columns.sql
-	//if err := autoMigrate(db); err != nil {
-	//	log.Fatalf("Failed to migrate database: %v", err)
-	//}
+	if err := autoMigrate(db); err != nil {
+		log.Fatalf("Failed to migrate database: %v", err)
+	}
 
 	// 3b. 预置默认数据（INSERT IGNORE，幂等安全）
 	seedDefaultData(db)
@@ -89,9 +89,10 @@ func main() {
 	services.VideoService.WithStorage(storageSvc)
 	services.AIService.WithStorage(storageSvc)
 	services.VideoService.WithSceneAnchorService(services.SceneAnchorService)
+	services.NovelImportService.WithStorage(storageSvc).WithAnalysisService(services.NovelAnalysisService).WithAIService(services.AIService)
 
 	// 11. 初始化处理器
-	handlers := initHandlers(services, storageSvc, db)
+	handlers := initHandlers(services, storageSvc, db, repos)
 
 	// 12. 设置路由
 	r := router.SetupRouter(&router.Config{
@@ -115,6 +116,8 @@ func main() {
 		TaskHandler:        handlers.TaskHandler,
 		MediaHandler:       handlers.MediaHandler,
 		SceneAnchorHandler: handlers.SceneAnchorHandler,
+		SystemHandler:      handlers.SystemHandler,
+		FsHandler:          handlers.FsHandler,
 	})
 
 	// 11. 设置Gin模式
@@ -197,6 +200,7 @@ func initDatabase(cfg *config.Config) (*gorm.DB, error) {
 	sqlDB.SetMaxIdleConns(10)
 	sqlDB.SetMaxOpenConns(100)
 	sqlDB.SetConnMaxLifetime(time.Hour)
+	sqlDB.SetConnMaxIdleTime(15 * time.Minute)
 
 	return db, nil
 }
@@ -539,13 +543,37 @@ func seedAIModels(db *gorm.DB) {
 	log.Printf("seedAIModels: %d providers, %d models ready", len(providerIDs), len(models))
 }
 
-// autoMigrate 自动迁移
+// schemaVersion must be bumped whenever any model struct is added or changed.
+// Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
+const schemaVersion = "2026-05-02-v2"
+
+// autoMigrate 自动迁移（带版本跳过优化）
+// 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
+// 当模型变更时，请同时更新 schemaVersion 常量。
 func autoMigrate(db *gorm.DB) error {
+	// 先确保版本表存在（首次启动时自动建表，几乎无开销）
+	if err := db.Exec(`CREATE TABLE IF NOT EXISTS ink_schema_version (
+		id   INT NOT NULL DEFAULT 1,
+		ver  VARCHAR(64) NOT NULL DEFAULT '',
+		PRIMARY KEY (id)
+	)`).Error; err != nil {
+		return err
+	}
+
+	// 读取当前已迁移版本
+	var storedVer string
+	db.Raw("SELECT ver FROM ink_schema_version WHERE id = 1").Scan(&storedVer)
+	if storedVer == schemaVersion {
+		log.Printf("autoMigrate: schema version %s already up-to-date, skipping", schemaVersion)
+		return nil
+	}
+
+	log.Printf("autoMigrate: migrating schema %s → %s", storedVer, schemaVersion)
 	preMigrateCleanup(db)
 	// 禁用外键约束创建：避免手动加列类型不匹配、循环依赖等问题
 	// AutoMigrate 只负责同步列定义，外键由应用层保证一致性
 	db.DisableForeignKeyConstraintWhenMigrating = true
-	return db.AutoMigrate(
+	if err := db.AutoMigrate(
 		&model.Tenant{},
 		&model.User{},
 		&model.TenantUser{},
@@ -590,7 +618,14 @@ func autoMigrate(db *gorm.DB) error {
 		&model.ConflictArc{},
 		&model.SceneAnchor{},
 		&model.SceneConsistencyLog{},
-	)
+		&model.SystemSetting{},
+	); err != nil {
+		return err
+	}
+
+	// 迁移成功后写入新版本号（UPSERT）
+	return db.Exec("INSERT INTO ink_schema_version (id, ver) VALUES (1, ?) ON DUPLICATE KEY UPDATE ver = ?",
+		schemaVersion, schemaVersion).Error
 }
 
 // initRedis 初始化Redis
@@ -783,6 +818,7 @@ type Repositories struct {
 	ConflictArcRepo         *repository.ConflictArcRepository
 	SceneAnchorRepo         *repository.SceneAnchorRepository
 	SceneConsistencyLogRepo *repository.SceneConsistencyLogRepository
+	SystemSettingRepo       *repository.SystemSettingRepository
 }
 
 // initRepositories 初始化仓库层
@@ -816,6 +852,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		ConflictArcRepo:         repository.NewConflictArcRepository(db),
 		SceneAnchorRepo:         repository.NewSceneAnchorRepository(db),
 		SceneConsistencyLogRepo: repository.NewSceneConsistencyLogRepository(db),
+		SystemSettingRepo:       repository.NewSystemSettingRepository(db),
 	}
 }
 
@@ -992,7 +1029,8 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	// 章节服务（需要 generationContextService 以构建富上下文 prompt）
 	chapterService := service.NewChapterService(repos.ChapterRepo, repos.NovelRepo, aiService, generationContextService).
 		WithNarrativeMemory(narrativeMemoryService).
-		WithDramaticServices(hookChainService, satisfactionPointService, conflictArcService)
+		WithDramaticServices(hookChainService, satisfactionPointService, conflictArcService).
+		WithPlotPointRepo(repos.PlotPointRepo)
 
 	// 图像生成服务
 	imageGenerationService := service.NewImageGenerationService(aiService)
@@ -1016,6 +1054,8 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	characterConsistencyService := service.NewCharacterConsistencyService(imageService, nil, aiService)
 	videoService.WithConsistencyService(characterConsistencyService)
 	videoService.WithBGMService(bgmService)
+	videoService.WithPlotPointRepo(repos.PlotPointRepo)
+	videoService.WithSystemSettingRepo(repos.SystemSettingRepo)
 
 	// 帧生成服务
 	frameGeneratorService := service.NewFrameGeneratorService(aiService)
@@ -1066,10 +1106,16 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	mcpService := service.NewMcpService(db)
 
 	// 物品服务
-	itemService := service.NewItemService(repos.ItemRepo, repos.ChapterItemRepo, repos.ChapterRepo, aiService)
+	itemService := service.NewItemService(repos.ItemRepo, repos.ChapterItemRepo, repos.ChapterRepo, aiService).
+		WithNovelRepo(repos.NovelRepo)
 
 	// 技能服务
-	skillService := service.NewSkillService(repos.SkillRepo, repos.CharacterRepo, repos.NovelRepo, aiService)
+	skillService := service.NewSkillService(repos.SkillRepo, repos.CharacterRepo, repos.NovelRepo, aiService).
+		WithChapterRepo(repos.ChapterRepo)
+
+	// 场景锚点服务（提前声明，供 novelAnalysisService 使用）
+	sceneAnchorService := service.NewSceneAnchorService(repos.SceneAnchorRepo, repos.StoryboardRepo, aiService, repos.NovelRepo).
+		WithChapterRepo(repos.ChapterRepo)
 
 	// 小说分析服务
 	novelAnalysisService := service.NewNovelAnalysisService(
@@ -1080,7 +1126,9 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		novelService,
 		aiService,
 	).WithItemRepo(repos.ItemRepo).
-		WithSkillService(skillService)
+		WithSkillService(skillService).
+		WithPlotPointService(plotPointService).
+		WithSceneAnchorService(sceneAnchorService)
 
 	return &Services{
 		NovelAnalysisService:        novelAnalysisService,
@@ -1126,7 +1174,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		SatisfactionPointService:    satisfactionPointService,
 		ConflictArcService:          conflictArcService,
 		PacingService:               pacingService,
-		SceneAnchorService:          service.NewSceneAnchorService(repos.SceneAnchorRepo, repos.StoryboardRepo, aiService, repos.NovelRepo),
+		SceneAnchorService:          sceneAnchorService,
 		SceneConsistencyService:     service.NewSceneConsistencyService(repos.SceneConsistencyLogRepo, aiService),
 	}
 }
@@ -1152,10 +1200,12 @@ type Handlers struct {
 	TaskHandler        *handler.TaskHandler
 	MediaHandler       *handler.MediaHandler
 	SceneAnchorHandler *handler.SceneAnchorHandler
+	SystemHandler      *handler.SystemHandler
+	FsHandler          *handler.FsHandler
 }
 
 // initHandlers 初始化处理器
-func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB) *Handlers {
+func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, repos *Repositories) *Handlers {
 	return &Handlers{
 		NovelHandler: handler.NewNovelHandler(
 			services.NovelService,
@@ -1196,12 +1246,14 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB) *
 		WorldviewHandler:   handler.NewWorldviewHandler(services.WorldviewService),
 		TenantHandler:      handler.NewTenantHandler(services.TenantService),
 		ItemHandler:        handler.NewItemHandler(services.ItemService, services.ChapterService).WithStorage(storageSvc).WithTaskService(services.TaskService),
-		SkillHandler:       handler.NewSkillHandler(services.SkillService),
+		SkillHandler:       handler.NewSkillHandler(services.SkillService).WithChapterService(services.ChapterService),
 		UploadHandler:      handler.NewUploadHandler(storageSvc),
 		PlotPointHandler:   handler.NewPlotPointHandler(services.PlotPointService).WithChapterService(services.ChapterService).WithTaskService(services.TaskService),
 		TaskHandler:        handler.NewTaskHandler(services.TaskService),
 		MediaHandler:       handler.NewMediaHandler(db),
-		SceneAnchorHandler: handler.NewSceneAnchorHandler(services.SceneAnchorService, services.SceneConsistencyService),
+		SceneAnchorHandler: handler.NewSceneAnchorHandler(services.SceneAnchorService, services.SceneConsistencyService).WithTaskService(services.TaskService).WithChapterService(services.ChapterService),
+		SystemHandler: handler.NewSystemHandler(repos.SystemSettingRepo),
+		FsHandler:     handler.NewFsHandler(),
 	}
 }
 

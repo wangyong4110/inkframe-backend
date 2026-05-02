@@ -122,9 +122,9 @@ func (s *NovelService) UpdateNovelEntity(novel *model.Novel) error {
 	return s.novelRepo.Update(novel)
 }
 
-// DeleteNovel 删除小说
+// DeleteNovel 删除小说及其全部关联数据
 func (s *NovelService) DeleteNovel(id uint) error {
-	return s.novelRepo.Delete(id)
+	return s.novelRepo.DeleteWithCascade(id)
 }
 
 // CreateNovel handler-compatible wrapper
@@ -187,6 +187,15 @@ func (s *NovelService) UpdateNovel(id uint, req *model.UpdateNovelRequest) (*mod
 	if req.StylePrompt != "" {
 		novel.StylePrompt = req.StylePrompt
 	}
+	if req.ImageStyle != "" {
+		novel.ImageStyle = req.ImageStyle
+	}
+	if req.TargetWordCount != nil {
+		novel.TargetWordCount = *req.TargetWordCount
+	}
+	if req.TargetChapters != nil {
+		novel.TargetChapters = *req.TargetChapters
+	}
 	if req.VideoType != "" {
 		novel.VideoType = req.VideoType
 	}
@@ -201,6 +210,9 @@ func (s *NovelService) UpdateNovel(id uint, req *model.UpdateNovelRequest) (*mod
 	}
 	if req.CharConsistencyWeight != nil {
 		novel.CharConsistencyWeight = *req.CharConsistencyWeight
+	}
+	if req.AssetExportPath != "" {
+		novel.AssetExportPath = req.AssetExportPath
 	}
 	if err := s.novelRepo.Update(novel); err != nil {
 		return nil, err
@@ -307,6 +319,22 @@ func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutli
 	}
 
 	sb.WriteString(fmt.Sprintf("请生成%d章的大纲，每章包括：标题、简要概述、预计字数（2000-3000字）、主要剧情点。\n", req.ChapterNum))
+
+	// 注入未解决剧情点（引导大纲在后续章节中推进解决）
+	if s.plotPointService != nil {
+		pps, _ := s.plotPointService.ListByNovel(novel.ID, "", true)
+		if len(pps) > 0 {
+			sb.WriteString("\n【未解决的剧情线（大纲需在后续章节中推进解决）】\n")
+			max := 8
+			if len(pps) < max {
+				max = len(pps)
+			}
+			for i := 0; i < max; i++ {
+				sb.WriteString(fmt.Sprintf("- [%s] %s\n", pps[i].Type, pps[i].Description))
+			}
+			sb.WriteString("\n")
+		}
+	}
 
 	sb.WriteString("\n请以JSON格式返回，格式如下：\n")
 	sb.WriteString(`{"title":"小说标题","chapters":[{"chapter_no":1,"title":"章节标题","summary":"章节概述","word_count":2500,"plot_points":["剧情点1","剧情点2"]}]}`)
@@ -882,6 +910,7 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 	}
 
 	// Instantiate the provider.
+	// 名称优先匹配已知 key；对自定义名称（如"豆包图片"）则根据 endpoint 推断构造器。
 	var provider ai.AIProvider
 	switch matched.Name {
 	case ai.ProviderNameVolcengineVisual:
@@ -901,7 +930,27 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 	case "azure":
 		provider = ai.NewAzureProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, "")
 	default:
-		return s.aiManager.GetProvider(providerName)
+		// 自定义名称：按 endpoint 推断底层 API 格式
+		ep := strings.ToLower(matched.APIEndpoint)
+		switch {
+		case strings.Contains(ep, "volces.com") || strings.Contains(ep, "volcengine"):
+			// 火山方舟 / 豆包系列（OpenAI 兼容格式）
+			log.Printf("getTenantProvider: provider %q mapped to doubao constructor via endpoint", matched.Name)
+			provider = ai.NewDoubaoProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion)
+		case strings.Contains(ep, "azure.com") || strings.Contains(ep, "openai.azure"):
+			log.Printf("getTenantProvider: provider %q mapped to azure constructor via endpoint", matched.Name)
+			provider = ai.NewAzureProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, "")
+		case strings.Contains(ep, "anthropic.com"):
+			log.Printf("getTenantProvider: provider %q mapped to anthropic constructor via endpoint", matched.Name)
+			provider = ai.NewAnthropicProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion)
+		case matched.APIEndpoint != "":
+			// 有自定义 endpoint → 按 OpenAI 兼容格式通用处理
+			log.Printf("getTenantProvider: provider %q using OpenAI-compatible constructor for endpoint %s", matched.Name, matched.APIEndpoint)
+			provider = ai.NewOpenAIProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion)
+		default:
+			log.Printf("getTenantProvider: unrecognized provider %q with no endpoint — falling back to static aiManager", matched.Name)
+			return s.aiManager.GetProvider(providerName)
+		}
 	}
 
 	// 包装重试
@@ -914,6 +963,18 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 	})
 
 	return provider, nil
+}
+
+// InvalidateProviderCache 删除指定提供商在所有租户下的缓存，供 DeleteProvider/UpdateProvider 调用。
+func (s *AIService) InvalidateProviderCache(providerName string) {
+	s.providerCache.Range(func(k, _ any) bool {
+		key, ok := k.(string)
+		// key format: "tenantID:providerName"
+		if ok && strings.HasSuffix(key, ":"+providerName) {
+			s.providerCache.Delete(k)
+		}
+		return true
+	})
 }
 
 // GenerateWithProvider 使用指定 Provider 生成内容（providerName 为空则使用默认）
@@ -1204,13 +1265,73 @@ var knownImageCapableProviders = []ai.ImageProviderEntry{
 	{ProviderName: "volcengine-visual", Model: ai.VolcModelText2ImgV3, Size: "1328x1328"},
 }
 
+// loadDBImageProviderEntries 从 DB 加载 IMAGE 类型的提供者列表，使用实际配置的模型名称（APIVersion）。
+// 避免 knownImageCapableProviders 硬编码模型与用户实际配置不匹配的问题。
+// volcengine-visual 排在末尾：它需要服务端下载参考图，私有 OSS URL 会导致 403 失败。
+func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProviderEntry {
+	if s.providerRepo == nil {
+		return nil
+	}
+	providers, err := s.providerRepo.ListByTenant(tenantID)
+	if err != nil {
+		return nil
+	}
+	defaultSizeMap := map[string]string{
+		"doubao":                          "1024x1024",
+		"qianwen":                         "1024x1024",
+		"openai":                          "1024x1024",
+		ai.ProviderNameVolcengineVisual:   "1328x1328",
+	}
+	var primary, volcengine []ai.ImageProviderEntry
+	seen := map[string]bool{}
+	for _, p := range providers {
+		if !p.IsActive {
+			log.Printf("loadDBImageProviderEntries: skip provider %q (inactive)", p.Name)
+			continue
+		}
+		if !strings.EqualFold(p.Type, "image") {
+			continue // non-image providers are expected, no need to log
+		}
+		if !providerHasCredentials(p) {
+			log.Printf("loadDBImageProviderEntries: skip IMAGE provider %q (missing credentials)", p.Name)
+			continue
+		}
+		if seen[p.Name] {
+			continue
+		}
+		seen[p.Name] = true
+		size := defaultSizeMap[p.Name]
+		if size == "" {
+			size = "1024x1024"
+		}
+		entry := ai.ImageProviderEntry{ProviderName: p.Name, Model: p.APIVersion, Size: size}
+		log.Printf("loadDBImageProviderEntries: adding IMAGE provider %q model=%q size=%s (tenantID=%d)", p.Name, p.APIVersion, size, tenantID)
+		// volcengine-visual 依赖服务端下载参考图，排到最后作为兜底
+		if p.Name == ai.ProviderNameVolcengineVisual {
+			volcengine = append(volcengine, entry)
+		} else {
+			primary = append(primary, entry)
+		}
+	}
+	result := append(primary, volcengine...)
+	if len(result) == 0 {
+		log.Printf("loadDBImageProviderEntries: no IMAGE providers found for tenantID=%d (total providers checked: %d)", tenantID, len(providers))
+	}
+	return result
+}
+
 // selectImageModel returns the model to use for the given entry.
 // For volcengine-visual: referenceImage → DreamO; style=="realistic" → PortraitPhoto.
 // selectImageModel 根据提供者、参考图、风格和一致性权重选择合适的图像生成模型。
 // consistencyWeight: 0-1，≥0.7 使用 DreamO（角色特征保持），<0.7 使用 SeedEditV3（指令编辑）
 func selectImageModel(entry ai.ImageProviderEntry, referenceImage, style string, consistencyWeight ...float64) string {
 	if entry.ProviderName == ai.ProviderNameVolcengineVisual {
+		// volcengine-visual 始终用内置 req_key，不依赖用户填写的 APIVersion
 		if referenceImage != "" {
+			// 写实风格：即使有参考图也使用 PortraitPhoto，保证生成真实感肖像
+			if style == "realistic" {
+				return ai.VolcModelPortraitPhoto
+			}
 			weight := 1.0
 			if len(consistencyWeight) > 0 && consistencyWeight[0] > 0 {
 				weight = consistencyWeight[0]
@@ -1220,9 +1341,9 @@ func selectImageModel(entry ai.ImageProviderEntry, referenceImage, style string,
 			}
 			return ai.VolcModelSeedEditV3
 		}
-		if style == "realistic" {
-			return ai.VolcModelPortraitPhoto
-		}
+		// 无参考图时：PortraitPhoto 是 I2I 模型，必须有 image_input 才能正常工作；
+		// 无论什么风格都使用 Text2ImgV3（文生图），这样 prompt/negative_prompt 才能完整生效。
+		return ai.VolcModelText2ImgV3
 	}
 	return entry.Model
 }
@@ -1232,7 +1353,7 @@ func selectImageModel(entry ai.ImageProviderEntry, referenceImage, style string,
 // 空字符串表示使用提供者默认模型。
 // consistencyWeight（可选）: 0-1，角色一致性强度；默认 1.0（严格）。
 //   ≥0.7 → DreamO（角色特征保持），<0.7 → SeedEditV3（指令编辑，scale 线性映射 1-10）
-func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uint, providerName, prompt, referenceImage, style string, consistencyWeight ...float64) (string, error) {
+func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uint, providerName, prompt, referenceImage, style, negativePrompt string, consistencyWeight ...float64) (string, error) {
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
 	}
@@ -1277,6 +1398,7 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 		resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
 			Model:             selectImageModel(*entry, referenceImage, style, weight),
 			Prompt:            prompt,
+			NegativePrompt:    negativePrompt,
 			Size:              entry.Size,
 			ReferenceImage:    referenceImage,
 			CFGScale:          cfgScale,
@@ -1291,12 +1413,18 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 		return resp.URL, nil
 	}
 
-	entries := s.aiManager.GetImageProviders()
-
-	// 若无静态注册的图像提供者（未通过环境变量配置），回退到 DB 动态加载路径
-	useDB := len(entries) == 0 && s.providerRepo != nil
+	// DB 模式（providerRepo 存在）时：DB 是唯一权威来源，完全忽略静态 aiManager 的图像提供者。
+	// 这样删除/更改 DB 中的提供者可以立即生效，不受 env/config.yaml 中通用 AI key 的干扰。
+	// 纯静态模式（无 DB）：读 aiManager 静态列表，为空时回退硬编码表。
+	var entries []ai.ImageProviderEntry
+	useDB := s.providerRepo != nil
 	if useDB {
-		entries = knownImageCapableProviders
+		entries = s.loadDBImageProviderEntries(tenantID)
+	} else {
+		entries = s.aiManager.GetImageProviders()
+		if len(entries) == 0 {
+			entries = knownImageCapableProviders
+		}
 	}
 
 	if len(entries) == 0 {
@@ -1317,19 +1445,24 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 			lastErr = err
 			continue
 		}
+		model := selectImageModel(e, referenceImage, style, weight)
+		log.Printf("GenerateCharacterThreeView: trying provider=%s model=%s refImage=%v", e.ProviderName, model, referenceImage != "")
 		resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
-			Model:             selectImageModel(e, referenceImage, style, weight),
+			Model:             model,
 			Prompt:            prompt,
+			NegativePrompt:    negativePrompt,
 			Size:              e.Size,
 			ReferenceImage:    referenceImage,
 			CFGScale:          cfgScale,
 			ConsistencyWeight: weight,
 		})
 		if err != nil {
+			log.Printf("GenerateCharacterThreeView: provider=%s failed: %v", e.ProviderName, err)
 			lastErr = err
 			continue
 		}
 		if resp.Error != "" {
+			log.Printf("GenerateCharacterThreeView: provider=%s error: %s", e.ProviderName, resp.Error)
 			lastErr = fmt.Errorf("image generation failed: %s", resp.Error)
 			continue
 		}
@@ -1592,10 +1725,32 @@ type VideoService struct {
 	bgmService         *BGMService
 	storageSvc         storage.Service
 	sceneAnchorSvc     *SceneAnchorService
+	plotPointRepo      *repository.PlotPointRepository
+	systemSettingRepo  *repository.SystemSettingRepository
+}
+
+// ffmpegBin 返回 FFmpeg 可执行文件路径（优先读系统配置，fallback 到 PATH 中的 ffmpeg）
+func (s *VideoService) ffmpegBin() string {
+	if s.systemSettingRepo != nil {
+		if p, err := s.systemSettingRepo.Get("ffmpeg_path"); err == nil && p != "" {
+			return p
+		}
+	}
+	return "ffmpeg"
+}
+
+func (s *VideoService) WithSystemSettingRepo(r *repository.SystemSettingRepository) *VideoService {
+	s.systemSettingRepo = r
+	return s
 }
 
 func (s *VideoService) WithSceneAnchorService(svc *SceneAnchorService) *VideoService {
 	s.sceneAnchorSvc = svc
+	return s
+}
+
+func (s *VideoService) WithPlotPointRepo(repo *repository.PlotPointRepository) *VideoService {
+	s.plotPointRepo = repo
 	return s
 }
 
@@ -1881,6 +2036,25 @@ func (s *VideoService) buildStoryboardPrompt(video *model.Video, content, userPr
 		}
 	}
 
+	// 注入未解决剧情点（提示分镜叙事张力）
+	if s.plotPointRepo != nil && video.ChapterID != nil {
+		pps, _ := s.plotPointRepo.ListByChapter(*video.ChapterID)
+		if len(pps) == 0 && video.NovelID > 0 {
+			pps, _ = s.plotPointRepo.ListByNovel(video.NovelID, "", true)
+		}
+		if len(pps) > 0 {
+			sb.WriteString("【本章剧情线（分镜需体现叙事张力）】\n")
+			max := 5
+			if len(pps) < max {
+				max = len(pps)
+			}
+			for i := 0; i < max; i++ {
+				sb.WriteString(fmt.Sprintf("- [%s] %s\n", pps[i].Type, pps[i].Description))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
 	if content != "" {
 		sb.WriteString("【章节内容】\n")
 		// 截断保护：最多 6000 字符
@@ -2072,6 +2246,10 @@ func (s *VideoService) CreateVideoFromReq(novelID uint, req *model.CreateVideoRe
 	}
 	if novel, err := s.novelRepo.GetByID(novelID); err == nil {
 		video.TenantID = novel.TenantID
+		// 默认画面风格：继承项目设置中的画面风格
+		if video.ArtStyle == "" && novel.ImageStyle != "" {
+			video.ArtStyle = novel.ImageStyle
+		}
 	}
 	if video.FrameRate == 0 {
 		video.FrameRate = 24
@@ -2459,10 +2637,10 @@ func (s *VideoService) checkTenantAccess(novelID uint) error {
 	return nil
 }
 
-// generateShotReferenceImage 为分镜生成参考帧图像（非致命：失败时返回空字符串）
-func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) string {
+// generateShotReferenceImage 为分镜生成参考帧图像，返回图片URL和错误。
+func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (string, error) {
 	if s.aiService == nil {
-		return ""
+		return "", fmt.Errorf("AI service not initialized")
 	}
 
 	// 精准匹配：先从 shot.CharacterIDs 中查找角色 Portrait/ThreeViewFront
@@ -2535,14 +2713,22 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) st
 				if novel.CharConsistencyWeight > 0 {
 					charConsistencyWeight = novel.CharConsistencyWeight
 				}
+				// 降级：视频未设置画面风格时使用项目设置中的画面风格
+				if artStyle == "" && novel.ImageStyle != "" {
+					artStyle = novel.ImageStyle
+				}
 			}
 		}
 	}
 
-	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", promptText, refImage, artStyle, charConsistencyWeight)
-	if err != nil || imageURL == "" {
+	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", promptText, refImage, artStyle, "", charConsistencyWeight)
+	if err != nil {
 		log.Printf("generateShotReferenceImage: image gen failed for shot %d: %v", shot.ShotNo, err)
-		return ""
+		return "", err
+	}
+	if imageURL == "" {
+		log.Printf("generateShotReferenceImage: image gen returned empty URL for shot %d", shot.ShotNo)
+		return "", fmt.Errorf("image provider returned empty URL")
 	}
 
 	// 首图锁定：场景锚点无参考图时，将本次生成结果存为参考图
@@ -2550,7 +2736,27 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) st
 		s.sceneAnchorSvc.AutoSetRefImage(*shot.SceneAnchorID, imageURL) //nolint:errcheck
 	}
 
-	return imageURL
+	return imageURL, nil
+}
+
+// resolveArtStyle 返回视频的画面风格：优先用 video.ArtStyle，降级到 novel.ImageStyle
+func (s *VideoService) resolveArtStyle(videoID uint) string {
+	if s.videoRepo == nil {
+		return ""
+	}
+	video, err := s.videoRepo.GetByID(videoID)
+	if err != nil {
+		return ""
+	}
+	if video.ArtStyle != "" {
+		return video.ArtStyle
+	}
+	if video.NovelID > 0 && s.novelRepo != nil {
+		if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil {
+			return novel.ImageStyle
+		}
+	}
+	return ""
 }
 
 // extractLastFrame 使用 FFmpeg 提取视频最后一帧，返回本地 jpeg 路径
@@ -2558,8 +2764,8 @@ func (s *VideoService) extractLastFrame(clipPath string) (string, error) {
 	// 处理 file:// 前缀
 	localPath := strings.TrimPrefix(clipPath, "file://")
 
-	tmpJpeg := fmt.Sprintf("/tmp/inkframe-lastframe-%d.jpg", time.Now().UnixNano())
-	cmd := exec.Command("ffmpeg", "-y",
+	tmpJpeg := fmt.Sprintf("%s/inkframe-lastframe-%d.jpg", inkframeTempDir(), time.Now().UnixNano())
+	cmd := exec.Command(s.ffmpegBin(), "-y",
 		"-sseof", "-0.1",
 		"-i", localPath,
 		"-vframes", "1",
@@ -2600,7 +2806,10 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	referenceImage := shot.ReferenceImageURL
 	if referenceImage == "" {
 		// 生成本镜参考帧（非致命）
-		frameURL := s.generateShotReferenceImage(shot)
+		frameURL, frameErr := s.generateShotReferenceImage(shot)
+		if frameErr != nil {
+			log.Printf("GenerateVideoShot: reference image gen failed for shot %d (non-fatal): %v", shot.ShotNo, frameErr)
+		}
 		if frameURL != "" {
 			shot.FrameImageURL = frameURL
 			referenceImage = frameURL
@@ -2613,6 +2822,11 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		if fragment, _, err := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); err == nil && fragment != "" {
 			videoPrompt = fragment + ", " + videoPrompt
 		}
+	}
+
+	// 画面风格：注入视频 prompt（video.ArtStyle 优先，降级到 novel.ImageStyle）
+	if videoArtStyle := s.resolveArtStyle(shot.VideoID); videoArtStyle != "" {
+		videoPrompt = videoArtStyle + " style, " + videoPrompt
 	}
 
 	shotDuration := shot.Duration
@@ -2879,7 +3093,7 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 		return "", fmt.Errorf("no completed shots to stitch")
 	}
 
-	tmpDir := fmt.Sprintf("/tmp/inkframe-%d", videoID)
+	tmpDir := fmt.Sprintf("%s/inkframe-%d", inkframeTempDir(), videoID)
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
 		return "", err
 	}
@@ -2930,7 +3144,7 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 		if shot.AudioPath != "" {
 			audioPath := strings.TrimPrefix(shot.AudioPath, "file://")
 			mergedFile := fmt.Sprintf("%s/clip_audio_%d.mp4", tmpDir, i)
-			cmd := exec.Command("ffmpeg", "-y",
+			cmd := exec.Command(s.ffmpegBin(), "-y",
 				"-i", clipFile,
 				"-i", audioPath,
 				"-c:v", "copy",
@@ -2953,8 +3167,8 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 		return "", err
 	}
 
-	stitchedPath := fmt.Sprintf("/tmp/inkframe-%d-stitched.mp4", videoID)
-	cmd := exec.Command("ffmpeg", "-y",
+	stitchedPath := fmt.Sprintf("%s/inkframe-%d-stitched.mp4", inkframeTempDir(), videoID)
+	cmd := exec.Command(s.ffmpegBin(), "-y",
 		"-f", "concat",
 		"-safe", "0",
 		"-i", listFile,
@@ -2966,7 +3180,7 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 	}
 
 	// BGM 混音（非致命：失败时使用无BGM版本）
-	outputPath := fmt.Sprintf("/tmp/inkframe-%d-output.mp4", videoID)
+	outputPath := fmt.Sprintf("%s/inkframe-%d-output.mp4", inkframeTempDir(), videoID)
 	if s.bgmService != nil {
 		bgmURL := s.bgmService.SelectBGM("")
 		if bgmURL != "" {
@@ -2993,14 +3207,23 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 	return outputPath, nil
 }
 
-// downloadToTemp 将 URL 下载到 /tmp 临时文件，返回本地路径
+// inkframeTempDir 返回可写的临时目录（优先用工作目录下的 tmp/，fallback 到系统临时目录）
+func inkframeTempDir() string {
+	dir := "tmp"
+	if err := os.MkdirAll(dir, 0755); err == nil {
+		return dir
+	}
+	return os.TempDir()
+}
+
+// downloadToTemp 将 URL 下载到临时文件，返回本地路径
 func downloadToTemp(url, prefix, ext string) (string, error) {
 	resp, err := http.Get(url) //nolint:noctx
 	if err != nil {
 		return "", fmt.Errorf("download %s: %w", url, err)
 	}
 	defer resp.Body.Close()
-	tmpFile, err := os.CreateTemp("", prefix+"*"+ext)
+	tmpFile, err := os.CreateTemp(inkframeTempDir(), prefix+"*"+ext)
 	if err != nil {
 		return "", err
 	}
@@ -3013,7 +3236,7 @@ func downloadToTemp(url, prefix, ext string) (string, error) {
 }
 
 // generateKenBurnsClip 使用 FFmpeg zoompan 滤镜将静图制作成 Ken Burns 动效短片
-func (s *VideoService) generateKenBurnsClip(shot *model.StoryboardShot, localImagePath string, duration float64, aspectRatio string) (string, error) {
+func (s *VideoService) generateKenBurnsClip(shot *model.StoryboardShot, imagePath string, duration float64, aspectRatio string) (string, error) {
 	if duration <= 0 {
 		duration = 5.0
 	}
@@ -3044,7 +3267,7 @@ func (s *VideoService) generateKenBurnsClip(shot *model.StoryboardShot, localIma
 		zoompan = fmt.Sprintf("zoompan=z='min(zoom+0.0008,1.2)':d=%d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'", totalFrames)
 	}
 
-	outPath := fmt.Sprintf("/tmp/inkframe-slideshow-%d-%d.mp4", shot.ID, time.Now().UnixNano())
+	outPath := fmt.Sprintf("%s/inkframe-slideshow-%d-%d.mp4", inkframeTempDir(), shot.ID, time.Now().UnixNano())
 	// pre-scale to 2x output resolution — zoompan 只需输入略大于输出，8000 过大极慢
 	preScale := "3840:-1"
 	if aspectRatio == "9:16" {
@@ -3054,10 +3277,10 @@ func (s *VideoService) generateKenBurnsClip(shot *model.StoryboardShot, localIma
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-y",
+	cmd := exec.CommandContext(ctx, s.ffmpegBin(), "-y",
 		"-loop", "1",
 		"-t", fmt.Sprintf("%.2f", duration),
-		"-i", localImagePath,
+		"-i", imagePath,
 		"-vf", vf,
 		"-c:v", "libx264",
 		"-pix_fmt", "yuv420p",
@@ -3085,15 +3308,18 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	s.storyboardRepo.Update(shot) //nolint:errcheck
 
 	// 1. 生成图片
-	imageURL := s.generateShotReferenceImage(shot)
+	imageURL, imgErr := s.generateShotReferenceImage(shot)
 	if imageURL == "" {
 		shot.Status = "failed"
 		s.storyboardRepo.Update(shot) //nolint:errcheck
-		return fmt.Errorf("image generation failed for shot %d (no image providers configured or API error)", shot.ShotNo)
+		if imgErr != nil {
+			return fmt.Errorf("image generation failed for shot %d: %w", shot.ShotNo, imgErr)
+		}
+		return fmt.Errorf("image generation failed for shot %d (empty URL returned)", shot.ShotNo)
 	}
 	shot.ImageURL = imageURL
 
-	// 2. 下载图片到本地临时文件
+	// 2. 下载图片到本地（Volcengine 返回的 URL 后缀为 .image，FFmpeg 无法识别格式，需重命名为 .jpg）
 	localImage, err := downloadToTemp(imageURL, fmt.Sprintf("inkframe-img-%d-", shot.ID), ".jpg")
 	if err != nil {
 		log.Printf("GenerateSlideshowShotVideo: download image failed for shot %d: %v", shot.ShotNo, err)

@@ -286,6 +286,31 @@ func (h *ItemHandler) DeleteChapterItem(c *gin.Context) {
 	respondOK(c, gin.H{"message": "chapter item deleted"})
 }
 
+// AIExtractChapterItems POST /novels/:id/chapters/:chapter_no/items/ai-extract
+func (h *ItemHandler) AIExtractChapterItems(c *gin.Context) {
+	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid novel id")
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+	chapter, err := h.chapterSvc.GetChapterByNo(uint(novelID), chapterNo)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	items, err := h.itemService.AIExtractChapterItems(getTenantID(c), uint(novelID), chapter.ID)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to extract chapter items: "+err.Error())
+		return
+	}
+	respondOK(c, gin.H{"items": items, "count": len(items)})
+}
+
 // UploadItemImage 上传物品图片到 OSS，保存 URL 到 item.ImageURL
 // POST /api/v1/items/:id/image/upload
 func (h *ItemHandler) UploadItemImage(c *gin.Context) {

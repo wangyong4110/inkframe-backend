@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"strings"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -16,6 +18,8 @@ type NovelRepository struct {
 	db    *gorm.DB
 	cache *redis.Client
 }
+
+const novelCacheTTL = 30 * time.Minute
 
 func NewNovelRepository(db *gorm.DB, cache *redis.Client) *NovelRepository {
 	return &NovelRepository{db: db, cache: cache}
@@ -32,11 +36,10 @@ func (r *NovelRepository) Create(novel *model.Novel) error {
 
 // GetByID 根据ID获取小说
 func (r *NovelRepository) GetByID(id uint) (*model.Novel, error) {
-	// 尝试从缓存获取
-	cacheKey := fmt.Sprintf("novel:%d", id)
+	// 1. 尝试 Redis 缓存
 	if r.cache != nil {
-		cached, err := r.cache.Get(context.Background(), cacheKey).Result()
-		if err == nil {
+		cacheKey := fmt.Sprintf("novel:%d", id)
+		if cached, err := r.cache.Get(context.Background(), cacheKey).Result(); err == nil {
 			var novel model.Novel
 			if json.Unmarshal([]byte(cached), &novel) == nil {
 				return &novel, nil
@@ -44,18 +47,18 @@ func (r *NovelRepository) GetByID(id uint) (*model.Novel, error) {
 		}
 	}
 
+	// 2. 查 DB
 	var novel model.Novel
 	if err := r.db.Preload("Worldview").First(&novel, id).Error; err != nil {
 		return nil, err
 	}
 
-	// 写入缓存
+	// 3. 写入缓存
 	if r.cache != nil {
 		if data, err := json.Marshal(novel); err == nil {
-			r.cache.Set(context.Background(), cacheKey, data, 30*time.Minute)
+			r.cache.Set(context.Background(), fmt.Sprintf("novel:%d", id), data, novelCacheTTL)
 		}
 	}
-
 	return &novel, nil
 }
 
@@ -132,9 +135,117 @@ func (r *NovelRepository) UpdateFields(id uint, fields map[string]interface{}) e
 	return nil
 }
 
-// Delete 删除小说
+// Delete 软删除小说（不删关联数据）
 func (r *NovelRepository) Delete(id uint) error {
 	if err := r.db.Delete(&model.Novel{}, id).Error; err != nil {
+		return err
+	}
+	r.invalidateCache(id)
+	return nil
+}
+
+// isSchemaMissing 判断是否为"列/表不存在"类错误（MySQL 1054/1146），遇到此类错误跳过而非中断
+func isSchemaMissing(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	// MySQL: 1054 Unknown column / 1146 Table doesn't exist
+	return strings.Contains(s, "1054") || strings.Contains(s, "1146") ||
+		strings.Contains(s, "Unknown column") || strings.Contains(s, "doesn't exist") ||
+		strings.Contains(s, "no such table") // SQLite
+}
+
+// DeleteWithCascade 物理删除小说及其全部关联数据（在事务中按依赖顺序执行）
+// 对"列/表不存在"类错误（schema 尚未迁移）采用 skip 策略，不中断事务。
+func (r *NovelRepository) DeleteWithCascade(id uint) error {
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		// tryExec 执行 SQL；若因 schema 缺失（列/表不存在）失败则记录日志并跳过
+		tryExec := func(sql string, args ...interface{}) error {
+			if e := tx.Exec(sql, args...).Error; e != nil {
+				if isSchemaMissing(e) {
+					log.Printf("[DeleteNovel] skip (schema not ready): %v", e)
+					return nil
+				}
+				return e
+			}
+			return nil
+		}
+
+		// ── 1. 间接关联：场景一致性日志（通过 anchor / storyboard_shot）
+		if e := tryExec(`DELETE FROM ink_scene_consistency_log WHERE anchor_id IN (SELECT id FROM ink_scene_anchor WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+		if e := tryExec(`DELETE FROM ink_scene_consistency_log WHERE shot_id IN (SELECT id FROM ink_storyboard_shot WHERE video_id IN (SELECT id FROM ink_video WHERE novel_id = ?))`, id); e != nil {
+			return e
+		}
+
+		// ── 2. 分镜（通过 video.novel_id）
+		if e := tryExec(`DELETE FROM ink_storyboard_shot WHERE video_id IN (SELECT id FROM ink_video WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+
+		// ── 3. 章节版本（通过 chapter.chapter_id）
+		if e := tryExec(`DELETE FROM ink_chapter_version WHERE chapter_id IN (SELECT id FROM ink_chapter WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+
+		// ── 4. 角色间接数据（通过 character.novel_id）
+		if e := tryExec(`DELETE FROM ink_character_visual_design WHERE character_id IN (SELECT id FROM ink_character WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+		if e := tryExec(`DELETE FROM ink_character_state_snapshot WHERE character_id IN (SELECT id FROM ink_character WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+		if e := tryExec(`DELETE FROM ink_character_appearance WHERE character_id IN (SELECT id FROM ink_character WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+
+		// ── 5. 章节物品关联（通过 item.novel_id）
+		if e := tryExec(`DELETE FROM ink_chapter_item WHERE item_id IN (SELECT id FROM ink_item WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+
+		// ── 6. 扩展表（novel_id 直接关联；部分表可能尚未迁移，tryExec 会跳过）
+		extStmts := []string{
+			`DELETE FROM ink_video WHERE novel_id = ?`,
+			`DELETE FROM ink_scene_anchor WHERE novel_id = ?`,
+			`DELETE FROM ink_arc_summary WHERE novel_id = ?`,
+			`DELETE FROM ink_quality_report WHERE novel_id = ?`,
+			`DELETE FROM ink_review_task WHERE novel_id = ?`,
+			`DELETE FROM ink_feedback_record WHERE novel_id = ?`,
+			`DELETE FROM ink_plot_point WHERE novel_id = ?`,
+			`DELETE FROM ink_model_usage_log WHERE novel_id = ?`,
+			`DELETE FROM ink_async_task WHERE novel_id = ?`,
+			`DELETE FROM ink_hook_chain WHERE novel_id = ?`,
+			`DELETE FROM ink_satisfaction_point WHERE novel_id = ?`,
+			`DELETE FROM ink_conflict_arc WHERE novel_id = ?`,
+			`DELETE FROM ink_knowledge_base WHERE novel_id = ?`,
+			`DELETE FROM ink_media_asset WHERE novel_id = ?`,
+			`DELETE FROM ink_chapter_character WHERE novel_id = ?`,
+		}
+		for _, stmt := range extStmts {
+			if e := tryExec(stmt, id); e != nil {
+				return e
+			}
+		}
+
+		// ── 7. 核心表（必须成功）
+		coreStmts := []string{
+			`DELETE FROM ink_item WHERE novel_id = ?`,
+			`DELETE FROM ink_skill WHERE novel_id = ?`,
+			`DELETE FROM ink_character WHERE novel_id = ?`,
+			`DELETE FROM ink_chapter WHERE novel_id = ?`,
+			`DELETE FROM ink_novel WHERE id = ?`,
+		}
+		for _, stmt := range coreStmts {
+			if e := tx.Exec(stmt, id).Error; e != nil {
+				return e
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	r.invalidateCache(id)
@@ -175,13 +286,19 @@ type ChapterRepository struct {
 	cache *redis.Client
 }
 
+const chapterListCacheTTL = 5 * time.Minute
+
 func NewChapterRepository(db *gorm.DB, cache *redis.Client) *ChapterRepository {
 	return &ChapterRepository{db: db, cache: cache}
 }
 
 // Create 创建章节
 func (r *ChapterRepository) Create(chapter *model.Chapter) error {
-	return r.db.Create(chapter).Error
+	if err := r.db.Create(chapter).Error; err != nil {
+		return err
+	}
+	r.invalidateListCache(chapter.NovelID)
+	return nil
 }
 
 // GetByID 根据ID获取章节
@@ -202,13 +319,60 @@ func (r *ChapterRepository) GetByNovelAndChapterNo(novelID uint, chapterNo int) 
 	return &chapter, nil
 }
 
-// ListByNovel 获取小说的所有章节
+// chapterListColumns 章节列表只需元数据字段，排除 content/outline/scene_outline/plot_points/chapter_hook/summary 等大文本列。
+// 100章 × ~3KB content = ~300KB 节省，减少 DB I/O 和网络传输。
+const chapterListColumns = "id, novel_id, uuid, chapter_no, title, status, word_count, quality_score, " +
+	"tension_level, act_no, emotional_tone, hook_type, " +
+	"previous_chapter_id, next_chapter_id, " +
+	"created_at, updated_at, published_at, deleted_at"
+
+func (r *ChapterRepository) chapterListCacheKey(novelID uint) string {
+	return fmt.Sprintf("chapters:novel:%d", novelID)
+}
+
+func (r *ChapterRepository) invalidateListCache(novelID uint) {
+	if r.cache != nil {
+		r.cache.Del(context.Background(), r.chapterListCacheKey(novelID))
+	}
+}
+
+// ListByNovel 获取小说的所有章节（列表元数据，不含正文/大纲等大字段）。
+// 查询结果缓存 5 分钟，写操作（Create/Update/Delete）自动失效。
 func (r *ChapterRepository) ListByNovel(novelID uint) ([]*model.Chapter, error) {
+	// 1. 尝试 Redis 缓存
+	if r.cache != nil {
+		key := r.chapterListCacheKey(novelID)
+		if cached, err := r.cache.Get(context.Background(), key).Result(); err == nil {
+			var chapters []*model.Chapter
+			if json.Unmarshal([]byte(cached), &chapters) == nil {
+				return chapters, nil
+			}
+		}
+	}
+
+	// 2. 列投影：只查元数据列，跳过大文本字段
 	var chapters []*model.Chapter
-	if err := r.db.Where("novel_id = ?", novelID).Order("chapter_no ASC").Find(&chapters).Error; err != nil {
+	if err := r.db.Select(chapterListColumns).
+		Where("novel_id = ?", novelID).
+		Order("chapter_no ASC").
+		Find(&chapters).Error; err != nil {
 		return nil, err
 	}
+
+	// 3. 写入缓存
+	if r.cache != nil {
+		if data, err := json.Marshal(chapters); err == nil {
+			r.cache.Set(context.Background(), r.chapterListCacheKey(novelID), data, chapterListCacheTTL)
+		}
+	}
 	return chapters, nil
+}
+
+// GetByNovelAndChapterRange 批量获取章节范围（含首尾，一次 SQL 代替循环 GetByNovelAndChapterNo）
+func (r *ChapterRepository) GetByNovelAndChapterRange(novelID uint, start, end int) ([]*model.Chapter, error) {
+	var chapters []*model.Chapter
+	return chapters, r.db.Where("novel_id = ? AND chapter_no BETWEEN ? AND ?", novelID, start, end).
+		Order("chapter_no ASC").Find(&chapters).Error
 }
 
 // GetRecent 获取最近N章
@@ -225,12 +389,20 @@ func (r *ChapterRepository) GetRecent(novelID uint, currentChapterNo, count int)
 
 // Update 更新章节
 func (r *ChapterRepository) Update(chapter *model.Chapter) error {
-	return r.db.Save(chapter).Error
+	if err := r.db.Save(chapter).Error; err != nil {
+		return err
+	}
+	r.invalidateListCache(chapter.NovelID)
+	return nil
 }
 
-// Delete 删除章节
-func (r *ChapterRepository) Delete(id uint) error {
-	return r.db.Delete(&model.Chapter{}, id).Error
+// Delete 删除章节（novelID 用于缓存失效）
+func (r *ChapterRepository) Delete(id, novelID uint) error {
+	if err := r.db.Delete(&model.Chapter{}, id).Error; err != nil {
+		return err
+	}
+	r.invalidateListCache(novelID)
+	return nil
 }
 
 // CountByNovel 统计小说章节数
@@ -1406,5 +1578,31 @@ func (r *SceneConsistencyLogRepository) ListByShotID(shotID uint) ([]*model.Scen
 func (r *SceneConsistencyLogRepository) ListByAnchorID(anchorID uint) ([]*model.SceneConsistencyLog, error) {
 	var items []*model.SceneConsistencyLog
 	err := r.db.Where("anchor_id = ?", anchorID).Order("created_at DESC").Find(&items).Error
+	return items, err
+}
+
+// ─── SystemSettingRepository ────────────────────────────────────────────────
+
+type SystemSettingRepository struct{ db *gorm.DB }
+
+func NewSystemSettingRepository(db *gorm.DB) *SystemSettingRepository {
+	return &SystemSettingRepository{db: db}
+}
+
+func (r *SystemSettingRepository) Get(key string) (string, error) {
+	var s model.SystemSetting
+	if err := r.db.First(&s, "key = ?", key).Error; err != nil {
+		return "", err
+	}
+	return s.Value, nil
+}
+
+func (r *SystemSettingRepository) Set(key, value, description string) error {
+	return r.db.Save(&model.SystemSetting{Key: key, Value: value, Description: description}).Error
+}
+
+func (r *SystemSettingRepository) List() ([]model.SystemSetting, error) {
+	var items []model.SystemSetting
+	err := r.db.Order("key ASC").Find(&items).Error
 	return items, err
 }

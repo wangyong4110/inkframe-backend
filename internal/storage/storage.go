@@ -89,12 +89,14 @@ func (s *ossService) Upload(ctx context.Context, key string, r io.Reader, size i
 
 	date := time.Now().UTC().Format(http.TimeFormat)
 	canonicalResource := fmt.Sprintf("/%s/%s", s.cfg.Bucket, key)
+	// x-oss-object-acl must appear in canonical headers (sorted alphabetically).
+	canonicalOSSHeaders := "x-oss-object-acl:public-read\n"
 	stringToSign := strings.Join([]string{
 		http.MethodPut,
 		"", // Content-MD5 (omitted)
 		contentType,
 		date,
-		canonicalResource,
+		canonicalOSSHeaders + canonicalResource,
 	}, "\n")
 
 	sig := s.sign(stringToSign)
@@ -109,6 +111,7 @@ func (s *ossService) Upload(ctx context.Context, key string, r io.Reader, size i
 	req.ContentLength = int64(len(buf))
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Date", date)
+	req.Header.Set("x-oss-object-acl", "public-read")
 	req.Header.Set("Authorization", fmt.Sprintf("OSS %s:%s", s.cfg.AccessKey, sig))
 
 	resp, err := s.client.Do(req)

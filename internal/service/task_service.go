@@ -18,10 +18,11 @@ const (
 	TaskTypeVoiceGen      = "voice_gen"
 	TaskTypeImageGen      = "image_gen"
 	TaskTypeThreeView     = "three_view"
-	TaskTypeCharGen     = "char_gen"
-	TaskTypeItemExtract = "item_extract"
-	TaskTypePlotExtract = "plot_extract"
-	TaskTypeAssetGen    = "asset_gen"
+	TaskTypeCharGen             = "char_gen"
+	TaskTypeItemExtract         = "item_extract"
+	TaskTypePlotExtract         = "plot_extract"
+	TaskTypeAssetGen            = "asset_gen"
+	TaskTypeSceneAnchorExtract  = "scene_anchor_extract"
 )
 
 // TaskService manages persistent async tasks.
@@ -64,10 +65,14 @@ func (s *TaskService) SetRunning(taskID string) error {
 }
 
 // Complete stores the result and marks the task completed.
+// No-op if the task has already been cancelled.
 func (s *TaskService) Complete(taskID string, result interface{}) error {
 	task, err := s.repo.GetByTaskID(taskID)
 	if err != nil {
 		return fmt.Errorf("task %s not found: %w", taskID, err)
+	}
+	if task.Status == "cancelled" {
+		return nil
 	}
 	if result != nil {
 		b, err := json.Marshal(result)
@@ -81,13 +86,31 @@ func (s *TaskService) Complete(taskID string, result interface{}) error {
 }
 
 // Fail records the error message and marks the task failed.
+// No-op if the task has already been cancelled.
 func (s *TaskService) Fail(taskID string, errMsg string) error {
 	task, err := s.repo.GetByTaskID(taskID)
 	if err != nil {
 		return fmt.Errorf("task %s not found: %w", taskID, err)
 	}
+	if task.Status == "cancelled" {
+		return nil
+	}
 	task.Status = "failed"
 	task.Error = errMsg
+	return s.repo.Update(task)
+}
+
+// Cancel marks the task as cancelled. Running goroutines finish but their
+// Complete/Fail calls become no-ops once cancelled.
+func (s *TaskService) Cancel(taskID string) error {
+	task, err := s.repo.GetByTaskID(taskID)
+	if err != nil {
+		return fmt.Errorf("task %s not found: %w", taskID, err)
+	}
+	if task.Status == "completed" || task.Status == "failed" || task.Status == "cancelled" {
+		return nil // already terminal
+	}
+	task.Status = "cancelled"
 	return s.repo.Update(task)
 }
 

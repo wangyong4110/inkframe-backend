@@ -1,0 +1,42 @@
+请从以下章节内容中提取次要角色，生成简要的角色档案。
+
+# 小说信息
+- 标题：《{{.NovelTitle}}》
+- 类型：{{.Genre}}
+
+# 已有主要角色（不要重复提取这些角色）
+{{range .ExistingNames}}- {{.}}
+{{end}}
+
+# 本章内容
+{{.Content}}
+
+# 要求
+1. 只提取本章中出现的次要角色（龙套、路人、临时出场的角色），不超过10个
+2. 不要重复提取已有主要角色列表中的角色
+3. role 固定为 "minor"
+4. 次要角色信息可以简短：外貌/性格/背景用1-2句话描述即可
+5. visual_prompt 用简短英文描述外貌，不超过60词
+6. 若章节中无明显次要角色，输出空数组 []
+7. 严格输出 JSON 数组，不含任何说明文字
+
+# 输出格式（JSON 数组）
+[
+  {
+    "name": "角色名",
+    "role": "minor",
+    "archetype": "商人",
+    "appearance": "中年男性，身材微胖，一脸精明",
+    "personality": "圆滑市侩，见风使舵",
+    "personality_tags": ["圆滑", "精明"],
+    "background": "本章中出现的商人，为主角提供消息",
+    "character_arc": "",
+    "abilities": [],
+    "dialogue_style": {
+      "vocabulary_level": "现代白话",
+      "patterns": ["爱用敬语"],
+      "speech_habits": "客气圆滑"
+    },
+    "visual_prompt": "middle-aged male merchant, slightly overweight, shrewd expression, plain merchant clothing"
+  }
+]

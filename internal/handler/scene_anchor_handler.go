@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"strconv"
@@ -11,12 +12,24 @@ import (
 
 // SceneAnchorHandler 场景锚点处理器
 type SceneAnchorHandler struct {
-	svc              *service.SceneAnchorService
-	consistencySvc   *service.SceneConsistencyService
+	svc            *service.SceneAnchorService
+	consistencySvc *service.SceneConsistencyService
+	taskSvc        *service.TaskService
+	chapterSvc     *service.ChapterService
 }
 
 func NewSceneAnchorHandler(svc *service.SceneAnchorService, consistencySvc *service.SceneConsistencyService) *SceneAnchorHandler {
 	return &SceneAnchorHandler{svc: svc, consistencySvc: consistencySvc}
+}
+
+func (h *SceneAnchorHandler) WithTaskService(svc *service.TaskService) *SceneAnchorHandler {
+	h.taskSvc = svc
+	return h
+}
+
+func (h *SceneAnchorHandler) WithChapterService(svc *service.ChapterService) *SceneAnchorHandler {
+	h.chapterSvc = svc
+	return h
 }
 
 // GetSceneAnchor GET /scene-anchors/:id
@@ -203,4 +216,73 @@ func (h *SceneAnchorHandler) GetConsistencyLogs(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"logs": logs, "total": len(logs)})
+}
+
+// AIExtractChapterAnchors POST /novels/:id/chapters/:chapter_no/scene-anchors/ai-extract
+func (h *SceneAnchorHandler) AIExtractChapterAnchors(c *gin.Context) {
+	if h.chapterSvc == nil {
+		respondErr(c, http.StatusServiceUnavailable, "chapter service not configured")
+		return
+	}
+	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid novel id")
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+	chapter, err := h.chapterSvc.GetChapterByNo(uint(novelID), chapterNo)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	content := chapter.Content
+	if content == "" {
+		content = chapter.Summary
+	}
+	if content == "" {
+		respondBadRequest(c, "chapter has no content")
+		return
+	}
+	anchors, err := h.svc.ExtractFromChapter(context.Background(), getTenantID(c), uint(novelID), "", content)
+	if err != nil {
+		log.Printf("[SceneAnchorHandler] AIExtractChapterAnchors: %v", err)
+		respondErr(c, http.StatusInternalServerError, "failed to extract chapter scene anchors")
+		return
+	}
+	respondOK(c, gin.H{"scene_anchors": anchors, "total": len(anchors)})
+}
+
+// AIExtractFromNovel POST /novels/:id/scene-anchors/ai-extract
+// 异步批量提取小说所有章节的场景锚点
+func (h *SceneAnchorHandler) AIExtractFromNovel(c *gin.Context) {
+	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid novel id")
+		return
+	}
+	tenantID := getTenantID(c)
+	if h.taskSvc == nil {
+		respondErr(c, http.StatusInternalServerError, "task service not configured")
+		return
+	}
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeSceneAnchorExtract, "AI提取场景锚点", "novel", uint(novelID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+	go func(taskID string) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		anchors, err := h.svc.AIExtractAllFromNovel(tenantID, uint(novelID))
+		if err != nil {
+			log.Printf("[SceneAnchorHandler] AIExtractFromNovel: %v", err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+		} else {
+			h.taskSvc.Complete(taskID, map[string]interface{}{"scene_anchors": anchors, "count": len(anchors)}) //nolint:errcheck
+		}
+	}(task.TaskID)
+	respondAccepted(c, task.TaskID, "场景锚点提取任务已提交")
 }

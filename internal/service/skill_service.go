@@ -1,11 +1,13 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
+	"text/template"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -16,6 +18,7 @@ type SkillService struct {
 	skillRepo     *repository.SkillRepository
 	characterRepo *repository.CharacterRepository
 	novelRepo     *repository.NovelRepository
+	chapterRepo   *repository.ChapterRepository // optional, for AIExtractChapterSkills
 	aiService     *AIService
 }
 
@@ -31,6 +34,11 @@ func NewSkillService(
 		novelRepo:     novelRepo,
 		aiService:     aiService,
 	}
+}
+
+func (s *SkillService) WithChapterRepo(r *repository.ChapterRepository) *SkillService {
+	s.chapterRepo = r
+	return s
 }
 
 // CreateSkill 创建技能
@@ -214,7 +222,7 @@ skill_type 可选值：active/passive/toggle/ultimate
 
 	var rawSkills []rawSkill
 	if err := json.Unmarshal([]byte(jsonStr), &rawSkills); err != nil {
-		log.Printf("SkillService.GenerateSkills: parse JSON failed: %v\nraw=%s", err, jsonStr)
+		log.Printf("SkillService.GenerateSkills: parse JSON failed: %v (raw first 200: %.200s)", err, jsonStr)
 		return nil, fmt.Errorf("failed to parse AI response: %w", err)
 	}
 
@@ -264,7 +272,7 @@ func (s *SkillService) GenerateSkillEffect(id uint) (*model.Skill, error) {
 		prompt = buildSkillEffectPrompt(skill)
 	}
 
-	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), 0, "", prompt, "", "")
+	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), 0, "", prompt, "", "", "")
 	if err != nil {
 		return nil, fmt.Errorf("generate effect image failed: %w", err)
 	}
@@ -312,4 +320,128 @@ func buildSkillEffectPrompt(skill *model.Skill) string {
 	parts = append(parts, "fantasy art, concept art, dramatic lighting, vivid colors, high detail, no background text")
 
 	return strings.Join(parts, ", ")
+}
+
+// AIExtractChapterSkills 从单章内容中提取技能，写入 ink_skill 并关联 acquired_chapter_no
+func (s *SkillService) AIExtractChapterSkills(tenantID, novelID, chapterID uint, chapterNo int) ([]*model.Skill, error) {
+	if s.chapterRepo == nil {
+		return nil, fmt.Errorf("chapter repository not configured")
+	}
+	chapter, err := s.chapterRepo.GetByID(chapterID)
+	if err != nil {
+		return nil, fmt.Errorf("chapter not found: %w", err)
+	}
+	content := chapter.Content
+	if content == "" {
+		content = chapter.Summary
+	}
+	if content == "" {
+		return nil, fmt.Errorf("chapter has no content")
+	}
+
+	novelTitle := "本小说"
+	novelGenre := ""
+	if s.novelRepo != nil {
+		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
+			novelTitle = novel.Title
+			novelGenre = novel.Genre
+		}
+	}
+
+	// 已有技能名列表，用于去重
+	existing, _ := s.skillRepo.ListByNovel(novelID, repository.ListSkillsOpts{})
+	existingNames := make([]string, 0, len(existing))
+	existingNameSet := make(map[string]bool, len(existing))
+	for _, sk := range existing {
+		existingNames = append(existingNames, sk.Name)
+		existingNameSet[strings.ToLower(sk.Name)] = true
+	}
+
+	tmplStr := loadPromptTemplate("extract_chapter_skills.tmpl")
+	tmpl, err := template.New("extract_chapter_skills").Parse(tmplStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse template: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, map[string]interface{}{
+		"NovelTitle":    novelTitle,
+		"Genre":         novelGenre,
+		"ExistingNames": existingNames,
+		"Content":       content,
+	}); err != nil {
+		return nil, err
+	}
+
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_chapter_skills", buf.String(), "")
+	if err != nil {
+		return nil, fmt.Errorf("AI extract chapter skills: %w", err)
+	}
+
+	type skillJSON struct {
+		Name          string `json:"name"`
+		Category      string `json:"category"`
+		SkillType     string `json:"skill_type"`
+		Level         int    `json:"level"`
+		Realm         string `json:"realm"`
+		Description   string `json:"description"`
+		Effect        string `json:"effect"`
+		FlavorText    string `json:"flavor_text"`
+		Cost          string `json:"cost"`
+		CharacterName string `json:"character_name"`
+	}
+	var skills []skillJSON
+	cleaned := extractJSON(strings.TrimSpace(result))
+	if err := json.Unmarshal([]byte(cleaned), &skills); err != nil {
+		return nil, fmt.Errorf("parse skills JSON: %w", err)
+	}
+
+	// 构建角色名→ID map
+	chars, _ := s.characterRepo.ListByNovel(novelID)
+	charNameToID := make(map[string]uint, len(chars))
+	for _, c := range chars {
+		charNameToID[strings.ToLower(c.Name)] = c.ID
+	}
+
+	validTypes := map[string]bool{"active": true, "passive": true, "toggle": true, "ultimate": true}
+	var created []*model.Skill
+	for _, sk := range skills {
+		if sk.Name == "" || existingNameSet[strings.ToLower(sk.Name)] {
+			continue
+		}
+		skillType := sk.SkillType
+		if !validTypes[skillType] {
+			skillType = "active"
+		}
+		level := sk.Level
+		if level <= 0 {
+			level = 1
+		}
+		chNo := chapterNo
+		skill := &model.Skill{
+			NovelID:           novelID,
+			Name:              sk.Name,
+			Category:          sk.Category,
+			SkillType:         skillType,
+			Level:             level,
+			Realm:             sk.Realm,
+			Description:       sk.Description,
+			Effect:            sk.Effect,
+			FlavorText:        sk.FlavorText,
+			Cost:              sk.Cost,
+			AcquiredChapterNo: &chNo,
+			Status:            "active",
+		}
+		if sk.CharacterName != "" {
+			if id, ok := charNameToID[strings.ToLower(sk.CharacterName)]; ok {
+				skill.CharacterID = &id
+			}
+		}
+		if e := s.skillRepo.Create(skill); e != nil {
+			log.Printf("SkillService.AIExtractChapterSkills: create %q: %v", sk.Name, e)
+			continue
+		}
+		existingNameSet[strings.ToLower(sk.Name)] = true
+		created = append(created, skill)
+	}
+	return created, nil
 }

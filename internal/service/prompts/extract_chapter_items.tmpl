@@ -1,0 +1,35 @@
+请从以下章节内容中提取本章出现的物品/道具，生成简要的物品档案。
+
+# 小说信息
+- 标题：《{{.NovelTitle}}》
+- 类型：{{.Genre}}
+
+# 已有物品（不要重复提取）
+{{range .ExistingNames}}- {{.}}
+{{end}}
+
+# 本章内容
+{{.Content}}
+
+# 要求
+1. 只提取本章中明确出现或使用的物品（武器、宝物、道具、文件、器物等）
+2. 不要重复已有物品列表中的物品
+3. 不超过10个
+4. category 只能是：weapon / treasure / tool / document / artifact / other
+5. visual_prompt 用简短英文描述外观，不超过60词
+6. 若章节中无明显新物品，输出空数组 []
+7. 严格输出 JSON 数组，不含任何说明文字
+
+# 输出格式（JSON 数组）
+[
+  {
+    "name": "物品名",
+    "category": "weapon",
+    "appearance": "一柄古朴的长剑，剑身刻有符文",
+    "location": "主角腰间",
+    "owner": "主角名",
+    "significance": "主角的传家宝，蕴含远古力量",
+    "abilities": [{"name": "斩灵", "description": "可斩断幻术"}],
+    "visual_prompt": "ancient longsword with carved runes on blade, glowing faint blue, ornate hilt"
+  }
+]

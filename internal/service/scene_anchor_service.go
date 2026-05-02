@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -18,14 +19,21 @@ import (
 // 将命名场景的视觉描述、风格 token 和参考图固定下来，
 // 在分镜图像生成时强制注入，确保跨镜头布景一致。
 type SceneAnchorService struct {
-	repo      *repository.SceneAnchorRepository
-	shotRepo  *repository.StoryboardRepository
-	novelRepo *repository.NovelRepository
-	aiSvc     *AIService
+	repo        *repository.SceneAnchorRepository
+	shotRepo    *repository.StoryboardRepository
+	novelRepo   *repository.NovelRepository
+	chapterRepo *repository.ChapterRepository // optional, for AIExtractAllFromNovel
+	aiSvc       *AIService
 }
 
 func NewSceneAnchorService(repo *repository.SceneAnchorRepository, shotRepo *repository.StoryboardRepository, aiSvc *AIService, novelRepo *repository.NovelRepository) *SceneAnchorService {
 	return &SceneAnchorService{repo: repo, shotRepo: shotRepo, aiSvc: aiSvc, novelRepo: novelRepo}
+}
+
+// WithChapterRepo 注入章节仓库（可选，用于批量提取所有章节的场景锚点）
+func (s *SceneAnchorService) WithChapterRepo(r *repository.ChapterRepository) *SceneAnchorService {
+	s.chapterRepo = r
+	return s
 }
 
 // CreateSceneAnchorReq 创建请求
@@ -299,7 +307,7 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	parts = append(parts, "scene background, no characters, cinematic composition")
 	prompt := strings.Join(parts, ", ")
 
-	imageURL, err := s.aiSvc.GenerateCharacterThreeView(ctx, tenantID, providerName, prompt, "", imageStyle)
+	imageURL, err := s.aiSvc.GenerateCharacterThreeView(ctx, tenantID, providerName, prompt, "", imageStyle, "")
 	if err != nil {
 		return nil, fmt.Errorf("generate ref image: %w", err)
 	}
@@ -321,4 +329,59 @@ func (s *SceneAnchorService) UpdateStats(id uint, score float64) error {
 	anchor.AvgConsScore = (anchor.AvgConsScore*n + score) / (n + 1)
 	anchor.UsageCount++
 	return s.repo.Update(anchor)
+}
+
+// AIExtractAllFromNovel 批量从小说前 10 章中提取场景锚点（并发 3 goroutine）
+func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.SceneAnchor, error) {
+	if s.chapterRepo == nil {
+		return nil, fmt.Errorf("chapterRepo not configured")
+	}
+	chapters, err := s.chapterRepo.ListByNovel(novelID)
+	if err != nil {
+		return nil, fmt.Errorf("list chapters: %w", err)
+	}
+
+	novelTitle := ""
+	if s.novelRepo != nil {
+		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
+			novelTitle = novel.Title
+		}
+	}
+
+	const maxCh = 10
+	var candidates []*model.Chapter
+	for _, ch := range chapters {
+		if ch.Content != "" && len(candidates) < maxCh {
+			candidates = append(candidates, ch)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	ctx := context.Background()
+	const maxConcurrent = 3
+	sem := make(chan struct{}, maxConcurrent)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+	allCreated := make([]*model.SceneAnchor, 0)
+
+	for _, ch := range candidates {
+		ch := ch
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			anchors, err := s.ExtractFromChapter(ctx, tenantID, novelID, novelTitle, ch.Content)
+			if err != nil {
+				log.Printf("[SceneAnchorService] AIExtractAllFromNovel chapter %d: %v", ch.ID, err)
+				return
+			}
+			mu.Lock()
+			allCreated = append(allCreated, anchors...)
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	return allCreated, nil
 }

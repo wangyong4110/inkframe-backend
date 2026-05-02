@@ -1,23 +1,30 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/PuerkitoBio/goquery"
-	"github.com/google/uuid"
 	"io"
 	"log"
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
+
+	"github.com/PuerkitoBio/goquery"
+	"github.com/google/uuid"
+	"golang.org/x/text/encoding/simplifiedchinese"
+	"golang.org/x/text/transform"
 
 	"github.com/inkframe/inkframe-backend/internal/crawler"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
+	"github.com/inkframe/inkframe-backend/internal/storage"
 )
 
 // ============================================
@@ -67,6 +74,7 @@ type ImportResult struct {
 	FailedChapters   int      `json:"failed_chapters"`
 	Duration         float64  `json:"duration"` // 秒
 	Errors           []string `json:"errors,omitempty"`
+	OSSUrl           string   `json:"oss_url,omitempty"` // 原始文件 OSS 备份地址
 }
 
 // CrawlProgress 爬取进度
@@ -81,11 +89,15 @@ type CrawlProgress struct {
 
 // NovelImportService 小说导入服务
 type NovelImportService struct {
-	novelRepo       *repository.NovelRepository
-	chapterRepo     *repository.ChapterRepository
-	crawler         *crawler.NovelCrawler
-	narrativeMemory *NarrativeMemoryService
-	crawlProgress   sync.Map // novelID(uint) → *CrawlProgress
+	novelRepo          *repository.NovelRepository
+	chapterRepo        *repository.ChapterRepository
+	crawler            *crawler.NovelCrawler
+	narrativeMemory    *NarrativeMemoryService
+	storageSvc         storage.Service
+	analysisService    *NovelAnalysisService
+	aiService          *AIService
+	crawlProgress      sync.Map // novelID(uint) → *CrawlProgress
+	crawlDoneCallbacks sync.Map // novelID(uint) → func()
 }
 
 // NewNovelImportService 创建小说导入服务
@@ -105,6 +117,63 @@ func NewNovelImportService(
 func (s *NovelImportService) WithNarrativeMemory(nm *NarrativeMemoryService) *NovelImportService {
 	s.narrativeMemory = nm
 	return s
+}
+
+// WithStorage 注入存储服务（用于将原始文件上传到 OSS）
+func (s *NovelImportService) WithStorage(svc storage.Service) *NovelImportService {
+	s.storageSvc = svc
+	return s
+}
+
+// WithAnalysisService 注入分析服务（导入完成后自动触发分析）
+func (s *NovelImportService) WithAnalysisService(svc *NovelAnalysisService) *NovelImportService {
+	s.analysisService = svc
+	return s
+}
+
+// WithAIService 注入 AI 服务（章节标记不明显时 AI 辅助划分章节）
+func (s *NovelImportService) WithAIService(svc *AIService) *NovelImportService {
+	s.aiService = svc
+	return s
+}
+
+// RegisterCrawlDoneCallback 注册爬取完成回调（一次性，触发后自动移除）
+func (s *NovelImportService) RegisterCrawlDoneCallback(novelID uint, fn func()) {
+	s.crawlDoneCallbacks.Store(novelID, fn)
+}
+
+// uploadRawToOSS 将原始字节上传到 OSS（失败为 best-effort，不阻断主流程）
+func (s *NovelImportService) uploadRawToOSS(ctx context.Context, tenantID, novelID uint, filename string, data []byte) string {
+	if s.storageSvc == nil || len(data) == 0 {
+		return ""
+	}
+	key := fmt.Sprintf("novels/%d/source/%s_%s",
+		novelID, time.Now().Format("20060102150405"), filepath.Base(filename))
+	url, err := s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)),
+		contentTypeFromFilename(filename))
+	if err != nil {
+		log.Printf("[Import] OSS upload failed for novel %d: %v", novelID, err)
+		return ""
+	}
+	return url
+}
+
+// contentTypeFromFilename 根据文件名推断 Content-Type
+func contentTypeFromFilename(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".txt", ".md", ".markdown":
+		return "text/plain; charset=utf-8"
+	case ".html", ".htm":
+		return "text/html; charset=utf-8"
+	case ".epub":
+		return "application/epub+zip"
+	case ".docx":
+		return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+	case ".json":
+		return "application/json"
+	default:
+		return "application/octet-stream"
+	}
 }
 
 // GetCrawlProgress 获取爬取进度（先查内存，再查数据库）
@@ -272,6 +341,34 @@ func (s *NovelImportService) crawlChaptersBackground(
 	}
 	progress.Current = ""
 	log.Printf("[Crawl] novel=%d finished: done=%d failed=%d", novelID, progress.Done, progress.Failed)
+
+	// 将全本内容合并上传到 OSS 备份
+	if s.storageSvc != nil && progress.Status == "completed" {
+		go func() {
+			allChapters, err := s.chapterRepo.ListByNovel(novelID)
+			if err != nil || len(allChapters) == 0 {
+				return
+			}
+			var sb strings.Builder
+			sb.WriteString(novelTitle + "\n\n")
+			for _, ch := range allChapters {
+				if ch.Content != "" {
+					sb.WriteString(fmt.Sprintf("第%d章 %s\n\n%s\n\n", ch.ChapterNo, ch.Title, ch.Content))
+				}
+			}
+			if sb.Len() == 0 {
+				return
+			}
+			data := []byte(sb.String())
+			key := fmt.Sprintf("novels/%d/source/crawl_%s.txt", novelID, time.Now().Format("20060102150405"))
+			s.storageSvc.Upload(context.Background(), key, bytes.NewReader(data), int64(len(data)), "text/plain; charset=utf-8") //nolint:errcheck
+		}()
+	}
+
+	// 触发注册的完成回调（如自动分析）
+	if fn, ok := s.crawlDoneCallbacks.LoadAndDelete(novelID); ok {
+		fn.(func())()
+	}
 }
 
 // getParserForURL 根据 URL 返回对应解析器
@@ -318,9 +415,7 @@ func (s *NovelImportService) Import(req *ImportRequest) (*ImportResult, error) {
 
 // 从文件导入
 func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, error) {
-	result := &ImportResult{
-		Duration: 0,
-	}
+	result := &ImportResult{}
 
 	// 检测格式
 	format := s.detectFormat(req.FileName, req.Format)
@@ -379,15 +474,48 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 	result.NovelID = novel.ID
 	result.Title = novel.Title
 
+	// 将原始文件上传到 OSS 备份（novelID 确定后立即上传）
+	if len(req.FileData) > 0 {
+		result.OSSUrl = s.uploadRawToOSS(context.Background(), req.TenantID, novel.ID, req.FileName, req.FileData)
+	}
+
 	// 保存章节（追加时序号从已有数量后续）
+	// 若同章节号已存在但内容为空（上次导入失败遗留），则覆盖更新；否则跳过以免破坏已有内容。
 	for i, chapter := range chapters {
 		chapter.NovelID = novel.ID
 		chapter.ChapterNo = chapterOffset + i + 1
-		if err := s.chapterRepo.Create(chapter); err != nil {
-			result.FailedChapters++
-			result.Errors = append(result.Errors, fmt.Sprintf("chapter %d failed: %v", i+1, err))
+		if chapter.UUID == "" {
+			chapter.UUID = uuid.New().String()
+		}
+
+		existing, lookupErr := s.chapterRepo.GetByNovelAndChapterNo(novel.ID, chapter.ChapterNo)
+		if lookupErr == nil && existing != nil {
+			if existing.Content == "" && chapter.Content != "" {
+				// 用新内容覆盖上次导入遗留的空章节
+				existing.Title = chapter.Title
+				existing.Content = chapter.Content
+				existing.WordCount = chapter.WordCount
+				existing.Status = chapter.Status
+				if err := s.chapterRepo.Update(existing); err != nil {
+					result.FailedChapters++
+					log.Printf("[Import] novel=%d chapter %d update failed: %v", novel.ID, chapter.ChapterNo, err)
+					result.Errors = append(result.Errors, fmt.Sprintf("chapter %d update failed: %v", chapter.ChapterNo, err))
+				} else {
+					result.ImportedChapters++
+				}
+			} else {
+				log.Printf("[Import] novel=%d chapter %d already exists with content (%d chars), skipping", novel.ID, chapter.ChapterNo, len([]rune(existing.Content)))
+				result.ImportedChapters++
+			}
 		} else {
-			result.ImportedChapters++
+			if err := s.chapterRepo.Create(chapter); err != nil {
+				result.FailedChapters++
+				log.Printf("[Import] novel=%d chapter %d create failed: %v", novel.ID, chapter.ChapterNo, err)
+				result.Errors = append(result.Errors, fmt.Sprintf("chapter %d failed: %v", chapter.ChapterNo, err))
+			} else {
+				result.ImportedChapters++
+				log.Printf("[Import] novel=%d chapter %d saved (%d chars)", novel.ID, chapter.ChapterNo, len([]rune(chapter.Content)))
+			}
 		}
 	}
 	result.TotalChapters = len(chapters)
@@ -555,16 +683,38 @@ func (s *NovelImportService) detectSiteFromURL(url string) string {
 	return "default"
 }
 
+// toUTF8Text 将文本字节转换为 UTF-8 字符串。
+// 若输入已是合法 UTF-8 直接返回；否则尝试 GBK（GB2312/GB18030）解码。
+// 绝大多数中文 TXT 小说在 Windows 下以 GBK 编码保存，此处做自动兼容。
+func toUTF8Text(data []byte) string {
+	if utf8.Valid(data) {
+		return string(data)
+	}
+	// 尝试 GBK → UTF-8
+	decoder := simplifiedchinese.GBK.NewDecoder()
+	out, _, err := transform.Bytes(decoder, data)
+	if err == nil && utf8.Valid(out) {
+		return string(out)
+	}
+	// 降级：直接转换（可能含乱码，但不中断）
+	return string(data)
+}
+
 // 解析TXT文件
 func (s *NovelImportService) parseTxtFile(data []byte, fileName string) (*model.Novel, []*model.Chapter, error) {
-	content := string(data)
+	content := toUTF8Text(data)
+	// 统一换行符：Windows CRLF → LF，避免正则行首锚点失配
+	content = strings.ReplaceAll(content, "\r\n", "\n")
+	content = strings.ReplaceAll(content, "\r", "\n")
 
 	// 提取标题（从文件名或内容第一行）
+	// 注意：若第一行本身是章节标题（如"第一章 xxx"），不把它当小说标题
 	title := strings.TrimSuffix(filepath.Base(fileName), filepath.Ext(fileName))
 	lines := strings.Split(content, "\n")
+	chapterHeadRe := regexp.MustCompile(`^第[一二三四五六七八九十百千零〇\d]+[章节卷]`)
 	if len(lines) > 0 {
-		titleLine := lines[0]
-		if len(titleLine) > 0 && len(titleLine) < 50 {
+		titleLine := strings.TrimSpace(lines[0])
+		if len([]rune(titleLine)) > 0 && len([]rune(titleLine)) < 50 && !chapterHeadRe.MatchString(titleLine) {
 			title = titleLine
 			content = strings.Join(lines[1:], "\n")
 		}
@@ -584,7 +734,7 @@ func (s *NovelImportService) parseTxtFile(data []byte, fileName string) (*model.
 
 // 解析Markdown文件
 func (s *NovelImportService) parseMarkdownFile(data []byte, fileName string) (*model.Novel, []*model.Chapter, error) {
-	content := string(data)
+	content := toUTF8Text(data)
 	lines := strings.Split(content, "\n")
 
 	// 提取标题（从文件名或第一个#标题）
@@ -655,7 +805,7 @@ func (s *NovelImportService) parseJsonFile(data []byte) (*model.Novel, []*model.
 
 // 解析HTML文件
 func (s *NovelImportService) parseHtmlFile(data []byte) (*model.Novel, []*model.Chapter, error) {
-	content := string(data)
+	content := toUTF8Text(data)
 
 	// 简单提取标题
 	titleRegex := regexp.MustCompile(`<title>([^<]+)</title>`)
@@ -706,15 +856,17 @@ func (s *NovelImportService) stripHtmlTags(html string) string {
 
 // 按章节分割
 func (s *NovelImportService) splitByChapters(content, novelTitle string) []*model.Chapter {
-	var chapters []*model.Chapter
-
-	// 尝试多种章节分割模式
+	// 尝试多种章节分割模式（取命中数最多的一种）
 	patterns := []string{
-		`第[一二三四五六七八九十百千\d]+章[^\n]*`, // 中文章节
-		`第[0-9]+章[^\n]*`,         // 数字章节
-		`Chapter\s+[0-9]+[^\n]*`, // English chapter
-		`ch\.\s*[0-9]+[^\n]*`,    // ch.1
-		`\[第[0-9]+章\]`,           // [第1章]
+		`(?m)^第[一二三四五六七八九十百千零〇\d]+章[^\n]*`,  // 中文章节（行首）
+		`(?m)^第[0-9]+章[^\n]*`,                        // 纯数字章（行首）
+		`(?m)^卷[一二三四五六七八九十百千零〇\d]+[^\n]*`,    // 卷（行首）
+		`(?m)^第[一二三四五六七八九十百千零〇\d]+节[^\n]*`,  // 节（行首）
+		`(?m)^番外[一二三四五六七八九十\d]*[^\n]*`,         // 番外章（行首）
+		`Chapter\s+[0-9]+[^\n]*`,                       // English chapter
+		`ch\.\s*[0-9]+[^\n]*`,                          // ch.1
+		`(?m)^\[第[0-9]+章\][^\n]*`,                    // [第1章]（行首）
+		`(?m)^【[^】]{1,30}】[^\n]*`,                   // 【标题】（行首）
 	}
 
 	var splits []int
@@ -723,45 +875,140 @@ func (s *NovelImportService) splitByChapters(content, novelTitle string) []*mode
 	for _, pattern := range patterns {
 		re := regexp.MustCompile(pattern)
 		matches := re.FindAllStringIndex(content, -1)
-
 		if len(matches) > len(splits) {
-			splits = []int{}
-			chapterTitles = []string{}
+			splits = nil
+			chapterTitles = nil
 			for _, match := range matches {
 				splits = append(splits, match[0])
-				chapterTitles = append(chapterTitles, content[match[0]:match[1]])
+				// 取标题行（去掉尾部空白）
+				title := strings.TrimRight(content[match[0]:match[1]], " \t\r\n")
+				chapterTitles = append(chapterTitles, title)
 			}
 		}
 	}
 
-	// 如果没有找到章节标记，按固定字数分割
-	if len(splits) == 0 {
-		return s.splitByLength(content, novelTitle, 3000) // 每章3000字
+	// 正则找到了章节 → 按切割位提取内容
+	if len(splits) >= 2 {
+		return s.buildChaptersFromSplits(content, splits, chapterTitles)
 	}
 
-	// 提取章节内容
+	// 正则未命中，尝试 AI 辅助划分
+	if s.aiService != nil && len([]rune(content)) > 500 {
+		if aiChapters := s.splitByChaptersWithAI(content); len(aiChapters) >= 2 {
+			return aiChapters
+		}
+	}
+
+	// 最终兜底：按固定字数分割
+	return s.splitByLength(content, novelTitle, 3000)
+}
+
+// buildChaptersFromSplits 从切割位和标题列表构建章节
+func (s *NovelImportService) buildChaptersFromSplits(content string, splits []int, titles []string) []*model.Chapter {
+	var chapters []*model.Chapter
+	chNo := 0
 	for i := 0; i < len(splits); i++ {
 		start := splits[i]
 		end := len(content)
 		if i < len(splits)-1 {
 			end = splits[i+1]
 		}
-
 		chapterContent := strings.TrimSpace(content[start:end])
-		if len(chapterContent) < 100 {
+		if len([]rune(chapterContent)) < 50 {
 			continue
 		}
-
-		chapter := &model.Chapter{
-			ChapterNo: i + 1,
-			Title:     chapterTitles[i],
+		chNo++
+		chapters = append(chapters, &model.Chapter{
+			UUID:      uuid.New().String(),
+			ChapterNo: chNo,
+			Title:     titles[i],
 			Content:   chapterContent,
 			WordCount: len([]rune(chapterContent)),
 			Status:    "published",
-		}
-		chapters = append(chapters, chapter)
+		})
+	}
+	return chapters
+}
+
+// splitByChaptersWithAI 让 AI 从文本中识别章节标题，用于正则无法匹配的非标准格式
+func (s *NovelImportService) splitByChaptersWithAI(content string) []*model.Chapter {
+	const maxSampleRunes = 10000
+	runes := []rune(content)
+	sample := content
+	if len(runes) > maxSampleRunes {
+		sample = string(runes[:maxSampleRunes])
 	}
 
+	prompt := `请从以下小说文本中找出所有章节的起始标题行，并以JSON数组格式返回章节标题列表。
+格式要求：["第一章 xxx", "第二章 yyy", ...]
+要求：
+1. 标题必须与原文完全一致（字符相同）
+2. 只返回JSON数组，不含其他内容
+3. 若文本没有明显章节，则按每约3000字一章分章，标题使用"第N章"格式（N为数字）
+
+小说文本（前10000字）：
+` + sample
+
+	resp, err := s.aiService.Generate(0, "chapter", prompt)
+	if err != nil || strings.TrimSpace(resp) == "" {
+		log.Printf("[Import] AI chapter split error: %v", err)
+		return nil
+	}
+
+	// 提取 JSON 数组
+	raw := resp
+	if i := strings.Index(raw, "["); i >= 0 {
+		if j := strings.LastIndex(raw, "]"); j > i {
+			raw = raw[i : j+1]
+		}
+	}
+	var titles []string
+	if err := json.Unmarshal([]byte(raw), &titles); err != nil || len(titles) == 0 {
+		log.Printf("[Import] AI chapter split JSON parse error: %v, raw=%q", err, raw)
+		return nil
+	}
+
+	// 在全文中定位每个标题
+	type entry struct {
+		pos   int
+		title string
+	}
+	var entries []entry
+	searchFrom := 0
+	for _, title := range titles {
+		title = strings.TrimSpace(title)
+		if title == "" {
+			continue
+		}
+		idx := strings.Index(content[searchFrom:], title)
+		if idx < 0 {
+			// 宽松搜索（忽略之前的偏移）
+			idx = strings.Index(content, title)
+			if idx < 0 {
+				continue
+			}
+		} else {
+			idx += searchFrom
+		}
+		entries = append(entries, entry{pos: idx, title: title})
+		searchFrom = idx + len(title)
+	}
+
+	if len(entries) < 2 {
+		return nil
+	}
+
+	// 确保升序（防止 AI 乱序返回）
+	sort.Slice(entries, func(i, j int) bool { return entries[i].pos < entries[j].pos })
+
+	splits := make([]int, len(entries))
+	titleStrs := make([]string, len(entries))
+	for i, e := range entries {
+		splits[i] = e.pos
+		titleStrs[i] = e.title
+	}
+	chapters := s.buildChaptersFromSplits(content, splits, titleStrs)
+	log.Printf("[Import] AI chapter split: %d chapters detected", len(chapters))
 	return chapters
 }
 
@@ -781,6 +1028,7 @@ func (s *NovelImportService) splitByLength(content, title string, chunkSize int)
 		chapterNo := i/chunkSize + 1
 
 		chapter := &model.Chapter{
+			UUID:      uuid.New().String(),
 			ChapterNo: chapterNo,
 			Title:     fmt.Sprintf("第%d章", chapterNo),
 			Content:   chapterContent,

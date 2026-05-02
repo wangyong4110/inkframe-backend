@@ -52,6 +52,7 @@ type chapterMemoryRepo interface {
 	GetRecent(novelID uint, chapterNo int, count int) ([]*model.Chapter, error)
 	ListByNovel(novelID uint) ([]*model.Chapter, error)
 	GetByNovelAndChapterNo(novelID uint, chapterNo int) (*model.Chapter, error)
+	GetByNovelAndChapterRange(novelID uint, start, end int) ([]*model.Chapter, error)
 }
 
 type characterLister interface {
@@ -128,19 +129,26 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 		PlotTensionState: s.buildPlotTensionState(novel.ID, currentChapterNo),
 	}
 
-	// 弧摘要（所有已完成弧）
+	// 弧摘要（所有已完成弧 + 当前弧中段预摘要）
+	// 一次查询加载所有弧摘要，再做内存 map 查找，避免 N+1
 	completedArcs := (currentChapterNo - 1) / arcSize
+	allArcs, _ := s.arcRepo.ListByNovel(novel.ID)
+	arcMap := make(map[int]*model.ArcSummary, len(allArcs))
+	for _, a := range allArcs {
+		arcMap[a.ArcNo] = a
+	}
 	for arcNo := 1; arcNo <= completedArcs; arcNo++ {
-		arc, err := s.arcRepo.GetByNovelAndArcNo(novel.ID, arcNo)
-		if err == nil && arc != nil {
-			ctx.ArcSummaries = append(ctx.ArcSummaries, ArcBrief{
-				ArcNo:        arc.ArcNo,
-				StartChapter: arc.StartChapter,
-				EndChapter:   arc.EndChapter,
-				Summary:      arc.Summary,
-				KeyEvents:    arc.KeyEvents,
-			})
+		arc := arcMap[arcNo]
+		if arc == nil {
+			continue
 		}
+		ctx.ArcSummaries = append(ctx.ArcSummaries, ArcBrief{
+			ArcNo:        arc.ArcNo,
+			StartChapter: arc.StartChapter,
+			EndChapter:   arc.EndChapter,
+			Summary:      arc.Summary,
+			KeyEvents:    arc.KeyEvents,
+		})
 	}
 
 	// 当前弧中段预摘要（填补11-19章等弧内盲区）
@@ -148,7 +156,7 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 	lastMidArcCh := (currentChapterNo - 1) / halfArcSize * halfArcSize
 	if lastMidArcCh > 0 && lastMidArcCh%arcSize != 0 {
 		midArcNo := -(lastMidArcCh / halfArcSize)
-		if arc, err := s.arcRepo.GetByNovelAndArcNo(novel.ID, midArcNo); err == nil && arc != nil {
+		if arc := arcMap[midArcNo]; arc != nil {
 			ctx.ArcSummaries = append(ctx.ArcSummaries, ArcBrief{
 				ArcNo:        arc.ArcNo,
 				StartChapter: arc.StartChapter,
@@ -171,25 +179,33 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 	}
 
 	// 稍远章简短摘要（往前第3~10章）
+	// 一次 BETWEEN 查询代替逐章 GetByNovelAndChapterNo，避免 N+1
 	shortStart := currentChapterNo - recentFullCount - recentShortCount
 	if shortStart < 1 {
 		shortStart = 1
 	}
 	shortEnd := currentChapterNo - recentFullCount - 1
-	for chNo := shortEnd; chNo >= shortStart; chNo-- {
-		ch, err := s.chapterRepo.GetByNovelAndChapterNo(novel.ID, chNo)
-		if err != nil || ch == nil {
-			continue
+	if shortEnd >= shortStart {
+		shortChapters, _ := s.chapterRepo.GetByNovelAndChapterRange(novel.ID, shortStart, shortEnd)
+		chMap := make(map[int]*model.Chapter, len(shortChapters))
+		for _, ch := range shortChapters {
+			chMap[ch.ChapterNo] = ch
 		}
-		brief := ch.Summary
-		if len([]rune(brief)) > shortSummaryMaxRunes {
-			brief = string([]rune(brief)[:shortSummaryMaxRunes]) + "…"
+		for chNo := shortEnd; chNo >= shortStart; chNo-- {
+			ch := chMap[chNo]
+			if ch == nil {
+				continue
+			}
+			brief := ch.Summary
+			if len([]rune(brief)) > shortSummaryMaxRunes {
+				brief = string([]rune(brief)[:shortSummaryMaxRunes]) + "…"
+			}
+			ctx.RecentShort = append(ctx.RecentShort, ChapterBrief{
+				ChapterNo: ch.ChapterNo,
+				Title:     ch.Title,
+				Summary:   brief,
+			})
 		}
-		ctx.RecentShort = append(ctx.RecentShort, ChapterBrief{
-			ChapterNo: ch.ChapterNo,
-			Title:     ch.Title,
-			Summary:   brief,
-		})
 	}
 
 	return ctx, nil
@@ -390,11 +406,11 @@ func (s *NarrativeMemoryService) generateArcSummary(tenantID, novelID uint, arcN
 		Summary   string
 	}
 	var chapters []chSummary
-	for chNo := startChapter; chNo <= endChapter; chNo++ {
-		ch, err := s.chapterRepo.GetByNovelAndChapterNo(novelID, chNo)
-		if err != nil || ch == nil {
-			continue
-		}
+	rawChapters, err := s.chapterRepo.GetByNovelAndChapterRange(novelID, startChapter, endChapter)
+	if err != nil {
+		return fmt.Errorf("arc %d: fetch chapters [%d-%d]: %w", arcNo, startChapter, endChapter, err)
+	}
+	for _, ch := range rawChapters {
 		chapters = append(chapters, chSummary{ChapterNo: ch.ChapterNo, Title: ch.Title, Summary: ch.Summary})
 	}
 	if len(chapters) == 0 {

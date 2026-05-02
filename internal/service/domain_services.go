@@ -75,14 +75,15 @@ func marshalExistingNames[T any](items []T, transform func(T) any) string {
 // ============================================
 
 type ChapterService struct {
-	chapterRepo   *repository.ChapterRepository
-	novelRepo     *repository.NovelRepository
-	aiService     *AIService
-	contextSvc    *GenerationContextService
-	narrativeSvc  *NarrativeMemoryService // 层次化记忆 + 摘要 + 标题 + 精修
-	hookSvc       *HookChainService
-	spSvc         *SatisfactionPointService
-	arcSvc        *ConflictArcService
+	chapterRepo    *repository.ChapterRepository
+	novelRepo      *repository.NovelRepository
+	aiService      *AIService
+	contextSvc     *GenerationContextService
+	narrativeSvc   *NarrativeMemoryService // 层次化记忆 + 摘要 + 标题 + 精修
+	hookSvc        *HookChainService
+	spSvc          *SatisfactionPointService
+	arcSvc         *ConflictArcService
+	plotPointRepo  *repository.PlotPointRepository // 未解决剧情点注入
 }
 
 func NewChapterService(
@@ -102,6 +103,12 @@ func NewChapterService(
 // WithNarrativeMemory 注入层次化记忆服务（可选）
 func (s *ChapterService) WithNarrativeMemory(svc *NarrativeMemoryService) *ChapterService {
 	s.narrativeSvc = svc
+	return s
+}
+
+// WithPlotPointRepo 注入剧情点仓库（可选），用于将未解决的伏笔/冲突注入生成 prompt
+func (s *ChapterService) WithPlotPointRepo(repo *repository.PlotPointRepository) *ChapterService {
+	s.plotPointRepo = repo
 	return s
 }
 
@@ -183,9 +190,9 @@ func (s *ChapterService) UpdateChapter(id uint, req *model.UpdateChapterRequest)
 func (s *ChapterService) DeleteChapter(id uint) error {
 	chapter, err := s.chapterRepo.GetByID(id)
 	if err != nil {
-		return s.chapterRepo.Delete(id)
+		return s.chapterRepo.Delete(id, 0)
 	}
-	if err := s.chapterRepo.Delete(id); err != nil {
+	if err := s.chapterRepo.Delete(id, chapter.NovelID); err != nil {
 		return err
 	}
 	s.syncNovelStats(chapter.NovelID)
@@ -272,7 +279,7 @@ func (s *ChapterService) DeleteChapterByNo(novelID uint, chapterNo int) error {
 	if err != nil {
 		return err
 	}
-	if err := s.chapterRepo.Delete(chapter.ID); err != nil {
+	if err := s.chapterRepo.Delete(chapter.ID, novelID); err != nil {
 		return err
 	}
 	s.syncNovelStats(novelID)
@@ -603,6 +610,9 @@ func (s *ChapterService) generateFromSceneOutline(
 	// 获取角色对话风格
 	characterVoices := s.getCharacterVoices(novelID)
 
+	// 未解决剧情线（伏笔/冲突）
+	foreshadowHints := s.buildForeshadowHints(novelID, req.ChapterNo)
+
 	// 峰值张力
 	peakTension := 0
 	for _, sc := range outlineData.Scenes {
@@ -639,9 +649,10 @@ func (s *ChapterService) generateFromSceneOutline(
 		"Scenes":        outlineData.Scenes,
 		"HookSetup":     outlineData.HookSetup,
 		"PeakTension":   peakTension,
-		"Characters":    characterVoices,
-		"UserPrompt":    req.Prompt,
-		"IsStandalone":  req.IsStandalone,
+		"Characters":      characterVoices,
+		"ForeshadowHints": foreshadowHints,
+		"UserPrompt":      req.Prompt,
+		"IsStandalone":    req.IsStandalone,
 	}); err != nil {
 		content, err := s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
 		return content, "", err
@@ -716,6 +727,80 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 	if s.narrativeSvc != nil {
 		s.narrativeSvc.TriggerArcSummaryIfNeeded(tenantID, novel.ID, chapter.ChapterNo)
 	}
+
+	// 6. 自动检查并标记已解决的剧情点（伏笔/冲突）
+	s.checkAndAutoResolvePlotPoints(tenantID, chapter)
+}
+
+// checkAndAutoResolvePlotPoints 用单次 AI 调用判断本章是否解决了悬而未决的剧情线，自动更新 is_resolved
+func (s *ChapterService) checkAndAutoResolvePlotPoints(tenantID uint, chapter *model.Chapter) {
+	if s.plotPointRepo == nil || chapter.Content == "" {
+		return
+	}
+	pps, err := s.plotPointRepo.ListByNovel(chapter.NovelID, "", true) // unresolved only
+	if err != nil || len(pps) == 0 {
+		return
+	}
+	// 最多取前5条 foreshadow/conflict/twist 进行检查
+	var relevant []*model.PlotPoint
+	for _, pp := range pps {
+		if pp.Type == "foreshadow" || pp.Type == "conflict" || pp.Type == "twist" {
+			relevant = append(relevant, pp)
+		}
+		if len(relevant) >= 5 {
+			break
+		}
+	}
+	if len(relevant) == 0 {
+		return
+	}
+
+	// 构建精简 prompt
+	var sb strings.Builder
+	sb.WriteString("请分析以下章节内容摘录，判断哪些剧情线在本章中已明确解决（不再是悬念或未完结冲突）：\n\n")
+	sb.WriteString("【章节内容摘录】\n")
+	excerpt := []rune(chapter.Content)
+	if len(excerpt) > 2000 {
+		excerpt = excerpt[:2000]
+	}
+	sb.WriteString(string(excerpt))
+	sb.WriteString("\n\n【待检查的剧情线】\n")
+	for i, pp := range relevant {
+		sb.WriteString(fmt.Sprintf("%d. [%s] %s\n", i+1, pp.Type, pp.Description))
+	}
+	sb.WriteString("\n只返回在本章中明确解决的序号，以JSON格式：{\"resolved_indices\":[1,3]}\n")
+	sb.WriteString("若全部未解决则返回 {\"resolved_indices\":[]}")
+
+	result, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "plot_resolution_check", sb.String(), "")
+	if err != nil {
+		log.Printf("checkAndAutoResolvePlotPoints[%d]: AI error: %v", chapter.NovelID, err)
+		return
+	}
+
+	var resp struct {
+		ResolvedIndices []int `json:"resolved_indices"`
+	}
+	if err := json.Unmarshal([]byte(extractJSON(strings.TrimSpace(result))), &resp); err != nil {
+		return
+	}
+	for _, idx := range resp.ResolvedIndices {
+		if idx < 1 || idx > len(relevant) {
+			continue
+		}
+		pp := relevant[idx-1]
+		pp.IsResolved = true
+		pp.ResolvedIn = &chapter.ID
+		if err := s.plotPointRepo.Update(pp); err != nil {
+			log.Printf("checkAndAutoResolvePlotPoints: update pp#%d: %v", pp.ID, err)
+		} else {
+			desc := pp.Description
+			if len([]rune(desc)) > 40 {
+				desc = string([]rune(desc)[:40]) + "…"
+			}
+			log.Printf("postProcess[novel=%d ch=%d]: auto-resolved plot point #%d [%s]: %s",
+				chapter.NovelID, chapter.ChapterNo, pp.ID, pp.Type, desc)
+		}
+	}
 }
 
 // ──────────────────────────────────────────────
@@ -744,24 +829,45 @@ func (s *ChapterService) buildCharacterStateString(novelID uint) string {
 }
 
 func (s *ChapterService) buildForeshadowHints(novelID uint, chapterNo int) string {
-	if s.contextSvc == nil || s.contextSvc.foreshadowSvc == nil {
-		return ""
-	}
-	foreshadows, err := s.contextSvc.foreshadowSvc.CheckForeshadowStatus(novelID, chapterNo)
-	if err != nil {
-		return ""
-	}
 	var hints strings.Builder
 	count := 0
-	for _, fs := range foreshadows {
-		if !fs.IsFulfilled && chapterNo-fs.ChapterNo >= 3 {
-			hints.WriteString(fmt.Sprintf("- 请考虑回收伏笔：「%s」（第%d章埋设）\n", fs.Description, fs.ChapterNo))
-			count++
-			if count >= 3 {
-				break
+
+	// 来源1：旧伏笔系统（ForeshadowService）
+	if s.contextSvc != nil && s.contextSvc.foreshadowSvc != nil {
+		foreshadows, err := s.contextSvc.foreshadowSvc.CheckForeshadowStatus(novelID, chapterNo)
+		if err == nil {
+			for _, fs := range foreshadows {
+				if !fs.IsFulfilled && chapterNo-fs.ChapterNo >= 3 {
+					hints.WriteString(fmt.Sprintf("- 请考虑回收伏笔：「%s」（第%d章埋设）\n", fs.Description, fs.ChapterNo))
+					count++
+					if count >= 3 {
+						break
+					}
+				}
 			}
 		}
 	}
+
+	// 来源2：PlotPoint 表中未解决的伏笔与冲突（最多补充至5条）
+	if s.plotPointRepo != nil && count < 5 {
+		pps, err := s.plotPointRepo.ListByNovel(novelID, "", true) // unresolved only
+		if err == nil {
+			for _, pp := range pps {
+				if count >= 5 {
+					break
+				}
+				switch pp.Type {
+				case "foreshadow":
+					hints.WriteString(fmt.Sprintf("- 未回收伏笔：「%s」\n", pp.Description))
+					count++
+				case "conflict":
+					hints.WriteString(fmt.Sprintf("- 进行中的冲突：「%s」\n", pp.Description))
+					count++
+				}
+			}
+		}
+	}
+
 	return hints.String()
 }
 
@@ -923,6 +1029,7 @@ func (s *CharacterService) CreateCharacter(novelID uint, req *model.CreateCharac
 		UUID:        uuid.New().String(),
 		NovelID:     novelID,
 		Name:        req.Name,
+		Gender:      req.Gender,
 		Role:        req.Role,
 		Archetype:   req.Archetype,
 		Background:  req.Background,
@@ -948,6 +1055,9 @@ func (s *CharacterService) UpdateCharacter(id uint, req *model.UpdateCharacterRe
 	}
 	if req.Name != "" {
 		character.Name = req.Name
+	}
+	if req.Gender != "" {
+		character.Gender = req.Gender
 	}
 	if req.Role != "" {
 		character.Role = req.Role
@@ -1145,7 +1255,26 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 		return nil, fmt.Errorf("failed to load chapters: %w", err)
 	}
 
-	novelContext := collectContent(chapters, 3, 3000)
+	// 构建章节摘要文本（优先用摘要，最多 15 章，8000 字）
+	summariesText := buildChapterSummariesText(chapters, 15, 8000)
+	if summariesText == "" {
+		summariesText = collectContent(chapters, 5, 5000)
+	}
+
+	// 获取小说标题/类型（用于 prompt）
+	novelTitle := "本小说"
+	novelGenre := ""
+	if s.novelRepo != nil {
+		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+			novelTitle = novel.Title
+			novelGenre = novel.Genre
+		}
+	}
+	if summariesText == "" {
+		summariesText = fmt.Sprintf("这是一部%s类型的小说《%s》，请根据类型惯例设计主要角色。", novelGenre, novelTitle)
+	}
+
+	// 已有角色提示（防止重名/重复创建）
 	existingJSON := marshalExistingNames(existing, func(c *model.Character) any {
 		return struct {
 			Name string `json:"name"`
@@ -1153,34 +1282,32 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 		}{c.Name, c.Role}
 	})
 
-	var existingHint string
+	// 使用与分析流程相同的富格式 extract_characters.tmpl
+	tmplStr := loadPromptTemplate("extract_characters.tmpl")
+	// 在末尾追加已有角色提示，防止重名
 	if existingJSON != "" {
-		existingHint = "已有角色（必须使用完全相同的 name 字段，不得改名或创建重名角色）：\n" + existingJSON + "\n"
+		tmplStr += "\n\n注意：已有角色如下，必须复用原名，不得改名或重复创建：\n" + existingJSON
+	}
+	tmpl, err := template.New("extract_characters").Parse(tmplStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse extract_characters.tmpl: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, map[string]interface{}{
+		"NovelTitle": novelTitle,
+		"Genre":      novelGenre,
+		"Summaries":  summariesText,
+	}); err != nil {
+		return nil, fmt.Errorf("render extract_characters.tmpl: %w", err)
 	}
 
-	prompt := fmt.Sprintf(`请根据以下小说内容提取或补充主要角色，以 JSON 数组格式返回：
-[
-  {"name":"角色名","role":"protagonist/antagonist/supporting","appearance":"外貌描述","personality":"性格特点","background":"背景故事"}
-]
-%s规则：
-1. 已有角色必须保留原名，直接复用，不得改名。
-2. 仅当小说中出现了已有角色列表之外的重要角色时，才新增条目。
-3. 只返回 JSON 数组，不要添加任何说明文字。
-小说内容：%s`, existingHint, novelContext)
-
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "character_profile", prompt, "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_characters", buf.String(), "")
 	if err != nil {
 		return nil, fmt.Errorf("AI generation failed: %w", err)
 	}
 
-	var profiles []struct {
-		Name        string `json:"name"`
-		Role        string `json:"role"`
-		Appearance  string `json:"appearance"`
-		Personality string `json:"personality"`
-		Background  string `json:"background"`
-	}
-	if err := json.Unmarshal([]byte(extractJSON(result)), &profiles); err != nil {
+	var profiles []analysisCharJSON
+	if err := json.Unmarshal([]byte(extractJSON(strings.TrimSpace(result))), &profiles); err != nil {
 		log.Printf("CharacterService.AIBatchGenerate: parse error: %v, raw: %.200s", err, result)
 		return nil, fmt.Errorf("failed to parse AI response")
 	}
@@ -1190,36 +1317,74 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 		if p.Name == "" {
 			continue
 		}
-		if ch, ok := byName[p.Name]; ok {
-			req := &model.UpdateCharacterRequest{
-				Name: ch.Name, Role: ch.Role,
-				Appearance: ch.Appearance, Personality: ch.Personality, Background: ch.Background,
+		// 序列化可选字段
+		abilitiesJSON := ""
+		if len(p.Abilities) > 0 {
+			if b, err := json.Marshal(p.Abilities); err == nil {
+				abilitiesJSON = string(b)
 			}
-			var changed bool
-			if v, ok := fillIfEmpty(ch.Role, p.Role); ok { req.Role = v; changed = true }
-			if v, ok := fillIfEmpty(ch.Appearance, p.Appearance); ok { req.Appearance = v; changed = true }
-			if v, ok := fillIfEmpty(ch.Personality, p.Personality); ok { req.Personality = v; changed = true }
-			if v, ok := fillIfEmpty(ch.Background, p.Background); ok { req.Background = v; changed = true }
+		}
+		personalityTagsJSON := ""
+		if len(p.PersonalityTags) > 0 {
+			if b, err := json.Marshal(p.PersonalityTags); err == nil {
+				personalityTagsJSON = string(b)
+			}
+		}
+		dialogueStyleJSON := ""
+		if p.DialogueStyle.VocabularyLevel != "" || len(p.DialogueStyle.Patterns) > 0 {
+			if b, err := json.Marshal(p.DialogueStyle); err == nil {
+				dialogueStyleJSON = string(b)
+			}
+		}
+		visualDesignJSON := ""
+		if p.VisualPrompt != "" {
+			if b, err := json.Marshal(map[string]string{"image_prompt": p.VisualPrompt}); err == nil {
+				visualDesignJSON = string(b)
+			}
+		}
+		role := p.Role
+		if role != "protagonist" && role != "antagonist" && role != "supporting" {
+			role = "supporting"
+		}
+
+		if ch, ok := byName[p.Name]; ok {
+			// 更新现有角色：用 AI 数据填充空缺字段
+			changed := false
+			if v, ok := fillIfEmpty(ch.Role, role); ok { ch.Role = v; changed = true }
+			if v, ok := fillIfEmpty(ch.Archetype, p.Archetype); ok { ch.Archetype = v; changed = true }
+			if v, ok := fillIfEmpty(ch.Appearance, p.Appearance); ok { ch.Appearance = v; changed = true }
+			if v, ok := fillIfEmpty(ch.Personality, p.Personality); ok { ch.Personality = v; changed = true }
+			if v, ok := fillIfEmpty(ch.Background, p.Background); ok { ch.Background = v; changed = true }
+			if v, ok := fillIfEmpty(ch.CharacterArc, p.CharacterArc); ok { ch.CharacterArc = v; changed = true }
+			if v, ok := fillIfEmpty(ch.Abilities, abilitiesJSON); ok { ch.Abilities = v; changed = true }
+			if v, ok := fillIfEmpty(ch.PersonalityTags, personalityTagsJSON); ok { ch.PersonalityTags = v; changed = true }
+			if v, ok := fillIfEmpty(ch.DialogueStyle, dialogueStyleJSON); ok { ch.DialogueStyle = v; changed = true }
+			if v, ok := fillIfEmpty(ch.VisualDesign, visualDesignJSON); ok { ch.VisualDesign = v; changed = true }
 			if !changed {
 				upserted = append(upserted, ch)
 				continue
 			}
-			updated, err := s.UpdateCharacter(ch.ID, req)
-			if err != nil {
+			if err := s.characterRepo.Update(ch); err != nil {
 				log.Printf("CharacterService.AIBatchGenerate: update %s: %v", ch.Name, err)
 				continue
 			}
-			upserted = append(upserted, updated)
+			upserted = append(upserted, ch)
 		} else {
 			character := &model.Character{
-				UUID:        uuid.New().String(),
-				NovelID:     novelID,
-				Name:        p.Name,
-				Role:        p.Role,
-				Appearance:  p.Appearance,
-				Personality: p.Personality,
-				Background:  p.Background,
-				Status:      "active",
+				UUID:            uuid.New().String(),
+				NovelID:         novelID,
+				Name:            p.Name,
+				Role:            role,
+				Archetype:       p.Archetype,
+				Appearance:      p.Appearance,
+				Personality:     p.Personality,
+				PersonalityTags: personalityTagsJSON,
+				Background:      p.Background,
+				CharacterArc:    p.CharacterArc,
+				Abilities:       abilitiesJSON,
+				DialogueStyle:   dialogueStyleJSON,
+				VisualDesign:    visualDesignJSON,
+				Status:          "active",
 			}
 			if err := s.characterRepo.Create(character); err != nil {
 				log.Printf("CharacterService.AIBatchGenerate: create %s: %v", p.Name, err)
@@ -1229,6 +1394,112 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 		}
 	}
 	return upserted, nil
+}
+
+// AIExtractMinorChars 从单章内容中提取次要角色（role=minor），并写入 ChapterCharacter 关联
+func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint) ([]*model.Character, error) {
+	if s.chapterRepo == nil {
+		return nil, fmt.Errorf("chapter repository not configured")
+	}
+	chapter, err := s.chapterRepo.GetByID(chapterID)
+	if err != nil {
+		return nil, fmt.Errorf("chapter not found: %w", err)
+	}
+	content := chapter.Content
+	if content == "" {
+		content = chapter.Summary
+	}
+	if content == "" {
+		return nil, fmt.Errorf("chapter has no content")
+	}
+
+	novelTitle := "本小说"
+	novelGenre := ""
+	if s.novelRepo != nil {
+		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
+			novelTitle = novel.Title
+			novelGenre = novel.Genre
+		}
+	}
+
+	// 已有角色名列表，用于去重
+	existing, _ := s.characterRepo.ListByNovel(novelID)
+	existingNames := make([]string, 0, len(existing))
+	existingNameSet := make(map[string]bool, len(existing))
+	for _, c := range existing {
+		existingNames = append(existingNames, c.Name)
+		existingNameSet[strings.ToLower(c.Name)] = true
+	}
+
+	tmplStr := loadPromptTemplate("extract_minor_characters.tmpl")
+	tmpl, err := template.New("extract_minor_characters").Parse(tmplStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse template: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, map[string]interface{}{
+		"NovelTitle":    novelTitle,
+		"Genre":         novelGenre,
+		"ExistingNames": existingNames,
+		"Content":       content,
+	}); err != nil {
+		return nil, err
+	}
+
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_minor_characters", buf.String(), "")
+	if err != nil {
+		return nil, fmt.Errorf("AI extract minor chars: %w", err)
+	}
+
+	var chars []analysisCharJSON
+	cleaned := extractJSON(strings.TrimSpace(result))
+	if err := json.Unmarshal([]byte(cleaned), &chars); err != nil {
+		return nil, fmt.Errorf("parse minor chars JSON: %w", err)
+	}
+
+	var created []*model.Character
+	for _, c := range chars {
+		if c.Name == "" || existingNameSet[strings.ToLower(c.Name)] {
+			continue
+		}
+		visualDesign := ""
+		if c.VisualPrompt != "" {
+			if vd, e := json.Marshal(map[string]string{"image_prompt": c.VisualPrompt}); e == nil {
+				visualDesign = string(vd)
+			}
+		}
+		char := &model.Character{
+			NovelID:      novelID,
+			UUID:         uuid.New().String(),
+			Name:         c.Name,
+			Role:         "minor",
+			Archetype:    c.Archetype,
+			Appearance:   c.Appearance,
+			Personality:  c.Personality,
+			Background:   c.Background,
+			CharacterArc: c.CharacterArc,
+			VisualDesign: visualDesign,
+			Status:       "active",
+		}
+		if e := s.characterRepo.Create(char); e != nil {
+			log.Printf("CharacterService.AIExtractMinorChars: create %q: %v", c.Name, e)
+			continue
+		}
+		existingNameSet[strings.ToLower(c.Name)] = true
+		// 关联到章节
+		if s.chapterCharacterRepo != nil {
+			cc := &model.ChapterCharacter{
+				CharacterID: char.ID,
+				ChapterID:   chapterID,
+				NovelID:     novelID,
+			}
+			if e := s.chapterCharacterRepo.Upsert(cc); e != nil {
+				log.Printf("CharacterService.AIExtractMinorChars: link chapter %v: %v", chapterID, e)
+			}
+		}
+		created = append(created, char)
+	}
+	return created, nil
 }
 
 func (s *CharacterService) AnalyzeConsistency(id uint, images []string) (interface{}, error) {
@@ -1272,23 +1543,68 @@ func (s *ImageGenerationService) GenerateCharacterImage(req *model.GenerateImage
 
 // GenerateThreeViewImage 生成单个视角的角色三视图
 // viewType: "front" | "side" | "back"
+// gender: "male" | "female" | "neutral" | ""（空时不注入性别词）
 // referenceImage: 肖像参考图 URL（用于 IP-Adapter 保持面部一致性，可为空）
 // provider: 指定图像生成提供者（可为空，空时自动选择）
-func (s *ImageGenerationService) GenerateThreeViewImage(tenantID uint, name, appearance, viewType, style, referenceImage, provider string) (*GeneratedCharacterImage, error) {
+func (s *ImageGenerationService) GenerateThreeViewImage(tenantID uint, name, appearance, viewType, style, gender, referenceImage, provider string) (*GeneratedCharacterImage, error) {
+	// "角色设定参考图" 会被模型理解成"多视角设计总表"，导致单图出现多个人物，改用单视角描述词。
 	viewDesc := map[string]string{
-		"front": "正面，面朝前方，全身，角色设定参考图",
-		"side":  "侧面，侧身视角，全身，角色设定参考图",
-		"back":  "背面，背对观察者，全身，角色设定参考图",
+		"front": "正面站立，面朝镜头，全身",
+		"side":  "侧身站立，侧面朝向，全身",
+		"back":  "背对镜头站立，全身",
 	}
 	angleDesc, ok := viewDesc[viewType]
 	if !ok {
 		return nil, fmt.Errorf("invalid view type: %s", viewType)
 	}
-	styleStr := style
-	if styleStr == "" {
-		styleStr = "动漫"
+	genderDesc := map[string]string{
+		"male":    "男性",
+		"female":  "女性",
+		"neutral": "中性",
 	}
-	prompt := fmt.Sprintf("%s，%s，%s，%s风格，白色背景，线条清晰，高品质", name, appearance, angleDesc, styleStr)
+	genderStr := genderDesc[gender] // empty string if gender not set
+	// 将前端 image_style ID 映射为 AI 可理解的中文风格描述
+	styleDesc := map[string]string{
+		"anime":        "日系动漫插画",
+		"realistic":    "写实摄影",
+		"ink_painting": "水墨中国风插画",
+		"cyberpunk":    "赛博朋克风格插画",
+		"xianxia_style": "古典仙侠国风插画",
+		"oil_painting": "油画风格插画",
+		"watercolor":   "水彩插画",
+	}
+	styleStr := styleDesc[style]
+	if styleStr == "" {
+		if style != "" {
+			styleStr = style // 未知风格直接透传
+		} else {
+			styleStr = "日系动漫插画"
+		}
+	}
+
+	// 性别 token 放在提示词最前面以获得最高权重。
+	// 英文 booru 标签（1boy/1girl）对插画模型约束力最强；中文作为辅助。
+	genderTag := map[string]string{"male": "1boy", "female": "1girl"}[gender]
+	genderLeader := genderTag // prefix: "1boy" / "1girl" / ""
+	if genderStr != "" && genderLeader == "" {
+		genderLeader = genderStr // neutral: 用中文作前缀
+	}
+
+	var prompt string
+	if style == "realistic" {
+		// 写实：English terms 更有效
+		realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
+		prompt = fmt.Sprintf("%ssolo, 单人, 只有一个人物, %s, %s, %s, realistic photography, pure white background, detailed lighting, high quality portrait",
+			realisticGender, name, appearance, angleDesc)
+	} else {
+		if genderLeader != "" {
+			prompt = fmt.Sprintf("%s, solo, 单人, 只有一个人物，%s，%s，%s，%s风格，白色背景，线条清晰，高品质",
+				genderLeader, name, appearance, angleDesc, styleStr)
+		} else {
+			prompt = fmt.Sprintf("solo, 单人, 只有一个人物，%s，%s，%s，%s风格，白色背景，线条清晰，高品质",
+				name, appearance, angleDesc, styleStr)
+		}
+	}
 	// Only pass an absolute HTTP(S) URL to the AI — local/relative paths cannot be fetched by remote APIs.
 	aiRef := referenceImage
 	if !strings.HasPrefix(aiRef, "http://") && !strings.HasPrefix(aiRef, "https://") {
@@ -1299,7 +1615,17 @@ func (s *ImageGenerationService) GenerateThreeViewImage(tenantID uint, name, app
 	} else {
 		log.Printf("GenerateThreeViewImage: %s/%s no valid reference image", name, viewType)
 	}
-	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, prompt, aiRef, style)
+	// 负向提示词：始终禁止多人，再叠加性别排斥词
+	baseNeg := "multiple people, two people, duo, couple, group, 多人, 两人, 三人, 合照, nsfw, lowres, bad anatomy"
+	genderNeg := map[string]string{
+		"male":   "female, girl, woman, 女性, 女生, 裙子, 长裙, 女装, feminine, she, her",
+		"female": "male, man, boy, 男性, 男生, 胡须, beard, mustache, masculine, he, him",
+	}[gender]
+	negativePrompt := baseNeg
+	if genderNeg != "" {
+		negativePrompt = baseNeg + ", " + genderNeg
+	}
+	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, prompt, aiRef, style, negativePrompt)
 	if err != nil {
 		return nil, err
 	}
@@ -1623,7 +1949,9 @@ func (s *ModelService) seedProviderModel(provider *model.ModelProvider) {
 }
 
 // SeedAllProviders seeds AIModel rows for every existing provider that has an
-// api_version set but no matching model row yet. Call once at startup.
+// api_version set but no matching model row yet. Also fixes existing rows that
+// were created with is_available=false due to a prior bug in CreateModel.
+// Call once at startup.
 func (s *ModelService) SeedAllProviders() {
 	providers, err := s.providerRepo.List()
 	if err != nil {
@@ -1631,6 +1959,18 @@ func (s *ModelService) SeedAllProviders() {
 	}
 	for _, p := range providers {
 		s.seedProviderModel(p)
+	}
+	// One-time fix: activate any manually-created models that have is_active=true
+	// but is_available=false (created before the bug was fixed).
+	all, err := s.modelRepo.List(nil)
+	if err != nil {
+		return
+	}
+	for _, m := range all {
+		if m.IsActive && !m.IsAvailable {
+			m.IsAvailable = true
+			_ = s.modelRepo.Update(m)
+		}
 	}
 }
 
@@ -1686,6 +2026,10 @@ func (s *ModelService) UpdateProvider(id uint, tenantID uint, req *model.UpdateM
 		return nil, err
 	}
 	s.seedProviderModel(provider)
+	// 清除缓存，使下次调用重新从 DB 加载最新凭据
+	if s.aiService != nil {
+		s.aiService.InvalidateProviderCache(provider.Name)
+	}
 	return provider, nil
 }
 
@@ -1698,7 +2042,14 @@ func (s *ModelService) DeleteProvider(id uint, tenantID uint) error {
 	if provider.TenantID != tenantID {
 		return fmt.Errorf("cannot delete system-level provider")
 	}
-	return s.providerRepo.Delete(id)
+	if err := s.providerRepo.Delete(id); err != nil {
+		return err
+	}
+	// 清除缓存，防止已删除的提供商被继续使用
+	if s.aiService != nil {
+		s.aiService.InvalidateProviderCache(provider.Name)
+	}
+	return nil
 }
 
 func (s *ModelService) TestProvider(id uint, tenantID uint) (interface{}, error) {
@@ -1742,6 +2093,7 @@ func (s *ModelService) CreateModel(req *model.CreateAIModelRequest) (*model.AIMo
 		MaxTokens:     req.MaxTokens,
 		CostPer1K:     req.CostPer1K,
 		IsActive:      true,
+		IsAvailable:   true,
 	}
 	return m, s.modelRepo.Create(m)
 }

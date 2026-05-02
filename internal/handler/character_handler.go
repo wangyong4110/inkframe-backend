@@ -21,6 +21,7 @@ import (
 func characterToUpdateReq(c *model.Character) *model.UpdateCharacterRequest {
 	return &model.UpdateCharacterRequest{
 		Name:           c.Name,
+		Gender:         c.Gender,
 		Role:           c.Role,
 		Archetype:      c.Archetype,
 		Appearance:     c.Appearance,
@@ -47,6 +48,7 @@ func characterResponse(c *model.Character) gin.H {
 		"novel_id":         c.NovelID,
 		"uuid":             c.UUID,
 		"name":             c.Name,
+		"gender":           c.Gender,
 		"role":             c.Role,
 		"archetype":        c.Archetype,
 		"appearance":       c.Appearance,
@@ -332,7 +334,10 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 			wg.Add(1)
 			go func(v string) {
 				defer wg.Done()
-				img, err := h.imageGenService.GenerateThreeViewImage(tenantID, char.Name, char.Appearance, v, style, char.Portrait, provider)
+				// 三视图是"按文字描述定义角色外观"，不传参考图，
+			// 让 Text2ImgV3/PortraitPhoto 完全由外貌描述+性别驱动。
+			// Portrait 仅用于视频帧生成（帧间一致性）。
+			img, err := h.imageGenService.GenerateThreeViewImage(tenantID, char.Name, char.Appearance, v, style, char.Gender, "", provider)
 				if err != nil {
 					resultCh <- viewResult{view: v, err: err}
 					return
@@ -637,6 +642,31 @@ func (h *CharacterHandler) DeleteChapterCharacter(c *gin.Context) {
 		return
 	}
 	respondOK(c, nil)
+}
+
+// AIExtractMinorCharacters POST /novels/:id/chapters/:chapter_no/characters/ai-extract
+func (h *CharacterHandler) AIExtractMinorCharacters(c *gin.Context) {
+	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid novel id")
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+	chapter, err := h.chapterSvc.GetChapterByNo(uint(novelID), chapterNo)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	chars, err := h.characterService.AIExtractMinorChars(getTenantID(c), uint(novelID), chapter.ID)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to extract minor characters: "+err.Error())
+		return
+	}
+	respondOK(c, gin.H{"characters": chars, "count": len(chars)})
 }
 
 // PreviewVoice 试听角色声音

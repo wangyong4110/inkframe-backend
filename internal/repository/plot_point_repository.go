@@ -57,6 +57,32 @@ func (r *PlotPointRepository) ListByNovel(novelID uint, ppType string, onlyUnres
 	return pps, nil
 }
 
+func (r *PlotPointRepository) ListByNovelPaged(novelID uint, ppType string, onlyUnresolved bool, page, pageSize int) ([]*model.PlotPoint, int64, error) {
+	q := r.db.Model(&model.PlotPoint{}).Where("novel_id = ?", novelID)
+	if ppType != "" {
+		q = q.Where("type = ?", ppType)
+	}
+	if onlyUnresolved {
+		q = q.Where("is_resolved = ?", false)
+	}
+	var total int64
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 {
+		pageSize = 20
+	}
+	var pps []*model.PlotPoint
+	offset := (page - 1) * pageSize
+	if err := q.Order("chapter_id ASC, created_at ASC").Offset(offset).Limit(pageSize).Find(&pps).Error; err != nil {
+		return nil, 0, err
+	}
+	return pps, total, nil
+}
+
 func (r *PlotPointRepository) BatchCreate(pps []*model.PlotPoint) error {
 	if len(pps) == 0 {
 		return nil
