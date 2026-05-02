@@ -730,6 +730,9 @@ func (s *GenerationContextService) generateGlobalSummary(ctx *GenerationContext)
 		if ctx.Novel.Worldview.Geography != "" {
 			sb.WriteString(fmt.Sprintf("地理环境：%s\n", ctx.Novel.Worldview.Geography))
 		}
+		if ctx.Novel.Worldview.CheatSystem != "" {
+			sb.WriteString(fmt.Sprintf("金手指/系统：%s\n", ctx.Novel.Worldview.CheatSystem))
+		}
 	}
 
 	sb.WriteString("\n【主要角色】\n")

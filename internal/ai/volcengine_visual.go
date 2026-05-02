@@ -178,6 +178,10 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 		params["prompt"] = req.Prompt
 		params["width"] = width
 		params["height"] = height
+		// scale 参数控制特征保持强度（范围 1-10），由 CFGScale 传入
+		if req.CFGScale > 0 {
+			params["scale"] = req.CFGScale
+		}
 		p.setImageInput(params, req.ReferenceImage, "image_urls", "binary_data_base64")
 
 	case VolcModelImageEffect:

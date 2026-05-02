@@ -16,6 +16,7 @@ type AIQualityScores struct {
 	Character   float64  `json:"character"`
 	Writing     float64  `json:"writing"`
 	Pacing      float64  `json:"pacing"`
+	Dramatic    float64  `json:"dramatic"` // 戏剧性：冲突密度、反转次数、悬念收尾质量
 	Issues      []string `json:"issues"`
 	Suggestions []string `json:"suggestions"`
 }
@@ -60,6 +61,10 @@ func (s *QualityControlService) runAIQualityCheck(chapter *model.Chapter, novel 
 2. character（角色一致性）：角色行为是否符合其性格设定
 3. writing（文笔质量）：语言是否生动，描写是否细腻，是否有重复词汇
 4. pacing（节奏把控）：场景切换是否流畅，节奏是否合理，有无张力
+5. dramatic（戏剧性）：综合评估以下三项 ——
+   - 冲突密度：主角是否遭遇阻碍/意外/对立，还是一路顺畅？（有阻碍得高分）
+   - 反转次数：是否出现期待落空或局势骤变？（平铺直叙得低分）
+   - 悬念收尾：章节结尾是否留下未解答的问题/威胁/情感钩子？（平淡收场得低分）
 
 %s
 章节标题：%s
@@ -67,10 +72,10 @@ func (s *QualityControlService) runAIQualityCheck(chapter *model.Chapter, novel 
 %s
 
 请只返回以下JSON格式，不要包含任何markdown或说明文字：
-{"logic":8,"character":7,"writing":9,"pacing":8,"issues":["问题1","问题2"],"suggestions":["建议1","建议2"]}`,
+{"logic":8,"character":7,"writing":9,"pacing":8,"dramatic":7,"issues":["问题1","问题2"],"suggestions":["建议1","建议2"]}`,
 		novelInfo, chapter.Title, contentPreview)
 
-	result, err := s.aiSvc.GenerateWithProvider(0, 0, "quality_check", prompt, s.aiSvc.taskRouting.QualityCheck)
+	result, err := s.aiSvc.GenerateWithProvider(novel.TenantID, novel.ID, "quality_check", prompt, s.aiSvc.taskRouting.QualityCheck)
 	if err != nil {
 		return nil, fmt.Errorf("AI quality check failed: %w", err)
 	}
@@ -91,6 +96,7 @@ type QualityReport struct {
 	QualityScore     float64        `json:"quality_score"`
 	LogicScore       float64        `json:"logic_score"`
 	StyleScore       float64        `json:"style_score"`
+	DramaticScore    float64        `json:"dramatic_score"` // 戏剧性评分
 	Issues           []QualityIssue `json:"issues"`
 	Suggestions      []string       `json:"suggestions"`
 }
@@ -125,6 +131,7 @@ func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter
 		report.ConsistencyScore = aiScores.Character / 10.0
 		report.QualityScore = aiScores.Writing / 10.0
 		report.StyleScore = aiScores.Pacing / 10.0
+		report.DramaticScore = aiScores.Dramatic / 10.0
 
 		// 将 AI 发现的问题加入报告
 		for _, issue := range aiScores.Issues {
@@ -142,14 +149,16 @@ func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter
 		report.QualityScore = s.calcQualityScore(chapter)
 		report.LogicScore = 0.7 // 规则无法检查逻辑，给中性分
 		report.StyleScore = s.calcStyleScore(chapter)
+		report.DramaticScore = s.calcDramaticScore(chapter)
 
 		report.Issues = append(report.Issues, s.checkConsistency(chapter)...)
 		report.Issues = append(report.Issues, s.checkQuality(chapter)...)
 		report.Issues = append(report.Issues, s.checkStyle(chapter)...)
+		report.Issues = append(report.Issues, s.checkDramatic(chapter)...)
 	}
 
-	// 计算综合总分（加权平均）
-	report.OverallScore = (report.LogicScore*0.3 + report.ConsistencyScore*0.25 + report.QualityScore*0.25 + report.StyleScore*0.2)
+	// 计算综合总分（加权平均）: Logic 25% + Consistency 20% + Quality 20% + Style 15% + Dramatic 20%
+	report.OverallScore = report.LogicScore*0.25 + report.ConsistencyScore*0.20 + report.QualityScore*0.20 + report.StyleScore*0.15 + report.DramaticScore*0.20
 	if report.OverallScore > 1.0 {
 		report.OverallScore = 1.0
 	}
@@ -270,6 +279,116 @@ func (s *QualityControlService) checkStyle(chapter *model.Chapter) []QualityIssu
 	return issues
 }
 
+// conflictKeywords 表示冲突/阻碍/意外的关键词
+var conflictKeywords = []string{
+	"但是", "然而", "却", "不料", "没想到", "出乎意料", "意外", "突然改变",
+	"失败", "阻碍", "阻止", "拦截", "发现问题", "出了差错", "计划落空",
+	"不对", "不妙", "危险", "威胁", "陷阱", "背叛",
+}
+
+// calcDramaticScore 基于规则计算戏剧性分数
+func (s *QualityControlService) calcDramaticScore(chapter *model.Chapter) float64 {
+	if chapter.Content == "" {
+		return 0.5
+	}
+	score := 0.5
+	content := chapter.Content
+	totalRunes := len([]rune(content))
+
+	// 1. 冲突密度：冲突关键词出现频率
+	conflictCount := 0
+	for _, kw := range conflictKeywords {
+		conflictCount += strings.Count(content, kw)
+	}
+	if totalRunes > 0 {
+		density := float64(conflictCount) / float64(totalRunes) * 1000 // 每千字冲突词数
+		if density >= 3 {
+			score += 0.2
+		} else if density >= 1.5 {
+			score += 0.1
+		} else if density < 0.5 {
+			score -= 0.15 // 冲突密度过低
+		}
+	}
+
+	// 2. 悬念收尾：检查结尾段落
+	paragraphs := strings.Split(strings.TrimSpace(content), "\n")
+	lastPara := ""
+	for i := len(paragraphs) - 1; i >= 0; i-- {
+		p := strings.TrimSpace(paragraphs[i])
+		if len([]rune(p)) >= 10 {
+			lastPara = p
+			break
+		}
+	}
+	hookIndicators := []string{"?", "？", "……", "...", "不知", "会不会", "什么", "为什么", "难道", "竟然", "不可能"}
+	hasHook := false
+	for _, ind := range hookIndicators {
+		if strings.Contains(lastPara, ind) {
+			hasHook = true
+			break
+		}
+	}
+	if hasHook {
+		score += 0.15
+	} else {
+		score -= 0.1 // 平淡收场扣分
+	}
+
+	// 3. 顺序陈述检测：连续"然后/接着/于是"的线性推进
+	sequentialCount := strings.Count(content, "然后") + strings.Count(content, "于是") + strings.Count(content, "接着")
+	if totalRunes > 0 {
+		seqDensity := float64(sequentialCount) / float64(totalRunes) * 1000
+		if seqDensity > 3 {
+			score -= 0.15 // 顺序陈述过多
+		}
+	}
+
+	if score > 1.0 {
+		score = 1.0
+	}
+	if score < 0 {
+		score = 0
+	}
+	return score
+}
+
+func (s *QualityControlService) checkDramatic(chapter *model.Chapter) []QualityIssue {
+	issues := []QualityIssue{}
+	if chapter.Content == "" {
+		return issues
+	}
+
+	conflictCount := 0
+	for _, kw := range conflictKeywords {
+		conflictCount += strings.Count(chapter.Content, kw)
+	}
+	totalRunes := len([]rune(chapter.Content))
+	if totalRunes > 1000 {
+		density := float64(conflictCount) / float64(totalRunes) * 1000
+		if density < 1.0 {
+			issues = append(issues, QualityIssue{
+				Type:        "dramatic",
+				Severity:    "medium",
+				Description: "冲突密度不足：章节中阻碍/意外/对立情节偏少，情节推进过于顺畅",
+				Suggestion:  "建议在主角行动推进中插入意外阻碍、信息反转或对立角色的干扰",
+			})
+		}
+	}
+
+	sequentialCount := strings.Count(chapter.Content, "然后") + strings.Count(chapter.Content, "于是") + strings.Count(chapter.Content, "接着")
+	if sequentialCount > 8 {
+		issues = append(issues, QualityIssue{
+			Type:        "dramatic",
+			Severity:    "low",
+			Description: fmt.Sprintf("顺序叙述过多：「然后/于是/接着」出现%d次，情节推进缺乏波折", sequentialCount),
+			Suggestion:  "建议将部分线性段落改写为因果冲突或内心挣扎",
+		})
+	}
+
+	return issues
+}
+
 func (s *QualityControlService) generateQualitySuggestions(report *QualityReport) []string {
 	seen := map[string]bool{}
 	suggestions := []string{}
@@ -281,6 +400,12 @@ func (s *QualityControlService) generateQualitySuggestions(report *QualityReport
 			seen[sg] = true
 			suggestions = append(suggestions, sg)
 		}
+	}
+
+	// Append dramatic-specific suggestions
+	if report.DramaticScore < 0.6 && !seen["建议增加情节冲突和反转"] {
+		seen["建议增加情节冲突和反转"] = true
+		suggestions = append(suggestions, "建议增加情节冲突和反转：在主角顺利推进时插入意外阻碍，结尾留下悬念钩子")
 	}
 
 	// Append summary based on score
@@ -310,6 +435,12 @@ func (s *QualityControlService) RefineWithSuggestions(chapterID uint, suggestion
 		return chapter.Content, nil
 	}
 
+	// Resolve tenant ID from the chapter's novel.
+	var tenantID uint
+	if novel, err := s.novelRepo.GetByID(chapter.NovelID); err == nil {
+		tenantID = novel.TenantID
+	}
+
 	var sb strings.Builder
 	for i, sg := range suggestions {
 		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, sg))
@@ -323,7 +454,7 @@ func (s *QualityControlService) RefineWithSuggestions(chapterID uint, suggestion
 原始内容：
 %s`, sb.String(), chapter.Content)
 
-	result, err := s.aiSvc.GenerateWithProvider(0, 0, "quality_check", prompt, "")
+	result, err := s.aiSvc.GenerateWithProvider(tenantID, chapter.NovelID, "quality_check", prompt, "")
 	if err != nil {
 		return "", fmt.Errorf("AI refine failed: %w", err)
 	}

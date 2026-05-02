@@ -27,11 +27,21 @@ func (h *ModelHandler) ListProviders(c *gin.Context) {
 		return
 	}
 
-	// Mask API keys before returning
+	// Mask API keys and annotate has_key before returning
+	type providerView struct {
+		*model.ModelProvider
+		HasKey bool `json:"has_key"`
+	}
 	if list, ok := providers.([]*model.ModelProvider); ok {
-		for _, p := range list {
+		views := make([]providerView, len(list))
+		for i, p := range list {
+			hasKey := providerHasCredentialsRaw(p)
 			p.APIKey = maskAPIKey(p.APIKey)
+			p.APISecretKey = maskAPIKey(p.APISecretKey)
+			views[i] = providerView{p, hasKey}
 		}
+		respondOK(c, views)
+		return
 	}
 
 	respondOK(c, providers)
@@ -234,10 +244,7 @@ func (h *ModelHandler) DeleteModel(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-	})
+	respondOK(c, nil)
 }
 
 // TestModel 测试模型

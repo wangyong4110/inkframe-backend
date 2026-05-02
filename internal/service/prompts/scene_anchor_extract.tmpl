@@ -1,0 +1,33 @@
+You are a visual scene analyst for the novel "{{.NovelTitle}}".
+
+Your task: extract all visually distinct, recurring scenes from the chapter content below that have strong visual identity and can serve as consistent visual anchors across multiple shots.
+
+{{if .ExistingAnchors}}
+Already registered scene anchors (do NOT duplicate these):
+{{range .ExistingAnchors}}- {{.Name}}: {{.Description}}
+{{end}}
+{{end}}
+
+Chapter content:
+---
+{{.ChapterContent}}
+---
+
+Rules:
+1. Only extract scenes that appear (or are clearly referenced) in the chapter content above.
+2. Each scene must have a unique, recognizable visual identity (architecture, lighting, atmosphere).
+3. Skip generic/temporary locations with no visual distinctiveness.
+4. Output ONLY a valid JSON array, no markdown fences, no explanation.
+5. Use English for description and prompt_lock fields (for image generation compatibility).
+6. type must be one of: interior, exterior, imaginary
+
+Output format (JSON array):
+[
+  {
+    "name": "Scene name in Chinese (2-8 chars)",
+    "type": "interior|exterior|imaginary",
+    "description": "English visual description of the scene (architecture, scale, key features, 1-2 sentences)",
+    "prompt_lock": "Comma-separated English image generation keywords that must appear in every image of this scene",
+    "style_tokens": "Comma-separated style tags (e.g. ancient_chinese, dimly_lit, misty)"
+  }
+]

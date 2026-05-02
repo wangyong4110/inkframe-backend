@@ -13,6 +13,11 @@
 - 情感基调：{{.EmotionalTone}}
 - 章末钩子类型：{{.HookType}}
 
+{{if .PlotTensionState}}
+# 当前张力状态（必须参考）
+{{.PlotTensionState}}
+{{end}}
+
 # 上一章结尾状态
 {{.PreviousChapterEnding}}
 
@@ -25,6 +30,13 @@
 {{.ForeshadowHints}}
 {{end}}
 
+# 张力设计规则（强制执行）
+1. **张力不得单调**：各场景 tension 值必须有变化，不允许所有场景值相同或差值<2
+2. **反转要求**：至少1个场景的 tension_direction 为 "reversal"（期待被打破/局势骤变）
+3. **舒适区禁令**：主角不得在本章内顺利完成核心目标，至少出现一次意外阻碍或代价
+4. **信息不对称**：至少1个场景中某角色拥有其他人不知道的关键信息，制造潜在冲突
+5. **章末必须更危险**：最后一个场景的张力值必须 ≥ 第一个场景，读者读完后处境更紧迫
+
 # 场景大纲输出要求
 请输出 3-5 个场景，每个场景包含：
 - scene_no: 场景序号（1、2、3...）
@@ -36,6 +48,7 @@
 - key_beats: 场景关键节拍（3-5个动作/对话/内心活动，每条20字内）
 - closing_beat: 场景如何收场/过渡到下一场景
 - emotional_shift: 情绪变化（如：紧张→释然、平静→震惊）
+- tension_direction: 张力方向（rising/peak/falling/reversal）
 - pov_character: 视角人物
 - tension: 本场景张力值（1-10）
 
@@ -62,6 +75,7 @@
       "key_beats": ["节拍1", "节拍2", "节拍3"],
       "closing_beat": "收场/过渡描述",
       "emotional_shift": "情绪变化",
+      "tension_direction": "rising/peak/falling/reversal",
       "pov_character": "视角人物",
       "tension": 5
     }

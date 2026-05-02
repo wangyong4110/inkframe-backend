@@ -187,6 +187,21 @@ func (s *NovelService) UpdateNovel(id uint, req *model.UpdateNovelRequest) (*mod
 	if req.StylePrompt != "" {
 		novel.StylePrompt = req.StylePrompt
 	}
+	if req.VideoType != "" {
+		novel.VideoType = req.VideoType
+	}
+	if req.VideoResolution != "" {
+		novel.VideoResolution = req.VideoResolution
+	}
+	if req.VideoFPS != nil {
+		novel.VideoFPS = *req.VideoFPS
+	}
+	if req.VideoAspectRatio != "" {
+		novel.VideoAspectRatio = req.VideoAspectRatio
+	}
+	if req.CharConsistencyWeight != nil {
+		novel.CharConsistencyWeight = *req.CharConsistencyWeight
+	}
 	if err := s.novelRepo.Update(novel); err != nil {
 		return nil, err
 	}
@@ -651,6 +666,9 @@ func (s *NovelService) buildChapterPrompt(novel *model.Novel, req *GenerateChapt
 		if novel.Worldview.Culture != "" {
 			sb.WriteString(fmt.Sprintf("文化背景：%s\n", novel.Worldview.Culture))
 		}
+		if novel.Worldview.CheatSystem != "" {
+			sb.WriteString(fmt.Sprintf("金手指/系统：%s\n", novel.Worldview.CheatSystem))
+		}
 		sb.WriteString("\n")
 	}
 
@@ -1029,6 +1047,34 @@ func (s *AIService) callAIWithProvider(tenantID uint, prompt string, config *mod
 	return resp.Content, nil
 }
 
+// generateJSONForTenant 带 tenantID 的 JSON 生成重试（最多重试 maxRetries 次）
+func (s *AIService) generateJSONForTenant(tenantID, novelID uint, taskType, prompt string, maxRetries int) (string, error) {
+	if maxRetries <= 0 {
+		maxRetries = 2
+	}
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		p := prompt
+		if attempt > 0 {
+			p = prompt + "\n\n⚠️ 重要提示：请只返回纯 JSON，不要包含任何 markdown 代码块（```）或说明文字。"
+			log.Printf("generateJSONForTenant: attempt %d for taskType=%s, novelID=%d", attempt+1, taskType, novelID)
+		}
+		result, err := s.GenerateWithProvider(tenantID, novelID, taskType, p, "")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		cleaned := extractJSON(result)
+		var v interface{}
+		if jsonErr := json.Unmarshal([]byte(cleaned), &v); jsonErr == nil {
+			return cleaned, nil
+		}
+		lastErr = fmt.Errorf("invalid JSON on attempt %d: %s", attempt+1, cleaned[:min(100, len(cleaned))])
+		log.Printf("generateJSONForTenant: %v", lastErr)
+	}
+	return "", fmt.Errorf("generateJSONForTenant failed after %d attempts: %w", maxRetries+1, lastErr)
+}
+
 // generateWithRetry 带容错重试的 JSON 生成（最多重试 2 次）
 func (s *AIService) generateWithRetry(novelID uint, taskType, prompt string, maxRetries int) (string, error) {
 	if maxRetries <= 0 {
@@ -1158,27 +1204,45 @@ var knownImageCapableProviders = []ai.ImageProviderEntry{
 	{ProviderName: "volcengine-visual", Model: ai.VolcModelText2ImgV3, Size: "1328x1328"},
 }
 
-// selectImageModel returns the model to use for the given entry. When a reference image
-// is provided for volcengine-visual, DreamO (which supports reference images) is used
-// instead of the default text-to-image model.
-func selectImageModel(entry ai.ImageProviderEntry, referenceImage string) string {
-	if referenceImage != "" && entry.ProviderName == ai.ProviderNameVolcengineVisual {
-		return ai.VolcModelDreamO
+// selectImageModel returns the model to use for the given entry.
+// For volcengine-visual: referenceImage → DreamO; style=="realistic" → PortraitPhoto.
+// selectImageModel 根据提供者、参考图、风格和一致性权重选择合适的图像生成模型。
+// consistencyWeight: 0-1，≥0.7 使用 DreamO（角色特征保持），<0.7 使用 SeedEditV3（指令编辑）
+func selectImageModel(entry ai.ImageProviderEntry, referenceImage, style string, consistencyWeight ...float64) string {
+	if entry.ProviderName == ai.ProviderNameVolcengineVisual {
+		if referenceImage != "" {
+			weight := 1.0
+			if len(consistencyWeight) > 0 && consistencyWeight[0] > 0 {
+				weight = consistencyWeight[0]
+			}
+			if weight >= 0.7 {
+				return ai.VolcModelDreamO
+			}
+			return ai.VolcModelSeedEditV3
+		}
+		if style == "realistic" {
+			return ai.VolcModelPortraitPhoto
+		}
 	}
 	return entry.Model
 }
 
-// GenerateCharacterThreeView 使用图像生成 API 生成角色视图图像。
-// 优先使用启动时注册的静态图像提供者；若无静态注册（仅通过 DB 配置），则按
-// knownImageCapableProviders 依次从 DB 动态加载提供者尝试。
-// tenantID=0 表示使用系统级配置。
-// providerName 非空时强制使用该提供者（不再遍历其他候选）。
-// referenceImage 非空时作为参考图传给提供者（用于角色一致性控制）。
-// 失败时返回空字符串 + error，调用方应将其视为非致命错误。
-func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uint, providerName, prompt, referenceImage string) (string, error) {
+// GenerateCharacterThreeView 使用图像生成 API 生成角色/场景视图图像。
+// style: 图片风格（"realistic"/"anime"/"ink_painting" 等），影响 Volcengine 模型选择。
+// 空字符串表示使用提供者默认模型。
+// consistencyWeight（可选）: 0-1，角色一致性强度；默认 1.0（严格）。
+//   ≥0.7 → DreamO（角色特征保持），<0.7 → SeedEditV3（指令编辑，scale 线性映射 1-10）
+func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uint, providerName, prompt, referenceImage, style string, consistencyWeight ...float64) (string, error) {
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
 	}
+
+	weight := 1.0
+	if len(consistencyWeight) > 0 && consistencyWeight[0] > 0 {
+		weight = consistencyWeight[0]
+	}
+	// SeedEditV3 的 scale 参数范围 1-10；以 weight 线性映射
+	cfgScale := 1.0 + weight*9.0
 
 	// 指定提供者时：直接加载并调用，不走遍历逻辑
 	if providerName != "" {
@@ -1211,10 +1275,12 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 			}
 		}
 		resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
-			Model:          selectImageModel(*entry, referenceImage),
-			Prompt:         prompt,
-			Size:           entry.Size,
-			ReferenceImage: referenceImage,
+			Model:             selectImageModel(*entry, referenceImage, style, weight),
+			Prompt:            prompt,
+			Size:              entry.Size,
+			ReferenceImage:    referenceImage,
+			CFGScale:          cfgScale,
+			ConsistencyWeight: weight,
 		})
 		if err != nil {
 			return "", err
@@ -1252,10 +1318,12 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 			continue
 		}
 		resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
-			Model:          selectImageModel(e, referenceImage),
-			Prompt:         prompt,
-			Size:           e.Size,
-			ReferenceImage: referenceImage,
+			Model:             selectImageModel(e, referenceImage, style, weight),
+			Prompt:            prompt,
+			Size:              e.Size,
+			ReferenceImage:    referenceImage,
+			CFGScale:          cfgScale,
+			ConsistencyWeight: weight,
 		})
 		if err != nil {
 			lastErr = err
@@ -1523,6 +1591,12 @@ type VideoService struct {
 	consistencyService *CharacterConsistencyService
 	bgmService         *BGMService
 	storageSvc         storage.Service
+	sceneAnchorSvc     *SceneAnchorService
+}
+
+func (s *VideoService) WithSceneAnchorService(svc *SceneAnchorService) *VideoService {
+	s.sceneAnchorSvc = svc
+	return s
 }
 
 func NewVideoService(
@@ -1577,6 +1651,9 @@ func (s *VideoService) CreateVideoFromChapter(novelID uint, chapterID *uint) (*m
 		Resolution:  "1080p",
 		AspectRatio: "16:9",
 	}
+	if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+		video.TenantID = novel.TenantID
+	}
 
 	if err := s.videoRepo.Create(video); err != nil {
 		return nil, err
@@ -1591,7 +1668,8 @@ func (s *VideoService) CreateVideo(novelID uint, req *model.CreateVideoRequest) 
 }
 
 // GenerateStoryboard 生成分镜
-func (s *VideoService) GenerateStoryboard(videoID uint, provider string, chapterIDOverride ...*uint) ([]*model.StoryboardShot, error) {
+// userPrompt: 用户自定义提示词（可选），将追加到系统 prompt 之后
+func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt string, chapterIDOverride ...*uint) ([]*model.StoryboardShot, error) {
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
 		return nil, err
@@ -1615,7 +1693,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider string, chapter
 	}
 
 	// 构建分镜提示词
-	prompt := s.buildStoryboardPrompt(video, content)
+	prompt := s.buildStoryboardPrompt(video, content, userPrompt)
 
 	// 获取租户 ID（供 getTenantProvider 查租户私有配置）
 	var tenantID uint
@@ -1631,6 +1709,14 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider string, chapter
 
 	// 解析分镜（传入 chapterID，供每个 shot 继承）
 	shots := s.parseStoryboardResult(videoID, chapterID, result)
+
+	// 场景锚点自动匹配：按 shot.Location 名称匹配已注册的场景锚点
+	// 避免 SceneAnchorID 永远为 nil，使锚点注入逻辑真正生效
+	if s.sceneAnchorSvc != nil {
+		s.autoMatchShotAnchors(shots, video.NovelID)
+	}
+	// 角色自动关联：按 shot.Characters JSON 中的名称匹配小说角色
+	s.autoMatchShotCharacters(shots, video.NovelID)
 
 	// 删除旧分镜，再插入新分镜（避免 uk_video_shot 唯一键冲突）
 	if err := s.storyboardRepo.DeleteByVideoID(videoID); err != nil {
@@ -1650,8 +1736,116 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider string, chapter
 	return shots, nil
 }
 
+// autoMatchShotAnchors 按场景名称自动将分镜绑定到场景锚点（模糊匹配 scene.location）
+// 这样无需前端手动调用 SetShotAnchor，锚点注入即可在视频生成时自动生效。
+func (s *VideoService) autoMatchShotAnchors(shots []*model.StoryboardShot, novelID uint) {
+	anchors, err := s.sceneAnchorSvc.ListByNovel(novelID)
+	if err != nil || len(anchors) == 0 {
+		return
+	}
+	// 构建名称→ID映射（小写，方便模糊匹配）
+	anchorMap := make(map[string]uint, len(anchors))
+	for _, a := range anchors {
+		anchorMap[strings.ToLower(a.Name)] = a.ID
+	}
+	for _, shot := range shots {
+		if shot.SceneAnchorID != nil {
+			continue // 已手动绑定，不覆盖
+		}
+		// shot.Scene 是 JSON: {"location":"...","time_of_day":"..."}
+		loc := extractLocationFromScene(shot.Scene)
+		if loc == "" {
+			// 降级：从 Description 中做关键词匹配
+			loc = shot.Description
+		}
+		loc = strings.ToLower(loc)
+		if loc == "" {
+			continue
+		}
+		// 精确匹配优先，其次包含匹配
+		if id, ok := anchorMap[loc]; ok {
+			id := id
+			shot.SceneAnchorID = &id
+			continue
+		}
+		for name, id := range anchorMap {
+			if strings.Contains(loc, name) || strings.Contains(name, loc) {
+				id := id
+				shot.SceneAnchorID = &id
+				break
+			}
+		}
+	}
+}
+
+// autoMatchShotCharacters 按 shot.Characters JSON 中的名称匹配小说角色，写入 CharacterIDs
+// 已有 CharacterIDs 时不覆盖（保留手动绑定结果）。
+func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, novelID uint) {
+	chars, err := s.characterRepo.ListByNovel(novelID)
+	if err != nil || len(chars) == 0 {
+		return
+	}
+	// 构建 小写名→ID map
+	nameMap := make(map[string]uint, len(chars))
+	for _, c := range chars {
+		nameMap[strings.ToLower(c.Name)] = c.ID
+	}
+	for _, shot := range shots {
+		if len(shot.CharacterIDs) > 0 {
+			continue // 已手动绑定，不覆盖
+		}
+		// shot.Characters = JSON array: [{"name":"...","expression":"...","pose":"..."}]
+		var shotChars []struct {
+			Name string `json:"name"`
+		}
+		if shot.Characters == "" {
+			continue
+		}
+		if err := json.Unmarshal([]byte(shot.Characters), &shotChars); err != nil {
+			continue
+		}
+		var matched model.JSONUintSlice
+		seen := make(map[uint]bool)
+		for _, sc := range shotChars {
+			nameLower := strings.ToLower(sc.Name)
+			if id, ok := nameMap[nameLower]; ok {
+				if !seen[id] {
+					matched = append(matched, id)
+					seen[id] = true
+				}
+				continue
+			}
+			// 模糊匹配
+			for name, id := range nameMap {
+				if strings.Contains(nameLower, name) || strings.Contains(name, nameLower) {
+					if !seen[id] {
+						matched = append(matched, id)
+						seen[id] = true
+					}
+					break
+				}
+			}
+		}
+		if len(matched) > 0 {
+			shot.CharacterIDs = matched
+		}
+	}
+}
+
+// extractLocationFromScene 从 shot.Scene JSON 中提取 location 字符串
+func extractLocationFromScene(sceneJSON string) string {
+	if sceneJSON == "" {
+		return ""
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(sceneJSON), &m); err != nil {
+		return ""
+	}
+	return m["location"]
+}
+
 // buildStoryboardPrompt 构建分镜提示词（含截断保护和角色信息）
-func (s *VideoService) buildStoryboardPrompt(video *model.Video, content string) string {
+func (s *VideoService) buildStoryboardPrompt(video *model.Video, content, userPrompt string) string {
 	var sb strings.Builder
 
 	sb.WriteString("你是一名专业分镜师。请根据以下内容生成分镜脚本，以JSON数组格式返回。\n\n")
@@ -1675,6 +1869,18 @@ func (s *VideoService) buildStoryboardPrompt(video *model.Video, content string)
 		}
 	}
 
+	// 注入已命名场景，帮助 LLM 输出可匹配的 location
+	if s.sceneAnchorSvc != nil && video.NovelID > 0 {
+		anchors, _ := s.sceneAnchorSvc.ListByNovel(video.NovelID)
+		if len(anchors) > 0 {
+			sb.WriteString("【已命名场景（location字段请从以下名称中选择）】\n")
+			for _, a := range anchors {
+				sb.WriteString(fmt.Sprintf("- %s: %s\n", a.Name, a.Description))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
 	if content != "" {
 		sb.WriteString("【章节内容】\n")
 		// 截断保护：最多 6000 字符
@@ -1682,6 +1888,13 @@ func (s *VideoService) buildStoryboardPrompt(video *model.Video, content string)
 			content = content[:6000] + "…（已截断）"
 		}
 		sb.WriteString(content)
+		sb.WriteString("\n\n")
+	}
+
+	// 注入用户自定义提示词
+	if userPrompt != "" {
+		sb.WriteString("【用户额外要求】\n")
+		sb.WriteString(userPrompt)
 		sb.WriteString("\n\n")
 	}
 
@@ -1854,7 +2067,11 @@ func (s *VideoService) CreateVideoFromReq(novelID uint, req *model.CreateVideoRe
 		AspectRatio: req.AspectRatio,
 		ArtStyle:    req.ArtStyle,
 		QualityTier: req.QualityTier,
+		Mode:        req.Mode,
 		Status:      "planning",
+	}
+	if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+		video.TenantID = novel.TenantID
 	}
 	if video.FrameRate == 0 {
 		video.FrameRate = 24
@@ -1869,14 +2086,19 @@ func (s *VideoService) CreateVideoFromReq(novelID uint, req *model.CreateVideoRe
 		video.QualityTier = "preview"
 	}
 	if video.Mode == "" {
-		video.Mode = "video"
+		video.Mode = "slideshow"
 	}
 	return video, s.videoRepo.Create(video)
 }
 
-// GetVideo 获取视频
+// GetVideo 获取视频（内部调用，无租户隔离）
 func (s *VideoService) GetVideo(id uint) (*model.Video, error) {
 	return s.videoRepo.GetByID(id)
+}
+
+// GetVideoByTenant 获取视频（带租户隔离，防止越权访问）
+func (s *VideoService) GetVideoByTenant(id, tenantID uint) (*model.Video, error) {
+	return s.videoRepo.GetByIDAndTenant(id, tenantID)
 }
 
 // ListVideos 获取视频列表
@@ -1908,6 +2130,9 @@ func (s *VideoService) UpdateVideo(id uint, req *model.UpdateVideoRequest) (*mod
 	}
 	if req.ScriptStatus != "" {
 		video.ScriptStatus = req.ScriptStatus
+	}
+	if req.Mode != "" {
+		video.Mode = req.Mode
 	}
 	return video, s.videoRepo.Update(video)
 }
@@ -2028,6 +2253,16 @@ func (s *VideoService) UpdateShot(id uint, req *model.StoryboardShot) (*model.St
 	return shot, s.storyboardRepo.Update(shot)
 }
 
+// SetShotCharacters 手动设置分镜的角色绑定
+func (s *VideoService) SetShotCharacters(shotID uint, ids []uint) error {
+	shot, err := s.storyboardRepo.GetByID(shotID)
+	if err != nil {
+		return err
+	}
+	shot.CharacterIDs = model.JSONUintSlice(ids)
+	return s.storyboardRepo.Update(shot)
+}
+
 // GenerateSingleShot 触发单个分镜生成（异步）
 func (s *VideoService) GetShotByID(videoID, shotID uint) (*model.StoryboardShot, error) {
 	shot, err := s.storyboardRepo.GetByID(shotID)
@@ -2052,17 +2287,42 @@ func (s *VideoService) GenerateSingleShot(videoID, shotID uint, provider ...stri
 	if shot.VideoID != videoID {
 		return nil, fmt.Errorf("shot %d does not belong to video %d", shotID, videoID)
 	}
+
+	// Resolve provider and aspect ratio from novel project config (caller override wins)
+	effectiveProvider := ""
+	if len(provider) > 0 {
+		effectiveProvider = provider[0]
+	}
+	aspectRatio := video.AspectRatio
+	if video.NovelID > 0 && s.novelRepo != nil {
+		if novel, nErr := s.novelRepo.GetByID(video.NovelID); nErr == nil {
+			if effectiveProvider == "" && novel.VideoModel != "" {
+				effectiveProvider = novel.VideoModel
+			}
+			if aspectRatio == "" && novel.VideoAspectRatio != "" {
+				aspectRatio = novel.VideoAspectRatio
+			}
+		}
+	}
+
 	shot.Status = "generating"
 	s.storyboardRepo.Update(shot) //nolint:errcheck
-	go func() {
-		if err := s.GenerateShotVideo(shot, video.AspectRatio, provider...); err != nil {
-			log.Printf("GenerateSingleShot: shot %d failed: %v", shot.ShotNo, err)
-		}
-	}()
-	return shot, nil
+	if video.Mode == "slideshow" {
+		return shot, s.GenerateSlideshowShotVideo(shot, aspectRatio)
+	}
+	// AI 视频模式：若没有可用的视频提供商，自动降级为图片解说模式
+	if len(s.videoProviders) == 0 {
+		log.Printf("GenerateSingleShot: no video provider available, falling back to slideshow for shot %d (video %d)", shotID, videoID)
+		return shot, s.GenerateSlideshowShotVideo(shot, aspectRatio)
+	}
+	return shot, s.GenerateShotVideo(shot, aspectRatio, effectiveProvider)
 }
 
-// BatchGenerateShots 批量触发指定分镜生成（异步）
+// maxConcurrentShots 限制同时提交给视频提供商的并发数，防止触发 API 429
+const maxConcurrentShots = 3
+
+// BatchGenerateShots 批量触发指定分镜生成（同步等待所有完成，支持并发限制）
+// 图片解说模式(Mode=="slideshow")只生成图片，不生成 Ken Burns 短片。
 func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityTierOverride string, provider ...string) ([]*model.StoryboardShot, error) {
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
@@ -2071,7 +2331,27 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 	if qualityTierOverride != "" {
 		video.QualityTier = qualityTierOverride
 	}
+
+	// Resolve effective provider and aspect ratio from novel config
+	effectiveProvider := ""
+	if len(provider) > 0 {
+		effectiveProvider = provider[0]
+	}
+	aspectRatio := video.AspectRatio
+	if video.NovelID > 0 && s.novelRepo != nil {
+		if novel, nErr := s.novelRepo.GetByID(video.NovelID); nErr == nil {
+			if effectiveProvider == "" && novel.VideoModel != "" {
+				effectiveProvider = novel.VideoModel
+			}
+			if aspectRatio == "" && novel.VideoAspectRatio != "" {
+				aspectRatio = novel.VideoAspectRatio
+			}
+		}
+	}
+
 	var queued []*model.StoryboardShot
+	sem := make(chan struct{}, maxConcurrentShots)
+	var wg sync.WaitGroup
 	for _, sid := range shotIDs {
 		shot, err := s.storyboardRepo.GetByID(sid)
 		if err != nil || shot.VideoID != videoID {
@@ -2080,12 +2360,22 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 		shot.Status = "generating"
 		s.storyboardRepo.Update(shot) //nolint:errcheck
 		queued = append(queued, shot)
+		sem <- struct{}{}
+		wg.Add(1)
 		go func(sh *model.StoryboardShot) {
-			if err := s.GenerateShotVideo(sh, video.AspectRatio, provider...); err != nil {
-				log.Printf("BatchGenerateShots: shot %d failed: %v", sh.ShotNo, err)
+			defer func() { <-sem; wg.Done() }()
+			var genErr error
+			if video.Mode == "slideshow" || len(s.videoProviders) == 0 {
+				genErr = s.GenerateSlideshowShotVideo(sh, aspectRatio)
+			} else {
+				genErr = s.GenerateShotVideo(sh, aspectRatio, effectiveProvider)
+			}
+			if genErr != nil {
+				log.Printf("BatchGenerateShots: shot %d failed: %v", sh.ShotNo, genErr)
 			}
 		}(shot)
 	}
+	wg.Wait()
 	return queued, nil
 }
 
@@ -2175,9 +2465,24 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) st
 		return ""
 	}
 
-	// 通过 ChapterID 找到 NovelID，然后取第一个有肖像的角色作为 IP-Adapter 参考
+	// 精准匹配：先从 shot.CharacterIDs 中查找角色 Portrait/ThreeViewFront
 	var characterPortrait string
-	if shot.ChapterID != nil {
+	for _, id := range shot.CharacterIDs {
+		char, err := s.characterRepo.GetByID(id)
+		if err != nil {
+			continue
+		}
+		if char.Portrait != "" {
+			characterPortrait = char.Portrait
+			break
+		}
+		if char.ThreeViewFront != "" {
+			characterPortrait = char.ThreeViewFront
+			break
+		}
+	}
+	// 降级：通过 ChapterID 找到 NovelID，取第一个有肖像的角色
+	if characterPortrait == "" && shot.ChapterID != nil {
 		chapter, err := s.chapterRepo.GetByID(*shot.ChapterID)
 		if err == nil && chapter != nil {
 			chars, err := s.characterRepo.ListByNovel(chapter.NovelID)
@@ -2197,30 +2502,55 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) st
 		promptText = shot.Description
 	}
 
-	imgReq := &ai.ImageGenerateRequest{
-		Prompt:         promptText,
-		NegativePrompt: shot.NegativePrompt,
-		Size:           "1280x720",
-		CFGScale:       7.0,
-		ReferenceImage: characterPortrait, // IP-Adapter 参考
+	// 场景锚点：注入锁定词，使用锚点参考图替代角色图（布景优先于人物）
+	var sceneRefImage string
+	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
+		if fragment, refURL, err := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); err == nil {
+			if fragment != "" {
+				promptText = fragment + ", " + promptText
+			}
+			sceneRefImage = refURL
+		}
+	}
+	refImage := characterPortrait
+	if sceneRefImage != "" {
+		refImage = sceneRefImage
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	provider, err := s.aiService.aiManager.GetProvider("")
-	if err != nil {
-		log.Printf("generateShotReferenceImage: get provider failed: %v", err)
-		return ""
+	// 获取视频的 ArtStyle、TenantID 和角色一致性权重
+	artStyle := ""
+	var tenantID uint
+	charConsistencyWeight := 1.0 // 默认严格一致
+	if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil {
+		artStyle = video.ArtStyle
+		tenantID = video.TenantID
+		if video.NovelID > 0 && s.novelRepo != nil {
+			if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil {
+				if tenantID == 0 {
+					tenantID = novel.TenantID
+				}
+				if novel.CharConsistencyWeight > 0 {
+					charConsistencyWeight = novel.CharConsistencyWeight
+				}
+			}
+		}
 	}
 
-	resp, err := provider.ImageGenerate(ctx, imgReq)
-	if err != nil || resp == nil || resp.URL == "" {
+	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", promptText, refImage, artStyle, charConsistencyWeight)
+	if err != nil || imageURL == "" {
 		log.Printf("generateShotReferenceImage: image gen failed for shot %d: %v", shot.ShotNo, err)
 		return ""
 	}
 
-	return resp.URL
+	// 首图锁定：场景锚点无参考图时，将本次生成结果存为参考图
+	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
+		s.sceneAnchorSvc.AutoSetRefImage(*shot.SceneAnchorID, imageURL) //nolint:errcheck
+	}
+
+	return imageURL
 }
 
 // extractLastFrame 使用 FFmpeg 提取视频最后一帧，返回本地 jpeg 路径
@@ -2277,10 +2607,22 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		}
 	}
 
+	// 场景锚点：将锁定词注入视频生成 prompt
+	videoPrompt := shot.Prompt
+	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
+		if fragment, _, err := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); err == nil && fragment != "" {
+			videoPrompt = fragment + ", " + videoPrompt
+		}
+	}
+
+	shotDuration := shot.Duration
+	if shotDuration <= 0 {
+		shotDuration = 5
+	}
 	req := &ai.VideoGenerateRequest{
-		Prompt:         shot.Prompt,
+		Prompt:         videoPrompt,
 		NegativePrompt: shot.NegativePrompt,
-		Duration:       5,
+		Duration:       shotDuration,
 		AspectRatio:    videoAspectRatio,
 		ImageURL:       referenceImage, // image-to-video（空时退化为 text-to-video）
 	}
@@ -2703,9 +3045,16 @@ func (s *VideoService) generateKenBurnsClip(shot *model.StoryboardShot, localIma
 	}
 
 	outPath := fmt.Sprintf("/tmp/inkframe-slideshow-%d-%d.mp4", shot.ID, time.Now().UnixNano())
-	vf := fmt.Sprintf("scale=8000:-1,%s,scale=%s,setsar=1", zoompan, resolution)
+	// pre-scale to 2x output resolution — zoompan 只需输入略大于输出，8000 过大极慢
+	preScale := "3840:-1"
+	if aspectRatio == "9:16" {
+		preScale = "2160:-1"
+	}
+	vf := fmt.Sprintf("scale=%s,%s,scale=%s,setsar=1", preScale, zoompan, resolution)
 
-	cmd := exec.Command("ffmpeg", "-y",
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ffmpeg", "-y",
 		"-loop", "1",
 		"-t", fmt.Sprintf("%.2f", duration),
 		"-i", localImagePath,
@@ -2713,6 +3062,7 @@ func (s *VideoService) generateKenBurnsClip(shot *model.StoryboardShot, localIma
 		"-c:v", "libx264",
 		"-pix_fmt", "yuv420p",
 		"-r", fmt.Sprintf("%d", fps),
+		"-threads", "0",
 		outPath,
 	)
 	var stderr bytes.Buffer
@@ -2723,7 +3073,7 @@ func (s *VideoService) generateKenBurnsClip(shot *model.StoryboardShot, localIma
 	return outPath, nil
 }
 
-// GenerateSlideshowShotVideo 为单个分镜生成图片+Ken Burns短片（图片解说模式）
+// GenerateSlideshowShotVideo 为单个分镜生成图片并应用 Ken Burns 动效（图片解说模式）
 func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, aspectRatio string) error {
 	duration := shot.Duration
 	if duration <= 0 {
@@ -2738,7 +3088,8 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	imageURL := s.generateShotReferenceImage(shot)
 	if imageURL == "" {
 		shot.Status = "failed"
-		return s.storyboardRepo.Update(shot)
+		s.storyboardRepo.Update(shot) //nolint:errcheck
+		return fmt.Errorf("image generation failed for shot %d (no image providers configured or API error)", shot.ShotNo)
 	}
 	shot.ImageURL = imageURL
 
@@ -2747,16 +3098,18 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	if err != nil {
 		log.Printf("GenerateSlideshowShotVideo: download image failed for shot %d: %v", shot.ShotNo, err)
 		shot.Status = "failed"
-		return s.storyboardRepo.Update(shot)
+		s.storyboardRepo.Update(shot) //nolint:errcheck
+		return fmt.Errorf("download image failed for shot %d: %w", shot.ShotNo, err)
 	}
 	defer os.Remove(localImage)
 
-	// 3. Ken Burns 动效
+	// 3. Ken Burns 动效（缓慢推拉/平移，让静态图更生动）
 	clipPath, err := s.generateKenBurnsClip(shot, localImage, duration, aspectRatio)
 	if err != nil {
 		log.Printf("GenerateSlideshowShotVideo: ken burns failed for shot %d: %v", shot.ShotNo, err)
 		shot.Status = "failed"
-		return s.storyboardRepo.Update(shot)
+		s.storyboardRepo.Update(shot) //nolint:errcheck
+		return fmt.Errorf("ken burns effect failed for shot %d: %w", shot.ShotNo, err)
 	}
 
 	shot.ClipPath = "file://" + clipPath
@@ -2804,7 +3157,7 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 		return err
 	}
 
-	// 图片解说模式：异步处理图片+Ken Burns，完成后自动拼接
+	// 图片解说模式：异步生成图片，完成后自动拼接
 	if video.Mode == "slideshow" {
 		shots, err := s.storyboardRepo.ListByVideoAndStatus(videoID, "pending")
 		if err != nil || len(shots) == 0 {

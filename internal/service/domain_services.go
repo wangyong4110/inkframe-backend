@@ -80,6 +80,9 @@ type ChapterService struct {
 	aiService     *AIService
 	contextSvc    *GenerationContextService
 	narrativeSvc  *NarrativeMemoryService // 层次化记忆 + 摘要 + 标题 + 精修
+	hookSvc       *HookChainService
+	spSvc         *SatisfactionPointService
+	arcSvc        *ConflictArcService
 }
 
 func NewChapterService(
@@ -102,9 +105,22 @@ func (s *ChapterService) WithNarrativeMemory(svc *NarrativeMemoryService) *Chapt
 	return s
 }
 
+// WithDramaticServices 注入戏剧张力服务（可选）
+func (s *ChapterService) WithDramaticServices(hookSvc *HookChainService, spSvc *SatisfactionPointService, arcSvc *ConflictArcService) *ChapterService {
+	s.hookSvc = hookSvc
+	s.spSvc = spSvc
+	s.arcSvc = arcSvc
+	return s
+}
+
 // GetDefaultProviderName 返回默认 AI provider 名称
 func (s *ChapterService) GetDefaultProviderName() string {
 	return s.aiService.GetDefaultProviderName()
+}
+
+// syncNovelStats refreshes chapter_count and total_words on the novel (best-effort).
+func (s *ChapterService) syncNovelStats(novelID uint) {
+	_ = s.novelRepo.SyncStats(novelID)
 }
 
 func (s *ChapterService) CreateChapter(novelID uint, req *model.CreateChapterRequest) (*model.Chapter, error) {
@@ -117,7 +133,11 @@ func (s *ChapterService) CreateChapter(novelID uint, req *model.CreateChapterReq
 		WordCount: countChineseChars(req.Content),
 		Status:    "completed",
 	}
-	return chapter, s.chapterRepo.Create(chapter)
+	if err := s.chapterRepo.Create(chapter); err != nil {
+		return nil, err
+	}
+	s.syncNovelStats(novelID)
+	return chapter, nil
 }
 
 func (s *ChapterService) GetChapter(id uint) (*model.Chapter, error) {
@@ -151,11 +171,25 @@ func (s *ChapterService) UpdateChapter(id uint, req *model.UpdateChapterRequest)
 		return nil, err
 	}
 	applyChapterUpdate(chapter, req)
-	return chapter, s.chapterRepo.Update(chapter)
+	if err := s.chapterRepo.Update(chapter); err != nil {
+		return nil, err
+	}
+	if req.Content != "" {
+		s.syncNovelStats(chapter.NovelID)
+	}
+	return chapter, nil
 }
 
 func (s *ChapterService) DeleteChapter(id uint) error {
-	return s.chapterRepo.Delete(id)
+	chapter, err := s.chapterRepo.GetByID(id)
+	if err != nil {
+		return s.chapterRepo.Delete(id)
+	}
+	if err := s.chapterRepo.Delete(id); err != nil {
+		return err
+	}
+	s.syncNovelStats(chapter.NovelID)
+	return nil
 }
 
 func (s *ChapterService) GetChapterByNo(novelID uint, chapterNo int) (*model.Chapter, error) {
@@ -168,7 +202,13 @@ func (s *ChapterService) UpdateChapterByNo(novelID uint, chapterNo int, req *mod
 		return nil, err
 	}
 	applyChapterUpdate(chapter, req)
-	return chapter, s.chapterRepo.Update(chapter)
+	if err := s.chapterRepo.Update(chapter); err != nil {
+		return nil, err
+	}
+	if req.Content != "" {
+		s.syncNovelStats(novelID)
+	}
+	return chapter, nil
 }
 
 // GenerateChapterOutline 用 AI 为指定章节生成大纲（概述性文字，非场景 JSON）
@@ -232,7 +272,11 @@ func (s *ChapterService) DeleteChapterByNo(novelID uint, chapterNo int) error {
 	if err != nil {
 		return err
 	}
-	return s.chapterRepo.Delete(chapter.ID)
+	if err := s.chapterRepo.Delete(chapter.ID); err != nil {
+		return err
+	}
+	s.syncNovelStats(novelID)
+	return nil
 }
 
 // GenerateChapter 专业级章节生成流水线：
@@ -314,6 +358,8 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 			return nil, err
 		}
 	}
+
+	s.syncNovelStats(novelID)
 
 	// ── Step 5: 异步后处理 ───────────────────────────────
 	go s.postProcessChapter(tenantID, chapter, novel)
@@ -409,6 +455,37 @@ func (s *ChapterService) generateSceneOutline(
 	// 获取角色列表
 	characters := s.getCharactersForPrompt(novelID)
 
+	// 获取剧情张力状态（供场景大纲决策参考）
+	plotTensionState := ""
+	if s.narrativeSvc != nil {
+		plotTensionState = s.narrativeSvc.BuildPlotTensionStateText(novelID, req.ChapterNo)
+	}
+	// 注入戏剧上下文（钩子链、爽点、冲突弧）
+	if s.hookSvc != nil {
+		if ctx := s.hookSvc.GetInjectionContext(novelID, req.ChapterNo); ctx != "" {
+			if plotTensionState != "" {
+				plotTensionState += "\n\n"
+			}
+			plotTensionState += ctx
+		}
+	}
+	if s.spSvc != nil {
+		if ctx := s.spSvc.GetInjectionContext(novelID, req.ChapterNo); ctx != "" {
+			if plotTensionState != "" {
+				plotTensionState += "\n\n"
+			}
+			plotTensionState += ctx
+		}
+	}
+	if s.arcSvc != nil {
+		if ctx := s.arcSvc.GetInjectionContext(novelID, req.ChapterNo); ctx != "" {
+			if plotTensionState != "" {
+				plotTensionState += "\n\n"
+			}
+			plotTensionState += ctx
+		}
+	}
+
 	hookType := meta.hookType
 	if hookType == "" {
 		if req.IsStandalone {
@@ -456,6 +533,7 @@ func (s *ChapterService) generateSceneOutline(
 		"Characters":            characters,
 		"ForeshadowHints":       foreshadowHints,
 		"CharacterStates":       charStateStr,
+		"PlotTensionState":      plotTensionState,
 	}); err != nil {
 		log.Printf("GenerateChapter: execute scene_outline.tmpl: %v", err)
 		return "", ""
@@ -925,6 +1003,9 @@ func (s *CharacterService) UpdateCharacter(id uint, req *model.UpdateCharacterRe
 	if req.VoiceStyle != "" {
 		character.VoiceStyle = req.VoiceStyle
 	}
+	if req.VoiceLanguage != "" {
+		character.VoiceLanguage = req.VoiceLanguage
+	}
 	if req.VoiceSample != "" {
 		character.VoiceSample = req.VoiceSample
 	}
@@ -1218,7 +1299,7 @@ func (s *ImageGenerationService) GenerateThreeViewImage(tenantID uint, name, app
 	} else {
 		log.Printf("GenerateThreeViewImage: %s/%s no valid reference image", name, viewType)
 	}
-	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, prompt, aiRef)
+	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, prompt, aiRef, style)
 	if err != nil {
 		return nil, err
 	}
@@ -1238,12 +1319,12 @@ func NewStoryboardService(videoService *VideoService, aiService *AIService) *Sto
 	return &StoryboardService{videoService: videoService, aiService: aiService}
 }
 
-func (s *StoryboardService) GenerateStoryboard(videoID, chapterID uint, characters []string, style, provider string) (interface{}, error) {
+func (s *StoryboardService) GenerateStoryboard(videoID, chapterID uint, characters []string, style, provider, userPrompt string) (interface{}, error) {
 	var chapterIDPtr *uint
 	if chapterID != 0 {
 		chapterIDPtr = &chapterID
 	}
-	shots, err := s.videoService.GenerateStoryboard(videoID, provider, chapterIDPtr)
+	shots, err := s.videoService.GenerateStoryboard(videoID, provider, userPrompt, chapterIDPtr)
 	if err != nil {
 		return nil, err
 	}
@@ -1502,6 +1583,57 @@ func (s *ModelService) GetProvider(id uint, tenantID uint) (*model.ModelProvider
 	return s.providerRepo.GetByIDAndTenant(id, tenantID)
 }
 
+// suitableTasksForProviderType returns the JSON suitable_tasks array for a provider type.
+func suitableTasksForProviderType(providerType string) string {
+	switch strings.ToLower(providerType) {
+	case "image":
+		return `["image_gen"]`
+	case "video":
+		return `["video_gen"]`
+	case "embedding":
+		return `["embedding"]`
+	case "voice", "tts":
+		return `["voice_gen"]`
+	default: // "llm" and anything unrecognised
+		return `["chapter"]`
+	}
+}
+
+// seedProviderModel upserts a default AIModel row for the given provider if api_version is set.
+func (s *ModelService) seedProviderModel(provider *model.ModelProvider) {
+	if provider.APIVersion == "" {
+		return
+	}
+	tasks := suitableTasksForProviderType(provider.Type)
+	existing, _ := s.modelRepo.List(&provider.ID)
+	for _, m := range existing {
+		if m.Name == provider.APIVersion {
+			return // already seeded
+		}
+	}
+	m := &model.AIModel{
+		ProviderID:    provider.ID,
+		Name:          provider.APIVersion,
+		DisplayName:   provider.APIVersion,
+		SuitableTasks: tasks,
+		IsActive:      true,
+		IsAvailable:   true,
+	}
+	_ = s.modelRepo.Create(m)
+}
+
+// SeedAllProviders seeds AIModel rows for every existing provider that has an
+// api_version set but no matching model row yet. Call once at startup.
+func (s *ModelService) SeedAllProviders() {
+	providers, err := s.providerRepo.List()
+	if err != nil {
+		return
+	}
+	for _, p := range providers {
+		s.seedProviderModel(p)
+	}
+}
+
 func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, tenantID uint) (*model.ModelProvider, error) {
 	provider := &model.ModelProvider{
 		TenantID:     tenantID,
@@ -1514,7 +1646,11 @@ func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, ten
 		APIVersion:   req.APIVersion,
 		IsActive:     req.IsActive,
 	}
-	return provider, s.providerRepo.Create(provider)
+	if err := s.providerRepo.Create(provider); err != nil {
+		return nil, err
+	}
+	s.seedProviderModel(provider)
+	return provider, nil
 }
 
 func (s *ModelService) UpdateProvider(id uint, tenantID uint, req *model.UpdateModelProviderRequest) (*model.ModelProvider, error) {
@@ -1546,7 +1682,11 @@ func (s *ModelService) UpdateProvider(id uint, tenantID uint, req *model.UpdateM
 	if req.IsActive != nil {
 		provider.IsActive = *req.IsActive
 	}
-	return provider, s.providerRepo.Update(provider)
+	if err := s.providerRepo.Update(provider); err != nil {
+		return nil, err
+	}
+	s.seedProviderModel(provider)
+	return provider, nil
 }
 
 func (s *ModelService) DeleteProvider(id uint, tenantID uint) error {
@@ -1843,7 +1983,8 @@ func (s *WorldviewService) GenerateWorldview(tenantID uint, novelID uint, genre 
   "history": "世界历史背景，包括重大历史事件、时代更迭、上古传说、现存历史遗留问题",
   "culture": "世界的文化风俗，包括种族/文明构成、宗教信仰、礼仪习俗、价值观念",
   "technology": "世界的科技/炼器/阵法水平，与修炼体系的关系，普通人与修炼者的生活差异",
-  "rules": "世界运行的核心规则与禁忌，包括天道法则、禁术禁地、不可违背的世界规律"
+  "rules": "世界运行的核心规则与禁忌，包括天道法则、禁术禁地、不可违背的世界规律",
+  "cheat_system": "主角金手指/系统描述（可选，无则留空）：系统名称、核心功能、等级/点数机制、触发条件"
 }`
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, 0, "worldview", prompt, "")
@@ -1860,6 +2001,7 @@ func (s *WorldviewService) GenerateWorldview(tenantID uint, novelID uint, genre 
 		Culture     string `json:"culture"`
 		Technology  string `json:"technology"`
 		Rules       string `json:"rules"`
+		CheatSystem string `json:"cheat_system"`
 	}
 	if err := json.Unmarshal([]byte(extractJSON(result)), &data); err != nil {
 		log.Printf("GenerateWorldview: failed to parse AI response: %v, raw: %.300s", err, result)
@@ -1881,6 +2023,7 @@ func (s *WorldviewService) GenerateWorldview(tenantID uint, novelID uint, genre 
 		Culture:     data.Culture,
 		Technology:  data.Technology,
 		Rules:       data.Rules,
+		CheatSystem: data.CheatSystem,
 	}, nil
 }
 

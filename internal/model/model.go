@@ -1,10 +1,43 @@
 package model
 
 import (
+	"database/sql/driver"
 	"encoding/json"
+	"fmt"
 	"gorm.io/gorm"
 	"time"
 )
+
+// JSONUintSlice 存储为 JSON 字符串，序列化为 JSON 数组（供 character_ids 等字段使用）
+type JSONUintSlice []uint
+
+func (s JSONUintSlice) Value() (driver.Value, error) {
+	if len(s) == 0 {
+		return "[]", nil
+	}
+	b, err := json.Marshal([]uint(s))
+	return string(b), err
+}
+
+func (s *JSONUintSlice) Scan(value interface{}) error {
+	*s = nil
+	if value == nil {
+		return nil
+	}
+	var str string
+	switch v := value.(type) {
+	case []byte:
+		str = string(v)
+	case string:
+		str = v
+	default:
+		return fmt.Errorf("JSONUintSlice: unsupported type %T", value)
+	}
+	if str == "" || str == "null" || str == "[]" {
+		return nil
+	}
+	return json.Unmarshal([]byte(str), s)
+}
 
 // AsyncTask 统一异步任务（DB 持久化，页面刷新后仍可恢复）
 type AsyncTask struct {
@@ -111,6 +144,13 @@ type Novel struct {
 	// 风格配置
 	ImageStyle     string `json:"image_style" gorm:"size:50"`       // 视觉/图片风格，如 anime/realistic/ink_painting
 	ReferenceStyle string `json:"reference_style" gorm:"type:text"` // 参考作品（书名、URL 或描述）
+
+	// 视频生成配置
+	VideoType              string  `json:"video_type" gorm:"size:20;default:'animation'"`      // 视频类型：narration(图片解说)/animation(动画)
+	VideoResolution        string  `json:"video_resolution" gorm:"size:20;default:'1080p'"`    // 分辨率：720p/1080p/4K
+	VideoFPS               int     `json:"video_fps" gorm:"default:30"`                        // 帧率：24/30/60
+	VideoAspectRatio       string  `json:"video_aspect_ratio" gorm:"size:10;default:'16:9'"`   // 宽高比：16:9/9:16/1:1/4:3
+	CharConsistencyWeight  float64 `json:"char_consistency_weight" gorm:"type:decimal(3,2);default:1.0"` // 角色一致性权重 0-1
 
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`
@@ -223,6 +263,9 @@ type Worldview struct {
 	// 约束规则
 	Rules string `json:"rules" gorm:"type:text"`
 
+	// 金手指/系统（可选）
+	CheatSystem string `json:"cheat_system" gorm:"type:text"`
+
 	// 扩展世界观元素
 	Factions            string `json:"factions" gorm:"type:text"`             // 势力格局
 	CoreConflicts       string `json:"core_conflicts" gorm:"type:text"`       // 核心矛盾
@@ -315,10 +358,11 @@ type Character struct {
 	CoverImage string `json:"cover_image" gorm:"size:500"`
 
 	// 配音设置
-	VoiceID     string  `json:"voice_id" gorm:"size:100"`                         // 声音ID/名称（如 alloy/echo/nova 等）
-	VoiceSpeed  float64 `json:"voice_speed" gorm:"type:decimal(4,2);default:1.0"` // 语速 0.25–4.0
-	VoiceStyle  string  `json:"voice_style" gorm:"size:100"`                      // 语音风格（如 calm/excited/sad）
-	VoiceSample string  `json:"voice_sample" gorm:"size:1000"`                    // 试听样本 URL
+	VoiceID       string  `json:"voice_id" gorm:"size:100"`                         // 声音ID（如 alloy/echo/nova 等）
+	VoiceSpeed    float64 `json:"voice_speed" gorm:"type:decimal(4,2);default:1.0"` // 语速 0.25–4.0
+	VoiceStyle    string  `json:"voice_style" gorm:"size:100"`                      // 语音风格（如 calm/excited/sad）
+	VoiceLanguage string  `json:"voice_language" gorm:"size:20"`                    // 语言+方言（如 zh / zh-yue / en / ja）
+	VoiceSample   string  `json:"voice_sample" gorm:"size:1000"`                    // 试听样本 URL
 
 	// 状态
 	Status string `json:"status" gorm:"size:20;default:active"`
@@ -721,9 +765,10 @@ func (ModelUsageLog) TableName() string {
 
 // Video 视频
 type Video struct {
-	ID        uint     `json:"id" gorm:"primaryKey"`
-	UUID      string   `json:"uuid" gorm:"uniqueIndex;size:36"`
-	NovelID   uint     `json:"novel_id" gorm:"index;not null"`
+	ID       uint `json:"id" gorm:"primaryKey"`
+	TenantID uint `json:"tenant_id" gorm:"index;default:0"`
+	UUID     string `json:"uuid" gorm:"uniqueIndex;size:36"`
+	NovelID  uint   `json:"novel_id" gorm:"index;not null"`
 	Novel     *Novel   `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
 	ChapterID *uint    `json:"chapter_id,omitempty" gorm:"index"`
 	Chapter   *Chapter `json:"chapter,omitempty" gorm:"foreignKey:ChapterID"`
@@ -841,6 +886,12 @@ type StoryboardShot struct {
 	// 时序连贯与参考帧
 	ReferenceImageURL string `json:"reference_image_url" gorm:"size:500"` // 前一镜头最后一帧URL，用于时序连贯
 	FrameImageURL     string `json:"frame_image_url" gorm:"size:500"`     // 本镜头AI图像生成结果URL，传给Kling image-to-video
+
+	// 场景锚点
+	SceneAnchorID *uint `json:"scene_anchor_id,omitempty" gorm:"index"`
+
+	// 角色绑定（序列化为 JSON 数组，前端直接收到 [1,2,3]）
+	CharacterIDs JSONUintSlice `json:"character_ids" gorm:"type:json"`
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -1156,6 +1207,12 @@ type UpdateNovelRequest struct {
 	TopK        *int     `json:"top_k"`
 	MaxTokens   *int     `json:"max_tokens"`
 	StylePrompt string   `json:"style_prompt"`
+	// 视频配置
+	VideoType             string   `json:"video_type"`
+	VideoResolution       string   `json:"video_resolution"`
+	VideoFPS              *int     `json:"video_fps"`
+	VideoAspectRatio      string   `json:"video_aspect_ratio"`
+	CharConsistencyWeight *float64 `json:"char_consistency_weight"`
 }
 
 type CreateChapterRequest struct {
@@ -1206,10 +1263,11 @@ type UpdateCharacterRequest struct {
 	Portrait        string        `json:"portrait"`
 	CoverImage      string        `json:"cover_image"`
 	// 配音设置
-	VoiceID     string   `json:"voice_id"`
-	VoiceSpeed  *float64 `json:"voice_speed"` // nil = absent (don't update)
-	VoiceStyle  string   `json:"voice_style"`
-	VoiceSample string   `json:"voice_sample"` // 试听样本存储路径（file:// 或 URL）
+	VoiceID       string   `json:"voice_id"`
+	VoiceSpeed    *float64 `json:"voice_speed"`    // nil = absent (don't update)
+	VoiceStyle    string   `json:"voice_style"`
+	VoiceLanguage string   `json:"voice_language"` // 语言+方言（如 zh / zh-yue / en / ja）
+	VoiceSample   string   `json:"voice_sample"`   // 试听样本存储路径（file:// 或 URL）
 }
 
 type GenerateImageRequest struct {
@@ -1239,6 +1297,7 @@ type UpdateVideoRequest struct {
 	AspectRatio  string `json:"aspect_ratio"`
 	ArtStyle     string `json:"art_style"`
 	ScriptStatus string `json:"script_status"` // draft/confirmed
+	Mode         string `json:"mode"`           // video/slideshow
 }
 
 type EnhancementConfig struct {
@@ -1533,3 +1592,124 @@ type BatchGenerateShotsRequest struct {
 	QualityTier string `json:"quality_tier"` // override; empty = use video's quality_tier
 	Provider    string `json:"provider"`     // video provider override (e.g. "kling", "seedance")
 }
+
+// ─── 戏剧张力管理模型 ──────────────────────────────────────────────────────────
+
+// HookChain 钩子链（章末悬念/情感/谜题/威胁/承诺）
+type HookChain struct {
+	ID       uint `json:"id" gorm:"primaryKey"`
+	TenantID uint `json:"tenant_id" gorm:"index;not null;default:1"`
+	NovelID  uint `json:"novel_id" gorm:"index;not null"`
+
+	Type        string `json:"type" gorm:"size:50;not null"`
+	// chapter_end/emotional/mystery/threat/promise
+	Description     string `json:"description" gorm:"type:text;not null"`
+	PlantedAt       int    `json:"planted_at" gorm:"not null"`                // 埋下章节号
+	PlannedPayoffAt int    `json:"planned_payoff_at" gorm:"default:0"`        // 计划兑现章节号（0=未规划）
+	ActualPayoffAt  int    `json:"actual_payoff_at" gorm:"default:0"`         // 实际兑现章节号
+	Intensity       int    `json:"intensity" gorm:"not null;default:5"`       // 1-10
+	IsFulfilled     bool   `json:"is_fulfilled" gorm:"default:false"`
+	Notes           string `json:"notes" gorm:"type:text"`
+
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
+}
+
+func (HookChain) TableName() string { return "ink_hook_chain" }
+
+// SatisfactionPoint 爽点（打脸/突破/揭秘/重逢/复仇/认可/其他）
+type SatisfactionPoint struct {
+	ID       uint `json:"id" gorm:"primaryKey"`
+	TenantID uint `json:"tenant_id" gorm:"index;not null;default:1"`
+	NovelID  uint `json:"novel_id" gorm:"index;not null"`
+
+	ChapterID      *uint  `json:"chapter_id" gorm:"index"` // 实际发生章节（nil=仅计划）
+	PlannedChapter int    `json:"planned_chapter" gorm:"default:0"` // 计划发生章节号
+	Type           string `json:"type" gorm:"size:50;not null"`
+	// face_slap/breakthrough/reveal/reunion/revenge/recognition/other
+	Description     string `json:"description" gorm:"type:text;not null"`
+	BuildupStart    int    `json:"buildup_start" gorm:"default:0"`        // 铺垫从第几章开始
+	IntensityTarget int    `json:"intensity_target" gorm:"default:7"`     // 1-10
+	IsPlanned       bool   `json:"is_planned" gorm:"default:true"`        // false=已发生
+	Notes           string `json:"notes" gorm:"type:text"`
+
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
+}
+
+func (SatisfactionPoint) TableName() string { return "ink_satisfaction_point" }
+
+// ConflictArc 冲突弧（内部/人际/社会）
+type ConflictArc struct {
+	ID       uint `json:"id" gorm:"primaryKey"`
+	TenantID uint `json:"tenant_id" gorm:"index;not null;default:1"`
+	NovelID  uint `json:"novel_id" gorm:"index;not null"`
+
+	Title        string `json:"title" gorm:"size:255;not null"`
+	Type         string `json:"type" gorm:"size:50;not null"`
+	// internal/interpersonal/social
+	Description  string `json:"description" gorm:"type:text"`
+	Antagonist   string `json:"antagonist" gorm:"size:255"`
+	StartChapter int    `json:"start_chapter" gorm:"default:0"`
+	PeakChapter  int    `json:"peak_chapter" gorm:"default:0"`  // 预计高潮章节
+	EndChapter   int    `json:"end_chapter" gorm:"default:0"`   // 预计解决章节（0=未规划）
+	CurrentPhase string `json:"current_phase" gorm:"size:30;default:setup"`
+	// setup/escalation/climax/resolution
+	IsResolved bool   `json:"is_resolved" gorm:"default:false"`
+	Notes      string `json:"notes" gorm:"type:text"`
+
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
+}
+
+func (ConflictArc) TableName() string { return "ink_conflict_arc" }
+
+// SceneAnchor 场景锚点（固定命名场景的视觉描述，确保分镜跨镜头布景一致）
+type SceneAnchor struct {
+	ID       uint `json:"id" gorm:"primaryKey"`
+	TenantID uint `json:"tenant_id" gorm:"index;not null;default:1"`
+	NovelID  uint `json:"novel_id" gorm:"index;not null"`
+
+	Name        string `json:"name" gorm:"size:255;not null"`
+	Type        string `json:"type" gorm:"size:50"` // interior/exterior/imaginary
+	Description string `json:"description" gorm:"type:text"`
+	PromptLock  string `json:"prompt_lock" gorm:"type:text"`   // 锁定关键词（逗号分隔）
+	StyleTokens string `json:"style_tokens" gorm:"size:500"`   // 风格标签
+	RefImageURL string `json:"ref_image_url" gorm:"size:1000"` // 首次生成后存参考图URL
+	Notes       string `json:"notes" gorm:"type:text"`
+
+	// 扩展字段（一致性评分相关）
+	RefImageLockedAt *time.Time `json:"ref_image_locked_at,omitempty" gorm:"index"`
+	RefImageShotID   *uint      `json:"ref_image_shot_id,omitempty"`
+	UsageCount       int        `json:"usage_count" gorm:"default:0"`
+	AvgConsScore     float64    `json:"avg_cons_score" gorm:"type:decimal(4,3);default:0"`
+	ParentAnchorID   *uint      `json:"parent_anchor_id,omitempty" gorm:"index"`
+	Variant          string     `json:"variant" gorm:"size:50"` // day/night/winter/battle
+
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
+}
+
+func (SceneAnchor) TableName() string { return "ink_scene_anchor" }
+
+// SceneConsistencyLog 场景一致性评分日志
+type SceneConsistencyLog struct {
+	ID           uint    `gorm:"primaryKey" json:"id"`
+	ShotID       uint    `gorm:"index;not null" json:"shot_id"`
+	AnchorID     uint    `gorm:"index;not null" json:"anchor_id"`
+	Attempt      int     `json:"attempt"`
+	OverallScore float64 `gorm:"type:decimal(4,3)" json:"overall_score"`
+	ArchScore    float64 `gorm:"type:decimal(4,3)" json:"arch_score"`
+	LightScore   float64 `gorm:"type:decimal(4,3)" json:"light_score"`
+	AtmoScore    float64 `gorm:"type:decimal(4,3)" json:"atmo_score"`
+	Issues       string  `gorm:"type:json" json:"issues"`
+	IPWeight     float64 `json:"ip_weight"`
+	Passed       bool    `json:"passed"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+func (SceneConsistencyLog) TableName() string { return "ink_scene_consistency_log" }

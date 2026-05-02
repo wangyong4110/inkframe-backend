@@ -141,6 +141,26 @@ func (r *NovelRepository) Delete(id uint) error {
 	return nil
 }
 
+// SyncStats recalculates chapter_count and total_words from the chapters table.
+func (r *NovelRepository) SyncStats(novelID uint) error {
+	var result struct {
+		Count int
+		Words int
+	}
+	r.db.Model(&model.Chapter{}).
+		Select("COUNT(*) as count, COALESCE(SUM(word_count), 0) as words").
+		Where("novel_id = ?", novelID).
+		Scan(&result)
+	if err := r.db.Model(&model.Novel{}).Where("id = ?", novelID).Updates(map[string]interface{}{
+		"chapter_count": result.Count,
+		"total_words":   result.Words,
+	}).Error; err != nil {
+		return err
+	}
+	r.invalidateCache(novelID)
+	return nil
+}
+
 // invalidateCache 清除缓存
 func (r *NovelRepository) invalidateCache(id uint) {
 	if r.cache != nil {
@@ -624,6 +644,20 @@ func (r *VideoRepository) GetByID(id uint) (*model.Video, error) {
 	return &video, nil
 }
 
+// GetByIDAndTenant 根据ID和租户获取视频（防止越权访问）
+// 优先使用 ink_videos.tenant_id 直接过滤（无需 JOIN）；
+// tenant_id=0 的旧记录视为公共数据，任意租户均可访问（兼容迁移前数据）。
+func (r *VideoRepository) GetByIDAndTenant(id, tenantID uint) (*model.Video, error) {
+	var video model.Video
+	err := r.db.
+		Where("id = ? AND (tenant_id = ? OR tenant_id = 0)", id, tenantID).
+		First(&video).Error
+	if err != nil {
+		return nil, err
+	}
+	return &video, nil
+}
+
 // List 获取视频列表
 func (r *VideoRepository) List(novelID *uint, chapterID *uint, page, pageSize int) ([]*model.Video, int64, error) {
 	var videos []*model.Video
@@ -708,9 +742,10 @@ func (r *StoryboardRepository) Update(shot *model.StoryboardShot) error {
 	return r.db.Save(shot).Error
 }
 
-// DeleteByVideoID 删除视频的所有分镜（重新生成时使用）
+// DeleteByVideoID 硬删除视频的所有分镜（重新生成时使用）
+// 必须用 Unscoped() 物理删除，否则软删除的行仍触发 uk_video_shot 唯一键冲突。
 func (r *StoryboardRepository) DeleteByVideoID(videoID uint) error {
-	return r.db.Where("video_id = ?", videoID).Delete(&model.StoryboardShot{}).Error
+	return r.db.Unscoped().Where("video_id = ?", videoID).Delete(&model.StoryboardShot{}).Error
 }
 
 // ReviewTaskRepository 审核任务仓库
@@ -1198,4 +1233,178 @@ func (r *SkillRepository) BatchCreate(skills []*model.Skill) error {
 		return nil
 	}
 	return r.db.CreateInBatches(skills, 100).Error
+}
+
+// ─── 戏剧张力仓库 ──────────────────────────────────────────────────────────────
+
+// HookChainRepository 钩子链仓库
+type HookChainRepository struct{ db *gorm.DB }
+
+func NewHookChainRepository(db *gorm.DB) *HookChainRepository {
+	return &HookChainRepository{db: db}
+}
+
+func (r *HookChainRepository) Create(h *model.HookChain) error {
+	return r.db.Create(h).Error
+}
+
+func (r *HookChainRepository) GetByID(id uint) (*model.HookChain, error) {
+	var h model.HookChain
+	if err := r.db.First(&h, id).Error; err != nil {
+		return nil, err
+	}
+	return &h, nil
+}
+
+func (r *HookChainRepository) Update(h *model.HookChain) error {
+	return r.db.Save(h).Error
+}
+
+func (r *HookChainRepository) Delete(id uint) error {
+	return r.db.Delete(&model.HookChain{}, id).Error
+}
+
+func (r *HookChainRepository) ListByNovel(novelID uint) ([]*model.HookChain, error) {
+	var items []*model.HookChain
+	err := r.db.Where("novel_id = ?", novelID).Order("planted_at ASC").Find(&items).Error
+	return items, err
+}
+
+// ListPending 返回未兑现的钩子
+func (r *HookChainRepository) ListPending(novelID uint) ([]*model.HookChain, error) {
+	var items []*model.HookChain
+	err := r.db.Where("novel_id = ? AND is_fulfilled = false", novelID).Order("planted_at ASC").Find(&items).Error
+	return items, err
+}
+
+// SatisfactionPointRepository 爽点仓库
+type SatisfactionPointRepository struct{ db *gorm.DB }
+
+func NewSatisfactionPointRepository(db *gorm.DB) *SatisfactionPointRepository {
+	return &SatisfactionPointRepository{db: db}
+}
+
+func (r *SatisfactionPointRepository) Create(sp *model.SatisfactionPoint) error {
+	return r.db.Create(sp).Error
+}
+
+func (r *SatisfactionPointRepository) GetByID(id uint) (*model.SatisfactionPoint, error) {
+	var sp model.SatisfactionPoint
+	if err := r.db.First(&sp, id).Error; err != nil {
+		return nil, err
+	}
+	return &sp, nil
+}
+
+func (r *SatisfactionPointRepository) Update(sp *model.SatisfactionPoint) error {
+	return r.db.Save(sp).Error
+}
+
+func (r *SatisfactionPointRepository) Delete(id uint) error {
+	return r.db.Delete(&model.SatisfactionPoint{}, id).Error
+}
+
+func (r *SatisfactionPointRepository) ListByNovel(novelID uint) ([]*model.SatisfactionPoint, error) {
+	var items []*model.SatisfactionPoint
+	err := r.db.Where("novel_id = ?", novelID).Order("planned_chapter ASC").Find(&items).Error
+	return items, err
+}
+
+// ListRecentFulfilled 返回最近N章内已发生的爽点（用于节奏健康检测）
+func (r *SatisfactionPointRepository) ListRecentFulfilled(novelID uint, fromChapter int) ([]*model.SatisfactionPoint, error) {
+	var items []*model.SatisfactionPoint
+	err := r.db.Where("novel_id = ? AND is_planned = false AND planned_chapter >= ?", novelID, fromChapter).
+		Find(&items).Error
+	return items, err
+}
+
+// ConflictArcRepository 冲突弧仓库
+type ConflictArcRepository struct{ db *gorm.DB }
+
+func NewConflictArcRepository(db *gorm.DB) *ConflictArcRepository {
+	return &ConflictArcRepository{db: db}
+}
+
+func (r *ConflictArcRepository) Create(arc *model.ConflictArc) error {
+	return r.db.Create(arc).Error
+}
+
+func (r *ConflictArcRepository) GetByID(id uint) (*model.ConflictArc, error) {
+	var arc model.ConflictArc
+	if err := r.db.First(&arc, id).Error; err != nil {
+		return nil, err
+	}
+	return &arc, nil
+}
+
+func (r *ConflictArcRepository) Update(arc *model.ConflictArc) error {
+	return r.db.Save(arc).Error
+}
+
+func (r *ConflictArcRepository) Delete(id uint) error {
+	return r.db.Delete(&model.ConflictArc{}, id).Error
+}
+
+func (r *ConflictArcRepository) ListByNovel(novelID uint) ([]*model.ConflictArc, error) {
+	var items []*model.ConflictArc
+	err := r.db.Where("novel_id = ?", novelID).Order("start_chapter ASC").Find(&items).Error
+	return items, err
+}
+
+// ─── SceneAnchorRepository 场景锚点仓库 ──────────────────────────────────────
+
+type SceneAnchorRepository struct{ db *gorm.DB }
+
+func NewSceneAnchorRepository(db *gorm.DB) *SceneAnchorRepository {
+	return &SceneAnchorRepository{db: db}
+}
+
+func (r *SceneAnchorRepository) Create(a *model.SceneAnchor) error {
+	return r.db.Create(a).Error
+}
+
+func (r *SceneAnchorRepository) GetByID(id uint) (*model.SceneAnchor, error) {
+	var a model.SceneAnchor
+	if err := r.db.First(&a, id).Error; err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+func (r *SceneAnchorRepository) Update(a *model.SceneAnchor) error {
+	return r.db.Save(a).Error
+}
+
+func (r *SceneAnchorRepository) Delete(id uint) error {
+	return r.db.Delete(&model.SceneAnchor{}, id).Error
+}
+
+func (r *SceneAnchorRepository) ListByNovel(novelID uint) ([]*model.SceneAnchor, error) {
+	var items []*model.SceneAnchor
+	err := r.db.Where("novel_id = ?", novelID).Order("created_at ASC").Find(&items).Error
+	return items, err
+}
+
+// ─── SceneConsistencyLogRepository 场景一致性日志仓库 ────────────────────────
+
+type SceneConsistencyLogRepository struct{ db *gorm.DB }
+
+func NewSceneConsistencyLogRepository(db *gorm.DB) *SceneConsistencyLogRepository {
+	return &SceneConsistencyLogRepository{db: db}
+}
+
+func (r *SceneConsistencyLogRepository) Create(log *model.SceneConsistencyLog) error {
+	return r.db.Create(log).Error
+}
+
+func (r *SceneConsistencyLogRepository) ListByShotID(shotID uint) ([]*model.SceneConsistencyLog, error) {
+	var items []*model.SceneConsistencyLog
+	err := r.db.Where("shot_id = ?", shotID).Order("created_at DESC").Find(&items).Error
+	return items, err
+}
+
+func (r *SceneConsistencyLogRepository) ListByAnchorID(anchorID uint) ([]*model.SceneConsistencyLog, error) {
+	var items []*model.SceneConsistencyLog
+	err := r.db.Where("anchor_id = ?", anchorID).Order("created_at DESC").Find(&items).Error
+	return items, err
 }

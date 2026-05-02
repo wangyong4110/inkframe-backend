@@ -449,6 +449,11 @@ func (s *IntelligentStoryboardService) determineLighting(scene *SceneAnalysis) s
 
 // 构建提示词
 func (s *IntelligentStoryboardService) buildPrompt(shot *StoryboardShot, config *VideoGenerationRequest) string {
+	// 防止 nil config 导致 panic
+	if config == nil {
+		config = &VideoGenerationRequest{ArtStyle: "cinematic", Resolution: "1080p"}
+	}
+
 	prompt := ""
 
 	// 添加场景描述
@@ -897,11 +902,13 @@ func parseFloatSafe(s string, fallback float64) float64 {
 
 // ImagePromptConfig 图像 Prompt 生成配置
 type ImagePromptConfig struct {
-	ArtStyle       string   // 风格：realistic/anime/ink_wash/watercolor/cinematic
-	Resolution     string   // 分辨率标签：4k/8k/hd
-	CharacterRefs  []string // 角色外貌关键词
-	LightingStyle  string   // 光影：golden_hour/dramatic/soft/backlit
-	ColorPalette   string   // 色调：warm/cool/neutral/vibrant
+	ArtStyle             string   // 风格：realistic/anime/ink_wash/watercolor/cinematic
+	Resolution           string   // 分辨率标签：4k/8k/hd
+	CharacterRefs        []string // 角色外貌关键词
+	LightingStyle        string   // 光影：golden_hour/dramatic/soft/backlit
+	ColorPalette         string   // 色调：warm/cool/neutral/vibrant
+	SceneAnchorFragment  string   // 场景锚点描述+锁定词（直接拼入 prompt，优先级高于 shot.Scene）
+	SceneRefImageURL     string   // 场景参考图URL（IP-Adapter，返回给前端展示）
 }
 
 // ImagePromptBuilder 专业图像 Prompt 生成器
@@ -940,8 +947,10 @@ func (b *ImagePromptBuilder) BuildVisualPrompt(shot *StoryboardShot, config *Ima
 		parts = append(parts, strings.Join(config.CharacterRefs, ", "))
 	}
 
-	// 场景
-	if shot.Scene != "" {
+	// 场景（锚点优先，其次裸字符串）
+	if config != nil && config.SceneAnchorFragment != "" {
+		parts = append(parts, config.SceneAnchorFragment)
+	} else if shot.Scene != "" {
 		parts = append(parts, "in "+shot.Scene)
 	}
 

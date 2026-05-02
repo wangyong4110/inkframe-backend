@@ -14,9 +14,10 @@ import (
 )
 
 const (
-	arcSize          = 10 // 每弧章节数
-	recentFullCount  = 2  // 最近N章注入详细摘要
-	recentShortCount = 8  // 再往前N章注入简短摘要（30字）
+	arcSize          = 10            // 每弧章节数
+	halfArcSize      = arcSize / 2   // 中段预摘要间隔（每5章）
+	recentFullCount  = 2             // 最近N章注入详细摘要
+	recentShortCount = 8             // 再往前N章注入简短摘要（30字）
 
 	shortSummaryMaxRunes        = 40 // 简短摘要截断字符数
 	repeatWordThreshold         = 5  // 重复词出现 N 次触发精修建议
@@ -78,10 +79,11 @@ func NewNarrativeMemoryService(
 // ──────────────────────────────────────────────
 
 type HierarchicalContext struct {
-	RecentDetailed []ChapterBrief // 最近 recentFullCount 章（详细摘要）
-	RecentShort    []ChapterBrief // 再往前 recentShortCount 章（简短摘要）
-	ArcSummaries   []ArcBrief     // 已完成弧
-	GlobalSummary  string
+	RecentDetailed   []ChapterBrief // 最近 recentFullCount 章（详细摘要）
+	RecentShort      []ChapterBrief // 再往前 recentShortCount 章（简短摘要）
+	ArcSummaries     []ArcBrief     // 已完成弧
+	GlobalSummary    string
+	PlotTensionState string         // 当前剧情张力状态（供场景大纲决策参考）
 }
 
 type ChapterBrief struct {
@@ -102,6 +104,11 @@ type ArcBrief struct {
 // BuildHierarchicalContext
 // ──────────────────────────────────────────────
 
+// BuildPlotTensionStateText 返回当前剧情张力状态文本（供场景大纲模板使用）
+func (s *NarrativeMemoryService) BuildPlotTensionStateText(novelID uint, currentChapterNo int) string {
+	return s.buildPlotTensionState(novelID, currentChapterNo)
+}
+
 // BuildHierarchicalContext 返回供 prompt 注入的层次化上下文文本
 func (s *NarrativeMemoryService) BuildHierarchicalContext(novelID uint, currentChapterNo int) (string, error) {
 	novel, err := s.novelRepo.GetByID(novelID)
@@ -117,7 +124,8 @@ func (s *NarrativeMemoryService) BuildHierarchicalContext(novelID uint, currentC
 
 func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapterNo int) (*HierarchicalContext, error) {
 	ctx := &HierarchicalContext{
-		GlobalSummary: s.buildGlobalSummary(novel),
+		GlobalSummary:    s.buildGlobalSummary(novel),
+		PlotTensionState: s.buildPlotTensionState(novel.ID, currentChapterNo),
 	}
 
 	// 弧摘要（所有已完成弧）
@@ -125,6 +133,22 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 	for arcNo := 1; arcNo <= completedArcs; arcNo++ {
 		arc, err := s.arcRepo.GetByNovelAndArcNo(novel.ID, arcNo)
 		if err == nil && arc != nil {
+			ctx.ArcSummaries = append(ctx.ArcSummaries, ArcBrief{
+				ArcNo:        arc.ArcNo,
+				StartChapter: arc.StartChapter,
+				EndChapter:   arc.EndChapter,
+				Summary:      arc.Summary,
+				KeyEvents:    arc.KeyEvents,
+			})
+		}
+	}
+
+	// 当前弧中段预摘要（填补11-19章等弧内盲区）
+	// 中段摘要以负 arcNo 存储（见 TriggerArcSummaryIfNeeded）
+	lastMidArcCh := (currentChapterNo - 1) / halfArcSize * halfArcSize
+	if lastMidArcCh > 0 && lastMidArcCh%arcSize != 0 {
+		midArcNo := -(lastMidArcCh / halfArcSize)
+		if arc, err := s.arcRepo.GetByNovelAndArcNo(novel.ID, midArcNo); err == nil && arc != nil {
 			ctx.ArcSummaries = append(ctx.ArcSummaries, ArcBrief{
 				ArcNo:        arc.ArcNo,
 				StartChapter: arc.StartChapter,
@@ -171,6 +195,97 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 	return ctx, nil
 }
 
+// buildPlotTensionState 分析近期章节张力走势，生成供场景大纲决策参考的状态描述
+func (s *NarrativeMemoryService) buildPlotTensionState(novelID uint, currentChapterNo int) string {
+	if currentChapterNo <= 1 {
+		return ""
+	}
+	lookback := 5
+	recent, err := s.chapterRepo.GetRecent(novelID, currentChapterNo, lookback)
+	if err != nil || len(recent) == 0 {
+		return ""
+	}
+
+	// 收集有效张力值（>0 表示已填充）
+	type tensionPoint struct {
+		chapterNo int
+		level     int
+		hook      string
+	}
+	var points []tensionPoint
+	for i := len(recent) - 1; i >= 0; i-- { // 升序排列
+		ch := recent[i]
+		if ch.TensionLevel > 0 {
+			points = append(points, tensionPoint{ch.ChapterNo, ch.TensionLevel, ch.ChapterHook})
+		}
+	}
+	if len(points) == 0 {
+		return ""
+	}
+
+	current := points[len(points)-1].level
+
+	// 判断走势
+	pattern := "plateau"
+	if len(points) >= 2 {
+		first, last := points[0].level, points[len(points)-1].level
+		diff := last - first
+		if diff >= 2 {
+			pattern = "rising"
+		} else if diff <= -2 {
+			pattern = "falling"
+		}
+	}
+
+	// 统计连续章节数
+	consecutiveLow, consecutiveHigh := 0, 0
+	for i := len(points) - 1; i >= 0; i-- {
+		if points[i].level <= 4 {
+			consecutiveLow++
+		} else {
+			break
+		}
+	}
+	for i := len(points) - 1; i >= 0; i-- {
+		if points[i].level >= 7 {
+			consecutiveHigh++
+		} else {
+			break
+		}
+	}
+
+	// 收集近章未收尾的钩子
+	var hooks []string
+	for _, p := range points {
+		if p.hook != "" {
+			hooks = append(hooks, fmt.Sprintf("第%d章钩子：「%s」", p.chapterNo, truncateForPrompt(p.hook, 40)))
+		}
+	}
+
+	var sb strings.Builder
+	patternZH := map[string]string{"rising": "持续上升", "falling": "持续下降", "plateau": "平稳维持"}[pattern]
+	sb.WriteString(fmt.Sprintf("- 当前张力值：%d/10（近%d章走势：%s）\n", current, len(points), patternZH))
+
+	if consecutiveHigh >= 3 {
+		sb.WriteString(fmt.Sprintf("- ⚠️ 已连续%d章高张力（≥7），读者需要喘息空间，本章应安排低张力过渡或情感缓冲\n", consecutiveHigh))
+	} else if consecutiveLow >= 3 {
+		sb.WriteString(fmt.Sprintf("- ⚠️ 已连续%d章低张力（≤4），读者期待爆发，本章必须制造重大冲突或意外反转\n", consecutiveLow))
+	} else if pattern == "rising" {
+		sb.WriteString("- 张力持续上升中，可以在本章安排一个小高潮，或引入新的外部威胁推向更高点\n")
+	} else if pattern == "falling" {
+		sb.WriteString("- 张力连续下降，本章必须逆转趋势：引入新危机、揭示隐藏威胁、或打破当前平静\n")
+	}
+
+	if len(hooks) > 0 {
+		sb.WriteString("- 待延续的上章悬念（本章应回应或深化）：\n")
+		for _, h := range hooks {
+			sb.WriteString("  · " + h + "\n")
+		}
+	}
+
+	return sb.String()
+}
+
 func (s *NarrativeMemoryService) buildGlobalSummary(novel *model.Novel) string {
 	var sb strings.Builder
 	sb.WriteString("【故事概要】\n" + novel.Description)
@@ -185,6 +300,9 @@ func (s *NarrativeMemoryService) buildGlobalSummary(novel *model.Novel) string {
 		if novel.Worldview.Culture != "" {
 			sb.WriteString("文化：" + novel.Worldview.Culture + "\n")
 		}
+		if novel.Worldview.CheatSystem != "" {
+			sb.WriteString("金手指/系统：" + novel.Worldview.CheatSystem + "\n")
+		}
 	}
 	return sb.String()
 }
@@ -192,6 +310,11 @@ func (s *NarrativeMemoryService) buildGlobalSummary(novel *model.Novel) string {
 func renderHierarchicalContext(ctx *HierarchicalContext) string {
 	var sb strings.Builder
 	sb.WriteString(ctx.GlobalSummary)
+
+	if ctx.PlotTensionState != "" {
+		sb.WriteString("\n\n【剧情张力状态】\n")
+		sb.WriteString(ctx.PlotTensionState)
+	}
 
 	if len(ctx.ArcSummaries) > 0 {
 		sb.WriteString("\n\n【历史弧光摘要（长期记忆）】\n")
@@ -226,20 +349,38 @@ func renderHierarchicalContext(ctx *HierarchicalContext) string {
 // TriggerArcSummaryIfNeeded
 // ──────────────────────────────────────────────
 
-// TriggerArcSummaryIfNeeded 在章节写完后检查是否需要生成弧摘要，异步执行
+// TriggerArcSummaryIfNeeded 在章节写完后检查是否需要生成弧摘要，异步执行。
+// 触发条件：
+//   - 每 arcSize 章末尾 → 完整弧摘要（arcNo = 1,2,3…）
+//   - 每 halfArcSize 章且不与完整弧重合 → 中段预摘要（arcNo = -1,-2,-3…）
+//
+// 两个触发条件互斥（case 2 的 %arcSize != 0 保证），不会重复执行。
+// 中段摘要使用负 arcNo 以与完整弧区分，BuildHierarchicalContext 会一并检索。
 func (s *NarrativeMemoryService) TriggerArcSummaryIfNeeded(tenantID, novelID uint, completedChapterNo int) {
-	if completedChapterNo%arcSize != 0 {
-		return
+	switch {
+	case completedChapterNo%arcSize == 0:
+		// 完整弧结束
+		arcNo := completedChapterNo / arcSize
+		startChapter := completedChapterNo - arcSize + 1
+		go func() {
+			if err := s.generateArcSummary(tenantID, novelID, arcNo, startChapter, completedChapterNo); err != nil {
+				log.Printf("NarrativeMemory: arc %d summary failed (novel %d): %v", arcNo, novelID, err)
+			} else {
+				log.Printf("NarrativeMemory: arc %d summary done (novel %d, ch %d-%d)", arcNo, novelID, startChapter, completedChapterNo)
+			}
+		}()
+	case completedChapterNo > halfArcSize && completedChapterNo%halfArcSize == 0:
+		// 弧中段预摘要（第5、15、25...章）；arcNo 用负数标识，不覆盖完整弧
+		midArcNo := -(completedChapterNo / halfArcSize)
+		startChapter := completedChapterNo - halfArcSize + 1
+		go func() {
+			if err := s.generateArcSummary(tenantID, novelID, midArcNo, startChapter, completedChapterNo); err != nil {
+				log.Printf("NarrativeMemory: mid-arc %d summary failed (novel %d): %v", midArcNo, novelID, err)
+			} else {
+				log.Printf("NarrativeMemory: mid-arc %d summary done (novel %d, ch %d-%d)", midArcNo, novelID, startChapter, completedChapterNo)
+			}
+		}()
 	}
-	arcNo := completedChapterNo / arcSize
-	startChapter := completedChapterNo - arcSize + 1
-	go func() {
-		if err := s.generateArcSummary(tenantID, novelID, arcNo, startChapter, completedChapterNo); err != nil {
-			log.Printf("NarrativeMemory: arc %d summary failed (novel %d): %v", arcNo, novelID, err)
-		} else {
-			log.Printf("NarrativeMemory: arc %d summary done (novel %d, ch %d-%d)", arcNo, novelID, startChapter, completedChapterNo)
-		}
-	}()
 }
 
 func (s *NarrativeMemoryService) generateArcSummary(tenantID, novelID uint, arcNo, startChapter, endChapter int) error {
@@ -470,7 +611,17 @@ func (s *NarrativeMemoryService) RefineChapterContent(tenantID uint, chapter *mo
 		log.Printf("NarrativeMemory: refinement ch%d failed: %v — using original", chapter.ChapterNo, err)
 		return chapter.Content, nil
 	}
-	return strings.TrimSpace(refined), nil
+	refined = strings.TrimSpace(refined)
+
+	// 护栏：精修后字数不能比原文少超过 20%，防止 AI 删减情节
+	origRunes := len([]rune(chapter.Content))
+	refinedRunes := len([]rune(refined))
+	if origRunes > 0 && refinedRunes < origRunes*80/100 {
+		log.Printf("NarrativeMemory: refinement ch%d rejected — word count dropped %d→%d (>20%%)", chapter.ChapterNo, origRunes, refinedRunes)
+		return chapter.Content, nil
+	}
+
+	return refined, nil
 }
 
 // ──────────────────────────────────────────────

@@ -150,7 +150,7 @@ func (s *ItemService) GenerateItemImage(tenantID, id uint, referenceImageURL, pr
 	} else {
 		log.Printf("GenerateItemImage: item=%d no valid reference image, generating without reference", id)
 	}
-	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL)
+	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL, "")
 	if err != nil {
 		return nil, fmt.Errorf("generate image failed: %w", err)
 	}

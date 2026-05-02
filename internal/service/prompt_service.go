@@ -59,6 +59,9 @@ func (s *PromptService) BuildOutlinePrompt(novel *model.Novel, req *GenerateOutl
 		if novel.Worldview.Culture != "" {
 			sb.WriteString(fmt.Sprintf("文化背景：%s\n", novel.Worldview.Culture))
 		}
+		if novel.Worldview.CheatSystem != "" {
+			sb.WriteString(fmt.Sprintf("金手指/系统：%s\n", novel.Worldview.CheatSystem))
+		}
 		sb.WriteString("\n")
 	}
 
@@ -104,6 +107,9 @@ func (s *PromptService) BuildChapterPrompt(
 		}
 		if novel.Worldview.Culture != "" {
 			sb.WriteString(fmt.Sprintf("- 文化背景：%s\n", novel.Worldview.Culture))
+		}
+		if novel.Worldview.CheatSystem != "" {
+			sb.WriteString(fmt.Sprintf("- 金手指/系统：%s\n", novel.Worldview.CheatSystem))
 		}
 		sb.WriteString("\n")
 	}

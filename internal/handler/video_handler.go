@@ -41,6 +41,17 @@ func (h *VideoHandler) WithTaskService(svc *service.TaskService) *VideoHandler {
 	return h
 }
 
+// getVideoForTenant 提取租户鉴权公共逻辑，减少重复代码。
+// 返回 false 时已向 c 写入错误响应，调用方直接 return。
+func (h *VideoHandler) getVideoForTenant(c *gin.Context, id uint) (*model.Video, bool) {
+	video, err := h.videoService.GetVideoByTenant(id, getTenantID(c))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "video not found")
+		return nil, false
+	}
+	return video, true
+}
+
 // ListVideoProviders 列出已配置的视频生成提供者
 // GET /api/v1/videos/providers
 func (h *VideoHandler) ListVideoProviders(c *gin.Context) {
@@ -80,9 +91,8 @@ func (h *VideoHandler) GetVideo(c *gin.Context) {
 		return
 	}
 
-	video, err := h.videoService.GetVideo(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "video not found")
+	video, ok := h.getVideoForTenant(c, uint(id))
+	if !ok {
 		return
 	}
 
@@ -194,7 +204,8 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 		ChapterID  uint     `json:"chapter_id"`
 		Characters []string `json:"characters"`
 		Style      string   `json:"style,omitempty"`
-		Provider   string   `json:"provider,omitempty"` // 指定 LLM 提供者，可为空
+		Provider   string   `json:"provider,omitempty"`    // 指定 LLM 提供者，可为空
+		UserPrompt string   `json:"user_prompt,omitempty"` // 用户自定义提示词
 	}
 	// 所有字段均可选，body 为空时忽略 EOF
 	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
@@ -212,7 +223,7 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 	go func(taskID string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 
-		result, err := h.storyboardService.GenerateStoryboard(uint(videoId), req.ChapterID, req.Characters, req.Style, req.Provider)
+		result, err := h.storyboardService.GenerateStoryboard(uint(videoId), req.ChapterID, req.Characters, req.Style, req.Provider, req.UserPrompt)
 		if err != nil {
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			fmt.Printf("GenerateStoryboard task %s failed: %v\n", taskID, err)
@@ -344,6 +355,28 @@ func (h *VideoHandler) UpdateStoryboardShot(c *gin.Context) {
 	respondOK(c, shot)
 }
 
+// SetShotCharacters 手动绑定分镜角色
+// PUT /api/v1/videos/:id/shots/:shot_id/characters
+func (h *VideoHandler) SetShotCharacters(c *gin.Context) {
+	shotID, err := strconv.ParseUint(c.Param("shot_id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid shot id")
+		return
+	}
+	var body struct {
+		CharacterIDs []uint `json:"character_ids"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	if err := h.videoService.SetShotCharacters(uint(shotID), body.CharacterIDs); err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to set shot characters")
+		return
+	}
+	respondOK(c, nil)
+}
+
 // AnalyzeEmotions 情感分析
 // POST /api/v1/storyboard/analyze-emotions
 func (h *VideoHandler) AnalyzeEmotions(c *gin.Context) {
@@ -437,6 +470,11 @@ func (h *VideoHandler) GetVideoStatus(c *gin.Context) {
 		return
 	}
 
+	// 租户鉴权：确认该视频属于当前租户
+	if _, ok := h.getVideoForTenant(c, uint(id)); !ok {
+		return
+	}
+
 	status, err := h.videoService.GetStatus(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
@@ -455,9 +493,8 @@ func (h *VideoHandler) GenerateShotVideos(c *gin.Context) {
 		return
 	}
 
-	video, err := h.videoService.GetVideo(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
+	video, ok := h.getVideoForTenant(c, uint(id))
+	if !ok {
 		return
 	}
 
@@ -515,7 +552,7 @@ func (h *VideoHandler) StitchVideoHandler(c *gin.Context) {
 	})
 }
 
-// GenerateSingleShot 生成单个分镜
+// GenerateSingleShot 生成单个分镜（异步任务模式，立即返回 task_id）
 // POST /api/v1/videos/:id/shots/:shot_id/generate
 func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 	videoID, err := strconv.ParseUint(c.Param("id"), 10, 32)
@@ -534,20 +571,32 @@ func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 	}
 	c.ShouldBindJSON(&req) //nolint:errcheck — optional body
 
-	shot, err := h.videoService.GenerateSingleShot(uint(videoID), uint(shotID), req.Provider)
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeAssetGen,
+		fmt.Sprintf("镜头 #%d 素材生成", shotID), "shot", uint(shotID))
 	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
 
+	go func(taskID string) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		shot, genErr := h.videoService.GenerateSingleShot(uint(videoID), uint(shotID), req.Provider)
+		if genErr != nil {
+			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, gin.H{"shot_id": shot.ID, "status": shot.Status}) //nolint:errcheck
+	}(task.TaskID)
+
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
-		"message": "shot generation queued",
-		"data":    shot,
+		"message": "素材生成任务已提交",
+		"data":    gin.H{"task_id": task.TaskID},
 	})
 }
 
-// BatchGenerateShots 批量生成分镜
+// BatchGenerateShots 批量生成分镜素材（异步任务模式，立即返回 task_id）
 // POST /api/v1/videos/:id/shots/batch-generate
 func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 	videoID, err := strconv.ParseUint(c.Param("id"), 10, 32)
@@ -562,16 +611,28 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 		return
 	}
 
-	shots, err := h.videoService.BatchGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, req.Provider)
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeAssetGen,
+		fmt.Sprintf("批量生成 %d 个镜头素材", len(req.ShotIDs)), "video", uint(videoID))
 	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
 
+	go func(taskID string) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		shots, genErr := h.videoService.BatchGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, req.Provider)
+		if genErr != nil {
+			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, gin.H{"shot_count": len(shots)}) //nolint:errcheck
+	}(task.TaskID)
+
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
-		"message": "batch shot generation queued",
-		"data":    shots,
+		"message": "批量素材生成任务已提交",
+		"data":    gin.H{"task_id": task.TaskID},
 	})
 }
 
@@ -672,9 +733,8 @@ func (h *VideoHandler) ExportCapCutDraft(c *gin.Context) {
 		return
 	}
 
-	video, err := h.videoService.GetVideo(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "video not found")
+	video, ok := h.getVideoForTenant(c, uint(id))
+	if !ok {
 		return
 	}
 

@@ -25,8 +25,9 @@ type Config struct {
 	SkillHandler     *handler.SkillHandler
 	UploadHandler    *handler.UploadHandler
 	PlotPointHandler *handler.PlotPointHandler
-	TaskHandler      *handler.TaskHandler
-	MediaHandler     *handler.MediaHandler
+	TaskHandler        *handler.TaskHandler
+	MediaHandler       *handler.MediaHandler
+	SceneAnchorHandler *handler.SceneAnchorHandler
 }
 
 // SetupRouter 配置路由
@@ -187,6 +188,14 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				novels.GET("/:id/plot-points", cfg.PlotPointHandler.ListByNovel)
 				novels.POST("/:id/plot-points/ai-extract", cfg.PlotPointHandler.AIExtractFromNovel)
 			}
+
+	
+			// 场景锚点（挂在 novel 下）
+			if cfg.SceneAnchorHandler != nil {
+				novels.GET("/:id/scene-anchors", cfg.SceneAnchorHandler.ListSceneAnchors)
+				novels.POST("/:id/scene-anchors", cfg.SceneAnchorHandler.CreateSceneAnchor)
+				novels.POST("/:id/scene-anchors/extract", cfg.SceneAnchorHandler.ExtractSceneAnchors)
+			}
 		}
 
 		// 技能（单个技能操作）
@@ -247,6 +256,20 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			}
 		}
 
+		// 场景锚点单条操作
+		if cfg.SceneAnchorHandler != nil {
+			sceneAnchors := v1.Group("/scene-anchors")
+			{
+				sceneAnchors.GET("/:id", cfg.SceneAnchorHandler.GetSceneAnchor)
+				sceneAnchors.PUT("/:id", cfg.SceneAnchorHandler.UpdateSceneAnchor)
+				sceneAnchors.DELETE("/:id", cfg.SceneAnchorHandler.DeleteSceneAnchor)
+				sceneAnchors.PUT("/:id/ref-image", cfg.SceneAnchorHandler.LockRefImage)
+				sceneAnchors.POST("/:id/generate-ref-image", cfg.SceneAnchorHandler.GenerateRefImage)
+				sceneAnchors.GET("/:id/consistency-logs", cfg.SceneAnchorHandler.GetConsistencyLogs)
+			}
+		}
+
+
 		// 角色相关
 		characters := v1.Group("/characters")
 		{
@@ -284,6 +307,12 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.GET("/:id/storyboard/:shot_id/audio", cfg.VideoHandler.ServeAudio)
 			videos.POST("/:id/stitch", cfg.VideoHandler.StitchVideoHandler)
 			videos.GET("/:id/export/capcut", cfg.VideoHandler.ExportCapCutDraft)
+			// 分镜绑定场景锚点
+			if cfg.SceneAnchorHandler != nil {
+				videos.PUT("/:id/shots/:shot_id/anchor", cfg.SceneAnchorHandler.SetShotAnchor)
+			}
+			// 分镜绑定角色
+			videos.PUT("/:id/shots/:shot_id/characters", cfg.VideoHandler.SetShotCharacters)
 		}
 
 		// 分镜

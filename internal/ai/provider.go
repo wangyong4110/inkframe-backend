@@ -82,6 +82,7 @@ type ImageGenerateRequest struct {
 	Style          string   `json:"style"` // realistic, anime, cartoon, etc.
 	ReferenceImage string   `json:"reference_image,omitempty"` // 用于一致性控制
 	ControlNets    []ControlNet `json:"control_nets,omitempty"`
+	ConsistencyWeight float64 `json:"consistency_weight,omitempty"` // 0-1，角色一致性强度（影响模型选择和scale）
 }
 
 // ControlNet 控制网

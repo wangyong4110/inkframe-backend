@@ -44,9 +44,9 @@ func main() {
 
 	// 3. 自动迁移（GORM AutoMigrate 只增列不删列，开发环境安全运行）
 	// 注意：列重命名需先执行 migrations/001_fix_model_provider_columns.sql
-	if err := autoMigrate(db); err != nil {
-		log.Fatalf("Failed to migrate database: %v", err)
-	}
+	//if err := autoMigrate(db); err != nil {
+	//	log.Fatalf("Failed to migrate database: %v", err)
+	//}
 
 	// 3b. 预置默认数据（INSERT IGNORE，幂等安全）
 	seedDefaultData(db)
@@ -88,31 +88,33 @@ func main() {
 	// 注入存储服务
 	services.VideoService.WithStorage(storageSvc)
 	services.AIService.WithStorage(storageSvc)
+	services.VideoService.WithSceneAnchorService(services.SceneAnchorService)
 
 	// 11. 初始化处理器
 	handlers := initHandlers(services, storageSvc, db)
 
 	// 12. 设置路由
 	r := router.SetupRouter(&router.Config{
-		JWTSecret:        cfg.Server.JWTSecret,
-		NovelHandler:     handlers.NovelHandler,
-		ChapterHandler:   handlers.ChapterHandler,
-		CharacterHandler: handlers.CharacterHandler,
-		VideoHandler:     handlers.VideoHandler,
-		ModelHandler:     handlers.ModelHandler,
-		McpHandler:       handlers.McpHandler,
-		StyleHandler:     handlers.StyleHandler,
-		ContextHandler:   handlers.ContextHandler,
-		AuthHandler:      handlers.AuthHandler,
-		ImportHandler:    handlers.ImportHandler,
-		WorldviewHandler: handlers.WorldviewHandler,
-		TenantHandler:    handlers.TenantHandler,
-		ItemHandler:      handlers.ItemHandler,
-		SkillHandler:     handlers.SkillHandler,
-		UploadHandler:    handlers.UploadHandler,
-		PlotPointHandler: handlers.PlotPointHandler,
-		TaskHandler:      handlers.TaskHandler,
-		MediaHandler:     handlers.MediaHandler,
+		JWTSecret:          cfg.Server.JWTSecret,
+		NovelHandler:       handlers.NovelHandler,
+		ChapterHandler:     handlers.ChapterHandler,
+		CharacterHandler:   handlers.CharacterHandler,
+		VideoHandler:       handlers.VideoHandler,
+		ModelHandler:       handlers.ModelHandler,
+		McpHandler:         handlers.McpHandler,
+		StyleHandler:       handlers.StyleHandler,
+		ContextHandler:     handlers.ContextHandler,
+		AuthHandler:        handlers.AuthHandler,
+		ImportHandler:      handlers.ImportHandler,
+		WorldviewHandler:   handlers.WorldviewHandler,
+		TenantHandler:      handlers.TenantHandler,
+		ItemHandler:        handlers.ItemHandler,
+		SkillHandler:       handlers.SkillHandler,
+		UploadHandler:      handlers.UploadHandler,
+		PlotPointHandler:   handlers.PlotPointHandler,
+		TaskHandler:        handlers.TaskHandler,
+		MediaHandler:       handlers.MediaHandler,
+		SceneAnchorHandler: handlers.SceneAnchorHandler,
 	})
 
 	// 11. 设置Gin模式
@@ -583,6 +585,11 @@ func autoMigrate(db *gorm.DB) error {
 		&model.Skill{},
 		&model.AsyncTask{},
 		&model.MediaAsset{},
+		&model.HookChain{},
+		&model.SatisfactionPoint{},
+		&model.ConflictArc{},
+		&model.SceneAnchor{},
+		&model.SceneConsistencyLog{},
 	)
 }
 
@@ -748,57 +755,67 @@ func initVectorStore(cfg *config.Config) *vector.StoreManager {
 
 // Repositories 仓库层
 type Repositories struct {
-	NovelRepo            *repository.NovelRepository
-	ChapterRepo          *repository.ChapterRepository
-	CharacterRepo        *repository.CharacterRepository
-	WorldviewRepo        *repository.WorldviewRepository
-	AIModelRepo          *repository.AIModelRepository
-	TaskModelConfigRepo  *repository.TaskModelConfigRepository
-	VideoRepo            *repository.VideoRepository
-	StoryboardRepo       *repository.StoryboardRepository
-	KnowledgeBaseRepo    *repository.KnowledgeBaseRepository
-	ModelProviderRepo    *repository.ModelProviderRepository
-	ModelComparisonRepo  *repository.ModelComparisonRepository
-	ReviewTaskRepo       *repository.ReviewTaskRepository
-	ChapterVersionRepo   *repository.ChapterVersionRepository
-	SnapshotRepo         *repository.CharacterStateSnapshotRepository
-	UserRepo             *repository.UserRepository
-	TenantRepo           *repository.TenantRepository
-	TenantUserRepo       *repository.TenantUserRepository
-	ArcSummaryRepo       *repository.ArcSummaryRepository
-	ItemRepo             *repository.ItemRepository
-	ChapterItemRepo      *repository.ChapterItemRepository
-	ChapterCharacterRepo *repository.ChapterCharacterRepository
-	SkillRepo            *repository.SkillRepository
-	PlotPointRepo        *repository.PlotPointRepository
+	NovelRepo               *repository.NovelRepository
+	ChapterRepo             *repository.ChapterRepository
+	CharacterRepo           *repository.CharacterRepository
+	WorldviewRepo           *repository.WorldviewRepository
+	AIModelRepo             *repository.AIModelRepository
+	TaskModelConfigRepo     *repository.TaskModelConfigRepository
+	VideoRepo               *repository.VideoRepository
+	StoryboardRepo          *repository.StoryboardRepository
+	KnowledgeBaseRepo       *repository.KnowledgeBaseRepository
+	ModelProviderRepo       *repository.ModelProviderRepository
+	ModelComparisonRepo     *repository.ModelComparisonRepository
+	ReviewTaskRepo          *repository.ReviewTaskRepository
+	ChapterVersionRepo      *repository.ChapterVersionRepository
+	SnapshotRepo            *repository.CharacterStateSnapshotRepository
+	UserRepo                *repository.UserRepository
+	TenantRepo              *repository.TenantRepository
+	TenantUserRepo          *repository.TenantUserRepository
+	ArcSummaryRepo          *repository.ArcSummaryRepository
+	ItemRepo                *repository.ItemRepository
+	ChapterItemRepo         *repository.ChapterItemRepository
+	ChapterCharacterRepo    *repository.ChapterCharacterRepository
+	SkillRepo               *repository.SkillRepository
+	PlotPointRepo           *repository.PlotPointRepository
+	HookChainRepo           *repository.HookChainRepository
+	SatisfactionPointRepo   *repository.SatisfactionPointRepository
+	ConflictArcRepo         *repository.ConflictArcRepository
+	SceneAnchorRepo         *repository.SceneAnchorRepository
+	SceneConsistencyLogRepo *repository.SceneConsistencyLogRepository
 }
 
 // initRepositories 初始化仓库层
 func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 	return &Repositories{
-		NovelRepo:            repository.NewNovelRepository(db, redis),
-		ChapterRepo:          repository.NewChapterRepository(db, redis),
-		CharacterRepo:        repository.NewCharacterRepository(db),
-		WorldviewRepo:        repository.NewWorldviewRepository(db),
-		AIModelRepo:          repository.NewAIModelRepository(db),
-		TaskModelConfigRepo:  repository.NewTaskModelConfigRepository(db),
-		VideoRepo:            repository.NewVideoRepository(db),
-		StoryboardRepo:       repository.NewStoryboardRepository(db),
-		KnowledgeBaseRepo:    repository.NewKnowledgeBaseRepository(db),
-		ModelProviderRepo:    repository.NewModelProviderRepository(db),
-		ModelComparisonRepo:  repository.NewModelComparisonRepository(db),
-		ReviewTaskRepo:       repository.NewReviewTaskRepository(db),
-		ChapterVersionRepo:   repository.NewChapterVersionRepository(db),
-		SnapshotRepo:         repository.NewCharacterStateSnapshotRepository(db),
-		UserRepo:             repository.NewUserRepository(db),
-		TenantRepo:           repository.NewTenantRepository(db),
-		TenantUserRepo:       repository.NewTenantUserRepository(db),
-		ArcSummaryRepo:       repository.NewArcSummaryRepository(db),
-		ItemRepo:             repository.NewItemRepository(db),
-		ChapterItemRepo:      repository.NewChapterItemRepository(db),
-		ChapterCharacterRepo: repository.NewChapterCharacterRepository(db),
-		SkillRepo:            repository.NewSkillRepository(db),
-		PlotPointRepo:        repository.NewPlotPointRepository(db),
+		NovelRepo:               repository.NewNovelRepository(db, redis),
+		ChapterRepo:             repository.NewChapterRepository(db, redis),
+		CharacterRepo:           repository.NewCharacterRepository(db),
+		WorldviewRepo:           repository.NewWorldviewRepository(db),
+		AIModelRepo:             repository.NewAIModelRepository(db),
+		TaskModelConfigRepo:     repository.NewTaskModelConfigRepository(db),
+		VideoRepo:               repository.NewVideoRepository(db),
+		StoryboardRepo:          repository.NewStoryboardRepository(db),
+		KnowledgeBaseRepo:       repository.NewKnowledgeBaseRepository(db),
+		ModelProviderRepo:       repository.NewModelProviderRepository(db),
+		ModelComparisonRepo:     repository.NewModelComparisonRepository(db),
+		ReviewTaskRepo:          repository.NewReviewTaskRepository(db),
+		ChapterVersionRepo:      repository.NewChapterVersionRepository(db),
+		SnapshotRepo:            repository.NewCharacterStateSnapshotRepository(db),
+		UserRepo:                repository.NewUserRepository(db),
+		TenantRepo:              repository.NewTenantRepository(db),
+		TenantUserRepo:          repository.NewTenantUserRepository(db),
+		ArcSummaryRepo:          repository.NewArcSummaryRepository(db),
+		ItemRepo:                repository.NewItemRepository(db),
+		ChapterItemRepo:         repository.NewChapterItemRepository(db),
+		ChapterCharacterRepo:    repository.NewChapterCharacterRepository(db),
+		SkillRepo:               repository.NewSkillRepository(db),
+		PlotPointRepo:           repository.NewPlotPointRepository(db),
+		HookChainRepo:           repository.NewHookChainRepository(db),
+		SatisfactionPointRepo:   repository.NewSatisfactionPointRepository(db),
+		ConflictArcRepo:         repository.NewConflictArcRepository(db),
+		SceneAnchorRepo:         repository.NewSceneAnchorRepository(db),
+		SceneConsistencyLogRepo: repository.NewSceneConsistencyLogRepository(db),
 	}
 }
 
@@ -843,6 +860,12 @@ type Services struct {
 	PlotPointService            *service.PlotPointService
 	TaskService                 *service.TaskService
 	AIService                   *service.AIService
+	HookChainService            *service.HookChainService
+	SatisfactionPointService    *service.SatisfactionPointService
+	ConflictArcService          *service.ConflictArcService
+	PacingService               *service.PacingService
+	SceneAnchorService          *service.SceneAnchorService
+	SceneConsistencyService     *service.SceneConsistencyService
 }
 
 // initServices 初始化服务层
@@ -901,6 +924,9 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		aiService,
 	)
 
+	// 确保已有 provider 都有对应的 AIModel 行
+	modelService.SeedAllProviders()
+
 	// 提示词服务
 	promptService := service.NewPromptService(nil)
 
@@ -957,9 +983,16 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		aiService,
 	)
 
+	// 戏剧张力服务
+	hookChainService := service.NewHookChainService(repos.HookChainRepo)
+	satisfactionPointService := service.NewSatisfactionPointService(repos.SatisfactionPointRepo)
+	conflictArcService := service.NewConflictArcService(repos.ConflictArcRepo)
+	pacingService := service.NewPacingService(repos.ChapterRepo, repos.SatisfactionPointRepo)
+
 	// 章节服务（需要 generationContextService 以构建富上下文 prompt）
 	chapterService := service.NewChapterService(repos.ChapterRepo, repos.NovelRepo, aiService, generationContextService).
-		WithNarrativeMemory(narrativeMemoryService)
+		WithNarrativeMemory(narrativeMemoryService).
+		WithDramaticServices(hookChainService, satisfactionPointService, conflictArcService)
 
 	// 图像生成服务
 	imageGenerationService := service.NewImageGenerationService(aiService)
@@ -1089,29 +1122,36 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		PlotPointService:            plotPointService,
 		TaskService:                 taskService,
 		AIService:                   aiService,
+		HookChainService:            hookChainService,
+		SatisfactionPointService:    satisfactionPointService,
+		ConflictArcService:          conflictArcService,
+		PacingService:               pacingService,
+		SceneAnchorService:          service.NewSceneAnchorService(repos.SceneAnchorRepo, repos.StoryboardRepo, aiService, repos.NovelRepo),
+		SceneConsistencyService:     service.NewSceneConsistencyService(repos.SceneConsistencyLogRepo, aiService),
 	}
 }
 
 // Handlers 处理器
 type Handlers struct {
-	NovelHandler     *handler.NovelHandler
-	ChapterHandler   *handler.ChapterHandler
-	CharacterHandler *handler.CharacterHandler
-	VideoHandler     *handler.VideoHandler
-	ModelHandler     *handler.ModelHandler
-	McpHandler       *handler.McpHandler
-	StyleHandler     *handler.StyleHandler
-	ContextHandler   *handler.ContextHandler
-	AuthHandler      *handler.AuthHandler
-	ImportHandler    *handler.ImportHandler
-	WorldviewHandler *handler.WorldviewHandler
-	TenantHandler    *handler.TenantHandler
-	ItemHandler      *handler.ItemHandler
-	SkillHandler     *handler.SkillHandler
-	UploadHandler    *handler.UploadHandler
-	PlotPointHandler *handler.PlotPointHandler
-	TaskHandler      *handler.TaskHandler
-	MediaHandler     *handler.MediaHandler
+	NovelHandler       *handler.NovelHandler
+	ChapterHandler     *handler.ChapterHandler
+	CharacterHandler   *handler.CharacterHandler
+	VideoHandler       *handler.VideoHandler
+	ModelHandler       *handler.ModelHandler
+	McpHandler         *handler.McpHandler
+	StyleHandler       *handler.StyleHandler
+	ContextHandler     *handler.ContextHandler
+	AuthHandler        *handler.AuthHandler
+	ImportHandler      *handler.ImportHandler
+	WorldviewHandler   *handler.WorldviewHandler
+	TenantHandler      *handler.TenantHandler
+	ItemHandler        *handler.ItemHandler
+	SkillHandler       *handler.SkillHandler
+	UploadHandler      *handler.UploadHandler
+	PlotPointHandler   *handler.PlotPointHandler
+	TaskHandler        *handler.TaskHandler
+	MediaHandler       *handler.MediaHandler
+	SceneAnchorHandler *handler.SceneAnchorHandler
 }
 
 // initHandlers 初始化处理器
@@ -1153,14 +1193,15 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB) *
 			h.SetAnalysisService(services.NovelAnalysisService)
 			return h
 		}(),
-		WorldviewHandler: handler.NewWorldviewHandler(services.WorldviewService),
-		TenantHandler:    handler.NewTenantHandler(services.TenantService),
-		ItemHandler:      handler.NewItemHandler(services.ItemService, services.ChapterService).WithStorage(storageSvc).WithTaskService(services.TaskService),
-		SkillHandler:     handler.NewSkillHandler(services.SkillService),
-		UploadHandler:    handler.NewUploadHandler(storageSvc),
-		PlotPointHandler: handler.NewPlotPointHandler(services.PlotPointService).WithChapterService(services.ChapterService).WithTaskService(services.TaskService),
-		TaskHandler:      handler.NewTaskHandler(services.TaskService),
-		MediaHandler:     handler.NewMediaHandler(db),
+		WorldviewHandler:   handler.NewWorldviewHandler(services.WorldviewService),
+		TenantHandler:      handler.NewTenantHandler(services.TenantService),
+		ItemHandler:        handler.NewItemHandler(services.ItemService, services.ChapterService).WithStorage(storageSvc).WithTaskService(services.TaskService),
+		SkillHandler:       handler.NewSkillHandler(services.SkillService),
+		UploadHandler:      handler.NewUploadHandler(storageSvc),
+		PlotPointHandler:   handler.NewPlotPointHandler(services.PlotPointService).WithChapterService(services.ChapterService).WithTaskService(services.TaskService),
+		TaskHandler:        handler.NewTaskHandler(services.TaskService),
+		MediaHandler:       handler.NewMediaHandler(db),
+		SceneAnchorHandler: handler.NewSceneAnchorHandler(services.SceneAnchorService, services.SceneConsistencyService),
 	}
 }
 
