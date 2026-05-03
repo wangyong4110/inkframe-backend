@@ -101,6 +101,10 @@ func (h *ModelHandler) CreateProvider(c *gin.Context) {
 
 	provider, err := h.modelService.CreateProvider(&req, getTenantID(c))
 	if err != nil {
+		if isDuplicateKeyError(err) {
+			respondErr(c, http.StatusConflict, "该名称的提供商已存在，请修改名称或直接编辑已有提供商")
+			return
+		}
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}

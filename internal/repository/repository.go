@@ -1160,6 +1160,10 @@ func (r *ModelProviderRepository) GetSystemProvider(name string) (*model.ModelPr
 
 // Create 创建提供商
 func (r *ModelProviderRepository) Create(provider *model.ModelProvider) error {
+	// 清理同 (tenant_id, name) 的历史软删除记录，避免唯一索引冲突。
+	r.db.Unscoped().
+		Where("tenant_id = ? AND name = ? AND deleted_at IS NOT NULL", provider.TenantID, provider.Name).
+		Delete(&model.ModelProvider{}) //nolint:errcheck
 	return r.db.Create(provider).Error
 }
 
@@ -1168,9 +1172,9 @@ func (r *ModelProviderRepository) Update(provider *model.ModelProvider) error {
 	return r.db.Save(provider).Error
 }
 
-// Delete 删除模型提供商
+// Delete 硬删除模型提供商（Unscoped，跳过软删除），确保再次创建同名提供商不会冲突。
 func (r *ModelProviderRepository) Delete(id uint) error {
-	return r.db.Delete(&model.ModelProvider{}, id).Error
+	return r.db.Unscoped().Delete(&model.ModelProvider{}, id).Error
 }
 
 // UpdateHealthStatus 更新健康状态

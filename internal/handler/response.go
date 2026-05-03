@@ -14,6 +14,17 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/storage"
 )
 
+// isDuplicateKeyError reports whether err is a MySQL/SQLite unique-constraint violation.
+func isDuplicateKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "1062") ||
+		strings.Contains(msg, "Duplicate entry") ||
+		strings.Contains(msg, "UNIQUE constraint failed")
+}
+
 func respondOK(c *gin.Context, data interface{}) {
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": data})
 }

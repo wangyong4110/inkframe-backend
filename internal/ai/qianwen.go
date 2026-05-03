@@ -1,15 +1,18 @@
 package ai
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -325,16 +328,27 @@ func (p *QianwenProvider) ImageGenerate(ctx context.Context, req *ImageGenerateR
 	}, nil
 }
 
-// AudioGenerate 使用 CosyVoice 模型合成语音。
-// DashScope 兼容 OpenAI /audio/speech 接口，model 默认 cosyvoice-v1，voice 默认 longxiaochun。
-// 常用发音人：longxiaochun（女）、longhua（男）、longshu（男）、longxiaoxia（女）等。
+// AudioGenerate 合成语音。
+//
+// 模型选取优先级：req.Model > p.model > "cosyvoice-v1"
+// 模型路由：
+//   - qwen*tts* 系列 → 调用 DashScope 原生 TTS API（SSE 流式）
+//   - cosyvoice* 及其他 → 调用 OpenAI 兼容 /audio/speech 接口
+//
+// 常用 qwen-tts 发音人：longxiaochun（女）、longhua（男）、longshu（男）、longxiaoxia（女）
 func (p *QianwenProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRequest) (*AudioResponse, error) {
 	start := time.Now()
 
+	// 模型优先级：请求指定 > 提供商配置 > cosyvoice-v1 兜底
 	model := req.Model
 	if model == "" {
+		model = p.model
+	}
+	// p.model 可能是文本生成模型（如 qwen-plus），此时回退到 TTS 默认
+	if model == "" || (!strings.Contains(strings.ToLower(model), "tts") && !strings.HasPrefix(strings.ToLower(model), "cosyvoice")) {
 		model = "cosyvoice-v1"
 	}
+
 	voice := req.Voice
 	if voice == "" {
 		voice = "longxiaochun"
@@ -344,9 +358,19 @@ func (p *QianwenProvider) AudioGenerate(ctx context.Context, req *AudioGenerateR
 		speed = 1.0
 	}
 
+	// Qwen TTS 系列使用原生 DashScope API
+	if strings.Contains(strings.ToLower(model), "tts") && strings.HasPrefix(strings.ToLower(model), "qwen") {
+		return p.generateQwenTTS(ctx, req.Text, model, voice, speed, start)
+	}
+	// CosyVoice 及其他使用 OpenAI 兼容接口
+	return p.generateCosyVoice(ctx, req.Text, model, voice, speed, start)
+}
+
+// generateCosyVoice 调用 DashScope OpenAI 兼容 /audio/speech 接口（cosyvoice 系列）。
+func (p *QianwenProvider) generateCosyVoice(ctx context.Context, text, model, voice string, speed float64, start time.Time) (*AudioResponse, error) {
 	ttsReq := map[string]interface{}{
 		"model":           model,
-		"input":           req.Text,
+		"input":           text,
 		"voice":           voice,
 		"speed":           speed,
 		"response_format": "mp3",
@@ -362,6 +386,55 @@ func (p *QianwenProvider) AudioGenerate(ctx context.Context, req *AudioGenerateR
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
+		return nil, fmt.Errorf("千问 CosyVoice TTS 请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("千问 CosyVoice TTS 错误 %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	audioData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("千问 CosyVoice TTS 读取响应失败: %w", err)
+	}
+	if len(audioData) == 0 {
+		return nil, fmt.Errorf("千问 CosyVoice TTS 返回空音频数据")
+	}
+
+	return saveTTSToTemp(audioData, text, start)
+}
+
+// generateQwenTTS 调用 DashScope 原生 TTS API（qwen-tts/qwen3-tts 系列，SSE 流式）。
+// 官方文档：https://help.aliyun.com/document_detail/2712523.html
+// 端点：POST https://dashscope.aliyuncs.com/api/v1/services/aigc/text2audiospeech/synthesis
+// 响应：SSE 流，每个 event 的 data.output.audio 为 base64 编码的 MP3 分块。
+func (p *QianwenProvider) generateQwenTTS(ctx context.Context, text, model, voice string, speed float64, start time.Time) (*AudioResponse, error) {
+	const nativeTTSEndpoint = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text2audiospeech/synthesis"
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"model": model,
+		"input": map[string]string{
+			"text": text,
+		},
+		"parameters": map[string]interface{}{
+			"voice":  voice,
+			"format": "mp3",
+			"rate":   speed,
+		},
+	})
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", nativeTTSEndpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	httpReq.Header.Set("X-DashScope-SSE", "enable")
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
 		return nil, fmt.Errorf("千问 TTS 请求失败: %w", err)
 	}
 	defer resp.Body.Close()
@@ -371,25 +444,64 @@ func (p *QianwenProvider) AudioGenerate(ctx context.Context, req *AudioGenerateR
 		return nil, fmt.Errorf("千问 TTS 错误 %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	audioData, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("千问 TTS 读取响应失败: %w", err)
+	// 解析 SSE 流，拼接 base64 音频块
+	type sseOutput struct {
+		FinishReason string `json:"finish_reason"`
+		Audio        string `json:"audio"` // base64 encoded MP3 chunk
 	}
-	if len(audioData) == 0 {
-		return nil, fmt.Errorf("千问 TTS 返回空音频数据")
+	type sseData struct {
+		Output sseOutput `json:"output"`
 	}
 
+	var audioData []byte
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 512*1024), 512*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" || payload == "[DONE]" {
+			continue
+		}
+		var ev sseData
+		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
+			continue
+		}
+		if ev.Output.Audio != "" {
+			chunk, err := base64.StdEncoding.DecodeString(ev.Output.Audio)
+			if err != nil {
+				return nil, fmt.Errorf("千问 TTS base64 解码失败: %w", err)
+			}
+			audioData = append(audioData, chunk...)
+		}
+		if ev.Output.FinishReason == "stop" {
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("千问 TTS 读取 SSE 流失败: %w", err)
+	}
+	if len(audioData) == 0 {
+		return nil, fmt.Errorf("千问 TTS 未收到音频数据，请检查发音人名称和 API Key 权限")
+	}
+
+	return saveTTSToTemp(audioData, text, start)
+}
+
+// saveTTSToTemp 将音频字节写入 /tmp 临时文件并返回 AudioResponse。
+func saveTTSToTemp(audioData []byte, text string, start time.Time) (*AudioResponse, error) {
 	idBytes := make([]byte, 8)
 	rand.Read(idBytes) //nolint:errcheck
 	tmpPath := fmt.Sprintf("/tmp/inkframe-tts-%s.mp3", hex.EncodeToString(idBytes))
 	if err := os.WriteFile(tmpPath, audioData, 0644); err != nil {
-		return nil, fmt.Errorf("千问 TTS 写入临时文件失败: %w", err)
+		return nil, fmt.Errorf("TTS 写入临时文件失败: %w", err)
 	}
-
 	return &AudioResponse{
 		URL:       "file://" + tmpPath,
 		Format:    "mp3",
-		Duration:  float64(len(req.Text)) / 8.0,
+		Duration:  float64(len([]rune(text))) / 8.0,
 		LatencyMs: time.Since(start).Milliseconds(),
 	}, nil
 }
