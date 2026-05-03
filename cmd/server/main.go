@@ -469,6 +469,7 @@ func seedAIModels(db *gorm.DB) {
 		{"volcengine-visual", "即梦AI（火山引擎）", "image", ""},
 		{"kling", "可灵（快手）", "video", ""},
 		{"seedance", "Seedance（字节跳动）", "video", "https://ark.volces.com/api/v3"},
+		{"doubao-speech", "豆包语音合成", "voice", "https://openspeech.bytedance.com/api/v3"},
 	}
 
 	llmTasks := []string{"chapter", "outline", "storyboard", "quality_check"}
@@ -501,6 +502,9 @@ func seedAIModels(db *gorm.DB) {
 		// 视频
 		{"kling", "kling-v1-6", "可灵 v1.6", []string{"video_gen"}, 0.9, 0},
 		{"seedance", "seedance-01-lite", "Seedance 01 Lite", []string{"video_gen"}, 0.88, 0},
+		// 豆包语音合成
+		{"doubao-speech", "seed-tts-2.0", "豆包 Seed TTS 2.0", []string{"voice_gen"}, 0.92, 0},
+		{"doubao-speech", "seed-tts-1.0", "豆包 Seed TTS 1.0", []string{"voice_gen"}, 0.88, 0},
 	}
 
 	// 1. 确保 provider 记录存在（tenant_id=0 系统级）
@@ -725,6 +729,12 @@ func initAIModule(cfg *config.Config) *ai.ModelManager {
 	if vvp := initVolcengineVisual(cfg); vvp != nil {
 		manager.RegisterProvider("volcengine-visual", vvp)
 		manager.RegisterImageProvider("volcengine-visual", ai.VolcModelText2ImgV3, "1328x1328")
+	}
+
+	// 豆包语音合成（openspeech.bytedance.com 原生 TTS API，X-Api-Key 鉴权）
+	if speechKey := getEnv("DOUBAO_SPEECH_API_KEY", ""); speechKey != "" {
+		resourceID := getEnv("DOUBAO_SPEECH_RESOURCE_ID", "")
+		manager.RegisterProvider("doubao-speech", ai.NewDoubaoSpeechProvider(speechKey, resourceID))
 	}
 
 	// 为所有 Provider 包装指数退避重试（最多 3 次，基础延迟 500ms）
