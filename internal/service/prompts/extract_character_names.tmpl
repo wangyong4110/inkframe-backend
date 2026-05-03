@@ -1,0 +1,23 @@
+请从以下小说内容中提取主要角色名单。
+
+# 小说信息
+- 标题：《{{.NovelTitle}}》
+- 类型：{{.Genre}}
+
+# 内容概要
+{{.Summaries}}
+{{if .ExistingNames}}
+# 已有角色（必须复用，不得改名）
+{{.ExistingNames}}
+{{end}}
+# 要求
+1. 只提取主要角色：protagonist（主角）、antagonist（反派）、supporting（重要配角）；最多10个
+2. 不要提取次要/龙套角色
+3. role 只能是：protagonist / antagonist / supporting
+4. brief：一句话概括该角色的核心定位（不超过30字）
+5. 严格输出 JSON 数组，不含任何说明文字
+
+# 输出格式（JSON 数组）
+[
+  {"name": "角色名", "role": "protagonist", "brief": "一句话描述"}
+]

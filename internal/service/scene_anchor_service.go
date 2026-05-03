@@ -199,6 +199,26 @@ type extractedAnchor struct {
 	StyleTokens string `json:"style_tokens"`
 }
 
+// parseAnchorJSONResult parses the LLM response into []extractedAnchor.
+// Handles both bare arrays and wrapped objects like {"scene_anchors":[...]}.
+func parseAnchorJSONResult(raw string) ([]extractedAnchor, error) {
+	cleaned := extractJSON(strings.TrimSpace(raw))
+	var result []extractedAnchor
+	if err := json.Unmarshal([]byte(cleaned), &result); err == nil {
+		return result, nil
+	}
+	// Try wrapped object: {"scene_anchors":[...]} or {"data":[...]} etc.
+	var wrapper map[string]json.RawMessage
+	if json.Unmarshal([]byte(cleaned), &wrapper) == nil {
+		for _, v := range wrapper {
+			if json.Unmarshal(v, &result) == nil {
+				return result, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("cannot parse as anchor array: %.200s", raw)
+}
+
 // ExtractFromChapter 调用 LLM 提取章节中的场景锚点，去重后批量创建
 func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, novelID uint, novelTitle, chapterContent string) ([]*model.SceneAnchor, error) {
 	_ = ctx // 未来可传 context 给 AI provider
@@ -242,8 +262,8 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 	}
 
 	// 解析 JSON
-	var extracted []extractedAnchor
-	if err := json.Unmarshal([]byte(jsonStr), &extracted); err != nil {
+	extracted, err := parseAnchorJSONResult(jsonStr)
+	if err != nil {
 		log.Printf("[SceneAnchorService] ExtractFromChapter: JSON parse failed: %v, jsonStr=%q", err, jsonStr)
 		return nil, fmt.Errorf("parse LLM response: %w", err)
 	}
@@ -365,6 +385,7 @@ func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*m
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	allCreated := make([]*model.SceneAnchor, 0)
+	failCount := 0
 
 	for _, ch := range candidates {
 		ch := ch
@@ -375,6 +396,9 @@ func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*m
 			anchors, err := s.ExtractFromChapter(ctx, tenantID, novelID, novelTitle, ch.Content)
 			if err != nil {
 				log.Printf("[SceneAnchorService] AIExtractAllFromNovel chapter %d: %v", ch.ID, err)
+				mu.Lock()
+				failCount++
+				mu.Unlock()
 				return
 			}
 			mu.Lock()
@@ -383,5 +407,8 @@ func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*m
 		}()
 	}
 	wg.Wait()
+	if failCount == len(candidates) {
+		return nil, fmt.Errorf("所有章节场景锚点提取均失败，请检查 AI 提供商配置")
+	}
 	return allCreated, nil
 }

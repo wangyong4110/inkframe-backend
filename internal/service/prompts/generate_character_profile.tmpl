@@ -1,0 +1,40 @@
+请为小说《{{.NovelTitle}}》中的角色「{{.CharacterName}}」生成完整角色档案。
+
+# 角色基本信息
+- 姓名：{{.CharacterName}}
+- 定位：{{.CharacterRole}}
+- 简介：{{.CharacterBrief}}
+
+# 相关小说内容
+{{.Summaries}}
+
+# 要求
+1. appearance：详细外貌，包含身高体型、发色发型、眼睛颜色神态、面部特征、常见服装
+2. personality：深度性格，包含核心特质、行为模式、内在矛盾
+3. personality_tags：3-5个短标签，每个不超过4字，如["孤傲冷峻","腹黑算计"]
+4. background：详细背景，包含出身、成长经历、重要转折
+5. character_arc：角色成长轨迹，描述起点、关键转变、最终归宿
+6. abilities：核心能力，每项包含 name 和 description
+7. dialogue_style：说话风格（vocabulary_level / patterns 2-4条 / speech_habits 一句话总结）
+8. visual_prompt：英文图像生成提示词，不超过150词
+9. archetype：角色原型，如英雄、智者、导师、反派、守护者、叛逆者等
+10. 严格输出单个 JSON 对象，不含任何说明文字
+
+# 输出格式（单个 JSON 对象）
+{
+  "name": "{{.CharacterName}}",
+  "role": "{{.CharacterRole}}",
+  "archetype": "角色原型",
+  "appearance": "...",
+  "personality": "...",
+  "personality_tags": ["...", "..."],
+  "background": "...",
+  "character_arc": "...",
+  "abilities": [{"name": "...", "description": "..."}],
+  "dialogue_style": {
+    "vocabulary_level": "武侠",
+    "patterns": ["...", "..."],
+    "speech_habits": "..."
+  },
+  "visual_prompt": "..."
+}

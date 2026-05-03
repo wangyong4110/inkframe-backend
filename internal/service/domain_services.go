@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"text/template"
 	"time"
 
@@ -70,10 +71,238 @@ func marshalExistingNames[T any](items []T, transform func(T) any) string {
 	return string(b)
 }
 
+// charNameEntry 阶段一提取的角色简要信息
+type charNameEntry struct {
+	Name  string `json:"name"`
+	Role  string `json:"role"`
+	Brief string `json:"brief"`
+}
+
+// extractCharNamesFromContent 从单章内容中提取角色名单（纯 AI 提取，不操作 DB）
+func (s *CharacterService) extractCharNamesFromContent(
+	tenantID, novelID uint,
+	novelTitle, genre, content string,
+) ([]charNameEntry, error) {
+	tmplStr := loadPromptTemplate("extract_character_names.tmpl")
+	tmpl, err := template.New("extract_character_names").Parse(tmplStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse template: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, map[string]interface{}{
+		"NovelTitle":    novelTitle,
+		"Genre":         genre,
+		"Summaries":     content,
+		"ExistingNames": "",
+	}); err != nil {
+		return nil, fmt.Errorf("render template: %w", err)
+	}
+
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_character_names", buf.String(), "")
+	if err != nil {
+		return nil, err
+	}
+
+	cleaned := extractJSON(strings.TrimSpace(result))
+	var entries []charNameEntry
+	if err := json.Unmarshal([]byte(cleaned), &entries); err != nil {
+		dec := json.NewDecoder(strings.NewReader(cleaned))
+		if _, e := dec.Token(); e == nil {
+			for dec.More() {
+				var e charNameEntry
+				if dec.Decode(&e) == nil && e.Name != "" {
+					entries = append(entries, e)
+				}
+			}
+		}
+	}
+	valid := entries[:0]
+	for _, e := range entries {
+		if e.Name != "" {
+			valid = append(valid, e)
+		}
+	}
+	return valid, nil
+}
+
+// extractCharacterNamesFromChapters Phase 1：逐章并发提取角色名单，合并去重
+func (s *CharacterService) extractCharacterNamesFromChapters(
+	tenantID, novelID uint,
+	novelTitle, genre string,
+	chapters []*model.Chapter,
+) ([]charNameEntry, error) {
+	const maxChapters = 10
+	const concurrency = 3
+
+	// 过滤有内容的章节（最多 maxChapters 章）
+	var candidates []*model.Chapter
+	for _, ch := range chapters {
+		if ch.Content != "" || ch.Summary != "" {
+			candidates = append(candidates, ch)
+			if len(candidates) >= maxChapters {
+				break
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no chapter content available")
+	}
+
+	type chResult struct {
+		entries []charNameEntry
+		err     error
+	}
+	results := make([]chResult, len(candidates))
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for i, ch := range candidates {
+		wg.Add(1)
+		go func(idx int, c *model.Chapter) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			content := c.Content
+			if content == "" {
+				content = c.Summary
+			}
+			entries, err := s.extractCharNamesFromContent(tenantID, novelID, novelTitle, genre, content)
+			results[idx] = chResult{entries, err}
+		}(i, ch)
+	}
+	wg.Wait()
+
+	// 合并去重（按小写名字，保留第一次出现）
+	seen := make(map[string]bool)
+	var merged []charNameEntry
+	for _, r := range results {
+		if r.err != nil {
+			continue
+		}
+		for _, e := range r.entries {
+			key := strings.ToLower(e.Name)
+			if !seen[key] {
+				seen[key] = true
+				merged = append(merged, e)
+			}
+		}
+	}
+	return merged, nil
+}
+
+// extractCharacterNameList 阶段一：从小说摘要中提取角色名单（输出极短，避免截断）
+func (s *CharacterService) extractCharacterNameList(
+	tenantID, novelID uint,
+	novelTitle, genre, summariesText string,
+	existing []*model.Character,
+) ([]charNameEntry, error) {
+	existingJSON := marshalExistingNames(existing, func(c *model.Character) any {
+		return struct {
+			Name string `json:"name"`
+			Role string `json:"role"`
+		}{c.Name, c.Role}
+	})
+
+	tmplStr := loadPromptTemplate("extract_character_names.tmpl")
+	tmpl, err := template.New("extract_character_names").Parse(tmplStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse extract_character_names.tmpl: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, map[string]interface{}{
+		"NovelTitle":    novelTitle,
+		"Genre":         genre,
+		"Summaries":     summariesText,
+		"ExistingNames": existingJSON,
+	}); err != nil {
+		return nil, fmt.Errorf("render extract_character_names.tmpl: %w", err)
+	}
+
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_character_names", buf.String(), "")
+	if err != nil {
+		return nil, fmt.Errorf("AI call failed: %w", err)
+	}
+
+	cleaned := extractJSON(strings.TrimSpace(result))
+	var entries []charNameEntry
+	if err := json.Unmarshal([]byte(cleaned), &entries); err != nil {
+		// 兜底：尝试用 Decoder 部分恢复
+		dec := json.NewDecoder(strings.NewReader(cleaned))
+		if _, e := dec.Token(); e == nil {
+			for dec.More() {
+				var e charNameEntry
+				if dec.Decode(&e) == nil && e.Name != "" {
+					entries = append(entries, e)
+				}
+			}
+		}
+	}
+	// 过滤掉名字为空的
+	valid := entries[:0]
+	for _, e := range entries {
+		if e.Name != "" {
+			valid = append(valid, e)
+		}
+	}
+	return valid, nil
+}
+
+// generateOneCharacterProfile 阶段二：为单个角色生成完整档案
+func (s *CharacterService) generateOneCharacterProfile(
+	tenantID, novelID uint,
+	novelTitle, genre string,
+	entry charNameEntry,
+	shortSummaries string,
+) (*analysisCharJSON, error) {
+	tmplStr := loadPromptTemplate("generate_character_profile.tmpl")
+	tmpl, err := template.New("generate_character_profile").Parse(tmplStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse template: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, map[string]interface{}{
+		"NovelTitle":     novelTitle,
+		"Genre":          genre,
+		"CharacterName":  entry.Name,
+		"CharacterRole":  entry.Role,
+		"CharacterBrief": entry.Brief,
+		"Summaries":      shortSummaries,
+	}); err != nil {
+		return nil, fmt.Errorf("render template: %w", err)
+	}
+
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "generate_character_profile", buf.String(), "")
+	if err != nil {
+		return nil, fmt.Errorf("AI call: %w", err)
+	}
+
+	cleaned := extractJSON(strings.TrimSpace(result))
+	var profile analysisCharJSON
+	if err := json.Unmarshal([]byte(cleaned), &profile); err != nil {
+		// 如果是包裹对象 {"character":{...}}，尝试解包
+		var wrapper map[string]json.RawMessage
+		if json.Unmarshal([]byte(cleaned), &wrapper) == nil {
+			for _, v := range wrapper {
+				if json.Unmarshal(v, &profile) == nil && profile.Name != "" {
+					return &profile, nil
+				}
+			}
+		}
+		return nil, fmt.Errorf("parse profile JSON: %w", err)
+	}
+	if profile.Name == "" {
+		profile.Name = entry.Name
+	}
+	if profile.Role == "" {
+		profile.Role = entry.Role
+	}
+	return &profile, nil
+}
+
 // parseCharacterJSONResult 从 AI 响应中解析 []analysisCharJSON。
 // 兼容以下几种常见输出形式：
 //  1. 裸数组:        [{"name":"xxx",...}]
 //  2. 被包裹的对象:  {"characters":[...]} / {"data":[...]} 等
+//  3. 截断的 JSON:   输出被 token 上限截断，通过 json.Decoder 逐对象恢复
 func parseCharacterJSONResult(raw string) ([]analysisCharJSON, error) {
 	cleaned := extractJSON(strings.TrimSpace(raw))
 	var profiles []analysisCharJSON
@@ -89,7 +318,35 @@ func parseCharacterJSONResult(raw string) ([]analysisCharJSON, error) {
 			}
 		}
 	}
+	// 最后尝试部分恢复：用 json.Decoder 逐个解析，遇到截断就停止
+	if partial := extractPartialCharacterObjects(raw); len(partial) > 0 {
+		log.Printf("[parseCharacterJSONResult] partial recovery: got %d characters from truncated JSON", len(partial))
+		return partial, nil
+	}
 	return nil, fmt.Errorf("cannot parse as character array: %.200s", raw)
+}
+
+// extractPartialCharacterObjects 从截断的 JSON 数组中尽量多地解析完整对象
+func extractPartialCharacterObjects(raw string) []analysisCharJSON {
+	start := strings.IndexByte(raw, '[')
+	if start == -1 {
+		return nil
+	}
+	dec := json.NewDecoder(strings.NewReader(raw[start:]))
+	if _, err := dec.Token(); err != nil { // consume '['
+		return nil
+	}
+	var results []analysisCharJSON
+	for dec.More() {
+		var obj analysisCharJSON
+		if err := dec.Decode(&obj); err != nil {
+			break // truncated — stop here
+		}
+		if obj.Name != "" {
+			results = append(results, obj)
+		}
+	}
+	return results
 }
 
 // ============================================
@@ -1261,6 +1518,7 @@ func (s *CharacterService) GenerateProfile(tenantID uint, novelID uint, descript
 }
 
 // AIBatchGenerate 使用 AI 批量生成/更新小说角色（按 novel_id+name upsert，仅补填空字段）
+// AIBatchGenerate 使用 AI 批量生成/更新小说角色（两阶段：先提名单，再并发生成档案）
 func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Character, error) {
 	if s.chapterRepo == nil {
 		return nil, fmt.Errorf("chapter repository not configured")
@@ -1277,13 +1535,7 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 		return nil, fmt.Errorf("failed to load chapters: %w", err)
 	}
 
-	// 构建章节摘要文本（优先用摘要，最多 15 章，8000 字）
-	summariesText := buildChapterSummariesText(chapters, 15, 8000)
-	if summariesText == "" {
-		summariesText = collectContent(chapters, 5, 5000)
-	}
-
-	// 获取小说标题/类型（用于 prompt）
+	// 获取小说标题/类型
 	novelTitle := "本小说"
 	novelGenre := ""
 	if s.novelRepo != nil {
@@ -1292,54 +1544,61 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			novelGenre = novel.Genre
 		}
 	}
-	if summariesText == "" {
-		summariesText = fmt.Sprintf("这是一部%s类型的小说《%s》，请根据类型惯例设计主要角色。", novelGenre, novelTitle)
-	}
 
-	// 已有角色提示（防止重名/重复创建）
-	existingJSON := marshalExistingNames(existing, func(c *model.Character) any {
-		return struct {
-			Name string `json:"name"`
-			Role string `json:"role"`
-		}{c.Name, c.Role}
-	})
-
-	// 使用与分析流程相同的富格式 extract_characters.tmpl
-	tmplStr := loadPromptTemplate("extract_characters.tmpl")
-	// 在末尾追加已有角色提示，防止重名
-	if existingJSON != "" {
-		tmplStr += "\n\n注意：已有角色如下，必须复用原名，不得改名或重复创建：\n" + existingJSON
-	}
-	tmpl, err := template.New("extract_characters").Parse(tmplStr)
+	// ── 阶段一：逐章并发提取角色名单，合并去重 ──────────────────────────────
+	nameList, err := s.extractCharacterNamesFromChapters(tenantID, novelID, novelTitle, novelGenre, chapters)
 	if err != nil {
-		return nil, fmt.Errorf("parse extract_characters.tmpl: %w", err)
+		return nil, fmt.Errorf("phase 1 (extract names per chapter): %w", err)
 	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
-		"NovelTitle": novelTitle,
-		"Genre":      novelGenre,
-		"Summaries":  summariesText,
-	}); err != nil {
-		return nil, fmt.Errorf("render extract_characters.tmpl: %w", err)
+	if len(nameList) == 0 {
+		return nil, fmt.Errorf("AI 未识别到任何主要角色，请确认小说内容是否充足")
+	}
+	log.Printf("CharacterService.AIBatchGenerate: phase1 got %d characters: %v", len(nameList), func() []string {
+		ns := make([]string, len(nameList))
+		for i, e := range nameList {
+			ns[i] = e.Name
+		}
+		return ns
+	}())
+
+	// ── 阶段二：并发生成每个角色的完整档案（短摘要，最多 3 并发）────────────
+	// 阶段二每次只处理一个角色，用较短摘要节省 token
+	shortSummaries := buildChapterSummariesText(chapters, 5, 2000)
+	if shortSummaries == "" {
+		shortSummaries = collectContent(chapters, 5, 2000)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_characters", buf.String(), "")
-	if err != nil {
-		return nil, fmt.Errorf("AI generation failed: %w", err)
+	type profileResult struct {
+		profile *analysisCharJSON
+		err     error
 	}
-
-	profiles, err := parseCharacterJSONResult(result)
-	if err != nil {
-		log.Printf("CharacterService.AIBatchGenerate: parse error: %v, raw: %.200s", err, result)
-		return nil, fmt.Errorf("failed to parse AI response")
+	results := make([]profileResult, len(nameList))
+	sem := make(chan struct{}, 3)
+	var wg sync.WaitGroup
+	for i, entry := range nameList {
+		wg.Add(1)
+		go func(idx int, e charNameEntry) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			p, err := s.generateOneCharacterProfile(tenantID, novelID, novelTitle, novelGenre, e, shortSummaries)
+			results[idx] = profileResult{p, err}
+		}(i, entry)
 	}
+	wg.Wait()
 
-	upserted := make([]*model.Character, 0, len(profiles))
-	for _, p := range profiles {
-		if p.Name == "" {
+	// ── Upsert ───────────────────────────────────────────────────────────────
+	upserted := make([]*model.Character, 0, len(nameList))
+	for i, res := range results {
+		if res.err != nil {
+			log.Printf("CharacterService.AIBatchGenerate: generate profile for %q: %v", nameList[i].Name, res.err)
 			continue
 		}
-		// 序列化可选字段
+		p := res.profile
+		if p == nil || p.Name == "" {
+			continue
+		}
+
 		abilitiesJSON := ""
 		if len(p.Abilities) > 0 {
 			if b, err := json.Marshal(p.Abilities); err == nil {
@@ -1370,7 +1629,6 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 		}
 
 		if ch, ok := byName[p.Name]; ok {
-			// 更新现有角色：用 AI 数据填充空缺字段
 			changed := false
 			if v, ok := fillIfEmpty(ch.Role, role); ok { ch.Role = v; changed = true }
 			if v, ok := fillIfEmpty(ch.Archetype, p.Archetype); ok { ch.Archetype = v; changed = true }
@@ -1414,6 +1672,10 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			}
 			upserted = append(upserted, character)
 		}
+	}
+
+	if len(upserted) == 0 && len(nameList) > 0 {
+		return nil, fmt.Errorf("所有角色档案生成均失败，请检查 AI 提供商配置")
 	}
 	return upserted, nil
 }

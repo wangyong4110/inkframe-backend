@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"text/template"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -320,6 +321,230 @@ func buildSkillEffectPrompt(skill *model.Skill) string {
 	parts = append(parts, "fantasy art, concept art, dramatic lighting, vivid colors, high detail, no background text")
 
 	return strings.Join(parts, ", ")
+}
+
+// extractSkillsFromContent 从章节内容中提取技能（纯 AI 提取，不操作 DB）
+type skillExtractedJSON struct {
+	Name          string `json:"name"`
+	Category      string `json:"category"`
+	SkillType     string `json:"skill_type"`
+	Level         int    `json:"level"`
+	Realm         string `json:"realm"`
+	Description   string `json:"description"`
+	Effect        string `json:"effect"`
+	FlavorText    string `json:"flavor_text"`
+	Cost          string `json:"cost"`
+	CharacterName string `json:"character_name"`
+	ChapterNo     int    // 记录来自哪章（不是 JSON 字段）
+}
+
+func (s *SkillService) extractSkillsFromContent(
+	tenantID, novelID uint,
+	novelTitle, genre, content string,
+	existingNames []string,
+	chapterNo int,
+) ([]skillExtractedJSON, error) {
+	tmplStr := loadPromptTemplate("extract_chapter_skills.tmpl")
+	tmpl, err := template.New("extract_chapter_skills").Parse(tmplStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse template: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, map[string]interface{}{
+		"NovelTitle":    novelTitle,
+		"Genre":         genre,
+		"ExistingNames": existingNames,
+		"Content":       content,
+	}); err != nil {
+		return nil, fmt.Errorf("render template: %w", err)
+	}
+
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_chapter_skills", buf.String(), "")
+	if err != nil {
+		return nil, err
+	}
+
+	type rawSkill struct {
+		Name          string `json:"name"`
+		Category      string `json:"category"`
+		SkillType     string `json:"skill_type"`
+		Level         int    `json:"level"`
+		Realm         string `json:"realm"`
+		Description   string `json:"description"`
+		Effect        string `json:"effect"`
+		FlavorText    string `json:"flavor_text"`
+		Cost          string `json:"cost"`
+		CharacterName string `json:"character_name"`
+	}
+	cleaned := extractJSON(strings.TrimSpace(result))
+	var raw []rawSkill
+	if err := json.Unmarshal([]byte(cleaned), &raw); err != nil {
+		dec := json.NewDecoder(strings.NewReader(cleaned))
+		if _, e := dec.Token(); e == nil {
+			for dec.More() {
+				var sk rawSkill
+				if dec.Decode(&sk) == nil && sk.Name != "" {
+					raw = append(raw, sk)
+				}
+			}
+		}
+	}
+	skills := make([]skillExtractedJSON, 0, len(raw))
+	for _, r := range raw {
+		if r.Name == "" {
+			continue
+		}
+		skills = append(skills, skillExtractedJSON{
+			Name:          r.Name,
+			Category:      r.Category,
+			SkillType:     r.SkillType,
+			Level:         r.Level,
+			Realm:         r.Realm,
+			Description:   r.Description,
+			Effect:        r.Effect,
+			FlavorText:    r.FlavorText,
+			Cost:          r.Cost,
+			CharacterName: r.CharacterName,
+			ChapterNo:     chapterNo,
+		})
+	}
+	return skills, nil
+}
+
+// AIExtractAllFromNovel 逐章并发提取技能：先并发 AI 提取，再统一去重、入库
+func (s *SkillService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.Skill, error) {
+	if s.chapterRepo == nil {
+		return nil, fmt.Errorf("chapter repository not configured")
+	}
+	chapters, err := s.chapterRepo.ListByNovel(novelID)
+	if err != nil {
+		return nil, fmt.Errorf("load chapters: %w", err)
+	}
+
+	novelTitle := "本小说"
+	novelGenre := ""
+	if s.novelRepo != nil {
+		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
+			novelTitle = novel.Title
+			novelGenre = novel.Genre
+		}
+	}
+
+	// 已有技能名单
+	existing, _ := s.skillRepo.ListByNovel(novelID, repository.ListSkillsOpts{})
+	existingNames := make([]string, 0, len(existing))
+	existingNameSet := make(map[string]bool, len(existing))
+	for _, sk := range existing {
+		existingNames = append(existingNames, sk.Name)
+		existingNameSet[strings.ToLower(sk.Name)] = true
+	}
+
+	// 过滤有内容的章节（最多 10 章）
+	const maxChapters = 10
+	const concurrency = 3
+	var candidates []*model.Chapter
+	for _, ch := range chapters {
+		if ch.Content != "" || ch.Summary != "" {
+			candidates = append(candidates, ch)
+			if len(candidates) >= maxChapters {
+				break
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no chapter content available")
+	}
+
+	// 并发提取（纯 AI 调用，不操作 DB）
+	type chResult struct {
+		skills []skillExtractedJSON
+		err    error
+	}
+	results := make([]chResult, len(candidates))
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for i, ch := range candidates {
+		wg.Add(1)
+		go func(idx int, c *model.Chapter) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			content := c.Content
+			if content == "" {
+				content = c.Summary
+			}
+			skills, err := s.extractSkillsFromContent(tenantID, novelID, novelTitle, novelGenre, content, existingNames, c.ChapterNo)
+			results[idx] = chResult{skills, err}
+		}(i, ch)
+	}
+	wg.Wait()
+
+	// 合并去重（按小写名字，保留第一次出现）
+	seen := make(map[string]bool)
+	for k := range existingNameSet {
+		seen[k] = true
+	}
+	var allSkills []skillExtractedJSON
+	for _, r := range results {
+		if r.err != nil {
+			log.Printf("SkillService.AIExtractAllFromNovel: chapter extract error: %v", r.err)
+			continue
+		}
+		for _, sk := range r.skills {
+			key := strings.ToLower(sk.Name)
+			if !seen[key] {
+				seen[key] = true
+				allSkills = append(allSkills, sk)
+			}
+		}
+	}
+
+	// 构建角色名→ID map
+	chars, _ := s.characterRepo.ListByNovel(novelID)
+	charNameToID := make(map[string]uint, len(chars))
+	for _, c := range chars {
+		charNameToID[strings.ToLower(c.Name)] = c.ID
+	}
+
+	// 统一入库（单线程，无竞争）
+	validTypes := map[string]bool{"active": true, "passive": true, "toggle": true, "ultimate": true}
+	var created []*model.Skill
+	for _, sk := range allSkills {
+		skillType := sk.SkillType
+		if !validTypes[skillType] {
+			skillType = "active"
+		}
+		level := sk.Level
+		if level <= 0 {
+			level = 1
+		}
+		chNo := sk.ChapterNo
+		skill := &model.Skill{
+			NovelID:           novelID,
+			Name:              sk.Name,
+			Category:          sk.Category,
+			SkillType:         skillType,
+			Level:             level,
+			Realm:             sk.Realm,
+			Description:       sk.Description,
+			Effect:            sk.Effect,
+			FlavorText:        sk.FlavorText,
+			Cost:              sk.Cost,
+			AcquiredChapterNo: &chNo,
+			Status:            "active",
+		}
+		if sk.CharacterName != "" {
+			if id, ok := charNameToID[strings.ToLower(sk.CharacterName)]; ok {
+				skill.CharacterID = &id
+			}
+		}
+		if e := s.skillRepo.Create(skill); e != nil {
+			log.Printf("SkillService.AIExtractAllFromNovel: create %q: %v", sk.Name, e)
+			continue
+		}
+		created = append(created, skill)
+	}
+	return created, nil
 }
 
 // AIExtractChapterSkills 从单章内容中提取技能，写入 ink_skill 并关联 acquired_chapter_no

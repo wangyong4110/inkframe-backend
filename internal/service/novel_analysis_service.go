@@ -61,6 +61,7 @@ type NovelAnalysisService struct {
 	characterRepo      *repository.CharacterRepository
 	worldviewRepo      *repository.WorldviewRepository
 	itemRepo           *repository.ItemRepository
+	itemService        *ItemService
 	skillService       *SkillService
 	novelService       *NovelService
 	aiService          *AIService
@@ -102,6 +103,12 @@ func (s *NovelAnalysisService) Shutdown() {
 // WithItemRepo 注入物品仓库（可选，支持物品提取步骤）
 func (s *NovelAnalysisService) WithItemRepo(itemRepo *repository.ItemRepository) *NovelAnalysisService {
 	s.itemRepo = itemRepo
+	return s
+}
+
+// WithItemService 注入物品服务（可选，启用逐章并发提取）
+func (s *NovelAnalysisService) WithItemService(svc *ItemService) *NovelAnalysisService {
+	s.itemService = svc
 	return s
 }
 
@@ -898,173 +905,45 @@ func (s *NovelAnalysisService) generateThreeViewsAsync(ctx context.Context, char
 	}
 }
 
-// stepGenerateSkills 自动生成技能数据；结果可为空，失败不影响 pipeline
+// stepGenerateSkills 逐章提取技能；结果可为空，失败不影响 pipeline
 func (s *NovelAnalysisService) stepGenerateSkills(
 	ctx context.Context, task *AnalysisTask, novel *model.Novel,
 ) error {
 	// 若已有技能则跳过
 	existing, _ := s.skillService.ListSkills(novel.ID, repository.ListSkillsOpts{})
 	if len(existing) > 0 {
-		log.Printf("NovelAnalysis[%d]: skills already exist (%d), skip generation", novel.ID, len(existing))
+		log.Printf("NovelAnalysis[%d]: skills already exist (%d), skip", novel.ID, len(existing))
 		task.setProgress(68)
 		return nil
 	}
 
-	// 生成世界级技能（不绑定角色）
-	worldReq := &model.GenerateSkillsRequest{
-		Count: 5,
-		Hints: fmt.Sprintf("请根据小说类型(%s)设计核心技能体系，涵盖不同类别，数量5个左右。", novel.Genre),
-	}
-	worldSkills, err := s.skillService.GenerateSkills(novel.TenantID, novel.ID, worldReq)
+	skills, err := s.skillService.AIExtractAllFromNovel(novel.TenantID, novel.ID)
 	if err != nil {
-		log.Printf("NovelAnalysis[%d]: world skills gen warn: %v", novel.ID, err)
-	} else {
-		log.Printf("NovelAnalysis[%d]: generated %d world skills", novel.ID, len(worldSkills))
+		log.Printf("NovelAnalysis[%d]: skill extraction warn: %v", novel.ID, err)
+		task.setProgress(68)
+		return nil // 非致命错误，不影响 pipeline
 	}
-
-	// 为主角/反派并发生成专属技能（各角色独立，可并行）
-	chars, _ := s.characterRepo.ListByNovel(novel.ID)
-	var wg sync.WaitGroup
-	for _, char := range chars {
-		if char.Role != "protagonist" && char.Role != "antagonist" {
-			continue
-		}
-		char := char // capture loop variable
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			charReq := &model.GenerateSkillsRequest{
-				CharacterID: &char.ID,
-				Count:       3,
-				Hints:       fmt.Sprintf("根据角色【%s】的背景和能力，设计专属技能，要有鲜明个性。", char.Name),
-			}
-			charSkills, err := s.skillService.GenerateSkills(novel.TenantID, novel.ID, charReq)
-			if err != nil {
-				log.Printf("NovelAnalysis[%d]: char %q skills gen warn: %v", novel.ID, char.Name, err)
-				return
-			}
-			log.Printf("NovelAnalysis[%d]: generated %d skills for char %q", novel.ID, len(charSkills), char.Name)
-		}()
-	}
-	wg.Wait()
+	log.Printf("NovelAnalysis[%d]: extracted %d skills from chapters", novel.ID, len(skills))
+	task.setProgress(68)
 	return nil
 }
 
-// stepExtractItems 从章节摘要/小说描述提取物品信息
+// stepExtractItems 逐章并发提取物品信息
 func (s *NovelAnalysisService) stepExtractItems(
 	ctx context.Context, task *AnalysisTask, tenantID uint, novel *model.Novel, chapters []*model.Chapter,
 ) error {
-	var summariesText string
-	if len(chapters) > 0 {
-		summariesText = buildChapterSummariesText(chapters, 5, 3000)
-	} else {
-		summariesText = novel.Description
-	}
-	if summariesText == "" {
-		summariesText = fmt.Sprintf("这是一部%s类型的小说《%s》，请根据类型惯例设计主要物品道具。", novel.Genre, novel.Title)
-	}
-
-	tmplStr := loadPromptTemplate("extract_items.tmpl")
-	tmpl, err := template.New("extract_items").Parse(tmplStr)
-	if err != nil {
-		return fmt.Errorf("parse extract_items.tmpl: %w", err)
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
-		"NovelTitle": novel.Title,
-		"Genre":      novel.Genre,
-		"Summaries":  summariesText,
-	}); err != nil {
-		return err
-	}
-
-	result, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "extract_items", buf.String(), "")
-	if err != nil {
-		return fmt.Errorf("AI extract_items: %w", err)
-	}
-
-	var items []analysisItemJSON
-	cleaned := extractJSON(strings.TrimSpace(result))
-	if err := json.Unmarshal([]byte(cleaned), &items); err != nil {
-		return fmt.Errorf("parse items JSON: %w", err)
-	}
-
-	// 去重（按名称）
+	// 若已有物品则跳过
 	existing, _ := s.itemRepo.ListByNovel(novel.ID)
-	existingNames := make(map[string]bool, len(existing))
-	for _, e := range existing {
-		existingNames[strings.ToLower(e.Name)] = true
+	if len(existing) > 0 {
+		log.Printf("NovelAnalysis[%d]: items already exist (%d), skip", novel.ID, len(existing))
+		return nil
 	}
 
-	const maxMainItems = 15
-	const maxConcurrentImageGen = 3
-	sem := make(chan struct{}, maxConcurrentImageGen)
-	var wg sync.WaitGroup
-	createdItemCount := 0
-
-	for _, it := range items {
-		if createdItemCount+len(existing) >= maxMainItems {
-			break
-		}
-		if it.Name == "" || existingNames[strings.ToLower(it.Name)] {
-			continue
-		}
-		abilities := ""
-		if len(it.Abilities) > 0 {
-			if ab, err := json.Marshal(it.Abilities); err == nil {
-				abilities = string(ab)
-			}
-		}
-		cat := it.Category
-		valid := map[string]bool{"weapon": true, "treasure": true, "tool": true, "document": true, "artifact": true, "other": true}
-		if !valid[cat] {
-			cat = "other"
-		}
-		item := &model.Item{
-			NovelID:      novel.ID,
-			UUID:         uuid.New().String(),
-			Name:         it.Name,
-			Category:     cat,
-			Appearance:   it.Appearance,
-			Location:     it.Location,
-			Owner:        it.Owner,
-			Significance: it.Significance,
-			Abilities:    abilities,
-			VisualPrompt: it.VisualPrompt,
-			Status:       "active",
-		}
-		if err := s.itemRepo.Create(item); err != nil {
-			log.Printf("NovelAnalysis: create item %q: %v", it.Name, err)
-			continue
-		}
-		existingNames[strings.ToLower(it.Name)] = true
-		createdItemCount++
-		// 有界并发生成图片（最多 maxConcurrentImageGen 个并发，等待全部完成）
-		sem <- struct{}{}
-		wg.Add(1)
-		go func(i *model.Item) {
-			defer func() {
-				wg.Done()
-				<-sem
-			}()
-			prompt := i.VisualPrompt
-			if prompt == "" {
-				prompt = fmt.Sprintf("%s, %s, fantasy item illustration, high detail", i.Name, i.Appearance)
-			}
-			url, err := s.aiService.GenerateCharacterThreeView(ctx, 0, "", prompt+", item concept art, no background", "", "", "")
-			if err != nil {
-				log.Printf("NovelAnalysis: item image gen %q: %v", i.Name, err)
-				return
-			}
-			if url != "" {
-				i.ImageURL = url
-				if err := s.itemRepo.Update(i); err != nil {
-					log.Printf("NovelAnalysis: save item image %q: %v", i.Name, err)
-				}
-			}
-		}(item)
+	items, err := s.itemService.AIExtractAllFromNovel(tenantID, novel.ID)
+	if err != nil {
+		return fmt.Errorf("AIExtractAllFromNovel items: %w", err)
 	}
-	wg.Wait()
+	log.Printf("NovelAnalysis[%d]: extracted %d items", novel.ID, len(items))
 	return nil
 }
 

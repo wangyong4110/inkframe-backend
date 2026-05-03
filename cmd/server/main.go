@@ -589,7 +589,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-03-v1"
+const schemaVersion = "2026-05-03-v2"
 
 // autoMigrate 自动迁移（带版本跳过优化）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -1176,6 +1176,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		novelService,
 		aiService,
 	).WithItemRepo(repos.ItemRepo).
+		WithItemService(itemService).
 		WithSkillService(skillService).
 		WithPlotPointService(plotPointService).
 		WithSceneAnchorService(sceneAnchorService)

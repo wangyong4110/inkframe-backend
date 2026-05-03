@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"text/template"
 
 	"github.com/google/uuid"
@@ -359,6 +360,181 @@ func (s *ItemService) ListEffectiveItems(novelID uint, chapterID uint) ([]*Effec
 		result = append(result, ei)
 	}
 	return result, nil
+}
+
+// extractItemsFromContent 从章节内容中提取物品（纯 AI 提取，不操作 DB）
+func (s *ItemService) extractItemsFromContent(
+	tenantID, novelID uint,
+	novelTitle, genre, content string,
+	existingNames []string,
+) ([]analysisItemJSON, error) {
+	tmplStr := loadPromptTemplate("extract_chapter_items.tmpl")
+	tmpl, err := template.New("extract_chapter_items").Parse(tmplStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse template: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, map[string]interface{}{
+		"NovelTitle":    novelTitle,
+		"Genre":         genre,
+		"ExistingNames": existingNames,
+		"Content":       content,
+	}); err != nil {
+		return nil, fmt.Errorf("render template: %w", err)
+	}
+
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_chapter_items", buf.String(), "")
+	if err != nil {
+		return nil, err
+	}
+
+	cleaned := extractJSON(strings.TrimSpace(result))
+	var items []analysisItemJSON
+	if err := json.Unmarshal([]byte(cleaned), &items); err != nil {
+		// 部分恢复
+		dec := json.NewDecoder(strings.NewReader(cleaned))
+		if _, e := dec.Token(); e == nil {
+			for dec.More() {
+				var item analysisItemJSON
+				if dec.Decode(&item) == nil && item.Name != "" {
+					items = append(items, item)
+				}
+			}
+		}
+	}
+	valid := items[:0]
+	for _, it := range items {
+		if it.Name != "" {
+			valid = append(valid, it)
+		}
+	}
+	return valid, nil
+}
+
+// AIExtractAllFromNovel 逐章并发提取物品：先并发 AI 提取，再统一去重、入库
+func (s *ItemService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.Item, error) {
+	if s.chapterRepo == nil {
+		return nil, fmt.Errorf("chapter repository not configured")
+	}
+	chapters, err := s.chapterRepo.ListByNovel(novelID)
+	if err != nil {
+		return nil, fmt.Errorf("load chapters: %w", err)
+	}
+
+	novelTitle := "本小说"
+	novelGenre := ""
+	if s.novelRepo != nil {
+		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
+			novelTitle = novel.Title
+			novelGenre = novel.Genre
+		}
+	}
+
+	// 已有物品名单（用于 AI prompt 去重提示）
+	existing, _ := s.itemRepo.ListByNovel(novelID)
+	existingNames := make([]string, 0, len(existing))
+	byName := make(map[string]*model.Item, len(existing))
+	for _, it := range existing {
+		existingNames = append(existingNames, it.Name)
+		byName[strings.ToLower(it.Name)] = it
+	}
+
+	// 过滤有内容的章节（最多 10 章）
+	const maxChapters = 10
+	const concurrency = 3
+	var candidates []*model.Chapter
+	for _, ch := range chapters {
+		if ch.Content != "" || ch.Summary != "" {
+			candidates = append(candidates, ch)
+			if len(candidates) >= maxChapters {
+				break
+			}
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no chapter content available")
+	}
+
+	// 并发提取（纯 AI 调用，不操作 DB）
+	type chResult struct {
+		items []analysisItemJSON
+		err   error
+	}
+	results := make([]chResult, len(candidates))
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for i, ch := range candidates {
+		wg.Add(1)
+		go func(idx int, c *model.Chapter) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			content := c.Content
+			if content == "" {
+				content = c.Summary
+			}
+			items, err := s.extractItemsFromContent(tenantID, novelID, novelTitle, novelGenre, content, existingNames)
+			results[idx] = chResult{items, err}
+		}(i, ch)
+	}
+	wg.Wait()
+
+	// 合并去重（按小写名字，保留第一次出现）
+	seen := make(map[string]bool)
+	for k := range byName {
+		seen[k] = true
+	}
+	var allItems []analysisItemJSON
+	for _, r := range results {
+		if r.err != nil {
+			log.Printf("ItemService.AIExtractAllFromNovel: chapter extract error: %v", r.err)
+			continue
+		}
+		for _, it := range r.items {
+			key := strings.ToLower(it.Name)
+			if !seen[key] {
+				seen[key] = true
+				allItems = append(allItems, it)
+			}
+		}
+	}
+
+	// 统一入库（单线程，无竞争）
+	validCat := map[string]bool{"weapon": true, "treasure": true, "tool": true, "document": true, "artifact": true, "other": true}
+	upserted := make([]*model.Item, 0, len(allItems))
+	for _, e := range allItems {
+		if e.Name == "" {
+			continue
+		}
+		abilitiesJSON := ""
+		if len(e.Abilities) > 0 {
+			if b, err := json.Marshal(e.Abilities); err == nil {
+				abilitiesJSON = string(b)
+			}
+		}
+		if !validCat[e.Category] {
+			e.Category = "other"
+		}
+		item := &model.Item{
+			NovelID:      novelID,
+			UUID:         uuid.New().String(),
+			Name:         e.Name,
+			Category:     e.Category,
+			Appearance:   e.Appearance,
+			Location:     e.Location,
+			Owner:        e.Owner,
+			Significance: e.Significance,
+			Abilities:    abilitiesJSON,
+			VisualPrompt: e.VisualPrompt,
+			Status:       "active",
+		}
+		if err := s.itemRepo.Create(item); err != nil {
+			log.Printf("ItemService.AIExtractAllFromNovel: create %q: %v", e.Name, err)
+			continue
+		}
+		upserted = append(upserted, item)
+	}
+	return upserted, nil
 }
 
 // AIExtractChapterItems 从单章内容中提取物品，写入 ink_item + ink_chapter_item

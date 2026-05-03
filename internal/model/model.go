@@ -1684,9 +1684,9 @@ func (ConflictArc) TableName() string { return "ink_conflict_arc" }
 type SceneAnchor struct {
 	ID       uint `json:"id" gorm:"primaryKey"`
 	TenantID uint `json:"tenant_id" gorm:"index;not null;default:1"`
-	NovelID  uint `json:"novel_id" gorm:"index;not null"`
+	NovelID  uint `json:"novel_id" gorm:"uniqueIndex:idx_scene_anchor_novel_name;not null"`
 
-	Name        string `json:"name" gorm:"size:255;not null"`
+	Name        string `json:"name" gorm:"size:255;not null;uniqueIndex:idx_scene_anchor_novel_name"`
 	Type        string `json:"type" gorm:"size:50"` // interior/exterior/imaginary
 	Description string `json:"description" gorm:"type:text"`
 	PromptLock  string `json:"prompt_lock" gorm:"type:text"`   // 锁定关键词（逗号分隔）
