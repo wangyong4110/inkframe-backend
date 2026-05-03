@@ -152,6 +152,7 @@ type Novel struct {
 	VideoAspectRatio       string  `json:"video_aspect_ratio" gorm:"size:10;default:'16:9'"`   // 宽高比：16:9/9:16/1:1/4:3
 	CharConsistencyWeight  float64 `json:"char_consistency_weight" gorm:"type:decimal(3,2);default:1.0"` // 角色一致性权重 0-1
 	AssetExportPath        string  `json:"asset_export_path" gorm:"size:500"`                             // 素材导出路径
+	NarrationVoice         string  `json:"narration_voice" gorm:"size:200"`                               // 旁白音色 ID（无角色配音时使用）
 
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`
@@ -1063,6 +1064,7 @@ type UpdateNovelRequest struct {
 	VideoAspectRatio      string   `json:"video_aspect_ratio"`
 	CharConsistencyWeight *float64 `json:"char_consistency_weight"`
 	AssetExportPath       string   `json:"asset_export_path"`
+	NarrationVoice        string   `json:"narration_voice"`
 }
 
 type CreateChapterRequest struct {

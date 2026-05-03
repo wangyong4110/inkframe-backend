@@ -670,10 +670,15 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, err.Error())
 		return
 	}
-	if shot.Dialogue == "" {
-		respondBadRequest(c, "shot has no dialogue text")
+	if shot.Dialogue == "" && shot.Description == "" {
+		respondBadRequest(c, "shot has no text content")
 		return
 	}
+
+	var req struct {
+		NarrationVoice string `json:"narration_voice"`
+	}
+	_ = c.ShouldBindJSON(&req)
 
 	tenantID := getTenantID(c)
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeVoiceGen,
@@ -683,17 +688,17 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 		return
 	}
 
-	go func(taskID string, shot *model.StoryboardShot) {
+	go func(taskID string, shot *model.StoryboardShot, narrationVoice string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 
-		if err := h.videoService.GenerateShotAudio(shot, tenantID); err != nil {
+		if err := h.videoService.GenerateShotAudio(shot, tenantID, narrationVoice); err != nil {
 			log.Printf("[VideoHandler] GenerateShotVoice task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
 
 		h.taskSvc.Complete(taskID, gin.H{"audio_url": shot.AudioPath, "shot_id": shot.ID}) //nolint:errcheck
-	}(task.TaskID, shot)
+	}(task.TaskID, shot, req.NarrationVoice)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,

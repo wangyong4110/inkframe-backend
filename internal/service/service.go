@@ -215,6 +215,10 @@ func (s *NovelService) UpdateNovel(id uint, req *model.UpdateNovelRequest) (*mod
 	if req.AssetExportPath != "" {
 		novel.AssetExportPath = req.AssetExportPath
 	}
+	// NarrationVoice can be cleared (empty string = reset to default)
+	if req.NarrationVoice != novel.NarrationVoice {
+		novel.NarrationVoice = req.NarrationVoice
+	}
 	if err := s.novelRepo.Update(novel); err != nil {
 		return nil, err
 	}
@@ -3271,16 +3275,21 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 }
 
 // GenerateShotAudio 为单个分镜生成 TTS 音频，优先使用角色声音设置。
+// narrationVoice 为旁白音色 ID（空串则降级到 "alloy"）；非对话镜头以 Description 作为朗读文本。
 // 若注入了 storageSvc，将音频上传至 OSS 或 DB，并更新 shot.AudioPath 为持久 URL。
-func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID uint) error {
-	if shot.Dialogue == "" {
+func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID uint, narrationVoice string) error {
+	text := shot.Dialogue
+	if text == "" {
+		text = shot.Description
+	}
+	if text == "" {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	voice, speed, style := s.resolveVoiceForShot(shot)
-	audioURL, err := s.aiService.AudioGenerateWithOptions(ctx, tenantID, shot.Dialogue, voice, speed, style)
+	voice, speed, style := s.resolveVoiceForShot(shot, narrationVoice)
+	audioURL, err := s.aiService.AudioGenerateWithOptions(ctx, tenantID, text, voice, speed, style)
 	if err != nil {
 		return fmt.Errorf("TTS generation failed: %w", err)
 	}
@@ -3343,12 +3352,16 @@ func (s *VideoService) uploadAudioToStorage(ctx context.Context, shot *model.Sto
 	return s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), "audio/mpeg")
 }
 
-// resolveVoiceForShot 从对话文本中解析发言角色并返回其配音设置（voice, speed, style）
-func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot) (voice string, speed float64, style string) {
+// resolveVoiceForShot 解析分镜对应角色的配音设置（voice, speed, style）。
+// 优先级：① 对话文本「角色名：」前缀 → ② shot.CharacterIDs 第一个角色 → ③ narrationVoice → ④ alloy。
+func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narrationVoice string) (voice string, speed float64, style string) {
 	voice = "alloy"
+	if narrationVoice != "" {
+		voice = narrationVoice
+	}
 	speed = 1.0
 
-	// 从对话中解析发言角色（格式：角色名：对话内容 或 角色名:对话内容）
+	// 步骤一：从对话中解析发言角色（格式：角色名：对话内容 或 角色名:对话内容）
 	speakerName := ""
 	for _, sep := range []string{"：", ":"} {
 		if idx := strings.Index(shot.Dialogue, sep); idx > 0 && idx < 20 {
@@ -3356,31 +3369,44 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot) (voice st
 			break
 		}
 	}
-	if speakerName == "" {
-		return
-	}
 
 	video, err := s.videoRepo.GetByID(shot.VideoID)
 	if err != nil || video.NovelID == 0 {
 		return
 	}
 
-	characters, err := s.characterRepo.ListByNovel(video.NovelID)
-	if err != nil {
-		return
+	applyCharVoice := func(c *model.Character) {
+		if c.VoiceID != "" {
+			voice = c.VoiceID
+		}
+		if c.VoiceSpeed > 0 {
+			speed = c.VoiceSpeed
+		}
+		style = c.VoiceStyle
 	}
-	for _, c := range characters {
-		if strings.EqualFold(c.Name, speakerName) {
-			if c.VoiceID != "" {
-				voice = c.VoiceID
-			}
-			if c.VoiceSpeed > 0 {
-				speed = c.VoiceSpeed
-			}
-			style = c.VoiceStyle
+
+	if speakerName != "" {
+		// 按名称匹配
+		characters, err := s.characterRepo.ListByNovel(video.NovelID)
+		if err != nil {
 			return
 		}
+		for _, c := range characters {
+			if strings.EqualFold(c.Name, speakerName) {
+				applyCharVoice(c)
+				return
+			}
+		}
 	}
+
+	// 步骤二：无明确发言者时，使用分镜绑定的第一个角色的音色
+	if len(shot.CharacterIDs) > 0 {
+		char, err := s.characterRepo.GetByID(shot.CharacterIDs[0])
+		if err == nil && char != nil {
+			applyCharVoice(char)
+		}
+	}
+
 	return
 }
 
@@ -3690,7 +3716,7 @@ func (s *VideoService) runSlideshowPipeline(videoID uint) {
 		if err := s.GenerateSlideshowShotVideo(shot, video.AspectRatio); err != nil {
 			log.Printf("runSlideshowPipeline: shot %d failed: %v", shot.ShotNo, err)
 		}
-		go s.GenerateShotAudio(shot, video.TenantID) //nolint:errcheck
+		go s.GenerateShotAudio(shot, video.TenantID, "") //nolint:errcheck
 	}
 
 	// 拼接
@@ -3743,7 +3769,7 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 			continue
 		}
 		// TTS audio in parallel
-		go s.GenerateShotAudio(shot, video.TenantID) //nolint:errcheck
+		go s.GenerateShotAudio(shot, video.TenantID, "") //nolint:errcheck
 	}
 	return nil
 }
