@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -94,6 +95,21 @@ func main() {
 
 	// 11. 初始化处理器
 	handlers := initHandlers(services, storageSvc, db, repos)
+
+	// 11a. 种子并发度设置 + 注册运行时变更回调
+	seedConcurrencySettings(repos.SystemSettingRepo, cfg, services.AIService, services.VideoService)
+	handlers.SystemHandler.RegisterOnChange("image_concurrency", func(v string) {
+		if n, err := strconv.Atoi(v); err == nil {
+			services.AIService.SetImageConcurrency(n)
+			log.Printf("image_concurrency updated to %d", n)
+		}
+	})
+	handlers.SystemHandler.RegisterOnChange("video_concurrency", func(v string) {
+		if n, err := strconv.Atoi(v); err == nil {
+			services.VideoService.SetVideoConcurrency(n)
+			log.Printf("video_concurrency updated to %d", n)
+		}
+	})
 
 	// 12. 设置路由
 	r := router.SetupRouter(&router.Config{
@@ -1107,6 +1123,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	videoService.WithBGMService(bgmService)
 	videoService.WithPlotPointRepo(repos.PlotPointRepo)
 	videoService.WithSystemSettingRepo(repos.SystemSettingRepo)
+	videoService.WithVideoConcurrency(cfg.AI.VideoConcurrency)
 
 	// 帧生成服务
 	frameGeneratorService := service.NewFrameGeneratorService(aiService)
@@ -1308,6 +1325,27 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		SystemHandler: handler.NewSystemHandler(repos.SystemSettingRepo),
 		FsHandler:     handler.NewFsHandler(),
 	}
+}
+
+// seedConcurrencySettings 将并发度配置种子写入 DB（首次启动），或从 DB 加载并应用到运行时服务。
+func seedConcurrencySettings(repo *repository.SystemSettingRepository, cfg *config.Config, aiSvc *service.AIService, videoSvc *service.VideoService) {
+	seed := func(key, desc string, cfgVal int, apply func(int)) {
+		if v, err := repo.Get(key); err == nil {
+			// 已有记录：加载并应用（DB 优先于 config.yaml）
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				apply(n)
+			}
+		} else {
+			// 首次：写入 config 默认值
+			val := cfgVal
+			if val <= 0 {
+				val = 1
+			}
+			_ = repo.Set(key, strconv.Itoa(val), desc)
+		}
+	}
+	seed("image_concurrency", "图像生成最大并发数", cfg.AI.ImageConcurrency, aiSvc.SetImageConcurrency)
+	seed("video_concurrency", "视频生成最大并发数", cfg.AI.VideoConcurrency, videoSvc.SetVideoConcurrency)
 }
 
 // getEnv 获取环境变量

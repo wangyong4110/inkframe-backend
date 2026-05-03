@@ -799,8 +799,9 @@ type AIService struct {
 	novelRepo     *repository.NovelRepository
 	storageSvc    storage.Service
 	taskRouting   TaskRouting
-	providerCache sync.Map    // key: "tenantID:providerName" → providerCacheEntry
+	providerCache sync.Map     // key: "tenantID:providerName" → providerCacheEntry
 	imageSem      chan struct{} // nil = unlimited; set via WithImageConcurrency
+	semMu         sync.RWMutex // protects imageSem replacement
 }
 
 func NewAIService(
@@ -845,6 +846,17 @@ func (s *AIService) WithImageConcurrency(n int) *AIService {
 		s.imageSem = make(chan struct{}, n)
 	}
 	return s
+}
+
+// SetImageConcurrency 运行时动态调整图像并发度（线程安全）。
+func (s *AIService) SetImageConcurrency(n int) {
+	s.semMu.Lock()
+	defer s.semMu.Unlock()
+	if n > 0 {
+		s.imageSem = make(chan struct{}, n)
+	} else {
+		s.imageSem = nil
+	}
 }
 
 // Generate 生成内容（使用系统级提供商，tenantID=0）
@@ -1434,10 +1446,13 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 	}
 
 	// 并发限流：若配置了 image_concurrency，则在此处等待令牌
-	if s.imageSem != nil {
+	s.semMu.RLock()
+	sem := s.imageSem
+	s.semMu.RUnlock()
+	if sem != nil {
 		select {
-		case s.imageSem <- struct{}{}:
-			defer func() { <-s.imageSem }()
+		case sem <- struct{}{}:
+			defer func() { <-sem }()
 		case <-ctx.Done():
 			return "", ctx.Err()
 		}
@@ -1837,6 +1852,8 @@ type VideoService struct {
 	sceneAnchorSvc     *SceneAnchorService
 	plotPointRepo      *repository.PlotPointRepository
 	systemSettingRepo  *repository.SystemSettingRepository
+	videoSem           chan struct{} // nil = unlimited; set via WithVideoConcurrency
+	videoSemMu         sync.RWMutex // protects videoSem replacement
 }
 
 // ffmpegBin 返回 FFmpeg 可执行文件路径（优先读系统配置，fallback 到 PATH 中的 ffmpeg）
@@ -1852,6 +1869,25 @@ func (s *VideoService) ffmpegBin() string {
 func (s *VideoService) WithSystemSettingRepo(r *repository.SystemSettingRepository) *VideoService {
 	s.systemSettingRepo = r
 	return s
+}
+
+// WithVideoConcurrency 设置视频生成的最大并发数（启动时调用）。
+func (s *VideoService) WithVideoConcurrency(n int) *VideoService {
+	if n > 0 {
+		s.videoSem = make(chan struct{}, n)
+	}
+	return s
+}
+
+// SetVideoConcurrency 运行时动态调整视频并发度（线程安全）。
+func (s *VideoService) SetVideoConcurrency(n int) {
+	s.videoSemMu.Lock()
+	defer s.videoSemMu.Unlock()
+	if n > 0 {
+		s.videoSem = make(chan struct{}, n)
+	} else {
+		s.videoSem = nil
+	}
 }
 
 func (s *VideoService) WithSceneAnchorService(svc *SceneAnchorService) *VideoService {
@@ -1957,26 +1993,50 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		}
 	}
 
-	// 构建分镜提示词
-	prompt := s.buildStoryboardPrompt(video, content, userPrompt)
-
 	// 获取租户 ID（供 getTenantProvider 查租户私有配置）
 	var tenantID uint
 	if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil {
 		tenantID = novel.TenantID
 	}
 
-	// 调用AI生成分镜
-	result, err := s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", prompt, provider)
-	if err != nil {
-		return nil, err
+	// 分段生成：长章节按 2000 字切割，每段独立调用 AI，合并后顺序重编号。
+	// 短章节（≤2000 字）等同于原单段调用路径，行为完全一致。
+	const segmentMaxRunes = 2000
+	segments := splitContentSegments(content, segmentMaxRunes)
+
+	var allShots []*model.StoryboardShot
+	shotCounter := 0
+
+	for segIdx, seg := range segments {
+		prompt := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, len(segments))
+		result, aiErr := s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", prompt, provider)
+		if aiErr != nil {
+			if segIdx == 0 {
+				return nil, aiErr
+			}
+			log.Printf("GenerateStoryboard: segment %d/%d AI call failed (non-fatal): %v", segIdx+1, len(segments), aiErr)
+			continue
+		}
+		segShots, parseErr := s.parseStoryboardResult(videoID, chapterID, result)
+		if parseErr != nil {
+			if segIdx == 0 {
+				return nil, fmt.Errorf("解析AI分镜结果失败: %w", parseErr)
+			}
+			log.Printf("GenerateStoryboard: segment %d/%d parse failed (non-fatal): %v", segIdx+1, len(segments), parseErr)
+			continue
+		}
+		// 全局顺序重编号，保证跨段 shot_no 连续且唯一
+		for _, shot := range segShots {
+			shotCounter++
+			shot.ShotNo = shotCounter
+		}
+		allShots = append(allShots, segShots...)
 	}
 
-	// 解析分镜（传入 chapterID，供每个 shot 继承）
-	shots, err := s.parseStoryboardResult(videoID, chapterID, result)
-	if err != nil {
-		return nil, fmt.Errorf("解析AI分镜结果失败: %w", err)
+	if len(allShots) == 0 {
+		return nil, fmt.Errorf("所有段落均未能生成分镜，请检查章节内容或重试")
 	}
+	shots := allShots
 
 	// 场景锚点自动匹配：按 shot.Location 名称匹配已注册的场景锚点
 	// 避免 SceneAnchorID 永远为 nil，使锚点注入逻辑真正生效
@@ -1992,7 +2052,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	}
 	for _, shot := range shots {
 		if err := s.storyboardRepo.Create(shot); err != nil {
-			return nil, err
+			log.Printf("GenerateStoryboard: save shot %d failed: %v", shot.ShotNo, err)
 		}
 	}
 
@@ -2083,9 +2143,11 @@ func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, no
 				}
 				continue
 			}
-			// 模糊匹配
+			// 模糊匹配：子串包含 + 汉字字符级重叠（阈值 50%，适配"萧炎"vs"炎少"等写法）
+			const runeOverlapThreshold = 0.5
 			for name, id := range nameMap {
-				if strings.Contains(nameLower, name) || strings.Contains(name, nameLower) {
+				if strings.Contains(nameLower, name) || strings.Contains(name, nameLower) ||
+					charRuneOverlap(nameLower, name) >= runeOverlapThreshold {
 					if !seen[id] {
 						matched = append(matched, id)
 						seen[id] = true
@@ -2100,6 +2162,69 @@ func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, no
 	}
 }
 
+// charRuneOverlap 返回两个字符串的汉字级重叠比例（以较短串为分母）。
+// 用于模糊角色名匹配，如"萧炎"vs"炎少"（"炎"重叠 → 0.5，超过阈值即视为同一角色）。
+func charRuneOverlap(a, b string) float64 {
+	ra, rb := []rune(a), []rune(b)
+	if len(ra) == 0 || len(rb) == 0 {
+		return 0
+	}
+	shorter, longer := ra, rb
+	if len(ra) > len(rb) {
+		shorter, longer = rb, ra
+	}
+	longerSet := make(map[rune]struct{}, len(longer))
+	for _, r := range longer {
+		longerSet[r] = struct{}{}
+	}
+	overlap := 0
+	for _, r := range shorter {
+		if _, ok := longerSet[r]; ok {
+			overlap++
+		}
+	}
+	return float64(overlap) / float64(len(shorter))
+}
+
+// splitContentSegments 按段落边界切割长文本，每段最多 maxRunes 个字符。
+// 若内容不超过 maxRunes，直接返回单段切片。
+// 切割优先在双换行（段落）处断开，其次在单换行处断开，保证分镜上下文完整。
+func splitContentSegments(content string, maxRunes int) []string {
+	runes := []rune(content)
+	if len(runes) <= maxRunes {
+		return []string{content}
+	}
+	var segments []string
+	start := 0
+	for start < len(runes) {
+		end := start + maxRunes
+		if end >= len(runes) {
+			segments = append(segments, string(runes[start:]))
+			break
+		}
+		// 在最后 20% 区间内找段落边界：优先双换行，次选单换行
+		boundary := -1
+		searchFrom := end - maxRunes/5
+		for i := end; i >= searchFrom; i-- {
+			if runes[i] == '\n' {
+				if i > 0 && runes[i-1] == '\n' {
+					boundary = i + 1 // 双换行后断开
+					break
+				}
+				if boundary < 0 {
+					boundary = i + 1 // 先记录单换行，继续找双换行
+				}
+			}
+		}
+		if boundary > start {
+			end = boundary
+		}
+		segments = append(segments, string(runes[start:end]))
+		start = end
+	}
+	return segments
+}
+
 // extractLocationFromScene 从 shot.Scene JSON 中提取 location 字符串
 func extractLocationFromScene(sceneJSON string) string {
 	if sceneJSON == "" {
@@ -2112,11 +2237,16 @@ func extractLocationFromScene(sceneJSON string) string {
 	return m["location"]
 }
 
-// buildStoryboardPrompt 构建分镜提示词（含截断保护和角色信息）
-func (s *VideoService) buildStoryboardPrompt(video *model.Video, content, userPrompt string) string {
+// buildStoryboardPrompt 构建分镜提示词（含截断保护、角色信息、段落上下文）
+// segNo/totalSegs 为分段编号（从 1 开始），单段调用时传 1, 1。
+func (s *VideoService) buildStoryboardPrompt(video *model.Video, content, userPrompt string, segNo, totalSegs int) string {
 	var sb strings.Builder
 
-	sb.WriteString("你是一名专业分镜师。请根据以下内容生成分镜脚本，以JSON数组格式返回。\n\n")
+	segLabel := ""
+	if totalSegs > 1 {
+		segLabel = fmt.Sprintf("（第%d段 / 共%d段）", segNo, totalSegs)
+	}
+	sb.WriteString(fmt.Sprintf("你是一名专业分镜师。请根据以下内容%s生成分镜脚本，以JSON数组格式返回。\n\n", segLabel))
 
 	// 注入角色视觉信息（portrait/外貌）
 	if video.NovelID > 0 {
@@ -2128,9 +2258,7 @@ func (s *VideoService) buildStoryboardPrompt(video *model.Video, content, userPr
 				if c.Appearance != "" {
 					sb.WriteString(fmt.Sprintf("：%s", c.Appearance))
 				}
-				if c.Portrait != "" {
-					sb.WriteString(fmt.Sprintf("，参考图：%s", c.Portrait))
-				}
+				// Portrait URL 为图片地址，纯文本 LLM 无法访问，不注入 prompt
 				sb.WriteString("\n")
 			}
 			sb.WriteString("\n")
@@ -2171,8 +2299,8 @@ func (s *VideoService) buildStoryboardPrompt(video *model.Video, content, userPr
 	if content != "" {
 		sb.WriteString("【章节内容】\n")
 		// 截断保护：最多 6000 字符
-		if len(content) > 6000 {
-			content = content[:6000] + "…（已截断）"
+		if len(content) > 10000 {
+			content = content[:10000] + "…（已截断）"
 		}
 		sb.WriteString(content)
 		sb.WriteString("\n\n")
@@ -2185,7 +2313,18 @@ func (s *VideoService) buildStoryboardPrompt(video *model.Video, content, userPr
 		sb.WriteString("\n\n")
 	}
 
-	sb.WriteString(`请将内容分解为若干分镜（5-15个），以JSON数组返回，格式如下：
+	// 按内容长度动态计算期望分镜数（每 280 字一个镜头，最少 5 个，最多 20 个）
+	expectedShots := len([]rune(content)) / 280
+	if expectedShots < 5 {
+		expectedShots = 5
+	}
+	if expectedShots > 20 {
+		expectedShots = 20
+	}
+	sb.WriteString(fmt.Sprintf(
+		`请将以下内容分解为约%d个分镜（按实际情节密度生成；每个重大动作、对话轮次、场景切换必须单独成镜）。以JSON数组返回，格式如下：`,
+		expectedShots))
+	sb.WriteString(`
 [
   {
     "shot_no": 1,
@@ -2744,20 +2883,22 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		return "", fmt.Errorf("AI service not initialized")
 	}
 
-	// 精准匹配：先从 shot.CharacterIDs 中查找角色 Portrait/ThreeViewFront
+	// 精准匹配：从 shot.CharacterIDs 查找角色参考图
+	// 优先级：ThreeViewFront（专为一致性生成）> Portrait（仅脸部，一致性较差）
+	// 多角色镜头：扫描全部角色，一旦找到三视图即停止；Portrait 仅作保底（不提前 break）
 	var characterPortrait string
 	for _, id := range shot.CharacterIDs {
 		char, err := s.characterRepo.GetByID(id)
 		if err != nil {
 			continue
 		}
-		if char.Portrait != "" {
-			characterPortrait = char.Portrait
-			break
-		}
 		if char.ThreeViewFront != "" {
 			characterPortrait = char.ThreeViewFront
-			break
+			break // 三视图是最优选择，找到即停
+		}
+		if char.Portrait != "" && characterPortrait == "" {
+			characterPortrait = char.Portrait
+			// 不 break：继续查找是否有三视图
 		}
 	}
 	// 降级：通过 ChapterID 找到 NovelID，取第一个有肖像的角色
@@ -2791,8 +2932,10 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 			sceneRefImage = refURL
 		}
 	}
+	// 角色三视图/肖像优先；场景锚点参考图仅在无角色参考图时作保底
+	// 场景上下文已通过 fragment 注入 promptText，无需用参考图再次覆盖
 	refImage := characterPortrait
-	if sceneRefImage != "" {
+	if refImage == "" {
 		refImage = sceneRefImage
 	}
 
@@ -2881,6 +3024,15 @@ func (s *VideoService) extractLastFrame(clipPath string) (string, error) {
 
 // GenerateShotVideo 为单个分镜提交视频生成任务
 func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspectRatio string, providerOverride ...string) error {
+	// 并发限流：若配置了 video_concurrency，则在此处等待令牌
+	s.videoSemMu.RLock()
+	vsem := s.videoSem
+	s.videoSemMu.RUnlock()
+	if vsem != nil {
+		vsem <- struct{}{}
+		defer func() { <-vsem }()
+	}
+
 	providerName := "kling"
 	if len(providerOverride) > 0 && providerOverride[0] != "" {
 		providerName = providerOverride[0]
@@ -2903,18 +3055,16 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		videoAspectRatio = "16:9"
 	}
 
-	// 确定参考图：优先使用时序连贯的前镜最后一帧，其次生成新参考帧
+	// 始终生成角色一致性参考帧（携带角色三视图），确保批量重新生成时角色参考图不被跳过。
+	// 生成成功则覆盖 ReferenceImageURL；失败时降级使用已有的 ReferenceImageURL（非致命）。
 	referenceImage := shot.ReferenceImageURL
-	if referenceImage == "" {
-		// 生成本镜参考帧（非致命）
-		frameURL, frameErr := s.generateShotReferenceImage(shot)
-		if frameErr != nil {
-			log.Printf("GenerateVideoShot: reference image gen failed for shot %d (non-fatal): %v", shot.ShotNo, frameErr)
-		}
-		if frameURL != "" {
-			shot.FrameImageURL = frameURL
-			referenceImage = frameURL
-		}
+	frameURL, frameErr := s.generateShotReferenceImage(shot)
+	if frameErr != nil {
+		log.Printf("GenerateVideoShot: reference image gen failed for shot %d (non-fatal): %v", shot.ShotNo, frameErr)
+	}
+	if frameURL != "" {
+		shot.FrameImageURL = frameURL
+		referenceImage = frameURL
 	}
 
 	// 场景锚点：将锁定词注入视频生成 prompt
