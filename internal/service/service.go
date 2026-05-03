@@ -219,6 +219,22 @@ func (s *NovelService) UpdateNovel(id uint, req *model.UpdateNovelRequest) (*mod
 	if req.NarrationVoice != novel.NarrationVoice {
 		novel.NarrationVoice = req.NarrationVoice
 	}
+	// 字幕配置（可清空）
+	if req.SubtitleEnabled != nil {
+		novel.SubtitleEnabled = *req.SubtitleEnabled
+	}
+	if req.SubtitlePosition != "" {
+		novel.SubtitlePosition = req.SubtitlePosition
+	}
+	if req.SubtitleFontSize != nil {
+		novel.SubtitleFontSize = *req.SubtitleFontSize
+	}
+	if req.SubtitleColor != "" {
+		novel.SubtitleColor = req.SubtitleColor
+	}
+	if req.SubtitleBgStyle != "" {
+		novel.SubtitleBgStyle = req.SubtitleBgStyle
+	}
 	if err := s.novelRepo.Update(novel); err != nil {
 		return nil, err
 	}
@@ -1867,6 +1883,11 @@ type VideoService struct {
 	videoSemMu         sync.RWMutex // protects videoSem replacement
 }
 
+// GetNovelByID 通过 novelRepo 加载小说（供 handler 传递给 CapCutService 等下游服务）
+func (s *VideoService) GetNovelByID(id uint) (*model.Novel, error) {
+	return s.novelRepo.GetByID(id)
+}
+
 // ffmpegBin 返回 FFmpeg 可执行文件路径（优先读系统配置，fallback 到 PATH 中的 ffmpeg）
 func (s *VideoService) ffmpegBin() string {
 	if s.systemSettingRepo != nil {
@@ -3275,7 +3296,7 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 }
 
 // GenerateShotAudio 为单个分镜生成 TTS 音频，优先使用角色声音设置。
-// narrationVoice 为旁白音色 ID（空串则降级到 "alloy"）；非对话镜头以 Description 作为朗读文本。
+// narrationVoice 为旁白音色 ID（空串则自动从项目配置加载，仍空则降级到 "alloy"）；非对话镜头以 Description 作为朗读文本。
 // 若注入了 storageSvc，将音频上传至 OSS 或 DB，并更新 shot.AudioPath 为持久 URL。
 func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID uint, narrationVoice string) error {
 	text := shot.Dialogue
@@ -3285,6 +3306,16 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 	if text == "" {
 		return nil
 	}
+
+	// 若调用方未传入旁白音色，从项目配置自动加载
+	if narrationVoice == "" && s.novelRepo != nil {
+		if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil {
+			if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil {
+				narrationVoice = novel.NarrationVoice
+			}
+		}
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
@@ -3350,6 +3381,33 @@ func (s *VideoService) uploadAudioToStorage(ctx context.Context, shot *model.Sto
 	filename := fmt.Sprintf("shot-%d.mp3", shot.ID)
 	key := storage.BuildKey(novelID, chapterID, "audio", filename)
 	return s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), "audio/mpeg")
+}
+
+// GenerateShotSRT 根据分镜的台词和时长生成单条 SRT 字幕内容。
+// 时间码从 00:00:00,000 开始，结束时间 = shot.Duration。
+func GenerateShotSRT(shot *model.StoryboardShot) string {
+	text := shot.Dialogue
+	if text == "" {
+		text = shot.Description
+	}
+	if text == "" {
+		return ""
+	}
+	dur := shot.Duration
+	if dur <= 0 {
+		dur = 5.0
+	}
+	end := formatSRTTimecode(dur)
+	return fmt.Sprintf("1\n00:00:00,000 --> %s\n%s\n", end, text)
+}
+
+// formatSRTTimecode 将秒数格式化为 SRT 时间码 HH:MM:SS,mmm
+func formatSRTTimecode(secs float64) string {
+	h := int(secs) / 3600
+	m := (int(secs) % 3600) / 60
+	s := int(secs) % 60
+	ms := int((secs-float64(int(secs)))*1000 + 0.5)
+	return fmt.Sprintf("%02d:%02d:%02d,%03d", h, m, s, ms)
 }
 
 // resolveVoiceForShot 解析分镜对应角色的配音设置（voice, speed, style）。
@@ -3450,6 +3508,12 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 	}()
 	var concatLines []string
 	for i, shot := range shots {
+		// 跳过无视频片段的镜头（仅有图片，Ken Burns 未生成）
+		if shot.ClipPath == "" {
+			log.Printf("StitchVideo: shot %d has no clip, skipping", shot.ShotNo)
+			continue
+		}
+
 		clipFile := fmt.Sprintf("%s/clip_%d.mp4", tmpDir, i)
 		finalClip := clipFile
 
@@ -3582,6 +3646,44 @@ func downloadToTemp(url, prefix, ext string) (string, error) {
 }
 
 // generateKenBurnsClip 使用 FFmpeg zoompan 滤镜将静图制作成 Ken Burns 动效短片
+// generateStillFrameClip 用 FFmpeg 将静态图片编码为固定时长的视频（无动效，Ken Burns 降级方案）。
+func (s *VideoService) generateStillFrameClip(imagePath string, duration float64, aspectRatio string) (string, error) {
+	if duration <= 0 {
+		duration = 5.0
+	}
+	resolution := "1920:1080"
+	switch aspectRatio {
+	case "9:16":
+		resolution = "1080:1920"
+	case "1:1":
+		resolution = "1080:1080"
+	case "4:3":
+		resolution = "1440:1080"
+	}
+	parts := strings.SplitN(resolution, ":", 2)
+	w, h := parts[0], parts[1]
+	vf := fmt.Sprintf("scale=%s:%s:force_original_aspect_ratio=decrease,pad=%s:%s:(ow-iw)/2:(oh-ih)/2,setsar=1", w, h, w, h)
+	outPath := fmt.Sprintf("%s/inkframe-still-%d.mp4", inkframeTempDir(), time.Now().UnixNano())
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, s.ffmpegBin(), "-y",
+		"-loop", "1",
+		"-t", fmt.Sprintf("%.2f", duration),
+		"-i", imagePath,
+		"-vf", vf,
+		"-c:v", "libx264",
+		"-pix_fmt", "yuv420p",
+		"-r", "24",
+		outPath,
+	)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("ffmpeg still frame: %v — %s", err, stderr.String())
+	}
+	return outPath, nil
+}
+
 func (s *VideoService) generateKenBurnsClip(shot *model.StoryboardShot, imagePath string, duration float64, aspectRatio string) (string, error) {
 	if duration <= 0 {
 		duration = 5.0
@@ -3684,18 +3786,26 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	}
 	defer os.Remove(localImage)
 
-	// 3. Ken Burns 动效（缓慢推拉/平移，让静态图更生动）
+	// 3. Ken Burns 动效（缓慢推拉/平移，让静态图更生动）；失败时降级为静止画面
 	clipPath, err := s.generateKenBurnsClip(shot, localImage, duration, aspectRatio)
 	if err != nil {
-		log.Printf("GenerateSlideshowShotVideo: ken burns failed for shot %d, marking completed with image only: %v", shot.ShotNo, err)
-		shot.Status = "completed"
-		shot.Progress = 100
-		shot.ErrorMessage = fmt.Sprintf("ken burns skipped: %v", err)
-		return s.storyboardRepo.Update(shot)
+		log.Printf("GenerateSlideshowShotVideo: ken burns failed for shot %d, falling back to still frame: %v", shot.ShotNo, err)
+		// 降级：用静止画面代替 Ken Burns
+		clipPath, err = s.generateStillFrameClip(localImage, duration, aspectRatio)
+		if err != nil {
+			log.Printf("GenerateSlideshowShotVideo: still frame fallback also failed for shot %d, completing with image only: %v", shot.ShotNo, err)
+			shot.Status = "completed"
+			shot.Progress = 100
+			shot.ErrorMessage = fmt.Sprintf("ffmpeg unavailable: %v", err)
+			return s.storyboardRepo.Update(shot)
+		}
+		shot.ErrorMessage = "ken burns skipped, used still frame"
 	}
 
 	shot.ClipPath = "file://" + clipPath
-	shot.ErrorMessage = ""
+	if shot.ErrorMessage == "" {
+		shot.ErrorMessage = ""
+	}
 	shot.Status = "completed"
 	shot.Progress = 100
 	return s.storyboardRepo.Update(shot)

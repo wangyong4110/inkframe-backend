@@ -154,6 +154,13 @@ type Novel struct {
 	AssetExportPath        string  `json:"asset_export_path" gorm:"size:500"`                             // 素材导出路径
 	NarrationVoice         string  `json:"narration_voice" gorm:"size:200"`                               // 旁白音色 ID（无角色配音时使用）
 
+	// 字幕配置
+	SubtitleEnabled  bool   `json:"subtitle_enabled" gorm:"default:true"`
+	SubtitlePosition string `json:"subtitle_position" gorm:"size:20;default:'bottom'"`  // bottom/center/top
+	SubtitleFontSize int    `json:"subtitle_font_size" gorm:"default:48"`               // 字体大小（px）
+	SubtitleColor    string `json:"subtitle_color" gorm:"size:20;default:'#FFFFFF'"`    // 十六进制颜色
+	SubtitleBgStyle  string `json:"subtitle_bg_style" gorm:"size:20;default:'shadow'"`  // none/shadow/box
+
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -1065,6 +1072,13 @@ type UpdateNovelRequest struct {
 	CharConsistencyWeight *float64 `json:"char_consistency_weight"`
 	AssetExportPath       string   `json:"asset_export_path"`
 	NarrationVoice        string   `json:"narration_voice"`
+
+	// 字幕配置
+	SubtitleEnabled  *bool  `json:"subtitle_enabled"`
+	SubtitlePosition string `json:"subtitle_position"`
+	SubtitleFontSize *int   `json:"subtitle_font_size"`
+	SubtitleColor    string `json:"subtitle_color"`
+	SubtitleBgStyle  string `json:"subtitle_bg_style"`
 }
 
 type CreateChapterRequest struct {

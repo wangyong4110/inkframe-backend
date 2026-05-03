@@ -676,7 +676,14 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 	}
 
 	var req struct {
-		NarrationVoice string `json:"narration_voice"`
+		NarrationVoice  string `json:"narration_voice"`
+		SubtitleEnabled bool   `json:"subtitle_enabled"`
+		SubtitleConfig  struct {
+			Position string `json:"position"`
+			FontSize  int    `json:"font_size"`
+			Color     string `json:"color"`
+			BgStyle   string `json:"bg_style"`
+		} `json:"subtitle_config"`
 	}
 	_ = c.ShouldBindJSON(&req)
 
@@ -688,7 +695,7 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 		return
 	}
 
-	go func(taskID string, shot *model.StoryboardShot, narrationVoice string) {
+	go func(taskID string, shot *model.StoryboardShot, narrationVoice string, subtitleEnabled bool) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 
 		if err := h.videoService.GenerateShotAudio(shot, tenantID, narrationVoice); err != nil {
@@ -697,8 +704,15 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 			return
 		}
 
-		h.taskSvc.Complete(taskID, gin.H{"audio_url": shot.AudioPath, "shot_id": shot.ID}) //nolint:errcheck
-	}(task.TaskID, shot, req.NarrationVoice)
+		result := gin.H{"audio_url": shot.AudioPath, "shot_id": shot.ID}
+		if subtitleEnabled {
+			srt := service.GenerateShotSRT(shot)
+			if srt != "" {
+				result["subtitle_srt"] = srt
+			}
+		}
+		h.taskSvc.Complete(taskID, result) //nolint:errcheck
+	}(task.TaskID, shot, req.NarrationVoice, req.SubtitleEnabled)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
@@ -764,7 +778,9 @@ func (h *VideoHandler) ExportCapCutDraft(c *gin.Context) {
 		return
 	}
 
-	result, err := h.capcutService.ExportCapCutDraft(video, shots)
+	novel, _ := h.videoService.GetNovelByID(video.NovelID) // 用于字幕样式配置，失败不阻断导出
+
+	result, err := h.capcutService.ExportCapCutDraft(video, shots, novel)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
