@@ -880,7 +880,7 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		return s.aiManager.GetProvider(providerName)
 	}
 
-	// 优先租户私有，其次系统级
+	// 优先租户私有，其次系统级（优先选择有 credentials 的 provider）
 	var tenantMatch, systemMatch *model.ModelProvider
 	for _, p := range providers {
 		// 跳过已禁用的提供商
@@ -896,11 +896,20 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		}
 		if providerName == "" || p.Name == providerName {
 			if p.TenantID == tenantID && tenantID != 0 {
-				tenantMatch = p
-				break
+				if tenantMatch == nil || (!providerHasCredentials(tenantMatch) && providerHasCredentials(p)) {
+					tenantMatch = p
+				}
+				if providerHasCredentials(tenantMatch) {
+					break
+				}
 			}
-			if p.TenantID == 0 && systemMatch == nil {
-				systemMatch = p
+			if p.TenantID == 0 {
+				// 优先选有凭证的系统级 provider，已有有凭证的则不覆盖
+				if systemMatch == nil {
+					systemMatch = p
+				} else if !providerHasCredentials(systemMatch) && providerHasCredentials(p) {
+					systemMatch = p
+				}
 			}
 		}
 	}
@@ -1009,6 +1018,7 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 	config := *base
 
 	// 应用小说项目级 AI 配置（覆盖任务默认值）
+	var resolvedModel string
 	if novelID > 0 && s.novelRepo != nil {
 		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
 			if novel.Temperature > 0 {
@@ -1023,11 +1033,19 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 			if novel.MaxTokens > 0 {
 				config.MaxTokens = novel.MaxTokens
 			}
+			// 若小说配置了特定 AI 模型且调用方未指定 provider，
+			// 通过模型名反查对应 provider 并将模型名透传给 API
+			if providerName == "" && novel.AIModel != "" {
+				resolvedModel = novel.AIModel
+				if pName := s.resolveProviderFromModel(tenantID, novel.AIModel); pName != "" {
+					providerName = pName
+				}
+			}
 		}
 	}
 
 	// 调用真实AI API
-	result, err := s.callAIWithProvider(tenantID, prompt, &config, providerName)
+	result, err := s.callAIWithProvider(tenantID, prompt, &config, providerName, resolvedModel)
 	if err != nil {
 		return "", fmt.Errorf("AI generation failed: %w", err)
 	}
@@ -1036,6 +1054,32 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 	s.logUsage(&config, prompt, result)
 
 	return result, nil
+}
+
+// resolveProviderFromModel 通过模型名（如 "deepseek-chat"）在 DB 中查找对应的 provider name（如 "deepseek"）
+// 若查找失败则静默返回空字符串（由 getTenantProvider 兜底选择第一个可用 provider）
+func (s *AIService) resolveProviderFromModel(tenantID uint, modelName string) string {
+	if s.modelRepo == nil {
+		return ""
+	}
+	m, err := s.modelRepo.GetByName(modelName)
+	if err != nil || m == nil || m.Provider == nil {
+		return ""
+	}
+	providerName := m.Provider.Name
+	// 确认该 provider 对当前租户可用（有凭证）
+	if s.providerRepo != nil {
+		providers, err := s.providerRepo.ListByTenant(tenantID)
+		if err == nil {
+			for _, p := range providers {
+				if p.Name == providerName && p.IsActive && providerHasCredentials(p) {
+					return providerName
+				}
+			}
+		}
+		return "" // provider 无凭证，让 getTenantProvider 自动选择
+	}
+	return providerName
 }
 
 // callAI 调用AI接口（使用系统级 provider）
@@ -1088,7 +1132,8 @@ func (s *AIService) GenerateWithVision(prompt string, imageURLs []string) (strin
 }
 
 // callAIWithProvider 调用指定 Provider 的 AI 接口
-func (s *AIService) callAIWithProvider(tenantID uint, prompt string, config *model.TaskModelConfig, providerName string) (string, error) {
+// modelOverride 可选，非空时会覆盖 provider 的默认模型（用于小说项目级 ai_model 配置）
+func (s *AIService) callAIWithProvider(tenantID uint, prompt string, config *model.TaskModelConfig, providerName string, modelOverride ...string) (string, error) {
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
 	}
@@ -1104,6 +1149,9 @@ func (s *AIService) callAIWithProvider(tenantID uint, prompt string, config *mod
 		MaxTokens:   config.MaxTokens,
 		Temperature: config.Temperature,
 		TopP:        config.TopP,
+	}
+	if len(modelOverride) > 0 && modelOverride[0] != "" {
+		req.Model = modelOverride[0]
 	}
 	// Claude 不支持 top_k，仅在非 Anthropic provider 时传入
 	if provider.GetName() != "anthropic" {

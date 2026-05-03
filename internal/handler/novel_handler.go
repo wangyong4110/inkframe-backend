@@ -18,6 +18,7 @@ type NovelHandler struct {
 	timelineService       *service.TimelineService
 	qualityControlService *service.QualityControlService
 	taskSvc               *service.TaskService
+	modelService          *service.ModelService
 }
 
 func NewNovelHandler(
@@ -41,15 +42,32 @@ func (h *NovelHandler) WithTaskService(svc *service.TaskService) *NovelHandler {
 	return h
 }
 
+func (h *NovelHandler) WithModelService(svc *service.ModelService) *NovelHandler {
+	h.modelService = svc
+	return h
+}
+
 // CreateNovel 创建小说
 // POST /api/v1/novels
 func (h *NovelHandler) CreateNovel(c *gin.Context) {
+	tenantID := getTenantID(c)
+
+	// 前置检查：要求至少配置一个有效的 LLM 提供商
+	if h.modelService != nil {
+		capable, err := h.modelService.ListCapableProviders(tenantID, "llm")
+		if err == nil && len(capable) == 0 {
+			respondErr(c, http.StatusUnprocessableEntity,
+				"请先前往「模型管理」页面为至少一个文本生成（LLM）提供商配置 API Key，再创建小说项目")
+			return
+		}
+	}
+
 	var req model.CreateNovelRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respondBadRequest(c, err.Error())
 		return
 	}
-	req.TenantID = getTenantID(c)
+	req.TenantID = tenantID
 
 	novel, err := h.novelService.CreateNovel(&req)
 	if err != nil {

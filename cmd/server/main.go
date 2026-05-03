@@ -1263,7 +1263,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			services.ForeshadowService,
 			services.TimelineService,
 			services.QualityControlService,
-		).WithTaskService(services.TaskService),
+		).WithTaskService(services.TaskService).WithModelService(services.ModelService),
 		ChapterHandler: handler.NewChapterHandler(
 			services.ChapterService,
 			services.ChapterVersionService,
