@@ -497,18 +497,9 @@ func seedAIModels(db *gorm.DB) {
 			[]string{"seed-tts-2.0", "seed-tts-1.0"}},
 		{"doubao-speech-v1", "豆包语音合成 V1", "voice", "https://openspeech.bytedance.com/api/v1", true,
 			[]string{
-				// volcano_mega 集群（豆包2.0大模型音色）
-				"zh_female_vv_uranus_bigtts",                  // vivi 2.0
-				"zh_female_xiaohe_uranus_bigtts",              // 小何
-				"zh_male_m191_uranus_bigtts",                  // 云舟
-				"zh_male_taocheng_uranus_bigtts",              // 小天
-				"saturn_zh_female_cancan_tob",                 // 知性灿灿
-				"saturn_zh_female_keainvsheng_tob",            // 可爱女生
-				"saturn_zh_female_tiaopigongzhu_tob",          // 调皮公主
-				"saturn_zh_male_shuanglangshaonian_tob",       // 爽朗少年
-				"saturn_zh_male_tiancaitongzhuo_tob",          // 天才同桌
-				// volcano_tts 集群（经典音色，需手动将 cluster 改为 volcano_tts）
-				"BV001_streaming", "BV002_streaming",
+				// volcano_mega 集群（豆包2.0大模型音色，仅供参考；实际音色列表由 modelSeeds 管理）
+				"zh_female_vv_uranus_bigtts", "zh_female_xiaohe_uranus_bigtts",
+				"zh_male_m191_uranus_bigtts", "zh_male_taocheng_uranus_bigtts",
 			}},
 	}
 
@@ -545,16 +536,72 @@ func seedAIModels(db *gorm.DB) {
 		// 豆包语音合成 V3（seed-tts 系列）
 		{"doubao-speech", "seed-tts-2.0", "豆包 Seed TTS 2.0", []string{"voice_gen"}, 0.92, 0},
 		{"doubao-speech", "seed-tts-1.0", "豆包 Seed TTS 1.0", []string{"voice_gen"}, 0.88, 0},
-		// 豆包语音合成 V1（appid/token 鉴权，默认 volcano_mega 集群）
-		{"doubao-speech-v1", "zh_female_vv_uranus_bigtts", "vivi 2.0", []string{"voice_gen"}, 0.92, 0},
-		{"doubao-speech-v1", "zh_female_xiaohe_uranus_bigtts", "小何", []string{"voice_gen"}, 0.90, 0},
-		{"doubao-speech-v1", "zh_male_m191_uranus_bigtts", "云舟", []string{"voice_gen"}, 0.90, 0},
-		{"doubao-speech-v1", "zh_male_taocheng_uranus_bigtts", "小天", []string{"voice_gen"}, 0.90, 0},
-		{"doubao-speech-v1", "saturn_zh_female_cancan_tob", "知性灿灿", []string{"voice_gen"}, 0.90, 0},
-		{"doubao-speech-v1", "saturn_zh_female_keainvsheng_tob", "可爱女生", []string{"voice_gen"}, 0.90, 0},
-		{"doubao-speech-v1", "saturn_zh_female_tiaopigongzhu_tob", "调皮公主", []string{"voice_gen"}, 0.90, 0},
-		{"doubao-speech-v1", "saturn_zh_male_shuanglangshaonian_tob", "爽朗少年", []string{"voice_gen"}, 0.90, 0},
-		{"doubao-speech-v1", "saturn_zh_male_tiancaitongzhuo_tob", "天才同桌", []string{"voice_gen"}, 0.90, 0},
+		// 豆包语音合成 V1（appid/token 鉴权，volcano_mega 集群，豆包2.0大模型音色）
+		// ── 通用场景 ──────────────────────────────────────────────────
+		{"doubao-speech-v1", "zh_female_vv_uranus_bigtts", "Vivi 2.0", []string{"voice_gen"}, 0.92, 0},
+		{"doubao-speech-v1", "zh_female_xiaohe_uranus_bigtts", "小何 2.0", []string{"voice_gen"}, 0.91, 0},
+		{"doubao-speech-v1", "zh_male_m191_uranus_bigtts", "云舟 2.0", []string{"voice_gen"}, 0.91, 0},
+		{"doubao-speech-v1", "zh_male_taocheng_uranus_bigtts", "小天 2.0", []string{"voice_gen"}, 0.91, 0},
+		{"doubao-speech-v1", "zh_male_liufei_uranus_bigtts", "刘飞 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_sophie_uranus_bigtts", "魅力苏菲 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_qingxinnvsheng_uranus_bigtts", "清新女声 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_meilinvyou_uranus_bigtts", "魅力女友 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_liuchangnv_uranus_bigtts", "流畅女声 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_wenroumama_uranus_bigtts", "温柔妈妈 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_tvbnv_uranus_bigtts", "TVB女声 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_qiaopinv_uranus_bigtts", "俏皮女声 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_gaolengyujie_uranus_bigtts", "高冷御姐 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_popo_uranus_bigtts", "婆婆 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_wenroushunv_uranus_bigtts", "温柔淑女 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_mengyatou_uranus_bigtts", "萌丫头 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_ruyayichen_uranus_bigtts", "儒雅逸辰 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_jieshuoxiaoming_uranus_bigtts", "解说小明 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_yizhipiannan_uranus_bigtts", "译制片男 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_linjiananhai_uranus_bigtts", "邻家男孩 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_ruyaqingnian_uranus_bigtts", "儒雅青年 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_wennuanahu_uranus_bigtts", "温暖阿虎 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_naiqimengwa_uranus_bigtts", "奶气萌娃 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_aojiaobazong_uranus_bigtts", "傲娇霸总 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_lanyinmianbao_uranus_bigtts", "懒音绵宝 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_fanjuanqingnian_uranus_bigtts", "反卷青年 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_huolixiaoge_uranus_bigtts", "活力小哥 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_yangguangqingnian_uranus_bigtts", "天才童声 2.0", []string{"voice_gen"}, 0.90, 0},
+		// ── 角色扮演 ──────────────────────────────────────────────────
+		{"doubao-speech-v1", "zh_female_cancan_uranus_bigtts", "知性灿灿 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_sajiaoxuemei_uranus_bigtts", "撒娇学妹 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_zhishuaiyingzi_uranus_bigtts", "直率英子 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_gufengshaoyu_uranus_bigtts", "古风少御 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_silang_uranus_bigtts", "四郎 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_qingcang_uranus_bigtts", "擎苍 2.0", []string{"voice_gen"}, 0.90, 0},
+		// ── 有声阅读 ──────────────────────────────────────────────────
+		{"doubao-speech-v1", "zh_male_baqiqingshu_uranus_bigtts", "霸气青叔 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_xuanyijieshuo_uranus_bigtts", "悬疑解说 2.0", []string{"voice_gen"}, 0.90, 0},
+		// ── 视频配音 ──────────────────────────────────────────────────
+		{"doubao-speech-v1", "zh_female_peiqi_uranus_bigtts", "佩奇猪 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_linjianvhai_uranus_bigtts", "邻家女孩 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_shaonianzixin_uranus_bigtts", "少年梓辛 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_sunwukong_uranus_bigtts", "猴哥 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_dayi_uranus_bigtts", "大壹 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_mizai_uranus_bigtts", "黑猫侦探社咪仔 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_xionger_uranus_bigtts", "熊二 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_yingtaowanzi_uranus_bigtts", "樱桃丸子 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_zhubajie_uranus_bigtts", "猪八戒 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_wuzetian_uranus_bigtts", "武则天 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_gujie_uranus_bigtts", "顾姐 2.0", []string{"voice_gen"}, 0.90, 0},
+		// ── 客服 / 教育 ───────────────────────────────────────────────
+		{"doubao-speech-v1", "zh_female_yingyujiaoxue_uranus_bigtts", "Tina老师 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_kefunvsheng_uranus_bigtts", "暖阳女声 2.0", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_female_xiaoxue_uranus_bigtts", "儿童绘本 2.0", []string{"voice_gen"}, 0.90, 0},
+		// ── 多语种 ────────────────────────────────────────────────────
+		{"doubao-speech-v1", "en_male_tim_uranus_bigtts", "Tim (EN)", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "en_female_dacey_uranus_bigtts", "Dacey (EN)", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "en_female_stokie_uranus_bigtts", "Stokie (EN)", []string{"voice_gen"}, 0.90, 0},
+		// ── 角色扮演 TOB（doubao-character-tts 资源）──────────────────
+		{"doubao-speech-v1", "saturn_zh_female_cancan_tob", "知性灿灿（角色）", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "saturn_zh_female_keainvsheng_tob", "可爱女生（角色）", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "saturn_zh_female_tiaopigongzhu_tob", "调皮公主（角色）", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "saturn_zh_male_shuanglangshaonian_tob", "爽朗少年（角色）", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "saturn_zh_male_tiancaitongzhuo_tob", "天才同桌（角色）", []string{"voice_gen"}, 0.90, 0},
 	}
 
 	// 1. 确保 provider 记录存在（tenant_id=0 系统级）
