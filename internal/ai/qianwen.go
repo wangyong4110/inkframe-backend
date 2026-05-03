@@ -3,10 +3,13 @@ package ai
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -53,6 +56,9 @@ func (p *QianwenProvider) GetModels() []string {
 		"wanx-v1",
 		"wanx2.1-t2i-turbo",
 		"wanx2.1-t2i-plus",
+		// CosyVoice 语音合成模型
+		"cosyvoice-v1",
+		"cosyvoice-v2",
 	}
 }
 
@@ -319,6 +325,71 @@ func (p *QianwenProvider) ImageGenerate(ctx context.Context, req *ImageGenerateR
 	}, nil
 }
 
-func (p *QianwenProvider) AudioGenerate(_ context.Context, _ *AudioGenerateRequest) (*AudioResponse, error) {
-	return nil, fmt.Errorf("千问暂不支持音频生成")
+// AudioGenerate 使用 CosyVoice 模型合成语音。
+// DashScope 兼容 OpenAI /audio/speech 接口，model 默认 cosyvoice-v1，voice 默认 longxiaochun。
+// 常用发音人：longxiaochun（女）、longhua（男）、longshu（男）、longxiaoxia（女）等。
+func (p *QianwenProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRequest) (*AudioResponse, error) {
+	start := time.Now()
+
+	model := req.Model
+	if model == "" {
+		model = "cosyvoice-v1"
+	}
+	voice := req.Voice
+	if voice == "" {
+		voice = "longxiaochun"
+	}
+	speed := req.Speed
+	if speed <= 0 {
+		speed = 1.0
+	}
+
+	ttsReq := map[string]interface{}{
+		"model":           model,
+		"input":           req.Text,
+		"voice":           voice,
+		"speed":           speed,
+		"response_format": "mp3",
+	}
+	body, _ := json.Marshal(ttsReq)
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint+"/audio/speech", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("千问 TTS 请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("千问 TTS 错误 %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	audioData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("千问 TTS 读取响应失败: %w", err)
+	}
+	if len(audioData) == 0 {
+		return nil, fmt.Errorf("千问 TTS 返回空音频数据")
+	}
+
+	idBytes := make([]byte, 8)
+	rand.Read(idBytes) //nolint:errcheck
+	tmpPath := fmt.Sprintf("/tmp/inkframe-tts-%s.mp3", hex.EncodeToString(idBytes))
+	if err := os.WriteFile(tmpPath, audioData, 0644); err != nil {
+		return nil, fmt.Errorf("千问 TTS 写入临时文件失败: %w", err)
+	}
+
+	return &AudioResponse{
+		URL:       "file://" + tmpPath,
+		Format:    "mp3",
+		Duration:  float64(len(req.Text)) / 8.0,
+		LatencyMs: time.Since(start).Milliseconds(),
+	}, nil
 }
