@@ -3272,7 +3272,7 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 
 // GenerateShotAudio 为单个分镜生成 TTS 音频，优先使用角色声音设置。
 // 若注入了 storageSvc，将音频上传至 OSS 或 DB，并更新 shot.AudioPath 为持久 URL。
-func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot) error {
+func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID uint) error {
 	if shot.Dialogue == "" {
 		return nil
 	}
@@ -3280,7 +3280,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot) error {
 	defer cancel()
 
 	voice, speed, style := s.resolveVoiceForShot(shot)
-	audioURL, err := s.aiService.AudioGenerateWithOptions(ctx, 0, shot.Dialogue, voice, speed, style)
+	audioURL, err := s.aiService.AudioGenerateWithOptions(ctx, tenantID, shot.Dialogue, voice, speed, style)
 	if err != nil {
 		return fmt.Errorf("TTS generation failed: %w", err)
 	}
@@ -3690,7 +3690,7 @@ func (s *VideoService) runSlideshowPipeline(videoID uint) {
 		if err := s.GenerateSlideshowShotVideo(shot, video.AspectRatio); err != nil {
 			log.Printf("runSlideshowPipeline: shot %d failed: %v", shot.ShotNo, err)
 		}
-		go s.GenerateShotAudio(shot) //nolint:errcheck
+		go s.GenerateShotAudio(shot, video.TenantID) //nolint:errcheck
 	}
 
 	// 拼接
@@ -3743,7 +3743,7 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 			continue
 		}
 		// TTS audio in parallel
-		go s.GenerateShotAudio(shot) //nolint:errcheck
+		go s.GenerateShotAudio(shot, video.TenantID) //nolint:errcheck
 	}
 	return nil
 }

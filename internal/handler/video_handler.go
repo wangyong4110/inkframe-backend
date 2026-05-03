@@ -686,7 +686,7 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 	go func(taskID string, shot *model.StoryboardShot) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 
-		if err := h.videoService.GenerateShotAudio(shot); err != nil {
+		if err := h.videoService.GenerateShotAudio(shot, tenantID); err != nil {
 			log.Printf("[VideoHandler] GenerateShotVoice task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
