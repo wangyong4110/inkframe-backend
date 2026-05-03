@@ -3670,29 +3670,32 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 		return fmt.Errorf("image generation failed for shot %d (empty URL returned)", shot.ShotNo)
 	}
 	shot.ImageURL = imageURL
+	// 保存图片 URL（后续步骤失败时图片仍可用）
+	s.storyboardRepo.Update(shot) //nolint:errcheck
 
 	// 2. 下载图片到本地（Volcengine 返回的 URL 后缀为 .image，FFmpeg 无法识别格式，需重命名为 .jpg）
 	localImage, err := downloadToTemp(imageURL, fmt.Sprintf("inkframe-img-%d-", shot.ID), ".jpg")
 	if err != nil {
-		log.Printf("GenerateSlideshowShotVideo: download image failed for shot %d: %v", shot.ShotNo, err)
-		shot.Status = "failed"
-		shot.ErrorMessage = err.Error()
-		s.storyboardRepo.Update(shot) //nolint:errcheck
-		return fmt.Errorf("download image failed for shot %d: %w", shot.ShotNo, err)
+		log.Printf("GenerateSlideshowShotVideo: download image failed for shot %d, marking completed with image only: %v", shot.ShotNo, err)
+		shot.Status = "completed"
+		shot.Progress = 100
+		shot.ErrorMessage = fmt.Sprintf("ken burns skipped: %v", err)
+		return s.storyboardRepo.Update(shot)
 	}
 	defer os.Remove(localImage)
 
 	// 3. Ken Burns 动效（缓慢推拉/平移，让静态图更生动）
 	clipPath, err := s.generateKenBurnsClip(shot, localImage, duration, aspectRatio)
 	if err != nil {
-		log.Printf("GenerateSlideshowShotVideo: ken burns failed for shot %d: %v", shot.ShotNo, err)
-		shot.Status = "failed"
-		shot.ErrorMessage = err.Error()
-		s.storyboardRepo.Update(shot) //nolint:errcheck
-		return fmt.Errorf("ken burns effect failed for shot %d: %w", shot.ShotNo, err)
+		log.Printf("GenerateSlideshowShotVideo: ken burns failed for shot %d, marking completed with image only: %v", shot.ShotNo, err)
+		shot.Status = "completed"
+		shot.Progress = 100
+		shot.ErrorMessage = fmt.Sprintf("ken burns skipped: %v", err)
+		return s.storyboardRepo.Update(shot)
 	}
 
 	shot.ClipPath = "file://" + clipPath
+	shot.ErrorMessage = ""
 	shot.Status = "completed"
 	shot.Progress = 100
 	return s.storyboardRepo.Update(shot)
