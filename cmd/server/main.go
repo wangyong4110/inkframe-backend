@@ -605,7 +605,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-04-v2"
+const schemaVersion = "2026-05-04-v3"
 
 // autoMigrate 自动迁移（带版本跳过优化）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -637,7 +637,6 @@ func autoMigrate(db *gorm.DB) error {
 		&model.Tenant{},
 		&model.User{},
 		&model.TenantUser{},
-		&model.TenantProject{},
 		&model.Novel{},
 		&model.Chapter{},
 		&model.PlotPoint{},
@@ -649,7 +648,6 @@ func autoMigrate(db *gorm.DB) error {
 		&model.ReferenceNovel{},
 		&model.ReferenceChapter{},
 		&model.KnowledgeBase{},
-		&model.PromptTemplate{},
 		&model.AIModel{},
 		&model.ModelProvider{},
 		&model.TaskModelConfig{},
@@ -658,12 +656,8 @@ func autoMigrate(db *gorm.DB) error {
 		&model.ModelUsageLog{},
 		&model.Video{},
 		&model.StoryboardShot{},
-		&model.CharacterVisualDesign{},
-		&model.SceneVisualDesign{},
 		&model.QualityReport{},
-		&model.ReviewTask{},
 		&model.ChapterVersion{},
-		&model.FeedbackRecord{},
 		&model.McpTool{},
 		&model.ModelMcpBinding{},
 		&model.ArcSummary{},
@@ -867,7 +861,7 @@ type Repositories struct {
 	KnowledgeBaseRepo       *repository.KnowledgeBaseRepository
 	ModelProviderRepo       *repository.ModelProviderRepository
 	ModelComparisonRepo     *repository.ModelComparisonRepository
-	ReviewTaskRepo          *repository.ReviewTaskRepository
+
 	ChapterVersionRepo      *repository.ChapterVersionRepository
 	SnapshotRepo            *repository.CharacterStateSnapshotRepository
 	UserRepo                *repository.UserRepository
@@ -901,7 +895,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		KnowledgeBaseRepo:       repository.NewKnowledgeBaseRepository(db),
 		ModelProviderRepo:       repository.NewModelProviderRepository(db),
 		ModelComparisonRepo:     repository.NewModelComparisonRepository(db),
-		ReviewTaskRepo:          repository.NewReviewTaskRepository(db),
+
 		ChapterVersionRepo:      repository.NewChapterVersionRepository(db),
 		SnapshotRepo:            repository.NewCharacterStateSnapshotRepository(db),
 		UserRepo:                repository.NewUserRepository(db),
@@ -936,7 +930,7 @@ type Services struct {
 	PromptService               *service.PromptService
 	ContinuityService           *service.ContinuityService
 	KnowledgeService            *service.KnowledgeService
-	ReviewTaskService           *service.ReviewTaskService
+
 	ChapterVersionService       *service.ChapterVersionService
 	ForeshadowService           *service.ForeshadowService
 	TimelineService             *service.TimelineService
@@ -1050,9 +1044,6 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		log.Printf("Warning: no default AI provider available; knowledge base embedding disabled")
 	}
 	knowledgeService := service.NewKnowledgeService(repos.KnowledgeBaseRepo, vectorStore, defaultAIProvider)
-
-	// 审核任务服务
-	reviewTaskService := service.NewReviewTaskService(repos.ReviewTaskRepo)
 
 	// 章节版本服务
 	chapterVersionService := service.NewChapterVersionService(repos.ChapterVersionRepo, repos.ChapterRepo)
@@ -1212,7 +1203,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		PromptService:               promptService,
 		ContinuityService:           continuityService,
 		KnowledgeService:            knowledgeService,
-		ReviewTaskService:           reviewTaskService,
+
 		ChapterVersionService:       chapterVersionService,
 		ForeshadowService:           foreshadowService,
 		TimelineService:             timelineService,

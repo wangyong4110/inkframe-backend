@@ -462,16 +462,10 @@ func (s *CharacterArcService) CreateSnapshot(chapterID uint, characterID uint, c
 // Style Service - 风格控制
 // ============================================
 
-type StyleService struct {
-	templateRepo interface {
-		GetByGenreAndStage(genre, stage string) (*model.PromptTemplate, error)
-	}
-}
+type StyleService struct{}
 
-func NewStyleService(repo interface {
-	GetByGenreAndStage(genre string, stage string) (*model.PromptTemplate, error)
-}) *StyleService {
-	return &StyleService{templateRepo: repo}
+func NewStyleService(_ interface{}) *StyleService {
+	return &StyleService{}
 }
 
 // StyleConfig 风格配置

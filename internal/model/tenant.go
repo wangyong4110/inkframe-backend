@@ -113,33 +113,6 @@ func (TenantUser) TableName() string {
 	return "tenant_users"
 }
 
-// TenantProject 租户项目关联
-type TenantProject struct {
-	ID        uint   `json:"id" gorm:"primaryKey"`
-	TenantID  uint   `json:"tenant_id" gorm:"index;not null"`
-	ProjectID uint   `json:"project_id" gorm:"index;not null;comment:项目ID(小说ID或自定义项目ID)"`
-	ProjectType string `json:"project_type" gorm:"size:20;default:novel;comment:项目类型 novel/custom"`
-	Name      string `json:"name" gorm:"size:100;comment:项目名称"`
-	Status    string `json:"status" gorm:"size:20;default:active;comment:状态"`
-	
-	// 成员
-	Members   string `json:"members" gorm:"type:text;comment:成员列表JSON"`
-	
-	// 设置
-	Settings string `json:"settings" gorm:"type:text;comment:项目设置JSON"`
-	Tags     string `json:"tags" gorm:"type:text;comment:标签JSON"`
-	
-	// 配额
-	StorageUsed int64 `json:"storage_used" gorm:"default:0;comment:已用存储字节"`
-	
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-func (TenantProject) TableName() string {
-	return "tenant_projects"
-}
-
 // User 用户
 type User struct {
 	ID        uint      `json:"id" gorm:"primaryKey"`

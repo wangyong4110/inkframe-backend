@@ -532,37 +532,6 @@ func (KnowledgeBase) TableName() string {
 	return "ink_knowledge_base"
 }
 
-// PromptTemplate 提示词模板
-type PromptTemplate struct {
-	ID    uint   `json:"id" gorm:"primaryKey"`
-	UUID  string `json:"uuid" gorm:"uniqueIndex;size:36"`
-	Name  string `json:"name" gorm:"size:100;not null"`
-	Genre string `json:"genre" gorm:"size:50;index"`
-	Stage string `json:"stage" gorm:"size:50"`
-	// outline=大纲, chapter=章节, dialogue=对话, description=描写
-
-	// 模板内容
-	Template string `json:"template" gorm:"type:text;not null"`
-
-	// AI系统提示（AI参数从小说项目配置继承）
-	SystemPrompt string `json:"system_prompt" gorm:"type:text"`
-
-	// 使用统计
-	UsageCount int `json:"usage_count" gorm:"default:0"`
-
-	// 状态
-	IsDefault bool `json:"is_default" gorm:"default:false"`
-	IsActive  bool `json:"is_active" gorm:"default:true"`
-
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
-}
-
-func (PromptTemplate) TableName() string {
-	return "ink_prompt_template"
-}
-
 // ModelProvider 模型提供商
 type ModelProvider struct {
 	ID          uint   `json:"id" gorm:"primaryKey"`
@@ -911,82 +880,6 @@ func (StoryboardShot) TableName() string {
 	return "ink_storyboard_shot"
 }
 
-// CharacterVisualDesign 角色视觉设计
-type CharacterVisualDesign struct {
-	ID          uint       `json:"id" gorm:"primaryKey"`
-	CharacterID uint       `json:"character_id" gorm:"index;unique;not null"`
-	Character   *Character `json:"character,omitempty" gorm:"foreignKey:CharacterID"`
-
-	AppearanceDescription string `json:"appearance_description" gorm:"type:text"`
-
-	// 视觉特征
-	FacialFeatures string `json:"facial_features" gorm:"type:text"`
-	HairStyle      string `json:"hair_style" gorm:"type:text"`
-	SkinTone       string `json:"skin_tone" gorm:"size:50"`
-	BodyType       string `json:"body_type" gorm:"size:50"`
-	Age            int    `json:"age"`
-	Gender         string `json:"gender" gorm:"size:20"`
-
-	// 服装装备
-	Outfit      string `json:"outfit" gorm:"type:text"`
-	Accessories string `json:"accessories" gorm:"type:text"`
-	Weapons     string `json:"weapons" gorm:"type:text"`
-
-	// 风格
-	ArtStyle     string `json:"art_style" gorm:"size:50;default:realistic"`
-	ColorPalette string `json:"color_palette" gorm:"type:text"`
-
-	// 参考图
-	ReferenceImageURLs string `json:"reference_image_urls" gorm:"type:text"`
-	GeneratedImages    string `json:"generated_images" gorm:"type:text"`
-
-	// LoRA
-	LoraModelID string  `json:"lora_model_id" gorm:"size:100"`
-	LoraWeight  float64 `json:"lora_weight" gorm:"type:decimal(3,2);default:0.7"`
-
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-func (CharacterVisualDesign) TableName() string {
-	return "ink_character_visual_design"
-}
-
-// SceneVisualDesign 场景视觉设计
-type SceneVisualDesign struct {
-	ID      uint `json:"id" gorm:"primaryKey"`
-	SceneID uint `json:"scene_id" gorm:"index;unique;not null"`
-
-	SceneDescription string `json:"scene_description" gorm:"type:text"`
-
-	// 场景元素
-	Environment  string `json:"environment" gorm:"type:text"`
-	Architecture string `json:"architecture" gorm:"type:text"`
-	Props        string `json:"props" gorm:"type:text"`
-	Lighting     string `json:"lighting" gorm:"type:text"`
-	Atmosphere   string `json:"atmosphere" gorm:"size:50"`
-
-	// 风格
-	ArtStyle     string `json:"art_style" gorm:"size:50;default:realistic"`
-	ColorPalette string `json:"color_palette" gorm:"type:text"`
-	Mood         string `json:"mood" gorm:"size:50"`
-
-	// 参考图
-	ReferenceImageURLs string `json:"reference_image_urls" gorm:"type:text"`
-	GeneratedImages    string `json:"generated_images" gorm:"type:text"`
-
-	// LoRA
-	LoraModelID string  `json:"lora_model_id" gorm:"size:100"`
-	LoraWeight  float64 `json:"lora_weight" gorm:"type:decimal(3,2);default:0.7"`
-
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-func (SceneVisualDesign) TableName() string {
-	return "ink_scene_visual_design"
-}
-
 // QualityReport 质量报告
 type QualityReport struct {
 	ID         uint   `json:"id" gorm:"primaryKey"`
@@ -1019,37 +912,6 @@ func (QualityReport) TableName() string {
 	return "ink_quality_report"
 }
 
-// ReviewTask 审核任务
-type ReviewTask struct {
-	ID        uint     `json:"id" gorm:"primaryKey"`
-	UUID      string   `json:"uuid" gorm:"uniqueIndex;size:36"`
-	NovelID   uint     `json:"novel_id" gorm:"index;not null"`
-	Novel     *Novel   `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
-	ChapterID *uint    `json:"chapter_id,omitempty" gorm:"index"`
-	Chapter   *Chapter `json:"chapter,omitempty" gorm:"foreignKey:ChapterID"`
-
-	Type     string `json:"type" gorm:"size:50;index"`
-	Priority string `json:"priority" gorm:"size:20;default:medium"`
-	// high=高, medium=中, low=低
-
-	Issues string `json:"issues" gorm:"type:text"` // JSON
-
-	Status string `json:"status" gorm:"size:20;default:pending"`
-	// pending=待处理, in_progress=处理中, completed=已完成, rejected=已驳回
-
-	AssignedTo   *uint  `json:"assigned_to,omitempty"`
-	ReviewerNote string `json:"reviewer_note" gorm:"type:text"`
-
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
-
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-func (ReviewTask) TableName() string {
-	return "ink_review_task"
-}
-
 // ChapterVersion 章节版本
 type ChapterVersion struct {
 	ID        uint     `json:"id" gorm:"primaryKey"`
@@ -1073,33 +935,6 @@ type ChapterVersion struct {
 
 func (ChapterVersion) TableName() string {
 	return "ink_chapter_version"
-}
-
-// FeedbackRecord 反馈记录
-type FeedbackRecord struct {
-	ID        uint     `json:"id" gorm:"primaryKey"`
-	NovelID   uint     `json:"novel_id" gorm:"index;not null"`
-	Novel     *Novel   `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
-	ChapterID *uint    `json:"chapter_id,omitempty" gorm:"index"`
-	Chapter   *Chapter `json:"chapter,omitempty" gorm:"foreignKey:ChapterID"`
-
-	FeedbackType string `json:"feedback_type" gorm:"size:50;index"`
-	// consistency_issue=一致性问题, quality_issue=质量问题, user_suggestion=用户建议
-
-	IssueType   string `json:"issue_type" gorm:"size:50"`
-	Description string `json:"description" gorm:"type:text"`
-
-	UserRating  *int   `json:"user_rating,omitempty"` // 1-5
-	UserComment string `json:"user_comment" gorm:"type:text"`
-
-	AIResponse string `json:"ai_response" gorm:"type:text"`
-	WasHelpful *bool  `json:"was_helpful,omitempty"`
-
-	CreatedAt time.Time `json:"created_at"`
-}
-
-func (FeedbackRecord) TableName() string {
-	return "ink_feedback_record"
 }
 
 // ArcSummary 弧光摘要（每10章自动生成一次，用于长篇小说的层次化记忆）

@@ -444,20 +444,52 @@ func (p *QianwenProvider) generateQwenTTS(ctx context.Context, text, model, voic
 		return nil, fmt.Errorf("千问 TTS 错误 %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	// 解析 SSE 流，拼接 base64 音频块
+	// 如果响应是二进制音频（Content-Type: audio/*），直接读取
+	ct := resp.Header.Get("Content-Type")
+	if strings.Contains(ct, "audio/") || strings.Contains(ct, "octet-stream") {
+		audioData, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, fmt.Errorf("千问 TTS 读取音频失败: %w", err)
+		}
+		if len(audioData) == 0 {
+			return nil, fmt.Errorf("千问 TTS 返回空音频数据")
+		}
+		return saveTTSToTemp(audioData, text, start)
+	}
+
+	// 解析 SSE 流，拼接 base64 音频块。
+	// DashScope output.audio 字段有两种格式：
+	//   旧格式：{"output":{"audio":"base64...","finish_reason":"null"}}
+	//   新格式：{"output":{"audio":{"data":"base64..."},"finish_reason":"null"}}
+	// 使用 json.RawMessage 兼容两种格式。
 	type sseOutput struct {
-		FinishReason string `json:"finish_reason"`
-		Audio        string `json:"audio"` // base64 encoded MP3 chunk
+		FinishReason string          `json:"finish_reason"`
+		Audio        json.RawMessage `json:"audio"`
 	}
 	type sseData struct {
 		Output sseOutput `json:"output"`
 	}
 
+	// 解码 base64 音频块（兼容标准编码和 URL 安全编码）
+	decodeAudio := func(raw string) ([]byte, error) {
+		raw = strings.TrimSpace(raw)
+		if chunk, err := base64.StdEncoding.DecodeString(raw); err == nil {
+			return chunk, nil
+		}
+		return base64.URLEncoding.DecodeString(raw)
+	}
+
 	var audioData []byte
+	var rawSnippet strings.Builder // 用于错误诊断
 	scanner := bufio.NewScanner(resp.Body)
-	scanner.Buffer(make([]byte, 512*1024), 512*1024)
+	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1 MB per line
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
+		line := scanner.Text()
+		if rawSnippet.Len() < 512 {
+			rawSnippet.WriteString(line)
+			rawSnippet.WriteByte('\n')
+		}
+		line = strings.TrimSpace(line)
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
@@ -469,12 +501,31 @@ func (p *QianwenProvider) generateQwenTTS(ctx context.Context, text, model, voic
 		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
 			continue
 		}
-		if ev.Output.Audio != "" {
-			chunk, err := base64.StdEncoding.DecodeString(ev.Output.Audio)
-			if err != nil {
-				return nil, fmt.Errorf("千问 TTS base64 解码失败: %w", err)
+		if len(ev.Output.Audio) > 0 && string(ev.Output.Audio) != "null" {
+			raw := string(ev.Output.Audio)
+			var audioB64 string
+			// 尝试解析为字符串（旧格式）
+			if err := json.Unmarshal(ev.Output.Audio, &audioB64); err == nil && audioB64 != "" {
+				chunk, err := decodeAudio(audioB64)
+				if err != nil {
+					return nil, fmt.Errorf("千问 TTS base64 解码失败: %w", err)
+				}
+				audioData = append(audioData, chunk...)
+			} else {
+				// 尝试解析为对象（新格式：{"data":"base64..."}）
+				var audioObj struct {
+					Data string `json:"data"`
+				}
+				if err := json.Unmarshal(ev.Output.Audio, &audioObj); err == nil && audioObj.Data != "" {
+					chunk, err := decodeAudio(audioObj.Data)
+					if err != nil {
+						return nil, fmt.Errorf("千问 TTS base64 解码失败: %w", err)
+					}
+					audioData = append(audioData, chunk...)
+				} else {
+					_ = raw // 格式未知，跳过
+				}
 			}
-			audioData = append(audioData, chunk...)
 		}
 		if ev.Output.FinishReason == "stop" {
 			break
@@ -484,7 +535,13 @@ func (p *QianwenProvider) generateQwenTTS(ctx context.Context, text, model, voic
 		return nil, fmt.Errorf("千问 TTS 读取 SSE 流失败: %w", err)
 	}
 	if len(audioData) == 0 {
-		return nil, fmt.Errorf("千问 TTS 未收到音频数据，请检查发音人名称和 API Key 权限")
+		snippet := strings.TrimSpace(rawSnippet.String())
+		if snippet == "" {
+			snippet = "(空响应)"
+		} else if len(snippet) > 300 {
+			snippet = snippet[:300] + "..."
+		}
+		return nil, fmt.Errorf("千问 TTS 未收到音频数据（响应片段: %s）", snippet)
 	}
 
 	return saveTTSToTemp(audioData, text, start)

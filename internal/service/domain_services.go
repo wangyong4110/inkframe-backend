@@ -2799,34 +2799,6 @@ func (s *WorldviewService) GenerateWorldview(tenantID uint, novelID uint, genre 
 }
 
 // ============================================
-// ReviewTaskService
-// ============================================
-
-type ReviewTaskService struct {
-	reviewTaskRepo *repository.ReviewTaskRepository
-}
-
-func NewReviewTaskService(reviewTaskRepo *repository.ReviewTaskRepository) *ReviewTaskService {
-	return &ReviewTaskService{reviewTaskRepo: reviewTaskRepo}
-}
-
-func (s *ReviewTaskService) CreateTask(task *model.ReviewTask) error {
-	return s.reviewTaskRepo.Create(task)
-}
-
-func (s *ReviewTaskService) GetTask(id uint) (*model.ReviewTask, error) {
-	return s.reviewTaskRepo.GetByID(id)
-}
-
-func (s *ReviewTaskService) ListPendingTasks(priority string, limit int) ([]*model.ReviewTask, error) {
-	return s.reviewTaskRepo.ListPending(priority, limit)
-}
-
-func (s *ReviewTaskService) UpdateTaskStatus(id uint, status, note string) error {
-	return s.reviewTaskRepo.UpdateStatus(id, status, note)
-}
-
-// ============================================
 // TenantService
 // ============================================
 

@@ -8,30 +8,10 @@ import (
 )
 
 // PromptService 提示词服务
-type PromptService struct {
-	templateRepo interface {
-		GetByGenreAndStage(genre, stage string) (*model.PromptTemplate, error)
-		GetByID(id uint) (*model.PromptTemplate, error)
-		List() ([]*model.PromptTemplate, error)
-	}
-}
+type PromptService struct{}
 
-func NewPromptService(repo interface {
-	GetByGenreAndStage(genre, stage string) (*model.PromptTemplate, error)
-	GetByID(id uint) (*model.PromptTemplate, error)
-	List() ([]*model.PromptTemplate, error)
-}) *PromptService {
-	return &PromptService{templateRepo: repo}
-}
-
-// RenderPrompt 渲染提示词
-func (s *PromptService) RenderPrompt(templateID uint, variables map[string]interface{}) (string, error) {
-	tmpl, err := s.templateRepo.GetByID(templateID)
-	if err != nil {
-		return "", err
-	}
-
-	return s.render(tmpl.Template, variables), nil
+func NewPromptService(_ interface{}) *PromptService {
+	return &PromptService{}
 }
 
 // BuildOutlinePrompt 构建大纲提示词
