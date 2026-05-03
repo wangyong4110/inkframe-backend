@@ -1096,6 +1096,15 @@ func (r *ModelProviderRepository) List() ([]*model.ModelProvider, error) {
 	return providers, nil
 }
 
+// ListSystem 获取系统预置提供商列表（仅 tenant_id=0）
+func (r *ModelProviderRepository) ListSystem() ([]*model.ModelProvider, error) {
+	var providers []*model.ModelProvider
+	if err := r.db.Where("tenant_id = 0").Order("id").Find(&providers).Error; err != nil {
+		return nil, err
+	}
+	return providers, nil
+}
+
 // ListByTenant 获取租户提供商列表（含系统级 tenant_id=0）
 func (r *ModelProviderRepository) ListByTenant(tenantID uint) ([]*model.ModelProvider, error) {
 	var providers []*model.ModelProvider

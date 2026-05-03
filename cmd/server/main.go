@@ -445,10 +445,12 @@ func seedDefaultData(db *gorm.DB) {
 // 仅创建元数据（名称/适用任务等），API Key 留空由用户通过模型管理页面填写。
 func seedAIModels(db *gorm.DB) {
 	type providerSeed struct {
-		name        string
-		displayName string
-		provType    string
-		endpoint    string
+		name           string
+		displayName    string
+		provType       string
+		endpoint       string
+		needsSecretKey bool     // 是否需要 AK/SK 双密钥
+		staticModels   []string // 不支持 /models 端点时的内置模型列表
 	}
 	type modelSeed struct {
 		providerName string
@@ -460,16 +462,23 @@ func seedAIModels(db *gorm.DB) {
 	}
 
 	providers := []providerSeed{
-		{"openai", "OpenAI", "llm", "https://api.openai.com/v1"},
-		{"anthropic", "Anthropic", "llm", "https://api.anthropic.com/v1"},
-		{"google", "Google", "llm", "https://generativelanguage.googleapis.com/v1"},
-		{"doubao", "豆包（火山引擎 Ark）", "llm", "https://ark.volces.com/api/v3"},
-		{"deepseek", "DeepSeek", "llm", "https://api.deepseek.com/v1"},
-		{"qianwen", "通义千问（DashScope）", "llm", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
-		{"volcengine-visual", "即梦AI（火山引擎）", "image", ""},
-		{"kling", "可灵（快手）", "video", ""},
-		{"seedance", "Seedance（字节跳动）", "video", "https://ark.volces.com/api/v3"},
-		{"doubao-speech", "豆包语音合成", "voice", "https://openspeech.bytedance.com/api/v3"},
+		// LLM
+		{"openai", "OpenAI", "llm", "https://api.openai.com/v1", false, nil},
+		{"anthropic", "Anthropic", "llm", "https://api.anthropic.com/v1", false, nil},
+		{"google", "Google", "llm", "https://generativelanguage.googleapis.com/v1", false, nil},
+		{"doubao", "豆包（火山引擎 Ark）", "llm", "https://ark.volces.com/api/v3", false, nil},
+		{"deepseek", "DeepSeek", "llm", "https://api.deepseek.com/v1", false, nil},
+		{"qianwen", "通义千问（DashScope）", "llm", "https://dashscope.aliyuncs.com/compatible-mode/v1", false, nil},
+		// 图像生成
+		{"volcengine-visual", "即梦AI（火山引擎）", "image", "", true,
+			[]string{"general_v3.0", "general_v3.0-I2V"}},
+		// 视频生成
+		{"kling", "可灵（快手）", "video", "https://api.klingai.com", false,
+			[]string{"kling-v1-6", "kling-v1-5", "kling-v1"}},
+		{"seedance", "Seedance（字节跳动）", "video", "https://ark.volces.com/api/v3", false, nil},
+		// 语音合成
+		{"doubao-speech", "豆包语音合成", "voice", "https://openspeech.bytedance.com/api/v3", false,
+			[]string{"seed-tts-2.0", "seed-tts-1.0"}},
 	}
 
 	llmTasks := []string{"chapter", "outline", "storyboard", "quality_check"}
@@ -510,14 +519,22 @@ func seedAIModels(db *gorm.DB) {
 	// 1. 确保 provider 记录存在（tenant_id=0 系统级）
 	providerIDs := map[string]uint{}
 	for _, p := range providers {
+		staticModelsJSON := ""
+		if len(p.staticModels) > 0 {
+			b, _ := json.Marshal(p.staticModels)
+			staticModelsJSON = string(b)
+		}
+
 		var prov model.ModelProvider
 		result := db.Where("name = ? AND tenant_id = 0", p.name).FirstOrCreate(&prov, model.ModelProvider{
-			Name:        p.name,
-			DisplayName: p.displayName,
-			Type:        p.provType,
-			APIEndpoint: p.endpoint,
-			TenantID:    0,
-			IsActive:    true,
+			Name:           p.name,
+			DisplayName:    p.displayName,
+			Type:           p.provType,
+			APIEndpoint:    p.endpoint,
+			NeedsSecretKey: p.needsSecretKey,
+			StaticModels:   staticModelsJSON,
+			TenantID:       0,
+			IsActive:       true,
 		})
 		if result.Error != nil {
 			// Duplicate key means the record already exists (race or prior run); just fetch it.
@@ -531,9 +548,19 @@ func seedAIModels(db *gorm.DB) {
 				continue
 			}
 		}
-		// Fix existing records that were created with type "cloud"
+		// 同步元数据字段（幂等更新，确保已有记录也能获得新字段值）
+		updates := map[string]interface{}{}
 		if prov.Type != p.provType {
-			db.Model(&prov).Update("type", p.provType)
+			updates["type"] = p.provType
+		}
+		if prov.NeedsSecretKey != p.needsSecretKey {
+			updates["needs_secret_key"] = p.needsSecretKey
+		}
+		if prov.StaticModels != staticModelsJSON {
+			updates["static_models"] = staticModelsJSON
+		}
+		if len(updates) > 0 {
+			db.Model(&prov).Updates(updates)
 		}
 		providerIDs[p.name] = prov.ID
 	}
@@ -562,7 +589,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-02-v2"
+const schemaVersion = "2026-05-03-v1"
 
 // autoMigrate 自动迁移（带版本跳过优化）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。

@@ -25,27 +25,32 @@ type AnalysisTask struct {
 	cancel         context.CancelFunc `json:"-"` // 取消 pipeline 上下文
 
 	mu       sync.RWMutex `json:"-"`
-	Status   string       `json:"status"`         // pending / running / completed / failed
-	Progress int          `json:"progress"`       // 0-100
+	Status   string       `json:"status"`              // pending / running / completed / failed
+	Progress int          `json:"progress"`            // 0-100
 	Step     string       `json:"step"`
 	Error    string       `json:"error,omitempty"`
+	Warnings []string     `json:"warnings,omitempty"` // 各步骤非致命警告
 }
 
 func (t *AnalysisTask) setStatus(s string)   { t.mu.Lock(); t.Status = s; t.mu.Unlock() }
 func (t *AnalysisTask) setProgress(p int)    { t.mu.Lock(); t.Progress = p; t.mu.Unlock() }
 func (t *AnalysisTask) setStep(s string)     { t.mu.Lock(); t.Step = s; t.mu.Unlock() }
 func (t *AnalysisTask) setError(e string)    { t.mu.Lock(); t.Error = e; t.mu.Unlock() }
+func (t *AnalysisTask) addWarning(w string)  { t.mu.Lock(); t.Warnings = append(t.Warnings, w); t.mu.Unlock() }
 
 // snapshot 返回字段快照，供 handler 安全读取
 func (t *AnalysisTask) snapshot() *AnalysisTask {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
+	ws := make([]string, len(t.Warnings))
+	copy(ws, t.Warnings)
 	return &AnalysisTask{
 		NovelID:  t.NovelID,
 		Status:   t.Status,
 		Progress: t.Progress,
 		Step:     t.Step,
 		Error:    t.Error,
+		Warnings: ws,
 	}
 }
 
@@ -196,6 +201,12 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 	}()
 	task.setStatus("running")
 
+	// 预检：确认 AI 提供商可用，否则立即报错，避免全流程静默空跑
+	if err := s.aiService.CheckAvailability(tenantID); err != nil {
+		s.fail(task, "AI 提供商未配置或不可用，请在「模型管理」页面为至少一个文本生成提供商添加 API Key（错误："+err.Error()+"）")
+		return
+	}
+
 	chapters, err := s.chapterRepo.ListByNovel(novel.ID)
 	if err != nil {
 		s.fail(task, "获取章节列表失败: "+err.Error())
@@ -207,6 +218,7 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 		task.setStep("正在生成章节摘要...")
 		if err := s.stepSummarizeChapters(ctx, task, tenantID, novel, chapters); err != nil {
 			log.Printf("NovelAnalysis[%d]: stepSummarizeChapters warn: %v", novel.ID, err)
+			task.addWarning("章节摘要生成失败: " + err.Error())
 		}
 		// 刷新摘要
 		if refreshed, err := s.chapterRepo.ListByNovel(novel.ID); err == nil {
@@ -252,7 +264,9 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 			go func() {
 				defer phWg.Done()
 				if err := pt.fn(); err != nil {
+					msg := fmt.Sprintf("%s提取失败: %v", pt.name, err)
 					log.Printf("NovelAnalysis[%d]: step%s warn: %v", novel.ID, pt.name, err)
+					task.addWarning(msg)
 				}
 				n := int(doneCount.Add(1))
 				task.setProgress(20 + n*50/total)

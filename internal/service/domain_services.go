@@ -1839,6 +1839,11 @@ func (s *ModelService) ListProviders(tenantID uint) (interface{}, error) {
 	return providers, err
 }
 
+// ListSystemProviders 返回系统预置提供商列表（tenant_id=0），用于前端模板下拉框。
+func (s *ModelService) ListSystemProviders() ([]*model.ModelProvider, error) {
+	return s.providerRepo.ListSystem()
+}
+
 // CapableProvider is a minimal provider descriptor returned by capability-filtered listing endpoints.
 type CapableProvider struct {
 	Name        string `json:"name"`

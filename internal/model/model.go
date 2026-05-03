@@ -583,6 +583,10 @@ type ModelProvider struct {
 	MaxTokens int     `json:"max_tokens"`
 	CostPer1K float64 `json:"cost_per_1k_tokens"`
 
+	// 元数据（系统级模板字段，由 seedAIModels 写入，用户无需填写）
+	NeedsSecretKey bool   `json:"needs_secret_key" gorm:"default:false"` // 是否需要 AK/SK 双密钥鉴权
+	StaticModels   string `json:"static_models,omitempty" gorm:"type:text"` // JSON 字符串，不支持 /models 端点时的内置模型列表
+
 	// 状态
 	IsActive    bool   `json:"is_active" gorm:"default:true"`
 	HealthCheck string `json:"health_check" gorm:"size:20;default:ok"`

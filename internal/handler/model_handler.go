@@ -6,12 +6,20 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
+
+// staticProviderModels 对不提供 OpenAI 兼容 /models 端点的提供商，
+// 按端点前缀返回内置静态模型列表（语音、视频等专用 API）。
+var staticProviderModels = map[string][]string{
+	"openspeech.bytedance.com": {"seed-tts-2.0", "seed-tts-1.0"},
+	"api.klingai.com":          {"kling-v1-6", "kling-v1-5", "kling-v1"},
+}
 
 // ModelHandler 模型管理处理器
 type ModelHandler struct {
@@ -433,12 +441,20 @@ func (h *ModelHandler) FetchProviderModels(c *gin.Context) {
 	endpoint := req.Endpoint
 	apiKey := req.APIKey
 
-	// ID 模式：从 DB 读取凭证
+	// ID 模式：从 DB 读取凭证，并优先使用 DB 中的静态模型列表
 	if req.ProviderID > 0 {
 		p, err := h.modelService.GetProvider(req.ProviderID, getTenantID(c))
 		if err != nil {
 			respondErr(c, http.StatusNotFound, "provider not found")
 			return
+		}
+		// 若 DB 中已配置静态模型列表（不支持 /models 端点的提供商），直接返回
+		if p.StaticModels != "" {
+			var staticList []string
+			if jsonErr := json.Unmarshal([]byte(p.StaticModels), &staticList); jsonErr == nil && len(staticList) > 0 {
+				respondOK(c, gin.H{"models": staticList})
+				return
+			}
 		}
 		if endpoint == "" {
 			endpoint = p.APIEndpoint
@@ -455,6 +471,14 @@ func (h *ModelHandler) FetchProviderModels(c *gin.Context) {
 	if apiKey == "" {
 		respondBadRequest(c, "api_key is required")
 		return
+	}
+
+	// 对不支持 OpenAI /models 端点的提供商，直接返回内置静态列表
+	for host, models := range staticProviderModels {
+		if strings.Contains(endpoint, host) {
+			respondOK(c, gin.H{"models": models})
+			return
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
@@ -499,4 +523,42 @@ func (h *ModelHandler) FetchProviderModels(c *gin.Context) {
 	}
 
 	respondOK(c, gin.H{"models": ids})
+}
+
+// ListProviderTemplates 返回系统预置的提供商模板列表（tenant_id=0），
+// 供前端"添加提供商"下拉框使用，不含 API Key 等敏感字段。
+//
+// GET /api/v1/model-providers/templates
+func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
+	templates, err := h.modelService.ListSystemProviders()
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to list templates")
+		return
+	}
+
+	type providerTemplate struct {
+		Name           string   `json:"name"`
+		DisplayName    string   `json:"display_name"`
+		Type           string   `json:"type"`
+		APIEndpoint    string   `json:"api_endpoint"`
+		NeedsSecretKey bool     `json:"needs_secret_key"`
+		StaticModels   []string `json:"static_models,omitempty"`
+	}
+
+	result := make([]providerTemplate, 0, len(templates))
+	for _, p := range templates {
+		t := providerTemplate{
+			Name:           p.Name,
+			DisplayName:    p.DisplayName,
+			Type:           p.Type,
+			APIEndpoint:    p.APIEndpoint,
+			NeedsSecretKey: p.NeedsSecretKey,
+		}
+		if p.StaticModels != "" {
+			json.Unmarshal([]byte(p.StaticModels), &t.StaticModels) //nolint:errcheck
+		}
+		result = append(result, t)
+	}
+
+	respondOK(c, result)
 }

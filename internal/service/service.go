@@ -976,6 +976,12 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 	return provider, nil
 }
 
+// CheckAvailability 检查指定租户是否有可用的 LLM 提供商（用于 pipeline 预检）
+func (s *AIService) CheckAvailability(tenantID uint) error {
+	_, err := s.getTenantProvider(tenantID, "")
+	return err
+}
+
 // InvalidateProviderCache 删除指定提供商在所有租户下的缓存，供 DeleteProvider/UpdateProvider 调用。
 func (s *AIService) InvalidateProviderCache(providerName string) {
 	s.providerCache.Range(func(k, _ any) bool {
