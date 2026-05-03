@@ -460,6 +460,10 @@ func seedDefaultData(db *gorm.DB) {
 // seedAIModels 预置系统级模型提供商和 AI 模型（幂等，FirstOrCreate）
 // 仅创建元数据（名称/适用任务等），API Key 留空由用户通过模型管理页面填写。
 func seedAIModels(db *gorm.DB) {
+	// ink_ai_model.type 列可能由历史 AutoMigrate 遗留且无默认值，导致 INSERT 失败。
+	// 幂等修复：确保该列有 DEFAULT ''，不影响已有数据。
+	db.Exec("ALTER TABLE `ink_ai_model` MODIFY COLUMN `type` VARCHAR(50) NOT NULL DEFAULT ''")
+
 	type providerSeed struct {
 		name           string
 		displayName    string
@@ -677,7 +681,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-04-v3"
+const schemaVersion = "2026-05-04-v4"
 
 // autoMigrate 自动迁移（带版本跳过优化）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。

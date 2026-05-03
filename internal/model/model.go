@@ -581,6 +581,7 @@ type AIModel struct {
 	Name        string `json:"name" gorm:"size:100;not null"`
 	DisplayName string `json:"display_name" gorm:"size:100"`
 	Version     string `json:"version" gorm:"size:50"`
+	Type        string `json:"type" gorm:"size:50;default:''"` // e.g. chat/image/voice/embedding
 
 	// 能力
 	Capabilities string `json:"capabilities" gorm:"type:text"` // JSON
