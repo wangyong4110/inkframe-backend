@@ -493,8 +493,11 @@ func seedAIModels(db *gorm.DB) {
 			[]string{"kling-v1-6", "kling-v1-5", "kling-v1"}},
 		{"seedance", "Seedance（字节跳动）", "video", "https://ark.volces.com/api/v3", false, nil},
 		// 语音合成
-		{"doubao-speech", "豆包语音合成", "voice", "https://openspeech.bytedance.com/api/v3", false,
+		{"doubao-speech", "豆包语音合成 V3", "voice", "https://openspeech.bytedance.com/api/v3", false,
 			[]string{"seed-tts-2.0", "seed-tts-1.0"}},
+		{"doubao-speech-v1", "豆包语音合成 V1", "voice", "https://openspeech.bytedance.com/api/v1", false,
+			[]string{"BV001_streaming", "BV002_streaming", "BV005_streaming", "BV006_streaming",
+				"BV007_streaming", "zh_female_shuangkuaisisi_moon_bigtts", "zh_male_jingqiangkanye_moon_bigtts"}},
 	}
 
 	llmTasks := []string{"chapter", "outline", "storyboard", "quality_check"}
@@ -527,9 +530,16 @@ func seedAIModels(db *gorm.DB) {
 		// 视频
 		{"kling", "kling-v1-6", "可灵 v1.6", []string{"video_gen"}, 0.9, 0},
 		{"seedance", "seedance-01-lite", "Seedance 01 Lite", []string{"video_gen"}, 0.88, 0},
-		// 豆包语音合成
+		// 豆包语音合成 V3（seed-tts 系列）
 		{"doubao-speech", "seed-tts-2.0", "豆包 Seed TTS 2.0", []string{"voice_gen"}, 0.92, 0},
 		{"doubao-speech", "seed-tts-1.0", "豆包 Seed TTS 1.0", []string{"voice_gen"}, 0.88, 0},
+		// 豆包语音合成 V1（经典音色，appid/token 鉴权）
+		{"doubao-speech-v1", "BV001_streaming", "通用女声", []string{"voice_gen"}, 0.85, 0},
+		{"doubao-speech-v1", "BV002_streaming", "通用男声", []string{"voice_gen"}, 0.85, 0},
+		{"doubao-speech-v1", "BV005_streaming", "活泼女声", []string{"voice_gen"}, 0.85, 0},
+		{"doubao-speech-v1", "BV006_streaming", "沉稳男声", []string{"voice_gen"}, 0.85, 0},
+		{"doubao-speech-v1", "zh_female_shuangkuaisisi_moon_bigtts", "爽快思思", []string{"voice_gen"}, 0.87, 0},
+		{"doubao-speech-v1", "zh_male_jingqiangkanye_moon_bigtts", "精英男声", []string{"voice_gen"}, 0.87, 0},
 	}
 
 	// 1. 确保 provider 记录存在（tenant_id=0 系统级）
@@ -768,10 +778,17 @@ func initAIModule(cfg *config.Config) *ai.ModelManager {
 		manager.RegisterImageProvider("volcengine-visual", ai.VolcModelText2ImgV3, "1328x1328")
 	}
 
-	// 豆包语音合成（openspeech.bytedance.com 原生 TTS API，X-Api-Key 鉴权）
+	// 豆包语音合成 V3（openspeech.bytedance.com，X-Api-Key 鉴权，支持 seed-tts-2.0）
 	if speechKey := getEnv("DOUBAO_SPEECH_API_KEY", ""); speechKey != "" {
 		resourceID := getEnv("DOUBAO_SPEECH_RESOURCE_ID", "")
 		manager.RegisterProvider("doubao-speech", ai.NewDoubaoSpeechProvider(speechKey, resourceID))
+	}
+
+	// 豆包语音合成 V1（HTTP 一次性合成，appid+access_token 鉴权，火山引擎老版控制台）
+	if v1AppID := getEnv("DOUBAO_SPEECH_V1_APP_ID", ""); v1AppID != "" {
+		v1Token := getEnv("DOUBAO_SPEECH_V1_TOKEN", "")
+		v1Cluster := getEnv("DOUBAO_SPEECH_V1_CLUSTER", "")
+		manager.RegisterProvider("doubao-speech-v1", ai.NewDoubaoSpeechV1Provider(v1AppID, v1Token, v1Cluster))
 	}
 
 	// 为所有 Provider 包装指数退避重试（最多 3 次，基础延迟 500ms）
