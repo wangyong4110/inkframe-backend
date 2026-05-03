@@ -112,6 +112,7 @@ func (s *NarrativeMemoryService) BuildPlotTensionStateText(novelID uint, current
 
 // BuildHierarchicalContext 返回供 prompt 注入的层次化上下文文本
 func (s *NarrativeMemoryService) BuildHierarchicalContext(novelID uint, currentChapterNo int) (string, error) {
+	log.Printf("[NarrativeMemory] BuildHierarchicalContext: novelID=%d chapterNo=%d", novelID, currentChapterNo)
 	novel, err := s.novelRepo.GetByID(novelID)
 	if err != nil {
 		return "", fmt.Errorf("NarrativeMemory.BuildHierarchicalContext: %w", err)
@@ -400,6 +401,7 @@ func (s *NarrativeMemoryService) TriggerArcSummaryIfNeeded(tenantID, novelID uin
 }
 
 func (s *NarrativeMemoryService) generateArcSummary(tenantID, novelID uint, arcNo, startChapter, endChapter int) error {
+	log.Printf("[NarrativeMemory] generateArcSummary: novelID=%d arcNo=%d ch%d~ch%d", novelID, arcNo, startChapter, endChapter)
 	type chSummary struct {
 		ChapterNo int
 		Title     string
@@ -458,6 +460,7 @@ func (s *NarrativeMemoryService) generateArcSummary(tenantID, novelID uint, arcN
 	charChangesJSON, _ := json.Marshal(result.CharacterChanges)
 	openForeshadowsJSON, _ := json.Marshal(result.OpenForeshadows)
 
+	log.Printf("[NarrativeMemory] generateArcSummary done: novelID=%d arcNo=%d", novelID, arcNo)
 	now := time.Now()
 	existing, _ := s.arcRepo.GetByNovelAndArcNo(novelID, arcNo)
 	if existing != nil {
@@ -488,6 +491,7 @@ func (s *NarrativeMemoryService) generateArcSummary(tenantID, novelID uint, arcN
 
 // GenerateChapterSummary 为已生成章节内容生成80-120字摘要
 func (s *NarrativeMemoryService) GenerateChapterSummary(tenantID uint, chapter *model.Chapter, novelTitle string) (string, error) {
+	log.Printf("[NarrativeMemory] GenerateChapterSummary: novelID=%d chapterNo=%d", chapter.NovelID, chapter.ChapterNo)
 	tmplStr := loadPromptTemplate("chapter_summary.tmpl")
 	tmpl, err := template.New("chapter_summary").Parse(tmplStr)
 	if err != nil {
@@ -504,9 +508,12 @@ func (s *NarrativeMemoryService) GenerateChapterSummary(tenantID uint, chapter *
 	}
 	summary, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "chapter_summary", buf.String(), "")
 	if err != nil {
+		log.Printf("[NarrativeMemory] GenerateChapterSummary AI error: chapterNo=%d err=%v", chapter.ChapterNo, err)
 		return "", err
 	}
-	return strings.TrimSpace(summary), nil
+	summary = strings.TrimSpace(summary)
+	log.Printf("[NarrativeMemory] GenerateChapterSummary done: novelID=%d chapterNo=%d len=%d", chapter.NovelID, chapter.ChapterNo, len(summary))
+	return summary, nil
 }
 
 // ──────────────────────────────────────────────
@@ -515,6 +522,7 @@ func (s *NarrativeMemoryService) GenerateChapterSummary(tenantID uint, chapter *
 
 // GenerateChapterTitle 根据摘要和情感基调生成创意章节标题
 func (s *NarrativeMemoryService) GenerateChapterTitle(tenantID uint, chapter *model.Chapter, genre, emotionalTone string) (string, error) {
+	log.Printf("[NarrativeMemory] GenerateChapterTitle: novelID=%d chapterNo=%d", chapter.NovelID, chapter.ChapterNo)
 	tmplStr := loadPromptTemplate("chapter_title.tmpl")
 	tmpl, err := template.New("chapter_title").Parse(tmplStr)
 	if err != nil {
@@ -530,6 +538,7 @@ func (s *NarrativeMemoryService) GenerateChapterTitle(tenantID uint, chapter *mo
 	}
 	title, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "chapter_title", buf.String(), "")
 	if err != nil {
+		log.Printf("[NarrativeMemory] GenerateChapterTitle AI error: chapterNo=%d err=%v", chapter.ChapterNo, err)
 		return "", err
 	}
 	title = strings.TrimSpace(strings.Trim(title, "「」『』\"'【】"))
@@ -601,6 +610,7 @@ func (s *NarrativeMemoryService) ExtractCharacterVoice(tenantID uint, character 
 
 // RefineChapterContent 对章节内容做一轮精修（仅在检测到质量问题时执行）
 func (s *NarrativeMemoryService) RefineChapterContent(tenantID uint, chapter *model.Chapter, novelTitle string) (string, error) {
+	log.Printf("[NarrativeMemory] RefineChapterContent: novelID=%d chapterNo=%d", chapter.NovelID, chapter.ChapterNo)
 	focusAreas := detectRefinementNeeds(chapter.Content)
 	if focusAreas == "" {
 		return chapter.Content, nil

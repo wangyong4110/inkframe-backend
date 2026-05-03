@@ -221,6 +221,7 @@ func parseAnchorJSONResult(raw string) ([]extractedAnchor, error) {
 
 // ExtractFromChapter 调用 LLM 提取章节中的场景锚点，去重后批量创建
 func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, novelID uint, novelTitle, chapterContent string) ([]*model.SceneAnchor, error) {
+	log.Printf("[SceneAnchorService] ExtractFromChapter: novelID=%d contentLen=%d", novelID, len(chapterContent))
 	_ = ctx // 未来可传 context 给 AI provider
 
 	// 获取已存在锚点（去重用）
@@ -295,6 +296,7 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 		existingNames[e.Name] = true
 	}
 
+	log.Printf("[SceneAnchorService] ExtractFromChapter done: novelID=%d created=%d", novelID, len(created))
 	return created, nil
 }
 
@@ -353,6 +355,7 @@ func (s *SceneAnchorService) UpdateStats(id uint, score float64) error {
 
 // AIExtractAllFromNovel 批量从小说前 10 章中提取场景锚点（并发 3 goroutine）
 func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.SceneAnchor, error) {
+	log.Printf("[SceneAnchorService] AIExtractAllFromNovel: novelID=%d", novelID)
 	if s.chapterRepo == nil {
 		return nil, fmt.Errorf("chapterRepo not configured")
 	}
@@ -407,6 +410,7 @@ func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*m
 		}()
 	}
 	wg.Wait()
+	log.Printf("[SceneAnchorService] AIExtractAllFromNovel done: novelID=%d created=%d", novelID, len(allCreated))
 	if failCount == len(candidates) {
 		return nil, fmt.Errorf("所有章节场景锚点提取均失败，请检查 AI 提供商配置")
 	}

@@ -107,6 +107,7 @@ func (s *PlotPointService) MarkResolved(id uint, resolvedInChapterID uint) (*mod
 
 // AIExtractFromNovel 从小说所有章节中并发提取剧情点（跳过已有剧情点的章节）
 func (s *PlotPointService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.PlotPoint, error) {
+	log.Printf("[PlotPointService] AIExtractFromNovel: novelID=%d", novelID)
 	const maxConcurrent = 3
 
 	if s.chapterRepo == nil {
@@ -158,11 +159,13 @@ func (s *PlotPointService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.
 		}()
 	}
 	wg.Wait()
+	log.Printf("[PlotPointService] AIExtractFromNovel done: novelID=%d total=%d", novelID, len(all))
 	return all, nil
 }
 
 // ExtractFromChapter 使用AI从章节内容提取剧情点并保存
 func (s *PlotPointService) ExtractFromChapter(tenantID uint, chapter *model.Chapter) ([]*model.PlotPoint, error) {
+	log.Printf("[PlotPointService] ExtractFromChapter: novelID=%d chapterNo=%d", chapter.NovelID, chapter.ChapterNo)
 	if chapter.Content == "" {
 		return nil, fmt.Errorf("chapter content is empty")
 	}
@@ -223,5 +226,6 @@ func (s *PlotPointService) ExtractFromChapter(tenantID uint, chapter *model.Chap
 	if err := s.repo.BatchCreate(pps); err != nil {
 		return nil, fmt.Errorf("failed to save plot points: %w", err)
 	}
+	log.Printf("[PlotPointService] ExtractFromChapter done: chapterNo=%d created=%d", chapter.ChapterNo, len(pps))
 	return pps, nil
 }

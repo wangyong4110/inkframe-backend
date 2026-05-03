@@ -413,6 +413,7 @@ func (s *ItemService) extractItemsFromContent(
 
 // AIExtractAllFromNovel 逐章并发提取物品：先并发 AI 提取，再统一去重、入库
 func (s *ItemService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.Item, error) {
+	log.Printf("[ItemService] AIExtractAllFromNovel: novelID=%d", novelID)
 	if s.chapterRepo == nil {
 		return nil, fmt.Errorf("chapter repository not configured")
 	}
@@ -498,6 +499,7 @@ func (s *ItemService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.It
 			}
 		}
 	}
+	log.Printf("[ItemService] AIExtractAllFromNovel: chapters processed=%d, merged=%d unique items", len(candidates), len(allItems))
 
 	// 统一入库（单线程，无竞争）
 	validCat := map[string]bool{"weapon": true, "treasure": true, "tool": true, "document": true, "artifact": true, "other": true}
@@ -534,11 +536,13 @@ func (s *ItemService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.It
 		}
 		upserted = append(upserted, item)
 	}
+	log.Printf("[ItemService] AIExtractAllFromNovel done: novelID=%d created=%d", novelID, len(upserted))
 	return upserted, nil
 }
 
 // AIExtractChapterItems 从单章内容中提取物品，写入 ink_item + ink_chapter_item
 func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint) ([]*model.Item, error) {
+	log.Printf("[ItemService] AIExtractChapterItems: novelID=%d chapterID=%d", novelID, chapterID)
 	chapter, err := s.chapterRepo.GetByID(chapterID)
 	if err != nil {
 		return nil, fmt.Errorf("chapter not found: %w", err)
@@ -654,5 +658,6 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint) (
 		}
 		created = append(created, item)
 	}
+	log.Printf("[ItemService] AIExtractChapterItems done: chapterID=%d created=%d", chapterID, len(created))
 	return created, nil
 }

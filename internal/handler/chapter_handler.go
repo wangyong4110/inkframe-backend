@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 
@@ -140,6 +141,7 @@ func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 		respondBadRequest(c, err.Error())
 		return
 	}
+	log.Printf("[ChapterHandler] GenerateChapter: novelID=%d chapterNo=%d", req.NovelID, req.ChapterNo)
 
 	// 支持通过 Header 临时覆盖 AI 模型/provider
 	if override := c.GetHeader("X-Model-Override"); override != "" && req.ModelOverride == "" {
@@ -468,6 +470,7 @@ func (h *ChapterHandler) BatchSummarizeChapters(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	log.Printf("[ChapterHandler] BatchSummarizeChapters: tenantID=%d novelID=%d taskID=%s", tenantID, novelID, task.TaskID)
 	go func(taskID string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		count, err := h.chapterService.BatchGenerateSummaries(tenantID, uint(novelID))
