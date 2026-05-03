@@ -1093,6 +1093,15 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 		}
 	}
 
+	// 分镜/角色/世界观等 JSON 输出量大的任务，不允许被 novel.MaxTokens（章节字数目标）压低
+	// novel.MaxTokens 存的是章节字数目标 ×2，不代表模型 output token 上限
+	switch taskType {
+	case "storyboard", "character", "worldview", "character_state", "scene_anchor_extract":
+		if config.MaxTokens < 16384 {
+			config.MaxTokens = 16384
+		}
+	}
+
 	// 调用真实AI API
 	result, err := s.callAIWithProvider(tenantID, prompt, &config, providerName, resolvedModel)
 	if err != nil {
@@ -2025,6 +2034,9 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			content = chapter.Content
 		}
 	}
+	if strings.TrimSpace(content) == "" {
+		return nil, fmt.Errorf("章节内容为空，请先在「写作」页面编写章节内容再生成分镜脚本")
+	}
 
 	// 获取租户 ID（供 getTenantProvider 查租户私有配置）
 	var tenantID uint
@@ -2050,7 +2062,23 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			segShotCount = 3
 		}
 		prompt := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, len(segments), segShotCount)
-		result, aiErr := s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", prompt, provider)
+		var result string
+		var aiErr error
+		// 最多重试 2 次：空响应或 JSON 解析失败时重试
+		for attempt := 0; attempt < 3; attempt++ {
+			p := prompt
+			if attempt > 0 {
+				p = prompt + "\n\n⚠️ 重要提示：请只返回纯 JSON 数组，不要包含任何 markdown 代码块（```）或说明文字。"
+				log.Printf("GenerateStoryboard: segment %d/%d retry attempt %d", segIdx+1, len(segments), attempt)
+			}
+			result, aiErr = s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", p, provider)
+			if aiErr == nil && strings.TrimSpace(result) != "" {
+				break
+			}
+			if aiErr != nil {
+				log.Printf("GenerateStoryboard: segment %d/%d attempt %d AI error: %v", segIdx+1, len(segments), attempt, aiErr)
+			}
+		}
 		if aiErr != nil {
 			if segIdx == 0 {
 				return nil, aiErr
