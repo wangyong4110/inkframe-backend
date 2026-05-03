@@ -144,6 +144,37 @@ func (h *ItemHandler) AIExtractFromNovel(c *gin.Context) {
 	respondAccepted(c, task.TaskID, "物品提取任务已提交")
 }
 
+// BatchGenerateImages 批量为小说所有物品生成图像（异步任务）
+// POST /api/v1/novels/:id/items/batch-images
+func (h *ItemHandler) BatchGenerateImages(c *gin.Context) {
+	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid novel id")
+		return
+	}
+	var req struct {
+		Provider string `json:"provider"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImageGen, "批量生成物品图片", "novel", uint(novelID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+	go func(taskID string) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		succ, fail, err := h.itemService.BatchGenerateImages(tenantID, uint(novelID), req.Provider)
+		if err != nil {
+			log.Printf("[ItemHandler] BatchGenerateImages task %s failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+		} else {
+			h.taskSvc.Complete(taskID, map[string]interface{}{"succeeded": succ, "failed": fail}) //nolint:errcheck
+		}
+	}(task.TaskID)
+	respondAccepted(c, task.TaskID, "物品图片批量生成任务已提交")
+}
+
 // GenerateItemImage 生成物品图像（异步任务）
 // POST /api/v1/items/:id/images
 // 立即返回 202 + task_id，轮询 GET /items/:id/images/:task_id 获取结果

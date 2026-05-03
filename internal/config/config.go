@@ -88,6 +88,8 @@ type AIConfig struct {
 	VolcengineVisual VolcengineVisualConfig `mapstructure:"volcengine_visual"`
 	Tasks            TasksConfig            `mapstructure:"tasks"`
 	Default          DefaultAIConfig        `mapstructure:"default"`
+	ImageConcurrency int                    `mapstructure:"image_concurrency"` // 图像生成并发度（默认 1）
+	VideoConcurrency int                    `mapstructure:"video_concurrency"` // 视频生成并发度（默认 1）
 }
 
 // OpenAIConfig OpenAI配置
@@ -275,6 +277,8 @@ func setDefaults() {
 	viper.SetDefault("ai.default.temperature", 0.7)
 	viper.SetDefault("ai.default.top_p", 0.9)
 	viper.SetDefault("ai.default.top_k", 40)
+	viper.SetDefault("ai.image_concurrency", 1)
+	viper.SetDefault("ai.video_concurrency", 1)
 
 	// 日志默认值
 	viper.SetDefault("logger.level", "info")

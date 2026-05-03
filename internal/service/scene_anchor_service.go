@@ -353,6 +353,42 @@ func (s *SceneAnchorService) UpdateStats(id uint, score float64) error {
 	return s.repo.Update(anchor)
 }
 
+// BatchGenerateRefImages 批量为小说的场景锚点生成参考图（跳过已有 RefImageURL 的锚点）。
+// 并发度由 AIService.imageSem 统一管控（config.yaml ai.image_concurrency）。
+func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantID, novelID uint, provider string) (succeeded, failed int, err error) {
+	anchors, err := s.repo.ListByNovel(novelID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("list anchors: %w", err)
+	}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for _, anchor := range anchors {
+		anchor := anchor
+		if anchor.RefImageURL != "" {
+			continue // 已有参考图，跳过
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, genErr := s.GenerateRefImage(ctx, tenantID, anchor.ID, provider); genErr != nil {
+				log.Printf("[SceneAnchorService] BatchGenerateRefImages: anchor %d (%s) failed: %v", anchor.ID, anchor.Name, genErr)
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				return
+			}
+			mu.Lock()
+			succeeded++
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	log.Printf("[SceneAnchorService] BatchGenerateRefImages: novelID=%d succeeded=%d failed=%d", novelID, succeeded, failed)
+	return succeeded, failed, nil
+}
+
 // AIExtractAllFromNovel 批量从小说前 10 章中提取场景锚点（并发 3 goroutine）
 func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.SceneAnchor, error) {
 	log.Printf("[SceneAnchorService] AIExtractAllFromNovel: novelID=%d", novelID)

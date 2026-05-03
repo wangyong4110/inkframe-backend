@@ -1862,6 +1862,60 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 	return created, nil
 }
 
+// BatchGenerateImages 批量为小说的角色生成三视图正面图（跳过已有 ThreeViewFront 的角色）。
+// 所有goroutine并发调用 ImageGenerationService.GenerateThreeViewImage，
+// 并发度由 AIService.imageSem 统一管控（config.yaml ai.image_concurrency）。
+// 返回成功数和失败数；只要有一次成功就不返回 error。
+func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider string) (succeeded, failed int, err error) {
+	chars, err := s.characterRepo.ListByNovel(novelID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("list characters: %w", err)
+	}
+
+	imageStyle := ""
+	if s.novelRepo != nil {
+		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
+			imageStyle = novel.ImageStyle
+		}
+	}
+
+	imgSvc := NewImageGenerationService(s.aiService)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for _, char := range chars {
+		char := char
+		if char.ThreeViewFront != "" {
+			continue // 已有正面图，跳过
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			img, genErr := imgSvc.GenerateThreeViewImage(tenantID, char.Name, char.Appearance, "front", imageStyle, char.Gender, "", provider)
+			if genErr != nil {
+				log.Printf("[CharacterService] BatchGenerateImages: char %d (%s) failed: %v", char.ID, char.Name, genErr)
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				return
+			}
+			if _, saveErr := s.UpdateCharacter(char.ID, &model.UpdateCharacterRequest{ThreeViewFront: img.URL}); saveErr != nil {
+				log.Printf("[CharacterService] BatchGenerateImages: save char %d: %v", char.ID, saveErr)
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				return
+			}
+			mu.Lock()
+			succeeded++
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	log.Printf("[CharacterService] BatchGenerateImages: novelID=%d succeeded=%d failed=%d", novelID, succeeded, failed)
+	return succeeded, failed, nil
+}
+
 func (s *CharacterService) AnalyzeConsistency(id uint, images []string) (interface{}, error) {
 	return map[string]interface{}{
 		"character_id":      id,

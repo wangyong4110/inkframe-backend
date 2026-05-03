@@ -799,7 +799,8 @@ type AIService struct {
 	novelRepo     *repository.NovelRepository
 	storageSvc    storage.Service
 	taskRouting   TaskRouting
-	providerCache sync.Map // key: "tenantID:providerName" → providerCacheEntry
+	providerCache sync.Map    // key: "tenantID:providerName" → providerCacheEntry
+	imageSem      chan struct{} // nil = unlimited; set via WithImageConcurrency
 }
 
 func NewAIService(
@@ -834,6 +835,15 @@ func (s *AIService) WithStorage(svc storage.Service) *AIService {
 // WithTaskRouting 设置各任务类型优先使用的 provider（来自 config.yaml ai.tasks）
 func (s *AIService) WithTaskRouting(tr TaskRouting) *AIService {
 	s.taskRouting = tr
+	return s
+}
+
+// WithImageConcurrency 设置图像生成的最大并发数。
+// n ≤ 0 时不限制并发（仅受 AI 提供商限速约束）。
+func (s *AIService) WithImageConcurrency(n int) *AIService {
+	if n > 0 {
+		s.imageSem = make(chan struct{}, n)
+	}
 	return s
 }
 
@@ -1423,6 +1433,16 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 		return "", fmt.Errorf("AI manager not initialized")
 	}
 
+	// 并发限流：若配置了 image_concurrency，则在此处等待令牌
+	if s.imageSem != nil {
+		select {
+		case s.imageSem <- struct{}{}:
+			defer func() { <-s.imageSem }()
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+
 	weight := 1.0
 	if len(consistencyWeight) > 0 && consistencyWeight[0] > 0 {
 		weight = consistencyWeight[0]
@@ -1953,7 +1973,10 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	}
 
 	// 解析分镜（传入 chapterID，供每个 shot 继承）
-	shots := s.parseStoryboardResult(videoID, chapterID, result)
+	shots, err := s.parseStoryboardResult(videoID, chapterID, result)
+	if err != nil {
+		return nil, fmt.Errorf("解析AI分镜结果失败: %w", err)
+	}
 
 	// 场景锚点自动匹配：按 shot.Location 名称匹配已注册的场景锚点
 	// 避免 SceneAnchorID 永远为 nil，使锚点注入逻辑真正生效
@@ -2185,8 +2208,8 @@ func (s *VideoService) buildStoryboardPrompt(video *model.Video, content, userPr
 	return sb.String()
 }
 
-// parseStoryboardResult 解析AI分镜响应，失败时生成基础默认分镜
-func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, result string) []*model.StoryboardShot {
+// parseStoryboardResult 解析AI分镜响应。解析失败时返回 error（不生成空占位）。
+func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, result string) ([]*model.StoryboardShot, error) {
 	// 提取 JSON 数组
 	cleaned := extractJSON(result)
 
@@ -2211,23 +2234,11 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 	}
 
 	if err := json.Unmarshal([]byte(cleaned), &rawShots); err != nil || len(rawShots) == 0 {
-		// 解析失败时生成基础占位分镜（5个）
-		log.Printf("parseStoryboardResult: JSON parse failed (%v), using fallback", err)
-		shots := make([]*model.StoryboardShot, 5)
-		for i := range shots {
-			shots[i] = &model.StoryboardShot{
-				UUID:        uuid.New().String(),
-				VideoID:     videoID,
-				ChapterID:   chapterID,
-				ShotNo:      i + 1,
-				CameraType:  "static",
-				CameraAngle: "eye_level",
-				ShotSize:    "medium",
-				Duration:    5.0,
-				Status:      "pending",
-			}
+		log.Printf("[VideoService] parseStoryboardResult: JSON parse failed (%v); raw AI response (first 500 chars): %.500s", err, result)
+		if err != nil {
+			return nil, fmt.Errorf("分镜JSON解析失败: %w; AI原始响应(前200字符): %.200s", err, result)
 		}
-		return shots
+		return nil, fmt.Errorf("AI返回了空的分镜列表，请检查章节内容或重试")
 	}
 
 	shots := make([]*model.StoryboardShot, 0, len(rawShots))
@@ -2289,7 +2300,7 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 		}
 		shots = append(shots, shot)
 	}
-	return shots
+	return shots, nil
 }
 
 // validCameraType 验证摄像机类型，无效时返回默认值

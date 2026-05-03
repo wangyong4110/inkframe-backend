@@ -105,6 +105,10 @@ ai:
     video_gen: ""          # 视频生成
     embedding: ""          # 向量嵌入
 
+  # 图像/视频生成并发度（默认 1，避免触发提供商限速；可按需提高）
+  image_concurrency: 1
+  video_concurrency: 1
+
   default:
     temperature: 0.7
     top_p: 0.9

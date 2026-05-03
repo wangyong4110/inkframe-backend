@@ -169,6 +169,59 @@ func (s *ItemService) GenerateItemImage(tenantID, id uint, referenceImageURL, pr
 }
 
 // AIExtractFromNovel 使用 AI 从章节内容中提取物品（按 novel_id+name upsert）
+// BatchGenerateImages 批量为小说的物品生成图像（跳过已有 ImageURL 的物品）。
+// 并发度由 AIService.imageSem 统一管控（config.yaml ai.image_concurrency）。
+func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider string) (succeeded, failed int, err error) {
+	items, err := s.itemRepo.ListByNovel(novelID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("list items: %w", err)
+	}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+
+	for _, item := range items {
+		item := item
+		if item.ImageURL != "" {
+			continue // 已有图片，跳过
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			prompt := item.VisualPrompt
+			if prompt == "" {
+				prompt = fmt.Sprintf("%s，%s，奇幻物品插画，精细细节，概念艺术", item.Name, item.Appearance)
+			}
+			aiRefURL := item.ReferenceImageURL
+			if !strings.HasPrefix(aiRefURL, "http://") && !strings.HasPrefix(aiRefURL, "https://") {
+				aiRefURL = ""
+			}
+			url, genErr := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL, "", "")
+			if genErr != nil {
+				log.Printf("[ItemService] BatchGenerateImages: item %d (%s) failed: %v", item.ID, item.Name, genErr)
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				return
+			}
+			item.ImageURL = url
+			if saveErr := s.itemRepo.Update(item); saveErr != nil {
+				log.Printf("[ItemService] BatchGenerateImages: save item %d: %v", item.ID, saveErr)
+				mu.Lock()
+				failed++
+				mu.Unlock()
+				return
+			}
+			mu.Lock()
+			succeeded++
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	log.Printf("[ItemService] BatchGenerateImages: novelID=%d succeeded=%d failed=%d", novelID, succeeded, failed)
+	return succeeded, failed, nil
+}
+
 func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item, error) {
 	chapters, err := s.chapterRepo.ListByNovel(novelID)
 	if err != nil {

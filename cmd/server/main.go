@@ -967,7 +967,8 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 			ImageGen:     cfg.AI.Tasks.ImageGen,
 			VideoGen:     cfg.AI.Tasks.VideoGen,
 			Embedding:    cfg.AI.Tasks.Embedding,
-		})
+		}).
+		WithImageConcurrency(cfg.AI.ImageConcurrency)
 
 	// 异步任务服务
 	taskRepo := repository.NewTaskRepository(db)

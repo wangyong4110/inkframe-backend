@@ -449,6 +449,37 @@ func (h *CharacterHandler) AIBatchGenerate(c *gin.Context) {
 	respondAccepted(c, task.TaskID, "角色批量生成任务已提交")
 }
 
+// BatchGenerateImages 批量为小说所有角色生成三视图正面图（异步任务）
+// POST /api/v1/novels/:id/characters/batch-images
+func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
+	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid novel id")
+		return
+	}
+	var req struct {
+		Provider string `json:"provider"` // 可选：指定图像生成提供者
+	}
+	_ = c.ShouldBindJSON(&req)
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeThreeView, "批量生成角色图片", "novel", uint(novelID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+	go func(taskID string) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		succ, fail, err := h.characterService.BatchGenerateImages(tenantID, uint(novelID), req.Provider)
+		if err != nil {
+			log.Printf("[CharacterHandler] BatchGenerateImages task %s failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+		} else {
+			h.taskSvc.Complete(taskID, map[string]interface{}{"succeeded": succ, "failed": fail}) //nolint:errcheck
+		}
+	}(task.TaskID)
+	respondAccepted(c, task.TaskID, "角色图片批量生成任务已提交")
+}
+
 // GenerateCharacterProfile AI生成角色档案
 // POST /api/v1/novels/:novel_id/characters/generate
 func (h *CharacterHandler) GenerateCharacterProfile(c *gin.Context) {

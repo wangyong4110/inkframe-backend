@@ -256,6 +256,41 @@ func (h *SceneAnchorHandler) AIExtractChapterAnchors(c *gin.Context) {
 	respondOK(c, gin.H{"scene_anchors": anchors, "total": len(anchors)})
 }
 
+// BatchGenerateRefImages POST /novels/:id/scene-anchors/batch-ref-images
+// 批量为小说所有场景锚点生成参考图（跳过已有参考图的锚点，异步任务）
+func (h *SceneAnchorHandler) BatchGenerateRefImages(c *gin.Context) {
+	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid novel id")
+		return
+	}
+	var body struct {
+		Provider string `json:"provider"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	tenantID := getTenantID(c)
+	if h.taskSvc == nil {
+		respondErr(c, http.StatusInternalServerError, "task service not configured")
+		return
+	}
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImageGen, "批量生成场景参考图", "novel", uint(novelID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+	go func(taskID string) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		succ, fail, err := h.svc.BatchGenerateRefImages(context.Background(), tenantID, uint(novelID), body.Provider)
+		if err != nil {
+			log.Printf("[SceneAnchorHandler] BatchGenerateRefImages task %s failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+		} else {
+			h.taskSvc.Complete(taskID, map[string]interface{}{"succeeded": succ, "failed": fail}) //nolint:errcheck
+		}
+	}(task.TaskID)
+	respondAccepted(c, task.TaskID, "场景参考图批量生成任务已提交")
+}
+
 // AIExtractFromNovel POST /novels/:id/scene-anchors/ai-extract
 // 异步批量提取小说所有章节的场景锚点
 func (h *SceneAnchorHandler) AIExtractFromNovel(c *gin.Context) {
