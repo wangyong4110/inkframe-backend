@@ -407,25 +407,48 @@ func (p *QianwenProvider) generateCosyVoice(ctx context.Context, text, model, vo
 }
 
 // generateQwenTTS 调用 DashScope 原生 TTS API（qwen-tts/qwen3-tts 系列，SSE 流式）。
-// 官方文档：https://help.aliyun.com/document_detail/2712523.html
-// 端点：POST https://dashscope.aliyuncs.com/api/v1/services/aigc/text2audiospeech/synthesis
-// 响应：SSE 流，每个 event 的 data.output.audio 为 base64 编码的 MP3 分块。
+//
+// 端点路由（两者响应格式相同，均为 SSE + base64 音频块）：
+//   - qwen-tts*  → /api/v1/services/aigc/text2audiospeech/synthesis（voice 在 parameters）
+//   - qwen3-tts* → /api/v1/services/aigc/multimodal-generation/generation（voice 在 input）
 func (p *QianwenProvider) generateQwenTTS(ctx context.Context, text, model, voice string, speed float64, start time.Time) (*AudioResponse, error) {
-	const nativeTTSEndpoint = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text2audiospeech/synthesis"
+	const (
+		qwenTTSEndpoint  = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text2audiospeech/synthesis"
+		qwen3TTSEndpoint = "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation"
+	)
 
-	body, _ := json.Marshal(map[string]interface{}{
-		"model": model,
-		"input": map[string]string{
-			"text": text,
-		},
-		"parameters": map[string]interface{}{
-			"voice":  voice,
-			"format": "mp3",
-			"rate":   speed,
-		},
-	})
+	var endpoint string
+	var reqBody map[string]interface{}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", nativeTTSEndpoint, bytes.NewReader(body))
+	if strings.HasPrefix(strings.ToLower(model), "qwen3") {
+		// qwen3-tts-flash：voice 在 input 中，endpoint 使用 multimodal-generation
+		endpoint = qwen3TTSEndpoint
+		inputFields := map[string]interface{}{
+			"text":  text,
+			"voice": voice,
+		}
+		reqBody = map[string]interface{}{
+			"model":      model,
+			"input":      inputFields,
+			"parameters": map[string]interface{}{"format": "mp3", "rate": speed},
+		}
+	} else {
+		// qwen-tts（老版本）：voice 在 parameters 中
+		endpoint = qwenTTSEndpoint
+		reqBody = map[string]interface{}{
+			"model": model,
+			"input": map[string]string{"text": text},
+			"parameters": map[string]interface{}{
+				"voice":  voice,
+				"format": "mp3",
+				"rate":   speed,
+			},
+		}
+	}
+
+	body, _ := json.Marshal(reqBody)
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
