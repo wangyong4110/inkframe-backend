@@ -113,7 +113,7 @@ func (s *PlotPointService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.
 	if s.chapterRepo == nil {
 		return nil, fmt.Errorf("chapter repository not configured")
 	}
-	chapters, err := s.chapterRepo.ListByNovel(novelID)
+	chapters, err := s.chapterRepo.ListByNovelWithContent(novelID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load chapters: %w", err)
 	}

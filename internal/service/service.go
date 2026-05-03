@@ -1566,15 +1566,11 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 			provider = p
 		}
 	}
-	// 3. 静态模式：env-var 默认 provider
-	if provider == nil {
-		if p, err := s.aiManager.GetProvider(""); err == nil {
-			provider = p
-		}
-	}
+	// 注意：不再兜底到默认 LLM provider，LLM 提供商通常不支持 /audio/speech 接口，
+	// 兜底只会产生 404 错误，不如直接给用户明确的配置提示。
 
 	if provider == nil {
-		return "", fmt.Errorf("no TTS provider available — please add a voice provider in 模型管理")
+		return "", fmt.Errorf("未配置语音合成提供商，请在「模型管理」中添加一个类型为 voice 或 tts 的 AI 提供商（如豆包语音、OpenAI TTS 等）并填写 API Key")
 	}
 
 	if voice == "" {

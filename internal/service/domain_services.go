@@ -1238,7 +1238,7 @@ func (s *ChapterService) BatchGenerateSummaries(tenantID, novelID uint) (int, er
 		return 0, fmt.Errorf("narrative service not configured")
 	}
 
-	chapters, err := s.chapterRepo.ListByNovel(novelID)
+	chapters, err := s.chapterRepo.ListByNovelWithContent(novelID)
 	if err != nil {
 		return 0, fmt.Errorf("load chapters: %w", err)
 	}
@@ -1604,7 +1604,7 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 		byName[c.Name] = c
 	}
 
-	chapters, err := s.chapterRepo.ListByNovel(novelID)
+	chapters, err := s.chapterRepo.ListByNovelWithContent(novelID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load chapters: %w", err)
 	}

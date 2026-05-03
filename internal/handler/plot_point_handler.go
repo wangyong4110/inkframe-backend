@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 
@@ -185,6 +186,7 @@ func (h *PlotPointHandler) AIExtractFromNovel(c *gin.Context) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		pps, err := h.svc.AIExtractFromNovel(tenantID, uint(novelID))
 		if err != nil {
+			log.Printf("[PlotPointHandler] AIExtractFromNovel task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"plot_points": pps, "count": len(pps)}) //nolint:errcheck

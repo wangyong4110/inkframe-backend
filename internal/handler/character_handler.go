@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 	"sync"
@@ -352,6 +353,7 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 		updateReq := characterToUpdateReq(char)
 		for r := range resultCh {
 			if r.err != nil {
+				log.Printf("[CharacterHandler] GenerateThreeView task %s view=%s failed: %v", taskID, r.view, r.err)
 				h.taskSvc.Fail(taskID, "generate "+r.view+" view failed: "+r.err.Error()) //nolint:errcheck
 				return
 			}
@@ -438,6 +440,7 @@ func (h *CharacterHandler) AIBatchGenerate(c *gin.Context) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		chars, err := h.characterService.AIBatchGenerate(tenantID, uint(novelID))
 		if err != nil {
+			log.Printf("[CharacterHandler] AIBatchGenerate task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"characters": chars, "count": len(chars)}) //nolint:errcheck

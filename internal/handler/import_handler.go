@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -150,6 +151,7 @@ func (h *ImportHandler) ImportNovel(c *gin.Context) {
 	go func(r service.ImportRequest) {
 		result, err := h.importService.Import(&r)
 		if err != nil {
+			log.Printf("[ImportHandler] Import task %s failed: %v", taskID, err)
 			setImportTask(taskID, &importTaskStatus{
 				TaskID:    taskID,
 				Status:    "failed",
@@ -309,6 +311,7 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 		// 1. 创建章节存根，启动后台爬取
 		result, err := h.importService.Import(r)
 		if err != nil {
+			log.Printf("[ImportHandler] Crawl import task %s failed: %v", taskID, err)
 			setImportTask(taskID, &importTaskStatus{
 				TaskID:    taskID,
 				Status:    "failed",

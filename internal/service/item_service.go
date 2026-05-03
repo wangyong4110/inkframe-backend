@@ -417,7 +417,7 @@ func (s *ItemService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.It
 	if s.chapterRepo == nil {
 		return nil, fmt.Errorf("chapter repository not configured")
 	}
-	chapters, err := s.chapterRepo.ListByNovel(novelID)
+	chapters, err := s.chapterRepo.ListByNovelWithContent(novelID)
 	if err != nil {
 		return nil, fmt.Errorf("load chapters: %w", err)
 	}

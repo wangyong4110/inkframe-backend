@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -207,7 +207,7 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 		chapter, err := h.chapterService.GenerateChapter(tenantID, uint(novelId), &req)
 		if err != nil {
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-			fmt.Printf("GenerateChapter task %s failed: %v\n", taskID, err)
+			log.Printf("[NovelHandler] GenerateChapter task %s failed: %v", taskID, err)
 			return
 		}
 
@@ -220,12 +220,12 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 		// 后处理：伏笔提取 + 质量检查（非阻塞）
 		go func(ch *model.Chapter) {
 			if _, err := h.foreshadowService.ExtractForeshadows(ch, ch.NovelID); err != nil {
-				fmt.Printf("GenerateChapter: foreshadow extraction failed (ch %d): %v\n", ch.ID, err)
+				log.Printf("[NovelHandler] GenerateChapter: foreshadow extraction failed (ch %d): %v", ch.ID, err)
 			}
 		}(chapter)
 		go func(chID uint) {
 			if _, err := h.qualityControlService.CheckChapter(chID); err != nil {
-				fmt.Printf("GenerateChapter: quality check failed (ch %d): %v\n", chID, err)
+				log.Printf("[NovelHandler] GenerateChapter: quality check failed (ch %d): %v", chID, err)
 			}
 		}(chapter.ID)
 	}(task.TaskID)

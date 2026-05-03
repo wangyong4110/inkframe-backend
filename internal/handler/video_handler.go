@@ -2,6 +2,7 @@ package handler
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -226,7 +227,7 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 		result, err := h.storyboardService.GenerateStoryboard(uint(videoId), req.ChapterID, req.Characters, req.Style, req.Provider, req.UserPrompt)
 		if err != nil {
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-			fmt.Printf("GenerateStoryboard task %s failed: %v\n", taskID, err)
+			log.Printf("[VideoHandler] GenerateStoryboard task %s failed: %v", taskID, err)
 			return
 		}
 		h.taskSvc.Complete(taskID, result) //nolint:errcheck
@@ -583,6 +584,7 @@ func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		shot, genErr := h.videoService.GenerateSingleShot(uint(videoID), uint(shotID), req.Provider)
 		if genErr != nil {
+			log.Printf("[VideoHandler] GenerateSingleShot task %s failed: %v", taskID, genErr)
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
 			return
 		}
@@ -623,6 +625,7 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		shots, genErr := h.videoService.BatchGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, req.Provider)
 		if genErr != nil {
+			log.Printf("[VideoHandler] BatchGenerateShots task %s failed: %v", taskID, genErr)
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
 			return
 		}
@@ -673,6 +676,7 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 
 		if err := h.videoService.GenerateShotAudio(shot); err != nil {
+			log.Printf("[VideoHandler] GenerateShotVoice task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}

@@ -216,7 +216,7 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 		return
 	}
 
-	chapters, err := s.chapterRepo.ListByNovel(novel.ID)
+	chapters, err := s.chapterRepo.ListByNovelWithContent(novel.ID)
 	if err != nil {
 		s.fail(task, "获取章节列表失败: "+err.Error())
 		return
@@ -229,8 +229,8 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 			log.Printf("NovelAnalysis[%d]: stepSummarizeChapters warn: %v", novel.ID, err)
 			task.addWarning("章节摘要生成失败: " + err.Error())
 		}
-		// 刷新摘要
-		if refreshed, err := s.chapterRepo.ListByNovel(novel.ID); err == nil {
+		// 刷新章节（含更新后的摘要和内容）
+		if refreshed, err := s.chapterRepo.ListByNovelWithContent(novel.ID); err == nil {
 			chapters = refreshed
 		}
 	}

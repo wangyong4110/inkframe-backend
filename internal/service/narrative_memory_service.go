@@ -51,6 +51,7 @@ type chapterMemoryRepo interface {
 	GetByID(id uint) (*model.Chapter, error)
 	GetRecent(novelID uint, chapterNo int, count int) ([]*model.Chapter, error)
 	ListByNovel(novelID uint) ([]*model.Chapter, error)
+	ListByNovelWithContent(novelID uint) ([]*model.Chapter, error)
 	GetByNovelAndChapterNo(novelID uint, chapterNo int) (*model.Chapter, error)
 	GetByNovelAndChapterRange(novelID uint, start, end int) ([]*model.Chapter, error)
 }
@@ -555,7 +556,7 @@ func (s *NarrativeMemoryService) GenerateChapterTitle(tenantID uint, chapter *mo
 
 // ExtractCharacterVoice 从已有章节中提取角色对话风格（JSON格式）
 func (s *NarrativeMemoryService) ExtractCharacterVoice(tenantID uint, character *model.Character, novelID uint) (string, error) {
-	chapters, err := s.chapterRepo.ListByNovel(novelID)
+	chapters, err := s.chapterRepo.ListByNovelWithContent(novelID)
 	if err != nil {
 		return "", err
 	}

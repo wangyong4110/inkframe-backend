@@ -475,6 +475,7 @@ func (h *ChapterHandler) BatchSummarizeChapters(c *gin.Context) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		count, err := h.chapterService.BatchGenerateSummaries(tenantID, uint(novelID))
 		if err != nil {
+			log.Printf("[ChapterHandler] BatchGenerateSummaries task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"count": count}) //nolint:errcheck

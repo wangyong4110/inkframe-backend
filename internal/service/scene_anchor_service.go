@@ -359,7 +359,7 @@ func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*m
 	if s.chapterRepo == nil {
 		return nil, fmt.Errorf("chapterRepo not configured")
 	}
-	chapters, err := s.chapterRepo.ListByNovel(novelID)
+	chapters, err := s.chapterRepo.ListByNovelWithContent(novelID)
 	if err != nil {
 		return nil, fmt.Errorf("list chapters: %w", err)
 	}

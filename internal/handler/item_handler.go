@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 
@@ -134,6 +135,7 @@ func (h *ItemHandler) AIExtractFromNovel(c *gin.Context) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		items, err := h.itemService.AIExtractFromNovel(tenantID, uint(novelID))
 		if err != nil {
+			log.Printf("[ItemHandler] AIExtractFromNovel task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"items": items, "count": len(items)}) //nolint:errcheck
@@ -172,6 +174,7 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		item, err := h.itemService.GenerateItemImage(tenantID, itemID, refURL, provider)
 		if err != nil {
+			log.Printf("[ItemHandler] GenerateItemImage task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, item) //nolint:errcheck
