@@ -495,7 +495,7 @@ func seedAIModels(db *gorm.DB) {
 		// 语音合成
 		{"doubao-speech", "豆包语音合成 V3", "voice", "https://openspeech.bytedance.com/api/v3", false,
 			[]string{"seed-tts-2.0", "seed-tts-1.0"}},
-		{"doubao-speech-v1", "豆包语音合成 V1", "voice", "https://openspeech.bytedance.com/api/v1", false,
+		{"doubao-speech-v1", "豆包语音合成 V1", "voice", "https://openspeech.bytedance.com/api/v1", true,
 			[]string{"BV001_streaming", "BV002_streaming", "BV005_streaming", "BV006_streaming",
 				"BV007_streaming", "zh_female_shuangkuaisisi_moon_bigtts", "zh_male_jingqiangkanye_moon_bigtts"}},
 	}

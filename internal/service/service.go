@@ -966,6 +966,12 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		provider = ai.NewGoogleProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion)
 	case "doubao":
 		provider = ai.NewDoubaoProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion)
+	case "doubao-speech":
+		// APIKey = X-Api-Key, APIVersion = resourceID（如 "seed-tts-2.0"）
+		provider = ai.NewDoubaoSpeechProvider(matched.APIKey, matched.APIVersion)
+	case "doubao-speech-v1":
+		// APIKey = appID, APISecretKey = access_token, APIVersion = cluster（默认 volcano_tts）
+		provider = ai.NewDoubaoSpeechV1Provider(matched.APIKey, matched.APISecretKey, matched.APIVersion)
 	case "deepseek":
 		provider = ai.NewDeepSeekProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion)
 	case "qianwen":
