@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -139,6 +140,12 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 	resourceID := p.resourceID
 	if req.Model != "" {
 		resourceID = req.Model
+	}
+	// 若未显式指定 resource，根据音色名称自动推断：
+	//   _tob 后缀（角色扮演系列） → doubao-character-tts
+	//   其余保持 seed-tts-2.0 / 用户配置值
+	if resourceID == doubaoSpeechDefaultResourceID && strings.HasSuffix(speaker, "_tob") {
+		resourceID = "doubao-character-tts"
 	}
 	httpReq.Header.Set("X-Api-Resource-Id", resourceID)
 
