@@ -544,9 +544,8 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 		return fmt.Errorf("AI extract_characters: %w", err)
 	}
 
-	var chars []analysisCharJSON
-	cleaned := extractJSON(strings.TrimSpace(result))
-	if err := json.Unmarshal([]byte(cleaned), &chars); err != nil {
+	chars, err := parseCharacterJSONResult(result)
+	if err != nil {
 		return fmt.Errorf("parse characters JSON: %w", err)
 	}
 

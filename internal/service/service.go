@@ -1011,7 +1011,7 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 	if err != nil {
 		base = &model.TaskModelConfig{
 			Temperature: 0.7,
-			MaxTokens:   4096,
+			MaxTokens:   16384, // 默认值提高至 16384，避免提取类任务（角色/物品/世界观）JSON 被截断
 		}
 	}
 	// 复制一份避免污染缓存

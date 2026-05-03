@@ -70,6 +70,28 @@ func marshalExistingNames[T any](items []T, transform func(T) any) string {
 	return string(b)
 }
 
+// parseCharacterJSONResult 从 AI 响应中解析 []analysisCharJSON。
+// 兼容以下几种常见输出形式：
+//  1. 裸数组:        [{"name":"xxx",...}]
+//  2. 被包裹的对象:  {"characters":[...]} / {"data":[...]} 等
+func parseCharacterJSONResult(raw string) ([]analysisCharJSON, error) {
+	cleaned := extractJSON(strings.TrimSpace(raw))
+	var profiles []analysisCharJSON
+	if err := json.Unmarshal([]byte(cleaned), &profiles); err == nil {
+		return profiles, nil
+	}
+	// 如果直接解析失败，尝试从包裹对象中提取数组
+	var wrapper map[string]json.RawMessage
+	if json.Unmarshal([]byte(cleaned), &wrapper) == nil {
+		for _, v := range wrapper {
+			if json.Unmarshal(v, &profiles) == nil {
+				return profiles, nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("cannot parse as character array: %.200s", raw)
+}
+
 // ============================================
 // ChapterService 章节服务
 // ============================================
@@ -1306,8 +1328,8 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 		return nil, fmt.Errorf("AI generation failed: %w", err)
 	}
 
-	var profiles []analysisCharJSON
-	if err := json.Unmarshal([]byte(extractJSON(strings.TrimSpace(result))), &profiles); err != nil {
+	profiles, err := parseCharacterJSONResult(result)
+	if err != nil {
 		log.Printf("CharacterService.AIBatchGenerate: parse error: %v, raw: %.200s", err, result)
 		return nil, fmt.Errorf("failed to parse AI response")
 	}
