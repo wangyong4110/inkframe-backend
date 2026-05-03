@@ -202,16 +202,25 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 	}
 
 	var req struct {
-		ChapterID  uint     `json:"chapter_id"`
-		Characters []string `json:"characters"`
-		Style      string   `json:"style,omitempty"`
-		Provider   string   `json:"provider,omitempty"`    // 指定 LLM 提供者，可为空
-		UserPrompt string   `json:"user_prompt,omitempty"` // 用户自定义提示词
+		ChapterID      uint     `json:"chapter_id"`
+		Characters     []string `json:"characters"`
+		Style          string   `json:"style,omitempty"`
+		Provider       string   `json:"provider,omitempty"`        // 指定 LLM 提供者，可为空
+		UserPrompt     string   `json:"user_prompt,omitempty"`     // 用户自定义提示词
+		Pacing         string   `json:"pacing,omitempty"`          // slow/normal/fast
+		TargetDuration int      `json:"target_duration,omitempty"` // 0=自动估算
 	}
 	// 所有字段均可选，body 为空时忽略 EOF
 	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
 		respondBadRequest(c, err.Error())
 		return
+	}
+
+	// 若请求携带节奏/时长配置，持久化到 Video 记录，后续 GenerateStoryboard 读取
+	if req.Pacing != "" || req.TargetDuration != 0 {
+		if err := h.videoService.UpdatePacingConfig(uint(videoId), req.Pacing, req.TargetDuration); err != nil {
+			log.Printf("[VideoHandler] UpdatePacingConfig failed (non-fatal): %v", err)
+		}
 	}
 
 	tenantID := getTenantID(c)
@@ -223,8 +232,9 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 
 	go func(taskID string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 
-		result, err := h.storyboardService.GenerateStoryboard(uint(videoId), req.ChapterID, req.Characters, req.Style, req.Provider, req.UserPrompt)
+		result, err := h.storyboardService.GenerateStoryboard(uint(videoId), req.ChapterID, req.Characters, req.Style, req.Provider, req.UserPrompt, progressFn)
 		if err != nil {
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			log.Printf("[VideoHandler] GenerateStoryboard task %s failed: %v", taskID, err)
@@ -623,7 +633,8 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 
 	go func(taskID string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		shots, genErr := h.videoService.BatchGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, req.Provider)
+		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
+		shots, genErr := h.videoService.BatchGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, progressFn, req.Provider)
 		if genErr != nil {
 			log.Printf("[VideoHandler] BatchGenerateShots task %s failed: %v", taskID, genErr)
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck

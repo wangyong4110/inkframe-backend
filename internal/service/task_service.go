@@ -65,6 +65,25 @@ func (s *TaskService) SetRunning(taskID string) error {
 	return s.repo.Update(task)
 }
 
+// UpdateProgress updates the task's progress percentage (0-99). No-op if task is not running.
+func (s *TaskService) UpdateProgress(taskID string, progress int) error {
+	task, err := s.repo.GetByTaskID(taskID)
+	if err != nil {
+		return fmt.Errorf("task %s not found: %w", taskID, err)
+	}
+	if task.Status != "running" {
+		return nil
+	}
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 99 {
+		progress = 99
+	}
+	task.Progress = progress
+	return s.repo.Update(task)
+}
+
 // Complete stores the result and marks the task completed.
 // No-op if the task has already been cancelled.
 func (s *TaskService) Complete(taskID string, result interface{}) error {
@@ -112,16 +131,6 @@ func (s *TaskService) Cancel(taskID string) error {
 		return nil // already terminal
 	}
 	task.Status = "cancelled"
-	return s.repo.Update(task)
-}
-
-// UpdateProgress sets the progress percentage (0-100).
-func (s *TaskService) UpdateProgress(taskID string, progress int) error {
-	task, err := s.repo.GetByTaskID(taskID)
-	if err != nil {
-		return err
-	}
-	task.Progress = progress
 	return s.repo.Update(task)
 }
 

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -1970,7 +1971,8 @@ func (s *VideoService) CreateVideo(novelID uint, req *model.CreateVideoRequest) 
 
 // GenerateStoryboard 生成分镜
 // userPrompt: 用户自定义提示词（可选），将追加到系统 prompt 之后
-func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt string, chapterIDOverride ...*uint) ([]*model.StoryboardShot, error) {
+// progressFn: 可选的进度回调（0-99），供调用方更新任务进度（传 nil 则跳过）
+func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt string, progressFn func(int), chapterIDOverride ...*uint) ([]*model.StoryboardShot, error) {
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
 		return nil, err
@@ -2004,11 +2006,19 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	const segmentMaxRunes = 2000
 	segments := splitContentSegments(content, segmentMaxRunes)
 
+	totalRunes := len([]rune(content))
+	totalShots := calcTotalShots(totalRunes, video.TargetDuration, video.Pacing)
+
 	var allShots []*model.StoryboardShot
 	shotCounter := 0
 
 	for segIdx, seg := range segments {
-		prompt := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, len(segments))
+		segRunes := len([]rune(seg))
+		segShotCount := totalShots * segRunes / max(totalRunes, 1)
+		if segShotCount < 3 {
+			segShotCount = 3
+		}
+		prompt := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, len(segments), segShotCount)
 		result, aiErr := s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", prompt, provider)
 		if aiErr != nil {
 			if segIdx == 0 {
@@ -2031,6 +2041,11 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			shot.ShotNo = shotCounter
 		}
 		allShots = append(allShots, segShots...)
+		// 进度回调：每段完成后按比例上报（最多到 90%，Complete 时才到 100%）
+		if progressFn != nil {
+			pct := (segIdx + 1) * 90 / len(segments)
+			progressFn(pct)
+		}
 	}
 
 	if len(allShots) == 0 {
@@ -2186,6 +2201,32 @@ func charRuneOverlap(a, b string) float64 {
 	return float64(overlap) / float64(len(shorter))
 }
 
+// calcTotalShots 按目标时长+节奏计算全章期望分镜总数。
+// targetDuration=0 时降级为字数密度估算（向后兼容）。
+func calcTotalShots(totalRunes, targetDuration int, pacing string) int {
+	if targetDuration > 0 {
+		avg := map[string]int{"slow": 8, "normal": 5, "fast": 3}
+		s, ok := avg[pacing]
+		if !ok {
+			s = 5
+		}
+		n := targetDuration / s
+		if n < 3 {
+			n = 3
+		}
+		return n
+	}
+	// 降级：字数估算
+	n := totalRunes / 280
+	if n < 5 {
+		n = 5
+	}
+	if n > 60 {
+		n = 60
+	}
+	return n
+}
+
 // splitContentSegments 按段落边界切割长文本，每段最多 maxRunes 个字符。
 // 若内容不超过 maxRunes，直接返回单段切片。
 // 切割优先在双换行（段落）处断开，其次在单换行处断开，保证分镜上下文完整。
@@ -2239,7 +2280,8 @@ func extractLocationFromScene(sceneJSON string) string {
 
 // buildStoryboardPrompt 构建分镜提示词（含截断保护、角色信息、段落上下文）
 // segNo/totalSegs 为分段编号（从 1 开始），单段调用时传 1, 1。
-func (s *VideoService) buildStoryboardPrompt(video *model.Video, content, userPrompt string, segNo, totalSegs int) string {
+// expectedShots 为本段期望分镜数，由调用方通过 calcTotalShots 计算后传入。
+func (s *VideoService) buildStoryboardPrompt(video *model.Video, content, userPrompt string, segNo, totalSegs, expectedShots int) string {
 	var sb strings.Builder
 
 	segLabel := ""
@@ -2313,14 +2355,6 @@ func (s *VideoService) buildStoryboardPrompt(video *model.Video, content, userPr
 		sb.WriteString("\n\n")
 	}
 
-	// 按内容长度动态计算期望分镜数（每 280 字一个镜头，最少 5 个，最多 20 个）
-	expectedShots := len([]rune(content)) / 280
-	if expectedShots < 5 {
-		expectedShots = 5
-	}
-	if expectedShots > 20 {
-		expectedShots = 20
-	}
 	sb.WriteString(fmt.Sprintf(
 		`请将以下内容分解为约%d个分镜（按实际情节密度生成；每个重大动作、对话轮次、场景切换必须单独成镜）。以JSON数组返回，格式如下：`,
 		expectedShots))
@@ -2555,6 +2589,19 @@ func (s *VideoService) UpdateVideo(id uint, req *model.UpdateVideoRequest) (*mod
 	return video, s.videoRepo.Update(video)
 }
 
+// UpdatePacingConfig 更新视频的节奏和目标时长配置（供分镜生成前调用）
+func (s *VideoService) UpdatePacingConfig(id uint, pacing string, targetDuration int) error {
+	video, err := s.videoRepo.GetByID(id)
+	if err != nil {
+		return err
+	}
+	if pacing != "" {
+		video.Pacing = pacing
+	}
+	video.TargetDuration = targetDuration
+	return s.videoRepo.Update(video)
+}
+
 // DeleteVideo 删除视频
 func (s *VideoService) DeleteVideo(id uint) error {
 	return s.videoRepo.DeleteByID(id)
@@ -2741,7 +2788,7 @@ const maxConcurrentShots = 3
 
 // BatchGenerateShots 批量触发指定分镜生成（同步等待所有完成，支持并发限制）
 // 图片解说模式(Mode=="slideshow")只生成图片，不生成 Ken Burns 短片。
-func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityTierOverride string, provider ...string) ([]*model.StoryboardShot, error) {
+func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityTierOverride string, progressFn func(int), provider ...string) ([]*model.StoryboardShot, error) {
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
 		return nil, err
@@ -2770,9 +2817,15 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 	var queued []*model.StoryboardShot
 	sem := make(chan struct{}, maxConcurrentShots)
 	var wg sync.WaitGroup
+	total := len(shotIDs)
+	var done atomic.Int32
 	for _, sid := range shotIDs {
 		shot, err := s.storyboardRepo.GetByID(sid)
 		if err != nil || shot.VideoID != videoID {
+			if progressFn != nil && total > 0 {
+				pct := int(done.Add(1)) * 99 / total
+				progressFn(pct)
+			}
 			continue
 		}
 		shot.Status = "generating"
@@ -2781,7 +2834,14 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 		sem <- struct{}{}
 		wg.Add(1)
 		go func(sh *model.StoryboardShot) {
-			defer func() { <-sem; wg.Done() }()
+			defer func() {
+				<-sem
+				wg.Done()
+				if progressFn != nil && total > 0 {
+					pct := int(done.Add(1)) * 99 / total
+					progressFn(pct)
+				}
+			}()
 			var genErr error
 			if video.Mode == "slideshow" || len(s.videoProviders) == 0 {
 				genErr = s.GenerateSlideshowShotVideo(sh, aspectRatio)
@@ -3474,6 +3534,9 @@ func downloadToTemp(url, prefix, ext string) (string, error) {
 		return "", fmt.Errorf("download %s: %w", url, err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
+	}
 	tmpFile, err := os.CreateTemp(inkframeTempDir(), prefix+"*"+ext)
 	if err != nil {
 		return "", err
@@ -3561,7 +3624,13 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	// 1. 生成图片
 	imageURL, imgErr := s.generateShotReferenceImage(shot)
 	if imageURL == "" {
+		errMsg := "image provider returned empty URL"
+		if imgErr != nil {
+			errMsg = imgErr.Error()
+		}
+		log.Printf("GenerateSlideshowShotVideo: image gen failed for shot %d: %s", shot.ShotNo, errMsg)
 		shot.Status = "failed"
+		shot.ErrorMessage = errMsg
 		s.storyboardRepo.Update(shot) //nolint:errcheck
 		if imgErr != nil {
 			return fmt.Errorf("image generation failed for shot %d: %w", shot.ShotNo, imgErr)
@@ -3575,6 +3644,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	if err != nil {
 		log.Printf("GenerateSlideshowShotVideo: download image failed for shot %d: %v", shot.ShotNo, err)
 		shot.Status = "failed"
+		shot.ErrorMessage = err.Error()
 		s.storyboardRepo.Update(shot) //nolint:errcheck
 		return fmt.Errorf("download image failed for shot %d: %w", shot.ShotNo, err)
 	}
@@ -3585,6 +3655,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	if err != nil {
 		log.Printf("GenerateSlideshowShotVideo: ken burns failed for shot %d: %v", shot.ShotNo, err)
 		shot.Status = "failed"
+		shot.ErrorMessage = err.Error()
 		s.storyboardRepo.Update(shot) //nolint:errcheck
 		return fmt.Errorf("ken burns effect failed for shot %d: %w", shot.ShotNo, err)
 	}

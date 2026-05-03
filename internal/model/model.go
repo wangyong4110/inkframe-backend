@@ -792,7 +792,9 @@ type Video struct {
 	Resolution  string `json:"resolution" gorm:"size:20;default:1080p"`
 	FrameRate   int    `json:"frame_rate" gorm:"default:24"`
 	AspectRatio string `json:"aspect_ratio" gorm:"size:10;default:16:9"`
-	ArtStyle    string `json:"art_style" gorm:"size:50"`
+	ArtStyle       string `json:"art_style" gorm:"size:50"`
+	Pacing         string `json:"pacing" gorm:"size:20;default:'normal'"`   // slow/normal/fast
+	TargetDuration int    `json:"target_duration" gorm:"default:0"`          // 目标时长（秒），0=自动估算
 
 	// 统计
 	Duration    float64 `json:"duration"` // 秒
@@ -868,8 +870,9 @@ type StoryboardShot struct {
 	Frames         string `json:"frames" gorm:"type:text"` // JSON数组
 
 	// 状态
-	Status   string  `json:"status" gorm:"size:20;index:idx_shot_video_status,priority:2;default:pending"`
-	Progress float64 `json:"progress" gorm:"type:decimal(5,2);default:0"`
+	Status       string `json:"status" gorm:"size:20;index:idx_shot_video_status,priority:2;default:pending"`
+	Progress     float64 `json:"progress" gorm:"type:decimal(5,2);default:0"`
+	ErrorMessage string  `json:"error_message,omitempty" gorm:"type:text"` // 失败原因（供前端展示）
 
 	// 文件
 	ClipPath string `json:"clip_path" gorm:"size:500"`
