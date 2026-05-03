@@ -131,6 +131,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			// 章节
 			novels.GET("/:id/chapters", cfg.ChapterHandler.ListChapters)
 			novels.POST("/:id/chapters", cfg.ChapterHandler.CreateChapter)
+			novels.POST("/:id/chapters/batch-summarize", cfg.ChapterHandler.BatchSummarizeChapters)
 			novels.GET("/:id/chapters/:chapter_no", cfg.ChapterHandler.GetChapterByNo)
 			novels.PUT("/:id/chapters/:chapter_no", cfg.ChapterHandler.UpdateChapterByNo)
 			novels.DELETE("/:id/chapters/:chapter_no", cfg.ChapterHandler.DeleteChapterByNo)

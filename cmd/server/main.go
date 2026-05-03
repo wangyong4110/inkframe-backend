@@ -1269,6 +1269,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			services.ChapterService,
 			services.ChapterVersionService,
 			services.QualityControlService,
+			services.TaskService,
 		),
 		CharacterHandler: handler.NewCharacterHandler(
 			services.CharacterService,

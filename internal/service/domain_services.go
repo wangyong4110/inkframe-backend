@@ -8,6 +8,7 @@ import (
 	"log"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"text/template"
 	"time"
 
@@ -1217,6 +1218,65 @@ func (s *ChapterService) RejectChapter(id uint, reason string) error {
 	}
 	chapter.Status = "rejected"
 	return s.chapterRepo.Update(chapter)
+}
+
+// BatchGenerateSummaries 对所有无摘要章节逐章并发生成摘要（3 并发）
+func (s *ChapterService) BatchGenerateSummaries(tenantID, novelID uint) (int, error) {
+	if s.narrativeSvc == nil {
+		return 0, fmt.Errorf("narrative service not configured")
+	}
+
+	chapters, err := s.chapterRepo.ListByNovel(novelID)
+	if err != nil {
+		return 0, fmt.Errorf("load chapters: %w", err)
+	}
+
+	novelTitle := "本小说"
+	if s.novelRepo != nil {
+		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
+			novelTitle = novel.Title
+		}
+	}
+
+	// 过滤需要生成摘要的章节（有内容但无摘要）
+	var needSummary []*model.Chapter
+	for _, ch := range chapters {
+		if ch.Content != "" && ch.Summary == "" {
+			needSummary = append(needSummary, ch)
+		}
+	}
+	if len(needSummary) == 0 {
+		return 0, nil
+	}
+
+	const concurrency = 3
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	var count int32
+
+	for _, ch := range needSummary {
+		ch := ch
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			summary, err := s.narrativeSvc.GenerateChapterSummary(tenantID, ch, novelTitle)
+			if err != nil {
+				log.Printf("BatchGenerateSummaries: ch%d: %v", ch.ChapterNo, err)
+				return
+			}
+			ch.Summary = strings.TrimSpace(summary)
+			if err := s.chapterRepo.Update(ch); err != nil {
+				log.Printf("BatchGenerateSummaries: save ch%d: %v", ch.ChapterNo, err)
+				return
+			}
+			atomic.AddInt32(&count, 1)
+		}()
+	}
+	wg.Wait()
+	return int(atomic.LoadInt32(&count)), nil
 }
 
 // ============================================

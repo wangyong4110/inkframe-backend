@@ -14,17 +14,20 @@ type ChapterHandler struct {
 	chapterService     *service.ChapterService
 	versionService     *service.ChapterVersionService
 	qualityService     *service.QualityControlService
+	taskSvc            *service.TaskService
 }
 
 func NewChapterHandler(
 	chapterService *service.ChapterService,
 	versionService *service.ChapterVersionService,
 	qualityService *service.QualityControlService,
+	taskSvc *service.TaskService,
 ) *ChapterHandler {
 	return &ChapterHandler{
 		chapterService: chapterService,
 		versionService: versionService,
 		qualityService: qualityService,
+		taskSvc:        taskSvc,
 	}
 }
 
@@ -449,4 +452,30 @@ func (h *ChapterHandler) RejectChapter(c *gin.Context) {
 		"code":    0,
 		"message": "success",
 	})
+}
+
+// BatchSummarizeChapters 批量生成章节摘要（异步任务）
+// POST /api/v1/novels/:id/chapters/batch-summarize
+func (h *ChapterHandler) BatchSummarizeChapters(c *gin.Context) {
+	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid novel id")
+		return
+	}
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterSummaryBatch, "批量生成章节摘要", "novel", uint(novelID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+	go func(taskID string) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		count, err := h.chapterService.BatchGenerateSummaries(tenantID, uint(novelID))
+		if err != nil {
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+		} else {
+			h.taskSvc.Complete(taskID, map[string]interface{}{"count": count}) //nolint:errcheck
+		}
+	}(task.TaskID)
+	respondAccepted(c, task.TaskID, "章节摘要批量生成任务已提交")
 }

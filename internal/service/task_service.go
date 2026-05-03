@@ -22,7 +22,8 @@ const (
 	TaskTypeItemExtract         = "item_extract"
 	TaskTypePlotExtract         = "plot_extract"
 	TaskTypeAssetGen            = "asset_gen"
-	TaskTypeSceneAnchorExtract  = "scene_anchor_extract"
+	TaskTypeSceneAnchorExtract       = "scene_anchor_extract"
+	TaskTypeChapterSummaryBatch      = "chapter_summary_batch"
 )
 
 // TaskService manages persistent async tasks.
