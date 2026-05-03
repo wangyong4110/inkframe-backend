@@ -883,6 +883,17 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 	// 优先租户私有，其次系统级
 	var tenantMatch, systemMatch *model.ModelProvider
 	for _, p := range providers {
+		// 跳过已禁用的提供商
+		if !p.IsActive {
+			continue
+		}
+		// 当未指定具体提供商时，跳过图像/视频/语音/嵌入类型（这些不做文本生成）
+		if providerName == "" {
+			t := strings.ToLower(p.Type)
+			if t == "image" || t == "video" || t == "voice" || t == "embedding" {
+				continue
+			}
+		}
 		if providerName == "" || p.Name == providerName {
 			if p.TenantID == tenantID && tenantID != 0 {
 				tenantMatch = p

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -459,15 +460,15 @@ func seedAIModels(db *gorm.DB) {
 	}
 
 	providers := []providerSeed{
-		{"openai", "OpenAI", "cloud", "https://api.openai.com/v1"},
-		{"anthropic", "Anthropic", "cloud", "https://api.anthropic.com/v1"},
-		{"google", "Google", "cloud", "https://generativelanguage.googleapis.com/v1"},
-		{"doubao", "豆包（火山引擎 Ark）", "cloud", "https://ark.volces.com/api/v3"},
-		{"deepseek", "DeepSeek", "cloud", "https://api.deepseek.com/v1"},
-		{"qianwen", "通义千问（DashScope）", "cloud", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
-		{"volcengine-visual", "即梦AI（火山引擎）", "cloud", ""},
-		{"kling", "可灵（快手）", "cloud", ""},
-		{"seedance", "Seedance（字节跳动）", "cloud", "https://ark.volces.com/api/v3"},
+		{"openai", "OpenAI", "llm", "https://api.openai.com/v1"},
+		{"anthropic", "Anthropic", "llm", "https://api.anthropic.com/v1"},
+		{"google", "Google", "llm", "https://generativelanguage.googleapis.com/v1"},
+		{"doubao", "豆包（火山引擎 Ark）", "llm", "https://ark.volces.com/api/v3"},
+		{"deepseek", "DeepSeek", "llm", "https://api.deepseek.com/v1"},
+		{"qianwen", "通义千问（DashScope）", "llm", "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+		{"volcengine-visual", "即梦AI（火山引擎）", "image", ""},
+		{"kling", "可灵（快手）", "video", ""},
+		{"seedance", "Seedance（字节跳动）", "video", "https://ark.volces.com/api/v3"},
 	}
 
 	llmTasks := []string{"chapter", "outline", "storyboard", "quality_check"}
@@ -515,8 +516,20 @@ func seedAIModels(db *gorm.DB) {
 			IsActive:    true,
 		})
 		if result.Error != nil {
-			log.Printf("seedAIModels: provider %q: %v", p.name, result.Error)
-			continue
+			// Duplicate key means the record already exists (race or prior run); just fetch it.
+			if strings.Contains(result.Error.Error(), "1062") || strings.Contains(result.Error.Error(), "Duplicate entry") {
+				if err := db.Where("name = ? AND tenant_id = 0", p.name).First(&prov).Error; err != nil {
+					log.Printf("seedAIModels: provider %q: fetch after conflict: %v", p.name, err)
+					continue
+				}
+			} else {
+				log.Printf("seedAIModels: provider %q: %v", p.name, result.Error)
+				continue
+			}
+		}
+		// Fix existing records that were created with type "cloud"
+		if prov.Type != p.provType {
+			db.Model(&prov).Update("type", p.provType)
 		}
 		providerIDs[p.name] = prov.ID
 	}

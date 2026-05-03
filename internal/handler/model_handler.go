@@ -1,8 +1,12 @@
 package handler
 
 import (
+	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -407,4 +411,92 @@ func (h *ModelHandler) StartExperiment(c *gin.Context) {
 		"code":    0,
 		"message": "success",
 	})
+}
+
+// FetchProviderModels 从云商 API 拉取模型 ID 列表（OpenAI 兼容 /models 端点）。
+// 支持两种模式：
+//   - 直接模式：传入 endpoint + api_key（添加新提供商时使用）
+//   - ID 模式：传入 provider_id，后端从 DB 读取凭证（编辑已有提供商时使用）
+//
+// POST /api/v1/model-providers/fetch-models
+func (h *ModelHandler) FetchProviderModels(c *gin.Context) {
+	var req struct {
+		ProviderID uint   `json:"provider_id"`
+		Endpoint   string `json:"endpoint"`
+		APIKey     string `json:"api_key"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+
+	endpoint := req.Endpoint
+	apiKey := req.APIKey
+
+	// ID 模式：从 DB 读取凭证
+	if req.ProviderID > 0 {
+		p, err := h.modelService.GetProvider(req.ProviderID, getTenantID(c))
+		if err != nil {
+			respondErr(c, http.StatusNotFound, "provider not found")
+			return
+		}
+		if endpoint == "" {
+			endpoint = p.APIEndpoint
+		}
+		if apiKey == "" {
+			apiKey = p.APIKey
+		}
+	}
+
+	if endpoint == "" {
+		respondBadRequest(c, "endpoint is required")
+		return
+	}
+	if apiKey == "" {
+		respondBadRequest(c, "api_key is required")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", endpoint+"/models", nil)
+	if err != nil {
+		respondBadRequest(c, "invalid endpoint: "+err.Error())
+		return
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		respondErr(c, http.StatusBadGateway, "failed to reach provider: "+err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		respondErr(c, http.StatusBadGateway, "provider returned error: "+string(body))
+		return
+	}
+
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		respondErr(c, http.StatusBadGateway, "invalid response from provider")
+		return
+	}
+
+	ids := make([]string, 0, len(result.Data))
+	for _, m := range result.Data {
+		if m.ID != "" {
+			ids = append(ids, m.ID)
+		}
+	}
+
+	respondOK(c, gin.H{"models": ids})
 }

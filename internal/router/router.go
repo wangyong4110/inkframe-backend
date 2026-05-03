@@ -355,6 +355,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			modelProviders.GET("", cfg.ModelHandler.ListProviders)
 			modelProviders.POST("", cfg.ModelHandler.CreateProvider)
 			modelProviders.GET("/capable", cfg.ModelHandler.ListCapableProviders)
+			modelProviders.POST("/fetch-models", cfg.ModelHandler.FetchProviderModels)
 			modelProviders.GET("/:id", cfg.ModelHandler.GetProvider)
 			modelProviders.PUT("/:id", cfg.ModelHandler.UpdateProvider)
 			modelProviders.DELETE("/:id", cfg.ModelHandler.DeleteProvider)
