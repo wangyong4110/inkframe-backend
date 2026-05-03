@@ -22,7 +22,8 @@ func getTenantID(c *gin.Context) uint {
 // e.g. "sk-abcdefgh1234" → "sk-a****1234"
 // providerHasCredentialsRaw checks raw (unmasked) credentials.
 func providerHasCredentialsRaw(p *model.ModelProvider) bool {
-	if p.Name == "volcengine-visual" {
+	switch p.Name {
+	case "volcengine-visual", "doubao-speech-v1":
 		return strings.TrimSpace(p.APIKey) != "" && strings.TrimSpace(p.APISecretKey) != ""
 	}
 	return strings.TrimSpace(p.APIKey) != ""

@@ -2282,7 +2282,9 @@ var providerDisplayNames = map[string]string{
 // providerHasCredentials reports whether p has all required credentials.
 // volcengine-visual uses AK/SK (two fields); all other providers use a single APIKey.
 func providerHasCredentials(p *model.ModelProvider) bool {
-	if p.Name == ai.ProviderNameVolcengineVisual {
+	// 需要双密钥的提供商：AK 和 SK 都必须有值
+	switch p.Name {
+	case ai.ProviderNameVolcengineVisual, "doubao-speech-v1":
 		return strings.TrimSpace(p.APIKey) != "" && strings.TrimSpace(p.APISecretKey) != ""
 	}
 	return strings.TrimSpace(p.APIKey) != ""
