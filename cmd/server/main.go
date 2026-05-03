@@ -496,8 +496,20 @@ func seedAIModels(db *gorm.DB) {
 		{"doubao-speech", "豆包语音合成 V3", "voice", "https://openspeech.bytedance.com/api/v3", false,
 			[]string{"seed-tts-2.0", "seed-tts-1.0"}},
 		{"doubao-speech-v1", "豆包语音合成 V1", "voice", "https://openspeech.bytedance.com/api/v1", true,
-			[]string{"BV001_streaming", "BV002_streaming", "BV005_streaming", "BV006_streaming",
-				"BV007_streaming", "zh_female_shuangkuaisisi_moon_bigtts", "zh_male_jingqiangkanye_moon_bigtts"}},
+			[]string{
+				// volcano_mega 集群（豆包2.0大模型音色）
+				"zh_female_vv_uranus_bigtts",                  // vivi 2.0
+				"zh_female_xiaohe_uranus_bigtts",              // 小何
+				"zh_male_m191_uranus_bigtts",                  // 云舟
+				"zh_male_taocheng_uranus_bigtts",              // 小天
+				"saturn_zh_female_cancan_tob",                 // 知性灿灿
+				"saturn_zh_female_keainvsheng_tob",            // 可爱女生
+				"saturn_zh_female_tiaopigongzhu_tob",          // 调皮公主
+				"saturn_zh_male_shuanglangshaonian_tob",       // 爽朗少年
+				"saturn_zh_male_tiancaitongzhuo_tob",          // 天才同桌
+				// volcano_tts 集群（经典音色，需手动将 cluster 改为 volcano_tts）
+				"BV001_streaming", "BV002_streaming",
+			}},
 	}
 
 	llmTasks := []string{"chapter", "outline", "storyboard", "quality_check"}
@@ -533,13 +545,16 @@ func seedAIModels(db *gorm.DB) {
 		// 豆包语音合成 V3（seed-tts 系列）
 		{"doubao-speech", "seed-tts-2.0", "豆包 Seed TTS 2.0", []string{"voice_gen"}, 0.92, 0},
 		{"doubao-speech", "seed-tts-1.0", "豆包 Seed TTS 1.0", []string{"voice_gen"}, 0.88, 0},
-		// 豆包语音合成 V1（经典音色，appid/token 鉴权）
-		{"doubao-speech-v1", "BV001_streaming", "通用女声", []string{"voice_gen"}, 0.85, 0},
-		{"doubao-speech-v1", "BV002_streaming", "通用男声", []string{"voice_gen"}, 0.85, 0},
-		{"doubao-speech-v1", "BV005_streaming", "活泼女声", []string{"voice_gen"}, 0.85, 0},
-		{"doubao-speech-v1", "BV006_streaming", "沉稳男声", []string{"voice_gen"}, 0.85, 0},
-		{"doubao-speech-v1", "zh_female_shuangkuaisisi_moon_bigtts", "爽快思思", []string{"voice_gen"}, 0.87, 0},
-		{"doubao-speech-v1", "zh_male_jingqiangkanye_moon_bigtts", "精英男声", []string{"voice_gen"}, 0.87, 0},
+		// 豆包语音合成 V1（appid/token 鉴权，默认 volcano_mega 集群）
+		{"doubao-speech-v1", "zh_female_vv_uranus_bigtts", "vivi 2.0", []string{"voice_gen"}, 0.92, 0},
+		{"doubao-speech-v1", "zh_female_xiaohe_uranus_bigtts", "小何", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_m191_uranus_bigtts", "云舟", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "zh_male_taocheng_uranus_bigtts", "小天", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "saturn_zh_female_cancan_tob", "知性灿灿", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "saturn_zh_female_keainvsheng_tob", "可爱女生", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "saturn_zh_female_tiaopigongzhu_tob", "调皮公主", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "saturn_zh_male_shuanglangshaonian_tob", "爽朗少年", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech-v1", "saturn_zh_male_tiancaitongzhuo_tob", "天才同桌", []string{"voice_gen"}, 0.90, 0},
 	}
 
 	// 1. 确保 provider 记录存在（tenant_id=0 系统级）

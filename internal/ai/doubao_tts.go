@@ -225,7 +225,10 @@ type DoubaoSpeechV1Provider struct {
 }
 
 const doubaoV1TTSEndpoint = "https://openspeech.bytedance.com/api/v1/tts"
-const doubaoV1DefaultCluster = "volcano_tts"
+// doubaoV1DefaultCluster 默认集群。
+// volcano_tts  — 经典集群，支持 BV001_streaming 等老音色
+// volcano_mega — 大模型集群，支持 _uranus_bigtts / _tob 等豆包2.0音色（推荐）
+const doubaoV1DefaultCluster = "volcano_mega"
 const doubaoV1SuccessCode = 3000
 
 // doubaoV1Request V1 请求体
@@ -405,6 +408,22 @@ func (p *DoubaoSpeechV1Provider) AudioGenerate(ctx context.Context, req *AudioGe
 
 	if resp.StatusCode != http.StatusOK {
 		errBody, _ := io.ReadAll(resp.Body)
+		// 解析 JSON body 提供更明确的错误指引
+		var errJSON struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(errBody, &errJSON) == nil {
+			switch errJSON.Code {
+			case 3001:
+				return nil, fmt.Errorf("doubao-speech-v1: 应用未获授权访问 TTS 资源（%s）。" +
+					"请前往火山引擎控制台 → 语音技术 → 应用管理，确认应用已开通「语音合成」服务并激活对应资源包", errJSON.Message)
+			case 3000:
+				// 正常成功码不会出现在 4xx 里，防御性处理
+			default:
+				return nil, fmt.Errorf("doubao-speech-v1: API 错误 (code=%d): %s", errJSON.Code, errJSON.Message)
+			}
+		}
 		return nil, fmt.Errorf("doubao-speech-v1: HTTP %d: %s", resp.StatusCode, string(errBody))
 	}
 
