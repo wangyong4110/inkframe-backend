@@ -132,9 +132,21 @@ type JWTClaims struct {
 	jwt.RegisteredClaims
 }
 
-// NewAuth 创建JWT认证中间件
+// NewAuth 创建JWT认证中间件。
+// 当 jwtSecret 为空字符串时进入开发绕过模式：跳过 token 校验，
+// 并将 tenant_id=1 / user_id=1 / user_role="admin" 注入上下文，
+// 方便本地开发测试。生产环境务必配置非空的 jwt_secret。
 func NewAuth(jwtSecret string) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// ── 开发绕过模式（jwt_secret 为空） ────────────────────────────────
+		if jwtSecret == "" {
+			c.Set("user_id", uint(1))
+			c.Set("tenant_id", uint(1))
+			c.Set("user_role", "admin")
+			c.Next()
+			return
+		}
+
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "authorization header required"})
