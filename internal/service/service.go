@@ -2106,7 +2106,8 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			prompt := s.buildStoryboardPrompt(video, seg, userPrompt, idx+1, len(segments), segShotCount, characters, anchors, plotPoints)
 			var result string
 			var aiErr error
-			// 最多重试 2 次：空响应或 JSON 解析失败时重试
+			// 最多重试 2 次：仅针对 JSON 格式错误（AI 输出 markdown 包装等）重试。
+			// 超时错误直接 fail-fast，重试超时只会叠加等待时间。
 			for attempt := 0; attempt < 3; attempt++ {
 				p := prompt
 				if attempt > 0 {
@@ -2119,6 +2120,10 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 				}
 				if aiErr != nil {
 					log.Printf("GenerateStoryboard: segment %d/%d attempt %d AI error: %v", idx+1, len(segments), attempt, aiErr)
+					// 超时不重试：重试只会叠加等待时间
+					if ai.IsTimeoutError(aiErr) {
+						break
+					}
 				}
 			}
 			if aiErr != nil {
@@ -2403,27 +2408,63 @@ func (s *VideoService) buildStoryboardPrompt(
 	}
 	sb.WriteString(fmt.Sprintf("你是一名专业分镜师。请根据以下内容%s生成分镜脚本，以JSON数组格式返回。\n\n", segLabel))
 
-	// 注入角色视觉信息（portrait/外貌）
+	// 注入角色视觉信息（只注入当前段落提及的角色，减少无关 token）
 	if len(characters) > 0 {
-		sb.WriteString("【角色信息】\n")
+		contentLower := strings.ToLower(content)
+		var matched []*model.Character
 		for _, c := range characters {
-			sb.WriteString(fmt.Sprintf("- %s（%s）", c.Name, c.Role))
-			if c.Appearance != "" {
-				sb.WriteString(fmt.Sprintf("：%s", c.Appearance))
+			if strings.Contains(contentLower, strings.ToLower(c.Name)) {
+				matched = append(matched, c)
 			}
-			// Portrait URL 为图片地址，纯文本 LLM 无法访问，不注入 prompt
+		}
+		// 若段落中未命中任何角色（短段落/旁白段），回退注入主角（role=protagonist）
+		if len(matched) == 0 {
+			for _, c := range characters {
+				if c.Role == "protagonist" {
+					matched = append(matched, c)
+				}
+			}
+		}
+		if len(matched) > 0 {
+			sb.WriteString("【角色信息】\n")
+			for _, c := range matched {
+				sb.WriteString(fmt.Sprintf("- %s（%s）", c.Name, c.Role))
+				if c.Appearance != "" {
+					sb.WriteString(fmt.Sprintf("：%s", c.Appearance))
+				}
+				sb.WriteString("\n")
+			}
 			sb.WriteString("\n")
 		}
-		sb.WriteString("\n")
 	}
 
-	// 注入已命名场景，帮助 LLM 输出可匹配的 location
+	// 注入已命名场景（只注入当前段落提及的锚点；超出 8 个时截断，避免 prompt 过大）
 	if len(anchors) > 0 {
-		sb.WriteString("【已命名场景（location字段请从以下名称中选择）】\n")
+		contentLower := strings.ToLower(content)
+		var matchedAnchors []*model.SceneAnchor
 		for _, a := range anchors {
-			sb.WriteString(fmt.Sprintf("- %s: %s\n", a.Name, a.Description))
+			if strings.Contains(contentLower, strings.ToLower(a.Name)) {
+				matchedAnchors = append(matchedAnchors, a)
+			}
 		}
-		sb.WriteString("\n")
+		// 若无命中，取前 5 个作为兜底提示（不超出 prompt 预算）
+		if len(matchedAnchors) == 0 && len(anchors) > 0 {
+			limit := 5
+			if len(anchors) < limit {
+				limit = len(anchors)
+			}
+			matchedAnchors = anchors[:limit]
+		}
+		if len(matchedAnchors) > 8 {
+			matchedAnchors = matchedAnchors[:8]
+		}
+		if len(matchedAnchors) > 0 {
+			sb.WriteString("【已命名场景（location字段请从以下名称中选择）】\n")
+			for _, a := range matchedAnchors {
+				sb.WriteString(fmt.Sprintf("- %s: %s\n", a.Name, a.Description))
+			}
+			sb.WriteString("\n")
+		}
 	}
 
 	// 注入未解决剧情点（提示分镜叙事张力）

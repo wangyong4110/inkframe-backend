@@ -554,13 +554,30 @@ func NewRetryProvider(provider AIProvider, maxRetries int, baseDelay time.Durati
 	}
 }
 
-// isRetryable 判断错误是否值得重试
-func isRetryable(err error) bool {
+// IsTimeoutError 判断错误是否为客户端超时（HTTP Client.Timeout / context deadline）。
+// 超时代表 AI 服务处理时间超过 HTTP client 设定值，重试只会让情况更糟；应 fail-fast。
+func IsTimeoutError(err error) bool {
 	if err == nil {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	retryKeywords := []string{"timeout", "connection refused", "temporary", "429", "502", "503", "rate limit", "overloaded"}
+	return strings.Contains(msg, "context deadline exceeded") ||
+		strings.Contains(msg, "client.timeout") ||
+		strings.Contains(msg, "request timed out")
+}
+
+// isRetryable 判断错误是否值得重试。
+// 只重试网络临时故障和服务端过载，不重试客户端超时（重试超时只会叠加等待时间）。
+func isRetryable(err error) bool {
+	if err == nil {
+		return false
+	}
+	// 客户端超时不重试
+	if IsTimeoutError(err) {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	retryKeywords := []string{"connection refused", "temporary", "429", "502", "503", "rate limit", "overloaded"}
 	for _, kw := range retryKeywords {
 		if strings.Contains(msg, kw) {
 			return true
