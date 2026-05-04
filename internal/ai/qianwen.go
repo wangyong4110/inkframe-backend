@@ -26,19 +26,22 @@ type QianwenProvider struct {
 	client   *http.Client
 }
 
-// NewQianwenProvider 创建通义千问提供者
-func NewQianwenProvider(apiKey, endpoint, model string) *QianwenProvider {
+// NewQianwenProvider 创建通义千问提供者。timeout<=0 时使用默认值 DefaultProviderTimeout。
+func NewQianwenProvider(apiKey, endpoint, model string, timeout time.Duration) *QianwenProvider {
 	if endpoint == "" {
 		endpoint = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 	}
 	if model == "" {
 		model = "qwen-plus"
 	}
+	if timeout <= 0 {
+		timeout = DefaultProviderTimeout
+	}
 	return &QianwenProvider{
 		apiKey:   apiKey,
 		endpoint: endpoint,
 		model:    model,
-		client:   &http.Client{Timeout: 120 * time.Second},
+		client:   &http.Client{Timeout: timeout},
 	}
 }
 

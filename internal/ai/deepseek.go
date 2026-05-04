@@ -19,19 +19,22 @@ type DeepSeekProvider struct {
 	client   *http.Client
 }
 
-// NewDeepSeekProvider 创建 DeepSeek 提供者
-func NewDeepSeekProvider(apiKey, endpoint, model string) *DeepSeekProvider {
+// NewDeepSeekProvider 创建 DeepSeek 提供者。timeout<=0 时使用默认值 DefaultProviderTimeout。
+func NewDeepSeekProvider(apiKey, endpoint, model string, timeout time.Duration) *DeepSeekProvider {
 	if endpoint == "" {
 		endpoint = "https://api.deepseek.com/v1"
 	}
 	if model == "" {
 		model = "deepseek-chat"
 	}
+	if timeout <= 0 {
+		timeout = DefaultProviderTimeout
+	}
 	return &DeepSeekProvider{
 		apiKey:   apiKey,
 		endpoint: endpoint,
 		model:    model,
-		client:   &http.Client{Timeout: 120 * time.Second},
+		client:   &http.Client{Timeout: timeout},
 	}
 }
 

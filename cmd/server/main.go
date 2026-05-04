@@ -681,7 +681,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-04-v6"
+const schemaVersion = "2026-05-04-v7"
 
 // autoMigrate 自动迁移（带版本跳过优化）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -806,17 +806,17 @@ func initAIModule(cfg *config.Config) *ai.ModelManager {
 	// env var 优先，config.yaml 作为备选（两者均可配置 API key）
 	defs := []providerDef{
 		{"openai", getEnv("OPENAI_API_KEY", cfg.AI.OpenAI.APIKey), cfg.AI.OpenAI.Endpoint, cfg.AI.OpenAI.Model,
-			func(k, e, m string) ai.AIProvider { return ai.NewOpenAIProvider(k, e, m) }},
+			func(k, e, m string) ai.AIProvider { return ai.NewOpenAIProvider(k, e, m, 0) }},
 		{"anthropic", getEnv("ANTHROPIC_API_KEY", cfg.AI.Anthropic.APIKey), cfg.AI.Anthropic.Endpoint, cfg.AI.Anthropic.Model,
-			func(k, e, m string) ai.AIProvider { return ai.NewAnthropicProvider(k, e, m) }},
+			func(k, e, m string) ai.AIProvider { return ai.NewAnthropicProvider(k, e, m, 0) }},
 		{"google", getEnv("GOOGLE_API_KEY", cfg.AI.Google.APIKey), cfg.AI.Google.Endpoint, cfg.AI.Google.Model,
-			func(k, e, m string) ai.AIProvider { return ai.NewGoogleProvider(k, e, m) }},
+			func(k, e, m string) ai.AIProvider { return ai.NewGoogleProvider(k, e, m, 0) }},
 		{"doubao", getEnv("DOUBAO_API_KEY", cfg.AI.Doubao.APIKey), cfg.AI.Doubao.Endpoint, cfg.AI.Doubao.Model,
-			func(k, e, m string) ai.AIProvider { return ai.NewDoubaoProvider(k, e, m) }},
+			func(k, e, m string) ai.AIProvider { return ai.NewDoubaoProvider(k, e, m, 0) }},
 		{"deepseek", getEnv("DEEPSEEK_API_KEY", cfg.AI.DeepSeek.APIKey), cfg.AI.DeepSeek.Endpoint, cfg.AI.DeepSeek.Model,
-			func(k, e, m string) ai.AIProvider { return ai.NewDeepSeekProvider(k, e, m) }},
+			func(k, e, m string) ai.AIProvider { return ai.NewDeepSeekProvider(k, e, m, 0) }},
 		{"qianwen", getEnv("QIANWEN_API_KEY", cfg.AI.Qianwen.APIKey), cfg.AI.Qianwen.Endpoint, cfg.AI.Qianwen.Model,
-			func(k, e, m string) ai.AIProvider { return ai.NewQianwenProvider(k, e, m) }},
+			func(k, e, m string) ai.AIProvider { return ai.NewQianwenProvider(k, e, m, 0) }},
 	}
 	for _, d := range defs {
 		if d.key == "" {

@@ -20,21 +20,22 @@ type AnthropicProvider struct {
 	client   *http.Client
 }
 
-func NewAnthropicProvider(apiKey, endpoint, model string) *AnthropicProvider {
+// NewAnthropicProvider 创建 Anthropic/Claude provider。timeout<=0 时使用默认值 DefaultProviderTimeout。
+func NewAnthropicProvider(apiKey, endpoint, model string, timeout time.Duration) *AnthropicProvider {
 	if endpoint == "" {
 		endpoint = "https://api.anthropic.com/v1"
 	}
 	if model == "" {
 		model = "claude-3-opus-20240229"
 	}
-
+	if timeout <= 0 {
+		timeout = DefaultProviderTimeout
+	}
 	return &AnthropicProvider{
 		apiKey:   apiKey,
 		endpoint: endpoint,
 		model:    model,
-		client: &http.Client{
-			Timeout: 120 * time.Second,
-		},
+		client:   &http.Client{Timeout: timeout},
 	}
 }
 
@@ -343,21 +344,22 @@ type GoogleProvider struct {
 	client   *http.Client
 }
 
-func NewGoogleProvider(apiKey, endpoint, model string) *GoogleProvider {
+// NewGoogleProvider 创建 Google/Gemini provider。timeout<=0 时使用默认值 DefaultProviderTimeout。
+func NewGoogleProvider(apiKey, endpoint, model string, timeout time.Duration) *GoogleProvider {
 	if endpoint == "" {
 		endpoint = "https://generativelanguage.googleapis.com/v1beta"
 	}
 	if model == "" {
 		model = "gemini-pro"
 	}
-
+	if timeout <= 0 {
+		timeout = DefaultProviderTimeout
+	}
 	return &GoogleProvider{
 		apiKey:   apiKey,
 		endpoint: endpoint,
 		model:    model,
-		client: &http.Client{
-			Timeout: 120 * time.Second,
-		},
+		client:   &http.Client{Timeout: timeout},
 	}
 }
 

@@ -2406,6 +2406,7 @@ func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, ten
 		APISecretKey: req.APISecretKey,
 		APIVersion:   req.APIVersion,
 		IsActive:     req.IsActive,
+		Timeout:      req.Timeout,
 	}
 	if err := s.providerRepo.Create(provider); err != nil {
 		return nil, err
@@ -2442,6 +2443,9 @@ func (s *ModelService) UpdateProvider(id uint, tenantID uint, req *model.UpdateM
 	}
 	if req.IsActive != nil {
 		provider.IsActive = *req.IsActive
+	}
+	if req.Timeout != nil {
+		provider.Timeout = *req.Timeout
 	}
 	if err := s.providerRepo.Update(provider); err != nil {
 		return nil, err

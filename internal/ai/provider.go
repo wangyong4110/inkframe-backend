@@ -10,6 +10,17 @@ import (
 	"time"
 )
 
+// DefaultProviderTimeout 是 provider HTTP client 的默认超时时间。
+const DefaultProviderTimeout = 300 * time.Second
+
+// ResolveTimeout 将秒数配置转换为 time.Duration；0 或负数返回默认值。
+func ResolveTimeout(seconds int) time.Duration {
+	if seconds <= 0 {
+		return DefaultProviderTimeout
+	}
+	return time.Duration(seconds) * time.Second
+}
+
 // AIProvider AI提供者接口
 type AIProvider interface {
 	// Generate 生成文本

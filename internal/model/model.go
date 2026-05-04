@@ -559,6 +559,7 @@ type ModelProvider struct {
 	RateLimit int     `json:"rate_limit"` // 请求/分钟
 	MaxTokens int     `json:"max_tokens"`
 	CostPer1K float64 `json:"cost_per_1k_tokens"`
+	Timeout   int     `json:"timeout" gorm:"default:0"` // HTTP 请求超时（秒），0=使用默认值300s
 
 	// 元数据（系统级模板字段，由 seedAIModels 写入，用户无需填写）
 	NeedsSecretKey bool   `json:"needs_secret_key" gorm:"default:false"` // 是否需要 AK/SK 双密钥鉴权
@@ -1183,6 +1184,7 @@ type CreateModelProviderRequest struct {
 	APISecretKey string `json:"api_secret_key"`
 	APIVersion   string `json:"api_version"`
 	IsActive     bool   `json:"is_active"`
+	Timeout      int    `json:"timeout"` // HTTP 超时秒数，0=默认300s
 }
 
 type UpdateModelProviderRequest struct {
@@ -1194,6 +1196,7 @@ type UpdateModelProviderRequest struct {
 	APISecretKey string `json:"api_secret_key"`
 	APIVersion   string `json:"api_version"`
 	IsActive     *bool  `json:"is_active"`
+	Timeout      *int   `json:"timeout"` // HTTP 超时秒数，0=默认300s；nil=不修改
 }
 
 type CreateAIModelRequest struct {

@@ -23,19 +23,22 @@ type DoubaoProvider struct {
 	client   *http.Client
 }
 
-// NewDoubaoProvider 创建豆包提供者
-func NewDoubaoProvider(apiKey, endpoint, model string) *DoubaoProvider {
+// NewDoubaoProvider 创建豆包提供者。timeout<=0 时使用默认值 DefaultProviderTimeout。
+func NewDoubaoProvider(apiKey, endpoint, model string, timeout time.Duration) *DoubaoProvider {
 	if endpoint == "" {
 		endpoint = "https://ark.volces.com/api/v3"
 	}
 	if model == "" {
 		model = "doubao-pro-32k"
 	}
+	if timeout <= 0 {
+		timeout = DefaultProviderTimeout
+	}
 	return &DoubaoProvider{
 		apiKey:   apiKey,
 		endpoint: endpoint,
 		model:    model,
-		client:   &http.Client{Timeout: 120 * time.Second},
+		client:   &http.Client{Timeout: timeout},
 	}
 }
 

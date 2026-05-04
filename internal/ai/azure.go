@@ -25,7 +25,8 @@ type AzureProvider struct {
 //   - endpoint:   base URL, e.g. https://…cognitiveservices.azure.com/openai
 //   - deployment: deployment / model name, e.g. gpt-4.1
 //   - apiVersion: Azure REST API version, e.g. 2025-01-01-preview
-func NewAzureProvider(apiKey, endpoint, deployment, apiVersion string) *AzureProvider {
+// NewAzureProvider 创建 Azure OpenAI provider。timeout<=0 时使用默认值 DefaultProviderTimeout。
+func NewAzureProvider(apiKey, endpoint, deployment, apiVersion string, timeout time.Duration) *AzureProvider {
 	if endpoint == "" {
 		endpoint = "https://YOUR-RESOURCE.cognitiveservices.azure.com/openai"
 	}
@@ -35,12 +36,15 @@ func NewAzureProvider(apiKey, endpoint, deployment, apiVersion string) *AzurePro
 	if apiVersion == "" {
 		apiVersion = "2025-01-01-preview"
 	}
+	if timeout <= 0 {
+		timeout = DefaultProviderTimeout
+	}
 	return &AzureProvider{
 		apiKey:     apiKey,
 		endpoint:   endpoint,
 		deployment: deployment,
 		apiVersion: apiVersion,
-		client:     &http.Client{Timeout: 120 * time.Second},
+		client:     &http.Client{Timeout: timeout},
 	}
 }
 

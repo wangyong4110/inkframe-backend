@@ -22,21 +22,22 @@ type OpenAIProvider struct {
 	client   *http.Client
 }
 
-func NewOpenAIProvider(apiKey, endpoint, model string) *OpenAIProvider {
+// NewOpenAIProvider 创建 OpenAI provider。timeout<=0 时使用默认值 DefaultProviderTimeout。
+func NewOpenAIProvider(apiKey, endpoint, model string, timeout time.Duration) *OpenAIProvider {
 	if endpoint == "" {
 		endpoint = "https://api.openai.com/v1"
 	}
 	if model == "" {
 		model = "gpt-4"
 	}
-
+	if timeout <= 0 {
+		timeout = DefaultProviderTimeout
+	}
 	return &OpenAIProvider{
 		apiKey:   apiKey,
 		endpoint: endpoint,
 		model:    model,
-		client: &http.Client{
-			Timeout: 120 * time.Second,
-		},
+		client:   &http.Client{Timeout: timeout},
 	}
 }
 

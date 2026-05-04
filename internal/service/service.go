@@ -979,18 +979,19 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 
 	// Instantiate the provider.
 	// 名称优先匹配已知 key；对自定义名称（如"豆包图片"）则根据 endpoint 推断构造器。
+	timeout := ai.ResolveTimeout(matched.Timeout)
 	var provider ai.AIProvider
 	switch matched.Name {
 	case ai.ProviderNameVolcengineVisual:
 		provider = ai.NewVolcengineVisualProvider(matched.APIKey, matched.APISecretKey)
 	case "openai":
-		provider = ai.NewOpenAIProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion)
+		provider = ai.NewOpenAIProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "anthropic":
-		provider = ai.NewAnthropicProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion)
+		provider = ai.NewAnthropicProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "google":
-		provider = ai.NewGoogleProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion)
+		provider = ai.NewGoogleProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "doubao":
-		provider = ai.NewDoubaoProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion)
+		provider = ai.NewDoubaoProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "doubao-speech":
 		// APIKey = X-Api-Key, APIVersion = resourceID（如 "seed-tts-2.0"）
 		provider = ai.NewDoubaoSpeechProvider(matched.APIKey, matched.APIVersion)
@@ -998,11 +999,11 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		// APIKey = appID, APISecretKey = access_token, APIVersion = cluster（默认 volcano_tts）
 		provider = ai.NewDoubaoSpeechV1Provider(matched.APIKey, matched.APISecretKey, matched.APIVersion)
 	case "deepseek":
-		provider = ai.NewDeepSeekProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion)
+		provider = ai.NewDeepSeekProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "qianwen":
-		provider = ai.NewQianwenProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion)
+		provider = ai.NewQianwenProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "azure":
-		provider = ai.NewAzureProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, "")
+		provider = ai.NewAzureProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, "", timeout)
 	default:
 		// 自定义名称：按 endpoint 推断底层 API 格式
 		ep := strings.ToLower(matched.APIEndpoint)
@@ -1010,17 +1011,17 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		case strings.Contains(ep, "volces.com") || strings.Contains(ep, "volcengine"):
 			// 火山方舟 / 豆包系列（OpenAI 兼容格式）
 			log.Printf("getTenantProvider: provider %q mapped to doubao constructor via endpoint", matched.Name)
-			provider = ai.NewDoubaoProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion)
+			provider = ai.NewDoubaoProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
 		case strings.Contains(ep, "azure.com") || strings.Contains(ep, "openai.azure"):
 			log.Printf("getTenantProvider: provider %q mapped to azure constructor via endpoint", matched.Name)
-			provider = ai.NewAzureProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, "")
+			provider = ai.NewAzureProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, "", timeout)
 		case strings.Contains(ep, "anthropic.com"):
 			log.Printf("getTenantProvider: provider %q mapped to anthropic constructor via endpoint", matched.Name)
-			provider = ai.NewAnthropicProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion)
+			provider = ai.NewAnthropicProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
 		case matched.APIEndpoint != "":
 			// 有自定义 endpoint → 按 OpenAI 兼容格式通用处理
 			log.Printf("getTenantProvider: provider %q using OpenAI-compatible constructor for endpoint %s", matched.Name, matched.APIEndpoint)
-			provider = ai.NewOpenAIProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion)
+			provider = ai.NewOpenAIProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
 		default:
 			log.Printf("getTenantProvider: unrecognized provider %q with no endpoint — falling back to static aiManager", matched.Name)
 			return s.aiManager.GetProvider(providerName)
@@ -1104,6 +1105,11 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 	case "storyboard", "character", "worldview", "character_state", "scene_anchor_extract":
 		if config.MaxTokens < 16384 {
 			config.MaxTokens = 16384
+		}
+		// JSON 结构化输出任务降温：高温度会产生格式漂移（多余 markdown / 说明文字），
+		// 触发 retry 反而更慢；0.1 足以保证输出格式稳定。
+		if config.Temperature > 0.2 {
+			config.Temperature = 0.1
 		}
 	}
 
@@ -2077,6 +2083,9 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	totalShots := calcTotalShots(totalRunes, video.TargetDuration, video.Pacing)
 
 	// 并发处理各段落：各段独立发起 AI 调用，最终按顺序合并。
+	// 信号量限制最多 3 段同时调用 AI，避免触发 rate limit。
+	const maxConcurrentSegs = 3
+	sem := make(chan struct{}, maxConcurrentSegs)
 	type segResult struct {
 		shots []*model.StoryboardShot
 		err   error
@@ -2087,6 +2096,8 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		wg.Add(1)
 		go func(idx int, seg string) {
 			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			segRunes := len([]rune(seg))
 			segShotCount := totalShots * segRunes / max(totalRunes, 1)
 			if segShotCount < 3 {
