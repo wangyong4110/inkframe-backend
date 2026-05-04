@@ -829,13 +829,14 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 	width, height := aspectRatioDimensions(ratio)
 
 	type assetInfo struct {
-		id          string
-		src         string
-		duration    int64 // micros
-		filename    string
-		audioID     string // empty = no audio
-		audioSrc    string
-		audioFile   string
+		id        string
+		src       string
+		duration  int64 // micros
+		filename  string
+		localClip string // 本地 Ken Burns 文件路径（slideshow 模式）
+		audioID   string // empty = no audio
+		audioSrc  string
+		audioFile string
 	}
 
 	var assets []assetInfo
@@ -849,17 +850,27 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 		if dur <= 0 {
 			dur = 5_000_000
 		}
+		vidSrc, vidLocal := shotVideoSource(shot)
 		mediaURL := shot.ImageURL
 		ext := ".jpg"
-		if shot.VideoURL != "" {
-			mediaURL = shot.VideoURL
+		if vidSrc != "" {
 			ext = ".mp4"
+			if vidLocal {
+				// 本地 Ken Burns 文件：src 用 media/ 相对路径（下面打包进 ZIP）
+				mediaURL = "media/" + fmt.Sprintf("%03d.mp4", shot.ShotNo)
+			} else {
+				mediaURL = vidSrc
+			}
 		}
 		vidID := fmt.Sprintf("r%d", nextID)
 		nextID++
 		vidFile := fmt.Sprintf("%03d%s", shot.ShotNo, ext)
 
 		ai := assetInfo{id: vidID, src: mediaURL, duration: dur, filename: vidFile}
+		// 本地剪辑文件保存到 ai.localClip 供后续打包
+		if vidLocal && vidSrc != "" {
+			ai.localClip = vidSrc
+		}
 
 		if shot.AudioPath != "" {
 			audID := fmt.Sprintf("r%d", nextID)
@@ -950,7 +961,14 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 
 	// 媒体文件打包到 media/（供离线重连）
 	for _, a := range assets {
-		if a.src != "" {
+		if a.localClip != "" {
+			// 本地 Ken Burns 文件（slideshow 模式）直接读取
+			if data, err := os.ReadFile(a.localClip); err == nil {
+				if e := writeZip(prefix+"media/"+a.filename, data); e != nil {
+					return nil, fmt.Errorf("write media %s: %w", a.filename, e)
+				}
+			}
+		} else if a.src != "" && (strings.HasPrefix(a.src, "http://") || strings.HasPrefix(a.src, "https://")) {
 			if data, err := downloadMediaFile(a.src); err == nil {
 				if e := writeZip(prefix+"media/"+a.filename, data); e != nil {
 					return nil, fmt.Errorf("write media %s: %w", a.filename, e)
@@ -1029,27 +1047,29 @@ func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.Sto
 		}
 
 		// 视频/图片
-		mediaURL := shot.ImageURL
-		isVideo := shot.VideoURL != ""
+		vidSrc, vidLocal := shotVideoSource(shot)
+		isVideo := vidSrc != ""
 		if isVideo {
-			mediaURL = shot.VideoURL
-		}
-		if mediaURL != "" {
-			ext := ".jpg"
-			subdir := "image"
-			if isVideo {
-				ext = ".mp4"
-				subdir = "video"
-			}
-			filename := fmt.Sprintf("%03d%s", shot.ShotNo, ext)
-			if data, err := downloadMediaFile(mediaURL); err == nil {
-				if e := writeZip(subdir+"/"+filename, data); e != nil {
-					return nil, fmt.Errorf("write %s/%s: %w", subdir, filename, e)
-				}
-			}
-			if isVideo {
-				meta.VideoFile = "video/" + filename
+			filename := fmt.Sprintf("%03d.mp4", shot.ShotNo)
+			var data []byte
+			var err error
+			if vidLocal {
+				data, err = os.ReadFile(vidSrc)
 			} else {
+				data, err = downloadMediaFile(vidSrc)
+			}
+			if err == nil {
+				if e := writeZip("video/"+filename, data); e != nil {
+					return nil, fmt.Errorf("write video/%s: %w", filename, e)
+				}
+				meta.VideoFile = "video/" + filename
+			}
+		} else if shot.ImageURL != "" {
+			filename := fmt.Sprintf("%03d.jpg", shot.ShotNo)
+			if data, err := downloadMediaFile(shot.ImageURL); err == nil {
+				if e := writeZip("image/"+filename, data); e != nil {
+					return nil, fmt.Errorf("write image/%s: %w", filename, e)
+				}
 				meta.ImageFile = "image/" + filename
 			}
 		}
@@ -1110,6 +1130,16 @@ func (s *CapCutService) ExportSRT(video *model.Video, shots []*model.StoryboardS
 		Filename:    projectName + ".srt",
 		ContentType: "text/plain; charset=utf-8",
 	}, nil
+}
+
+// shotVideoSource 返回镜头的有效视频来源。
+// 优先级：ClipPath（本地 Ken Burns/静帧文件）> VideoURL（CDN）> ""（仅图片）
+// isLocal=true 表示返回的是本地文件路径（已去除 file:// 前缀）。
+func shotVideoSource(shot *model.StoryboardShot) (src string, isLocal bool) {
+	if shot.ClipPath != "" {
+		return strings.TrimPrefix(shot.ClipPath, "file://"), true
+	}
+	return shot.VideoURL, false
 }
 
 // readLocalOrRemoteFile 读取本地文件（支持 file:// 前缀）或远程 URL
@@ -1325,8 +1355,44 @@ func buildPhotoMotionKeyframes(segID, cameraType string, durMicros int64, shotNo
 	return groups
 }
 
+// stripDialogueSpeakerPrefix 去除台词字段中的"角色名："前缀，仅保留台词内容。
+// 例："妈妈：你好吗？" → "你好吗？"
+// Dialogue 字段保留完整格式供 TTS 音色解析，字幕显示时才调用此函数。
+func stripDialogueSpeakerPrefix(text string) string {
+	for _, colon := range []string{"：", ":"} {
+		idx := strings.Index(text, colon)
+		if idx <= 0 || idx > len(colon)*12 {
+			continue
+		}
+		prefix := []rune(text[:idx])
+		if len(prefix) < 1 || len(prefix) > 8 {
+			continue
+		}
+		rest := strings.TrimSpace(text[idx+len(colon):])
+		if rest != "" {
+			return rest
+		}
+	}
+	return text
+}
+
+// shotSubtitleText 返回镜头的有效字幕文本。
+// 优先级：Subtitle 覆盖 > Dialogue（去角色名前缀）> Narration > Description。
+func shotSubtitleText(shot *model.StoryboardShot) string {
+	if shot.Subtitle != "" {
+		return shot.Subtitle
+	}
+	if shot.Dialogue != "" {
+		return stripDialogueSpeakerPrefix(shot.Dialogue)
+	}
+	if shot.Narration != "" {
+		return shot.Narration
+	}
+	return shot.Description
+}
+
 // buildSRTSubtitles 生成 SRT 格式字幕内容（通用字幕标准，可在剪映/VLC/PotPlayer 等中导入）。
-// 文本优先级：台词 > 旁白 > 画面描述；无文本的镜头跳过编号。
+// 文本优先级：字幕覆盖 > 台词 > 旁白 > 画面描述；无文本的镜头跳过编号。
 func buildSRTSubtitles(shots []*model.StoryboardShot) string {
 	var sb strings.Builder
 	var cursor int64 // 当前时间指针（微秒）
@@ -1338,14 +1404,7 @@ func buildSRTSubtitles(shots []*model.StoryboardShot) string {
 		}
 		end := cursor + dur
 
-		text := shot.Dialogue
-		if text == "" {
-			text = shot.Narration
-		}
-		if text == "" {
-			text = shot.Description
-		}
-		if text != "" {
+		if text := shotSubtitleText(shot); text != "" {
 			fmt.Fprintf(&sb, "%d\n%s --> %s\n%s\n\n",
 				idx, microsToSRTTime(cursor), microsToSRTTime(end), text)
 			idx++
@@ -1402,14 +1461,7 @@ func (s *CapCutService) ExportVTT(video *model.Video, shots []*model.StoryboardS
 		if dur <= 0 {
 			dur = 5 * time.Second
 		}
-		text := shot.Dialogue
-		if text == "" {
-			text = shot.Narration
-		}
-		if text == "" {
-			text = shot.Description
-		}
-		if text != "" {
+		if text := shotSubtitleText(shot); text != "" {
 			subs.Items = append(subs.Items, &astisub.Item{
 				StartAt: cursor,
 				EndAt:   cursor + dur,
@@ -1459,26 +1511,29 @@ func (s *CapCutService) ExportEDL(video *model.Video, shots []*model.StoryboardS
 	sb.WriteString(fmt.Sprintf("TITLE: %s\n", projectName))
 	sb.WriteString("FCM: NON-DROP FRAME\n\n")
 
+	eventNo := 1
 	var recordIn int64
-	for i, shot := range shots {
+	for _, shot := range shots {
 		dur := int64(shot.Duration * 1_000_000)
 		if dur <= 0 {
 			dur = 5_000_000
 		}
 		recordOut := recordIn + dur
 
+		vidSrc, _ := shotVideoSource(shot)
 		ext := ".jpg"
-		if shot.VideoURL != "" {
+		if vidSrc != "" {
 			ext = ".mp4"
 		}
 		clipName := fmt.Sprintf("%03d%s", shot.ShotNo, ext)
 
+		// 视频事件
 		sb.WriteString(fmt.Sprintf("%03d  AX       V     C        %s %s %s %s\n",
-			i+1,
-			microsToEDLTimecode(0),        // source IN（每段素材从头开始）
-			microsToEDLTimecode(dur),       // source OUT
-			microsToEDLTimecode(recordIn),  // record IN（时间线位置）
-			microsToEDLTimecode(recordOut), // record OUT
+			eventNo,
+			microsToEDLTimecode(0),
+			microsToEDLTimecode(dur),
+			microsToEDLTimecode(recordIn),
+			microsToEDLTimecode(recordOut),
 		))
 		sb.WriteString(fmt.Sprintf("* FROM CLIP NAME: %s\n", clipName))
 		comment := shot.Narration
@@ -1486,7 +1541,6 @@ func (s *CapCutService) ExportEDL(video *model.Video, shots []*model.StoryboardS
 			comment = shot.Description
 		}
 		if comment != "" {
-			// EDL 注释最长不超过约 100 字符（部分 NLE 截断），截取足够长度
 			runes := []rune(comment)
 			if len(runes) > 80 {
 				comment = string(runes[:80])
@@ -1494,6 +1548,23 @@ func (s *CapCutService) ExportEDL(video *model.Video, shots []*model.StoryboardS
 			sb.WriteString(fmt.Sprintf("* COMMENT: %s\n", comment))
 		}
 		sb.WriteString("\n")
+		eventNo++
+
+		// 音频事件（单独 A 事件，与视频同时间线位置，引用独立音频素材）
+		if shot.AudioPath != "" {
+			audExt := audioExtension(shot.AudioPath)
+			audClipName := fmt.Sprintf("%03d_audio%s", shot.ShotNo, audExt)
+			sb.WriteString(fmt.Sprintf("%03d  AX       A     C        %s %s %s %s\n",
+				eventNo,
+				microsToEDLTimecode(0),
+				microsToEDLTimecode(dur),
+				microsToEDLTimecode(recordIn),
+				microsToEDLTimecode(recordOut),
+			))
+			sb.WriteString(fmt.Sprintf("* FROM CLIP NAME: %s\n", audClipName))
+			sb.WriteString("\n")
+			eventNo++
+		}
 
 		recordIn = recordOut
 	}
@@ -1526,6 +1597,12 @@ type otioExternalReference struct {
 	TargetURL      string         `json:"target_url"`
 	Name           string         `json:"name,omitempty"`
 	AvailableRange *otioTimeRange `json:"available_range,omitempty"`
+}
+
+type otioGap struct {
+	OTIOSchema  string         `json:"OTIO_SCHEMA"`
+	Name        string         `json:"name"`
+	SourceRange *otioTimeRange `json:"source_range,omitempty"`
 }
 
 type otioClip struct {
@@ -1565,43 +1642,92 @@ func (s *CapCutService) ExportOTIO(video *model.Video, shots []*model.Storyboard
 		projectName = fmt.Sprintf("video_%d", video.ID)
 	}
 
-	var clips []any
+	var videoClips []any
+	var audioClips []any
+	hasAnyAudio := false
+
 	for _, shot := range shots {
 		dur := shot.Duration
 		if dur <= 0 {
 			dur = 5.0
 		}
 		durFrames := dur * fps
-
-		mediaURL := shot.ImageURL
-		if shot.VideoURL != "" {
-			mediaURL = shot.VideoURL
+		srcRange := &otioTimeRange{
+			StartTime: otioRationalTime{Value: 0, Rate: fps},
+			Duration:  otioRationalTime{Value: durFrames, Rate: fps},
 		}
+
+		// 视频 / 图片 clip
+		vidSrc, vidLocal := shotVideoSource(shot)
+		mediaURL := shot.ImageURL
 		ext := ".jpg"
-		if shot.VideoURL != "" {
+		if vidSrc != "" {
 			ext = ".mp4"
+			if vidLocal {
+				mediaURL = "file://" + vidSrc
+			} else {
+				mediaURL = vidSrc
+			}
 		}
 		clipName := fmt.Sprintf("%03d%s", shot.ShotNo, ext)
-
-		clips = append(clips, otioClip{
-			OTIOSchema: "Clip.2",
-			Name:       clipName,
-			SourceRange: &otioTimeRange{
-				StartTime: otioRationalTime{Value: 0, Rate: fps},
-				Duration:  otioRationalTime{Value: durFrames, Rate: fps},
-			},
+		videoClips = append(videoClips, otioClip{
+			OTIOSchema:  "Clip.2",
+			Name:        clipName,
+			SourceRange: srcRange,
 			MediaReferences: map[string]otioExternalReference{
 				"DEFAULT_MEDIA": {
-					OTIOSchema: "ExternalReference.1",
-					TargetURL:  mediaURL,
-					Name:       clipName,
-					AvailableRange: &otioTimeRange{
-						StartTime: otioRationalTime{Value: 0, Rate: fps},
-						Duration:  otioRationalTime{Value: durFrames, Rate: fps},
-					},
+					OTIOSchema:     "ExternalReference.1",
+					TargetURL:      mediaURL,
+					Name:           clipName,
+					AvailableRange: srcRange,
 				},
 			},
 			ActiveMediaReferenceKey: "DEFAULT_MEDIA",
+		})
+
+		// 音频 clip（或 gap 占位）
+		if shot.AudioPath != "" {
+			hasAnyAudio = true
+			audExt := audioExtension(shot.AudioPath)
+			audName := fmt.Sprintf("%03d_audio%s", shot.ShotNo, audExt)
+			audioClips = append(audioClips, otioClip{
+				OTIOSchema:  "Clip.2",
+				Name:        audName,
+				SourceRange: srcRange,
+				MediaReferences: map[string]otioExternalReference{
+					"DEFAULT_MEDIA": {
+						OTIOSchema:     "ExternalReference.1",
+						TargetURL:      shot.AudioPath,
+						Name:           audName,
+						AvailableRange: srcRange,
+					},
+				},
+				ActiveMediaReferenceKey: "DEFAULT_MEDIA",
+			})
+		} else {
+			// 无音频的镜头用 Gap 占位，保持轨道对齐
+			audioClips = append(audioClips, otioGap{
+				OTIOSchema:  "Gap.1",
+				Name:        "gap",
+				SourceRange: srcRange,
+			})
+		}
+	}
+
+	trackChildren := []any{
+		otioTrack{
+			OTIOSchema: "Track.1",
+			Name:       "Video",
+			Kind:       "Video",
+			Children:   videoClips,
+		},
+	}
+	if hasAnyAudio {
+		trackChildren = append(trackChildren, otioTrack{
+			OTIOSchema: "Track.1",
+			Name:       "Audio",
+			Kind:       "Audio",
+			Children:   audioClips,
 		})
 	}
 
@@ -1611,14 +1737,7 @@ func (s *CapCutService) ExportOTIO(video *model.Video, shots []*model.Storyboard
 		Tracks: otioStack{
 			OTIOSchema: "Stack.1",
 			Name:       "tracks",
-			Children: []any{
-				otioTrack{
-					OTIOSchema: "Track.1",
-					Name:       "Video",
-					Kind:       "Video",
-					Children:   clips,
-				},
-			},
+			Children:   trackChildren,
 		},
 	}
 

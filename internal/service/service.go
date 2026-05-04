@@ -2502,9 +2502,11 @@ func (s *VideoService) buildStoryboardPrompt(
 ▸ narration（中文旁白文案）——每镜必填，不得为空
   - 观众"听到"的旁白内容，第三人称叙事视角，语言生动凝练
   - 严禁出现以下词汇：镜头、画面、特写、推进、切换、转场、画外音、摄影机、定格
+  - 严禁以角色名称开头，如"妈妈说："、"凌云道："、"角色名：" 等格式——旁白是旁白，不是台词引用
   - ✅ 正确示例："凌云握紧长剑，眼中燃起不灭的复仇之火。"
   - ❌ 错误示例："镜头推近，画面聚焦在凌云手握长剑的特写上。"
   - ❌ 错误示例："画面展示凌云愤怒的表情，镜头缓缓拉远。"
+  - ❌ 错误示例："妈妈说：今天你必须回家。"（角色名前缀属于 dialogue 字段，不属于 narration）
 
 ▸ dialogue（角色台词）——仅当角色实际开口说话时填写
   - 格式固定："角色名：台词内容"（如"凌云：你敢再说一遍！"）
@@ -2724,7 +2726,7 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			Description: r.Description,
 			Narration:   r.Narration,
 			Prompt:      prompt,
-			Dialogue:    r.Dialogue,
+			Dialogue:    r.Dialogue, // 保留"角色名：台词"格式供TTS音色解析
 			CameraType:  validCameraType(r.CameraType),
 			CameraAngle: validCameraAngle(r.CameraAngle),
 			ShotSize:    validShotSize(r.ShotSize),
@@ -3735,11 +3737,15 @@ func (s *VideoService) uploadAudioToStorage(ctx context.Context, shot *model.Sto
 // 时间码从 00:00:00,000 开始，结束时间 = shot.Duration。
 // 文本优先级：Dialogue > Narration > Description（兜底兼容旧数据）。
 func GenerateShotSRT(shot *model.StoryboardShot) string {
-	text := shot.Dialogue
-	if text == "" {
+	var text string
+	if shot.Subtitle != "" {
+		text = shot.Subtitle
+	} else if shot.Dialogue != "" {
+		// 去除"角色名："前缀，字幕只显示台词内容
+		text = stripDialogueSpeakerPrefix(shot.Dialogue)
+	} else if shot.Narration != "" {
 		text = shot.Narration
-	}
-	if text == "" {
+	} else {
 		text = shot.Description
 	}
 	if text == "" {

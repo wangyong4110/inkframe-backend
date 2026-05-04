@@ -372,7 +372,7 @@ func (h *VideoHandler) ServeAudio(c *gin.Context) {
 	// file:// 本地路径（兼容未配置存储服务的情况）
 	if strings.HasPrefix(shot.AudioPath, "file://") {
 		filePath := strings.TrimPrefix(shot.AudioPath, "file://")
-		c.Header("Cache-Control", "public, max-age=86400")
+		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
 		c.File(filePath)
 		return
 	}

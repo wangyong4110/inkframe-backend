@@ -826,6 +826,7 @@ type StoryboardShot struct {
 	Description string `json:"description" gorm:"type:text"` // 英文画面描述，供AI图片/视频生成使用
 	Narration   string `json:"narration" gorm:"type:text"`   // 中文旁白文案，供TTS朗读和字幕显示使用
 	Dialogue    string `json:"dialogue" gorm:"type:text"`    // 角色台词（格式："角色名：台词"），有对话时填写
+	Subtitle    string `json:"subtitle" gorm:"type:text"`    // 字幕覆盖文本，非空时优先用于SRT/VTT导出，不影响TTS朗读
 
 	// 摄像机配置
 	CameraType string `json:"camera_type" gorm:"size:50;default:static"`
