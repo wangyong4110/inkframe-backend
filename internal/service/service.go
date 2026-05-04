@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -3964,9 +3965,13 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 	return outputPath, nil
 }
 
-// inkframeTempDir 返回可写的临时目录（优先用工作目录下的 tmp/，fallback 到系统临时目录）
+// inkframeTempDir 返回可写的临时目录（绝对路径，优先用工作目录下的 tmp/，fallback 到系统临时目录）
+// 必须返回绝对路径，否则嵌入式 WASM ffmpeg 无法通过 WASI 文件系统访问。
 func inkframeTempDir() string {
 	dir := "tmp"
+	if abs, err := filepath.Abs(dir); err == nil {
+		dir = abs
+	}
 	if err := os.MkdirAll(dir, 0755); err == nil {
 		return dir
 	}
