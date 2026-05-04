@@ -2247,6 +2247,9 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		return nil, fmt.Errorf("所有段落均未能生成分镜，请检查章节内容或重试")
 	}
 	shots := allShots
+	if progressFn != nil {
+		progressFn(92)
+	}
 
 	// 场景锚点自动匹配：按 shot.Location 名称匹配已注册的场景锚点
 	if s.sceneAnchorSvc != nil {
@@ -2254,6 +2257,9 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	}
 	// 角色自动关联：按 shot.Characters JSON 中的名称匹配小说角色
 	s.autoMatchShotCharacters(shots, characters)
+	if progressFn != nil {
+		progressFn(95)
+	}
 
 	// 删除旧分镜，再批量插入新分镜（单次 SQL，避免 N 次往返）
 	if err := s.storyboardRepo.DeleteByVideoID(videoID); err != nil {
@@ -2261,6 +2267,9 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	}
 	if err := s.storyboardRepo.BatchCreate(shots); err != nil {
 		return nil, fmt.Errorf("保存分镜失败: %w", err)
+	}
+	if progressFn != nil {
+		progressFn(99)
 	}
 
 	// 更新视频状态
