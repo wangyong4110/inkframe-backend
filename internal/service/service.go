@@ -2858,6 +2858,106 @@ func (s *VideoService) GetStoryboard(videoID uint) ([]*model.StoryboardShot, err
 	return s.storyboardRepo.ListByVideo(videoID)
 }
 
+// ReviewStoryboard 调用 AI 对分镜脚本进行专业审查，返回结构化报告。
+func (s *VideoService) ReviewStoryboard(videoID uint, provider string) (*model.StoryboardReview, error) {
+	shots, err := s.storyboardRepo.ListByVideo(videoID)
+	if err != nil {
+		return nil, fmt.Errorf("获取分镜失败: %w", err)
+	}
+	if len(shots) == 0 {
+		return nil, fmt.Errorf("该视频暂无分镜，请先生成分镜脚本")
+	}
+
+	prompt := buildStoryboardReviewPrompt(shots)
+
+	result, err := s.aiService.Generate(0, provider, prompt)
+	if err != nil {
+		return nil, fmt.Errorf("AI审查失败: %w", err)
+	}
+
+	return parseStoryboardReview(result)
+}
+
+// buildStoryboardReviewPrompt 构建分镜审查提示词
+func buildStoryboardReviewPrompt(shots []*model.StoryboardShot) string {
+	var sb strings.Builder
+
+	sb.WriteString(fmt.Sprintf("你是资深影视分镜审查师，请从专业角度对以下%d个分镜脚本进行全面审查，返回JSON格式的审查报告。\n\n", len(shots)))
+
+	sb.WriteString(`【审查标准】
+1. 叙事连贯性（30分）：故事逻辑、场景衔接、情节推进是否自然流畅
+2. 视觉多样性（20分）：景别、镜头类型、角度是否合理变化，避免长时间单调重复
+3. 节奏控制（20分）：单镜时长分配是否匹配场景强度，快慢张弛有度
+4. 旁白质量（20分）：旁白是否生动感人、避免镜头语言、符合叙事视角、无重复
+5. 整体专业度（10分）：构图合理性、转场设计、角色调度
+
+【分镜数据】
+`)
+
+	for _, shot := range shots {
+		narr := shot.Narration
+		if narr == "" {
+			narr = shot.Description
+		}
+		// 截断过长的旁白
+		if len([]rune(narr)) > 80 {
+			runes := []rune(narr)
+			narr = string(runes[:80]) + "…"
+		}
+		sb.WriteString(fmt.Sprintf("[镜%d] 景别:%s 时长:%.0fs 镜头:%s/%s",
+			shot.ShotNo, shot.ShotSize, shot.Duration, shot.CameraType, shot.CameraAngle))
+		if narr != "" {
+			sb.WriteString(fmt.Sprintf(" 旁白:\"%s\"", narr))
+		}
+		if shot.Dialogue != "" {
+			d := shot.Dialogue
+			if len([]rune(d)) > 40 {
+				d = string([]rune(d)[:40]) + "…"
+			}
+			sb.WriteString(fmt.Sprintf(" 台词:\"%s\"", d))
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString(`
+【输出格式】
+返回JSON对象，不要包含markdown代码块或任何额外说明：
+{
+  "overall_score": 7.5,
+  "narrative_score": 8.0,
+  "visual_score": 6.5,
+  "pacing_score": 7.0,
+  "narration_score": 8.0,
+  "summary": "总体评价（100字以内）",
+  "strengths": ["亮点描述1", "亮点描述2"],
+  "weaknesses": ["主要问题描述1", "主要问题描述2"],
+  "global_suggestions": ["整体改进建议1", "整体改进建议2", "整体改进建议3"],
+  "shot_feedback": [
+    {
+      "shot_no": 3,
+      "issues": ["旁白包含镜头语言：'镜头推近'"],
+      "suggestion": "改为：'凌云眼神逐渐坚定，握紧了手中的剑'",
+      "severity": "warning"
+    }
+  ]
+}
+注意：shot_feedback 只需列出有问题的镜头（建议不超过10个最典型的），无问题镜头无需列出。
+severity 取值：error（严重，直接影响质量）、warning（中等，建议修改）、info（轻微，可选优化）`)
+
+	return sb.String()
+}
+
+// parseStoryboardReview 解析 AI 审查结果为结构化报告
+func parseStoryboardReview(result string) (*model.StoryboardReview, error) {
+	cleaned := extractJSON(result)
+
+	var review model.StoryboardReview
+	if err := json.Unmarshal([]byte(cleaned), &review); err != nil {
+		return nil, fmt.Errorf("审查报告解析失败: %w; AI原始响应(前300字符): %.300s", err, result)
+	}
+	return &review, nil
+}
+
 // GetShot 根据 ID 获取单个分镜
 func (s *VideoService) GetShot(id uint) (*model.StoryboardShot, error) {
 	return s.storyboardRepo.GetByID(id)
@@ -2958,6 +3058,10 @@ func (s *VideoService) GenerateSingleShot(videoID, shotID uint, provider ...stri
 // maxConcurrentShots 限制同时提交给视频提供商的并发数，防止触发 API 429
 const maxConcurrentShots = 3
 
+// downloadHTTPClient 用于下载生成的图片/视频文件。
+// 设置 5 分钟超时，防止 CDN 接受连接后挂起导致 goroutine 永久阻塞（批量生成卡在 99% 的根本原因）。
+var downloadHTTPClient = &http.Client{Timeout: 5 * time.Minute}
+
 // BatchGenerateShots 批量触发指定分镜生成（同步等待所有完成，支持并发限制）
 // 图片解说模式(Mode=="slideshow")只生成图片，不生成 Ken Burns 短片。
 func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityTierOverride string, progressFn func(int), provider ...string) ([]*model.StoryboardShot, error) {
@@ -3014,14 +3118,24 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 					progressFn(pct)
 				}
 			}()
+			const maxRetries = 3
 			var genErr error
-			if video.Mode == "slideshow" || len(s.videoProviders) == 0 {
-				genErr = s.GenerateSlideshowShotVideo(sh, aspectRatio)
-			} else {
-				genErr = s.GenerateShotVideo(sh, aspectRatio, effectiveProvider)
+			for attempt := 1; attempt <= maxRetries; attempt++ {
+				if video.Mode == "slideshow" || len(s.videoProviders) == 0 {
+					genErr = s.GenerateSlideshowShotVideo(sh, aspectRatio)
+				} else {
+					genErr = s.GenerateShotVideo(sh, aspectRatio, effectiveProvider)
+				}
+				if genErr == nil {
+					break
+				}
+				log.Printf("BatchGenerateShots: shot %d attempt %d/%d failed: %v", sh.ShotNo, attempt, maxRetries, genErr)
+				if attempt < maxRetries {
+					time.Sleep(time.Duration(attempt*2) * time.Second)
+				}
 			}
 			if genErr != nil {
-				log.Printf("BatchGenerateShots: shot %d failed: %v", sh.ShotNo, genErr)
+				log.Printf("BatchGenerateShots: shot %d failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
 			}
 		}(shot)
 	}
@@ -3619,7 +3733,7 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 
 // downloadFile 下载 HTTP URL 到本地路径
 func downloadFile(url, dest string) error {
-	resp, err := http.Get(url) //nolint:gosec
+	resp, err := downloadHTTPClient.Get(url) //nolint:gosec
 	if err != nil {
 		return err
 	}
@@ -3774,7 +3888,7 @@ func inkframeTempDir() string {
 
 // downloadToTemp 将 URL 下载到临时文件，返回本地路径
 func downloadToTemp(url, prefix, ext string) (string, error) {
-	resp, err := http.Get(url) //nolint:noctx
+	resp, err := downloadHTTPClient.Get(url) //nolint:gosec
 	if err != nil {
 		return "", fmt.Errorf("download %s: %w", url, err)
 	}

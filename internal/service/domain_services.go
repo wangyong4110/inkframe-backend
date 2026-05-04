@@ -2076,6 +2076,11 @@ func (s *StoryboardService) GenerateStoryboard(videoID, chapterID uint, characte
 	}, nil
 }
 
+// ReviewStoryboard 调用 AI 对分镜脚本进行专业审查
+func (s *StoryboardService) ReviewStoryboard(videoID uint, provider string) (*model.StoryboardReview, error) {
+	return s.videoService.ReviewStoryboard(videoID, provider)
+}
+
 func (s *StoryboardService) AnalyzeEmotions(content string) (interface{}, error) {
 	prompt := fmt.Sprintf("请分析以下内容的情感曲线：\n%s", content)
 	result, err := s.aiService.Generate(0, "analysis", prompt)

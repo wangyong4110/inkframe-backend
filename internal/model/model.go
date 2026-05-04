@@ -1470,6 +1470,30 @@ type BatchGenerateShotsRequest struct {
 	Provider    string `json:"provider"`     // video provider override (e.g. "kling", "seedance")
 }
 
+// ─── 分镜脚本 AI 审查 ──────────────────────────────────────────────────────────
+
+// ShotReviewFeedback 单个镜头的审查反馈
+type ShotReviewFeedback struct {
+	ShotNo     int      `json:"shot_no"`
+	Issues     []string `json:"issues"`
+	Suggestion string   `json:"suggestion"`
+	Severity   string   `json:"severity"` // info / warning / error
+}
+
+// StoryboardReview AI 分镜脚本审查报告
+type StoryboardReview struct {
+	OverallScore      float64              `json:"overall_score"`      // 综合得分 0-10
+	NarrativeScore    float64              `json:"narrative_score"`    // 叙事连贯性
+	VisualScore       float64              `json:"visual_score"`       // 视觉多样性
+	PacingScore       float64              `json:"pacing_score"`       // 节奏控制
+	NarrationScore    float64              `json:"narration_score"`    // 旁白质量
+	Summary           string               `json:"summary"`            // 综合评价
+	Strengths         []string             `json:"strengths"`          // 亮点
+	Weaknesses        []string             `json:"weaknesses"`         // 主要问题
+	GlobalSuggestions []string             `json:"global_suggestions"` // 整体改进建议
+	ShotFeedback      []ShotReviewFeedback `json:"shot_feedback"`      // 逐镜反馈（仅有问题的镜头）
+}
+
 // ─── 戏剧张力管理模型 ──────────────────────────────────────────────────────────
 
 // HookChain 钩子链（章末悬念/情感/谜题/威胁/承诺）

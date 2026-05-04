@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -286,6 +287,31 @@ func resolveAudioURL(videoID uint, shot *model.StoryboardShot) string {
 		return fmt.Sprintf("/api/v1/videos/%d/storyboard/%d/audio", videoID, shot.ID)
 	}
 	return shot.AudioPath
+}
+
+// ReviewStoryboard 对分镜脚本进行 AI 专业审查
+// POST /api/v1/videos/:id/storyboard/review
+func (h *VideoHandler) ReviewStoryboard(c *gin.Context) {
+	videoId, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid video id")
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoId)); !ok {
+		return
+	}
+
+	var req struct {
+		Provider string `json:"provider"`
+	}
+	_ = c.ShouldBindJSON(&req) // 可选 body
+
+	review, err := h.storyboardService.ReviewStoryboard(uint(videoId), req.Provider)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, review)
 }
 
 // GetStoryboard 获取分镜列表
@@ -796,9 +822,20 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 	go func(taskID string, shot *model.StoryboardShot, narrationVoice string, subtitleEnabled bool) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 
-		if err := h.videoService.GenerateShotAudio(shot, tenantID, narrationVoice); err != nil {
-			log.Printf("[VideoHandler] GenerateShotVoice task %s failed: %v", taskID, err)
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+		const maxRetries = 3
+		var audioErr error
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			audioErr = h.videoService.GenerateShotAudio(shot, tenantID, narrationVoice)
+			if audioErr == nil {
+				break
+			}
+			log.Printf("[VideoHandler] GenerateShotVoice task %s shot %d attempt %d/%d failed: %v", taskID, shot.ShotNo, attempt, maxRetries, audioErr)
+			if attempt < maxRetries {
+				time.Sleep(time.Duration(attempt*2) * time.Second)
+			}
+		}
+		if audioErr != nil {
+			h.taskSvc.Fail(taskID, audioErr.Error()) //nolint:errcheck
 			return
 		}
 

@@ -402,8 +402,9 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			matType = "video"
 		}
 
-		vidFilename := fmt.Sprintf("shot_%03d%s", shot.ShotNo, ext)
+		// 使用 materialID 作为文件名（与剪映自身草稿格式一致），放在草稿根目录而非子目录
 		vidMatID := uuid.New().String()
+		vidFilename := strings.ReplaceAll(vidMatID, "-", "") + ext
 
 		if mediaURL != "" {
 			if data, err := downloadMediaFile(mediaURL); err == nil {
@@ -421,7 +422,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			ID:             vidMatID,
 			ImportTime:     now,
 			MaterialID:     vidMatID,
-			Path:           "media/" + vidFilename,
+			Path:           vidFilename, // 剪映草稿中媒体文件路径相对于草稿根目录
 			SourcePlatform: 0,
 			Type:           matType,
 			Width:          width,
@@ -454,8 +455,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 		// ── 2. 配音音频素材 ───────────────────────────────────────
 		if shot.AudioPath != "" {
-			audioFilename := fmt.Sprintf("shot_%03d_audio.mp3", shot.ShotNo)
 			audMatID := uuid.New().String()
+			audioFilename := strings.ReplaceAll(audMatID, "-", "") + ".mp3" // 默认扩展名，读取成功后更新
 
 			// Bug3修复：用实际音频时长替代 shot.Duration。
 			// CapCut 根据 Material.Duration 和 SourceTimerange.Duration 解析音频播放范围；
@@ -463,7 +464,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			actualAudioDur := durationMicros // fallback：读取失败时用视频段时长
 			if data, err := readLocalOrRemoteFile(shot.AudioPath); err == nil && len(data) > 0 {
 				ext := audioExtension(shot.AudioPath)
-				audioFilename = fmt.Sprintf("shot_%03d_audio%s", shot.ShotNo, ext)
+				audioFilename = strings.ReplaceAll(audMatID, "-", "") + ext // 使用 materialID 作为文件名
 				mediaFiles = append(mediaFiles, mediaFile{filename: audioFilename, data: data})
 				if dur := parseAudioDurationMicros(data, ext); dur > 0 {
 					actualAudioDur = dur
@@ -478,12 +479,15 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			audioMaterials = append(audioMaterials, ccAudioMaterial{
 				CheckFlag:  1,
 				Duration:   actualAudioDur, // 素材真实时长
-				FilePath:   "media/" + audioFilename,
+				FilePath:   audioFilename,  // 相对于草稿根目录的文件名
 				ID:         audMatID,
 				Name:       fmt.Sprintf("shot_%03d_audio", shot.ShotNo),
 				Type:       "extract_music",
 			})
 
+			// Bug修复：TargetTimerange.Duration 必须等于 SourceTimerange.Duration（srcDur）。
+			// 若用 durationMicros（视频段时长）而 srcDur < durationMicros，
+			// 剪映会将音频拉伸以填满时间槽，导致音频变慢、音画严重不同步。
 			audioSegments = append(audioSegments, ccSegment{
 				Clip: ccClip{
 					Alpha: 1.0,
@@ -492,8 +496,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				ID:              uuid.New().String(),
 				MaterialID:      audMatID,
 				Speed:           1.0,
-				SourceTimerange: ccTimeRange{Duration: srcDur, Start: 0},    // 实际音频长度
-				TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros}, // 时间轴位置与视频对齐
+				SourceTimerange: ccTimeRange{Duration: srcDur, Start: 0},
+				TargetTimerange: ccTimeRange{Duration: srcDur, Start: startMicros},
 				Type:            "audio",
 				Visible:         true,
 				Volume:          1.0,
@@ -502,13 +506,13 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 		// ── 3. 音效素材（SFX）────────────────────────────────────
 		if shot.SFXURL != "" {
-			sfxFilename := fmt.Sprintf("shot_%03d_sfx.mp3", shot.ShotNo)
 			sfxMatID := uuid.New().String()
+			sfxFilename := strings.ReplaceAll(sfxMatID, "-", "") + ".mp3" // 默认扩展名
 
 			actualSFXDur := durationMicros
 			if data, err := readLocalOrRemoteFile(shot.SFXURL); err == nil && len(data) > 0 {
 				ext := audioExtension(shot.SFXURL)
-				sfxFilename = fmt.Sprintf("shot_%03d_sfx%s", shot.ShotNo, ext)
+				sfxFilename = strings.ReplaceAll(sfxMatID, "-", "") + ext // 使用 materialID 作为文件名
 				mediaFiles = append(mediaFiles, mediaFile{filename: sfxFilename, data: data})
 				if dur := parseAudioDurationMicros(data, ext); dur > 0 {
 					actualSFXDur = dur
@@ -533,11 +537,13 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			sfxMaterials = append(sfxMaterials, ccAudioMaterial{
 				CheckFlag: 1,
 				Duration:  actualSFXDur,
-				FilePath:  "media/" + sfxFilename,
+				FilePath:  sfxFilename, // 相对于草稿根目录的文件名
 				ID:        sfxMatID,
 				Name:      fmt.Sprintf("shot_%03d_sfx", shot.ShotNo),
 				Type:      "extract_music",
 			})
+			// Bug修复：SFX TargetTimerange.Duration 必须等于 SourceTimerange.Duration（sfxSrcDur），
+			// 否则剪映会拉伸音效填满 durationMicros，导致音效变速、时间线混乱。
 			sfxSegments = append(sfxSegments, ccSegment{
 				Clip: ccClip{
 					Alpha: 1.0,
@@ -547,7 +553,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				MaterialID:      sfxMatID,
 				Speed:           1.0,
 				SourceTimerange: ccTimeRange{Duration: sfxSrcDur, Start: 0},
-				TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
+				TargetTimerange: ccTimeRange{Duration: sfxSrcDur, Start: startMicros},
 				Type:            "audio",
 				Visible:         true,
 				Volume:          sfxVol,
@@ -703,9 +709,24 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	if err := writeZip(prefix+"draft_meta_info.json", metaJSON); err != nil {
 		return nil, fmt.Errorf("write draft_meta_info.json: %w", err)
 	}
+
+	// draft_virtual_store.json — 部分版本的剪映需要此文件（资源索引），缺失时草稿可能无法识别
+	virtualStoreJSON, _ := json.Marshal(map[string]interface{}{"sub_store": map[string]interface{}{}})
+	if err := writeZip(prefix+"draft_virtual_store.json", virtualStoreJSON); err != nil {
+		return nil, fmt.Errorf("write draft_virtual_store.json: %w", err)
+	}
+
+	// 媒体文件放在草稿根目录（与剪映真实草稿格式一致），而非 media/ 子目录
 	for _, mf := range mediaFiles {
-		if err := writeZip(prefix+"media/"+mf.filename, mf.data); err != nil {
+		if err := writeZip(prefix+mf.filename, mf.data); err != nil {
 			return nil, fmt.Errorf("write media file %s: %w", mf.filename, err)
+		}
+	}
+
+	// SRT 字幕文件（通用格式，可在剪映/其他播放器/字幕工具中独立使用）
+	if srtContent := buildSRTSubtitles(shots); srtContent != "" {
+		if err := writeZip(prefix+"subtitle.srt", []byte(srtContent)); err != nil {
+			return nil, fmt.Errorf("write subtitle.srt: %w", err)
 		}
 	}
 
@@ -930,6 +951,48 @@ func buildPhotoMotionKeyframes(segID, cameraType string, durMicros int64, shotNo
 		})
 	}
 	return groups
+}
+
+// buildSRTSubtitles 生成 SRT 格式字幕内容（通用字幕标准，可在剪映/VLC/PotPlayer 等中导入）。
+// 文本优先级：台词 > 旁白 > 画面描述；无文本的镜头跳过编号。
+func buildSRTSubtitles(shots []*model.StoryboardShot) string {
+	var sb strings.Builder
+	var cursor int64 // 当前时间指针（微秒）
+	idx := 1
+	for _, shot := range shots {
+		dur := int64(shot.Duration * 1_000_000)
+		if dur <= 0 {
+			dur = 5_000_000
+		}
+		end := cursor + dur
+
+		text := shot.Dialogue
+		if text == "" {
+			text = shot.Narration
+		}
+		if text == "" {
+			text = shot.Description
+		}
+		if text != "" {
+			fmt.Fprintf(&sb, "%d\n%s --> %s\n%s\n\n",
+				idx, microsToSRTTime(cursor), microsToSRTTime(end), text)
+			idx++
+		}
+		cursor = end
+	}
+	return sb.String()
+}
+
+// microsToSRTTime 将微秒转为 SRT 时间格式 HH:MM:SS,mmm
+func microsToSRTTime(micros int64) string {
+	ms := micros / 1000
+	hh := ms / 3_600_000
+	ms %= 3_600_000
+	mm := ms / 60_000
+	ms %= 60_000
+	ss := ms / 1000
+	ms %= 1000
+	return fmt.Sprintf("%02d:%02d:%02d,%03d", hh, mm, ss, ms)
 }
 
 // sanitizeFilename 清理文件名非法字符，限制长度为50

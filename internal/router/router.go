@@ -312,6 +312,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.PUT("/:id/storyboard/:shot_id", cfg.VideoHandler.UpdateStoryboardShot)
 			videos.POST("/:id/storyboard/generate", cfg.VideoHandler.GenerateStoryboard)
 			videos.GET("/:id/storyboard/generate/:task_id", cfg.VideoHandler.GetStoryboardGenStatus)
+			videos.POST("/:id/storyboard/review", cfg.VideoHandler.ReviewStoryboard)
 			videos.POST("/:id/generate", cfg.VideoHandler.StartVideoGeneration)
 			videos.GET("/:id/status", cfg.VideoHandler.GetVideoStatus)
 			videos.GET("/:id/shots", cfg.VideoHandler.ListShots)
