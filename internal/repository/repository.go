@@ -939,6 +939,11 @@ func (r *StoryboardRepository) Update(shot *model.StoryboardShot) error {
 	return r.db.Save(shot).Error
 }
 
+// UpdateFields 按 map 部分更新分镜字段（空字符串也会写入，支持清空字段）
+func (r *StoryboardRepository) UpdateFields(id uint, fields map[string]interface{}) error {
+	return r.db.Model(&model.StoryboardShot{}).Where("id = ?", id).Updates(fields).Error
+}
+
 // UpdateSFX 更新单个分镜的音效字段（URL、标签、混音音量）
 func (r *StoryboardRepository) UpdateSFX(shotID uint, sfxURL, sfxTags string, sfxVolume float64) error {
 	return r.db.Model(&model.StoryboardShot{}).Where("id = ?", shotID).Updates(map[string]interface{}{

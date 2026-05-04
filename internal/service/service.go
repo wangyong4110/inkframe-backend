@@ -2976,7 +2976,7 @@ func (s *VideoService) ReviewStoryboard(videoID uint, provider string) (*model.S
 
 	prompt := buildStoryboardReviewPrompt(shots)
 
-	result, err := s.aiService.Generate(0, provider, prompt)
+	result, err := s.aiService.GenerateWithProvider(0, 0, "storyboard_review", prompt, provider)
 	if err != nil {
 		return nil, fmt.Errorf("AI审查失败: %w", err)
 	}
@@ -3094,6 +3094,30 @@ func (s *VideoService) UpdateShot(id uint, req *model.StoryboardShot) (*model.St
 		shot.GenerationMode = req.GenerationMode
 	}
 	return shot, s.storyboardRepo.Update(shot)
+}
+
+// UpdateShotPartial 按字段 map 部分更新分镜，仅更新请求中明确提供的字段。
+// 允许的字段：description, narration, dialogue, subtitle, camera_type, camera_angle,
+// shot_size, duration, emotional_tone, transition, status, generation_mode.
+func (s *VideoService) UpdateShotPartial(id uint, fields map[string]interface{}) (*model.StoryboardShot, error) {
+	allowed := map[string]bool{
+		"description": true, "narration": true, "dialogue": true, "subtitle": true,
+		"camera_type": true, "camera_angle": true, "shot_size": true, "duration": true,
+		"emotional_tone": true, "transition": true, "status": true, "generation_mode": true,
+	}
+	safe := make(map[string]interface{}, len(fields))
+	for k, v := range fields {
+		if allowed[k] {
+			safe[k] = v
+		}
+	}
+	if len(safe) == 0 {
+		return s.storyboardRepo.GetByID(id)
+	}
+	if err := s.storyboardRepo.UpdateFields(id, safe); err != nil {
+		return nil, err
+	}
+	return s.storyboardRepo.GetByID(id)
 }
 
 // SetShotCharacters 手动设置分镜的角色绑定

@@ -380,7 +380,7 @@ func (h *VideoHandler) ServeAudio(c *gin.Context) {
 	c.Redirect(http.StatusFound, shot.AudioPath)
 }
 
-// UpdateStoryboardShot 更新分镜
+// UpdateStoryboardShot 更新分镜（支持部分字段更新）
 // PUT /api/v1/videos/:id/storyboard/:shot_id
 func (h *VideoHandler) UpdateStoryboardShot(c *gin.Context) {
 	shotId, err := strconv.ParseUint(c.Param("shot_id"), 10, 32)
@@ -389,13 +389,13 @@ func (h *VideoHandler) UpdateStoryboardShot(c *gin.Context) {
 		return
 	}
 
-	var req model.StoryboardShot
-	if err := c.ShouldBindJSON(&req); err != nil {
+	var fields map[string]interface{}
+	if err := c.ShouldBindJSON(&fields); err != nil {
 		respondBadRequest(c, err.Error())
 		return
 	}
 
-	shot, err := h.videoService.UpdateShot(uint(shotId), &req)
+	shot, err := h.videoService.UpdateShotPartial(uint(shotId), fields)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
