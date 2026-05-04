@@ -71,6 +71,7 @@ func (h *NovelHandler) CreateNovel(c *gin.Context) {
 
 	novel, err := h.novelService.CreateNovel(&req)
 	if err != nil {
+		log.Printf("[NovelHandler] CreateNovel: tenantID=%d err=%v", tenantID, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -114,6 +115,7 @@ func (h *NovelHandler) ListNovels(c *gin.Context) {
 
 	novels, total, err := h.novelService.ListNovelsFiltered(p.Page, p.PageSize, filters)
 	if err != nil {
+		log.Printf("[NovelHandler] ListNovels: err=%v", err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -144,6 +146,7 @@ func (h *NovelHandler) UpdateNovel(c *gin.Context) {
 
 	novel, err := h.novelService.UpdateNovel(uint(id), &req)
 	if err != nil {
+		log.Printf("[NovelHandler] UpdateNovel: novelID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -161,6 +164,7 @@ func (h *NovelHandler) DeleteNovel(c *gin.Context) {
 	}
 
 	if err := h.novelService.DeleteNovel(uint(id)); err != nil {
+		log.Printf("[NovelHandler] DeleteNovel: novelID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -280,6 +284,7 @@ func (h *NovelHandler) GenerateOutline(c *gin.Context) {
 		Keywords:   req.Keywords,
 	})
 	if err != nil {
+		log.Printf("[NovelHandler] GenerateOutline: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -300,6 +305,7 @@ func (h *NovelHandler) GetForeshadows(c *gin.Context) {
 
 	foreshadows, err := h.foreshadowService.GetForeshadows(uint(novelId), chapterNo)
 	if err != nil {
+		log.Printf("[NovelHandler] GetForeshadows: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -322,6 +328,7 @@ func (h *NovelHandler) MarkForeshadowFulfilled(c *gin.Context) {
 	}
 
 	if err := h.foreshadowService.MarkFulfilledByID(uint(novelId), uint(foreshadowId), req.ChapterID); err != nil {
+		log.Printf("[NovelHandler] MarkForeshadowFulfilled: novelID=%d foreshadowID=%d err=%v", novelId, foreshadowId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -343,6 +350,7 @@ func (h *NovelHandler) GetTimeline(c *gin.Context) {
 
 	timeline, err := h.timelineService.GetTimeline(uint(novelId))
 	if err != nil {
+		log.Printf("[NovelHandler] GetTimeline: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -361,6 +369,7 @@ func (h *NovelHandler) BuildTimeline(c *gin.Context) {
 
 	timeline, err := h.timelineService.BuildTimeline(uint(novelId))
 	if err != nil {
+		log.Printf("[NovelHandler] BuildTimeline: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -400,6 +409,7 @@ func (h *NovelHandler) SyncCharacterSnapshots(c *gin.Context) {
 	if err := h.novelService.SyncCharacterSnapshots(
 		getTenantID(c), chapter, req.CharacterIDs, req.ReusePrevious,
 	); err != nil {
+		log.Printf("[NovelHandler] SyncCharacterSnapshots: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}

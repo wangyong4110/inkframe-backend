@@ -31,6 +31,11 @@ import (
 )
 
 func main() {
+	// 统一所有标准库 log 输出到 stdout，与 gin 的 DefaultWriter 一致，
+	// 避免 stdout/stderr 分流导致终端或 reflex 热重载时看不到日志。
+	log.SetOutput(os.Stdout)
+	log.SetFlags(log.LstdFlags)
+
 	// 1. 加载配置
 	cfg, err := config.Load("config.yaml")
 	if err != nil {

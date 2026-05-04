@@ -145,8 +145,12 @@ func (p *DoubaoProvider) Generate(ctx context.Context, req *GenerateRequest) (*G
 		return &GenerateResponse{Error: "no choices returned", FinishTime: time.Since(start).Milliseconds()}, nil
 	}
 
+	content := result.Choices[0].Message.Content
+	if content == "" {
+		content = result.Choices[0].Message.ReasoningContent
+	}
 	return &GenerateResponse{
-		Content:     result.Choices[0].Message.Content,
+		Content:     content,
 		Model:       result.Model,
 		InputTokens: result.Usage.PromptTokens,
 		Tokens:      result.Usage.TotalTokens,

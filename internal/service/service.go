@@ -2194,6 +2194,11 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 				results[idx] = segResult{err: aiErr}
 				return
 			}
+			if strings.TrimSpace(result) == "" {
+				log.Printf("[Storyboard] seg %d/%d fatal: AI returned empty response after all retries", idx+1, len(segments))
+				results[idx] = segResult{err: fmt.Errorf("AI返回空响应，请检查模型配置或更换提供商")}
+				return
+			}
 			shots, parseErr := s.parseStoryboardResult(videoID, chapterID, result)
 			if parseErr != nil {
 				log.Printf("[Storyboard] seg %d/%d parse failed: %v", idx+1, len(segments), parseErr)
@@ -2974,9 +2979,15 @@ func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string)
 		return nil, fmt.Errorf("该视频暂无分镜，请先生成分镜脚本")
 	}
 
+	// 取 Video.NovelID 以便 GenerateWithProvider 能通过小说级 AI 模型配置选择 provider
+	var novelID uint
+	if video, err := s.videoRepo.GetByID(videoID); err == nil {
+		novelID = video.NovelID
+	}
+
 	prompt := buildStoryboardReviewPrompt(shots)
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, 0, "storyboard_review", prompt, provider)
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "storyboard_review", prompt, provider)
 	if err != nil {
 		return nil, fmt.Errorf("AI审查失败: %w", err)
 	}

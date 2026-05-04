@@ -49,6 +49,7 @@ func (h *ChapterHandler) CreateChapter(c *gin.Context) {
 
 	chapter, err := h.chapterService.CreateChapter(uint(novelId), &req)
 	if err != nil {
+		log.Printf("[ChapterHandler] CreateChapter: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -85,6 +86,7 @@ func (h *ChapterHandler) ListChapters(c *gin.Context) {
 
 	chapters, err := h.chapterService.ListChapters(uint(novelId))
 	if err != nil {
+		log.Printf("[ChapterHandler] ListChapters: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -109,6 +111,7 @@ func (h *ChapterHandler) UpdateChapter(c *gin.Context) {
 
 	chapter, err := h.chapterService.UpdateChapter(uint(id), &req)
 	if err != nil {
+		log.Printf("[ChapterHandler] UpdateChapter: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -126,6 +129,7 @@ func (h *ChapterHandler) DeleteChapter(c *gin.Context) {
 	}
 
 	if err := h.chapterService.DeleteChapter(uint(id)); err != nil {
+		log.Printf("[ChapterHandler] DeleteChapter: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -186,6 +190,7 @@ func (h *ChapterHandler) RegenerateChapter(c *gin.Context) {
 
 	chapter, err := h.chapterService.RegenerateChapter(getTenantID(c), uint(id), req.Prompt)
 	if err != nil {
+		log.Printf("[ChapterHandler] RegenerateChapter: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -204,6 +209,7 @@ func (h *ChapterHandler) GetVersions(c *gin.Context) {
 
 	versions, err := h.versionService.GetVersions(uint(id))
 	if err != nil {
+		log.Printf("[ChapterHandler] GetVersions: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -227,6 +233,7 @@ func (h *ChapterHandler) RestoreVersion(c *gin.Context) {
 
 	chapter, err := h.versionService.RestoreVersion(uint(id), versionNo)
 	if err != nil {
+		log.Printf("[ChapterHandler] RestoreVersion: chapterID=%d versionNo=%d err=%v", id, versionNo, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -279,6 +286,7 @@ func (h *ChapterHandler) UpdateChapterByNo(c *gin.Context) {
 
 	chapter, err := h.chapterService.UpdateChapterByNo(uint(novelId), chapterNo, &req)
 	if err != nil {
+		log.Printf("[ChapterHandler] UpdateChapterByNo: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -301,6 +309,7 @@ func (h *ChapterHandler) DeleteChapterByNo(c *gin.Context) {
 	}
 
 	if err := h.chapterService.DeleteChapterByNo(uint(novelId), chapterNo); err != nil {
+		log.Printf("[ChapterHandler] DeleteChapterByNo: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -331,6 +340,7 @@ func (h *ChapterHandler) GenerateChapterOutline(c *gin.Context) {
 
 	chapter, err := h.chapterService.GenerateChapterOutline(getTenantID(c), uint(novelID), chapterNo, req.Prompt)
 	if err != nil {
+		log.Printf("[ChapterHandler] GenerateChapterOutline: novelID=%d chapterNo=%d err=%v", novelID, chapterNo, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -348,6 +358,7 @@ func (h *ChapterHandler) GetQualityReport(c *gin.Context) {
 
 	report, err := h.qualityService.CheckChapter(uint(id))
 	if err != nil {
+		log.Printf("[ChapterHandler] GetQualityReport: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -366,6 +377,7 @@ func (h *ChapterHandler) QualityCheck(c *gin.Context) {
 
 	report, err := h.qualityService.CheckChapter(uint(id))
 	if err != nil {
+		log.Printf("[ChapterHandler] QualityCheck: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -396,6 +408,7 @@ func (h *ChapterHandler) RefineChapter(c *gin.Context) {
 
 	content, err := h.qualityService.RefineWithSuggestions(uint(id), req.Suggestions)
 	if err != nil {
+		log.Printf("[ChapterHandler] RefineChapter: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -418,6 +431,7 @@ func (h *ChapterHandler) ApproveChapter(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req) // comment is optional; ignore bind errors
 
 	if err := h.chapterService.ApproveChapter(uint(id), req.Comment); err != nil {
+		log.Printf("[ChapterHandler] ApproveChapter: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -446,6 +460,7 @@ func (h *ChapterHandler) RejectChapter(c *gin.Context) {
 	}
 
 	if err := h.chapterService.RejectChapter(uint(id), req.Reason); err != nil {
+		log.Printf("[ChapterHandler] RejectChapter: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}

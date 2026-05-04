@@ -131,13 +131,17 @@ func (p *OpenAIProvider) Generate(ctx context.Context, req *GenerateRequest) (*G
 		}, nil
 	}
 
+	content := openaiResp.Choices[0].Message.Content
+	if content == "" {
+		content = openaiResp.Choices[0].Message.ReasoningContent
+	}
 	return &GenerateResponse{
-		Content:    openaiResp.Choices[0].Message.Content,
-		Model:      openaiResp.Model,
-		Tokens:       0,
+		Content:     content,
+		Model:       openaiResp.Model,
+		Tokens:      0,
 		InputTokens: openaiResp.Usage.PromptTokens,
-		StopReason: openaiResp.Choices[0].FinishReason,
-		FinishTime: time.Since(start).Milliseconds(),
+		StopReason:  openaiResp.Choices[0].FinishReason,
+		FinishTime:  time.Since(start).Milliseconds(),
 	}, nil
 }
 
@@ -454,10 +458,11 @@ type OpenAIChatResponse struct {
 	Created int64  `json:"created"`
 	Model   string `json:"model"`
 	Choices []struct {
-		Index        int    `json:"index"`
-		Message      struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+		Index   int `json:"index"`
+		Message struct {
+			Role             string `json:"role"`
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"` // DeepSeek-R1 / 豆包思考模型
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`

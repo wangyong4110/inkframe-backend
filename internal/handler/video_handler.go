@@ -83,6 +83,7 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 
 	video, err := h.videoService.CreateVideo(uint(novelId), &req)
 	if err != nil {
+		log.Printf("[VideoHandler] CreateVideo: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -141,6 +142,7 @@ func (h *VideoHandler) ListVideos(c *gin.Context) {
 
 	videos, total, err := h.videoService.ListVideos(novelId, chapterID, status, p.Page, p.PageSize)
 	if err != nil {
+		log.Printf("[VideoHandler] ListVideos: err=%v", err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -171,6 +173,7 @@ func (h *VideoHandler) UpdateVideo(c *gin.Context) {
 
 	video, err := h.videoService.UpdateVideo(uint(id), &req)
 	if err != nil {
+		log.Printf("[VideoHandler] UpdateVideo: id=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -188,6 +191,7 @@ func (h *VideoHandler) DeleteVideo(c *gin.Context) {
 	}
 
 	if err := h.videoService.DeleteVideo(uint(id)); err != nil {
+		log.Printf("[VideoHandler] DeleteVideo: id=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -314,6 +318,7 @@ func (h *VideoHandler) ReviewStoryboard(c *gin.Context) {
 
 	review, err := h.storyboardService.ReviewStoryboard(getTenantID(c), uint(videoId), req.Provider)
 	if err != nil {
+		log.Printf("[VideoHandler] ReviewStoryboard: videoID=%d provider=%q err=%v", videoId, req.Provider, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -331,6 +336,7 @@ func (h *VideoHandler) GetStoryboard(c *gin.Context) {
 
 	shots, err := h.videoService.GetStoryboard(uint(videoId))
 	if err != nil {
+		log.Printf("[VideoHandler] GetStoryboard: videoID=%d err=%v", videoId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -397,6 +403,7 @@ func (h *VideoHandler) UpdateStoryboardShot(c *gin.Context) {
 
 	shot, err := h.videoService.UpdateShotPartial(uint(shotId), fields)
 	if err != nil {
+		log.Printf("[VideoHandler] UpdateStoryboardShot: shotID=%d err=%v", shotId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -420,6 +427,7 @@ func (h *VideoHandler) SetShotCharacters(c *gin.Context) {
 		return
 	}
 	if err := h.videoService.SetShotCharacters(uint(shotID), body.CharacterIDs); err != nil {
+		log.Printf("[VideoHandler] SetShotCharacters: shotID=%d err=%v", shotID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to set shot characters")
 		return
 	}
@@ -439,6 +447,7 @@ func (h *VideoHandler) AnalyzeEmotions(c *gin.Context) {
 
 	result, err := h.storyboardService.AnalyzeEmotions(req.Content)
 	if err != nil {
+		log.Printf("[VideoHandler] AnalyzeEmotions: err=%v", err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -501,6 +510,7 @@ func (h *VideoHandler) StartVideoGeneration(c *gin.Context) {
 
 	taskId, err := h.videoService.StartGeneration(uint(id))
 	if err != nil {
+		log.Printf("[VideoHandler] StartVideoGeneration: videoID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -526,6 +536,7 @@ func (h *VideoHandler) GetVideoStatus(c *gin.Context) {
 
 	status, err := h.videoService.GetStatus(uint(id))
 	if err != nil {
+		log.Printf("[VideoHandler] GetVideoStatus: videoID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -548,6 +559,7 @@ func (h *VideoHandler) GenerateShotVideos(c *gin.Context) {
 	}
 
 	if err := h.videoService.GenerateAllShotVideos(uint(id)); err != nil {
+		log.Printf("[VideoHandler] GenerateShotVideos: videoID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -574,6 +586,7 @@ func (h *VideoHandler) ListShots(c *gin.Context) {
 
 	shots, err := h.videoService.GetStoryboard(uint(id))
 	if err != nil {
+		log.Printf("[VideoHandler] ListShots: videoID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -592,6 +605,7 @@ func (h *VideoHandler) StitchVideoHandler(c *gin.Context) {
 
 	outputPath, err := h.videoService.StitchVideo(uint(id))
 	if err != nil {
+		log.Printf("[VideoHandler] StitchVideo: videoID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -926,6 +940,7 @@ func (h *VideoHandler) CalculateConsistencyScore(c *gin.Context) {
 
 	score, err := h.consistencyService.CalculateConsistencyScore(req.ReferenceImage, req.GeneratedImages)
 	if err != nil {
+		log.Printf("[VideoHandler] CalculateConsistencyScore: err=%v", err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -984,6 +999,7 @@ func (h *VideoHandler) Export(c *gin.Context) {
 
 	shots, err := h.videoService.GetStoryboard(uint(id))
 	if err != nil {
+		log.Printf("[VideoHandler] Export: videoID=%d get storyboard err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -1010,10 +1026,12 @@ func (h *VideoHandler) Export(c *gin.Context) {
 	}
 
 	if err != nil {
+		log.Printf("[VideoHandler] Export: videoID=%d format=%s err=%v", id, format, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	log.Printf("[VideoHandler] Export: videoID=%d format=%s filename=%s size=%d", id, format, result.Filename, len(result.Data))
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, result.Filename))
 	c.Header("Content-Length", strconv.Itoa(len(result.Data)))
 	c.Data(http.StatusOK, result.ContentType, result.Data)
