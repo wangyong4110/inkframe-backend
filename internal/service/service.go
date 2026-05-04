@@ -170,9 +170,15 @@ func (s *NovelService) UpdateNovel(id uint, req *model.UpdateNovelRequest) (*mod
 	if req.AIModel != "" {
 		novel.AIModel = req.AIModel
 	}
-	novel.ImageModel = req.ImageModel
-	novel.VideoModel = req.VideoModel
-	novel.TTSModel = req.TTSModel
+	if req.ImageModel != "" {
+		novel.ImageModel = req.ImageModel
+	}
+	if req.VideoModel != "" {
+		novel.VideoModel = req.VideoModel
+	}
+	if req.TTSModel != "" {
+		novel.TTSModel = req.TTSModel
+	}
 	if req.Temperature != nil {
 		novel.Temperature = *req.Temperature
 	}
@@ -215,8 +221,7 @@ func (s *NovelService) UpdateNovel(id uint, req *model.UpdateNovelRequest) (*mod
 	if req.AssetExportPath != "" {
 		novel.AssetExportPath = req.AssetExportPath
 	}
-	// NarrationVoice can be cleared (empty string = reset to default)
-	if req.NarrationVoice != novel.NarrationVoice {
+	if req.NarrationVoice != "" {
 		novel.NarrationVoice = req.NarrationVoice
 	}
 	// 字幕配置（可清空）
@@ -2044,6 +2049,25 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		tenantID = novel.TenantID
 	}
 
+	// 预取所有段落共用的静态数据，避免 N×3 次重复 DB 查询
+	var characters []*model.Character
+	if video.NovelID > 0 {
+		characters, _ = s.characterRepo.ListByNovel(video.NovelID)
+	}
+	var anchors []*model.SceneAnchor
+	if s.sceneAnchorSvc != nil && video.NovelID > 0 {
+		anchors, _ = s.sceneAnchorSvc.ListByNovel(video.NovelID)
+	}
+	var plotPoints []*model.PlotPoint
+	if s.plotPointRepo != nil {
+		if chapterID != nil {
+			plotPoints, _ = s.plotPointRepo.ListByChapter(*chapterID)
+		}
+		if len(plotPoints) == 0 && video.NovelID > 0 {
+			plotPoints, _ = s.plotPointRepo.ListByNovel(video.NovelID, "", true)
+		}
+	}
+
 	// 分段生成：长章节按 2000 字切割，每段独立调用 AI，合并后顺序重编号。
 	// 短章节（≤2000 字）等同于原单段调用路径，行为完全一致。
 	const segmentMaxRunes = 2000
@@ -2052,57 +2076,74 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	totalRunes := len([]rune(content))
 	totalShots := calcTotalShots(totalRunes, video.TargetDuration, video.Pacing)
 
-	var allShots []*model.StoryboardShot
-	shotCounter := 0
-
+	// 并发处理各段落：各段独立发起 AI 调用，最终按顺序合并。
+	type segResult struct {
+		shots []*model.StoryboardShot
+		err   error
+	}
+	results := make([]segResult, len(segments))
+	var wg sync.WaitGroup
 	for segIdx, seg := range segments {
-		segRunes := len([]rune(seg))
-		segShotCount := totalShots * segRunes / max(totalRunes, 1)
-		if segShotCount < 3 {
-			segShotCount = 3
-		}
-		prompt := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, len(segments), segShotCount)
-		var result string
-		var aiErr error
-		// 最多重试 2 次：空响应或 JSON 解析失败时重试
-		for attempt := 0; attempt < 3; attempt++ {
-			p := prompt
-			if attempt > 0 {
-				p = prompt + "\n\n⚠️ 重要提示：请只返回纯 JSON 数组，不要包含任何 markdown 代码块（```）或说明文字。"
-				log.Printf("GenerateStoryboard: segment %d/%d retry attempt %d", segIdx+1, len(segments), attempt)
+		wg.Add(1)
+		go func(idx int, seg string) {
+			defer wg.Done()
+			segRunes := len([]rune(seg))
+			segShotCount := totalShots * segRunes / max(totalRunes, 1)
+			if segShotCount < 3 {
+				segShotCount = 3
 			}
-			result, aiErr = s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", p, provider)
-			if aiErr == nil && strings.TrimSpace(result) != "" {
-				break
+			prompt := s.buildStoryboardPrompt(video, seg, userPrompt, idx+1, len(segments), segShotCount, characters, anchors, plotPoints)
+			var result string
+			var aiErr error
+			// 最多重试 2 次：空响应或 JSON 解析失败时重试
+			for attempt := 0; attempt < 3; attempt++ {
+				p := prompt
+				if attempt > 0 {
+					p = prompt + "\n\n⚠️ 重要提示：请只返回纯 JSON 数组，不要包含任何 markdown 代码块（```）或说明文字。"
+					log.Printf("GenerateStoryboard: segment %d/%d retry attempt %d", idx+1, len(segments), attempt)
+				}
+				result, aiErr = s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", p, provider)
+				if aiErr == nil && strings.TrimSpace(result) != "" {
+					break
+				}
+				if aiErr != nil {
+					log.Printf("GenerateStoryboard: segment %d/%d attempt %d AI error: %v", idx+1, len(segments), attempt, aiErr)
+				}
 			}
 			if aiErr != nil {
-				log.Printf("GenerateStoryboard: segment %d/%d attempt %d AI error: %v", segIdx+1, len(segments), attempt, aiErr)
+				results[idx] = segResult{err: aiErr}
+				return
 			}
-		}
-		if aiErr != nil {
-			if segIdx == 0 {
-				return nil, aiErr
+			segShots, parseErr := s.parseStoryboardResult(videoID, chapterID, result)
+			if parseErr != nil {
+				results[idx] = segResult{err: fmt.Errorf("解析AI分镜结果失败: %w", parseErr)}
+				return
 			}
-			log.Printf("GenerateStoryboard: segment %d/%d AI call failed (non-fatal): %v", segIdx+1, len(segments), aiErr)
-			continue
-		}
-		segShots, parseErr := s.parseStoryboardResult(videoID, chapterID, result)
-		if parseErr != nil {
-			if segIdx == 0 {
-				return nil, fmt.Errorf("解析AI分镜结果失败: %w", parseErr)
+			results[idx] = segResult{shots: segShots}
+		}(segIdx, seg)
+	}
+	wg.Wait()
+
+	// 按段落顺序合并结果
+	var allShots []*model.StoryboardShot
+	shotCounter := 0
+	for idx, res := range results {
+		if res.err != nil {
+			if idx == 0 {
+				return nil, res.err
 			}
-			log.Printf("GenerateStoryboard: segment %d/%d parse failed (non-fatal): %v", segIdx+1, len(segments), parseErr)
+			log.Printf("GenerateStoryboard: segment %d/%d failed (non-fatal): %v", idx+1, len(segments), res.err)
 			continue
 		}
 		// 全局顺序重编号，保证跨段 shot_no 连续且唯一
-		for _, shot := range segShots {
+		for _, shot := range res.shots {
 			shotCounter++
 			shot.ShotNo = shotCounter
 		}
-		allShots = append(allShots, segShots...)
+		allShots = append(allShots, res.shots...)
 		// 进度回调：每段完成后按比例上报（最多到 90%，Complete 时才到 100%）
 		if progressFn != nil {
-			pct := (segIdx + 1) * 90 / len(segments)
+			pct := (idx + 1) * 90 / len(segments)
 			progressFn(pct)
 		}
 	}
@@ -2113,21 +2154,18 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	shots := allShots
 
 	// 场景锚点自动匹配：按 shot.Location 名称匹配已注册的场景锚点
-	// 避免 SceneAnchorID 永远为 nil，使锚点注入逻辑真正生效
 	if s.sceneAnchorSvc != nil {
-		s.autoMatchShotAnchors(shots, video.NovelID)
+		s.autoMatchShotAnchors(shots, anchors)
 	}
 	// 角色自动关联：按 shot.Characters JSON 中的名称匹配小说角色
-	s.autoMatchShotCharacters(shots, video.NovelID)
+	s.autoMatchShotCharacters(shots, characters)
 
-	// 删除旧分镜，再插入新分镜（避免 uk_video_shot 唯一键冲突）
+	// 删除旧分镜，再批量插入新分镜（单次 SQL，避免 N 次往返）
 	if err := s.storyboardRepo.DeleteByVideoID(videoID); err != nil {
 		return nil, err
 	}
-	for _, shot := range shots {
-		if err := s.storyboardRepo.Create(shot); err != nil {
-			log.Printf("GenerateStoryboard: save shot %d failed: %v", shot.ShotNo, err)
-		}
+	if err := s.storyboardRepo.BatchCreate(shots); err != nil {
+		return nil, fmt.Errorf("保存分镜失败: %w", err)
 	}
 
 	// 更新视频状态
@@ -2140,9 +2178,9 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 
 // autoMatchShotAnchors 按场景名称自动将分镜绑定到场景锚点（模糊匹配 scene.location）
 // 这样无需前端手动调用 SetShotAnchor，锚点注入即可在视频生成时自动生效。
-func (s *VideoService) autoMatchShotAnchors(shots []*model.StoryboardShot, novelID uint) {
-	anchors, err := s.sceneAnchorSvc.ListByNovel(novelID)
-	if err != nil || len(anchors) == 0 {
+// anchors 为调用方预取的数据（避免重复查 DB）。
+func (s *VideoService) autoMatchShotAnchors(shots []*model.StoryboardShot, anchors []*model.SceneAnchor) {
+	if len(anchors) == 0 {
 		return
 	}
 	// 构建名称→ID映射（小写，方便模糊匹配）
@@ -2182,9 +2220,9 @@ func (s *VideoService) autoMatchShotAnchors(shots []*model.StoryboardShot, novel
 
 // autoMatchShotCharacters 按 shot.Characters JSON 中的名称匹配小说角色，写入 CharacterIDs
 // 已有 CharacterIDs 时不覆盖（保留手动绑定结果）。
-func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, novelID uint) {
-	chars, err := s.characterRepo.ListByNovel(novelID)
-	if err != nil || len(chars) == 0 {
+// chars 为调用方预取的数据（避免重复查 DB）。
+func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, chars []*model.Character) {
+	if len(chars) == 0 {
 		return
 	}
 	// 构建 小写名→ID map
@@ -2340,7 +2378,12 @@ func extractLocationFromScene(sceneJSON string) string {
 // buildStoryboardPrompt 构建分镜提示词（含截断保护、角色信息、段落上下文）
 // segNo/totalSegs 为分段编号（从 1 开始），单段调用时传 1, 1。
 // expectedShots 为本段期望分镜数，由调用方通过 calcTotalShots 计算后传入。
-func (s *VideoService) buildStoryboardPrompt(video *model.Video, content, userPrompt string, segNo, totalSegs, expectedShots int) string {
+// characters/anchors/plotPoints 为调用方预取的数据（避免每段重复查 DB）。
+func (s *VideoService) buildStoryboardPrompt(
+	video *model.Video, content, userPrompt string,
+	segNo, totalSegs, expectedShots int,
+	characters []*model.Character, anchors []*model.SceneAnchor, plotPoints []*model.PlotPoint,
+) string {
 	var sb strings.Builder
 
 	segLabel := ""
@@ -2350,51 +2393,39 @@ func (s *VideoService) buildStoryboardPrompt(video *model.Video, content, userPr
 	sb.WriteString(fmt.Sprintf("你是一名专业分镜师。请根据以下内容%s生成分镜脚本，以JSON数组格式返回。\n\n", segLabel))
 
 	// 注入角色视觉信息（portrait/外貌）
-	if video.NovelID > 0 {
-		characters, _ := s.characterRepo.ListByNovel(video.NovelID)
-		if len(characters) > 0 {
-			sb.WriteString("【角色信息】\n")
-			for _, c := range characters {
-				sb.WriteString(fmt.Sprintf("- %s（%s）", c.Name, c.Role))
-				if c.Appearance != "" {
-					sb.WriteString(fmt.Sprintf("：%s", c.Appearance))
-				}
-				// Portrait URL 为图片地址，纯文本 LLM 无法访问，不注入 prompt
-				sb.WriteString("\n")
+	if len(characters) > 0 {
+		sb.WriteString("【角色信息】\n")
+		for _, c := range characters {
+			sb.WriteString(fmt.Sprintf("- %s（%s）", c.Name, c.Role))
+			if c.Appearance != "" {
+				sb.WriteString(fmt.Sprintf("：%s", c.Appearance))
 			}
+			// Portrait URL 为图片地址，纯文本 LLM 无法访问，不注入 prompt
 			sb.WriteString("\n")
 		}
+		sb.WriteString("\n")
 	}
 
 	// 注入已命名场景，帮助 LLM 输出可匹配的 location
-	if s.sceneAnchorSvc != nil && video.NovelID > 0 {
-		anchors, _ := s.sceneAnchorSvc.ListByNovel(video.NovelID)
-		if len(anchors) > 0 {
-			sb.WriteString("【已命名场景（location字段请从以下名称中选择）】\n")
-			for _, a := range anchors {
-				sb.WriteString(fmt.Sprintf("- %s: %s\n", a.Name, a.Description))
-			}
-			sb.WriteString("\n")
+	if len(anchors) > 0 {
+		sb.WriteString("【已命名场景（location字段请从以下名称中选择）】\n")
+		for _, a := range anchors {
+			sb.WriteString(fmt.Sprintf("- %s: %s\n", a.Name, a.Description))
 		}
+		sb.WriteString("\n")
 	}
 
 	// 注入未解决剧情点（提示分镜叙事张力）
-	if s.plotPointRepo != nil && video.ChapterID != nil {
-		pps, _ := s.plotPointRepo.ListByChapter(*video.ChapterID)
-		if len(pps) == 0 && video.NovelID > 0 {
-			pps, _ = s.plotPointRepo.ListByNovel(video.NovelID, "", true)
+	if len(plotPoints) > 0 {
+		sb.WriteString("【本章剧情线（分镜需体现叙事张力）】\n")
+		maxPP := 5
+		if len(plotPoints) < maxPP {
+			maxPP = len(plotPoints)
 		}
-		if len(pps) > 0 {
-			sb.WriteString("【本章剧情线（分镜需体现叙事张力）】\n")
-			max := 5
-			if len(pps) < max {
-				max = len(pps)
-			}
-			for i := 0; i < max; i++ {
-				sb.WriteString(fmt.Sprintf("- [%s] %s\n", pps[i].Type, pps[i].Description))
-			}
-			sb.WriteString("\n")
+		for i := 0; i < maxPP; i++ {
+			sb.WriteString(fmt.Sprintf("- [%s] %s\n", plotPoints[i].Type, plotPoints[i].Description))
 		}
+		sb.WriteString("\n")
 	}
 
 	if content != "" {

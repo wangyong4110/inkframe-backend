@@ -899,6 +899,14 @@ func (r *StoryboardRepository) Create(shot *model.StoryboardShot) error {
 	return r.db.Create(shot).Error
 }
 
+// BatchCreate 批量插入分镜（单次 SQL，避免 N 次往返）
+func (r *StoryboardRepository) BatchCreate(shots []*model.StoryboardShot) error {
+	if len(shots) == 0 {
+		return nil
+	}
+	return r.db.CreateInBatches(shots, 100).Error
+}
+
 // GetByID 根据ID获取分镜
 func (r *StoryboardRepository) GetByID(id uint) (*model.StoryboardShot, error) {
 	var shot model.StoryboardShot
