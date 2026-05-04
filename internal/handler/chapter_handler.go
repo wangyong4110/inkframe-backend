@@ -472,6 +472,12 @@ func (h *ChapterHandler) BatchSummarizeChapters(c *gin.Context) {
 	}
 	log.Printf("[ChapterHandler] BatchSummarizeChapters: tenantID=%d novelID=%d taskID=%s", tenantID, novelID, task.TaskID)
 	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[ChapterHandler] BatchSummarizeChapters task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		count, err := h.chapterService.BatchGenerateSummaries(tenantID, uint(novelID), progressFn)

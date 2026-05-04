@@ -324,7 +324,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.POST("/:id/storyboard/:shot_id/voice", cfg.VideoHandler.GenerateShotVoice)
 			videos.GET("/:id/storyboard/:shot_id/audio", cfg.VideoHandler.ServeAudio)
 			videos.POST("/:id/stitch", cfg.VideoHandler.StitchVideoHandler)
-			videos.GET("/:id/export/capcut", cfg.VideoHandler.ExportCapCutDraft)
+			videos.GET("/:id/export/:format", cfg.VideoHandler.Export)
 			// 分镜绑定场景锚点
 			if cfg.SceneAnchorHandler != nil {
 				videos.PUT("/:id/shots/:shot_id/anchor", cfg.SceneAnchorHandler.SetShotAnchor)

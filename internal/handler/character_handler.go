@@ -441,6 +441,12 @@ func (h *CharacterHandler) AIBatchGenerate(c *gin.Context) {
 		return
 	}
 	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[CharacterHandler] AIBatchGenerate task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		chars, err := h.characterService.AIBatchGenerate(tenantID, uint(novelID))
@@ -473,6 +479,12 @@ func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
 		return
 	}
 	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[CharacterHandler] BatchGenerateImages task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		succ, fail, err := h.characterService.BatchGenerateImages(tenantID, uint(novelID), req.Provider, progressFn)

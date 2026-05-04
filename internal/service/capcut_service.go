@@ -3,15 +3,18 @@ package service
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
+	astisub "github.com/asticode/go-astisub"
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
@@ -160,10 +163,23 @@ type ccTextMaterial struct {
 }
 
 type ccMaterials struct {
-	Audios   []ccAudioMaterial `json:"audios"`
-	Stickers []interface{}     `json:"stickers"`
-	Texts    []ccTextMaterial  `json:"texts"`
-	Videos   []ccVideoMaterial `json:"videos"`
+	Audios             []ccAudioMaterial `json:"audios"`
+	Beats              []interface{}     `json:"beats"`
+	Canvases           []interface{}     `json:"canvases"`
+	Chromas            []interface{}     `json:"chromas"`
+	ColorCurves        []interface{}     `json:"color_curves"`
+	Filters            []interface{}     `json:"filters"`
+	GreenScreens       []interface{}     `json:"green_screens"`
+	Masks              []interface{}     `json:"masks"`
+	MaterialAnimations []interface{}     `json:"material_animations"`
+	Shapes             []interface{}     `json:"shapes"`
+	Speed              []interface{}     `json:"speed"`
+	Stickers           []interface{}     `json:"stickers"`
+	Texts              []ccTextMaterial  `json:"texts"`
+	Transitions        []interface{}     `json:"transitions"`
+	VideoEffects       []interface{}     `json:"video_effects"`
+	Videos             []ccVideoMaterial `json:"videos"`
+	VocalSeparations   []interface{}     `json:"vocal_separations"`
 }
 
 type ccCanvasConfig struct {
@@ -173,31 +189,46 @@ type ccCanvasConfig struct {
 }
 
 type ccDraftContent struct {
-	CanvasConfig ccCanvasConfig `json:"canvas_config"`
-	CreateTime   int64          `json:"create_time"`
-	Duration     int64          `json:"duration"`
-	ID           string         `json:"id"`
-	Keyframes    ccKeyframes    `json:"keyframes"`
-	Materials    ccMaterials    `json:"materials"`
-	Name         string         `json:"name"`
-	Tracks       []ccTrack      `json:"tracks"`
-	Version      string         `json:"version"`
+	CanvasConfig         ccCanvasConfig `json:"canvas_config"`
+	CreateTime           int64          `json:"create_time"`
+	Duration             int64          `json:"duration"`
+	FPS                  float64        `json:"fps"`
+	ID                   string         `json:"id"`
+	Keyframes            ccKeyframes    `json:"keyframes"`
+	LastModifiedPlatform string         `json:"last_modified_platform"`
+	Materials            ccMaterials    `json:"materials"`
+	Name                 string         `json:"name"`
+	NewVersion           string         `json:"new_version"`
+	Platform             string         `json:"platform"`
+	Relationships        []interface{}  `json:"relationships"`
+	Tracks               []ccTrack      `json:"tracks"`
+	UpdateTime           int64          `json:"update_time"`
+	Version              string         `json:"version"`
 }
 
 type ccMetaInfo struct {
-	DraftCover    string `json:"draft_cover"`
-	DraftID       string `json:"draft_id"`
-	DraftIsAI     bool   `json:"draft_is_ai_shorts"`
-	DraftName     string `json:"draft_name"`
-	TmDraftCreate int64  `json:"tm_draft_create"`
-	TmDraftModify int64  `json:"tm_draft_modified"`
-	TmDuration    int64  `json:"tm_duration"`
+	DraftCover               string        `json:"draft_cover"`
+	DraftFoldPath            string        `json:"draft_fold_path"`
+	DraftID                  string        `json:"draft_id"`
+	DraftIsAI                bool          `json:"draft_is_ai_shorts"`
+	DraftIsArticleVideo      bool          `json:"draft_is_article_video_draft"`
+	DraftIsInvisible         bool          `json:"draft_is_invisible"`
+	DraftMaterials           []interface{} `json:"draft_materials"`
+	DraftName                string        `json:"draft_name"`
+	DraftNewVersion          string        `json:"draft_new_version"`
+	DraftRootPath            string        `json:"draft_root_path"`
+	DraftSegmentExtraInfo    []interface{} `json:"draft_segment_extra_info"`
+	DraftTimelineMaterialsV2 []interface{} `json:"draft_timeline_materialsv2"`
+	TmDraftCreate            int64         `json:"tm_draft_create"`
+	TmDraftModify            int64         `json:"tm_draft_modified"`
+	TmDuration               int64         `json:"tm_duration"`
 }
 
-// CapCutExportResult ZIP 导出结果
-type CapCutExportResult struct {
-	Data     []byte
-	Filename string
+// ExportResult 导出结果（适用于所有格式）
+type ExportResult struct {
+	Data        []byte
+	Filename    string
+	ContentType string
 }
 
 // aspectRatioDimensions 根据宽高比返回 (width, height)
@@ -337,7 +368,7 @@ func buildTextContent(text string, cfg subtitleConfig) string {
 }
 
 // ExportCapCutDraft 导出剪映草稿 ZIP（含视频/图片、配音、字幕轨道）
-func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.StoryboardShot, novel *model.Novel) (*CapCutExportResult, error) {
+func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.StoryboardShot, novel *model.Novel) (*ExportResult, error) {
 	now := time.Now().Unix()
 	draftID := uuid.New().String()
 	projectName := sanitizeFilename(video.Title)
@@ -346,7 +377,11 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	}
 
 	subCfg := newSubtitleConfig(novel)
-	width, height := aspectRatioDimensions(video.AspectRatio)
+	ratio := video.AspectRatio
+	if ratio == "" {
+		ratio = "16:9"
+	}
+	width, height := aspectRatioDimensions(ratio)
 	defaultCrop := ccCrop{
 		LowerLeftX: 0, LowerLeftY: 1, LowerRightX: 1, LowerRightY: 1,
 		UpperLeftX: 0, UpperLeftY: 0, UpperRightX: 1, UpperRightY: 0,
@@ -647,37 +682,65 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		})
 	}
 
+	audios := append(audioMaterials, sfxMaterials...)
+	if audios == nil {
+		audios = []ccAudioMaterial{}
+	}
+	if textMaterials == nil {
+		textMaterials = []ccTextMaterial{}
+	}
 	content := ccDraftContent{
-		CanvasConfig: ccCanvasConfig{Height: height, Ratio: video.AspectRatio, Width: width},
-		CreateTime:   now,
-		Duration:     totalDuration,
-		ID:           draftID,
-		Keyframes:    ccKeyframes{Videos: allKFGroups},
+		CanvasConfig:         ccCanvasConfig{Height: height, Ratio: ratio, Width: width},
+		CreateTime:           now,
+		Duration:             totalDuration,
+		FPS:                  30.0,
+		ID:                   draftID,
+		Keyframes:            ccKeyframes{Videos: allKFGroups},
+		LastModifiedPlatform: "mac",
 		Materials: ccMaterials{
-			Audios:   append(audioMaterials, sfxMaterials...),
-			Stickers: []interface{}{},
-			Texts:    textMaterials,
-			Videos:   videoMaterials,
+			Audios:             audios,
+			Beats:              []interface{}{},
+			Canvases:           []interface{}{},
+			Chromas:            []interface{}{},
+			ColorCurves:        []interface{}{},
+			Filters:            []interface{}{},
+			GreenScreens:       []interface{}{},
+			Masks:              []interface{}{},
+			MaterialAnimations: []interface{}{},
+			Shapes:             []interface{}{},
+			Speed:              []interface{}{},
+			Stickers:           []interface{}{},
+			Texts:              textMaterials,
+			Transitions:        []interface{}{},
+			VideoEffects:       []interface{}{},
+			Videos:             videoMaterials,
+			VocalSeparations:   []interface{}{},
 		},
-		Name:    video.Title,
-		Tracks:  tracks,
-		Version: "3.0.0",
-	}
-	if content.Materials.Audios == nil {
-		content.Materials.Audios = []ccAudioMaterial{}
-	}
-	if content.Materials.Texts == nil {
-		content.Materials.Texts = []ccTextMaterial{}
+		Name:          video.Title,
+		NewVersion:    "",
+		Platform:      "mac",
+		Relationships: []interface{}{},
+		Tracks:        tracks,
+		UpdateTime:    now,
+		Version:       "3.0.0",
 	}
 
 	meta := ccMetaInfo{
-		DraftCover:    "cover.jpg",
-		DraftID:       draftID,
-		DraftIsAI:     false,
-		DraftName:     video.Title,
-		TmDraftCreate: now,
-		TmDraftModify: now,
-		TmDuration:    totalDuration,
+		DraftCover:               "cover.jpg",
+		DraftFoldPath:            "",
+		DraftID:                  draftID,
+		DraftIsAI:                false,
+		DraftIsArticleVideo:      false,
+		DraftIsInvisible:         false,
+		DraftMaterials:           []interface{}{},
+		DraftName:                video.Title,
+		DraftNewVersion:          "",
+		DraftRootPath:            "",
+		DraftSegmentExtraInfo:    []interface{}{},
+		DraftTimelineMaterialsV2: []interface{}{},
+		TmDraftCreate:            now,
+		TmDraftModify:            now,
+		TmDuration:               totalDuration,
 	}
 
 	contentJSON, err := json.MarshalIndent(content, "", "  ")
@@ -734,9 +797,265 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		return nil, fmt.Errorf("close zip: %w", err)
 	}
 
-	return &CapCutExportResult{
-		Data:     buf.Bytes(),
-		Filename: projectName + ".zip",
+	return &ExportResult{
+		Data:        buf.Bytes(),
+		Filename:    projectName + ".zip",
+		ContentType: "application/zip",
+	}, nil
+}
+
+// fcpXMLEscapeAttr 转义 XML 属性中的特殊字符
+func fcpXMLEscapeAttr(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	s = strings.ReplaceAll(s, `"`, "&quot;")
+	return s
+}
+
+// ExportFCPXML 导出 FCPXML 1.10 格式 ZIP（可在 DaVinci Resolve / Final Cut Pro 导入）
+// src 使用原始 CDN URL，同时将媒体文件打包到 media/ 供离线重连。
+func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
+	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
+
+	projectName := sanitizeFilename(video.Title)
+	if projectName == "" {
+		projectName = fmt.Sprintf("video_%d", video.ID)
+	}
+	ratio := video.AspectRatio
+	if ratio == "" {
+		ratio = "16:9"
+	}
+	width, height := aspectRatioDimensions(ratio)
+
+	type assetInfo struct {
+		id       string
+		src      string
+		duration int64 // micros
+		filename string
+	}
+
+	var assets []assetInfo
+	var totalDuration int64
+
+	// ── 构建 FCPXML ──────────────────────────────────────────────────────
+	var sb strings.Builder
+	sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
+	sb.WriteString("\n<!DOCTYPE fcpxml>\n")
+	sb.WriteString(`<fcpxml version="1.10">`)
+	sb.WriteString("\n<resources>\n")
+	sb.WriteString(fmt.Sprintf(`  <format id="r1" frameDuration="1/25s" width="%d" height="%d"/>`, width, height))
+	sb.WriteString("\n")
+
+	for i, shot := range shots {
+		dur := int64(shot.Duration * 1_000_000)
+		if dur <= 0 {
+			dur = 5_000_000
+		}
+		mediaURL := shot.ImageURL
+		ext := ".jpg"
+		if shot.VideoURL != "" {
+			mediaURL = shot.VideoURL
+			ext = ".mp4"
+		}
+		assetID := fmt.Sprintf("r%d", i+2)
+		filename := fmt.Sprintf("%03d%s", shot.ShotNo, ext)
+		durStr := fmt.Sprintf("%d/1000000s", dur)
+		sb.WriteString(fmt.Sprintf(`  <asset id="%s" src="%s" duration="%s" hasVideo="1"/>`,
+			assetID, fcpXMLEscapeAttr(mediaURL), durStr))
+		sb.WriteString("\n")
+		assets = append(assets, assetInfo{id: assetID, src: mediaURL, duration: dur, filename: filename})
+		totalDuration += dur
+	}
+
+	sb.WriteString("</resources>\n")
+	sb.WriteString(fmt.Sprintf(`<library><event name="%s"><project name="%s">`,
+		fcpXMLEscapeAttr(video.Title), fcpXMLEscapeAttr(video.Title)))
+	sb.WriteString("\n")
+	sb.WriteString(fmt.Sprintf(`<sequence duration="%d/1000000s" format="r1">`, totalDuration))
+	sb.WriteString("\n<spine>\n")
+
+	var offset int64
+	for _, asset := range assets {
+		sb.WriteString(fmt.Sprintf(`  <asset-clip ref="%s" offset="%d/1000000s" duration="%d/1000000s" tcFormat="NDF"/>`,
+			asset.id, offset, asset.duration))
+		sb.WriteString("\n")
+		offset += asset.duration
+	}
+
+	sb.WriteString("</spine>\n</sequence>\n</project></event></library>\n</fcpxml>\n")
+
+	// ── 构建 ZIP ─────────────────────────────────────────────────────────
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	writeZip := func(name string, data []byte) error {
+		w, e := zw.Create(name)
+		if e != nil {
+			return e
+		}
+		_, e = w.Write(data)
+		return e
+	}
+
+	prefix := projectName + "_fcpxml/"
+	if err := writeZip(prefix+projectName+".fcpxml", []byte(sb.String())); err != nil {
+		return nil, fmt.Errorf("write fcpxml: %w", err)
+	}
+
+	// 媒体文件打包到 media/（供离线重连）
+	for _, asset := range assets {
+		if asset.src == "" {
+			continue
+		}
+		if data, err := downloadMediaFile(asset.src); err == nil {
+			if e := writeZip(prefix+"media/"+asset.filename, data); e != nil {
+				return nil, fmt.Errorf("write media %s: %w", asset.filename, e)
+			}
+		}
+	}
+
+	// SRT 字幕
+	if srtContent := buildSRTSubtitles(shots); srtContent != "" {
+		if err := writeZip(prefix+"subtitle.srt", []byte(srtContent)); err != nil {
+			return nil, fmt.Errorf("write subtitle.srt: %w", err)
+		}
+	}
+
+	if err := zw.Close(); err != nil {
+		return nil, fmt.Errorf("close zip: %w", err)
+	}
+
+	return &ExportResult{
+		Data:        buf.Bytes(),
+		Filename:    projectName + "_fcpxml.zip",
+		ContentType: "application/zip",
+	}, nil
+}
+
+// shotJSONMeta 素材包 shots.json 中每镜元数据
+type shotJSONMeta struct {
+	ShotNo      int     `json:"shot_no"`
+	Description string  `json:"description"`
+	Dialogue    string  `json:"dialogue"`
+	Narration   string  `json:"narration"`
+	Duration    float64 `json:"duration"`
+	VideoFile   string  `json:"video_file,omitempty"`
+	ImageFile   string  `json:"image_file,omitempty"`
+	AudioFile   string  `json:"audio_file,omitempty"`
+}
+
+// ExportResourceZip 导出素材包 ZIP（图片/视频 + 音频 + SRT + shots.json，可用于任意剪辑软件）
+func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
+	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
+
+	projectName := sanitizeFilename(video.Title)
+	if projectName == "" {
+		projectName = fmt.Sprintf("video_%d", video.ID)
+	}
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	writeZip := func(name string, data []byte) error {
+		w, e := zw.Create(name)
+		if e != nil {
+			return e
+		}
+		_, e = w.Write(data)
+		return e
+	}
+
+	var metas []shotJSONMeta
+
+	for _, shot := range shots {
+		meta := shotJSONMeta{
+			ShotNo:      shot.ShotNo,
+			Description: shot.Description,
+			Dialogue:    shot.Dialogue,
+			Narration:   shot.Narration,
+			Duration:    shot.Duration,
+		}
+
+		// 视频/图片
+		mediaURL := shot.ImageURL
+		isVideo := shot.VideoURL != ""
+		if isVideo {
+			mediaURL = shot.VideoURL
+		}
+		if mediaURL != "" {
+			ext := ".jpg"
+			subdir := "image"
+			if isVideo {
+				ext = ".mp4"
+				subdir = "video"
+			}
+			filename := fmt.Sprintf("%03d%s", shot.ShotNo, ext)
+			if data, err := downloadMediaFile(mediaURL); err == nil {
+				if e := writeZip(subdir+"/"+filename, data); e != nil {
+					return nil, fmt.Errorf("write %s/%s: %w", subdir, filename, e)
+				}
+			}
+			if isVideo {
+				meta.VideoFile = "video/" + filename
+			} else {
+				meta.ImageFile = "image/" + filename
+			}
+		}
+
+		// 音频
+		if shot.AudioPath != "" {
+			if data, err := readLocalOrRemoteFile(shot.AudioPath); err == nil && len(data) > 0 {
+				ext := audioExtension(shot.AudioPath)
+				filename := fmt.Sprintf("%03d%s", shot.ShotNo, ext)
+				if e := writeZip("audio/"+filename, data); e != nil {
+					return nil, fmt.Errorf("write audio/%s: %w", filename, e)
+				}
+				meta.AudioFile = "audio/" + filename
+			}
+		}
+
+		metas = append(metas, meta)
+	}
+
+	// shots.json
+	shotsJSON, err := json.MarshalIndent(metas, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal shots.json: %w", err)
+	}
+	if err := writeZip("shots.json", shotsJSON); err != nil {
+		return nil, fmt.Errorf("write shots.json: %w", err)
+	}
+
+	// subtitle.srt
+	if srtContent := buildSRTSubtitles(shots); srtContent != "" {
+		if err := writeZip("subtitle.srt", []byte(srtContent)); err != nil {
+			return nil, fmt.Errorf("write subtitle.srt: %w", err)
+		}
+	}
+
+	if err := zw.Close(); err != nil {
+		return nil, fmt.Errorf("close zip: %w", err)
+	}
+
+	return &ExportResult{
+		Data:        buf.Bytes(),
+		Filename:    projectName + "_assets.zip",
+		ContentType: "application/zip",
+	}, nil
+}
+
+// ExportSRT 导出纯字幕 SRT 文件
+func (s *CapCutService) ExportSRT(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
+	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
+
+	projectName := sanitizeFilename(video.Title)
+	if projectName == "" {
+		projectName = fmt.Sprintf("video_%d", video.ID)
+	}
+
+	return &ExportResult{
+		Data:        []byte(buildSRTSubtitles(shots)),
+		Filename:    projectName + ".srt",
+		ContentType: "text/plain; charset=utf-8",
 	}, nil
 }
 
@@ -1007,4 +1326,306 @@ func sanitizeFilename(name string) string {
 		result = string(runes[:50])
 	}
 	return result
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VTT — github.com/asticode/go-astisub（695 stars，MIT，支持 SRT/VTT/SSA/TTML）
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ExportVTT 导出 WebVTT 字幕文件（浏览器原生、YouTube、Bilibili、各类播放器均支持）
+func (s *CapCutService) ExportVTT(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
+	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
+
+	projectName := sanitizeFilename(video.Title)
+	if projectName == "" {
+		projectName = fmt.Sprintf("video_%d", video.ID)
+	}
+
+	subs := astisub.NewSubtitles()
+	var cursor time.Duration
+
+	for _, shot := range shots {
+		dur := time.Duration(shot.Duration * float64(time.Second))
+		if dur <= 0 {
+			dur = 5 * time.Second
+		}
+		text := shot.Dialogue
+		if text == "" {
+			text = shot.Narration
+		}
+		if text == "" {
+			text = shot.Description
+		}
+		if text != "" {
+			subs.Items = append(subs.Items, &astisub.Item{
+				StartAt: cursor,
+				EndAt:   cursor + dur,
+				Lines:   []astisub.Line{{Items: []astisub.LineItem{{Text: text}}}},
+			})
+		}
+		cursor += dur
+	}
+
+	var buf bytes.Buffer
+	if err := subs.WriteToWebVTT(&buf); err != nil {
+		return nil, fmt.Errorf("write vtt: %w", err)
+	}
+
+	return &ExportResult{
+		Data:        buf.Bytes(),
+		Filename:    projectName + ".vtt",
+		ContentType: "text/vtt; charset=utf-8",
+	}, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EDL — CMX3600（DaVinci Resolve、Avid、Premiere Pro、Vegas Pro 均支持）
+// Go 无成熟库，格式极简，手动生成。
+// ─────────────────────────────────────────────────────────────────────────────
+
+// microsToEDLTimecode 将微秒转为 CMX3600 时间码 HH:MM:SS:FF（25fps）
+func microsToEDLTimecode(micros int64) string {
+	totalFrames := micros * 25 / 1_000_000
+	ff := totalFrames % 25
+	ss := totalFrames / 25 % 60
+	mm := totalFrames / 25 / 60 % 60
+	hh := totalFrames / 25 / 3600
+	return fmt.Sprintf("%02d:%02d:%02d:%02d", hh, mm, ss, ff)
+}
+
+// ExportEDL 导出 CMX3600 EDL 文件（可在几乎所有专业非线性编辑软件中导入）
+func (s *CapCutService) ExportEDL(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
+	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
+
+	projectName := sanitizeFilename(video.Title)
+	if projectName == "" {
+		projectName = fmt.Sprintf("video_%d", video.ID)
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("TITLE: %s\n", projectName))
+	sb.WriteString("FCM: NON-DROP FRAME\n\n")
+
+	var recordIn int64
+	for i, shot := range shots {
+		dur := int64(shot.Duration * 1_000_000)
+		if dur <= 0 {
+			dur = 5_000_000
+		}
+		recordOut := recordIn + dur
+
+		ext := ".jpg"
+		if shot.VideoURL != "" {
+			ext = ".mp4"
+		}
+		clipName := fmt.Sprintf("%03d%s", shot.ShotNo, ext)
+
+		sb.WriteString(fmt.Sprintf("%03d  AX       V     C        %s %s %s %s\n",
+			i+1,
+			microsToEDLTimecode(0),        // source IN（每段素材从头开始）
+			microsToEDLTimecode(dur),       // source OUT
+			microsToEDLTimecode(recordIn),  // record IN（时间线位置）
+			microsToEDLTimecode(recordOut), // record OUT
+		))
+		sb.WriteString(fmt.Sprintf("* FROM CLIP NAME: %s\n", clipName))
+		comment := shot.Narration
+		if comment == "" {
+			comment = shot.Description
+		}
+		if comment != "" {
+			// EDL 注释最长不超过约 100 字符（部分 NLE 截断），截取足够长度
+			runes := []rune(comment)
+			if len(runes) > 80 {
+				comment = string(runes[:80])
+			}
+			sb.WriteString(fmt.Sprintf("* COMMENT: %s\n", comment))
+		}
+		sb.WriteString("\n")
+
+		recordIn = recordOut
+	}
+
+	return &ExportResult{
+		Data:        []byte(sb.String()),
+		Filename:    projectName + ".edl",
+		ContentType: "text/plain; charset=utf-8",
+	}, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// OpenTimelineIO (.otio) — Pixar 主导的开放时间线标准（JSON，Adobe/Apple/Avid 均支持）
+// Go 无官方绑定，按规范手动构造 JSON。
+// spec: github.com/OpenTimelineIO/OpenTimelineIO-Specification
+// ─────────────────────────────────────────────────────────────────────────────
+
+type otioRationalTime struct {
+	Value float64 `json:"value"`
+	Rate  float64 `json:"rate"`
+}
+
+type otioTimeRange struct {
+	StartTime otioRationalTime `json:"start_time"`
+	Duration  otioRationalTime `json:"duration"`
+}
+
+type otioExternalReference struct {
+	OTIOSchema     string         `json:"OTIO_SCHEMA"`
+	TargetURL      string         `json:"target_url"`
+	Name           string         `json:"name,omitempty"`
+	AvailableRange *otioTimeRange `json:"available_range,omitempty"`
+}
+
+type otioClip struct {
+	OTIOSchema              string                           `json:"OTIO_SCHEMA"`
+	Name                    string                           `json:"name"`
+	SourceRange             *otioTimeRange                   `json:"source_range,omitempty"`
+	MediaReferences         map[string]otioExternalReference `json:"media_references"`
+	ActiveMediaReferenceKey string                           `json:"active_media_reference_key"`
+}
+
+type otioTrack struct {
+	OTIOSchema string `json:"OTIO_SCHEMA"`
+	Name       string `json:"name"`
+	Kind       string `json:"kind"` // "Video" | "Audio"
+	Children   []any  `json:"children"`
+}
+
+type otioStack struct {
+	OTIOSchema string `json:"OTIO_SCHEMA"`
+	Name       string `json:"name"`
+	Children   []any  `json:"children"`
+}
+
+type otioTimeline struct {
+	OTIOSchema string    `json:"OTIO_SCHEMA"`
+	Name       string    `json:"name"`
+	Tracks     otioStack `json:"tracks"`
+}
+
+// ExportOTIO 导出 OpenTimelineIO .otio 文件（Pixar 开放标准，Premiere / FCP / DaVinci 均可导入）
+func (s *CapCutService) ExportOTIO(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
+	const fps = 25.0
+	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
+
+	projectName := sanitizeFilename(video.Title)
+	if projectName == "" {
+		projectName = fmt.Sprintf("video_%d", video.ID)
+	}
+
+	var clips []any
+	for _, shot := range shots {
+		dur := shot.Duration
+		if dur <= 0 {
+			dur = 5.0
+		}
+		durFrames := dur * fps
+
+		mediaURL := shot.ImageURL
+		if shot.VideoURL != "" {
+			mediaURL = shot.VideoURL
+		}
+		ext := ".jpg"
+		if shot.VideoURL != "" {
+			ext = ".mp4"
+		}
+		clipName := fmt.Sprintf("%03d%s", shot.ShotNo, ext)
+
+		clips = append(clips, otioClip{
+			OTIOSchema: "Clip.2",
+			Name:       clipName,
+			SourceRange: &otioTimeRange{
+				StartTime: otioRationalTime{Value: 0, Rate: fps},
+				Duration:  otioRationalTime{Value: durFrames, Rate: fps},
+			},
+			MediaReferences: map[string]otioExternalReference{
+				"DEFAULT_MEDIA": {
+					OTIOSchema: "ExternalReference.1",
+					TargetURL:  mediaURL,
+					Name:       clipName,
+					AvailableRange: &otioTimeRange{
+						StartTime: otioRationalTime{Value: 0, Rate: fps},
+						Duration:  otioRationalTime{Value: durFrames, Rate: fps},
+					},
+				},
+			},
+			ActiveMediaReferenceKey: "DEFAULT_MEDIA",
+		})
+	}
+
+	timeline := otioTimeline{
+		OTIOSchema: "Timeline.1",
+		Name:       video.Title,
+		Tracks: otioStack{
+			OTIOSchema: "Stack.1",
+			Name:       "tracks",
+			Children: []any{
+				otioTrack{
+					OTIOSchema: "Track.1",
+					Name:       "Video",
+					Kind:       "Video",
+					Children:   clips,
+				},
+			},
+		},
+	}
+
+	data, err := json.MarshalIndent(timeline, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal otio: %w", err)
+	}
+
+	return &ExportResult{
+		Data:        data,
+		Filename:    projectName + ".otio",
+		ContentType: "application/json",
+	}, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CSV 分镜表 — encoding/csv（标准库，Excel / Notion / 制片管理工具通用）
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ExportCSV 导出分镜表 CSV（含全部元数据，可直接在 Excel / Notion 中打开）
+func (s *CapCutService) ExportCSV(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
+	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
+
+	projectName := sanitizeFilename(video.Title)
+	if projectName == "" {
+		projectName = fmt.Sprintf("video_%d", video.ID)
+	}
+
+	var buf bytes.Buffer
+	// BOM：让 Excel 正确识别 UTF-8（尤其是中文内容）
+	buf.WriteString("\xEF\xBB\xBF")
+	w := csv.NewWriter(&buf)
+
+	_ = w.Write([]string{
+		"shot_no", "description", "dialogue", "narration",
+		"duration_s", "camera_type", "shot_size",
+		"image_url", "video_url",
+	})
+
+	for _, shot := range shots {
+		_ = w.Write([]string{
+			strconv.Itoa(shot.ShotNo),
+			shot.Description,
+			shot.Dialogue,
+			shot.Narration,
+			strconv.FormatFloat(shot.Duration, 'f', 2, 64),
+			shot.CameraType,
+			shot.ShotSize,
+			shot.ImageURL,
+			shot.VideoURL,
+		})
+	}
+	w.Flush()
+	if err := w.Error(); err != nil {
+		return nil, fmt.Errorf("write csv: %w", err)
+	}
+
+	return &ExportResult{
+		Data:        buf.Bytes(),
+		Filename:    projectName + "_shots.csv",
+		ContentType: "text/csv; charset=utf-8",
+	}, nil
 }

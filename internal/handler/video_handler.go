@@ -629,6 +629,12 @@ func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 	}
 
 	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[VideoHandler] GenerateSingleShot task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		shot, genErr := h.videoService.GenerateSingleShot(uint(videoID), uint(shotID), req.Provider)
@@ -672,6 +678,12 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 	}
 
 	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[VideoHandler] BatchGenerateShots task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		shots, genErr := h.videoService.BatchGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, progressFn, req.Provider)
@@ -718,6 +730,12 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 	}
 
 	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[VideoHandler] BatchGenerateSFX task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		ctx := c.Request.Context()
@@ -932,7 +950,59 @@ func (h *VideoHandler) ExportCapCutDraft(c *gin.Context) {
 	}
 
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, result.Filename))
-	c.Header("Content-Type", "application/zip")
 	c.Header("Content-Length", strconv.Itoa(len(result.Data)))
-	c.Data(http.StatusOK, "application/zip", result.Data)
+	c.Data(http.StatusOK, result.ContentType, result.Data)
+}
+
+// Export 多格式导出
+// GET /api/v1/videos/:id/export/:format
+// format: capcut | fcpxml | zip | srt
+func (h *VideoHandler) Export(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid video id")
+		return
+	}
+	format := c.Param("format")
+
+	video, ok := h.getVideoForTenant(c, uint(id))
+	if !ok {
+		return
+	}
+
+	shots, err := h.videoService.GetStoryboard(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	var result *service.ExportResult
+	switch format {
+	case "fcpxml":
+		result, err = h.capcutService.ExportFCPXML(video, shots)
+	case "zip":
+		result, err = h.capcutService.ExportResourceZip(video, shots)
+	case "srt":
+		result, err = h.capcutService.ExportSRT(video, shots)
+	case "vtt":
+		result, err = h.capcutService.ExportVTT(video, shots)
+	case "edl":
+		result, err = h.capcutService.ExportEDL(video, shots)
+	case "otio":
+		result, err = h.capcutService.ExportOTIO(video, shots)
+	case "csv":
+		result, err = h.capcutService.ExportCSV(video, shots)
+	default: // "capcut" 或其他
+		novel, _ := h.videoService.GetNovelByID(video.NovelID)
+		result, err = h.capcutService.ExportCapCutDraft(video, shots, novel)
+	}
+
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, result.Filename))
+	c.Header("Content-Length", strconv.Itoa(len(result.Data)))
+	c.Data(http.StatusOK, result.ContentType, result.Data)
 }

@@ -183,6 +183,12 @@ func (h *PlotPointHandler) AIExtractFromNovel(c *gin.Context) {
 		return
 	}
 	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[PlotPointHandler] AIExtractFromNovel task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		pps, err := h.svc.AIExtractFromNovel(tenantID, uint(novelID))

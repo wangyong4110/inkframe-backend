@@ -202,6 +202,12 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 	}
 
 	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[NovelHandler] GenerateChapter task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
 		h.taskSvc.SetRunning(taskID)   //nolint:errcheck
 		h.taskSvc.UpdateProgress(taskID, 5) //nolint:errcheck
 

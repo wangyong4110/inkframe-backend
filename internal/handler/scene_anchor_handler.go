@@ -279,6 +279,12 @@ func (h *SceneAnchorHandler) BatchGenerateRefImages(c *gin.Context) {
 		return
 	}
 	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[SceneAnchorHandler] BatchGenerateRefImages task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		succ, fail, err := h.svc.BatchGenerateRefImages(context.Background(), tenantID, uint(novelID), body.Provider, progressFn)
@@ -311,6 +317,12 @@ func (h *SceneAnchorHandler) AIExtractFromNovel(c *gin.Context) {
 		return
 	}
 	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[SceneAnchorHandler] AIExtractFromNovel task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		anchors, err := h.svc.AIExtractAllFromNovel(tenantID, uint(novelID), progressFn)
