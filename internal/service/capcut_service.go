@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -39,6 +40,35 @@ type ccTransform struct {
 	Y float64 `json:"y"`
 }
 
+// --- 关键帧动画结构体（Ken Burns 运镜效果）---
+
+type ccPoint struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+type ccKeyframe struct {
+	CurveType    string    `json:"curveType"`
+	GraphID      string    `json:"graphID"`
+	ID           string    `json:"id"`
+	LeftControl  ccPoint   `json:"left_control"`
+	RightControl ccPoint   `json:"right_control"`
+	TimeOffset   int64     `json:"time_offset"`
+	Values       []float64 `json:"values"`
+}
+
+// ccKeyframeGroup 一段素材上单个属性（ScaleX/ScaleY/PositionX/PositionY）的关键帧组
+type ccKeyframeGroup struct {
+	ID           string       `json:"id"`
+	KeyframeList []ccKeyframe `json:"keyframe_list"`
+	MaterialID   string       `json:"material_id"` // 引用 segment.ID
+	PropertyType string       `json:"property_type"`
+}
+
+type ccKeyframes struct {
+	Videos []ccKeyframeGroup `json:"videos"`
+}
+
 type ccClip struct {
 	Alpha     float64     `json:"alpha"`
 	Flip      ccFlip      `json:"flip"`
@@ -55,6 +85,7 @@ type ccTimeRange struct {
 type ccSegment struct {
 	Clip            ccClip      `json:"clip"`
 	ID              string      `json:"id"`
+	KeyframeRefs    []string    `json:"keyframe_refs,omitempty"`
 	MaterialID      string      `json:"material_id"`
 	Reverse         bool        `json:"reverse"`
 	Speed           float64     `json:"speed"`
@@ -143,6 +174,7 @@ type ccDraftContent struct {
 	CreateTime   int64          `json:"create_time"`
 	Duration     int64          `json:"duration"`
 	ID           string         `json:"id"`
+	Keyframes    ccKeyframes    `json:"keyframes"`
 	Materials    ccMaterials    `json:"materials"`
 	Name         string         `json:"name"`
 	Tracks       []ccTrack      `json:"tracks"`
@@ -190,6 +222,8 @@ type subtitleConfig struct {
 
 func newSubtitleConfig(novel *model.Novel) subtitleConfig {
 	cfg := subtitleConfig{
+		// 导出草稿时始终生成字幕轨道；novel.SubtitleEnabled 仅控制应用内实时渲染，
+		// 不影响导出——用户可在剪映中自行删除字幕轨道。
 		enabled:  true,
 		position: "bottom",
 		fontSize: 48,
@@ -199,7 +233,7 @@ func newSubtitleConfig(novel *model.Novel) subtitleConfig {
 	if novel == nil {
 		return cfg
 	}
-	cfg.enabled = novel.SubtitleEnabled
+	// 保留小说级样式配置（位置/字号/颜色/背景），但不读取 enabled 字段
 	if novel.SubtitlePosition != "" {
 		cfg.position = novel.SubtitlePosition
 	}
@@ -312,12 +346,19 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	// 三类轨道数据
 	var videoMaterials []ccVideoMaterial
 	var videoSegments []ccSegment
+	allKFGroups := []ccKeyframeGroup{} // 图片分镜的 Ken Burns 运镜关键帧
 
 	var audioMaterials []ccAudioMaterial
 	var audioSegments []ccSegment
 
 	var textMaterials []ccTextMaterial
 	var textSegments []ccSegment
+
+	// Bug2修复：按 shot_no 升序排列，确保视频/音频/字幕轨道顺序与分镜编号一致。
+	// 数据库返回顺序不保证有序，直接遍历会导致配音顺序与画面顺序错位。
+	sort.Slice(shots, func(i, j int) bool {
+		return shots[i].ShotNo < shots[j].ShotNo
+	})
 
 	var totalDuration int64
 
@@ -368,12 +409,13 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			Width:          width,
 		})
 
-		videoSegments = append(videoSegments, ccSegment{
+		segID := uuid.New().String()
+		seg := ccSegment{
 			Clip: ccClip{
 				Alpha: 1.0,
 				Scale: ccScale{X: 1.0, Y: 1.0},
 			},
-			ID:              uuid.New().String(),
+			ID:              segID,
 			MaterialID:      vidMatID,
 			Speed:           1.0,
 			SourceTimerange: ccTimeRange{Duration: durationMicros, Start: 0},
@@ -381,23 +423,43 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			Type:            "video",
 			Visible:         true,
 			Volume:          1.0,
-		})
+		}
+		// 图片分镜（非视频）添加 Ken Burns 运镜关键帧
+		if !isVideo {
+			kfGroups := buildPhotoMotionKeyframes(segID, shot.CameraType, durationMicros, shot.ShotNo)
+			for _, g := range kfGroups {
+				seg.KeyframeRefs = append(seg.KeyframeRefs, g.ID)
+			}
+			allKFGroups = append(allKFGroups, kfGroups...)
+		}
+		videoSegments = append(videoSegments, seg)
 
 		// ── 2. 配音音频素材 ───────────────────────────────────────
 		if shot.AudioPath != "" {
 			audioFilename := fmt.Sprintf("shot_%03d_audio.mp3", shot.ShotNo)
 			audMatID := uuid.New().String()
 
+			// Bug3修复：用实际音频时长替代 shot.Duration。
+			// CapCut 根据 Material.Duration 和 SourceTimerange.Duration 解析音频播放范围；
+			// 若声称时长 > 文件实际时长，CapCut 可能拉伸音频，导致音画不同步。
+			actualAudioDur := durationMicros // fallback：读取失败时用视频段时长
 			if data, err := readLocalOrRemoteFile(shot.AudioPath); err == nil && len(data) > 0 {
-				// 根据实际内容决定后缀
 				ext := audioExtension(shot.AudioPath)
 				audioFilename = fmt.Sprintf("shot_%03d_audio%s", shot.ShotNo, ext)
 				mediaFiles = append(mediaFiles, mediaFile{filename: audioFilename, data: data})
+				if dur := parseAudioDurationMicros(data, ext); dur > 0 {
+					actualAudioDur = dur
+				}
+			}
+			// SourceTimerange：告知剪映实际取用的音频长度，不超过视频段时长
+			srcDur := actualAudioDur
+			if srcDur > durationMicros {
+				srcDur = durationMicros // 超出镜头时长的部分截断，避免溢出到下一镜头
 			}
 
 			audioMaterials = append(audioMaterials, ccAudioMaterial{
 				CheckFlag:  1,
-				Duration:   durationMicros,
+				Duration:   actualAudioDur, // 素材真实时长
 				FilePath:   "media/" + audioFilename,
 				ID:         audMatID,
 				Name:       fmt.Sprintf("shot_%03d_audio", shot.ShotNo),
@@ -412,8 +474,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				ID:              uuid.New().String(),
 				MaterialID:      audMatID,
 				Speed:           1.0,
-				SourceTimerange: ccTimeRange{Duration: durationMicros, Start: 0},
-				TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
+				SourceTimerange: ccTimeRange{Duration: srcDur, Start: 0},    // 实际音频长度
+				TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros}, // 时间轴位置与视频对齐
 				Type:            "audio",
 				Visible:         true,
 				Volume:          1.0,
@@ -495,6 +557,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		CreateTime:   now,
 		Duration:     totalDuration,
 		ID:           draftID,
+		Keyframes:    ccKeyframes{Videos: allKFGroups},
 		Materials: ccMaterials{
 			Audios:   audioMaterials,
 			Stickers: []interface{}{},
@@ -602,6 +665,182 @@ func downloadMediaFile(url string) ([]byte, error) {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	return io.ReadAll(resp.Body)
+}
+
+// parseAudioDurationMicros 解析音频文件的实际时长（微秒）。
+// 支持 WAV（精确解析 RIFF 头）和 MP3（扫描首帧 bitrate 近似估算）。
+// 其他格式或解析失败时返回 0（调用方应降级为 shot.Duration）。
+func parseAudioDurationMicros(data []byte, ext string) int64 {
+	switch strings.ToLower(ext) {
+	case ".wav":
+		return wavDurationMicros(data)
+	case ".mp3":
+		return mp3DurationMicros(data)
+	default:
+		return 0
+	}
+}
+
+// wavDurationMicros 解析 WAV/RIFF 格式的精确时长（微秒）。
+func wavDurationMicros(data []byte) int64 {
+	if len(data) < 44 {
+		return 0
+	}
+	if string(data[0:4]) != "RIFF" || string(data[8:12]) != "WAVE" {
+		return 0
+	}
+	readU32LE := func(b []byte, off int) uint32 {
+		return uint32(b[off]) | uint32(b[off+1])<<8 | uint32(b[off+2])<<16 | uint32(b[off+3])<<24
+	}
+	readU16LE := func(b []byte, off int) uint16 {
+		return uint16(b[off]) | uint16(b[off+1])<<8
+	}
+
+	var byteRate uint32
+	i := 12
+	for i+8 <= len(data) {
+		chunkID := string(data[i : i+4])
+		chunkSize := int(readU32LE(data, i+4))
+		if chunkID == "fmt " && chunkSize >= 16 {
+			// byteRate = sampleRate × numChannels × bitsPerSample/8
+			sampleRate := readU32LE(data, i+8+4)
+			numCh := readU16LE(data, i+8+2)
+			bps := readU16LE(data, i+8+14)
+			byteRate = sampleRate * uint32(numCh) * uint32(bps) / 8
+		}
+		if chunkID == "data" && byteRate > 0 {
+			durationSec := float64(chunkSize) / float64(byteRate)
+			return int64(durationSec * 1_000_000)
+		}
+		i += 8 + chunkSize
+		if chunkSize%2 != 0 {
+			i++ // RIFF chunks are word-aligned
+		}
+	}
+	return 0
+}
+
+// mp3DurationMicros 通过扫描首个有效 MPEG-1 Layer3 帧获取 bitrate，
+// 再用文件大小估算 MP3 时长（对 CBR MP3 准确，VBR 有偏差）。
+func mp3DurationMicros(data []byte) int64 {
+	// MPEG-1 Layer3 bitrate 表（kbps），索引 0 和 15 无效
+	bitrateKbps := [16]int{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0}
+
+	// 跳过 ID3v2 标签（常见于 TTS 输出文件头）
+	offset := 0
+	if len(data) >= 10 && string(data[0:3]) == "ID3" {
+		syncsafe := func(b []byte) int {
+			return int(b[0])<<21 | int(b[1])<<14 | int(b[2])<<7 | int(b[3])
+		}
+		offset = 10 + syncsafe(data[6:10])
+	}
+
+	// 扫描首个有效帧头（0xFF 0xFB / 0xFF 0xFA 等 MPEG-1 Layer3 同步字）
+	for i := offset; i < len(data)-3; i++ {
+		if data[i] != 0xFF || (data[i+1]&0xE0 != 0xE0) {
+			continue
+		}
+		ver := (data[i+1] >> 3) & 0x03   // 11=MPEG1
+		layer := (data[i+1] >> 1) & 0x03 // 01=Layer3
+		if ver != 3 || layer != 1 {
+			continue
+		}
+		brIdx := (data[i+2] >> 4) & 0x0F
+		if brIdx == 0 || brIdx == 15 {
+			continue
+		}
+		bitsPerSec := int64(bitrateKbps[brIdx]) * 1000
+		if bitsPerSec <= 0 {
+			continue
+		}
+		// 有效数据长度（去掉 ID3 标签）
+		audioBytes := int64(len(data) - offset)
+		durationSec := float64(audioBytes*8) / float64(bitsPerSec)
+		return int64(durationSec * 1_000_000)
+	}
+	return 0
+}
+
+// buildPhotoMotionKeyframes 为静图分镜生成 Ken Burns 运镜关键帧组。
+// 根据 shot.CameraType 映射到对应运镜预设，shotNo 用于交替平移方向。
+// 返回的各组 ID 应填入 segment.KeyframeRefs，组本身追加到 content.Keyframes.Videos。
+func buildPhotoMotionKeyframes(segID, cameraType string, durMicros int64, shotNo int) []ccKeyframeGroup {
+	type kfProp struct {
+		propType string
+		kv       [][2]float64 // [][time_offset_micros, value]
+	}
+
+	d := float64(durMicros)
+	dir := 1.0
+	if shotNo%2 == 0 {
+		dir = -1.0
+	}
+
+	var props []kfProp
+	switch cameraType {
+	case "pan":
+		// 水平平移：缩放固定 1.1，X 轴左右交替
+		props = []kfProp{
+			{"KFTypeScaleX", [][2]float64{{0, 1.1}, {d, 1.1}}},
+			{"KFTypeScaleY", [][2]float64{{0, 1.1}, {d, 1.1}}},
+			{"KFTypePositionX", [][2]float64{{0, -0.06 * dir}, {d, 0.06 * dir}}},
+		}
+	case "zoom":
+		// 推镜头：逐渐放大
+		props = []kfProp{
+			{"KFTypeScaleX", [][2]float64{{0, 1.0}, {d, 1.25}}},
+			{"KFTypeScaleY", [][2]float64{{0, 1.0}, {d, 1.25}}},
+		}
+	case "dolly":
+		// 拉镜头：逐渐缩小
+		props = []kfProp{
+			{"KFTypeScaleX", [][2]float64{{0, 1.25}, {d, 1.0}}},
+			{"KFTypeScaleY", [][2]float64{{0, 1.25}, {d, 1.0}}},
+		}
+	case "tracking":
+		// 跟拍：轻微放大 + X 轴平移
+		props = []kfProp{
+			{"KFTypeScaleX", [][2]float64{{0, 1.0}, {d, 1.15}}},
+			{"KFTypeScaleY", [][2]float64{{0, 1.0}, {d, 1.15}}},
+			{"KFTypePositionX", [][2]float64{{0, 0}, {d, 0.05 * dir}}},
+		}
+	case "crane":
+		// 升降镜头：缩放固定 1.1，Y 轴上下交替
+		props = []kfProp{
+			{"KFTypeScaleX", [][2]float64{{0, 1.1}, {d, 1.1}}},
+			{"KFTypeScaleY", [][2]float64{{0, 1.1}, {d, 1.1}}},
+			{"KFTypePositionY", [][2]float64{{0, -0.06 * dir}, {d, 0.06 * dir}}},
+		}
+	default:
+		// static 或未知：轻微推镜头，增加画面动感
+		props = []kfProp{
+			{"KFTypeScaleX", [][2]float64{{0, 1.0}, {d, 1.05}}},
+			{"KFTypeScaleY", [][2]float64{{0, 1.0}, {d, 1.05}}},
+		}
+	}
+
+	var groups []ccKeyframeGroup
+	for _, p := range props {
+		var kfs []ccKeyframe
+		for _, tv := range p.kv {
+			kfs = append(kfs, ccKeyframe{
+				CurveType:    "Line",
+				GraphID:      "",
+				ID:           uuid.New().String(),
+				LeftControl:  ccPoint{},
+				RightControl: ccPoint{},
+				TimeOffset:   int64(tv[0]),
+				Values:       []float64{tv[1]},
+			})
+		}
+		groups = append(groups, ccKeyframeGroup{
+			ID:           uuid.New().String(),
+			KeyframeList: kfs,
+			MaterialID:   segID,
+			PropertyType: p.propType,
+		})
+	}
+	return groups
 }
 
 // sanitizeFilename 清理文件名非法字符，限制长度为50
