@@ -93,6 +93,15 @@ func main() {
 	services.VideoService.WithSceneAnchorService(services.SceneAnchorService)
 	services.NovelImportService.WithStorage(storageSvc).WithAnalysisService(services.NovelAnalysisService).WithAIService(services.AIService)
 
+	// SFX 音效服务（三层降级：本地库 → Freesound → ElevenLabs）
+	sfxService := service.NewSFXService(services.AIService, storageSvc, repos.StoryboardRepo, service.SFXServiceConfig{
+		SFXDir:        getEnv("SFX_DIR", cfg.SFX.Dir),
+		FreesoundKey:  getEnv("FREESOUND_API_KEY", cfg.SFX.FreesoundKey),
+		ElevenLabsKey: getEnv("ELEVENLABS_API_KEY", cfg.SFX.ElevenLabsKey),
+	})
+	services.SFXService = sfxService
+	services.VideoService.WithSFXService(sfxService)
+
 	// 11. 初始化处理器
 	handlers := initHandlers(services, storageSvc, db, repos)
 
@@ -681,7 +690,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-04-v7"
+const schemaVersion = "2026-05-04-v9"
 
 // autoMigrate 自动迁移（带版本跳过优化）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -1027,6 +1036,7 @@ type Services struct {
 	FrameGeneratorService       *service.FrameGeneratorService
 	ConsistencyValidatorService *service.ConsistencyValidatorService
 	BGMService                  *service.BGMService
+	SFXService                  *service.SFXService
 	CrawlerService              *crawler.NovelCrawler
 	NovelImportService          *service.NovelImportService
 	NovelToVideoService         *service.NovelToVideoService
@@ -1299,7 +1309,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		CharacterConsistencyService: characterConsistencyService,
 		FrameGeneratorService:       frameGeneratorService,
 		ConsistencyValidatorService: consistencyValidatorService,
-		BGMService:                  bgmService,
+		BGMService: bgmService,
 		CrawlerService:              crawlerService,
 		NovelImportService:          novelImportService,
 		NovelToVideoService:         novelToVideoService,
@@ -1373,7 +1383,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			services.StoryboardService,
 			services.VideoEnhancementService,
 			services.CharacterConsistencyService,
-		).WithTaskService(services.TaskService),
+		).WithTaskService(services.TaskService).WithSFXService(services.SFXService),
 		ModelHandler:   handler.NewModelHandler(services.ModelService),
 		McpHandler:     handler.NewMcpHandler(services.McpService),
 		StyleHandler:   handler.NewStyleHandler(services.StyleService),

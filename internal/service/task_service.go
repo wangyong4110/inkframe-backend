@@ -24,6 +24,7 @@ const (
 	TaskTypeAssetGen            = "asset_gen"
 	TaskTypeSceneAnchorExtract       = "scene_anchor_extract"
 	TaskTypeChapterSummaryBatch      = "chapter_summary_batch"
+	TaskTypeSFXGen                   = "sfx_gen"
 )
 
 // TaskService manages persistent async tasks.

@@ -939,6 +939,15 @@ func (r *StoryboardRepository) Update(shot *model.StoryboardShot) error {
 	return r.db.Save(shot).Error
 }
 
+// UpdateSFX 更新单个分镜的音效字段（URL、标签、混音音量）
+func (r *StoryboardRepository) UpdateSFX(shotID uint, sfxURL, sfxTags string, sfxVolume float64) error {
+	return r.db.Model(&model.StoryboardShot{}).Where("id = ?", shotID).Updates(map[string]interface{}{
+		"sfx_url":    sfxURL,
+		"sfx_tags":   sfxTags,
+		"sfx_volume": sfxVolume,
+	}).Error
+}
+
 // DeleteByVideoID 硬删除视频的所有分镜（重新生成时使用）
 // 必须用 Unscoped() 物理删除，否则软删除的行仍触发 uk_video_shot 唯一键冲突。
 func (r *StoryboardRepository) DeleteByVideoID(videoID uint) error {

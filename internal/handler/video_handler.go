@@ -20,6 +20,7 @@ type VideoHandler struct {
 	consistencyService *service.CharacterConsistencyService
 	capcutService      *service.CapCutService
 	taskSvc            *service.TaskService
+	sfxSvc             *service.SFXService
 }
 
 func NewVideoHandler(
@@ -39,6 +40,11 @@ func NewVideoHandler(
 
 func (h *VideoHandler) WithTaskService(svc *service.TaskService) *VideoHandler {
 	h.taskSvc = svc
+	return h
+}
+
+func (h *VideoHandler) WithSFXService(svc *service.SFXService) *VideoHandler {
+	h.sfxSvc = svc
 	return h
 }
 
@@ -646,6 +652,98 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
 		"message": "批量素材生成任务已提交",
+		"data":    gin.H{"task_id": task.TaskID},
+	})
+}
+
+// BatchGenerateSFX POST /videos/:id/shots/sfx
+// 为视频所有分镜批量自动生成音效（异步任务）。
+// 已有 sfx_url 的分镜自动跳过（幂等）。
+func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
+	if h.sfxSvc == nil {
+		respondErr(c, http.StatusNotImplemented, "SFX service not configured")
+		return
+	}
+	videoID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		respondBadRequest(c, "invalid video id")
+		return
+	}
+	tenantID := getTenantID(c)
+
+	shots, err := h.videoService.GetStoryboard(uint(videoID))
+	if err != nil || len(shots) == 0 {
+		respondErr(c, http.StatusNotFound, "storyboard not found or empty")
+		return
+	}
+
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeSFXGen, "自动音效生成", "video", uint(videoID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "create task failed")
+		return
+	}
+
+	go func(taskID string) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
+		ctx := c.Request.Context()
+		success, fail := h.sfxSvc.BatchAutoGenerateSFX(ctx, shots, progressFn)
+		h.taskSvc.Complete(taskID, gin.H{"success": success, "fail": fail}) //nolint:errcheck
+		log.Printf("[VideoHandler] BatchGenerateSFX task %s done: success=%d fail=%d", taskID, success, fail)
+	}(task.TaskID)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "音效生成任务已提交",
+		"data":    gin.H{"task_id": task.TaskID},
+	})
+}
+
+// GenerateShotSFX POST /videos/:id/shots/:shot_id/sfx
+// 为单个分镜生成音效（异步任务）。
+func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
+	if h.sfxSvc == nil {
+		respondErr(c, http.StatusNotImplemented, "SFX service not configured")
+		return
+	}
+	videoID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		respondBadRequest(c, "invalid video id")
+		return
+	}
+	shotID, err := strconv.Atoi(c.Param("shot_id"))
+	if err != nil {
+		respondBadRequest(c, "invalid shot id")
+		return
+	}
+	tenantID := getTenantID(c)
+
+	shot, err := h.videoService.GetShotByID(uint(videoID), uint(shotID))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "shot not found")
+		return
+	}
+
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeSFXGen, "单镜头音效生成", "shot", uint(shotID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "create task failed")
+		return
+	}
+
+	go func(taskID string, s *model.StoryboardShot) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		ctx := c.Request.Context()
+		if err := h.sfxSvc.AutoGenerateSFX(ctx, s); err != nil {
+			log.Printf("[VideoHandler] GenerateShotSFX task %s failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, gin.H{"shot_id": s.ID, "sfx_url": s.SFXURL}) //nolint:errcheck
+	}(task.TaskID, shot)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "音效生成任务已提交",
 		"data":    gin.H{"task_id": task.TaskID},
 	})
 }

@@ -148,12 +148,15 @@ type ccAudioMaterial struct {
 }
 
 // ccTextMaterial 字幕/文字素材；content 是 JSON 字符串
+// 注意：剪映要求 id 与 material_id 同值，否则 segment.material_id 引用会失效导致字幕不显示。
 type ccTextMaterial struct {
-	CheckFlag int    `json:"check_flag"`
-	Content   string `json:"content"`
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Type      string `json:"type"` // "text"
+	CheckFlag  int    `json:"check_flag"`
+	Content    string `json:"content"`
+	ID         string `json:"id"`
+	IsSubtitle bool   `json:"is_subtitle"`
+	MaterialID string `json:"material_id"` // 必须与 ID 相同
+	Name       string `json:"name"`
+	Type       string `json:"type"` // "text"
 }
 
 type ccMaterials struct {
@@ -275,7 +278,9 @@ func subtitleTransformY(position string) float64 {
 	}
 }
 
-// buildTextContent 构建剪映字幕素材 content JSON 字符串
+// buildTextContent 构建剪映字幕素材 content JSON 字符串。
+// 剪映要求 style 元素中必须包含 font / useLetterColor / strokes 字段；
+// 缺少这些字段时剪映会静默跳过该文字素材，导致字幕不显示。
 func buildTextContent(text string, cfg subtitleConfig) string {
 	r, g, b := hexToRGBA(cfg.color)
 	// 字体大小：剪映使用 pt 单位，约 px / 5
@@ -294,7 +299,15 @@ func buildTextContent(text string, cfg subtitleConfig) string {
 			},
 			"type": "solid",
 		},
-		"size": sizePt,
+		"size":           sizePt,
+		"useLetterColor": false,
+		"strokes":        []interface{}{},
+		// font 为空时剪映使用默认字体，但字段本身必须存在
+		"font": map[string]interface{}{
+			"id":       "",
+			"path":     "",
+			"typeface": "",
+		},
 	}
 
 	// 背景样式
@@ -309,13 +322,15 @@ func buildTextContent(text string, cfg subtitleConfig) string {
 			"alpha": 0.6,
 			"color": map[string]interface{}{"a": 1.0, "b": 0.0, "g": 0.0, "r": 0.0},
 			"round_radius": 4.0,
-			"style": 2,
+			"style":        2,
 		}
 	}
 
 	obj := map[string]interface{}{
-		"styles": []interface{}{style},
-		"text":   text,
+		"text":          text,
+		"styles":        []interface{}{style},
+		"textAlignType": "center",
+		"typesetting":   0,
 	}
 	b2, _ := json.Marshal(obj)
 	return string(b2)
@@ -343,13 +358,16 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	}
 	var mediaFiles []mediaFile
 
-	// 三类轨道数据
+	// 四类轨道数据
 	var videoMaterials []ccVideoMaterial
 	var videoSegments []ccSegment
 	allKFGroups := []ccKeyframeGroup{} // 图片分镜的 Ken Burns 运镜关键帧
 
 	var audioMaterials []ccAudioMaterial
 	var audioSegments []ccSegment
+
+	var sfxMaterials []ccAudioMaterial // 音效轨道（独立于配音轨道）
+	var sfxSegments []ccSegment
 
 	var textMaterials []ccTextMaterial
 	var textSegments []ccSegment
@@ -482,20 +500,80 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			})
 		}
 
-		// ── 3. 字幕文字素材 ───────────────────────────────────────
+		// ── 3. 音效素材（SFX）────────────────────────────────────
+		if shot.SFXURL != "" {
+			sfxFilename := fmt.Sprintf("shot_%03d_sfx.mp3", shot.ShotNo)
+			sfxMatID := uuid.New().String()
+
+			actualSFXDur := durationMicros
+			if data, err := readLocalOrRemoteFile(shot.SFXURL); err == nil && len(data) > 0 {
+				ext := audioExtension(shot.SFXURL)
+				sfxFilename = fmt.Sprintf("shot_%03d_sfx%s", shot.ShotNo, ext)
+				mediaFiles = append(mediaFiles, mediaFile{filename: sfxFilename, data: data})
+				if dur := parseAudioDurationMicros(data, ext); dur > 0 {
+					actualSFXDur = dur
+				}
+			}
+			sfxSrcDur := actualSFXDur
+			if sfxSrcDur > durationMicros {
+				sfxSrcDur = durationMicros
+			}
+
+			// 混音音量：shot.SFXVolume>0 时使用该值，否则按是否有台词/配音自动估算
+			sfxVol := shot.SFXVolume
+			if sfxVol <= 0 {
+				sfxVol = 0.4
+				if shot.Dialogue != "" {
+					sfxVol = 0.2
+				} else if shot.AudioPath != "" {
+					sfxVol = 0.3
+				}
+			}
+
+			sfxMaterials = append(sfxMaterials, ccAudioMaterial{
+				CheckFlag: 1,
+				Duration:  actualSFXDur,
+				FilePath:  "media/" + sfxFilename,
+				ID:        sfxMatID,
+				Name:      fmt.Sprintf("shot_%03d_sfx", shot.ShotNo),
+				Type:      "extract_music",
+			})
+			sfxSegments = append(sfxSegments, ccSegment{
+				Clip: ccClip{
+					Alpha: 1.0,
+					Scale: ccScale{X: 1.0, Y: 1.0},
+				},
+				ID:              uuid.New().String(),
+				MaterialID:      sfxMatID,
+				Speed:           1.0,
+				SourceTimerange: ccTimeRange{Duration: sfxSrcDur, Start: 0},
+				TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
+				Type:            "audio",
+				Visible:         true,
+				Volume:          sfxVol,
+			})
+		}
+
+		// ── 4. 字幕文字素材 ───────────────────────────────────────
+		// 文本优先级：角色台词 > 旁白文案 > 英文画面描述（仅兼容旧分镜数据）
 		subtitleText := shot.Dialogue
 		if subtitleText == "" {
-			subtitleText = shot.Description
+			subtitleText = shot.Narration // 旁白文案（中文，新数据首选）
+		}
+		if subtitleText == "" {
+			subtitleText = shot.Description // 兜底：旧数据中 Description 可能是中文描述
 		}
 		if subtitleText != "" && subCfg.enabled {
 			txtMatID := uuid.New().String()
 
 			textMaterials = append(textMaterials, ccTextMaterial{
-				CheckFlag: 7,
-				Content:   buildTextContent(subtitleText, subCfg),
-				ID:        txtMatID,
-				Name:      fmt.Sprintf("shot_%03d_subtitle", shot.ShotNo),
-				Type:      "text",
+				CheckFlag:  7,
+				Content:    buildTextContent(subtitleText, subCfg),
+				ID:         txtMatID,
+				IsSubtitle: true,
+				MaterialID: txtMatID, // 必须与 ID 相同，否则 segment.material_id 引用失效
+				Name:       fmt.Sprintf("shot_%03d_subtitle", shot.ShotNo),
+				Type:       "text",
 			})
 
 			textSegments = append(textSegments, ccSegment{
@@ -540,6 +618,17 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			Type:          "audio",
 		})
 	}
+	if len(sfxSegments) > 0 {
+		tracks = append(tracks, ccTrack{
+			Attribute:     0,
+			Flag:          0,
+			ID:            uuid.New().String(),
+			IsDefaultName: true,
+			Name:          "音效",
+			Segments:      sfxSegments,
+			Type:          "audio",
+		})
+	}
 	if len(textSegments) > 0 {
 		tracks = append(tracks, ccTrack{
 			Attribute:     0,
@@ -559,7 +648,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		ID:           draftID,
 		Keyframes:    ccKeyframes{Videos: allKFGroups},
 		Materials: ccMaterials{
-			Audios:   audioMaterials,
+			Audios:   append(audioMaterials, sfxMaterials...),
 			Stickers: []interface{}{},
 			Texts:    textMaterials,
 			Videos:   videoMaterials,

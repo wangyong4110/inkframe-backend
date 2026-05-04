@@ -1895,6 +1895,7 @@ type VideoService struct {
 	videoProviders     map[string]ai.VideoProvider
 	consistencyService *CharacterConsistencyService
 	bgmService         *BGMService
+	sfxService         *SFXService
 	storageSvc         storage.Service
 	sceneAnchorSvc     *SceneAnchorService
 	plotPointRepo      *repository.PlotPointRepository
@@ -1983,6 +1984,12 @@ func (s *VideoService) WithConsistencyService(cs *CharacterConsistencyService) *
 // WithBGMService 设置BGM服务（选填）
 func (s *VideoService) WithBGMService(bgm *BGMService) *VideoService {
 	s.bgmService = bgm
+	return s
+}
+
+// WithSFXService 设置音效服务（选填）
+func (s *VideoService) WithSFXService(sfx *SFXService) *VideoService {
+	s.sfxService = sfx
 	return s
 }
 
@@ -2082,84 +2089,68 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	totalRunes := len([]rune(content))
 	totalShots := calcTotalShots(totalRunes, video.TargetDuration, video.Pacing)
 
-	// 并发处理各段落：各段独立发起 AI 调用，最终按顺序合并。
-	// 信号量限制最多 3 段同时调用 AI，避免触发 rate limit。
-	const maxConcurrentSegs = 3
-	sem := make(chan struct{}, maxConcurrentSegs)
-	type segResult struct {
-		shots []*model.StoryboardShot
-		err   error
-	}
-	results := make([]segResult, len(segments))
-	var wg sync.WaitGroup
+	// 顺序处理各段落，传递上段末尾分镜作为情节连贯上下文。
+	// 顺序处理是确保跨段连贯的必要条件：每段的 prompt 依赖上段的生成结果。
+	var allShots []*model.StoryboardShot
+	var prevTailShots []*model.StoryboardShot // 上一段末尾 N 个分镜，用于连贯上下文
+	shotCounter := 0
 	for segIdx, seg := range segments {
-		wg.Add(1)
-		go func(idx int, seg string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			segRunes := len([]rune(seg))
-			segShotCount := totalShots * segRunes / max(totalRunes, 1)
-			if segShotCount < 3 {
-				segShotCount = 3
+		segRunes := len([]rune(seg))
+		segShotCount := totalShots * segRunes / max(totalRunes, 1)
+		if segShotCount < 3 {
+			segShotCount = 3
+		}
+		prompt := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, len(segments), segShotCount, characters, anchors, plotPoints, prevTailShots)
+		var result string
+		var aiErr error
+		// 最多重试 2 次：仅针对 JSON 格式错误重试，超时直接 fail-fast。
+		for attempt := 0; attempt < 3; attempt++ {
+			p := prompt
+			if attempt > 0 {
+				p = prompt + "\n\n⚠️ 重要提示：请只返回纯 JSON 数组，不要包含任何 markdown 代码块（```）或说明文字。"
+				log.Printf("GenerateStoryboard: segment %d/%d retry attempt %d", segIdx+1, len(segments), attempt)
 			}
-			prompt := s.buildStoryboardPrompt(video, seg, userPrompt, idx+1, len(segments), segShotCount, characters, anchors, plotPoints)
-			var result string
-			var aiErr error
-			// 最多重试 2 次：仅针对 JSON 格式错误（AI 输出 markdown 包装等）重试。
-			// 超时错误直接 fail-fast，重试超时只会叠加等待时间。
-			for attempt := 0; attempt < 3; attempt++ {
-				p := prompt
-				if attempt > 0 {
-					p = prompt + "\n\n⚠️ 重要提示：请只返回纯 JSON 数组，不要包含任何 markdown 代码块（```）或说明文字。"
-					log.Printf("GenerateStoryboard: segment %d/%d retry attempt %d", idx+1, len(segments), attempt)
-				}
-				result, aiErr = s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", p, provider)
-				if aiErr == nil && strings.TrimSpace(result) != "" {
-					break
-				}
-				if aiErr != nil {
-					log.Printf("GenerateStoryboard: segment %d/%d attempt %d AI error: %v", idx+1, len(segments), attempt, aiErr)
-					// 超时不重试：重试只会叠加等待时间
-					if ai.IsTimeoutError(aiErr) {
-						break
-					}
-				}
+			result, aiErr = s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", p, provider)
+			if aiErr == nil && strings.TrimSpace(result) != "" {
+				break
 			}
 			if aiErr != nil {
-				results[idx] = segResult{err: aiErr}
-				return
+				log.Printf("GenerateStoryboard: segment %d/%d attempt %d AI error: %v", segIdx+1, len(segments), attempt, aiErr)
+				if ai.IsTimeoutError(aiErr) {
+					break
+				}
 			}
-			segShots, parseErr := s.parseStoryboardResult(videoID, chapterID, result)
-			if parseErr != nil {
-				results[idx] = segResult{err: fmt.Errorf("解析AI分镜结果失败: %w", parseErr)}
-				return
+		}
+		if aiErr != nil {
+			if segIdx == 0 {
+				return nil, aiErr
 			}
-			results[idx] = segResult{shots: segShots}
-		}(segIdx, seg)
-	}
-	wg.Wait()
-
-	// 按段落顺序合并结果
-	var allShots []*model.StoryboardShot
-	shotCounter := 0
-	for idx, res := range results {
-		if res.err != nil {
-			if idx == 0 {
-				return nil, res.err
+			log.Printf("GenerateStoryboard: segment %d/%d failed (non-fatal): %v", segIdx+1, len(segments), aiErr)
+			continue
+		}
+		segShots, parseErr := s.parseStoryboardResult(videoID, chapterID, result)
+		if parseErr != nil {
+			if segIdx == 0 {
+				return nil, fmt.Errorf("解析AI分镜结果失败: %w", parseErr)
 			}
-			log.Printf("GenerateStoryboard: segment %d/%d failed (non-fatal): %v", idx+1, len(segments), res.err)
+			log.Printf("GenerateStoryboard: segment %d/%d parse failed (non-fatal): %v", segIdx+1, len(segments), parseErr)
 			continue
 		}
 		// 全局顺序重编号，保证跨段 shot_no 连续且唯一
-		for _, shot := range res.shots {
+		for _, shot := range segShots {
 			shotCounter++
 			shot.ShotNo = shotCounter
 		}
-		allShots = append(allShots, res.shots...)
+		allShots = append(allShots, segShots...)
+		// 保存本段末尾 3 个分镜，供下一段的连贯上下文使用
+		tailCount := 3
+		if len(segShots) < tailCount {
+			tailCount = len(segShots)
+		}
+		prevTailShots = segShots[len(segShots)-tailCount:]
 		// 进度回调：每段完成后按比例上报（最多到 90%，Complete 时才到 100%）
 		if progressFn != nil {
-			pct := (idx + 1) * 90 / len(segments)
+			pct := (segIdx + 1) * 90 / len(segments)
 			progressFn(pct)
 		}
 	}
@@ -2395,20 +2386,60 @@ func extractLocationFromScene(sceneJSON string) string {
 // segNo/totalSegs 为分段编号（从 1 开始），单段调用时传 1, 1。
 // expectedShots 为本段期望分镜数，由调用方通过 calcTotalShots 计算后传入。
 // characters/anchors/plotPoints 为调用方预取的数据（避免每段重复查 DB）。
+// buildStoryboardPrompt 构建分镜生成 Prompt。
+// prevShots: 上一段落末尾的 N 个分镜，用于跨段落情节连贯（顺序处理时传入，并发时为 nil）。
 func (s *VideoService) buildStoryboardPrompt(
 	video *model.Video, content, userPrompt string,
 	segNo, totalSegs, expectedShots int,
 	characters []*model.Character, anchors []*model.SceneAnchor, plotPoints []*model.PlotPoint,
+	prevShots []*model.StoryboardShot,
 ) string {
 	var sb strings.Builder
 
 	segLabel := ""
 	if totalSegs > 1 {
-		segLabel = fmt.Sprintf("（第%d段 / 共%d段）", segNo, totalSegs)
+		segLabel = fmt.Sprintf("（第%d段，共%d段）", segNo, totalSegs)
 	}
-	sb.WriteString(fmt.Sprintf("你是一名专业分镜师。请根据以下内容%s生成分镜脚本，以JSON数组格式返回。\n\n", segLabel))
+	sb.WriteString(fmt.Sprintf("你是专业影视分镜师，同时负责撰写旁白文案。请将以下章节内容%s转化为约%d个分镜，返回JSON数组。\n\n", segLabel, expectedShots))
 
-	// 注入角色视觉信息（只注入当前段落提及的角色，减少无关 token）
+	// ── 字段规范（核心约束，AI 必须严格遵守）──────────────────────────
+	sb.WriteString(`【输出字段规范——严格遵守，违反规范将导致输出无法使用】
+▸ description（英文画面描述）
+  - 仅用于 AI 图片生成的英文视觉提示词
+  - 描述：主体（人物/物体）、场景环境、构图、光线氛围
+  - 禁止出现中文、叙事句子、心理描写
+
+▸ narration（中文旁白文案）——每镜必填，不得为空
+  - 观众"听到"的旁白内容，第三人称叙事视角，语言生动凝练
+  - 严禁出现以下词汇：镜头、画面、特写、推进、切换、转场、画外音、摄影机、定格
+  - ✅ 正确示例："凌云握紧长剑，眼中燃起不灭的复仇之火。"
+  - ❌ 错误示例："镜头推近，画面聚焦在凌云手握长剑的特写上。"
+  - ❌ 错误示例："画面展示凌云愤怒的表情，镜头缓缓拉远。"
+
+▸ dialogue（角色台词）——仅当角色实际开口说话时填写
+  - 格式固定："角色名：台词内容"（如"凌云：你敢再说一遍！"）
+  - 无对话时必须为空字符串 ""，禁止填入旁白或镜头描述
+
+`)
+
+	// ── 连续性上下文（跨段落情节连贯）──────────────────────────────
+	if len(prevShots) > 0 {
+		sb.WriteString("【上一段末尾分镜——本段首镜须与其情节自然衔接】\n")
+		for _, ps := range prevShots {
+			narr := ps.Narration
+			if narr == "" {
+				narr = ps.Description
+			}
+			sb.WriteString(fmt.Sprintf("  第%d镜 旁白：%s", ps.ShotNo, narr))
+			if ps.Dialogue != "" {
+				sb.WriteString(fmt.Sprintf(" ／ 台词：%s", ps.Dialogue))
+			}
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\n")
+	}
+
+	// ── 角色外貌信息（仅注入当前段落提及的角色）──────────────────
 	if len(characters) > 0 {
 		contentLower := strings.ToLower(content)
 		var matched []*model.Character
@@ -2417,7 +2448,6 @@ func (s *VideoService) buildStoryboardPrompt(
 				matched = append(matched, c)
 			}
 		}
-		// 若段落中未命中任何角色（短段落/旁白段），回退注入主角（role=protagonist）
 		if len(matched) == 0 {
 			for _, c := range characters {
 				if c.Role == "protagonist" {
@@ -2426,7 +2456,7 @@ func (s *VideoService) buildStoryboardPrompt(
 			}
 		}
 		if len(matched) > 0 {
-			sb.WriteString("【角色信息】\n")
+			sb.WriteString("【角色外貌（description 中须保持一致）】\n")
 			for _, c := range matched {
 				sb.WriteString(fmt.Sprintf("- %s（%s）", c.Name, c.Role))
 				if c.Appearance != "" {
@@ -2438,7 +2468,7 @@ func (s *VideoService) buildStoryboardPrompt(
 		}
 	}
 
-	// 注入已命名场景（只注入当前段落提及的锚点；超出 8 个时截断，避免 prompt 过大）
+	// ── 场景锚点（仅注入当前段落提及的锚点）──────────────────────
 	if len(anchors) > 0 {
 		contentLower := strings.ToLower(content)
 		var matchedAnchors []*model.SceneAnchor
@@ -2447,7 +2477,6 @@ func (s *VideoService) buildStoryboardPrompt(
 				matchedAnchors = append(matchedAnchors, a)
 			}
 		}
-		// 若无命中，取前 5 个作为兜底提示（不超出 prompt 预算）
 		if len(matchedAnchors) == 0 && len(anchors) > 0 {
 			limit := 5
 			if len(anchors) < limit {
@@ -2459,7 +2488,7 @@ func (s *VideoService) buildStoryboardPrompt(
 			matchedAnchors = matchedAnchors[:8]
 		}
 		if len(matchedAnchors) > 0 {
-			sb.WriteString("【已命名场景（location字段请从以下名称中选择）】\n")
+			sb.WriteString("【已命名场景（location 字段请从以下名称中选择）】\n")
 			for _, a := range matchedAnchors {
 				sb.WriteString(fmt.Sprintf("- %s: %s\n", a.Name, a.Description))
 			}
@@ -2467,9 +2496,9 @@ func (s *VideoService) buildStoryboardPrompt(
 		}
 	}
 
-	// 注入未解决剧情点（提示分镜叙事张力）
+	// ── 剧情线（提示叙事张力）──────────────────────────────────
 	if len(plotPoints) > 0 {
-		sb.WriteString("【本章剧情线（分镜需体现叙事张力）】\n")
+		sb.WriteString("【本章剧情线（旁白须体现叙事张力）】\n")
 		maxPP := 5
 		if len(plotPoints) < maxPP {
 			maxPP = len(plotPoints)
@@ -2480,9 +2509,9 @@ func (s *VideoService) buildStoryboardPrompt(
 		sb.WriteString("\n")
 	}
 
+	// ── 章节内容 ──────────────────────────────────────────────
 	if content != "" {
 		sb.WriteString("【章节内容】\n")
-		// 截断保护：最多 6000 字符
 		if len(content) > 10000 {
 			content = content[:10000] + "…（已截断）"
 		}
@@ -2490,22 +2519,22 @@ func (s *VideoService) buildStoryboardPrompt(
 		sb.WriteString("\n\n")
 	}
 
-	// 注入用户自定义提示词
+	// ── 用户附加要求 ──────────────────────────────────────────
 	if userPrompt != "" {
-		sb.WriteString("【用户额外要求】\n")
+		sb.WriteString("【用户要求】\n")
 		sb.WriteString(userPrompt)
 		sb.WriteString("\n\n")
 	}
 
-	sb.WriteString(fmt.Sprintf(
-		`请将以下内容分解为约%d个分镜（按实际情节密度生成；每个重大动作、对话轮次、场景切换必须单独成镜）。以JSON数组返回，格式如下：`,
-		expectedShots))
-	sb.WriteString(`
+	// ── 输出格式 ──────────────────────────────────────────────
+	sb.WriteString(fmt.Sprintf(`请将章节内容分解为约%d个分镜（每个重大动作、对话轮次、场景切换须单独成镜）。
+只返回JSON数组，不要任何额外说明或markdown代码块：
 [
   {
     "shot_no": 1,
-    "description": "场景描述（中文）",
-    "dialogue": "对话内容（如无则留空）",
+    "description": "English visual prompt for image generation only, no Chinese",
+    "narration": "中文旁白（必填，严禁镜头语言）",
+    "dialogue": "角色名：台词（无对话则为空字符串）",
     "camera_type": "static|pan|zoom|tracking|dolly|crane",
     "camera_angle": "eye_level|high|low|dutch|overhead|POV",
     "shot_size": "extreme_wide|wide|full|medium|close_up|extreme_close_up",
@@ -2514,11 +2543,10 @@ func (s *VideoService) buildStoryboardPrompt(
     "time_of_day": "dawn|morning|afternoon|evening|night",
     "weather": "clear|cloudy|rainy|snowy|foggy",
     "lighting": "natural|dramatic|soft|backlit",
-    "characters": [{"name":"角色名","expression":"表情","pose":"动作姿势"}],
+    "characters": [{"name":"角色名","expression":"表情","pose":"姿势动作"}],
     "transition": "cut|fade|dissolve|wipe"
   }
-]
-只返回JSON数组，不要任何额外说明。`)
+]`, expectedShots))
 
 	return sb.String()
 }
@@ -2530,8 +2558,9 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 
 	var rawShots []struct {
 		ShotNo      int     `json:"shot_no"`
-		Description string  `json:"description"`
-		Dialogue    string  `json:"dialogue"`
+		Description string  `json:"description"` // 英文画面描述（供图片/视频生成）
+		Narration   string  `json:"narration"`   // 中文旁白文案（供TTS和字幕）
+		Dialogue    string  `json:"dialogue"`    // 角色台词（格式："角色名：台词"）
 		CameraType  string  `json:"camera_type"`
 		CameraAngle string  `json:"camera_angle"`
 		ShotSize    string  `json:"shot_size"`
@@ -2603,6 +2632,7 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			ChapterID:   chapterID,
 			ShotNo:      shotNo,
 			Description: r.Description,
+			Narration:   r.Narration,
 			Prompt:      prompt,
 			Dialogue:    r.Dialogue,
 			CameraType:  validCameraType(r.CameraType),
@@ -3407,12 +3437,16 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 }
 
 // GenerateShotAudio 为单个分镜生成 TTS 音频，优先使用角色声音设置。
-// narrationVoice 为旁白音色 ID（空串则自动从项目配置加载，仍空则降级到 "alloy"）；非对话镜头以 Description 作为朗读文本。
+// 朗读文本优先级：Dialogue（角色台词）> Narration（旁白文案）> Description（英文画面描述，兜底）。
+// narrationVoice 为旁白音色 ID（空串则自动从项目配置加载，仍空则降级到 "alloy"）。
 // 若注入了 storageSvc，将音频上传至 OSS 或 DB，并更新 shot.AudioPath 为持久 URL。
 func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID uint, narrationVoice string) error {
 	text := shot.Dialogue
 	if text == "" {
-		text = shot.Description
+		text = shot.Narration // 旁白文案（中文，无镜头语言）
+	}
+	if text == "" {
+		text = shot.Description // 兜底：英文画面描述（旧数据兼容）
 	}
 	if text == "" {
 		return nil
@@ -3494,10 +3528,14 @@ func (s *VideoService) uploadAudioToStorage(ctx context.Context, shot *model.Sto
 	return s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), "audio/mpeg")
 }
 
-// GenerateShotSRT 根据分镜的台词和时长生成单条 SRT 字幕内容。
+// GenerateShotSRT 根据分镜的台词/旁白和时长生成单条 SRT 字幕内容。
 // 时间码从 00:00:00,000 开始，结束时间 = shot.Duration。
+// 文本优先级：Dialogue > Narration > Description（兜底兼容旧数据）。
 func GenerateShotSRT(shot *model.StoryboardShot) string {
 	text := shot.Dialogue
+	if text == "" {
+		text = shot.Narration
+	}
 	if text == "" {
 		text = shot.Description
 	}

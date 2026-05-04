@@ -823,8 +823,9 @@ type StoryboardShot struct {
 	ChapterID *uint    `json:"chapter_id,omitempty" gorm:"index"`
 	Chapter   *Chapter `json:"chapter,omitempty" gorm:"foreignKey:ChapterID"`
 
-	Description string `json:"description" gorm:"type:text"`
-	Dialogue    string `json:"dialogue" gorm:"type:text"`
+	Description string `json:"description" gorm:"type:text"` // 英文画面描述，供AI图片/视频生成使用
+	Narration   string `json:"narration" gorm:"type:text"`   // 中文旁白文案，供TTS朗读和字幕显示使用
+	Dialogue    string `json:"dialogue" gorm:"type:text"`    // 角色台词（格式："角色名：台词"），有对话时填写
 
 	// 摄像机配置
 	CameraType string `json:"camera_type" gorm:"size:50;default:static"`
@@ -880,6 +881,11 @@ type StoryboardShot struct {
 
 	// 角色绑定（序列化为 JSON 数组，前端直接收到 [1,2,3]）
 	CharacterIDs JSONUintSlice `json:"character_ids" gorm:"type:json"`
+
+	// 音效（SFX）
+	SFXURL    string  `json:"sfx_url" gorm:"size:1000"`    // 音效文件URL（本地/OSS/Freesound预览）
+	SFXTags   string  `json:"sfx_tags" gorm:"size:500"`    // LLM提取的音效标签（JSON数组字符串）
+	SFXVolume float64 `json:"sfx_volume" gorm:"type:decimal(4,2);default:0"` // 混音音量（0=自动，>0=覆盖）
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
