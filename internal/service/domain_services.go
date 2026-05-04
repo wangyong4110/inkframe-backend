@@ -2104,8 +2104,8 @@ func (s *StoryboardService) GenerateStoryboard(videoID, chapterID uint, characte
 }
 
 // ReviewStoryboard 调用 AI 对分镜脚本进行专业审查
-func (s *StoryboardService) ReviewStoryboard(videoID uint, provider string) (*model.StoryboardReview, error) {
-	return s.videoService.ReviewStoryboard(videoID, provider)
+func (s *StoryboardService) ReviewStoryboard(tenantID, videoID uint, provider string) (*model.StoryboardReview, error) {
+	return s.videoService.ReviewStoryboard(tenantID, videoID, provider)
 }
 
 func (s *StoryboardService) AnalyzeEmotions(content string) (interface{}, error) {

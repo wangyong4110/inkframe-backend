@@ -312,7 +312,7 @@ func (h *VideoHandler) ReviewStoryboard(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req) // 可选 body
 
-	review, err := h.storyboardService.ReviewStoryboard(uint(videoId), req.Provider)
+	review, err := h.storyboardService.ReviewStoryboard(getTenantID(c), uint(videoId), req.Provider)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return

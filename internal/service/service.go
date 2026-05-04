@@ -2965,7 +2965,7 @@ func (s *VideoService) GetStoryboard(videoID uint) ([]*model.StoryboardShot, err
 }
 
 // ReviewStoryboard 调用 AI 对分镜脚本进行专业审查，返回结构化报告。
-func (s *VideoService) ReviewStoryboard(videoID uint, provider string) (*model.StoryboardReview, error) {
+func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string) (*model.StoryboardReview, error) {
 	shots, err := s.storyboardRepo.ListByVideo(videoID)
 	if err != nil {
 		return nil, fmt.Errorf("获取分镜失败: %w", err)
@@ -2976,7 +2976,7 @@ func (s *VideoService) ReviewStoryboard(videoID uint, provider string) (*model.S
 
 	prompt := buildStoryboardReviewPrompt(shots)
 
-	result, err := s.aiService.GenerateWithProvider(0, 0, "storyboard_review", prompt, provider)
+	result, err := s.aiService.GenerateWithProvider(tenantID, 0, "storyboard_review", prompt, provider)
 	if err != nil {
 		return nil, fmt.Errorf("AI审查失败: %w", err)
 	}
