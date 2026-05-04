@@ -9,7 +9,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1957,16 +1956,6 @@ func (s *VideoService) GetNovelByID(id uint) (*model.Novel, error) {
 	return s.novelRepo.GetByID(id)
 }
 
-// ffmpegBin 返回 FFmpeg 可执行文件路径（优先读系统配置，fallback 到 PATH 中的 ffmpeg）
-func (s *VideoService) ffmpegBin() string {
-	if s.systemSettingRepo != nil {
-		if p, err := s.systemSettingRepo.Get("ffmpeg_path"); err == nil && p != "" {
-			return p
-		}
-	}
-	return "ffmpeg"
-}
-
 func (s *VideoService) WithSystemSettingRepo(r *repository.SystemSettingRepository) *VideoService {
 	s.systemSettingRepo = r
 	return s
@@ -3455,15 +3444,14 @@ func (s *VideoService) extractLastFrame(clipPath string) (string, error) {
 	localPath := strings.TrimPrefix(clipPath, "file://")
 
 	tmpJpeg := fmt.Sprintf("%s/inkframe-lastframe-%d.jpg", inkframeTempDir(), time.Now().UnixNano())
-	cmd := exec.Command(s.ffmpegBin(), "-y",
+	if _, err := runFFmpegCtx(context.Background(), "-y",
 		"-sseof", "-0.1",
 		"-i", localPath,
 		"-vframes", "1",
 		"-f", "image2",
 		tmpJpeg,
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("extractLastFrame failed: %w\noutput: %s", err, string(out))
+	); err != nil {
+		return "", fmt.Errorf("extractLastFrame failed: %w", err)
 	}
 	return tmpJpeg, nil
 }
@@ -3915,15 +3903,14 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 		if shot.AudioPath != "" {
 			audioPath := strings.TrimPrefix(shot.AudioPath, "file://")
 			mergedFile := fmt.Sprintf("%s/clip_audio_%d.mp4", tmpDir, i)
-			cmd := exec.Command(s.ffmpegBin(), "-y",
+			if _, err := runFFmpegCtx(context.Background(), "-y",
 				"-i", clipFile,
 				"-i", audioPath,
 				"-c:v", "copy",
 				"-c:a", "aac",
 				"-shortest",
 				mergedFile,
-			)
-			if err := cmd.Run(); err != nil {
+			); err != nil {
 				log.Printf("StitchVideo: merge audio for shot %d failed: %v, using clip without audio", shot.ShotNo, err)
 			} else {
 				finalClip = mergedFile
@@ -3939,15 +3926,14 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 	}
 
 	stitchedPath := fmt.Sprintf("%s/inkframe-%d-stitched.mp4", inkframeTempDir(), videoID)
-	cmd := exec.Command(s.ffmpegBin(), "-y",
+	if _, err := runFFmpegCtx(context.Background(), "-y",
 		"-f", "concat",
 		"-safe", "0",
 		"-i", listFile,
 		"-c", "copy",
 		stitchedPath,
-	)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("ffmpeg stitch failed: %w\noutput: %s", err, string(out))
+	); err != nil {
+		return "", fmt.Errorf("ffmpeg stitch failed: %w", err)
 	}
 
 	// BGM 混音（非致命：失败时使用无BGM版本）
@@ -4030,7 +4016,7 @@ func (s *VideoService) generateStillFrameClip(imagePath string, duration float64
 	outPath := fmt.Sprintf("%s/inkframe-still-%d.mp4", inkframeTempDir(), time.Now().UnixNano())
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, s.ffmpegBin(), "-y",
+	if _, err := runFFmpegCtx(ctx, "-y",
 		"-loop", "1",
 		"-t", fmt.Sprintf("%.2f", duration),
 		"-i", imagePath,
@@ -4039,11 +4025,8 @@ func (s *VideoService) generateStillFrameClip(imagePath string, duration float64
 		"-pix_fmt", "yuv420p",
 		"-r", "24",
 		outPath,
-	)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("ffmpeg still frame: %v — %s", err, stderr.String())
+	); err != nil {
+		return "", fmt.Errorf("ffmpeg still frame: %w", err)
 	}
 	return outPath, nil
 }
@@ -4089,7 +4072,7 @@ func (s *VideoService) generateKenBurnsClip(shot *model.StoryboardShot, imagePat
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, s.ffmpegBin(), "-y",
+	if _, err := runFFmpegCtx(ctx, "-y",
 		"-loop", "1",
 		"-t", fmt.Sprintf("%.2f", duration),
 		"-i", imagePath,
@@ -4099,11 +4082,8 @@ func (s *VideoService) generateKenBurnsClip(shot *model.StoryboardShot, imagePat
 		"-r", fmt.Sprintf("%d", fps),
 		"-threads", "0",
 		outPath,
-	)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("ffmpeg ken burns: %v — %s", err, stderr.String())
+	); err != nil {
+		return "", fmt.Errorf("ffmpeg ken burns: %w", err)
 	}
 	return outPath, nil
 }

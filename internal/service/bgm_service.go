@@ -1,10 +1,10 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -102,7 +102,7 @@ func (s *BGMService) MixBGM(videoPath, bgmSource, outputPath string) error {
 	// FFmpeg: 混合 BGM（30% 音量），原视频音频优先，BGM 循环填充
 	// -stream_loop -1 让 BGM 循环
 	// amix: 混合两路音频，duration=first 以视频时长为准
-	cmd := exec.Command("ffmpeg", "-y",
+	if out, err := runFFmpegCtx(context.Background(), "-y",
 		"-i", videoPath,
 		"-stream_loop", "-1",
 		"-i", bgmLocalPath,
@@ -113,9 +113,7 @@ func (s *BGMService) MixBGM(videoPath, bgmSource, outputPath string) error {
 		"-c:a", "aac",
 		"-shortest",
 		outputPath,
-	)
-
-	if out, err := cmd.CombinedOutput(); err != nil {
+	); err != nil {
 		log.Printf("MixBGM: ffmpeg failed: %v\n%s", err, string(out))
 		return fmt.Errorf("ffmpeg BGM mix failed: %w", err)
 	}

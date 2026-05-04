@@ -9,7 +9,6 @@ import (
 	"math"
 	"net/http"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -840,7 +839,7 @@ func (s *VideoEnhancementService) applyFrameInterpolation(ctx context.Context, v
 	}
 	outputPath := fmt.Sprintf("%s/fi-%d.mp4", s.tmpDir, time.Now().UnixNano())
 
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-y",
+	if out, runErr := runFFmpegCtx(ctx, "-y",
 		"-i", inputPath,
 		"-vf", fmt.Sprintf("minterpolate=fps=%d:mi_mode=mci:mc_mode=aobmc:vsbmc=1", targetFPS),
 		"-c:v", "libx264",
@@ -848,8 +847,7 @@ func (s *VideoEnhancementService) applyFrameInterpolation(ctx context.Context, v
 		"-crf", "18",
 		"-c:a", "copy",
 		outputPath,
-	)
-	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+	); runErr != nil {
 		log.Printf("[enhancement] frame_interpolation failed: %v\n%s", runErr, string(out))
 		return videoURL, nil // 非致命：返回原始
 	}
@@ -875,15 +873,14 @@ func (s *VideoEnhancementService) applySuperResolution(ctx context.Context, vide
 	outputPath := fmt.Sprintf("%s/sr-%d.mp4", s.tmpDir, time.Now().UnixNano())
 
 	scaleFilter := fmt.Sprintf("scale=iw*%.0f:ih*%.0f:flags=lanczos,unsharp=5:5:1.5:5:5:0.0", scale, scale)
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-y",
+	if out, runErr := runFFmpegCtx(ctx, "-y",
 		"-i", inputPath,
 		"-vf", scaleFilter,
 		"-c:v", "libx264",
 		"-crf", "16",
 		"-c:a", "copy",
 		outputPath,
-	)
-	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+	); runErr != nil {
 		log.Printf("[enhancement] super_resolution failed: %v\n%s", runErr, string(out))
 		return videoURL, nil
 	}
@@ -920,15 +917,14 @@ func (s *VideoEnhancementService) applyColorGrading(ctx context.Context, videoUR
 	}
 	outputPath := fmt.Sprintf("%s/cg-%d.mp4", s.tmpDir, time.Now().UnixNano())
 
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-y",
+	if out, runErr := runFFmpegCtx(ctx, "-y",
 		"-i", inputPath,
 		"-vf", filter,
 		"-c:v", "libx264",
 		"-crf", "18",
 		"-c:a", "copy",
 		outputPath,
-	)
-	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+	); runErr != nil {
 		log.Printf("[enhancement] color_grading failed: %v\n%s", runErr, string(out))
 		return videoURL, nil
 	}
@@ -950,24 +946,22 @@ func (s *VideoEnhancementService) applyStabilization(ctx context.Context, videoU
 	outputPath := fmt.Sprintf("%s/stab-%d.mp4", s.tmpDir, time.Now().UnixNano())
 
 	// Pass 1: detect
-	pass1 := exec.CommandContext(ctx, "ffmpeg", "-y",
+	if out, pass1Err := runFFmpegCtx(ctx, "-y",
 		"-i", inputPath,
 		"-vf", fmt.Sprintf("vidstabdetect=shakiness=10:accuracy=15:result=%s", trfFile),
 		"-f", "null", "-",
-	)
-	if out, pass1Err := pass1.CombinedOutput(); pass1Err != nil {
+	); pass1Err != nil {
 		if strings.Contains(string(out), "No such filter") || strings.Contains(pass1Err.Error(), "No such filter") {
 			// vid.stab 不可用，降级到 deshake
 			log.Printf("[enhancement] vid.stab unavailable, falling back to deshake")
-			deshakeCmd := exec.CommandContext(ctx, "ffmpeg", "-y",
+			if dOut, dErr := runFFmpegCtx(ctx, "-y",
 				"-i", inputPath,
 				"-vf", "deshake",
 				"-c:v", "libx264",
 				"-crf", "18",
 				"-c:a", "copy",
 				outputPath,
-			)
-			if dOut, dErr := deshakeCmd.CombinedOutput(); dErr != nil {
+			); dErr != nil {
 				log.Printf("[enhancement] deshake also failed: %v\n%s", dErr, string(dOut))
 				return videoURL, nil
 			}
@@ -978,16 +972,15 @@ func (s *VideoEnhancementService) applyStabilization(ctx context.Context, videoU
 	}
 
 	// Pass 2: transform
-	pass2 := exec.CommandContext(ctx, "ffmpeg", "-y",
+	defer os.Remove(trfFile)
+	if out, pass2Err := runFFmpegCtx(ctx, "-y",
 		"-i", inputPath,
 		"-vf", fmt.Sprintf("vidstabtransform=input=%s:zoom=1:smoothing=30,unsharp=5:5:0.8", trfFile),
 		"-c:v", "libx264",
 		"-crf", "18",
 		"-c:a", "copy",
 		outputPath,
-	)
-	defer os.Remove(trfFile)
-	if out, pass2Err := pass2.CombinedOutput(); pass2Err != nil {
+	); pass2Err != nil {
 		log.Printf("[enhancement] vidstabtransform failed: %v\n%s", pass2Err, string(out))
 		return videoURL, nil
 	}
@@ -1023,15 +1016,14 @@ func (s *VideoEnhancementService) applyStyleTransfer(ctx context.Context, videoU
 	}
 	outputPath := fmt.Sprintf("%s/st-%d.mp4", s.tmpDir, time.Now().UnixNano())
 
-	cmd := exec.CommandContext(ctx, "ffmpeg", "-y",
+	if out, runErr := runFFmpegCtx(ctx, "-y",
 		"-i", inputPath,
 		"-vf", filter,
 		"-c:v", "libx264",
 		"-crf", "18",
 		"-c:a", "copy",
 		outputPath,
-	)
-	if out, runErr := cmd.CombinedOutput(); runErr != nil {
+	); runErr != nil {
 		log.Printf("[enhancement] style_transfer failed: %v\n%s", runErr, string(out))
 		return videoURL, nil
 	}
