@@ -1099,12 +1099,13 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 		}
 	}
 
-	// 分镜/角色/世界观等 JSON 输出量大的任务，不允许被 novel.MaxTokens（章节字数目标）压低
-	// novel.MaxTokens 存的是章节字数目标 ×2，不代表模型 output token 上限
+	// 分镜/角色/世界观等 JSON 输出量大的任务，不允许被 novel.MaxTokens（章节字数目标）压低。
+	// novel.MaxTokens 存的是章节字数目标 ×2，不代表模型 output token 上限。
+	// 只设下限（4096），不强制上限：高镜头数（targetDuration+fast）可能需要 >8192 tokens。
 	switch taskType {
 	case "storyboard", "character", "worldview", "character_state", "scene_anchor_extract":
-		if config.MaxTokens < 16384 {
-			config.MaxTokens = 16384
+		if config.MaxTokens < 4096 {
+			config.MaxTokens = 4096
 		}
 		// JSON 结构化输出任务降温：高温度会产生格式漂移（多余 markdown / 说明文字），
 		// 触发 retry 反而更慢；0.1 足以保证输出格式稳定。
@@ -1231,7 +1232,11 @@ func (s *AIService) callAIWithProvider(tenantID uint, prompt string, config *mod
 		req.MaxTokens = 4096
 	}
 
-	resp, err := provider.Generate(context.Background(), req)
+	// 为所有 AI 同步调用设置 3 分钟超时，防止 AI 服务慢响应时请求无限挂起。
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	resp, err := provider.Generate(ctx, req)
 	if err != nil {
 		return "", err
 	}
@@ -2119,9 +2124,10 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		}
 	}
 
-	// 分段生成：长章节按 2000 字切割，每段独立调用 AI，合并后顺序重编号。
-	// 短章节（≤2000 字）等同于原单段调用路径，行为完全一致。
-	const segmentMaxRunes = 2000
+	// 分段生成：长章节按 3500 字切割，每段独立调用 AI，合并后顺序重编号。
+	// 短章节（≤3500 字）等同于原单段调用路径，行为完全一致。
+	// 3500 字对应约 25 个镜头（≈5000 tokens），在 8192 MaxTokens 内有充足余量。
+	const segmentMaxRunes = 3500
 	segments := splitContentSegments(content, segmentMaxRunes)
 
 	totalRunes := len([]rune(content))
