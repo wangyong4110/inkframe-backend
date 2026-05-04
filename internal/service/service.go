@@ -1331,11 +1331,49 @@ func extractJSON(content string) string {
 		} else if content[i] == closeChar {
 			depth--
 			if depth == 0 {
-				return content[start : i+1]
+				return sanitizeJSONStrings(content[start : i+1])
 			}
 		}
 	}
-	return content[start:]
+	return sanitizeJSONStrings(content[start:])
+}
+
+// sanitizeJSONStrings 将 JSON 字符串字面量内未转义的控制字符（\n \r \t）
+// 替换为合法的转义序列，修复 LLM 有时直接输出裸换行的问题。
+func sanitizeJSONStrings(s string) string {
+	var buf strings.Builder
+	buf.Grow(len(s))
+	inStr := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			switch c {
+			case '\\': // 已有转义序列，原样保留两个字节
+				buf.WriteByte(c)
+				i++
+				if i < len(s) {
+					buf.WriteByte(s[i])
+				}
+			case '"':
+				inStr = false
+				buf.WriteByte(c)
+			case '\n':
+				buf.WriteString(`\n`)
+			case '\r':
+				buf.WriteString(`\r`)
+			case '\t':
+				buf.WriteString(`\t`)
+			default:
+				buf.WriteByte(c)
+			}
+		} else {
+			if c == '"' {
+				inStr = true
+			}
+			buf.WriteByte(c)
+		}
+	}
+	return buf.String()
 }
 
 func min(a, b int) int {
