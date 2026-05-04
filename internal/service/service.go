@@ -2495,9 +2495,13 @@ func (s *VideoService) buildStoryboardPrompt(
 	// ── 字段规范（核心约束，AI 必须严格遵守）──────────────────────────
 	sb.WriteString(`【输出字段规范——严格遵守，违反规范将导致输出无法使用】
 ▸ description（英文画面描述）
-  - 仅用于 AI 图片生成的英文视觉提示词
-  - 描述：主体（人物/物体）、场景环境、构图、光线氛围
-  - 禁止出现中文、叙事句子、心理描写
+  - 仅用于 AI 图片生成的英文视觉提示词，禁止出现中文、叙事句子、心理描写
+  - 必须包含以下四层信息（缺少任一层将被视为不合格）：
+    ① 角色站位：出现的角色、在画框中的位置（foreground/background, left/center/right）、朝向与动作姿态
+    ② 道具/物品：镜头内关键道具的位置及与角色的空间关系（如 "a sword mounted on the wall to his left"）
+    ③ 场景环境：背景、地点特征、氛围细节
+    ④ 光线与构图：光源方向、色调、景深感
+  - 示例（全要素）："A young man in white robes stands foreground-left, gripping a bronze sword at his side, facing right. An elder in dark armor stands background-right, arms crossed. Between them, an ancient scroll rests on a stone table. Collapsed city gate visible behind the elder. Dramatic amber backlight, dusk, wide shot."
 
 ▸ narration（中文旁白文案）——每镜必填，不得为空
   - 观众"听到"的旁白内容，第三人称叙事视角，语言生动凝练
@@ -2624,7 +2628,7 @@ func (s *VideoService) buildStoryboardPrompt(
 [
   {
     "shot_no": 1,
-    "description": "English visual prompt for image generation only, no Chinese",
+    "description": "English only. Must include: ① character positions (foreground/background, left/center/right) and poses ② key props and their spatial relation to characters ③ scene environment ④ lighting and composition",
     "narration": "中文旁白（必填，严禁镜头语言）",
     "dialogue": "角色名：台词（无对话则为空字符串）",
     "camera_type": "static|pan|zoom|tracking|dolly|crane",
@@ -2635,7 +2639,7 @@ func (s *VideoService) buildStoryboardPrompt(
     "time_of_day": "dawn|morning|afternoon|evening|night",
     "weather": "clear|cloudy|rainy|snowy|foggy",
     "lighting": "natural|dramatic|soft|backlit",
-    "characters": [{"name":"角色名","expression":"表情","pose":"姿势动作"}],
+    "characters": [{"name":"角色名","expression":"表情","pose":"姿势动作","position":"foreground-left|center|background-right 等"}],
     "transition": "cut|fade|dissolve|wipe"
   }
 ]`, expectedShots))
@@ -2731,6 +2735,7 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			CameraAngle: validCameraAngle(r.CameraAngle),
 			ShotSize:    validShotSize(r.ShotSize),
 			Duration:    duration,
+			Transition:  validTransition(r.Transition),
 			Characters:  charsJSON,
 			Scene:       sceneJSON,
 			Status:      "pending",
@@ -2738,6 +2743,15 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 		shots = append(shots, shot)
 	}
 	return shots, nil
+}
+
+// validTransition 验证过渡方式，无效时返回默认值 cut
+func validTransition(t string) string {
+	valid := map[string]bool{"cut": true, "fade": true, "dissolve": true, "wipe": true}
+	if valid[t] {
+		return t
+	}
+	return "cut"
 }
 
 // validCameraType 验证摄像机类型，无效时返回默认值

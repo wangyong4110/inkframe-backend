@@ -840,6 +840,7 @@ type StoryboardShot struct {
 
 	Duration      float64 `json:"duration" gorm:"type:decimal(5,2);default:5.0"`
 	EmotionalTone string  `json:"emotional_tone" gorm:"size:100"` // 情绪基调，如：紧张、浪漫、压抑→释怀
+	Transition    string  `json:"transition" gorm:"size:20;default:cut"` // 过渡方式：cut/fade/dissolve/wipe
 
 	// 角色和场景（JSON）
 	Characters string `json:"characters" gorm:"type:text"`
