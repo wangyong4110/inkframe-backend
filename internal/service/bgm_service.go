@@ -91,7 +91,7 @@ func (s *BGMService) MixBGM(videoPath, bgmSource, outputPath string) error {
 	// BGM 需要下载的情况
 	bgmLocalPath := bgmSource
 	if strings.HasPrefix(bgmSource, "http://") || strings.HasPrefix(bgmSource, "https://") {
-		tmpBGM := fmt.Sprintf("/tmp/inkframe-bgm-%d.mp3", os.Getpid())
+		tmpBGM := fmt.Sprintf("%s/inkframe-bgm-%d.mp3", inkframeTempDir(), os.Getpid())
 		if err := downloadFile(bgmSource, tmpBGM); err != nil {
 			return fmt.Errorf("MixBGM: download BGM failed: %w", err)
 		}

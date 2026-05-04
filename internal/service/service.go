@@ -3572,7 +3572,7 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 		}
 
 		// 立即下载到本地，防止临时签名 URL 在拼接时过期
-		localClip := fmt.Sprintf("/tmp/inkframe-shot-%d.mp4", shot.ID)
+		localClip := fmt.Sprintf("%s/inkframe-shot-%d.mp4", inkframeTempDir(), shot.ID)
 		if dlErr := downloadFile(videoURL, localClip); dlErr != nil {
 			log.Printf("PollShotStatus: download shot %d clip failed (%v), storing URL as fallback", shot.ID, dlErr)
 			shot.ClipPath = videoURL

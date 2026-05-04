@@ -669,7 +669,7 @@ type VideoEnhancementService struct {
 }
 
 func NewVideoEnhancementService(imageService *ImageService, tmpDir ...string) *VideoEnhancementService {
-	dir := "/tmp/inkframe-enhance"
+	dir := inkframeTempDir() + "/inkframe-enhance"
 	if len(tmpDir) > 0 && tmpDir[0] != "" {
 		dir = tmpDir[0]
 	}
