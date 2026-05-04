@@ -2133,70 +2133,88 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	totalRunes := len([]rune(content))
 	totalShots := calcTotalShots(totalRunes, video.TargetDuration, video.Pacing)
 
-	// 顺序处理各段落，传递上段末尾分镜作为情节连贯上下文。
-	// 顺序处理是确保跨段连贯的必要条件：每段的 prompt 依赖上段的生成结果。
-	var allShots []*model.StoryboardShot
-	var prevTailShots []*model.StoryboardShot // 上一段末尾 N 个分镜，用于连贯上下文
-	shotCounter := 0
+	// 并行处理各段落：段间内容本身保证情节连贯（AI 读段落文本即可自然衔接），
+	// 不再传递 prevTailShots，换取所有段同时发起 AI 调用。
+	// 最多允许 3 段并发，避免超出大多数 API 的并发限制。
+	const maxParallelSegs = 3
+	type segResult struct {
+		shots []*model.StoryboardShot
+		err   error
+	}
+	results := make([]segResult, len(segments))
+	sem := make(chan struct{}, maxParallelSegs)
+	var wg sync.WaitGroup
+	var doneCount int32
+
 	for segIdx, seg := range segments {
-		segRunes := len([]rune(seg))
-		segShotCount := totalShots * segRunes / max(totalRunes, 1)
-		if segShotCount < 3 {
-			segShotCount = 3
-		}
-		prompt := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, len(segments), segShotCount, characters, anchors, plotPoints, prevTailShots)
-		var result string
-		var aiErr error
-		// 最多重试 2 次：仅针对 JSON 格式错误重试，超时直接 fail-fast。
-		for attempt := 0; attempt < 3; attempt++ {
-			p := prompt
-			if attempt > 0 {
-				p = prompt + "\n\n⚠️ 重要提示：请只返回纯 JSON 数组，不要包含任何 markdown 代码块（```）或说明文字。"
-				log.Printf("GenerateStoryboard: segment %d/%d retry attempt %d", segIdx+1, len(segments), attempt)
+		wg.Add(1)
+		go func(idx int, content string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			segRunes := len([]rune(content))
+			segShotCount := totalShots * segRunes / max(totalRunes, 1)
+			if segShotCount < 3 {
+				segShotCount = 3
 			}
-			result, aiErr = s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", p, provider)
-			if aiErr == nil && strings.TrimSpace(result) != "" {
-				break
-			}
-			if aiErr != nil {
-				log.Printf("GenerateStoryboard: segment %d/%d attempt %d AI error: %v", segIdx+1, len(segments), attempt, aiErr)
-				if ai.IsTimeoutError(aiErr) {
+			prompt := s.buildStoryboardPrompt(video, content, userPrompt, idx+1, len(segments), segShotCount, characters, anchors, plotPoints, nil)
+
+			var result string
+			var aiErr error
+			for attempt := 0; attempt < 3; attempt++ {
+				p := prompt
+				if attempt > 0 {
+					p = prompt + "\n\n⚠️ 重要提示：请只返回纯 JSON 数组，不要包含任何 markdown 代码块（```）或说明文字。"
+					log.Printf("GenerateStoryboard: segment %d/%d retry attempt %d", idx+1, len(segments), attempt)
+				}
+				result, aiErr = s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", p, provider)
+				if aiErr == nil && strings.TrimSpace(result) != "" {
 					break
 				}
+				if aiErr != nil {
+					log.Printf("GenerateStoryboard: segment %d/%d attempt %d AI error: %v", idx+1, len(segments), attempt, aiErr)
+					if ai.IsTimeoutError(aiErr) {
+						break
+					}
+				}
 			}
-		}
-		if aiErr != nil {
-			if segIdx == 0 {
-				return nil, aiErr
+			if aiErr != nil {
+				results[idx] = segResult{err: aiErr}
+				return
 			}
-			log.Printf("GenerateStoryboard: segment %d/%d failed (non-fatal): %v", segIdx+1, len(segments), aiErr)
+			shots, parseErr := s.parseStoryboardResult(videoID, chapterID, result)
+			if parseErr != nil {
+				results[idx] = segResult{err: fmt.Errorf("解析AI分镜结果失败: %w", parseErr)}
+				return
+			}
+			results[idx] = segResult{shots: shots}
+
+			// 进度回调：每段完成即上报（并发完成顺序不定，取当前已完成数比例）
+			if progressFn != nil {
+				done := int(atomic.AddInt32(&doneCount, 1))
+				progressFn(done * 90 / len(segments))
+			}
+		}(segIdx, seg)
+	}
+	wg.Wait()
+
+	// 按原始顺序合并结果，统一重编号
+	var allShots []*model.StoryboardShot
+	shotCounter := 0
+	for idx, r := range results {
+		if r.err != nil {
+			if idx == 0 {
+				return nil, r.err
+			}
+			log.Printf("GenerateStoryboard: segment %d/%d failed (non-fatal): %v", idx+1, len(segments), r.err)
 			continue
 		}
-		segShots, parseErr := s.parseStoryboardResult(videoID, chapterID, result)
-		if parseErr != nil {
-			if segIdx == 0 {
-				return nil, fmt.Errorf("解析AI分镜结果失败: %w", parseErr)
-			}
-			log.Printf("GenerateStoryboard: segment %d/%d parse failed (non-fatal): %v", segIdx+1, len(segments), parseErr)
-			continue
-		}
-		// 全局顺序重编号，保证跨段 shot_no 连续且唯一
-		for _, shot := range segShots {
+		for _, shot := range r.shots {
 			shotCounter++
 			shot.ShotNo = shotCounter
 		}
-		allShots = append(allShots, segShots...)
-		// 保存本段末尾 3 个分镜，供下一段的连贯上下文使用
-		tailCount := 3
-		if len(segShots) < tailCount {
-			tailCount = len(segShots)
-		}
-		prevTailShots = segShots[len(segShots)-tailCount:]
-		// 进度回调：每段完成后按比例上报（最多到 90%，Complete 时才到 100%）
-		if progressFn != nil {
-			pct := (segIdx + 1) * 90 / len(segments)
-			progressFn(pct)
-		}
+		allShots = append(allShots, r.shots...)
 	}
 
 	if len(allShots) == 0 {
