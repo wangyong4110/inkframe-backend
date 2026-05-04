@@ -3720,8 +3720,9 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 		}
 	}
 
-	// 步骤二：无明确发言者时，使用分镜绑定的第一个角色的音色
-	if len(shot.CharacterIDs) > 0 {
+	// 步骤二：仅当分镜有角色台词（Dialogue 非空）时，才使用第一个绑定角色的音色。
+	// 旁白/描述文本不应被角色音色覆盖，应沿用 narrationVoice。
+	if len(shot.CharacterIDs) > 0 && shot.Dialogue != "" {
 		char, err := s.characterRepo.GetByID(shot.CharacterIDs[0])
 		if err == nil && char != nil {
 			applyCharVoice(char)

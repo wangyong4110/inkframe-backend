@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -323,22 +324,25 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 		if viewType == "all" {
 			views = []string{"front", "side", "back"}
 		}
+		total := len(views)
 
 		type viewResult struct {
 			view string
 			url  string
 			err  error
 		}
-		resultCh := make(chan viewResult, len(views))
+		resultCh := make(chan viewResult, total)
 		var wg sync.WaitGroup
+		var doneCount int32
 		for _, v := range views {
 			wg.Add(1)
 			go func(v string) {
 				defer wg.Done()
 				// 三视图是"按文字描述定义角色外观"，不传参考图，
-			// 让 Text2ImgV3/PortraitPhoto 完全由外貌描述+性别驱动。
-			// Portrait 仅用于视频帧生成（帧间一致性）。
-			img, err := h.imageGenService.GenerateThreeViewImage(tenantID, char.Name, char.Appearance, v, style, char.Gender, "", provider)
+				// 让 Text2ImgV3/PortraitPhoto 完全由外貌描述+性别驱动。
+				img, err := h.imageGenService.GenerateThreeViewImage(tenantID, char.Name, char.Appearance, v, style, char.Gender, "", provider)
+				cur := int(atomic.AddInt32(&doneCount, 1))
+				h.taskSvc.UpdateProgress(taskID, cur*99/total) //nolint:errcheck
 				if err != nil {
 					resultCh <- viewResult{view: v, err: err}
 					return
@@ -438,6 +442,7 @@ func (h *CharacterHandler) AIBatchGenerate(c *gin.Context) {
 	}
 	go func(taskID string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		chars, err := h.characterService.AIBatchGenerate(tenantID, uint(novelID))
 		if err != nil {
 			log.Printf("[CharacterHandler] AIBatchGenerate task %s failed: %v", taskID, err)
@@ -469,7 +474,8 @@ func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
 	}
 	go func(taskID string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		succ, fail, err := h.characterService.BatchGenerateImages(tenantID, uint(novelID), req.Provider)
+		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
+		succ, fail, err := h.characterService.BatchGenerateImages(tenantID, uint(novelID), req.Provider, progressFn)
 		if err != nil {
 			log.Printf("[CharacterHandler] BatchGenerateImages task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck

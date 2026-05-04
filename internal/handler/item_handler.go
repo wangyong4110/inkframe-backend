@@ -133,6 +133,7 @@ func (h *ItemHandler) AIExtractFromNovel(c *gin.Context) {
 	}
 	go func(taskID string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		items, err := h.itemService.AIExtractFromNovel(tenantID, uint(novelID))
 		if err != nil {
 			log.Printf("[ItemHandler] AIExtractFromNovel task %s failed: %v", taskID, err)
@@ -164,7 +165,8 @@ func (h *ItemHandler) BatchGenerateImages(c *gin.Context) {
 	}
 	go func(taskID string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		succ, fail, err := h.itemService.BatchGenerateImages(tenantID, uint(novelID), req.Provider)
+		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
+		succ, fail, err := h.itemService.BatchGenerateImages(tenantID, uint(novelID), req.Provider, progressFn)
 		if err != nil {
 			log.Printf("[ItemHandler] BatchGenerateImages task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
@@ -203,11 +205,13 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 
 	go func(taskID string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		item, err := h.itemService.GenerateItemImage(tenantID, itemID, refURL, provider)
 		if err != nil {
 			log.Printf("[ItemHandler] GenerateItemImage task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
+			h.taskSvc.UpdateProgress(taskID, 90) //nolint:errcheck
 			h.taskSvc.Complete(taskID, item) //nolint:errcheck
 		}
 	}(task.TaskID)

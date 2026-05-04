@@ -202,7 +202,8 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 	}
 
 	go func(taskID string) {
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)   //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 5) //nolint:errcheck
 
 		chapter, err := h.chapterService.GenerateChapter(tenantID, uint(novelId), &req)
 		if err != nil {
@@ -210,6 +211,7 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 			log.Printf("[NovelHandler] GenerateChapter task %s failed: %v", taskID, err)
 			return
 		}
+		h.taskSvc.UpdateProgress(taskID, 90) //nolint:errcheck
 
 		modelUsed := req.ModelOverride
 		if modelUsed == "" {

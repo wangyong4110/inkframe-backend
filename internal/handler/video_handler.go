@@ -624,12 +624,14 @@ func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 
 	go func(taskID string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		shot, genErr := h.videoService.GenerateSingleShot(uint(videoID), uint(shotID), req.Provider)
 		if genErr != nil {
 			log.Printf("[VideoHandler] GenerateSingleShot task %s failed: %v", taskID, genErr)
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
 			return
 		}
+		h.taskSvc.UpdateProgress(taskID, 90) //nolint:errcheck
 		h.taskSvc.Complete(taskID, gin.H{"shot_id": shot.ID, "status": shot.Status}) //nolint:errcheck
 	}(task.TaskID)
 
@@ -821,6 +823,7 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 
 	go func(taskID string, shot *model.StoryboardShot, narrationVoice string, subtitleEnabled bool) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 
 		const maxRetries = 3
 		var audioErr error
@@ -838,6 +841,7 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 			h.taskSvc.Fail(taskID, audioErr.Error()) //nolint:errcheck
 			return
 		}
+		h.taskSvc.UpdateProgress(taskID, 90) //nolint:errcheck
 
 		result := gin.H{"audio_url": shot.AudioPath, "shot_id": shot.ID}
 		if subtitleEnabled {

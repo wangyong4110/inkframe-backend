@@ -355,20 +355,26 @@ func (s *SceneAnchorService) UpdateStats(id uint, score float64) error {
 
 // BatchGenerateRefImages 批量为小说的场景锚点生成参考图（跳过已有 RefImageURL 的锚点）。
 // 并发度由 AIService.imageSem 统一管控（config.yaml ai.image_concurrency）。
-func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantID, novelID uint, provider string) (succeeded, failed int, err error) {
+func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantID, novelID uint, provider string, progressFn func(int)) (succeeded, failed int, err error) {
 	anchors, err := s.repo.ListByNovel(novelID)
 	if err != nil {
 		return 0, 0, fmt.Errorf("list anchors: %w", err)
 	}
 
+	var todo []*model.SceneAnchor
+	for _, a := range anchors {
+		if a.RefImageURL == "" {
+			todo = append(todo, a)
+		}
+	}
+	total := len(todo)
+
 	var wg sync.WaitGroup
 	var mu sync.Mutex
+	var done int
 
-	for _, anchor := range anchors {
+	for _, anchor := range todo {
 		anchor := anchor
-		if anchor.RefImageURL != "" {
-			continue // 已有参考图，跳过
-		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -376,12 +382,22 @@ func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantI
 				log.Printf("[SceneAnchorService] BatchGenerateRefImages: anchor %d (%s) failed: %v", anchor.ID, anchor.Name, genErr)
 				mu.Lock()
 				failed++
+				done++
+				cur := done
 				mu.Unlock()
+				if progressFn != nil && total > 0 {
+					progressFn(cur * 99 / total)
+				}
 				return
 			}
 			mu.Lock()
 			succeeded++
+			done++
+			cur := done
 			mu.Unlock()
+			if progressFn != nil && total > 0 {
+				progressFn(cur * 99 / total)
+			}
 		}()
 	}
 	wg.Wait()
@@ -390,7 +406,7 @@ func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantI
 }
 
 // AIExtractAllFromNovel 批量从小说前 10 章中提取场景锚点（并发 3 goroutine）
-func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.SceneAnchor, error) {
+func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint, progressFn func(int)) ([]*model.SceneAnchor, error) {
 	log.Printf("[SceneAnchorService] AIExtractAllFromNovel: novelID=%d", novelID)
 	if s.chapterRepo == nil {
 		return nil, fmt.Errorf("chapterRepo not configured")
@@ -425,6 +441,8 @@ func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*m
 	var wg sync.WaitGroup
 	allCreated := make([]*model.SceneAnchor, 0)
 	failCount := 0
+	total := len(candidates)
+	var done int
 
 	for _, ch := range candidates {
 		ch := ch
@@ -433,16 +451,19 @@ func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*m
 		go func() {
 			defer func() { <-sem; wg.Done() }()
 			anchors, err := s.ExtractFromChapter(ctx, tenantID, novelID, novelTitle, ch.Content)
+			mu.Lock()
+			done++
 			if err != nil {
 				log.Printf("[SceneAnchorService] AIExtractAllFromNovel chapter %d: %v", ch.ID, err)
-				mu.Lock()
 				failCount++
-				mu.Unlock()
-				return
+			} else {
+				allCreated = append(allCreated, anchors...)
 			}
-			mu.Lock()
-			allCreated = append(allCreated, anchors...)
+			cur := done
 			mu.Unlock()
+			if progressFn != nil && total > 0 {
+				progressFn(cur * 99 / total)
+			}
 		}()
 	}
 	wg.Wait()

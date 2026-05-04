@@ -280,7 +280,8 @@ func (h *SceneAnchorHandler) BatchGenerateRefImages(c *gin.Context) {
 	}
 	go func(taskID string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		succ, fail, err := h.svc.BatchGenerateRefImages(context.Background(), tenantID, uint(novelID), body.Provider)
+		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
+		succ, fail, err := h.svc.BatchGenerateRefImages(context.Background(), tenantID, uint(novelID), body.Provider, progressFn)
 		if err != nil {
 			log.Printf("[SceneAnchorHandler] BatchGenerateRefImages task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
@@ -311,7 +312,8 @@ func (h *SceneAnchorHandler) AIExtractFromNovel(c *gin.Context) {
 	}
 	go func(taskID string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		anchors, err := h.svc.AIExtractAllFromNovel(tenantID, uint(novelID))
+		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
+		anchors, err := h.svc.AIExtractAllFromNovel(tenantID, uint(novelID), progressFn)
 		if err != nil {
 			log.Printf("[SceneAnchorHandler] AIExtractFromNovel: %v", err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck

@@ -1232,7 +1232,7 @@ func (s *ChapterService) RejectChapter(id uint, reason string) error {
 }
 
 // BatchGenerateSummaries 对所有无摘要章节逐章并发生成摘要（3 并发）
-func (s *ChapterService) BatchGenerateSummaries(tenantID, novelID uint) (int, error) {
+func (s *ChapterService) BatchGenerateSummaries(tenantID, novelID uint, progressFn func(int)) (int, error) {
 	log.Printf("[ChapterService] BatchGenerateSummaries: novelID=%d", novelID)
 	if s.narrativeSvc == nil {
 		return 0, fmt.Errorf("narrative service not configured")
@@ -1262,10 +1262,11 @@ func (s *ChapterService) BatchGenerateSummaries(tenantID, novelID uint) (int, er
 	}
 	log.Printf("[ChapterService] BatchGenerateSummaries: found %d chapters without summary", len(needSummary))
 
+	total := len(needSummary)
 	const concurrency = 3
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
-	var count int32
+	var count, done int32
 
 	for _, ch := range needSummary {
 		ch := ch
@@ -1278,14 +1279,18 @@ func (s *ChapterService) BatchGenerateSummaries(tenantID, novelID uint) (int, er
 			summary, err := s.narrativeSvc.GenerateChapterSummary(tenantID, ch, novelTitle)
 			if err != nil {
 				log.Printf("BatchGenerateSummaries: ch%d: %v", ch.ChapterNo, err)
-				return
+			} else {
+				ch.Summary = strings.TrimSpace(summary)
+				if err := s.chapterRepo.Update(ch); err != nil {
+					log.Printf("BatchGenerateSummaries: save ch%d: %v", ch.ChapterNo, err)
+				} else {
+					atomic.AddInt32(&count, 1)
+				}
 			}
-			ch.Summary = strings.TrimSpace(summary)
-			if err := s.chapterRepo.Update(ch); err != nil {
-				log.Printf("BatchGenerateSummaries: save ch%d: %v", ch.ChapterNo, err)
-				return
+			cur := int(atomic.AddInt32(&done, 1))
+			if progressFn != nil {
+				progressFn(cur * 99 / total)
 			}
-			atomic.AddInt32(&count, 1)
 		}()
 	}
 	wg.Wait()
@@ -1866,7 +1871,7 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 // 所有goroutine并发调用 ImageGenerationService.GenerateThreeViewImage，
 // 并发度由 AIService.imageSem 统一管控（config.yaml ai.image_concurrency）。
 // 返回成功数和失败数；只要有一次成功就不返回 error。
-func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider string) (succeeded, failed int, err error) {
+func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider string, progressFn func(int)) (succeeded, failed int, err error) {
 	chars, err := s.characterRepo.ListByNovel(novelID)
 	if err != nil {
 		return 0, 0, fmt.Errorf("list characters: %w", err)
@@ -1879,15 +1884,22 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 		}
 	}
 
+	// 统计实际需要生成的数量，用于进度计算
+	var todo []*model.Character
+	for _, c := range chars {
+		if c.ThreeViewFront == "" {
+			todo = append(todo, c)
+		}
+	}
+	total := len(todo)
+
 	imgSvc := NewImageGenerationService(s.aiService)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
+	var done int
 
-	for _, char := range chars {
+	for _, char := range todo {
 		char := char
-		if char.ThreeViewFront != "" {
-			continue // 已有正面图，跳过
-		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -1896,19 +1908,34 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 				log.Printf("[CharacterService] BatchGenerateImages: char %d (%s) failed: %v", char.ID, char.Name, genErr)
 				mu.Lock()
 				failed++
+				done++
+				cur := done
 				mu.Unlock()
+				if progressFn != nil && total > 0 {
+					progressFn(cur * 99 / total)
+				}
 				return
 			}
 			if _, saveErr := s.UpdateCharacter(char.ID, &model.UpdateCharacterRequest{ThreeViewFront: img.URL}); saveErr != nil {
 				log.Printf("[CharacterService] BatchGenerateImages: save char %d: %v", char.ID, saveErr)
 				mu.Lock()
 				failed++
+				done++
+				cur := done
 				mu.Unlock()
+				if progressFn != nil && total > 0 {
+					progressFn(cur * 99 / total)
+				}
 				return
 			}
 			mu.Lock()
 			succeeded++
+			done++
+			cur := done
 			mu.Unlock()
+			if progressFn != nil && total > 0 {
+				progressFn(cur * 99 / total)
+			}
 		}()
 	}
 	wg.Wait()
