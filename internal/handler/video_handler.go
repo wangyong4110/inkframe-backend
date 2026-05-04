@@ -783,6 +783,12 @@ func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
 	}
 
 	go func(taskID string, s *model.StoryboardShot) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[VideoHandler] GenerateShotSFX task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		ctx := c.Request.Context()
 		if err := h.sfxSvc.AutoGenerateSFX(ctx, s); err != nil {
@@ -846,6 +852,12 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 	}
 
 	go func(taskID string, shot *model.StoryboardShot, narrationVoice string, subtitleEnabled bool) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[VideoHandler] GenerateShotVoice task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 
