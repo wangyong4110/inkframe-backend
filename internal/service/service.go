@@ -1236,13 +1236,18 @@ func (s *AIService) callAIWithProvider(tenantID uint, prompt string, config *mod
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
+	callStart := time.Now()
 	resp, err := provider.Generate(ctx, req)
+	elapsed := time.Since(callStart).Round(time.Millisecond)
 	if err != nil {
+		log.Printf("[AI] provider=%s elapsed=%s err=%v", provider.GetName(), elapsed, err)
 		return "", err
 	}
 	if resp.Error != "" {
+		log.Printf("[AI] provider=%s elapsed=%s providerErr=%s", provider.GetName(), elapsed, resp.Error)
 		return "", fmt.Errorf("provider error: %s", resp.Error)
 	}
+	log.Printf("[AI] provider=%s elapsed=%s respLen=%d", provider.GetName(), elapsed, len(resp.Content))
 
 	return resp.Content, nil
 }
@@ -2074,6 +2079,8 @@ func (s *VideoService) CreateVideo(novelID uint, req *model.CreateVideoRequest) 
 // userPrompt: 用户自定义提示词（可选），将追加到系统 prompt 之后
 // progressFn: 可选的进度回调（0-99），供调用方更新任务进度（传 nil 则跳过）
 func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt string, progressFn func(int), chapterIDOverride ...*uint) ([]*model.StoryboardShot, error) {
+	totalStart := time.Now()
+
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
 		return nil, err
@@ -2133,6 +2140,13 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	totalRunes := len([]rune(content))
 	totalShots := calcTotalShots(totalRunes, video.TargetDuration, video.Pacing)
 
+	chIDStr := "nil"
+	if chapterID != nil {
+		chIDStr = fmt.Sprintf("%d", *chapterID)
+	}
+	log.Printf("[Storyboard] start videoID=%d chapterID=%s provider=%q totalRunes=%d segments=%d expectedShots=%d chars=%d anchors=%d plotPoints=%d",
+		videoID, chIDStr, provider, totalRunes, len(segments), totalShots, len(characters), len(anchors), len(plotPoints))
+
 	// 并行处理各段落：段间内容本身保证情节连贯（AI 读段落文本即可自然衔接），
 	// 不再传递 prevTailShots，换取所有段同时发起 AI 调用。
 	// 最多允许 3 段并发，避免超出大多数 API 的并发限制。
@@ -2153,11 +2167,14 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			sem <- struct{}{}
 			defer func() { <-sem }()
 
+			segStart := time.Now()
 			segRunes := len([]rune(content))
 			segShotCount := totalShots * segRunes / max(totalRunes, 1)
 			if segShotCount < 3 {
 				segShotCount = 3
 			}
+			log.Printf("[Storyboard] seg %d/%d start runes=%d expectedShots=%d", idx+1, len(segments), segRunes, segShotCount)
+
 			prompt := s.buildStoryboardPrompt(video, content, userPrompt, idx+1, len(segments), segShotCount, characters, anchors, plotPoints, nil)
 
 			var result string
@@ -2166,17 +2183,21 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 				p := prompt
 				if attempt > 0 {
 					p = prompt + "\n\n⚠️ 重要提示：请只返回纯 JSON 数组，不要包含任何 markdown 代码块（```）或说明文字。"
-					log.Printf("GenerateStoryboard: segment %d/%d retry attempt %d", idx+1, len(segments), attempt)
+					log.Printf("[Storyboard] seg %d/%d retry attempt=%d", idx+1, len(segments), attempt)
 				}
+				aiStart := time.Now()
 				result, aiErr = s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", p, provider)
-				if aiErr == nil && strings.TrimSpace(result) != "" {
-					break
-				}
+				aiElapsed := time.Since(aiStart).Round(time.Millisecond)
 				if aiErr != nil {
-					log.Printf("GenerateStoryboard: segment %d/%d attempt %d AI error: %v", idx+1, len(segments), attempt, aiErr)
+					log.Printf("[Storyboard] seg %d/%d attempt=%d AI error elapsed=%s err=%v", idx+1, len(segments), attempt, aiElapsed, aiErr)
 					if ai.IsTimeoutError(aiErr) {
 						break
 					}
+					continue
+				}
+				log.Printf("[Storyboard] seg %d/%d attempt=%d AI ok elapsed=%s responseLen=%d", idx+1, len(segments), attempt, aiElapsed, len(result))
+				if strings.TrimSpace(result) != "" {
+					break
 				}
 			}
 			if aiErr != nil {
@@ -2185,9 +2206,11 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			}
 			shots, parseErr := s.parseStoryboardResult(videoID, chapterID, result)
 			if parseErr != nil {
+				log.Printf("[Storyboard] seg %d/%d parse failed: %v", idx+1, len(segments), parseErr)
 				results[idx] = segResult{err: fmt.Errorf("解析AI分镜结果失败: %w", parseErr)}
 				return
 			}
+			log.Printf("[Storyboard] seg %d/%d done shots=%d elapsed=%s", idx+1, len(segments), len(shots), time.Since(segStart).Round(time.Millisecond))
 			results[idx] = segResult{shots: shots}
 
 			// 进度回调：每段完成即上报（并发完成顺序不定，取当前已完成数比例）
@@ -2202,12 +2225,15 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	// 按原始顺序合并结果，统一重编号
 	var allShots []*model.StoryboardShot
 	shotCounter := 0
+	failedSegs := 0
 	for idx, r := range results {
 		if r.err != nil {
+			failedSegs++
 			if idx == 0 {
+				log.Printf("[Storyboard] seg 1/%d failed (fatal): %v", len(segments), r.err)
 				return nil, r.err
 			}
-			log.Printf("GenerateStoryboard: segment %d/%d failed (non-fatal): %v", idx+1, len(segments), r.err)
+			log.Printf("[Storyboard] seg %d/%d failed (non-fatal): %v", idx+1, len(segments), r.err)
 			continue
 		}
 		for _, shot := range r.shots {
@@ -2241,6 +2267,9 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	video.TotalShots = len(shots)
 	video.Status = "storyboard"
 	s.videoRepo.Update(video)
+
+	log.Printf("[Storyboard] finished videoID=%d totalShots=%d segments=%d failedSegs=%d elapsed=%s",
+		videoID, len(shots), len(segments), failedSegs, time.Since(totalStart).Round(time.Millisecond))
 
 	return shots, nil
 }
