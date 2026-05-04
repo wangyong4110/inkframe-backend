@@ -829,25 +829,22 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 	width, height := aspectRatioDimensions(ratio)
 
 	type assetInfo struct {
-		id       string
-		src      string
-		duration int64 // micros
-		filename string
+		id          string
+		src         string
+		duration    int64 // micros
+		filename    string
+		audioID     string // empty = no audio
+		audioSrc    string
+		audioFile   string
 	}
 
 	var assets []assetInfo
 	var totalDuration int64
+	// asset id counter: r1=format, r2..rN=video/image, r(N+1)..=audio
+	nextID := 2
 
-	// ── 构建 FCPXML ──────────────────────────────────────────────────────
-	var sb strings.Builder
-	sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
-	sb.WriteString("\n<!DOCTYPE fcpxml>\n")
-	sb.WriteString(`<fcpxml version="1.10">`)
-	sb.WriteString("\n<resources>\n")
-	sb.WriteString(fmt.Sprintf(`  <format id="r1" frameDuration="1/25s" width="%d" height="%d"/>`, width, height))
-	sb.WriteString("\n")
-
-	for i, shot := range shots {
+	// ── 第一遍：收集所有资产信息 ─────────────────────────────────────────
+	for _, shot := range shots {
 		dur := int64(shot.Duration * 1_000_000)
 		if dur <= 0 {
 			dur = 5_000_000
@@ -858,14 +855,50 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 			mediaURL = shot.VideoURL
 			ext = ".mp4"
 		}
-		assetID := fmt.Sprintf("r%d", i+2)
-		filename := fmt.Sprintf("%03d%s", shot.ShotNo, ext)
-		durStr := fmt.Sprintf("%d/1000000s", dur)
-		sb.WriteString(fmt.Sprintf(`  <asset id="%s" src="%s" duration="%s" hasVideo="1"/>`,
-			assetID, fcpXMLEscapeAttr(mediaURL), durStr))
-		sb.WriteString("\n")
-		assets = append(assets, assetInfo{id: assetID, src: mediaURL, duration: dur, filename: filename})
+		vidID := fmt.Sprintf("r%d", nextID)
+		nextID++
+		vidFile := fmt.Sprintf("%03d%s", shot.ShotNo, ext)
+
+		ai := assetInfo{id: vidID, src: mediaURL, duration: dur, filename: vidFile}
+
+		if shot.AudioPath != "" {
+			audID := fmt.Sprintf("r%d", nextID)
+			nextID++
+			audExt := audioExtension(shot.AudioPath)
+			audFile := fmt.Sprintf("%03d_audio%s", shot.ShotNo, audExt)
+			ai.audioID = audID
+			ai.audioSrc = shot.AudioPath
+			ai.audioFile = audFile
+		}
+
+		assets = append(assets, ai)
 		totalDuration += dur
+	}
+
+	// ── 构建 FCPXML ──────────────────────────────────────────────────────
+	var sb strings.Builder
+	sb.WriteString(`<?xml version="1.0" encoding="UTF-8"?>`)
+	sb.WriteString("\n<!DOCTYPE fcpxml>\n")
+	sb.WriteString(`<fcpxml version="1.10">`)
+	sb.WriteString("\n<resources>\n")
+	sb.WriteString(fmt.Sprintf(`  <format id="r1" frameDuration="1/25s" width="%d" height="%d"/>`, width, height))
+	sb.WriteString("\n")
+
+	for _, a := range assets {
+		durStr := fmt.Sprintf("%d/1000000s", a.duration)
+		sb.WriteString(fmt.Sprintf(`  <asset id="%s" src="%s" duration="%s" hasVideo="1"/>`,
+			a.id, fcpXMLEscapeAttr(a.src), durStr))
+		sb.WriteString("\n")
+		if a.audioID != "" {
+			// 音频资产：src 优先使用 CDN URL；本地文件用 media/ 相对路径
+			audioSrc := a.audioSrc
+			if !strings.HasPrefix(audioSrc, "http://") && !strings.HasPrefix(audioSrc, "https://") {
+				audioSrc = "media/" + a.audioFile
+			}
+			sb.WriteString(fmt.Sprintf(`  <asset id="%s" src="%s" duration="%s" hasAudio="1"/>`,
+				a.audioID, fcpXMLEscapeAttr(audioSrc), durStr))
+			sb.WriteString("\n")
+		}
 	}
 
 	sb.WriteString("</resources>\n")
@@ -876,11 +909,24 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 	sb.WriteString("\n<spine>\n")
 
 	var offset int64
-	for _, asset := range assets {
-		sb.WriteString(fmt.Sprintf(`  <asset-clip ref="%s" offset="%d/1000000s" duration="%d/1000000s" tcFormat="NDF"/>`,
-			asset.id, offset, asset.duration))
-		sb.WriteString("\n")
-		offset += asset.duration
+	for _, a := range assets {
+		durStr := fmt.Sprintf("%d/1000000s", a.duration)
+		offStr := fmt.Sprintf("%d/1000000s", offset)
+		if a.audioID == "" {
+			// 纯视频/图片，无独立音频
+			sb.WriteString(fmt.Sprintf(`  <asset-clip ref="%s" offset="%s" duration="%s" tcFormat="NDF"/>`,
+				a.id, offStr, durStr))
+			sb.WriteString("\n")
+		} else {
+			// 视频 + 连接音频（lane="-1" 为标准 FCPXML 旁白轨道）
+			sb.WriteString(fmt.Sprintf(`  <asset-clip ref="%s" offset="%s" duration="%s" tcFormat="NDF">`,
+				a.id, offStr, durStr))
+			sb.WriteString("\n")
+			sb.WriteString(fmt.Sprintf(`    <audio ref="%s" lane="-1" offset="0s" duration="%s" role="dialogue"/>`,
+				a.audioID, durStr))
+			sb.WriteString("\n  </asset-clip>\n")
+		}
+		offset += a.duration
 	}
 
 	sb.WriteString("</spine>\n</sequence>\n</project></event></library>\n</fcpxml>\n")
@@ -903,13 +949,20 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 	}
 
 	// 媒体文件打包到 media/（供离线重连）
-	for _, asset := range assets {
-		if asset.src == "" {
-			continue
+	for _, a := range assets {
+		if a.src != "" {
+			if data, err := downloadMediaFile(a.src); err == nil {
+				if e := writeZip(prefix+"media/"+a.filename, data); e != nil {
+					return nil, fmt.Errorf("write media %s: %w", a.filename, e)
+				}
+			}
 		}
-		if data, err := downloadMediaFile(asset.src); err == nil {
-			if e := writeZip(prefix+"media/"+asset.filename, data); e != nil {
-				return nil, fmt.Errorf("write media %s: %w", asset.filename, e)
+		// 音频文件：本地或远程均打包进 media/
+		if a.audioSrc != "" {
+			if data, err := readLocalOrRemoteFile(a.audioSrc); err == nil && len(data) > 0 {
+				if e := writeZip(prefix+"media/"+a.audioFile, data); e != nil {
+					return nil, fmt.Errorf("write audio %s: %w", a.audioFile, e)
+				}
 			}
 		}
 	}
