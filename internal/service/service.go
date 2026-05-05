@@ -4465,6 +4465,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	s.storyboardRepo.Update(shot) //nolint:errcheck
 
 	// 2. 下载图片到本地（Volcengine 返回的 URL 后缀为 .image，FFmpeg 无法识别格式，需重命名为 .jpg）
+	logger.Printf("GenerateSlideshowShotVideo: shot %d downloading image for ffmpeg", shot.ShotNo)
 	localImage, err := downloadToTemp(imageURL, fmt.Sprintf("inkframe-img-%d-", shot.ID), ".jpg")
 	if err != nil {
 		logger.Printf("GenerateSlideshowShotVideo: download image failed for shot %d, marking completed with image only: %v", shot.ShotNo, err)
@@ -4476,6 +4477,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	defer os.Remove(localImage)
 
 	// 3. Ken Burns 动效（缓慢推拉/平移，让静态图更生动）；失败时降级为静止画面
+	logger.Printf("GenerateSlideshowShotVideo: shot %d starting ken burns ffmpeg", shot.ShotNo)
 	clipPath, err := s.generateKenBurnsClip(shot, localImage, duration, aspectRatio)
 	if err != nil {
 		logger.Printf("GenerateSlideshowShotVideo: ken burns failed for shot %d, falling back to still frame: %v", shot.ShotNo, err)
