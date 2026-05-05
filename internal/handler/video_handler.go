@@ -216,10 +216,13 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 		ChapterID      uint     `json:"chapter_id"`
 		Characters     []string `json:"characters"`
 		Style          string   `json:"style,omitempty"`
-		Provider       string   `json:"provider,omitempty"`        // 指定 LLM 提供者，可为空
-		UserPrompt     string   `json:"user_prompt,omitempty"`     // 用户自定义提示词
-		Pacing         string   `json:"pacing,omitempty"`          // slow/normal/fast
-		TargetDuration int      `json:"target_duration,omitempty"` // 0=自动估算
+		Provider       string   `json:"provider,omitempty"`         // 指定 LLM 提供者，可为空
+		UserPrompt     string   `json:"user_prompt,omitempty"`      // 用户自定义提示词
+		Pacing         string   `json:"pacing,omitempty"`           // slow/normal/fast
+		TargetDuration int      `json:"target_duration,omitempty"`  // 0=自动估算
+		MaxTokens      int      `json:"max_tokens,omitempty"`       // 0=使用系统默认
+		Temperature    float64  `json:"temperature,omitempty"`      // 0=使用系统默认
+		TimeoutSeconds int      `json:"timeout_seconds,omitempty"`  // 0=使用系统默认(180s)
 	}
 	// 所有字段均可选，body 为空时忽略 EOF
 	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
@@ -251,7 +254,12 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 
-		result, err := h.storyboardService.GenerateStoryboard(uint(videoId), req.ChapterID, req.Characters, req.Style, req.Provider, req.UserPrompt, progressFn)
+		overrides := service.StoryboardOverrides{
+			MaxTokens:      req.MaxTokens,
+			Temperature:    req.Temperature,
+			TimeoutSeconds: req.TimeoutSeconds,
+		}
+		result, err := h.storyboardService.GenerateStoryboard(uint(videoId), req.ChapterID, req.Characters, req.Style, req.Provider, req.UserPrompt, progressFn, overrides)
 		if err != nil {
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			logger.Printf("[VideoHandler] GenerateStoryboard task %s failed: %v", taskID, err)

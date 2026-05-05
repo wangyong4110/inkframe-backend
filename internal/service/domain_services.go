@@ -2077,6 +2077,13 @@ func (s *ImageGenerationService) GenerateThreeViewImage(tenantID uint, name, app
 // StoryboardService 分镜服务（handler-facing）
 // ============================================
 
+// StoryboardOverrides 允许调用方覆盖单次分镜生成的 AI 参数（0 表示使用系统默认值）
+type StoryboardOverrides struct {
+	MaxTokens      int     // 输出 token 上限，0=系统默认（≥4096）
+	Temperature    float64 // 生成温度，0=系统默认（0.1）
+	TimeoutSeconds int     // 单次 AI 调用超时（秒），0=系统默认（180s）
+}
+
 type StoryboardService struct {
 	videoService *VideoService
 	aiService    *AIService
@@ -2086,12 +2093,12 @@ func NewStoryboardService(videoService *VideoService, aiService *AIService) *Sto
 	return &StoryboardService{videoService: videoService, aiService: aiService}
 }
 
-func (s *StoryboardService) GenerateStoryboard(videoID, chapterID uint, characters []string, style, provider, userPrompt string, progressFn func(int)) (interface{}, error) {
+func (s *StoryboardService) GenerateStoryboard(videoID, chapterID uint, characters []string, style, provider, userPrompt string, progressFn func(int), overrides StoryboardOverrides) (interface{}, error) {
 	var chapterIDPtr *uint
 	if chapterID != 0 {
 		chapterIDPtr = &chapterID
 	}
-	shots, err := s.videoService.GenerateStoryboard(videoID, provider, userPrompt, progressFn, chapterIDPtr)
+	shots, err := s.videoService.GenerateStoryboard(videoID, provider, userPrompt, progressFn, overrides, chapterIDPtr)
 	if err != nil {
 		return nil, err
 	}

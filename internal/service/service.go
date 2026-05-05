@@ -1060,7 +1060,7 @@ func (s *AIService) InvalidateProviderCache(providerName string) {
 
 // GenerateWithProvider 使用指定 Provider 生成内容（providerName 为空则使用默认）
 // 参数优先级：小说项目配置 > 任务配置 > 内置默认值
-func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType string, prompt string, providerName string) (string, error) {
+func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType string, prompt string, providerName string, overrides ...StoryboardOverrides) (string, error) {
 	// 获取任务配置（基础层）
 	base, err := s.taskRepo.GetByTaskType(taskType)
 	if err != nil {
@@ -1111,6 +1111,20 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 		// 触发 retry 反而更慢；0.1 足以保证输出格式稳定。
 		if config.Temperature > 0.2 {
 			config.Temperature = 0.1
+		}
+	}
+
+	// 应用调用方传入的覆盖参数（优先级最高，覆盖任务配置和小说配置）
+	if len(overrides) > 0 {
+		o := overrides[0]
+		if o.MaxTokens > 0 {
+			config.MaxTokens = o.MaxTokens
+		}
+		if o.Temperature > 0 {
+			config.Temperature = o.Temperature
+		}
+		if o.TimeoutSeconds > 0 {
+			config.TimeoutSeconds = o.TimeoutSeconds
 		}
 	}
 
@@ -1232,10 +1246,15 @@ func (s *AIService) callAIWithProvider(tenantID uint, prompt string, config *mod
 		req.MaxTokens = 4096
 	}
 
-	// 为所有 AI 同步调用设置 3 分钟超时，防止 AI 服务慢响应时请求无限挂起。
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	// 超时：优先使用 config.TimeoutSeconds（由调用方注入），否则默认 5 分钟。
+	timeoutDur := 5 * time.Minute
+	if config.TimeoutSeconds > 0 {
+		timeoutDur = time.Duration(config.TimeoutSeconds) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeoutDur)
 	defer cancel()
 
+	logger.Printf("[AI] provider=%s maxTokens=%d temperature=%.2f calling...", provider.GetName(), req.MaxTokens, req.Temperature)
 	callStart := time.Now()
 	resp, err := provider.Generate(ctx, req)
 	elapsed := time.Since(callStart).Round(time.Millisecond)
@@ -1247,7 +1266,7 @@ func (s *AIService) callAIWithProvider(tenantID uint, prompt string, config *mod
 		logger.Printf("[AI] provider=%s elapsed=%s providerErr=%s", provider.GetName(), elapsed, resp.Error)
 		return "", fmt.Errorf("provider error: %s", resp.Error)
 	}
-	logger.Printf("[AI] provider=%s elapsed=%s respLen=%d", provider.GetName(), elapsed, len(resp.Content))
+	logger.Printf("[AI] provider=%s elapsed=%s maxTokens=%d respLen=%d stopReason=%q", provider.GetName(), elapsed, req.MaxTokens, len(resp.Content), resp.StopReason)
 
 	return resp.Content, nil
 }
@@ -2068,7 +2087,7 @@ func (s *VideoService) CreateVideo(novelID uint, req *model.CreateVideoRequest) 
 // GenerateStoryboard 生成分镜
 // userPrompt: 用户自定义提示词（可选），将追加到系统 prompt 之后
 // progressFn: 可选的进度回调（0-99），供调用方更新任务进度（传 nil 则跳过）
-func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt string, progressFn func(int), chapterIDOverride ...*uint) ([]*model.StoryboardShot, error) {
+func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt string, progressFn func(int), overrides StoryboardOverrides, chapterIDOverride ...*uint) ([]*model.StoryboardShot, error) {
 	totalStart := time.Now()
 
 	video, err := s.videoRepo.GetByID(videoID)
@@ -2176,7 +2195,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 					logger.Printf("[Storyboard] seg %d/%d retry attempt=%d", idx+1, len(segments), attempt)
 				}
 				aiStart := time.Now()
-				result, aiErr = s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", p, provider)
+				result, aiErr = s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", p, provider, overrides)
 				aiElapsed := time.Since(aiStart).Round(time.Millisecond)
 				if aiErr != nil {
 					logger.Printf("[Storyboard] seg %d/%d attempt=%d AI error elapsed=%s err=%v", idx+1, len(segments), attempt, aiElapsed, aiErr)

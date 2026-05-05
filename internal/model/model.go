@@ -135,11 +135,12 @@ type Novel struct {
 	ImageModel  string  `json:"image_model" gorm:"size:100"` // 图片生成模型
 	VideoModel  string  `json:"video_model" gorm:"size:100"` // 视频生成模型
 	TTSModel    string  `json:"tts_model" gorm:"size:100"`   // 语音合成模型
-	Temperature float64 `json:"temperature" gorm:"type:decimal(3,2);default:0.7"`
-	TopP        float64 `json:"top_p" gorm:"type:decimal(3,2);default:0.9"`
-	TopK        int     `json:"top_k" gorm:"default:40"`
-	MaxTokens   int     `json:"max_tokens" gorm:"default:4096"`
-	StylePrompt string  `json:"style_prompt" gorm:"type:text"`
+	Temperature    float64 `json:"temperature" gorm:"type:decimal(3,2);default:0.7"`
+	TopP           float64 `json:"top_p" gorm:"type:decimal(3,2);default:0.9"`
+	TopK           int     `json:"top_k" gorm:"default:40"`
+	MaxTokens      int     `json:"max_tokens" gorm:"default:4096"`
+	TimeoutSeconds int     `json:"timeout_seconds" gorm:"default:0"` // 0=使用系统默认(300s)
+	StylePrompt    string  `json:"style_prompt" gorm:"type:text"`
 
 	// 风格配置
 	ImageStyle     string `json:"image_style" gorm:"size:50"`       // 视觉/图片风格，如 anime/realistic/ink_painting
@@ -633,11 +634,12 @@ type TaskModelConfig struct {
 	FallbackModelIDs string   `json:"fallback_model_ids" gorm:"type:text"` // JSON数组
 
 	// 参数
-	Temperature  float64 `json:"temperature" gorm:"type:decimal(3,2)"`
-	TopP         float64 `json:"top_p" gorm:"type:decimal(3,2)"`
-	TopK         int     `json:"top_k"`
-	MaxTokens    int     `json:"max_tokens"`
-	SystemPrompt string  `json:"system_prompt" gorm:"type:text"`
+	Temperature    float64 `json:"temperature" gorm:"type:decimal(3,2)"`
+	TopP           float64 `json:"top_p" gorm:"type:decimal(3,2)"`
+	TopK           int     `json:"top_k"`
+	MaxTokens      int     `json:"max_tokens"`
+	TimeoutSeconds int     `json:"timeout_seconds" gorm:"default:0"` // 0=使用硬编码默认值(300s)
+	SystemPrompt   string  `json:"system_prompt" gorm:"type:text"`
 
 	// 限制
 	MaxCostPerTask float64 `json:"max_cost_per_task"`
