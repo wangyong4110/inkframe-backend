@@ -1118,16 +1118,10 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 		}
 	}
 
-	// 分镜/角色/世界观等 JSON 输出量大的任务，不允许被 novel.MaxTokens（章节字数目标）压低。
-	// novel.MaxTokens 存的是章节字数目标 ×2，不代表模型 output token 上限。
-	// 只设下限（4096），不强制上限：高镜头数（targetDuration+fast）可能需要 >8192 tokens。
+	// JSON 结构化输出任务降温：高温度会产生格式漂移（多余 markdown / 说明文字），触发 retry 更慢。
+	// MaxTokens 不设强制下限，由任务配置 / 小说配置 / 调用方覆盖自行决定。
 	switch taskType {
 	case "storyboard", "character", "worldview", "character_state", "scene_anchor_extract":
-		if config.MaxTokens < 4096 {
-			config.MaxTokens = 4096
-		}
-		// JSON 结构化输出任务降温：高温度会产生格式漂移（多余 markdown / 说明文字），
-		// 触发 retry 反而更慢；0.1 足以保证输出格式稳定。
 		if config.Temperature > 0.2 {
 			config.Temperature = 0.1
 		}
@@ -1384,6 +1378,47 @@ func extractJSON(content string) string {
 		}
 	}
 	return sanitizeJSONStrings(content[start:])
+}
+
+// repairTruncatedJSONArray 尝试修复被截断的 JSON 数组。
+// 找到最后一个完整的对象元素（depth 从 1 降回 1 的 '}'），在该处截断并补 ']'。
+// 返回修复后的字符串；若无法修复则返回原始字符串。
+func repairTruncatedJSONArray(s string) string {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "[") {
+		return s
+	}
+	depth := 0
+	inStr := false
+	lastCompleteEnd := -1 // position (exclusive) after the last '}' at array depth 1→0
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inStr {
+			if c == '\\' {
+				i++ // skip escaped char
+			} else if c == '"' {
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '[', '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 1 { // just closed an array element (not nested object)
+				lastCompleteEnd = i + 1
+			}
+		case ']':
+			depth--
+		}
+	}
+	if lastCompleteEnd > 0 && depth > 0 {
+		return s[:lastCompleteEnd] + "]"
+	}
+	return s
 }
 
 // sanitizeJSONStrings 将 JSON 字符串字面量内未转义的控制字符（\n \r \t）
@@ -2716,10 +2751,42 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 		Transition string `json:"transition"`
 	}
 
-	if err := json.Unmarshal([]byte(cleaned), &rawShots); err != nil || len(rawShots) == 0 {
-		logger.Printf("[VideoService] parseStoryboardResult: JSON parse failed (%v)\n===== AI RAW RESPONSE (len=%d) =====\n%s\n===== END =====", err, len(result), result)
-		if err != nil {
-			return nil, fmt.Errorf("分镜JSON解析失败: %w", err)
+	parseErr := json.Unmarshal([]byte(cleaned), &rawShots)
+	if parseErr != nil || len(rawShots) == 0 {
+		// 尝试修复截断 JSON（模型输出被 max_tokens 截断时常见）
+		repaired := repairTruncatedJSONArray(cleaned)
+		if repaired != cleaned {
+			var repairedShots []struct {
+				ShotNo      int     `json:"shot_no"`
+				Description string  `json:"description"`
+				Narration   string  `json:"narration"`
+				Dialogue    string  `json:"dialogue"`
+				CameraType  string  `json:"camera_type"`
+				CameraAngle string  `json:"camera_angle"`
+				ShotSize    string  `json:"shot_size"`
+				Duration    float64 `json:"duration"`
+				Location    string  `json:"location"`
+				TimeOfDay   string  `json:"time_of_day"`
+				Weather     string  `json:"weather"`
+				Lighting    string  `json:"lighting"`
+				Characters  []struct {
+					Name       string `json:"name"`
+					Expression string `json:"expression"`
+					Pose       string `json:"pose"`
+				} `json:"characters"`
+				Transition string `json:"transition"`
+			}
+			if err2 := json.Unmarshal([]byte(repaired), &repairedShots); err2 == nil && len(repairedShots) > 0 {
+				logger.Printf("[VideoService] parseStoryboardResult: JSON was truncated; repaired and recovered %d shots (original len=%d). Consider increasing Max Tokens.", len(repairedShots), len(result))
+				rawShots = repairedShots
+				parseErr = nil
+			}
+		}
+	}
+	if parseErr != nil || len(rawShots) == 0 {
+		logger.Printf("[VideoService] parseStoryboardResult: JSON parse failed (%v)\n===== AI RAW RESPONSE (len=%d) =====\n%s\n===== END =====", parseErr, len(result), result)
+		if parseErr != nil {
+			return nil, fmt.Errorf("分镜JSON解析失败（JSON 疑似被模型截断，建议在高级参数中增大 Max Tokens ≥16384 或减少目标分镜数量）: %w", parseErr)
 		}
 		return nil, fmt.Errorf("AI返回了空的分镜列表，请检查章节内容或重试")
 	}
