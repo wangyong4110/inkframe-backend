@@ -34,7 +34,7 @@ type Config struct {
 
 // SetupRouter 配置路由
 func SetupRouter(cfg *Config) *gin.Engine {
-	r := gin.Default()
+	r := gin.New()
 
 	// 全局中间件
 	r.Use(middleware.CORS())

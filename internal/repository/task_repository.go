@@ -55,3 +55,15 @@ func (r *TaskRepository) DeleteOldCompleted(before time.Time) error {
 	return r.db.Where("status IN ? AND updated_at < ?", []string{"completed", "failed"}, before).
 		Delete(&model.AsyncTask{}).Error
 }
+
+// MarkStaleRunning marks pending/running tasks not updated since `before` as failed.
+// Used to recover orphaned tasks after server restart or goroutine timeout.
+func (r *TaskRepository) MarkStaleRunning(before time.Time) (int64, error) {
+	result := r.db.Model(&model.AsyncTask{}).
+		Where("status IN ? AND updated_at < ?", []string{"pending", "running"}, before).
+		Updates(map[string]interface{}{
+			"status": "failed",
+			"error":  "任务超时或服务重启，请重新提交",
+		})
+	return result.RowsAffected, result.Error
+}

@@ -1805,6 +1805,7 @@ func (s *AIService) uploadImageToStorage(ctx context.Context, tenantID uint, img
 	}
 	ext := imageExtFromContentType(ct)
 	filename := uuid.New().String() + ext
+	logger.Printf("uploadImageToStorage: generated filename=%q from imgURL=%q", filename, imgURL)
 
 	var key string
 	if hint, ok := ctx.Value(imageStorageHintKey{}).(ImageStorageHint); ok && hint.NovelTitle != "" {
@@ -4440,6 +4441,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 		return fmt.Errorf("image generation failed for shot %d (empty URL returned)", shot.ShotNo)
 	}
 	shot.ImageURL = imageURL
+	logger.Printf("GenerateSlideshowShotVideo: shot %d storing image_url=%q (len=%d)", shot.ShotNo, imageURL, len(imageURL))
 	// 保存图片 URL（后续步骤失败时图片仍可用）
 	s.storyboardRepo.Update(shot) //nolint:errcheck
 

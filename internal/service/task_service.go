@@ -37,6 +37,9 @@ type TaskService struct {
 
 func NewTaskService(repo *repository.TaskRepository) *TaskService {
 	svc := &TaskService{repo: repo}
+	// Immediately recover tasks left in running/pending state from a previous server session.
+	// Tasks not updated within the last 10 seconds are considered orphaned.
+	svc.recoverOrphaned(10 * time.Second)
 	go svc.runCleanup()
 	return svc
 }
@@ -170,13 +173,28 @@ func (s *TaskService) List(tenantID uint, taskType, status string, page, pageSiz
 	return s.repo.ListByTenant(tenantID, taskType, status, page, pageSize)
 }
 
-// runCleanup deletes completed/failed tasks older than 7 days, once per hour.
+// recoverOrphaned marks tasks stuck in pending/running as failed if not updated within `age`.
+func (s *TaskService) recoverOrphaned(age time.Duration) {
+	before := time.Now().Add(-age)
+	n, err := s.repo.MarkStaleRunning(before)
+	if err != nil {
+		logger.Printf("TaskService: recoverOrphaned error: %v", err)
+	} else if n > 0 {
+		logger.Printf("TaskService: recovered %d orphaned task(s) from previous session", n)
+	}
+}
+
+// runCleanup deletes completed/failed tasks older than 7 days, and recovers stale
+// running tasks (not updated in >2h), once per hour.
 func (s *TaskService) runCleanup() {
 	ticker := time.NewTicker(time.Hour)
 	for range ticker.C {
+		// Delete old terminal tasks.
 		cutoff := time.Now().AddDate(0, 0, -7)
 		if err := s.repo.DeleteOldCompleted(cutoff); err != nil {
 			logger.Printf("TaskService: cleanup error: %v", err)
 		}
+		// Recover tasks stuck in running/pending for more than 2 hours.
+		s.recoverOrphaned(2 * time.Hour)
 	}
 }

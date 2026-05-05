@@ -79,7 +79,7 @@ func getBucket(ip string, capacity, rate float64) *tokenBucket {
 	return actual.(*tokenBucket)
 }
 
-// Logger 日志中间件
+// Logger 日志中间件（GET 请求不打印日志）
 func Logger() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		start := time.Now()
@@ -87,6 +87,10 @@ func Logger() gin.HandlerFunc {
 		method := c.Request.Method
 
 		c.Next()
+
+		if method == "GET" {
+			return
+		}
 
 		latency := time.Since(start)
 		status := c.Writer.Status()
