@@ -3918,6 +3918,13 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 // 若注入了 storageSvc，将音频上传至 OSS 或 DB，并更新 shot.AudioPath 为持久 URL。
 func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID uint, narrationVoice string) error {
 	text := shot.Dialogue
+	// 去掉 "角色名：内容" 格式中的角色名前缀，避免 TTS 朗读出角色名
+	for _, sep := range []string{"：", ":"} {
+		if idx := strings.Index(text, sep); idx > 0 && idx < 20 {
+			text = strings.TrimSpace(text[idx+len(sep):])
+			break
+		}
+	}
 	if text == "" {
 		text = shot.Narration // 旁白文案（中文，无镜头语言）
 	}
