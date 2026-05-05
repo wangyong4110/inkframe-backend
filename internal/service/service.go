@@ -4573,20 +4573,19 @@ func (s *VideoService) generateKenBurnsClip(shot *model.StoryboardShot, imagePat
 	}
 
 	outPath := fmt.Sprintf("%s/inkframe-slideshow-%d-%d.mp4", inkframeTempDir(), shot.ID, time.Now().UnixNano())
-	// pre-scale 到输出分辨率的 1.5x：zoompan 只需略大于输出即可。
-	// 过大（如 3840）会导致 WASM FFmpeg 每帧计算量剧增，且 WASM 的纯计算不响应 context 取消，
-	// 造成任务永久阻塞。1.5x 在效果和速度间取得平衡。
-	preScale := "2880:-1"
-	if aspectRatio == "9:16" {
-		preScale = "1620:-1"
-	} else if aspectRatio == "1:1" {
-		preScale = "1620:-1"
+	// pre-scale 到恰好等于输出分辨率：zoompan 的 zoom≤1.2 只需输入≥输出即可，更大对效果无益
+	// 但会让 WASM 每帧计算量成倍增加（3840 vs 1920 = 4x 像素量）。
+	// 1920:-1 for 16:9, 1080:-1 for 9:16/1:1 — 均与最终输出宽度对齐。
+	preScale := "1920:-1"
+	if aspectRatio == "9:16" || aspectRatio == "1:1" {
+		preScale = "1080:-1"
 	}
 	vf := fmt.Sprintf("scale=%s,%s,scale=%s,setsar=1", preScale, zoompan, resolution)
 
 	// WASM FFmpeg 的纯计算阶段不响应 context 取消，用 goroutine + channel 在 Go 层强制超时，
 	// 超时后解除调用方阻塞（WASM goroutine 在后台继续跑完或被 GC 回收）。
-	const kenBurnsTimeout = 90 * time.Second
+	// 30s：以 1920:-1 输入跑 zoompan，普通 CPU 通常在 10-25s 内完成；超时则快速降级 still frame。
+	const kenBurnsTimeout = 30 * time.Second
 	type result struct {
 		err []byte
 		rc  error
@@ -4664,8 +4663,10 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	defer os.Remove(localImage)
 
 	// 3. Ken Burns 动效（缓慢推拉/平移，让静态图更生动）；失败时降级为静止画面
-	logger.Printf("GenerateSlideshowShotVideo: shot %d starting ken burns ffmpeg", shot.ShotNo)
-	clipPath, err := s.generateKenBurnsClip(shot, localImage, duration, aspectRatio)
+	// 首选纯 Go 实现（逐帧计算 + WASM 编码）：速度快、可被 context 取消。
+	// 若失败则降级为静止画面（跳过旧的 WASM zoompan 方案以避免长时间阻塞）。
+	logger.Printf("GenerateSlideshowShotVideo: shot %d starting ken burns (pure Go)", shot.ShotNo)
+	clipPath, err := s.generateKenBurnsPureGo(context.Background(), shot, localImage, duration, aspectRatio)
 	if err != nil {
 		logger.Printf("GenerateSlideshowShotVideo: ken burns failed for shot %d, falling back to still frame: %v", shot.ShotNo, err)
 		// 降级：用静止画面代替 Ken Burns
