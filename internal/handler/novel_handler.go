@@ -259,17 +259,23 @@ func (h *NovelHandler) GenerateOutline(c *gin.Context) {
 	}
 
 	var req struct {
-		ChapterNum int      `json:"chapter_num"`
-		Prompt     string   `json:"prompt"`
-		Keywords   []string `json:"keywords"`
+		ChapterNum     int      `json:"chapter_num"`
+		Prompt         string   `json:"prompt"`
+		Keywords       []string `json:"keywords"`
+		MaxTokens      int      `json:"max_tokens,omitempty"`
+		Temperature    float64  `json:"temperature,omitempty"`
+		TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
 	}
 	c.ShouldBindJSON(&req)
 
 	result, err := h.novelService.GenerateOutline(getTenantID(c), &service.GenerateOutlineRequest{
-		NovelID:    uint(novelId),
-		ChapterNum: req.ChapterNum,
-		Prompt:     req.Prompt,
-		Keywords:   req.Keywords,
+		NovelID:        uint(novelId),
+		ChapterNum:     req.ChapterNum,
+		Prompt:         req.Prompt,
+		Keywords:       req.Keywords,
+		MaxTokens:      req.MaxTokens,
+		Temperature:    req.Temperature,
+		TimeoutSeconds: req.TimeoutSeconds,
 	})
 	if err != nil {
 		logger.Printf("[NovelHandler] GenerateOutline: novelID=%d err=%v", novelId, err)

@@ -1106,12 +1106,14 @@ type UpdateChapterRequest struct {
 }
 
 type GenerateChapterRequest struct {
-	NovelID       uint   `json:"novel_id"`
-	ChapterNo     int    `json:"chapter_no" binding:"required,min=1"`
-	Prompt        string `json:"prompt"`
-	MaxTokens     int    `json:"max_tokens"`
-	ModelOverride string `json:"model,omitempty"` // 可选：指定使用的 AI 模型/provider
-	IsStandalone  bool   `json:"is_standalone"`   // true=最终章，要求故事完整收尾；可显式传入，也会由系统根据 chapter_no >= target_chapters 自动推断
+	NovelID        uint    `json:"novel_id"`
+	ChapterNo      int     `json:"chapter_no" binding:"required,min=1"`
+	Prompt         string  `json:"prompt"`
+	MaxTokens      int     `json:"max_tokens"`
+	Temperature    float64 `json:"temperature,omitempty"`    // 0=使用项目配置或系统默认
+	TimeoutSeconds int     `json:"timeout_seconds,omitempty"` // 0=使用项目配置或系统默认
+	ModelOverride  string  `json:"model,omitempty"` // 可选：指定使用的 AI 模型/provider
+	IsStandalone   bool    `json:"is_standalone"`   // true=最终章，要求故事完整收尾；可显式传入，也会由系统根据 chapter_no >= target_chapters 自动推断
 }
 
 type CreateCharacterRequest struct {

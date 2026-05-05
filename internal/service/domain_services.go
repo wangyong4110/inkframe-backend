@@ -545,7 +545,13 @@ func (s *ChapterService) GenerateChapterOutline(tenantID, novelID uint, chapterN
 		recentCtxSection, extraPromptSection,
 	)
 
-	outline, err := s.aiService.GenerateWithProvider(tenantID, novelID, "chapter_outline", prompt, "")
+	// 从项目配置读取参数默认值
+	chOutlineOverrides := StoryboardOverrides{
+		MaxTokens:      novel.MaxTokens,
+		Temperature:    novel.Temperature,
+		TimeoutSeconds: novel.TimeoutSeconds,
+	}
+	outline, err := s.aiService.GenerateWithProvider(tenantID, novelID, "chapter_outline", prompt, "", chOutlineOverrides)
 	if err != nil {
 		return nil, err
 	}
@@ -831,7 +837,7 @@ func (s *ChapterService) generateSceneOutline(
 		return "", ""
 	}
 
-	resp, err := s.aiService.GenerateWithProvider(tenantID, novelID, "scene_outline", buf.String(), req.ModelOverride)
+	resp, err := s.aiService.GenerateWithProvider(tenantID, novelID, "scene_outline", buf.String(), req.ModelOverride, buildChapterOverrides(req, novel))
 	if err != nil {
 		logger.Printf("GenerateChapter: scene outline AI call failed: %v", err)
 		return "", ""
@@ -946,7 +952,7 @@ func (s *ChapterService) generateFromSceneOutline(
 		return content, "", err
 	}
 
-	raw, err := s.aiService.GenerateWithProvider(tenantID, novelID, "chapter", buf.String(), req.ModelOverride)
+	raw, err := s.aiService.GenerateWithProvider(tenantID, novelID, "chapter", buf.String(), req.ModelOverride, buildChapterOverrides(req, novel))
 	if err != nil {
 		return "", "", err
 	}
@@ -969,7 +975,7 @@ func (s *ChapterService) generateFallbackChapter(tenantID, novelID uint, req *mo
 	if req.Prompt != "" {
 		prompt += "\n\n创作要求：" + req.Prompt
 	}
-	return s.aiService.GenerateWithProvider(tenantID, novelID, "chapter", prompt, req.ModelOverride)
+	return s.aiService.GenerateWithProvider(tenantID, novelID, "chapter", prompt, req.ModelOverride, buildChapterOverrides(req, novel))
 }
 
 // postProcessChapter 异步后处理：生成摘要→生成标题→精修→提取角色状态→触发弧摘要
@@ -2081,7 +2087,27 @@ func (s *ImageGenerationService) GenerateThreeViewImage(tenantID uint, name, app
 type StoryboardOverrides struct {
 	MaxTokens      int     // 输出 token 上限，0=系统默认（≥4096）
 	Temperature    float64 // 生成温度，0=系统默认（0.1）
-	TimeoutSeconds int     // 单次 AI 调用超时（秒），0=系统默认（180s）
+	TimeoutSeconds int     // 单次 AI 调用超时（秒），0=系统默认（300s）
+}
+
+// buildChapterOverrides 从请求参数和小说项目配置构建 AI 参数覆盖。
+// 优先级：请求参数 > 项目配置 > 系统默认。
+func buildChapterOverrides(req *model.GenerateChapterRequest, novel *model.Novel) StoryboardOverrides {
+	o := StoryboardOverrides{
+		MaxTokens:      req.MaxTokens,
+		Temperature:    req.Temperature,
+		TimeoutSeconds: req.TimeoutSeconds,
+	}
+	if o.MaxTokens == 0 {
+		o.MaxTokens = novel.MaxTokens
+	}
+	if o.Temperature == 0 {
+		o.Temperature = novel.Temperature
+	}
+	if o.TimeoutSeconds == 0 {
+		o.TimeoutSeconds = novel.TimeoutSeconds
+	}
+	return o
 }
 
 type StoryboardService struct {

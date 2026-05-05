@@ -248,10 +248,13 @@ func (s *NovelService) UpdateNovel(id uint, req *model.UpdateNovelRequest) (*mod
 
 // GenerateOutlineRequest 生成大纲请求
 type GenerateOutlineRequest struct {
-	NovelID    uint     `json:"novel_id" binding:"required"`
-	Prompt     string   `json:"prompt"`
-	ChapterNum int      `json:"chapter_num" binding:"required"`
-	Keywords   []string `json:"keywords"`
+	NovelID        uint     `json:"novel_id" binding:"required"`
+	Prompt         string   `json:"prompt"`
+	ChapterNum     int      `json:"chapter_num" binding:"required"`
+	Keywords       []string `json:"keywords"`
+	MaxTokens      int      `json:"max_tokens,omitempty"`
+	Temperature    float64  `json:"temperature,omitempty"`
+	TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
 }
 
 // GenerateOutline 生成大纲
@@ -264,8 +267,24 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 	// 构建提示词
 	prompt := s.buildOutlinePrompt(novel, req)
 
+	// 构建 AI 参数覆盖：优先请求参数，其次项目配置
+	outlineOverrides := StoryboardOverrides{
+		MaxTokens:      req.MaxTokens,
+		Temperature:    req.Temperature,
+		TimeoutSeconds: req.TimeoutSeconds,
+	}
+	if outlineOverrides.MaxTokens == 0 {
+		outlineOverrides.MaxTokens = novel.MaxTokens
+	}
+	if outlineOverrides.Temperature == 0 {
+		outlineOverrides.Temperature = novel.Temperature
+	}
+	if outlineOverrides.TimeoutSeconds == 0 {
+		outlineOverrides.TimeoutSeconds = novel.TimeoutSeconds
+	}
+
 	// 调用AI生成（使用租户提供商）
-	result, err := s.aiService.GenerateWithProvider(tenantID, req.NovelID, "outline", prompt, "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, req.NovelID, "outline", prompt, "", outlineOverrides)
 	if err != nil {
 		return nil, err
 	}
