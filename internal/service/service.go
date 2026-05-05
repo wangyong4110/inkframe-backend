@@ -2683,6 +2683,17 @@ func (s *VideoService) buildStoryboardPrompt(
 
 	// ── 字段规范（核心约束，AI 必须严格遵守）──────────────────────────
 	sb.WriteString(`【输出字段规范——严格遵守，违反规范将导致输出无法使用】
+▸ camera_type（运镜方式）——必须体现多样性，禁止全部使用 static
+  可选值（选其中一个填入）：static | pan | zoom | tracking | dolly | crane
+  含义：static=固定机位，pan=水平平移，zoom=推拉，tracking=跟踪角色，dolly=移动拍摄，crane=升降
+  分布建议：static 不超过全部分镜的 40%，对话/动作场景优先用 pan/zoom/tracking
+
+▸ camera_angle（摄像机角度）——选其中一个填入
+  可选值：eye_level | high | low | dutch | overhead | POV
+
+▸ shot_size（景别）——选其中一个填入
+  可选值：extreme_wide | wide | full | medium | close_up | extreme_close_up
+
 ▸ description（英文画面描述）
   - 仅用于 AI 图片生成的英文视觉提示词，禁止出现中文、叙事句子、心理描写
   - 必须包含以下四层信息（缺少任一层将被视为不合格）：
@@ -2819,17 +2830,17 @@ func (s *VideoService) buildStoryboardPrompt(
     "shot_no": 1,
     "description": "English only. Must include: ① character positions (foreground/background, left/center/right) and poses ② key props and their spatial relation to characters ③ scene environment ④ lighting and composition",
     "narration": "中文旁白（必填，严禁镜头语言）",
-    "dialogue": "角色名：台词（无对话则为空字符串）",
-    "camera_type": "static|pan|zoom|tracking|dolly|crane",
-    "camera_angle": "eye_level|high|low|dutch|overhead|POV",
-    "shot_size": "extreme_wide|wide|full|medium|close_up|extreme_close_up",
+    "dialogue": "角色名：台词（无对话则为空字符串 \"\"）",
+    "camera_type": "pan",
+    "camera_angle": "eye_level",
+    "shot_size": "medium",
     "duration": 5.0,
     "location": "场景地点",
-    "time_of_day": "dawn|morning|afternoon|evening|night",
-    "weather": "clear|cloudy|rainy|snowy|foggy",
-    "lighting": "natural|dramatic|soft|backlit",
-    "characters": [{"name":"角色名","expression":"表情","pose":"姿势动作","position":"foreground-left|center|background-right 等"}],
-    "transition": "cut|fade|dissolve|wipe"
+    "time_of_day": "morning",
+    "weather": "clear",
+    "lighting": "natural",
+    "characters": [{"name":"角色名","expression":"表情","pose":"姿势动作","position":"foreground-left"}],
+    "transition": "cut"
   }
 ]`, expectedShots))
 
@@ -2975,11 +2986,15 @@ func validTransition(t string) string {
 	return "cut"
 }
 
-// validCameraType 验证摄像机类型，无效时返回默认值
+// validCameraType 验证摄像机类型，无效时返回默认值 "static"。
+// 注意：如日志出现 "invalid camera_type"，说明 AI 输出了管道分隔枚举字符串或其他非法值，需检查 Prompt 格式。
 func validCameraType(t string) string {
 	valid := map[string]bool{"static": true, "pan": true, "zoom": true, "tracking": true, "dolly": true, "crane": true}
 	if valid[t] {
 		return t
+	}
+	if t != "" {
+		logger.Printf("validCameraType: invalid camera_type=%q, falling back to static", t)
 	}
 	return "static"
 }
@@ -3673,24 +3688,50 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 			logger.Printf("BatchGenerateShots: shot %d start (mode=%s)", sh.ShotNo, mode)
 			const maxRetries = 3
 			var genErr error
-			for attempt := 1; attempt <= maxRetries; attempt++ {
-				if video.Mode == "slideshow" || len(s.videoProviders) == 0 {
-					genErr = s.GenerateSlideshowShotVideo(sh, aspectRatio)
-				} else {
-					genErr = s.GenerateShotVideo(sh, aspectRatio, effectiveProvider)
+			if video.Mode == "slideshow" || len(s.videoProviders) == 0 {
+				// ── 两阶段异步模式 ──────────────────────────────────────────────────
+				// 阶段一（同步，占用 sem）：AI 图片生成 → 下载到本地
+				// 阶段二（异步，释放 sem 后后台执行）：Ken Burns 编码 → OSS 上传，支持自动重试
+				var localImage string
+				var clipDur float64
+				for attempt := 1; attempt <= maxRetries; attempt++ {
+					localImage, clipDur, genErr = s.generateShotImageOnly(sh, aspectRatio)
+					if genErr == nil {
+						break
+					}
+					logger.Printf("BatchGenerateShots: shot %d image attempt %d/%d failed: %v", sh.ShotNo, attempt, maxRetries, genErr)
+					if attempt < maxRetries {
+						time.Sleep(time.Duration(attempt*2) * time.Second)
+					}
 				}
 				if genErr == nil {
-					break
+					// 图片就绪：立即标记 completed（progress=50）供前端展示
+					s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
+						"status": "completed", "progress": 50,
+					}) //nolint:errcheck
+					// Ken Burns + OSS 在后台异步执行，完成后 progress=100
+					go s.generateClipAndUploadWithRetry(sh.ID, localImage, clipDur, aspectRatio)
+					logger.Printf("BatchGenerateShots: shot %d image ready, clip async", sh.ShotNo)
+				} else {
+					logger.Printf("BatchGenerateShots: shot %d image failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
 				}
-				logger.Printf("BatchGenerateShots: shot %d attempt %d/%d failed: %v", sh.ShotNo, attempt, maxRetries, genErr)
-				if attempt < maxRetries {
-					time.Sleep(time.Duration(attempt*2) * time.Second)
-				}
-			}
-			if genErr != nil {
-				logger.Printf("BatchGenerateShots: shot %d failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
 			} else {
-				logger.Printf("BatchGenerateShots: shot %d submitted successfully (taskID=%s)", sh.ShotNo, sh.ShotTaskID)
+				// ── AI 视频模式：原有同步逻辑（提交 → provider 轮询）──────────────
+				for attempt := 1; attempt <= maxRetries; attempt++ {
+					genErr = s.GenerateShotVideo(sh, aspectRatio, effectiveProvider)
+					if genErr == nil {
+						break
+					}
+					logger.Printf("BatchGenerateShots: shot %d attempt %d/%d failed: %v", sh.ShotNo, attempt, maxRetries, genErr)
+					if attempt < maxRetries {
+						time.Sleep(time.Duration(attempt*2) * time.Second)
+					}
+				}
+				if genErr != nil {
+					logger.Printf("BatchGenerateShots: shot %d failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
+				} else {
+					logger.Printf("BatchGenerateShots: shot %d submitted successfully (taskID=%s)", sh.ShotNo, sh.ShotTaskID)
+				}
 			}
 		}(shot)
 	}
@@ -4616,11 +4657,126 @@ func (s *VideoService) generateKenBurnsClip(shot *model.StoryboardShot, imagePat
 	return outPath, nil
 }
 
+// generateShotImageOnly 执行图片解说模式的第一阶段：生成图片 + 下载到本地临时文件。
+// 返回本地文件路径和实际视频时长；调用方负责在使用完毕后删除该文件。
+// shot.Status 会在此函数内被设置为 "generating"；完成后调用方应更新为 "completed"。
+func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectRatio string) (localImage string, duration float64, err error) {
+	duration = shot.Duration
+	if duration <= 0 {
+		duration = 5.0
+	}
+	// 视频时长不能低于音频时长
+	if shot.AudioPath != "" {
+		if data, readErr := readLocalOrRemoteFile(shot.AudioPath); readErr == nil && len(data) > 0 {
+			ext := audioExtension(shot.AudioPath)
+			if micros := parseAudioDurationMicros(data, ext); micros > 0 {
+				if audioDur := float64(micros) / 1_000_000; audioDur > duration {
+					logger.Printf("generateShotImageOnly: shot %d extending duration %.2f→%.2fs to cover audio", shot.ShotNo, duration, audioDur)
+					duration = audioDur
+					shot.Duration = audioDur
+				}
+			}
+		}
+	}
+	shot.GenerationMode = "static"
+	shot.Status = "generating"
+	s.storyboardRepo.Update(shot) //nolint:errcheck
+
+	imageURL, imgErr := s.generateShotReferenceImage(shot)
+	if imageURL == "" {
+		errMsg := "image provider returned empty URL"
+		if imgErr != nil {
+			errMsg = imgErr.Error()
+		}
+		shot.Status = "failed"
+		shot.ErrorMessage = errMsg
+		s.storyboardRepo.Update(shot) //nolint:errcheck
+		if imgErr != nil {
+			return "", 0, fmt.Errorf("image generation failed for shot %d: %w", shot.ShotNo, imgErr)
+		}
+		return "", 0, fmt.Errorf("image generation failed for shot %d (empty URL)", shot.ShotNo)
+	}
+	shot.ImageURL = imageURL
+	s.storyboardRepo.Update(shot) //nolint:errcheck
+
+	localImage, err = downloadToTemp(imageURL, fmt.Sprintf("inkframe-img-%d-", shot.ID), ".jpg")
+	if err != nil {
+		return "", 0, fmt.Errorf("download image for shot %d: %w", shot.ShotNo, err)
+	}
+	return localImage, duration, nil
+}
+
+// generateClipAndUploadWithRetry 在后台 goroutine 中执行 Ken Burns 编码 + OSS 上传，
+// 支持最多 maxClipRetries 次自动重试（指数退避）。
+// 无论成功与否，最终均将 progress 更新为 100，并清理本地临时文件。
+const maxClipRetries = 3
+
+func (s *VideoService) generateClipAndUploadWithRetry(shotID uint, localImage string, duration float64, aspectRatio string) {
+	defer os.Remove(localImage)
+
+	shot, err := s.storyboardRepo.GetByID(shotID)
+	if err != nil {
+		logger.Printf("generateClipAndUploadWithRetry: shot %d not found: %v", shotID, err)
+		return
+	}
+
+	var clipPath string
+	var lastErr error
+
+	for attempt := 1; attempt <= maxClipRetries; attempt++ {
+		// 优先纯 Go Ken Burns；失败时降级为静止画面
+		clipPath, lastErr = s.generateKenBurnsPureGo(context.Background(), shot, localImage, duration, aspectRatio)
+		if lastErr != nil {
+			logger.Printf("generateClipAndUploadWithRetry: shot %d ken burns attempt %d/%d: %v", shot.ShotNo, attempt, maxClipRetries, lastErr)
+			clipPath, lastErr = s.generateStillFrameClip(localImage, duration, aspectRatio)
+		}
+		if lastErr == nil {
+			break
+		}
+		logger.Printf("generateClipAndUploadWithRetry: shot %d still frame attempt %d/%d: %v", shot.ShotNo, attempt, maxClipRetries, lastErr)
+		if attempt < maxClipRetries {
+			time.Sleep(time.Duration(attempt*5) * time.Second)
+		}
+	}
+
+	fields := map[string]interface{}{"progress": 100}
+	if lastErr != nil {
+		logger.Printf("generateClipAndUploadWithRetry: shot %d clip failed after %d attempts, keeping image-only: %v", shot.ShotNo, maxClipRetries, lastErr)
+	} else if ossURL := s.uploadClipToStorage(context.Background(), shot, clipPath); ossURL != "" {
+		fields["video_url"] = ossURL
+		fields["clip_path"] = ""
+		os.Remove(clipPath) //nolint:errcheck
+		logger.Printf("generateClipAndUploadWithRetry: shot %d clip → %s", shot.ShotNo, ossURL)
+	} else {
+		fields["clip_path"] = "file://" + clipPath
+		logger.Printf("generateClipAndUploadWithRetry: shot %d clip done (local only)", shot.ShotNo)
+	}
+	s.storyboardRepo.UpdateFields(shotID, fields) //nolint:errcheck
+}
+
 // GenerateSlideshowShotVideo 为单个分镜生成图片并应用 Ken Burns 动效（图片解说模式）
+// 此函数保持同步语义，供 runSlideshowPipeline 的顺序流水线使用。
+// BatchGenerateShots 中的批量生成改用 generateShotImageOnly + generateClipAndUploadWithRetry 两阶段异步模式。
 func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, aspectRatio string) error {
 	duration := shot.Duration
 	if duration <= 0 {
 		duration = 5.0
+	}
+
+	// 视频时长不能低于音频时长：读取已生成的 TTS 音频，若音频更长则扩展 duration。
+	if shot.AudioPath != "" {
+		if data, err := readLocalOrRemoteFile(shot.AudioPath); err == nil && len(data) > 0 {
+			ext := audioExtension(shot.AudioPath)
+			if micros := parseAudioDurationMicros(data, ext); micros > 0 {
+				audioDur := float64(micros) / 1_000_000
+				if audioDur > duration {
+					logger.Printf("GenerateSlideshowShotVideo: shot %d extending duration %.2f→%.2fs to cover audio",
+						shot.ShotNo, duration, audioDur)
+					duration = audioDur
+					shot.Duration = audioDur
+				}
+			}
+		}
 	}
 
 	logger.Printf("GenerateSlideshowShotVideo: shot %d aspect=%s duration=%.1fs", shot.ShotNo, aspectRatio, duration)
@@ -4681,14 +4837,56 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 		shot.ErrorMessage = "ken burns skipped, used still frame"
 	}
 
-	shot.ClipPath = "file://" + clipPath
-	if shot.ErrorMessage == "" {
-		shot.ErrorMessage = ""
+	// 优先上传到 OSS（持久存储），成功后清除本地 file:// 路径并删除临时文件。
+	// 失败时降级保留 file:// 路径（本地可访问但重启后失效）。
+	if ossURL := s.uploadClipToStorage(context.Background(), shot, clipPath); ossURL != "" {
+		shot.VideoURL = ossURL
+		shot.ClipPath = ""
+		os.Remove(clipPath) //nolint:errcheck
+		logger.Printf("GenerateSlideshowShotVideo: shot %d clip uploaded → %s", shot.ShotNo, ossURL)
+	} else {
+		shot.ClipPath = "file://" + clipPath
+		logger.Printf("GenerateSlideshowShotVideo: shot %d completed clip=%s (local only)", shot.ShotNo, clipPath)
 	}
 	shot.Status = "completed"
 	shot.Progress = 100
-	logger.Printf("GenerateSlideshowShotVideo: shot %d completed clip=%s", shot.ShotNo, clipPath)
 	return s.storyboardRepo.Update(shot)
+}
+
+// uploadClipToStorage 将本地 MP4 文件上传到持久存储（OSS），返回持久 URL。
+// storageSvc 为 nil 或上传失败时返回 ""（调用方保留 file:// 本地路径）。
+// OSS key 格式：novels/{title}/chapters/{no}/videos/{uuid}.mp4
+//
+//	章节 ID 未知时降级：videos/{uuid}.mp4
+func (s *VideoService) uploadClipToStorage(ctx context.Context, shot *model.StoryboardShot, clipPath string) string {
+	if s.storageSvc == nil {
+		return ""
+	}
+	data, err := os.ReadFile(clipPath)
+	if err != nil {
+		logger.Printf("uploadClipToStorage: read %s: %v", clipPath, err)
+		return ""
+	}
+
+	filename := uuid.New().String() + ".mp4"
+	key := fmt.Sprintf("videos/%s", filename) // fallback key
+
+	if shot.ChapterID != nil {
+		if ch, err := s.chapterRepo.GetByID(*shot.ChapterID); err == nil {
+			if novel, err := s.novelRepo.GetByID(ch.NovelID); err == nil && novel.Title != "" {
+				if sanitized := sanitizeStorageName(novel.Title); sanitized != "" {
+					key = fmt.Sprintf("novels/%s/chapters/%d/videos/%s", sanitized, ch.ChapterNo, filename)
+				}
+			}
+		}
+	}
+
+	ossURL, err := s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), "video/mp4")
+	if err != nil {
+		logger.Printf("uploadClipToStorage: upload failed for shot %d: %v", shot.ShotNo, err)
+		return ""
+	}
+	return ossURL
 }
 
 // runSlideshowPipeline 异步处理图片解说模式的所有分镜，完成后自动拼接
