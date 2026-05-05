@@ -611,7 +611,11 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 
 	// 异步生成三视图（不阻塞 pipeline，传递父 ctx 避免孤儿 goroutine）
 	if len(createdChars) > 0 {
-		go s.generateThreeViewsAsync(ctx, createdChars)
+		threeViewCtx := ctx
+		if novel.Title != "" {
+			threeViewCtx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title})
+		}
+		go s.generateThreeViewsAsync(threeViewCtx, createdChars)
 	}
 	logger.Printf("[NovelAnalysis] stepExtractCharacters done: novelID=%d characters created", novel.ID)
 	return nil

@@ -317,6 +317,9 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 		return
 	}
 
+	// 提前获取小说标题（用于 OSS 路径），避免在每个视角 goroutine 中重复查询
+	novelTitle := h.characterService.GetNovelTitle(character.NovelID)
+
 	go func(taskID string, charID uint, char *model.Character, viewType, style, provider string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 
@@ -340,7 +343,11 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 				defer wg.Done()
 				// 三视图是"按文字描述定义角色外观"，不传参考图，
 				// 让 Text2ImgV3/PortraitPhoto 完全由外貌描述+性别驱动。
-				img, err := h.imageGenService.GenerateThreeViewImage(tenantID, char.Name, char.Appearance, v, style, char.Gender, "", provider)
+				genCtx := context.Background()
+				if novelTitle != "" {
+					genCtx = service.WithImageStorageHint(genCtx, service.ImageStorageHint{NovelTitle: novelTitle})
+				}
+				img, err := h.imageGenService.GenerateThreeViewImage(genCtx, tenantID, char.Name, char.Appearance, v, style, char.Gender, "", provider)
 				cur := int(atomic.AddInt32(&doneCount, 1))
 				h.taskSvc.UpdateProgress(taskID, cur*99/total) //nolint:errcheck
 				if err != nil {
@@ -729,26 +736,44 @@ func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
 	}
 
 	var req struct {
-		Text string `json:"text"`
+		Text          string   `json:"text"`
+		VoiceID       string   `json:"voice_id"`
+		VoiceSpeed    *float64 `json:"voice_speed"`
+		VoiceStyle    string   `json:"voice_style"`
+		VoiceLanguage string   `json:"voice_language"`
 	}
 	_ = c.ShouldBindJSON(&req)
 	if req.Text == "" {
 		req.Text = "大家好，我是" + character.Name + "，很高兴认识你们。"
 	}
 
-	voice := character.VoiceID
+	// Use request params if provided; fall back to saved character values
+	voice := req.VoiceID
+	if voice == "" {
+		voice = character.VoiceID
+	}
 	if voice == "" {
 		voice = "alloy"
 	}
-	speed := character.VoiceSpeed
-	if speed <= 0 {
-		speed = 1.0
+	speed := 1.0
+	if req.VoiceSpeed != nil {
+		speed = *req.VoiceSpeed
+	} else if character.VoiceSpeed > 0 {
+		speed = character.VoiceSpeed
+	}
+	style := req.VoiceStyle
+	if style == "" {
+		style = character.VoiceStyle
+	}
+	lang := req.VoiceLanguage
+	if lang == "" {
+		lang = character.VoiceLanguage
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	rawURL, err := h.aiService.AudioGenerateWithOptions(ctx, getTenantID(c), req.Text, voice, speed, character.VoiceStyle)
+	rawURL, err := h.aiService.AudioGenerateWithOptions(ctx, getTenantID(c), req.Text, voice, speed, style, lang)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "voice generation failed: "+err.Error())
 		return

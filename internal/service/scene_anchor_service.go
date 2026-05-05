@@ -307,11 +307,14 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 		return nil, fmt.Errorf("anchor not found: %w", err)
 	}
 
-	// 查询小说的图片风格（用于模型选择）
+	// 查询小说的图片风格（用于模型选择）和标题（用于 OSS 路径）
 	imageStyle := ""
 	if s.novelRepo != nil {
 		if novel, err := s.novelRepo.GetByID(anchor.NovelID); err == nil {
 			imageStyle = novel.ImageStyle
+			if novel.Title != "" {
+				ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title})
+			}
 		}
 	}
 

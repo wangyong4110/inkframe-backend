@@ -1502,8 +1502,9 @@ func (s *AIService) GenerateImage(prompt string, options *ImageGenerationOptions
 	if err != nil {
 		return nil, err
 	}
+	persistURL := s.uploadImageToStorage(context.Background(), 0, resp.URL)
 	return &GeneratedImage{
-		URL:    resp.URL,
+		URL:    persistURL,
 		Width:  resp.Width,
 		Height: resp.Height,
 	}, nil
@@ -1675,7 +1676,7 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 		if resp.Error != "" {
 			return "", fmt.Errorf("image generation failed: %s", resp.Error)
 		}
-		return resp.URL, nil
+		return s.uploadImageToStorage(ctx, tenantID, resp.URL), nil
 	}
 
 	// DB 模式（providerRepo 存在）时：DB 是唯一权威来源，完全忽略静态 aiManager 的图像提供者。
@@ -1731,9 +1732,116 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 			lastErr = fmt.Errorf("image generation failed: %s", resp.Error)
 			continue
 		}
-		return resp.URL, nil
+		return s.uploadImageToStorage(ctx, tenantID, resp.URL), nil
 	}
 	return "", fmt.Errorf("no image provider available: %w", lastErr)
+}
+
+// imageStorageHintKey is the context key for ImageStorageHint.
+type imageStorageHintKey struct{}
+
+// ImageStorageHint carries novel/chapter metadata for OSS key building.
+type ImageStorageHint struct {
+	NovelTitle string
+	ChapterNo  int // 0 = novel-level, non-zero = chapter-level
+}
+
+// WithImageStorageHint enriches a context with novel/chapter metadata for OSS key building.
+func WithImageStorageHint(ctx context.Context, hint ImageStorageHint) context.Context {
+	return context.WithValue(ctx, imageStorageHintKey{}, hint)
+}
+
+// sanitizeStorageName strips characters unsafe in OSS keys, keeping ASCII alnum, CJK, hyphen, underscore.
+func sanitizeStorageName(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_':
+			b.WriteRune(r)
+		case r == ' ':
+			b.WriteRune('_')
+		case r >= 0x4E00 && r <= 0x9FFF: // CJK Unified Ideographs
+			b.WriteRune(r)
+		}
+	}
+	runes := []rune(b.String())
+	if len(runes) > 64 {
+		runes = runes[:64]
+	}
+	return string(runes)
+}
+
+// uploadImageToStorage 下载 AI 模型返回的临时图片 URL 并上传到持久存储（OSS/本地/DB）。
+// storageSvc 为 nil 或上传失败时降级返回原 imgURL（非致命）。
+// OSS key 格式：
+//   - 有小说+章节信息：novels/{title}/chapters/{no}/images/{uuid}.ext
+//   - 有小说信息：     novels/{title}/images/{uuid}.ext
+//   - 无信息（降级）：  images/{tenantID}/{uuid}.ext
+func (s *AIService) uploadImageToStorage(ctx context.Context, tenantID uint, imgURL string) string {
+	if s.storageSvc == nil || imgURL == "" {
+		return imgURL
+	}
+	dlCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, imgURL, nil)
+	if err != nil {
+		logger.Printf("uploadImageToStorage: build request: %v", err)
+		return imgURL
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		logger.Printf("uploadImageToStorage: download %s: %v", imgURL, err)
+		return imgURL
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		logger.Printf("uploadImageToStorage: read body: %v", err)
+		return imgURL
+	}
+	ct := resp.Header.Get("Content-Type")
+	if ct == "" || !strings.HasPrefix(ct, "image/") {
+		ct = "image/jpeg"
+	}
+	ext := imageExtFromContentType(ct)
+	filename := uuid.New().String() + ext
+
+	var key string
+	if hint, ok := ctx.Value(imageStorageHintKey{}).(ImageStorageHint); ok && hint.NovelTitle != "" {
+		sanitized := sanitizeStorageName(hint.NovelTitle)
+		if sanitized != "" {
+			if hint.ChapterNo > 0 {
+				key = fmt.Sprintf("novels/%s/chapters/%d/images/%s", sanitized, hint.ChapterNo, filename)
+			} else {
+				key = fmt.Sprintf("novels/%s/images/%s", sanitized, filename)
+			}
+		}
+	}
+	if key == "" {
+		key = fmt.Sprintf("images/%d/%s", tenantID, filename)
+	}
+
+	persistURL, uploadErr := s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), ct)
+	if uploadErr != nil {
+		logger.Printf("uploadImageToStorage: upload failed (falling back to original URL): %v", uploadErr)
+		return imgURL
+	}
+	logger.Printf("uploadImageToStorage: persisted %s → %s", imgURL, persistURL)
+	return persistURL
+}
+
+// imageExtFromContentType 根据 Content-Type 返回图片文件扩展名。
+func imageExtFromContentType(ct string) string {
+	switch {
+	case strings.Contains(ct, "jpeg"), strings.Contains(ct, "jpg"):
+		return ".jpg"
+	case strings.Contains(ct, "png"):
+		return ".png"
+	case strings.Contains(ct, "webp"):
+		return ".webp"
+	default:
+		return ".jpg"
+	}
 }
 
 // AudioGenerate 调用默认 AI provider 生成 TTS 音频，返回本地文件路径（file:// URL）
@@ -1741,12 +1849,12 @@ func (s *AIService) AudioGenerate(ctx context.Context, text, voice string) (stri
 	return s.AudioGenerateWithOptions(ctx, 0, text, voice, 1.0, "")
 }
 
-// AudioGenerateWithOptions 支持语速和风格的 TTS 生成。
+// AudioGenerateWithOptions 支持语速、风格和语言/方言的 TTS 生成。
 // Provider 选取顺序（DB 模式优先，与图像生成保持一致）：
 //  1. DB 中租户配置的 voice/tts 类型 provider
 //  2. config.yaml ai.tasks.tts 指定的 provider（静态模式兜底）
 //  3. env-var 注册的默认 provider（静态模式兜底）
-func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint, text, voice string, speed float64, style string) (string, error) {
+func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint, text, voice string, speed float64, style string, language ...string) (string, error) {
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
 	}
@@ -1779,11 +1887,16 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 	if speed <= 0 {
 		speed = 1.0
 	}
+	lang := ""
+	if len(language) > 0 {
+		lang = language[0]
+	}
 	resp, err := provider.AudioGenerate(ctx, &ai.AudioGenerateRequest{
-		Text:    text,
-		Voice:   voice,
-		Speed:   speed,
-		Emotion: style,
+		Text:     text,
+		Voice:    voice,
+		Speed:    speed,
+		Emotion:  style,
+		Language: lang,
 	})
 	if err != nil {
 		return "", err
@@ -3490,16 +3603,19 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 			// 不 break：继续查找是否有三视图
 		}
 	}
-	// 降级：通过 ChapterID 找到 NovelID，取第一个有肖像的角色
-	if characterPortrait == "" && shot.ChapterID != nil {
-		chapter, err := s.chapterRepo.GetByID(*shot.ChapterID)
-		if err == nil && chapter != nil {
-			chars, err := s.characterRepo.ListByNovel(chapter.NovelID)
-			if err == nil {
-				for _, c := range chars {
-					if c.Portrait != "" {
-						characterPortrait = c.Portrait
-						break
+	// 降级：通过 ChapterID 找到 NovelID，取第一个有肖像的角色；同时获取章节序号用于 OSS 路径
+	var chapterNo int
+	if shot.ChapterID != nil && s.chapterRepo != nil {
+		if chapter, err := s.chapterRepo.GetByID(*shot.ChapterID); err == nil && chapter != nil {
+			chapterNo = chapter.ChapterNo
+			if characterPortrait == "" {
+				chars, err := s.characterRepo.ListByNovel(chapter.NovelID)
+				if err == nil {
+					for _, c := range chars {
+						if c.Portrait != "" {
+							characterPortrait = c.Portrait
+							break
+						}
 					}
 				}
 			}
@@ -3549,6 +3665,10 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				// 降级：视频未设置画面风格时使用项目设置中的画面风格
 				if artStyle == "" && novel.ImageStyle != "" {
 					artStyle = novel.ImageStyle
+				}
+				// 注入 OSS 路径提示（项目名+章节序号）
+				if novel.Title != "" {
+					ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title, ChapterNo: chapterNo})
 				}
 			}
 		}

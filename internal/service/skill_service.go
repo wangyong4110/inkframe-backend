@@ -273,7 +273,13 @@ func (s *SkillService) GenerateSkillEffect(id uint) (*model.Skill, error) {
 		prompt = buildSkillEffectPrompt(skill)
 	}
 
-	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), 0, "", prompt, "", "", "")
+	genCtx := context.Background()
+	if s.novelRepo != nil && skill.NovelID > 0 {
+		if novel, e := s.novelRepo.GetByID(skill.NovelID); e == nil && novel.Title != "" {
+			genCtx = WithImageStorageHint(genCtx, ImageStorageHint{NovelTitle: novel.Title})
+		}
+	}
+	url, err := s.aiService.GenerateCharacterThreeView(genCtx, 0, "", prompt, "", "", "")
 	if err != nil {
 		return nil, fmt.Errorf("generate effect image failed: %w", err)
 	}

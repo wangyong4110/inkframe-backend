@@ -160,7 +160,13 @@ func (s *ItemService) GenerateItemImage(tenantID, id uint, referenceImageURL, pr
 	} else {
 		logger.Printf("GenerateItemImage: item=%d no valid reference image, generating without reference", id)
 	}
-	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL, "", "")
+	genCtx := context.Background()
+	if s.novelRepo != nil && item.NovelID > 0 {
+		if novel, e := s.novelRepo.GetByID(item.NovelID); e == nil && novel.Title != "" {
+			genCtx = WithImageStorageHint(genCtx, ImageStorageHint{NovelTitle: novel.Title})
+		}
+	}
+	url, err := s.aiService.GenerateCharacterThreeView(genCtx, tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL, "", "")
 	if err != nil {
 		return nil, fmt.Errorf("generate image failed: %w", err)
 	}
@@ -185,6 +191,13 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 	}
 	total := len(todo)
 
+	var novelTitle string
+	if s.novelRepo != nil {
+		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
+			novelTitle = novel.Title
+		}
+	}
+
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var done int
@@ -202,7 +215,11 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 			if !strings.HasPrefix(aiRefURL, "http://") && !strings.HasPrefix(aiRefURL, "https://") {
 				aiRefURL = ""
 			}
-			url, genErr := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL, "", "")
+			genCtx := context.Background()
+			if novelTitle != "" {
+				genCtx = WithImageStorageHint(genCtx, ImageStorageHint{NovelTitle: novelTitle})
+			}
+			url, genErr := s.aiService.GenerateCharacterThreeView(genCtx, tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL, "", "")
 			if genErr != nil {
 				logger.Printf("[ItemService] BatchGenerateImages: item %d (%s) failed: %v", item.ID, item.Name, genErr)
 				mu.Lock()

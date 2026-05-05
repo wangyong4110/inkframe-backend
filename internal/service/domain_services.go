@@ -1372,6 +1372,17 @@ func NewCharacterService(
 	}
 }
 
+// GetNovelTitle 返回小说标题，用于 OSS 路径构建；未注入 novelRepo 或查询失败时返回空字符串。
+func (s *CharacterService) GetNovelTitle(novelID uint) string {
+	if s.novelRepo == nil || novelID == 0 {
+		return ""
+	}
+	if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+		return novel.Title
+	}
+	return ""
+}
+
 // WithChapterCharacterRepo 注入章节角色覆盖仓库（可选）
 func (s *CharacterService) WithChapterCharacterRepo(r *repository.ChapterCharacterRepository) *CharacterService {
 	s.chapterCharacterRepo = r
@@ -1470,12 +1481,13 @@ func (s *CharacterService) UpdateCharacter(id uint, req *model.UpdateCharacterRe
 	}
 	if req.VoiceID != "" {
 		character.VoiceID = req.VoiceID
+		// When updating voice, also sync style (allow clearing to empty/default)
+		character.VoiceStyle = req.VoiceStyle
+	} else if req.VoiceStyle != "" {
+		character.VoiceStyle = req.VoiceStyle
 	}
 	if req.VoiceSpeed != nil {
 		character.VoiceSpeed = *req.VoiceSpeed
-	}
-	if req.VoiceStyle != "" {
-		character.VoiceStyle = req.VoiceStyle
 	}
 	if req.VoiceLanguage != "" {
 		character.VoiceLanguage = req.VoiceLanguage
@@ -1884,9 +1896,11 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 	}
 
 	imageStyle := ""
+	var novelTitle string
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
 			imageStyle = novel.ImageStyle
+			novelTitle = novel.Title
 		}
 	}
 
@@ -1909,7 +1923,11 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			img, genErr := imgSvc.GenerateThreeViewImage(tenantID, char.Name, char.Appearance, "front", imageStyle, char.Gender, "", provider)
+			genCtx := context.Background()
+			if novelTitle != "" {
+				genCtx = WithImageStorageHint(genCtx, ImageStorageHint{NovelTitle: novelTitle})
+			}
+			img, genErr := imgSvc.GenerateThreeViewImage(genCtx, tenantID, char.Name, char.Appearance, "front", imageStyle, char.Gender, "", provider)
 			if genErr != nil {
 				logger.Printf("[CharacterService] BatchGenerateImages: char %d (%s) failed: %v", char.ID, char.Name, genErr)
 				mu.Lock()
@@ -1993,7 +2011,8 @@ func (s *ImageGenerationService) GenerateCharacterImage(req *model.GenerateImage
 // gender: "male" | "female" | "neutral" | ""（空时不注入性别词）
 // referenceImage: 肖像参考图 URL（用于 IP-Adapter 保持面部一致性，可为空）
 // provider: 指定图像生成提供者（可为空，空时自动选择）
-func (s *ImageGenerationService) GenerateThreeViewImage(tenantID uint, name, appearance, viewType, style, gender, referenceImage, provider string) (*GeneratedCharacterImage, error) {
+// ctx 可携带 ImageStorageHint 用于 OSS 路径构建，传 context.Background() 亦可
+func (s *ImageGenerationService) GenerateThreeViewImage(ctx context.Context, tenantID uint, name, appearance, viewType, style, gender, referenceImage, provider string) (*GeneratedCharacterImage, error) {
 	// "角色设定参考图" 会被模型理解成"多视角设计总表"，导致单图出现多个人物，改用单视角描述词。
 	viewDesc := map[string]string{
 		"front": "正面站立，面朝镜头，全身",
@@ -2072,7 +2091,7 @@ func (s *ImageGenerationService) GenerateThreeViewImage(tenantID uint, name, app
 	if genderNeg != "" {
 		negativePrompt = baseNeg + ", " + genderNeg
 	}
-	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, prompt, aiRef, style, negativePrompt)
+	url, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt, aiRef, style, negativePrompt)
 	if err != nil {
 		return nil, err
 	}
