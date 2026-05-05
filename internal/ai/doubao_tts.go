@@ -120,6 +120,10 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 	if req.Emotion != "" {
 		reqParams["emotion"] = req.Emotion
 	}
+	// 方言/语言：BigTTS 通过 language 字段控制发音方言（如 zh-yue 粤语、zh-scu 四川话）
+	if req.Language != "" {
+		reqParams["language"] = req.Language
+	}
 
 	ttsBody := map[string]interface{}{
 		"user":       map[string]string{"uid": "inkframe"},
@@ -262,6 +266,7 @@ type doubaoV1Audio struct {
 	SpeedRatio    float64 `json:"speed_ratio,omitempty"`
 	Emotion       string  `json:"emotion,omitempty"`
 	EnableEmotion bool    `json:"enable_emotion,omitempty"`
+	Language      string  `json:"language,omitempty"` // 方言/语言（如 zh-yue 粤语）
 }
 
 type doubaoV1ReqBody struct {
@@ -373,6 +378,7 @@ func (p *DoubaoSpeechV1Provider) AudioGenerate(ctx context.Context, req *AudioGe
 		VoiceType:  voiceType,
 		Encoding:   "mp3",
 		SpeedRatio: speedRatio,
+		Language:   req.Language,
 	}
 	if req.Emotion != "" {
 		audio.Emotion = req.Emotion

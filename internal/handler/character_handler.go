@@ -65,6 +65,7 @@ func characterResponse(c *model.Character) gin.H {
 		"voice_id":         c.VoiceID,
 		"voice_speed":      c.VoiceSpeed,
 		"voice_style":      c.VoiceStyle,
+		"voice_language":   c.VoiceLanguage,
 		"voice_sample":     c.VoiceSample,
 		"status":           c.Status,
 		"created_at":       c.CreatedAt,
