@@ -1085,7 +1085,7 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 	if err != nil {
 		base = &model.TaskModelConfig{
 			Temperature: 0.7,
-			MaxTokens:   16384, // 默认值提高至 16384，避免提取类任务（角色/物品/世界观）JSON 被截断
+			MaxTokens:   0, // 0 = 不限制，由 AI provider 使用其模型默认值
 		}
 	}
 	// 复制一份避免污染缓存
@@ -1254,10 +1254,7 @@ func (s *AIService) callAIWithProvider(tenantID uint, prompt string, config *mod
 	if provider.GetName() != "anthropic" {
 		req.TopK = config.TopK
 	}
-	// Stop sequences 仅 OpenAI 支持，其他 provider 忽略
-	if req.MaxTokens == 0 {
-		req.MaxTokens = 4096
-	}
+	// MaxTokens == 0 时不设限，由各 provider 实现决定是否传给 API（doubao/qianwen 已做 >0 判断）
 
 	// 超时：优先使用 config.TimeoutSeconds（由调用方注入），否则默认 5 分钟。
 	timeoutDur := 5 * time.Minute
