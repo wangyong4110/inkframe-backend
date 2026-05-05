@@ -2679,9 +2679,9 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 	}
 
 	if err := json.Unmarshal([]byte(cleaned), &rawShots); err != nil || len(rawShots) == 0 {
-		logger.Printf("[VideoService] parseStoryboardResult: JSON parse failed (%v); raw AI response (first 500 chars): %.500s", err, result)
+		logger.Printf("[VideoService] parseStoryboardResult: JSON parse failed (%v)\n===== AI RAW RESPONSE (len=%d) =====\n%s\n===== END =====", err, len(result), result)
 		if err != nil {
-			return nil, fmt.Errorf("分镜JSON解析失败: %w; AI原始响应(前200字符): %.200s", err, result)
+			return nil, fmt.Errorf("分镜JSON解析失败: %w", err)
 		}
 		return nil, fmt.Errorf("AI返回了空的分镜列表，请检查章节内容或重试")
 	}
