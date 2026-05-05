@@ -3,7 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"strconv"
 	"sync"
@@ -357,7 +357,7 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 		updateReq := characterToUpdateReq(char)
 		for r := range resultCh {
 			if r.err != nil {
-				log.Printf("[CharacterHandler] GenerateThreeView task %s view=%s failed: %v", taskID, r.view, r.err)
+				logger.Printf("[CharacterHandler] GenerateThreeView task %s view=%s failed: %v", taskID, r.view, r.err)
 				h.taskSvc.Fail(taskID, "generate "+r.view+" view failed: "+r.err.Error()) //nolint:errcheck
 				return
 			}
@@ -431,7 +431,7 @@ func (h *CharacterHandler) AIBatchGenerate(c *gin.Context) {
 	go func(taskID string) {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("[CharacterHandler] AIBatchGenerate task %s panic: %v", taskID, r)
+				logger.Printf("[CharacterHandler] AIBatchGenerate task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -439,7 +439,7 @@ func (h *CharacterHandler) AIBatchGenerate(c *gin.Context) {
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		chars, err := h.characterService.AIBatchGenerate(tenantID, uint(novelID))
 		if err != nil {
-			log.Printf("[CharacterHandler] AIBatchGenerate task %s failed: %v", taskID, err)
+			logger.Printf("[CharacterHandler] AIBatchGenerate task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"characters": chars, "count": len(chars)}) //nolint:errcheck
@@ -469,7 +469,7 @@ func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
 	go func(taskID string) {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("[CharacterHandler] BatchGenerateImages task %s panic: %v", taskID, r)
+				logger.Printf("[CharacterHandler] BatchGenerateImages task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -477,7 +477,7 @@ func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		succ, fail, err := h.characterService.BatchGenerateImages(tenantID, uint(novelID), req.Provider, progressFn)
 		if err != nil {
-			log.Printf("[CharacterHandler] BatchGenerateImages task %s failed: %v", taskID, err)
+			logger.Printf("[CharacterHandler] BatchGenerateImages task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"succeeded": succ, "failed": fail}) //nolint:errcheck

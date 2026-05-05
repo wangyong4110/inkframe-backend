@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"strings"
 	"time"
 
@@ -164,7 +164,7 @@ func (r *NovelRepository) DeleteWithCascade(id uint) error {
 		tryExec := func(sql string, args ...interface{}) error {
 			if e := tx.Exec(sql, args...).Error; e != nil {
 				if isSchemaMissing(e) {
-					log.Printf("[DeleteNovel] skip (schema not ready): %v", e)
+					logger.Printf("[DeleteNovel] skip (schema not ready): %v", e)
 					return nil
 				}
 				return e

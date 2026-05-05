@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"strings"
 	"time"
@@ -599,7 +599,7 @@ func (p *RetryProvider) Generate(ctx context.Context, req *GenerateRequest) (*Ge
 	for attempt := 0; attempt < p.maxRetries; attempt++ {
 		if attempt > 0 {
 			delay := p.baseDelay * time.Duration(1<<uint(attempt-1))
-			log.Printf("RetryProvider.Generate: attempt %d, waiting %v", attempt+1, delay)
+			logger.Printf("RetryProvider.Generate: attempt %d, waiting %v", attempt+1, delay)
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():

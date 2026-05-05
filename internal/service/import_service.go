@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"path/filepath"
 	"regexp"
@@ -152,7 +152,7 @@ func (s *NovelImportService) uploadRawToOSS(ctx context.Context, tenantID, novel
 	url, err := s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)),
 		contentTypeFromFilename(filename))
 	if err != nil {
-		log.Printf("[Import] OSS upload failed for novel %d: %v", novelID, err)
+		logger.Printf("[Import] OSS upload failed for novel %d: %v", novelID, err)
 		return ""
 	}
 	return url
@@ -273,7 +273,7 @@ func (s *NovelImportService) crawlChaptersBackground(
 		// 爬取页面
 		html, err := httpClient.Get(ctx, chapterURL)
 		if err != nil {
-			log.Printf("[Crawl] chapter %d fetch error: %v", ch.ChapterNo, err)
+			logger.Printf("[Crawl] chapter %d fetch error: %v", ch.ChapterNo, err)
 			progress.Failed++
 			time.Sleep(rateLimit)
 			continue
@@ -281,7 +281,7 @@ func (s *NovelImportService) crawlChaptersBackground(
 
 		doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 		if err != nil {
-			log.Printf("[Crawl] chapter %d parse html error: %v", ch.ChapterNo, err)
+			logger.Printf("[Crawl] chapter %d parse html error: %v", ch.ChapterNo, err)
 			progress.Failed++
 			time.Sleep(rateLimit)
 			continue
@@ -289,7 +289,7 @@ func (s *NovelImportService) crawlChaptersBackground(
 
 		content, err := parser.ParseChapter(doc)
 		if err != nil || content.Content == "" {
-			log.Printf("[Crawl] chapter %d parse content error: %v", ch.ChapterNo, err)
+			logger.Printf("[Crawl] chapter %d parse content error: %v", ch.ChapterNo, err)
 			progress.Failed++
 			time.Sleep(rateLimit)
 			continue
@@ -304,14 +304,14 @@ func (s *NovelImportService) crawlChaptersBackground(
 
 		// 写回数据库
 		if err := s.chapterRepo.UpdateCrawledContent(ch.ID, title, content.Content, wordCount); err != nil {
-			log.Printf("[Crawl] chapter %d save error: %v", ch.ChapterNo, err)
+			logger.Printf("[Crawl] chapter %d save error: %v", ch.ChapterNo, err)
 			progress.Failed++
 			time.Sleep(rateLimit)
 			continue
 		}
 
 		progress.Done++
-		log.Printf("[Crawl] novel=%d chapter=%d/%d done", novelID, progress.Done, progress.Total)
+		logger.Printf("[Crawl] novel=%d chapter=%d/%d done", novelID, progress.Done, progress.Total)
 
 		// 爬取完成后自动生成 AI 摘要
 		if s.narrativeMemory != nil {
@@ -319,7 +319,7 @@ func (s *NovelImportService) crawlChaptersBackground(
 			ch.Content = content.Content
 			summary, err := s.narrativeMemory.GenerateChapterSummary(0, ch, novelTitle)
 			if err != nil {
-				log.Printf("[Crawl] chapter %d summary error: %v", ch.ChapterNo, err)
+				logger.Printf("[Crawl] chapter %d summary error: %v", ch.ChapterNo, err)
 			} else {
 				ch.Summary = summary
 				s.chapterRepo.Update(ch)
@@ -340,7 +340,7 @@ func (s *NovelImportService) crawlChaptersBackground(
 		s.novelRepo.UpdateFields(novelID, map[string]interface{}{"status": "writing"})
 	}
 	progress.Current = ""
-	log.Printf("[Crawl] novel=%d finished: done=%d failed=%d", novelID, progress.Done, progress.Failed)
+	logger.Printf("[Crawl] novel=%d finished: done=%d failed=%d", novelID, progress.Done, progress.Failed)
 
 	// 将全本内容合并上传到 OSS 备份
 	if s.storageSvc != nil && progress.Status == "completed" {
@@ -459,7 +459,7 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 				novel = existing
 				count, _ := s.chapterRepo.CountByNovel(existing.ID)
 				chapterOffset = int(count)
-				log.Printf("[Import] novel %q already exists (id=%d), appending chapters from offset %d", novel.Title, novel.ID, chapterOffset)
+				logger.Printf("[Import] novel %q already exists (id=%d), appending chapters from offset %d", novel.Title, novel.ID, chapterOffset)
 			}
 		}
 		// 仍需新建（无同名小说）
@@ -498,23 +498,23 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 				existing.Status = chapter.Status
 				if err := s.chapterRepo.Update(existing); err != nil {
 					result.FailedChapters++
-					log.Printf("[Import] novel=%d chapter %d update failed: %v", novel.ID, chapter.ChapterNo, err)
+					logger.Printf("[Import] novel=%d chapter %d update failed: %v", novel.ID, chapter.ChapterNo, err)
 					result.Errors = append(result.Errors, fmt.Sprintf("chapter %d update failed: %v", chapter.ChapterNo, err))
 				} else {
 					result.ImportedChapters++
 				}
 			} else {
-				log.Printf("[Import] novel=%d chapter %d already exists with content (%d chars), skipping", novel.ID, chapter.ChapterNo, len([]rune(existing.Content)))
+				logger.Printf("[Import] novel=%d chapter %d already exists with content (%d chars), skipping", novel.ID, chapter.ChapterNo, len([]rune(existing.Content)))
 				result.ImportedChapters++
 			}
 		} else {
 			if err := s.chapterRepo.Create(chapter); err != nil {
 				result.FailedChapters++
-				log.Printf("[Import] novel=%d chapter %d create failed: %v", novel.ID, chapter.ChapterNo, err)
+				logger.Printf("[Import] novel=%d chapter %d create failed: %v", novel.ID, chapter.ChapterNo, err)
 				result.Errors = append(result.Errors, fmt.Sprintf("chapter %d failed: %v", chapter.ChapterNo, err))
 			} else {
 				result.ImportedChapters++
-				log.Printf("[Import] novel=%d chapter %d saved (%d chars)", novel.ID, chapter.ChapterNo, len([]rune(chapter.Content)))
+				logger.Printf("[Import] novel=%d chapter %d saved (%d chars)", novel.ID, chapter.ChapterNo, len([]rune(chapter.Content)))
 			}
 		}
 	}
@@ -586,7 +586,7 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 			novel = existing
 			count, _ := s.chapterRepo.CountByNovel(existing.ID)
 			chapterOffset = int(count)
-			log.Printf("[Import] crawl: novel %q already exists (id=%d), appending from offset %d", novel.Title, novel.ID, chapterOffset)
+			logger.Printf("[Import] crawl: novel %q already exists (id=%d), appending from offset %d", novel.Title, novel.ID, chapterOffset)
 		}
 	}
 	if novel == nil {
@@ -951,7 +951,7 @@ func (s *NovelImportService) splitByChaptersWithAI(content string) []*model.Chap
 
 	resp, err := s.aiService.Generate(0, "chapter", prompt)
 	if err != nil || strings.TrimSpace(resp) == "" {
-		log.Printf("[Import] AI chapter split error: %v", err)
+		logger.Printf("[Import] AI chapter split error: %v", err)
 		return nil
 	}
 
@@ -964,7 +964,7 @@ func (s *NovelImportService) splitByChaptersWithAI(content string) []*model.Chap
 	}
 	var titles []string
 	if err := json.Unmarshal([]byte(raw), &titles); err != nil || len(titles) == 0 {
-		log.Printf("[Import] AI chapter split JSON parse error: %v, raw=%q", err, raw)
+		logger.Printf("[Import] AI chapter split JSON parse error: %v, raw=%q", err, raw)
 		return nil
 	}
 
@@ -1008,7 +1008,7 @@ func (s *NovelImportService) splitByChaptersWithAI(content string) []*model.Chap
 		titleStrs[i] = e.title
 	}
 	chapters := s.buildChaptersFromSplits(content, splits, titleStrs)
-	log.Printf("[Import] AI chapter split: %d chapters detected", len(chapters))
+	logger.Printf("[Import] AI chapter split: %d chapters detected", len(chapters))
 	return chapters
 }
 
@@ -1119,7 +1119,7 @@ func (s *NovelToVideoService) ImportAndGenerate(req *ImportRequest, videoReq *No
 	}
 
 	result.NovelID = importResult.NovelID
-	log.Printf("Novel imported: %s, chapters: %d", importResult.Title, importResult.ImportedChapters)
+	logger.Printf("Novel imported: %s, chapters: %d", importResult.Title, importResult.ImportedChapters)
 
 	// 2. 生成视频
 	videoReq.NovelID = importResult.NovelID
@@ -1234,14 +1234,14 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 			}
 			if s.storyboardRepo != nil {
 				if err := s.storyboardRepo.Create(dbShot); err != nil {
-					log.Printf("save storyboard shot failed (chapter %d, shot %d): %v", chapter.ChapterNo, idx+1, err)
+					logger.Printf("save storyboard shot failed (chapter %d, shot %d): %v", chapter.ChapterNo, idx+1, err)
 				}
 			}
 			totalShots++
 		}
 
 		result.ChaptersProcessed = i + 1
-		log.Printf("Processed chapter %d/%d, shots: %d", i+1, len(chapters), len(shots))
+		logger.Printf("Processed chapter %d/%d, shots: %d", i+1, len(chapters), len(shots))
 	}
 
 	result.ShotsGenerated = totalShots
@@ -1251,7 +1251,7 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 	enhancements := s.videoEnhancement.GetDefaultEnhancements()
 	for _, enh := range enhancements {
 		if enh.Enabled {
-			log.Printf("Applying enhancement: %s", enh.Type)
+			logger.Printf("Applying enhancement: %s", enh.Type)
 		}
 	}
 

@@ -2,7 +2,7 @@ package handler
 
 import (
 	"fmt"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"mime"
 	"net/http"
 	"path/filepath"
@@ -39,7 +39,7 @@ func respondBadRequest(c *gin.Context, msg string) {
 
 func respondErr(c *gin.Context, status int, msg string) {
 	if status >= 500 {
-		log.Printf("[HTTP] %s %s -> %d: %s", c.Request.Method, c.Request.URL.Path, status, msg)
+		logger.Printf("[HTTP] %s %s -> %d: %s", c.Request.Method, c.Request.URL.Path, status, msg)
 	}
 	c.JSON(status, gin.H{"error": msg})
 }

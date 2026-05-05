@@ -2,7 +2,7 @@ package handler
 
 import (
 	"context"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"strconv"
 
@@ -154,7 +154,7 @@ func (h *SceneAnchorHandler) ExtractSceneAnchors(c *gin.Context) {
 	}
 	anchors, err := h.svc.ExtractFromChapter(c.Request.Context(), getTenantID(c), uint(novelID), body.NovelTitle, body.ChapterContent)
 	if err != nil {
-		log.Printf("[SceneAnchorHandler] ExtractSceneAnchors error: %v", err)
+		logger.Printf("[SceneAnchorHandler] ExtractSceneAnchors error: %v", err)
 		respondErr(c, http.StatusInternalServerError, "failed to extract scene anchors")
 		return
 	}
@@ -196,7 +196,7 @@ func (h *SceneAnchorHandler) GenerateRefImage(c *gin.Context) {
 	_ = c.ShouldBindJSON(&body) // optional body
 	anchor, err := h.svc.GenerateRefImage(c.Request.Context(), getTenantID(c), uint(id), body.Provider)
 	if err != nil {
-		log.Printf("[SceneAnchorHandler] GenerateRefImage error: %v", err)
+		logger.Printf("[SceneAnchorHandler] GenerateRefImage error: %v", err)
 		respondErr(c, http.StatusInternalServerError, "failed to generate ref image")
 		return
 	}
@@ -249,7 +249,7 @@ func (h *SceneAnchorHandler) AIExtractChapterAnchors(c *gin.Context) {
 	}
 	anchors, err := h.svc.ExtractFromChapter(context.Background(), getTenantID(c), uint(novelID), "", content)
 	if err != nil {
-		log.Printf("[SceneAnchorHandler] AIExtractChapterAnchors: %v", err)
+		logger.Printf("[SceneAnchorHandler] AIExtractChapterAnchors: %v", err)
 		respondErr(c, http.StatusInternalServerError, "failed to extract chapter scene anchors")
 		return
 	}
@@ -281,7 +281,7 @@ func (h *SceneAnchorHandler) BatchGenerateRefImages(c *gin.Context) {
 	go func(taskID string) {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("[SceneAnchorHandler] BatchGenerateRefImages task %s panic: %v", taskID, r)
+				logger.Printf("[SceneAnchorHandler] BatchGenerateRefImages task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -289,7 +289,7 @@ func (h *SceneAnchorHandler) BatchGenerateRefImages(c *gin.Context) {
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		succ, fail, err := h.svc.BatchGenerateRefImages(context.Background(), tenantID, uint(novelID), body.Provider, progressFn)
 		if err != nil {
-			log.Printf("[SceneAnchorHandler] BatchGenerateRefImages task %s failed: %v", taskID, err)
+			logger.Printf("[SceneAnchorHandler] BatchGenerateRefImages task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"succeeded": succ, "failed": fail}) //nolint:errcheck
@@ -319,7 +319,7 @@ func (h *SceneAnchorHandler) AIExtractFromNovel(c *gin.Context) {
 	go func(taskID string) {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("[SceneAnchorHandler] AIExtractFromNovel task %s panic: %v", taskID, r)
+				logger.Printf("[SceneAnchorHandler] AIExtractFromNovel task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -327,7 +327,7 @@ func (h *SceneAnchorHandler) AIExtractFromNovel(c *gin.Context) {
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		anchors, err := h.svc.AIExtractAllFromNovel(tenantID, uint(novelID), progressFn)
 		if err != nil {
-			log.Printf("[SceneAnchorHandler] AIExtractFromNovel: %v", err)
+			logger.Printf("[SceneAnchorHandler] AIExtractFromNovel: %v", err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"scene_anchors": anchors, "count": len(anchors)}) //nolint:errcheck

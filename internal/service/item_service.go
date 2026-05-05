@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"strings"
 	"sync"
 	"text/template"
@@ -156,9 +156,9 @@ func (s *ItemService) GenerateItemImage(tenantID, id uint, referenceImageURL, pr
 		aiRefURL = ""
 	}
 	if aiRefURL != "" {
-		log.Printf("GenerateItemImage: item=%d using reference image %s", id, aiRefURL)
+		logger.Printf("GenerateItemImage: item=%d using reference image %s", id, aiRefURL)
 	} else {
-		log.Printf("GenerateItemImage: item=%d no valid reference image, generating without reference", id)
+		logger.Printf("GenerateItemImage: item=%d no valid reference image, generating without reference", id)
 	}
 	url, err := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL, "", "")
 	if err != nil {
@@ -204,7 +204,7 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 			}
 			url, genErr := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL, "", "")
 			if genErr != nil {
-				log.Printf("[ItemService] BatchGenerateImages: item %d (%s) failed: %v", item.ID, item.Name, genErr)
+				logger.Printf("[ItemService] BatchGenerateImages: item %d (%s) failed: %v", item.ID, item.Name, genErr)
 				mu.Lock()
 				failed++
 				done++
@@ -217,7 +217,7 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 			}
 			item.ImageURL = url
 			if saveErr := s.itemRepo.Update(item); saveErr != nil {
-				log.Printf("[ItemService] BatchGenerateImages: save item %d: %v", item.ID, saveErr)
+				logger.Printf("[ItemService] BatchGenerateImages: save item %d: %v", item.ID, saveErr)
 				mu.Lock()
 				failed++
 				done++
@@ -239,7 +239,7 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 		}()
 	}
 	wg.Wait()
-	log.Printf("[ItemService] BatchGenerateImages: novelID=%d succeeded=%d failed=%d", novelID, succeeded, failed)
+	logger.Printf("[ItemService] BatchGenerateImages: novelID=%d succeeded=%d failed=%d", novelID, succeeded, failed)
 	return succeeded, failed, nil
 }
 
@@ -306,7 +306,7 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 
 	var extracted []analysisItemJSON
 	if err := json.Unmarshal([]byte(extractJSON(strings.TrimSpace(result))), &extracted); err != nil {
-		log.Printf("ItemService.AIExtractFromNovel: parse error: %v, raw: %.200s", err, result)
+		logger.Printf("ItemService.AIExtractFromNovel: parse error: %v, raw: %.200s", err, result)
 		return nil, fmt.Errorf("failed to parse AI response")
 	}
 
@@ -343,7 +343,7 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 				continue
 			}
 			if err := s.itemRepo.Update(it); err != nil {
-				log.Printf("ItemService.AIExtractFromNovel: update %s: %v", e.Name, err)
+				logger.Printf("ItemService.AIExtractFromNovel: update %s: %v", e.Name, err)
 				continue
 			}
 			upserted = append(upserted, it)
@@ -362,7 +362,7 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 				Status:       "active",
 			}
 			if err := s.itemRepo.Create(item); err != nil {
-				log.Printf("ItemService.AIExtractFromNovel: create %s: %v", e.Name, err)
+				logger.Printf("ItemService.AIExtractFromNovel: create %s: %v", e.Name, err)
 				continue
 			}
 			upserted = append(upserted, item)
@@ -487,7 +487,7 @@ func (s *ItemService) extractItemsFromContent(
 
 // AIExtractAllFromNovel 逐章并发提取物品：先并发 AI 提取，再统一去重、入库
 func (s *ItemService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.Item, error) {
-	log.Printf("[ItemService] AIExtractAllFromNovel: novelID=%d", novelID)
+	logger.Printf("[ItemService] AIExtractAllFromNovel: novelID=%d", novelID)
 	if s.chapterRepo == nil {
 		return nil, fmt.Errorf("chapter repository not configured")
 	}
@@ -562,7 +562,7 @@ func (s *ItemService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.It
 	var allItems []analysisItemJSON
 	for _, r := range results {
 		if r.err != nil {
-			log.Printf("ItemService.AIExtractAllFromNovel: chapter extract error: %v", r.err)
+			logger.Printf("ItemService.AIExtractAllFromNovel: chapter extract error: %v", r.err)
 			continue
 		}
 		for _, it := range r.items {
@@ -573,7 +573,7 @@ func (s *ItemService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.It
 			}
 		}
 	}
-	log.Printf("[ItemService] AIExtractAllFromNovel: chapters processed=%d, merged=%d unique items", len(candidates), len(allItems))
+	logger.Printf("[ItemService] AIExtractAllFromNovel: chapters processed=%d, merged=%d unique items", len(candidates), len(allItems))
 
 	// 统一入库（单线程，无竞争）
 	validCat := map[string]bool{"weapon": true, "treasure": true, "tool": true, "document": true, "artifact": true, "other": true}
@@ -605,18 +605,18 @@ func (s *ItemService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.It
 			Status:       "active",
 		}
 		if err := s.itemRepo.Create(item); err != nil {
-			log.Printf("ItemService.AIExtractAllFromNovel: create %q: %v", e.Name, err)
+			logger.Printf("ItemService.AIExtractAllFromNovel: create %q: %v", e.Name, err)
 			continue
 		}
 		upserted = append(upserted, item)
 	}
-	log.Printf("[ItemService] AIExtractAllFromNovel done: novelID=%d created=%d", novelID, len(upserted))
+	logger.Printf("[ItemService] AIExtractAllFromNovel done: novelID=%d created=%d", novelID, len(upserted))
 	return upserted, nil
 }
 
 // AIExtractChapterItems 从单章内容中提取物品，写入 ink_item + ink_chapter_item
 func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint) ([]*model.Item, error) {
-	log.Printf("[ItemService] AIExtractChapterItems: novelID=%d chapterID=%d", novelID, chapterID)
+	logger.Printf("[ItemService] AIExtractChapterItems: novelID=%d chapterID=%d", novelID, chapterID)
 	chapter, err := s.chapterRepo.GetByID(chapterID)
 	if err != nil {
 		return nil, fmt.Errorf("chapter not found: %w", err)
@@ -715,7 +715,7 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint) (
 			Status:       "active",
 		}
 		if e := s.itemRepo.Create(item); e != nil {
-			log.Printf("ItemService.AIExtractChapterItems: create %q: %v", it.Name, e)
+			logger.Printf("ItemService.AIExtractChapterItems: create %q: %v", it.Name, e)
 			continue
 		}
 		existingNameSet[strings.ToLower(it.Name)] = true
@@ -728,10 +728,10 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint) (
 			Owner:     it.Owner,
 		}
 		if e := s.chapterItemRepo.Upsert(ci); e != nil {
-			log.Printf("ItemService.AIExtractChapterItems: link chapter: %v", e)
+			logger.Printf("ItemService.AIExtractChapterItems: link chapter: %v", e)
 		}
 		created = append(created, item)
 	}
-	log.Printf("[ItemService] AIExtractChapterItems done: chapterID=%d created=%d", chapterID, len(created))
+	logger.Printf("[ItemService] AIExtractChapterItems done: chapterID=%d created=%d", chapterID, len(created))
 	return created, nil
 }

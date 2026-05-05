@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"os"
 	"path/filepath"
 	"strings"
@@ -114,7 +114,7 @@ func (s *BGMService) MixBGM(videoPath, bgmSource, outputPath string) error {
 		"-shortest",
 		outputPath,
 	); err != nil {
-		log.Printf("MixBGM: ffmpeg failed: %v\n%s", err, string(out))
+		logger.Printf("MixBGM: ffmpeg failed: %v\n%s", err, string(out))
 		return fmt.Errorf("ffmpeg BGM mix failed: %w", err)
 	}
 	return nil

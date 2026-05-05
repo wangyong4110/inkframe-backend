@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"net/url"
 	"os"
@@ -109,7 +109,7 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	// 1. 用 LLM 提取语义标签
 	tags, err := s.extractTags(ctx, shot)
 	if err != nil {
-		log.Printf("[SFXService] shot %d LLM tag extract failed (%v), using rule fallback", shot.ID, err)
+		logger.Printf("[SFXService] shot %d LLM tag extract failed (%v), using rule fallback", shot.ID, err)
 		tags = s.fallbackTags(shot)
 	}
 
@@ -124,7 +124,7 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 		var genErr error
 		sfxURL, genErr = s.generateElevenLabs(ctx, shot)
 		if genErr != nil {
-			log.Printf("[SFXService] shot %d ElevenLabs failed: %v", shot.ID, genErr)
+			logger.Printf("[SFXService] shot %d ElevenLabs failed: %v", shot.ID, genErr)
 		}
 	}
 
@@ -160,7 +160,7 @@ func (s *SFXService) BatchAutoGenerateSFX(
 			break
 		}
 		if err := s.AutoGenerateSFX(ctx, shot); err != nil {
-			log.Printf("[SFXService] shot %d: %v", shot.ID, err)
+			logger.Printf("[SFXService] shot %d: %v", shot.ID, err)
 			fail++
 		} else {
 			success++

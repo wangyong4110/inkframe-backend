@@ -3,7 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -74,7 +74,7 @@ func (s *SceneConsistencyService) ScoreScene(
 
 	report, err := parseConsistencyResponse(raw, shot.ID, anchor.ID)
 	if err != nil {
-		log.Printf("[SceneConsistencyService] parse failed for shot %d: %v, raw=%q", shot.ID, err, raw)
+		logger.Printf("[SceneConsistencyService] parse failed for shot %d: %v, raw=%q", shot.ID, err, raw)
 		// 解析失败时给中性分，不阻断流程
 		report = &SceneConsistencyReport{
 			ShotID:       shot.ID,
@@ -106,7 +106,7 @@ func (s *SceneConsistencyService) ScoreScene(
 		Passed:       !report.NeedsHuman,
 	}
 	if err := s.logRepo.Create(logEntry); err != nil {
-		log.Printf("[SceneConsistencyService] save log: %v", err)
+		logger.Printf("[SceneConsistencyService] save log: %v", err)
 	}
 
 	return report, nil

@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"strings"
 	"sync"
@@ -91,7 +91,7 @@ func Logger() gin.HandlerFunc {
 		latency := time.Since(start)
 		status := c.Writer.Status()
 
-		log.Printf("[%s] %s %s %d %v",
+		logger.Printf("[%s] %s %s %d %v",
 			time.Now().Format("2006-01-02 15:04:05"),
 			method,
 			path,

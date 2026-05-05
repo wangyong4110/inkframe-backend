@@ -3,7 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"time"
 
 	"github.com/google/uuid"
@@ -27,6 +27,7 @@ const (
 	TaskTypeSFXGen                   = "sfx_gen"
 	TaskTypeStoryboardReview         = "storyboard_review"
 	TaskTypeImport                   = "import"
+	TaskTypeNovelAnalysis            = "novel_analysis"
 )
 
 // TaskService manages persistent async tasks.
@@ -175,7 +176,7 @@ func (s *TaskService) runCleanup() {
 	for range ticker.C {
 		cutoff := time.Now().AddDate(0, 0, -7)
 		if err := s.repo.DeleteOldCompleted(cutoff); err != nil {
-			log.Printf("TaskService: cleanup error: %v", err)
+			logger.Printf("TaskService: cleanup error: %v", err)
 		}
 	}
 }

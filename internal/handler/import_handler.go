@@ -3,7 +3,7 @@ package handler
 import (
 	"fmt"
 	"io"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -71,7 +71,7 @@ func (h *ImportHandler) runImportAndAnalyze(taskID string, req *service.ImportRe
 
 	result, err := h.importService.Import(req)
 	if err != nil {
-		log.Printf("[ImportHandler] runImportAndAnalyze task %s failed: %v", taskID, err)
+		logger.Printf("[ImportHandler] runImportAndAnalyze task %s failed: %v", taskID, err)
 		h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		return
 	}
@@ -112,14 +112,14 @@ func (h *ImportHandler) ImportNovel(c *gin.Context) {
 	go func(taskID string, r service.ImportRequest) {
 		defer func() {
 			if rc := recover(); rc != nil {
-				log.Printf("[ImportHandler] ImportNovel task %s panic: %v", taskID, rc)
+				logger.Printf("[ImportHandler] ImportNovel task %s panic: %v", taskID, rc)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		result, err := h.importService.Import(&r)
 		if err != nil {
-			log.Printf("[ImportHandler] ImportNovel task %s failed: %v", taskID, err)
+			logger.Printf("[ImportHandler] ImportNovel task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -264,7 +264,7 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 	go func(taskID string, r *service.ImportRequest) {
 		defer func() {
 			if rc := recover(); rc != nil {
-				log.Printf("[ImportHandler] ImportFromCrawl task %s panic: %v", taskID, rc)
+				logger.Printf("[ImportHandler] ImportFromCrawl task %s panic: %v", taskID, rc)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -273,7 +273,7 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 		// 1. 创建章节存根，启动后台爬取
 		result, err := h.importService.Import(r)
 		if err != nil {
-			log.Printf("[ImportHandler] Crawl import task %s failed: %v", taskID, err)
+			logger.Printf("[ImportHandler] Crawl import task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -634,7 +634,7 @@ func (h *ImportHandler) GetCrawlStatus(c *gin.Context) {
 	respondOK(c, progress)
 }
 
-// ResumeCrawl 从断点继续爬取
+// ResumeCrawl 从断点继续爬取（异步，返回 202+task_id）
 // POST /api/v1/novels/:id/crawl/resume
 func (h *ImportHandler) ResumeCrawl(c *gin.Context) {
 	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
@@ -642,31 +642,54 @@ func (h *ImportHandler) ResumeCrawl(c *gin.Context) {
 		respondBadRequest(c, "invalid novel id")
 		return
 	}
-	if err := h.importService.ResumeCrawl(uint(novelID)); err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondOK(c, gin.H{"message": "crawl resumed"})
-}
+	tenantID := getTenantID(c)
 
-// GetAnalysisStatus 查询分析任务状态
-// GET /api/v1/novels/:id/analyze/status?task_id=xxx
-func (h *ImportHandler) GetAnalysisStatus(c *gin.Context) {
-	taskID := c.Query("task_id")
-	if taskID == "" {
-		respondBadRequest(c, "task_id required")
-		return
-	}
-	if h.analysisService == nil {
-		respondErr(c, http.StatusInternalServerError, "analysis service not available")
-		return
-	}
-	task, err := h.analysisService.GetStatus(taskID)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImport, "续爬导入", "novel", uint(novelID))
 	if err != nil {
-		respondErr(c, http.StatusNotFound, "task not found")
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	respondOK(c, task)
+
+	if err := h.importService.ResumeCrawl(uint(novelID)); err != nil {
+		h.taskSvc.Fail(task.TaskID, err.Error()) //nolint:errcheck
+		respondErr(c, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	go func(taskID string, nid uint) {
+		defer func() {
+			if rc := recover(); rc != nil {
+				logger.Printf("[ImportHandler] ResumeCrawl task %s panic: %v", taskID, rc)
+				h.taskSvc.Fail(taskID, "内部错误") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		for {
+			progress, _ := h.importService.GetCrawlProgress(nid)
+			if progress == nil || progress.Status == "completed" || progress.Status == "failed" || progress.Status == "paused" {
+				break
+			}
+			pct := 0
+			if progress.Total > 0 {
+				pct = int(float64(progress.Done) / float64(progress.Total) * 100)
+			}
+			h.taskSvc.UpdateProgress(taskID, pct) //nolint:errcheck
+			h.taskSvc.SetMeta(taskID, map[string]interface{}{ //nolint:errcheck
+				"novel_id":      nid,
+				"crawl_done":    progress.Done,
+				"crawl_total":   progress.Total,
+				"crawl_current": progress.Current,
+			})
+			time.Sleep(2 * time.Second)
+		}
+		h.taskSvc.Complete(taskID, map[string]interface{}{"novel_id": nid, "message": "续爬完成"}) //nolint:errcheck
+	}(task.TaskID, uint(novelID))
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "crawl resumed",
+		"data":    gin.H{"task_id": task.TaskID},
+	})
 }
 
 // 检测文件格式

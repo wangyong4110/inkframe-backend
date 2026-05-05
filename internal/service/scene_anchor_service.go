@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"strings"
 	"sync"
 	"text/template"
@@ -221,7 +221,7 @@ func parseAnchorJSONResult(raw string) ([]extractedAnchor, error) {
 
 // ExtractFromChapter 调用 LLM 提取章节中的场景锚点，去重后批量创建
 func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, novelID uint, novelTitle, chapterContent string) ([]*model.SceneAnchor, error) {
-	log.Printf("[SceneAnchorService] ExtractFromChapter: novelID=%d contentLen=%d", novelID, len(chapterContent))
+	logger.Printf("[SceneAnchorService] ExtractFromChapter: novelID=%d contentLen=%d", novelID, len(chapterContent))
 	_ = ctx // 未来可传 context 给 AI provider
 
 	// 获取已存在锚点（去重用）
@@ -265,7 +265,7 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 	// 解析 JSON
 	extracted, err := parseAnchorJSONResult(jsonStr)
 	if err != nil {
-		log.Printf("[SceneAnchorService] ExtractFromChapter: JSON parse failed: %v, jsonStr=%q", err, jsonStr)
+		logger.Printf("[SceneAnchorService] ExtractFromChapter: JSON parse failed: %v, jsonStr=%q", err, jsonStr)
 		return nil, fmt.Errorf("parse LLM response: %w", err)
 	}
 
@@ -289,14 +289,14 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 			StyleTokens: e.StyleTokens,
 		}
 		if err := s.repo.Create(anchor); err != nil {
-			log.Printf("[SceneAnchorService] create anchor %q: %v", e.Name, err)
+			logger.Printf("[SceneAnchorService] create anchor %q: %v", e.Name, err)
 			continue
 		}
 		created = append(created, anchor)
 		existingNames[e.Name] = true
 	}
 
-	log.Printf("[SceneAnchorService] ExtractFromChapter done: novelID=%d created=%d", novelID, len(created))
+	logger.Printf("[SceneAnchorService] ExtractFromChapter done: novelID=%d created=%d", novelID, len(created))
 	return created, nil
 }
 
@@ -379,7 +379,7 @@ func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantI
 		go func() {
 			defer wg.Done()
 			if _, genErr := s.GenerateRefImage(ctx, tenantID, anchor.ID, provider); genErr != nil {
-				log.Printf("[SceneAnchorService] BatchGenerateRefImages: anchor %d (%s) failed: %v", anchor.ID, anchor.Name, genErr)
+				logger.Printf("[SceneAnchorService] BatchGenerateRefImages: anchor %d (%s) failed: %v", anchor.ID, anchor.Name, genErr)
 				mu.Lock()
 				failed++
 				done++
@@ -401,13 +401,13 @@ func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantI
 		}()
 	}
 	wg.Wait()
-	log.Printf("[SceneAnchorService] BatchGenerateRefImages: novelID=%d succeeded=%d failed=%d", novelID, succeeded, failed)
+	logger.Printf("[SceneAnchorService] BatchGenerateRefImages: novelID=%d succeeded=%d failed=%d", novelID, succeeded, failed)
 	return succeeded, failed, nil
 }
 
 // AIExtractAllFromNovel 批量从小说前 10 章中提取场景锚点（并发 3 goroutine）
 func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint, progressFn func(int)) ([]*model.SceneAnchor, error) {
-	log.Printf("[SceneAnchorService] AIExtractAllFromNovel: novelID=%d", novelID)
+	logger.Printf("[SceneAnchorService] AIExtractAllFromNovel: novelID=%d", novelID)
 	if s.chapterRepo == nil {
 		return nil, fmt.Errorf("chapterRepo not configured")
 	}
@@ -454,7 +454,7 @@ func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint, progr
 			mu.Lock()
 			done++
 			if err != nil {
-				log.Printf("[SceneAnchorService] AIExtractAllFromNovel chapter %d: %v", ch.ID, err)
+				logger.Printf("[SceneAnchorService] AIExtractAllFromNovel chapter %d: %v", ch.ID, err)
 				failCount++
 			} else {
 				allCreated = append(allCreated, anchors...)
@@ -467,7 +467,7 @@ func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint, progr
 		}()
 	}
 	wg.Wait()
-	log.Printf("[SceneAnchorService] AIExtractAllFromNovel done: novelID=%d created=%d", novelID, len(allCreated))
+	logger.Printf("[SceneAnchorService] AIExtractAllFromNovel done: novelID=%d created=%d", novelID, len(allCreated))
 	if failCount == len(candidates) {
 		return nil, fmt.Errorf("所有章节场景锚点提取均失败，请检查 AI 提供商配置")
 	}

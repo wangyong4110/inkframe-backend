@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 
 	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -52,7 +52,7 @@ func (s *KnowledgeService) StoreKnowledge(ctx context.Context, kb *model.Knowled
 		text := kb.Title + " " + kb.Content
 		vec, err := s.aiClient.Embed(ctx, text)
 		if err != nil {
-			log.Printf("KnowledgeService.StoreKnowledge: embed error for kb %d: %v", kb.ID, err)
+			logger.Printf("KnowledgeService.StoreKnowledge: embed error for kb %d: %v", kb.ID, err)
 			// 不因为向量化失败就整体失败，降级处理
 		} else {
 			store := s.vectorStore.DefaultStore()
@@ -71,7 +71,7 @@ func (s *KnowledgeService) StoreKnowledge(ctx context.Context, kb *model.Knowled
 					Payload:    payload,
 				})
 				if storeErr != nil {
-					log.Printf("KnowledgeService.StoreKnowledge: vector store error for kb %d: %v", kb.ID, storeErr)
+					logger.Printf("KnowledgeService.StoreKnowledge: vector store error for kb %d: %v", kb.ID, storeErr)
 				}
 			}
 		}
@@ -126,7 +126,7 @@ func (s *KnowledgeService) SearchKnowledge(ctx context.Context, query string, li
 			}
 		}
 		// 向量搜索失败，降级到关键词搜索
-		log.Printf("KnowledgeService.SearchKnowledge: vector search failed, fallback to keyword: %v", err)
+		logger.Printf("KnowledgeService.SearchKnowledge: vector search failed, fallback to keyword: %v", err)
 	}
 
 	// 关键词搜索降级

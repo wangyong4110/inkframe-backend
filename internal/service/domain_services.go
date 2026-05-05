@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -101,7 +101,7 @@ func (s *CharacterService) extractCharNamesFromContent(
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_character_names", buf.String(), "")
 	if err != nil {
-		log.Printf("[CharacterService] extractCharNamesFromContent: AI call failed: %v", err)
+		logger.Printf("[CharacterService] extractCharNamesFromContent: AI call failed: %v", err)
 		return nil, err
 	}
 
@@ -149,7 +149,7 @@ func (s *CharacterService) extractCharacterNamesFromChapters(
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no chapter content available")
 	}
-	log.Printf("[CharacterService] extractCharacterNamesFromChapters: novelID=%d chapters=%d", novelID, len(candidates))
+	logger.Printf("[CharacterService] extractCharacterNamesFromChapters: novelID=%d chapters=%d", novelID, len(candidates))
 
 	type chResult struct {
 		entries []charNameEntry
@@ -275,7 +275,7 @@ func (s *CharacterService) generateOneCharacterProfile(
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "generate_character_profile", buf.String(), "")
 	if err != nil {
-		log.Printf("[CharacterService] generateOneCharacterProfile: AI call failed for %q: %v", entry.Name, err)
+		logger.Printf("[CharacterService] generateOneCharacterProfile: AI call failed for %q: %v", entry.Name, err)
 		return nil, fmt.Errorf("AI call: %w", err)
 	}
 
@@ -324,7 +324,7 @@ func parseCharacterJSONResult(raw string) ([]analysisCharJSON, error) {
 	}
 	// 最后尝试部分恢复：用 json.Decoder 逐个解析，遇到截断就停止
 	if partial := extractPartialCharacterObjects(raw); len(partial) > 0 {
-		log.Printf("[parseCharacterJSONResult] partial recovery: got %d characters from truncated JSON", len(partial))
+		logger.Printf("[parseCharacterJSONResult] partial recovery: got %d characters from truncated JSON", len(partial))
 		return partial, nil
 	}
 	return nil, fmt.Errorf("cannot parse as character array: %.200s", raw)
@@ -577,7 +577,7 @@ func (s *ChapterService) DeleteChapterByNo(novelID uint, chapterNo int) error {
 //  Step 4  存储章节（包含场景大纲、叙事元数据）
 //  Step 5  异步后处理：摘要生成、标题生成、精修、角色状态提取、弧摘要触发
 func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model.GenerateChapterRequest) (*model.Chapter, error) {
-	log.Printf("[ChapterService] GenerateChapter: tenantID=%d novelID=%d chapterNo=%d", tenantID, novelID, req.ChapterNo)
+	logger.Printf("[ChapterService] GenerateChapter: tenantID=%d novelID=%d chapterNo=%d", tenantID, novelID, req.ChapterNo)
 	novel, err := s.novelRepo.GetByID(novelID)
 	if err != nil {
 		return nil, err
@@ -655,7 +655,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	// ── Step 5: 异步后处理 ───────────────────────────────
 	go s.postProcessChapter(tenantID, chapter, novel)
 
-	log.Printf("[ChapterService] GenerateChapter done: chapterID=%d wordCount=%d", chapter.ID, chapter.WordCount)
+	logger.Printf("[ChapterService] GenerateChapter done: chapterID=%d wordCount=%d", chapter.ID, chapter.WordCount)
 	return chapter, nil
 }
 
@@ -713,7 +713,7 @@ func (s *ChapterService) buildGlobalContext(novelID uint, chapterNo int, novel *
 		if err == nil && ctx != "" {
 			return ctx
 		}
-		log.Printf("GenerateChapter: hierarchical context failed: %v — fallback", err)
+		logger.Printf("GenerateChapter: hierarchical context failed: %v — fallback", err)
 	}
 	// 降级到原 GenerationContextService
 	if s.contextSvc != nil {
@@ -806,7 +806,7 @@ func (s *ChapterService) generateSceneOutline(
 	tmplStr := loadPromptTemplate("chapter_scene_outline.tmpl")
 	tmpl, err := template.New("scene_outline").Parse(tmplStr)
 	if err != nil {
-		log.Printf("GenerateChapter: parse scene_outline.tmpl: %v", err)
+		logger.Printf("GenerateChapter: parse scene_outline.tmpl: %v", err)
 		return "", ""
 	}
 
@@ -827,13 +827,13 @@ func (s *ChapterService) generateSceneOutline(
 		"CharacterStates":       charStateStr,
 		"PlotTensionState":      plotTensionState,
 	}); err != nil {
-		log.Printf("GenerateChapter: execute scene_outline.tmpl: %v", err)
+		logger.Printf("GenerateChapter: execute scene_outline.tmpl: %v", err)
 		return "", ""
 	}
 
 	resp, err := s.aiService.GenerateWithProvider(tenantID, novelID, "scene_outline", buf.String(), req.ModelOverride)
 	if err != nil {
-		log.Printf("GenerateChapter: scene outline AI call failed: %v", err)
+		logger.Printf("GenerateChapter: scene outline AI call failed: %v", err)
 		return "", ""
 	}
 
@@ -847,7 +847,7 @@ func (s *ChapterService) generateSceneOutline(
 	if err := json.Unmarshal([]byte(resp), &outlineResult); err == nil {
 		suggestedTitle = outlineResult.ChapterTitle
 	}
-	log.Printf("[ChapterService] generateSceneOutline: chapterNo=%d scenes=%d", req.ChapterNo, len(outlineResult.Scenes))
+	logger.Printf("[ChapterService] generateSceneOutline: chapterNo=%d scenes=%d", req.ChapterNo, len(outlineResult.Scenes))
 
 	return resp, suggestedTitle
 }
@@ -893,7 +893,7 @@ func (s *ChapterService) generateFromSceneOutline(
 		} `json:"scenes"`
 	}
 	_ = json.Unmarshal([]byte(sceneOutlineJSON), &outlineData)
-	log.Printf("[ChapterService] generateFromSceneOutline: chapterNo=%d scenes=%d", req.ChapterNo, len(outlineData.Scenes))
+	logger.Printf("[ChapterService] generateFromSceneOutline: chapterNo=%d scenes=%d", req.ChapterNo, len(outlineData.Scenes))
 
 	// 获取角色对话风格
 	characterVoices := s.getCharacterVoices(novelID)
@@ -951,13 +951,13 @@ func (s *ChapterService) generateFromSceneOutline(
 		return "", "", err
 	}
 	content, hook := extractChapterHook(raw)
-	log.Printf("[ChapterService] generateFromSceneOutline done: chapterNo=%d contentLen=%d", req.ChapterNo, len(content))
+	logger.Printf("[ChapterService] generateFromSceneOutline done: chapterNo=%d contentLen=%d", req.ChapterNo, len(content))
 	return content, hook, nil
 }
 
 // generateFallbackChapter 场景大纲失败时的降级生成
 func (s *ChapterService) generateFallbackChapter(tenantID, novelID uint, req *model.GenerateChapterRequest, novel *model.Novel, globalCtx string) (string, error) {
-	log.Printf("GenerateChapter: using fallback (no scene outline) for novel %d ch %d", novelID, req.ChapterNo)
+	logger.Printf("GenerateChapter: using fallback (no scene outline) for novel %d ch %d", novelID, req.ChapterNo)
 	wc := req.MaxTokens
 	if wc <= 0 {
 		wc = novel.MaxTokens
@@ -974,16 +974,16 @@ func (s *ChapterService) generateFallbackChapter(tenantID, novelID uint, req *mo
 
 // postProcessChapter 异步后处理：生成摘要→生成标题→精修→提取角色状态→触发弧摘要
 func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapter, novel *model.Novel) {
-	log.Printf("[ChapterService] postProcessChapter start: chapterID=%d no=%d", chapter.ID, chapter.ChapterNo)
+	logger.Printf("[ChapterService] postProcessChapter start: chapterID=%d no=%d", chapter.ID, chapter.ChapterNo)
 	// 1. 生成摘要（最重要：供后续章节的上下文使用）
 	if s.narrativeSvc != nil && chapter.Summary == "" {
 		if summary, err := s.narrativeSvc.GenerateChapterSummary(tenantID, chapter, novel.Title); err == nil {
 			chapter.Summary = summary
 			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
-				log.Printf("postProcessChapter: update chapter %d [摘要]: %v", chapter.ID, updateErr)
+				logger.Printf("postProcessChapter: update chapter %d [摘要]: %v", chapter.ID, updateErr)
 			}
 		} else {
-			log.Printf("postProcess: summary ch%d: %v", chapter.ChapterNo, err)
+			logger.Printf("postProcess: summary ch%d: %v", chapter.ChapterNo, err)
 		}
 	}
 
@@ -993,7 +993,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 		if title, err := s.narrativeSvc.GenerateChapterTitle(tenantID, chapter, novel.Genre, chapter.EmotionalTone); err == nil && title != "" {
 			chapter.Title = fmt.Sprintf("第%d章 %s", chapter.ChapterNo, title)
 			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
-				log.Printf("postProcessChapter: update chapter %d [标题]: %v", chapter.ID, updateErr)
+				logger.Printf("postProcessChapter: update chapter %d [标题]: %v", chapter.ID, updateErr)
 			}
 		}
 	}
@@ -1004,7 +1004,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 			chapter.Content = refined
 			chapter.WordCount = countChineseChars(refined)
 			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
-				log.Printf("postProcessChapter: update chapter %d [精修]: %v", chapter.ID, updateErr)
+				logger.Printf("postProcessChapter: update chapter %d [精修]: %v", chapter.ID, updateErr)
 			}
 		}
 	}
@@ -1020,7 +1020,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 
 	// 6. 自动检查并标记已解决的剧情点（伏笔/冲突）
 	s.checkAndAutoResolvePlotPoints(tenantID, chapter)
-	log.Printf("[ChapterService] postProcessChapter done: chapterID=%d", chapter.ID)
+	logger.Printf("[ChapterService] postProcessChapter done: chapterID=%d", chapter.ID)
 }
 
 // checkAndAutoResolvePlotPoints 用单次 AI 调用判断本章是否解决了悬而未决的剧情线，自动更新 is_resolved
@@ -1064,7 +1064,7 @@ func (s *ChapterService) checkAndAutoResolvePlotPoints(tenantID uint, chapter *m
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "plot_resolution_check", sb.String(), "")
 	if err != nil {
-		log.Printf("checkAndAutoResolvePlotPoints[%d]: AI error: %v", chapter.NovelID, err)
+		logger.Printf("checkAndAutoResolvePlotPoints[%d]: AI error: %v", chapter.NovelID, err)
 		return
 	}
 
@@ -1082,13 +1082,13 @@ func (s *ChapterService) checkAndAutoResolvePlotPoints(tenantID uint, chapter *m
 		pp.IsResolved = true
 		pp.ResolvedIn = &chapter.ID
 		if err := s.plotPointRepo.Update(pp); err != nil {
-			log.Printf("checkAndAutoResolvePlotPoints: update pp#%d: %v", pp.ID, err)
+			logger.Printf("checkAndAutoResolvePlotPoints: update pp#%d: %v", pp.ID, err)
 		} else {
 			desc := pp.Description
 			if len([]rune(desc)) > 40 {
 				desc = string([]rune(desc)[:40]) + "…"
 			}
-			log.Printf("postProcess[novel=%d ch=%d]: auto-resolved plot point #%d [%s]: %s",
+			logger.Printf("postProcess[novel=%d ch=%d]: auto-resolved plot point #%d [%s]: %s",
 				chapter.NovelID, chapter.ChapterNo, pp.ID, pp.Type, desc)
 		}
 	}
@@ -1233,7 +1233,7 @@ func (s *ChapterService) RejectChapter(id uint, reason string) error {
 
 // BatchGenerateSummaries 对所有无摘要章节逐章并发生成摘要（3 并发）
 func (s *ChapterService) BatchGenerateSummaries(tenantID, novelID uint, progressFn func(int)) (int, error) {
-	log.Printf("[ChapterService] BatchGenerateSummaries: novelID=%d", novelID)
+	logger.Printf("[ChapterService] BatchGenerateSummaries: novelID=%d", novelID)
 	if s.narrativeSvc == nil {
 		return 0, fmt.Errorf("narrative service not configured")
 	}
@@ -1260,7 +1260,7 @@ func (s *ChapterService) BatchGenerateSummaries(tenantID, novelID uint, progress
 	if len(needSummary) == 0 {
 		return 0, nil
 	}
-	log.Printf("[ChapterService] BatchGenerateSummaries: found %d chapters without summary", len(needSummary))
+	logger.Printf("[ChapterService] BatchGenerateSummaries: found %d chapters without summary", len(needSummary))
 
 	total := len(needSummary)
 	const concurrency = 3
@@ -1278,11 +1278,11 @@ func (s *ChapterService) BatchGenerateSummaries(tenantID, novelID uint, progress
 
 			summary, err := s.narrativeSvc.GenerateChapterSummary(tenantID, ch, novelTitle)
 			if err != nil {
-				log.Printf("BatchGenerateSummaries: ch%d: %v", ch.ChapterNo, err)
+				logger.Printf("BatchGenerateSummaries: ch%d: %v", ch.ChapterNo, err)
 			} else {
 				ch.Summary = strings.TrimSpace(summary)
 				if err := s.chapterRepo.Update(ch); err != nil {
-					log.Printf("BatchGenerateSummaries: save ch%d: %v", ch.ChapterNo, err)
+					logger.Printf("BatchGenerateSummaries: save ch%d: %v", ch.ChapterNo, err)
 				} else {
 					atomic.AddInt32(&count, 1)
 				}
@@ -1294,7 +1294,7 @@ func (s *ChapterService) BatchGenerateSummaries(tenantID, novelID uint, progress
 		}()
 	}
 	wg.Wait()
-	log.Printf("[ChapterService] BatchGenerateSummaries done: novelID=%d generated=%d", novelID, atomic.LoadInt32(&count))
+	logger.Printf("[ChapterService] BatchGenerateSummaries done: novelID=%d generated=%d", novelID, atomic.LoadInt32(&count))
 	return int(atomic.LoadInt32(&count)), nil
 }
 
@@ -1632,7 +1632,7 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 	if len(nameList) == 0 {
 		return nil, fmt.Errorf("AI 未识别到任何主要角色，请确认小说内容是否充足")
 	}
-	log.Printf("CharacterService.AIBatchGenerate: phase1 got %d characters: %v", len(nameList), func() []string {
+	logger.Printf("CharacterService.AIBatchGenerate: phase1 got %d characters: %v", len(nameList), func() []string {
 		ns := make([]string, len(nameList))
 		for i, e := range nameList {
 			ns[i] = e.Name
@@ -1665,13 +1665,13 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 		}(i, entry)
 	}
 	wg.Wait()
-	log.Printf("[CharacterService] AIBatchGenerate: phase2 done, processing %d profiles", len(nameList))
+	logger.Printf("[CharacterService] AIBatchGenerate: phase2 done, processing %d profiles", len(nameList))
 
 	// ── Upsert ───────────────────────────────────────────────────────────────
 	upserted := make([]*model.Character, 0, len(nameList))
 	for i, res := range results {
 		if res.err != nil {
-			log.Printf("CharacterService.AIBatchGenerate: generate profile for %q: %v", nameList[i].Name, res.err)
+			logger.Printf("CharacterService.AIBatchGenerate: generate profile for %q: %v", nameList[i].Name, res.err)
 			continue
 		}
 		p := res.profile
@@ -1725,7 +1725,7 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 				continue
 			}
 			if err := s.characterRepo.Update(ch); err != nil {
-				log.Printf("CharacterService.AIBatchGenerate: update %s: %v", ch.Name, err)
+				logger.Printf("CharacterService.AIBatchGenerate: update %s: %v", ch.Name, err)
 				continue
 			}
 			upserted = append(upserted, ch)
@@ -1747,7 +1747,7 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 				Status:          "active",
 			}
 			if err := s.characterRepo.Create(character); err != nil {
-				log.Printf("CharacterService.AIBatchGenerate: create %s: %v", p.Name, err)
+				logger.Printf("CharacterService.AIBatchGenerate: create %s: %v", p.Name, err)
 				continue
 			}
 			upserted = append(upserted, character)
@@ -1757,7 +1757,7 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 	if len(upserted) == 0 && len(nameList) > 0 {
 		return nil, fmt.Errorf("所有角色档案生成均失败，请检查 AI 提供商配置")
 	}
-	log.Printf("[CharacterService] AIBatchGenerate done: novelID=%d upserted=%d", novelID, len(upserted))
+	logger.Printf("[CharacterService] AIBatchGenerate done: novelID=%d upserted=%d", novelID, len(upserted))
 	return upserted, nil
 }
 
@@ -1847,7 +1847,7 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 			Status:       "active",
 		}
 		if e := s.characterRepo.Create(char); e != nil {
-			log.Printf("CharacterService.AIExtractMinorChars: create %q: %v", c.Name, e)
+			logger.Printf("CharacterService.AIExtractMinorChars: create %q: %v", c.Name, e)
 			continue
 		}
 		existingNameSet[strings.ToLower(c.Name)] = true
@@ -1859,7 +1859,7 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 				NovelID:     novelID,
 			}
 			if e := s.chapterCharacterRepo.Upsert(cc); e != nil {
-				log.Printf("CharacterService.AIExtractMinorChars: link chapter %v: %v", chapterID, e)
+				logger.Printf("CharacterService.AIExtractMinorChars: link chapter %v: %v", chapterID, e)
 			}
 		}
 		created = append(created, char)
@@ -1905,7 +1905,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 			defer wg.Done()
 			img, genErr := imgSvc.GenerateThreeViewImage(tenantID, char.Name, char.Appearance, "front", imageStyle, char.Gender, "", provider)
 			if genErr != nil {
-				log.Printf("[CharacterService] BatchGenerateImages: char %d (%s) failed: %v", char.ID, char.Name, genErr)
+				logger.Printf("[CharacterService] BatchGenerateImages: char %d (%s) failed: %v", char.ID, char.Name, genErr)
 				mu.Lock()
 				failed++
 				done++
@@ -1917,7 +1917,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 				return
 			}
 			if _, saveErr := s.UpdateCharacter(char.ID, &model.UpdateCharacterRequest{ThreeViewFront: img.URL}); saveErr != nil {
-				log.Printf("[CharacterService] BatchGenerateImages: save char %d: %v", char.ID, saveErr)
+				logger.Printf("[CharacterService] BatchGenerateImages: save char %d: %v", char.ID, saveErr)
 				mu.Lock()
 				failed++
 				done++
@@ -1939,7 +1939,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 		}()
 	}
 	wg.Wait()
-	log.Printf("[CharacterService] BatchGenerateImages: novelID=%d succeeded=%d failed=%d", novelID, succeeded, failed)
+	logger.Printf("[CharacterService] BatchGenerateImages: novelID=%d succeeded=%d failed=%d", novelID, succeeded, failed)
 	return succeeded, failed, nil
 }
 
@@ -2052,9 +2052,9 @@ func (s *ImageGenerationService) GenerateThreeViewImage(tenantID uint, name, app
 		aiRef = ""
 	}
 	if aiRef != "" {
-		log.Printf("GenerateThreeViewImage: %s/%s using reference image %s", name, viewType, aiRef)
+		logger.Printf("GenerateThreeViewImage: %s/%s using reference image %s", name, viewType, aiRef)
 	} else {
-		log.Printf("GenerateThreeViewImage: %s/%s no valid reference image", name, viewType)
+		logger.Printf("GenerateThreeViewImage: %s/%s no valid reference image", name, viewType)
 	}
 	// 负向提示词：始终禁止多人，再叠加性别排斥词
 	baseNeg := "multiple people, two people, duo, couple, group, 多人, 两人, 三人, 合照, nsfw, lowres, bad anatomy"
@@ -2813,7 +2813,7 @@ func (s *WorldviewService) GenerateWorldview(tenantID uint, novelID uint, genre 
 		CheatSystem string `json:"cheat_system"`
 	}
 	if err := json.Unmarshal([]byte(extractJSON(result)), &data); err != nil {
-		log.Printf("GenerateWorldview: failed to parse AI response: %v, raw: %.300s", err, result)
+		logger.Printf("GenerateWorldview: failed to parse AI response: %v, raw: %.300s", err, result)
 	}
 
 	name := data.Name

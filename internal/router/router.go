@@ -158,9 +158,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			// 从已有小说生成视频
 			novels.POST("/:id/generate-video", cfg.ImportHandler.GenerateVideoFromNovel)
 
-			// 分析导入的小说
+			// 分析导入的小说（状态通过统一端点 GET /api/v1/tasks/:task_id 查询）
 			novels.POST("/:id/analyze", cfg.ImportHandler.StartAnalysis)
-			novels.GET("/:id/analyze/status", cfg.ImportHandler.GetAnalysisStatus)
 
 			// 爬取进度
 			novels.GET("/:id/crawl/status", cfg.ImportHandler.GetCrawlStatus)

@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"strings"
 	"sync"
 	"text/template"
@@ -223,7 +223,7 @@ skill_type 可选值：active/passive/toggle/ultimate
 
 	var rawSkills []rawSkill
 	if err := json.Unmarshal([]byte(jsonStr), &rawSkills); err != nil {
-		log.Printf("SkillService.GenerateSkills: parse JSON failed: %v (raw first 200: %.200s)", err, jsonStr)
+		logger.Printf("SkillService.GenerateSkills: parse JSON failed: %v (raw first 200: %.200s)", err, jsonStr)
 		return nil, fmt.Errorf("failed to parse AI response: %w", err)
 	}
 
@@ -413,7 +413,7 @@ func (s *SkillService) extractSkillsFromContent(
 
 // AIExtractAllFromNovel 逐章并发提取技能：先并发 AI 提取，再统一去重、入库
 func (s *SkillService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.Skill, error) {
-	log.Printf("[SkillService] AIExtractAllFromNovel: novelID=%d", novelID)
+	logger.Printf("[SkillService] AIExtractAllFromNovel: novelID=%d", novelID)
 	if s.chapterRepo == nil {
 		return nil, fmt.Errorf("chapter repository not configured")
 	}
@@ -488,7 +488,7 @@ func (s *SkillService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.S
 	var allSkills []skillExtractedJSON
 	for _, r := range results {
 		if r.err != nil {
-			log.Printf("SkillService.AIExtractAllFromNovel: chapter extract error: %v", r.err)
+			logger.Printf("SkillService.AIExtractAllFromNovel: chapter extract error: %v", r.err)
 			continue
 		}
 		for _, sk := range r.skills {
@@ -499,7 +499,7 @@ func (s *SkillService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.S
 			}
 		}
 	}
-	log.Printf("[SkillService] AIExtractAllFromNovel: chapters processed=%d, merged=%d unique skills", len(candidates), len(allSkills))
+	logger.Printf("[SkillService] AIExtractAllFromNovel: chapters processed=%d, merged=%d unique skills", len(candidates), len(allSkills))
 
 	// 构建角色名→ID map
 	chars, _ := s.characterRepo.ListByNovel(novelID)
@@ -541,18 +541,18 @@ func (s *SkillService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.S
 			}
 		}
 		if e := s.skillRepo.Create(skill); e != nil {
-			log.Printf("SkillService.AIExtractAllFromNovel: create %q: %v", sk.Name, e)
+			logger.Printf("SkillService.AIExtractAllFromNovel: create %q: %v", sk.Name, e)
 			continue
 		}
 		created = append(created, skill)
 	}
-	log.Printf("[SkillService] AIExtractAllFromNovel done: novelID=%d created=%d", novelID, len(created))
+	logger.Printf("[SkillService] AIExtractAllFromNovel done: novelID=%d created=%d", novelID, len(created))
 	return created, nil
 }
 
 // AIExtractChapterSkills 从单章内容中提取技能，写入 ink_skill 并关联 acquired_chapter_no
 func (s *SkillService) AIExtractChapterSkills(tenantID, novelID, chapterID uint, chapterNo int) ([]*model.Skill, error) {
-	log.Printf("[SkillService] AIExtractChapterSkills: novelID=%d chapterID=%d chapterNo=%d", novelID, chapterID, chapterNo)
+	logger.Printf("[SkillService] AIExtractChapterSkills: novelID=%d chapterID=%d chapterNo=%d", novelID, chapterID, chapterNo)
 	if s.chapterRepo == nil {
 		return nil, fmt.Errorf("chapter repository not configured")
 	}
@@ -666,12 +666,12 @@ func (s *SkillService) AIExtractChapterSkills(tenantID, novelID, chapterID uint,
 			}
 		}
 		if e := s.skillRepo.Create(skill); e != nil {
-			log.Printf("SkillService.AIExtractChapterSkills: create %q: %v", sk.Name, e)
+			logger.Printf("SkillService.AIExtractChapterSkills: create %q: %v", sk.Name, e)
 			continue
 		}
 		existingNameSet[strings.ToLower(sk.Name)] = true
 		created = append(created, skill)
 	}
-	log.Printf("[SkillService] AIExtractChapterSkills done: chapterNo=%d created=%d", chapterNo, len(created))
+	logger.Printf("[SkillService] AIExtractChapterSkills done: chapterNo=%d created=%d", chapterNo, len(created))
 	return created, nil
 }

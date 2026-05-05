@@ -1,7 +1,7 @@
 package handler
 
 import (
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"strconv"
 
@@ -134,7 +134,7 @@ func (h *ItemHandler) AIExtractFromNovel(c *gin.Context) {
 	go func(taskID string) {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("[ItemHandler] AIExtractFromNovel task %s panic: %v", taskID, r)
+				logger.Printf("[ItemHandler] AIExtractFromNovel task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -142,7 +142,7 @@ func (h *ItemHandler) AIExtractFromNovel(c *gin.Context) {
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		items, err := h.itemService.AIExtractFromNovel(tenantID, uint(novelID))
 		if err != nil {
-			log.Printf("[ItemHandler] AIExtractFromNovel task %s failed: %v", taskID, err)
+			logger.Printf("[ItemHandler] AIExtractFromNovel task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"items": items, "count": len(items)}) //nolint:errcheck
@@ -172,7 +172,7 @@ func (h *ItemHandler) BatchGenerateImages(c *gin.Context) {
 	go func(taskID string) {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("[ItemHandler] BatchGenerateImages task %s panic: %v", taskID, r)
+				logger.Printf("[ItemHandler] BatchGenerateImages task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -180,7 +180,7 @@ func (h *ItemHandler) BatchGenerateImages(c *gin.Context) {
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		succ, fail, err := h.itemService.BatchGenerateImages(tenantID, uint(novelID), req.Provider, progressFn)
 		if err != nil {
-			log.Printf("[ItemHandler] BatchGenerateImages task %s failed: %v", taskID, err)
+			logger.Printf("[ItemHandler] BatchGenerateImages task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"succeeded": succ, "failed": fail}) //nolint:errcheck
@@ -218,7 +218,7 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 	go func(taskID string) {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("[ItemHandler] GenerateItemImage task %s panic: %v", taskID, r)
+				logger.Printf("[ItemHandler] GenerateItemImage task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -226,7 +226,7 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		item, err := h.itemService.GenerateItemImage(tenantID, itemID, refURL, provider)
 		if err != nil {
-			log.Printf("[ItemHandler] GenerateItemImage task %s failed: %v", taskID, err)
+			logger.Printf("[ItemHandler] GenerateItemImage task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.UpdateProgress(taskID, 90) //nolint:errcheck

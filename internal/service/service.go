@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -274,7 +274,7 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 	outline := &OutlineResult{}
 	cleaned := extractJSON(result)
 	if err := json.Unmarshal([]byte(cleaned), outline); err != nil {
-		log.Printf("GenerateOutline: failed to parse AI response for novel %d: %v", req.NovelID, err)
+		logger.Printf("GenerateOutline: failed to parse AI response for novel %d: %v", req.NovelID, err)
 		outline = &OutlineResult{
 			Title:    novel.Title,
 			Chapters: []ChapterOutline{},
@@ -469,7 +469,7 @@ func (s *NovelService) writeCharacterSnapshots(chapter *model.Chapter) {
 
 	result, err := s.aiService.Generate(chapter.NovelID, "character_state", prompt)
 	if err != nil {
-		log.Printf("writeCharacterSnapshots: AI extraction failed for chapter %d: %v", chapter.ID, err)
+		logger.Printf("writeCharacterSnapshots: AI extraction failed for chapter %d: %v", chapter.ID, err)
 		return
 	}
 
@@ -485,7 +485,7 @@ func (s *NovelService) writeCharacterSnapshots(chapter *model.Chapter) {
 	}
 
 	if err := json.Unmarshal([]byte(cleaned), &extraction); err != nil {
-		log.Printf("writeCharacterSnapshots: parse failed: %v", err)
+		logger.Printf("writeCharacterSnapshots: parse failed: %v", err)
 		return
 	}
 
@@ -510,7 +510,7 @@ func (s *NovelService) writeCharacterSnapshots(chapter *model.Chapter) {
 			SnapshotTime: chapter.CreatedAt,
 		}
 		if err := s.snapshotRepo.Create(snapshot); err != nil {
-			log.Printf("writeCharacterSnapshots: create snapshot failed for char %d: %v", char.ID, err)
+			logger.Printf("writeCharacterSnapshots: create snapshot failed for char %d: %v", char.ID, err)
 		}
 	}
 }
@@ -593,7 +593,7 @@ func (s *NovelService) SyncCharacterSnapshots(
 				SnapshotTime:   chapter.CreatedAt,
 			}
 			if e := s.snapshotRepo.Create(snap); e != nil {
-				log.Printf("SyncCharacterSnapshots: copy snapshot char %d: %v", char.ID, e)
+				logger.Printf("SyncCharacterSnapshots: copy snapshot char %d: %v", char.ID, e)
 			}
 		}
 		return nil
@@ -644,7 +644,7 @@ func (s *NovelService) SyncCharacterSnapshots(
 
 		result, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "character_state", prompt, "")
 		if err != nil {
-			log.Printf("SyncCharacterSnapshots: AI failed for char %d: %v", char.ID, err)
+			logger.Printf("SyncCharacterSnapshots: AI failed for char %d: %v", char.ID, err)
 			continue
 		}
 
@@ -658,7 +658,7 @@ func (s *NovelService) SyncCharacterSnapshots(
 		}
 		cleaned := extractJSON(strings.TrimSpace(result))
 		if e := json.Unmarshal([]byte(cleaned), &state); e != nil {
-			log.Printf("SyncCharacterSnapshots: parse failed char %d: %v", char.ID, e)
+			logger.Printf("SyncCharacterSnapshots: parse failed char %d: %v", char.ID, e)
 			continue
 		}
 
@@ -696,7 +696,7 @@ func (s *NovelService) SyncCharacterSnapshots(
 			SnapshotTime: chapter.CreatedAt,
 		}
 		if e := s.snapshotRepo.Create(snap); e != nil {
-			log.Printf("SyncCharacterSnapshots: create snapshot char %d: %v", char.ID, e)
+			logger.Printf("SyncCharacterSnapshots: create snapshot char %d: %v", char.ID, e)
 		}
 	}
 	return nil
@@ -765,7 +765,7 @@ func countChineseChars(text string) int {
 func (s *NovelService) updateNovelStats(novelID uint) {
 	chapters, err := s.chapterRepo.ListByNovel(novelID)
 	if err != nil {
-		log.Printf("updateNovelStats: list chapters for novel %d: %v", novelID, err)
+		logger.Printf("updateNovelStats: list chapters for novel %d: %v", novelID, err)
 		return
 	}
 
@@ -784,7 +784,7 @@ func (s *NovelService) updateNovelStats(novelID uint) {
 	}
 
 	if err := s.novelRepo.UpdateFields(novelID, fields); err != nil {
-		log.Printf("updateNovelStats: update novel %d: %v", novelID, err)
+		logger.Printf("updateNovelStats: update novel %d: %v", novelID, err)
 	}
 }
 
@@ -794,7 +794,7 @@ func (s *NovelService) extractPlotPoints(chapter *model.Chapter) {
 		return
 	}
 	if _, err := s.plotPointService.ExtractFromChapter(0, chapter); err != nil {
-		log.Printf("extractPlotPoints chapter %d: %v", chapter.ID, err)
+		logger.Printf("extractPlotPoints chapter %d: %v", chapter.ID, err)
 	}
 }
 
@@ -973,7 +973,7 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 
 	// Validate credentials before constructing the provider.
 	if !providerHasCredentials(matched) {
-		log.Printf("getTenantProvider: DB provider %q missing credentials, falling back to in-memory manager", matched.Name)
+		logger.Printf("getTenantProvider: DB provider %q missing credentials, falling back to in-memory manager", matched.Name)
 		return s.aiManager.GetProvider(providerName)
 	}
 
@@ -1010,20 +1010,20 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		switch {
 		case strings.Contains(ep, "volces.com") || strings.Contains(ep, "volcengine"):
 			// 火山方舟 / 豆包系列（OpenAI 兼容格式）
-			log.Printf("getTenantProvider: provider %q mapped to doubao constructor via endpoint", matched.Name)
+			logger.Printf("getTenantProvider: provider %q mapped to doubao constructor via endpoint", matched.Name)
 			provider = ai.NewDoubaoProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
 		case strings.Contains(ep, "azure.com") || strings.Contains(ep, "openai.azure"):
-			log.Printf("getTenantProvider: provider %q mapped to azure constructor via endpoint", matched.Name)
+			logger.Printf("getTenantProvider: provider %q mapped to azure constructor via endpoint", matched.Name)
 			provider = ai.NewAzureProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, "", timeout)
 		case strings.Contains(ep, "anthropic.com"):
-			log.Printf("getTenantProvider: provider %q mapped to anthropic constructor via endpoint", matched.Name)
+			logger.Printf("getTenantProvider: provider %q mapped to anthropic constructor via endpoint", matched.Name)
 			provider = ai.NewAnthropicProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
 		case matched.APIEndpoint != "":
 			// 有自定义 endpoint → 按 OpenAI 兼容格式通用处理
-			log.Printf("getTenantProvider: provider %q using OpenAI-compatible constructor for endpoint %s", matched.Name, matched.APIEndpoint)
+			logger.Printf("getTenantProvider: provider %q using OpenAI-compatible constructor for endpoint %s", matched.Name, matched.APIEndpoint)
 			provider = ai.NewOpenAIProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
 		default:
-			log.Printf("getTenantProvider: unrecognized provider %q with no endpoint — falling back to static aiManager", matched.Name)
+			logger.Printf("getTenantProvider: unrecognized provider %q with no endpoint — falling back to static aiManager", matched.Name)
 			return s.aiManager.GetProvider(providerName)
 		}
 	}
@@ -1210,7 +1210,7 @@ func (s *AIService) callAIWithProvider(tenantID uint, prompt string, config *mod
 
 	provider, err := s.getTenantProvider(tenantID, providerName)
 	if err != nil {
-		log.Printf("callAIWithProvider: getTenantProvider failed (tenant=%d, provider=%q): %v", tenantID, providerName, err)
+		logger.Printf("callAIWithProvider: getTenantProvider failed (tenant=%d, provider=%q): %v", tenantID, providerName, err)
 		return "", fmt.Errorf("failed to get AI provider: %w", err)
 	}
 
@@ -1240,14 +1240,14 @@ func (s *AIService) callAIWithProvider(tenantID uint, prompt string, config *mod
 	resp, err := provider.Generate(ctx, req)
 	elapsed := time.Since(callStart).Round(time.Millisecond)
 	if err != nil {
-		log.Printf("[AI] provider=%s elapsed=%s err=%v", provider.GetName(), elapsed, err)
+		logger.Printf("[AI] provider=%s elapsed=%s err=%v", provider.GetName(), elapsed, err)
 		return "", err
 	}
 	if resp.Error != "" {
-		log.Printf("[AI] provider=%s elapsed=%s providerErr=%s", provider.GetName(), elapsed, resp.Error)
+		logger.Printf("[AI] provider=%s elapsed=%s providerErr=%s", provider.GetName(), elapsed, resp.Error)
 		return "", fmt.Errorf("provider error: %s", resp.Error)
 	}
-	log.Printf("[AI] provider=%s elapsed=%s respLen=%d", provider.GetName(), elapsed, len(resp.Content))
+	logger.Printf("[AI] provider=%s elapsed=%s respLen=%d", provider.GetName(), elapsed, len(resp.Content))
 
 	return resp.Content, nil
 }
@@ -1262,7 +1262,7 @@ func (s *AIService) generateJSONForTenant(tenantID, novelID uint, taskType, prom
 		p := prompt
 		if attempt > 0 {
 			p = prompt + "\n\n⚠️ 重要提示：请只返回纯 JSON，不要包含任何 markdown 代码块（```）或说明文字。"
-			log.Printf("generateJSONForTenant: attempt %d for taskType=%s, novelID=%d", attempt+1, taskType, novelID)
+			logger.Printf("generateJSONForTenant: attempt %d for taskType=%s, novelID=%d", attempt+1, taskType, novelID)
 		}
 		result, err := s.GenerateWithProvider(tenantID, novelID, taskType, p, "")
 		if err != nil {
@@ -1275,7 +1275,7 @@ func (s *AIService) generateJSONForTenant(tenantID, novelID uint, taskType, prom
 			return cleaned, nil
 		}
 		lastErr = fmt.Errorf("invalid JSON on attempt %d: %s", attempt+1, cleaned[:min(100, len(cleaned))])
-		log.Printf("generateJSONForTenant: %v", lastErr)
+		logger.Printf("generateJSONForTenant: %v", lastErr)
 	}
 	return "", fmt.Errorf("generateJSONForTenant failed after %d attempts: %w", maxRetries+1, lastErr)
 }
@@ -1290,7 +1290,7 @@ func (s *AIService) generateWithRetry(novelID uint, taskType, prompt string, max
 		p := prompt
 		if attempt > 0 {
 			p = prompt + "\n\n⚠️ 重要提示：请只返回纯 JSON，不要包含任何 markdown 代码块（```）或说明文字。"
-			log.Printf("generateWithRetry: attempt %d for taskType=%s, novelID=%d", attempt+1, taskType, novelID)
+			logger.Printf("generateWithRetry: attempt %d for taskType=%s, novelID=%d", attempt+1, taskType, novelID)
 		}
 		result, err := s.Generate(novelID, taskType, p)
 		if err != nil {
@@ -1305,7 +1305,7 @@ func (s *AIService) generateWithRetry(novelID uint, taskType, prompt string, max
 			return cleaned, nil
 		}
 		lastErr = fmt.Errorf("invalid JSON on attempt %d: %s", attempt+1, cleaned[:min(100, len(cleaned))])
-		log.Printf("generateWithRetry: %v", lastErr)
+		logger.Printf("generateWithRetry: %v", lastErr)
 	}
 	return "", fmt.Errorf("generateWithRetry failed after %d attempts: %w", maxRetries+1, lastErr)
 }
@@ -1468,14 +1468,14 @@ func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProvider
 	seen := map[string]bool{}
 	for _, p := range providers {
 		if !p.IsActive {
-			log.Printf("loadDBImageProviderEntries: skip provider %q (inactive)", p.Name)
+			logger.Printf("loadDBImageProviderEntries: skip provider %q (inactive)", p.Name)
 			continue
 		}
 		if !strings.EqualFold(p.Type, "image") {
 			continue // non-image providers are expected, no need to log
 		}
 		if !providerHasCredentials(p) {
-			log.Printf("loadDBImageProviderEntries: skip IMAGE provider %q (missing credentials)", p.Name)
+			logger.Printf("loadDBImageProviderEntries: skip IMAGE provider %q (missing credentials)", p.Name)
 			continue
 		}
 		if seen[p.Name] {
@@ -1487,7 +1487,7 @@ func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProvider
 			size = "1024x1024"
 		}
 		entry := ai.ImageProviderEntry{ProviderName: p.Name, Model: p.APIVersion, Size: size}
-		log.Printf("loadDBImageProviderEntries: adding IMAGE provider %q model=%q size=%s (tenantID=%d)", p.Name, p.APIVersion, size, tenantID)
+		logger.Printf("loadDBImageProviderEntries: adding IMAGE provider %q model=%q size=%s (tenantID=%d)", p.Name, p.APIVersion, size, tenantID)
 		// volcengine-visual 依赖服务端下载参考图，排到最后作为兜底
 		if p.Name == ai.ProviderNameVolcengineVisual {
 			volcengine = append(volcengine, entry)
@@ -1497,7 +1497,7 @@ func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProvider
 	}
 	result := append(primary, volcengine...)
 	if len(result) == 0 {
-		log.Printf("loadDBImageProviderEntries: no IMAGE providers found for tenantID=%d (total providers checked: %d)", tenantID, len(providers))
+		logger.Printf("loadDBImageProviderEntries: no IMAGE providers found for tenantID=%d (total providers checked: %d)", tenantID, len(providers))
 	}
 	return result
 }
@@ -1641,7 +1641,7 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 			continue
 		}
 		model := selectImageModel(e, referenceImage, style, weight)
-		log.Printf("GenerateCharacterThreeView: trying provider=%s model=%s refImage=%v", e.ProviderName, model, referenceImage != "")
+		logger.Printf("GenerateCharacterThreeView: trying provider=%s model=%s refImage=%v", e.ProviderName, model, referenceImage != "")
 		resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
 			Model:             model,
 			Prompt:            prompt,
@@ -1652,12 +1652,12 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 			ConsistencyWeight: weight,
 		})
 		if err != nil {
-			log.Printf("GenerateCharacterThreeView: provider=%s failed: %v", e.ProviderName, err)
+			logger.Printf("GenerateCharacterThreeView: provider=%s failed: %v", e.ProviderName, err)
 			lastErr = err
 			continue
 		}
 		if resp.Error != "" {
-			log.Printf("GenerateCharacterThreeView: provider=%s error: %s", e.ProviderName, resp.Error)
+			logger.Printf("GenerateCharacterThreeView: provider=%s error: %s", e.ProviderName, resp.Error)
 			lastErr = fmt.Errorf("image generation failed: %s", resp.Error)
 			continue
 		}
@@ -1736,15 +1736,15 @@ func (s *AIService) loadDBVoiceProvider(tenantID uint) (ai.AIProvider, error) {
 			continue
 		}
 		if !providerHasCredentials(p) {
-			log.Printf("loadDBVoiceProvider: skip voice provider %q (missing credentials)", p.Name)
+			logger.Printf("loadDBVoiceProvider: skip voice provider %q (missing credentials)", p.Name)
 			continue
 		}
 		provider, err := s.getTenantProvider(tenantID, p.Name)
 		if err != nil {
-			log.Printf("loadDBVoiceProvider: failed to instantiate provider %q: %v", p.Name, err)
+			logger.Printf("loadDBVoiceProvider: failed to instantiate provider %q: %v", p.Name, err)
 			continue
 		}
-		log.Printf("loadDBVoiceProvider: using voice provider %q model=%q", p.Name, p.APIVersion)
+		logger.Printf("loadDBVoiceProvider: using voice provider %q model=%q", p.Name, p.APIVersion)
 		return provider, nil
 	}
 	return nil, fmt.Errorf("no voice providers configured in DB")
@@ -2134,7 +2134,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	if chapterID != nil {
 		chIDStr = fmt.Sprintf("%d", *chapterID)
 	}
-	log.Printf("[Storyboard] start videoID=%d chapterID=%s provider=%q totalRunes=%d segments=%d expectedShots=%d chars=%d anchors=%d plotPoints=%d",
+	logger.Printf("[Storyboard] start videoID=%d chapterID=%s provider=%q totalRunes=%d segments=%d expectedShots=%d chars=%d anchors=%d plotPoints=%d",
 		videoID, chIDStr, provider, totalRunes, len(segments), totalShots, len(characters), len(anchors), len(plotPoints))
 
 	// 并行处理各段落：段间内容本身保证情节连贯（AI 读段落文本即可自然衔接），
@@ -2163,7 +2163,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			if segShotCount < 3 {
 				segShotCount = 3
 			}
-			log.Printf("[Storyboard] seg %d/%d start runes=%d expectedShots=%d", idx+1, len(segments), segRunes, segShotCount)
+			logger.Printf("[Storyboard] seg %d/%d start runes=%d expectedShots=%d", idx+1, len(segments), segRunes, segShotCount)
 
 			prompt := s.buildStoryboardPrompt(video, content, userPrompt, idx+1, len(segments), segShotCount, characters, anchors, plotPoints, nil)
 
@@ -2173,19 +2173,19 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 				p := prompt
 				if attempt > 0 {
 					p = prompt + "\n\n⚠️ 重要提示：请只返回纯 JSON 数组，不要包含任何 markdown 代码块（```）或说明文字。"
-					log.Printf("[Storyboard] seg %d/%d retry attempt=%d", idx+1, len(segments), attempt)
+					logger.Printf("[Storyboard] seg %d/%d retry attempt=%d", idx+1, len(segments), attempt)
 				}
 				aiStart := time.Now()
 				result, aiErr = s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", p, provider)
 				aiElapsed := time.Since(aiStart).Round(time.Millisecond)
 				if aiErr != nil {
-					log.Printf("[Storyboard] seg %d/%d attempt=%d AI error elapsed=%s err=%v", idx+1, len(segments), attempt, aiElapsed, aiErr)
+					logger.Printf("[Storyboard] seg %d/%d attempt=%d AI error elapsed=%s err=%v", idx+1, len(segments), attempt, aiElapsed, aiErr)
 					if ai.IsTimeoutError(aiErr) {
 						break
 					}
 					continue
 				}
-				log.Printf("[Storyboard] seg %d/%d attempt=%d AI ok elapsed=%s responseLen=%d", idx+1, len(segments), attempt, aiElapsed, len(result))
+				logger.Printf("[Storyboard] seg %d/%d attempt=%d AI ok elapsed=%s responseLen=%d", idx+1, len(segments), attempt, aiElapsed, len(result))
 				if strings.TrimSpace(result) != "" {
 					break
 				}
@@ -2195,17 +2195,17 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 				return
 			}
 			if strings.TrimSpace(result) == "" {
-				log.Printf("[Storyboard] seg %d/%d fatal: AI returned empty response after all retries", idx+1, len(segments))
+				logger.Printf("[Storyboard] seg %d/%d fatal: AI returned empty response after all retries", idx+1, len(segments))
 				results[idx] = segResult{err: fmt.Errorf("AI返回空响应，请检查模型配置或更换提供商")}
 				return
 			}
 			shots, parseErr := s.parseStoryboardResult(videoID, chapterID, result)
 			if parseErr != nil {
-				log.Printf("[Storyboard] seg %d/%d parse failed: %v", idx+1, len(segments), parseErr)
+				logger.Printf("[Storyboard] seg %d/%d parse failed: %v", idx+1, len(segments), parseErr)
 				results[idx] = segResult{err: fmt.Errorf("解析AI分镜结果失败: %w", parseErr)}
 				return
 			}
-			log.Printf("[Storyboard] seg %d/%d done shots=%d elapsed=%s", idx+1, len(segments), len(shots), time.Since(segStart).Round(time.Millisecond))
+			logger.Printf("[Storyboard] seg %d/%d done shots=%d elapsed=%s", idx+1, len(segments), len(shots), time.Since(segStart).Round(time.Millisecond))
 			results[idx] = segResult{shots: shots}
 
 			// 进度回调：每段完成即上报（并发完成顺序不定，取当前已完成数比例）
@@ -2225,10 +2225,10 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		if r.err != nil {
 			failedSegs++
 			if idx == 0 {
-				log.Printf("[Storyboard] seg 1/%d failed (fatal): %v", len(segments), r.err)
+				logger.Printf("[Storyboard] seg 1/%d failed (fatal): %v", len(segments), r.err)
 				return nil, r.err
 			}
-			log.Printf("[Storyboard] seg %d/%d failed (non-fatal): %v", idx+1, len(segments), r.err)
+			logger.Printf("[Storyboard] seg %d/%d failed (non-fatal): %v", idx+1, len(segments), r.err)
 			continue
 		}
 		for _, shot := range r.shots {
@@ -2272,7 +2272,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	video.Status = "storyboard"
 	s.videoRepo.Update(video)
 
-	log.Printf("[Storyboard] finished videoID=%d totalShots=%d segments=%d failedSegs=%d elapsed=%s",
+	logger.Printf("[Storyboard] finished videoID=%d totalShots=%d segments=%d failedSegs=%d elapsed=%s",
 		videoID, len(shots), len(segments), failedSegs, time.Since(totalStart).Round(time.Millisecond))
 
 	return shots, nil
@@ -2679,7 +2679,7 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 	}
 
 	if err := json.Unmarshal([]byte(cleaned), &rawShots); err != nil || len(rawShots) == 0 {
-		log.Printf("[VideoService] parseStoryboardResult: JSON parse failed (%v); raw AI response (first 500 chars): %.500s", err, result)
+		logger.Printf("[VideoService] parseStoryboardResult: JSON parse failed (%v); raw AI response (first 500 chars): %.500s", err, result)
 		if err != nil {
 			return nil, fmt.Errorf("分镜JSON解析失败: %w; AI原始响应(前200字符): %.200s", err, result)
 		}
@@ -3190,7 +3190,7 @@ func (s *VideoService) GenerateSingleShot(videoID, shotID uint, provider ...stri
 	}
 	// AI 视频模式：若没有可用的视频提供商，自动降级为图片解说模式
 	if len(s.videoProviders) == 0 {
-		log.Printf("GenerateSingleShot: no video provider available, falling back to slideshow for shot %d (video %d)", shotID, videoID)
+		logger.Printf("GenerateSingleShot: no video provider available, falling back to slideshow for shot %d (video %d)", shotID, videoID)
 		return shot, s.GenerateSlideshowShotVideo(shot, aspectRatio)
 	}
 	return shot, s.GenerateShotVideo(shot, aspectRatio, effectiveProvider)
@@ -3270,13 +3270,13 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 				if genErr == nil {
 					break
 				}
-				log.Printf("BatchGenerateShots: shot %d attempt %d/%d failed: %v", sh.ShotNo, attempt, maxRetries, genErr)
+				logger.Printf("BatchGenerateShots: shot %d attempt %d/%d failed: %v", sh.ShotNo, attempt, maxRetries, genErr)
 				if attempt < maxRetries {
 					time.Sleep(time.Duration(attempt*2) * time.Second)
 				}
 			}
 			if genErr != nil {
-				log.Printf("BatchGenerateShots: shot %d failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
+				logger.Printf("BatchGenerateShots: shot %d failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
 			}
 		}(shot)
 	}
@@ -3454,11 +3454,11 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 
 	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", promptText, refImage, artStyle, "", charConsistencyWeight)
 	if err != nil {
-		log.Printf("generateShotReferenceImage: image gen failed for shot %d: %v", shot.ShotNo, err)
+		logger.Printf("generateShotReferenceImage: image gen failed for shot %d: %v", shot.ShotNo, err)
 		return "", err
 	}
 	if imageURL == "" {
-		log.Printf("generateShotReferenceImage: image gen returned empty URL for shot %d", shot.ShotNo)
+		logger.Printf("generateShotReferenceImage: image gen returned empty URL for shot %d", shot.ShotNo)
 		return "", fmt.Errorf("image provider returned empty URL")
 	}
 
@@ -3546,7 +3546,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	referenceImage := shot.ReferenceImageURL
 	frameURL, frameErr := s.generateShotReferenceImage(shot)
 	if frameErr != nil {
-		log.Printf("GenerateVideoShot: reference image gen failed for shot %d (non-fatal): %v", shot.ShotNo, frameErr)
+		logger.Printf("GenerateVideoShot: reference image gen failed for shot %d (non-fatal): %v", shot.ShotNo, frameErr)
 	}
 	if frameURL != "" {
 		shot.FrameImageURL = frameURL
@@ -3625,7 +3625,7 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 		// 立即下载到本地，防止临时签名 URL 在拼接时过期
 		localClip := fmt.Sprintf("%s/inkframe-shot-%d.mp4", inkframeTempDir(), shot.ID)
 		if dlErr := downloadFile(videoURL, localClip); dlErr != nil {
-			log.Printf("PollShotStatus: download shot %d clip failed (%v), storing URL as fallback", shot.ID, dlErr)
+			logger.Printf("PollShotStatus: download shot %d clip failed (%v), storing URL as fallback", shot.ID, dlErr)
 			shot.ClipPath = videoURL
 		} else {
 			shot.ClipPath = "file://" + localClip
@@ -3673,7 +3673,7 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 					}
 				}
 			} else {
-				log.Printf("PollShotStatus: extractLastFrame for shot %d failed: %v", shot.ShotNo, frameErr)
+				logger.Printf("PollShotStatus: extractLastFrame for shot %d failed: %v", shot.ShotNo, frameErr)
 			}
 		}
 
@@ -3731,7 +3731,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 	if s.storageSvc != nil {
 		persistURL, uploadErr := s.uploadAudioToStorage(ctx, shot, audioURL)
 		if uploadErr != nil {
-			log.Printf("GenerateShotAudio: storage upload failed (falling back to local): %v", uploadErr)
+			logger.Printf("GenerateShotAudio: storage upload failed (falling back to local): %v", uploadErr)
 		} else {
 			audioURL = persistURL
 			// 删除 /tmp 临时文件（file:// 前缀）
@@ -3918,7 +3918,7 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 	for i, shot := range shots {
 		// 跳过无视频片段的镜头（仅有图片，Ken Burns 未生成）
 		if shot.ClipPath == "" {
-			log.Printf("StitchVideo: shot %d has no clip, skipping", shot.ShotNo)
+			logger.Printf("StitchVideo: shot %d has no clip, skipping", shot.ShotNo)
 			continue
 		}
 
@@ -3967,7 +3967,7 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 				"-shortest",
 				mergedFile,
 			); err != nil {
-				log.Printf("StitchVideo: merge audio for shot %d failed: %v, using clip without audio", shot.ShotNo, err)
+				logger.Printf("StitchVideo: merge audio for shot %d failed: %v, using clip without audio", shot.ShotNo, err)
 			} else {
 				finalClip = mergedFile
 			}
@@ -3998,7 +3998,7 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 		bgmURL := s.bgmService.SelectBGM("")
 		if bgmURL != "" {
 			if mixErr := s.bgmService.MixBGM(stitchedPath, bgmURL, outputPath); mixErr != nil {
-				log.Printf("StitchVideo: BGM mixing failed (video %d): %v, using stitched without BGM", videoID, mixErr)
+				logger.Printf("StitchVideo: BGM mixing failed (video %d): %v, using stitched without BGM", videoID, mixErr)
 				outputPath = stitchedPath
 			}
 		} else {
@@ -4166,7 +4166,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 		if imgErr != nil {
 			errMsg = imgErr.Error()
 		}
-		log.Printf("GenerateSlideshowShotVideo: image gen failed for shot %d: %s", shot.ShotNo, errMsg)
+		logger.Printf("GenerateSlideshowShotVideo: image gen failed for shot %d: %s", shot.ShotNo, errMsg)
 		shot.Status = "failed"
 		shot.ErrorMessage = errMsg
 		s.storyboardRepo.Update(shot) //nolint:errcheck
@@ -4182,7 +4182,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	// 2. 下载图片到本地（Volcengine 返回的 URL 后缀为 .image，FFmpeg 无法识别格式，需重命名为 .jpg）
 	localImage, err := downloadToTemp(imageURL, fmt.Sprintf("inkframe-img-%d-", shot.ID), ".jpg")
 	if err != nil {
-		log.Printf("GenerateSlideshowShotVideo: download image failed for shot %d, marking completed with image only: %v", shot.ShotNo, err)
+		logger.Printf("GenerateSlideshowShotVideo: download image failed for shot %d, marking completed with image only: %v", shot.ShotNo, err)
 		shot.Status = "completed"
 		shot.Progress = 100
 		shot.ErrorMessage = fmt.Sprintf("ken burns skipped: %v", err)
@@ -4193,11 +4193,11 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	// 3. Ken Burns 动效（缓慢推拉/平移，让静态图更生动）；失败时降级为静止画面
 	clipPath, err := s.generateKenBurnsClip(shot, localImage, duration, aspectRatio)
 	if err != nil {
-		log.Printf("GenerateSlideshowShotVideo: ken burns failed for shot %d, falling back to still frame: %v", shot.ShotNo, err)
+		logger.Printf("GenerateSlideshowShotVideo: ken burns failed for shot %d, falling back to still frame: %v", shot.ShotNo, err)
 		// 降级：用静止画面代替 Ken Burns
 		clipPath, err = s.generateStillFrameClip(localImage, duration, aspectRatio)
 		if err != nil {
-			log.Printf("GenerateSlideshowShotVideo: still frame fallback also failed for shot %d, completing with image only: %v", shot.ShotNo, err)
+			logger.Printf("GenerateSlideshowShotVideo: still frame fallback also failed for shot %d, completing with image only: %v", shot.ShotNo, err)
 			shot.Status = "completed"
 			shot.Progress = 100
 			shot.ErrorMessage = fmt.Sprintf("ffmpeg unavailable: %v", err)
@@ -4219,26 +4219,26 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 func (s *VideoService) runSlideshowPipeline(videoID uint) {
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
-		log.Printf("runSlideshowPipeline: get video %d failed: %v", videoID, err)
+		logger.Printf("runSlideshowPipeline: get video %d failed: %v", videoID, err)
 		return
 	}
 
 	shots, err := s.storyboardRepo.ListByVideoAndStatus(videoID, "pending")
 	if err != nil || len(shots) == 0 {
-		log.Printf("runSlideshowPipeline: no pending shots for video %d", videoID)
+		logger.Printf("runSlideshowPipeline: no pending shots for video %d", videoID)
 		return
 	}
 
 	for _, shot := range shots {
 		if err := s.GenerateSlideshowShotVideo(shot, video.AspectRatio); err != nil {
-			log.Printf("runSlideshowPipeline: shot %d failed: %v", shot.ShotNo, err)
+			logger.Printf("runSlideshowPipeline: shot %d failed: %v", shot.ShotNo, err)
 		}
 		go s.GenerateShotAudio(shot, video.TenantID, "") //nolint:errcheck
 	}
 
 	// 拼接
 	if _, err := s.StitchVideo(videoID); err != nil {
-		log.Printf("runSlideshowPipeline: stitch video %d failed: %v", videoID, err)
+		logger.Printf("runSlideshowPipeline: stitch video %d failed: %v", videoID, err)
 		if v, _ := s.videoRepo.GetByID(videoID); v != nil {
 			v.Status = "failed"
 			v.ErrorMessage = err.Error()
@@ -4282,7 +4282,7 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 
 	for _, shot := range shots {
 		if err := s.GenerateShotVideo(shot, video.AspectRatio); err != nil {
-			log.Printf("GenerateAllShotVideos: shot %d failed: %v", shot.ShotNo, err)
+			logger.Printf("GenerateAllShotVideos: shot %d failed: %v", shot.ShotNo, err)
 			continue
 		}
 		// TTS audio in parallel
@@ -4300,7 +4300,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 
 	for {
 		if time.Now().After(deadline) {
-			log.Printf("PollAndStitchVideo: videoID %d timed out after 2h", videoID)
+			logger.Printf("PollAndStitchVideo: videoID %d timed out after 2h", videoID)
 			video, _ := s.videoRepo.GetByID(videoID)
 			if video != nil && video.Status != "completed" {
 				video.Status = "failed"
@@ -4350,7 +4350,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 		if completedCount+failedCount == len(allShots) {
 			if completedCount > 0 {
 				if _, err := s.StitchVideo(videoID); err != nil {
-					log.Printf("PollAndStitchVideo: stitch failed: %v", err)
+					logger.Printf("PollAndStitchVideo: stitch failed: %v", err)
 					video, _ := s.videoRepo.GetByID(videoID)
 					if video != nil {
 						video.Status = "failed"
@@ -4375,7 +4375,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 		if len(processingNow) == 0 && len(pendingNow) == 0 {
 			noProgressCount++
 			if noProgressCount >= 5 {
-				log.Printf("PollAndStitchVideo: videoID %d stalled, stopping", videoID)
+				logger.Printf("PollAndStitchVideo: videoID %d stalled, stopping", videoID)
 				return
 			}
 		} else {

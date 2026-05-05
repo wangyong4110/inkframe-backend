@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"os"
 	"sort"
@@ -370,7 +370,7 @@ func buildTextContent(text string, cfg subtitleConfig) string {
 
 // ExportCapCutDraft 导出剪映草稿 ZIP（含视频/图片、配音、字幕轨道）
 func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.StoryboardShot, novel *model.Novel) (*ExportResult, error) {
-	log.Printf("[CapCutService] ExportCapCutDraft: videoID=%d title=%q shots=%d", video.ID, video.Title, len(shots))
+	logger.Printf("[CapCutService] ExportCapCutDraft: videoID=%d title=%q shots=%d", video.ID, video.Title, len(shots))
 	now := time.Now().Unix()
 	draftID := uuid.New().String()
 	projectName := sanitizeFilename(video.Title)
@@ -747,12 +747,12 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 	contentJSON, err := json.MarshalIndent(content, "", "  ")
 	if err != nil {
-		log.Printf("[CapCutService] ExportCapCutDraft: marshal draft content failed: %v", err)
+		logger.Printf("[CapCutService] ExportCapCutDraft: marshal draft content failed: %v", err)
 		return nil, fmt.Errorf("marshal draft content: %w", err)
 	}
 	metaJSON, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
-		log.Printf("[CapCutService] ExportCapCutDraft: marshal draft meta failed: %v", err)
+		logger.Printf("[CapCutService] ExportCapCutDraft: marshal draft meta failed: %v", err)
 		return nil, fmt.Errorf("marshal draft meta: %w", err)
 	}
 
@@ -798,7 +798,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	}
 
 	if err := zw.Close(); err != nil {
-		log.Printf("[CapCutService] ExportCapCutDraft: close zip failed: %v", err)
+		logger.Printf("[CapCutService] ExportCapCutDraft: close zip failed: %v", err)
 		return nil, fmt.Errorf("close zip: %w", err)
 	}
 
@@ -807,7 +807,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		Filename:    projectName + ".zip",
 		ContentType: "application/zip",
 	}
-	log.Printf("[CapCutService] ExportCapCutDraft done: filename=%s size=%d", result.Filename, len(result.Data))
+	logger.Printf("[CapCutService] ExportCapCutDraft done: filename=%s size=%d", result.Filename, len(result.Data))
 	return result, nil
 }
 
@@ -823,7 +823,7 @@ func fcpXMLEscapeAttr(s string) string {
 // ExportFCPXML 导出 FCPXML 1.10 格式 ZIP（可在 DaVinci Resolve / Final Cut Pro 导入）
 // src 使用原始 CDN URL，同时将媒体文件打包到 media/ 供离线重连。
 func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
-	log.Printf("[CapCutService] ExportFCPXML: videoID=%d shots=%d", video.ID, len(shots))
+	logger.Printf("[CapCutService] ExportFCPXML: videoID=%d shots=%d", video.ID, len(shots))
 	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
 
 	projectName := sanitizeFilename(video.Title)
@@ -1001,7 +1001,7 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 	}
 
 	if err := zw.Close(); err != nil {
-		log.Printf("[CapCutService] ExportFCPXML: close zip failed: %v", err)
+		logger.Printf("[CapCutService] ExportFCPXML: close zip failed: %v", err)
 		return nil, fmt.Errorf("close zip: %w", err)
 	}
 
@@ -1010,7 +1010,7 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 		Filename:    projectName + "_fcpxml.zip",
 		ContentType: "application/zip",
 	}
-	log.Printf("[CapCutService] ExportFCPXML done: filename=%s size=%d", result.Filename, len(result.Data))
+	logger.Printf("[CapCutService] ExportFCPXML done: filename=%s size=%d", result.Filename, len(result.Data))
 	return result, nil
 }
 
@@ -1028,7 +1028,7 @@ type shotJSONMeta struct {
 
 // ExportResourceZip 导出素材包 ZIP（图片/视频 + 音频 + SRT + shots.json，可用于任意剪辑软件）
 func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
-	log.Printf("[CapCutService] ExportResourceZip: videoID=%d shots=%d", video.ID, len(shots))
+	logger.Printf("[CapCutService] ExportResourceZip: videoID=%d shots=%d", video.ID, len(shots))
 	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
 
 	projectName := sanitizeFilename(video.Title)
@@ -1118,7 +1118,7 @@ func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.Sto
 	}
 
 	if err := zw.Close(); err != nil {
-		log.Printf("[CapCutService] ExportResourceZip: close zip failed: %v", err)
+		logger.Printf("[CapCutService] ExportResourceZip: close zip failed: %v", err)
 		return nil, fmt.Errorf("close zip: %w", err)
 	}
 
@@ -1127,13 +1127,13 @@ func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.Sto
 		Filename:    projectName + "_assets.zip",
 		ContentType: "application/zip",
 	}
-	log.Printf("[CapCutService] ExportResourceZip done: filename=%s size=%d", result.Filename, len(result.Data))
+	logger.Printf("[CapCutService] ExportResourceZip done: filename=%s size=%d", result.Filename, len(result.Data))
 	return result, nil
 }
 
 // ExportSRT 导出纯字幕 SRT 文件
 func (s *CapCutService) ExportSRT(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
-	log.Printf("[CapCutService] ExportSRT: videoID=%d shots=%d", video.ID, len(shots))
+	logger.Printf("[CapCutService] ExportSRT: videoID=%d shots=%d", video.ID, len(shots))
 	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
 
 	projectName := sanitizeFilename(video.Title)
@@ -1462,7 +1462,7 @@ func sanitizeFilename(name string) string {
 
 // ExportVTT 导出 WebVTT 字幕文件（浏览器原生、YouTube、Bilibili、各类播放器均支持）
 func (s *CapCutService) ExportVTT(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
-	log.Printf("[CapCutService] ExportVTT: videoID=%d shots=%d", video.ID, len(shots))
+	logger.Printf("[CapCutService] ExportVTT: videoID=%d shots=%d", video.ID, len(shots))
 	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
 
 	projectName := sanitizeFilename(video.Title)
@@ -1490,7 +1490,7 @@ func (s *CapCutService) ExportVTT(video *model.Video, shots []*model.StoryboardS
 
 	var buf bytes.Buffer
 	if err := subs.WriteToWebVTT(&buf); err != nil {
-		log.Printf("[CapCutService] ExportVTT: write vtt failed: %v", err)
+		logger.Printf("[CapCutService] ExportVTT: write vtt failed: %v", err)
 		return nil, fmt.Errorf("write vtt: %w", err)
 	}
 
@@ -1518,7 +1518,7 @@ func microsToEDLTimecode(micros int64) string {
 
 // ExportEDL 导出 CMX3600 EDL 文件（可在几乎所有专业非线性编辑软件中导入）
 func (s *CapCutService) ExportEDL(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
-	log.Printf("[CapCutService] ExportEDL: videoID=%d shots=%d", video.ID, len(shots))
+	logger.Printf("[CapCutService] ExportEDL: videoID=%d shots=%d", video.ID, len(shots))
 	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
 
 	projectName := sanitizeFilename(video.Title)
@@ -1653,7 +1653,7 @@ type otioTimeline struct {
 
 // ExportOTIO 导出 OpenTimelineIO .otio 文件（Pixar 开放标准，Premiere / FCP / DaVinci 均可导入）
 func (s *CapCutService) ExportOTIO(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
-	log.Printf("[CapCutService] ExportOTIO: videoID=%d shots=%d", video.ID, len(shots))
+	logger.Printf("[CapCutService] ExportOTIO: videoID=%d shots=%d", video.ID, len(shots))
 	const fps = 25.0
 	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
 
@@ -1763,7 +1763,7 @@ func (s *CapCutService) ExportOTIO(video *model.Video, shots []*model.Storyboard
 
 	data, err := json.MarshalIndent(timeline, "", "  ")
 	if err != nil {
-		log.Printf("[CapCutService] ExportOTIO: marshal failed: %v", err)
+		logger.Printf("[CapCutService] ExportOTIO: marshal failed: %v", err)
 		return nil, fmt.Errorf("marshal otio: %w", err)
 	}
 
@@ -1780,7 +1780,7 @@ func (s *CapCutService) ExportOTIO(video *model.Video, shots []*model.Storyboard
 
 // ExportCSV 导出分镜表 CSV（含全部元数据，可直接在 Excel / Notion 中打开）
 func (s *CapCutService) ExportCSV(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
-	log.Printf("[CapCutService] ExportCSV: videoID=%d shots=%d", video.ID, len(shots))
+	logger.Printf("[CapCutService] ExportCSV: videoID=%d shots=%d", video.ID, len(shots))
 	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
 
 	projectName := sanitizeFilename(video.Title)
@@ -1814,7 +1814,7 @@ func (s *CapCutService) ExportCSV(video *model.Video, shots []*model.StoryboardS
 	}
 	w.Flush()
 	if err := w.Error(); err != nil {
-		log.Printf("[CapCutService] ExportCSV: flush failed: %v", err)
+		logger.Printf("[CapCutService] ExportCSV: flush failed: %v", err)
 		return nil, fmt.Errorf("write csv: %w", err)
 	}
 

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"strings"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -120,7 +120,7 @@ func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter
 	// 1. AI 综合质检（获取真实分数）
 	aiScores, err := s.runAIQualityCheck(chapter, novel)
 	if err != nil {
-		log.Printf("QualityControlService: AI quality check failed: %v, falling back to rule-based", err)
+		logger.Printf("QualityControlService: AI quality check failed: %v, falling back to rule-based", err)
 		// AI 失败时降级到规则检查
 		aiScores = nil
 	}

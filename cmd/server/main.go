@@ -18,6 +18,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/config"
 	"github.com/inkframe/inkframe-backend/internal/crawler"
 	"github.com/inkframe/inkframe-backend/internal/handler"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/router"
@@ -27,32 +28,31 @@ import (
 	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 func main() {
-	// 统一所有标准库 log 输出到 stdout，与 gin 的 DefaultWriter 一致，
-	// 避免 stdout/stderr 分流导致终端或 reflex 热重载时看不到日志。
-	log.SetOutput(os.Stdout)
-	log.SetFlags(log.LstdFlags)
+	// 初始化 zap logger（开发模式：彩色可读格式）
+	logger.Init(true)
+	defer logger.Sync()
 
 	// 1. 加载配置
 	cfg, err := config.Load("config.yaml")
 	if err != nil {
-		log.Printf("Config file not found, using defaults")
+		logger.Printf("Config file not found, using defaults")
 		cfg = config.DefaultConfig()
 	}
 
 	// 2. 初始化数据库
 	db, err := initDatabase(cfg)
 	if err != nil {
-		log.Fatalf("Failed to init database: %v", err)
+		logger.Fatalf("Failed to init database: %v", err)
 	}
 
 	// 3. 自动迁移（GORM AutoMigrate 只增列不删列，开发环境安全运行）
 	// 注意：列重命名需先执行 migrations/001_fix_model_provider_columns.sql
 	if err := autoMigrate(db); err != nil {
-		log.Fatalf("Failed to migrate database: %v", err)
+		logger.Fatalf("Failed to migrate database: %v", err)
 	}
 
 	// 3b. 预置默认数据（INSERT IGNORE，幂等安全）
@@ -90,7 +90,7 @@ func main() {
 		LocalDir:  "./uploads",
 		LocalBase: "/uploads",
 	}, db)
-	log.Printf("Storage: type=%s", cfg.Storage.Type)
+	logger.Printf("Storage: type=%s", cfg.Storage.Type)
 
 	// 注入存储服务
 	services.VideoService.WithStorage(storageSvc)
@@ -115,13 +115,13 @@ func main() {
 	handlers.SystemHandler.RegisterOnChange("image_concurrency", func(v string) {
 		if n, err := strconv.Atoi(v); err == nil {
 			services.AIService.SetImageConcurrency(n)
-			log.Printf("image_concurrency updated to %d", n)
+			logger.Printf("image_concurrency updated to %d", n)
 		}
 	})
 	handlers.SystemHandler.RegisterOnChange("video_concurrency", func(v string) {
 		if n, err := strconv.Atoi(v); err == nil {
 			services.VideoService.SetVideoConcurrency(n)
-			log.Printf("video_concurrency updated to %d", n)
+			logger.Printf("video_concurrency updated to %d", n)
 		}
 	})
 
@@ -167,9 +167,9 @@ func main() {
 
 	// 13. 启动服务器
 	go func() {
-		log.Printf("Server starting on %s", cfg.Server.GetAddr())
+		logger.Printf("Server starting on %s", cfg.Server.GetAddr())
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("Server failed to start: %v", err)
+			logger.Fatalf("Server failed to start: %v", err)
 		}
 	}()
 
@@ -178,14 +178,14 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Shutting down server...")
+	logger.Println("Shutting down server...")
 
 	// 15. 优雅关闭
 	ctx, cancel := context.WithTimeout(context.Background(), cfg.Server.ShutdownTimeout)
 	defer cancel()
 
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("Server forced to shutdown: %v", err)
+		logger.Fatalf("Server forced to shutdown: %v", err)
 	}
 
 	// 16. 关闭数据库连接
@@ -198,18 +198,18 @@ func main() {
 		redisClient.Close()
 	}
 
-	log.Println("Server exited")
+	logger.Println("Server exited")
 }
 
 // initDatabase 初始化数据库
 func initDatabase(cfg *config.Config) (*gorm.DB, error) {
 	dsn := cfg.Database.GetDSN()
 
-	gormLogger := logger.New(
+	gormLogger := gormlogger.New(
 		log.New(os.Stdout, "\r\n", log.LstdFlags),
-		logger.Config{
+		gormlogger.Config{
 			SlowThreshold:             200 * time.Millisecond,
-			LogLevel:                  logger.Info,
+			LogLevel:                  gormlogger.Info,
 			IgnoreRecordNotFoundError: true,
 			Colorful:                  true,
 		},
@@ -245,7 +245,7 @@ func initDatabase(cfg *config.Config) (*gorm.DB, error) {
 func seedDefaultUser(services *Services) {
 	password := os.Getenv("SEED_TEST_PASSWORD")
 	if password == "" {
-		log.Println("[seed] SEED_TEST_PASSWORD not set, skipping default user creation")
+		logger.Println("[seed] SEED_TEST_PASSWORD not set, skipping default user creation")
 		return
 	}
 
@@ -268,13 +268,13 @@ func seedDefaultUser(services *Services) {
 	if err != nil {
 		// "email already registered" 表示已存在，不视为错误
 		if err.Error() == "email already registered" {
-			log.Printf("[seed] default user already exists (%s)", email)
+			logger.Printf("[seed] default user already exists (%s)", email)
 		} else {
-			log.Printf("[seed] failed to create default user: %v", err)
+			logger.Printf("[seed] failed to create default user: %v", err)
 		}
 		return
 	}
-	log.Printf("[seed] default test user created: %s", email)
+	logger.Printf("[seed] default test user created: %s", email)
 }
 
 // preMigrateCleanup 清理会阻塞 AutoMigrate 唯一索引迁移的无效行
@@ -646,11 +646,11 @@ func seedAIModels(db *gorm.DB) {
 			// Duplicate key means the record already exists (race or prior run); just fetch it.
 			if strings.Contains(result.Error.Error(), "1062") || strings.Contains(result.Error.Error(), "Duplicate entry") {
 				if err := db.Where("name = ? AND tenant_id = 0", p.name).First(&prov).Error; err != nil {
-					log.Printf("seedAIModels: provider %q: fetch after conflict: %v", p.name, err)
+					logger.Printf("seedAIModels: provider %q: fetch after conflict: %v", p.name, err)
 					continue
 				}
 			} else {
-				log.Printf("seedAIModels: provider %q: %v", p.name, result.Error)
+				logger.Printf("seedAIModels: provider %q: %v", p.name, result.Error)
 				continue
 			}
 		}
@@ -690,7 +690,7 @@ func seedAIModels(db *gorm.DB) {
 			IsAvailable:   true,
 		})
 	}
-	log.Printf("seedAIModels: %d providers, %d models ready", len(providerIDs), len(models))
+	logger.Printf("seedAIModels: %d providers, %d models ready", len(providerIDs), len(models))
 }
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
@@ -714,11 +714,11 @@ func autoMigrate(db *gorm.DB) error {
 	var storedVer string
 	db.Raw("SELECT ver FROM ink_schema_version WHERE id = 1").Scan(&storedVer)
 	if storedVer == schemaVersion {
-		log.Printf("autoMigrate: schema version %s already up-to-date, skipping", schemaVersion)
+		logger.Printf("autoMigrate: schema version %s already up-to-date, skipping", schemaVersion)
 		return nil
 	}
 
-	log.Printf("autoMigrate: migrating schema %s → %s", storedVer, schemaVersion)
+	logger.Printf("autoMigrate: migrating schema %s → %s", storedVer, schemaVersion)
 	preMigrateCleanup(db)
 	// 禁用外键约束创建：避免手动加列类型不匹配、循环依赖等问题
 	// AutoMigrate 只负责同步列定义，外键由应用层保证一致性
@@ -786,11 +786,11 @@ func initRedis(cfg *config.Config) *redis.Client {
 	defer cancel()
 
 	if err := client.Ping(ctx).Err(); err != nil {
-		log.Printf("Warning: Redis connection failed: %v", err)
+		logger.Printf("Warning: Redis connection failed: %v", err)
 		return nil
 	}
 
-	log.Println("Redis connected successfully")
+	logger.Println("Redis connected successfully")
 	return client
 }
 
@@ -849,7 +849,7 @@ func initAIModule(cfg *config.Config) *ai.ModelManager {
 		manager.SetDefault(firstRegistered)
 	}
 	if len(manager.ListProviders()) == 0 {
-		log.Println("initAIModule: no AI API keys in env — providers will be loaded from DB per-tenant")
+		logger.Println("initAIModule: no AI API keys in env — providers will be loaded from DB per-tenant")
 	}
 
 	// 即梦AI Visual API（AK/SK 鉴权图像生成）
@@ -874,7 +874,7 @@ func initAIModule(cfg *config.Config) *ai.ModelManager {
 	// 为所有 Provider 包装指数退避重试（最多 3 次，基础延迟 500ms）
 	for _, name := range manager.ListProviders() {
 		if err := manager.WrapWithRetry(name, 3, 500*time.Millisecond); err != nil {
-			log.Printf("Warning: failed to wrap provider %s with retry: %v", name, err)
+			logger.Printf("Warning: failed to wrap provider %s with retry: %v", name, err)
 		}
 	}
 
@@ -898,7 +898,7 @@ func initVideoProviders(cfg *config.Config) map[string]ai.VideoProvider {
 		providers["seedance"] = ai.NewSeedanceProvider(seedanceKey, cfg.AI.Seedance.Endpoint)
 	}
 
-	log.Printf("Initialized video providers: %d registered", len(providers))
+	logger.Printf("Initialized video providers: %d registered", len(providers))
 	return providers
 }
 
@@ -910,7 +910,7 @@ func initVolcengineVisual(cfg *config.Config) *ai.VolcengineVisualProvider {
 	if ak == "" || sk == "" {
 		return nil
 	}
-	log.Println("VolcengineVisual (即梦AI) provider initialized")
+	logger.Println("VolcengineVisual (即梦AI) provider initialized")
 	return ai.NewVolcengineVisualProvider(ak, sk)
 }
 
@@ -924,12 +924,12 @@ func initVectorStore(cfg *config.Config) *vector.StoreManager {
 		apiKey := getEnv("DASHVECTOR_API_KEY", cfg.VectorDB.APIKey)
 		dashStore := vector.NewDashVectorStore(cfg.VectorDB.Endpoint, apiKey)
 		manager.RegisterStore("dashvector", dashStore)
-		log.Printf("VectorStore: DashVector @ %s", cfg.VectorDB.Endpoint)
+		logger.Printf("VectorStore: DashVector @ %s", cfg.VectorDB.Endpoint)
 
 	case "chroma":
 		chromaStore := vector.NewChromaStore(cfg.VectorDB.Endpoint)
 		manager.RegisterStore("chroma", chromaStore)
-		log.Printf("VectorStore: Chroma @ %s", cfg.VectorDB.Endpoint)
+		logger.Printf("VectorStore: Chroma @ %s", cfg.VectorDB.Endpoint)
 
 	default: // "qdrant" 或未填，向后兼容
 		endpoint := getEnv("QDRANT_ENDPOINT", cfg.VectorDB.Endpoint)
@@ -939,7 +939,7 @@ func initVectorStore(cfg *config.Config) *vector.StoreManager {
 		apiKey := getEnv("QDRANT_API_KEY", cfg.VectorDB.APIKey)
 		qdrantStore := vector.NewQdrantStore(endpoint, apiKey)
 		manager.RegisterStore("qdrant", qdrantStore)
-		log.Printf("VectorStore: Qdrant @ %s", endpoint)
+		logger.Printf("VectorStore: Qdrant @ %s", endpoint)
 	}
 
 	return manager
@@ -1135,11 +1135,11 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		var providerErr error
 		defaultAIProvider, providerErr = aiManager.GetProvider("")
 		if providerErr != nil {
-			log.Printf("Warning: could not load default AI provider: %v — knowledge base embedding will be unavailable", providerErr)
+			logger.Printf("Warning: could not load default AI provider: %v — knowledge base embedding will be unavailable", providerErr)
 		}
 	}
 	if defaultAIProvider == nil {
-		log.Printf("Warning: no default AI provider available; knowledge base embedding disabled")
+		logger.Printf("Warning: no default AI provider available; knowledge base embedding disabled")
 	}
 	knowledgeService := service.NewKnowledgeService(repos.KnowledgeBaseRepo, vectorStore, defaultAIProvider)
 
@@ -1286,7 +1286,8 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		WithItemService(itemService).
 		WithSkillService(skillService).
 		WithPlotPointService(plotPointService).
-		WithSceneAnchorService(sceneAnchorService)
+		WithSceneAnchorService(sceneAnchorService).
+		WithTaskService(taskService)
 
 	return &Services{
 		NovelAnalysisService:        novelAnalysisService,
