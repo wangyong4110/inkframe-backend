@@ -313,6 +313,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.GET("/:id/shots", cfg.VideoHandler.ListShots)
 			videos.POST("/:id/shots/generate", cfg.VideoHandler.GenerateShotVideos)
 			videos.POST("/:id/shots/batch-generate", cfg.VideoHandler.BatchGenerateShots)
+			videos.POST("/:id/shots/batch-images", cfg.VideoHandler.BatchGenerateShotImages)
+			videos.POST("/:id/shots/batch-clips", cfg.VideoHandler.BatchGenerateShotClips)
 			videos.POST("/:id/shots/sfx", cfg.VideoHandler.BatchGenerateSFX)
 			videos.POST("/:id/shots/:shot_id/generate", cfg.VideoHandler.GenerateSingleShot)
 			videos.POST("/:id/shots/:shot_id/sfx", cfg.VideoHandler.GenerateShotSFX)

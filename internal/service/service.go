@@ -3804,6 +3804,188 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 	return queued, nil
 }
 
+// BatchGenerateShotImages 批量为分镜生成参考图片（幂等：已有 ImageURL 的分镜自动跳过）。
+// 只执行阶段一（AI 图片生成），不启动 Ken Burns 编码。
+func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, progressFn func(int)) ([]*model.StoryboardShot, error) {
+	video, err := s.videoRepo.GetByID(videoID)
+	if err != nil {
+		return nil, err
+	}
+	aspectRatio := video.AspectRatio
+	if video.NovelID > 0 && s.novelRepo != nil {
+		if novel, nErr := s.novelRepo.GetByID(video.NovelID); nErr == nil && novel.VideoAspectRatio != "" {
+			aspectRatio = novel.VideoAspectRatio
+		}
+	}
+
+	logger.Printf("BatchGenerateShotImages: videoID=%d total=%d aspectRatio=%s", videoID, len(shotIDs), aspectRatio)
+	var queued []*model.StoryboardShot
+	sem := make(chan struct{}, maxConcurrentShots)
+	var wg sync.WaitGroup
+	total := len(shotIDs)
+	var done atomic.Int32
+
+	advanceProgress := func() {
+		n := int(done.Add(1))
+		if progressFn != nil && total > 0 {
+			progressFn(n * 99 / total)
+		}
+	}
+
+	for _, sid := range shotIDs {
+		shot, err := s.storyboardRepo.GetByID(sid)
+		if err != nil || shot.VideoID != videoID {
+			advanceProgress()
+			continue
+		}
+		if shot.ImageURL != "" {
+			// Already has image — skip (idempotent).
+			advanceProgress()
+			continue
+		}
+		queued = append(queued, shot)
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(sh *model.StoryboardShot) {
+			defer func() {
+				<-sem
+				wg.Done()
+				advanceProgress()
+				logger.Printf("BatchGenerateShotImages: shot %d done", sh.ShotNo)
+			}()
+			const maxRetries = 3
+			var localImage string
+			var genErr error
+			for attempt := 1; attempt <= maxRetries; attempt++ {
+				localImage, _, genErr = s.generateShotImageOnly(sh, aspectRatio)
+				if genErr == nil {
+					break
+				}
+				logger.Printf("BatchGenerateShotImages: shot %d attempt %d/%d failed: %v", sh.ShotNo, attempt, maxRetries, genErr)
+				if attempt < maxRetries {
+					time.Sleep(time.Duration(attempt*2) * time.Second)
+				}
+			}
+			if localImage != "" {
+				os.Remove(localImage) //nolint:errcheck  // temp file not needed; ImageURL is in DB
+			}
+			if genErr == nil {
+				s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
+					"status": "completed", "progress": 50,
+				}) //nolint:errcheck
+				logger.Printf("BatchGenerateShotImages: shot %d image ready", sh.ShotNo)
+			} else {
+				logger.Printf("BatchGenerateShotImages: shot %d failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
+			}
+		}(shot)
+	}
+	wg.Wait()
+	logger.Printf("BatchGenerateShotImages: all %d shots done for videoID=%d", len(queued), videoID)
+	return queued, nil
+}
+
+// BatchGenerateShotClips 批量为已有图片的分镜生成 Ken Burns 动效视频（幂等：已有 VideoURL 的分镜自动跳过）。
+// 只执行阶段二（Ken Burns 编码 + OSS 上传），不重新生成图片。
+// 分镜必须已有 ImageURL；若没有图片则跳过并记录日志。
+func (s *VideoService) BatchGenerateShotClips(videoID uint, shotIDs []uint, progressFn func(int)) ([]*model.StoryboardShot, error) {
+	video, err := s.videoRepo.GetByID(videoID)
+	if err != nil {
+		return nil, err
+	}
+	aspectRatio := video.AspectRatio
+	if video.NovelID > 0 && s.novelRepo != nil {
+		if novel, nErr := s.novelRepo.GetByID(video.NovelID); nErr == nil && novel.VideoAspectRatio != "" {
+			aspectRatio = novel.VideoAspectRatio
+		}
+	}
+
+	logger.Printf("BatchGenerateShotClips: videoID=%d total=%d aspectRatio=%s", videoID, len(shotIDs), aspectRatio)
+	var queued []*model.StoryboardShot
+	sem := make(chan struct{}, maxConcurrentShots)
+	var wg sync.WaitGroup
+	total := len(shotIDs)
+	var done atomic.Int32
+
+	advanceProgress := func() {
+		n := int(done.Add(1))
+		if progressFn != nil && total > 0 {
+			progressFn(n * 99 / total)
+		}
+	}
+
+	for _, sid := range shotIDs {
+		shot, err := s.storyboardRepo.GetByID(sid)
+		if err != nil || shot.VideoID != videoID {
+			advanceProgress()
+			continue
+		}
+		if shot.VideoURL != "" {
+			// Already has clip — skip (idempotent).
+			advanceProgress()
+			continue
+		}
+		if shot.ImageURL == "" {
+			logger.Printf("BatchGenerateShotClips: shot %d skipped — no image", shot.ShotNo)
+			advanceProgress()
+			continue
+		}
+		queued = append(queued, shot)
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(sh *model.StoryboardShot) {
+			defer func() {
+				<-sem
+				wg.Done()
+				advanceProgress()
+				logger.Printf("BatchGenerateShotClips: shot %d done", sh.ShotNo)
+			}()
+			duration := sh.Duration
+			if duration <= 0 {
+				duration = 5.0
+			}
+			localImage, dlErr := downloadToTemp(sh.ImageURL, fmt.Sprintf("inkframe-img-%d-", sh.ID), ".jpg")
+			if dlErr != nil {
+				logger.Printf("BatchGenerateShotClips: shot %d download failed: %v", sh.ShotNo, dlErr)
+				return
+			}
+			defer os.Remove(localImage)
+
+			// Ken Burns encode (with still-frame fallback), same logic as generateClipAndUploadWithRetry.
+			var clipPath string
+			var lastErr error
+			for attempt := 1; attempt <= maxClipRetries; attempt++ {
+				clipPath, lastErr = s.generateKenBurnsPureGo(context.Background(), sh, localImage, duration, aspectRatio)
+				if lastErr != nil {
+					clipPath, lastErr = s.generateStillFrameClip(localImage, duration, aspectRatio)
+				}
+				if lastErr == nil {
+					break
+				}
+				logger.Printf("BatchGenerateShotClips: shot %d attempt %d/%d: %v", sh.ShotNo, attempt, maxClipRetries, lastErr)
+				if attempt < maxClipRetries {
+					time.Sleep(time.Duration(attempt*5) * time.Second)
+				}
+			}
+
+			fields := map[string]interface{}{"progress": 100}
+			if lastErr != nil {
+				logger.Printf("BatchGenerateShotClips: shot %d clip failed: %v", sh.ShotNo, lastErr)
+			} else if ossURL := s.uploadClipToStorage(context.Background(), sh, clipPath); ossURL != "" {
+				fields["video_url"] = ossURL
+				fields["clip_path"] = ""
+				os.Remove(clipPath) //nolint:errcheck
+				logger.Printf("BatchGenerateShotClips: shot %d clip → %s", sh.ShotNo, ossURL)
+			} else {
+				fields["clip_path"] = "file://" + clipPath
+			}
+			s.storyboardRepo.UpdateFields(sh.ID, fields) //nolint:errcheck
+		}(shot)
+	}
+	wg.Wait()
+	logger.Printf("BatchGenerateShotClips: all %d shots done for videoID=%d", len(queued), videoID)
+	return queued, nil
+}
+
 // GetStatus 获取视频生成状态（从 provider 同步最新进度）
 func (s *VideoService) GetStatus(id uint) (interface{}, error) {
 	video, err := s.videoRepo.GetByID(id)

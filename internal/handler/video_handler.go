@@ -806,6 +806,102 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 	})
 }
 
+// BatchGenerateShotImages POST /videos/:id/shots/batch-images
+// 批量为分镜生成参考图片（阶段一）。已有图片的分镜自动跳过（幂等）。
+func (h *VideoHandler) BatchGenerateShotImages(c *gin.Context) {
+	videoID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid video id")
+		return
+	}
+
+	var req model.BatchGenerateShotsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeAssetGen,
+		fmt.Sprintf("批量生成 %d 个镜头图片", len(req.ShotIDs)), "video", uint(videoID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[VideoHandler] BatchGenerateShotImages task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
+		shots, genErr := h.videoService.BatchGenerateShotImages(uint(videoID), req.ShotIDs, progressFn)
+		if genErr != nil {
+			logger.Printf("[VideoHandler] BatchGenerateShotImages task %s failed: %v", taskID, genErr)
+			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, gin.H{"shot_count": len(shots)}) //nolint:errcheck
+	}(task.TaskID)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "批量图片生成任务已提交",
+		"data":    gin.H{"task_id": task.TaskID},
+	})
+}
+
+// BatchGenerateShotClips POST /videos/:id/shots/batch-clips
+// 批量为已有图片的分镜生成 Ken Burns 动效视频（阶段二）。已有视频的分镜自动跳过（幂等）。
+func (h *VideoHandler) BatchGenerateShotClips(c *gin.Context) {
+	videoID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid video id")
+		return
+	}
+
+	var req model.BatchGenerateShotsRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeAssetGen,
+		fmt.Sprintf("批量生成 %d 个镜头视频", len(req.ShotIDs)), "video", uint(videoID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[VideoHandler] BatchGenerateShotClips task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
+		shots, genErr := h.videoService.BatchGenerateShotClips(uint(videoID), req.ShotIDs, progressFn)
+		if genErr != nil {
+			logger.Printf("[VideoHandler] BatchGenerateShotClips task %s failed: %v", taskID, genErr)
+			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, gin.H{"shot_count": len(shots)}) //nolint:errcheck
+	}(task.TaskID)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "批量视频生成任务已提交",
+		"data":    gin.H{"task_id": task.TaskID},
+	})
+}
+
 // BatchGenerateSFX POST /videos/:id/shots/sfx
 // 为视频所有分镜批量自动生成音效（异步任务）。
 // 已有 sfx_url 的分镜自动跳过（幂等）。
