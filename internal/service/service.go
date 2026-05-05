@@ -2382,7 +2382,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			}
 			logger.Printf("[Storyboard] seg %d/%d start runes=%d expectedShots=%d", idx+1, len(segments), segRunes, segShotCount)
 
-			prompt := s.buildStoryboardPrompt(video, content, userPrompt, idx+1, len(segments), segShotCount, characters, anchors, plotPoints, nil)
+			prompt := s.buildStoryboardPrompt(video, content, userPrompt, idx+1, len(segments), segShotCount, characters, anchors, plotPoints, nil, overrides.VoiceMode)
 
 			var result string
 			var aiErr error
@@ -2717,6 +2717,7 @@ func (s *VideoService) buildStoryboardPrompt(
 	segNo, totalSegs, expectedShots int,
 	characters []*model.Character, anchors []*model.SceneAnchor, plotPoints []*model.PlotPoint,
 	prevShots []*model.StoryboardShot,
+	voiceMode string,
 ) string {
 	var sb strings.Builder
 
@@ -2769,6 +2770,16 @@ func (s *VideoService) buildStoryboardPrompt(
   - ❌ 错误示例：dialogue="凌云：你敢！\n敌将：我就敢！"（两个角色在同一镜头）
 
 `)
+
+	// ── 配音模式约束 ─────────────────────────────────────────────────
+	switch voiceMode {
+	case "narration":
+		sb.WriteString("【配音模式：仅旁白】\n所有分镜一律使用旁白（narration 非空），dialogue 必须为空字符串 \"\"。\n禁止出现任何角色台词，角色对话内容应转化为第三人称叙事旁白描述。\n\n")
+	case "dialogue":
+		sb.WriteString("【配音模式：仅对白】\n所有分镜一律使用角色台词（dialogue 非空），narration 必须为空字符串 \"\"。\n场景过渡、动作描写等非对话内容，请尽量转化为角色的内心独白或台词形式；若实在无法转化为台词，可将 narration 和 dialogue 均留空。\n\n")
+	default:
+		// "both" or "" — default behavior, narration/dialogue mutual exclusion already specified above
+	}
 
 	// ── 连续性上下文（跨段落情节连贯）──────────────────────────────
 	if len(prevShots) > 0 {

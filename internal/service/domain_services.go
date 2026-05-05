@@ -2107,6 +2107,7 @@ type StoryboardOverrides struct {
 	MaxTokens      int     // 输出 token 上限，0=系统默认（≥4096）
 	Temperature    float64 // 生成温度，0=系统默认（0.1）
 	TimeoutSeconds int     // 单次 AI 调用超时（秒），0=系统默认（300s）
+	VoiceMode      string  // 配音模式：""/"both"=对白+旁白（默认），"narration"=仅旁白，"dialogue"=仅对白
 }
 
 // buildChapterOverrides 从请求参数和小说项目配置构建 AI 参数覆盖。

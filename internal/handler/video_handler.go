@@ -223,6 +223,7 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 		MaxTokens      int      `json:"max_tokens,omitempty"`       // 0=使用系统默认
 		Temperature    float64  `json:"temperature,omitempty"`      // 0=使用系统默认
 		TimeoutSeconds int      `json:"timeout_seconds,omitempty"`  // 0=使用系统默认(180s)
+		VoiceMode      string   `json:"voice_mode,omitempty"`       // ""/"both"=对白+旁白, "narration"=仅旁白, "dialogue"=仅对白
 	}
 	// 所有字段均可选，body 为空时忽略 EOF
 	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
@@ -262,6 +263,7 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 			MaxTokens:      req.MaxTokens,
 			Temperature:    req.Temperature,
 			TimeoutSeconds: req.TimeoutSeconds,
+			VoiceMode:      req.VoiceMode,
 		}
 		result, err := h.storyboardService.GenerateStoryboard(uint(videoId), req.ChapterID, req.Characters, req.Style, req.Provider, req.UserPrompt, progressFn, overrides)
 		if err != nil {
