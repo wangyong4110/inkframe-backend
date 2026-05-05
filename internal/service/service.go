@@ -1339,7 +1339,8 @@ func (s *AIService) generateWithRetry(novelID uint, taskType, prompt string, max
 	return "", fmt.Errorf("generateWithRetry failed after %d attempts: %w", maxRetries+1, lastErr)
 }
 
-// extractJSON 从 AI 输出中提取纯 JSON 字符串
+// extractJSON 从 AI 输出中提取纯 JSON 字符串。
+// 优先提取数组（[...]）；若顶层是对象（{...}），尝试查找其内部的第一个数组。
 func extractJSON(content string) string {
 	content = strings.TrimSpace(content)
 	if idx := strings.Index(content, "```json"); idx != -1 {
@@ -1354,27 +1355,53 @@ func extractJSON(content string) string {
 		}
 	}
 	content = strings.TrimSpace(content)
-	start := strings.IndexAny(content, "{[")
-	if start == -1 {
-		return content
-	}
-	openChar := content[start]
-	closeChar := byte('}')
-	if openChar == '[' {
-		closeChar = ']'
-	}
-	depth := 0
-	for i := start; i < len(content); i++ {
-		if content[i] == openChar {
-			depth++
-		} else if content[i] == closeChar {
-			depth--
-			if depth == 0 {
-				return sanitizeJSONStrings(content[start : i+1])
+
+	// extractBracket extracts a balanced bracket expression starting at `start`.
+	extractBracket := func(s string, start int, open, close byte) string {
+		depth := 0
+		inStr := false
+		for i := start; i < len(s); i++ {
+			c := s[i]
+			if inStr {
+				if c == '\\' {
+					i++
+				} else if c == '"' {
+					inStr = false
+				}
+				continue
+			}
+			switch c {
+			case '"':
+				inStr = true
+			case open:
+				depth++
+			case close:
+				depth--
+				if depth == 0 {
+					return sanitizeJSONStrings(s[start : i+1])
+				}
 			}
 		}
+		return sanitizeJSONStrings(s[start:])
 	}
-	return sanitizeJSONStrings(content[start:])
+
+	// Prefer array over object: find the first '[' and the first '{'.
+	arrIdx := strings.Index(content, "[")
+	objIdx := strings.Index(content, "{")
+	if arrIdx != -1 && (objIdx == -1 || arrIdx <= objIdx) {
+		// Array comes first — extract it directly.
+		return extractBracket(content, arrIdx, '[', ']')
+	}
+	if objIdx != -1 {
+		// Top-level is an object. Extract it, then look for an embedded array.
+		obj := extractBracket(content, objIdx, '{', '}')
+		// Search for the first '[' inside the object to unwrap {"shots":[...]} style.
+		if inner := strings.Index(obj, "["); inner != -1 {
+			return extractBracket(obj, inner, '[', ']')
+		}
+		return obj
+	}
+	return content
 }
 
 // repairTruncatedJSONArray 尝试修复被截断的 JSON 数组。
@@ -2353,11 +2380,16 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 
 			var result string
 			var aiErr error
+			var shots []*model.StoryboardShot
 			for attempt := 0; attempt < 3; attempt++ {
 				p := prompt
-				if attempt > 0 {
+				switch attempt {
+				case 1:
 					p = prompt + "\n\n⚠️ 重要提示：请只返回纯 JSON 数组，不要包含任何 markdown 代码块（```）或说明文字。"
-					logger.Printf("[Storyboard] seg %d/%d retry attempt=%d", idx+1, len(segments), attempt)
+					logger.Printf("[Storyboard] seg %d/%d retry attempt=%d (format hint)", idx+1, len(segments), attempt)
+				case 2:
+					p = prompt + fmt.Sprintf("\n\n⚠️ 极重要：上一次你只返回了很少的分镜，请务必生成全部%d个分镜，只返回JSON数组不要截断。", segShotCount)
+					logger.Printf("[Storyboard] seg %d/%d retry attempt=%d (shot count hint)", idx+1, len(segments), attempt)
 				}
 				aiStart := time.Now()
 				result, aiErr = s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", p, provider, overrides)
@@ -2370,23 +2402,30 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 					continue
 				}
 				logger.Printf("[Storyboard] seg %d/%d attempt=%d AI ok elapsed=%s responseLen=%d", idx+1, len(segments), attempt, aiElapsed, len(result))
-				if strings.TrimSpace(result) != "" {
-					break
+				if strings.TrimSpace(result) == "" {
+					continue
 				}
+				parsed, parseErr := s.parseStoryboardResult(videoID, chapterID, result)
+				if parseErr != nil {
+					logger.Printf("[Storyboard] seg %d/%d attempt=%d parse failed: %v", idx+1, len(segments), attempt, parseErr)
+					continue
+				}
+				// Retry if AI returned far fewer shots than requested (< 50% of target).
+				if len(parsed) < segShotCount/2 && attempt < 2 {
+					logger.Printf("[Storyboard] seg %d/%d attempt=%d too few shots got=%d expected=%d, retrying", idx+1, len(segments), attempt, len(parsed), segShotCount)
+					shots = parsed // keep as fallback
+					continue
+				}
+				shots = parsed
+				break
 			}
-			if aiErr != nil {
+			if aiErr != nil && shots == nil {
 				results[idx] = segResult{err: aiErr}
 				return
 			}
-			if strings.TrimSpace(result) == "" {
-				logger.Printf("[Storyboard] seg %d/%d fatal: AI returned empty response after all retries", idx+1, len(segments))
+			if shots == nil {
+				logger.Printf("[Storyboard] seg %d/%d fatal: AI returned empty or unparseable response after all retries", idx+1, len(segments))
 				results[idx] = segResult{err: fmt.Errorf("AI返回空响应，请检查模型配置或更换提供商")}
-				return
-			}
-			shots, parseErr := s.parseStoryboardResult(videoID, chapterID, result)
-			if parseErr != nil {
-				logger.Printf("[Storyboard] seg %d/%d parse failed: %v", idx+1, len(segments), parseErr)
-				results[idx] = segResult{err: fmt.Errorf("解析AI分镜结果失败: %w", parseErr)}
 				return
 			}
 			logger.Printf("[Storyboard] seg %d/%d done shots=%d elapsed=%s", idx+1, len(segments), len(shots), time.Since(segStart).Round(time.Millisecond))
@@ -2703,18 +2742,25 @@ func (s *VideoService) buildStoryboardPrompt(
     ④ 光线与构图：光源方向、色调、景深感
   - 示例（全要素）："A young man in white robes stands foreground-left, gripping a bronze sword at his side, facing right. An elder in dark armor stands background-right, arms crossed. Between them, an ancient scroll rests on a stone table. Collapsed city gate visible behind the elder. Dramatic amber backlight, dusk, wide shot."
 
-▸ narration（中文旁白文案）——每镜必填，不得为空
+▸ narration 与 dialogue 互斥规则——核心约束，必须严格遵守
+  ① 旁白镜头（narration 非空）：dialogue 必须为空字符串 ""，二者不能同时出现在同一个分镜中
+  ② 对白镜头（dialogue 非空）：narration 必须为空字符串 ""，不为角色台词配旁白
+  ③ 每个对白镜头只允许一个角色说话——如果原文中两个角色连续对话，必须拆分为两个独立分镜，每镜一句台词
+  ④ 对白场景拆分示例：凌云说"你敢！"→ 一个镜头；敌将回答"我就敢！"→ 下一个独立镜头
+  ⑤ 旁白镜头用于叙述动作、场景过渡、心理刻画；对白镜头专用于角色开口说话
+
+▸ narration（中文旁白文案）——旁白镜头必填，对白镜头必须为空 ""
   - 观众"听到"的旁白内容，第三人称叙事视角，语言生动凝练
   - 严禁出现以下词汇：镜头、画面、特写、推进、切换、转场、画外音、摄影机、定格
   - 严禁以角色名称开头，如"妈妈说："、"凌云道："、"角色名：" 等格式——旁白是旁白，不是台词引用
-  - ✅ 正确示例："凌云握紧长剑，眼中燃起不灭的复仇之火。"
-  - ❌ 错误示例："镜头推近，画面聚焦在凌云手握长剑的特写上。"
-  - ❌ 错误示例："画面展示凌云愤怒的表情，镜头缓缓拉远。"
-  - ❌ 错误示例："妈妈说：今天你必须回家。"（角色名前缀属于 dialogue 字段，不属于 narration）
+  - ✅ 正确示例：narration="凌云握紧长剑，眼中燃起不灭的复仇之火。" dialogue=""
+  - ❌ 错误示例：narration="凌云握紧长剑。" dialogue="凌云：你敢再说一遍！"（两个字段同时有内容）
 
-▸ dialogue（角色台词）——仅当角色实际开口说话时填写
+▸ dialogue（角色台词）——对白镜头必填，旁白镜头必须为空 ""
   - 格式固定："角色名：台词内容"（如"凌云：你敢再说一遍！"）
-  - 无对话时必须为空字符串 ""，禁止填入旁白或镜头描述
+  - 每个分镜只能包含一个角色的一句台词，多角色对话必须拆分为多个分镜
+  - ✅ 正确示例：dialogue="凌云：你敢再说一遍！" narration=""
+  - ❌ 错误示例：dialogue="凌云：你敢！\n敌将：我就敢！"（两个角色在同一镜头）
 
 `)
 
@@ -2823,8 +2869,9 @@ func (s *VideoService) buildStoryboardPrompt(
 	}
 
 	// ── 输出格式 ──────────────────────────────────────────────
-	sb.WriteString(fmt.Sprintf(`请将章节内容分解为约%d个分镜（每个重大动作、对话轮次、场景切换须单独成镜）。
-只返回JSON数组，不要任何额外说明或markdown代码块：
+	sb.WriteString(fmt.Sprintf(`请将章节内容分解为**%d个**分镜（每个重大动作、对话轮次、场景切换须单独成镜）。
+⚠️ 注意：必须输出全部%d个分镜，不得省略。只返回JSON数组，不要任何额外说明或markdown代码块。
+格式示例（以下仅展示2个分镜作为格式参考，实际须生成%d个）：
 [
   {
     "shot_no": 1,
@@ -2839,10 +2886,27 @@ func (s *VideoService) buildStoryboardPrompt(
     "time_of_day": "morning",
     "weather": "clear",
     "lighting": "natural",
-    "characters": [{"name":"角色名","expression":"表情","pose":"姿势动作","position":"foreground-left"}],
+    "characters": [{"name":"角色名","expression":"表情","pose":"姿势动作"}],
+    "transition": "cut"
+  },
+  {
+    "shot_no": 2,
+    "description": "English description for second shot...",
+    "narration": "第二个镜头的中文旁白",
+    "dialogue": "",
+    "camera_type": "zoom",
+    "camera_angle": "low",
+    "shot_size": "close_up",
+    "duration": 4.0,
+    "location": "场景地点",
+    "time_of_day": "morning",
+    "weather": "clear",
+    "lighting": "dramatic",
+    "characters": [{"name":"角色名","expression":"表情","pose":"姿势动作"}],
     "transition": "cut"
   }
-]`, expectedShots))
+  ... （继续输出剩余 %d 个分镜，格式与上述完全相同）
+]`, expectedShots, expectedShots, expectedShots, expectedShots-2))
 
 	return sb.String()
 }
@@ -3826,25 +3890,86 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		return "", fmt.Errorf("AI service not initialized")
 	}
 
+	// charBestImage 返回角色的最佳参考图 URL。
+	// 优先级：ThreeViewFront（三视图正面，一致性最强）> Portrait（肖像）
+	charBestImage := func(c *model.Character) string {
+		if c.ThreeViewFront != "" {
+			return c.ThreeViewFront
+		}
+		return c.Portrait
+	}
+
 	// 精准匹配：从 shot.CharacterIDs 查找角色参考图
-	// 优先级：ThreeViewFront（专为一致性生成）> Portrait（仅脸部，一致性较差）
-	// 多角色镜头：扫描全部角色，一旦找到三视图即停止；Portrait 仅作保底（不提前 break）
 	var characterPortrait string
+	var refSource string // for logging
 	for _, id := range shot.CharacterIDs {
 		char, err := s.characterRepo.GetByID(id)
 		if err != nil {
 			continue
 		}
+		img := charBestImage(char)
+		if img == "" {
+			continue
+		}
 		if char.ThreeViewFront != "" {
-			characterPortrait = char.ThreeViewFront
+			characterPortrait = img
+			refSource = fmt.Sprintf("charID=%d ThreeViewFront", id)
 			break // 三视图是最优选择，找到即停
 		}
-		if char.Portrait != "" && characterPortrait == "" {
-			characterPortrait = char.Portrait
+		if characterPortrait == "" {
+			characterPortrait = img
+			refSource = fmt.Sprintf("charID=%d Portrait/ImageURL", id)
 			// 不 break：继续查找是否有三视图
 		}
 	}
-	// 降级：通过 ChapterID 找到 NovelID，取第一个有肖像的角色；同时获取章节序号用于 OSS 路径
+
+	// 降级一：若 CharacterIDs 未命中，从 shot.Characters JSON 内联名称匹配
+	// （CharacterIDs 由 autoMatchShotCharacters 在分镜生成时设置，若名称有偏差则可能为空）
+	if characterPortrait == "" && shot.Characters != "" {
+		var shotChars []struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal([]byte(shot.Characters), &shotChars); err == nil && len(shotChars) > 0 {
+			if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil && video.NovelID > 0 {
+				if novelChars, err := s.characterRepo.ListByNovel(video.NovelID); err == nil {
+					nameMap := make(map[string]*model.Character, len(novelChars))
+					for _, c := range novelChars {
+						nameMap[strings.ToLower(c.Name)] = c
+					}
+					for _, sc := range shotChars {
+						nameLow := strings.ToLower(sc.Name)
+						char, ok := nameMap[nameLow]
+						if !ok {
+							// 子串模糊匹配
+							for n, c := range nameMap {
+								if strings.Contains(nameLow, n) || strings.Contains(n, nameLow) {
+									char = c
+									ok = true
+									break
+								}
+							}
+						}
+						if ok && char != nil {
+							img := charBestImage(char)
+							if img != "" {
+								if char.ThreeViewFront != "" {
+									characterPortrait = img
+									refSource = fmt.Sprintf("inline name=%q ThreeViewFront", sc.Name)
+									break
+								}
+								if characterPortrait == "" {
+									characterPortrait = img
+									refSource = fmt.Sprintf("inline name=%q fallback", sc.Name)
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// 降级二：通过 ChapterID 找到 NovelID，取第一个有参考图的角色；同时获取章节序号用于 OSS 路径
 	var chapterNo int
 	if shot.ChapterID != nil && s.chapterRepo != nil {
 		if chapter, err := s.chapterRepo.GetByID(*shot.ChapterID); err == nil && chapter != nil {
@@ -3853,8 +3978,10 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				chars, err := s.characterRepo.ListByNovel(chapter.NovelID)
 				if err == nil {
 					for _, c := range chars {
-						if c.Portrait != "" {
-							characterPortrait = c.Portrait
+						img := charBestImage(c)
+						if img != "" {
+							characterPortrait = img
+							refSource = fmt.Sprintf("novel first char=%q", c.Name)
 							break
 						}
 					}
@@ -3862,6 +3989,8 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 			}
 		}
 	}
+	logger.Printf("generateShotReferenceImage: shot %d charIDs=%v refSource=%q portrait=%v",
+		shot.ShotNo, shot.CharacterIDs, refSource, characterPortrait != "")
 
 	promptText := shot.Prompt
 	if promptText == "" {
