@@ -973,20 +973,42 @@ func (r *StoryboardRepository) MaxShotNo(videoID uint) (int, error) {
 	return max, err
 }
 
-// ShiftShotNos 将 video_id 下所有 shot_no >= fromShotNo 的分镜的 shot_no 加 delta（delta 通常为 1）
+// ShiftShotNos 将 video_id 下所有 shot_no >= fromShotNo 的分镜的 shot_no 加 delta（delta 通常为 1）。
+// 使用两阶段更新避免唯一键冲突：先整体偏移到无冲突区间，再还原到目标值。
 func (r *StoryboardRepository) ShiftShotNos(videoID uint, fromShotNo, delta int) error {
-	return r.db.Exec(
-		"UPDATE ink_storyboard_shot SET shot_no = shot_no + ? WHERE video_id = ? AND shot_no >= ? AND deleted_at IS NULL",
-		delta, videoID, fromShotNo,
-	).Error
+	const tempOffset = 100000
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		// Phase 1: move into a temporary collision-free range
+		if err := tx.Exec(
+			"UPDATE ink_storyboard_shot SET shot_no = shot_no + ? WHERE video_id = ? AND shot_no >= ? AND deleted_at IS NULL",
+			tempOffset, videoID, fromShotNo,
+		).Error; err != nil {
+			return err
+		}
+		// Phase 2: shift back to the intended final position
+		return tx.Exec(
+			"UPDATE ink_storyboard_shot SET shot_no = shot_no - ? + ? WHERE video_id = ? AND shot_no >= ? AND deleted_at IS NULL",
+			tempOffset, delta, videoID, fromShotNo+tempOffset,
+		).Error
+	})
 }
 
-// CompactShotNosAfter 将 video_id 下 shot_no > deletedShotNo 的分镜 shot_no 减 1（删除后紧凑化）
+// CompactShotNosAfter 将 video_id 下 shot_no > deletedShotNo 的分镜 shot_no 减 1（删除后紧凑化）。
+// 同样使用两阶段更新。
 func (r *StoryboardRepository) CompactShotNosAfter(videoID uint, deletedShotNo int) error {
-	return r.db.Exec(
-		"UPDATE ink_storyboard_shot SET shot_no = shot_no - 1 WHERE video_id = ? AND shot_no > ? AND deleted_at IS NULL",
-		videoID, deletedShotNo,
-	).Error
+	const tempOffset = 100000
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Exec(
+			"UPDATE ink_storyboard_shot SET shot_no = shot_no + ? WHERE video_id = ? AND shot_no > ? AND deleted_at IS NULL",
+			tempOffset, videoID, deletedShotNo,
+		).Error; err != nil {
+			return err
+		}
+		return tx.Exec(
+			"UPDATE ink_storyboard_shot SET shot_no = shot_no - ? - 1 WHERE video_id = ? AND shot_no > ? AND deleted_at IS NULL",
+			tempOffset, videoID, deletedShotNo+tempOffset,
+		).Error
+	})
 }
 
 // ShotVoiceSegmentRepository 分镜语音段落仓库
