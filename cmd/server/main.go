@@ -1397,11 +1397,9 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			WithSMSService(services.SMSService).
 			WithOAuthService(services.OAuthService).
 			WithFrontendURL(services.FrontendURL),
-		ImportHandler: func() *handler.ImportHandler {
-			h := handler.NewImportHandler(services.NovelImportService, services.NovelToVideoService)
-			h.SetAnalysisService(services.NovelAnalysisService)
-			return h
-		}(),
+		ImportHandler: handler.NewImportHandler(services.NovelImportService, services.NovelToVideoService).
+			SetAnalysisService(services.NovelAnalysisService).
+			WithTaskService(services.TaskService),
 		WorldviewHandler:   handler.NewWorldviewHandler(services.WorldviewService),
 		TenantHandler:      handler.NewTenantHandler(services.TenantService),
 		ItemHandler:        handler.NewItemHandler(services.ItemService, services.ChapterService).WithStorage(storageSvc).WithTaskService(services.TaskService),

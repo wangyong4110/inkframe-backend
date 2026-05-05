@@ -16,26 +16,6 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
 
-// importTaskStatus 导入任务状态
-type importTaskStatus struct {
-	TaskID         string `json:"task_id"`
-	Status         string `json:"status"`   // pending/uploading/parsing/analyzing/completed/failed
-	Progress       int    `json:"progress"` // 0-100
-	Step           string `json:"step,omitempty"`
-	Message        string `json:"message,omitempty"`
-	NovelID        uint   `json:"novel_id,omitempty"`
-	OSSUrl         string `json:"oss_url,omitempty"`
-	AnalysisTaskID string `json:"analysis_task_id,omitempty"`
-	// 爬取进度（crawl 任务）
-	CrawlDone    int    `json:"crawl_done,omitempty"`
-	CrawlTotal   int    `json:"crawl_total,omitempty"`
-	CrawlCurrent string `json:"crawl_current,omitempty"`
-	CreatedAt    int64  `json:"created_at"`
-	UpdatedAt    int64  `json:"updated_at"`
-}
-
-// importTaskStore 全局任务状态存储（in-memory，进程重启后丢失，可接受）
-var importTaskStore sync.Map
 
 // chunkSession 分片上传会话
 type chunkSession struct {
@@ -53,24 +33,12 @@ type chunkSession struct {
 // chunkStore 全局分片会话存储
 var chunkStore sync.Map
 
-func setImportTask(id string, status *importTaskStatus) {
-	status.UpdatedAt = time.Now().Unix()
-	importTaskStore.Store(id, status)
-}
-
-func getImportTask(id string) (*importTaskStatus, bool) {
-	v, ok := importTaskStore.Load(id)
-	if !ok {
-		return nil, false
-	}
-	return v.(*importTaskStatus), true
-}
-
 // ImportHandler 导入处理器
 type ImportHandler struct {
 	importService       *service.NovelImportService
 	novelToVideoService *service.NovelToVideoService
 	analysisService     *service.NovelAnalysisService
+	taskSvc             *service.TaskService
 }
 
 func NewImportHandler(
@@ -84,28 +52,27 @@ func NewImportHandler(
 }
 
 // SetAnalysisService 注入分析服务
-func (h *ImportHandler) SetAnalysisService(svc *service.NovelAnalysisService) {
+func (h *ImportHandler) SetAnalysisService(svc *service.NovelAnalysisService) *ImportHandler {
 	h.analysisService = svc
+	return h
+}
+
+// WithTaskService 注入统一任务服务
+func (h *ImportHandler) WithTaskService(svc *service.TaskService) *ImportHandler {
+	h.taskSvc = svc
+	return h
 }
 
 // runImportAndAnalyze 通用导入+分析流程（在 goroutine 中调用）
-func (h *ImportHandler) runImportAndAnalyze(taskID string, createdAt int64, req *service.ImportRequest, tenantID uint) {
-	setImportTask(taskID, &importTaskStatus{
-		TaskID:    taskID,
-		Status:    "parsing",
-		Step:      "解析导入中...",
-		Progress:  20,
-		CreatedAt: createdAt,
-	})
+func (h *ImportHandler) runImportAndAnalyze(taskID string, req *service.ImportRequest, tenantID uint) {
+	h.taskSvc.SetRunning(taskID)   //nolint:errcheck
+	h.taskSvc.UpdateProgress(taskID, 20) //nolint:errcheck
+	h.taskSvc.SetMeta(taskID, map[string]interface{}{"step": "解析导入中..."}) //nolint:errcheck
 
 	result, err := h.importService.Import(req)
 	if err != nil {
-		setImportTask(taskID, &importTaskStatus{
-			TaskID:    taskID,
-			Status:    "failed",
-			Message:   err.Error(),
-			CreatedAt: createdAt,
-		})
+		log.Printf("[ImportHandler] runImportAndAnalyze task %s failed: %v", taskID, err)
+		h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		return
 	}
 
@@ -117,15 +84,12 @@ func (h *ImportHandler) runImportAndAnalyze(taskID string, createdAt int64, req 
 		}
 	}
 
-	setImportTask(taskID, &importTaskStatus{
-		TaskID:         taskID,
-		Status:         "completed",
-		Progress:       100,
-		Message:        fmt.Sprintf("导入完成，共 %d 章", result.ImportedChapters),
-		NovelID:        result.NovelID,
-		OSSUrl:         result.OSSUrl,
-		AnalysisTaskID: analysisTaskID,
-		CreatedAt:      createdAt,
+	h.taskSvc.Complete(taskID, map[string]interface{}{ //nolint:errcheck
+		"novel_id":         result.NovelID,
+		"imported_chapters": result.ImportedChapters,
+		"oss_url":          result.OSSUrl,
+		"analysis_task_id": analysisTaskID,
+		"message":          fmt.Sprintf("导入完成，共 %d 章", result.ImportedChapters),
 	})
 }
 
@@ -138,42 +102,38 @@ func (h *ImportHandler) ImportNovel(c *gin.Context) {
 		return
 	}
 
-	taskID := fmt.Sprintf("import-%d", time.Now().UnixNano())
-	now := time.Now().Unix()
-	setImportTask(taskID, &importTaskStatus{
-		TaskID:    taskID,
-		Status:    "running",
-		Progress:  0,
-		Message:   "导入中",
-		CreatedAt: now,
-	})
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImport, "小说导入", "novel", 0)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 
-	go func(r service.ImportRequest) {
+	go func(taskID string, r service.ImportRequest) {
+		defer func() {
+			if rc := recover(); rc != nil {
+				log.Printf("[ImportHandler] ImportNovel task %s panic: %v", taskID, rc)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		result, err := h.importService.Import(&r)
 		if err != nil {
-			log.Printf("[ImportHandler] Import task %s failed: %v", taskID, err)
-			setImportTask(taskID, &importTaskStatus{
-				TaskID:    taskID,
-				Status:    "failed",
-				Progress:  0,
-				Message:   err.Error(),
-				CreatedAt: now,
-			})
+			log.Printf("[ImportHandler] ImportNovel task %s failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
-		setImportTask(taskID, &importTaskStatus{
-			TaskID:    taskID,
-			Status:    "completed",
-			Progress:  100,
-			Message:   fmt.Sprintf("导入完成，共 %d 章", result.ImportedChapters),
-			CreatedAt: now,
+		h.taskSvc.Complete(taskID, map[string]interface{}{ //nolint:errcheck
+			"novel_id":          result.NovelID,
+			"imported_chapters": result.ImportedChapters,
+			"message":           fmt.Sprintf("导入完成，共 %d 章", result.ImportedChapters),
 		})
-	}(req)
+	}(task.TaskID, req)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
 		"message": "import started",
-		"data":    gin.H{"task_id": taskID},
+		"data":    gin.H{"task_id": task.TaskID},
 	})
 }
 
@@ -226,22 +186,19 @@ func (h *ImportHandler) ImportFromFile(c *gin.Context) {
 	tenantID := getTenantID(c)
 
 	// 异步执行：OSS 上传 → 解析 → 保存 → 触发分析
-	taskID := fmt.Sprintf("import-file-%d", time.Now().UnixNano())
-	now := time.Now().Unix()
-	setImportTask(taskID, &importTaskStatus{
-		TaskID:    taskID,
-		Status:    "uploading",
-		Step:      "上传中...",
-		Progress:  0,
-		CreatedAt: now,
-	})
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImport, "文件导入", "novel", 0)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+	h.taskSvc.SetMeta(task.TaskID, map[string]interface{}{"step": "上传中..."}) //nolint:errcheck
 
-	go h.runImportAndAnalyze(taskID, now, req, tenantID)
+	go h.runImportAndAnalyze(task.TaskID, req, tenantID)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
 		"message": "import started",
-		"data":    gin.H{"task_id": taskID},
+		"data":    gin.H{"task_id": task.TaskID},
 	})
 }
 
@@ -297,38 +254,35 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 	}
 	tenantID := getTenantID(c)
 
-	taskID := fmt.Sprintf("import-crawl-%d", time.Now().UnixNano())
-	now := time.Now().Unix()
-	setImportTask(taskID, &importTaskStatus{
-		TaskID:    taskID,
-		Status:    "crawling",
-		Step:      "获取章节目录...",
-		Progress:  0,
-		CreatedAt: now,
-	})
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImport, "爬取导入", "novel", 0)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+	h.taskSvc.SetMeta(task.TaskID, map[string]interface{}{"step": "获取章节目录..."}) //nolint:errcheck
 
-	go func(r *service.ImportRequest) {
+	go func(taskID string, r *service.ImportRequest) {
+		defer func() {
+			if rc := recover(); rc != nil {
+				log.Printf("[ImportHandler] ImportFromCrawl task %s panic: %v", taskID, rc)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+
 		// 1. 创建章节存根，启动后台爬取
 		result, err := h.importService.Import(r)
 		if err != nil {
 			log.Printf("[ImportHandler] Crawl import task %s failed: %v", taskID, err)
-			setImportTask(taskID, &importTaskStatus{
-				TaskID:    taskID,
-				Status:    "failed",
-				Message:   err.Error(),
-				CreatedAt: now,
-			})
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
 		novelID := result.NovelID
-		setImportTask(taskID, &importTaskStatus{
-			TaskID:     taskID,
-			Status:     "crawling",
-			Step:       "爬取章节内容中...",
-			Progress:   5,
-			NovelID:    novelID,
-			CrawlTotal: result.TotalChapters,
-			CreatedAt:  now,
+		h.taskSvc.UpdateProgress(taskID, 5) //nolint:errcheck
+		h.taskSvc.SetMeta(taskID, map[string]interface{}{ //nolint:errcheck
+			"step":        "爬取章节内容中...",
+			"novel_id":    novelID,
+			"crawl_total": result.TotalChapters,
 		})
 
 		// 2. 注册爬取完成回调（触发分析）
@@ -356,16 +310,13 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 			if progress.Total > 0 {
 				pct = 5 + int(float64(progress.Done)/float64(progress.Total)*55)
 			}
-			setImportTask(taskID, &importTaskStatus{
-				TaskID:       taskID,
-				Status:       "crawling",
-				Step:         "爬取章节内容中...",
-				Progress:     pct,
-				NovelID:      novelID,
-				CrawlDone:    progress.Done,
-				CrawlTotal:   progress.Total,
-				CrawlCurrent: progress.Current,
-				CreatedAt:    now,
+			h.taskSvc.UpdateProgress(taskID, pct) //nolint:errcheck
+			h.taskSvc.SetMeta(taskID, map[string]interface{}{ //nolint:errcheck
+				"step":          "爬取章节内容中...",
+				"novel_id":      novelID,
+				"crawl_done":    progress.Done,
+				"crawl_total":   progress.Total,
+				"crawl_current": progress.Current,
 			})
 			time.Sleep(2 * time.Second)
 		}
@@ -379,21 +330,18 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 			// 回调可能已在爬取完成前触发，直接继续
 		}
 
-		setImportTask(taskID, &importTaskStatus{
-			TaskID:         taskID,
-			Status:         "completed",
-			Progress:       100,
-			Message:        fmt.Sprintf("爬取完成，共 %d 章", result.ImportedChapters),
-			NovelID:        novelID,
-			AnalysisTaskID: analysisTaskID,
-			CreatedAt:      now,
+		h.taskSvc.Complete(taskID, map[string]interface{}{ //nolint:errcheck
+			"novel_id":         novelID,
+			"imported_chapters": result.ImportedChapters,
+			"analysis_task_id": analysisTaskID,
+			"message":          fmt.Sprintf("爬取完成，共 %d 章", result.ImportedChapters),
 		})
-	}(importReq)
+	}(task.TaskID, importReq)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
 		"message": "crawl started",
-		"data":    gin.H{"task_id": taskID},
+		"data":    gin.H{"task_id": task.TaskID},
 	})
 }
 
@@ -616,40 +564,24 @@ func (h *ImportHandler) CompleteChunkedUpload(c *gin.Context) {
 	}
 
 	tenantID := sess.TenantID
-	taskID := fmt.Sprintf("import-file-%d", time.Now().UnixNano())
-	now := time.Now().Unix()
-	setImportTask(taskID, &importTaskStatus{
-		TaskID:    taskID,
-		Status:    "parsing",
-		Step:      "解析导入中...",
-		Progress:  5,
-		CreatedAt: now,
-	})
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImport, "分片文件导入", "novel", 0)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+	h.taskSvc.UpdateProgress(task.TaskID, 5)                                                     //nolint:errcheck
+	h.taskSvc.SetMeta(task.TaskID, map[string]interface{}{"step": "解析导入中..."}) //nolint:errcheck
 
-	go h.runImportAndAnalyze(taskID, now, req, tenantID)
+	go h.runImportAndAnalyze(task.TaskID, req, tenantID)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
 		"message": "import started",
 		"data": gin.H{
-			"task_id":       taskID,
+			"task_id":        task.TaskID,
 			"assembled_size": len(assembled),
 		},
 	})
-}
-
-// GetImportStatus 获取导入状态
-// GET /api/v1/import/status/:task_id
-func (h *ImportHandler) GetImportStatus(c *gin.Context) {
-	taskID := c.Param("task_id")
-
-	task, ok := getImportTask(taskID)
-	if !ok {
-		respondErr(c, http.StatusNotFound, "task not found")
-		return
-	}
-
-	respondOK(c, task)
 }
 
 // StartAnalysis 触发小说分析 Pipeline

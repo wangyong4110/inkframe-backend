@@ -241,18 +241,6 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 	})
 }
 
-// GetItemImageTaskStatus 查询物品图像生成任务状态
-// GET /api/v1/items/:id/images/:task_id
-func (h *ItemHandler) GetItemImageTaskStatus(c *gin.Context) {
-	taskID := c.Param("task_id")
-	task, err := h.taskSvc.Get(taskID)
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "task not found")
-		return
-	}
-	respondOK(c, task)
-}
-
 // ListEffectiveItems GET /novels/:id/chapters/:chapter_no/items
 func (h *ItemHandler) ListEffectiveItems(c *gin.Context) {
 	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)

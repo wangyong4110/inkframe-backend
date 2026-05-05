@@ -249,18 +249,6 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 	})
 }
 
-// GetChapterGenStatus 查询章节生成任务状态
-// GET /api/v1/novels/:id/chapters/generate/:task_id
-func (h *NovelHandler) GetChapterGenStatus(c *gin.Context) {
-	taskID := c.Param("task_id")
-	task, err := h.taskSvc.Get(taskID)
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "task not found")
-		return
-	}
-	respondOK(c, task)
-}
-
 // GenerateOutline 生成大纲
 // POST /api/v1/novels/:id/outline
 func (h *NovelHandler) GenerateOutline(c *gin.Context) {

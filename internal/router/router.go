@@ -101,7 +101,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			importGroup.POST("/novel/url", cfg.ImportHandler.ImportFromURL)
 			importGroup.POST("/novel/crawl", cfg.ImportHandler.ImportFromCrawl)
 			importGroup.POST("/novel/video", cfg.ImportHandler.ImportAndGenerate)
-			importGroup.GET("/status/:task_id", cfg.ImportHandler.GetImportStatus)
 		}
 
 		// 小说相关
@@ -113,7 +112,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.PUT("/:id", cfg.NovelHandler.UpdateNovel)
 			novels.DELETE("/:id", cfg.NovelHandler.DeleteNovel)
 			novels.POST("/:id/chapters/generate", cfg.NovelHandler.GenerateChapter)
-			novels.GET("/:id/chapters/generate/:task_id", cfg.NovelHandler.GetChapterGenStatus)
 
 			// 伏笔
 			novels.GET("/:id/foreshadows", cfg.NovelHandler.GetForeshadows)
@@ -233,8 +231,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				items.DELETE("/:id", cfg.ItemHandler.DeleteItem)
 				items.POST("/:id/image/upload", cfg.ItemHandler.UploadItemImage)
 				items.POST("/:id/images", cfg.ItemHandler.GenerateItemImage)
-				items.GET("/:id/images/:task_id", cfg.ItemHandler.GetItemImageTaskStatus)
-				items.POST("/:id/reference/upload", cfg.ItemHandler.UploadItemReference)
+					items.POST("/:id/reference/upload", cfg.ItemHandler.UploadItemReference)
 			}
 		}
 
@@ -293,7 +290,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			characters.DELETE("/:id", cfg.CharacterHandler.DeleteCharacter)
 			characters.POST("/:id/images", cfg.CharacterHandler.GenerateCharacterImage)
 			characters.POST("/:id/three-view", cfg.CharacterHandler.GenerateThreeView)
-			characters.GET("/:id/three-view/:task_id", cfg.CharacterHandler.GetThreeViewTaskStatus)
 			characters.POST("/:id/portrait/upload", cfg.CharacterHandler.UploadPortrait)
 			characters.POST("/:id/analyze-consistency", cfg.CharacterHandler.AnalyzeCharacterConsistency)
 			characters.POST("/:id/voice/preview", cfg.CharacterHandler.PreviewVoice)
@@ -311,7 +307,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.GET("/:id/storyboard", cfg.VideoHandler.GetStoryboard)
 			videos.PUT("/:id/storyboard/:shot_id", cfg.VideoHandler.UpdateStoryboardShot)
 			videos.POST("/:id/storyboard/generate", cfg.VideoHandler.GenerateStoryboard)
-			videos.GET("/:id/storyboard/generate/:task_id", cfg.VideoHandler.GetStoryboardGenStatus)
 			videos.POST("/:id/storyboard/review", cfg.VideoHandler.ReviewStoryboard)
 			videos.POST("/:id/generate", cfg.VideoHandler.StartVideoGeneration)
 			videos.GET("/:id/status", cfg.VideoHandler.GetVideoStatus)

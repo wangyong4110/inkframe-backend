@@ -267,18 +267,6 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 	})
 }
 
-// GetStoryboardGenStatus 查询分镜生成任务状态
-// GET /api/v1/videos/:id/storyboard/generate/:task_id
-func (h *VideoHandler) GetStoryboardGenStatus(c *gin.Context) {
-	taskID := c.Param("task_id")
-	task, err := h.taskSvc.Get(taskID)
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "task not found")
-		return
-	}
-	respondOK(c, task)
-}
-
 // shotWithAudio 在分镜基础上增加可直接播放的 audio_url 字段
 type shotWithAudio struct {
 	*model.StoryboardShot
@@ -299,8 +287,9 @@ func resolveAudioURL(videoID uint, shot *model.StoryboardShot) string {
 	return shot.AudioPath
 }
 
-// ReviewStoryboard 对分镜脚本进行 AI 专业审查
+// ReviewStoryboard 对分镜脚本进行 AI 专业审查（异步任务）
 // POST /api/v1/videos/:id/storyboard/review
+// 立即返回 202 + task_id，轮询 GET /:id/storyboard/review/:task_id 获取结果
 func (h *VideoHandler) ReviewStoryboard(c *gin.Context) {
 	videoId, err := strconv.ParseUint(c.Param("id"), 10, 32)
 	if err != nil {
@@ -316,13 +305,36 @@ func (h *VideoHandler) ReviewStoryboard(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req) // 可选 body
 
-	review, err := h.storyboardService.ReviewStoryboard(getTenantID(c), uint(videoId), req.Provider)
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeStoryboardReview, "分镜 AI 审查", "video", uint(videoId))
 	if err != nil {
-		log.Printf("[VideoHandler] ReviewStoryboard: videoID=%d provider=%q err=%v", videoId, req.Provider, err)
-		respondErr(c, http.StatusInternalServerError, err.Error())
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	respondOK(c, review)
+
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[VideoHandler] ReviewStoryboard task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+
+		review, reviewErr := h.storyboardService.ReviewStoryboard(tenantID, uint(videoId), req.Provider)
+		if reviewErr != nil {
+			log.Printf("[VideoHandler] ReviewStoryboard task %s failed: videoID=%d err=%v", taskID, videoId, reviewErr)
+			h.taskSvc.Fail(taskID, reviewErr.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, review) //nolint:errcheck
+	}(task.TaskID)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "分镜审查任务已提交",
+		"data":    gin.H{"task_id": task.TaskID},
+	})
 }
 
 // GetStoryboard 获取分镜列表

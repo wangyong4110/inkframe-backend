@@ -384,18 +384,6 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 	respondAccepted(c, task.TaskID, "三视图生成任务已提交")
 }
 
-// GetThreeViewTaskStatus 查询三视图生成任务状态
-// GET /api/v1/characters/:id/three-view/:task_id
-func (h *CharacterHandler) GetThreeViewTaskStatus(c *gin.Context) {
-	taskID := c.Param("task_id")
-	task, err := h.taskSvc.Get(taskID)
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "task not found")
-		return
-	}
-	respondOK(c, task)
-}
-
 // UploadPortrait 上传角色肖像图片（远端 OSS 或本地存储兜底），用作三视图生成参考图
 // POST /api/v1/characters/:id/portrait/upload
 func (h *CharacterHandler) UploadPortrait(c *gin.Context) {

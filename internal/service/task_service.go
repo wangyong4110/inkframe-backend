@@ -25,6 +25,8 @@ const (
 	TaskTypeSceneAnchorExtract       = "scene_anchor_extract"
 	TaskTypeChapterSummaryBatch      = "chapter_summary_batch"
 	TaskTypeSFXGen                   = "sfx_gen"
+	TaskTypeStoryboardReview         = "storyboard_review"
+	TaskTypeImport                   = "import"
 )
 
 // TaskService manages persistent async tasks.
@@ -132,6 +134,22 @@ func (s *TaskService) Cancel(taskID string) error {
 		return nil // already terminal
 	}
 	task.Status = "cancelled"
+	return s.repo.Update(task)
+}
+
+// SetMeta updates the task's ResultJSON with arbitrary metadata without changing its status.
+// Used to expose intermediate progress data (e.g. crawl_done/total, novel_id) during polling.
+func (s *TaskService) SetMeta(taskID string, meta interface{}) error {
+	task, err := s.repo.GetByTaskID(taskID)
+	if err != nil {
+		return fmt.Errorf("task %s not found: %w", taskID, err)
+	}
+	if meta != nil {
+		b, err := json.Marshal(meta)
+		if err == nil {
+			task.ResultJSON = string(b)
+		}
+	}
 	return s.repo.Update(task)
 }
 
