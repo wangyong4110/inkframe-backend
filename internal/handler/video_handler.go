@@ -902,6 +902,37 @@ func (h *VideoHandler) BatchGenerateShotClips(c *gin.Context) {
 	})
 }
 
+// RefineShotImage POST /videos/:id/shots/:shot_id/refine-image
+// 基于用户修改建议重新生成分镜图片（同步，直接返回新图片 URL）。
+func (h *VideoHandler) RefineShotImage(c *gin.Context) {
+	_, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid video id")
+		return
+	}
+	shotID, err := strconv.ParseUint(c.Param("shot_id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid shot id")
+		return
+	}
+
+	var req struct {
+		Suggestion string `json:"suggestion"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+
+	newURL, err := h.videoService.RefineShotImage(uint(shotID), req.Suggestion)
+	if err != nil {
+		logger.Printf("[VideoHandler] RefineShotImage shot %d failed: %v", shotID, err)
+		respondErr(c, http.StatusInternalServerError, "图片重新生成失败，请重试")
+		return
+	}
+	respondOK(c, gin.H{"image_url": newURL})
+}
+
 // BatchGenerateSFX POST /videos/:id/shots/sfx
 // 为视频所有分镜批量自动生成音效（异步任务）。
 // 已有 sfx_url 的分镜自动跳过（幂等）。
@@ -1221,4 +1252,216 @@ func (h *VideoHandler) Export(c *gin.Context) {
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, result.Filename))
 	c.Header("Content-Length", strconv.Itoa(len(result.Data)))
 	c.Data(http.StatusOK, result.ContentType, result.Data)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 分镜语音段落 (VoiceSegment) 处理器
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ListVoiceSegments GET /videos/:id/shots/:shot_id/segments
+func (h *VideoHandler) ListVoiceSegments(c *gin.Context) {
+	shotID, err := strconv.ParseUint(c.Param("shot_id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid shot id")
+		return
+	}
+	segs, err := h.videoService.ListVoiceSegments(uint(shotID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, segs)
+}
+
+// AppendVoiceSegment POST /videos/:id/shots/:shot_id/segments
+func (h *VideoHandler) AppendVoiceSegment(c *gin.Context) {
+	shotID, err := strconv.ParseUint(c.Param("shot_id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid shot id")
+		return
+	}
+	var input service.VoiceSegmentInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	seg, err := h.videoService.AppendVoiceSegment(uint(shotID), input)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"code": 0, "data": seg})
+}
+
+// InsertVoiceSegment POST /videos/:id/shots/:shot_id/segments/insert
+// body: { after_seq_no: int, text, speaker, voice_id }
+func (h *VideoHandler) InsertVoiceSegment(c *gin.Context) {
+	shotID, err := strconv.ParseUint(c.Param("shot_id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid shot id")
+		return
+	}
+	var req struct {
+		AfterSeqNo int `json:"after_seq_no"`
+		service.VoiceSegmentInput
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	seg, err := h.videoService.InsertVoiceSegment(uint(shotID), req.AfterSeqNo, req.VoiceSegmentInput)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"code": 0, "data": seg})
+}
+
+// UpdateVoiceSegment PUT /videos/:id/shots/:shot_id/segments/:seg_id
+func (h *VideoHandler) UpdateVoiceSegment(c *gin.Context) {
+	segID, err := strconv.ParseUint(c.Param("seg_id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid segment id")
+		return
+	}
+	var input service.VoiceSegmentInput
+	if err := c.ShouldBindJSON(&input); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	seg, err := h.videoService.UpdateVoiceSegment(uint(segID), input)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, seg)
+}
+
+// DeleteVoiceSegment DELETE /videos/:id/shots/:shot_id/segments/:seg_id
+func (h *VideoHandler) DeleteVoiceSegment(c *gin.Context) {
+	segID, err := strconv.ParseUint(c.Param("seg_id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid segment id")
+		return
+	}
+	if err := h.videoService.DeleteVoiceSegment(uint(segID)); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, nil)
+}
+
+// GenerateSegmentVoice POST /videos/:id/shots/:shot_id/segments/:seg_id/voice
+// 为单条语音段落生成 TTS 音频（同步，完成后返回更新后的段落）
+func (h *VideoHandler) GenerateSegmentVoice(c *gin.Context) {
+	segID, err := strconv.ParseUint(c.Param("seg_id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid segment id")
+		return
+	}
+	var req struct {
+		NarrationVoice string `json:"narration_voice"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	tenantID := getTenantID(c)
+	if err := h.videoService.GenerateSegmentAudio(uint(segID), tenantID, req.NarrationVoice); err != nil {
+		logger.Printf("[VideoHandler] GenerateSegmentVoice seg %d: %v", segID, err)
+		respondErr(c, http.StatusInternalServerError, "语音生成失败，请重试")
+		return
+	}
+	seg, _ := h.videoService.GetVoiceSegment(uint(segID))
+	respondOK(c, seg)
+}
+
+// ServeSegmentAudio GET /videos/:id/shots/:shot_id/segments/:seg_id/audio
+// 提供语音段落的音频文件（file:// 本地文件直接 serve；http(s):// 重定向）
+func (h *VideoHandler) ServeSegmentAudio(c *gin.Context) {
+	segID, err := strconv.ParseUint(c.Param("seg_id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid segment id")
+		return
+	}
+	seg, err := h.videoService.GetVoiceSegment(uint(segID))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "segment not found")
+		return
+	}
+	if seg.AudioPath == "" {
+		respondErr(c, http.StatusNotFound, "no audio generated")
+		return
+	}
+	if strings.HasPrefix(seg.AudioPath, "file://") {
+		path := strings.TrimPrefix(seg.AudioPath, "file://")
+		c.Header("Content-Type", "audio/mpeg")
+		c.File(path)
+		return
+	}
+	c.Redirect(http.StatusFound, seg.AudioPath)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 分镜插入 / 复制 / 删除
+// ─────────────────────────────────────────────────────────────────────────────
+
+// InsertShot POST /videos/:id/shots/insert
+// body: { after_shot_no: int, narration, description, duration }
+func (h *VideoHandler) InsertShot(c *gin.Context) {
+	videoID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid video id")
+		return
+	}
+	var req struct {
+		AfterShotNo int     `json:"after_shot_no"`
+		Narration   string  `json:"narration"`
+		Description string  `json:"description"`
+		Duration    float64 `json:"duration"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	shot, err := h.videoService.InsertShot(uint(videoID), req.AfterShotNo, req.Narration, req.Description, req.Duration)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"code": 0, "data": shot})
+}
+
+// CopyShot POST /videos/:id/shots/:shot_id/copy
+// body: { after_shot_no?: int }  (-1 or omitted = right after source shot)
+func (h *VideoHandler) CopyShot(c *gin.Context) {
+	shotID, err := strconv.ParseUint(c.Param("shot_id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid shot id")
+		return
+	}
+	var req struct {
+		AfterShotNo int `json:"after_shot_no"`
+	}
+	req.AfterShotNo = -1 // default: right after source
+	_ = c.ShouldBindJSON(&req)
+
+	shot, err := h.videoService.CopyShotAfter(uint(shotID), req.AfterShotNo)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"code": 0, "data": shot})
+}
+
+// DeleteShot DELETE /videos/:id/shots/:shot_id
+func (h *VideoHandler) DeleteShot(c *gin.Context) {
+	shotID, err := strconv.ParseUint(c.Param("shot_id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid shot id")
+		return
+	}
+	if err := h.videoService.DeleteShot(uint(shotID)); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, nil)
 }

@@ -2159,6 +2159,7 @@ type VideoService struct {
 	sceneAnchorSvc     *SceneAnchorService
 	plotPointRepo      *repository.PlotPointRepository
 	systemSettingRepo  *repository.SystemSettingRepository
+	segmentRepo        *repository.ShotVoiceSegmentRepository
 	videoSem           chan struct{} // nil = unlimited; set via WithVideoConcurrency
 	videoSemMu         sync.RWMutex // protects videoSem replacement
 }
@@ -2190,6 +2191,11 @@ func (s *VideoService) SetVideoConcurrency(n int) {
 	} else {
 		s.videoSem = nil
 	}
+}
+
+func (s *VideoService) WithSegmentRepo(r *repository.ShotVoiceSegmentRepository) *VideoService {
+	s.segmentRepo = r
+	return s
 }
 
 func (s *VideoService) WithSceneAnchorService(svc *SceneAnchorService) *VideoService {
@@ -4242,6 +4248,296 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	}
 
 	return imageURL, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 分镜语音段落 (ShotVoiceSegment) 服务方法
+// ─────────────────────────────────────────────────────────────────────────────
+
+// VoiceSegmentInput 创建/更新语音段落时的输入
+type VoiceSegmentInput struct {
+	Text    string `json:"text"`
+	Speaker string `json:"speaker"` // 空串=旁白，非空=角色名（对白）
+	VoiceID string `json:"voice_id"` // TTS 声音 ID，空串=自动
+}
+
+// GetVoiceSegment 按 ID 获取单个语音段落
+func (s *VideoService) GetVoiceSegment(segID uint) (*model.ShotVoiceSegment, error) {
+	if s.segmentRepo == nil {
+		return nil, fmt.Errorf("segment repository not initialized")
+	}
+	return s.segmentRepo.GetByID(segID)
+}
+
+// ListVoiceSegments 获取分镜的所有语音段落
+func (s *VideoService) ListVoiceSegments(shotID uint) ([]*model.ShotVoiceSegment, error) {
+	if s.segmentRepo == nil {
+		return nil, fmt.Errorf("segment repository not initialized")
+	}
+	return s.segmentRepo.ListByShotID(shotID)
+}
+
+// AppendVoiceSegment 追加段落到分镜末尾
+func (s *VideoService) AppendVoiceSegment(shotID uint, input VoiceSegmentInput) (*model.ShotVoiceSegment, error) {
+	if s.segmentRepo == nil {
+		return nil, fmt.Errorf("segment repository not initialized")
+	}
+	maxSeq, err := s.segmentRepo.MaxSeqNo(shotID)
+	if err != nil {
+		return nil, err
+	}
+	seg := &model.ShotVoiceSegment{
+		ShotID:  shotID,
+		SeqNo:   maxSeq + 1,
+		Text:    input.Text,
+		Speaker: input.Speaker,
+		VoiceID: input.VoiceID,
+	}
+	return seg, s.segmentRepo.Create(seg)
+}
+
+// InsertVoiceSegment 在 afterSeqNo 之后插入新段落（afterSeqNo=0 表示插入到最前）
+func (s *VideoService) InsertVoiceSegment(shotID uint, afterSeqNo int, input VoiceSegmentInput) (*model.ShotVoiceSegment, error) {
+	if s.segmentRepo == nil {
+		return nil, fmt.Errorf("segment repository not initialized")
+	}
+	newSeqNo := afterSeqNo + 1
+	// 把 seq_no >= newSeqNo 的段落全部后移 1 位
+	if err := s.segmentRepo.ShiftSeqNos(shotID, newSeqNo); err != nil {
+		return nil, err
+	}
+	seg := &model.ShotVoiceSegment{
+		ShotID:  shotID,
+		SeqNo:   newSeqNo,
+		Text:    input.Text,
+		Speaker: input.Speaker,
+		VoiceID: input.VoiceID,
+	}
+	return seg, s.segmentRepo.Create(seg)
+}
+
+// UpdateVoiceSegment 更新段落文本/说话人/声音
+func (s *VideoService) UpdateVoiceSegment(segID uint, input VoiceSegmentInput) (*model.ShotVoiceSegment, error) {
+	if s.segmentRepo == nil {
+		return nil, fmt.Errorf("segment repository not initialized")
+	}
+	seg, err := s.segmentRepo.GetByID(segID)
+	if err != nil {
+		return nil, err
+	}
+	seg.Text = input.Text
+	seg.Speaker = input.Speaker
+	seg.VoiceID = input.VoiceID
+	return seg, s.segmentRepo.Update(seg)
+}
+
+// DeleteVoiceSegment 删除段落并将后续段落 seq_no 前移（保持连续）
+func (s *VideoService) DeleteVoiceSegment(segID uint) error {
+	if s.segmentRepo == nil {
+		return fmt.Errorf("segment repository not initialized")
+	}
+	seg, err := s.segmentRepo.GetByID(segID)
+	if err != nil {
+		return err
+	}
+	if err := s.segmentRepo.Delete(segID); err != nil {
+		return err
+	}
+	return s.segmentRepo.CompactSeqNosAfter(seg.ShotID, seg.SeqNo)
+}
+
+// GenerateSegmentAudio 为单条语音段落生成 TTS 音频
+func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVoice string) error {
+	if s.segmentRepo == nil {
+		return fmt.Errorf("segment repository not initialized")
+	}
+	seg, err := s.segmentRepo.GetByID(segID)
+	if err != nil {
+		return fmt.Errorf("segment %d not found: %w", segID, err)
+	}
+	text := seg.Text
+	if text == "" {
+		return nil
+	}
+	// 确定 TTS 声音：段落级 > 角色声音查找 > 默认
+	voice := seg.VoiceID
+	speed := 1.0
+	style := ""
+	if voice == "" && seg.Speaker != "" && s.characterRepo != nil {
+		// 根据说话人名字查角色声音设置
+		// 获取 shot 所属 video 的 novelID
+		if shot, err := s.storyboardRepo.GetByID(seg.ShotID); err == nil {
+			if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil && video.NovelID > 0 {
+				if chars, err := s.characterRepo.ListByNovel(video.NovelID); err == nil {
+					for _, c := range chars {
+						if strings.EqualFold(c.Name, seg.Speaker) {
+							voice = c.VoiceID
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+	if voice == "" {
+		voice = defaultVoice
+	}
+	if voice == "" {
+		voice = "alloy"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	audioURL, err := s.aiService.AudioGenerateWithOptions(ctx, tenantID, text, voice, speed, style)
+	if err != nil {
+		return fmt.Errorf("TTS failed for segment %d: %w", segID, err)
+	}
+	if audioURL == "" {
+		return fmt.Errorf("TTS returned empty URL for segment %d", segID)
+	}
+
+	// 上传到持久存储（如果配置了 storageSvc）
+	if s.storageSvc != nil {
+		var data []byte
+		if strings.HasPrefix(audioURL, "file://") {
+			data, err = os.ReadFile(strings.TrimPrefix(audioURL, "file://"))
+		} else {
+			resp, e := http.Get(audioURL) //nolint:gosec
+			if e == nil {
+				defer resp.Body.Close()
+				data, err = io.ReadAll(resp.Body)
+			} else {
+				err = e
+			}
+		}
+		if err == nil && len(data) > 0 {
+			key := fmt.Sprintf("segments/seg-%d.mp3", segID)
+			if ossURL, e := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(data), int64(len(data)), "audio/mpeg"); e == nil {
+				if strings.HasPrefix(audioURL, "file://") {
+					os.Remove(strings.TrimPrefix(audioURL, "file://")) //nolint:errcheck
+				}
+				audioURL = ossURL
+			}
+		}
+	}
+
+	s.segmentRepo.UpdateFields(segID, map[string]interface{}{"audio_path": audioURL}) //nolint:errcheck
+	return nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 分镜插入 / 复制 / 删除
+// ─────────────────────────────────────────────────────────────────────────────
+
+// InsertShot 在 afterShotNo 之后插入一个空分镜（afterShotNo=0 表示插入到最前）
+func (s *VideoService) InsertShot(videoID uint, afterShotNo int, narration, description string, duration float64) (*model.StoryboardShot, error) {
+	newShotNo := afterShotNo + 1
+	// 后移所有 shot_no >= newShotNo 的分镜
+	if err := s.storyboardRepo.ShiftShotNos(videoID, newShotNo, 1); err != nil {
+		return nil, fmt.Errorf("shift shot numbers: %w", err)
+	}
+	if duration <= 0 {
+		duration = 5.0
+	}
+	shot := &model.StoryboardShot{
+		VideoID:     videoID,
+		ShotNo:      newShotNo,
+		UUID:        uuid.New().String(),
+		Narration:   narration,
+		Description: description,
+		Duration:    duration,
+		CameraType:  "static",
+		CameraAngle: "eye_level",
+		ShotSize:    "medium",
+		Transition:  "cut",
+		Status:      "pending",
+	}
+	return shot, s.storyboardRepo.Create(shot)
+}
+
+// CopyShotAfter 复制分镜，插入到 afterShotNo 之后（afterShotNo=0 → 复制到最前；afterShotNo=-1 → 紧接源分镜之后）
+func (s *VideoService) CopyShotAfter(sourceShotID uint, afterShotNo int) (*model.StoryboardShot, error) {
+	src, err := s.storyboardRepo.GetByID(sourceShotID)
+	if err != nil {
+		return nil, fmt.Errorf("source shot not found: %w", err)
+	}
+	if afterShotNo < 0 {
+		afterShotNo = src.ShotNo // 紧接在原分镜之后
+	}
+	newShotNo := afterShotNo + 1
+	if err := s.storyboardRepo.ShiftShotNos(src.VideoID, newShotNo, 1); err != nil {
+		return nil, fmt.Errorf("shift shot numbers: %w", err)
+	}
+	shot := &model.StoryboardShot{
+		VideoID:           src.VideoID,
+		ChapterID:         src.ChapterID,
+		ShotNo:            newShotNo,
+		UUID:              uuid.New().String(),
+		Description:       src.Description,
+		Narration:         src.Narration,
+		Dialogue:          src.Dialogue,
+		Subtitle:          src.Subtitle,
+		CameraType:        src.CameraType,
+		CameraAngle:       src.CameraAngle,
+		ShotSize:          src.ShotSize,
+		Duration:          src.Duration,
+		EmotionalTone:     src.EmotionalTone,
+		Transition:        src.Transition,
+		Characters:        src.Characters,
+		Scene:             src.Scene,
+		Prompt:            src.Prompt,
+		NegativePrompt:    src.NegativePrompt,
+		SceneAnchorID:     src.SceneAnchorID,
+		CharacterIDs:      src.CharacterIDs,
+		GenerationMode:    src.GenerationMode,
+		// ImageURL and VideoURL intentionally NOT copied — copied shot starts fresh
+		Status: "pending",
+	}
+	return shot, s.storyboardRepo.Create(shot)
+}
+
+// DeleteShot 删除单个分镜并将后续分镜 shot_no 前移（保持连续）
+func (s *VideoService) DeleteShot(shotID uint) error {
+	shot, err := s.storyboardRepo.GetByID(shotID)
+	if err != nil {
+		return fmt.Errorf("shot %d not found: %w", shotID, err)
+	}
+	if err := s.storyboardRepo.Delete(shotID); err != nil {
+		return err
+	}
+	return s.storyboardRepo.CompactShotNosAfter(shot.VideoID, shot.ShotNo)
+}
+
+// RefineShotImage 基于用户修改建议重新生成分镜图片。
+// suggestion 追加到原有 Prompt/Description 后，角色参考图查找逻辑保持不变。
+// 成功后自动更新 DB 中的 ImageURL 并返回新 URL。
+func (s *VideoService) RefineShotImage(shotID uint, suggestion string) (string, error) {
+	shot, err := s.storyboardRepo.GetByID(shotID)
+	if err != nil {
+		return "", fmt.Errorf("shot %d not found: %w", shotID, err)
+	}
+
+	// 构建含修改建议的提示词（操作副本，不改 DB 原始字段）
+	shotCopy := *shot
+	basePrompt := shot.Prompt
+	if basePrompt == "" {
+		basePrompt = shot.Description
+	}
+	if suggestion != "" {
+		shotCopy.Prompt = basePrompt + ". Modification: " + suggestion
+	} else {
+		shotCopy.Prompt = basePrompt
+	}
+
+	newURL, err := s.generateShotReferenceImage(&shotCopy)
+	if err != nil {
+		return "", fmt.Errorf("refine image for shot %d: %w", shotID, err)
+	}
+
+	// 持久化新图片 URL
+	s.storyboardRepo.UpdateFields(shotID, map[string]interface{}{"image_url": newURL}) //nolint:errcheck
+	return newURL, nil
 }
 
 // resolveArtStyle 返回视频的画面风格：优先用 video.ArtStyle，降级到 novel.ImageStyle

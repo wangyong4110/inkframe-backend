@@ -96,6 +96,7 @@ func main() {
 	services.VideoService.WithStorage(storageSvc)
 	services.AIService.WithStorage(storageSvc)
 	services.VideoService.WithSceneAnchorService(services.SceneAnchorService)
+	services.VideoService.WithSegmentRepo(repos.ShotVoiceSegmentRepo)
 	services.NovelImportService.WithStorage(storageSvc).WithAnalysisService(services.NovelAnalysisService).WithAIService(services.AIService)
 
 	// SFX 音效服务（三层降级：本地库 → Freesound → ElevenLabs）
@@ -695,7 +696,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-05-v3"
+const schemaVersion = "2026-05-06-v1"
 
 // autoMigrate 自动迁移（带版本跳过优化）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -763,6 +764,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.SceneAnchor{},
 		&model.SceneConsistencyLog{},
 		&model.SystemSetting{},
+		&model.ShotVoiceSegment{},
 	); err != nil {
 		return err
 	}
@@ -976,6 +978,7 @@ type Repositories struct {
 	SceneAnchorRepo         *repository.SceneAnchorRepository
 	SceneConsistencyLogRepo *repository.SceneConsistencyLogRepository
 	SystemSettingRepo       *repository.SystemSettingRepository
+	ShotVoiceSegmentRepo    *repository.ShotVoiceSegmentRepository
 }
 
 // initRepositories 初始化仓库层
@@ -1010,6 +1013,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		SceneAnchorRepo:         repository.NewSceneAnchorRepository(db),
 		SceneConsistencyLogRepo: repository.NewSceneConsistencyLogRepository(db),
 		SystemSettingRepo:       repository.NewSystemSettingRepository(db),
+		ShotVoiceSegmentRepo:    repository.NewShotVoiceSegmentRepository(db),
 	}
 }
 

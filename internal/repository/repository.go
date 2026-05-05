@@ -959,6 +959,101 @@ func (r *StoryboardRepository) DeleteByVideoID(videoID uint) error {
 	return r.db.Unscoped().Where("video_id = ?", videoID).Delete(&model.StoryboardShot{}).Error
 }
 
+// Delete 硬删除单个分镜
+func (r *StoryboardRepository) Delete(shotID uint) error {
+	return r.db.Unscoped().Delete(&model.StoryboardShot{}, shotID).Error
+}
+
+// MaxShotNo 返回视频中最大的 shot_no（无分镜时返回 0）
+func (r *StoryboardRepository) MaxShotNo(videoID uint) (int, error) {
+	var max int
+	err := r.db.Model(&model.StoryboardShot{}).
+		Where("video_id = ? AND deleted_at IS NULL", videoID).
+		Select("COALESCE(MAX(shot_no), 0)").Scan(&max).Error
+	return max, err
+}
+
+// ShiftShotNos 将 video_id 下所有 shot_no >= fromShotNo 的分镜的 shot_no 加 delta（delta 通常为 1）
+func (r *StoryboardRepository) ShiftShotNos(videoID uint, fromShotNo, delta int) error {
+	return r.db.Exec(
+		"UPDATE ink_storyboard_shot SET shot_no = shot_no + ? WHERE video_id = ? AND shot_no >= ? AND deleted_at IS NULL",
+		delta, videoID, fromShotNo,
+	).Error
+}
+
+// CompactShotNosAfter 将 video_id 下 shot_no > deletedShotNo 的分镜 shot_no 减 1（删除后紧凑化）
+func (r *StoryboardRepository) CompactShotNosAfter(videoID uint, deletedShotNo int) error {
+	return r.db.Exec(
+		"UPDATE ink_storyboard_shot SET shot_no = shot_no - 1 WHERE video_id = ? AND shot_no > ? AND deleted_at IS NULL",
+		videoID, deletedShotNo,
+	).Error
+}
+
+// ShotVoiceSegmentRepository 分镜语音段落仓库
+type ShotVoiceSegmentRepository struct {
+	db *gorm.DB
+}
+
+func NewShotVoiceSegmentRepository(db *gorm.DB) *ShotVoiceSegmentRepository {
+	return &ShotVoiceSegmentRepository{db: db}
+}
+
+// ListByShotID 获取分镜的所有语音段落，按 seq_no 升序
+func (r *ShotVoiceSegmentRepository) ListByShotID(shotID uint) ([]*model.ShotVoiceSegment, error) {
+	var segs []*model.ShotVoiceSegment
+	err := r.db.Where("shot_id = ?", shotID).Order("seq_no ASC").Find(&segs).Error
+	return segs, err
+}
+
+func (r *ShotVoiceSegmentRepository) GetByID(id uint) (*model.ShotVoiceSegment, error) {
+	var seg model.ShotVoiceSegment
+	if err := r.db.First(&seg, id).Error; err != nil {
+		return nil, err
+	}
+	return &seg, nil
+}
+
+func (r *ShotVoiceSegmentRepository) Create(seg *model.ShotVoiceSegment) error {
+	return r.db.Create(seg).Error
+}
+
+func (r *ShotVoiceSegmentRepository) Update(seg *model.ShotVoiceSegment) error {
+	return r.db.Save(seg).Error
+}
+
+func (r *ShotVoiceSegmentRepository) UpdateFields(id uint, fields map[string]interface{}) error {
+	return r.db.Model(&model.ShotVoiceSegment{}).Where("id = ?", id).Updates(fields).Error
+}
+
+func (r *ShotVoiceSegmentRepository) Delete(id uint) error {
+	return r.db.Unscoped().Delete(&model.ShotVoiceSegment{}, id).Error
+}
+
+// MaxSeqNo 返回分镜中最大的 seq_no（无段落时返回 0）
+func (r *ShotVoiceSegmentRepository) MaxSeqNo(shotID uint) (int, error) {
+	var max int
+	err := r.db.Model(&model.ShotVoiceSegment{}).
+		Where("shot_id = ? AND deleted_at IS NULL", shotID).
+		Select("COALESCE(MAX(seq_no), 0)").Scan(&max).Error
+	return max, err
+}
+
+// ShiftSeqNos 将 shot_id 下所有 seq_no >= fromSeqNo 的段落的 seq_no 加 1（为插入腾出位置）
+func (r *ShotVoiceSegmentRepository) ShiftSeqNos(shotID uint, fromSeqNo int) error {
+	return r.db.Exec(
+		"UPDATE ink_shot_voice_segment SET seq_no = seq_no + 1 WHERE shot_id = ? AND seq_no >= ? AND deleted_at IS NULL",
+		shotID, fromSeqNo,
+	).Error
+}
+
+// CompactSeqNosAfter 将 shot_id 下 seq_no > deletedSeqNo 的段落 seq_no 减 1（删除后紧凑化）
+func (r *ShotVoiceSegmentRepository) CompactSeqNosAfter(shotID uint, deletedSeqNo int) error {
+	return r.db.Exec(
+		"UPDATE ink_shot_voice_segment SET seq_no = seq_no - 1 WHERE shot_id = ? AND seq_no > ? AND deleted_at IS NULL",
+		shotID, deletedSeqNo,
+	).Error
+}
+
 // CharacterStateSnapshotRepository 角色状态快照仓库
 type CharacterStateSnapshotRepository struct {
 	db *gorm.DB

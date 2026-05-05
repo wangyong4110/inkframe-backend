@@ -900,6 +900,26 @@ func (StoryboardShot) TableName() string {
 	return "ink_storyboard_shot"
 }
 
+// ShotVoiceSegment 分镜语音段落（一个分镜可包含多条语音/字幕段落）
+type ShotVoiceSegment struct {
+	ID     uint `json:"id" gorm:"primaryKey"`
+	ShotID uint `json:"shot_id" gorm:"not null;index:idx_seg_shot_seq,priority:1"`
+	SeqNo  int  `json:"seq_no" gorm:"not null;default:1;index:idx_seg_shot_seq,priority:2"`
+
+	Text     string `json:"text" gorm:"type:text"`    // TTS 朗读文本（旁白或台词内容）
+	Speaker  string `json:"speaker" gorm:"size:100"`  // 空串=旁白，"角色名"=对白
+	VoiceID  string `json:"voice_id" gorm:"size:100"` // TTS 声音 ID（覆盖默认值）
+
+	AudioPath    string  `json:"audio_path" gorm:"size:1000"`                   // 生成的音频文件路径/URL
+	DurationSecs float64 `json:"duration_secs" gorm:"type:decimal(8,3);default:0"` // 音频时长（秒）
+
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
+}
+
+func (ShotVoiceSegment) TableName() string { return "ink_shot_voice_segment" }
+
 // QualityReport 质量报告
 type QualityReport struct {
 	ID         uint   `json:"id" gorm:"primaryKey"`
