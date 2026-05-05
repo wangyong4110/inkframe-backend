@@ -4357,6 +4357,56 @@ func (s *VideoService) DeleteVoiceSegment(segID uint) error {
 	return s.segmentRepo.CompactSeqNosAfter(seg.ShotID, seg.SeqNo)
 }
 
+// mp3Duration estimates the duration in seconds of MPEG1 Layer3 audio data by
+// counting frames. Returns 0 if the data cannot be parsed.
+func mp3Duration(data []byte) float64 {
+	if len(data) < 4 {
+		return 0
+	}
+	// Skip ID3v2 tag if present
+	offset := 0
+	if len(data) >= 10 && data[0] == 'I' && data[1] == 'D' && data[2] == '3' {
+		sz := int(data[6]&0x7F)<<21 | int(data[7]&0x7F)<<14 | int(data[8]&0x7F)<<7 | int(data[9]&0x7F)
+		offset = 10 + sz
+	}
+	bitrateTable := [16]int{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0}
+	sampleRates := [4]int{44100, 48000, 32000, 0}
+	var frames, sampleRate int
+	for i := offset; i+3 < len(data); {
+		if data[i] != 0xFF || (data[i+1]&0xE0) != 0xE0 {
+			i++
+			continue
+		}
+		// MPEG1 (bits 4-3 = 11) + Layer3 (bits 2-1 = 01)
+		if (data[i+1]&0x18) != 0x18 || (data[i+1]&0x06) != 0x02 {
+			i++
+			continue
+		}
+		bitrateIdx := int(data[i+2]>>4) & 0x0F
+		srIdx := int(data[i+2]>>2) & 0x03
+		padding := int(data[i+2]>>1) & 0x01
+		bitrate := bitrateTable[bitrateIdx] * 1000
+		sr := sampleRates[srIdx]
+		if bitrate == 0 || sr == 0 {
+			i++
+			continue
+		}
+		frameLen := 144*bitrate/sr + padding
+		if frameLen <= 4 || i+frameLen > len(data) {
+			break
+		}
+		frames++
+		if sampleRate == 0 {
+			sampleRate = sr
+		}
+		i += frameLen
+	}
+	if frames == 0 || sampleRate == 0 {
+		return 0
+	}
+	return float64(frames) * 1152.0 / float64(sampleRate)
+}
+
 // GenerateSegmentAudio 为单条语音段落生成 TTS 音频
 func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVoice string) error {
 	if s.segmentRepo == nil {
@@ -4408,32 +4458,39 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 		return fmt.Errorf("TTS returned empty URL for segment %d", segID)
 	}
 
-	// 上传到持久存储（如果配置了 storageSvc）
-	if s.storageSvc != nil {
-		var data []byte
-		if strings.HasPrefix(audioURL, "file://") {
-			data, err = os.ReadFile(strings.TrimPrefix(audioURL, "file://"))
+	// Download audio bytes (needed for OSS upload and duration calculation)
+	var audioData []byte
+	if strings.HasPrefix(audioURL, "file://") {
+		audioData, err = os.ReadFile(strings.TrimPrefix(audioURL, "file://"))
+	} else {
+		if resp, e := http.Get(audioURL); e == nil { //nolint:gosec
+			audioData, err = io.ReadAll(resp.Body)
+			resp.Body.Close()
 		} else {
-			resp, e := http.Get(audioURL) //nolint:gosec
-			if e == nil {
-				defer resp.Body.Close()
-				data, err = io.ReadAll(resp.Body)
-			} else {
-				err = e
-			}
+			err = e
 		}
-		if err == nil && len(data) > 0 {
-			key := fmt.Sprintf("segments/seg-%d.mp3", segID)
-			if ossURL, e := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(data), int64(len(data)), "audio/mpeg"); e == nil {
-				if strings.HasPrefix(audioURL, "file://") {
-					os.Remove(strings.TrimPrefix(audioURL, "file://")) //nolint:errcheck
-				}
-				audioURL = ossURL
+	}
+	if err != nil {
+		logger.Printf("warn: could not read audio for segment %d: %v", segID, err)
+	}
+
+	// 上传到持久存储（如果配置了 storageSvc）
+	if s.storageSvc != nil && len(audioData) > 0 {
+		key := fmt.Sprintf("segments/seg-%d.mp3", segID)
+		if ossURL, e := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(audioData), int64(len(audioData)), "audio/mpeg"); e == nil {
+			if strings.HasPrefix(audioURL, "file://") {
+				os.Remove(strings.TrimPrefix(audioURL, "file://")) //nolint:errcheck
 			}
+			audioURL = ossURL
 		}
 	}
 
-	s.segmentRepo.UpdateFields(segID, map[string]interface{}{"audio_path": audioURL}) //nolint:errcheck
+	// Persist audio path + measured duration
+	fields := map[string]interface{}{"audio_path": audioURL}
+	if d := mp3Duration(audioData); d > 0 {
+		fields["duration_secs"] = d
+	}
+	s.segmentRepo.UpdateFields(segID, fields) //nolint:errcheck
 	return nil
 }
 
