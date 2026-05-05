@@ -265,7 +265,12 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 			logger.Printf("[VideoHandler] GenerateStoryboard task %s failed: %v", taskID, err)
 			return
 		}
-		h.taskSvc.Complete(taskID, result) //nolint:errcheck
+		// 只存 shot_count，不把完整分镜数组写入 result 列（JSON 可能超出 TEXT 65KB 限制导致 Update 失败，任务永远卡在 99%）
+		var shotCount int
+		if shots, ok := result.([]*model.StoryboardShot); ok {
+			shotCount = len(shots)
+		}
+		h.taskSvc.Complete(taskID, gin.H{"shot_count": shotCount}) //nolint:errcheck
 	}(task.TaskID)
 
 	c.JSON(http.StatusAccepted, gin.H{

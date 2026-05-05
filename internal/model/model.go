@@ -49,7 +49,7 @@ type AsyncTask struct {
 	Title      string         `json:"title" gorm:"size:255"`
 	EntityType string         `json:"entity_type" gorm:"size:50"`
 	EntityID   uint           `json:"entity_id" gorm:"index"`
-	ResultJSON string         `json:"-" gorm:"column:result;type:text"`
+	ResultJSON string         `json:"-" gorm:"column:result;type:mediumtext"` // mediumtext 支持 16MB，避免大结果超 text 65KB 限制
 	Error      string         `json:"error,omitempty" gorm:"type:text"`
 	Progress   int            `json:"progress" gorm:"default:0"`
 	CreatedAt  time.Time      `json:"created_at"`
@@ -138,7 +138,7 @@ type Novel struct {
 	Temperature    float64 `json:"temperature" gorm:"type:decimal(3,2);default:0.7"`
 	TopP           float64 `json:"top_p" gorm:"type:decimal(3,2);default:0.9"`
 	TopK           int     `json:"top_k" gorm:"default:40"`
-	MaxTokens      int     `json:"max_tokens" gorm:"default:4096"`
+	MaxTokens      int     `json:"max_tokens" gorm:"default:0"` // 0=不限制，由模型自身决定
 	TimeoutSeconds int     `json:"timeout_seconds" gorm:"default:0"` // 0=使用系统默认(300s)
 	StylePrompt    string  `json:"style_prompt" gorm:"type:text"`
 
