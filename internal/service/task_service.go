@@ -26,6 +26,7 @@ const (
 	TaskTypeChapterSummaryBatch      = "chapter_summary_batch"
 	TaskTypeSFXGen                   = "sfx_gen"
 	TaskTypeStoryboardReview         = "storyboard_review"
+	TaskTypeStoryboardOptimize       = "storyboard_optimize"
 	TaskTypeImport                   = "import"
 	TaskTypeNovelAnalysis            = "novel_analysis"
 )
@@ -171,6 +172,14 @@ func (s *TaskService) List(tenantID uint, taskType, status string, page, pageSiz
 		pageSize = 20
 	}
 	return s.repo.ListByTenant(tenantID, taskType, status, page, pageSize)
+}
+
+// CancelActiveByEntity cancels all pending/running tasks of the given type for an entity.
+// Used before creating a replacement task; cancelled status makes goroutine Complete/Fail no-ops.
+func (s *TaskService) CancelActiveByEntity(entityType string, entityID uint, taskType string) {
+	if err := s.repo.CancelActiveByEntity(entityType, entityID, taskType); err != nil {
+		logger.Printf("TaskService: CancelActiveByEntity %s/%d/%s: %v", entityType, entityID, taskType, err)
+	}
 }
 
 // recoverOrphaned marks tasks stuck in pending/running as failed if not updated within `age`.

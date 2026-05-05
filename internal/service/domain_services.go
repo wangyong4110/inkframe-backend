@@ -2160,6 +2160,11 @@ func (s *StoryboardService) ReviewStoryboard(tenantID, videoID uint, provider st
 	return s.videoService.ReviewStoryboard(tenantID, videoID, provider)
 }
 
+// OptimizeStoryboardFromReview 根据审查报告一键优化分镜
+func (s *StoryboardService) OptimizeStoryboardFromReview(tenantID, videoID uint, review *model.StoryboardReview, provider string) (int, error) {
+	return s.videoService.OptimizeStoryboardFromReview(tenantID, videoID, review, provider)
+}
+
 func (s *StoryboardService) AnalyzeEmotions(content string) (interface{}, error) {
 	prompt := fmt.Sprintf("请分析以下内容的情感曲线：\n%s", content)
 	result, err := s.aiService.Generate(0, "analysis", prompt)

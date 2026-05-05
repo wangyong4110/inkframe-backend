@@ -67,3 +67,16 @@ func (r *TaskRepository) MarkStaleRunning(before time.Time) (int64, error) {
 		})
 	return result.RowsAffected, result.Error
 }
+
+// CancelActiveByEntity cancels all pending/running tasks of the given type for a specific
+// entity. Used before creating a replacement task to let zombie goroutines exit gracefully
+// (Complete/Fail are no-ops once status is "cancelled").
+func (r *TaskRepository) CancelActiveByEntity(entityType string, entityID uint, taskType string) error {
+	return r.db.Model(&model.AsyncTask{}).
+		Where("entity_type = ? AND entity_id = ? AND type = ? AND status IN ?",
+			entityType, entityID, taskType, []string{"pending", "running"}).
+		Updates(map[string]interface{}{
+			"status": "cancelled",
+			"error":  "已被新任务取代",
+		}).Error
+}

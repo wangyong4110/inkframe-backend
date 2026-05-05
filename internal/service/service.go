@@ -3291,6 +3291,193 @@ func parseStoryboardReview(result string) (*model.StoryboardReview, error) {
 	return &review, nil
 }
 
+// OptimizeStoryboardFromReview 根据 AI 审查报告一键优化分镜。
+// 将当前分镜 + 全局建议 + 逐镜反馈发送给 AI，AI 返回需要修改的镜头列表，
+// 逐个调用 UpdateShotPartial 落库。返回实际修改的镜头数。
+func (s *VideoService) OptimizeStoryboardFromReview(tenantID, videoID uint, review *model.StoryboardReview, provider string) (int, error) {
+	shots, err := s.storyboardRepo.ListByVideo(videoID)
+	if err != nil {
+		return 0, fmt.Errorf("获取分镜失败: %w", err)
+	}
+	if len(shots) == 0 {
+		return 0, fmt.Errorf("该视频暂无分镜")
+	}
+	if len(review.GlobalSuggestions) == 0 && len(review.ShotFeedback) == 0 {
+		return 0, fmt.Errorf("审查报告中无改进建议")
+	}
+
+	var novelID uint
+	if video, err := s.videoRepo.GetByID(videoID); err == nil {
+		novelID = video.NovelID
+	}
+
+	prompt := buildStoryboardOptimizePrompt(shots, review)
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "storyboard_optimize", prompt, provider)
+	if err != nil {
+		return 0, fmt.Errorf("AI优化失败: %w", err)
+	}
+
+	updates, err := parseOptimizedShots(result)
+	if err != nil {
+		return 0, fmt.Errorf("优化结果解析失败: %w", err)
+	}
+
+	// 建立 shot_no → ID 索引
+	shotIndex := make(map[int]uint, len(shots))
+	for _, sh := range shots {
+		shotIndex[sh.ShotNo] = sh.ID
+	}
+
+	applied := 0
+	for _, upd := range updates {
+		id, ok := shotIndex[upd.ShotNo]
+		if !ok {
+			logger.Printf("OptimizeStoryboardFromReview: unknown shot_no %d, skipping", upd.ShotNo)
+			continue
+		}
+		fields := upd.toFieldMap()
+		if len(fields) == 0 {
+			continue
+		}
+		if _, err := s.UpdateShotPartial(id, fields); err != nil {
+			logger.Printf("OptimizeStoryboardFromReview: UpdateShotPartial shot_no=%d: %v", upd.ShotNo, err)
+			continue
+		}
+		applied++
+	}
+	return applied, nil
+}
+
+// shotOptimizeUpdate 是 AI 返回的单镜优化结果（仅含需要修改的字段）。
+type shotOptimizeUpdate struct {
+	ShotNo        int     `json:"shot_no"`
+	Description   string  `json:"description,omitempty"`
+	Narration     string  `json:"narration,omitempty"`
+	Dialogue      string  `json:"dialogue,omitempty"`
+	CameraType    string  `json:"camera_type,omitempty"`
+	CameraAngle   string  `json:"camera_angle,omitempty"`
+	ShotSize      string  `json:"shot_size,omitempty"`
+	Duration      float64 `json:"duration,omitempty"`
+	EmotionalTone string  `json:"emotional_tone,omitempty"`
+	Transition    string  `json:"transition,omitempty"`
+}
+
+func (u shotOptimizeUpdate) toFieldMap() map[string]interface{} {
+	m := make(map[string]interface{})
+	if u.Description != "" {
+		m["description"] = u.Description
+	}
+	if u.Narration != "" {
+		m["narration"] = u.Narration
+	}
+	if u.Dialogue != "" {
+		m["dialogue"] = u.Dialogue
+	}
+	if u.CameraType != "" {
+		m["camera_type"] = u.CameraType
+	}
+	if u.CameraAngle != "" {
+		m["camera_angle"] = u.CameraAngle
+	}
+	if u.ShotSize != "" {
+		m["shot_size"] = u.ShotSize
+	}
+	if u.Duration > 0 {
+		m["duration"] = u.Duration
+	}
+	if u.EmotionalTone != "" {
+		m["emotional_tone"] = u.EmotionalTone
+	}
+	if u.Transition != "" {
+		m["transition"] = u.Transition
+	}
+	return m
+}
+
+// buildStoryboardOptimizePrompt 构建分镜优化提示词
+func buildStoryboardOptimizePrompt(shots []*model.StoryboardShot, review *model.StoryboardReview) string {
+	var sb strings.Builder
+
+	sb.WriteString(fmt.Sprintf("你是专业分镜优化师。以下是%d个分镜和AI审查报告，请根据改进建议优化分镜，只输出需要修改的镜头。\n\n", len(shots)))
+
+	sb.WriteString("【当前分镜】\n")
+	for _, sh := range shots {
+		narr := sh.Narration
+		if len([]rune(narr)) > 60 {
+			narr = string([]rune(narr)[:60]) + "…"
+		}
+		desc := sh.Description
+		if len([]rune(desc)) > 60 {
+			desc = string([]rune(desc)[:60]) + "…"
+		}
+		sb.WriteString(fmt.Sprintf("[镜%d] 景别:%s 时长:%.0fs 镜头:%s/%s",
+			sh.ShotNo, sh.ShotSize, sh.Duration, sh.CameraType, sh.CameraAngle))
+		if desc != "" {
+			sb.WriteString(fmt.Sprintf(" 描述:\"%s\"", desc))
+		}
+		if narr != "" {
+			sb.WriteString(fmt.Sprintf(" 旁白:\"%s\"", narr))
+		}
+		sb.WriteString("\n")
+	}
+
+	if len(review.GlobalSuggestions) > 0 {
+		sb.WriteString("\n【整体改进建议】\n")
+		for _, s := range review.GlobalSuggestions {
+			sb.WriteString("- " + s + "\n")
+		}
+	}
+
+	if len(review.ShotFeedback) > 0 {
+		sb.WriteString("\n【逐镜问题反馈】\n")
+		for _, fb := range review.ShotFeedback {
+			sb.WriteString(fmt.Sprintf("[镜%d] 严重度:%s\n", fb.ShotNo, fb.Severity))
+			for _, issue := range fb.Issues {
+				sb.WriteString("  问题: " + issue + "\n")
+			}
+			if fb.Suggestion != "" {
+				sb.WriteString("  建议: " + fb.Suggestion + "\n")
+			}
+		}
+	}
+
+	sb.WriteString(`
+【输出要求】
+- 只输出需要修改的镜头，无需修改的镜头不要输出
+- 每个字段只有在有实质性改动时才输出，不改的字段不要输出
+- description 用英文，其余字段用中文
+- camera_type 取值: static/pan/zoom/tracking/dolly
+- camera_angle 取值: eye_level/low/high/dutch
+- shot_size 取值: wide/medium/close_up/extreme_close_up
+- transition 取值: cut/fade/dissolve/wipe
+- duration 单位为秒（数字）
+
+返回 JSON，不包含 markdown 代码块：
+{
+  "optimized_shots": [
+    {
+      "shot_no": 3,
+      "narration": "改进后的旁白",
+      "camera_type": "pan"
+    }
+  ]
+}`)
+
+	return sb.String()
+}
+
+// parseOptimizedShots 解析 AI 返回的优化镜头列表
+func parseOptimizedShots(result string) ([]shotOptimizeUpdate, error) {
+	cleaned := extractJSON(result)
+	var resp struct {
+		OptimizedShots []shotOptimizeUpdate `json:"optimized_shots"`
+	}
+	if err := json.Unmarshal([]byte(cleaned), &resp); err != nil {
+		return nil, fmt.Errorf("%w; AI原始响应(前300字符): %.300s", err, result)
+	}
+	return resp.OptimizedShots, nil
+}
+
 // GetShot 根据 ID 获取单个分镜
 func (s *VideoService) GetShot(id uint) (*model.StoryboardShot, error) {
 	return s.storyboardRepo.GetByID(id)

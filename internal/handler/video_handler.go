@@ -238,6 +238,10 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
+	// 若该视频已有 pending/running 的分镜生成任务，先将其标记为 cancelled，
+	// 让僵尸 goroutine 的 Complete/Fail 调用自动变 no-op，避免状态污染。
+	h.taskSvc.CancelActiveByEntity("video", uint(videoId), service.TaskTypeStoryboardGen)
+
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeStoryboardGen, "分镜脚本生成", "video", uint(videoId))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
@@ -457,6 +461,67 @@ func (h *VideoHandler) SetShotCharacters(c *gin.Context) {
 		return
 	}
 	respondOK(c, nil)
+}
+
+// OptimizeStoryboardFromReview 根据 AI 审查报告一键优化分镜（异步任务）
+// POST /api/v1/videos/:id/storyboard/optimize-from-review
+// Body: StoryboardReview JSON（由 review 任务结果直接透传）+ 可选 provider
+func (h *VideoHandler) OptimizeStoryboardFromReview(c *gin.Context) {
+	videoID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid video id")
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
+
+	var req struct {
+		model.StoryboardReview
+		Provider string `json:"provider"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "request body must contain a valid StoryboardReview: "+err.Error())
+		return
+	}
+	if len(req.GlobalSuggestions) == 0 && len(req.ShotFeedback) == 0 {
+		respondBadRequest(c, "审查报告中无改进建议，无需优化")
+		return
+	}
+
+	tenantID := getTenantID(c)
+	h.taskSvc.CancelActiveByEntity("video", uint(videoID), service.TaskTypeStoryboardOptimize)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeStoryboardOptimize, "分镜一键优化", "video", uint(videoID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+
+	review := req.StoryboardReview
+	provider := req.Provider
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[VideoHandler] OptimizeStoryboardFromReview task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+
+		count, optErr := h.storyboardService.OptimizeStoryboardFromReview(tenantID, uint(videoID), &review, provider)
+		if optErr != nil {
+			logger.Printf("[VideoHandler] OptimizeStoryboardFromReview task %s failed: %v", taskID, optErr)
+			h.taskSvc.Fail(taskID, optErr.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, gin.H{"updated_shots": count}) //nolint:errcheck
+	}(task.TaskID)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "分镜优化任务已提交",
+		"data":    gin.H{"task_id": task.TaskID},
+	})
 }
 
 // AnalyzeEmotions 情感分析
