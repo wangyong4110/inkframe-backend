@@ -209,7 +209,7 @@ func initDatabase(cfg *config.Config) (*gorm.DB, error) {
 		log.New(os.Stdout, "\r\n", log.LstdFlags),
 		gormlogger.Config{
 			SlowThreshold:             200 * time.Millisecond,
-			LogLevel:                  gormlogger.Info,
+			LogLevel:                  gormlogger.Warn, // Warn: 仅打印慢查询和错误，不打印普通 SELECT
 			IgnoreRecordNotFoundError: true,
 			Colorful:                  true,
 		},

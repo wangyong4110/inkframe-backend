@@ -3446,6 +3446,12 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 		}
 	}
 
+	mode := video.Mode
+	if mode == "" {
+		mode = "video"
+	}
+	logger.Printf("BatchGenerateShots: videoID=%d total=%d mode=%s provider=%s aspectRatio=%s", videoID, len(shotIDs), mode, effectiveProvider, aspectRatio)
+
 	var queued []*model.StoryboardShot
 	sem := make(chan struct{}, maxConcurrentShots)
 	var wg sync.WaitGroup
@@ -3469,11 +3475,14 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 			defer func() {
 				<-sem
 				wg.Done()
+				n := int(done.Add(1))
 				if progressFn != nil && total > 0 {
-					pct := int(done.Add(1)) * 99 / total
+					pct := n * 99 / total
 					progressFn(pct)
 				}
+				logger.Printf("BatchGenerateShots: shot %d done (%d/%d)", sh.ShotNo, n, total)
 			}()
+			logger.Printf("BatchGenerateShots: shot %d start (mode=%s)", sh.ShotNo, mode)
 			const maxRetries = 3
 			var genErr error
 			for attempt := 1; attempt <= maxRetries; attempt++ {
@@ -3492,10 +3501,13 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 			}
 			if genErr != nil {
 				logger.Printf("BatchGenerateShots: shot %d failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
+			} else {
+				logger.Printf("BatchGenerateShots: shot %d submitted successfully (taskID=%s)", sh.ShotNo, sh.ShotTaskID)
 			}
 		}(shot)
 	}
 	wg.Wait()
+	logger.Printf("BatchGenerateShots: all %d shots done for videoID=%d", len(queued), videoID)
 	return queued, nil
 }
 
@@ -3763,12 +3775,17 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		videoAspectRatio = "16:9"
 	}
 
+	logger.Printf("GenerateShotVideo: shot %d provider=%s aspect=%s duration=%ds", shot.ShotNo, providerName, videoAspectRatio, shot.Duration)
+
 	// 始终生成角色一致性参考帧（携带角色三视图），确保批量重新生成时角色参考图不被跳过。
 	// 生成成功则覆盖 ReferenceImageURL；失败时降级使用已有的 ReferenceImageURL（非致命）。
 	referenceImage := shot.ReferenceImageURL
+	logger.Printf("GenerateShotVideo: shot %d generating reference image (charIDs=%v)", shot.ShotNo, shot.CharacterIDs)
 	frameURL, frameErr := s.generateShotReferenceImage(shot)
 	if frameErr != nil {
-		logger.Printf("GenerateVideoShot: reference image gen failed for shot %d (non-fatal): %v", shot.ShotNo, frameErr)
+		logger.Printf("GenerateShotVideo: shot %d reference image failed (non-fatal, using existing=%q): %v", shot.ShotNo, referenceImage, frameErr)
+	} else {
+		logger.Printf("GenerateShotVideo: shot %d reference image ok: %s", shot.ShotNo, frameURL)
 	}
 	if frameURL != "" {
 		shot.FrameImageURL = frameURL
@@ -3800,14 +3817,18 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		ImageURL:       referenceImage, // image-to-video（空时退化为 text-to-video）
 	}
 
+	logger.Printf("GenerateShotVideo: shot %d submitting to %s (hasRef=%v prompt=%q)", shot.ShotNo, providerName, referenceImage != "", videoPrompt)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	task, err := provider.GenerateVideo(ctx, req)
 	if err != nil {
+		logger.Printf("GenerateShotVideo: shot %d submit failed: %v", shot.ShotNo, err)
 		return fmt.Errorf("shot video generation failed: %w", err)
 	}
 
+	logger.Printf("GenerateShotVideo: shot %d submitted taskID=%s", shot.ShotNo, task.TaskID)
 	shot.ShotTaskID = task.TaskID
 	shot.ShotProviderName = providerName
 	shot.Status = "processing"
@@ -3818,6 +3839,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 	// 超时检查
 	if shot.Status == "processing" && time.Since(shot.UpdatedAt) > 30*time.Minute {
+		logger.Printf("PollShotStatus: shot %d timed out (taskID=%s), marking failed", shot.ShotNo, shot.ShotTaskID)
 		shot.Status = "failed"
 		shot.RetryCount++
 		s.storyboardRepo.Update(shot) //nolint:errcheck
@@ -3837,6 +3859,8 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 		return err
 	}
 
+	logger.Printf("PollShotStatus: shot %d taskID=%s status=%s", shot.ShotNo, shot.ShotTaskID, taskStatus.Status)
+
 	switch taskStatus.Status {
 	case "completed", "succeed":
 		videoURL, urlErr := provider.GetVideoURL(ctx, shot.ShotTaskID)
@@ -3845,11 +3869,13 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 		}
 
 		// 立即下载到本地，防止临时签名 URL 在拼接时过期
+		logger.Printf("PollShotStatus: shot %d completed, downloading clip", shot.ShotNo)
 		localClip := fmt.Sprintf("%s/inkframe-shot-%d.mp4", inkframeTempDir(), shot.ID)
 		if dlErr := downloadFile(videoURL, localClip); dlErr != nil {
 			logger.Printf("PollShotStatus: download shot %d clip failed (%v), storing URL as fallback", shot.ID, dlErr)
 			shot.ClipPath = videoURL
 		} else {
+			logger.Printf("PollShotStatus: shot %d clip saved to %s", shot.ShotNo, localClip)
 			shot.ClipPath = "file://" + localClip
 		}
 		shot.Status = "completed"
@@ -3900,11 +3926,13 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 		}
 
 	case "failed":
+		logger.Printf("PollShotStatus: shot %d failed (retry=%d)", shot.ShotNo, shot.RetryCount)
 		shot.Status = "failed"
 		shot.RetryCount++
 		if shot.RetryCount < 2 {
 			shot.Status = "pending"
 			shot.ShotTaskID = ""
+			logger.Printf("PollShotStatus: shot %d will be retried", shot.ShotNo)
 		}
 		s.storyboardRepo.Update(shot) //nolint:errcheck
 	}
@@ -3948,13 +3976,17 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 	defer cancel()
 
 	voice, speed, style := s.resolveVoiceForShot(shot, narrationVoice)
+	logger.Printf("GenerateShotAudio: shot %d voice=%s speed=%.1f style=%q text=%q", shot.ShotNo, voice, speed, style, text)
+
 	audioURL, err := s.aiService.AudioGenerateWithOptions(ctx, tenantID, text, voice, speed, style)
 	if err != nil {
+		logger.Printf("GenerateShotAudio: shot %d TTS failed: %v", shot.ShotNo, err)
 		return fmt.Errorf("TTS generation failed: %w", err)
 	}
 	if audioURL == "" {
 		return fmt.Errorf("TTS returned empty audio URL")
 	}
+	logger.Printf("GenerateShotAudio: shot %d TTS ok url=%s", shot.ShotNo, audioURL)
 
 	// 若配置了存储服务，将音频上传至持久存储
 	if s.storageSvc != nil {
@@ -3963,6 +3995,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 			logger.Printf("GenerateShotAudio: storage upload failed (falling back to local): %v", uploadErr)
 		} else {
 			audioURL = persistURL
+			logger.Printf("GenerateShotAudio: shot %d audio stored at %s", shot.ShotNo, audioURL)
 			// 删除 /tmp 临时文件（file:// 前缀）
 			if strings.HasPrefix(shot.AudioPath, "file://") {
 				os.Remove(strings.TrimPrefix(shot.AudioPath, "file://")) //nolint:errcheck
@@ -4384,6 +4417,8 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 		duration = 5.0
 	}
 
+	logger.Printf("GenerateSlideshowShotVideo: shot %d aspect=%s duration=%.1fs", shot.ShotNo, aspectRatio, duration)
+
 	shot.GenerationMode = "static"
 	shot.Status = "generating"
 	s.storyboardRepo.Update(shot) //nolint:errcheck
@@ -4441,6 +4476,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	}
 	shot.Status = "completed"
 	shot.Progress = 100
+	logger.Printf("GenerateSlideshowShotVideo: shot %d completed clip=%s", shot.ShotNo, clipPath)
 	return s.storyboardRepo.Update(shot)
 }
 
