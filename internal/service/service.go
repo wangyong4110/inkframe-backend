@@ -4386,27 +4386,46 @@ func (s *VideoService) generateKenBurnsClip(shot *model.StoryboardShot, imagePat
 	}
 
 	outPath := fmt.Sprintf("%s/inkframe-slideshow-%d-%d.mp4", inkframeTempDir(), shot.ID, time.Now().UnixNano())
-	// pre-scale to 2x output resolution — zoompan 只需输入略大于输出，8000 过大极慢
-	preScale := "3840:-1"
+	// pre-scale 到输出分辨率的 1.5x：zoompan 只需略大于输出即可。
+	// 过大（如 3840）会导致 WASM FFmpeg 每帧计算量剧增，且 WASM 的纯计算不响应 context 取消，
+	// 造成任务永久阻塞。1.5x 在效果和速度间取得平衡。
+	preScale := "2880:-1"
 	if aspectRatio == "9:16" {
-		preScale = "2160:-1"
+		preScale = "1620:-1"
+	} else if aspectRatio == "1:1" {
+		preScale = "1620:-1"
 	}
 	vf := fmt.Sprintf("scale=%s,%s,scale=%s,setsar=1", preScale, zoompan, resolution)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	if _, err := runFFmpegCtx(ctx, "-y",
-		"-loop", "1",
-		"-t", fmt.Sprintf("%.2f", duration),
-		"-i", imagePath,
-		"-vf", vf,
-		"-c:v", "libx264",
-		"-pix_fmt", "yuv420p",
-		"-r", fmt.Sprintf("%d", fps),
-		"-threads", "0",
-		outPath,
-	); err != nil {
-		return "", fmt.Errorf("ffmpeg ken burns: %w", err)
+	// WASM FFmpeg 的纯计算阶段不响应 context 取消，用 goroutine + channel 在 Go 层强制超时，
+	// 超时后解除调用方阻塞（WASM goroutine 在后台继续跑完或被 GC 回收）。
+	const kenBurnsTimeout = 90 * time.Second
+	type result struct {
+		err []byte
+		rc  error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		out, err := runFFmpegCtx(context.Background(), "-y",
+			"-loop", "1",
+			"-t", fmt.Sprintf("%.2f", duration),
+			"-i", imagePath,
+			"-vf", vf,
+			"-c:v", "libx264",
+			"-pix_fmt", "yuv420p",
+			"-r", fmt.Sprintf("%d", fps),
+			"-threads", "1",
+			outPath,
+		)
+		ch <- result{out, err}
+	}()
+	select {
+	case res := <-ch:
+		if res.rc != nil {
+			return "", fmt.Errorf("ffmpeg ken burns: %w", res.rc)
+		}
+	case <-time.After(kenBurnsTimeout):
+		return "", fmt.Errorf("ffmpeg ken burns: timed out after %s", kenBurnsTimeout)
 	}
 	return outPath, nil
 }
