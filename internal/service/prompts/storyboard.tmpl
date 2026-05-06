@@ -52,9 +52,16 @@
       "color_palette": "色调描述（如：冷蓝色调、暖金色调）",
       "visual_prompt": "professional photo, [subject], [setting], [art style] style, [lighting], [composition], highly detailed, 4k resolution",
       "negative_prompt": "blurry, low quality, deformed, ugly, watermark, text, bad anatomy, extra limbs, poorly drawn",
-      "character_refs": ["角色外貌关键词1", "角色外貌关键词2"]
+      "character_refs": ["角色外貌关键词1", "角色外貌关键词2"],
+      "sfx_tags": ["sound effect keyword 1", "sound effect keyword 2"]
     }
   ]
 }
+
+# sfx_tags 字段说明
+sfx_tags 是该镜头的环境音效关键词列表（英文），用于从音效库搜索匹配的音效文件。
+- 根据画面内容填写 1-4 个最贴切的音效标签，例如：["sword clash", "crowd cheering", "wind"]
+- 纯静态/无声镜头可留空数组 []
+- 不要包含配乐（BGM）类标签，只描述场景中自然发生的声音
 
 请开始创作分镜头脚本：

@@ -106,11 +106,20 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 		return nil // 已有音效，幂等跳过
 	}
 
-	// 1. 用 LLM 提取语义标签
-	tags, err := s.extractTags(ctx, shot)
-	if err != nil {
-		logger.Printf("[SFXService] shot %d LLM tag extract failed (%v), using rule fallback", shot.ID, err)
-		tags = s.fallbackTags(shot)
+	// 1. 优先使用分镜脚本生成时已提取的 sfx_tags，避免重复 LLM 调用
+	var tags []string
+	if shot.SFXTags != "" {
+		if err := json.Unmarshal([]byte(shot.SFXTags), &tags); err != nil || len(tags) == 0 {
+			tags = nil // 解析失败则继续走 LLM
+		}
+	}
+	if len(tags) == 0 {
+		var err error
+		tags, err = s.extractTags(ctx, shot)
+		if err != nil {
+			logger.Printf("[SFXService] shot %d LLM tag extract failed (%v), using rule fallback", shot.ID, err)
+			tags = s.fallbackTags(shot)
+		}
 	}
 
 	tagsJSON, _ := json.Marshal(tags)
@@ -144,7 +153,8 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	return s.storyboardRepo.UpdateSFX(shot.ID, sfxURL, string(tagsJSON), vol)
 }
 
-// BatchAutoGenerateSFX 批量处理视频所有镜头。progressFn 每完成一个镜头调用一次（0-100）。
+// BatchAutoGenerateSFX 批量处理视频所有镜头，最多 5 并发。
+// progressFn 每完成一个镜头调用一次（0-100）。
 // 返回成功/失败数量，不因单个失败而中止整批。
 func (s *SFXService) BatchAutoGenerateSFX(
 	ctx context.Context,
@@ -155,18 +165,41 @@ func (s *SFXService) BatchAutoGenerateSFX(
 	if total == 0 {
 		return
 	}
-	for i, shot := range shots {
+	const maxConcurrency = 5
+	sem := make(chan struct{}, maxConcurrency)
+	type result struct{ ok bool }
+	results := make(chan result, total)
+
+	for _, shot := range shots {
 		if ctx.Err() != nil {
 			break
 		}
-		if err := s.AutoGenerateSFX(ctx, shot); err != nil {
-			logger.Printf("[SFXService] shot %d: %v", shot.ID, err)
-			fail++
-		} else {
+		sem <- struct{}{}
+		go func(s2 *model.StoryboardShot) {
+			defer func() { <-sem }()
+			err := s.AutoGenerateSFX(ctx, s2)
+			if err != nil {
+				logger.Printf("[SFXService] shot %d: %v", s2.ID, err)
+			}
+			results <- result{ok: err == nil}
+		}(shot)
+	}
+	// drain remaining sem slots so all goroutines finish
+	for i := 0; i < cap(sem); i++ {
+		sem <- struct{}{}
+	}
+	close(results)
+
+	done := 0
+	for r := range results {
+		done++
+		if r.ok {
 			success++
+		} else {
+			fail++
 		}
 		if progressFn != nil {
-			progressFn((i + 1) * 100 / total)
+			progressFn(done * 100 / total)
 		}
 	}
 	return
@@ -239,12 +272,21 @@ func (s *SFXService) fallbackTags(shot *model.StoryboardShot) []string {
 	return tags
 }
 
+// normalizeTag 将标签统一为小写下划线格式（兼容空格和连字符）
+func normalizeTag(tag string) string {
+	tag = strings.ToLower(strings.TrimSpace(tag))
+	tag = strings.ReplaceAll(tag, " ", "_")
+	tag = strings.ReplaceAll(tag, "-", "_")
+	return tag
+}
+
 // searchLocalLib 在本地目录中查找首个匹配标签的音效文件，返回 file:// URL
 func (s *SFXService) searchLocalLib(tags []string) string {
 	if s.sfxDir == "" {
 		return ""
 	}
-	for _, tag := range tags {
+	for _, rawTag := range tags {
+		tag := normalizeTag(rawTag)
 		// 精确匹配
 		if filename, ok := s.localLib[tag]; ok {
 			p := filepath.Join(s.sfxDir, filename)
@@ -266,19 +308,8 @@ func (s *SFXService) searchLocalLib(tags []string) string {
 	return ""
 }
 
-// searchFreesound 通过 Freesound API 搜索 CC0 授权音效，返回高质量预览 MP3 URL。
-// 需要 FreesoundKey 配置。
-func (s *SFXService) searchFreesound(ctx context.Context, tags []string) string {
-	if s.freesoundKey == "" {
-		return ""
-	}
-	// 取前3个标签组成搜索词
-	n := len(tags)
-	if n > 3 {
-		n = 3
-	}
-	query := strings.Join(tags[:n], " ")
-
+// freesoundSearch 执行单次 Freesound API 搜索，返回首个结果的预览 MP3 URL
+func (s *SFXService) freesoundSearch(ctx context.Context, query string) string {
 	apiURL := fmt.Sprintf(
 		"https://freesound.org/apiv2/search/text/?query=%s&filter=license:%%22Creative+Commons+0%%22&fields=id,name,previews&page_size=1&token=%s",
 		url.QueryEscape(query), s.freesoundKey,
@@ -306,8 +337,60 @@ func (s *SFXService) searchFreesound(ctx context.Context, tags []string) string 
 	return result.Results[0].Previews.PreviewHQMP3
 }
 
+// searchFreesound 通过 Freesound API 搜索 CC0 授权音效，返回高质量预览 MP3 URL。
+// 先用前3个标签合并搜索，失败则逐个标签降级重试。
+// 需要 FreesoundKey 配置。
+func (s *SFXService) searchFreesound(ctx context.Context, tags []string) string {
+	if s.freesoundKey == "" || len(tags) == 0 {
+		return ""
+	}
+	// 第一次：取前3个标签合并搜索（效果更精准）
+	n := len(tags)
+	if n > 3 {
+		n = 3
+	}
+	if u := s.freesoundSearch(ctx, strings.Join(tags[:n], " ")); u != "" {
+		return u
+	}
+	// 降级：逐个标签单独搜索（将下划线替换为空格，更符合 Freesound 关键词习惯）
+	for _, tag := range tags {
+		q := strings.ReplaceAll(normalizeTag(tag), "_", " ")
+		if u := s.freesoundSearch(ctx, q); u != "" {
+			return u
+		}
+	}
+	return ""
+}
+
+// elevenLabsPrompt 将 sfx_tags 转换为适合 ElevenLabs 音效生成的英文 Prompt。
+// 优先使用 sfx_tags（语义更准确），降级用镜头描述的前缀。
+func elevenLabsPrompt(shot *model.StoryboardShot) string {
+	// 尝试从 SFXTags 字段构建
+	if shot.SFXTags != "" {
+		var tags []string
+		if json.Unmarshal([]byte(shot.SFXTags), &tags) == nil && len(tags) > 0 {
+			// 将 underscore 标签转为自然语言短语
+			parts := make([]string, 0, len(tags))
+			for _, t := range tags {
+				parts = append(parts, strings.ReplaceAll(normalizeTag(t), "_", " "))
+			}
+			prompt := "Sound effects: " + strings.Join(parts, ", ")
+			if shot.EmotionalTone != "" {
+				prompt += ". Mood: " + shot.EmotionalTone
+			}
+			return prompt
+		}
+	}
+	// 降级：截取镜头描述（视觉提示词，质量较差但聊胜于无）
+	runes := []rune(shot.Description)
+	if len(runes) > 200 {
+		return string(runes[:200])
+	}
+	return shot.Description
+}
+
 // generateElevenLabs 调用 ElevenLabs Sound Generation API，
-// 根据镜头描述生成定制音效，上传至存储服务后返回公开 URL。
+// 根据音效标签生成定制音效，上传至存储服务后返回公开 URL。
 // 需要 ElevenLabsKey + storageSvc 配置。
 func (s *SFXService) generateElevenLabs(ctx context.Context, shot *model.StoryboardShot) (string, error) {
 	if s.elevenKey == "" {
@@ -317,8 +400,7 @@ func (s *SFXService) generateElevenLabs(ctx context.Context, shot *model.Storybo
 		return "", fmt.Errorf("storage not configured for elevenlabs upload")
 	}
 
-	// 使用镜头描述作为音效生成 Prompt（英文化输出质量更好，但中文也可用）
-	prompt := shot.Description
+	prompt := elevenLabsPrompt(shot)
 	runes := []rune(prompt)
 	if len(runes) > 200 {
 		prompt = string(runes[:200])

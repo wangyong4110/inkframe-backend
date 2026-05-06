@@ -2504,6 +2504,18 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	logger.Printf("[Storyboard] finished videoID=%d totalShots=%d segments=%d failedSegs=%d elapsed=%s",
 		videoID, len(shots), len(segments), failedSegs, time.Since(totalStart).Round(time.Millisecond))
 
+	// 分镜生成完成后，自动用 sfx_tags 触发音效搜索（后台执行，不阻塞接口返回）
+	if s.sfxService != nil {
+		sfxShots := make([]*model.StoryboardShot, len(shots))
+		copy(sfxShots, shots)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+			defer cancel()
+			success, fail := s.sfxService.BatchAutoGenerateSFX(ctx, sfxShots, nil)
+			logger.Printf("[Storyboard] auto-SFX done videoID=%d success=%d fail=%d", videoID, success, fail)
+		}()
+	}
+
 	return shots, nil
 }
 
@@ -2951,7 +2963,8 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			Expression string `json:"expression"`
 			Pose       string `json:"pose"`
 		} `json:"characters"`
-		Transition string `json:"transition"`
+		Transition string   `json:"transition"`
+		SFXTags    []string `json:"sfx_tags"`
 	}
 
 	parseErr := json.Unmarshal([]byte(cleaned), &rawShots)
@@ -2977,7 +2990,8 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 					Expression string `json:"expression"`
 					Pose       string `json:"pose"`
 				} `json:"characters"`
-				Transition string `json:"transition"`
+				Transition string   `json:"transition"`
+				SFXTags    []string `json:"sfx_tags"`
 			}
 			if err2 := json.Unmarshal([]byte(repaired), &repairedShots); err2 == nil && len(repairedShots) > 0 {
 				logger.Printf("[VideoService] parseStoryboardResult: JSON was truncated; repaired and recovered %d shots (original len=%d). Consider increasing Max Tokens.", len(repairedShots), len(result))
@@ -3035,6 +3049,14 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			prompt += ", " + r.Lighting + " lighting"
 		}
 
+		// 将 sfx_tags 序列化为 JSON 字符串存储
+		var sfxTagsJSON string
+		if len(r.SFXTags) > 0 {
+			if b, err := json.Marshal(r.SFXTags); err == nil {
+				sfxTagsJSON = string(b)
+			}
+		}
+
 		shot := &model.StoryboardShot{
 			UUID:        uuid.New().String(),
 			VideoID:     videoID,
@@ -3051,6 +3073,7 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			Transition:  validTransition(r.Transition),
 			Characters:  charsJSON,
 			Scene:       sceneJSON,
+			SFXTags:     sfxTagsJSON,
 			Status:      "pending",
 		}
 		shots = append(shots, shot)
