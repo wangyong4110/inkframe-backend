@@ -317,6 +317,12 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.POST("/:id/shots/batch-clips", cfg.VideoHandler.BatchGenerateShotClips)
 			videos.POST("/:id/shots/insert", cfg.VideoHandler.InsertShot)
 			videos.POST("/:id/shots/sfx", cfg.VideoHandler.BatchGenerateSFX)
+			videos.POST("/:id/shots/sfx-tags", cfg.VideoHandler.AnalyzeSFXTags)
+			videos.POST("/:id/shots/batch-voice", cfg.VideoHandler.BatchGenerateVoice)
+			// BGM 背景音乐
+			videos.GET("/:id/bgm/segments", cfg.VideoHandler.ListBGMSegments)
+			videos.POST("/:id/bgm/analyze", cfg.VideoHandler.AnalyzeBGMSegments)
+			videos.POST("/:id/bgm/generate", cfg.VideoHandler.GenerateBGM)
 			videos.POST("/:id/shots/:shot_id/generate", cfg.VideoHandler.GenerateSingleShot)
 			videos.POST("/:id/shots/:shot_id/copy", cfg.VideoHandler.CopyShot)
 			videos.DELETE("/:id/shots/:shot_id", cfg.VideoHandler.DeleteShot)

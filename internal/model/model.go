@@ -938,6 +938,30 @@ type ShotSFXItem struct {
 
 func (ShotSFXItem) TableName() string { return "ink_shot_sfx_item" }
 
+// VideoBGMSegment 视频背景音乐分段（一段BGM可跨越多个分镜，AI智能分组）
+type VideoBGMSegment struct {
+	ID          uint    `json:"id" gorm:"primaryKey"`
+	VideoID     uint    `json:"video_id" gorm:"index;not null"`
+	SeqNo       int     `json:"seq_no" gorm:"not null;default:1"` // 分段顺序
+	StartShotNo int     `json:"start_shot_no" gorm:"not null;default:1"`
+	EndShotNo   int     `json:"end_shot_no" gorm:"not null;default:1"`
+	Mood        string  `json:"mood" gorm:"size:200"`         // 情绪/氛围描述，如 "史诗战斗""温情别离"
+	Tempo       string  `json:"tempo" gorm:"size:20"`         // fast/medium/slow
+	SearchQueries string `json:"search_queries" gorm:"type:text"` // JSON 字符串，自然语言搜索词列表
+	URL         string  `json:"url" gorm:"size:1000"`          // 匹配到的 BGM 音频 URL
+	Volume      float64 `json:"volume" gorm:"type:decimal(4,2);default:0.3"`
+	DurationSecs float64 `json:"duration_secs" gorm:"type:decimal(8,3)"`
+	TrackName   string  `json:"track_name" gorm:"size:255"`
+	TrackArtist string  `json:"track_artist" gorm:"size:255"`
+	Source      string  `json:"source" gorm:"size:20"` // jamendo/local/none
+
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
+}
+
+func (VideoBGMSegment) TableName() string { return "ink_video_bgm_segment" }
+
 // QualityReport 质量报告
 type QualityReport struct {
 	ID         uint   `json:"id" gorm:"primaryKey"`

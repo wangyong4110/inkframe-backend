@@ -2900,6 +2900,60 @@ func (s *VideoService) buildStoryboardPrompt(
 	// ── 输出格式 ──────────────────────────────────────────────
 	sb.WriteString(fmt.Sprintf(`请将章节内容分解为**%d个**分镜（每个重大动作、对话轮次、场景切换须单独成镜）。
 ⚠️ 注意：必须输出全部%d个分镜，不得省略。只返回JSON数组，不要任何额外说明或markdown代码块。
+
+【sfx_tags 填写规则】
+sfx_tags 是该镜头环境音效关键词列表（英文，用于音效库搜索）。须根据画面内容、情绪、动作严格选词，每镜头选 1-4 个最贴合的标签，不得照抄示例。
+
+可用标签词库（按类别分组，从中选取）：
+
+自然/天气：
+  rain_light / rain_heavy / rainstorm / thunder / lightning_crack / wind_gentle / wind_strong / wind_howling
+  forest_ambient / jungle_ambient / birdsong / crickets_night / frogs / insects_buzz
+  river_flowing / waterfall / ocean_waves / beach_waves / dripping_water / splash / underwater_ambient
+  fire_crackle / fire_roar / snow_crunch / ice_crack / earthquake_rumble / cave_echo / desert_wind
+
+室内/日常：
+  ambient_room / fireplace / clock_ticking / door_open / door_close / door_creak / door_knock
+  footsteps_wood / footsteps_stone / footsteps_metal / footsteps_grass
+  glass_break / window_shatter / paper_rustle / book_flip / chair_scrape / table_slam
+  cooking_sizzle / kettle_boil / pouring_liquid / coins_clink
+  temple_bell / gong_strike / drum_beat / flute_ambient / guqin_ambient / erhu_ambient
+
+人群/城市：
+  crowd_murmur / crowd_outdoor / crowd_cheer / crowd_panic / crowd_fight / crowd_pray
+  market_outdoor / market_indoor / tavern_ambient / harbor_ambient / street_ambient
+  horse_gallop / horse_neigh / cart_wheels / blacksmith / construction_noise
+  announcement_horn / war_drums / parade_drums / gate_open / gate_close
+
+战斗/动作：
+  sword_clash / sword_draw / sword_slice / spear_thrust / bow_draw / arrow_whoosh / arrow_impact
+  punch_impact / kick_impact / body_fall / bones_crack / armor_clank / shield_block
+  whip_crack / chain_rattle / weapon_drop / weapon_throw
+  explosion / cannon_fire / fire_spread / debris_fall / wall_crumble / ground_shake
+  running_footsteps / jumping_land / tumble / rope_swing / grappling
+
+修仙/玄幻特效（仙侠/修真/玄幻小说适用）：
+  qi_surge / spirit_energy / cultivation_aura / energy_explosion / magic_blast / energy_impact
+  spiritual_chime / dao_resonance / formation_activate / seal_break / rune_glow / treasure_glow
+  flying_whoosh / teleport_flash / space_tear / dimension_crack / void_rumble
+  breakthrough_rumble / spiritual_pressure / divine_thunder / heavenly_lightning / immortal_wind
+  spirit_beast_roar / demon_roar / ghost_howl / evil_energy / purification_light
+
+动物/生物：
+  wolf_howl / tiger_roar / dragon_roar / eagle_cry / snake_hiss / bat_screech
+  horse_neigh / cattle_moo / dog_bark / bird_flock / monster_growl / beast_stomp
+
+情绪/心理：
+  heartbeat / heartbeat_fast / breath_heavy / breath_slow / gasp / whisper
+  tension_sting / horror_sting / mystery_hum / suspense_low / sadness_ambience
+  bell_ring / wind_night / echo_distant / silence_deep
+
+建筑/机械：
+  mechanism_click / trap_trigger / stone_rolling / stone_door / bridge_creak
+  rope_creak / pulley / lock_click / chest_open
+
+纯对话/静态：留空数组 []
+
 格式示例（以下仅展示2个分镜作为格式参考，实际须生成%d个）：
 [
   {
@@ -2916,7 +2970,8 @@ func (s *VideoService) buildStoryboardPrompt(
     "weather": "clear",
     "lighting": "natural",
     "characters": [{"name":"角色名","expression":"表情","pose":"姿势动作"}],
-    "transition": "cut"
+    "transition": "cut",
+    "sfx_tags": ["rain_heavy", "thunder", "forest_ambient"]
   },
   {
     "shot_no": 2,
@@ -2932,7 +2987,8 @@ func (s *VideoService) buildStoryboardPrompt(
     "weather": "clear",
     "lighting": "dramatic",
     "characters": [{"name":"角色名","expression":"表情","pose":"姿势动作"}],
-    "transition": "cut"
+    "transition": "cut",
+    "sfx_tags": ["qi_surge", "energy_explosion", "spiritual_pressure"]
   }
   ... （继续输出剩余 %d 个分镜，格式与上述完全相同）
 ]`, expectedShots, expectedShots, expectedShots, expectedShots-2))

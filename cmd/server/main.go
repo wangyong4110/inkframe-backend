@@ -698,7 +698,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-06-v2"
+const schemaVersion = "2026-05-06-v3"
 
 // autoMigrate 自动迁移（带版本跳过优化）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -768,6 +768,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.SystemSetting{},
 		&model.ShotVoiceSegment{},
 		&model.ShotSFXItem{},
+		&model.VideoBGMSegment{},
 	); err != nil {
 		return err
 	}
@@ -983,6 +984,7 @@ type Repositories struct {
 	SystemSettingRepo       *repository.SystemSettingRepository
 	ShotVoiceSegmentRepo    *repository.ShotVoiceSegmentRepository
 	ShotSFXItemRepo         *repository.ShotSFXItemRepository
+	VideoBGMSegmentRepo     *repository.VideoBGMSegmentRepository
 }
 
 // initRepositories 初始化仓库层
@@ -1019,6 +1021,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		SystemSettingRepo:       repository.NewSystemSettingRepository(db),
 		ShotVoiceSegmentRepo:    repository.NewShotVoiceSegmentRepository(db),
 		ShotSFXItemRepo:         repository.NewShotSFXItemRepository(db),
+		VideoBGMSegmentRepo:     repository.NewVideoBGMSegmentRepository(db),
 	}
 }
 
@@ -1213,7 +1216,9 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	videoEnhancementService := service.NewVideoEnhancementService(imageService, "/tmp/inkframe-enhance")
 
 	// BGM 服务（bgmDir 为空时无BGM；可通过 BGM_DIR 环境变量或配置指定本地 BGM 目录）
-	bgmService := service.NewBGMService(getEnv("BGM_DIR", ""))
+	bgmService := service.NewBGMService(getEnv("BGM_DIR", "")).
+		WithAIService(aiService).
+		WithJamendo(getEnv("JAMENDO_CLIENT_ID", ""))
 
 	// 角色一致性服务
 	characterConsistencyService := service.NewCharacterConsistencyService(imageService, nil, aiService)
@@ -1398,7 +1403,8 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			services.StoryboardService,
 			services.VideoEnhancementService,
 			services.CharacterConsistencyService,
-		).WithTaskService(services.TaskService).WithSFXService(services.SFXService).WithSFXItemRepo(repos.ShotSFXItemRepo),
+		).WithTaskService(services.TaskService).WithSFXService(services.SFXService).WithSFXItemRepo(repos.ShotSFXItemRepo).
+			WithBGMService(services.BGMService).WithBGMRepo(repos.VideoBGMSegmentRepo),
 		ModelHandler:   handler.NewModelHandler(services.ModelService),
 		McpHandler:     handler.NewMcpHandler(services.McpService),
 		StyleHandler:   handler.NewStyleHandler(services.StyleService),

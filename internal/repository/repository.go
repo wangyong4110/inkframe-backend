@@ -944,6 +944,11 @@ func (r *StoryboardRepository) UpdateFields(id uint, fields map[string]interface
 	return r.db.Model(&model.StoryboardShot{}).Where("id = ?", id).Updates(fields).Error
 }
 
+// UpdateSFXTags 仅更新分镜的 sfx_tags 字段，不修改 sfx_url 和 sfx_volume
+func (r *StoryboardRepository) UpdateSFXTags(shotID uint, sfxTags string) error {
+	return r.db.Model(&model.StoryboardShot{}).Where("id = ?", shotID).Update("sfx_tags", sfxTags).Error
+}
+
 // UpdateSFX 更新单个分镜的音效字段（URL、标签、混音音量）
 func (r *StoryboardRepository) UpdateSFX(shotID uint, sfxURL, sfxTags string, sfxVolume float64) error {
 	return r.db.Model(&model.StoryboardShot{}).Where("id = ?", shotID).Updates(map[string]interface{}{
@@ -1765,4 +1770,40 @@ func (r *ShotSFXItemRepository) Delete(id uint) error {
 // DeleteByShotID 物理删除分镜的所有音效条目（重新生成时使用）
 func (r *ShotSFXItemRepository) DeleteByShotID(shotID uint) error {
 	return r.db.Unscoped().Where("shot_id = ?", shotID).Delete(&model.ShotSFXItem{}).Error
+}
+
+// ─── VideoBGMSegmentRepository ────────────────────────────────────────────────
+
+// VideoBGMSegmentRepository 视频BGM分段仓库
+type VideoBGMSegmentRepository struct {
+	db *gorm.DB
+}
+
+func NewVideoBGMSegmentRepository(db *gorm.DB) *VideoBGMSegmentRepository {
+	return &VideoBGMSegmentRepository{db: db}
+}
+
+// ListByVideoID 获取视频的所有BGM分段，按 seq_no 升序
+func (r *VideoBGMSegmentRepository) ListByVideoID(videoID uint) ([]*model.VideoBGMSegment, error) {
+	var segs []*model.VideoBGMSegment
+	err := r.db.Where("video_id = ?", videoID).Order("seq_no").Find(&segs).Error
+	return segs, err
+}
+
+// DeleteByVideoID 删除视频的所有BGM分段（重新分析时清空）
+func (r *VideoBGMSegmentRepository) DeleteByVideoID(videoID uint) error {
+	return r.db.Unscoped().Where("video_id = ?", videoID).Delete(&model.VideoBGMSegment{}).Error
+}
+
+// BatchCreate 批量创建BGM分段
+func (r *VideoBGMSegmentRepository) BatchCreate(segs []*model.VideoBGMSegment) error {
+	if len(segs) == 0 {
+		return nil
+	}
+	return r.db.Create(&segs).Error
+}
+
+// Update 更新BGM分段（用于更新URL/Volume等）
+func (r *VideoBGMSegmentRepository) Update(seg *model.VideoBGMSegment) error {
+	return r.db.Save(seg).Error
 }

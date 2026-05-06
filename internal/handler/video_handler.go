@@ -25,10 +25,22 @@ type VideoHandler struct {
 	taskSvc            *service.TaskService
 	sfxSvc             *service.SFXService
 	sfxItemRepo        *repository.ShotSFXItemRepository
+	bgmSvc             *service.BGMService
+	bgmRepo            *repository.VideoBGMSegmentRepository
 }
 
 func (h *VideoHandler) WithSFXItemRepo(r *repository.ShotSFXItemRepository) *VideoHandler {
 	h.sfxItemRepo = r
+	return h
+}
+
+func (h *VideoHandler) WithBGMService(svc *service.BGMService) *VideoHandler {
+	h.bgmSvc = svc
+	return h
+}
+
+func (h *VideoHandler) WithBGMRepo(r *repository.VideoBGMSegmentRepository) *VideoHandler {
+	h.bgmRepo = r
 	return h
 }
 
@@ -1008,9 +1020,16 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)     //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 5) //nolint:errcheck
 		ctx := context.Background()
+		// Step 1: AI 批量分析所有分镜，生成精准的自然语言音效搜索词
+		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots); err != nil {
+			logger.Printf("[VideoHandler] BatchGenerateSFX task %s: AI analyze failed (proceeding): %v", taskID, err)
+		}
+		h.taskSvc.UpdateProgress(taskID, 20) //nolint:errcheck
+		// Step 2: 用更新后的 sfx_tags 搜索/生成实际音效文件
+		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, 20+pct*80/100) } //nolint:errcheck
 		success, fail := h.sfxSvc.BatchAutoGenerateSFX(ctx, shots, progressFn)
 		h.taskSvc.Complete(taskID, gin.H{"success": success, "fail": fail}) //nolint:errcheck
 		logger.Printf("[VideoHandler] BatchGenerateSFX task %s done: success=%d fail=%d", taskID, success, fail)
@@ -1019,6 +1038,57 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
 		"message": "音效生成任务已提交",
+		"data":    gin.H{"task_id": task.TaskID},
+	})
+}
+
+// AnalyzeSFXTags POST /videos/:id/shots/sfx-tags
+// 用 AI 批量分析分镜脚本，为每个镜头生成精准的自然语言音效搜索词，写入 sfx_tags 字段。
+// 仅更新标签，不搜索/生成实际音频文件。
+func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
+	if h.sfxSvc == nil {
+		respondErr(c, http.StatusNotImplemented, "SFX service not configured")
+		return
+	}
+	videoID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		respondBadRequest(c, "invalid video id")
+		return
+	}
+	tenantID := getTenantID(c)
+
+	shots, err := h.videoService.GetStoryboard(uint(videoID))
+	if err != nil || len(shots) == 0 {
+		respondErr(c, http.StatusNotFound, "storyboard not found or empty")
+		return
+	}
+
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeSFXGen, "AI 音效标签分析", "video", uint(videoID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "create task failed")
+		return
+	}
+
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[VideoHandler] AnalyzeSFXTags task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		ctx := context.Background()
+		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots); err != nil {
+			logger.Printf("[VideoHandler] AnalyzeSFXTags task %s failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, gin.H{"count": len(shots)}) //nolint:errcheck
+	}(task.TaskID)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "AI 音效分析任务已提交",
 		"data":    gin.H{"task_id": task.TaskID},
 	})
 }
@@ -1570,4 +1640,243 @@ func (h *VideoHandler) DeleteShotSFXItem(c *gin.Context) {
 		return
 	}
 	respondOK(c, nil)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 批量配音（单任务，顺序处理，最多10个，避免TTS限流）
+// ─────────────────────────────────────────────────────────────────────────────
+
+// BatchGenerateVoice POST /videos/:id/shots/batch-voice
+// 为视频所有分镜批量生成配音，作为单个异步任务顺序处理。
+// 每次最多处理 10 个分镜（避免 TTS API 限流），已有配音的分镜自动跳过。
+func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
+	videoID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid video id")
+		return
+	}
+
+	var req struct {
+		NarrationVoice  string `json:"narration_voice"`
+		SubtitleEnabled bool   `json:"subtitle_enabled"`
+		MaxShots        int    `json:"max_shots"`    // 0=自动上限10
+		SkipExisting    *bool  `json:"skip_existing"` // nil/true=跳过已有配音
+	}
+	_ = c.ShouldBindJSON(&req)
+	maxShots := req.MaxShots
+	if maxShots <= 0 || maxShots > 10 {
+		maxShots = 10
+	}
+	skipExisting := req.SkipExisting == nil || *req.SkipExisting // default true
+
+	allShots, err := h.videoService.GetStoryboard(uint(videoID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// 筛选需要生成配音的分镜（有文本，且未有配音或强制重生）
+	var targets []*model.StoryboardShot
+	for _, s := range allShots {
+		if s.Narration == "" && s.Dialogue == "" && s.Description == "" {
+			continue
+		}
+		if skipExisting && s.AudioPath != "" {
+			continue
+		}
+		targets = append(targets, s)
+	}
+
+	if len(targets) == 0 {
+		respondOK(c, gin.H{"message": "所有分镜已有配音，无需重新生成", "count": 0})
+		return
+	}
+	if len(targets) > maxShots {
+		targets = targets[:maxShots]
+	}
+
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeVoiceGen,
+		fmt.Sprintf("批量配音（%d 个分镜）", len(targets)), "video", uint(videoID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+
+	go func(taskID string, shots []*model.StoryboardShot, narrationVoice string, subtitleEnabled bool) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[VideoHandler] BatchGenerateVoice task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+
+		total := len(shots)
+		success, fail := 0, 0
+		for i, shot := range shots {
+			h.taskSvc.UpdateProgress(taskID, i*100/total) //nolint:errcheck
+			if err := h.videoService.GenerateShotAudio(shot, tenantID, narrationVoice); err != nil {
+				logger.Printf("[VideoHandler] BatchGenerateVoice task %s shot %d failed: %v", taskID, shot.ShotNo, err)
+				fail++
+			} else {
+				success++
+			}
+			// 每个分镜间隔 1s，避免触发 TTS API 限流
+			if i < total-1 {
+				time.Sleep(1 * time.Second)
+			}
+		}
+		h.taskSvc.Complete(taskID, gin.H{"success": success, "fail": fail, "total": total}) //nolint:errcheck
+		logger.Printf("[VideoHandler] BatchGenerateVoice task %s done: success=%d fail=%d", taskID, success, fail)
+	}(task.TaskID, targets, req.NarrationVoice, req.SubtitleEnabled)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": fmt.Sprintf("批量配音任务已提交（共 %d 个分镜）", len(targets)),
+		"data":    gin.H{"task_id": task.TaskID, "shot_count": len(targets)},
+	})
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BGM 背景音乐 AI 分析 & 生成
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ListBGMSegments GET /videos/:id/bgm/segments
+func (h *VideoHandler) ListBGMSegments(c *gin.Context) {
+	if h.bgmRepo == nil {
+		respondErr(c, http.StatusNotImplemented, "BGM repository not configured")
+		return
+	}
+	videoID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid video id")
+		return
+	}
+	segs, err := h.bgmRepo.ListByVideoID(uint(videoID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, segs)
+}
+
+// AnalyzeBGMSegments POST /videos/:id/bgm/analyze
+// 仅执行 AI 分析（不搜索音频），返回分段计划（含搜索词）。
+func (h *VideoHandler) AnalyzeBGMSegments(c *gin.Context) {
+	if h.bgmSvc == nil || h.bgmRepo == nil {
+		respondErr(c, http.StatusNotImplemented, "BGM service not configured")
+		return
+	}
+	videoID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid video id")
+		return
+	}
+
+	shots, err := h.videoService.GetStoryboard(uint(videoID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if len(shots) == 0 {
+		respondBadRequest(c, "no shots found for this video")
+		return
+	}
+
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, "bgm_analyze",
+		"BGM分段分析", "video", uint(videoID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[VideoHandler] AnalyzeBGMSegments task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		ctx := context.Background()
+		segs, err := h.bgmSvc.AnalyzeBGMForVideo(ctx, shots, h.bgmRepo, uint(videoID))
+		if err != nil {
+			logger.Printf("[VideoHandler] AnalyzeBGMSegments task %s failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, gin.H{"count": len(segs)}) //nolint:errcheck
+	}(task.TaskID)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "BGM分段分析任务已提交",
+		"data":    gin.H{"task_id": task.TaskID},
+	})
+}
+
+// GenerateBGM POST /videos/:id/bgm/generate
+// AI分析 + Jamendo搜索，一步完成所有BGM分段。
+func (h *VideoHandler) GenerateBGM(c *gin.Context) {
+	if h.bgmSvc == nil || h.bgmRepo == nil {
+		respondErr(c, http.StatusNotImplemented, "BGM service not configured")
+		return
+	}
+	videoID, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid video id")
+		return
+	}
+
+	shots, err := h.videoService.GetStoryboard(uint(videoID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if len(shots) == 0 {
+		respondBadRequest(c, "no shots found for this video")
+		return
+	}
+
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, "bgm_generate",
+		"BGM背景音乐生成", "video", uint(videoID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[VideoHandler] GenerateBGM task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
+		ctx := context.Background()
+		segs, err := h.bgmSvc.GenerateBGMSegments(ctx, shots, h.bgmRepo, uint(videoID), progressFn)
+		if err != nil {
+			logger.Printf("[VideoHandler] GenerateBGM task %s failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+			return
+		}
+		matched := 0
+		for _, s := range segs {
+			if s.URL != "" {
+				matched++
+			}
+		}
+		h.taskSvc.Complete(taskID, gin.H{"total": len(segs), "matched": matched}) //nolint:errcheck
+		logger.Printf("[VideoHandler] GenerateBGM task %s done: total=%d matched=%d", taskID, len(segs), matched)
+	}(task.TaskID)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "BGM生成任务已提交",
+		"data":    gin.H{"task_id": task.TaskID},
+	})
 }

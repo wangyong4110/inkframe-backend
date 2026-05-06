@@ -109,6 +109,111 @@ func buildDefaultSFXLib() map[string]string {
 	}
 }
 
+// sfxShotBrief 发给 AI 进行音效分析的精简分镜信息
+type sfxShotBrief struct {
+	ShotID        uint    `json:"shot_id"`
+	ShotNo        int     `json:"shot_no"`
+	Description   string  `json:"description"`            // 英文画面描述
+	Narration     string  `json:"narration,omitempty"`    // 中文旁白
+	Dialogue      string  `json:"dialogue,omitempty"`     // 台词
+	EmotionalTone string  `json:"emotional_tone,omitempty"`
+	Duration      float64 `json:"duration"`
+}
+
+// sfxAnalysisItem AI 返回的单镜头音效分析结果
+type sfxAnalysisItem struct {
+	ShotID     uint     `json:"shot_id"`
+	SFXQueries []string `json:"sfx_queries"` // 自然语言搜索词组，如 "heavy rain bamboo forest"
+}
+
+// AnalyzeSFXForVideo 用一次 AI 调用批量分析所有分镜，为每个镜头生成
+// 自然语言音效搜索词组，写入 sfx_tags 字段。
+// 相比单镜头 LLM 调用，全局视角能避免所有镜头标签雷同，且搜索词更精准。
+func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.StoryboardShot) error {
+	if len(shots) == 0 {
+		return nil
+	}
+
+	// 构造发给 AI 的分镜摘要列表
+	briefs := make([]sfxShotBrief, 0, len(shots))
+	for _, shot := range shots {
+		briefs = append(briefs, sfxShotBrief{
+			ShotID:        shot.ID,
+			ShotNo:        shot.ShotNo,
+			Description:   shot.Description,
+			Narration:     shot.Narration,
+			Dialogue:      shot.Dialogue,
+			EmotionalTone: shot.EmotionalTone,
+			Duration:      float64(shot.Duration),
+		})
+	}
+	briefsJSON, err := json.Marshal(briefs)
+	if err != nil {
+		return fmt.Errorf("marshal shot briefs: %w", err)
+	}
+
+	// 构造 prompt，让 AI 以音效设计师视角自由生成搜索词组
+	sysCtx := "你是专业影视音效设计师，擅长为各类场景（现代、古代、修仙、玄幻、武侠、战争等）设计精准音效。\n\n"
+	userPrompt := sysCtx + `请分析以下分镜脚本，为每个镜头设计 2-4 个精确的英文音效搜索词组，用于在 Freesound、Jamendo 等专业音效库中检索真实音效素材。
+
+【设计原则】
+1. 每个词组为 2-6 个英文单词，须是音效库中实际存在的内容（贴近真实搜索习惯）
+2. 优先级：场景环境音 > 动作冲击音 > 情绪渲染音
+3. 要具体："heavy rain hits tile roof ambient" 胜过 "rain"
+4. 修仙/玄幻场景：可用 "qi energy surge whoosh impact"、"magic spell casting release"、"spiritual cultivation aura resonance"、"sword energy beam release"、"divine thunder lightning crack"
+5. 武侠/战斗场景：可用 "metal sword clash combat"、"arrow flying whoosh impact"、"punch kick fight impact"、"horse gallop battle charge"
+6. 古代中国场景：可用 "ancient chinese palace hall ambience"、"wooden door creak open"、"guqin string pluck"、"crowd ancient market china"
+7. 自然场景：可用 "mountain wind howl echo"、"bamboo forest breeze rustle"、"river stream rocks flowing"
+8. 每个镜头的词组须与其画面内容高度贴合，即使相邻镜头场景类似也要有细微差异
+9. 纯对话静止镜头（完全无动作环境音）输出空数组 []
+
+分镜数据：
+` + string(briefsJSON) + `
+
+只返回 JSON 数组，格式严格如下（shot_id 对应输入中的 shot_id 字段）：
+[{"shot_id": 1, "sfx_queries": ["phrase1", "phrase2", "phrase3"]}, {"shot_id": 2, "sfx_queries": ["phrase4", "phrase5"]}, ...]`
+
+	fullPrompt := userPrompt
+	logger.Printf("[SFXService] AnalyzeSFXForVideo: %d shots, calling AI...", len(shots))
+	result, err := s.aiSvc.Generate(0, "sfx_analyze", fullPrompt)
+	if err != nil {
+		return fmt.Errorf("AI SFX analysis: %w", err)
+	}
+
+	// 解析 AI 返回的 JSON
+	raw := extractJSON(result)
+	var items []sfxAnalysisItem
+	if err := json.Unmarshal([]byte(raw), &items); err != nil {
+		return fmt.Errorf("parse SFX analysis JSON: %w (raw=%q)", err, raw)
+	}
+
+	// 建立 shotID → queries 映射
+	queryMap := make(map[uint][]string, len(items))
+	for _, item := range items {
+		if len(item.SFXQueries) > 0 {
+			queryMap[item.ShotID] = item.SFXQueries
+		}
+	}
+
+	// 写入 DB 并更新内存中的 shot 对象
+	updated := 0
+	for _, shot := range shots {
+		queries, ok := queryMap[shot.ID]
+		if !ok || len(queries) == 0 {
+			continue
+		}
+		tagsJSON, _ := json.Marshal(queries)
+		shot.SFXTags = string(tagsJSON)
+		if err := s.storyboardRepo.UpdateSFXTags(shot.ID, string(tagsJSON)); err != nil {
+			logger.Printf("[SFXService] AnalyzeSFXForVideo: update shot %d sfx_tags failed: %v", shot.ID, err)
+		} else {
+			updated++
+		}
+	}
+	logger.Printf("[SFXService] AnalyzeSFXForVideo: updated %d/%d shots", updated, len(shots))
+	return nil
+}
+
 // AutoGenerateSFX 为单个镜头自动选取/生成音效，每个 tag 独立搜索，写入多条 ShotSFXItem。
 // 若该镜头已有音效条目，直接跳过（幂等）。
 func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.StoryboardShot) error {
