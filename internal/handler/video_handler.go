@@ -707,6 +707,37 @@ func (h *VideoHandler) StitchVideoHandler(c *gin.Context) {
 	})
 }
 
+// DownloadVideo 下载完整 MP4（拼接所有分镜后直接发送文件）
+// GET /api/v1/videos/:id/download
+func (h *VideoHandler) DownloadVideo(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid video id")
+		return
+	}
+
+	video, ok := h.getVideoForTenant(c, uint(id))
+	if !ok {
+		return
+	}
+
+	// 如果已经有拼接好的文件，直接下载；否则先触发拼接
+	outputPath := video.VideoPath
+	if outputPath == "" {
+		outputPath, err = h.videoService.StitchVideo(uint(id))
+		if err != nil {
+			logger.Printf("[VideoHandler] DownloadVideo stitch: videoID=%d err=%v", id, err)
+			respondErr(c, http.StatusInternalServerError, "视频拼接失败")
+			return
+		}
+	}
+
+	filename := fmt.Sprintf("inkframe-video-%d.mp4", id)
+	c.Header("Content-Disposition", "attachment; filename=\""+filename+"\"")
+	c.Header("Content-Type", "video/mp4")
+	c.File(outputPath)
+}
+
 // GenerateSingleShot 生成单个分镜（异步任务模式，立即返回 task_id）
 // POST /api/v1/videos/:id/shots/:shot_id/generate
 func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {

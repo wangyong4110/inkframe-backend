@@ -4498,13 +4498,26 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 	}
 
 	// 上传到持久存储（如果配置了 storageSvc）
+	// key 格式与图片/视频一致：novels/{novelID}/chapters/{chapterID}/audio/seg-{segID}.mp3
 	if s.storageSvc != nil && len(audioData) > 0 {
-		key := fmt.Sprintf("segments/seg-%d.mp3", segID)
+		var novelID, chapterID uint
+		if sh, e := s.storyboardRepo.GetByID(seg.ShotID); e == nil {
+			if vid, e := s.videoRepo.GetByID(sh.VideoID); e == nil {
+				novelID = vid.NovelID
+				if vid.ChapterID != nil {
+					chapterID = *vid.ChapterID
+				}
+			}
+		}
+		filename := fmt.Sprintf("seg-%d.mp3", segID)
+		key := storage.BuildKey(novelID, chapterID, "audio", filename)
 		if ossURL, e := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(audioData), int64(len(audioData)), "audio/mpeg"); e == nil {
 			if strings.HasPrefix(audioURL, "file://") {
 				os.Remove(strings.TrimPrefix(audioURL, "file://")) //nolint:errcheck
 			}
 			audioURL = ossURL
+		} else {
+			logger.Printf("GenerateSegmentAudio: OSS upload failed for segment %d: %v", segID, e)
 		}
 	}
 

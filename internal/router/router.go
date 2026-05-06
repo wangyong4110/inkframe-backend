@@ -333,6 +333,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.POST("/:id/storyboard/:shot_id/voice", cfg.VideoHandler.GenerateShotVoice)
 			videos.GET("/:id/storyboard/:shot_id/audio", cfg.VideoHandler.ServeAudio)
 			videos.POST("/:id/stitch", cfg.VideoHandler.StitchVideoHandler)
+			videos.GET("/:id/download", cfg.VideoHandler.DownloadVideo)
 			videos.GET("/:id/export/:format", cfg.VideoHandler.Export)
 			// 分镜绑定场景锚点
 			if cfg.SceneAnchorHandler != nil {
