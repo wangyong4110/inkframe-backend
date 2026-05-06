@@ -321,6 +321,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.POST("/:id/shots/batch-voice", cfg.VideoHandler.BatchGenerateVoice)
 			// BGM 背景音乐
 			videos.GET("/:id/bgm/segments", cfg.VideoHandler.ListBGMSegments)
+			videos.GET("/:id/bgm/search", cfg.VideoHandler.JamendoSearchBGM)
+			videos.PATCH("/:id/bgm/segments/:seg_id/track", cfg.VideoHandler.ApplyBGMTrack)
 			videos.POST("/:id/bgm/analyze", cfg.VideoHandler.AnalyzeBGMSegments)
 			videos.POST("/:id/bgm/generate", cfg.VideoHandler.GenerateBGM)
 			videos.POST("/:id/shots/:shot_id/generate", cfg.VideoHandler.GenerateSingleShot)

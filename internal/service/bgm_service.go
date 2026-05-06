@@ -172,6 +172,7 @@ func (s *BGMService) AnalyzeBGMForVideo(
 	shots []*model.StoryboardShot,
 	bgmRepo *repository.VideoBGMSegmentRepository,
 	videoID uint,
+	tenantID uint,
 ) ([]*model.VideoBGMSegment, error) {
 	if s.aiSvc == nil {
 		return nil, fmt.Errorf("BGMService: AI service not configured")
@@ -234,7 +235,7 @@ func (s *BGMService) AnalyzeBGMForVideo(
   }
 ]`, string(briefsJSON))
 
-	raw, err := s.aiSvc.Generate(0, "bgm_analyze", prompt)
+	raw, err := s.aiSvc.GenerateWithProvider(tenantID, 0, "bgm_analyze", prompt, "")
 	if err != nil {
 		return nil, fmt.Errorf("BGM AI analysis failed: %w", err)
 	}
@@ -319,49 +320,136 @@ func (s *BGMService) SearchBGMForSegment(ctx context.Context, seg *model.VideoBG
 	return nil
 }
 
-// jamendoSearch 在 Jamendo API 中按自然语言搜索 BGM 曲目，返回 (url, name, artist)
-func (s *BGMService) jamendoSearch(ctx context.Context, query string) (string, string, string) {
+// JamendoTrack Jamendo 音轨信息（用于前端搜索结果展示）
+type JamendoTrack struct {
+	ID                   string   `json:"id"`
+	Name                 string   `json:"name"`
+	ArtistName           string   `json:"artist_name"`
+	Duration             int      `json:"duration"`
+	Audio                string   `json:"audio"`
+	AudioDownload        string   `json:"audiodownload"`
+	AudioDownloadAllowed bool     `json:"audiodownload_allowed"`
+	Tags                 []string `json:"tags,omitempty"`
+}
+
+// PlayURL 返回优先可下载的播放 URL
+func (t JamendoTrack) PlayURL() string {
+	if t.AudioDownloadAllowed && t.AudioDownload != "" {
+		return t.AudioDownload
+	}
+	return t.Audio
+}
+
+// JamendoSearchParams Jamendo 搜索参数
+type JamendoSearchParams struct {
+	Query  string // 自然语言模糊搜索（fuzzytags）
+	Tags   string // 精确标签（空格分隔）
+	Speed  string // slow / medium / fast / veryslow / veryfast
+	BpmMin int    // BPM 下限，0=不限
+	BpmMax int    // BPM 上限，0=不限
+	Limit  int    // 结果数量，默认 10，最多 50
+}
+
+// JamendoSearch 在 Jamendo API 中搜索器乐曲目，返回完整音轨列表供前端展示/选择。
+func (s *BGMService) JamendoSearch(ctx context.Context, p JamendoSearchParams) ([]JamendoTrack, error) {
+	if s.jamendoClientID == "" {
+		return nil, fmt.Errorf("Jamendo client_id not configured")
+	}
+	limit := p.Limit
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
 	params := url.Values{}
 	params.Set("client_id", s.jamendoClientID)
 	params.Set("format", "json")
-	params.Set("limit", "5")
-	params.Set("fuzzytags", query)
+	params.Set("limit", fmt.Sprintf("%d", limit))
 	params.Set("vocalinstrumental", "instrumental")
 	params.Set("order", "popularity_month")
 	params.Set("include", "musicinfo")
 
+	if p.Query != "" {
+		params.Set("fuzzytags", p.Query)
+	}
+	if p.Tags != "" {
+		params.Set("tags", p.Tags)
+	}
+	if p.Speed != "" {
+		params.Set("speed", p.Speed)
+	}
+	if p.BpmMin > 0 && p.BpmMax > 0 {
+		params.Set("bpm_between", fmt.Sprintf("%d_%d", p.BpmMin, p.BpmMax))
+	} else if p.BpmMin > 0 {
+		params.Set("bpm_between", fmt.Sprintf("%d_300", p.BpmMin))
+	} else if p.BpmMax > 0 {
+		params.Set("bpm_between", fmt.Sprintf("0_%d", p.BpmMax))
+	}
+
 	apiURL := "https://api.jamendo.com/v3.0/tracks/?" + params.Encode()
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
-		return "", "", ""
+		return nil, err
 	}
 	resp, err := s.httpClient.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
-		return "", "", ""
+	if err != nil {
+		return nil, fmt.Errorf("Jamendo request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("Jamendo HTTP %d", resp.StatusCode)
+	}
 
 	var result struct {
 		Results []struct {
+			ID                   string `json:"id"`
+			Name                 string `json:"name"`
+			ArtistName           string `json:"artist_name"`
+			Duration             int    `json:"duration"`
 			Audio                string `json:"audio"`
 			AudioDownload        string `json:"audiodownload"`
 			AudioDownloadAllowed bool   `json:"audiodownload_allowed"`
-			Name                 string `json:"name"`
-			ArtistName           string `json:"artist_name"`
+			MusicInfo            struct {
+				Tags struct {
+					Genres   []string `json:"genres"`
+					Vartags  []string `json:"vartags"`
+				} `json:"tags"`
+			} `json:"musicinfo"`
 		} `json:"results"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Results) == 0 {
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("Jamendo response parse failed: %w", err)
+	}
+
+	tracks := make([]JamendoTrack, 0, len(result.Results))
+	for _, r := range result.Results {
+		tags := append(r.MusicInfo.Tags.Genres, r.MusicInfo.Tags.Vartags...)
+		tracks = append(tracks, JamendoTrack{
+			ID:                   r.ID,
+			Name:                 r.Name,
+			ArtistName:           r.ArtistName,
+			Duration:             r.Duration,
+			Audio:                r.Audio,
+			AudioDownload:        r.AudioDownload,
+			AudioDownloadAllowed: r.AudioDownloadAllowed,
+			Tags:                 tags,
+		})
+	}
+	return tracks, nil
+}
+
+// jamendoSearch 在 Jamendo API 中按自然语言搜索 BGM 曲目，返回 (url, name, artist)
+// 内部使用，供自动批量生成流程调用。
+func (s *BGMService) jamendoSearch(ctx context.Context, query string) (string, string, string) {
+	tracks, err := s.JamendoSearch(ctx, JamendoSearchParams{Query: query, Limit: 5})
+	if err != nil || len(tracks) == 0 {
 		return "", "", ""
 	}
-	for _, track := range result.Results {
-		audioURL := ""
-		if track.AudioDownloadAllowed && track.AudioDownload != "" {
-			audioURL = track.AudioDownload
-		} else if track.Audio != "" {
-			audioURL = track.Audio
-		}
-		if audioURL != "" {
-			return audioURL, track.Name, track.ArtistName
+	for _, t := range tracks {
+		if u := t.PlayURL(); u != "" {
+			return u, t.Name, t.ArtistName
 		}
 	}
 	return "", "", ""
@@ -373,6 +461,7 @@ func (s *BGMService) GenerateBGMSegments(
 	shots []*model.StoryboardShot,
 	bgmRepo *repository.VideoBGMSegmentRepository,
 	videoID uint,
+	tenantID uint,
 	progressFn func(int),
 ) ([]*model.VideoBGMSegment, error) {
 	progress := func(pct int) {
@@ -383,7 +472,7 @@ func (s *BGMService) GenerateBGMSegments(
 
 	// Step 1: AI analysis
 	progress(5)
-	segments, err := s.AnalyzeBGMForVideo(ctx, shots, bgmRepo, videoID)
+	segments, err := s.AnalyzeBGMForVideo(ctx, shots, bgmRepo, videoID, tenantID)
 	if err != nil {
 		return nil, err
 	}

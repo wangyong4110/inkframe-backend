@@ -1807,3 +1807,13 @@ func (r *VideoBGMSegmentRepository) BatchCreate(segs []*model.VideoBGMSegment) e
 func (r *VideoBGMSegmentRepository) Update(seg *model.VideoBGMSegment) error {
 	return r.db.Save(seg).Error
 }
+
+// UpdateTrack 更新BGM分段的曲目信息（手动选曲后调用）
+func (r *VideoBGMSegmentRepository) UpdateTrack(id uint, url, name, artist, source string) error {
+	return r.db.Model(&model.VideoBGMSegment{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"url":          url,
+		"track_name":   name,
+		"track_artist": artist,
+		"source":       source,
+	}).Error
+}

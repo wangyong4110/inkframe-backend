@@ -126,97 +126,112 @@ type sfxAnalysisItem struct {
 	SFXQueries []string `json:"sfx_queries"` // 自然语言搜索词组，如 "heavy rain bamboo forest"
 }
 
-// AnalyzeSFXForVideo 用一次 AI 调用批量分析所有分镜，为每个镜头生成
-// 自然语言音效搜索词组，写入 sfx_tags 字段。
-// 相比单镜头 LLM 调用，全局视角能避免所有镜头标签雷同，且搜索词更精准。
-func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.StoryboardShot) error {
-	if len(shots) == 0 {
+// analyzeSingleShotSFX 为单个分镜调用 AI 生成自然语言音效搜索词，更新 sfx_tags 字段。
+func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint) error {
+	prompt := `你是专业影视音效设计师，擅长为各类场景（现代、古代、修仙、玄幻、武侠、战争等）设计精准音效。
+
+请根据以下单个分镜信息，设计 2-4 个精确的英文音效搜索词组，用于在 Freesound、Jamendo 等专业音效库中检索真实音效素材。
+
+【设计原则】
+1. 每个词组为 2-6 个英文单词，须贴近真实音效库搜索词
+2. 优先级：场景环境音 > 动作冲击音 > 情绪渲染音
+3. 要具体："heavy rain hits tile roof ambient" 胜过 "rain"
+4. 修仙/玄幻：可用 "qi energy surge whoosh impact"、"spiritual aura cultivation resonance"、"divine thunder lightning crack"
+5. 武侠/战斗：可用 "metal sword clash combat"、"arrow flying whoosh impact"、"horse gallop battle charge"
+6. 古代中国：可用 "ancient palace hall ambience"、"wooden door creak open"、"crowd ancient market"
+7. 自然：可用 "mountain wind howl echo"、"bamboo forest breeze rustle"、"river stream flowing"
+8. 纯对话静止镜头（无动作环境音）输出空数组 []
+
+分镜信息：
+`
+	if shot.ShotNo > 0 {
+		prompt += fmt.Sprintf("镜头编号：%d\n", shot.ShotNo)
+	}
+	if shot.Description != "" {
+		prompt += fmt.Sprintf("画面描述：%s\n", shot.Description)
+	}
+	if shot.EmotionalTone != "" {
+		prompt += fmt.Sprintf("情绪基调：%s\n", shot.EmotionalTone)
+	}
+	if shot.Narration != "" {
+		prompt += fmt.Sprintf("旁白：%s\n", shot.Narration)
+	}
+	if shot.Dialogue != "" {
+		prompt += fmt.Sprintf("台词（仅参考环境，无需为台词本身生成音效）：%s\n", shot.Dialogue)
+	}
+	prompt += "\n只输出 JSON 字符串数组，示例：[\"heavy rain hits tile roof ambient\", \"thunder distant echo\"]"
+
+	result, err := s.aiSvc.GenerateWithProvider(tenantID, 0, "sfx_analyze", prompt, "")
+	if err != nil {
+		return fmt.Errorf("AI call: %w", err)
+	}
+
+	raw := extractJSON(result)
+	var queries []string
+	if err := json.Unmarshal([]byte(raw), &queries); err != nil {
+		return fmt.Errorf("parse JSON: %w (raw=%q)", err, raw)
+	}
+	if len(queries) == 0 {
 		return nil
 	}
 
-	// 构造发给 AI 的分镜摘要列表
-	briefs := make([]sfxShotBrief, 0, len(shots))
+	tagsJSON, _ := json.Marshal(queries)
+	shot.SFXTags = string(tagsJSON)
+	if err := s.storyboardRepo.UpdateSFXTags(shot.ID, string(tagsJSON)); err != nil {
+		return fmt.Errorf("update sfx_tags: %w", err)
+	}
+	return nil
+}
+
+// AnalyzeSFXForVideo 并行为每个分镜单独调用 AI 生成自然语言音效搜索词，写入 sfx_tags 字段。
+// 每个分镜独立分析，并发度最多 5，单个失败不影响其余镜头。
+func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.StoryboardShot, tenantID uint) error {
+	if len(shots) == 0 {
+		return nil
+	}
+	logger.Printf("[SFXService] AnalyzeSFXForVideo: parallel analysis for %d shots", len(shots))
+
+	const maxConcurrency = 5
+	sem := make(chan struct{}, maxConcurrency)
+	type result struct {
+		shotNo int
+		err    error
+	}
+	results := make(chan result, len(shots))
+
 	for _, shot := range shots {
-		briefs = append(briefs, sfxShotBrief{
-			ShotID:        shot.ID,
-			ShotNo:        shot.ShotNo,
-			Description:   shot.Description,
-			Narration:     shot.Narration,
-			Dialogue:      shot.Dialogue,
-			EmotionalTone: shot.EmotionalTone,
-			Duration:      float64(shot.Duration),
-		})
-	}
-	briefsJSON, err := json.Marshal(briefs)
-	if err != nil {
-		return fmt.Errorf("marshal shot briefs: %w", err)
-	}
-
-	// 构造 prompt，让 AI 以音效设计师视角自由生成搜索词组
-	sysCtx := "你是专业影视音效设计师，擅长为各类场景（现代、古代、修仙、玄幻、武侠、战争等）设计精准音效。\n\n"
-	userPrompt := sysCtx + `请分析以下分镜脚本，为每个镜头设计 2-4 个精确的英文音效搜索词组，用于在 Freesound、Jamendo 等专业音效库中检索真实音效素材。
-
-【设计原则】
-1. 每个词组为 2-6 个英文单词，须是音效库中实际存在的内容（贴近真实搜索习惯）
-2. 优先级：场景环境音 > 动作冲击音 > 情绪渲染音
-3. 要具体："heavy rain hits tile roof ambient" 胜过 "rain"
-4. 修仙/玄幻场景：可用 "qi energy surge whoosh impact"、"magic spell casting release"、"spiritual cultivation aura resonance"、"sword energy beam release"、"divine thunder lightning crack"
-5. 武侠/战斗场景：可用 "metal sword clash combat"、"arrow flying whoosh impact"、"punch kick fight impact"、"horse gallop battle charge"
-6. 古代中国场景：可用 "ancient chinese palace hall ambience"、"wooden door creak open"、"guqin string pluck"、"crowd ancient market china"
-7. 自然场景：可用 "mountain wind howl echo"、"bamboo forest breeze rustle"、"river stream rocks flowing"
-8. 每个镜头的词组须与其画面内容高度贴合，即使相邻镜头场景类似也要有细微差异
-9. 纯对话静止镜头（完全无动作环境音）输出空数组 []
-
-分镜数据：
-` + string(briefsJSON) + `
-
-只返回 JSON 数组，格式严格如下（shot_id 对应输入中的 shot_id 字段）：
-[{"shot_id": 1, "sfx_queries": ["phrase1", "phrase2", "phrase3"]}, {"shot_id": 2, "sfx_queries": ["phrase4", "phrase5"]}, ...]`
-
-	fullPrompt := userPrompt
-	logger.Printf("[SFXService] AnalyzeSFXForVideo: %d shots, calling AI...", len(shots))
-	result, err := s.aiSvc.Generate(0, "sfx_analyze", fullPrompt)
-	if err != nil {
-		return fmt.Errorf("AI SFX analysis: %w", err)
-	}
-
-	// 解析 AI 返回的 JSON
-	raw := extractJSON(result)
-	var items []sfxAnalysisItem
-	if err := json.Unmarshal([]byte(raw), &items); err != nil {
-		return fmt.Errorf("parse SFX analysis JSON: %w (raw=%q)", err, raw)
-	}
-
-	// 建立 shotID → queries 映射
-	queryMap := make(map[uint][]string, len(items))
-	for _, item := range items {
-		if len(item.SFXQueries) > 0 {
-			queryMap[item.ShotID] = item.SFXQueries
+		if ctx.Err() != nil {
+			break
 		}
+		sem <- struct{}{}
+		go func(sh *model.StoryboardShot) {
+			defer func() { <-sem }()
+			err := s.analyzeSingleShotSFX(ctx, sh, tenantID)
+			results <- result{shotNo: sh.ShotNo, err: err}
+		}(shot)
 	}
+	// 等待所有 goroutine 完成
+	for i := 0; i < cap(sem); i++ {
+		sem <- struct{}{}
+	}
+	close(results)
 
-	// 写入 DB 并更新内存中的 shot 对象
-	updated := 0
-	for _, shot := range shots {
-		queries, ok := queryMap[shot.ID]
-		if !ok || len(queries) == 0 {
-			continue
-		}
-		tagsJSON, _ := json.Marshal(queries)
-		shot.SFXTags = string(tagsJSON)
-		if err := s.storyboardRepo.UpdateSFXTags(shot.ID, string(tagsJSON)); err != nil {
-			logger.Printf("[SFXService] AnalyzeSFXForVideo: update shot %d sfx_tags failed: %v", shot.ID, err)
+	updated, failed := 0, 0
+	for r := range results {
+		if r.err != nil {
+			logger.Printf("[SFXService] AnalyzeSFXForVideo: shot %d failed: %v", r.shotNo, r.err)
+			failed++
 		} else {
 			updated++
 		}
 	}
-	logger.Printf("[SFXService] AnalyzeSFXForVideo: updated %d/%d shots", updated, len(shots))
+	logger.Printf("[SFXService] AnalyzeSFXForVideo: updated=%d failed=%d", updated, failed)
 	return nil
 }
 
 // AutoGenerateSFX 为单个镜头自动选取/生成音效，每个 tag 独立搜索，写入多条 ShotSFXItem。
 // 若该镜头已有音效条目，直接跳过（幂等）。
-func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.StoryboardShot) error {
+func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint) error {
 	// 幂等检测：优先用新表；无仓库时降级用旧字段
 	if s.sfxItemRepo != nil {
 		count, _ := s.sfxItemRepo.CountByShotID(shot.ID)
@@ -236,7 +251,7 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	}
 	if len(tags) == 0 {
 		var err error
-		tags, err = s.extractTags(ctx, shot)
+		tags, err = s.extractTags(ctx, shot, tenantID)
 		if err != nil {
 			logger.Printf("[SFXService] shot %d LLM tag extract failed (%v), using rule fallback", shot.ID, err)
 			tags = s.fallbackTags(shot)
@@ -354,6 +369,7 @@ func (s *SFXService) searchOneTag(ctx context.Context, tags []string, maxDur flo
 func (s *SFXService) BatchAutoGenerateSFX(
 	ctx context.Context,
 	shots []*model.StoryboardShot,
+	tenantID uint,
 	progressFn func(int),
 ) (success, fail int) {
 	total := len(shots)
@@ -372,7 +388,7 @@ func (s *SFXService) BatchAutoGenerateSFX(
 		sem <- struct{}{}
 		go func(s2 *model.StoryboardShot) {
 			defer func() { <-sem }()
-			err := s.AutoGenerateSFX(ctx, s2)
+			err := s.AutoGenerateSFX(ctx, s2, tenantID)
 			if err != nil {
 				logger.Printf("[SFXService] shot %d: %v", s2.ID, err)
 			}
@@ -424,9 +440,9 @@ func sfxPrompt(shot *model.StoryboardShot) string {
 }
 
 // extractTags 调用 LLM 提取音效标签列表
-func (s *SFXService) extractTags(ctx context.Context, shot *model.StoryboardShot) ([]string, error) {
+func (s *SFXService) extractTags(ctx context.Context, shot *model.StoryboardShot, tenantID uint) ([]string, error) {
 	prompt := sfxPrompt(shot)
-	result, err := s.aiSvc.Generate(0, "sfx_extract", prompt)
+	result, err := s.aiSvc.GenerateWithProvider(tenantID, 0, "sfx_extract", prompt, "")
 	if err != nil {
 		return nil, err
 	}

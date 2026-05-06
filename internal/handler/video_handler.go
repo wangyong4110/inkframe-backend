@@ -1024,13 +1024,13 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 		h.taskSvc.UpdateProgress(taskID, 5) //nolint:errcheck
 		ctx := context.Background()
 		// Step 1: AI 批量分析所有分镜，生成精准的自然语言音效搜索词
-		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots); err != nil {
+		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID); err != nil {
 			logger.Printf("[VideoHandler] BatchGenerateSFX task %s: AI analyze failed (proceeding): %v", taskID, err)
 		}
 		h.taskSvc.UpdateProgress(taskID, 20) //nolint:errcheck
 		// Step 2: 用更新后的 sfx_tags 搜索/生成实际音效文件
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, 20+pct*80/100) } //nolint:errcheck
-		success, fail := h.sfxSvc.BatchAutoGenerateSFX(ctx, shots, progressFn)
+		success, fail := h.sfxSvc.BatchAutoGenerateSFX(ctx, shots, tenantID, progressFn)
 		h.taskSvc.Complete(taskID, gin.H{"success": success, "fail": fail}) //nolint:errcheck
 		logger.Printf("[VideoHandler] BatchGenerateSFX task %s done: success=%d fail=%d", taskID, success, fail)
 	}(task.TaskID)
@@ -1078,7 +1078,7 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		ctx := context.Background()
-		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots); err != nil {
+		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID); err != nil {
 			logger.Printf("[VideoHandler] AnalyzeSFXTags task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
@@ -1133,7 +1133,7 @@ func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		ctx := context.Background()
-		if err := h.sfxSvc.AutoGenerateSFX(ctx, s); err != nil {
+		if err := h.sfxSvc.AutoGenerateSFX(ctx, s, tenantID); err != nil {
 			logger.Printf("[VideoHandler] GenerateShotSFX task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
@@ -1761,6 +1761,67 @@ func (h *VideoHandler) ListBGMSegments(c *gin.Context) {
 	respondOK(c, segs)
 }
 
+// JamendoSearchBGM GET /videos/:id/bgm/search
+// 代理搜索 Jamendo 音乐库（避免跨域），返回器乐曲目列表供前端选择。
+// 查询参数：q（模糊搜索词）、tags（精确标签，空格分隔）、speed（slow/medium/fast）、
+//           bpm_min、bpm_max（BPM范围，0=不限）、limit（默认10，最多50）。
+func (h *VideoHandler) JamendoSearchBGM(c *gin.Context) {
+	if h.bgmSvc == nil {
+		respondErr(c, http.StatusNotImplemented, "BGM service not configured")
+		return
+	}
+	bpmMin, _ := strconv.Atoi(c.DefaultQuery("bpm_min", "0"))
+	bpmMax, _ := strconv.Atoi(c.DefaultQuery("bpm_max", "0"))
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
+
+	tracks, err := h.bgmSvc.JamendoSearch(c.Request.Context(), service.JamendoSearchParams{
+		Query:  c.Query("q"),
+		Tags:   c.Query("tags"),
+		Speed:  c.Query("speed"),
+		BpmMin: bpmMin,
+		BpmMax: bpmMax,
+		Limit:  limit,
+	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, tracks)
+}
+
+// ApplyBGMTrack PATCH /videos/:id/bgm/segments/:seg_id/track
+// 将手动选中的 Jamendo 曲目应用到指定 BGM 分段，更新 URL/track_name/track_artist/source。
+func (h *VideoHandler) ApplyBGMTrack(c *gin.Context) {
+	if h.bgmRepo == nil {
+		respondErr(c, http.StatusNotImplemented, "BGM repository not configured")
+		return
+	}
+	segID, err := strconv.ParseUint(c.Param("seg_id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid seg_id")
+		return
+	}
+	var req struct {
+		URL         string `json:"url" binding:"required"`
+		TrackName   string `json:"track_name"`
+		TrackArtist string `json:"track_artist"`
+		Source      string `json:"source"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "invalid body: url is required")
+		return
+	}
+	src := req.Source
+	if src == "" {
+		src = "jamendo"
+	}
+	if err := h.bgmRepo.UpdateTrack(uint(segID), req.URL, req.TrackName, req.TrackArtist, src); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"seg_id": segID})
+}
+
 // AnalyzeBGMSegments POST /videos/:id/bgm/analyze
 // 仅执行 AI 分析（不搜索音频），返回分段计划（含搜索词）。
 func (h *VideoHandler) AnalyzeBGMSegments(c *gin.Context) {
@@ -1801,7 +1862,7 @@ func (h *VideoHandler) AnalyzeBGMSegments(c *gin.Context) {
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		ctx := context.Background()
-		segs, err := h.bgmSvc.AnalyzeBGMForVideo(ctx, shots, h.bgmRepo, uint(videoID))
+		segs, err := h.bgmSvc.AnalyzeBGMForVideo(ctx, shots, h.bgmRepo, uint(videoID), tenantID)
 		if err != nil {
 			logger.Printf("[VideoHandler] AnalyzeBGMSegments task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
@@ -1858,7 +1919,7 @@ func (h *VideoHandler) GenerateBGM(c *gin.Context) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		ctx := context.Background()
-		segs, err := h.bgmSvc.GenerateBGMSegments(ctx, shots, h.bgmRepo, uint(videoID), progressFn)
+		segs, err := h.bgmSvc.GenerateBGMSegments(ctx, shots, h.bgmRepo, uint(videoID), tenantID, progressFn)
 		if err != nil {
 			logger.Printf("[VideoHandler] GenerateBGM task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
