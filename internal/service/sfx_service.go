@@ -334,7 +334,8 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	return nil
 }
 
-// searchOneTag 对单个 tag 执行四层降级搜索，返回 (url, source)
+// searchOneTag 对单个 tag 执行三层降级搜索，返回 (url, source)。
+// 注意：Jamendo 是音乐平台（适合 BGM），不适合作为音效来源，已从降级链中移除。
 func (s *SFXService) searchOneTag(ctx context.Context, tags []string, maxDur float64, shot *model.StoryboardShot) (string, string) {
 	if u := s.searchLocalLib(tags); u != "" {
 		logger.Printf("[SFXService] shot %d local hit: %s", shot.ID, u)
@@ -347,14 +348,6 @@ func (s *SFXService) searchOneTag(ctx context.Context, tags []string, maxDur flo
 		return u, "freesound"
 	} else {
 		logger.Printf("[SFXService] shot %d Freesound miss", shot.ID)
-	}
-	if s.jamendoClientID == "" {
-		logger.Printf("[SFXService] shot %d skip Jamendo (no client_id)", shot.ID)
-	} else if u := s.searchJamendo(ctx, tags, maxDur); u != "" {
-		logger.Printf("[SFXService] shot %d Jamendo hit: %s", shot.ID, u)
-		return u, "jamendo"
-	} else {
-		logger.Printf("[SFXService] shot %d Jamendo miss", shot.ID)
 	}
 	if u, err := s.generateElevenLabs(ctx, shot); err == nil && u != "" {
 		logger.Printf("[SFXService] shot %d ElevenLabs hit: %s", shot.ID, u)
