@@ -888,7 +888,7 @@ type StoryboardShot struct {
 
 	// 音效（SFX）
 	SFXURL    string  `json:"sfx_url" gorm:"size:1000"`    // 音效文件URL（本地/OSS/Freesound预览）
-	SFXTags   string  `json:"sfx_tags" gorm:"size:500"`    // LLM提取的音效标签（JSON数组字符串）
+	SFXTags   string  `json:"sfx_tags" gorm:"size:2000"`   // LLM提取的音效标签（JSON对象或数组字符串）
 	SFXVolume float64 `json:"sfx_volume" gorm:"type:decimal(4,2);default:0"` // 混音音量（0=自动，>0=覆盖）
 
 	CreatedAt time.Time      `json:"created_at"`
@@ -926,7 +926,7 @@ type ShotSFXItem struct {
 	ShotID uint `json:"shot_id" gorm:"not null;index:idx_sfx_shot_seq,priority:1"`
 	SeqNo  int  `json:"seq_no" gorm:"not null;default:1;index:idx_sfx_shot_seq,priority:2"`
 
-	Tag    string  `json:"tag" gorm:"size:100"`                          // 音效标签，如 "rain_heavy"
+	Tag    string  `json:"tag" gorm:"size:200"`                          // 音效搜索词，如 "heavy rain bamboo forest"
 	URL    string  `json:"url" gorm:"size:1000"`                         // 音效文件 URL
 	Volume float64 `json:"volume" gorm:"type:decimal(4,2);default:0.4"` // 混音音量（0.1–1.0）
 	Source string  `json:"source" gorm:"size:20"`                        // local/freesound/jamendo/elevenlabs

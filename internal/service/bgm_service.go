@@ -173,6 +173,7 @@ func (s *BGMService) AnalyzeBGMForVideo(
 	bgmRepo *repository.VideoBGMSegmentRepository,
 	videoID uint,
 	tenantID uint,
+	userPrompt string,
 ) ([]*model.VideoBGMSegment, error) {
 	if s.aiSvc == nil {
 		return nil, fmt.Errorf("BGMService: AI service not configured")
@@ -234,6 +235,10 @@ func (s *BGMService) AnalyzeBGMForVideo(
     ]
   }
 ]`, string(briefsJSON))
+
+	if userPrompt != "" {
+		prompt += "\n\n额外背景信息（优先参考，用于调整BGM风格/情绪）：\n" + userPrompt
+	}
 
 	raw, err := s.aiSvc.GenerateWithProvider(tenantID, 0, "bgm_analyze", prompt, "")
 	if err != nil {
@@ -462,6 +467,7 @@ func (s *BGMService) GenerateBGMSegments(
 	bgmRepo *repository.VideoBGMSegmentRepository,
 	videoID uint,
 	tenantID uint,
+	userPrompt string,
 	progressFn func(int),
 ) ([]*model.VideoBGMSegment, error) {
 	progress := func(pct int) {
@@ -472,7 +478,7 @@ func (s *BGMService) GenerateBGMSegments(
 
 	// Step 1: AI analysis
 	progress(5)
-	segments, err := s.AnalyzeBGMForVideo(ctx, shots, bgmRepo, videoID, tenantID)
+	segments, err := s.AnalyzeBGMForVideo(ctx, shots, bgmRepo, videoID, tenantID, userPrompt)
 	if err != nil {
 		return nil, err
 	}

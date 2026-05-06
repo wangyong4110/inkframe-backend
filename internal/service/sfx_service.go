@@ -113,34 +113,34 @@ func buildDefaultSFXLib() map[string]string {
 type sfxShotBrief struct {
 	ShotID        uint    `json:"shot_id"`
 	ShotNo        int     `json:"shot_no"`
-	Description   string  `json:"description"`            // 英文画面描述
-	Narration     string  `json:"narration,omitempty"`    // 中文旁白
-	Dialogue      string  `json:"dialogue,omitempty"`     // 台词
+	Description   string  `json:"description"`
+	Narration     string  `json:"narration,omitempty"`
+	Dialogue      string  `json:"dialogue,omitempty"`
 	EmotionalTone string  `json:"emotional_tone,omitempty"`
 	Duration      float64 `json:"duration"`
 }
 
-// sfxAnalysisItem AI 返回的单镜头音效分析结果
-type sfxAnalysisItem struct {
-	ShotID     uint     `json:"shot_id"`
-	SFXQueries []string `json:"sfx_queries"` // 自然语言搜索词组，如 "heavy rain bamboo forest"
-}
 
 // analyzeSingleShotSFX 为单个分镜调用 AI 生成自然语言音效搜索词，更新 sfx_tags 字段。
-func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint) error {
-	prompt := `你是专业影视音效设计师，擅长为各类场景（现代、古代、修仙、玄幻、武侠、战争等）设计精准音效。
+// 参考7类音效框架引导 AI 选词，输出平铺 JSON 数组；无需音效时输出空数组。
+func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint, userContext string) error {
+	prompt := `你是专业影视音效设计师，为分镜场景设计精准音效搜索词。
 
-请根据以下单个分镜信息，设计 2-4 个精确的英文音效搜索词组，用于在 Freesound、Jamendo 等专业音效库中检索真实音效素材。
+请根据分镜信息，从以下音效类型中选择适合该场景的词组（共输出 0-5 条英文搜索词）：
 
-【设计原则】
-1. 每个词组为 2-6 个英文单词，须贴近真实音效库搜索词
-2. 优先级：场景环境音 > 动作冲击音 > 情绪渲染音
-3. 要具体："heavy rain hits tile roof ambient" 胜过 "rain"
-4. 修仙/玄幻：可用 "qi energy surge whoosh impact"、"spiritual aura cultivation resonance"、"divine thunder lightning crack"
-5. 武侠/战斗：可用 "metal sword clash combat"、"arrow flying whoosh impact"、"horse gallop battle charge"
-6. 古代中国：可用 "ancient palace hall ambience"、"wooden door creak open"、"crowd ancient market"
-7. 自然：可用 "mountain wind howl echo"、"bamboo forest breeze rustle"、"river stream flowing"
-8. 纯对话静止镜头（无动作环境音）输出空数组 []
+音效类型参考（按需选择，不限类别数量）：
+• 环境音效：风声、雨声、鸟鸣、虫鸣、车流、人群、空调白噪音、咖啡厅背景声等
+• 动作音效：脚步声、开关门、物体碰撞摔落、剑鸣刀击、马蹄、衣物摩擦等
+• UI/界面音效：按钮点击、提示音、翻页、错误/成功提示（科技/游戏场景）
+• 特效音效：爆炸枪声、Whoosh移动感、Boom冲击感、Riser过渡音、慢动作拉伸音
+• 情绪音效：喜剧滑稽音、心跳悬疑音、恐怖诡异噪音、胜利/失败音效
+• 人声音效：笑声、掌声、欢呼、人群反应、耳语回声（不含角色对白）
+• 转场音效：Swoosh扫过、咔哒声、电影胶片转动、时钟滴答
+
+【输出规则】
+- 仅输出 JSON 字符串数组，每条为2-6个英文单词的可搜索词组
+- 纯静止镜头或纯对话镜头不需要音效时，输出空数组 []
+- 示例：["heavy rain tile roof ambient", "wooden door creak open", "sword clash metal impact"]
 
 分镜信息：
 `
@@ -157,9 +157,11 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 		prompt += fmt.Sprintf("旁白：%s\n", shot.Narration)
 	}
 	if shot.Dialogue != "" {
-		prompt += fmt.Sprintf("台词（仅参考环境，无需为台词本身生成音效）：%s\n", shot.Dialogue)
+		prompt += fmt.Sprintf("台词（仅参考场景环境，无需为台词本身设计音效）：%s\n", shot.Dialogue)
 	}
-	prompt += "\n只输出 JSON 字符串数组，示例：[\"heavy rain hits tile roof ambient\", \"thunder distant echo\"]"
+	if userContext != "" {
+		prompt += "\n额外场景背景（优先参考）：\n" + userContext
+	}
 
 	result, err := s.aiSvc.GenerateWithProvider(tenantID, 0, "sfx_analyze", prompt, "")
 	if err != nil {
@@ -172,6 +174,9 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 		return fmt.Errorf("parse JSON: %w (raw=%q)", err, raw)
 	}
 	if len(queries) == 0 {
+		// 该镜头无需音效
+		shot.SFXTags = ""
+		_ = s.storyboardRepo.UpdateSFXTags(shot.ID, "")
 		return nil
 	}
 
@@ -185,7 +190,7 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 
 // AnalyzeSFXForVideo 并行为每个分镜单独调用 AI 生成自然语言音效搜索词，写入 sfx_tags 字段。
 // 每个分镜独立分析，并发度最多 5，单个失败不影响其余镜头。
-func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.StoryboardShot, tenantID uint) error {
+func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.StoryboardShot, tenantID uint, userContext string) error {
 	if len(shots) == 0 {
 		return nil
 	}
@@ -206,7 +211,7 @@ func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.Stor
 		sem <- struct{}{}
 		go func(sh *model.StoryboardShot) {
 			defer func() { <-sem }()
-			err := s.analyzeSingleShotSFX(ctx, sh, tenantID)
+			err := s.analyzeSingleShotSFX(ctx, sh, tenantID, userContext)
 			results <- result{shotNo: sh.ShotNo, err: err}
 		}(shot)
 	}
@@ -257,9 +262,9 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 			tags = s.fallbackTags(shot)
 		}
 	}
-	// 最多取前 3 个 tag，避免过多网络请求
-	if len(tags) > 3 {
-		tags = tags[:3]
+	// 最多取前 5 个 tag，避免过多网络请求
+	if len(tags) > 5 {
+		tags = tags[:5]
 	}
 
 	tagsJSON, _ := json.Marshal(tags)
@@ -287,8 +292,7 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	var results []sfxResult
 
 	for _, tag := range tags {
-		singleTags := []string{tag}
-		u, src := s.searchOneTag(ctx, singleTags, maxDur, shot)
+		u, src := s.searchOneTag(ctx, []string{tag}, maxDur, shot)
 		if u != "" {
 			results = append(results, sfxResult{tag: tag, url: u, source: src})
 			logger.Printf("[SFXService] shot %d tag=%q source=%s url=%s", shot.ID, tag, src, u)
@@ -303,7 +307,6 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 
 	// 3. 写入数据库
 	if s.sfxItemRepo != nil {
-		// 新表：写入多条 ShotSFXItem
 		items := make([]*model.ShotSFXItem, 0, len(results))
 		for i, r := range results {
 			// 主音效音量 = baseVol；后续音效递减 0.1（最低 0.1）
@@ -326,7 +329,6 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 		// 同步更新旧字段（向后兼容时间线播放）
 		_ = s.storyboardRepo.UpdateSFX(shot.ID, results[0].url, string(tagsJSON), baseVol)
 	} else {
-		// 无新仓库：降级写旧字段（单条）
 		_ = s.storyboardRepo.UpdateSFX(shot.ID, results[0].url, string(tagsJSON), baseVol)
 	}
 	return nil
@@ -370,6 +372,7 @@ func (s *SFXService) BatchAutoGenerateSFX(
 	ctx context.Context,
 	shots []*model.StoryboardShot,
 	tenantID uint,
+	userContext string,
 	progressFn func(int),
 ) (success, fail int) {
 	total := len(shots)
@@ -655,11 +658,9 @@ func (s *SFXService) searchJamendo(ctx context.Context, tags []string, maxDurati
 // elevenLabsPrompt 将 sfx_tags 转换为适合 ElevenLabs 音效生成的英文 Prompt。
 // 优先使用 sfx_tags（语义更准确），降级用镜头描述的前缀。
 func elevenLabsPrompt(shot *model.StoryboardShot) string {
-	// 尝试从 SFXTags 字段构建
 	if shot.SFXTags != "" {
 		var tags []string
 		if json.Unmarshal([]byte(shot.SFXTags), &tags) == nil && len(tags) > 0 {
-			// 将 underscore 标签转为自然语言短语
 			parts := make([]string, 0, len(tags))
 			for _, t := range tags {
 				parts = append(parts, strings.ReplaceAll(normalizeTag(t), "_", " "))
@@ -671,7 +672,7 @@ func elevenLabsPrompt(shot *model.StoryboardShot) string {
 			return prompt
 		}
 	}
-	// 降级：截取镜头描述（视觉提示词，质量较差但聊胜于无）
+	// 降级：截取镜头描述
 	runes := []rune(shot.Description)
 	if len(runes) > 200 {
 		return string(runes[:200])

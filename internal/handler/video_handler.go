@@ -1007,33 +1007,38 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 		return
 	}
 
+	var sfxReq struct {
+		UserContext string `json:"user_context"`
+	}
+	_ = c.ShouldBindJSON(&sfxReq)
+
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeSFXGen, "自动音效生成", "video", uint(videoID))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "create task failed")
 		return
 	}
 
-	go func(taskID string) {
+	go func(taskID string, userContext string) {
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Printf("[VideoHandler] BatchGenerateSFX task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID)     //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)        //nolint:errcheck
 		h.taskSvc.UpdateProgress(taskID, 5) //nolint:errcheck
 		ctx := context.Background()
 		// Step 1: AI 批量分析所有分镜，生成精准的自然语言音效搜索词
-		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID); err != nil {
+		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID, userContext); err != nil {
 			logger.Printf("[VideoHandler] BatchGenerateSFX task %s: AI analyze failed (proceeding): %v", taskID, err)
 		}
 		h.taskSvc.UpdateProgress(taskID, 20) //nolint:errcheck
 		// Step 2: 用更新后的 sfx_tags 搜索/生成实际音效文件
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, 20+pct*80/100) } //nolint:errcheck
-		success, fail := h.sfxSvc.BatchAutoGenerateSFX(ctx, shots, tenantID, progressFn)
+		success, fail := h.sfxSvc.BatchAutoGenerateSFX(ctx, shots, tenantID, userContext, progressFn)
 		h.taskSvc.Complete(taskID, gin.H{"success": success, "fail": fail}) //nolint:errcheck
 		logger.Printf("[VideoHandler] BatchGenerateSFX task %s done: success=%d fail=%d", taskID, success, fail)
-	}(task.TaskID)
+	}(task.TaskID, sfxReq.UserContext)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
@@ -1063,13 +1068,18 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 		return
 	}
 
+	var sfxTagsReq struct {
+		UserContext string `json:"user_context"`
+	}
+	_ = c.ShouldBindJSON(&sfxTagsReq)
+
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeSFXGen, "AI 音效标签分析", "video", uint(videoID))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "create task failed")
 		return
 	}
 
-	go func(taskID string) {
+	go func(taskID string, userContext string) {
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Printf("[VideoHandler] AnalyzeSFXTags task %s panic: %v", taskID, r)
@@ -1078,13 +1088,13 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		ctx := context.Background()
-		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID); err != nil {
+		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID, userContext); err != nil {
 			logger.Printf("[VideoHandler] AnalyzeSFXTags task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
 		h.taskSvc.Complete(taskID, gin.H{"count": len(shots)}) //nolint:errcheck
-	}(task.TaskID)
+	}(task.TaskID, sfxTagsReq.UserContext)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
@@ -1853,7 +1863,12 @@ func (h *VideoHandler) AnalyzeBGMSegments(c *gin.Context) {
 		return
 	}
 
-	go func(taskID string) {
+	var bgmReq struct {
+		UserPrompt string `json:"user_prompt"`
+	}
+	_ = c.ShouldBindJSON(&bgmReq)
+
+	go func(taskID string, userPrompt string) {
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Printf("[VideoHandler] AnalyzeBGMSegments task %s panic: %v", taskID, r)
@@ -1862,14 +1877,14 @@ func (h *VideoHandler) AnalyzeBGMSegments(c *gin.Context) {
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		ctx := context.Background()
-		segs, err := h.bgmSvc.AnalyzeBGMForVideo(ctx, shots, h.bgmRepo, uint(videoID), tenantID)
+		segs, err := h.bgmSvc.AnalyzeBGMForVideo(ctx, shots, h.bgmRepo, uint(videoID), tenantID, userPrompt)
 		if err != nil {
 			logger.Printf("[VideoHandler] AnalyzeBGMSegments task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
 		h.taskSvc.Complete(taskID, gin.H{"count": len(segs)}) //nolint:errcheck
-	}(task.TaskID)
+	}(task.TaskID, bgmReq.UserPrompt)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
@@ -1909,7 +1924,12 @@ func (h *VideoHandler) GenerateBGM(c *gin.Context) {
 		return
 	}
 
-	go func(taskID string) {
+	var bgmGenReq struct {
+		UserPrompt string `json:"user_prompt"`
+	}
+	_ = c.ShouldBindJSON(&bgmGenReq)
+
+	go func(taskID string, userPrompt string) {
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Printf("[VideoHandler] GenerateBGM task %s panic: %v", taskID, r)
@@ -1919,7 +1939,7 @@ func (h *VideoHandler) GenerateBGM(c *gin.Context) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		ctx := context.Background()
-		segs, err := h.bgmSvc.GenerateBGMSegments(ctx, shots, h.bgmRepo, uint(videoID), tenantID, progressFn)
+		segs, err := h.bgmSvc.GenerateBGMSegments(ctx, shots, h.bgmRepo, uint(videoID), tenantID, userPrompt, progressFn)
 		if err != nil {
 			logger.Printf("[VideoHandler] GenerateBGM task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
@@ -1933,7 +1953,7 @@ func (h *VideoHandler) GenerateBGM(c *gin.Context) {
 		}
 		h.taskSvc.Complete(taskID, gin.H{"total": len(segs), "matched": matched}) //nolint:errcheck
 		logger.Printf("[VideoHandler] GenerateBGM task %s done: total=%d matched=%d", taskID, len(segs), matched)
-	}(task.TaskID)
+	}(task.TaskID, bgmGenReq.UserPrompt)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
