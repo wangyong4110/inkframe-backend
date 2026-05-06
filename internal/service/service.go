@@ -4514,7 +4514,40 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 		fields["duration_secs"] = d
 	}
 	s.segmentRepo.UpdateFields(segID, fields) //nolint:errcheck
+
+	// 配音生成完成后，同步更新分镜时长：取视频时长与所有配音段落累计时长中的较大值
+	s.syncShotDurationAfterVoice(seg.ShotID)
+
 	return nil
+}
+
+// syncShotDurationAfterVoice 累加该分镜所有配音段落的 duration_secs，
+// 若合计时长超过当前分镜时长，则更新分镜 duration 为二者中较大值。
+func (s *VideoService) syncShotDurationAfterVoice(shotID uint) {
+	if s.segmentRepo == nil {
+		return
+	}
+	segs, err := s.segmentRepo.ListByShotID(shotID)
+	if err != nil || len(segs) == 0 {
+		return
+	}
+	var totalVoice float64
+	for _, sg := range segs {
+		if sg.DurationSecs > 0 {
+			totalVoice += sg.DurationSecs
+		}
+	}
+	if totalVoice <= 0 {
+		return
+	}
+	shot, err := s.storyboardRepo.GetByID(shotID)
+	if err != nil || shot == nil {
+		return
+	}
+	if totalVoice <= shot.Duration {
+		return // 配音比当前时长短，不需要更新
+	}
+	s.storyboardRepo.UpdateFields(shotID, map[string]interface{}{"duration": totalVoice}) //nolint:errcheck
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
