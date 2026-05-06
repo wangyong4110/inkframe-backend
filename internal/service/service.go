@@ -4963,6 +4963,15 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 		}
 	}
 
+	// 计算配音时长，更新分镜 duration = max(原始时长, 配音时长)
+	if strings.HasPrefix(audioURL, "file://") {
+		if data, e := os.ReadFile(strings.TrimPrefix(audioURL, "file://")); e == nil {
+			if d := mp3Duration(data); d > 0 && d > shot.Duration {
+				shot.Duration = d
+			}
+		}
+	}
+
 	shot.AudioPath = audioURL
 	s.storyboardRepo.Update(shot) //nolint:errcheck
 	return nil
