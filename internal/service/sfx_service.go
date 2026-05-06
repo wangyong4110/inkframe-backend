@@ -126,6 +126,7 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	}
 
 	tagsJSON, _ := json.Marshal(tags)
+	logger.Printf("[SFXService] shot %d tags=%s", shot.ID, tagsJSON)
 
 	// 2. 四层降级查找音效：本地库 → Freesound → Jamendo → ElevenLabs
 	maxDur := float64(shot.Duration)
@@ -133,17 +134,40 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 		maxDur = 0 // 不限时长
 	}
 	sfxURL := s.searchLocalLib(tags)
-	if sfxURL == "" {
-		sfxURL = s.searchFreesound(ctx, tags, maxDur)
+	if sfxURL != "" {
+		logger.Printf("[SFXService] shot %d local hit: %s", shot.ID, sfxURL)
 	}
 	if sfxURL == "" {
-		sfxURL = s.searchJamendo(ctx, tags, maxDur)
+		if s.freesoundKey == "" {
+			logger.Printf("[SFXService] shot %d skip Freesound (no key)", shot.ID)
+		} else {
+			sfxURL = s.searchFreesound(ctx, tags, maxDur)
+			if sfxURL != "" {
+				logger.Printf("[SFXService] shot %d Freesound hit: %s", shot.ID, sfxURL)
+			} else {
+				logger.Printf("[SFXService] shot %d Freesound miss", shot.ID)
+			}
+		}
+	}
+	if sfxURL == "" {
+		if s.jamendoClientID == "" {
+			logger.Printf("[SFXService] shot %d skip Jamendo (no client_id)", shot.ID)
+		} else {
+			sfxURL = s.searchJamendo(ctx, tags, maxDur)
+			if sfxURL != "" {
+				logger.Printf("[SFXService] shot %d Jamendo hit: %s", shot.ID, sfxURL)
+			} else {
+				logger.Printf("[SFXService] shot %d Jamendo miss", shot.ID)
+			}
+		}
 	}
 	if sfxURL == "" {
 		var genErr error
 		sfxURL, genErr = s.generateElevenLabs(ctx, shot)
 		if genErr != nil {
 			logger.Printf("[SFXService] shot %d ElevenLabs failed: %v", shot.ID, genErr)
+		} else {
+			logger.Printf("[SFXService] shot %d ElevenLabs hit: %s", shot.ID, sfxURL)
 		}
 	}
 
