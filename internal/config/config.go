@@ -42,9 +42,10 @@ type Config struct {
 
 // SFXConfig 自动音效生成配置
 type SFXConfig struct {
-	Dir           string `mapstructure:"dir"`            // 本地音效库目录（优先层）
-	FreesoundKey  string `mapstructure:"freesound_key"`  // Freesound API key（第二层，可选）
-	ElevenLabsKey string `mapstructure:"elevenlabs_key"` // ElevenLabs API key（第三层，可选）
+	Dir             string `mapstructure:"dir"`              // 本地音效库目录（优先层）
+	FreesoundKey    string `mapstructure:"freesound_key"`    // Freesound API key（第二层，可选）
+	JamendoClientID string `mapstructure:"jamendo_client_id"` // Jamendo client_id（第三层，可选）
+	ElevenLabsKey   string `mapstructure:"elevenlabs_key"`   // ElevenLabs API key（第四层，可选）
 }
 
 // ServerConfig 服务器配置

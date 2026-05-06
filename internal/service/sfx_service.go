@@ -20,24 +20,26 @@ import (
 )
 
 // SFXService 自动音效生成服务。
-// 三层降级：本地 SFX 库 → Freesound API（关键词搜索）→ ElevenLabs（AI生成）。
+// 四层降级：本地 SFX 库 → Freesound API → Jamendo API → ElevenLabs（AI生成）。
 // 各层均可选，未配置时透明跳过。
 type SFXService struct {
-	aiSvc          *AIService
-	storageSvc     storage.Service
-	storyboardRepo *repository.StoryboardRepository
-	sfxDir         string            // 本地音效目录
-	freesoundKey   string            // Freesound API Token（可选）
-	elevenKey      string            // ElevenLabs API Key（可选）
-	httpClient     *http.Client
-	localLib       map[string]string // 内置标签 → 文件名（不含目录）
+	aiSvc           *AIService
+	storageSvc      storage.Service
+	storyboardRepo  *repository.StoryboardRepository
+	sfxDir          string            // 本地音效目录
+	freesoundKey    string            // Freesound API Token（可选）
+	jamendoClientID string            // Jamendo client_id（可选）
+	elevenKey       string            // ElevenLabs API Key（可选）
+	httpClient      *http.Client
+	localLib        map[string]string // 内置标签 → 文件名（不含目录）
 }
 
 // SFXServiceConfig SFXService 构造参数
 type SFXServiceConfig struct {
-	SFXDir        string // 本地音效目录（环境变量 SFX_DIR）
-	FreesoundKey  string // 环境变量 FREESOUND_API_KEY
-	ElevenLabsKey string // 环境变量 ELEVENLABS_API_KEY
+	SFXDir          string // 本地音效目录（环境变量 SFX_DIR）
+	FreesoundKey    string // 环境变量 FREESOUND_API_KEY
+	JamendoClientID string // 环境变量 JAMENDO_CLIENT_ID
+	ElevenLabsKey   string // 环境变量 ELEVENLABS_API_KEY
 }
 
 // NewSFXService 创建 SFX 服务实例
@@ -48,14 +50,15 @@ func NewSFXService(
 	cfg SFXServiceConfig,
 ) *SFXService {
 	return &SFXService{
-		aiSvc:          aiSvc,
-		storageSvc:     storageSvc,
-		storyboardRepo: storyboardRepo,
-		sfxDir:         cfg.SFXDir,
-		freesoundKey:   cfg.FreesoundKey,
-		elevenKey:      cfg.ElevenLabsKey,
-		httpClient:     &http.Client{Timeout: 30 * time.Second},
-		localLib:       buildDefaultSFXLib(),
+		aiSvc:           aiSvc,
+		storageSvc:      storageSvc,
+		storyboardRepo:  storyboardRepo,
+		sfxDir:          cfg.SFXDir,
+		freesoundKey:    cfg.FreesoundKey,
+		jamendoClientID: cfg.JamendoClientID,
+		elevenKey:       cfg.ElevenLabsKey,
+		httpClient:      &http.Client{Timeout: 30 * time.Second},
+		localLib:        buildDefaultSFXLib(),
 	}
 }
 
@@ -124,10 +127,17 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 
 	tagsJSON, _ := json.Marshal(tags)
 
-	// 2. 三层降级查找音效
+	// 2. 四层降级查找音效：本地库 → Freesound → Jamendo → ElevenLabs
+	maxDur := float64(shot.Duration)
+	if maxDur <= 0 {
+		maxDur = 0 // 不限时长
+	}
 	sfxURL := s.searchLocalLib(tags)
 	if sfxURL == "" {
-		sfxURL = s.searchFreesound(ctx, tags)
+		sfxURL = s.searchFreesound(ctx, tags, maxDur)
+	}
+	if sfxURL == "" {
+		sfxURL = s.searchJamendo(ctx, tags, maxDur)
 	}
 	if sfxURL == "" {
 		var genErr error
@@ -308,11 +318,16 @@ func (s *SFXService) searchLocalLib(tags []string) string {
 	return ""
 }
 
-// freesoundSearch 执行单次 Freesound API 搜索，返回首个结果的预览 MP3 URL
-func (s *SFXService) freesoundSearch(ctx context.Context, query string) string {
+// freesoundSearch 执行单次 Freesound API 搜索，返回首个结果的预览 MP3 URL。
+// maxDuration > 0 时附加时长过滤（秒），并按下载量降序排列。
+func (s *SFXService) freesoundSearch(ctx context.Context, query string, maxDuration float64) string {
+	filter := `license:"Creative Commons 0"`
+	if maxDuration > 0 {
+		filter += fmt.Sprintf(" duration:[0.5 TO %.1f]", maxDuration)
+	}
 	apiURL := fmt.Sprintf(
-		"https://freesound.org/apiv2/search/text/?query=%s&filter=license:%%22Creative+Commons+0%%22&fields=id,name,previews&page_size=1&token=%s",
-		url.QueryEscape(query), s.freesoundKey,
+		"https://freesound.org/apiv2/search/text/?query=%s&filter=%s&fields=id,name,previews&sort=downloads_desc&page_size=1&token=%s",
+		url.QueryEscape(query), url.QueryEscape(filter), s.freesoundKey,
 	)
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
@@ -338,9 +353,10 @@ func (s *SFXService) freesoundSearch(ctx context.Context, query string) string {
 }
 
 // searchFreesound 通过 Freesound API 搜索 CC0 授权音效，返回高质量预览 MP3 URL。
+// maxDuration > 0 时对搜索结果施加时长上限。
 // 先用前3个标签合并搜索，失败则逐个标签降级重试。
 // 需要 FreesoundKey 配置。
-func (s *SFXService) searchFreesound(ctx context.Context, tags []string) string {
+func (s *SFXService) searchFreesound(ctx context.Context, tags []string, maxDuration float64) string {
 	if s.freesoundKey == "" || len(tags) == 0 {
 		return ""
 	}
@@ -349,13 +365,86 @@ func (s *SFXService) searchFreesound(ctx context.Context, tags []string) string 
 	if n > 3 {
 		n = 3
 	}
-	if u := s.freesoundSearch(ctx, strings.Join(tags[:n], " ")); u != "" {
+	if u := s.freesoundSearch(ctx, strings.Join(tags[:n], " "), maxDuration); u != "" {
 		return u
 	}
 	// 降级：逐个标签单独搜索（将下划线替换为空格，更符合 Freesound 关键词习惯）
 	for _, tag := range tags {
 		q := strings.ReplaceAll(normalizeTag(tag), "_", " ")
-		if u := s.freesoundSearch(ctx, q); u != "" {
+		if u := s.freesoundSearch(ctx, q, maxDuration); u != "" {
+			return u
+		}
+	}
+	return ""
+}
+
+// searchJamendo 通过 Jamendo API 搜索免费器乐背景音效，返回可下载 MP3 URL。
+// 先用标签合并搜索，失败则逐个标签降级重试。
+// 需要 JamendoClientID 配置。
+func (s *SFXService) searchJamendo(ctx context.Context, tags []string, maxDuration float64) string {
+	if s.jamendoClientID == "" || len(tags) == 0 {
+		return ""
+	}
+
+	// 内部搜索函数：单次请求
+	doSearch := func(query string) string {
+		params := url.Values{}
+		params.Set("client_id", s.jamendoClientID)
+		params.Set("format", "json")
+		params.Set("limit", "5")
+		params.Set("namesearch", query)
+		params.Set("vocalinstrumental", "instrumental")
+		params.Set("order", "popularity_month")
+		if maxDuration > 0 {
+			params.Set("durationbetween", fmt.Sprintf("1_%d", int(maxDuration)))
+		}
+		apiURL := "https://api.jamendo.com/v3.0/tracks/?" + params.Encode()
+		req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+		if err != nil {
+			return ""
+		}
+		resp, err := s.httpClient.Do(req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			return ""
+		}
+		defer resp.Body.Close()
+
+		var result struct {
+			Results []struct {
+				Audio                string `json:"audio"`
+				AudioDownload        string `json:"audiodownload"`
+				AudioDownloadAllowed bool   `json:"audiodownload_allowed"`
+				Duration             int    `json:"duration"`
+			} `json:"results"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Results) == 0 {
+			return ""
+		}
+		for _, track := range result.Results {
+			if track.AudioDownloadAllowed && track.AudioDownload != "" {
+				return track.AudioDownload
+			}
+			if track.Audio != "" {
+				return track.Audio
+			}
+		}
+		return ""
+	}
+
+	// 先合并前3个标签搜索
+	n := len(tags)
+	if n > 3 {
+		n = 3
+	}
+	query := strings.Join(tags[:n], " ")
+	query = strings.ReplaceAll(query, "_", " ")
+	if u := doSearch(query); u != "" {
+		return u
+	}
+	// 降级：逐个标签单独搜索
+	for _, tag := range tags {
+		q := strings.ReplaceAll(normalizeTag(tag), "_", " ")
+		if u := doSearch(q); u != "" {
 			return u
 		}
 	}

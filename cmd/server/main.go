@@ -99,11 +99,12 @@ func main() {
 	services.VideoService.WithSegmentRepo(repos.ShotVoiceSegmentRepo)
 	services.NovelImportService.WithStorage(storageSvc).WithAnalysisService(services.NovelAnalysisService).WithAIService(services.AIService)
 
-	// SFX 音效服务（三层降级：本地库 → Freesound → ElevenLabs）
+	// SFX 音效服务（四层降级：本地库 → Freesound → Jamendo → ElevenLabs）
 	sfxService := service.NewSFXService(services.AIService, storageSvc, repos.StoryboardRepo, service.SFXServiceConfig{
-		SFXDir:        getEnv("SFX_DIR", cfg.SFX.Dir),
-		FreesoundKey:  getEnv("FREESOUND_API_KEY", cfg.SFX.FreesoundKey),
-		ElevenLabsKey: getEnv("ELEVENLABS_API_KEY", cfg.SFX.ElevenLabsKey),
+		SFXDir:          getEnv("SFX_DIR", cfg.SFX.Dir),
+		FreesoundKey:    getEnv("FREESOUND_API_KEY", cfg.SFX.FreesoundKey),
+		JamendoClientID: getEnv("JAMENDO_CLIENT_ID", cfg.SFX.JamendoClientID),
+		ElevenLabsKey:   getEnv("ELEVENLABS_API_KEY", cfg.SFX.ElevenLabsKey),
 	})
 	services.SFXService = sfxService
 	services.VideoService.WithSFXService(sfxService)

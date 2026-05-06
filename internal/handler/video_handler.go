@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
@@ -1002,7 +1003,7 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
-		ctx := c.Request.Context()
+		ctx := context.Background()
 		success, fail := h.sfxSvc.BatchAutoGenerateSFX(ctx, shots, progressFn)
 		h.taskSvc.Complete(taskID, gin.H{"success": success, "fail": fail}) //nolint:errcheck
 		logger.Printf("[VideoHandler] BatchGenerateSFX task %s done: success=%d fail=%d", taskID, success, fail)
@@ -1054,7 +1055,7 @@ func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
 			}
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		ctx := c.Request.Context()
+		ctx := context.Background()
 		if err := h.sfxSvc.AutoGenerateSFX(ctx, s); err != nil {
 			logger.Printf("[VideoHandler] GenerateShotSFX task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
