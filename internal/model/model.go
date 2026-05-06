@@ -920,6 +920,24 @@ type ShotVoiceSegment struct {
 
 func (ShotVoiceSegment) TableName() string { return "ink_shot_voice_segment" }
 
+// ShotSFXItem 分镜音效条目（一个分镜可包含多条独立音效）
+type ShotSFXItem struct {
+	ID     uint `json:"id" gorm:"primaryKey"`
+	ShotID uint `json:"shot_id" gorm:"not null;index:idx_sfx_shot_seq,priority:1"`
+	SeqNo  int  `json:"seq_no" gorm:"not null;default:1;index:idx_sfx_shot_seq,priority:2"`
+
+	Tag    string  `json:"tag" gorm:"size:100"`                          // 音效标签，如 "rain_heavy"
+	URL    string  `json:"url" gorm:"size:1000"`                         // 音效文件 URL
+	Volume float64 `json:"volume" gorm:"type:decimal(4,2);default:0.4"` // 混音音量（0.1–1.0）
+	Source string  `json:"source" gorm:"size:20"`                        // local/freesound/jamendo/elevenlabs
+
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
+}
+
+func (ShotSFXItem) TableName() string { return "ink_shot_sfx_item" }
+
 // QualityReport 质量报告
 type QualityReport struct {
 	ID         uint   `json:"id" gorm:"primaryKey"`

@@ -106,6 +106,7 @@ func main() {
 		JamendoClientID: getEnv("JAMENDO_CLIENT_ID", cfg.SFX.JamendoClientID),
 		ElevenLabsKey:   getEnv("ELEVENLABS_API_KEY", cfg.SFX.ElevenLabsKey),
 	})
+	sfxService.WithSFXItemRepo(repos.ShotSFXItemRepo)
 	services.SFXService = sfxService
 	services.VideoService.WithSFXService(sfxService)
 
@@ -697,7 +698,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-06-v1"
+const schemaVersion = "2026-05-06-v2"
 
 // autoMigrate 自动迁移（带版本跳过优化）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -766,6 +767,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.SceneConsistencyLog{},
 		&model.SystemSetting{},
 		&model.ShotVoiceSegment{},
+		&model.ShotSFXItem{},
 	); err != nil {
 		return err
 	}
@@ -980,6 +982,7 @@ type Repositories struct {
 	SceneConsistencyLogRepo *repository.SceneConsistencyLogRepository
 	SystemSettingRepo       *repository.SystemSettingRepository
 	ShotVoiceSegmentRepo    *repository.ShotVoiceSegmentRepository
+	ShotSFXItemRepo         *repository.ShotSFXItemRepository
 }
 
 // initRepositories 初始化仓库层
@@ -1015,6 +1018,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		SceneConsistencyLogRepo: repository.NewSceneConsistencyLogRepository(db),
 		SystemSettingRepo:       repository.NewSystemSettingRepository(db),
 		ShotVoiceSegmentRepo:    repository.NewShotVoiceSegmentRepository(db),
+		ShotSFXItemRepo:         repository.NewShotSFXItemRepository(db),
 	}
 }
 
@@ -1394,7 +1398,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			services.StoryboardService,
 			services.VideoEnhancementService,
 			services.CharacterConsistencyService,
-		).WithTaskService(services.TaskService).WithSFXService(services.SFXService),
+		).WithTaskService(services.TaskService).WithSFXService(services.SFXService).WithSFXItemRepo(repos.ShotSFXItemRepo),
 		ModelHandler:   handler.NewModelHandler(services.ModelService),
 		McpHandler:     handler.NewMcpHandler(services.McpService),
 		StyleHandler:   handler.NewStyleHandler(services.StyleService),

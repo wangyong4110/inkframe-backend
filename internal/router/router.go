@@ -322,6 +322,10 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.DELETE("/:id/shots/:shot_id", cfg.VideoHandler.DeleteShot)
 			videos.POST("/:id/shots/:shot_id/refine-image", cfg.VideoHandler.RefineShotImage)
 			videos.POST("/:id/shots/:shot_id/sfx", cfg.VideoHandler.GenerateShotSFX)
+			// 音效条目（多条）
+			videos.GET("/:id/shots/:shot_id/sfx-items", cfg.VideoHandler.ListShotSFXItems)
+			videos.PUT("/:id/shots/:shot_id/sfx-items/:item_id", cfg.VideoHandler.UpdateShotSFXItem)
+			videos.DELETE("/:id/shots/:shot_id/sfx-items/:item_id", cfg.VideoHandler.DeleteShotSFXItem)
 			// 语音段落
 			videos.GET("/:id/shots/:shot_id/segments", cfg.VideoHandler.ListVoiceSegments)
 			videos.POST("/:id/shots/:shot_id/segments", cfg.VideoHandler.AppendVoiceSegment)

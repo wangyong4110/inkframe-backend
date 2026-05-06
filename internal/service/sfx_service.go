@@ -26,12 +26,19 @@ type SFXService struct {
 	aiSvc           *AIService
 	storageSvc      storage.Service
 	storyboardRepo  *repository.StoryboardRepository
+	sfxItemRepo     *repository.ShotSFXItemRepository
 	sfxDir          string            // 本地音效目录
 	freesoundKey    string            // Freesound API Token（可选）
 	jamendoClientID string            // Jamendo client_id（可选）
 	elevenKey       string            // ElevenLabs API Key（可选）
 	httpClient      *http.Client
 	localLib        map[string]string // 内置标签 → 文件名（不含目录）
+}
+
+// WithSFXItemRepo 注入音效条目仓库（可选；注入后才启用多 item 存储）
+func (s *SFXService) WithSFXItemRepo(r *repository.ShotSFXItemRepository) *SFXService {
+	s.sfxItemRepo = r
+	return s
 }
 
 // SFXServiceConfig SFXService 构造参数
@@ -102,18 +109,24 @@ func buildDefaultSFXLib() map[string]string {
 	}
 }
 
-// AutoGenerateSFX 为单个镜头自动选取/生成音效，并将结果写入数据库。
-// 若该镜头已有 SFXURL，直接跳过（幂等）。
+// AutoGenerateSFX 为单个镜头自动选取/生成音效，每个 tag 独立搜索，写入多条 ShotSFXItem。
+// 若该镜头已有音效条目，直接跳过（幂等）。
 func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.StoryboardShot) error {
-	if shot.SFXURL != "" {
-		return nil // 已有音效，幂等跳过
+	// 幂等检测：优先用新表；无仓库时降级用旧字段
+	if s.sfxItemRepo != nil {
+		count, _ := s.sfxItemRepo.CountByShotID(shot.ID)
+		if count > 0 {
+			return nil
+		}
+	} else if shot.SFXURL != "" {
+		return nil
 	}
 
-	// 1. 优先使用分镜脚本生成时已提取的 sfx_tags，避免重复 LLM 调用
+	// 1. 提取标签
 	var tags []string
 	if shot.SFXTags != "" {
 		if err := json.Unmarshal([]byte(shot.SFXTags), &tags); err != nil || len(tags) == 0 {
-			tags = nil // 解析失败则继续走 LLM
+			tags = nil
 		}
 	}
 	if len(tags) == 0 {
@@ -124,67 +137,110 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 			tags = s.fallbackTags(shot)
 		}
 	}
+	// 最多取前 3 个 tag，避免过多网络请求
+	if len(tags) > 3 {
+		tags = tags[:3]
+	}
 
 	tagsJSON, _ := json.Marshal(tags)
 	logger.Printf("[SFXService] shot %d tags=%s", shot.ID, tagsJSON)
 
-	// 2. 四层降级查找音效：本地库 → Freesound → Jamendo → ElevenLabs
 	maxDur := float64(shot.Duration)
 	if maxDur <= 0 {
-		maxDur = 0 // 不限时长
+		maxDur = 0
 	}
-	sfxURL := s.searchLocalLib(tags)
-	if sfxURL != "" {
-		logger.Printf("[SFXService] shot %d local hit: %s", shot.ID, sfxURL)
+
+	// 基础音量：台词场景压低，有旁白略降
+	baseVol := 0.4
+	if shot.Dialogue != "" {
+		baseVol = 0.2
+	} else if shot.AudioPath != "" {
+		baseVol = 0.3
 	}
-	if sfxURL == "" {
-		if s.freesoundKey == "" {
-			logger.Printf("[SFXService] shot %d skip Freesound (no key)", shot.ID)
+
+	// 2. 逐 tag 搜索，收集结果
+	type sfxResult struct {
+		tag    string
+		url    string
+		source string
+	}
+	var results []sfxResult
+
+	for _, tag := range tags {
+		singleTags := []string{tag}
+		u, src := s.searchOneTag(ctx, singleTags, maxDur, shot)
+		if u != "" {
+			results = append(results, sfxResult{tag: tag, url: u, source: src})
+			logger.Printf("[SFXService] shot %d tag=%q source=%s url=%s", shot.ID, tag, src, u)
 		} else {
-			sfxURL = s.searchFreesound(ctx, tags, maxDur)
-			if sfxURL != "" {
-				logger.Printf("[SFXService] shot %d Freesound hit: %s", shot.ID, sfxURL)
-			} else {
-				logger.Printf("[SFXService] shot %d Freesound miss", shot.ID)
-			}
-		}
-	}
-	if sfxURL == "" {
-		if s.jamendoClientID == "" {
-			logger.Printf("[SFXService] shot %d skip Jamendo (no client_id)", shot.ID)
-		} else {
-			sfxURL = s.searchJamendo(ctx, tags, maxDur)
-			if sfxURL != "" {
-				logger.Printf("[SFXService] shot %d Jamendo hit: %s", shot.ID, sfxURL)
-			} else {
-				logger.Printf("[SFXService] shot %d Jamendo miss", shot.ID)
-			}
-		}
-	}
-	if sfxURL == "" {
-		var genErr error
-		sfxURL, genErr = s.generateElevenLabs(ctx, shot)
-		if genErr != nil {
-			logger.Printf("[SFXService] shot %d ElevenLabs failed: %v", shot.ID, genErr)
-		} else {
-			logger.Printf("[SFXService] shot %d ElevenLabs hit: %s", shot.ID, sfxURL)
+			logger.Printf("[SFXService] shot %d tag=%q: no result", shot.ID, tag)
 		}
 	}
 
-	if sfxURL == "" {
+	if len(results) == 0 {
 		return fmt.Errorf("no SFX found for shot %d (tags: %s)", shot.ID, tagsJSON)
 	}
 
-	// 3. 混音音量：有台词降低，有配音轨道适中，纯旁白最高
-	vol := 0.4
-	if shot.Dialogue != "" {
-		vol = 0.2 // 台词场景：音效退后，让台词清晰
-	} else if shot.AudioPath != "" {
-		vol = 0.3 // 有旁白配音：略降
+	// 3. 写入数据库
+	if s.sfxItemRepo != nil {
+		// 新表：写入多条 ShotSFXItem
+		items := make([]*model.ShotSFXItem, 0, len(results))
+		for i, r := range results {
+			// 主音效音量 = baseVol；后续音效递减 0.1（最低 0.1）
+			vol := baseVol - float64(i)*0.1
+			if vol < 0.1 {
+				vol = 0.1
+			}
+			items = append(items, &model.ShotSFXItem{
+				ShotID: shot.ID,
+				SeqNo:  i + 1,
+				Tag:    r.tag,
+				URL:    r.url,
+				Volume: vol,
+				Source: r.source,
+			})
+		}
+		if err := s.sfxItemRepo.BatchCreate(items); err != nil {
+			return fmt.Errorf("save sfx items shot %d: %w", shot.ID, err)
+		}
+		// 同步更新旧字段（向后兼容时间线播放）
+		_ = s.storyboardRepo.UpdateSFX(shot.ID, results[0].url, string(tagsJSON), baseVol)
+	} else {
+		// 无新仓库：降级写旧字段（单条）
+		_ = s.storyboardRepo.UpdateSFX(shot.ID, results[0].url, string(tagsJSON), baseVol)
 	}
+	return nil
+}
 
-	// 4. 写入数据库
-	return s.storyboardRepo.UpdateSFX(shot.ID, sfxURL, string(tagsJSON), vol)
+// searchOneTag 对单个 tag 执行四层降级搜索，返回 (url, source)
+func (s *SFXService) searchOneTag(ctx context.Context, tags []string, maxDur float64, shot *model.StoryboardShot) (string, string) {
+	if u := s.searchLocalLib(tags); u != "" {
+		logger.Printf("[SFXService] shot %d local hit: %s", shot.ID, u)
+		return u, "local"
+	}
+	if s.freesoundKey == "" {
+		logger.Printf("[SFXService] shot %d skip Freesound (no key)", shot.ID)
+	} else if u := s.searchFreesound(ctx, tags, maxDur); u != "" {
+		logger.Printf("[SFXService] shot %d Freesound hit: %s", shot.ID, u)
+		return u, "freesound"
+	} else {
+		logger.Printf("[SFXService] shot %d Freesound miss", shot.ID)
+	}
+	if s.jamendoClientID == "" {
+		logger.Printf("[SFXService] shot %d skip Jamendo (no client_id)", shot.ID)
+	} else if u := s.searchJamendo(ctx, tags, maxDur); u != "" {
+		logger.Printf("[SFXService] shot %d Jamendo hit: %s", shot.ID, u)
+		return u, "jamendo"
+	} else {
+		logger.Printf("[SFXService] shot %d Jamendo miss", shot.ID)
+	}
+	if u, err := s.generateElevenLabs(ctx, shot); err == nil && u != "" {
+		logger.Printf("[SFXService] shot %d ElevenLabs hit: %s", shot.ID, u)
+		return u, "elevenlabs"
+	} else if err != nil {
+		logger.Printf("[SFXService] shot %d ElevenLabs failed: %v", shot.ID, err)
+	}
+	return "", ""
 }
 
 // BatchAutoGenerateSFX 批量处理视频所有镜头，最多 5 并发。

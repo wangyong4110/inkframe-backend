@@ -11,6 +11,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
+	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
 
@@ -23,6 +24,12 @@ type VideoHandler struct {
 	capcutService      *service.CapCutService
 	taskSvc            *service.TaskService
 	sfxSvc             *service.SFXService
+	sfxItemRepo        *repository.ShotSFXItemRepository
+}
+
+func (h *VideoHandler) WithSFXItemRepo(r *repository.ShotSFXItemRepository) *VideoHandler {
+	h.sfxItemRepo = r
+	return h
 }
 
 func NewVideoHandler(
@@ -1495,6 +1502,71 @@ func (h *VideoHandler) DeleteShot(c *gin.Context) {
 	}
 	if err := h.videoService.DeleteShot(uint(shotID)); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, nil)
+}
+
+// ListShotSFXItems GET /videos/:id/shots/:shot_id/sfx-items
+func (h *VideoHandler) ListShotSFXItems(c *gin.Context) {
+	if h.sfxItemRepo == nil {
+		respondErr(c, http.StatusNotImplemented, "SFX item repo not configured")
+		return
+	}
+	shotID, err := strconv.Atoi(c.Param("shot_id"))
+	if err != nil {
+		respondBadRequest(c, "invalid shot id")
+		return
+	}
+	items, err := h.sfxItemRepo.ListByShotID(uint(shotID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to list sfx items")
+		return
+	}
+	respondOK(c, items)
+}
+
+// UpdateShotSFXItem PUT /videos/:id/shots/:shot_id/sfx-items/:item_id
+func (h *VideoHandler) UpdateShotSFXItem(c *gin.Context) {
+	if h.sfxItemRepo == nil {
+		respondErr(c, http.StatusNotImplemented, "SFX item repo not configured")
+		return
+	}
+	itemID, err := strconv.Atoi(c.Param("item_id"))
+	if err != nil {
+		respondBadRequest(c, "invalid item id")
+		return
+	}
+	var req struct {
+		Volume float64 `json:"volume"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "invalid body")
+		return
+	}
+	item := &model.ShotSFXItem{}
+	item.ID = uint(itemID)
+	item.Volume = req.Volume
+	if err := h.sfxItemRepo.Update(item); err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to update sfx item")
+		return
+	}
+	respondOK(c, item)
+}
+
+// DeleteShotSFXItem DELETE /videos/:id/shots/:shot_id/sfx-items/:item_id
+func (h *VideoHandler) DeleteShotSFXItem(c *gin.Context) {
+	if h.sfxItemRepo == nil {
+		respondErr(c, http.StatusNotImplemented, "SFX item repo not configured")
+		return
+	}
+	itemID, err := strconv.Atoi(c.Param("item_id"))
+	if err != nil {
+		respondBadRequest(c, "invalid item id")
+		return
+	}
+	if err := h.sfxItemRepo.Delete(uint(itemID)); err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to delete sfx item")
 		return
 	}
 	respondOK(c, nil)

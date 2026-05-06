@@ -1719,3 +1719,50 @@ func (r *SystemSettingRepository) List() ([]model.SystemSetting, error) {
 	err := r.db.Order("key ASC").Find(&items).Error
 	return items, err
 }
+
+
+// ShotSFXItemRepository 分镜音效条目仓库
+type ShotSFXItemRepository struct {
+	db *gorm.DB
+}
+
+func NewShotSFXItemRepository(db *gorm.DB) *ShotSFXItemRepository {
+	return &ShotSFXItemRepository{db: db}
+}
+
+// ListByShotID 获取分镜的所有音效条目，按 seq_no 升序
+func (r *ShotSFXItemRepository) ListByShotID(shotID uint) ([]*model.ShotSFXItem, error) {
+	var items []*model.ShotSFXItem
+	err := r.db.Where("shot_id = ?", shotID).Order("seq_no").Find(&items).Error
+	return items, err
+}
+
+// CountByShotID 统计分镜已有音效数量（幂等检测）
+func (r *ShotSFXItemRepository) CountByShotID(shotID uint) (int64, error) {
+	var count int64
+	err := r.db.Model(&model.ShotSFXItem{}).Where("shot_id = ?", shotID).Count(&count).Error
+	return count, err
+}
+
+// BatchCreate 批量创建音效条目
+func (r *ShotSFXItemRepository) BatchCreate(items []*model.ShotSFXItem) error {
+	if len(items) == 0 {
+		return nil
+	}
+	return r.db.Create(&items).Error
+}
+
+// Update 更新音效条目（通常只更新 volume）
+func (r *ShotSFXItemRepository) Update(item *model.ShotSFXItem) error {
+	return r.db.Save(item).Error
+}
+
+// Delete 物理删除单条音效条目
+func (r *ShotSFXItemRepository) Delete(id uint) error {
+	return r.db.Unscoped().Delete(&model.ShotSFXItem{}, id).Error
+}
+
+// DeleteByShotID 物理删除分镜的所有音效条目（重新生成时使用）
+func (r *ShotSFXItemRepository) DeleteByShotID(shotID uint) error {
+	return r.db.Unscoped().Where("shot_id = ?", shotID).Delete(&model.ShotSFXItem{}).Error
+}
