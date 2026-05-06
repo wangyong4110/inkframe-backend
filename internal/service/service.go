@@ -4948,6 +4948,16 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 	}
 	logger.Printf("GenerateShotAudio: shot %d TTS ok url=%s", shot.ShotNo, audioURL)
 
+	// 先计算配音时长（必须在上传前读取，上传后 audioURL 会被替换为 OSS URL）
+	localAudioURL := audioURL
+	if strings.HasPrefix(localAudioURL, "file://") {
+		if data, e := os.ReadFile(strings.TrimPrefix(localAudioURL, "file://")); e == nil {
+			if d := mp3Duration(data); d > 0 && d > shot.Duration {
+				shot.Duration = d
+			}
+		}
+	}
+
 	// 若配置了存储服务，将音频上传至持久存储
 	if s.storageSvc != nil {
 		persistURL, uploadErr := s.uploadAudioToStorage(ctx, shot, audioURL)
@@ -4959,15 +4969,6 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 			// 删除 /tmp 临时文件（file:// 前缀）
 			if strings.HasPrefix(shot.AudioPath, "file://") {
 				os.Remove(strings.TrimPrefix(shot.AudioPath, "file://")) //nolint:errcheck
-			}
-		}
-	}
-
-	// 计算配音时长，更新分镜 duration = max(原始时长, 配音时长)
-	if strings.HasPrefix(audioURL, "file://") {
-		if data, e := os.ReadFile(strings.TrimPrefix(audioURL, "file://")); e == nil {
-			if d := mp3Duration(data); d > 0 && d > shot.Duration {
-				shot.Duration = d
 			}
 		}
 	}
