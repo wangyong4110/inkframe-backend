@@ -482,16 +482,29 @@ func (s *BGMService) GenerateBGMSegments(
 	if err != nil {
 		return nil, err
 	}
+	if len(segments) == 0 {
+		return nil, fmt.Errorf("BGM AI returned 0 segments for video %d (check AI provider config or prompt)", videoID)
+	}
+	logger.Printf("[BGMService] AI produced %d BGM segments for video %d", len(segments), videoID)
 	progress(50)
+
+	if s.jamendoClientID == "" && s.bgmDir == "" {
+		logger.Printf("[BGMService] WARNING: neither JAMENDO_CLIENT_ID nor BGM_DIR configured; segments will be saved without audio URLs")
+	}
 
 	// Step 2: Search Jamendo per segment
 	for i, seg := range segments {
 		if err := s.SearchBGMForSegment(ctx, seg); err != nil {
 			logger.Printf("[BGMService] segment %d search error: %v", i+1, err)
 		}
+		logger.Printf("[BGMService] segment %d (%s): url=%q source=%q", i+1, seg.Mood, seg.URL, seg.Source)
 		// Persist URL update
 		if bgmRepo != nil && seg.ID > 0 {
-			_ = bgmRepo.Update(seg)
+			if err := bgmRepo.Update(seg); err != nil {
+				logger.Printf("[BGMService] segment %d Update failed: %v", i+1, err)
+			}
+		} else {
+			logger.Printf("[BGMService] segment %d skipped Update: bgmRepo=%v seg.ID=%d", i+1, bgmRepo != nil, seg.ID)
 		}
 		pct := 50 + (i+1)*50/len(segments)
 		progress(pct)
