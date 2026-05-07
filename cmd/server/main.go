@@ -1216,11 +1216,12 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	// 视频增强服务（传入临时工作目录）
 	videoEnhancementService := service.NewVideoEnhancementService(imageService, "/tmp/inkframe-enhance")
 
-	// BGM 服务（五层降级：BGM_DIR → Jamendo → Pixabay → ...）
-	bgmService := service.NewBGMService(getEnv("BGM_DIR", "")).
+	// BGM 服务（三层降级：本地目录 → Jamendo → Pixabay）
+	// env var 优先，config.yaml bgm.* 作为 fallback
+	bgmService := service.NewBGMService(getEnv("BGM_DIR", cfg.BGM.Dir)).
 		WithAIService(aiService).
-		WithJamendo(getEnv("JAMENDO_CLIENT_ID", "")).
-		WithPixabay(getEnv("PIXABAY_API_KEY", ""))
+		WithJamendo(getEnv("JAMENDO_CLIENT_ID", cfg.BGM.JamendoClientID)).
+		WithPixabay(getEnv("PIXABAY_API_KEY", cfg.BGM.PixabayKey))
 
 	// 角色一致性服务
 	characterConsistencyService := service.NewCharacterConsistencyService(imageService, nil, aiService)

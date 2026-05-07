@@ -142,3 +142,22 @@ logger:
   level: "info"            # debug | info | warn | error
   format: "json"           # json | text
   output_path: "stdout"
+
+# 自动音效（SFX）配置
+# 五层降级：本地目录 → Freesound → Pixabay → Jamendo → ElevenLabs
+# API Key 也可通过环境变量传入（env var 优先级更高）：
+#   FREESOUND_API_KEY / PIXABAY_API_KEY / JAMENDO_CLIENT_ID / ELEVENLABS_API_KEY
+sfx:
+  dir: ""                  # 本地音效库目录，文件名格式：<tag>.mp3
+  freesound_key: ""        # https://freesound.org/apiv2/apply/
+  pixabay_key: ""          # https://pixabay.com/api/docs/（与图片搜索同一 key）
+  jamendo_client_id: ""    # https://devportal.jamendo.com/
+  elevenlabs_key: ""       # https://elevenlabs.io/
+
+# 背景音乐（BGM）配置
+# 三层降级：本地目录 → Jamendo → Pixabay
+# env var 优先级更高：BGM_DIR / JAMENDO_CLIENT_ID / PIXABAY_API_KEY
+bgm:
+  dir: ""                  # 本地 BGM 目录，文件名即情绪词，如 tension.mp3 / default.mp3
+  jamendo_client_id: ""    # 与 sfx.jamendo_client_id 可相同
+  pixabay_key: ""          # 与 sfx.pixabay_key 可相同

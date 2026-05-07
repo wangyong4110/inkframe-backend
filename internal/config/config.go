@@ -38,6 +38,16 @@ type Config struct {
 
 	// 音效配置
 	SFX SFXConfig `mapstructure:"sfx"`
+
+	// 背景音乐配置
+	BGM BGMConfig `mapstructure:"bgm"`
+}
+
+// BGMConfig 背景音乐配置
+type BGMConfig struct {
+	Dir             string `mapstructure:"dir"`              // 本地 BGM 目录（优先）
+	JamendoClientID string `mapstructure:"jamendo_client_id"` // Jamendo（第二层）
+	PixabayKey      string `mapstructure:"pixabay_key"`       // Pixabay（第三层）
 }
 
 // SFXConfig 自动音效生成配置
