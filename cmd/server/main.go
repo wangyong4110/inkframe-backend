@@ -99,10 +99,11 @@ func main() {
 	services.VideoService.WithSegmentRepo(repos.ShotVoiceSegmentRepo)
 	services.NovelImportService.WithStorage(storageSvc).WithAnalysisService(services.NovelAnalysisService).WithAIService(services.AIService)
 
-	// SFX 音效服务（四层降级：本地库 → Freesound → Jamendo → ElevenLabs）
+	// SFX 音效服务（五层降级：本地库 → Freesound → Pixabay → Jamendo → ElevenLabs）
 	sfxService := service.NewSFXService(services.AIService, storageSvc, repos.StoryboardRepo, service.SFXServiceConfig{
 		SFXDir:          getEnv("SFX_DIR", cfg.SFX.Dir),
 		FreesoundKey:    getEnv("FREESOUND_API_KEY", cfg.SFX.FreesoundKey),
+		PixabayKey:      getEnv("PIXABAY_API_KEY", cfg.SFX.PixabayKey),
 		JamendoClientID: getEnv("JAMENDO_CLIENT_ID", cfg.SFX.JamendoClientID),
 		ElevenLabsKey:   getEnv("ELEVENLABS_API_KEY", cfg.SFX.ElevenLabsKey),
 	})
@@ -1215,10 +1216,11 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	// 视频增强服务（传入临时工作目录）
 	videoEnhancementService := service.NewVideoEnhancementService(imageService, "/tmp/inkframe-enhance")
 
-	// BGM 服务（bgmDir 为空时无BGM；可通过 BGM_DIR 环境变量或配置指定本地 BGM 目录）
+	// BGM 服务（五层降级：BGM_DIR → Jamendo → Pixabay → ...）
 	bgmService := service.NewBGMService(getEnv("BGM_DIR", "")).
 		WithAIService(aiService).
-		WithJamendo(getEnv("JAMENDO_CLIENT_ID", ""))
+		WithJamendo(getEnv("JAMENDO_CLIENT_ID", "")).
+		WithPixabay(getEnv("PIXABAY_API_KEY", ""))
 
 	// 角色一致性服务
 	characterConsistencyService := service.NewCharacterConsistencyService(imageService, nil, aiService)

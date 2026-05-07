@@ -20,7 +20,7 @@ import (
 )
 
 // SFXService 自动音效生成服务。
-// 四层降级：本地 SFX 库 → Freesound API → Jamendo API → ElevenLabs（AI生成）。
+// 五层降级：本地 SFX 库 → Freesound API → Pixabay API → Jamendo API → ElevenLabs（AI生成）。
 // 各层均可选，未配置时透明跳过。
 type SFXService struct {
 	aiSvc           *AIService
@@ -29,6 +29,7 @@ type SFXService struct {
 	sfxItemRepo     *repository.ShotSFXItemRepository
 	sfxDir          string            // 本地音效目录
 	freesoundKey    string            // Freesound API Token（可选）
+	pixabayKey      string            // Pixabay API Key（可选）
 	jamendoClientID string            // Jamendo client_id（可选）
 	elevenKey       string            // ElevenLabs API Key（可选）
 	httpClient      *http.Client
@@ -45,6 +46,7 @@ func (s *SFXService) WithSFXItemRepo(r *repository.ShotSFXItemRepository) *SFXSe
 type SFXServiceConfig struct {
 	SFXDir          string // 本地音效目录（环境变量 SFX_DIR）
 	FreesoundKey    string // 环境变量 FREESOUND_API_KEY
+	PixabayKey      string // 环境变量 PIXABAY_API_KEY
 	JamendoClientID string // 环境变量 JAMENDO_CLIENT_ID
 	ElevenLabsKey   string // 环境变量 ELEVENLABS_API_KEY
 }
@@ -62,6 +64,7 @@ func NewSFXService(
 		storyboardRepo:  storyboardRepo,
 		sfxDir:          cfg.SFXDir,
 		freesoundKey:    cfg.FreesoundKey,
+		pixabayKey:      cfg.PixabayKey,
 		jamendoClientID: cfg.JamendoClientID,
 		elevenKey:       cfg.ElevenLabsKey,
 		httpClient:      &http.Client{Timeout: 30 * time.Second},
@@ -334,8 +337,8 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	return nil
 }
 
-// searchOneTag 对单个 tag 执行三层降级搜索，返回 (url, source)。
-// 注意：Jamendo 是音乐平台（适合 BGM），不适合作为音效来源，已从降级链中移除。
+// searchOneTag 对单个 tag 执行五层降级搜索，返回 (url, source)。
+// 顺序：本地库 → Freesound → Pixabay → Jamendo → ElevenLabs
 func (s *SFXService) searchOneTag(ctx context.Context, tags []string, maxDur float64, shot *model.StoryboardShot) (string, string) {
 	if u := s.searchLocalLib(tags); u != "" {
 		logger.Printf("[SFXService] shot %d local hit: %s", shot.ID, u)
@@ -348,6 +351,21 @@ func (s *SFXService) searchOneTag(ctx context.Context, tags []string, maxDur flo
 		return u, "freesound"
 	} else {
 		logger.Printf("[SFXService] shot %d Freesound miss", shot.ID)
+	}
+	if s.pixabayKey == "" {
+		logger.Printf("[SFXService] shot %d skip Pixabay (no key)", shot.ID)
+	} else if u := s.searchPixabay(ctx, tags, maxDur); u != "" {
+		logger.Printf("[SFXService] shot %d Pixabay hit: %s", shot.ID, u)
+		return u, "pixabay"
+	} else {
+		logger.Printf("[SFXService] shot %d Pixabay miss", shot.ID)
+	}
+	if s.jamendoClientID != "" {
+		if u := s.searchJamendo(ctx, tags, maxDur); u != "" {
+			logger.Printf("[SFXService] shot %d Jamendo hit: %s", shot.ID, u)
+			return u, "jamendo"
+		}
+		logger.Printf("[SFXService] shot %d Jamendo miss", shot.ID)
 	}
 	if u, err := s.generateElevenLabs(ctx, shot); err == nil && u != "" {
 		logger.Printf("[SFXService] shot %d ElevenLabs hit: %s", shot.ID, u)
@@ -569,6 +587,74 @@ func (s *SFXService) searchFreesound(ctx context.Context, tags []string, maxDura
 	for _, tag := range tags {
 		q := strings.ReplaceAll(normalizeTag(tag), "_", " ")
 		if u := s.freesoundSearch(ctx, q, maxDuration); u != "" {
+			return u
+		}
+	}
+	return ""
+}
+
+// searchPixabay 通过 Pixabay API 搜索免费音效，返回 CDN 直链 MP3 URL。
+// 先用标签合并搜索，失败则逐个标签降级重试。
+// API 文档：https://pixabay.com/api/docs/ (media_type=music)
+func (s *SFXService) searchPixabay(ctx context.Context, tags []string, maxDuration float64) string {
+	if s.pixabayKey == "" || len(tags) == 0 {
+		return ""
+	}
+
+	doSearch := func(query string) string {
+		params := url.Values{}
+		params.Set("key", s.pixabayKey)
+		params.Set("q", query)
+		params.Set("media_type", "music")
+		params.Set("lang", "en")
+		params.Set("order", "popular")
+		params.Set("per_page", "10")
+		params.Set("safesearch", "true")
+
+		req, err := http.NewRequestWithContext(ctx, "GET", "https://pixabay.com/api/?"+params.Encode(), nil)
+		if err != nil {
+			return ""
+		}
+		resp, err := s.httpClient.Do(req)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			return ""
+		}
+		defer resp.Body.Close()
+
+		var result struct {
+			Hits []struct {
+				Duration int    `json:"duration"`
+				AudioURL string `json:"audio_url"`
+			} `json:"hits"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			return ""
+		}
+		for _, hit := range result.Hits {
+			if hit.AudioURL == "" {
+				continue
+			}
+			if maxDuration > 0 && float64(hit.Duration) > maxDuration {
+				continue
+			}
+			return hit.AudioURL
+		}
+		return ""
+	}
+
+	// 第一次：前 3 个标签合并搜索
+	n := len(tags)
+	if n > 3 {
+		n = 3
+	}
+	query := strings.ReplaceAll(strings.Join(tags[:n], " "), "_", " ")
+	if u := doSearch(query); u != "" {
+		return u
+	}
+	// 降级：逐个标签单独搜索
+	for _, tag := range tags {
+		q := strings.ReplaceAll(normalizeTag(tag), "_", " ")
+		if u := doSearch(q); u != "" {
 			return u
 		}
 	}

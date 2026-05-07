@@ -22,6 +22,7 @@ type BGMService struct {
 	bgmURLMap       map[string]string // emotion → URL（CDN fallback，占位符）
 	aiSvc           *AIService        // AI 分析（可选）
 	jamendoClientID string            // Jamendo client_id（可选）
+	pixabayKey      string            // Pixabay API key（可选，Jamendo 降级）
 	httpClient      *http.Client
 }
 
@@ -60,6 +61,12 @@ func (s *BGMService) WithAIService(aiSvc *AIService) *BGMService {
 // WithJamendo 配置 Jamendo client_id
 func (s *BGMService) WithJamendo(clientID string) *BGMService {
 	s.jamendoClientID = clientID
+	return s
+}
+
+// WithPixabay 配置 Pixabay API key（Jamendo 的降级来源）
+func (s *BGMService) WithPixabay(apiKey string) *BGMService {
+	s.pixabayKey = apiKey
 	return s
 }
 
@@ -322,6 +329,20 @@ func (s *BGMService) SearchBGMForSegment(ctx context.Context, seg *model.VideoBG
 		logger.Printf("[BGMService] segment %d (%s) Jamendo miss for all queries", seg.SeqNo, seg.Mood)
 	}
 
+	// Pixabay 降级搜索（Jamendo 未配置或全部 miss 时）
+	if s.pixabayKey != "" {
+		for _, q := range queries {
+			if trackURL, name := s.pixabaySearchBGM(ctx, q); trackURL != "" {
+				seg.URL = trackURL
+				seg.TrackName = name
+				seg.TrackArtist = "Pixabay"
+				seg.Source = "pixabay"
+				return nil
+			}
+		}
+		logger.Printf("[BGMService] segment %d (%s) Pixabay miss for all queries", seg.SeqNo, seg.Mood)
+	}
+
 	return nil
 }
 
@@ -445,6 +466,49 @@ func (s *BGMService) JamendoSearch(ctx context.Context, p JamendoSearchParams) (
 	return tracks, nil
 }
 
+// pixabaySearchBGM 在 Pixabay API 中按关键词搜索背景音乐，返回 (url, trackName)。
+// media_type=music 同时涵盖背景音乐与音效，按热度排序取首个可用结果。
+func (s *BGMService) pixabaySearchBGM(ctx context.Context, query string) (string, string) {
+	if s.pixabayKey == "" || query == "" {
+		return "", ""
+	}
+
+	params := url.Values{}
+	params.Set("key", s.pixabayKey)
+	params.Set("q", query)
+	params.Set("media_type", "music")
+	params.Set("lang", "en")
+	params.Set("order", "popular")
+	params.Set("per_page", "10")
+	params.Set("safesearch", "true")
+
+	req, err := http.NewRequestWithContext(ctx, "GET", "https://pixabay.com/api/?"+params.Encode(), nil)
+	if err != nil {
+		return "", ""
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return "", ""
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Hits []struct {
+			Tags     string `json:"tags"`
+			AudioURL string `json:"audio_url"`
+		} `json:"hits"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", ""
+	}
+	for _, hit := range result.Hits {
+		if hit.AudioURL != "" {
+			return hit.AudioURL, hit.Tags
+		}
+	}
+	return "", ""
+}
+
 // jamendoSearch 在 Jamendo API 中按自然语言搜索 BGM 曲目，返回 (url, name, artist)
 // 内部使用，供自动批量生成流程调用。
 func (s *BGMService) jamendoSearch(ctx context.Context, query string) (string, string, string) {
@@ -488,8 +552,8 @@ func (s *BGMService) GenerateBGMSegments(
 	logger.Printf("[BGMService] AI produced %d BGM segments for video %d", len(segments), videoID)
 	progress(50)
 
-	if s.jamendoClientID == "" && s.bgmDir == "" {
-		logger.Printf("[BGMService] WARNING: neither JAMENDO_CLIENT_ID nor BGM_DIR configured; segments will be saved without audio URLs")
+	if s.jamendoClientID == "" && s.bgmDir == "" && s.pixabayKey == "" {
+		logger.Printf("[BGMService] WARNING: no audio source configured (JAMENDO_CLIENT_ID, BGM_DIR, PIXABAY_API_KEY); segments will be saved without audio URLs")
 	}
 
 	// Step 2: Search Jamendo per segment
