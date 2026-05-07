@@ -1825,3 +1825,28 @@ func (r *VideoBGMSegmentRepository) UpdateTrack(id uint, url, name, artist, sour
 		"source":       source,
 	}).Error
 }
+
+// ReplaceForVideo 在单个事务内原子替换视频的所有 BGM 分段：先建新再删旧，避免数据丢失。
+func (r *VideoBGMSegmentRepository) ReplaceForVideo(videoID uint, segs []*model.VideoBGMSegment) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if len(segs) > 0 {
+			if err := tx.Create(&segs).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Unscoped().Where("video_id = ? AND id NOT IN (?)",
+			videoID, collectIDs(segs)).Delete(&model.VideoBGMSegment{}).Error
+	})
+}
+
+// collectIDs 提取记录 ID 列表；若空则返回 []uint{0}（避免 NOT IN 空集合语法错误）
+func collectIDs(segs []*model.VideoBGMSegment) []uint {
+	if len(segs) == 0 {
+		return []uint{0}
+	}
+	ids := make([]uint, len(segs))
+	for i, s := range segs {
+		ids[i] = s.ID
+	}
+	return ids
+}

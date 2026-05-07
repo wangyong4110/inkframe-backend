@@ -95,6 +95,7 @@ func main() {
 	// 注入存储服务
 	services.VideoService.WithStorage(storageSvc)
 	services.AIService.WithStorage(storageSvc)
+	services.BGMService.WithStorage(storageSvc)
 	services.VideoService.WithSceneAnchorService(services.SceneAnchorService)
 	services.VideoService.WithSegmentRepo(repos.ShotVoiceSegmentRepo)
 	services.NovelImportService.WithStorage(storageSvc).WithAnalysisService(services.NovelAnalysisService).WithAIService(services.AIService)
