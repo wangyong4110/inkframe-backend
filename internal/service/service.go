@@ -2162,6 +2162,33 @@ type VideoService struct {
 	segmentRepo        *repository.ShotVoiceSegmentRepository
 	videoSem           chan struct{} // nil = unlimited; set via WithVideoConcurrency
 	videoSemMu         sync.RWMutex // protects videoSem replacement
+	audioSem           chan struct{} // limits concurrent TTS calls; nil = unlimited
+	charListCache      sync.Map     // novelID → *charListEntry (short-lived cache for batch voice gen)
+}
+
+// charListEntry is a TTL-bounded cache entry for ListByNovel results.
+type charListEntry struct {
+	chars     []*model.Character
+	expiresAt time.Time
+}
+
+// listCharsByNovelCached returns the character list for a novel, using a 60-second
+// in-process cache to avoid repeated DB calls during batch voice generation.
+func (s *VideoService) listCharsByNovelCached(novelID uint) ([]*model.Character, error) {
+	if v, ok := s.charListCache.Load(novelID); ok {
+		if entry := v.(*charListEntry); time.Now().Before(entry.expiresAt) {
+			return entry.chars, nil
+		}
+	}
+	chars, err := s.characterRepo.ListByNovel(novelID)
+	if err != nil {
+		return nil, err
+	}
+	s.charListCache.Store(novelID, &charListEntry{
+		chars:     chars,
+		expiresAt: time.Now().Add(60 * time.Second),
+	})
+	return chars, nil
 }
 
 // GetNovelByID 通过 novelRepo 加载小说（供 handler 传递给 CapCutService 等下游服务）
@@ -2178,6 +2205,15 @@ func (s *VideoService) WithSystemSettingRepo(r *repository.SystemSettingReposito
 func (s *VideoService) WithVideoConcurrency(n int) *VideoService {
 	if n > 0 {
 		s.videoSem = make(chan struct{}, n)
+	}
+	return s
+}
+
+// WithAudioConcurrency 设置 TTS 音频生成的最大并发数。
+// 默认不限制；推荐设置为 3，防止批量生成时触发 API 限速（429）。
+func (s *VideoService) WithAudioConcurrency(n int) *VideoService {
+	if n > 0 {
+		s.audioSem = make(chan struct{}, n)
 	}
 	return s
 }
@@ -4499,22 +4535,30 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 	if text == "" {
 		return nil
 	}
-	// 确定 TTS 声音：段落级 > 角色声音查找 > 默认
+
+	// 预加载 shot + video 一次，同时用于：① 角色声音查找 ② OSS 存储 key（避免重复查询）
+	var novelID, chapterID uint
+	if s.storyboardRepo != nil && s.videoRepo != nil {
+		if shot, e := s.storyboardRepo.GetByID(seg.ShotID); e == nil {
+			if video, e := s.videoRepo.GetByID(shot.VideoID); e == nil {
+				novelID = video.NovelID
+				if video.ChapterID != nil {
+					chapterID = *video.ChapterID
+				}
+			}
+		}
+	}
+
+	// 确定 TTS 声音：段落级 > 角色声音查找（带缓存）> 默认
 	voice := seg.VoiceID
 	speed := 1.0
 	style := ""
-	if voice == "" && seg.Speaker != "" && s.characterRepo != nil {
-		// 根据说话人名字查角色声音设置
-		// 获取 shot 所属 video 的 novelID
-		if shot, err := s.storyboardRepo.GetByID(seg.ShotID); err == nil {
-			if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil && video.NovelID > 0 {
-				if chars, err := s.characterRepo.ListByNovel(video.NovelID); err == nil {
-					for _, c := range chars {
-						if strings.EqualFold(c.Name, seg.Speaker) {
-							voice = c.VoiceID
-							break
-						}
-					}
+	if voice == "" && seg.Speaker != "" && s.characterRepo != nil && novelID > 0 {
+		if chars, e := s.listCharsByNovelCached(novelID); e == nil {
+			for _, c := range chars {
+				if strings.EqualFold(c.Name, seg.Speaker) {
+					voice = c.VoiceID
+					break
 				}
 			}
 		}
@@ -4554,17 +4598,8 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 	}
 
 	// 上传到持久存储（如果配置了 storageSvc）
-	// key 格式与图片/视频一致：novels/{novelID}/chapters/{chapterID}/audio/seg-{segID}.mp3
+	// key 格式：novels/{novelID}/chapters/{chapterID}/audio/seg-{segID}.mp3
 	if s.storageSvc != nil && len(audioData) > 0 {
-		var novelID, chapterID uint
-		if sh, e := s.storyboardRepo.GetByID(seg.ShotID); e == nil {
-			if vid, e := s.videoRepo.GetByID(sh.VideoID); e == nil {
-				novelID = vid.NovelID
-				if vid.ChapterID != nil {
-					chapterID = *vid.ChapterID
-				}
-			}
-		}
 		filename := fmt.Sprintf("seg-%d.mp3", segID)
 		key := storage.BuildKey(novelID, chapterID, "audio", filename)
 		if ossURL, e := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(audioData), int64(len(audioData)), "audio/mpeg"); e == nil {
@@ -4974,6 +5009,12 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 // narrationVoice 为旁白音色 ID（空串则自动从项目配置加载，仍空则降级到 "alloy"）。
 // 若注入了 storageSvc，将音频上传至 OSS 或 DB，并更新 shot.AudioPath 为持久 URL。
 func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID uint, narrationVoice string) error {
+	// 并发限流：防止批量生成时同时发起过多 TTS 请求触发 API 限速（429）
+	if s.audioSem != nil {
+		s.audioSem <- struct{}{}
+		defer func() { <-s.audioSem }()
+	}
+
 	text := shot.Dialogue
 	// 去掉 "角色名：内容" 格式中的角色名前缀，避免 TTS 朗读出角色名
 	for _, sep := range []string{"：", ":"} {
@@ -4992,11 +5033,18 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 		return nil
 	}
 
-	// 若调用方未传入旁白音色，从项目配置自动加载
-	if narrationVoice == "" && s.novelRepo != nil {
+	// 预加载 video 一次（供旁白音色加载 + resolveVoice + uploadAudio 三处共用，避免重复 DB 查询）
+	var novelID, chapterID uint
+	if s.videoRepo != nil {
 		if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil {
-			if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil {
-				narrationVoice = novel.NarrationVoice
+			novelID = video.NovelID
+			if video.ChapterID != nil {
+				chapterID = *video.ChapterID
+			}
+			if narrationVoice == "" && s.novelRepo != nil && video.NovelID > 0 {
+				if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil {
+					narrationVoice = novel.NarrationVoice
+				}
 			}
 		}
 	}
@@ -5004,7 +5052,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	voice, speed, style := s.resolveVoiceForShot(shot, narrationVoice)
+	voice, speed, style := s.resolveVoiceForShot(shot, narrationVoice, novelID)
 	logger.Printf("GenerateShotAudio: shot %d voice=%s speed=%.1f style=%q text=%q", shot.ShotNo, voice, speed, style, text)
 
 	audioURL, err := s.aiService.AudioGenerateWithOptions(ctx, tenantID, text, voice, speed, style)
@@ -5029,15 +5077,15 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 
 	// 若配置了存储服务，将音频上传至持久存储
 	if s.storageSvc != nil {
-		persistURL, uploadErr := s.uploadAudioToStorage(ctx, shot, audioURL)
+		persistURL, uploadErr := s.uploadAudioToStorage(ctx, shot, audioURL, novelID, chapterID)
 		if uploadErr != nil {
 			logger.Printf("GenerateShotAudio: storage upload failed (falling back to local): %v", uploadErr)
 		} else {
 			audioURL = persistURL
 			logger.Printf("GenerateShotAudio: shot %d audio stored at %s", shot.ShotNo, audioURL)
-			// 删除 /tmp 临时文件（file:// 前缀）
-			if strings.HasPrefix(shot.AudioPath, "file://") {
-				os.Remove(strings.TrimPrefix(shot.AudioPath, "file://")) //nolint:errcheck
+			// 删除本次新建的 /tmp 临时文件（修复：之前错误地删除旧 shot.AudioPath）
+			if strings.HasPrefix(localAudioURL, "file://") {
+				os.Remove(strings.TrimPrefix(localAudioURL, "file://")) //nolint:errcheck
 			}
 		}
 	}
@@ -5048,7 +5096,8 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 }
 
 // uploadAudioToStorage 读取 TTS 输出（file:// 路径或 HTTP URL），上传并返回持久 URL。
-func (s *VideoService) uploadAudioToStorage(ctx context.Context, shot *model.StoryboardShot, audioURL string) (string, error) {
+// novelID/chapterID 由调用方提供，避免重复查询 video 记录。
+func (s *VideoService) uploadAudioToStorage(ctx context.Context, shot *model.StoryboardShot, audioURL string, novelID, chapterID uint) (string, error) {
 	var data []byte
 	var readErr error
 
@@ -5066,16 +5115,6 @@ func (s *VideoService) uploadAudioToStorage(ctx context.Context, shot *model.Sto
 	}
 	if readErr != nil {
 		return "", readErr
-	}
-
-	video, err := s.videoRepo.GetByID(shot.VideoID)
-	if err != nil {
-		return "", err
-	}
-	novelID := video.NovelID
-	var chapterID uint
-	if video.ChapterID != nil {
-		chapterID = *video.ChapterID
 	}
 
 	filename := fmt.Sprintf("shot-%d.mp3", shot.ID)
@@ -5120,12 +5159,17 @@ func formatSRTTimecode(secs float64) string {
 
 // resolveVoiceForShot 解析分镜对应角色的配音设置（voice, speed, style）。
 // 优先级：① 对话文本「角色名：」前缀 → ② shot.CharacterIDs 第一个角色 → ③ narrationVoice → ④ alloy。
-func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narrationVoice string) (voice string, speed float64, style string) {
+// novelID 由调用方提供（避免此函数重复查询 video 记录）。
+func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narrationVoice string, novelID uint) (voice string, speed float64, style string) {
 	voice = "alloy"
 	if narrationVoice != "" {
 		voice = narrationVoice
 	}
 	speed = 1.0
+
+	if novelID == 0 || s.characterRepo == nil {
+		return
+	}
 
 	// 步骤一：从对话中解析发言角色（格式：角色名：对话内容 或 角色名:对话内容）
 	speakerName := ""
@@ -5134,11 +5178,6 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 			speakerName = strings.TrimSpace(shot.Dialogue[:idx])
 			break
 		}
-	}
-
-	video, err := s.videoRepo.GetByID(shot.VideoID)
-	if err != nil || video.NovelID == 0 {
-		return
 	}
 
 	applyCharVoice := func(c *model.Character) {
@@ -5152,8 +5191,8 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 	}
 
 	if speakerName != "" {
-		// 按名称匹配
-		characters, err := s.characterRepo.ListByNovel(video.NovelID)
+		// 使用带 TTL 缓存的角色列表（批量配音时避免 N+1 查询）
+		characters, err := s.listCharsByNovelCached(novelID)
 		if err != nil {
 			return
 		}

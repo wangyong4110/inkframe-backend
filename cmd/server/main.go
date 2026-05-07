@@ -1231,6 +1231,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	videoService.WithPlotPointRepo(repos.PlotPointRepo)
 	videoService.WithSystemSettingRepo(repos.SystemSettingRepo)
 	videoService.WithVideoConcurrency(cfg.AI.VideoConcurrency)
+	videoService.WithAudioConcurrency(3) // 最多 3 路并发 TTS，防止批量生成触发 API 限速
 
 	// 帧生成服务
 	frameGeneratorService := service.NewFrameGeneratorService(aiService)

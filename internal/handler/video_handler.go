@@ -1185,8 +1185,9 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 
 	var req struct {
 		NarrationVoice  string `json:"narration_voice"`
-		SubtitleEnabled bool   `json:"subtitle_enabled"`
-		SubtitleConfig  struct {
+		SubtitleEnabled bool `json:"subtitle_enabled"`
+		// SubtitleConfig 字幕样式参数（当前已解析，暂未持久化至 SRT；规划中实现 ASS 样式输出）
+		SubtitleConfig struct {
 			Position string `json:"position"`
 			FontSize  int    `json:"font_size"`
 			Color     string `json:"color"`
@@ -1473,7 +1474,7 @@ func (h *VideoHandler) DeleteVoiceSegment(c *gin.Context) {
 }
 
 // GenerateSegmentVoice POST /videos/:id/shots/:shot_id/segments/:seg_id/voice
-// 为单条语音段落生成 TTS 音频（同步，完成后返回更新后的段落）
+// 为单条语音段落生成 TTS 音频（异步 Task，与单镜头配音接口对称）
 func (h *VideoHandler) GenerateSegmentVoice(c *gin.Context) {
 	segID, err := strconv.ParseUint(c.Param("seg_id"), 10, 32)
 	if err != nil {
@@ -1486,13 +1487,48 @@ func (h *VideoHandler) GenerateSegmentVoice(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 
 	tenantID := getTenantID(c)
-	if err := h.videoService.GenerateSegmentAudio(uint(segID), tenantID, req.NarrationVoice); err != nil {
-		logger.Printf("[VideoHandler] GenerateSegmentVoice seg %d: %v", segID, err)
-		respondErr(c, http.StatusInternalServerError, "语音生成失败，请重试")
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeVoiceGen,
+		fmt.Sprintf("片段 #%d 配音生成", segID), "segment", uint(segID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	seg, _ := h.videoService.GetVoiceSegment(uint(segID))
-	respondOK(c, seg)
+
+	go func(taskID string, sID uint, narrationVoice string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[VideoHandler] GenerateSegmentVoice task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+
+		const maxRetries = 3
+		var audioErr error
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			audioErr = h.videoService.GenerateSegmentAudio(sID, tenantID, narrationVoice)
+			if audioErr == nil {
+				break
+			}
+			logger.Printf("[VideoHandler] GenerateSegmentVoice task %s seg %d attempt %d/%d: %v",
+				taskID, sID, attempt, maxRetries, audioErr)
+			if attempt < maxRetries {
+				time.Sleep(time.Duration(attempt*2) * time.Second)
+			}
+		}
+		if audioErr != nil {
+			h.taskSvc.Fail(taskID, audioErr.Error()) //nolint:errcheck
+			return
+		}
+		seg, _ := h.videoService.GetVoiceSegment(sID)
+		h.taskSvc.Complete(taskID, seg) //nolint:errcheck
+	}(task.TaskID, uint(segID), req.NarrationVoice)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "片段配音任务已提交",
+		"data":    gin.H{"task_id": task.TaskID},
+	})
 }
 
 // ServeSegmentAudio GET /videos/:id/shots/:shot_id/segments/:seg_id/audio
