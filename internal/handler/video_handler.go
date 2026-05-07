@@ -1634,6 +1634,31 @@ func (h *VideoHandler) UpdateShotSFXItem(c *gin.Context) {
 	respondOK(c, item)
 }
 
+// ToggleShotSFXItem PATCH /videos/:id/shots/:shot_id/sfx-items/:item_id/disabled
+func (h *VideoHandler) ToggleShotSFXItem(c *gin.Context) {
+	if h.sfxItemRepo == nil {
+		respondErr(c, http.StatusNotImplemented, "SFX item repo not configured")
+		return
+	}
+	itemID, err := strconv.Atoi(c.Param("item_id"))
+	if err != nil {
+		respondBadRequest(c, "invalid item id")
+		return
+	}
+	var req struct {
+		Disabled bool `json:"disabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "invalid body")
+		return
+	}
+	if err := h.sfxItemRepo.UpdateDisabled(uint(itemID), req.Disabled); err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to update sfx item")
+		return
+	}
+	respondOK(c, gin.H{"id": itemID, "disabled": req.Disabled})
+}
+
 // DeleteShotSFXItem DELETE /videos/:id/shots/:shot_id/sfx-items/:item_id
 func (h *VideoHandler) DeleteShotSFXItem(c *gin.Context) {
 	if h.sfxItemRepo == nil {
@@ -1830,6 +1855,31 @@ func (h *VideoHandler) ApplyBGMTrack(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"seg_id": segID})
+}
+
+// ToggleBGMSegment PATCH /videos/:id/bgm/segments/:seg_id/disabled
+func (h *VideoHandler) ToggleBGMSegment(c *gin.Context) {
+	if h.bgmRepo == nil {
+		respondErr(c, http.StatusNotImplemented, "BGM repository not configured")
+		return
+	}
+	segID, err := strconv.ParseUint(c.Param("seg_id"), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid seg_id")
+		return
+	}
+	var req struct {
+		Disabled bool `json:"disabled"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "invalid body")
+		return
+	}
+	if err := h.bgmRepo.UpdateDisabled(uint(segID), req.Disabled); err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to update BGM segment")
+		return
+	}
+	respondOK(c, gin.H{"id": segID, "disabled": req.Disabled})
 }
 
 // AnalyzeBGMSegments POST /videos/:id/bgm/analyze

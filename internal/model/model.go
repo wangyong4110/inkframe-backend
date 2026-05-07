@@ -926,10 +926,11 @@ type ShotSFXItem struct {
 	ShotID uint `json:"shot_id" gorm:"not null;index:idx_sfx_shot_seq,priority:1"`
 	SeqNo  int  `json:"seq_no" gorm:"not null;default:1;index:idx_sfx_shot_seq,priority:2"`
 
-	Tag    string  `json:"tag" gorm:"size:200"`                          // 音效搜索词，如 "heavy rain bamboo forest"
-	URL    string  `json:"url" gorm:"size:1000"`                         // 音效文件 URL
-	Volume float64 `json:"volume" gorm:"type:decimal(4,2);default:0.4"` // 混音音量（0.1–1.0）
-	Source string  `json:"source" gorm:"size:20"`                        // local/freesound/jamendo/elevenlabs
+	Tag      string  `json:"tag" gorm:"size:200"`                          // 音效搜索词，如 "heavy rain bamboo forest"
+	URL      string  `json:"url" gorm:"size:1000"`                         // 音效文件 URL
+	Volume   float64 `json:"volume" gorm:"type:decimal(4,2);default:0.4"` // 混音音量（0.1–1.0）
+	Source   string  `json:"source" gorm:"size:20"`                        // local/freesound/jamendo/elevenlabs
+	Disabled bool    `json:"disabled" gorm:"default:false"`                // 禁用后不参与合成/预览
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -953,7 +954,8 @@ type VideoBGMSegment struct {
 	DurationSecs float64 `json:"duration_secs" gorm:"type:decimal(8,3)"`
 	TrackName   string  `json:"track_name" gorm:"size:255"`
 	TrackArtist string  `json:"track_artist" gorm:"size:255"`
-	Source      string  `json:"source" gorm:"size:20"` // jamendo/local/none
+	Source      string  `json:"source" gorm:"size:20"`   // jamendo/pixabay/local/none
+	Disabled    bool    `json:"disabled" gorm:"default:false"` // 禁用后不参与合成/预览
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`

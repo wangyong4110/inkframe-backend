@@ -1762,6 +1762,10 @@ func (r *ShotSFXItemRepository) Update(item *model.ShotSFXItem) error {
 	return r.db.Save(item).Error
 }
 
+func (r *ShotSFXItemRepository) UpdateDisabled(id uint, disabled bool) error {
+	return r.db.Model(&model.ShotSFXItem{}).Where("id = ?", id).Update("disabled", disabled).Error
+}
+
 // Delete 物理删除单条音效条目
 func (r *ShotSFXItemRepository) Delete(id uint) error {
 	return r.db.Unscoped().Delete(&model.ShotSFXItem{}, id).Error
@@ -1806,6 +1810,10 @@ func (r *VideoBGMSegmentRepository) BatchCreate(segs []*model.VideoBGMSegment) e
 // Update 更新BGM分段（用于更新URL/Volume等）
 func (r *VideoBGMSegmentRepository) Update(seg *model.VideoBGMSegment) error {
 	return r.db.Save(seg).Error
+}
+
+func (r *VideoBGMSegmentRepository) UpdateDisabled(id uint, disabled bool) error {
+	return r.db.Model(&model.VideoBGMSegment{}).Where("id = ?", id).Update("disabled", disabled).Error
 }
 
 // UpdateTrack 更新BGM分段的曲目信息（手动选曲后调用）

@@ -323,6 +323,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.GET("/:id/bgm/segments", cfg.VideoHandler.ListBGMSegments)
 			videos.GET("/:id/bgm/search", cfg.VideoHandler.JamendoSearchBGM)
 			videos.PATCH("/:id/bgm/segments/:seg_id/track", cfg.VideoHandler.ApplyBGMTrack)
+			videos.PATCH("/:id/bgm/segments/:seg_id/disabled", cfg.VideoHandler.ToggleBGMSegment)
 			videos.POST("/:id/bgm/analyze", cfg.VideoHandler.AnalyzeBGMSegments)
 			videos.POST("/:id/bgm/generate", cfg.VideoHandler.GenerateBGM)
 			videos.POST("/:id/shots/:shot_id/generate", cfg.VideoHandler.GenerateSingleShot)
@@ -333,6 +334,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			// 音效条目（多条）
 			videos.GET("/:id/shots/:shot_id/sfx-items", cfg.VideoHandler.ListShotSFXItems)
 			videos.PUT("/:id/shots/:shot_id/sfx-items/:item_id", cfg.VideoHandler.UpdateShotSFXItem)
+			videos.PATCH("/:id/shots/:shot_id/sfx-items/:item_id/disabled", cfg.VideoHandler.ToggleShotSFXItem)
 			videos.DELETE("/:id/shots/:shot_id/sfx-items/:item_id", cfg.VideoHandler.DeleteShotSFXItem)
 			// 语音段落
 			videos.GET("/:id/shots/:shot_id/segments", cfg.VideoHandler.ListVoiceSegments)
