@@ -926,11 +926,13 @@ type ShotSFXItem struct {
 	ShotID uint `json:"shot_id" gorm:"not null;index:idx_sfx_shot_seq,priority:1"`
 	SeqNo  int  `json:"seq_no" gorm:"not null;default:1;index:idx_sfx_shot_seq,priority:2"`
 
-	Tag      string  `json:"tag" gorm:"size:200"`                          // 音效搜索词，如 "heavy rain bamboo forest"
-	URL      string  `json:"url" gorm:"size:1000"`                         // 音效文件 URL
-	Volume   float64 `json:"volume" gorm:"type:decimal(4,2);default:0.4"` // 混音音量（0.1–1.0）
-	Source   string  `json:"source" gorm:"size:20"`                        // local/freesound/jamendo/elevenlabs
-	Disabled bool    `json:"disabled" gorm:"default:false"`                // 禁用后不参与合成/预览
+	Tag          string  `json:"tag" gorm:"size:200"`                          // 音效搜索词，如 "heavy rain bamboo forest"
+	URL          string  `json:"url" gorm:"size:1000"`                         // 音效文件 URL
+	Volume       float64 `json:"volume" gorm:"type:decimal(4,2);default:0.4"` // 混音音量（0.1–1.0）
+	Source       string  `json:"source" gorm:"size:20"`                        // local/freesound/elevenlabs
+	Disabled     bool    `json:"disabled" gorm:"default:false"`                // 禁用后不参与合成/预览
+	StartOffset  float64 `json:"start_offset" gorm:"type:decimal(8,3);default:0"`  // 在分镜中的开始时间（秒，0=分镜起始）
+	DurationSecs float64 `json:"duration_secs" gorm:"type:decimal(8,3);default:0"` // 音效时长（秒，0=未知）
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`

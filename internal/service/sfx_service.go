@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,11 +22,19 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/storage"
 )
 
+// sfxHit holds the result of a single SFX search.
+type sfxHit struct {
+	url          string
+	source       string
+	durationSecs float64 // 音效时长（秒）；0 = 未知
+}
+
 // sfxCacheEntry caches API search results to avoid duplicate requests for the same query.
 type sfxCacheEntry struct {
-	url       string
-	source    string
-	expiresAt time.Time
+	url          string
+	source       string
+	durationSecs float64
+	expiresAt    time.Time
 }
 
 const sfxCacheTTL = 24 * time.Hour
@@ -286,23 +295,23 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 
 	// 2. 逐 tag 搜索，收集结果
 	type sfxResult struct {
-		tag    string
-		url    string
-		source string
-		vol    float64
+		tag string
+		hit sfxHit
+		vol float64
 	}
 	var results []sfxResult
 
 	for _, tag := range tags {
-		u, src := s.searchOneTag(ctx, tenantID, tag, maxDur, shot)
-		if u != "" {
+		hit := s.searchOneTag(ctx, tenantID, tag, maxDur, shot)
+		if hit.url != "" {
 			// 音量按音效类型决定，再根据台词场景进一步压低
 			vol := sfxCategoryVolume(tag) * (baseVol / 0.4)
 			if vol < 0.1 {
 				vol = 0.1
 			}
-			results = append(results, sfxResult{tag: tag, url: u, source: src, vol: vol})
-			logger.Printf("[SFXService] shot %d tag=%q source=%s url=%s vol=%.2f", shot.ID, tag, src, u, vol)
+			results = append(results, sfxResult{tag: tag, hit: hit, vol: vol})
+			logger.Printf("[SFXService] shot %d tag=%q source=%s url=%s dur=%.1fs vol=%.2f",
+				shot.ID, tag, hit.source, hit.url, hit.durationSecs, vol)
 		} else {
 			logger.Printf("[SFXService] shot %d tag=%q: no result", shot.ID, tag)
 		}
@@ -317,48 +326,50 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 		items := make([]*model.ShotSFXItem, 0, len(results))
 		for i, r := range results {
 			items = append(items, &model.ShotSFXItem{
-				ShotID: shot.ID,
-				SeqNo:  i + 1,
-				Tag:    r.tag,
-				URL:    r.url,
-				Volume: r.vol,
-				Source: r.source,
+				ShotID:       shot.ID,
+				SeqNo:        i + 1,
+				Tag:          r.tag,
+				URL:          r.hit.url,
+				Volume:       r.vol,
+				Source:       r.hit.source,
+				DurationSecs: r.hit.durationSecs, // 精确音效时长（来自 API 或文件头解析）
+				// StartOffset: 0 默认（AI 生成时均从分镜起始播放）
 			})
 		}
 		if err := s.sfxItemRepo.BatchCreate(items); err != nil {
 			return fmt.Errorf("save sfx items shot %d: %w", shot.ID, err)
 		}
 		// 同步更新旧字段（向后兼容时间线播放）
-		_ = s.storyboardRepo.UpdateSFX(shot.ID, results[0].url, string(tagsJSON), results[0].vol)
+		_ = s.storyboardRepo.UpdateSFX(shot.ID, results[0].hit.url, string(tagsJSON), results[0].vol)
 	} else {
-		_ = s.storyboardRepo.UpdateSFX(shot.ID, results[0].url, string(tagsJSON), baseVol)
+		_ = s.storyboardRepo.UpdateSFX(shot.ID, results[0].hit.url, string(tagsJSON), baseVol)
 	}
 	return nil
 }
 
-// searchOneTag 对单个 tag 执行三层降级搜索，返回 (url, source)。
+// searchOneTag 对单个 tag 执行三层降级搜索，返回 sfxHit（url/source/durationSecs）。
 // 顺序：本地库 → Freesound（CC0 专业音效库） → ElevenLabs（AI生成）
 // Jamendo 为音乐平台，返回完整音乐曲目而非单次音效，不适合 SFX 场景。
-func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, tag string, maxDur float64, shot *model.StoryboardShot) (string, string) {
-	if u := s.searchLocalLib(ctx, tenantID, tag); u != "" {
-		logger.Printf("[SFXService] shot %d local hit: %s", shot.ID, u)
-		return u, "local"
+func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, tag string, maxDur float64, shot *model.StoryboardShot) sfxHit {
+	if u, dur := s.searchLocalLib(ctx, tenantID, tag); u != "" {
+		logger.Printf("[SFXService] shot %d local hit: %s (%.1fs)", shot.ID, u, dur)
+		return sfxHit{url: u, source: "local", durationSecs: dur}
 	}
 	if s.freesoundKey == "" {
 		logger.Printf("[SFXService] shot %d skip Freesound (no key)", shot.ID)
-	} else if u := s.searchFreesound(ctx, tag, maxDur); u != "" {
-		logger.Printf("[SFXService] shot %d Freesound hit: %s", shot.ID, u)
-		return u, "freesound"
+	} else if hit := s.searchFreesound(ctx, tag, maxDur); hit.url != "" {
+		logger.Printf("[SFXService] shot %d Freesound hit: %s (%.1fs)", shot.ID, hit.url, hit.durationSecs)
+		return hit
 	} else {
 		logger.Printf("[SFXService] shot %d Freesound miss for %q", shot.ID, tag)
 	}
-	if u, err := s.generateElevenLabs(ctx, shot); err == nil && u != "" {
-		logger.Printf("[SFXService] shot %d ElevenLabs hit: %s", shot.ID, u)
-		return u, "elevenlabs"
+	if u, dur, err := s.generateElevenLabs(ctx, shot); err == nil && u != "" {
+		logger.Printf("[SFXService] shot %d ElevenLabs hit: %s (%.1fs)", shot.ID, u, dur)
+		return sfxHit{url: u, source: "elevenlabs", durationSecs: dur}
 	} else if err != nil {
 		logger.Printf("[SFXService] shot %d ElevenLabs failed: %v", shot.ID, err)
 	}
-	return "", ""
+	return sfxHit{}
 }
 
 // BatchAutoGenerateSFX 批量处理视频所有镜头，最多 5 并发。
@@ -489,25 +500,97 @@ func matchLocalLibKey(lib map[string]string, phrase string) (string, bool) {
 	return "", false
 }
 
+// parseWAVDuration 读取 WAV 文件的 RIFF 头，返回音频时长（秒）。
+// 不支持的格式或读取失败时返回 0。
+func parseWAVDuration(path string) float64 {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+
+	// RIFF header: 4 (RIFF) + 4 (size) + 4 (WAVE) = 12 bytes
+	var riffID [4]byte
+	var riffSize uint32
+	var waveID [4]byte
+	if binary.Read(f, binary.LittleEndian, &riffID) != nil ||
+		binary.Read(f, binary.LittleEndian, &riffSize) != nil ||
+		binary.Read(f, binary.LittleEndian, &waveID) != nil {
+		return 0
+	}
+	if string(riffID[:]) != "RIFF" || string(waveID[:]) != "WAVE" {
+		return 0
+	}
+
+	var byteRate uint32
+	var dataSize uint32
+	for {
+		var chunkID [4]byte
+		var chunkSize uint32
+		if binary.Read(f, binary.LittleEndian, &chunkID) != nil ||
+			binary.Read(f, binary.LittleEndian, &chunkSize) != nil {
+			break
+		}
+		switch string(chunkID[:]) {
+		case "fmt ":
+			if chunkSize < 16 {
+				return 0
+			}
+			var audioFmt, channels uint16
+			var sampleRate, bRate uint32
+			var blockAlign, bitsPerSample uint16
+			binary.Read(f, binary.LittleEndian, &audioFmt)
+			binary.Read(f, binary.LittleEndian, &channels)
+			binary.Read(f, binary.LittleEndian, &sampleRate)
+			binary.Read(f, binary.LittleEndian, &bRate)
+			binary.Read(f, binary.LittleEndian, &blockAlign)
+			binary.Read(f, binary.LittleEndian, &bitsPerSample)
+			byteRate = bRate
+			if remaining := int64(chunkSize) - 16; remaining > 0 {
+				f.Seek(remaining, io.SeekCurrent)
+			}
+		case "data":
+			dataSize = chunkSize
+		default:
+			// Skip unknown chunk (WAV requires even-byte alignment)
+			skip := int64(chunkSize)
+			if chunkSize%2 != 0 {
+				skip++
+			}
+			f.Seek(skip, io.SeekCurrent)
+		}
+		if dataSize > 0 && byteRate > 0 {
+			break
+		}
+	}
+	if byteRate == 0 || dataSize == 0 {
+		return 0
+	}
+	return float64(dataSize) / float64(byteRate)
+}
+
 // searchLocalLib 在本地目录中查找首个匹配短语的音效文件。
-// 找到后自动上传至 OSS（首次），返回可公开访问的 URL。
+// 找到后自动上传至 OSS（首次），返回可公开访问的 URL 和音效时长（秒）。
 // file:// 协议 URL 无法在浏览器端访问，因此必须通过存储服务转换。
-func (s *SFXService) searchLocalLib(ctx context.Context, tenantID uint, phrase string) string {
+func (s *SFXService) searchLocalLib(ctx context.Context, tenantID uint, phrase string) (string, float64) {
 	if s.sfxDir == "" {
-		return ""
+		return "", 0
 	}
 	filename, ok := matchLocalLibKey(s.localLib, phrase)
 	if !ok {
-		return ""
+		return "", 0
 	}
 	localPath := filepath.Join(s.sfxDir, filename)
 	if _, err := os.Stat(localPath); err != nil {
-		return ""
+		return "", 0
 	}
+
+	// 解析本地 WAV 时长
+	dur := parseWAVDuration(localPath)
 
 	// 命中进程内缓存
 	if cached, ok := s.localUploadCache.Load(localPath); ok {
-		return cached.(string)
+		return cached.(string), dur
 	}
 
 	// 上传至 OSS（首次使用时）
@@ -524,14 +607,14 @@ func (s *SFXService) searchLocalLib(ctx context.Context, tenantID uint, phrase s
 			}
 			if u, err := s.storageSvc.Upload(ctx, ossKey, f, fi.Size(), mime); err == nil {
 				s.localUploadCache.Store(localPath, u)
-				return u
+				return u, dur
 			} else {
 				logger.Printf("[SFXService] local OSS upload failed (%s): %v", filename, err)
 			}
 		}
 	}
 	// storageSvc 未配置或上传失败：跳过本地文件，继续搜索外部 API
-	return ""
+	return "", 0
 }
 
 // sfxCategoryVolume 根据音效类型返回建议混音音量（0.1–0.6）。
@@ -567,74 +650,79 @@ func sfxCategoryVolume(tag string) float64 {
 
 // cachedQuery 用进程内缓存包装一次 API 搜索，TTL = sfxCacheTTL。
 // cacheKey 格式建议："source:query"。
-func (s *SFXService) cachedQuery(cacheKey string, fn func() (string, string)) (string, string) {
+func (s *SFXService) cachedQuery(cacheKey string, fn func() sfxHit) sfxHit {
 	if v, ok := s.queryCache.Load(cacheKey); ok {
 		entry := v.(sfxCacheEntry)
 		if time.Now().Before(entry.expiresAt) {
-			return entry.url, entry.source
+			return sfxHit{url: entry.url, source: entry.source, durationSecs: entry.durationSecs}
 		}
 		s.queryCache.Delete(cacheKey)
 	}
-	u, src := fn()
-	if u != "" {
-		s.queryCache.Store(cacheKey, sfxCacheEntry{url: u, source: src, expiresAt: time.Now().Add(sfxCacheTTL)})
+	hit := fn()
+	if hit.url != "" {
+		s.queryCache.Store(cacheKey, sfxCacheEntry{
+			url: hit.url, source: hit.source, durationSecs: hit.durationSecs,
+			expiresAt: time.Now().Add(sfxCacheTTL),
+		})
 	}
-	return u, src
+	return hit
 }
 
-// freesoundSearch 执行单次 Freesound API 搜索，返回首个结果的预览 MP3 URL。
-func (s *SFXService) freesoundSearch(ctx context.Context, query string, maxDuration float64) string {
+// freesoundSearch 执行单次 Freesound API 搜索，返回首个结果的预览 MP3 URL 和时长（秒）。
+func (s *SFXService) freesoundSearch(ctx context.Context, query string, maxDuration float64) (string, float64) {
 	filter := `license:"Creative Commons 0"`
 	if maxDuration > 0 {
 		filter += fmt.Sprintf(" duration:[0.5 TO %.1f]", maxDuration)
 	}
 	apiURL := fmt.Sprintf(
-		"https://freesound.org/apiv2/search/text/?query=%s&filter=%s&fields=id,name,previews&sort=downloads_desc&page_size=1&token=%s",
+		"https://freesound.org/apiv2/search/text/?query=%s&filter=%s&fields=id,name,previews,duration&sort=downloads_desc&page_size=1&token=%s",
 		url.QueryEscape(query), url.QueryEscape(filter), s.freesoundKey,
 	)
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
-		return ""
+		return "", 0
 	}
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		logger.Printf("[SFXService] Freesound request error for %q: %v", query, err)
-		return ""
+		return "", 0
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		logger.Printf("[SFXService] Freesound HTTP %d for %q: %s", resp.StatusCode, query, body)
-		return ""
+		return "", 0
 	}
 
 	var result struct {
 		Results []struct {
+			Duration float64 `json:"duration"`
 			Previews struct {
 				PreviewHQMP3 string `json:"preview-hq-mp3"`
 			} `json:"previews"`
 		} `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Results) == 0 {
-		return ""
+		return "", 0
 	}
-	return result.Results[0].Previews.PreviewHQMP3
+	return result.Results[0].Previews.PreviewHQMP3, result.Results[0].Duration
 }
 
 // searchFreesound 通过 Freesound API 搜索 CC0 授权音效。
 // 先用完整短语搜索，失败则拆词降级重试。结果缓存 sfxCacheTTL。
-func (s *SFXService) searchFreesound(ctx context.Context, phrase string, maxDuration float64) string {
+func (s *SFXService) searchFreesound(ctx context.Context, phrase string, maxDuration float64) sfxHit {
 	if s.freesoundKey == "" || phrase == "" {
-		return ""
+		return sfxHit{}
 	}
 	// 完整短语搜索
 	query := strings.ReplaceAll(normalizeTag(phrase), "_", " ")
 	cacheKey := "freesound:" + query
-	u, _ := s.cachedQuery(cacheKey, func() (string, string) {
-		return s.freesoundSearch(ctx, query, maxDuration), "freesound"
+	hit := s.cachedQuery(cacheKey, func() sfxHit {
+		u, dur := s.freesoundSearch(ctx, query, maxDuration)
+		return sfxHit{url: u, source: "freesound", durationSecs: dur}
 	})
-	if u != "" {
-		return u
+	if hit.url != "" {
+		return hit
 	}
 	// 降级：拆分关键词，逐词搜索（取前 3 个有意义的词）
 	words := strings.Fields(query)
@@ -646,14 +734,15 @@ func (s *SFXService) searchFreesound(ctx context.Context, phrase string, maxDura
 			continue
 		}
 		ck := "freesound:" + w
-		wu, _ := s.cachedQuery(ck, func() (string, string) {
-			return s.freesoundSearch(ctx, w, maxDuration), "freesound"
+		wHit := s.cachedQuery(ck, func() sfxHit {
+			u, dur := s.freesoundSearch(ctx, w, maxDuration)
+			return sfxHit{url: u, source: "freesound", durationSecs: dur}
 		})
-		if wu != "" {
-			return wu
+		if wHit.url != "" {
+			return wHit
 		}
 	}
-	return ""
+	return sfxHit{}
 }
 
 // elevenLabsPrompt 将 sfx_tags 转换为适合 ElevenLabs 音效生成的英文 Prompt。
@@ -680,12 +769,13 @@ func elevenLabsPrompt(shot *model.StoryboardShot) string {
 }
 
 // generateElevenLabs 调用 ElevenLabs Sound Generation API，生成定制音效并上传至存储服务。
-func (s *SFXService) generateElevenLabs(ctx context.Context, shot *model.StoryboardShot) (string, error) {
+// 返回 URL、实际请求的时长（秒）和错误。
+func (s *SFXService) generateElevenLabs(ctx context.Context, shot *model.StoryboardShot) (string, float64, error) {
 	if s.elevenKey == "" {
-		return "", fmt.Errorf("elevenlabs key not configured")
+		return "", 0, fmt.Errorf("elevenlabs key not configured")
 	}
 	if s.storageSvc == nil {
-		return "", fmt.Errorf("storage not configured for elevenlabs upload")
+		return "", 0, fmt.Errorf("storage not configured for elevenlabs upload")
 	}
 
 	prompt := elevenLabsPrompt(shot)
@@ -711,26 +801,27 @@ func (s *SFXService) generateElevenLabs(ctx context.Context, shot *model.Storybo
 	req, err := http.NewRequestWithContext(ctx, "POST",
 		"https://api.elevenlabs.io/v1/sound-generation", bytes.NewReader(body))
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("xi-api-key", s.elevenKey)
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", fmt.Errorf("elevenlabs HTTP %d: %s", resp.StatusCode, bodyBytes)
+		return "", 0, fmt.Errorf("elevenlabs HTTP %d: %s", resp.StatusCode, bodyBytes)
 	}
 
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return "", 0, err
 	}
 
 	key := fmt.Sprintf("sfx/video_%d/shot_%d.mp3", shot.VideoID, shot.ID)
-	return s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), "audio/mpeg")
+	u, err := s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), "audio/mpeg")
+	return u, float64(dur), err
 }
