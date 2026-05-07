@@ -6,34 +6,46 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/storage"
 )
 
+// sfxCacheEntry caches API search results to avoid duplicate requests for the same query.
+type sfxCacheEntry struct {
+	url       string
+	source    string
+	expiresAt time.Time
+}
+
+const sfxCacheTTL = 24 * time.Hour
+
 // SFXService 自动音效生成服务。
-// 五层降级：本地 SFX 库 → Freesound API → Pixabay API → Jamendo API → ElevenLabs（AI生成）。
-// 各层均可选，未配置时透明跳过。
+// 四层降级：本地 SFX 库 → Freesound API → Jamendo API → ElevenLabs（AI生成）。
+// 注意：Pixabay 的 API 仅支持 music 媒体类型，不适合音效搜索，仅用于 BGM 服务。
 type SFXService struct {
-	aiSvc           *AIService
-	storageSvc      storage.Service
-	storyboardRepo  *repository.StoryboardRepository
-	sfxItemRepo     *repository.ShotSFXItemRepository
-	sfxDir          string            // 本地音效目录
-	freesoundKey    string            // Freesound API Token（可选）
-	pixabayKey      string            // Pixabay API Key（可选）
-	jamendoClientID string            // Jamendo client_id（可选）
-	elevenKey       string            // ElevenLabs API Key（可选）
-	httpClient      *http.Client
-	localLib        map[string]string // 内置标签 → 文件名（不含目录）
+	aiSvc            *AIService
+	storageSvc       storage.Service
+	storyboardRepo   *repository.StoryboardRepository
+	sfxItemRepo      *repository.ShotSFXItemRepository
+	sfxDir           string // 本地音效目录
+	freesoundKey     string // Freesound API Token（可选）
+	jamendoClientID  string // Jamendo client_id（可选）
+	elevenKey        string // ElevenLabs API Key（可选）
+	httpClient       *http.Client
+	localLib         map[string]string // 内置标签 → 文件名（不含目录）
+	localUploadCache sync.Map          // local file path → OSS URL（进程内缓存）
+	queryCache       sync.Map          // "source:query" → sfxCacheEntry
 }
 
 // WithSFXItemRepo 注入音效条目仓库（可选；注入后才启用多 item 存储）
@@ -46,7 +58,7 @@ func (s *SFXService) WithSFXItemRepo(r *repository.ShotSFXItemRepository) *SFXSe
 type SFXServiceConfig struct {
 	SFXDir          string // 本地音效目录（环境变量 SFX_DIR）
 	FreesoundKey    string // 环境变量 FREESOUND_API_KEY
-	PixabayKey      string // 环境变量 PIXABAY_API_KEY
+	PixabayKey      string // 保留字段（Pixabay 仅供 BGM 服务使用，此处忽略）
 	JamendoClientID string // 环境变量 JAMENDO_CLIENT_ID
 	ElevenLabsKey   string // 环境变量 ELEVENLABS_API_KEY
 }
@@ -64,7 +76,6 @@ func NewSFXService(
 		storyboardRepo:  storyboardRepo,
 		sfxDir:          cfg.SFXDir,
 		freesoundKey:    cfg.FreesoundKey,
-		pixabayKey:      cfg.PixabayKey,
 		jamendoClientID: cfg.JamendoClientID,
 		elevenKey:       cfg.ElevenLabsKey,
 		httpClient:      &http.Client{Timeout: 30 * time.Second},
@@ -107,7 +118,7 @@ func buildDefaultSFXLib() map[string]string {
 		"door_knock":        "door_knock.wav",
 		"bell_ring":         "bell_ring.wav",
 		// 情绪音
-		"heartbeat":    "heartbeat.wav",
+		"heartbeat":     "heartbeat.wav",
 		"clock_ticking": "clock_ticking.wav",
 	}
 }
@@ -122,7 +133,6 @@ type sfxShotBrief struct {
 	EmotionalTone string  `json:"emotional_tone,omitempty"`
 	Duration      float64 `json:"duration"`
 }
-
 
 // analyzeSingleShotSFX 为单个分镜调用 AI 生成自然语言音效搜索词，更新 sfx_tags 字段。
 // 参考7类音效框架引导 AI 选词，输出平铺 JSON 数组；无需音效时输出空数组。
@@ -177,7 +187,6 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 		return fmt.Errorf("parse JSON: %w (raw=%q)", err, raw)
 	}
 	if len(queries) == 0 {
-		// 该镜头无需音效
 		shot.SFXTags = ""
 		_ = s.storyboardRepo.UpdateSFXTags(shot.ID, "")
 		return nil
@@ -201,39 +210,29 @@ func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.Stor
 
 	const maxConcurrency = 5
 	sem := make(chan struct{}, maxConcurrency)
-	type result struct {
-		shotNo int
-		err    error
-	}
-	results := make(chan result, len(shots))
+	var wg sync.WaitGroup
+	var updated, failed atomic.Int32
 
 	for _, shot := range shots {
 		if ctx.Err() != nil {
 			break
 		}
+		wg.Add(1)
 		sem <- struct{}{}
 		go func(sh *model.StoryboardShot) {
+			defer wg.Done()
 			defer func() { <-sem }()
 			err := s.analyzeSingleShotSFX(ctx, sh, tenantID, userContext)
-			results <- result{shotNo: sh.ShotNo, err: err}
+			if err != nil {
+				logger.Printf("[SFXService] AnalyzeSFXForVideo: shot %d failed: %v", sh.ShotNo, err)
+				failed.Add(1)
+			} else {
+				updated.Add(1)
+			}
 		}(shot)
 	}
-	// 等待所有 goroutine 完成
-	for i := 0; i < cap(sem); i++ {
-		sem <- struct{}{}
-	}
-	close(results)
-
-	updated, failed := 0, 0
-	for r := range results {
-		if r.err != nil {
-			logger.Printf("[SFXService] AnalyzeSFXForVideo: shot %d failed: %v", r.shotNo, r.err)
-			failed++
-		} else {
-			updated++
-		}
-	}
-	logger.Printf("[SFXService] AnalyzeSFXForVideo: updated=%d failed=%d", updated, failed)
+	wg.Wait()
+	logger.Printf("[SFXService] AnalyzeSFXForVideo: updated=%d failed=%d", updated.Load(), failed.Load())
 	return nil
 }
 
@@ -250,7 +249,7 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 		return nil
 	}
 
-	// 1. 提取标签
+	// 1. 提取搜索词（优先用已有 sfx_tags；否则调用 AI 分析）
 	var tags []string
 	if shot.SFXTags != "" {
 		if err := json.Unmarshal([]byte(shot.SFXTags), &tags); err != nil || len(tags) == 0 {
@@ -258,12 +257,16 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 		}
 	}
 	if len(tags) == 0 {
-		var err error
-		tags, err = s.extractTags(ctx, shot, tenantID)
-		if err != nil {
-			logger.Printf("[SFXService] shot %d LLM tag extract failed (%v), using rule fallback", shot.ID, err)
+		// 调用统一的 AI 分析函数（与批量分析路径一致，避免两套 Prompt）
+		if err := s.analyzeSingleShotSFX(ctx, shot, tenantID, ""); err != nil {
+			logger.Printf("[SFXService] shot %d AI analyze failed (%v), using rule fallback", shot.ID, err)
 			tags = s.fallbackTags(shot)
+		} else if shot.SFXTags != "" {
+			_ = json.Unmarshal([]byte(shot.SFXTags), &tags)
 		}
+	}
+	if len(tags) == 0 {
+		tags = s.fallbackTags(shot)
 	}
 	// 最多取前 5 个 tag，避免过多网络请求
 	if len(tags) > 5 {
@@ -291,14 +294,20 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 		tag    string
 		url    string
 		source string
+		vol    float64
 	}
 	var results []sfxResult
 
 	for _, tag := range tags {
-		u, src := s.searchOneTag(ctx, []string{tag}, maxDur, shot)
+		u, src := s.searchOneTag(ctx, tenantID, tag, maxDur, shot)
 		if u != "" {
-			results = append(results, sfxResult{tag: tag, url: u, source: src})
-			logger.Printf("[SFXService] shot %d tag=%q source=%s url=%s", shot.ID, tag, src, u)
+			// 音量按音效类型决定，再根据台词场景进一步压低
+			vol := sfxCategoryVolume(tag) * (baseVol / 0.4)
+			if vol < 0.1 {
+				vol = 0.1
+			}
+			results = append(results, sfxResult{tag: tag, url: u, source: src, vol: vol})
+			logger.Printf("[SFXService] shot %d tag=%q source=%s url=%s vol=%.2f", shot.ID, tag, src, u, vol)
 		} else {
 			logger.Printf("[SFXService] shot %d tag=%q: no result", shot.ID, tag)
 		}
@@ -312,17 +321,12 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	if s.sfxItemRepo != nil {
 		items := make([]*model.ShotSFXItem, 0, len(results))
 		for i, r := range results {
-			// 主音效音量 = baseVol；后续音效递减 0.1（最低 0.1）
-			vol := baseVol - float64(i)*0.1
-			if vol < 0.1 {
-				vol = 0.1
-			}
 			items = append(items, &model.ShotSFXItem{
 				ShotID: shot.ID,
 				SeqNo:  i + 1,
 				Tag:    r.tag,
 				URL:    r.url,
-				Volume: vol,
+				Volume: r.vol,
 				Source: r.source,
 			})
 		}
@@ -330,42 +334,35 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 			return fmt.Errorf("save sfx items shot %d: %w", shot.ID, err)
 		}
 		// 同步更新旧字段（向后兼容时间线播放）
-		_ = s.storyboardRepo.UpdateSFX(shot.ID, results[0].url, string(tagsJSON), baseVol)
+		_ = s.storyboardRepo.UpdateSFX(shot.ID, results[0].url, string(tagsJSON), results[0].vol)
 	} else {
 		_ = s.storyboardRepo.UpdateSFX(shot.ID, results[0].url, string(tagsJSON), baseVol)
 	}
 	return nil
 }
 
-// searchOneTag 对单个 tag 执行五层降级搜索，返回 (url, source)。
-// 顺序：本地库 → Freesound → Pixabay → Jamendo → ElevenLabs
-func (s *SFXService) searchOneTag(ctx context.Context, tags []string, maxDur float64, shot *model.StoryboardShot) (string, string) {
-	if u := s.searchLocalLib(tags); u != "" {
+// searchOneTag 对单个 tag 执行四层降级搜索，返回 (url, source)。
+// 顺序：本地库 → Freesound → Jamendo → ElevenLabs
+func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, tag string, maxDur float64, shot *model.StoryboardShot) (string, string) {
+	if u := s.searchLocalLib(ctx, tenantID, tag); u != "" {
 		logger.Printf("[SFXService] shot %d local hit: %s", shot.ID, u)
 		return u, "local"
 	}
 	if s.freesoundKey == "" {
 		logger.Printf("[SFXService] shot %d skip Freesound (no key)", shot.ID)
-	} else if u := s.searchFreesound(ctx, tags, maxDur); u != "" {
+	} else if u := s.searchFreesound(ctx, tag, maxDur); u != "" {
 		logger.Printf("[SFXService] shot %d Freesound hit: %s", shot.ID, u)
 		return u, "freesound"
 	} else {
-		logger.Printf("[SFXService] shot %d Freesound miss", shot.ID)
+		logger.Printf("[SFXService] shot %d Freesound miss for %q", shot.ID, tag)
 	}
-	if s.pixabayKey == "" {
-		logger.Printf("[SFXService] shot %d skip Pixabay (no key)", shot.ID)
-	} else if u := s.searchPixabay(ctx, tags, maxDur); u != "" {
-		logger.Printf("[SFXService] shot %d Pixabay hit: %s", shot.ID, u)
-		return u, "pixabay"
+	if s.jamendoClientID == "" {
+		logger.Printf("[SFXService] shot %d skip Jamendo (no key)", shot.ID)
+	} else if u := s.searchJamendo(ctx, tag, maxDur); u != "" {
+		logger.Printf("[SFXService] shot %d Jamendo hit: %s", shot.ID, u)
+		return u, "jamendo"
 	} else {
-		logger.Printf("[SFXService] shot %d Pixabay miss", shot.ID)
-	}
-	if s.jamendoClientID != "" {
-		if u := s.searchJamendo(ctx, tags, maxDur); u != "" {
-			logger.Printf("[SFXService] shot %d Jamendo hit: %s", shot.ID, u)
-			return u, "jamendo"
-		}
-		logger.Printf("[SFXService] shot %d Jamendo miss", shot.ID)
+		logger.Printf("[SFXService] shot %d Jamendo miss for %q", shot.ID, tag)
 	}
 	if u, err := s.generateElevenLabs(ctx, shot); err == nil && u != "" {
 		logger.Printf("[SFXService] shot %d ElevenLabs hit: %s", shot.ID, u)
@@ -377,7 +374,7 @@ func (s *SFXService) searchOneTag(ctx context.Context, tags []string, maxDur flo
 }
 
 // BatchAutoGenerateSFX 批量处理视频所有镜头，最多 5 并发。
-// progressFn 每完成一个镜头调用一次（0-100）。
+// progressFn 每完成一个镜头时实时调用（0-100）。
 // 返回成功/失败数量，不因单个失败而中止整批。
 func (s *SFXService) BatchAutoGenerateSFX(
 	ctx context.Context,
@@ -392,93 +389,50 @@ func (s *SFXService) BatchAutoGenerateSFX(
 	}
 	const maxConcurrency = 5
 	sem := make(chan struct{}, maxConcurrency)
-	type result struct{ ok bool }
-	results := make(chan result, total)
+	var wg sync.WaitGroup
+	var doneCount atomic.Int32
+	var successCount, failCount atomic.Int32
 
 	for _, shot := range shots {
 		if ctx.Err() != nil {
 			break
 		}
+		wg.Add(1)
 		sem <- struct{}{}
 		go func(s2 *model.StoryboardShot) {
+			defer wg.Done()
 			defer func() { <-sem }()
 			err := s.AutoGenerateSFX(ctx, s2, tenantID)
 			if err != nil {
 				logger.Printf("[SFXService] shot %d: %v", s2.ID, err)
+				failCount.Add(1)
+			} else {
+				successCount.Add(1)
 			}
-			results <- result{ok: err == nil}
+			// progressFn 在 goroutine 内实时调用，而非事后批量触发
+			n := int(doneCount.Add(1))
+			if progressFn != nil {
+				progressFn(n * 100 / total)
+			}
 		}(shot)
 	}
-	// drain remaining sem slots so all goroutines finish
-	for i := 0; i < cap(sem); i++ {
-		sem <- struct{}{}
-	}
-	close(results)
-
-	done := 0
-	for r := range results {
-		done++
-		if r.ok {
-			success++
-		} else {
-			fail++
-		}
-		if progressFn != nil {
-			progressFn(done * 100 / total)
-		}
-	}
-	return
+	wg.Wait()
+	return int(successCount.Load()), int(failCount.Load())
 }
 
 // --- 内部方法 ---
-
-// sfxPrompt 构建 LLM 提取音效标签的 Prompt
-func sfxPrompt(shot *model.StoryboardShot) string {
-	var sb strings.Builder
-	sb.WriteString("你是专业影视音效师。根据以下分镜信息，输出3-5个英文音效标签（JSON数组）。\n")
-	sb.WriteString("要求：标签具体可搜索（如 \"rain_heavy\"）；优先环境音 > 动作音 > 情绪音；仅输出JSON数组。\n\n")
-	if shot.Scene != "" {
-		fmt.Fprintf(&sb, "场景类型：%s\n", shot.Scene)
-	}
-	if shot.EmotionalTone != "" {
-		fmt.Fprintf(&sb, "情绪基调：%s\n", shot.EmotionalTone)
-	}
-	if shot.Description != "" {
-		fmt.Fprintf(&sb, "镜头描述：%s\n", shot.Description)
-	}
-	if shot.Dialogue != "" {
-		fmt.Fprintf(&sb, "台词（仅参考场景环境，无需为台词生成音效）：%s\n", shot.Dialogue)
-	}
-	sb.WriteString("\n输出格式示例：[\"rain_heavy\", \"footsteps_stone\", \"thunder\"]")
-	return sb.String()
-}
-
-// extractTags 调用 LLM 提取音效标签列表
-func (s *SFXService) extractTags(ctx context.Context, shot *model.StoryboardShot, tenantID uint) ([]string, error) {
-	prompt := sfxPrompt(shot)
-	result, err := s.aiSvc.GenerateWithProvider(tenantID, 0, "sfx_extract", prompt, "")
-	if err != nil {
-		return nil, err
-	}
-	raw := extractJSON(result)
-	var tags []string
-	if err := json.Unmarshal([]byte(raw), &tags); err != nil {
-		return nil, fmt.Errorf("parse SFX tags JSON: %w (raw=%q)", err, raw)
-	}
-	return tags, nil
-}
 
 // fallbackTags 基于规则从描述 / 情绪基调 / 镜头类型推断标签（LLM 不可用时的降级）
 func (s *SFXService) fallbackTags(shot *model.StoryboardShot) []string {
 	desc := strings.ToLower(shot.Description + " " + shot.EmotionalTone + " " + shot.Scene)
 	rules := [][2]string{
-		{"雨", "rain_heavy"}, {"雪", "wind_night"}, {"风", "wind_strong"},
-		{"雷", "thunder"}, {"森林", "forest_ambient"}, {"河", "river_flowing"},
-		{"城市", "city_ambient"}, {"人群", "crowd_outdoor"}, {"室内", "ambient_room"},
-		{"战斗", "sword_clash"}, {"奔跑", "footsteps_running"},
-		{"马", "horse_gallop"}, {"爆炸", "explosion"}, {"箭", "arrow_whoosh"},
-		{"门", "door_open"}, {"火", "fire_crackle"},
-		{"紧张", "heartbeat"}, {"钟", "clock_ticking"}, {"铃", "bell_ring"},
+		{"雨", "rain heavy ambient"}, {"雪", "wind cold night"}, {"风", "wind strong"},
+		{"雷", "thunder storm"}, {"森林", "forest ambient birds"}, {"河", "river flowing water"},
+		{"城市", "city street ambient"}, {"人群", "crowd outdoor noise"}, {"室内", "room interior ambient"},
+		{"战斗", "sword clash metal impact"}, {"奔跑", "footsteps running fast"},
+		{"马", "horse gallop hooves"}, {"爆炸", "explosion blast impact"}, {"箭", "arrow whoosh flight"},
+		{"门", "door open creak"}, {"火", "fire crackle burning"},
+		{"紧张", "heartbeat suspense"}, {"钟", "clock ticking"}, {"铃", "bell ring"},
 	}
 	seen := map[string]bool{}
 	var tags []string
@@ -489,7 +443,7 @@ func (s *SFXService) fallbackTags(shot *model.StoryboardShot) []string {
 		}
 	}
 	if len(tags) == 0 {
-		tags = []string{"ambient_room"}
+		tags = []string{"room interior ambient"}
 	}
 	if len(tags) > 5 {
 		tags = tags[:5]
@@ -505,36 +459,142 @@ func normalizeTag(tag string) string {
 	return tag
 }
 
-// searchLocalLib 在本地目录中查找首个匹配标签的音效文件，返回 file:// URL
-func (s *SFXService) searchLocalLib(tags []string) string {
+// matchLocalLibKey 尝试将英文短语匹配到 localLib 键，返回对应文件名。
+// 三级匹配：1) 精确标准化匹配  2) 键的所有词均出现在短语中  3) 键的主词（>3字符）出现在短语中
+func matchLocalLibKey(lib map[string]string, phrase string) (string, bool) {
+	phraseWords := strings.Fields(strings.ToLower(phrase))
+	phraseSet := make(map[string]bool, len(phraseWords))
+	for _, w := range phraseWords {
+		phraseSet[w] = true
+	}
+
+	// 1. 精确标准化匹配（针对 underscore_tag 输入）
+	normalized := strings.Join(phraseWords, "_")
+	if filename, ok := lib[normalized]; ok {
+		return filename, true
+	}
+
+	// 2. 键的所有词均出现在短语中（如 "rain_heavy" ↔ "heavy rain tile roof"）
+	for libKey, filename := range lib {
+		keyWords := strings.Split(libKey, "_")
+		allMatch := true
+		for _, kw := range keyWords {
+			if !phraseSet[kw] {
+				allMatch = false
+				break
+			}
+		}
+		if allMatch {
+			return filename, true
+		}
+	}
+
+	// 3. 键的主词（第一个且长度 > 3 的词）出现在短语中（弱匹配）
+	for libKey, filename := range lib {
+		keyWords := strings.Split(libKey, "_")
+		for _, kw := range keyWords {
+			if len(kw) > 3 && phraseSet[kw] {
+				return filename, true
+			}
+		}
+	}
+	return "", false
+}
+
+// searchLocalLib 在本地目录中查找首个匹配短语的音效文件。
+// 找到后自动上传至 OSS（首次），返回可公开访问的 URL。
+// file:// 协议 URL 无法在浏览器端访问，因此必须通过存储服务转换。
+func (s *SFXService) searchLocalLib(ctx context.Context, tenantID uint, phrase string) string {
 	if s.sfxDir == "" {
 		return ""
 	}
-	for _, rawTag := range tags {
-		tag := normalizeTag(rawTag)
-		// 精确匹配
-		if filename, ok := s.localLib[tag]; ok {
-			p := filepath.Join(s.sfxDir, filename)
-			if _, err := os.Stat(p); err == nil {
-				return "file://" + p
+	filename, ok := matchLocalLibKey(s.localLib, phrase)
+	if !ok {
+		return ""
+	}
+	localPath := filepath.Join(s.sfxDir, filename)
+	if _, err := os.Stat(localPath); err != nil {
+		return ""
+	}
+
+	// 命中进程内缓存
+	if cached, ok := s.localUploadCache.Load(localPath); ok {
+		return cached.(string)
+	}
+
+	// 上传至 OSS（首次使用时）
+	if s.storageSvc != nil {
+		f, err := os.Open(localPath)
+		if err == nil {
+			defer f.Close()
+			fi, _ := f.Stat()
+			ossKey := fmt.Sprintf("sfx/local/%s", filepath.Base(localPath))
+			ext := strings.ToLower(filepath.Ext(localPath))
+			mime := "audio/wav"
+			if ext == ".mp3" {
+				mime = "audio/mpeg"
 			}
-		}
-		// 前缀匹配：标签 "rain_light" → 匹配库中所有 rain_* 条目
-		prefix := strings.SplitN(tag, "_", 2)[0]
-		for libTag, filename := range s.localLib {
-			if strings.HasPrefix(libTag, prefix) {
-				p := filepath.Join(s.sfxDir, filename)
-				if _, err := os.Stat(p); err == nil {
-					return "file://" + p
-				}
+			if u, err := s.storageSvc.Upload(ctx, ossKey, f, fi.Size(), mime); err == nil {
+				s.localUploadCache.Store(localPath, u)
+				return u
+			} else {
+				logger.Printf("[SFXService] local OSS upload failed (%s): %v", filename, err)
 			}
 		}
 	}
+	// storageSvc 未配置或上传失败：跳过本地文件，继续搜索外部 API
 	return ""
 }
 
+// sfxCategoryVolume 根据音效类型返回建议混音音量（0.1–0.6）。
+// 冲击音效音量较高，环境音效较低，避免掩盖人声。
+func sfxCategoryVolume(tag string) float64 {
+	lower := strings.ToLower(tag)
+	// 冲击类：爆炸、打击、碰撞 → 较高音量
+	for _, kw := range []string{"explosion", "blast", "impact", "clash", "punch", "crash", "bang", "boom", "thunder"} {
+		if strings.Contains(lower, kw) {
+			return 0.55
+		}
+	}
+	// 动作类：脚步、门、武器 → 中等音量
+	for _, kw := range []string{"footstep", "door", "sword", "arrow", "whoosh", "gallop", "swing", "click"} {
+		if strings.Contains(lower, kw) {
+			return 0.45
+		}
+	}
+	// 环境类：自然音、人群 → 较低音量（避免掩盖旁白）
+	for _, kw := range []string{"rain", "wind", "forest", "ambient", "crowd", "city", "river", "fire", "room"} {
+		if strings.Contains(lower, kw) {
+			return 0.3
+		}
+	}
+	// 情绪/转场类：心跳、时钟 → 低音量
+	for _, kw := range []string{"heartbeat", "clock", "tick", "breath"} {
+		if strings.Contains(lower, kw) {
+			return 0.25
+		}
+	}
+	return 0.4 // 默认
+}
+
+// cachedQuery 用进程内缓存包装一次 API 搜索，TTL = sfxCacheTTL。
+// cacheKey 格式建议："source:query"。
+func (s *SFXService) cachedQuery(cacheKey string, fn func() (string, string)) (string, string) {
+	if v, ok := s.queryCache.Load(cacheKey); ok {
+		entry := v.(sfxCacheEntry)
+		if time.Now().Before(entry.expiresAt) {
+			return entry.url, entry.source
+		}
+		s.queryCache.Delete(cacheKey)
+	}
+	u, src := fn()
+	if u != "" {
+		s.queryCache.Store(cacheKey, sfxCacheEntry{url: u, source: src, expiresAt: time.Now().Add(sfxCacheTTL)})
+	}
+	return u, src
+}
+
 // freesoundSearch 执行单次 Freesound API 搜索，返回首个结果的预览 MP3 URL。
-// maxDuration > 0 时附加时长过滤（秒），并按下载量降序排列。
 func (s *SFXService) freesoundSearch(ctx context.Context, query string, maxDuration float64) string {
 	filter := `license:"Creative Commons 0"`
 	if maxDuration > 0 {
@@ -549,10 +609,16 @@ func (s *SFXService) freesoundSearch(ctx context.Context, query string, maxDurat
 		return ""
 	}
 	resp, err := s.httpClient.Do(req)
-	if err != nil || resp.StatusCode != http.StatusOK {
+	if err != nil {
+		logger.Printf("[SFXService] Freesound request error for %q: %v", query, err)
 		return ""
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		logger.Printf("[SFXService] Freesound HTTP %d for %q: %s", resp.StatusCode, query, body)
+		return ""
+	}
 
 	var result struct {
 		Results []struct {
@@ -567,167 +633,115 @@ func (s *SFXService) freesoundSearch(ctx context.Context, query string, maxDurat
 	return result.Results[0].Previews.PreviewHQMP3
 }
 
-// searchFreesound 通过 Freesound API 搜索 CC0 授权音效，返回高质量预览 MP3 URL。
-// maxDuration > 0 时对搜索结果施加时长上限。
-// 先用前3个标签合并搜索，失败则逐个标签降级重试。
-// 需要 FreesoundKey 配置。
-func (s *SFXService) searchFreesound(ctx context.Context, tags []string, maxDuration float64) string {
-	if s.freesoundKey == "" || len(tags) == 0 {
+// searchFreesound 通过 Freesound API 搜索 CC0 授权音效。
+// 先用完整短语搜索，失败则拆词降级重试。结果缓存 sfxCacheTTL。
+func (s *SFXService) searchFreesound(ctx context.Context, phrase string, maxDuration float64) string {
+	if s.freesoundKey == "" || phrase == "" {
 		return ""
 	}
-	// 第一次：取前3个标签合并搜索（效果更精准）
-	n := len(tags)
-	if n > 3 {
-		n = 3
-	}
-	if u := s.freesoundSearch(ctx, strings.Join(tags[:n], " "), maxDuration); u != "" {
+	// 完整短语搜索
+	query := strings.ReplaceAll(normalizeTag(phrase), "_", " ")
+	cacheKey := "freesound:" + query
+	u, _ := s.cachedQuery(cacheKey, func() (string, string) {
+		return s.freesoundSearch(ctx, query, maxDuration), "freesound"
+	})
+	if u != "" {
 		return u
 	}
-	// 降级：逐个标签单独搜索（将下划线替换为空格，更符合 Freesound 关键词习惯）
-	for _, tag := range tags {
-		q := strings.ReplaceAll(normalizeTag(tag), "_", " ")
-		if u := s.freesoundSearch(ctx, q, maxDuration); u != "" {
-			return u
+	// 降级：拆分关键词，逐词搜索（取前 3 个有意义的词）
+	words := strings.Fields(query)
+	for i, w := range words {
+		if i >= 3 {
+			break
+		}
+		if len(w) <= 3 {
+			continue
+		}
+		ck := "freesound:" + w
+		wu, _ := s.cachedQuery(ck, func() (string, string) {
+			return s.freesoundSearch(ctx, w, maxDuration), "freesound"
+		})
+		if wu != "" {
+			return wu
 		}
 	}
 	return ""
 }
 
-// searchPixabay 通过 Pixabay API 搜索免费音效，返回 CDN 直链 MP3 URL。
-// 先用标签合并搜索，失败则逐个标签降级重试。
-// API 文档：https://pixabay.com/api/docs/ (media_type=music)
-func (s *SFXService) searchPixabay(ctx context.Context, tags []string, maxDuration float64) string {
-	if s.pixabayKey == "" || len(tags) == 0 {
+// searchJamendo 通过 Jamendo API 搜索器乐音效，返回可下载 MP3 URL。
+// 使用 fuzzytags 进行语义标签搜索（优于 namesearch）。结果缓存 sfxCacheTTL。
+func (s *SFXService) searchJamendo(ctx context.Context, phrase string, maxDuration float64) string {
+	if s.jamendoClientID == "" || phrase == "" {
 		return ""
 	}
 
 	doSearch := func(query string) string {
-		params := url.Values{}
-		params.Set("key", s.pixabayKey)
-		params.Set("q", query)
-		params.Set("media_type", "music")
-		params.Set("lang", "en")
-		params.Set("order", "popular")
-		params.Set("per_page", "10")
-		params.Set("safesearch", "true")
-
-		req, err := http.NewRequestWithContext(ctx, "GET", "https://pixabay.com/api/?"+params.Encode(), nil)
-		if err != nil {
-			return ""
-		}
-		resp, err := s.httpClient.Do(req)
-		if err != nil || resp.StatusCode != http.StatusOK {
-			return ""
-		}
-		defer resp.Body.Close()
-
-		var result struct {
-			Hits []struct {
-				Duration int    `json:"duration"`
-				AudioURL string `json:"audio_url"`
-			} `json:"hits"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			return ""
-		}
-		for _, hit := range result.Hits {
-			if hit.AudioURL == "" {
-				continue
+		cacheKey := "jamendo:" + query
+		u, _ := s.cachedQuery(cacheKey, func() (string, string) {
+			params := url.Values{}
+			params.Set("client_id", s.jamendoClientID)
+			params.Set("format", "json")
+			params.Set("limit", "5")
+			params.Set("fuzzytags", query) // Fix: fuzzytags 支持语义标签搜索（原 namesearch 仅精确名称匹配）
+			params.Set("vocalinstrumental", "instrumental")
+			params.Set("order", "popularity_month")
+			if maxDuration > 0 {
+				params.Set("durationbetween", fmt.Sprintf("1_%d", int(maxDuration)))
 			}
-			if maxDuration > 0 && float64(hit.Duration) > maxDuration {
-				continue
+			apiURL := "https://api.jamendo.com/v3.0/tracks/?" + params.Encode()
+			req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+			if err != nil {
+				return "", ""
 			}
-			return hit.AudioURL
-		}
-		return ""
+			resp, err := s.httpClient.Do(req)
+			if err != nil {
+				logger.Printf("[SFXService] Jamendo request error for %q: %v", query, err)
+				return "", ""
+			}
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+				logger.Printf("[SFXService] Jamendo HTTP %d for %q: %s", resp.StatusCode, query, body)
+				return "", ""
+			}
+
+			var result struct {
+				Results []struct {
+					Audio                string `json:"audio"`
+					AudioDownload        string `json:"audiodownload"`
+					AudioDownloadAllowed bool   `json:"audiodownload_allowed"`
+				} `json:"results"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Results) == 0 {
+				return "", ""
+			}
+			for _, track := range result.Results {
+				if track.AudioDownloadAllowed && track.AudioDownload != "" {
+					return track.AudioDownload, "jamendo"
+				}
+				if track.Audio != "" {
+					return track.Audio, "jamendo"
+				}
+			}
+			return "", ""
+		})
+		return u
 	}
 
-	// 第一次：前 3 个标签合并搜索
-	n := len(tags)
-	if n > 3 {
-		n = 3
-	}
-	query := strings.ReplaceAll(strings.Join(tags[:n], " "), "_", " ")
+	// 完整短语搜索
+	query := strings.ReplaceAll(normalizeTag(phrase), "_", " ")
 	if u := doSearch(query); u != "" {
 		return u
 	}
-	// 降级：逐个标签单独搜索
-	for _, tag := range tags {
-		q := strings.ReplaceAll(normalizeTag(tag), "_", " ")
-		if u := doSearch(q); u != "" {
-			return u
+	// 降级：拆分关键词单独搜索（取前3个有意义的词）
+	for i, w := range strings.Fields(query) {
+		if i >= 3 {
+			break
 		}
-	}
-	return ""
-}
-
-// searchJamendo 通过 Jamendo API 搜索免费器乐背景音效，返回可下载 MP3 URL。
-// 先用标签合并搜索，失败则逐个标签降级重试。
-// 需要 JamendoClientID 配置。
-func (s *SFXService) searchJamendo(ctx context.Context, tags []string, maxDuration float64) string {
-	if s.jamendoClientID == "" || len(tags) == 0 {
-		return ""
-	}
-
-	// 内部搜索函数：单次请求
-	doSearch := func(query string) string {
-		params := url.Values{}
-		params.Set("client_id", s.jamendoClientID)
-		params.Set("format", "json")
-		params.Set("limit", "5")
-		params.Set("namesearch", query)
-		params.Set("vocalinstrumental", "instrumental")
-		params.Set("order", "popularity_month")
-		if maxDuration > 0 {
-			params.Set("durationbetween", fmt.Sprintf("1_%d", int(maxDuration)))
+		if len(w) <= 3 {
+			continue
 		}
-		apiURL := "https://api.jamendo.com/v3.0/tracks/?" + params.Encode()
-		req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
-		if err != nil {
-			return ""
-		}
-		resp, err := s.httpClient.Do(req)
-		if err != nil || resp.StatusCode != http.StatusOK {
-			return ""
-		}
-		defer resp.Body.Close()
-
-		var result struct {
-			Results []struct {
-				Audio                string `json:"audio"`
-				AudioDownload        string `json:"audiodownload"`
-				AudioDownloadAllowed bool   `json:"audiodownload_allowed"`
-				Duration             int    `json:"duration"`
-			} `json:"results"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Results) == 0 {
-			return ""
-		}
-		for _, track := range result.Results {
-			if track.AudioDownloadAllowed && track.AudioDownload != "" {
-				return track.AudioDownload
-			}
-			if track.Audio != "" {
-				return track.Audio
-			}
-		}
-		return ""
-	}
-
-	// 先合并前3个标签搜索
-	n := len(tags)
-	if n > 3 {
-		n = 3
-	}
-	query := strings.Join(tags[:n], " ")
-	query = strings.ReplaceAll(query, "_", " ")
-	if u := doSearch(query); u != "" {
-		return u
-	}
-	// 降级：逐个标签单独搜索
-	for _, tag := range tags {
-		q := strings.ReplaceAll(normalizeTag(tag), "_", " ")
-		if u := doSearch(q); u != "" {
+		if u := doSearch(w); u != "" {
 			return u
 		}
 	}
@@ -735,7 +749,6 @@ func (s *SFXService) searchJamendo(ctx context.Context, tags []string, maxDurati
 }
 
 // elevenLabsPrompt 将 sfx_tags 转换为适合 ElevenLabs 音效生成的英文 Prompt。
-// 优先使用 sfx_tags（语义更准确），降级用镜头描述的前缀。
 func elevenLabsPrompt(shot *model.StoryboardShot) string {
 	if shot.SFXTags != "" {
 		var tags []string
@@ -751,7 +764,6 @@ func elevenLabsPrompt(shot *model.StoryboardShot) string {
 			return prompt
 		}
 	}
-	// 降级：截取镜头描述
 	runes := []rune(shot.Description)
 	if len(runes) > 200 {
 		return string(runes[:200])
@@ -759,9 +771,7 @@ func elevenLabsPrompt(shot *model.StoryboardShot) string {
 	return shot.Description
 }
 
-// generateElevenLabs 调用 ElevenLabs Sound Generation API，
-// 根据音效标签生成定制音效，上传至存储服务后返回公开 URL。
-// 需要 ElevenLabsKey + storageSvc 配置。
+// generateElevenLabs 调用 ElevenLabs Sound Generation API，生成定制音效并上传至存储服务。
 func (s *SFXService) generateElevenLabs(ctx context.Context, shot *model.StoryboardShot) (string, error) {
 	if s.elevenKey == "" {
 		return "", fmt.Errorf("elevenlabs key not configured")
@@ -776,7 +786,6 @@ func (s *SFXService) generateElevenLabs(ctx context.Context, shot *model.Storybo
 		prompt = string(runes[:200])
 	}
 
-	// 时长范围：ElevenLabs 支持 0.5-22 秒
 	dur := shot.Duration
 	if dur <= 0 {
 		dur = 5
@@ -788,7 +797,7 @@ func (s *SFXService) generateElevenLabs(ctx context.Context, shot *model.Storybo
 	body, _ := json.Marshal(map[string]interface{}{
 		"text":             prompt,
 		"duration_seconds": dur,
-		"prompt_influence": 0.3, // 0=随机创意，1=完全按Prompt
+		"prompt_influence": 0.3,
 	})
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
@@ -805,7 +814,8 @@ func (s *SFXService) generateElevenLabs(ctx context.Context, shot *model.Storybo
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("elevenlabs HTTP %d", resp.StatusCode)
+		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", fmt.Errorf("elevenlabs HTTP %d: %s", resp.StatusCode, bodyBytes)
 	}
 
 	data, err := io.ReadAll(resp.Body)
