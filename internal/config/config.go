@@ -105,6 +105,7 @@ type AIConfig struct {
 	Doubao           DoubaoConfig           `mapstructure:"doubao"`
 	DeepSeek         DeepSeekConfig         `mapstructure:"deepseek"`
 	Qianwen          QianwenConfig          `mapstructure:"qianwen"`
+	Ollama           OllamaConfig           `mapstructure:"ollama"`
 	Seedance         SeedanceConfig         `mapstructure:"seedance"`
 	Kling            KlingConfig            `mapstructure:"kling"`
 	VolcengineVisual VolcengineVisualConfig `mapstructure:"volcengine_visual"`
@@ -155,6 +156,12 @@ type QianwenConfig struct {
 	APIKey   string `mapstructure:"api_key"`
 	Endpoint string `mapstructure:"endpoint"`
 	Model    string `mapstructure:"model"`
+}
+
+// OllamaConfig Ollama 本地 LLM 配置
+type OllamaConfig struct {
+	Endpoint string `mapstructure:"endpoint"` // 本地 Ollama API 地址，如 http://localhost:11434/v1
+	Model    string `mapstructure:"model"`    // 默认推理模型，如 llama3.2 / qwen2.5:7b
 }
 
 // SeedanceConfig Seedance视频配置

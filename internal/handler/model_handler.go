@@ -472,8 +472,20 @@ func (h *ModelHandler) FetchProviderModels(c *gin.Context) {
 		respondBadRequest(c, "endpoint is required")
 		return
 	}
-	if apiKey == "" {
+
+	// Ollama 本地服务特殊处理：无需 API Key，使用 /api/tags 获取已安装模型列表
+	isOllama := strings.Contains(endpoint, ":11434") || providerNameFromEndpoint(endpoint) == "ollama"
+	if !isOllama && apiKey == "" {
 		respondBadRequest(c, "api_key is required")
+		return
+	}
+	if isOllama {
+		models, err := fetchOllamaModels(c.Request.Context(), endpoint)
+		if err != nil {
+			respondErr(c, http.StatusBadGateway, "failed to reach Ollama: "+err.Error())
+			return
+		}
+		respondOK(c, gin.H{"models": models})
 		return
 	}
 
@@ -546,6 +558,7 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 		Type           string   `json:"type"`
 		APIEndpoint    string   `json:"api_endpoint"`
 		NeedsSecretKey bool     `json:"needs_secret_key"`
+		NoAPIKey       bool     `json:"no_api_key,omitempty"` // 无需 API Key（如 Ollama 本地服务）
 		StaticModels   []string `json:"static_models,omitempty"`
 	}
 
@@ -557,6 +570,7 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 			Type:           p.Type,
 			APIEndpoint:    p.APIEndpoint,
 			NeedsSecretKey: p.NeedsSecretKey,
+			NoAPIKey:       p.Name == "ollama",
 		}
 		if p.StaticModels != "" {
 			json.Unmarshal([]byte(p.StaticModels), &t.StaticModels) //nolint:errcheck
@@ -565,4 +579,44 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 	}
 
 	respondOK(c, result)
+}
+
+// providerNameFromEndpoint 从 endpoint 推断提供商名称（用于无 API Key 检测）
+func providerNameFromEndpoint(endpoint string) string {
+	if strings.Contains(endpoint, "ollama") {
+		return "ollama"
+	}
+	return ""
+}
+
+// fetchOllamaModels 从 Ollama /api/tags 获取已安装模型名称列表
+func fetchOllamaModels(ctx context.Context, endpoint string) ([]string, error) {
+	// endpoint 可能是 http://localhost:11434/v1，需要去掉 /v1 部分
+	baseURL := strings.TrimSuffix(strings.TrimRight(endpoint, "/"), "/v1")
+	reqCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, "GET", baseURL+"/api/tags", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var result struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(result.Models))
+	for _, m := range result.Models {
+		if m.Name != "" {
+			names = append(names, m.Name)
+		}
+	}
+	return names, nil
 }

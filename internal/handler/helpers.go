@@ -25,6 +25,8 @@ func providerHasCredentialsRaw(p *model.ModelProvider) bool {
 	switch p.Name {
 	case "volcengine-visual", "doubao-speech-v1":
 		return strings.TrimSpace(p.APIKey) != "" && strings.TrimSpace(p.APISecretKey) != ""
+	case "ollama":
+		return true // Ollama 无需 API Key，本地服务始终视为已配置
 	}
 	return strings.TrimSpace(p.APIKey) != ""
 }

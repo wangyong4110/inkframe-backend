@@ -305,6 +305,15 @@ func preMigrateCleanup(db *gorm.DB) {
 		}
 		db.Exec("ALTER TABLE ink_worldview DROP COLUMN novel_id")
 	}
+	// ink_model_usage_log.model_id 曾有 FK 约束指向 ink_ai_model(id)，
+	// 已改为软引用（无 FK），需删除旧约束避免 1452 错误
+	var usageLogFKs []string
+	db.Raw(`SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_model_usage_log'
+		AND COLUMN_NAME = 'model_id' AND REFERENCED_TABLE_NAME IS NOT NULL`).Scan(&usageLogFKs)
+	for _, fk := range usageLogFKs {
+		db.Exec("ALTER TABLE ink_model_usage_log DROP FOREIGN KEY " + fk)
+	}
 }
 
 // seedDefaultData 预置默认世界观（INSERT IGNORE 幂等）
@@ -508,6 +517,8 @@ func seedAIModels(db *gorm.DB) {
 		{"doubao", "豆包（火山引擎 Ark）", "llm", "https://ark.volces.com/api/v3", false, nil},
 		{"deepseek", "DeepSeek", "llm", "https://api.deepseek.com/v1", false, nil},
 		{"qianwen", "通义千问（DashScope）", "llm", "https://dashscope.aliyuncs.com/compatible-mode/v1", false, nil},
+		// Ollama 本地 LLM（无需 API Key，endpoint 由用户填写或保持默认）
+		{"ollama", "Ollama（本地）", "llm", "http://localhost:11434/v1", false, nil},
 		// 图像生成
 		{"volcengine-visual", "即梦AI（火山引擎）", "image", "", true,
 			[]string{"general_v3.0", "general_v3.0-I2V"}},
@@ -551,6 +562,16 @@ func seedAIModels(db *gorm.DB) {
 		{"qianwen", "qwen-plus", "通义千问 Plus", llmTasks, 0.85, 4096},
 		{"qianwen", "qwen-max", "通义千问 Max", llmTasks, 0.92, 4096},
 		{"qianwen", "wanx2.1-t2i-turbo", "万象 2.1 文生图 Turbo", []string{"image_gen"}, 0.85, 0},
+		// Ollama 本地 LLM（常用模型，实际可用列表由 /api/tags 动态获取）
+		{"ollama", "llama3.2", "Llama 3.2", llmTasks, 0.80, 4096},
+		{"ollama", "llama3.1:8b", "Llama 3.1 8B", llmTasks, 0.78, 4096},
+		{"ollama", "qwen2.5:7b", "Qwen 2.5 7B", llmTasks, 0.80, 4096},
+		{"ollama", "qwen2.5:14b", "Qwen 2.5 14B", llmTasks, 0.83, 4096},
+		{"ollama", "deepseek-r1:7b", "DeepSeek R1 7B", llmTasks, 0.82, 4096},
+		{"ollama", "deepseek-r1:14b", "DeepSeek R1 14B", llmTasks, 0.85, 8192},
+		{"ollama", "gemma3:12b", "Gemma 3 12B", llmTasks, 0.80, 4096},
+		{"ollama", "mistral", "Mistral 7B", llmTasks, 0.78, 4096},
+		{"ollama", "nomic-embed-text", "Nomic Embed Text", []string{"embedding"}, 0.85, 0},
 		// 即梦AI
 		{"volcengine-visual", "general_v3.0", "即梦AI 文生图 V3", []string{"image_gen"}, 0.9, 0},
 		// 视频
@@ -858,6 +879,18 @@ func initAIModule(cfg *config.Config) *ai.ModelManager {
 	}
 	if len(manager.ListProviders()) == 0 {
 		logger.Println("initAIModule: no AI API keys in env — providers will be loaded from DB per-tenant")
+	}
+
+	// Ollama 本地 LLM（无需 API Key，endpoint 非空即注册）
+	// 设置 OLLAMA_ENDPOINT 或在 config.yaml 中配置 ai.ollama.endpoint
+	ollamaEndpoint := getEnv("OLLAMA_ENDPOINT", cfg.AI.Ollama.Endpoint)
+	if ollamaEndpoint != "" {
+		ollamaModel := getEnv("OLLAMA_MODEL", cfg.AI.Ollama.Model)
+		manager.RegisterProvider("ollama", ai.NewOllamaProvider(ollamaEndpoint, ollamaModel, 0))
+		if firstRegistered == "" {
+			firstRegistered = "ollama"
+		}
+		logger.Printf("initAIModule: registered ollama at %s (model=%s)", ollamaEndpoint, ollamaModel)
 	}
 
 	// 即梦AI Visual API（AK/SK 鉴权图像生成）

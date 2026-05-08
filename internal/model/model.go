@@ -726,11 +726,11 @@ func (ExperimentResult) TableName() string {
 }
 
 // ModelUsageLog 模型使用记录
+// ModelID 仅作为软引用（无外键约束），允许关联的 AIModel 被删除而不级联报错。
 type ModelUsageLog struct {
-	ID       uint     `json:"id" gorm:"primaryKey"`
-	ModelID  uint     `json:"model_id" gorm:"index;not null"`
-	Model    *AIModel `json:"model,omitempty" gorm:"foreignKey:ModelID"`
-	TaskType string   `json:"task_type" gorm:"size:50;index"`
+	ID       uint   `json:"id" gorm:"primaryKey"`
+	ModelID  uint   `json:"model_id" gorm:"index;default:0"`  // 软引用，0=未关联
+	TaskType string `json:"task_type" gorm:"size:50;index"`
 
 	InputTokens  int     `json:"input_tokens"`
 	OutputTokens int     `json:"output_tokens"`

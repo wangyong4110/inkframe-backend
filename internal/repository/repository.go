@@ -681,9 +681,22 @@ func (r *AIModelRepository) UpdateHealthStatus(providerID uint, status string) e
 		}).Error
 }
 
-// LogUsage 记录使用
+// LogUsage 记录使用（忽略外键约束错误，使用日志为非关键数据）
 func (r *AIModelRepository) LogUsage(log *model.ModelUsageLog) error {
-	return r.db.Create(log).Error
+	err := r.db.Create(log).Error
+	if err != nil && isForeignKeyError(err) {
+		return nil // model_id 引用不存在时静默跳过，不影响主流程
+	}
+	return err
+}
+
+// isForeignKeyError 判断是否为 MySQL 外键约束错误（1452）
+func isForeignKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "1452") || strings.Contains(msg, "foreign key constraint")
 }
 
 // GetUsageStats 获取使用统计

@@ -82,6 +82,12 @@ ai:
     endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     model: "qwen-plus"
 
+  # Ollama 本地 LLM（需先安装并运行 `ollama serve`，无需 API Key）
+  # 文档：https://ollama.com | 支持模型：llama3.2 / qwen2.5 / deepseek-r1 等
+  ollama:
+    endpoint: ""           # 如 http://localhost:11434/v1，或通过 $OLLAMA_ENDPOINT 传入
+    model: "llama3.2"      # 默认推理模型（ollama pull llama3.2）
+
   # Seedance 视频生成（火山引擎 Ark，通常与豆包共用同一 Key）
   seedance:
     api_key: ""                      # 或通过 $SEEDANCE_API_KEY 传入
@@ -98,7 +104,7 @@ ai:
     secret_key: ""                   # 或通过 $VOLCENGINE_SECRET_KEY 传入
 
   # 各任务类型使用的 provider（留空则自动选择可用 provider）
-  # 可选值：openai / anthropic / doubao / deepseek / qianwen / volcengine-visual / kling / seedance
+  # 可选值：openai / anthropic / doubao / deepseek / qianwen / ollama / volcengine-visual / kling / seedance
   tasks:
     chapter_gen: ""        # 章节生成
     quality_check: ""      # 质量检查
