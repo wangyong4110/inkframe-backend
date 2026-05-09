@@ -246,34 +246,48 @@ func (s *BGMService) AnalyzeBGMForVideo(
 		return nil, fmt.Errorf("marshal briefs: %w", err)
 	}
 
-	prompt := fmt.Sprintf(`你是一位专业的影视配乐顾问，擅长为短视频/影视片段分析背景音乐需求。
+	prompt := fmt.Sprintf(`你是资深影视配乐顾问，深度了解 Jamendo 和 Pixabay 音乐平台的曲库结构与搜索逻辑。
 
-以下是一段视频的所有分镜信息（JSON数组）：
+以下是视频所有分镜信息（JSON数组）：
 %s
 
-请分析这些分镜的情绪走向，将情绪/氛围相近的连续分镜归为一个BGM分段。
-一首背景音乐应跨越多个分镜（建议每段跨3~8个分镜），避免频繁换曲。
+## 任务
+将情绪/氛围相近的连续分镜归为一个 BGM 分段（建议每段 3~8 个分镜，避免频繁换曲），输出每段的配乐方案。
 
-要求：
-1. 将所有分镜（shot_no从最小到最大，不遗漏、不重叠）分组为若干BGM分段
-2. 每段给出：start_shot_no、end_shot_no、mood（中文情绪描述，≤20字）、tempo（fast/medium/slow）
-3. search_queries：给出3~5个英文自然语言搜索词，适合在 Jamendo 等音乐库搜索
-   - 要具体描述音乐风格、乐器、情绪（如 "epic orchestral battle theme strings percussion"）
-   - 不要用通用词（如 "music" "background" "film score"）
-   - 可以包含流派关键词（如 "chinese traditional erhu melancholy" "xianxia fantasy ethereal flute"）
-   - 每条搜索词6~12个英文单词
+## 关键：search_queries 必须符合 Jamendo/Pixabay 平台词汇
 
-只输出合法 JSON 数组，格式如下（禁止输出其他内容）：
+### Jamendo 实际有效词汇（按类别）
+**流派标签**（高权重）：ambient / cinematic / orchestral / classical / electronic / folk / world / acoustic / new-age / meditation
+**情绪标签**：melancholic / uplifting / peaceful / dramatic / dark / mysterious / energetic / hopeful / tense / epic / ethereal / majestic / serene / nostalgic / triumphant
+**乐器标签**：piano / guitar / strings / violin / cello / harp / flute / erhu / percussion / synthesizer / drums / brass / choir
+**东方/民族标签**：chinese / asian / oriental / ethnic / traditional / folk / guqin / pipa / erhu
+
+### 场景→Jamendo 标签映射（请参考）
+- 修炼/突破/感悟 → ambient mysterious ethereal / cinematic orchestral epic / dark mysterious oriental
+- 战斗/武打 → cinematic orchestral dramatic / epic percussion strings tense / dark action energetic
+- 离别/悲情 → melancholic strings piano / sad orchestral emotional / chinese erhu melancholic folk
+- 阴谋/对峙/悬疑 → dark mysterious tense / cinematic suspense strings / ambient dark ominous
+- 日常/行走/探索 → acoustic folk peaceful / cinematic adventure world / ambient nature serene
+- 胜利/高潮 → epic orchestral triumphant / uplifting cinematic majestic / dramatic percussion brass
+- 温情/感情戏 → piano romantic peaceful / strings emotional gentle / acoustic folk nostalgic
+- 宫廷/大场面 → orchestral majestic grand / cinematic epic strings brass / classical dramatic
+
+### 搜索词构成规则
+- 每条 2~5 个词（Jamendo fuzzytags 拆词搜索，太长会稀释权重）
+- 组合格式：[流派] [情绪] [主乐器] 或 [文化] [流派] [情绪]
+- 前两条针对 Jamendo，第三条可以用完整短语（供 Pixabay 自然语言搜索）
+
+## 输出格式（严格 JSON 数组，禁止输出任何其他内容）
 [
   {
     "start_shot_no": 1,
     "end_shot_no": 5,
-    "mood": "紧张压抑的对峙",
+    "mood": "紧张压抑的修炼对峙",
     "tempo": "medium",
     "search_queries": [
-      "tense confrontation orchestral dark strings suspense",
-      "dramatic tension low brass cinematic thriller",
-      "chinese xianxia cultivation power struggle intense"
+      "cinematic orchestral dark tense",
+      "mysterious ambient oriental strings",
+      "chinese xianxia cultivation tense dramatic strings"
     ]
   }
 ]`, string(briefsJSON))
@@ -565,14 +579,16 @@ func (s *BGMService) JamendoSearch(ctx context.Context, p JamendoSearchParams) (
 	return tracks, nil
 }
 
-// phraseToTags 将自然语言短语（如 "epic orchestral battle strings"）转换为
+// phraseToTags 将自然语言短语（如 "cinematic orchestral dark tense"）转换为
 // Jamendo fuzzytags 所需的逗号分隔标签（过滤英文停用词，取前 5 个有意义的词）。
+// 新版 BGM 提示词已生成简短标签式搜索词（2~5词），此函数作为额外清洗层。
 func phraseToTags(phrase string) string {
 	stopwords := map[string]bool{
 		"a": true, "an": true, "the": true, "and": true, "or": true,
 		"in": true, "on": true, "at": true, "for": true, "to": true,
 		"of": true, "with": true, "by": true, "from": true, "as": true,
-		"is": true, "it": true, "its": true, "be": true,
+		"is": true, "it": true, "its": true, "be": true, "music": true,
+		"background": true, "theme": true, "song": true, "track": true,
 	}
 	words := strings.Fields(strings.ToLower(phrase))
 	var tags []string

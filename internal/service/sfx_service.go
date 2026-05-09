@@ -142,46 +142,75 @@ type sfxShotBrief struct {
 }
 
 // analyzeSingleShotSFX 为单个分镜调用 AI 生成自然语言音效搜索词，更新 sfx_tags 字段。
-// 参考7类音效框架引导 AI 选词，输出平铺 JSON 数组；无需音效时输出空数组。
+// 使用专业音效设计框架引导 AI：分层设计（动作音→环境底层→情绪点缀），
+// 并遵循 Freesound 实际有效的 [物体+材质+动作+音色描述符] 四元格式。
 func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint, userContext string) error {
-	prompt := `你是专业影视音效设计师，为分镜场景设计精准音效搜索词。
+	hasSpeech := shot.Dialogue != "" || shot.Narration != ""
 
-请根据分镜信息，从以下音效类型中选择适合该场景的词组（共输出 0-5 条英文搜索词）：
-
-音效类型参考（按需选择，不限类别数量）：
-• 环境音效：风声、雨声、鸟鸣、虫鸣、车流、人群、空调白噪音、咖啡厅背景声等
-• 动作音效：脚步声、开关门、物体碰撞摔落、剑鸣刀击、马蹄、衣物摩擦等
-• UI/界面音效：按钮点击、提示音、翻页、错误/成功提示（科技/游戏场景）
-• 特效音效：爆炸枪声、Whoosh移动感、Boom冲击感、Riser过渡音、慢动作拉伸音
-• 情绪音效：喜剧滑稽音、心跳悬疑音、恐怖诡异噪音、胜利/失败音效
-• 人声音效：笑声、掌声、欢呼、人群反应、耳语回声（不含角色对白）
-• 转场音效：Swoosh扫过、咔哒声、电影胶片转动、时钟滴答
-
-【输出规则】
-- 仅输出 JSON 字符串数组，每条为2-6个英文单词的可搜索词组
-- 纯静止镜头或纯对话镜头不需要音效时，输出空数组 []
-- 示例：["heavy rain tile roof ambient", "wooden door creak open", "sword clash metal impact"]
-
-分镜信息：
-`
+	var sceneCtx strings.Builder
 	if shot.ShotNo > 0 {
-		prompt += fmt.Sprintf("镜头编号：%d\n", shot.ShotNo)
+		fmt.Fprintf(&sceneCtx, "镜头编号：%d\n", shot.ShotNo)
 	}
 	if shot.Description != "" {
-		prompt += fmt.Sprintf("画面描述：%s\n", shot.Description)
+		fmt.Fprintf(&sceneCtx, "画面描述：%s\n", shot.Description)
 	}
 	if shot.EmotionalTone != "" {
-		prompt += fmt.Sprintf("情绪基调：%s\n", shot.EmotionalTone)
-	}
-	if shot.Narration != "" {
-		prompt += fmt.Sprintf("旁白：%s\n", shot.Narration)
+		fmt.Fprintf(&sceneCtx, "情绪基调：%s\n", shot.EmotionalTone)
 	}
 	if shot.Dialogue != "" {
-		prompt += fmt.Sprintf("台词（仅参考场景环境，无需为台词本身设计音效）：%s\n", shot.Dialogue)
+		fmt.Fprintf(&sceneCtx, "台词（参考场景环境，不为对白本身设计音效）：%s\n", shot.Dialogue)
+	}
+	if shot.Narration != "" {
+		fmt.Fprintf(&sceneCtx, "旁白：%s\n", shot.Narration)
 	}
 	if userContext != "" {
-		prompt += "\n额外场景背景（优先参考）：\n" + userContext
+		fmt.Fprintf(&sceneCtx, "\n额外场景背景（优先参考）：\n%s\n", userContext)
 	}
+
+	speechGuide := ""
+	if hasSpeech {
+		speechGuide = "\n⚠️ 本镜头含台词/旁白：只输出 1 条 subtle 环境底层音，禁止动作音/冲击音，避免掩盖人声。\n"
+	}
+
+	prompt := `你是有10年经验的专业影视音效设计师，精通 Freesound、SoundSnap 等专业音效库的搜索逻辑。
+
+## 音效分层原则（按优先级顺序）
+1. **动作音**（单次触发型）：画面中具体发生的物理动作 → 与画面强同步，最重要
+2. **环境底层**（循环持续型）：场景持续存在的背景声，建立空间感与沉浸感
+3. **情绪点缀**（单次触发型）：场景转折/情感强调时的冲击音、rise音或 sub-bass
+
+## Freesound 有效搜索词格式
+**四元格式**：[物体/来源] [材质/空间] [动作类型] [音色描述符]
+
+音色描述符词库（根据场景选用）：
+- 触发类型：single / one-shot / short / burst
+- 持续类型：loop / continuous / sustained
+- 空间感：indoor / outdoor / reverb / dry / echo / distant / close-up
+- 质感：heavy / light / sharp / soft / subtle / muffled / crisp
+
+✅ 高命中率示例（请模仿此精度）：
+- "wooden footsteps stone corridor reverb" — 脚步指定材质+空间+音色
+- "metal sword unsheath dry single sharp" — 武器动作指定材质+类型+质感
+- "heavy rain outdoor rooftop loop" — 雨声指定强度+位置+类型
+- "fire wood crackle burning close loop" — 火声指定材料+音色+距离
+- "crowd cheer outdoor distant reverb" — 人群指定类型+距离+空间
+- "thunder rumble distant outdoor single" — 雷声指定质感+距离+类型
+- "spiritual energy crackle electric whoosh" — 玄幻场景的灵气/能量音效
+- "magic spell cast energy swoosh single" — 施法/释放技能音效
+- "qi explosion impact cinematic boom" — 内力/真气爆发冲击音
+
+❌ 低命中率（避免）：
+- 单词：sword / rain / fire / ambient（太笼统）
+- 描述句：sword fighting sound / background rain noise（Freesound 不支持）
+` + speechGuide + `
+## 输出规则
+- 输出 0~3 条搜索词（按优先级降序）
+- 每条 3~7 个英文单词
+- 纯情感特写/空镜：最多 1 条 subtle 环境音
+- 仅输出 JSON 字符串数组，禁止输出任何其他内容
+
+## 分镜信息
+` + sceneCtx.String()
 
 	result, err := s.aiSvc.GenerateWithProvider(tenantID, 0, "sfx_analyze", prompt, "")
 	if err != nil {
@@ -421,17 +450,61 @@ func (s *SFXService) BatchAutoGenerateSFX(
 
 // --- 内部方法 ---
 
-// fallbackTags 基于规则从描述 / 情绪基调 / 镜头类型推断标签（LLM 不可用时的降级）
+// fallbackTags 基于规则从描述 / 情绪基调 / 镜头类型推断标签（LLM 不可用时的降级）。
+// 遵循 Freesound 四元格式：[物体] [材质/空间] [动作] [音色描述符]
 func (s *SFXService) fallbackTags(shot *model.StoryboardShot) []string {
-	desc := strings.ToLower(shot.Description + " " + shot.EmotionalTone + " " + shot.Scene)
+	desc := strings.ToLower(shot.Description + " " + shot.EmotionalTone + " " + shot.Scene + " " + shot.Narration)
+	// [中文关键词] → [Freesound 有效搜索词]
 	rules := [][2]string{
-		{"雨", "rain heavy ambient"}, {"雪", "wind cold night"}, {"风", "wind strong"},
-		{"雷", "thunder storm"}, {"森林", "forest ambient birds"}, {"河", "river flowing water"},
-		{"城市", "city street ambient"}, {"人群", "crowd outdoor noise"}, {"室内", "room interior ambient"},
-		{"战斗", "sword clash metal impact"}, {"奔跑", "footsteps running fast"},
-		{"马", "horse gallop hooves"}, {"爆炸", "explosion blast impact"}, {"箭", "arrow whoosh flight"},
-		{"门", "door open creak"}, {"火", "fire crackle burning"},
-		{"紧张", "heartbeat suspense"}, {"钟", "clock ticking"}, {"铃", "bell ring"},
+		// 天气/自然环境
+		{"大雨", "heavy rain outdoor rooftop loop"},
+		{"小雨", "light rain window glass indoor loop"},
+		{"雨", "rain outdoor ambient loop"},
+		{"雪", "blizzard wind cold outdoor loop"},
+		{"风", "wind outdoor howling loop"},
+		{"雷", "thunder rumble distant outdoor single"},
+		{"闪电", "thunder lightning crack sharp single"},
+		{"森林", "forest birds morning ambient outdoor loop"},
+		{"鸟", "birds chirping outdoor morning ambient"},
+		{"虫鸣", "crickets insects night outdoor loop"},
+		{"河", "river stream flowing water outdoor loop"},
+		{"海", "ocean waves beach outdoor loop"},
+		{"火", "fire wood crackle burning close loop"},
+		// 城市/室内环境
+		{"城市", "city street traffic ambient outdoor loop"},
+		{"集市", "crowd market outdoor bustling ambient"},
+		{"人群", "crowd outdoor distant reverb ambient"},
+		{"室内", "room indoor ambience subtle loop"},
+		{"酒馆", "tavern crowd indoor ambient murmur"},
+		{"宫殿", "palace hall reverb footsteps stone"},
+		// 战斗/武侠/玄幻动作
+		{"战斗", "sword metal clash impact dry single"},
+		{"拔剑", "metal sword unsheath sharp single"},
+		{"剑", "sword slash whoosh sharp single"},
+		{"刀", "blade metal swing whoosh single"},
+		{"弓箭", "arrow whoosh release outdoor single"},
+		{"拳", "punch impact thud dry single"},
+		{"爆炸", "explosion blast impact outdoor single"},
+		{"真气", "qi energy crackle electric whoosh single"},
+		{"灵气", "spiritual energy hum ethereal loop"},
+		{"施法", "magic spell cast swoosh energy single"},
+		{"突破", "power surge energy burst impact single"},
+		{"马", "horse gallop hooves dirt outdoor"},
+		// 日常动作
+		{"奔跑", "footsteps running stone floor indoor"},
+		{"脚步", "footsteps walking stone corridor reverb"},
+		{"走", "footsteps slow walk indoor"},
+		{"开门", "wooden door open creak single"},
+		{"关门", "door close slam wood single"},
+		{"门", "wooden door creak open indoor"},
+		// 情绪/氛围
+		{"紧张", "heartbeat pulse tense close-up single"},
+		{"恐惧", "heartbeat fast tense horror single"},
+		{"悬疑", "suspense stinger short single"},
+		{"钟", "clock ticking mechanical indoor loop"},
+		{"铃", "bell ring resonant single"},
+		{"笑声", "crowd laugh indoor distant"},
+		{"掌声", "applause crowd indoor"},
 	}
 	seen := map[string]bool{}
 	var tags []string
@@ -439,13 +512,13 @@ func (s *SFXService) fallbackTags(shot *model.StoryboardShot) []string {
 		if strings.Contains(desc, r[0]) && !seen[r[1]] {
 			tags = append(tags, r[1])
 			seen[r[1]] = true
+			if len(tags) == 3 {
+				break
+			}
 		}
 	}
 	if len(tags) == 0 {
-		tags = []string{"room interior ambient"}
-	}
-	if len(tags) > 5 {
-		tags = tags[:5]
+		tags = []string{"room indoor ambience subtle loop"}
 	}
 	return tags
 }
