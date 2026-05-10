@@ -103,6 +103,7 @@ func main() {
 	services.AssetService.WithStorage(storageSvc)
 	services.VideoService.WithSceneAnchorService(services.SceneAnchorService)
 	services.VideoService.WithSegmentRepo(repos.ShotVoiceSegmentRepo).WithTaskService(services.TaskService)
+	services.VideoService.WithReviewRecordRepo(repos.StoryboardReviewRecordRepo)
 	services.VideoService.WithVideoSocial(repos.VideoLikeRepo, repos.VideoCommentRepo)
 	services.NovelService.WithNovelSocial(repos.NovelLikeRepo, repos.NovelCommentRepo)
 	services.NovelImportService.WithStorage(storageSvc).WithAnalysisService(services.NovelAnalysisService).WithAIService(services.AIService)
@@ -865,9 +866,10 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-10-v6"
+const schemaVersion = "2026-05-11-v1"
 
-// ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）
+// ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
+// 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
 func ensureCriticalColumns(db *gorm.DB) {
 	type colAdd struct{ table, col, def string }
 	additions := []colAdd{
@@ -882,15 +884,14 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_novel", "plaza_tags", "VARCHAR(500) NULL"},
 	}
 	for _, a := range additions {
-		var cnt int64
-		db.Raw("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?",
-			a.table, a.col).Scan(&cnt)
-		if cnt == 0 {
-			if err := db.Exec("ALTER TABLE " + a.table + " ADD COLUMN " + a.col + " " + a.def).Error; err != nil {
-				logger.Printf("ensureCriticalColumns: failed to add %s.%s: %v", a.table, a.col, err)
-			} else {
-				logger.Printf("ensureCriticalColumns: added %s.%s", a.table, a.col)
+		sql := "ALTER TABLE `" + a.table + "` ADD COLUMN `" + a.col + "` " + a.def
+		if err := db.Exec(sql).Error; err != nil {
+			// 1060 = Duplicate column name（列已存在），正常情况；其他错误才需要记录
+			if !strings.Contains(err.Error(), "1060") && !strings.Contains(err.Error(), "Duplicate column") {
+				logger.Warnf("ensureCriticalColumns: %s.%s: %v", a.table, a.col, err)
 			}
+		} else {
+			logger.Infof("ensureCriticalColumns: added column %s.%s", a.table, a.col)
 		}
 	}
 }
@@ -966,6 +967,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.SceneConsistencyLog{},
 		&model.SystemSetting{},
 		&model.ShotVoiceSegment{},
+		&model.StoryboardReviewRecord{},
 		&model.ShotSFXItem{},
 		&model.VideoBGMSegment{},
 		&model.RewriteProject{},
@@ -1221,7 +1223,8 @@ type Repositories struct {
 	SceneAnchorRepo         *repository.SceneAnchorRepository
 	SceneConsistencyLogRepo *repository.SceneConsistencyLogRepository
 	SystemSettingRepo       *repository.SystemSettingRepository
-	ShotVoiceSegmentRepo    *repository.ShotVoiceSegmentRepository
+	ShotVoiceSegmentRepo       *repository.ShotVoiceSegmentRepository
+	StoryboardReviewRecordRepo *repository.StoryboardReviewRecordRepository
 	ShotSFXItemRepo         *repository.ShotSFXItemRepository
 	VideoBGMSegmentRepo     *repository.VideoBGMSegmentRepository
 	RewriteProjectRepo      *repository.RewriteProjectRepository
@@ -1282,7 +1285,8 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		SceneAnchorRepo:         repository.NewSceneAnchorRepository(db),
 		SceneConsistencyLogRepo: repository.NewSceneConsistencyLogRepository(db),
 		SystemSettingRepo:       repository.NewSystemSettingRepository(db),
-		ShotVoiceSegmentRepo:    repository.NewShotVoiceSegmentRepository(db),
+		ShotVoiceSegmentRepo:       repository.NewShotVoiceSegmentRepository(db),
+		StoryboardReviewRecordRepo: repository.NewStoryboardReviewRecordRepository(db),
 		ShotSFXItemRepo:         repository.NewShotSFXItemRepository(db),
 		VideoBGMSegmentRepo:     repository.NewVideoBGMSegmentRepository(db),
 		RewriteProjectRepo:      repository.NewRewriteProjectRepository(db, redis),
@@ -1612,7 +1616,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	content := initContentServiceGroup(repos, core, aiManager, vectorStore)
 	video   := initVideoServiceGroup(repos, core, content, cfg)
 
-	// 改写服务
+	// 改写服务（依赖统一异步任务系统）
 	rewriteSvc := service.NewRewriteService(
 		repos.RewriteProjectRepo,
 		repos.LiteraryAnalysisRepo,
@@ -1621,7 +1625,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		repos.ChapterRepo,
 		repos.NovelRepo,
 		core.AI,
-	)
+	).WithTaskService(core.Task)
 
 	// 认证 / 租户 / 通信服务（依赖 db 和 redisClient，数量少，直接内联）
 	smsSvc := service.NewSMSService(redisClient, cfg.SMS)
@@ -1788,7 +1792,8 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		SystemHandler: handler.NewSystemHandler(repos.SystemSettingRepo),
 		FsHandler:     handler.NewFsHandler(),
 		RewriteHandler: handler.NewRewriteHandler(services.RewriteService),
-		PlatformHandler: handler.NewPlatformHandler(services.NovelService, services.VideoService, services.PlatformPublishService),
+		PlatformHandler: handler.NewPlatformHandler(services.NovelService, services.VideoService, services.PlatformPublishService).
+			WithChapterService(services.ChapterService),
 		AssetHandler:    handler.NewAssetHandler(services.AssetService),
 	}
 }

@@ -2,12 +2,10 @@ package service
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
-	"sync"
 	"text/template"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -23,8 +21,7 @@ type RewriteService struct {
 	chapterRepo     *repository.ChapterRepository
 	novelRepo       *repository.NovelRepository
 	aiSvc           *AIService
-	mu              sync.Mutex
-	runningTasks    map[uint]context.CancelFunc
+	taskSvc         *TaskService
 }
 
 // NewRewriteService creates a new RewriteService
@@ -45,8 +42,13 @@ func NewRewriteService(
 		chapterRepo:     chapterRepo,
 		novelRepo:       novelRepo,
 		aiSvc:           aiSvc,
-		runningTasks:    make(map[uint]context.CancelFunc),
 	}
+}
+
+// WithTaskService wires in the unified async task service.
+func (s *RewriteService) WithTaskService(svc *TaskService) *RewriteService {
+	s.taskSvc = svc
+	return s
 }
 
 // renderRewriteTemplate loads and executes a named rewrite prompt template
@@ -91,49 +93,60 @@ func (s *RewriteService) GetProject(id uint) (*model.RewriteProject, error) {
 	return s.projectRepo.GetByID(id)
 }
 
-// DeleteProject deletes a project and all its data
+// DeleteProject deletes a project and all its data, cancelling any running tasks.
 func (s *RewriteService) DeleteProject(id uint) error {
-	s.mu.Lock()
-	if cancel, ok := s.runningTasks[id]; ok {
-		cancel()
-		delete(s.runningTasks, id)
+	if s.taskSvc != nil {
+		s.taskSvc.CancelActiveByEntity("rewrite_project", id, TaskTypeRewriteAnalysis)
+		s.taskSvc.CancelActiveByEntity("rewrite_project", id, TaskTypeRewriteChapters)
 	}
-	s.mu.Unlock()
 	return s.projectRepo.Delete(id)
 }
 
-// StartAnalysis begins Phase 0: literary analysis of the original novel
-func (s *RewriteService) StartAnalysis(ctx context.Context, projectID uint) error {
+// StartAnalysis begins Phase 0+1: literary analysis + bible generation.
+// Returns the async task ID that the caller can poll via GET /api/v1/tasks/:task_id.
+func (s *RewriteService) StartAnalysis(tenantID, projectID uint) (string, error) {
 	project, err := s.projectRepo.GetByID(projectID)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-	s.mu.Lock()
-	s.runningTasks[projectID] = cancel
-	s.mu.Unlock()
+	// Cancel any existing analysis task for this project before creating a replacement.
+	if s.taskSvc != nil {
+		s.taskSvc.CancelActiveByEntity("rewrite_project", projectID, TaskTypeRewriteAnalysis)
+	}
 
-	go func() {
+	task, err := s.taskSvc.Create(tenantID, TaskTypeRewriteAnalysis,
+		"文学分析 & 改写圣经生成", "rewrite_project", projectID)
+	if err != nil {
+		return "", fmt.Errorf("create task: %w", err)
+	}
+
+	go func(taskID string) {
 		defer func() {
-			s.mu.Lock()
-			delete(s.runningTasks, projectID)
-			s.mu.Unlock()
+			if r := recover(); r != nil {
+				msg := fmt.Sprintf("内部错误: %v", r)
+				s.taskSvc.Fail(taskID, msg)
+				s.projectRepo.UpdateStatus(projectID, "failed", msg)
+			}
 		}()
-		defer cancel()
-
-		if err := s.runAnalysis(ctx, project); err != nil {
+		s.taskSvc.SetRunning(taskID)
+		if err := s.runAnalysis(taskID, project); err != nil {
+			s.taskSvc.Fail(taskID, err.Error())
 			s.projectRepo.UpdateStatus(projectID, "failed", err.Error())
+			return
 		}
-	}()
-	return nil
+		s.taskSvc.Complete(taskID, map[string]interface{}{
+			"project_id": projectID,
+			"status":     "bible_ready",
+		})
+	}(task.TaskID)
+
+	return task.TaskID, nil
 }
 
-func (s *RewriteService) runAnalysis(ctx context.Context, project *model.RewriteProject) error {
-	_ = ctx
+func (s *RewriteService) runAnalysis(taskID string, project *model.RewriteProject) error {
 	s.projectRepo.UpdateStatus(project.ID, "analyzing", "")
 
-	// Get novel and sample chapters
 	novel, err := s.novelRepo.GetByID(project.NovelID)
 	if err != nil {
 		return fmt.Errorf("get novel: %w", err)
@@ -144,7 +157,6 @@ func (s *RewriteService) runAnalysis(ctx context.Context, project *model.Rewrite
 		return fmt.Errorf("get chapters: %w", err)
 	}
 
-	// Build sample content (first 3 chapters)
 	var sampleContent strings.Builder
 	for i, ch := range chapters {
 		if i >= 3 {
@@ -154,7 +166,6 @@ func (s *RewriteService) runAnalysis(ctx context.Context, project *model.Rewrite
 		sampleContent.WriteString("\n\n---\n\n")
 	}
 
-	// Render analysis prompt
 	prompt, err := renderRewriteTemplate("rewrite_analyze", map[string]interface{}{
 		"Title":   novel.Title,
 		"Content": sampleContent.String(),
@@ -163,14 +174,14 @@ func (s *RewriteService) runAnalysis(ctx context.Context, project *model.Rewrite
 		return fmt.Errorf("render template: %w", err)
 	}
 
-	// Call AI
-	result, err := s.aiSvc.Generate(project.NovelID, "chapter_gen", prompt)
+	result, err := s.aiSvc.GenerateWithProvider(project.TenantID, project.NovelID, "chapter_gen", prompt, "")
 	if err != nil {
 		return fmt.Errorf("ai generate: %w", err)
 	}
 
-	// Parse JSON result
-	jsonStr := extractJSON(result)
+	s.taskSvc.UpdateProgress(taskID, 40)
+
+	jsonStr := extractJSONObject(result)
 	var analysisData map[string]interface{}
 	if err := json.Unmarshal([]byte(jsonStr), &analysisData); err != nil {
 		return fmt.Errorf("parse analysis: %w", err)
@@ -194,16 +205,15 @@ func (s *RewriteService) runAnalysis(ctx context.Context, project *model.Rewrite
 		return fmt.Errorf("save analysis: %w", err)
 	}
 
-	// Count chapters
 	total, _ := s.chapterRepo.CountByNovel(project.NovelID)
 	s.projectRepo.UpdateTotalChapters(project.ID, int(total))
 
-	// Proceed to generate bible
-	return s.generateBible(ctx, project, analysis, novel)
+	s.taskSvc.UpdateProgress(taskID, 50)
+
+	return s.generateBible(taskID, project, analysis, novel)
 }
 
-func (s *RewriteService) generateBible(ctx context.Context, project *model.RewriteProject, analysis *model.LiteraryAnalysis, novel *model.Novel) error {
-	_ = ctx
+func (s *RewriteService) generateBible(taskID string, project *model.RewriteProject, analysis *model.LiteraryAnalysis, novel *model.Novel) error {
 	_ = novel
 
 	analysisJSON, _ := json.Marshal(map[string]interface{}{
@@ -230,12 +240,14 @@ func (s *RewriteService) generateBible(ctx context.Context, project *model.Rewri
 		return err
 	}
 
-	result, err := s.aiSvc.Generate(project.NovelID, "chapter_gen", prompt)
+	result, err := s.aiSvc.GenerateWithProvider(project.TenantID, project.NovelID, "chapter_gen", prompt, "")
 	if err != nil {
 		return err
 	}
 
-	jsonStr := extractJSON(result)
+	s.taskSvc.UpdateProgress(taskID, 80)
+
+	jsonStr := extractJSONObject(result)
 	var bibleData map[string]interface{}
 	if err := json.Unmarshal([]byte(jsonStr), &bibleData); err != nil {
 		return fmt.Errorf("parse bible: %w", err)
@@ -260,7 +272,6 @@ func (s *RewriteService) generateBible(ctx context.Context, project *model.Rewri
 		return err
 	}
 
-	// Create chapter tasks
 	chapters, err := s.chapterRepo.ListByNovelWithContent(project.NovelID)
 	if err != nil {
 		return err
@@ -279,37 +290,53 @@ func (s *RewriteService) generateBible(ctx context.Context, project *model.Rewri
 	return s.projectRepo.UpdateStatus(project.ID, "bible_ready", "")
 }
 
-// StartRewriting begins Phase 3: chapter-by-chapter rewriting
-func (s *RewriteService) StartRewriting(ctx context.Context, projectID uint) error {
+// StartRewriting begins Phase 2: chapter-by-chapter rewriting.
+// Returns the async task ID that the caller can poll via GET /api/v1/tasks/:task_id.
+func (s *RewriteService) StartRewriting(tenantID, projectID uint) (string, error) {
 	project, err := s.projectRepo.GetByID(projectID)
 	if err != nil {
-		return err
+		return "", err
 	}
-	if project.Status != "bible_ready" {
-		return fmt.Errorf("project must be in bible_ready status, got: %s", project.Status)
+	if project.Status == "failed" && project.TotalChapters > 0 {
+		// Allow retry: bible exists, rewriting phase failed
+	} else if project.Status != "bible_ready" {
+		return "", fmt.Errorf("project must be in bible_ready status, got: %s", project.Status)
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-	s.mu.Lock()
-	s.runningTasks[projectID] = cancel
-	s.mu.Unlock()
+	if s.taskSvc != nil {
+		s.taskSvc.CancelActiveByEntity("rewrite_project", projectID, TaskTypeRewriteChapters)
+	}
 
-	go func() {
+	task, err := s.taskSvc.Create(tenantID, TaskTypeRewriteChapters,
+		"章节改写", "rewrite_project", projectID)
+	if err != nil {
+		return "", fmt.Errorf("create task: %w", err)
+	}
+
+	go func(taskID string) {
 		defer func() {
-			s.mu.Lock()
-			delete(s.runningTasks, projectID)
-			s.mu.Unlock()
+			if r := recover(); r != nil {
+				msg := fmt.Sprintf("内部错误: %v", r)
+				s.taskSvc.Fail(taskID, msg)
+				s.projectRepo.UpdateStatus(projectID, "failed", msg)
+			}
 		}()
-		defer cancel()
-
-		if err := s.runRewriting(ctx, project); err != nil {
+		s.taskSvc.SetRunning(taskID)
+		if err := s.runRewriting(taskID, project); err != nil {
+			s.taskSvc.Fail(taskID, err.Error())
 			s.projectRepo.UpdateStatus(projectID, "failed", err.Error())
+			return
 		}
-	}()
-	return nil
+		s.taskSvc.Complete(taskID, map[string]interface{}{
+			"project_id": projectID,
+			"status":     "completed",
+		})
+	}(task.TaskID)
+
+	return task.TaskID, nil
 }
 
-func (s *RewriteService) runRewriting(ctx context.Context, project *model.RewriteProject) error {
+func (s *RewriteService) runRewriting(taskID string, project *model.RewriteProject) error {
 	s.projectRepo.UpdateStatus(project.ID, "rewriting", "")
 
 	bible, err := s.bibleRepo.GetByProjectID(project.ID)
@@ -323,32 +350,39 @@ func (s *RewriteService) runRewriting(ctx context.Context, project *model.Rewrit
 	}
 
 	done := 0
+	total := len(tasks)
 	for _, task := range tasks {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
+		// Check if the async task has been cancelled between chapters.
+		if at, err := s.taskSvc.Get(taskID); err == nil && at.Status == "cancelled" {
+			return fmt.Errorf("task cancelled")
 		}
 
 		if task.Status == "completed" {
 			done++
+			s.updateRewriteProgress(taskID, project.ID, done, total)
 			continue
 		}
 
-		if err := s.rewriteChapter(ctx, project, bible, task); err != nil {
+		if err := s.rewriteChapter(project, bible, task); err != nil {
 			s.chapterTaskRepo.UpdateStatus(task.ID, "failed", err.Error())
 		} else {
 			done++
 		}
 
-		s.projectRepo.UpdateProgress(project.ID, done, len(tasks))
+		s.updateRewriteProgress(taskID, project.ID, done, total)
 	}
 
 	return s.projectRepo.UpdateStatus(project.ID, "completed", "")
 }
 
-func (s *RewriteService) rewriteChapter(ctx context.Context, project *model.RewriteProject, bible *model.RewriteBible, task *model.ChapterRewriteTask) error {
-	_ = ctx
+func (s *RewriteService) updateRewriteProgress(taskID string, projectID uint, done, total int) {
+	if total > 0 {
+		s.taskSvc.UpdateProgress(taskID, done*100/total)
+	}
+	s.projectRepo.UpdateProgress(projectID, done, total)
+}
+
+func (s *RewriteService) rewriteChapter(project *model.RewriteProject, bible *model.RewriteBible, task *model.ChapterRewriteTask) error {
 	s.chapterTaskRepo.UpdateStatus(task.ID, "rewriting", "")
 
 	var tmplName string
@@ -376,12 +410,11 @@ func (s *RewriteService) rewriteChapter(ctx context.Context, project *model.Rewr
 		return err
 	}
 
-	rewritten, err := s.aiSvc.Generate(project.NovelID, "chapter_gen", prompt)
+	rewritten, err := s.aiSvc.GenerateWithProvider(project.TenantID, project.NovelID, "chapter_gen", prompt, "")
 	if err != nil {
 		return err
 	}
 
-	// Simple similarity check (lexical overlap)
 	lexSim := calculateLexicalSimilarity(task.OriginalContent, rewritten)
 	passed := lexSim < 0.35
 
@@ -443,3 +476,4 @@ func (s *RewriteService) GetChapterTask(taskID uint) (*model.ChapterRewriteTask,
 func (s *RewriteService) ApproveChapter(taskID uint) error {
 	return s.chapterTaskRepo.UpdateStatus(taskID, "completed", "")
 }
+

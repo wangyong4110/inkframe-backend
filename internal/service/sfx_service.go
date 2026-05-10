@@ -130,87 +130,171 @@ func buildDefaultSFXLib() map[string]string {
 	}
 }
 
-// sfxShotBrief 发给 AI 进行音效分析的精简分镜信息
-type sfxShotBrief struct {
-	ShotID        uint    `json:"shot_id"`
-	ShotNo        int     `json:"shot_no"`
-	Description   string  `json:"description"`
-	Narration     string  `json:"narration,omitempty"`
-	Dialogue      string  `json:"dialogue,omitempty"`
-	EmotionalTone string  `json:"emotional_tone,omitempty"`
-	Duration      float64 `json:"duration"`
+// sfxTagItem 结构化音效标签，包含搜索词和分类类型。
+// SFXType: action=动作音（单次触发）/ ambient=环境底层音（循环）/ emotion=情绪点缀（冲击/rise）
+type sfxTagItem struct {
+	Tag     string `json:"tag"`
+	SFXType string `json:"type"` // action / ambient / emotion
 }
 
-// analyzeSingleShotSFX 为单个分镜调用 AI 生成自然语言音效搜索词，更新 sfx_tags 字段。
-// 使用专业音效设计框架引导 AI：分层设计（动作音→环境底层→情绪点缀），
-// 并遵循 Freesound 实际有效的 [物体+材质+动作+音色描述符] 四元格式。
-func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint, userContext string) error {
-	hasSpeech := shot.Dialogue != "" || shot.Narration != ""
+// parseSFXTags 解析 sfx_tags 字段，兼容旧版纯字符串数组和新版结构化格式。
+func parseSFXTags(raw string) []sfxTagItem {
+	if raw == "" {
+		return nil
+	}
+	// 尝试新格式 [{"tag":"...","type":"..."}]
+	var items []sfxTagItem
+	if err := json.Unmarshal([]byte(raw), &items); err == nil && len(items) > 0 && items[0].Tag != "" {
+		return items
+	}
+	// 兼容旧格式 ["...","..."]
+	var strs []string
+	if err := json.Unmarshal([]byte(raw), &strs); err == nil {
+		items = make([]sfxTagItem, 0, len(strs))
+		for _, s := range strs {
+			items = append(items, sfxTagItem{Tag: s, SFXType: guessSFXType(s)})
+		}
+		return items
+	}
+	return nil
+}
 
+// guessSFXType 根据标签词汇推断音效类型（旧数据迁移用）。
+func guessSFXType(tag string) string {
+	lower := strings.ToLower(tag)
+	ambientKW := []string{"loop", "ambient", "continuous", "sustained", "rain", "wind", "forest", "river", "crowd", "city", "room", "birds", "insects", "fire"}
+	for _, kw := range ambientKW {
+		if strings.Contains(lower, kw) {
+			return "ambient"
+		}
+	}
+	emotionKW := []string{"heartbeat", "clock", "tick", "rise", "stinger", "boom", "impact", "sub-bass", "breath"}
+	for _, kw := range emotionKW {
+		if strings.Contains(lower, kw) {
+			return "emotion"
+		}
+	}
+	return "action"
+}
+
+// shotSizeGuide 根据景别返回音效设计侧重说明。
+func shotSizeGuide(shotSize string) string {
+	switch shotSize {
+	case "extreme_close_up":
+		return "极近景/特写：强调微观细节音（衣物摩擦、皮肤/毛发接触、呼吸、心跳），禁止远景环境音"
+	case "close_up":
+		return "近景：突出物体近距离动作音，环境音压低至 subtle"
+	case "wide":
+		return "远景/全景：以环境底层音为主，动作音选 distant/reverb 版本"
+	default: // medium
+		return "中景：动作音与环境底层音并重，保持自然比例"
+	}
+}
+
+// cameraMotionGuide 根据运镜类型返回额外音效提示。
+func cameraMotionGuide(cameraType string) string {
+	switch cameraType {
+	case "pan":
+		return "横移镜头：可加一条极短的 whoosh 扫场音（0.3–0.5s）"
+	case "zoom":
+		return "推拉镜头：快速推进可加 zoom in swoosh，拉远可不加额外音"
+	case "tracking":
+		return "跟随镜头：动作音随角色移动节奏，环境音保持稳定"
+	default:
+		return ""
+	}
+}
+
+// analyzeSingleShotSFX 为单个分镜调用 AI 生成结构化音效搜索词，更新 sfx_tags 字段。
+// 输出格式：[{"tag":"...","type":"action|ambient|emotion"}, ...]
+// 景别/运镜/时长全部传入，AI 根据场景信息做专业分层设计。
+func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint, userContext string) error {
+	// 构建分镜上下文
 	var sceneCtx strings.Builder
-	if shot.ShotNo > 0 {
-		fmt.Fprintf(&sceneCtx, "镜头编号：%d\n", shot.ShotNo)
+	fmt.Fprintf(&sceneCtx, "镜头编号：%d\n", shot.ShotNo)
+	fmt.Fprintf(&sceneCtx, "时长：%.1f 秒\n", shot.Duration)
+	if shot.ShotSize != "" {
+		fmt.Fprintf(&sceneCtx, "景别：%s\n", shot.ShotSize)
+	}
+	if shot.CameraType != "" && shot.CameraType != "static" {
+		fmt.Fprintf(&sceneCtx, "运镜：%s\n", shot.CameraType)
 	}
 	if shot.Description != "" {
-		fmt.Fprintf(&sceneCtx, "画面描述：%s\n", shot.Description)
+		fmt.Fprintf(&sceneCtx, "画面描述（视觉，仅用于推断声音来源，不要把视觉词写进标签）：%s\n", shot.Description)
+	}
+	if shot.Scene != "" {
+		fmt.Fprintf(&sceneCtx, "场景环境：%s\n", shot.Scene)
 	}
 	if shot.EmotionalTone != "" {
 		fmt.Fprintf(&sceneCtx, "情绪基调：%s\n", shot.EmotionalTone)
 	}
 	if shot.Dialogue != "" {
-		fmt.Fprintf(&sceneCtx, "台词（参考场景环境，不为对白本身设计音效）：%s\n", shot.Dialogue)
-	}
-	if shot.Narration != "" {
-		fmt.Fprintf(&sceneCtx, "旁白：%s\n", shot.Narration)
+		fmt.Fprintf(&sceneCtx, "⚠️ 有人物台词（对白）：环境底层音必须非常 subtle，禁止动作冲击音，避免掩盖人声\n")
 	}
 	if userContext != "" {
-		fmt.Fprintf(&sceneCtx, "\n额外场景背景（优先参考）：\n%s\n", userContext)
+		fmt.Fprintf(&sceneCtx, "额外背景（优先参考）：%s\n", userContext)
 	}
 
-	speechGuide := ""
-	if hasSpeech {
-		speechGuide = "\n⚠️ 本镜头含台词/旁白：只输出 1 条 subtle 环境底层音，禁止动作音/冲击音，避免掩盖人声。\n"
+	// 景别 & 运镜引导
+	sizeGuide := shotSizeGuide(shot.ShotSize)
+	motionGuide := cameraMotionGuide(shot.CameraType)
+	motionSection := ""
+	if motionGuide != "" {
+		motionSection = "\n运镜音提示：" + motionGuide
 	}
 
-	prompt := `你是有10年经验的专业影视音效设计师，精通 Freesound、SoundSnap 等专业音效库的搜索逻辑。
+	prompt := `你是有15年经验的好莱坞级影视音效设计师，负责为分镜脚本设计精准的 Freesound/SoundSnap 搜索词。
 
-## 音效分层原则（按优先级顺序）
-1. **动作音**（单次触发型）：画面中具体发生的物理动作 → 与画面强同步，最重要
-2. **环境底层**（循环持续型）：场景持续存在的背景声，建立空间感与沉浸感
-3. **情绪点缀**（单次触发型）：场景转折/情感强调时的冲击音、rise音或 sub-bass
+## 核心原则：声音必须真实可被听见
+搜索词只能描述听觉现象——物体发出的真实声音。
+绝对禁止视觉概念（光线/色彩/时段/情绪抽象）出现在搜索词里。
 
-## Freesound 有效搜索词格式
-**四元格式**：[物体/来源] [材质/空间] [动作类型] [音色描述符]
+## 三层分层设计框架
+| 层次 | 类型标记 | 触发方式 | 优先级 |
+|------|----------|----------|--------|
+| 动作音 | action | 单次触发（one-shot） | 最高，与画面强同步 |
+| 环境底层音 | ambient | 循环（loop），贯穿全镜 | 中，建立空间感 |
+| 情绪点缀音 | emotion | 单次触发，场景转折/强调 | 低，谨慎使用 |
 
-音色描述符词库（根据场景选用）：
-- 触发类型：single / one-shot / short / burst
-- 持续类型：loop / continuous / sustained
-- 空间感：indoor / outdoor / reverb / dry / echo / distant / close-up
+## 景别设计规则
+` + sizeGuide + motionSection + `
+
+## Freesound 高命中格式：[物体/来源] [材质/空间] [动作] [音色描述符]
+
+音色描述符参考：
+- 触发音：single / one-shot / short / burst
+- 循环音：loop / continuous
+- 空间感：indoor / outdoor / reverb / dry / distant / close-up
 - 质感：heavy / light / sharp / soft / subtle / muffled / crisp
 
-✅ 高命中率示例（请模仿此精度）：
-- "wooden footsteps stone corridor reverb" — 脚步指定材质+空间+音色
-- "metal sword unsheath dry single sharp" — 武器动作指定材质+类型+质感
-- "heavy rain outdoor rooftop loop" — 雨声指定强度+位置+类型
-- "fire wood crackle burning close loop" — 火声指定材料+音色+距离
-- "crowd cheer outdoor distant reverb" — 人群指定类型+距离+空间
-- "thunder rumble distant outdoor single" — 雷声指定质感+距离+类型
-- "spiritual energy crackle electric whoosh" — 玄幻场景的灵气/能量音效
-- "magic spell cast energy swoosh single" — 施法/释放技能音效
-- "qi explosion impact cinematic boom" — 内力/真气爆发冲击音
+✅ 正确示例：
+- {"tag":"wooden door creak open indoor single","type":"action"} → 门开，指定材质+空间+动作
+- {"tag":"metal sword unsheath sharp dry single","type":"action"} → 出剑，指定材质+质感
+- {"tag":"forest birds chirping outdoor loop","type":"ambient"} → 森林环境，无视觉词
+- {"tag":"rain tile roof pattering loop","type":"ambient"} → 雨声，指定落点+质感
+- {"tag":"fire wood crackle close loop","type":"ambient"} → 火焰，指定材料+距离
+- {"tag":"heartbeat tense pulse close single","type":"emotion"} → 心跳特写强调
+- {"tag":"wolf paw dirt footstep soft single","type":"action"} → 狼爪脚步，指定材质
+- {"tag":"qi energy crackle electric whoosh single","type":"action"} → 玄幻能量音
 
-❌ 低命中率（避免）：
-- 单词：sword / rain / fire / ambient（太笼统）
-- 描述句：sword fighting sound / background rain noise（Freesound 不支持）
-` + speechGuide + `
+❌ 错误示例（绝对禁止）：
+- "morning sunlight soft loop" → ❌ sunlight/morning 是视觉词
+- "warm indoor ambience loop" → ❌ warm/ambience 是 BGM 词汇
+- "forest atmosphere soundscape" → ❌ atmosphere/soundscape 是 BGM 词汇
+- "room tone wooden house" → ❌ room tone 是音乐制作术语
+- "bright cheerful music loop" → ❌ 音乐不是音效
+- "sword" / "rain" / "fire" → ❌ 单词太笼统，Freesound 搜索无意义
+
 ## 输出规则
-- 输出 0~3 条搜索词（按优先级降序）
-- 每条 3~7 个英文单词
-- 纯情感特写/空镜：最多 1 条 subtle 环境音
-- 仅输出 JSON 字符串数组，禁止输出任何其他内容
+- 输出 0~3 条，按 action → ambient → emotion 优先级排列
+- 每条 tag 为 3~7 个英文单词，必须是真实声音
+- 极近景特写（无动作）：只输出 0~1 条 action（细节音），不加 ambient
+- 纯情感特写/空镜：最多 1 条极 subtle 的 ambient
+- 仅输出 JSON 数组，禁止任何额外文字
 
 ## 分镜信息
-` + sceneCtx.String()
+` + sceneCtx.String() + `
+请输出：`
 
 	result, err := s.aiSvc.GenerateWithProvider(tenantID, 0, "sfx_analyze", prompt, "")
 	if err != nil {
@@ -218,17 +302,33 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 	}
 
 	raw := extractJSON(result)
-	var queries []string
-	if err := json.Unmarshal([]byte(raw), &queries); err != nil {
-		return fmt.Errorf("parse JSON: %w (raw=%q)", err, raw)
-	}
-	if len(queries) == 0 {
-		shot.SFXTags = ""
-		_ = s.storyboardRepo.UpdateSFXTags(shot.ID, "")
-		return nil
+
+	// 解析结构化格式
+	var items []sfxTagItem
+	if err := json.Unmarshal([]byte(raw), &items); err != nil || len(items) == 0 || items[0].Tag == "" {
+		// 兼容旧版纯字符串输出
+		var strs []string
+		if err2 := json.Unmarshal([]byte(raw), &strs); err2 != nil {
+			return fmt.Errorf("parse JSON: %w (raw=%q)", err, raw)
+		}
+		items = make([]sfxTagItem, 0, len(strs))
+		for _, s2 := range strs {
+			items = append(items, sfxTagItem{Tag: s2, SFXType: guessSFXType(s2)})
+		}
 	}
 
-	tagsJSON, _ := json.Marshal(queries)
+	// 过滤空 tag
+	filtered := items[:0]
+	for _, it := range items {
+		if strings.TrimSpace(it.Tag) != "" {
+			if it.SFXType == "" {
+				it.SFXType = guessSFXType(it.Tag)
+			}
+			filtered = append(filtered, it)
+		}
+	}
+
+	tagsJSON, _ := json.Marshal(filtered)
 	shot.SFXTags = string(tagsJSON)
 	if err := s.storyboardRepo.UpdateSFXTags(shot.ID, string(tagsJSON)); err != nil {
 		return fmt.Errorf("update sfx_tags: %w", err)
@@ -272,6 +372,44 @@ func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.Stor
 	return nil
 }
 
+// sfxItemConfig 根据标签类型和镜头特征决定单条音效的播放参数。
+func sfxItemConfig(item sfxTagItem, hasSpeech bool, hasNarration bool) (vol float64, loop bool, fadeInMs, fadeOutMs int) {
+	switch item.SFXType {
+	case "ambient":
+		// 环境底层音：循环播放，淡入/淡出避免硬切
+		loop = true
+		fadeInMs = 300
+		fadeOutMs = 500
+		if hasSpeech {
+			vol = 0.15 // 有台词：大幅压低，不掩盖人声
+		} else if hasNarration {
+			vol = 0.25 // 有旁白：适度压低
+		} else {
+			vol = 0.35
+		}
+	case "emotion":
+		// 情绪点缀音：单次触发，短淡出
+		loop = false
+		fadeInMs = 0
+		fadeOutMs = 300
+		if hasSpeech {
+			vol = 0.25
+		} else {
+			vol = 0.45
+		}
+	default: // action
+		// 动作音：单次触发，不受台词影响（关键声音必须听到）
+		loop = false
+		fadeInMs = 0
+		fadeOutMs = 100
+		vol = sfxCategoryVolume(item.Tag) // 按具体类别（爆炸/脚步/门声等）定音量
+	}
+	if vol < 0.1 {
+		vol = 0.1
+	}
+	return
+}
+
 // AutoGenerateSFX 为单个镜头自动选取/生成音效，每个 tag 独立搜索，写入多条 ShotSFXItem。
 // 每次调用都会先清除旧音效条目再写入新结果，确保重新生成时能替换旧音效。
 func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint) error {
@@ -282,68 +420,57 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 		}
 	}
 
-	// 1. 提取搜索词（优先用已有 sfx_tags；否则调用 AI 分析）
-	var tags []string
-	if shot.SFXTags != "" {
-		if err := json.Unmarshal([]byte(shot.SFXTags), &tags); err != nil || len(tags) == 0 {
-			tags = nil
-		}
-	}
-	if len(tags) == 0 {
-		// 调用统一的 AI 分析函数（与批量分析路径一致，避免两套 Prompt）
+	// 1. 提取结构化标签（优先用已有 sfx_tags；否则调用 AI 分析）
+	tagItems := parseSFXTags(shot.SFXTags)
+	if len(tagItems) == 0 {
 		if err := s.analyzeSingleShotSFX(ctx, shot, tenantID, ""); err != nil {
 			logger.Printf("[SFXService] shot %d AI analyze failed (%v), using rule fallback", shot.ID, err)
-			tags = s.fallbackTags(shot)
-		} else if shot.SFXTags != "" {
-			_ = json.Unmarshal([]byte(shot.SFXTags), &tags)
+			for _, t := range s.fallbackTags(shot) {
+				tagItems = append(tagItems, sfxTagItem{Tag: t, SFXType: guessSFXType(t)})
+			}
+		} else {
+			tagItems = parseSFXTags(shot.SFXTags)
 		}
 	}
-	if len(tags) == 0 {
-		tags = s.fallbackTags(shot)
+	if len(tagItems) == 0 {
+		for _, t := range s.fallbackTags(shot) {
+			tagItems = append(tagItems, sfxTagItem{Tag: t, SFXType: guessSFXType(t)})
+		}
 	}
-	// 最多取前 5 个 tag，避免过多网络请求
-	if len(tags) > 5 {
-		tags = tags[:5]
-	}
+	// 最多取前 5 个（action 优先，ambient 最多 1 个）
+	tagItems = deduplicateAndLimit(tagItems, 5)
 
-	tagsJSON, _ := json.Marshal(tags)
+	tagsJSON, _ := json.Marshal(tagItems)
 	logger.Printf("[SFXService] shot %d tags=%s", shot.ID, tagsJSON)
 
 	maxDur := float64(shot.Duration)
 	if maxDur <= 0 {
 		maxDur = 0
 	}
+	hasSpeech := shot.Dialogue != ""
+	hasNarration := shot.Narration != "" || shot.AudioPath != ""
 
-	// 基础音量：台词场景压低，有旁白略降
-	baseVol := 0.4
-	if shot.Dialogue != "" {
-		baseVol = 0.2
-	} else if shot.AudioPath != "" {
-		baseVol = 0.3
-	}
-
-	// 2. 逐 tag 搜索，收集结果
+	// 2. 逐 tag 搜索
 	type sfxResult struct {
-		tag string
-		hit sfxHit
-		vol float64
+		item sfxTagItem
+		hit  sfxHit
+		vol  float64
+		loop bool
+		fin  int
+		fout int
 	}
 	var results []sfxResult
 
-	for _, tag := range tags {
-		hit := s.searchOneTag(ctx, tenantID, tag, maxDur, shot)
-		if hit.url != "" {
-			// 音量按音效类型决定，再根据台词场景进一步压低
-			vol := sfxCategoryVolume(tag) * (baseVol / 0.4)
-			if vol < 0.1 {
-				vol = 0.1
-			}
-			results = append(results, sfxResult{tag: tag, hit: hit, vol: vol})
-			logger.Printf("[SFXService] shot %d tag=%q source=%s url=%s dur=%.1fs vol=%.2f",
-				shot.ID, tag, hit.source, hit.url, hit.durationSecs, vol)
-		} else {
-			logger.Printf("[SFXService] shot %d tag=%q: no result", shot.ID, tag)
+	for _, item := range tagItems {
+		hit := s.searchOneTag(ctx, tenantID, item, maxDur, shot)
+		if hit.url == "" {
+			logger.Printf("[SFXService] shot %d tag=%q: no result", shot.ID, item.Tag)
+			continue
 		}
+		vol, loop, fin, fout := sfxItemConfig(item, hasSpeech, hasNarration)
+		results = append(results, sfxResult{item: item, hit: hit, vol: vol, loop: loop, fin: fin, fout: fout})
+		logger.Printf("[SFXService] shot %d tag=%q type=%s source=%s dur=%.1fs vol=%.2f loop=%v",
+			shot.ID, item.Tag, item.SFXType, hit.source, hit.durationSecs, vol, loop)
 	}
 
 	if len(results) == 0 {
@@ -351,59 +478,95 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	}
 
 	// 3. 写入数据库
+	dbItems := make([]*model.ShotSFXItem, 0, len(results))
+	for i, r := range results {
+		dbItems = append(dbItems, &model.ShotSFXItem{
+			ShotID:       shot.ID,
+			SeqNo:        i + 1,
+			Tag:          r.item.Tag,
+			URL:          r.hit.url,
+			Volume:       r.vol,
+			Source:       r.hit.source,
+			DurationSecs: r.hit.durationSecs,
+			SFXType:      r.item.SFXType,
+			LoopEnabled:  r.loop,
+			FadeInMs:     r.fin,
+			FadeOutMs:    r.fout,
+			// StartOffset 默认 0；action 音的精确帧偏移由前端手动调整
+		})
+	}
+
 	if s.sfxItemRepo != nil {
-		items := make([]*model.ShotSFXItem, 0, len(results))
-		for i, r := range results {
-			items = append(items, &model.ShotSFXItem{
-				ShotID:       shot.ID,
-				SeqNo:        i + 1,
-				Tag:          r.tag,
-				URL:          r.hit.url,
-				Volume:       r.vol,
-				Source:       r.hit.source,
-				DurationSecs: r.hit.durationSecs, // 精确音效时长（来自 API 或文件头解析）
-				// StartOffset: 0 默认（AI 生成时均从分镜起始播放）
-			})
-		}
-		if err := s.sfxItemRepo.BatchCreate(items); err != nil {
+		if err := s.sfxItemRepo.BatchCreate(dbItems); err != nil {
 			return fmt.Errorf("save sfx items shot %d: %w", shot.ID, err)
 		}
-		// 同步更新旧字段（向后兼容时间线播放）
-		_ = s.storyboardRepo.UpdateSFX(shot.ID, results[0].hit.url, string(tagsJSON), results[0].vol)
-	} else {
-		_ = s.storyboardRepo.UpdateSFX(shot.ID, results[0].hit.url, string(tagsJSON), baseVol)
 	}
+	// 同步更新旧字段（向后兼容时间线播放）
+	allTagsJSON, _ := json.Marshal(func() []string {
+		ss := make([]string, len(results))
+		for i, r := range results {
+			ss[i] = r.item.Tag
+		}
+		return ss
+	}())
+	_ = s.storyboardRepo.UpdateSFX(shot.ID, results[0].hit.url, string(allTagsJSON), results[0].vol)
 	return nil
 }
 
-// searchOneTag 对单个 tag 执行三层降级搜索，返回 sfxHit（url/source/durationSecs）。
-// 顺序：本地库 → Freesound（CC0 专业音效库） → ElevenLabs（AI生成）
-// Jamendo 为音乐平台，返回完整音乐曲目而非单次音效，不适合 SFX 场景。
-func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, tag string, maxDur float64, shot *model.StoryboardShot) sfxHit {
-	if u, dur := s.searchLocalLib(ctx, tenantID, tag); u != "" {
-		logger.Printf("[SFXService] shot %d local hit: %s (%.1fs)", shot.ID, u, dur)
+// deduplicateAndLimit 对 tag 列表去重并限制数量：
+// ambient 最多保留 1 条（防止多条循环音叠加成噪音），总数最多 limit 条。
+func deduplicateAndLimit(items []sfxTagItem, limit int) []sfxTagItem {
+	seen := map[string]bool{}
+	ambientCount := 0
+	out := make([]sfxTagItem, 0, limit)
+	for _, it := range items {
+		if seen[it.Tag] {
+			continue
+		}
+		if it.SFXType == "ambient" {
+			ambientCount++
+			if ambientCount > 1 {
+				continue // 最多 1 条环境底层音
+			}
+		}
+		seen[it.Tag] = true
+		out = append(out, it)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+// searchOneTag 对单个结构化标签执行三层降级搜索：本地库 → Freesound → ElevenLabs（AI生成）。
+// ElevenLabs 是最后兜底，每个 tag 独立生成一条定制音效（非多 tag 混合）。
+func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot) sfxHit {
+	if u, dur := s.searchLocalLib(ctx, tenantID, item.Tag); u != "" {
+		logger.Printf("[SFXService] shot %d local hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 		return sfxHit{url: u, source: "local", durationSecs: dur}
 	}
 	if s.freesoundKey == "" {
 		logger.Printf("[SFXService] shot %d skip Freesound (no key)", shot.ID)
-	} else if hit := s.searchFreesound(ctx, tag, maxDur); hit.url != "" {
-		logger.Printf("[SFXService] shot %d Freesound hit: %s (%.1fs)", shot.ID, hit.url, hit.durationSecs)
+	} else if hit := s.searchFreesound(ctx, item, maxDur); hit.url != "" {
+		logger.Printf("[SFXService] shot %d Freesound hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
 		return hit
 	} else {
-		logger.Printf("[SFXService] shot %d Freesound miss for %q", shot.ID, tag)
+		logger.Printf("[SFXService] shot %d Freesound miss tag=%q", shot.ID, item.Tag)
 	}
-	if u, dur, err := s.generateElevenLabs(ctx, shot); err == nil && u != "" {
-		logger.Printf("[SFXService] shot %d ElevenLabs hit: %s (%.1fs)", shot.ID, u, dur)
+	// ElevenLabs：每个 tag 独立生成，避免多 tag 混音成一条不可分离的音频
+	if u, dur, err := s.generateElevenLabsForTag(ctx, item, shot); err == nil && u != "" {
+		logger.Printf("[SFXService] shot %d ElevenLabs hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 		return sfxHit{url: u, source: "elevenlabs", durationSecs: dur}
 	} else if err != nil {
-		logger.Printf("[SFXService] shot %d ElevenLabs failed: %v", shot.ID, err)
+		logger.Printf("[SFXService] shot %d ElevenLabs failed tag=%q: %v", shot.ID, item.Tag, err)
 	}
 	return sfxHit{}
 }
 
 // BatchAutoGenerateSFX 批量处理视频所有镜头，最多 5 并发。
+// 全部镜头处理完成后执行场景连续性修复：同一场景的连续镜头共用同一条 ambient 底层音，
+// 避免每镜切换环境音导致的听感跳变。
 // progressFn 每完成一个镜头时实时调用（0-100）。
-// 返回成功/失败数量，不因单个失败而中止整批。
 func (s *SFXService) BatchAutoGenerateSFX(
 	ctx context.Context,
 	shots []*model.StoryboardShot,
@@ -437,7 +600,6 @@ func (s *SFXService) BatchAutoGenerateSFX(
 			} else {
 				successCount.Add(1)
 			}
-			// progressFn 在 goroutine 内实时调用，而非事后批量触发
 			n := int(doneCount.Add(1))
 			if progressFn != nil {
 				progressFn(n * 100 / total)
@@ -445,8 +607,91 @@ func (s *SFXService) BatchAutoGenerateSFX(
 		}(shot)
 	}
 	wg.Wait()
+
+	// 场景连续性修复（串行，不影响上面的并发结果）
+	if s.sfxItemRepo != nil && len(shots) > 1 {
+		s.applySceneContinuity(ctx, shots)
+	}
+
 	return int(successCount.Load()), int(failCount.Load())
 }
+
+// applySceneContinuity 将同一场景的连续镜头的 ambient 音效统一为该场景首镜的 ambient 音效。
+// 场景相同判断：Scene 字段内容（前64字符）相同，或 ShotNo 连续且 Scene 为空时跳过。
+// 效果：森林场景的镜头3→4→5 共用同一条 forest birds loop，不再每镜各自搜索不同 URL。
+func (s *SFXService) applySceneContinuity(ctx context.Context, shots []*model.StoryboardShot) {
+	type sceneGroup struct {
+		key        string
+		ambientURL string
+		ambientVol float64
+	}
+	var current sceneGroup
+
+	for _, shot := range shots {
+		sceneKey := sceneKeyOf(shot)
+		if sceneKey == "" {
+			current = sceneGroup{} // 无场景信息，重置
+			continue
+		}
+
+		items, err := s.sfxItemRepo.ListByShotID(shot.ID)
+		if err != nil || len(items) == 0 {
+			if sceneKey == current.key {
+				continue // 该镜头无音效，保持当前 scene 状态
+			}
+			current = sceneGroup{key: sceneKey}
+			continue
+		}
+
+		// 找本镜头的 ambient 条目
+		var ambientItem *model.ShotSFXItem
+		for _, it := range items {
+			if it.SFXType == "ambient" && !it.Disabled {
+				ambientItem = it
+				break
+			}
+		}
+
+		if sceneKey != current.key {
+			// 场景切换：重置，以本镜头 ambient 为新场景基准
+			current = sceneGroup{key: sceneKey}
+			if ambientItem != nil {
+				current.ambientURL = ambientItem.URL
+				current.ambientVol = ambientItem.Volume
+			}
+			continue
+		}
+
+		// 同一场景：将本镜头 ambient 替换为首镜的 ambient URL
+		if current.ambientURL != "" && ambientItem != nil && ambientItem.URL != current.ambientURL {
+			ambientItem.URL = current.ambientURL
+			ambientItem.Volume = current.ambientVol
+			if err := s.sfxItemRepo.Update(ambientItem); err != nil {
+				logger.Printf("[SFXService] scene continuity: update shot %d ambient failed: %v", shot.ID, err)
+			} else {
+				logger.Printf("[SFXService] scene continuity: shot %d ambient unified to scene %q", shot.ID, sceneKey[:min(len(sceneKey), 20)])
+			}
+		} else if current.ambientURL == "" && ambientItem != nil {
+			// 首镜没 ambient 但后续镜头有，以后续镜头为基准
+			current.ambientURL = ambientItem.URL
+			current.ambientVol = ambientItem.Volume
+		}
+	}
+}
+
+// sceneKeyOf 提取镜头的场景标识键（取 Scene 字段前64字符，忽略空格差异）。
+func sceneKeyOf(shot *model.StoryboardShot) string {
+	s := strings.TrimSpace(shot.Scene)
+	if s == "" {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) > 64 {
+		runes = runes[:64]
+	}
+	return string(runes)
+}
+
 
 // --- 内部方法 ---
 
@@ -532,7 +777,9 @@ func normalizeTag(tag string) string {
 }
 
 // matchLocalLibKey 尝试将英文短语匹配到 localLib 键，返回对应文件名。
-// 三级匹配：1) 精确标准化匹配  2) 键的所有词均出现在短语中  3) 键的主词（>3字符）出现在短语中
+// 两级匹配（移除了原来不可靠的 level-3 单词弱匹配，防止误判）：
+//  1. 精确标准化匹配（"rain_heavy" ↔ "rain heavy"）
+//  2. 库键的所有词均出现在短语中（"rain_heavy" ↔ "heavy rain rooftop loop"）
 func matchLocalLibKey(lib map[string]string, phrase string) (string, bool) {
 	phraseWords := strings.Fields(strings.ToLower(phrase))
 	phraseSet := make(map[string]bool, len(phraseWords))
@@ -540,13 +787,13 @@ func matchLocalLibKey(lib map[string]string, phrase string) (string, bool) {
 		phraseSet[w] = true
 	}
 
-	// 1. 精确标准化匹配（针对 underscore_tag 输入）
+	// 1. 精确标准化匹配
 	normalized := strings.Join(phraseWords, "_")
 	if filename, ok := lib[normalized]; ok {
 		return filename, true
 	}
 
-	// 2. 键的所有词均出现在短语中（如 "rain_heavy" ↔ "heavy rain tile roof"）
+	// 2. 键的所有词均出现在短语中（精确子集匹配，防止误判）
 	for libKey, filename := range lib {
 		keyWords := strings.Split(libKey, "_")
 		allMatch := true
@@ -558,16 +805,6 @@ func matchLocalLibKey(lib map[string]string, phrase string) (string, bool) {
 		}
 		if allMatch {
 			return filename, true
-		}
-	}
-
-	// 3. 键的主词（第一个且长度 > 3 的词）出现在短语中（弱匹配）
-	for libKey, filename := range lib {
-		keyWords := strings.Split(libKey, "_")
-		for _, kw := range keyWords {
-			if len(kw) > 3 && phraseSet[kw] {
-				return filename, true
-			}
 		}
 	}
 	return "", false
@@ -741,30 +978,45 @@ func (s *SFXService) cachedQuery(cacheKey string, fn func() sfxHit) sfxHit {
 	return hit
 }
 
-// freesoundSearch 执行单次 Freesound API 搜索，返回首个结果的预览 MP3 URL 和时长（秒）。
-func (s *SFXService) freesoundSearch(ctx context.Context, query string, maxDuration float64) (string, float64) {
+// freesoundSearchResults 执行单次 Freesound API 搜索，按相关性排序，返回 top-N 结果。
+// 对 action/emotion 类型限制时长 ≤ maxDuration；对 ambient 类型要求时长 ≥ 2s（用于循环）。
+func (s *SFXService) freesoundSearchResults(ctx context.Context, query string, maxDuration float64, sfxType string) []struct {
+	URL      string
+	Duration float64
+} {
 	filter := `license:"Creative Commons 0"`
-	if maxDuration > 0 {
-		filter += fmt.Sprintf(" duration:[0.5 TO %.1f]", maxDuration)
+	switch sfxType {
+	case "ambient":
+		// 环境音需要足够长以供循环，不受镜头时长上限限制
+		filter += " duration:[2.0 TO 120.0]"
+	default:
+		// 动作音/情绪音：时长不超过镜头时长，且最短 0.1s
+		if maxDuration > 0 {
+			filter += fmt.Sprintf(" duration:[0.1 TO %.1f]", maxDuration)
+		} else {
+			filter += " duration:[0.1 TO 30.0]"
+		}
 	}
+
 	apiURL := fmt.Sprintf(
-		"https://freesound.org/apiv2/search/text/?query=%s&filter=%s&fields=id,name,previews,duration&sort=downloads_desc&page_size=1&token=%s",
+		// sort=score 按相关性排序（而非下载量），page_size=5 取前5个候选
+		"https://freesound.org/apiv2/search/text/?query=%s&filter=%s&fields=id,name,previews,duration&sort=score&page_size=5&token=%s",
 		url.QueryEscape(query), url.QueryEscape(filter), s.freesoundKey,
 	)
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
-		return "", 0
+		return nil
 	}
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		logger.Printf("[SFXService] Freesound request error for %q: %v", query, err)
-		return "", 0
+		return nil
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		logger.Printf("[SFXService] Freesound HTTP %d for %q: %s", resp.StatusCode, query, body)
-		return "", 0
+		return nil
 	}
 
 	var result struct {
@@ -775,75 +1027,97 @@ func (s *SFXService) freesoundSearch(ctx context.Context, query string, maxDurat
 			} `json:"previews"`
 		} `json:"results"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Results) == 0 {
-		return "", 0
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil
 	}
-	return result.Results[0].Previews.PreviewHQMP3, result.Results[0].Duration
+
+	out := make([]struct {
+		URL      string
+		Duration float64
+	}, 0, len(result.Results))
+	for _, r := range result.Results {
+		if r.Previews.PreviewHQMP3 != "" {
+			out = append(out, struct {
+				URL      string
+				Duration float64
+			}{r.Previews.PreviewHQMP3, r.Duration})
+		}
+	}
+	return out
 }
 
 // searchFreesound 通过 Freesound API 搜索 CC0 授权音效。
-// 先用完整短语搜索，失败则拆词降级重试。结果缓存 sfxCacheTTL。
-func (s *SFXService) searchFreesound(ctx context.Context, phrase string, maxDuration float64) sfxHit {
-	if s.freesoundKey == "" || phrase == "" {
+// 从 top-5 中挑选最佳：action 选时长最短的（单次触发），ambient 选时长最长的（循环素材）。
+// 不再做单词拆分降级搜索（会产生不可控的误匹配）。
+func (s *SFXService) searchFreesound(ctx context.Context, item sfxTagItem, maxDuration float64) sfxHit {
+	if s.freesoundKey == "" || item.Tag == "" {
 		return sfxHit{}
 	}
-	// 完整短语搜索
-	query := strings.ReplaceAll(normalizeTag(phrase), "_", " ")
-	cacheKey := "freesound:" + query
-	hit := s.cachedQuery(cacheKey, func() sfxHit {
-		u, dur := s.freesoundSearch(ctx, query, maxDuration)
-		return sfxHit{url: u, source: "freesound", durationSecs: dur}
+	query := strings.ReplaceAll(normalizeTag(item.Tag), "_", " ")
+	cacheKey := fmt.Sprintf("freesound:%s:%s", item.SFXType, query)
+
+	return s.cachedQuery(cacheKey, func() sfxHit {
+		results := s.freesoundSearchResults(ctx, query, maxDuration, item.SFXType)
+		if len(results) == 0 {
+			return sfxHit{}
+		}
+		// 选最佳结果
+		best := results[0]
+		for _, r := range results[1:] {
+			switch item.SFXType {
+			case "ambient":
+				// 环境音：选时长最长的，循环接缝最少
+				if r.Duration > best.Duration {
+					best = r
+				}
+			default:
+				// 动作音/情绪音：选时长最短的，避免尾音过长
+				if r.Duration < best.Duration && r.Duration >= 0.1 {
+					best = r
+				}
+			}
+		}
+		return sfxHit{url: best.URL, source: "freesound", durationSecs: best.Duration}
 	})
-	if hit.url != "" {
-		return hit
-	}
-	// 降级：拆分关键词，逐词搜索（取前 3 个有意义的词）
-	words := strings.Fields(query)
-	for i, w := range words {
-		if i >= 3 {
-			break
-		}
-		if len(w) <= 3 {
-			continue
-		}
-		ck := "freesound:" + w
-		wHit := s.cachedQuery(ck, func() sfxHit {
-			u, dur := s.freesoundSearch(ctx, w, maxDuration)
-			return sfxHit{url: u, source: "freesound", durationSecs: dur}
-		})
-		if wHit.url != "" {
-			return wHit
-		}
-	}
-	return sfxHit{}
 }
 
-// elevenLabsPrompt 将 sfx_tags 转换为适合 ElevenLabs 音效生成的英文 Prompt。
-func elevenLabsPrompt(shot *model.StoryboardShot) string {
-	if shot.SFXTags != "" {
-		var tags []string
-		if json.Unmarshal([]byte(shot.SFXTags), &tags) == nil && len(tags) > 0 {
-			parts := make([]string, 0, len(tags))
-			for _, t := range tags {
-				parts = append(parts, strings.ReplaceAll(normalizeTag(t), "_", " "))
-			}
-			prompt := "Sound effects: " + strings.Join(parts, ", ")
-			if shot.EmotionalTone != "" {
-				prompt += ". Mood: " + shot.EmotionalTone
-			}
-			return prompt
-		}
+// buildElevenLabsPrompt 将结构化标签转换为 ElevenLabs 自然语言描述。
+// ElevenLabs 接受自然语言，不接受关键词堆砌；需要明确描述声音的物理特征和空间感。
+func buildElevenLabsPrompt(item sfxTagItem, shot *model.StoryboardShot) string {
+	tag := strings.ReplaceAll(normalizeTag(item.Tag), "_", " ")
+	var sb strings.Builder
+
+	switch item.SFXType {
+	case "ambient":
+		sb.WriteString("Ambient background sound: ")
+		sb.WriteString(tag)
+		sb.WriteString(". Continuous loop, smooth and consistent, no sudden changes.")
+	case "emotion":
+		sb.WriteString("Emotional accent sound effect: ")
+		sb.WriteString(tag)
+		sb.WriteString(". Short cinematic sting, impactful.")
+	default: // action
+		sb.WriteString("Sound effect: ")
+		sb.WriteString(tag)
+		sb.WriteString(". Single occurrence, realistic and precise.")
 	}
-	runes := []rune(shot.Description)
+	if shot.EmotionalTone != "" {
+		sb.WriteString(" Mood: ")
+		sb.WriteString(shot.EmotionalTone)
+		sb.WriteString(".")
+	}
+	prompt := sb.String()
+	runes := []rune(prompt)
 	if len(runes) > 200 {
-		return string(runes[:200])
+		prompt = string(runes[:200])
 	}
-	return shot.Description
+	return prompt
 }
 
-// generateElevenLabs 调用 ElevenLabs Sound Generation API，生成定制音效并上传至存储服务。
-// 返回 URL、实际请求的时长（秒）和错误。
-func (s *SFXService) generateElevenLabs(ctx context.Context, shot *model.StoryboardShot) (string, float64, error) {
+// generateElevenLabsForTag 对单个结构化标签调用 ElevenLabs Sound Generation API。
+// 每个 tag 独立生成，避免多标签混成一条不可分离的音频。
+// prompt_influence=0.7（提高提示词约束力，降低模型自由发挥程度）。
+func (s *SFXService) generateElevenLabsForTag(ctx context.Context, item sfxTagItem, shot *model.StoryboardShot) (string, float64, error) {
 	if s.elevenKey == "" {
 		return "", 0, fmt.Errorf("elevenlabs key not configured")
 	}
@@ -851,15 +1125,15 @@ func (s *SFXService) generateElevenLabs(ctx context.Context, shot *model.Storybo
 		return "", 0, fmt.Errorf("storage not configured for elevenlabs upload")
 	}
 
-	prompt := elevenLabsPrompt(shot)
-	runes := []rune(prompt)
-	if len(runes) > 200 {
-		prompt = string(runes[:200])
-	}
+	prompt := buildElevenLabsPrompt(item, shot)
 
+	// 时长：ambient 用镜头全长（循环），action/emotion 最多 5s
 	dur := shot.Duration
-	if dur <= 0 {
+	if item.SFXType != "ambient" && dur > 5 {
 		dur = 5
+	}
+	if dur <= 0 {
+		dur = 3
 	}
 	if dur > 22 {
 		dur = 22
@@ -868,7 +1142,7 @@ func (s *SFXService) generateElevenLabs(ctx context.Context, shot *model.Storybo
 	body, _ := json.Marshal(map[string]interface{}{
 		"text":             prompt,
 		"duration_seconds": dur,
-		"prompt_influence": 0.3,
+		"prompt_influence": 0.7, // 0.3→0.7，提高提示词约束力
 	})
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
@@ -894,7 +1168,9 @@ func (s *SFXService) generateElevenLabs(ctx context.Context, shot *model.Storybo
 		return "", 0, err
 	}
 
-	key := fmt.Sprintf("sfx/video_%d/shot_%d.mp3", shot.VideoID, shot.ID)
+	// key 包含 tag 哈希以避免同镜头多条音效覆盖
+	tagHash := fmt.Sprintf("%x", len(item.Tag)*31+len(item.SFXType))
+	key := fmt.Sprintf("sfx/video_%d/shot_%d_%s.mp3", shot.VideoID, shot.ID, tagHash)
 	u, err := s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), "audio/mpeg")
 	return u, float64(dur), err
 }

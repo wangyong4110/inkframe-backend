@@ -433,7 +433,9 @@ func (p *OpenAIProvider) buildRequest(req *GenerateRequest) map[string]interface
 		"model":       model,
 		"messages":    messages,
 		"temperature": req.Temperature,
-		"max_tokens":  req.MaxTokens,
+	}
+	if req.MaxTokens > 0 {
+		openaiReq["max_tokens"] = req.MaxTokens
 	}
 
 	if req.TopP > 0 {

@@ -390,6 +390,59 @@ func (h *NovelHandler) BuildTimeline(c *gin.Context) {
 	respondOK(c, timeline)
 }
 
+// PublishNovel 发布小说到广场
+// POST /api/v1/novels/:id/publish
+func (h *NovelHandler) PublishNovel(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	novel, err := h.novelService.GetNovel(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found")
+		return
+	}
+	if tenantID := getTenantID(c); novel.TenantID != tenantID {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
+	var req struct {
+		Visibility string `json:"visibility"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Visibility == "" {
+		req.Visibility = "public"
+	}
+	updated, err := h.novelService.PublishNovel(uint(id), req.Visibility)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, updated)
+}
+
+// UnpublishNovel 取消发布小说
+// POST /api/v1/novels/:id/unpublish
+func (h *NovelHandler) UnpublishNovel(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	novel, err := h.novelService.GetNovel(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found")
+		return
+	}
+	if tenantID := getTenantID(c); novel.TenantID != tenantID {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
+	if err := h.novelService.UnpublishNovel(uint(id)); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"unpublished": true})
+}
+
 // SyncCharacterSnapshots 同步章节角色状态快照
 // POST /api/v1/novels/:id/chapters/:chapter_no/character-snapshots
 func (h *NovelHandler) SyncCharacterSnapshots(c *gin.Context) {

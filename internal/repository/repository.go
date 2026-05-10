@@ -27,7 +27,14 @@ func NewNovelRepository(db *gorm.DB, cache *redis.Client) *NovelRepository {
 
 // Create 创建小说
 func (r *NovelRepository) Create(novel *model.Novel) error {
-	if err := r.db.Create(novel).Error; err != nil {
+	err := r.db.Create(novel).Error
+	if err != nil && (strings.Contains(err.Error(), "1054") || strings.Contains(err.Error(), "Unknown column")) {
+		// 广场社交列尚未迁移到 DB，降级：剔除这些列（它们均有 DB default，不影响业务）
+		logger.Warnf("NovelRepository.Create: social columns missing, retrying without them: %v", err)
+		err = r.db.Omit("view_count", "like_count", "comment_count", "hot_score",
+			"is_published", "published_at", "visibility", "plaza_tags").Create(novel).Error
+	}
+	if err != nil {
 		return err
 	}
 	r.invalidateCache(novel.ID)
@@ -423,6 +430,25 @@ func (r *ChapterRepository) Update(chapter *model.Chapter) error {
 	}
 	r.invalidateListCache(chapter.NovelID)
 	return nil
+}
+
+// UpdateStatus 更新章节状态（novelID 用于缓存失效）
+func (r *ChapterRepository) UpdateStatus(id, novelID uint, status string) error {
+	if err := r.db.Model(&model.Chapter{}).Where("id = ? AND novel_id = ?", id, novelID).
+		Update("status", status).Error; err != nil {
+		return err
+	}
+	r.invalidateListCache(novelID)
+	return nil
+}
+
+// ListPublishedByNovel 获取小说已发布章节（按章节号升序）
+func (r *ChapterRepository) ListPublishedByNovel(novelID uint) ([]*model.Chapter, error) {
+	var chapters []*model.Chapter
+	err := r.db.Select("id, novel_id, tenant_id, uuid, chapter_no, title, summary, status, word_count, created_at, updated_at").
+		Where("novel_id = ? AND status = ?", novelID, "published").
+		Order("chapter_no ASC").Find(&chapters).Error
+	return chapters, err
 }
 
 // Delete 删除章节（novelID 用于缓存失效）
@@ -943,7 +969,7 @@ func (r *VideoRepository) ListPublicSorted(sort, q string, page, pageSize int) (
 	if q != "" {
 		base = base.Where("title LIKE ? OR description LIKE ?", "%"+q+"%", "%"+q+"%")
 	}
-	if err := base.Count(&total).Error; err != nil {
+	if err := base.Session(&gorm.Session{}).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	order := "hot_score DESC, published_at DESC"
@@ -2207,24 +2233,100 @@ func (r *NovelRepository) GetPublicByID(id uint) (*model.Novel, error) {
 	return &n, err
 }
 
-// ListPublicSorted 列出公开小说（sort: latest|hot；q: 标题/描述关键词）
-func (r *NovelRepository) ListPublicSorted(sort, q string, page, pageSize int) ([]*model.Novel, int64, error) {
+// NovelPublicFilter 公开小说列表筛选参数
+type NovelPublicFilter struct {
+	Sort        string // hot|latest|words|favorites
+	Q           string
+	Channel     string // female|male|publish|""=全部
+	Genre       string // exact match, ""=全部
+	WordMin     int    // 0=不限
+	WordMax     int    // 0=不限
+	UpdatedDays int    // 0=不限，N=最近N天内更新
+	IsCompleted string // ""=全部 "1"=completed "0"=ongoing
+	Page        int
+	PageSize    int
+}
+
+// ListPublicSorted 列出公开小说（支持精细筛选和多种排序）
+func (r *NovelRepository) ListPublicSorted(f NovelPublicFilter) ([]*model.Novel, int64, error) {
 	var novels []*model.Novel
 	var total int64
 	base := r.db.Model(&model.Novel{}).Where("is_published = ? AND visibility = ?", true, "public")
-	if q != "" {
-		base = base.Where("title LIKE ? OR description LIKE ?", "%"+q+"%", "%"+q+"%")
+	if f.Q != "" {
+		base = base.Where("title LIKE ? OR description LIKE ?", "%"+f.Q+"%", "%"+f.Q+"%")
 	}
-	if err := base.Count(&total).Error; err != nil {
+	if f.Channel != "" {
+		base = base.Where("channel = ?", f.Channel)
+	}
+	if f.Genre != "" {
+		base = base.Where("genre = ?", f.Genre)
+	}
+	if f.WordMin > 0 {
+		base = base.Where("total_words >= ?", f.WordMin)
+	}
+	if f.WordMax > 0 {
+		base = base.Where("total_words <= ?", f.WordMax)
+	}
+	if f.UpdatedDays > 0 {
+		cutoff := time.Now().AddDate(0, 0, -f.UpdatedDays)
+		base = base.Where("updated_at >= ?", cutoff)
+	}
+	if f.IsCompleted == "1" {
+		base = base.Where("status = ?", "completed")
+	} else if f.IsCompleted == "0" {
+		base = base.Where("status IN ?", []string{"planning", "writing", "paused"})
+	}
+	if err := base.Session(&gorm.Session{}).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	order := "hot_score DESC, published_at DESC"
-	if sort == "latest" {
+	switch f.Sort {
+	case "latest":
 		order = "published_at DESC, created_at DESC"
+	case "words":
+		order = "total_words DESC, published_at DESC"
+	case "favorites":
+		order = "like_count DESC, published_at DESC"
+	}
+	page := f.Page
+	if page < 1 {
+		page = 1
+	}
+	pageSize := f.PageSize
+	if pageSize < 1 {
+		pageSize = 12
 	}
 	offset := (page - 1) * pageSize
 	err := base.Order(order).Offset(offset).Limit(pageSize).Find(&novels).Error
 	return novels, total, err
+}
+
+// GetPublicRanking 获取公开小说排行榜
+// rankType: hot|new|completed|favorites|updated  gender: male|female|""=全部
+func (r *NovelRepository) GetPublicRanking(rankType, gender string, limit int) ([]*model.Novel, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	base := r.db.Model(&model.Novel{}).Where("is_published = ? AND visibility = ?", true, "public")
+	if gender == "male" || gender == "female" {
+		base = base.Where("channel = ?", gender)
+	}
+	switch rankType {
+	case "new":
+		cutoff := time.Now().AddDate(0, -1, 0)
+		base = base.Where("published_at >= ?", cutoff).Order("published_at DESC")
+	case "completed":
+		base = base.Where("status = ?", "completed").Order("hot_score DESC, like_count DESC")
+	case "favorites":
+		base = base.Order("like_count DESC, published_at DESC")
+	case "updated":
+		base = base.Order("updated_at DESC")
+	default: // hot
+		base = base.Order("hot_score DESC, like_count DESC, published_at DESC")
+	}
+	var novels []*model.Novel
+	err := base.Limit(limit).Find(&novels).Error
+	return novels, err
 }
 
 // IncrNovelViewCount 浏览量+1
@@ -2321,4 +2423,32 @@ func (r *NovelCommentRepository) GetByID(id uint) (*model.NovelComment, error) {
 
 func (r *NovelCommentRepository) Delete(id uint) error {
 	return r.db.Delete(&model.NovelComment{}, id).Error
+}
+
+// ─── StoryboardReviewRecordRepository ───────────────────────────────────────
+
+type StoryboardReviewRecordRepository struct{ db *gorm.DB }
+
+func NewStoryboardReviewRecordRepository(db *gorm.DB) *StoryboardReviewRecordRepository {
+	return &StoryboardReviewRecordRepository{db: db}
+}
+
+func (r *StoryboardReviewRecordRepository) Create(rec *model.StoryboardReviewRecord) error {
+	return r.db.Create(rec).Error
+}
+
+func (r *StoryboardReviewRecordRepository) ListByVideo(videoID uint) ([]*model.StoryboardReviewRecord, error) {
+	var list []*model.StoryboardReviewRecord
+	err := r.db.Where("video_id = ?", videoID).Order("created_at DESC").Find(&list).Error
+	return list, err
+}
+
+func (r *StoryboardReviewRecordRepository) GetByID(id uint) (*model.StoryboardReviewRecord, error) {
+	var rec model.StoryboardReviewRecord
+	err := r.db.First(&rec, id).Error
+	return &rec, err
+}
+
+func (r *StoryboardReviewRecordRepository) Update(rec *model.StoryboardReviewRecord) error {
+	return r.db.Save(rec).Error
 }

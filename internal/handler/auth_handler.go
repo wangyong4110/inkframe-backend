@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/service"
+	"gorm.io/gorm"
 )
 
 // AuthHandler 认证处理器
@@ -109,6 +111,20 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 
 	user, err := h.authService.GetUserByID(userID)
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// User not in DB (e.g. dev bypass mode with user_id=1 but no seed).
+			// Return partial info from JWT context so the frontend can proceed.
+			respondOK(c, gin.H{
+				"user_id":   userID,
+				"tenant_id": tenantID,
+				"role":      role,
+				"username":  "dev",
+				"nickname":  "Dev User",
+				"avatar":    "",
+				"email":     "",
+			})
+			return
+		}
 		respondErr(c, http.StatusInternalServerError, "failed to fetch user")
 		return
 	}

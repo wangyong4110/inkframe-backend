@@ -304,7 +304,7 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 	// JSON 结构化输出任务降温：高温度会产生格式漂移（多余 markdown / 说明文字），触发 retry 更慢。
 	// MaxTokens 不设强制下限，由任务配置 / 小说配置 / 调用方覆盖自行决定。
 	switch taskType {
-	case "storyboard", "character", "worldview", "character_state", "scene_anchor_extract":
+	case "storyboard", "character", "worldview", "character_state", "scene_anchor_extract", "storyboard_review":
 		if config.Temperature > 0.2 {
 			config.Temperature = 0.1
 		}

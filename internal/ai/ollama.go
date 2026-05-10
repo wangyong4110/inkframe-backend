@@ -107,13 +107,16 @@ func (p *OllamaProvider) Generate(ctx context.Context, req *GenerateRequest) (*G
 		model = p.model
 	}
 
-	body, err := json.Marshal(map[string]interface{}{
+	ollamaReq := map[string]interface{}{
 		"model":       model,
 		"messages":    p.buildMessages(req),
 		"temperature": req.Temperature,
-		"max_tokens":  req.MaxTokens,
 		"stream":      false,
-	})
+	}
+	if req.MaxTokens > 0 {
+		ollamaReq["max_tokens"] = req.MaxTokens
+	}
+	body, err := json.Marshal(ollamaReq)
 	if err != nil {
 		return nil, err
 	}
@@ -170,13 +173,16 @@ func (p *OllamaProvider) GenerateStream(ctx context.Context, req *GenerateReques
 			model = p.model
 		}
 
-		body, err := json.Marshal(map[string]interface{}{
+		ollamaStreamReq := map[string]interface{}{
 			"model":       model,
 			"messages":    p.buildMessages(req),
 			"temperature": req.Temperature,
-			"max_tokens":  req.MaxTokens,
 			"stream":      true,
-		})
+		}
+		if req.MaxTokens > 0 {
+			ollamaStreamReq["max_tokens"] = req.MaxTokens
+		}
+		body, err := json.Marshal(ollamaStreamReq)
 		if err != nil {
 			ch <- &GenerateResponse{Error: err.Error()}
 			return

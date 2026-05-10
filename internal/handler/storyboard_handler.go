@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
@@ -124,7 +125,8 @@ func (h *VideoHandler) ReviewStoryboard(c *gin.Context) {
 	}
 
 	var req struct {
-		Provider string `json:"provider"`
+		Provider      string  `json:"provider"`
+		PreviousScore float64 `json:"previous_score"` // 上次审查分数，用于稳定相对评分
 	}
 	_ = c.ShouldBindJSON(&req) // 可选 body
 
@@ -144,13 +146,18 @@ func (h *VideoHandler) ReviewStoryboard(c *gin.Context) {
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 
-		review, reviewErr := h.storyboardService.ReviewStoryboard(tenantID, uint(videoId), req.Provider)
+		review, recordID, reviewErr := h.storyboardService.ReviewStoryboard(tenantID, uint(videoId), req.Provider, req.PreviousScore)
 		if reviewErr != nil {
 			logger.Printf("[VideoHandler] ReviewStoryboard task %s failed: videoID=%d err=%v", taskID, videoId, reviewErr)
 			h.taskSvc.Fail(taskID, reviewErr.Error()) //nolint:errcheck
 			return
 		}
-		h.taskSvc.Complete(taskID, review) //nolint:errcheck
+		// 将 record_id 附在 task data 中，前端可用于关联后续 apply/rollback
+		type reviewResult struct {
+			*model.StoryboardReview
+			RecordID uint `json:"record_id,omitempty"`
+		}
+		h.taskSvc.Complete(taskID, &reviewResult{StoryboardReview: review, RecordID: recordID}) //nolint:errcheck
 	}(task.TaskID)
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -321,6 +328,112 @@ func (h *VideoHandler) OptimizeStoryboardFromReview(c *gin.Context) {
 		"message": "分镜优化任务已提交",
 		"data":    gin.H{"task_id": task.TaskID},
 	})
+}
+
+// ApplyStoryboardDiffs 将用户选中的差异直接写入 DB（同步，无 AI 调用）。
+// POST /api/v1/videos/:id/storyboard/optimize/apply
+func (h *VideoHandler) ApplyStoryboardDiffs(c *gin.Context) {
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
+
+	var req struct {
+		Diffs    []service.ShotApplyDiff `json:"diffs" binding:"required"`
+		RecordID uint                    `json:"record_id"` // 可选，关联审查记录以记录回滚快照
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	if len(req.Diffs) == 0 {
+		respondBadRequest(c, "diffs 列表不能为空")
+		return
+	}
+
+	count, err := h.videoService.ApplyStoryboardDiffs(uint(videoID), req.Diffs, req.RecordID)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"updated_shots": count})
+}
+
+// ListReviewRecords 获取某视频的审查历史列表
+// GET /api/v1/videos/:id/storyboard/reviews
+func (h *VideoHandler) ListReviewRecords(c *gin.Context) {
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
+
+	records, err := h.storyboardService.ListReviewRecords(uint(videoID))
+	if err != nil {
+		logger.Printf("[VideoHandler] ListReviewRecords videoID=%d err=%v", videoID, err)
+		// 表可能尚未迁移（服务首次启动），返回空列表而不是 500
+		respondOK(c, []struct{}{})
+		return
+	}
+
+	// 将 ReviewDataJSON 反序列化后附在响应中
+	type recordResp struct {
+		ID           uint                 `json:"id"`
+		CreatedAt    string               `json:"created_at"`
+		OverallScore float64              `json:"overall_score"`
+		Status       string               `json:"status"`
+		AppliedAt    *string              `json:"applied_at,omitempty"`
+		Review       *model.StoryboardReview `json:"review,omitempty"`
+	}
+	resp := make([]recordResp, 0, len(records))
+	for _, rec := range records {
+		r := recordResp{
+			ID:           rec.ID,
+			CreatedAt:    rec.CreatedAt.Format("2006-01-02 15:04:05"),
+			OverallScore: rec.OverallScore,
+			Status:       rec.Status,
+		}
+		if rec.AppliedAt != nil {
+			s := rec.AppliedAt.Format("2006-01-02 15:04:05")
+			r.AppliedAt = &s
+		}
+		if rec.ReviewDataJSON != "" {
+			var rv model.StoryboardReview
+			if err := json.Unmarshal([]byte(rec.ReviewDataJSON), &rv); err == nil {
+				r.Review = &rv
+			}
+		}
+		resp = append(resp, r)
+	}
+	respondOK(c, resp)
+}
+
+// RollbackReview 将分镜内容回滚到某次审查应用之前的状态
+// POST /api/v1/videos/:id/storyboard/reviews/:record_id/rollback
+func (h *VideoHandler) RollbackReview(c *gin.Context) {
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
+	recordID, ok := parseID(c, "record_id")
+	if !ok {
+		return
+	}
+
+	tenantID := getTenantID(c)
+	restored, err := h.storyboardService.RollbackReview(tenantID, uint(videoID), uint(recordID))
+	if err != nil {
+		respondErr(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"restored_shots": restored})
 }
 
 // AnalyzeEmotions 情感分析

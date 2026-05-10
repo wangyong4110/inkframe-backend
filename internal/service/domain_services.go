@@ -580,6 +580,37 @@ func (s *ChapterService) DeleteChapterByNo(novelID uint, chapterNo int) error {
 	return nil
 }
 
+// PublishChapter 将章节状态设为 published（在广场公开展示）
+func (s *ChapterService) PublishChapter(novelID uint, chapterNo int) (*model.Chapter, error) {
+	chapter, err := s.chapterRepo.GetByNovelAndChapterNo(novelID, chapterNo)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.chapterRepo.UpdateStatus(chapter.ID, novelID, "published"); err != nil {
+		return nil, err
+	}
+	chapter.Status = "published"
+	return chapter, nil
+}
+
+// UnpublishChapter 将章节状态回退为 completed（取消广场展示）
+func (s *ChapterService) UnpublishChapter(novelID uint, chapterNo int) (*model.Chapter, error) {
+	chapter, err := s.chapterRepo.GetByNovelAndChapterNo(novelID, chapterNo)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.chapterRepo.UpdateStatus(chapter.ID, novelID, "completed"); err != nil {
+		return nil, err
+	}
+	chapter.Status = "completed"
+	return chapter, nil
+}
+
+// ListPublishedChapters 获取小说已公开发布的章节列表
+func (s *ChapterService) ListPublishedChapters(novelID uint) ([]*model.Chapter, error) {
+	return s.chapterRepo.ListPublishedByNovel(novelID)
+}
+
 // GenerateChapter 专业级章节生成流水线：
 //
 //  Step 1  构建层次化上下文（近章详摘 + 弧摘要 + 全局概述）
@@ -2162,13 +2193,23 @@ func (s *StoryboardService) GenerateStoryboard(videoID, chapterID uint, characte
 }
 
 // ReviewStoryboard 调用 AI 对分镜脚本进行专业审查
-func (s *StoryboardService) ReviewStoryboard(tenantID, videoID uint, provider string) (*model.StoryboardReview, error) {
-	return s.videoService.ReviewStoryboard(tenantID, videoID, provider)
+func (s *StoryboardService) ReviewStoryboard(tenantID, videoID uint, provider string, previousScore float64) (*model.StoryboardReview, uint, error) {
+	return s.videoService.ReviewStoryboard(tenantID, videoID, provider, previousScore)
 }
 
 // OptimizeStoryboardFromReview 根据审查报告一键优化分镜
 func (s *StoryboardService) OptimizeStoryboardFromReview(tenantID, videoID uint, review *model.StoryboardReview, provider string) (int, error) {
 	return s.videoService.OptimizeStoryboardFromReview(tenantID, videoID, review, provider)
+}
+
+// ListReviewRecords 返回审查历史列表
+func (s *StoryboardService) ListReviewRecords(videoID uint) ([]*model.StoryboardReviewRecord, error) {
+	return s.videoService.ListReviewRecords(videoID)
+}
+
+// RollbackReview 回滚某次审查应用
+func (s *StoryboardService) RollbackReview(tenantID, videoID, recordID uint) (int, error) {
+	return s.videoService.RollbackReview(tenantID, videoID, recordID)
 }
 
 func (s *StoryboardService) AnalyzeEmotions(content string) (interface{}, error) {

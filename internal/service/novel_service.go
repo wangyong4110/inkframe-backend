@@ -247,6 +247,31 @@ func (s *NovelService) UpdateNovel(id uint, req *model.UpdateNovelRequest) (*mod
 	return novel, nil
 }
 
+// PublishNovel 发布小说到广场
+func (s *NovelService) PublishNovel(id uint, visibility string) (*model.Novel, error) {
+	novel, err := s.novelRepo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	novel.IsPublished = true
+	novel.PublishedAt = &now
+	novel.Visibility = visibility
+	if err := s.novelRepo.UpdateFields(id, map[string]interface{}{
+		"is_published": true, "published_at": &now, "visibility": visibility,
+	}); err != nil {
+		return nil, err
+	}
+	return novel, nil
+}
+
+// UnpublishNovel 取消发布小说
+func (s *NovelService) UnpublishNovel(id uint) error {
+	return s.novelRepo.UpdateFields(id, map[string]interface{}{
+		"is_published": false, "visibility": "private",
+	})
+}
+
 // GenerateOutlineRequest 生成大纲请求
 type GenerateOutlineRequest struct {
 	NovelID        uint     `json:"novel_id" binding:"required"`
@@ -854,12 +879,17 @@ func (s *NovelService) GetPublicNovel(id uint) (*model.Novel, error) {
 	return s.novelRepo.GetPublicByID(id)
 }
 
-// ListPublicNovels 列出公开小说（sort: latest|hot，q: 关键词）
-func (s *NovelService) ListPublicNovels(sort, q string, page, pageSize int) ([]*model.Novel, int64, error) {
-	if sort == "" {
-		sort = "hot"
+// ListPublicNovels 列出公开小说（支持精细筛选）
+func (s *NovelService) ListPublicNovels(f repository.NovelPublicFilter) ([]*model.Novel, int64, error) {
+	if f.Sort == "" {
+		f.Sort = "hot"
 	}
-	return s.novelRepo.ListPublicSorted(sort, q, page, pageSize)
+	return s.novelRepo.ListPublicSorted(f)
+}
+
+// GetNovelRanking 获取公开小说排行榜
+func (s *NovelService) GetNovelRanking(rankType, gender string) ([]*model.Novel, error) {
+	return s.novelRepo.GetPublicRanking(rankType, gender, 30)
 }
 
 // RecordNovelViewDeduped 防刷浏览量（同 IP 对同一小说 1 小时内只计一次）

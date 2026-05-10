@@ -190,6 +190,54 @@ func sanitizeStorageName(s string) string {
 	return string(runes)
 }
 
+// extractJSONObject extracts the first top-level JSON object {...} from an AI response,
+// without unwrapping any inner arrays. Use this when the expected result is an object,
+// not an array (contrast with extractJSON which prefers arrays for storyboard use).
+func extractJSONObject(content string) string {
+	content = strings.TrimSpace(content)
+	if idx := strings.Index(content, "```json"); idx != -1 {
+		content = content[idx+7:]
+		if end := strings.Index(content, "```"); end != -1 {
+			content = content[:end]
+		}
+	} else if idx := strings.Index(content, "```"); idx != -1 {
+		content = content[idx+3:]
+		if end := strings.Index(content, "```"); end != -1 {
+			content = content[:end]
+		}
+	}
+	content = strings.TrimSpace(content)
+	objIdx := strings.Index(content, "{")
+	if objIdx == -1 {
+		return content
+	}
+	depth := 0
+	inStr := false
+	for i := objIdx; i < len(content); i++ {
+		c := content[i]
+		if inStr {
+			if c == '\\' {
+				i++
+			} else if c == '"' {
+				inStr = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			inStr = true
+		case '{':
+			depth++
+		case '}':
+			depth--
+			if depth == 0 {
+				return sanitizeJSONStrings(content[objIdx : i+1])
+			}
+		}
+	}
+	return sanitizeJSONStrings(content[objIdx:])
+}
+
 // unmarshalAIJSON extracts JSON from an AI response string and unmarshals it into T.
 func unmarshalAIJSON[T any](raw string) (*T, error) {
 	cleaned := extractJSON(strings.TrimSpace(raw))

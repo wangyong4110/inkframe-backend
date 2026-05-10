@@ -39,6 +39,7 @@ type VideoService struct {
 	plotPointRepo      *repository.PlotPointRepository
 	systemSettingRepo  *repository.SystemSettingRepository
 	segmentRepo        *repository.ShotVoiceSegmentRepository
+	reviewRecordRepo   *repository.StoryboardReviewRecordRepository
 	taskSvc            *TaskService
 	videoSem           chan struct{} // nil = unlimited; set via WithVideoConcurrency
 	videoSemMu         sync.RWMutex  // protects videoSem replacement
@@ -123,6 +124,11 @@ func (s *VideoService) SetVideoConcurrency(n int) {
 	} else {
 		s.videoSem = nil
 	}
+}
+
+func (s *VideoService) WithReviewRecordRepo(r *repository.StoryboardReviewRecordRepository) *VideoService {
+	s.reviewRecordRepo = r
+	return s
 }
 
 func (s *VideoService) WithSegmentRepo(r *repository.ShotVoiceSegmentRepository) *VideoService {
@@ -1610,14 +1616,15 @@ func (s *VideoService) GetStoryboard(videoID uint) ([]*model.StoryboardShot, err
 	return s.storyboardRepo.ListByVideo(videoID)
 }
 
-// ReviewStoryboard 调用 AI 对分镜脚本进行专业审查，返回结构化报告。
-func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string) (*model.StoryboardReview, error) {
+// ReviewStoryboard 调用 AI 对分镜脚本进行专业审查，返回结构化报告及历史记录 ID。
+// previousScore > 0 时，将上次评分注入提示词，引导 AI 做相对评估而非每次独立打分。
+func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string, previousScore float64) (*model.StoryboardReview, uint, error) {
 	shots, err := s.storyboardRepo.ListByVideo(videoID)
 	if err != nil {
-		return nil, fmt.Errorf("获取分镜失败: %w", err)
+		return nil, 0, fmt.Errorf("获取分镜失败: %w", err)
 	}
 	if len(shots) == 0 {
-		return nil, fmt.Errorf("该视频暂无分镜，请先生成分镜脚本")
+		return nil, 0, fmt.Errorf("该视频暂无分镜，请先生成分镜脚本")
 	}
 
 	// 取 Video.NovelID 以便 GenerateWithProvider 能通过小说级 AI 模型配置选择 provider
@@ -1626,18 +1633,42 @@ func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string)
 		novelID = video.NovelID
 	}
 
-	prompt := buildStoryboardReviewPrompt(shots)
+	prompt := buildStoryboardReviewPrompt(shots, previousScore)
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "storyboard_review", prompt, provider)
 	if err != nil {
-		return nil, fmt.Errorf("AI审查失败: %w", err)
+		return nil, 0, fmt.Errorf("AI审查失败: %w", err)
 	}
 
-	return parseStoryboardReview(result)
+	review, err := parseStoryboardReview(result)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// 持久化审查记录
+	var recordID uint
+	if s.reviewRecordRepo != nil {
+		reviewJSON, _ := json.Marshal(review)
+		rec := &model.StoryboardReviewRecord{
+			TenantID:       tenantID,
+			VideoID:        videoID,
+			OverallScore:   review.OverallScore,
+			ReviewDataJSON: string(reviewJSON),
+			Status:         "pending",
+		}
+		if saveErr := s.reviewRecordRepo.Create(rec); saveErr != nil {
+			logger.Printf("ReviewStoryboard: save record failed: %v", saveErr)
+		} else {
+			recordID = rec.ID
+		}
+	}
+
+	return review, recordID, nil
 }
 
 // buildStoryboardReviewPrompt 构建分镜审查提示词
-func buildStoryboardReviewPrompt(shots []*model.StoryboardShot) string {
+// previousScore > 0 时注入上次评分上下文，引导模型给出更稳定的相对评分
+func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, previousScore float64) string {
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("你是资深影视分镜审查师，请从专业角度对以下%d个分镜脚本进行全面审查，返回JSON格式的审查报告。\n\n", len(shots)))
@@ -1677,6 +1708,14 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot) string {
 		sb.WriteString("\n")
 	}
 
+	if previousScore > 0 {
+		sb.WriteString(fmt.Sprintf(`
+【上次审查参考】
+上次综合评分：%.1f / 10
+本次是对同一脚本应用改动后的复核审查。请根据当前脚本内容客观评分，若改动带来实质提升则分数应上升，若引入新问题则下降，若无显著变化则保持相近。在 summary 中用一句话说明相比上次的主要变化方向。
+`, previousScore))
+	}
+
 	sb.WriteString(`
 【输出格式】
 返回JSON对象，不要包含markdown代码块或任何额外说明：
@@ -1694,20 +1733,25 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot) string {
     {
       "shot_no": 3,
       "issues": ["旁白包含镜头语言：'镜头推近'"],
-      "suggestion": "改为：'凌云眼神逐渐坚定，握紧了手中的剑'",
-      "severity": "warning"
+      "suggestion": "改为描述人物状态而非摄像机动作",
+      "severity": "warning",
+      "suggested_narration": "凌云眼神逐渐坚定，握紧了手中的剑，沉声道：'今日，我必踏上那座山峰。'",
+      "suggested_description": "CU 凌云面部特写，眼神坚毅，手握剑柄，浅景深。"
     }
   ]
 }
-注意：shot_feedback 只需列出有问题的镜头（建议不超过10个最典型的），无问题镜头无需列出。
-severity 取值：error（严重，直接影响质量）、warning（中等，建议修改）、info（轻微，可选优化）`)
+规则：
+- shot_feedback 只需列出有问题的镜头（不超过10个最典型的），无问题镜头无需列出
+- severity 取值：error（严重）、warning（中等）、info（轻微）
+- suggested_narration：针对旁白问题，给出修改后的完整旁白文本；无旁白问题则省略此字段
+- suggested_description：针对视觉描述问题，给出修改后的完整画面描述；无视觉问题则省略此字段`)
 
 	return sb.String()
 }
 
 // parseStoryboardReview 解析 AI 审查结果为结构化报告
 func parseStoryboardReview(result string) (*model.StoryboardReview, error) {
-	cleaned := extractJSON(result)
+	cleaned := extractJSONObject(result)
 
 	var review model.StoryboardReview
 	if err := json.Unmarshal([]byte(cleaned), &review); err != nil {
@@ -1771,6 +1815,156 @@ func (s *VideoService) OptimizeStoryboardFromReview(tenantID, videoID uint, revi
 		applied++
 	}
 	return applied, nil
+}
+
+// ShotApplyDiff 用户选中要应用的单镜修改（来自审查报告的 suggested 字段）。
+type ShotApplyDiff struct {
+	ShotID      uint   `json:"shot_id"`
+	ShotNo      int    `json:"shot_no"`
+	Narration   string `json:"narration,omitempty"`
+	Description string `json:"description,omitempty"`
+}
+
+// ApplyStoryboardDiffs 将用户选中的差异直接写入 DB（无 AI 调用，同步执行）。
+// recordID > 0 时：在写入前保存回滚快照，并将记录状态更新为 applied。
+func (s *VideoService) ApplyStoryboardDiffs(videoID uint, diffs []ShotApplyDiff, recordID uint) (int, error) {
+	if len(diffs) == 0 {
+		return 0, nil
+	}
+	// 若 shot_id 为 0，尝试通过 shot_no 反查
+	shots, _ := s.storyboardRepo.ListByVideo(videoID)
+	noToID := make(map[int]uint, len(shots))
+	shotByID := make(map[uint]*model.StoryboardShot, len(shots))
+	for _, sh := range shots {
+		noToID[sh.ShotNo] = sh.ID
+		shotByID[sh.ID] = sh
+	}
+
+	// 应用前采集回滚快照（仅受影响的镜头）
+	var snapshot []model.ShotRollbackItem
+	for _, d := range diffs {
+		id := d.ShotID
+		if id == 0 {
+			id = noToID[d.ShotNo]
+		}
+		if id == 0 {
+			continue
+		}
+		if sh, ok := shotByID[id]; ok {
+			snapshot = append(snapshot, model.ShotRollbackItem{
+				ShotID:      sh.ID,
+				ShotNo:      sh.ShotNo,
+				Narration:   sh.Narration,
+				Description: sh.Description,
+			})
+		}
+	}
+
+	applied := 0
+	for _, d := range diffs {
+		id := d.ShotID
+		if id == 0 {
+			id = noToID[d.ShotNo]
+		}
+		if id == 0 {
+			logger.Printf("ApplyStoryboardDiffs: cannot resolve shot_no=%d, skipping", d.ShotNo)
+			continue
+		}
+		fields := map[string]interface{}{}
+		if d.Narration != "" {
+			fields["narration"] = d.Narration
+		}
+		if d.Description != "" {
+			fields["description"] = d.Description
+		}
+		if len(fields) == 0 {
+			continue
+		}
+		if _, err := s.UpdateShotPartial(id, fields); err != nil {
+			logger.Printf("ApplyStoryboardDiffs: shot_id=%d: %v", id, err)
+			continue
+		}
+		applied++
+	}
+
+	// 更新审查记录状态
+	if recordID > 0 && s.reviewRecordRepo != nil && applied > 0 {
+		rec, err := s.reviewRecordRepo.GetByID(recordID)
+		if err == nil {
+			now := time.Now()
+			snapshotJSON, _ := json.Marshal(snapshot)
+			diffsJSON, _ := json.Marshal(diffs)
+			rec.Status = "applied"
+			rec.AppliedAt = &now
+			rec.RollbackSnapshotJSON = string(snapshotJSON)
+			rec.AppliedDiffsJSON = string(diffsJSON)
+			if saveErr := s.reviewRecordRepo.Update(rec); saveErr != nil {
+				logger.Printf("ApplyStoryboardDiffs: update record failed: %v", saveErr)
+			}
+		}
+	}
+
+	return applied, nil
+}
+
+// RollbackReview 将分镜内容回滚到某次审查应用之前的状态。
+func (s *VideoService) RollbackReview(tenantID, videoID, recordID uint) (int, error) {
+	if s.reviewRecordRepo == nil {
+		return 0, fmt.Errorf("审查记录功能未启用")
+	}
+	rec, err := s.reviewRecordRepo.GetByID(recordID)
+	if err != nil {
+		return 0, fmt.Errorf("审查记录不存在: %w", err)
+	}
+	if rec.VideoID != videoID {
+		return 0, fmt.Errorf("记录与视频不匹配")
+	}
+	if rec.Status != "applied" {
+		return 0, fmt.Errorf("该记录状态为 %s，无法回滚（仅 applied 状态可回滚）", rec.Status)
+	}
+	if rec.RollbackSnapshotJSON == "" {
+		return 0, fmt.Errorf("该记录无回滚快照数据")
+	}
+
+	var snapshot []model.ShotRollbackItem
+	if err := json.Unmarshal([]byte(rec.RollbackSnapshotJSON), &snapshot); err != nil {
+		return 0, fmt.Errorf("回滚快照解析失败: %w", err)
+	}
+
+	restored := 0
+	for _, item := range snapshot {
+		fields := map[string]interface{}{
+			"narration":   item.Narration,
+			"description": item.Description,
+		}
+		if _, err := s.UpdateShotPartial(item.ShotID, fields); err != nil {
+			logger.Printf("RollbackReview: shot_id=%d: %v", item.ShotID, err)
+			continue
+		}
+		restored++
+	}
+
+	rec.Status = "rolled_back"
+	if saveErr := s.reviewRecordRepo.Update(rec); saveErr != nil {
+		logger.Printf("RollbackReview: update record failed: %v", saveErr)
+	}
+
+	return restored, nil
+}
+
+// ListReviewRecords 返回某视频的所有审查历史（含解析后的 review 数据）。
+func (s *VideoService) ListReviewRecords(videoID uint) ([]*model.StoryboardReviewRecord, error) {
+	if s.reviewRecordRepo == nil {
+		return []*model.StoryboardReviewRecord{}, nil
+	}
+	list, err := s.reviewRecordRepo.ListByVideo(videoID)
+	if err != nil {
+		return nil, err
+	}
+	if list == nil {
+		list = []*model.StoryboardReviewRecord{}
+	}
+	return list, nil
 }
 
 // shotOptimizeUpdate 是 AI 返回的单镜优化结果（仅含需要修改的字段）。

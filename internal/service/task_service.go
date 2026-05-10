@@ -28,6 +28,8 @@ const (
 	TaskTypeStoryboardOptimize       = "storyboard_optimize"
 	TaskTypeImport                   = "import"
 	TaskTypeNovelAnalysis            = "novel_analysis"
+	TaskTypeRewriteAnalysis          = "rewrite_analysis" // Phase 0+1: literary analysis + bible generation
+	TaskTypeRewriteChapters          = "rewrite_chapters" // Phase 2: chapter-by-chapter rewriting
 )
 
 // TaskService manages persistent async tasks.

@@ -349,6 +349,48 @@ func (h *ChapterHandler) DeleteChapterByNo(c *gin.Context) {
 	})
 }
 
+// PublishChapter 发布章节到广场
+// POST /api/v1/novels/:id/chapters/:chapter_no/publish
+func (h *ChapterHandler) PublishChapter(c *gin.Context) {
+	novelId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		respondBadRequest(c, "invalid chapter no")
+		return
+	}
+	chapter, err := h.chapterService.PublishChapter(uint(novelId), chapterNo)
+	if err != nil {
+		logger.Printf("[ChapterHandler] PublishChapter: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, chapter)
+}
+
+// UnpublishChapter 取消章节发布
+// POST /api/v1/novels/:id/chapters/:chapter_no/unpublish
+func (h *ChapterHandler) UnpublishChapter(c *gin.Context) {
+	novelId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		respondBadRequest(c, "invalid chapter no")
+		return
+	}
+	chapter, err := h.chapterService.UnpublishChapter(uint(novelId), chapterNo)
+	if err != nil {
+		logger.Printf("[ChapterHandler] UnpublishChapter: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, chapter)
+}
+
 // GenerateChapterOutline 为章节生成 AI 大纲
 // POST /api/v1/novels/:id/chapters/:chapter_no/outline
 func (h *ChapterHandler) GenerateChapterOutline(c *gin.Context) {

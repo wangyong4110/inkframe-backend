@@ -109,6 +109,10 @@ func (p *AnthropicProvider) Generate(ctx context.Context, req *GenerateRequest) 
 		}
 	}
 
+	maxTok := req.MaxTokens
+	if maxTok <= 0 {
+		maxTok = 4096 // Anthropic requires a positive integer; use a safe default
+	}
 	anthropicReq := map[string]interface{}{
 		"model": func() string {
 			if req.Model != "" {
@@ -116,9 +120,9 @@ func (p *AnthropicProvider) Generate(ctx context.Context, req *GenerateRequest) 
 			}
 			return p.model
 		}(),
-		"messages":      messages,
+		"messages":     messages,
 		"temperature":  req.Temperature,
-		"max_tokens":    req.MaxTokens,
+		"max_tokens":   maxTok,
 	}
 
 	if req.SystemPrompt != "" {
@@ -216,12 +220,16 @@ func (p *AnthropicProvider) GenerateStream(ctx context.Context, req *GenerateReq
 			}
 		}
 
+		streamMaxTok := req.MaxTokens
+		if streamMaxTok <= 0 {
+			streamMaxTok = 4096
+		}
 		anthropicReq := map[string]interface{}{
-			"model":         p.model,
-			"messages":      messages,
-			"temperature":   req.Temperature,
-			"max_tokens":    req.MaxTokens,
-			"stream":        true,
+			"model":       p.model,
+			"messages":    messages,
+			"temperature": req.Temperature,
+			"max_tokens":  streamMaxTok,
+			"stream":      true,
 		}
 
 		if req.SystemPrompt != "" {

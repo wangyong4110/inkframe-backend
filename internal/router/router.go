@@ -70,9 +70,11 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		public.GET("/platform/videos/:id", cfg.PlatformHandler.GetPlatformVideo)
 		public.POST("/platform/videos/:id/view", cfg.PlatformHandler.RecordView)
 		public.GET("/platform/videos/:id/comments", cfg.PlatformHandler.ListComments)
+		public.GET("/platform/novels/ranking", cfg.PlatformHandler.GetNovelRanking)
 		public.GET("/platform/novels", cfg.PlatformHandler.GetPlatformNovels)
 		public.GET("/platform/novels/:id", cfg.PlatformHandler.GetPlatformNovel)
 		public.POST("/platform/novels/:id/view", cfg.PlatformHandler.RecordNovelView)
+		public.GET("/platform/novels/:id/chapters", cfg.PlatformHandler.GetNovelChapters)
 		public.GET("/platform/novels/:id/comments", cfg.PlatformHandler.ListNovelComments)
 	}
 
@@ -155,8 +157,14 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.GET("/:id/chapters/:chapter_no", cfg.ChapterHandler.GetChapterByNo)
 			novels.PUT("/:id/chapters/:chapter_no", cfg.ChapterHandler.UpdateChapterByNo)
 			novels.DELETE("/:id/chapters/:chapter_no", cfg.ChapterHandler.DeleteChapterByNo)
+			novels.POST("/:id/chapters/:chapter_no/publish", cfg.ChapterHandler.PublishChapter)
+			novels.POST("/:id/chapters/:chapter_no/unpublish", cfg.ChapterHandler.UnpublishChapter)
 			novels.POST("/:id/chapters/:chapter_no/outline", cfg.ChapterHandler.GenerateChapterOutline)
 			novels.POST("/:id/chapters/:chapter_no/character-snapshots", cfg.NovelHandler.SyncCharacterSnapshots)
+
+			// 发布/取消发布
+			novels.POST("/:id/publish", cfg.NovelHandler.PublishNovel)
+			novels.POST("/:id/unpublish", cfg.NovelHandler.UnpublishNovel)
 
 			// 大纲
 			novels.POST("/:id/outline", cfg.NovelHandler.GenerateOutline)
@@ -329,7 +337,10 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.PUT("/:id/storyboard/:shot_id", cfg.VideoHandler.UpdateStoryboardShot)
 			videos.POST("/:id/storyboard/generate", cfg.VideoHandler.GenerateStoryboard)
 			videos.POST("/:id/storyboard/review", cfg.VideoHandler.ReviewStoryboard)
+			videos.GET("/:id/storyboard/reviews", cfg.VideoHandler.ListReviewRecords)
+			videos.POST("/:id/storyboard/reviews/:record_id/rollback", cfg.VideoHandler.RollbackReview)
 			videos.POST("/:id/storyboard/optimize-from-review", cfg.VideoHandler.OptimizeStoryboardFromReview)
+			videos.POST("/:id/storyboard/optimize/apply", cfg.VideoHandler.ApplyStoryboardDiffs)
 			videos.POST("/:id/generate", cfg.VideoHandler.StartVideoGeneration)
 			videos.GET("/:id/status", cfg.VideoHandler.GetVideoStatus)
 			videos.GET("/:id/shots", cfg.VideoHandler.ListShots)

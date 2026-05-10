@@ -1083,6 +1083,12 @@ type ShotSFXItem struct {
 	StartOffset  float64 `json:"start_offset" gorm:"type:decimal(8,3);default:0"`  // 在分镜中的开始时间（秒，0=分镜起始）
 	DurationSecs float64 `json:"duration_secs" gorm:"type:decimal(8,3);default:0"` // 音效时长（秒，0=未知）
 
+	// 音效分类与播放行为（v2）
+	SFXType     string `json:"sfx_type" gorm:"size:20;default:'action'"` // action / ambient / emotion
+	LoopEnabled bool   `json:"loop_enabled" gorm:"default:false"`         // true=循环播放直到镜头结束
+	FadeInMs    int    `json:"fade_in_ms" gorm:"default:0"`               // 淡入时长（毫秒）
+	FadeOutMs   int    `json:"fade_out_ms" gorm:"default:200"`            // 淡出时长（毫秒）
+
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
@@ -1699,10 +1705,33 @@ type BatchGenerateShotsRequest struct {
 
 // ShotReviewFeedback 单个镜头的审查反馈
 type ShotReviewFeedback struct {
-	ShotNo     int      `json:"shot_no"`
-	Issues     []string `json:"issues"`
-	Suggestion string   `json:"suggestion"`
-	Severity   string   `json:"severity"` // info / warning / error
+	ShotNo               int      `json:"shot_no"`
+	Issues               []string `json:"issues"`
+	Suggestion           string   `json:"suggestion"`
+	Severity             string   `json:"severity"` // info / warning / error
+	SuggestedNarration   string   `json:"suggested_narration,omitempty"`
+	SuggestedDescription string   `json:"suggested_description,omitempty"`
+}
+
+// StoryboardReviewRecord 分镜审查历史记录（含应用状态与回滚快照）
+type StoryboardReviewRecord struct {
+	gorm.Model
+	TenantID             uint       `json:"tenant_id" gorm:"index;not null;default:1"`
+	VideoID              uint       `json:"video_id" gorm:"index;not null"`
+	OverallScore         float64    `json:"overall_score"`
+	ReviewDataJSON       string     `json:"-" gorm:"column:review_data;type:text"`       // full StoryboardReview JSON
+	Status               string     `json:"status" gorm:"size:20;default:'pending'"`     // pending|applied|rolled_back
+	AppliedAt            *time.Time `json:"applied_at,omitempty"`
+	AppliedDiffsJSON     string     `json:"-" gorm:"column:applied_diffs;type:text"`     // []ShotApplyDiff JSON (selected)
+	RollbackSnapshotJSON string     `json:"-" gorm:"column:rollback_snapshot;type:text"` // []ShotRollbackItem JSON
+}
+
+// ShotRollbackItem 回滚快照中的单镜原始内容
+type ShotRollbackItem struct {
+	ShotID      uint   `json:"shot_id"`
+	ShotNo      int    `json:"shot_no"`
+	Narration   string `json:"narration"`
+	Description string `json:"description"`
 }
 
 // StoryboardReview AI 分镜脚本审查报告

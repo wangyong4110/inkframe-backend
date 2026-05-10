@@ -100,6 +100,7 @@ func (h *RewriteHandler) DeleteProject(c *gin.Context) {
 }
 
 // StartAnalysis POST /rewrite/projects/:id/analyze
+// Returns 202 Accepted with task_id; poll GET /api/v1/tasks/:task_id for progress.
 func (h *RewriteHandler) StartAnalysis(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -109,14 +110,17 @@ func (h *RewriteHandler) StartAnalysis(c *gin.Context) {
 	if _, ok := h.getProjectForTenant(c, uint(id)); !ok {
 		return
 	}
-	if err := h.rewriteSvc.StartAnalysis(c.Request.Context(), uint(id)); err != nil {
+	tenantID := c.GetUint("tenant_id")
+	taskID, err := h.rewriteSvc.StartAnalysis(tenantID, uint(id))
+	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	respondOK(c, gin.H{"message": "analysis started"})
+	respondAccepted(c, taskID, "文学分析任务已提交")
 }
 
 // StartRewriting POST /rewrite/projects/:id/rewrite
+// Returns 202 Accepted with task_id; poll GET /api/v1/tasks/:task_id for progress.
 func (h *RewriteHandler) StartRewriting(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -126,11 +130,13 @@ func (h *RewriteHandler) StartRewriting(c *gin.Context) {
 	if _, ok := h.getProjectForTenant(c, uint(id)); !ok {
 		return
 	}
-	if err := h.rewriteSvc.StartRewriting(c.Request.Context(), uint(id)); err != nil {
+	tenantID := c.GetUint("tenant_id")
+	taskID, err := h.rewriteSvc.StartRewriting(tenantID, uint(id))
+	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	respondOK(c, gin.H{"message": "rewriting started"})
+	respondAccepted(c, taskID, "章节改写任务已提交")
 }
 
 // GetAnalysis GET /rewrite/projects/:id/analysis

@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
 
@@ -14,6 +15,7 @@ type PlatformHandler struct {
 	novelService   *service.NovelService
 	videoService   *service.VideoService
 	publishService *service.PlatformPublishService
+	chapterService *service.ChapterService
 }
 
 func NewPlatformHandler(novelSvc *service.NovelService, videoSvc *service.VideoService, publishSvc *service.PlatformPublishService) *PlatformHandler {
@@ -24,16 +26,38 @@ func NewPlatformHandler(novelSvc *service.NovelService, videoSvc *service.VideoS
 	}
 }
 
+func (h *PlatformHandler) WithChapterService(svc *service.ChapterService) *PlatformHandler {
+	h.chapterService = svc
+	return h
+}
+
 // ─── 小说广场 ─────────────────────────────────────────────────────────────────
 
 // GetPlatformNovels 小说广场（公开，无需 JWT）
-// GET /api/v1/platform/novels?sort=latest|hot&q=关键词&page=1&page_size=12
+// GET /api/v1/platform/novels?sort=hot|latest|words|favorites&q=关键词&channel=female|male|publish
+//
+//	&genre=romance&word_min=300000&word_max=1000000&updated_days=7&is_completed=1
+//	&page=1&page_size=12
 func (h *PlatformHandler) GetPlatformNovels(c *gin.Context) {
 	p := parsePagination(c)
-	sort := c.DefaultQuery("sort", "hot")
-	q := c.Query("q")
+	wordMin, _ := strconv.Atoi(c.Query("word_min"))
+	wordMax, _ := strconv.Atoi(c.Query("word_max"))
+	updatedDays, _ := strconv.Atoi(c.Query("updated_days"))
 
-	novels, total, err := h.novelService.ListPublicNovels(sort, q, p.Page, p.PageSize)
+	f := repository.NovelPublicFilter{
+		Sort:        c.DefaultQuery("sort", "hot"),
+		Q:           c.Query("q"),
+		Channel:     c.Query("channel"),
+		Genre:       c.Query("genre"),
+		WordMin:     wordMin,
+		WordMax:     wordMax,
+		UpdatedDays: updatedDays,
+		IsCompleted: c.Query("is_completed"),
+		Page:        p.Page,
+		PageSize:    p.PageSize,
+	}
+
+	novels, total, err := h.novelService.ListPublicNovels(f)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to list novels")
 		return
@@ -45,6 +69,19 @@ func (h *PlatformHandler) GetPlatformNovels(c *gin.Context) {
 		"page_size":  p.PageSize,
 		"total_page": (total + int64(p.PageSize) - 1) / int64(p.PageSize),
 	})
+}
+
+// GetNovelRanking 小说排行榜（公开，无需 JWT）
+// GET /api/v1/platform/novels/ranking?type=hot|new|completed|favorites|updated&gender=male|female
+func (h *PlatformHandler) GetNovelRanking(c *gin.Context) {
+	rankType := c.DefaultQuery("type", "hot")
+	gender := c.Query("gender")
+	novels, err := h.novelService.GetNovelRanking(rankType, gender)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to get ranking")
+		return
+	}
+	respondOK(c, gin.H{"items": novels, "total": len(novels)})
 }
 
 // GetPlatformNovel 获取公开小说详情（可选 JWT：已登录则附带 is_liked）
@@ -127,6 +164,29 @@ func (h *PlatformHandler) ListNovelComments(c *gin.Context) {
 		"page_size":  size,
 		"total_page": (total + int64(size) - 1) / int64(size),
 	})
+}
+
+// GetNovelChapters 获取已发布小说的章节列表（公开）
+// GET /api/v1/platform/novels/:id/chapters
+func (h *PlatformHandler) GetNovelChapters(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, err := h.novelService.GetPublicNovel(uint(id)); err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found or not published")
+		return
+	}
+	if h.chapterService == nil {
+		respondErr(c, http.StatusServiceUnavailable, "chapter service not available")
+		return
+	}
+	chapters, err := h.chapterService.ListPublishedChapters(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to list chapters")
+		return
+	}
+	respondOK(c, gin.H{"items": chapters, "total": len(chapters)})
 }
 
 // AddNovelComment 发表评论（需 JWT）
