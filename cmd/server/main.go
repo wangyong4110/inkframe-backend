@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -793,26 +794,34 @@ func seedAIModels(db *gorm.DB) {
 		}
 
 		var prov model.ModelProvider
-		result := db.Where("name = ? AND tenant_id = 0", p.name).FirstOrCreate(&prov, model.ModelProvider{
-			Name:           p.name,
-			DisplayName:    p.displayName,
-			Type:           p.provType,
-			APIEndpoint:    p.endpoint,
-			NeedsSecretKey: p.needsSecretKey,
-			StaticModels:   staticModelsJSON,
-			TenantID:       0,
-			IsActive:       true,
-		})
-		if result.Error != nil {
-			// Duplicate key means the record already exists (race or prior run); just fetch it.
-			if strings.Contains(result.Error.Error(), "1062") || strings.Contains(result.Error.Error(), "Duplicate entry") {
-				if err := db.Where("name = ? AND tenant_id = 0", p.name).First(&prov).Error; err != nil {
-					logger.Printf("seedAIModels: provider %q: fetch after conflict: %v", p.name, err)
+		// 先查询，避免 FirstOrCreate 触发 GORM 错误日志（1062 duplicate key）
+		if err := db.Where("name = ? AND tenant_id = 0", p.name).First(&prov).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				logger.Printf("seedAIModels: provider %q: lookup: %v", p.name, err)
+				continue
+			}
+			// 不存在则创建
+			prov = model.ModelProvider{
+				Name:           p.name,
+				DisplayName:    p.displayName,
+				Type:           p.provType,
+				APIEndpoint:    p.endpoint,
+				NeedsSecretKey: p.needsSecretKey,
+				StaticModels:   staticModelsJSON,
+				TenantID:       0,
+				IsActive:       true,
+			}
+			if err2 := db.Create(&prov).Error; err2 != nil {
+				// 并发创建时可能仍触发 1062，此时 fetch 已有记录
+				if strings.Contains(err2.Error(), "1062") || strings.Contains(err2.Error(), "Duplicate entry") {
+					if err3 := db.Where("name = ? AND tenant_id = 0", p.name).First(&prov).Error; err3 != nil {
+						logger.Printf("seedAIModels: provider %q: fetch after race: %v", p.name, err3)
+						continue
+					}
+				} else {
+					logger.Printf("seedAIModels: provider %q: create: %v", p.name, err2)
 					continue
 				}
-			} else {
-				logger.Printf("seedAIModels: provider %q: %v", p.name, result.Error)
-				continue
 			}
 		}
 		// 同步元数据字段（幂等更新，确保已有记录也能获得新字段值）
@@ -856,7 +865,35 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-10-v5"
+const schemaVersion = "2026-05-10-v6"
+
+// ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）
+func ensureCriticalColumns(db *gorm.DB) {
+	type colAdd struct{ table, col, def string }
+	additions := []colAdd{
+		// ink_novels 广场社交字段（2026-05-10 新增）
+		{"ink_novels", "view_count", "INT NOT NULL DEFAULT 0"},
+		{"ink_novels", "like_count", "INT NOT NULL DEFAULT 0"},
+		{"ink_novels", "comment_count", "INT NOT NULL DEFAULT 0"},
+		{"ink_novels", "hot_score", "DOUBLE NOT NULL DEFAULT 0"},
+		{"ink_novels", "is_published", "TINYINT(1) NOT NULL DEFAULT 0"},
+		{"ink_novels", "published_at", "DATETIME(3) NULL"},
+		{"ink_novels", "visibility", "VARCHAR(20) NOT NULL DEFAULT 'private'"},
+		{"ink_novels", "plaza_tags", "TEXT NULL"},
+	}
+	for _, a := range additions {
+		var cnt int64
+		db.Raw("SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?",
+			a.table, a.col).Scan(&cnt)
+		if cnt == 0 {
+			if err := db.Exec("ALTER TABLE " + a.table + " ADD COLUMN " + a.col + " " + a.def).Error; err != nil {
+				logger.Printf("ensureCriticalColumns: failed to add %s.%s: %v", a.table, a.col, err)
+			} else {
+				logger.Printf("ensureCriticalColumns: added %s.%s", a.table, a.col)
+			}
+		}
+	}
+}
 
 // autoMigrate 自动迁移（带版本跳过优化）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -870,6 +907,9 @@ func autoMigrate(db *gorm.DB) error {
 	)`).Error; err != nil {
 		return err
 	}
+
+	// 无条件补全关键列（防止版本跳过导致列缺失）
+	ensureCriticalColumns(db)
 
 	// 读取当前已迁移版本
 	var storedVer string
