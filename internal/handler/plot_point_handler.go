@@ -110,6 +110,15 @@ func (h *PlotPointHandler) Update(c *gin.Context) {
 	if !ok {
 		return
 	}
+	existing, err := h.svc.Get(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "plot point not found")
+		return
+	}
+	if existing.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
 	var req model.UpdatePlotPointRequest
 	if !bindJSON(c, &req) {
 		return
@@ -126,6 +135,15 @@ func (h *PlotPointHandler) Update(c *gin.Context) {
 func (h *PlotPointHandler) MarkResolved(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+	existing, err := h.svc.Get(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "plot point not found")
+		return
+	}
+	if existing.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
 	var body struct {
@@ -146,6 +164,15 @@ func (h *PlotPointHandler) MarkResolved(c *gin.Context) {
 func (h *PlotPointHandler) Delete(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+	existing, err := h.svc.Get(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "plot point not found")
+		return
+	}
+	if existing.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
 	if err := h.svc.Delete(uint(id)); err != nil {

@@ -43,6 +43,11 @@ func (s *PlotPointService) ListByNovelPaged(novelID uint, ppType string, onlyUnr
 	return s.repo.ListByNovelPaged(novelID, ppType, onlyUnresolved, page, pageSize)
 }
 
+// Get 根据 ID 获取剧情点
+func (s *PlotPointService) Get(id uint) (*model.PlotPoint, error) {
+	return s.repo.GetByID(id)
+}
+
 // Create 手动创建剧情点
 func (s *PlotPointService) Create(pp *model.PlotPoint) error {
 	return s.repo.Create(pp)

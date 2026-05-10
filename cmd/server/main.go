@@ -219,6 +219,9 @@ func main() {
 		}
 	}()
 
+	// 后台定时任务：每 30 分钟清理超时的分片上传会话（防内存泄漏）
+	go handler.CleanupChunkStore()
+
 	// 14. 等待中断信号
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -1731,7 +1734,8 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			WithFrontendURL(services.FrontendURL),
 		ImportHandler: handler.NewImportHandler(services.NovelImportService, services.NovelToVideoService).
 			SetAnalysisService(services.NovelAnalysisService).
-			WithTaskService(services.TaskService),
+			WithTaskService(services.TaskService).
+			WithNovelService(services.NovelService),
 		WorldviewHandler:   handler.NewWorldviewHandler(services.WorldviewService),
 		TenantHandler:      handler.NewTenantHandler(services.TenantService),
 		ItemHandler:        handler.NewItemHandler(services.ItemService, services.ChapterService).WithStorage(storageSvc).WithTaskService(services.TaskService).WithNovelService(services.NovelService),

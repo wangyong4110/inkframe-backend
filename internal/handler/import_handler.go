@@ -26,8 +26,27 @@ type chunkSession struct {
 	Format      string
 	NovelID     uint
 	TmpDir      string
+	CreatedAt   time.Time
 	mu          sync.Mutex
 	received    map[int]bool
+}
+
+// CleanupChunkStore 清理超过 2 小时未完成的分片上传会话（防内存泄漏）。
+// 应在 main.go 启动后台 goroutine 定期调用。
+func CleanupChunkStore() {
+	ticker := time.NewTicker(30 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		cutoff := time.Now().Add(-2 * time.Hour)
+		chunkStore.Range(func(k, v any) bool {
+			sess := v.(*chunkSession)
+			if sess.CreatedAt.Before(cutoff) {
+				chunkStore.Delete(k)
+				os.RemoveAll(sess.TmpDir) //nolint:errcheck
+			}
+			return true
+		})
+	}
 }
 
 // chunkStore 全局分片会话存储
@@ -39,6 +58,7 @@ type ImportHandler struct {
 	novelToVideoService *service.NovelToVideoService
 	analysisService     *service.NovelAnalysisService
 	taskSvc             *service.TaskService
+	novelSvc            *service.NovelService
 }
 
 func NewImportHandler(
@@ -49,6 +69,25 @@ func NewImportHandler(
 		importService:       importService,
 		novelToVideoService: novelToVideoService,
 	}
+}
+
+// WithNovelService 注入小说服务（用于校验小说归属租户）
+func (h *ImportHandler) WithNovelService(svc *service.NovelService) *ImportHandler {
+	h.novelSvc = svc
+	return h
+}
+
+// checkNovelTenant 校验小说归属当前租户。返回 false 时已写入错误响应。
+func (h *ImportHandler) checkNovelTenant(c *gin.Context, novelID uint) bool {
+	if h.novelSvc == nil {
+		return true
+	}
+	novel, err := h.novelSvc.GetNovel(novelID)
+	if err != nil || novel.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return false
+	}
+	return true
 }
 
 // SetAnalysisService 注入分析服务
@@ -445,6 +484,7 @@ func (h *ImportHandler) InitChunkedUpload(c *gin.Context) {
 		Format:      body.Format,
 		NovelID:     body.NovelID,
 		TmpDir:      tmpDir,
+		CreatedAt:   time.Now(),
 		received:    make(map[int]bool),
 	}
 	chunkStore.Store(uploadID, sess)
@@ -612,6 +652,9 @@ func (h *ImportHandler) GetCrawlStatus(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if !h.checkNovelTenant(c, uint(novelID)) {
+		return
+	}
 	progress, err := h.importService.GetCrawlProgress(uint(novelID))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
@@ -629,6 +672,9 @@ func (h *ImportHandler) GetCrawlStatus(c *gin.Context) {
 func (h *ImportHandler) ResumeCrawl(c *gin.Context) {
 	novelID, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+	if !h.checkNovelTenant(c, uint(novelID)) {
 		return
 	}
 	tenantID := getTenantID(c)

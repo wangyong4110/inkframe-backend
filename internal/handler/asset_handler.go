@@ -372,6 +372,16 @@ func (h *AssetHandler) RemoveTag(c *gin.Context) {
 	respondOK(c, nil)
 }
 
+// POST /assets/:id/auto-tag
+func (h *AssetHandler) TriggerAutoTag(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err := h.svc.TriggerAutoTag(uint(id), callerID(c)); err != nil {
+		respondErr(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"message": "auto-tag triggered"})
+}
+
 // ─── Public Library Interactions ──────────────────────────────────────────────
 
 // POST /assets/:id/like

@@ -44,6 +44,10 @@ func (h *SceneAnchorHandler) GetSceneAnchor(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "scene anchor not found")
 		return
 	}
+	if anchor.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
 	respondOK(c, anchor)
 }
 
@@ -85,6 +89,15 @@ func (h *SceneAnchorHandler) UpdateSceneAnchor(c *gin.Context) {
 	if !ok {
 		return
 	}
+	existing, err := h.svc.Get(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "scene anchor not found")
+		return
+	}
+	if existing.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
 	var req service.UpdateSceneAnchorReq
 	if !bindJSON(c, &req) {
 		return
@@ -101,6 +114,15 @@ func (h *SceneAnchorHandler) UpdateSceneAnchor(c *gin.Context) {
 func (h *SceneAnchorHandler) DeleteSceneAnchor(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+	existing, err := h.svc.Get(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "scene anchor not found")
+		return
+	}
+	if existing.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
 	if err := h.svc.Delete(uint(id)); err != nil {
@@ -157,6 +179,15 @@ func (h *SceneAnchorHandler) LockRefImage(c *gin.Context) {
 	if !ok {
 		return
 	}
+	existing, err := h.svc.Get(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "scene anchor not found")
+		return
+	}
+	if existing.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
 	var body struct {
 		ImageURL string `json:"image_url" binding:"required"`
 		ShotID   *uint  `json:"shot_id"`
@@ -177,6 +208,15 @@ func (h *SceneAnchorHandler) GenerateRefImage(c *gin.Context) {
 	if !ok {
 		return
 	}
+	existing, err := h.svc.Get(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "scene anchor not found")
+		return
+	}
+	if existing.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
 	var body struct {
 		Provider string `json:"provider"`
 	}
@@ -194,6 +234,15 @@ func (h *SceneAnchorHandler) GenerateRefImage(c *gin.Context) {
 func (h *SceneAnchorHandler) GetConsistencyLogs(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+	anchor, err := h.svc.Get(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "scene anchor not found")
+		return
+	}
+	if anchor.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
 	logs, err := h.consistencySvc.GetLogsByAnchorID(uint(id))

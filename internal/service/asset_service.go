@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -33,6 +34,7 @@ type AssetService struct {
 	quotaRepo      *repository.AssetStorageQuotaRepository
 	storageSvc     storage.Service
 	taskSvc        *TaskService
+	aiSvc          *AIService
 }
 
 func NewAssetService(
@@ -641,10 +643,92 @@ func (s *AssetService) ListCrawlJobs(page, size int) ([]*model.CrawlJob, int64, 
 	return s.crawlRepo.List(page, size)
 }
 
-// ─── Asset Processing Pipeline (stub) ────────────────────────────────────────
+// ─── Asset Processing Pipeline ───────────────────────────────────────────────
 
-func (s *AssetService) processNewAsset(_ context.Context, _ *model.Asset) error {
-	// Full pipeline in asset_process_service.go; stub here
+func (s *AssetService) processNewAsset(ctx context.Context, asset *model.Asset) error {
+	if s.aiSvc == nil {
+		return nil
+	}
+	return s.autoTagAsset(ctx, asset)
+}
+
+// autoTagResult holds the structured tag output from the AI.
+type autoTagResult struct {
+	Style   []string `json:"style"`
+	Mood    []string `json:"mood"`
+	Subject []string `json:"subject"`
+	Color   []string `json:"color"`
+	Angle   []string `json:"angle"`
+	Genre   []string `json:"genre"`
+	Custom  []string `json:"custom"`
+}
+
+// autoTagAsset calls the AI to generate tags for the asset and persists them.
+func (s *AssetService) autoTagAsset(ctx context.Context, asset *model.Asset) error {
+	_ = ctx
+	var rawJSON string
+	var err error
+
+	if asset.Type == "image" && asset.StorageURL != "" {
+		prompt := loadPromptTemplate("asset_auto_tag.tmpl")
+		rawJSON, err = s.aiSvc.GenerateWithVision(prompt, []string{asset.StorageURL})
+	} else {
+		// Non-image: text-based tag generation from title + type
+		prompt := fmt.Sprintf(
+			"请为以下素材生成描述标签，以JSON格式返回{\"custom\":[\"标签1\",\"标签2\",\"标签3\"]}，最多5个标签，简短中文：类型=%s，名称=%s，子类型=%s",
+			asset.Type, asset.Title, asset.SubType,
+		)
+		rawJSON, err = s.aiSvc.Generate(0, "asset_tag", prompt)
+	}
+	if err != nil {
+		return nil // non-fatal: AI unavailable, skip tagging
+	}
+
+	return s.saveAutoTags(asset.ID, rawJSON)
+}
+
+// saveAutoTags parses the AI JSON response and persists tags to the database.
+func (s *AssetService) saveAutoTags(assetID uint, rawJSON string) error {
+	cleaned := extractJSON(strings.TrimSpace(rawJSON))
+	var result autoTagResult
+	if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
+		return nil // non-fatal: malformed JSON from AI
+	}
+
+	categoryTags := map[string][]string{
+		"style": result.Style, "mood": result.Mood, "subject": result.Subject,
+		"color": result.Color, "angle": result.Angle, "genre": result.Genre,
+		"custom": result.Custom,
+	}
+	for category, names := range categoryTags {
+		for _, name := range names {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			tag, err := s.tagRepo.FindOrCreate(name, category)
+			if err != nil {
+				continue
+			}
+			_ = s.tagRepo.AddToAsset(assetID, tag.ID, "ai", 0.9)
+			_ = s.tagRepo.IncrUseCount(tag.ID)
+		}
+	}
+	return nil
+}
+
+// TriggerAutoTag re-runs AI tagging on demand (for owners).
+func (s *AssetService) TriggerAutoTag(assetID, callerID uint) error {
+	a, err := s.assetRepo.GetByID(assetID)
+	if err != nil || a.CreatorID != callerID {
+		return errors.New("not found or permission denied")
+	}
+	if s.aiSvc == nil {
+		return errors.New("AI service not available")
+	}
+	go func() {
+		_ = s.autoTagAsset(context.Background(), a)
+	}()
 	return nil
 }
 

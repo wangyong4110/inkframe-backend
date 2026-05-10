@@ -560,6 +560,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			// Tags on asset
 			v1.POST("/assets/:id/tags", ah.AddTags)
 			v1.DELETE("/assets/:id/tags/:tag_id", ah.RemoveTag)
+			v1.POST("/assets/:id/auto-tag", ah.TriggerAutoTag)
 
 			// Public interactions
 			v1.POST("/assets/:id/like", ah.ToggleLike)

@@ -5,6 +5,7 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
 
@@ -16,6 +17,20 @@ type RewriteHandler struct {
 // NewRewriteHandler creates a new RewriteHandler
 func NewRewriteHandler(rewriteSvc *service.RewriteService) *RewriteHandler {
 	return &RewriteHandler{rewriteSvc: rewriteSvc}
+}
+
+// getProjectForTenant 提取租户鉴权公共逻辑。返回 false 时已写入错误响应。
+func (h *RewriteHandler) getProjectForTenant(c *gin.Context, id uint) (*model.RewriteProject, bool) {
+	project, err := h.rewriteSvc.GetProject(id)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, err.Error())
+		return nil, false
+	}
+	if project.TenantID != c.GetUint("tenant_id") {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return nil, false
+	}
+	return project, true
 }
 
 // ListProjects GET /rewrite/projects
@@ -60,9 +75,8 @@ func (h *RewriteHandler) GetProject(c *gin.Context) {
 		respondBadRequest(c, "invalid id")
 		return
 	}
-	project, err := h.rewriteSvc.GetProject(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusNotFound, err.Error())
+	project, ok := h.getProjectForTenant(c, uint(id))
+	if !ok {
 		return
 	}
 	respondOK(c, project)
@@ -73,6 +87,9 @@ func (h *RewriteHandler) DeleteProject(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
 		respondBadRequest(c, "invalid id")
+		return
+	}
+	if _, ok := h.getProjectForTenant(c, uint(id)); !ok {
 		return
 	}
 	if err := h.rewriteSvc.DeleteProject(uint(id)); err != nil {
@@ -89,6 +106,9 @@ func (h *RewriteHandler) StartAnalysis(c *gin.Context) {
 		respondBadRequest(c, "invalid id")
 		return
 	}
+	if _, ok := h.getProjectForTenant(c, uint(id)); !ok {
+		return
+	}
 	if err := h.rewriteSvc.StartAnalysis(c.Request.Context(), uint(id)); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -103,6 +123,9 @@ func (h *RewriteHandler) StartRewriting(c *gin.Context) {
 		respondBadRequest(c, "invalid id")
 		return
 	}
+	if _, ok := h.getProjectForTenant(c, uint(id)); !ok {
+		return
+	}
 	if err := h.rewriteSvc.StartRewriting(c.Request.Context(), uint(id)); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -112,7 +135,14 @@ func (h *RewriteHandler) StartRewriting(c *gin.Context) {
 
 // GetAnalysis GET /rewrite/projects/:id/analysis
 func (h *RewriteHandler) GetAnalysis(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		respondBadRequest(c, "invalid id")
+		return
+	}
+	if _, ok := h.getProjectForTenant(c, uint(id)); !ok {
+		return
+	}
 	analysis, err := h.rewriteSvc.GetAnalysis(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, err.Error())
@@ -123,7 +153,14 @@ func (h *RewriteHandler) GetAnalysis(c *gin.Context) {
 
 // GetBible GET /rewrite/projects/:id/bible
 func (h *RewriteHandler) GetBible(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		respondBadRequest(c, "invalid id")
+		return
+	}
+	if _, ok := h.getProjectForTenant(c, uint(id)); !ok {
+		return
+	}
 	bible, err := h.rewriteSvc.GetBible(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, err.Error())
@@ -134,7 +171,14 @@ func (h *RewriteHandler) GetBible(c *gin.Context) {
 
 // ListChapterTasks GET /rewrite/projects/:id/chapters
 func (h *RewriteHandler) ListChapterTasks(c *gin.Context) {
-	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		respondBadRequest(c, "invalid id")
+		return
+	}
+	if _, ok := h.getProjectForTenant(c, uint(id)); !ok {
+		return
+	}
 	tasks, err := h.rewriteSvc.ListChapterTasks(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
