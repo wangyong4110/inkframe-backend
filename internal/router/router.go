@@ -30,6 +30,7 @@ type Config struct {
 	SceneAnchorHandler *handler.SceneAnchorHandler
 	SystemHandler      *handler.SystemHandler
 	FsHandler          *handler.FsHandler
+	RewriteHandler     *handler.RewriteHandler
 }
 
 // SetupRouter 配置路由
@@ -322,6 +323,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			// BGM 背景音乐
 			videos.GET("/:id/bgm/segments", cfg.VideoHandler.ListBGMSegments)
 			videos.GET("/:id/bgm/search", cfg.VideoHandler.JamendoSearchBGM)
+			videos.PUT("/:id/bgm/segments/:seg_id", cfg.VideoHandler.UpdateBGMSegment)
 			videos.PATCH("/:id/bgm/segments/:seg_id/track", cfg.VideoHandler.ApplyBGMTrack)
 			videos.PATCH("/:id/bgm/segments/:seg_id/disabled", cfg.VideoHandler.ToggleBGMSegment)
 			videos.POST("/:id/bgm/analyze", cfg.VideoHandler.AnalyzeBGMSegments)
@@ -349,6 +351,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.POST("/:id/stitch", cfg.VideoHandler.StitchVideoHandler)
 			videos.GET("/:id/download", cfg.VideoHandler.DownloadVideo)
 			videos.GET("/:id/export/:format", cfg.VideoHandler.Export)
+			videos.POST("/:id/subtitles/export", cfg.VideoHandler.ExportSubtitles)
 			// 分镜绑定场景锚点
 			if cfg.SceneAnchorHandler != nil {
 				videos.PUT("/:id/shots/:shot_id/anchor", cfg.SceneAnchorHandler.SetShotAnchor)
@@ -483,6 +486,24 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		// 本地文件系统浏览（本地部署工具专用）
 		if cfg.FsHandler != nil {
 			v1.GET("/fs/browse", cfg.FsHandler.Browse)
+		}
+
+		// 改写项目
+		if cfg.RewriteHandler != nil {
+			rewrite := v1.Group("/rewrite")
+			{
+				rewrite.GET("/projects", cfg.RewriteHandler.ListProjects)
+				rewrite.POST("/projects", cfg.RewriteHandler.CreateProject)
+				rewrite.GET("/projects/:id", cfg.RewriteHandler.GetProject)
+				rewrite.DELETE("/projects/:id", cfg.RewriteHandler.DeleteProject)
+				rewrite.POST("/projects/:id/analyze", cfg.RewriteHandler.StartAnalysis)
+				rewrite.POST("/projects/:id/rewrite", cfg.RewriteHandler.StartRewriting)
+				rewrite.GET("/projects/:id/analysis", cfg.RewriteHandler.GetAnalysis)
+				rewrite.GET("/projects/:id/bible", cfg.RewriteHandler.GetBible)
+				rewrite.GET("/projects/:id/chapters", cfg.RewriteHandler.ListChapterTasks)
+				rewrite.GET("/projects/:id/chapters/:task_id", cfg.RewriteHandler.GetChapterTask)
+				rewrite.POST("/projects/:id/chapters/:task_id/approve", cfg.RewriteHandler.ApproveChapter)
+			}
 		}
 	}
 

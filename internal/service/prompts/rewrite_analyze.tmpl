@@ -1,0 +1,43 @@
+你是一位专业的文学分析师。请对以下小说内容进行深度文学分析，提取其文学指纹。
+
+小说标题：{{.Title}}
+章节内容（样本）：
+{{.Content}}
+
+请输出JSON格式的分析结果：
+{
+  "voice_fingerprint": {
+    "narrator_style": "第三人称全知视角，语气平静客观",
+    "sentence_patterns": ["短句为主，节奏明快", "对话穿插频繁"],
+    "distinctive_phrases": ["特征性短语1", "特征性短语2"],
+    "rhythm": "fast|medium|slow"
+  },
+  "scene_architecture": {
+    "typical_structure": "开场悬念→行动→冲突→解决",
+    "avg_scene_length": 500,
+    "transition_style": "直接切换|渐进过渡",
+    "description_ratio": 0.3
+  },
+  "character_psychology": {
+    "archetypes": ["英雄", "导师", "反派"],
+    "relationship_topology": "师徒→对立→和解",
+    "emotional_baseline": "压抑克制"
+  },
+  "theme_core": {
+    "primary_theme": "成长与自我救赎",
+    "motifs": ["剑", "血", "孤独"],
+    "symbolic_elements": ["特定地名或物品的象征意义"]
+  },
+  "world_logic": {
+    "power_system": "修炼体系描述",
+    "world_rules": ["规则1", "规则2"],
+    "unique_geography": ["特定地名"]
+  },
+  "high_risk_markers": {
+    "unique_phrases": ["独特的标志性短语"],
+    "plot_sequences": ["标志性情节序列"],
+    "signature_elements": ["作者标志性元素"]
+  }
+}
+
+只输出JSON，不要其他解释。

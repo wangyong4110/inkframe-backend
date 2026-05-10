@@ -24,6 +24,7 @@ import (
 	"image/jpeg"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
@@ -101,17 +102,65 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 		}
 	}
 
+	// 查询当前视频的调色配置（可选）
+	colorGrade := ""
+	var colorContrast, colorSaturation float64
+	colorSaturation = 1.0
+	var filmGrain, vignette, chromaticAberration bool
+	if shot.VideoID > 0 && s.videoRepo != nil && s.novelRepo != nil {
+		if video, vErr := s.videoRepo.GetByID(shot.VideoID); vErr == nil && video.NovelID > 0 {
+			if novel, nErr := s.novelRepo.GetByID(video.NovelID); nErr == nil {
+				vc := novel.VideoConf()
+				if vc.ColorGrade != "" && vc.ColorGrade != "none" {
+					colorGrade = vc.ColorGrade
+					colorContrast = vc.ContrastLevel
+					colorSaturation = vc.Saturation
+					if colorSaturation == 0 {
+						colorSaturation = 1.0
+					}
+				}
+				filmGrain = vc.FilmGrain
+				vignette = vc.Vignette
+				chromaticAberration = vc.ChromaticAberration
+			}
+		}
+	}
+
 	// Encode JPEG sequence → MP4.  This is the fast step: no per-frame pixel math
 	// in WASM, just JPEG decode + x264 entropy coding.
 	outPath := fmt.Sprintf("%s/inkframe-slideshow-%d-%d.mp4", inkframeTempDir(), shot.ID, time.Now().UnixNano())
 	inputPattern := filepath.Join(frameDir, "frame%05d.jpg")
+
+	// 构建 vf 滤镜链（基础 + 可选调色 + 镜头特效）
+	var vfFilters []string
+	if gradeFilter := buildColorGradeFilter(colorGrade, colorContrast, colorSaturation); gradeFilter != "" {
+		vfFilters = append(vfFilters, gradeFilter)
+	}
+
+	// 胶片颗粒（Film Grain）
+	if filmGrain {
+		vfFilters = append(vfFilters, "noise=alls=8:allf=t+u")
+	}
+
+	// 镜头暗角（Vignette）
+	if vignette {
+		vfFilters = append(vfFilters, "vignette=PI/4.5:eval=frame")
+	}
+
+	// 色差（Chromatic Aberration）— 通过 colorbalance 模拟 RGB 偏移
+	if chromaticAberration {
+		vfFilters = append(vfFilters, "colorbalance=rs=0.03:gs=0:bs=-0.03:rm=0:gm=0:bm=0:rh=0:gh=0:bh=0")
+	}
+
+	vfFilters = append(vfFilters, "format=yuv420p")
+	vfFilter := strings.Join(vfFilters, ",")
 
 	_, encErr := runFFmpegCtx(ctx,
 		"-y",
 		"-framerate", fmt.Sprintf("%d", fps),
 		"-i", inputPattern,
 		"-c:v", "libx264",
-		"-pix_fmt", "yuv420p",
+		"-vf", vfFilter,
 		"-r", fmt.Sprintf("%d", fps),
 		"-threads", "1",
 		outPath,
@@ -122,15 +171,99 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 	return outPath, nil
 }
 
+// buildColorGradeFilter 根据调色方案返回 FFmpeg 滤镜字符串（追加到 vf chain）。
+// 空字符串表示无需调色（透传）。
+func buildColorGradeFilter(grade string, contrast, saturation float64) string {
+	var parts []string
+
+	// 预设调色方案
+	switch grade {
+	case "cinematic":
+		// 模拟 ARRI LogC→Rec709 的专业影调：蓝色高光 + 橙色阴影 + 降低整体饱和度
+		if contrast == 0 {
+			contrast = 0.15
+		}
+		if saturation == 1.0 {
+			saturation = 0.85
+		}
+		parts = append(parts,
+			"curves=r='0/0 0.3/0.28 0.7/0.72 1/0.97':g='0/0 0.3/0.30 0.7/0.70 1/0.97':b='0/0 0.3/0.32 0.7/0.74 1/1.02'",
+			fmt.Sprintf("eq=contrast=%.2f:saturation=%.2f", 1.0+contrast, saturation),
+		)
+		// 已处理 eq，跳过后续 eq 逻辑
+		return strings.Join(parts, ",")
+	case "warm":
+		parts = append(parts, "colorchannelmixer=rr=1.05:gg=1.0:bb=0.92")
+	case "cool":
+		parts = append(parts, "colorchannelmixer=rr=0.92:gg=0.98:bb=1.08")
+	case "teal_orange":
+		// 好莱坞商业片经典：青色阴影 + 橙色肤色
+		if saturation == 1.0 {
+			saturation = 1.15
+		}
+		parts = append(parts,
+			"curves=r='0/0.05 0.3/0.35 0.6/0.65 1/1.0':g='0/0 0.3/0.27 0.7/0.70 1/0.95':b='0/0.1 0.3/0.35 0.6/0.55 1/0.85'",
+			fmt.Sprintf("eq=saturation=%.2f", saturation),
+		)
+		// 已处理 eq，跳过后续 eq 逻辑
+		return strings.Join(parts, ",")
+	case "vintage":
+		parts = append(parts, "colorchannelmixer=rr=1.02:gg=0.95:bb=0.88")
+		if saturation == 1.0 {
+			saturation = 0.8
+		}
+	case "noir":
+		// 黑白
+		parts = append(parts, "hue=s=0")
+		if contrast == 0 {
+			contrast = 0.2
+		}
+	default:
+		// "none" 或未知方案：无调色
+		return ""
+	}
+
+	// 对比度/饱和度调整（eq 滤镜）
+	var eqParts []string
+	if contrast != 0 {
+		c := 1.0 + contrast // 0.15 → 1.15
+		eqParts = append(eqParts, fmt.Sprintf("contrast=%.2f", c))
+	}
+	if saturation != 1.0 && grade != "noir" {
+		eqParts = append(eqParts, fmt.Sprintf("saturation=%.2f", saturation))
+	}
+	if len(eqParts) > 0 {
+		parts = append(parts, "eq="+strings.Join(eqParts, ":"))
+	}
+
+	return strings.Join(parts, ",")
+}
+
 // kbCrop returns the crop rectangle in source-image coordinates for the given
 // camera type and time t ∈ [0, duration] (seconds).
 //
 // Zoom factors mirror the FFmpeg zoompan expressions in generateKenBurnsClip:
 //   - "zoom":    z increments by 0.002/frame from 1.0 → 1.5, centred
 //   - "pan":     fixed z=1.3, horizontal pan left→right, centred vertically
+//   - "tilt":    fixed z=1.3, vertical pan top→bottom, centred horizontally
 //   - default:   z increments by 0.0008/frame from 1.0 → 1.2, centred (Ken Burns classic)
 func kbCrop(cameraType string, srcW, srcH int, t, duration float64) (x, y, w, h int) {
 	const fps = 30
+
+	// Compute linear progress [0, 1] then apply smoothstep easing (cubic 3t²-2t³).
+	// This eliminates the mechanical constant-speed feel of linear motion.
+	var progress float64
+	if duration > 0 {
+		progress = t / duration
+		if progress < 0 {
+			progress = 0
+		}
+		if progress > 1 {
+			progress = 1
+		}
+	}
+	// Smoothstep easing: 消除线性运动的机械感
+	progress = progress * progress * (3 - 2*progress)
 
 	var zoom float64
 	switch cameraType {
@@ -147,18 +280,24 @@ func kbCrop(cameraType string, srcW, srcH int, t, duration float64) (x, y, w, h 
 		y = (srcH - h) / 2
 
 	case "pan":
-		// Fixed zoom=1.3, pan from left to right.
+		// Fixed zoom=1.3, pan from left to right with smoothstep easing.
 		const panZoom = 1.3
 		w = int(float64(srcW) / panZoom)
 		h = int(float64(srcH) / panZoom)
 		xStart := (srcW - w) / 2
 		xEnd := xStart + (srcW - w) // matches FFmpeg: iw/2-(iw/zoom/2) + (iw - iw/zoom)
-		if duration > 0 {
-			x = xStart + int(float64(xEnd-xStart)*t/duration)
-		} else {
-			x = xStart
-		}
+		x = xStart + int(float64(xEnd-xStart)*progress)
 		y = (srcH - h) / 2
+
+	case "tilt":
+		// 垂直平移（从上到下）with smoothstep easing.
+		const tiltZoom = 1.3
+		w = int(float64(srcW) / tiltZoom)
+		h = int(float64(srcH) / tiltZoom)
+		x = (srcW - w) / 2
+		yStart := 0
+		yEnd := srcH - h
+		y = yStart + int(float64(yEnd-yStart)*progress)
 
 	default:
 		// Gentle Ken Burns: z increments 0.0008/frame, caps at 1.2.

@@ -507,6 +507,50 @@ func (h *VideoHandler) ApplyBGMTrack(c *gin.Context) {
 	respondOK(c, gin.H{"seg_id": segID})
 }
 
+// UpdateBGMSegment PUT /videos/:id/bgm/segments/:seg_id
+// 更新 BGM 分段通用字段（volume、ducking_enabled、ducking_level 等）。
+func (h *VideoHandler) UpdateBGMSegment(c *gin.Context) {
+	if h.bgmRepo == nil {
+		respondErr(c, http.StatusNotImplemented, "BGM repository not configured")
+		return
+	}
+	segID, ok := parseID(c, "seg_id")
+	if !ok {
+		return
+	}
+	seg, err := h.bgmRepo.GetByID(uint(segID))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "BGM segment not found")
+		return
+	}
+	var req struct {
+		Volume         *float64 `json:"volume"`
+		DuckingEnabled *bool    `json:"ducking_enabled"`
+		DuckingLevel   *float64 `json:"ducking_level"`
+		Disabled       *bool    `json:"disabled"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	if req.Volume != nil {
+		seg.Volume = *req.Volume
+	}
+	if req.DuckingEnabled != nil {
+		seg.DuckingEnabled = *req.DuckingEnabled
+	}
+	if req.DuckingLevel != nil {
+		seg.DuckingLevel = *req.DuckingLevel
+	}
+	if req.Disabled != nil {
+		seg.Disabled = *req.Disabled
+	}
+	if err := h.bgmRepo.Update(seg); err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to update BGM segment")
+		return
+	}
+	respondOK(c, seg)
+}
+
 // ToggleBGMSegment PATCH /videos/:id/bgm/segments/:seg_id/disabled
 func (h *VideoHandler) ToggleBGMSegment(c *gin.Context) {
 	if h.bgmRepo == nil {

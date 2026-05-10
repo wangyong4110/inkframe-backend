@@ -64,6 +64,11 @@ func (s *SceneAnchorService) Get(id uint) (*model.SceneAnchor, error) {
 	return s.repo.GetByID(id)
 }
 
+// GetByID 通过 ID 获取场景锚点（与 Get 等价，供内部服务调用）
+func (s *SceneAnchorService) GetByID(id uint) (*model.SceneAnchor, error) {
+	return s.repo.GetByID(id)
+}
+
 func (s *SceneAnchorService) ListByNovel(novelID uint) ([]*model.SceneAnchor, error) {
 	return s.repo.ListByNovel(novelID)
 }

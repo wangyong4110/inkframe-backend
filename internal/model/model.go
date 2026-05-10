@@ -205,6 +205,23 @@ type NovelVideoConfig struct {
 	SubtitleColor    string `json:"subtitle_color" gorm:"size:20;default:'#FFFFFF'"`
 	SubtitleBgStyle  string `json:"subtitle_bg_style" gorm:"size:20;default:'shadow'"`
 
+	// 色彩调色配置（Color Grading）
+	ColorGrade    string  `json:"color_grade" gorm:"size:50;default:'none'"`          // none/cinematic/warm/cool/teal_orange/vintage/noir
+	ContrastLevel float64 `json:"contrast_level" gorm:"type:decimal(3,2);default:0"`   // -1.0 to 1.0, 0=no change
+	Saturation    float64 `json:"saturation" gorm:"type:decimal(3,2);default:1.0"`     // 0.0=grayscale, 1.0=normal, 2.0=vivid
+
+	// 镜头特效（Lens FX）
+	FilmGrain           bool `json:"film_grain" gorm:"default:false"`            // 胶片颗粒
+	Vignette            bool `json:"vignette" gorm:"default:false"`              // 镜头暗角
+	ChromaticAberration bool `json:"chromatic_aberration" gorm:"default:false"` // 色差效果
+
+	// Kling 专业模式
+	KlingProForAction bool `json:"kling_pro_for_action" gorm:"default:true"` // 动作/史诗镜头自动使用 pro 模式
+
+	// 字幕样式
+	SubtitleStyle string `json:"subtitle_style" gorm:"size:20;default:'none'"`                  // none/basic/cinematic/anime
+	SubtitleFont  string `json:"subtitle_font" gorm:"size:100;default:'Noto Sans CJK SC'"` // 字体名称
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -845,10 +862,10 @@ func (Video) TableName() string {
 // StoryboardShot 分镜
 type StoryboardShot struct {
 	ID        uint     `json:"id" gorm:"primaryKey"`
-	VideoID   uint     `json:"video_id" gorm:"index;index:idx_shot_video_status,priority:1;not null"`
+	VideoID   uint     `json:"video_id" gorm:"index;index:idx_shot_video_status,priority:1;index:idx_shot_video_no,priority:1;not null"`
 	Video     *Video   `json:"video,omitempty" gorm:"foreignKey:VideoID"`
 	UUID      string   `json:"uuid" gorm:"uniqueIndex;size:36"`
-	ShotNo    int      `json:"shot_no" gorm:"not null"`
+	ShotNo    int      `json:"shot_no" gorm:"not null;index:idx_shot_video_no,priority:2"`
 	ChapterID *uint    `json:"chapter_id,omitempty" gorm:"index"`
 	Chapter   *Chapter `json:"chapter,omitempty" gorm:"foreignKey:ChapterID"`
 
@@ -878,6 +895,7 @@ type StoryboardShot struct {
 	// AI生成
 	Prompt         string `json:"prompt" gorm:"type:text"`
 	NegativePrompt string `json:"negative_prompt" gorm:"type:text"`
+	MotionPrompt   string `json:"motion_prompt" gorm:"type:text"` // 视频运镜描述（供Kling/Seedance使用）
 	Frames         string `json:"frames" gorm:"type:text"` // JSON数组
 
 	// 状态
@@ -985,6 +1003,10 @@ type VideoBGMSegment struct {
 	TrackArtist string  `json:"track_artist" gorm:"size:255"`
 	Source      string  `json:"source" gorm:"size:20"`   // jamendo/pixabay/local/none
 	Disabled    bool    `json:"disabled" gorm:"default:false"` // 禁用后不参与合成/预览
+
+	// 人声闪避（Audio Ducking）
+	DuckingEnabled bool    `json:"ducking_enabled" gorm:"default:true"`                    // true=检测到人声时自动压低BGM
+	DuckingLevel   float64 `json:"ducking_level" gorm:"type:decimal(3,2);default:0.15"`   // 闪避后的目标音量（0.1-0.5，默认0.15）
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -1689,6 +1711,11 @@ type SceneAnchor struct {
 	ParentAnchorID   *uint      `json:"parent_anchor_id,omitempty" gorm:"index"`
 	Variant          string     `json:"variant" gorm:"size:50"` // day/night/winter/battle
 
+	// 光照锁定（确保同一场景跨镜头光照一致）
+	LightingKeywords string `json:"lighting_keywords" gorm:"size:500"` // 逗号分隔关键词，如 "golden hour, warm backlight, soft shadows"
+	TimeOfDay        string `json:"time_of_day" gorm:"size:50"`        // morning/afternoon/evening/night
+	Weather          string `json:"weather" gorm:"size:50"`            // clear/cloudy/rainy/foggy/snowy
+
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
@@ -1724,3 +1751,74 @@ type SystemSetting struct {
 }
 
 func (SystemSetting) TableName() string { return "ink_system_setting" }
+
+// RewriteProject represents a novel rewriting project
+type RewriteProject struct {
+	ID            uint      `json:"id" gorm:"primaryKey"`
+	TenantID      uint      `json:"tenant_id" gorm:"index"`
+	NovelID       uint      `json:"novel_id" gorm:"index"`
+	Name          string    `json:"name" gorm:"size:200"`
+	Level         int       `json:"level" gorm:"default:1"` // 1=Literary Refinement, 2=Structural Reconstruction, 3=Spirit Distillation
+	Status        string    `json:"status" gorm:"size:20;default:'pending'"` // pending, analyzing, bible_ready, rewriting, reviewing, completed, failed
+	Progress      int       `json:"progress" gorm:"default:0"` // 0-100
+	TotalChapters int       `json:"total_chapters" gorm:"default:0"`
+	DoneChapters  int       `json:"done_chapters" gorm:"default:0"`
+	ErrorMsg      string    `json:"error_msg" gorm:"size:500"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+func (RewriteProject) TableName() string { return "ink_rewrite_project" }
+
+// LiteraryAnalysis holds the AI analysis of the original novel
+type LiteraryAnalysis struct {
+	ID                uint      `json:"id" gorm:"primaryKey"`
+	ProjectID         uint      `json:"project_id" gorm:"uniqueIndex"`
+	VoiceFingerprint  string    `json:"voice_fingerprint" gorm:"type:text"` // JSON: narrator_style, sentence_patterns, distinctive_phrases
+	SceneArchitecture string    `json:"scene_architecture" gorm:"type:text"` // JSON: typical_scene_structure, pacing, transitions
+	CharacterPsych    string    `json:"character_psych" gorm:"type:text"` // JSON: character archetypes, relationship topology
+	ThemeCore         string    `json:"theme_core" gorm:"type:text"` // JSON: themes, motifs, symbols
+	WorldLogic        string    `json:"world_logic" gorm:"type:text"` // JSON: world rules, power systems, geography
+	HighRiskMarkers   string    `json:"high_risk_markers" gorm:"type:text"` // JSON: unique phrases, plot sequences, signature elements
+	CreatedAt         time.Time `json:"created_at"`
+}
+
+func (LiteraryAnalysis) TableName() string { return "ink_literary_analysis" }
+
+// RewriteBible is the strategic rewriting guide
+type RewriteBible struct {
+	ID             uint      `json:"id" gorm:"primaryKey"`
+	ProjectID      uint      `json:"project_id" gorm:"uniqueIndex"`
+	NewWorldName   string    `json:"new_world_name" gorm:"size:200"`
+	NewCharNames   string    `json:"new_char_names" gorm:"type:text"` // JSON: map[oldName]newName
+	PlotTransform  string    `json:"plot_transform" gorm:"type:text"` // JSON: transformation rules for main plot beats
+	VoiceStrategy  string    `json:"voice_strategy" gorm:"type:text"` // JSON: narrator voice guidelines
+	StyleGuide     string    `json:"style_guide" gorm:"type:text"` // JSON: sentence structure, vocabulary register, pacing rules
+	ForbiddenElems string    `json:"forbidden_elems" gorm:"type:text"` // JSON: elements to avoid (high-risk markers)
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+func (RewriteBible) TableName() string { return "ink_rewrite_bible" }
+
+// ChapterRewriteTask tracks rewriting progress per chapter
+type ChapterRewriteTask struct {
+	ID               uint      `json:"id" gorm:"primaryKey"`
+	ProjectID        uint      `json:"project_id" gorm:"index"`
+	ChapterID        uint      `json:"chapter_id" gorm:"index"`
+	ChapterNo        int       `json:"chapter_no"`
+	Status           string    `json:"status" gorm:"size:20;default:'pending'"` // pending, rewriting, reviewing, completed, failed
+	OriginalContent  string    `json:"original_content" gorm:"type:longtext"`
+	RewrittenContent string    `json:"rewritten_content" gorm:"type:longtext"`
+	SimilarityScore  float64   `json:"similarity_score" gorm:"default:0"` // 0-1, lower is better (more different)
+	LexicalSim       float64   `json:"lexical_sim" gorm:"default:0"`
+	SemanticSim      float64   `json:"semantic_sim" gorm:"default:0"`
+	StructuralSim    float64   `json:"structural_sim" gorm:"default:0"`
+	Passed           bool      `json:"passed" gorm:"default:false"`
+	RetryCount       int       `json:"retry_count" gorm:"default:0"`
+	ErrorMsg         string    `json:"error_msg" gorm:"size:500"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+func (ChapterRewriteTask) TableName() string { return "ink_chapter_rewrite_task" }

@@ -99,14 +99,14 @@ func (r *NovelRepository) List(page, pageSize int, filters map[string]interface{
 		query = query.Where("genre = ?", genre)
 	}
 
-	// 统计总数
-	if err := query.Count(&total).Error; err != nil {
+	// 统计总数 (clone to avoid state contamination)
+	if err := query.Session(&gorm.Session{}).Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 
-	// 分页查询
+	// 分页查询（列表视图不需要 Worldview 完整数据，novel.WorldviewID 字段已足够）
 	offset := (page - 1) * pageSize
-	if err := query.Preload("Worldview").
+	if err := query.
 		Order("updated_at DESC").
 		Offset(offset).
 		Limit(pageSize).
@@ -124,7 +124,9 @@ func (r *NovelRepository) Update(novel *model.Novel) error {
 	}
 	if novel.VideoConfig != nil {
 		novel.VideoConfig.NovelID = novel.ID
-		r.db.Save(novel.VideoConfig) //nolint:errcheck
+		if err := r.db.Save(novel.VideoConfig).Error; err != nil {
+			logger.Printf("[NovelRepository] Save VideoConfig: %v", err)
+		}
 	}
 	r.invalidateCache(novel.ID)
 	return nil
@@ -371,6 +373,22 @@ func (r *ChapterRepository) ListByNovel(novelID uint) ([]*model.Chapter, error) 
 	return chapters, nil
 }
 
+// ListByNovelPaged 分页获取章节列表（列元数据，不含正文大字段，不走缓存）。
+func (r *ChapterRepository) ListByNovelPaged(novelID uint, page, pageSize int) ([]*model.Chapter, int64, error) {
+	var chapters []*model.Chapter
+	var total int64
+
+	base := r.db.Model(&model.Chapter{}).Where("novel_id = ?", novelID)
+	if err := base.Session(&gorm.Session{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	offset := (page - 1) * pageSize
+	if err := base.Select(chapterListColumns).Order("chapter_no ASC").Offset(offset).Limit(pageSize).Find(&chapters).Error; err != nil {
+		return nil, 0, err
+	}
+	return chapters, total, nil
+}
+
 // ListByNovelWithContent 获取小说的所有章节，包含 content 和 summary 字段。
 // 用于 AI 提取任务（角色/物品/技能等），不走缓存。
 func (r *ChapterRepository) ListByNovelWithContent(novelID uint) ([]*model.Chapter, error) {
@@ -474,6 +492,15 @@ func (r *CharacterRepository) ListByNovel(novelID uint) ([]*model.Character, err
 		return nil, err
 	}
 	return characters, nil
+}
+
+// ListByIDs 批量获取指定ID的角色（单次 IN 查询，避免 N+1）
+func (r *CharacterRepository) ListByIDs(ids []uint) ([]*model.Character, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var chars []*model.Character
+	return chars, r.db.Where("id IN ?", ids).Find(&chars).Error
 }
 
 // Update 更新角色
@@ -601,30 +628,19 @@ func NewAIModelRepository(db *gorm.DB) *AIModelRepository {
 	return &AIModelRepository{db: db}
 }
 
-// GetAvailableByTaskType 获取任务可用的模型
+// GetAvailableByTaskType 获取任务可用的模型。
+// suitable_tasks 列存储 JSON 数组字符串（如 `["chapter","image"]`）；使用 LIKE 在 DB 层过滤，
+// 兼容 MySQL 和 SQLite，无需全量加载后在内存中遍历。
 func (r *AIModelRepository) GetAvailableByTaskType(taskType string) ([]*model.AIModel, error) {
 	var models []*model.AIModel
+	// LIKE pattern matches `"taskType"` as a JSON array element substring.
+	pattern := `%"` + taskType + `"%`
 	if err := r.db.Preload("Provider").
-		Where("is_active = ? AND is_available = ?", true, true).
+		Where("is_active = ? AND is_available = ? AND suitable_tasks LIKE ?", true, true, pattern).
 		Find(&models).Error; err != nil {
 		return nil, err
 	}
-
-	// 过滤适合该任务的模型
-	var suitableModels []*model.AIModel
-	for _, m := range models {
-		var tasks []string
-		if json.Unmarshal([]byte(m.SuitableTasks), &tasks) == nil {
-			for _, t := range tasks {
-				if t == taskType {
-					suitableModels = append(suitableModels, m)
-					break
-				}
-			}
-		}
-	}
-
-	return suitableModels, nil
+	return models, nil
 }
 
 // GetByID 根据ID获取模型
@@ -705,29 +721,32 @@ func isForeignKeyError(err error) bool {
 // GetUsageStats 获取使用统计
 func (r *AIModelRepository) GetUsageStats(modelID uint, startTime, endTime time.Time) (*UsageStats, error) {
 	var stats UsageStats
-
-	// 查询使用记录
-	var logs []model.ModelUsageLog
-	if err := r.db.Where("model_id = ? AND created_at BETWEEN ? AND ?", modelID, startTime, endTime).Find(&logs).Error; err != nil {
+	type aggRow struct {
+		TotalRequests int
+		SuccessCount  int
+		TotalTokens   int
+		TotalCost     float64
+		TotalLatency  float64
+	}
+	var row aggRow
+	err := r.db.Model(&model.ModelUsageLog{}).
+		Select("COUNT(*) AS total_requests, SUM(CASE WHEN success THEN 1 ELSE 0 END) AS success_count, "+
+			"COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(cost), 0) AS total_cost, "+
+			"COALESCE(SUM(latency), 0) AS total_latency").
+		Where("model_id = ? AND created_at BETWEEN ? AND ?", modelID, startTime, endTime).
+		Scan(&row).Error
+	if err != nil {
 		return nil, err
 	}
-
-	// 统计
-	stats.TotalRequests = len(logs)
-	for _, log := range logs {
-		stats.TotalTokens += log.TotalTokens
-		stats.TotalCost += log.Cost
-		stats.TotalLatency += log.Latency
-		if log.Success {
-			stats.SuccessCount++
-		}
-	}
-
+	stats.TotalRequests = row.TotalRequests
+	stats.SuccessCount = row.SuccessCount
+	stats.TotalTokens = row.TotalTokens
+	stats.TotalCost = row.TotalCost
+	stats.TotalLatency = row.TotalLatency
 	if stats.TotalRequests > 0 {
 		stats.AverageLatency = stats.TotalLatency / float64(stats.TotalRequests)
 		stats.SuccessRate = float64(stats.SuccessCount) / float64(stats.TotalRequests)
 	}
-
 	return &stats, nil
 }
 
@@ -789,7 +808,9 @@ func (r *KnowledgeBaseRepository) Create(kb *model.KnowledgeBase) error {
 // Search 搜索知识
 func (r *KnowledgeBaseRepository) Search(keyword string, limit int) ([]*model.KnowledgeBase, error) {
 	var results []*model.KnowledgeBase
-	if err := r.db.Where("title LIKE ? OR content LIKE ?", "%"+keyword+"%", "%"+keyword+"%").
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(keyword)
+	pattern := "%" + escaped + "%"
+	if err := r.db.Where("title LIKE ? OR content LIKE ?", pattern, pattern).
 		Limit(limit).
 		Find(&results).Error; err != nil {
 		return nil, err
@@ -864,11 +885,14 @@ func (r *VideoRepository) GetByIDAndTenant(id, tenantID uint) (*model.Video, err
 }
 
 // List 获取视频列表
-func (r *VideoRepository) List(novelID *uint, chapterID *uint, page, pageSize int) ([]*model.Video, int64, error) {
+func (r *VideoRepository) List(novelID *uint, chapterID *uint, tenantID uint, page, pageSize int) ([]*model.Video, int64, error) {
 	var videos []*model.Video
 	var total int64
 
-	query := r.db.Model(&model.Video{})
+	query := r.db.Model(&model.Video{}).Session(&gorm.Session{})
+	if tenantID > 0 {
+		query = query.Where("tenant_id = ? OR tenant_id = 0", tenantID)
+	}
 	if novelID != nil {
 		query = query.Where("novel_id = ?", *novelID)
 	}
@@ -958,6 +982,18 @@ func (r *StoryboardRepository) Update(shot *model.StoryboardShot) error {
 // UpdateFields 按 map 部分更新分镜字段（空字符串也会写入，支持清空字段）
 func (r *StoryboardRepository) UpdateFields(id uint, fields map[string]interface{}) error {
 	return r.db.Model(&model.StoryboardShot{}).Where("id = ?", id).Updates(fields).Error
+}
+
+// BatchGetByIDs 批量获取分镜（单次 IN 查询）
+func (r *StoryboardRepository) BatchGetByIDs(ids []uint) ([]*model.StoryboardShot, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	var shots []*model.StoryboardShot
+	if err := r.db.Where("id IN ?", ids).Find(&shots).Error; err != nil {
+		return nil, err
+	}
+	return shots, nil
 }
 
 // UpdateSFXTags 仅更新分镜的 sfx_tags 字段，不修改 sfx_url 和 sfx_volume
@@ -1126,6 +1162,15 @@ func (r *CharacterStateSnapshotRepository) GetByChapterAndCharacter(chapterID, c
 	return &s, nil
 }
 
+// ListByChapterID 批量获取指定章节的所有角色快照（一次查询，避免 N+1）
+func (r *CharacterStateSnapshotRepository) ListByChapterID(chapterID uint) ([]*model.CharacterStateSnapshot, error) {
+	var snapshots []*model.CharacterStateSnapshot
+	if err := r.db.Where("chapter_id = ?", chapterID).Find(&snapshots).Error; err != nil {
+		return nil, err
+	}
+	return snapshots, nil
+}
+
 // GetLatestForCharacter 获取某角色最新的快照（可选：只找 chapterID 之前创建的）
 func (r *CharacterStateSnapshotRepository) GetLatestForCharacter(characterID uint) (*model.CharacterStateSnapshot, error) {
 	var s model.CharacterStateSnapshot
@@ -1183,16 +1228,17 @@ func (r *ChapterVersionRepository) List(chapterID uint) ([]*model.ChapterVersion
 
 // GetNextVersionNo 获取下一个版本号
 func (r *ChapterVersionRepository) GetNextVersionNo(chapterID uint) (int, error) {
-	var version model.ChapterVersion
-	if err := r.db.Where("chapter_id = ?", chapterID).
-		Order("version_no DESC").
-		First(&version).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return 1, nil
-		}
+	var maxNo *int
+	if err := r.db.Model(&model.ChapterVersion{}).
+		Select("MAX(version_no)").
+		Where("chapter_id = ?", chapterID).
+		Scan(&maxNo).Error; err != nil {
 		return 0, err
 	}
-	return version.VersionNo + 1, nil
+	if maxNo == nil {
+		return 1, nil
+	}
+	return *maxNo + 1, nil
 }
 
 // ============================================
@@ -1824,6 +1870,14 @@ func (r *VideoBGMSegmentRepository) BatchCreate(segs []*model.VideoBGMSegment) e
 }
 
 // Update 更新BGM分段（用于更新URL/Volume等）
+func (r *VideoBGMSegmentRepository) GetByID(id uint) (*model.VideoBGMSegment, error) {
+	var seg model.VideoBGMSegment
+	if err := r.db.First(&seg, id).Error; err != nil {
+		return nil, err
+	}
+	return &seg, nil
+}
+
 func (r *VideoBGMSegmentRepository) Update(seg *model.VideoBGMSegment) error {
 	return r.db.Save(seg).Error
 }
@@ -1853,6 +1907,150 @@ func (r *VideoBGMSegmentRepository) ReplaceForVideo(videoID uint, segs []*model.
 		return tx.Unscoped().Where("video_id = ? AND id NOT IN (?)",
 			videoID, collectIDs(segs)).Delete(&model.VideoBGMSegment{}).Error
 	})
+}
+
+// RewriteProjectRepository handles rewrite project data
+type RewriteProjectRepository struct {
+	db    *gorm.DB
+	redis *redis.Client
+}
+
+func NewRewriteProjectRepository(db *gorm.DB, redis *redis.Client) *RewriteProjectRepository {
+	return &RewriteProjectRepository{db: db, redis: redis}
+}
+
+func (r *RewriteProjectRepository) Create(p *model.RewriteProject) error {
+	return r.db.Create(p).Error
+}
+
+func (r *RewriteProjectRepository) GetByID(id uint) (*model.RewriteProject, error) {
+	var p model.RewriteProject
+	if err := r.db.First(&p, id).Error; err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+func (r *RewriteProjectRepository) ListByTenant(tenantID uint, page, pageSize int) ([]*model.RewriteProject, int64, error) {
+	var projects []*model.RewriteProject
+	var total int64
+	offset := (page - 1) * pageSize
+	r.db.Model(&model.RewriteProject{}).Where("tenant_id = ?", tenantID).Count(&total)
+	err := r.db.Where("tenant_id = ?", tenantID).Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&projects).Error
+	return projects, total, err
+}
+
+func (r *RewriteProjectRepository) UpdateStatus(id uint, status, errMsg string) error {
+	return r.db.Model(&model.RewriteProject{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"status": status, "error_msg": errMsg,
+	}).Error
+}
+
+func (r *RewriteProjectRepository) UpdateProgress(id uint, done, total int) error {
+	progress := 0
+	if total > 0 {
+		progress = done * 100 / total
+	}
+	return r.db.Model(&model.RewriteProject{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"done_chapters": done, "progress": progress,
+	}).Error
+}
+
+func (r *RewriteProjectRepository) UpdateTotalChapters(id uint, total int) error {
+	return r.db.Model(&model.RewriteProject{}).Where("id = ?", id).Update("total_chapters", total).Error
+}
+
+func (r *RewriteProjectRepository) Delete(id uint) error {
+	return r.db.Delete(&model.RewriteProject{}, id).Error
+}
+
+// LiteraryAnalysisRepository handles literary analysis data
+type LiteraryAnalysisRepository struct {
+	db *gorm.DB
+}
+
+func NewLiteraryAnalysisRepository(db *gorm.DB) *LiteraryAnalysisRepository {
+	return &LiteraryAnalysisRepository{db: db}
+}
+
+func (r *LiteraryAnalysisRepository) Create(a *model.LiteraryAnalysis) error {
+	return r.db.Create(a).Error
+}
+
+func (r *LiteraryAnalysisRepository) GetByProjectID(projectID uint) (*model.LiteraryAnalysis, error) {
+	var a model.LiteraryAnalysis
+	if err := r.db.Where("project_id = ?", projectID).First(&a).Error; err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+// RewriteBibleRepository handles rewrite bible data
+type RewriteBibleRepository struct {
+	db *gorm.DB
+}
+
+func NewRewriteBibleRepository(db *gorm.DB) *RewriteBibleRepository {
+	return &RewriteBibleRepository{db: db}
+}
+
+func (r *RewriteBibleRepository) Create(b *model.RewriteBible) error {
+	return r.db.Create(b).Error
+}
+
+func (r *RewriteBibleRepository) GetByProjectID(projectID uint) (*model.RewriteBible, error) {
+	var b model.RewriteBible
+	if err := r.db.Where("project_id = ?", projectID).First(&b).Error; err != nil {
+		return nil, err
+	}
+	return &b, nil
+}
+
+func (r *RewriteBibleRepository) Update(b *model.RewriteBible) error {
+	return r.db.Save(b).Error
+}
+
+// ChapterRewriteTaskRepository handles chapter rewrite task data
+type ChapterRewriteTaskRepository struct {
+	db *gorm.DB
+}
+
+func NewChapterRewriteTaskRepository(db *gorm.DB) *ChapterRewriteTaskRepository {
+	return &ChapterRewriteTaskRepository{db: db}
+}
+
+func (r *ChapterRewriteTaskRepository) Create(t *model.ChapterRewriteTask) error {
+	return r.db.Create(t).Error
+}
+
+func (r *ChapterRewriteTaskRepository) GetByID(id uint) (*model.ChapterRewriteTask, error) {
+	var t model.ChapterRewriteTask
+	if err := r.db.First(&t, id).Error; err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (r *ChapterRewriteTaskRepository) ListByProject(projectID uint) ([]*model.ChapterRewriteTask, error) {
+	var tasks []*model.ChapterRewriteTask
+	err := r.db.Where("project_id = ?", projectID).Order("chapter_no ASC").Find(&tasks).Error
+	return tasks, err
+}
+
+func (r *ChapterRewriteTaskRepository) UpdateStatus(id uint, status, errMsg string) error {
+	return r.db.Model(&model.ChapterRewriteTask{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"status": status, "error_msg": errMsg,
+	}).Error
+}
+
+func (r *ChapterRewriteTaskRepository) UpdateRewritten(id uint, content string, simScore float64, passed bool) error {
+	return r.db.Model(&model.ChapterRewriteTask{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"rewritten_content": content,
+		"lexical_sim":       simScore,
+		"similarity_score":  simScore,
+		"passed":            passed,
+		"status":            "completed",
+	}).Error
 }
 
 // collectIDs 提取记录 ID 列表；若空则返回 []uint{0}（避免 NOT IN 空集合语法错误）

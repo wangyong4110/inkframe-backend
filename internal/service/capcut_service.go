@@ -87,17 +87,28 @@ type ccTimeRange struct {
 }
 
 type ccSegment struct {
-	Clip            ccClip      `json:"clip"`
-	ID              string      `json:"id"`
-	KeyframeRefs    []string    `json:"keyframe_refs,omitempty"`
-	MaterialID      string      `json:"material_id"`
-	Reverse         bool        `json:"reverse"`
-	Speed           float64     `json:"speed"`
-	SourceTimerange ccTimeRange `json:"source_timerange"`
-	TargetTimerange ccTimeRange `json:"target_timerange"`
-	Type            string      `json:"type"`
-	Visible         bool        `json:"visible"`
-	Volume          float64     `json:"volume"`
+	Clip              ccClip      `json:"clip"`
+	ID                string      `json:"id"`
+	KeyframeRefs      []string    `json:"keyframe_refs,omitempty"`
+	ExtraMaterialRefs []string    `json:"extra_material_refs,omitempty"`
+	MaterialID        string      `json:"material_id"`
+	Reverse           bool        `json:"reverse"`
+	Speed             float64     `json:"speed"`
+	SourceTimerange   ccTimeRange `json:"source_timerange"`
+	TargetTimerange   ccTimeRange `json:"target_timerange"`
+	Type              string      `json:"type"`
+	Visible           bool        `json:"visible"`
+	Volume            float64     `json:"volume"`
+}
+
+// ccTransitionMaterial 转场特效素材
+type ccTransitionMaterial struct {
+	Category string `json:"category"` // "transition"
+	Duration int64  `json:"duration"` // microseconds (500000 = 0.5s)
+	Effect   string `json:"effect"`   // "dissolve" / "fade_to_black" / "fade_to_white" / "wipe_right" / "fade"
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Type     string `json:"type"` // "transition"
 }
 
 type ccTrack struct {
@@ -164,23 +175,23 @@ type ccTextMaterial struct {
 }
 
 type ccMaterials struct {
-	Audios             []ccAudioMaterial `json:"audios"`
-	Beats              []interface{}     `json:"beats"`
-	Canvases           []interface{}     `json:"canvases"`
-	Chromas            []interface{}     `json:"chromas"`
-	ColorCurves        []interface{}     `json:"color_curves"`
-	Filters            []interface{}     `json:"filters"`
-	GreenScreens       []interface{}     `json:"green_screens"`
-	Masks              []interface{}     `json:"masks"`
-	MaterialAnimations []interface{}     `json:"material_animations"`
-	Shapes             []interface{}     `json:"shapes"`
-	Speed              []interface{}     `json:"speed"`
-	Stickers           []interface{}     `json:"stickers"`
-	Texts              []ccTextMaterial  `json:"texts"`
-	Transitions        []interface{}     `json:"transitions"`
-	VideoEffects       []interface{}     `json:"video_effects"`
-	Videos             []ccVideoMaterial `json:"videos"`
-	VocalSeparations   []interface{}     `json:"vocal_separations"`
+	Audios             []ccAudioMaterial      `json:"audios"`
+	Beats              []interface{}          `json:"beats"`
+	Canvases           []interface{}          `json:"canvases"`
+	Chromas            []interface{}          `json:"chromas"`
+	ColorCurves        []interface{}          `json:"color_curves"`
+	Filters            []interface{}          `json:"filters"`
+	GreenScreens       []interface{}          `json:"green_screens"`
+	Masks              []interface{}          `json:"masks"`
+	MaterialAnimations []interface{}          `json:"material_animations"`
+	Shapes             []interface{}          `json:"shapes"`
+	Speed              []interface{}          `json:"speed"`
+	Stickers           []interface{}          `json:"stickers"`
+	Texts              []ccTextMaterial       `json:"texts"`
+	Transitions        []ccTransitionMaterial `json:"transitions"`
+	VideoEffects       []interface{}          `json:"video_effects"`
+	Videos             []ccVideoMaterial      `json:"videos"`
+	VocalSeparations   []interface{}          `json:"vocal_separations"`
 }
 
 type ccCanvasConfig struct {
@@ -369,6 +380,25 @@ func buildTextContent(text string, cfg subtitleConfig) string {
 	return string(b2)
 }
 
+// capCutTransitionEffect 将分镜 Transition 值映射到剪映转场效果名称。
+// 返回空字符串表示直切（无转场素材）。
+func capCutTransitionEffect(t string) string {
+	switch t {
+	case "fade", "fade-in", "fade-out":
+		return "fade"
+	case "dissolve":
+		return "dissolve"
+	case "dip-black":
+		return "fade_to_black"
+	case "dip-white":
+		return "fade_to_white"
+	case "wipe":
+		return "wipe_right"
+	default:
+		return "" // cut 及其他未知值 = 直切，无转场
+	}
+}
+
 // ExportCapCutDraft 导出剪映草稿 ZIP（含视频/图片、配音、字幕轨道）
 func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.StoryboardShot, novel *model.Novel) (*ExportResult, error) {
 	logger.Printf("[CapCutService] ExportCapCutDraft: videoID=%d title=%q shots=%d", video.ID, video.Title, len(shots))
@@ -409,6 +439,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 	var textMaterials []ccTextMaterial
 	var textSegments []ccSegment
+
+	var transitionMaterials []ccTransitionMaterial // 转场素材
 
 	// Bug2修复：按 shot_no 升序排列，确保视频/音频/字幕轨道顺序与分镜编号一致。
 	// 数据库返回顺序不保证有序，直接遍历会导致配音顺序与画面顺序错位。
@@ -488,6 +520,19 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				seg.KeyframeRefs = append(seg.KeyframeRefs, g.ID)
 			}
 			allKFGroups = append(allKFGroups, kfGroups...)
+		}
+		// 转场特效：非直切时创建转场素材并挂载到当前 segment
+		if effect := capCutTransitionEffect(shot.Transition); effect != "" {
+			transMatID := uuid.New().String()
+			transitionMaterials = append(transitionMaterials, ccTransitionMaterial{
+				Category: "transition",
+				Duration: 500000, // 0.5s
+				Effect:   effect,
+				ID:       transMatID,
+				Name:     effect,
+				Type:     "transition",
+			})
+			seg.ExtraMaterialRefs = append(seg.ExtraMaterialRefs, transMatID)
 		}
 		videoSegments = append(videoSegments, seg)
 
@@ -714,7 +759,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			Speed:              []interface{}{},
 			Stickers:           []interface{}{},
 			Texts:              textMaterials,
-			Transitions:        []interface{}{},
+			Transitions:        transitionMaterials,
 			VideoEffects:       []interface{}{},
 			Videos:             videoMaterials,
 			VocalSeparations:   []interface{}{},

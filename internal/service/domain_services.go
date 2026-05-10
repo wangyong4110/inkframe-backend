@@ -438,6 +438,11 @@ func (s *ChapterService) ListChapters(novelID uint) ([]*model.Chapter, error) {
 	return s.chapterRepo.ListByNovel(novelID)
 }
 
+// ListChaptersPaged returns a page of chapter metadata for a novel.
+func (s *ChapterService) ListChaptersPaged(novelID uint, page, pageSize int) ([]*model.Chapter, int64, error) {
+	return s.chapterRepo.ListByNovelPaged(novelID, page, pageSize)
+}
+
 // applyChapterUpdate patches non-zero request fields onto a chapter in place.
 func applyChapterUpdate(chapter *model.Chapter, req *model.UpdateChapterRequest) {
 	if req.Title != "" {

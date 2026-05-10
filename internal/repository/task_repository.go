@@ -80,3 +80,37 @@ func (r *TaskRepository) CancelActiveByEntity(entityType string, entityID uint, 
 			"error":  "已被新任务取代",
 		}).Error
 }
+
+// UpdateFields 仅更新指定字段（避免 GetByTaskID + Update 两次 DB 操作）
+func (r *TaskRepository) UpdateFields(taskID string, fields map[string]interface{}) error {
+	return r.db.Model(&model.AsyncTask{}).Where("task_id = ?", taskID).Updates(fields).Error
+}
+
+// CompleteIfNotCancelled atomically completes a task only if it's not already cancelled.
+// The resultJSON parameter must be the JSON-encoded result string (column name: result).
+func (r *TaskRepository) CompleteIfNotCancelled(taskID string, resultJSON string) error {
+	return r.db.Model(&model.AsyncTask{}).
+		Where("task_id = ? AND status != ?", taskID, "cancelled").
+		Updates(map[string]interface{}{
+			"status":   "completed",
+			"progress": 100,
+			"result":   resultJSON,
+		}).Error
+}
+
+// FailIfNotCancelled atomically fails a task only if it's not already cancelled.
+func (r *TaskRepository) FailIfNotCancelled(taskID string, errMsg string) error {
+	return r.db.Model(&model.AsyncTask{}).
+		Where("task_id = ? AND status != ?", taskID, "cancelled").
+		Updates(map[string]interface{}{
+			"status": "failed",
+			"error":  errMsg,
+		}).Error
+}
+
+// CancelIfActive cancels a task only if it's still pending or running.
+func (r *TaskRepository) CancelIfActive(taskID string) error {
+	return r.db.Model(&model.AsyncTask{}).
+		Where("task_id = ? AND status IN ?", taskID, []string{"pending", "running"}).
+		Update("status", "cancelled").Error
+}

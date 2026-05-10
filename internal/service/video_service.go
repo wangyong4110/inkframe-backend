@@ -75,6 +75,18 @@ func (s *VideoService) GetNovelByID(id uint) (*model.Novel, error) {
 	return s.novelRepo.GetByID(id)
 }
 
+// GetNovelVideoConfig 获取小说的视频配置（供 handler 层使用）
+func (s *VideoService) GetNovelVideoConfig(novelID uint) *model.NovelVideoConfig {
+	if s.novelRepo == nil {
+		return nil
+	}
+	novel, err := s.novelRepo.GetByID(novelID)
+	if err != nil || novel == nil {
+		return nil
+	}
+	return novel.VideoConfig
+}
+
 func (s *VideoService) WithSystemSettingRepo(r *repository.SystemSettingRepository) *VideoService {
 	s.systemSettingRepo = r
 	return s
@@ -214,7 +226,9 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		chapterID = chapterIDOverride[0]
 		// 同步更新 video 记录，保持一致性
 		video.ChapterID = chapterID
-		s.videoRepo.Update(video) //nolint:errcheck
+		if err := s.videoRepo.Update(video); err != nil {
+			logger.Printf("[VideoService] failed to update video chapterID: %v", err)
+		}
 	}
 
 	var content string
@@ -228,28 +242,40 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		return nil, fmt.Errorf("章节内容为空，请先在「写作」页面编写章节内容再生成分镜脚本")
 	}
 
-	// 获取租户 ID（供 getTenantProvider 查租户私有配置）
-	var tenantID uint
-	if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil {
-		tenantID = novel.TenantID
-	}
-
-	// 预取所有段落共用的静态数据，避免 N×3 次重复 DB 查询
+	// 并行预取角色、场景锚点、情节点（避免多次串行 DB 查询）
+	// tenantID 直接从已加载的 video 取，无需额外查小说。
+	tenantID := video.TenantID
 	var characters []*model.Character
-	if video.NovelID > 0 {
-		characters, _ = s.characterRepo.ListByNovel(video.NovelID)
-	}
 	var anchors []*model.SceneAnchor
-	if s.sceneAnchorSvc != nil && video.NovelID > 0 {
-		anchors, _ = s.sceneAnchorSvc.ListByNovel(video.NovelID)
-	}
 	var plotPoints []*model.PlotPoint
-	if s.plotPointRepo != nil {
-		if chapterID != nil {
-			plotPoints, _ = s.plotPointRepo.ListByChapter(*chapterID)
+	{
+		var wgPre sync.WaitGroup
+		novelID := video.NovelID
+		if novelID > 0 {
+			wgPre.Add(1)
+			go func() {
+				defer wgPre.Done()
+				characters, _ = s.characterRepo.ListByNovel(novelID)
+			}()
+			if s.sceneAnchorSvc != nil {
+				wgPre.Add(1)
+				go func() {
+					defer wgPre.Done()
+					anchors, _ = s.sceneAnchorSvc.ListByNovel(novelID)
+				}()
+			}
 		}
-		if len(plotPoints) == 0 && video.NovelID > 0 {
-			plotPoints, _ = s.plotPointRepo.ListByNovel(video.NovelID, "", true)
+		if s.plotPointRepo != nil && chapterID != nil {
+			wgPre.Add(1)
+			go func() {
+				defer wgPre.Done()
+				plotPoints, _ = s.plotPointRepo.ListByChapter(*chapterID)
+			}()
+		}
+		wgPre.Wait()
+		// 如果章节内无情节点，降级到小说级别
+		if s.plotPointRepo != nil && len(plotPoints) == 0 && novelID > 0 {
+			plotPoints, _ = s.plotPointRepo.ListByNovel(novelID, "", true)
 		}
 	}
 
@@ -282,11 +308,17 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	var wg sync.WaitGroup
 	var doneCount int32
 
+	genCtx := context.Background()
 	for segIdx, seg := range segments {
 		wg.Add(1)
 		go func(idx int, content string) {
 			defer wg.Done()
-			sem <- struct{}{}
+			select {
+			case <-genCtx.Done():
+				results[idx] = segResult{err: genCtx.Err()}
+				return
+			case sem <- struct{}{}:
+			}
 			defer func() { <-sem }()
 
 			segStart := time.Now()
@@ -534,6 +566,7 @@ func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, ch
 
 // charRuneOverlap 返回两个字符串的汉字级重叠比例（以较短串为分母）。
 // 用于模糊角色名匹配，如"萧炎"vs"炎少"（"炎"重叠 → 0.5，超过阈值即视为同一角色）。
+// 优化：对于 ≤8 个字符的短串（汉字人名典型情况），线性扫描比 map 分配更快。
 func charRuneOverlap(a, b string) float64 {
 	ra, rb := []rune(a), []rune(b)
 	if len(ra) == 0 || len(rb) == 0 {
@@ -543,14 +576,27 @@ func charRuneOverlap(a, b string) float64 {
 	if len(ra) > len(rb) {
 		shorter, longer = rb, ra
 	}
-	longerSet := make(map[rune]struct{}, len(longer))
-	for _, r := range longer {
-		longerSet[r] = struct{}{}
-	}
 	overlap := 0
-	for _, r := range shorter {
-		if _, ok := longerSet[r]; ok {
-			overlap++
+	if len(longer) > 8 {
+		// 长串：map 查找 O(n)，避免 O(n²) 线性扫描
+		longerSet := make(map[rune]struct{}, len(longer))
+		for _, r := range longer {
+			longerSet[r] = struct{}{}
+		}
+		for _, r := range shorter {
+			if _, ok := longerSet[r]; ok {
+				overlap++
+			}
+		}
+	} else {
+		// 短串（≤8 字符，汉字人名典型）：线性扫描避免 map 分配开销
+		for _, r := range shorter {
+			for _, s := range longer {
+				if r == s {
+					overlap++
+					break
+				}
+			}
 		}
 	}
 	return float64(overlap) / float64(len(shorter))
@@ -1028,6 +1074,9 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			}
 		}
 
+		cameraType := validCameraType(r.CameraType)
+		cameraAngle := validCameraAngle(r.CameraAngle)
+		shotSize := validShotSize(r.ShotSize)
 		shot := &model.StoryboardShot{
 			UUID:        uuid.New().String(),
 			VideoID:     videoID,
@@ -1036,10 +1085,16 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			Description: r.Description,
 			Narration:   r.Narration,
 			Prompt:      prompt,
+			MotionPrompt: buildMotionPrompt(&model.StoryboardShot{
+				CameraType:  cameraType,
+				CameraAngle: cameraAngle,
+				ShotSize:    shotSize,
+				Description: r.Description,
+			}),
 			Dialogue:    r.Dialogue, // 保留"角色名：台词"格式供TTS音色解析
-			CameraType:  validCameraType(r.CameraType),
-			CameraAngle: validCameraAngle(r.CameraAngle),
-			ShotSize:    validShotSize(r.ShotSize),
+			CameraType:  cameraType,
+			CameraAngle: cameraAngle,
+			ShotSize:    shotSize,
 			Duration:    duration,
 			Transition:  validTransition(r.Transition),
 			Characters:  charsJSON,
@@ -1054,11 +1109,128 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 
 // validTransition 验证过渡方式，无效时返回默认值 cut
 func validTransition(t string) string {
-	valid := map[string]bool{"cut": true, "fade": true, "dissolve": true, "wipe": true}
+	valid := map[string]bool{
+		"cut": true, "j-cut": true, "l-cut": true,
+		"fade": true, "dissolve": true, "dip-black": true, "dip-white": true,
+		"wipe": true, "push": true, "slide": true, "zoom": true,
+		"whip-pan": true, "spin": true, "flash": true, "glitch": true,
+		"blur": true, "morph": true,
+	}
 	if valid[t] {
 		return t
 	}
 	return "cut"
+}
+
+// buildMotionPrompt 根据分镜的摄像机设置和情绪基调，生成适合 Kling/Seedance 的运镜提示词。
+// 视频AI(image-to-video)需要描述运动/镜头的英文短语，而非静态画面描述。
+func buildMotionPrompt(shot *model.StoryboardShot) string {
+	parts := make([]string, 0, 6)
+
+	// 摄像机运动翻译
+	switch shot.CameraType {
+	case "pan":
+		parts = append(parts, "smooth camera pan")
+	case "zoom":
+		// 根据情绪决定推拉方向
+		if strings.Contains(shot.EmotionalTone, "紧张") || strings.Contains(shot.EmotionalTone, "压迫") || strings.Contains(shot.EmotionalTone, "危险") {
+			parts = append(parts, "dramatic zoom in")
+		} else {
+			parts = append(parts, "slow zoom out")
+		}
+	case "tracking":
+		parts = append(parts, "tracking shot following subject")
+	case "dolly":
+		parts = append(parts, "smooth dolly movement")
+	default: // static
+		parts = append(parts, "static locked-off shot, subtle breathing movement")
+	}
+
+	// 镜头角度
+	switch shot.CameraAngle {
+	case "low":
+		parts = append(parts, "low angle looking up")
+	case "high":
+		parts = append(parts, "high angle bird's eye view")
+	case "dutch":
+		parts = append(parts, "dutch angle tilted frame")
+	}
+
+	// 景别影响景深和焦距
+	switch shot.ShotSize {
+	case "extreme_close_up":
+		parts = append(parts, "extreme close-up, shallow depth of field, bokeh background")
+	case "close_up":
+		parts = append(parts, "close-up shot, shallow depth of field")
+	case "wide":
+		parts = append(parts, "wide establishing shot")
+	}
+
+	// 注入镜头焦距特征，提升视频生成中的光学真实感
+	switch shot.ShotSize {
+	case "extreme_close_up":
+		parts = append(parts, "macro photography, f/1.8 aperture, extreme bokeh, subject fills frame")
+	case "close_up":
+		parts = append(parts, "portrait photography, 85mm equivalent, f/2.8, soft background separation")
+	case "medium":
+		parts = append(parts, "50mm equivalent, f/5.6, natural perspective")
+	case "wide", "extreme_wide":
+		parts = append(parts, "wide angle, 24mm equivalent, deep focus, environmental storytelling")
+	}
+
+	// 情绪基调 → 运动节奏
+	tone := shot.EmotionalTone
+	switch {
+	case strings.Contains(tone, "紧张") || strings.Contains(tone, "战斗") || strings.Contains(tone, "危险"):
+		parts = append(parts, "fast dynamic motion, high energy")
+	case strings.Contains(tone, "悲") || strings.Contains(tone, "离别") || strings.Contains(tone, "伤"):
+		parts = append(parts, "slow melancholic movement, gentle sway")
+	case strings.Contains(tone, "浪漫") || strings.Contains(tone, "温情"):
+		parts = append(parts, "soft gentle movement, warm atmosphere")
+	case strings.Contains(tone, "史诗") || strings.Contains(tone, "宏大") || strings.Contains(tone, "壮观"):
+		parts = append(parts, "epic cinematic sweep")
+	default:
+		parts = append(parts, "natural fluid movement")
+	}
+
+	// 大气元素（根据情绪增加环境细节）
+	switch {
+	case strings.Contains(tone, "紧张") || strings.Contains(tone, "战斗") || strings.Contains(tone, "危险"):
+		parts = append(parts, "atmospheric smoke, dynamic lighting")
+	case strings.Contains(tone, "悲") || strings.Contains(tone, "离别"):
+		parts = append(parts, "soft diffused light, gentle lens flare")
+	case strings.Contains(tone, "史诗") || strings.Contains(tone, "宏大"):
+		parts = append(parts, "volumetric god rays, epic atmosphere, dust particles in light")
+	case strings.Contains(tone, "浪漫") || strings.Contains(tone, "温情"):
+		parts = append(parts, "warm golden hour light, soft bokeh, romantic haze")
+	}
+
+	// 添加简短的场景描述（前40字符）
+	if shot.Description != "" {
+		desc := shot.Description
+		runes := []rune(desc)
+		if len(runes) > 40 {
+			desc = string(runes[:40])
+		}
+		parts = append(parts, desc)
+	}
+
+	return strings.Join(parts, ", ")
+}
+
+// qualityTierImageParams 根据视频质量档位返回图片生成参数。
+// draft:   512px / 20步 / CFG5   — 快速预览，适合脚本确认阶段
+// preview: 1024px / 35步 / CFG7  — 默认，平衡质量与速度
+// final:   2048px / 50步 / CFG8.5 — 最高质量，正式输出
+func qualityTierImageParams(tier string) (width, steps int, cfgScale float64) {
+	switch tier {
+	case "draft":
+		return 512, 20, 5.0
+	case "final":
+		return 2048, 50, 8.5
+	default: // preview (default)
+		return 1024, 35, 7.0
+	}
 }
 
 // validCameraType 验证摄像机类型，无效时返回默认值 "static"。
@@ -1143,8 +1315,8 @@ func (s *VideoService) GetVideoByTenant(id, tenantID uint) (*model.Video, error)
 }
 
 // ListVideos 获取视频列表
-func (s *VideoService) ListVideos(novelId *uint, chapterID *uint, status string, page, pageSize int) ([]*model.Video, int, error) {
-	videos, total, err := s.videoRepo.List(novelId, chapterID, page, pageSize)
+func (s *VideoService) ListVideos(novelId *uint, chapterID *uint, status string, tenantID uint, page, pageSize int) ([]*model.Video, int, error) {
+	videos, total, err := s.videoRepo.List(novelId, chapterID, tenantID, page, pageSize)
 	return videos, int(total), err
 }
 
@@ -1678,7 +1850,9 @@ func (s *VideoService) GenerateSingleShot(videoID, shotID uint, provider ...stri
 	}
 
 	shot.Status = "generating"
-	s.storyboardRepo.Update(shot) //nolint:errcheck
+	if err := s.storyboardRepo.Update(shot); err != nil {
+		logger.Printf("[VideoService] failed to update shot status to generating: %v", err)
+	}
 	if video.Mode == "slideshow" {
 		return shot, s.GenerateSlideshowShotVideo(shot, aspectRatio)
 	}
@@ -1731,14 +1905,24 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 	}
 	logger.Printf("BatchGenerateShots: videoID=%d total=%d mode=%s provider=%s aspectRatio=%s", videoID, len(shotIDs), mode, effectiveProvider, aspectRatio)
 
+	// 批量预取所有分镜（单次 IN 查询，避免 N 次 GetByID 往返）
+	allShots, batchErr := s.storyboardRepo.BatchGetByIDs(shotIDs)
+	if batchErr != nil {
+		return nil, batchErr
+	}
+	shotMap := make(map[uint]*model.StoryboardShot, len(allShots))
+	for _, sh := range allShots {
+		shotMap[sh.ID] = sh
+	}
+
 	var queued []*model.StoryboardShot
 	sem := make(chan struct{}, maxConcurrentShots)
 	var wg sync.WaitGroup
 	total := len(shotIDs)
 	var done atomic.Int32
 	for _, sid := range shotIDs {
-		shot, err := s.storyboardRepo.GetByID(sid)
-		if err != nil || shot.VideoID != videoID {
+		shot, ok := shotMap[sid]
+		if !ok || shot.VideoID != videoID {
 			if progressFn != nil && total > 0 {
 				pct := int(done.Add(1)) * 99 / total
 				progressFn(pct)
@@ -1746,7 +1930,9 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 			continue
 		}
 		shot.Status = "generating"
-		s.storyboardRepo.Update(shot) //nolint:errcheck
+		if err := s.storyboardRepo.Update(shot); err != nil {
+			logger.Printf("[VideoService] BatchGenerateShots: failed to update shot %d status: %v", shot.ShotNo, err)
+		}
 		queued = append(queued, shot)
 		sem <- struct{}{}
 		wg.Add(1)
@@ -1782,11 +1968,13 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 				}
 				if genErr == nil {
 					// 图片就绪：立即标记 completed（progress=50）供前端展示
-					s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
+					if err := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
 						"status": "completed", "progress": 50,
-					}) //nolint:errcheck
+					}); err != nil {
+						logger.Printf("[VideoService] BatchGenerateShots: failed to update shot %d status: %v", sh.ShotNo, err)
+					}
 					// Ken Burns + OSS 在后台异步执行，完成后 progress=100
-					go s.generateClipAndUploadWithRetry(sh.ID, localImage, clipDur, aspectRatio)
+					go s.generateClipAndUploadWithRetry(context.Background(), sh.ID, localImage, clipDur, aspectRatio)
 					logger.Printf("BatchGenerateShots: shot %d image ready, clip async", sh.ShotNo)
 				} else {
 					logger.Printf("BatchGenerateShots: shot %d image failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
@@ -1831,6 +2019,17 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, pro
 	}
 
 	logger.Printf("BatchGenerateShotImages: videoID=%d total=%d aspectRatio=%s", videoID, len(shotIDs), aspectRatio)
+
+	// 批量预取所有分镜（单次 IN 查询，避免 N 次 GetByID 往返）
+	allShotsImg, batchErrImg := s.storyboardRepo.BatchGetByIDs(shotIDs)
+	if batchErrImg != nil {
+		return nil, batchErrImg
+	}
+	shotMapImg := make(map[uint]*model.StoryboardShot, len(allShotsImg))
+	for _, sh := range allShotsImg {
+		shotMapImg[sh.ID] = sh
+	}
+
 	var queued []*model.StoryboardShot
 	sem := make(chan struct{}, maxConcurrentShots)
 	var wg sync.WaitGroup
@@ -1845,8 +2044,8 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, pro
 	}
 
 	for _, sid := range shotIDs {
-		shot, err := s.storyboardRepo.GetByID(sid)
-		if err != nil || shot.VideoID != videoID {
+		shot, ok := shotMapImg[sid]
+		if !ok || shot.VideoID != videoID {
 			advanceProgress()
 			continue
 		}
@@ -1882,9 +2081,11 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, pro
 				os.Remove(localImage) //nolint:errcheck  // temp file not needed; ImageURL is in DB
 			}
 			if genErr == nil {
-				s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
+				if err := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
 					"status": "completed", "progress": 50,
-				}) //nolint:errcheck
+				}); err != nil {
+					logger.Printf("[VideoService] BatchGenerateShotImages: failed to update shot %d status: %v", sh.ShotNo, err)
+				}
 				logger.Printf("BatchGenerateShotImages: shot %d image ready", sh.ShotNo)
 			} else {
 				logger.Printf("BatchGenerateShotImages: shot %d failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
@@ -1912,6 +2113,17 @@ func (s *VideoService) BatchGenerateShotClips(videoID uint, shotIDs []uint, prog
 	}
 
 	logger.Printf("BatchGenerateShotClips: videoID=%d total=%d aspectRatio=%s", videoID, len(shotIDs), aspectRatio)
+
+	// 批量预取所有分镜（单次 IN 查询，避免 N 次 GetByID 往返）
+	allShotsClip, batchErrClip := s.storyboardRepo.BatchGetByIDs(shotIDs)
+	if batchErrClip != nil {
+		return nil, batchErrClip
+	}
+	shotMapClip := make(map[uint]*model.StoryboardShot, len(allShotsClip))
+	for _, sh := range allShotsClip {
+		shotMapClip[sh.ID] = sh
+	}
+
 	var queued []*model.StoryboardShot
 	sem := make(chan struct{}, maxConcurrentShots)
 	var wg sync.WaitGroup
@@ -1926,8 +2138,8 @@ func (s *VideoService) BatchGenerateShotClips(videoID uint, shotIDs []uint, prog
 	}
 
 	for _, sid := range shotIDs {
-		shot, err := s.storyboardRepo.GetByID(sid)
-		if err != nil || shot.VideoID != videoID {
+		shot, ok := shotMapClip[sid]
+		if !ok || shot.VideoID != videoID {
 			advanceProgress()
 			continue
 		}
@@ -1990,7 +2202,9 @@ func (s *VideoService) BatchGenerateShotClips(videoID uint, shotIDs []uint, prog
 			} else {
 				fields["clip_path"] = "file://" + clipPath
 			}
-			s.storyboardRepo.UpdateFields(sh.ID, fields) //nolint:errcheck
+			if err := s.storyboardRepo.UpdateFields(sh.ID, fields); err != nil {
+				logger.Printf("[VideoService] BatchGenerateShotClips: failed to update shot %d fields: %v", sh.ShotNo, err)
+			}
 		}(shot)
 	}
 	wg.Wait()
@@ -2093,29 +2307,33 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		return c.Portrait
 	}
 
-	// 精准匹配：从 shot.CharacterIDs 查找角色参考图
+	// 精准匹配：批量加载 shot.CharacterIDs 中的角色参考图（单次 IN 查询，避免 N+1）
 	var characterPortrait string
 	var refSource string // for logging
-	for _, id := range shot.CharacterIDs {
-		char, err := s.characterRepo.GetByID(id)
-		if err != nil {
-			continue
-		}
-		img := charBestImage(char)
-		if img == "" {
-			continue
-		}
-		if char.ThreeViewFront != "" {
-			characterPortrait = img
-			refSource = fmt.Sprintf("charID=%d ThreeViewFront", id)
-			break // 三视图是最优选择，找到即停
-		}
-		if characterPortrait == "" {
-			characterPortrait = img
-			refSource = fmt.Sprintf("charID=%d Portrait/ImageURL", id)
-			// 不 break：继续查找是否有三视图
+	if len(shot.CharacterIDs) > 0 {
+		ids := []uint(shot.CharacterIDs)
+		batchChars, batchErr := s.characterRepo.ListByIDs(ids)
+		if batchErr == nil {
+			for _, char := range batchChars {
+				img := charBestImage(char)
+				if img == "" {
+					continue
+				}
+				if char.ThreeViewFront != "" {
+					characterPortrait = img
+					refSource = fmt.Sprintf("charID=%d ThreeViewFront", char.ID)
+					break // 三视图是最优选择，找到即停
+				}
+				if characterPortrait == "" {
+					characterPortrait = img
+					refSource = fmt.Sprintf("charID=%d Portrait/ImageURL", char.ID)
+				}
+			}
 		}
 	}
+
+	// cachedNovelChars 延迟加载：降级一、降级二共用，避免重复 ListByNovel 查询
+	var cachedNovelChars []*model.Character
 
 	// 降级一：若 CharacterIDs 未命中，从 shot.Characters JSON 内联名称匹配
 	// （CharacterIDs 由 autoMatchShotCharacters 在分镜生成时设置，若名称有偏差则可能为空）
@@ -2125,9 +2343,12 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 		if err := json.Unmarshal([]byte(shot.Characters), &shotChars); err == nil && len(shotChars) > 0 {
 			if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil && video.NovelID > 0 {
-				if novelChars, err := s.characterRepo.ListByNovel(video.NovelID); err == nil {
-					nameMap := make(map[string]*model.Character, len(novelChars))
-					for _, c := range novelChars {
+				if cachedNovelChars == nil {
+					cachedNovelChars, _ = s.characterRepo.ListByNovel(video.NovelID)
+				}
+				if len(cachedNovelChars) > 0 {
+					nameMap := make(map[string]*model.Character, len(cachedNovelChars))
+					for _, c := range cachedNovelChars {
 						nameMap[strings.ToLower(c.Name)] = c
 					}
 					for _, sc := range shotChars {
@@ -2169,15 +2390,15 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		if chapter, err := s.chapterRepo.GetByID(*shot.ChapterID); err == nil && chapter != nil {
 			chapterNo = chapter.ChapterNo
 			if characterPortrait == "" {
-				chars, err := s.characterRepo.ListByNovel(chapter.NovelID)
-				if err == nil {
-					for _, c := range chars {
-						img := charBestImage(c)
-						if img != "" {
-							characterPortrait = img
-							refSource = fmt.Sprintf("novel first char=%q", c.Name)
-							break
-						}
+				if cachedNovelChars == nil {
+					cachedNovelChars, _ = s.characterRepo.ListByNovel(chapter.NovelID)
+				}
+				for _, c := range cachedNovelChars {
+					img := charBestImage(c)
+					if img != "" {
+						characterPortrait = img
+						refSource = fmt.Sprintf("novel first char=%q", c.Name)
+						break
 					}
 				}
 			}
@@ -2201,6 +2422,26 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 			sceneRefImage = refURL
 		}
 	}
+
+	// 注入场景锚点的光照锁定关键词（确保同一场景跨镜头光照一致）
+	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
+		if anchor, anchorErr := s.sceneAnchorSvc.GetByID(*shot.SceneAnchorID); anchorErr == nil && anchor != nil {
+			var lightParts []string
+			if anchor.LightingKeywords != "" {
+				lightParts = append(lightParts, anchor.LightingKeywords)
+			}
+			if anchor.TimeOfDay != "" {
+				lightParts = append(lightParts, anchor.TimeOfDay+" lighting")
+			}
+			if anchor.Weather != "" {
+				lightParts = append(lightParts, anchor.Weather+" weather")
+			}
+			if len(lightParts) > 0 {
+				promptText += ", " + strings.Join(lightParts, ", ")
+			}
+		}
+	}
+
 	// 角色三视图/肖像优先；场景锚点参考图仅在无角色参考图时作保底
 	// 场景上下文已通过 fragment 注入 promptText，无需用参考图再次覆盖
 	refImage := characterPortrait
@@ -2211,13 +2452,17 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	// 获取视频的 ArtStyle、TenantID 和角色一致性权重
+	// 获取视频的 ArtStyle、TenantID、质量档位和角色一致性权重
 	artStyle := ""
 	var tenantID uint
 	charConsistencyWeight := 1.0 // 默认严格一致
+	qualityTier := "preview"     // 默认质量档位
 	if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil {
 		artStyle = video.ArtStyle
 		tenantID = video.TenantID
+		if video.QualityTier != "" {
+			qualityTier = video.QualityTier
+		}
 		if video.NovelID > 0 && s.novelRepo != nil {
 			if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil {
 				if tenantID == 0 {
@@ -2238,6 +2483,29 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
+	// 根据质量档位注入分辨率提示，引导图像提供者选择适当尺寸。
+	// 对于支持 size 参数的提供者（如 DALL-E 3），此 hint 也作为备注说明。
+	imgWidth, _, _ := qualityTierImageParams(qualityTier)
+	if imgWidth > 0 {
+		promptText = fmt.Sprintf("--w %d ", imgWidth) + promptText
+	}
+	logger.Printf("generateShotReferenceImage: shot %d qualityTier=%s imgWidth=%d", shot.ShotNo, qualityTier, imgWidth)
+
+	// 镜头类型注解：根据景别选择光学特征，提升图像构图的电影感
+	lensTypeMap := map[string]string{
+		"extreme_close_up": "macro lens 100mm, extreme shallow DOF, bokeh",
+		"close_up":         "portrait lens 85mm, shallow depth of field, subject isolation",
+		"medium":           "standard lens 50mm, natural perspective",
+		"wide":             "wide angle lens 24mm, deep focus, environmental context",
+		"extreme_wide":     "ultra wide lens 16mm, expansive environment, dramatic perspective",
+	}
+	lensType := lensTypeMap[shot.ShotSize]
+	if lensType == "" {
+		lensType = "standard lens 50mm"
+	}
+	cinematicImgPrefix := "cinematic film photography, 35mm anamorphic lens, professional lighting setup, " + lensType + ", "
+	promptText = cinematicImgPrefix + promptText
+
 	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", promptText, refImage, artStyle, "", charConsistencyWeight)
 	if err != nil {
 		logger.Printf("generateShotReferenceImage: image gen failed for shot %d: %v", shot.ShotNo, err)
@@ -2250,7 +2518,9 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 
 	// 首图锁定：场景锚点无参考图时，将本次生成结果存为参考图
 	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
-		s.sceneAnchorSvc.AutoSetRefImage(*shot.SceneAnchorID, imageURL) //nolint:errcheck
+		if err := s.sceneAnchorSvc.AutoSetRefImage(*shot.SceneAnchorID, imageURL); err != nil {
+			logger.Printf("[VideoService] AutoSetRefImage: %v", err)
+		}
 	}
 
 	return imageURL, nil
@@ -2402,6 +2672,40 @@ func mp3Duration(data []byte) float64 {
 	return float64(frames) * 1152.0 / float64(sampleRate)
 }
 
+// alignShotDurationToTTS 检查分镜的 TTS 音频时长，若音频更长则延伸分镜时长以确保配音完整。
+// 返回调整后的时长（秒）；无法读取音频时返回原 shot.Duration。
+// 注意：此函数仅用于当次生成，不持久化回数据库。
+func alignShotDurationToTTS(shot *model.StoryboardShot) float64 {
+	if shot.AudioPath == "" {
+		return shot.Duration
+	}
+	data, err := readLocalOrRemoteFile(shot.AudioPath)
+	if err != nil || len(data) == 0 {
+		return shot.Duration
+	}
+	ext := audioExtension(shot.AudioPath)
+	var audioDur float64
+	if ext == ".mp3" {
+		audioDur = mp3Duration(data)
+	} else {
+		micros := parseAudioDurationMicros(data, ext)
+		if micros > 0 {
+			audioDur = float64(micros) / 1_000_000.0
+		}
+	}
+	if audioDur <= 0 {
+		return shot.Duration
+	}
+	const buffer = 0.3
+	needed := audioDur + buffer
+	if needed > shot.Duration {
+		logger.Printf("[VideoService] alignShotDurationToTTS: shot %d duration %.1fs → %.1fs (TTS=%.1fs)",
+			shot.ShotNo, shot.Duration, needed, audioDur)
+		return needed
+	}
+	return shot.Duration
+}
+
 // GenerateSegmentAudio 为单条语音段落生成 TTS 音频
 func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVoice string) error {
 	if s.segmentRepo == nil {
@@ -2497,7 +2801,9 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 	if d := mp3Duration(audioData); d > 0 {
 		fields["duration_secs"] = d
 	}
-	s.segmentRepo.UpdateFields(segID, fields) //nolint:errcheck
+	if err := s.segmentRepo.UpdateFields(segID, fields); err != nil {
+		logger.Printf("[VideoService] GenerateSegmentAudio: failed to update segment %d fields: %v", segID, err)
+	}
 
 	// 配音生成完成后，同步更新分镜时长：取视频时长与所有配音段落累计时长中的较大值
 	s.syncShotDurationAfterVoice(seg.ShotID)
@@ -2531,7 +2837,9 @@ func (s *VideoService) syncShotDurationAfterVoice(shotID uint) {
 	if totalVoice <= shot.Duration {
 		return // 配音比当前时长短，不需要更新
 	}
-	s.storyboardRepo.UpdateFields(shotID, map[string]interface{}{"duration": totalVoice}) //nolint:errcheck
+	if err := s.storyboardRepo.UpdateFields(shotID, map[string]interface{}{"duration": totalVoice}); err != nil {
+		logger.Printf("[VideoService] syncShotDurationAfterVoice: failed to update shot %d duration: %v", shotID, err)
+	}
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2644,7 +2952,9 @@ func (s *VideoService) RefineShotImage(shotID uint, suggestion string) (string, 
 	}
 
 	// 持久化新图片 URL
-	s.storyboardRepo.UpdateFields(shotID, map[string]interface{}{"image_url": newURL}) //nolint:errcheck
+	if err := s.storyboardRepo.UpdateFields(shotID, map[string]interface{}{"image_url": newURL}); err != nil {
+		logger.Printf("[VideoService] RefineShot: failed to update shot %d image URL: %v", shotID, err)
+	}
 	return newURL, nil
 }
 
@@ -2684,6 +2994,48 @@ func (s *VideoService) extractLastFrame(clipPath string) (string, error) {
 		return "", fmt.Errorf("extractLastFrame failed: %w", err)
 	}
 	return tmpJpeg, nil
+}
+
+// emotionToKlingParams 根据情绪/摄像机类型映射最优的 Kling 生成参数。
+// 动作/史诗场景使用 pro 模式 + 10 秒时长，获得更高画质；
+// 风景/全景使用高 CFG + 10 秒；对话/温情使用 5 秒防止内容填充。
+func emotionToKlingParams(emotion, cameraType string) (mode string, cfgScale float64, duration float64) {
+	// 将情绪标签规范化到英文
+	e := strings.ToLower(emotion)
+	ct := strings.ToLower(cameraType)
+
+	switch {
+	case strings.Contains(e, "battle") || strings.Contains(e, "combat") ||
+		strings.Contains(e, "战斗") || strings.Contains(e, "打斗") ||
+		strings.Contains(e, "action") || strings.Contains(e, "fight"):
+		return "pro", 0.45, 10
+
+	case strings.Contains(e, "epic") || strings.Contains(e, "史诗") ||
+		strings.Contains(e, "宏大") || strings.Contains(e, "壮观") ||
+		strings.Contains(e, "climax") || strings.Contains(e, "高潮"):
+		return "pro", 0.5, 10
+
+	case strings.Contains(e, "dramatic") || strings.Contains(e, "紧张") ||
+		strings.Contains(e, "suspense") || strings.Contains(e, "danger") ||
+		strings.Contains(e, "危险") || strings.Contains(e, "恐惧"):
+		return "std", 0.7, 5
+
+	case strings.Contains(e, "landscape") || strings.Contains(e, "scenery") ||
+		strings.Contains(e, "风景") || strings.Contains(e, "空镜") ||
+		ct == "crane" || (ct == "pan" && strings.Contains(e, "wide")):
+		return "std", 0.8, 10
+
+	case strings.Contains(e, "romantic") || strings.Contains(e, "浪漫") ||
+		strings.Contains(e, "tender") || strings.Contains(e, "温情"):
+		return "std", 0.6, 5
+
+	case strings.Contains(e, "sad") || strings.Contains(e, "悲") ||
+		strings.Contains(e, "离别") || strings.Contains(e, "grief"):
+		return "std", 0.65, 5
+
+	default:
+		return "std", 0.5, 5
+	}
 }
 
 // GenerateShotVideo 为单个分镜提交视频生成任务
@@ -2737,7 +3089,11 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	}
 
 	// 场景锚点：将锁定词注入视频生成 prompt
-	videoPrompt := shot.Prompt
+	// 优先使用运镜提示词（MotionPrompt），若为空则降级到静态画面描述（Prompt）
+	videoPrompt := shot.MotionPrompt
+	if videoPrompt == "" {
+		videoPrompt = shot.Prompt
+	}
 	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
 		if fragment, _, err := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); err == nil && fragment != "" {
 			videoPrompt = fragment + ", " + videoPrompt
@@ -2749,19 +3105,51 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		videoPrompt = videoArtStyle + " style, " + videoPrompt
 	}
 
-	shotDuration := shot.Duration
+	// TTS 对齐：若分镜有配音，确保视频时长不短于音频时长+缓冲。
+	// alignShotDurationToTTS 仅返回调整值，不持久化到 DB。
+	shotDuration := alignShotDurationToTTS(shot)
+
+	// 动态 Kling 参数（根据情绪和摄像机类型选择最优配置）
+	klingMode, klingCFG, klingDefaultDur := emotionToKlingParams(shot.EmotionalTone, shot.CameraType)
 	if shotDuration <= 0 {
-		shotDuration = 5
+		shotDuration = klingDefaultDur
 	}
+
+	// 检查是否允许对动作场景使用 pro 模式
+	if klingMode == "pro" {
+		if vid, vidErr := s.videoRepo.GetByID(shot.VideoID); vidErr == nil && vid.NovelID > 0 && s.novelRepo != nil {
+			if novel, novelErr := s.novelRepo.GetByID(vid.NovelID); novelErr == nil {
+				if !novel.VideoConf().KlingProForAction {
+					klingMode = "std"
+				}
+			}
+		}
+	}
+
+	// 电影级画质引导词前缀（提升 AI 视频生成的画面质量）
+	cinematicPrefix := "cinematic film still, professional cinematography, anamorphic lens, " +
+		"shallow depth of field, natural film grain, high dynamic range, "
+	negativeBase := "blurry, low quality, watermark, text overlay, deformed, ugly, " +
+		"bad anatomy, duplicate, morbid, mutilated, out of frame, extra limbs, " +
+		"gross proportions, malformed limbs"
+
+	videoPromptFinal := cinematicPrefix + videoPrompt
+	negativePrompt := negativeBase
+	if shot.NegativePrompt != "" {
+		negativePrompt = negativeBase + ", " + shot.NegativePrompt
+	}
+
 	req := &ai.VideoGenerateRequest{
-		Prompt:         videoPrompt,
-		NegativePrompt: shot.NegativePrompt,
+		Prompt:         videoPromptFinal,
+		NegativePrompt: negativePrompt,
 		Duration:       shotDuration,
 		AspectRatio:    videoAspectRatio,
 		ImageURL:       referenceImage, // image-to-video（空时退化为 text-to-video）
+		CFGScale:       klingCFG,
+		Mode:           klingMode,
 	}
 
-	logger.Printf("GenerateShotVideo: shot %d submitting to %s (hasRef=%v prompt=%q)", shot.ShotNo, providerName, referenceImage != "", videoPrompt)
+	logger.Printf("GenerateShotVideo: shot %d submitting to %s (hasRef=%v mode=%s cfg=%.2f prompt=%q)", shot.ShotNo, providerName, referenceImage != "", klingMode, klingCFG, videoPromptFinal)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -2786,7 +3174,9 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 		logger.Printf("PollShotStatus: shot %d timed out (taskID=%s), marking failed", shot.ShotNo, shot.ShotTaskID)
 		shot.Status = "failed"
 		shot.RetryCount++
-		s.storyboardRepo.Update(shot) //nolint:errcheck
+		if err := s.storyboardRepo.Update(shot); err != nil {
+			logger.Printf("[VideoService] PollShotStatus: failed to update shot %d status to failed: %v", shot.ShotNo, err)
+		}
 		return nil
 	}
 
@@ -2848,7 +3238,9 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 				}
 			}
 		}
-		s.storyboardRepo.Update(shot) //nolint:errcheck
+		if err := s.storyboardRepo.Update(shot); err != nil {
+			logger.Printf("[VideoService] PollShotStatus: failed to update shot %d status: %v", shot.ShotNo, err)
+		}
 
 		// 时序连贯：提取本镜最后一帧，存入下一镜 ReferenceImageURL
 		if shot.Status == "completed" && strings.HasPrefix(shot.ClipPath, "file://") {
@@ -2859,7 +3251,9 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 					for _, ns := range nextShots {
 						if ns.ShotNo == shot.ShotNo+1 && ns.ShotTaskID == "" {
 							ns.ReferenceImageURL = "file://" + lastFramePath
-							s.storyboardRepo.Update(ns) //nolint:errcheck
+							if err := s.storyboardRepo.Update(ns); err != nil {
+								logger.Printf("[VideoService] PollShotStatus: failed to update next shot %d reference image: %v", ns.ShotNo, err)
+							}
 							break
 						}
 					}
@@ -2878,7 +3272,9 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 			shot.ShotTaskID = ""
 			logger.Printf("PollShotStatus: shot %d will be retried", shot.ShotNo)
 		}
-		s.storyboardRepo.Update(shot) //nolint:errcheck
+		if err := s.storyboardRepo.Update(shot); err != nil {
+			logger.Printf("[VideoService] PollShotStatus: failed to update shot %d status after failure: %v", shot.ShotNo, err)
+		}
 	}
 
 	return nil
@@ -2971,7 +3367,9 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 	}
 
 	shot.AudioPath = audioURL
-	s.storyboardRepo.Update(shot) //nolint:errcheck
+	if err := s.storyboardRepo.Update(shot); err != nil {
+		logger.Printf("[VideoService] GenerateShotAudio: failed to update shot %d audio path: %v", shot.ShotNo, err)
+	}
 	return nil
 }
 
@@ -3235,7 +3633,9 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 	}
 	video.VideoPath = outputPath
 	video.Status = "completed"
-	s.videoRepo.Update(video) //nolint:errcheck
+	if err := s.videoRepo.Update(video); err != nil {
+		logger.Printf("[VideoService] StitchVideo: failed to update video %d status to completed: %v", videoID, err)
+	}
 
 	return outputPath, nil
 }
@@ -3409,7 +3809,9 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 	}
 	shot.GenerationMode = "static"
 	shot.Status = "generating"
-	s.storyboardRepo.Update(shot) //nolint:errcheck
+	if err := s.storyboardRepo.Update(shot); err != nil {
+		logger.Printf("[VideoService] generateShotImageOnly: failed to update shot %d status to generating: %v", shot.ShotNo, err)
+	}
 
 	imageURL, imgErr := s.generateShotReferenceImage(shot)
 	if imageURL == "" {
@@ -3419,14 +3821,18 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 		}
 		shot.Status = "failed"
 		shot.ErrorMessage = errMsg
-		s.storyboardRepo.Update(shot) //nolint:errcheck
+		if err := s.storyboardRepo.Update(shot); err != nil {
+			logger.Printf("[VideoService] generateShotImageOnly: failed to update shot %d status to failed: %v", shot.ShotNo, err)
+		}
 		if imgErr != nil {
 			return "", 0, fmt.Errorf("image generation failed for shot %d: %w", shot.ShotNo, imgErr)
 		}
 		return "", 0, fmt.Errorf("image generation failed for shot %d (empty URL)", shot.ShotNo)
 	}
 	shot.ImageURL = imageURL
-	s.storyboardRepo.Update(shot) //nolint:errcheck
+	if err := s.storyboardRepo.Update(shot); err != nil {
+		logger.Printf("[VideoService] generateShotImageOnly: failed to update shot %d image URL: %v", shot.ShotNo, err)
+	}
 
 	localImage, err = downloadToTemp(imageURL, fmt.Sprintf("inkframe-img-%d-", shot.ID), ".jpg")
 	if err != nil {
@@ -3440,7 +3846,7 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 // 无论成功与否，最终均将 progress 更新为 100，并清理本地临时文件。
 const maxClipRetries = 3
 
-func (s *VideoService) generateClipAndUploadWithRetry(shotID uint, localImage string, duration float64, aspectRatio string) {
+func (s *VideoService) generateClipAndUploadWithRetry(ctx context.Context, shotID uint, localImage string, duration float64, aspectRatio string) {
 	defer os.Remove(localImage)
 
 	shot, err := s.storyboardRepo.GetByID(shotID)
@@ -3454,7 +3860,7 @@ func (s *VideoService) generateClipAndUploadWithRetry(shotID uint, localImage st
 
 	for attempt := 1; attempt <= maxClipRetries; attempt++ {
 		// 优先纯 Go Ken Burns；失败时降级为静止画面
-		clipPath, lastErr = s.generateKenBurnsPureGo(context.Background(), shot, localImage, duration, aspectRatio)
+		clipPath, lastErr = s.generateKenBurnsPureGo(ctx, shot, localImage, duration, aspectRatio)
 		if lastErr != nil {
 			logger.Printf("generateClipAndUploadWithRetry: shot %d ken burns attempt %d/%d: %v", shot.ShotNo, attempt, maxClipRetries, lastErr)
 			clipPath, lastErr = s.generateStillFrameClip(localImage, duration, aspectRatio)
@@ -3464,7 +3870,12 @@ func (s *VideoService) generateClipAndUploadWithRetry(shotID uint, localImage st
 		}
 		logger.Printf("generateClipAndUploadWithRetry: shot %d still frame attempt %d/%d: %v", shot.ShotNo, attempt, maxClipRetries, lastErr)
 		if attempt < maxClipRetries {
-			time.Sleep(time.Duration(attempt*5) * time.Second)
+			select {
+			case <-time.After(time.Duration(attempt*5) * time.Second):
+			case <-ctx.Done():
+				logger.Printf("[VideoService] generateClipAndUploadWithRetry: context cancelled for shot %d, stopping retries", shotID)
+				return
+			}
 		}
 	}
 
@@ -3480,7 +3891,9 @@ func (s *VideoService) generateClipAndUploadWithRetry(shotID uint, localImage st
 		fields["clip_path"] = "file://" + clipPath
 		logger.Printf("generateClipAndUploadWithRetry: shot %d clip done (local only)", shot.ShotNo)
 	}
-	s.storyboardRepo.UpdateFields(shotID, fields) //nolint:errcheck
+	if err := s.storyboardRepo.UpdateFields(shotID, fields); err != nil {
+		logger.Printf("[VideoService] generateClipAndUploadWithRetry: failed to update shot %d fields: %v", shotID, err)
+	}
 }
 
 // GenerateSlideshowShotVideo 为单个分镜生成图片并应用 Ken Burns 动效（图片解说模式）
@@ -3512,7 +3925,9 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 
 	shot.GenerationMode = "static"
 	shot.Status = "generating"
-	s.storyboardRepo.Update(shot) //nolint:errcheck
+	if err := s.storyboardRepo.Update(shot); err != nil {
+		logger.Printf("[VideoService] GenerateSlideshowShotVideo: failed to update shot %d status to generating: %v", shot.ShotNo, err)
+	}
 
 	// 1. 生成图片
 	imageURL, imgErr := s.generateShotReferenceImage(shot)
@@ -3524,7 +3939,9 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 		logger.Printf("GenerateSlideshowShotVideo: image gen failed for shot %d: %s", shot.ShotNo, errMsg)
 		shot.Status = "failed"
 		shot.ErrorMessage = errMsg
-		s.storyboardRepo.Update(shot) //nolint:errcheck
+		if err := s.storyboardRepo.Update(shot); err != nil {
+			logger.Printf("[VideoService] GenerateSlideshowShotVideo: failed to update shot %d status to failed: %v", shot.ShotNo, err)
+		}
 		if imgErr != nil {
 			return fmt.Errorf("image generation failed for shot %d: %w", shot.ShotNo, imgErr)
 		}
@@ -3533,7 +3950,9 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	shot.ImageURL = imageURL
 	logger.Printf("GenerateSlideshowShotVideo: shot %d storing image_url=%q (len=%d)", shot.ShotNo, imageURL, len(imageURL))
 	// 保存图片 URL（后续步骤失败时图片仍可用）
-	s.storyboardRepo.Update(shot) //nolint:errcheck
+	if err := s.storyboardRepo.Update(shot); err != nil {
+		logger.Printf("[VideoService] GenerateSlideshowShotVideo: failed to update shot %d image URL: %v", shot.ShotNo, err)
+	}
 
 	// 2. 下载图片到本地（Volcengine 返回的 URL 后缀为 .image，FFmpeg 无法识别格式，需重命名为 .jpg）
 	logger.Printf("GenerateSlideshowShotVideo: shot %d downloading image for ffmpeg", shot.ShotNo)
@@ -3645,7 +4064,9 @@ func (s *VideoService) runSlideshowPipeline(videoID uint) {
 		if v, _ := s.videoRepo.GetByID(videoID); v != nil {
 			v.Status = "failed"
 			v.ErrorMessage = err.Error()
-			s.videoRepo.Update(v) //nolint:errcheck
+			if updErr := s.videoRepo.Update(v); updErr != nil {
+				logger.Printf("[VideoService] runSlideshowPipeline: failed to update video %d status to failed: %v", videoID, updErr)
+			}
 		}
 	}
 }
@@ -3665,7 +4086,9 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 		}
 		video.Status = "generating"
 		video.ErrorMessage = ""
-		s.videoRepo.Update(video) //nolint:errcheck
+		if err := s.videoRepo.Update(video); err != nil {
+			logger.Printf("[VideoService] GenerateAllShotVideos: failed to update video %d status to generating: %v", videoID, err)
+		}
 		go s.runSlideshowPipeline(videoID)
 		return nil
 	}
@@ -3681,7 +4104,9 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 	// 更新状态，让用户可以通过 GetStatus 感知进度
 	video.Status = "generating"
 	video.ErrorMessage = ""
-	s.videoRepo.Update(video) //nolint:errcheck
+	if err := s.videoRepo.Update(video); err != nil {
+		logger.Printf("[VideoService] GenerateAllShotVideos: failed to update video %d status to generating: %v", videoID, err)
+	}
 
 	for _, shot := range shots {
 		if err := s.GenerateShotVideo(shot, video.AspectRatio); err != nil {
@@ -3708,7 +4133,9 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 			if video != nil && video.Status != "completed" {
 				video.Status = "failed"
 				video.ErrorMessage = "stitch pipeline timed out (>2h)"
-				s.videoRepo.Update(video) //nolint:errcheck
+				if err := s.videoRepo.Update(video); err != nil {
+					logger.Printf("[VideoService] PollAndStitchVideo: failed to update video %d status to failed (timeout): %v", videoID, err)
+				}
 			}
 			return
 		}
@@ -3758,7 +4185,9 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 					if video != nil {
 						video.Status = "failed"
 						video.ErrorMessage = err.Error()
-						s.videoRepo.Update(video) //nolint:errcheck
+						if updErr := s.videoRepo.Update(video); updErr != nil {
+							logger.Printf("[VideoService] PollAndStitchVideo: failed to update video %d status to failed (stitch error): %v", videoID, updErr)
+						}
 					}
 				}
 			} else {
@@ -3766,7 +4195,9 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 				if video != nil {
 					video.Status = "failed"
 					video.ErrorMessage = "all shots failed"
-					s.videoRepo.Update(video) //nolint:errcheck
+					if updErr := s.videoRepo.Update(video); updErr != nil {
+						logger.Printf("[VideoService] PollAndStitchVideo: failed to update video %d status to failed (all shots failed): %v", videoID, updErr)
+					}
 				}
 			}
 			return

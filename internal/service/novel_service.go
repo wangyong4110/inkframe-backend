@@ -566,13 +566,20 @@ func (s *NovelService) SyncCharacterSnapshots(
 		prevChapter, _ = s.chapterRepo.GetByNovelAndChapterNo(chapter.NovelID, chapter.ChapterNo-1)
 	}
 
+	// 批量预取上章所有角色快照，构建 characterID → snapshot 的 map，避免 N+1
+	prevSnapMap := make(map[uint]*model.CharacterStateSnapshot)
+	if prevChapter != nil {
+		if prevSnaps, err2 := s.snapshotRepo.ListByChapterID(prevChapter.ID); err2 == nil {
+			for _, ps := range prevSnaps {
+				prevSnapMap[ps.CharacterID] = ps
+			}
+		}
+	}
+
 	if reusePrevious {
 		// 复用上章快照：复制到本章
 		for _, char := range chars {
-			var prevSnap *model.CharacterStateSnapshot
-			if prevChapter != nil {
-				prevSnap, _ = s.snapshotRepo.GetByChapterAndCharacter(prevChapter.ID, char.ID)
-			}
+			prevSnap := prevSnapMap[char.ID]
 			if prevSnap == nil {
 				// 没有上章快照就跳过
 				continue
@@ -611,15 +618,13 @@ func (s *NovelService) SyncCharacterSnapshots(
 	}
 
 	for _, char := range chars {
-		// 构建上章角色状态上下文
+		// 构建上章角色状态上下文（直接从预取 map 查找，无额外 DB 查询）
 		var prevCtx string
-		if prevChapter != nil {
-			if ps, _ := s.snapshotRepo.GetByChapterAndCharacter(prevChapter.ID, char.ID); ps != nil {
-				prevCtx = fmt.Sprintf(
-					"上章末状态：情绪=%s, 位置=%s, 动机=%s, 战力=%d, 健康=%s",
-					ps.Mood, ps.Location, ps.Motivation, ps.PowerLevel, ps.Health,
-				)
-			}
+		if ps := prevSnapMap[char.ID]; ps != nil {
+			prevCtx = fmt.Sprintf(
+				"上章末状态：情绪=%s, 位置=%s, 动机=%s, 战力=%d, 健康=%s",
+				ps.Mood, ps.Location, ps.Motivation, ps.PowerLevel, ps.Health,
+			)
 		}
 		if prevCtx == "" {
 			if ls, _ := s.snapshotRepo.GetLatestForCharacter(char.ID); ls != nil {
@@ -667,14 +672,12 @@ func (s *NovelService) SyncCharacterSnapshots(
 			continue
 		}
 
-		// 沿用上章快照中的静态字段（身高体重等）
+		// 沿用上章快照中的静态字段（身高体重等，直接从预取 map 查找）
 		var baseAbilities, baseEquipment string
 		var age, height, weight float64
-		if prevChapter != nil {
-			if ps, _ := s.snapshotRepo.GetByChapterAndCharacter(prevChapter.ID, char.ID); ps != nil {
-				age, height, weight = ps.Age, ps.Height, ps.Weight
-				baseEquipment = ps.Equipment
-			}
+		if ps := prevSnapMap[char.ID]; ps != nil {
+			age, height, weight = ps.Age, ps.Height, ps.Weight
+			baseEquipment = ps.Equipment
 		}
 		abilities := state.Abilities
 		if abilities == "" {

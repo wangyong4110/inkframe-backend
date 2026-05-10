@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -24,6 +25,7 @@ type VideoHandler struct {
 	sfxItemRepo        *repository.ShotSFXItemRepository
 	bgmSvc             *service.BGMService
 	bgmRepo            *repository.VideoBGMSegmentRepository
+	subtitleSvc        *service.SubtitleService
 }
 
 func (h *VideoHandler) WithSFXItemRepo(r *repository.ShotSFXItemRepository) *VideoHandler {
@@ -39,6 +41,52 @@ func (h *VideoHandler) WithBGMService(svc *service.BGMService) *VideoHandler {
 func (h *VideoHandler) WithBGMRepo(r *repository.VideoBGMSegmentRepository) *VideoHandler {
 	h.bgmRepo = r
 	return h
+}
+
+func (h *VideoHandler) WithSubtitleService(svc *service.SubtitleService) *VideoHandler {
+	h.subtitleSvc = svc
+	return h
+}
+
+// ExportSubtitles 导出视频字幕（ASS 格式）
+// POST /api/v1/videos/:id/subtitles/export
+func (h *VideoHandler) ExportSubtitles(c *gin.Context) {
+	if h.subtitleSvc == nil {
+		respondErr(c, http.StatusNotImplemented, "subtitle service not configured")
+		return
+	}
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	video, ok := h.getVideoForTenant(c, uint(id))
+	if !ok {
+		return
+	}
+	shots, err := h.videoService.GetStoryboard(video.ID)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to load storyboard")
+		return
+	}
+
+	// 获取字体配置
+	fontName := "Noto Sans CJK SC"
+	if vc := h.videoService.GetNovelVideoConfig(video.NovelID); vc != nil && vc.SubtitleFont != "" {
+		fontName = vc.SubtitleFont
+	}
+
+	// 将 []*model.StoryboardShot 转换为 []model.StoryboardShot
+	shotSlice := make([]model.StoryboardShot, len(shots))
+	for i, s := range shots {
+		if s != nil {
+			shotSlice[i] = *s
+		}
+	}
+
+	content := h.subtitleSvc.GenerateASS(shotSlice, fontName)
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"video_%d_subtitles.ass\"", id))
+	c.Header("Content-Type", "text/plain; charset=utf-8")
+	c.String(http.StatusOK, content)
 }
 
 func NewVideoHandler(
@@ -154,7 +202,7 @@ func (h *VideoHandler) ListVideos(c *gin.Context) {
 	status := c.Query("status")
 	p := parsePagination(c)
 
-	videos, total, err := h.videoService.ListVideos(novelId, chapterID, status, p.Page, p.PageSize)
+	videos, total, err := h.videoService.ListVideos(novelId, chapterID, status, getTenantID(c), p.Page, p.PageSize)
 	if err != nil {
 		logger.Printf("[VideoHandler] ListVideos: err=%v", err)
 		respondErr(c, http.StatusInternalServerError, err.Error())

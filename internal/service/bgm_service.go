@@ -164,11 +164,16 @@ func (s *BGMService) MixBGM(videoPath, bgmSource, outputPath string) error {
 		defer os.Remove(bgmLocalPath)
 	}
 
+	// EBU R128 响度标准化混音：
+	// BGM: EQ 去除浑浊低中频(250Hz -2dB) + 压缩刺耳高中频(4kHz -1dB)，归一化至 -23 LUFS（广播 BGM 标准）
+	// 人声: 高通 80Hz（去除低频噪声），归一化至 -16 LUFS（对话目标）
+	// 混音权重：1.0 人声 : 0.3 BGM
+	filterComplex := "[1:a]volume=0.3,equalizer=f=250:t=o:w=2:g=-2,equalizer=f=4000:t=o:w=2:g=-1[bgm_eq];[bgm_eq]loudnorm=I=-23:LRA=7:TP=-2[bgm];[0:a]highpass=f=80,loudnorm=I=-16:LRA=11:TP=-1.5[voice];[voice][bgm]amix=inputs=2:duration=first:weights=1 0.3[out]"
 	if out, err := runFFmpegCtx(context.Background(), "-y",
 		"-i", videoPath,
 		"-stream_loop", "-1",
 		"-i", bgmLocalPath,
-		"-filter_complex", "[1:a]volume=0.3[bgm];[0:a][bgm]amix=inputs=2:duration=first[out]",
+		"-filter_complex", filterComplex,
 		"-map", "0:v",
 		"-map", "[out]",
 		"-c:v", "copy",
@@ -817,4 +822,88 @@ func (s *BGMService) GenerateBGMSegments(
 	wg.Wait()
 
 	return segments, nil
+}
+
+// MixBGMWithDucking 将BGM混入视频，并在人声轨存在时自动压低BGM音量（Audio Ducking）。
+// 当 audioTrackPath 非空时，使用人声作为 sidechain 信号压制 BGM；
+// 否则退化为普通 MixBGM。
+// audioTrackPath: 合并后的人声轨道文件路径（或空串表示无人声）
+// duckingLevel: 闪避后 BGM 的目标音量（0.1-0.5，默认0.15）
+func (s *BGMService) MixBGMWithDucking(videoPath, bgmSource, audioTrackPath, outputPath string, bgmVolume, duckingLevel float64) error {
+	videoPath = strings.TrimPrefix(videoPath, "file://")
+	bgmSource = strings.TrimPrefix(bgmSource, "file://")
+
+	if videoPath == "" || bgmSource == "" || outputPath == "" {
+		return fmt.Errorf("MixBGMWithDucking: invalid arguments")
+	}
+	if bgmVolume <= 0 {
+		bgmVolume = 0.3
+	}
+	if duckingLevel <= 0 {
+		duckingLevel = 0.15
+	}
+
+	bgmLocalPath := bgmSource
+	if strings.HasPrefix(bgmSource, "http://") || strings.HasPrefix(bgmSource, "https://") {
+		tmp, err := os.CreateTemp(inkframeTempDir(), "inkframe-bgm-*.mp3")
+		if err != nil {
+			return fmt.Errorf("MixBGMWithDucking: create temp file failed: %w", err)
+		}
+		tmp.Close()
+		bgmLocalPath = tmp.Name()
+		if err := downloadFile(bgmSource, bgmLocalPath); err != nil {
+			os.Remove(bgmLocalPath)
+			return fmt.Errorf("MixBGMWithDucking: download BGM failed: %w", err)
+		}
+		defer os.Remove(bgmLocalPath)
+	}
+
+	// 若无人声轨，退化为普通混音（无需闪避）
+	if audioTrackPath == "" {
+		return s.MixBGM(videoPath, bgmSource, outputPath)
+	}
+
+	audioTrackPath = strings.TrimPrefix(audioTrackPath, "file://")
+
+	// FFmpeg sidechaincompress 实现专业人声闪避（Audio Ducking）：
+	// - 输入0: 视频文件（含视频流）
+	// - 输入1: BGM 文件（循环）
+	// - 输入2: 人声轨道（sidechain 信号）
+	// 专业闪避参数：
+	// - threshold=0.02（语音检测灵敏度）
+	// - ratio=6:1（中等压缩，不会太死板）
+	// - attack=10ms（快速响应，避免语音开头被切掉）
+	// - release=600ms（自然释放，不会太突然回来）
+	// - knee=3dB（软拐点，更自然）
+	// - makeup=1（补偿压缩造成的音量损失）
+	// 输入0=videoPath（含原始音轨）, 输入1=bgmLocalPath, 输入2=audioTrackPath（人声）
+	filterComplex := fmt.Sprintf(
+		"[1:a]volume=%.2f,equalizer=f=250:t=o:w=2:g=-2[bgm_eq];"+
+			"[2:a]highpass=f=80[voice_hp];"+
+			"[bgm_eq][voice_hp]sidechaincompress=threshold=0.02:ratio=6:attack=10:release=600:knee=3:makeup=1[bgm_ducked];"+
+			"[voice_hp][bgm_ducked]amix=inputs=2:duration=first:weights=1 1[out]",
+		bgmVolume,
+	)
+
+	args := []string{
+		"-y",
+		"-i", videoPath,
+		"-stream_loop", "-1", "-i", bgmLocalPath,
+		"-i", audioTrackPath,
+		"-filter_complex", filterComplex,
+		"-map", "0:v",
+		"-map", "[out]",
+		"-c:v", "copy",
+		"-c:a", "aac",
+		"-shortest",
+		outputPath,
+	}
+
+	if out, err := runFFmpegCtx(context.Background(), args...); err != nil {
+		logger.Printf("MixBGMWithDucking: ffmpeg failed: %v\n%s", err, string(out))
+		// 降级到普通混音
+		logger.Printf("MixBGMWithDucking: falling back to simple mix")
+		return s.MixBGM(videoPath, bgmSource, outputPath)
+	}
+	return nil
 }

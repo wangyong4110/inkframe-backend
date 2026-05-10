@@ -75,9 +75,29 @@ func (h *ChapterHandler) GetChapter(c *gin.Context) {
 
 // ListChapters 获取章节列表
 // GET /api/v1/novels/:novel_id/chapters
+// 支持可选分页：?page=1&page_size=20。无分页参数时返回全量列表（向后兼容）。
 func (h *ChapterHandler) ListChapters(c *gin.Context) {
 	novelId, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+
+	// If pagination params are provided, use paginated query.
+	if c.Query("page") != "" || c.Query("page_size") != "" {
+		p := parsePagination(c)
+		chapters, total, err := h.chapterService.ListChaptersPaged(uint(novelId), p.Page, p.PageSize)
+		if err != nil {
+			logger.Printf("[ChapterHandler] ListChapters: novelID=%d err=%v", novelId, err)
+			respondErr(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		respondOK(c, gin.H{
+			"items":      chapters,
+			"total":      total,
+			"page":       p.Page,
+			"page_size":  p.PageSize,
+			"total_page": (total + int64(p.PageSize) - 1) / int64(p.PageSize),
+		})
 		return
 	}
 

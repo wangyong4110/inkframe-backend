@@ -157,6 +157,7 @@ func main() {
 		SceneAnchorHandler: handlers.SceneAnchorHandler,
 		SystemHandler:      handlers.SystemHandler,
 		FsHandler:          handlers.FsHandler,
+		RewriteHandler:     handlers.RewriteHandler,
 	})
 
 	// 11. 设置Gin模式
@@ -815,7 +816,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-09-v2"
+const schemaVersion = "2026-05-10-v1"
 
 // autoMigrate 自动迁移（带版本跳过优化）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -887,6 +888,10 @@ func autoMigrate(db *gorm.DB) error {
 		&model.ShotVoiceSegment{},
 		&model.ShotSFXItem{},
 		&model.VideoBGMSegment{},
+		&model.RewriteProject{},
+		&model.LiteraryAnalysis{},
+		&model.RewriteBible{},
+		&model.ChapterRewriteTask{},
 	); err != nil {
 		return err
 	}
@@ -1116,6 +1121,10 @@ type Repositories struct {
 	ShotVoiceSegmentRepo    *repository.ShotVoiceSegmentRepository
 	ShotSFXItemRepo         *repository.ShotSFXItemRepository
 	VideoBGMSegmentRepo     *repository.VideoBGMSegmentRepository
+	RewriteProjectRepo      *repository.RewriteProjectRepository
+	LiteraryAnalysisRepo    *repository.LiteraryAnalysisRepository
+	RewriteBibleRepo        *repository.RewriteBibleRepository
+	ChapterRewriteTaskRepo  *repository.ChapterRewriteTaskRepository
 }
 
 // initRepositories 初始化仓库层
@@ -1154,6 +1163,10 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		ShotVoiceSegmentRepo:    repository.NewShotVoiceSegmentRepository(db),
 		ShotSFXItemRepo:         repository.NewShotSFXItemRepository(db),
 		VideoBGMSegmentRepo:     repository.NewVideoBGMSegmentRepository(db),
+		RewriteProjectRepo:      repository.NewRewriteProjectRepository(db, redis),
+		LiteraryAnalysisRepo:    repository.NewLiteraryAnalysisRepository(db),
+		RewriteBibleRepo:        repository.NewRewriteBibleRepository(db),
+		ChapterRewriteTaskRepo:  repository.NewChapterRewriteTaskRepository(db),
 	}
 }
 
@@ -1205,6 +1218,7 @@ type Services struct {
 	PacingService               *service.PacingService
 	SceneAnchorService          *service.SceneAnchorService
 	SceneConsistencyService     *service.SceneConsistencyService
+	RewriteService              *service.RewriteService
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -1455,6 +1469,17 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	content := initContentServiceGroup(repos, core, aiManager, vectorStore)
 	video   := initVideoServiceGroup(repos, core, content, cfg)
 
+	// 改写服务
+	rewriteSvc := service.NewRewriteService(
+		repos.RewriteProjectRepo,
+		repos.LiteraryAnalysisRepo,
+		repos.RewriteBibleRepo,
+		repos.ChapterRewriteTaskRepo,
+		repos.ChapterRepo,
+		repos.NovelRepo,
+		core.AI,
+	)
+
 	// 认证 / 租户 / 通信服务（依赖 db 和 redisClient，数量少，直接内联）
 	smsSvc := service.NewSMSService(redisClient, cfg.SMS)
 	authSvc := service.NewAuthService(db, repos.UserRepo, repos.TenantRepo, repos.TenantUserRepo, cfg.Server.JWTSecret, cfg.Server.JWTExpiry).
@@ -1512,6 +1537,8 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		OAuthService:  oauthSvc,
 		McpService:    mcpSvc,
 		FrontendURL:   cfg.Server.FrontendURL,
+		// ── Rewrite ──
+		RewriteService: rewriteSvc,
 	}
 }
 
@@ -1538,6 +1565,7 @@ type Handlers struct {
 	SceneAnchorHandler *handler.SceneAnchorHandler
 	SystemHandler      *handler.SystemHandler
 	FsHandler          *handler.FsHandler
+	RewriteHandler     *handler.RewriteHandler
 }
 
 // initHandlers 初始化处理器
@@ -1567,7 +1595,8 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			services.VideoEnhancementService,
 			services.CharacterConsistencyService,
 		).WithTaskService(services.TaskService).WithSFXService(services.SFXService).WithSFXItemRepo(repos.ShotSFXItemRepo).
-			WithBGMService(services.BGMService).WithBGMRepo(repos.VideoBGMSegmentRepo),
+			WithBGMService(services.BGMService).WithBGMRepo(repos.VideoBGMSegmentRepo).
+			WithSubtitleService(service.NewSubtitleService()),
 		ModelHandler:   handler.NewModelHandler(services.ModelService),
 		McpHandler:     handler.NewMcpHandler(services.McpService),
 		StyleHandler:   handler.NewStyleHandler(services.StyleService),
@@ -1590,6 +1619,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		SceneAnchorHandler: handler.NewSceneAnchorHandler(services.SceneAnchorService, services.SceneConsistencyService).WithTaskService(services.TaskService).WithChapterService(services.ChapterService),
 		SystemHandler: handler.NewSystemHandler(repos.SystemSettingRepo),
 		FsHandler:     handler.NewFsHandler(),
+		RewriteHandler: handler.NewRewriteHandler(services.RewriteService),
 	}
 }
 
