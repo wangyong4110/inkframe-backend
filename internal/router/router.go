@@ -32,6 +32,7 @@ type Config struct {
 	FsHandler          *handler.FsHandler
 	RewriteHandler     *handler.RewriteHandler
 	PlatformHandler    *handler.PlatformHandler
+	AssetHandler       *handler.AssetHandler
 }
 
 // SetupRouter 配置路由
@@ -54,6 +55,11 @@ func SetupRouter(cfg *Config) *gin.Engine {
 	// 媒体素材下载（DB 存储后端；无需登录，可嵌入 <audio>/<img>）
 	if cfg.MediaHandler != nil {
 		r.GET("/api/v1/media/:id", cfg.MediaHandler.ServeMedia)
+	}
+
+	// 公开分享页（无需登录）
+	if cfg.AssetHandler != nil {
+		r.GET("/api/v1/share/:token", cfg.AssetHandler.PublicSharePage)
 	}
 
 	// 公开认证路由（不需要JWT）
@@ -506,6 +512,85 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				platformR.DELETE("/accounts/:id", cfg.PlatformHandler.DisconnectAccount)
 			}
 		}
+
+		// ── 素材库 ────────────────────────────────────────────────────
+		if cfg.AssetHandler != nil {
+			ah := cfg.AssetHandler
+
+			// Tag dictionary (before /assets to avoid param conflict)
+			v1.GET("/assets/tags", ah.ListTags)
+			v1.GET("/assets/tags/suggest", ah.SuggestTags)
+			v1.GET("/assets/trash", ah.ListTrash)
+			v1.GET("/assets/stats/ranking", ah.GetValueRanking)
+			v1.GET("/assets/stats/search-gaps", ah.GetSearchGaps)
+			v1.POST("/assets/batch-delete", ah.BatchDelete)
+			v1.POST("/assets/batch-share-request", ah.BatchShareRequest)
+
+			// Asset CRUD
+			v1.GET("/assets", ah.SearchAssets)
+			v1.POST("/assets", ah.Upload)
+			v1.GET("/assets/:id", ah.GetAsset)
+			v1.PUT("/assets/:id", ah.UpdateAsset)
+			v1.DELETE("/assets/:id", ah.SoftDelete)
+			v1.POST("/assets/:id/restore", ah.Restore)
+			v1.DELETE("/assets/:id/purge", ah.Purge)
+
+			// Share workflow
+			v1.POST("/assets/:id/share-request", ah.RequestShare)
+			v1.GET("/assets/:id/share-request", ah.GetShareRequest)
+			v1.DELETE("/assets/:id/share-request", ah.CancelShareRequest)
+			v1.POST("/assets/:id/withdraw", ah.WithdrawShare)
+
+			// Tags on asset
+			v1.POST("/assets/:id/tags", ah.AddTags)
+			v1.DELETE("/assets/:id/tags/:tag_id", ah.RemoveTag)
+
+			// Public interactions
+			v1.POST("/assets/:id/like", ah.ToggleLike)
+			v1.POST("/assets/:id/use", ah.UseAsset)
+
+			// Versions
+			v1.GET("/assets/:id/versions", ah.ListVersions)
+			v1.POST("/assets/:id/versions", ah.CreateVersion)
+			v1.POST("/assets/:id/versions/:v/restore", ah.RestoreVersion)
+
+			// Comments
+			v1.GET("/assets/:id/comments", ah.ListComments)
+			v1.POST("/assets/:id/comments", ah.AddComment)
+			v1.DELETE("/assets/:id/comments/:cid", ah.DeleteComment)
+
+			// Collections
+			v1.GET("/asset-collections", ah.ListCollections)
+			v1.POST("/asset-collections", ah.CreateCollection)
+			v1.GET("/asset-collections/:id/items", ah.ListCollectionItems)
+			v1.POST("/asset-collections/:id/items", ah.AddToCollection)
+			v1.DELETE("/asset-collections/:id/items", ah.RemoveFromCollection)
+
+			// Share links
+			v1.GET("/share-links", ah.ListShareLinks)
+			v1.POST("/share-links", ah.CreateShareLink)
+			v1.DELETE("/share-links/:token", ah.RevokeShareLink)
+
+			// Analytics
+			v1.GET("/account/quota", ah.GetQuota)
+
+			// Crawl jobs
+			v1.GET("/crawl-jobs", ah.ListCrawlJobs)
+			v1.POST("/crawl-jobs", ah.CreateCrawlJob)
+			v1.GET("/crawl-jobs/:id", ah.GetCrawlJob)
+
+			// Admin
+			adminR := v1.Group("/admin")
+			{
+				adminR.GET("/share-requests", ah.ListPendingShareRequests)
+				adminR.POST("/share-requests/:id/approve", ah.ApproveShareRequest)
+				adminR.POST("/share-requests/:id/reject", ah.RejectShareRequest)
+				adminR.POST("/assets/:id/remove", ah.AdminRemoveAsset)
+			}
+		}
+
+		// Public share page (no auth required — placed outside v1 auth middleware)
+		// NOTE: registered separately below on the root group
 
 		// 本地文件系统浏览（本地部署工具专用）
 		if cfg.FsHandler != nil {

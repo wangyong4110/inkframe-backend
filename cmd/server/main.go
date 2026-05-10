@@ -99,6 +99,7 @@ func main() {
 	services.VideoService.WithStorage(storageSvc)
 	services.AIService.WithStorage(storageSvc)
 	services.BGMService.WithStorage(storageSvc)
+	services.AssetService.WithStorage(storageSvc)
 	services.VideoService.WithSceneAnchorService(services.SceneAnchorService)
 	services.VideoService.WithSegmentRepo(repos.ShotVoiceSegmentRepo).WithTaskService(services.TaskService)
 	services.NovelImportService.WithStorage(storageSvc).WithAnalysisService(services.NovelAnalysisService).WithAIService(services.AIService)
@@ -159,6 +160,7 @@ func main() {
 		FsHandler:          handlers.FsHandler,
 		RewriteHandler:     handlers.RewriteHandler,
 		PlatformHandler:    handlers.PlatformHandler,
+		AssetHandler:       handlers.AssetHandler,
 	})
 
 	// 11. 设置Gin模式
@@ -817,7 +819,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-10-v2"
+const schemaVersion = "2026-05-10-v3"
 
 // autoMigrate 自动迁移（带版本跳过优化）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -895,6 +897,22 @@ func autoMigrate(db *gorm.DB) error {
 		&model.ChapterRewriteTask{},
 		&model.PlatformAccount{},
 		&model.VideoPublishRecord{},
+		// Asset Library (Phase 3)
+		&model.Asset{},
+		&model.Tag{},
+		&model.AssetTagMap{},
+		&model.AssetShareRequest{},
+		&model.AssetVersion{},
+		&model.AssetCollection{},
+		&model.AssetCollectionItem{},
+		&model.CrawlJob{},
+		&model.AssetLike{},
+		&model.AssetUsage{},
+		&model.AssetComment{},
+		&model.ShareLink{},
+		&model.AssetRequest{},
+		&model.SearchLog{},
+		&model.AssetStorageQuota{},
 	); err != nil {
 		return err
 	}
@@ -1130,6 +1148,19 @@ type Repositories struct {
 	ChapterRewriteTaskRepo  *repository.ChapterRewriteTaskRepository
 	PlatformAccountRepo     *repository.PlatformAccountRepository
 	VideoPublishRecordRepo  *repository.VideoPublishRecordRepository
+	// Asset Library
+	AssetRepo               *repository.AssetRepository
+	TagRepo                 *repository.TagRepository
+	AssetVersionRepo        *repository.AssetVersionRepository
+	AssetCollectionRepo     *repository.AssetCollectionRepository
+	AssetShareRequestRepo   *repository.AssetShareRequestRepository
+	AssetUsageRepo          *repository.AssetUsageRepository
+	AssetLikeRepo           *repository.AssetLikeRepository
+	AssetCommentRepo        *repository.AssetCommentRepository
+	CrawlJobRepo            *repository.CrawlJobRepository
+	ShareLinkRepo           *repository.ShareLinkRepository
+	SearchLogRepo           *repository.SearchLogRepository
+	TenantQuotaRepo         *repository.AssetStorageQuotaRepository
 }
 
 // initRepositories 初始化仓库层
@@ -1174,6 +1205,19 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		ChapterRewriteTaskRepo:  repository.NewChapterRewriteTaskRepository(db),
 		PlatformAccountRepo:     repository.NewPlatformAccountRepository(db),
 		VideoPublishRecordRepo:  repository.NewVideoPublishRecordRepository(db),
+		// Asset Library
+		AssetRepo:             repository.NewAssetRepository(db),
+		TagRepo:               repository.NewTagRepository(db),
+		AssetVersionRepo:      repository.NewAssetVersionRepository(db),
+		AssetCollectionRepo:   repository.NewAssetCollectionRepository(db),
+		AssetShareRequestRepo: repository.NewAssetShareRequestRepository(db),
+		AssetUsageRepo:        repository.NewAssetUsageRepository(db),
+		AssetLikeRepo:         repository.NewAssetLikeRepository(db),
+		AssetCommentRepo:      repository.NewAssetCommentRepository(db),
+		CrawlJobRepo:          repository.NewCrawlJobRepository(db),
+		ShareLinkRepo:         repository.NewShareLinkRepository(db),
+		SearchLogRepo:         repository.NewSearchLogRepository(db),
+		TenantQuotaRepo:       repository.NewAssetStorageQuotaRepository(db),
 	}
 }
 
@@ -1227,6 +1271,7 @@ type Services struct {
 	SceneConsistencyService     *service.SceneConsistencyService
 	RewriteService              *service.RewriteService
 	PlatformPublishService      *service.PlatformPublishService
+	AssetService                *service.AssetService
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -1553,6 +1598,22 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 			repos.VideoPublishRecordRepo,
 			core.Task,
 		),
+		// ── Asset Library ──
+		AssetService: service.NewAssetService(
+			repos.AssetRepo,
+			repos.TagRepo,
+			repos.AssetVersionRepo,
+			repos.AssetCollectionRepo,
+			repos.AssetShareRequestRepo,
+			repos.AssetUsageRepo,
+			repos.AssetLikeRepo,
+			repos.AssetCommentRepo,
+			repos.CrawlJobRepo,
+			repos.ShareLinkRepo,
+			repos.SearchLogRepo,
+			repos.TenantQuotaRepo,
+			core.Task,
+		),
 	}
 }
 
@@ -1581,6 +1642,7 @@ type Handlers struct {
 	FsHandler          *handler.FsHandler
 	RewriteHandler     *handler.RewriteHandler
 	PlatformHandler    *handler.PlatformHandler
+	AssetHandler       *handler.AssetHandler
 }
 
 // initHandlers 初始化处理器
@@ -1636,6 +1698,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		FsHandler:     handler.NewFsHandler(),
 		RewriteHandler: handler.NewRewriteHandler(services.RewriteService),
 		PlatformHandler: handler.NewPlatformHandler(services.VideoService, services.PlatformPublishService),
+		AssetHandler:    handler.NewAssetHandler(services.AssetService),
 	}
 }
 
