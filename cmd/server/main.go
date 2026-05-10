@@ -102,6 +102,8 @@ func main() {
 	services.AssetService.WithStorage(storageSvc)
 	services.VideoService.WithSceneAnchorService(services.SceneAnchorService)
 	services.VideoService.WithSegmentRepo(repos.ShotVoiceSegmentRepo).WithTaskService(services.TaskService)
+	services.VideoService.WithVideoSocial(repos.VideoLikeRepo, repos.VideoCommentRepo)
+	services.NovelService.WithNovelSocial(repos.NovelLikeRepo, repos.NovelCommentRepo)
 	services.NovelImportService.WithStorage(storageSvc).WithAnalysisService(services.NovelAnalysisService).WithAIService(services.AIService)
 
 	// SFX 音效服务（五层降级：本地库 → Freesound → Pixabay → Jamendo → ElevenLabs）
@@ -182,6 +184,28 @@ func main() {
 		logger.Printf("Server starting on %s", cfg.Server.GetAddr())
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatalf("Server failed to start: %v", err)
+		}
+	}()
+
+	// 后台定时任务：每小时重新计算视频广场热度分
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := services.VideoService.RecalcVideoHotScores(); err != nil {
+				logger.Printf("[hot-score] recalc error: %v", err)
+			}
+		}
+	}()
+
+	// 后台定时任务：每小时重新计算小说广场热度分
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			if err := services.NovelService.RecalcNovelHotScores(); err != nil {
+				logger.Printf("[novel-hot-score] recalc error: %v", err)
+			}
 		}
 	}()
 
@@ -819,7 +843,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-10-v3"
+const schemaVersion = "2026-05-10-v5"
 
 // autoMigrate 自动迁移（带版本跳过优化）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -913,6 +937,11 @@ func autoMigrate(db *gorm.DB) error {
 		&model.AssetRequest{},
 		&model.SearchLog{},
 		&model.AssetStorageQuota{},
+		// 广场社交
+		&model.VideoLike{},
+		&model.VideoComment{},
+		&model.NovelLike{},
+		&model.NovelComment{},
 	); err != nil {
 		return err
 	}
@@ -1161,6 +1190,10 @@ type Repositories struct {
 	ShareLinkRepo           *repository.ShareLinkRepository
 	SearchLogRepo           *repository.SearchLogRepository
 	TenantQuotaRepo         *repository.AssetStorageQuotaRepository
+	VideoLikeRepo           *repository.VideoLikeRepository
+	VideoCommentRepo        *repository.VideoCommentRepository
+	NovelLikeRepo           *repository.NovelLikeRepository
+	NovelCommentRepo        *repository.NovelCommentRepository
 }
 
 // initRepositories 初始化仓库层
@@ -1218,6 +1251,10 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		ShareLinkRepo:         repository.NewShareLinkRepository(db),
 		SearchLogRepo:         repository.NewSearchLogRepository(db),
 		TenantQuotaRepo:       repository.NewAssetStorageQuotaRepository(db),
+		VideoLikeRepo:         repository.NewVideoLikeRepository(db),
+		VideoCommentRepo:      repository.NewVideoCommentRepository(db),
+		NovelLikeRepo:         repository.NewNovelLikeRepository(db),
+		NovelCommentRepo:      repository.NewNovelCommentRepository(db),
 	}
 }
 
@@ -1697,7 +1734,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		SystemHandler: handler.NewSystemHandler(repos.SystemSettingRepo),
 		FsHandler:     handler.NewFsHandler(),
 		RewriteHandler: handler.NewRewriteHandler(services.RewriteService),
-		PlatformHandler: handler.NewPlatformHandler(services.VideoService, services.PlatformPublishService),
+		PlatformHandler: handler.NewPlatformHandler(services.NovelService, services.VideoService, services.PlatformPublishService),
 		AssetHandler:    handler.NewAssetHandler(services.AssetService),
 	}
 }

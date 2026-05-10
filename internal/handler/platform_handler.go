@@ -2,29 +2,197 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
 
-// PlatformHandler 视频广场与外部平台发布处理器
+// PlatformHandler 视频广场、小说广场与外部平台发布处理器
 type PlatformHandler struct {
-	videoService    *service.VideoService
-	publishService  *service.PlatformPublishService
+	novelService   *service.NovelService
+	videoService   *service.VideoService
+	publishService *service.PlatformPublishService
 }
 
-func NewPlatformHandler(videoSvc *service.VideoService, publishSvc *service.PlatformPublishService) *PlatformHandler {
+func NewPlatformHandler(novelSvc *service.NovelService, videoSvc *service.VideoService, publishSvc *service.PlatformPublishService) *PlatformHandler {
 	return &PlatformHandler{
+		novelService:   novelSvc,
 		videoService:   videoSvc,
 		publishService: publishSvc,
 	}
 }
 
+// ─── 小说广场 ─────────────────────────────────────────────────────────────────
+
+// GetPlatformNovels 小说广场（公开，无需 JWT）
+// GET /api/v1/platform/novels?sort=latest|hot&q=关键词&page=1&page_size=12
+func (h *PlatformHandler) GetPlatformNovels(c *gin.Context) {
+	p := parsePagination(c)
+	sort := c.DefaultQuery("sort", "hot")
+	q := c.Query("q")
+
+	novels, total, err := h.novelService.ListPublicNovels(sort, q, p.Page, p.PageSize)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to list novels")
+		return
+	}
+	respondOK(c, gin.H{
+		"items":      novels,
+		"total":      total,
+		"page":       p.Page,
+		"page_size":  p.PageSize,
+		"total_page": (total + int64(p.PageSize) - 1) / int64(p.PageSize),
+	})
+}
+
+// GetPlatformNovel 获取公开小说详情（可选 JWT：已登录则附带 is_liked）
+// GET /api/v1/platform/novels/:id
+func (h *PlatformHandler) GetPlatformNovel(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	novel, err := h.novelService.GetPublicNovel(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found or not published")
+		return
+	}
+	isLiked := false
+	if uid := getUserID(c); uid > 0 {
+		isLiked = h.novelService.IsNovelLiked(uint(id), uid)
+	}
+	respondOK(c, gin.H{
+		"novel":    novel,
+		"is_liked": isLiked,
+	})
+}
+
+// RecordNovelView 记录小说浏览量（防刷）
+// POST /api/v1/platform/novels/:id/view
+func (h *PlatformHandler) RecordNovelView(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	_ = h.novelService.RecordNovelViewDeduped(uint(id), c.ClientIP())
+	respondOK(c, gin.H{"recorded": true})
+}
+
+// ToggleNovelLike 点赞/取消（需 JWT）
+// POST /api/v1/platform/novels/:id/like
+func (h *PlatformHandler) ToggleNovelLike(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	uid := getUserID(c)
+	if uid == 0 {
+		respondErr(c, http.StatusUnauthorized, "login required")
+		return
+	}
+	liked, err := h.novelService.ToggleNovelLike(uint(id), uid)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"liked": liked})
+}
+
+// ListNovelComments 获取评论列表（公开）
+// GET /api/v1/platform/novels/:id/comments?page=1&page_size=20
+func (h *PlatformHandler) ListNovelComments(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	size, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 || size > 100 {
+		size = 20
+	}
+	comments, total, err := h.novelService.ListNovelComments(uint(id), page, size)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to list comments")
+		return
+	}
+	respondOK(c, gin.H{
+		"items":      comments,
+		"total":      total,
+		"page":       page,
+		"page_size":  size,
+		"total_page": (total + int64(size) - 1) / int64(size),
+	})
+}
+
+// AddNovelComment 发表评论（需 JWT）
+// POST /api/v1/platform/novels/:id/comments
+func (h *PlatformHandler) AddNovelComment(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	uid := getUserID(c)
+	if uid == 0 {
+		respondErr(c, http.StatusUnauthorized, "login required")
+		return
+	}
+	var req struct {
+		Content  string `json:"content" binding:"required"`
+		ParentID *uint  `json:"parent_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondErr(c, http.StatusBadRequest, "content is required")
+		return
+	}
+	nickname := ""
+	if n, exists := c.Get("nickname"); exists {
+		if s, ok2 := n.(string); ok2 {
+			nickname = s
+		}
+	}
+	comment, err := h.novelService.AddNovelComment(uint(id), uid, nickname, req.Content, req.ParentID)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"code": 0, "data": comment})
+}
+
+// DeleteNovelComment 删除评论（作者本人）
+// DELETE /api/v1/platform/novels/:id/comments/:cid
+func (h *PlatformHandler) DeleteNovelComment(c *gin.Context) {
+	cid, ok := parseID(c, "cid")
+	if !ok {
+		return
+	}
+	uid := getUserID(c)
+	if uid == 0 {
+		respondErr(c, http.StatusUnauthorized, "login required")
+		return
+	}
+	if err := h.novelService.DeleteNovelComment(uint(cid), uid); err != nil {
+		if err.Error() == "permission denied" {
+			respondErr(c, http.StatusForbidden, "permission denied")
+		} else {
+			respondErr(c, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	respondOK(c, gin.H{"deleted": true})
+}
+
 // GetPlatformFeed 视频广场（公开，无需 JWT）
-// GET /api/v1/platform/videos
+// GET /api/v1/platform/videos?sort=latest|hot&q=关键词&page=1&page_size=12
 func (h *PlatformHandler) GetPlatformFeed(c *gin.Context) {
 	p := parsePagination(c)
-	videos, total, err := h.videoService.ListPublicVideos(p.Page, p.PageSize)
+	sort := c.DefaultQuery("sort", "hot")
+	q := c.Query("q")
+
+	videos, total, err := h.videoService.ListPublicVideos(sort, q, p.Page, p.PageSize)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to list videos")
 		return
@@ -38,34 +206,155 @@ func (h *PlatformHandler) GetPlatformFeed(c *gin.Context) {
 	})
 }
 
-// GetPlatformVideo 获取公开视频详情（JWT 保护）
+// GetPlatformVideo 获取公开视频详情（可选 JWT：已登录则附带 is_liked）
 // GET /api/v1/platform/videos/:id
 func (h *PlatformHandler) GetPlatformVideo(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
-	video, err := h.videoService.GetVideoByTenant(uint(id), 0) // 0 = 任意租户（公开视频）
-	if err != nil || !video.IsPublished {
+	video, err := h.videoService.GetPublicVideo(uint(id))
+	if err != nil {
 		respondErr(c, http.StatusNotFound, "video not found or not published")
 		return
 	}
-	respondOK(c, video)
+
+	// 附带当前用户是否已点赞（登录时有效）
+	isLiked := false
+	if uid := getUserID(c); uid > 0 {
+		isLiked = h.videoService.IsVideoLiked(uint(id), uid)
+	}
+
+	respondOK(c, gin.H{
+		"video":    video,
+		"is_liked": isLiked,
+	})
 }
 
-// RecordView 记录视频播放量（公开）
+// RecordView 记录视频播放量（防刷，同 IP 1 小时内只计一次）
 // POST /api/v1/platform/videos/:id/view
 func (h *PlatformHandler) RecordView(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
-	_ = h.videoService.IncrVideoViewCount(uint(id))
+	clientIP := c.ClientIP()
+	_ = h.videoService.RecordViewDeduped(uint(id), clientIP)
 	respondOK(c, gin.H{"recorded": true})
 }
 
+// ToggleLike 点赞/取消（需 JWT）
+// POST /api/v1/platform/videos/:id/like
+func (h *PlatformHandler) ToggleLike(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	uid := getUserID(c)
+	if uid == 0 {
+		respondErr(c, http.StatusUnauthorized, "login required")
+		return
+	}
+	liked, err := h.videoService.ToggleVideoLike(uint(id), uid)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"liked": liked})
+}
+
+// ListComments 获取评论列表（公开）
+// GET /api/v1/platform/videos/:id/comments?page=1&page_size=20
+func (h *PlatformHandler) ListComments(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	size, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 || size > 100 {
+		size = 20
+	}
+
+	comments, total, err := h.videoService.ListVideoComments(uint(id), page, size)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to list comments")
+		return
+	}
+	respondOK(c, gin.H{
+		"items":      comments,
+		"total":      total,
+		"page":       page,
+		"page_size":  size,
+		"total_page": (total + int64(size) - 1) / int64(size),
+	})
+}
+
+// AddComment 发表评论（需 JWT）
+// POST /api/v1/platform/videos/:id/comments
+func (h *PlatformHandler) AddComment(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	uid := getUserID(c)
+	if uid == 0 {
+		respondErr(c, http.StatusUnauthorized, "login required")
+		return
+	}
+
+	var req struct {
+		Content  string `json:"content" binding:"required"`
+		ParentID *uint  `json:"parent_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondErr(c, http.StatusBadRequest, "content is required")
+		return
+	}
+
+	// 从 JWT claims 取昵称（graceful fallback）
+	nickname := ""
+	if n, exists := c.Get("nickname"); exists {
+		if s, ok2 := n.(string); ok2 {
+			nickname = s
+		}
+	}
+
+	comment, err := h.videoService.AddVideoComment(uint(id), uid, nickname, req.Content, req.ParentID)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"code": 0, "data": comment})
+}
+
+// DeleteComment 删除评论（作者本人）
+// DELETE /api/v1/platform/videos/:id/comments/:cid
+func (h *PlatformHandler) DeleteComment(c *gin.Context) {
+	cid, ok := parseID(c, "cid")
+	if !ok {
+		return
+	}
+	uid := getUserID(c)
+	if uid == 0 {
+		respondErr(c, http.StatusUnauthorized, "login required")
+		return
+	}
+	if err := h.videoService.DeleteVideoComment(uint(cid), uid); err != nil {
+		if err.Error() == "permission denied" {
+			respondErr(c, http.StatusForbidden, "permission denied")
+		} else {
+			respondErr(c, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	respondOK(c, gin.H{"deleted": true})
+}
+
 // ListAccounts 列出平台账号（JWT 保护）
-// GET /api/v1/platform/accounts
 func (h *PlatformHandler) ListAccounts(c *gin.Context) {
 	accounts, err := h.publishService.ListAccounts(getTenantID(c))
 	if err != nil {
@@ -75,8 +364,7 @@ func (h *PlatformHandler) ListAccounts(c *gin.Context) {
 	respondOK(c, accounts)
 }
 
-// ConnectAccount OAuth 跳转（JWT 保护）
-// GET /api/v1/platform/accounts/oauth/:platform → 302
+// ConnectAccount OAuth 跳转
 func (h *PlatformHandler) ConnectAccount(c *gin.Context) {
 	platform := c.Param("platform")
 	redirectURI := c.Query("redirect_uri")
@@ -97,8 +385,7 @@ func (h *PlatformHandler) ConnectAccount(c *gin.Context) {
 	c.Redirect(http.StatusFound, url)
 }
 
-// OAuthCallback OAuth 回调（JWT 保护）
-// GET /api/v1/platform/accounts/callback/:platform
+// OAuthCallback OAuth 回调
 func (h *PlatformHandler) OAuthCallback(c *gin.Context) {
 	platform := c.Param("platform")
 	code := c.Query("code")
@@ -115,8 +402,7 @@ func (h *PlatformHandler) OAuthCallback(c *gin.Context) {
 	respondOK(c, account)
 }
 
-// DisconnectAccount 解绑平台账号（JWT 保护）
-// DELETE /api/v1/platform/accounts/:id
+// DisconnectAccount 解绑平台账号
 func (h *PlatformHandler) DisconnectAccount(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -129,8 +415,7 @@ func (h *PlatformHandler) DisconnectAccount(c *gin.Context) {
 	respondOK(c, gin.H{"disconnected": true})
 }
 
-// PublishToExternal 向外部平台发布视频（JWT 保护）
-// POST /api/v1/videos/:id/publish-external
+// PublishToExternal 向外部平台发布视频
 func (h *PlatformHandler) PublishToExternal(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -169,8 +454,7 @@ func (h *PlatformHandler) PublishToExternal(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"code": 0, "data": gin.H{"task_id": taskID}})
 }
 
-// ListPublishRecords 列出视频发布记录（JWT 保护）
-// GET /api/v1/videos/:id/publish-records
+// ListPublishRecords 列出视频发布记录
 func (h *PlatformHandler) ListPublishRecords(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -182,4 +466,19 @@ func (h *PlatformHandler) ListPublishRecords(c *gin.Context) {
 		return
 	}
 	respondOK(c, records)
+}
+
+// getUserID 从 JWT claims 提取用户 ID（未登录返回 0）
+func getUserID(c *gin.Context) uint {
+	if v, exists := c.Get("user_id"); exists {
+		switch id := v.(type) {
+		case uint:
+			return id
+		case float64:
+			return uint(id)
+		case int:
+			return uint(id)
+		}
+	}
+	return 0
 }

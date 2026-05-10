@@ -44,6 +44,10 @@ type VideoService struct {
 	videoSemMu         sync.RWMutex  // protects videoSem replacement
 	audioSem           chan struct{} // limits concurrent TTS calls; nil = unlimited
 	charListCache      sync.Map      // novelID → *charListEntry (short-lived cache for batch voice gen)
+	// 广场社交
+	videoLikeRepo    *repository.VideoLikeRepository
+	videoCommentRepo *repository.VideoCommentRepository
+	viewDedupCache   sync.Map // key "ip:id" → expiry time.Time（防刷播放量）
 }
 
 // charListEntry is a TTL-bounded cache entry for ListByNovel results.
@@ -1374,14 +1378,134 @@ func (s *VideoService) UpdateVideoFields(id uint, fields map[string]interface{})
 	return s.videoRepo.UpdateFields(id, fields)
 }
 
+// WithVideoSocial 注入广场社交仓库
+func (s *VideoService) WithVideoSocial(likeRepo *repository.VideoLikeRepository, commentRepo *repository.VideoCommentRepository) *VideoService {
+	s.videoLikeRepo = likeRepo
+	s.videoCommentRepo = commentRepo
+	return s
+}
+
 // IncrVideoViewCount 增加视频播放量
 func (s *VideoService) IncrVideoViewCount(id uint) error {
 	return s.videoRepo.IncrViewCount(id)
 }
 
-// ListPublicVideos 列出公开视频（用于广场）
-func (s *VideoService) ListPublicVideos(page, pageSize int) ([]*model.Video, int64, error) {
-	return s.videoRepo.ListPublic(page, pageSize)
+// RecordViewDeduped 防刷播放量（同一 IP 对同一视频 1 小时内只计一次）
+func (s *VideoService) RecordViewDeduped(id uint, clientIP string) error {
+	key := fmt.Sprintf("%s:%d", clientIP, id)
+	if v, ok := s.viewDedupCache.Load(key); ok {
+		if expiry, ok2 := v.(time.Time); ok2 && time.Now().Before(expiry) {
+			return nil // 已记录，跳过
+		}
+	}
+	s.viewDedupCache.Store(key, time.Now().Add(time.Hour))
+	return s.videoRepo.IncrViewCount(id)
+}
+
+// GetPublicVideo 获取单条公开视频（无需 tenantID）
+func (s *VideoService) GetPublicVideo(id uint) (*model.Video, error) {
+	return s.videoRepo.GetPublicByID(id)
+}
+
+// ListPublicVideos 列出公开视频（支持排序 latest|hot 和关键词搜索）
+func (s *VideoService) ListPublicVideos(sort, q string, page, pageSize int) ([]*model.Video, int64, error) {
+	if sort == "" {
+		sort = "hot"
+	}
+	return s.videoRepo.ListPublicSorted(sort, q, page, pageSize)
+}
+
+// ToggleVideoLike 点赞/取消点赞，返回最终状态
+func (s *VideoService) ToggleVideoLike(videoID, userID uint) (liked bool, err error) {
+	if s.videoLikeRepo == nil {
+		return false, fmt.Errorf("like feature not available")
+	}
+	liked, err = s.videoLikeRepo.Toggle(videoID, userID)
+	if err != nil {
+		return false, err
+	}
+	delta := 1
+	if !liked {
+		delta = -1
+	}
+	_ = s.videoRepo.IncrLikeCount(videoID, delta)
+	return liked, nil
+}
+
+// IsVideoLiked 检查用户是否已点赞
+func (s *VideoService) IsVideoLiked(videoID, userID uint) bool {
+	if s.videoLikeRepo == nil {
+		return false
+	}
+	exists, _ := s.videoLikeRepo.Exists(videoID, userID)
+	return exists
+}
+
+// ListVideoComments 获取评论列表
+func (s *VideoService) ListVideoComments(videoID uint, page, size int) ([]*model.VideoComment, int64, error) {
+	if s.videoCommentRepo == nil {
+		return nil, 0, nil
+	}
+	return s.videoCommentRepo.ListByVideo(videoID, page, size)
+}
+
+// AddVideoComment 发表评论
+func (s *VideoService) AddVideoComment(videoID, userID uint, nickname, content string, parentID *uint) (*model.VideoComment, error) {
+	if s.videoCommentRepo == nil {
+		return nil, fmt.Errorf("comment feature not available")
+	}
+	c := &model.VideoComment{
+		VideoID:  videoID,
+		UserID:   userID,
+		Nickname: nickname,
+		Content:  content,
+		ParentID: parentID,
+	}
+	if err := s.videoCommentRepo.Create(c); err != nil {
+		return nil, err
+	}
+	_ = s.videoRepo.IncrCommentCount(videoID, 1)
+	return c, nil
+}
+
+// DeleteVideoComment 删除评论（只允许作者删除）
+func (s *VideoService) DeleteVideoComment(commentID, callerID uint) error {
+	if s.videoCommentRepo == nil {
+		return fmt.Errorf("comment feature not available")
+	}
+	c, err := s.videoCommentRepo.GetByID(commentID)
+	if err != nil {
+		return err
+	}
+	if c.UserID != callerID {
+		return fmt.Errorf("permission denied")
+	}
+	if err := s.videoCommentRepo.Delete(commentID); err != nil {
+		return err
+	}
+	_ = s.videoRepo.IncrCommentCount(c.VideoID, -1)
+	return nil
+}
+
+// RecalcVideoHotScores 重新计算所有公开视频热度分（定时任务调用）
+// HotScore = view_count×0.5 + like_count×0.3 + comment_count×0.2，叠加时间衰减
+func (s *VideoService) RecalcVideoHotScores() error {
+	videos, err := s.videoRepo.ListPublicForHotCalc()
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	for _, v := range videos {
+		ageDays := 1.0
+		if v.PublishedAt != nil {
+			ageDays = now.Sub(*v.PublishedAt).Hours()/24 + 1
+		}
+		// 简单时间衰减：分母随天数增长
+		decay := 1.0 / (1.0 + ageDays*0.1)
+		score := (float64(v.ViewCount)*0.5 + float64(v.LikeCount)*0.3 + float64(v.CommentCount)*0.2) * decay
+		_ = s.videoRepo.UpdateHotScore(v.ID, score)
+	}
+	return nil
 }
 
 // DeleteVideo 删除视频

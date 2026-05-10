@@ -932,22 +932,129 @@ func (r *VideoRepository) UpdateFields(id uint, fields map[string]interface{}) e
 
 // ListPublic 列出公开发布的视频（用于广场）
 func (r *VideoRepository) ListPublic(page, pageSize int) ([]*model.Video, int64, error) {
+	return r.ListPublicSorted("hot", "", page, pageSize)
+}
+
+// ListPublicSorted 排序列出公开视频（sort: latest|hot；q: 关键词搜索）
+func (r *VideoRepository) ListPublicSorted(sort, q string, page, pageSize int) ([]*model.Video, int64, error) {
 	var videos []*model.Video
 	var total int64
-	q := r.db.Model(&model.Video{}).Where("is_published = ? AND visibility = ?", true, "public")
-	if err := q.Count(&total).Error; err != nil {
+	base := r.db.Model(&model.Video{}).Where("is_published = ? AND visibility = ?", true, "public")
+	if q != "" {
+		base = base.Where("title LIKE ? OR description LIKE ?", "%"+q+"%", "%"+q+"%")
+	}
+	if err := base.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
+	order := "hot_score DESC, published_at DESC"
+	if sort == "latest" {
+		order = "published_at DESC, created_at DESC"
+	}
 	offset := (page - 1) * pageSize
-	if err := q.Order("view_count DESC, created_at DESC").Offset(offset).Limit(pageSize).Find(&videos).Error; err != nil {
+	if err := base.Order(order).Offset(offset).Limit(pageSize).Find(&videos).Error; err != nil {
 		return nil, 0, err
 	}
 	return videos, total, nil
 }
 
+// GetPublicByID 获取单条公开视频（不需要 tenantID）
+func (r *VideoRepository) GetPublicByID(id uint) (*model.Video, error) {
+	var v model.Video
+	err := r.db.Where("id = ? AND is_published = ? AND visibility = ?", id, true, "public").First(&v).Error
+	return &v, err
+}
+
 // IncrViewCount 视频播放量+1
 func (r *VideoRepository) IncrViewCount(id uint) error {
 	return r.db.Model(&model.Video{}).Where("id = ?", id).UpdateColumn("view_count", gorm.Expr("view_count + 1")).Error
+}
+
+// IncrLikeCount 点赞数 delta（+1 或 -1）
+func (r *VideoRepository) IncrLikeCount(id uint, delta int) error {
+	return r.db.Model(&model.Video{}).Where("id = ?", id).UpdateColumn("like_count", gorm.Expr("like_count + ?", delta)).Error
+}
+
+// IncrCommentCount 评论数 delta（+1 或 -1）
+func (r *VideoRepository) IncrCommentCount(id uint, delta int) error {
+	return r.db.Model(&model.Video{}).Where("id = ?", id).UpdateColumn("comment_count", gorm.Expr("comment_count + ?", delta)).Error
+}
+
+// UpdateHotScore 更新热度分
+func (r *VideoRepository) UpdateHotScore(id uint, score float64) error {
+	return r.db.Model(&model.Video{}).Where("id = ?", id).Update("hot_score", score).Error
+}
+
+// ListPublicForHotCalc 列出所有公开视频用于热度分批量计算
+func (r *VideoRepository) ListPublicForHotCalc() ([]*model.Video, error) {
+	var videos []*model.Video
+	err := r.db.Model(&model.Video{}).Where("is_published = ? AND visibility = ?", true, "public").
+		Select("id, view_count, like_count, comment_count, published_at").Find(&videos).Error
+	return videos, err
+}
+
+// ─── VideoLikeRepository ────────────────────────────────────────────────────
+
+type VideoLikeRepository struct{ db *gorm.DB }
+
+func NewVideoLikeRepository(db *gorm.DB) *VideoLikeRepository {
+	return &VideoLikeRepository{db: db}
+}
+
+// Toggle 点赞/取消，返回最终状态
+func (r *VideoLikeRepository) Toggle(videoID, userID uint) (liked bool, err error) {
+	var like model.VideoLike
+	result := r.db.Where("video_id = ? AND user_id = ?", videoID, userID).First(&like)
+	if result.Error != nil {
+		// 不存在 → 创建
+		if err2 := r.db.Create(&model.VideoLike{VideoID: videoID, UserID: userID}).Error; err2 != nil {
+			return false, err2
+		}
+		return true, nil
+	}
+	// 已存在 → 删除
+	return false, r.db.Delete(&like).Error
+}
+
+// Exists 检查是否已点赞
+func (r *VideoLikeRepository) Exists(videoID, userID uint) (bool, error) {
+	var count int64
+	err := r.db.Model(&model.VideoLike{}).Where("video_id = ? AND user_id = ?", videoID, userID).Count(&count).Error
+	return count > 0, err
+}
+
+// ─── VideoCommentRepository ──────────────────────────────────────────────────
+
+type VideoCommentRepository struct{ db *gorm.DB }
+
+func NewVideoCommentRepository(db *gorm.DB) *VideoCommentRepository {
+	return &VideoCommentRepository{db: db}
+}
+
+func (r *VideoCommentRepository) Create(c *model.VideoComment) error {
+	return r.db.Create(c).Error
+}
+
+func (r *VideoCommentRepository) ListByVideo(videoID uint, page, size int) ([]*model.VideoComment, int64, error) {
+	var list []*model.VideoComment
+	var total int64
+	base := r.db.Model(&model.VideoComment{}).Where("video_id = ?", videoID)
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	offset := (page - 1) * size
+	if err := base.Order("created_at DESC").Offset(offset).Limit(size).Find(&list).Error; err != nil {
+		return nil, 0, err
+	}
+	return list, total, nil
+}
+
+func (r *VideoCommentRepository) GetByID(id uint) (*model.VideoComment, error) {
+	var c model.VideoComment
+	return &c, r.db.First(&c, id).Error
+}
+
+func (r *VideoCommentRepository) Delete(id uint) error {
+	return r.db.Delete(&model.VideoComment{}, id).Error
 }
 
 // StoryboardRepository 分镜仓库
@@ -2088,4 +2195,130 @@ func collectIDs(segs []*model.VideoBGMSegment) []uint {
 		ids[i] = s.ID
 	}
 	return ids
+}
+
+// ─── 小说广场 — NovelRepository 扩展 ──────────────────────────────────────────
+
+// GetPublicByID 获取单条公开小说（无需 tenantID）
+func (r *NovelRepository) GetPublicByID(id uint) (*model.Novel, error) {
+	var n model.Novel
+	err := r.db.Where("id = ? AND is_published = ? AND visibility = ?", id, true, "public").
+		First(&n).Error
+	return &n, err
+}
+
+// ListPublicSorted 列出公开小说（sort: latest|hot；q: 标题/描述关键词）
+func (r *NovelRepository) ListPublicSorted(sort, q string, page, pageSize int) ([]*model.Novel, int64, error) {
+	var novels []*model.Novel
+	var total int64
+	base := r.db.Model(&model.Novel{}).Where("is_published = ? AND visibility = ?", true, "public")
+	if q != "" {
+		base = base.Where("title LIKE ? OR description LIKE ?", "%"+q+"%", "%"+q+"%")
+	}
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	order := "hot_score DESC, published_at DESC"
+	if sort == "latest" {
+		order = "published_at DESC, created_at DESC"
+	}
+	offset := (page - 1) * pageSize
+	err := base.Order(order).Offset(offset).Limit(pageSize).Find(&novels).Error
+	return novels, total, err
+}
+
+// IncrNovelViewCount 浏览量+1
+func (r *NovelRepository) IncrNovelViewCount(id uint) error {
+	return r.db.Model(&model.Novel{}).Where("id = ?", id).
+		UpdateColumn("view_count", gorm.Expr("view_count + 1")).Error
+}
+
+// IncrNovelLikeCount 点赞数 delta（+1 或 -1）
+func (r *NovelRepository) IncrNovelLikeCount(id uint, delta int) error {
+	return r.db.Model(&model.Novel{}).Where("id = ?", id).
+		UpdateColumn("like_count", gorm.Expr("like_count + ?", delta)).Error
+}
+
+// IncrNovelCommentCount 评论数 delta
+func (r *NovelRepository) IncrNovelCommentCount(id uint, delta int) error {
+	return r.db.Model(&model.Novel{}).Where("id = ?", id).
+		UpdateColumn("comment_count", gorm.Expr("comment_count + ?", delta)).Error
+}
+
+// UpdateNovelHotScore 更新热度分
+func (r *NovelRepository) UpdateNovelHotScore(id uint, score float64) error {
+	return r.db.Model(&model.Novel{}).Where("id = ?", id).Update("hot_score", score).Error
+}
+
+// ListPublicNovelsForHotCalc 批量拉取公开小说用于热度分计算
+func (r *NovelRepository) ListPublicNovelsForHotCalc() ([]*model.Novel, error) {
+	var novels []*model.Novel
+	err := r.db.Model(&model.Novel{}).
+		Where("is_published = ? AND visibility = ?", true, "public").
+		Select("id, view_count, like_count, comment_count, published_at").
+		Find(&novels).Error
+	return novels, err
+}
+
+// ─── NovelLikeRepository ────────────────────────────────────────────────────
+
+type NovelLikeRepository struct{ db *gorm.DB }
+
+func NewNovelLikeRepository(db *gorm.DB) *NovelLikeRepository {
+	return &NovelLikeRepository{db: db}
+}
+
+// Toggle 点赞/取消，返回最终状态（true=已点赞）
+func (r *NovelLikeRepository) Toggle(novelID, userID uint) (liked bool, err error) {
+	var like model.NovelLike
+	result := r.db.Where("novel_id = ? AND user_id = ?", novelID, userID).First(&like)
+	if result.Error != nil {
+		if err2 := r.db.Create(&model.NovelLike{NovelID: novelID, UserID: userID}).Error; err2 != nil {
+			return false, err2
+		}
+		return true, nil
+	}
+	return false, r.db.Delete(&like).Error
+}
+
+// Exists 是否已点赞
+func (r *NovelLikeRepository) Exists(novelID, userID uint) (bool, error) {
+	var count int64
+	err := r.db.Model(&model.NovelLike{}).
+		Where("novel_id = ? AND user_id = ?", novelID, userID).Count(&count).Error
+	return count > 0, err
+}
+
+// ─── NovelCommentRepository ─────────────────────────────────────────────────
+
+type NovelCommentRepository struct{ db *gorm.DB }
+
+func NewNovelCommentRepository(db *gorm.DB) *NovelCommentRepository {
+	return &NovelCommentRepository{db: db}
+}
+
+func (r *NovelCommentRepository) Create(c *model.NovelComment) error {
+	return r.db.Create(c).Error
+}
+
+func (r *NovelCommentRepository) ListByNovel(novelID uint, page, size int) ([]*model.NovelComment, int64, error) {
+	var list []*model.NovelComment
+	var total int64
+	base := r.db.Model(&model.NovelComment{}).Where("novel_id = ?", novelID)
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	offset := (page - 1) * size
+	err := base.Order("created_at DESC").Offset(offset).Limit(size).Find(&list).Error
+	return list, total, err
+}
+
+func (r *NovelCommentRepository) GetByID(id uint) (*model.NovelComment, error) {
+	var c model.NovelComment
+	err := r.db.First(&c, id).Error
+	return &c, err
+}
+
+func (r *NovelCommentRepository) Delete(id uint) error {
+	return r.db.Delete(&model.NovelComment{}, id).Error
 }

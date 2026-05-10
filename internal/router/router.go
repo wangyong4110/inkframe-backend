@@ -499,13 +499,24 @@ func SetupRouter(cfg *Config) *gin.Engine {
 
 		// 平台广场 + 外部账号
 		if cfg.PlatformHandler != nil {
-			// 公开路由（广场）
+			// 公开路由（无需 JWT）
 			v1.GET("/platform/videos", cfg.PlatformHandler.GetPlatformFeed)
+			v1.GET("/platform/videos/:id", cfg.PlatformHandler.GetPlatformVideo)
 			v1.POST("/platform/videos/:id/view", cfg.PlatformHandler.RecordView)
+			v1.GET("/platform/videos/:id/comments", cfg.PlatformHandler.ListComments)
+			v1.GET("/platform/novels", cfg.PlatformHandler.GetPlatformNovels)
+			v1.GET("/platform/novels/:id", cfg.PlatformHandler.GetPlatformNovel)
+			v1.POST("/platform/novels/:id/view", cfg.PlatformHandler.RecordNovelView)
+			v1.GET("/platform/novels/:id/comments", cfg.PlatformHandler.ListNovelComments)
 			// JWT 保护的平台路由
 			platformR := v1.Group("/platform")
 			{
-				platformR.GET("/videos/:id", cfg.PlatformHandler.GetPlatformVideo)
+				platformR.POST("/videos/:id/like", cfg.PlatformHandler.ToggleLike)
+				platformR.POST("/videos/:id/comments", cfg.PlatformHandler.AddComment)
+				platformR.DELETE("/videos/:id/comments/:cid", cfg.PlatformHandler.DeleteComment)
+				platformR.POST("/novels/:id/like", cfg.PlatformHandler.ToggleNovelLike)
+				platformR.POST("/novels/:id/comments", cfg.PlatformHandler.AddNovelComment)
+				platformR.DELETE("/novels/:id/comments/:cid", cfg.PlatformHandler.DeleteNovelComment)
 				platformR.GET("/accounts", cfg.PlatformHandler.ListAccounts)
 				platformR.GET("/accounts/oauth/:platform", cfg.PlatformHandler.ConnectAccount)
 				platformR.GET("/accounts/callback/:platform", cfg.PlatformHandler.OAuthCallback)

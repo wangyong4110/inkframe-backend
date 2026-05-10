@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -20,6 +21,10 @@ type NovelService struct {
 	characterRepo    *repository.CharacterRepository
 	snapshotRepo     *repository.CharacterStateSnapshotRepository
 	plotPointService *PlotPointService
+	// 广场社交
+	novelLikeRepo    *repository.NovelLikeRepository
+	novelCommentRepo *repository.NovelCommentRepository
+	novelViewDedup   sync.Map // key "ip:id" → expiry time.Time
 }
 
 func NewNovelService(
@@ -814,3 +819,129 @@ type TaskRouting struct {
 }
 
 // AIService AI服务
+
+// ─── 小说广场 ─────────────────────────────────────────────────────────────────
+
+// WithNovelSocial 注入广场社交仓库
+func (s *NovelService) WithNovelSocial(likeRepo *repository.NovelLikeRepository, commentRepo *repository.NovelCommentRepository) *NovelService {
+	s.novelLikeRepo = likeRepo
+	s.novelCommentRepo = commentRepo
+	return s
+}
+
+// GetPublicNovel 获取公开小说详情（无需 tenantID）
+func (s *NovelService) GetPublicNovel(id uint) (*model.Novel, error) {
+	return s.novelRepo.GetPublicByID(id)
+}
+
+// ListPublicNovels 列出公开小说（sort: latest|hot，q: 关键词）
+func (s *NovelService) ListPublicNovels(sort, q string, page, pageSize int) ([]*model.Novel, int64, error) {
+	if sort == "" {
+		sort = "hot"
+	}
+	return s.novelRepo.ListPublicSorted(sort, q, page, pageSize)
+}
+
+// RecordNovelViewDeduped 防刷浏览量（同 IP 对同一小说 1 小时内只计一次）
+func (s *NovelService) RecordNovelViewDeduped(id uint, clientIP string) error {
+	key := fmt.Sprintf("novel:%s:%d", clientIP, id)
+	if v, ok := s.novelViewDedup.Load(key); ok {
+		if expiry, ok2 := v.(time.Time); ok2 && time.Now().Before(expiry) {
+			return nil
+		}
+	}
+	s.novelViewDedup.Store(key, time.Now().Add(time.Hour))
+	return s.novelRepo.IncrNovelViewCount(id)
+}
+
+// ToggleNovelLike 点赞/取消，返回最终状态
+func (s *NovelService) ToggleNovelLike(novelID, userID uint) (bool, error) {
+	if s.novelLikeRepo == nil {
+		return false, fmt.Errorf("like feature not available")
+	}
+	liked, err := s.novelLikeRepo.Toggle(novelID, userID)
+	if err != nil {
+		return false, err
+	}
+	delta := 1
+	if !liked {
+		delta = -1
+	}
+	_ = s.novelRepo.IncrNovelLikeCount(novelID, delta)
+	return liked, nil
+}
+
+// IsNovelLiked 检查用户是否已点赞
+func (s *NovelService) IsNovelLiked(novelID, userID uint) bool {
+	if s.novelLikeRepo == nil {
+		return false
+	}
+	exists, _ := s.novelLikeRepo.Exists(novelID, userID)
+	return exists
+}
+
+// ListNovelComments 获取评论列表
+func (s *NovelService) ListNovelComments(novelID uint, page, size int) ([]*model.NovelComment, int64, error) {
+	if s.novelCommentRepo == nil {
+		return nil, 0, nil
+	}
+	return s.novelCommentRepo.ListByNovel(novelID, page, size)
+}
+
+// AddNovelComment 发表评论
+func (s *NovelService) AddNovelComment(novelID, userID uint, nickname, content string, parentID *uint) (*model.NovelComment, error) {
+	if s.novelCommentRepo == nil {
+		return nil, fmt.Errorf("comment feature not available")
+	}
+	c := &model.NovelComment{
+		NovelID:  novelID,
+		UserID:   userID,
+		Nickname: nickname,
+		Content:  content,
+		ParentID: parentID,
+	}
+	if err := s.novelCommentRepo.Create(c); err != nil {
+		return nil, err
+	}
+	_ = s.novelRepo.IncrNovelCommentCount(novelID, 1)
+	return c, nil
+}
+
+// DeleteNovelComment 删除评论（仅作者本人）
+func (s *NovelService) DeleteNovelComment(commentID, userID uint) error {
+	if s.novelCommentRepo == nil {
+		return fmt.Errorf("comment feature not available")
+	}
+	c, err := s.novelCommentRepo.GetByID(commentID)
+	if err != nil {
+		return err
+	}
+	if c.UserID != userID {
+		return fmt.Errorf("permission denied")
+	}
+	if err := s.novelCommentRepo.Delete(commentID); err != nil {
+		return err
+	}
+	_ = s.novelRepo.IncrNovelCommentCount(c.NovelID, -1)
+	return nil
+}
+
+// RecalcNovelHotScores 批量重算热度分（由后台定时任务调用）
+// hot_score = (view×0.5 + like×0.3 + comment×0.2) × (1 / (1 + ageDays×0.1))
+func (s *NovelService) RecalcNovelHotScores() error {
+	novels, err := s.novelRepo.ListPublicNovelsForHotCalc()
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	for _, n := range novels {
+		ageDays := 0.0
+		if n.PublishedAt != nil {
+			ageDays = now.Sub(*n.PublishedAt).Hours() / 24
+		}
+		base := float64(n.ViewCount)*0.5 + float64(n.LikeCount)*0.3 + float64(n.CommentCount)*0.2
+		score := base / (1 + ageDays*0.1)
+		_ = s.novelRepo.UpdateNovelHotScore(n.ID, score)
+	}
+	return nil
+}

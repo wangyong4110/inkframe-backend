@@ -147,6 +147,16 @@ type Novel struct {
 	// 视频/字幕配置（已迁移至 ink_novel_video_config，通过 VideoConfig 关联访问）
 	VideoConfig *NovelVideoConfig `json:"video_config,omitempty" gorm:"foreignKey:NovelID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
 
+	// 广场社交字段
+	IsPublished  bool       `json:"is_published" gorm:"default:false;index"`
+	PublishedAt  *time.Time `json:"published_at"`
+	Visibility   string     `json:"visibility" gorm:"size:20;default:'private'"` // private|unlisted|public
+	ViewCount    int        `json:"view_count" gorm:"default:0"`
+	LikeCount    int        `json:"like_count" gorm:"default:0"`
+	CommentCount int        `json:"comment_count" gorm:"default:0"`
+	HotScore     float64    `json:"hot_score" gorm:"default:0;index"`
+	PlazaTags    string     `json:"plaza_tags" gorm:"size:500"` // JSON 数组，如 ["玄幻","古风"]
+
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -858,6 +868,12 @@ type Video struct {
 	ViewCount     int        `json:"view_count" gorm:"default:0"`
 	Visibility    string     `json:"visibility" gorm:"size:20;default:'private'"` // private|unlisted|public
 
+	// 广场社交字段
+	LikeCount    int     `json:"like_count" gorm:"default:0"`
+	CommentCount int     `json:"comment_count" gorm:"default:0"`
+	HotScore     float64 `json:"hot_score" gorm:"default:0;index"` // 热度分，定时计算
+	Tags         string  `json:"tags" gorm:"size:500"`             // JSON 数组，如 ["玄幻","古风"]
+
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
@@ -866,6 +882,52 @@ type Video struct {
 func (Video) TableName() string {
 	return "ink_video"
 }
+
+// VideoLike 视频点赞（ink_video_like）
+type VideoLike struct {
+	VideoID   uint      `gorm:"primaryKey"`
+	UserID    uint      `gorm:"primaryKey"`
+	CreatedAt time.Time
+}
+
+func (VideoLike) TableName() string { return "ink_video_like" }
+
+// VideoComment 视频评论（ink_video_comment）
+type VideoComment struct {
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	VideoID   uint      `json:"video_id" gorm:"index"`
+	UserID    uint      `json:"user_id"`
+	Nickname  string    `json:"nickname" gorm:"size:100"` // 冗余，避免 JOIN
+	Content   string    `json:"content" gorm:"size:2000"`
+	ParentID  *uint     `json:"parent_id"` // 二级回复
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (VideoComment) TableName() string { return "ink_video_comment" }
+
+// NovelLike 小说点赞（ink_novel_like）
+type NovelLike struct {
+	NovelID   uint      `gorm:"primaryKey"`
+	UserID    uint      `gorm:"primaryKey"`
+	CreatedAt time.Time
+}
+
+func (NovelLike) TableName() string { return "ink_novel_like" }
+
+// NovelComment 小说评论（ink_novel_comment）
+type NovelComment struct {
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	NovelID   uint      `json:"novel_id" gorm:"index"`
+	UserID    uint      `json:"user_id"`
+	Nickname  string    `json:"nickname" gorm:"size:100"`
+	Content   string    `json:"content" gorm:"size:2000"`
+	ParentID  *uint     `json:"parent_id"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (NovelComment) TableName() string { return "ink_novel_comment" }
 
 // PlatformAccount 外部平台账号绑定
 type PlatformAccount struct {
@@ -1887,24 +1949,24 @@ type Asset struct {
 	TenantID    uint   `json:"tenant_id" gorm:"index"`
 	CreatorID   uint   `json:"creator_id" gorm:"index"`
 	Title       string `json:"title" gorm:"size:500;index"`
-	Description string `json:"description" gorm:"size:2000"`
+	Description string `json:"description" gorm:"type:text"`
 	Type        string `json:"type" gorm:"size:20;index"`    // image|video|audio|text
 	SubType     string `json:"sub_type" gorm:"size:30;index"` // shot|character_ref|scene|bgm|sfx|voice|template|stock|cutout
 	Source      string `json:"source" gorm:"size:20;index"`  // platform|crawled|uploaded
 
 	// Storage
-	StorageURL   string `json:"storage_url" gorm:"size:2000"`
-	ThumbnailURL string `json:"thumbnail_url" gorm:"size:2000"`
-	PreviewURL   string `json:"preview_url" gorm:"size:2000"`
-	WaveformURL  string `json:"waveform_url" gorm:"size:2000"`
-	HlsURL       string `json:"hls_url" gorm:"size:2000"`
+	StorageURL   string `json:"storage_url" gorm:"type:text"`
+	ThumbnailURL string `json:"thumbnail_url" gorm:"type:text"`
+	PreviewURL   string `json:"preview_url" gorm:"type:text"`
+	WaveformURL  string `json:"waveform_url" gorm:"type:text"`
+	HlsURL       string `json:"hls_url" gorm:"type:text"`
 
 	// Copyright
-	SourceURL   string `json:"source_url" gorm:"size:2000"`
+	SourceURL   string `json:"source_url" gorm:"type:text"`
 	ExternalID  string `json:"external_id" gorm:"size:200;uniqueIndex:uq_external_id,where:external_id != ''"`
 	License     string `json:"license" gorm:"size:100;index"` // CC0|CC-BY|CC-BY-SA|CC-BY-NC|PD|unsplash|pexels|pixabay|platform
-	LicenseURL  string `json:"license_url" gorm:"size:2000"`
-	Attribution string `json:"attribution" gorm:"size:500"`
+	LicenseURL  string `json:"license_url" gorm:"type:text"`
+	Attribution string `json:"attribution" gorm:"type:text"`
 
 	// Media metadata
 	Width       int     `json:"width"`
@@ -2009,8 +2071,8 @@ type AssetVersion struct {
 	ID           uint      `json:"id" gorm:"primaryKey"`
 	AssetID      uint      `json:"asset_id" gorm:"index"`
 	VersionNo    int       `json:"version_no"`
-	StorageURL   string    `json:"storage_url" gorm:"size:2000"`
-	ThumbnailURL string    `json:"thumbnail_url" gorm:"size:2000"`
+	StorageURL   string    `json:"storage_url" gorm:"type:text"`
+	ThumbnailURL string    `json:"thumbnail_url" gorm:"type:text"`
 	FileSize     int64     `json:"file_size"`
 	ChangeNote   string    `json:"change_note" gorm:"size:500"`
 	CreatedBy    uint      `json:"created_by"`
