@@ -31,6 +31,7 @@ type Config struct {
 	SystemHandler      *handler.SystemHandler
 	FsHandler          *handler.FsHandler
 	RewriteHandler     *handler.RewriteHandler
+	PlatformHandler    *handler.PlatformHandler
 }
 
 // SetupRouter 配置路由
@@ -352,6 +353,13 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.GET("/:id/download", cfg.VideoHandler.DownloadVideo)
 			videos.GET("/:id/export/:format", cfg.VideoHandler.Export)
 			videos.POST("/:id/subtitles/export", cfg.VideoHandler.ExportSubtitles)
+			videos.POST("/:id/synthesize", cfg.VideoHandler.SynthesizeVideo)
+			videos.POST("/:id/publish", cfg.VideoHandler.PublishVideo)
+			videos.POST("/:id/unpublish", cfg.VideoHandler.UnpublishVideo)
+			if cfg.PlatformHandler != nil {
+				videos.GET("/:id/publish-records", cfg.PlatformHandler.ListPublishRecords)
+				videos.POST("/:id/publish-external", cfg.PlatformHandler.PublishToExternal)
+			}
 			// 分镜绑定场景锚点
 			if cfg.SceneAnchorHandler != nil {
 				videos.PUT("/:id/shots/:shot_id/anchor", cfg.SceneAnchorHandler.SetShotAnchor)
@@ -481,6 +489,22 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		{
 			system.GET("/settings", cfg.SystemHandler.ListSettings)
 			system.PUT("/settings/:key", cfg.SystemHandler.UpdateSetting)
+		}
+
+		// 平台广场 + 外部账号
+		if cfg.PlatformHandler != nil {
+			// 公开路由（广场）
+			v1.GET("/platform/videos", cfg.PlatformHandler.GetPlatformFeed)
+			v1.POST("/platform/videos/:id/view", cfg.PlatformHandler.RecordView)
+			// JWT 保护的平台路由
+			platformR := v1.Group("/platform")
+			{
+				platformR.GET("/videos/:id", cfg.PlatformHandler.GetPlatformVideo)
+				platformR.GET("/accounts", cfg.PlatformHandler.ListAccounts)
+				platformR.GET("/accounts/oauth/:platform", cfg.PlatformHandler.ConnectAccount)
+				platformR.GET("/accounts/callback/:platform", cfg.PlatformHandler.OAuthCallback)
+				platformR.DELETE("/accounts/:id", cfg.PlatformHandler.DisconnectAccount)
+			}
 		}
 
 		// 本地文件系统浏览（本地部署工具专用）

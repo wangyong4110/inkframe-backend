@@ -925,6 +925,31 @@ func (r *VideoRepository) DeleteByID(id uint) error {
 	return r.db.Delete(&model.Video{}, id).Error
 }
 
+// UpdateFields 更新视频任意字段
+func (r *VideoRepository) UpdateFields(id uint, fields map[string]interface{}) error {
+	return r.db.Model(&model.Video{}).Where("id = ?", id).Updates(fields).Error
+}
+
+// ListPublic 列出公开发布的视频（用于广场）
+func (r *VideoRepository) ListPublic(page, pageSize int) ([]*model.Video, int64, error) {
+	var videos []*model.Video
+	var total int64
+	q := r.db.Model(&model.Video{}).Where("is_published = ? AND visibility = ?", true, "public")
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	offset := (page - 1) * pageSize
+	if err := q.Order("view_count DESC, created_at DESC").Offset(offset).Limit(pageSize).Find(&videos).Error; err != nil {
+		return nil, 0, err
+	}
+	return videos, total, nil
+}
+
+// IncrViewCount 视频播放量+1
+func (r *VideoRepository) IncrViewCount(id uint) error {
+	return r.db.Model(&model.Video{}).Where("id = ?", id).UpdateColumn("view_count", gorm.Expr("view_count + 1")).Error
+}
+
 // StoryboardRepository 分镜仓库
 type StoryboardRepository struct {
 	db *gorm.DB

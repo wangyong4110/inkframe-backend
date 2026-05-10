@@ -100,7 +100,7 @@ func main() {
 	services.AIService.WithStorage(storageSvc)
 	services.BGMService.WithStorage(storageSvc)
 	services.VideoService.WithSceneAnchorService(services.SceneAnchorService)
-	services.VideoService.WithSegmentRepo(repos.ShotVoiceSegmentRepo)
+	services.VideoService.WithSegmentRepo(repos.ShotVoiceSegmentRepo).WithTaskService(services.TaskService)
 	services.NovelImportService.WithStorage(storageSvc).WithAnalysisService(services.NovelAnalysisService).WithAIService(services.AIService)
 
 	// SFX 音效服务（五层降级：本地库 → Freesound → Pixabay → Jamendo → ElevenLabs）
@@ -158,6 +158,7 @@ func main() {
 		SystemHandler:      handlers.SystemHandler,
 		FsHandler:          handlers.FsHandler,
 		RewriteHandler:     handlers.RewriteHandler,
+		PlatformHandler:    handlers.PlatformHandler,
 	})
 
 	// 11. 设置Gin模式
@@ -816,7 +817,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-10-v1"
+const schemaVersion = "2026-05-10-v2"
 
 // autoMigrate 自动迁移（带版本跳过优化）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -892,6 +893,8 @@ func autoMigrate(db *gorm.DB) error {
 		&model.LiteraryAnalysis{},
 		&model.RewriteBible{},
 		&model.ChapterRewriteTask{},
+		&model.PlatformAccount{},
+		&model.VideoPublishRecord{},
 	); err != nil {
 		return err
 	}
@@ -1125,6 +1128,8 @@ type Repositories struct {
 	LiteraryAnalysisRepo    *repository.LiteraryAnalysisRepository
 	RewriteBibleRepo        *repository.RewriteBibleRepository
 	ChapterRewriteTaskRepo  *repository.ChapterRewriteTaskRepository
+	PlatformAccountRepo     *repository.PlatformAccountRepository
+	VideoPublishRecordRepo  *repository.VideoPublishRecordRepository
 }
 
 // initRepositories 初始化仓库层
@@ -1167,6 +1172,8 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		LiteraryAnalysisRepo:    repository.NewLiteraryAnalysisRepository(db),
 		RewriteBibleRepo:        repository.NewRewriteBibleRepository(db),
 		ChapterRewriteTaskRepo:  repository.NewChapterRewriteTaskRepository(db),
+		PlatformAccountRepo:     repository.NewPlatformAccountRepository(db),
+		VideoPublishRecordRepo:  repository.NewVideoPublishRecordRepository(db),
 	}
 }
 
@@ -1219,6 +1226,7 @@ type Services struct {
 	SceneAnchorService          *service.SceneAnchorService
 	SceneConsistencyService     *service.SceneConsistencyService
 	RewriteService              *service.RewriteService
+	PlatformPublishService      *service.PlatformPublishService
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -1539,6 +1547,12 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		FrontendURL:   cfg.Server.FrontendURL,
 		// ── Rewrite ──
 		RewriteService: rewriteSvc,
+		// ── Platform publish ──
+		PlatformPublishService: service.NewPlatformPublishService(
+			repos.PlatformAccountRepo,
+			repos.VideoPublishRecordRepo,
+			core.Task,
+		),
 	}
 }
 
@@ -1566,6 +1580,7 @@ type Handlers struct {
 	SystemHandler      *handler.SystemHandler
 	FsHandler          *handler.FsHandler
 	RewriteHandler     *handler.RewriteHandler
+	PlatformHandler    *handler.PlatformHandler
 }
 
 // initHandlers 初始化处理器
@@ -1620,6 +1635,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		SystemHandler: handler.NewSystemHandler(repos.SystemSettingRepo),
 		FsHandler:     handler.NewFsHandler(),
 		RewriteHandler: handler.NewRewriteHandler(services.RewriteService),
+		PlatformHandler: handler.NewPlatformHandler(services.VideoService, services.PlatformPublishService),
 	}
 }
 

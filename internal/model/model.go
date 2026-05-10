@@ -850,6 +850,14 @@ type Video struct {
 	ErrorMessage string `json:"error_message,omitempty" gorm:"type:text"` // 生成失败原因
 	RetryCount   int    `json:"retry_count" gorm:"default:0"`             // 已重试次数
 
+	// 合成与发布
+	FinalVideoURL string     `json:"final_video_url" gorm:"size:2000"`
+	CoverURL      string     `json:"cover_url" gorm:"size:2000"`
+	IsPublished   bool       `json:"is_published" gorm:"default:false;index"`
+	PublishedAt   *time.Time `json:"published_at"`
+	ViewCount     int        `json:"view_count" gorm:"default:0"`
+	Visibility    string     `json:"visibility" gorm:"size:20;default:'private'"` // private|unlisted|public
+
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
@@ -858,6 +866,40 @@ type Video struct {
 func (Video) TableName() string {
 	return "ink_video"
 }
+
+// PlatformAccount 外部平台账号绑定
+type PlatformAccount struct {
+	ID           uint       `json:"id" gorm:"primaryKey"`
+	TenantID     uint       `json:"tenant_id" gorm:"index"`
+	Platform     string     `json:"platform" gorm:"size:30"`   // bilibili|douyin|youtube|wechat_video
+	AccountName  string     `json:"account_name" gorm:"size:200"`
+	UID          string     `json:"uid" gorm:"size:200"`
+	AccessToken  string     `json:"-" gorm:"size:2000"`
+	RefreshToken string     `json:"-" gorm:"size:2000"`
+	ExpiresAt    *time.Time `json:"expires_at"`
+	Status       string     `json:"status" gorm:"size:20;default:'active'"` // active|expired|revoked
+	CreatedAt    time.Time  `json:"created_at"`
+	UpdatedAt    time.Time  `json:"updated_at"`
+}
+
+func (PlatformAccount) TableName() string { return "ink_platform_account" }
+
+// VideoPublishRecord 视频外部发布记录
+type VideoPublishRecord struct {
+	ID          uint       `json:"id" gorm:"primaryKey"`
+	VideoID     uint       `json:"video_id" gorm:"index"`
+	Platform    string     `json:"platform" gorm:"size:30"`
+	AccountID   uint       `json:"account_id"`
+	ExternalID  string     `json:"external_id" gorm:"size:500"`
+	ExternalURL string     `json:"external_url" gorm:"size:2000"`
+	Status      string     `json:"status" gorm:"size:20;default:'pending'"` // pending|uploading|processing|published|failed
+	ErrorMsg    string     `json:"error_msg" gorm:"size:500"`
+	PublishedAt *time.Time `json:"published_at"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+}
+
+func (VideoPublishRecord) TableName() string { return "ink_video_publish_record" }
 
 // StoryboardShot 分镜
 type StoryboardShot struct {

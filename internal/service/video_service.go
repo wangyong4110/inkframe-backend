@@ -39,6 +39,7 @@ type VideoService struct {
 	plotPointRepo      *repository.PlotPointRepository
 	systemSettingRepo  *repository.SystemSettingRepository
 	segmentRepo        *repository.ShotVoiceSegmentRepository
+	taskSvc            *TaskService
 	videoSem           chan struct{} // nil = unlimited; set via WithVideoConcurrency
 	videoSemMu         sync.RWMutex  // protects videoSem replacement
 	audioSem           chan struct{} // limits concurrent TTS calls; nil = unlimited
@@ -122,6 +123,11 @@ func (s *VideoService) SetVideoConcurrency(n int) {
 
 func (s *VideoService) WithSegmentRepo(r *repository.ShotVoiceSegmentRepository) *VideoService {
 	s.segmentRepo = r
+	return s
+}
+
+func (s *VideoService) WithTaskService(svc *TaskService) *VideoService {
+	s.taskSvc = svc
 	return s
 }
 
@@ -1361,6 +1367,21 @@ func (s *VideoService) UpdatePacingConfig(id uint, pacing string, targetDuration
 	}
 	video.TargetDuration = targetDuration
 	return s.videoRepo.Update(video)
+}
+
+// UpdateVideoFields 更新视频任意字段（用于发布状态更新）
+func (s *VideoService) UpdateVideoFields(id uint, fields map[string]interface{}) error {
+	return s.videoRepo.UpdateFields(id, fields)
+}
+
+// IncrVideoViewCount 增加视频播放量
+func (s *VideoService) IncrVideoViewCount(id uint) error {
+	return s.videoRepo.IncrViewCount(id)
+}
+
+// ListPublicVideos 列出公开视频（用于广场）
+func (s *VideoService) ListPublicVideos(page, pageSize int) ([]*model.Video, int64, error) {
+	return s.videoRepo.ListPublic(page, pageSize)
 }
 
 // DeleteVideo 删除视频
@@ -4216,6 +4237,164 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 			noProgressCount = 0
 		}
 	}
+}
+
+// SynthesizeVideo 完整合成流水线（拼接→BGM→字幕→上传OSS），异步执行，返回 task_id。
+func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenantID uint) (string, error) {
+	video, err := s.videoRepo.GetByID(videoID)
+	if err != nil {
+		return "", fmt.Errorf("video not found: %w", err)
+	}
+
+	// 创建异步任务
+	var taskID string
+	if s.taskSvc != nil {
+		task, err := s.taskSvc.Create(tenantID, "video_synthesis", "视频合成", "video", videoID)
+		if err != nil {
+			return "", fmt.Errorf("create task: %w", err)
+		}
+		taskID = task.TaskID
+	} else {
+		taskID = fmt.Sprintf("synth-%d", videoID)
+	}
+
+	go func() {
+		synthCtx := context.Background()
+		if s.taskSvc != nil {
+			_ = s.taskSvc.SetRunning(taskID)
+		}
+
+		// 1. 拼接视频（含BGM）
+		if s.taskSvc != nil {
+			_ = s.taskSvc.UpdateProgress(taskID, 10)
+		}
+		stitchedPath, err := s.StitchVideo(videoID)
+		if err != nil {
+			if s.taskSvc != nil {
+				_ = s.taskSvc.Fail(taskID, "stitch failed: "+err.Error())
+			}
+			return
+		}
+
+		finalPath := stitchedPath
+
+		// 2. 字幕烧录（可选）
+		if s.taskSvc != nil {
+			_ = s.taskSvc.UpdateProgress(taskID, 40)
+		}
+		novelCfg := s.GetNovelVideoConfig(video.NovelID)
+		if novelCfg != nil && novelCfg.SubtitleStyle != "" && novelCfg.SubtitleStyle != "none" {
+			shots, err := s.storyboardRepo.ListByVideo(videoID)
+			if err == nil && len(shots) > 0 {
+				subtitleSvc := NewSubtitleService()
+				fontName := "Noto Sans CJK SC"
+				if novelCfg.SubtitleFont != "" {
+					fontName = novelCfg.SubtitleFont
+				}
+				shotSlice := make([]model.StoryboardShot, len(shots))
+				for i, sh := range shots {
+					if sh != nil {
+						shotSlice[i] = *sh
+					}
+				}
+				assContent := subtitleSvc.GenerateASS(shotSlice, fontName)
+				assPath := fmt.Sprintf("%s/inkframe-%d-subtitles.ass", inkframeTempDir(), videoID)
+				if writeErr := os.WriteFile(assPath, []byte(assContent), 0644); writeErr == nil {
+					burnedPath := fmt.Sprintf("%s/inkframe-%d-burned.mp4", inkframeTempDir(), videoID)
+					if burnErr := subtitleSvc.BurnSubtitles(stitchedPath, assPath, burnedPath); burnErr == nil {
+						finalPath = burnedPath
+					} else {
+						logger.Printf("SynthesizeVideo: subtitle burn failed for video %d: %v", videoID, burnErr)
+					}
+					os.Remove(assPath)
+				}
+			}
+		}
+
+		// 3. 提取封面
+		if s.taskSvc != nil {
+			_ = s.taskSvc.UpdateProgress(taskID, 60)
+		}
+		coverPath := fmt.Sprintf("%s/inkframe-%d-cover.jpg", inkframeTempDir(), videoID)
+		coverURL := ""
+		if _, err := runFFmpegCtx(synthCtx, "-y", "-ss", "2", "-i", finalPath,
+			"-frames:v", "1", "-vf", "scale=640:-1", coverPath); err == nil {
+			defer os.Remove(coverPath)
+		}
+
+		// 4. 上传视频和封面到 OSS
+		if s.taskSvc != nil {
+			_ = s.taskSvc.UpdateProgress(taskID, 70)
+		}
+		finalVideoURL := ""
+		novel, _ := s.novelRepo.GetByID(video.NovelID)
+		novelTitle := ""
+		if novel != nil {
+			novelTitle = sanitizeStorageName(novel.Title)
+		}
+
+		if s.storageSvc != nil {
+			// 上传视频
+			videoUUID := uuid.New().String()
+			var videoKey string
+			if novelTitle != "" {
+				videoKey = fmt.Sprintf("novels/%s/videos/%s.mp4", novelTitle, videoUUID)
+			} else {
+				videoKey = fmt.Sprintf("videos/%s.mp4", videoUUID)
+			}
+			if vf, err := os.Open(finalPath); err == nil {
+				defer vf.Close()
+				if fi, err := vf.Stat(); err == nil {
+					if ossURL, err := s.storageSvc.Upload(synthCtx, videoKey, vf, fi.Size(), "video/mp4"); err == nil {
+						finalVideoURL = ossURL
+					} else {
+						logger.Printf("SynthesizeVideo: upload video failed for video %d: %v", videoID, err)
+					}
+				}
+			}
+
+			// 上传封面
+			if cf, err := os.Open(coverPath); err == nil {
+				defer cf.Close()
+				if fi, err := cf.Stat(); err == nil {
+					coverKey := videoKey[:len(videoKey)-4] + "_cover.jpg"
+					if ossURL, err := s.storageSvc.Upload(synthCtx, coverKey, cf, fi.Size(), "image/jpeg"); err == nil {
+						coverURL = ossURL
+					} else {
+						logger.Printf("SynthesizeVideo: upload cover failed for video %d: %v", videoID, err)
+					}
+				}
+			}
+		}
+
+		// 5. 更新数据库
+		if s.taskSvc != nil {
+			_ = s.taskSvc.UpdateProgress(taskID, 90)
+		}
+		if finalVideoURL != "" {
+			video.FinalVideoURL = finalVideoURL
+		}
+		if coverURL != "" {
+			video.CoverURL = coverURL
+		}
+		video.Status = "completed"
+		if err := s.videoRepo.Update(video); err != nil {
+			logger.Printf("SynthesizeVideo: update video %d failed: %v", videoID, err)
+		}
+
+		if s.taskSvc != nil {
+			result := map[string]string{"final_video_url": finalVideoURL, "cover_url": coverURL}
+			_ = s.taskSvc.Complete(taskID, result)
+		}
+
+		// 清理临时文件
+		os.Remove(finalPath)
+		if finalPath != stitchedPath {
+			os.Remove(stitchedPath)
+		}
+	}()
+
+	return taskID, nil
 }
 
 // ModelService 模型服务

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
+
+func timeNow() time.Time { return time.Now() }
 
 // VideoHandler 视频处理器
 type VideoHandler struct {
@@ -259,6 +262,78 @@ func (h *VideoHandler) DeleteVideo(c *gin.Context) {
 		"code":    0,
 		"message": "success",
 	})
+}
+
+// SynthesizeVideo 完整合成流水线（拼接→BGM→字幕→上传OSS）
+// POST /api/v1/videos/:id/synthesize
+func (h *VideoHandler) SynthesizeVideo(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	video, ok := h.getVideoForTenant(c, uint(id))
+	if !ok {
+		return
+	}
+	taskID, err := h.videoService.SynthesizeVideo(c.Request.Context(), video.ID, getTenantID(c))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusAccepted, gin.H{"code": 0, "data": gin.H{"task_id": taskID}})
+}
+
+// PublishVideo 站内发布（设置可见性）
+// POST /api/v1/videos/:id/publish
+func (h *VideoHandler) PublishVideo(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	video, ok := h.getVideoForTenant(c, uint(id))
+	if !ok {
+		return
+	}
+	var req struct {
+		Visibility string `json:"visibility"` // private|unlisted|public
+	}
+	if err := c.ShouldBindJSON(&req); err != nil || req.Visibility == "" {
+		req.Visibility = "public"
+	}
+	now := timeNow()
+	video.IsPublished = true
+	video.PublishedAt = &now
+	video.Visibility = req.Visibility
+	if err := h.videoService.UpdateVideoFields(video.ID, map[string]interface{}{
+		"is_published": true,
+		"published_at": &now,
+		"visibility":   req.Visibility,
+	}); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, video)
+}
+
+// UnpublishVideo 取消站内发布
+// POST /api/v1/videos/:id/unpublish
+func (h *VideoHandler) UnpublishVideo(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	_, ok = h.getVideoForTenant(c, uint(id))
+	if !ok {
+		return
+	}
+	if err := h.videoService.UpdateVideoFields(uint(id), map[string]interface{}{
+		"is_published": false,
+		"visibility":   "private",
+	}); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"unpublished": true})
 }
 
 // GenerateStoryboard 生成分镜（异步任务）
