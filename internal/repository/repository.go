@@ -49,7 +49,7 @@ func (r *NovelRepository) GetByID(id uint) (*model.Novel, error) {
 
 	// 2. 查 DB
 	var novel model.Novel
-	if err := r.db.Preload("Worldview").First(&novel, id).Error; err != nil {
+	if err := r.db.Preload("Worldview").Preload("VideoConfig").First(&novel, id).Error; err != nil {
 		return nil, err
 	}
 
@@ -65,7 +65,7 @@ func (r *NovelRepository) GetByID(id uint) (*model.Novel, error) {
 // GetByUUID 根据UUID获取小说
 func (r *NovelRepository) GetByUUID(uuid string) (*model.Novel, error) {
 	var novel model.Novel
-	if err := r.db.Preload("Worldview").Where("uuid = ?", uuid).First(&novel).Error; err != nil {
+	if err := r.db.Preload("Worldview").Preload("VideoConfig").Where("uuid = ?", uuid).First(&novel).Error; err != nil {
 		return nil, err
 	}
 	return &novel, nil
@@ -117,10 +117,14 @@ func (r *NovelRepository) List(page, pageSize int, filters map[string]interface{
 	return novels, total, nil
 }
 
-// Update 更新小说
+// Update 更新小说（同时 upsert VideoConfig）
 func (r *NovelRepository) Update(novel *model.Novel) error {
 	if err := r.db.Save(novel).Error; err != nil {
 		return err
+	}
+	if novel.VideoConfig != nil {
+		novel.VideoConfig.NovelID = novel.ID
+		r.db.Save(novel.VideoConfig) //nolint:errcheck
 	}
 	r.invalidateCache(novel.ID)
 	return nil
@@ -321,10 +325,9 @@ func (r *ChapterRepository) GetByNovelAndChapterNo(novelID uint, chapterNo int) 
 
 // chapterListColumns 章节列表只需元数据字段，排除 content/outline/scene_outline/plot_points/chapter_hook/summary 等大文本列。
 // 100章 × ~3KB content = ~300KB 节省，减少 DB I/O 和网络传输。
-const chapterListColumns = "id, novel_id, uuid, chapter_no, title, status, word_count, quality_score, " +
+const chapterListColumns = "id, novel_id, tenant_id, uuid, chapter_no, title, status, word_count, " +
 	"tension_level, act_no, emotional_tone, hook_type, " +
-	"previous_chapter_id, next_chapter_id, " +
-	"created_at, updated_at, published_at, deleted_at"
+	"created_at, updated_at, deleted_at"
 
 func (r *ChapterRepository) chapterListCacheKey(novelID uint) string {
 	return fmt.Sprintf("chapters:novel:%d", novelID)

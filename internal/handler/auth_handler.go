@@ -45,8 +45,7 @@ func (h *AuthHandler) WithFrontendURL(u string) *AuthHandler {
 // POST /api/v1/auth/register
 func (h *AuthHandler) Register(c *gin.Context) {
 	var req service.RegisterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -63,8 +62,7 @@ func (h *AuthHandler) Register(c *gin.Context) {
 // POST /api/v1/auth/login
 func (h *AuthHandler) Login(c *gin.Context) {
 	var req service.LoginRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -83,8 +81,7 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	var req struct {
 		Token string `json:"token" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -133,8 +130,7 @@ func (h *AuthHandler) SendSMSCode(c *gin.Context) {
 	var req struct {
 		Phone string `json:"phone" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	if h.smsService == nil {
@@ -157,8 +153,7 @@ func (h *AuthHandler) PhoneRegister(c *gin.Context) {
 		Nickname   string `json:"nickname"`
 		TenantName string `json:"tenant_name"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	resp, err := h.authService.RegisterWithPhone(req.Phone, req.Code, req.Nickname, req.TenantName)
@@ -176,8 +171,7 @@ func (h *AuthHandler) PhoneLogin(c *gin.Context) {
 		Phone string `json:"phone" binding:"required"`
 		Code  string `json:"code" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	resp, err := h.authService.LoginWithPhone(req.Phone, req.Code)

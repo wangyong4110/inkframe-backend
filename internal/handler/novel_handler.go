@@ -1,9 +1,10 @@
 package handler
 
 import (
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"strconv"
+
+	"github.com/inkframe/inkframe-backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -63,8 +64,7 @@ func (h *NovelHandler) CreateNovel(c *gin.Context) {
 	}
 
 	var req model.CreateNovelRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	req.TenantID = tenantID
@@ -82,9 +82,8 @@ func (h *NovelHandler) CreateNovel(c *gin.Context) {
 // GetNovel 获取小说详情
 // GET /api/v1/novels/:id
 func (h *NovelHandler) GetNovel(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -132,15 +131,13 @@ func (h *NovelHandler) ListNovels(c *gin.Context) {
 // UpdateNovel 更新小说
 // PUT /api/v1/novels/:id
 func (h *NovelHandler) UpdateNovel(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
 	var req model.UpdateNovelRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -157,9 +154,8 @@ func (h *NovelHandler) UpdateNovel(c *gin.Context) {
 // DeleteNovel 删除小说
 // DELETE /api/v1/novels/:id
 func (h *NovelHandler) DeleteNovel(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -179,15 +175,13 @@ func (h *NovelHandler) DeleteNovel(c *gin.Context) {
 // POST /api/v1/novels/:id/chapters/generate
 // 立即返回 202 + task_id，轮询 GET /:id/chapters/generate/:task_id 获取结果
 func (h *NovelHandler) GenerateChapter(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
 	var req model.GenerateChapterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	// NovelID 从 URL 路径参数注入（body 中可不传）
@@ -212,7 +206,7 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID)   //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)        //nolint:errcheck
 		h.taskSvc.UpdateProgress(taskID, 5) //nolint:errcheck
 
 		chapter, err := h.chapterService.GenerateChapter(tenantID, uint(novelId), &req)
@@ -252,9 +246,8 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 // GenerateOutline 生成大纲
 // POST /api/v1/novels/:id/outline
 func (h *NovelHandler) GenerateOutline(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -289,9 +282,8 @@ func (h *NovelHandler) GenerateOutline(c *gin.Context) {
 // GetForeshadows 获取伏笔列表
 // GET /api/v1/novels/:id/foreshadows
 func (h *NovelHandler) GetForeshadows(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -310,14 +302,19 @@ func (h *NovelHandler) GetForeshadows(c *gin.Context) {
 // MarkForeshadowFulfilled 标记伏笔已回收
 // POST /api/v1/novels/:id/foreshadows/:foreshadow_id/fulfill
 func (h *NovelHandler) MarkForeshadowFulfilled(c *gin.Context) {
-	novelId, _ := strconv.ParseUint(c.Param("id"), 10, 32)
-	foreshadowId, _ := strconv.ParseUint(c.Param("foreshadow_id"), 10, 32)
+	novelId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	foreshadowId, ok := parseID(c, "foreshadow_id")
+	if !ok {
+		return
+	}
 
 	var req struct {
 		ChapterID uint `json:"chapter_id"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -336,9 +333,8 @@ func (h *NovelHandler) MarkForeshadowFulfilled(c *gin.Context) {
 // GetTimeline 获取时间线
 // GET /api/v1/novels/:id/timeline
 func (h *NovelHandler) GetTimeline(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -355,9 +351,8 @@ func (h *NovelHandler) GetTimeline(c *gin.Context) {
 // BuildTimeline 构建时间线
 // POST /api/v1/novels/:id/timeline/build
 func (h *NovelHandler) BuildTimeline(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -374,9 +369,8 @@ func (h *NovelHandler) BuildTimeline(c *gin.Context) {
 // SyncCharacterSnapshots 同步章节角色状态快照
 // POST /api/v1/novels/:id/chapters/:chapter_no/character-snapshots
 func (h *NovelHandler) SyncCharacterSnapshots(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
@@ -389,8 +383,7 @@ func (h *NovelHandler) SyncCharacterSnapshots(c *gin.Context) {
 		CharacterIDs  []uint `json:"character_ids"`
 		ReusePrevious bool   `json:"reuse_previous"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 

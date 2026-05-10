@@ -123,7 +123,6 @@ type Novel struct {
 	// 统计
 	TotalWords   int `json:"total_words" gorm:"default:0"`
 	ChapterCount int `json:"chapter_count" gorm:"default:0"`
-	ViewCount    int `json:"view_count" gorm:"default:0"`
 
 	// 关联
 	WorldviewID *uint      `json:"worldview_id"`
@@ -143,24 +142,10 @@ type Novel struct {
 	StylePrompt    string  `json:"style_prompt" gorm:"type:text"`
 
 	// 风格配置
-	ImageStyle     string `json:"image_style" gorm:"size:50"`       // 视觉/图片风格，如 anime/realistic/ink_painting
-	ReferenceStyle string `json:"reference_style" gorm:"type:text"` // 参考作品（书名、URL 或描述）
+	ImageStyle string `json:"image_style" gorm:"size:50"` // 视觉/图片风格，如 anime/realistic/ink_painting
 
-	// 视频生成配置
-	VideoType              string  `json:"video_type" gorm:"size:20;default:'animation'"`      // 视频类型：narration(图片解说)/animation(动画)
-	VideoResolution        string  `json:"video_resolution" gorm:"size:20;default:'1080p'"`    // 分辨率：720p/1080p/4K
-	VideoFPS               int     `json:"video_fps" gorm:"default:30"`                        // 帧率：24/30/60
-	VideoAspectRatio       string  `json:"video_aspect_ratio" gorm:"size:10;default:'16:9'"`   // 宽高比：16:9/9:16/1:1/4:3
-	CharConsistencyWeight  float64 `json:"char_consistency_weight" gorm:"type:decimal(3,2);default:1.0"` // 角色一致性权重 0-1
-	AssetExportPath        string  `json:"asset_export_path" gorm:"size:500"`                             // 素材导出路径
-	NarrationVoice         string  `json:"narration_voice" gorm:"size:200"`                               // 旁白音色 ID（无角色配音时使用）
-
-	// 字幕配置
-	SubtitleEnabled  bool   `json:"subtitle_enabled" gorm:"default:true"`
-	SubtitlePosition string `json:"subtitle_position" gorm:"size:20;default:'bottom'"`  // bottom/center/top
-	SubtitleFontSize int    `json:"subtitle_font_size" gorm:"default:48"`               // 字体大小（px）
-	SubtitleColor    string `json:"subtitle_color" gorm:"size:20;default:'#FFFFFF'"`    // 十六进制颜色
-	SubtitleBgStyle  string `json:"subtitle_bg_style" gorm:"size:20;default:'shadow'"`  // none/shadow/box
+	// 视频/字幕配置（已迁移至 ink_novel_video_config，通过 VideoConfig 关联访问）
+	VideoConfig *NovelVideoConfig `json:"video_config,omitempty" gorm:"foreignKey:NovelID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
 
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`
@@ -172,11 +157,66 @@ func (Novel) TableName() string {
 	return "ink_novel"
 }
 
+// VideoConf returns video/subtitle config with safe nil handling.
+func (n *Novel) VideoConf() NovelVideoConfig {
+	if n.VideoConfig != nil {
+		return *n.VideoConfig
+	}
+	return NovelVideoConfig{
+		VideoType:             "animation",
+		VideoResolution:       "1080p",
+		VideoFPS:              30,
+		VideoAspectRatio:      "16:9",
+		CharConsistencyWeight: 1.0,
+		SubtitleEnabled:       true,
+		SubtitlePosition:      "bottom",
+		SubtitleFontSize:      48,
+		SubtitleColor:         "#FFFFFF",
+		SubtitleBgStyle:       "shadow",
+	}
+}
+
+// EnsureVideoConfig initializes VideoConfig if nil (for mutation).
+func (n *Novel) EnsureVideoConfig() *NovelVideoConfig {
+	if n.VideoConfig == nil {
+		n.VideoConfig = &NovelVideoConfig{NovelID: n.ID}
+	}
+	return n.VideoConfig
+}
+
+// NovelVideoConfig 小说视频/字幕配置（1:1 with Novel，独立表）
+type NovelVideoConfig struct {
+	ID      uint `json:"id" gorm:"primaryKey"`
+	NovelID uint `json:"novel_id" gorm:"uniqueIndex;not null"`
+
+	// 视频生成配置
+	VideoType             string  `json:"video_type" gorm:"size:20;default:'animation'"`
+	VideoResolution       string  `json:"video_resolution" gorm:"size:20;default:'1080p'"`
+	VideoFPS              int     `json:"video_fps" gorm:"default:30"`
+	VideoAspectRatio      string  `json:"video_aspect_ratio" gorm:"size:10;default:'16:9'"`
+	CharConsistencyWeight float64 `json:"char_consistency_weight" gorm:"type:decimal(3,2);default:1.0"`
+	AssetExportPath       string  `json:"asset_export_path" gorm:"size:500"`
+	NarrationVoice        string  `json:"narration_voice" gorm:"size:200"`
+
+	// 字幕配置
+	SubtitleEnabled  bool   `json:"subtitle_enabled" gorm:"default:true"`
+	SubtitlePosition string `json:"subtitle_position" gorm:"size:20;default:'bottom'"`
+	SubtitleFontSize int    `json:"subtitle_font_size" gorm:"default:48"`
+	SubtitleColor    string `json:"subtitle_color" gorm:"size:20;default:'#FFFFFF'"`
+	SubtitleBgStyle  string `json:"subtitle_bg_style" gorm:"size:20;default:'shadow'"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (NovelVideoConfig) TableName() string { return "ink_novel_video_config" }
+
 // Chapter 章节
 type Chapter struct {
-	ID        uint   `json:"id" gorm:"primaryKey"`
-	NovelID   uint   `json:"novel_id" gorm:"index;uniqueIndex:idx_chapter_novel_no,priority:1;index:idx_chapter_novel_status,priority:1;not null"`
-	Novel     *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
+	ID       uint   `json:"id" gorm:"primaryKey"`
+	NovelID  uint   `json:"novel_id" gorm:"index;uniqueIndex:idx_chapter_novel_no,priority:1;index:idx_chapter_novel_status,priority:1;not null"`
+	TenantID uint   `json:"tenant_id" gorm:"index;not null;default:1"`
+	Novel    *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
 	UUID      string `json:"uuid" gorm:"uniqueIndex;size:36"`
 	ChapterNo int    `json:"chapter_no" gorm:"uniqueIndex:idx_chapter_novel_no,priority:2;not null"`
 	Title     string `json:"title" gorm:"size:255"`
@@ -189,7 +229,6 @@ type Chapter struct {
 	// 大纲与场景结构
 	Outline      string `json:"outline" gorm:"type:text"`
 	SceneOutline string `json:"scene_outline" gorm:"type:text"` // JSON: 场景级大纲（3-5个场景）
-	PlotPoints   string `json:"plot_points" gorm:"type:text"`   // JSON数组
 
 	// 叙事元数据（来自小说大纲）
 	TensionLevel  int    `json:"tension_level" gorm:"default:0"` // 0-10 张力值
@@ -202,18 +241,10 @@ type Chapter struct {
 	Status string `json:"status" gorm:"size:20;index:idx_chapter_novel_status,priority:2;default:draft"`
 	// draft=草稿, generating=生成中, completed=已完成, published=已发布
 
-	// 关联
-	PreviousChapterID *uint `json:"previous_chapter_id"`
-	NextChapterID     *uint `json:"next_chapter_id"`
-
-	// 质量评分
-	QualityScore float64 `json:"quality_score" gorm:"type:decimal(5,4)"`
-
 	// 时间戳
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	PublishedAt *time.Time     `json:"published_at,omitempty"`
-	DeletedAt   gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (Chapter) TableName() string {
@@ -224,7 +255,7 @@ func (Chapter) TableName() string {
 type PlotPoint struct {
 	ID        uint     `json:"id" gorm:"primaryKey"`
 	TenantID  uint     `json:"tenant_id" gorm:"index"`
-	NovelID   uint     `json:"novel_id" gorm:"index;not null"`
+	NovelID   uint     `json:"novel_id" gorm:"index:idx_plotpoint_novel_resolved,priority:1;not null"`
 	ChapterID uint     `json:"chapter_id" gorm:"index;not null"`
 	Chapter   *Chapter `json:"chapter,omitempty" gorm:"foreignKey:ChapterID"`
 	Type      string   `json:"type" gorm:"size:50"`
@@ -234,7 +265,7 @@ type PlotPoint struct {
 	Characters  string `json:"characters" gorm:"type:text"` // JSON数组
 	Locations   string `json:"locations" gorm:"type:text"`  // JSON数组
 
-	IsResolved bool  `json:"is_resolved" gorm:"default:false"`
+	IsResolved bool  `json:"is_resolved" gorm:"index:idx_plotpoint_novel_resolved,priority:2;default:false"`
 	ResolvedIn *uint `json:"resolved_in"` // 解决这一剧情点的章节ID
 
 	CreatedAt time.Time `json:"created_at"`
@@ -325,9 +356,10 @@ func (WorldviewEntity) TableName() string {
 
 // Character 角色
 type Character struct {
-	ID      uint   `json:"id" gorm:"primaryKey"`
-	NovelID uint   `json:"novel_id" gorm:"index;not null"`
-	Novel   *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
+	ID       uint   `json:"id" gorm:"primaryKey"`
+	NovelID  uint   `json:"novel_id" gorm:"index;not null"`
+	TenantID uint   `json:"tenant_id" gorm:"index;not null;default:1"`
+	Novel    *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
 	UUID    string `json:"uuid" gorm:"uniqueIndex;size:36"`
 
 	Name   string `json:"name" gorm:"size:100;not null"`
@@ -391,9 +423,9 @@ func (Character) TableName() string {
 // CharacterAppearance 角色出现记录
 type CharacterAppearance struct {
 	ID          uint       `json:"id" gorm:"primaryKey"`
-	CharacterID uint       `json:"character_id" gorm:"index;not null"`
+	CharacterID uint       `json:"character_id" gorm:"uniqueIndex:idx_char_app_char_chapter,priority:1;not null"`
 	Character   *Character `json:"character,omitempty" gorm:"foreignKey:CharacterID"`
-	ChapterID   uint       `json:"chapter_id" gorm:"index;not null"`
+	ChapterID   uint       `json:"chapter_id" gorm:"uniqueIndex:idx_char_app_char_chapter,priority:2;not null"`
 	Chapter     *Chapter   `json:"chapter,omitempty" gorm:"foreignKey:ChapterID"`
 
 	RoleInChapter string `json:"role_in_chapter" gorm:"size:50"`
@@ -471,11 +503,6 @@ type ReferenceNovel struct {
 	Status string `json:"status" gorm:"size:20;default:crawling"`
 	// crawling=爬取中, completed=已完成, failed=失败
 
-	// 分析结果
-	StyleAnalysis string `json:"style_analysis" gorm:"type:text"` // JSON
-	Keywords      string `json:"keywords" gorm:"type:text"`       // JSON数组
-	SimilarNovels string `json:"similar_novels" gorm:"type:text"` // JSON数组
-
 	// 封面
 	CoverImage string `json:"cover_image" gorm:"size:500"`
 
@@ -511,7 +538,7 @@ func (ReferenceChapter) TableName() string {
 // KnowledgeBase 知识库
 type KnowledgeBase struct {
 	ID   uint   `json:"id" gorm:"primaryKey"`
-	Type string `json:"type" gorm:"size:50;index"`
+	Type string `json:"type" gorm:"size:50;index;index:idx_kb_novel_type,priority:2"`
 	// character_fact=角色事实, lore=世界观知识, writing_technique=写作技巧
 
 	Title   string `json:"title" gorm:"size:255;not null"`
@@ -520,7 +547,7 @@ type KnowledgeBase struct {
 	Tags string `json:"tags" gorm:"type:text"` // JSON数组
 
 	// 关联
-	NovelID     *uint           `json:"novel_id,omitempty" gorm:"index"`
+	NovelID     *uint           `json:"novel_id,omitempty" gorm:"index;index:idx_kb_novel_type,priority:1"`
 	Novel       *Novel          `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
 	ReferenceID *uint           `json:"reference_id,omitempty" gorm:"index"`
 	Reference   *ReferenceNovel `json:"reference,omitempty" gorm:"foreignKey:ReferenceID"`
@@ -729,7 +756,7 @@ func (ExperimentResult) TableName() string {
 // ModelID 仅作为软引用（无外键约束），允许关联的 AIModel 被删除而不级联报错。
 type ModelUsageLog struct {
 	ID       uint   `json:"id" gorm:"primaryKey"`
-	ModelID  uint   `json:"model_id" gorm:"index;default:0"`  // 软引用，0=未关联
+	ModelID  uint   `json:"model_id" gorm:"index:idx_usage_model_time,priority:1;default:0"` // 软引用，0=未关联
 	TaskType string `json:"task_type" gorm:"size:50;index"`
 
 	InputTokens  int     `json:"input_tokens"`
@@ -743,7 +770,7 @@ type ModelUsageLog struct {
 
 	QualityScore *float64 `json:"quality_score,omitempty"`
 
-	CreatedAt time.Time `json:"created_at"`
+	CreatedAt time.Time `json:"created_at" gorm:"index:idx_usage_model_time,priority:2"`
 }
 
 func (ModelUsageLog) TableName() string {
@@ -842,7 +869,7 @@ type StoryboardShot struct {
 
 	Duration      float64 `json:"duration" gorm:"type:decimal(5,2);default:5.0"`
 	EmotionalTone string  `json:"emotional_tone" gorm:"size:100"` // 情绪基调，如：紧张、浪漫、压抑→释怀
-	Transition    string  `json:"transition" gorm:"size:20;default:cut"` // 过渡方式：cut/fade/dissolve/wipe
+	Transition    string  `json:"transition" gorm:"size:50;default:cut"` // 过渡方式：cut/j-cut/l-cut/fade/dissolve/dip-black/dip-white/wipe/push/slide/zoom/whip-pan/spin/flash/glitch/blur/morph
 
 	// 角色和场景（JSON）
 	Characters string `json:"characters" gorm:"type:text"`
@@ -859,13 +886,13 @@ type StoryboardShot struct {
 	ErrorMessage string  `json:"error_message,omitempty" gorm:"type:text"` // 失败原因（供前端展示）
 
 	// 文件
-	ClipPath string `json:"clip_path" gorm:"size:500"`
+	ClipPath string `json:"clip_path" gorm:"size:2000"`
 
 	// per-shot 视频生成
 	ShotTaskID       string  `json:"shot_task_id" gorm:"size:255;index"`
 	ShotProviderName string  `json:"shot_provider_name" gorm:"size:50"`
 	ConsistencyScore float64 `json:"consistency_score" gorm:"type:decimal(4,3)"`
-	AudioPath        string  `json:"audio_path" gorm:"size:500"`
+	AudioPath        string  `json:"audio_path" gorm:"size:2000"`
 	RetryCount       int     `json:"retry_count" gorm:"default:0"`
 
 	// 生成模式
@@ -943,9 +970,9 @@ func (ShotSFXItem) TableName() string { return "ink_shot_sfx_item" }
 
 // VideoBGMSegment 视频背景音乐分段（一段BGM可跨越多个分镜，AI智能分组）
 type VideoBGMSegment struct {
-	ID          uint    `json:"id" gorm:"primaryKey"`
-	VideoID     uint    `json:"video_id" gorm:"index;not null"`
-	SeqNo       int     `json:"seq_no" gorm:"not null;default:1"` // 分段顺序
+	ID      uint `json:"id" gorm:"primaryKey"`
+	VideoID uint `json:"video_id" gorm:"index;index:idx_bgm_video_seq,priority:1;not null"`
+	SeqNo   int  `json:"seq_no" gorm:"index:idx_bgm_video_seq,priority:2;not null;default:1"` // 分段顺序
 	StartShotNo int     `json:"start_shot_no" gorm:"not null;default:1"`
 	EndShotNo   int     `json:"end_shot_no" gorm:"not null;default:1"`
 	Mood        string  `json:"mood" gorm:"size:200"`         // 情绪/氛围描述，如 "史诗战斗""温情别离"
@@ -970,10 +997,10 @@ func (VideoBGMSegment) TableName() string { return "ink_video_bgm_segment" }
 type QualityReport struct {
 	ID         uint   `json:"id" gorm:"primaryKey"`
 	UUID       string `json:"uuid" gorm:"uniqueIndex;size:36"`
-	TargetType string `json:"target_type" gorm:"size:50;index"`
+	TargetType string `json:"target_type" gorm:"size:50;index:idx_quality_target,priority:1"`
 	// novel=小说, chapter=章节, video=视频
 
-	TargetID uint `json:"target_id" gorm:"index;not null"`
+	TargetID uint `json:"target_id" gorm:"index:idx_quality_target,priority:2;not null"`
 
 	// 整体评分
 	OverallScore     float64 `json:"overall_score" gorm:"type:decimal(5,4)"`
@@ -1001,9 +1028,9 @@ func (QualityReport) TableName() string {
 // ChapterVersion 章节版本
 type ChapterVersion struct {
 	ID        uint     `json:"id" gorm:"primaryKey"`
-	ChapterID uint     `json:"chapter_id" gorm:"index;not null"`
+	ChapterID uint     `json:"chapter_id" gorm:"uniqueIndex:idx_version_chapter,priority:1;not null"`
 	Chapter   *Chapter `json:"chapter,omitempty" gorm:"foreignKey:ChapterID"`
-	VersionNo int      `json:"version_no" gorm:"not null"`
+	VersionNo int      `json:"version_no" gorm:"uniqueIndex:idx_version_chapter,priority:2;not null"`
 
 	Content string `json:"content" gorm:"type:text"`
 
@@ -1449,8 +1476,8 @@ type UpsertChapterCharacterRequest struct {
 // status: active/sealed(封印)/lost(失传)/disabled(禁用)
 type Skill struct {
 	ID          uint  `json:"id" gorm:"primaryKey"`
-	NovelID     uint  `json:"novel_id" gorm:"index;not null"`
-	CharacterID *uint `json:"character_id" gorm:"index"` // nil = 世界/未分配技能
+	NovelID     uint  `json:"novel_id" gorm:"index;index:idx_skill_novel_char,priority:1;not null"`
+	CharacterID *uint `json:"character_id" gorm:"index;index:idx_skill_novel_char,priority:2"` // nil = 世界/未分配技能
 	ParentID    *uint `json:"parent_id" gorm:"index"`    // 前置技能（技能树）
 
 	Name      string `json:"name" gorm:"size:100;not null"`
@@ -1572,7 +1599,7 @@ type StoryboardReview struct {
 type HookChain struct {
 	ID       uint `json:"id" gorm:"primaryKey"`
 	TenantID uint `json:"tenant_id" gorm:"index;not null;default:1"`
-	NovelID  uint `json:"novel_id" gorm:"index;not null"`
+	NovelID  uint `json:"novel_id" gorm:"index;index:idx_hook_novel_fulfilled,priority:1;not null"`
 
 	Type        string `json:"type" gorm:"size:50;not null"`
 	// chapter_end/emotional/mystery/threat/promise
@@ -1581,7 +1608,7 @@ type HookChain struct {
 	PlannedPayoffAt int    `json:"planned_payoff_at" gorm:"default:0"`        // 计划兑现章节号（0=未规划）
 	ActualPayoffAt  int    `json:"actual_payoff_at" gorm:"default:0"`         // 实际兑现章节号
 	Intensity       int    `json:"intensity" gorm:"not null;default:5"`       // 1-10
-	IsFulfilled     bool   `json:"is_fulfilled" gorm:"default:false"`
+	IsFulfilled     bool   `json:"is_fulfilled" gorm:"index:idx_hook_novel_fulfilled,priority:2;default:false"`
 	Notes           string `json:"notes" gorm:"type:text"`
 
 	CreatedAt time.Time      `json:"created_at"`
@@ -1679,6 +1706,7 @@ type SceneConsistencyLog struct {
 	ArchScore    float64 `gorm:"type:decimal(4,3)" json:"arch_score"`
 	LightScore   float64 `gorm:"type:decimal(4,3)" json:"light_score"`
 	AtmoScore    float64 `gorm:"type:decimal(4,3)" json:"atmo_score"`
+	PropScore    float64 `gorm:"type:decimal(4,3)" json:"prop_score"`
 	Issues       string  `gorm:"type:json" json:"issues"`
 	IPWeight     float64 `json:"ip_weight"`
 	Passed       bool    `json:"passed"`

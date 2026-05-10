@@ -1,9 +1,10 @@
 package handler
 
 import (
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"strconv"
+
+	"github.com/inkframe/inkframe-backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -12,10 +13,10 @@ import (
 
 // ChapterHandler 章节处理器
 type ChapterHandler struct {
-	chapterService     *service.ChapterService
-	versionService     *service.ChapterVersionService
-	qualityService     *service.QualityControlService
-	taskSvc            *service.TaskService
+	chapterService *service.ChapterService
+	versionService *service.ChapterVersionService
+	qualityService *service.QualityControlService
+	taskSvc        *service.TaskService
 }
 
 func NewChapterHandler(
@@ -35,15 +36,13 @@ func NewChapterHandler(
 // CreateChapter 创建章节
 // POST /api/v1/novels/:novel_id/chapters
 func (h *ChapterHandler) CreateChapter(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
 	var req model.CreateChapterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -60,9 +59,8 @@ func (h *ChapterHandler) CreateChapter(c *gin.Context) {
 // GetChapter 获取章节详情
 // GET /api/v1/chapters/:id
 func (h *ChapterHandler) GetChapter(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid chapter id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -78,9 +76,8 @@ func (h *ChapterHandler) GetChapter(c *gin.Context) {
 // ListChapters 获取章节列表
 // GET /api/v1/novels/:novel_id/chapters
 func (h *ChapterHandler) ListChapters(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -97,15 +94,13 @@ func (h *ChapterHandler) ListChapters(c *gin.Context) {
 // UpdateChapter 更新章节
 // PUT /api/v1/chapters/:id
 func (h *ChapterHandler) UpdateChapter(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid chapter id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
 	var req model.UpdateChapterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -122,9 +117,8 @@ func (h *ChapterHandler) UpdateChapter(c *gin.Context) {
 // DeleteChapter 删除章节
 // DELETE /api/v1/chapters/:id
 func (h *ChapterHandler) DeleteChapter(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid chapter id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -141,8 +135,7 @@ func (h *ChapterHandler) DeleteChapter(c *gin.Context) {
 // POST /api/v1/chapters/generate
 func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 	var req model.GenerateChapterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	logger.Printf("[ChapterHandler] GenerateChapter: novelID=%d chapterNo=%d", req.NovelID, req.ChapterNo)
@@ -174,17 +167,15 @@ func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 // RegenerateChapter 重新生成章节
 // POST /api/v1/chapters/:id/regenerate
 func (h *ChapterHandler) RegenerateChapter(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid chapter id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
 	var req struct {
 		Prompt string `json:"prompt"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -201,9 +192,8 @@ func (h *ChapterHandler) RegenerateChapter(c *gin.Context) {
 // GetVersions 获取章节版本历史
 // GET /api/v1/chapters/:id/versions
 func (h *ChapterHandler) GetVersions(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid chapter id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -220,9 +210,8 @@ func (h *ChapterHandler) GetVersions(c *gin.Context) {
 // RestoreVersion 恢复版本
 // POST /api/v1/chapters/:id/versions/:version_no/restore
 func (h *ChapterHandler) RestoreVersion(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid chapter id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	versionNo, err := strconv.Atoi(c.Param("version_no"))
@@ -244,9 +233,8 @@ func (h *ChapterHandler) RestoreVersion(c *gin.Context) {
 // GetChapterByNo 根据章节号获取章节
 // GET /api/v1/novels/:novel_id/chapters/:chapter_no
 func (h *ChapterHandler) GetChapterByNo(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
@@ -267,9 +255,8 @@ func (h *ChapterHandler) GetChapterByNo(c *gin.Context) {
 // UpdateChapterByNo 根据章节号更新章节
 // PUT /api/v1/novels/:novel_id/chapters/:chapter_no
 func (h *ChapterHandler) UpdateChapterByNo(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
@@ -279,8 +266,7 @@ func (h *ChapterHandler) UpdateChapterByNo(c *gin.Context) {
 	}
 
 	var req model.UpdateChapterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -297,9 +283,8 @@ func (h *ChapterHandler) UpdateChapterByNo(c *gin.Context) {
 // DeleteChapterByNo 根据章节号删除章节
 // DELETE /api/v1/novels/:novel_id/chapters/:chapter_no
 func (h *ChapterHandler) DeleteChapterByNo(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
@@ -323,9 +308,8 @@ func (h *ChapterHandler) DeleteChapterByNo(c *gin.Context) {
 // GenerateChapterOutline 为章节生成 AI 大纲
 // POST /api/v1/novels/:id/chapters/:chapter_no/outline
 func (h *ChapterHandler) GenerateChapterOutline(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
@@ -350,9 +334,8 @@ func (h *ChapterHandler) GenerateChapterOutline(c *gin.Context) {
 // GetQualityReport 获取质量报告
 // GET /api/v1/chapters/:id/quality-report
 func (h *ChapterHandler) GetQualityReport(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid chapter id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -369,9 +352,8 @@ func (h *ChapterHandler) GetQualityReport(c *gin.Context) {
 // QualityCheck 质量检查
 // POST /api/v1/chapters/:id/quality-check
 func (h *ChapterHandler) QualityCheck(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid chapter id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -388,17 +370,15 @@ func (h *ChapterHandler) QualityCheck(c *gin.Context) {
 // RefineChapter 应用改进建议精修章节（返回改进后内容，不自动保存）
 // POST /api/v1/chapters/:id/improve
 func (h *ChapterHandler) RefineChapter(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid chapter id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
 	var req struct {
 		Suggestions []string `json:"suggestions"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	if len(req.Suggestions) == 0 {
@@ -419,9 +399,8 @@ func (h *ChapterHandler) RefineChapter(c *gin.Context) {
 // ApproveChapter 审核通过章节
 // POST /api/v1/chapters/:id/approve
 func (h *ChapterHandler) ApproveChapter(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid chapter id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -445,17 +424,15 @@ func (h *ChapterHandler) ApproveChapter(c *gin.Context) {
 // RejectChapter 驳回章节
 // POST /api/v1/chapters/:id/reject
 func (h *ChapterHandler) RejectChapter(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid chapter id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
 	var req struct {
 		Reason string `json:"reason" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -474,9 +451,8 @@ func (h *ChapterHandler) RejectChapter(c *gin.Context) {
 // BatchSummarizeChapters 批量生成章节摘要（异步任务）
 // POST /api/v1/novels/:id/chapters/batch-summarize
 func (h *ChapterHandler) BatchSummarizeChapters(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	tenantID := getTenantID(c)
@@ -493,7 +469,7 @@ func (h *ChapterHandler) BatchSummarizeChapters(c *gin.Context) {
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		count, err := h.chapterService.BatchGenerateSummaries(tenantID, uint(novelID), progressFn)
 		if err != nil {

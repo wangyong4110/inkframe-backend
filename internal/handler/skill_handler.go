@@ -27,9 +27,8 @@ func (h *SkillHandler) WithChapterService(svc *service.ChapterService) *SkillHan
 
 // ListSkills GET /novels/:id/skills
 func (h *SkillHandler) ListSkills(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil {
-		respondErr(c, http.StatusBadRequest, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	opts := repository.ListSkillsOpts{
@@ -52,14 +51,12 @@ func (h *SkillHandler) ListSkills(c *gin.Context) {
 
 // CreateSkill POST /novels/:id/skills
 func (h *SkillHandler) CreateSkill(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil {
-		respondErr(c, http.StatusBadRequest, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req model.CreateSkillRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondErr(c, http.StatusBadRequest, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	skill, err := h.skillService.CreateSkill(uint(novelID), &req)
@@ -72,9 +69,8 @@ func (h *SkillHandler) CreateSkill(c *gin.Context) {
 
 // GetSkill GET /skills/:skillId
 func (h *SkillHandler) GetSkill(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("skillId"), 10, 64)
-	if err != nil {
-		respondErr(c, http.StatusBadRequest, "invalid skill id")
+	id, ok := parseID(c, "skillId")
+	if !ok {
 		return
 	}
 	skill, err := h.skillService.GetSkill(uint(id))
@@ -87,14 +83,12 @@ func (h *SkillHandler) GetSkill(c *gin.Context) {
 
 // UpdateSkill PUT /skills/:skillId
 func (h *SkillHandler) UpdateSkill(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("skillId"), 10, 64)
-	if err != nil {
-		respondErr(c, http.StatusBadRequest, "invalid skill id")
+	id, ok := parseID(c, "skillId")
+	if !ok {
 		return
 	}
 	var req model.UpdateSkillRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondErr(c, http.StatusBadRequest, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	skill, err := h.skillService.UpdateSkill(uint(id), &req)
@@ -107,9 +101,8 @@ func (h *SkillHandler) UpdateSkill(c *gin.Context) {
 
 // DeleteSkill DELETE /skills/:skillId
 func (h *SkillHandler) DeleteSkill(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("skillId"), 10, 64)
-	if err != nil {
-		respondErr(c, http.StatusBadRequest, "invalid skill id")
+	id, ok := parseID(c, "skillId")
+	if !ok {
 		return
 	}
 	if err := h.skillService.DeleteSkill(uint(id)); err != nil {
@@ -121,14 +114,12 @@ func (h *SkillHandler) DeleteSkill(c *gin.Context) {
 
 // GenerateSkills POST /novels/:id/skills/generate
 func (h *SkillHandler) GenerateSkills(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil {
-		respondErr(c, http.StatusBadRequest, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req model.GenerateSkillsRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondErr(c, http.StatusBadRequest, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	skills, err := h.skillService.GenerateSkills(getTenantID(c), uint(novelID), &req)
@@ -145,9 +136,8 @@ func (h *SkillHandler) AIExtractChapterSkills(c *gin.Context) {
 		respondErr(c, http.StatusServiceUnavailable, "chapter service not configured")
 		return
 	}
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondErr(c, http.StatusBadRequest, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
@@ -170,9 +160,8 @@ func (h *SkillHandler) AIExtractChapterSkills(c *gin.Context) {
 
 // GenerateSkillEffect POST /skills/:skillId/effect-image
 func (h *SkillHandler) GenerateSkillEffect(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("skillId"), 10, 64)
-	if err != nil {
-		respondErr(c, http.StatusBadRequest, "invalid skill id")
+	id, ok := parseID(c, "skillId")
+	if !ok {
 		return
 	}
 	skill, err := h.skillService.GenerateSkillEffect(uint(id))

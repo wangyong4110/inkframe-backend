@@ -42,8 +42,7 @@ func (h *SystemHandler) UpdateSetting(c *gin.Context) {
 		Value       string `json:"value"`
 		Description string `json:"description"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &body) {
 		return
 	}
 	if err := h.repo.Set(key, body.Value, body.Description); err != nil {

@@ -2,7 +2,6 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -43,9 +42,8 @@ func (h *WorldviewHandler) ListWorldviews(c *gin.Context) {
 // GetWorldview 获取世界观详情
 // GET /api/v1/worldviews/:id
 func (h *WorldviewHandler) GetWorldview(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid worldview id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -71,8 +69,7 @@ func (h *WorldviewHandler) CreateWorldview(c *gin.Context) {
 		History     string `json:"history"`
 		Technology  string `json:"technology"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -99,9 +96,8 @@ func (h *WorldviewHandler) CreateWorldview(c *gin.Context) {
 // UpdateWorldview 更新世界观
 // PUT /api/v1/worldviews/:id
 func (h *WorldviewHandler) UpdateWorldview(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid worldview id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -122,8 +118,7 @@ func (h *WorldviewHandler) UpdateWorldview(c *gin.Context) {
 		Technology  *string `json:"technology"`
 		Rules       *string `json:"rules"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -166,9 +161,8 @@ func (h *WorldviewHandler) UpdateWorldview(c *gin.Context) {
 // DeleteWorldview 删除世界观
 // DELETE /api/v1/worldviews/:id
 func (h *WorldviewHandler) DeleteWorldview(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid worldview id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -191,8 +185,7 @@ func (h *WorldviewHandler) GenerateWorldview(c *gin.Context) {
 		Hints   []string `json:"hints"`
 		NovelID uint     `json:"novel_id"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	if req.Genre == "" && req.NovelID == 0 {
@@ -221,9 +214,8 @@ func (h *WorldviewHandler) GenerateWorldview(c *gin.Context) {
 // ListEntities 获取世界观实体列表
 // GET /api/v1/worldviews/:id/entities
 func (h *WorldviewHandler) ListEntities(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid worldview id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	entities, err := h.worldviewService.GetEntities(uint(id))
@@ -237,9 +229,8 @@ func (h *WorldviewHandler) ListEntities(c *gin.Context) {
 // CreateEntity 创建世界观实体
 // POST /api/v1/worldviews/:id/entities
 func (h *WorldviewHandler) CreateEntity(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid worldview id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req struct {
@@ -248,8 +239,7 @@ func (h *WorldviewHandler) CreateEntity(c *gin.Context) {
 		Description string `json:"description"`
 		ImageURL    string `json:"image_url"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	entity := &model.WorldviewEntity{
@@ -269,9 +259,8 @@ func (h *WorldviewHandler) CreateEntity(c *gin.Context) {
 // UpdateEntity 更新世界观实体
 // PUT /api/v1/worldviews/:id/entities/:entity_id
 func (h *WorldviewHandler) UpdateEntity(c *gin.Context) {
-	entityID, err := strconv.ParseUint(c.Param("entity_id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid entity id")
+	entityID, ok := parseID(c, "entity_id")
+	if !ok {
 		return
 	}
 	entity, err := h.worldviewService.GetEntity(uint(entityID))
@@ -285,8 +274,7 @@ func (h *WorldviewHandler) UpdateEntity(c *gin.Context) {
 		Description *string `json:"description"`
 		ImageURL    *string `json:"image_url"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	if req.Type != nil {
@@ -311,9 +299,8 @@ func (h *WorldviewHandler) UpdateEntity(c *gin.Context) {
 // DeleteEntity 删除世界观实体
 // DELETE /api/v1/worldviews/:id/entities/:entity_id
 func (h *WorldviewHandler) DeleteEntity(c *gin.Context) {
-	entityID, err := strconv.ParseUint(c.Param("entity_id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid entity id")
+	entityID, ok := parseID(c, "entity_id")
+	if !ok {
 		return
 	}
 	if err := h.worldviewService.DeleteEntity(uint(entityID)); err != nil {

@@ -2,12 +2,13 @@ package handler
 
 import (
 	"fmt"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"mime"
 	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/inkframe/inkframe-backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -34,14 +35,14 @@ func respondCreated(c *gin.Context, data interface{}) {
 }
 
 func respondBadRequest(c *gin.Context, msg string) {
-	c.JSON(http.StatusBadRequest, gin.H{"error": msg})
+	c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": msg, "data": nil})
 }
 
 func respondErr(c *gin.Context, status int, msg string) {
 	if status >= 500 {
 		logger.Printf("[HTTP] %s %s -> %d: %s", c.Request.Method, c.Request.URL.Path, status, msg)
 	}
-	c.JSON(status, gin.H{"error": msg})
+	c.JSON(status, gin.H{"code": status, "message": msg, "data": nil})
 }
 
 // respondAccepted writes a 202 Accepted response with a task_id payload.

@@ -3,12 +3,13 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/inkframe/inkframe-backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -139,15 +140,13 @@ func (h *CharacterHandler) WithChapterService(svc *service.ChapterService) *Char
 // CreateCharacter 创建角色
 // POST /api/v1/novels/:novel_id/characters
 func (h *CharacterHandler) CreateCharacter(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
 	var req model.CreateCharacterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -163,9 +162,8 @@ func (h *CharacterHandler) CreateCharacter(c *gin.Context) {
 // GetCharacter 获取角色详情
 // GET /api/v1/characters/:id
 func (h *CharacterHandler) GetCharacter(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid character id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -181,9 +179,8 @@ func (h *CharacterHandler) GetCharacter(c *gin.Context) {
 // ListCharacters 获取角色列表
 // GET /api/v1/novels/:novel_id/characters
 func (h *CharacterHandler) ListCharacters(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -203,15 +200,13 @@ func (h *CharacterHandler) ListCharacters(c *gin.Context) {
 // UpdateCharacter 更新角色
 // PUT /api/v1/characters/:id
 func (h *CharacterHandler) UpdateCharacter(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid character id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
 	var req model.UpdateCharacterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -227,9 +222,8 @@ func (h *CharacterHandler) UpdateCharacter(c *gin.Context) {
 // DeleteCharacter 删除角色
 // DELETE /api/v1/characters/:id
 func (h *CharacterHandler) DeleteCharacter(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid character id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -243,9 +237,8 @@ func (h *CharacterHandler) DeleteCharacter(c *gin.Context) {
 // GenerateCharacterImage 生成角色图像
 // POST /api/v1/characters/:id/images
 func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid character id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -255,8 +248,7 @@ func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 		Action  string `json:"action,omitempty"`
 		Style   string `json:"style,omitempty"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -286,9 +278,8 @@ func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 // POST /api/v1/characters/:id/three-view
 // 立即返回 202 + task_id，轮询 GET /characters/:id/three-view/:task_id 获取结果
 func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid character id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -395,9 +386,8 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 // UploadPortrait 上传角色肖像图片（远端 OSS 或本地存储兜底），用作三视图生成参考图
 // POST /api/v1/characters/:id/portrait/upload
 func (h *CharacterHandler) UploadPortrait(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid character id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -425,9 +415,8 @@ func (h *CharacterHandler) UploadPortrait(c *gin.Context) {
 // AIBatchGenerate AI批量生成/更新角色（异步任务）
 // POST /api/v1/novels/:id/characters/ai-batch
 func (h *CharacterHandler) AIBatchGenerate(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	tenantID := getTenantID(c)
@@ -443,7 +432,7 @@ func (h *CharacterHandler) AIBatchGenerate(c *gin.Context) {
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		chars, err := h.characterService.AIBatchGenerate(tenantID, uint(novelID))
 		if err != nil {
@@ -459,9 +448,8 @@ func (h *CharacterHandler) AIBatchGenerate(c *gin.Context) {
 // BatchGenerateImages 批量为小说所有角色生成三视图正面图（异步任务）
 // POST /api/v1/novels/:id/characters/batch-images
 func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req struct {
@@ -481,7 +469,7 @@ func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		succ, fail, err := h.characterService.BatchGenerateImages(tenantID, uint(novelID), req.Provider, progressFn)
 		if err != nil {
@@ -497,17 +485,15 @@ func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
 // GenerateCharacterProfile AI生成角色档案
 // POST /api/v1/novels/:novel_id/characters/generate
 func (h *CharacterHandler) GenerateCharacterProfile(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
 	var req struct {
 		Description string `json:"description" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -523,8 +509,14 @@ func (h *CharacterHandler) GenerateCharacterProfile(c *gin.Context) {
 // GetCharacterArc 获取角色弧光
 // GET /api/v1/novels/:novel_id/character-arcs/:character_id
 func (h *CharacterHandler) GetCharacterArc(c *gin.Context) {
-	novelId, _ := strconv.ParseUint(c.Param("id"), 10, 32)
-	characterId, _ := strconv.ParseUint(c.Param("character_id"), 10, 32)
+	novelId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	characterId, ok := parseID(c, "character_id")
+	if !ok {
+		return
+	}
 
 	arc, err := h.arcService.GetCharacterArc(uint(novelId), uint(characterId))
 	if err != nil {
@@ -538,9 +530,8 @@ func (h *CharacterHandler) GetCharacterArc(c *gin.Context) {
 // GetAllCharacterArcs 获取所有角色弧光
 // GET /api/v1/novels/:novel_id/character-arcs
 func (h *CharacterHandler) GetAllCharacterArcs(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -556,15 +547,20 @@ func (h *CharacterHandler) GetAllCharacterArcs(c *gin.Context) {
 // UpdateCharacterArc 更新角色弧光
 // PUT /api/v1/novels/:novel_id/character-arcs/:character_id
 func (h *CharacterHandler) UpdateCharacterArc(c *gin.Context) {
-	novelId, _ := strconv.ParseUint(c.Param("id"), 10, 32)
-	characterId, _ := strconv.ParseUint(c.Param("character_id"), 10, 32)
+	novelId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	characterId, ok := parseID(c, "character_id")
+	if !ok {
+		return
+	}
 
 	var req struct {
 		CurrentStage int    `json:"current_stage"`
 		Note         string `json:"note,omitempty"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -580,17 +576,15 @@ func (h *CharacterHandler) UpdateCharacterArc(c *gin.Context) {
 // AnalyzeCharacterConsistency 分析角色一致性
 // POST /api/v1/characters/:id/analyze-consistency
 func (h *CharacterHandler) AnalyzeCharacterConsistency(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid character id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
 	var req struct {
 		Images []string `json:"images" binding:"required,min=1"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -605,9 +599,8 @@ func (h *CharacterHandler) AnalyzeCharacterConsistency(c *gin.Context) {
 
 // ListEffectiveCharacters GET /novels/:id/chapters/:chapter_no/characters
 func (h *CharacterHandler) ListEffectiveCharacters(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
@@ -630,9 +623,8 @@ func (h *CharacterHandler) ListEffectiveCharacters(c *gin.Context) {
 
 // UpsertChapterCharacter POST /novels/:id/chapters/:chapter_no/characters/:character_id
 func (h *CharacterHandler) UpsertChapterCharacter(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
@@ -640,9 +632,8 @@ func (h *CharacterHandler) UpsertChapterCharacter(c *gin.Context) {
 		respondBadRequest(c, "invalid chapter_no")
 		return
 	}
-	characterID, err := strconv.ParseUint(c.Param("character_id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid character id")
+	characterID, ok := parseID(c, "character_id")
+	if !ok {
 		return
 	}
 	chapter, err := h.chapterSvc.GetChapterByNo(uint(novelID), chapterNo)
@@ -651,8 +642,7 @@ func (h *CharacterHandler) UpsertChapterCharacter(c *gin.Context) {
 		return
 	}
 	var req model.UpsertChapterCharacterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	cc, err := h.characterService.UpsertChapterCharacter(uint(novelID), chapter.ID, uint(characterID), &req)
@@ -665,9 +655,8 @@ func (h *CharacterHandler) UpsertChapterCharacter(c *gin.Context) {
 
 // DeleteChapterCharacter DELETE /novels/:id/chapters/:chapter_no/characters/:character_id
 func (h *CharacterHandler) DeleteChapterCharacter(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
@@ -675,9 +664,8 @@ func (h *CharacterHandler) DeleteChapterCharacter(c *gin.Context) {
 		respondBadRequest(c, "invalid chapter_no")
 		return
 	}
-	characterID, err := strconv.ParseUint(c.Param("character_id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid character id")
+	characterID, ok := parseID(c, "character_id")
+	if !ok {
 		return
 	}
 	chapter, err := h.chapterSvc.GetChapterByNo(uint(novelID), chapterNo)
@@ -694,9 +682,8 @@ func (h *CharacterHandler) DeleteChapterCharacter(c *gin.Context) {
 
 // AIExtractMinorCharacters POST /novels/:id/chapters/:chapter_no/characters/ai-extract
 func (h *CharacterHandler) AIExtractMinorCharacters(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
@@ -720,9 +707,8 @@ func (h *CharacterHandler) AIExtractMinorCharacters(c *gin.Context) {
 // PreviewVoice 试听角色声音
 // POST /api/v1/characters/:id/voice/preview
 func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid character id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	if h.aiService == nil {
@@ -796,9 +782,8 @@ func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
 // ServeVoiceSample 播放角色声音样本（file:// 路径转 HTTP 流）
 // GET /api/v1/characters/:id/voice/sample
 func (h *CharacterHandler) ServeVoiceSample(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid character id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	character, err := h.characterService.GetCharacter(uint(id))

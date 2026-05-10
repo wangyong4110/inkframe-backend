@@ -3,7 +3,6 @@ package handler
 import (
 	"fmt"
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -20,9 +19,8 @@ func NewMediaHandler(db *gorm.DB) *MediaHandler {
 // ServeMedia 返回 DB 中存储的媒体素材二进制数据
 // GET /api/v1/media/:id
 func (h *MediaHandler) ServeMedia(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err != nil {
-		respondBadRequest(c, "invalid media id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var asset model.MediaAsset

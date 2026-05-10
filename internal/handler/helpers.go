@@ -1,11 +1,34 @@
 package handler
 
 import (
+	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
+
+// parseID parses a uint route parameter, writing a 400 response on failure.
+// Returns (id, true) on success; (0, false) on failure.
+func parseID(c *gin.Context, param string) (uint, bool) {
+	v, err := strconv.ParseUint(c.Param(param), 10, 32)
+	if err != nil {
+		respondBadRequest(c, "invalid "+param)
+		return 0, false
+	}
+	return uint(v), true
+}
+
+// bindJSON deserialises the JSON request body into v.
+// Returns true on success; writes a 400 response and returns false on failure.
+func bindJSON(c *gin.Context, v interface{}) bool {
+	if err := c.ShouldBindJSON(v); err != nil {
+		respondBadRequest(c, fmt.Sprintf("invalid request: %v", err))
+		return false
+	}
+	return true
+}
 
 // getTenantID extracts tenant_id injected by JWT middleware.
 // Returns 0 if not present (falls back to system-level providers).

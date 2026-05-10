@@ -1,9 +1,10 @@
 package handler
 
 import (
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"strconv"
+
+	"github.com/inkframe/inkframe-backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -35,9 +36,8 @@ func (h *ItemHandler) WithTaskService(svc *service.TaskService) *ItemHandler {
 
 // ListItems GET /novels/:id/items
 func (h *ItemHandler) ListItems(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	items, err := h.itemService.ListItems(uint(novelID))
@@ -50,14 +50,12 @@ func (h *ItemHandler) ListItems(c *gin.Context) {
 
 // CreateItem POST /novels/:id/items
 func (h *ItemHandler) CreateItem(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req model.CreateItemRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	item, err := h.itemService.CreateItem(uint(novelID), &req)
@@ -70,9 +68,8 @@ func (h *ItemHandler) CreateItem(c *gin.Context) {
 
 // GetItem GET /items/:id
 func (h *ItemHandler) GetItem(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid item id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	item, err := h.itemService.GetItem(uint(id))
@@ -85,14 +82,12 @@ func (h *ItemHandler) GetItem(c *gin.Context) {
 
 // UpdateItem PUT /items/:id
 func (h *ItemHandler) UpdateItem(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid item id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req model.UpdateItemRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	item, err := h.itemService.UpdateItem(uint(id), &req)
@@ -105,9 +100,8 @@ func (h *ItemHandler) UpdateItem(c *gin.Context) {
 
 // DeleteItem DELETE /items/:id
 func (h *ItemHandler) DeleteItem(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid item id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	if err := h.itemService.DeleteItem(uint(id)); err != nil {
@@ -120,9 +114,8 @@ func (h *ItemHandler) DeleteItem(c *gin.Context) {
 // AIExtractFromNovel AI从章节内容提取物品（异步任务）
 // POST /api/v1/novels/:id/items/ai-extract
 func (h *ItemHandler) AIExtractFromNovel(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	tenantID := getTenantID(c)
@@ -138,7 +131,7 @@ func (h *ItemHandler) AIExtractFromNovel(c *gin.Context) {
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		items, err := h.itemService.AIExtractFromNovel(tenantID, uint(novelID))
 		if err != nil {
@@ -154,9 +147,8 @@ func (h *ItemHandler) AIExtractFromNovel(c *gin.Context) {
 // BatchGenerateImages 批量为小说所有物品生成图像（异步任务）
 // POST /api/v1/novels/:id/items/batch-images
 func (h *ItemHandler) BatchGenerateImages(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req struct {
@@ -176,7 +168,7 @@ func (h *ItemHandler) BatchGenerateImages(c *gin.Context) {
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		succ, fail, err := h.itemService.BatchGenerateImages(tenantID, uint(novelID), req.Provider, progressFn)
 		if err != nil {
@@ -193,9 +185,8 @@ func (h *ItemHandler) BatchGenerateImages(c *gin.Context) {
 // POST /api/v1/items/:id/images
 // 立即返回 202 + task_id，轮询 GET /items/:id/images/:task_id 获取结果
 func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid item id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req struct {
@@ -222,7 +213,7 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		item, err := h.itemService.GenerateItemImage(tenantID, itemID, refURL, provider)
 		if err != nil {
@@ -230,7 +221,7 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.UpdateProgress(taskID, 90) //nolint:errcheck
-			h.taskSvc.Complete(taskID, item) //nolint:errcheck
+			h.taskSvc.Complete(taskID, item)     //nolint:errcheck
 		}
 	}(task.TaskID)
 
@@ -243,9 +234,8 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 
 // ListEffectiveItems GET /novels/:id/chapters/:chapter_no/items
 func (h *ItemHandler) ListEffectiveItems(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
@@ -268,9 +258,8 @@ func (h *ItemHandler) ListEffectiveItems(c *gin.Context) {
 
 // UpsertChapterItem POST /novels/:id/chapters/:chapter_no/items/:item_id
 func (h *ItemHandler) UpsertChapterItem(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
@@ -278,9 +267,8 @@ func (h *ItemHandler) UpsertChapterItem(c *gin.Context) {
 		respondBadRequest(c, "invalid chapter_no")
 		return
 	}
-	itemID, err := strconv.ParseUint(c.Param("item_id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid item id")
+	itemID, ok := parseID(c, "item_id")
+	if !ok {
 		return
 	}
 	chapter, err := h.chapterSvc.GetChapterByNo(uint(novelID), chapterNo)
@@ -289,8 +277,7 @@ func (h *ItemHandler) UpsertChapterItem(c *gin.Context) {
 		return
 	}
 	var req model.UpsertChapterItemRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	ci, err := h.itemService.UpsertChapterItem(uint(novelID), chapter.ID, uint(itemID), &req)
@@ -303,9 +290,8 @@ func (h *ItemHandler) UpsertChapterItem(c *gin.Context) {
 
 // DeleteChapterItem DELETE /novels/:id/chapters/:chapter_no/items/:item_id
 func (h *ItemHandler) DeleteChapterItem(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
@@ -313,9 +299,8 @@ func (h *ItemHandler) DeleteChapterItem(c *gin.Context) {
 		respondBadRequest(c, "invalid chapter_no")
 		return
 	}
-	itemID, err := strconv.ParseUint(c.Param("item_id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid item id")
+	itemID, ok := parseID(c, "item_id")
+	if !ok {
 		return
 	}
 	chapter, err := h.chapterSvc.GetChapterByNo(uint(novelID), chapterNo)
@@ -332,9 +317,8 @@ func (h *ItemHandler) DeleteChapterItem(c *gin.Context) {
 
 // AIExtractChapterItems POST /novels/:id/chapters/:chapter_no/items/ai-extract
 func (h *ItemHandler) AIExtractChapterItems(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
@@ -362,9 +346,8 @@ func (h *ItemHandler) UploadItemImage(c *gin.Context) {
 		respondErr(c, http.StatusServiceUnavailable, "storage not configured")
 		return
 	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid item id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	imgURL, ok := receiveAndUpload(c, "item-images", h.storageSvc)
@@ -386,9 +369,8 @@ func (h *ItemHandler) UploadItemReference(c *gin.Context) {
 		respondErr(c, http.StatusServiceUnavailable, "storage not configured")
 		return
 	}
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid item id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	refURL, ok := receiveAndUpload(c, "item-references", h.storageSvc)

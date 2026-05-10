@@ -37,10 +37,8 @@ type Tenant struct {
 	// 到期时间（nil = 永不过期）
 	ExpiresAt *time.Time `json:"expires_at" gorm:"comment:到期时间"`
 
-	// 配额使用量（需要原子 UPDATE，保留独立列）
-	UsedProjects  int `json:"used_projects" gorm:"default:0;comment:已用项目数"`
-	UsedStorageMB int `json:"used_storage_mb" gorm:"default:0;comment:已用存储MB"`
-	UsedUsers     int `json:"used_users" gorm:"default:0;comment:已用用户数"`
+	// 配额使用量
+	UsedUsers int `json:"used_users" gorm:"default:0;comment:已用用户数"`
 
 	// 配额上限 + 计费周期（配置性，合并为 JSON）
 	Quota string `json:"quota" gorm:"type:text;comment:配额配置JSON"`
@@ -130,20 +128,10 @@ type User struct {
 	OAuthProvider string `json:"oauth_provider" gorm:"column:oauth_provider;size:20;comment:OAuth提供商"`
 	OAuthID       string `json:"oauth_id"       gorm:"column:oauth_id;size:100;comment:OAuth ID"`
 	
-	// 设置
-	Settings    string `json:"settings" gorm:"type:text;comment:用户设置JSON"`
-	Preferences string `json:"preferences" gorm:"type:text;comment:偏好设置JSON"`
-	
-	// 统计
-	TotalProjects int `json:"total_projects" gorm:"default:0"`
-	TotalNovels   int `json:"total_novels" gorm:"default:0"`
-	TotalWords    int `json:"total_words" gorm:"default:0"`
-	
 	// 时间戳
-	CreatedAt   time.Time      `json:"created_at"`
-	UpdatedAt   time.Time      `json:"updated_at"`
-	LastLoginAt *time.Time     `json:"last_login_at"`
-	DeletedAt   gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (User) TableName() string {

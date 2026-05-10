@@ -2,9 +2,10 @@ package handler
 
 import (
 	"context"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"strconv"
+
+	"github.com/inkframe/inkframe-backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/service"
@@ -34,9 +35,8 @@ func (h *SceneAnchorHandler) WithChapterService(svc *service.ChapterService) *Sc
 
 // GetSceneAnchor GET /scene-anchors/:id
 func (h *SceneAnchorHandler) GetSceneAnchor(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid scene anchor id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	anchor, err := h.svc.Get(uint(id))
@@ -49,9 +49,8 @@ func (h *SceneAnchorHandler) GetSceneAnchor(c *gin.Context) {
 
 // ListSceneAnchors GET /novels/:id/scene-anchors
 func (h *SceneAnchorHandler) ListSceneAnchors(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	anchors, err := h.svc.ListByNovel(uint(novelID))
@@ -64,14 +63,12 @@ func (h *SceneAnchorHandler) ListSceneAnchors(c *gin.Context) {
 
 // CreateSceneAnchor POST /novels/:id/scene-anchors
 func (h *SceneAnchorHandler) CreateSceneAnchor(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req service.CreateSceneAnchorReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	anchor, err := h.svc.Create(getTenantID(c), uint(novelID), req)
@@ -84,14 +81,12 @@ func (h *SceneAnchorHandler) CreateSceneAnchor(c *gin.Context) {
 
 // UpdateSceneAnchor PUT /scene-anchors/:id
 func (h *SceneAnchorHandler) UpdateSceneAnchor(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid scene anchor id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req service.UpdateSceneAnchorReq
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	anchor, err := h.svc.Update(uint(id), req)
@@ -104,9 +99,8 @@ func (h *SceneAnchorHandler) UpdateSceneAnchor(c *gin.Context) {
 
 // DeleteSceneAnchor DELETE /scene-anchors/:id
 func (h *SceneAnchorHandler) DeleteSceneAnchor(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid scene anchor id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	if err := h.svc.Delete(uint(id)); err != nil {
@@ -118,16 +112,14 @@ func (h *SceneAnchorHandler) DeleteSceneAnchor(c *gin.Context) {
 
 // SetShotAnchor PUT /videos/:video_id/shots/:shot_id/anchor
 func (h *SceneAnchorHandler) SetShotAnchor(c *gin.Context) {
-	shotID, err := strconv.ParseUint(c.Param("shot_id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid shot id")
+	shotID, ok := parseID(c, "shot_id")
+	if !ok {
 		return
 	}
 	var body struct {
 		AnchorID *uint `json:"anchor_id"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &body) {
 		return
 	}
 	if err := h.svc.SetShotAnchor(uint(shotID), body.AnchorID); err != nil {
@@ -139,17 +131,15 @@ func (h *SceneAnchorHandler) SetShotAnchor(c *gin.Context) {
 
 // ExtractSceneAnchors POST /novels/:id/scene-anchors/extract
 func (h *SceneAnchorHandler) ExtractSceneAnchors(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var body struct {
 		ChapterContent string `json:"chapter_content" binding:"required"`
 		NovelTitle     string `json:"novel_title"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &body) {
 		return
 	}
 	anchors, err := h.svc.ExtractFromChapter(c.Request.Context(), getTenantID(c), uint(novelID), body.NovelTitle, body.ChapterContent)
@@ -163,17 +153,15 @@ func (h *SceneAnchorHandler) ExtractSceneAnchors(c *gin.Context) {
 
 // LockRefImage PUT /scene-anchors/:id/ref-image
 func (h *SceneAnchorHandler) LockRefImage(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid scene anchor id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var body struct {
 		ImageURL string `json:"image_url" binding:"required"`
 		ShotID   *uint  `json:"shot_id"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &body) {
 		return
 	}
 	if err := h.svc.SetRefImage(uint(id), body.ImageURL, body.ShotID); err != nil {
@@ -185,9 +173,8 @@ func (h *SceneAnchorHandler) LockRefImage(c *gin.Context) {
 
 // GenerateRefImage POST /scene-anchors/:id/generate-ref-image
 func (h *SceneAnchorHandler) GenerateRefImage(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid scene anchor id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var body struct {
@@ -205,9 +192,8 @@ func (h *SceneAnchorHandler) GenerateRefImage(c *gin.Context) {
 
 // GetConsistencyLogs GET /scene-anchors/:id/consistency-logs
 func (h *SceneAnchorHandler) GetConsistencyLogs(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid scene anchor id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	logs, err := h.consistencySvc.GetLogsByAnchorID(uint(id))
@@ -224,9 +210,8 @@ func (h *SceneAnchorHandler) AIExtractChapterAnchors(c *gin.Context) {
 		respondErr(c, http.StatusServiceUnavailable, "chapter service not configured")
 		return
 	}
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
@@ -259,9 +244,8 @@ func (h *SceneAnchorHandler) AIExtractChapterAnchors(c *gin.Context) {
 // BatchGenerateRefImages POST /novels/:id/scene-anchors/batch-ref-images
 // 批量为小说所有场景锚点生成参考图（跳过已有参考图的锚点，异步任务）
 func (h *SceneAnchorHandler) BatchGenerateRefImages(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var body struct {
@@ -285,7 +269,7 @@ func (h *SceneAnchorHandler) BatchGenerateRefImages(c *gin.Context) {
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		succ, fail, err := h.svc.BatchGenerateRefImages(context.Background(), tenantID, uint(novelID), body.Provider, progressFn)
 		if err != nil {
@@ -301,9 +285,8 @@ func (h *SceneAnchorHandler) BatchGenerateRefImages(c *gin.Context) {
 // AIExtractFromNovel POST /novels/:id/scene-anchors/ai-extract
 // 异步批量提取小说所有章节的场景锚点
 func (h *SceneAnchorHandler) AIExtractFromNovel(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	tenantID := getTenantID(c)
@@ -323,7 +306,7 @@ func (h *SceneAnchorHandler) AIExtractFromNovel(c *gin.Context) {
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		anchors, err := h.svc.AIExtractAllFromNovel(tenantID, uint(novelID), progressFn)
 		if err != nil {

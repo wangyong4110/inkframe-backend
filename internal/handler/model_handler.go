@@ -74,9 +74,8 @@ func (h *ModelHandler) ListCapableProviders(c *gin.Context) {
 // GetProvider 获取单个提供商
 // GET /api/v1/model-providers/:id
 func (h *ModelHandler) GetProvider(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid provider id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -94,8 +93,7 @@ func (h *ModelHandler) GetProvider(c *gin.Context) {
 // POST /api/v1/model-providers
 func (h *ModelHandler) CreateProvider(c *gin.Context) {
 	var req model.CreateModelProviderRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -116,15 +114,13 @@ func (h *ModelHandler) CreateProvider(c *gin.Context) {
 // UpdateProvider 更新提供商
 // PUT /api/v1/model-providers/:id
 func (h *ModelHandler) UpdateProvider(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid provider id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
 	var req model.UpdateModelProviderRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -141,9 +137,8 @@ func (h *ModelHandler) UpdateProvider(c *gin.Context) {
 // DeleteProvider 删除提供商
 // DELETE /api/v1/model-providers/:id
 func (h *ModelHandler) DeleteProvider(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid provider id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -161,9 +156,8 @@ func (h *ModelHandler) DeleteProvider(c *gin.Context) {
 // TestProvider 测试提供商连接
 // POST /api/v1/model-providers/:id/test
 func (h *ModelHandler) TestProvider(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid provider id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -208,8 +202,7 @@ func (h *ModelHandler) ListModels(c *gin.Context) {
 // POST /api/v1/models
 func (h *ModelHandler) CreateModel(c *gin.Context) {
 	var req model.CreateAIModelRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -225,15 +218,13 @@ func (h *ModelHandler) CreateModel(c *gin.Context) {
 // UpdateModel 更新模型
 // PUT /api/v1/models/:id
 func (h *ModelHandler) UpdateModel(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid model id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
 	var req model.UpdateAIModelRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -249,9 +240,8 @@ func (h *ModelHandler) UpdateModel(c *gin.Context) {
 // DeleteModel 删除模型
 // DELETE /api/v1/models/:id
 func (h *ModelHandler) DeleteModel(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid model id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -266,9 +256,8 @@ func (h *ModelHandler) DeleteModel(c *gin.Context) {
 // TestModel 测试模型
 // POST /api/v1/models/:id/test
 func (h *ModelHandler) TestModel(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid model id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -309,8 +298,7 @@ func (h *ModelHandler) SelectModel(c *gin.Context) {
 		TaskType string `json:"task_type" binding:"required"`
 		Strategy string `json:"strategy"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -343,8 +331,7 @@ func (h *ModelHandler) UpdateTaskConfig(c *gin.Context) {
 	task := c.Param("task")
 
 	var req model.UpdateTaskConfigRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -373,8 +360,7 @@ func (h *ModelHandler) ListExperiments(c *gin.Context) {
 // POST /api/v1/experiments
 func (h *ModelHandler) CreateExperiment(c *gin.Context) {
 	var req model.CreateModelComparisonRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -390,9 +376,8 @@ func (h *ModelHandler) CreateExperiment(c *gin.Context) {
 // GetExperiment 获取实验详情
 // GET /api/v1/experiments/:id
 func (h *ModelHandler) GetExperiment(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid experiment id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -408,9 +393,8 @@ func (h *ModelHandler) GetExperiment(c *gin.Context) {
 // StartExperiment 开始实验
 // POST /api/v1/experiments/:id/start
 func (h *ModelHandler) StartExperiment(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid experiment id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -437,8 +421,7 @@ func (h *ModelHandler) FetchProviderModels(c *gin.Context) {
 		Endpoint   string `json:"endpoint"`
 		APIKey     string `json:"api_key"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 

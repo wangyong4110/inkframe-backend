@@ -269,17 +269,18 @@ func newSubtitleConfig(novel *model.Novel) subtitleConfig {
 		return cfg
 	}
 	// 保留小说级样式配置（位置/字号/颜色/背景），但不读取 enabled 字段
-	if novel.SubtitlePosition != "" {
-		cfg.position = novel.SubtitlePosition
+	vc := novel.VideoConf()
+	if vc.SubtitlePosition != "" {
+		cfg.position = vc.SubtitlePosition
 	}
-	if novel.SubtitleFontSize > 0 {
-		cfg.fontSize = novel.SubtitleFontSize
+	if vc.SubtitleFontSize > 0 {
+		cfg.fontSize = vc.SubtitleFontSize
 	}
-	if novel.SubtitleColor != "" {
-		cfg.color = novel.SubtitleColor
+	if vc.SubtitleColor != "" {
+		cfg.color = vc.SubtitleColor
 	}
-	if novel.SubtitleBgStyle != "" {
-		cfg.bgStyle = novel.SubtitleBgStyle
+	if vc.SubtitleBgStyle != "" {
+		cfg.bgStyle = vc.SubtitleBgStyle
 	}
 	return cfg
 }

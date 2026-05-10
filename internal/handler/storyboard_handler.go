@@ -1,0 +1,531 @@
+package handler
+
+import (
+	"fmt"
+	"net/http"
+	"strings"
+
+	"github.com/gin-gonic/gin"
+	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/model"
+	"github.com/inkframe/inkframe-backend/internal/service"
+)
+
+func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
+	videoId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	var req struct {
+		ChapterID      uint     `json:"chapter_id"`
+		Characters     []string `json:"characters"`
+		Style          string   `json:"style,omitempty"`
+		Provider       string   `json:"provider,omitempty"`        // 指定 LLM 提供者，可为空
+		UserPrompt     string   `json:"user_prompt,omitempty"`     // 用户自定义提示词
+		Pacing         string   `json:"pacing,omitempty"`          // slow/normal/fast
+		TargetDuration int      `json:"target_duration,omitempty"` // 0=自动估算
+		MaxTokens      int      `json:"max_tokens,omitempty"`      // 0=使用系统默认
+		Temperature    float64  `json:"temperature,omitempty"`     // 0=使用系统默认
+		TimeoutSeconds int      `json:"timeout_seconds,omitempty"` // 0=使用系统默认(180s)
+		VoiceMode      string   `json:"voice_mode,omitempty"`      // ""/"both"=对白+旁白, "narration"=仅旁白, "dialogue"=仅对白
+	}
+	// 所有字段均可选，body 为空时忽略 EOF
+	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
+		respondBadRequest(c, err.Error())
+		return
+	}
+
+	// 若请求携带节奏/时长配置，持久化到 Video 记录，后续 GenerateStoryboard 读取
+	if req.Pacing != "" || req.TargetDuration != 0 {
+		if err := h.videoService.UpdatePacingConfig(uint(videoId), req.Pacing, req.TargetDuration); err != nil {
+			logger.Printf("[VideoHandler] UpdatePacingConfig failed (non-fatal): %v", err)
+		}
+	}
+
+	tenantID := getTenantID(c)
+	// 若该视频已有 pending/running 的分镜生成任务，先将其标记为 cancelled，
+	// 让僵尸 goroutine 的 Complete/Fail 调用自动变 no-op，避免状态污染。
+	h.taskSvc.CancelActiveByEntity("video", uint(videoId), service.TaskTypeStoryboardGen)
+
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeStoryboardGen, "分镜脚本生成", "video", uint(videoId))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[VideoHandler] GenerateStoryboard task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
+		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
+
+		overrides := service.StoryboardOverrides{
+			MaxTokens:      req.MaxTokens,
+			Temperature:    req.Temperature,
+			TimeoutSeconds: req.TimeoutSeconds,
+			VoiceMode:      req.VoiceMode,
+		}
+		result, err := h.storyboardService.GenerateStoryboard(uint(videoId), req.ChapterID, req.Characters, req.Style, req.Provider, req.UserPrompt, progressFn, overrides)
+		if err != nil {
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+			logger.Printf("[VideoHandler] GenerateStoryboard task %s failed: %v", taskID, err)
+			return
+		}
+		// 只存 shot_count，不把完整分镜数组写入 result 列（JSON 可能超出 TEXT 65KB 限制导致 Update 失败，任务永远卡在 99%）
+		var shotCount int
+		if shots, ok := result.([]*model.StoryboardShot); ok {
+			shotCount = len(shots)
+		}
+		h.taskSvc.Complete(taskID, gin.H{"shot_count": shotCount}) //nolint:errcheck
+	}(task.TaskID)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "分镜生成任务已提交",
+		"data":    gin.H{"task_id": task.TaskID},
+	})
+}
+
+// shotWithAudio 在分镜基础上增加可直接播放的 audio_url 字段
+type shotWithAudio struct {
+	*model.StoryboardShot
+	AudioURL string `json:"audio_url"`
+}
+
+// resolveAudioURL 将 AudioPath 转换为前端可用的 URL：
+// - file:// → 指向后端 serve 端点（/api/v1/videos/:id/storyboard/:shot_id/audio）
+// - http(s):// → 原样返回
+// - 空 → 返回空字符串
+func resolveAudioURL(videoID uint, shot *model.StoryboardShot) string {
+	if shot.AudioPath == "" {
+		return ""
+	}
+	if strings.HasPrefix(shot.AudioPath, "file://") {
+		return fmt.Sprintf("/api/v1/videos/%d/storyboard/%d/audio", videoID, shot.ID)
+	}
+	return shot.AudioPath
+}
+
+// ReviewStoryboard 对分镜脚本进行 AI 专业审查（异步任务）
+// POST /api/v1/videos/:id/storyboard/review
+// 立即返回 202 + task_id，轮询 GET /:id/storyboard/review/:task_id 获取结果
+func (h *VideoHandler) ReviewStoryboard(c *gin.Context) {
+	videoId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoId)); !ok {
+		return
+	}
+
+	var req struct {
+		Provider string `json:"provider"`
+	}
+	_ = c.ShouldBindJSON(&req) // 可选 body
+
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeStoryboardReview, "分镜 AI 审查", "video", uint(videoId))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[VideoHandler] ReviewStoryboard task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+
+		review, reviewErr := h.storyboardService.ReviewStoryboard(tenantID, uint(videoId), req.Provider)
+		if reviewErr != nil {
+			logger.Printf("[VideoHandler] ReviewStoryboard task %s failed: videoID=%d err=%v", taskID, videoId, reviewErr)
+			h.taskSvc.Fail(taskID, reviewErr.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, review) //nolint:errcheck
+	}(task.TaskID)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "分镜审查任务已提交",
+		"data":    gin.H{"task_id": task.TaskID},
+	})
+}
+
+// GetStoryboard 获取分镜列表
+// GET /api/v1/videos/:id/storyboard
+func (h *VideoHandler) GetStoryboard(c *gin.Context) {
+	videoId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	shots, err := h.videoService.GetStoryboard(uint(videoId))
+	if err != nil {
+		logger.Printf("[VideoHandler] GetStoryboard: videoID=%d err=%v", videoId, err)
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	result := make([]shotWithAudio, len(shots))
+	for i, s := range shots {
+		result[i] = shotWithAudio{
+			StoryboardShot: s,
+			AudioURL:       resolveAudioURL(uint(videoId), s),
+		}
+	}
+	respondOK(c, result)
+}
+
+// ServeAudio 供前端播放配音文件
+// GET /api/v1/videos/:id/storyboard/:shot_id/audio
+func (h *VideoHandler) ServeAudio(c *gin.Context) {
+	shotID, ok := parseID(c, "shot_id")
+	if !ok {
+		return
+	}
+
+	shot, err := h.videoService.GetShot(uint(shotID))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "shot not found")
+		return
+	}
+
+	if shot.AudioPath == "" {
+		respondErr(c, http.StatusNotFound, "no audio for this shot")
+		return
+	}
+	// HTTP/HTTPS URL（OSS 或 DB media endpoint）— 重定向
+	if strings.HasPrefix(shot.AudioPath, "http://") || strings.HasPrefix(shot.AudioPath, "https://") {
+		c.Redirect(http.StatusFound, shot.AudioPath)
+		return
+	}
+	// file:// 本地路径（兼容未配置存储服务的情况）
+	if strings.HasPrefix(shot.AudioPath, "file://") {
+		filePath := strings.TrimPrefix(shot.AudioPath, "file://")
+		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+		c.File(filePath)
+		return
+	}
+	// /api/v1/media/:id 相对路径 — 重定向
+	c.Redirect(http.StatusFound, shot.AudioPath)
+}
+
+// UpdateStoryboardShot 更新分镜（支持部分字段更新）
+// PUT /api/v1/videos/:id/storyboard/:shot_id
+func (h *VideoHandler) UpdateStoryboardShot(c *gin.Context) {
+	shotId, ok := parseID(c, "shot_id")
+	if !ok {
+		return
+	}
+
+	var fields map[string]interface{}
+	if !bindJSON(c, &fields) {
+		return
+	}
+
+	shot, err := h.videoService.UpdateShotPartial(uint(shotId), fields)
+	if err != nil {
+		logger.Printf("[VideoHandler] UpdateStoryboardShot: shotID=%d err=%v", shotId, err)
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondOK(c, shot)
+}
+
+// SetShotCharacters 手动绑定分镜角色
+// PUT /api/v1/videos/:id/shots/:shot_id/characters
+func (h *VideoHandler) SetShotCharacters(c *gin.Context) {
+	shotID, ok := parseID(c, "shot_id")
+	if !ok {
+		return
+	}
+	var body struct {
+		CharacterIDs []uint `json:"character_ids"`
+	}
+	if !bindJSON(c, &body) {
+		return
+	}
+	if err := h.videoService.SetShotCharacters(uint(shotID), body.CharacterIDs); err != nil {
+		logger.Printf("[VideoHandler] SetShotCharacters: shotID=%d err=%v", shotID, err)
+		respondErr(c, http.StatusInternalServerError, "failed to set shot characters")
+		return
+	}
+	respondOK(c, nil)
+}
+
+// OptimizeStoryboardFromReview 根据 AI 审查报告一键优化分镜（异步任务）
+// POST /api/v1/videos/:id/storyboard/optimize-from-review
+// Body: StoryboardReview JSON（由 review 任务结果直接透传）+ 可选 provider
+func (h *VideoHandler) OptimizeStoryboardFromReview(c *gin.Context) {
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
+
+	var req struct {
+		model.StoryboardReview
+		Provider string `json:"provider"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "request body must contain a valid StoryboardReview: "+err.Error())
+		return
+	}
+	if len(req.GlobalSuggestions) == 0 && len(req.ShotFeedback) == 0 {
+		respondBadRequest(c, "审查报告中无改进建议，无需优化")
+		return
+	}
+
+	tenantID := getTenantID(c)
+	h.taskSvc.CancelActiveByEntity("video", uint(videoID), service.TaskTypeStoryboardOptimize)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeStoryboardOptimize, "分镜一键优化", "video", uint(videoID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+
+	review := req.StoryboardReview
+	provider := req.Provider
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[VideoHandler] OptimizeStoryboardFromReview task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+
+		count, optErr := h.storyboardService.OptimizeStoryboardFromReview(tenantID, uint(videoID), &review, provider)
+		if optErr != nil {
+			logger.Printf("[VideoHandler] OptimizeStoryboardFromReview task %s failed: %v", taskID, optErr)
+			h.taskSvc.Fail(taskID, optErr.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, gin.H{"updated_shots": count}) //nolint:errcheck
+	}(task.TaskID)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "分镜优化任务已提交",
+		"data":    gin.H{"task_id": task.TaskID},
+	})
+}
+
+// AnalyzeEmotions 情感分析
+// POST /api/v1/storyboard/analyze-emotions
+func (h *VideoHandler) AnalyzeEmotions(c *gin.Context) {
+	var req struct {
+		Content string `json:"content" binding:"required"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+
+	result, err := h.storyboardService.AnalyzeEmotions(req.Content)
+	if err != nil {
+		logger.Printf("[VideoHandler] AnalyzeEmotions: err=%v", err)
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondOK(c, result)
+}
+
+// EnhanceVideo 增强视频
+// POST /api/v1/video/enhance
+func (h *VideoHandler) EnhanceVideo(c *gin.Context) {
+	var req struct {
+		VideoURL     string                    `json:"video_url" binding:"required"`
+		Enhancements []model.EnhancementConfig `json:"enhancements"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+
+	result, err := h.enhancementService.EnhanceVideo(req.VideoURL, req.Enhancements)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondOK(c, result)
+}
+
+// GetEnhancementRecommendations 获取增强建议
+// POST /api/v1/video/recommendations
+func (h *VideoHandler) GetEnhancementRecommendations(c *gin.Context) {
+	var req struct {
+		FPS        int    `json:"fps"`
+		Resolution string `json:"resolution"`
+		Duration   int    `json:"duration"`
+		Style      string `json:"style"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+
+	result, err := h.enhancementService.GetRecommendations(req.FPS, req.Resolution, req.Duration, req.Style)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondOK(c, result)
+}
+
+// StartVideoGeneration 开始视频生成
+// POST /api/v1/videos/:id/generate
+func (h *VideoHandler) StartVideoGeneration(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	taskId, err := h.videoService.StartGeneration(uint(id))
+	if err != nil {
+		logger.Printf("[VideoHandler] StartVideoGeneration: videoID=%d err=%v", id, err)
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondOK(c, gin.H{
+		"task_id": taskId,
+	})
+}
+
+// GetVideoStatus 获取视频生成状态
+// GET /api/v1/videos/:id/status
+func (h *VideoHandler) GetVideoStatus(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	// 租户鉴权：确认该视频属于当前租户
+	if _, ok := h.getVideoForTenant(c, uint(id)); !ok {
+		return
+	}
+
+	status, err := h.videoService.GetStatus(uint(id))
+	if err != nil {
+		logger.Printf("[VideoHandler] GetVideoStatus: videoID=%d err=%v", id, err)
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondOK(c, status)
+}
+
+// GenerateShotVideos 提交所有分镜视频生成任务，并后台轮询拼接
+// POST /api/v1/videos/:id/shots/generate
+func (h *VideoHandler) GenerateShotVideos(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	video, ok := h.getVideoForTenant(c, uint(id))
+	if !ok {
+		return
+	}
+
+	if err := h.videoService.GenerateAllShotVideos(uint(id)); err != nil {
+		logger.Printf("[VideoHandler] GenerateShotVideos: videoID=%d err=%v", id, err)
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// slideshow mode handles stitching internally; only poll for AI video mode
+	if video.Mode != "slideshow" {
+		go h.videoService.PollAndStitchVideo(uint(id))
+	}
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "shot generation started",
+	})
+}
+
+// ListShots 获取所有分镜状态
+// GET /api/v1/videos/:id/shots
+func (h *VideoHandler) ListShots(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	shots, err := h.videoService.GetStoryboard(uint(id))
+	if err != nil {
+		logger.Printf("[VideoHandler] ListShots: videoID=%d err=%v", id, err)
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondOK(c, shots)
+}
+
+// StitchVideoHandler 手动触发视频拼接
+// POST /api/v1/videos/:id/stitch
+func (h *VideoHandler) StitchVideoHandler(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	outputPath, err := h.videoService.StitchVideo(uint(id))
+	if err != nil {
+		logger.Printf("[VideoHandler] StitchVideo: videoID=%d err=%v", id, err)
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondOK(c, gin.H{
+		"output_path": outputPath,
+	})
+}
+
+// DownloadVideo 下载完整 MP4（拼接所有分镜后直接发送文件）
+// GET /api/v1/videos/:id/download
+func (h *VideoHandler) DownloadVideo(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	video, ok := h.getVideoForTenant(c, uint(id))
+	if !ok {
+		return
+	}
+
+	// 如果已经有拼接好的文件，直接下载；否则先触发拼接
+	outputPath := video.VideoPath
+	if outputPath == "" {
+		var err error
+		outputPath, err = h.videoService.StitchVideo(uint(id))
+		if err != nil {
+			logger.Printf("[VideoHandler] DownloadVideo stitch: videoID=%d err=%v", id, err)
+			respondErr(c, http.StatusInternalServerError, "视频拼接失败")
+			return
+		}
+	}
+
+	filename := fmt.Sprintf("inkframe-video-%d.mp4", id)
+	c.Header("Content-Disposition", "attachment; filename=\""+filename+"\"")
+	c.Header("Content-Type", "video/mp4")
+	c.File(outputPath)
+}
+
+// GenerateSingleShot 生成单个分镜（异步任务模式，立即返回 task_id）
+// POST /api/v1/videos/:id/shots/:shot_id/generate

@@ -20,9 +20,8 @@ func NewContextHandler(contextService *service.GenerationContextService) *Contex
 // GetContext 获取生成上下文
 // GET /api/v1/novels/:id/context
 func (h *ContextHandler) GetContext(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -40,20 +39,18 @@ func (h *ContextHandler) GetContext(c *gin.Context) {
 // BuildPrompt 构建生成提示词
 // POST /api/v1/novels/:id/prompt
 func (h *ContextHandler) BuildPrompt(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
 	var req struct {
-		ChapterNo    int     `json:"chapter_no"`
-		Style        string  `json:"style,omitempty"`
-		ExtraPrompt  string  `json:"extra_prompt,omitempty"`
-		MaxContextLen int     `json:"max_context_len,omitempty"`
+		ChapterNo     int    `json:"chapter_no"`
+		Style         string `json:"style,omitempty"`
+		ExtraPrompt   string `json:"extra_prompt,omitempty"`
+		MaxContextLen int    `json:"max_context_len,omitempty"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -69,9 +66,8 @@ func (h *ContextHandler) BuildPrompt(c *gin.Context) {
 // PreviewContext 预览上下文摘要
 // GET /api/v1/novels/:id/context/preview
 func (h *ContextHandler) PreviewContext(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 

@@ -55,6 +55,9 @@ func main() {
 		logger.Fatalf("Failed to migrate database: %v", err)
 	}
 
+	// 3a. 执行幂等 schema 清理（回填租户ID、迁移视频配置、删除废弃列）
+	runSchemaCleanup(db)
+
 	// 3b. 预置默认数据（INSERT IGNORE，幂等安全）
 	seedDefaultData(db)
 	seedAIModels(db)
@@ -314,6 +317,97 @@ func preMigrateCleanup(db *gorm.DB) {
 	for _, fk := range usageLogFKs {
 		db.Exec("ALTER TABLE ink_model_usage_log DROP FOREIGN KEY " + fk)
 	}
+}
+
+// runSchemaCleanup 幂等数据迁移与废弃列清理（AutoMigrate 不删列，需手动执行）
+// 安全：所有操作均有 IF EXISTS 或 WHERE 守卫，可重复执行。
+func runSchemaCleanup(db *gorm.DB) {
+	// ── 1. 回填 Chapter.tenant_id（只处理 tenant_id=0 的行）
+	if err := db.Exec(`UPDATE ink_chapter c
+		JOIN ink_novel n ON c.novel_id = n.id
+		SET c.tenant_id = n.tenant_id
+		WHERE c.tenant_id = 0`).Error; err != nil {
+		logger.Printf("[runSchemaCleanup] backfill chapter tenant_id: %v", err)
+	}
+
+	// ── 2. 回填 Character.tenant_id
+	if err := db.Exec(`UPDATE ink_character c
+		JOIN ink_novel n ON c.novel_id = n.id
+		SET c.tenant_id = n.tenant_id
+		WHERE c.tenant_id = 0`).Error; err != nil {
+		logger.Printf("[runSchemaCleanup] backfill character tenant_id: %v", err)
+	}
+
+	// ── 3. 迁移视频配置：ink_novel → ink_novel_video_config（INSERT IGNORE 幂等）
+	if err := db.Exec(`INSERT IGNORE INTO ink_novel_video_config
+		(novel_id, video_type, video_resolution, video_fps, video_aspect_ratio,
+		 char_consistency_weight, asset_export_path, narration_voice,
+		 subtitle_enabled, subtitle_position, subtitle_font_size, subtitle_color, subtitle_bg_style,
+		 created_at, updated_at)
+		SELECT id,
+		       COALESCE(video_type, 'animation'),
+		       COALESCE(video_resolution, '1080p'),
+		       COALESCE(video_fps, 30),
+		       COALESCE(video_aspect_ratio, '16:9'),
+		       COALESCE(char_consistency_weight, 1.0),
+		       COALESCE(asset_export_path, ''),
+		       COALESCE(narration_voice, ''),
+		       COALESCE(subtitle_enabled, 1),
+		       COALESCE(subtitle_position, 'bottom'),
+		       COALESCE(subtitle_font_size, 48),
+		       COALESCE(subtitle_color, '#FFFFFF'),
+		       COALESCE(subtitle_bg_style, 'shadow'),
+		       NOW(), NOW()
+		FROM ink_novel n
+		WHERE NOT EXISTS (SELECT 1 FROM ink_novel_video_config vc WHERE vc.novel_id = n.id)`).Error; err != nil {
+		logger.Printf("[runSchemaCleanup] migrate video config: %v", err)
+	}
+
+	// ── 4. 删除废弃列（DROP COLUMN IF EXISTS，MySQL 8.0+；对 5.7 用 information_schema 守卫）
+	dropIfExists := func(table, col string) {
+		var cnt int64
+		db.Raw(`SELECT COUNT(*) FROM information_schema.COLUMNS
+			WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, table, col).Scan(&cnt)
+		if cnt > 0 {
+			if err := db.Exec(fmt.Sprintf("ALTER TABLE `%s` DROP COLUMN `%s`", table, col)).Error; err != nil {
+				logger.Printf("[runSchemaCleanup] drop %s.%s: %v", table, col, err)
+			}
+		}
+	}
+
+	// 废弃的视频/字幕列（已迁移到 ink_novel_video_config）
+	for _, col := range []string{
+		"video_type", "video_resolution", "video_fps", "video_aspect_ratio",
+		"char_consistency_weight", "asset_export_path", "narration_voice",
+		"subtitle_enabled", "subtitle_position", "subtitle_font_size", "subtitle_color", "subtitle_bg_style",
+	} {
+		dropIfExists("ink_novel", col)
+	}
+	// 废弃的链表列
+	dropIfExists("ink_chapter", "previous_chapter_id")
+	dropIfExists("ink_chapter", "next_chapter_id")
+	// 废弃的 plot_points 列
+	dropIfExists("ink_chapter", "plot_points")
+	// 废弃的 chapter 统计列
+	dropIfExists("ink_chapter", "quality_score")
+	dropIfExists("ink_chapter", "published_at")
+	// 废弃的 novel 列
+	dropIfExists("ink_novel", "view_count")
+	dropIfExists("ink_novel", "reference_style")
+	// 废弃的 reference_novel 分析列
+	dropIfExists("ink_reference_novel", "style_analysis")
+	dropIfExists("ink_reference_novel", "keywords")
+	dropIfExists("ink_reference_novel", "similar_novels")
+	// 废弃的 user 列
+	dropIfExists("users", "total_projects")
+	dropIfExists("users", "total_novels")
+	dropIfExists("users", "total_words")
+	dropIfExists("users", "settings")
+	dropIfExists("users", "preferences")
+	dropIfExists("users", "last_login_at")
+	// 废弃的 tenant 列
+	dropIfExists("tenants", "used_projects")
+	dropIfExists("tenants", "used_storage_mb")
 }
 
 // seedDefaultData 预置默认世界观（INSERT IGNORE 幂等）
@@ -721,7 +815,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-07-v1"
+const schemaVersion = "2026-05-09-v2"
 
 // autoMigrate 自动迁移（带版本跳过优化）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -754,6 +848,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.User{},
 		&model.TenantUser{},
 		&model.Novel{},
+		&model.NovelVideoConfig{},
 		&model.Chapter{},
 		&model.PlotPoint{},
 		&model.Character{},
@@ -999,6 +1094,7 @@ type Repositories struct {
 	KnowledgeBaseRepo       *repository.KnowledgeBaseRepository
 	ModelProviderRepo       *repository.ModelProviderRepository
 	ModelComparisonRepo     *repository.ModelComparisonRepository
+	TaskRepo                *repository.TaskRepository
 
 	ChapterVersionRepo      *repository.ChapterVersionRepository
 	SnapshotRepo            *repository.CharacterStateSnapshotRepository
@@ -1036,6 +1132,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		KnowledgeBaseRepo:       repository.NewKnowledgeBaseRepository(db),
 		ModelProviderRepo:       repository.NewModelProviderRepository(db),
 		ModelComparisonRepo:     repository.NewModelComparisonRepository(db),
+		TaskRepo:                repository.NewTaskRepository(db),
 
 		ChapterVersionRepo:      repository.NewChapterVersionRepository(db),
 		SnapshotRepo:            repository.NewCharacterStateSnapshotRepository(db),
@@ -1110,10 +1207,67 @@ type Services struct {
 	SceneConsistencyService     *service.SceneConsistencyService
 }
 
-// initServices 初始化服务层
-func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, vectorStore *vector.StoreManager, cfg *config.Config, redisClient *redis.Client) *Services {
+// ──────────────────────────────────────────────────────────────
+// Service group structs  (intermediate, only used during init)
+// ──────────────────────────────────────────────────────────────
+
+// coreSvcs holds foundational AI/model services that all other groups depend on.
+type coreSvcs struct {
+	AI        *service.AIService
+	Model     *service.ModelService
+	Task      *service.TaskService
+	PlotPoint *service.PlotPointService
+	Quality   *service.QualityControlService
+}
+
+// contentSvcs holds novel/chapter/character domain services.
+type contentSvcs struct {
+	Novel             *service.NovelService
+	Chapter           *service.ChapterService
+	Character         *service.CharacterService
+	Worldview         *service.WorldviewService
+	Knowledge         *service.KnowledgeService
+	Continuity        *service.ContinuityService
+	Prompt            *service.PromptService
+	ChapterVersion    *service.ChapterVersionService
+	Foreshadow        *service.ForeshadowService
+	Timeline          *service.TimelineService
+	CharacterArc      *service.CharacterArcService
+	Style             *service.StyleService
+	GenContext        *service.GenerationContextService
+	ImageGen          *service.ImageGenerationService
+	HookChain         *service.HookChainService
+	SatisfactionPoint *service.SatisfactionPointService
+	ConflictArc       *service.ConflictArcService
+	Pacing            *service.PacingService
+	Item              *service.ItemService
+	Skill             *service.SkillService
+	SceneAnchor       *service.SceneAnchorService
+	NovelAnalysis     *service.NovelAnalysisService
+	NovelImport       *service.NovelImportService
+	Crawler           *crawler.NovelCrawler
+}
+
+// videoSvcs holds video / media generation services.
+type videoSvcs struct {
+	Video                *service.VideoService
+	Storyboard           *service.StoryboardService
+	Enhancement          *service.VideoEnhancementService
+	CharConsistency      *service.CharacterConsistencyService
+	BGM                  *service.BGMService
+	FrameGenerator       *service.FrameGeneratorService
+	ConsistencyValidator *service.ConsistencyValidatorService
+	NovelToVideo         *service.NovelToVideoService
+	SceneConsistency     *service.SceneConsistencyService
+}
+
+// ──────────────────────────────────────────────────────────────
+// Group initializers
+// ──────────────────────────────────────────────────────────────
+
+func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *config.Config) *coreSvcs {
 	// AI服务（注入 providerRepo 以支持按租户加载 AK/SK，注入 novelRepo 以读取小说项目级 AI 配置）
-	aiService := service.NewAIService(repos.AIModelRepo, repos.TaskModelConfigRepo, aiManager, repos.ModelProviderRepo).
+	aiSvc := service.NewAIService(repos.AIModelRepo, repos.TaskModelConfigRepo, aiManager, repos.ModelProviderRepo).
 		WithNovelRepo(repos.NovelRepo).
 		WithTaskRouting(service.TaskRouting{
 			ChapterGen:   cfg.AI.Tasks.ChapterGen,
@@ -1125,268 +1279,239 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		}).
 		WithImageConcurrency(cfg.AI.ImageConcurrency)
 
+	// 模型服务（注入 aiService 以支持 TestProvider 实例化验证）
+	modelSvc := service.NewModelService(repos.AIModelRepo, repos.ModelProviderRepo, repos.TaskModelConfigRepo, repos.ModelComparisonRepo, aiSvc)
+	modelSvc.SeedAllProviders()
+
 	// 异步任务服务
-	taskRepo := repository.NewTaskRepository(db)
-	taskService := service.NewTaskService(taskRepo)
+	taskSvc := service.NewTaskService(repos.TaskRepo)
 
 	// 剧情点服务
-	plotPointService := service.NewPlotPointService(repos.PlotPointRepo, aiService).
+	plotPointSvc := service.NewPlotPointService(repos.PlotPointRepo, aiSvc).
 		WithChapterRepo(repos.ChapterRepo)
 
-	// 小说服务
-	novelService := service.NewNovelService(repos.NovelRepo, repos.ChapterRepo, aiService).
-		WithCharacterRepos(repos.CharacterRepo, repos.SnapshotRepo).
-		WithPlotPointService(plotPointService)
+	// 质量控制服务
+	qualitySvc := service.NewQualityControlService(aiSvc, repos.ChapterRepo, repos.NovelRepo)
 
-	// 章节服务
-	// chapterService is wired after generationContextService is built (see below)
+	return &coreSvcs{AI: aiSvc, Model: modelSvc, Task: taskSvc, PlotPoint: plotPointSvc, Quality: qualitySvc}
+}
+
+func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.ModelManager, vectorStore *vector.StoreManager) *contentSvcs {
+	aiSvc := core.AI
+
+	// 小说服务
+	novelSvc := service.NewNovelService(repos.NovelRepo, repos.ChapterRepo, aiSvc).
+		WithCharacterRepos(repos.CharacterRepo, repos.SnapshotRepo).
+		WithPlotPointService(core.PlotPoint)
 
 	// 角色服务
-	characterService := service.NewCharacterService(repos.CharacterRepo, aiService).
+	characterSvc := service.NewCharacterService(repos.CharacterRepo, aiSvc).
 		WithChapterCharacterRepo(repos.ChapterCharacterRepo).
 		WithNovelRepo(repos.NovelRepo).
 		WithChapterRepo(repos.ChapterRepo)
 
 	// 世界观服务
-	worldviewService := service.NewWorldviewService(repos.WorldviewRepo, aiService).
+	worldviewSvc := service.NewWorldviewService(repos.WorldviewRepo, aiSvc).
 		WithNovelRepos(repos.NovelRepo, repos.ChapterRepo)
 
-	// 质量控制服务（使用 AIService 以支持 DB provider 和 task routing）
-	qualityControlService := service.NewQualityControlService(aiService, repos.ChapterRepo, repos.NovelRepo)
-
-	// 视频服务
-	videoProviders := initVideoProviders(cfg)
-	videoService := service.NewVideoService(repos.VideoRepo, repos.StoryboardRepo, repos.ChapterRepo, repos.CharacterRepo, repos.NovelRepo, repos.TenantRepo, aiService, videoProviders)
-
-	// 模型服务（注入 aiService 以支持 TestProvider 实例化验证）
-	modelService := service.NewModelService(
-		repos.AIModelRepo,
-		repos.ModelProviderRepo,
-		repos.TaskModelConfigRepo,
-		repos.ModelComparisonRepo,
-		aiService,
-	)
-
-	// 确保已有 provider 都有对应的 AIModel 行
-	modelService.SeedAllProviders()
-
-	// 提示词服务
-	promptService := service.NewPromptService(nil)
-
-	// 连续性检查服务
-	continuityService := service.NewContinuityService(repos.CharacterRepo, repos.ChapterRepo)
+	// 提示词 / 连续性
+	promptSvc := service.NewPromptService(nil)
+	continuitySvc := service.NewContinuityService(repos.CharacterRepo, repos.ChapterRepo)
 
 	// 知识库服务（传入 AI provider 用于向量化）
 	var defaultAIProvider ai.AIProvider
 	if aiManager != nil {
-		var providerErr error
-		defaultAIProvider, providerErr = aiManager.GetProvider("")
-		if providerErr != nil {
-			logger.Printf("Warning: could not load default AI provider: %v — knowledge base embedding will be unavailable", providerErr)
+		if p, err := aiManager.GetProvider(""); err == nil {
+			defaultAIProvider = p
+		} else {
+			logger.Printf("Warning: could not load default AI provider: %v — knowledge base embedding will be unavailable", err)
 		}
 	}
 	if defaultAIProvider == nil {
 		logger.Printf("Warning: no default AI provider available; knowledge base embedding disabled")
 	}
-	knowledgeService := service.NewKnowledgeService(repos.KnowledgeBaseRepo, vectorStore, defaultAIProvider)
+	knowledgeSvc := service.NewKnowledgeService(repos.KnowledgeBaseRepo, vectorStore, defaultAIProvider)
 
-	// 章节版本服务
-	chapterVersionService := service.NewChapterVersionService(repos.ChapterVersionRepo, repos.ChapterRepo)
-
-	// 伏笔服务
-	foreshadowService := service.NewForeshadowService(repos.KnowledgeBaseRepo, aiService)
-
-	// 时间线服务
-	timelineService := service.NewTimelineService(repos.ChapterRepo)
-
-	// 角色弧光服务
-	characterArcService := service.NewCharacterArcService(repos.CharacterRepo, repos.SnapshotRepo)
-
-	// 风格服务
-	styleService := service.NewStyleService(nil)
+	// 章节版本 / 伏笔 / 时间线 / 角色弧光 / 风格
+	chapterVersionSvc := service.NewChapterVersionService(repos.ChapterVersionRepo, repos.ChapterRepo)
+	foreshadowSvc := service.NewForeshadowService(repos.KnowledgeBaseRepo, aiSvc)
+	timelineSvc := service.NewTimelineService(repos.ChapterRepo)
+	characterArcSvc := service.NewCharacterArcService(repos.CharacterRepo, repos.SnapshotRepo)
+	styleSvc := service.NewStyleService(nil)
 
 	// 生成上下文服务
-	generationContextService := service.NewGenerationContextService(
-		repos.NovelRepo,
-		repos.ChapterRepo,
-		repos.CharacterRepo,
-		characterArcService,
-		foreshadowService,
-	)
+	genCtxSvc := service.NewGenerationContextService(repos.NovelRepo, repos.ChapterRepo, repos.CharacterRepo, characterArcSvc, foreshadowSvc)
 
-	// 层次化叙事记忆服务（摘要、创意标题、精修、弧光记忆）
-	narrativeMemoryService := service.NewNarrativeMemoryService(
-		repos.NovelRepo,
-		repos.ChapterRepo,
-		repos.CharacterRepo,
-		repos.ArcSummaryRepo,
-		aiService,
-	)
+	// 层次化叙事记忆服务
+	narrativeMemorySvc := service.NewNarrativeMemoryService(repos.NovelRepo, repos.ChapterRepo, repos.CharacterRepo, repos.ArcSummaryRepo, aiSvc)
 
 	// 戏剧张力服务
-	hookChainService := service.NewHookChainService(repos.HookChainRepo)
-	satisfactionPointService := service.NewSatisfactionPointService(repos.SatisfactionPointRepo)
-	conflictArcService := service.NewConflictArcService(repos.ConflictArcRepo)
-	pacingService := service.NewPacingService(repos.ChapterRepo, repos.SatisfactionPointRepo)
+	hookChainSvc := service.NewHookChainService(repos.HookChainRepo)
+	satisfactionSvc := service.NewSatisfactionPointService(repos.SatisfactionPointRepo)
+	conflictArcSvc := service.NewConflictArcService(repos.ConflictArcRepo)
+	pacingSvc := service.NewPacingService(repos.ChapterRepo, repos.SatisfactionPointRepo)
 
-	// 章节服务（需要 generationContextService 以构建富上下文 prompt）
-	chapterService := service.NewChapterService(repos.ChapterRepo, repos.NovelRepo, aiService, generationContextService).
-		WithNarrativeMemory(narrativeMemoryService).
-		WithDramaticServices(hookChainService, satisfactionPointService, conflictArcService).
+	// 章节服务（依赖 genCtxSvc + narrativeMemorySvc）
+	chapterSvc := service.NewChapterService(repos.ChapterRepo, repos.NovelRepo, aiSvc, genCtxSvc).
+		WithNarrativeMemory(narrativeMemorySvc).
+		WithDramaticServices(hookChainSvc, satisfactionSvc, conflictArcSvc).
 		WithPlotPointRepo(repos.PlotPointRepo)
 
 	// 图像生成服务
-	imageGenerationService := service.NewImageGenerationService(aiService)
+	imageGenSvc := service.NewImageGenerationService(aiSvc)
 
-	// 图像服务（用于视频生成）
-	imageService := service.NewImageService(nil)
+	// 物品 / 技能 / 场景锚点
+	itemSvc := service.NewItemService(repos.ItemRepo, repos.ChapterItemRepo, repos.ChapterRepo, aiSvc).
+		WithNovelRepo(repos.NovelRepo)
+	skillSvc := service.NewSkillService(repos.SkillRepo, repos.CharacterRepo, repos.NovelRepo, aiSvc).
+		WithChapterRepo(repos.ChapterRepo)
+	sceneAnchorSvc := service.NewSceneAnchorService(repos.SceneAnchorRepo, repos.StoryboardRepo, aiSvc, repos.NovelRepo).
+		WithChapterRepo(repos.ChapterRepo)
 
-	// 智能分镜服务（用于小说转视频）
-	intelligentStoryboardService := service.NewIntelligentStoryboardService(aiService, imageService)
+	// 小说分析服务（依赖大部分上面的服务）
+	novelAnalysisSvc := service.NewNovelAnalysisService(repos.NovelRepo, repos.ChapterRepo, repos.CharacterRepo, repos.WorldviewRepo, novelSvc, aiSvc).
+		WithItemRepo(repos.ItemRepo).
+		WithItemService(itemSvc).
+		WithSkillService(skillSvc).
+		WithPlotPointService(core.PlotPoint).
+		WithSceneAnchorService(sceneAnchorSvc).
+		WithTaskService(core.Task)
 
-	// 分镜服务（handler层使用）
-	storyboardService := service.NewStoryboardService(videoService, aiService)
+	// 导入服务
+	crawlerSvc := crawler.NewNovelCrawler(nil)
+	novelImportSvc := service.NewNovelImportService(repos.NovelRepo, repos.ChapterRepo, crawlerSvc).
+		WithNarrativeMemory(narrativeMemorySvc)
 
-	// 视频增强服务（传入临时工作目录）
-	videoEnhancementService := service.NewVideoEnhancementService(imageService, "/tmp/inkframe-enhance")
+	return &contentSvcs{
+		Novel: novelSvc, Chapter: chapterSvc, Character: characterSvc, Worldview: worldviewSvc,
+		Knowledge: knowledgeSvc, Continuity: continuitySvc, Prompt: promptSvc,
+		ChapterVersion: chapterVersionSvc, Foreshadow: foreshadowSvc, Timeline: timelineSvc,
+		CharacterArc: characterArcSvc, Style: styleSvc, GenContext: genCtxSvc,
+		ImageGen: imageGenSvc, HookChain: hookChainSvc, SatisfactionPoint: satisfactionSvc,
+		ConflictArc: conflictArcSvc, Pacing: pacingSvc, Item: itemSvc, Skill: skillSvc,
+		SceneAnchor: sceneAnchorSvc, NovelAnalysis: novelAnalysisSvc, NovelImport: novelImportSvc,
+		Crawler: crawlerSvc,
+	}
+}
 
-	// BGM 服务（三层降级：本地目录 → Jamendo → Pixabay）
-	// env var 优先，config.yaml bgm.* 作为 fallback
-	bgmService := service.NewBGMService(getEnv("BGM_DIR", cfg.BGM.Dir)).
-		WithAIService(aiService).
+func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *contentSvcs, cfg *config.Config) *videoSvcs {
+	aiSvc := core.AI
+
+	// 视频服务
+	videoProviders := initVideoProviders(cfg)
+	videoSvc := service.NewVideoService(repos.VideoRepo, repos.StoryboardRepo, repos.ChapterRepo, repos.CharacterRepo, repos.NovelRepo, repos.TenantRepo, aiSvc, videoProviders)
+
+	// 图像服务（内部，用于视频增强和一致性服务）
+	imageSvc := service.NewImageService(nil)
+
+	// 分镜 / 视频增强 / BGM / 角色一致性
+	intelligentStoryboardSvc := service.NewIntelligentStoryboardService(aiSvc, imageSvc)
+	storyboardSvc := service.NewStoryboardService(videoSvc, aiSvc)
+	enhancementSvc := service.NewVideoEnhancementService(imageSvc, "/tmp/inkframe-enhance")
+	bgmSvc := service.NewBGMService(getEnv("BGM_DIR", cfg.BGM.Dir)).
+		WithAIService(aiSvc).
 		WithJamendo(getEnv("JAMENDO_CLIENT_ID", cfg.BGM.JamendoClientID)).
 		WithPixabay(getEnv("PIXABAY_API_KEY", cfg.BGM.PixabayKey))
 
-	// 角色一致性服务
-	characterConsistencyService := service.NewCharacterConsistencyService(imageService, nil, aiService)
-	videoService.WithConsistencyService(characterConsistencyService)
-	videoService.WithBGMService(bgmService)
-	videoService.WithPlotPointRepo(repos.PlotPointRepo)
-	videoService.WithSystemSettingRepo(repos.SystemSettingRepo)
-	videoService.WithVideoConcurrency(cfg.AI.VideoConcurrency)
-	videoService.WithAudioConcurrency(3) // 最多 3 路并发 TTS，防止批量生成触发 API 限速
+	charConsistencySvc := service.NewCharacterConsistencyService(imageSvc, nil, aiSvc)
 
-	// 帧生成服务
-	frameGeneratorService := service.NewFrameGeneratorService(aiService)
+	// 将依赖注回 videoService
+	videoSvc.WithConsistencyService(charConsistencySvc)
+	videoSvc.WithBGMService(bgmSvc)
+	videoSvc.WithPlotPointRepo(repos.PlotPointRepo)
+	videoSvc.WithSystemSettingRepo(repos.SystemSettingRepo)
+	videoSvc.WithVideoConcurrency(cfg.AI.VideoConcurrency)
+	videoSvc.WithAudioConcurrency(3)
 
-	// 一致性验证服务
-	consistencyValidatorService := service.NewConsistencyValidatorService(aiService)
-
-	// 爬虫服务
-	crawlerService := crawler.NewNovelCrawler(nil)
-
-	// 导入服务（注入叙事记忆服务，爬取后自动生成章节摘要）
-	novelImportService := service.NewNovelImportService(repos.NovelRepo, repos.ChapterRepo, crawlerService).
-		WithNarrativeMemory(narrativeMemoryService)
-
-	// 小说转视频服务
-	novelToVideoService := service.NewNovelToVideoService(
-		novelImportService,
-		intelligentStoryboardService,
-		frameGeneratorService,
-		videoEnhancementService,
-		consistencyValidatorService,
+	// 帧生成 / 一致性验证 / 小说转视频
+	frameGenSvc := service.NewFrameGeneratorService(aiSvc)
+	consistencyValidatorSvc := service.NewConsistencyValidatorService(aiSvc)
+	novelToVideoSvc := service.NewNovelToVideoService(
+		content.NovelImport,
+		intelligentStoryboardSvc,
+		frameGenSvc,
+		enhancementSvc,
+		consistencyValidatorSvc,
 		repos.NovelRepo,
 		repos.ChapterRepo,
 		repos.VideoRepo,
 		repos.StoryboardRepo,
 	)
 
-	// 短信服务
-	smsService := service.NewSMSService(redisClient, cfg.SMS)
+	sceneConsistencySvc := service.NewSceneConsistencyService(repos.SceneConsistencyLogRepo, aiSvc)
 
-	// OAuth服务
-	oauthService := service.NewOAuthService(cfg.OAuth)
+	return &videoSvcs{
+		Video: videoSvc, Storyboard: storyboardSvc, Enhancement: enhancementSvc,
+		CharConsistency: charConsistencySvc, BGM: bgmSvc, FrameGenerator: frameGenSvc,
+		ConsistencyValidator: consistencyValidatorSvc,
+		NovelToVideo: novelToVideoSvc, SceneConsistency: sceneConsistencySvc,
+	}
+}
 
-	// 认证服务
-	authService := service.NewAuthService(
-		db,
-		repos.UserRepo,
-		repos.TenantRepo,
-		repos.TenantUserRepo,
-		cfg.Server.JWTSecret,
-		cfg.Server.JWTExpiry,
-	).WithSMSService(smsService)
 
-	// 租户服务
-	tenantService := service.NewTenantService(repos.TenantRepo, repos.TenantUserRepo)
+// initServices 初始化服务层
+func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, vectorStore *vector.StoreManager, cfg *config.Config, redisClient *redis.Client) *Services {
+	core    := initCoreServiceGroup(repos, aiManager, cfg)
+	content := initContentServiceGroup(repos, core, aiManager, vectorStore)
+	video   := initVideoServiceGroup(repos, core, content, cfg)
 
-	// MCP 服务（直接注入 db，轻量无依赖）
-	mcpService := service.NewMcpService(db)
-
-	// 物品服务
-	itemService := service.NewItemService(repos.ItemRepo, repos.ChapterItemRepo, repos.ChapterRepo, aiService).
-		WithNovelRepo(repos.NovelRepo)
-
-	// 技能服务
-	skillService := service.NewSkillService(repos.SkillRepo, repos.CharacterRepo, repos.NovelRepo, aiService).
-		WithChapterRepo(repos.ChapterRepo)
-
-	// 场景锚点服务（提前声明，供 novelAnalysisService 使用）
-	sceneAnchorService := service.NewSceneAnchorService(repos.SceneAnchorRepo, repos.StoryboardRepo, aiService, repos.NovelRepo).
-		WithChapterRepo(repos.ChapterRepo)
-
-	// 小说分析服务
-	novelAnalysisService := service.NewNovelAnalysisService(
-		repos.NovelRepo,
-		repos.ChapterRepo,
-		repos.CharacterRepo,
-		repos.WorldviewRepo,
-		novelService,
-		aiService,
-	).WithItemRepo(repos.ItemRepo).
-		WithItemService(itemService).
-		WithSkillService(skillService).
-		WithPlotPointService(plotPointService).
-		WithSceneAnchorService(sceneAnchorService).
-		WithTaskService(taskService)
+	// 认证 / 租户 / 通信服务（依赖 db 和 redisClient，数量少，直接内联）
+	smsSvc := service.NewSMSService(redisClient, cfg.SMS)
+	authSvc := service.NewAuthService(db, repos.UserRepo, repos.TenantRepo, repos.TenantUserRepo, cfg.Server.JWTSecret, cfg.Server.JWTExpiry).
+		WithSMSService(smsSvc)
+	tenantSvc := service.NewTenantService(repos.TenantRepo, repos.TenantUserRepo)
+	oauthSvc  := service.NewOAuthService(cfg.OAuth)
+	mcpSvc    := service.NewMcpService(db)
 
 	return &Services{
-		NovelAnalysisService:        novelAnalysisService,
-		McpService:                  mcpService,
-		NovelService:                novelService,
-		ChapterService:              chapterService,
-		CharacterService:            characterService,
-		WorldviewService:            worldviewService,
-		QualityControlService:       qualityControlService,
-		VideoService:                videoService,
-		ModelService:                modelService,
-		PromptService:               promptService,
-		ContinuityService:           continuityService,
-		KnowledgeService:            knowledgeService,
-
-		ChapterVersionService:       chapterVersionService,
-		ForeshadowService:           foreshadowService,
-		TimelineService:             timelineService,
-		CharacterArcService:         characterArcService,
-		StyleService:                styleService,
-		GenerationContextService:    generationContextService,
-		ImageGenerationService:      imageGenerationService,
-		StoryboardService:           storyboardService,
-		VideoEnhancementService:     videoEnhancementService,
-		CharacterConsistencyService: characterConsistencyService,
-		FrameGeneratorService:       frameGeneratorService,
-		ConsistencyValidatorService: consistencyValidatorService,
-		BGMService: bgmService,
-		CrawlerService:              crawlerService,
-		NovelImportService:          novelImportService,
-		NovelToVideoService:         novelToVideoService,
-		AuthService:                 authService,
-		TenantService:               tenantService,
-		SMSService:                  smsService,
-		OAuthService:                oauthService,
-		FrontendURL:                 cfg.Server.FrontendURL,
-		ItemService:                 itemService,
-		SkillService:                skillService,
-		PlotPointService:            plotPointService,
-		TaskService:                 taskService,
-		AIService:                   aiService,
-		HookChainService:            hookChainService,
-		SatisfactionPointService:    satisfactionPointService,
-		ConflictArcService:          conflictArcService,
-		PacingService:               pacingService,
-		SceneAnchorService:          sceneAnchorService,
-		SceneConsistencyService:     service.NewSceneConsistencyService(repos.SceneConsistencyLogRepo, aiService),
+		// ── AI core ──
+		AIService:             core.AI,
+		ModelService:          core.Model,
+		TaskService:           core.Task,
+		PlotPointService:      core.PlotPoint,
+		QualityControlService: core.Quality,
+		// ── Content ──
+		NovelService:          content.Novel,
+		ChapterService:        content.Chapter,
+		CharacterService:      content.Character,
+		WorldviewService:      content.Worldview,
+		KnowledgeService:      content.Knowledge,
+		ContinuityService:     content.Continuity,
+		PromptService:         content.Prompt,
+		ChapterVersionService: content.ChapterVersion,
+		ForeshadowService:     content.Foreshadow,
+		TimelineService:       content.Timeline,
+		CharacterArcService:   content.CharacterArc,
+		StyleService:          content.Style,
+		GenerationContextService: content.GenContext,
+		ImageGenerationService:   content.ImageGen,
+		HookChainService:         content.HookChain,
+		SatisfactionPointService: content.SatisfactionPoint,
+		ConflictArcService:       content.ConflictArc,
+		PacingService:            content.Pacing,
+		ItemService:              content.Item,
+		SkillService:             content.Skill,
+		SceneAnchorService:       content.SceneAnchor,
+		NovelAnalysisService:     content.NovelAnalysis,
+		NovelImportService:       content.NovelImport,
+		CrawlerService:           content.Crawler,
+		// ── Video ──
+		VideoService:                video.Video,
+		StoryboardService:           video.Storyboard,
+		VideoEnhancementService:     video.Enhancement,
+		CharacterConsistencyService: video.CharConsistency,
+		BGMService:                  video.BGM,
+		FrameGeneratorService:       video.FrameGenerator,
+		ConsistencyValidatorService: video.ConsistencyValidator,
+		NovelToVideoService:         video.NovelToVideo,
+		SceneConsistencyService:     video.SceneConsistency,
+		// ── Auth / platform ──
+		AuthService:   authSvc,
+		TenantService: tenantSvc,
+		SMSService:    smsSvc,
+		OAuthService:  oauthSvc,
+		McpService:    mcpSvc,
+		FrontendURL:   cfg.Server.FrontendURL,
 	}
 }
 

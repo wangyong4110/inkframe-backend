@@ -32,15 +32,14 @@ func (h *StyleHandler) GetDefaultStyle(c *gin.Context) {
 // POST /api/v1/styles/prompt
 func (h *StyleHandler) BuildStylePrompt(c *gin.Context) {
 	var req struct {
-		NarrativeVoice       string  `json:"narrative_voice"`
-		NarrativeDistance    string  `json:"narrative_distance"`
-		EmotionalTone        string  `json:"emotional_tone"`
-		SentenceComplexity   string  `json:"sentence_complexity"`
-		DescriptionDensity   string  `json:"description_density"`
-		DialogueRatio        float64 `json:"dialogue_ratio"`
+		NarrativeVoice     string  `json:"narrative_voice"`
+		NarrativeDistance  string  `json:"narrative_distance"`
+		EmotionalTone      string  `json:"emotional_tone"`
+		SentenceComplexity string  `json:"sentence_complexity"`
+		DescriptionDensity string  `json:"description_density"`
+		DialogueRatio      float64 `json:"dialogue_ratio"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 

@@ -2,7 +2,6 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -30,9 +29,8 @@ func NewDramaticHandler(
 
 // GetPacingCurve GET /novels/:id/pacing-curve
 func (h *DramaticHandler) GetPacingCurve(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	points, err := h.pacingSvc.GetCurve(uint(novelID))
@@ -45,9 +43,8 @@ func (h *DramaticHandler) GetPacingCurve(c *gin.Context) {
 
 // GetPacingHealth GET /novels/:id/pacing-health
 func (h *DramaticHandler) GetPacingHealth(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	health, err := h.pacingSvc.GetHealth(uint(novelID))
@@ -62,9 +59,8 @@ func (h *DramaticHandler) GetPacingHealth(c *gin.Context) {
 
 // ListHooks GET /novels/:id/hooks
 func (h *DramaticHandler) ListHooks(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	hooks, err := h.hookSvc.ListByNovel(uint(novelID))
@@ -77,14 +73,12 @@ func (h *DramaticHandler) ListHooks(c *gin.Context) {
 
 // CreateHook POST /novels/:id/hooks
 func (h *DramaticHandler) CreateHook(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req model.HookChain
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	hook, err := h.hookSvc.Create(getTenantID(c), uint(novelID), &req)
@@ -97,14 +91,12 @@ func (h *DramaticHandler) CreateHook(c *gin.Context) {
 
 // UpdateHook PUT /hooks/:id
 func (h *DramaticHandler) UpdateHook(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid hook id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req model.HookChain
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	hook, err := h.hookSvc.Update(uint(id), &req)
@@ -117,9 +109,8 @@ func (h *DramaticHandler) UpdateHook(c *gin.Context) {
 
 // DeleteHook DELETE /hooks/:id
 func (h *DramaticHandler) DeleteHook(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid hook id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	if err := h.hookSvc.Delete(uint(id)); err != nil {
@@ -131,16 +122,14 @@ func (h *DramaticHandler) DeleteHook(c *gin.Context) {
 
 // FulfillHook PUT /hooks/:id/fulfill
 func (h *DramaticHandler) FulfillHook(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid hook id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var body struct {
 		ActualChapter int `json:"actual_chapter" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &body) {
 		return
 	}
 	hook, err := h.hookSvc.Fulfill(uint(id), body.ActualChapter)
@@ -155,9 +144,8 @@ func (h *DramaticHandler) FulfillHook(c *gin.Context) {
 
 // ListSatisfactionPoints GET /novels/:id/satisfaction-points
 func (h *DramaticHandler) ListSatisfactionPoints(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	sps, err := h.spSvc.ListByNovel(uint(novelID))
@@ -170,14 +158,12 @@ func (h *DramaticHandler) ListSatisfactionPoints(c *gin.Context) {
 
 // CreateSatisfactionPoint POST /novels/:id/satisfaction-points
 func (h *DramaticHandler) CreateSatisfactionPoint(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req model.SatisfactionPoint
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	sp, err := h.spSvc.Create(getTenantID(c), uint(novelID), &req)
@@ -190,14 +176,12 @@ func (h *DramaticHandler) CreateSatisfactionPoint(c *gin.Context) {
 
 // UpdateSatisfactionPoint PUT /satisfaction-points/:id
 func (h *DramaticHandler) UpdateSatisfactionPoint(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid satisfaction point id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req model.SatisfactionPoint
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	sp, err := h.spSvc.Update(uint(id), &req)
@@ -210,9 +194,8 @@ func (h *DramaticHandler) UpdateSatisfactionPoint(c *gin.Context) {
 
 // DeleteSatisfactionPoint DELETE /satisfaction-points/:id
 func (h *DramaticHandler) DeleteSatisfactionPoint(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid satisfaction point id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	if err := h.spSvc.Delete(uint(id)); err != nil {
@@ -226,9 +209,8 @@ func (h *DramaticHandler) DeleteSatisfactionPoint(c *gin.Context) {
 
 // ListConflictArcs GET /novels/:id/conflict-arcs
 func (h *DramaticHandler) ListConflictArcs(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	arcs, err := h.arcSvc.ListByNovel(uint(novelID))
@@ -241,14 +223,12 @@ func (h *DramaticHandler) ListConflictArcs(c *gin.Context) {
 
 // CreateConflictArc POST /novels/:id/conflict-arcs
 func (h *DramaticHandler) CreateConflictArc(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req model.ConflictArc
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	arc, err := h.arcSvc.Create(getTenantID(c), uint(novelID), &req)
@@ -261,14 +241,12 @@ func (h *DramaticHandler) CreateConflictArc(c *gin.Context) {
 
 // UpdateConflictArc PUT /conflict-arcs/:id
 func (h *DramaticHandler) UpdateConflictArc(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid conflict arc id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req model.ConflictArc
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	arc, err := h.arcSvc.Update(uint(id), &req)
@@ -281,9 +259,8 @@ func (h *DramaticHandler) UpdateConflictArc(c *gin.Context) {
 
 // DeleteConflictArc DELETE /conflict-arcs/:id
 func (h *DramaticHandler) DeleteConflictArc(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid conflict arc id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	if err := h.arcSvc.Delete(uint(id)); err != nil {
@@ -295,9 +272,8 @@ func (h *DramaticHandler) DeleteConflictArc(c *gin.Context) {
 
 // AdvancePhase PUT /conflict-arcs/:id/advance-phase
 func (h *DramaticHandler) AdvancePhase(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid conflict arc id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	arc, err := h.arcSvc.AdvancePhase(uint(id))

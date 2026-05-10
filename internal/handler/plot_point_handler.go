@@ -1,9 +1,9 @@
 package handler
 
 import (
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
-	"strconv"
+
+	"github.com/inkframe/inkframe-backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -34,9 +34,8 @@ func (h *PlotPointHandler) WithTaskService(svc *service.TaskService) *PlotPointH
 
 // ListByChapter GET /chapters/:id/plot-points
 func (h *PlotPointHandler) ListByChapter(c *gin.Context) {
-	chapterID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid chapter id")
+	chapterID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	pps, err := h.svc.List(uint(chapterID))
@@ -49,14 +48,12 @@ func (h *PlotPointHandler) ListByChapter(c *gin.Context) {
 
 // Create POST /chapters/:id/plot-points
 func (h *PlotPointHandler) Create(c *gin.Context) {
-	chapterID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid chapter id")
+	chapterID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var pp model.PlotPoint
-	if err := c.ShouldBindJSON(&pp); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &pp) {
 		return
 	}
 	pp.ChapterID = uint(chapterID)
@@ -69,9 +66,8 @@ func (h *PlotPointHandler) Create(c *gin.Context) {
 
 // ExtractFromChapter POST /chapters/:id/plot-points/extract
 func (h *PlotPointHandler) ExtractFromChapter(c *gin.Context) {
-	chapterID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid chapter id")
+	chapterID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	if h.chapterSvc == nil {
@@ -93,9 +89,8 @@ func (h *PlotPointHandler) ExtractFromChapter(c *gin.Context) {
 
 // ListByNovel GET /novels/:id/plot-points
 func (h *PlotPointHandler) ListByNovel(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	ppType := c.Query("type")
@@ -111,14 +106,12 @@ func (h *PlotPointHandler) ListByNovel(c *gin.Context) {
 
 // Update PUT /plot-points/:id
 func (h *PlotPointHandler) Update(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid plot point id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req model.UpdatePlotPointRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	pp, err := h.svc.Update(uint(id), &req)
@@ -131,16 +124,14 @@ func (h *PlotPointHandler) Update(c *gin.Context) {
 
 // MarkResolved PUT /plot-points/:id/resolve
 func (h *PlotPointHandler) MarkResolved(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid plot point id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var body struct {
 		ResolvedInChapterID uint `json:"resolved_in_chapter_id" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &body) {
 		return
 	}
 	pp, err := h.svc.MarkResolved(uint(id), body.ResolvedInChapterID)
@@ -153,9 +144,8 @@ func (h *PlotPointHandler) MarkResolved(c *gin.Context) {
 
 // Delete DELETE /plot-points/:id
 func (h *PlotPointHandler) Delete(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid plot point id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	if err := h.svc.Delete(uint(id)); err != nil {
@@ -171,9 +161,8 @@ func (h *PlotPointHandler) AIExtractFromNovel(c *gin.Context) {
 		respondErr(c, http.StatusServiceUnavailable, "task service not configured")
 		return
 	}
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	tenantID := getTenantID(c)
@@ -189,7 +178,7 @@ func (h *PlotPointHandler) AIExtractFromNovel(c *gin.Context) {
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		pps, err := h.svc.AIExtractFromNovel(tenantID, uint(novelID))
 		if err != nil {

@@ -3,7 +3,6 @@ package handler
 import (
 	"fmt"
 	"io"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,10 +11,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/inkframe/inkframe-backend/internal/logger"
+
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
-
 
 // chunkSession 分片上传会话
 type chunkSession struct {
@@ -65,8 +65,8 @@ func (h *ImportHandler) WithTaskService(svc *service.TaskService) *ImportHandler
 
 // runImportAndAnalyze 通用导入+分析流程（在 goroutine 中调用）
 func (h *ImportHandler) runImportAndAnalyze(taskID string, req *service.ImportRequest, tenantID uint) {
-	h.taskSvc.SetRunning(taskID)   //nolint:errcheck
-	h.taskSvc.UpdateProgress(taskID, 20) //nolint:errcheck
+	h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
+	h.taskSvc.UpdateProgress(taskID, 20)                                  //nolint:errcheck
 	h.taskSvc.SetMeta(taskID, map[string]interface{}{"step": "解析导入中..."}) //nolint:errcheck
 
 	result, err := h.importService.Import(req)
@@ -85,11 +85,11 @@ func (h *ImportHandler) runImportAndAnalyze(taskID string, req *service.ImportRe
 	}
 
 	h.taskSvc.Complete(taskID, map[string]interface{}{ //nolint:errcheck
-		"novel_id":         result.NovelID,
+		"novel_id":          result.NovelID,
 		"imported_chapters": result.ImportedChapters,
-		"oss_url":          result.OSSUrl,
-		"analysis_task_id": analysisTaskID,
-		"message":          fmt.Sprintf("导入完成，共 %d 章", result.ImportedChapters),
+		"oss_url":           result.OSSUrl,
+		"analysis_task_id":  analysisTaskID,
+		"message":           fmt.Sprintf("导入完成，共 %d 章", result.ImportedChapters),
 	})
 }
 
@@ -97,8 +97,7 @@ func (h *ImportHandler) runImportAndAnalyze(taskID string, req *service.ImportRe
 // POST /api/v1/import/novel
 func (h *ImportHandler) ImportNovel(c *gin.Context) {
 	var req service.ImportRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -210,8 +209,7 @@ func (h *ImportHandler) ImportFromURL(c *gin.Context) {
 		SiteName string `json:"site_name,omitempty"`
 		NovelID  uint   `json:"novel_id,omitempty"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -240,8 +238,7 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 		SiteName string `json:"site_name,omitempty"`
 		NovelID  uint   `json:"novel_id,omitempty"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -278,7 +275,7 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 			return
 		}
 		novelID := result.NovelID
-		h.taskSvc.UpdateProgress(taskID, 5) //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 5)               //nolint:errcheck
 		h.taskSvc.SetMeta(taskID, map[string]interface{}{ //nolint:errcheck
 			"step":        "爬取章节内容中...",
 			"novel_id":    novelID,
@@ -310,7 +307,7 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 			if progress.Total > 0 {
 				pct = 5 + int(float64(progress.Done)/float64(progress.Total)*55)
 			}
-			h.taskSvc.UpdateProgress(taskID, pct) //nolint:errcheck
+			h.taskSvc.UpdateProgress(taskID, pct)             //nolint:errcheck
 			h.taskSvc.SetMeta(taskID, map[string]interface{}{ //nolint:errcheck
 				"step":          "爬取章节内容中...",
 				"novel_id":      novelID,
@@ -331,10 +328,10 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 		}
 
 		h.taskSvc.Complete(taskID, map[string]interface{}{ //nolint:errcheck
-			"novel_id":         novelID,
+			"novel_id":          novelID,
 			"imported_chapters": result.ImportedChapters,
-			"analysis_task_id": analysisTaskID,
-			"message":          fmt.Sprintf("爬取完成，共 %d 章", result.ImportedChapters),
+			"analysis_task_id":  analysisTaskID,
+			"message":           fmt.Sprintf("爬取完成，共 %d 章", result.ImportedChapters),
 		})
 	}(task.TaskID, importReq)
 
@@ -359,14 +356,13 @@ func (h *ImportHandler) ImportAndGenerate(c *gin.Context) {
 
 		// 视频参数
 		StartChapter int    `json:"start_chapter,omitempty"`
-		EndChapter  int    `json:"end_chapter,omitempty"`
-		Resolution  string `json:"resolution,omitempty"`
-		FrameRate   int    `json:"frame_rate,omitempty"`
-		AspectRatio string `json:"aspect_ratio,omitempty"`
-		ArtStyle    string `json:"art_style,omitempty"`
+		EndChapter   int    `json:"end_chapter,omitempty"`
+		Resolution   string `json:"resolution,omitempty"`
+		FrameRate    int    `json:"frame_rate,omitempty"`
+		AspectRatio  string `json:"aspect_ratio,omitempty"`
+		ArtStyle     string `json:"art_style,omitempty"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -381,11 +377,11 @@ func (h *ImportHandler) ImportAndGenerate(c *gin.Context) {
 
 	videoReq := &service.NovelToVideoRequest{
 		StartChapter: req.StartChapter,
-		EndChapter:  req.EndChapter,
-		Resolution:  req.Resolution,
-		FrameRate:   req.FrameRate,
-		AspectRatio: req.AspectRatio,
-		ArtStyle:   req.ArtStyle,
+		EndChapter:   req.EndChapter,
+		Resolution:   req.Resolution,
+		FrameRate:    req.FrameRate,
+		AspectRatio:  req.AspectRatio,
+		ArtStyle:     req.ArtStyle,
 	}
 
 	result, err := h.novelToVideoService.ImportAndGenerate(importReq, videoReq)
@@ -400,15 +396,13 @@ func (h *ImportHandler) ImportAndGenerate(c *gin.Context) {
 // GenerateVideoFromNovel 从已有小说生成视频
 // POST /api/v1/novels/:id/generate-video
 func (h *ImportHandler) GenerateVideoFromNovel(c *gin.Context) {
-	novelId, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelId, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
 	var req service.NovelToVideoRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -432,8 +426,7 @@ func (h *ImportHandler) InitChunkedUpload(c *gin.Context) {
 		NovelID     uint   `json:"novel_id,omitempty"`
 		Format      string `json:"format,omitempty"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &body) {
 		return
 	}
 
@@ -515,8 +508,7 @@ func (h *ImportHandler) CompleteChunkedUpload(c *gin.Context) {
 	var body struct {
 		UploadID string `json:"upload_id" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &body) {
 		return
 	}
 
@@ -569,7 +561,7 @@ func (h *ImportHandler) CompleteChunkedUpload(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	h.taskSvc.UpdateProgress(task.TaskID, 5)                                                     //nolint:errcheck
+	h.taskSvc.UpdateProgress(task.TaskID, 5)                                   //nolint:errcheck
 	h.taskSvc.SetMeta(task.TaskID, map[string]interface{}{"step": "解析导入中..."}) //nolint:errcheck
 
 	go h.runImportAndAnalyze(task.TaskID, req, tenantID)
@@ -587,9 +579,8 @@ func (h *ImportHandler) CompleteChunkedUpload(c *gin.Context) {
 // StartAnalysis 触发小说分析 Pipeline
 // POST /api/v1/novels/:id/analyze
 func (h *ImportHandler) StartAnalysis(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	if h.analysisService == nil {
@@ -617,9 +608,8 @@ func (h *ImportHandler) StartAnalysis(c *gin.Context) {
 // GetCrawlStatus 查询爬取进度
 // GET /api/v1/novels/:id/crawl/status
 func (h *ImportHandler) GetCrawlStatus(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	progress, err := h.importService.GetCrawlProgress(uint(novelID))
@@ -637,9 +627,8 @@ func (h *ImportHandler) GetCrawlStatus(c *gin.Context) {
 // ResumeCrawl 从断点继续爬取（异步，返回 202+task_id）
 // POST /api/v1/novels/:id/crawl/resume
 func (h *ImportHandler) ResumeCrawl(c *gin.Context) {
-	novelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid novel id")
+	novelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	tenantID := getTenantID(c)
@@ -673,7 +662,7 @@ func (h *ImportHandler) ResumeCrawl(c *gin.Context) {
 			if progress.Total > 0 {
 				pct = int(float64(progress.Done) / float64(progress.Total) * 100)
 			}
-			h.taskSvc.UpdateProgress(taskID, pct) //nolint:errcheck
+			h.taskSvc.UpdateProgress(taskID, pct)             //nolint:errcheck
 			h.taskSvc.SetMeta(taskID, map[string]interface{}{ //nolint:errcheck
 				"novel_id":      nid,
 				"crawl_done":    progress.Done,

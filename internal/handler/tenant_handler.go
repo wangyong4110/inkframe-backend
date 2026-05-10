@@ -2,7 +2,6 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -41,9 +40,8 @@ func (h *TenantHandler) ListTenants(c *gin.Context) {
 // GetTenant 获取租户详情
 // GET /api/v1/tenants/:id
 func (h *TenantHandler) GetTenant(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid tenant id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -67,8 +65,7 @@ func (h *TenantHandler) CreateTenant(c *gin.Context) {
 		Description  string `json:"description"`
 		ContactEmail string `json:"contact_email"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -108,9 +105,8 @@ func (h *TenantHandler) CreateTenant(c *gin.Context) {
 // UpdateTenant 更新租户
 // PUT /api/v1/tenants/:id
 func (h *TenantHandler) UpdateTenant(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid tenant id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -128,8 +124,7 @@ func (h *TenantHandler) UpdateTenant(c *gin.Context) {
 		Description  string `json:"description"`
 		ContactEmail string `json:"contact_email"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 
@@ -170,9 +165,8 @@ func (h *TenantHandler) UpdateTenant(c *gin.Context) {
 // DeleteTenant 删除租户
 // DELETE /api/v1/tenants/:id
 func (h *TenantHandler) DeleteTenant(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid tenant id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -190,9 +184,8 @@ func (h *TenantHandler) DeleteTenant(c *gin.Context) {
 // GetQuota 获取租户配额
 // GET /api/v1/tenants/:id/quota
 func (h *TenantHandler) GetQuota(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid tenant id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -208,9 +201,8 @@ func (h *TenantHandler) GetQuota(c *gin.Context) {
 // ListMembers 获取租户成员列表
 // GET /api/v1/tenants/:id/members
 func (h *TenantHandler) ListMembers(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid tenant id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -226,9 +218,8 @@ func (h *TenantHandler) ListMembers(c *gin.Context) {
 // AddMember 添加租户成员
 // POST /api/v1/tenants/:id/members
 func (h *TenantHandler) AddMember(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid tenant id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 
@@ -236,8 +227,7 @@ func (h *TenantHandler) AddMember(c *gin.Context) {
 		UserID uint   `json:"user_id" binding:"required"`
 		Role   string `json:"role"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	if req.Role == "" {
@@ -258,14 +248,12 @@ func (h *TenantHandler) AddMember(c *gin.Context) {
 // RemoveMember 移除租户成员
 // DELETE /api/v1/tenants/:id/members/:user_id
 func (h *TenantHandler) RemoveMember(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid tenant id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
-	userId, err := strconv.ParseUint(c.Param("user_id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid user id")
+	userId, ok := parseID(c, "user_id")
+	if !ok {
 		return
 	}
 
@@ -283,22 +271,19 @@ func (h *TenantHandler) RemoveMember(c *gin.Context) {
 // UpdateMemberRole 更新成员角色
 // PUT /api/v1/tenants/:id/members/:user_id/role
 func (h *TenantHandler) UpdateMemberRole(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid tenant id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
-	userId, err := strconv.ParseUint(c.Param("user_id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid user id")
+	userId, ok := parseID(c, "user_id")
+	if !ok {
 		return
 	}
 
 	var req struct {
 		Role string `json:"role" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 

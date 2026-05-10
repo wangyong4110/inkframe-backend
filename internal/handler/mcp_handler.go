@@ -2,7 +2,6 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -33,8 +32,7 @@ func (h *McpHandler) ListMcpTools(c *gin.Context) {
 // POST /api/v1/mcp-tools
 func (h *McpHandler) CreateMcpTool(c *gin.Context) {
 	var req model.CreateMcpToolRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	tool, err := h.mcpService.CreateTool(&req)
@@ -48,14 +46,12 @@ func (h *McpHandler) CreateMcpTool(c *gin.Context) {
 // UpdateMcpTool 更新 MCP 工具
 // PUT /api/v1/mcp-tools/:id
 func (h *McpHandler) UpdateMcpTool(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req model.UpdateMcpToolRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	tool, err := h.mcpService.UpdateTool(uint(id), &req)
@@ -69,9 +65,8 @@ func (h *McpHandler) UpdateMcpTool(c *gin.Context) {
 // DeleteMcpTool 删除 MCP 工具
 // DELETE /api/v1/mcp-tools/:id
 func (h *McpHandler) DeleteMcpTool(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	if err := h.mcpService.DeleteTool(uint(id)); err != nil {
@@ -84,9 +79,8 @@ func (h *McpHandler) DeleteMcpTool(c *gin.Context) {
 // TestMcpTool 测试 MCP 工具连通性
 // POST /api/v1/mcp-tools/:id/test
 func (h *McpHandler) TestMcpTool(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	result, err := h.mcpService.TestTool(uint(id))
@@ -100,9 +94,8 @@ func (h *McpHandler) TestMcpTool(c *gin.Context) {
 // GetMcpToolModels 获取绑定到某 MCP 工具的所有模型
 // GET /api/v1/mcp-tools/:id/models
 func (h *McpHandler) GetMcpToolModels(c *gin.Context) {
-	id, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid id")
+	id, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	models, err := h.mcpService.GetToolModels(uint(id))
@@ -116,9 +109,8 @@ func (h *McpHandler) GetMcpToolModels(c *gin.Context) {
 // GetModelMcpTools 获取模型绑定的所有 MCP 工具
 // GET /api/v1/models/:id/mcp-tools
 func (h *McpHandler) GetModelMcpTools(c *gin.Context) {
-	modelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid model id")
+	modelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	tools, err := h.mcpService.GetModelTools(uint(modelID))
@@ -132,16 +124,14 @@ func (h *McpHandler) GetModelMcpTools(c *gin.Context) {
 // BindMcpTool 将 MCP 工具绑定到模型
 // POST /api/v1/models/:id/mcp-tools
 func (h *McpHandler) BindMcpTool(c *gin.Context) {
-	modelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid model id")
+	modelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
 	var req struct {
 		ToolID uint `json:"tool_id" binding:"required"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	if !bindJSON(c, &req) {
 		return
 	}
 	if err := h.mcpService.BindTool(uint(modelID), req.ToolID); err != nil {
@@ -154,14 +144,12 @@ func (h *McpHandler) BindMcpTool(c *gin.Context) {
 // UnbindMcpTool 解除模型与 MCP 工具的绑定
 // DELETE /api/v1/models/:id/mcp-tools/:tool_id
 func (h *McpHandler) UnbindMcpTool(c *gin.Context) {
-	modelID, err := strconv.ParseUint(c.Param("id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid model id")
+	modelID, ok := parseID(c, "id")
+	if !ok {
 		return
 	}
-	toolID, err := strconv.ParseUint(c.Param("tool_id"), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid tool id")
+	toolID, ok := parseID(c, "tool_id")
+	if !ok {
 		return
 	}
 	if err := h.mcpService.UnbindTool(uint(modelID), uint(toolID)); err != nil {
