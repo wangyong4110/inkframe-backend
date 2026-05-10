@@ -14,6 +14,7 @@ import (
 type SkillHandler struct {
 	skillService *service.SkillService
 	chapterSvc   *service.ChapterService
+	novelSvc     *service.NovelService
 }
 
 func NewSkillHandler(skillService *service.SkillService) *SkillHandler {
@@ -23,6 +24,24 @@ func NewSkillHandler(skillService *service.SkillService) *SkillHandler {
 func (h *SkillHandler) WithChapterService(svc *service.ChapterService) *SkillHandler {
 	h.chapterSvc = svc
 	return h
+}
+
+func (h *SkillHandler) WithNovelService(svc *service.NovelService) *SkillHandler {
+	h.novelSvc = svc
+	return h
+}
+
+// checkSkillTenant 校验技能归属当前租户（通过关联小说）。
+func (h *SkillHandler) checkSkillTenant(c *gin.Context, novelID uint) bool {
+	if h.novelSvc == nil {
+		return true
+	}
+	novel, err := h.novelSvc.GetNovel(novelID)
+	if err != nil || novel.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return false
+	}
+	return true
 }
 
 // ListSkills GET /novels/:id/skills
@@ -78,6 +97,9 @@ func (h *SkillHandler) GetSkill(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "skill not found")
 		return
 	}
+	if !h.checkSkillTenant(c, skill.NovelID) {
+		return
+	}
 	respondOK(c, skill)
 }
 
@@ -85,6 +107,14 @@ func (h *SkillHandler) GetSkill(c *gin.Context) {
 func (h *SkillHandler) UpdateSkill(c *gin.Context) {
 	id, ok := parseID(c, "skillId")
 	if !ok {
+		return
+	}
+	existing, err := h.skillService.GetSkill(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "skill not found")
+		return
+	}
+	if !h.checkSkillTenant(c, existing.NovelID) {
 		return
 	}
 	var req model.UpdateSkillRequest
@@ -103,6 +133,14 @@ func (h *SkillHandler) UpdateSkill(c *gin.Context) {
 func (h *SkillHandler) DeleteSkill(c *gin.Context) {
 	id, ok := parseID(c, "skillId")
 	if !ok {
+		return
+	}
+	existing, err := h.skillService.GetSkill(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "skill not found")
+		return
+	}
+	if !h.checkSkillTenant(c, existing.NovelID) {
 		return
 	}
 	if err := h.skillService.DeleteSkill(uint(id)); err != nil {

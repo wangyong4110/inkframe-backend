@@ -69,6 +69,10 @@ func (h *ChapterHandler) GetChapter(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "chapter not found")
 		return
 	}
+	if chapter.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
 
 	respondOK(c, chapter)
 }
@@ -119,6 +123,16 @@ func (h *ChapterHandler) UpdateChapter(c *gin.Context) {
 		return
 	}
 
+	existing, err := h.chapterService.GetChapter(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	if existing.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	var req model.UpdateChapterRequest
 	if !bindJSON(c, &req) {
 		return
@@ -139,6 +153,16 @@ func (h *ChapterHandler) UpdateChapter(c *gin.Context) {
 func (h *ChapterHandler) DeleteChapter(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+
+	existing, err := h.chapterService.GetChapter(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	if existing.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
 

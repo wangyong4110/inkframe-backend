@@ -229,6 +229,10 @@ func (h *VideoHandler) UpdateVideo(c *gin.Context) {
 		return
 	}
 
+	if _, ok := h.getVideoForTenant(c, uint(id)); !ok {
+		return
+	}
+
 	var req model.UpdateVideoRequest
 	if !bindJSON(c, &req) {
 		return
@@ -249,6 +253,10 @@ func (h *VideoHandler) UpdateVideo(c *gin.Context) {
 func (h *VideoHandler) DeleteVideo(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+
+	if _, ok := h.getVideoForTenant(c, uint(id)); !ok {
 		return
 	}
 

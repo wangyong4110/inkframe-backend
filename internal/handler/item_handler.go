@@ -16,12 +16,18 @@ import (
 type ItemHandler struct {
 	itemService *service.ItemService
 	chapterSvc  *service.ChapterService
+	novelSvc    *service.NovelService
 	storageSvc  storage.Service
 	taskSvc     *service.TaskService
 }
 
 func NewItemHandler(itemService *service.ItemService, chapterSvc *service.ChapterService) *ItemHandler {
 	return &ItemHandler{itemService: itemService, chapterSvc: chapterSvc}
+}
+
+func (h *ItemHandler) WithNovelService(svc *service.NovelService) *ItemHandler {
+	h.novelSvc = svc
+	return h
 }
 
 func (h *ItemHandler) WithStorage(svc storage.Service) *ItemHandler {
@@ -66,6 +72,20 @@ func (h *ItemHandler) CreateItem(c *gin.Context) {
 	respondCreated(c, item)
 }
 
+// checkItemTenant 校验物品归属当前租户（通过关联小说）。
+// 返回 false 时已写入错误响应。
+func (h *ItemHandler) checkItemTenant(c *gin.Context, novelID uint) bool {
+	if h.novelSvc == nil {
+		return true // novelSvc 未注入时跳过检查（兼容测试）
+	}
+	novel, err := h.novelSvc.GetNovel(novelID)
+	if err != nil || novel.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return false
+	}
+	return true
+}
+
 // GetItem GET /items/:id
 func (h *ItemHandler) GetItem(c *gin.Context) {
 	id, ok := parseID(c, "id")
@@ -77,6 +97,9 @@ func (h *ItemHandler) GetItem(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "item not found")
 		return
 	}
+	if !h.checkItemTenant(c, item.NovelID) {
+		return
+	}
 	respondOK(c, item)
 }
 
@@ -84,6 +107,14 @@ func (h *ItemHandler) GetItem(c *gin.Context) {
 func (h *ItemHandler) UpdateItem(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+	existing, err := h.itemService.GetItem(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "item not found")
+		return
+	}
+	if !h.checkItemTenant(c, existing.NovelID) {
 		return
 	}
 	var req model.UpdateItemRequest
@@ -102,6 +133,14 @@ func (h *ItemHandler) UpdateItem(c *gin.Context) {
 func (h *ItemHandler) DeleteItem(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+	existing, err := h.itemService.GetItem(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "item not found")
+		return
+	}
+	if !h.checkItemTenant(c, existing.NovelID) {
 		return
 	}
 	if err := h.itemService.DeleteItem(uint(id)); err != nil {

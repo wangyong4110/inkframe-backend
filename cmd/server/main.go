@@ -189,6 +189,11 @@ func main() {
 
 	// 后台定时任务：每小时重新计算视频广场热度分
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[hot-score] goroutine panic: %v", r)
+			}
+		}()
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
 		for range ticker.C {
@@ -200,6 +205,11 @@ func main() {
 
 	// 后台定时任务：每小时重新计算小说广场热度分
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[novel-hot-score] goroutine panic: %v", r)
+			}
+		}()
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
 		for range ticker.C {
@@ -1724,8 +1734,8 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			WithTaskService(services.TaskService),
 		WorldviewHandler:   handler.NewWorldviewHandler(services.WorldviewService),
 		TenantHandler:      handler.NewTenantHandler(services.TenantService),
-		ItemHandler:        handler.NewItemHandler(services.ItemService, services.ChapterService).WithStorage(storageSvc).WithTaskService(services.TaskService),
-		SkillHandler:       handler.NewSkillHandler(services.SkillService).WithChapterService(services.ChapterService),
+		ItemHandler:        handler.NewItemHandler(services.ItemService, services.ChapterService).WithStorage(storageSvc).WithTaskService(services.TaskService).WithNovelService(services.NovelService),
+		SkillHandler:       handler.NewSkillHandler(services.SkillService).WithChapterService(services.ChapterService).WithNovelService(services.NovelService),
 		UploadHandler:      handler.NewUploadHandler(storageSvc),
 		PlotPointHandler:   handler.NewPlotPointHandler(services.PlotPointService).WithChapterService(services.ChapterService).WithTaskService(services.TaskService),
 		TaskHandler:        handler.NewTaskHandler(services.TaskService),

@@ -172,6 +172,10 @@ func (h *CharacterHandler) GetCharacter(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
+	if tenantID := getTenantID(c); character.TenantID != tenantID {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
 
 	respondOK(c, characterResponse(character))
 }
@@ -205,6 +209,16 @@ func (h *CharacterHandler) UpdateCharacter(c *gin.Context) {
 		return
 	}
 
+	existing, err := h.characterService.GetCharacter(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+	if tenantID := getTenantID(c); existing.TenantID != tenantID {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	var req model.UpdateCharacterRequest
 	if !bindJSON(c, &req) {
 		return
@@ -224,6 +238,16 @@ func (h *CharacterHandler) UpdateCharacter(c *gin.Context) {
 func (h *CharacterHandler) DeleteCharacter(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+
+	existing, err := h.characterService.GetCharacter(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+	if tenantID := getTenantID(c); existing.TenantID != tenantID {
+		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
 

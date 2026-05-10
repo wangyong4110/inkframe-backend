@@ -62,6 +62,20 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		r.GET("/api/v1/share/:token", cfg.AssetHandler.PublicSharePage)
 	}
 
+	// 公开平台广场路由（无需 JWT，只限速）
+	if cfg.PlatformHandler != nil {
+		public := r.Group("/api/v1")
+		public.Use(middleware.RateLimit(60, 10))
+		public.GET("/platform/videos", cfg.PlatformHandler.GetPlatformFeed)
+		public.GET("/platform/videos/:id", cfg.PlatformHandler.GetPlatformVideo)
+		public.POST("/platform/videos/:id/view", cfg.PlatformHandler.RecordView)
+		public.GET("/platform/videos/:id/comments", cfg.PlatformHandler.ListComments)
+		public.GET("/platform/novels", cfg.PlatformHandler.GetPlatformNovels)
+		public.GET("/platform/novels/:id", cfg.PlatformHandler.GetPlatformNovel)
+		public.POST("/platform/novels/:id/view", cfg.PlatformHandler.RecordNovelView)
+		public.GET("/platform/novels/:id/comments", cfg.PlatformHandler.ListNovelComments)
+	}
+
 	// 公开认证路由（不需要JWT）
 	auth := r.Group("/api/v1/auth")
 	{
@@ -497,17 +511,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			system.PUT("/settings/:key", cfg.SystemHandler.UpdateSetting)
 		}
 
-		// 平台广场 + 外部账号
+		// 平台广场 + 外部账号（JWT 保护部分）
 		if cfg.PlatformHandler != nil {
-			// 公开路由（无需 JWT）
-			v1.GET("/platform/videos", cfg.PlatformHandler.GetPlatformFeed)
-			v1.GET("/platform/videos/:id", cfg.PlatformHandler.GetPlatformVideo)
-			v1.POST("/platform/videos/:id/view", cfg.PlatformHandler.RecordView)
-			v1.GET("/platform/videos/:id/comments", cfg.PlatformHandler.ListComments)
-			v1.GET("/platform/novels", cfg.PlatformHandler.GetPlatformNovels)
-			v1.GET("/platform/novels/:id", cfg.PlatformHandler.GetPlatformNovel)
-			v1.POST("/platform/novels/:id/view", cfg.PlatformHandler.RecordNovelView)
-			v1.GET("/platform/novels/:id/comments", cfg.PlatformHandler.ListNovelComments)
 			// JWT 保护的平台路由
 			platformR := v1.Group("/platform")
 			{

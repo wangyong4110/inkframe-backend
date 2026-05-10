@@ -92,6 +92,10 @@ func (h *NovelHandler) GetNovel(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return
 	}
+	if tenantID := getTenantID(c); novel.TenantID != tenantID {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
 
 	respondOK(c, novel)
 }
@@ -136,6 +140,16 @@ func (h *NovelHandler) UpdateNovel(c *gin.Context) {
 		return
 	}
 
+	existing, err := h.novelService.GetNovel(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found")
+		return
+	}
+	if tenantID := getTenantID(c); existing.TenantID != tenantID {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	var req model.UpdateNovelRequest
 	if !bindJSON(c, &req) {
 		return
@@ -156,6 +170,16 @@ func (h *NovelHandler) UpdateNovel(c *gin.Context) {
 func (h *NovelHandler) DeleteNovel(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+
+	existing, err := h.novelService.GetNovel(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found")
+		return
+	}
+	if tenantID := getTenantID(c); existing.TenantID != tenantID {
+		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
 

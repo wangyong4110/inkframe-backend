@@ -1382,7 +1382,23 @@ func (s *VideoService) UpdateVideoFields(id uint, fields map[string]interface{})
 func (s *VideoService) WithVideoSocial(likeRepo *repository.VideoLikeRepository, commentRepo *repository.VideoCommentRepository) *VideoService {
 	s.videoLikeRepo = likeRepo
 	s.videoCommentRepo = commentRepo
+	go s.cleanupViewDedup()
 	return s
+}
+
+// cleanupViewDedup 每小时扫描并清除已过期的去重条目，防止 sync.Map 无限增长。
+func (s *VideoService) cleanupViewDedup() {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for range ticker.C {
+		now := time.Now()
+		s.viewDedupCache.Range(func(k, v any) bool {
+			if expiry, ok := v.(time.Time); ok && now.After(expiry) {
+				s.viewDedupCache.Delete(k)
+			}
+			return true
+		})
+	}
 }
 
 // IncrVideoViewCount 增加视频播放量
@@ -1444,7 +1460,7 @@ func (s *VideoService) IsVideoLiked(videoID, userID uint) bool {
 // ListVideoComments 获取评论列表
 func (s *VideoService) ListVideoComments(videoID uint, page, size int) ([]*model.VideoComment, int64, error) {
 	if s.videoCommentRepo == nil {
-		return nil, 0, nil
+		return []*model.VideoComment{}, 0, nil
 	}
 	return s.videoCommentRepo.ListByVideo(videoID, page, size)
 }
@@ -1478,7 +1494,7 @@ func (s *VideoService) DeleteVideoComment(commentID, callerID uint) error {
 		return err
 	}
 	if c.UserID != callerID {
-		return fmt.Errorf("permission denied")
+		return ErrPermissionDenied
 	}
 	if err := s.videoCommentRepo.Delete(commentID); err != nil {
 		return err
@@ -1503,7 +1519,9 @@ func (s *VideoService) RecalcVideoHotScores() error {
 		// 简单时间衰减：分母随天数增长
 		decay := 1.0 / (1.0 + ageDays*0.1)
 		score := (float64(v.ViewCount)*0.5 + float64(v.LikeCount)*0.3 + float64(v.CommentCount)*0.2) * decay
-		_ = s.videoRepo.UpdateHotScore(v.ID, score)
+		if err := s.videoRepo.UpdateHotScore(v.ID, score); err != nil {
+			logger.Printf("RecalcVideoHotScores: failed to update video %d: %v", v.ID, err)
+		}
 	}
 	return nil
 }

@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -13,6 +14,9 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
+
+// ErrPermissionDenied is returned when a user tries to modify a resource they don't own.
+var ErrPermissionDenied = errors.New("permission denied")
 
 type NovelService struct {
 	novelRepo        *repository.NovelRepository
@@ -826,7 +830,23 @@ type TaskRouting struct {
 func (s *NovelService) WithNovelSocial(likeRepo *repository.NovelLikeRepository, commentRepo *repository.NovelCommentRepository) *NovelService {
 	s.novelLikeRepo = likeRepo
 	s.novelCommentRepo = commentRepo
+	go s.cleanupViewDedup()
 	return s
+}
+
+// cleanupViewDedup 每小时扫描并清除已过期的去重条目，防止 sync.Map 无限增长。
+func (s *NovelService) cleanupViewDedup() {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for range ticker.C {
+		now := time.Now()
+		s.novelViewDedup.Range(func(k, v any) bool {
+			if expiry, ok := v.(time.Time); ok && now.After(expiry) {
+				s.novelViewDedup.Delete(k)
+			}
+			return true
+		})
+	}
 }
 
 // GetPublicNovel 获取公开小说详情（无需 tenantID）
@@ -883,7 +903,7 @@ func (s *NovelService) IsNovelLiked(novelID, userID uint) bool {
 // ListNovelComments 获取评论列表
 func (s *NovelService) ListNovelComments(novelID uint, page, size int) ([]*model.NovelComment, int64, error) {
 	if s.novelCommentRepo == nil {
-		return nil, 0, nil
+		return []*model.NovelComment{}, 0, nil
 	}
 	return s.novelCommentRepo.ListByNovel(novelID, page, size)
 }
@@ -917,7 +937,7 @@ func (s *NovelService) DeleteNovelComment(commentID, userID uint) error {
 		return err
 	}
 	if c.UserID != userID {
-		return fmt.Errorf("permission denied")
+		return ErrPermissionDenied
 	}
 	if err := s.novelCommentRepo.Delete(commentID); err != nil {
 		return err
@@ -941,7 +961,9 @@ func (s *NovelService) RecalcNovelHotScores() error {
 		}
 		base := float64(n.ViewCount)*0.5 + float64(n.LikeCount)*0.3 + float64(n.CommentCount)*0.2
 		score := base / (1 + ageDays*0.1)
-		_ = s.novelRepo.UpdateNovelHotScore(n.ID, score)
+		if err := s.novelRepo.UpdateNovelHotScore(n.ID, score); err != nil {
+			logger.Printf("RecalcNovelHotScores: failed to update novel %d: %v", n.ID, err)
+		}
 	}
 	return nil
 }

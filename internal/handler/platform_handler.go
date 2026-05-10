@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -175,7 +176,7 @@ func (h *PlatformHandler) DeleteNovelComment(c *gin.Context) {
 		return
 	}
 	if err := h.novelService.DeleteNovelComment(uint(cid), uid); err != nil {
-		if err.Error() == "permission denied" {
+		if errors.Is(err, service.ErrPermissionDenied) {
 			respondErr(c, http.StatusForbidden, "permission denied")
 		} else {
 			respondErr(c, http.StatusInternalServerError, err.Error())
@@ -344,7 +345,7 @@ func (h *PlatformHandler) DeleteComment(c *gin.Context) {
 		return
 	}
 	if err := h.videoService.DeleteVideoComment(uint(cid), uid); err != nil {
-		if err.Error() == "permission denied" {
+		if errors.Is(err, service.ErrPermissionDenied) {
 			respondErr(c, http.StatusForbidden, "permission denied")
 		} else {
 			respondErr(c, http.StatusInternalServerError, err.Error())
