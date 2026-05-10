@@ -871,15 +871,15 @@ const schemaVersion = "2026-05-10-v6"
 func ensureCriticalColumns(db *gorm.DB) {
 	type colAdd struct{ table, col, def string }
 	additions := []colAdd{
-		// ink_novels 广场社交字段（2026-05-10 新增）
-		{"ink_novels", "view_count", "INT NOT NULL DEFAULT 0"},
-		{"ink_novels", "like_count", "INT NOT NULL DEFAULT 0"},
-		{"ink_novels", "comment_count", "INT NOT NULL DEFAULT 0"},
-		{"ink_novels", "hot_score", "DOUBLE NOT NULL DEFAULT 0"},
-		{"ink_novels", "is_published", "TINYINT(1) NOT NULL DEFAULT 0"},
-		{"ink_novels", "published_at", "DATETIME(3) NULL"},
-		{"ink_novels", "visibility", "VARCHAR(20) NOT NULL DEFAULT 'private'"},
-		{"ink_novels", "plaza_tags", "TEXT NULL"},
+		// ink_novel 广场社交字段（2026-05-10 新增）
+		{"ink_novel", "view_count", "INT NOT NULL DEFAULT 0"},
+		{"ink_novel", "like_count", "INT NOT NULL DEFAULT 0"},
+		{"ink_novel", "comment_count", "INT NOT NULL DEFAULT 0"},
+		{"ink_novel", "hot_score", "DOUBLE NOT NULL DEFAULT 0"},
+		{"ink_novel", "is_published", "TINYINT(1) NOT NULL DEFAULT 0"},
+		{"ink_novel", "published_at", "DATETIME(3) NULL"},
+		{"ink_novel", "visibility", "VARCHAR(20) NOT NULL DEFAULT 'private'"},
+		{"ink_novel", "plaza_tags", "VARCHAR(500) NULL"},
 	}
 	for _, a := range additions {
 		var cnt int64
