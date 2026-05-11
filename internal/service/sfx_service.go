@@ -296,7 +296,8 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 ` + sceneCtx.String() + `
 请输出：`
 
-	result, err := s.aiSvc.GenerateWithProvider(tenantID, 0, "sfx_analyze", prompt, "")
+	result, err := s.aiSvc.GenerateWithProvider(tenantID, 0, "sfx_analyze", prompt, "",
+		StoryboardOverrides{TimeoutSeconds: 30})
 	if err != nil {
 		return fmt.Errorf("AI call: %w", err)
 	}
