@@ -580,29 +580,29 @@ func (s *ChapterService) DeleteChapterByNo(novelID uint, chapterNo int) error {
 	return nil
 }
 
-// PublishChapter 将章节状态设为 published（在广场公开展示）
+// PublishChapter 将章节标记为已发布（不改变内容 status）
 func (s *ChapterService) PublishChapter(novelID uint, chapterNo int) (*model.Chapter, error) {
 	chapter, err := s.chapterRepo.GetByNovelAndChapterNo(novelID, chapterNo)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.chapterRepo.UpdateStatus(chapter.ID, novelID, "published"); err != nil {
+	if err := s.chapterRepo.UpdateIsPublished(chapter.ID, novelID, true); err != nil {
 		return nil, err
 	}
-	chapter.Status = "published"
+	chapter.IsPublished = true
 	return chapter, nil
 }
 
-// UnpublishChapter 将章节状态回退为 completed（取消广场展示）
+// UnpublishChapter 取消章节发布（不改变内容 status）
 func (s *ChapterService) UnpublishChapter(novelID uint, chapterNo int) (*model.Chapter, error) {
 	chapter, err := s.chapterRepo.GetByNovelAndChapterNo(novelID, chapterNo)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.chapterRepo.UpdateStatus(chapter.ID, novelID, "completed"); err != nil {
+	if err := s.chapterRepo.UpdateIsPublished(chapter.ID, novelID, false); err != nil {
 		return nil, err
 	}
-	chapter.Status = "completed"
+	chapter.IsPublished = false
 	return chapter, nil
 }
 

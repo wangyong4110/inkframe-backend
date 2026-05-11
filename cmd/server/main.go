@@ -866,7 +866,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-11-v1"
+const schemaVersion = "2026-05-11-v2"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -882,6 +882,9 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_novel", "published_at", "DATETIME(3) NULL"},
 		{"ink_novel", "visibility", "VARCHAR(20) NOT NULL DEFAULT 'private'"},
 		{"ink_novel", "plaza_tags", "VARCHAR(500) NULL"},
+		// ink_chapter 广场发布字段（2026-05-11 新增，与内容状态解耦）
+		{"ink_chapter", "is_published", "TINYINT(1) NOT NULL DEFAULT 0"},
+		{"ink_chapter", "published_at", "DATETIME(3) NULL"},
 	}
 	for _, a := range additions {
 		sql := "ALTER TABLE `" + a.table + "` ADD COLUMN `" + a.col + "` " + a.def
@@ -999,6 +1002,11 @@ func autoMigrate(db *gorm.DB) error {
 		&model.NovelComment{},
 	); err != nil {
 		return err
+	}
+
+	// 数据迁移：将历史 status='published' 的章节修正为 is_published=true, status='completed'
+	if err := db.Exec(`UPDATE ink_chapter SET is_published = 1, status = 'completed' WHERE status = 'published'`).Error; err != nil {
+		logger.Warnf("autoMigrate: chapter status migration failed: %v", err)
 	}
 
 	// 迁移成功后写入新版本号（UPSERT）

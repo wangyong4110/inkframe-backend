@@ -166,6 +166,9 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.POST("/:id/publish", cfg.NovelHandler.PublishNovel)
 			novels.POST("/:id/unpublish", cfg.NovelHandler.UnpublishNovel)
 
+			// 封面
+			novels.POST("/:id/cover/generate", cfg.NovelHandler.GenerateCoverImage)
+
 			// 大纲
 			novels.POST("/:id/outline", cfg.NovelHandler.GenerateOutline)
 

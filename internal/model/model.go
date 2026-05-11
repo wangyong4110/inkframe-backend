@@ -264,9 +264,13 @@ type Chapter struct {
 	HookType      string `json:"hook_type" gorm:"size:30"`       // 章末钩子类型
 	ChapterHook   string `json:"chapter_hook" gorm:"type:text"`  // 章末钩子正文（供下一章生成时使用）
 
-	// 状态
+	// 内容状态（不含发布状态）
 	Status string `json:"status" gorm:"size:20;index:idx_chapter_novel_status,priority:2;default:draft"`
-	// draft=草稿, generating=生成中, completed=已完成, published=已发布
+	// draft=草稿, generating=生成中, completed=已完成
+
+	// 广场发布状态（与内容状态解耦）
+	IsPublished bool       `json:"is_published" gorm:"default:false;index"`
+	PublishedAt *time.Time `json:"published_at"`
 
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`

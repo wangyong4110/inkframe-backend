@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -247,6 +248,57 @@ func (s *NovelService) UpdateNovel(id uint, req *model.UpdateNovelRequest) (*mod
 	return novel, nil
 }
 
+// GenerateCoverImage 使用 AI 为小说生成封面图，并将 URL 写回 cover_image 字段
+func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID uint) (string, error) {
+	novel, err := s.novelRepo.GetByID(novelID)
+	if err != nil {
+		return "", err
+	}
+
+	genreMap := map[string]string{
+		"fantasy":    "fantasy xianxia cultivation magic world",
+		"xianxia":    "xianxia immortal cultivation Chinese fantasy",
+		"urban":      "modern Chinese urban city",
+		"romance":    "romance love story elegant",
+		"historical": "ancient Chinese historical palace dynasty",
+		"scifi":      "science fiction futuristic space technology",
+		"mystery":    "mystery thriller suspense dark",
+		"wuxia":      "Chinese martial arts wuxia sword hero",
+		"horror":     "horror supernatural dark eerie",
+		"apocalypse": "post-apocalyptic wasteland survival",
+		"rebirth":    "time travel rebirth second chance",
+	}
+	genreDesc := genreMap[novel.Genre]
+	if genreDesc == "" {
+		genreDesc = novel.Genre
+	}
+
+	desc := ""
+	if novel.Description != "" && len(novel.Description) <= 150 {
+		desc = " Theme: " + novel.Description + "."
+	}
+
+	prompt := fmt.Sprintf(
+		"Professional book cover illustration for a Chinese novel titled \"%s\".%s "+
+			"Genre: %s. Style: cinematic, atmospheric, high-quality digital art, dramatic lighting, "+
+			"vibrant colors, detailed, no text, no letters, no watermarks.",
+		novel.Title, desc, genreDesc,
+	)
+	negativePrompt := "text, words, letters, watermark, signature, blurry, low quality, ugly, distorted, nsfw"
+
+	ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title})
+	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", prompt, "", "", negativePrompt)
+	if err != nil {
+		return "", fmt.Errorf("generate cover image: %w", err)
+	}
+
+	novel.CoverImage = imageURL
+	if err := s.novelRepo.Update(novel); err != nil {
+		return imageURL, fmt.Errorf("persist cover image: %w", err)
+	}
+	return imageURL, nil
+}
+
 // PublishNovel 发布小说到广场
 func (s *NovelService) PublishNovel(id uint, visibility string) (*model.Novel, error) {
 	novel, err := s.novelRepo.GetByID(id)
@@ -315,14 +367,26 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 		return nil, err
 	}
 
-	// 解析结果
+	// 解析结果：兼容两种 AI 输出格式
+	//   格式 A（预期）：{"title":"...","chapters":[...]}
+	//   格式 B（AI 偶发）：[{"chapter_no":1,...},...]  直接输出数组
 	outline := &OutlineResult{}
 	cleaned := extractJSON(result)
 	if err := json.Unmarshal([]byte(cleaned), outline); err != nil {
-		logger.Printf("GenerateOutline: failed to parse AI response for novel %d: %v", req.NovelID, err)
-		outline = &OutlineResult{
-			Title:    novel.Title,
-			Chapters: []ChapterOutline{},
+		// 尝试格式 B：纯 chapters 数组
+		var chapters []ChapterOutline
+		if err2 := json.Unmarshal([]byte(cleaned), &chapters); err2 == nil && len(chapters) > 0 {
+			logger.Printf("GenerateOutline: novel %d returned array format, wrapping into OutlineResult", req.NovelID)
+			outline = &OutlineResult{
+				Title:    novel.Title,
+				Chapters: chapters,
+			}
+		} else {
+			logger.Printf("GenerateOutline: failed to parse AI response for novel %d: %v (raw len=%d)", req.NovelID, err, len(cleaned))
+			outline = &OutlineResult{
+				Title:    novel.Title,
+				Chapters: []ChapterOutline{},
+			}
 		}
 	}
 
@@ -407,8 +471,9 @@ func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutli
 		}
 	}
 
-	sb.WriteString("\n请以JSON格式返回，格式如下：\n")
+	sb.WriteString("\n请以JSON格式返回，必须是一个 JSON 对象（不是数组），格式严格如下：\n")
 	sb.WriteString(`{"title":"小说标题","chapters":[{"chapter_no":1,"title":"章节标题","summary":"章节概述","word_count":2500,"plot_points":["剧情点1","剧情点2"]}]}`)
+	sb.WriteString("\n注意：最外层必须是 {} 对象，chapters 是其中的数组字段，禁止直接返回 [] 数组。")
 
 	return sb.String()
 }

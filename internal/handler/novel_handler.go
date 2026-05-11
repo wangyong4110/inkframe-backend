@@ -443,6 +443,31 @@ func (h *NovelHandler) UnpublishNovel(c *gin.Context) {
 	respondOK(c, gin.H{"unpublished": true})
 }
 
+// GenerateCoverImage 使用 AI 为小说生成封面（异步不适用，直接同步返回 URL）
+// POST /api/v1/novels/:id/cover/generate
+func (h *NovelHandler) GenerateCoverImage(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	novel, err := h.novelService.GetNovel(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found")
+		return
+	}
+	if tenantID := getTenantID(c); novel.TenantID != tenantID {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
+	url, err := h.novelService.GenerateCoverImage(c.Request.Context(), getTenantID(c), uint(id))
+	if err != nil {
+		logger.Printf("[NovelHandler] GenerateCoverImage: novelID=%d err=%v", id, err)
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"url": url})
+}
+
 // SyncCharacterSnapshots 同步章节角色状态快照
 // POST /api/v1/novels/:id/chapters/:chapter_no/character-snapshots
 func (h *NovelHandler) SyncCharacterSnapshots(c *gin.Context) {

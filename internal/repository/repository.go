@@ -445,10 +445,24 @@ func (r *ChapterRepository) UpdateStatus(id, novelID uint, status string) error 
 // ListPublishedByNovel 获取小说已发布章节（按章节号升序）
 func (r *ChapterRepository) ListPublishedByNovel(novelID uint) ([]*model.Chapter, error) {
 	var chapters []*model.Chapter
-	err := r.db.Select("id, novel_id, tenant_id, uuid, chapter_no, title, summary, status, word_count, created_at, updated_at").
-		Where("novel_id = ? AND status = ?", novelID, "published").
+	err := r.db.Select("id, novel_id, tenant_id, uuid, chapter_no, title, summary, status, is_published, published_at, word_count, created_at, updated_at").
+		Where("novel_id = ? AND is_published = ?", novelID, true).
 		Order("chapter_no ASC").Find(&chapters).Error
 	return chapters, err
+}
+
+// UpdateIsPublished 更新章节广场发布状态（不修改内容 status）
+func (r *ChapterRepository) UpdateIsPublished(id, novelID uint, isPublished bool) error {
+	updates := map[string]interface{}{"is_published": isPublished}
+	if isPublished {
+		now := time.Now()
+		updates["published_at"] = &now
+	}
+	if err := r.db.Model(&model.Chapter{}).Where("id = ? AND novel_id = ?", id, novelID).Updates(updates).Error; err != nil {
+		return err
+	}
+	r.invalidateListCache(novelID)
+	return nil
 }
 
 // Delete 删除章节（novelID 用于缓存失效）
@@ -477,14 +491,14 @@ func (r *ChapterRepository) ListPendingCrawl(novelID uint) ([]*model.Chapter, er
 	return chapters, err
 }
 
-// UpdateCrawledContent 将爬取完成的内容写回章节
+// UpdateCrawledContent 将爬取完成的内容写回章节（状态置为 completed，发布状态独立管理）
 func (r *ChapterRepository) UpdateCrawledContent(id uint, title, content string, wordCount int) error {
 	return r.db.Model(&model.Chapter{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"title":      title,
 		"content":    content,
 		"outline":    "",
 		"word_count": wordCount,
-		"status":     "published",
+		"status":     "completed",
 	}).Error
 }
 
