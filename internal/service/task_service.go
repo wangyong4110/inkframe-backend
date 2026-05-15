@@ -17,6 +17,7 @@ const (
 	TaskTypeVoiceGen      = "voice_gen"
 	TaskTypeImageGen      = "image_gen"
 	TaskTypeThreeView     = "three_view"
+	TaskTypeFaceCloseup   = "face_closeup"
 	TaskTypeCharGen             = "char_gen"
 	TaskTypeItemExtract         = "item_extract"
 	TaskTypePlotExtract         = "plot_extract"

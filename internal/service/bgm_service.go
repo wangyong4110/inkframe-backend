@@ -251,57 +251,15 @@ func (s *BGMService) AnalyzeBGMForVideo(
 		return nil, fmt.Errorf("marshal briefs: %w", err)
 	}
 
-	prompt := fmt.Sprintf(`你是资深影视配乐顾问，深度了解 Jamendo 和 Pixabay 音乐平台的曲库结构与搜索逻辑。
-
-以下是视频所有分镜信息（JSON数组）：
-%s
-
-## 任务
-将情绪/氛围相近的连续分镜归为一个 BGM 分段（建议每段 3~8 个分镜，避免频繁换曲），输出每段的配乐方案。
-
-## 关键：search_queries 必须符合 Jamendo/Pixabay 平台词汇
-
-### Jamendo 实际有效词汇（按类别）
-**流派标签**（高权重）：ambient / cinematic / orchestral / classical / electronic / folk / world / acoustic / new-age / meditation
-**情绪标签**：melancholic / uplifting / peaceful / dramatic / dark / mysterious / energetic / hopeful / tense / epic / ethereal / majestic / serene / nostalgic / triumphant
-**乐器标签**：piano / guitar / strings / violin / cello / harp / flute / erhu / percussion / synthesizer / drums / brass / choir
-**东方/民族标签**：chinese / asian / oriental / ethnic / traditional / folk / guqin / pipa / erhu
-
-### 场景→Jamendo 标签映射（请参考）
-- 修炼/突破/感悟 → ambient mysterious ethereal / cinematic orchestral epic / dark mysterious oriental
-- 战斗/武打 → cinematic orchestral dramatic / epic percussion strings tense / dark action energetic
-- 离别/悲情 → melancholic strings piano / sad orchestral emotional / chinese erhu melancholic folk
-- 阴谋/对峙/悬疑 → dark mysterious tense / cinematic suspense strings / ambient dark ominous
-- 日常/行走/探索 → acoustic folk peaceful / cinematic adventure world / ambient nature serene
-- 胜利/高潮 → epic orchestral triumphant / uplifting cinematic majestic / dramatic percussion brass
-- 温情/感情戏 → piano romantic peaceful / strings emotional gentle / acoustic folk nostalgic
-- 宫廷/大场面 → orchestral majestic grand / cinematic epic strings brass / classical dramatic
-
-### 搜索词构成规则
-- 每条 2~5 个词（Jamendo fuzzytags 拆词搜索，太长会稀释权重）
-- 组合格式：[流派] [情绪] [主乐器] 或 [文化] [流派] [情绪]
-- 前两条针对 Jamendo，第三条可以用完整短语（供 Pixabay 自然语言搜索）
-
-## 输出格式（严格 JSON 数组，禁止输出任何其他内容）
-[
-  {
-    "start_shot_no": 1,
-    "end_shot_no": 5,
-    "mood": "紧张压抑的修炼对峙",
-    "tempo": "medium",
-    "search_queries": [
-      "cinematic orchestral dark tense",
-      "mysterious ambient oriental strings",
-      "chinese xianxia cultivation tense dramatic strings"
-    ]
-  }
-]`, string(briefsJSON))
-
-	if userPrompt != "" {
-		prompt += "\n\n额外背景信息（优先参考，用于调整BGM风格/情绪）：\n" + userPrompt
+	bgmPrompt, err := renderPrompt("bgm_analyze", map[string]interface{}{
+		"ShotsJSON":  string(briefsJSON),
+		"UserPrompt": userPrompt,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render bgm_analyze: %w", err)
 	}
 
-	raw, err := s.aiSvc.GenerateWithProvider(tenantID, 0, "bgm_analyze", prompt, "")
+	raw, err := s.aiSvc.GenerateWithProvider(tenantID, 0, "bgm_analyze", bgmPrompt, "")
 	if err != nil {
 		return nil, fmt.Errorf("BGM AI analysis failed: %w", err)
 	}

@@ -1,14 +1,12 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"strings"
 	"sync"
-	"text/template"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -42,8 +40,6 @@ type CreateSceneAnchorReq struct {
 	Type           string `json:"type"`
 	Description    string `json:"description"`
 	PromptLock     string `json:"prompt_lock"`
-	StyleTokens    string `json:"style_tokens"`
-	Notes          string `json:"notes"`
 	Variant        string `json:"variant"`
 	ParentAnchorID *uint  `json:"parent_anchor_id"`
 }
@@ -54,8 +50,6 @@ type UpdateSceneAnchorReq struct {
 	Type           string `json:"type"`
 	Description    string `json:"description"`
 	PromptLock     string `json:"prompt_lock"`
-	StyleTokens    string `json:"style_tokens"`
-	Notes          string `json:"notes"`
 	Variant        string `json:"variant"`
 	ParentAnchorID *uint  `json:"parent_anchor_id"`
 }
@@ -81,8 +75,6 @@ func (s *SceneAnchorService) Create(tenantID, novelID uint, req CreateSceneAncho
 		Type:           req.Type,
 		Description:    req.Description,
 		PromptLock:     req.PromptLock,
-		StyleTokens:    req.StyleTokens,
-		Notes:          req.Notes,
 		Variant:        req.Variant,
 		ParentAnchorID: req.ParentAnchorID,
 	}
@@ -108,12 +100,6 @@ func (s *SceneAnchorService) Update(id uint, req UpdateSceneAnchorReq) (*model.S
 	}
 	if req.PromptLock != "" {
 		anchor.PromptLock = req.PromptLock
-	}
-	if req.StyleTokens != "" {
-		anchor.StyleTokens = req.StyleTokens
-	}
-	if req.Notes != "" {
-		anchor.Notes = req.Notes
 	}
 	if req.Variant != "" {
 		anchor.Variant = req.Variant
@@ -175,9 +161,6 @@ func (s *SceneAnchorService) BuildPromptFragment(id uint) (promptFragment string
 	if anchor.PromptLock != "" {
 		parts = append(parts, anchor.PromptLock)
 	}
-	if anchor.StyleTokens != "" {
-		parts = append(parts, anchor.StyleTokens)
-	}
 	fragment := strings.Join(parts, ", ")
 	if anchor.Name != "" && fragment != "" {
 		fragment = fmt.Sprintf("[scene: %s] %s", anchor.Name, fragment)
@@ -201,7 +184,6 @@ type extractedAnchor struct {
 	Type        string `json:"type"`
 	Description string `json:"description"`
 	PromptLock  string `json:"prompt_lock"`
-	StyleTokens string `json:"style_tokens"`
 }
 
 // parseAnchorJSONResult parses the LLM response into []extractedAnchor.
@@ -247,22 +229,17 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 	}
 
 	// 渲染 prompt
-	tmplStr := loadPromptTemplate("scene_anchor_extract.tmpl")
-	tmpl, err := template.New("scene_anchor_extract").Parse(tmplStr)
-	if err != nil {
-		return nil, fmt.Errorf("parse scene_anchor_extract.tmpl: %w", err)
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
+	anchorPrompt, err := renderPrompt("scene_anchor_extract", map[string]interface{}{
 		"NovelTitle":      novelTitle,
 		"ExistingAnchors": existingEntries,
 		"ChapterContent":  truncateForPrompt(chapterContent, 8000),
-	}); err != nil {
-		return nil, fmt.Errorf("render scene_anchor_extract.tmpl: %w", err)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render scene_anchor_extract: %w", err)
 	}
 
 	// 调用 LLM（带租户 ID，确保使用正确的 provider）
-	jsonStr, err := s.aiSvc.generateJSONForTenant(tenantID, novelID, "scene_anchor_extract", buf.String(), 2)
+	jsonStr, err := s.aiSvc.generateJSONForTenant(tenantID, novelID, "scene_anchor_extract", anchorPrompt, 2)
 	if err != nil {
 		return nil, fmt.Errorf("LLM extract anchors: %w", err)
 	}
@@ -291,7 +268,6 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 			Type:        anchorType,
 			Description: e.Description,
 			PromptLock:  e.PromptLock,
-			StyleTokens: e.StyleTokens,
 		}
 		if err := s.repo.Create(anchor); err != nil {
 			logger.Printf("[SceneAnchorService] create anchor %q: %v", e.Name, err)
@@ -330,9 +306,6 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	}
 	if anchor.PromptLock != "" {
 		parts = append(parts, anchor.PromptLock)
-	}
-	if anchor.StyleTokens != "" {
-		parts = append(parts, anchor.StyleTokens)
 	}
 	parts = append(parts, "scene background, no characters, cinematic composition")
 	prompt := strings.Join(parts, ", ")

@@ -1,11 +1,9 @@
 package service
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
-	"text/template"
 )
 
 // extractJSON 从 AI 输出中提取纯 JSON 字符串。
@@ -248,15 +246,3 @@ func unmarshalAIJSON[T any](raw string) (*T, error) {
 	return &result, nil
 }
 
-// renderTemplate parses and executes a text/template with data, returning the rendered string.
-func renderTemplate(name, tmplStr string, data interface{}) (string, error) {
-	tmpl, err := template.New(name).Parse(tmplStr)
-	if err != nil {
-		return "", fmt.Errorf("renderTemplate %s parse: %w", name, err)
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("renderTemplate %s execute: %w", name, err)
-	}
-	return buf.String(), nil
-}

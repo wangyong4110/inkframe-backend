@@ -1,13 +1,13 @@
-你是一位专业的小说编辑，请为以下章节段落（第{{.StartChapter}}-{{.EndChapter}}章）生成弧光摘要。
+你是一位专业的小说编辑，请为以下章节段落（第{{ StartChapter }}-{{ EndChapter }}章）生成弧光摘要。
 
 # 任务
-这段内容是《{{.NovelTitle}}》第{{.ArcNo}}弧（第{{.StartChapter}}-{{.EndChapter}}章）。
+这段内容是《{{ NovelTitle }}》第{{ ArcNo }}弧（第{{ StartChapter }}-{{ EndChapter }}章）。
 请生成一份供后续章节写作参考的结构化摘要，帮助AI写作时保持长期连贯性。
 
 # 章节摘要列表
-{{range .ChapterSummaries}}
-【第{{.ChapterNo}}章「{{.Title}}」】{{.Summary}}
-{{end}}
+{% for ch in ChapterSummaries %}
+【第{{ ch.ChapterNo }}章「{{ ch.Title }}」】{{ ch.Summary }}
+{% endfor %}
 
 # 输出格式（JSON，不要markdown代码块）
 {

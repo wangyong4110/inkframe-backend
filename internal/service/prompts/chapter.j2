@@ -1,40 +1,40 @@
 你是一位专业的小说作家，擅长创作引人入胜的章节内容。
 
 # 任务
-请根据提供的信息创作小说第{{.ChapterNo}}章的完整内容。
+请根据提供的信息创作小说第{{ ChapterNo }}章的完整内容。
 
 # 小说信息
-- 标题：{{.Novel.Title}}
-- 类型：{{.Novel.Genre}}
-- 风格：{{.Style}}
+- 标题：{{ Novel.Title }}
+- 类型：{{ Novel.Genre }}
+- 风格：{{ Style }}
 
 # 章节信息
-- 章节号：第{{.ChapterNo}}章
-- 章节标题：{{.Chapter.Title}}
-- 章节概述：{{.Chapter.Summary}}
-- 要求字数：{{.WordCount}}字
+- 章节号：第{{ ChapterNo }}章
+- 章节标题：{{ Chapter.Title }}
+- 章节概述：{{ Chapter.Summary }}
+- 要求字数：{{ WordCount }}字
 
 # 前情提要
-{{range .RecentChapters}}
-第{{.ChapterNo}}章「{{.Title}}」：{{.Summary}}
-{{end}}
+{% for ch in RecentChapters %}
+第{{ ch.ChapterNo }}章「{{ ch.Title }}」：{{ ch.Summary }}
+{% endfor %}
 
 # 主要角色设定
-{{range .Characters}}
-- {{.Name}}：{{.Personality}}
-{{end}}
+{% for char in Characters %}
+- {{ char.Name }}：{{ char.Personality }}
+{% endfor %}
 
-{{if .CharacterStates}}
+{% if CharacterStates %}
 # 角色当前状态（上章末）
 ⚠️ 本章角色行为必须与以下状态保持连续性：
-{{.CharacterStates}}
-{{end}}
+{{ CharacterStates }}
+{% endif %}
 
-{{if .Foreshadows}}
+{% if Foreshadows %}
 # 待兑现伏笔（可酌情呼应）
 以下伏笔尚未兑现，本章可选择性地推进或呼应：
-{{.Foreshadows}}
-{{end}}
+{{ Foreshadows }}
+{% endif %}
 
 # 创作要求
 1. 保持与前文的剧情连贯性，角色位置/状态必须与上章末一致
@@ -46,13 +46,13 @@
 7. 情感描写真实自然
 8. 章节末尾设置悬念钩子，吸引读者继续阅读
 
-{{if .UserPrompt}}
+{% if UserPrompt %}
 # 创作要求（用户指定）
-{{.UserPrompt}}
-{{end}}
+{{ UserPrompt }}
+{% endif %}
 
-请开始创作第{{.ChapterNo}}章：
+请开始创作第{{ ChapterNo }}章：
 
-第{{.ChapterNo}}章 {{.Chapter.Title}}
+第{{ ChapterNo }}章 {{ Chapter.Title }}
 
-正文（{{.WordCount}}字左右）：
+正文（{{ WordCount }}字左右）：

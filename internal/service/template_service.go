@@ -1,79 +1,120 @@
 package service
 
 import (
-	"bytes"
 	"embed"
+	"encoding/json"
 	"fmt"
-	"text/template"
+	"strings"
+	"sync"
+
+	"github.com/flosch/pongo2/v4"
 )
 
 //go:embed prompts/*
 var promptTemplates embed.FS
 
-// loadPromptTemplate reads a template file from the embedded FS.
-// Returns empty string on error (callers should handle gracefully).
-func loadPromptTemplate(name string) string {
-	data, err := promptTemplates.ReadFile("prompts/" + name)
+// templateCache holds compiled pongo2 templates keyed by name (without extension).
+var templateCache sync.Map
+
+// renderPrompt renders a Jinja2 prompt template by name (without extension).
+// ctx is a map[string]interface{} of template variables.
+func renderPrompt(name string, ctx map[string]interface{}) (string, error) {
+	var tpl *pongo2.Template
+	if cached, ok := templateCache.Load(name); ok {
+		tpl = cached.(*pongo2.Template)
+	} else {
+		data, err := promptTemplates.ReadFile("prompts/" + name + ".j2")
+		if err != nil {
+			return "", fmt.Errorf("load template %s: %w", name, err)
+		}
+		tpl, err = pongo2.FromString(string(data))
+		if err != nil {
+			return "", fmt.Errorf("parse template %s: %w", name, err)
+		}
+		templateCache.Store(name, tpl)
+	}
+	if ctx == nil {
+		ctx = map[string]interface{}{}
+	}
+	out, err := tpl.Execute(pongo2.Context(ctx))
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("render template %s: %w", name, err)
 	}
-	return string(data)
+	return out, nil
 }
 
-// TemplateService 模板服务
-type TemplateService struct {
-	templates map[string]*template.Template
+// toContext converts any value to pongo2.Context via JSON round-trip.
+// Accepts map[string]interface{} directly or converts structs via JSON.
+func toContext(data interface{}) (pongo2.Context, error) {
+	if data == nil {
+		return pongo2.Context{}, nil
+	}
+	if ctx, ok := data.(map[string]interface{}); ok {
+		return pongo2.Context(ctx), nil
+	}
+	b, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("marshal template data: %w", err)
+	}
+	var ctx map[string]interface{}
+	if err := json.Unmarshal(b, &ctx); err != nil {
+		return nil, fmt.Errorf("unmarshal template context: %w", err)
+	}
+	return pongo2.Context(ctx), nil
 }
 
-// NewTemplateService 创建模板服务
+// TemplateService 模板服务（保留向后兼容 API）
+type TemplateService struct{}
+
+// NewTemplateService 创建模板服务，预验证所有 .j2 模板语法
 func NewTemplateService() (*TemplateService, error) {
-	svc := &TemplateService{
-		templates: make(map[string]*template.Template),
-	}
-
-	// 加载所有模板文件
 	entries, err := promptTemplates.ReadDir("prompts")
 	if err != nil {
-		return nil, fmt.Errorf("failed to read templates directory: %w", err)
+		return nil, fmt.Errorf("read prompts dir: %w", err)
 	}
-
 	for _, entry := range entries {
-		if entry.IsDir() {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".j2") {
 			continue
 		}
-
-		// 读取模板文件
-		content, err := promptTemplates.ReadFile("prompts/" + entry.Name())
+		data, err := promptTemplates.ReadFile("prompts/" + entry.Name())
 		if err != nil {
-			return nil, fmt.Errorf("failed to read template %s: %w", entry.Name(), err)
+			return nil, fmt.Errorf("read template %s: %w", entry.Name(), err)
 		}
-
-		// 解析模板
-		tmplName := entry.Name()[:len(entry.Name())-5] // 去掉 .tmpl 扩展名
-		tmpl, err := template.New(tmplName).Parse(string(content))
+		name := strings.TrimSuffix(entry.Name(), ".j2")
+		tpl, err := pongo2.FromString(string(data))
 		if err != nil {
-			return nil, fmt.Errorf("failed to parse template %s: %w", entry.Name(), err)
+			return nil, fmt.Errorf("parse template %s: %w", entry.Name(), err)
 		}
-
-		svc.templates[tmplName] = tmpl
+		templateCache.Store(name, tpl)
 	}
-
-	return svc, nil
+	return &TemplateService{}, nil
 }
 
-// Render 渲染模板
+// Render 渲染模板（兼容旧 API，data 可为 map 或 struct 指针）
 func (s *TemplateService) Render(name string, data interface{}) (string, error) {
-	tmpl, ok := s.templates[name]
-	if !ok {
-		return "", fmt.Errorf("template not found: %s", name)
+	ctx, err := toContext(data)
+	if err != nil {
+		return "", err
 	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("failed to execute template %s: %w", name, err)
+	var tpl *pongo2.Template
+	if cached, ok := templateCache.Load(name); ok {
+		tpl = cached.(*pongo2.Template)
+	} else {
+		raw, err := promptTemplates.ReadFile("prompts/" + name + ".j2")
+		if err != nil {
+			return "", fmt.Errorf("template not found: %s", name)
+		}
+		tpl, err = pongo2.FromString(string(raw))
+		if err != nil {
+			return "", fmt.Errorf("parse template %s: %w", name, err)
+		}
+		templateCache.Store(name, tpl)
 	}
-
-	return buf.String(), nil
+	out, err := tpl.Execute(ctx)
+	if err != nil {
+		return "", fmt.Errorf("render template %s: %w", name, err)
+	}
+	return out, nil
 }
 
 // RenderNovelOutlinePrompt 渲染小说大纲提示词
@@ -102,7 +143,7 @@ func (s *TemplateService) RenderStoryboardPrompt(data *StoryboardTemplateData) (
 }
 
 // ============================================
-// 模板数据结构
+// 模板数据结构（向后兼容）
 // ============================================
 
 // NovelOutlineTemplateData 小说大纲模板数据
@@ -125,8 +166,8 @@ type ChapterTemplateData struct {
 	UserPrompt      string
 	RecentChapters  []ChapterInfo
 	Characters      []CharacterInfo
-	CharacterStates string // 角色当前状态快照（格式化文本）
-	Foreshadows     string // 待兑现伏笔列表（格式化文本）
+	CharacterStates string
+	Foreshadows     string
 }
 
 // CharacterInfo 角色信息
@@ -157,7 +198,7 @@ type SceneTemplateData struct {
 
 // StoryboardCharacterInfo 分镜角色外貌信息
 type StoryboardCharacterInfo struct {
-	Name      string
+	Name       string
 	Appearance string
 	HairColor  string
 	Outfit     string
@@ -169,10 +210,10 @@ type StoryboardTemplateData struct {
 	NovelTitle     string
 	ChapterNo      int
 	ChapterContent string
-	Characters     []StoryboardCharacterInfo // 角色外貌参考
-	ArtStyle       string                    // 视觉风格
-	ColorTone      string                    // 色彩基调
-	LightingStyle  string                    // 光影风格
+	Characters     []StoryboardCharacterInfo
+	ArtStyle       string
+	ColorTone      string
+	LightingStyle  string
 }
 
 // NovelInfo 小说信息

@@ -56,24 +56,14 @@ func (s *QualityControlService) runAIQualityCheck(chapter *model.Chapter, novel 
 		contentPreview = contentPreview[:3000] + "...(已截断)"
 	}
 
-	prompt := fmt.Sprintf(`请从以下维度评估这段章节内容（0-10分制），并以JSON返回：
-1. logic（逻辑连贯性）：情节是否自洽，因果关系是否合理
-2. character（角色一致性）：角色行为是否符合其性格设定
-3. writing（文笔质量）：语言是否生动，描写是否细腻，是否有重复词汇
-4. pacing（节奏把控）：场景切换是否流畅，节奏是否合理，有无张力
-5. dramatic（戏剧性）：综合评估以下三项 ——
-   - 冲突密度：主角是否遭遇阻碍/意外/对立，还是一路顺畅？（有阻碍得高分）
-   - 反转次数：是否出现期待落空或局势骤变？（平铺直叙得低分）
-   - 悬念收尾：章节结尾是否留下未解答的问题/威胁/情感钩子？（平淡收场得低分）
-
-%s
-章节标题：%s
-章节内容：
-%s
-
-请只返回以下JSON格式，不要包含任何markdown或说明文字：
-{"logic":8,"character":7,"writing":9,"pacing":8,"dramatic":7,"issues":["问题1","问题2"],"suggestions":["建议1","建议2"]}`,
-		novelInfo, chapter.Title, contentPreview)
+	prompt, err := renderPrompt("quality_check", map[string]interface{}{
+		"NovelInfo":      novelInfo,
+		"ChapterTitle":   chapter.Title,
+		"ChapterContent": contentPreview,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render quality_check: %w", err)
+	}
 
 	result, err := s.aiSvc.GenerateWithProvider(novel.TenantID, novel.ID, "quality_check", prompt, s.aiSvc.taskRouting.QualityCheck)
 	if err != nil {
@@ -446,15 +436,15 @@ func (s *QualityControlService) RefineWithSuggestions(chapterID uint, suggestion
 		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, sg))
 	}
 
-	prompt := fmt.Sprintf(`你是一位专业的小说编辑。请根据以下改进建议，对章节内容进行精修。
-要求：保持原有情节、人物和对话不变，只优化写作质量；不添加任何解释说明，直接返回修改后的完整内容。
+	prompt, err := renderPrompt("quality_refine", map[string]interface{}{
+		"Suggestions": sb.String(),
+		"Content":     chapter.Content,
+	})
+	if err != nil {
+		return "", fmt.Errorf("render quality_refine: %w", err)
+	}
 
-改进建议：
-%s
-原始内容：
-%s`, sb.String(), chapter.Content)
-
-	result, err := s.aiSvc.GenerateWithProvider(tenantID, chapter.NovelID, "quality_check", prompt, "")
+	result, err := s.aiSvc.GenerateWithProvider(tenantID, chapter.NovelID, "quality_refine", prompt, "")
 	if err != nil {
 		return "", fmt.Errorf("AI refine failed: %w", err)
 	}

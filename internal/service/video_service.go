@@ -719,9 +719,9 @@ func (s *VideoService) buildStoryboardPrompt(
 	// ── 字段规范（核心约束，AI 必须严格遵守）──────────────────────────
 	sb.WriteString(`【输出字段规范——严格遵守，违反规范将导致输出无法使用】
 ▸ camera_type（运镜方式）——必须体现多样性，禁止全部使用 static
-  可选值（选其中一个填入）：static | pan | zoom | tracking | dolly | crane
-  含义：static=固定机位，pan=水平平移，zoom=推拉，tracking=跟踪角色，dolly=移动拍摄，crane=升降
-  分布建议：static 不超过全部分镜的 40%，对话/动作场景优先用 pan/zoom/tracking
+  可选值（选其中一个填入）：static | push | pull | pan | track | crane_up | crane_down | follow | arc | tilt | whip_pan | zoom
+  含义：static=固定机位，push=推镜头(向前推进)，pull=拉镜头(向后拉远)，pan=摇镜头(水平旋转)，track=移镜头(横向平移)，crane_up=升镜头，crane_down=降镜头，follow=跟镜头(跟随主体)，arc=环绕镜头(围绕主体环绕)，tilt=俯仰镜头(垂直俯仰)，whip_pan=甩镜头(快速甩动)，zoom=变焦镜头(焦距变化)
+  分布建议：static 不超过全部分镜的 40%，动作场景用 push/follow/arc，对话场景用 pan/tilt，环境展示用 pull/track/crane_up
 
 ▸ camera_angle（摄像机角度）——选其中一个填入
   可选值：eye_level | high | low | dutch | overhead | POV
@@ -1145,8 +1145,26 @@ func buildMotionPrompt(shot *model.StoryboardShot) string {
 
 	// 摄像机运动翻译
 	switch shot.CameraType {
+	case "push":
+		parts = append(parts, "slow push in, camera moves forward toward subject")
+	case "pull":
+		parts = append(parts, "slow pull back, camera moves away from subject")
 	case "pan":
 		parts = append(parts, "smooth camera pan")
+	case "track":
+		parts = append(parts, "lateral tracking shot, camera moves sideways")
+	case "crane_up":
+		parts = append(parts, "crane shot moving upward, rising camera")
+	case "crane_down":
+		parts = append(parts, "crane shot moving downward, descending camera")
+	case "follow":
+		parts = append(parts, "follow shot tracking subject movement")
+	case "arc":
+		parts = append(parts, "arc shot, camera orbits around subject")
+	case "tilt":
+		parts = append(parts, "camera tilt, vertical pivot movement")
+	case "whip_pan":
+		parts = append(parts, "whip pan, fast swinging camera movement")
 	case "zoom":
 		// 根据情绪决定推拉方向
 		if strings.Contains(shot.EmotionalTone, "紧张") || strings.Contains(shot.EmotionalTone, "压迫") || strings.Contains(shot.EmotionalTone, "危险") {
@@ -1154,10 +1172,13 @@ func buildMotionPrompt(shot *model.StoryboardShot) string {
 		} else {
 			parts = append(parts, "slow zoom out")
 		}
+	// 向后兼容旧值
 	case "tracking":
 		parts = append(parts, "tracking shot following subject")
 	case "dolly":
 		parts = append(parts, "smooth dolly movement")
+	case "crane":
+		parts = append(parts, "crane shot, vertical camera movement")
 	default: // static
 		parts = append(parts, "static locked-off shot, subtle breathing movement")
 	}
@@ -1252,7 +1273,14 @@ func qualityTierImageParams(tier string) (width, steps int, cfgScale float64) {
 // validCameraType 验证摄像机类型，无效时返回默认值 "static"。
 // 注意：如日志出现 "invalid camera_type"，说明 AI 输出了管道分隔枚举字符串或其他非法值，需检查 Prompt 格式。
 func validCameraType(t string) string {
-	valid := map[string]bool{"static": true, "pan": true, "zoom": true, "tracking": true, "dolly": true, "crane": true}
+	valid := map[string]bool{
+		// 当前规范值（10种常见运镜）
+		"static": true, "push": true, "pull": true, "pan": true,
+		"track": true, "crane_up": true, "crane_down": true,
+		"follow": true, "arc": true, "tilt": true, "whip_pan": true, "zoom": true,
+		// 向后兼容旧值
+		"tracking": true, "dolly": true, "crane": true,
+	}
 	if valid[t] {
 		return t
 	}
@@ -2065,7 +2093,7 @@ func buildStoryboardOptimizePrompt(shots []*model.StoryboardShot, review *model.
 - 只输出需要修改的镜头，无需修改的镜头不要输出
 - 每个字段只有在有实质性改动时才输出，不改的字段不要输出
 - description 用英文，其余字段用中文
-- camera_type 取值: static/pan/zoom/tracking/dolly
+- camera_type 取值: static/push/pull/pan/track/crane_up/crane_down/follow/arc/tilt/whip_pan/zoom
 - camera_angle 取值: eye_level/low/high/dutch
 - shot_size 取值: wide/medium/close_up/extreme_close_up
 - transition 取值: cut/fade/dissolve/wipe
@@ -2656,10 +2684,10 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	}
 
 	// charBestImage 返回角色的最佳参考图 URL。
-	// 优先级：ThreeViewFront（三视图正面，一致性最强）> Portrait（肖像）
+	// 优先级：ThreeViewSheet（三视图合图，一致性最强）> Portrait（肖像）
 	charBestImage := func(c *model.Character) string {
-		if c.ThreeViewFront != "" {
-			return c.ThreeViewFront
+		if c.ThreeViewSheet != "" {
+			return c.ThreeViewSheet
 		}
 		return c.Portrait
 	}
@@ -2676,9 +2704,9 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				if img == "" {
 					continue
 				}
-				if char.ThreeViewFront != "" {
+				if char.ThreeViewSheet != "" {
 					characterPortrait = img
-					refSource = fmt.Sprintf("charID=%d ThreeViewFront", char.ID)
+					refSource = fmt.Sprintf("charID=%d ThreeViewSheet", char.ID)
 					break // 三视图是最优选择，找到即停
 				}
 				if characterPortrait == "" {
@@ -2724,9 +2752,9 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 						if ok && char != nil {
 							img := charBestImage(char)
 							if img != "" {
-								if char.ThreeViewFront != "" {
+								if char.ThreeViewSheet != "" {
 									characterPortrait = img
-									refSource = fmt.Sprintf("inline name=%q ThreeViewFront", sc.Name)
+									refSource = fmt.Sprintf("inline name=%q ThreeViewSheet", sc.Name)
 									break
 								}
 								if characterPortrait == "" {
@@ -2777,25 +2805,6 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				promptText = fragment + ", " + promptText
 			}
 			sceneRefImage = refURL
-		}
-	}
-
-	// 注入场景锚点的光照锁定关键词（确保同一场景跨镜头光照一致）
-	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
-		if anchor, anchorErr := s.sceneAnchorSvc.GetByID(*shot.SceneAnchorID); anchorErr == nil && anchor != nil {
-			var lightParts []string
-			if anchor.LightingKeywords != "" {
-				lightParts = append(lightParts, anchor.LightingKeywords)
-			}
-			if anchor.TimeOfDay != "" {
-				lightParts = append(lightParts, anchor.TimeOfDay+" lighting")
-			}
-			if anchor.Weather != "" {
-				lightParts = append(lightParts, anchor.Weather+" weather")
-			}
-			if len(lightParts) > 0 {
-				promptText += ", " + strings.Join(lightParts, ", ")
-			}
 		}
 	}
 
@@ -4088,14 +4097,26 @@ func (s *VideoService) generateKenBurnsClip(shot *model.StoryboardShot, imagePat
 	// 根据摄像机类型选择 zoompan 动效
 	var zoompan string
 	switch shot.CameraType {
-	case "zoom":
-		// 明显放大
+	case "zoom", "push":
+		// 推镜/变焦：明显放大，模拟向前推进
 		zoompan = fmt.Sprintf("zoompan=z='min(zoom+0.002,1.5)':d=%d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'", totalFrames)
-	case "pan":
-		// 水平平移（从左向右）
+	case "pull":
+		// 拉镜：缩小，模拟向后拉远（从1.4缩到1.0）
+		zoompan = fmt.Sprintf("zoompan=z='max(1.4-t*0.4/%.1f,1.0)':d=%d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'", duration, totalFrames)
+	case "pan", "track":
+		// 摇镜/移镜：水平平移
 		zoompan = fmt.Sprintf("zoompan=z=1.3:d=%d:x='trunc(iw/2-(iw/zoom/2)+t*((iw-(iw/zoom))/%.1f))':y='ih/2-(ih/zoom/2)'", totalFrames, duration)
+	case "crane_up":
+		// 升镜：向上平移
+		zoompan = fmt.Sprintf("zoompan=z=1.3:d=%d:x='iw/2-(iw/zoom/2)':y='trunc(ih-(ih/zoom)-t*((ih-(ih/zoom))/%.1f))'", totalFrames, duration)
+	case "crane_down":
+		// 降镜：向下平移
+		zoompan = fmt.Sprintf("zoompan=z=1.3:d=%d:x='iw/2-(iw/zoom/2)':y='trunc(t*((ih-(ih/zoom))/%.1f))'", totalFrames, duration)
+	case "whip_pan":
+		// 甩镜：快速水平扫过
+		zoompan = fmt.Sprintf("zoompan=z=1.2:d=%d:x='trunc(iw/2-(iw/zoom/2)+t*((iw-(iw/zoom))/%.1f)*2)':y='ih/2-(ih/zoom/2)'", totalFrames, duration)
 	default:
-		// 默认轻微放大（Ken Burns 经典效果）
+		// static / follow / arc / tilt / 旧值：默认轻微放大（Ken Burns 经典效果）
 		zoompan = fmt.Sprintf("zoompan=z='min(zoom+0.0008,1.2)':d=%d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'", totalFrames)
 	}
 

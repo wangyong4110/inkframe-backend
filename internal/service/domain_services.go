@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,7 +8,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"text/template"
 	"time"
 
 	"github.com/google/uuid"
@@ -84,22 +82,17 @@ func (s *CharacterService) extractCharNamesFromContent(
 	tenantID, novelID uint,
 	novelTitle, genre, content string,
 ) ([]charNameEntry, error) {
-	tmplStr := loadPromptTemplate("extract_character_names.tmpl")
-	tmpl, err := template.New("extract_character_names").Parse(tmplStr)
-	if err != nil {
-		return nil, fmt.Errorf("parse template: %w", err)
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
+	prompt, err := renderPrompt("extract_character_names", map[string]interface{}{
 		"NovelTitle":    novelTitle,
 		"Genre":         genre,
 		"Summaries":     content,
 		"ExistingNames": "",
-	}); err != nil {
-		return nil, fmt.Errorf("render template: %w", err)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render extract_character_names: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_character_names", buf.String(), "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_character_names", prompt, "")
 	if err != nil {
 		logger.Printf("[CharacterService] extractCharNamesFromContent: AI call failed: %v", err)
 		return nil, err
@@ -205,22 +198,17 @@ func (s *CharacterService) extractCharacterNameList(
 		}{c.Name, c.Role}
 	})
 
-	tmplStr := loadPromptTemplate("extract_character_names.tmpl")
-	tmpl, err := template.New("extract_character_names").Parse(tmplStr)
-	if err != nil {
-		return nil, fmt.Errorf("parse extract_character_names.tmpl: %w", err)
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
+	prompt, err := renderPrompt("extract_character_names", map[string]interface{}{
 		"NovelTitle":    novelTitle,
 		"Genre":         genre,
 		"Summaries":     summariesText,
 		"ExistingNames": existingJSON,
-	}); err != nil {
-		return nil, fmt.Errorf("render extract_character_names.tmpl: %w", err)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render extract_character_names: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_character_names", buf.String(), "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_character_names", prompt, "")
 	if err != nil {
 		return nil, fmt.Errorf("AI call failed: %w", err)
 	}
@@ -256,24 +244,19 @@ func (s *CharacterService) generateOneCharacterProfile(
 	entry charNameEntry,
 	shortSummaries string,
 ) (*analysisCharJSON, error) {
-	tmplStr := loadPromptTemplate("generate_character_profile.tmpl")
-	tmpl, err := template.New("generate_character_profile").Parse(tmplStr)
-	if err != nil {
-		return nil, fmt.Errorf("parse template: %w", err)
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
+	prompt, err := renderPrompt("generate_character_profile", map[string]interface{}{
 		"NovelTitle":     novelTitle,
 		"Genre":          genre,
 		"CharacterName":  entry.Name,
 		"CharacterRole":  entry.Role,
 		"CharacterBrief": entry.Brief,
 		"Summaries":      shortSummaries,
-	}); err != nil {
-		return nil, fmt.Errorf("render template: %w", err)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render generate_character_profile: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "generate_character_profile", buf.String(), "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "generate_character_profile", prompt, "")
 	if err != nil {
 		logger.Printf("[CharacterService] generateOneCharacterProfile: AI call failed for %q: %v", entry.Name, err)
 		return nil, fmt.Errorf("AI call: %w", err)
@@ -845,15 +828,7 @@ func (s *ChapterService) generateSceneOutline(
 		chapterSummary = req.Prompt
 	}
 
-	tmplStr := loadPromptTemplate("chapter_scene_outline.tmpl")
-	tmpl, err := template.New("scene_outline").Parse(tmplStr)
-	if err != nil {
-		logger.Printf("GenerateChapter: parse scene_outline.tmpl: %v", err)
-		return "", ""
-	}
-
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
+	outlinePrompt, err := renderPrompt("chapter_scene_outline", map[string]interface{}{
 		"NovelTitle":            novel.Title,
 		"ChapterNo":             req.ChapterNo,
 		"GlobalContext":         globalCtx,
@@ -868,12 +843,13 @@ func (s *ChapterService) generateSceneOutline(
 		"ForeshadowHints":       foreshadowHints,
 		"CharacterStates":       charStateStr,
 		"PlotTensionState":      plotTensionState,
-	}); err != nil {
-		logger.Printf("GenerateChapter: execute scene_outline.tmpl: %v", err)
+	})
+	if err != nil {
+		logger.Printf("GenerateChapter: render chapter_scene_outline: %v", err)
 		return "", ""
 	}
 
-	resp, err := s.aiService.GenerateWithProvider(tenantID, novelID, "scene_outline", buf.String(), req.ModelOverride, buildChapterOverrides(req, novel))
+	resp, err := s.aiService.GenerateWithProvider(tenantID, novelID, "scene_outline", outlinePrompt, req.ModelOverride, buildChapterOverrides(req, novel))
 	if err != nil {
 		logger.Printf("GenerateChapter: scene outline AI call failed: %v", err)
 		return "", ""
@@ -962,33 +938,26 @@ func (s *ChapterService) generateFromSceneOutline(
 		return content, "", err
 	}
 
-	tmplStr := loadPromptTemplate("chapter_from_outline.tmpl")
-	tmpl, err := template.New("chapter_from_outline").Parse(tmplStr)
+	chapterPrompt, err := renderPrompt("chapter_from_outline", map[string]interface{}{
+		"NovelTitle":      novel.Title,
+		"ChapterNo":       req.ChapterNo,
+		"ChapterTitle":    chapterTitle,
+		"WordCount":       wordCount,
+		"GlobalContext":   globalCtx,
+		"Scenes":          outlineData.Scenes,
+		"HookSetup":       outlineData.HookSetup,
+		"PeakTension":     peakTension,
+		"Characters":      characterVoices,
+		"ForeshadowHints": foreshadowHints,
+		"UserPrompt":      req.Prompt,
+		"IsStandalone":    req.IsStandalone,
+	})
 	if err != nil {
 		content, err := s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
 		return content, "", err
 	}
 
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
-		"NovelTitle":    novel.Title,
-		"ChapterNo":     req.ChapterNo,
-		"ChapterTitle":  chapterTitle,
-		"WordCount":     wordCount,
-		"GlobalContext": globalCtx,
-		"Scenes":        outlineData.Scenes,
-		"HookSetup":     outlineData.HookSetup,
-		"PeakTension":   peakTension,
-		"Characters":      characterVoices,
-		"ForeshadowHints": foreshadowHints,
-		"UserPrompt":      req.Prompt,
-		"IsStandalone":    req.IsStandalone,
-	}); err != nil {
-		content, err := s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
-		return content, "", err
-	}
-
-	raw, err := s.aiService.GenerateWithProvider(tenantID, novelID, "chapter", buf.String(), req.ModelOverride, buildChapterOverrides(req, novel))
+	raw, err := s.aiService.GenerateWithProvider(tenantID, novelID, "chapter", chapterPrompt, req.ModelOverride, buildChapterOverrides(req, novel))
 	if err != nil {
 		return "", "", err
 	}
@@ -1488,26 +1457,11 @@ func (s *CharacterService) UpdateCharacter(id uint, req *model.UpdateCharacterRe
 	if req.CharacterArc != "" {
 		character.CharacterArc = req.CharacterArc
 	}
-	// PersonalityTags: nil = absent (skip), non-nil (including empty) = update
-	if req.PersonalityTags != nil {
-		if b, err := json.Marshal(req.PersonalityTags); err == nil {
-			character.PersonalityTags = string(b)
-		}
+	if req.ThreeViewSheet != "" {
+		character.ThreeViewSheet = req.ThreeViewSheet
 	}
-	// Abilities: nil = absent (skip), non-nil = update
-	if req.Abilities != nil {
-		if b, err := json.Marshal(req.Abilities); err == nil {
-			character.Abilities = string(b)
-		}
-	}
-	if req.ThreeViewFront != "" {
-		character.ThreeViewFront = req.ThreeViewFront
-	}
-	if req.ThreeViewSide != "" {
-		character.ThreeViewSide = req.ThreeViewSide
-	}
-	if req.ThreeViewBack != "" {
-		character.ThreeViewBack = req.ThreeViewBack
+	if req.FaceCloseup != "" {
+		character.FaceCloseup = req.FaceCloseup
 	}
 	if req.Portrait != "" {
 		character.Portrait = req.Portrait
@@ -1733,18 +1687,6 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			continue
 		}
 
-		abilitiesJSON := ""
-		if len(p.Abilities) > 0 {
-			if b, err := json.Marshal(p.Abilities); err == nil {
-				abilitiesJSON = string(b)
-			}
-		}
-		personalityTagsJSON := ""
-		if len(p.PersonalityTags) > 0 {
-			if b, err := json.Marshal(p.PersonalityTags); err == nil {
-				personalityTagsJSON = string(b)
-			}
-		}
 		dialogueStyleJSON := ""
 		if p.DialogueStyle.VocabularyLevel != "" || len(p.DialogueStyle.Patterns) > 0 {
 			if b, err := json.Marshal(p.DialogueStyle); err == nil {
@@ -1770,8 +1712,6 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			if v, ok := fillIfEmpty(ch.Personality, p.Personality); ok { ch.Personality = v; changed = true }
 			if v, ok := fillIfEmpty(ch.Background, p.Background); ok { ch.Background = v; changed = true }
 			if v, ok := fillIfEmpty(ch.CharacterArc, p.CharacterArc); ok { ch.CharacterArc = v; changed = true }
-			if v, ok := fillIfEmpty(ch.Abilities, abilitiesJSON); ok { ch.Abilities = v; changed = true }
-			if v, ok := fillIfEmpty(ch.PersonalityTags, personalityTagsJSON); ok { ch.PersonalityTags = v; changed = true }
 			if v, ok := fillIfEmpty(ch.DialogueStyle, dialogueStyleJSON); ok { ch.DialogueStyle = v; changed = true }
 			if v, ok := fillIfEmpty(ch.VisualDesign, visualDesignJSON); ok { ch.VisualDesign = v; changed = true }
 			if !changed {
@@ -1785,20 +1725,18 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			upserted = append(upserted, ch)
 		} else {
 			character := &model.Character{
-				UUID:            uuid.New().String(),
-				NovelID:         novelID,
-				Name:            p.Name,
-				Role:            role,
-				Archetype:       p.Archetype,
-				Appearance:      p.Appearance,
-				Personality:     p.Personality,
-				PersonalityTags: personalityTagsJSON,
-				Background:      p.Background,
-				CharacterArc:    p.CharacterArc,
-				Abilities:       abilitiesJSON,
-				DialogueStyle:   dialogueStyleJSON,
-				VisualDesign:    visualDesignJSON,
-				Status:          "active",
+				UUID:          uuid.New().String(),
+				NovelID:       novelID,
+				Name:          p.Name,
+				Role:          role,
+				Archetype:     p.Archetype,
+				Appearance:    p.Appearance,
+				Personality:   p.Personality,
+				Background:    p.Background,
+				CharacterArc:  p.CharacterArc,
+				DialogueStyle: dialogueStyleJSON,
+				VisualDesign:  visualDesignJSON,
+				Status:        "active",
 			}
 			if err := s.characterRepo.Create(character); err != nil {
 				logger.Printf("CharacterService.AIBatchGenerate: create %s: %v", p.Name, err)
@@ -1850,22 +1788,17 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 		existingNameSet[strings.ToLower(c.Name)] = true
 	}
 
-	tmplStr := loadPromptTemplate("extract_minor_characters.tmpl")
-	tmpl, err := template.New("extract_minor_characters").Parse(tmplStr)
-	if err != nil {
-		return nil, fmt.Errorf("parse template: %w", err)
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
+	minorCharsPrompt, err := renderPrompt("extract_minor_characters", map[string]interface{}{
 		"NovelTitle":    novelTitle,
 		"Genre":         novelGenre,
 		"ExistingNames": existingNames,
 		"Content":       content,
-	}); err != nil {
-		return nil, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render extract_minor_characters: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_minor_characters", buf.String(), "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_minor_characters", minorCharsPrompt, "")
 	if err != nil {
 		return nil, fmt.Errorf("AI extract minor chars: %w", err)
 	}
@@ -1921,8 +1854,8 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 	return created, nil
 }
 
-// BatchGenerateImages 批量为小说的角色生成三视图正面图（跳过已有 ThreeViewFront 的角色）。
-// 所有goroutine并发调用 ImageGenerationService.GenerateThreeViewImage，
+// BatchGenerateImages 批量为小说的角色生成三视图合图（跳过已有 ThreeViewSheet 的角色）。
+// 所有goroutine并发调用 ImageGenerationService.GenerateThreeViewSheet，
 // 并发度由 AIService.imageSem 统一管控（config.yaml ai.image_concurrency）。
 // 返回成功数和失败数；只要有一次成功就不返回 error。
 func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider string, progressFn func(int)) (succeeded, failed int, err error) {
@@ -1943,7 +1876,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 	// 统计实际需要生成的数量，用于进度计算
 	var todo []*model.Character
 	for _, c := range chars {
-		if c.ThreeViewFront == "" {
+		if c.ThreeViewSheet == "" {
 			todo = append(todo, c)
 		}
 	}
@@ -1963,7 +1896,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 			if novelTitle != "" {
 				genCtx = WithImageStorageHint(genCtx, ImageStorageHint{NovelTitle: novelTitle})
 			}
-			img, genErr := imgSvc.GenerateThreeViewImage(genCtx, tenantID, char.Name, char.Appearance, "front", imageStyle, char.Gender, "", provider)
+			img, genErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, char.Appearance, imageStyle, char.Gender, "", provider)
 			if genErr != nil {
 				logger.Printf("[CharacterService] BatchGenerateImages: char %d (%s) failed: %v", char.ID, char.Name, genErr)
 				mu.Lock()
@@ -1976,7 +1909,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 				}
 				return
 			}
-			if _, saveErr := s.UpdateCharacter(char.ID, &model.UpdateCharacterRequest{ThreeViewFront: img.URL}); saveErr != nil {
+			if _, saveErr := s.UpdateCharacter(char.ID, &model.UpdateCharacterRequest{ThreeViewSheet: img.URL}); saveErr != nil {
 				logger.Printf("[CharacterService] BatchGenerateImages: save char %d: %v", char.ID, saveErr)
 				mu.Lock()
 				failed++
@@ -2132,6 +2065,165 @@ func (s *ImageGenerationService) GenerateThreeViewImage(ctx context.Context, ten
 		return nil, err
 	}
 	return &GeneratedCharacterImage{URL: url, Description: fmt.Sprintf("%s %s", name, viewType)}, nil
+}
+
+// GenerateThreeViewSheet 生成三合一角色参考图（正视/侧视/背视放在同一张图中）。
+// 与 GenerateThreeViewImage 的区别：使用 turnaround sheet 提示词，期望 AI 在单张图内展示三个视角。
+// ctx 可携带 ImageStorageHint 用于 OSS 路径构建。
+func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, tenantID uint, name, appearance, style, gender, referenceImage, provider string) (*GeneratedCharacterImage, error) {
+	genderDesc := map[string]string{
+		"male":    "男性",
+		"female":  "女性",
+		"neutral": "中性",
+	}
+	genderStr := genderDesc[gender]
+	styleDesc := map[string]string{
+		"anime":         "日系动漫插画",
+		"realistic":     "写实摄影",
+		"ink_painting":  "水墨中国风插画",
+		"cyberpunk":     "赛博朋克风格插画",
+		"xianxia_style": "古典仙侠国风插画",
+		"oil_painting":  "油画风格插画",
+		"watercolor":    "水彩插画",
+	}
+	styleStr := styleDesc[style]
+	if styleStr == "" {
+		if style != "" {
+			styleStr = style
+		} else {
+			styleStr = "日系动漫插画"
+		}
+	}
+
+	genderTag := map[string]string{"male": "1boy", "female": "1girl"}[gender]
+	genderLeader := genderTag
+	if genderStr != "" && genderLeader == "" {
+		genderLeader = genderStr
+	}
+
+	// 三合一参考图使用 turnaround/character sheet 专用提示词。
+	// 三视图术语（character design sheet, turnaround）能引导模型在一张图内排列三个视角。
+	var prompt string
+	if style == "realistic" {
+		realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
+		prompt = fmt.Sprintf(
+			"%scharacter design reference sheet, full body turnaround, front view and side view and back view of the same character, "+
+				"3-angle orthographic views arranged horizontally, %s, %s, "+
+				"realistic photography style, pure white background, clean composition, high quality",
+			realisticGender, name, appearance)
+	} else {
+		if genderLeader != "" {
+			prompt = fmt.Sprintf(
+				"%s, 角色三视图参考图，同一角色的正面视角+侧面视角+背面视角横向排列，角色设计总表，"+
+					"%s，%s，%s风格，白色背景，线条清晰，三视图均为全身，高品质插画",
+				genderLeader, name, appearance, styleStr)
+		} else {
+			prompt = fmt.Sprintf(
+				"角色三视图参考图，同一角色的正面视角+侧面视角+背面视角横向排列，角色设计总表，"+
+					"%s，%s，%s风格，白色背景，线条清晰，三视图均为全身，高品质插画",
+				name, appearance, styleStr)
+		}
+	}
+
+	aiRef := referenceImage
+	if !strings.HasPrefix(aiRef, "http://") && !strings.HasPrefix(aiRef, "https://") {
+		aiRef = ""
+	}
+	logger.Printf("GenerateThreeViewSheet: %s ref=%v", name, aiRef != "")
+
+	// 负向提示词：禁止不同角色出现，但允许同一角色的多个视角
+	baseNeg := "different characters, multiple distinct people, inconsistent appearance, nsfw, lowres, bad anatomy, poorly drawn"
+	genderNeg := map[string]string{
+		"male":   "female, girl, woman, 女性, 女生, 裙子, 女装, feminine",
+		"female": "male, man, boy, 男性, 男生, 胡须, beard, mustache, masculine",
+	}[gender]
+	negativePrompt := baseNeg
+	if genderNeg != "" {
+		negativePrompt = baseNeg + ", " + genderNeg
+	}
+
+	url, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt, aiRef, style, negativePrompt)
+	if err != nil {
+		return nil, err
+	}
+	return &GeneratedCharacterImage{URL: url, Description: name + " three-view sheet"}, nil
+}
+
+// GenerateFaceCloseupImage 生成角色面部特写图片。
+// ctx 可携带 ImageStorageHint 用于 OSS 路径构建。
+func (s *ImageGenerationService) GenerateFaceCloseupImage(ctx context.Context, tenantID uint, name, appearance, style, gender, referenceImage, provider string) (*GeneratedCharacterImage, error) {
+	genderDesc := map[string]string{
+		"male":    "男性",
+		"female":  "女性",
+		"neutral": "中性",
+	}
+	genderStr := genderDesc[gender]
+	styleDesc := map[string]string{
+		"anime":         "日系动漫插画",
+		"realistic":     "写实摄影",
+		"ink_painting":  "水墨中国风插画",
+		"cyberpunk":     "赛博朋克风格插画",
+		"xianxia_style": "古典仙侠国风插画",
+		"oil_painting":  "油画风格插画",
+		"watercolor":    "水彩插画",
+	}
+	styleStr := styleDesc[style]
+	if styleStr == "" {
+		if style != "" {
+			styleStr = style
+		} else {
+			styleStr = "日系动漫插画"
+		}
+	}
+
+	genderTag := map[string]string{"male": "1boy", "female": "1girl"}[gender]
+	genderLeader := genderTag
+	if genderStr != "" && genderLeader == "" {
+		genderLeader = genderStr
+	}
+
+	var prompt string
+	if style == "realistic" {
+		realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
+		prompt = fmt.Sprintf(
+			"%sclose-up portrait, face and upper chest, head shot, solo, %s, %s, "+
+				"detailed facial features, expressive eyes, realistic photography, pure white background, high quality portrait photo",
+			realisticGender, name, appearance)
+	} else {
+		if genderLeader != "" {
+			prompt = fmt.Sprintf(
+				"%s, solo, 面部特写，头部特写，胸像，%s，%s，"+
+					"细腻的五官，精致的眼睛，表情生动，%s风格，白色背景，线条清晰，高品质",
+				genderLeader, name, appearance, styleStr)
+		} else {
+			prompt = fmt.Sprintf(
+				"solo, 面部特写，头部特写，胸像，%s，%s，"+
+					"细腻的五官，精致的眼睛，表情生动，%s风格，白色背景，线条清晰，高品质",
+				name, appearance, styleStr)
+		}
+	}
+
+	aiRef := referenceImage
+	if !strings.HasPrefix(aiRef, "http://") && !strings.HasPrefix(aiRef, "https://") {
+		aiRef = ""
+	}
+	logger.Printf("GenerateFaceCloseupImage: %s ref=%v", name, aiRef != "")
+
+	baseNeg := "multiple people, two people, group, 多人, nsfw, lowres, bad anatomy, full body, feet, legs below waist"
+	genderNeg := map[string]string{
+		"male":   "female, girl, woman, 女性, 女生, 裙子, 女装, feminine",
+		"female": "male, man, boy, 男性, 男生, 胡须, beard, mustache, masculine",
+	}[gender]
+	negativePrompt := baseNeg
+	if genderNeg != "" {
+		negativePrompt = baseNeg + ", " + genderNeg
+	}
+
+	url, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt, aiRef, style, negativePrompt)
+	if err != nil {
+		return nil, err
+	}
+	return &GeneratedCharacterImage{URL: url, Description: name + " face closeup"}, nil
 }
 
 // ============================================

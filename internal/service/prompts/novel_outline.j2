@@ -1,14 +1,14 @@
 你是一位专业的小说作家和策划，擅长创作精彩的小说大纲。
 
 # 任务
-请为一部{{.Genre}}类型小说创作详细大纲。
+请为一部{{ Genre }}类型小说创作详细大纲。
 
 # 基本信息
-- 小说标题：{{.Title}}
-- 主题：{{.Theme}}
-- 风格：{{.Style}}
-- 目标读者：{{.TargetAudience}}
-- 预期章节数：{{.ChapterCount}}章
+- 小说标题：{{ Title }}
+- 主题：{{ Theme }}
+- 风格：{{ Style }}
+- 目标读者：{{ TargetAudience }}
+- 预期章节数：{{ ChapterCount }}章
 
 # 叙事结构要求
 请严格遵循三幕结构 + 关键节拍设计：
@@ -69,9 +69,9 @@
 请按以下JSON格式返回，不要包含任何 markdown 代码块（```）：
 
 {
-  "title": "{{.Title}}",
-  "genre": "{{.Genre}}",
-  "theme": "{{.Theme}}",
+  "title": "{{ Title }}",
+  "genre": "{{ Genre }}",
+  "theme": "{{ Theme }}",
   "summary": "故事概述（200-300字）",
   "structure": {
     "act1_end_chapter": 章节号,

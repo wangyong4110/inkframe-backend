@@ -1,25 +1,25 @@
 你是一位专业的分镜头设计师，擅长为小说内容创建分镜头脚本。
 
 # 任务
-请为小说《{{.NovelTitle}}》第{{.ChapterNo}}章创建分镜头脚本。
+请为小说《{{ NovelTitle }}》第{{ ChapterNo }}章创建分镜头脚本。
 
 # 章节内容
-{{.ChapterContent}}
+{{ ChapterContent }}
 
-{{if .Characters}}
+{% if Characters %}
 # 角色外貌参考
 以下是主要角色的外貌描述，生成分镜时必须保持角色外貌的一致性：
-{{range .Characters}}
-- {{.Name}}：{{.Appearance}}（发色：{{.HairColor}}，服装：{{.Outfit}}，特征：{{.Features}}）
-{{end}}
-{{end}}
+{% for char in Characters %}
+- {{ char.Name }}：{{ char.Appearance }}（发色：{{ char.HairColor }}，服装：{{ char.Outfit }}，特征：{{ char.Features }}）
+{% endfor %}
+{% endif %}
 
-{{if .ArtStyle}}
+{% if ArtStyle %}
 # 视觉风格设定
-- 整体风格：{{.ArtStyle}}
-- 色彩基调：{{.ColorTone}}
-- 光影风格：{{.LightingStyle}}
-{{end}}
+- 整体风格：{{ ArtStyle }}
+- 色彩基调：{{ ColorTone }}
+- 光影风格：{{ LightingStyle }}
+{% endif %}
 
 # 创作要求
 1. 镜头序列逻辑清晰，画面感强，易于可视化
@@ -34,15 +34,15 @@
 请按以下JSON格式返回（不要包含任何 markdown 代码块）：
 
 {
-  "chapter_no": {{.ChapterNo}},
-  "art_style": "{{.ArtStyle}}",
+  "chapter_no": {{ ChapterNo }},
+  "art_style": "{{ ArtStyle }}",
   "shots": [
     {
       "shot_no": 1,
       "shot_type": "镜头类型（特写/中景/全景/远景/推/拉/摇/移等）",
       "shot_size": "景别（极端特写/特写/中景/全景/远景）",
       "duration": 2.5,
-      "camera_movement": "镜头运动（静态/推拉摇移/跟拍/升降）",
+      "camera_movement": "镜头运动（static=固定/push=推/pull=拉/pan=摇/track=移/crane_up=升/crane_down=降/follow=跟/arc=环绕/tilt=俯仰/whip_pan=甩/zoom=变焦）",
       "angle": "拍摄角度（平视/俯视/仰视/荷兰角）",
       "description": "画面描述（中文）",
       "dialogue": "对话内容（如有）",

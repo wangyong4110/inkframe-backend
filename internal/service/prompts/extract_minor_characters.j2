@@ -1,15 +1,15 @@
 请从以下章节内容中提取次要角色，生成简要的角色档案。
 
 # 小说信息
-- 标题：《{{.NovelTitle}}》
-- 类型：{{.Genre}}
+- 标题：《{{ NovelTitle }}》
+- 类型：{{ Genre }}
 
 # 已有主要角色（不要重复提取这些角色）
-{{range .ExistingNames}}- {{.}}
-{{end}}
+{% for name in ExistingNames %}- {{ name }}
+{% endfor %}
 
 # 本章内容
-{{.Content}}
+{{ Content }}
 
 # 要求
 1. 只提取本章中出现的次要角色（龙套、路人、临时出场的角色），不超过10个

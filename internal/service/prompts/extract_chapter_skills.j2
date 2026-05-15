@@ -1,15 +1,15 @@
 请从以下章节内容中提取本章首次出现或使用的技能/法术/招式，生成技能档案。
 
 # 小说信息
-- 标题：《{{.NovelTitle}}》
-- 类型：{{.Genre}}
+- 标题：《{{ NovelTitle }}》
+- 类型：{{ Genre }}
 
 # 已有技能（不要重复提取）
-{{range .ExistingNames}}- {{.}}
-{{end}}
+{% for name in ExistingNames %}- {{ name }}
+{% endfor %}
 
 # 本章内容
-{{.Content}}
+{{ Content }}
 
 # 要求
 1. 只提取本章中明确出现的技能/法术/招式/特殊能力

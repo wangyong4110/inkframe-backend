@@ -405,11 +405,6 @@ type Character struct {
 	Personality string `json:"personality" gorm:"type:text"`
 	Background  string `json:"background" gorm:"type:text"`
 
-	// 能力与属性
-	Abilities       string `json:"abilities" gorm:"type:text"`        // JSON array [{name,level,description}]
-	PersonalityTags string `json:"personality_tags" gorm:"type:text"` // JSON array of tag strings
-	Attributes      string `json:"attributes" gorm:"type:text"`       // JSON
-
 	// 角色关系（JSON）
 	Relations string `json:"relations" gorm:"type:text"`
 
@@ -422,10 +417,11 @@ type Character struct {
 	// 视觉设计
 	VisualDesign string `json:"visual_design" gorm:"type:text"` // JSON: 包含图像URL、表情库等
 
-	// 三视图（正面、侧面、背面参考图）
-	ThreeViewFront string `json:"three_view_front" gorm:"size:1000"`
-	ThreeViewSide  string `json:"three_view_side" gorm:"size:1000"`
-	ThreeViewBack  string `json:"three_view_back" gorm:"size:1000"`
+	// 三视图合一参考图（一张图展示正/侧/背三个视角）
+	ThreeViewSheet string `json:"three_view_sheet" gorm:"column:three_view_front;size:1000"`
+
+	// 面部特写图
+	FaceCloseup string `json:"face_closeup" gorm:"size:1000"`
 
 	// 封面 / 头像
 	Portrait   string `json:"portrait" gorm:"size:1000"`
@@ -1232,10 +1228,8 @@ type Item struct {
 
 	Description  string `json:"description" gorm:"type:text"`
 	Appearance   string `json:"appearance" gorm:"type:text"`   // 外观描述
-	Location     string `json:"location" gorm:"size:200"`      // 当前/最后已知位置
-	Owner        string `json:"owner" gorm:"size:100"`         // 当前持有者
-	Significance string `json:"significance" gorm:"type:text"` // 在故事中的重要性
-	Abilities    string `json:"abilities" gorm:"type:text"`    // JSON: [{name, description}]
+	Location string `json:"location" gorm:"size:200"` // 当前/最后已知位置
+	Owner    string `json:"owner" gorm:"size:100"`    // 当前持有者
 
 	ImageURL          string `json:"image_url" gorm:"size:1000"`
 	VisualPrompt      string `json:"visual_prompt" gorm:"type:text"`       // 用于 AI 图像生成的英文提示词
@@ -1363,13 +1357,9 @@ type UpdateCharacterRequest struct {
 	Background   string `json:"background"`
 	Appearance   string `json:"appearance"`
 	Personality  string `json:"personality"`
-	CharacterArc string `json:"character_arc"`
-	// nil = field absent (don't update); non-nil empty = clear; non-empty = update
-	PersonalityTags []string      `json:"personality_tags"`
-	Abilities       []interface{} `json:"abilities"` // [{name,level,description}]
-	ThreeViewFront  string        `json:"three_view_front"`
-	ThreeViewSide   string        `json:"three_view_side"`
-	ThreeViewBack   string        `json:"three_view_back"`
+	CharacterArc   string `json:"character_arc"`
+	ThreeViewSheet string `json:"three_view_sheet"`
+	FaceCloseup    string `json:"face_closeup"`
 	Portrait        string        `json:"portrait"`
 	CoverImage      string        `json:"cover_image"`
 	// 配音设置
@@ -1549,8 +1539,6 @@ type CreateItemRequest struct {
 	Appearance   string `json:"appearance"`
 	Location     string `json:"location"`
 	Owner        string `json:"owner"`
-	Significance string `json:"significance"`
-	Abilities    string `json:"abilities"`
 	VisualPrompt string `json:"visual_prompt"`
 	Status       string `json:"status"`
 }
@@ -1562,8 +1550,6 @@ type UpdateItemRequest struct {
 	Appearance        string `json:"appearance"`
 	Location          string `json:"location"`
 	Owner             string `json:"owner"`
-	Significance      string `json:"significance"`
-	Abilities         string `json:"abilities"`
 	VisualPrompt      string `json:"visual_prompt"`
 	ImageURL          string `json:"image_url"`
 	ReferenceImageURL string `json:"reference_image_url"`
@@ -1835,10 +1821,8 @@ type SceneAnchor struct {
 	Name        string `json:"name" gorm:"size:255;not null;uniqueIndex:idx_scene_anchor_novel_name"`
 	Type        string `json:"type" gorm:"size:50"` // interior/exterior/imaginary
 	Description string `json:"description" gorm:"type:text"`
-	PromptLock  string `json:"prompt_lock" gorm:"type:text"`   // 锁定关键词（逗号分隔）
-	StyleTokens string `json:"style_tokens" gorm:"size:500"`   // 风格标签
+	PromptLock  string `json:"prompt_lock" gorm:"type:text"`   // 锁定关键词（逗号分隔，含风格/光照等）
 	RefImageURL string `json:"ref_image_url" gorm:"size:1000"` // 首次生成后存参考图URL
-	Notes       string `json:"notes" gorm:"type:text"`
 
 	// 扩展字段（一致性评分相关）
 	RefImageLockedAt *time.Time `json:"ref_image_locked_at,omitempty" gorm:"index"`
@@ -1847,11 +1831,6 @@ type SceneAnchor struct {
 	AvgConsScore     float64    `json:"avg_cons_score" gorm:"type:decimal(4,3);default:0"`
 	ParentAnchorID   *uint      `json:"parent_anchor_id,omitempty" gorm:"index"`
 	Variant          string     `json:"variant" gorm:"size:50"` // day/night/winter/battle
-
-	// 光照锁定（确保同一场景跨镜头光照一致）
-	LightingKeywords string `json:"lighting_keywords" gorm:"size:500"` // 逗号分隔关键词，如 "golden hour, warm backlight, soft shadows"
-	TimeOfDay        string `json:"time_of_day" gorm:"size:50"`        // morning/afternoon/evening/night
-	Weather          string `json:"weather" gorm:"size:50"`            // clear/cloudy/rainy/foggy/snowy
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`

@@ -1,14 +1,12 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"strings"
 	"sync"
-	"text/template"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -168,8 +166,8 @@ func (s *SkillService) GenerateSkills(tenantID, novelID uint, req *model.Generat
 	if req.CharacterID != nil {
 		char, cerr := s.characterRepo.GetByID(*req.CharacterID)
 		if cerr == nil && char != nil {
-			charSection = fmt.Sprintf("\n角色信息：\n- 姓名：%s\n- 定位：%s\n- 能力：%s\n- 背景：%s",
-				char.Name, char.Role, char.Abilities, char.Background)
+			charSection = fmt.Sprintf("\n角色信息：\n- 姓名：%s\n- 定位：%s\n- 背景：%s",
+				char.Name, char.Role, char.Background)
 		}
 	}
 
@@ -350,22 +348,17 @@ func (s *SkillService) extractSkillsFromContent(
 	existingNames []string,
 	chapterNo int,
 ) ([]skillExtractedJSON, error) {
-	tmplStr := loadPromptTemplate("extract_chapter_skills.tmpl")
-	tmpl, err := template.New("extract_chapter_skills").Parse(tmplStr)
-	if err != nil {
-		return nil, fmt.Errorf("parse template: %w", err)
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
+	skillsPrompt, err := renderPrompt("extract_chapter_skills", map[string]interface{}{
 		"NovelTitle":    novelTitle,
 		"Genre":         genre,
 		"ExistingNames": existingNames,
 		"Content":       content,
-	}); err != nil {
-		return nil, fmt.Errorf("render template: %w", err)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render extract_chapter_skills: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_chapter_skills", buf.String(), "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_chapter_skills", skillsPrompt, "")
 	if err != nil {
 		return nil, err
 	}
@@ -592,22 +585,17 @@ func (s *SkillService) AIExtractChapterSkills(tenantID, novelID, chapterID uint,
 		existingNameSet[strings.ToLower(sk.Name)] = true
 	}
 
-	tmplStr := loadPromptTemplate("extract_chapter_skills.tmpl")
-	tmpl, err := template.New("extract_chapter_skills").Parse(tmplStr)
-	if err != nil {
-		return nil, fmt.Errorf("parse template: %w", err)
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
+	skillsPrompt2, err := renderPrompt("extract_chapter_skills", map[string]interface{}{
 		"NovelTitle":    novelTitle,
 		"Genre":         novelGenre,
 		"ExistingNames": existingNames,
 		"Content":       content,
-	}); err != nil {
-		return nil, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render extract_chapter_skills: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_chapter_skills", buf.String(), "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_chapter_skills", skillsPrompt2, "")
 	if err != nil {
 		return nil, fmt.Errorf("AI extract chapter skills: %w", err)
 	}

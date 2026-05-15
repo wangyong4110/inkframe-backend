@@ -65,7 +65,16 @@ func (s *SceneConsistencyService) ScoreScene(
 		return report, nil
 	}
 
-	prompt := buildConsistencyPrompt(anchor, generatedImageURL)
+	prompt, err := renderPrompt("scene_consistency_score", map[string]interface{}{
+		"AnchorName":        anchor.Name,
+		"RefImageURL":       anchor.RefImageURL,
+		"GeneratedImageURL": generatedImageURL,
+		"Description":       anchor.Description,
+		"PromptLock":        anchor.PromptLock,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render scene_consistency_score: %w", err)
+	}
 
 	raw, err := s.aiSvc.Generate(shot.VideoID, "scene_consistency", prompt)
 	if err != nil {
@@ -122,43 +131,6 @@ func (s *SceneConsistencyService) GetLogsByAnchorID(anchorID uint) ([]*model.Sce
 	return s.logRepo.ListByAnchorID(anchorID)
 }
 
-// buildConsistencyPrompt 构造 Vision LLM 对比 prompt
-func buildConsistencyPrompt(anchor *model.SceneAnchor, generatedImageURL string) string {
-	return fmt.Sprintf(`You are a visual consistency evaluator for film/animation production.
-
-Scene anchor reference: "%s"
-Reference image URL: %s
-Generated image URL: %s
-
-Anchor description: %s
-Required prompt keywords: %s
-
-Compare the two images and score consistency on four dimensions (0.0 to 1.0):
-- arch_score: Architectural structure, layout, key physical features
-- light_score: Lighting direction, color temperature, brightness
-- atmo_score: Overall atmosphere, mood, color palette
-- prop_score: Key props, decorations, signature elements
-
-Identify any issues and classify them by category (arch/light/atmo/prop), severity (warning/error), and brief detail.
-
-Output ONLY valid JSON, no markdown:
-{
-  "overall_score": 0.0-1.0,
-  "arch_score": 0.0-1.0,
-  "light_score": 0.0-1.0,
-  "atmo_score": 0.0-1.0,
-  "prop_score": 0.0-1.0,
-  "issues": [
-    {"category": "arch|light|atmo|prop", "severity": "warning|error", "detail": "description", "score": 0.0-1.0}
-  ]
-}`,
-		anchor.Name,
-		anchor.RefImageURL,
-		generatedImageURL,
-		anchor.Description,
-		anchor.PromptLock,
-	)
-}
 
 // consistencyLLMResponse LLM 返回结构
 type consistencyLLMResponse struct {

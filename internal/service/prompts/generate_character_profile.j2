@@ -1,12 +1,12 @@
-请为小说《{{.NovelTitle}}》中的角色「{{.CharacterName}}」生成完整角色档案。
+请为小说《{{ NovelTitle }}》中的角色「{{ CharacterName }}」生成完整角色档案。
 
 # 角色基本信息
-- 姓名：{{.CharacterName}}
-- 定位：{{.CharacterRole}}
-- 简介：{{.CharacterBrief}}
+- 姓名：{{ CharacterName }}
+- 定位：{{ CharacterRole }}
+- 简介：{{ CharacterBrief }}
 
 # 相关小说内容
-{{.Summaries}}
+{{ Summaries }}
 
 # 要求
 1. appearance：详细外貌，包含身高体型、发色发型、眼睛颜色神态、面部特征、常见服装
@@ -22,8 +22,8 @@
 
 # 输出格式（单个 JSON 对象）
 {
-  "name": "{{.CharacterName}}",
-  "role": "{{.CharacterRole}}",
+  "name": "{{ CharacterName }}",
+  "role": "{{ CharacterRole }}",
   "archetype": "角色原型",
   "appearance": "...",
   "personality": "...",

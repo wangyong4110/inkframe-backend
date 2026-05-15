@@ -670,15 +670,22 @@ func (s *AssetService) autoTagAsset(ctx context.Context, asset *model.Asset) err
 	var err error
 
 	if asset.Type == "image" && asset.StorageURL != "" {
-		prompt := loadPromptTemplate("asset_auto_tag.tmpl")
-		rawJSON, err = s.aiSvc.GenerateWithVision(prompt, []string{asset.StorageURL})
+		var prompt string
+		prompt, err = renderPrompt("asset_auto_tag", nil)
+		if err == nil {
+			rawJSON, err = s.aiSvc.GenerateWithVision(prompt, []string{asset.StorageURL})
+		}
 	} else {
 		// Non-image: text-based tag generation from title + type
-		prompt := fmt.Sprintf(
-			"请为以下素材生成描述标签，以JSON格式返回{\"custom\":[\"标签1\",\"标签2\",\"标签3\"]}，最多5个标签，简短中文：类型=%s，名称=%s，子类型=%s",
-			asset.Type, asset.Title, asset.SubType,
-		)
-		rawJSON, err = s.aiSvc.Generate(0, "asset_tag", prompt)
+		var prompt string
+		prompt, err = renderPrompt("asset_text_tag", map[string]interface{}{
+			"Type":    asset.Type,
+			"Title":   asset.Title,
+			"SubType": asset.SubType,
+		})
+		if err == nil {
+			rawJSON, err = s.aiSvc.Generate(0, "asset_tag", prompt)
+		}
 	}
 	if err != nil {
 		return nil // non-fatal: AI unavailable, skip tagging

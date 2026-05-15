@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -9,8 +8,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"text/template"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -328,28 +325,24 @@ type analysisDialogueStyleJSON struct {
 }
 
 type analysisCharJSON struct {
-	Name            string                    `json:"name"`
-	Role            string                    `json:"role"`
-	Archetype       string                    `json:"archetype"`
-	Appearance      string                    `json:"appearance"`
-	Personality     string                    `json:"personality"`
-	PersonalityTags []string                  `json:"personality_tags"`
-	Background      string                    `json:"background"`
-	CharacterArc    string                    `json:"character_arc"`
-	Abilities       []analysisAbilityJSON     `json:"abilities"`
-	DialogueStyle   analysisDialogueStyleJSON `json:"dialogue_style"`
-	VisualPrompt    string                    `json:"visual_prompt"`
+	Name         string                    `json:"name"`
+	Role         string                    `json:"role"`
+	Archetype    string                    `json:"archetype"`
+	Appearance   string                    `json:"appearance"`
+	Personality  string                    `json:"personality"`
+	Background   string                    `json:"background"`
+	CharacterArc string                    `json:"character_arc"`
+	DialogueStyle analysisDialogueStyleJSON `json:"dialogue_style"`
+	VisualPrompt string                    `json:"visual_prompt"`
 }
 
 type analysisItemJSON struct {
-	Name         string               `json:"name"`
-	Category     string               `json:"category"`
-	Appearance   string               `json:"appearance"`
-	Location     string               `json:"location"`
-	Owner        string               `json:"owner"`
-	Significance string               `json:"significance"`
-	Abilities    []analysisAbilityJSON `json:"abilities"`
-	VisualPrompt string               `json:"visual_prompt"`
+	Name         string `json:"name"`
+	Category     string `json:"category"`
+	Appearance   string `json:"appearance"`
+	Location     string `json:"location"`
+	Owner        string `json:"owner"`
+	VisualPrompt string `json:"visual_prompt"`
 }
 
 // buildChapterSummariesText 从章节列表构建摘要文本，最多取 maxChapters 章，截断至 maxLen
@@ -378,11 +371,6 @@ func (s *NovelAnalysisService) stepSummarizeChapters(
 	ctx context.Context, task *AnalysisTask, tenantID uint, novel *model.Novel, chapters []*model.Chapter,
 ) error {
 	logger.Printf("[NovelAnalysis] stepSummarizeChapters: novelID=%d chapters=%d", novel.ID, len(chapters))
-	tmplStr := loadPromptTemplate("chapter_summary.tmpl")
-	tmpl, err := template.New("chapter_summary").Parse(tmplStr)
-	if err != nil {
-		return fmt.Errorf("parse chapter_summary.tmpl: %w", err)
-	}
 
 	// 关键路径：只并发处理前 N 章（Phase 2 提取最多用前 5 章摘要）
 	const maxForPipeline = 15
@@ -416,15 +404,15 @@ func (s *NovelAnalysisService) stepSummarizeChapters(
 		wg.Add(1)
 		go func() {
 			defer func() { <-sem; wg.Done() }()
-			var buf bytes.Buffer
-			if err := tmpl.Execute(&buf, map[string]interface{}{
+			prompt, pErr := renderPrompt("chapter_summary", map[string]interface{}{
 				"NovelTitle":   novel.Title,
 				"ChapterNo":    ch.ChapterNo,
 				"ChapterTitle": ch.Title,
 				"Content":      truncateForPrompt(ch.Content, 6000),
-			}); err != nil {
-				logger.Printf("NovelAnalysis: chapter %d tmpl exec: %v", ch.ChapterNo, err)
-			} else if summary, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "chapter_summary", buf.String(), ""); err != nil {
+			})
+			if pErr != nil {
+				logger.Printf("NovelAnalysis: chapter %d render prompt: %v", ch.ChapterNo, pErr)
+			} else if summary, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "chapter_summary", prompt, ""); err != nil {
 				logger.Printf("NovelAnalysis: chapter %d summary AI error: %v", ch.ChapterNo, err)
 			} else {
 				ch.Summary = strings.TrimSpace(summary)
@@ -442,7 +430,7 @@ func (s *NovelAnalysisService) stepSummarizeChapters(
 
 	// 剩余章节后台异步补全摘要，不阻塞 pipeline
 	if len(chapters) > maxForPipeline {
-		go s.summarizeChaptersBackground(ctx, tenantID, novel, chapters[maxForPipeline:], tmpl)
+		go s.summarizeChaptersBackground(ctx, tenantID, novel, chapters[maxForPipeline:])
 	}
 	return nil
 }
@@ -450,7 +438,7 @@ func (s *NovelAnalysisService) stepSummarizeChapters(
 // summarizeChaptersBackground 后台低优先级补全剩余章节摘要（不影响 pipeline 进度）
 func (s *NovelAnalysisService) summarizeChaptersBackground(
 	ctx context.Context, tenantID uint, novel *model.Novel,
-	chapters []*model.Chapter, tmpl *template.Template,
+	chapters []*model.Chapter,
 ) {
 	logger.Printf("[NovelAnalysis] summarizeChaptersBackground: novelID=%d chapters=%d", novel.ID, len(chapters))
 	const maxConcurrent = 2
@@ -471,16 +459,16 @@ func (s *NovelAnalysisService) summarizeChaptersBackground(
 					logger.Printf("NovelAnalysis[bg][%d]: chapter %d panic: %v", novel.ID, ch.ChapterNo, r)
 				}
 			}()
-			var buf bytes.Buffer
-			if err := tmpl.Execute(&buf, map[string]interface{}{
+			prompt, err := renderPrompt("chapter_summary", map[string]interface{}{
 				"NovelTitle":   novel.Title,
 				"ChapterNo":    ch.ChapterNo,
 				"ChapterTitle": ch.Title,
 				"Content":      truncateForPrompt(ch.Content, 6000),
-			}); err != nil {
+			})
+			if err != nil {
 				return
 			}
-			summary, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "chapter_summary", buf.String(), "")
+			summary, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "chapter_summary", prompt, "")
 			if err != nil {
 				logger.Printf("NovelAnalysis[bg][%d]: chapter %d summary error: %v", novel.ID, ch.ChapterNo, err)
 				return
@@ -510,21 +498,16 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 		summariesText = fmt.Sprintf("这是一部%s类型的小说《%s》，请根据类型惯例设计主要角色。", novel.Genre, novel.Title)
 	}
 
-	tmplStr := loadPromptTemplate("extract_characters.tmpl")
-	tmpl, err := template.New("extract_characters").Parse(tmplStr)
-	if err != nil {
-		return fmt.Errorf("parse extract_characters.tmpl: %w", err)
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
+	extractCharsPrompt, err := renderPrompt("extract_characters", map[string]interface{}{
 		"NovelTitle": novel.Title,
 		"Genre":      novel.Genre,
 		"Summaries":  summariesText,
-	}); err != nil {
-		return err
+	})
+	if err != nil {
+		return fmt.Errorf("render extract_characters: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "extract_characters", buf.String(), "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "extract_characters", extractCharsPrompt, "")
 	if err != nil {
 		return fmt.Errorf("AI extract_characters: %w", err)
 	}
@@ -557,18 +540,6 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 		if c.Role == "minor" {
 			continue
 		}
-		abilities := ""
-		if len(c.Abilities) > 0 {
-			if ab, err := json.Marshal(c.Abilities); err == nil {
-				abilities = string(ab)
-			}
-		}
-		personalityTags := ""
-		if len(c.PersonalityTags) > 0 {
-			if pt, err := json.Marshal(c.PersonalityTags); err == nil {
-				personalityTags = string(pt)
-			}
-		}
 		dialogueStyle := ""
 		if c.DialogueStyle.VocabularyLevel != "" || len(c.DialogueStyle.Patterns) > 0 {
 			if ds, err := json.Marshal(c.DialogueStyle); err == nil {
@@ -586,20 +557,18 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 			role = "supporting"
 		}
 		char := &model.Character{
-			NovelID:         novel.ID,
-			UUID:            uuid.New().String(),
-			Name:            c.Name,
-			Role:            role,
-			Archetype:       c.Archetype,
-			Appearance:      c.Appearance,
-			Personality:     c.Personality,
-			PersonalityTags: personalityTags,
-			Background:      c.Background,
-			CharacterArc:    c.CharacterArc,
-			Abilities:       abilities,
-			DialogueStyle:   dialogueStyle,
-			VisualDesign:    visualDesign,
-			Status:          "active",
+			NovelID:       novel.ID,
+			UUID:          uuid.New().String(),
+			Name:          c.Name,
+			Role:          role,
+			Archetype:     c.Archetype,
+			Appearance:    c.Appearance,
+			Personality:   c.Personality,
+			Background:    c.Background,
+			CharacterArc:  c.CharacterArc,
+			DialogueStyle: dialogueStyle,
+			VisualDesign:  visualDesign,
+			Status:        "active",
 		}
 		if err := s.characterRepo.Create(char); err != nil {
 			logger.Printf("NovelAnalysis: create character %q: %v", c.Name, err)
@@ -644,21 +613,16 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 		}
 	}
 
-	tmplStr := loadPromptTemplate("extract_worldview.tmpl")
-	tmpl, err := template.New("extract_worldview").Parse(tmplStr)
-	if err != nil {
-		return fmt.Errorf("parse extract_worldview.tmpl: %w", err)
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
+	worldviewPrompt, err := renderPrompt("extract_worldview", map[string]interface{}{
 		"NovelTitle": novel.Title,
 		"Genre":      novel.Genre,
 		"Summaries":  summariesText,
-	}); err != nil {
-		return err
+	})
+	if err != nil {
+		return fmt.Errorf("render extract_worldview: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "extract_worldview", buf.String(), "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "extract_worldview", worldviewPrompt, "")
 	if err != nil {
 		return fmt.Errorf("AI extract_worldview: %w", err)
 	}
@@ -861,32 +825,13 @@ func (s *NovelAnalysisService) generateThreeViewsAsync(ctx context.Context, char
 			}
 		}
 
-		views := []struct {
-			suffix    string
-			fieldSet  func(c *model.Character, url string)
-		}{
-			{"front view, facing camera, full body, character design sheet", func(c *model.Character, url string) { c.ThreeViewFront = url }},
-			{"side profile view, full body, character design sheet", func(c *model.Character, url string) { c.ThreeViewSide = url }},
-			{"back view, full body, character design sheet", func(c *model.Character, url string) { c.ThreeViewBack = url }},
-		}
-
-		changed := false
-		for _, v := range views {
-			prompt := basePrompt + ", " + v.suffix
-			url, err := s.aiService.GenerateCharacterThreeView(ctx, 0, "", prompt, "", "", "")
-			if err != nil {
-				logger.Printf("NovelAnalysis: three-view %q for char %d: %v", v.suffix, char.ID, err)
-				continue
-			}
-			if url != "" {
-				v.fieldSet(char, url)
-				changed = true
-			}
-			// 小间隔避免限速
-			time.Sleep(500 * time.Millisecond)
-		}
-
-		if changed {
+		// 生成三视图合图（combined turnaround sheet）
+		sheetPrompt := basePrompt + ", character turnaround sheet, front and side and back views side by side, three-view character design sheet, same character multiple angles"
+		url, err := s.aiService.GenerateCharacterThreeView(ctx, 0, "", sheetPrompt, "", "", "")
+		if err != nil {
+			logger.Printf("NovelAnalysis: three-view sheet for char %d: %v", char.ID, err)
+		} else if url != "" {
+			char.ThreeViewSheet = url
 			if err := s.characterRepo.Update(char); err != nil {
 				logger.Printf("NovelAnalysis: save three-view for char %d: %v", char.ID, err)
 			}

@@ -1,12 +1,10 @@
 package service
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
-	"text/template"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -51,21 +49,13 @@ func (s *RewriteService) WithTaskService(svc *TaskService) *RewriteService {
 	return s
 }
 
-// renderRewriteTemplate loads and executes a named rewrite prompt template
+// renderRewriteTemplate renders a named rewrite prompt template using Jinja2.
 func renderRewriteTemplate(name string, data interface{}) (string, error) {
-	tmplStr := loadPromptTemplate(name + ".tmpl")
-	if tmplStr == "" {
-		return "", fmt.Errorf("template not found: %s", name)
+	ctx, ok := data.(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("renderRewriteTemplate: data must be map[string]interface{}")
 	}
-	tmpl, err := template.New(name).Parse(tmplStr)
-	if err != nil {
-		return "", fmt.Errorf("parse template %s: %w", name, err)
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, data); err != nil {
-		return "", fmt.Errorf("execute template %s: %w", name, err)
-	}
-	return buf.String(), nil
+	return renderPrompt(name, ctx)
 }
 
 // CreateProject creates a new rewrite project

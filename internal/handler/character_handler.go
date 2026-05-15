@@ -5,8 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
@@ -19,8 +17,6 @@ import (
 
 // characterToUpdateReq copies string fields from a Character into an
 // UpdateCharacterRequest, preserving existing values before a partial update.
-// Slice fields (PersonalityTags, Abilities) are left nil so the service
-// leaves them unchanged.
 func characterToUpdateReq(c *model.Character) *model.UpdateCharacterRequest {
 	return &model.UpdateCharacterRequest{
 		Name:           c.Name,
@@ -32,9 +28,8 @@ func characterToUpdateReq(c *model.Character) *model.UpdateCharacterRequest {
 		Background:     c.Background,
 		CharacterArc:   c.CharacterArc,
 		Portrait:       c.Portrait,
-		ThreeViewFront: c.ThreeViewFront,
-		ThreeViewSide:  c.ThreeViewSide,
-		ThreeViewBack:  c.ThreeViewBack,
+		ThreeViewSheet: c.ThreeViewSheet,
+		FaceCloseup:    c.FaceCloseup,
 		CoverImage:     c.CoverImage,
 		VoiceID:        c.VoiceID,
 		VoiceSpeed:     &c.VoiceSpeed,
@@ -42,9 +37,7 @@ func characterToUpdateReq(c *model.Character) *model.UpdateCharacterRequest {
 	}
 }
 
-// characterResponse converts a Character model to a response map, parsing JSON
-// string fields (abilities, personality_tags) into proper JSON arrays so the
-// frontend receives typed data rather than raw JSON strings.
+// characterResponse converts a Character model to a response map.
 func characterResponse(c *model.Character) gin.H {
 	resp := gin.H{
 		"id":               c.ID,
@@ -58,9 +51,8 @@ func characterResponse(c *model.Character) gin.H {
 		"personality":      c.Personality,
 		"background":       c.Background,
 		"character_arc":    c.CharacterArc,
-		"three_view_front": c.ThreeViewFront,
-		"three_view_side":  c.ThreeViewSide,
-		"three_view_back":  c.ThreeViewBack,
+		"three_view_sheet": c.ThreeViewSheet,
+		"face_closeup":     c.FaceCloseup,
 		"portrait":         c.Portrait,
 		"cover_image":      c.CoverImage,
 		"voice_id":         c.VoiceID,
@@ -71,19 +63,6 @@ func characterResponse(c *model.Character) gin.H {
 		"status":           c.Status,
 		"created_at":       c.CreatedAt,
 		"updated_at":       c.UpdatedAt,
-	}
-	// Parse JSON-stored array fields
-	if c.Abilities != "" {
-		var v interface{}
-		if err := json.Unmarshal([]byte(c.Abilities), &v); err == nil {
-			resp["abilities"] = v
-		}
-	}
-	if c.PersonalityTags != "" {
-		var v interface{}
-		if err := json.Unmarshal([]byte(c.PersonalityTags), &v); err == nil {
-			resp["personality_tags"] = v
-		}
 	}
 	if c.VisualDesign != "" {
 		var v interface{}
@@ -298,9 +277,9 @@ func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 	respondOK(c, image)
 }
 
-// GenerateThreeView AI生成角色三视图（异步任务）
+// GenerateThreeView AI生成角色三视图合图（正视/侧视/背视放在同一张图中，异步任务）
 // POST /api/v1/characters/:id/three-view
-// 立即返回 202 + task_id，轮询 GET /characters/:id/three-view/:task_id 获取结果
+// 立即返回 202 + task_id，轮询任务接口获取结果
 func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -308,16 +287,12 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 	}
 
 	var req struct {
-		ViewType string `json:"view_type"` // "front" | "side" | "back" | "all"
 		Style    string `json:"style,omitempty"`
-		Provider string `json:"provider,omitempty"` // 指定图像生成提供者，可为空
+		Provider string `json:"provider,omitempty"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
 		respondBadRequest(c, err.Error())
 		return
-	}
-	if req.ViewType == "" {
-		req.ViewType = "all"
 	}
 
 	character, err := h.characterService.GetCharacter(uint(id))
@@ -333,78 +308,110 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 		return
 	}
 
-	// 提前获取小说标题（用于 OSS 路径），避免在每个视角 goroutine 中重复查询
 	novelTitle := h.characterService.GetNovelTitle(character.NovelID)
 
-	go func(taskID string, charID uint, char *model.Character, viewType, style, provider string) {
+	go func(taskID string, charID uint, char *model.Character, style, provider string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 
-		views := []string{viewType}
-		if viewType == "all" {
-			views = []string{"front", "side", "back"}
+		genCtx := context.Background()
+		if novelTitle != "" {
+			genCtx = service.WithImageStorageHint(genCtx, service.ImageStorageHint{NovelTitle: novelTitle})
 		}
-		total := len(views)
+		// 生成三合一参考图（正视+侧视+背视放在同一张图中）
+		img, err := h.imageGenService.GenerateThreeViewSheet(genCtx, tenantID, char.Name, char.Appearance, style, char.Gender, "", provider)
+		if err != nil {
+			logger.Printf("[CharacterHandler] GenerateThreeView task %s failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, "generate three-view sheet failed: "+err.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.UpdateProgress(taskID, 99) //nolint:errcheck
 
-		type viewResult struct {
-			view string
-			url  string
-			err  error
-		}
-		resultCh := make(chan viewResult, total)
-		var wg sync.WaitGroup
-		var doneCount int32
-		for _, v := range views {
-			wg.Add(1)
-			go func(v string) {
-				defer wg.Done()
-				// 三视图是"按文字描述定义角色外观"，不传参考图，
-				// 让 Text2ImgV3/PortraitPhoto 完全由外貌描述+性别驱动。
-				genCtx := context.Background()
-				if novelTitle != "" {
-					genCtx = service.WithImageStorageHint(genCtx, service.ImageStorageHint{NovelTitle: novelTitle})
-				}
-				img, err := h.imageGenService.GenerateThreeViewImage(genCtx, tenantID, char.Name, char.Appearance, v, style, char.Gender, "", provider)
-				cur := int(atomic.AddInt32(&doneCount, 1))
-				h.taskSvc.UpdateProgress(taskID, cur*99/total) //nolint:errcheck
-				if err != nil {
-					resultCh <- viewResult{view: v, err: err}
-					return
-				}
-				resultCh <- viewResult{view: v, url: img.URL}
-			}(v)
-		}
-		wg.Wait()
-		close(resultCh)
-
-		generated := map[string]string{}
 		updateReq := characterToUpdateReq(char)
-		for r := range resultCh {
-			if r.err != nil {
-				logger.Printf("[CharacterHandler] GenerateThreeView task %s view=%s failed: %v", taskID, r.view, r.err)
-				h.taskSvc.Fail(taskID, "generate "+r.view+" view failed: "+r.err.Error()) //nolint:errcheck
-				return
-			}
-			generated[r.view] = r.url
-			switch r.view {
-			case "front":
-				updateReq.ThreeViewFront = r.url
-			case "side":
-				updateReq.ThreeViewSide = r.url
-			case "back":
-				updateReq.ThreeViewBack = r.url
-			}
-		}
+		updateReq.ThreeViewSheet = img.URL // ThreeViewSheet 存储三合一参考图
 
 		updated, err := h.characterService.UpdateCharacter(charID, updateReq)
 		if err != nil {
-			h.taskSvc.Fail(taskID, "save three view failed: "+err.Error()) //nolint:errcheck
+			h.taskSvc.Fail(taskID, "save three-view sheet failed: "+err.Error()) //nolint:errcheck
 			return
 		}
 
-		h.taskSvc.Complete(taskID, map[string]interface{}{"character": updated, "generated": generated}) //nolint:errcheck
-	}(task.TaskID, uint(id), character, req.ViewType, req.Style, req.Provider)
+		h.taskSvc.Complete(taskID, map[string]interface{}{ //nolint:errcheck
+			"character": updated,
+			"generated": map[string]string{"sheet": img.URL},
+		})
+	}(task.TaskID, uint(id), character, req.Style, req.Provider)
 
 	respondAccepted(c, task.TaskID, "三视图生成任务已提交")
+}
+
+// GenerateFaceCloseup AI生成角色面部特写图（异步任务）
+// POST /api/v1/characters/:id/face-closeup
+func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Style    string `json:"style,omitempty"`
+		Provider string `json:"provider,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
+		respondBadRequest(c, err.Error())
+		return
+	}
+
+	character, err := h.characterService.GetCharacter(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeFaceCloseup, "角色面部特写生成", "character", uint(id))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+
+	novelTitle := h.characterService.GetNovelTitle(character.NovelID)
+
+	go func(taskID string, charID uint, char *model.Character, style, provider string) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+
+		genCtx := context.Background()
+		if novelTitle != "" {
+			genCtx = service.WithImageStorageHint(genCtx, service.ImageStorageHint{NovelTitle: novelTitle})
+		}
+		// 使用肖像图作为参考（若有），保持面部一致性
+		referenceImage := char.Portrait
+		if referenceImage == "" {
+			referenceImage = char.ThreeViewSheet
+		}
+		img, err := h.imageGenService.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, char.Appearance, style, char.Gender, referenceImage, provider)
+		if err != nil {
+			logger.Printf("[CharacterHandler] GenerateFaceCloseup task %s failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, "generate face closeup failed: "+err.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.UpdateProgress(taskID, 99) //nolint:errcheck
+
+		updateReq := characterToUpdateReq(char)
+		updateReq.FaceCloseup = img.URL
+
+		updated, err := h.characterService.UpdateCharacter(charID, updateReq)
+		if err != nil {
+			h.taskSvc.Fail(taskID, "save face closeup failed: "+err.Error()) //nolint:errcheck
+			return
+		}
+
+		h.taskSvc.Complete(taskID, map[string]interface{}{ //nolint:errcheck
+			"character": updated,
+			"generated": map[string]string{"face_closeup": img.URL},
+		})
+	}(task.TaskID, uint(id), character, req.Style, req.Provider)
+
+	respondAccepted(c, task.TaskID, "面部特写生成任务已提交")
 }
 
 // UploadPortrait 上传角色肖像图片（远端 OSS 或本地存储兜底），用作三视图生成参考图
@@ -469,7 +476,7 @@ func (h *CharacterHandler) AIBatchGenerate(c *gin.Context) {
 	respondAccepted(c, task.TaskID, "角色批量生成任务已提交")
 }
 
-// BatchGenerateImages 批量为小说所有角色生成三视图正面图（异步任务）
+// BatchGenerateImages 批量为小说所有角色生成三视图合图图（异步任务）
 // POST /api/v1/novels/:id/characters/batch-images
 func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
 	novelID, ok := parseID(c, "id")

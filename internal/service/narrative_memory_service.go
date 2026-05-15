@@ -1,12 +1,10 @@
 package service
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"strings"
-	"text/template"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -425,23 +423,18 @@ func (s *NarrativeMemoryService) generateArcSummary(tenantID, novelID uint, arcN
 		return err
 	}
 
-	tmplStr := loadPromptTemplate("arc_summary.tmpl")
-	tmpl, err := template.New("arc_summary").Parse(tmplStr)
-	if err != nil {
-		return fmt.Errorf("parse arc_summary.tmpl: %w", err)
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
+	prompt, err := renderPrompt("arc_summary", map[string]interface{}{
 		"NovelTitle":       novel.Title,
 		"ArcNo":            arcNo,
 		"StartChapter":     startChapter,
 		"EndChapter":       endChapter,
 		"ChapterSummaries": chapters,
-	}); err != nil {
-		return err
+	})
+	if err != nil {
+		return fmt.Errorf("render arc_summary: %w", err)
 	}
 
-	resp, err := s.aiService.GenerateWithProvider(tenantID, novelID, "arc_summary", buf.String(), "")
+	resp, err := s.aiService.GenerateWithProvider(tenantID, novelID, "arc_summary", prompt, "")
 	if err != nil {
 		return fmt.Errorf("AI arc summary: %w", err)
 	}
@@ -493,21 +486,16 @@ func (s *NarrativeMemoryService) generateArcSummary(tenantID, novelID uint, arcN
 // GenerateChapterSummary 为已生成章节内容生成80-120字摘要
 func (s *NarrativeMemoryService) GenerateChapterSummary(tenantID uint, chapter *model.Chapter, novelTitle string) (string, error) {
 	logger.Printf("[NarrativeMemory] GenerateChapterSummary: novelID=%d chapterNo=%d", chapter.NovelID, chapter.ChapterNo)
-	tmplStr := loadPromptTemplate("chapter_summary.tmpl")
-	tmpl, err := template.New("chapter_summary").Parse(tmplStr)
-	if err != nil {
-		return "", err
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
+	prompt, err := renderPrompt("chapter_summary", map[string]interface{}{
 		"NovelTitle":   novelTitle,
 		"ChapterNo":    chapter.ChapterNo,
 		"ChapterTitle": chapter.Title,
 		"Content":      truncateForPrompt(chapter.Content, 6000),
-	}); err != nil {
+	})
+	if err != nil {
 		return "", err
 	}
-	summary, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "chapter_summary", buf.String(), "")
+	summary, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "chapter_summary", prompt, "")
 	if err != nil {
 		logger.Printf("[NarrativeMemory] GenerateChapterSummary AI error: chapterNo=%d err=%v", chapter.ChapterNo, err)
 		return "", err
@@ -524,20 +512,15 @@ func (s *NarrativeMemoryService) GenerateChapterSummary(tenantID uint, chapter *
 // GenerateChapterTitle 根据摘要和情感基调生成创意章节标题
 func (s *NarrativeMemoryService) GenerateChapterTitle(tenantID uint, chapter *model.Chapter, genre, emotionalTone string) (string, error) {
 	logger.Printf("[NarrativeMemory] GenerateChapterTitle: novelID=%d chapterNo=%d", chapter.NovelID, chapter.ChapterNo)
-	tmplStr := loadPromptTemplate("chapter_title.tmpl")
-	tmpl, err := template.New("chapter_title").Parse(tmplStr)
-	if err != nil {
-		return "", err
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
+	prompt, err := renderPrompt("chapter_title", map[string]interface{}{
 		"Genre":         genre,
 		"Summary":       chapter.Summary,
 		"EmotionalTone": emotionalTone,
-	}); err != nil {
+	})
+	if err != nil {
 		return "", err
 	}
-	title, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "chapter_title", buf.String(), "")
+	title, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "chapter_title", prompt, "")
 	if err != nil {
 		logger.Printf("[NarrativeMemory] GenerateChapterTitle AI error: chapterNo=%d err=%v", chapter.ChapterNo, err)
 		return "", err
@@ -587,22 +570,17 @@ func (s *NarrativeMemoryService) ExtractCharacterVoice(tenantID uint, character 
 		return "", fmt.Errorf("no dialogue samples for %s", character.Name)
 	}
 
-	tmplStr := loadPromptTemplate("character_voice.tmpl")
-	tmpl, err := template.New("character_voice").Parse(tmplStr)
-	if err != nil {
-		return "", err
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
+	prompt, err := renderPrompt("character_voice", map[string]interface{}{
 		"Name":            character.Name,
 		"Role":            character.Role,
 		"Personality":     character.Personality,
 		"Background":      character.Background,
 		"DialogueSamples": samples.String(),
-	}); err != nil {
+	})
+	if err != nil {
 		return "", err
 	}
-	return s.aiService.GenerateWithProvider(tenantID, novelID, "character_voice", buf.String(), "")
+	return s.aiService.GenerateWithProvider(tenantID, novelID, "character_voice", prompt, "")
 }
 
 // ──────────────────────────────────────────────
@@ -617,23 +595,18 @@ func (s *NarrativeMemoryService) RefineChapterContent(tenantID uint, chapter *mo
 		return chapter.Content, nil
 	}
 
-	tmplStr := loadPromptTemplate("refinement_pass.tmpl")
-	tmpl, err := template.New("refinement").Parse(tmplStr)
-	if err != nil {
-		return chapter.Content, err
-	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, map[string]interface{}{
+	prompt, err := renderPrompt("refinement_pass", map[string]interface{}{
 		"NovelTitle":   novelTitle,
 		"ChapterNo":    chapter.ChapterNo,
 		"ChapterTitle": chapter.Title,
 		"Content":      chapter.Content,
 		"FocusAreas":   focusAreas,
-	}); err != nil {
+	})
+	if err != nil {
 		return chapter.Content, err
 	}
 
-	refined, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "refinement", buf.String(), "")
+	refined, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "refinement", prompt, "")
 	if err != nil {
 		logger.Printf("NarrativeMemory: refinement ch%d failed: %v — using original", chapter.ChapterNo, err)
 		return chapter.Content, nil
