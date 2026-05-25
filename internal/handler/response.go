@@ -56,8 +56,9 @@ func respondAccepted(c *gin.Context, taskID, message string) {
 }
 
 // receiveAndUpload validates the uploaded image file and stores it under keyPrefix.
+// acceptedExts is the set of allowed file extensions (e.g. []string{".jpg",".png"}).
 // On success it returns (url, true); on failure it writes the HTTP response and returns ("", false).
-func receiveAndUpload(c *gin.Context, keyPrefix string, storageSvc storage.Service) (string, bool) {
+func receiveAndUpload(c *gin.Context, keyPrefix string, storageSvc storage.Service, acceptedExts []string) (string, bool) {
 	file, header, err := c.Request.FormFile("file")
 	if err != nil {
 		respondBadRequest(c, "no file uploaded")
@@ -65,9 +66,13 @@ func receiveAndUpload(c *gin.Context, keyPrefix string, storageSvc storage.Servi
 	}
 	defer file.Close()
 
+	allowed := make(map[string]bool, len(acceptedExts))
+	for _, e := range acceptedExts {
+		allowed[e] = true
+	}
 	ext := strings.ToLower(filepath.Ext(header.Filename))
-	if !map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".webp": true}[ext] {
-		respondBadRequest(c, "only jpg/png/webp images are allowed")
+	if !allowed[ext] {
+		respondBadRequest(c, "unsupported file type: "+ext)
 		return "", false
 	}
 

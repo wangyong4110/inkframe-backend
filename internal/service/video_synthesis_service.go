@@ -631,6 +631,12 @@ func (s *VideoService) uploadClipToStorage(ctx context.Context, shot *model.Stor
 	if s.storageSvc == nil {
 		return ""
 	}
+	// If the context has no deadline, add a 5-minute timeout to prevent hangs.
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+	}
 	data, err := os.ReadFile(clipPath)
 	if err != nil {
 		logger.Printf("uploadClipToStorage: read %s: %v", clipPath, err)

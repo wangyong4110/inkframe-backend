@@ -30,6 +30,7 @@ type AIService struct {
 	providerCache sync.Map      // key: "tenantID:providerName" → providerCacheEntry
 	imageSem      chan struct{} // nil = unlimited; set via WithImageConcurrency
 	semMu         sync.RWMutex  // protects imageSem replacement
+	stopCh        chan struct{} // closed by Shutdown() to stop background goroutines
 }
 
 func NewAIService(
@@ -42,6 +43,7 @@ func NewAIService(
 		modelRepo: modelRepo,
 		taskRepo:  taskRepo,
 		aiManager: aiManager,
+		stopCh:    make(chan struct{}),
 	}
 	if len(providerRepo) > 0 {
 		svc.providerRepo = providerRepo[0]
@@ -50,19 +52,34 @@ func NewAIService(
 	return svc
 }
 
+// Shutdown stops background goroutines (call on server exit).
+func (s *AIService) Shutdown() {
+	select {
+	case <-s.stopCh:
+		// already closed
+	default:
+		close(s.stopCh)
+	}
+}
+
 // startProviderCacheCleanup 启动 providerCache 的后台定期清理（每 10 分钟扫描一次，删除已过期条目）。
 func (s *AIService) startProviderCacheCleanup() {
 	ticker := time.NewTicker(10 * time.Minute)
 	go func() {
 		defer ticker.Stop()
-		for range ticker.C {
-			now := time.Now()
-			s.providerCache.Range(func(k, v interface{}) bool {
-				if entry, ok := v.(providerCacheEntry); ok && now.After(entry.expiresAt) {
-					s.providerCache.Delete(k)
-				}
-				return true
-			})
+		for {
+			select {
+			case <-ticker.C:
+				now := time.Now()
+				s.providerCache.Range(func(k, v interface{}) bool {
+					if entry, ok := v.(providerCacheEntry); ok && now.After(entry.expiresAt) {
+						s.providerCache.Delete(k)
+					}
+					return true
+				})
+			case <-s.stopCh:
+				return
+			}
 		}
 	}()
 }
@@ -419,7 +436,9 @@ func (s *AIService) GenerateWithVision(prompt string, imageURLs []string) (strin
 		Temperature: 0.1,
 	}
 
-	resp, err := provider.Generate(context.Background(), req)
+	visionCtx, visionCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer visionCancel()
+	resp, err := provider.Generate(visionCtx, req)
 	if err != nil {
 		return "", err
 	}

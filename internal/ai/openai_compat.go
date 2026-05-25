@@ -130,7 +130,7 @@ func (p *OpenAICompatProvider) Generate(ctx context.Context, req *GenerateReques
 		Content:     result.Choices[0].Message.Content,
 		Model:       result.Model,
 		InputTokens: result.Usage.PromptTokens,
-		Tokens:      result.Usage.TotalTokens,
+		Tokens:      result.Usage.CompletionTokens,
 		StopReason:  result.Choices[0].FinishReason,
 		FinishTime:  time.Since(start).Milliseconds(),
 	}, nil

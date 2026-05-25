@@ -146,7 +146,8 @@ type Novel struct {
 	TopK           int     `json:"top_k" gorm:"default:40"`
 	MaxTokens      int     `json:"max_tokens" gorm:"default:0"` // 0=不限制，由模型自身决定
 	TimeoutSeconds int     `json:"timeout_seconds" gorm:"default:0"` // 0=使用系统默认(300s)
-	StylePrompt    string  `json:"style_prompt" gorm:"type:text"`
+	StylePrompt string `json:"style_prompt" gorm:"type:text"`
+	Outline     string `json:"outline,omitempty" gorm:"type:text"` // 大纲 JSON（章节列表）
 
 	// 风格配置
 	ImageStyle string `json:"image_style" gorm:"size:50"` // 视觉/图片风格，如 anime/realistic/ink_painting

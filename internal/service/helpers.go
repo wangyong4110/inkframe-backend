@@ -6,7 +6,12 @@ import (
 	"strings"
 )
 
-// extractJSON 从 AI 输出中提取纯 JSON 字符串。
+// extractJSON extracts the first JSON object or array from text that may contain
+// markdown code fences or other surrounding content.
+// This is the single canonical implementation for the service package — do NOT
+// duplicate this function in other service files.
+//
+// 从 AI 输出中提取纯 JSON 字符串。
 // 优先提取数组（[...]）；若顶层是对象（{...}），尝试查找其内部的第一个数组。
 func extractJSON(content string) string {
 	content = strings.TrimSpace(content)

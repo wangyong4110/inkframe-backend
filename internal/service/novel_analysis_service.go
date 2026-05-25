@@ -64,6 +64,7 @@ type NovelAnalysisService struct {
 	plotPointService   *PlotPointService
 	sceneAnchorService *SceneAnchorService
 	taskSvc            *TaskService
+	cleanupStop        chan struct{} // closed by Shutdown() to stop background goroutines
 }
 
 func NewNovelAnalysisService(
@@ -81,6 +82,17 @@ func NewNovelAnalysisService(
 		worldviewRepo: worldviewRepo,
 		novelService:  novelService,
 		aiService:     aiService,
+		cleanupStop:   make(chan struct{}),
+	}
+}
+
+// Shutdown stops all background goroutines (call on server exit).
+func (s *NovelAnalysisService) Shutdown() {
+	select {
+	case <-s.cleanupStop:
+		// already closed
+	default:
+		close(s.cleanupStop)
 	}
 }
 

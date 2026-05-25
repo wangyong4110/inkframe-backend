@@ -218,6 +218,16 @@ func Auth() gin.HandlerFunc {
 	}
 }
 
+// MaxBodySize 请求体大小限制中间件。
+// maxBytes: 最大允许的请求体字节数（超出时返回 413）。
+// 对上传端点，调用方应自行处理大文件，不应全局限制。
+func MaxBodySize(maxBytes int64) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
+		c.Next()
+	}
+}
+
 // RateLimit 限流中间件
 // capacity: 令牌桶容量（突发请求数）, rate: 每秒补充速率
 func RateLimit(capacity float64, rate float64) gin.HandlerFunc {

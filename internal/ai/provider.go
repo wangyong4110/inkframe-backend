@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/inkframe/inkframe-backend/internal/logger"
 )
 
 // DefaultProviderTimeout 是 provider HTTP client 的默认超时时间。
@@ -143,6 +145,7 @@ type ImageProviderEntry struct {
 
 // ModelManager 模型管理器
 type ModelManager struct {
+	mu              sync.RWMutex
 	providers       map[string]AIProvider
 	defaultProvider string
 	imageProviders  []ImageProviderEntry
@@ -157,21 +160,29 @@ func NewModelManager() *ModelManager {
 // RegisterImageProvider 注册图像生成提供者候选列表（按调用顺序尝试）。
 // provider 不需要在注册时已存在；实际可用性在请求时由 GetProvider 决定。
 func (m *ModelManager) RegisterImageProvider(name, model, size string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.imageProviders = append(m.imageProviders, ImageProviderEntry{name, model, size})
 }
 
 // GetImageProviders 返回已注册的图像生成提供者列表
 func (m *ModelManager) GetImageProviders() []ImageProviderEntry {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.imageProviders
 }
 
 // RegisterProvider 注册AI提供者
 func (m *ModelManager) RegisterProvider(name string, provider AIProvider) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.providers[name] = provider
 }
 
 // SetDefault 设置默认提供者
 func (m *ModelManager) SetDefault(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if _, ok := m.providers[name]; !ok {
 		return fmt.Errorf("provider not found: %s", name)
 	}
@@ -181,6 +192,8 @@ func (m *ModelManager) SetDefault(name string) error {
 
 // GetProvider 获取提供者
 func (m *ModelManager) GetProvider(name string) (AIProvider, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	if name == "" {
 		name = m.defaultProvider
 	}
@@ -193,6 +206,8 @@ func (m *ModelManager) GetProvider(name string) (AIProvider, error) {
 
 // ListProviders 列出所有提供者
 func (m *ModelManager) ListProviders() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	names := []string{}
 	for name := range m.providers {
 		names = append(names, name)
@@ -277,63 +292,6 @@ func (b *GenerateRequestBuilder) Extra(key string, value interface{}) *GenerateR
 
 func (b *GenerateRequestBuilder) Build() *GenerateRequest {
 	return b.req
-}
-
-// TaskTypeToModelMapping 任务类型到模型的默认映射
-var TaskTypeToModelMapping = map[string]map[string]string{
-	"outline": { // 大纲生成
-		"openai":    "gpt-4-turbo",
-		"anthropic": "claude-3-opus",
-		"google":    "gemini-pro",
-	},
-	"chapter": { // 章节生成
-		"openai":    "gpt-4-turbo",
-		"anthropic": "claude-3-sonnet",
-		"google":    "gemini-pro",
-	},
-	"character": { // 角色生成
-		"openai":    "gpt-4",
-		"anthropic": "claude-3-opus",
-		"google":    "gemini-pro",
-	},
-	"worldview": { // 世界观生成
-		"openai":    "gpt-4",
-		"anthropic": "claude-3-opus",
-		"google":    "gemini-pro",
-	},
-	"dialogue": { // 对话生成
-		"openai":    "gpt-3.5-turbo",
-		"anthropic": "claude-3-haiku",
-		"google":    "gemini-pro",
-	},
-	"description": { // 描述生成
-		"openai":    "gpt-4",
-		"anthropic": "claude-3-sonnet",
-		"google":    "gemini-pro",
-	},
-	"summary": { // 摘要生成
-		"openai":    "gpt-3.5-turbo",
-		"anthropic": "claude-3-haiku",
-		"google":    "gemini-pro",
-	},
-	"image": { // 图像生成
-		"openai":    "dall-e-3",
-		"stability": "stable-diffusion-xl",
-	},
-	"voice": { // 语音生成
-		"elevenlabs": "elevenlabs",
-		"azure":      "azure-tts",
-	},
-}
-
-// GetRecommendedModel 获取推荐模型
-func GetRecommendedModel(taskType, provider string) string {
-	if mapping, ok := TaskTypeToModelMapping[taskType]; ok {
-		if model, ok := mapping[provider]; ok {
-			return model
-		}
-	}
-	return ""
 }
 
 // CostEstimator 成本估算器
@@ -689,6 +647,8 @@ func (p *RetryProvider) HealthCheck(ctx context.Context) error { return p.provid
 
 // SwitchProvider 在 ModelManager 中动态切换某个任务类型的默认 Provider
 func (m *ModelManager) SwitchProvider(providerName string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if _, ok := m.providers[providerName]; !ok {
 		return fmt.Errorf("provider not found: %s", providerName)
 	}
@@ -698,6 +658,8 @@ func (m *ModelManager) SwitchProvider(providerName string) error {
 
 // WrapWithRetry 将已注册的 Provider 包装为 RetryProvider
 func (m *ModelManager) WrapWithRetry(name string, maxRetries int, baseDelay time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	provider, ok := m.providers[name]
 	if !ok {
 		return fmt.Errorf("provider not found: %s", name)

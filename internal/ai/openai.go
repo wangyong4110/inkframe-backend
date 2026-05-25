@@ -112,10 +112,7 @@ func (p *OpenAIProvider) Generate(ctx context.Context, req *GenerateRequest) (*G
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return &GenerateResponse{
-			Error:     fmt.Sprintf("API error: %s", string(respBody)),
-			FinishTime: time.Since(start).Milliseconds(),
-		}, nil
+		return nil, fmt.Errorf("openai API error status=%d body=%s", resp.StatusCode, string(respBody))
 	}
 
 	// 解析响应
@@ -138,7 +135,7 @@ func (p *OpenAIProvider) Generate(ctx context.Context, req *GenerateRequest) (*G
 	return &GenerateResponse{
 		Content:     content,
 		Model:       openaiResp.Model,
-		Tokens:      0,
+		Tokens:      openaiResp.Usage.CompletionTokens,
 		InputTokens: openaiResp.Usage.PromptTokens,
 		StopReason:  openaiResp.Choices[0].FinishReason,
 		FinishTime:  time.Since(start).Milliseconds(),

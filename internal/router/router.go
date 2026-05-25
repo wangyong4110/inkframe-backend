@@ -44,6 +44,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 	r.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))
 	r.Use(middleware.Logger())
 	r.Use(middleware.Recovery())
+	r.Use(middleware.MaxBodySize(4 * 1024 * 1024)) // 4MB for JSON; upload handlers handle their own limits
 
 	// 健康检查（公开）
 	r.GET("/health", func(c *gin.Context) {

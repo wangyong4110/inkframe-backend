@@ -389,7 +389,7 @@ func (h *ItemHandler) UploadItemImage(c *gin.Context) {
 	if !ok {
 		return
 	}
-	imgURL, ok := receiveAndUpload(c, "item-images", h.storageSvc)
+	imgURL, ok := receiveAndUpload(c, "item-images", h.storageSvc, []string{".jpg", ".jpeg", ".png", ".webp"})
 	if !ok {
 		return
 	}
@@ -412,7 +412,7 @@ func (h *ItemHandler) UploadItemReference(c *gin.Context) {
 	if !ok {
 		return
 	}
-	refURL, ok := receiveAndUpload(c, "item-references", h.storageSvc)
+	refURL, ok := receiveAndUpload(c, "item-references", h.storageSvc, []string{".jpg", ".jpeg", ".png", ".webp"})
 	if !ok {
 		return
 	}

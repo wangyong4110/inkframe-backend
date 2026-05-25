@@ -86,7 +86,7 @@ type CreateNovelRequest struct {
 func (s *NovelService) Create(req *CreateNovelRequest) (*model.Novel, error) {
 	tenantID := req.TenantID
 	if tenantID == 0 {
-		tenantID = 1
+		return nil, fmt.Errorf("tenant_id is required")
 	}
 	novel := &model.Novel{
 		UUID:            uuid.New().String(),

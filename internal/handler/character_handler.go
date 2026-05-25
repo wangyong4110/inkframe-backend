@@ -402,7 +402,7 @@ func (h *CharacterHandler) UploadPortrait(c *gin.Context) {
 		return
 	}
 
-	portraitURL, ok := receiveAndUpload(c, "portraits", h.storageSvc)
+	portraitURL, ok := receiveAndUpload(c, "portraits", h.storageSvc, []string{".jpg", ".jpeg", ".png", ".webp"})
 	if !ok {
 		return
 	}

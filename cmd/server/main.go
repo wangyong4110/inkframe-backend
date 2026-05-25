@@ -138,6 +138,11 @@ func main() {
 		}
 	})
 
+	// 11b. 设置Gin模式（必须在 SetupRouter 之前）
+	if cfg.Server.Mode == "release" {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
 	// 12. 设置路由
 	r := router.SetupRouter(&router.Config{
 		JWTSecret:          cfg.Server.JWTSecret,
@@ -168,11 +173,6 @@ func main() {
 		AssetHandler:       handlers.AssetHandler,
 	})
 
-	// 11. 设置Gin模式
-	if cfg.Server.Mode == "release" {
-		gin.SetMode(gin.ReleaseMode)
-	}
-
 	// 12. 创建服务器
 	srv := &http.Server{
 		Addr:           cfg.Server.GetAddr(),
@@ -190,7 +190,9 @@ func main() {
 		}
 	}()
 
-	// 后台定时任务：每小时重新计算视频广场热度分
+	// 后台定时任务：每小时重新计算热度分（带优雅退出）
+	hotScoreQuit := make(chan struct{})
+
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -199,14 +201,18 @@ func main() {
 		}()
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
-		for range ticker.C {
-			if err := services.VideoService.RecalcVideoHotScores(); err != nil {
-				logger.Printf("[hot-score] recalc error: %v", err)
+		for {
+			select {
+			case <-ticker.C:
+				if err := services.VideoService.RecalcVideoHotScores(); err != nil {
+					logger.Printf("[hot-score] recalc error: %v", err)
+				}
+			case <-hotScoreQuit:
+				return
 			}
 		}
 	}()
 
-	// 后台定时任务：每小时重新计算小说广场热度分
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -215,9 +221,14 @@ func main() {
 		}()
 		ticker := time.NewTicker(time.Hour)
 		defer ticker.Stop()
-		for range ticker.C {
-			if err := services.NovelService.RecalcNovelHotScores(); err != nil {
-				logger.Printf("[novel-hot-score] recalc error: %v", err)
+		for {
+			select {
+			case <-ticker.C:
+				if err := services.NovelService.RecalcNovelHotScores(); err != nil {
+					logger.Printf("[novel-hot-score] recalc error: %v", err)
+				}
+			case <-hotScoreQuit:
+				return
 			}
 		}
 	}()
@@ -241,8 +252,15 @@ func main() {
 	}
 
 	// 16. 关闭后台服务 goroutines
+	close(hotScoreQuit)
 	services.VideoService.Shutdown()
 	services.NovelService.Shutdown()
+	if services.NovelAnalysisService != nil {
+		services.NovelAnalysisService.Shutdown()
+	}
+	if services.AIService != nil {
+		services.AIService.Shutdown()
+	}
 	if services.TaskService != nil {
 		services.TaskService.Shutdown()
 	}
@@ -355,7 +373,7 @@ func preMigrateCleanup(db *gorm.DB) {
 			WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_worldview'
 			AND COLUMN_NAME = 'novel_id' AND REFERENCED_TABLE_NAME IS NOT NULL`).Scan(&fkNames)
 		for _, fk := range fkNames {
-			db.Exec("ALTER TABLE ink_worldview DROP FOREIGN KEY " + fk)
+			db.Exec("ALTER TABLE `ink_worldview` DROP FOREIGN KEY `" + fk + "`")
 		}
 		db.Exec("ALTER TABLE ink_worldview DROP COLUMN novel_id")
 	}
@@ -942,7 +960,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-15-v2"
+const schemaVersion = "2026-05-25-v1"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -1083,6 +1101,14 @@ func autoMigrate(db *gorm.DB) error {
 	// 数据迁移：将历史 status='published' 的章节修正为 is_published=true, status='completed'
 	if err := db.Exec(`UPDATE ink_chapter SET is_published = 1, status = 'completed' WHERE status = 'published'`).Error; err != nil {
 		logger.Warnf("autoMigrate: chapter status migration failed: %v", err)
+	}
+
+	// 数据迁移（H-1）：将 style_prompt 中误存的大纲 JSON 迁移到 outline 字段
+	if err := db.Exec(`UPDATE ink_novel SET outline = style_prompt WHERE style_prompt LIKE '{"chapters":%' AND (outline = '' OR outline IS NULL)`).Error; err != nil {
+		logger.Warnf("autoMigrate: outline backfill failed: %v", err)
+	}
+	if err := db.Exec(`UPDATE ink_novel SET style_prompt = '' WHERE style_prompt LIKE '{"chapters":%'`).Error; err != nil {
+		logger.Warnf("autoMigrate: style_prompt cleanup failed: %v", err)
 	}
 
 	// 数据迁移（2026-05-15-v2）：将 Character 旧字段合并到 description
