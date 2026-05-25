@@ -92,6 +92,12 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 		return "", fmt.Errorf("no completed shots to stitch")
 	}
 
+	// 获取宽高比（Ken Burns 降级时使用）
+	aspectRatio := "16:9"
+	if video, verr := s.videoRepo.GetByID(videoID); verr == nil && video != nil && video.AspectRatio != "" {
+		aspectRatio = video.AspectRatio
+	}
+
 	tmpDir := fmt.Sprintf("%s/inkframe-%d", inkframeTempDir(), videoID)
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
 		return "", err
@@ -106,9 +112,34 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 	}()
 	var concatLines []string
 	for i, shot := range shots {
-		// 跳过既无本地 clip 也无远端 URL 的镜头
+		// 镜头无视频 clip/URL，但有图片 → 实时生成 Ken Burns 片段
 		if shot.ClipPath == "" && shot.VideoURL == "" {
-			logger.Printf("StitchVideo: shot %d has no clip or video URL, skipping", shot.ShotNo)
+			if shot.ImageURL == "" {
+				logger.Printf("StitchVideo: shot %d has no clip, video URL, or image — skipping", shot.ShotNo)
+				continue
+			}
+			duration := shot.Duration
+			if duration <= 0 {
+				duration = defaultShotDurationSecs
+			}
+			localImage, dlErr := downloadToTemp(shot.ImageURL, fmt.Sprintf("inkframe-img-%d-", shot.ID), ".jpg")
+			if dlErr != nil {
+				logger.Printf("StitchVideo: shot %d image download failed: %v — skipping", shot.ShotNo, dlErr)
+				continue
+			}
+			kbPath := fmt.Sprintf("%s/kb_%d.mp4", tmpDir, i)
+			kbErr := error(nil)
+			kbPath, kbErr = s.generateKenBurnsPureGo(context.Background(), shot, localImage, duration, aspectRatio)
+			os.Remove(localImage)
+			if kbErr != nil {
+				// Ken Burns 失败则降级为静帧
+				kbPath, kbErr = s.generateStillFrameClip(localImage, duration, aspectRatio)
+			}
+			if kbErr != nil {
+				logger.Printf("StitchVideo: shot %d ken burns + still frame both failed: %v — skipping", shot.ShotNo, kbErr)
+				continue
+			}
+			concatLines = append(concatLines, fmt.Sprintf("file '%s'", kbPath))
 			continue
 		}
 
