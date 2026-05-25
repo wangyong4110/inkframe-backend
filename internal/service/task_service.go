@@ -35,16 +35,25 @@ const (
 
 // TaskService manages persistent async tasks.
 type TaskService struct {
-	repo *repository.TaskRepository
+	repo     *repository.TaskRepository
+	stopCh   chan struct{} // closed by Shutdown() to stop background goroutines
 }
 
 func NewTaskService(repo *repository.TaskRepository) *TaskService {
-	svc := &TaskService{repo: repo}
+	svc := &TaskService{
+		repo:   repo,
+		stopCh: make(chan struct{}),
+	}
 	// Immediately recover tasks left in running/pending state from a previous server session.
-	// Tasks not updated within the last 10 seconds are considered orphaned.
+	// Use a short context timeout to avoid blocking startup if DB is slow.
 	svc.recoverOrphaned(10 * time.Second)
 	go svc.runCleanup()
 	return svc
+}
+
+// Shutdown stops background goroutines. Call on server exit.
+func (s *TaskService) Shutdown() {
+	close(s.stopCh)
 }
 
 // Create inserts a new pending task and returns it.
@@ -156,16 +165,22 @@ func (s *TaskService) recoverOrphaned(age time.Duration) {
 }
 
 // runCleanup deletes completed/failed tasks older than 7 days, and recovers stale
-// running tasks (not updated in >2h), once per hour.
+// running tasks (not updated in >2h), once per hour. Exits when Shutdown() is called.
 func (s *TaskService) runCleanup() {
 	ticker := time.NewTicker(time.Hour)
-	for range ticker.C {
-		// Delete old terminal tasks.
-		cutoff := time.Now().AddDate(0, 0, -7)
-		if err := s.repo.DeleteOldCompleted(cutoff); err != nil {
-			logger.Printf("TaskService: cleanup error: %v", err)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			// Delete old terminal tasks.
+			cutoff := time.Now().AddDate(0, 0, -7)
+			if err := s.repo.DeleteOldCompleted(cutoff); err != nil {
+				logger.Printf("TaskService: cleanup error: %v", err)
+			}
+			// Recover tasks stuck in running/pending for more than 2 hours.
+			s.recoverOrphaned(2 * time.Hour)
+		case <-s.stopCh:
+			return
 		}
-		// Recover tasks stuck in running/pending for more than 2 hours.
-		s.recoverOrphaned(2 * time.Hour)
 	}
 }

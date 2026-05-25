@@ -1,0 +1,483 @@
+package repository
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/model"
+	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
+)
+
+// NovelRepository 小说仓库
+type NovelRepository struct {
+	db    *gorm.DB
+	cache *redis.Client
+}
+
+const novelCacheTTL = 30 * time.Minute
+
+func NewNovelRepository(db *gorm.DB, cache *redis.Client) *NovelRepository {
+	return &NovelRepository{db: db, cache: cache}
+}
+
+// Create 创建小说
+func (r *NovelRepository) Create(novel *model.Novel) error {
+	err := r.db.Create(novel).Error
+	if err != nil && (isSchemaMissing(err)) {
+		// 广场社交列尚未迁移到 DB，降级：剔除这些列（它们均有 DB default，不影响业务）
+		logger.Warnf("NovelRepository.Create: social columns missing, retrying without them: %v", err)
+		err = r.db.Omit("view_count", "like_count", "comment_count", "hot_score",
+			"is_published", "published_at", "visibility", "plaza_tags").Create(novel).Error
+	}
+	if err != nil {
+		return err
+	}
+	r.invalidateCache(novel.ID)
+	return nil
+}
+
+// GetByID 根据ID获取小说
+func (r *NovelRepository) GetByID(id uint) (*model.Novel, error) {
+	// 1. 尝试 Redis 缓存
+	if r.cache != nil {
+		cacheKey := fmt.Sprintf("novel:%d", id)
+		if cached, err := r.cache.Get(context.Background(), cacheKey).Result(); err == nil {
+			var novel model.Novel
+			if json.Unmarshal([]byte(cached), &novel) == nil {
+				return &novel, nil
+			}
+		}
+	}
+
+	// 2. 查 DB
+	var novel model.Novel
+	if err := r.db.Preload("Worldview").Preload("VideoConfig").First(&novel, id).Error; err != nil {
+		return nil, err
+	}
+
+	// 3. 写入缓存
+	if r.cache != nil {
+		if data, err := json.Marshal(novel); err == nil {
+			r.cache.Set(context.Background(), fmt.Sprintf("novel:%d", id), data, novelCacheTTL)
+		}
+	}
+	return &novel, nil
+}
+
+// GetByUUID 根据UUID获取小说
+func (r *NovelRepository) GetByUUID(uuid string) (*model.Novel, error) {
+	var novel model.Novel
+	if err := r.db.Preload("Worldview").Preload("VideoConfig").Where("uuid = ?", uuid).First(&novel).Error; err != nil {
+		return nil, err
+	}
+	return &novel, nil
+}
+
+// FindByTitle 按标题和 tenantID 查找小说（用于导入去重）
+func (r *NovelRepository) FindByTitle(title string, tenantID uint) (*model.Novel, error) {
+	var novel model.Novel
+	err := r.db.Where("title = ? AND tenant_id = ? AND deleted_at IS NULL", title, tenantID).First(&novel).Error
+	if err != nil {
+		return nil, err
+	}
+	return &novel, nil
+}
+
+// List 获取小说列表
+func (r *NovelRepository) List(page, pageSize int, filters map[string]interface{}) ([]*model.Novel, int64, error) {
+	var novels []*model.Novel
+	var total int64
+
+	query := r.db.Model(&model.Novel{})
+
+	// 应用过滤
+	if tenantID, ok := filters["tenant_id"]; ok {
+		query = query.Where("tenant_id = ?", tenantID)
+	}
+	if status, ok := filters["status"]; ok {
+		query = query.Where("status = ?", status)
+	}
+	if genre, ok := filters["genre"]; ok {
+		query = query.Where("genre = ?", genre)
+	}
+
+	// 统计总数 (clone to avoid state contamination)
+	if err := query.Session(&gorm.Session{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	// 分页查询（列表视图不需要 Worldview 完整数据，novel.WorldviewID 字段已足够）
+	offset := (page - 1) * pageSize
+	if err := query.
+		Order("updated_at DESC").
+		Offset(offset).
+		Limit(pageSize).
+		Find(&novels).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return novels, total, nil
+}
+
+// Update 更新小说（同时 upsert VideoConfig）
+func (r *NovelRepository) Update(novel *model.Novel) error {
+	if err := r.db.Save(novel).Error; err != nil {
+		return err
+	}
+	if novel.VideoConfig != nil {
+		novel.VideoConfig.NovelID = novel.ID
+		if err := r.db.Save(novel.VideoConfig).Error; err != nil {
+			logger.Printf("[NovelRepository] Save VideoConfig: %v", err)
+		}
+	}
+	r.invalidateCache(novel.ID)
+	return nil
+}
+
+// UpdateFields 更新小说指定字段（避免 Save 写零值导致数据丢失）
+func (r *NovelRepository) UpdateFields(id uint, fields map[string]interface{}) error {
+	if err := r.db.Model(&model.Novel{}).Where("id = ?", id).Updates(fields).Error; err != nil {
+		return err
+	}
+	r.invalidateCache(id)
+	return nil
+}
+
+// Delete 软删除小说（不删关联数据）
+func (r *NovelRepository) Delete(id uint) error {
+	if err := r.db.Delete(&model.Novel{}, id).Error; err != nil {
+		return err
+	}
+	r.invalidateCache(id)
+	return nil
+}
+
+// DeleteWithCascade 物理删除小说及其全部关联数据（在事务中按依赖顺序执行）
+// 对"列/表不存在"类错误（schema 尚未迁移）采用 skip 策略，不中断事务。
+func (r *NovelRepository) DeleteWithCascade(id uint) error {
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		// tryExec 执行 SQL；若因 schema 缺失（列/表不存在）失败则记录日志并跳过
+		tryExec := func(sql string, args ...interface{}) error {
+			if e := tx.Exec(sql, args...).Error; e != nil {
+				if isSchemaMissing(e) {
+					logger.Printf("[DeleteNovel] skip (schema not ready): %v", e)
+					return nil
+				}
+				return e
+			}
+			return nil
+		}
+
+		// ── 1. 间接关联：场景一致性日志（通过 anchor / storyboard_shot）
+		if e := tryExec(`DELETE FROM ink_scene_consistency_log WHERE anchor_id IN (SELECT id FROM ink_scene_anchor WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+		if e := tryExec(`DELETE FROM ink_scene_consistency_log WHERE shot_id IN (SELECT id FROM ink_storyboard_shot WHERE video_id IN (SELECT id FROM ink_video WHERE novel_id = ?))`, id); e != nil {
+			return e
+		}
+
+		// ── 2. 分镜（通过 video.novel_id）
+		if e := tryExec(`DELETE FROM ink_storyboard_shot WHERE video_id IN (SELECT id FROM ink_video WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+
+		// ── 3. 章节版本（通过 chapter.chapter_id）
+		if e := tryExec(`DELETE FROM ink_chapter_version WHERE chapter_id IN (SELECT id FROM ink_chapter WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+
+		// ── 4. 角色间接数据（通过 character.novel_id）
+		if e := tryExec(`DELETE FROM ink_character_visual_design WHERE character_id IN (SELECT id FROM ink_character WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+		if e := tryExec(`DELETE FROM ink_character_state_snapshot WHERE character_id IN (SELECT id FROM ink_character WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+		if e := tryExec(`DELETE FROM ink_character_appearance WHERE character_id IN (SELECT id FROM ink_character WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+
+		// ── 5. 章节物品关联（通过 item.novel_id）
+		if e := tryExec(`DELETE FROM ink_chapter_item WHERE item_id IN (SELECT id FROM ink_item WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+
+		// ── 6. 扩展表（novel_id 直接关联；部分表可能尚未迁移，tryExec 会跳过）
+		extStmts := []string{
+			`DELETE FROM ink_video WHERE novel_id = ?`,
+			`DELETE FROM ink_scene_anchor WHERE novel_id = ?`,
+			`DELETE FROM ink_arc_summary WHERE novel_id = ?`,
+			`DELETE FROM ink_quality_report WHERE novel_id = ?`,
+			`DELETE FROM ink_review_task WHERE novel_id = ?`,
+			`DELETE FROM ink_feedback_record WHERE novel_id = ?`,
+			`DELETE FROM ink_plot_point WHERE novel_id = ?`,
+			`DELETE FROM ink_model_usage_log WHERE novel_id = ?`,
+			`DELETE FROM ink_async_task WHERE novel_id = ?`,
+			`DELETE FROM ink_hook_chain WHERE novel_id = ?`,
+			`DELETE FROM ink_satisfaction_point WHERE novel_id = ?`,
+			`DELETE FROM ink_conflict_arc WHERE novel_id = ?`,
+			`DELETE FROM ink_knowledge_base WHERE novel_id = ?`,
+			`DELETE FROM ink_media_asset WHERE novel_id = ?`,
+			`DELETE FROM ink_chapter_character WHERE novel_id = ?`,
+		}
+		for _, stmt := range extStmts {
+			if e := tryExec(stmt, id); e != nil {
+				return e
+			}
+		}
+
+		// ── 7. 核心表（必须成功）
+		coreStmts := []string{
+			`DELETE FROM ink_item WHERE novel_id = ?`,
+			`DELETE FROM ink_skill WHERE novel_id = ?`,
+			`DELETE FROM ink_character WHERE novel_id = ?`,
+			`DELETE FROM ink_chapter WHERE novel_id = ?`,
+			`DELETE FROM ink_novel WHERE id = ?`,
+		}
+		for _, stmt := range coreStmts {
+			if e := tx.Exec(stmt, id).Error; e != nil {
+				return e
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	r.invalidateCache(id)
+	return nil
+}
+
+// SyncStats recalculates chapter_count and total_words from the chapters table.
+func (r *NovelRepository) SyncStats(novelID uint) error {
+	var result struct {
+		Count int
+		Words int
+	}
+	r.db.Model(&model.Chapter{}).
+		Select("COUNT(*) as count, COALESCE(SUM(word_count), 0) as words").
+		Where("novel_id = ?", novelID).
+		Scan(&result)
+	if err := r.db.Model(&model.Novel{}).Where("id = ?", novelID).Updates(map[string]interface{}{
+		"chapter_count": result.Count,
+		"total_words":   result.Words,
+	}).Error; err != nil {
+		return err
+	}
+	r.invalidateCache(novelID)
+	return nil
+}
+
+// invalidateCache 清除缓存
+func (r *NovelRepository) invalidateCache(id uint) {
+	if r.cache != nil {
+		cacheKey := fmt.Sprintf("novel:%d", id)
+		r.cache.Del(context.Background(), cacheKey)
+	}
+}
+
+// ─── 小说广场 — NovelRepository 扩展 ──────────────────────────────────────────
+
+// GetPublicByID 获取单条公开小说（无需 tenantID）
+func (r *NovelRepository) GetPublicByID(id uint) (*model.Novel, error) {
+	var n model.Novel
+	err := r.db.Where("id = ? AND is_published = ? AND visibility = ?", id, true, "public").
+		First(&n).Error
+	return &n, err
+}
+
+// NovelPublicFilter 公开小说列表筛选参数
+type NovelPublicFilter struct {
+	Sort        string // hot|latest|words|favorites
+	Q           string
+	Channel     string // female|male|publish|""=全部
+	Genre       string // exact match, ""=全部
+	WordMin     int    // 0=不限
+	WordMax     int    // 0=不限
+	UpdatedDays int    // 0=不限，N=最近N天内更新
+	IsCompleted string // ""=全部 "1"=completed "0"=ongoing
+	Page        int
+	PageSize    int
+}
+
+// ListPublicSorted 列出公开小说（支持精细筛选和多种排序）
+func (r *NovelRepository) ListPublicSorted(f NovelPublicFilter) ([]*model.Novel, int64, error) {
+	var novels []*model.Novel
+	var total int64
+	base := r.db.Model(&model.Novel{}).Where("is_published = ? AND visibility = ?", true, "public")
+	if f.Q != "" {
+		base = base.Where("title LIKE ? OR description LIKE ?", "%"+f.Q+"%", "%"+f.Q+"%")
+	}
+	if f.Channel != "" {
+		base = base.Where("channel = ?", f.Channel)
+	}
+	if f.Genre != "" {
+		base = base.Where("genre = ?", f.Genre)
+	}
+	if f.WordMin > 0 {
+		base = base.Where("total_words >= ?", f.WordMin)
+	}
+	if f.WordMax > 0 {
+		base = base.Where("total_words <= ?", f.WordMax)
+	}
+	if f.UpdatedDays > 0 {
+		cutoff := time.Now().AddDate(0, 0, -f.UpdatedDays)
+		base = base.Where("updated_at >= ?", cutoff)
+	}
+	if f.IsCompleted == "1" {
+		base = base.Where("status = ?", "completed")
+	} else if f.IsCompleted == "0" {
+		base = base.Where("status IN ?", []string{"planning", "writing", "paused"})
+	}
+	if err := base.Session(&gorm.Session{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	order := "hot_score DESC, published_at DESC"
+	switch f.Sort {
+	case "latest":
+		order = "published_at DESC, created_at DESC"
+	case "words":
+		order = "total_words DESC, published_at DESC"
+	case "favorites":
+		order = "like_count DESC, published_at DESC"
+	}
+	page := f.Page
+	if page < 1 {
+		page = 1
+	}
+	pageSize := f.PageSize
+	if pageSize < 1 {
+		pageSize = 12
+	}
+	offset := (page - 1) * pageSize
+	err := base.Order(order).Offset(offset).Limit(pageSize).Find(&novels).Error
+	return novels, total, err
+}
+
+// GetPublicRanking 获取公开小说排行榜
+// rankType: hot|new|completed|favorites|updated  gender: male|female|""=全部
+func (r *NovelRepository) GetPublicRanking(rankType, gender string, limit int) ([]*model.Novel, error) {
+	if limit <= 0 {
+		limit = 30
+	}
+	base := r.db.Model(&model.Novel{}).Where("is_published = ? AND visibility = ?", true, "public")
+	if gender == "male" || gender == "female" {
+		base = base.Where("channel = ?", gender)
+	}
+	switch rankType {
+	case "new":
+		cutoff := time.Now().AddDate(0, -1, 0)
+		base = base.Where("published_at >= ?", cutoff).Order("published_at DESC")
+	case "completed":
+		base = base.Where("status = ?", "completed").Order("hot_score DESC, like_count DESC")
+	case "favorites":
+		base = base.Order("like_count DESC, published_at DESC")
+	case "updated":
+		base = base.Order("updated_at DESC")
+	default: // hot
+		base = base.Order("hot_score DESC, like_count DESC, published_at DESC")
+	}
+	var novels []*model.Novel
+	err := base.Limit(limit).Find(&novels).Error
+	return novels, err
+}
+
+// IncrNovelViewCount 浏览量+1
+func (r *NovelRepository) IncrNovelViewCount(id uint) error {
+	return r.db.Model(&model.Novel{}).Where("id = ?", id).
+		UpdateColumn("view_count", gorm.Expr("view_count + 1")).Error
+}
+
+// IncrNovelLikeCount 点赞数 delta（+1 或 -1）
+func (r *NovelRepository) IncrNovelLikeCount(id uint, delta int) error {
+	return r.db.Model(&model.Novel{}).Where("id = ?", id).
+		UpdateColumn("like_count", gorm.Expr("like_count + ?", delta)).Error
+}
+
+// IncrNovelCommentCount 评论数 delta
+func (r *NovelRepository) IncrNovelCommentCount(id uint, delta int) error {
+	return r.db.Model(&model.Novel{}).Where("id = ?", id).
+		UpdateColumn("comment_count", gorm.Expr("comment_count + ?", delta)).Error
+}
+
+// UpdateNovelHotScore 更新热度分
+func (r *NovelRepository) UpdateNovelHotScore(id uint, score float64) error {
+	return r.db.Model(&model.Novel{}).Where("id = ?", id).Update("hot_score", score).Error
+}
+
+// ListPublicNovelsForHotCalc 批量拉取公开小说用于热度分计算
+func (r *NovelRepository) ListPublicNovelsForHotCalc() ([]*model.Novel, error) {
+	var novels []*model.Novel
+	err := r.db.Model(&model.Novel{}).
+		Where("is_published = ? AND visibility = ?", true, "public").
+		Select("id, view_count, like_count, comment_count, published_at").
+		Find(&novels).Error
+	return novels, err
+}
+
+// ─── NovelLikeRepository ────────────────────────────────────────────────────
+
+type NovelLikeRepository struct{ db *gorm.DB }
+
+func NewNovelLikeRepository(db *gorm.DB) *NovelLikeRepository {
+	return &NovelLikeRepository{db: db}
+}
+
+// Toggle 点赞/取消，返回最终状态（true=已点赞）
+func (r *NovelLikeRepository) Toggle(novelID, userID uint) (liked bool, err error) {
+	var like model.NovelLike
+	result := r.db.Where("novel_id = ? AND user_id = ?", novelID, userID).First(&like)
+	if result.Error != nil {
+		if err2 := r.db.Create(&model.NovelLike{NovelID: novelID, UserID: userID}).Error; err2 != nil {
+			return false, err2
+		}
+		return true, nil
+	}
+	return false, r.db.Delete(&like).Error
+}
+
+// Exists 是否已点赞
+func (r *NovelLikeRepository) Exists(novelID, userID uint) (bool, error) {
+	var count int64
+	err := r.db.Model(&model.NovelLike{}).
+		Where("novel_id = ? AND user_id = ?", novelID, userID).Count(&count).Error
+	return count > 0, err
+}
+
+// ─── NovelCommentRepository ─────────────────────────────────────────────────
+
+type NovelCommentRepository struct{ db *gorm.DB }
+
+func NewNovelCommentRepository(db *gorm.DB) *NovelCommentRepository {
+	return &NovelCommentRepository{db: db}
+}
+
+func (r *NovelCommentRepository) Create(c *model.NovelComment) error {
+	return r.db.Create(c).Error
+}
+
+func (r *NovelCommentRepository) ListByNovel(novelID uint, page, size int) ([]*model.NovelComment, int64, error) {
+	var list []*model.NovelComment
+	var total int64
+	base := r.db.Model(&model.NovelComment{}).Where("novel_id = ?", novelID)
+	if err := base.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	offset := (page - 1) * size
+	err := base.Order("created_at DESC").Offset(offset).Limit(size).Find(&list).Error
+	return list, total, err
+}
+
+func (r *NovelCommentRepository) GetByID(id uint) (*model.NovelComment, error) {
+	var c model.NovelComment
+	err := r.db.First(&c, id).Error
+	return &c, err
+}
+
+func (r *NovelCommentRepository) Delete(id uint) error {
+	return r.db.Delete(&model.NovelComment{}, id).Error
+}

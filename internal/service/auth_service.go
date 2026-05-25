@@ -8,6 +8,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/middleware"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -164,7 +165,9 @@ func (s *AuthService) Login(req *LoginRequest) (*AuthResponse, error) {
 		return nil, errors.New("no tenant associated with this account")
 	}
 
-	_ = s.userRepo.UpdateLastLogin(user.ID)
+	if err := s.userRepo.UpdateLastLogin(user.ID); err != nil {
+		logger.Printf("[AuthService] failed to update last login for user %d: %v", user.ID, err)
+	}
 
 	return s.signToken(user.ID, tu.TenantID, tu.Role)
 }
@@ -318,7 +321,9 @@ func (s *AuthService) LoginWithPhone(phone, code string) (*AuthResponse, error) 
 		return nil, errors.New("no tenant associated with this account")
 	}
 
-	_ = s.userRepo.UpdateLastLogin(user.ID)
+	if err := s.userRepo.UpdateLastLogin(user.ID); err != nil {
+		logger.Printf("[AuthService] failed to update last login for user %d: %v", user.ID, err)
+	}
 	return s.signToken(user.ID, tu.TenantID, tu.Role)
 }
 
@@ -335,7 +340,9 @@ func (s *AuthService) LoginWithOAuth(info *OAuthUserInfo) (*AuthResponse, error)
 		if err != nil {
 			return nil, errors.New("no tenant associated with this account")
 		}
-		_ = s.userRepo.UpdateLastLogin(user.ID)
+		if err := s.userRepo.UpdateLastLogin(user.ID); err != nil {
+			logger.Printf("[AuthService] failed to update last login for user %d: %v", user.ID, err)
+		}
 		return s.signToken(user.ID, tu.TenantID, tu.Role)
 	}
 

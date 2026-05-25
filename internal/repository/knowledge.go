@@ -1,0 +1,64 @@
+package repository
+
+import (
+	"strings"
+
+	"github.com/inkframe/inkframe-backend/internal/model"
+	"gorm.io/gorm"
+)
+
+// KnowledgeBaseRepository 知识库仓库
+type KnowledgeBaseRepository struct {
+	db *gorm.DB
+}
+
+func NewKnowledgeBaseRepository(db *gorm.DB) *KnowledgeBaseRepository {
+	return &KnowledgeBaseRepository{db: db}
+}
+
+// Create 创建知识
+func (r *KnowledgeBaseRepository) Create(kb *model.KnowledgeBase) error {
+	return r.db.Create(kb).Error
+}
+
+// Search 搜索知识
+func (r *KnowledgeBaseRepository) Search(keyword string, limit int) ([]*model.KnowledgeBase, error) {
+	var results []*model.KnowledgeBase
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(keyword)
+	pattern := "%" + escaped + "%"
+	if err := r.db.Where("title LIKE ? OR content LIKE ?", pattern, pattern).
+		Limit(limit).
+		Find(&results).Error; err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// GetByNovel 获取小说的所有知识
+func (r *KnowledgeBaseRepository) GetByNovel(novelID uint) ([]*model.KnowledgeBase, error) {
+	var results []*model.KnowledgeBase
+	if err := r.db.Where("novel_id = ?", novelID).Find(&results).Error; err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+// GetByID 根据ID获取知识库条目
+func (r *KnowledgeBaseRepository) GetByID(id uint) (*model.KnowledgeBase, error) {
+	var kb model.KnowledgeBase
+	if err := r.db.First(&kb, id).Error; err != nil {
+		return nil, err
+	}
+	return &kb, nil
+}
+
+// Update 更新知识库
+func (r *KnowledgeBaseRepository) Update(kb *model.KnowledgeBase) error {
+	return r.db.Save(kb).Error
+}
+
+// IncrementUsageCount 增加使用次数
+func (r *KnowledgeBaseRepository) IncrementUsageCount(id uint) error {
+	return r.db.Model(&model.KnowledgeBase{}).Where("id = ?", id).
+		UpdateColumn("usage_count", gorm.Expr("usage_count + 1")).Error
+}

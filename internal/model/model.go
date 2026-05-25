@@ -4,6 +4,7 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"log"
 	"gorm.io/gorm"
 	"time"
 )
@@ -40,12 +41,15 @@ func (s *JSONUintSlice) Scan(value interface{}) error {
 }
 
 // AsyncTask 统一异步任务（DB 持久化，页面刷新后仍可恢复）
+// 索引说明：
+//   - idx_task_tenant_status: 按租户+状态过滤（ListByTenant、cleanup）
+//   - idx_task_tenant_type_status: 按租户+类型+状态组合查询
 type AsyncTask struct {
 	ID         uint           `json:"id" gorm:"primaryKey"`
 	TaskID     string         `json:"task_id" gorm:"uniqueIndex;size:64;not null"`
-	TenantID   uint           `json:"tenant_id" gorm:"index;not null;default:1"`
-	Type       string         `json:"type" gorm:"size:50;index;not null"`
-	Status     string         `json:"status" gorm:"size:20;index;not null;default:pending"`
+	TenantID   uint           `json:"tenant_id" gorm:"not null;default:1;index:idx_task_tenant_status;index:idx_task_tenant_type_status"`
+	Type       string         `json:"type" gorm:"size:50;not null;index:idx_task_tenant_type_status"`
+	Status     string         `json:"status" gorm:"size:20;not null;default:pending;index:idx_task_tenant_status;index:idx_task_tenant_type_status"`
 	Title      string         `json:"title" gorm:"size:255"`
 	EntityType string         `json:"entity_type" gorm:"size:50"`
 	EntityID   uint           `json:"entity_id" gorm:"index"`
@@ -95,7 +99,10 @@ func (t AsyncTask) MarshalJSON() ([]byte, error) {
 	}
 	if t.ResultJSON != "" {
 		var data interface{}
-		if err := json.Unmarshal([]byte(t.ResultJSON), &data); err == nil {
+		if err := json.Unmarshal([]byte(t.ResultJSON), &data); err != nil {
+			// ResultJSON 损坏时记录警告，避免静默丢失数据
+			log.Printf("[AsyncTask] task %s: ResultJSON unmarshal failed: %v", t.TaskID, err)
+		} else {
 			m["data"] = data
 		}
 	}

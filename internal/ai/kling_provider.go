@@ -112,10 +112,10 @@ func (p *KlingProvider) GenerateVideo(ctx context.Context, req *VideoGenerateReq
 		"model":           model,
 		"prompt":          req.Prompt,
 		"negative_prompt": req.NegativePrompt,
-		"cfg_scale":       cfgScale,
-		"mode":            mode,
-		"aspect_ratio":    req.AspectRatio,
-		"duration":        fmt.Sprintf("%.0f", duration),
+		"cfg_scale":    cfgScale,
+		"mode":         mode,
+		"aspect_ratio": req.AspectRatio,
+		"duration":     int(duration), // Kling API 期望整数而非字符串
 	}
 
 	switch len(allImages) {
@@ -231,7 +231,11 @@ func (p *KlingProvider) GetVideoURL(ctx context.Context, taskID string) (string,
 		return "", fmt.Errorf("kling parse video URL failed: %w", err)
 	}
 
-	if result.Data.TaskStatus != "succeed" {
+	// Kling API 不同版本可能返回 "succeed" 或 "success"
+	switch result.Data.TaskStatus {
+	case "succeed", "success", "completed":
+		// 任务完成，继续获取 URL
+	default:
 		return "", fmt.Errorf("kling task not completed: status=%s", result.Data.TaskStatus)
 	}
 

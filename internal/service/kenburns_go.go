@@ -25,8 +25,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
+	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
@@ -35,7 +35,7 @@ import (
 // the resulting JPEG sequence to MP4 with WASM FFmpeg.
 func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.StoryboardShot, imagePath string, duration float64, aspectRatio string) (string, error) {
 	if duration <= 0 {
-		duration = 5.0
+		duration = defaultShotDurationSecs
 	}
 	const fps = 30
 	totalFrames := int(duration*float64(fps) + 0.5)
@@ -128,7 +128,7 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 
 	// Encode JPEG sequence → MP4.  This is the fast step: no per-frame pixel math
 	// in WASM, just JPEG decode + x264 entropy coding.
-	outPath := fmt.Sprintf("%s/inkframe-slideshow-%d-%d.mp4", inkframeTempDir(), shot.ID, time.Now().UnixNano())
+	outPath := fmt.Sprintf("%s/inkframe-slideshow-%d-%s.mp4", inkframeTempDir(), shot.ID, uuid.New().String()[:8])
 	inputPattern := filepath.Join(frameDir, "frame%05d.jpg")
 
 	// 构建 vf 滤镜链（基础 + 可选调色 + 镜头特效）

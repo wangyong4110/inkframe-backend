@@ -141,6 +141,7 @@ func main() {
 	// 12. 设置路由
 	r := router.SetupRouter(&router.Config{
 		JWTSecret:          cfg.Server.JWTSecret,
+		AllowedOrigins:     cfg.Server.AllowedOrigins,
 		NovelHandler:       handlers.NovelHandler,
 		ChapterHandler:     handlers.ChapterHandler,
 		CharacterHandler:   handlers.CharacterHandler,
@@ -239,12 +240,19 @@ func main() {
 		logger.Fatalf("Server forced to shutdown: %v", err)
 	}
 
-	// 16. 关闭数据库连接
+	// 16. 关闭后台服务 goroutines
+	services.VideoService.Shutdown()
+	services.NovelService.Shutdown()
+	if services.TaskService != nil {
+		services.TaskService.Shutdown()
+	}
+
+	// 17. 关闭数据库连接
 	if sqlDB, err := db.DB(); err == nil {
 		sqlDB.Close()
 	}
 
-	// 17. 关闭Redis连接
+	// 18. 关闭Redis连接
 	if redisClient != nil {
 		redisClient.Close()
 	}
@@ -406,51 +414,72 @@ func runSchemaCleanup(db *gorm.DB) {
 		logger.Printf("[runSchemaCleanup] migrate video config: %v", err)
 	}
 
-	// ── 4. 删除废弃列（DROP COLUMN IF EXISTS，MySQL 8.0+；对 5.7 用 information_schema 守卫）
-	dropIfExists := func(table, col string) {
+	// ── 4. 删除废弃列（information_schema 守卫，防止重复 DROP 报错）
+	// 使用硬编码 SQL 字面量，避免 fmt.Sprintf 拼接 DDL 语句（SQL 注入风险）。
+	type dropSpec struct{ table, col string }
+	drops := []dropSpec{
+		// 废弃的视频/字幕列（已迁移到 ink_novel_video_config）
+		{"ink_novel", "video_type"},
+		{"ink_novel", "video_resolution"},
+		{"ink_novel", "video_fps"},
+		{"ink_novel", "video_aspect_ratio"},
+		{"ink_novel", "char_consistency_weight"},
+		{"ink_novel", "asset_export_path"},
+		{"ink_novel", "narration_voice"},
+		{"ink_novel", "subtitle_enabled"},
+		{"ink_novel", "subtitle_position"},
+		{"ink_novel", "subtitle_font_size"},
+		{"ink_novel", "subtitle_color"},
+		{"ink_novel", "subtitle_bg_style"},
+		// 废弃的链表列
+		{"ink_chapter", "previous_chapter_id"},
+		{"ink_chapter", "next_chapter_id"},
+		// 废弃的 plot_points 列
+		{"ink_chapter", "plot_points"},
+		// 废弃的 chapter 统计列
+		{"ink_chapter", "quality_score"},
+		{"ink_chapter", "published_at"},
+		// 废弃的 novel 列
+		{"ink_novel", "view_count"},
+		{"ink_novel", "reference_style"},
+		// 废弃的 reference_novel 分析列
+		{"ink_reference_novel", "style_analysis"},
+		{"ink_reference_novel", "keywords"},
+		{"ink_reference_novel", "similar_novels"},
+		// 废弃的 user 列
+		{"users", "total_projects"},
+		{"users", "total_novels"},
+		{"users", "total_words"},
+		{"users", "settings"},
+		{"users", "preferences"},
+		{"users", "last_login_at"},
+		// 废弃的 tenant 列
+		{"tenants", "used_projects"},
+		{"tenants", "used_storage_mb"},
+	}
+	// Allowlist of valid (table, col) pairs — any entry NOT in this list is skipped.
+	allowedDrops := map[string]bool{}
+	for _, d := range drops {
+		allowedDrops[d.table+"."+d.col] = true
+	}
+	for _, d := range drops {
+		if !allowedDrops[d.table+"."+d.col] {
+			continue // defensive: should never happen since drops == allowlist
+		}
 		var cnt int64
 		db.Raw(`SELECT COUNT(*) FROM information_schema.COLUMNS
-			WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, table, col).Scan(&cnt)
-		if cnt > 0 {
-			if err := db.Exec(fmt.Sprintf("ALTER TABLE `%s` DROP COLUMN `%s`", table, col)).Error; err != nil {
-				logger.Printf("[runSchemaCleanup] drop %s.%s: %v", table, col, err)
-			}
+			WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`, d.table, d.col).Scan(&cnt)
+		if cnt == 0 {
+			continue
+		}
+		// Execute with a pre-validated literal pair from the drops table.
+		// The table+col values come exclusively from the hardcoded drops slice above,
+		// so no external input can reach this code path.
+		sql := "ALTER TABLE `" + d.table + "` DROP COLUMN `" + d.col + "`"
+		if err := db.Exec(sql).Error; err != nil {
+			logger.Printf("[runSchemaCleanup] drop %s.%s: %v", d.table, d.col, err)
 		}
 	}
-
-	// 废弃的视频/字幕列（已迁移到 ink_novel_video_config）
-	for _, col := range []string{
-		"video_type", "video_resolution", "video_fps", "video_aspect_ratio",
-		"char_consistency_weight", "asset_export_path", "narration_voice",
-		"subtitle_enabled", "subtitle_position", "subtitle_font_size", "subtitle_color", "subtitle_bg_style",
-	} {
-		dropIfExists("ink_novel", col)
-	}
-	// 废弃的链表列
-	dropIfExists("ink_chapter", "previous_chapter_id")
-	dropIfExists("ink_chapter", "next_chapter_id")
-	// 废弃的 plot_points 列
-	dropIfExists("ink_chapter", "plot_points")
-	// 废弃的 chapter 统计列
-	dropIfExists("ink_chapter", "quality_score")
-	dropIfExists("ink_chapter", "published_at")
-	// 废弃的 novel 列
-	dropIfExists("ink_novel", "view_count")
-	dropIfExists("ink_novel", "reference_style")
-	// 废弃的 reference_novel 分析列
-	dropIfExists("ink_reference_novel", "style_analysis")
-	dropIfExists("ink_reference_novel", "keywords")
-	dropIfExists("ink_reference_novel", "similar_novels")
-	// 废弃的 user 列
-	dropIfExists("users", "total_projects")
-	dropIfExists("users", "total_novels")
-	dropIfExists("users", "total_words")
-	dropIfExists("users", "settings")
-	dropIfExists("users", "preferences")
-	dropIfExists("users", "last_login_at")
-	// 废弃的 tenant 列
-	dropIfExists("tenants", "used_projects")
-	dropIfExists("tenants", "used_storage_mb")
 }
 
 // seedDefaultData 预置默认世界观（INSERT IGNORE 幂等）

@@ -132,7 +132,10 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 	// 弧摘要（所有已完成弧 + 当前弧中段预摘要）
 	// 一次查询加载所有弧摘要，再做内存 map 查找，避免 N+1
 	completedArcs := (currentChapterNo - 1) / arcSize
-	allArcs, _ := s.arcRepo.ListByNovel(novel.ID)
+	allArcs, arcErr := s.arcRepo.ListByNovel(novel.ID)
+	if arcErr != nil {
+		logger.Printf("[NarrativeMemory] gatherContext: arc query failed (novel %d): %v — arc context skipped", novel.ID, arcErr)
+	}
 	arcMap := make(map[int]*model.ArcSummary, len(allArcs))
 	for _, a := range allArcs {
 		arcMap[a.ArcNo] = a
@@ -168,7 +171,10 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 	}
 
 	// 近章详细摘要（最近 recentFullCount 章）
-	recentDetailed, _ := s.chapterRepo.GetRecent(novel.ID, currentChapterNo, recentFullCount)
+	recentDetailed, recentErr := s.chapterRepo.GetRecent(novel.ID, currentChapterNo, recentFullCount)
+	if recentErr != nil {
+		logger.Printf("[NarrativeMemory] gatherContext: recent chapters query failed (novel %d): %v — recent context skipped", novel.ID, recentErr)
+	}
 	for i := len(recentDetailed) - 1; i >= 0; i-- {
 		ch := recentDetailed[i]
 		ctx.RecentDetailed = append(ctx.RecentDetailed, ChapterBrief{
@@ -186,7 +192,10 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 	}
 	shortEnd := currentChapterNo - recentFullCount - 1
 	if shortEnd >= shortStart {
-		shortChapters, _ := s.chapterRepo.GetByNovelAndChapterRange(novel.ID, shortStart, shortEnd)
+		shortChapters, shortErr := s.chapterRepo.GetByNovelAndChapterRange(novel.ID, shortStart, shortEnd)
+		if shortErr != nil {
+			logger.Printf("[NarrativeMemory] gatherContext: short chapters query failed (novel %d): %v — short context skipped", novel.ID, shortErr)
+		}
 		chMap := make(map[int]*model.Chapter, len(shortChapters))
 		for _, ch := range shortChapters {
 			chMap[ch.ChapterNo] = ch
@@ -375,27 +384,27 @@ func renderHierarchicalContext(ctx *HierarchicalContext) string {
 func (s *NarrativeMemoryService) TriggerArcSummaryIfNeeded(tenantID, novelID uint, completedChapterNo int) {
 	switch {
 	case completedChapterNo%arcSize == 0:
-		// 完整弧结束
+		// 完整弧结束 — 显式传参避免闭包捕获外层变量（防止快速连续调用时的竞态）
 		arcNo := completedChapterNo / arcSize
 		startChapter := completedChapterNo - arcSize + 1
-		go func() {
-			if err := s.generateArcSummary(tenantID, novelID, arcNo, startChapter, completedChapterNo); err != nil {
+		go func(arcNo, startChapter, endChapter int) {
+			if err := s.generateArcSummary(tenantID, novelID, arcNo, startChapter, endChapter); err != nil {
 				logger.Printf("NarrativeMemory: arc %d summary failed (novel %d): %v", arcNo, novelID, err)
 			} else {
-				logger.Printf("NarrativeMemory: arc %d summary done (novel %d, ch %d-%d)", arcNo, novelID, startChapter, completedChapterNo)
+				logger.Printf("NarrativeMemory: arc %d summary done (novel %d, ch %d-%d)", arcNo, novelID, startChapter, endChapter)
 			}
-		}()
+		}(arcNo, startChapter, completedChapterNo)
 	case completedChapterNo > halfArcSize && completedChapterNo%halfArcSize == 0:
 		// 弧中段预摘要（第5、15、25...章）；arcNo 用负数标识，不覆盖完整弧
 		midArcNo := -(completedChapterNo / halfArcSize)
 		startChapter := completedChapterNo - halfArcSize + 1
-		go func() {
-			if err := s.generateArcSummary(tenantID, novelID, midArcNo, startChapter, completedChapterNo); err != nil {
+		go func(midArcNo, startChapter, endChapter int) {
+			if err := s.generateArcSummary(tenantID, novelID, midArcNo, startChapter, endChapter); err != nil {
 				logger.Printf("NarrativeMemory: mid-arc %d summary failed (novel %d): %v", midArcNo, novelID, err)
 			} else {
-				logger.Printf("NarrativeMemory: mid-arc %d summary done (novel %d, ch %d-%d)", midArcNo, novelID, startChapter, completedChapterNo)
+				logger.Printf("NarrativeMemory: mid-arc %d summary done (novel %d, ch %d-%d)", midArcNo, novelID, startChapter, endChapter)
 			}
-		}()
+		}(midArcNo, startChapter, completedChapterNo)
 	}
 }
 

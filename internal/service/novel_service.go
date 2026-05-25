@@ -29,7 +29,8 @@ type NovelService struct {
 	// 广场社交
 	novelLikeRepo    *repository.NovelLikeRepository
 	novelCommentRepo *repository.NovelCommentRepository
-	novelViewDedup   sync.Map // key "ip:id" → expiry time.Time
+	novelViewDedup   sync.Map     // key "ip:id" → expiry time.Time
+	stopCh           chan struct{} // closed by Shutdown() to stop background goroutines
 }
 
 func NewNovelService(
@@ -41,7 +42,13 @@ func NewNovelService(
 		novelRepo:   novelRepo,
 		chapterRepo: chapterRepo,
 		aiService:   aiService,
+		stopCh:      make(chan struct{}),
 	}
+}
+
+// Shutdown 停止所有后台 goroutine（优雅关闭时调用）。
+func (s *NovelService) Shutdown() {
+	close(s.stopCh)
 }
 
 // WithCharacterRepos 设置角色相关仓库（用于快照写入）
@@ -928,14 +935,19 @@ func (s *NovelService) WithNovelSocial(likeRepo *repository.NovelLikeRepository,
 func (s *NovelService) cleanupViewDedup() {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
-	for range ticker.C {
-		now := time.Now()
-		s.novelViewDedup.Range(func(k, v any) bool {
-			if expiry, ok := v.(time.Time); ok && now.After(expiry) {
-				s.novelViewDedup.Delete(k)
-			}
-			return true
-		})
+	for {
+		select {
+		case <-ticker.C:
+			now := time.Now()
+			s.novelViewDedup.Range(func(k, v any) bool {
+				if expiry, ok := v.(time.Time); ok && now.After(expiry) {
+					s.novelViewDedup.Delete(k)
+				}
+				return true
+			})
+		case <-s.stopCh:
+			return
+		}
 	}
 }
 

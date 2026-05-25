@@ -9,6 +9,7 @@ import (
 // Config 路由配置
 type Config struct {
 	JWTSecret        string
+	AllowedOrigins   []string // CORS 允许的来源列表；留空表示允许所有（开发模式）
 	NovelHandler     *handler.NovelHandler
 	ChapterHandler   *handler.ChapterHandler
 	CharacterHandler *handler.CharacterHandler
@@ -40,7 +41,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 	r := gin.New()
 
 	// 全局中间件
-	r.Use(middleware.CORS())
+	r.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))
 	r.Use(middleware.Logger())
 	r.Use(middleware.Recovery())
 

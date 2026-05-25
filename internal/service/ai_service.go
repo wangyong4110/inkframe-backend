@@ -46,7 +46,25 @@ func NewAIService(
 	if len(providerRepo) > 0 {
 		svc.providerRepo = providerRepo[0]
 	}
+	svc.startProviderCacheCleanup()
 	return svc
+}
+
+// startProviderCacheCleanup 启动 providerCache 的后台定期清理（每 10 分钟扫描一次，删除已过期条目）。
+func (s *AIService) startProviderCacheCleanup() {
+	ticker := time.NewTicker(10 * time.Minute)
+	go func() {
+		defer ticker.Stop()
+		for range ticker.C {
+			now := time.Now()
+			s.providerCache.Range(func(k, v interface{}) bool {
+				if entry, ok := v.(providerCacheEntry); ok && now.After(entry.expiresAt) {
+					s.providerCache.Delete(k)
+				}
+				return true
+			})
+		}
+	}()
 }
 
 // WithNovelRepo 注入小说仓库，用于在生成时读取小说级 AI 配置
@@ -524,6 +542,9 @@ func (s *AIService) generateWithRetry(novelID uint, taskType, prompt string, max
 
 // logUsage 记录使用
 func (s *AIService) logUsage(config *model.TaskModelConfig, prompt, result string) {
+	if s.modelRepo == nil {
+		return
+	}
 	inputTokens := countChineseChars(prompt)
 	outputTokens := countChineseChars(result)
 

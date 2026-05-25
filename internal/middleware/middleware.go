@@ -3,6 +3,7 @@ package middleware
 import (
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -79,18 +80,19 @@ func getBucket(ip string, capacity, rate float64) *tokenBucket {
 	return actual.(*tokenBucket)
 }
 
-// Logger 日志中间件（GET 请求不打印日志）
+// Logger 日志中间件（跳过健康检查路径）
 func Logger() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if c.Request.URL.Path == "/health" {
+			c.Next()
+			return
+		}
+
 		start := time.Now()
 		path := c.Request.URL.Path
 		method := c.Request.Method
 
 		c.Next()
-
-		if method == "GET" {
-			return
-		}
 
 		latency := time.Since(start)
 		status := c.Writer.Status()
@@ -110,10 +112,20 @@ func Recovery() gin.HandlerFunc {
 	return gin.Recovery()
 }
 
-// CORS 跨域中间件
-func CORS() gin.HandlerFunc {
+// CORSMiddleware 跨域中间件。
+// allowedOrigins 为空时允许所有来源（开发模式兼容，等同于旧的通配符行为）。
+// 生产环境应传入前端 URL 列表，如 []string{"https://app.example.com"}。
+func CORSMiddleware(allowedOrigins []string) gin.HandlerFunc {
+	originSet := make(map[string]bool, len(allowedOrigins))
+	for _, o := range allowedOrigins {
+		originSet[o] = true
+	}
 	return func(c *gin.Context) {
-		c.Header("Access-Control-Allow-Origin", "*")
+		origin := c.Request.Header.Get("Origin")
+		if len(allowedOrigins) == 0 || originSet[origin] {
+			// 允许该来源：返回实际 origin（而非通配符），以兼容带凭据的请求
+			c.Header("Access-Control-Allow-Origin", origin)
+		}
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization, X-Requested-With")
 		c.Header("Access-Control-Expose-Headers", "Content-Length, Access-Control-Allow-Origin, Access-Control-Allow-Headers")
@@ -128,6 +140,12 @@ func CORS() gin.HandlerFunc {
 	}
 }
 
+// CORS 跨域中间件（向后兼容包装，允许所有来源）。
+// 新代码请使用 CORSMiddleware(cfg.Server.AllowedOrigins)。
+func CORS() gin.HandlerFunc {
+	return CORSMiddleware(nil)
+}
+
 // JWTClaims JWT声明
 type JWTClaims struct {
 	UserID   uint   `json:"user_id"`
@@ -140,10 +158,19 @@ type JWTClaims struct {
 // 当 jwtSecret 为空字符串时进入开发绕过模式：跳过 token 校验，
 // 并将 tenant_id=1 / user_id=1 / user_role="admin" 注入上下文，
 // 方便本地开发测试。生产环境务必配置非空的 jwt_secret。
+//
+// 安全保障：开发旁路模式仅在 GIN_MODE != release 且 APP_ENV != production 时生效，
+// 防止生产配置缺失 jwt_secret 时意外暴露 API。
 func NewAuth(jwtSecret string) gin.HandlerFunc {
+	isDevBypass := jwtSecret == "" && gin.Mode() != gin.ReleaseMode && os.Getenv("APP_ENV") != "production"
+	if jwtSecret == "" && !isDevBypass {
+		// 生产环境未配置 secret — 启动时 panic，防止静默放行
+		panic("jwt_secret is empty in production mode; set APP_ENV=production and provide a valid jwt_secret")
+	}
 	return func(c *gin.Context) {
-		// ── 开发绕过模式（jwt_secret 为空） ────────────────────────────────
-		if jwtSecret == "" {
+		// ── 开发绕过模式（jwt_secret 为空且非生产） ────────────────────────
+		if isDevBypass {
+			logger.Printf("[Auth] WARNING: dev-bypass mode active — all requests granted admin (tenant=1)")
 			c.Set("user_id", uint(1))
 			c.Set("tenant_id", uint(1))
 			c.Set("user_role", "admin")

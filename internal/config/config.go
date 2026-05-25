@@ -71,6 +71,9 @@ type ServerConfig struct {
 	JWTSecret       string        `mapstructure:"jwt_secret"`
 	JWTExpiry       time.Duration `mapstructure:"jwt_expiry"`
 	FrontendURL     string        `mapstructure:"frontend_url"`
+	// AllowedOrigins 允许的 CORS 来源列表。留空表示允许所有来源（开发模式兼容）。
+	// 生产环境应设置为前端 URL，如 ["https://app.example.com"]。
+	AllowedOrigins  []string      `mapstructure:"allowed_origins"`
 }
 
 // DatabaseConfig 数据库配置

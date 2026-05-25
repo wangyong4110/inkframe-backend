@@ -147,7 +147,8 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 		return
 	}
 
-	video, err := h.videoService.CreateVideo(uint(novelId), &req)
+	tenantID := getTenantID(c)
+	video, err := h.videoService.CreateVideo(uint(novelId), &req, tenantID)
 	if err != nil {
 		logger.Printf("[VideoHandler] CreateVideo: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
@@ -307,6 +308,13 @@ func (h *VideoHandler) PublishVideo(c *gin.Context) {
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.Visibility == "" {
 		req.Visibility = "public"
+	}
+	switch req.Visibility {
+	case "private", "unlisted", "public":
+		// valid
+	default:
+		respondBadRequest(c, "visibility must be one of: private, unlisted, public")
+		return
 	}
 	now := timeNow()
 	video.IsPublished = true

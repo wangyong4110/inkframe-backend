@@ -56,5 +56,5 @@ func (p *BilibiliPublisher) PublishVideo(ctx context.Context, account *model.Pla
 
 func (p *BilibiliPublisher) CheckPublishStatus(ctx context.Context, account *model.PlatformAccount, externalID string) (string, error) {
 	// TODO: 调用 /x/space/arc/mine 查询投稿状态
-	return "unknown", nil
+	return "", fmt.Errorf("bilibili: CheckPublishStatus not yet implemented")
 }
