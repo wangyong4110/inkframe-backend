@@ -84,19 +84,29 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 
 // StitchVideo 将所有 completed 分镜拼接为最终视频
 func (s *VideoService) StitchVideo(videoID uint) (string, error) {
+	return s.StitchVideoCtx(context.Background(), videoID)
+}
+
+// StitchVideoCtx 同 StitchVideo，但支持外部 context（超时 / 取消）。
+func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string, error) {
+	logger.Printf("[StitchVideo] videoID=%d: start", videoID)
+
 	shots, err := s.storyboardRepo.ListByVideoAndStatus(videoID, "completed")
 	if err != nil {
 		return "", err
 	}
 	if len(shots) == 0 {
+		logger.Printf("[StitchVideo] videoID=%d: no completed shots found", videoID)
 		return "", fmt.Errorf("no completed shots to stitch")
 	}
+	logger.Printf("[StitchVideo] videoID=%d: found %d completed shots", videoID, len(shots))
 
 	// 获取宽高比（Ken Burns 降级时使用）
 	aspectRatio := "16:9"
 	if video, verr := s.videoRepo.GetByID(videoID); verr == nil && video != nil && video.AspectRatio != "" {
 		aspectRatio = video.AspectRatio
 	}
+	logger.Printf("[StitchVideo] videoID=%d: aspectRatio=%s", videoID, aspectRatio)
 
 	tmpDir := fmt.Sprintf("%s/inkframe-%d", inkframeTempDir(), videoID)
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
@@ -112,33 +122,40 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 	}()
 	var concatLines []string
 	for i, shot := range shots {
+		logger.Printf("[StitchVideo] shot %d: clipPath=%q videoURL=%q imageURL=%q audioPath=%q duration=%.1fs",
+			shot.ShotNo, shot.ClipPath, shot.VideoURL, shot.ImageURL, shot.AudioPath, shot.Duration)
+
 		// 镜头无视频 clip/URL，但有图片 → 实时生成 Ken Burns 片段
 		if shot.ClipPath == "" && shot.VideoURL == "" {
 			if shot.ImageURL == "" {
-				logger.Printf("StitchVideo: shot %d has no clip, video URL, or image — skipping", shot.ShotNo)
+				logger.Printf("[StitchVideo] shot %d: no clip, video URL, or image — skipping", shot.ShotNo)
 				continue
 			}
 			duration := shot.Duration
 			if duration <= 0 {
 				duration = defaultShotDurationSecs
 			}
+			logger.Printf("[StitchVideo] shot %d: image-only, generating Ken Burns (duration=%.1fs)", shot.ShotNo, duration)
 			localImage, dlErr := downloadToTemp(shot.ImageURL, fmt.Sprintf("inkframe-img-%d-", shot.ID), ".jpg")
 			if dlErr != nil {
-				logger.Printf("StitchVideo: shot %d image download failed: %v — skipping", shot.ShotNo, dlErr)
+				logger.Printf("[StitchVideo] shot %d: image download failed: %v — skipping", shot.ShotNo, dlErr)
 				continue
 			}
-			kbPath := fmt.Sprintf("%s/kb_%d.mp4", tmpDir, i)
-			kbErr := error(nil)
-			kbPath, kbErr = s.generateKenBurnsPureGo(context.Background(), shot, localImage, duration, aspectRatio)
-			os.Remove(localImage)
+			// Ken Burns 每镜头超时 = max(120s, duration*20) 留出足够余量
+			kbTimeout := time.Duration(duration*20)*time.Second + 120*time.Second
+			kbCtx, kbCancel := context.WithTimeout(ctx, kbTimeout)
+			kbPath, kbErr := s.generateKenBurnsPureGo(kbCtx, shot, localImage, duration, aspectRatio)
+			kbCancel()
 			if kbErr != nil {
-				// Ken Burns 失败则降级为静帧
+				logger.Printf("[StitchVideo] shot %d: Ken Burns failed (%v), falling back to still frame", shot.ShotNo, kbErr)
 				kbPath, kbErr = s.generateStillFrameClip(localImage, duration, aspectRatio)
 			}
+			os.Remove(localImage)
 			if kbErr != nil {
-				logger.Printf("StitchVideo: shot %d ken burns + still frame both failed: %v — skipping", shot.ShotNo, kbErr)
+				logger.Printf("[StitchVideo] shot %d: Ken Burns + still frame both failed: %v — skipping", shot.ShotNo, kbErr)
 				continue
 			}
+			logger.Printf("[StitchVideo] shot %d: Ken Burns clip ready: %s", shot.ShotNo, kbPath)
 			concatLines = append(concatLines, fmt.Sprintf("file '%s'", kbPath))
 			continue
 		}
@@ -151,13 +168,16 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 			clipFile = strings.TrimPrefix(shot.ClipPath, "file://")
 			finalClip = clipFile
 			localShotFiles = append(localShotFiles, clipFile)
+			logger.Printf("[StitchVideo] shot %d: using local clip: %s", shot.ShotNo, clipFile)
 		} else {
 			// 远端 URL：优先用 ClipPath，fallback 到 VideoURL
 			remoteURL := shot.ClipPath
 			if remoteURL == "" {
 				remoteURL = shot.VideoURL
 			}
+			logger.Printf("[StitchVideo] shot %d: downloading from %s", shot.ShotNo, remoteURL)
 			if err := downloadFile(remoteURL, clipFile); err != nil {
+				logger.Printf("[StitchVideo] shot %d: download failed (%v), trying fresh URL from provider", shot.ShotNo, err)
 				// URL 可能已过期，尝试从 provider 重新获取
 				if shot.ShotTaskID != "" && shot.ShotProviderName != "" {
 					if p, ok := s.videoProviders[shot.ShotProviderName]; ok {
@@ -165,6 +185,7 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 						freshURL, fErr := p.GetVideoURL(rCtx, shot.ShotTaskID)
 						rCancel()
 						if fErr == nil {
+							logger.Printf("[StitchVideo] shot %d: got fresh URL, retrying download", shot.ShotNo)
 							if err2 := downloadFile(freshURL, clipFile); err2 != nil {
 								return "", fmt.Errorf("download shot %d clip failed (fresh URL also failed): %w", shot.ShotNo, err2)
 							}
@@ -178,32 +199,41 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 					return "", fmt.Errorf("download shot %d clip failed: %w", shot.ShotNo, err)
 				}
 			}
+			logger.Printf("[StitchVideo] shot %d: download complete: %s", shot.ShotNo, clipFile)
 		}
 
 		// Merge audio if present
 		if shot.AudioPath != "" {
 			audioPath := strings.TrimPrefix(shot.AudioPath, "file://")
 			mergedFile := fmt.Sprintf("%s/clip_audio_%d.mp4", tmpDir, i)
-			if _, err := runFFmpegCtx(context.Background(), "-y",
+			logger.Printf("[StitchVideo] shot %d: merging audio: %s", shot.ShotNo, audioPath)
+			mergeCtx, mergeCancel := context.WithTimeout(ctx, 60*time.Second)
+			_, mergeErr := runFFmpegCtx(mergeCtx, "-y",
 				"-i", clipFile,
 				"-i", audioPath,
 				"-c:v", "copy",
 				"-c:a", "aac",
 				"-shortest",
 				mergedFile,
-			); err != nil {
-				logger.Printf("StitchVideo: merge audio for shot %d failed: %v, using clip without audio", shot.ShotNo, err)
+			)
+			mergeCancel()
+			if mergeErr != nil {
+				logger.Printf("[StitchVideo] shot %d: audio merge failed: %v — using clip without audio", shot.ShotNo, err)
 			} else {
+				logger.Printf("[StitchVideo] shot %d: audio merged OK", shot.ShotNo)
 				finalClip = mergedFile
 			}
 		}
+
 
 		concatLines = append(concatLines, fmt.Sprintf("file '%s'", finalClip))
 	}
 
 	if len(concatLines) == 0 {
+		logger.Printf("[StitchVideo] videoID=%d: no clips collected after processing all shots", videoID)
 		return "", fmt.Errorf("no clips available to stitch (all shots missing video)")
 	}
+	logger.Printf("[StitchVideo] videoID=%d: %d clips ready for concat", videoID, len(concatLines))
 
 	listFile := fmt.Sprintf("%s/list.txt", tmpDir)
 	if err := os.WriteFile(listFile, []byte(strings.Join(concatLines, "\n")), 0644); err != nil {
@@ -211,7 +241,12 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 	}
 
 	stitchedPath := fmt.Sprintf("%s/inkframe-%d-stitched.mp4", inkframeTempDir(), videoID)
-	if _, err := runFFmpegCtx(context.Background(), "-y",
+	logger.Printf("[StitchVideo] videoID=%d: running ffmpeg concat → %s", videoID, stitchedPath)
+	// concat 超时 = 每个 clip 2 分钟，最少 5 分钟
+	concatTimeout := time.Duration(len(concatLines))*2*time.Minute + 5*time.Minute
+	concatCtx, concatCancel := context.WithTimeout(ctx, concatTimeout)
+	defer concatCancel()
+	if _, err := runFFmpegCtx(concatCtx, "-y",
 		"-f", "concat",
 		"-safe", "0",
 		"-i", listFile,
@@ -220,17 +255,22 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 	); err != nil {
 		return "", fmt.Errorf("ffmpeg stitch failed: %w", err)
 	}
+	logger.Printf("[StitchVideo] videoID=%d: ffmpeg concat done", videoID)
 
 	// BGM 混音（非致命：失败时使用无BGM版本）
 	outputPath := fmt.Sprintf("%s/inkframe-%d-output.mp4", inkframeTempDir(), videoID)
 	if s.bgmService != nil {
 		bgmURL := s.bgmService.SelectBGM("")
 		if bgmURL != "" {
+			logger.Printf("[StitchVideo] videoID=%d: mixing BGM: %s", videoID, bgmURL)
 			if mixErr := s.bgmService.MixBGM(stitchedPath, bgmURL, outputPath); mixErr != nil {
-				logger.Printf("StitchVideo: BGM mixing failed (video %d): %v, using stitched without BGM", videoID, mixErr)
+				logger.Printf("[StitchVideo] videoID=%d: BGM mix failed: %v — using stitched without BGM", videoID, mixErr)
 				outputPath = stitchedPath
+			} else {
+				logger.Printf("[StitchVideo] videoID=%d: BGM mix done", videoID)
 			}
 		} else {
+			logger.Printf("[StitchVideo] videoID=%d: no BGM selected", videoID)
 			outputPath = stitchedPath
 		}
 	} else {
@@ -240,15 +280,16 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 	// Update video record — must succeed for status to be reflected in DB
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
-		logger.Printf("[VideoService] StitchVideo: video %d not found after stitch, status NOT updated: %v", videoID, err)
+		logger.Printf("[StitchVideo] videoID=%d: video record not found after stitch, status NOT updated: %v", videoID, err)
 		return outputPath, fmt.Errorf("stitch succeeded but video record not found: %w", err)
 	}
 	video.VideoPath = outputPath
 	video.Status = "completed"
 	if err := s.videoRepo.Update(video); err != nil {
-		logger.Printf("[VideoService] StitchVideo: failed to update video %d status to completed: %v", videoID, err)
+		logger.Printf("[StitchVideo] videoID=%d: failed to update status to completed: %v", videoID, err)
 	}
 
+	logger.Printf("[StitchVideo] videoID=%d: done → %s", videoID, outputPath)
 	return outputPath, nil
 }
 
@@ -355,8 +396,10 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 
 // ─── Synthesis Pipeline ───────────────────────────────────────────────────────
 
-// SynthesizeVideo 完整合成流水线（拼接→BGM→字幕→上传OSS），异步执行，返回 task_id。
+// SynthesizeVideo 完整合成流水线（拼接→字幕→封面→上传OSS），异步执行，返回 task_id。
 func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenantID uint) (string, error) {
+	logger.Printf("[SynthesizeVideo] videoID=%d tenantID=%d: start", videoID, tenantID)
+
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
 		return "", fmt.Errorf("video not found: %w", err)
@@ -378,6 +421,7 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 	} else {
 		taskID = fmt.Sprintf("synth-%d", videoID)
 	}
+	logger.Printf("[SynthesizeVideo] videoID=%d: taskID=%s", videoID, taskID)
 
 	synthCtx, synthCancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	go func() {
@@ -386,21 +430,25 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 			_ = s.taskSvc.SetRunning(taskID)
 		}
 
-		// 1. 拼接视频（含BGM）
+		// 1. 拼接视频
+		logger.Printf("[SynthesizeVideo] videoID=%d step=1/4: stitching video", videoID)
 		if s.taskSvc != nil {
 			_ = s.taskSvc.UpdateProgress(taskID, 10)
 		}
-		stitchedPath, err := s.StitchVideo(videoID)
+		stitchedPath, err := s.StitchVideoCtx(synthCtx, videoID)
 		if err != nil {
+			logger.Printf("[SynthesizeVideo] videoID=%d step=1/4: stitch failed: %v", videoID, err)
 			if s.taskSvc != nil {
 				_ = s.taskSvc.Fail(taskID, "stitch failed: "+err.Error())
 			}
 			return
 		}
+		logger.Printf("[SynthesizeVideo] videoID=%d step=1/4: stitch OK → %s", videoID, stitchedPath)
 
 		finalPath := stitchedPath
 
 		// 2. 字幕烧录（可选）
+		logger.Printf("[SynthesizeVideo] videoID=%d step=2/4: subtitle burn", videoID)
 		if s.taskSvc != nil {
 			_ = s.taskSvc.UpdateProgress(taskID, 40)
 		}
@@ -413,6 +461,8 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 				if novelCfg.SubtitleFont != "" {
 					fontName = novelCfg.SubtitleFont
 				}
+				logger.Printf("[SynthesizeVideo] videoID=%d step=2/4: burning subtitles (style=%s font=%s shots=%d)",
+					videoID, novelCfg.SubtitleStyle, fontName, len(shots))
 				shotSlice := make([]model.StoryboardShot, len(shots))
 				for i, sh := range shots {
 					if sh != nil {
@@ -424,16 +474,20 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 				if writeErr := os.WriteFile(assPath, []byte(assContent), 0644); writeErr == nil {
 					burnedPath := fmt.Sprintf("%s/inkframe-%d-burned.mp4", inkframeTempDir(), videoID)
 					if burnErr := subtitleSvc.BurnSubtitles(stitchedPath, assPath, burnedPath); burnErr == nil {
+						logger.Printf("[SynthesizeVideo] videoID=%d step=2/4: subtitle burn OK → %s", videoID, burnedPath)
 						finalPath = burnedPath
 					} else {
-						logger.Printf("SynthesizeVideo: subtitle burn failed for video %d: %v", videoID, burnErr)
+						logger.Printf("[SynthesizeVideo] videoID=%d step=2/4: subtitle burn failed: %v — skipping", videoID, burnErr)
 					}
 					os.Remove(assPath)
 				}
 			}
+		} else {
+			logger.Printf("[SynthesizeVideo] videoID=%d step=2/4: subtitles disabled or not configured — skipping", videoID)
 		}
 
 		// 3. 提取封面
+		logger.Printf("[SynthesizeVideo] videoID=%d step=3/4: extracting cover", videoID)
 		if s.taskSvc != nil {
 			_ = s.taskSvc.UpdateProgress(taskID, 60)
 		}
@@ -441,10 +495,14 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 		coverURL := ""
 		if _, err := runFFmpegCtx(synthCtx, "-y", "-ss", "2", "-i", finalPath,
 			"-frames:v", "1", "-vf", "scale=640:-1", coverPath); err == nil {
+			logger.Printf("[SynthesizeVideo] videoID=%d step=3/4: cover extracted → %s", videoID, coverPath)
 			defer os.Remove(coverPath)
+		} else {
+			logger.Printf("[SynthesizeVideo] videoID=%d step=3/4: cover extraction failed: %v — continuing", videoID, err)
 		}
 
 		// 4. 上传视频和封面到 OSS
+		logger.Printf("[SynthesizeVideo] videoID=%d step=4/4: uploading to OSS", videoID)
 		if s.taskSvc != nil {
 			_ = s.taskSvc.UpdateProgress(taskID, 70)
 		}
@@ -464,13 +522,16 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 			} else {
 				videoKey = fmt.Sprintf("videos/%s.mp4", videoUUID)
 			}
+			logger.Printf("[SynthesizeVideo] videoID=%d: uploading video to key=%s", videoID, videoKey)
 			if vf, err := os.Open(finalPath); err == nil {
 				defer vf.Close()
 				if fi, err := vf.Stat(); err == nil {
+					logger.Printf("[SynthesizeVideo] videoID=%d: video file size=%.1fMB", videoID, float64(fi.Size())/1e6)
 					if ossURL, err := s.storageSvc.Upload(synthCtx, videoKey, vf, fi.Size(), "video/mp4"); err == nil {
+						logger.Printf("[SynthesizeVideo] videoID=%d: video upload OK → %s", videoID, ossURL)
 						finalVideoURL = ossURL
 					} else {
-						logger.Printf("SynthesizeVideo: upload video failed for video %d: %v", videoID, err)
+						logger.Printf("[SynthesizeVideo] videoID=%d: video upload failed: %v", videoID, err)
 					}
 				}
 			}
@@ -480,16 +541,21 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 				defer cf.Close()
 				if fi, err := cf.Stat(); err == nil {
 					coverKey := videoKey[:len(videoKey)-4] + "_cover.jpg"
+					logger.Printf("[SynthesizeVideo] videoID=%d: uploading cover key=%s", videoID, coverKey)
 					if ossURL, err := s.storageSvc.Upload(synthCtx, coverKey, cf, fi.Size(), "image/jpeg"); err == nil {
+						logger.Printf("[SynthesizeVideo] videoID=%d: cover upload OK → %s", videoID, ossURL)
 						coverURL = ossURL
 					} else {
-						logger.Printf("SynthesizeVideo: upload cover failed for video %d: %v", videoID, err)
+						logger.Printf("[SynthesizeVideo] videoID=%d: cover upload failed: %v — continuing", videoID, err)
 					}
 				}
 			}
+		} else {
+			logger.Printf("[SynthesizeVideo] videoID=%d step=4/4: storageSvc not configured — skipping upload", videoID)
 		}
 
 		// 5. 更新数据库
+		logger.Printf("[SynthesizeVideo] videoID=%d step=5/5: updating DB (finalVideoURL=%q)", videoID, finalVideoURL)
 		if s.taskSvc != nil {
 			_ = s.taskSvc.UpdateProgress(taskID, 90)
 		}
@@ -502,12 +568,13 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 		// 仅当视频成功上传（有 URL）才标记 completed；否则标记 failed 以告知用户
 		if finalVideoURL != "" {
 			video.Status = "completed"
+			logger.Printf("[SynthesizeVideo] videoID=%d: pipeline complete", videoID)
 		} else {
 			video.Status = "failed"
-			logger.Printf("SynthesizeVideo: video %d upload failed, marking as failed", videoID)
+			logger.Printf("[SynthesizeVideo] videoID=%d: upload failed — marking video as failed", videoID)
 		}
 		if err := s.videoRepo.Update(video); err != nil {
-			logger.Printf("SynthesizeVideo: update video %d failed: %v", videoID, err)
+			logger.Printf("[SynthesizeVideo] videoID=%d: DB update failed: %v", videoID, err)
 		}
 
 		if s.taskSvc != nil {
@@ -524,6 +591,7 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 		if finalPath != stitchedPath {
 			os.Remove(stitchedPath)
 		}
+		logger.Printf("[SynthesizeVideo] videoID=%d: goroutine done", videoID)
 	}()
 
 	return taskID, nil

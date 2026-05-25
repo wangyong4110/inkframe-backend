@@ -74,7 +74,11 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 	}
 
 	// Temp directory for JPEG frames.
-	frameDir, err := os.MkdirTemp("", "inkframe-kbgo-")
+	// Must be under inkframeTempDir() so the WASM ffmpeg (WASI) can access it
+	// via the absolute path mounted at startup. Using os.MkdirTemp("", ...) can
+	// produce /tmp/... which on macOS is a symlink to /private/tmp — ffmpeg WASM
+	// follows the literal path and may fail to open the frame files.
+	frameDir, err := os.MkdirTemp(inkframeTempDir(), "kbgo-")
 	if err != nil {
 		return "", fmt.Errorf("ken burns go: mkdirtemp: %w", err)
 	}
