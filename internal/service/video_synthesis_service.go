@@ -473,7 +473,7 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 				assPath := fmt.Sprintf("%s/inkframe-%d-subtitles.ass", inkframeTempDir(), videoID)
 				if writeErr := os.WriteFile(assPath, []byte(assContent), 0644); writeErr == nil {
 					burnedPath := fmt.Sprintf("%s/inkframe-%d-burned.mp4", inkframeTempDir(), videoID)
-					if burnErr := subtitleSvc.BurnSubtitles(stitchedPath, assPath, burnedPath); burnErr == nil {
+					if burnErr := subtitleSvc.BurnSubtitles(synthCtx, stitchedPath, assPath, burnedPath); burnErr == nil {
 						logger.Printf("[SynthesizeVideo] videoID=%d step=2/4: subtitle burn OK → %s", videoID, burnedPath)
 						finalPath = burnedPath
 					} else {

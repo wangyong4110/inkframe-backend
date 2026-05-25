@@ -108,7 +108,7 @@ func (s *SubtitleService) ExportASS(shots []model.StoryboardShot, fontName, outp
 // assPath: ASS 字幕文件路径
 // videoPath: 输入视频路径
 // outputPath: 输出视频路径
-func (s *SubtitleService) BurnSubtitles(videoPath, assPath, outputPath string) error {
+func (s *SubtitleService) BurnSubtitles(ctx context.Context, videoPath, assPath, outputPath string) error {
 	// 转义 ASS 路径（Windows 兼容性）
 	escapedASS := strings.ReplaceAll(assPath, "\\", "/")
 	escapedASS = strings.ReplaceAll(escapedASS, ":", "\\:")
@@ -123,7 +123,7 @@ func (s *SubtitleService) BurnSubtitles(videoPath, assPath, outputPath string) e
 		"-c:a", "copy",
 		outputPath,
 	}
-	if _, err := runFFmpegCtx(context.Background(), args...); err != nil {
+	if _, err := runFFmpegCtx(ctx, args...); err != nil {
 		return fmt.Errorf("subtitle burn failed: %w", err)
 	}
 	return nil
