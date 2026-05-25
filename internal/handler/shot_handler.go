@@ -546,8 +546,12 @@ func (h *VideoHandler) ExportCapCutDraft(c *gin.Context) {
 	}
 
 	novel, _ := h.videoService.GetNovelByID(video.NovelID) // 用于字幕样式配置，失败不阻断导出
+	var bgmSegs []*model.VideoBGMSegment
+	if h.bgmRepo != nil {
+		bgmSegs, _ = h.bgmRepo.ListByVideoID(uint(id))
+	}
 
-	result, err := h.capcutService.ExportCapCutDraft(video, shots, novel)
+	result, err := h.capcutService.ExportCapCutDraft(video, shots, novel, bgmSegs)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -598,7 +602,11 @@ func (h *VideoHandler) Export(c *gin.Context) {
 		result, err = h.capcutService.ExportCSV(video, shots)
 	default: // "capcut" 或其他
 		novel, _ := h.videoService.GetNovelByID(video.NovelID)
-		result, err = h.capcutService.ExportCapCutDraft(video, shots, novel)
+		var bgmSegs []*model.VideoBGMSegment
+		if h.bgmRepo != nil {
+			bgmSegs, _ = h.bgmRepo.ListByVideoID(uint(id))
+		}
+		result, err = h.capcutService.ExportCapCutDraft(video, shots, novel, bgmSegs)
 	}
 
 	if err != nil {

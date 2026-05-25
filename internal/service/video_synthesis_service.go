@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -114,37 +115,115 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 	}
 	defer os.RemoveAll(tmpDir)
 
-	var localShotFiles []string // 记录 PollShotStatus 下载的本地文件，拼接后清理
-	defer func() {
-		for _, f := range localShotFiles {
-			os.Remove(f) //nolint:errcheck
-		}
-	}()
-	var concatLines []string
-	for i, shot := range shots {
-		logger.Printf("[StitchVideo] shot %d: clipPath=%q videoURL=%q imageURL=%q audioPath=%q duration=%.1fs",
-			shot.ShotNo, shot.ClipPath, shot.VideoURL, shot.ImageURL, shot.AudioPath, shot.Duration)
+// shotDownloadResult 记录一个分镜的下载结果（保序）
+	type shotDownloadResult struct {
+		index     int
+		shot      *model.StoryboardShot
+		clipFile  string // 下载后的本地路径（空 = 跳过 / 仅图片）
+		imgFile   string // image-only 镜头的本地图片路径
+		isLocal   bool   // clipFile 是 file:// 已存在的本地文件
+		downloadErr error
+	}
 
-		// 镜头无视频 clip/URL，但有图片 → 实时生成 Ken Burns 片段
-		if shot.ClipPath == "" && shot.VideoURL == "" {
+	results := make([]shotDownloadResult, len(shots))
+	for i, shot := range shots {
+		results[i] = shotDownloadResult{index: i, shot: shot}
+	}
+
+	// ── Phase 1: 并发下载远端素材（HTTP I/O，最多 4 并发） ────────────────
+	const maxDownloadConc = 4
+	sem := make(chan struct{}, maxDownloadConc)
+	var wg sync.WaitGroup
+
+	for i, shot := range shots {
+		switch {
+		case shot.ClipPath == "" && shot.VideoURL == "":
+			// image-only：并发下载图片
 			if shot.ImageURL == "" {
-				logger.Printf("[StitchVideo] shot %d: no clip, video URL, or image — skipping", shot.ShotNo)
-				continue
+				continue // 无任何素材，跳过
 			}
+			wg.Add(1)
+			go func(idx int, sh *model.StoryboardShot) {
+				defer wg.Done()
+				sem <- struct{}{}; defer func() { <-sem }()
+				tmp, dlErr := downloadToTemp(sh.ImageURL, fmt.Sprintf("inkframe-img-%d-", sh.ID), ".jpg")
+				results[idx].imgFile = tmp
+				results[idx].downloadErr = dlErr
+			}(i, shot)
+
+		case strings.HasPrefix(shot.ClipPath, "file://"):
+			// 已是本地文件，无需下载
+			results[i].clipFile = strings.TrimPrefix(shot.ClipPath, "file://")
+			results[i].isLocal = true
+
+		default:
+			// 远端视频：并发下载
+			remoteURL := shot.ClipPath
+			if remoteURL == "" {
+				remoteURL = shot.VideoURL
+			}
+			clipFile := fmt.Sprintf("%s/clip_%d.mp4", tmpDir, i)
+			wg.Add(1)
+			go func(idx int, sh *model.StoryboardShot, url, dest string) {
+				defer wg.Done()
+				sem <- struct{}{}; defer func() { <-sem }()
+				dlStart := time.Now()
+				logger.Printf("[StitchVideo] shot %d: downloading from %s", sh.ShotNo, url)
+				if err := downloadFile(url, dest); err != nil {
+					// URL 可能已过期，尝试从 provider 重新获取
+					if sh.ShotTaskID != "" && sh.ShotProviderName != "" {
+						if p, ok := s.videoProviders[sh.ShotProviderName]; ok {
+							rCtx, rCancel := context.WithTimeout(context.Background(), 15*time.Second)
+							freshURL, fErr := p.GetVideoURL(rCtx, sh.ShotTaskID)
+							rCancel()
+							if fErr == nil {
+								logger.Printf("[StitchVideo] shot %d: got fresh URL, retrying download", sh.ShotNo)
+								results[idx].downloadErr = downloadFile(freshURL, dest)
+							} else {
+								results[idx].downloadErr = fmt.Errorf("download failed and refresh URL failed: %w", err)
+							}
+						} else {
+							results[idx].downloadErr = err
+						}
+					} else {
+						results[idx].downloadErr = err
+					}
+					return
+				}
+				if fi, statErr := os.Stat(dest); statErr == nil {
+					logger.Printf("[StitchVideo] shot %d: download complete in %.1fs size=%.1fMB", sh.ShotNo, time.Since(dlStart).Seconds(), float64(fi.Size())/1e6)
+				} else {
+					logger.Printf("[StitchVideo] shot %d: download complete in %.1fs", sh.ShotNo, time.Since(dlStart).Seconds())
+				}
+				results[idx].clipFile = dest
+			}(i, shot, remoteURL, clipFile)
+		}
+	}
+	wg.Wait()
+	logger.Printf("[StitchVideo] videoID=%d: all downloads complete", videoID)
+
+	// ── Phase 2: 按序处理（FFmpeg 串行，WASM 单线程限制） ────────────────
+	var concatLines []string
+	for i, res := range results {
+		shot := res.shot
+		logger.Printf("[StitchVideo] shot %d: processing (clipFile=%q imgFile=%q err=%v)",
+			shot.ShotNo, res.clipFile, res.imgFile, res.downloadErr)
+
+		if res.downloadErr != nil {
+			logger.Printf("[StitchVideo] shot %d: download error — skipping: %v", shot.ShotNo, res.downloadErr)
+			continue
+		}
+
+		// image-only 镜头：生成 still frame（FFmpeg 串行）
+		if res.imgFile != "" {
 			duration := shot.Duration
 			if duration <= 0 {
 				duration = defaultShotDurationSecs
 			}
 			// image-only 镜头：直接用 still frame（-loop 1，x264 全 P 帧，WASM 几秒完成）。
 			// 注意：zoompan / JPEG序列编码在 WASM 单线程下耗时数分钟且 context 无法取消，禁止在合成路径使用。
-			logger.Printf("[StitchVideo] shot %d: image-only, generating still frame (duration=%.1fs)", shot.ShotNo, duration)
-			localImage, dlErr := downloadToTemp(shot.ImageURL, fmt.Sprintf("inkframe-img-%d-", shot.ID), ".jpg")
-			if dlErr != nil {
-				logger.Printf("[StitchVideo] shot %d: image download failed: %v — skipping", shot.ShotNo, dlErr)
-				continue
-			}
-			clipPath, clipErr := s.generateStillFrameClip(localImage, duration, aspectRatio)
-			os.Remove(localImage)
+			clipPath, clipErr := s.generateStillFrameClip(res.imgFile, duration, aspectRatio)
+			os.Remove(res.imgFile)
 			if clipErr != nil {
 				logger.Printf("[StitchVideo] shot %d: still frame failed: %v — skipping", shot.ShotNo, clipErr)
 				continue
@@ -154,53 +233,17 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 			continue
 		}
 
-		clipFile := fmt.Sprintf("%s/clip_%d.mp4", tmpDir, i)
-		finalClip := clipFile
-
-		// 如果已是本地文件（PollShotStatus 立即下载过），直接使用，无需再下载
-		if strings.HasPrefix(shot.ClipPath, "file://") {
-			clipFile = strings.TrimPrefix(shot.ClipPath, "file://")
-			finalClip = clipFile
-			localShotFiles = append(localShotFiles, clipFile)
-			logger.Printf("[StitchVideo] shot %d: using local clip: %s", shot.ShotNo, clipFile)
-		} else {
-			// 远端 URL：优先用 ClipPath，fallback 到 VideoURL
-			remoteURL := shot.ClipPath
-			if remoteURL == "" {
-				remoteURL = shot.VideoURL
-			}
-			dlStart := time.Now()
-			logger.Printf("[StitchVideo] shot %d: downloading from %s", shot.ShotNo, remoteURL)
-			if err := downloadFile(remoteURL, clipFile); err != nil {
-				logger.Printf("[StitchVideo] shot %d: download failed (%v), trying fresh URL from provider", shot.ShotNo, err)
-				// URL 可能已过期，尝试从 provider 重新获取
-				if shot.ShotTaskID != "" && shot.ShotProviderName != "" {
-					if p, ok := s.videoProviders[shot.ShotProviderName]; ok {
-						rCtx, rCancel := context.WithTimeout(context.Background(), 15*time.Second)
-						freshURL, fErr := p.GetVideoURL(rCtx, shot.ShotTaskID)
-						rCancel()
-						if fErr == nil {
-							logger.Printf("[StitchVideo] shot %d: got fresh URL, retrying download", shot.ShotNo)
-							if err2 := downloadFile(freshURL, clipFile); err2 != nil {
-								return "", fmt.Errorf("download shot %d clip failed (fresh URL also failed): %w", shot.ShotNo, err2)
-							}
-						} else {
-							return "", fmt.Errorf("download shot %d clip failed and refresh URL failed: %w", shot.ShotNo, err)
-						}
-					} else {
-						return "", fmt.Errorf("download shot %d clip failed: %w", shot.ShotNo, err)
-					}
-				} else {
-					return "", fmt.Errorf("download shot %d clip failed: %w", shot.ShotNo, err)
-				}
-			}
-			if fi, statErr := os.Stat(clipFile); statErr == nil {
-					logger.Printf("[StitchVideo] shot %d: download complete in %.1fs size=%.1fMB → %s",
-						shot.ShotNo, time.Since(dlStart).Seconds(), float64(fi.Size())/1e6, clipFile)
-				} else {
-					logger.Printf("[StitchVideo] shot %d: download complete in %.1fs → %s", shot.ShotNo, time.Since(dlStart).Seconds(), clipFile)
-				}
+		if res.clipFile == "" {
+			logger.Printf("[StitchVideo] shot %d: no clip or image — skipping", shot.ShotNo)
+			continue
 		}
+
+		// 本地文件：加入清理列表（file:// 本地缓存）
+		if res.isLocal {
+			defer os.Remove(res.clipFile) //nolint:errcheck
+		}
+
+		finalClip := res.clipFile
 
 		// Merge audio if present
 		if shot.AudioPath != "" {
@@ -209,7 +252,7 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 			logger.Printf("[StitchVideo] shot %d: merging audio: %s", shot.ShotNo, audioPath)
 			mergeCtx, mergeCancel := context.WithTimeout(ctx, 60*time.Second)
 			_, mergeErr := runFFmpegCtx(mergeCtx, "-y",
-				"-i", clipFile,
+				"-i", res.clipFile,
 				"-i", audioPath,
 				"-c:v", "copy",
 				"-c:a", "aac",
@@ -218,13 +261,12 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 			)
 			mergeCancel()
 			if mergeErr != nil {
-				logger.Printf("[StitchVideo] shot %d: audio merge failed: %v — using clip without audio", shot.ShotNo, err)
+				logger.Printf("[StitchVideo] shot %d: audio merge failed: %v — using clip without audio", shot.ShotNo, mergeErr)
 			} else {
 				logger.Printf("[StitchVideo] shot %d: audio merged OK", shot.ShotNo)
 				finalClip = mergedFile
 			}
 		}
-
 
 		concatLines = append(concatLines, fmt.Sprintf("file '%s'", finalClip))
 	}
@@ -242,18 +284,21 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 
 	stitchedPath := fmt.Sprintf("%s/inkframe-%d-stitched.mp4", inkframeTempDir(), videoID)
 	logger.Printf("[StitchVideo] videoID=%d: running ffmpeg concat → %s", videoID, stitchedPath)
-	// concat 超时 = 每个 clip 2 分钟，最少 5 分钟
-	concatTimeout := time.Duration(len(concatLines))*2*time.Minute + 5*time.Minute
-	concatCtx, concatCancel := context.WithTimeout(ctx, concatTimeout)
-	defer concatCancel()
-	if _, err := runFFmpegCtx(concatCtx, "-y",
+	// concat 使用 goroutine 超时（wazero 在 WASM 内无法通过 ctx 中断）
+	// -c copy 只是复制流，通常很快；给每个 clip 留 30s 余量，最少 3 分钟
+	concatTimeout := time.Duration(len(concatLines))*30*time.Second + 3*time.Minute
+	if concatTimeout > 30*time.Minute {
+		concatTimeout = 30 * time.Minute
+	}
+	if concatOut, concatErr := runFFmpegWithGoroutineTimeout(concatTimeout, "-y",
 		"-f", "concat",
 		"-safe", "0",
 		"-i", listFile,
 		"-c", "copy",
 		stitchedPath,
-	); err != nil {
-		return "", fmt.Errorf("ffmpeg stitch failed: %w", err)
+	); concatErr != nil {
+		logger.Printf("[StitchVideo] videoID=%d: ffmpeg concat failed: %v\noutput: %s", videoID, concatErr, string(concatOut))
+		return "", fmt.Errorf("ffmpeg stitch failed: %w", concatErr)
 	}
 	logger.Printf("[StitchVideo] videoID=%d: ffmpeg concat done", videoID)
 
@@ -493,7 +538,7 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 		}
 		coverPath := fmt.Sprintf("%s/inkframe-%d-cover.jpg", inkframeTempDir(), videoID)
 		coverURL := ""
-		if _, err := runFFmpegCtx(synthCtx, "-y", "-ss", "2", "-i", finalPath,
+		if _, err := runFFmpegWithGoroutineTimeout(30*time.Second, "-y", "-ss", "2", "-i", finalPath,
 			"-frames:v", "1", "-vf", "scale=640:-1", coverPath); err == nil {
 			logger.Printf("[SynthesizeVideo] videoID=%d step=3/4: cover extracted → %s", videoID, coverPath)
 			defer os.Remove(coverPath)

@@ -1796,20 +1796,24 @@ func (s *VideoService) generateStillFrameClip(imagePath string, duration float64
 	vf := fmt.Sprintf("scale=%s:%s:force_original_aspect_ratio=decrease,pad=%s:%s:(ow-iw)/2:(oh-ih)/2,setsar=1", w, h, w, h)
 	outPath := fmt.Sprintf("%s/inkframe-still-%s.mp4", inkframeTempDir(), uuid.New().String()[:8])
 	logger.Printf("generateStillFrameClip: start image=%s duration=%.1fs res=%s → %s", imagePath, duration, resolution, outPath)
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
 	encStart := time.Now()
-	if out, err := runFFmpegCtx(ctx, "-y",
+	// 使用 goroutine 超时而非 context 超时：wazero 在密集计算时不响应 ctx 取消。
+	// -preset ultrafast -tune stillimage 大幅降低 WASM x264 编码时间（静止帧全为 P 帧）。
+	out, err := runFFmpegWithGoroutineTimeout(90*time.Second,
+		"-y",
 		"-loop", "1",
 		"-t", fmt.Sprintf("%.2f", duration),
 		"-i", imagePath,
 		"-vf", vf,
 		"-c:v", "libx264",
+		"-preset", "ultrafast",
+		"-tune", "stillimage",
 		"-pix_fmt", "yuv420p",
 		"-r", "24",
 		outPath,
-	); err != nil {
-		logger.Printf("generateStillFrameClip: ffmpeg failed after %.1fs: %v\noutput: %s", time.Since(encStart).Seconds(), err, string(out))
+	)
+	if err != nil {
+		logger.Printf("generateStillFrameClip: failed after %.1fs: %v\noutput: %s", time.Since(encStart).Seconds(), err, string(out))
 		return "", fmt.Errorf("ffmpeg still frame: %w", err)
 	}
 	logger.Printf("generateStillFrameClip: done in %.1fs → %s", time.Since(encStart).Seconds(), outPath)

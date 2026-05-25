@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
@@ -118,12 +119,13 @@ func (s *SubtitleService) BurnSubtitles(ctx context.Context, videoPath, assPath,
 		"-i", videoPath,
 		"-vf", fmt.Sprintf("ass='%s'", escapedASS),
 		"-c:v", "libx264",
-		"-crf", "18",
-		"-preset", "fast",
+		"-preset", "ultrafast",
 		"-c:a", "copy",
 		outputPath,
 	}
-	if _, err := runFFmpegCtx(ctx, args...); err != nil {
+	// 使用 goroutine 超时：wazero 在密集 x264 编码时不响应 ctx 取消
+	// 字幕烧录需重新编码整个视频，给 5 分钟余量
+	if _, err := runFFmpegWithGoroutineTimeout(5*time.Minute, args...); err != nil {
 		return fmt.Errorf("subtitle burn failed: %w", err)
 	}
 	return nil

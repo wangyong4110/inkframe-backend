@@ -400,7 +400,7 @@ func capCutTransitionEffect(t string) string {
 }
 
 // ExportCapCutDraft 导出剪映草稿 ZIP（含视频/图片、配音、字幕轨道）
-func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.StoryboardShot, novel *model.Novel) (*ExportResult, error) {
+func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.StoryboardShot, novel *model.Novel, bgmSegs []*model.VideoBGMSegment) (*ExportResult, error) {
 	logger.Printf("[CapCutService] ExportCapCutDraft: videoID=%d title=%q shots=%d", video.ID, video.Title, len(shots))
 	now := time.Now().Unix()
 	draftID := uuid.New().String()
@@ -731,6 +731,85 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	}
 
 	audios := append(audioMaterials, sfxMaterials...)
+
+	// ── BGM 轨道 ──────────────────────────────────────────────────────────────
+	if len(bgmSegs) > 0 {
+		// shot 已按 shot_no 升序排列，构建两张快查表（O(1) 查找，避免 O(N²) 嵌套）
+		shotStartMap := make(map[int]int64, len(shots))
+		shotEndMap   := make(map[int]int64, len(shots))
+		var acc int64
+		for _, sh := range shots {
+			shotStartMap[sh.ShotNo] = acc
+			dur := int64(sh.Duration * 1_000_000)
+			if dur <= 0 {
+				dur = 5_000_000
+			}
+			shotEndMap[sh.ShotNo] = acc + dur
+			acc += dur
+		}
+
+		var bgmSegments []ccSegment
+		for _, bs := range bgmSegs {
+			if bs.Disabled || bs.URL == "" {
+				continue
+			}
+			startMicros, ok := shotStartMap[bs.StartShotNo]
+			if !ok {
+				continue
+			}
+			// BGM 结束时间 = EndShotNo 镜头的末尾时刻（O(1) 查表）
+			endMicros := totalDuration
+			if end, ok2 := shotEndMap[bs.EndShotNo]; ok2 {
+				endMicros = end
+			}
+			segDur := endMicros - startMicros
+			if segDur <= 0 {
+				continue
+			}
+
+			bgmMatID := uuid.New().String()
+			bgmFilename := strings.ReplaceAll(bgmMatID, "-", "") + ".mp3"
+			if data, err := downloadMediaFile(bs.URL); err == nil {
+				mediaFiles = append(mediaFiles, mediaFile{filename: bgmFilename, data: data})
+			}
+
+			vol := bs.Volume
+			if vol <= 0 {
+				vol = 0.3
+			}
+
+			audios = append(audios, ccAudioMaterial{
+				CheckFlag: 1,
+				Duration:  segDur,
+				FilePath:  bgmFilename,
+				ID:        bgmMatID,
+				Name:      bs.TrackName,
+				Type:      "music",
+			})
+			bgmSegments = append(bgmSegments, ccSegment{
+				Clip:            ccClip{Alpha: 1.0, Scale: ccScale{X: 1.0, Y: 1.0}},
+				ID:              uuid.New().String(),
+				MaterialID:      bgmMatID,
+				Speed:           1.0,
+				SourceTimerange: ccTimeRange{Duration: segDur, Start: 0},
+				TargetTimerange: ccTimeRange{Duration: segDur, Start: startMicros},
+				Type:            "audio",
+				Visible:         true,
+				Volume:          vol,
+			})
+		}
+		if len(bgmSegments) > 0 {
+			tracks = append(tracks, ccTrack{
+				Attribute:     0,
+				Flag:          0,
+				ID:            uuid.New().String(),
+				IsDefaultName: true,
+				Name:          "背景音乐",
+				Segments:      bgmSegments,
+				Type:          "audio",
+			})
+		}
+	}
 	if audios == nil {
 		audios = []ccAudioMaterial{}
 	}
