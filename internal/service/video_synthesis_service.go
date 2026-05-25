@@ -175,6 +175,7 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 			if remoteURL == "" {
 				remoteURL = shot.VideoURL
 			}
+			dlStart := time.Now()
 			logger.Printf("[StitchVideo] shot %d: downloading from %s", shot.ShotNo, remoteURL)
 			if err := downloadFile(remoteURL, clipFile); err != nil {
 				logger.Printf("[StitchVideo] shot %d: download failed (%v), trying fresh URL from provider", shot.ShotNo, err)
@@ -199,7 +200,12 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 					return "", fmt.Errorf("download shot %d clip failed: %w", shot.ShotNo, err)
 				}
 			}
-			logger.Printf("[StitchVideo] shot %d: download complete: %s", shot.ShotNo, clipFile)
+			if fi, statErr := os.Stat(clipFile); statErr == nil {
+					logger.Printf("[StitchVideo] shot %d: download complete in %.1fs size=%.1fMB → %s",
+						shot.ShotNo, time.Since(dlStart).Seconds(), float64(fi.Size())/1e6, clipFile)
+				} else {
+					logger.Printf("[StitchVideo] shot %d: download complete in %.1fs → %s", shot.ShotNo, time.Since(dlStart).Seconds(), clipFile)
+				}
 		}
 
 		// Merge audio if present

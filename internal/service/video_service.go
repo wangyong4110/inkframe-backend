@@ -1795,9 +1795,11 @@ func (s *VideoService) generateStillFrameClip(imagePath string, duration float64
 	w, h := parts[0], parts[1]
 	vf := fmt.Sprintf("scale=%s:%s:force_original_aspect_ratio=decrease,pad=%s:%s:(ow-iw)/2:(oh-ih)/2,setsar=1", w, h, w, h)
 	outPath := fmt.Sprintf("%s/inkframe-still-%s.mp4", inkframeTempDir(), uuid.New().String()[:8])
+	logger.Printf("generateStillFrameClip: start image=%s duration=%.1fs res=%s → %s", imagePath, duration, resolution, outPath)
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	if _, err := runFFmpegCtx(ctx, "-y",
+	encStart := time.Now()
+	if out, err := runFFmpegCtx(ctx, "-y",
 		"-loop", "1",
 		"-t", fmt.Sprintf("%.2f", duration),
 		"-i", imagePath,
@@ -1807,8 +1809,10 @@ func (s *VideoService) generateStillFrameClip(imagePath string, duration float64
 		"-r", "24",
 		outPath,
 	); err != nil {
+		logger.Printf("generateStillFrameClip: ffmpeg failed after %.1fs: %v\noutput: %s", time.Since(encStart).Seconds(), err, string(out))
 		return "", fmt.Errorf("ffmpeg still frame: %w", err)
 	}
+	logger.Printf("generateStillFrameClip: done in %.1fs → %s", time.Since(encStart).Seconds(), outPath)
 	return outPath, nil
 }
 

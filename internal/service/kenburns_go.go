@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/logger"
@@ -84,8 +85,9 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 	}
 	defer os.RemoveAll(frameDir)
 
-	logger.Printf("generateKenBurnsPureGo: shot %d rendering %d frames (%dx%d) src=%dx%d camera=%s",
-		shot.ShotNo, totalFrames, outW, outH, srcW, srcH, shot.CameraType)
+	renderStart := time.Now()
+	logger.Printf("generateKenBurnsPureGo: shot %d rendering %d frames (%dx%d) src=%dx%d camera=%s frameDir=%s",
+		shot.ShotNo, totalFrames, outW, outH, srcW, srcH, shot.CameraType, frameDir)
 
 	// Render one JPEG per frame.
 	for i := 0; i < totalFrames; i++ {
@@ -93,6 +95,11 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 		case <-ctx.Done():
 			return "", ctx.Err()
 		default:
+		}
+
+		if i > 0 && i%30 == 0 {
+			logger.Printf("generateKenBurnsPureGo: shot %d frame %d/%d (%.0f%%)",
+				shot.ShotNo, i, totalFrames, float64(i)*100/float64(totalFrames))
 		}
 
 		t := float64(i) / float64(fps)
@@ -105,6 +112,7 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 			return "", fmt.Errorf("ken burns go: write frame %d: %w", i, err)
 		}
 	}
+	logger.Printf("generateKenBurnsPureGo: shot %d frame rendering done in %.1fs", shot.ShotNo, time.Since(renderStart).Seconds())
 
 	// 查询当前视频的调色配置（可选）
 	colorGrade := ""
@@ -159,7 +167,9 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 	vfFilters = append(vfFilters, "format=yuv420p")
 	vfFilter := strings.Join(vfFilters, ",")
 
-	_, encErr := runFFmpegCtx(ctx,
+	encStart := time.Now()
+	logger.Printf("generateKenBurnsPureGo: shot %d starting ffmpeg encode: %d frames → %s vf=%q", shot.ShotNo, totalFrames, outPath, vfFilter)
+	encOut, encErr := runFFmpegCtx(ctx,
 		"-y",
 		"-framerate", fmt.Sprintf("%d", fps),
 		"-i", inputPattern,
@@ -170,8 +180,11 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 		outPath,
 	)
 	if encErr != nil {
+		logger.Printf("generateKenBurnsPureGo: shot %d ffmpeg encode failed after %.1fs: %v\noutput: %s",
+			shot.ShotNo, time.Since(encStart).Seconds(), encErr, string(encOut))
 		return "", fmt.Errorf("ken burns go: ffmpeg encode: %w", encErr)
 	}
+	logger.Printf("generateKenBurnsPureGo: shot %d ffmpeg encode done in %.1fs → %s", shot.ShotNo, time.Since(encStart).Seconds(), outPath)
 	return outPath, nil
 }
 
