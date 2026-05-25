@@ -176,6 +176,14 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 			task.cancel()
 		}
 	}()
+	// 顶层 panic 捕获：任何未预期的 panic 都调 fail() 而不是让进程崩溃
+	defer func() {
+		if r := recover(); r != nil {
+			msg := fmt.Sprintf("internal panic: %v", r)
+			logger.Printf("[NovelAnalysis] PANIC in runPipeline novelID=%d: %v", novel.ID, r)
+			s.fail(task, msg)
+		}
+	}()
 	task.setStatus("running")
 	if task.taskSvc != nil && task.externalTaskID != "" {
 		task.taskSvc.SetRunning(task.externalTaskID) //nolint:errcheck
@@ -243,6 +251,13 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 			phWg.Add(1)
 			go func() {
 				defer phWg.Done()
+				defer func() {
+					if r := recover(); r != nil {
+						msg := fmt.Sprintf("%s提取 panic: %v", pt.name, r)
+						logger.Printf("NovelAnalysis[%d]: step%s PANIC: %v", novel.ID, pt.name, r)
+						task.addWarning(msg)
+					}
+				}()
 				if err := pt.fn(); err != nil {
 					msg := fmt.Sprintf("%s提取失败: %v", pt.name, err)
 					logger.Printf("NovelAnalysis[%d]: step%s warn: %v", novel.ID, pt.name, err)
@@ -259,7 +274,7 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 	// ── Phase 3: 技能生成（依赖角色，顺序执行）(70→78) ───────────────────────
 	task.setStep("正在生成技能数据...")
 	if s.skillService != nil {
-		if err := s.stepGenerateSkills(ctx, task, novel); err != nil {
+		if err := s.stepGenerateSkills(ctx, task, tenantID, novel); err != nil {
 			logger.Printf("NovelAnalysis[%d]: stepGenerateSkills warn: %v", novel.ID, err)
 		}
 	}
@@ -568,6 +583,7 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 		}
 		char := &model.Character{
 			NovelID:     novel.ID,
+			TenantID:    tenantID,
 			UUID:        uuid.New().String(),
 			Name:        c.Name,
 			Role:        role,
@@ -835,7 +851,7 @@ func (s *NovelAnalysisService) generateThreeViewsAsync(ctx context.Context, char
 
 // stepGenerateSkills 逐章提取技能；结果可为空，失败不影响 pipeline
 func (s *NovelAnalysisService) stepGenerateSkills(
-	ctx context.Context, task *AnalysisTask, novel *model.Novel,
+	ctx context.Context, task *AnalysisTask, tenantID uint, novel *model.Novel,
 ) error {
 	logger.Printf("[NovelAnalysis] stepGenerateSkills: novelID=%d", novel.ID)
 	// 若已有技能则跳过
@@ -845,7 +861,7 @@ func (s *NovelAnalysisService) stepGenerateSkills(
 		return nil
 	}
 
-	skills, err := s.skillService.AIExtractAllFromNovel(novel.TenantID, novel.ID)
+	skills, err := s.skillService.AIExtractAllFromNovel(tenantID, novel.ID)
 	if err != nil {
 		logger.Printf("NovelAnalysis[%d]: skill extraction warn: %v", novel.ID, err)
 		return nil // 非致命错误，不影响 pipeline
