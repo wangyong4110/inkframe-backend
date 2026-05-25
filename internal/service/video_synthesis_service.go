@@ -135,28 +135,26 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 			if duration <= 0 {
 				duration = defaultShotDurationSecs
 			}
-			logger.Printf("[StitchVideo] shot %d: image-only, generating Ken Burns (duration=%.1fs)", shot.ShotNo, duration)
+			logger.Printf("[StitchVideo] shot %d: image-only, generating clip (duration=%.1fs)", shot.ShotNo, duration)
 			localImage, dlErr := downloadToTemp(shot.ImageURL, fmt.Sprintf("inkframe-img-%d-", shot.ID), ".jpg")
 			if dlErr != nil {
 				logger.Printf("[StitchVideo] shot %d: image download failed: %v — skipping", shot.ShotNo, dlErr)
 				continue
 			}
-			// Ken Burns 每镜头超时 = max(120s, duration*20) 留出足够余量
-			kbTimeout := time.Duration(duration*20)*time.Second + 120*time.Second
-			kbCtx, kbCancel := context.WithTimeout(ctx, kbTimeout)
-			kbPath, kbErr := s.generateKenBurnsPureGo(kbCtx, shot, localImage, duration, aspectRatio)
-			kbCancel()
-			if kbErr != nil {
-				logger.Printf("[StitchVideo] shot %d: Ken Burns failed (%v), falling back to still frame", shot.ShotNo, kbErr)
-				kbPath, kbErr = s.generateStillFrameClip(localImage, duration, aspectRatio)
+			// 先尝试 Ken Burns zoompan（30s 超时）；WASM 太慢时自动降级 still frame（最快）
+			logger.Printf("[StitchVideo] shot %d: trying Ken Burns zoompan...", shot.ShotNo)
+			clipPath, clipErr := s.generateKenBurnsClip(shot, localImage, duration, aspectRatio)
+			if clipErr != nil {
+				logger.Printf("[StitchVideo] shot %d: Ken Burns zoompan failed (%v), falling back to still frame", shot.ShotNo, clipErr)
+				clipPath, clipErr = s.generateStillFrameClip(localImage, duration, aspectRatio)
 			}
 			os.Remove(localImage)
-			if kbErr != nil {
-				logger.Printf("[StitchVideo] shot %d: Ken Burns + still frame both failed: %v — skipping", shot.ShotNo, kbErr)
+			if clipErr != nil {
+				logger.Printf("[StitchVideo] shot %d: all clip generation methods failed: %v — skipping", shot.ShotNo, clipErr)
 				continue
 			}
-			logger.Printf("[StitchVideo] shot %d: Ken Burns clip ready: %s", shot.ShotNo, kbPath)
-			concatLines = append(concatLines, fmt.Sprintf("file '%s'", kbPath))
+			logger.Printf("[StitchVideo] shot %d: clip ready: %s", shot.ShotNo, clipPath)
+			concatLines = append(concatLines, fmt.Sprintf("file '%s'", clipPath))
 			continue
 		}
 
