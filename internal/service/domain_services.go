@@ -1113,7 +1113,7 @@ type characterForPrompt struct {
 	Name         string
 	Role         string
 	CurrentState string
-	DialogueStyle string
+	Description  string
 }
 
 func (s *ChapterService) getCharactersForPrompt(novelID uint) []characterForPrompt {
@@ -1352,11 +1352,10 @@ func (s *ChapterVersionService) RestoreVersion(chapterID uint, versionNo int) (*
 // EffectiveCharacter 有效角色（合并项目级与章节级覆盖）
 type EffectiveCharacter struct {
 	model.Character
-	ChapterOverride      *model.ChapterCharacter `json:"chapter_override,omitempty"`
-	EffectiveAppearance  string                  `json:"effective_appearance"`
-	EffectivePersonality string                  `json:"effective_personality"`
-	EffectiveStatus      string                  `json:"effective_status"`
-	EffectiveLocation    string                  `json:"effective_location"`
+	ChapterOverride     *model.ChapterCharacter `json:"chapter_override,omitempty"`
+	EffectiveDescription string                 `json:"effective_description"`
+	EffectiveStatus     string                  `json:"effective_status"`
+	EffectiveLocation   string                  `json:"effective_location"`
 }
 
 type CharacterService struct {
@@ -1409,12 +1408,8 @@ func (s *CharacterService) CreateCharacter(novelID uint, req *model.CreateCharac
 		UUID:        uuid.New().String(),
 		NovelID:     novelID,
 		Name:        req.Name,
-		Gender:      req.Gender,
 		Role:        req.Role,
-		Archetype:   req.Archetype,
-		Background:  req.Background,
-		Appearance:  req.Appearance,
-		Personality: req.Personality,
+		Description: req.Description,
 		Status:      "active",
 	}
 	return character, s.characterRepo.Create(character)
@@ -1436,26 +1431,11 @@ func (s *CharacterService) UpdateCharacter(id uint, req *model.UpdateCharacterRe
 	if req.Name != "" {
 		character.Name = req.Name
 	}
-	if req.Gender != "" {
-		character.Gender = req.Gender
-	}
 	if req.Role != "" {
 		character.Role = req.Role
 	}
-	if req.Archetype != "" {
-		character.Archetype = req.Archetype
-	}
-	if req.Background != "" {
-		character.Background = req.Background
-	}
-	if req.Appearance != "" {
-		character.Appearance = req.Appearance
-	}
-	if req.Personality != "" {
-		character.Personality = req.Personality
-	}
-	if req.CharacterArc != "" {
-		character.CharacterArc = req.CharacterArc
+	if req.Description != "" {
+		character.Description = req.Description
 	}
 	if req.ThreeViewSheet != "" {
 		character.ThreeViewSheet = req.ThreeViewSheet
@@ -1465,9 +1445,6 @@ func (s *CharacterService) UpdateCharacter(id uint, req *model.UpdateCharacterRe
 	}
 	if req.Portrait != "" {
 		character.Portrait = req.Portrait
-	}
-	if req.CoverImage != "" {
-		character.CoverImage = req.CoverImage
 	}
 	if req.VoiceID != "" {
 		character.VoiceID = req.VoiceID
@@ -1510,15 +1487,15 @@ func (s *CharacterService) ListEffectiveCharacters(novelID, chapterID uint) ([]*
 		ec := &EffectiveCharacter{Character: *ch}
 		if o, ok := overrideMap[ch.ID]; ok {
 			ec.ChapterOverride = o
-			if o.Appearance != "" {
-				ec.EffectiveAppearance = o.Appearance
+			// Merge chapter-level appearance/personality overrides into description
+			base := ch.Description
+			var overrides []string
+			if o.Appearance != "" { overrides = append(overrides, "外貌（本章）："+o.Appearance) }
+			if o.Personality != "" { overrides = append(overrides, "性格（本章）："+o.Personality) }
+			if len(overrides) > 0 {
+				ec.EffectiveDescription = base + "\n" + strings.Join(overrides, "\n")
 			} else {
-				ec.EffectiveAppearance = ch.Appearance
-			}
-			if o.Personality != "" {
-				ec.EffectivePersonality = o.Personality
-			} else {
-				ec.EffectivePersonality = ch.Personality
+				ec.EffectiveDescription = base
 			}
 			if o.Status != "" {
 				ec.EffectiveStatus = o.Status
@@ -1527,8 +1504,7 @@ func (s *CharacterService) ListEffectiveCharacters(novelID, chapterID uint) ([]*
 			}
 			ec.EffectiveLocation = o.Location
 		} else {
-			ec.EffectiveAppearance = ch.Appearance
-			ec.EffectivePersonality = ch.Personality
+			ec.EffectiveDescription = ch.Description
 			ec.EffectiveStatus = ch.Status
 		}
 		result = append(result, ec)
@@ -1570,7 +1546,7 @@ func (s *CharacterService) DeleteChapterCharacter(chapterID, characterID uint) e
 }
 
 func (s *CharacterService) GenerateProfile(tenantID uint, novelID uint, description string) (*model.Character, error) {
-	prompt := fmt.Sprintf("根据以下描述生成小说角色档案：%s\n以JSON格式返回：{\"name\":\"角色名\",\"role\":\"protagonist/antagonist/supporting\",\"background\":\"背景故事\",\"appearance\":\"外貌描述\",\"personality\":\"性格特点\"}", description)
+	prompt := fmt.Sprintf("根据以下描述生成小说角色档案：%s\n以JSON格式返回：{\"name\":\"角色名\",\"role\":\"protagonist/antagonist/supporting\",\"description\":\"外貌、性格、背景等综合描述\"}", description)
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "character_profile", prompt, "")
 	if err != nil {
 		return nil, err
@@ -1579,28 +1555,25 @@ func (s *CharacterService) GenerateProfile(tenantID uint, novelID uint, descript
 	var profile struct {
 		Name        string `json:"name"`
 		Role        string `json:"role"`
-		Background  string `json:"background"`
-		Appearance  string `json:"appearance"`
-		Personality string `json:"personality"`
+		Description string `json:"description"`
 	}
 	if err := json.Unmarshal([]byte(extractJSON(result)), &profile); err != nil {
 		return &model.Character{
-			UUID:       uuid.New().String(),
-			NovelID:    novelID,
-			Name:       "AI生成角色",
-			Role:       "supporting",
-			Background: result,
-			Status:     "active",
+			UUID:        uuid.New().String(),
+			NovelID:     novelID,
+			Name:        "AI生成角色",
+			Role:        "supporting",
+			Description: result,
+			Status:      "active",
 		}, nil
 	}
 	return &model.Character{
-		UUID:       uuid.New().String(),
-		NovelID:    novelID,
-		Name:       profile.Name,
-		Role:       profile.Role,
-		Background: profile.Background,
-		Appearance: profile.Appearance,
-		Status:     "active",
+		UUID:        uuid.New().String(),
+		NovelID:     novelID,
+		Name:        profile.Name,
+		Role:        profile.Role,
+		Description: profile.Description,
+		Status:      "active",
 	}, nil
 }
 
@@ -1687,33 +1660,27 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			continue
 		}
 
-		dialogueStyleJSON := ""
-		if p.DialogueStyle.VocabularyLevel != "" || len(p.DialogueStyle.Patterns) > 0 {
-			if b, err := json.Marshal(p.DialogueStyle); err == nil {
-				dialogueStyleJSON = string(b)
-			}
-		}
-		visualDesignJSON := ""
-		if p.VisualPrompt != "" {
-			if b, err := json.Marshal(map[string]string{"image_prompt": p.VisualPrompt}); err == nil {
-				visualDesignJSON = string(b)
-			}
-		}
 		role := p.Role
 		if role != "protagonist" && role != "antagonist" && role != "supporting" {
 			role = "supporting"
 		}
 
+		var descParts []string
+		if p.Appearance != "" { descParts = append(descParts, "外貌："+p.Appearance) }
+		if p.Personality != "" { descParts = append(descParts, "性格："+p.Personality) }
+		if p.Background != "" { descParts = append(descParts, "背景："+p.Background) }
+		if p.CharacterArc != "" { descParts = append(descParts, "弧光："+p.CharacterArc) }
+		if len(p.DialogueStyle.Patterns) > 0 {
+			descParts = append(descParts, "说话风格："+strings.Join(p.DialogueStyle.Patterns, "；"))
+		} else if p.DialogueStyle.VocabularyLevel != "" {
+			descParts = append(descParts, "说话风格："+p.DialogueStyle.VocabularyLevel)
+		}
+		description := strings.Join(descParts, "\n")
+
 		if ch, ok := byName[p.Name]; ok {
 			changed := false
 			if v, ok := fillIfEmpty(ch.Role, role); ok { ch.Role = v; changed = true }
-			if v, ok := fillIfEmpty(ch.Archetype, p.Archetype); ok { ch.Archetype = v; changed = true }
-			if v, ok := fillIfEmpty(ch.Appearance, p.Appearance); ok { ch.Appearance = v; changed = true }
-			if v, ok := fillIfEmpty(ch.Personality, p.Personality); ok { ch.Personality = v; changed = true }
-			if v, ok := fillIfEmpty(ch.Background, p.Background); ok { ch.Background = v; changed = true }
-			if v, ok := fillIfEmpty(ch.CharacterArc, p.CharacterArc); ok { ch.CharacterArc = v; changed = true }
-			if v, ok := fillIfEmpty(ch.DialogueStyle, dialogueStyleJSON); ok { ch.DialogueStyle = v; changed = true }
-			if v, ok := fillIfEmpty(ch.VisualDesign, visualDesignJSON); ok { ch.VisualDesign = v; changed = true }
+			if v, ok := fillIfEmpty(ch.Description, description); ok { ch.Description = v; changed = true }
 			if !changed {
 				upserted = append(upserted, ch)
 				continue
@@ -1725,18 +1692,12 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			upserted = append(upserted, ch)
 		} else {
 			character := &model.Character{
-				UUID:          uuid.New().String(),
-				NovelID:       novelID,
-				Name:          p.Name,
-				Role:          role,
-				Archetype:     p.Archetype,
-				Appearance:    p.Appearance,
-				Personality:   p.Personality,
-				Background:    p.Background,
-				CharacterArc:  p.CharacterArc,
-				DialogueStyle: dialogueStyleJSON,
-				VisualDesign:  visualDesignJSON,
-				Status:        "active",
+				UUID:        uuid.New().String(),
+				NovelID:     novelID,
+				Name:        p.Name,
+				Role:        role,
+				Description: description,
+				Status:      "active",
 			}
 			if err := s.characterRepo.Create(character); err != nil {
 				logger.Printf("CharacterService.AIBatchGenerate: create %s: %v", p.Name, err)
@@ -1814,24 +1775,18 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 		if c.Name == "" || existingNameSet[strings.ToLower(c.Name)] {
 			continue
 		}
-		visualDesign := ""
-		if c.VisualPrompt != "" {
-			if vd, e := json.Marshal(map[string]string{"image_prompt": c.VisualPrompt}); e == nil {
-				visualDesign = string(vd)
-			}
-		}
+		var minorDescParts []string
+		if c.Appearance != "" { minorDescParts = append(minorDescParts, "外貌："+c.Appearance) }
+		if c.Personality != "" { minorDescParts = append(minorDescParts, "性格："+c.Personality) }
+		if c.Background != "" { minorDescParts = append(minorDescParts, "背景："+c.Background) }
+		if c.CharacterArc != "" { minorDescParts = append(minorDescParts, "弧光："+c.CharacterArc) }
 		char := &model.Character{
-			NovelID:      novelID,
-			UUID:         uuid.New().String(),
-			Name:         c.Name,
-			Role:         "minor",
-			Archetype:    c.Archetype,
-			Appearance:   c.Appearance,
-			Personality:  c.Personality,
-			Background:   c.Background,
-			CharacterArc: c.CharacterArc,
-			VisualDesign: visualDesign,
-			Status:       "active",
+			NovelID:     novelID,
+			UUID:        uuid.New().String(),
+			Name:        c.Name,
+			Role:        "minor",
+			Description: strings.Join(minorDescParts, "\n"),
+			Status:      "active",
 		}
 		if e := s.characterRepo.Create(char); e != nil {
 			logger.Printf("CharacterService.AIExtractMinorChars: create %q: %v", c.Name, e)
@@ -1896,7 +1851,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 			if novelTitle != "" {
 				genCtx = WithImageStorageHint(genCtx, ImageStorageHint{NovelTitle: novelTitle})
 			}
-			img, genErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, char.Appearance, imageStyle, char.Gender, "", provider)
+			img, genErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, char.Description, imageStyle, "", "", provider)
 			if genErr != nil {
 				logger.Printf("[CharacterService] BatchGenerateImages: char %d (%s) failed: %v", char.ID, char.Name, genErr)
 				mu.Lock()

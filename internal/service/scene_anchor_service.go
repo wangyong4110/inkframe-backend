@@ -117,7 +117,7 @@ func (s *SceneAnchorService) Delete(id uint) error {
 	return s.repo.Delete(id)
 }
 
-// SetRefImage 锁定参考图（强制覆盖，可选绑定 shotID）
+// SetRefImage 锁定参考图（强制覆盖）
 func (s *SceneAnchorService) SetRefImage(id uint, imageURL string, shotID *uint) error {
 	anchor, err := s.repo.GetByID(id)
 	if err != nil {
@@ -126,9 +126,6 @@ func (s *SceneAnchorService) SetRefImage(id uint, imageURL string, shotID *uint)
 	anchor.RefImageURL = imageURL
 	now := time.Now()
 	anchor.RefImageLockedAt = &now
-	if shotID != nil {
-		anchor.RefImageShotID = shotID
-	}
 	return s.repo.Update(anchor)
 }
 

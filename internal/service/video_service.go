@@ -804,11 +804,11 @@ func (s *VideoService) buildStoryboardPrompt(
 			}
 		}
 		if len(matched) > 0 {
-			sb.WriteString("【角色外貌（description 中须保持一致）】\n")
+			sb.WriteString("【角色信息（description 中须保持一致）】\n")
 			for _, c := range matched {
 				sb.WriteString(fmt.Sprintf("- %s（%s）", c.Name, c.Role))
-				if c.Appearance != "" {
-					sb.WriteString(fmt.Sprintf("：%s", c.Appearance))
+				if c.Description != "" {
+					sb.WriteString(fmt.Sprintf("：%s", c.Description))
 				}
 				sb.WriteString("\n")
 			}
@@ -1321,6 +1321,8 @@ func (s *VideoService) CreateVideoFromReq(novelID uint, req *model.CreateVideoRe
 		ArtStyle:    req.ArtStyle,
 		QualityTier: req.QualityTier,
 		Mode:        req.Mode,
+		VisualMode:  req.VisualMode,
+		ThreeDStyle: req.ThreeDStyle,
 		Status:      "planning",
 	}
 	if novel, err := s.novelRepo.GetByID(novelID); err == nil {
@@ -1390,6 +1392,12 @@ func (s *VideoService) UpdateVideo(id uint, req *model.UpdateVideoRequest) (*mod
 	}
 	if req.Mode != "" {
 		video.Mode = req.Mode
+	}
+	if req.VisualMode != "" {
+		video.VisualMode = req.VisualMode
+	}
+	if req.ThreeDStyle != "" {
+		video.ThreeDStyle = req.ThreeDStyle
 	}
 	return video, s.videoRepo.Update(video)
 }
@@ -3481,23 +3489,44 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		shotDuration = klingDefaultDur
 	}
 
-	// 检查是否允许对动作场景使用 pro 模式
-	if klingMode == "pro" {
-		if vid, vidErr := s.videoRepo.GetByID(shot.VideoID); vidErr == nil && vid.NovelID > 0 && s.novelRepo != nil {
-			if novel, novelErr := s.novelRepo.GetByID(vid.NovelID); novelErr == nil {
-				if !novel.VideoConf().KlingProForAction {
-					klingMode = "std"
-				}
+	// 检查项目配置：KlingProForAction、HD、3D
+	var hdEnabled, threeDEnabled bool
+	var threeDStyle, klingModelOverride string
+	if vid, vidErr := s.videoRepo.GetByID(shot.VideoID); vidErr == nil && vid.NovelID > 0 && s.novelRepo != nil {
+		if novel, novelErr := s.novelRepo.GetByID(vid.NovelID); novelErr == nil {
+			vc := novel.VideoConf()
+			if klingMode == "pro" && !vc.KlingProForAction {
+				klingMode = "std"
 			}
+			hdEnabled = vc.HDEnabled || strings.Contains(vid.VisualMode, "hd")
+			threeDEnabled = vc.ThreeDEnabled || strings.Contains(vid.VisualMode, "3d")
+			threeDStyle = vid.ThreeDStyle
+			klingModelOverride = vc.KlingModel
 		}
 	}
+	if threeDStyle == "" {
+		threeDStyle = "cg"
+	}
+	// HD 模式：升级为更高清的模型并强制 pro
+	if hdEnabled {
+		if klingModelOverride == "" || klingModelOverride == "kling-v1" {
+			klingModelOverride = "kling-v1-6"
+		}
+		klingMode = "pro"
+	}
 
-	// 电影级画质引导词前缀（提升 AI 视频生成的画面质量）
-	cinematicPrefix := "cinematic film still, professional cinematography, anamorphic lens, " +
-		"shallow depth of field, natural film grain, high dynamic range, "
+	// 电影级动态前缀——注入运镜词+情绪氛围词，移除 "film still" 静态词避免抑制视频动态感
+	cinematicPrefix := buildCinematicPrefix(shot.CameraType, shot.EmotionalTone)
+	// 3D 风格前缀
+	if threeDEnabled {
+		cinematicPrefix = resolve3DStylePrefix(threeDStyle) + ", " + cinematicPrefix
+	}
+	// 视频生成专属负向词：补充 static/still/frozen/slideshow 防止模型生成静止画面
 	negativeBase := "blurry, low quality, watermark, text overlay, deformed, ugly, " +
 		"bad anatomy, duplicate, morbid, mutilated, out of frame, extra limbs, " +
-		"gross proportions, malformed limbs"
+		"gross proportions, malformed limbs, " +
+		"static image, still frame, frozen, no motion, slideshow, photo, " +
+		"flickering, temporal inconsistency, abrupt scene change, jump cut"
 
 	videoPromptFinal := cinematicPrefix + videoPrompt
 	negativePrompt := negativeBase
@@ -3513,6 +3542,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		ImageURL:       referenceImage, // image-to-video（空时退化为 text-to-video）
 		CFGScale:       klingCFG,
 		Mode:           klingMode,
+		Model:          klingModelOverride,
 	}
 
 	logger.Printf("GenerateShotVideo: shot %d submitting to %s (hasRef=%v mode=%s cfg=%.2f prompt=%q)", shot.ShotNo, providerName, referenceImage != "", klingMode, klingCFG, videoPromptFinal)
@@ -3531,6 +3561,94 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	shot.ShotProviderName = providerName
 	shot.Status = "processing"
 	return s.storyboardRepo.Update(shot)
+}
+
+// buildCinematicPrefix 根据摄像机类型和情绪生成动态电影级 prompt 前缀。
+// 刻意移除了 "film still"（静帧含义），改用 "cinematic sequence" 强化动态感。
+func buildCinematicPrefix(cameraType, emotionalTone string) string {
+	motion := cameraMotionToken(cameraType)
+	atmos := emotionAtmosphereToken(emotionalTone)
+	base := "cinematic sequence, professional cinematography, anamorphic lens, natural film grain, high dynamic range"
+	if motion != "" {
+		base = motion + ", " + base
+	}
+	if atmos != "" {
+		base += ", " + atmos
+	}
+	return base + ", "
+}
+
+// cameraMotionToken 把 CameraType 映射为视频 prompt 运镜描述词。
+func cameraMotionToken(cameraType string) string {
+	switch strings.ToLower(cameraType) {
+	case "pan":
+		return "smooth camera pan"
+	case "tilt":
+		return "camera tilt movement"
+	case "zoom":
+		return "cinematic zoom"
+	case "dolly":
+		return "dolly shot, camera pushing forward"
+	case "tracking", "track":
+		return "smooth tracking shot following subject"
+	case "crane", "crane_up":
+		return "crane shot, camera rising dramatically"
+	case "crane_down":
+		return "crane shot, camera descending"
+	case "arc":
+		return "arc shot, camera orbiting subject"
+	case "handheld":
+		return "handheld camera, subtle natural shake"
+	case "whip_pan":
+		return "whip pan transition, fast swipe"
+	default: // "static" or unknown — no motion token
+		return ""
+	}
+}
+
+// emotionAtmosphereToken 把情绪基调映射为氛围关键词，注入 prompt 以影响画面色调与动态能量。
+func emotionAtmosphereToken(emotion string) string {
+	e := strings.ToLower(emotion)
+	switch {
+	case strings.Contains(e, "battle") || strings.Contains(e, "combat") ||
+		strings.Contains(e, "战斗") || strings.Contains(e, "打斗") || strings.Contains(e, "action"):
+		return "intense action atmosphere, dynamic motion blur, adrenaline energy"
+	case strings.Contains(e, "epic") || strings.Contains(e, "史诗") ||
+		strings.Contains(e, "宏大") || strings.Contains(e, "climax") || strings.Contains(e, "高潮"):
+		return "epic grand atmosphere, sweeping cinematic motion, heroic scale"
+	case strings.Contains(e, "dramatic") || strings.Contains(e, "紧张") ||
+		strings.Contains(e, "suspense") || strings.Contains(e, "danger") || strings.Contains(e, "tension"):
+		return "dramatic tense atmosphere, deep shadows, ominous mood"
+	case strings.Contains(e, "romantic") || strings.Contains(e, "浪漫") ||
+		strings.Contains(e, "tender") || strings.Contains(e, "温情"):
+		return "soft romantic atmosphere, warm golden bokeh, intimate mood"
+	case strings.Contains(e, "sad") || strings.Contains(e, "悲") ||
+		strings.Contains(e, "grief") || strings.Contains(e, "离别") || strings.Contains(e, "melancholy"):
+		return "melancholic somber atmosphere, cool desaturated tones, slow motion feel"
+	case strings.Contains(e, "landscape") || strings.Contains(e, "风景") ||
+		strings.Contains(e, "scenery") || strings.Contains(e, "空镜"):
+		return "breathtaking scenic vista, sweeping majestic atmosphere"
+	case strings.Contains(e, "peaceful") || strings.Contains(e, "平静") || strings.Contains(e, "calm"):
+		return "serene tranquil atmosphere, soft diffused light, gentle motion"
+	case strings.Contains(e, "funny") || strings.Contains(e, "humorous") || strings.Contains(e, "幽默"):
+		return "lively energetic atmosphere, bright warm tones"
+	default:
+		return ""
+	}
+}
+
+// resolve3DStylePrefix 返回对应 3D 风格的提示词前缀。
+func resolve3DStylePrefix(style string) string {
+	switch style {
+	case "pixar":
+		return "Pixar-style 3D animation, stylized characters, warm appealing lighting, Disney Pixar quality render"
+	case "anime3d":
+		return "3D anime style, cel-shaded 3D, vibrant colors, smooth 3D animation, Japanese anime 3D render"
+	case "realistic3d":
+		return "ultra-realistic 3D render, Unreal Engine 5, ray tracing global illumination, cinematic 3D, 8K 3D rendering"
+	default: // "cg"
+		return "3D CGI animation, ray tracing, volumetric lighting, subsurface scattering, photorealistic 3D render, high-fidelity 3D"
+	}
 }
 
 // PollShotStatus 轮询单个分镜视频生成状态

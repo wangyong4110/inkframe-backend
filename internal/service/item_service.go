@@ -56,9 +56,7 @@ func (s *ItemService) CreateItem(novelID uint, req *model.CreateItemRequest) (*m
 		NovelID:      novelID,
 		UUID:         uuid.New().String(),
 		Name:         req.Name,
-		Category:     req.Category,
 		Description:  req.Description,
-		Appearance:   req.Appearance,
 		Location:     req.Location,
 		Owner:        req.Owner,
 		VisualPrompt: req.VisualPrompt,
@@ -89,14 +87,8 @@ func (s *ItemService) UpdateItem(id uint, req *model.UpdateItemRequest) (*model.
 	if req.Name != "" {
 		item.Name = req.Name
 	}
-	if req.Category != "" {
-		item.Category = req.Category
-	}
 	if req.Description != "" {
 		item.Description = req.Description
-	}
-	if req.Appearance != "" {
-		item.Appearance = req.Appearance
 	}
 	if req.Location != "" {
 		item.Location = req.Location
@@ -134,7 +126,7 @@ func (s *ItemService) GenerateItemImage(tenantID, id uint, referenceImageURL, pr
 	}
 	prompt := item.VisualPrompt
 	if prompt == "" {
-		prompt = fmt.Sprintf("%s，%s，奇幻物品插画，精细细节，概念艺术", item.Name, item.Appearance)
+		prompt = fmt.Sprintf("%s，%s，奇幻物品插画，精细细节，概念艺术", item.Name, item.Description)
 	}
 	// Persist new reference URL; fall back to previously saved one.
 	if referenceImageURL != "" {
@@ -199,7 +191,7 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 			defer wg.Done()
 			prompt := item.VisualPrompt
 			if prompt == "" {
-				prompt = fmt.Sprintf("%s，%s，奇幻物品插画，精细细节，概念艺术", item.Name, item.Appearance)
+				prompt = fmt.Sprintf("%s，%s，奇幻物品插画，精细细节，概念艺术", item.Name, item.Description)
 			}
 			aiRefURL := item.ReferenceImageURL
 			if !strings.HasPrefix(aiRefURL, "http://") && !strings.HasPrefix(aiRefURL, "https://") {
@@ -283,9 +275,9 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 
 	existingJSON := marshalExistingNames(existing, func(it *model.Item) any {
 		return struct {
-			Name     string `json:"name"`
-			Category string `json:"category"`
-		}{it.Name, it.Category}
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		}{it.Name, it.Description}
 	})
 
 	// 使用与分析流程相同的富格式 extract_items.j2
@@ -323,11 +315,11 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 			e.Category = "other"
 		}
 
+		extractedDesc := buildItemDescription(e.Category, e.Appearance)
 		if it, ok := byName[e.Name]; ok {
 			// 更新：用 AI 数据填充空缺字段
 			var changed bool
-			if v, ok := fillIfEmpty(it.Category, e.Category); ok { it.Category = v; changed = true }
-			if v, ok := fillIfEmpty(it.Appearance, e.Appearance); ok { it.Appearance = v; changed = true }
+			if v, ok := fillIfEmpty(it.Description, extractedDesc); ok { it.Description = v; changed = true }
 			if v, ok := fillIfEmpty(it.Location, e.Location); ok { it.Location = v; changed = true }
 			if v, ok := fillIfEmpty(it.Owner, e.Owner); ok { it.Owner = v; changed = true }
 			if v, ok := fillIfEmpty(it.VisualPrompt, e.VisualPrompt); ok { it.VisualPrompt = v; changed = true }
@@ -345,8 +337,7 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 				NovelID:      novelID,
 				UUID:         uuid.New().String(),
 				Name:         e.Name,
-				Category:     e.Category,
-				Appearance:   e.Appearance,
+				Description:  extractedDesc,
 				Location:     e.Location,
 				Owner:        e.Owner,
 				VisualPrompt: e.VisualPrompt,
@@ -575,8 +566,7 @@ func (s *ItemService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.It
 			NovelID:      novelID,
 			UUID:         uuid.New().String(),
 			Name:         e.Name,
-			Category:     e.Category,
-			Appearance:   e.Appearance,
+			Description:  buildItemDescription(e.Category, e.Appearance),
 			Location:     e.Location,
 			Owner:        e.Owner,
 			VisualPrompt: e.VisualPrompt,
@@ -653,22 +643,16 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint) (
 		return nil, fmt.Errorf("parse items JSON: %w", err)
 	}
 
-	validCats := map[string]bool{"weapon": true, "treasure": true, "tool": true, "document": true, "artifact": true, "other": true}
 	var created []*model.Item
 	for _, it := range items {
 		if it.Name == "" || existingNameSet[strings.ToLower(it.Name)] {
 			continue
 		}
-		cat := it.Category
-		if !validCats[cat] {
-			cat = "other"
-		}
 		item := &model.Item{
 			NovelID:      novelID,
 			UUID:         uuid.New().String(),
 			Name:         it.Name,
-			Category:     cat,
-			Appearance:   it.Appearance,
+			Description:  buildItemDescription(it.Category, it.Appearance),
 			Location:     it.Location,
 			Owner:        it.Owner,
 			VisualPrompt: it.VisualPrompt,
@@ -694,4 +678,16 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint) (
 	}
 	logger.Printf("[ItemService] AIExtractChapterItems done: chapterID=%d created=%d", chapterID, len(created))
 	return created, nil
+}
+
+// buildItemDescription 将类别和外观描述合并为统一描述字段。
+func buildItemDescription(category, appearance string) string {
+	var parts []string
+	if category != "" {
+		parts = append(parts, category)
+	}
+	if appearance != "" {
+		parts = append(parts, appearance)
+	}
+	return strings.Join(parts, "，")
 }

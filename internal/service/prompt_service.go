@@ -98,7 +98,7 @@ func (s *PromptService) BuildChapterPrompt(
 	if len(characters) > 0 {
 		sb.WriteString("【主要角色设定】\n")
 		for _, char := range characters {
-			sb.WriteString(fmt.Sprintf("- %s：%s\n", char.Name, char.Personality))
+			sb.WriteString(fmt.Sprintf("- %s：%s\n", char.Name, char.Description))
 		}
 		sb.WriteString("\n")
 	}

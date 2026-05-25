@@ -540,35 +540,27 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 		if c.Role == "minor" {
 			continue
 		}
-		dialogueStyle := ""
-		if c.DialogueStyle.VocabularyLevel != "" || len(c.DialogueStyle.Patterns) > 0 {
-			if ds, err := json.Marshal(c.DialogueStyle); err == nil {
-				dialogueStyle = string(ds)
-			}
-		}
-		visualDesign := ""
-		if c.VisualPrompt != "" {
-			if vd, err := json.Marshal(map[string]string{"image_prompt": c.VisualPrompt}); err == nil {
-				visualDesign = string(vd)
-			}
-		}
 		role := c.Role
 		if role != "protagonist" && role != "antagonist" && role != "supporting" {
 			role = "supporting"
 		}
+		var descParts []string
+		if c.Appearance != "" { descParts = append(descParts, "外貌："+c.Appearance) }
+		if c.Personality != "" { descParts = append(descParts, "性格："+c.Personality) }
+		if c.Background != "" { descParts = append(descParts, "背景："+c.Background) }
+		if c.CharacterArc != "" { descParts = append(descParts, "弧光："+c.CharacterArc) }
+		if len(c.DialogueStyle.Patterns) > 0 {
+			descParts = append(descParts, "说话风格："+strings.Join(c.DialogueStyle.Patterns, "；"))
+		} else if c.DialogueStyle.VocabularyLevel != "" {
+			descParts = append(descParts, "说话风格："+c.DialogueStyle.VocabularyLevel)
+		}
 		char := &model.Character{
-			NovelID:       novel.ID,
-			UUID:          uuid.New().String(),
-			Name:          c.Name,
-			Role:          role,
-			Archetype:     c.Archetype,
-			Appearance:    c.Appearance,
-			Personality:   c.Personality,
-			Background:    c.Background,
-			CharacterArc:  c.CharacterArc,
-			DialogueStyle: dialogueStyle,
-			VisualDesign:  visualDesign,
-			Status:        "active",
+			NovelID:     novel.ID,
+			UUID:        uuid.New().String(),
+			Name:        c.Name,
+			Role:        role,
+			Description: strings.Join(descParts, "\n"),
+			Status:      "active",
 		}
 		if err := s.characterRepo.Create(char); err != nil {
 			logger.Printf("NovelAnalysis: create character %q: %v", c.Name, err)
@@ -808,21 +800,11 @@ func (s *NovelAnalysisService) generateThreeViewsAsync(ctx context.Context, char
 	}
 
 	for _, char := range sorted {
-		// 从 VisualDesign JSON 中提取 image_prompt
 		basePrompt := ""
-		if char.VisualDesign != "" {
-			var vd map[string]string
-			if err := json.Unmarshal([]byte(char.VisualDesign), &vd); err == nil {
-				basePrompt = vd["image_prompt"]
-			}
-		}
-		// 若无 visual_prompt，用 Appearance 构造简单英文 prompt
-		if basePrompt == "" {
-			if char.Appearance != "" {
-				basePrompt = fmt.Sprintf("character named %s, %s, high quality illustration", char.Name, char.Appearance)
-			} else {
-				basePrompt = fmt.Sprintf("character named %s, full body, high quality illustration", char.Name)
-			}
+		if char.Description != "" {
+			basePrompt = fmt.Sprintf("character named %s, %s, high quality illustration", char.Name, char.Description)
+		} else {
+			basePrompt = fmt.Sprintf("character named %s, full body, high quality illustration", char.Name)
 		}
 
 		// 生成三视图合图（combined turnaround sheet）

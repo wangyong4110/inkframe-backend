@@ -29,9 +29,9 @@
 {{ ForeshadowHints }}
 {% endif %}
 
-# 角色说话风格（严格遵守，体现角色个性）
+# 角色信息（严格保持角色个性与说话风格）
 {% for char in Characters %}
-**{{ char.Name }}**：{{ char.DialogueStyle }}
+**{{ char.Name }}**：{{ char.Description }}
 {% endfor %}
 
 # 写作规范

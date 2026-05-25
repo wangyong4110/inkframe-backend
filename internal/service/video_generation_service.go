@@ -919,21 +919,40 @@ func NewImagePromptBuilder() *ImagePromptBuilder {
 	return &ImagePromptBuilder{}
 }
 
-// BuildVisualPrompt 根据分镜信息生成专业图像 Prompt
-// 结构: [主体描述], [场景], [风格标签], [光影], [构图], [质量词]
+// BuildVisualPrompt 根据分镜信息生成专业图像/视频 Prompt。
+// 结构（按 AI 权重从高到低）:
+//
+//	[运镜/景别] → [主体+动作] → [角色外貌] → [场景] → [光影] → [情绪氛围] → [风格] → [质量词]
 func (b *ImagePromptBuilder) BuildVisualPrompt(shot *StoryboardShot, config *ImagePromptConfig) string {
 	parts := []string{}
 
-	// 主体描述
+	// 1. 运镜描述 + 景别（权重最高，放最前）
+	if shot.CameraMovement != "" && shot.CameraMovement != "static" {
+		parts = append(parts, shot.CameraMovement+" camera movement")
+	}
+	if shot.ShotType != "" {
+		parts = append(parts, string(shot.ShotType)+" shot")
+	}
+	if shot.ShotAngle != "" {
+		parts = append(parts, string(shot.ShotAngle)+" angle")
+	}
+
+	// 2. 主体描述（含动作）
 	if shot.Description != "" {
 		parts = append(parts, shot.Description)
 	}
+	if shot.Action != "" {
+		parts = append(parts, shot.Action)
+	}
 
-	// 角色信息
+	// 3. 角色信息
 	if len(shot.Characters) > 0 {
 		charParts := []string{}
 		for _, char := range shot.Characters {
 			charDesc := char.Name
+			if char.Pose != "" {
+				charDesc += " " + char.Pose
+			}
 			if char.Expression != "" {
 				charDesc += " with " + char.Expression + " expression"
 			}
@@ -942,19 +961,25 @@ func (b *ImagePromptBuilder) BuildVisualPrompt(shot *StoryboardShot, config *Ima
 		parts = append(parts, strings.Join(charParts, " and "))
 	}
 
-	// 外貌参考关键词
+	// 4. 外貌参考关键词
 	if config != nil && len(config.CharacterRefs) > 0 {
 		parts = append(parts, strings.Join(config.CharacterRefs, ", "))
 	}
 
-	// 场景（锚点优先，其次裸字符串）
+	// 5. 场景（锚点优先，其次裸字符串）
 	if config != nil && config.SceneAnchorFragment != "" {
 		parts = append(parts, config.SceneAnchorFragment)
 	} else if shot.Scene != "" {
 		parts = append(parts, "in "+shot.Scene)
 	}
+	if shot.TimeOfDay != "" {
+		parts = append(parts, shot.TimeOfDay)
+	}
+	if shot.Weather != "" && shot.Weather != "clear" {
+		parts = append(parts, shot.Weather+" weather")
+	}
 
-	// 光影
+	// 6. 光影
 	lighting := "natural lighting"
 	if config != nil && config.LightingStyle != "" {
 		lighting = config.LightingStyle
@@ -963,21 +988,22 @@ func (b *ImagePromptBuilder) BuildVisualPrompt(shot *StoryboardShot, config *Ima
 	}
 	parts = append(parts, lighting)
 
-	// 镜头构图
-	if shot.ShotType != "" {
-		parts = append(parts, string(shot.ShotType)+" shot")
-	}
-	if shot.ShotAngle != "" {
-		parts = append(parts, string(shot.ShotAngle)+" angle")
+	// 7. 情绪氛围（情绪词显著影响色调和动态能量）
+	if shot.Emotion != "" {
+		parts = append(parts, shot.Emotion+" mood")
 	}
 
 	// 风格标签 + 风格特定质量词
 	styleQualityTokens := map[string]string{
-		"realistic":  "8K uhd, photorealistic, film grain, anamorphic lens, RAW photo, professional photography",
-		"anime":      "anime style, key visual, vibrant colors, detailed linework, Studio Ghibli quality",
-		"watercolor": "watercolor painting style, soft edges, transparent washes, painterly, flowing colors",
-		"ink_wash":   "Chinese ink wash painting, 水墨风格, monochromatic, elegant brushwork, traditional",
-		"cinematic":  "cinematic 4K, anamorphic lens, color graded, shallow DOF, Arri Alexa, film grain",
+		"realistic":    "8K uhd, photorealistic, film grain, anamorphic lens, RAW photo, professional photography",
+		"anime":        "anime style, key visual, vibrant colors, detailed linework, Studio Ghibli quality",
+		"watercolor":   "watercolor painting style, soft edges, transparent washes, painterly, flowing colors",
+		"ink_wash":     "Chinese ink wash painting, 水墨风格, monochromatic, elegant brushwork, traditional",
+		"cinematic":    "cinematic 4K, anamorphic lens, color graded, shallow DOF, Arri Alexa, film grain",
+		"3d_cg":        "3D CGI animation, ray tracing, volumetric lighting, subsurface scattering, photorealistic 3D render, high-fidelity 3D",
+		"3d_pixar":     "Pixar-style 3D animation, stylized characters, warm lighting, appealing design, Disney Pixar quality render",
+		"3d_anime":     "3D anime style, cel-shaded 3D, vibrant colors, smooth 3D animation, Japanese anime 3D render",
+		"3d_realistic": "ultra-realistic 3D render, Unreal Engine 5, ray tracing global illumination, cinematic 3D, 8K 3D rendering",
 	}
 
 	artStyle := "cinematic"

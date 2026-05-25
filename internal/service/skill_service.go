@@ -167,7 +167,7 @@ func (s *SkillService) GenerateSkills(tenantID, novelID uint, req *model.Generat
 		char, cerr := s.characterRepo.GetByID(*req.CharacterID)
 		if cerr == nil && char != nil {
 			charSection = fmt.Sprintf("\n角色信息：\n- 姓名：%s\n- 定位：%s\n- 背景：%s",
-				char.Name, char.Role, char.Background)
+				char.Name, char.Role, char.Description)
 		}
 	}
 

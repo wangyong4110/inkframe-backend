@@ -647,13 +647,22 @@ func seedAIModels(db *gorm.DB) {
 	}
 
 	providers := []providerSeed{
-		// LLM
+		// LLM — 国际
 		{"openai", "OpenAI", "llm", "https://api.openai.com/v1", false, nil},
 		{"anthropic", "Anthropic", "llm", "https://api.anthropic.com/v1", false, nil},
-		{"google", "Google", "llm", "https://generativelanguage.googleapis.com/v1", false, nil},
+		{"google", "Google DeepMind", "llm", "https://generativelanguage.googleapis.com/v1", false, nil},
+		{"xai", "xAI (Grok)", "llm", "https://api.x.ai/v1", false, nil},
+		{"mistral", "Mistral AI", "llm", "https://api.mistral.ai/v1", false, nil},
+		{"meta", "Meta AI (Llama)", "llm", "https://api.llama.com/compat/v1", false, nil},
+		// LLM — 国内
 		{"doubao", "豆包（火山引擎 Ark）", "llm", "https://ark.volces.com/api/v3", false, nil},
 		{"deepseek", "DeepSeek", "llm", "https://api.deepseek.com/v1", false, nil},
 		{"qianwen", "通义千问（DashScope）", "llm", "https://dashscope.aliyuncs.com/compatible-mode/v1", false, nil},
+		{"zhipu", "智谱AI (GLM / Z.AI)", "llm", "https://open.bigmodel.cn/api/paas/v4", false, nil},
+		{"moonshot", "Moonshot AI (Kimi)", "llm", "https://api.moonshot.cn/v1", false, nil},
+		{"baidu", "百度文心一言 (ERNIE)", "llm", "https://qianfan.baidubce.com/v2", false, nil},
+		{"tencent", "腾讯混元 (Hunyuan)", "llm", "https://api.hunyuan.cloud.tencent.com/v1", false, nil},
+		{"yi", "零一万物 (Yi)", "llm", "https://api.lingyiwanwu.com/v1", false, nil},
 		// Ollama 本地 LLM（无需 API Key，endpoint 由用户填写或保持默认）
 		{"ollama", "Ollama（本地）", "llm", "http://localhost:11434/v1", false, nil},
 		// 图像生成
@@ -683,22 +692,60 @@ func seedAIModels(db *gorm.DB) {
 		{"openai", "tts-1-hd", "TTS-1 HD", []string{"voice_gen"}, 0.95, 0},
 		{"openai", "dall-e-3", "DALL-E 3", []string{"image_gen"}, 0.95, 0},
 		// Anthropic
-		{"anthropic", "claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet", llmTasks, 0.97, 8192},
-		{"anthropic", "claude-3-haiku-20240307", "Claude 3 Haiku", llmTasks, 0.88, 4096},
-		// Google
-		{"google", "gemini-2.0-flash", "Gemini 2.0 Flash", llmTasks, 0.9, 8192},
-		{"google", "gemini-1.5-pro", "Gemini 1.5 Pro", llmTasks, 0.93, 8192},
+		{"anthropic", "claude-opus-4-5", "Claude Opus 4.5", llmTasks, 0.98, 8192},
+		{"anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5", llmTasks, 0.96, 8192},
+		{"anthropic", "claude-haiku-4-5-20251001", "Claude Haiku 4.5", llmTasks, 0.90, 4096},
+		// Google DeepMind
+		{"google", "gemini-2.5-pro", "Gemini 2.5 Pro", llmTasks, 0.95, 8192},
+		{"google", "gemini-2.5-flash", "Gemini 2.5 Flash", llmTasks, 0.91, 8192},
+		{"google", "gemini-2.0-flash", "Gemini 2.0 Flash", llmTasks, 0.90, 8192},
+		// xAI (Grok)
+		{"xai", "grok-4", "Grok 4", llmTasks, 0.96, 8192},
+		{"xai", "grok-4-0709", "Grok 4 0709", llmTasks, 0.95, 8192},
+		{"xai", "grok-3-mini", "Grok 3 Mini", llmTasks, 0.87, 4096},
+		{"xai", "grok-3-mini-fast", "Grok 3 Mini Fast", llmTasks, 0.85, 4096},
+		// Mistral AI
+		{"mistral", "mistral-large-latest", "Mistral Large", llmTasks, 0.93, 8192},
+		{"mistral", "mistral-medium-latest", "Mistral Medium", llmTasks, 0.88, 4096},
+		{"mistral", "mistral-small-latest", "Mistral Small", llmTasks, 0.82, 4096},
+		// Meta AI (Llama)
+		{"meta", "Llama-4-Scout-17B-16E-Instruct-FP8", "Llama 4 Scout", llmTasks, 0.88, 8192},
+		{"meta", "Llama-4-Maverick-17B-128E-Instruct-FP8", "Llama 4 Maverick", llmTasks, 0.92, 8192},
+		{"meta", "Llama-3.3-70B-Instruct", "Llama 3.3 70B", llmTasks, 0.87, 8192},
 		// 豆包
 		{"doubao", "doubao-pro-32k", "豆包 Pro 32K", llmTasks, 0.88, 4096},
 		{"doubao", "doubao-lite-32k", "豆包 Lite 32K", llmTasks, 0.75, 4096},
 		{"doubao", "seedream-3-0-t2i-250415", "Seedream 3.0 文生图", []string{"image_gen"}, 0.9, 0},
 		// DeepSeek
-		{"deepseek", "deepseek-chat", "DeepSeek Chat", llmTasks, 0.88, 4096},
-		{"deepseek", "deepseek-reasoner", "DeepSeek R1", llmTasks, 0.92, 8192},
+		{"deepseek", "deepseek-chat", "DeepSeek V3", llmTasks, 0.90, 4096},
+		{"deepseek", "deepseek-reasoner", "DeepSeek R1", llmTasks, 0.94, 8192},
 		// 通义千问
-		{"qianwen", "qwen-plus", "通义千问 Plus", llmTasks, 0.85, 4096},
+		{"qianwen", "qwen3-max", "Qwen3 Max", llmTasks, 0.93, 8192},
+		{"qianwen", "qwen3-plus", "Qwen3 Plus", llmTasks, 0.88, 4096},
 		{"qianwen", "qwen-max", "通义千问 Max", llmTasks, 0.92, 4096},
 		{"qianwen", "wanx2.1-t2i-turbo", "万象 2.1 文生图 Turbo", []string{"image_gen"}, 0.85, 0},
+		// 智谱AI (GLM / Z.AI)
+		{"zhipu", "glm-4-plus", "GLM-4 Plus", llmTasks, 0.90, 8192},
+		{"zhipu", "glm-4-flash", "GLM-4 Flash", llmTasks, 0.82, 4096},
+		{"zhipu", "glm-4-air", "GLM-4 Air", llmTasks, 0.84, 4096},
+		{"zhipu", "glm-z1-flash", "GLM-Z1 Flash", llmTasks, 0.85, 4096},
+		// Moonshot AI (Kimi)
+		{"moonshot", "kimi-k2-0711-preview", "Kimi K2", llmTasks, 0.93, 8192},
+		{"moonshot", "moonshot-v1-128k", "Kimi 128K", llmTasks, 0.88, 8192},
+		{"moonshot", "moonshot-v1-32k", "Kimi 32K", llmTasks, 0.86, 4096},
+		// 百度文心一言 (ERNIE)
+		{"baidu", "ernie-4.5-8k", "ERNIE 4.5", llmTasks, 0.89, 4096},
+		{"baidu", "ernie-4.5-128k", "ERNIE 4.5 128K", llmTasks, 0.89, 8192},
+		{"baidu", "ernie-3.5-8k", "ERNIE 3.5", llmTasks, 0.84, 4096},
+		{"baidu", "ernie-speed-128k", "ERNIE Speed 128K", llmTasks, 0.78, 4096},
+		// 腾讯混元 (Hunyuan)
+		{"tencent", "hunyuan-turbo", "混元 Turbo", llmTasks, 0.91, 8192},
+		{"tencent", "hunyuan-pro", "混元 Pro", llmTasks, 0.89, 4096},
+		{"tencent", "hunyuan-lite", "混元 Lite", llmTasks, 0.80, 4096},
+		// 零一万物 (Yi)
+		{"yi", "yi-lightning", "Yi Lightning", llmTasks, 0.88, 4096},
+		{"yi", "yi-large", "Yi Large", llmTasks, 0.87, 4096},
+		{"yi", "yi-large-turbo", "Yi Large Turbo", llmTasks, 0.85, 4096},
 		// Ollama 本地 LLM（常用模型，实际可用列表由 /api/tags 动态获取）
 		{"ollama", "llama3.2", "Llama 3.2", llmTasks, 0.80, 4096},
 		{"ollama", "llama3.1:8b", "Llama 3.1 8B", llmTasks, 0.78, 4096},
@@ -866,7 +913,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-11-v2"
+const schemaVersion = "2026-05-15-v2"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -1009,6 +1056,31 @@ func autoMigrate(db *gorm.DB) error {
 		logger.Warnf("autoMigrate: chapter status migration failed: %v", err)
 	}
 
+	// 数据迁移（2026-05-15-v2）：将 Character 旧字段合并到 description
+	if err := db.Exec(`UPDATE ink_character SET description = CONCAT_WS('\n',
+		IF(appearance != '' AND appearance IS NOT NULL, CONCAT('外貌：', appearance), NULL),
+		IF(personality != '' AND personality IS NOT NULL, CONCAT('性格：', personality), NULL),
+		IF(background != '' AND background IS NOT NULL, CONCAT('背景：', background), NULL),
+		IF(character_arc != '' AND character_arc IS NOT NULL, CONCAT('弧光：', character_arc), NULL),
+		IF(dialogue_style != '' AND dialogue_style IS NOT NULL, CONCAT('说话风格：', dialogue_style), NULL)
+	) WHERE (description = '' OR description IS NULL)
+		AND (appearance IS NOT NULL AND appearance != ''
+			OR personality IS NOT NULL AND personality != ''
+			OR background IS NOT NULL AND background != ''
+			OR character_arc IS NOT NULL AND character_arc != ''
+			OR dialogue_style IS NOT NULL AND dialogue_style != '')`).Error; err != nil {
+		logger.Warnf("autoMigrate: character description migration failed: %v", err)
+	}
+
+	// 数据迁移（2026-05-15-v2）：将 Item 旧字段合并到 description
+	if err := db.Exec(`UPDATE ink_item SET description = CONCAT_WS('，',
+		IF(category != '' AND category IS NOT NULL, category, NULL),
+		IF(description != '' AND description IS NOT NULL, description, NULL),
+		IF(appearance != '' AND appearance IS NOT NULL, appearance, NULL)
+	) WHERE (category IS NOT NULL AND category != '') OR (appearance IS NOT NULL AND appearance != '')`).Error; err != nil {
+		logger.Warnf("autoMigrate: item description migration failed: %v", err)
+	}
+
 	// 迁移成功后写入新版本号（UPSERT）
 	return db.Exec("INSERT INTO ink_schema_version (id, ver) VALUES (1, ?) ON DUPLICATE KEY UPDATE ver = ?",
 		schemaVersion, schemaVersion).Error
@@ -1061,18 +1133,36 @@ func initAIModule(cfg *config.Config) *ai.ModelManager {
 
 	// env var 优先，config.yaml 作为备选（两者均可配置 API key）
 	defs := []providerDef{
+		// 国际
 		{"openai", getEnv("OPENAI_API_KEY", cfg.AI.OpenAI.APIKey), cfg.AI.OpenAI.Endpoint, cfg.AI.OpenAI.Model,
 			func(k, e, m string) ai.AIProvider { return ai.NewOpenAIProvider(k, e, m, 0) }},
 		{"anthropic", getEnv("ANTHROPIC_API_KEY", cfg.AI.Anthropic.APIKey), cfg.AI.Anthropic.Endpoint, cfg.AI.Anthropic.Model,
 			func(k, e, m string) ai.AIProvider { return ai.NewAnthropicProvider(k, e, m, 0) }},
 		{"google", getEnv("GOOGLE_API_KEY", cfg.AI.Google.APIKey), cfg.AI.Google.Endpoint, cfg.AI.Google.Model,
 			func(k, e, m string) ai.AIProvider { return ai.NewGoogleProvider(k, e, m, 0) }},
+		{"xai", getEnv("XAI_API_KEY", cfg.AI.XAI.APIKey), cfg.AI.XAI.Endpoint, cfg.AI.XAI.Model,
+			func(k, e, m string) ai.AIProvider { return ai.NewXAIProvider(k, e, m, 0) }},
+		{"mistral", getEnv("MISTRAL_API_KEY", cfg.AI.Mistral.APIKey), cfg.AI.Mistral.Endpoint, cfg.AI.Mistral.Model,
+			func(k, e, m string) ai.AIProvider { return ai.NewMistralProvider(k, e, m, 0) }},
+		{"meta", getEnv("META_API_KEY", cfg.AI.Meta.APIKey), cfg.AI.Meta.Endpoint, cfg.AI.Meta.Model,
+			func(k, e, m string) ai.AIProvider { return ai.NewMetaProvider(k, e, m, 0) }},
+		// 国内
 		{"doubao", getEnv("DOUBAO_API_KEY", cfg.AI.Doubao.APIKey), cfg.AI.Doubao.Endpoint, cfg.AI.Doubao.Model,
 			func(k, e, m string) ai.AIProvider { return ai.NewDoubaoProvider(k, e, m, 0) }},
 		{"deepseek", getEnv("DEEPSEEK_API_KEY", cfg.AI.DeepSeek.APIKey), cfg.AI.DeepSeek.Endpoint, cfg.AI.DeepSeek.Model,
 			func(k, e, m string) ai.AIProvider { return ai.NewDeepSeekProvider(k, e, m, 0) }},
 		{"qianwen", getEnv("QIANWEN_API_KEY", cfg.AI.Qianwen.APIKey), cfg.AI.Qianwen.Endpoint, cfg.AI.Qianwen.Model,
 			func(k, e, m string) ai.AIProvider { return ai.NewQianwenProvider(k, e, m, 0) }},
+		{"zhipu", getEnv("ZHIPU_API_KEY", cfg.AI.Zhipu.APIKey), cfg.AI.Zhipu.Endpoint, cfg.AI.Zhipu.Model,
+			func(k, e, m string) ai.AIProvider { return ai.NewZhipuProvider(k, e, m, 0) }},
+		{"moonshot", getEnv("MOONSHOT_API_KEY", cfg.AI.Moonshot.APIKey), cfg.AI.Moonshot.Endpoint, cfg.AI.Moonshot.Model,
+			func(k, e, m string) ai.AIProvider { return ai.NewMoonshotProvider(k, e, m, 0) }},
+		{"baidu", getEnv("BAIDU_API_KEY", cfg.AI.Baidu.APIKey), cfg.AI.Baidu.Endpoint, cfg.AI.Baidu.Model,
+			func(k, e, m string) ai.AIProvider { return ai.NewBaiduProvider(k, e, m, 0) }},
+		{"tencent", getEnv("TENCENT_API_KEY", cfg.AI.Tencent.APIKey), cfg.AI.Tencent.Endpoint, cfg.AI.Tencent.Model,
+			func(k, e, m string) ai.AIProvider { return ai.NewTencentProvider(k, e, m, 0) }},
+		{"yi", getEnv("YI_API_KEY", cfg.AI.Yi.APIKey), cfg.AI.Yi.Endpoint, cfg.AI.Yi.Model,
+			func(k, e, m string) ai.AIProvider { return ai.NewYiProvider(k, e, m, 0) }},
 	}
 	for _, d := range defs {
 		if d.key == "" {

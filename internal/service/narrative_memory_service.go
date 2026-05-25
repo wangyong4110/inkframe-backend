@@ -573,8 +573,8 @@ func (s *NarrativeMemoryService) ExtractCharacterVoice(tenantID uint, character 
 	prompt, err := renderPrompt("character_voice", map[string]interface{}{
 		"Name":            character.Name,
 		"Role":            character.Role,
-		"Personality":     character.Personality,
-		"Background":      character.Background,
+		"Personality":     character.Description,
+		"Background":      character.Description,
 		"DialogueSamples": samples.String(),
 	})
 	if err != nil {

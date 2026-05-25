@@ -11,7 +11,7 @@ import (
 
 // SceneIssue 一致性问题描述
 type SceneIssue struct {
-	Category string  `json:"category"` // arch/light/atmo/prop
+	Category string  `json:"category"` // arch/light/atmo/prop/time
 	Severity string  `json:"severity"` // warning/error
 	Detail   string  `json:"detail"`
 	Score    float64 `json:"score"`
@@ -26,6 +26,7 @@ type SceneConsistencyReport struct {
 	LightScore   float64
 	AtmoScore    float64
 	PropScore    float64
+	TimeScore    float64 // 时间/季节一致性
 	Issues       []SceneIssue
 	Passed       bool
 	NeedsRetry   bool // 0.70 <= score < 0.85
@@ -60,6 +61,7 @@ func (s *SceneConsistencyService) ScoreScene(
 			LightScore:   1.0,
 			AtmoScore:    1.0,
 			PropScore:    1.0,
+			TimeScore:    1.0,
 			Passed:       true,
 		}
 		return report, nil
@@ -93,6 +95,7 @@ func (s *SceneConsistencyService) ScoreScene(
 			LightScore:   0.8,
 			AtmoScore:    0.8,
 			PropScore:    0.8,
+			TimeScore:    0.8,
 			Passed:       true,
 		}
 	}
@@ -139,6 +142,7 @@ type consistencyLLMResponse struct {
 	LightScore   float64      `json:"light_score"`
 	AtmoScore    float64      `json:"atmo_score"`
 	PropScore    float64      `json:"prop_score"`
+	TimeScore    float64      `json:"time_score"`
 	Issues       []SceneIssue `json:"issues"`
 }
 
@@ -148,6 +152,10 @@ func parseConsistencyResponse(raw string, shotID, anchorID uint) (*SceneConsiste
 	if err := json.Unmarshal([]byte(jsonStr), &resp); err != nil {
 		return nil, err
 	}
+	// time_score defaults to 1.0 when absent (older LLM responses without the field)
+	if resp.TimeScore == 0 {
+		resp.TimeScore = 1.0
+	}
 	return &SceneConsistencyReport{
 		ShotID:       shotID,
 		AnchorID:     anchorID,
@@ -156,6 +164,7 @@ func parseConsistencyResponse(raw string, shotID, anchorID uint) (*SceneConsiste
 		LightScore:   resp.LightScore,
 		AtmoScore:    resp.AtmoScore,
 		PropScore:    resp.PropScore,
+		TimeScore:    resp.TimeScore,
 		Issues:       resp.Issues,
 		Passed:       resp.OverallScore >= 0.85,
 	}, nil

@@ -2,7 +2,6 @@ package handler
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"time"
@@ -20,17 +19,11 @@ import (
 func characterToUpdateReq(c *model.Character) *model.UpdateCharacterRequest {
 	return &model.UpdateCharacterRequest{
 		Name:           c.Name,
-		Gender:         c.Gender,
 		Role:           c.Role,
-		Archetype:      c.Archetype,
-		Appearance:     c.Appearance,
-		Personality:    c.Personality,
-		Background:     c.Background,
-		CharacterArc:   c.CharacterArc,
+		Description:    c.Description,
 		Portrait:       c.Portrait,
 		ThreeViewSheet: c.ThreeViewSheet,
 		FaceCloseup:    c.FaceCloseup,
-		CoverImage:     c.CoverImage,
 		VoiceID:        c.VoiceID,
 		VoiceSpeed:     &c.VoiceSpeed,
 		VoiceStyle:     c.VoiceStyle,
@@ -39,22 +32,16 @@ func characterToUpdateReq(c *model.Character) *model.UpdateCharacterRequest {
 
 // characterResponse converts a Character model to a response map.
 func characterResponse(c *model.Character) gin.H {
-	resp := gin.H{
+	return gin.H{
 		"id":               c.ID,
 		"novel_id":         c.NovelID,
 		"uuid":             c.UUID,
 		"name":             c.Name,
-		"gender":           c.Gender,
 		"role":             c.Role,
-		"archetype":        c.Archetype,
-		"appearance":       c.Appearance,
-		"personality":      c.Personality,
-		"background":       c.Background,
-		"character_arc":    c.CharacterArc,
+		"description":      c.Description,
 		"three_view_sheet": c.ThreeViewSheet,
 		"face_closeup":     c.FaceCloseup,
 		"portrait":         c.Portrait,
-		"cover_image":      c.CoverImage,
 		"voice_id":         c.VoiceID,
 		"voice_speed":      c.VoiceSpeed,
 		"voice_style":      c.VoiceStyle,
@@ -64,13 +51,6 @@ func characterResponse(c *model.Character) gin.H {
 		"created_at":       c.CreatedAt,
 		"updated_at":       c.UpdatedAt,
 	}
-	if c.VisualDesign != "" {
-		var v interface{}
-		if err := json.Unmarshal([]byte(c.VisualDesign), &v); err == nil {
-			resp["visual_design"] = v
-		}
-	}
-	return resp
 }
 
 // CharacterHandler 角色处理器
@@ -263,7 +243,7 @@ func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 
 	image, err := h.imageGenService.GenerateCharacterImage(&model.GenerateImageRequest{
 		Subject:     character.Name,
-		Description: character.Appearance,
+		Description: character.Description,
 		Type:        req.Type,
 		Emotion:     req.Emotion,
 		Action:      req.Action,
@@ -318,7 +298,7 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 			genCtx = service.WithImageStorageHint(genCtx, service.ImageStorageHint{NovelTitle: novelTitle})
 		}
 		// 生成三合一参考图（正视+侧视+背视放在同一张图中）
-		img, err := h.imageGenService.GenerateThreeViewSheet(genCtx, tenantID, char.Name, char.Appearance, style, char.Gender, "", provider)
+		img, err := h.imageGenService.GenerateThreeViewSheet(genCtx, tenantID, char.Name, char.Description, style, "", "", provider)
 		if err != nil {
 			logger.Printf("[CharacterHandler] GenerateThreeView task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, "generate three-view sheet failed: "+err.Error()) //nolint:errcheck
@@ -388,7 +368,7 @@ func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
 		if referenceImage == "" {
 			referenceImage = char.ThreeViewSheet
 		}
-		img, err := h.imageGenService.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, char.Appearance, style, char.Gender, referenceImage, provider)
+		img, err := h.imageGenService.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, char.Description, style, "", referenceImage, provider)
 		if err != nil {
 			logger.Printf("[CharacterHandler] GenerateFaceCloseup task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, "generate face closeup failed: "+err.Error()) //nolint:errcheck

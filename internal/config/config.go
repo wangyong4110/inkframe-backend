@@ -106,6 +106,15 @@ type AIConfig struct {
 	DeepSeek         DeepSeekConfig         `mapstructure:"deepseek"`
 	Qianwen          QianwenConfig          `mapstructure:"qianwen"`
 	Ollama           OllamaConfig           `mapstructure:"ollama"`
+	// 新增提供商
+	XAI      XAIConfig      `mapstructure:"xai"`
+	Mistral  MistralConfig  `mapstructure:"mistral"`
+	Meta     MetaConfig     `mapstructure:"meta"`
+	Zhipu    ZhipuConfig    `mapstructure:"zhipu"`
+	Moonshot MoonshotConfig `mapstructure:"moonshot"`
+	Baidu    BaiduConfig    `mapstructure:"baidu"`
+	Tencent  TencentConfig  `mapstructure:"tencent"`
+	Yi       YiConfig       `mapstructure:"yi"`
 	Seedance         SeedanceConfig         `mapstructure:"seedance"`
 	Kling            KlingConfig            `mapstructure:"kling"`
 	VolcengineVisual VolcengineVisualConfig `mapstructure:"volcengine_visual"`
@@ -162,6 +171,62 @@ type QianwenConfig struct {
 type OllamaConfig struct {
 	Endpoint string `mapstructure:"endpoint"` // 本地 Ollama API 地址，如 http://localhost:11434/v1
 	Model    string `mapstructure:"model"`    // 默认推理模型，如 llama3.2 / qwen2.5:7b
+}
+
+// XAIConfig xAI (Grok) 配置
+type XAIConfig struct {
+	APIKey   string `mapstructure:"api_key"`
+	Endpoint string `mapstructure:"endpoint"`
+	Model    string `mapstructure:"model"`
+}
+
+// MistralConfig Mistral AI 配置
+type MistralConfig struct {
+	APIKey   string `mapstructure:"api_key"`
+	Endpoint string `mapstructure:"endpoint"`
+	Model    string `mapstructure:"model"`
+}
+
+// MetaConfig Meta AI (Llama) 配置
+type MetaConfig struct {
+	APIKey   string `mapstructure:"api_key"`
+	Endpoint string `mapstructure:"endpoint"`
+	Model    string `mapstructure:"model"`
+}
+
+// ZhipuConfig 智谱AI (GLM / Z.AI) 配置
+type ZhipuConfig struct {
+	APIKey   string `mapstructure:"api_key"`
+	Endpoint string `mapstructure:"endpoint"`
+	Model    string `mapstructure:"model"`
+}
+
+// MoonshotConfig Moonshot AI (Kimi) 配置
+type MoonshotConfig struct {
+	APIKey   string `mapstructure:"api_key"`
+	Endpoint string `mapstructure:"endpoint"`
+	Model    string `mapstructure:"model"`
+}
+
+// BaiduConfig 百度文心一言 (ERNIE) 配置
+type BaiduConfig struct {
+	APIKey   string `mapstructure:"api_key"`
+	Endpoint string `mapstructure:"endpoint"`
+	Model    string `mapstructure:"model"`
+}
+
+// TencentConfig 腾讯混元 (Hunyuan) 配置
+type TencentConfig struct {
+	APIKey   string `mapstructure:"api_key"`
+	Endpoint string `mapstructure:"endpoint"`
+	Model    string `mapstructure:"model"`
+}
+
+// YiConfig 零一万物 (Yi) 配置
+type YiConfig struct {
+	APIKey   string `mapstructure:"api_key"`
+	Endpoint string `mapstructure:"endpoint"`
+	Model    string `mapstructure:"model"`
 }
 
 // SeedanceConfig Seedance视频配置

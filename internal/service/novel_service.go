@@ -734,7 +734,7 @@ func (s *NovelService) SyncCharacterSnapshots(
 			}
 		}
 		if prevCtx == "" {
-			prevCtx = fmt.Sprintf("角色背景：%s。性格：%s。", char.Background, char.Personality)
+			prevCtx = fmt.Sprintf("角色信息：%s", char.Description)
 		}
 
 		prompt := fmt.Sprintf(

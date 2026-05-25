@@ -82,6 +82,53 @@ ai:
     endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1"
     model: "qwen-plus"
 
+  # ── 国际新增 Provider ─────────────────────────────────────────
+  xai:
+    api_key: ""                      # 或通过 $XAI_API_KEY 传入
+    endpoint: "https://api.x.ai/v1"
+    model: "grok-3-mini"             # grok-4 / grok-4-0709 / grok-3-mini
+
+  mistral:
+    api_key: ""                      # 或通过 $MISTRAL_API_KEY 传入
+    endpoint: "https://api.mistral.ai/v1"
+    model: "mistral-large-latest"
+
+  meta:
+    api_key: ""                      # 或通过 $META_API_KEY 传入（Meta AI API）
+    endpoint: "https://api.llama.com/compat/v1"
+    model: "Llama-4-Scout-17B-16E-Instruct-FP8"
+
+  # ── 国内新增 Provider ─────────────────────────────────────────
+  # 智谱AI (GLM / Z.AI)：https://open.bigmodel.cn
+  zhipu:
+    api_key: ""                      # 或通过 $ZHIPU_API_KEY 传入
+    endpoint: "https://open.bigmodel.cn/api/paas/v4"
+    model: "glm-4-plus"              # glm-4-plus / glm-4-flash / glm-z1-flash
+
+  # Moonshot AI (Kimi)：https://platform.moonshot.cn
+  moonshot:
+    api_key: ""                      # 或通过 $MOONSHOT_API_KEY 传入
+    endpoint: "https://api.moonshot.cn/v1"
+    model: "moonshot-v1-32k"         # kimi-k2-0711-preview / moonshot-v1-128k
+
+  # 百度文心一言 (ERNIE)：https://cloud.baidu.com/product/wenxinworkshop
+  baidu:
+    api_key: ""                      # 或通过 $BAIDU_API_KEY 传入（百度智能云 API Key）
+    endpoint: "https://qianfan.baidubce.com/v2"
+    model: "ernie-4.5-8k"            # ernie-4.5-128k / ernie-3.5-8k / ernie-speed-128k
+
+  # 腾讯混元 (Hunyuan)：https://cloud.tencent.com/product/hunyuan
+  tencent:
+    api_key: ""                      # 或通过 $TENCENT_API_KEY 传入
+    endpoint: "https://api.hunyuan.cloud.tencent.com/v1"
+    model: "hunyuan-turbo"           # hunyuan-pro / hunyuan-lite
+
+  # 零一万物 (Yi)：https://platform.lingyiwanwu.com
+  yi:
+    api_key: ""                      # 或通过 $YI_API_KEY 传入
+    endpoint: "https://api.lingyiwanwu.com/v1"
+    model: "yi-lightning"            # yi-large / yi-large-turbo
+
   # Ollama 本地 LLM（需先安装并运行 `ollama serve`，无需 API Key）
   # 文档：https://ollama.com | 支持模型：llama3.2 / qwen2.5 / deepseek-r1 等
   ollama:

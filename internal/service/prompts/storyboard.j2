@@ -26,8 +26,10 @@
 2. 节奏把控合理，动作/对话/描述场景镜头数量适配
 3. 符合视频制作需求，镜头语言专业
 4. **镜头连续性**：相邻镜头的光线方向、色彩基调、时间状态（白天/夜晚）必须保持一致
-5. 角色外貌在所有镜头中保持一致，不得改变发色、服装等特征
-6. 每个 shot 必须包含专为图像生成优化的英文提示词（visual_prompt）
+5. **180度规则**：同一场景内相邻镜头须遵守180度轴线规则，角色相对位置和面朝方向不得随意翻转
+6. **运动连贯性**：角色动作在切镜时保持方向一致，避免「跳切」（jump cut）
+7. 角色外貌在所有镜头中保持一致，不得改变发色、服装等特征
+8. 每个 shot 必须包含专为**视频生成**优化的英文提示词（visual_prompt）
 
 # 分镜头格式要求
 
@@ -50,8 +52,8 @@
       "transition": "转场方式（硬切/淡入淡出/溶解/划像等）",
       "lighting": "光源方向和类型（如：侧逆光、黄昏暖光）",
       "color_palette": "色调描述（如：冷蓝色调、暖金色调）",
-      "visual_prompt": "professional photo, [subject], [setting], [art style] style, [lighting], [composition], highly detailed, 4k resolution",
-      "negative_prompt": "blurry, low quality, deformed, ugly, watermark, text, bad anatomy, extra limbs, poorly drawn",
+      "visual_prompt": "[camera_movement] camera movement, [shot_size] shot, [subject performing action/motion], [setting], [lighting from the lighting field], [color_palette from the color_palette field], [art style] style, cinematic, highly detailed",
+      "negative_prompt": "blurry, low quality, deformed, ugly, watermark, text, bad anatomy, extra limbs, poorly drawn, static image, still frame, frozen, no motion, slideshow",
       "character_refs": ["角色外貌关键词1", "角色外貌关键词2"],
       "sfx_tags": ["sound effect keyword 1", "sound effect keyword 2"]
     }

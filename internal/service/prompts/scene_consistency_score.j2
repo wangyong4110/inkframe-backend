@@ -7,13 +7,14 @@ Generated image URL: {{ GeneratedImageURL }}
 Anchor description: {{ Description }}
 Required prompt keywords: {{ PromptLock }}
 
-Compare the two images and score consistency on four dimensions (0.0 to 1.0):
+Compare the two images and score consistency on five dimensions (0.0 to 1.0):
 - arch_score: Architectural structure, layout, key physical features
 - light_score: Lighting direction, color temperature, brightness
 - atmo_score: Overall atmosphere, mood, color palette
 - prop_score: Key props, decorations, signature elements
+- time_score: Time-of-day and season consistency (e.g., day vs night, summer vs winter sky)
 
-Identify any issues and classify them by category (arch/light/atmo/prop), severity (warning/error), and brief detail.
+Identify any issues and classify them by category (arch/light/atmo/prop/time), severity (warning/error), and brief detail.
 
 Output ONLY valid JSON, no markdown:
 {
@@ -22,7 +23,8 @@ Output ONLY valid JSON, no markdown:
   "light_score": 0.0-1.0,
   "atmo_score": 0.0-1.0,
   "prop_score": 0.0-1.0,
+  "time_score": 0.0-1.0,
   "issues": [
-    {"category": "arch|light|atmo|prop", "severity": "warning|error", "detail": "description", "score": 0.0-1.0}
+    {"category": "arch|light|atmo|prop|time", "severity": "warning|error", "detail": "description", "score": 0.0-1.0}
   ]
 }

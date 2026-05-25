@@ -732,7 +732,7 @@ func (s *GenerationContextService) generateGlobalSummary(ctx *GenerationContext)
 	sb.WriteString("\n【主要角色】\n")
 	for _, char := range ctx.Characters {
 		if char.Role == "protagonist" || char.Role == "antagonist" {
-			sb.WriteString(fmt.Sprintf("- %s（%s）：%s\n", char.Name, char.Role, char.Personality))
+			sb.WriteString(fmt.Sprintf("- %s（%s）：%s\n", char.Name, char.Role, char.Description))
 		}
 	}
 

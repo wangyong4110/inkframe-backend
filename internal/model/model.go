@@ -228,6 +228,11 @@ type NovelVideoConfig struct {
 	// Kling 专业模式
 	KlingProForAction bool `json:"kling_pro_for_action" gorm:"default:true"` // 动作/史诗镜头自动使用 pro 模式
 
+	// 高清 & 3D 视频生成（项目全局）
+	KlingModel    string `json:"kling_model" gorm:"size:50;default:'kling-v1'"`    // kling-v1/kling-v1-6/kling-v2
+	HDEnabled     bool   `json:"hd_enabled" gorm:"default:false"`                  // 开启高清输出（自动升级为 kling-v1-6 + pro）
+	ThreeDEnabled bool   `json:"three_d_enabled" gorm:"default:false"`              // 开启 3D 动画风格（项目全局默认）
+
 	// 字幕样式
 	SubtitleStyle string `json:"subtitle_style" gorm:"size:20;default:'none'"`                  // none/basic/cinematic/anime
 	SubtitleFont  string `json:"subtitle_font" gorm:"size:100;default:'Noto Sans CJK SC'"` // 字体名称
@@ -393,29 +398,11 @@ type Character struct {
 	Novel    *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
 	UUID    string `json:"uuid" gorm:"uniqueIndex;size:36"`
 
-	Name   string `json:"name" gorm:"size:100;not null"`
-	Role   string `json:"role" gorm:"size:50"`
-	// protagonist=主角, antagonist=反派, supporting=配角, minor=龙套
-	Gender string `json:"gender" gorm:"size:20"` // "male" | "female" | "neutral"
+	Name string `json:"name" gorm:"size:100;not null"`
+	Role string `json:"role" gorm:"size:50"` // protagonist/antagonist/supporting/minor
 
-	Archetype string `json:"archetype" gorm:"size:50"` // 角色原型
-
-	// 外貌与性格
-	Appearance  string `json:"appearance" gorm:"type:text"`
-	Personality string `json:"personality" gorm:"type:text"`
-	Background  string `json:"background" gorm:"type:text"`
-
-	// 角色关系（JSON）
-	Relations string `json:"relations" gorm:"type:text"`
-
-	// 角色弧光
-	CharacterArc string `json:"character_arc" gorm:"type:text"`
-
-	// 对话风格（AI提取的说话习惯、用词偏好、禁忌表达）
-	DialogueStyle string `json:"dialogue_style" gorm:"type:text"` // JSON: {patterns, vocabulary_level, speech_habits, forbidden_phrases}
-
-	// 视觉设计
-	VisualDesign string `json:"visual_design" gorm:"type:text"` // JSON: 包含图像URL、表情库等
+	// 统一描述字段（外貌、性格、背景、对话风格等所有描述性信息）
+	Description string `json:"description" gorm:"type:text"`
 
 	// 三视图合一参考图（一张图展示正/侧/背三个视角）
 	ThreeViewSheet string `json:"three_view_sheet" gorm:"column:three_view_front;size:1000"`
@@ -423,9 +410,8 @@ type Character struct {
 	// 面部特写图
 	FaceCloseup string `json:"face_closeup" gorm:"size:1000"`
 
-	// 封面 / 头像
-	Portrait   string `json:"portrait" gorm:"size:1000"`
-	CoverImage string `json:"cover_image" gorm:"size:500"`
+	// 头像
+	Portrait string `json:"portrait" gorm:"size:1000"`
 
 	// 配音设置
 	VoiceID       string  `json:"voice_id" gorm:"size:100"`                         // 声音ID（如 alloy/echo/nova 等）
@@ -851,6 +837,10 @@ type Video struct {
 	QualityTier string `json:"quality_tier" gorm:"size:20;default:preview"`
 	// draft=草稿(静图+Pan), preview=预览(720p短片), final=正式(1080p+)
 
+	// 高清 & 3D 视觉模式
+	VisualMode  string `json:"visual_mode" gorm:"size:30;default:'standard'"` // standard/hd/3d/hd_3d
+	ThreeDStyle string `json:"three_d_style" gorm:"size:50;default:'cg'"`     // cg/pixar/anime3d/realistic3d
+
 	// 成本
 	GenerationCost float64 `json:"generation_cost" gorm:"type:decimal(10,2)"`
 
@@ -1223,12 +1213,10 @@ type Item struct {
 	NovelID uint   `json:"novel_id" gorm:"index;not null"`
 	UUID    string `json:"uuid" gorm:"uniqueIndex;size:36"`
 
-	Name     string `json:"name" gorm:"size:100;not null"`
-	Category string `json:"category" gorm:"size:50"` // weapon/treasure/tool/document/artifact/other
+	Name string `json:"name" gorm:"size:100;not null"`
 
-	Description  string `json:"description" gorm:"type:text"`
-	Appearance   string `json:"appearance" gorm:"type:text"`   // 外观描述
-	Location string `json:"location" gorm:"size:200"` // 当前/最后已知位置
+	Description string `json:"description" gorm:"type:text"` // 统一描述（含类别、外观等所有描述性信息）
+	Location    string `json:"location" gorm:"size:200"`      // 当前/最后已知位置
 	Owner    string `json:"owner" gorm:"size:100"`    // 当前持有者
 
 	ImageURL          string `json:"image_url" gorm:"size:1000"`
@@ -1341,27 +1329,17 @@ type GenerateChapterRequest struct {
 
 type CreateCharacterRequest struct {
 	Name        string `json:"name" binding:"required"`
-	Gender      string `json:"gender"`   // "male" | "female" | "neutral"
 	Role        string `json:"role"`
-	Archetype   string `json:"archetype"`
-	Background  string `json:"background"`
-	Appearance  string `json:"appearance"`
-	Personality string `json:"personality"`
+	Description string `json:"description"`
 }
 
 type UpdateCharacterRequest struct {
-	Name         string `json:"name"`
-	Gender       string `json:"gender"`    // "male" | "female" | "neutral"
-	Role         string `json:"role"`
-	Archetype    string `json:"archetype"`
-	Background   string `json:"background"`
-	Appearance   string `json:"appearance"`
-	Personality  string `json:"personality"`
-	CharacterArc   string `json:"character_arc"`
-	ThreeViewSheet string `json:"three_view_sheet"`
-	FaceCloseup    string `json:"face_closeup"`
-	Portrait        string        `json:"portrait"`
-	CoverImage      string        `json:"cover_image"`
+	Name           string   `json:"name"`
+	Role           string   `json:"role"`
+	Description    string   `json:"description"`
+	ThreeViewSheet string   `json:"three_view_sheet"`
+	FaceCloseup    string   `json:"face_closeup"`
+	Portrait       string   `json:"portrait"`
 	// 配音设置
 	VoiceID       string   `json:"voice_id"`
 	VoiceSpeed    *float64 `json:"voice_speed"`    // nil = absent (don't update)
@@ -1387,7 +1365,9 @@ type CreateVideoRequest struct {
 	ArtStyle    string `json:"art_style"`
 	QualityTier string `json:"quality_tier"` // draft/preview/final
 	ChapterID   *uint  `json:"chapter_id"`
-	Mode        string `json:"mode"` // video/slideshow
+	Mode        string `json:"mode"`        // video/slideshow
+	VisualMode  string `json:"visual_mode"` // standard/hd/3d/hd_3d
+	ThreeDStyle string `json:"three_d_style"` // cg/pixar/anime3d/realistic3d
 }
 
 type UpdateVideoRequest struct {
@@ -1398,6 +1378,8 @@ type UpdateVideoRequest struct {
 	ArtStyle     string `json:"art_style"`
 	ScriptStatus string `json:"script_status"` // draft/confirmed
 	Mode         string `json:"mode"`           // video/slideshow
+	VisualMode   string `json:"visual_mode"`    // standard/hd/3d/hd_3d
+	ThreeDStyle  string `json:"three_d_style"`  // cg/pixar/anime3d/realistic3d
 }
 
 type EnhancementConfig struct {
@@ -1534,9 +1516,7 @@ type UpdateMcpToolRequest struct {
 
 type CreateItemRequest struct {
 	Name         string `json:"name" binding:"required"`
-	Category     string `json:"category"`
 	Description  string `json:"description"`
-	Appearance   string `json:"appearance"`
 	Location     string `json:"location"`
 	Owner        string `json:"owner"`
 	VisualPrompt string `json:"visual_prompt"`
@@ -1545,9 +1525,7 @@ type CreateItemRequest struct {
 
 type UpdateItemRequest struct {
 	Name              string `json:"name"`
-	Category          string `json:"category"`
 	Description       string `json:"description"`
-	Appearance        string `json:"appearance"`
 	Location          string `json:"location"`
 	Owner             string `json:"owner"`
 	VisualPrompt      string `json:"visual_prompt"`
@@ -1826,7 +1804,6 @@ type SceneAnchor struct {
 
 	// 扩展字段（一致性评分相关）
 	RefImageLockedAt *time.Time `json:"ref_image_locked_at,omitempty" gorm:"index"`
-	RefImageShotID   *uint      `json:"ref_image_shot_id,omitempty"`
 	UsageCount       int        `json:"usage_count" gorm:"default:0"`
 	AvgConsScore     float64    `json:"avg_cons_score" gorm:"type:decimal(4,3);default:0"`
 	ParentAnchorID   *uint      `json:"parent_anchor_id,omitempty" gorm:"index"`
