@@ -61,24 +61,35 @@ func (p *SeedanceProvider) doRequest(ctx context.Context, method, path string, b
 }
 
 // GenerateVideo 提交 Seedance 视频生成任务
-// 支持文生视频（t2v）和图生视频（i2v）
+// 支持文生视频（t2v）和图生视频（i2v），i2v 模式下支持多张参考图
 func (p *SeedanceProvider) GenerateVideo(ctx context.Context, req *VideoGenerateRequest) (*VideoTask, error) {
+	// 合并 ImageURL 和 ImageURLs：ImageURL（主参考图/生成场景图）插入首位，ImageURLs 追加（角色图、场景锚点图等）
+	allImages := make([]string, 0, 1+len(req.ImageURLs))
+	if req.ImageURL != "" {
+		allImages = append(allImages, req.ImageURL)
+	}
+	for _, u := range req.ImageURLs {
+		if u != "" && u != req.ImageURL { // 去重
+			allImages = append(allImages, u)
+		}
+	}
+
 	model := req.Model
 	if model == "" {
-		if req.ImageURL != "" {
+		if len(allImages) > 0 {
 			model = "seedance-1-0-i2v-250428"
 		} else {
 			model = "seedance-1-0-t2v-250428"
 		}
 	}
 
-	content := make([]map[string]interface{}, 0, 2)
+	content := make([]map[string]interface{}, 0, len(allImages)+1)
 
-	// 图生视频：先传图片
-	if req.ImageURL != "" {
+	// 图生视频：将所有参考图依序放入 content（Seedance content 数组支持多个 image_url）
+	for _, imgURL := range allImages {
 		content = append(content, map[string]interface{}{
 			"type":      "image_url",
-			"image_url": map[string]string{"url": req.ImageURL},
+			"image_url": map[string]string{"url": imgURL},
 		})
 	}
 

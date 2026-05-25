@@ -66,9 +66,29 @@ func (p *KlingProvider) doRequest(ctx context.Context, method, path string, body
 
 // GenerateVideo 提交图生视频任务
 func (p *KlingProvider) GenerateVideo(ctx context.Context, req *VideoGenerateRequest) (*VideoTask, error) {
+	// 合并所有参考图：ImageURL（主参考图）置首位，ImageURLs 追加并去重
+	allImages := make([]string, 0, 1+len(req.ImageURLs))
+	if req.ImageURL != "" {
+		allImages = append(allImages, req.ImageURL)
+	}
+	for _, u := range req.ImageURLs {
+		if u != "" && u != req.ImageURL {
+			allImages = append(allImages, u)
+		}
+	}
+	// Kling 多图最多支持 4 张
+	if len(allImages) > 4 {
+		allImages = allImages[:4]
+	}
+
 	model := req.Model
 	if model == "" {
-		model = "kling-v1"
+		if len(allImages) > 1 {
+			// 多图模式需要 kling-v1-6 及以上
+			model = "kling-v1-6"
+		} else {
+			model = "kling-v1"
+		}
 	}
 
 	cfgScale := req.CFGScale
@@ -98,8 +118,15 @@ func (p *KlingProvider) GenerateVideo(ctx context.Context, req *VideoGenerateReq
 		"duration":        fmt.Sprintf("%.0f", duration),
 	}
 
-	if req.ImageURL != "" {
-		klingReq["image_url"] = req.ImageURL
+	switch len(allImages) {
+	case 0:
+		// text-to-video，不设置 image 字段
+	case 1:
+		// 单图：使用 image_url（兼容所有版本）
+		klingReq["image_url"] = allImages[0]
+	default:
+		// 多图：使用 image_list（kling-v1-6+）
+		klingReq["image_list"] = allImages
 	}
 
 	if req.CameraMovement != "" {

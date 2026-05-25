@@ -19,15 +19,16 @@ type VideoProvider interface {
 
 // VideoGenerateRequest 视频生成请求
 type VideoGenerateRequest struct {
-	ImageURL       string  `json:"image_url"`        // 参考图（图生视频）
-	Prompt         string  `json:"prompt"`           // 视频描述 Prompt
-	NegativePrompt string  `json:"negative_prompt"`  // 负向 Prompt
-	Duration       float64 `json:"duration"`         // 时长（秒），如 5.0
-	AspectRatio    string  `json:"aspect_ratio"`     // 16:9, 9:16, 1:1
-	CameraMovement string  `json:"camera_movement"`  // pan_left, zoom_in, zoom_out, static 等
-	Model          string  `json:"model,omitempty"`  // 可选指定模型
-	CFGScale       float64 `json:"cfg_scale"`        // 提示词引导强度 (0.0-1.0)，默认 0.5
-	Mode           string  `json:"mode,omitempty"`   // kling: std/pro
+	ImageURL       string   `json:"image_url"`         // 主参考图（图生视频，Kling 等单图提供商使用）
+	ImageURLs      []string `json:"image_urls"`         // 多参考图（Seedance 等支持多图的提供商使用；ImageURL 若非空会自动插入首位）
+	Prompt         string   `json:"prompt"`            // 视频描述 Prompt
+	NegativePrompt string   `json:"negative_prompt"`   // 负向 Prompt
+	Duration       float64  `json:"duration"`          // 时长（秒），如 5.0
+	AspectRatio    string   `json:"aspect_ratio"`      // 16:9, 9:16, 1:1
+	CameraMovement string   `json:"camera_movement"`   // pan_left, zoom_in, zoom_out, static 等
+	Model          string   `json:"model,omitempty"`   // 可选指定模型
+	CFGScale       float64  `json:"cfg_scale"`         // 提示词引导强度 (0.0-1.0)，默认 0.5
+	Mode           string   `json:"mode,omitempty"`    // kling: std/pro
 }
 
 // VideoTask 已提交的视频任务
