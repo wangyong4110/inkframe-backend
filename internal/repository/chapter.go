@@ -32,6 +32,23 @@ func (r *ChapterRepository) Create(chapter *model.Chapter) error {
 	return nil
 }
 
+// CreateInBatches 批量创建章节（单次事务，避免 N 次独立 INSERT 的性能开销）
+func (r *ChapterRepository) CreateInBatches(chapters []*model.Chapter, batchSize int) error {
+	if len(chapters) == 0 {
+		return nil
+	}
+	if batchSize <= 0 {
+		batchSize = 100
+	}
+	if err := r.db.CreateInBatches(chapters, batchSize).Error; err != nil {
+		return err
+	}
+	if len(chapters) > 0 {
+		r.invalidateListCache(chapters[0].NovelID)
+	}
+	return nil
+}
+
 // GetByID 根据ID获取章节
 func (r *ChapterRepository) GetByID(id uint) (*model.Chapter, error) {
 	var chapter model.Chapter

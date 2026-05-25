@@ -479,17 +479,43 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 		result.OSSUrl = s.uploadRawToOSS(context.Background(), req.TenantID, novel.ID, req.FileName, req.FileData)
 	}
 
-	// 保存章节（追加时序号从已有数量后续）
-	// 若同章节号已存在但内容为空（上次导入失败遗留），则覆盖更新；否则跳过以免破坏已有内容。
+	// 保存章节：先给所有章节填充 NovelID / ChapterNo / UUID
 	for i, chapter := range chapters {
 		chapter.NovelID = novel.ID
 		chapter.ChapterNo = chapterOffset + i + 1
 		if chapter.UUID == "" {
 			chapter.UUID = uuid.New().String()
 		}
+	}
+	result.TotalChapters = len(chapters)
 
-		existing, lookupErr := s.chapterRepo.GetByNovelAndChapterNo(novel.ID, chapter.ChapterNo)
-		if lookupErr == nil && existing != nil {
+	// 新建小说（chapterOffset==0 且 novel 刚刚创建）：跳过逐章查重，直接批量插入。
+	// 这将 N 次 SELECT+INSERT 降为 1 次批量 INSERT，对数百章的大文件性能提升显著。
+	if chapterOffset == 0 && req.NovelID == 0 {
+		if err := s.chapterRepo.CreateInBatches(chapters, 100); err != nil {
+			result.FailedChapters = len(chapters)
+			result.Errors = append(result.Errors, fmt.Sprintf("batch create failed: %v", err))
+			logger.Printf("[Import] novel=%d batch create failed: %v", novel.ID, err)
+		} else {
+			result.ImportedChapters = len(chapters)
+			logger.Printf("[Import] novel=%d batch created %d chapters", novel.ID, len(chapters))
+		}
+		return result, nil
+	}
+
+	// 追加/覆盖模式：批量查已有章节，构建 chapter_no→record map，避免 N+1 查询
+	minChNo := chapterOffset + 1
+	maxChNo := chapterOffset + len(chapters)
+	existingList, _ := s.chapterRepo.GetByNovelAndChapterRange(novel.ID, minChNo, maxChNo)
+	existingMap := make(map[int]*model.Chapter, len(existingList))
+	for _, ex := range existingList {
+		existingMap[ex.ChapterNo] = ex
+	}
+
+	var toCreate []*model.Chapter
+	for _, chapter := range chapters {
+		existing, ok := existingMap[chapter.ChapterNo]
+		if ok {
 			if existing.Content == "" && chapter.Content != "" {
 				// 用新内容覆盖上次导入遗留的空章节
 				existing.Title = chapter.Title
@@ -504,21 +530,23 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 					result.ImportedChapters++
 				}
 			} else {
-				logger.Printf("[Import] novel=%d chapter %d already exists with content (%d chars), skipping", novel.ID, chapter.ChapterNo, len([]rune(existing.Content)))
+				logger.Printf("[Import] novel=%d chapter %d already exists (%d chars), skipping", novel.ID, chapter.ChapterNo, len([]rune(existing.Content)))
 				result.ImportedChapters++
 			}
 		} else {
-			if err := s.chapterRepo.Create(chapter); err != nil {
-				result.FailedChapters++
-				logger.Printf("[Import] novel=%d chapter %d create failed: %v", novel.ID, chapter.ChapterNo, err)
-				result.Errors = append(result.Errors, fmt.Sprintf("chapter %d failed: %v", chapter.ChapterNo, err))
-			} else {
-				result.ImportedChapters++
-				logger.Printf("[Import] novel=%d chapter %d saved (%d chars)", novel.ID, chapter.ChapterNo, len([]rune(chapter.Content)))
-			}
+			toCreate = append(toCreate, chapter)
 		}
 	}
-	result.TotalChapters = len(chapters)
+	if len(toCreate) > 0 {
+		if err := s.chapterRepo.CreateInBatches(toCreate, 100); err != nil {
+			result.FailedChapters += len(toCreate)
+			result.Errors = append(result.Errors, fmt.Sprintf("batch create failed: %v", err))
+			logger.Printf("[Import] novel=%d batch create %d chapters failed: %v", novel.ID, len(toCreate), err)
+		} else {
+			result.ImportedChapters += len(toCreate)
+			logger.Printf("[Import] novel=%d batch created %d new chapters", novel.ID, len(toCreate))
+		}
+	}
 
 	return result, nil
 }

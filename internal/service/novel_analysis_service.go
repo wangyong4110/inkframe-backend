@@ -842,18 +842,15 @@ func (s *NovelAnalysisService) stepGenerateSkills(
 	existing, _ := s.skillService.ListSkills(novel.ID, repository.ListSkillsOpts{})
 	if len(existing) > 0 {
 		logger.Printf("NovelAnalysis[%d]: skills already exist (%d), skip", novel.ID, len(existing))
-		task.setProgress(68)
 		return nil
 	}
 
 	skills, err := s.skillService.AIExtractAllFromNovel(novel.TenantID, novel.ID)
 	if err != nil {
 		logger.Printf("NovelAnalysis[%d]: skill extraction warn: %v", novel.ID, err)
-		task.setProgress(68)
 		return nil // 非致命错误，不影响 pipeline
 	}
 	logger.Printf("NovelAnalysis[%d]: extracted %d skills from chapters", novel.ID, len(skills))
-	task.setProgress(68)
 	return nil
 }
 

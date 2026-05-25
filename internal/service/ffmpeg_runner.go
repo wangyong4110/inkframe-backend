@@ -4,12 +4,18 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"codeberg.org/gruf/go-ffmpreg/ffmpreg"
 	"codeberg.org/gruf/go-ffmpreg/wasm"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/tetratelabs/wazero"
 )
+
+// ffmpegLeakedGoroutines 累计因超时被放弃的 FFmpeg WASM goroutine 数量。
+// wazero 无法中断正在执行的 WASM 模块，超时后 goroutine 仍在后台运行。
+var ffmpegLeakedGoroutines atomic.Int64
 
 // rootFSConfig mounts the host root filesystem so ffmpeg can read/write arbitrary paths.
 func rootFSConfig(cfg wazero.ModuleConfig) wazero.ModuleConfig {
@@ -64,6 +70,8 @@ func runFFmpegWithGoroutineTimeout(timeout time.Duration, args ...string) ([]byt
 	case res := <-ch:
 		return res.out, res.err
 	case <-time.After(timeout):
+		n := ffmpegLeakedGoroutines.Add(1)
+		logger.Printf("[FFmpegRunner] WARN: goroutine timeout after %v — WASM still running in background (total leaked: %d)", timeout, n)
 		return nil, fmt.Errorf("ffmpeg goroutine timeout after %v (wasm still running in background)", timeout)
 	}
 }

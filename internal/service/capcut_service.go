@@ -322,6 +322,25 @@ func subtitleTransformY(position string) float64 {
 	}
 }
 
+// sanitizeSubtitleText 清理字幕文本：
+//   - 去除 C0 控制字符（\x00–\x1F，保留 \t \n），防止 CapCut JSON 解析异常
+//   - 超过 500 字符截断，避免单字幕素材过大
+func sanitizeSubtitleText(s string) string {
+	var b strings.Builder
+	count := 0
+	for _, r := range s {
+		if count >= 500 {
+			break
+		}
+		if r < 0x20 && r != '\t' && r != '\n' {
+			continue // 丢弃控制字符
+		}
+		b.WriteRune(r)
+		count++
+	}
+	return b.String()
+}
+
 // buildTextContent 构建剪映字幕素材 content JSON 字符串。
 // 剪映要求 style 元素中必须包含 font / useLetterColor / strokes 字段；
 // 缺少这些字段时剪映会静默跳过该文字素材，导致字幕不显示。
@@ -513,8 +532,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			Visible:         true,
 			Volume:          1.0,
 		}
-		// 图片分镜（非视频）添加 Ken Burns 运镜关键帧
-		if !isVideo {
+		// 添加 Ken Burns 运镜关键帧（图片：缩放+平移；视频：叠加二次运镜，增强视觉动感）
+		{
 			kfGroups := buildPhotoMotionKeyframes(segID, shot.CameraType, durationMicros, shot.ShotNo)
 			for _, g := range kfGroups {
 				seg.KeyframeRefs = append(seg.KeyframeRefs, g.ID)
@@ -654,6 +673,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		}
 		if subtitleText != "" && subCfg.enabled {
 			txtMatID := uuid.New().String()
+			subtitleText = sanitizeSubtitleText(subtitleText)
 
 			textMaterials = append(textMaterials, ccTextMaterial{
 				CheckFlag:  7,
@@ -927,6 +947,10 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		return nil, fmt.Errorf("close zip: %w", err)
 	}
 
+	const zipWarnThreshold = 500 * 1024 * 1024 // 500 MB
+	if buf.Len() > zipWarnThreshold {
+		logger.Printf("[CapCutService] ExportCapCutDraft WARNING: ZIP size %d bytes exceeds %d MB; consider reducing shot count or media quality", buf.Len(), zipWarnThreshold/1024/1024)
+	}
 	result := &ExportResult{
 		Data:        buf.Bytes(),
 		Filename:    projectName + ".zip",
