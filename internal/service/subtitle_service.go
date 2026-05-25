@@ -1,10 +1,10 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -123,10 +123,8 @@ func (s *SubtitleService) BurnSubtitles(videoPath, assPath, outputPath string) e
 		"-c:a", "copy",
 		outputPath,
 	}
-	cmd := exec.Command("ffmpeg", args...)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("subtitle burn failed: %w\nffmpeg: %s", err, string(out))
+	if _, err := runFFmpegCtx(context.Background(), args...); err != nil {
+		return fmt.Errorf("subtitle burn failed: %w", err)
 	}
 	return nil
 }

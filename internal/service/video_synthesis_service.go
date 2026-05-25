@@ -106,9 +106,9 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 	}()
 	var concatLines []string
 	for i, shot := range shots {
-		// 跳过无视频片段的镜头（仅有图片，Ken Burns 未生成）
-		if shot.ClipPath == "" {
-			logger.Printf("StitchVideo: shot %d has no clip, skipping", shot.ShotNo)
+		// 跳过既无本地 clip 也无远端 URL 的镜头
+		if shot.ClipPath == "" && shot.VideoURL == "" {
+			logger.Printf("StitchVideo: shot %d has no clip or video URL, skipping", shot.ShotNo)
 			continue
 		}
 
@@ -121,8 +121,12 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 			finalClip = clipFile
 			localShotFiles = append(localShotFiles, clipFile)
 		} else {
-			// 仍是远程 URL（fallback），下载到 tmpDir
-			if err := downloadFile(shot.ClipPath, clipFile); err != nil {
+			// 远端 URL：优先用 ClipPath，fallback 到 VideoURL
+			remoteURL := shot.ClipPath
+			if remoteURL == "" {
+				remoteURL = shot.VideoURL
+			}
+			if err := downloadFile(remoteURL, clipFile); err != nil {
 				// URL 可能已过期，尝试从 provider 重新获取
 				if shot.ShotTaskID != "" && shot.ShotProviderName != "" {
 					if p, ok := s.videoProviders[shot.ShotProviderName]; ok {
@@ -164,6 +168,10 @@ func (s *VideoService) StitchVideo(videoID uint) (string, error) {
 		}
 
 		concatLines = append(concatLines, fmt.Sprintf("file '%s'", finalClip))
+	}
+
+	if len(concatLines) == 0 {
+		return "", fmt.Errorf("no clips available to stitch (all shots missing video)")
 	}
 
 	listFile := fmt.Sprintf("%s/list.txt", tmpDir)
