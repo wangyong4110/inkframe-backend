@@ -388,6 +388,10 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 
 	audioURL := localAudioURL
 
+	// 在上传/删除本地文件之前先测量时长，保证能读到本地音频数据
+	shot.AudioPath = localAudioURL
+	shot.Duration = alignShotDurationToTTS(shot)
+
 	// 上传到持久存储（持久化音频避免本地 /tmp 文件重启后消失）
 	if s.storageSvc != nil {
 		persistURL, uploadErr := s.uploadAudioToStorage(ctx, shot, audioURL, novelID, chapterID)
@@ -396,7 +400,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 		} else {
 			audioURL = persistURL
 			logger.Printf("GenerateShotAudio: shot %d audio stored at %s", shot.ShotNo, audioURL)
-			// 删除本次新建的 /tmp 临时文件（修复：之前错误地删除旧 shot.AudioPath）
+			// 删除本次新建的 /tmp 临时文件（时长已测量完毕，可以安全删除）
 			if strings.HasPrefix(localAudioURL, "file://") {
 				os.Remove(strings.TrimPrefix(localAudioURL, "file://")) //nolint:errcheck
 			}
@@ -404,8 +408,6 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 	}
 
 	shot.AudioPath = audioURL
-	// 更新分镜时长：取视频时长与配音时长的最大值（含 0.3s 缓冲），并持久化
-	shot.Duration = alignShotDurationToTTS(shot)
 	if err := s.storyboardRepo.Update(shot); err != nil {
 		logger.Printf("[VideoService] GenerateShotAudio: failed to update shot %d audio path: %v", shot.ShotNo, err)
 	}
