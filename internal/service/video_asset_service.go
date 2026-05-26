@@ -119,8 +119,9 @@ func (s *VideoService) DeleteVoiceSegment(segID uint) error {
 
 // ─── Audio Helpers ────────────────────────────────────────────────────────────
 
-// mp3Duration estimates the duration in seconds of MPEG1 Layer3 audio data by
-// counting frames. Returns 0 if the data cannot be parsed.
+// mp3Duration estimates the duration in seconds of MP3 audio data by counting frames.
+// Supports MPEG1 Layer3 (44.1/48/32 kHz) and MPEG2 Layer3 (22.05/24/16 kHz, used by
+// doubao-speech and other TTS providers). Returns 0 if the data cannot be parsed.
 func mp3Duration(data []byte) float64 {
 	if len(data) < 4 {
 		return 0
@@ -131,42 +132,67 @@ func mp3Duration(data []byte) float64 {
 		sz := int(data[6]&0x7F)<<21 | int(data[7]&0x7F)<<14 | int(data[8]&0x7F)<<7 | int(data[9]&0x7F)
 		offset = 10 + sz
 	}
-	bitrateTable := [16]int{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0}
-	sampleRates := [4]int{44100, 48000, 32000, 0}
-	var frames, sampleRate int
+	// MPEG1 Layer3 bitrate table (kbps)
+	bitratesMPEG1 := [16]int{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0}
+	// MPEG2/2.5 Layer3 bitrate table (kbps)
+	bitratesMPEG2 := [16]int{0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0}
+	// Sample rates indexed by srIdx (0-2); MPEG2.5 = MPEG2/2
+	sampleRatesMPEG1 := [4]int{44100, 48000, 32000, 0}
+	sampleRatesMPEG2 := [4]int{22050, 24000, 16000, 0}
+
+	var frames, sampleRate, samplesPerFrame int
 	for i := offset; i+3 < len(data); {
 		if data[i] != 0xFF || (data[i+1]&0xE0) != 0xE0 {
 			i++
 			continue
 		}
-		// MPEG1 (bits 4-3 = 11) + Layer3 (bits 2-1 = 01)
-		if (data[i+1]&0x18) != 0x18 || (data[i+1]&0x06) != 0x02 {
+		// Layer must be Layer3 (bits 2-1 = 01)
+		if (data[i+1] & 0x06) != 0x02 {
 			i++
 			continue
 		}
+		mpegVer := (data[i+1] >> 3) & 0x03 // 11=MPEG1, 10=MPEG2, 00=MPEG2.5
 		bitrateIdx := int(data[i+2]>>4) & 0x0F
 		srIdx := int(data[i+2]>>2) & 0x03
 		padding := int(data[i+2]>>1) & 0x01
-		bitrate := bitrateTable[bitrateIdx] * 1000
-		sr := sampleRates[srIdx]
+
+		var bitrate, sr, spf int
+		switch mpegVer {
+		case 0x03: // MPEG1: 1152 samples/frame
+			bitrate = bitratesMPEG1[bitrateIdx] * 1000
+			sr = sampleRatesMPEG1[srIdx]
+			spf = 1152
+		case 0x02: // MPEG2: 576 samples/frame
+			bitrate = bitratesMPEG2[bitrateIdx] * 1000
+			sr = sampleRatesMPEG2[srIdx]
+			spf = 576
+		case 0x00: // MPEG2.5: 576 samples/frame, half the MPEG2 sample rates
+			bitrate = bitratesMPEG2[bitrateIdx] * 1000
+			sr = sampleRatesMPEG2[srIdx] / 2
+			spf = 576
+		default:
+			i++
+			continue
+		}
 		if bitrate == 0 || sr == 0 {
 			i++
 			continue
 		}
-		frameLen := 144*bitrate/sr + padding
+		frameLen := spf/8*bitrate/sr + padding
 		if frameLen <= 4 || i+frameLen > len(data) {
 			break
 		}
 		frames++
 		if sampleRate == 0 {
 			sampleRate = sr
+			samplesPerFrame = spf
 		}
 		i += frameLen
 	}
 	if frames == 0 || sampleRate == 0 {
 		return 0
 	}
-	return float64(frames) * 1152.0 / float64(sampleRate)
+	return float64(frames) * float64(samplesPerFrame) / float64(sampleRate)
 }
 
 // alignShotDurationToTTS 检查分镜的 TTS 音频时长，若音频更长则延伸分镜时长以确保配音完整。
