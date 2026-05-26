@@ -591,20 +591,27 @@ func (s *VideoService) buildStoryboardPrompt(
   - 示例（仙侠写实风）："ancient Chinese xianxia, cinematic photography, medium close-up shot, low angle, young male cultivator (early 20s, sharp features, long black hair tied with jade hairpin, flowing white hanfu with gold trim) stands foreground-center gripping a glowing azure longsword raised to chest height with both hands, enemy elder in black iron armor stands background-right arms outstretched casting dark energy, crumbling stone training arena floor with scattered rubble, ancient pagoda visible in background, dramatic rim lighting from above left with cool blue magic light, cool blue and silver palette, shallow depth of field 85mm f/2.8, masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting"
 
 `)
-	// video_prompt 头部注释
+	// video_prompt 字段规范（语言模式：en=英文，zh=中文）
 	if isEn {
-		sb.WriteString("▸ video_prompt（视频生成专用提示词，English only，必填）\n")
-	} else {
-		sb.WriteString("▸ video_prompt（视频生成专用提示词，必填）\n")
-	}
-	sb.WriteString(`  - 专为 Kling / Seedance 等 AI 视频生成模型优化，核心是描述"运动"，而非静态构图
-  - 结构（按顺序拼接）：
-    [镜头运动轨迹和速度] → [主体动态行为：具体动作+运动方向+速度节奏] → [场景动态元素：风/粒子/布料/水/火等] → [光线变化（如有）] → [时间流逝感] → [情绪节奏词]
-  - 必须以镜头运动开头，体现 camera_type 字段的运动类型（例如 static 镜头也要写 "locked-off camera with subtle breathing stabilization"）
-  - 禁止纯描述静态构图，每个字段都要有动态感
-  - 示例（推镜+战斗）："slow cinematic push in toward subject at 0.3x speed, young cultivator dramatically sweeps glowing azure sword upward in a wide arc with full body rotation, white robes billowing outward from centrifugal force, azure sword energy particles trail behind blade path, dark energy tendrils from enemy dissipating frame-right, stone debris from impact site still settling in slow-motion, magic light intensifying with each frame, building tension, epic fantasy atmosphere, fluid smooth motion"
+		sb.WriteString(`▸ video_prompt（English only，必填）
+  - Optimized for Kling / Seedance AI video generation. Focus on MOTION, not static composition.
+  - Structure (in order): [camera movement trajectory + speed] → [subject dynamic action + direction + rhythm] → [scene dynamic elements: wind/particles/cloth/water/fire/etc] → [lighting changes if any] → [time-lapse feel] → [mood/rhythm keywords]
+  - Must start with camera movement matching camera_type (e.g. static shot: "locked-off camera with subtle breathing stabilization")
+  - Every element must convey motion — no purely static descriptions
+  - Example (push + combat): "slow cinematic push in toward subject at 0.3x speed, young cultivator dramatically sweeps glowing azure sword upward in a wide arc with full body rotation, white robes billowing outward from centrifugal force, azure sword energy particles trail behind blade path, dark energy tendrils from enemy dissipating frame-right, stone debris from impact site still settling in slow-motion, magic light intensifying with each frame, building tension, epic fantasy atmosphere, fluid smooth motion"
 
 `)
+	} else {
+		sb.WriteString(`▸ video_prompt（中文视频提示词，必填）
+  - 专为 Kling / Seedance 等 AI 视频生成模型优化，核心是描述"运动"，而非静态构图
+  - 请使用中文撰写，禁止使用英文
+  - 结构（按顺序拼接）：[镜头运动轨迹+速度] → [主体动态行为：具体动作+运动方向+速度节奏] → [场景动态元素：风/粒子/布料/水/火等] → [光线变化（如有）] → [时间流逝感] → [情绪节奏词]
+  - 必须以镜头运动开头，体现 camera_type 字段的运动类型（static 镜头写"固定机位，轻微呼吸感稳定"）
+  - 禁止纯描述静态构图，每个字段都要有动态感
+  - 示例（推镜+战斗）："慢速电影推镜以0.3x速度靠近主体，年轻修士大幅度上扬发光蓝剑，全身带动旋转，白袍袖摆随离心力向外飘扬，蓝剑能量粒子沿剑弧飘散，右侧敌方黑色能量丝线消散，魔法光芒逐帧增强，积聚戏剧张力，史诗奇幻氛围，流畅柔滑运动"
+
+`)
+	}
 	// negative_prompt 头部注释
 	if isEn {
 		sb.WriteString("▸ negative_prompt（负向提示词，English only，必填）\n")
@@ -1392,24 +1399,28 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, previousScore fl
 
 	for _, shot := range shots {
 		narr := shot.Narration
-		if narr == "" {
-			narr = shot.Description
+		desc := shot.Description
+		// 截断过长内容
+		truncate := func(s string, max int) string {
+			r := []rune(s)
+			if len(r) > max {
+				return string(r[:max]) + "…"
+			}
+			return s
 		}
-		// 截断过长的旁白
-		if len([]rune(narr)) > 80 {
-			runes := []rune(narr)
-			narr = string(runes[:80]) + "…"
-		}
+		narr = truncate(narr, 80)
+		desc = truncate(desc, 60)
+
 		sb.WriteString(fmt.Sprintf("[镜%d] 景别:%s 时长:%.0fs 镜头:%s/%s",
 			shot.ShotNo, shot.ShotSize, shot.Duration, shot.CameraType, shot.CameraAngle))
+		if desc != "" {
+			sb.WriteString(fmt.Sprintf(" 描述:\"%s\"", desc))
+		}
 		if narr != "" {
 			sb.WriteString(fmt.Sprintf(" 旁白:\"%s\"", narr))
 		}
 		if shot.Dialogue != "" {
-			d := shot.Dialogue
-			if len([]rune(d)) > 40 {
-				d = string([]rune(d)[:40]) + "…"
-			}
+			d := truncate(shot.Dialogue, 40)
 			sb.WriteString(fmt.Sprintf(" 台词:\"%s\"", d))
 		}
 		sb.WriteString("\n")
@@ -1436,12 +1447,15 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, previousScore fl
   "shot_feedback": [
     {
       "shot_no": 3,
-      "severity": "high",
-      "issues": ["问题描述"],
-      "suggestion": "改进建议"
+      "severity": "warning",
+      "issues": ["旁白出现禁用词「镜头」", "画面描述缺少角色站位信息"],
+      "suggestion": "改进建议",
+      "suggested_narration": "修改后的旁白全文（仅旁白有问题时填写，否则留空字符串）",
+      "suggested_description": "修改后的画面描述全文（仅描述有问题时填写，否则留空字符串）"
     }
   ]
-}`)
+}
+注意：suggested_narration / suggested_description 必须是完整的替换文本，不是diff说明；若该字段无需修改则填空字符串 ""。`)
 
 	return sb.String()
 }

@@ -181,7 +181,7 @@ func (s *PlotPointService) ExtractFromChapter(tenantID uint, chapter *model.Chap
 		textForAI = truncateForPrompt(chapter.Content, 3000)
 	}
 
-	prompt := fmt.Sprintf(`请从以下章节内容中提取关键剧情点，返回JSON数组格式：
+	prompt := fmt.Sprintf(`请从以下章节内容中提取关键剧情点，以如下JSON对象格式返回，不要输出任何其他内容：
 {
   "plot_points": [
     {
@@ -199,22 +199,29 @@ func (s *PlotPointService) ExtractFromChapter(tenantID uint, chapter *model.Chap
 		return nil, fmt.Errorf("AI extraction failed: %w", err)
 	}
 
-	var plotResult struct {
-		PlotPoints []struct {
-			Type        string   `json:"type"`
-			Description string   `json:"description"`
-			Characters  []string `json:"characters"`
-			Locations   []string `json:"locations"`
-		} `json:"plot_points"`
+	type plotPointItem struct {
+		Type        string   `json:"type"`
+		Description string   `json:"description"`
+		Characters  []string `json:"characters"`
+		Locations   []string `json:"locations"`
 	}
 
-	if err := json.Unmarshal([]byte(extractJSON(result)), &plotResult); err != nil {
+	var items []plotPointItem
+	raw := extractJSON(result)
+
+	// Try wrapped object first, then fall back to bare array.
+	var wrapped struct {
+		PlotPoints []plotPointItem `json:"plot_points"`
+	}
+	if err := json.Unmarshal([]byte(raw), &wrapped); err == nil {
+		items = wrapped.PlotPoints
+	} else if err2 := json.Unmarshal([]byte(raw), &items); err2 != nil {
 		logger.Printf("PlotPointService.ExtractFromChapter: parse error: %v, raw: %.200s", err, result)
 		return nil, fmt.Errorf("failed to parse AI response")
 	}
 
-	pps := make([]*model.PlotPoint, 0, len(plotResult.PlotPoints))
-	for _, p := range plotResult.PlotPoints {
+	pps := make([]*model.PlotPoint, 0, len(items))
+	for _, p := range items {
 		chars, _ := json.Marshal(p.Characters)
 		locs, _ := json.Marshal(p.Locations)
 		pps = append(pps, &model.PlotPoint{
