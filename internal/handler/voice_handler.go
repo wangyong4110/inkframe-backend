@@ -363,6 +363,16 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 		return
 	}
 
+	// 若前端未传 narration_voice，从视频配置中读取
+	narrationVoice := req.NarrationVoice
+	if narrationVoice == "" {
+		if video, err := h.videoService.GetVideo(uint(videoID)); err == nil {
+			if vc := h.videoService.GetNovelVideoConfig(video.NovelID); vc != nil {
+				narrationVoice = vc.NarrationVoice
+			}
+		}
+	}
+
 	// 筛选需要生成配音的分镜（有文本，且未有配音或强制重生）
 	var targets []*model.StoryboardShot
 	for _, s := range allShots {
@@ -447,7 +457,7 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 
 		h.taskSvc.Complete(taskID, gin.H{"success": success, "fail": fail, "total": total}) //nolint:errcheck
 		logger.Printf("[VideoHandler] BatchGenerateVoice task %s done: success=%d fail=%d", taskID, success, fail)
-	}(task.TaskID, targets, req.NarrationVoice, req.SubtitleEnabled)
+	}(task.TaskID, targets, narrationVoice, req.SubtitleEnabled)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,

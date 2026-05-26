@@ -59,8 +59,8 @@ func (h *RewriteHandler) CreateProject(c *gin.Context) {
 		respondBadRequest(c, err.Error())
 		return
 	}
-	if req.Level < 1 || req.Level > 3 {
-		req.Level = 1
+	if req.Level < 1 || req.Level > 5 {
+		req.Level = 2
 	}
 	project, err := h.rewriteSvc.CreateProject(tenantID, req.NovelID, req.Name, req.Level)
 	if err != nil {

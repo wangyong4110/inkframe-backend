@@ -216,9 +216,11 @@ func (s *RewriteService) generateBible(taskID string, project *model.RewriteProj
 	})
 
 	levelDesc := map[int]string{
-		1: "文学精炼：保留80-90%情节，用全新文学语言重写",
-		2: "结构重构：保留40-60%情节，重构世界观和角色",
-		3: "精神蒸馏：只保留5-20%精神内核，全面重创",
+		1: "字词润色：保留90-95%情节，仅做词句级同义替换",
+		2: "文学精炼：保留80-90%情节，用全新文学语言重写",
+		3: "情节调整：保留60-75%情节，适度调整场景与对话",
+		4: "结构重构：保留30-50%情节，重构世界观和角色",
+		5: "精神蒸馏：只保留5-20%精神内核，全面重创",
 	}
 
 	prompt, err := renderRewriteTemplate("rewrite_bible_generate", map[string]interface{}{
@@ -372,21 +374,35 @@ func (s *RewriteService) updateRewriteProgress(taskID string, projectID uint, do
 	s.projectRepo.UpdateProgress(projectID, done, total)
 }
 
+type rewriteLevelConfig struct {
+	Template        string
+	Goal            string
+	RetentionTarget string
+	SimilarityLimit string
+	LexSimThreshold float64
+}
+
+var rewriteLevelConfigs = map[int]rewriteLevelConfig{
+	1: {"rewrite_chapter_l1", "仅做词句级同义替换，不改变情节与对话内容", "90-95%", "60%", 0.75},
+	2: {"rewrite_chapter_l1", "用全新文学语言重新表达，保留情节骨架", "80-90%", "35%", 0.60},
+	3: {"rewrite_chapter_l2", "适度调整场景顺序与细节，改写对话语气", "60-75%", "50%", 0.50},
+	4: {"rewrite_chapter_l3", "重构世界观与角色设定，大幅改变故事形式", "30-50%", "65%", 0.35},
+	5: {"rewrite_chapter_l3", "只保留精神内核与情感逻辑，全面重创", "5-20%", "90%", 0.20},
+}
+
 func (s *RewriteService) rewriteChapter(project *model.RewriteProject, bible *model.RewriteBible, task *model.ChapterRewriteTask) error {
 	s.chapterTaskRepo.UpdateStatus(task.ID, "rewriting", "")
 
-	var tmplName string
-	if project.Level <= 2 {
-		tmplName = "rewrite_chapter_l1"
-	} else {
-		tmplName = "rewrite_chapter_l3"
+	cfg, ok := rewriteLevelConfigs[project.Level]
+	if !ok {
+		cfg = rewriteLevelConfigs[2]
 	}
 
 	origRunes := []rune(task.OriginalContent)
 	coreEnd := min(500, len(origRunes))
 	coreElements := string(origRunes[:coreEnd])
 
-	prompt, err := renderRewriteTemplate(tmplName, map[string]interface{}{
+	prompt, err := renderRewriteTemplate(cfg.Template, map[string]interface{}{
 		"WorldName":       bible.NewWorldName,
 		"CharNames":       bible.NewCharNames,
 		"PlotTransform":   bible.PlotTransform,
@@ -395,6 +411,9 @@ func (s *RewriteService) rewriteChapter(project *model.RewriteProject, bible *mo
 		"ForbiddenElems":  bible.ForbiddenElems,
 		"OriginalContent": task.OriginalContent,
 		"CoreElements":    coreElements,
+		"LevelGoal":       cfg.Goal,
+		"RetentionTarget": cfg.RetentionTarget,
+		"SimilarityLimit": cfg.SimilarityLimit,
 	})
 	if err != nil {
 		return err
@@ -406,7 +425,7 @@ func (s *RewriteService) rewriteChapter(project *model.RewriteProject, bible *mo
 	}
 
 	lexSim := calculateLexicalSimilarity(task.OriginalContent, rewritten)
-	passed := lexSim < 0.35
+	passed := lexSim < cfg.LexSimThreshold
 
 	return s.chapterTaskRepo.UpdateRewritten(task.ID, rewritten, lexSim, passed)
 }

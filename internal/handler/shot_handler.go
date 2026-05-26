@@ -418,7 +418,7 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, err.Error())
 		return
 	}
-	if shot.Dialogue == "" && shot.Description == "" {
+	if shot.Narration == "" && shot.Dialogue == "" && shot.Description == "" {
 		respondBadRequest(c, "shot has no text content")
 		return
 	}

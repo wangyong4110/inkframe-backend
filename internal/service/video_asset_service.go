@@ -8,6 +8,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -524,6 +525,30 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 		char, err := s.characterRepo.GetByID(shot.CharacterIDs[0])
 		if err == nil && char != nil {
 			applyCharVoice(char)
+			return
+		}
+	}
+
+	// 步骤三：CharacterIDs 为空时降级到 shot.Characters JSON（名称匹配）。
+	// autoMatchShotCharacters 可能未命中，但 Characters JSON 由 LLM 直接写入，更可靠。
+	if shot.Dialogue != "" && shot.Characters != "" {
+		var shotChars []struct {
+			Name string `json:"name"`
+		}
+		if err := json.Unmarshal([]byte(shot.Characters), &shotChars); err == nil && len(shotChars) > 0 {
+			characters, err := s.listCharsByNovelCached(novelID)
+			if err == nil {
+				nameMap := make(map[string]*model.Character, len(characters))
+				for _, c := range characters {
+					nameMap[strings.ToLower(c.Name)] = c
+				}
+				for _, sc := range shotChars {
+					if char, ok := nameMap[strings.ToLower(sc.Name)]; ok {
+						applyCharVoice(char)
+						return
+					}
+				}
+			}
 		}
 	}
 
