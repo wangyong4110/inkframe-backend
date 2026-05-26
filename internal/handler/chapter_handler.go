@@ -391,6 +391,22 @@ func (h *ChapterHandler) UnpublishChapter(c *gin.Context) {
 	respondOK(c, chapter)
 }
 
+// BatchPublishChapters 批量发布小说所有章节到广场
+// POST /api/v1/novels/:id/chapters/batch-publish
+func (h *ChapterHandler) BatchPublishChapters(c *gin.Context) {
+	novelId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	count, err := h.chapterService.BatchPublishChapters(uint(novelId))
+	if err != nil {
+		logger.Printf("[ChapterHandler] BatchPublishChapters: novelID=%d err=%v", novelId, err)
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"published_count": count})
+}
+
 // GenerateChapterOutline 为章节生成 AI 大纲
 // POST /api/v1/novels/:id/chapters/:chapter_no/outline
 func (h *ChapterHandler) GenerateChapterOutline(c *gin.Context) {

@@ -268,6 +268,11 @@ func (s *ChapterService) UnpublishChapter(novelID uint, chapterNo int) (*model.C
 	return chapter, nil
 }
 
+// BatchPublishChapters 批量发布小说所有章节到广场
+func (s *ChapterService) BatchPublishChapters(novelID uint) (int64, error) {
+	return s.chapterRepo.BatchUpdateIsPublished(novelID, true)
+}
+
 // ListPublishedChapters 获取小说已公开发布的章节列表
 func (s *ChapterService) ListPublishedChapters(novelID uint) ([]*model.Chapter, error) {
 	return s.chapterRepo.ListPublishedByNovel(novelID)

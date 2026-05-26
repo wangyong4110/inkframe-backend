@@ -200,6 +200,21 @@ func (r *ChapterRepository) UpdateIsPublished(id, novelID uint, isPublished bool
 	return nil
 }
 
+// BatchUpdateIsPublished 批量更新小说下所有章节的发布状态
+func (r *ChapterRepository) BatchUpdateIsPublished(novelID uint, isPublished bool) (int64, error) {
+	updates := map[string]interface{}{"is_published": isPublished}
+	if isPublished {
+		now := time.Now()
+		updates["published_at"] = &now
+	}
+	result := r.db.Model(&model.Chapter{}).Where("novel_id = ?", novelID).Updates(updates)
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	r.invalidateListCache(novelID)
+	return result.RowsAffected, nil
+}
+
 // Delete 删除章节（novelID 用于缓存失效）
 func (r *ChapterRepository) Delete(id, novelID uint) error {
 	if err := r.db.Delete(&model.Chapter{}, id).Error; err != nil {

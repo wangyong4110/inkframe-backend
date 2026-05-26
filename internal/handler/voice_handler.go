@@ -125,7 +125,8 @@ func (h *VideoHandler) GenerateSegmentVoice(c *gin.Context) {
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 
 		const maxRetries = 3
 		var audioErr error
@@ -145,6 +146,7 @@ func (h *VideoHandler) GenerateSegmentVoice(c *gin.Context) {
 			return
 		}
 		seg, _ := h.videoService.GetVoiceSegment(sID)
+		h.taskSvc.UpdateProgress(taskID, 90)    //nolint:errcheck
 		h.taskSvc.Complete(taskID, seg) //nolint:errcheck
 	}(task.TaskID, uint(segID), req.NarrationVoice)
 

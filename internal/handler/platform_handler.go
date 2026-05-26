@@ -16,6 +16,7 @@ type PlatformHandler struct {
 	videoService   *service.VideoService
 	publishService *service.PlatformPublishService
 	chapterService *service.ChapterService
+	readingService *service.ReadingService
 }
 
 func NewPlatformHandler(novelSvc *service.NovelService, videoSvc *service.VideoService, publishSvc *service.PlatformPublishService) *PlatformHandler {
@@ -28,6 +29,11 @@ func NewPlatformHandler(novelSvc *service.NovelService, videoSvc *service.VideoS
 
 func (h *PlatformHandler) WithChapterService(svc *service.ChapterService) *PlatformHandler {
 	h.chapterService = svc
+	return h
+}
+
+func (h *PlatformHandler) WithReadingService(svc *service.ReadingService) *PlatformHandler {
+	h.readingService = svc
 	return h
 }
 
@@ -187,6 +193,39 @@ func (h *PlatformHandler) GetNovelChapters(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"items": chapters, "total": len(chapters)})
+}
+
+// GetPublishedChapter 获取已发布小说的单章内容（公开）
+// GET /api/v1/platform/novels/:id/chapters/:chapter_no
+func (h *PlatformHandler) GetPublishedChapter(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	chapterNoStr := c.Param("chapter_no")
+	chapterNo, err := strconv.Atoi(chapterNoStr)
+	if err != nil || chapterNo < 1 {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+	if _, err := h.novelService.GetPublicNovel(uint(id)); err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found or not published")
+		return
+	}
+	if h.chapterService == nil {
+		respondErr(c, http.StatusServiceUnavailable, "chapter service not available")
+		return
+	}
+	chapter, err := h.chapterService.GetChapterByNo(uint(id), chapterNo)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	if !chapter.IsPublished {
+		respondErr(c, http.StatusNotFound, "chapter not published")
+		return
+	}
+	respondOK(c, chapter)
 }
 
 // AddNovelComment 发表评论（需 JWT）
@@ -527,6 +566,341 @@ func (h *PlatformHandler) ListPublishRecords(c *gin.Context) {
 		return
 	}
 	respondOK(c, records)
+}
+
+// ─── Chapter Social: Like / Comment ──────────────────────────────────────────
+
+// ToggleChapterLike 章节点赞/取消（需 JWT）
+// POST /api/v1/platform/novels/:id/chapters/:chapter_no/like
+func (h *PlatformHandler) ToggleChapterLike(c *gin.Context) {
+	if h.readingService == nil {
+		respondErr(c, http.StatusServiceUnavailable, "reading service not available")
+		return
+	}
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil || chapterNo < 1 {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+	uid := getUserID(c)
+	if uid == 0 {
+		respondErr(c, http.StatusUnauthorized, "login required")
+		return
+	}
+	if h.chapterService == nil {
+		respondErr(c, http.StatusServiceUnavailable, "chapter service not available")
+		return
+	}
+	chapter, err := h.chapterService.GetChapterByNo(uint(novelID), chapterNo)
+	if err != nil || !chapter.IsPublished {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	liked, likeCount, err := h.readingService.ToggleChapterLike(chapter.ID, uint(novelID), uid)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"liked": liked, "like_count": likeCount})
+}
+
+// ListChapterComments 获取章节评论列表（公开）
+// GET /api/v1/platform/novels/:id/chapters/:chapter_no/comments
+func (h *PlatformHandler) ListChapterComments(c *gin.Context) {
+	if h.readingService == nil {
+		respondErr(c, http.StatusServiceUnavailable, "reading service not available")
+		return
+	}
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil || chapterNo < 1 {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+	if h.chapterService == nil {
+		respondErr(c, http.StatusServiceUnavailable, "chapter service not available")
+		return
+	}
+	chapter, err := h.chapterService.GetChapterByNo(uint(novelID), chapterNo)
+	if err != nil || !chapter.IsPublished {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	pg := parsePagination(c)
+	page, pageSize := pg.Page, pg.PageSize
+	list, total, err := h.readingService.ListChapterComments(chapter.ID, page, pageSize)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"items": list, "total": total, "page": page, "page_size": pageSize})
+}
+
+// AddChapterComment 发表章节评论（需 JWT）
+// POST /api/v1/platform/novels/:id/chapters/:chapter_no/comments
+func (h *PlatformHandler) AddChapterComment(c *gin.Context) {
+	if h.readingService == nil {
+		respondErr(c, http.StatusServiceUnavailable, "reading service not available")
+		return
+	}
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil || chapterNo < 1 {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+	uid := getUserID(c)
+	if uid == 0 {
+		respondErr(c, http.StatusUnauthorized, "login required")
+		return
+	}
+	if h.chapterService == nil {
+		respondErr(c, http.StatusServiceUnavailable, "chapter service not available")
+		return
+	}
+	chapter, err := h.chapterService.GetChapterByNo(uint(novelID), chapterNo)
+	if err != nil || !chapter.IsPublished {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	var req struct {
+		Content  string `json:"content" binding:"required"`
+		ParentID *uint  `json:"parent_id"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "content is required")
+		return
+	}
+	nickname := ""
+	if n, exists := c.Get("nickname"); exists {
+		if s, ok2 := n.(string); ok2 {
+			nickname = s
+		}
+	}
+	comment, err := h.readingService.AddChapterComment(chapter.ID, uint(novelID), uid, nickname, req.Content, req.ParentID)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	c.JSON(http.StatusCreated, gin.H{"code": 0, "data": comment})
+}
+
+// DeleteChapterComment 删除章节评论（作者本人）
+// DELETE /api/v1/platform/novels/:id/chapters/:chapter_no/comments/:cid
+func (h *PlatformHandler) DeleteChapterComment(c *gin.Context) {
+	if h.readingService == nil {
+		respondErr(c, http.StatusServiceUnavailable, "reading service not available")
+		return
+	}
+	cid, ok := parseID(c, "cid")
+	if !ok {
+		return
+	}
+	uid := getUserID(c)
+	if uid == 0 {
+		respondErr(c, http.StatusUnauthorized, "login required")
+		return
+	}
+	if err := h.readingService.DeleteChapterComment(uint(cid), uid); err != nil {
+		if errors.Is(err, service.ErrChapterCommentPermission) {
+			respondErr(c, http.StatusForbidden, "permission denied")
+		} else {
+			respondErr(c, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	respondOK(c, gin.H{"deleted": true})
+}
+
+// ─── Reading Progress ─────────────────────────────────────────────────────────
+
+// SaveReadingProgress 保存阅读进度（需 JWT）
+// PUT /api/v1/platform/novels/:id/progress
+func (h *PlatformHandler) SaveReadingProgress(c *gin.Context) {
+	if h.readingService == nil {
+		respondErr(c, http.StatusServiceUnavailable, "reading service not available")
+		return
+	}
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	uid := getUserID(c)
+	if uid == 0 {
+		respondErr(c, http.StatusUnauthorized, "login required")
+		return
+	}
+	var req struct {
+		ChapterNo int  `json:"chapter_no" binding:"required,min=1"`
+		ChapterID uint `json:"chapter_id" binding:"required"`
+		ScrollPct int  `json:"scroll_pct"` // 0-100
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	if req.ScrollPct < 0 {
+		req.ScrollPct = 0
+	}
+	if req.ScrollPct > 100 {
+		req.ScrollPct = 100
+	}
+	if err := h.readingService.SaveProgress(uid, uint(novelID), req.ChapterNo, req.ChapterID, req.ScrollPct); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"saved": true})
+}
+
+// GetReadingProgress 获取阅读进度（需 JWT）
+// GET /api/v1/platform/novels/:id/progress
+func (h *PlatformHandler) GetReadingProgress(c *gin.Context) {
+	if h.readingService == nil {
+		respondErr(c, http.StatusServiceUnavailable, "reading service not available")
+		return
+	}
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	uid := getUserID(c)
+	if uid == 0 {
+		respondErr(c, http.StatusUnauthorized, "login required")
+		return
+	}
+	prog, err := h.readingService.GetProgress(uid, uint(novelID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, prog) // nil → null in JSON
+}
+
+// GetReadChapters 获取用户在某小说中已读的章节 ID 列表（需 JWT）
+// GET /api/v1/platform/novels/:id/read-chapters
+func (h *PlatformHandler) GetReadChapters(c *gin.Context) {
+	if h.readingService == nil {
+		respondErr(c, http.StatusServiceUnavailable, "reading service not available")
+		return
+	}
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	uid := getUserID(c)
+	if uid == 0 {
+		respondErr(c, http.StatusUnauthorized, "login required")
+		return
+	}
+	ids, err := h.readingService.GetReadChapterIDs(uid, uint(novelID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if ids == nil {
+		ids = []uint{}
+	}
+	respondOK(c, gin.H{"chapter_ids": ids})
+}
+
+// GetReadingHistory 获取当前用户阅读历史（需 JWT）
+// GET /api/v1/platform/me/reading-history
+func (h *PlatformHandler) GetReadingHistory(c *gin.Context) {
+	if h.readingService == nil {
+		respondErr(c, http.StatusServiceUnavailable, "reading service not available")
+		return
+	}
+	uid := getUserID(c)
+	if uid == 0 {
+		respondErr(c, http.StatusUnauthorized, "login required")
+		return
+	}
+	pg := parsePagination(c)
+	page, pageSize := pg.Page, pg.PageSize
+	list, total, err := h.readingService.GetReadHistory(uid, page, pageSize)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"items": list, "total": total, "page": page, "page_size": pageSize})
+}
+
+// MarkChapterRead 标记章节已读（需 JWT，打开章节时调用）
+// POST /api/v1/platform/novels/:id/chapters/:chapter_no/read
+func (h *PlatformHandler) MarkChapterRead(c *gin.Context) {
+	if h.readingService == nil {
+		respondOK(c, gin.H{"marked": false})
+		return
+	}
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil || chapterNo < 1 {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+	uid := getUserID(c)
+	if uid == 0 {
+		respondErr(c, http.StatusUnauthorized, "login required")
+		return
+	}
+	if h.chapterService == nil {
+		respondOK(c, gin.H{"marked": false})
+		return
+	}
+	chapter, err := h.chapterService.GetChapterByNo(uint(novelID), chapterNo)
+	if err != nil || !chapter.IsPublished {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	_ = h.readingService.MarkChapterRead(uid, chapter.ID, uint(novelID))
+	respondOK(c, gin.H{"marked": true})
+}
+
+// GetChapterIsLiked 获取当前用户是否已点赞某章节（需 JWT）
+// GET /api/v1/platform/novels/:id/chapters/:chapter_no/like
+func (h *PlatformHandler) GetChapterIsLiked(c *gin.Context) {
+	if h.readingService == nil {
+		respondOK(c, gin.H{"liked": false})
+		return
+	}
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil || chapterNo < 1 {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+	uid := getUserID(c)
+	if uid == 0 {
+		respondOK(c, gin.H{"liked": false})
+		return
+	}
+	if h.chapterService == nil {
+		respondOK(c, gin.H{"liked": false})
+		return
+	}
+	chapter, err := h.chapterService.GetChapterByNo(uint(novelID), chapterNo)
+	if err != nil {
+		respondOK(c, gin.H{"liked": false})
+		return
+	}
+	liked := h.readingService.IsChapterLiked(chapter.ID, uid)
+	respondOK(c, gin.H{"liked": liked})
 }
 
 // getUserID 从 JWT claims 提取用户 ID（未登录返回 0）

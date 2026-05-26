@@ -334,6 +334,9 @@ type Chapter struct {
 	IsPublished bool       `json:"is_published" gorm:"default:false;index"`
 	PublishedAt *time.Time `json:"published_at"`
 
+	// 广场社交数据
+	LikeCount int `json:"like_count" gorm:"default:0"`
+
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -978,6 +981,54 @@ type NovelComment struct {
 }
 
 func (NovelComment) TableName() string { return "ink_novel_comment" }
+
+// ChapterLike 章节点赞（ink_chapter_like）复合主键：ChapterID+UserID
+type ChapterLike struct {
+	ChapterID uint      `gorm:"primaryKey" json:"chapter_id"`
+	UserID    uint      `gorm:"primaryKey" json:"user_id"`
+	NovelID   uint      `gorm:"index" json:"novel_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (ChapterLike) TableName() string { return "ink_chapter_like" }
+
+// ChapterComment 章节评论（ink_chapter_comment）
+type ChapterComment struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	ChapterID uint      `gorm:"index:idx_chcomment_chapter" json:"chapter_id"`
+	NovelID   uint      `gorm:"index" json:"novel_id"`
+	UserID    uint      `json:"user_id"`
+	Nickname  string    `gorm:"size:100" json:"nickname"`
+	Content   string    `gorm:"size:2000" json:"content"`
+	ParentID  *uint     `json:"parent_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (ChapterComment) TableName() string { return "ink_chapter_comment" }
+
+// ReadingProgress 用户阅读进度（ink_reading_progress）每用户每小说一条
+type ReadingProgress struct {
+	UserID    uint      `gorm:"uniqueIndex:idx_rp_user_novel;not null" json:"user_id"`
+	NovelID   uint      `gorm:"uniqueIndex:idx_rp_user_novel;not null" json:"novel_id"`
+	ChapterNo int       `json:"chapter_no"`
+	ChapterID uint      `json:"chapter_id"`
+	ScrollPct int       `json:"scroll_pct"` // 0-100 阅读进度百分比
+	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (ReadingProgress) TableName() string { return "ink_reading_progress" }
+
+// ChapterReadRecord 章节已读标记（ink_chapter_read_record）复合主键
+type ChapterReadRecord struct {
+	UserID    uint      `gorm:"primaryKey" json:"user_id"`
+	ChapterID uint      `gorm:"primaryKey" json:"chapter_id"`
+	NovelID   uint      `gorm:"index" json:"novel_id"`
+	ReadAt    time.Time `json:"read_at"`
+}
+
+func (ChapterReadRecord) TableName() string { return "ink_chapter_read_record" }
 
 // PlatformAccount 外部平台账号绑定
 type PlatformAccount struct {

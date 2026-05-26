@@ -144,7 +144,8 @@ func (h *VideoHandler) ReviewStoryboard(c *gin.Context) {
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 
 		review, recordID, reviewErr := h.storyboardService.ReviewStoryboard(tenantID, uint(videoId), req.Provider, req.PreviousScore)
 		if reviewErr != nil {
@@ -157,6 +158,7 @@ func (h *VideoHandler) ReviewStoryboard(c *gin.Context) {
 			*model.StoryboardReview
 			RecordID uint `json:"record_id,omitempty"`
 		}
+		h.taskSvc.UpdateProgress(taskID, 90)                                                      //nolint:errcheck
 		h.taskSvc.Complete(taskID, &reviewResult{StoryboardReview: review, RecordID: recordID}) //nolint:errcheck
 	}(task.TaskID)
 
@@ -312,7 +314,8 @@ func (h *VideoHandler) OptimizeStoryboardFromReview(c *gin.Context) {
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 
 		count, optErr := h.storyboardService.OptimizeStoryboardFromReview(tenantID, uint(videoID), &review, provider)
 		if optErr != nil {
@@ -320,6 +323,7 @@ func (h *VideoHandler) OptimizeStoryboardFromReview(c *gin.Context) {
 			h.taskSvc.Fail(taskID, optErr.Error()) //nolint:errcheck
 			return
 		}
+		h.taskSvc.UpdateProgress(taskID, 90)                              //nolint:errcheck
 		h.taskSvc.Complete(taskID, gin.H{"updated_shots": count}) //nolint:errcheck
 	}(task.TaskID)
 

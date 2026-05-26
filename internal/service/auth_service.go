@@ -232,6 +232,43 @@ func (s *AuthService) GetUserByID(id uint) (*model.User, error) {
 	return s.userRepo.GetByID(id)
 }
 
+// UpdateProfile 更新用户资料（昵称、邮箱、头像）
+func (s *AuthService) UpdateProfile(userID uint, nickname, email, avatar string) (*model.User, error) {
+	updates := map[string]interface{}{}
+	if nickname != "" {
+		updates["nickname"] = nickname
+	}
+	if email != "" {
+		updates["email"] = email
+	}
+	if avatar != "" {
+		updates["avatar"] = avatar
+	}
+	if len(updates) == 0 {
+		return s.userRepo.GetByID(userID)
+	}
+	if err := s.userRepo.UpdateProfile(userID, updates); err != nil {
+		return nil, err
+	}
+	return s.userRepo.GetByID(userID)
+}
+
+// ChangePassword 修改密码
+func (s *AuthService) ChangePassword(userID uint, oldPwd, newPwd string) error {
+	user, err := s.userRepo.GetByID(userID)
+	if err != nil {
+		return err // preserve gorm.ErrRecordNotFound for dev-bypass detection
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(oldPwd)); err != nil {
+		return errors.New("current password is incorrect")
+	}
+	hashed, err := bcrypt.GenerateFromPassword([]byte(newPwd), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash password: %w", err)
+	}
+	return s.userRepo.UpdatePassword(userID, string(hashed))
+}
+
 // RegisterWithPhone 手机号注册
 func (s *AuthService) RegisterWithPhone(phone, code, nickname, tenantName string) (*AuthResponse, error) {
 	if s.smsService == nil {

@@ -373,3 +373,11 @@ func (r *StoryboardReviewRecordRepository) GetByID(id uint) (*model.StoryboardRe
 func (r *StoryboardReviewRecordRepository) Update(rec *model.StoryboardReviewRecord) error {
 	return r.db.Save(rec).Error
 }
+
+// GetLatestApplied 获取该视频最近一条已应用（status=applied）的审查记录
+func (r *StoryboardReviewRecordRepository) GetLatestApplied(videoID uint) (*model.StoryboardReviewRecord, error) {
+	var rec model.StoryboardReviewRecord
+	err := r.db.Where("video_id = ? AND status = ?", videoID, "applied").
+		Order("id DESC").First(&rec).Error
+	return &rec, err
+}

@@ -76,6 +76,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		public.GET("/platform/novels/:id", cfg.PlatformHandler.GetPlatformNovel)
 		public.POST("/platform/novels/:id/view", cfg.PlatformHandler.RecordNovelView)
 		public.GET("/platform/novels/:id/chapters", cfg.PlatformHandler.GetNovelChapters)
+		public.GET("/platform/novels/:id/chapters/:chapter_no", cfg.PlatformHandler.GetPublishedChapter)
+		public.GET("/platform/novels/:id/chapters/:chapter_no/comments", cfg.PlatformHandler.ListChapterComments)
 		public.GET("/platform/novels/:id/comments", cfg.PlatformHandler.ListNovelComments)
 	}
 
@@ -97,8 +99,10 @@ func SetupRouter(cfg *Config) *gin.Engine {
 	v1.Use(middleware.RateLimit(60, 10))
 	v1.Use(middleware.NewAuth(cfg.JWTSecret))
 	{
-		// 当前用户信息
+		// 当前用户信息 & 资料管理
 		v1.GET("/auth/me", cfg.AuthHandler.GetCurrentUser)
+		v1.PUT("/auth/me", cfg.AuthHandler.UpdateProfile)
+		v1.PUT("/auth/me/password", cfg.AuthHandler.ChangePassword)
 
 		// 统一异步任务
 		if cfg.TaskHandler != nil {
@@ -155,6 +159,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.GET("/:id/chapters", cfg.ChapterHandler.ListChapters)
 			novels.POST("/:id/chapters", cfg.ChapterHandler.CreateChapter)
 			novels.POST("/:id/chapters/batch-summarize", cfg.ChapterHandler.BatchSummarizeChapters)
+			novels.POST("/:id/chapters/batch-publish", cfg.ChapterHandler.BatchPublishChapters)
 			novels.GET("/:id/chapters/:chapter_no", cfg.ChapterHandler.GetChapterByNo)
 			novels.PUT("/:id/chapters/:chapter_no", cfg.ChapterHandler.UpdateChapterByNo)
 			novels.DELETE("/:id/chapters/:chapter_no", cfg.ChapterHandler.DeleteChapterByNo)
@@ -519,6 +524,18 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				platformR.POST("/novels/:id/like", cfg.PlatformHandler.ToggleNovelLike)
 				platformR.POST("/novels/:id/comments", cfg.PlatformHandler.AddNovelComment)
 				platformR.DELETE("/novels/:id/comments/:cid", cfg.PlatformHandler.DeleteNovelComment)
+				// 章节社交
+				platformR.POST("/novels/:id/chapters/:chapter_no/like", cfg.PlatformHandler.ToggleChapterLike)
+				platformR.GET("/novels/:id/chapters/:chapter_no/like", cfg.PlatformHandler.GetChapterIsLiked)
+				platformR.POST("/novels/:id/chapters/:chapter_no/comments", cfg.PlatformHandler.AddChapterComment)
+				platformR.DELETE("/novels/:id/chapters/:chapter_no/comments/:cid", cfg.PlatformHandler.DeleteChapterComment)
+				platformR.POST("/novels/:id/chapters/:chapter_no/read", cfg.PlatformHandler.MarkChapterRead)
+				// 阅读进度
+				platformR.PUT("/novels/:id/progress", cfg.PlatformHandler.SaveReadingProgress)
+				platformR.GET("/novels/:id/progress", cfg.PlatformHandler.GetReadingProgress)
+				platformR.GET("/novels/:id/read-chapters", cfg.PlatformHandler.GetReadChapters)
+				// 阅读历史
+				platformR.GET("/me/reading-history", cfg.PlatformHandler.GetReadingHistory)
 				platformR.GET("/accounts", cfg.PlatformHandler.ListAccounts)
 				platformR.GET("/accounts/oauth/:platform", cfg.PlatformHandler.ConnectAccount)
 				platformR.GET("/accounts/callback/:platform", cfg.PlatformHandler.OAuthCallback)

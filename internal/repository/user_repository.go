@@ -43,6 +43,15 @@ func (r *UserRepository) UpdateLastLogin(id uint) error {
 		Update("last_login_at", time.Now()).Error
 }
 
+func (r *UserRepository) UpdateProfile(id uint, updates map[string]interface{}) error {
+	return r.db.Model(&model.User{}).Where("id = ?", id).Updates(updates).Error
+}
+
+func (r *UserRepository) UpdatePassword(id uint, hashed string) error {
+	return r.db.Model(&model.User{}).Where("id = ?", id).
+		Update("password", hashed).Error
+}
+
 func (r *UserRepository) GetByPhone(phone string) (*model.User, error) {
 	var user model.User
 	err := r.db.Where("phone = ?", phone).First(&user).Error

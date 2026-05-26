@@ -140,6 +140,80 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 	})
 }
 
+// UpdateProfile 更新当前用户资料
+// PUT /api/v1/auth/me
+func (h *AuthHandler) UpdateProfile(c *gin.Context) {
+	userIDVal, exists := c.Get("user_id")
+	if !exists {
+		respondErr(c, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	userID := userIDVal.(uint)
+
+	var req struct {
+		Nickname string `json:"nickname"`
+		Email    string `json:"email"`
+		Avatar   string `json:"avatar"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+
+	user, err := h.authService.UpdateProfile(userID, req.Nickname, req.Email, req.Avatar)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Dev bypass mode: no actual user record in DB; echo back the requested values.
+			respondOK(c, gin.H{
+				"user_id":  userID,
+				"username": "dev",
+				"nickname": req.Nickname,
+				"avatar":   req.Avatar,
+				"email":    req.Email,
+			})
+			return
+		}
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{
+		"user_id":  user.ID,
+		"username": user.Username,
+		"nickname": user.Nickname,
+		"avatar":   user.Avatar,
+		"email":    user.Email,
+	})
+}
+
+// ChangePassword 修改当前用户密码
+// PUT /api/v1/auth/me/password
+func (h *AuthHandler) ChangePassword(c *gin.Context) {
+	userIDVal, exists := c.Get("user_id")
+	if !exists {
+		respondErr(c, http.StatusUnauthorized, "not authenticated")
+		return
+	}
+	userID := userIDVal.(uint)
+
+	var req struct {
+		OldPassword string `json:"old_password" binding:"required"`
+		NewPassword string `json:"new_password" binding:"required,min=8"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+
+	if err := h.authService.ChangePassword(userID, req.OldPassword, req.NewPassword); err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Dev bypass mode: no actual user record in DB.
+			respondOK(c, gin.H{"changed": true})
+			return
+		}
+		respondErr(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"changed": true})
+}
+
 // SendSMSCode 发送短信验证码
 // POST /api/v1/auth/sms/send
 func (h *AuthHandler) SendSMSCode(c *gin.Context) {

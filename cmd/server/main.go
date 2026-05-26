@@ -1101,6 +1101,11 @@ func autoMigrate(db *gorm.DB) error {
 		&model.VideoComment{},
 		&model.NovelLike{},
 		&model.NovelComment{},
+		// 章节社交 & 阅读进度
+		&model.ChapterLike{},
+		&model.ChapterComment{},
+		&model.ReadingProgress{},
+		&model.ChapterReadRecord{},
 	); err != nil {
 		return err
 	}
@@ -1409,6 +1414,10 @@ type Repositories struct {
 	VideoCommentRepo        *repository.VideoCommentRepository
 	NovelLikeRepo           *repository.NovelLikeRepository
 	NovelCommentRepo        *repository.NovelCommentRepository
+	ChapterLikeRepo         *repository.ChapterLikeRepository
+	ChapterCommentRepo      *repository.ChapterCommentRepository
+	ReadingProgressRepo     *repository.ReadingProgressRepository
+	ChapterReadRecordRepo   *repository.ChapterReadRecordRepository
 }
 
 // initRepositories 初始化仓库层
@@ -1470,6 +1479,10 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		VideoCommentRepo:      repository.NewVideoCommentRepository(db),
 		NovelLikeRepo:         repository.NewNovelLikeRepository(db),
 		NovelCommentRepo:      repository.NewNovelCommentRepository(db),
+		ChapterLikeRepo:       repository.NewChapterLikeRepository(db),
+		ChapterCommentRepo:    repository.NewChapterCommentRepository(db),
+		ReadingProgressRepo:   repository.NewReadingProgressRepository(db),
+		ChapterReadRecordRepo: repository.NewChapterReadRecordRepository(db),
 	}
 }
 
@@ -1523,6 +1536,7 @@ type Services struct {
 	RewriteService              *service.RewriteService
 	PlatformPublishService      *service.PlatformPublishService
 	AssetService                *service.AssetService
+	ReadingService              *service.ReadingService
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -1862,6 +1876,14 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 			repos.TenantQuotaRepo,
 			core.Task,
 		),
+		// ── Reading / Chapter Social ──
+		ReadingService: service.NewReadingService(
+			repos.ChapterLikeRepo,
+			repos.ChapterCommentRepo,
+			repos.ReadingProgressRepo,
+			repos.ChapterReadRecordRepo,
+			repos.ChapterRepo,
+		),
 	}
 }
 
@@ -1945,7 +1967,8 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		FsHandler:     handler.NewFsHandler(),
 		RewriteHandler: handler.NewRewriteHandler(services.RewriteService),
 		PlatformHandler: handler.NewPlatformHandler(services.NovelService, services.VideoService, services.PlatformPublishService).
-			WithChapterService(services.ChapterService),
+			WithChapterService(services.ChapterService).
+			WithReadingService(services.ReadingService),
 		AssetHandler:    handler.NewAssetHandler(services.AssetService),
 	}
 }
