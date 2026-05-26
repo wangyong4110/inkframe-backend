@@ -1962,10 +1962,13 @@ type ChapterRewriteTask struct {
 	SemanticSim      float64   `json:"semantic_sim" gorm:"default:0"`
 	StructuralSim    float64   `json:"structural_sim" gorm:"default:0"`
 	Passed           bool      `json:"passed" gorm:"default:false"`
-	RetryCount       int       `json:"retry_count" gorm:"default:0"`
-	ErrorMsg         string    `json:"error_msg" gorm:"size:500"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	RetryCount        int       `json:"retry_count" gorm:"default:0"`
+	ErrorMsg          string    `json:"error_msg" gorm:"size:500"`
+	QualityScore      float64   `json:"quality_score" gorm:"default:0"`
+	DeaiApplied       bool      `json:"deai_applied" gorm:"default:false"`
+	ConsistencyIssues string    `json:"consistency_issues" gorm:"size:1000"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 func (ChapterRewriteTask) TableName() string { return "ink_chapter_rewrite_task" }

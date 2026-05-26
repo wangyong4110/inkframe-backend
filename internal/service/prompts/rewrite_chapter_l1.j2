@@ -12,6 +12,10 @@
 {{ PrevContext }}
 
 {% endif %}
+{% if ArcStage %}
+【叙事位置】本章在全书中处于「{{ ArcStage }}」阶段，改写时请保持与该阶段相符的情绪基调与叙事节奏。
+
+{% endif %}
 【原始章节】
 {{ OriginalContent }}
 
@@ -27,5 +31,9 @@
 7. 调整叙事视角和语气，符合文风指南
 8. 最终文本与原文相似度必须<{{ SimilarityLimit }}
 9. 目标字数：{{ TargetWords }}字左右（允许±20%浮动，不得随意扩写或大幅压缩原文篇幅）
+
+{% if RetryHint %}
+【特别注意 - 改写要求升级】{{ RetryHint }}
+{% endif %}
 
 直接输出改写后的章节正文，不要解释。

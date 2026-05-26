@@ -62,8 +62,9 @@ func renderRewriteTemplate(name string, data interface{}) (string, error) {
 	return renderPrompt(name, ctx)
 }
 
-// stratifiedSample picks up to maxSamples chapters spread evenly across the full list.
-// Captures early / mid / late narrative styles rather than only the first N chapters.
+// stratifiedSample picks up to maxSamples chapters at 7 semantic positions:
+// 0 / 0.15 / 0.35 / 0.55 / 0.75 / 0.90 / 1.0
+// This captures early, early-mid, mid, late-mid, late, near-end, and final style layers.
 func stratifiedSample(chapters []*model.Chapter, maxSamples int) []*model.Chapter {
 	n := len(chapters)
 	if n == 0 {
@@ -72,10 +73,25 @@ func stratifiedSample(chapters []*model.Chapter, maxSamples int) []*model.Chapte
 	if n <= maxSamples {
 		return chapters
 	}
+
+	// 7-point semantic positions
+	positions := []float64{0, 0.15, 0.35, 0.55, 0.75, 0.90, 1.0}
+	if maxSamples < len(positions) {
+		// fall back to evenly spaced
+		positions = make([]float64, maxSamples)
+		for i := range positions {
+			if maxSamples == 1 {
+				positions[i] = 0
+			} else {
+				positions[i] = float64(i) / float64(maxSamples-1)
+			}
+		}
+	}
+
 	seen := make(map[int]bool)
-	result := make([]*model.Chapter, 0, maxSamples)
-	for i := 0; i < maxSamples; i++ {
-		idx := int(float64(i)/float64(maxSamples-1)*float64(n-1) + 0.5)
+	result := make([]*model.Chapter, 0, len(positions))
+	for _, p := range positions {
+		idx := int(p*float64(n-1) + 0.5)
 		if idx >= n {
 			idx = n - 1
 		}
@@ -106,12 +122,124 @@ func extractCoreElements(content string, level int) string {
 	return begin + "\n[...中段...]\n" + mid + "\n[...末段...]\n" + end
 }
 
-// buildPrevContext formats recent rewritten chapter excerpts as a continuity block for the AI.
-func buildPrevContext(recent []string) string {
+// recentChapterInfo holds the opening and closing excerpts of a recently-rewritten chapter
+// for richer narrative continuity injection.
+type recentChapterInfo struct {
+	ChapterNo int
+	Opening   string // first 250 runes
+	Closing   string // last 200 runes
+}
+
+// buildRichPrevContext formats recent rewritten chapter info (opening + closing) as a
+// continuity block for the AI. This gives the model both the start AND end state of
+// prior chapters, helping it maintain character arcs and avoid narrative loops.
+func buildRichPrevContext(recent []recentChapterInfo) string {
 	if len(recent) == 0 {
 		return ""
 	}
-	return "【前文已改写内容摘要（保持叙事连贯，角色状态以此为准）】\n" + strings.Join(recent, "\n")
+	var sb strings.Builder
+	sb.WriteString("【前文已改写内容摘要（保持叙事连贯，角色状态以此为准）】\n")
+	for _, r := range recent {
+		sb.WriteString(fmt.Sprintf("第%d章 开头：%s\n      末尾：%s\n", r.ChapterNo, r.Opening, r.Closing))
+	}
+	return sb.String()
+}
+
+// emotionalArcStage maps a chapter's position in the full novel to a human-readable
+// narrative stage label. Used to help the AI maintain tonal coherence.
+func emotionalArcStage(chapterNo, total int) string {
+	if total <= 0 {
+		return ""
+	}
+	ratio := float64(chapterNo) / float64(total)
+	switch {
+	case ratio < 0.12:
+		return "开篇建立期（世界观铺垫，人物登场）"
+	case ratio < 0.30:
+		return "矛盾上升期（冲突萌芽，关系确立）"
+	case ratio < 0.50:
+		return "发展深化期（情节推进，张力积累）"
+	case ratio < 0.70:
+		return "高潮酝酿期（危机激化，情感爆发前夕）"
+	case ratio < 0.85:
+		return "高潮决战期（核心冲突爆发，命运转折）"
+	case ratio < 0.95:
+		return "收束期（余波平息，伏笔揭晓）"
+	default:
+		return "终章（主题升华，情感落幕）"
+	}
+}
+
+// checkConsistency scans the rewritten text for original character names and forbidden
+// elements that must NOT appear in the rewrite. Returns a list of violation descriptions.
+// This is a rule-based check with no AI call required.
+func checkConsistency(rewritten string, bible *model.RewriteBible) []string {
+	var issues []string
+
+	// Parse new char name map to find original names (keys)
+	if bible.NewCharNames != "" && bible.NewCharNames != "null" {
+		var nameMap map[string]string
+		if err := json.Unmarshal([]byte(bible.NewCharNames), &nameMap); err == nil {
+			for origName := range nameMap {
+				if origName != "" && strings.Contains(rewritten, origName) {
+					issues = append(issues, fmt.Sprintf("原著角色名残留：「%s」", origName))
+				}
+			}
+		}
+	}
+
+	// Parse forbidden elements array/object
+	if bible.ForbiddenElems != "" && bible.ForbiddenElems != "null" && bible.ForbiddenElems != "[]" {
+		var forbidden []string
+		if err := json.Unmarshal([]byte(bible.ForbiddenElems), &forbidden); err == nil {
+			for _, elem := range forbidden {
+				if elem != "" && len([]rune(elem)) >= 4 && strings.Contains(rewritten, elem) {
+					issues = append(issues, fmt.Sprintf("禁止元素残留：「%s」", elem))
+				}
+			}
+		}
+	}
+
+	return issues
+}
+
+// calculateHeuristicQuality returns a 0-100 quality score without any AI calls.
+// It combines:
+//   - Similarity penalty: high similarity → lower score
+//   - Word-count ratio: too short or too long → penalty
+//   - Consistency penalty: each violation deducts points
+func calculateHeuristicQuality(lexSim, structSim float64, origLen, rewLen int, issues []string) float64 {
+	// Base score from similarity (lower sim = better rewrite divergence)
+	avgSim := (lexSim + structSim) / 2
+	simScore := (1.0 - avgSim) * 60 // max 60 points
+
+	// Word-count ratio score (max 30 points)
+	var ratioScore float64
+	if origLen > 0 {
+		ratio := float64(rewLen) / float64(origLen)
+		// Ideal range 0.8-1.2
+		if ratio >= 0.8 && ratio <= 1.2 {
+			ratioScore = 30
+		} else if ratio >= 0.6 && ratio < 0.8 {
+			ratioScore = 30 * (ratio - 0.6) / 0.2
+		} else if ratio > 1.2 && ratio <= 1.5 {
+			ratioScore = 30 * (1.5 - ratio) / 0.3
+		} else {
+			ratioScore = 0
+		}
+	}
+
+	// Consistency penalty (max -10 per issue, capped at 10 points total deduction)
+	consistencyPenalty := math.Min(float64(len(issues))*10, 10)
+
+	score := simScore + ratioScore - consistencyPenalty
+	if score < 0 {
+		score = 0
+	}
+	if score > 100 {
+		score = 100
+	}
+	return math.Round(score*10) / 10
 }
 
 // splitSentences splits Chinese text into sentence units by end-of-sentence punctuation.
@@ -284,9 +412,8 @@ func (s *RewriteService) runAnalysis(ctx context.Context, taskID string, project
 		return fmt.Errorf("get chapters: %w", err)
 	}
 
-	// FIX: stratified sampling — up to 5 chapters spread across the full novel
-	// (previously only took the first 3, missing mid/late narrative style)
-	sampled := stratifiedSample(chapters, 5)
+	// 7-point stratified sampling across the full novel
+	sampled := stratifiedSample(chapters, 7)
 	var sampleContent strings.Builder
 	for _, ch := range sampled {
 		sampleContent.WriteString(ch.Content)
@@ -353,7 +480,7 @@ func (s *RewriteService) runAnalysis(ctx context.Context, taskID string, project
 func (s *RewriteService) generateBible(ctx context.Context, taskID string, project *model.RewriteProject, analysis *model.LiteraryAnalysis, novel *model.Novel) error {
 	_ = novel
 
-	// FIX: each analysis field is already a JSON string; unmarshal first so the
+	// each analysis field is already a JSON string; unmarshal first so the
 	// combined payload contains nested objects, not doubly-escaped strings.
 	toObj := func(raw string) interface{} {
 		var v interface{}
@@ -500,6 +627,21 @@ func (s *RewriteService) StartRewriting(tenantID, projectID uint) (string, error
 
 const maxChapterRetries = 2
 
+// retryHints provides progressively stronger retry instructions when similarity is too high.
+var retryHints = []string{
+	"", // attempt 0 — no hint
+	"上次改写相似度过高，请采用更大幅度文学变形：更换叙事视角（如从第三人称改为第一人称内心独白）、打乱场景顺序、将对话转为心理描写，彻底改变句式结构。",
+	"前两次均未达标，请完全重构叙事视角与表达方式：抛弃原文一切表层描述，只保留核心情感逻辑，用截然不同的故事形式（如倒叙、片段化意识流、书信体）重新承载相同的戏剧张力。",
+}
+
+// rewriteResult holds the outcome of a single chapter rewrite attempt.
+type rewriteResult struct {
+	Content   string
+	LexSim    float64
+	StructSim float64
+	Passed    bool
+}
+
 func (s *RewriteService) runRewriting(ctx context.Context, taskID string, project *model.RewriteProject) error {
 	s.projectRepo.UpdateStatus(project.ID, "rewriting", "")
 
@@ -515,9 +657,8 @@ func (s *RewriteService) runRewriting(ctx context.Context, taskID string, projec
 
 	done := 0
 	total := len(tasks)
-	// recentContext holds short excerpts of the last 3 rewritten chapters,
-	// passed to each subsequent chapter so the AI maintains narrative continuity.
-	var recentContext []string
+	// recentContext holds opening+closing excerpts of the last 3 rewritten chapters.
+	var recentContext []recentChapterInfo
 
 	for _, task := range tasks {
 		if ctx.Err() != nil {
@@ -530,8 +671,10 @@ func (s *RewriteService) runRewriting(ctx context.Context, taskID string, projec
 			continue
 		}
 
-		prevContext := buildPrevContext(recentContext)
-		rewritten, err := s.rewriteChapterWithRetry(ctx, project, bible, task, prevContext)
+		prevContext := buildRichPrevContext(recentContext)
+		arcStage := emotionalArcStage(task.ChapterNo, project.TotalChapters)
+
+		result, err := s.rewriteChapterWithRetry(ctx, project, bible, task, prevContext, arcStage)
 		if err != nil {
 			if ctx.Err() != nil {
 				return fmt.Errorf("task cancelled")
@@ -540,10 +683,56 @@ func (s *RewriteService) runRewriting(ctx context.Context, taskID string, projec
 			// Continue to next chapter — don't abort the whole batch.
 		} else {
 			done++
-			// Append a short excerpt to the rolling context window.
-			r := []rune(rewritten)
-			excerpt := string(r[:min(200, len(r))])
-			recentContext = append(recentContext, fmt.Sprintf("第%d章开头：%s", task.ChapterNo, excerpt))
+
+			// ── Post-processing pipeline ───────────────────────────────────
+			finalContent := result.Content
+
+			// Quality Gate 2: consistency check (rule-based, no AI)
+			issues := checkConsistency(finalContent, bible)
+			issuesJSON := "[]"
+			if len(issues) > 0 {
+				if b, err := json.Marshal(issues); err == nil {
+					issuesJSON = string(b)
+				}
+				logger.Printf("[Rewrite] chapter %d consistency issues: %v", task.ChapterNo, issues)
+			}
+
+			// De-AI pass for Level 2+ (non-fatal)
+			deaiApplied := false
+			if project.Level >= 2 {
+				if polished := s.deAIPass(ctx, project, finalContent, bible); polished != "" {
+					finalContent = polished
+					deaiApplied = true
+					logger.Printf("[Rewrite] deAI pass applied for chapter %d", task.ChapterNo)
+				}
+			}
+
+			// Quality Gate 3: heuristic quality score (no AI)
+			origLen := len([]rune(task.OriginalContent))
+			rewLen := len([]rune(finalContent))
+			qualityScore := calculateHeuristicQuality(result.LexSim, result.StructSim, origLen, rewLen, issues)
+			logger.Printf("[Rewrite] chapter %d quality_score=%.1f deai=%v", task.ChapterNo, qualityScore, deaiApplied)
+
+			// Persist final content + metadata
+			if err := s.chapterTaskRepo.UpdatePostProcess(task.ID, finalContent, qualityScore, deaiApplied, issuesJSON); err != nil {
+				logger.Printf("[Rewrite] UpdatePostProcess chapter %d: %v", task.ChapterNo, err)
+			}
+
+			// Build rolling rich context from final content
+			runes := []rune(finalContent)
+			n := len(runes)
+			opening := string(runes[:min(250, n)])
+			closing := ""
+			if n > 200 {
+				closing = string(runes[n-200:])
+			} else {
+				closing = string(runes)
+			}
+			recentContext = append(recentContext, recentChapterInfo{
+				ChapterNo: task.ChapterNo,
+				Opening:   opening,
+				Closing:   closing,
+			})
 			if len(recentContext) > 3 {
 				recentContext = recentContext[1:]
 			}
@@ -554,17 +743,29 @@ func (s *RewriteService) runRewriting(ctx context.Context, taskID string, projec
 	return s.projectRepo.UpdateStatus(project.ID, "completed", "")
 }
 
-// rewriteChapterWithRetry retries rewriteChapter up to maxChapterRetries times on error.
+// rewriteChapterWithRetry retries rewriteChapter up to maxChapterRetries times.
+// On similarity-too-high failures it passes progressively stronger retry hints.
 // On exhaustion it marks the chapter task as failed and returns the last error.
-func (s *RewriteService) rewriteChapterWithRetry(ctx context.Context, project *model.RewriteProject, bible *model.RewriteBible, task *model.ChapterRewriteTask, prevContext string) (string, error) {
+func (s *RewriteService) rewriteChapterWithRetry(
+	ctx context.Context,
+	project *model.RewriteProject,
+	bible *model.RewriteBible,
+	task *model.ChapterRewriteTask,
+	prevContext string,
+	arcStage string,
+) (*rewriteResult, error) {
 	var lastErr error
 	for attempt := 0; attempt <= maxChapterRetries; attempt++ {
 		if ctx.Err() != nil {
-			return "", ctx.Err()
+			return nil, ctx.Err()
 		}
-		rewritten, err := s.rewriteChapter(ctx, project, bible, task, prevContext)
+		hint := ""
+		if attempt < len(retryHints) {
+			hint = retryHints[attempt]
+		}
+		res, err := s.rewriteChapter(ctx, project, bible, task, prevContext, arcStage, hint, attempt)
 		if err == nil {
-			return rewritten, nil
+			return res, nil
 		}
 		lastErr = err
 		logger.Printf("[Rewrite] chapter %d attempt %d/%d failed: %v",
@@ -575,7 +776,7 @@ func (s *RewriteService) rewriteChapterWithRetry(ctx context.Context, project *m
 		}
 	}
 	s.chapterTaskRepo.UpdateStatus(task.ID, "failed", lastErr.Error())
-	return "", lastErr
+	return nil, lastErr
 }
 
 type rewriteLevelConfig struct {
@@ -594,9 +795,20 @@ var rewriteLevelConfigs = map[int]rewriteLevelConfig{
 	5: {"rewrite_chapter_l3", "只保留精神内核与情感逻辑，全面重创", "5-20%", "90%", 0.20},
 }
 
-// rewriteChapter runs a single chapter rewrite and stores the result.
-// Returns the rewritten text so the caller can build narrative context.
-func (s *RewriteService) rewriteChapter(ctx context.Context, project *model.RewriteProject, bible *model.RewriteBible, task *model.ChapterRewriteTask, prevContext string) (string, error) {
+// rewriteChapter runs a single chapter rewrite attempt.
+// Returns rewriteResult on success, error on AI failure or similarity threshold exceeded.
+// On success it also persists the raw similarity scores via UpdateRewritten.
+// The caller (rewriteChapterWithRetry) is responsible for the final UpdatePostProcess.
+func (s *RewriteService) rewriteChapter(
+	ctx context.Context,
+	project *model.RewriteProject,
+	bible *model.RewriteBible,
+	task *model.ChapterRewriteTask,
+	prevContext string,
+	arcStage string,
+	retryHint string,
+	attempt int,
+) (*rewriteResult, error) {
 	s.chapterTaskRepo.UpdateStatus(task.ID, "rewriting", "")
 
 	cfg, ok := rewriteLevelConfigs[project.Level]
@@ -604,10 +816,10 @@ func (s *RewriteService) rewriteChapter(ctx context.Context, project *model.Rewr
 		cfg = rewriteLevelConfigs[2]
 	}
 
-	// FIX: Level 4-5 use beginning+middle+end; Level 1-3 use leading excerpt.
+	// Level 4-5 use beginning+middle+end; Level 1-3 use leading excerpt.
 	coreElements := extractCoreElements(task.OriginalContent, project.Level)
 
-	// FIX: pass target word count so AI maintains similar chapter length.
+	// Pass target word count so AI maintains similar chapter length.
 	targetWords := len([]rune(task.OriginalContent))
 
 	prompt, err := renderRewriteTemplate(cfg.Template, map[string]interface{}{
@@ -626,24 +838,64 @@ func (s *RewriteService) rewriteChapter(ctx context.Context, project *model.Rewr
 		"SimilarityLimit": cfg.SimilarityLimit,
 		"TargetWords":     targetWords,
 		"PrevContext":     prevContext,
+		"ArcStage":        arcStage,
+		"RetryHint":       retryHint,
 	})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	rewritten, err := s.aiSvc.GenerateWithProviderCtx(ctx, project.TenantID, project.NovelID, "chapter_gen", prompt, "")
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	lexSim := calculateLexicalSimilarity(task.OriginalContent, rewritten)
 	structSim := calculateStructuralSimilarity(task.OriginalContent, rewritten)
 	passed := lexSim < cfg.LexSimThreshold
 
+	// Persist raw similarity scores immediately
 	if err := s.chapterTaskRepo.UpdateRewritten(task.ID, rewritten, lexSim, structSim, passed); err != nil {
-		return "", err
+		return nil, err
 	}
-	return rewritten, nil
+
+	// Quality Gate 1: if similarity is still too high and we have retries left, signal retry
+	if !passed && attempt < maxChapterRetries {
+		return nil, fmt.Errorf("相似度过高 lexSim=%.3f threshold=%.2f", lexSim, cfg.LexSimThreshold)
+	}
+
+	return &rewriteResult{
+		Content:   rewritten,
+		LexSim:    lexSim,
+		StructSim: structSim,
+		Passed:    passed,
+	}, nil
+}
+
+// deAIPass calls the rewrite_deai template to remove AI writing patterns.
+// Non-fatal: on any error it logs and returns "" so the caller can use the original content.
+func (s *RewriteService) deAIPass(ctx context.Context, project *model.RewriteProject, content string, bible *model.RewriteBible) string {
+	if ctx.Err() != nil {
+		return ""
+	}
+	prompt, err := renderRewriteTemplate("rewrite_deai", map[string]interface{}{
+		"Content":       content,
+		"StyleGuide":    bible.StyleGuide,
+		"VoiceStrategy": bible.VoiceStrategy,
+	})
+	if err != nil {
+		logger.Printf("[Rewrite] deAIPass render: %v", err)
+		return ""
+	}
+	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, project.TenantID, project.NovelID, "chapter_gen", prompt, "")
+	if err != nil {
+		logger.Printf("[Rewrite] deAIPass generate: %v", err)
+		return ""
+	}
+	if strings.TrimSpace(result) == "" {
+		return ""
+	}
+	return result
 }
 
 func (s *RewriteService) updateRewriteProgress(taskID string, projectID uint, done, total int) {

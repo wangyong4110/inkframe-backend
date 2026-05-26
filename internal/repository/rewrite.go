@@ -163,3 +163,14 @@ func (r *ChapterRewriteTaskRepository) UpdateRewritten(id uint, content string, 
 		"status":            "completed",
 	}).Error
 }
+
+func (r *ChapterRewriteTaskRepository) UpdatePostProcess(
+	id uint, finalContent string, qualityScore float64, deaiApplied bool, issues string,
+) error {
+	return r.db.Model(&model.ChapterRewriteTask{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"rewritten_content":  finalContent,
+		"quality_score":      qualityScore,
+		"deai_applied":       deaiApplied,
+		"consistency_issues": issues,
+	}).Error
+}
