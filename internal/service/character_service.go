@@ -1224,18 +1224,19 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 		prompt = fmt.Sprintf(
 			"%scharacter design reference sheet, full body turnaround, front view and side view and back view of the same character, "+
 				"3-angle orthographic views arranged horizontally, %s, %s, "+
-				"realistic photography style, pure white background, clean composition, high quality",
+				"realistic photography style, pure white background, clean composition, high quality, "+
+				"no text, no labels, no annotations, no watermarks, no captions",
 			realisticGender, name, appearance)
 	} else {
 		if genderLeader != "" {
 			prompt = fmt.Sprintf(
 				"%s, 角色三视图参考图，同一角色的正面视角+侧面视角+背面视角横向排列，角色设计总表，"+
-					"%s，%s，%s风格，白色背景，线条清晰，三视图均为全身，高品质插画",
+					"%s，%s，%s风格，白色背景，线条清晰，三视图均为全身，高品质插画，无文字标注，无标签，无水印",
 				genderLeader, name, appearance, styleStr)
 		} else {
 			prompt = fmt.Sprintf(
 				"角色三视图参考图，同一角色的正面视角+侧面视角+背面视角横向排列，角色设计总表，"+
-					"%s，%s，%s风格，白色背景，线条清晰，三视图均为全身，高品质插画",
+					"%s，%s，%s风格，白色背景，线条清晰，三视图均为全身，高品质插画，无文字标注，无标签，无水印",
 				name, appearance, styleStr)
 		}
 	}
@@ -1246,8 +1247,9 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	}
 	logger.Printf("GenerateThreeViewSheet: %s ref=%v", name, aiRef != "")
 
-	// 负向提示词：禁止不同角色出现，但允许同一角色的多个视角
-	baseNeg := "different characters, multiple distinct people, inconsistent appearance, nsfw, lowres, bad anatomy, poorly drawn"
+	// 负向提示词：禁止不同角色出现，但允许同一角色的多个视角；同时禁止文字标注
+	baseNeg := "text, labels, annotations, watermark, signature, caption, speech bubble, character name tag, " +
+		"different characters, multiple distinct people, inconsistent appearance, nsfw, lowres, bad anatomy, poorly drawn"
 	genderNeg := map[string]string{
 		"male":   "female, girl, woman, 女性, 女生, 裙子, 女装, feminine",
 		"female": "male, man, boy, 男性, 男生, 胡须, beard, mustache, masculine",
