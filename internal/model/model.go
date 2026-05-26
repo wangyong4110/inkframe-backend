@@ -1922,7 +1922,7 @@ type RewriteProject struct {
 	TenantID      uint      `json:"tenant_id" gorm:"index"`
 	NovelID       uint      `json:"novel_id" gorm:"index"`
 	Name          string    `json:"name" gorm:"size:200"`
-	Level         int       `json:"level" gorm:"default:1"` // 1=Literary Refinement, 2=Structural Reconstruction, 3=Spirit Distillation
+	Level         int       `json:"level" gorm:"default:1"` // 1=字词润色 2=文学精炼 3=情节调整 4=结构重构 5=精神蒸馏
 	Status        string    `json:"status" gorm:"size:20;default:'pending'"` // pending, analyzing, bible_ready, rewriting, reviewing, completed, failed
 	Progress      int       `json:"progress" gorm:"default:0"` // 0-100
 	TotalChapters int       `json:"total_chapters" gorm:"default:0"`

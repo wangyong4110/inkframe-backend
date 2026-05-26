@@ -404,6 +404,8 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 	}
 
 	shot.AudioPath = audioURL
+	// 更新分镜时长：取视频时长与配音时长的最大值（含 0.3s 缓冲），并持久化
+	shot.Duration = alignShotDurationToTTS(shot)
 	if err := s.storyboardRepo.Update(shot); err != nil {
 		logger.Printf("[VideoService] GenerateShotAudio: failed to update shot %d audio path: %v", shot.ShotNo, err)
 	}

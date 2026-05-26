@@ -77,6 +77,10 @@ func (r *LiteraryAnalysisRepository) Create(a *model.LiteraryAnalysis) error {
 	return r.db.Create(a).Error
 }
 
+func (r *LiteraryAnalysisRepository) DeleteByProjectID(projectID uint) error {
+	return r.db.Where("project_id = ?", projectID).Delete(&model.LiteraryAnalysis{}).Error
+}
+
 func (r *LiteraryAnalysisRepository) GetByProjectID(projectID uint) (*model.LiteraryAnalysis, error) {
 	var a model.LiteraryAnalysis
 	if err := r.db.Where("project_id = ?", projectID).First(&a).Error; err != nil {
@@ -106,6 +110,10 @@ func (r *RewriteBibleRepository) GetByProjectID(projectID uint) (*model.RewriteB
 		return nil, err
 	}
 	return &b, nil
+}
+
+func (r *RewriteBibleRepository) DeleteByProjectID(projectID uint) error {
+	return r.db.Where("project_id = ?", projectID).Delete(&model.RewriteBible{}).Error
 }
 
 func (r *RewriteBibleRepository) Update(b *model.RewriteBible) error {

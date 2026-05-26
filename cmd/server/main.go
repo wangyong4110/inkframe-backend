@@ -989,6 +989,10 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_rewrite_bible", "forbidden_phrases", "TEXT NULL"},
 		{"ink_rewrite_bible", "forbidden_dialogues", "TEXT NULL"},
 		{"ink_rewrite_bible", "imagery_transform", "TEXT NULL"},
+		// ink_chapter_rewrite_task 质量评分 & 去AI字段（2026-05-27 Phase1 新增）
+		{"ink_chapter_rewrite_task", "quality_score", "DOUBLE NOT NULL DEFAULT 0"},
+		{"ink_chapter_rewrite_task", "deai_applied", "TINYINT(1) NOT NULL DEFAULT 0"},
+		{"ink_chapter_rewrite_task", "consistency_issues", "VARCHAR(1000) NULL"},
 		// ink_chapter_rewrite_task 新增原子写入字段（2026-05-27 新增）
 		{"ink_chapter_rewrite_task", "attempt_content", "LONGTEXT NULL"},
 		{"ink_chapter_rewrite_task", "summary_written", "TINYINT(1) NOT NULL DEFAULT 0"},

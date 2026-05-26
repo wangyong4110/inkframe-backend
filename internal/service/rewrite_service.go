@@ -31,6 +31,7 @@ type RewriteService struct {
 
 // rewriteLevelConfig holds per-level parameters.
 type rewriteLevelConfig struct {
+	Level            int     // 1-5
 	Template         string  // prompt template name (without .j2)
 	Goal             string  // human-readable goal
 	RetentionTarget  string  // e.g. "80-90%"
@@ -66,11 +67,11 @@ type recentChapterInfo struct {
 const maxChapterRetries = 2
 
 var rewriteLevelConfigs = map[int]rewriteLevelConfig{
-	1: {Template: "rewrite_depth_shallow", Goal: "仅做词句级同义替换，不改变情节与对话内容", RetentionTarget: "90-95%", TargetLexSimLow: 0.50, TargetLexSimHigh: 0.80},
-	2: {Template: "rewrite_depth_medium", Goal: "用全新文学语言重新表达，保留情节骨架", RetentionTarget: "80-90%", TargetLexSimLow: 0.28, TargetLexSimHigh: 0.60},
-	3: {Template: "rewrite_depth_medium", Goal: "适度调整场景顺序与细节，改写对话语气", RetentionTarget: "60-75%", TargetLexSimLow: 0.18, TargetLexSimHigh: 0.48},
-	4: {Template: "rewrite_depth_deep", Goal: "重构世界观与角色设定，大幅改变故事形式", RetentionTarget: "30-50%", TargetLexSimLow: 0.05, TargetLexSimHigh: 0.33},
-	5: {Template: "rewrite_depth_deep", Goal: "只保留精神内核与情感逻辑，全面重创", RetentionTarget: "5-20%", TargetLexSimLow: 0.00, TargetLexSimHigh: 0.18},
+	1: {Level: 1, Template: "rewrite_depth_shallow", Goal: "仅做词句级同义替换，不改变情节与对话内容", RetentionTarget: "90-95%", TargetLexSimLow: 0.50, TargetLexSimHigh: 0.80},
+	2: {Level: 2, Template: "rewrite_depth_medium", Goal: "用全新文学语言重新表达，保留情节骨架", RetentionTarget: "80-90%", TargetLexSimLow: 0.28, TargetLexSimHigh: 0.60},
+	3: {Level: 3, Template: "rewrite_depth_medium", Goal: "适度调整场景顺序与细节，改写对话语气", RetentionTarget: "60-75%", TargetLexSimLow: 0.18, TargetLexSimHigh: 0.48},
+	4: {Level: 4, Template: "rewrite_depth_deep", Goal: "重构世界观与角色设定，大幅改变故事形式", RetentionTarget: "30-50%", TargetLexSimLow: 0.05, TargetLexSimHigh: 0.33},
+	5: {Level: 5, Template: "rewrite_depth_deep", Goal: "只保留精神内核与情感逻辑，全面重创", RetentionTarget: "5-20%", TargetLexSimLow: 0.00, TargetLexSimHigh: 0.18},
 }
 
 // retryHints provides progressively stronger instructions on each retry.
@@ -580,7 +581,7 @@ func checkConsistency(rewritten string, bible *model.RewriteBible) []string {
 		}
 	}
 	for _, phrase := range parseForbiddenPhrases(bible) {
-		if phrase != "" && len([]rune(phrase)) >= 4 && strings.Contains(rewritten, phrase) {
+		if phrase != "" && len([]rune(phrase)) >= 2 && strings.Contains(rewritten, phrase) {
 			issues = append(issues, fmt.Sprintf("禁止短语残留：「%s」", phrase))
 		}
 	}
@@ -608,19 +609,25 @@ func calculateLevelAwareQuality(lexSim, structSim float64, origLen, rewLen int, 
 		}
 	}
 
-	// Word count score (0-30): penalise when too short or too long
+	// Word count score (0-30): penalise when outside the level-specific target range.
+	// Use targetWordRange so Level 4-5 rewrites at 60-200% of original still score well.
 	var ratioScore float64
 	if origLen > 0 {
 		ratio := float64(rewLen) / float64(origLen)
+		minW, maxW := targetWordRange(origLen, cfg.Level)
+		minRatio := float64(minW) / float64(origLen)
+		maxRatio := float64(maxW) / float64(origLen)
 		switch {
-		case ratio >= 0.8 && ratio <= 1.2:
+		case ratio >= minRatio && ratio <= maxRatio:
 			ratioScore = 30
-		case ratio >= 0.6 && ratio < 0.8:
-			ratioScore = 30 * (ratio - 0.6) / 0.2
-		case ratio > 1.2 && ratio <= 1.5:
-			ratioScore = 30 * (1.5 - ratio) / 0.3
-		default:
-			ratioScore = 0
+		case ratio < minRatio && minRatio > 0:
+			ratioScore = 30 * (ratio / minRatio)
+		case ratio > maxRatio:
+			// Allow up to 50% above max before zeroing
+			excess := maxRatio * 1.5
+			if ratio <= excess {
+				ratioScore = 30 * (excess - ratio) / (excess - maxRatio)
+			}
 		}
 	}
 
@@ -659,6 +666,16 @@ func (s *RewriteService) DeleteProject(id uint) error {
 	if s.taskSvc != nil {
 		s.taskSvc.CancelActiveByEntity("rewrite_project", id, TaskTypeRewriteAnalysis)
 		s.taskSvc.CancelActiveByEntity("rewrite_project", id, TaskTypeRewriteChapters)
+	}
+	// Cascade-delete all derived data to avoid orphaned records
+	s.analysisRepo.DeleteByProjectID(id)
+	s.bibleRepo.DeleteByProjectID(id)
+	s.chapterTaskRepo.DeleteByProjectID(id)
+	if s.continuityRepo != nil {
+		s.continuityRepo.DeleteByProject(id)
+	}
+	if s.summaryRepo != nil {
+		s.summaryRepo.DeleteByProject(id)
 	}
 	return s.projectRepo.Delete(id)
 }
@@ -879,7 +896,9 @@ func (s *RewriteService) generateBible(ctx context.Context, taskID string, proje
 			Status:          "pending",
 			OriginalContent: ch.Content,
 		}
-		s.chapterTaskRepo.Create(task)
+		if err := s.chapterTaskRepo.Create(task); err != nil {
+			return fmt.Errorf("create chapter task for ch%d: %w", ch.ChapterNo, err)
+		}
 	}
 
 	return s.projectRepo.UpdateStatus(project.ID, "bible_ready", "")
@@ -892,8 +911,11 @@ func (s *RewriteService) StartRewriting(tenantID, projectID uint) (string, error
 	if err != nil {
 		return "", err
 	}
-	if project.Status == "failed" && project.TotalChapters > 0 {
-		// Allow retry when bible exists but rewriting failed
+	if project.Status == "failed" {
+		// Allow retry only when the bible already exists (analysis completed before failure)
+		if _, err := s.bibleRepo.GetByProjectID(projectID); err != nil {
+			return "", fmt.Errorf("bible not found, please re-run analysis first: %w", err)
+		}
 	} else if project.Status != "bible_ready" {
 		return "", fmt.Errorf("project must be in bible_ready status, got: %s", project.Status)
 	}
@@ -1014,7 +1036,7 @@ func (s *RewriteService) runRewriting(ctx context.Context, taskID string, projec
 			}
 
 			// Async: generate chapter summary and update continuity index
-			s.generateChapterSummaryAsync(project.TenantID, project.NovelID, project.ID, task.ChapterNo, finalContent)
+			s.generateChapterSummaryAsync(project.TenantID, project.NovelID, project.ID, task.ID, task.ChapterNo, finalContent)
 
 			// Update excerpt-based fallback context
 			runes := []rune(finalContent)
@@ -1036,6 +1058,9 @@ func (s *RewriteService) runRewriting(ctx context.Context, taskID string, projec
 		s.updateRewriteProgress(taskID, project.ID, done, total)
 	}
 
+	if done == 0 && total > 0 {
+		return s.projectRepo.UpdateStatus(project.ID, "failed", "所有章节改写均失败")
+	}
 	return s.projectRepo.UpdateStatus(project.ID, "completed", "")
 }
 
@@ -1187,7 +1212,7 @@ func (s *RewriteService) rewriteChapter(
 
 // generateChapterSummaryAsync calls AI to produce a semantic summary after each accepted chapter.
 // Runs in a background goroutine; failures are logged but do not block subsequent chapters.
-func (s *RewriteService) generateChapterSummaryAsync(tenantID, novelID, projectID uint, chapterNo int, content string) {
+func (s *RewriteService) generateChapterSummaryAsync(tenantID, novelID, projectID, taskID uint, chapterNo int, content string) {
 	if s.summaryRepo == nil {
 		return
 	}
@@ -1240,6 +1265,9 @@ func (s *RewriteService) generateChapterSummaryAsync(tenantID, novelID, projectI
 					}
 				}
 			}
+		}
+		if err := s.chapterTaskRepo.MarkSummaryWritten(taskID); err != nil {
+			logger.Printf("[Rewrite] MarkSummaryWritten ch%d: %v", chapterNo, err)
 		}
 		logger.Printf("[Rewrite] summary written ch%d", chapterNo)
 	}()
