@@ -254,13 +254,20 @@ func (s *CharacterService) generateOneCharacterProfile(
 		return nil, fmt.Errorf("render generate_character_profile: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "generate_character_profile", prompt, "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "generate_character_profile", prompt, "",
+		StoryboardOverrides{MaxTokens: 8192})
 	if err != nil {
 		logger.Printf("[CharacterService] generateOneCharacterProfile: AI call failed for %q: %v", entry.Name, err)
 		return nil, fmt.Errorf("AI call: %w", err)
 	}
 
-	cleaned := extractJSON(strings.TrimSpace(result))
+	logger.Printf("[CharacterService] generateOneCharacterProfile %q: raw response len=%d tail=%q",
+		entry.Name, len(result), result[max(0, len(result)-200):])
+
+	// Use extractJSONObject (not extractJSON) because the expected response is a single
+	// JSON object. extractJSON would incorrectly unwrap inner arrays (e.g. personality_tags)
+	// instead of returning the full character profile object.
+	cleaned := extractJSONObject(strings.TrimSpace(result))
 	var profile analysisCharJSON
 	if err := json.Unmarshal([]byte(cleaned), &profile); err != nil {
 		// 如果是包裹对象 {"character":{...}}，尝试解包
@@ -268,12 +275,14 @@ func (s *CharacterService) generateOneCharacterProfile(
 		if json.Unmarshal([]byte(cleaned), &wrapper) == nil {
 			for _, v := range wrapper {
 				if json.Unmarshal(v, &profile) == nil && profile.Name != "" {
+					logger.Printf("[CharacterService] generateOneCharacterProfile %q (unwrapped): VisualPrompt=%q", entry.Name, profile.VisualPrompt)
 					return &profile, nil
 				}
 			}
 		}
 		return nil, fmt.Errorf("parse profile JSON: %w", err)
 	}
+	logger.Printf("[CharacterService] generateOneCharacterProfile %q: parsed VisualPrompt=%q", entry.Name, profile.VisualPrompt)
 	if profile.Name == "" {
 		profile.Name = entry.Name
 	}
@@ -653,22 +662,28 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			role = "supporting"
 		}
 
-		var descParts []string
-		if p.Appearance != "" { descParts = append(descParts, "外貌："+p.Appearance) }
-		if p.Personality != "" { descParts = append(descParts, "性格："+p.Personality) }
-		if p.Background != "" { descParts = append(descParts, "背景："+p.Background) }
-		if p.CharacterArc != "" { descParts = append(descParts, "弧光："+p.CharacterArc) }
-		if len(p.DialogueStyle.Patterns) > 0 {
-			descParts = append(descParts, "说话风格："+strings.Join(p.DialogueStyle.Patterns, "；"))
-		} else if p.DialogueStyle.VocabularyLevel != "" {
-			descParts = append(descParts, "说话风格："+p.DialogueStyle.VocabularyLevel)
+		// 优先使用新格式的统一 description，兼容旧格式分离字段
+		description := p.Description
+		if description == "" {
+			var descParts []string
+			if p.Appearance != "" { descParts = append(descParts, "外貌："+p.Appearance) }
+			if p.Personality != "" { descParts = append(descParts, "性格："+p.Personality) }
+			if p.Background != "" { descParts = append(descParts, "背景："+p.Background) }
+			if p.CharacterArc != "" { descParts = append(descParts, "弧光："+p.CharacterArc) }
+			if len(p.DialogueStyle.Patterns) > 0 {
+				descParts = append(descParts, "说话风格："+strings.Join(p.DialogueStyle.Patterns, "；"))
+			} else if p.DialogueStyle.VocabularyLevel != "" {
+				descParts = append(descParts, "说话风格："+p.DialogueStyle.VocabularyLevel)
+			}
+			description = strings.Join(descParts, "\n")
 		}
-		description := strings.Join(descParts, "\n")
 
 		if ch, ok := byName[p.Name]; ok {
+			logger.Printf("[CharacterService] AIBatchGenerate upsert(update) %q: p.VisualPrompt=%q ch.VisualPrompt(existing)=%q", p.Name, p.VisualPrompt, ch.VisualPrompt)
 			changed := false
 			if v, ok := fillIfEmpty(ch.Role, role); ok { ch.Role = v; changed = true }
 			if v, ok := fillIfEmpty(ch.Description, description); ok { ch.Description = v; changed = true }
+			if v, ok := fillIfEmpty(ch.VisualPrompt, p.VisualPrompt); ok { ch.VisualPrompt = v; changed = true }
 			if !changed {
 				upserted = append(upserted, ch)
 				continue
@@ -680,12 +695,13 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			upserted = append(upserted, ch)
 		} else {
 			character := &model.Character{
-				UUID:        uuid.New().String(),
-				NovelID:     novelID,
-				Name:        p.Name,
-				Role:        role,
-				Description: description,
-				Status:      "active",
+				UUID:         uuid.New().String(),
+				NovelID:      novelID,
+				Name:         p.Name,
+				Role:         role,
+				Description:  description,
+				VisualPrompt: p.VisualPrompt,
+				Status:       "active",
 			}
 			if err := s.characterRepo.Create(character); err != nil {
 				logger.Printf("CharacterService.AIBatchGenerate: create %s: %v", p.Name, err)

@@ -233,7 +233,6 @@ func (r *NovelRepository) DeleteWithCascade(id uint) error {
 		// ── 7. 核心表（必须成功）
 		coreStmts := []string{
 			`DELETE FROM ink_item WHERE novel_id = ?`,
-			`DELETE FROM ink_skill WHERE novel_id = ?`,
 			`DELETE FROM ink_character WHERE novel_id = ?`,
 			`DELETE FROM ink_chapter WHERE novel_id = ?`,
 			`DELETE FROM ink_novel WHERE id = ?`,

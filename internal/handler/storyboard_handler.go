@@ -29,7 +29,7 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 		MaxTokens      int      `json:"max_tokens,omitempty"`      // 0=使用系统默认
 		Temperature    float64  `json:"temperature,omitempty"`     // 0=使用系统默认
 		TimeoutSeconds int      `json:"timeout_seconds,omitempty"` // 0=使用系统默认(180s)
-		VoiceMode      string   `json:"voice_mode,omitempty"`      // ""/"both"=对白+旁白, "narration"=仅旁白, "dialogue"=仅对白
+		VoiceMode      string   `json:"voice_mode,omitempty"`      // ""/"auto"/"both"=自动, "narration"=仅旁白, "dialogue"=仅对白, "narration_primary"=旁白为主, "dialogue_primary"=对白为主
 	}
 	// 所有字段均可选，body 为空时忽略 EOF
 	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {

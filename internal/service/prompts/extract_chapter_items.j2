@@ -16,9 +16,10 @@
 2. 不要重复已有物品列表中的物品
 3. 不超过10个
 4. category 只能是：weapon / treasure / tool / document / artifact / other
-5. visual_prompt 用简短英文描述外观，不超过60词
-6. 若章节中无明显新物品，输出空数组 []
-7. 严格输出 JSON 数组，不含任何说明文字
+5. description：物品的详细说明，包含其在故事中的重要性、作用和特殊能力（1-2句）
+6. visual_prompt 用简短英文描述外观，不超过60词
+7. 若章节中无明显新物品，输出空数组 []
+8. 严格输出 JSON 数组，不含任何说明文字
 
 # 输出格式（JSON 数组）
 [
@@ -26,6 +27,7 @@
     "name": "物品名",
     "category": "weapon",
     "appearance": "一柄古朴的长剑，剑身刻有符文",
+    "description": "主角的传家宝剑，能斩断任何束缚，是本章突破境界的关键道具",
     "location": "主角腰间",
     "owner": "主角名",
     "visual_prompt": "ancient longsword with carved runes on blade, glowing faint blue, ornate hilt"

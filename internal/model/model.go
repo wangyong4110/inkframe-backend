@@ -150,7 +150,8 @@ type Novel struct {
 	Outline     string `json:"outline,omitempty" gorm:"type:text"` // 大纲 JSON（章节列表）
 
 	// 风格配置
-	ImageStyle string `json:"image_style" gorm:"size:50"` // 视觉/图片风格，如 anime/realistic/ink_painting
+	ImageStyle     string `json:"image_style" gorm:"size:50"`      // 视觉/图片风格，如 anime/realistic/ink_painting
+	PromptLanguage string `json:"prompt_language" gorm:"size:10;default:zh"` // AI 提示词语言：zh（中文，默认）/ en（英文）
 
 	// 视频/字幕配置（已迁移至 ink_novel_video_config，通过 VideoConfig 关联访问）
 	VideoConfig *NovelVideoConfig `json:"video_config,omitempty" gorm:"foreignKey:NovelID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
@@ -411,6 +412,9 @@ type Character struct {
 
 	// 统一描述字段（外貌、性格、背景、对话风格等所有描述性信息）
 	Description string `json:"description" gorm:"type:text"`
+
+	// AI 图像生成英文提示词（由 extract_characters 生成，用于三视图/头像生成）
+	VisualPrompt string `json:"visual_prompt" gorm:"type:text"`
 
 	// 三视图合一参考图（一张图展示正/侧/背三个视角）
 	ThreeViewSheet string `json:"three_view_sheet" gorm:"column:three_view_front;size:1000"`
@@ -806,7 +810,7 @@ type Video struct {
 	NovelID  uint   `json:"novel_id" gorm:"index;not null"`
 	Novel     *Novel   `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
 	ChapterID *uint    `json:"chapter_id,omitempty" gorm:"index"`
-	Chapter   *Chapter `json:"chapter,omitempty" gorm:"foreignKey:ChapterID"`
+	Chapter   *Chapter `json:"chapter,omitempty" gorm:"-"`
 
 	Title       string `json:"title" gorm:"size:255;not null"`
 	Description string `json:"description" gorm:"type:text"`
@@ -1289,8 +1293,9 @@ type UpdateNovelRequest struct {
 	TopP        *float64 `json:"top_p"`
 	TopK        *int     `json:"top_k"`
 	MaxTokens   *int     `json:"max_tokens"`
-	StylePrompt string   `json:"style_prompt"`
-	ImageStyle  string   `json:"image_style"`
+	StylePrompt    string `json:"style_prompt"`
+	ImageStyle     string `json:"image_style"`
+	PromptLanguage string `json:"prompt_language"`
 	// 创作目标
 	TargetWordCount *int `json:"target_word_count"`
 	TargetChapters  *int `json:"target_chapters"`
@@ -1578,96 +1583,6 @@ type UpsertChapterCharacterRequest struct {
 
 // ─── Skill 技能 ─────────────────────────────────────────────────────────────────
 
-// Skill 技能（归属于角色，或作为世界级别的公共技能）
-// category: 武技/法术/身法/心法/阵法/神通/秘法/特性
-// skill_type: active(主动)/passive(被动)/toggle(切换)/ultimate(绝技)
-// status: active/sealed(封印)/lost(失传)/disabled(禁用)
-type Skill struct {
-	ID          uint  `json:"id" gorm:"primaryKey"`
-	NovelID     uint  `json:"novel_id" gorm:"index;index:idx_skill_novel_char,priority:1;not null"`
-	CharacterID *uint `json:"character_id" gorm:"index;index:idx_skill_novel_char,priority:2"` // nil = 世界/未分配技能
-	ParentID    *uint `json:"parent_id" gorm:"index"`    // 前置技能（技能树）
-
-	Name      string `json:"name" gorm:"size:100;not null"`
-	Category  string `json:"category" gorm:"size:50"`   // 武技/法术/身法/心法/阵法/神通/秘法/特性
-	SkillType string `json:"skill_type" gorm:"size:30"` // active/passive/toggle/ultimate
-	Level     int    `json:"level" gorm:"default:1"`
-	MaxLevel  int    `json:"max_level" gorm:"default:10"`
-	Realm     string `json:"realm" gorm:"size:50"` // 修炼境界要求：练气/筑基/金丹/元婴…
-
-	Description string `json:"description" gorm:"type:text"` // 技能概述
-	Effect      string `json:"effect" gorm:"type:text"`      // 效果详情
-	FlavorText  string `json:"flavor_text" gorm:"type:text"` // 世界观文字（小说内描述）
-
-	Cost     string `json:"cost" gorm:"size:100"`    // 消耗（法力/灵力/体力等）
-	Cooldown string `json:"cooldown" gorm:"size:50"` // 冷却时间
-	Tags     string `json:"tags" gorm:"size:200"`    // 逗号分隔标签
-
-	AcquiredChapterNo *int   `json:"acquired_chapter_no"`            // 获得技能的章节号
-	AcquiredDesc      string `json:"acquired_desc" gorm:"type:text"` // 获得方式描述
-
-	Status string `json:"status" gorm:"size:20;default:active"` // active/sealed/lost/disabled
-	Notes  string `json:"notes" gorm:"type:text"`               // 作者内部备注
-
-	EffectImageURL     string `json:"effect_image_url" gorm:"size:1000"`     // AI 生成的技能特效图片
-	EffectVisualPrompt string `json:"effect_visual_prompt" gorm:"type:text"` // 特效图片生成提示词
-
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
-}
-
-func (Skill) TableName() string { return "ink_skill" }
-
-// ─── Skill DTOs ────────────────────────────────────────────────────────────────
-
-type CreateSkillRequest struct {
-	CharacterID       *uint  `json:"character_id"`
-	ParentID          *uint  `json:"parent_id"`
-	Name              string `json:"name" binding:"required"`
-	Category          string `json:"category"`
-	SkillType         string `json:"skill_type"`
-	Level             int    `json:"level"`
-	MaxLevel          int    `json:"max_level"`
-	Realm             string `json:"realm"`
-	Description       string `json:"description"`
-	Effect            string `json:"effect"`
-	FlavorText        string `json:"flavor_text"`
-	Cost              string `json:"cost"`
-	Cooldown          string `json:"cooldown"`
-	Tags              string `json:"tags"`
-	AcquiredChapterNo *int   `json:"acquired_chapter_no"`
-	AcquiredDesc      string `json:"acquired_desc"`
-	Notes             string `json:"notes"`
-}
-
-type UpdateSkillRequest struct {
-	CharacterID        *uint  `json:"character_id"`
-	ParentID           *uint  `json:"parent_id"`
-	Name               string `json:"name"`
-	Category           string `json:"category"`
-	SkillType          string `json:"skill_type"`
-	Level              int    `json:"level"`
-	MaxLevel           int    `json:"max_level"`
-	Realm              string `json:"realm"`
-	Description        string `json:"description"`
-	Effect             string `json:"effect"`
-	FlavorText         string `json:"flavor_text"`
-	Cost               string `json:"cost"`
-	Cooldown           string `json:"cooldown"`
-	Tags               string `json:"tags"`
-	AcquiredChapterNo  *int   `json:"acquired_chapter_no"`
-	AcquiredDesc       string `json:"acquired_desc"`
-	Status             string `json:"status"`
-	Notes              string `json:"notes"`
-	EffectVisualPrompt string `json:"effect_visual_prompt"`
-}
-
-type GenerateSkillsRequest struct {
-	CharacterID *uint  `json:"character_id"`
-	Count       int    `json:"count"` // 生成数量，默认3，最大10
-	Hints       string `json:"hints"` // 额外生成提示
-}
 
 // ─── Per-shot generation DTOs ─────────────────────────────────────────────────
 

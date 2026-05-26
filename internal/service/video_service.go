@@ -236,6 +236,9 @@ func (s *VideoService) WithStorage(svc storage.Service) *VideoService {
 
 // CreateVideoFromChapter 从章节创建视频
 func (s *VideoService) CreateVideoFromChapter(novelID uint, chapterID *uint) (*model.Video, error) {
+	if chapterID != nil && *chapterID == 0 {
+		chapterID = nil
+	}
 	video := &model.Video{
 		UUID:        uuid.New().String(),
 		NovelID:     novelID,
@@ -265,10 +268,15 @@ func (s *VideoService) CreateVideo(novelID uint, req *model.CreateVideoRequest, 
 
 
 func (s *VideoService) CreateVideoFromReq(novelID uint, req *model.CreateVideoRequest, callerTenantID uint) (*model.Video, error) {
+	// Treat chapter_id=0 as absent (frontend may send 0 instead of omitting the field)
+	chapterID := req.ChapterID
+	if chapterID != nil && *chapterID == 0 {
+		chapterID = nil
+	}
 	video := &model.Video{
 		UUID:        uuid.New().String(),
 		NovelID:     novelID,
-		ChapterID:   req.ChapterID,
+		ChapterID:   chapterID,
 		Title:       req.Title,
 		Resolution:  req.Resolution,
 		FrameRate:   req.FrameRate,

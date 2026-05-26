@@ -160,7 +160,6 @@ func main() {
 		WorldviewHandler:   handlers.WorldviewHandler,
 		TenantHandler:      handlers.TenantHandler,
 		ItemHandler:        handlers.ItemHandler,
-		SkillHandler:       handlers.SkillHandler,
 		UploadHandler:      handlers.UploadHandler,
 		PlotPointHandler:   handlers.PlotPointHandler,
 		TaskHandler:        handlers.TaskHandler,
@@ -386,6 +385,15 @@ func preMigrateCleanup(db *gorm.DB) {
 	for _, fk := range usageLogFKs {
 		db.Exec("ALTER TABLE ink_model_usage_log DROP FOREIGN KEY " + fk)
 	}
+	// ink_video.chapter_id FK 约束导致创建无章节视频时 1452 错误（chapter_id=0 非法值）
+	// chapter_id 为可选字段，改为软引用（保留 index，删除 FK 约束）
+	var videoChapterFKs []string
+	db.Raw(`SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_video'
+		AND COLUMN_NAME = 'chapter_id' AND REFERENCED_TABLE_NAME IS NOT NULL`).Scan(&videoChapterFKs)
+	for _, fk := range videoChapterFKs {
+		db.Exec("ALTER TABLE ink_video DROP FOREIGN KEY `" + fk + "`")
+	}
 }
 
 // runSchemaCleanup 幂等数据迁移与废弃列清理（AutoMigrate 不删列，需手动执行）
@@ -408,28 +416,34 @@ func runSchemaCleanup(db *gorm.DB) {
 	}
 
 	// ── 3. 迁移视频配置：ink_novel → ink_novel_video_config（INSERT IGNORE 幂等）
-	if err := db.Exec(`INSERT IGNORE INTO ink_novel_video_config
-		(novel_id, video_type, video_resolution, video_fps, video_aspect_ratio,
-		 char_consistency_weight, asset_export_path, narration_voice,
-		 subtitle_enabled, subtitle_position, subtitle_font_size, subtitle_color, subtitle_bg_style,
-		 created_at, updated_at)
-		SELECT id,
-		       COALESCE(video_type, 'animation'),
-		       COALESCE(video_resolution, '1080p'),
-		       COALESCE(video_fps, 30),
-		       COALESCE(video_aspect_ratio, '16:9'),
-		       COALESCE(char_consistency_weight, 1.0),
-		       COALESCE(asset_export_path, ''),
-		       COALESCE(narration_voice, ''),
-		       COALESCE(subtitle_enabled, 1),
-		       COALESCE(subtitle_position, 'bottom'),
-		       COALESCE(subtitle_font_size, 48),
-		       COALESCE(subtitle_color, '#FFFFFF'),
-		       COALESCE(subtitle_bg_style, 'shadow'),
-		       NOW(), NOW()
-		FROM ink_novel n
-		WHERE NOT EXISTS (SELECT 1 FROM ink_novel_video_config vc WHERE vc.novel_id = n.id)`).Error; err != nil {
-		logger.Printf("[runSchemaCleanup] migrate video config: %v", err)
+	// 仅在 ink_novel.video_type 列尚未删除时执行（避免重复迁移报错）
+	var videoTypeExists int
+	db.Raw(`SELECT COUNT(*) FROM information_schema.COLUMNS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_novel' AND COLUMN_NAME = 'video_type'`).Scan(&videoTypeExists)
+	if videoTypeExists > 0 {
+		if err := db.Exec(`INSERT IGNORE INTO ink_novel_video_config
+			(novel_id, video_type, video_resolution, video_fps, video_aspect_ratio,
+			 char_consistency_weight, asset_export_path, narration_voice,
+			 subtitle_enabled, subtitle_position, subtitle_font_size, subtitle_color, subtitle_bg_style,
+			 created_at, updated_at)
+			SELECT id,
+			       COALESCE(video_type, 'animation'),
+			       COALESCE(video_resolution, '1080p'),
+			       COALESCE(video_fps, 30),
+			       COALESCE(video_aspect_ratio, '16:9'),
+			       COALESCE(char_consistency_weight, 1.0),
+			       COALESCE(asset_export_path, ''),
+			       COALESCE(narration_voice, ''),
+			       COALESCE(subtitle_enabled, 1),
+			       COALESCE(subtitle_position, 'bottom'),
+			       COALESCE(subtitle_font_size, 48),
+			       COALESCE(subtitle_color, '#FFFFFF'),
+			       COALESCE(subtitle_bg_style, 'shadow'),
+			       NOW(), NOW()
+			FROM ink_novel n
+			WHERE NOT EXISTS (SELECT 1 FROM ink_novel_video_config vc WHERE vc.novel_id = n.id)`).Error; err != nil {
+			logger.Printf("[runSchemaCleanup] migrate video config: %v", err)
+		}
 	}
 
 	// ── 4. 删除废弃列（information_schema 守卫，防止重复 DROP 报错）
@@ -456,9 +470,7 @@ func runSchemaCleanup(db *gorm.DB) {
 		{"ink_chapter", "plot_points"},
 		// 废弃的 chapter 统计列
 		{"ink_chapter", "quality_score"},
-		{"ink_chapter", "published_at"},
 		// 废弃的 novel 列
-		{"ink_novel", "view_count"},
 		{"ink_novel", "reference_style"},
 		// 废弃的 reference_novel 分析列
 		{"ink_reference_novel", "style_analysis"},
@@ -960,7 +972,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-25-v1"
+const schemaVersion = "2026-05-26-v1"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -979,14 +991,24 @@ func ensureCriticalColumns(db *gorm.DB) {
 		// ink_chapter 广场发布字段（2026-05-11 新增，与内容状态解耦）
 		{"ink_chapter", "is_published", "TINYINT(1) NOT NULL DEFAULT 0"},
 		{"ink_chapter", "published_at", "DATETIME(3) NULL"},
+		// ink_character 新增字段（2026-05-25 新增）
+		{"ink_character", "visual_prompt", "TEXT NULL"},
+		// ink_novel 提示词语言（2026-05-26 新增）
+		{"ink_novel", "prompt_language", "VARCHAR(10) NOT NULL DEFAULT 'zh'"},
 	}
 	for _, a := range additions {
+		// 先查 information_schema，列已存在则跳过，避免触发 GORM 的 Error 1060 日志
+		var cnt int64
+		db.Raw(
+			"SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+			a.table, a.col,
+		).Scan(&cnt)
+		if cnt > 0 {
+			continue // 列已存在，无需操作
+		}
 		sql := "ALTER TABLE `" + a.table + "` ADD COLUMN `" + a.col + "` " + a.def
 		if err := db.Exec(sql).Error; err != nil {
-			// 1060 = Duplicate column name（列已存在），正常情况；其他错误才需要记录
-			if !strings.Contains(err.Error(), "1060") && !strings.Contains(err.Error(), "Duplicate column") {
-				logger.Warnf("ensureCriticalColumns: %s.%s: %v", a.table, a.col, err)
-			}
+			logger.Warnf("ensureCriticalColumns: %s.%s: %v", a.table, a.col, err)
 		} else {
 			logger.Infof("ensureCriticalColumns: added column %s.%s", a.table, a.col)
 		}
@@ -1054,7 +1076,6 @@ func autoMigrate(db *gorm.DB) error {
 		&model.Item{},
 		&model.ChapterItem{},
 		&model.ChapterCharacter{},
-		&model.Skill{},
 		&model.AsyncTask{},
 		&model.MediaAsset{},
 		&model.HookChain{},
@@ -1368,7 +1389,6 @@ type Repositories struct {
 	ItemRepo                *repository.ItemRepository
 	ChapterItemRepo         *repository.ChapterItemRepository
 	ChapterCharacterRepo    *repository.ChapterCharacterRepository
-	SkillRepo               *repository.SkillRepository
 	PlotPointRepo           *repository.PlotPointRepository
 	HookChainRepo           *repository.HookChainRepository
 	SatisfactionPointRepo   *repository.SatisfactionPointRepository
@@ -1430,7 +1450,6 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		ItemRepo:                repository.NewItemRepository(db),
 		ChapterItemRepo:         repository.NewChapterItemRepository(db),
 		ChapterCharacterRepo:    repository.NewChapterCharacterRepository(db),
-		SkillRepo:               repository.NewSkillRepository(db),
 		PlotPointRepo:           repository.NewPlotPointRepository(db),
 		HookChainRepo:           repository.NewHookChainRepository(db),
 		SatisfactionPointRepo:   repository.NewSatisfactionPointRepository(db),
@@ -1506,7 +1525,6 @@ type Services struct {
 	OAuthService                *service.OAuthService
 	FrontendURL                 string
 	ItemService                 *service.ItemService
-	SkillService                *service.SkillService
 	PlotPointService            *service.PlotPointService
 	TaskService                 *service.TaskService
 	AIService                   *service.AIService
@@ -1555,7 +1573,6 @@ type contentSvcs struct {
 	ConflictArc       *service.ConflictArcService
 	Pacing            *service.PacingService
 	Item              *service.ItemService
-	Skill             *service.SkillService
 	SceneAnchor       *service.SceneAnchorService
 	NovelAnalysis     *service.NovelAnalysisService
 	NovelImport       *service.NovelImportService
@@ -1674,11 +1691,9 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 	// 图像生成服务
 	imageGenSvc := service.NewImageGenerationService(aiSvc)
 
-	// 物品 / 技能 / 场景锚点
+	// 物品 / 场景锚点
 	itemSvc := service.NewItemService(repos.ItemRepo, repos.ChapterItemRepo, repos.ChapterRepo, aiSvc).
 		WithNovelRepo(repos.NovelRepo)
-	skillSvc := service.NewSkillService(repos.SkillRepo, repos.CharacterRepo, repos.NovelRepo, aiSvc).
-		WithChapterRepo(repos.ChapterRepo)
 	sceneAnchorSvc := service.NewSceneAnchorService(repos.SceneAnchorRepo, repos.StoryboardRepo, aiSvc, repos.NovelRepo).
 		WithChapterRepo(repos.ChapterRepo)
 
@@ -1686,7 +1701,6 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 	novelAnalysisSvc := service.NewNovelAnalysisService(repos.NovelRepo, repos.ChapterRepo, repos.CharacterRepo, repos.WorldviewRepo, novelSvc, aiSvc).
 		WithItemRepo(repos.ItemRepo).
 		WithItemService(itemSvc).
-		WithSkillService(skillSvc).
 		WithPlotPointService(core.PlotPoint).
 		WithSceneAnchorService(sceneAnchorSvc).
 		WithTaskService(core.Task)
@@ -1702,7 +1716,7 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 		ChapterVersion: chapterVersionSvc, Foreshadow: foreshadowSvc, Timeline: timelineSvc,
 		CharacterArc: characterArcSvc, Style: styleSvc, GenContext: genCtxSvc,
 		ImageGen: imageGenSvc, HookChain: hookChainSvc, SatisfactionPoint: satisfactionSvc,
-		ConflictArc: conflictArcSvc, Pacing: pacingSvc, Item: itemSvc, Skill: skillSvc,
+		ConflictArc: conflictArcSvc, Pacing: pacingSvc, Item: itemSvc,
 		SceneAnchor: sceneAnchorSvc, NovelAnalysis: novelAnalysisSvc, NovelImport: novelImportSvc,
 		Crawler: crawlerSvc,
 	}
@@ -1815,7 +1829,6 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		ConflictArcService:       content.ConflictArc,
 		PacingService:            content.Pacing,
 		ItemService:              content.Item,
-		SkillService:             content.Skill,
 		SceneAnchorService:       content.SceneAnchor,
 		NovelAnalysisService:     content.NovelAnalysis,
 		NovelImportService:       content.NovelImport,
@@ -1879,7 +1892,6 @@ type Handlers struct {
 	WorldviewHandler   *handler.WorldviewHandler
 	TenantHandler      *handler.TenantHandler
 	ItemHandler        *handler.ItemHandler
-	SkillHandler       *handler.SkillHandler
 	UploadHandler      *handler.UploadHandler
 	PlotPointHandler   *handler.PlotPointHandler
 	TaskHandler        *handler.TaskHandler
@@ -1936,7 +1948,6 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		WorldviewHandler:   handler.NewWorldviewHandler(services.WorldviewService),
 		TenantHandler:      handler.NewTenantHandler(services.TenantService),
 		ItemHandler:        handler.NewItemHandler(services.ItemService, services.ChapterService).WithStorage(storageSvc).WithTaskService(services.TaskService).WithNovelService(services.NovelService),
-		SkillHandler:       handler.NewSkillHandler(services.SkillService).WithChapterService(services.ChapterService).WithNovelService(services.NovelService),
 		UploadHandler:      handler.NewUploadHandler(storageSvc),
 		PlotPointHandler:   handler.NewPlotPointHandler(services.PlotPointService).WithChapterService(services.ChapterService).WithTaskService(services.TaskService),
 		TaskHandler:        handler.NewTaskHandler(services.TaskService),

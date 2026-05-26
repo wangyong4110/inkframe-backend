@@ -427,13 +427,13 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 
 	switch format {
 	case FormatTxt:
-		novel, chapters, err = s.parseTxtFile(req.FileData, req.FileName)
+		novel, chapters, err = s.parseTxtFile(req.FileData, req.FileName, req.TenantID)
 	case FormatMd:
-		novel, chapters, err = s.parseMarkdownFile(req.FileData, req.FileName)
+		novel, chapters, err = s.parseMarkdownFile(req.FileData, req.FileName, req.TenantID)
 	case FormatJson:
-		novel, chapters, err = s.parseJsonFile(req.FileData)
+		novel, chapters, err = s.parseJsonFile(req.FileData, req.TenantID)
 	case FormatHtml:
-		novel, chapters, err = s.parseHtmlFile(req.FileData)
+		novel, chapters, err = s.parseHtmlFile(req.FileData, req.TenantID)
 	default:
 		return nil, fmt.Errorf("unsupported format: %s", format)
 	}
@@ -500,6 +500,7 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 			result.ImportedChapters = len(chapters)
 			logger.Printf("[Import] novel=%d batch created %d chapters", novel.ID, len(chapters))
 		}
+		_ = s.novelRepo.SyncStats(novel.ID)
 		return result, nil
 	}
 
@@ -548,6 +549,7 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 		}
 	}
 
+	_ = s.novelRepo.SyncStats(novel.ID)
 	return result, nil
 }
 
@@ -729,7 +731,7 @@ func toUTF8Text(data []byte) string {
 }
 
 // 解析TXT文件
-func (s *NovelImportService) parseTxtFile(data []byte, fileName string) (*model.Novel, []*model.Chapter, error) {
+func (s *NovelImportService) parseTxtFile(data []byte, fileName string, tenantID uint) (*model.Novel, []*model.Chapter, error) {
 	content := toUTF8Text(data)
 	// 统一换行符：Windows CRLF → LF，避免正则行首锚点失配
 	content = strings.ReplaceAll(content, "\r\n", "\n")
@@ -755,13 +757,13 @@ func (s *NovelImportService) parseTxtFile(data []byte, fileName string) (*model.
 	}
 
 	// 按章节分割
-	chapters := s.splitByChapters(content, title)
+	chapters := s.splitByChapters(content, title, tenantID)
 
 	return novel, chapters, nil
 }
 
 // 解析Markdown文件
-func (s *NovelImportService) parseMarkdownFile(data []byte, fileName string) (*model.Novel, []*model.Chapter, error) {
+func (s *NovelImportService) parseMarkdownFile(data []byte, fileName string, tenantID uint) (*model.Novel, []*model.Chapter, error) {
 	content := toUTF8Text(data)
 	lines := strings.Split(content, "\n")
 
@@ -782,13 +784,13 @@ func (s *NovelImportService) parseMarkdownFile(data []byte, fileName string) (*m
 
 	// 合并内容并按章节分割
 	fullContent := strings.Join(lines, "\n")
-	chapters := s.splitByChapters(fullContent, title)
+	chapters := s.splitByChapters(fullContent, title, tenantID)
 
 	return novel, chapters, nil
 }
 
 // 解析JSON文件
-func (s *NovelImportService) parseJsonFile(data []byte) (*model.Novel, []*model.Chapter, error) {
+func (s *NovelImportService) parseJsonFile(data []byte, tenantID uint) (*model.Novel, []*model.Chapter, error) {
 	// 尝试解析为结构化JSON
 	var structured struct {
 		Title    string `json:"title"`
@@ -803,7 +805,7 @@ func (s *NovelImportService) parseJsonFile(data []byte) (*model.Novel, []*model.
 
 	if err := json.Unmarshal(data, &structured); err != nil {
 		// 如果解析失败，当作纯文本处理
-		return s.parseTxtFile(data, "imported.json")
+		return s.parseTxtFile(data, "imported.json", tenantID)
 	}
 
 	novel := &model.Novel{
@@ -820,19 +822,19 @@ func (s *NovelImportService) parseJsonFile(data []byte) (*model.Novel, []*model.
 				Title:     ch.Title,
 				Content:   ch.Content,
 				WordCount: len([]rune(ch.Content)),
-				Status:    "published",
+				Status:    "completed",
 			})
 		}
 	} else if structured.Content != "" {
 		// 扁平结构，按章节分割
-		chapters = s.splitByChapters(structured.Content, novel.Title)
+		chapters = s.splitByChapters(structured.Content, novel.Title, tenantID)
 	}
 
 	return novel, chapters, nil
 }
 
 // 解析HTML文件
-func (s *NovelImportService) parseHtmlFile(data []byte) (*model.Novel, []*model.Chapter, error) {
+func (s *NovelImportService) parseHtmlFile(data []byte, tenantID uint) (*model.Novel, []*model.Chapter, error) {
 	content := toUTF8Text(data)
 
 	// 简单提取标题
@@ -852,7 +854,7 @@ func (s *NovelImportService) parseHtmlFile(data []byte) (*model.Novel, []*model.
 		Status: "completed",
 	}
 
-	chapters := s.splitByChapters(cleanContent, title)
+	chapters := s.splitByChapters(cleanContent, title, tenantID)
 
 	return novel, chapters, nil
 }
@@ -883,7 +885,13 @@ func (s *NovelImportService) stripHtmlTags(html string) string {
 }
 
 // 按章节分割
-func (s *NovelImportService) splitByChapters(content, novelTitle string) []*model.Chapter {
+func (s *NovelImportService) splitByChapters(content, novelTitle string, tenantID uint) []*model.Chapter {
+	contentRunes := len([]rune(content))
+	logger.Printf("[Import] splitByChapters: novelTitle=%q contentRunes=%d", novelTitle, contentRunes)
+	if contentRunes == 0 {
+		logger.Printf("[Import] splitByChapters: empty content, returning no chapters")
+		return nil
+	}
 	// 尝试多种章节分割模式（取命中数最多的一种）
 	patterns := []string{
 		`(?m)^第[一二三四五六七八九十百千零〇\d]+章[^\n]*`,  // 中文章节（行首）
@@ -917,18 +925,29 @@ func (s *NovelImportService) splitByChapters(content, novelTitle string) []*mode
 
 	// 正则找到了章节 → 按切割位提取内容
 	if len(splits) >= 2 {
+		logger.Printf("[Import] splitByChapters: regex found %d splits, building chapters", len(splits))
 		return s.buildChaptersFromSplits(content, splits, chapterTitles)
 	}
 
-	// 正则未命中，尝试 AI 辅助划分
-	if s.aiService != nil && len([]rune(content)) > 500 {
-		if aiChapters := s.splitByChaptersWithAI(content); len(aiChapters) >= 2 {
-			return aiChapters
-		}
+	// 正则仅命中 1 处：说明有章节标记但只有一章，直接作为单章返回
+	if len(splits) == 1 {
+		logger.Printf("[Import] splitByChapters: single chapter header found, treating as 1 chapter")
+		return s.buildChaptersFromSplits(content, splits, chapterTitles)
 	}
 
-	// 最终兜底：按固定字数分割
-	return s.splitByLength(content, novelTitle, 3000)
+	// 正则未命中，无章节标记 → 整体作为一章，不强制按字数切割
+	// （splitByLength 会把 6 万字文件拆成 20 章，与用户预期不符）
+	logger.Printf("[Import] splitByChapters: no chapter markers found, treating entire content as 1 chapter")
+	return []*model.Chapter{
+		{
+			UUID:      uuid.New().String(),
+			ChapterNo: 1,
+			Title:     novelTitle,
+			Content:   strings.TrimSpace(content),
+			WordCount: contentRunes,
+			Status:    "completed",
+		},
+	}
 }
 
 // buildChaptersFromSplits 从切割位和标题列表构建章节
@@ -952,14 +971,14 @@ func (s *NovelImportService) buildChaptersFromSplits(content string, splits []in
 			Title:     titles[i],
 			Content:   chapterContent,
 			WordCount: len([]rune(chapterContent)),
-			Status:    "published",
+			Status:    "completed",
 		})
 	}
 	return chapters
 }
 
 // splitByChaptersWithAI 让 AI 从文本中识别章节标题，用于正则无法匹配的非标准格式
-func (s *NovelImportService) splitByChaptersWithAI(content string) []*model.Chapter {
+func (s *NovelImportService) splitByChaptersWithAI(content string, tenantID uint) []*model.Chapter {
 	const maxSampleRunes = 10000
 	runes := []rune(content)
 	sample := content
@@ -977,7 +996,7 @@ func (s *NovelImportService) splitByChaptersWithAI(content string) []*model.Chap
 小说文本（前10000字）：
 ` + sample
 
-	resp, err := s.aiService.Generate(0, "chapter", prompt)
+	resp, err := s.aiService.GenerateWithProvider(tenantID, 0, "chapter", prompt, "", StoryboardOverrides{TimeoutSeconds: 30})
 	if err != nil || strings.TrimSpace(resp) == "" {
 		logger.Printf("[Import] AI chapter split error: %v", err)
 		return nil
@@ -1061,7 +1080,7 @@ func (s *NovelImportService) splitByLength(content, title string, chunkSize int)
 			Title:     fmt.Sprintf("第%d章", chapterNo),
 			Content:   chapterContent,
 			WordCount: len(runes[i:end]),
-			Status:    "published",
+			Status:    "completed",
 		}
 		chapters = append(chapters, chapter)
 	}

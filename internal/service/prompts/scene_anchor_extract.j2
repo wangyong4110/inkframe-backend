@@ -1,9 +1,9 @@
-You are a visual scene analyst for the novel "{{ NovelTitle }}".
+You are a visual production designer analyzing the novel "{{ NovelTitle }}" to extract scene anchors for AI image and video generation.
 
-Your task: extract all visually distinct, recurring scenes from the chapter content below that have strong visual identity and can serve as consistent visual anchors across multiple shots.
+Your task: identify all visually distinct, recurring locations from the chapter content below that have strong visual identity and will appear across multiple shots.
 
 {% if ExistingAnchors %}
-Already registered scene anchors (do NOT duplicate these):
+Already registered scene anchors — do NOT duplicate these:
 {% for anchor in ExistingAnchors %}- {{ anchor.Name }}: {{ anchor.Description }}
 {% endfor %}
 {% endif %}
@@ -13,20 +13,34 @@ Chapter content:
 {{ ChapterContent }}
 ---
 
-Rules:
-1. Only extract scenes that appear (or are clearly referenced) in the chapter content above.
-2. Each scene must have a unique, recognizable visual identity (architecture, lighting, atmosphere).
-3. Skip generic/temporary locations with no visual distinctiveness.
-4. Output ONLY a valid JSON array, no markdown fences, no explanation.
-5. Use English for description and prompt_lock fields (for image generation compatibility).
-6. type must be one of: interior, exterior, imaginary
+# Rules
 
-Output format (JSON array):
+1. Only extract scenes that appear (or are clearly referenced) in this chapter.
+2. Each scene must have a recognizable, persistent visual identity — skip generic or one-off locations.
+3. `type` must be one of: `interior` / `exterior` / `imaginary`
+4. `name`: 2–8 Chinese characters, specific and memorable (e.g. 皇宫正殿, not 宫殿).
+5. `description`: Detailed English visual description for AI image generation, **80–150 words**. Cover ALL of these dimensions:
+   - **Architecture / structure**: spatial scale (vast/intimate), layout, ceiling height, key structural elements (columns, arches, walls, windows, gates)
+   - **Materials & textures**: stone, wood, metal, fabric — color and surface quality
+   - **Lighting**: source (sunlight / torches / moonlight / magical), direction, quality (soft/harsh/filtered), color temperature
+   - **Atmosphere & mood**: the emotional feel of the space (oppressive, serene, mysterious, grand, decaying…)
+   - **Distinctive visual elements**: unique props, decorations, vegetation, water features, symbols, colors that make this scene instantly recognizable
+   - **Time / weather / season** if relevant to the scene's primary appearance
+6. `prompt_lock`: 10–20 comma-separated English keywords that MUST appear in every image generated for this scene. Structure them as:
+   - 2–4 core architectural identifiers (e.g. `marble throne dais`, `bamboo forest path`)
+   - 2–3 material/texture tags (e.g. `weathered stone`, `red lacquered wood`)
+   - 2–3 lighting tags (e.g. `golden afternoon sunlight`, `cool blue moonlight`)
+   - 1–2 atmosphere tags (e.g. `eerie silence`, `grandeur and power`)
+   - 1–2 art style / quality tags (e.g. `Chinese fantasy concept art`, `ultra-detailed`, `cinematic`)
+7. Output ONLY a valid JSON array — no markdown fences, no explanation text.
+
+# Output format
+
 [
   {
-    "name": "Scene name in Chinese (2-8 chars)",
-    "type": "interior|exterior|imaginary",
-    "description": "English visual description of the scene (architecture, scale, key features, 1-2 sentences)",
-    "prompt_lock": "Comma-separated English image generation keywords that must appear in every image of this scene (include style, lighting, and atmosphere tags)"
+    "name": "皇宫正殿",
+    "type": "interior",
+    "description": "An immense imperial throne hall of overwhelming scale, roughly 60 meters long and 30 meters wide, with a 15-meter coffered ceiling supported by twelve massive vermillion-lacquered pillars carved with coiling golden dragons. The polished jade-green marble floor reflects the blaze of hundreds of white candles in iron chandeliers above. At the far end, a tiered black granite throne dais rises seven steps, flanked by two incense burners trailing white smoke. Walls are hung with heavy crimson silk banners embroidered with golden phoenixes. Daylight filters through narrow lattice windows high on the north wall, casting long diagonal bars of cold morning light across the smoke-filled air, creating a mood of absolute imperial authority and latent menace.",
+    "prompt_lock": "imperial throne hall, vermillion dragon pillars, jade marble floor, tiered granite throne dais, crimson silk banners, golden phoenix embroidery, iron chandelier candles, white incense smoke, cold morning window light, overwhelming scale, Chinese imperial architecture, grandeur and latent menace, Chinese fantasy concept art, ultra-detailed, cinematic lighting"
   }
 ]

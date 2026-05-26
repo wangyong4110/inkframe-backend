@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
@@ -58,7 +59,6 @@ type NovelAnalysisService struct {
 	worldviewRepo      *repository.WorldviewRepository
 	itemRepo           *repository.ItemRepository
 	itemService        *ItemService
-	skillService       *SkillService
 	novelService       *NovelService
 	aiService          *AIService
 	plotPointService   *PlotPointService
@@ -111,12 +111,6 @@ func (s *NovelAnalysisService) WithItemRepo(itemRepo *repository.ItemRepository)
 // WithItemService 注入物品服务（可选，启用逐章并发提取）
 func (s *NovelAnalysisService) WithItemService(svc *ItemService) *NovelAnalysisService {
 	s.itemService = svc
-	return s
-}
-
-// WithSkillService 注入技能服务（可选，支持技能自动生成步骤）
-func (s *NovelAnalysisService) WithSkillService(skillService *SkillService) *NovelAnalysisService {
-	s.skillService = skillService
 	return s
 }
 
@@ -201,13 +195,15 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 		return
 	}
 
-	// ── Phase 1: 章节摘要 (0→20) ─────────────────────────────────────────────
+	// ── Phase 1: 章节摘要 (0→20)，最多 3 分钟 ──────────────────────────────
 	if len(chapters) > 0 {
 		task.setStep("正在生成章节摘要...")
-		if err := s.stepSummarizeChapters(ctx, task, tenantID, novel, chapters); err != nil {
+		phase1Ctx, phase1Cancel := context.WithTimeout(ctx, 3*time.Minute)
+		if err := s.stepSummarizeChapters(phase1Ctx, task, tenantID, novel, chapters); err != nil {
 			logger.Printf("NovelAnalysis[%d]: stepSummarizeChapters warn: %v", novel.ID, err)
 			task.addWarning("章节摘要生成失败: " + err.Error())
 		}
+		phase1Cancel()
 		// 刷新章节（含更新后的摘要和内容）
 		if refreshed, err := s.chapterRepo.ListByNovelWithContent(novel.ID); err == nil {
 			chapters = refreshed
@@ -215,33 +211,36 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 	}
 	task.setProgress(20)
 
-	// ── Phase 2: 并发提取 角色/物品/世界观/剧情点/场景锚点 (20→70) ─────────
+	// ── Phase 2: 并发提取 角色/物品/世界观/剧情点/场景锚点 (20→70)，最多 6 分钟 ──
 	task.setStep("正在同步提取角色、物品、世界观、剧情点、场景锚点...")
 	{
+		phase2Ctx, phase2Cancel := context.WithTimeout(ctx, 6*time.Minute)
+		defer phase2Cancel()
+
 		type phaseTask struct {
 			name string
 			fn   func() error
 		}
 		phaseTasks := []phaseTask{
 			{"角色", func() error {
-				return s.stepExtractCharacters(ctx, task, tenantID, novel, chapters)
+				return s.stepExtractCharacters(phase2Ctx, task, tenantID, novel, chapters)
 			}},
 			{"物品", func() error {
 				if s.itemRepo == nil {
 					return nil
 				}
-				return s.stepExtractItems(ctx, task, tenantID, novel, chapters)
+				return s.stepExtractItems(phase2Ctx, task, tenantID, novel, chapters)
 			}},
 			{"世界观", func() error {
-				return s.stepExtractWorldview(ctx, task, tenantID, novel, chapters)
+				return s.stepExtractWorldview(phase2Ctx, task, tenantID, novel, chapters)
 			}},
 			{"剧情点", func() error {
-				return s.stepExtractPlotPoints(ctx, task, tenantID, novel, chapters)
+				return s.stepExtractPlotPoints(phase2Ctx, task, tenantID, novel, chapters)
 			}},
 			{"场景锚点", func() error {
-				return s.stepExtractSceneAnchors(ctx, task, tenantID, novel, chapters)
+				return s.stepExtractSceneAnchors(phase2Ctx, task, tenantID, novel, chapters)
 			}},
-		}
+			}
 
 		var phWg sync.WaitGroup
 		var doneCount atomic.Int32
@@ -271,16 +270,7 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 	}
 	task.setProgress(70)
 
-	// ── Phase 3: 技能生成（依赖角色，顺序执行）(70→78) ───────────────────────
-	task.setStep("正在生成技能数据...")
-	if s.skillService != nil {
-		if err := s.stepGenerateSkills(ctx, task, tenantID, novel); err != nil {
-			logger.Printf("NovelAnalysis[%d]: stepGenerateSkills warn: %v", novel.ID, err)
-		}
-	}
-	task.setProgress(78)
-
-	// ── Phase 4: 大纲 + 设置 并行 (78→90) ────────────────────────────────────
+	// ── Phase 3: 大纲 + 设置 并行 (70→88)，大纲最多 5 分钟 ─────────────────
 	task.setStep("正在生成大纲与设置...")
 	var outline *OutlineResult
 	{
@@ -288,32 +278,205 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 		phWg.Add(2)
 		go func() {
 			defer phWg.Done()
+			outlineCtx, outlineCancel := context.WithTimeout(ctx, 5*time.Minute)
+			defer outlineCancel()
 			var oErr error
-			outline, oErr = s.stepGenerateOutline(ctx, task, tenantID, novel)
+			outline, oErr = s.stepGenerateOutline(outlineCtx, task, tenantID, novel)
 			if oErr != nil {
 				logger.Printf("NovelAnalysis[%d]: stepGenerateOutline warn: %v", novel.ID, oErr)
 			}
 		}()
 		go func() {
 			defer phWg.Done()
-			if err := s.stepUpdateNovelSettings(ctx, task, tenantID, novel, chapters); err != nil {
+			settingsCtx, settingsCancel := context.WithTimeout(ctx, 2*time.Minute)
+			defer settingsCancel()
+			if err := s.stepUpdateNovelSettings(settingsCtx, task, tenantID, novel, chapters); err != nil {
 				logger.Printf("NovelAnalysis[%d]: stepUpdateNovelSettings warn: %v", novel.ID, err)
 			}
 		}()
 		phWg.Wait()
 	}
-	task.setProgress(90)
+	task.setProgress(88)
 
-	// ── Phase 5: 章节大纲 (90→95) ─────────────────────────────────────────────
+	// ── Phase 4: 章节大纲 (88→95) ─────────────────────────────────────────────
+	phase4Created := false
 	if outline != nil && len(outline.Chapters) > 0 {
+		logger.Printf("NovelAnalysis[%d]: Phase4 creating chapter outlines: %d chapters", novel.ID, len(outline.Chapters))
 		task.setStep("正在创建章节大纲...")
 		if err := s.stepCreateChapterOutlines(ctx, task, novel, outline); err != nil {
 			logger.Printf("NovelAnalysis[%d]: stepCreateChapterOutlines warn: %v", novel.ID, err)
+		} else {
+			phase4Created = true
+		}
+	} else {
+		if outline == nil {
+			logger.Printf("NovelAnalysis[%d]: Phase4 skipped: outline is nil (GenerateOutline failed)", novel.ID)
+		} else {
+			logger.Printf("NovelAnalysis[%d]: Phase4 skipped: outline has 0 chapters", novel.ID)
+		}
+	}
+
+	// ── Phase 4.5: 补跑物品/场景/设置提取（仅当 Phase2 时无章节内容，Phase4 后有摘要可用）──
+	if phase4Created {
+		// 补跑小说设置（genre/description/style_prompt 等）
+		freshNovel, _ := s.novelRepo.GetByID(novel.ID)
+		needSettings := freshNovel != nil && (freshNovel.Genre == "" || freshNovel.Genre == "unknown" ||
+			freshNovel.Description == "" || freshNovel.StylePrompt == "")
+		if needSettings {
+			logger.Printf("NovelAnalysis[%d]: Phase4.5 re-running novel settings update", novel.ID)
+			task.setStep("正在补充生成设置...")
+			// 用 outline.Summary 填充临时 description，让 settings 有素材可用
+			novelForSettings := *freshNovel
+			if novelForSettings.Description == "" && outline != nil && outline.Summary != "" {
+				novelForSettings.Description = outline.Summary
+			}
+			freshChaptersForSettings, _ := s.chapterRepo.ListByNovelWithContent(novel.ID)
+			if err := s.stepUpdateNovelSettings(ctx, task, tenantID, &novelForSettings, freshChaptersForSettings); err != nil {
+				logger.Printf("NovelAnalysis[%d]: Phase4.5 settings update warn: %v", novel.ID, err)
+			}
+		}
+		// 补跑物品提取
+		if s.itemRepo != nil && s.itemService != nil {
+			existingItems, _ := s.itemRepo.ListByNovel(novel.ID)
+			if len(existingItems) == 0 {
+				logger.Printf("NovelAnalysis[%d]: Phase4.5 re-running item extraction (chapters now have summaries)", novel.ID)
+				task.setStep("正在补充提取物品...")
+				if items, err := s.itemService.AIExtractAllFromNovel(tenantID, novel.ID); err != nil {
+					logger.Printf("NovelAnalysis[%d]: Phase4.5 item extraction warn: %v", novel.ID, err)
+				} else {
+					logger.Printf("NovelAnalysis[%d]: Phase4.5 item extraction done: %d items", novel.ID, len(items))
+				}
+			}
+		}
+		// 补跑场景锚点提取（用章节 summary 代替 content）
+		if s.sceneAnchorService != nil {
+			existingAnchors, _ := s.sceneAnchorService.ListByNovel(novel.ID)
+			if len(existingAnchors) == 0 {
+				logger.Printf("NovelAnalysis[%d]: Phase4.5 re-running scene anchor extraction (using chapter summaries)", novel.ID)
+				task.setStep("正在补充提取场景...")
+				// 重新加载章节（Phase4 创建的带 summary 的 draft 章节）
+				if freshChapters, err := s.chapterRepo.ListByNovelWithContent(novel.ID); err == nil {
+					const maxConcurrent = 3
+					sem := make(chan struct{}, maxConcurrent)
+					var wg sync.WaitGroup
+					count := 0
+					for _, ch := range freshChapters {
+						text := ch.Content
+						if text == "" {
+							text = ch.Summary
+						}
+						if text == "" || count >= 10 {
+							continue
+						}
+						count++
+						ch := ch
+						capturedText := text
+						sem <- struct{}{}
+						wg.Add(1)
+						go func() {
+							defer func() { <-sem; wg.Done() }()
+							anchors, err := s.sceneAnchorService.ExtractFromChapter(ctx, tenantID, novel.ID, novel.Title, capturedText)
+							if err != nil {
+								logger.Printf("NovelAnalysis[%d]: Phase4.5 scene anchor ch%d warn: %v", novel.ID, ch.ChapterNo, err)
+							} else {
+								logger.Printf("NovelAnalysis[%d]: Phase4.5 scene anchor ch%d: %d anchors", novel.ID, ch.ChapterNo, len(anchors))
+							}
+						}()
+					}
+					wg.Wait()
+				}
+			}
+		}
+		// 补跑角色信息丰富（Phase2 时无章节内容，Description/VisualPrompt 可能为空）
+		{
+			existingChars, _ := s.characterRepo.ListByNovel(novel.ID)
+			var emptyChars []*model.Character
+			for _, c := range existingChars {
+				if c.Description == "" || c.VisualPrompt == "" {
+					emptyChars = append(emptyChars, c)
+				}
+			}
+			if len(emptyChars) > 0 {
+				logger.Printf("NovelAnalysis[%d]: Phase4.5 enriching %d characters with empty fields", novel.ID, len(emptyChars))
+				task.setStep("正在补充角色信息...")
+				novelForChar := freshNovel
+				if novelForChar == nil {
+					novelForChar, _ = s.novelRepo.GetByID(novel.ID)
+				}
+				if novelForChar != nil {
+					freshChaptersForChar, _ := s.chapterRepo.ListByNovelWithContent(novel.ID)
+					summariesText := buildChapterSummariesText(freshChaptersForChar, 15, 8000)
+					if summariesText != "" {
+						extractPrompt, pErr := renderPrompt("extract_characters", map[string]interface{}{
+							"NovelTitle":     novelForChar.Title,
+							"Genre":          novelForChar.Genre,
+							"Summaries":      summariesText,
+							"PromptLanguage": novelForChar.PromptLanguage,
+						})
+						if pErr == nil {
+							result, aErr := s.aiService.GenerateWithProvider(tenantID, novel.ID, "extract_characters", extractPrompt, "",
+								StoryboardOverrides{MaxTokens: 8192})
+							if aErr == nil {
+								chars, pErr2 := parseCharacterJSONResult(result)
+								if pErr2 == nil {
+									// 建立 name→emptyChar 映射，只更新空字段
+									emptyByName := make(map[string]*model.Character, len(emptyChars))
+									for _, c := range emptyChars {
+										emptyByName[strings.ToLower(c.Name)] = c
+									}
+									for _, c := range chars {
+										ec, ok := emptyByName[strings.ToLower(c.Name)]
+										if !ok {
+											continue
+										}
+										enriched := false
+										if ec.Description == "" {
+											// 优先新格式的统一 description，兼容旧格式分离字段
+											desc := c.Description
+											if desc == "" {
+												var parts []string
+												if c.Appearance != "" { parts = append(parts, "外貌："+c.Appearance) }
+												if c.Personality != "" { parts = append(parts, "性格："+c.Personality) }
+												if c.Background != "" { parts = append(parts, "背景："+c.Background) }
+												if c.CharacterArc != "" { parts = append(parts, "弧光："+c.CharacterArc) }
+												if c.Archetype != "" { parts = append(parts, "原型："+c.Archetype) }
+												if c.DialogueStyle.SpeechHabits != "" {
+													parts = append(parts, "口头禅："+c.DialogueStyle.SpeechHabits)
+												} else if len(c.DialogueStyle.Patterns) > 0 {
+													parts = append(parts, "说话风格："+strings.Join(c.DialogueStyle.Patterns, "；"))
+												}
+												desc = strings.Join(parts, "\n")
+											}
+											if desc != "" {
+												ec.Description = desc
+												enriched = true
+											}
+										}
+										if ec.VisualPrompt == "" && c.VisualPrompt != "" {
+											ec.VisualPrompt = c.VisualPrompt
+											enriched = true
+										}
+										if enriched {
+											if err := s.characterRepo.Update(ec); err != nil {
+												logger.Printf("NovelAnalysis[%d]: Phase4.5 update char %q: %v", novel.ID, ec.Name, err)
+											} else {
+												logger.Printf("NovelAnalysis[%d]: Phase4.5 enriched char %q", novel.ID, ec.Name)
+											}
+										}
+									}
+								}
+							} else {
+								logger.Printf("NovelAnalysis[%d]: Phase4.5 character enrichment AI error: %v", novel.ID, aErr)
+							}
+						}
+					}
+				}
+			}
 		}
 	}
 	task.setProgress(95)
 
-	// ── Phase 6: 收尾 (95→100) ────────────────────────────────────────────────
+	// ── Phase 5: 收尾 (95→100) ────────────────────────────────────────────────
 	task.setStep("收尾中...")
 	if err := s.stepFinalize(task, novel); err != nil {
 		logger.Printf("NovelAnalysis[%d]: stepFinalize warn: %v", novel.ID, err)
@@ -354,12 +517,13 @@ type analysisDialogueStyleJSON struct {
 type analysisCharJSON struct {
 	Name         string                    `json:"name"`
 	Role         string                    `json:"role"`
-	Archetype    string                    `json:"archetype"`
-	Appearance   string                    `json:"appearance"`
-	Personality  string                    `json:"personality"`
-	Background   string                    `json:"background"`
-	CharacterArc string                    `json:"character_arc"`
-	DialogueStyle analysisDialogueStyleJSON `json:"dialogue_style"`
+	Description  string                    `json:"description"`   // 统一中文描述（新格式）
+	Archetype    string                    `json:"archetype"`     // 旧格式兼容
+	Appearance   string                    `json:"appearance"`    // 旧格式兼容
+	Personality  string                    `json:"personality"`   // 旧格式兼容
+	Background   string                    `json:"background"`    // 旧格式兼容
+	CharacterArc string                    `json:"character_arc"` // 旧格式兼容
+	DialogueStyle analysisDialogueStyleJSON `json:"dialogue_style"` // 旧格式兼容
 	VisualPrompt string                    `json:"visual_prompt"`
 }
 
@@ -367,6 +531,7 @@ type analysisItemJSON struct {
 	Name         string `json:"name"`
 	Category     string `json:"category"`
 	Appearance   string `json:"appearance"`
+	Description  string `json:"description"`
 	Location     string `json:"location"`
 	Owner        string `json:"owner"`
 	VisualPrompt string `json:"visual_prompt"`
@@ -399,8 +564,8 @@ func (s *NovelAnalysisService) stepSummarizeChapters(
 ) error {
 	logger.Printf("[NovelAnalysis] stepSummarizeChapters: novelID=%d chapters=%d", novel.ID, len(chapters))
 
-	// 关键路径：只并发处理前 N 章（Phase 2 提取最多用前 5 章摘要）
-	const maxForPipeline = 15
+	// 关键路径：只并发处理前 N 章（Phase 2 各提取步骤也上限 10 章，保持一致）
+	const maxForPipeline = 10
 	const maxConcurrent = 3
 
 	pipeline := chapters
@@ -526,15 +691,17 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 	}
 
 	extractCharsPrompt, err := renderPrompt("extract_characters", map[string]interface{}{
-		"NovelTitle": novel.Title,
-		"Genre":      novel.Genre,
-		"Summaries":  summariesText,
+		"NovelTitle":     novel.Title,
+		"Genre":          novel.Genre,
+		"Summaries":      summariesText,
+		"PromptLanguage": novel.PromptLanguage,
 	})
 	if err != nil {
 		return fmt.Errorf("render extract_characters: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "extract_characters", extractCharsPrompt, "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "extract_characters", extractCharsPrompt, "",
+		StoryboardOverrides{MaxTokens: 8192})
 	if err != nil {
 		return fmt.Errorf("AI extract_characters: %w", err)
 	}
@@ -571,24 +738,33 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 		if role != "protagonist" && role != "antagonist" && role != "supporting" {
 			role = "supporting"
 		}
-		var descParts []string
-		if c.Appearance != "" { descParts = append(descParts, "外貌："+c.Appearance) }
-		if c.Personality != "" { descParts = append(descParts, "性格："+c.Personality) }
-		if c.Background != "" { descParts = append(descParts, "背景："+c.Background) }
-		if c.CharacterArc != "" { descParts = append(descParts, "弧光："+c.CharacterArc) }
-		if len(c.DialogueStyle.Patterns) > 0 {
-			descParts = append(descParts, "说话风格："+strings.Join(c.DialogueStyle.Patterns, "；"))
-		} else if c.DialogueStyle.VocabularyLevel != "" {
-			descParts = append(descParts, "说话风格："+c.DialogueStyle.VocabularyLevel)
+		// 优先使用新格式的统一 description；兼容旧格式的分离字段
+		finalDesc := c.Description
+		if finalDesc == "" {
+			var descParts []string
+			if c.Appearance != "" { descParts = append(descParts, "外貌："+c.Appearance) }
+			if c.Personality != "" { descParts = append(descParts, "性格："+c.Personality) }
+			if c.Background != "" { descParts = append(descParts, "背景："+c.Background) }
+			if c.CharacterArc != "" { descParts = append(descParts, "弧光："+c.CharacterArc) }
+			if c.Archetype != "" { descParts = append(descParts, "原型："+c.Archetype) }
+			if c.DialogueStyle.SpeechHabits != "" {
+				descParts = append(descParts, "口头禅/语癖："+c.DialogueStyle.SpeechHabits)
+			} else if len(c.DialogueStyle.Patterns) > 0 {
+				descParts = append(descParts, "说话风格："+strings.Join(c.DialogueStyle.Patterns, "；"))
+			} else if c.DialogueStyle.VocabularyLevel != "" {
+				descParts = append(descParts, "说话风格："+c.DialogueStyle.VocabularyLevel)
+			}
+			finalDesc = strings.Join(descParts, "\n")
 		}
 		char := &model.Character{
-			NovelID:     novel.ID,
-			TenantID:    tenantID,
-			UUID:        uuid.New().String(),
-			Name:        c.Name,
-			Role:        role,
-			Description: strings.Join(descParts, "\n"),
-			Status:      "active",
+			NovelID:      novel.ID,
+			TenantID:     tenantID,
+			UUID:         uuid.New().String(),
+			Name:         c.Name,
+			Role:         role,
+			Description:  finalDesc,
+			VisualPrompt: c.VisualPrompt,
+			Status:       "active",
 		}
 		if err := s.characterRepo.Create(char); err != nil {
 			logger.Printf("NovelAnalysis: create character %q: %v", c.Name, err)
@@ -741,9 +917,13 @@ func (s *NovelAnalysisService) stepGenerateOutline(
 		chapterNum = 30
 	}
 
+	// 大纲 JSON 对 30 章非常庞大（每章含摘要/剧情点/钩子等），
+	// 默认 4096 token 会截断导致 JSON 解析失败；强制给定最低 8192 token。
+	const minOutlineTokens = 8192
 	req := &GenerateOutlineRequest{
 		NovelID:    novel.ID,
 		ChapterNum: chapterNum,
+		MaxTokens:  minOutlineTokens,
 	}
 	outline, err := s.novelService.GenerateOutline(tenantID, req)
 	if err != nil {
@@ -765,6 +945,10 @@ func (s *NovelAnalysisService) stepGenerateOutline(
 func (s *NovelAnalysisService) stepCreateChapterOutlines(
 	ctx context.Context, task *AnalysisTask, novel *model.Novel, outline *OutlineResult,
 ) error {
+	logger.Printf("NovelAnalysis[%d]: stepCreateChapterOutlines start: novelID=%d totalChapters=%d tenantID=%d",
+		novel.ID, novel.ID, len(outline.Chapters), novel.TenantID)
+	created := 0
+	skipped := 0
 	for _, co := range outline.Chapters {
 		if co.ChapterNo <= 0 {
 			continue
@@ -772,11 +956,13 @@ func (s *NovelAnalysisService) stepCreateChapterOutlines(
 		// 检查是否已存在同 NovelID+ChapterNo 的记录
 		existing, err := s.chapterRepo.GetByNovelAndChapterNo(novel.ID, co.ChapterNo)
 		if err == nil && existing != nil {
+			skipped++
 			continue // 已存在，跳过
 		}
 		ch := &model.Chapter{
 			UUID:      uuid.New().String(),
 			NovelID:   novel.ID,
+			TenantID:  novel.TenantID,
 			ChapterNo: co.ChapterNo,
 			Title:     co.Title,
 			Summary:   co.Summary,
@@ -785,7 +971,13 @@ func (s *NovelAnalysisService) stepCreateChapterOutlines(
 		}
 		if err := s.chapterRepo.Create(ch); err != nil {
 			logger.Printf("NovelAnalysis: create chapter placeholder %d: %v", co.ChapterNo, err)
+		} else {
+			created++
 		}
+	}
+	logger.Printf("NovelAnalysis[%d]: stepCreateChapterOutlines done: created=%d skipped=%d", novel.ID, created, skipped)
+	if created > 0 {
+		_ = s.novelRepo.SyncStats(novel.ID)
 	}
 	return nil
 }
@@ -829,7 +1021,10 @@ func (s *NovelAnalysisService) generateThreeViewsAsync(ctx context.Context, char
 
 	for _, char := range sorted {
 		basePrompt := ""
-		if char.Description != "" {
+		if char.VisualPrompt != "" {
+			// 优先使用 AI 生成的英文视觉提示词（避免中文描述影响图像质量）
+			basePrompt = fmt.Sprintf("character named %s, %s, high quality illustration", char.Name, char.VisualPrompt)
+		} else if char.Description != "" {
 			basePrompt = fmt.Sprintf("character named %s, %s, high quality illustration", char.Name, char.Description)
 		} else {
 			basePrompt = fmt.Sprintf("character named %s, full body, high quality illustration", char.Name)
@@ -847,27 +1042,6 @@ func (s *NovelAnalysisService) generateThreeViewsAsync(ctx context.Context, char
 			}
 		}
 	}
-}
-
-// stepGenerateSkills 逐章提取技能；结果可为空，失败不影响 pipeline
-func (s *NovelAnalysisService) stepGenerateSkills(
-	ctx context.Context, task *AnalysisTask, tenantID uint, novel *model.Novel,
-) error {
-	logger.Printf("[NovelAnalysis] stepGenerateSkills: novelID=%d", novel.ID)
-	// 若已有技能则跳过
-	existing, _ := s.skillService.ListSkills(novel.ID, repository.ListSkillsOpts{})
-	if len(existing) > 0 {
-		logger.Printf("NovelAnalysis[%d]: skills already exist (%d), skip", novel.ID, len(existing))
-		return nil
-	}
-
-	skills, err := s.skillService.AIExtractAllFromNovel(tenantID, novel.ID)
-	if err != nil {
-		logger.Printf("NovelAnalysis[%d]: skill extraction warn: %v", novel.ID, err)
-		return nil // 非致命错误，不影响 pipeline
-	}
-	logger.Printf("NovelAnalysis[%d]: extracted %d skills from chapters", novel.ID, len(skills))
-	return nil
 }
 
 // stepExtractItems 逐章并发提取物品信息
@@ -987,40 +1161,79 @@ func (s *NovelAnalysisService) stepUpdateNovelSettings(
 			break
 		}
 	}
+	// 降级：章节摘要（大纲分析时 draft 章节只有 summary）
+	if sampleContent == "" {
+		for _, ch := range chapters {
+			if ch.Summary != "" {
+				sampleContent = truncateForPrompt(ch.Summary, 2000)
+				break
+			}
+		}
+	}
 	if sampleContent == "" {
 		sampleContent = novel.Description
 	}
 	if sampleContent == "" {
-		return nil
+		// 最后兜底：只用小说标题让 AI 推断基本设置
+		sampleContent = fmt.Sprintf("小说标题：《%s》，类型待确认。", novel.Title)
 	}
 
 	updates := map[string]interface{}{}
 
-	// ── 1. 自动识别小说类型 ─────────────────────────────────────────────────
-	if needGenre {
-		validGenres := []string{
-			"现代言情", "古代言情", "幻想言情", "历史", "军事", "科幻",
-			"游戏", "游戏竞技", "玄幻奇幻", "都市", "奇闻异事", "武侠仙侠",
-			"体育", "N次元", "文学艺术",
-		}
-		genrePrompt := fmt.Sprintf(`小说《%s》部分内容：
-%s
+	validGenres := []string{
+		"现代言情", "古代言情", "幻想言情", "历史", "军事", "科幻",
+		"游戏", "游戏竞技", "玄幻奇幻", "都市", "奇闻异事", "武侠仙侠",
+		"体育", "N次元", "文学艺术",
+	}
 
-请从以下类型中选择最符合的一个：%s
-只输出类型名称，不要任何其他内容。`, novel.Title, sampleContent, strings.Join(validGenres, "、"))
-		if g, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "genre_detection", genrePrompt, ""); err == nil {
-			g = strings.TrimSpace(g)
-			for _, vg := range validGenres {
-				if strings.Contains(g, vg) {
-					novel.Genre = vg
-					updates["genre"] = vg
-					break
+	// ── 1. 合并 AI 调用：一次返回 genre/style_prompt/description ─────────────
+	// 只请求实际缺失的字段，最多 1 次 AI 往返（原来最多 3 次）
+	if needGenre || needStylePrompt || needDescription {
+		type settingsJSON struct {
+			Genre       string `json:"genre"`
+			StylePrompt string `json:"style_prompt"`
+			Description string `json:"description"`
+		}
+		var fieldDescs []string
+		if needGenre {
+			fieldDescs = append(fieldDescs, fmt.Sprintf(
+				`  "genre": "从以下类型选一个最符合的：%s"`, strings.Join(validGenres, "、")))
+		}
+		if needStylePrompt {
+			fieldDescs = append(fieldDescs, `  "style_prompt": "100字以内：叙事视角、语言风格、情感基调、节奏特点（AI续写风格参考）"`)
+		}
+		if needDescription {
+			fieldDescs = append(fieldDescs, `  "description": "150字以内作品简介：故事背景、主人公、核心冲突，不剧透结局，语言生动"`)
+		}
+		combinedPrompt := fmt.Sprintf("小说《%s》部分章节内容：\n%s\n\n请用JSON格式返回以下字段：\n{\n%s\n}\n只输出JSON对象，不要任何其他内容。",
+			novel.Title, sampleContent, strings.Join(fieldDescs, ",\n"))
+		if resp, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "novel_settings", combinedPrompt, ""); err == nil {
+			var res settingsJSON
+			if cleaned := extractJSON(strings.TrimSpace(resp)); json.Unmarshal([]byte(cleaned), &res) == nil {
+				if needGenre && res.Genre != "" {
+					for _, vg := range validGenres {
+						if strings.Contains(res.Genre, vg) {
+							novel.Genre = vg
+							updates["genre"] = vg
+							break
+						}
+					}
+				}
+				if needStylePrompt {
+					if sp := strings.TrimSpace(res.StylePrompt); sp != "" {
+						updates["style_prompt"] = sp
+					}
+				}
+				if needDescription {
+					if desc := strings.TrimSpace(res.Description); desc != "" {
+						updates["description"] = desc
+					}
 				}
 			}
 		}
 	}
 
-	// ── 2. 根据类型自动推断图片风格（仅当未设置时）─────────────────────────
+	// ── 2. 根据类型自动推断图片风格（无需 AI，纯映射）────────────────────────
 	if needImageStyle {
 		genreStyleMap := map[string]string{
 			"武侠仙侠": "ink_painting", "古代言情": "ink_painting", "历史": "ink_painting",
@@ -1033,38 +1246,7 @@ func (s *NovelAnalysisService) stepUpdateNovelSettings(
 		}
 	}
 
-	// ── 3. 写作风格描述 ─────────────────────────────────────────────────────
-	if needStylePrompt {
-		stylePrompt := fmt.Sprintf(`小说《%s》，类型：%s。
-以下是部分章节内容示例：
-%s
-
-请用简洁中文（100字以内）描述本书写作风格特点（叙事视角、语言风格、情感基调、节奏特点），作为AI续写的风格参考指引。只输出风格描述，不要标题或解释。`,
-			novel.Title, novel.Genre, sampleContent)
-		if styleText, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "style_analysis", stylePrompt, ""); err == nil {
-			if styleText = strings.TrimSpace(styleText); styleText != "" {
-				updates["style_prompt"] = styleText
-			}
-		}
-	}
-
-	// ── 4. 简介 ─────────────────────────────────────────────────────────────
-	if needDescription {
-		descPrompt := fmt.Sprintf(`小说《%s》（类型：%s）部分内容：
-%s
-
-请为这部小说写一段150字以内的作品简介：
-- 介绍故事背景、主人公与核心冲突
-- 语言生动，吸引读者，不剧透结局
-- 只输出简介正文，无需标题或解释`, novel.Title, novel.Genre, sampleContent)
-		if desc, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "novel_description", descPrompt, ""); err == nil {
-			if desc = strings.TrimSpace(desc); desc != "" {
-				updates["description"] = desc
-			}
-		}
-	}
-
-	// ── 5. 目标章节数 / 目标字数（从已有章节推断）──────────────────────────
+	// ── 4. 目标章节数 / 目标字数（从已有章节推断）──────────────────────────
 	if needTargets && len(chapters) > 0 {
 		if novel.TargetChapters == 0 {
 			updates["target_chapters"] = len(chapters)

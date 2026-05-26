@@ -10,23 +10,29 @@
 # 要求
 1. 提取故事中出现的所有有名称的重要物品（武器、宝物、道具、典籍、神器等）
 2. category 只能是：weapon（武器）/ treasure（宝物）/ tool（道具）/ document（典籍/文书）/ artifact（神器/法宝）/ other（其他）
-3. appearance：外观描述，包含材质、颜色、形态、尺寸、特殊标志等细节
-4. description：物品的详细说明，包含其在故事中的重要性和作用（情节推动、象征意义等），以及特殊能力或用途
-5. location：物品当前所处位置或最后出现的地点
-6. owner：当前持有者或归属（若无主人则留空字符串）
-7. visual_prompt：英文图像生成提示词，描述物品外观，用于 AI 绘图，不超过100词
-8. 若信息不足，结合小说类型合理推断，不要留空
-9. 严格输出 JSON 数组，不含任何说明文字
+{% if PromptLanguage == "en" %}3. appearance (English): detailed visual description — material and texture, primary color and luminescence, form and dimensions, surface details (engravings, runes, gem inlays), aura or special effects; used directly for image generation
+4. description (English): item function and significance — usage, special abilities (conditions, effects, limitations), plot role, symbolic meaning or legendary background{% else %}3. appearance：详细外观描述，必须包含：材质与质感（金属/玉石/布料/骨骸等）、主色调与光泽（颜色、是否发光/流光）、形态与尺寸（长宽高、刃长、形状）、表面特征（纹路、铭文、符文、雕刻、宝石镶嵌）、散发的气息或特殊效果（寒气/火焰/灵光等）；这部分会直接用于图像生成
+4. description：物品在故事中的功能与意义，包含：用途或使用方式、特殊能力（详细描述每项能力的条件、效果和限制）、情节推动作用、象征意义或传说背景{% endif %}
+5. visual_prompt：详细的英文图像生成提示词，用于 AI 绘图。必须包含以下维度，词数 150-250 词：
+   - 物品类型与名称（如 ancient cultivation sword, magical artifact orb）
+   - 材质：精确描述材质（如 "forged from black cold iron with traces of starlight silver"）
+   - 颜色：主色调 + 次色调 + 光效（如 "midnight black blade with pale blue rune glow along the edge"）
+   - 形态：尺寸感、比例、形状细节（如 "three-foot longsword, slightly curved blade, double-edged"）
+   - 表面细节：纹路/符文/雕花/宝石（如 "ancient dragon scale pattern etched along the flat, single crimson ruby set in the pommel"）
+   - 装饰配件：护手/剑格/剑鞘/底座/配件（如 "bronze crossguard shaped like spread wings, black lacquer scabbard wrapped in dark-red cord"）
+   - 特殊视觉效果：发光/流光/气场/元素效果（如 "faint frost mist drifting from the blade, soft blue luminescence along the runes"）
+   - 陈设/背景：展示方式（如 "displayed on a dark stone pedestal, dramatic side lighting, dark void background"）
+   - 风格标签：画风（fantasy concept art / Chinese ink painting / high fantasy illustration）、质量词（masterpiece, ultra-detailed, 8k, photorealistic rendering）
+6. 若信息不足，结合小说类型合理推断，不要留空
+7. 严格输出 JSON 数组，不含任何说明文字
 
 # 输出格式（JSON 数组）
 [
   {
     "name": "物品名称",
     "category": "weapon",
-    "appearance": "一柄三尺长剑，剑身由寒铁铸造，剑格嵌有一颗幽蓝宝石，剑鞘用黑龙皮包裹，剑身上篆刻着古老的符文，寒气逼人",
-    "description": "主角的传家宝剑，据说是上古剑仙遗留，能斩断任何束缚，在故事中是主角突破境界的关键道具。特殊能力：寒气凝固（可在方圆三丈内降温，冻结敌人行动）、符文共鸣（与特定阵法共鸣时威力倍增）",
-    "location": "主角腰间",
-    "owner": "主角名",
-    "visual_prompt": "ancient Chinese longsword, three-foot blade of black cold iron, blue gemstone on guard, black dragon leather sheath, ancient runes carved on blade, icy ethereal aura, fantasy concept art, high detail, dark background"
+    "appearance": "一柄三尺长剑，剑身由玄铁与寒星银合炼而成，通体漆黑，剑面隐约流动着幽蓝色光纹，近看是上古符文，剑格为展翅铜龙造型，龙眼各嵌一颗深红宝石，剑格与剑身交接处常有薄薄的寒雾弥漫，剑鞘以黑漆竹节纹硬鞘包裹，外缠暗红色绸带，末端有银色穗坠",
+    "description": "主角的传家宝剑，据说是上古剑仙遗留，能斩断任何束缚，在故事中是主角突破境界的关键道具。特殊能力：寒气凝固（可在方圆三丈内急速降温，令敌人行动迟滞，持续30秒，每日可用3次）、符文共鸣（在特定上古阵法内威力倍增，与同源法宝相遇时自动激活）、意念驱动（可以心念驱动于方圆百步内飞行攻敌）",
+    "visual_prompt": "ancient Chinese cultivation longsword, a three-foot-long blade masterwork. Material: forged from black cold iron infused with starlight silver ore, giving the blade a deep matte-black surface with faint silver-grey undertones visible at oblique angles. Color: midnight black primary, with glowing pale-blue ancient rune inscriptions running along both flats of the blade, emanating a soft cold luminescence. Form: straight double-edged blade, slight taper toward the tip, three feet total length, elegant narrow profile, weight balanced toward the hilt. Surface detail: dense ancient dragon-seal rune engravings etched along the fuller, the runes pulse faintly with blue-white energy. Guard: a cast-bronze crossguard sculpted as two outstretched dragon wings, each wing tip curling inward, a single deep crimson ruby cabochon set into each dragon eye. Grip: tightly wrapped in dark-charcoal silk cord over bone-white ray skin, slightly worn from use. Scabbard: rigid lacquered bamboo-joint design in matte black, wrapped in dark crimson silk cord, silver hanging ring at the throat, silver finial at the chape. Special effect: thin wisps of pale frost mist drifting along the blade length, faint crackle of frozen air near the edge. Background: displayed upright on a weathered dark-stone pedestal, dramatic single-source cold side lighting casting long shadows, deep void black background. Style: Chinese fantasy concept art, masterpiece, ultra-detailed, 8k, cinematic lighting, photorealistic rendering"
   }
 ]

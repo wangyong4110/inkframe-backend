@@ -23,7 +23,6 @@ type Config struct {
 	WorldviewHandler *handler.WorldviewHandler
 	TenantHandler    *handler.TenantHandler
 	ItemHandler      *handler.ItemHandler
-	SkillHandler     *handler.SkillHandler
 	UploadHandler    *handler.UploadHandler
 	PlotPointHandler *handler.PlotPointHandler
 	TaskHandler        *handler.TaskHandler
@@ -219,14 +218,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.DELETE("/:id/chapters/:chapter_no/characters/:character_id", cfg.CharacterHandler.DeleteChapterCharacter)
 			novels.POST("/:id/chapters/:chapter_no/characters/ai-extract", cfg.CharacterHandler.AIExtractMinorCharacters)
 
-			// 技能管理
-			if cfg.SkillHandler != nil {
-				novels.GET("/:id/skills", cfg.SkillHandler.ListSkills)
-				novels.POST("/:id/skills", cfg.SkillHandler.CreateSkill)
-				novels.POST("/:id/skills/generate", cfg.SkillHandler.GenerateSkills)
-				novels.POST("/:id/chapters/:chapter_no/skills/ai-extract", cfg.SkillHandler.AIExtractChapterSkills)
-			}
-
 			// 剧情点（小说级）
 			if cfg.PlotPointHandler != nil {
 				novels.GET("/:id/plot-points", cfg.PlotPointHandler.ListByNovel)
@@ -242,17 +233,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				novels.POST("/:id/scene-anchors/ai-extract", cfg.SceneAnchorHandler.AIExtractFromNovel)
 				novels.POST("/:id/scene-anchors/batch-ref-images", cfg.SceneAnchorHandler.BatchGenerateRefImages)
 				novels.POST("/:id/chapters/:chapter_no/scene-anchors/ai-extract", cfg.SceneAnchorHandler.AIExtractChapterAnchors)
-			}
-		}
-
-		// 技能（单个技能操作）
-		if cfg.SkillHandler != nil {
-			skills := v1.Group("/skills")
-			{
-				skills.GET("/:skillId", cfg.SkillHandler.GetSkill)
-				skills.PUT("/:skillId", cfg.SkillHandler.UpdateSkill)
-				skills.DELETE("/:skillId", cfg.SkillHandler.DeleteSkill)
-				skills.POST("/:skillId/effect-image", cfg.SkillHandler.GenerateSkillEffect)
 			}
 		}
 

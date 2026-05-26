@@ -257,10 +257,14 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 	// 获取小说标题/类型
 	novelTitle := "本小说"
 	novelGenre := ""
+	promptLanguage := "zh"
 	if s.novelRepo != nil {
 		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
 			novelTitle = novel.Title
 			novelGenre = novel.Genre
+			if novel.PromptLanguage != "" {
+				promptLanguage = novel.PromptLanguage
+			}
 		}
 	}
 	if summariesText == "" {
@@ -282,9 +286,10 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 
 	// 使用与分析流程相同的富格式 extract_items.j2
 	itemsPrompt, err := renderPrompt("extract_items", map[string]interface{}{
-		"NovelTitle": novelTitle,
-		"Genre":      novelGenre,
-		"Summaries":  summariesText,
+		"NovelTitle":     novelTitle,
+		"Genre":          novelGenre,
+		"Summaries":      summariesText,
+		"PromptLanguage": promptLanguage,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render extract_items: %w", err)
@@ -293,7 +298,8 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 		itemsPrompt += "\n\n注意：已有物品如下，必须复用原名，不得改名或重复创建：\n" + existingJSON
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_items", itemsPrompt, "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_items", itemsPrompt, "",
+		StoryboardOverrides{MaxTokens: 8192})
 	if err != nil {
 		return nil, fmt.Errorf("AI extraction failed: %w", err)
 	}
@@ -315,7 +321,7 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 			e.Category = "other"
 		}
 
-		extractedDesc := buildItemDescription(e.Category, e.Appearance)
+		extractedDesc := buildItemDescription(e.Category, e.Appearance, e.Description)
 		if it, ok := byName[e.Name]; ok {
 			// 更新：用 AI 数据填充空缺字段
 			var changed bool
@@ -434,7 +440,8 @@ func (s *ItemService) extractItemsFromContent(
 		return nil, fmt.Errorf("render extract_chapter_items: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_chapter_items", chItemsPrompt, "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_chapter_items", chItemsPrompt, "",
+		StoryboardOverrides{MaxTokens: 8192})
 	if err != nil {
 		return nil, err
 	}
@@ -504,7 +511,8 @@ func (s *ItemService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.It
 		}
 	}
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("no chapter content available")
+		logger.Printf("[ItemService] AIExtractAllFromNovel: novelID=%d no chapter content, skip", novelID)
+		return nil, nil
 	}
 
 	// 并发提取（纯 AI 调用，不操作 DB）
@@ -566,7 +574,7 @@ func (s *ItemService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.It
 			NovelID:      novelID,
 			UUID:         uuid.New().String(),
 			Name:         e.Name,
-			Description:  buildItemDescription(e.Category, e.Appearance),
+			Description:  buildItemDescription(e.Category, e.Appearance, e.Description),
 			Location:     e.Location,
 			Owner:        e.Owner,
 			VisualPrompt: e.VisualPrompt,
@@ -624,7 +632,8 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint) (
 		return nil, fmt.Errorf("render extract_chapter_items: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_chapter_items", chItemsPrompt2, "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_chapter_items", chItemsPrompt2, "",
+		StoryboardOverrides{MaxTokens: 8192})
 	if err != nil {
 		return nil, fmt.Errorf("AI extract chapter items: %w", err)
 	}
@@ -633,6 +642,7 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint) (
 		Name         string `json:"name"`
 		Category     string `json:"category"`
 		Appearance   string `json:"appearance"`
+		Description  string `json:"description"`
 		Location     string `json:"location"`
 		Owner        string `json:"owner"`
 		VisualPrompt string `json:"visual_prompt"`
@@ -652,7 +662,7 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint) (
 			NovelID:      novelID,
 			UUID:         uuid.New().String(),
 			Name:         it.Name,
-			Description:  buildItemDescription(it.Category, it.Appearance),
+			Description:  buildItemDescription(it.Category, it.Appearance, it.Description),
 			Location:     it.Location,
 			Owner:        it.Owner,
 			VisualPrompt: it.VisualPrompt,
@@ -680,14 +690,17 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint) (
 	return created, nil
 }
 
-// buildItemDescription 将类别和外观描述合并为统一描述字段。
-func buildItemDescription(category, appearance string) string {
+// buildItemDescription 将外观和叙事说明合并为统一描述字段。
+// appearance 始终置于首段，description 紧随其后。
+func buildItemDescription(category, appearance, description string) string {
 	var parts []string
-	if category != "" {
+	if appearance != "" {
+		parts = append(parts, "【外观】"+appearance)
+	}
+	if description != "" {
+		parts = append(parts, description)
+	} else if category != "" {
 		parts = append(parts, category)
 	}
-	if appearance != "" {
-		parts = append(parts, appearance)
-	}
-	return strings.Join(parts, "，")
+	return strings.Join(parts, "\n")
 }

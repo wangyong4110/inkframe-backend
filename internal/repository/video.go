@@ -18,6 +18,10 @@ func NewVideoRepository(db *gorm.DB) *VideoRepository {
 
 // Create 创建视频
 func (r *VideoRepository) Create(video *model.Video) error {
+	// Normalize chapter_id=0 to NULL to avoid FK constraint failures
+	if video.ChapterID != nil && *video.ChapterID == 0 {
+		video.ChapterID = nil
+	}
 	return r.db.Create(video).Error
 }
 

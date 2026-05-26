@@ -225,11 +225,20 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 		existingNames[a.Name] = true
 	}
 
+	// 获取提示词语言配置（场景锚点模板已为英文，此处备用）
+	promptLanguage := "zh"
+	if s.novelRepo != nil {
+		if novel, nErr := s.novelRepo.GetByID(novelID); nErr == nil && novel.PromptLanguage != "" {
+			promptLanguage = novel.PromptLanguage
+		}
+	}
+
 	// 渲染 prompt
 	anchorPrompt, err := renderPrompt("scene_anchor_extract", map[string]interface{}{
 		"NovelTitle":      novelTitle,
 		"ExistingAnchors": existingEntries,
 		"ChapterContent":  truncateForPrompt(chapterContent, 8000),
+		"PromptLanguage":  promptLanguage,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render scene_anchor_extract: %w", err)

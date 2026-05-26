@@ -14,11 +14,12 @@ import (
 // URL:  {endpoint}/deployments/{deployment}/chat/completions?api-version={apiVersion}
 // Auth: api-key header (not Bearer token)
 type AzureProvider struct {
-	apiKey     string
-	endpoint   string
-	deployment string
-	apiVersion string
-	client     *http.Client
+	apiKey           string
+	endpoint         string
+	deployment       string
+	apiVersion       string
+	client           *http.Client
+	maxTokensCap     int // upper bound for max_tokens; 0 = no cap (default: 32768)
 }
 
 // NewAzureProvider creates an Azure OpenAI provider.
@@ -40,11 +41,12 @@ func NewAzureProvider(apiKey, endpoint, deployment, apiVersion string, timeout t
 		timeout = DefaultProviderTimeout
 	}
 	return &AzureProvider{
-		apiKey:     apiKey,
-		endpoint:   endpoint,
-		deployment: deployment,
-		apiVersion: apiVersion,
-		client:     &http.Client{Timeout: timeout},
+		apiKey:       apiKey,
+		endpoint:     endpoint,
+		deployment:   deployment,
+		apiVersion:   apiVersion,
+		client:       &http.Client{Timeout: timeout},
+		maxTokensCap: 32768, // safe default; most Azure deployments cap completion tokens at 32768
 	}
 }
 
@@ -205,7 +207,11 @@ func (p *AzureProvider) buildChatRequest(req *GenerateRequest) map[string]interf
 		"messages": messages,
 	}
 	if req.MaxTokens > 0 {
-		payload["max_tokens"] = req.MaxTokens
+		tok := req.MaxTokens
+		if p.maxTokensCap > 0 && tok > p.maxTokensCap {
+			tok = p.maxTokensCap
+		}
+		payload["max_tokens"] = tok
 	}
 	if req.Temperature > 0 {
 		payload["temperature"] = req.Temperature

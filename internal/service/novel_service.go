@@ -204,6 +204,9 @@ func (s *NovelService) UpdateNovel(id uint, req *model.UpdateNovelRequest) (*mod
 	if req.ImageStyle != "" {
 		novel.ImageStyle = req.ImageStyle
 	}
+	if req.PromptLanguage != "" {
+		novel.PromptLanguage = req.PromptLanguage
+	}
 	if req.TargetWordCount != nil {
 		novel.TargetWordCount = *req.TargetWordCount
 	}
@@ -375,25 +378,27 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 	}
 
 	// 解析结果：兼容两种 AI 输出格式
-	//   格式 A（预期）：{"title":"...","chapters":[...]}
-	//   格式 B（AI 偶发）：[{"chapter_no":1,...},...]  直接输出数组
+	//   格式 A（预期）：{"title":"...","chapters":[...]}  → 用 extractJSONObject 保留完整对象
+	//   格式 B（AI 偶发）：[{"chapter_no":1,...},...]      → 直接输出数组，用 extractJSON 作降级
 	outline := &OutlineResult{}
-	cleaned := extractJSON(result)
-	if err := json.Unmarshal([]byte(cleaned), outline); err != nil {
-		// 尝试格式 B：纯 chapters 数组
+	cleaned := extractJSONObject(result)
+	if err := json.Unmarshal([]byte(cleaned), outline); err != nil || len(outline.Chapters) == 0 {
+		// 降级：尝试格式 B（纯 chapters 数组）
+		cleanedArr := extractJSON(result)
 		var chapters []ChapterOutline
-		if err2 := json.Unmarshal([]byte(cleaned), &chapters); err2 == nil && len(chapters) > 0 {
+		if err2 := json.Unmarshal([]byte(cleanedArr), &chapters); err2 == nil && len(chapters) > 0 {
 			logger.Printf("GenerateOutline: novel %d returned array format, wrapping into OutlineResult", req.NovelID)
 			outline = &OutlineResult{
 				Title:    novel.Title,
 				Chapters: chapters,
 			}
 		} else {
-			logger.Printf("GenerateOutline: failed to parse AI response for novel %d: %v (raw len=%d)", req.NovelID, err, len(cleaned))
-			outline = &OutlineResult{
-				Title:    novel.Title,
-				Chapters: []ChapterOutline{},
+			parseErr := err
+			if parseErr == nil {
+				parseErr = fmt.Errorf("chapters array empty after parse")
 			}
+			logger.Printf("GenerateOutline: failed to parse AI response for novel %d: %v (object len=%d, array len=%d)", req.NovelID, parseErr, len(cleaned), len(cleanedArr))
+			return nil, fmt.Errorf("outline parse failed: %w", parseErr)
 		}
 	}
 
