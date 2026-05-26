@@ -76,7 +76,13 @@ func (s *SubtitleService) GenerateASS(shots []model.StoryboardShot, fontName str
 		start := formatASSTime(currentTime)
 		end := formatASSTime(subEnd)
 
-		if shot.Narration != "" {
+		// shot.Subtitle 为手动覆写优先级最高，与 GenerateShotSRT 保持一致
+		if shot.Subtitle != "" {
+			text := cleanSubtitleText(shot.Subtitle)
+			if text != "" {
+				sb.WriteString(fmt.Sprintf("Dialogue: 0,%s,%s,Narration,,0,0,0,,%s\n", start, end, text))
+			}
+		} else if shot.Narration != "" {
 			// 旁白字幕（白色，居中底部）
 			text := cleanSubtitleText(shot.Narration)
 			if text != "" {

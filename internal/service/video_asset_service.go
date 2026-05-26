@@ -340,14 +340,11 @@ func (s *VideoService) syncShotDurationAfterVoice(shotID uint) {
 
 // GenerateShotAudio 为单个分镜生成 TTS 音频（同步），生成后更新 shot.AudioPath
 func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID uint, narrationVoice string) error {
+	// 阻塞等待信号量槽位：audioSem 用于限速（防 429），不应跳过。
+	// 注意：此函数始终在后台 goroutine 中调用，阻塞等待是正确行为。
 	if s.audioSem != nil {
-		select {
-		case s.audioSem <- struct{}{}:
-			defer func() { <-s.audioSem }()
-		default:
-			logger.Printf("[VideoService] GenerateShotAudio: audio semaphore full, skipping shot %d", shot.ShotNo)
-			return nil
-		}
+		s.audioSem <- struct{}{}
+		defer func() { <-s.audioSem }()
 	}
 
 	// Determine the text to synthesize

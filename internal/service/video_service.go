@@ -2136,6 +2136,12 @@ func (s *VideoService) runSlideshowPipeline(videoID uint) {
 		return
 	}
 
+	// 从小说视频配置读取旁白音色
+	narrationVoice := ""
+	if vc := s.GetNovelVideoConfig(video.NovelID); vc != nil {
+		narrationVoice = vc.NarrationVoice
+	}
+
 	var audioWg sync.WaitGroup
 	for _, shot := range shots {
 		if err := s.GenerateSlideshowShotVideo(shot, video.AspectRatio); err != nil {
@@ -2144,7 +2150,7 @@ func (s *VideoService) runSlideshowPipeline(videoID uint) {
 		audioWg.Add(1)
 		go func(sh *model.StoryboardShot) {
 			defer audioWg.Done()
-			if err := s.GenerateShotAudio(sh, video.TenantID, ""); err != nil {
+			if err := s.GenerateShotAudio(sh, video.TenantID, narrationVoice); err != nil {
 				logger.Printf("runSlideshowPipeline: audio gen failed for shot %d: %v", sh.ShotNo, err)
 			}
 		}(shot)
@@ -2201,13 +2207,19 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 		logger.Printf("[VideoService] GenerateAllShotVideos: failed to update video %d status to generating: %v", videoID, err)
 	}
 
+	// 从小说视频配置读取旁白音色
+	narrationVoice := ""
+	if vc := s.GetNovelVideoConfig(video.NovelID); vc != nil {
+		narrationVoice = vc.NarrationVoice
+	}
+
 	for _, shot := range shots {
 		if err := s.GenerateShotVideo(shot, video.AspectRatio); err != nil {
 			logger.Printf("GenerateAllShotVideos: shot %d failed: %v", shot.ShotNo, err)
 			continue
 		}
 		// TTS audio in parallel
-		go s.GenerateShotAudio(shot, video.TenantID, "") //nolint:errcheck
+		go s.GenerateShotAudio(shot, video.TenantID, narrationVoice) //nolint:errcheck
 	}
 	return nil
 }
