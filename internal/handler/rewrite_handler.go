@@ -1,12 +1,14 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
+	"gorm.io/gorm"
 )
 
 // RewriteHandler handles novel rewriting project endpoints
@@ -151,7 +153,11 @@ func (h *RewriteHandler) GetAnalysis(c *gin.Context) {
 	}
 	analysis, err := h.rewriteSvc.GetAnalysis(uint(id))
 	if err != nil {
-		respondErr(c, http.StatusNotFound, err.Error())
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondOK(c, nil)
+			return
+		}
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	respondOK(c, analysis)
@@ -169,7 +175,11 @@ func (h *RewriteHandler) GetBible(c *gin.Context) {
 	}
 	bible, err := h.rewriteSvc.GetBible(uint(id))
 	if err != nil {
-		respondErr(c, http.StatusNotFound, err.Error())
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			respondOK(c, nil)
+			return
+		}
+		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	respondOK(c, bible)

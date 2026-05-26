@@ -114,6 +114,11 @@ func (p *QianwenProvider) Generate(ctx context.Context, req *GenerateRequest) (*
 	if req.TopP > 0 {
 		apiReq["top_p"] = req.TopP
 	}
+	// Qwen3 系列默认开启 thinking 模式（推理前会生成大量 reasoning token，严重拖慢速度）。
+	// 对于小说/剧本等创作任务，thinking 模式无收益，统一关闭。
+	if strings.HasPrefix(strings.ToLower(model), "qwen3") {
+		apiReq["enable_thinking"] = false
+	}
 
 	body, err := json.Marshal(apiReq)
 	if err != nil {
@@ -153,8 +158,13 @@ func (p *QianwenProvider) Generate(ctx context.Context, req *GenerateRequest) (*
 		return &GenerateResponse{Error: "no choices returned", FinishTime: time.Since(start).Milliseconds()}, nil
 	}
 
+	content := result.Choices[0].Message.Content
+	// Qwen3 thinking 模式下 content 可能为空，回退到 reasoning_content
+	if content == "" {
+		content = result.Choices[0].Message.ReasoningContent
+	}
 	return &GenerateResponse{
-		Content:     result.Choices[0].Message.Content,
+		Content:     content,
 		Model:       result.Model,
 		InputTokens: result.Usage.PromptTokens,
 		Tokens:      result.Usage.CompletionTokens,
@@ -192,6 +202,10 @@ func (p *QianwenProvider) GenerateStream(ctx context.Context, req *GenerateReque
 		}
 		if req.MaxTokens > 0 {
 			apiReq["max_tokens"] = req.MaxTokens
+		}
+		// Qwen3 系列默认开启 thinking 模式，关闭以避免额外延迟
+		if strings.HasPrefix(strings.ToLower(model), "qwen3") {
+			apiReq["enable_thinking"] = false
 		}
 
 		body, _ := json.Marshal(apiReq)

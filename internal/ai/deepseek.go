@@ -132,8 +132,13 @@ func (p *DeepSeekProvider) Generate(ctx context.Context, req *GenerateRequest) (
 		return &GenerateResponse{Error: "no choices returned", FinishTime: time.Since(start).Milliseconds()}, nil
 	}
 
+	content := result.Choices[0].Message.Content
+	// deepseek-reasoner: 思考阶段 content 为空，回退到 reasoning_content
+	if content == "" {
+		content = result.Choices[0].Message.ReasoningContent
+	}
 	return &GenerateResponse{
-		Content:     result.Choices[0].Message.Content,
+		Content:     content,
 		Model:       result.Model,
 		InputTokens: result.Usage.PromptTokens,
 		Tokens:      result.Usage.CompletionTokens,

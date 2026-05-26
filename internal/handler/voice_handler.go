@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -337,9 +339,11 @@ func (h *VideoHandler) DeleteShotSFXItem(c *gin.Context) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 // BatchGenerateVoice POST /videos/:id/shots/batch-voice
-// 为视频所有分镜批量生成配音，作为单个异步任务顺序处理。
-// 每次最多处理 10 个分镜（避免 TTS API 限流），已有配音的分镜自动跳过。
+// 为视频所有分镜批量生成配音，作为单个异步任务处理。
+// 内部每批并发 5 个，批间隔 1s，避免 TTS API 限流；已有配音的分镜自动跳过。
 func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
+	const batchSize = 5
+
 	videoID, ok := parseID(c, "id")
 	if !ok {
 		return
@@ -348,14 +352,9 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 	var req struct {
 		NarrationVoice  string `json:"narration_voice"`
 		SubtitleEnabled bool   `json:"subtitle_enabled"`
-		MaxShots        int    `json:"max_shots"`     // 0=自动上限10
 		SkipExisting    *bool  `json:"skip_existing"` // nil/true=跳过已有配音
 	}
 	_ = c.ShouldBindJSON(&req)
-	maxShots := req.MaxShots
-	if maxShots <= 0 || maxShots > 10 {
-		maxShots = 10
-	}
 	skipExisting := req.SkipExisting == nil || *req.SkipExisting // default true
 
 	allShots, err := h.videoService.GetStoryboard(uint(videoID))
@@ -380,9 +379,6 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 		respondOK(c, gin.H{"message": "所有分镜已有配音，无需重新生成", "count": 0})
 		return
 	}
-	if len(targets) > maxShots {
-		targets = targets[:maxShots]
-	}
 
 	tenantID := getTenantID(c)
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeVoiceGen,
@@ -402,27 +398,60 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 
 		total := len(shots)
-		success, fail := 0, 0
-		for i, shot := range shots {
-			h.taskSvc.UpdateProgress(taskID, i*100/total) //nolint:errcheck
-			if err := h.videoService.GenerateShotAudio(shot, tenantID, narrationVoice); err != nil {
-				logger.Printf("[VideoHandler] BatchGenerateVoice task %s shot %d failed: %v", taskID, shot.ShotNo, err)
-				fail++
-			} else {
-				success++
+		var doneCount atomic.Int32
+
+		for i := 0; i < total; i += batchSize {
+			end := i + batchSize
+			if end > total {
+				end = total
 			}
-			// 每个分镜间隔 1s，避免触发 TTS API 限流
-			if i < total-1 {
+			batch := shots[i:end]
+
+			var wg sync.WaitGroup
+			for _, shot := range batch {
+				wg.Add(1)
+				go func(s *model.StoryboardShot) {
+					defer wg.Done()
+					if err := h.videoService.GenerateShotAudio(s, tenantID, narrationVoice); err != nil {
+						logger.Printf("[VideoHandler] BatchGenerateVoice task %s shot %d failed: %v", taskID, s.ShotNo, err)
+					}
+					done := int(doneCount.Add(1))
+					h.taskSvc.UpdateProgress(taskID, done*100/total) //nolint:errcheck
+				}(shot)
+			}
+			wg.Wait()
+
+			// 批次间隔 1s，避免触发 TTS API 限流
+			if end < total {
 				time.Sleep(1 * time.Second)
 			}
 		}
+
+		// 统计最终结果
+		finalShots, _ := h.videoService.GetStoryboard(uint(videoID))
+		shotSet := make(map[uint]bool, len(shots))
+		for _, s := range shots {
+			shotSet[s.ID] = true
+		}
+		success, fail := 0, 0
+		for _, s := range finalShots {
+			if !shotSet[s.ID] {
+				continue
+			}
+			if s.AudioPath != "" {
+				success++
+			} else {
+				fail++
+			}
+		}
+
 		h.taskSvc.Complete(taskID, gin.H{"success": success, "fail": fail, "total": total}) //nolint:errcheck
 		logger.Printf("[VideoHandler] BatchGenerateVoice task %s done: success=%d fail=%d", taskID, success, fail)
 	}(task.TaskID, targets, req.NarrationVoice, req.SubtitleEnabled)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
-		"message": fmt.Sprintf("批量配音任务已提交（共 %d 个分镜）", len(targets)),
+		"message": fmt.Sprintf("批量配音任务已提交（共 %d 个分镜，每批 %d 个并发）", len(targets), batchSize),
 		"data":    gin.H{"task_id": task.TaskID, "shot_count": len(targets)},
 	})
 }
