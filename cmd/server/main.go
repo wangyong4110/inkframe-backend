@@ -1639,7 +1639,8 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 	characterSvc := service.NewCharacterService(repos.CharacterRepo, aiSvc).
 		WithChapterCharacterRepo(repos.ChapterCharacterRepo).
 		WithNovelRepo(repos.NovelRepo).
-		WithChapterRepo(repos.ChapterRepo)
+		WithChapterRepo(repos.ChapterRepo).
+		WithModelRepo(repos.AIModelRepo)
 
 	// 世界观服务
 	worldviewSvc := service.NewWorldviewService(repos.WorldviewRepo, aiSvc).
@@ -1703,7 +1704,8 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 		WithItemService(itemSvc).
 		WithPlotPointService(core.PlotPoint).
 		WithSceneAnchorService(sceneAnchorSvc).
-		WithTaskService(core.Task)
+		WithTaskService(core.Task).
+		WithModelRepo(repos.AIModelRepo)
 
 	// 导入服务
 	crawlerSvc := crawler.NewNovelCrawler(nil)

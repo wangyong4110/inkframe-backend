@@ -12,17 +12,27 @@
 2. 不要提取次要/龙套/仅一次性出场的角色
 3. role 只能是：protagonist / antagonist / supporting
 {% if PromptLanguage == "en" %}4. description (English): include appearance, personality, backstory, speaking style, character arc — one coherent paragraph, 300 words max{% else %}4. description（中文）：包含外貌特征、性格特点、背景故事、说话风格、角色弧光等所有描述性信息，写成连贯段落，300字以内{% endif %}
-5. visual_prompt（英文）：详细图像生成提示词，必须覆盖以下所有维度，150-200词：
+{% if PromptLanguage == "en" %}5. visual_prompt (English): detailed image generation prompt, must cover all dimensions below, 150-200 words:
+   - gender / apparent age / ethnicity and facial features
+   - body type (tall/petite/athletic/slender etc.)
+   - facial details: face shape, eye shape + color + expression, eyebrows, lips
+   - skin tone and texture (fair/warm ivory/golden tan/porcelain etc.)
+   - hairstyle: exact color tone, texture, length, styling
+   - default expression (reflecting personality)
+   - full outfit: top/robe/bottom, fabric, colors, decorative details
+   - accessories: hair ornaments, jewelry, weapons/props
+   - posture and aura
+   - art style + quality tags (anime style / masterpiece / ultra-detailed / 8k / cinematic lighting etc.){% else %}5. visual_prompt（中文）：详细图像生成提示词，必须覆盖以下所有维度，150-200字：
    - 性别/年龄感/种族面部特征
-   - 身形体型（tall/petite/athletic/slender等）
+   - 身形体型（高挑/娇小/运动/纤细等）
    - 面部细节：脸型、眼型+颜色+神态、眉毛、嘴唇
-   - 肤色质感（fair/warm ivory/golden tan/porcelain等）
+   - 肤色质感（白皙/暖象牙/健康小麦/如瓷等）
    - 发型：颜色（精确色调）、发质、长度、造型
    - 默认表情（体现性格）
    - 完整服装描述：上衣/外袍/下装、材质、颜色、装饰细节
    - 配饰：发饰、首饰、武器/道具
    - 体态气质
-   - 画风+质量标签（anime style / masterpiece / ultra-detailed / 8k / cinematic lighting等）
+   - 画风+质量标签（如：动漫风格、极致细节、8k画质、电影级光影等）{% endif %}
 6. 若信息不足，结合小说类型和角色定位合理推断，不要留空
 7. 严格输出 JSON 数组，不含任何说明文字
 
@@ -32,6 +42,6 @@
     "name": "角色名",
     "role": "protagonist",
     "description": "外貌：身高约1.82米，体型精瘦有力，乌黑长发束以白玉簪，剑眉斜飞入鬓，漆黑眼眸深邃冷峻，面容线条分明，常着白色绣银纹长袍，腰悬古朴长剑，气质出尘。性格：外表冷漠疏离，内心热忱，因早年背叛筑起心墙，对认可之人极度忠诚，做事果决，关键时刻为弱者挺身。背景：出身修仙世家，因遭背叛独行天涯，立誓复仇，核心能力：天罚剑诀（凌厉速攻）、元神感知（百米气机感应）。弧光：从孤立复仇者逐渐开放心扉，最终成为守护众人的存在。说话风格：惜字如金，语气平淡，绝不废话。",
-    "visual_prompt": "young male cultivator, appears early 20s, East Asian facial features, tall slender yet toned athletic build with broad shoulders. Sharp angular face, strong defined jawline, high cheekbones. Eyes: long narrow phoenix eyes, pure black irises, icy cold distant gaze, framed by thick sword-like eyebrows. Skin: fair porcelain complexion, smooth and flawless. Hair: long silky midnight-black hair reaching lower back, loosely tied at nape with slender white jade hairpin, loose strands across forehead. Default expression: cold aloof composure, lips slightly pressed. Attire: flowing white cultivation robes layered over silver-grey inner garments, outer robe embroidered with fine silver cloud-and-lightning patterns along sleeves and collar, cinched with pale grey satin sash. Ancient straight sword in plain black lacquer scabbard at left hip. Accessories: single white jade thumb ring. Posture: upright regal bearing, one hand resting lightly on sword hilt. Aura: cool ethereal otherworldly presence. Style: anime art style, masterpiece, ultra-detailed, 8k, cinematic lighting, soft volumetric backlight"
+    "visual_prompt": "{% if PromptLanguage == "en" %}young male cultivator, appears early 20s, East Asian facial features, tall slender yet toned athletic build with broad shoulders. Sharp angular face, strong defined jawline, high cheekbones. Eyes: long narrow phoenix eyes, pure black irises, icy cold distant gaze, framed by thick sword-like eyebrows. Skin: fair porcelain complexion, smooth and flawless. Hair: long silky midnight-black hair reaching lower back, loosely tied at nape with slender white jade hairpin, loose strands across forehead. Default expression: cold aloof composure, lips slightly pressed. Attire: flowing white cultivation robes layered over silver-grey inner garments, outer robe embroidered with fine silver cloud-and-lightning patterns along sleeves and collar, cinched with pale grey satin sash. Ancient straight sword in plain black lacquer scabbard at left hip. Accessories: single white jade thumb ring. Posture: upright regal bearing, one hand resting lightly on sword hilt. Aura: cool ethereal otherworldly presence. Style: anime art style, masterpiece, ultra-detailed, 8k, cinematic lighting, soft volumetric backlight{% else %}年轻男性修仙者，看似二十出头，东亚面孔，高挑精瘦却肌肉有力的身形，宽肩窄腰。脸型轮廓分明，颧骨高耸，下颌线清晰。眼型：细长丹凤眼，瞳色纯黑，目光凌厉冷峻，配以如剑的浓眉。肤色白皙如瓷，光洁无瑕。发型：及腰的漆黑长直发，以细白玉簪松松束于颈后，额前有几缕散落。默认表情：冷淡疏离，嘴唇微抿。服装：白色修仙长袍叠穿银灰内衫，外袍袖口和领口绣有细密银色云雷纹，以浅灰缎带束腰。左腰悬黑漆素鞘古直剑。配饰：单枚白玉扳指。体态：挺拔端正，一手轻搭剑柄。气质：出尘冷峻，仙风道骨。画风：动漫风格，极致细节，8k画质，电影级光影，柔和体积感背光{% endif %}"
   }
 ]

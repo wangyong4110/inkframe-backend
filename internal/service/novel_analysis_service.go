@@ -64,6 +64,7 @@ type NovelAnalysisService struct {
 	plotPointService   *PlotPointService
 	sceneAnchorService *SceneAnchorService
 	taskSvc            *TaskService
+	modelRepo          *repository.AIModelRepository // optional, for voice auto-suggestion
 	cleanupStop        chan struct{} // closed by Shutdown() to stop background goroutines
 }
 
@@ -123,6 +124,12 @@ func (s *NovelAnalysisService) WithPlotPointService(svc *PlotPointService) *Nove
 // WithSceneAnchorService 注入场景锚点服务（可选，支持场景锚点提取步骤）
 func (s *NovelAnalysisService) WithSceneAnchorService(svc *SceneAnchorService) *NovelAnalysisService {
 	s.sceneAnchorService = svc
+	return s
+}
+
+// WithModelRepo 注入模型仓库（可选，启用角色音色自动推荐）
+func (s *NovelAnalysisService) WithModelRepo(r *repository.AIModelRepository) *NovelAnalysisService {
+	s.modelRepo = r
 	return s
 }
 
@@ -515,16 +522,17 @@ type analysisDialogueStyleJSON struct {
 }
 
 type analysisCharJSON struct {
-	Name         string                    `json:"name"`
-	Role         string                    `json:"role"`
-	Description  string                    `json:"description"`   // 统一中文描述（新格式）
-	Archetype    string                    `json:"archetype"`     // 旧格式兼容
-	Appearance   string                    `json:"appearance"`    // 旧格式兼容
-	Personality  string                    `json:"personality"`   // 旧格式兼容
-	Background   string                    `json:"background"`    // 旧格式兼容
-	CharacterArc string                    `json:"character_arc"` // 旧格式兼容
-	DialogueStyle analysisDialogueStyleJSON `json:"dialogue_style"` // 旧格式兼容
-	VisualPrompt string                    `json:"visual_prompt"`
+	Name            string                    `json:"name"`
+	Role            string                    `json:"role"`
+	Description     string                    `json:"description"`     // 统一中文描述（新格式）
+	Archetype       string                    `json:"archetype"`       // 旧格式兼容
+	Appearance      string                    `json:"appearance"`      // 旧格式兼容
+	Personality     string                    `json:"personality"`     // 旧格式兼容
+	PersonalityTags []string                  `json:"personality_tags"` // AI 生成的性格标签
+	Background      string                    `json:"background"`      // 旧格式兼容
+	CharacterArc    string                    `json:"character_arc"`   // 旧格式兼容
+	DialogueStyle   analysisDialogueStyleJSON `json:"dialogue_style"`  // 旧格式兼容
+	VisualPrompt    string                    `json:"visual_prompt"`
 }
 
 type analysisItemJSON struct {
@@ -718,6 +726,12 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 		existingNames[strings.ToLower(ec.Name)] = true
 	}
 
+	// 加载可用音色模型（用于自动推荐，可选）
+	var voiceModels []*model.AIModel
+	if s.modelRepo != nil {
+		voiceModels, _ = s.modelRepo.GetAvailableByTaskType("voice_gen")
+	}
+
 	const maxMainCharacters = 20
 	var createdChars []*model.Character
 	for _, c := range chars {
@@ -756,6 +770,8 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 			}
 			finalDesc = strings.Join(descParts, "\n")
 		}
+		// 自动推荐音色
+		suggestedVoice := suggestVoiceForCharacter(finalDesc, c.PersonalityTags, role, voiceModels)
 		char := &model.Character{
 			NovelID:      novel.ID,
 			TenantID:     tenantID,
@@ -764,6 +780,7 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 			Role:         role,
 			Description:  finalDesc,
 			VisualPrompt: c.VisualPrompt,
+			VoiceID:      suggestedVoice,
 			Status:       "active",
 		}
 		if err := s.characterRepo.Create(char); err != nil {
@@ -871,6 +888,29 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 		wv.Name = novel.Title + " 世界观"
 	}
 
+	// 若小说已关联世界观，直接更新（复用），不重复创建
+	if novel.WorldviewID != nil {
+		existing, err := s.worldviewRepo.GetByID(*novel.WorldviewID)
+		if err == nil {
+			existing.Name = wv.Name
+			existing.Description = wv.Description
+			existing.Genre = novel.Genre
+			existing.MagicSystem = wv.MagicSystem
+			existing.Geography = wv.Geography
+			existing.History = wv.History
+			existing.Culture = wv.Culture
+			existing.Technology = wv.Technology
+			existing.Rules = wv.Rules
+			existing.CheatSystem = wv.CheatSystem
+			logger.Printf("NovelAnalysis[%d]: updating existing worldview id=%d %q", novel.ID, existing.ID, existing.Name)
+			if err := s.worldviewRepo.Update(existing); err != nil {
+				logger.Printf("NovelAnalysis: update worldview %d: %v", existing.ID, err)
+			}
+			return nil
+		}
+		// existing worldview missing in DB — fall through to create
+	}
+
 	worldview := &model.Worldview{
 		UUID:        uuid.New().String(),
 		Name:        wv.Name,
@@ -890,14 +930,12 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 	}
 
 	// 关联到小说
-	if novel.WorldviewID == nil {
-		if err := s.novelRepo.UpdateFields(novel.ID, map[string]interface{}{
-			"worldview_id": worldview.ID,
-		}); err != nil {
-			logger.Printf("NovelAnalysis: link worldview to novel %d: %v", novel.ID, err)
-		} else {
-			novel.WorldviewID = &worldview.ID
-		}
+	if err := s.novelRepo.UpdateFields(novel.ID, map[string]interface{}{
+		"worldview_id": worldview.ID,
+	}); err != nil {
+		logger.Printf("NovelAnalysis: link worldview to novel %d: %v", novel.ID, err)
+	} else {
+		novel.WorldviewID = &worldview.ID
 	}
 	return nil
 }

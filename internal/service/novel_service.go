@@ -252,6 +252,36 @@ func (s *NovelService) UpdateNovel(id uint, req *model.UpdateNovelRequest) (*mod
 	if req.SubtitleBgStyle != "" {
 		vc.SubtitleBgStyle = req.SubtitleBgStyle
 	}
+	if req.SubtitleFont != "" {
+		vc.SubtitleFont = req.SubtitleFont
+	}
+	// 超时
+	if req.TimeoutSeconds != nil {
+		novel.TimeoutSeconds = *req.TimeoutSeconds
+	}
+	// 色彩调色
+	if req.ColorGrade != "" {
+		vc.ColorGrade = req.ColorGrade
+	}
+	if req.ContrastLevel != nil {
+		vc.ContrastLevel = *req.ContrastLevel
+	}
+	if req.Saturation != nil {
+		vc.Saturation = *req.Saturation
+	}
+	// 镜头特效（bool 用指针，false 也要写入）
+	if req.FilmGrain != nil {
+		vc.FilmGrain = *req.FilmGrain
+	}
+	if req.Vignette != nil {
+		vc.Vignette = *req.Vignette
+	}
+	if req.ChromaticAberration != nil {
+		vc.ChromaticAberration = *req.ChromaticAberration
+	}
+	if req.KlingProForAction != nil {
+		vc.KlingProForAction = *req.KlingProForAction
+	}
 	if err := s.novelRepo.Update(novel); err != nil {
 		return nil, err
 	}

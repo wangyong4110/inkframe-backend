@@ -203,6 +203,41 @@ func (n *Novel) EnsureVideoConfig() *NovelVideoConfig {
 	return n.VideoConfig
 }
 
+// MarshalJSON flattens VideoConfig fields into the top-level Novel JSON so the
+// frontend can read them directly (e.g. novel.video_type instead of novel.video_config.video_type).
+func (n Novel) MarshalJSON() ([]byte, error) {
+	// Use a type alias to avoid infinite recursion.
+	type NovelAlias Novel
+	base, err := json.Marshal(NovelAlias(n))
+	if err != nil {
+		return nil, err
+	}
+	if n.VideoConfig == nil {
+		return base, nil
+	}
+	// Merge VideoConfig fields into the top-level object.
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(base, &m); err != nil {
+		return nil, err
+	}
+	vcBytes, err := json.Marshal(n.VideoConfig)
+	if err != nil {
+		return nil, err
+	}
+	var vc map[string]json.RawMessage
+	if err := json.Unmarshal(vcBytes, &vc); err != nil {
+		return nil, err
+	}
+	// Skip VideoConfig meta fields to avoid polluting the top level.
+	skip := map[string]bool{"id": true, "novel_id": true, "created_at": true, "updated_at": true}
+	for k, v := range vc {
+		if !skip[k] {
+			m[k] = v
+		}
+	}
+	return json.Marshal(m)
+}
+
 // NovelVideoConfig 小说视频/字幕配置（1:1 with Novel，独立表）
 type NovelVideoConfig struct {
 	ID      uint `json:"id" gorm:"primaryKey"`
@@ -1314,6 +1349,21 @@ type UpdateNovelRequest struct {
 	SubtitleFontSize *int   `json:"subtitle_font_size"`
 	SubtitleColor    string `json:"subtitle_color"`
 	SubtitleBgStyle  string `json:"subtitle_bg_style"`
+	SubtitleFont     string `json:"subtitle_font"`
+
+	// 超时
+	TimeoutSeconds *int `json:"timeout_seconds"`
+
+	// 色彩调色
+	ColorGrade    string   `json:"color_grade"`
+	ContrastLevel *float64 `json:"contrast_level"`
+	Saturation    *float64 `json:"saturation"`
+
+	// 镜头特效（bool 用指针，false 也要能写入）
+	FilmGrain           *bool `json:"film_grain"`
+	Vignette            *bool `json:"vignette"`
+	ChromaticAberration *bool `json:"chromatic_aberration"`
+	KlingProForAction   *bool `json:"kling_pro_for_action"`
 }
 
 type CreateChapterRequest struct {
@@ -1350,6 +1400,7 @@ type UpdateCharacterRequest struct {
 	Name           string   `json:"name"`
 	Role           string   `json:"role"`
 	Description    string   `json:"description"`
+	VisualPrompt   string   `json:"visual_prompt"`  // AI 图像生成英文提示词
 	ThreeViewSheet string   `json:"three_view_sheet"`
 	FaceCloseup    string   `json:"face_closeup"`
 	Portrait       string   `json:"portrait"`

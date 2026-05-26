@@ -76,15 +76,16 @@ type charNameEntry struct {
 }
 
 // extractCharNamesFromContent 从单章内容中提取角色名单（纯 AI 提取，不操作 DB）
+// existingNamesJSON：已知角色的 JSON 数组字符串，传入后 AI 会复用已有名称而非产生别名
 func (s *CharacterService) extractCharNamesFromContent(
 	tenantID, novelID uint,
-	novelTitle, genre, content string,
+	novelTitle, genre, content, existingNamesJSON string,
 ) ([]charNameEntry, error) {
 	prompt, err := renderPrompt("extract_character_names", map[string]interface{}{
 		"NovelTitle":    novelTitle,
 		"Genre":         genre,
 		"Summaries":     content,
-		"ExistingNames": "",
+		"ExistingNames": existingNamesJSON,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render extract_character_names: %w", err)
@@ -142,6 +143,20 @@ func (s *CharacterService) extractCharacterNamesFromChapters(
 	}
 	logger.Printf("[CharacterService] extractCharacterNamesFromChapters: novelID=%d chapters=%d", novelID, len(candidates))
 
+	// 加载 DB 中已有角色名，作为 ExistingNames 上下文传入提取提示词，
+	// 让 AI 在各章提取时复用已知名称，减少别名产生。
+	var existingNamesJSON string
+	if s.characterRepo != nil {
+		if existing, err := s.characterRepo.ListByNovel(novelID); err == nil && len(existing) > 0 {
+			existingNamesJSON = marshalExistingNames(existing, func(c *model.Character) any {
+				return struct {
+					Name string `json:"name"`
+					Role string `json:"role"`
+				}{c.Name, c.Role}
+			})
+		}
+	}
+
 	type chResult struct {
 		entries []charNameEntry
 		err     error
@@ -159,7 +174,7 @@ func (s *CharacterService) extractCharacterNamesFromChapters(
 			if content == "" {
 				content = c.Summary
 			}
-			entries, err := s.extractCharNamesFromContent(tenantID, novelID, novelTitle, genre, content)
+			entries, err := s.extractCharNamesFromContent(tenantID, novelID, novelTitle, genre, content, existingNamesJSON)
 			results[idx] = chResult{entries, err}
 		}(i, ch)
 	}
@@ -180,7 +195,52 @@ func (s *CharacterService) extractCharacterNamesFromChapters(
 			}
 		}
 	}
+
+	// 合并后若仍有多条记录，用 AI 做一次别名整合（消除跨章产生的同一角色不同名）
+	if len(merged) > 1 {
+		if consolidated, err := s.consolidateCharacterNames(tenantID, novelID, novelTitle, merged); err == nil && len(consolidated) > 0 {
+			logger.Printf("[CharacterService] consolidateCharacterNames: %d → %d entries", len(merged), len(consolidated))
+			merged = consolidated
+		} else if err != nil {
+			logger.Printf("[CharacterService] consolidateCharacterNames: warn: %v (keeping original list)", err)
+		}
+	}
 	return merged, nil
+}
+
+// consolidateCharacterNames 用 AI 合并别名，消除跨章节提取产生的同一角色多名问题
+func (s *CharacterService) consolidateCharacterNames(
+	tenantID, novelID uint,
+	novelTitle string,
+	entries []charNameEntry,
+) ([]charNameEntry, error) {
+	namesJSON, err := json.Marshal(entries)
+	if err != nil {
+		return nil, fmt.Errorf("marshal entries: %w", err)
+	}
+	prompt, err := renderPrompt("consolidate_character_names", map[string]interface{}{
+		"NovelTitle": novelTitle,
+		"Names":      string(namesJSON),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render consolidate_character_names: %w", err)
+	}
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "consolidate_character_names", prompt, "")
+	if err != nil {
+		return nil, fmt.Errorf("AI call: %w", err)
+	}
+	cleaned := extractJSON(strings.TrimSpace(result))
+	var consolidated []charNameEntry
+	if err := json.Unmarshal([]byte(cleaned), &consolidated); err != nil {
+		return nil, fmt.Errorf("parse JSON: %w", err)
+	}
+	valid := consolidated[:0]
+	for _, e := range consolidated {
+		if e.Name != "" {
+			valid = append(valid, e)
+		}
+	}
+	return valid, nil
 }
 
 // extractCharacterNameList 阶段一：从小说摘要中提取角色名单（输出极短，避免截断）
@@ -238,7 +298,7 @@ func (s *CharacterService) extractCharacterNameList(
 // generateOneCharacterProfile 阶段二：为单个角色生成完整档案
 func (s *CharacterService) generateOneCharacterProfile(
 	tenantID, novelID uint,
-	novelTitle, genre string,
+	novelTitle, genre, promptLanguage string,
 	entry charNameEntry,
 	shortSummaries string,
 ) (*analysisCharJSON, error) {
@@ -249,6 +309,7 @@ func (s *CharacterService) generateOneCharacterProfile(
 		"CharacterRole":  entry.Role,
 		"CharacterBrief": entry.Brief,
 		"Summaries":      shortSummaries,
+		"PromptLanguage": promptLanguage,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render generate_character_profile: %w", err)
@@ -359,8 +420,81 @@ type CharacterService struct {
 	characterRepo        *repository.CharacterRepository
 	chapterCharacterRepo *repository.ChapterCharacterRepository
 	aiService            *AIService
-	novelRepo            *repository.NovelRepository  // optional, for AIBatchGenerate
+	novelRepo            *repository.NovelRepository   // optional, for AIBatchGenerate
 	chapterRepo          *repository.ChapterRepository // optional, for AIBatchGenerate
+	modelRepo            *repository.AIModelRepository // optional, for voice auto-suggestion
+}
+
+// inferGenderFromText 从角色描述文本中推断性别，返回 "male"/"female"/""
+func inferGenderFromText(text string) string {
+	femaleKws := []string{"女性", "女子", "少女", "姑娘", "女侠", "女郎", "女孩", "小姐", "夫人", "女王", "女帝", "她的", "1girl", "female", "girl", "woman"}
+	maleKws := []string{"男性", "男子", "少年", "男孩", "男侠", "公子", "大侠", "他的", "1boy", "male", "man", "boy"}
+	fCount, mCount := 0, 0
+	lower := strings.ToLower(text)
+	for _, kw := range femaleKws {
+		fCount += strings.Count(lower, strings.ToLower(kw))
+	}
+	for _, kw := range maleKws {
+		mCount += strings.Count(lower, strings.ToLower(kw))
+	}
+	if fCount > 0 && fCount >= mCount {
+		return "female"
+	}
+	if mCount > 0 {
+		return "male"
+	}
+	return ""
+}
+
+// suggestVoiceForCharacter 根据角色描述/标签/角色类型从可用音色中自动选择合适的音色 ID。
+// 若无可用音色，返回空字符串（调用方保持 VoiceID 为空）。
+func suggestVoiceForCharacter(description string, personalityTags []string, role string, voices []*model.AIModel) string {
+	if len(voices) == 0 {
+		return ""
+	}
+
+	// 合并描述和标签，用于性别推断
+	combined := description + " " + strings.Join(personalityTags, " ")
+	gender := inferGenderFromText(combined)
+
+	femaleKws := []string{"female", "女", "girl", "woman", "f_"}
+	maleKws := []string{"male", "男", "boy", "man", "m_"}
+
+	var femaleVoices, maleVoices []*model.AIModel
+	for _, v := range voices {
+		haystack := strings.ToLower(v.Name + " " + v.DisplayName)
+		isFemale, isMale := false, false
+		for _, kw := range femaleKws {
+			if strings.Contains(haystack, kw) {
+				isFemale = true
+				break
+			}
+		}
+		for _, kw := range maleKws {
+			if strings.Contains(haystack, kw) {
+				isMale = true
+				break
+			}
+		}
+		if isFemale && !isMale {
+			femaleVoices = append(femaleVoices, v)
+		} else if isMale && !isFemale {
+			maleVoices = append(maleVoices, v)
+		}
+	}
+
+	switch gender {
+	case "female":
+		if len(femaleVoices) > 0 {
+			return femaleVoices[0].Name
+		}
+	case "male":
+		if len(maleVoices) > 0 {
+			return maleVoices[0].Name
+		}
+	}
+	// 性别不明或无对应性别音色，返回第一个可用音色
+	return voices[0].Name
 }
 
 func NewCharacterService(
@@ -400,6 +534,11 @@ func (s *CharacterService) WithChapterRepo(r *repository.ChapterRepository) *Cha
 	return s
 }
 
+func (s *CharacterService) WithModelRepo(r *repository.AIModelRepository) *CharacterService {
+	s.modelRepo = r
+	return s
+}
+
 func (s *CharacterService) CreateCharacter(novelID uint, req *model.CreateCharacterRequest) (*model.Character, error) {
 	character := &model.Character{
 		UUID:        uuid.New().String(),
@@ -433,6 +572,9 @@ func (s *CharacterService) UpdateCharacter(id uint, req *model.UpdateCharacterRe
 	}
 	if req.Description != "" {
 		character.Description = req.Description
+	}
+	if req.VisualPrompt != "" {
+		character.VisualPrompt = req.VisualPrompt
 	}
 	if req.ThreeViewSheet != "" {
 		character.ThreeViewSheet = req.ThreeViewSheet
@@ -592,13 +734,17 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 		return nil, fmt.Errorf("failed to load chapters: %w", err)
 	}
 
-	// 获取小说标题/类型
+	// 获取小说标题/类型/语言配置
 	novelTitle := "本小说"
 	novelGenre := ""
+	novelPromptLanguage := "zh"
 	if s.novelRepo != nil {
 		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
 			novelTitle = novel.Title
 			novelGenre = novel.Genre
+			if novel.PromptLanguage != "" {
+				novelPromptLanguage = novel.PromptLanguage
+			}
 		}
 	}
 
@@ -638,12 +784,18 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			p, err := s.generateOneCharacterProfile(tenantID, novelID, novelTitle, novelGenre, e, shortSummaries)
+			p, err := s.generateOneCharacterProfile(tenantID, novelID, novelTitle, novelGenre, novelPromptLanguage, e, shortSummaries)
 			results[idx] = profileResult{p, err}
 		}(i, entry)
 	}
 	wg.Wait()
 	logger.Printf("[CharacterService] AIBatchGenerate: phase2 done, processing %d profiles", len(nameList))
+
+	// ── 加载可用音色（一次，用于后续自动推荐）────────────────────────────────
+	var voiceModels []*model.AIModel
+	if s.modelRepo != nil {
+		voiceModels, _ = s.modelRepo.GetAvailableByTaskType("voice_gen")
+	}
 
 	// ── Upsert ───────────────────────────────────────────────────────────────
 	upserted := make([]*model.Character, 0, len(nameList))
@@ -678,12 +830,15 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			description = strings.Join(descParts, "\n")
 		}
 
+		suggestedVoice := suggestVoiceForCharacter(description, p.PersonalityTags, role, voiceModels)
+
 		if ch, ok := byName[p.Name]; ok {
 			logger.Printf("[CharacterService] AIBatchGenerate upsert(update) %q: p.VisualPrompt=%q ch.VisualPrompt(existing)=%q", p.Name, p.VisualPrompt, ch.VisualPrompt)
 			changed := false
 			if v, ok := fillIfEmpty(ch.Role, role); ok { ch.Role = v; changed = true }
 			if v, ok := fillIfEmpty(ch.Description, description); ok { ch.Description = v; changed = true }
 			if v, ok := fillIfEmpty(ch.VisualPrompt, p.VisualPrompt); ok { ch.VisualPrompt = v; changed = true }
+			if v, ok := fillIfEmpty(ch.VoiceID, suggestedVoice); ok { ch.VoiceID = v; changed = true }
 			if !changed {
 				upserted = append(upserted, ch)
 				continue
@@ -701,6 +856,7 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 				Role:         role,
 				Description:  description,
 				VisualPrompt: p.VisualPrompt,
+				VoiceID:      suggestedVoice,
 				Status:       "active",
 			}
 			if err := s.characterRepo.Create(character); err != nil {

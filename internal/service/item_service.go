@@ -539,26 +539,42 @@ func (s *ItemService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.It
 	}
 	wg.Wait()
 
-	// 合并去重（按小写名字，保留第一次出现）
-	seen := make(map[string]bool)
-	for k := range byName {
-		seen[k] = true
+	// 合并：统计每个物品出现在多少章节，只保留 ≥2 章的物品
+	type itemEntry struct {
+		item      analysisItemJSON
+		chapterCt int
 	}
-	var allItems []analysisItemJSON
+	itemMap := make(map[string]*itemEntry) // key = lowercase name
 	for _, r := range results {
 		if r.err != nil {
 			logger.Printf("ItemService.AIExtractAllFromNovel: chapter extract error: %v", r.err)
 			continue
 		}
+		seenThisChapter := make(map[string]bool)
 		for _, it := range r.items {
 			key := strings.ToLower(it.Name)
-			if !seen[key] {
-				seen[key] = true
-				allItems = append(allItems, it)
+			if seenThisChapter[key] {
+				continue
+			}
+			seenThisChapter[key] = true
+			if e, ok := itemMap[key]; ok {
+				e.chapterCt++
+			} else {
+				itemMap[key] = &itemEntry{item: it, chapterCt: 1}
 			}
 		}
 	}
-	logger.Printf("[ItemService] AIExtractAllFromNovel: chapters processed=%d, merged=%d unique items", len(candidates), len(allItems))
+	// 已存在 DB 的物品跳过，新物品只保留出现在 ≥2 章的
+	var allItems []analysisItemJSON
+	for key, e := range itemMap {
+		if byName[key] != nil {
+			continue // already in DB
+		}
+		if e.chapterCt >= 2 {
+			allItems = append(allItems, e.item)
+		}
+	}
+	logger.Printf("[ItemService] AIExtractAllFromNovel: chapters processed=%d, candidate items=%d, freq-filtered=%d", len(candidates), len(itemMap), len(allItems))
 
 	// 统一入库（单线程，无竞争）
 	validCat := map[string]bool{"weapon": true, "treasure": true, "tool": true, "document": true, "artifact": true, "other": true}
