@@ -1754,18 +1754,37 @@ type ShotRollbackItem struct {
 	Description string `json:"description"`
 }
 
+// ShotInsertSuggestion AI 审查建议插入的新分镜
+type ShotInsertSuggestion struct {
+	AfterShotNo int     `json:"after_shot_no"` // 在此编号镜头之后插入；0=插入到最前
+	Narration   string  `json:"narration"`
+	Description string  `json:"description"`
+	Duration    float64 `json:"duration"`
+	ShotSize    string  `json:"shot_size,omitempty"`
+	CameraType  string  `json:"camera_type,omitempty"`
+	Reason      string  `json:"reason"` // 插入原因（引用章节文本依据）
+}
+
+// ShotDeleteSuggestion AI 审查建议删除的分镜
+type ShotDeleteSuggestion struct {
+	ShotNo int    `json:"shot_no"`
+	Reason string `json:"reason"` // 删除原因
+}
+
 // StoryboardReview AI 分镜脚本审查报告
 type StoryboardReview struct {
-	OverallScore      float64              `json:"overall_score"`      // 综合得分 0-10
-	NarrativeScore    float64              `json:"narrative_score"`    // 叙事连贯性
-	VisualScore       float64              `json:"visual_score"`       // 视觉多样性
-	PacingScore       float64              `json:"pacing_score"`       // 节奏控制
-	NarrationScore    float64              `json:"narration_score"`    // 旁白质量
-	Summary           string               `json:"summary"`            // 综合评价
-	Strengths         []string             `json:"strengths"`          // 亮点
-	Weaknesses        []string             `json:"weaknesses"`         // 主要问题
-	GlobalSuggestions []string             `json:"global_suggestions"` // 整体改进建议
-	ShotFeedback      []ShotReviewFeedback `json:"shot_feedback"`      // 逐镜反馈（仅有问题的镜头）
+	OverallScore      float64                `json:"overall_score"`       // 综合得分 0-10
+	NarrativeScore    float64                `json:"narrative_score"`     // 叙事连贯性
+	VisualScore       float64                `json:"visual_score"`        // 视觉多样性
+	PacingScore       float64                `json:"pacing_score"`        // 节奏控制
+	NarrationScore    float64                `json:"narration_score"`     // 旁白质量
+	Summary           string                 `json:"summary"`             // 综合评价
+	Strengths         []string               `json:"strengths"`           // 亮点
+	Weaknesses        []string               `json:"weaknesses"`          // 主要问题
+	GlobalSuggestions []string               `json:"global_suggestions"`  // 整体改进建议
+	ShotFeedback      []ShotReviewFeedback   `json:"shot_feedback"`       // 逐镜反馈（仅有问题的镜头）
+	SuggestedInserts  []ShotInsertSuggestion `json:"suggested_inserts,omitempty"` // 建议插入的新镜头
+	SuggestedDeletes  []ShotDeleteSuggestion `json:"suggested_deletes,omitempty"` // 建议删除的镜头
 }
 
 // ─── 戏剧张力管理模型 ──────────────────────────────────────────────────────────
@@ -1917,61 +1936,96 @@ func (RewriteProject) TableName() string { return "ink_rewrite_project" }
 
 // LiteraryAnalysis holds the AI analysis of the original novel
 type LiteraryAnalysis struct {
-	ID                uint      `json:"id" gorm:"primaryKey"`
-	ProjectID         uint      `json:"project_id" gorm:"uniqueIndex"`
-	VoiceFingerprint  string    `json:"voice_fingerprint" gorm:"type:text"` // JSON: narrator_style, sentence_patterns, distinctive_phrases
-	SceneArchitecture string    `json:"scene_architecture" gorm:"type:text"` // JSON: typical_scene_structure, pacing, transitions
-	CharacterPsych    string    `json:"character_psych" gorm:"type:text"` // JSON: character archetypes, relationship topology
-	ThemeCore         string    `json:"theme_core" gorm:"type:text"` // JSON: themes, motifs, symbols
-	WorldLogic        string    `json:"world_logic" gorm:"type:text"` // JSON: world rules, power systems, geography
-	HighRiskMarkers   string    `json:"high_risk_markers" gorm:"type:text"` // JSON: unique phrases, plot sequences, signature elements
-	CreatedAt         time.Time `json:"created_at"`
+	ID                 uint      `json:"id" gorm:"primaryKey"`
+	ProjectID          uint      `json:"project_id" gorm:"uniqueIndex"`
+	VoiceFingerprint   string    `json:"voice_fingerprint" gorm:"type:text"`   // JSON: narrator_style, sentence_patterns, distinctive_phrases
+	SceneArchitecture  string    `json:"scene_architecture" gorm:"type:text"`  // JSON: typical_scene_structure, pacing, transitions
+	CharacterPsych     string    `json:"character_psych" gorm:"type:text"`     // JSON: character archetypes, relationship topology
+	ThemeCore          string    `json:"theme_core" gorm:"type:text"`          // JSON: themes, motifs, symbols
+	WorldLogic         string    `json:"world_logic" gorm:"type:text"`         // JSON: world rules, power systems, geography
+	HighRiskMarkers    string    `json:"high_risk_markers" gorm:"type:text"`   // JSON: unique phrases, plot sequences, signature elements
+	RhythmPattern      string    `json:"rhythm_pattern" gorm:"type:text"`      // JSON: emotional peak interval, chapter-end hook style
+	ImagerySystem      string    `json:"imagery_system" gorm:"type:text"`      // JSON: core symbols and their recurrence pattern
+	InterChapterHooks  string    `json:"inter_chapter_hooks" gorm:"type:text"` // JSON: foreshadow style, avg reveal distance in chapters
+	CreatedAt          time.Time `json:"created_at"`
 }
 
 func (LiteraryAnalysis) TableName() string { return "ink_literary_analysis" }
 
 // RewriteBible is the strategic rewriting guide
 type RewriteBible struct {
-	ID              uint      `json:"id" gorm:"primaryKey"`
-	ProjectID       uint      `json:"project_id" gorm:"uniqueIndex"`
-	NewWorldName    string    `json:"new_world_name" gorm:"size:200"`
-	NewCharNames    string    `json:"new_char_names" gorm:"type:text"`    // JSON: map[oldName]newName (proper names only)
-	NamingStyle     string    `json:"naming_style" gorm:"type:text"`      // cultural/naming convention guide for consistency
-	PlotTransform   string    `json:"plot_transform" gorm:"type:text"`    // JSON: transformation rules for main plot beats
-	PropsTransform  string    `json:"props_transform" gorm:"type:text"`   // JSON: map[originalProp]newProp for iconic items
-	VoiceStrategy   string    `json:"voice_strategy" gorm:"type:text"`    // JSON: narrator voice guidelines
-	StyleGuide      string    `json:"style_guide" gorm:"type:text"`       // JSON: sentence structure, vocabulary register, pacing rules
-	ForbiddenElems  string    `json:"forbidden_elems" gorm:"type:text"`   // JSON: elements to avoid + signature dialogue rewrites
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID                 uint      `json:"id" gorm:"primaryKey"`
+	ProjectID          uint      `json:"project_id" gorm:"uniqueIndex"`
+	NewWorldName       string    `json:"new_world_name" gorm:"size:200"`
+	NewCharNames       string    `json:"new_char_names" gorm:"type:text"`       // JSON: map[oldName]newName (proper names only)
+	NamingStyle        string    `json:"naming_style" gorm:"type:text"`         // cultural/naming convention guide for consistency
+	PlotTransform      string    `json:"plot_transform" gorm:"type:text"`       // JSON: transformation rules for main plot beats
+	PropsTransform     string    `json:"props_transform" gorm:"type:text"`      // JSON: map[originalProp]newProp for iconic items
+	VoiceStrategy      string    `json:"voice_strategy" gorm:"type:text"`       // JSON: narrator voice guidelines
+	StyleGuide         string    `json:"style_guide" gorm:"type:text"`          // JSON: sentence structure, vocabulary register, pacing rules
+	ForbiddenElems     string    `json:"forbidden_elems" gorm:"type:text"`      // JSON: legacy mixed-type array (kept for backward compat)
+	ForbiddenPhrases   string    `json:"forbidden_phrases" gorm:"type:text"`    // JSON: []string — phrases strictly forbidden in output
+	ForbiddenDialogues string    `json:"forbidden_dialogues" gorm:"type:text"`  // JSON: []ForbiddenDialogue — signature dialogues with rewrite guides
+	ImageryTransform   string    `json:"imagery_transform" gorm:"type:text"`    // JSON: map[originalSymbol]newSymbol for core imagery
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 func (RewriteBible) TableName() string { return "ink_rewrite_bible" }
 
 // ChapterRewriteTask tracks rewriting progress per chapter
 type ChapterRewriteTask struct {
-	ID               uint      `json:"id" gorm:"primaryKey"`
-	ProjectID        uint      `json:"project_id" gorm:"index"`
-	ChapterID        uint      `json:"chapter_id" gorm:"index"`
-	ChapterNo        int       `json:"chapter_no"`
-	Status           string    `json:"status" gorm:"size:20;default:'pending'"` // pending, rewriting, reviewing, completed, failed
-	OriginalContent  string    `json:"original_content" gorm:"type:longtext"`
-	RewrittenContent string    `json:"rewritten_content" gorm:"type:longtext"`
-	SimilarityScore  float64   `json:"similarity_score" gorm:"default:0"` // 0-1, lower is better (more different)
-	LexicalSim       float64   `json:"lexical_sim" gorm:"default:0"`
-	SemanticSim      float64   `json:"semantic_sim" gorm:"default:0"`
-	StructuralSim    float64   `json:"structural_sim" gorm:"default:0"`
-	Passed           bool      `json:"passed" gorm:"default:false"`
+	ID                uint      `json:"id" gorm:"primaryKey"`
+	ProjectID         uint      `json:"project_id" gorm:"index"`
+	ChapterID         uint      `json:"chapter_id" gorm:"index"`
+	ChapterNo         int       `json:"chapter_no"`
+	Status            string    `json:"status" gorm:"size:20;default:'pending'"` // pending, rewriting, reviewing, completed, failed
+	OriginalContent   string    `json:"original_content" gorm:"type:longtext"`
+	AttemptContent    string    `json:"attempt_content" gorm:"type:longtext"`  // in-flight result; not shown until accepted
+	RewrittenContent  string    `json:"rewritten_content" gorm:"type:longtext"` // accepted final result
+	SimilarityScore   float64   `json:"similarity_score" gorm:"default:0"`
+	LexicalSim        float64   `json:"lexical_sim" gorm:"default:0"`
+	SemanticSim       float64   `json:"semantic_sim" gorm:"default:0"`
+	StructuralSim     float64   `json:"structural_sim" gorm:"default:0"`
+	Passed            bool      `json:"passed" gorm:"default:false"`
 	RetryCount        int       `json:"retry_count" gorm:"default:0"`
 	ErrorMsg          string    `json:"error_msg" gorm:"size:500"`
 	QualityScore      float64   `json:"quality_score" gorm:"default:0"`
 	DeaiApplied       bool      `json:"deai_applied" gorm:"default:false"`
 	ConsistencyIssues string    `json:"consistency_issues" gorm:"size:1000"`
+	SummaryWritten    bool      `json:"summary_written" gorm:"default:false"`
 	CreatedAt         time.Time `json:"created_at"`
 	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 func (ChapterRewriteTask) TableName() string { return "ink_chapter_rewrite_task" }
+
+// RewriteContinuityIndex tracks all confirmed entity replacements across chapters.
+// Built incrementally: Bible names are pre-seeded, new names discovered per chapter are appended.
+type RewriteContinuityIndex struct {
+	ID         uint      `json:"id" gorm:"primaryKey"`
+	ProjectID  uint      `json:"project_id" gorm:"uniqueIndex:idx_rci_proj_key"`
+	EntityKey  string    `json:"entity_key" gorm:"size:200;uniqueIndex:idx_rci_proj_key"` // original name/phrase
+	EntityType string    `json:"entity_type" gorm:"size:30"`                              // char | location | prop | concept
+	NewName    string    `json:"new_name" gorm:"size:200"`                                // replacement in the rewritten world
+	FirstSeen  int       `json:"first_seen"`                                              // chapter_no where first confirmed
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+func (RewriteContinuityIndex) TableName() string { return "ink_rewrite_continuity_index" }
+
+// RewriteChapterSummary stores an AI-generated semantic summary of each completed chapter.
+// Used as rolling context for subsequent chapters (richer than opening/closing excerpts).
+type RewriteChapterSummary struct {
+	ID            uint      `json:"id" gorm:"primaryKey"`
+	ProjectID     uint      `json:"project_id" gorm:"uniqueIndex:idx_rcs_proj_ch"`
+	ChapterNo     int       `json:"chapter_no" gorm:"uniqueIndex:idx_rcs_proj_ch"`
+	Summary       string    `json:"summary" gorm:"type:text"`      // 100-150 char semantic summary
+	CharStateSnap string    `json:"char_state_snap" gorm:"type:text"` // JSON map[charName]stateDesc at chapter end
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+func (RewriteChapterSummary) TableName() string { return "ink_rewrite_chapter_summary" }
 
 // ─── Asset Library ────────────────────────────────────────────────────────────
 

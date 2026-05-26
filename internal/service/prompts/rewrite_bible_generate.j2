@@ -9,7 +9,7 @@
 请生成改写圣经，输出JSON：
 {
   "new_world_name": "新世界观名称（级别>=4则重命名，否则可沿用或微调）",
-  "naming_style": "统一的命名文化风格说明，确保全文角色名、地名出自同一文化体系。例如：'东亚古典风，人名用两字汉字，地名用山水意象'。必须避免西方名（如赫尔曼）和中文称谓（奶奶/妈妈）出现在同一文化体系中造成混乱。",
+  "naming_style": "统一的命名文化风格说明，确保全文角色名、地名出自同一文化体系。例如：'东亚古典风，人名用两字汉字，地名用山水意象'。必须避免西方名和中文称谓（奶奶/妈妈）出现在同一文化体系中造成混乱。",
   "new_char_names": {
     "原角色专有姓名1": "新角色专有姓名1（遵循naming_style）",
     "原角色专有姓名2": "新角色专有姓名2（遵循naming_style）"
@@ -31,22 +31,24 @@
     "perspective": "第一人称|第三人称限制|第三人称全知"
   },
   "style_guide": {
-    "sentence_style": "长句为主，多用意象",
+    "sentence_style": "句式风格，如：长句为主，多用意象",
     "vocabulary_register": "古雅|现代|混合",
-    "pacing_rules": ["每500字设置一个悬念钩子"],
-    "forbidden_patterns": ["避免连续3句以上的短句堆砌"]
+    "pacing_rules": ["节奏规则，如：每500字设置一个悬念钩子"],
+    "forbidden_patterns": ["避免的写作模式，如：避免连续3句以上短句堆砌"]
   },
-  "forbidden_elements": [
-    "禁止出现的原著标志性短语",
+  "imagery_transform": {
+    "原著核心意象1（如：剑）": "替换意象及其象征含义（如：琴——孤独与克制）",
+    "原著核心意象2": "替换意象及其象征含义"
+  },
+  "forbidden_phrases": [
+    "禁止出现的原著标志性短语1",
+    "禁止出现的原著标志性短语2"
+  ],
+  "forbidden_dialogues": [
     {
-      "type": "signature_dialogue",
-      "pattern": "原著标志性对话结构描述",
+      "pattern": "原著标志性对话的结构特征描述",
+      "excerpt": "原文核心片段10-30字",
       "rewrite_guide": "打破该结构的具体改写方向"
-    },
-    {
-      "type": "iconic_prop",
-      "original": "原道具名称",
-      "replacement": "props_transform中对应的新道具"
     }
   ]
 }
@@ -54,6 +56,7 @@
 重要规则：
 1. new_char_names 只包含专有姓名，严禁将称呼（奶奶、妈妈）、物种名（狼）、职业名（猎人）列入
 2. naming_style 必须统一全文所有角色/地名的文化背景，不得出现文化混搭
-3. props_transform 必须覆盖 high_risk_markers.iconic_props 中列出的所有标志性道具
-4. forbidden_elements 必须包含 high_risk_markers.signature_dialogues 中所有标志性对话的改写指引
+3. props_transform 必须覆盖 high_risk_markers.iconic_props 中所有标志性道具
+4. forbidden_dialogues 必须包含 high_risk_markers.signature_dialogues 中所有标志性对话的改写指引
+5. imagery_transform 必须覆盖 imagery_system.core_symbols 中所有核心意象
 只输出JSON，不要其他解释。

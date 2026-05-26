@@ -335,6 +335,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.GET("/:id/storyboard/ignored-suggestions", cfg.VideoHandler.ListIgnoredSuggestions)
 			videos.POST("/:id/storyboard/ignored-suggestions", cfg.VideoHandler.IgnoreSuggestion)
 			videos.DELETE("/:id/storyboard/ignored-suggestions/:suggestion_id", cfg.VideoHandler.UnignoreSuggestion)
+			videos.POST("/:id/storyboard/review/apply-inserts", cfg.VideoHandler.ApplyReviewInserts)
+			videos.POST("/:id/storyboard/review/apply-deletes", cfg.VideoHandler.ApplyReviewDeletes)
 			videos.POST("/:id/generate", cfg.VideoHandler.StartVideoGeneration)
 			videos.GET("/:id/status", cfg.VideoHandler.GetVideoStatus)
 			videos.GET("/:id/shots", cfg.VideoHandler.ListShots)

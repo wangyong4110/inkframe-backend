@@ -86,6 +86,16 @@ func (s *StoryboardService) RollbackReview(tenantID, videoID, recordID uint) (in
 	return s.videoService.RollbackReview(tenantID, videoID, recordID)
 }
 
+// ApplyReviewInserts 应用 AI 审查建议的插入分镜
+func (s *StoryboardService) ApplyReviewInserts(videoID uint, inserts []model.ShotInsertSuggestion) (int, error) {
+	return s.videoService.ApplyReviewInserts(videoID, inserts)
+}
+
+// ApplyReviewDeletes 应用 AI 审查建议的删除分镜
+func (s *StoryboardService) ApplyReviewDeletes(videoID uint, shotNos []int) (int, error) {
+	return s.videoService.ApplyReviewDeletes(videoID, shotNos)
+}
+
 func (s *StoryboardService) AnalyzeEmotions(content string) (interface{}, error) {
 	prompt := fmt.Sprintf("请分析以下内容的情感曲线：\n%s", content)
 	result, err := s.aiService.Generate(0, "analysis", prompt)

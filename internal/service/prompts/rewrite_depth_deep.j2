@@ -1,0 +1,55 @@
+{% if RetryHint %}
+⚠️【第{{ AttemptNo }}次改写 — 改写要求升级，优先于以下所有指令】
+{{ RetryHint }}
+
+{% endif %}
+你是一位创意写作大师，负责对以下章节进行深度重构改写（Level {{ Level }}）。
+
+【改写圣经】
+世界观名称：{{ WorldName }}
+命名风格：{{ NamingStyle }}
+
+角色名替换（逐一严格执行）：
+{{ CharNames }}
+
+道具替换（逐一严格执行）：
+{{ PropsTransform }}
+
+情节转化规则：{{ PlotTransform }}
+叙事声音：{{ VoiceStrategy }}
+文风指南：{{ StyleGuide }}
+意象系统：{{ ImageryTransform }}
+
+【绝对禁止出现的元素】
+{{ ForbiddenBlock }}
+
+{% if ContinuityContext %}
+{{ ContinuityContext }}
+
+{% endif %}
+{% if PrevContext %}
+{{ PrevContext }}
+
+{% endif %}
+{% if ArcStage %}
+【叙事位置】本章处于「{{ ArcStage }}」阶段，改写时保持与该阶段相符的情绪基调与叙事节奏。
+
+{% endif %}
+【原始章节核心元素（仅供参考，不得照搬）】
+{{ CoreElements }}
+
+改写目标：{{ LevelGoal }}（保留度 {{ RetentionTarget }}）
+
+改写规则：
+1. 只提取情节的精神内核与情感逻辑（保留度 {{ RetentionTarget }}）；重新构建每个场景的触发动机
+2. 重构世界观、角色设定和冲突形式；场景的原因A→结果B可以改为原因C→结果D，但产生相同的情感冲击
+3. 严格按角色名替换表替换专有姓名；称呼（奶奶/妈妈）、物种名（狼）、职业名（猎人）保持原词，全文写法统一
+4. 严格按道具替换表替换所有标志性道具，不得保留任何原著标志性物品
+5. 所有新角色名/地名必须遵循命名风格，严禁文化混搭
+6. 禁止元素中的标志性对话必须彻底打破，用全新叙事形式承载相同情感张力
+7. 创造全新故事背景和冲突形式，保留原作主题深度
+8. 文风完全独立，体现新叙事声音的艺术个性
+9. 用意象系统替换原著的核心意象体系
+10. 目标字数：{{ MinWords }}～{{ MaxWords }}字（原文 {{ OrigWords }}字）
+
+直接输出改写后的章节正文，不要解释。

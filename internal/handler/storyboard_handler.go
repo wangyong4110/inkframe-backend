@@ -505,6 +505,62 @@ func (h *VideoHandler) UnignoreSuggestion(c *gin.Context) {
 	respondOK(c, nil)
 }
 
+// ApplyReviewInserts 应用 AI 审查建议的插入分镜
+// POST /api/v1/videos/:id/storyboard/review/apply-inserts
+func (h *VideoHandler) ApplyReviewInserts(c *gin.Context) {
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
+	var req struct {
+		Inserts []model.ShotInsertSuggestion `json:"inserts" binding:"required"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	if len(req.Inserts) == 0 {
+		respondBadRequest(c, "inserts 列表不能为空")
+		return
+	}
+	count, err := h.storyboardService.ApplyReviewInserts(uint(videoID), req.Inserts)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"inserted_shots": count})
+}
+
+// ApplyReviewDeletes 应用 AI 审查建议的删除分镜
+// POST /api/v1/videos/:id/storyboard/review/apply-deletes
+func (h *VideoHandler) ApplyReviewDeletes(c *gin.Context) {
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
+	var req struct {
+		ShotNos []int `json:"shot_nos" binding:"required"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	if len(req.ShotNos) == 0 {
+		respondBadRequest(c, "shot_nos 列表不能为空")
+		return
+	}
+	count, err := h.storyboardService.ApplyReviewDeletes(uint(videoID), req.ShotNos)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"deleted_shots": count})
+}
+
 // AnalyzeEmotions 情感分析
 // POST /api/v1/storyboard/analyze-emotions
 func (h *VideoHandler) AnalyzeEmotions(c *gin.Context) {

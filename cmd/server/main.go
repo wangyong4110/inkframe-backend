@@ -985,6 +985,17 @@ func ensureCriticalColumns(db *gorm.DB) {
 		// ink_rewrite_bible 命名风格 & 道具映射（2026-05-26 新增）
 		{"ink_rewrite_bible", "naming_style", "TEXT NULL"},
 		{"ink_rewrite_bible", "props_transform", "TEXT NULL"},
+		// ink_rewrite_bible 新增禁止元素拆分字段 & 意象映射（2026-05-27 新增）
+		{"ink_rewrite_bible", "forbidden_phrases", "TEXT NULL"},
+		{"ink_rewrite_bible", "forbidden_dialogues", "TEXT NULL"},
+		{"ink_rewrite_bible", "imagery_transform", "TEXT NULL"},
+		// ink_chapter_rewrite_task 新增原子写入字段（2026-05-27 新增）
+		{"ink_chapter_rewrite_task", "attempt_content", "LONGTEXT NULL"},
+		{"ink_chapter_rewrite_task", "summary_written", "TINYINT(1) NOT NULL DEFAULT 0"},
+		// ink_literary_analysis 新增节奏/意象/章际钩子字段（2026-05-27 新增）
+		{"ink_literary_analysis", "rhythm_pattern", "TEXT NULL"},
+		{"ink_literary_analysis", "imagery_system", "TEXT NULL"},
+		{"ink_literary_analysis", "inter_chapter_hooks", "TEXT NULL"},
 	}
 	for _, a := range additions {
 		// 先查 information_schema，列已存在则跳过，避免触发 GORM 的 Error 1060 日志
@@ -1083,6 +1094,8 @@ func autoMigrate(db *gorm.DB) error {
 		&model.LiteraryAnalysis{},
 		&model.RewriteBible{},
 		&model.ChapterRewriteTask{},
+		&model.RewriteContinuityIndex{},
+		&model.RewriteChapterSummary{},
 		&model.PlatformAccount{},
 		&model.VideoPublishRecord{},
 		// Asset Library (Phase 3)
@@ -1397,10 +1410,12 @@ type Repositories struct {
 	IgnoredSuggestionRepo       *repository.IgnoredSuggestionRepository
 	ShotSFXItemRepo         *repository.ShotSFXItemRepository
 	VideoBGMSegmentRepo     *repository.VideoBGMSegmentRepository
-	RewriteProjectRepo      *repository.RewriteProjectRepository
-	LiteraryAnalysisRepo    *repository.LiteraryAnalysisRepository
-	RewriteBibleRepo        *repository.RewriteBibleRepository
-	ChapterRewriteTaskRepo  *repository.ChapterRewriteTaskRepository
+	RewriteProjectRepo           *repository.RewriteProjectRepository
+	LiteraryAnalysisRepo         *repository.LiteraryAnalysisRepository
+	RewriteBibleRepo             *repository.RewriteBibleRepository
+	ChapterRewriteTaskRepo       *repository.ChapterRewriteTaskRepository
+	RewriteContinuityIndexRepo   *repository.RewriteContinuityIndexRepository
+	RewriteChapterSummaryRepo    *repository.RewriteChapterSummaryRepository
 	PlatformAccountRepo     *repository.PlatformAccountRepository
 	VideoPublishRecordRepo  *repository.VideoPublishRecordRepository
 	// Asset Library
@@ -1463,10 +1478,12 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		IgnoredSuggestionRepo:      repository.NewIgnoredSuggestionRepository(db),
 		ShotSFXItemRepo:         repository.NewShotSFXItemRepository(db),
 		VideoBGMSegmentRepo:     repository.NewVideoBGMSegmentRepository(db),
-		RewriteProjectRepo:      repository.NewRewriteProjectRepository(db, redis),
-		LiteraryAnalysisRepo:    repository.NewLiteraryAnalysisRepository(db),
-		RewriteBibleRepo:        repository.NewRewriteBibleRepository(db),
-		ChapterRewriteTaskRepo:  repository.NewChapterRewriteTaskRepository(db),
+		RewriteProjectRepo:           repository.NewRewriteProjectRepository(db, redis),
+		LiteraryAnalysisRepo:         repository.NewLiteraryAnalysisRepository(db),
+		RewriteBibleRepo:             repository.NewRewriteBibleRepository(db),
+		ChapterRewriteTaskRepo:       repository.NewChapterRewriteTaskRepository(db),
+		RewriteContinuityIndexRepo:   repository.NewRewriteContinuityIndexRepository(db),
+		RewriteChapterSummaryRepo:    repository.NewRewriteChapterSummaryRepository(db),
 		PlatformAccountRepo:     repository.NewPlatformAccountRepository(db),
 		VideoPublishRecordRepo:  repository.NewVideoPublishRecordRepository(db),
 		// Asset Library
@@ -1801,7 +1818,9 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		repos.ChapterRepo,
 		repos.NovelRepo,
 		core.AI,
-	).WithTaskService(core.Task)
+	).WithTaskService(core.Task).
+		WithContinuityRepo(repos.RewriteContinuityIndexRepo).
+		WithSummaryRepo(repos.RewriteChapterSummaryRepo)
 
 	// 认证 / 租户 / 通信服务（依赖 db 和 redisClient，数量少，直接内联）
 	smsSvc := service.NewSMSService(redisClient, cfg.SMS)

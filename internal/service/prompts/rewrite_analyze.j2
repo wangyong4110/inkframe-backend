@@ -1,52 +1,68 @@
 你是一位专业的文学分析师。请对以下小说内容进行深度文学分析，提取其文学指纹。
 
 小说标题：{{ Title }}
-章节内容（样本）：
+章节内容（分层采样，覆盖全书早/中/晚期）：
 {{ Content }}
 
 请输出JSON格式的分析结果：
 {
   "voice_fingerprint": {
-    "narrator_style": "第三人称全知视角，语气平静客观",
-    "sentence_patterns": ["短句为主，节奏明快", "对话穿插频繁"],
-    "distinctive_phrases": ["特征性短语1", "特征性短语2"],
+    "narrator_style": "叙事视角与语气，如：第三人称全知视角，语气平静客观",
+    "sentence_patterns": ["主要句式特征，如：短句为主，节奏明快", "对话穿插频繁"],
+    "distinctive_phrases": ["作者标志性短语1", "标志性短语2"],
     "rhythm": "fast|medium|slow"
   },
   "scene_architecture": {
-    "typical_structure": "开场悬念→行动→冲突→解决",
+    "typical_structure": "典型章节结构，如：开场悬念→行动→冲突→解决",
     "avg_scene_length": 500,
     "transition_style": "直接切换|渐进过渡",
     "description_ratio": 0.3
   },
   "character_psychology": {
     "archetypes": ["英雄", "导师", "反派"],
-    "relationship_topology": "师徒→对立→和解",
-    "emotional_baseline": "压抑克制",
-    "titles_and_honorifics": ["奶奶", "妈妈", "大人"]
+    "relationship_topology": "人物关系演变模式，如：师徒→对立→和解",
+    "emotional_baseline": "人物情绪基调，如：压抑克制",
+    "titles_and_honorifics": ["称呼词列表，如：奶奶、妈妈、大人"]
   },
   "theme_core": {
-    "primary_theme": "成长与自我救赎",
-    "motifs": ["剑", "血", "孤独"],
+    "primary_theme": "主题，如：成长与自我救赎",
+    "motifs": ["反复出现的意象，如：剑", "血", "孤独"],
     "symbolic_elements": ["特定地名或物品的象征意义"]
   },
   "world_logic": {
-    "power_system": "修炼体系描述",
-    "world_rules": ["规则1", "规则2"],
+    "power_system": "力量/修炼体系描述",
+    "world_rules": ["世界规则1", "世界规则2"],
     "unique_geography": ["特定地名"],
-    "cultural_background": "欧洲童话|中国古代|现代都市 等"
+    "cultural_background": "文化背景，如：欧洲童话|中国古代|现代都市"
   },
   "high_risk_markers": {
-    "unique_phrases": ["独特的标志性短语，必须完全避免"],
+    "unique_phrases": ["必须完全避免的标志性短语"],
     "signature_dialogues": [
       {
-        "pattern": "该对话的结构特征（如：问答式身体特征对话）",
-        "excerpt": "原文核心片段（10-30字）",
-        "rewrite_guide": "改写方向：完全打破问答结构，用新形式表达同等戏剧张力"
+        "pattern": "对话结构特征描述，如：问答式身体特征对话",
+        "excerpt": "原文核心片段10-30字",
+        "rewrite_guide": "改写方向：打破该结构的具体方式"
       }
     ],
-    "iconic_props": ["标志性道具1（如：红色兜帽）", "标志性道具2（如：篮子里的蛋糕）"],
+    "iconic_props": ["标志性道具1，如：红色兜帽", "标志性道具2，如：篮子里的蛋糕"],
     "plot_sequences": ["标志性情节序列，如：反派伪装成亲人骗取信任"],
     "signature_elements": ["作者/原著标志性元素"]
+  },
+  "rhythm_pattern": {
+    "emotional_peak_interval": "情绪高点出现频率，如：每800字出现一次",
+    "chapter_end_hook": "章节结尾制造悬念的惯用手法描述",
+    "tension_curve": "张力曲线模式，如：缓升-急降-余韵"
+  },
+  "imagery_system": {
+    "core_symbols": [
+      {"symbol": "原著核心意象，如：剑", "meaning": "象征含义，如：孤独与力量", "frequency": "high|medium|low"}
+    ],
+    "recurrence_pattern": "核心意象的强化节奏，如：每3-5章出现一次"
+  },
+  "inter_chapter_hooks": {
+    "foreshadow_style": "埋伏笔的叙事手法，如：通过人物无意间提及",
+    "reveal_distance": "平均几章后揭晓，如：15-20章",
+    "callback_pattern": "呼应手法描述"
   }
 }
 

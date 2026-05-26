@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1065,10 +1066,16 @@ func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string,
 		return nil, 0, fmt.Errorf("该视频暂无分镜，请先生成分镜脚本")
 	}
 
-	// 取 Video.NovelID 以便 GenerateWithProvider 能通过小说级 AI 模型配置选择 provider
+	// 取 Video.NovelID / ChapterID 以便选择 provider 并注入章节原文
 	var novelID uint
+	var chapterContent string
 	if video, err := s.videoRepo.GetByID(videoID); err == nil {
 		novelID = video.NovelID
+		if video.ChapterID != nil && s.chapterRepo != nil {
+			if ch, err := s.chapterRepo.GetByID(*video.ChapterID); err == nil && ch != nil {
+				chapterContent = ch.Content
+			}
+		}
 	}
 
 	// 拉取最近一次已应用的审查反馈，注入提示词避免重复建议
@@ -1088,7 +1095,7 @@ func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string,
 		ignoredItems, _ = s.ignoredSuggestionRepo.ListByVideo(videoID)
 	}
 
-	prompt := buildStoryboardReviewPrompt(shots, previousScore, previousFeedback, ignoredItems)
+	prompt := buildStoryboardReviewPrompt(shots, chapterContent, previousScore, previousFeedback, ignoredItems)
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "storyboard_review", prompt, provider)
 	if err != nil {
@@ -1121,9 +1128,72 @@ func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string,
 	return review, recordID, nil
 }
 
+// ApplyReviewInserts 将 AI 审查建议的插入分镜依次写入数据库。
+// 从最大 after_shot_no 向小排序插入，避免逐步移位导致编号错乱。
+func (s *VideoService) ApplyReviewInserts(videoID uint, inserts []model.ShotInsertSuggestion) (int, error) {
+	sorted := make([]model.ShotInsertSuggestion, len(inserts))
+	copy(sorted, inserts)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].AfterShotNo > sorted[j].AfterShotNo
+	})
+	count := 0
+	for _, ins := range sorted {
+		shot, err := s.InsertShot(videoID, ins.AfterShotNo, ins.Narration, ins.Description, ins.Duration)
+		if err != nil {
+			return count, fmt.Errorf("insert after shot %d: %w", ins.AfterShotNo, err)
+		}
+		// Apply optional shot_size / camera_type from the suggestion
+		fields := map[string]interface{}{}
+		if ins.ShotSize != "" {
+			fields["shot_size"] = ins.ShotSize
+		}
+		if ins.CameraType != "" {
+			fields["camera_type"] = ins.CameraType
+		}
+		if len(fields) > 0 {
+			_ = s.storyboardRepo.UpdateFields(shot.ID, fields)
+		}
+		count++
+	}
+	return count, nil
+}
+
+// ApplyReviewDeletes 将 AI 审查建议的删除分镜从数据库中移除。
+// 从最大 shot_no 向小排序删除，避免逐步移位导致编号错乱。
+func (s *VideoService) ApplyReviewDeletes(videoID uint, shotNos []int) (int, error) {
+	shots, err := s.storyboardRepo.ListByVideo(videoID)
+	if err != nil {
+		return 0, fmt.Errorf("list shots: %w", err)
+	}
+	shotNoToID := make(map[int]uint, len(shots))
+	for _, sh := range shots {
+		shotNoToID[sh.ShotNo] = sh.ID
+	}
+
+	sorted := make([]int, len(shotNos))
+	copy(sorted, shotNos)
+	sort.Sort(sort.Reverse(sort.IntSlice(sorted)))
+
+	count := 0
+	for _, shotNo := range sorted {
+		shotID, ok := shotNoToID[shotNo]
+		if !ok {
+			continue
+		}
+		if err := s.DeleteShot(shotID); err != nil {
+			return count, fmt.Errorf("delete shot %d: %w", shotNo, err)
+		}
+		// Keep remaining map entries consistent after deletion (lower shotNos are unaffected)
+		delete(shotNoToID, shotNo)
+		count++
+	}
+	return count, nil
+}
+
 // buildStoryboardReviewPrompt 构建分镜审查提示词
+// chapterContent 非空时注入小说章节原文（用于对比覆盖率、建议插入/删除）。
 // previousScore > 0 时注入上次评分上下文；previousFeedback 非空时注入已修正问题；ignoredItems 非空时注入永久忽略列表。
-func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, previousScore float64, previousFeedback []model.ShotReviewFeedback, ignoredItems []*model.IgnoredSuggestion) string {
+func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent string, previousScore float64, previousFeedback []model.ShotReviewFeedback, ignoredItems []*model.IgnoredSuggestion) string {
 	// 预格式化分镜数据（带截断保护）
 	var sb strings.Builder
 	truncate := func(s string, max int) string {
@@ -1167,15 +1237,23 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, previousScore fl
 		ignoredLines = append(ignoredLines, fmt.Sprintf("镜%d: %s", item.ShotNo, item.IssueText))
 	}
 
+	// 截断章节原文（防止过长撑爆上下文，保留前 3000 字）
+	truncatedChapter := chapterContent
+	if runes := []rune(truncatedChapter); len(runes) > 3000 {
+		truncatedChapter = string(runes[:3000]) + "…（已截断）"
+	}
+
 	ctx := map[string]interface{}{
-		"ShotCount":         len(shots),
-		"ShotsText":         sb.String(),
-		"HasPreviousScore":  previousScore > 0,
-		"PreviousScoreStr":  fmt.Sprintf("%.1f", previousScore),
-		"HasPreviousFixed":  len(prevFixedLines) > 0,
-		"PreviousFixedText": strings.Join(prevFixedLines, "\n"),
-		"HasIgnored":        len(ignoredLines) > 0,
-		"IgnoredText":       strings.Join(ignoredLines, "\n"),
+		"ShotCount":          len(shots),
+		"ShotsText":          sb.String(),
+		"HasChapterContent":  truncatedChapter != "",
+		"ChapterContent":     truncatedChapter,
+		"HasPreviousScore":   previousScore > 0,
+		"PreviousScoreStr":   fmt.Sprintf("%.1f", previousScore),
+		"HasPreviousFixed":   len(prevFixedLines) > 0,
+		"PreviousFixedText":  strings.Join(prevFixedLines, "\n"),
+		"HasIgnored":         len(ignoredLines) > 0,
+		"IgnoredText":        strings.Join(ignoredLines, "\n"),
 	}
 	result, err := renderPrompt("storyboard_review", ctx)
 	if err != nil {

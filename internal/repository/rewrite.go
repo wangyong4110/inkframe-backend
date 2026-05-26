@@ -4,6 +4,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // RewriteProjectRepository handles rewrite project data
@@ -152,6 +153,39 @@ func (r *ChapterRewriteTaskRepository) UpdateStatus(id uint, status, errMsg stri
 	}).Error
 }
 
+// ResetStaleRewriting resets chapters stuck in "rewriting" state back to "pending".
+// Called at the start of StartRewriting to recover from a previous interrupted run.
+func (r *ChapterRewriteTaskRepository) ResetStaleRewriting(projectID uint) error {
+	return r.db.Model(&model.ChapterRewriteTask{}).
+		Where("project_id = ? AND status = ?", projectID, "rewriting").
+		Update("status", "pending").Error
+}
+
+// SaveAttempt stores the AI-generated content in AttemptContent without touching
+// RewrittenContent or changing status. Safe to call on every attempt.
+func (r *ChapterRewriteTaskRepository) SaveAttempt(id uint, content string) error {
+	return r.db.Model(&model.ChapterRewriteTask{}).Where("id = ?", id).
+		Update("attempt_content", content).Error
+}
+
+// AcceptAttempt promotes AttemptContent → RewrittenContent and marks the task completed.
+// Also records similarity scores. Call only when the attempt passes quality gates.
+func (r *ChapterRewriteTaskRepository) AcceptAttempt(id uint, lexSim, structSim float64, passed bool) error {
+	combined := (lexSim + structSim) / 2
+
+	// Copy attempt_content into rewritten_content in a single UPDATE
+	return r.db.Model(&model.ChapterRewriteTask{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"rewritten_content": gorm.Expr("attempt_content"),
+		"lexical_sim":       lexSim,
+		"structural_sim":    structSim,
+		"similarity_score":  combined,
+		"passed":            passed,
+		"status":            "completed",
+	}).Error
+}
+
+// UpdateRewritten is the legacy method kept for backward compatibility.
+// New code should use SaveAttempt + AcceptAttempt instead.
 func (r *ChapterRewriteTaskRepository) UpdateRewritten(id uint, content string, lexSim, structSim float64, passed bool) error {
 	combined := (lexSim + structSim) / 2
 	return r.db.Model(&model.ChapterRewriteTask{}).Where("id = ?", id).Updates(map[string]interface{}{
@@ -173,4 +207,98 @@ func (r *ChapterRewriteTaskRepository) UpdatePostProcess(
 		"deai_applied":       deaiApplied,
 		"consistency_issues": issues,
 	}).Error
+}
+
+func (r *ChapterRewriteTaskRepository) MarkSummaryWritten(id uint) error {
+	return r.db.Model(&model.ChapterRewriteTask{}).Where("id = ?", id).
+		Update("summary_written", true).Error
+}
+
+// ── RewriteContinuityIndexRepository ─────────────────────────────────────────
+
+type RewriteContinuityIndexRepository struct {
+	db *gorm.DB
+}
+
+func NewRewriteContinuityIndexRepository(db *gorm.DB) *RewriteContinuityIndexRepository {
+	return &RewriteContinuityIndexRepository{db: db}
+}
+
+// Upsert inserts or updates a single entity replacement entry.
+func (r *RewriteContinuityIndexRepository) Upsert(projectID uint, entityKey, entityType, newName string, firstSeen int) error {
+	entry := model.RewriteContinuityIndex{
+		ProjectID:  projectID,
+		EntityKey:  entityKey,
+		EntityType: entityType,
+		NewName:    newName,
+		FirstSeen:  firstSeen,
+	}
+	return r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "project_id"}, {Name: "entity_key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"new_name", "entity_type", "updated_at"}),
+	}).Create(&entry).Error
+}
+
+// BatchUpsert inserts or updates multiple entries at once.
+func (r *RewriteContinuityIndexRepository) BatchUpsert(entries []*model.RewriteContinuityIndex) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	return r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "project_id"}, {Name: "entity_key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"new_name", "entity_type", "updated_at"}),
+	}).Create(&entries).Error
+}
+
+// GetByProject returns all continuity entries for a project.
+func (r *RewriteContinuityIndexRepository) GetByProject(projectID uint) ([]*model.RewriteContinuityIndex, error) {
+	var entries []*model.RewriteContinuityIndex
+	err := r.db.Where("project_id = ?", projectID).Order("first_seen ASC").Find(&entries).Error
+	return entries, err
+}
+
+// DeleteByProject removes all entries for a project (called when re-running analysis).
+func (r *RewriteContinuityIndexRepository) DeleteByProject(projectID uint) error {
+	return r.db.Where("project_id = ?", projectID).Delete(&model.RewriteContinuityIndex{}).Error
+}
+
+// ── RewriteChapterSummaryRepository ──────────────────────────────────────────
+
+type RewriteChapterSummaryRepository struct {
+	db *gorm.DB
+}
+
+func NewRewriteChapterSummaryRepository(db *gorm.DB) *RewriteChapterSummaryRepository {
+	return &RewriteChapterSummaryRepository{db: db}
+}
+
+// Upsert inserts or updates the summary for a specific chapter.
+func (r *RewriteChapterSummaryRepository) Upsert(projectID uint, chapterNo int, summary, charStateSnap string) error {
+	entry := model.RewriteChapterSummary{
+		ProjectID:     projectID,
+		ChapterNo:     chapterNo,
+		Summary:       summary,
+		CharStateSnap: charStateSnap,
+	}
+	return r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "project_id"}, {Name: "chapter_no"}},
+		DoUpdates: clause.AssignmentColumns([]string{"summary", "char_state_snap"}),
+	}).Create(&entry).Error
+}
+
+// GetRecentByProject returns up to `limit` summaries immediately before `beforeChapterNo`.
+func (r *RewriteChapterSummaryRepository) GetRecentByProject(projectID uint, beforeChapterNo, limit int) ([]*model.RewriteChapterSummary, error) {
+	var summaries []*model.RewriteChapterSummary
+	err := r.db.Where("project_id = ? AND chapter_no < ?", projectID, beforeChapterNo).
+		Order("chapter_no DESC").Limit(limit).Find(&summaries).Error
+	// Reverse so caller gets them in ascending order
+	for i, j := 0, len(summaries)-1; i < j; i, j = i+1, j-1 {
+		summaries[i], summaries[j] = summaries[j], summaries[i]
+	}
+	return summaries, err
+}
+
+// DeleteByProject removes all summaries for a project.
+func (r *RewriteChapterSummaryRepository) DeleteByProject(projectID uint) error {
+	return r.db.Where("project_id = ?", projectID).Delete(&model.RewriteChapterSummary{}).Error
 }
