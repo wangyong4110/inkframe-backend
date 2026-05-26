@@ -212,7 +212,7 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 	if err != nil {
 		return fmt.Errorf("segment %d not found: %w", segID, err)
 	}
-	text := seg.Text
+	text := stripDialogueSpeakerPrefix(seg.Text)
 	if text == "" {
 		return nil
 	}
@@ -351,7 +351,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 	// Determine the text to synthesize
 	text := shot.Narration
 	if text == "" {
-		text = shot.Dialogue
+		text = stripDialogueSpeakerPrefix(shot.Dialogue)
 	}
 	if text == "" {
 		text = shot.Description

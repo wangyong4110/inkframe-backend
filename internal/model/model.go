@@ -1932,16 +1932,18 @@ func (LiteraryAnalysis) TableName() string { return "ink_literary_analysis" }
 
 // RewriteBible is the strategic rewriting guide
 type RewriteBible struct {
-	ID             uint      `json:"id" gorm:"primaryKey"`
-	ProjectID      uint      `json:"project_id" gorm:"uniqueIndex"`
-	NewWorldName   string    `json:"new_world_name" gorm:"size:200"`
-	NewCharNames   string    `json:"new_char_names" gorm:"type:text"` // JSON: map[oldName]newName
-	PlotTransform  string    `json:"plot_transform" gorm:"type:text"` // JSON: transformation rules for main plot beats
-	VoiceStrategy  string    `json:"voice_strategy" gorm:"type:text"` // JSON: narrator voice guidelines
-	StyleGuide     string    `json:"style_guide" gorm:"type:text"` // JSON: sentence structure, vocabulary register, pacing rules
-	ForbiddenElems string    `json:"forbidden_elems" gorm:"type:text"` // JSON: elements to avoid (high-risk markers)
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	ID              uint      `json:"id" gorm:"primaryKey"`
+	ProjectID       uint      `json:"project_id" gorm:"uniqueIndex"`
+	NewWorldName    string    `json:"new_world_name" gorm:"size:200"`
+	NewCharNames    string    `json:"new_char_names" gorm:"type:text"`    // JSON: map[oldName]newName (proper names only)
+	NamingStyle     string    `json:"naming_style" gorm:"type:text"`      // cultural/naming convention guide for consistency
+	PlotTransform   string    `json:"plot_transform" gorm:"type:text"`    // JSON: transformation rules for main plot beats
+	PropsTransform  string    `json:"props_transform" gorm:"type:text"`   // JSON: map[originalProp]newProp for iconic items
+	VoiceStrategy   string    `json:"voice_strategy" gorm:"type:text"`    // JSON: narrator voice guidelines
+	StyleGuide      string    `json:"style_guide" gorm:"type:text"`       // JSON: sentence structure, vocabulary register, pacing rules
+	ForbiddenElems  string    `json:"forbidden_elems" gorm:"type:text"`   // JSON: elements to avoid + signature dialogue rewrites
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 func (RewriteBible) TableName() string { return "ink_rewrite_bible" }

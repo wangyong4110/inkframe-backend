@@ -1,11 +1,13 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
-	"github.com/inkframe/inkframe-backend/internal/logger"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
@@ -35,8 +37,9 @@ const (
 
 // TaskService manages persistent async tasks.
 type TaskService struct {
-	repo     *repository.TaskRepository
-	stopCh   chan struct{} // closed by Shutdown() to stop background goroutines
+	repo      *repository.TaskRepository
+	stopCh    chan struct{}  // closed by Shutdown() to stop background goroutines
+	cancelFns sync.Map      // taskID string → context.CancelFunc
 }
 
 func NewTaskService(repo *repository.TaskRepository) *TaskService {
@@ -110,9 +113,24 @@ func (s *TaskService) Fail(taskID string, errMsg string) error {
 	return s.repo.FailIfNotCancelled(taskID, errMsg)
 }
 
+// RegisterCancel stores a cancel function for an in-flight task.
+// Call DeregisterCancel when the task finishes to avoid memory leaks.
+func (s *TaskService) RegisterCancel(taskID string, cancel context.CancelFunc) {
+	s.cancelFns.Store(taskID, cancel)
+}
+
+// DeregisterCancel removes the cancel function after the task finishes.
+func (s *TaskService) DeregisterCancel(taskID string) {
+	s.cancelFns.Delete(taskID)
+}
+
 // Cancel marks the task as cancelled only if it is still pending or running.
-// Already-terminal tasks (completed/failed/cancelled) are unaffected.
+// If a cancel function is registered (task is in-flight), it is invoked immediately
+// so the running goroutine's context is cancelled.
 func (s *TaskService) Cancel(taskID string) error {
+	if fn, ok := s.cancelFns.Load(taskID); ok {
+		fn.(context.CancelFunc)()
+	}
 	return s.repo.CancelIfActive(taskID)
 }
 

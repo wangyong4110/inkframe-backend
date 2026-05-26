@@ -71,6 +71,8 @@ func NewLiteraryAnalysisRepository(db *gorm.DB) *LiteraryAnalysisRepository {
 }
 
 func (r *LiteraryAnalysisRepository) Create(a *model.LiteraryAnalysis) error {
+	// Delete any existing record first to handle re-analysis on the same project.
+	r.db.Where("project_id = ?", a.ProjectID).Delete(&model.LiteraryAnalysis{})
 	return r.db.Create(a).Error
 }
 
@@ -92,6 +94,8 @@ func NewRewriteBibleRepository(db *gorm.DB) *RewriteBibleRepository {
 }
 
 func (r *RewriteBibleRepository) Create(b *model.RewriteBible) error {
+	// Delete any existing record first to handle re-analysis on the same project.
+	r.db.Where("project_id = ?", b.ProjectID).Delete(&model.RewriteBible{})
 	return r.db.Create(b).Error
 }
 
@@ -107,6 +111,10 @@ func (r *RewriteBibleRepository) Update(b *model.RewriteBible) error {
 	return r.db.Save(b).Error
 }
 
+func (r *RewriteBibleRepository) UpdateFields(projectID uint, fields map[string]interface{}) error {
+	return r.db.Model(&model.RewriteBible{}).Where("project_id = ?", projectID).Updates(fields).Error
+}
+
 // ChapterRewriteTaskRepository handles chapter rewrite task data
 type ChapterRewriteTaskRepository struct {
 	db *gorm.DB
@@ -118,6 +126,10 @@ func NewChapterRewriteTaskRepository(db *gorm.DB) *ChapterRewriteTaskRepository 
 
 func (r *ChapterRewriteTaskRepository) Create(t *model.ChapterRewriteTask) error {
 	return r.db.Create(t).Error
+}
+
+func (r *ChapterRewriteTaskRepository) DeleteByProjectID(projectID uint) error {
+	return r.db.Where("project_id = ?", projectID).Delete(&model.ChapterRewriteTask{}).Error
 }
 
 func (r *ChapterRewriteTaskRepository) GetByID(id uint) (*model.ChapterRewriteTask, error) {
@@ -140,11 +152,13 @@ func (r *ChapterRewriteTaskRepository) UpdateStatus(id uint, status, errMsg stri
 	}).Error
 }
 
-func (r *ChapterRewriteTaskRepository) UpdateRewritten(id uint, content string, simScore float64, passed bool) error {
+func (r *ChapterRewriteTaskRepository) UpdateRewritten(id uint, content string, lexSim, structSim float64, passed bool) error {
+	combined := (lexSim + structSim) / 2
 	return r.db.Model(&model.ChapterRewriteTask{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"rewritten_content": content,
-		"lexical_sim":       simScore,
-		"similarity_score":  simScore,
+		"lexical_sim":       lexSim,
+		"structural_sim":    structSim,
+		"similarity_score":  combined,
 		"passed":            passed,
 		"status":            "completed",
 	}).Error

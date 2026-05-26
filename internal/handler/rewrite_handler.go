@@ -223,3 +223,25 @@ func (h *RewriteHandler) ApproveChapter(c *gin.Context) {
 	}
 	respondOK(c, gin.H{"message": "approved"})
 }
+
+// UpdateBible PUT /rewrite/projects/:id/bible
+func (h *RewriteHandler) UpdateBible(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		respondBadRequest(c, "invalid id")
+		return
+	}
+	if _, ok := h.getProjectForTenant(c, uint(id)); !ok {
+		return
+	}
+	var req service.UpdateBibleRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	if err := h.rewriteSvc.UpdateBible(uint(id), req); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"message": "updated"})
+}

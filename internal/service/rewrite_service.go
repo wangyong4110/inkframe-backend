@@ -1,11 +1,13 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"math"
 	"strings"
 
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
@@ -49,6 +51,8 @@ func (s *RewriteService) WithTaskService(svc *TaskService) *RewriteService {
 	return s
 }
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
 // renderRewriteTemplate renders a named rewrite prompt template using Jinja2.
 func renderRewriteTemplate(name string, data interface{}) (string, error) {
 	ctx, ok := data.(map[string]interface{})
@@ -57,6 +61,139 @@ func renderRewriteTemplate(name string, data interface{}) (string, error) {
 	}
 	return renderPrompt(name, ctx)
 }
+
+// stratifiedSample picks up to maxSamples chapters spread evenly across the full list.
+// Captures early / mid / late narrative styles rather than only the first N chapters.
+func stratifiedSample(chapters []*model.Chapter, maxSamples int) []*model.Chapter {
+	n := len(chapters)
+	if n == 0 {
+		return nil
+	}
+	if n <= maxSamples {
+		return chapters
+	}
+	seen := make(map[int]bool)
+	result := make([]*model.Chapter, 0, maxSamples)
+	for i := 0; i < maxSamples; i++ {
+		idx := int(float64(i)/float64(maxSamples-1)*float64(n-1) + 0.5)
+		if idx >= n {
+			idx = n - 1
+		}
+		if !seen[idx] {
+			seen[idx] = true
+			result = append(result, chapters[idx])
+		}
+	}
+	return result
+}
+
+// extractCoreElements returns the reference excerpt from a chapter for deep-rewrite prompts.
+// Levels 1-3: leading 500 chars.
+// Levels 4-5: beginning + middle + end to expose the full emotional arc.
+func extractCoreElements(content string, level int) string {
+	runes := []rune(content)
+	n := len(runes)
+	if level < 4 {
+		return string(runes[:min(500, n)])
+	}
+	if n <= 1500 {
+		return content
+	}
+	segLen := 300
+	begin := string(runes[:segLen])
+	mid := string(runes[n/2-segLen/2 : n/2+segLen/2])
+	end := string(runes[n-segLen:])
+	return begin + "\n[...中段...]\n" + mid + "\n[...末段...]\n" + end
+}
+
+// buildPrevContext formats recent rewritten chapter excerpts as a continuity block for the AI.
+func buildPrevContext(recent []string) string {
+	if len(recent) == 0 {
+		return ""
+	}
+	return "【前文已改写内容摘要（保持叙事连贯，角色状态以此为准）】\n" + strings.Join(recent, "\n")
+}
+
+// splitSentences splits Chinese text into sentence units by end-of-sentence punctuation.
+func splitSentences(text string) []string {
+	var result []string
+	var buf strings.Builder
+	for _, r := range text {
+		buf.WriteRune(r)
+		if r == '。' || r == '！' || r == '？' || r == '\n' {
+			if s := strings.TrimSpace(buf.String()); s != "" {
+				result = append(result, s)
+			}
+			buf.Reset()
+		}
+	}
+	if s := strings.TrimSpace(buf.String()); s != "" {
+		result = append(result, s)
+	}
+	return result
+}
+
+// calculateStructuralSimilarity measures what fraction of rewritten sentences share
+// 4-gram fingerprints with the original.  A high score means the sentence-level
+// content is still largely the same even if individual characters differ.
+func calculateStructuralSimilarity(original, rewritten string) float64 {
+	origSents := splitSentences(original)
+	rewSents := splitSentences(rewritten)
+	if len(origSents) == 0 || len(rewSents) == 0 {
+		return 0
+	}
+	origFP := make(map[string]bool, len(origSents)*10)
+	for _, s := range origSents {
+		r := []rune(s)
+		for i := 0; i+4 <= len(r); i++ {
+			origFP[string(r[i:i+4])] = true
+		}
+	}
+	matches := 0
+	for _, s := range rewSents {
+		r := []rune(s)
+		for i := 0; i+4 <= len(r); i++ {
+			if origFP[string(r[i:i+4])] {
+				matches++
+				break
+			}
+		}
+	}
+	denom := len(origSents)
+	if len(rewSents) > denom {
+		denom = len(rewSents)
+	}
+	return float64(matches) / float64(denom)
+}
+
+// calculateLexicalSimilarity returns a 0-1 score based on character-bigram overlap (higher = more similar).
+func calculateLexicalSimilarity(original, rewritten string) float64 {
+	origRunes := []rune(original)
+	rewRunes := []rune(rewritten)
+	if len(origRunes) == 0 || len(rewRunes) == 0 {
+		return 0
+	}
+	origBigrams := make(map[string]int)
+	for i := 0; i < len(origRunes)-1; i++ {
+		bg := string(origRunes[i : i+2])
+		origBigrams[bg]++
+	}
+	matches := 0
+	for i := 0; i < len(rewRunes)-1; i++ {
+		bg := string(rewRunes[i : i+2])
+		if origBigrams[bg] > 0 {
+			matches++
+			origBigrams[bg]--
+		}
+	}
+	totalBigrams := len(origRunes) - 1
+	if totalBigrams <= 0 {
+		return 0
+	}
+	return math.Min(float64(matches)/float64(totalBigrams), 1.0)
+}
+
+// ── CRUD ──────────────────────────────────────────────────────────────────────
 
 // CreateProject creates a new rewrite project
 func (s *RewriteService) CreateProject(tenantID, novelID uint, name string, level int) (*model.RewriteProject, error) {
@@ -73,17 +210,14 @@ func (s *RewriteService) CreateProject(tenantID, novelID uint, name string, leve
 	return project, nil
 }
 
-// ListProjects returns all projects for a tenant
 func (s *RewriteService) ListProjects(tenantID uint, page, pageSize int) ([]*model.RewriteProject, int64, error) {
 	return s.projectRepo.ListByTenant(tenantID, page, pageSize)
 }
 
-// GetProject returns a project by ID
 func (s *RewriteService) GetProject(id uint) (*model.RewriteProject, error) {
 	return s.projectRepo.GetByID(id)
 }
 
-// DeleteProject deletes a project and all its data, cancelling any running tasks.
 func (s *RewriteService) DeleteProject(id uint) error {
 	if s.taskSvc != nil {
 		s.taskSvc.CancelActiveByEntity("rewrite_project", id, TaskTypeRewriteAnalysis)
@@ -92,19 +226,17 @@ func (s *RewriteService) DeleteProject(id uint) error {
 	return s.projectRepo.Delete(id)
 }
 
+// ── Phase 0+1: Analysis & Bible ───────────────────────────────────────────────
+
 // StartAnalysis begins Phase 0+1: literary analysis + bible generation.
-// Returns the async task ID that the caller can poll via GET /api/v1/tasks/:task_id.
 func (s *RewriteService) StartAnalysis(tenantID, projectID uint) (string, error) {
 	project, err := s.projectRepo.GetByID(projectID)
 	if err != nil {
 		return "", err
 	}
-
-	// Cancel any existing analysis task for this project before creating a replacement.
 	if s.taskSvc != nil {
 		s.taskSvc.CancelActiveByEntity("rewrite_project", projectID, TaskTypeRewriteAnalysis)
 	}
-
 	task, err := s.taskSvc.Create(tenantID, TaskTypeRewriteAnalysis,
 		"文学分析 & 改写圣经生成", "rewrite_project", projectID)
 	if err != nil {
@@ -112,6 +244,11 @@ func (s *RewriteService) StartAnalysis(tenantID, projectID uint) (string, error)
 	}
 
 	go func(taskID string) {
+		ctx, cancel := context.WithCancel(context.Background())
+		s.taskSvc.RegisterCancel(taskID, cancel)
+		defer s.taskSvc.DeregisterCancel(taskID)
+		defer cancel()
+
 		defer func() {
 			if r := recover(); r != nil {
 				msg := fmt.Sprintf("内部错误: %v", r)
@@ -120,7 +257,7 @@ func (s *RewriteService) StartAnalysis(tenantID, projectID uint) (string, error)
 			}
 		}()
 		s.taskSvc.SetRunning(taskID)
-		if err := s.runAnalysis(taskID, project); err != nil {
+		if err := s.runAnalysis(ctx, taskID, project); err != nil {
 			s.taskSvc.Fail(taskID, err.Error())
 			s.projectRepo.UpdateStatus(projectID, "failed", err.Error())
 			return
@@ -134,7 +271,7 @@ func (s *RewriteService) StartAnalysis(tenantID, projectID uint) (string, error)
 	return task.TaskID, nil
 }
 
-func (s *RewriteService) runAnalysis(taskID string, project *model.RewriteProject) error {
+func (s *RewriteService) runAnalysis(ctx context.Context, taskID string, project *model.RewriteProject) error {
 	s.projectRepo.UpdateStatus(project.ID, "analyzing", "")
 
 	novel, err := s.novelRepo.GetByID(project.NovelID)
@@ -147,11 +284,11 @@ func (s *RewriteService) runAnalysis(taskID string, project *model.RewriteProjec
 		return fmt.Errorf("get chapters: %w", err)
 	}
 
+	// FIX: stratified sampling — up to 5 chapters spread across the full novel
+	// (previously only took the first 3, missing mid/late narrative style)
+	sampled := stratifiedSample(chapters, 5)
 	var sampleContent strings.Builder
-	for i, ch := range chapters {
-		if i >= 3 {
-			break
-		}
+	for _, ch := range sampled {
 		sampleContent.WriteString(ch.Content)
 		sampleContent.WriteString("\n\n---\n\n")
 	}
@@ -164,8 +301,15 @@ func (s *RewriteService) runAnalysis(taskID string, project *model.RewriteProjec
 		return fmt.Errorf("render template: %w", err)
 	}
 
-	result, err := s.aiSvc.GenerateWithProvider(project.TenantID, project.NovelID, "chapter_gen", prompt, "")
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("task cancelled")
+	}
+
+	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, project.TenantID, project.NovelID, "chapter_gen", prompt, "")
 	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("task cancelled")
+		}
 		return fmt.Errorf("ai generate: %w", err)
 	}
 
@@ -198,21 +342,33 @@ func (s *RewriteService) runAnalysis(taskID string, project *model.RewriteProjec
 	total, _ := s.chapterRepo.CountByNovel(project.NovelID)
 	s.projectRepo.UpdateTotalChapters(project.ID, int(total))
 
-	s.taskSvc.UpdateProgress(taskID, 50)
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("task cancelled")
+	}
 
-	return s.generateBible(taskID, project, analysis, novel)
+	s.taskSvc.UpdateProgress(taskID, 50)
+	return s.generateBible(ctx, taskID, project, analysis, novel)
 }
 
-func (s *RewriteService) generateBible(taskID string, project *model.RewriteProject, analysis *model.LiteraryAnalysis, novel *model.Novel) error {
+func (s *RewriteService) generateBible(ctx context.Context, taskID string, project *model.RewriteProject, analysis *model.LiteraryAnalysis, novel *model.Novel) error {
 	_ = novel
 
+	// FIX: each analysis field is already a JSON string; unmarshal first so the
+	// combined payload contains nested objects, not doubly-escaped strings.
+	toObj := func(raw string) interface{} {
+		var v interface{}
+		if json.Unmarshal([]byte(raw), &v) == nil {
+			return v
+		}
+		return raw
+	}
 	analysisJSON, _ := json.Marshal(map[string]interface{}{
-		"voice_fingerprint":    analysis.VoiceFingerprint,
-		"scene_architecture":   analysis.SceneArchitecture,
-		"character_psychology": analysis.CharacterPsych,
-		"theme_core":           analysis.ThemeCore,
-		"world_logic":          analysis.WorldLogic,
-		"high_risk_markers":    analysis.HighRiskMarkers,
+		"voice_fingerprint":    toObj(analysis.VoiceFingerprint),
+		"scene_architecture":   toObj(analysis.SceneArchitecture),
+		"character_psychology": toObj(analysis.CharacterPsych),
+		"theme_core":           toObj(analysis.ThemeCore),
+		"world_logic":          toObj(analysis.WorldLogic),
+		"high_risk_markers":    toObj(analysis.HighRiskMarkers),
 	})
 
 	levelDesc := map[int]string{
@@ -232,8 +388,11 @@ func (s *RewriteService) generateBible(taskID string, project *model.RewriteProj
 		return err
 	}
 
-	result, err := s.aiSvc.GenerateWithProvider(project.TenantID, project.NovelID, "chapter_gen", prompt, "")
+	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, project.TenantID, project.NovelID, "chapter_gen", prompt, "")
 	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("task cancelled")
+		}
 		return err
 	}
 
@@ -251,11 +410,14 @@ func (s *RewriteService) generateBible(taskID string, project *model.RewriteProj
 	}
 
 	worldName, _ := bibleData["new_world_name"].(string)
+	namingStyle, _ := bibleData["naming_style"].(string)
 	bible := &model.RewriteBible{
 		ProjectID:      project.ID,
 		NewWorldName:   worldName,
 		NewCharNames:   toJSON(bibleData["new_char_names"]),
+		NamingStyle:    namingStyle,
 		PlotTransform:  toJSON(bibleData["plot_transform"]),
+		PropsTransform: toJSON(bibleData["props_transform"]),
 		VoiceStrategy:  toJSON(bibleData["voice_strategy"]),
 		StyleGuide:     toJSON(bibleData["style_guide"]),
 		ForbiddenElems: toJSON(bibleData["forbidden_elements"]),
@@ -263,6 +425,8 @@ func (s *RewriteService) generateBible(taskID string, project *model.RewriteProj
 	if err := s.bibleRepo.Create(bible); err != nil {
 		return err
 	}
+
+	s.chapterTaskRepo.DeleteByProjectID(project.ID)
 
 	chapters, err := s.chapterRepo.ListByNovelWithContent(project.NovelID)
 	if err != nil {
@@ -282,8 +446,9 @@ func (s *RewriteService) generateBible(taskID string, project *model.RewriteProj
 	return s.projectRepo.UpdateStatus(project.ID, "bible_ready", "")
 }
 
+// ── Phase 2: Chapter Rewriting ────────────────────────────────────────────────
+
 // StartRewriting begins Phase 2: chapter-by-chapter rewriting.
-// Returns the async task ID that the caller can poll via GET /api/v1/tasks/:task_id.
 func (s *RewriteService) StartRewriting(tenantID, projectID uint) (string, error) {
 	project, err := s.projectRepo.GetByID(projectID)
 	if err != nil {
@@ -306,6 +471,11 @@ func (s *RewriteService) StartRewriting(tenantID, projectID uint) (string, error
 	}
 
 	go func(taskID string) {
+		ctx, cancel := context.WithCancel(context.Background())
+		s.taskSvc.RegisterCancel(taskID, cancel)
+		defer s.taskSvc.DeregisterCancel(taskID)
+		defer cancel()
+
 		defer func() {
 			if r := recover(); r != nil {
 				msg := fmt.Sprintf("内部错误: %v", r)
@@ -314,7 +484,7 @@ func (s *RewriteService) StartRewriting(tenantID, projectID uint) (string, error
 			}
 		}()
 		s.taskSvc.SetRunning(taskID)
-		if err := s.runRewriting(taskID, project); err != nil {
+		if err := s.runRewriting(ctx, taskID, project); err != nil {
 			s.taskSvc.Fail(taskID, err.Error())
 			s.projectRepo.UpdateStatus(projectID, "failed", err.Error())
 			return
@@ -328,7 +498,9 @@ func (s *RewriteService) StartRewriting(tenantID, projectID uint) (string, error
 	return task.TaskID, nil
 }
 
-func (s *RewriteService) runRewriting(taskID string, project *model.RewriteProject) error {
+const maxChapterRetries = 2
+
+func (s *RewriteService) runRewriting(ctx context.Context, taskID string, project *model.RewriteProject) error {
 	s.projectRepo.UpdateStatus(project.ID, "rewriting", "")
 
 	bible, err := s.bibleRepo.GetByProjectID(project.ID)
@@ -343,9 +515,12 @@ func (s *RewriteService) runRewriting(taskID string, project *model.RewriteProje
 
 	done := 0
 	total := len(tasks)
+	// recentContext holds short excerpts of the last 3 rewritten chapters,
+	// passed to each subsequent chapter so the AI maintains narrative continuity.
+	var recentContext []string
+
 	for _, task := range tasks {
-		// Check if the async task has been cancelled between chapters.
-		if at, err := s.taskSvc.Get(taskID); err == nil && at.Status == "cancelled" {
+		if ctx.Err() != nil {
 			return fmt.Errorf("task cancelled")
 		}
 
@@ -355,23 +530,52 @@ func (s *RewriteService) runRewriting(taskID string, project *model.RewriteProje
 			continue
 		}
 
-		if err := s.rewriteChapter(project, bible, task); err != nil {
-			s.chapterTaskRepo.UpdateStatus(task.ID, "failed", err.Error())
+		prevContext := buildPrevContext(recentContext)
+		rewritten, err := s.rewriteChapterWithRetry(ctx, project, bible, task, prevContext)
+		if err != nil {
+			if ctx.Err() != nil {
+				return fmt.Errorf("task cancelled")
+			}
+			// rewriteChapterWithRetry already marked the chapter as failed.
+			// Continue to next chapter — don't abort the whole batch.
 		} else {
 			done++
+			// Append a short excerpt to the rolling context window.
+			r := []rune(rewritten)
+			excerpt := string(r[:min(200, len(r))])
+			recentContext = append(recentContext, fmt.Sprintf("第%d章开头：%s", task.ChapterNo, excerpt))
+			if len(recentContext) > 3 {
+				recentContext = recentContext[1:]
+			}
 		}
-
 		s.updateRewriteProgress(taskID, project.ID, done, total)
 	}
 
 	return s.projectRepo.UpdateStatus(project.ID, "completed", "")
 }
 
-func (s *RewriteService) updateRewriteProgress(taskID string, projectID uint, done, total int) {
-	if total > 0 {
-		s.taskSvc.UpdateProgress(taskID, done*100/total)
+// rewriteChapterWithRetry retries rewriteChapter up to maxChapterRetries times on error.
+// On exhaustion it marks the chapter task as failed and returns the last error.
+func (s *RewriteService) rewriteChapterWithRetry(ctx context.Context, project *model.RewriteProject, bible *model.RewriteBible, task *model.ChapterRewriteTask, prevContext string) (string, error) {
+	var lastErr error
+	for attempt := 0; attempt <= maxChapterRetries; attempt++ {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		rewritten, err := s.rewriteChapter(ctx, project, bible, task, prevContext)
+		if err == nil {
+			return rewritten, nil
+		}
+		lastErr = err
+		logger.Printf("[Rewrite] chapter %d attempt %d/%d failed: %v",
+			task.ChapterNo, attempt+1, maxChapterRetries+1, err)
+		if attempt < maxChapterRetries {
+			// Reset to pending so the next attempt starts fresh.
+			s.chapterTaskRepo.UpdateStatus(task.ID, "pending", "")
+		}
 	}
-	s.projectRepo.UpdateProgress(projectID, done, total)
+	s.chapterTaskRepo.UpdateStatus(task.ID, "failed", lastErr.Error())
+	return "", lastErr
 }
 
 type rewriteLevelConfig struct {
@@ -390,7 +594,9 @@ var rewriteLevelConfigs = map[int]rewriteLevelConfig{
 	5: {"rewrite_chapter_l3", "只保留精神内核与情感逻辑，全面重创", "5-20%", "90%", 0.20},
 }
 
-func (s *RewriteService) rewriteChapter(project *model.RewriteProject, bible *model.RewriteBible, task *model.ChapterRewriteTask) error {
+// rewriteChapter runs a single chapter rewrite and stores the result.
+// Returns the rewritten text so the caller can build narrative context.
+func (s *RewriteService) rewriteChapter(ctx context.Context, project *model.RewriteProject, bible *model.RewriteBible, task *model.ChapterRewriteTask, prevContext string) (string, error) {
 	s.chapterTaskRepo.UpdateStatus(task.ID, "rewriting", "")
 
 	cfg, ok := rewriteLevelConfigs[project.Level]
@@ -398,14 +604,18 @@ func (s *RewriteService) rewriteChapter(project *model.RewriteProject, bible *mo
 		cfg = rewriteLevelConfigs[2]
 	}
 
-	origRunes := []rune(task.OriginalContent)
-	coreEnd := min(500, len(origRunes))
-	coreElements := string(origRunes[:coreEnd])
+	// FIX: Level 4-5 use beginning+middle+end; Level 1-3 use leading excerpt.
+	coreElements := extractCoreElements(task.OriginalContent, project.Level)
+
+	// FIX: pass target word count so AI maintains similar chapter length.
+	targetWords := len([]rune(task.OriginalContent))
 
 	prompt, err := renderRewriteTemplate(cfg.Template, map[string]interface{}{
 		"WorldName":       bible.NewWorldName,
 		"CharNames":       bible.NewCharNames,
+		"NamingStyle":     bible.NamingStyle,
 		"PlotTransform":   bible.PlotTransform,
+		"PropsTransform":  bible.PropsTransform,
 		"VoiceStrategy":   bible.VoiceStrategy,
 		"StyleGuide":      bible.StyleGuide,
 		"ForbiddenElems":  bible.ForbiddenElems,
@@ -414,75 +624,101 @@ func (s *RewriteService) rewriteChapter(project *model.RewriteProject, bible *mo
 		"LevelGoal":       cfg.Goal,
 		"RetentionTarget": cfg.RetentionTarget,
 		"SimilarityLimit": cfg.SimilarityLimit,
+		"TargetWords":     targetWords,
+		"PrevContext":     prevContext,
 	})
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	rewritten, err := s.aiSvc.GenerateWithProvider(project.TenantID, project.NovelID, "chapter_gen", prompt, "")
+	rewritten, err := s.aiSvc.GenerateWithProviderCtx(ctx, project.TenantID, project.NovelID, "chapter_gen", prompt, "")
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	lexSim := calculateLexicalSimilarity(task.OriginalContent, rewritten)
+	structSim := calculateStructuralSimilarity(task.OriginalContent, rewritten)
 	passed := lexSim < cfg.LexSimThreshold
 
-	return s.chapterTaskRepo.UpdateRewritten(task.ID, rewritten, lexSim, passed)
+	if err := s.chapterTaskRepo.UpdateRewritten(task.ID, rewritten, lexSim, structSim, passed); err != nil {
+		return "", err
+	}
+	return rewritten, nil
 }
 
-// calculateLexicalSimilarity returns a 0-1 score (higher = more similar)
-func calculateLexicalSimilarity(original, rewritten string) float64 {
-	origRunes := []rune(original)
-	rewRunes := []rune(rewritten)
-	if len(origRunes) == 0 || len(rewRunes) == 0 {
-		return 0
+func (s *RewriteService) updateRewriteProgress(taskID string, projectID uint, done, total int) {
+	if total > 0 {
+		s.taskSvc.UpdateProgress(taskID, done*100/total)
 	}
-
-	origBigrams := make(map[string]int)
-	for i := 0; i < len(origRunes)-1; i++ {
-		bg := string(origRunes[i : i+2])
-		origBigrams[bg]++
-	}
-
-	matches := 0
-	for i := 0; i < len(rewRunes)-1; i++ {
-		bg := string(rewRunes[i : i+2])
-		if origBigrams[bg] > 0 {
-			matches++
-			origBigrams[bg]--
-		}
-	}
-
-	totalBigrams := len(origRunes) - 1
-	if totalBigrams <= 0 {
-		return 0
-	}
-	sim := float64(matches) / float64(totalBigrams)
-	return math.Min(sim, 1.0)
+	s.projectRepo.UpdateProgress(projectID, done, total)
 }
 
-// GetBible returns the rewrite bible for a project
+// ── Bible editing ─────────────────────────────────────────────────────────────
+
+// UpdateBibleRequest holds optional fields for patching the rewrite bible.
+// Only non-nil fields are applied.
+type UpdateBibleRequest struct {
+	NewWorldName   *string `json:"new_world_name,omitempty"`
+	NamingStyle    *string `json:"naming_style,omitempty"`
+	NewCharNames   *string `json:"new_char_names,omitempty"`
+	PlotTransform  *string `json:"plot_transform,omitempty"`
+	PropsTransform *string `json:"props_transform,omitempty"`
+	VoiceStrategy  *string `json:"voice_strategy,omitempty"`
+	StyleGuide     *string `json:"style_guide,omitempty"`
+	ForbiddenElems *string `json:"forbidden_elems,omitempty"`
+}
+
+// UpdateBible applies a partial update to the rewrite bible for a project.
+func (s *RewriteService) UpdateBible(projectID uint, req UpdateBibleRequest) error {
+	fields := map[string]interface{}{}
+	if req.NewWorldName != nil {
+		fields["new_world_name"] = *req.NewWorldName
+	}
+	if req.NamingStyle != nil {
+		fields["naming_style"] = *req.NamingStyle
+	}
+	if req.NewCharNames != nil {
+		fields["new_char_names"] = *req.NewCharNames
+	}
+	if req.PlotTransform != nil {
+		fields["plot_transform"] = *req.PlotTransform
+	}
+	if req.PropsTransform != nil {
+		fields["props_transform"] = *req.PropsTransform
+	}
+	if req.VoiceStrategy != nil {
+		fields["voice_strategy"] = *req.VoiceStrategy
+	}
+	if req.StyleGuide != nil {
+		fields["style_guide"] = *req.StyleGuide
+	}
+	if req.ForbiddenElems != nil {
+		fields["forbidden_elems"] = *req.ForbiddenElems
+	}
+	if len(fields) == 0 {
+		return nil
+	}
+	return s.bibleRepo.UpdateFields(projectID, fields)
+}
+
+// ── Accessors ─────────────────────────────────────────────────────────────────
+
 func (s *RewriteService) GetBible(projectID uint) (*model.RewriteBible, error) {
 	return s.bibleRepo.GetByProjectID(projectID)
 }
 
-// GetAnalysis returns the literary analysis for a project
 func (s *RewriteService) GetAnalysis(projectID uint) (*model.LiteraryAnalysis, error) {
 	return s.analysisRepo.GetByProjectID(projectID)
 }
 
-// ListChapterTasks returns all chapter tasks for a project
 func (s *RewriteService) ListChapterTasks(projectID uint) ([]*model.ChapterRewriteTask, error) {
 	return s.chapterTaskRepo.ListByProject(projectID)
 }
 
-// GetChapterTask returns a single chapter task
 func (s *RewriteService) GetChapterTask(taskID uint) (*model.ChapterRewriteTask, error) {
 	return s.chapterTaskRepo.GetByID(taskID)
 }
 
-// ApproveChapter marks a chapter task as approved
 func (s *RewriteService) ApproveChapter(taskID uint) error {
 	return s.chapterTaskRepo.UpdateStatus(taskID, "completed", "")
 }
-

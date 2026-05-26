@@ -459,6 +459,17 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 				novel = existing
 				count, _ := s.chapterRepo.CountByNovel(existing.ID)
 				chapterOffset = int(count)
+				// 重复上传检测：若文件的章节数 ≤ 已有章节数，说明是同一文件重复上传，
+				// 直接返回已有小说，避免每次上传都追加重复章节。
+				if chapterOffset >= len(chapters) {
+					result.NovelID = novel.ID
+					result.Title = novel.Title
+					result.ImportedChapters = int(count)
+					result.TotalChapters = int(count)
+					logger.Printf("[Import] novel %q (id=%d) re-upload detected (%d chapters already present, file has %d), skipping", novel.Title, novel.ID, chapterOffset, len(chapters))
+					_ = s.novelRepo.SyncStats(novel.ID)
+					return result, nil
+				}
 				logger.Printf("[Import] novel %q already exists (id=%d), appending chapters from offset %d", novel.Title, novel.ID, chapterOffset)
 			}
 		}

@@ -360,7 +360,7 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 	}
 
 	// 调用真实AI API
-	result, err := s.callAIWithProvider(tenantID, prompt, &config, providerName, resolvedModel)
+	result, err := s.callAIWithProvider(context.Background(), tenantID, prompt, &config, providerName, resolvedModel)
 	if err != nil {
 		return "", fmt.Errorf("AI generation failed: %w", err)
 	}
@@ -368,6 +368,67 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 	// 记录使用
 	s.logUsage(&config, prompt, result)
 
+	return result, nil
+}
+
+// GenerateWithProviderCtx is like GenerateWithProvider but respects an external context.
+// Use this when the caller holds a cancellable context (e.g. async task with cancel support).
+func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, novelID uint, taskType string, prompt string, providerName string, overrides ...StoryboardOverrides) (string, error) {
+	base, err := s.taskRepo.GetByTaskType(taskType)
+	if err != nil {
+		base = &model.TaskModelConfig{Temperature: 0.7, MaxTokens: 0}
+	}
+	config := *base
+
+	var resolvedModel string
+	if novelID > 0 && s.novelRepo != nil {
+		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+			if novel.Temperature > 0 {
+				config.Temperature = novel.Temperature
+			}
+			if novel.TopP > 0 {
+				config.TopP = novel.TopP
+			}
+			if novel.TopK > 0 {
+				config.TopK = novel.TopK
+			}
+			if novel.MaxTokens > 0 {
+				config.MaxTokens = novel.MaxTokens
+			}
+			if providerName == "" && novel.AIModel != "" {
+				resolvedModel = novel.AIModel
+				if pName := s.resolveProviderFromModel(tenantID, novel.AIModel); pName != "" {
+					providerName = pName
+				}
+			}
+		}
+	}
+
+	switch taskType {
+	case "storyboard", "character", "worldview", "character_state", "scene_anchor_extract", "storyboard_review", "sfx_analyze":
+		if config.Temperature > 0.2 {
+			config.Temperature = 0.1
+		}
+	}
+
+	if len(overrides) > 0 {
+		o := overrides[0]
+		if o.MaxTokens > 0 {
+			config.MaxTokens = o.MaxTokens
+		}
+		if o.Temperature > 0 {
+			config.Temperature = o.Temperature
+		}
+		if o.TimeoutSeconds > 0 {
+			config.TimeoutSeconds = o.TimeoutSeconds
+		}
+	}
+
+	result, err := s.callAIWithProvider(ctx, tenantID, prompt, &config, providerName, resolvedModel)
+	if err != nil {
+		return "", fmt.Errorf("AI generation failed: %w", err)
+	}
+	s.logUsage(&config, prompt, result)
 	return result, nil
 }
 
@@ -399,7 +460,7 @@ func (s *AIService) resolveProviderFromModel(tenantID uint, modelName string) st
 
 // callAI 调用AI接口（使用系统级 provider）
 func (s *AIService) callAI(prompt string, config *model.TaskModelConfig) (string, error) {
-	return s.callAIWithProvider(0, prompt, config, "")
+	return s.callAIWithProvider(context.Background(), 0, prompt, config, "")
 }
 
 // GenerateWithVision 使用 Vision AI 分析图像内容
@@ -449,8 +510,9 @@ func (s *AIService) GenerateWithVision(prompt string, imageURLs []string) (strin
 }
 
 // callAIWithProvider 调用指定 Provider 的 AI 接口
+// parentCtx 作为父 context；timeout 会在其上叠加（不会超出父 context 的 deadline）。
 // modelOverride 可选，非空时会覆盖 provider 的默认模型（用于小说项目级 ai_model 配置）
-func (s *AIService) callAIWithProvider(tenantID uint, prompt string, config *model.TaskModelConfig, providerName string, modelOverride ...string) (string, error) {
+func (s *AIService) callAIWithProvider(parentCtx context.Context, tenantID uint, prompt string, config *model.TaskModelConfig, providerName string, modelOverride ...string) (string, error) {
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
 	}
@@ -481,7 +543,7 @@ func (s *AIService) callAIWithProvider(tenantID uint, prompt string, config *mod
 	if config.TimeoutSeconds > 0 {
 		timeoutDur = time.Duration(config.TimeoutSeconds) * time.Second
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeoutDur)
+	ctx, cancel := context.WithTimeout(parentCtx, timeoutDur)
 	defer cancel()
 
 	logger.Printf("[AI] provider=%s maxTokens=%d temperature=%.2f calling...", provider.GetName(), req.MaxTokens, req.Temperature)

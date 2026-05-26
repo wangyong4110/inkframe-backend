@@ -959,7 +959,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-26-v2"
+const schemaVersion = "2026-05-26-v3"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -982,6 +982,9 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_character", "visual_prompt", "TEXT NULL"},
 		// ink_novel 提示词语言（2026-05-26 新增）
 		{"ink_novel", "prompt_language", "VARCHAR(10) NOT NULL DEFAULT 'zh'"},
+		// ink_rewrite_bible 命名风格 & 道具映射（2026-05-26 新增）
+		{"ink_rewrite_bible", "naming_style", "TEXT NULL"},
+		{"ink_rewrite_bible", "props_transform", "TEXT NULL"},
 	}
 	for _, a := range additions {
 		// 先查 information_schema，列已存在则跳过，避免触发 GORM 的 Error 1060 日志
