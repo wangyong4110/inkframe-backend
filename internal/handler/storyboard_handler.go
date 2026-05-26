@@ -440,6 +440,71 @@ func (h *VideoHandler) RollbackReview(c *gin.Context) {
 	respondOK(c, gin.H{"restored_shots": restored})
 }
 
+// IgnoreSuggestion 永久忽略某条审查建议
+// POST /api/v1/videos/:id/storyboard/ignored-suggestions
+func (h *VideoHandler) IgnoreSuggestion(c *gin.Context) {
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
+	var req struct {
+		ShotNo    int    `json:"shot_no" binding:"required"`
+		IssueText string `json:"issue_text" binding:"required"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	tenantID := getTenantID(c)
+	item, err := h.videoService.IgnoreSuggestion(tenantID, uint(videoID), req.ShotNo, req.IssueText)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, item)
+}
+
+// ListIgnoredSuggestions 列出已忽略的建议
+// GET /api/v1/videos/:id/storyboard/ignored-suggestions
+func (h *VideoHandler) ListIgnoredSuggestions(c *gin.Context) {
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
+	items, err := h.videoService.ListIgnoredSuggestions(uint(videoID))
+	if err != nil {
+		respondOK(c, []struct{}{})
+		return
+	}
+	respondOK(c, items)
+}
+
+// UnignoreSuggestion 取消忽略
+// DELETE /api/v1/videos/:id/storyboard/ignored-suggestions/:suggestion_id
+func (h *VideoHandler) UnignoreSuggestion(c *gin.Context) {
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
+	suggestionID, ok := parseID(c, "suggestion_id")
+	if !ok {
+		return
+	}
+	if err := h.videoService.UnignoreSuggestion(uint(videoID), uint(suggestionID)); err != nil {
+		respondErr(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondOK(c, nil)
+}
+
 // AnalyzeEmotions 情感分析
 // POST /api/v1/storyboard/analyze-emotions
 func (h *VideoHandler) AnalyzeEmotions(c *gin.Context) {

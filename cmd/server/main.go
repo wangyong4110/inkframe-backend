@@ -128,6 +128,7 @@ func main() {
 	services.VideoService.WithSceneAnchorService(services.SceneAnchorService)
 	services.VideoService.WithSegmentRepo(repos.ShotVoiceSegmentRepo).WithTaskService(services.TaskService)
 	services.VideoService.WithReviewRecordRepo(repos.StoryboardReviewRecordRepo)
+	services.VideoService.WithIgnoredSuggestionRepo(repos.IgnoredSuggestionRepo)
 	services.VideoService.WithVideoSocial(repos.VideoLikeRepo, repos.VideoCommentRepo)
 	services.NovelService.WithNovelSocial(repos.NovelLikeRepo, repos.NovelCommentRepo)
 	services.NovelImportService.WithStorage(storageSvc).WithAnalysisService(services.NovelAnalysisService).WithAIService(services.AIService)
@@ -958,7 +959,7 @@ func seedAIModels(db *gorm.DB) {
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-26-v1"
+const schemaVersion = "2026-05-26-v2"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -1072,6 +1073,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.SystemSetting{},
 		&model.ShotVoiceSegment{},
 		&model.StoryboardReviewRecord{},
+		&model.IgnoredSuggestion{},
 		&model.ShotSFXItem{},
 		&model.VideoBGMSegment{},
 		&model.RewriteProject{},
@@ -1388,7 +1390,8 @@ type Repositories struct {
 	SceneConsistencyLogRepo *repository.SceneConsistencyLogRepository
 	SystemSettingRepo       *repository.SystemSettingRepository
 	ShotVoiceSegmentRepo       *repository.ShotVoiceSegmentRepository
-	StoryboardReviewRecordRepo *repository.StoryboardReviewRecordRepository
+	StoryboardReviewRecordRepo  *repository.StoryboardReviewRecordRepository
+	IgnoredSuggestionRepo       *repository.IgnoredSuggestionRepository
 	ShotSFXItemRepo         *repository.ShotSFXItemRepository
 	VideoBGMSegmentRepo     *repository.VideoBGMSegmentRepository
 	RewriteProjectRepo      *repository.RewriteProjectRepository
@@ -1454,6 +1457,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		SystemSettingRepo:       repository.NewSystemSettingRepository(db),
 		ShotVoiceSegmentRepo:       repository.NewShotVoiceSegmentRepository(db),
 		StoryboardReviewRecordRepo: repository.NewStoryboardReviewRecordRepository(db),
+		IgnoredSuggestionRepo:      repository.NewIgnoredSuggestionRepository(db),
 		ShotSFXItemRepo:         repository.NewShotSFXItemRepository(db),
 		VideoBGMSegmentRepo:     repository.NewVideoBGMSegmentRepository(db),
 		RewriteProjectRepo:      repository.NewRewriteProjectRepository(db, redis),

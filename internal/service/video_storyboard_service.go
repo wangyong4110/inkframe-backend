@@ -8,6 +8,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -1080,7 +1082,13 @@ func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string,
 		}
 	}
 
-	prompt := buildStoryboardReviewPrompt(shots, previousScore, previousFeedback)
+	// 拉取用户永久忽略的建议
+	var ignoredItems []*model.IgnoredSuggestion
+	if s.ignoredSuggestionRepo != nil {
+		ignoredItems, _ = s.ignoredSuggestionRepo.ListByVideo(videoID)
+	}
+
+	prompt := buildStoryboardReviewPrompt(shots, previousScore, previousFeedback, ignoredItems)
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "storyboard_review", prompt, provider)
 	if err != nil {
@@ -1114,8 +1122,8 @@ func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string,
 }
 
 // buildStoryboardReviewPrompt 构建分镜审查提示词
-// previousScore > 0 时注入上次评分上下文；previousFeedback 非空时注入已修正问题摘要。
-func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, previousScore float64, previousFeedback []model.ShotReviewFeedback) string {
+// previousScore > 0 时注入上次评分上下文；previousFeedback 非空时注入已修正问题；ignoredItems 非空时注入永久忽略列表。
+func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, previousScore float64, previousFeedback []model.ShotReviewFeedback, ignoredItems []*model.IgnoredSuggestion) string {
 	// 预格式化分镜数据（带截断保护）
 	var sb strings.Builder
 	truncate := func(s string, max int) string {
@@ -1153,13 +1161,21 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, previousScore fl
 		prevFixedLines = append(prevFixedLines, line)
 	}
 
+	// 构建忽略列表摘要
+	var ignoredLines []string
+	for _, item := range ignoredItems {
+		ignoredLines = append(ignoredLines, fmt.Sprintf("镜%d: %s", item.ShotNo, item.IssueText))
+	}
+
 	ctx := map[string]interface{}{
-		"ShotCount":          len(shots),
-		"ShotsText":          sb.String(),
-		"HasPreviousScore":   previousScore > 0,
-		"PreviousScoreStr":   fmt.Sprintf("%.1f", previousScore),
-		"HasPreviousFixed":   len(prevFixedLines) > 0,
-		"PreviousFixedText":  strings.Join(prevFixedLines, "\n"),
+		"ShotCount":         len(shots),
+		"ShotsText":         sb.String(),
+		"HasPreviousScore":  previousScore > 0,
+		"PreviousScoreStr":  fmt.Sprintf("%.1f", previousScore),
+		"HasPreviousFixed":  len(prevFixedLines) > 0,
+		"PreviousFixedText": strings.Join(prevFixedLines, "\n"),
+		"HasIgnored":        len(ignoredLines) > 0,
+		"IgnoredText":       strings.Join(ignoredLines, "\n"),
 	}
 	result, err := renderPrompt("storyboard_review", ctx)
 	if err != nil {
@@ -1481,6 +1497,53 @@ func (s *VideoService) ListReviewRecords(videoID uint) ([]*model.StoryboardRevie
 		return nil, fmt.Errorf("review record repository not initialized")
 	}
 	return s.reviewRecordRepo.ListByVideo(videoID)
+}
+
+// ─── Ignored suggestions ─────────────────────────────────────────────────────
+
+func issueHash(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:16])
+}
+
+func (s *VideoService) IgnoreSuggestion(tenantID, videoID uint, shotNo int, issueText string) (*model.IgnoredSuggestion, error) {
+	if s.ignoredSuggestionRepo == nil {
+		return nil, fmt.Errorf("ignored suggestion repository not initialized")
+	}
+	item := &model.IgnoredSuggestion{
+		TenantID:  tenantID,
+		VideoID:   videoID,
+		ShotNo:    shotNo,
+		IssueText: issueText,
+		IssueHash: issueHash(issueText),
+	}
+	if err := s.ignoredSuggestionRepo.Create(item); err != nil {
+		return nil, err
+	}
+	return item, nil
+}
+
+func (s *VideoService) UnignoreSuggestion(videoID, id uint) error {
+	if s.ignoredSuggestionRepo == nil {
+		return fmt.Errorf("ignored suggestion repository not initialized")
+	}
+	items, err := s.ignoredSuggestionRepo.ListByVideo(videoID)
+	if err != nil {
+		return err
+	}
+	for _, item := range items {
+		if item.ID == id {
+			return s.ignoredSuggestionRepo.Delete(id)
+		}
+	}
+	return fmt.Errorf("ignored suggestion %d not found for video %d", id, videoID)
+}
+
+func (s *VideoService) ListIgnoredSuggestions(videoID uint) ([]*model.IgnoredSuggestion, error) {
+	if s.ignoredSuggestionRepo == nil {
+		return nil, fmt.Errorf("ignored suggestion repository not initialized")
+	}
+	return s.ignoredSuggestionRepo.ListByVideo(videoID)
 }
 
 // ─── Ensure unused imports are satisfied ─────────────────────────────────────

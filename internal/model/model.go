@@ -1719,6 +1719,20 @@ type ShotReviewFeedback struct {
 	SuggestedDescription string   `json:"suggested_description,omitempty"`
 }
 
+// IgnoredSuggestion 用户永久忽略的分镜审查建议
+type IgnoredSuggestion struct {
+	ID        uint      `json:"id" gorm:"primaryKey"`
+	TenantID  uint      `json:"tenant_id" gorm:"index;not null;default:1"`
+	VideoID   uint      `json:"video_id" gorm:"index;not null"`
+	ShotNo    int       `json:"shot_no" gorm:"not null"`
+	IssueText string    `json:"issue_text" gorm:"type:text;not null"`
+	IssueHash string    `json:"issue_hash" gorm:"size:32;uniqueIndex:uk_ignored_video_shot_issue"`
+	Note      string    `json:"note" gorm:"size:500"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+func (IgnoredSuggestion) TableName() string { return "ink_ignored_suggestion" }
+
 // StoryboardReviewRecord 分镜审查历史记录（含应用状态与回滚快照）
 type StoryboardReviewRecord struct {
 	gorm.Model

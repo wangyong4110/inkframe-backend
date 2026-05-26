@@ -374,6 +374,32 @@ func (r *StoryboardReviewRecordRepository) Update(rec *model.StoryboardReviewRec
 	return r.db.Save(rec).Error
 }
 
+// ─── IgnoredSuggestionRepository ─────────────────────────────────────────────
+
+type IgnoredSuggestionRepository struct{ db *gorm.DB }
+
+func NewIgnoredSuggestionRepository(db *gorm.DB) *IgnoredSuggestionRepository {
+	return &IgnoredSuggestionRepository{db: db}
+}
+
+func (r *IgnoredSuggestionRepository) Create(item *model.IgnoredSuggestion) error {
+	return r.db.Where(model.IgnoredSuggestion{
+		VideoID:   item.VideoID,
+		ShotNo:    item.ShotNo,
+		IssueHash: item.IssueHash,
+	}).FirstOrCreate(item).Error
+}
+
+func (r *IgnoredSuggestionRepository) ListByVideo(videoID uint) ([]*model.IgnoredSuggestion, error) {
+	var list []*model.IgnoredSuggestion
+	err := r.db.Where("video_id = ?", videoID).Order("shot_no ASC, id ASC").Find(&list).Error
+	return list, err
+}
+
+func (r *IgnoredSuggestionRepository) Delete(id uint) error {
+	return r.db.Delete(&model.IgnoredSuggestion{}, id).Error
+}
+
 // GetLatestApplied 获取该视频最近一条已应用（status=applied）的审查记录
 func (r *StoryboardReviewRecordRepository) GetLatestApplied(videoID uint) (*model.StoryboardReviewRecord, error) {
 	var rec model.StoryboardReviewRecord
