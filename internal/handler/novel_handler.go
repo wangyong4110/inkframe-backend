@@ -283,7 +283,10 @@ func (h *NovelHandler) GenerateOutline(c *gin.Context) {
 		Temperature    float64  `json:"temperature,omitempty"`
 		TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
 	}
-	c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
 
 	result, err := h.novelService.GenerateOutline(getTenantID(c), &service.GenerateOutlineRequest{
 		NovelID:        uint(novelId),

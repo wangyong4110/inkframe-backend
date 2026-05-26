@@ -205,8 +205,9 @@ func (n *Novel) EnsureVideoConfig() *NovelVideoConfig {
 
 // MarshalJSON flattens VideoConfig fields into the top-level Novel JSON so the
 // frontend can read them directly (e.g. novel.video_type instead of novel.video_config.video_type).
+// Uses direct field mapping instead of triple JSON round-trip for better performance.
 func (n Novel) MarshalJSON() ([]byte, error) {
-	// Use a type alias to avoid infinite recursion.
+	// Type alias prevents infinite recursion when calling json.Marshal below.
 	type NovelAlias Novel
 	base, err := json.Marshal(NovelAlias(n))
 	if err != nil {
@@ -215,25 +216,37 @@ func (n Novel) MarshalJSON() ([]byte, error) {
 	if n.VideoConfig == nil {
 		return base, nil
 	}
-	// Merge VideoConfig fields into the top-level object.
+	// Unmarshal base once, then inject VideoConfig fields directly — no second marshal of vc.
 	var m map[string]json.RawMessage
 	if err := json.Unmarshal(base, &m); err != nil {
 		return nil, err
 	}
-	vcBytes, err := json.Marshal(n.VideoConfig)
-	if err != nil {
-		return nil, err
+	vc := n.VideoConfig
+	vcFields := map[string]any{
+		"video_type":              vc.VideoType,
+		"video_resolution":        vc.VideoResolution,
+		"video_fps":               vc.VideoFPS,
+		"video_aspect_ratio":      vc.VideoAspectRatio,
+		"char_consistency_weight": vc.CharConsistencyWeight,
+		"asset_export_path":       vc.AssetExportPath,
+		"narration_voice":         vc.NarrationVoice,
+		"subtitle_enabled":        vc.SubtitleEnabled,
+		"subtitle_position":       vc.SubtitlePosition,
+		"subtitle_font_size":      vc.SubtitleFontSize,
+		"subtitle_color":          vc.SubtitleColor,
+		"subtitle_bg_style":       vc.SubtitleBgStyle,
+		"subtitle_font":           vc.SubtitleFont,
+		"color_grade":             vc.ColorGrade,
+		"contrast_level":          vc.ContrastLevel,
+		"saturation":              vc.Saturation,
+		"film_grain":              vc.FilmGrain,
+		"vignette":                vc.Vignette,
+		"chromatic_aberration":    vc.ChromaticAberration,
+		"kling_pro_for_action":    vc.KlingProForAction,
 	}
-	var vc map[string]json.RawMessage
-	if err := json.Unmarshal(vcBytes, &vc); err != nil {
-		return nil, err
-	}
-	// Skip VideoConfig meta fields to avoid polluting the top level.
-	skip := map[string]bool{"id": true, "novel_id": true, "created_at": true, "updated_at": true}
-	for k, v := range vc {
-		if !skip[k] {
-			m[k] = v
-		}
+	for k, v := range vcFields {
+		b, _ := json.Marshal(v)
+		m[k] = b
 	}
 	return json.Marshal(m)
 }

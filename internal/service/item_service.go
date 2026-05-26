@@ -117,6 +117,24 @@ func (s *ItemService) DeleteItem(id uint) error {
 }
 
 // GenerateItemImage 为物品生成图像
+// generateItemImageCore is the shared AI call for item image generation.
+// It builds the prompt, filters the reference URL to HTTP(S) only, sets up storage context,
+// and calls the AI. Used by both GenerateItemImage and BatchGenerateImages.
+func (s *ItemService) generateItemImageCore(ctx context.Context, tenantID uint, item *model.Item, provider, novelTitle string) (string, error) {
+	prompt := item.VisualPrompt
+	if prompt == "" {
+		prompt = fmt.Sprintf("%s，%s，奇幻物品插画，精细细节，概念艺术", item.Name, item.Description)
+	}
+	aiRefURL := item.ReferenceImageURL
+	if !strings.HasPrefix(aiRefURL, "http://") && !strings.HasPrefix(aiRefURL, "https://") {
+		aiRefURL = ""
+	}
+	if novelTitle != "" {
+		ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novelTitle})
+	}
+	return s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL, "", "")
+}
+
 // referenceImageURL 可选：用户上传的参考图 URL（已存入 OSS），作为 AI 参考图使用
 // provider 可选：指定使用的图像生成提供者，空字符串 = 自动选择
 func (s *ItemService) GenerateItemImage(tenantID, id uint, referenceImageURL, provider string) (*model.Item, error) {
@@ -124,31 +142,24 @@ func (s *ItemService) GenerateItemImage(tenantID, id uint, referenceImageURL, pr
 	if err != nil {
 		return nil, fmt.Errorf("item not found: %w", err)
 	}
-	prompt := item.VisualPrompt
-	if prompt == "" {
-		prompt = fmt.Sprintf("%s，%s，奇幻物品插画，精细细节，概念艺术", item.Name, item.Description)
-	}
 	// Persist new reference URL; fall back to previously saved one.
 	if referenceImageURL != "" {
 		item.ReferenceImageURL = referenceImageURL
 	}
-	// Only absolute HTTP(S) URLs can be fetched by remote AI APIs; skip local/relative paths.
+	// Log whether a valid reference image will be used.
 	aiRefURL := item.ReferenceImageURL
-	if !strings.HasPrefix(aiRefURL, "http://") && !strings.HasPrefix(aiRefURL, "https://") {
-		aiRefURL = ""
-	}
-	if aiRefURL != "" {
+	if strings.HasPrefix(aiRefURL, "http://") || strings.HasPrefix(aiRefURL, "https://") {
 		logger.Printf("GenerateItemImage: item=%d using reference image %s", id, aiRefURL)
 	} else {
 		logger.Printf("GenerateItemImage: item=%d no valid reference image, generating without reference", id)
 	}
-	genCtx := context.Background()
+	var novelTitle string
 	if s.novelRepo != nil && item.NovelID > 0 {
 		if novel, e := s.novelRepo.GetByID(item.NovelID); e == nil && novel.Title != "" {
-			genCtx = WithImageStorageHint(genCtx, ImageStorageHint{NovelTitle: novel.Title})
+			novelTitle = novel.Title
 		}
 	}
-	url, err := s.aiService.GenerateCharacterThreeView(genCtx, tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL, "", "")
+	url, err := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle)
 	if err != nil {
 		return nil, fmt.Errorf("generate image failed: %w", err)
 	}
@@ -189,19 +200,7 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			prompt := item.VisualPrompt
-			if prompt == "" {
-				prompt = fmt.Sprintf("%s，%s，奇幻物品插画，精细细节，概念艺术", item.Name, item.Description)
-			}
-			aiRefURL := item.ReferenceImageURL
-			if !strings.HasPrefix(aiRefURL, "http://") && !strings.HasPrefix(aiRefURL, "https://") {
-				aiRefURL = ""
-			}
-			genCtx := context.Background()
-			if novelTitle != "" {
-				genCtx = WithImageStorageHint(genCtx, ImageStorageHint{NovelTitle: novelTitle})
-			}
-			url, genErr := s.aiService.GenerateCharacterThreeView(genCtx, tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL, "", "")
+			url, genErr := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle)
 			if genErr != nil {
 				logger.Printf("[ItemService] BatchGenerateImages: item %d (%s) failed: %v", item.ID, item.Name, genErr)
 				mu.Lock()

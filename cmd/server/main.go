@@ -32,6 +32,30 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 )
 
+// startRecalcLoop runs fn every hour in a background goroutine; panics are recovered.
+// The goroutine exits when quit is closed.
+func startRecalcLoop(tag string, quit <-chan struct{}, fn func() error) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[%s] goroutine panic: %v", tag, r)
+			}
+		}()
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if err := fn(); err != nil {
+					logger.Printf("[%s] recalc error: %v", tag, err)
+				}
+			case <-quit:
+				return
+			}
+		}
+	}()
+}
+
 func main() {
 	// 初始化 zap logger（开发模式：彩色可读格式）
 	logger.Init(true)
@@ -191,46 +215,8 @@ func main() {
 
 	// 后台定时任务：每小时重新计算热度分（带优雅退出）
 	hotScoreQuit := make(chan struct{})
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Printf("[hot-score] goroutine panic: %v", r)
-			}
-		}()
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				if err := services.VideoService.RecalcVideoHotScores(); err != nil {
-					logger.Printf("[hot-score] recalc error: %v", err)
-				}
-			case <-hotScoreQuit:
-				return
-			}
-		}
-	}()
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Printf("[novel-hot-score] goroutine panic: %v", r)
-			}
-		}()
-		ticker := time.NewTicker(time.Hour)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				if err := services.NovelService.RecalcNovelHotScores(); err != nil {
-					logger.Printf("[novel-hot-score] recalc error: %v", err)
-				}
-			case <-hotScoreQuit:
-				return
-			}
-		}
-	}()
+	startRecalcLoop("hot-score", hotScoreQuit, services.VideoService.RecalcVideoHotScores)
+	startRecalcLoop("novel-hot-score", hotScoreQuit, services.NovelService.RecalcNovelHotScores)
 
 	// 后台定时任务：每 30 分钟清理超时的分片上传会话（防内存泄漏）
 	go handler.CleanupChunkStore()

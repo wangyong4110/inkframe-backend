@@ -630,7 +630,10 @@ func (h *ImportHandler) StartAnalysis(c *gin.Context) {
 	var body struct {
 		CreateChapterOutlines bool `json:"create_chapter_outlines"`
 	}
-	c.ShouldBindJSON(&body)
+	if err := c.ShouldBindJSON(&body); err != nil {
+		respondBadRequest(c, "invalid request body: "+err.Error())
+		return
+	}
 
 	tenantID := getTenantID(c)
 	taskID, err := h.analysisService.StartAnalysis(tenantID, uint(novelID), body.CreateChapterOutlines)
