@@ -779,10 +779,11 @@ func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
 		return
 	}
 
-	// Store raw path for serving; return API endpoint if local file
+	// Store raw path for serving; return API endpoint if local file.
+	// Append a timestamp so the browser never serves a cached response when the voice changes.
 	playURL := rawURL
 	if len(rawURL) > 7 && rawURL[:7] == "file://" {
-		playURL = "/api/v1/characters/" + c.Param("id") + "/voice/sample"
+		playURL = "/api/v1/characters/" + c.Param("id") + "/voice/sample?t=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
 	}
 	h.characterService.UpdateCharacter(uint(id), &model.UpdateCharacterRequest{ //nolint:errcheck
 		Name:        character.Name,
