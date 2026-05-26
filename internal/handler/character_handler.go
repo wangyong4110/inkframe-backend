@@ -380,6 +380,7 @@ func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
 
 		updateReq := characterToUpdateReq(char)
 		updateReq.FaceCloseup = img.URL
+		updateReq.Portrait = img.URL // face closeup doubles as portrait/avatar
 
 		updated, err := h.characterService.UpdateCharacter(charID, updateReq)
 		if err != nil {

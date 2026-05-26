@@ -969,10 +969,10 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 	return created, nil
 }
 
-// BatchGenerateImages 批量为小说的角色生成三视图合图（跳过已有 ThreeViewSheet 的角色）。
-// 所有goroutine并发调用 ImageGenerationService.GenerateThreeViewSheet，
+// BatchGenerateImages 批量为小说的角色生成面部特写（同时用作头像）和三视图合图。
+// 每个角色在同一 goroutine 中顺序执行：先生成面部特写（兼头像），再生成三视图（以面部特写为参考）。
+// 已有对应图片的角色跳过该步骤；两张图均已存在则整个角色跳过。
 // 并发度由 AIService.imageSem 统一管控（config.yaml ai.image_concurrency）。
-// 返回成功数和失败数；只要有一次成功就不返回 error。
 func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider string, progressFn func(int)) (succeeded, failed int, err error) {
 	chars, err := s.characterRepo.ListByNovel(novelID)
 	if err != nil {
@@ -988,10 +988,10 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 		}
 	}
 
-	// 统计实际需要生成的数量，用于进度计算
+	// 需要至少生成一张图的角色
 	var todo []*model.Character
 	for _, c := range chars {
-		if c.ThreeViewSheet == "" {
+		if c.FaceCloseup == "" || c.ThreeViewSheet == "" {
 			todo = append(todo, c)
 		}
 	}
@@ -1011,33 +1011,47 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 			if novelTitle != "" {
 				genCtx = WithImageStorageHint(genCtx, ImageStorageHint{NovelTitle: novelTitle})
 			}
-			img, genErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, char.Description, imageStyle, "", "", provider)
-			if genErr != nil {
-				logger.Printf("[CharacterService] BatchGenerateImages: char %d (%s) failed: %v", char.ID, char.Name, genErr)
-				mu.Lock()
-				failed++
-				done++
-				cur := done
-				mu.Unlock()
-				if progressFn != nil && total > 0 {
-					progressFn(cur * 99 / total)
+
+			updateReq := &model.UpdateCharacterRequest{Name: char.Name}
+			charFailed := false
+
+			// 1. 面部特写（兼头像）
+			if char.FaceCloseup == "" {
+				faceImg, faceErr := imgSvc.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, char.Description, imageStyle, "", char.Portrait, provider)
+				if faceErr != nil {
+					logger.Printf("[CharacterService] BatchGenerateImages: face closeup char %d (%s) failed: %v", char.ID, char.Name, faceErr)
+					charFailed = true
+				} else {
+					updateReq.FaceCloseup = faceImg.URL
+					updateReq.Portrait = faceImg.URL
+					char.Portrait = faceImg.URL // use as reference for three-view below
 				}
-				return
 			}
-			if _, saveErr := s.UpdateCharacter(char.ID, &model.UpdateCharacterRequest{ThreeViewSheet: img.URL}); saveErr != nil {
-				logger.Printf("[CharacterService] BatchGenerateImages: save char %d: %v", char.ID, saveErr)
-				mu.Lock()
-				failed++
-				done++
-				cur := done
-				mu.Unlock()
-				if progressFn != nil && total > 0 {
-					progressFn(cur * 99 / total)
+
+			// 2. 三视图（使用面部特写或已有头像作为参考）
+			if char.ThreeViewSheet == "" {
+				threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, char.Description, imageStyle, "", char.Portrait, provider)
+				if threeErr != nil {
+					logger.Printf("[CharacterService] BatchGenerateImages: three-view char %d (%s) failed: %v", char.ID, char.Name, threeErr)
+					charFailed = true
+				} else {
+					updateReq.ThreeViewSheet = threeImg.URL
 				}
-				return
 			}
+
+			if updateReq.FaceCloseup != "" || updateReq.ThreeViewSheet != "" {
+				if _, saveErr := s.UpdateCharacter(char.ID, updateReq); saveErr != nil {
+					logger.Printf("[CharacterService] BatchGenerateImages: save char %d: %v", char.ID, saveErr)
+					charFailed = true
+				}
+			}
+
 			mu.Lock()
-			succeeded++
+			if charFailed {
+				failed++
+			} else {
+				succeeded++
+			}
 			done++
 			cur := done
 			mu.Unlock()
