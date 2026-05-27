@@ -30,7 +30,7 @@ import (
 const (
 	defaultShotDurationSecs  = 5.0  // 默认分镜时长（秒）
 	maxSegmentRunes          = 3500 // 每段最多字符数（约 25 个镜头，≈5000 tokens）
-	charRuneOverlapThreshold = 0.5  // 角色名模糊匹配汉字重叠比例阈值
+	charRuneOverlapThreshold = 0.7  // 角色名模糊匹配汉字重叠比例阈值（需≥70%重叠，避免"炎少"误匹配"萧炎"）
 )
 
 // ─── Storyboard Generation ────────────────────────────────────────────────────

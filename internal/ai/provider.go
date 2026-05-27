@@ -93,8 +93,9 @@ type ImageGenerateRequest struct {
 	CFGScale       float64  `json:"cfg_scale"`
 	Seed           int64    `json:"seed"`
 	Style          string   `json:"style"` // realistic, anime, cartoon, etc.
-	ReferenceImage string   `json:"reference_image,omitempty"` // 用于一致性控制
-	ControlNets    []ControlNet `json:"control_nets,omitempty"`
+	ReferenceImage  string   `json:"reference_image,omitempty"`  // 单张参考图（向后兼容）
+	ReferenceImages []string `json:"reference_images,omitempty"` // 多张参考图（优先级高于 ReferenceImage）
+	ControlNets     []ControlNet `json:"control_nets,omitempty"`
 	ConsistencyWeight float64 `json:"consistency_weight,omitempty"` // 0-1，角色一致性强度（影响模型选择和scale）
 }
 

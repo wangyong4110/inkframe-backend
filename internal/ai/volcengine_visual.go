@@ -177,7 +177,11 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 		if req.CFGScale > 0 {
 			params["scale"] = req.CFGScale
 		}
-		p.setImageInput(params, req.ReferenceImage, "image_urls", "binary_data_base64")
+		if len(req.ReferenceImages) > 0 {
+			p.setMultiImageInput(params, req.ReferenceImages, "image_urls", "binary_data_base64")
+		} else {
+			p.setImageInput(params, req.ReferenceImage, "image_urls", "binary_data_base64")
+		}
 
 	case VolcModelDreamO:
 		// 角色特征保持：image_urls[] 或 binary_data_base64[]，必填 prompt
@@ -188,7 +192,11 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 		if req.CFGScale > 0 {
 			params["scale"] = req.CFGScale
 		}
-		p.setImageInput(params, req.ReferenceImage, "image_urls", "binary_data_base64")
+		if len(req.ReferenceImages) > 0 {
+			p.setMultiImageInput(params, req.ReferenceImages, "image_urls", "binary_data_base64")
+		} else {
+			p.setImageInput(params, req.ReferenceImage, "image_urls", "binary_data_base64")
+		}
 
 	case VolcModelImageEffect:
 		// 图像特效：image_input1（URL）+ template_id（必填，来自 Style 字段）
@@ -201,7 +209,7 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 	return params
 }
 
-// setImageInput 将参考图设置到 URL 数组或 base64 数组字段
+// setImageInput 将单张参考图设置到 URL 数组或 base64 数组字段
 func (p *VolcengineVisualProvider) setImageInput(params map[string]interface{}, image, urlField, b64Field string) {
 	if image == "" {
 		return
@@ -210,6 +218,27 @@ func (p *VolcengineVisualProvider) setImageInput(params map[string]interface{}, 
 		params[urlField] = []string{image}
 	} else {
 		params[b64Field] = []string{image}
+	}
+}
+
+// setMultiImageInput 将多张参考图设置到 URL 数组或 base64 数组字段，URL 和 base64 分组填充
+func (p *VolcengineVisualProvider) setMultiImageInput(params map[string]interface{}, images []string, urlField, b64Field string) {
+	var urls, b64s []string
+	for _, img := range images {
+		if img == "" {
+			continue
+		}
+		if strings.HasPrefix(img, "http://") || strings.HasPrefix(img, "https://") {
+			urls = append(urls, img)
+		} else {
+			b64s = append(b64s, img)
+		}
+	}
+	if len(urls) > 0 {
+		params[urlField] = urls
+	}
+	if len(b64s) > 0 {
+		params[b64Field] = b64s
 	}
 }
 

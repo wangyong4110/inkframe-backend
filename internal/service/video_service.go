@@ -1174,15 +1174,6 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		return "", fmt.Errorf("AI service not initialized")
 	}
 
-	// charBestImage 返回角色的最佳参考图 URL。
-	// 优先级：ThreeViewSheet（三视图合图，一致性最强）> Portrait（肖像）
-	charBestImage := func(c *model.Character) string {
-		if c.ThreeViewSheet != "" {
-			return c.ThreeViewSheet
-		}
-		return c.Portrait
-	}
-
 	// 精准匹配：批量加载 shot.CharacterIDs 中的所有角色参考图（最多 maxCompositeImages-1 张，留槽给场景锚点）
 	const maxCharRefs = maxCompositeImages - 1
 	var characterPortraits []string // 可能包含多个角色的图
@@ -1206,7 +1197,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// cachedNovelChars 延迟加载：降级一、降级二共用，避免重复 ListByNovel 查询
+	// cachedNovelChars 延迟加载：降级一名称匹配使用
 	var cachedNovelChars []*model.Character
 
 	// 降级一：若 CharacterIDs 未命中，从 shot.Characters JSON 内联名称匹配
@@ -1255,24 +1246,11 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// 降级二：通过 ChapterID 找到 NovelID，取第一个有参考图的角色；同时获取章节序号用于 OSS 路径
+	// 获取章节序号用于 OSS 路径（不再降级注入第一个角色，避免把错误角色注入非角色镜头）
 	var chapterNo int
 	if shot.ChapterID != nil && s.chapterRepo != nil {
 		if chapter, err := s.chapterRepo.GetByID(*shot.ChapterID); err == nil && chapter != nil {
 			chapterNo = chapter.ChapterNo
-			if len(characterPortraits) == 0 {
-				if cachedNovelChars == nil {
-					cachedNovelChars, _ = s.characterRepo.ListByNovel(chapter.NovelID)
-				}
-				for _, c := range cachedNovelChars {
-					img := charBestImage(c)
-					if img != "" {
-						characterPortraits = append(characterPortraits, img)
-						refSources = append(refSources, fmt.Sprintf("novel first char=%q", c.Name))
-						break
-					}
-				}
-			}
 		}
 	}
 	logger.Printf("generateShotReferenceImage: shot %d charIDs=%v sources=%v portraits=%d",
@@ -1335,23 +1313,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// 合成参考图：多张时横向拼接为单一图（角色一致性 + 场景锚点同时作为参考）
-	var refImage string
-	switch len(allRefImages) {
-	case 0:
-		// 无任何参考图，纯文本生成
-	case 1:
-		refImage = allRefImages[0]
-	default:
-		composited, compErr := s.compositeRefImages(ctx, allRefImages, tenantID)
-		if compErr != nil {
-			logger.Printf("generateShotReferenceImage: shot %d composite failed (%v), using first image", shot.ShotNo, compErr)
-			refImage = allRefImages[0]
-		} else {
-			refImage = composited
-			logger.Printf("generateShotReferenceImage: shot %d composited %d ref images → %s", shot.ShotNo, len(allRefImages), composited)
-		}
-	}
+	// allRefImages 直接传给 API，无需合图（所有图生图 API 均支持多张参考图）
 
 	// 根据质量档位注入分辨率提示，引导图像提供者选择适当尺寸。
 	// 对于支持 size 参数的提供者（如 DALL-E 3），此 hint 也作为备注说明。
@@ -1376,7 +1338,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	cinematicImgPrefix := "cinematic film photography, 35mm anamorphic lens, professional lighting setup, " + lensType + ", "
 	promptText = cinematicImgPrefix + promptText
 
-	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", promptText, refImage, artStyle, "", charConsistencyWeight)
+	imageURL, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, allRefImages, artStyle, "", charConsistencyWeight)
 	if err != nil {
 		logger.Printf("generateShotReferenceImage: image gen failed for shot %d: %v", shot.ShotNo, err)
 		return "", err

@@ -899,6 +899,132 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 	return "", fmt.Errorf("no image provider available: %w", lastErr)
 }
 
+// GenerateCharacterThreeViewMulti 与 GenerateCharacterThreeView 相同，但支持传入多张参考图。
+// 所有图均会传给支持多图的 API（如 DreamO image_urls[]），无需调用方拼接合图。
+// 若 referenceImages 为空，退化为纯文本生成。
+func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantID uint, providerName, prompt string, referenceImages []string, style, negativePrompt string, consistencyWeight ...float64) (string, error) {
+	if s.aiManager == nil {
+		return "", fmt.Errorf("AI manager not initialized")
+	}
+
+	s.semMu.RLock()
+	sem := s.imageSem
+	s.semMu.RUnlock()
+	if sem != nil {
+		select {
+		case sem <- struct{}{}:
+			defer func() { <-sem }()
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+
+	weight := 1.0
+	if len(consistencyWeight) > 0 && consistencyWeight[0] > 0 {
+		weight = consistencyWeight[0]
+	}
+	cfgScale := 1.0 + weight*9.0
+
+	// 取第一张图作为 selectImageModel 的存在性判断
+	firstRef := ""
+	if len(referenceImages) > 0 {
+		firstRef = referenceImages[0]
+	}
+
+	buildReq := func(model, size string) *ai.ImageGenerateRequest {
+		return &ai.ImageGenerateRequest{
+			Model:             model,
+			Prompt:            prompt,
+			NegativePrompt:    negativePrompt,
+			Size:              size,
+			ReferenceImage:    firstRef,
+			ReferenceImages:   referenceImages,
+			CFGScale:          cfgScale,
+			ConsistencyWeight: weight,
+		}
+	}
+
+	if providerName != "" {
+		var entry *ai.ImageProviderEntry
+		for _, e := range knownImageCapableProviders {
+			if e.ProviderName == providerName {
+				entry = &e
+				break
+			}
+		}
+		if entry == nil {
+			for _, e := range s.aiManager.GetImageProviders() {
+				if e.ProviderName == providerName {
+					entry = &e
+					break
+				}
+			}
+		}
+		if entry == nil {
+			return "", fmt.Errorf("unknown image provider: %s", providerName)
+		}
+		provider, err := s.aiManager.GetProvider(providerName)
+		if err != nil {
+			provider, err = s.getTenantProvider(tenantID, providerName)
+			if err != nil {
+				return "", fmt.Errorf("image provider %q not available: %w", providerName, err)
+			}
+		}
+		resp, err := provider.ImageGenerate(ctx, buildReq(selectImageModel(*entry, firstRef, style, weight), entry.Size))
+		if err != nil {
+			return "", err
+		}
+		if resp.Error != "" {
+			return "", fmt.Errorf("image generation failed: %s", resp.Error)
+		}
+		return s.uploadImageToStorage(ctx, tenantID, resp.URL), nil
+	}
+
+	var entries []ai.ImageProviderEntry
+	useDB := s.providerRepo != nil
+	if useDB {
+		entries = s.loadDBImageProviderEntries(tenantID)
+	} else {
+		entries = s.aiManager.GetImageProviders()
+		if len(entries) == 0 {
+			entries = knownImageCapableProviders
+		}
+	}
+	if len(entries) == 0 {
+		return "", fmt.Errorf("no image providers configured")
+	}
+
+	var lastErr error
+	for _, e := range entries {
+		var provider ai.AIProvider
+		var err error
+		if useDB {
+			provider, err = s.getTenantProvider(tenantID, e.ProviderName)
+		} else {
+			provider, err = s.aiManager.GetProvider(e.ProviderName)
+		}
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		model := selectImageModel(e, firstRef, style, weight)
+		logger.Printf("GenerateCharacterThreeViewMulti: trying provider=%s model=%s refs=%d", e.ProviderName, model, len(referenceImages))
+		resp, err := provider.ImageGenerate(ctx, buildReq(model, e.Size))
+		if err != nil {
+			logger.Printf("GenerateCharacterThreeViewMulti: provider=%s failed: %v", e.ProviderName, err)
+			lastErr = err
+			continue
+		}
+		if resp.Error != "" {
+			logger.Printf("GenerateCharacterThreeViewMulti: provider=%s error: %s", e.ProviderName, resp.Error)
+			lastErr = fmt.Errorf("image generation failed: %s", resp.Error)
+			continue
+		}
+		return s.uploadImageToStorage(ctx, tenantID, resp.URL), nil
+	}
+	return "", fmt.Errorf("no image provider available: %w", lastErr)
+}
+
 // imageStorageHintKey is the context key for ImageStorageHint.
 type imageStorageHintKey struct{}
 
