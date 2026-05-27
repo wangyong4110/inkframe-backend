@@ -539,13 +539,29 @@ func deduplicateAndLimit(items []sfxTagItem, limit int) []sfxTagItem {
 	return out
 }
 
-// searchOneTag 对单个结构化标签执行三层降级搜索：本地库 → Freesound → ElevenLabs（AI生成）。
-// ElevenLabs 是最后兜底，每个 tag 独立生成一条定制音效（非多 tag 混合）。
+// searchOneTag 对单个结构化标签执行多层降级搜索。
+// 优先级：AI 文生音效（sfx 类型提供商）→ 本地库 → Freesound → ElevenLabs。
+// 若未配置 sfx 类型提供商，则跳过 AI 音效直接走后三层。
 func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot) sfxHit {
+	sfxDur := maxDur
+	if sfxDur <= 0 {
+		sfxDur = 5
+	}
+	// 1. AI 文生音效（Kling SFX 等 sfx 类型提供商）——优先尝试
+	if s.aiSvc != nil {
+		if u, dur, err := s.aiSvc.GenerateSFX(ctx, tenantID, item.Tag, sfxDur); err == nil && u != "" {
+			logger.Printf("[SFXService] shot %d AI-SFX hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
+			return sfxHit{url: u, source: "ai-sfx", durationSecs: dur}
+		} else if err != nil && !isNoProviderErr(err) {
+			logger.Printf("[SFXService] shot %d AI-SFX failed tag=%q: %v", shot.ID, item.Tag, err)
+		}
+	}
+	// 2. 本地音效库
 	if u, dur := s.searchLocalLib(ctx, tenantID, item.Tag); u != "" {
 		logger.Printf("[SFXService] shot %d local hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 		return sfxHit{url: u, source: "local", durationSecs: dur}
 	}
+	// 3. Freesound API
 	if s.freesoundKey == "" {
 		logger.Printf("[SFXService] shot %d skip Freesound (no key)", shot.ID)
 	} else if hit := s.searchFreesound(ctx, item, maxDur); hit.url != "" {
@@ -554,20 +570,7 @@ func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTa
 	} else {
 		logger.Printf("[SFXService] shot %d Freesound miss tag=%q", shot.ID, item.Tag)
 	}
-	// AI 文生音效（Kling SFX 等 sfx 类型提供商）
-	if s.aiSvc != nil {
-		sfxDur := maxDur
-		if sfxDur <= 0 {
-			sfxDur = 5
-		}
-		if u, dur, err := s.aiSvc.GenerateSFX(ctx, tenantID, item.Tag, sfxDur); err == nil && u != "" {
-			logger.Printf("[SFXService] shot %d AI-SFX hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
-			return sfxHit{url: u, source: "ai-sfx", durationSecs: dur}
-		} else if err != nil {
-			logger.Printf("[SFXService] shot %d AI-SFX failed tag=%q: %v", shot.ID, item.Tag, err)
-		}
-	}
-	// ElevenLabs：每个 tag 独立生成，避免多 tag 混音成一条不可分离的音频
+	// 4. ElevenLabs：每个 tag 独立生成，避免多 tag 混音成一条不可分离的音频
 	if u, dur, err := s.generateElevenLabsForTag(ctx, item, shot); err == nil && u != "" {
 		logger.Printf("[SFXService] shot %d ElevenLabs hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 		return sfxHit{url: u, source: "elevenlabs", durationSecs: dur}
@@ -575,6 +578,11 @@ func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTa
 		logger.Printf("[SFXService] shot %d ElevenLabs failed tag=%q: %v", shot.ID, item.Tag, err)
 	}
 	return sfxHit{}
+}
+
+// isNoProviderErr 判断错误是否为"未配置该类型提供商"（静默跳过，无需打印告警）。
+func isNoProviderErr(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "no sfx providers configured")
 }
 
 // BatchAutoGenerateSFX 批量处理视频所有镜头，最多 5 并发。

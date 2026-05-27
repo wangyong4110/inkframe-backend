@@ -172,10 +172,10 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		if !p.IsActive {
 			continue
 		}
-		// 当未指定具体提供商时，跳过图像/视频/语音/嵌入类型（这些不做文本生成）
+		// 当未指定具体提供商时，跳过图像/视频/语音/嵌入/多能力类型（这些不做文本生成）
 		if providerName == "" {
 			t := strings.ToLower(p.Type)
-			if t == "image" || t == "video" || t == "voice" || t == "embedding" {
+			if t == "image" || t == "video" || t == "voice" || t == "embedding" || t == "sfx" {
 				continue
 			}
 		}
@@ -742,7 +742,8 @@ func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProvider
 			logger.Printf("loadDBImageProviderEntries: skip provider %q (inactive)", p.Name)
 			continue
 		}
-		if !strings.EqualFold(p.Type, "image") {
+		pt := strings.ToLower(p.Type)
+		if pt != "image" {
 			continue // non-image providers are expected, no need to log
 		}
 		if !providerHasCredentials(p) {
@@ -1244,7 +1245,7 @@ func (s *AIService) loadDBSFXProvider(tenantID uint) (ai.AIProvider, error) {
 		if !p.IsActive {
 			continue
 		}
-		if strings.ToLower(p.Type) != "sfx" {
+		if pt := strings.ToLower(p.Type); pt != "sfx" {
 			continue
 		}
 		if !providerHasCredentials(p) {

@@ -972,7 +972,6 @@ func seedAIModels(db *gorm.DB) {
 		{"tencent-tts", "101050", "WeJack（英文男声）", []string{"voice_gen"}, 0.90, 0},
 		{"tencent-tts", "101051", "WeRose（英文女声）", []string{"voice_gen"}, 0.90, 0},
 		// ── 可灵文生音效 ─────────────────────────────────────────────────
-		// model 字段为时长配置，prompt 使用 Text 字段填写音效描述
 		{"kling-sfx", "5s", "5 秒音效（默认）", []string{"sfx_gen"}, 0.92, 0},
 		{"kling-sfx", "3s", "3 秒音效（最短）", []string{"sfx_gen"}, 0.90, 0},
 		{"kling-sfx", "7s", "7 秒音效", []string{"sfx_gen"}, 0.92, 0},
@@ -1481,7 +1480,6 @@ func initAIModule(cfg *config.Config) *ai.ModelManager {
 func initVideoProviders(cfg *config.Config) map[string]ai.VideoProvider {
 	providers := make(map[string]ai.VideoProvider)
 
-	// Kling 快手可灵（env var 优先，config.yaml ai.kling 作为备选）
 	klingKey := getEnv("KLING_API_KEY", cfg.AI.Kling.APIKey)
 	if klingKey != "" {
 		providers["kling"] = ai.NewKlingProvider(klingKey, cfg.AI.Kling.Endpoint)

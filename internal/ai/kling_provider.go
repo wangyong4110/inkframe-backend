@@ -260,15 +260,12 @@ func (p *KlingProvider) GetVideoURL(ctx context.Context, taskID string) (string,
 		return "", fmt.Errorf("kling parse video URL failed: %w", err)
 	}
 
-	// Kling API 不同版本可能返回 "succeed" 或 "success"
 	switch envelope.Data.TaskStatus {
 	case "succeed", "success", "completed":
-		// 任务完成，继续获取 URL
 	default:
 		return "", fmt.Errorf("kling task not completed: status=%s", envelope.Data.TaskStatus)
 	}
 
-	// 尝试 multi-image2video 格式：{videos:[{url}]}
 	var multiResult struct {
 		Videos []struct {
 			URL string `json:"url"`
@@ -280,7 +277,6 @@ func (p *KlingProvider) GetVideoURL(ctx context.Context, taskID string) (string,
 		}
 	}
 
-	// 尝试 image2video 旧格式：[{video:{url}}]
 	var works []struct {
 		Video struct {
 			URL string `json:"url"`
