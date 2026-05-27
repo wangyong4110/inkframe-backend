@@ -248,10 +248,11 @@ type SeedanceConfig struct {
 	Endpoint string `mapstructure:"endpoint"`
 }
 
-// KlingConfig 快手可灵视频配置
+// KlingConfig 快手可灵视频配置（AK/SK JWT 鉴权）
 type KlingConfig struct {
-	APIKey   string `mapstructure:"api_key"`
-	Endpoint string `mapstructure:"endpoint"`
+	APIKey    string `mapstructure:"api_key"`    // Access Key（AK）
+	SecretKey string `mapstructure:"secret_key"` // Secret Key（SK），用于生成 JWT
+	Endpoint  string `mapstructure:"endpoint"`
 }
 
 // VolcengineVisualConfig 火山引擎即梦AI图像配置（AK/SK 鉴权）

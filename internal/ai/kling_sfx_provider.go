@@ -21,9 +21,10 @@ import (
 //   - 输出为生成的音效文件 URL（mp3/wav），不本地化存储
 //   - req.Duration 控制音效时长（3.0~10.0 秒），默认 5.0 秒
 type KlingSFXProvider struct {
-	apiKey   string
-	endpoint string
-	client   *http.Client
+	accessKey string
+	secretKey string
+	endpoint  string
+	client    *http.Client
 }
 
 const (
@@ -58,16 +59,17 @@ type klingSFXQueryResponse struct {
 }
 
 // NewKlingSFXProvider 创建可灵文生音效提供者
-// apiKey: 可灵 API Key（与视频生成共用同一个 key）
+// accessKey / secretKey: 可灵 AK/SK（与视频生成共用同一对密钥）
 // endpoint: API 端点，留空使用默认 https://api.klingai.com
-func NewKlingSFXProvider(apiKey, endpoint string) *KlingSFXProvider {
+func NewKlingSFXProvider(accessKey, secretKey, endpoint string) *KlingSFXProvider {
 	if endpoint == "" {
 		endpoint = klingSFXDefaultEndpoint
 	}
 	return &KlingSFXProvider{
-		apiKey:   apiKey,
-		endpoint: endpoint,
-		client:   &http.Client{Timeout: 30 * time.Second},
+		accessKey: accessKey,
+		secretKey: secretKey,
+		endpoint:  endpoint,
+		client:    &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -79,8 +81,8 @@ func (p *KlingSFXProvider) GetModels() []string {
 }
 
 func (p *KlingSFXProvider) HealthCheck(ctx context.Context) error {
-	if p.apiKey == "" {
-		return fmt.Errorf("kling-sfx: API key not configured")
+	if p.accessKey == "" || p.secretKey == "" {
+		return fmt.Errorf("kling-sfx: Access Key and Secret Key not configured")
 	}
 	return nil
 }
@@ -257,11 +259,11 @@ func (p *KlingSFXProvider) queryTask(ctx context.Context, taskID string) (*kling
 
 // doRequest 发送 HTTP 请求，返回响应体、状态码
 func (p *KlingSFXProvider) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {
-	// 复用 KlingProvider 的 doRequest 逻辑（独立实现以保持文件独立性）
 	kp := &KlingProvider{
-		apiKey:   p.apiKey,
-		endpoint: p.endpoint,
-		client:   p.client,
+		accessKey: p.accessKey,
+		secretKey: p.secretKey,
+		endpoint:  p.endpoint,
+		client:    p.client,
 	}
 	return kp.doRequest(ctx, method, path, body)
 }

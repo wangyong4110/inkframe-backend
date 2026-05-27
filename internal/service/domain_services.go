@@ -107,7 +107,8 @@ var providerDisplayNames = map[string]string{
 func providerHasCredentials(p *model.ModelProvider) bool {
 	// 需要双密钥的提供商：AK 和 SK 都必须有值
 	switch p.Name {
-	case ai.ProviderNameVolcengineVisual, "doubao-speech-v1":
+	case ai.ProviderNameVolcengineVisual, "doubao-speech-v1",
+		"kling", "kling-sfx", "kling-tts", "kling-image":
 		return strings.TrimSpace(p.APIKey) != "" && strings.TrimSpace(p.APISecretKey) != ""
 	}
 	return strings.TrimSpace(p.APIKey) != ""

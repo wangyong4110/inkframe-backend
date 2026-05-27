@@ -13,20 +13,23 @@ import (
 
 // KlingProvider 快手可灵视频生成提供者
 // API: https://api.klingai.com/v1/videos/image2video
+// 鉴权：HS256 JWT（accessKey + secretKey）
 type KlingProvider struct {
-	apiKey   string
-	endpoint string
-	client   *http.Client
+	accessKey string
+	secretKey string
+	endpoint  string
+	client    *http.Client
 }
 
 // NewKlingProvider 创建 Kling 视频生成提供者
-func NewKlingProvider(apiKey, endpoint string) *KlingProvider {
+func NewKlingProvider(accessKey, secretKey, endpoint string) *KlingProvider {
 	if endpoint == "" {
 		endpoint = "https://api.klingai.com"
 	}
 	return &KlingProvider{
-		apiKey:   apiKey,
-		endpoint: endpoint,
+		accessKey: accessKey,
+		secretKey: secretKey,
+		endpoint:  endpoint,
 		client: &http.Client{
 			Timeout: 60 * time.Second,
 		},
@@ -52,8 +55,12 @@ func (p *KlingProvider) doRequest(ctx context.Context, method, path string, body
 	if err != nil {
 		return nil, 0, err
 	}
+	token, err := klingJWT(p.accessKey, p.secretKey)
+	if err != nil {
+		return nil, 0, fmt.Errorf("kling: JWT generation failed: %w", err)
+	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	httpReq.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {

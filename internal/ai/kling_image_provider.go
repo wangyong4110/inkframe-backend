@@ -19,9 +19,10 @@ import (
 // 支持模型：kling-v1 / kling-v1-5 / kling-v2 / kling-v2-new / kling-v2-1 / kling-v3
 // 返回 task_result.images[0].url（第一张生成图）
 type KlingImageProvider struct {
-	apiKey   string
-	endpoint string
-	client   *http.Client
+	accessKey string
+	secretKey string
+	endpoint  string
+	client    *http.Client
 }
 
 const (
@@ -50,14 +51,15 @@ type klingImageQueryResponse struct {
 }
 
 // NewKlingImageProvider 创建可灵图像生成提供者
-func NewKlingImageProvider(apiKey, endpoint string) *KlingImageProvider {
+func NewKlingImageProvider(accessKey, secretKey, endpoint string) *KlingImageProvider {
 	if endpoint == "" {
 		endpoint = klingImageDefaultEndpoint
 	}
 	return &KlingImageProvider{
-		apiKey:   apiKey,
-		endpoint: endpoint,
-		client:   &http.Client{Timeout: 30 * time.Second},
+		accessKey: accessKey,
+		secretKey: secretKey,
+		endpoint:  endpoint,
+		client:    &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -68,8 +70,8 @@ func (p *KlingImageProvider) GetModels() []string {
 }
 
 func (p *KlingImageProvider) HealthCheck(ctx context.Context) error {
-	if p.apiKey == "" {
-		return fmt.Errorf("kling-image: API key not configured")
+	if p.accessKey == "" || p.secretKey == "" {
+		return fmt.Errorf("kling-image: Access Key and Secret Key not configured")
 	}
 	return nil
 }
@@ -271,9 +273,10 @@ func (p *KlingImageProvider) queryImageTask(ctx context.Context, taskID string) 
 // doRequest 发送 HTTP 请求（复用 KlingProvider 鉴权逻辑）
 func (p *KlingImageProvider) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {
 	kp := &KlingProvider{
-		apiKey:   p.apiKey,
-		endpoint: p.endpoint,
-		client:   p.client,
+		accessKey: p.accessKey,
+		secretKey: p.secretKey,
+		endpoint:  p.endpoint,
+		client:    p.client,
 	}
 	return kp.doRequest(ctx, method, path, body)
 }

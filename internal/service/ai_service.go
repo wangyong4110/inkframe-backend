@@ -221,6 +221,12 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 	switch matched.Name {
 	case ai.ProviderNameVolcengineVisual:
 		provider = ai.NewVolcengineVisualProvider(matched.APIKey, matched.APISecretKey)
+	case "kling-sfx":
+		provider = ai.NewKlingSFXProvider(matched.APIKey, matched.APISecretKey, matched.APIEndpoint)
+	case "kling-tts":
+		provider = ai.NewKlingTTSProvider(matched.APIKey, matched.APISecretKey, matched.APIEndpoint)
+	case "kling-image":
+		provider = ai.NewKlingImageProvider(matched.APIKey, matched.APISecretKey, matched.APIEndpoint)
 	case "openai":
 		provider = ai.NewOpenAIProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "anthropic":

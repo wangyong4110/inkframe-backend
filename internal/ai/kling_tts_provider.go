@@ -21,9 +21,10 @@ import (
 //   - 需指定 voice_id（音色）、voice_language（zh/en）、voice_speed（0.8~2.0）
 //   - 返回音频 URL 字段为 url（而非 url_mp3）
 type KlingTTSProvider struct {
-	apiKey   string
-	endpoint string
-	client   *http.Client
+	accessKey string
+	secretKey string
+	endpoint  string
+	client    *http.Client
 }
 
 const (
@@ -59,16 +60,17 @@ type klingTTSQueryResponse struct {
 }
 
 // NewKlingTTSProvider 创建可灵语音合成提供者
-// apiKey: 可灵 API Key（与视频生成共用同一个 key）
+// accessKey / secretKey: 可灵 AK/SK（与视频生成共用同一对密钥）
 // endpoint: API 端点，留空使用默认 https://api.klingai.com
-func NewKlingTTSProvider(apiKey, endpoint string) *KlingTTSProvider {
+func NewKlingTTSProvider(accessKey, secretKey, endpoint string) *KlingTTSProvider {
 	if endpoint == "" {
 		endpoint = klingTTSDefaultEndpoint
 	}
 	return &KlingTTSProvider{
-		apiKey:   apiKey,
-		endpoint: endpoint,
-		client:   &http.Client{Timeout: 30 * time.Second},
+		accessKey: accessKey,
+		secretKey: secretKey,
+		endpoint:  endpoint,
+		client:    &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -89,8 +91,8 @@ func (p *KlingTTSProvider) GetModels() []string {
 }
 
 func (p *KlingTTSProvider) HealthCheck(ctx context.Context) error {
-	if p.apiKey == "" {
-		return fmt.Errorf("kling-tts: API key not configured")
+	if p.accessKey == "" || p.secretKey == "" {
+		return fmt.Errorf("kling-tts: Access Key and Secret Key not configured")
 	}
 	return nil
 }
@@ -274,9 +276,10 @@ func (p *KlingTTSProvider) queryTask(ctx context.Context, taskID string) (*kling
 // doRequest 发送 HTTP 请求，返回响应体、状态码（复用 KlingProvider 鉴权逻辑）
 func (p *KlingTTSProvider) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {
 	kp := &KlingProvider{
-		apiKey:   p.apiKey,
-		endpoint: p.endpoint,
-		client:   p.client,
+		accessKey: p.accessKey,
+		secretKey: p.secretKey,
+		endpoint:  p.endpoint,
+		client:    p.client,
 	}
 	return kp.doRequest(ctx, method, path, body)
 }
