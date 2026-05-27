@@ -12,6 +12,7 @@ import (
 	_ "image/png" // PNG 解码支持（合成参考图时可能遇到 PNG 格式）
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -857,11 +858,23 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, pro
 		shotMapImg[sh.ID] = sh
 	}
 
+	// 按 ShotNo 升序处理：确保同一场景中编号最小的分镜最先生成并锁定场景锚点，
+	// 后续分镜在 imageSem 等待期间能借助已锁定的锚点参考图提升一致性。
+	sort.Slice(shotIDs, func(i, j int) bool {
+		si, oki := shotMapImg[shotIDs[i]]
+		sj, okj := shotMapImg[shotIDs[j]]
+		if !oki || !okj {
+			return oki
+		}
+		return si.ShotNo < sj.ShotNo
+	})
+
 	var queued []*model.StoryboardShot
 	sem := make(chan struct{}, maxConcurrentShots)
 	var wg sync.WaitGroup
 	total := len(shotIDs)
 	var done atomic.Int32
+	var goroutineIdx atomic.Int32
 
 	advanceProgress := func() {
 		n := int(done.Add(1))
@@ -882,9 +895,14 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, pro
 			continue
 		}
 		queued = append(queued, shot)
+		gIdx := goroutineIdx.Add(1) - 1
 		sem <- struct{}{}
 		wg.Add(1)
-		go func(sh *model.StoryboardShot) {
+		go func(sh *model.StoryboardShot, idx int32) {
+			// 前几个并发 goroutine 错开 800ms 启动，避免 API 侧同时收到多个请求导致质量下降
+			if idx > 0 && idx < int32(maxConcurrentShots) {
+				time.Sleep(time.Duration(idx) * 800 * time.Millisecond)
+			}
 			defer func() {
 				<-sem
 				wg.Done()
@@ -917,7 +935,7 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, pro
 			} else {
 				logger.Printf("BatchGenerateShotImages: shot %d failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
 			}
-		}(shot)
+		}(shot, gIdx)
 	}
 	wg.Wait()
 	logger.Printf("BatchGenerateShotImages: all %d shots done for videoID=%d", len(queued), videoID)
@@ -1348,6 +1366,25 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		cinematicImgPrefix = artStyle + " style, " + cinematicImgPrefix
 	}
 	promptText = cinematicImgPrefix + promptText
+
+	// 二次读取场景锚点参考图：批量并发时本 goroutine 等待 imageSem 期间，
+	// 前一个分镜可能已完成并通过 AutoSetRefImage 锁定了锚点，此处刷新 allRefImages。
+	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
+		if _, latestRef, _ := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); latestRef != "" {
+			// 检查 sceneRefImage 是否尚未加入（可能一次读取时为空，二次读取时已锁定）
+			alreadyHaveRef := false
+			for _, r := range allRefImages {
+				if r == latestRef {
+					alreadyHaveRef = true
+					break
+				}
+			}
+			if !alreadyHaveRef {
+				allRefImages = append(allRefImages, latestRef)
+				logger.Printf("generateShotReferenceImage: shot %d late-read scene anchor ref (locked by earlier shot in batch)", shot.ShotNo)
+			}
+		}
+	}
 
 	imageURL, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, allRefImages, artStyle, "", imageSize, charConsistencyWeight)
 	if err != nil {
