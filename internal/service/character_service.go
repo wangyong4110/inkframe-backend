@@ -1258,6 +1258,7 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 				"%s, %s, "+
 				"standard A-pose, arms slightly away from body, "+
 				"complete figure from head to toe, orthographic projection, no perspective distortion, "+
+				"character only, no props, no additional objects, no background elements, no scene elements, "+
 				"realistic photography style, pure white background, clean composition, high quality, "+
 				"professional character design, "+
 				"no text, no labels, no annotations, no watermarks, no captions",
@@ -1270,6 +1271,7 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 					"%s，%s，"+
 					"标准站姿，双手自然垂放，"+
 					"三视图均为全身，头顶到脚底完整显示，正交视图，无透视变形，"+
+					"仅角色本身，无额外道具，无背景物品，无场景元素，"+
 					"%s风格，白色背景，线条清晰，高品质插画，"+
 					"model sheet, character reference sheet, turnaround sheet，无文字标注，无标签，无水印",
 				genderLeader, name, appearance, styleStr)
@@ -1280,6 +1282,7 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 					"%s，%s，"+
 					"标准站姿，双手自然垂放，"+
 					"三视图均为全身，头顶到脚底完整显示，正交视图，无透视变形，"+
+					"仅角色本身，无额外道具，无背景物品，无场景元素，"+
 					"%s风格，白色背景，线条清晰，高品质插画，"+
 					"model sheet, character reference sheet, turnaround sheet，无文字标注，无标签，无水印",
 				name, appearance, styleStr)
@@ -1294,6 +1297,7 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 
 	// 负向提示词：禁止不同角色出现，但允许同一角色的多个视角；同时禁止文字标注
 	baseNeg := "text, labels, annotations, watermark, signature, caption, speech bubble, character name tag, " +
+		"props, weapons, furniture, additional objects, background objects, scene elements, environment, " +
 		"perspective distortion, foreshortening, dynamic pose, action pose, " +
 		"different characters, multiple distinct people, inconsistent appearance, nsfw, lowres, bad anatomy, poorly drawn"
 	genderNeg := map[string]string{
@@ -1354,14 +1358,16 @@ func (s *ImageGenerationService) GenerateFaceCloseupImage(ctx context.Context, t
 	if style == "realistic" {
 		realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
 		prompt = fmt.Sprintf(
-			"%scharacter face close-up, portrait, front view, bust shot, face centered in frame, "+
+			"%scharacter face close-up, portrait, front view only, bust shot, face centered in frame, "+
+				"single view, not a turnaround, not a character sheet, "+
 				"solo, %s, %s, "+
 				"soft even lighting, studio light, no harsh shadows, "+
 				"detailed facial features, sharp focus on face, "+
 				"skin texture, hair strand detail, eye catchlight, "+
 				"neutral expression, looking at camera, "+
-				"same character as full body reference, identity preservation, face locked, "+
-				"character face reference sheet, IP-Adapter portrait, "+
+				"character only, no props, no additional objects, no background elements, "+
+				"identity preservation, face locked, "+
+				"character face reference, IP-Adapter portrait, "+
 				"pure white background, high quality portrait photo, "+
 				"no text, no labels, no watermarks",
 			realisticGender, name, appearance)
@@ -1371,7 +1377,8 @@ func (s *ImageGenerationService) GenerateFaceCloseupImage(ctx context.Context, t
 				"%s, solo, 角色面部特写，正面头像，肩部以上构图，面部居中，%s，%s，"+
 					"细腻的五官，精致的眼睛，双眼直视镜头，神情自然，"+
 					"柔和均匀布光，无强烈阴影，面部细节清晰，"+
-					"与全身三视图为同一角色，保持面部特征完全一致，"+
+					"仅角色本身，无额外道具，无背景物品，无场景元素，"+
+					"单一视角，仅正面，"+
 					"%s风格，白色背景，线条清晰，高品质插画，"+
 					"角色设计参考图，面部锁定参考，"+
 					"character face reference, identity preservation, face lock reference，"+
@@ -1382,7 +1389,8 @@ func (s *ImageGenerationService) GenerateFaceCloseupImage(ctx context.Context, t
 				"solo, 角色面部特写，正面头像，肩部以上构图，面部居中，%s，%s，"+
 					"细腻的五官，精致的眼睛，双眼直视镜头，神情自然，"+
 					"柔和均匀布光，无强烈阴影，面部细节清晰，"+
-					"与全身三视图为同一角色，保持面部特征完全一致，"+
+					"仅角色本身，无额外道具，无背景物品，无场景元素，"+
+					"单一视角，仅正面，"+
 					"%s风格，白色背景，线条清晰，高品质插画，"+
 					"角色设计参考图，面部锁定参考，"+
 					"character face reference, identity preservation, face lock reference，"+
@@ -1398,6 +1406,8 @@ func (s *ImageGenerationService) GenerateFaceCloseupImage(ctx context.Context, t
 	logger.Printf("GenerateFaceCloseupImage: %s ref=%v", name, aiRef != "")
 
 	baseNeg := "multiple people, two people, group, 多人, nsfw, lowres, bad anatomy, full body, feet, legs below waist, " +
+		"turnaround, multiple views, front and side and back, three views, character sheet, model sheet, " +
+		"props, weapons, furniture, additional objects, background objects, scene elements, environment, " +
 		"text, labels, annotations, watermark, signature, caption, " +
 		"harsh shadows, dramatic lighting, complex background"
 	genderNeg := map[string]string{
