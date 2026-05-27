@@ -1365,7 +1365,7 @@ func (s *ImageGenerationService) GenerateFaceCloseupImage(ctx context.Context, t
 				"detailed facial features, sharp focus on face, "+
 				"skin texture, hair strand detail, eye catchlight, "+
 				"neutral expression, looking at camera, "+
-				"character only, no props, no additional objects, no background elements, "+
+				"character only, no props, no additional objects, no background elements, no scene elements, "+
 				"identity preservation, face locked, "+
 				"character face reference, IP-Adapter portrait, "+
 				"pure white background, high quality portrait photo, "+
