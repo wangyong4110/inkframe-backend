@@ -851,6 +851,50 @@ func qualityTierImageParams(tier string) (width, steps int, cfgScale float64) {
 	}
 }
 
+// imageAspectRatioToSize 根据宽高比和质量档位计算 "WxH" 图片尺寸。
+// base 为较长边像素值，按 8 取整以兼容大多数图生图 API 的对齐要求。
+func imageAspectRatioToSize(aspectRatio, qualityTier string) string {
+	base, _, _ := qualityTierImageParams(qualityTier)
+	if base == 0 {
+		base = 1024
+	}
+	r8 := func(n int) int { return (n + 4) / 8 * 8 }
+	switch aspectRatio {
+	case "16:9":
+		return fmt.Sprintf("%dx%d", base, r8(base*9/16))
+	case "9:16":
+		return fmt.Sprintf("%dx%d", r8(base*9/16), base)
+	case "4:3":
+		return fmt.Sprintf("%dx%d", base, r8(base*3/4))
+	case "3:4":
+		return fmt.Sprintf("%dx%d", r8(base*3/4), base)
+	case "21:9":
+		return fmt.Sprintf("%dx%d", base, r8(base*9/21))
+	default: // 1:1 or unknown
+		return fmt.Sprintf("%dx%d", base, base)
+	}
+}
+
+// colorGradeToPromptKeyword 将色彩调色配置映射为 prompt 关键词，注入图片/视频生成 prompt。
+func colorGradeToPromptKeyword(grade string) string {
+	switch grade {
+	case "cinematic":
+		return "cinematic color grading, teal and orange, high contrast film look"
+	case "warm":
+		return "warm color tones, golden warm lighting"
+	case "cool":
+		return "cool color tones, cool blue atmosphere"
+	case "teal_orange":
+		return "teal and orange color grading"
+	case "vintage":
+		return "vintage film look, faded warm colors, retro tone"
+	case "noir":
+		return "film noir, dramatic high-contrast shadows, moody lighting"
+	default:
+		return ""
+	}
+}
+
 // validCameraType 验证摄像机类型，无效时返回默认值 static
 func validCameraType(t string) string {
 	valid := map[string]bool{

@@ -1282,14 +1282,16 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
-	// 获取视频的 ArtStyle、TenantID、质量档位和角色一致性权重
+	// 获取视频的 ArtStyle、TenantID、质量档位、宽高比、角色一致性权重和色彩调色
 	artStyle := ""
 	var tenantID uint
 	charConsistencyWeight := 1.0 // 默认严格一致
 	qualityTier := "preview"     // 默认质量档位
+	var imageAspectRatio, colorGrade string
 	if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil {
 		artStyle = video.ArtStyle
 		tenantID = video.TenantID
+		imageAspectRatio = video.AspectRatio
 		if video.QualityTier != "" {
 			qualityTier = video.QualityTier
 		}
@@ -1298,13 +1300,18 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				if tenantID == 0 {
 					tenantID = novel.TenantID
 				}
-				if novel.VideoConf().CharConsistencyWeight > 0 {
-					charConsistencyWeight = novel.VideoConf().CharConsistencyWeight
+				vc := novel.VideoConf()
+				if vc.CharConsistencyWeight > 0 {
+					charConsistencyWeight = vc.CharConsistencyWeight
 				}
-				// 降级：视频未设置画面风格时使用项目设置中的画面风格
+				// 降级：视频未设置画面风格/宽高比时使用项目设置
 				if artStyle == "" && novel.ImageStyle != "" {
 					artStyle = novel.ImageStyle
 				}
+				if imageAspectRatio == "" && vc.VideoAspectRatio != "" {
+					imageAspectRatio = vc.VideoAspectRatio
+				}
+				colorGrade = vc.ColorGrade
 				// 注入 OSS 路径提示（项目名+章节序号）
 				if novel.Title != "" {
 					ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title, ChapterNo: chapterNo})
@@ -1315,13 +1322,9 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 
 	// allRefImages 直接传给 API，无需合图（所有图生图 API 均支持多张参考图）
 
-	// 根据质量档位注入分辨率提示，引导图像提供者选择适当尺寸。
-	// 对于支持 size 参数的提供者（如 DALL-E 3），此 hint 也作为备注说明。
-	imgWidth, _, _ := qualityTierImageParams(qualityTier)
-	if imgWidth > 0 {
-		promptText = fmt.Sprintf("--w %d ", imgWidth) + promptText
-	}
-	logger.Printf("generateShotReferenceImage: shot %d qualityTier=%s imgWidth=%d", shot.ShotNo, qualityTier, imgWidth)
+	// 根据宽高比+质量档位计算实际图片尺寸（WxH），直接传给 API
+	imageSize := imageAspectRatioToSize(imageAspectRatio, qualityTier)
+	logger.Printf("generateShotReferenceImage: shot %d qualityTier=%s aspectRatio=%s imageSize=%s", shot.ShotNo, qualityTier, imageAspectRatio, imageSize)
 
 	// 镜头类型注解：根据景别选择光学特征，提升图像构图的电影感
 	lensTypeMap := map[string]string{
@@ -1336,9 +1339,17 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		lensType = "standard lens 50mm"
 	}
 	cinematicImgPrefix := "cinematic film photography, 35mm anamorphic lens, professional lighting setup, " + lensType + ", "
+	// 注入色彩调色关键词（将项目色调设置映射为 prompt 语义词）
+	if kw := colorGradeToPromptKeyword(colorGrade); kw != "" {
+		cinematicImgPrefix = kw + ", " + cinematicImgPrefix
+	}
+	// 注入画面风格（非 volcengine 提供商不通过 style 参数感知风格，需在 prompt 中明确）
+	if artStyle != "" {
+		cinematicImgPrefix = artStyle + " style, " + cinematicImgPrefix
+	}
 	promptText = cinematicImgPrefix + promptText
 
-	imageURL, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, allRefImages, artStyle, "", charConsistencyWeight)
+	imageURL, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, allRefImages, artStyle, "", imageSize, charConsistencyWeight)
 	if err != nil {
 		logger.Printf("generateShotReferenceImage: image gen failed for shot %d: %v", shot.ShotNo, err)
 		return "", err
@@ -1560,9 +1571,9 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		shotDuration = klingDefaultDur
 	}
 
-	// 检查项目配置：KlingProForAction、HD、3D
+	// 检查项目配置：KlingProForAction、HD、3D、色彩调色
 	var hdEnabled, threeDEnabled bool
-	var threeDStyle, klingModelOverride string
+	var threeDStyle, klingModelOverride, videoColorGrade string
 	if vid, vidErr := s.videoRepo.GetByID(shot.VideoID); vidErr == nil && vid.NovelID > 0 && s.novelRepo != nil {
 		if novel, novelErr := s.novelRepo.GetByID(vid.NovelID); novelErr == nil {
 			vc := novel.VideoConf()
@@ -1573,6 +1584,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 			threeDEnabled = vc.ThreeDEnabled || strings.Contains(vid.VisualMode, "3d")
 			threeDStyle = vid.ThreeDStyle
 			klingModelOverride = vc.KlingModel
+			videoColorGrade = vc.ColorGrade
 		}
 	}
 	if threeDStyle == "" {
@@ -1600,6 +1612,10 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		"flickering, temporal inconsistency, abrupt scene change, jump cut"
 
 	videoPromptFinal := cinematicPrefix + videoPrompt
+	// 注入色彩调色关键词（项目设置 → 视频 prompt）
+	if kw := colorGradeToPromptKeyword(videoColorGrade); kw != "" {
+		videoPromptFinal = kw + ", " + videoPromptFinal
+	}
 	negativePrompt := negativeBase
 	if shot.NegativePrompt != "" {
 		negativePrompt = negativeBase + ", " + shot.NegativePrompt

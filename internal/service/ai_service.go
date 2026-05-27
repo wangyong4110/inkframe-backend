@@ -899,10 +899,11 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 	return "", fmt.Errorf("no image provider available: %w", lastErr)
 }
 
-// GenerateCharacterThreeViewMulti 与 GenerateCharacterThreeView 相同，但支持传入多张参考图。
-// 所有图均会传给支持多图的 API（如 DreamO image_urls[]），无需调用方拼接合图。
+// GenerateCharacterThreeViewMulti 与 GenerateCharacterThreeView 相同，但支持传入多张参考图和自定义尺寸。
+// referenceImages：多张参考图 URL，直接传给支持多图的 API（如 DreamO image_urls[]），无需调用方拼接合图。
+// size：图片尺寸（"WxH" 格式，如 "1024x576"），覆盖提供者默认尺寸；为空时使用提供者默认值。
 // 若 referenceImages 为空，退化为纯文本生成。
-func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantID uint, providerName, prompt string, referenceImages []string, style, negativePrompt string, consistencyWeight ...float64) (string, error) {
+func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantID uint, providerName, prompt string, referenceImages []string, style, negativePrompt, size string, consistencyWeight ...float64) (string, error) {
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
 	}
@@ -931,12 +932,16 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		firstRef = referenceImages[0]
 	}
 
-	buildReq := func(model, size string) *ai.ImageGenerateRequest {
+	buildReq := func(model, entrySize string) *ai.ImageGenerateRequest {
+		sz := size // 优先使用调用方传入的尺寸（基于 AspectRatio+QualityTier 计算）
+		if sz == "" {
+			sz = entrySize
+		}
 		return &ai.ImageGenerateRequest{
 			Model:             model,
 			Prompt:            prompt,
 			NegativePrompt:    negativePrompt,
-			Size:              size,
+			Size:              sz,
 			ReferenceImage:    firstRef,
 			ReferenceImages:   referenceImages,
 			CFGScale:          cfgScale,
