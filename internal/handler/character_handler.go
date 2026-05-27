@@ -305,7 +305,12 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 			genCtx = service.WithImageStorageHint(genCtx, service.ImageStorageHint{NovelTitle: novelTitle})
 		}
 		// 生成三合一参考图（正视+侧视+背视放在同一张图中）
-		img, err := h.imageGenService.GenerateThreeViewSheet(genCtx, tenantID, char.Name, char.Description, style, "", "", provider)
+		// 优先使用 visual_prompt（图像生成专用提示词，含质量标签），降级使用 description
+		sheetAppearance := char.VisualPrompt
+		if sheetAppearance == "" {
+			sheetAppearance = char.Description
+		}
+		img, err := h.imageGenService.GenerateThreeViewSheet(genCtx, tenantID, char.Name, sheetAppearance, style, "", "", provider)
 		if err != nil {
 			logger.Printf("[CharacterHandler] GenerateThreeView task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, "generate three-view sheet failed: "+err.Error()) //nolint:errcheck
@@ -380,7 +385,12 @@ func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
 		if referenceImage == "" {
 			referenceImage = char.ThreeViewSheet
 		}
-		img, err := h.imageGenService.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, char.Description, style, "", referenceImage, provider)
+		// 优先使用 visual_prompt（图像生成专用提示词，含质量标签），降级使用 description
+		faceAppearance := char.VisualPrompt
+		if faceAppearance == "" {
+			faceAppearance = char.Description
+		}
+		img, err := h.imageGenService.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, faceAppearance, style, "", referenceImage, provider)
 		if err != nil {
 			logger.Printf("[CharacterHandler] GenerateFaceCloseup task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, "generate face closeup failed: "+err.Error()) //nolint:errcheck

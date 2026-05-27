@@ -84,19 +84,38 @@
        e.g. "foreground-center-left" / "background-right" / "mid-ground-center"
     ② Ground contact (⚠️ most violated rule): ALWAYS write "[character] standing/sitting/kneeling ON [surface]"
        NEVER describe a character without stating what surface they are on
-    ③ Hand specificity — each visible hand described separately with full detail:
+    ③ Posture + body orientation — TWO parts required, both mandatory:
+       Posture: standing / sitting / crouching / kneeling / lying on back / lying on side / leaning forward
+       Body orientation: "facing camera full-on" / "body turned ¾ left" / "right-side profile to camera" / "facing away" / "angled 45° toward [other character]"
+       ✅ "standing upright, body turned ¾ toward left, leaning slightly forward at the waist"
+       ❌ "standing there" / "nearby" → AI defaults to front-facing standing, ignoring scene logic
+    ④ Hand specificity — each visible hand described separately with full detail:
        ✅ "right hand gripping sword pommel at hip level, knuckles white, all five fingers fully wrapped around hilt"
        ✅ "left arm raised, palm facing outward at shoulder height, fingers extended and spread apart"
        ❌ "holding a sword" — causes AI to invent wrong anatomy (extra/missing fingers, fused hands)
-    ④ Head direction per character: "facing camera full-on" / "turned ¾ right profile" / "head bowed downward"
-    ⑤ Only describe limbs VISIBLE within the shot_size frame; do not describe what the frame cuts off
+    ⑤ ONE LIMB = ONE ACTION (⚠️ prevents phantom/merged arm errors like hunter arm problem):
+       Each arm/hand may be assigned EXACTLY ONE action. Before writing, verify: is it physically possible for one person to do both actions with two separate arms?
+       ✅ "LEFT hand resting on grandmother's right shoulder from behind; RIGHT hand holding open scissors at waist height, blades apart 8cm, tip pointing toward wolf carcass"
+       ❌ "holding scissors while supporting grandmother" — AI assigns both to the same arm, generating extra limbs or anatomically impossible merges
+       ❌ "left hand on shoulder, also holding scissors" — contradicts itself, AI fabricates a third arm
+    ⑥ Head direction per character: "facing camera full-on" / "turned ¾ right profile" / "head bowed downward" / "looking at [specific target]"
+    ⑦ Facial expression — mandatory for every character whose face is visible in frame:
+       Must describe specific muscle states, NOT vague emotion labels:
+       ✅ "jaw slightly open, upper lip pulled back, brows drawn sharply together and lowered, eyes wide with pupils dilated"
+       ✅ "mouth pressed into a thin tight line, single deep vertical crease between brows, jaw set, eyes narrowed with cold focus"
+       ✅ "corners of mouth lifted 3-4mm, crow's-feet creased at outer eye corners, lower eyelid slightly raised, eyes soft"
+       ❌ "angry expression" / "happy face" / "surprised" — vague labels, AI fills with generic default face
+       Expression must match the scene emotion; inconsistent expression (e.g. smiling during crisis) destroys narrative believability
+    ⑧ Only describe limbs VISIBLE within the shot_size frame; do not describe what the frame cuts off
 
   PROPS BLOCK — size anchoring + physical connection (prevent floating / wrong-scale props):
     — Size: state prop dimensions relative to character body: "sword blade from hip to chin height" / "scroll half forearm length"
+    — Ownership: assign prop to a SPECIFIC limb: "in RIGHT hand" / "in LEFT hand" / "hanging from left hip" / "resting on right shoulder"
+       NEVER write "in hand" — ambiguous ownership causes AI to attach prop to wrong or duplicate limb
     — Connection: state exactly how prop attaches: "gripped in right hand" / "resting flat on table surface" / "hanging from belt loop"
-    — Every prop needs BOTH size AND connection; never write a prop without both
-    ✅ "a 1.2-meter black iron spear held vertically in right hand, butt-end resting on stone floor, tip 20cm above head"
-    ❌ "holding a spear" → wrong scale, floating result
+    — Every prop needs SIZE + SPECIFIC LIMB OWNERSHIP + CONNECTION; none may be omitted
+    ✅ "a 1.2-meter black iron spear held vertically in RIGHT hand, butt-end resting on stone floor, tip 20cm above head"
+    ❌ "holding a spear" → wrong scale, floating result, ambiguous which hand
 
   SCENE BLOCK — three depth layers, grounded (prevent floating environments):
     Layer 1 (foreground ground): surface texture + what characters contact ("cracked stone floor [character A stands on it]")
@@ -119,8 +138,12 @@
     Anime/illust: "masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
 
   PRE-SUBMIT CHECKLIST (verify each before writing the field):
-    □ Every character: explicit ground contact stated
-    □ Every prop: size relative to body + physical connection both stated
+    □ Every character: explicit frame position (foreground/mid/background + left/center/right) stated
+    □ Every character: ground contact surface stated (standing/sitting/lying ON what)
+    □ Every character: posture stated (standing/sitting/crouching/lying) + body orientation angle stated
+    □ Every character: each visible arm assigned exactly ONE action; verify no single arm does two things
+    □ Every character with visible face: facial expression described as specific muscle states (NOT emotion labels)
+    □ Every prop: size relative to body + SPECIFIC owning limb (left/right hand) + physical connection all stated
     □ Each visible hand described individually with specific action
     □ Composition detail level matches shot_size (no full body in close_up)
     □ Focal length stated and matches shot_size
@@ -145,19 +168,37 @@
        如"前景中央偏左"/"后景右侧"/"中景居中"
     ② 地面接触（⚠️ 最常违反的规则）：必须写"[角色]站在/坐在/跪在[地面材质]上"
        任何角色描述都不得省略与地面的接触关系
-    ③ 手部具体描述——每只可见的手单独说明：
+    ③ 姿态+身体朝向——两项均为必填：
+       姿态：站立/坐着/蹲伏/跪地/仰躺/侧躺/前倾
+       身体朝向："正面朝向镜头"/"身体四分之三向左转"/"右侧侧面对镜头"/"背对镜头"/"身体斜45度朝向[另一角色]"
+       ✅ "直立站姿，身体四分之三向左转，腰部略微前倾"
+       ❌ "站在那里"/"在附近" → AI默认正面直立，无视场景逻辑
+    ④ 手部具体描述——每只可见的手单独说明：
        ✅ "右手扣住腰间剑柄，指节泛白，五指完整握满"
        ✅ "左臂抬起，掌心向外平举至肩高，手指伸展张开"
        ❌ "手持一把剑"——过于模糊，导致AI创造错误解剖（额外/缺失手指、手掌变形）
-    ④ 每个角色头部朝向："正面朝向镜头"/"右侧四分之三侧面"/"低头俯视"
-    ⑤ 只描述在 shot_size 景别内可见的肢体，不描述被画框切断的部分
+    ⑤ 一个肢体只能有一个动作（⚠️ 防止"猎人胳膊"类型错误）：
+       每条手臂/每只手只能被分配恰好一个动作。写之前先验证：两个动作是否真的可以由两条独立的手臂分别完成？
+       ✅ "左手从身后搭在奶奶右肩上；右手在腰部高度握住张开的剪刀，刀刃分开约8厘米，剪尖朝向狼的尸体"
+       ❌ "一边握着剪刀一边扶着奶奶" → AI将两个动作分配给同一条手臂，产生额外肢体或解剖上不可能的合并
+       ❌ "左手放在肩上，同时还拿着剪刀" → 自相矛盾，AI会凭空生成第三条手臂
+    ⑥ 每个角色头部朝向："正面朝向镜头"/"右侧四分之三侧面"/"低头俯视"/"视线对准[具体目标]"
+    ⑦ 面部表情——凡是画框内可见脸部的角色，必须逐一描述具体肌肉状态，禁止使用情绪标签：
+       ✅ "嘴微张，上唇轻微向后拉，双眉用力向中间皱拢并向下压，双眼睁大瞳孔放大"
+       ✅ "嘴唇紧抿成一条细线，眉间深压出一道纵纹，下颌咬紧，双眼微眯神情冷峻"
+       ✅ "嘴角上扬约3-4毫米，眼角外侧出现细纹，下眼睑微微上提，目光柔和"
+       ❌ "愤怒的表情"/"开心的脸"/"惊讶" → 情绪标签过于模糊，AI用通用默认表情填充
+       表情必须与场景情绪吻合；表情与场景不符（如危机中微笑）将彻底破坏叙事可信度
+    ⑧ 只描述在 shot_size 景别内可见的肢体，不描述被画框切断的部分
 
-  道具区块——尺寸锚定+物理连接（防止道具悬浮或比例失调）：
+  道具区块——尺寸锚定+归属肢体+物理连接（防止道具悬浮或比例失调）：
     — 尺寸：相对于角色身体标注道具大小："剑身从腰部延伸至下巴高度"/"卷轴约前臂一半长"
+    — 归属肢体：必须指定具体是哪只手/哪个身体部位："握于右手"/"握于左手"/"挂于左腰"/"搭在右肩"
+       绝不能只写"握在手中"——归属不明确将导致AI将道具附着在错误或重复的肢体上
     — 连接：精确说明道具如何附着："紧握于右手"/"平放在桌面"/"挂于腰带扣上"
-    — 每件道具必须同时包含尺寸描述AND物理连接，缺一不可
+    — 每件道具必须同时包含尺寸+具体归属肢体+物理连接，三项缺一不可
     ✅ "一杆一米二长黑铁长枪竖立握于右手，枪尾抵在石板地面，枪尖高于头顶约二十厘米"
-    ❌ "手持一杆枪"→ 导致比例错误和悬浮
+    ❌ "手持一杆枪"→ 导致比例错误、悬浮、归属肢体不明
 
   场景区块——三层纵深，有实质接地感（防止环境悬浮）：
     第一层（前景地面）：地面质感+角色接触点（"龟裂石板地面，角色站立其上"）
@@ -180,8 +221,11 @@
     动漫/插画："masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
 
   输出前自检清单（每条验证后再写字段）：
-    □ 每个角色：明确写出地面接触（无悬浮）
-    □ 每件道具：尺寸相对身体+物理连接 均已说明
+    □ 每个角色：明确画框位置（前景/中景/后景 + 左/中/右）已标注
+    □ 每个角色：地面接触材质已说明（站/坐/躺在什么上面）
+    □ 每个角色：姿态已说明（站立/坐着/躺下等）+ 身体朝向角度已说明
+    □ 每个角色：每条可见手臂只分配了一个动作，没有一条手臂同时做两件事
+    □ 每件道具：尺寸相对身体+具体归属肢体（左手/右手）+物理连接 均已说明
     □ 每只可见的手单独描述具体动作
     □ 构图细节与 shot_size 匹配（close_up 不出现全身）
     □ 焦距已标注且与景别对应
@@ -198,7 +242,10 @@
        static → "locked-off with organic micro-stabilization, imperceptible ±0.3px breathing drift"
        push   → "slow cinematic dolly-push at 0.2x speed, closing distance by ~30% over shot duration"
        pan    → "smooth leftward pan at 15°/sec, horizon line held steady throughout"
-    B. Subject primary motion: leading character's body motion with physical specificity
+    B. Subject primary motion: BEGIN with a one-line initial state declaration for EACH character, then describe motion
+       Initial state (mandatory before any motion): "[character name] [posture] [frame position], [body orientation], [left hand doing X], [right hand doing Y]"
+       ✅ "Hunter stands mid-ground-right, body ¾ turned toward wolf, left hand resting on grandmother's shoulder, right hand holding open scissors at waist — then right arm extends forward 15cm over 1.2 seconds..."
+       ❌ Starting motion description without declaring where/how each character starts → AI fabricates starting state
        — which body part moves, direction, arc/trajectory, speed, acceleration curve (ease-in/ease-out)
        — secondary body responses: clothing/hair reacting to primary motion with physics delay
     C. Subject micro-motion (always required, even for static poses):
@@ -234,7 +281,10 @@
        static → "固定机位，带有机械有机感微稳定，呼吸感漂移幅度±0.3px"
        push   → "慢速电影推镜以0.2x速度向主体推近，镜头整体前进约画面30%距离"
        pan    → "匀速向左摇镜，速率约每秒15度，地平线全程保持水平"
-    B. 主体主运动：主角身体运动的物理细节
+    B. 主体主运动：先为每个角色写一行初始状态声明，再描述运动
+       初始状态（必填，在任何运动描述之前）："[角色名] [姿态] [画框位置]，[身体朝向]，[左手在做X]，[右手在做Y]"
+       ✅ "猎人站立于中景右侧，身体四分之三朝向狼，左手搭在奶奶肩上，右手在腰部高度握住张开的剪刀——随后右臂在1.2秒内向前伸出约15厘米..."
+       ❌ 不声明初始状态就直接描述运动 → AI自行推断初始姿态，易产生前后矛盾
        — 哪个身体部位运动、运动方向、弧线/轨迹、速度、加速度曲线（缓入/缓出）
        — 次级身体响应：服装/头发对主运动的物理滞后反应
     C. 主体微运动（即使静态姿势也必须描述）：
@@ -323,8 +373,9 @@
 {% endfor %}
 {% endif %}
 {% if Characters %}
-【角色信息（description 中须保持一致）】
+【角色信息（description 和 image_prompt 中须保持一致）】
 {% for c in Characters %}- {{ c.Name }}（{{ c.Role }}）{% if c.Description %}：{{ c.Description }}{% endif %}
+{% if c.VisualPrompt %}  [图像提示词参考，写 image_prompt 时直接借用其中的外貌关键词和风格标签]: {{ c.VisualPrompt }}{% endif %}
 {% endfor %}
 {% endif %}
 {% if Anchors %}

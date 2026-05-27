@@ -1026,9 +1026,15 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 			updateReq := &model.UpdateCharacterRequest{Name: char.Name}
 			charFailed := false
 
+			// 优先使用 visual_prompt（图像生成专用提示词，含质量标签），降级使用 description
+			charAppearance := char.VisualPrompt
+			if charAppearance == "" {
+				charAppearance = char.Description
+			}
+
 			// 1. 面部特写（兼头像）
 			if char.FaceCloseup == "" {
-				faceImg, faceErr := imgSvc.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, char.Description, imageStyle, "", char.Portrait, provider)
+				faceImg, faceErr := imgSvc.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, charAppearance, imageStyle, "", char.Portrait, provider)
 				if faceErr != nil {
 					logger.Printf("[CharacterService] BatchGenerateImages: face closeup char %d (%s) failed: %v", char.ID, char.Name, faceErr)
 					charFailed = true
@@ -1041,7 +1047,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 
 			// 2. 三视图（使用面部特写或已有头像作为参考）
 			if char.ThreeViewSheet == "" {
-				threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, char.Description, imageStyle, "", char.Portrait, provider)
+				threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, charAppearance, imageStyle, "", char.Portrait, provider)
 				if threeErr != nil {
 					logger.Printf("[CharacterService] BatchGenerateImages: three-view char %d (%s) failed: %v", char.ID, char.Name, threeErr)
 					charFailed = true

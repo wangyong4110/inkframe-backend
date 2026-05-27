@@ -132,7 +132,10 @@ func (s *ItemService) generateItemImageCore(ctx context.Context, tenantID uint, 
 	if novelTitle != "" {
 		ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novelTitle})
 	}
-	return s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL, imageStyle, "")
+	itemNegPrompt := "blurry, low quality, deformed, extra limbs, bad anatomy, malformed, " +
+		"watermark, text, logo, signature, multiple items, cluttered background, " +
+		"oversaturated, overexposed, underexposed, cropped, out of frame"
+	return s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL, imageStyle, itemNegPrompt)
 }
 
 // referenceImageURL 可选：用户上传的参考图 URL（已存入 OSS），作为 AI 参考图使用

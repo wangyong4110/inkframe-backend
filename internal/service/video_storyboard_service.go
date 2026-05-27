@@ -558,9 +558,10 @@ func (s *VideoService) buildStoryboardPrompt(
 		matchedChars = make([]map[string]interface{}, 0, len(matched))
 		for _, c := range matched {
 			matchedChars = append(matchedChars, map[string]interface{}{
-				"Name":        c.Name,
-				"Role":        c.Role,
-				"Description": c.Description,
+				"Name":         c.Name,
+				"Role":         c.Role,
+				"Description":  c.Description,
+				"VisualPrompt": c.VisualPrompt,
 			})
 		}
 	}
