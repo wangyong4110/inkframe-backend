@@ -262,9 +262,14 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 	style := ""
 	if voice == "" && seg.Speaker != "" && s.characterRepo != nil && novelID > 0 {
 		if chars, e := s.listCharsByNovelCached(novelID); e == nil {
+			autoVoices := []string{"alloy", "echo", "fable", "nova", "onyx", "shimmer"}
 			for _, c := range chars {
 				if strings.EqualFold(c.Name, seg.Speaker) {
-					voice = c.VoiceID
+					if c.VoiceID != "" {
+						voice = c.VoiceID
+					} else {
+						voice = autoVoices[c.ID%uint(len(autoVoices))]
+					}
 					break
 				}
 			}
@@ -528,6 +533,11 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 	applyCharVoice := func(c *model.Character) {
 		if c.VoiceID != "" {
 			voice = c.VoiceID
+		} else {
+			// 角色无显式 voice_id 时，按角色 ID 取模自动分配内置音色。
+			// 保证不同角色始终使用不同音色，无需手动配置。
+			autoVoices := []string{"alloy", "echo", "fable", "nova", "onyx", "shimmer"}
+			voice = autoVoices[c.ID%uint(len(autoVoices))]
 		}
 		if c.VoiceSpeed > 0 {
 			speed = c.VoiceSpeed
