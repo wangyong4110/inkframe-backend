@@ -150,6 +150,7 @@ func main() {
 		ElevenLabsKey:   getEnv("ELEVENLABS_API_KEY", cfg.SFX.ElevenLabsKey),
 	})
 	sfxService.WithSFXItemRepo(repos.ShotSFXItemRepo)
+	sfxService.WithAssetRepo(repos.AssetRepo, repos.TagRepo)
 	services.SFXService = sfxService
 	services.VideoService.WithSFXService(sfxService)
 

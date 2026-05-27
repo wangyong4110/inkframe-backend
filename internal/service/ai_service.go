@@ -1241,6 +1241,12 @@ func (s *AIService) GenerateSFX(ctx context.Context, tenantID uint, prompt strin
 	return resp.URL, resp.Duration, nil
 }
 
+// HasSFXProvider 判断当前租户是否已配置可用的文生音效提供商。
+func (s *AIService) HasSFXProvider(tenantID uint) bool {
+	_, err := s.loadDBSFXProvider(tenantID)
+	return err == nil
+}
+
 // loadDBSFXProvider 从 DB 中取第一个有效的 sfx 类型提供商（文生音效）。
 func (s *AIService) loadDBSFXProvider(tenantID uint) (ai.AIProvider, error) {
 	providers, err := s.providerRepo.ListByTenant(tenantID)

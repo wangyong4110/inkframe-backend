@@ -47,6 +47,8 @@ type SFXService struct {
 	storageSvc       storage.Service
 	storyboardRepo   *repository.StoryboardRepository
 	sfxItemRepo      *repository.ShotSFXItemRepository
+	assetRepo        *repository.AssetRepository
+	tagRepo          *repository.TagRepository
 	sfxDir           string // 本地音效目录
 	freesoundKey     string // Freesound API Token（可选）
 	elevenKey        string // ElevenLabs API Key（可选）
@@ -59,6 +61,13 @@ type SFXService struct {
 // WithSFXItemRepo 注入音效条目仓库（可选；注入后才启用多 item 存储）
 func (s *SFXService) WithSFXItemRepo(r *repository.ShotSFXItemRepository) *SFXService {
 	s.sfxItemRepo = r
+	return s
+}
+
+// WithAssetRepo 注入素材库仓库（可选；注入后生成的音效将自动存入素材库）
+func (s *SFXService) WithAssetRepo(assetRepo *repository.AssetRepository, tagRepo *repository.TagRepository) *SFXService {
+	s.assetRepo = assetRepo
+	s.tagRepo = tagRepo
 	return s
 }
 
@@ -297,7 +306,7 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 请输出：`
 
 	result, err := s.aiSvc.GenerateWithProvider(tenantID, 0, "sfx_analyze", prompt, "",
-		StoryboardOverrides{TimeoutSeconds: 30})
+		StoryboardOverrides{TimeoutSeconds: 90})
 	if err != nil {
 		return fmt.Errorf("AI call: %w", err)
 	}
@@ -338,9 +347,15 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 }
 
 // AnalyzeSFXForVideo 并行为每个分镜单独调用 AI 生成自然语言音效搜索词，写入 sfx_tags 字段。
+// 若已配置文生音效提供商（如 Kling SFX），跳过本步骤——音效将由提供商直接从分镜信息生成，无需 LLM 中间步骤。
 // 每个分镜独立分析，并发度最多 5，单个失败不影响其余镜头。
 func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.StoryboardShot, tenantID uint, userContext string) error {
 	if len(shots) == 0 {
+		return nil
+	}
+	// 已配置文生音效提供商时无需 LLM 标签分析
+	if s.aiSvc != nil && s.aiSvc.HasSFXProvider(tenantID) {
+		logger.Printf("[SFXService] AnalyzeSFXForVideo: sfx provider configured, skip LLM tag analysis")
 		return nil
 	}
 	logger.Printf("[SFXService] AnalyzeSFXForVideo: parallel analysis for %d shots", len(shots))
@@ -421,10 +436,14 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 		}
 	}
 
-	// 1. 提取结构化标签（优先用已有 sfx_tags；否则调用 AI 分析）
+	// 1. 提取结构化标签
+	// 优先级：已存 sfx_tags > 文生音效提供商（直接用分镜信息构建提示词）> LLM 标签分析 > 规则兜底
 	tagItems := parseSFXTags(shot.SFXTags)
 	if len(tagItems) == 0 {
-		if err := s.analyzeSingleShotSFX(ctx, shot, tenantID, ""); err != nil {
+		if s.aiSvc != nil && s.aiSvc.HasSFXProvider(tenantID) {
+			// 已配置文生音效提供商：直接从分镜信息构建提示词，不调用 LLM
+			tagItems = s.buildSFXPromptsFromShot(shot)
+		} else if err := s.analyzeSingleShotSFX(ctx, shot, tenantID, ""); err != nil {
 			logger.Printf("[SFXService] shot %d AI analyze failed (%v), using rule fallback", shot.ID, err)
 			for _, t := range s.fallbackTags(shot) {
 				tagItems = append(tagItems, sfxTagItem{Tag: t, SFXType: guessSFXType(t)})
@@ -501,6 +520,10 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 		if err := s.sfxItemRepo.BatchCreate(dbItems); err != nil {
 			return fmt.Errorf("save sfx items shot %d: %w", shot.ID, err)
 		}
+	}
+	// 自动存入素材库（异步，失败不影响主流程）
+	if s.assetRepo != nil && s.tagRepo != nil {
+		go s.saveToAssetLibrary(context.Background(), shot, dbItems, tenantID)
 	}
 	// 同步更新旧字段（向后兼容时间线播放）
 	allTagsJSON, _ := json.Marshal(func() []string {
@@ -716,6 +739,34 @@ func sceneKeyOf(shot *model.StoryboardShot) string {
 
 
 // --- 内部方法 ---
+
+// buildSFXPromptsFromShot 在文生音效提供商可用时，直接从分镜字段构建音效提示词，
+// 无需调用 LLM 进行标签分析。提示词包含场景环境、画面描述和情绪基调。
+func (s *SFXService) buildSFXPromptsFromShot(shot *model.StoryboardShot) []sfxTagItem {
+	var parts []string
+	if shot.Scene != "" {
+		parts = append(parts, shot.Scene)
+	}
+	if shot.Description != "" {
+		runes := []rune(shot.Description)
+		if len(runes) > 120 {
+			runes = runes[:120]
+		}
+		parts = append(parts, string(runes))
+	}
+	if shot.EmotionalTone != "" {
+		parts = append(parts, shot.EmotionalTone)
+	}
+	prompt := strings.Join(parts, " ")
+	if prompt == "" {
+		prompt = "ambient sound"
+	}
+	runes := []rune(prompt)
+	if len(runes) > 200 {
+		prompt = string(runes[:200])
+	}
+	return []sfxTagItem{{Tag: prompt, SFXType: guessSFXType(prompt)}}
+}
 
 // fallbackTags 基于规则从描述 / 情绪基调 / 镜头类型推断标签（LLM 不可用时的降级）。
 // 遵循 Freesound 四元格式：[物体] [材质/空间] [动作] [音色描述符]
@@ -1195,4 +1246,73 @@ func (s *SFXService) generateElevenLabsForTag(ctx context.Context, item sfxTagIt
 	key := fmt.Sprintf("sfx/video_%d/shot_%d_%s.mp3", shot.VideoID, shot.ID, tagHash)
 	u, err := s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), "audio/mpeg")
 	return u, float64(dur), err
+}
+
+// mapSFXSource 将音效来源映射为素材库 Asset.Source 枚举值。
+func mapSFXSource(source string) string {
+	switch source {
+	case "local":
+		return "uploaded"
+	case "freesound":
+		return "crawled"
+	default: // ai-sfx, elevenlabs
+		return "platform"
+	}
+}
+
+// saveToAssetLibrary 将已生成的音效批量存入素材库，并关联对应标签。
+// 以 URL 作为 ExternalID 去重：同一 URL 不重复入库。
+// 失败只记录日志，不影响主流程。
+func (s *SFXService) saveToAssetLibrary(ctx context.Context, shot *model.StoryboardShot, items []*model.ShotSFXItem, tenantID uint) {
+	videoID := shot.VideoID
+	shotID := shot.ID
+
+	for _, item := range items {
+		if item.URL == "" {
+			continue
+		}
+		// 去重：同 URL 已存在则跳过
+		if exists, err := s.assetRepo.ExistsByExternalID(item.URL); err != nil {
+			logger.Printf("[SFXService] AssetLib: ExistsByExternalID error (shot %d tag=%q): %v", shotID, item.Tag, err)
+			continue
+		} else if exists {
+			continue
+		}
+
+		// 构建 Asset 记录
+		asset := &model.Asset{
+			TenantID:   tenantID,
+			Type:       "audio",
+			SubType:    "sfx",
+			Title:      item.Tag,
+			StorageURL: item.URL,
+			ExternalID: item.URL,
+			Source:     mapSFXSource(item.Source),
+			Duration:   item.DurationSecs,
+			VideoID:    &videoID,
+			ShotID:     &shotID,
+			Status:     "active",
+		}
+		if err := s.assetRepo.Create(asset); err != nil {
+			logger.Printf("[SFXService] AssetLib: create asset failed (shot %d tag=%q): %v", shotID, item.Tag, err)
+			continue
+		}
+
+		// 关联标签：搜索词 + SFX 类型
+		tagNames := []string{item.Tag}
+		if item.SFXType != "" && item.SFXType != item.Tag {
+			tagNames = append(tagNames, item.SFXType)
+		}
+		for _, name := range tagNames {
+			tag, err := s.tagRepo.FindOrCreate(name, "audio")
+			if err != nil {
+				logger.Printf("[SFXService] AssetLib: FindOrCreate tag %q failed: %v", name, err)
+				continue
+			}
+			if err := s.tagRepo.AddToAsset(asset.ID, tag.ID, "ai", 1.0); err != nil {
+				logger.Printf("[SFXService] AssetLib: AddToAsset failed (asset %d tag %q): %v", asset.ID, name, err)
+			}
+		}
+		logger.Printf("[SFXService] AssetLib: saved asset %d tag=%q source=%s", asset.ID, item.Tag, item.Source)
+	}
 }
