@@ -172,9 +172,10 @@ func (s *ItemService) GenerateItemImage(tenantID, id uint, referenceImageURL, pr
 }
 
 // AIExtractFromNovel 使用 AI 从章节内容中提取物品（按 novel_id+name upsert）
-// BatchGenerateImages 批量为小说的物品生成图像（跳过已有 ImageURL 的物品）。
+// BatchGenerateImages 批量为小说的物品生成图像。
+// force=false：跳过已有图片的物品；force=true：全量重新生成（风格变更时使用）。
 // 并发度由 AIService.imageSem 统一管控（config.yaml ai.image_concurrency）。
-func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider string, progressFn func(int)) (succeeded, failed int, err error) {
+func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider string, force bool, progressFn func(int)) (succeeded, failed int, err error) {
 	items, err := s.itemRepo.ListByNovel(novelID)
 	if err != nil {
 		return 0, 0, fmt.Errorf("list items: %w", err)
@@ -182,7 +183,7 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 
 	var todo []*model.Item
 	for _, it := range items {
-		if it.ImageURL == "" {
+		if force || it.ImageURL == "" {
 			todo = append(todo, it)
 		}
 	}

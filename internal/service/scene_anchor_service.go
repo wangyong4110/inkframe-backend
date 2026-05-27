@@ -377,9 +377,10 @@ func (s *SceneAnchorService) UpdateStats(id uint, score float64) error {
 	return s.repo.Update(anchor)
 }
 
-// BatchGenerateRefImages 批量为小说的场景锚点生成参考图（跳过已有 RefImageURL 的锚点）。
+// BatchGenerateRefImages 批量为小说的场景锚点生成参考图。
+// force=false：跳过已有参考图的锚点；force=true：全量重新生成（风格变更时使用）。
 // 并发度由 AIService.imageSem 统一管控（config.yaml ai.image_concurrency）。
-func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantID, novelID uint, provider string, progressFn func(int)) (succeeded, failed int, err error) {
+func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantID, novelID uint, provider string, force bool, progressFn func(int)) (succeeded, failed int, err error) {
 	anchors, err := s.repo.ListByNovel(novelID)
 	if err != nil {
 		return 0, 0, fmt.Errorf("list anchors: %w", err)
@@ -387,7 +388,7 @@ func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantI
 
 	var todo []*model.SceneAnchor
 	for _, a := range anchors {
-		if a.RefImageURL == "" {
+		if force || a.RefImageURL == "" {
 			todo = append(todo, a)
 		}
 	}

@@ -2,9 +2,12 @@ package crawler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -69,9 +72,16 @@ type NovelDetail struct {
 
 // ChapterInfo 章节信息
 type ChapterInfo struct {
-	Title    string `json:"title"`
-	URL      string `json:"url"`
+	Title     string `json:"title"`
+	URL       string `json:"url"`
 	ChapterNo int    `json:"chapter_no"`
+	IsVip     bool   `json:"is_vip"` // 付费章节（内容可能无法爬取）
+}
+
+// ChapterListFetcher 可选扩展接口：解析器通过独立 HTTP 请求（如 Ajax API）获取章节列表
+// 优先于 ParseChapterList 使用；若失败则回退到 HTML 解析
+type ChapterListFetcher interface {
+	FetchChapterList(ctx context.Context, client *HTTPClient, bookURL string) ([]*ChapterInfo, error)
 }
 
 // ChapterContent 章节内容
@@ -242,43 +252,84 @@ func (c *NovelCrawler) identifySite(url string) string {
 	return "unknown"
 }
 
-// NewHTTPClient 创建 HTTP 客户端
+// NewHTTPClient 创建 HTTP 客户端（带 cookie jar，自动保持会话）
 func NewHTTPClient() *HTTPClient {
+	jar, _ := cookiejar.New(nil)
 	return &HTTPClient{
 		client: &http.Client{
 			Timeout: 30 * time.Second,
+			Jar:     jar,
 		},
 		headers: map[string]string{
-			"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+			"User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+			"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+			"Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
 		},
 	}
 }
 
-func (c *HTTPClient) Get(ctx context.Context, url string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+// CookieValue 返回指定域名下 cookie 的值（需先请求过该域名）
+func (c *HTTPClient) CookieValue(rawURL, name string) string {
+	if c.client.Jar == nil {
+		return ""
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	for _, cookie := range c.client.Jar.Cookies(u) {
+		if cookie.Name == name {
+			return cookie.Value
+		}
+	}
+	return ""
+}
+
+func (c *HTTPClient) Get(ctx context.Context, rawURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
 	if err != nil {
 		return "", err
 	}
-
 	for k, v := range c.headers {
 		req.Header.Set(k, v)
 	}
-
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
-
 	buf, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
 	}
-
 	return string(buf), nil
 }
 
-// 导入需要的包
+// GetJSON 发送带 XHR 标记的 GET 请求，用于调用 Ajax API
+func (c *HTTPClient) GetJSON(ctx context.Context, rawURL string, referer string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+	if err != nil {
+		return "", err
+	}
+	for k, v := range c.headers {
+		req.Header.Set(k, v)
+	}
+	req.Header.Set("Accept", "application/json, text/javascript, */*; q=0.01")
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	if referer != "" {
+		req.Header.Set("Referer", referer)
+	}
+	resp, err := c.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	buf, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	return string(buf), nil
+}
 
 // QidianParser 起点中文网解析器
 type QidianParser struct{}
@@ -291,63 +342,216 @@ func (p *QidianParser) GetSiteName() string {
 	return "起点中文网"
 }
 
+// extractBookID 从 URL 提取书籍 ID（如 https://www.qidian.com/book/1048727942/）
+func (p *QidianParser) extractBookID(bookURL string) string {
+	re := regexp.MustCompile(`/book/(\d+)`)
+	if m := re.FindStringSubmatch(bookURL); len(m) > 1 {
+		return m[1]
+	}
+	return ""
+}
+
 func (p *QidianParser) ParseNovelList(doc *goquery.Document) ([]*NovelInfo, error) {
 	var novels []*NovelInfo
-
 	doc.Find(".book-list li, .work-list li").Each(func(i int, s *goquery.Selection) {
 		title := s.Find(".book-name, .title").Text()
 		author := s.Find(".author").Text()
-		url, _ := s.Find("a").Attr("href")
-
+		href, _ := s.Find("a").Attr("href")
 		novels = append(novels, &NovelInfo{
 			Title:  strings.TrimSpace(title),
 			Author: strings.TrimSpace(author),
-			URL:    url,
+			URL:    href,
 		})
 	})
-
 	return novels, nil
 }
 
-func (p *QidianParser) ParseNovelDetail(doc *goquery.Document, url string) (*NovelDetail, error) {
+// ParseNovelDetail 解析书籍详情页（多选择器回退 + 内嵌 JSON 提取）
+func (p *QidianParser) ParseNovelDetail(doc *goquery.Document, bookURL string) (*NovelDetail, error) {
 	detail := &NovelDetail{}
 
-	detail.Title = doc.Find(".book-title, .book-name").First().Text()
-	detail.Author = doc.Find(".author-name").First().Text()
-	detail.Description = doc.Find(".book-intro, .desc").First().Text()
+	// 尝试从页面内嵌 JSON 提取（起点通常注入 window.g_data 或 __INITIAL_STATE__）
+	doc.Find("script").EachWithBreak(func(_ int, s *goquery.Selection) bool {
+		src := s.Text()
+		if !strings.Contains(src, "bookName") && !strings.Contains(src, "bookInfo") {
+			return true
+		}
+		// 匹配 "bookName":"xxx"
+		if m := regexp.MustCompile(`"bookName"\s*:\s*"([^"]+)"`).FindStringSubmatch(src); len(m) > 1 {
+			detail.Title = m[1]
+		}
+		if m := regexp.MustCompile(`"authorName"\s*:\s*"([^"]+)"`).FindStringSubmatch(src); len(m) > 1 {
+			detail.Author = m[1]
+		}
+		if m := regexp.MustCompile(`"description"\s*:\s*"([^"]+)"`).FindStringSubmatch(src); len(m) > 1 {
+			detail.Description = strings.ReplaceAll(m[1], `\n`, "\n")
+		}
+		if m := regexp.MustCompile(`"categoryName"\s*:\s*"([^"]+)"`).FindStringSubmatch(src); len(m) > 1 {
+			detail.Genre = m[1]
+		}
+		return detail.Title == "" // 找到标题就停止遍历
+	})
 
-	// 提取章节数
-	chapterText := doc.Find(".chapter-count, .total").First().Text()
-	detail.TotalChapters = extractNumber(chapterText)
+	// HTML 选择器回退（多组，优先级从高到低）
+	if detail.Title == "" {
+		for _, sel := range []string{
+			"h1.book-title", "h1.book-info-title", ".book-info h1", "h1",
+		} {
+			if t := strings.TrimSpace(doc.Find(sel).First().Text()); t != "" {
+				detail.Title = t
+				break
+			}
+		}
+	}
+	if detail.Author == "" {
+		for _, sel := range []string{
+			"a.writer-name", ".writer-info .name", ".author-name", ".book-author a",
+		} {
+			if a := strings.TrimSpace(doc.Find(sel).First().Text()); a != "" {
+				detail.Author = a
+				break
+			}
+		}
+	}
+	if detail.Description == "" {
+		for _, sel := range []string{
+			"p.intro", ".book-intro p", ".book-intro", ".intro",
+		} {
+			if d := strings.TrimSpace(doc.Find(sel).First().Text()); d != "" {
+				detail.Description = d
+				break
+			}
+		}
+	}
+	if detail.Genre == "" {
+		detail.Genre = strings.TrimSpace(doc.Find(".book-cat a, .tag-list a, .book-label a").First().Text())
+	}
+
+	detail.CoverURL, _ = doc.Find(".book-img img, .book-cover img, .cover img").First().Attr("src")
+
+	statusText := strings.ToLower(doc.Find(".book-label, .book-status, .status").First().Text())
+	if strings.Contains(statusText, "完") {
+		detail.Status = "completed"
+	} else {
+		detail.Status = "ongoing"
+	}
 
 	return detail, nil
 }
 
+// ParseChapterList HTML 回退方案（FetchChapterList 失败时使用）
 func (p *QidianParser) ParseChapterList(doc *goquery.Document) ([]*ChapterInfo, error) {
 	var chapters []*ChapterInfo
-
-	doc.Find(".chapter-list li a, .volume-chapter a").Each(func(i int, s *goquery.Selection) {
-		title := s.Text()
-		url, _ := s.Attr("href")
-
+	doc.Find(".chapter-list li a, .volume-chapter a, .chapter-wrap a").Each(func(i int, s *goquery.Selection) {
+		title := strings.TrimSpace(s.Text())
+		href, _ := s.Attr("href")
+		if title == "" || href == "" {
+			return
+		}
+		if strings.HasPrefix(href, "//") {
+			href = "https:" + href
+		} else if strings.HasPrefix(href, "/") {
+			href = "https://www.qidian.com" + href
+		}
 		chapters = append(chapters, &ChapterInfo{
-			Title:    strings.TrimSpace(title),
-			URL:      url,
+			Title:     title,
+			URL:       href,
 			ChapterNo: i + 1,
 		})
 	})
-
 	return chapters, nil
 }
 
+// qidianCategoryResp 起点章节目录 Ajax API 响应结构
+type qidianCategoryResp struct {
+	Code int    `json:"code"`
+	Msg  string `json:"msg"`
+	Data struct {
+		Vs []struct {
+			VName string `json:"vName"`
+			Cs    []struct {
+				ID    int64  `json:"id"`
+				Name  string `json:"name"`
+				IsVip int    `json:"isVip"`
+			} `json:"cs"`
+		} `json:"vs"`
+	} `json:"data"`
+}
+
+// FetchChapterList 通过起点 Ajax API 获取完整章节列表（实现 ChapterListFetcher 接口）
+// API: GET /ajax/book/category?bookId={id}&_csrfToken={token}
+// 访问书籍页面后 cookie jar 中会自动携带 _csrfToken
+func (p *QidianParser) FetchChapterList(ctx context.Context, client *HTTPClient, bookURL string) ([]*ChapterInfo, error) {
+	bookID := p.extractBookID(bookURL)
+	if bookID == "" {
+		return nil, fmt.Errorf("cannot extract book ID from URL: %s", bookURL)
+	}
+
+	csrfToken := client.CookieValue("https://www.qidian.com", "_csrfToken")
+	apiURL := fmt.Sprintf("https://www.qidian.com/ajax/book/category?bookId=%s&_csrfToken=%s", bookID, csrfToken)
+
+	body, err := client.GetJSON(ctx, apiURL, bookURL)
+	if err != nil {
+		return nil, fmt.Errorf("chapter list API request failed: %w", err)
+	}
+
+	var resp qidianCategoryResp
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		return nil, fmt.Errorf("parse chapter list JSON failed: %w (body prefix: %.200s)", err, body)
+	}
+	if resp.Code != 0 {
+		return nil, fmt.Errorf("chapter list API error code=%d msg=%s", resp.Code, resp.Msg)
+	}
+
+	var chapters []*ChapterInfo
+	seq := 1
+	for _, vol := range resp.Data.Vs {
+		for _, ch := range vol.Cs {
+			chapterURL := fmt.Sprintf("https://www.qidian.com/chapter/%s/%d/", bookID, ch.ID)
+			chapters = append(chapters, &ChapterInfo{
+				Title:     ch.Name,
+				URL:       chapterURL,
+				ChapterNo: seq,
+				IsVip:     ch.IsVip != 0,
+			})
+			seq++
+		}
+	}
+
+	if len(chapters) == 0 {
+		return nil, fmt.Errorf("chapter list API returned 0 chapters (bookId=%s)", bookID)
+	}
+	return chapters, nil
+}
+
+// ParseChapter 解析起点章节正文
 func (p *QidianParser) ParseChapter(doc *goquery.Document) (*ChapterContent, error) {
 	content := &ChapterContent{}
 
-	content.Title = doc.Find(".chapter-title, .j_chapterName").First().Text()
-	content.Content = doc.Find("#j_chapterBox, .chapter-content, .read-content").First().Text()
+	// 标题：多选择器回退
+	for _, sel := range []string{
+		".chapter-name", ".j_chapterName", "h1.chapter-name", "h1",
+	} {
+		if t := strings.TrimSpace(doc.Find(sel).First().Text()); t != "" {
+			content.Title = t
+			break
+		}
+	}
 
-	// 清理内容
-	content.Content = cleanText(content.Content)
+	// 正文：起点免费章节内容在 #j_readContent 或 .read-content 下的 <p> 标签
+	var paragraphs []string
+	contentSel := doc.Find("#j_readContent p, .read-content p, .chapter-content p, #j_chapterBox p")
+	if contentSel.Length() > 0 {
+		contentSel.Each(func(_ int, s *goquery.Selection) {
+			if t := strings.TrimSpace(s.Text()); t != "" {
+				paragraphs = append(paragraphs, t)
+			}
+		})
+		content.Content = strings.Join(paragraphs, "\n\n")
+	} else {
+		// 回退到整块文本
+		content.Content = cleanText(doc.Find("#j_readContent, .read-content, .chapter-content, #j_chapterBox").First().Text())
+	}
 
 	return content, nil
 }

@@ -223,7 +223,7 @@ func (s *NovelImportService) ResumeCrawl(novelID uint) error {
 
 	// 从第一个待爬取章节的 URL 推断解析器
 	firstURL := strings.TrimPrefix(pending[0].Outline, "crawl:")
-	parser, err := s.getParserForURL(firstURL)
+	parser, err := s.getParserForURL(firstURL, "")
 	if err != nil {
 		return fmt.Errorf("cannot identify site parser: %w", err)
 	}
@@ -371,9 +371,12 @@ func (s *NovelImportService) crawlChaptersBackground(
 	}
 }
 
-// getParserForURL 根据 URL 返回对应解析器
-func (s *NovelImportService) getParserForURL(url string) (crawler.NovelParser, error) {
+// getParserForURL 根据 URL（或 siteName 提示）返回对应解析器
+func (s *NovelImportService) getParserForURL(url string, siteName string) (crawler.NovelParser, error) {
 	site := s.detectSiteFromURL(url)
+	if site == "default" && siteName != "" {
+		site = strings.ToLower(siteName)
+	}
 	switch site {
 	case "qidian":
 		return crawler.NewQidianParser(), nil
@@ -384,7 +387,7 @@ func (s *NovelImportService) getParserForURL(url string) (crawler.NovelParser, e
 	case "qimao":
 		return crawler.NewQimaoParser(), nil
 	default:
-		return nil, fmt.Errorf("unsupported site: %s", site)
+		return nil, fmt.Errorf("unsupported site %q: please select the correct site", site)
 	}
 }
 
@@ -589,9 +592,9 @@ func (s *NovelImportService) importFromURL(req *ImportRequest) (*ImportResult, e
 func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult, error) {
 	result := &ImportResult{}
 
-	parser, err := s.getParserForURL(req.URL)
+	parser, err := s.getParserForURL(req.URL, req.SiteName)
 	if err != nil {
-		return nil, fmt.Errorf("unsupported site: %w", err)
+		return nil, err
 	}
 
 	httpClient := crawler.NewHTTPClient()
@@ -613,8 +616,17 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 		return nil, fmt.Errorf("parse novel detail failed: %w", err)
 	}
 
-	// 解析章节列表
-	chapterInfos, err := parser.ParseChapterList(doc)
+	// 解析章节列表：优先使用 Ajax API（如解析器实现了 ChapterListFetcher），失败则回退 HTML 解析
+	var chapterInfos []*crawler.ChapterInfo
+	if fetcher, ok := parser.(crawler.ChapterListFetcher); ok {
+		chapterInfos, err = fetcher.FetchChapterList(context.Background(), httpClient, req.URL)
+		if err != nil {
+			logger.Printf("[Import] Ajax chapter list failed (%v), falling back to HTML parse", err)
+			chapterInfos, err = parser.ParseChapterList(doc)
+		}
+	} else {
+		chapterInfos, err = parser.ParseChapterList(doc)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("parse chapter list failed: %w", err)
 	}

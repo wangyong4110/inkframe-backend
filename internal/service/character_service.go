@@ -982,9 +982,9 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 
 // BatchGenerateImages 批量为小说的角色生成面部特写（同时用作头像）和三视图合图。
 // 每个角色在同一 goroutine 中顺序执行：先生成面部特写（兼头像），再生成三视图（以面部特写为参考）。
-// 已有对应图片的角色跳过该步骤；两张图均已存在则整个角色跳过。
+// force=false：跳过已有对应图片的角色；force=true：全量重新生成（风格变更时使用）。
 // 并发度由 AIService.imageSem 统一管控（config.yaml ai.image_concurrency）。
-func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider string, progressFn func(int)) (succeeded, failed int, err error) {
+func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider string, force bool, progressFn func(int)) (succeeded, failed int, err error) {
 	chars, err := s.characterRepo.ListByNovel(novelID)
 	if err != nil {
 		return 0, 0, fmt.Errorf("list characters: %w", err)
@@ -999,10 +999,10 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 		}
 	}
 
-	// 需要至少生成一张图的角色
+	// force=true 全量重新生成；否则仅处理缺图的角色
 	var todo []*model.Character
 	for _, c := range chars {
-		if c.FaceCloseup == "" || c.ThreeViewSheet == "" {
+		if force || c.FaceCloseup == "" || c.ThreeViewSheet == "" {
 			todo = append(todo, c)
 		}
 	}
@@ -1032,8 +1032,8 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 				charAppearance = char.Description
 			}
 
-			// 1. 面部特写（兼头像）
-			if char.FaceCloseup == "" {
+			// 1. 面部特写（兼头像）：force 时无论是否已有图片都重新生成
+			if force || char.FaceCloseup == "" {
 				faceImg, faceErr := imgSvc.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, charAppearance, imageStyle, "", char.Portrait, provider)
 				if faceErr != nil {
 					logger.Printf("[CharacterService] BatchGenerateImages: face closeup char %d (%s) failed: %v", char.ID, char.Name, faceErr)
@@ -1045,8 +1045,8 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 				}
 			}
 
-			// 2. 三视图（使用面部特写或已有头像作为参考）
-			if char.ThreeViewSheet == "" {
+			// 2. 三视图（使用面部特写或已有头像作为参考）：force 时无论是否已有都重新生成
+			if force || char.ThreeViewSheet == "" {
 				threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, charAppearance, imageStyle, "", char.Portrait, provider)
 				if threeErr != nil {
 					logger.Printf("[CharacterService] BatchGenerateImages: three-view char %d (%s) failed: %v", char.ID, char.Name, threeErr)
@@ -1121,72 +1121,89 @@ func (s *ImageGenerationService) GenerateCharacterImage(req *model.GenerateImage
 	return &GeneratedCharacterImage{URL: image.URL, Description: req.Description}, nil
 }
 
+// resolveStyleDesc maps image_style ID to an AI-prompt-friendly style description.
+// Falls back to the raw style string, or "日系动漫插画" when style is empty.
+func resolveStyleDesc(style string) string {
+	m := map[string]string{
+		"anime":         "日系动漫插画",
+		"realistic":     "写实摄影",
+		"ink_painting":  "水墨中国风插画",
+		"cyberpunk":     "赛博朋克风格插画",
+		"xianxia_style": "古典仙侠国风插画",
+		"oil_painting":  "油画风格插画",
+		"watercolor":    "水彩插画",
+	}
+	if d, ok := m[style]; ok {
+		return d
+	}
+	if style != "" {
+		return style
+	}
+	return "日系动漫插画"
+}
+
+// resolveGenderInfo returns (promptTag, negativeFragment) for a given gender.
+// promptTag is the booru-style leading token for positive prompts ("1boy" / "1girl" / "中性" / "").
+// negativeFragment lists opposite-gender tokens to suppress in the negative prompt.
+func resolveGenderInfo(gender string) (tag string, neg string) {
+	switch gender {
+	case "male":
+		return "1boy", "female, girl, woman, 女性, 女生, 裙子, 女装, feminine"
+	case "female":
+		return "1girl", "male, man, boy, 男性, 男生, 胡须, beard, mustache, masculine"
+	case "neutral":
+		return "中性", ""
+	default:
+		return "", ""
+	}
+}
+
 // GenerateThreeViewImage 生成单个视角的角色三视图
 // viewType: "front" | "side" | "back"
 // gender: "male" | "female" | "neutral" | ""（空时不注入性别词）
-// referenceImage: 肖像参考图 URL（用于 IP-Adapter 保持面部一致性，可为空）
+// referenceImage: 肖像参考图 URL（可为空）
 // provider: 指定图像生成提供者（可为空，空时自动选择）
-// ctx 可携带 ImageStorageHint 用于 OSS 路径构建，传 context.Background() 亦可
 func (s *ImageGenerationService) GenerateThreeViewImage(ctx context.Context, tenantID uint, name, appearance, viewType, style, gender, referenceImage, provider string) (*GeneratedCharacterImage, error) {
-	// "角色设定参考图" 会被模型理解成"多视角设计总表"，导致单图出现多个人物，改用单视角描述词。
+	// Use precise orthographic angle descriptions to avoid the model interpreting "side view" as a 3/4 angle.
 	viewDesc := map[string]string{
-		"front": "正面站立，面朝镜头，全身",
-		"side":  "侧身站立，侧面朝向，全身",
-		"back":  "背对镜头站立，全身",
+		"front": "front view, facing camera directly, full body from head to toe",
+		"side":  "pure right side view, 90-degree profile, looking right, full body from head to toe",
+		"back":  "back view, facing away from camera, full body from head to toe",
 	}
 	angleDesc, ok := viewDesc[viewType]
 	if !ok {
 		return nil, fmt.Errorf("invalid view type: %s", viewType)
 	}
-	genderDesc := map[string]string{
-		"male":    "男性",
-		"female":  "女性",
-		"neutral": "中性",
-	}
-	genderStr := genderDesc[gender] // empty string if gender not set
-	// 将前端 image_style ID 映射为 AI 可理解的中文风格描述
-	styleDesc := map[string]string{
-		"anime":        "日系动漫插画",
-		"realistic":    "写实摄影",
-		"ink_painting": "水墨中国风插画",
-		"cyberpunk":    "赛博朋克风格插画",
-		"xianxia_style": "古典仙侠国风插画",
-		"oil_painting": "油画风格插画",
-		"watercolor":   "水彩插画",
-	}
-	styleStr := styleDesc[style]
-	if styleStr == "" {
-		if style != "" {
-			styleStr = style // 未知风格直接透传
-		} else {
-			styleStr = "日系动漫插画"
-		}
-	}
-
-	// 性别 token 放在提示词最前面以获得最高权重。
-	// 英文 booru 标签（1boy/1girl）对插画模型约束力最强；中文作为辅助。
-	genderTag := map[string]string{"male": "1boy", "female": "1girl"}[gender]
-	genderLeader := genderTag // prefix: "1boy" / "1girl" / ""
-	if genderStr != "" && genderLeader == "" {
-		genderLeader = genderStr // neutral: 用中文作前缀
-	}
+	styleStr := resolveStyleDesc(style)
+	genderTag, genderNeg := resolveGenderInfo(gender)
 
 	var prompt string
 	if style == "realistic" {
-		// 写实：English terms 更有效
 		realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
-		prompt = fmt.Sprintf("%ssolo, 单人, 只有一个人物, %s, %s, %s, realistic photography, pure white background, detailed lighting, high quality portrait",
-			realisticGender, name, appearance, angleDesc)
+		prompt = fmt.Sprintf(
+			"%ssolo, full body, %s, %s, "+
+				"realistic photography style, pure white background, "+
+				"detailed features, clean composition, high quality, "+
+				"no props, no background elements, no text, no watermarks",
+			realisticGender, appearance, angleDesc)
+	} else if genderTag != "" {
+		// 英文 booru 标签（1boy/1girl）对插画模型权重最高，置于最前
+		prompt = fmt.Sprintf(
+			"%s, solo, full body, %s, %s, "+
+				"%s风格, flat color illustration, clean lineart, character design, "+
+				"white background, high quality, "+
+				"no props, no background elements, no text, no watermarks",
+			genderTag, appearance, angleDesc, styleStr)
 	} else {
-		if genderLeader != "" {
-			prompt = fmt.Sprintf("%s, solo, 单人, 只有一个人物，%s，%s，%s，%s风格，白色背景，线条清晰，高品质",
-				genderLeader, name, appearance, angleDesc, styleStr)
-		} else {
-			prompt = fmt.Sprintf("solo, 单人, 只有一个人物，%s，%s，%s，%s风格，白色背景，线条清晰，高品质",
-				name, appearance, angleDesc, styleStr)
-		}
+		prompt = fmt.Sprintf(
+			"solo, full body, %s, %s, "+
+				"%s风格, flat color illustration, clean lineart, character design, "+
+				"white background, high quality, "+
+				"no props, no background elements, no text, no watermarks",
+			appearance, angleDesc, styleStr)
 	}
-	// Only pass an absolute HTTP(S) URL to the AI — local/relative paths cannot be fetched by remote APIs.
+
+	// Only pass an absolute HTTP(S) URL — local/relative paths cannot be fetched by remote APIs.
 	aiRef := referenceImage
 	if !strings.HasPrefix(aiRef, "http://") && !strings.HasPrefix(aiRef, "https://") {
 		aiRef = ""
@@ -1196,12 +1213,11 @@ func (s *ImageGenerationService) GenerateThreeViewImage(ctx context.Context, ten
 	} else {
 		logger.Printf("GenerateThreeViewImage: %s/%s no valid reference image", name, viewType)
 	}
-	// 负向提示词：始终禁止多人，再叠加性别排斥词
-	baseNeg := "multiple people, two people, duo, couple, group, 多人, 两人, 三人, 合照, nsfw, lowres, bad anatomy"
-	genderNeg := map[string]string{
-		"male":   "female, girl, woman, 女性, 女生, 裙子, 长裙, 女装, feminine, she, her",
-		"female": "male, man, boy, 男性, 男生, 胡须, beard, mustache, masculine, he, him",
-	}[gender]
+
+	baseNeg := "multiple people, two people, duo, couple, group, 多人, nsfw, lowres, bad anatomy, " +
+		"cropped body, cut off at legs, missing feet, bottom cut off, partial body, floating figure, " +
+		"different character, inconsistent appearance, " +
+		"text, labels, watermark, signature"
 	negativePrompt := baseNeg
 	if genderNeg != "" {
 		negativePrompt = baseNeg + ", " + genderNeg
@@ -1217,76 +1233,52 @@ func (s *ImageGenerationService) GenerateThreeViewImage(ctx context.Context, ten
 // 与 GenerateThreeViewImage 的区别：使用 turnaround sheet 提示词，期望 AI 在单张图内展示三个视角。
 // ctx 可携带 ImageStorageHint 用于 OSS 路径构建。
 func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, tenantID uint, name, appearance, style, gender, referenceImage, provider string) (*GeneratedCharacterImage, error) {
-	genderDesc := map[string]string{
-		"male":    "男性",
-		"female":  "女性",
-		"neutral": "中性",
-	}
-	genderStr := genderDesc[gender]
-	styleDesc := map[string]string{
-		"anime":         "日系动漫插画",
-		"realistic":     "写实摄影",
-		"ink_painting":  "水墨中国风插画",
-		"cyberpunk":     "赛博朋克风格插画",
-		"xianxia_style": "古典仙侠国风插画",
-		"oil_painting":  "油画风格插画",
-		"watercolor":    "水彩插画",
-	}
-	styleStr := styleDesc[style]
-	if styleStr == "" {
-		if style != "" {
-			styleStr = style
-		} else {
-			styleStr = "日系动漫插画"
-		}
-	}
-
-	genderTag := map[string]string{"male": "1boy", "female": "1girl"}[gender]
-	genderLeader := genderTag
-	if genderStr != "" && genderLeader == "" {
-		genderLeader = genderStr
-	}
+	styleStr := resolveStyleDesc(style)
+	genderTag, genderNeg := resolveGenderInfo(gender)
 
 	// 三合一参考图使用 turnaround/character sheet 专用提示词。
-	// 参考 model sheet 最佳实践：正交视图+标准站姿+无透视变形 是生成一致三视图的关键词组合。
+	// 关键实践：
+	//   - 明确"right 90-degree side profile"而非模糊"侧面"，防止模型生成3/4视角
+	//   - standard A-pose（手臂向外约45°）而非"双手自然垂放"（T-pose/紧贴身体）
+	//   - 用精确 token 约束三视图一致性，而非散文描述
 	var prompt string
 	if style == "realistic" {
 		realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
 		prompt = fmt.Sprintf(
-			"%scharacter model sheet, full body turnaround, front view and right side view and back view of the same character, "+
-				"3-angle orthographic views arranged horizontally, same character consistent across all views, "+
-				"%s, %s, "+
-				"standard A-pose, arms slightly away from body, "+
-				"complete figure from head to toe, orthographic projection, no perspective distortion, "+
-				"character only, no props, no additional objects, no background elements, no scene elements, "+
+			"%scharacter model sheet, full body turnaround, "+
+				"front view and right 90-degree side profile and back view arranged horizontally, "+
+				"three views of the same character, same hair color same eye color same outfit across all views, "+
+				"standard A-pose, arms relaxed at 45 degrees from body sides, "+
+				"%s, "+
+				"complete figure from head to toe no cropping, orthographic projection, no perspective distortion, "+
+				"character only, no props, no background elements, no scene elements, "+
 				"realistic photography style, pure white background, clean composition, high quality, "+
-				"professional character design, "+
-				"no text, no labels, no annotations, no watermarks, no captions",
-			realisticGender, name, appearance)
+				"professional character design reference, no text, no labels, no watermarks",
+			realisticGender, appearance)
+	} else if genderTag != "" {
+		prompt = fmt.Sprintf(
+			"%s, character model sheet, turnaround reference sheet, "+
+				"front view and right 90-degree side profile and back view arranged horizontally, "+
+				"three views of the same character, same hair color same eye color same outfit across all views, "+
+				"standard A-pose, arms relaxed at 45 degrees from body sides, "+
+				"%s, "+
+				"full body from head to toe complete figure no cropping, orthographic projection, no perspective distortion, "+
+				"character only, no props, no background elements, "+
+				"%s风格, flat color illustration, clean lineart, white background, high quality, "+
+				"model sheet, character reference sheet, no text, no labels, no watermarks",
+			genderTag, appearance, styleStr)
 	} else {
-		if genderLeader != "" {
-			prompt = fmt.Sprintf(
-				"%s, 角色设定图，同一角色的正面视角+右侧面视角+背面视角横向排列，角色设计总表，"+
-					"三个视角为同一角色，发型轮廓·服装款式·配饰位置三个视角完全一致，"+
-					"%s，%s，"+
-					"标准站姿，双手自然垂放，"+
-					"三视图均为全身，头顶到脚底完整显示，正交视图，无透视变形，"+
-					"仅角色本身，无额外道具，无背景物品，无场景元素，"+
-					"%s风格，白色背景，线条清晰，高品质插画，"+
-					"model sheet, character reference sheet, turnaround sheet，无文字标注，无标签，无水印",
-				genderLeader, name, appearance, styleStr)
-		} else {
-			prompt = fmt.Sprintf(
-				"角色设定图，同一角色的正面视角+右侧面视角+背面视角横向排列，角色设计总表，"+
-					"三个视角为同一角色，发型轮廓·服装款式·配饰位置三个视角完全一致，"+
-					"%s，%s，"+
-					"标准站姿，双手自然垂放，"+
-					"三视图均为全身，头顶到脚底完整显示，正交视图，无透视变形，"+
-					"仅角色本身，无额外道具，无背景物品，无场景元素，"+
-					"%s风格，白色背景，线条清晰，高品质插画，"+
-					"model sheet, character reference sheet, turnaround sheet，无文字标注，无标签，无水印",
-				name, appearance, styleStr)
-		}
+		prompt = fmt.Sprintf(
+			"character model sheet, turnaround reference sheet, "+
+				"front view and right 90-degree side profile and back view arranged horizontally, "+
+				"three views of the same character, same hair color same eye color same outfit across all views, "+
+				"standard A-pose, arms relaxed at 45 degrees from body sides, "+
+				"%s, "+
+				"full body from head to toe complete figure no cropping, orthographic projection, no perspective distortion, "+
+				"character only, no props, no background elements, "+
+				"%s风格, flat color illustration, clean lineart, white background, high quality, "+
+				"model sheet, character reference sheet, no text, no labels, no watermarks",
+			appearance, styleStr)
 	}
 
 	aiRef := referenceImage
@@ -1295,15 +1287,12 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	}
 	logger.Printf("GenerateThreeViewSheet: %s ref=%v", name, aiRef != "")
 
-	// 负向提示词：禁止不同角色出现，但允许同一角色的多个视角；同时禁止文字标注
-	baseNeg := "text, labels, annotations, watermark, signature, caption, speech bubble, character name tag, " +
+	baseNeg := "text, labels, annotations, watermark, signature, caption, speech bubble, " +
 		"props, weapons, furniture, additional objects, background objects, scene elements, environment, " +
 		"perspective distortion, foreshortening, dynamic pose, action pose, " +
-		"different characters, multiple distinct people, inconsistent appearance, nsfw, lowres, bad anatomy, poorly drawn"
-	genderNeg := map[string]string{
-		"male":   "female, girl, woman, 女性, 女生, 裙子, 女装, feminine",
-		"female": "male, man, boy, 男性, 男生, 胡须, beard, mustache, masculine",
-	}[gender]
+		"different characters, inconsistent appearance, different hairstyle, hair color change, costume mismatch, " +
+		"cropped body, cut off feet, missing feet, bottom cut off, partial figure, floating figure, " +
+		"extra limbs, bad anatomy, nsfw, lowres, poorly drawn"
 	negativePrompt := baseNeg
 	if genderNeg != "" {
 		negativePrompt = baseNeg + ", " + genderNeg
@@ -1324,79 +1313,47 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 // GenerateFaceCloseupImage 生成角色面部特写图片。
 // ctx 可携带 ImageStorageHint 用于 OSS 路径构建。
 func (s *ImageGenerationService) GenerateFaceCloseupImage(ctx context.Context, tenantID uint, name, appearance, style, gender, referenceImage, provider string) (*GeneratedCharacterImage, error) {
-	genderDesc := map[string]string{
-		"male":    "男性",
-		"female":  "女性",
-		"neutral": "中性",
-	}
-	genderStr := genderDesc[gender]
-	styleDesc := map[string]string{
-		"anime":         "日系动漫插画",
-		"realistic":     "写实摄影",
-		"ink_painting":  "水墨中国风插画",
-		"cyberpunk":     "赛博朋克风格插画",
-		"xianxia_style": "古典仙侠国风插画",
-		"oil_painting":  "油画风格插画",
-		"watercolor":    "水彩插画",
-	}
-	styleStr := styleDesc[style]
-	if styleStr == "" {
-		if style != "" {
-			styleStr = style
-		} else {
-			styleStr = "日系动漫插画"
-		}
-	}
+	styleStr := resolveStyleDesc(style)
+	genderTag, genderNeg := resolveGenderInfo(gender)
 
-	genderTag := map[string]string{"male": "1boy", "female": "1girl"}[gender]
-	genderLeader := genderTag
-	if genderStr != "" && genderLeader == "" {
-		genderLeader = genderStr
-	}
-
+	// 注意：不要在提示词中加入 "identity preservation" / "face lock reference" / "IP-Adapter portrait"
+	// 这些是框架工具名（非 SD prompt token），不被扩散模型识别，只会占用 token 权重、干扰生成。
 	var prompt string
 	if style == "realistic" {
 		realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
 		prompt = fmt.Sprintf(
-			"%scharacter face close-up, portrait, front view only, bust shot, face centered in frame, "+
+			"%sbust shot, upper body portrait, front view only, face centered in frame, "+
 				"single view, not a turnaround, not a character sheet, "+
-				"solo, %s, %s, "+
+				"solo, %s, "+
 				"soft even lighting, studio light, no harsh shadows, "+
 				"detailed facial features, sharp focus on face, "+
 				"skin texture, hair strand detail, eye catchlight, "+
 				"neutral expression, looking at camera, "+
-				"character only, no props, no additional objects, no background elements, no scene elements, "+
-				"identity preservation, face locked, "+
-				"character face reference, IP-Adapter portrait, "+
-				"pure white background, high quality portrait photo, "+
+				"character only, no props, pure white background, high quality portrait photo, "+
 				"no text, no labels, no watermarks",
-			realisticGender, name, appearance)
+			realisticGender, appearance)
+	} else if genderTag != "" {
+		prompt = fmt.Sprintf(
+			"%s, solo, bust shot, upper body portrait, head and shoulders, face centered, "+
+				"%s, "+
+				"detailed facial features, expressive eyes, looking at viewer, neutral expression, "+
+				"soft even lighting, no harsh shadows, sharp focus on face, "+
+				"character only, no props, no background elements, "+
+				"front view only, single view, "+
+				"%s风格, flat color illustration, clean lineart, white background, high quality, "+
+				"no text, no labels, no watermarks",
+			genderTag, appearance, styleStr)
 	} else {
-		if genderLeader != "" {
-			prompt = fmt.Sprintf(
-				"%s, solo, 角色面部特写，正面头像，肩部以上构图，面部居中，%s，%s，"+
-					"细腻的五官，精致的眼睛，双眼直视镜头，神情自然，"+
-					"柔和均匀布光，无强烈阴影，面部细节清晰，"+
-					"仅角色本身，无额外道具，无背景物品，无场景元素，"+
-					"单一视角，仅正面，"+
-					"%s风格，白色背景，线条清晰，高品质插画，"+
-					"角色设计参考图，面部锁定参考，"+
-					"character face reference, identity preservation, face lock reference，"+
-					"无文字标注，无标签，无水印",
-				genderLeader, name, appearance, styleStr)
-		} else {
-			prompt = fmt.Sprintf(
-				"solo, 角色面部特写，正面头像，肩部以上构图，面部居中，%s，%s，"+
-					"细腻的五官，精致的眼睛，双眼直视镜头，神情自然，"+
-					"柔和均匀布光，无强烈阴影，面部细节清晰，"+
-					"仅角色本身，无额外道具，无背景物品，无场景元素，"+
-					"单一视角，仅正面，"+
-					"%s风格，白色背景，线条清晰，高品质插画，"+
-					"角色设计参考图，面部锁定参考，"+
-					"character face reference, identity preservation, face lock reference，"+
-					"无文字标注，无标签，无水印",
-				name, appearance, styleStr)
-		}
+		prompt = fmt.Sprintf(
+			"solo, bust shot, upper body portrait, head and shoulders, face centered, "+
+				"%s, "+
+				"detailed facial features, expressive eyes, looking at viewer, neutral expression, "+
+				"soft even lighting, no harsh shadows, sharp focus on face, "+
+				"character only, no props, no background elements, "+
+				"front view only, single view, "+
+				"%s风格, flat color illustration, clean lineart, white background, high quality, "+
+				"no text, no labels, no watermarks",
+			appearance, styleStr)
 	}
 
 	aiRef := referenceImage
@@ -1405,15 +1362,12 @@ func (s *ImageGenerationService) GenerateFaceCloseupImage(ctx context.Context, t
 	}
 	logger.Printf("GenerateFaceCloseupImage: %s ref=%v", name, aiRef != "")
 
-	baseNeg := "multiple people, two people, group, 多人, nsfw, lowres, bad anatomy, full body, feet, legs below waist, " +
+	baseNeg := "multiple people, group, 多人, nsfw, lowres, bad anatomy, " +
+		"full body, feet, legs below waist, body below chest, waist and below, " +
 		"turnaround, multiple views, front and side and back, three views, character sheet, model sheet, " +
 		"props, weapons, furniture, additional objects, background objects, scene elements, environment, " +
 		"text, labels, annotations, watermark, signature, caption, " +
 		"harsh shadows, dramatic lighting, complex background"
-	genderNeg := map[string]string{
-		"male":   "female, girl, woman, 女性, 女生, 裙子, 女装, feminine",
-		"female": "male, man, boy, 男性, 男生, 胡须, beard, mustache, masculine",
-	}[gender]
 	negativePrompt := baseNeg
 	if genderNeg != "" {
 		negativePrompt = baseNeg + ", " + genderNeg

@@ -192,6 +192,7 @@ func (h *ItemHandler) BatchGenerateImages(c *gin.Context) {
 	}
 	var req struct {
 		Provider string `json:"provider"`
+		Force    bool   `json:"force"` // true=强制重新生成（风格变更时使用）
 	}
 	_ = c.ShouldBindJSON(&req)
 	tenantID := getTenantID(c)
@@ -207,9 +208,9 @@ func (h *ItemHandler) BatchGenerateImages(c *gin.Context) {
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)                                           //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
-		succ, fail, err := h.itemService.BatchGenerateImages(tenantID, uint(novelID), req.Provider, progressFn)
+		succ, fail, err := h.itemService.BatchGenerateImages(tenantID, uint(novelID), req.Provider, req.Force, progressFn)
 		if err != nil {
 			logger.Printf("[ItemHandler] BatchGenerateImages task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
