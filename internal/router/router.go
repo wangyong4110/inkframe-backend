@@ -296,6 +296,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				sceneAnchors.DELETE("/:id", cfg.SceneAnchorHandler.DeleteSceneAnchor)
 				sceneAnchors.PUT("/:id/ref-image", cfg.SceneAnchorHandler.LockRefImage)
 				sceneAnchors.POST("/:id/generate-ref-image", cfg.SceneAnchorHandler.GenerateRefImage)
+				sceneAnchors.POST("/:id/edit-ref-image", cfg.SceneAnchorHandler.EditRefImage)
 				sceneAnchors.GET("/:id/consistency-logs", cfg.SceneAnchorHandler.GetConsistencyLogs)
 			}
 		}

@@ -328,6 +328,35 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	return s.repo.GetByID(id)
 }
 
+// EditRefImageWithInstruction 使用指令对现有参考图进行编辑（SeedEditV3 图生图）
+// instruction 为自然语言编辑指令，如"让场景更暗，增加烟雾"
+func (s *SceneAnchorService) EditRefImageWithInstruction(ctx context.Context, tenantID, id uint, instruction string) (*model.SceneAnchor, error) {
+	anchor, err := s.repo.GetByID(id)
+	if err != nil {
+		return nil, fmt.Errorf("anchor not found: %w", err)
+	}
+	if anchor.RefImageURL == "" {
+		return nil, fmt.Errorf("no ref image to edit; generate one first")
+	}
+
+	// consistencyWeight < 0.7 → GenerateCharacterThreeViewMulti 自动选用 SeedEditV3 指令编辑
+	// scale = weight * 10 = 4（中等编辑强度）
+	imageURL, err := s.aiSvc.GenerateCharacterThreeViewMulti(
+		ctx, tenantID, "", instruction,
+		[]string{anchor.RefImageURL},
+		"", "", "", 0.4,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("edit ref image: %w", err)
+	}
+
+	if err := s.SetRefImage(id, imageURL, nil); err != nil {
+		return nil, fmt.Errorf("save edited ref image: %w", err)
+	}
+	logger.Printf("[SceneAnchorService] EditRefImageWithInstruction: anchor %d edited, url=%s", id, imageURL)
+	return s.repo.GetByID(id)
+}
+
 // UpdateStats 更新锚点使用统计（usage_count++，avg_cons_score 滚动平均）
 func (s *SceneAnchorService) UpdateStats(id uint, score float64) error {
 	anchor, err := s.repo.GetByID(id)

@@ -230,6 +230,36 @@ func (h *SceneAnchorHandler) GenerateRefImage(c *gin.Context) {
 	respondOK(c, anchor)
 }
 
+// EditRefImage POST /scene-anchors/:id/edit-ref-image
+func (h *SceneAnchorHandler) EditRefImage(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	existing, err := h.svc.Get(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "scene anchor not found")
+		return
+	}
+	if existing.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
+	var body struct {
+		Instruction string `json:"instruction" binding:"required"`
+	}
+	if !bindJSON(c, &body) {
+		return
+	}
+	anchor, err := h.svc.EditRefImageWithInstruction(c.Request.Context(), getTenantID(c), uint(id), body.Instruction)
+	if err != nil {
+		logger.Printf("[SceneAnchorHandler] EditRefImage error: %v", err)
+		respondErr(c, http.StatusInternalServerError, "failed to edit ref image")
+		return
+	}
+	respondOK(c, anchor)
+}
+
 // GetConsistencyLogs GET /scene-anchors/:id/consistency-logs
 func (h *SceneAnchorHandler) GetConsistencyLogs(c *gin.Context) {
 	id, ok := parseID(c, "id")
