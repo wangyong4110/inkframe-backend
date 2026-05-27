@@ -1273,6 +1273,9 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	}
 	logger.Printf("generateShotReferenceImage: shot %d charIDs=%v sources=%v portraits=%d",
 		shot.ShotNo, shot.CharacterIDs, refSources, len(characterPortraits))
+	if len(shot.CharacterIDs) > 0 && len(characterPortraits) == 0 {
+		logger.Printf("[WARN] generateShotReferenceImage: shot %d has CharacterIDs=%v but no portrait/ThreeViewSheet found — characters may not have images generated yet", shot.ShotNo, shot.CharacterIDs)
+	}
 
 	promptText := shot.Prompt
 	if promptText == "" {
@@ -1290,10 +1293,17 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// 合并所有参考图 URL（角色图 + 场景锚点图），稍后在 tenantID 确定后执行合成
+	// 合并参考图 URL：角色图优先，场景锚点图仅在有角色图时追加。
+	//
+	// 关键约束：selectImageModel 依赖 firstRef（第一张图）决定是否启用 DreamO（角色特征保持）。
+	// 若无角色参考图但场景锚点图非空，firstRef 将是场景背景图 → DreamO 错误地将背景作为"角色外观"
+	// 进行特征保持，导致生成图角色面目全非。
+	// 解决方案：无角色图时不把场景图加入 allRefImages，让模型回退到 Text2ImgV3（纯文生图）；
+	// 场景锚点的文字描述已通过 promptText 注入，仍能保障画面主题一致性。
 	allRefImages := make([]string, 0, len(characterPortraits)+1)
 	allRefImages = append(allRefImages, characterPortraits...)
-	if sceneRefImage != "" {
+	if sceneRefImage != "" && len(characterPortraits) > 0 {
+		// 仅在有角色图时追加场景图（作为 DreamO 的补充上下文，而非主参考）
 		allRefImages = append(allRefImages, sceneRefImage)
 	}
 
@@ -1344,7 +1354,25 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	imageSize := imageAspectRatioToSize(imageAspectRatio, qualityTier)
 	logger.Printf("generateShotReferenceImage: shot %d qualityTier=%s aspectRatio=%s imageSize=%s", shot.ShotNo, qualityTier, imageAspectRatio, imageSize)
 
-	// 镜头类型注解：根据景别选择光学特征，提升图像构图的电影感
+	// 构建负向提示词：基础解剖/物理规律排除词 + 分镜 LLM 生成的镜头专项排除词
+	// 图像生成必须有负向提示词，否则极易出现变形肢体、违反物理规律、比例失调等问题
+	imgNegBase := "worst quality, low quality, jpeg artifacts, noise, blurry, " +
+		"deformed, ugly, bad anatomy, extra limbs, missing limbs, floating limbs, disconnected limbs, " +
+		"malformed hands, missing fingers, fused fingers, extra fingers, poorly drawn hands, extra arms, extra legs, " +
+		"bad proportions, gross proportions, long neck, cloned face, " +
+		"out of frame, cropped head, poorly drawn face, poorly drawn eyes, asymmetric eyes, " +
+		"text, watermark, logo, signature, " +
+		"impossible physics, floating objects, gravity defying, " +
+		"oversaturated, overexposed, underexposed"
+	negPrompt := imgNegBase
+	if shot.NegativePrompt != "" {
+		negPrompt = imgNegBase + ", " + shot.NegativePrompt
+	}
+
+	// Prompt 前缀策略：
+	// - shot.Prompt（LLM 生成的 image_prompt）已包含画风/画质词/镜头参数，只补充项目级调色和风格词，
+	//   避免重复注入镜头参数（如 35mm vs 85mm）产生冲突，导致画面比例/构图异常。
+	// - shot.Prompt 为空时（降级用 description），注入完整电影级前缀补足画质词和镜头描述。
 	lensTypeMap := map[string]string{
 		"extreme_close_up": "macro lens 100mm, extreme shallow DOF, bokeh",
 		"close_up":         "portrait lens 85mm, shallow depth of field, subject isolation",
@@ -1356,22 +1384,36 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	if lensType == "" {
 		lensType = "standard lens 50mm"
 	}
-	cinematicImgPrefix := "cinematic film photography, 35mm anamorphic lens, professional lighting setup, " + lensType + ", "
-	// 注入色彩调色关键词（将项目色调设置映射为 prompt 语义词）
-	if kw := colorGradeToPromptKeyword(colorGrade); kw != "" {
-		cinematicImgPrefix = kw + ", " + cinematicImgPrefix
-	}
-	// 注入画面风格（非 volcengine 提供商不通过 style 参数感知风格，需在 prompt 中明确）
-	if artStyle != "" {
-		cinematicImgPrefix = artStyle + " style, " + cinematicImgPrefix
-	}
-	promptText = cinematicImgPrefix + promptText
 
-	// 二次读取场景锚点参考图：批量并发时本 goroutine 等待 imageSem 期间，
-	// 前一个分镜可能已完成并通过 AutoSetRefImage 锁定了锚点，此处刷新 allRefImages。
-	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
+	if shot.Prompt != "" {
+		// LLM 生成的 image_prompt 已完整：仅补充项目级色调和风格（若 prompt 中未提及）
+		var prefix string
+		if kw := colorGradeToPromptKeyword(colorGrade); kw != "" {
+			prefix += kw + ", "
+		}
+		if artStyle != "" && !strings.Contains(strings.ToLower(promptText), strings.ToLower(artStyle)) {
+			prefix += artStyle + " style, "
+		}
+		if prefix != "" {
+			promptText = prefix + promptText
+		}
+	} else {
+		// 降级：description 无画质词，注入完整电影级前缀
+		cinematicImgPrefix := "cinematic film photography, 35mm anamorphic lens, professional lighting setup, " + lensType + ", "
+		if kw := colorGradeToPromptKeyword(colorGrade); kw != "" {
+			cinematicImgPrefix = kw + ", " + cinematicImgPrefix
+		}
+		if artStyle != "" {
+			cinematicImgPrefix = artStyle + " style, " + cinematicImgPrefix
+		}
+		promptText = cinematicImgPrefix + promptText
+	}
+
+	// 二次读取场景锚点参考图（仅在有角色参考图时才追加）：
+	// 批量并发时本 goroutine 等待 imageSem 期间，前一个分镜可能已完成并锁定了锚点。
+	// 同样遵守"无角色图不追加场景图"的约束，防止 DreamO 误将场景图视为角色外观。
+	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil && len(characterPortraits) > 0 {
 		if _, latestRef, _ := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); latestRef != "" {
-			// 检查 sceneRefImage 是否尚未加入（可能一次读取时为空，二次读取时已锁定）
 			alreadyHaveRef := false
 			for _, r := range allRefImages {
 				if r == latestRef {
@@ -1386,7 +1428,8 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	imageURL, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, allRefImages, artStyle, "", imageSize, charConsistencyWeight)
+	logger.Printf("generateShotReferenceImage: shot %d prompt=%q negPrompt=%q", shot.ShotNo, promptText[:min(len(promptText), 120)], negPrompt[:min(len(negPrompt), 80)])
+	imageURL, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, allRefImages, artStyle, negPrompt, imageSize, charConsistencyWeight)
 	if err != nil {
 		logger.Printf("generateShotReferenceImage: image gen failed for shot %d: %v", shot.ShotNo, err)
 		return "", err
