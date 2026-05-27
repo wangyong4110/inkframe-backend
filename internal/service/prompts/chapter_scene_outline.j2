@@ -7,15 +7,34 @@
 {{ GlobalContext }}
 
 # 本章目标
-- 章节主题：{{ ChapterSummary }}
+{% if ChapterTitle %}- 章节标题建议：{{ ChapterTitle }}
+{% endif %}- 章节主题：{{ ChapterSummary }}
 - 情感张力目标：{{ TensionLevel }}/10
 - 所属幕次：第{{ ActNo }}幕
 - 情感基调：{{ EmotionalTone }}
 - 章末钩子类型：{{ HookType }}
 
+{% if PlotPoints %}# 本章必须完成的剧情点（来自大纲，必须全部体现在场景中）
+{{ PlotPoints }}{% endif %}
+
 {% if PlotTensionState %}
 # 当前张力状态（必须参考）
 {{ PlotTensionState }}
+{% endif %}
+
+{% if RefStories %}
+# 联网参考故事（搜索结果，仅作灵感参考，严禁直接抄袭）
+{{ RefStories }}
+{% endif %}
+
+{% if WikiContext %}
+# 百科知识参考（确保世界观细节准确，可借用相关术语）
+{{ WikiContext }}
+{% endif %}
+
+{% if StoryPatternRef %}
+# 情节结构参考（可借鉴叙事节拍与情感弧线，不必机械照搬）
+{{ StoryPatternRef }}
 {% endif %}
 
 # 上一章结尾状态

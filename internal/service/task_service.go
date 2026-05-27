@@ -27,6 +27,7 @@ const (
 	TaskTypeSceneAnchorExtract       = "scene_anchor_extract"
 	TaskTypeChapterSummaryBatch      = "chapter_summary_batch"
 	TaskTypeSFXGen                   = "sfx_gen"
+	TaskTypeChapterReview            = "chapter_review"
 	TaskTypeStoryboardReview         = "storyboard_review"
 	TaskTypeStoryboardOptimize       = "storyboard_optimize"
 	TaskTypeImport                   = "import"

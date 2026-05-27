@@ -2,12 +2,16 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"strings"
+	"time"
 
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
+	"github.com/inkframe/inkframe-backend/internal/repository"
 )
 
 // AIQualityScores AI质检评分结果
@@ -26,22 +30,42 @@ type QualityControlService struct {
 	aiSvc       *AIService
 	chapterRepo interface {
 		GetByID(id uint) (*model.Chapter, error)
+		Update(chapter *model.Chapter) error
 	}
 	novelRepo interface {
 		GetByID(id uint) (*model.Novel, error)
 	}
+	reviewRecordRepo *repository.ChapterReviewRecordRepository
+	ignoredIssueRepo *repository.ChapterIgnoredIssueRepository
 }
 
 func NewQualityControlService(
 	aiSvc *AIService,
 	chapterRepo interface {
 		GetByID(id uint) (*model.Chapter, error)
+		Update(chapter *model.Chapter) error
 	},
 	novelRepo interface {
 		GetByID(id uint) (*model.Novel, error)
 	},
 ) *QualityControlService {
 	return &QualityControlService{aiSvc: aiSvc, chapterRepo: chapterRepo, novelRepo: novelRepo}
+}
+
+// WithReviewRepos injects the review/ignore repositories.
+func (s *QualityControlService) WithReviewRepos(
+	reviewRepo *repository.ChapterReviewRecordRepository,
+	ignoreRepo *repository.ChapterIgnoredIssueRepository,
+) *QualityControlService {
+	s.reviewRecordRepo = reviewRepo
+	s.ignoredIssueRepo = ignoreRepo
+	return s
+}
+
+// ParagraphDiff describes a single paragraph replacement.
+type ParagraphDiff struct {
+	Index      int    `json:"index"`
+	NewContent string `json:"new_content"`
 }
 
 // runAIQualityCheck 调用 AI 对章节内容进行综合质检，返回各维度评分（0-10分制）
@@ -449,4 +473,182 @@ func (s *QualityControlService) RefineWithSuggestions(chapterID uint, suggestion
 		return "", fmt.Errorf("AI refine failed: %w", err)
 	}
 	return strings.TrimSpace(result), nil
+}
+
+// ─── Chapter AI Review ────────────────────────────────────────────────────────
+
+// ReviewChapter performs a deep AI review of a chapter and stores the record.
+func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uint, provider string) (*model.ChapterReview, error) {
+	if s.reviewRecordRepo == nil {
+		return nil, fmt.Errorf("review repos not wired")
+	}
+
+	chapter, err := s.chapterRepo.GetByID(chapterID)
+	if err != nil {
+		return nil, fmt.Errorf("chapter %d not found: %w", chapterID, err)
+	}
+	novel, err := s.novelRepo.GetByID(chapter.NovelID)
+	if err != nil {
+		return nil, fmt.Errorf("novel %d not found: %w", chapter.NovelID, err)
+	}
+
+	// Build numbered paragraph list
+	paragraphs := strings.Split(strings.TrimSpace(chapter.Content), "\n\n")
+	var sb strings.Builder
+	for i, p := range paragraphs {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		fmt.Fprintf(&sb, "[%d] %s\n\n", i, p)
+	}
+
+	prompt, err := renderPrompt("chapter_review", map[string]interface{}{
+		"Genre":            novel.Genre,
+		"CharacterSummary": "",
+		"Content":          sb.String(),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render chapter_review: %w", err)
+	}
+
+	raw, err := s.aiSvc.GenerateWithProvider(novel.TenantID, novel.ID, "chapter_review", prompt, provider,
+		StoryboardOverrides{MaxTokens: 8192})
+	if err != nil {
+		return nil, fmt.Errorf("AI chapter review failed: %w", err)
+	}
+
+	content := extractJSONObject(raw)
+	var review model.ChapterReview
+	if err := json.Unmarshal([]byte(content), &review); err != nil {
+		return nil, fmt.Errorf("parse chapter review JSON: %w (raw: %.200s)", err, content)
+	}
+
+	// Persist record
+	reviewBytes, _ := json.Marshal(review)
+	rec := &model.ChapterReviewRecord{
+		ChapterID:       chapterID,
+		OverallScore:    review.OverallScore,
+		Status:          "pending",
+		ReviewJSON:      string(reviewBytes),
+		SnapshotContent: chapter.Content,
+	}
+	if err := s.reviewRecordRepo.Create(rec); err != nil {
+		logger.Printf("QualityControlService.ReviewChapter: save record failed: %v", err)
+	} else {
+		review.RecordID = rec.ID
+	}
+
+	return &review, nil
+}
+
+func (s *QualityControlService) ListReviewRecords(chapterID uint) ([]*model.ChapterReviewRecord, error) {
+	if s.reviewRecordRepo == nil {
+		return nil, nil
+	}
+	return s.reviewRecordRepo.ListByChapter(chapterID)
+}
+
+func (s *QualityControlService) GetReviewRecord(recordID uint) (*model.ChapterReviewRecord, error) {
+	if s.reviewRecordRepo == nil {
+		return nil, fmt.Errorf("review repos not wired")
+	}
+	return s.reviewRecordRepo.GetByID(recordID)
+}
+
+// RollbackReview restores the chapter content to the snapshot taken at review time.
+func (s *QualityControlService) RollbackReview(recordID uint) error {
+	if s.reviewRecordRepo == nil {
+		return fmt.Errorf("review repos not wired")
+	}
+	rec, err := s.reviewRecordRepo.GetByID(recordID)
+	if err != nil {
+		return fmt.Errorf("record %d not found: %w", recordID, err)
+	}
+	if rec.SnapshotContent == "" {
+		return fmt.Errorf("no snapshot available for record %d", recordID)
+	}
+	chapter, err := s.chapterRepo.GetByID(rec.ChapterID)
+	if err != nil {
+		return fmt.Errorf("chapter %d not found: %w", rec.ChapterID, err)
+	}
+	chapter.Content = rec.SnapshotContent
+	if err := s.chapterRepo.Update(chapter); err != nil {
+		return fmt.Errorf("restore chapter content: %w", err)
+	}
+	rec.Status = "rolled_back"
+	return s.reviewRecordRepo.Update(rec)
+}
+
+// ApplyDiffs replaces selected paragraphs in the chapter content.
+// Returns the number of paragraphs actually replaced.
+func (s *QualityControlService) ApplyDiffs(chapterID uint, diffs []ParagraphDiff, recordID uint) (int, error) {
+	if len(diffs) == 0 {
+		return 0, nil
+	}
+	chapter, err := s.chapterRepo.GetByID(chapterID)
+	if err != nil {
+		return 0, fmt.Errorf("chapter %d not found: %w", chapterID, err)
+	}
+
+	paragraphs := strings.Split(chapter.Content, "\n\n")
+	diffMap := make(map[int]string, len(diffs))
+	for _, d := range diffs {
+		diffMap[d.Index] = d.NewContent
+	}
+
+	applied := 0
+	for i := range paragraphs {
+		if newP, ok := diffMap[i]; ok {
+			paragraphs[i] = newP
+			applied++
+		}
+	}
+
+	chapter.Content = strings.Join(paragraphs, "\n\n")
+	if err := s.chapterRepo.Update(chapter); err != nil {
+		return 0, fmt.Errorf("update chapter content: %w", err)
+	}
+
+	// Mark record as applied if provided
+	if recordID > 0 && s.reviewRecordRepo != nil {
+		if rec, err := s.reviewRecordRepo.GetByID(recordID); err == nil {
+			now := time.Now()
+			rec.Status = "applied"
+			rec.AppliedAt = &now
+			_ = s.reviewRecordRepo.Update(rec)
+		}
+	}
+
+	return applied, nil
+}
+
+func (s *QualityControlService) ListIgnoredIssues(chapterID uint) ([]*model.ChapterIgnoredIssue, error) {
+	if s.ignoredIssueRepo == nil {
+		return nil, nil
+	}
+	return s.ignoredIssueRepo.ListByChapter(chapterID)
+}
+
+// IgnoreIssue adds an issue to the ignored list (idempotent by hash).
+func (s *QualityControlService) IgnoreIssue(chapterID uint, issueText, note string) error {
+	if s.ignoredIssueRepo == nil {
+		return fmt.Errorf("ignore repo not wired")
+	}
+	h := sha256.Sum256([]byte(issueText))
+	hash := hex.EncodeToString(h[:])
+	item := &model.ChapterIgnoredIssue{
+		ChapterID: chapterID,
+		IssueText: issueText,
+		IssueHash: hash,
+		Note:      note,
+	}
+	return s.ignoredIssueRepo.Create(item)
+}
+
+func (s *QualityControlService) UnignoreIssue(issueID uint) error {
+	if s.ignoredIssueRepo == nil {
+		return fmt.Errorf("ignore repo not wired")
+	}
+	return s.ignoredIssueRepo.DeleteByID(issueID)
 }

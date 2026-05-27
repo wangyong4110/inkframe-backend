@@ -1,8 +1,11 @@
 package service
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -214,6 +217,80 @@ func (s *McpService) BindTool(modelID, toolID uint) error {
 func (s *McpService) UnbindTool(modelID, toolID uint) error {
 	return s.db.Where("model_id = ? AND mcp_tool_id = ?", modelID, toolID).
 		Delete(&model.ModelMcpBinding{}).Error
+}
+
+// GetByName 按工具名称查找 MCP 工具
+func (s *McpService) GetByName(name string) (*model.McpTool, error) {
+	var tool model.McpTool
+	if err := s.db.Where("name = ?", name).First(&tool).Error; err != nil {
+		return nil, err
+	}
+	return &tool, nil
+}
+
+// InvokeTool 调用指定名称的 MCP 工具（向其 Endpoint 发送 POST 请求）
+// params 以 JSON 形式作为请求体发送，响应 JSON 解析后作为 output 返回。
+// 若工具未启用（is_active=false）则返回错误。
+func (s *McpService) InvokeTool(ctx context.Context, toolName string, params map[string]interface{}) (map[string]interface{}, error) {
+	tool, err := s.GetByName(toolName)
+	if err != nil {
+		return nil, fmt.Errorf("mcp tool %q not found: %w", toolName, err)
+	}
+	if !tool.IsActive {
+		return nil, fmt.Errorf("mcp tool %q is not active", toolName)
+	}
+	if tool.Endpoint == "" {
+		return nil, fmt.Errorf("mcp tool %q has no endpoint configured", toolName)
+	}
+
+	reqBody, err := json.Marshal(params)
+	if err != nil {
+		return nil, fmt.Errorf("mcp tool %q: marshal params: %w", toolName, err)
+	}
+
+	timeout := time.Duration(tool.Timeout) * time.Second
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, tool.Endpoint, bytes.NewReader(reqBody))
+	if err != nil {
+		return nil, fmt.Errorf("mcp tool %q: create request: %w", toolName, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Add custom headers from tool configuration if any
+	if tool.Headers != "" {
+		var headers map[string]string
+		if jsonErr := json.Unmarshal([]byte(tool.Headers), &headers); jsonErr == nil {
+			for k, v := range headers {
+				req.Header.Set(k, v)
+			}
+		}
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("mcp tool %q: request failed: %w", toolName, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("mcp tool %q: read response: %w", toolName, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nil, fmt.Errorf("mcp tool %q: HTTP %d: %s", toolName, resp.StatusCode, string(body))
+	}
+
+	var output map[string]interface{}
+	if err := json.Unmarshal(body, &output); err != nil {
+		return nil, fmt.Errorf("mcp tool %q: parse response: %w", toolName, err)
+	}
+	return output, nil
 }
 
 // marshalJSON 将 map 序列化为 JSON 字符串；nil map 返回空字符串

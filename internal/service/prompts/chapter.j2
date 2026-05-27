@@ -21,7 +21,7 @@
 
 # 主要角色设定
 {% for char in Characters %}
-- {{ char.Name }}：{{ char.Personality }}
+- {{ char.Name }}（{{ char.Role }}）：{{ char.Description }}
 {% endfor %}
 
 {% if CharacterStates %}
@@ -51,8 +51,13 @@
 {{ UserPrompt }}
 {% endif %}
 
-请开始创作第{{ ChapterNo }}章：
+# 输出规则（最高优先级）
+
+**直接输出正文，不得有任何前置或后置的非正文内容。**
+- 响应的第一行必须是章节标题（第X章 标题），紧接正文，无任何开场白
+- 不输出大纲、内容摘要、段落说明
+- 不输出"由于篇幅限制""以下是片段""如需续写请告知"之类的声明
+- 不输出结尾注释或说明文字
+- 正文写完即止，之后不再追加任何文字
 
 第{{ ChapterNo }}章 {{ Chapter.Title }}
-
-正文（{{ WordCount }}字左右）：

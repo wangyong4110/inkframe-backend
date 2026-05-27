@@ -41,6 +41,16 @@ type Config struct {
 
 	// 背景音乐配置
 	BGM BGMConfig `mapstructure:"bgm"`
+
+	// 联网搜索配置
+	WebSearch WebSearchConfig `mapstructure:"web_search"`
+}
+
+// WebSearchConfig 联网搜索配置
+type WebSearchConfig struct {
+	Provider string `mapstructure:"provider"` // "bing"|"searxng"|"tavily"|""
+	APIKey   string `mapstructure:"api_key"`  // Bing/Tavily key（也可用 WEB_SEARCH_API_KEY 环境变量）
+	Endpoint string `mapstructure:"endpoint"` // SearXNG: http://your-host
 }
 
 // BGMConfig 背景音乐配置

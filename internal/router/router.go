@@ -34,6 +34,11 @@ type Config struct {
 	PlatformHandler    *handler.PlatformHandler
 	AssetHandler       *handler.AssetHandler
 	ImageHandler       *handler.ImageHandler
+	WebSearchHandler       *handler.WebSearchHandler
+	WikiSearchHandler      *handler.WikiSearchHandler
+	StoryPatternHandler    *handler.StoryPatternHandler
+	ImageRefSearchHandler  *handler.ImageRefSearchHandler
+	ColorPaletteHandler    *handler.ColorPaletteHandler
 }
 
 // SetupRouter 配置路由
@@ -270,6 +275,16 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			chapters.POST("/:id/approve", cfg.ChapterHandler.ApproveChapter)
 			chapters.POST("/:id/reject", cfg.ChapterHandler.RejectChapter)
 
+			// AI 审查
+			chapters.POST("/:id/review", cfg.ChapterHandler.ReviewChapter)
+			chapters.GET("/:id/reviews", cfg.ChapterHandler.ListChapterReviews)
+			chapters.GET("/:id/reviews/:rid", cfg.ChapterHandler.GetChapterReview)
+			chapters.POST("/:id/reviews/:rid/rollback", cfg.ChapterHandler.RollbackChapterReview)
+			chapters.POST("/:id/review/apply-diffs", cfg.ChapterHandler.ApplyChapterReviewDiffs)
+			chapters.GET("/:id/ignored-issues", cfg.ChapterHandler.ListChapterIgnoredIssues)
+			chapters.POST("/:id/ignored-issues", cfg.ChapterHandler.IgnoreChapterIssue)
+			chapters.DELETE("/:id/ignored-issues/:iid", cfg.ChapterHandler.UnignoreChapterIssue)
+
 			// 剧情点（章节级）
 			if cfg.PlotPointHandler != nil {
 				chapters.GET("/:id/plot-points", cfg.PlotPointHandler.ListByChapter)
@@ -458,6 +473,26 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			mcpTools.DELETE("/:id", cfg.McpHandler.DeleteMcpTool)
 			mcpTools.POST("/:id/test", cfg.McpHandler.TestMcpTool)
 			mcpTools.GET("/:id/models", cfg.McpHandler.GetMcpToolModels)
+		}
+
+		// 内置工具端点（系统 MCP 工具的 HTTP 后端）
+		toolsGroup := v1.Group("/tools")
+		if cfg.WebSearchHandler != nil {
+			toolsGroup.POST("/web-search", cfg.WebSearchHandler.Search)
+		}
+		if cfg.WikiSearchHandler != nil {
+			toolsGroup.POST("/wiki-search", cfg.WikiSearchHandler.Search)
+		}
+		if cfg.StoryPatternHandler != nil {
+			toolsGroup.POST("/story-pattern", cfg.StoryPatternHandler.Search)
+			toolsGroup.GET("/story-pattern/list", cfg.StoryPatternHandler.ListAll)
+		}
+		if cfg.ImageRefSearchHandler != nil {
+			toolsGroup.POST("/image-ref-search", cfg.ImageRefSearchHandler.Search)
+		}
+		if cfg.ColorPaletteHandler != nil {
+			toolsGroup.POST("/color-palette", cfg.ColorPaletteHandler.Get)
+			toolsGroup.GET("/color-palette/list", cfg.ColorPaletteHandler.ListAll)
 		}
 
 		taskConfigs := v1.Group("/task-configs")

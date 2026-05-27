@@ -214,3 +214,18 @@ bgm:
   dir: ""                  # 本地 BGM 目录，文件名即情绪词，如 tension.mp3 / default.mp3
   jamendo_client_id: ""    # 与 sfx.jamendo_client_id 可相同
   pixabay_key: ""          # 与 sfx.pixabay_key 可相同
+
+# 联网搜索配置（用于章节生成的"联网参考"功能）
+# 启用方式：
+#   1. 配置下方 provider/api_key/endpoint
+#   2. 启动后在 MCP 工具管理页将"联网搜索"工具设为启用
+#   3. 章节生成面板打开"联网参考"开关
+# provider 可选：searxng（推荐国内）| bing | tavily
+# API Key 也可通过 WEB_SEARCH_API_KEY 环境变量传入
+#
+# SearXNG 自托管一键启动（免费，支持百度/必应/Google）：
+#   docker run -d --name searxng -p 8888:8080 -e SEARXNG_SECRET_KEY=mysecret searxng/searxng
+web_search:
+  provider: ""             # "searxng" | "bing" | "tavily" | ""（留空=禁用）
+  api_key: ""              # Bing/Tavily 的 API Key（或用 WEB_SEARCH_API_KEY 环境变量）
+  endpoint: ""             # SearXNG: http://localhost:8888（bing/tavily 留空）

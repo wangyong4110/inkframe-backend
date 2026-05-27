@@ -968,12 +968,17 @@ func (s *NovelAnalysisService) stepGenerateOutline(
 		return nil, fmt.Errorf("GenerateOutline: %w", err)
 	}
 
-	// 若小说描述为空，写入 outline summary
+	// 保存完整大纲 JSON 到 novel.Outline，供章节生成时使用
+	updateFields := map[string]interface{}{}
+	if outlineJSON, err := json.Marshal(outline); err == nil {
+		updateFields["outline"] = string(outlineJSON)
+	}
 	if novel.Description == "" && outline.Summary != "" {
-		if err := s.novelRepo.UpdateFields(novel.ID, map[string]interface{}{
-			"description": outline.Summary,
-		}); err != nil {
-			logger.Printf("NovelAnalysis: update novel description: %v", err)
+		updateFields["description"] = outline.Summary
+	}
+	if len(updateFields) > 0 {
+		if err := s.novelRepo.UpdateFields(novel.ID, updateFields); err != nil {
+			logger.Printf("NovelAnalysis: update novel outline/description: %v", err)
 		}
 	}
 	return outline, nil

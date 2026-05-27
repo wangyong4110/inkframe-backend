@@ -359,8 +359,14 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 		}
 	}
 
+	// 章节写作类任务注入 system prompt，阻止模型输出大纲/前言/元注释
+	sysPmt := ""
+	if chapterTaskTypes[taskType] {
+		sysPmt = novelWritingSystemPrompt
+	}
+
 	// 调用真实AI API
-	result, err := s.callAIWithProvider(context.Background(), tenantID, prompt, &config, providerName, resolvedModel)
+	result, err := s.callAIWithProviderSys(context.Background(), tenantID, prompt, sysPmt, &config, providerName, resolvedModel)
 	if err != nil {
 		return "", fmt.Errorf("AI generation failed: %w", err)
 	}
@@ -424,7 +430,12 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 		}
 	}
 
-	result, err := s.callAIWithProvider(ctx, tenantID, prompt, &config, providerName, resolvedModel)
+	sysPmt := ""
+	if chapterTaskTypes[taskType] {
+		sysPmt = novelWritingSystemPrompt
+	}
+
+	result, err := s.callAIWithProviderSys(ctx, tenantID, prompt, sysPmt, &config, providerName, resolvedModel)
 	if err != nil {
 		return "", fmt.Errorf("AI generation failed: %w", err)
 	}
@@ -512,7 +523,28 @@ func (s *AIService) GenerateWithVision(prompt string, imageURLs []string) (strin
 // callAIWithProvider 调用指定 Provider 的 AI 接口
 // parentCtx 作为父 context；timeout 会在其上叠加（不会超出父 context 的 deadline）。
 // modelOverride 可选，非空时会覆盖 provider 的默认模型（用于小说项目级 ai_model 配置）
+// novelWritingSystemPrompt is injected as the system role for all chapter/scene writing tasks.
+// It prevents the model from adding preambles, outlines, or meta-commentary.
+const novelWritingSystemPrompt = `你是一个小说正文生成引擎，只负责按指令输出小说正文内容。
+
+严格规则（任何情况下不得违反）：
+- 输出内容只能是小说正文，从章节标题行开始，到正文自然结束为止
+- 禁止任何开场白，如"好的""当然可以""非常抱歉""由于篇幅限制"等
+- 禁止在正文外输出大纲、章节摘要、写作建议或元注释
+- 禁止声明字数/篇幅限制，禁止请求用户确认续写
+- 禁止在正文结束后追加任何说明文字
+- 字数不足时直接写到章末钩子，不得截断并附注"待续"类说明`
+
+// chapterTaskTypes is the set of task types that generate novel prose.
+var chapterTaskTypes = map[string]bool{
+	"chapter": true, "chapter_outline": true, "scene_outline": true,
+}
+
 func (s *AIService) callAIWithProvider(parentCtx context.Context, tenantID uint, prompt string, config *model.TaskModelConfig, providerName string, modelOverride ...string) (string, error) {
+	return s.callAIWithProviderSys(parentCtx, tenantID, prompt, "", config, providerName, modelOverride...)
+}
+
+func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID uint, prompt string, systemPrompt string, config *model.TaskModelConfig, providerName string, modelOverride ...string) (string, error) {
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
 	}
@@ -524,10 +556,11 @@ func (s *AIService) callAIWithProvider(parentCtx context.Context, tenantID uint,
 	}
 
 	req := &ai.GenerateRequest{
-		Messages:    []ai.ChatMessage{{Role: "user", Content: prompt}},
-		MaxTokens:   config.MaxTokens,
-		Temperature: config.Temperature,
-		TopP:        config.TopP,
+		Messages:     []ai.ChatMessage{{Role: "user", Content: prompt}},
+		SystemPrompt: systemPrompt,
+		MaxTokens:    config.MaxTokens,
+		Temperature:  config.Temperature,
+		TopP:         config.TopP,
 	}
 	if len(modelOverride) > 0 && modelOverride[0] != "" {
 		req.Model = modelOverride[0]

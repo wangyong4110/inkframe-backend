@@ -124,7 +124,7 @@ type Novel struct {
 
 	// 频道与分类（创作目标）
 	Channel         string `json:"channel" gorm:"size:50"`             // female=女生原创, male=男生原创, publish=出版图书
-	TargetWordCount int    `json:"target_word_count" gorm:"default:0"` // 目标字数（万字）
+	TargetWordCount int    `json:"target_word_count" gorm:"default:0"` // 目标字数（字，如 300000 = 30万字）
 	TargetChapters  int    `json:"target_chapters" gorm:"default:0"`   // 目标章节数
 
 	// 统计
@@ -1447,11 +1447,15 @@ type GenerateChapterRequest struct {
 	NovelID        uint    `json:"novel_id"`
 	ChapterNo      int     `json:"chapter_no" binding:"required,min=1"`
 	Prompt         string  `json:"prompt"`
-	MaxTokens      int     `json:"max_tokens"`
+	WordCount      int     `json:"word_count"`      // 章节目标字数；0=从小说配置推算
+	MaxTokens      int     `json:"max_tokens"`      // LLM max tokens；0=自动；不影响目标字数
 	Temperature    float64 `json:"temperature,omitempty"`    // 0=使用项目配置或系统默认
 	TimeoutSeconds int     `json:"timeout_seconds,omitempty"` // 0=使用项目配置或系统默认
 	ModelOverride  string  `json:"model,omitempty"` // 可选：指定使用的 AI 模型/provider
-	IsStandalone   bool    `json:"is_standalone"`   // true=最终章，要求故事完整收尾；可显式传入，也会由系统根据 chapter_no >= target_chapters 自动推断
+	IsStandalone    bool    `json:"is_standalone"`    // true=最终章，要求故事完整收尾；可显式传入，也会由系统根据 chapter_no >= target_chapters 自动推断
+	WebSearch       bool    `json:"web_search"`       // true=启用联网参考，搜索相关故事片段注入 prompt
+	WikiSearch      bool    `json:"wiki_search"`      // true=启用百科知识查询，注入世界观准确信息
+	UseStoryPattern bool    `json:"use_story_pattern"` // true=启用情节模板，注入叙事结构参考
 }
 
 type CreateCharacterRequest struct {
@@ -1786,6 +1790,57 @@ type StoryboardReview struct {
 	SuggestedInserts  []ShotInsertSuggestion `json:"suggested_inserts,omitempty"` // 建议插入的新镜头
 	SuggestedDeletes  []ShotDeleteSuggestion `json:"suggested_deletes,omitempty"` // 建议删除的镜头
 }
+
+// ─── 章节 AI 审查 ──────────────────────────────────────────────────────────────
+
+// ParagraphFeedback 段落级审查反馈（嵌入 JSON，不单独建表）
+type ParagraphFeedback struct {
+	Index            int      `json:"index"`             // 段落序号(0起)
+	OrigText         string   `json:"orig_text"`         // 原文摘要(前80字)
+	Issues           []string `json:"issues"`
+	Suggestion       string   `json:"suggestion"`
+	SuggestedRewrite string   `json:"suggested_rewrite"` // 建议改写全文
+	Severity         string   `json:"severity"`          // info/warning/error
+}
+
+// ChapterReview AI章节审查报告
+type ChapterReview struct {
+	OverallScore      float64             `json:"overall_score"`
+	NarrativeScore    float64             `json:"narrative_score"`
+	CharacterScore    float64             `json:"character_score"`
+	WritingScore      float64             `json:"writing_score"`
+	PacingScore       float64             `json:"pacing_score"`
+	Summary           string              `json:"summary"`
+	Strengths         []string            `json:"strengths"`
+	Weaknesses        []string            `json:"weaknesses"`
+	GlobalSuggestions []string            `json:"global_suggestions"`
+	ParagraphFeedback []ParagraphFeedback `json:"paragraph_feedback"`
+	RecordID          uint                `json:"record_id,omitempty"`
+}
+
+// ChapterReviewRecord 章节审查历史记录
+type ChapterReviewRecord struct {
+	gorm.Model
+	ChapterID       uint       `json:"chapter_id" gorm:"index;not null"`
+	OverallScore    float64    `json:"overall_score"`
+	Status          string     `json:"status" gorm:"size:20;default:'pending'"` // pending/applied/rolled_back
+	ReviewJSON      string     `json:"-" gorm:"column:review_json;type:text"`
+	SnapshotContent string     `json:"-" gorm:"type:longtext"`
+	AppliedAt       *time.Time `json:"applied_at,omitempty"`
+}
+
+func (ChapterReviewRecord) TableName() string { return "ink_chapter_review_record" }
+
+// ChapterIgnoredIssue 被忽略的章节审查建议
+type ChapterIgnoredIssue struct {
+	gorm.Model
+	ChapterID uint   `json:"chapter_id" gorm:"index;not null"`
+	IssueText string `json:"issue_text" gorm:"type:text"`
+	IssueHash string `json:"issue_hash" gorm:"size:64;index"`
+	Note      string `json:"note" gorm:"size:500"`
+}
+
+func (ChapterIgnoredIssue) TableName() string { return "ink_chapter_ignored_issue" }
 
 // ─── 戏剧张力管理模型 ──────────────────────────────────────────────────────────
 

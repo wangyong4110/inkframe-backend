@@ -84,6 +84,7 @@ type HierarchicalContext struct {
 	ArcSummaries     []ArcBrief     // 已完成弧
 	GlobalSummary    string
 	PlotTensionState string         // 当前剧情张力状态（供场景大纲决策参考）
+	Characters       []CharacterBrief // 主要角色设定
 }
 
 type ChapterBrief struct {
@@ -98,6 +99,12 @@ type ArcBrief struct {
 	EndChapter   int
 	Summary      string
 	KeyEvents    string
+}
+
+type CharacterBrief struct {
+	Name        string
+	Role        string
+	Description string
 }
 
 // ──────────────────────────────────────────────
@@ -127,6 +134,17 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 	ctx := &HierarchicalContext{
 		GlobalSummary:    s.buildGlobalSummary(novel),
 		PlotTensionState: s.buildPlotTensionState(novel.ID, currentChapterNo),
+	}
+
+	// 加载角色信息（供 globalCtx 与 Characters 模板变量使用）
+	if chars, err := s.characterRepo.ListByNovel(novel.ID); err == nil {
+		for _, c := range chars {
+			ctx.Characters = append(ctx.Characters, CharacterBrief{
+				Name:        c.Name,
+				Role:        c.Role,
+				Description: c.Description,
+			})
+		}
 	}
 
 	// 弧摘要（所有已完成弧 + 当前弧中段预摘要）
@@ -335,6 +353,13 @@ func (s *NarrativeMemoryService) buildGlobalSummary(novel *model.Novel) string {
 func renderHierarchicalContext(ctx *HierarchicalContext) string {
 	var sb strings.Builder
 	sb.WriteString(ctx.GlobalSummary)
+
+	if len(ctx.Characters) > 0 {
+		sb.WriteString("\n\n【主要角色设定】\n")
+		for _, c := range ctx.Characters {
+			sb.WriteString(fmt.Sprintf("- %s（%s）：%s\n", c.Name, c.Role, c.Description))
+		}
+	}
 
 	if ctx.PlotTensionState != "" {
 		sb.WriteString("\n\n【剧情张力状态】\n")

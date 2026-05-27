@@ -1,0 +1,38 @@
+你是一位专业的小说编辑，请对以下章节进行全面的AI审查。
+
+小说类型：{{ Genre }}
+{% if CharacterSummary %}角色信息：{{ CharacterSummary }}{% endif %}
+
+章节内容（段落已编号，从0开始）：
+{{ Content }}
+
+请从以下维度评分（0.0-1.0浮点数）并提供详细反馈：
+1. narrative_score（叙事连贯性）：情节发展是否自然，因果关系是否合理
+2. character_score（角色一致性）：角色行为是否符合其性格，对话是否符合人物身份
+3. writing_score（文笔质量）：语言是否生动，描写是否细腻，有无重复词汇滥用
+4. pacing_score（节奏把控）：场景推进是否流畅，张弛有度，结尾是否留有悬念
+
+对于有明显问题的段落（最多10条），请在paragraph_feedback中逐一指出，并提供suggested_rewrite（完整改写建议，不是摘要）。severity级别：error（严重影响阅读）/warning（有待改进）/info（小建议）。
+
+只返回如下JSON格式，不要包含任何markdown或说明文字：
+{
+  "overall_score": 0.85,
+  "narrative_score": 0.8,
+  "character_score": 0.9,
+  "writing_score": 0.85,
+  "pacing_score": 0.8,
+  "summary": "总体评价",
+  "strengths": ["优点1", "优点2"],
+  "weaknesses": ["不足1", "不足2"],
+  "global_suggestions": ["整体建议1", "整体建议2"],
+  "paragraph_feedback": [
+    {
+      "index": 2,
+      "orig_text": "原文前80字...",
+      "issues": ["具体问题描述"],
+      "suggestion": "简要改进方向",
+      "suggested_rewrite": "完整改写后的段落内容",
+      "severity": "warning"
+    }
+  ]
+}

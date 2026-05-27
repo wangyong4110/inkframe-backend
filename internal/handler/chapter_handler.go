@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 
@@ -583,3 +584,240 @@ func (h *ChapterHandler) BatchSummarizeChapters(c *gin.Context) {
 	}(task.TaskID)
 	respondAccepted(c, task.TaskID, "章节摘要批量生成任务已提交")
 }
+
+// ─── Chapter AI Review Handlers ──────────────────────────────────────────────
+
+// ReviewChapter 启动章节 AI 审查（异步任务）
+// POST /api/v1/chapters/:id/review
+func (h *ChapterHandler) ReviewChapter(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Provider string `json:"provider"`
+	}
+	_ = c.ShouldBindJSON(&req)
+
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterReview, "章节 AI 审查", "chapter", uint(id))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[ChapterHandler] ReviewChapter task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
+
+		review, reviewErr := h.qualityService.ReviewChapter(c.Request.Context(), uint(id), req.Provider)
+		if reviewErr != nil {
+			logger.Printf("[ChapterHandler] ReviewChapter task %s failed: chapterID=%d err=%v", taskID, id, reviewErr)
+			h.taskSvc.Fail(taskID, reviewErr.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.UpdateProgress(taskID, 90)           //nolint:errcheck
+		h.taskSvc.Complete(taskID, review)              //nolint:errcheck
+	}(task.TaskID)
+
+	respondAccepted(c, task.TaskID, "章节审查任务已提交")
+}
+
+// ListChapterReviews 获取章节审查历史列表
+// GET /api/v1/chapters/:id/reviews
+func (h *ChapterHandler) ListChapterReviews(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	records, err := h.qualityService.ListReviewRecords(uint(id))
+	if err != nil {
+		respondOK(c, []struct{}{})
+		return
+	}
+
+	type recordResp struct {
+		ID           uint                 `json:"id"`
+		CreatedAt    string               `json:"created_at"`
+		OverallScore float64              `json:"overall_score"`
+		Status       string               `json:"status"`
+		AppliedAt    *string              `json:"applied_at,omitempty"`
+		Review       *model.ChapterReview `json:"review,omitempty"`
+	}
+	resp := make([]recordResp, 0, len(records))
+	for _, rec := range records {
+		r := recordResp{
+			ID:           rec.ID,
+			CreatedAt:    rec.CreatedAt.Format("2006-01-02 15:04:05"),
+			OverallScore: rec.OverallScore,
+			Status:       rec.Status,
+		}
+		if rec.AppliedAt != nil {
+			s := rec.AppliedAt.Format("2006-01-02 15:04:05")
+			r.AppliedAt = &s
+		}
+		if rec.ReviewJSON != "" {
+			var rv model.ChapterReview
+			if err := json.Unmarshal([]byte(rec.ReviewJSON), &rv); err == nil {
+				r.Review = &rv
+			}
+		}
+		resp = append(resp, r)
+	}
+	respondOK(c, resp)
+}
+
+// GetChapterReview 获取单条审查记录详情（含完整 ReviewJSON）
+// GET /api/v1/chapters/:id/reviews/:rid
+func (h *ChapterHandler) GetChapterReview(c *gin.Context) {
+	_, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	rid, ok := parseID(c, "rid")
+	if !ok {
+		return
+	}
+
+	rec, err := h.qualityService.GetReviewRecord(uint(rid))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "record not found")
+		return
+	}
+
+	type resp struct {
+		ID           uint                 `json:"id"`
+		CreatedAt    string               `json:"created_at"`
+		OverallScore float64              `json:"overall_score"`
+		Status       string               `json:"status"`
+		AppliedAt    *string              `json:"applied_at,omitempty"`
+		Review       *model.ChapterReview `json:"review,omitempty"`
+	}
+	r := resp{
+		ID:           rec.ID,
+		CreatedAt:    rec.CreatedAt.Format("2006-01-02 15:04:05"),
+		OverallScore: rec.OverallScore,
+		Status:       rec.Status,
+	}
+	if rec.AppliedAt != nil {
+		s := rec.AppliedAt.Format("2006-01-02 15:04:05")
+		r.AppliedAt = &s
+	}
+	if rec.ReviewJSON != "" {
+		var rv model.ChapterReview
+		if err := json.Unmarshal([]byte(rec.ReviewJSON), &rv); err == nil {
+			r.Review = &rv
+		}
+	}
+	respondOK(c, r)
+}
+
+// RollbackChapterReview 回滚章节内容到审查快照
+// POST /api/v1/chapters/:id/reviews/:rid/rollback
+func (h *ChapterHandler) RollbackChapterReview(c *gin.Context) {
+	_, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	rid, ok := parseID(c, "rid")
+	if !ok {
+		return
+	}
+
+	if err := h.qualityService.RollbackReview(uint(rid)); err != nil {
+		respondErr(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"rolled_back": true})
+}
+
+// ApplyChapterReviewDiffs 应用选中的段落改写
+// POST /api/v1/chapters/:id/review/apply-diffs
+func (h *ChapterHandler) ApplyChapterReviewDiffs(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Diffs    []service.ParagraphDiff `json:"diffs" binding:"required"`
+		RecordID uint                    `json:"record_id"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+
+	count, err := h.qualityService.ApplyDiffs(uint(id), req.Diffs, req.RecordID)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"updated_paragraphs": count})
+}
+
+// ListChapterIgnoredIssues 列出已忽略的审查问题
+// GET /api/v1/chapters/:id/ignored-issues
+func (h *ChapterHandler) ListChapterIgnoredIssues(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	items, err := h.qualityService.ListIgnoredIssues(uint(id))
+	if err != nil {
+		respondOK(c, []struct{}{})
+		return
+	}
+	respondOK(c, items)
+}
+
+// IgnoreChapterIssue 永久忽略某条审查建议
+// POST /api/v1/chapters/:id/ignored-issues
+func (h *ChapterHandler) IgnoreChapterIssue(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	var req struct {
+		IssueText string `json:"issue_text" binding:"required"`
+		Note      string `json:"note"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+
+	if err := h.qualityService.IgnoreIssue(uint(id), req.IssueText, req.Note); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"ignored": true})
+}
+
+// UnignoreChapterIssue 取消忽略
+// DELETE /api/v1/chapters/:id/ignored-issues/:iid
+func (h *ChapterHandler) UnignoreChapterIssue(c *gin.Context) {
+	_, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	iid, ok := parseID(c, "iid")
+	if !ok {
+		return
+	}
+
+	if err := h.qualityService.UnignoreIssue(uint(iid)); err != nil {
+		respondErr(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondOK(c, nil)
+}
+

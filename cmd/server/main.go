@@ -86,6 +86,11 @@ func main() {
 	// 3b. 预置默认数据（INSERT IGNORE，幂等安全）
 	seedDefaultData(db)
 	seedAIModels(db)
+	seedWebSearchMcpTool(db, cfg)
+	seedWikiSearchMcpTool(db, cfg)
+	seedStoryPatternMcpTool(db, cfg)
+	seedImageRefSearchMcpTool(db, cfg)
+	seedColorPaletteMcpTool(db, cfg)
 
 	// 4. 初始化Redis
 	redisClient := initRedis(cfg)
@@ -120,6 +125,9 @@ func main() {
 	}, db)
 	logger.Printf("Storage: type=%s", cfg.Storage.Type)
 
+	// 注入 MCP 服务到章节生成（用于联网搜索）
+	services.ChapterService.WithMcpService(services.McpService)
+
 	// 注入存储服务
 	services.VideoService.WithStorage(storageSvc)
 	services.AIService.WithStorage(storageSvc)
@@ -146,7 +154,7 @@ func main() {
 	services.VideoService.WithSFXService(sfxService)
 
 	// 11. 初始化处理器
-	handlers := initHandlers(services, storageSvc, db, repos)
+	handlers := initHandlers(services, storageSvc, db, repos, cfg)
 
 	// 11a. 种子并发度设置 + 注册运行时变更回调
 	seedConcurrencySettings(repos.SystemSettingRepo, cfg, services.AIService, services.VideoService)
@@ -196,6 +204,11 @@ func main() {
 		PlatformHandler:    handlers.PlatformHandler,
 		AssetHandler:       handlers.AssetHandler,
 		ImageHandler:       handlers.ImageHandler,
+		WebSearchHandler:      handlers.WebSearchHandler,
+		WikiSearchHandler:     handlers.WikiSearchHandler,
+		StoryPatternHandler:   handlers.StoryPatternHandler,
+		ImageRefSearchHandler: handlers.ImageRefSearchHandler,
+		ColorPaletteHandler:   handlers.ColorPaletteHandler,
 	})
 
 	// 12. 创建服务器
@@ -1093,6 +1106,8 @@ func autoMigrate(db *gorm.DB) error {
 		&model.ShotVoiceSegment{},
 		&model.StoryboardReviewRecord{},
 		&model.IgnoredSuggestion{},
+		&model.ChapterReviewRecord{},
+		&model.ChapterIgnoredIssue{},
 		&model.ShotSFXItem{},
 		&model.VideoBGMSegment{},
 		&model.RewriteProject{},
@@ -1413,6 +1428,8 @@ type Repositories struct {
 	ShotVoiceSegmentRepo       *repository.ShotVoiceSegmentRepository
 	StoryboardReviewRecordRepo  *repository.StoryboardReviewRecordRepository
 	IgnoredSuggestionRepo       *repository.IgnoredSuggestionRepository
+	ChapterReviewRecordRepo     *repository.ChapterReviewRecordRepository
+	ChapterIgnoredIssueRepo     *repository.ChapterIgnoredIssueRepository
 	ShotSFXItemRepo         *repository.ShotSFXItemRepository
 	VideoBGMSegmentRepo     *repository.VideoBGMSegmentRepository
 	RewriteProjectRepo           *repository.RewriteProjectRepository
@@ -1481,6 +1498,8 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		ShotVoiceSegmentRepo:       repository.NewShotVoiceSegmentRepository(db),
 		StoryboardReviewRecordRepo: repository.NewStoryboardReviewRecordRepository(db),
 		IgnoredSuggestionRepo:      repository.NewIgnoredSuggestionRepository(db),
+		ChapterReviewRecordRepo:    repository.NewChapterReviewRecordRepository(db),
+		ChapterIgnoredIssueRepo:    repository.NewChapterIgnoredIssueRepository(db),
 		ShotSFXItemRepo:         repository.NewShotSFXItemRepository(db),
 		VideoBGMSegmentRepo:     repository.NewVideoBGMSegmentRepository(db),
 		RewriteProjectRepo:           repository.NewRewriteProjectRepository(db, redis),
@@ -1651,7 +1670,8 @@ func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *
 		WithChapterRepo(repos.ChapterRepo)
 
 	// 质量控制服务
-	qualitySvc := service.NewQualityControlService(aiSvc, repos.ChapterRepo, repos.NovelRepo)
+	qualitySvc := service.NewQualityControlService(aiSvc, repos.ChapterRepo, repos.NovelRepo).
+		WithReviewRepos(repos.ChapterReviewRecordRepo, repos.ChapterIgnoredIssueRepo)
 
 	return &coreSvcs{AI: aiSvc, Model: modelSvc, Task: taskSvc, PlotPoint: plotPointSvc, Quality: qualitySvc}
 }
@@ -1716,7 +1736,8 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 	chapterSvc := service.NewChapterService(repos.ChapterRepo, repos.NovelRepo, aiSvc, genCtxSvc).
 		WithNarrativeMemory(narrativeMemorySvc).
 		WithDramaticServices(hookChainSvc, satisfactionSvc, conflictArcSvc).
-		WithPlotPointRepo(repos.PlotPointRepo)
+		WithPlotPointRepo(repos.PlotPointRepo).
+		WithCharacterRepo(repos.CharacterRepo)
 
 	// 图像生成服务
 	imageGenSvc := service.NewImageGenerationService(aiSvc)
@@ -1944,10 +1965,15 @@ type Handlers struct {
 	PlatformHandler    *handler.PlatformHandler
 	AssetHandler       *handler.AssetHandler
 	ImageHandler       *handler.ImageHandler
+	WebSearchHandler      *handler.WebSearchHandler
+	WikiSearchHandler     *handler.WikiSearchHandler
+	StoryPatternHandler   *handler.StoryPatternHandler
+	ImageRefSearchHandler *handler.ImageRefSearchHandler
+	ColorPaletteHandler   *handler.ColorPaletteHandler
 }
 
 // initHandlers 初始化处理器
-func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, repos *Repositories) *Handlers {
+func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, repos *Repositories, cfg *config.Config) *Handlers {
 	return &Handlers{
 		NovelHandler: handler.NewNovelHandler(
 			services.NovelService,
@@ -2003,6 +2029,22 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			WithReadingService(services.ReadingService),
 		AssetHandler:    handler.NewAssetHandler(services.AssetService),
 		ImageHandler:    handler.NewImageHandler(services.AIService, repos.NovelRepo),
+		WebSearchHandler: handler.NewWebSearchHandler(
+			service.NewWebSearcher(
+				cfg.WebSearch.Provider,
+				getEnv("WEB_SEARCH_API_KEY", cfg.WebSearch.APIKey),
+				cfg.WebSearch.Endpoint,
+			),
+		),
+		WikiSearchHandler:   handler.NewWikiSearchHandler(service.NewWikiSearcher()),
+		StoryPatternHandler: handler.NewStoryPatternHandler(service.NewStoryPatternService()),
+		ImageRefSearchHandler: handler.NewImageRefSearchHandler(
+			service.NewImageRefSearcher(
+				"pixabay",
+				getEnv("PIXABAY_API_KEY", cfg.SFX.PixabayKey),
+			),
+		),
+		ColorPaletteHandler: handler.NewColorPaletteHandler(service.NewColorPaletteService()),
 	}
 }
 
@@ -2025,6 +2067,109 @@ func seedConcurrencySettings(repo *repository.SystemSettingRepository, cfg *conf
 	}
 	seed("image_concurrency", "图像生成最大并发数", cfg.AI.ImageConcurrency, aiSvc.SetImageConcurrency)
 	seed("video_concurrency", "视频生成最大并发数", cfg.AI.VideoConcurrency, videoSvc.SetVideoConcurrency)
+}
+
+// seedWebSearchMcpTool 幂等写入系统内置 web_search MCP 工具
+// is_active 默认 false（需用户在 MCP 工具管理页手动启用）
+// 仅更新端点，不覆盖用户已修改的 is_active
+func seedWebSearchMcpTool(db *gorm.DB, cfg *config.Config) {
+	port := cfg.Server.Port
+	if port == 0 {
+		port = 8080
+	}
+	endpoint := fmt.Sprintf("http://localhost:%d/api/v1/tools/web-search", port)
+
+	var existing model.McpTool
+	err := db.Where("name = ?", "web_search").First(&existing).Error
+	if err != nil {
+		// Not found — create it
+		tool := model.McpTool{
+			Name:          "web_search",
+			DisplayName:   "联网搜索",
+			Description:   "搜索相关故事片段作为章节生成灵感参考",
+			TransportType: "http",
+			Endpoint:      endpoint,
+			Timeout:       15,
+			IsActive:      false,
+			IsSystem:      true,
+		}
+		if createErr := db.Create(&tool).Error; createErr != nil {
+			logger.Printf("[Seed] web_search MCP tool create failed: %v", createErr)
+			return
+		}
+		logger.Printf("[Seed] web_search MCP tool registered (is_active=false, endpoint=%s)", endpoint)
+	} else {
+		// Already exists — only update endpoint (preserve user's is_active setting)
+		if updateErr := db.Model(&existing).Update("endpoint", endpoint).Error; updateErr != nil {
+			logger.Printf("[Seed] web_search MCP tool update endpoint failed: %v", updateErr)
+		}
+	}
+}
+
+// seedMcpTool 通用幂等写入 MCP 工具（仅更新 endpoint，不覆盖用户 is_active）
+func seedMcpTool(db *gorm.DB, name, displayName, description, endpoint string) {
+	var existing model.McpTool
+	if err := db.Where("name = ?", name).First(&existing).Error; err != nil {
+		tool := model.McpTool{
+			Name:          name,
+			DisplayName:   displayName,
+			Description:   description,
+			TransportType: "http",
+			Endpoint:      endpoint,
+			Timeout:       15,
+			IsActive:      false,
+			IsSystem:      true,
+		}
+		if createErr := db.Create(&tool).Error; createErr != nil {
+			logger.Printf("[Seed] %s MCP tool create failed: %v", name, createErr)
+			return
+		}
+		logger.Printf("[Seed] %s MCP tool registered (is_active=false, endpoint=%s)", name, endpoint)
+	} else {
+		if updateErr := db.Model(&existing).Update("endpoint", endpoint).Error; updateErr != nil {
+			logger.Printf("[Seed] %s MCP tool update endpoint failed: %v", name, updateErr)
+		}
+	}
+}
+
+func seedWikiSearchMcpTool(db *gorm.DB, cfg *config.Config) {
+	port := cfg.Server.Port
+	if port == 0 {
+		port = 8080
+	}
+	seedMcpTool(db, "wiki_search", "百科知识查询",
+		"查询 Wikipedia 百科知识，为章节世界观和术语提供准确信息",
+		fmt.Sprintf("http://localhost:%d/api/v1/tools/wiki-search", port))
+}
+
+func seedStoryPatternMcpTool(db *gorm.DB, cfg *config.Config) {
+	port := cfg.Server.Port
+	if port == 0 {
+		port = 8080
+	}
+	seedMcpTool(db, "story_pattern", "情节结构模板",
+		"提供中文网络小说常见情节模板（逆袭/觉醒/复仇等），注入章节大纲生成以提升叙事结构",
+		fmt.Sprintf("http://localhost:%d/api/v1/tools/story-pattern", port))
+}
+
+func seedImageRefSearchMcpTool(db *gorm.DB, cfg *config.Config) {
+	port := cfg.Server.Port
+	if port == 0 {
+		port = 8080
+	}
+	seedMcpTool(db, "image_ref_search", "图片参考搜索",
+		"搜索 Pixabay/Unsplash 视觉参考图，为分镜/角色/场景图像生成提供风格参考",
+		fmt.Sprintf("http://localhost:%d/api/v1/tools/image-ref-search", port))
+}
+
+func seedColorPaletteMcpTool(db *gorm.DB, cfg *config.Config) {
+	port := cfg.Server.Port
+	if port == 0 {
+		port = 8080
+	}
+	seedMcpTool(db, "color_palette", "场景配色方案",
+		"根据情绪/场景类型返回配色方案，为视频分镜图像生成提供一致的视觉色调",
+		fmt.Sprintf("http://localhost:%d/api/v1/tools/color-palette", port))
 }
 
 // getEnv 获取环境变量
