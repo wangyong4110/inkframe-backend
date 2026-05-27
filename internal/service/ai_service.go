@@ -430,6 +430,12 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 		}
 	}
 
+	// 大纲生成需要较多输出 token（100 章大纲 ≈ 20K+ 字符），
+	// 若用户或项目配置的 maxTokens 低于 16384，自动提升到 16384，避免 JSON 截断。
+	if taskType == "outline" && config.MaxTokens > 0 && config.MaxTokens < 16384 {
+		config.MaxTokens = 16384
+	}
+
 	sysPmt := ""
 	if chapterTaskTypes[taskType] {
 		sysPmt = novelWritingSystemPrompt
@@ -1209,6 +1215,51 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 		return "", err
 	}
 	return resp.URL, nil
+}
+
+// GenerateSFX 使用 DB 中配置的 sfx 类型提供商生成音效，返回 CDN URL 和时长（秒）。
+// prompt: 音效描述，如 "春节烟花声"；duration: 期望时长（秒，3.0~10.0）。
+func (s *AIService) GenerateSFX(ctx context.Context, tenantID uint, prompt string, duration float64) (string, float64, error) {
+	provider, err := s.loadDBSFXProvider(tenantID)
+	if err != nil {
+		return "", 0, err
+	}
+	resp, err := provider.AudioGenerate(ctx, &ai.AudioGenerateRequest{
+		Text:     prompt,
+		Duration: duration,
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	return resp.URL, resp.Duration, nil
+}
+
+// loadDBSFXProvider 从 DB 中取第一个有效的 sfx 类型提供商（文生音效）。
+func (s *AIService) loadDBSFXProvider(tenantID uint) (ai.AIProvider, error) {
+	providers, err := s.providerRepo.ListByTenant(tenantID)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range providers {
+		if !p.IsActive {
+			continue
+		}
+		if strings.ToLower(p.Type) != "sfx" {
+			continue
+		}
+		if !providerHasCredentials(p) {
+			logger.Printf("loadDBSFXProvider: skip sfx provider %q (missing credentials)", p.Name)
+			continue
+		}
+		provider, err := s.getTenantProvider(tenantID, p.Name)
+		if err != nil {
+			logger.Printf("loadDBSFXProvider: failed to instantiate provider %q: %v", p.Name, err)
+			continue
+		}
+		logger.Printf("loadDBSFXProvider: using sfx provider %q", p.Name)
+		return provider, nil
+	}
+	return nil, fmt.Errorf("no sfx providers configured in DB")
 }
 
 // loadDBVoiceProvider 从 DB 中取第一个有效的 voice/tts 类型提供商。

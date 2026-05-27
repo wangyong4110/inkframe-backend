@@ -97,6 +97,7 @@ type ImageGenerateRequest struct {
 	ReferenceImages []string `json:"reference_images,omitempty"` // 多张参考图（优先级高于 ReferenceImage）
 	ControlNets     []ControlNet `json:"control_nets,omitempty"`
 	ConsistencyWeight float64 `json:"consistency_weight,omitempty"` // 0-1，角色一致性强度（影响模型选择和scale）
+	Extra           map[string]interface{} `json:"extra,omitempty"` // 提供者特定扩展参数
 }
 
 // ControlNet 控制网
@@ -119,13 +120,14 @@ type ImageResponse struct {
 
 // AudioGenerateRequest 音频生成请求
 type AudioGenerateRequest struct {
-	Model      string `json:"model"`
-	Text       string `json:"text"`
-	Voice      string `json:"voice"`      // 声音ID
-	Speed      float64 `json:"speed"`     // 语速
-	Pitch      float64 `json:"pitch"`     // 音调
-	Emotion    string `json:"emotion"`    // 情感
-	Language   string `json:"language"`   // 语言
+	Model      string  `json:"model"`
+	Text       string  `json:"text"`
+	Voice      string  `json:"voice"`    // 声音ID（TTS）
+	Speed      float64 `json:"speed"`    // 语速（TTS）
+	Pitch      float64 `json:"pitch"`    // 音调（TTS）
+	Emotion    string  `json:"emotion"`  // 情感（TTS）
+	Language   string  `json:"language"` // 语言（TTS）
+	Duration   float64 `json:"duration"` // 音效时长（秒，文生音效 API 使用，如 Kling SFX）
 }
 
 // AudioResponse 音频响应

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -118,15 +119,27 @@ func (p *KlingProvider) GenerateVideo(ctx context.Context, req *VideoGenerateReq
 		"duration":     int(duration), // Kling API 期望整数而非字符串
 	}
 
+	var submitPath string
 	switch len(allImages) {
 	case 0:
 		// text-to-video，不设置 image 字段
+		submitPath = "/v1/videos/image2video"
 	case 1:
 		// 单图：使用 image_url（兼容所有版本）
 		klingReq["image_url"] = allImages[0]
+		submitPath = "/v1/videos/image2video"
 	default:
-		// 多图：使用 image_list（kling-v1-6+）
-		klingReq["image_list"] = allImages
+		// 多图：使用 multi-image2video 端点，image_list 格式为 [{image: url}]
+		imageList := make([]map[string]string, len(allImages))
+		for i, img := range allImages {
+			imageList[i] = map[string]string{"image": img}
+		}
+		klingReq["image_list"] = imageList
+		// multi-image2video 使用 model_name 字段
+		klingReq["model_name"] = model
+		delete(klingReq, "model")
+		delete(klingReq, "cfg_scale") // multi-image2video 不支持 cfg_scale
+		submitPath = "/v1/videos/multi-image2video"
 	}
 
 	if req.CameraMovement != "" {
@@ -135,7 +148,7 @@ func (p *KlingProvider) GenerateVideo(ctx context.Context, req *VideoGenerateReq
 		}
 	}
 
-	respBody, status, err := p.doRequest(ctx, "POST", "/v1/videos/image2video", klingReq)
+	respBody, status, err := p.doRequest(ctx, "POST", submitPath, klingReq)
 	if err != nil {
 		return nil, fmt.Errorf("kling generate request failed: %w", err)
 	}
@@ -159,16 +172,33 @@ func (p *KlingProvider) GenerateVideo(ctx context.Context, req *VideoGenerateReq
 		return nil, fmt.Errorf("kling API error: code=%d, message=%s", result.Code, result.Message)
 	}
 
+	taskID := result.Data.TaskID
+	if submitPath == "/v1/videos/multi-image2video" {
+		// 用前缀标记，GetVideoStatus/GetVideoURL 据此选择正确的查询端点
+		taskID = "multi:" + taskID
+	}
+
 	return &VideoTask{
-		TaskID:   result.Data.TaskID,
+		TaskID:   taskID,
 		Status:   result.Data.Status,
 		Provider: p.GetName(),
 	}, nil
 }
 
+// klingVideoTaskPath 根据 taskID 前缀返回正确的查询路径。
+// "multi:<id>" → /v1/videos/multi-image2video/<id>
+// "<id>"       → /v1/videos/image2video/<id>
+func klingVideoTaskPath(taskID string) (path string, rawID string) {
+	if strings.HasPrefix(taskID, "multi:") {
+		rawID = taskID[6:]
+		return "/v1/videos/multi-image2video/" + rawID, rawID
+	}
+	return "/v1/videos/image2video/" + taskID, taskID
+}
+
 // GetVideoStatus 查询视频任务状态
 func (p *KlingProvider) GetVideoStatus(ctx context.Context, taskID string) (*VideoTaskStatus, error) {
-	path := fmt.Sprintf("/v1/videos/image2video/%s", taskID)
+	path, _ := klingVideoTaskPath(taskID)
 	respBody, status, err := p.doRequest(ctx, "GET", path, nil)
 	if err != nil {
 		return nil, fmt.Errorf("kling status request failed: %w", err)
@@ -206,7 +236,7 @@ func (p *KlingProvider) GetVideoStatus(ctx context.Context, taskID string) (*Vid
 
 // GetVideoURL 获取已完成任务的视频 URL
 func (p *KlingProvider) GetVideoURL(ctx context.Context, taskID string) (string, error) {
-	path := fmt.Sprintf("/v1/videos/image2video/%s", taskID)
+	path, _ := klingVideoTaskPath(taskID)
 	respBody, status, err := p.doRequest(ctx, "GET", path, nil)
 	if err != nil {
 		return "", fmt.Errorf("kling get video request failed: %w", err)
@@ -215,33 +245,52 @@ func (p *KlingProvider) GetVideoURL(ctx context.Context, taskID string) (string,
 		return "", fmt.Errorf("kling get video failed: status %d", status)
 	}
 
-	var result struct {
-		Code int    `json:"code"`
+	// 用 RawMessage 兼容两种 task_result 结构：
+	//   image2video:       task_result 为数组 [{video:{url}}]
+	//   multi-image2video: task_result 为对象 {videos:[{url}]}
+	var envelope struct {
+		Code int `json:"code"`
 		Data struct {
-			TaskStatus string `json:"task_status"`
-			Works      []struct {
-				Video struct {
-					URL string `json:"url"`
-				} `json:"video"`
-			} `json:"task_result"`
+			TaskStatus string          `json:"task_status"`
+			TaskResult json.RawMessage `json:"task_result"`
 		} `json:"data"`
 	}
 
-	if err := json.Unmarshal(respBody, &result); err != nil {
+	if err := json.Unmarshal(respBody, &envelope); err != nil {
 		return "", fmt.Errorf("kling parse video URL failed: %w", err)
 	}
 
 	// Kling API 不同版本可能返回 "succeed" 或 "success"
-	switch result.Data.TaskStatus {
+	switch envelope.Data.TaskStatus {
 	case "succeed", "success", "completed":
 		// 任务完成，继续获取 URL
 	default:
-		return "", fmt.Errorf("kling task not completed: status=%s", result.Data.TaskStatus)
+		return "", fmt.Errorf("kling task not completed: status=%s", envelope.Data.TaskStatus)
 	}
 
-	if len(result.Data.Works) == 0 {
-		return "", fmt.Errorf("kling: no video works returned")
+	// 尝试 multi-image2video 格式：{videos:[{url}]}
+	var multiResult struct {
+		Videos []struct {
+			URL string `json:"url"`
+		} `json:"videos"`
+	}
+	if err := json.Unmarshal(envelope.Data.TaskResult, &multiResult); err == nil && len(multiResult.Videos) > 0 {
+		if multiResult.Videos[0].URL != "" {
+			return multiResult.Videos[0].URL, nil
+		}
 	}
 
-	return result.Data.Works[0].Video.URL, nil
+	// 尝试 image2video 旧格式：[{video:{url}}]
+	var works []struct {
+		Video struct {
+			URL string `json:"url"`
+		} `json:"video"`
+	}
+	if err := json.Unmarshal(envelope.Data.TaskResult, &works); err == nil && len(works) > 0 {
+		if works[0].Video.URL != "" {
+			return works[0].Video.URL, nil
+		}
+	}
+
+	return "", fmt.Errorf("kling: no video URL in result")
 }

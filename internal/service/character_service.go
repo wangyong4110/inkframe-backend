@@ -1031,10 +1031,13 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 			if charAppearance == "" {
 				charAppearance = char.Description
 			}
+			// 从 VisualPrompt / Description 推断性别，注入到所有生成调用中以锁定性别特征。
+			// VisualPrompt 由 AI 生成，通常以 "1girl" / "1boy" 开头，识别率极高。
+			gender := InferGenderTag(char.VisualPrompt, char.Description)
 
 			// 1. 面部特写（兼头像）：force 时无论是否已有图片都重新生成
 			if force || char.FaceCloseup == "" {
-				faceImg, faceErr := imgSvc.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, charAppearance, imageStyle, "", char.Portrait, provider)
+				faceImg, faceErr := imgSvc.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, char.Portrait, provider)
 				if faceErr != nil {
 					logger.Printf("[CharacterService] BatchGenerateImages: face closeup char %d (%s) failed: %v", char.ID, char.Name, faceErr)
 					charFailed = true
@@ -1047,7 +1050,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 
 			// 2. 三视图（使用面部特写或已有头像作为参考）：force 时无论是否已有都重新生成
 			if force || char.ThreeViewSheet == "" {
-				threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, charAppearance, imageStyle, "", char.Portrait, provider)
+				threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, char.Portrait, provider)
 				if threeErr != nil {
 					logger.Printf("[CharacterService] BatchGenerateImages: three-view char %d (%s) failed: %v", char.ID, char.Name, threeErr)
 					charFailed = true
@@ -1119,6 +1122,33 @@ func (s *ImageGenerationService) GenerateCharacterImage(req *model.GenerateImage
 		return nil, err
 	}
 	return &GeneratedCharacterImage{URL: image.URL, Description: req.Description}, nil
+}
+
+// InferGenderTag extracts gender ("male" / "female" / "") from a character's VisualPrompt or
+// Description. VisualPrompt is AI-generated and typically starts with booru tokens (1girl / 1boy),
+// so those are checked first. Keyword fallback handles plain-text descriptions.
+// The result is passed to image generation functions to lock gender across all generated images.
+func InferGenderTag(visualPrompt, description string) string {
+	combined := strings.ToLower(visualPrompt + " " + description)
+	// Booru tokens — highest confidence; AI-generated VisualPrompt almost always starts with these.
+	if strings.Contains(combined, "1girl") || strings.Contains(combined, "1woman") {
+		return "female"
+	}
+	if strings.Contains(combined, "1boy") || strings.Contains(combined, "1man") {
+		return "male"
+	}
+	// Ordered keyword fallback — check female before male to avoid "woman"⊃"man" substring collisions.
+	for _, w := range []string{"female", "woman", "girl", "lady", "princess", "queen", "她", "女性", "女子", "女孩", "少女", "姑娘", "女士"} {
+		if strings.Contains(combined, w) {
+			return "female"
+		}
+	}
+	for _, w := range []string{"male", "man", "boy", "lord", "prince", "king", "他", "男性", "男子", "男孩", "少年", "男生"} {
+		if strings.Contains(combined, w) {
+			return "male"
+		}
+	}
+	return ""
 }
 
 // resolveStyleDesc maps image_style ID to an AI-prompt-friendly style description.

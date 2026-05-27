@@ -554,6 +554,19 @@ func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTa
 	} else {
 		logger.Printf("[SFXService] shot %d Freesound miss tag=%q", shot.ID, item.Tag)
 	}
+	// AI 文生音效（Kling SFX 等 sfx 类型提供商）
+	if s.aiSvc != nil {
+		sfxDur := maxDur
+		if sfxDur <= 0 {
+			sfxDur = 5
+		}
+		if u, dur, err := s.aiSvc.GenerateSFX(ctx, tenantID, item.Tag, sfxDur); err == nil && u != "" {
+			logger.Printf("[SFXService] shot %d AI-SFX hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
+			return sfxHit{url: u, source: "ai-sfx", durationSecs: dur}
+		} else if err != nil {
+			logger.Printf("[SFXService] shot %d AI-SFX failed tag=%q: %v", shot.ID, item.Tag, err)
+		}
+	}
 	// ElevenLabs：每个 tag 独立生成，避免多 tag 混音成一条不可分离的音频
 	if u, dur, err := s.generateElevenLabsForTag(ctx, item, shot); err == nil && u != "" {
 		logger.Printf("[SFXService] shot %d ElevenLabs hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)

@@ -741,6 +741,27 @@ func seedAIModels(db *gorm.DB) {
 				"zh_female_vv_uranus_bigtts", "zh_female_xiaohe_uranus_bigtts",
 				"zh_male_m191_uranus_bigtts", "zh_male_taocheng_uranus_bigtts",
 			}},
+		// 百度语音合成
+		{"baidu-tts", "百度语音合成", "voice", "https://tsn.baidu.com", true,
+			[]string{"0", "1", "3", "4", "5", "103", "106", "110", "111"}},
+		// MiniMax 语音合成
+		{"minimax-tts", "MiniMax 语音合成", "voice", "https://api.minimax.chat/v1", true,
+			[]string{"female-shaonv", "female-yujie", "male-qn-qingse", "male-qn-jingying"}},
+		// 阿里云 CosyVoice
+		{"aliyun-tts", "阿里云 CosyVoice", "voice", "https://dashscope.aliyuncs.com", false,
+			[]string{"longxiaochun", "longxiaoxia", "longxiaobai", "longfei"}},
+		// 腾讯云语音合成
+		{"tencent-tts", "腾讯云语音合成", "voice", "https://tts.tencentcloudapi.com", true,
+			[]string{"101001", "101002", "101011", "101012"}},
+		// 可灵文生音效（与视频生成共用 API Key）
+		{"kling-sfx", "可灵文生音效", "sfx", "https://api.klingai.com", false,
+			[]string{"3s", "5s", "7s", "10s"}},
+		// 可灵语音合成（与视频生成共用 API Key）
+		{"kling-tts", "可灵语音合成", "voice", "https://api.klingai.com", false,
+			[]string{"zh_female_story", "zh_male_story", "oversea_male1", "oversea_female1"}},
+		// 可灵图像生成（与视频生成共用 API Key）
+		{"kling-image", "可灵图像生成", "image", "https://api.klingai.com", false,
+			[]string{"kling-v1", "kling-v1-5", "kling-v2", "kling-v2-1", "kling-v3"}},
 	}
 
 	llmTasks := []string{"chapter", "outline", "storyboard", "quality_check"}
@@ -890,6 +911,92 @@ func seedAIModels(db *gorm.DB) {
 		{"doubao-speech-v1", "saturn_zh_female_tiaopigongzhu_tob", "调皮公主（角色）", []string{"voice_gen"}, 0.90, 0},
 		{"doubao-speech-v1", "saturn_zh_male_shuanglangshaonian_tob", "爽朗少年（角色）", []string{"voice_gen"}, 0.90, 0},
 		{"doubao-speech-v1", "saturn_zh_male_tiancaitongzhuo_tob", "天才同桌（角色）", []string{"voice_gen"}, 0.90, 0},
+		// ── 百度语音合成 ────────────────────────────────────────────────
+		{"baidu-tts", "0", "度小美（标准女声）", []string{"voice_gen"}, 0.85, 0},
+		{"baidu-tts", "1", "度小宇（标准男声）", []string{"voice_gen"}, 0.85, 0},
+		{"baidu-tts", "3", "度逍遥（情感男声/磁性）", []string{"voice_gen"}, 0.87, 0},
+		{"baidu-tts", "4", "度丫丫（情感童声/女）", []string{"voice_gen"}, 0.85, 0},
+		{"baidu-tts", "5", "度小娇（情感女声）", []string{"voice_gen"}, 0.87, 0},
+		{"baidu-tts", "103", "度米朵（精品童声/女）", []string{"voice_gen"}, 0.88, 0},
+		{"baidu-tts", "106", "度博文（精品情感男声）", []string{"voice_gen"}, 0.88, 0},
+		{"baidu-tts", "110", "度小童（精品童声/男）", []string{"voice_gen"}, 0.88, 0},
+		{"baidu-tts", "111", "度小萌（精品童声/女）", []string{"voice_gen"}, 0.88, 0},
+		// ── MiniMax 语音合成 ─────────────────────────────────────────────
+		{"minimax-tts", "female-shaonv", "少女音（年轻女/活泼）", []string{"voice_gen"}, 0.91, 0},
+		{"minimax-tts", "female-yujie", "御姐音（成熟女/知性）", []string{"voice_gen"}, 0.91, 0},
+		{"minimax-tts", "female-tianmei", "甜美音（女/甜蜜）", []string{"voice_gen"}, 0.90, 0},
+		{"minimax-tts", "female-qingxin", "清新音（女/清新）", []string{"voice_gen"}, 0.90, 0},
+		{"minimax-tts", "male-qn-qingse", "青涩青年音（男/年轻）", []string{"voice_gen"}, 0.91, 0},
+		{"minimax-tts", "male-qn-jingying", "精英青年音（男/知性）", []string{"voice_gen"}, 0.91, 0},
+		{"minimax-tts", "male-qn-badao", "霸道青年音（男/有力）", []string{"voice_gen"}, 0.90, 0},
+		{"minimax-tts", "male-qn-daxuesheng", "大学生音（男/活力）", []string{"voice_gen"}, 0.90, 0},
+		{"minimax-tts", "presenter_male", "男主持（专业）", []string{"voice_gen"}, 0.91, 0},
+		{"minimax-tts", "presenter_female", "女主持（专业）", []string{"voice_gen"}, 0.91, 0},
+		{"minimax-tts", "audiobook_male_1", "有声书男声1", []string{"voice_gen"}, 0.92, 0},
+		{"minimax-tts", "audiobook_male_2", "有声书男声2", []string{"voice_gen"}, 0.92, 0},
+		{"minimax-tts", "audiobook_female_1", "有声书女声1", []string{"voice_gen"}, 0.92, 0},
+		{"minimax-tts", "audiobook_female_2", "有声书女声2", []string{"voice_gen"}, 0.92, 0},
+		{"minimax-tts", "male-story", "故事男声（儿童）", []string{"voice_gen"}, 0.90, 0},
+		{"minimax-tts", "female-story", "故事女声（儿童）", []string{"voice_gen"}, 0.90, 0},
+		// ── 阿里云 CosyVoice ─────────────────────────────────────────────
+		{"aliyun-tts", "longxiaochun", "龙小淳（女/知性温暖）", []string{"voice_gen"}, 0.92, 0},
+		{"aliyun-tts", "longxiaoxia", "龙晓夏（女/活泼朝气）", []string{"voice_gen"}, 0.91, 0},
+		{"aliyun-tts", "longxiaobai", "龙小白（男/年轻开朗）", []string{"voice_gen"}, 0.91, 0},
+		{"aliyun-tts", "longfei", "龙飞（男/沉稳自信）", []string{"voice_gen"}, 0.91, 0},
+		{"aliyun-tts", "longjielidou", "龙姐励豆（女/温暖励志）", []string{"voice_gen"}, 0.91, 0},
+		{"aliyun-tts", "longmiaomiao", "龙淼淼（女/儿童活泼）", []string{"voice_gen"}, 0.90, 0},
+		{"aliyun-tts", "longshu", "龙叔（男/叙述沉稳）", []string{"voice_gen"}, 0.92, 0},
+		{"aliyun-tts", "longwan", "龙婉（女/甜美温柔）", []string{"voice_gen"}, 0.91, 0},
+		{"aliyun-tts", "longcheng", "龙橙（男/清晰专业）", []string{"voice_gen"}, 0.91, 0},
+		{"aliyun-tts", "longhua", "龙华（男/成熟稳重）", []string{"voice_gen"}, 0.91, 0},
+		{"aliyun-tts", "longxiang", "龙祥（男/磁性低沉）", []string{"voice_gen"}, 0.91, 0},
+		{"aliyun-tts", "loongbella", "贝拉（英文女声）", []string{"voice_gen"}, 0.91, 0},
+		{"aliyun-tts", "loongbobby", "鲍比（英文男声）", []string{"voice_gen"}, 0.91, 0},
+		// ── 腾讯云语音合成 ────────────────────────────────────────────────
+		{"tencent-tts", "101001", "智言（男/标准）", []string{"voice_gen"}, 0.91, 0},
+		{"tencent-tts", "101002", "智雅（女/标准）", []string{"voice_gen"}, 0.91, 0},
+		{"tencent-tts", "101003", "智燕（女/温暖）", []string{"voice_gen"}, 0.91, 0},
+		{"tencent-tts", "101004", "智晶（女/标准）", []string{"voice_gen"}, 0.91, 0},
+		{"tencent-tts", "101005", "智嘉（男/专业）", []string{"voice_gen"}, 0.91, 0},
+		{"tencent-tts", "101006", "智开（男/播音）", []string{"voice_gen"}, 0.92, 0},
+		{"tencent-tts", "101008", "智浩（男/播音）", []string{"voice_gen"}, 0.92, 0},
+		{"tencent-tts", "101009", "智莉（女/温暖）", []string{"voice_gen"}, 0.91, 0},
+		{"tencent-tts", "101010", "智华（男/年轻）", []string{"voice_gen"}, 0.90, 0},
+		{"tencent-tts", "101011", "智燃（男/活力）", []string{"voice_gen"}, 0.90, 0},
+		{"tencent-tts", "101012", "智雪（女/温柔）", []string{"voice_gen"}, 0.91, 0},
+		{"tencent-tts", "101013", "智希（女/活泼）", []string{"voice_gen"}, 0.90, 0},
+		{"tencent-tts", "101014", "智宁（男/成熟）", []string{"voice_gen"}, 0.91, 0},
+		{"tencent-tts", "101015", "智萌（童/活泼）", []string{"voice_gen"}, 0.90, 0},
+		{"tencent-tts", "101016", "智甜（女/甜美）", []string{"voice_gen"}, 0.90, 0},
+		{"tencent-tts", "101017", "智蓉（女/四川话）", []string{"voice_gen"}, 0.89, 0},
+		{"tencent-tts", "101050", "WeJack（英文男声）", []string{"voice_gen"}, 0.90, 0},
+		{"tencent-tts", "101051", "WeRose（英文女声）", []string{"voice_gen"}, 0.90, 0},
+		// ── 可灵文生音效 ─────────────────────────────────────────────────
+		// model 字段为时长配置，prompt 使用 Text 字段填写音效描述
+		{"kling-sfx", "5s", "5 秒音效（默认）", []string{"sfx_gen"}, 0.92, 0},
+		{"kling-sfx", "3s", "3 秒音效（最短）", []string{"sfx_gen"}, 0.90, 0},
+		{"kling-sfx", "7s", "7 秒音效", []string{"sfx_gen"}, 0.92, 0},
+		{"kling-sfx", "10s", "10 秒音效（最长）", []string{"sfx_gen"}, 0.92, 0},
+		// ── 可灵语音合成 ─────────────────────────────────────────────────
+		// voice_id 作为 model 字段；调用时 req.Voice 填写音色 ID
+		{"kling-tts", "zh_female_story", "故事女声（中文）", []string{"voice_gen"}, 0.92, 0},
+		{"kling-tts", "zh_female_qingxin", "清新女声（中文）", []string{"voice_gen"}, 0.91, 0},
+		{"kling-tts", "zh_female_tianmei", "甜美女声（中文）", []string{"voice_gen"}, 0.91, 0},
+		{"kling-tts", "zh_female_wenrou", "温柔女声（中文）", []string{"voice_gen"}, 0.91, 0},
+		{"kling-tts", "zh_female_zhishixing", "知性女声（中文）", []string{"voice_gen"}, 0.91, 0},
+		{"kling-tts", "zh_male_story", "故事男声（中文）", []string{"voice_gen"}, 0.92, 0},
+		{"kling-tts", "zh_male_zhengpai", "正派男声（中文）", []string{"voice_gen"}, 0.91, 0},
+		{"kling-tts", "zh_male_xinwen", "新闻男声（中文）", []string{"voice_gen"}, 0.91, 0},
+		{"kling-tts", "zh_male_shuhu", "书虎男声（中文）", []string{"voice_gen"}, 0.90, 0},
+		{"kling-tts", "zh_male_qingnian", "青年男声（中文）", []string{"voice_gen"}, 0.90, 0},
+		{"kling-tts", "oversea_male1", "英文男声", []string{"voice_gen"}, 0.90, 0},
+		{"kling-tts", "oversea_female1", "英文女声", []string{"voice_gen"}, 0.90, 0},
+		// ── 可灵图像生成 ─────────────────────────────────────────────────
+		{"kling-image", "kling-v1", "可灵 v1（标准）", []string{"image_gen"}, 0.88, 0},
+		{"kling-image", "kling-v1-5", "可灵 v1.5（图生图增强）", []string{"image_gen"}, 0.90, 0},
+		{"kling-image", "kling-v2", "可灵 v2", []string{"image_gen"}, 0.92, 0},
+		{"kling-image", "kling-v2-1", "可灵 v2.1", []string{"image_gen"}, 0.93, 0},
+		{"kling-image", "kling-v3", "可灵 v3（最新）", []string{"image_gen"}, 0.95, 0},
 	}
 
 	// 1. 确保 provider 记录存在（tenant_id=0 系统级）
@@ -1318,6 +1425,45 @@ func initAIModule(cfg *config.Config) *ai.ModelManager {
 		v1Token := getEnv("DOUBAO_SPEECH_V1_TOKEN", "")
 		v1Cluster := getEnv("DOUBAO_SPEECH_V1_CLUSTER", "")
 		manager.RegisterProvider("doubao-speech-v1", ai.NewDoubaoSpeechV1Provider(v1AppID, v1Token, v1Cluster))
+	}
+
+	// 百度智能云语音合成（API Key + Secret Key OAuth 鉴权）
+	if baiduAPIKey := getEnv("BAIDU_TTS_API_KEY", ""); baiduAPIKey != "" {
+		baiduSecretKey := getEnv("BAIDU_TTS_SECRET_KEY", "")
+		manager.RegisterProvider("baidu-tts", ai.NewBaiduTTSProvider(baiduAPIKey, baiduSecretKey))
+	}
+
+	// MiniMax 语音合成（Bearer Token + GroupID）
+	if minimaxKey := getEnv("MINIMAX_TTS_API_KEY", ""); minimaxKey != "" {
+		minimaxGroupID := getEnv("MINIMAX_TTS_GROUP_ID", "")
+		manager.RegisterProvider("minimax-tts", ai.NewMinimaxTTSProvider(minimaxKey, minimaxGroupID))
+	}
+
+	// 阿里云 CosyVoice 语音合成（DashScope API Key）
+	if aliyunKey := getEnv("ALIYUN_TTS_API_KEY", ""); aliyunKey != "" {
+		manager.RegisterProvider("aliyun-tts", ai.NewAliyunTTSProvider(aliyunKey))
+	}
+
+	// 腾讯云语音合成（SecretId + SecretKey TC3 鉴权）
+	if tencentSecretID := getEnv("TENCENT_TTS_SECRET_ID", ""); tencentSecretID != "" {
+		tencentSecretKey := getEnv("TENCENT_TTS_SECRET_KEY", "")
+		tencentRegion := getEnv("TENCENT_TTS_REGION", "")
+		manager.RegisterProvider("tencent-tts", ai.NewTencentTTSProvider(tencentSecretID, tencentSecretKey, tencentRegion))
+	}
+
+	// 可灵文生音效（复用 KLING_API_KEY，异步任务轮询）
+	if klingSFXKey := getEnv("KLING_API_KEY", cfg.AI.Kling.APIKey); klingSFXKey != "" {
+		manager.RegisterProvider("kling-sfx", ai.NewKlingSFXProvider(klingSFXKey, cfg.AI.Kling.Endpoint))
+	}
+
+	// 可灵语音合成（复用 KLING_API_KEY，异步任务轮询）
+	if klingTTSKey := getEnv("KLING_API_KEY", cfg.AI.Kling.APIKey); klingTTSKey != "" {
+		manager.RegisterProvider("kling-tts", ai.NewKlingTTSProvider(klingTTSKey, cfg.AI.Kling.Endpoint))
+	}
+
+	// 可灵图像生成（复用 KLING_API_KEY，异步任务轮询）
+	if klingImgKey := getEnv("KLING_API_KEY", cfg.AI.Kling.APIKey); klingImgKey != "" {
+		manager.RegisterProvider("kling-image", ai.NewKlingImageProvider(klingImgKey, cfg.AI.Kling.Endpoint))
 	}
 
 	// 为所有 Provider 包装指数退避重试（最多 3 次，基础延迟 500ms）

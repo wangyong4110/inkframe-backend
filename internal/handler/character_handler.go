@@ -310,7 +310,13 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 		if sheetAppearance == "" {
 			sheetAppearance = char.Description
 		}
-		img, err := h.imageGenService.GenerateThreeViewSheet(genCtx, tenantID, char.Name, sheetAppearance, style, "", "", provider)
+		// 用已有头像作为参考图，锁定面部特征；推断性别以锁定性别 token
+		sheetRef := char.Portrait
+		if sheetRef == "" {
+			sheetRef = char.FaceCloseup
+		}
+		sheetGender := service.InferGenderTag(char.VisualPrompt, char.Description)
+		img, err := h.imageGenService.GenerateThreeViewSheet(genCtx, tenantID, char.Name, sheetAppearance, style, sheetGender, sheetRef, provider)
 		if err != nil {
 			logger.Printf("[CharacterHandler] GenerateThreeView task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, "generate three-view sheet failed: "+err.Error()) //nolint:errcheck
@@ -380,7 +386,7 @@ func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
 		if novelTitle != "" {
 			genCtx = service.WithImageStorageHint(genCtx, service.ImageStorageHint{NovelTitle: novelTitle})
 		}
-		// 使用肖像图作为参考（若有），保持面部一致性
+		// 使用肖像图作为参考（若有），保持面部一致性；推断性别以锁定性别 token
 		referenceImage := char.Portrait
 		if referenceImage == "" {
 			referenceImage = char.ThreeViewSheet
@@ -390,7 +396,8 @@ func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
 		if faceAppearance == "" {
 			faceAppearance = char.Description
 		}
-		img, err := h.imageGenService.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, faceAppearance, style, "", referenceImage, provider)
+		faceGender := service.InferGenderTag(char.VisualPrompt, char.Description)
+		img, err := h.imageGenService.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, faceAppearance, style, faceGender, referenceImage, provider)
 		if err != nil {
 			logger.Printf("[CharacterHandler] GenerateFaceCloseup task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, "generate face closeup failed: "+err.Error()) //nolint:errcheck

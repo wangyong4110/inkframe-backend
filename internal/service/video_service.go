@@ -1193,23 +1193,45 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	}
 
 	// 精准匹配：批量加载 shot.CharacterIDs 中的所有角色参考图（最多 maxCompositeImages-1 张，留槽给场景锚点）
+	// 参考图优先级：FaceCloseup > Portrait > ThreeViewSheet
+	// 理由：DreamO IP-Adapter 对高分辨率面部特写效果最佳（720×1280 face vs 三视图中每视角仅约 427px）。
+	// 单角色时同时传 FaceCloseup + ThreeViewSheet，兼顾面部锁定和服装/体型一致性。
 	const maxCharRefs = maxCompositeImages - 1
 	var characterPortraits []string // 可能包含多个角色的图
+	var characterVisualPrompts []string // 角色外观 token 串，用于注入 shot prompt（文本+图像双重约束）
 	var refSources []string
 	if len(shot.CharacterIDs) > 0 {
 		ids := []uint(shot.CharacterIDs)
 		batchChars, batchErr := s.characterRepo.ListByIDs(ids)
 		if batchErr == nil {
+			singleChar := len(batchChars) == 1
 			for _, char := range batchChars {
 				if len(characterPortraits) >= maxCharRefs {
 					break
 				}
-				if char.ThreeViewSheet != "" {
-					characterPortraits = append(characterPortraits, char.ThreeViewSheet)
-					refSources = append(refSources, fmt.Sprintf("charID=%d ThreeViewSheet", char.ID))
-				} else if char.Portrait != "" {
-					characterPortraits = append(characterPortraits, char.Portrait)
-					refSources = append(refSources, fmt.Sprintf("charID=%d Portrait", char.ID))
+				remaining := maxCharRefs - len(characterPortraits)
+				// 收集外观 token 用于 prompt 注入
+				if char.VisualPrompt != "" {
+					characterVisualPrompts = append(characterVisualPrompts, char.VisualPrompt)
+				}
+				// FaceCloseup > Portrait（面部参考）; ThreeViewSheet（服装/体型参考）
+				faceRef := char.FaceCloseup
+				if faceRef == "" {
+					faceRef = char.Portrait
+				}
+				bodyRef := char.ThreeViewSheet
+				if singleChar && remaining >= 2 && faceRef != "" && bodyRef != "" {
+					// 单角色且槽位充足：face + three-view 双引用，同时锁定面部特征和服装设计
+					characterPortraits = append(characterPortraits, faceRef, bodyRef)
+					refSources = append(refSources,
+						fmt.Sprintf("charID=%d FaceCloseup/Portrait", char.ID),
+						fmt.Sprintf("charID=%d ThreeViewSheet", char.ID))
+				} else if faceRef != "" {
+					characterPortraits = append(characterPortraits, faceRef)
+					refSources = append(refSources, fmt.Sprintf("charID=%d FaceCloseup/Portrait", char.ID))
+				} else if bodyRef != "" {
+					characterPortraits = append(characterPortraits, bodyRef)
+					refSources = append(refSources, fmt.Sprintf("charID=%d ThreeViewSheet(fallback)", char.ID))
 				}
 			}
 		}
@@ -1250,12 +1272,19 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 							}
 						}
 						if ok && char != nil {
-							if char.ThreeViewSheet != "" {
+							if char.VisualPrompt != "" {
+								characterVisualPrompts = append(characterVisualPrompts, char.VisualPrompt)
+							}
+							inlineFaceRef := char.FaceCloseup
+							if inlineFaceRef == "" {
+								inlineFaceRef = char.Portrait
+							}
+							if inlineFaceRef != "" {
+								characterPortraits = append(characterPortraits, inlineFaceRef)
+								refSources = append(refSources, fmt.Sprintf("inline name=%q FaceCloseup/Portrait", sc.Name))
+							} else if char.ThreeViewSheet != "" {
 								characterPortraits = append(characterPortraits, char.ThreeViewSheet)
-								refSources = append(refSources, fmt.Sprintf("inline name=%q ThreeViewSheet", sc.Name))
-							} else if char.Portrait != "" {
-								characterPortraits = append(characterPortraits, char.Portrait)
-								refSources = append(refSources, fmt.Sprintf("inline name=%q Portrait", sc.Name))
+								refSources = append(refSources, fmt.Sprintf("inline name=%q ThreeViewSheet(fallback)", sc.Name))
 							}
 						}
 					}
@@ -1280,6 +1309,14 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	promptText := shot.Prompt
 	if promptText == "" {
 		promptText = shot.Description
+	}
+
+	// 角色外观 token 前置注入：与参考图形成文本+图像双重约束，大幅提升角色一致性。
+	// VisualPrompt 由 AI 生成，格式为 "1girl, long silver hair, blue eyes, white hanfu, ..."，
+	// 置于 prompt 最前端能获得最高权重，精确锁定面部、发型、服装特征。
+	// 仅在成功找到角色参考图时注入，避免对无角色镜头造成干扰。
+	if len(characterVisualPrompts) > 0 && len(characterPortraits) > 0 {
+		promptText = strings.Join(characterVisualPrompts, ", ") + ", " + promptText
 	}
 
 	// 场景锚点：注入锁定词，并收集场景参考图
@@ -1708,11 +1745,14 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	if multiImageProviders[providerName] && s.characterRepo != nil && len(shot.CharacterIDs) > 0 {
 		if chars, charErr := s.characterRepo.ListByIDs([]uint(shot.CharacterIDs)); charErr == nil {
 			for _, c := range chars {
+				// FaceCloseup > Portrait > ThreeViewSheet — 与 generateShotReferenceImage 保持一致
 				var img string
-				if c.ThreeViewSheet != "" {
-					img = c.ThreeViewSheet
+				if c.FaceCloseup != "" {
+					img = c.FaceCloseup
 				} else if c.Portrait != "" {
 					img = c.Portrait
+				} else if c.ThreeViewSheet != "" {
+					img = c.ThreeViewSheet
 				}
 				if img != "" && img != referenceImage {
 					extraRefImages = append(extraRefImages, img)

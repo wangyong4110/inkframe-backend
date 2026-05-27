@@ -410,6 +410,20 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 	// 解析结果：兼容两种 AI 输出格式
 	//   格式 A（预期）：{"title":"...","chapters":[...]}  → 用 extractJSONObject 保留完整对象
 	//   格式 B（AI 偶发）：[{"chapter_no":1,...},...]      → 直接输出数组，用 extractJSON 作降级
+	//   格式 C（token 截断）：上述两种格式但 JSON 不完整 → repairTruncatedJSON 修复后重试
+	tryParse := func(s string) (*OutlineResult, error) {
+		out := &OutlineResult{}
+		if e := json.Unmarshal([]byte(s), out); e == nil && len(out.Chapters) > 0 {
+			return out, nil
+		}
+		arr := extractJSON(s)
+		var chapters []ChapterOutline
+		if e2 := json.Unmarshal([]byte(arr), &chapters); e2 == nil && len(chapters) > 0 {
+			return &OutlineResult{Title: novel.Title, Chapters: chapters}, nil
+		}
+		return nil, fmt.Errorf("cannot parse outline JSON")
+	}
+
 	outline := &OutlineResult{}
 	cleaned := extractJSONObject(result)
 	if err := json.Unmarshal([]byte(cleaned), outline); err != nil || len(outline.Chapters) == 0 {
@@ -423,16 +437,90 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 				Chapters: chapters,
 			}
 		} else {
-			parseErr := err
-			if parseErr == nil {
-				parseErr = fmt.Errorf("chapters array empty after parse")
+			// 格式 C：尝试修复截断的 JSON（stopReason=length 时常见）
+			repaired := repairTruncatedJSON(cleaned)
+			if out, repErr := tryParse(repaired); repErr == nil {
+				logger.Printf("GenerateOutline: novel %d JSON was truncated, repaired %d chapters from %d chars",
+					req.NovelID, len(out.Chapters), len(cleaned))
+				outline = out
+			} else {
+				// 也尝试修复数组格式
+				repairedArr := repairTruncatedJSON(cleanedArr)
+				if out, repErr2 := tryParse(repairedArr); repErr2 == nil {
+					logger.Printf("GenerateOutline: novel %d array JSON was truncated, repaired %d chapters",
+						req.NovelID, len(out.Chapters))
+					outline = out
+				} else {
+					parseErr := err
+					if parseErr == nil {
+						parseErr = fmt.Errorf("chapters array empty after parse")
+					}
+					logger.Printf("GenerateOutline: failed to parse AI response for novel %d: %v (object len=%d, array len=%d)",
+						req.NovelID, parseErr, len(cleaned), len(cleanedArr))
+					return nil, fmt.Errorf("outline parse failed: %w", parseErr)
+				}
 			}
-			logger.Printf("GenerateOutline: failed to parse AI response for novel %d: %v (object len=%d, array len=%d)", req.NovelID, parseErr, len(cleaned), len(cleanedArr))
-			return nil, fmt.Errorf("outline parse failed: %w", parseErr)
 		}
 	}
 
 	return outline, nil
+}
+
+// repairTruncatedJSON 尝试修复因 token 截断而不完整的 JSON 字符串。
+// 策略：找到最后一个完整的 '}'，在此截断，然后补全所有未关闭的 '[' 和 '{' 。
+// 适用于大纲/数组等大 JSON 因 maxTokens 限制被截断的场景。
+func repairTruncatedJSON(s string) string {
+	// 找最后一个 '}'
+	last := strings.LastIndex(s, "}")
+	if last < 0 {
+		return s
+	}
+	s = s[:last+1]
+
+	// 逐字符统计未关闭的括号层数（跳过字符串内容）
+	var arrDepth, objDepth int
+	inStr, escape := false, false
+	for _, ch := range s {
+		if escape {
+			escape = false
+			continue
+		}
+		if ch == '\\' && inStr {
+			escape = true
+			continue
+		}
+		if ch == '"' {
+			inStr = !inStr
+			continue
+		}
+		if inStr {
+			continue
+		}
+		switch ch {
+		case '[':
+			arrDepth++
+		case ']':
+			if arrDepth > 0 {
+				arrDepth--
+			}
+		case '{':
+			objDepth++
+		case '}':
+			if objDepth > 0 {
+				objDepth--
+			}
+		}
+	}
+
+	var buf strings.Builder
+	buf.WriteString(s)
+	for i := 0; i < arrDepth; i++ {
+		buf.WriteByte(']')
+	}
+	for i := 0; i < objDepth; i++ {
+		buf.WriteByte('}')
+	}
+	return buf.String()
 }
 
 // OutlineStructure 三幕结构信息
