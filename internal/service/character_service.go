@@ -1248,26 +1248,40 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	}
 
 	// 三合一参考图使用 turnaround/character sheet 专用提示词。
-	// 三视图术语（character design sheet, turnaround）能引导模型在一张图内排列三个视角。
+	// 参考 model sheet 最佳实践：正交视图+标准站姿+无透视变形 是生成一致三视图的关键词组合。
 	var prompt string
 	if style == "realistic" {
 		realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
 		prompt = fmt.Sprintf(
-			"%scharacter design reference sheet, full body turnaround, front view and side view and back view of the same character, "+
-				"3-angle orthographic views arranged horizontally, %s, %s, "+
+			"%scharacter model sheet, full body turnaround, front view and right side view and back view of the same character, "+
+				"3-angle orthographic views arranged horizontally, same character consistent across all views, "+
+				"%s, %s, "+
+				"standard A-pose, arms slightly away from body, "+
+				"complete figure from head to toe, orthographic projection, no perspective distortion, "+
 				"realistic photography style, pure white background, clean composition, high quality, "+
+				"professional character design, "+
 				"no text, no labels, no annotations, no watermarks, no captions",
 			realisticGender, name, appearance)
 	} else {
 		if genderLeader != "" {
 			prompt = fmt.Sprintf(
-				"%s, 角色三视图参考图，同一角色的正面视角+侧面视角+背面视角横向排列，角色设计总表，"+
-					"%s，%s，%s风格，白色背景，线条清晰，三视图均为全身，高品质插画，无文字标注，无标签，无水印",
+				"%s, 角色设定图，同一角色的正面视角+右侧面视角+背面视角横向排列，角色设计总表，"+
+					"三个视角为同一角色，发型轮廓·服装款式·配饰位置三个视角完全一致，"+
+					"%s，%s，"+
+					"标准站姿，双手自然垂放，"+
+					"三视图均为全身，头顶到脚底完整显示，正交视图，无透视变形，"+
+					"%s风格，白色背景，线条清晰，高品质插画，"+
+					"model sheet, character reference sheet, turnaround sheet，无文字标注，无标签，无水印",
 				genderLeader, name, appearance, styleStr)
 		} else {
 			prompt = fmt.Sprintf(
-				"角色三视图参考图，同一角色的正面视角+侧面视角+背面视角横向排列，角色设计总表，"+
-					"%s，%s，%s风格，白色背景，线条清晰，三视图均为全身，高品质插画，无文字标注，无标签，无水印",
+				"角色设定图，同一角色的正面视角+右侧面视角+背面视角横向排列，角色设计总表，"+
+					"三个视角为同一角色，发型轮廓·服装款式·配饰位置三个视角完全一致，"+
+					"%s，%s，"+
+					"标准站姿，双手自然垂放，"+
+					"三视图均为全身，头顶到脚底完整显示，正交视图，无透视变形，"+
+					"%s风格，白色背景，线条清晰，高品质插画，"+
+					"model sheet, character reference sheet, turnaround sheet，无文字标注，无标签，无水印",
 				name, appearance, styleStr)
 		}
 	}
@@ -1280,6 +1294,7 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 
 	// 负向提示词：禁止不同角色出现，但允许同一角色的多个视角；同时禁止文字标注
 	baseNeg := "text, labels, annotations, watermark, signature, caption, speech bubble, character name tag, " +
+		"perspective distortion, foreshortening, dynamic pose, action pose, " +
 		"different characters, multiple distinct people, inconsistent appearance, nsfw, lowres, bad anatomy, poorly drawn"
 	genderNeg := map[string]string{
 		"male":   "female, girl, woman, 女性, 女生, 裙子, 女装, feminine",
@@ -1339,19 +1354,39 @@ func (s *ImageGenerationService) GenerateFaceCloseupImage(ctx context.Context, t
 	if style == "realistic" {
 		realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
 		prompt = fmt.Sprintf(
-			"%sclose-up portrait, face and upper chest, head shot, solo, %s, %s, "+
-				"detailed facial features, expressive eyes, realistic photography, pure white background, high quality portrait photo",
+			"%scharacter face close-up, portrait, front view, bust shot, face centered in frame, "+
+				"solo, %s, %s, "+
+				"soft even lighting, studio light, no harsh shadows, "+
+				"detailed facial features, sharp focus on face, "+
+				"skin texture, hair strand detail, eye catchlight, "+
+				"neutral expression, looking at camera, "+
+				"same character as full body reference, identity preservation, face locked, "+
+				"character face reference sheet, IP-Adapter portrait, "+
+				"pure white background, high quality portrait photo, "+
+				"no text, no labels, no watermarks",
 			realisticGender, name, appearance)
 	} else {
 		if genderLeader != "" {
 			prompt = fmt.Sprintf(
-				"%s, solo, 面部特写，头部特写，胸像，%s，%s，"+
-					"细腻的五官，精致的眼睛，表情生动，%s风格，白色背景，线条清晰，高品质",
+				"%s, solo, 角色面部特写，正面头像，肩部以上构图，面部居中，%s，%s，"+
+					"细腻的五官，精致的眼睛，双眼直视镜头，神情自然，"+
+					"柔和均匀布光，无强烈阴影，面部细节清晰，"+
+					"与全身三视图为同一角色，保持面部特征完全一致，"+
+					"%s风格，白色背景，线条清晰，高品质插画，"+
+					"角色设计参考图，面部锁定参考，"+
+					"character face reference, identity preservation, face lock reference，"+
+					"无文字标注，无标签，无水印",
 				genderLeader, name, appearance, styleStr)
 		} else {
 			prompt = fmt.Sprintf(
-				"solo, 面部特写，头部特写，胸像，%s，%s，"+
-					"细腻的五官，精致的眼睛，表情生动，%s风格，白色背景，线条清晰，高品质",
+				"solo, 角色面部特写，正面头像，肩部以上构图，面部居中，%s，%s，"+
+					"细腻的五官，精致的眼睛，双眼直视镜头，神情自然，"+
+					"柔和均匀布光，无强烈阴影，面部细节清晰，"+
+					"与全身三视图为同一角色，保持面部特征完全一致，"+
+					"%s风格，白色背景，线条清晰，高品质插画，"+
+					"角色设计参考图，面部锁定参考，"+
+					"character face reference, identity preservation, face lock reference，"+
+					"无文字标注，无标签，无水印",
 				name, appearance, styleStr)
 		}
 	}
@@ -1362,7 +1397,9 @@ func (s *ImageGenerationService) GenerateFaceCloseupImage(ctx context.Context, t
 	}
 	logger.Printf("GenerateFaceCloseupImage: %s ref=%v", name, aiRef != "")
 
-	baseNeg := "multiple people, two people, group, 多人, nsfw, lowres, bad anatomy, full body, feet, legs below waist"
+	baseNeg := "multiple people, two people, group, 多人, nsfw, lowres, bad anatomy, full body, feet, legs below waist, " +
+		"text, labels, annotations, watermark, signature, caption, " +
+		"harsh shadows, dramatic lighting, complex background"
 	genderNeg := map[string]string{
 		"male":   "female, girl, woman, 女性, 女生, 裙子, 女装, feminine",
 		"female": "male, man, boy, 男性, 男生, 胡须, beard, mustache, masculine",
