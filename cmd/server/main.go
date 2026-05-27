@@ -195,6 +195,7 @@ func main() {
 		RewriteHandler:     handlers.RewriteHandler,
 		PlatformHandler:    handlers.PlatformHandler,
 		AssetHandler:       handlers.AssetHandler,
+		ImageHandler:       handlers.ImageHandler,
 	})
 
 	// 12. 创建服务器
@@ -1942,6 +1943,7 @@ type Handlers struct {
 	RewriteHandler     *handler.RewriteHandler
 	PlatformHandler    *handler.PlatformHandler
 	AssetHandler       *handler.AssetHandler
+	ImageHandler       *handler.ImageHandler
 }
 
 // initHandlers 初始化处理器
@@ -2000,6 +2002,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			WithChapterService(services.ChapterService).
 			WithReadingService(services.ReadingService),
 		AssetHandler:    handler.NewAssetHandler(services.AssetService),
+		ImageHandler:    handler.NewImageHandler(services.AIService, repos.NovelRepo),
 	}
 }
 

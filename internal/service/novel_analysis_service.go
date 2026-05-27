@@ -797,7 +797,7 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 		if novel.Title != "" {
 			threeViewCtx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title})
 		}
-		go s.generateThreeViewsAsync(threeViewCtx, createdChars)
+		go s.generateThreeViewsAsync(threeViewCtx, tenantID, novel.ImageStyle, createdChars)
 	}
 	logger.Printf("[NovelAnalysis] stepExtractCharacters done: novelID=%d characters created", novel.ID)
 	return nil
@@ -1042,7 +1042,7 @@ func (s *NovelAnalysisService) fail(task *AnalysisTask, msg string) {
 }
 
 // generateThreeViewsAsync 为角色异步生成三视图（正/侧/背面），失败仅记录日志不影响流程
-func (s *NovelAnalysisService) generateThreeViewsAsync(ctx context.Context, chars []*model.Character) {
+func (s *NovelAnalysisService) generateThreeViewsAsync(ctx context.Context, tenantID uint, imageStyle string, chars []*model.Character) {
 	logger.Printf("[NovelAnalysis] generateThreeViewsAsync: characters=%d", len(chars))
 	// 优先为主角和反派生成，配角次之
 	sorted := make([]*model.Character, 0, len(chars))
@@ -1070,7 +1070,7 @@ func (s *NovelAnalysisService) generateThreeViewsAsync(ctx context.Context, char
 
 		// 生成三视图合图（combined turnaround sheet）
 		sheetPrompt := basePrompt + ", character turnaround sheet, front and side and back views side by side, three-view character design sheet, same character multiple angles"
-		url, err := s.aiService.GenerateCharacterThreeView(ctx, 0, "", sheetPrompt, "", "", "")
+		url, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", sheetPrompt, "", imageStyle, "")
 		if err != nil {
 			logger.Printf("NovelAnalysis: three-view sheet for char %d: %v", char.ID, err)
 		} else if url != "" {

@@ -518,6 +518,17 @@ func (s *CharacterService) GetNovelTitle(novelID uint) string {
 	return ""
 }
 
+// GetNovelImageStyle 返回小说的画面风格（image_style），用于图像生成风格一致性。
+func (s *CharacterService) GetNovelImageStyle(novelID uint) string {
+	if s.novelRepo == nil || novelID == 0 {
+		return ""
+	}
+	if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+		return novel.ImageStyle
+	}
+	return ""
+}
+
 // WithChapterCharacterRepo 注入章节角色覆盖仓库（可选）
 func (s *CharacterService) WithChapterCharacterRepo(r *repository.ChapterCharacterRepository) *CharacterService {
 	s.chapterCharacterRepo = r

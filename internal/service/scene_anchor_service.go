@@ -339,12 +339,20 @@ func (s *SceneAnchorService) EditRefImageWithInstruction(ctx context.Context, te
 		return nil, fmt.Errorf("no ref image to edit; generate one first")
 	}
 
+	// 读取小说画面风格，保持风格一致
+	imageStyle := ""
+	if s.novelRepo != nil {
+		if novel, e := s.novelRepo.GetByID(anchor.NovelID); e == nil {
+			imageStyle = novel.ImageStyle
+		}
+	}
+
 	// consistencyWeight < 0.7 → GenerateCharacterThreeViewMulti 自动选用 SeedEditV3 指令编辑
 	// scale = weight * 10 = 4（中等编辑强度）
 	imageURL, err := s.aiSvc.GenerateCharacterThreeViewMulti(
 		ctx, tenantID, "", instruction,
 		[]string{anchor.RefImageURL},
-		"", "", "", 0.4,
+		imageStyle, "", "", 0.4,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("edit ref image: %w", err)

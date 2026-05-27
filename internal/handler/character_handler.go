@@ -291,6 +291,11 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 	}
 
 	novelTitle := h.characterService.GetNovelTitle(character.NovelID)
+	// 优先使用请求中的 style；未指定时降级到小说项目设置的 image_style
+	resolvedStyle := req.Style
+	if resolvedStyle == "" {
+		resolvedStyle = h.characterService.GetNovelImageStyle(character.NovelID)
+	}
 
 	go func(taskID string, charID uint, char *model.Character, style, provider string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
@@ -321,7 +326,7 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 			"character": updated,
 			"generated": map[string]string{"sheet": img.URL},
 		})
-	}(task.TaskID, uint(id), character, req.Style, req.Provider)
+	}(task.TaskID, uint(id), character, resolvedStyle, req.Provider)
 
 	respondAccepted(c, task.TaskID, "三视图生成任务已提交")
 }
@@ -357,6 +362,11 @@ func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
 	}
 
 	novelTitle := h.characterService.GetNovelTitle(character.NovelID)
+	// 优先使用请求中的 style；未指定时降级到小说项目设置的 image_style
+	faceStyle := req.Style
+	if faceStyle == "" {
+		faceStyle = h.characterService.GetNovelImageStyle(character.NovelID)
+	}
 
 	go func(taskID string, charID uint, char *model.Character, style, provider string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
@@ -392,7 +402,7 @@ func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
 			"character": updated,
 			"generated": map[string]string{"face_closeup": img.URL},
 		})
-	}(task.TaskID, uint(id), character, req.Style, req.Provider)
+	}(task.TaskID, uint(id), character, faceStyle, req.Provider)
 
 	respondAccepted(c, task.TaskID, "面部特写生成任务已提交")
 }

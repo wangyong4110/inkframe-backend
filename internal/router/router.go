@@ -33,6 +33,7 @@ type Config struct {
 	RewriteHandler     *handler.RewriteHandler
 	PlatformHandler    *handler.PlatformHandler
 	AssetHandler       *handler.AssetHandler
+	ImageHandler       *handler.ImageHandler
 }
 
 // SetupRouter 配置路由
@@ -628,6 +629,11 @@ func SetupRouter(cfg *Config) *gin.Engine {
 
 		// Public share page (no auth required — placed outside v1 auth middleware)
 		// NOTE: registered separately below on the root group
+
+		// 通用图像编辑
+		if cfg.ImageHandler != nil {
+			v1.POST("/images/edit", cfg.ImageHandler.EditImage)
+		}
 
 		// 本地文件系统浏览（本地部署工具专用）
 		if cfg.FsHandler != nil {

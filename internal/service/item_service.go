@@ -120,7 +120,7 @@ func (s *ItemService) DeleteItem(id uint) error {
 // generateItemImageCore is the shared AI call for item image generation.
 // It builds the prompt, filters the reference URL to HTTP(S) only, sets up storage context,
 // and calls the AI. Used by both GenerateItemImage and BatchGenerateImages.
-func (s *ItemService) generateItemImageCore(ctx context.Context, tenantID uint, item *model.Item, provider, novelTitle string) (string, error) {
+func (s *ItemService) generateItemImageCore(ctx context.Context, tenantID uint, item *model.Item, provider, novelTitle, imageStyle string) (string, error) {
 	prompt := item.VisualPrompt
 	if prompt == "" {
 		prompt = fmt.Sprintf("%s，%s，奇幻物品插画，精细细节，概念艺术", item.Name, item.Description)
@@ -132,7 +132,7 @@ func (s *ItemService) generateItemImageCore(ctx context.Context, tenantID uint, 
 	if novelTitle != "" {
 		ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novelTitle})
 	}
-	return s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL, "", "")
+	return s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL, imageStyle, "")
 }
 
 // referenceImageURL 可选：用户上传的参考图 URL（已存入 OSS），作为 AI 参考图使用
@@ -153,13 +153,14 @@ func (s *ItemService) GenerateItemImage(tenantID, id uint, referenceImageURL, pr
 	} else {
 		logger.Printf("GenerateItemImage: item=%d no valid reference image, generating without reference", id)
 	}
-	var novelTitle string
+	var novelTitle, imageStyle string
 	if s.novelRepo != nil && item.NovelID > 0 {
-		if novel, e := s.novelRepo.GetByID(item.NovelID); e == nil && novel.Title != "" {
+		if novel, e := s.novelRepo.GetByID(item.NovelID); e == nil {
 			novelTitle = novel.Title
+			imageStyle = novel.ImageStyle
 		}
 	}
-	url, err := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle)
+	url, err := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle, imageStyle)
 	if err != nil {
 		return nil, fmt.Errorf("generate image failed: %w", err)
 	}
@@ -184,10 +185,11 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 	}
 	total := len(todo)
 
-	var novelTitle string
+	var novelTitle, imageStyle string
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
 			novelTitle = novel.Title
+			imageStyle = novel.ImageStyle
 		}
 	}
 
@@ -200,7 +202,7 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			url, genErr := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle)
+			url, genErr := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle, imageStyle)
 			if genErr != nil {
 				logger.Printf("[ItemService] BatchGenerateImages: item %d (%s) failed: %v", item.ID, item.Name, genErr)
 				mu.Lock()

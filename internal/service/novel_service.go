@@ -327,7 +327,7 @@ func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID
 	negativePrompt := "text, words, letters, watermark, signature, blurry, low quality, ugly, distorted, nsfw"
 
 	ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title})
-	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", prompt, "", "", negativePrompt)
+	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", prompt, "", novel.ImageStyle, negativePrompt)
 	if err != nil {
 		return "", fmt.Errorf("generate cover image: %w", err)
 	}
