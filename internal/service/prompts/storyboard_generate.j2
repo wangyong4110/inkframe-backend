@@ -80,6 +80,11 @@
     wide/extreme_wide → character silhouette small relative to environment
 
   CHARACTER BLOCK — anatomy-safe rules (failures cause extra limbs / floating poses):
+    ⓪ CAST ROSTER — write this FIRST, before any individual character descriptions:
+       Explicitly declare EVERY character who must appear in this shot, with frame position.
+       ✅ "PRESENT IN SHOT: Hunter (foreground-left), Grandmother (on bed, mid-right), Little Red Riding Hood (standing beside bed, center); Wolf (on bed near grandmother's feet)"
+       ❌ Describing characters individually without a roster → AI silently drops characters with no spatial anchor in the prompt
+       — Any named character who must NOT appear: add to negative_prompt (e.g., "no hunter figure, hunter absent from scene")
     ① Frame position: every character needs an EXPLICIT position label
        e.g. "foreground-center-left" / "background-right" / "mid-ground-center"
     ② Ground contact (⚠️ most violated rule): ALWAYS write "[character] standing/sitting/kneeling ON [surface]"
@@ -107,6 +112,20 @@
        ❌ "angry expression" / "happy face" / "surprised" — vague labels, AI fills with generic default face
        Expression must match the scene emotion; inconsistent expression (e.g. smiling during crisis) destroys narrative believability
     ⑧ Only describe limbs VISIBLE within the shot_size frame; do not describe what the frame cuts off
+    ⑨ ATTRIBUTE OWNERSHIP — every body state, wound, and anomaly must name its owner explicitly:
+       Physical properties (swollen belly, wound, distension, bleeding, mark, cut garment) must always include "[character name]'s [body part]"
+       NEVER use an orphan body-part noun — AI attaches it to whichever character is most visually prominent in the scene
+       ✅ "wolf's abdomen visibly distended, fur showing a 15cm vertical cut; grandmother's abdomen flat, hands folded at chest"
+       ❌ "abdomen distended with a cut visible on it" → AI assigns this to the most prominent bed occupant (grandmother)
+       When two characters share a scene with similar anatomy, BOTH must be explicitly described (even if one is "flat / normal / uninjured")
+    ⑩ OUT-OF-DISTRIBUTION CONCEPT RULE — describe the visual RESULT, not the concept label:
+       When a prompt involves a concept rare in training data (animal in human clothing, hybrid creature posture, physically impossible state),
+       describe exactly what it LOOKS LIKE, not what it IS:
+       ✅ "wolf's torso draped with a loose white cotton nightgown, two front paws extending from sleeve cuffs, paw pads visible at wrist level;
+           wolf lying on its side, limbs curled naturally along wolf anatomy, white nightcap straps looped around both ears —
+           NO human hands, NO human arms visible anywhere on the wolf's body"
+       ❌ "wolf wearing grandmother's nightgown lying in bed" → AI resolves concept collision to nearest training pattern: wolf body + human arms
+       For every out-of-distribution concept: enumerate what SHOULD be visible + what should NOT be visible (add the NOT list to negative_prompt)
 
   PROPS BLOCK — size anchoring + physical connection (prevent floating / wrong-scale props):
     — Size: state prop dimensions relative to character body: "sword blade from hip to chin height" / "scroll half forearm length"
@@ -138,11 +157,14 @@
     Anime/illust: "masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
 
   PRE-SUBMIT CHECKLIST (verify each before writing the field):
+    □ CAST ROSTER written: all expected characters explicitly listed with frame positions; absent characters named in negative_prompt
     □ Every character: explicit frame position (foreground/mid/background + left/center/right) stated
     □ Every character: ground contact surface stated (standing/sitting/lying ON what)
     □ Every character: posture stated (standing/sitting/crouching/lying) + body orientation angle stated
     □ Every character: each visible arm assigned exactly ONE action; verify no single arm does two things
     □ Every character with visible face: facial expression described as specific muscle states (NOT emotion labels)
+    □ Every visual anomaly (wound, swelling, distension, mark): owner stated as "[character name]'s [body part]"; co-present characters with similar anatomy explicitly described even if normal
+    □ Every out-of-distribution concept (animal in clothes, hybrid): visual result described (not concept label); negative_prompt lists what must NOT appear
     □ Every prop: size relative to body + SPECIFIC owning limb (left/right hand) + physical connection all stated
     □ Each visible hand described individually with specific action
     □ Composition detail level matches shot_size (no full body in close_up)
@@ -164,6 +186,11 @@
     wide/extreme_wide → 角色轮廓相对于环境较小
 
   角色区块——解剖安全规则（违反将产生额外肢体/悬浮姿势）：
+    ⓪ 出场角色名单——在所有单个角色描述之前，必须先写此项：
+       明确列出本镜头内必须出现的每一个角色，并标注画框位置。
+       ✅ "本镜头出场角色：猎人（前景左侧）、奶奶（床上中景右侧）、小红帽（床旁中央站立）；狼（床上靠奶奶脚边）"
+       ❌ 直接分别描述各角色但不写总名单 → AI会无声地遗漏没有空间锚点的角色
+       — 本镜头不应出现的命名角色，须在 negative_prompt 中注明（如 "no hunter, hunter absent from scene"）
     ① 画框位置：每个角色必须有明确位置标注
        如"前景中央偏左"/"后景右侧"/"中景居中"
     ② 地面接触（⚠️ 最常违反的规则）：必须写"[角色]站在/坐在/跪在[地面材质]上"
@@ -190,6 +217,20 @@
        ❌ "愤怒的表情"/"开心的脸"/"惊讶" → 情绪标签过于模糊，AI用通用默认表情填充
        表情必须与场景情绪吻合；表情与场景不符（如危机中微笑）将彻底破坏叙事可信度
     ⑧ 只描述在 shot_size 景别内可见的肢体，不描述被画框切断的部分
+    ⑨ 属性归属——每一个身体状态、伤口、异常都必须指名道姓：
+       外观属性（腹部膨胀、伤口、肿胀、出血、异常标记、衣物划口）必须带上"[角色名]的[身体部位]"
+       绝不使用无主语的身体部位名词——AI会将其附加到场景中视觉上最显眼的角色身上
+       ✅ "狼的腹部明显隆起，皮毛上有一道15厘米长的竖向切口；奶奶的腹部平坦，双手交叠于胸前"
+       ❌ "腹部隆起，上面有一道切口" → AI将此属性分配给床上最显眼的占据者（奶奶）
+       当两个角色共享场景且解剖结构相似时，两者都必须被显式描述（即使其中一个只是"腹部平坦/正常/无伤"）
+    ⑩ 分布外概念规则——描述视觉结果，而不是描述概念标签：
+       当提示词包含训练数据中罕见的概念（动物穿人类服装、混合体姿势、物理上极端罕见的状态）时，
+       描述它"看起来是什么样"，而不是它"是什么"：
+       ✅ "狼的躯干上宽松覆盖着白色棉布睡袍，两条前爪从袖口末端伸出，爪垫在袖口边缘可见；
+           狼侧躺，四肢按狼的自然解剖结构蜷曲，白色睡帽带子绕过两耳固定——
+           狼身上任何位置均不可见人类手部或人类手臂"
+       ❌ "狼穿着奶奶的睡袍躺在床上" → AI将概念冲突解析为最近邻训练模式：狼躯体+人类手臂
+       对于每一个分布外概念：列举出"应该可见的内容" + "不应该出现的内容"（将后者加入negative_prompt）
 
   道具区块——尺寸锚定+归属肢体+物理连接（防止道具悬浮或比例失调）：
     — 尺寸：相对于角色身体标注道具大小："剑身从腰部延伸至下巴高度"/"卷轴约前臂一半长"
@@ -221,10 +262,14 @@
     动漫/插画："masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
 
   输出前自检清单（每条验证后再写字段）：
+    □ 出场角色名单已写：本镜头所有预期角色均已明确列出并标注画框位置；不应出现的角色已在negative_prompt中注明
     □ 每个角色：明确画框位置（前景/中景/后景 + 左/中/右）已标注
     □ 每个角色：地面接触材质已说明（站/坐/躺在什么上面）
     □ 每个角色：姿态已说明（站立/坐着/躺下等）+ 身体朝向角度已说明
     □ 每个角色：每条可见手臂只分配了一个动作，没有一条手臂同时做两件事
+    □ 每个角色面部可见：表情已用具体肌肉状态描述（禁止情绪标签）
+    □ 每一个视觉异常（伤口、肿胀、膨胀、标记）：已以"[角色名]的[身体部位]"格式明确归属；场景中解剖相似的其他角色也已显式描述（即使正常）
+    □ 每个分布外概念（动物穿衣、混合体）：已描述视觉结果而非概念标签；不应出现的内容已加入negative_prompt
     □ 每件道具：尺寸相对身体+具体归属肢体（左手/右手）+物理连接 均已说明
     □ 每只可见的手单独描述具体动作
     □ 构图细节与 shot_size 匹配（close_up 不出现全身）

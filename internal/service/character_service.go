@@ -1290,7 +1290,12 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 		negativePrompt = baseNeg + ", " + genderNeg
 	}
 
-	url, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt, aiRef, style, negativePrompt)
+	// 三视图使用 16:9（1280x720）横版布局，适合横向排列三个视角
+	refs := []string{}
+	if aiRef != "" {
+		refs = []string{aiRef}
+	}
+	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, "1280x720")
 	if err != nil {
 		return nil, err
 	}
@@ -1367,7 +1372,12 @@ func (s *ImageGenerationService) GenerateFaceCloseupImage(ctx context.Context, t
 		negativePrompt = baseNeg + ", " + genderNeg
 	}
 
-	url, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt, aiRef, style, negativePrompt)
+	// 面部特写使用 9:16（720x1280）竖版布局，适合头像/肖像
+	refs := []string{}
+	if aiRef != "" {
+		refs = []string{aiRef}
+	}
+	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, "720x1280")
 	if err != nil {
 		return nil, err
 	}
