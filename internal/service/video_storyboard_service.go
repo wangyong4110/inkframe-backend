@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -853,26 +854,37 @@ func qualityTierImageParams(tier string) (width, steps int, cfgScale float64) {
 
 // imageAspectRatioToSize 根据宽高比和质量档位计算 "WxH" 图片尺寸。
 // base 为较长边像素值，按 8 取整以兼容大多数图生图 API 的对齐要求。
+// 同时保证总像素数不低于 seedreamMinPixels（921600），满足 Seedream API 最低要求。
+const seedreamMinPixels = 921600
+
 func imageAspectRatioToSize(aspectRatio, qualityTier string) string {
 	base, _, _ := qualityTierImageParams(qualityTier)
 	if base == 0 {
 		base = 1024
 	}
 	r8 := func(n int) int { return (n + 4) / 8 * 8 }
+	var w, h int
 	switch aspectRatio {
 	case "16:9":
-		return fmt.Sprintf("%dx%d", base, r8(base*9/16))
+		w, h = base, r8(base*9/16)
 	case "9:16":
-		return fmt.Sprintf("%dx%d", r8(base*9/16), base)
+		w, h = r8(base*9/16), base
 	case "4:3":
-		return fmt.Sprintf("%dx%d", base, r8(base*3/4))
+		w, h = base, r8(base*3/4)
 	case "3:4":
-		return fmt.Sprintf("%dx%d", r8(base*3/4), base)
+		w, h = r8(base*3/4), base
 	case "21:9":
-		return fmt.Sprintf("%dx%d", base, r8(base*9/21))
+		w, h = base, r8(base*9/21)
 	default: // 1:1 or unknown
-		return fmt.Sprintf("%dx%d", base, base)
+		w, h = base, base
 	}
+	// Enforce Seedream minimum pixel count by scaling up proportionally.
+	if w*h < seedreamMinPixels {
+		scale := math.Sqrt(float64(seedreamMinPixels) / float64(w*h))
+		w = r8(int(math.Ceil(float64(w) * scale)))
+		h = r8(int(math.Ceil(float64(h) * scale)))
+	}
+	return fmt.Sprintf("%dx%d", w, h)
 }
 
 // colorGradeToPromptKeyword 将色彩调色配置映射为 prompt 关键词，注入图片/视频生成 prompt。
