@@ -319,11 +319,13 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 ` + sceneCtx.String() + `
 请输出：`
 
-	// SFX 标签输出极小（最多 3 条 × ~80 字符），限制 MaxTokens 避免模型超额生成导致响应缓慢。
-	// TimeoutSeconds 缩短至 30s（快模型应在 5s 内完成，30s 已是充裕上限）。
+	// MaxTokens=3000：推理模型（如 DeepSeek-R1）会先输出思考过程再输出 JSON，
+	// 3000 token 足以容纳思考过程（~500-800 tok）+ JSON 输出（~100-200 tok）。
+	// jsonOnlySystemPrompt（由 ai_service 注入）会抑制大多数推理模型的思考输出。
+	// TimeoutSeconds=30：正常请求 10-15s 完成，30s 为宽裕上限。
 	callResult := func() (string, error) {
 		return s.aiSvc.GenerateWithProvider(tenantID, 0, "sfx_analyze", prompt, "",
-			StoryboardOverrides{TimeoutSeconds: 30, MaxTokens: 400})
+			StoryboardOverrides{TimeoutSeconds: 30, MaxTokens: 3000})
 	}
 	result, err := callResult()
 	if err != nil {
@@ -331,6 +333,13 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 	}
 
 	raw := extractJSON(result)
+	// DeepSeek-chat (V3) 有时在 content 里先输出推理过程再输出 JSON。
+	// 若 extractJSON 未能提取到有效数组（result 不以 [ 开头），尝试直接定位第一个 [ 字符。
+	if len(raw) == 0 || raw[0] != '[' {
+		if idx := strings.Index(result, "["); idx != -1 {
+			raw = extractJSON(result[idx:])
+		}
+	}
 	// 响应异常短（< 80 字节）说明模型输出不完整或被截断，重试一次。
 	if len(strings.TrimSpace(raw)) < 80 {
 		logger.Printf("[SFXService] shot %d: response too short (%d bytes), retrying", shot.ShotNo, len(raw))
