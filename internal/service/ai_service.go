@@ -248,9 +248,26 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 	case "azure":
 		provider = ai.NewAzureProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, "", timeout)
 	default:
-		// 自定义名称：按 endpoint 推断底层 API 格式
+		// 自定义名称：按 endpoint + type 推断底层 API 格式
 		ep := strings.ToLower(matched.APIEndpoint)
+		provType := strings.ToLower(matched.Type)
 		switch {
+		case strings.Contains(ep, "klingai.com"):
+			// 可灵系列：按 provider type 选择正确的构造器，避免误用 OpenAI 兼容构造器
+			switch provType {
+			case "sfx":
+				logger.Printf("getTenantProvider: provider %q mapped to KlingSFXProvider via endpoint+type", matched.Name)
+				provider = ai.NewKlingSFXProvider(matched.APIKey, matched.APISecretKey, matched.APIEndpoint)
+			case "voice", "tts":
+				logger.Printf("getTenantProvider: provider %q mapped to KlingTTSProvider via endpoint+type", matched.Name)
+				provider = ai.NewKlingTTSProvider(matched.APIKey, matched.APISecretKey, matched.APIEndpoint)
+			case "image":
+				logger.Printf("getTenantProvider: provider %q mapped to KlingImageProvider via endpoint+type", matched.Name)
+				provider = ai.NewKlingImageProvider(matched.APIKey, matched.APISecretKey, matched.APIEndpoint)
+			default:
+				logger.Printf("getTenantProvider: provider %q (klingai endpoint, type=%q) — falling back to static aiManager", matched.Name, matched.Type)
+				return s.aiManager.GetProvider(providerName)
+			}
 		case strings.Contains(ep, "volces.com") || strings.Contains(ep, "volcengine"):
 			// 火山方舟 / 豆包系列（OpenAI 兼容格式）
 			logger.Printf("getTenantProvider: provider %q mapped to doubao constructor via endpoint", matched.Name)
