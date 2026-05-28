@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -40,8 +41,7 @@ type sfxCacheEntry struct {
 const sfxCacheTTL = 24 * time.Hour
 
 // SFXService 自动音效生成服务。
-// 三层降级：本地 SFX 库 → Freesound API → ElevenLabs（AI生成）。
-// Pixabay（music 类型）和 Jamendo 均为音乐平台，不提供逐帧音效，已从降级链中移除。
+// 降级链：AI 文生音效 → 本地库 → Freesound API → Pixabay Audio → BBC Sound Effects（爬取） → ElevenLabs（AI生成）。
 type SFXService struct {
 	aiSvc            *AIService
 	storageSvc       storage.Service
@@ -51,11 +51,12 @@ type SFXService struct {
 	tagRepo          *repository.TagRepository
 	sfxDir           string // 本地音效目录
 	freesoundKey     string // Freesound API Token（可选）
+	pixabayKey       string // Pixabay API Key（可选）
 	elevenKey        string // ElevenLabs API Key（可选）
 	httpClient       *http.Client
 	localLib         map[string]string // 内置标签 → 文件名（不含目录）
 	localUploadCache sync.Map          // local file path → OSS URL（进程内缓存）
-	queryCache       sync.Map          // "freesound:query" → sfxCacheEntry
+	queryCache       sync.Map          // "source:query" → sfxCacheEntry
 }
 
 // WithSFXItemRepo 注入音效条目仓库（可选；注入后才启用多 item 存储）
@@ -74,8 +75,8 @@ func (s *SFXService) WithAssetRepo(assetRepo *repository.AssetRepository, tagRep
 // SFXServiceConfig SFXService 构造参数
 type SFXServiceConfig struct {
 	SFXDir          string // 本地音效目录（环境变量 SFX_DIR）
-	FreesoundKey    string // 环境变量 FREESOUND_API_KEY
-	PixabayKey      string // 保留字段（Pixabay/Jamendo 均为音乐平台，SFX 不使用）
+	FreesoundKey    string // Freesound API Token（环境变量 FREESOUND_API_KEY）
+	PixabayKey      string // Pixabay API Key（环境变量 PIXABAY_API_KEY；启用后搜索 Pixabay 音效库）
 	JamendoClientID string // 保留字段（Jamendo 为音乐平台，SFX 不使用）
 	ElevenLabsKey   string // 环境变量 ELEVENLABS_API_KEY
 }
@@ -93,6 +94,7 @@ func NewSFXService(
 		storyboardRepo: storyboardRepo,
 		sfxDir:         cfg.SFXDir,
 		freesoundKey:   cfg.FreesoundKey,
+		pixabayKey:     cfg.PixabayKey,
 		elevenKey:      cfg.ElevenLabsKey,
 		httpClient:      &http.Client{Timeout: 30 * time.Second},
 		localLib:        buildDefaultSFXLib(),
@@ -563,8 +565,7 @@ func deduplicateAndLimit(items []sfxTagItem, limit int) []sfxTagItem {
 }
 
 // searchOneTag 对单个结构化标签执行多层降级搜索。
-// 优先级：AI 文生音效（sfx 类型提供商）→ 本地库 → Freesound → ElevenLabs。
-// 若未配置 sfx 类型提供商，则跳过 AI 音效直接走后三层。
+// 优先级：AI 文生音效 → 本地库 → Freesound → Pixabay → BBC Sound Effects → ElevenLabs。
 func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot) sfxHit {
 	sfxDur := maxDur
 	if sfxDur <= 0 {
@@ -584,7 +585,7 @@ func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTa
 		logger.Printf("[SFXService] shot %d local hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 		return sfxHit{url: u, source: "local", durationSecs: dur}
 	}
-	// 3. Freesound API
+	// 3. Freesound API（CC0，需 API Key）
 	if s.freesoundKey == "" {
 		logger.Printf("[SFXService] shot %d skip Freesound (no key)", shot.ID)
 	} else if hit := s.searchFreesound(ctx, item, maxDur); hit.url != "" {
@@ -593,7 +594,30 @@ func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTa
 	} else {
 		logger.Printf("[SFXService] shot %d Freesound miss tag=%q", shot.ID, item.Tag)
 	}
-	// 4. ElevenLabs：每个 tag 独立生成，避免多 tag 混音成一条不可分离的音频
+	// 4. Pixabay Audio（CC0，需 API Key）
+	if s.pixabayKey == "" {
+		logger.Printf("[SFXService] shot %d skip Pixabay (no key)", shot.ID)
+	} else if hit := s.searchPixabay(ctx, item, maxDur); hit.url != "" {
+		logger.Printf("[SFXService] shot %d Pixabay hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
+		return hit
+	} else {
+		logger.Printf("[SFXService] shot %d Pixabay miss tag=%q", shot.ID, item.Tag)
+	}
+	// 5. BBC Sound Effects（BBC RemArc Licence，无需 API Key，直接爬取）
+	if hit := s.searchBBCSFX(ctx, item, maxDur); hit.url != "" {
+		logger.Printf("[SFXService] shot %d BBC-SFX hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
+		return hit
+	} else {
+		logger.Printf("[SFXService] shot %d BBC-SFX miss tag=%q", shot.ID, item.Tag)
+	}
+	// 6. 爱给网（aigei.com，免费音效，无需 API Key）
+	if hit := s.searchAigei(ctx, item, maxDur); hit.url != "" {
+		logger.Printf("[SFXService] shot %d Aigei hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
+		return hit
+	} else {
+		logger.Printf("[SFXService] shot %d Aigei miss tag=%q", shot.ID, item.Tag)
+	}
+	// 7. ElevenLabs：每个 tag 独立生成，避免多 tag 混音成一条不可分离的音频
 	if u, dur, err := s.generateElevenLabsForTag(ctx, item, shot); err == nil && u != "" {
 		logger.Printf("[SFXService] shot %d ElevenLabs hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 		return sfxHit{url: u, source: "elevenlabs", durationSecs: dur}
@@ -1154,6 +1178,288 @@ func (s *SFXService) searchFreesound(ctx context.Context, item sfxTagItem, maxDu
 	})
 }
 
+// searchPixabay 通过 Pixabay Audio API 搜索音效（需配置 PIXABAY_API_KEY）。
+// 返回 CC0 授权音效的直链 URL，ambient 类型选时长最长，其余选时长最短。
+func (s *SFXService) searchPixabay(ctx context.Context, item sfxTagItem, maxDuration float64) sfxHit {
+	if s.pixabayKey == "" || item.Tag == "" {
+		return sfxHit{}
+	}
+	query := strings.ReplaceAll(normalizeTag(item.Tag), "_", " ")
+	cacheKey := fmt.Sprintf("pixabay:%s:%s", item.SFXType, query)
+
+	return s.cachedQuery(cacheKey, func() sfxHit {
+		apiURL := fmt.Sprintf(
+			"https://pixabay.com/api/?key=%s&q=%s&media_type=music&page_size=5",
+			s.pixabayKey, url.QueryEscape(query),
+		)
+		req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+		if err != nil {
+			return sfxHit{}
+		}
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			logger.Printf("[SFXService] Pixabay request error for %q: %v", query, err)
+			return sfxHit{}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+			logger.Printf("[SFXService] Pixabay HTTP %d for %q: %s", resp.StatusCode, query, body)
+			return sfxHit{}
+		}
+
+		var result struct {
+			Hits []struct {
+				Duration float64 `json:"duration"`
+				Audio    string  `json:"audio"`
+				Tags     string  `json:"tags"`
+			} `json:"hits"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Hits) == 0 {
+			return sfxHit{}
+		}
+
+		// 从候选中挑最佳：ambient 选最长，其余选最短（且不超过镜头时长）
+		type candidate struct {
+			url string
+			dur float64
+		}
+		var candidates []candidate
+		for _, h := range result.Hits {
+			if h.Audio == "" {
+				continue
+			}
+			if item.SFXType != "ambient" && maxDuration > 0 && h.Duration > maxDuration {
+				continue
+			}
+			candidates = append(candidates, candidate{h.Audio, h.Duration})
+		}
+		if len(candidates) == 0 {
+			// 无满足时长限制的结果，放宽限制取第一个
+			for _, h := range result.Hits {
+				if h.Audio != "" {
+					return sfxHit{url: h.Audio, source: "pixabay", durationSecs: h.Duration}
+				}
+			}
+			return sfxHit{}
+		}
+		best := candidates[0]
+		for _, c := range candidates[1:] {
+			if item.SFXType == "ambient" {
+				if c.dur > best.dur {
+					best = c
+				}
+			} else {
+				if c.dur >= 0.1 && c.dur < best.dur {
+					best = c
+				}
+			}
+		}
+		return sfxHit{url: best.url, source: "pixabay", durationSecs: best.dur}
+	})
+}
+
+// searchBBCSFX 通过 BBC Sound Effects 公开搜索接口爬取音效（无需 API Key）。
+// BBC Sound Effects 提供 33,000+ 专业音效，均在 BBC RemArc Licence 下免费使用。
+// 爬取策略：搜索 → 取最佳候选（ambient 选最长，其余选最短）→ 返回 MP3 直链。
+func (s *SFXService) searchBBCSFX(ctx context.Context, item sfxTagItem, maxDuration float64) sfxHit {
+	if item.Tag == "" {
+		return sfxHit{}
+	}
+	query := strings.ReplaceAll(normalizeTag(item.Tag), "_", " ")
+	cacheKey := fmt.Sprintf("bbc:%s:%s", item.SFXType, query)
+
+	return s.cachedQuery(cacheKey, func() sfxHit {
+		apiURL := fmt.Sprintf(
+			"https://sound-effects.bbcrewind.co.uk/api/sfx/search?q=%s&limit=5",
+			url.QueryEscape(query),
+		)
+		req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
+		if err != nil {
+			return sfxHit{}
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; InkFrame/1.0; +https://inkframe.io)")
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := s.httpClient.Do(req)
+		if err != nil {
+			logger.Printf("[SFXService] BBC SFX request error for %q: %v", query, err)
+			return sfxHit{}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return sfxHit{}
+		}
+
+		var result struct {
+			Count   int `json:"count"`
+			Results []struct {
+				ID          string  `json:"id"`
+				Description string  `json:"description"`
+				Duration    float64 `json:"duration"`
+				Formats     struct {
+					MP3 string `json:"mp3"`
+				} `json:"formats"`
+			} `json:"results"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Results) == 0 {
+			return sfxHit{}
+		}
+
+		// 构造 MP3 URL：优先使用 formats.mp3，回退到 CDN 路径
+		mp3URL := func(id, fmtMP3 string) string {
+			if fmtMP3 != "" {
+				return fmtMP3
+			}
+			if id != "" {
+				return fmt.Sprintf("https://sound-effects-media.bbcrewind.co.uk/mp3/%s.mp3", id)
+			}
+			return ""
+		}
+
+		type candidate struct {
+			url string
+			dur float64
+		}
+		var candidates []candidate
+		for _, r := range result.Results {
+			u := mp3URL(r.ID, r.Formats.MP3)
+			if u == "" {
+				continue
+			}
+			if item.SFXType != "ambient" && maxDuration > 0 && r.Duration > maxDuration {
+				continue
+			}
+			candidates = append(candidates, candidate{u, r.Duration})
+		}
+		if len(candidates) == 0 {
+			// 放宽时长限制
+			for _, r := range result.Results {
+				if u := mp3URL(r.ID, r.Formats.MP3); u != "" {
+					return sfxHit{url: u, source: "bbc-sfx", durationSecs: r.Duration}
+				}
+			}
+			return sfxHit{}
+		}
+		best := candidates[0]
+		for _, c := range candidates[1:] {
+			if item.SFXType == "ambient" {
+				if c.dur > best.dur {
+					best = c
+				}
+			} else {
+				if c.dur >= 0.1 && c.dur < best.dur {
+					best = c
+				}
+			}
+		}
+		return sfxHit{url: best.url, source: "bbc-sfx", durationSecs: best.dur}
+	})
+}
+
+// searchAigei 通过爱给网（aigei.com）搜索免费音效（无需 API Key）。
+// API 路径：https://www.aigei.com/service/sound/search
+func (s *SFXService) searchAigei(ctx context.Context, item sfxTagItem, maxDuration float64) sfxHit {
+	if item.Tag == "" {
+		return sfxHit{}
+	}
+	query := strings.ReplaceAll(normalizeTag(item.Tag), "_", " ")
+	cacheKey := fmt.Sprintf("aigei:%s:%s", item.SFXType, query)
+	return s.cachedQuery(cacheKey, func() sfxHit {
+		apiURL := fmt.Sprintf(
+			"https://www.aigei.com/service/sound/search?term=%s&pageSize=10&page=1&type=sound",
+			url.QueryEscape(query),
+		)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+		if err != nil {
+			return sfxHit{}
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; InkFrame/1.0)")
+		req.Header.Set("Referer", "https://www.aigei.com/")
+		req.Header.Set("Accept", "application/json, text/plain, */*")
+
+		client := &http.Client{Timeout: 8 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			return sfxHit{}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return sfxHit{}
+		}
+
+		body, err := io.ReadAll(io.LimitReader(resp.Body, 128*1024))
+		if err != nil {
+			return sfxHit{}
+		}
+
+		// 响应结构：{ "data": { "list": [{"fileTitle":"...","fileTime":"0:30","playUrl":"...","downUrl":"..."}] } }
+		var result struct {
+			Data struct {
+				List []struct {
+					FileTitle string `json:"fileTitle"`
+					FileTime  string `json:"fileTime"` // "M:SS" or seconds string
+					PlayURL   string `json:"playUrl"`
+					DownURL   string `json:"downUrl"`
+				} `json:"list"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(body, &result); err != nil {
+			return sfxHit{}
+		}
+
+		type candidate struct {
+			url string
+			dur float64
+		}
+		var candidates []candidate
+		for _, it := range result.Data.List {
+			u := it.PlayURL
+			if u == "" {
+				u = it.DownURL
+			}
+			if u == "" {
+				continue
+			}
+			dur := parseAigeiDuration(it.FileTime)
+			if maxDuration > 0 && dur > maxDuration+2 {
+				continue
+			}
+			candidates = append(candidates, candidate{url: u, dur: dur})
+		}
+		if len(candidates) == 0 {
+			return sfxHit{}
+		}
+		best := candidates[0]
+		for _, c := range candidates[1:] {
+			if item.SFXType == "ambient" {
+				if c.dur > best.dur {
+					best = c
+				}
+			} else {
+				if c.dur >= 0.1 && c.dur < best.dur {
+					best = c
+				}
+			}
+		}
+		return sfxHit{url: best.url, source: "aigei", durationSecs: best.dur}
+	})
+}
+
+// parseAigeiDuration 解析爱给网的时长字符串（"M:SS" 或数字秒）。
+func parseAigeiDuration(s string) float64 {
+	if s == "" {
+		return 0
+	}
+	if idx := strings.Index(s, ":"); idx >= 0 {
+		min, _ := strconv.ParseFloat(s[:idx], 64)
+		sec, _ := strconv.ParseFloat(s[idx+1:], 64)
+		return min*60 + sec
+	}
+	v, _ := strconv.ParseFloat(s, 64)
+	return v
+}
+
 // buildElevenLabsPrompt 将结构化标签转换为 ElevenLabs 自然语言描述。
 // ElevenLabs 接受自然语言，不接受关键词堆砌；需要明确描述声音的物理特征和空间感。
 func buildElevenLabsPrompt(item sfxTagItem, shot *model.StoryboardShot) string {
@@ -1253,7 +1559,7 @@ func mapSFXSource(source string) string {
 	switch source {
 	case "local":
 		return "uploaded"
-	case "freesound":
+	case "freesound", "pixabay", "bbc-sfx", "aigei":
 		return "crawled"
 	default: // ai-sfx, elevenlabs
 		return "platform"
@@ -1282,6 +1588,8 @@ func (s *SFXService) saveToAssetLibrary(ctx context.Context, shot *model.Storybo
 		// 构建 Asset 记录
 		asset := &model.Asset{
 			TenantID:   tenantID,
+			CreatorID:  tenantID, // personal scope 查询需要 creator_id 匹配
+			Scope:      model.AssetScopePersonal,
 			Type:       "audio",
 			SubType:    "sfx",
 			Title:      item.Tag,
