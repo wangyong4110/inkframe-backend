@@ -75,11 +75,13 @@ type BGMConfig struct {
 
 // SFXConfig 自动音效生成配置
 type SFXConfig struct {
-	Dir             string `mapstructure:"dir"`              // 本地音效库目录（优先层）
-	FreesoundKey    string `mapstructure:"freesound_key"`    // Freesound API key（第二层，可选）
-	PixabayKey      string `mapstructure:"pixabay_key"`      // Pixabay API key（第三层，可选）
-	JamendoClientID string `mapstructure:"jamendo_client_id"` // Jamendo client_id（第四层，可选）
-	ElevenLabsKey   string `mapstructure:"elevenlabs_key"`   // ElevenLabs API key（第五层，可选）
+	Dir              string `mapstructure:"dir"`               // 本地音效库目录（优先层）
+	FreesoundKey     string `mapstructure:"freesound_key"`     // Freesound API key（可选）
+	PixabayKey       string `mapstructure:"pixabay_key"`       // Pixabay API key（可选）
+	JamendoClientID  string `mapstructure:"jamendo_client_id"` // Jamendo client_id（可选）
+	ElevenLabsKey    string `mapstructure:"elevenlabs_key"`    // ElevenLabs API key（可选）
+	AudioLDMEndpoint string `mapstructure:"audioldm_endpoint"` // 本地 AudioLDM HTTP API 地址（可选，如 http://localhost:8000/generate）
+	AudioLDMKey      string `mapstructure:"audioldm_key"`      // AudioLDM 鉴权 Token（可选，本地部署通常留空）
 }
 
 // ServerConfig 服务器配置

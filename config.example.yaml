@@ -197,15 +197,18 @@ logger:
   output_path: "stdout"
 
 # 自动音效（SFX）配置
-# 五层降级：本地目录 → Freesound → Pixabay → Jamendo → ElevenLabs
+# 降级链：AI文生音效 → 本地目录 → AudioLDM → Freesound → Pixabay → BBC → 爱给网 → ElevenLabs
 # API Key 也可通过环境变量传入（env var 优先级更高）：
+#   SFX_DIR / AUDIOLDM_ENDPOINT / AUDIOLDM_KEY
 #   FREESOUND_API_KEY / PIXABAY_API_KEY / JAMENDO_CLIENT_ID / ELEVENLABS_API_KEY
 sfx:
-  dir: ""                  # 本地音效库目录，文件名格式：<tag>.mp3
-  freesound_key: ""        # https://freesound.org/apiv2/apply/
-  pixabay_key: ""          # https://pixabay.com/api/docs/（与图片搜索同一 key）
-  jamendo_client_id: ""    # https://devportal.jamendo.com/
-  elevenlabs_key: ""       # https://elevenlabs.io/
+  dir: ""                       # 本地音效库目录，文件名格式：<tag>.mp3
+  audioldm_endpoint: ""         # 本地 AudioLDM HTTP API，如 http://localhost:8000/generate
+  audioldm_key: ""              # AudioLDM 鉴权 Token（本地部署通常留空）
+  freesound_key: ""             # https://freesound.org/apiv2/apply/
+  pixabay_key: ""               # https://pixabay.com/api/docs/（与图片搜索同一 key）
+  jamendo_client_id: ""         # https://devportal.jamendo.com/
+  elevenlabs_key: ""            # https://elevenlabs.io/
 
 # 背景音乐（BGM）配置
 # 三层降级：本地目录 → Jamendo → Pixabay

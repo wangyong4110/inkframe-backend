@@ -155,8 +155,8 @@ func main() {
 		PixabayKey:      getEnv("PIXABAY_API_KEY", cfg.SFX.PixabayKey),
 		JamendoClientID: getEnv("JAMENDO_CLIENT_ID", cfg.SFX.JamendoClientID),
 		ElevenLabsKey:    getEnv("ELEVENLABS_API_KEY", cfg.SFX.ElevenLabsKey),
-		AudioLDMEndpoint: getEnv("AUDIOLDM_ENDPOINT", ""),
-		AudioLDMKey:      getEnv("AUDIOLDM_KEY", ""),
+		AudioLDMEndpoint: getEnv("AUDIOLDM_ENDPOINT", cfg.SFX.AudioLDMEndpoint),
+		AudioLDMKey:      getEnv("AUDIOLDM_KEY", cfg.SFX.AudioLDMKey),
 		ProxyURL:         crawlProxyURL,
 	})
 	sfxService.WithSFXItemRepo(repos.ShotSFXItemRepo)
