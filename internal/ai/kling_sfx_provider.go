@@ -28,7 +28,7 @@ type KlingSFXProvider struct {
 }
 
 const (
-	klingSFXDefaultEndpoint = "https://api.klingai.com"
+	klingSFXDefaultEndpoint = "https://api-beijing.klingai.com"
 	klingSFXPollInterval    = 2 * time.Second
 	klingSFXMaxWait         = 5 * time.Minute
 	klingSFXMinDuration     = 3.0
@@ -60,7 +60,7 @@ type klingSFXQueryResponse struct {
 
 // NewKlingSFXProvider 创建可灵文生音效提供者
 // accessKey / secretKey: 可灵 AK/SK（与视频生成共用同一对密钥）
-// endpoint: API 端点，留空使用默认 https://api.klingai.com
+// endpoint: API 端点，留空使用默认 https://api-beijing.klingai.com
 func NewKlingSFXProvider(accessKey, secretKey, endpoint string) *KlingSFXProvider {
 	return &KlingSFXProvider{
 		accessKey: accessKey,

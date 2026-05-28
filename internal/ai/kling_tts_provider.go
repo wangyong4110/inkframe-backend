@@ -28,7 +28,7 @@ type KlingTTSProvider struct {
 }
 
 const (
-	klingTTSDefaultEndpoint  = "https://api.klingai.com"
+	klingTTSDefaultEndpoint  = "https://api-beijing.klingai.com"
 	klingTTSPollInterval     = 2 * time.Second
 	klingTTSMaxWait          = 5 * time.Minute
 	klingTTSDefaultVoiceID   = "zh_female_story"
@@ -61,7 +61,7 @@ type klingTTSQueryResponse struct {
 
 // NewKlingTTSProvider 创建可灵语音合成提供者
 // accessKey / secretKey: 可灵 AK/SK（与视频生成共用同一对密钥）
-// endpoint: API 端点，留空使用默认 https://api.klingai.com
+// endpoint: API 端点，留空使用默认 https://api-beijing.klingai.com
 func NewKlingTTSProvider(accessKey, secretKey, endpoint string) *KlingTTSProvider {
 	return &KlingTTSProvider{
 		accessKey: accessKey,

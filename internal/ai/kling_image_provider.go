@@ -26,7 +26,7 @@ type KlingImageProvider struct {
 }
 
 const (
-	klingImageDefaultEndpoint = "https://api.klingai.com"
+	klingImageDefaultEndpoint = "https://api-beijing.klingai.com"
 	klingImagePollInterval    = 2 * time.Second
 	klingImageMaxWait         = 3 * time.Minute
 	klingImageDefaultModel    = "kling-v1"

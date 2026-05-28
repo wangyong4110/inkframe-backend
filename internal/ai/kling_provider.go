@@ -12,7 +12,7 @@ import (
 )
 
 // KlingProvider 快手可灵视频生成提供者
-// API: https://api.klingai.com/v1/videos/image2video
+// API: https://api-beijing.klingai.com/v1/videos/image2video
 // 鉴权：HS256 JWT（accessKey + secretKey）
 type KlingProvider struct {
 	accessKey string
@@ -26,7 +26,7 @@ func NewKlingProvider(accessKey, secretKey, endpoint string) *KlingProvider {
 	return &KlingProvider{
 		accessKey: accessKey,
 		secretKey: secretKey,
-		endpoint:  normalizeKlingEndpoint(endpoint, "https://api.klingai.com"),
+		endpoint:  normalizeKlingEndpoint(endpoint, "https://api-beijing.klingai.com"),
 		client: &http.Client{
 			Timeout: 60 * time.Second,
 		},

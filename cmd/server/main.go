@@ -730,7 +730,7 @@ func seedAIModels(db *gorm.DB) {
 		{"volcengine-visual", "即梦AI（火山引擎）", "image", "", true,
 			[]string{"general_v3.0", "general_v3.0-I2V"}},
 		// 视频生成
-		{"kling", "可灵（快手）", "video", "https://api.klingai.com", true,
+		{"kling", "可灵（快手）", "video", "https://api-beijing.klingai.com", true,
 			[]string{"kling-v1-6", "kling-v1-5", "kling-v1"}},
 		{"seedance", "Seedance（字节跳动）", "video", "https://ark.volces.com/api/v3", false, nil},
 		// 语音合成
@@ -755,13 +755,13 @@ func seedAIModels(db *gorm.DB) {
 		{"tencent-tts", "腾讯云语音合成", "voice", "https://tts.tencentcloudapi.com", true,
 			[]string{"101001", "101002", "101011", "101012"}},
 		// 可灵文生音效（与视频生成共用 AK/SK）
-		{"kling-sfx", "可灵文生音效", "sfx", "https://api.klingai.com", true,
+		{"kling-sfx", "可灵文生音效", "sfx", "https://api-beijing.klingai.com", true,
 			[]string{"3s", "5s", "7s", "10s"}},
 		// 可灵语音合成（与视频生成共用 AK/SK）
-		{"kling-tts", "可灵语音合成", "voice", "https://api.klingai.com", true,
+		{"kling-tts", "可灵语音合成", "voice", "https://api-beijing.klingai.com", true,
 			[]string{"zh_female_story", "zh_male_story", "oversea_male1", "oversea_female1"}},
 		// 可灵图像生成（与视频生成共用 AK/SK）
-		{"kling-image", "可灵图像生成", "image", "https://api.klingai.com", true,
+		{"kling-image", "可灵图像生成", "image", "https://api-beijing.klingai.com", true,
 			[]string{"kling-v1", "kling-v1-5", "kling-v2", "kling-v2-1", "kling-v3"}},
 	}
 
