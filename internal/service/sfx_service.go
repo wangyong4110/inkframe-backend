@@ -319,13 +319,27 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 ` + sceneCtx.String() + `
 请输出：`
 
-	result, err := s.aiSvc.GenerateWithProvider(tenantID, 0, "sfx_analyze", prompt, "",
-		StoryboardOverrides{TimeoutSeconds: 90})
+	// SFX 标签输出极小（最多 3 条 × ~80 字符），限制 MaxTokens 避免模型超额生成导致响应缓慢。
+	// TimeoutSeconds 缩短至 30s（快模型应在 5s 内完成，30s 已是充裕上限）。
+	callResult := func() (string, error) {
+		return s.aiSvc.GenerateWithProvider(tenantID, 0, "sfx_analyze", prompt, "",
+			StoryboardOverrides{TimeoutSeconds: 30, MaxTokens: 400})
+	}
+	result, err := callResult()
 	if err != nil {
 		return fmt.Errorf("AI call: %w", err)
 	}
 
 	raw := extractJSON(result)
+	// 响应异常短（< 80 字节）说明模型输出不完整或被截断，重试一次。
+	if len(strings.TrimSpace(raw)) < 80 {
+		logger.Printf("[SFXService] shot %d: response too short (%d bytes), retrying", shot.ShotNo, len(raw))
+		if r2, err2 := callResult(); err2 == nil {
+			if raw2 := extractJSON(r2); len(strings.TrimSpace(raw2)) > len(raw) {
+				raw = raw2
+			}
+		}
+	}
 
 	// 解析结构化格式
 	var items []sfxTagItem
@@ -370,14 +384,14 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 
 // AnalyzeSFXForVideo 并行为每个分镜单独调用 AI 生成结构化音效搜索词，写入 sfx_tags 字段。
 // promptLanguage：项目提示词语言（"zh"=中文，"en"=英文）；影响 AI 输出标签语言。
-// 每个分镜独立分析，并发度最多 5，单个失败不影响其余镜头。
+// 每个分镜独立分析，并发度最多 15，单个失败不影响其余镜头。
 func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.StoryboardShot, tenantID uint, userContext string, promptLanguage string) error {
 	if len(shots) == 0 {
 		return nil
 	}
 	logger.Printf("[SFXService] AnalyzeSFXForVideo: parallel analysis for %d shots (lang=%s)", len(shots), promptLanguage)
 
-	const maxConcurrency = 5
+	const maxConcurrency = 15
 	sem := make(chan struct{}, maxConcurrency)
 	var wg sync.WaitGroup
 	var updated, failed atomic.Int32
@@ -670,7 +684,7 @@ func isNoProviderErr(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "no sfx providers configured")
 }
 
-// BatchAutoGenerateSFX 批量处理视频所有镜头，最多 5 并发。
+// BatchAutoGenerateSFX 批量处理视频所有镜头，最多 10 并发。
 // 全部镜头处理完成后执行场景连续性修复：同一场景的连续镜头共用同一条 ambient 底层音，
 // 避免每镜切换环境音导致的听感跳变。
 // progressFn 每完成一个镜头时实时调用（0-100）。
@@ -685,7 +699,7 @@ func (s *SFXService) BatchAutoGenerateSFX(
 	if total == 0 {
 		return
 	}
-	const maxConcurrency = 5
+	const maxConcurrency = 10
 	sem := make(chan struct{}, maxConcurrency)
 	var wg sync.WaitGroup
 	var doneCount atomic.Int32

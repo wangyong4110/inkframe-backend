@@ -346,12 +346,27 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		ctx := context.Background()
+
+		// 阶段一：AI 分析标签（进度 0→50%）
+		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID, userContext, lang); err != nil {
-			logger.Printf("[VideoHandler] AnalyzeSFXTags task %s failed: %v", taskID, err)
+			logger.Printf("[VideoHandler] AnalyzeSFXTags task %s phase1 failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
-		h.taskSvc.Complete(taskID, gin.H{"count": len(shots)}) //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 50) //nolint:errcheck
+
+		// 阶段二：批量搜索/生成音频文件（进度 50→100%）
+		total := len(shots)
+		progressFn := func(pct int) {
+			// pct 是 BatchAutoGenerateSFX 内部 0-100，映射到整体 50-95
+			overall := 50 + pct*45/100
+			h.taskSvc.UpdateProgress(taskID, overall) //nolint:errcheck
+		}
+		success, fail := h.sfxSvc.BatchAutoGenerateSFX(ctx, shots, tenantID, userContext, progressFn)
+		logger.Printf("[VideoHandler] AnalyzeSFXTags task %s done: tags=%d sfx_success=%d sfx_fail=%d",
+			taskID, total, success, fail)
+		h.taskSvc.Complete(taskID, gin.H{"count": total, "sfx_success": success, "sfx_fail": fail}) //nolint:errcheck
 	}(task.TaskID, sfxTagsReq.UserContext, promptLang)
 
 	c.JSON(http.StatusAccepted, gin.H{
