@@ -1734,7 +1734,7 @@ func (s *SFXService) pollAudioLDMTask(ctx context.Context, taskID string) ([]byt
 	if err != nil {
 		return nil, fmt.Errorf("parse endpoint: %w", err)
 	}
-	pollURL := fmt.Sprintf("%s://%s/%s", parsedURL.Scheme, parsedURL.Host, taskID)
+	pollURL := fmt.Sprintf("%s://%s/result/%s", parsedURL.Scheme, parsedURL.Host, taskID)
 
 	pollCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
@@ -1778,8 +1778,29 @@ func (s *SFXService) pollAudioLDMTask(ctx context.Context, taskID string) ([]byt
 				logger.Printf("[SFXService] AudioLDM poll task_id=%s still %s", taskID, status.Status)
 				continue
 			}
-			logger.Printf("[SFXService] AudioLDM poll task_id=%s done status=%q bodyLen=%d", taskID, status.Status, len(body))
-			return body, nil
+			if status.Status != "completed" {
+				return nil, fmt.Errorf("audioldm task failed with status=%q", status.Status)
+			}
+			// Download the actual audio bytes from /download/{taskID}
+			downloadURL := fmt.Sprintf("%s://%s/download/%s", parsedURL.Scheme, parsedURL.Host, taskID)
+			logger.Printf("[SFXService] AudioLDM poll task_id=%s completed, downloading from %s", taskID, downloadURL)
+			dlReq, err := http.NewRequestWithContext(pollCtx, http.MethodGet, downloadURL, nil)
+			if err != nil {
+				return nil, fmt.Errorf("audioldm download request: %w", err)
+			}
+			if s.audioLDMKey != "" {
+				dlReq.Header.Set("Authorization", "Bearer "+s.audioLDMKey)
+			}
+			dlResp, err := ldmClient.Do(dlReq)
+			if err != nil {
+				return nil, fmt.Errorf("audioldm download: %w", err)
+			}
+			audioBytes, _ := io.ReadAll(io.LimitReader(dlResp.Body, 64*1024*1024))
+			dlResp.Body.Close()
+			if dlResp.StatusCode != http.StatusOK {
+				return nil, fmt.Errorf("audioldm download HTTP %d", dlResp.StatusCode)
+			}
+			return audioBytes, nil
 		}
 	}
 }
