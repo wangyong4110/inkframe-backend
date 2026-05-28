@@ -1577,9 +1577,6 @@ func (s *SFXService) generateAudioLDMForTag(ctx context.Context, item sfxTagItem
 	if s.audioLDMEndpoint == "" {
 		return "", 0, fmt.Errorf("audioldm endpoint not configured")
 	}
-	if s.storageSvc == nil {
-		return "", 0, fmt.Errorf("storage not configured for audioldm upload")
-	}
 
 	// AudioLDM2 在英文 prompt 上效果最好，且部分实现有 ASCII-only 校验。
 	// 优先使用英文 tag（Freesound 四元格式），仅当 tag 为空时才降级到中文 prompt。
@@ -1637,39 +1634,50 @@ func (s *SFXService) generateAudioLDMForTag(ctx context.Context, item sfxTagItem
 		return "", 0, fmt.Errorf("audioldm read response: %w", err)
 	}
 
+	logger.Printf("[SFXService] AudioLDM 200 OK: tag=%q ct=%q bodyLen=%d", item.Tag, ct, len(data))
+
 	var audioData []byte
 	mimeType := "audio/wav"
 	actualDur := dur
 
 	if strings.HasPrefix(ct, "audio/") {
-		// 格式 3：原始音频字节
+		// 格式 3：原始音频字节（Content-Type: audio/wav 等）
 		audioData = data
 		mimeType = ct
+		logger.Printf("[SFXService] AudioLDM format=raw_audio mime=%q len=%d", ct, len(data))
 	} else {
 		// 尝试解析 JSON（格式 1 或 2）
+		// 兼容多种 AudioLDM2 实现的字段名：url / audio_base64 / audio / audio_data
 		var jsonResp struct {
 			URL         string  `json:"url"`
 			Duration    float64 `json:"duration"`
 			AudioBase64 string  `json:"audio_base64"`
-			Audio       string  `json:"audio"` // 兼容别名
+			Audio       string  `json:"audio"`      // 别名 1
+			AudioData   string  `json:"audio_data"` // AudioLDM2 标准字段
 		}
 		if err := json.Unmarshal(data, &jsonResp); err != nil {
-			return "", 0, fmt.Errorf("audioldm parse response: %w — body: %.200s", err, data)
+			return "", 0, fmt.Errorf("audioldm parse response: %w — body: %.300s", err, data)
 		}
 		if jsonResp.Duration > 0 {
 			actualDur = jsonResp.Duration
 		}
 		if jsonResp.URL != "" {
-			// 格式 1：已有 URL，直接返回
+			// 格式 1：已有 URL，直接返回（不需要 OSS）
+			logger.Printf("[SFXService] AudioLDM format=url url=%s dur=%.1f", jsonResp.URL, actualDur)
 			return jsonResp.URL, actualDur, nil
 		}
+		// 格式 2：base64 编码音频（audio_base64 / audio / audio_data）
 		b64 := jsonResp.AudioBase64
 		if b64 == "" {
 			b64 = jsonResp.Audio
 		}
 		if b64 == "" {
-			return "", 0, fmt.Errorf("audioldm: response has no url or audio_base64 field")
+			b64 = jsonResp.AudioData
 		}
+		if b64 == "" {
+			return "", 0, fmt.Errorf("audioldm: no audio in response (checked url/audio_base64/audio/audio_data) — body: %.300s", data)
+		}
+		logger.Printf("[SFXService] AudioLDM format=base64 b64Len=%d", len(b64))
 		audioData, err = base64.StdEncoding.DecodeString(b64)
 		if err != nil {
 			// 尝试 URL-safe base64
@@ -1681,6 +1689,9 @@ func (s *SFXService) generateAudioLDMForTag(ctx context.Context, item sfxTagItem
 	}
 
 	// 上传到 OSS
+	if s.storageSvc == nil {
+		return "", 0, fmt.Errorf("storage not configured; cannot save audioldm audio (len=%d)", len(audioData))
+	}
 	tagHash := fmt.Sprintf("%x", len(item.Tag)*31+len(item.SFXType))
 	ext := ".wav"
 	if strings.Contains(mimeType, "mpeg") || strings.Contains(mimeType, "mp3") {
@@ -1688,10 +1699,12 @@ func (s *SFXService) generateAudioLDMForTag(ctx context.Context, item sfxTagItem
 		mimeType = "audio/mpeg"
 	}
 	key := fmt.Sprintf("sfx/video_%d/shot_%d_%s_ldm%s", shot.VideoID, shot.ID, tagHash, ext)
+	logger.Printf("[SFXService] AudioLDM uploading: key=%s audioLen=%d", key, len(audioData))
 	u, err := s.storageSvc.Upload(ctx, key, bytes.NewReader(audioData), int64(len(audioData)), mimeType)
 	if err != nil {
 		return "", 0, fmt.Errorf("audioldm upload: %w", err)
 	}
+	logger.Printf("[SFXService] AudioLDM upload success: url=%s", u)
 	return u, actualDur, nil
 }
 
