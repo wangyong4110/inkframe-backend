@@ -266,6 +266,7 @@ func (h *VideoHandler) ListShotSFXItems(c *gin.Context) {
 }
 
 // UpdateShotSFXItem PUT /videos/:id/shots/:shot_id/sfx-items/:item_id
+// 支持部分更新：volume, loop_enabled, fade_in_ms, fade_out_ms, start_offset
 func (h *VideoHandler) UpdateShotSFXItem(c *gin.Context) {
 	if h.sfxItemRepo == nil {
 		respondErr(c, http.StatusNotImplemented, "SFX item repo not configured")
@@ -277,19 +278,40 @@ func (h *VideoHandler) UpdateShotSFXItem(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Volume float64 `json:"volume"`
+		Volume      *float64 `json:"volume"`
+		LoopEnabled *bool    `json:"loop_enabled"`
+		FadeInMs    *int     `json:"fade_in_ms"`
+		FadeOutMs   *int     `json:"fade_out_ms"`
+		StartOffset *float64 `json:"start_offset"`
 	}
 	if !bindJSON(c, &req) {
 		return
 	}
-	item := &model.ShotSFXItem{}
-	item.ID = uint(itemID)
-	item.Volume = req.Volume
-	if err := h.sfxItemRepo.Update(item); err != nil {
+	fields := map[string]interface{}{}
+	if req.Volume != nil {
+		fields["volume"] = *req.Volume
+	}
+	if req.LoopEnabled != nil {
+		fields["loop_enabled"] = *req.LoopEnabled
+	}
+	if req.FadeInMs != nil {
+		fields["fade_in_ms"] = *req.FadeInMs
+	}
+	if req.FadeOutMs != nil {
+		fields["fade_out_ms"] = *req.FadeOutMs
+	}
+	if req.StartOffset != nil {
+		fields["start_offset"] = *req.StartOffset
+	}
+	if len(fields) == 0 {
+		respondBadRequest(c, "no updatable fields provided")
+		return
+	}
+	if err := h.sfxItemRepo.UpdateFields(uint(itemID), fields); err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to update sfx item")
 		return
 	}
-	respondOK(c, item)
+	respondOK(c, fields)
 }
 
 // ToggleShotSFXItem PATCH /videos/:id/shots/:shot_id/sfx-items/:item_id/disabled

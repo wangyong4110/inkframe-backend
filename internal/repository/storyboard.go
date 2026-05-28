@@ -249,6 +249,11 @@ func (r *ShotSFXItemRepository) Update(item *model.ShotSFXItem) error {
 	return r.db.Save(item).Error
 }
 
+// UpdateFields 部分更新 ShotSFXItem 指定字段，避免 Save 覆盖未传字段为零值。
+func (r *ShotSFXItemRepository) UpdateFields(id uint, fields map[string]interface{}) error {
+	return r.db.Model(&model.ShotSFXItem{}).Where("id = ?", id).Updates(fields).Error
+}
+
 func (r *ShotSFXItemRepository) UpdateDisabled(id uint, disabled bool) error {
 	return r.db.Model(&model.ShotSFXItem{}).Where("id = ?", id).Update("disabled", disabled).Error
 }

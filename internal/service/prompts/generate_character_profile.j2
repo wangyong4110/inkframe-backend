@@ -16,7 +16,7 @@
 5. character_arc：角色成长轨迹，描述起点、关键转变、最终归宿
 6. abilities：核心能力，每项包含 name 和 description
 7. dialogue_style：说话风格（vocabulary_level / patterns 2-4条 / speech_habits 一句话总结）
-{% if PromptLanguage == "en" %}8. visual_prompt (English): image generation prompt in English, max 150 words{% else %}8. visual_prompt（中文）：中文图像生成提示词，不超过150字{% endif %}
+{% if PromptLanguage == "en" %}8. visual_prompt (English): image generation prompt in English, max 150 words. Focus only on character appearance (body, face, hair, outfit, accessories, posture). Do NOT include art style, quality boosters, or rendering tags.{% else %}8. visual_prompt（中文）：中文图像生成提示词，不超过150字。只描述角色外观（身形、面部、发型、服装、配饰、体态），禁止出现画风、质量标签或渲染词汇。{% endif %}
 9. archetype：角色原型，如英雄、智者、导师、反派、守护者、叛逆者等
 10. 严格输出单个 JSON 对象，不含任何说明文字
 
