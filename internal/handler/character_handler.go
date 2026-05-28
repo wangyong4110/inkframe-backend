@@ -504,6 +504,10 @@ func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"provider": req.Provider,
+		"force":    req.Force,
+	})
 	go func(taskID string) {
 		defer func() {
 			if r := recover(); r != nil {

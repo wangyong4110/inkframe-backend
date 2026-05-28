@@ -247,6 +247,12 @@ func main() {
 	// 后台定时任务：每 30 分钟清理超时的分片上传会话（防内存泄漏）
 	go handler.CleanupChunkStore()
 
+	// 注册可续跑任务类型，然后启动任务恢复（必须在所有服务 wiring 完成后调用）
+	if services.TaskService != nil {
+		registerTaskResumeHandlers(services)
+		services.TaskService.Boot()
+	}
+
 	// 14. 等待中断信号
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -1134,6 +1140,8 @@ func ensureCriticalColumns(db *gorm.DB) {
 		// ink_crawl_job TaskService 集成字段（2026-05-28 新增）
 		{"ink_crawl_job", "task_id", "VARCHAR(50) NULL"},
 		{"ink_crawl_job", "tenant_id", "INT UNSIGNED NOT NULL DEFAULT 0"},
+		// ink_async_task 续跑参数快照（2026-05-28 新增）
+		{"ink_async_task", "params", "TEXT NULL"},
 	}
 	for _, a := range additions {
 		// 先查 information_schema，列已存在则跳过，避免触发 GORM 的 Error 1060 日志
@@ -2323,6 +2331,89 @@ func seedColorPaletteMcpTool(db *gorm.DB, cfg *config.Config) {
 	seedMcpTool(db, "color_palette", "场景配色方案",
 		"根据情绪/场景类型返回配色方案，为视频分镜图像生成提供一致的视觉色调",
 		fmt.Sprintf("http://localhost:%d/api/v1/tools/color-palette", port))
+}
+
+// registerTaskResumeHandlers registers resume functions for idempotent task types.
+// Must be called after all services are fully wired.
+func registerTaskResumeHandlers(svcs *Services) {
+	// sfx_gen: SFX tag analysis + batch generation (idempotent — skips shots that already have tags/sfx)
+	if svcs.SFXService != nil && svcs.VideoService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeSFXGen, func(t *model.AsyncTask) {
+			videoID := t.EntityID
+			if videoID == 0 {
+				return
+			}
+			// Parse saved params
+			var params struct {
+				UserContext string `json:"user_context"`
+				Lang        string `json:"lang"`
+			}
+			if t.ParamsJSON != "" {
+				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
+			}
+			if params.Lang == "" {
+				params.Lang = "zh"
+			}
+
+			shots, err := svcs.VideoService.GetStoryboard(videoID)
+			if err != nil || len(shots) == 0 {
+				svcs.TaskService.Fail(t.TaskID, "storyboard not found on resume") //nolint:errcheck
+				return
+			}
+
+			tenantID := t.TenantID
+			svcs.TaskService.SetRunning(t.TaskID)        //nolint:errcheck
+			svcs.TaskService.UpdateProgress(t.TaskID, 5) //nolint:errcheck
+
+			ctx := context.Background()
+			if err := svcs.SFXService.AnalyzeSFXForVideo(ctx, shots, tenantID, params.UserContext, params.Lang); err != nil {
+				logger.Printf("TaskService resume sfx_gen %s: analyze failed: %v", t.TaskID, err)
+			}
+			svcs.TaskService.UpdateProgress(t.TaskID, 50) //nolint:errcheck
+
+			progressFn := func(pct int) {
+				overall := 50 + pct*45/100
+				svcs.TaskService.UpdateProgress(t.TaskID, overall) //nolint:errcheck
+			}
+			success, fail := svcs.SFXService.BatchAutoGenerateSFX(ctx, shots, tenantID, params.UserContext, progressFn)
+			logger.Printf("TaskService resume sfx_gen %s done: sfx_success=%d sfx_fail=%d", t.TaskID, success, fail)
+			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"sfx_success": success, "sfx_fail": fail}) //nolint:errcheck
+		})
+	}
+
+	// three_view: batch character image generation (idempotent — skips characters that already have images)
+	if svcs.CharacterService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeThreeView, func(t *model.AsyncTask) {
+			if t.EntityType != "novel" {
+				// Single-character three_view tasks are not resumable via this path
+				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+				return
+			}
+			novelID := t.EntityID
+			if novelID == 0 {
+				return
+			}
+			var params struct {
+				Provider string `json:"provider"`
+				Force    bool   `json:"force"`
+			}
+			if t.ParamsJSON != "" {
+				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
+			}
+
+			tenantID := t.TenantID
+			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
+			progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
+			succ, fail, err := svcs.CharacterService.BatchGenerateImages(tenantID, novelID, params.Provider, params.Force, progressFn)
+			if err != nil {
+				logger.Printf("TaskService resume three_view %s failed: %v", t.TaskID, err)
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+			} else {
+				logger.Printf("TaskService resume three_view %s done: succeeded=%d failed=%d", t.TaskID, succ, fail)
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"succeeded": succ, "failed": fail}) //nolint:errcheck
+			}
+		})
+	}
 }
 
 // getEnv 获取环境变量

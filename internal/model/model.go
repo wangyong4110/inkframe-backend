@@ -54,6 +54,7 @@ type AsyncTask struct {
 	EntityType string         `json:"entity_type" gorm:"size:50"`
 	EntityID   uint           `json:"entity_id" gorm:"index"`
 	ResultJSON string         `json:"-" gorm:"column:result;type:mediumtext"` // mediumtext 支持 16MB，避免大结果超 text 65KB 限制
+	ParamsJSON string         `json:"-" gorm:"column:params;type:text"`       // 续跑参数快照（用于服务重启后恢复任务）
 	Error      string         `json:"error,omitempty" gorm:"type:text"`
 	Progress   int            `json:"progress" gorm:"default:0"`
 	CreatedAt  time.Time      `json:"created_at"`

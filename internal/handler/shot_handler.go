@@ -336,6 +336,10 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "create task failed")
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"user_context": sfxTagsReq.UserContext,
+		"lang":         promptLang,
+	})
 
 	go func(taskID string, userContext string, lang string) {
 		defer func() {

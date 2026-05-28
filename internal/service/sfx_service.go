@@ -1646,7 +1646,7 @@ func (s *SFXService) generateAudioLDMForTag(ctx context.Context, item sfxTagItem
 		mimeType = ct
 		logger.Printf("[SFXService] AudioLDM format=raw_audio mime=%q len=%d", ct, len(data))
 	} else {
-		// 尝试解析 JSON（格式 1 或 2）
+		// 尝试解析 JSON（格式 1、2 或异步任务）
 		// 兼容多种 AudioLDM2 实现的字段名：url / audio_base64 / audio / audio_data
 		var jsonResp struct {
 			URL         string  `json:"url"`
@@ -1654,10 +1654,28 @@ func (s *SFXService) generateAudioLDMForTag(ctx context.Context, item sfxTagItem
 			AudioBase64 string  `json:"audio_base64"`
 			Audio       string  `json:"audio"`      // 别名 1
 			AudioData   string  `json:"audio_data"` // AudioLDM2 标准字段
+			// 异步任务格式（部分实现）
+			TaskID string `json:"task_id"`
+			Status string `json:"status"`
 		}
 		if err := json.Unmarshal(data, &jsonResp); err != nil {
 			return "", 0, fmt.Errorf("audioldm parse response: %w — body: %.300s", err, data)
 		}
+
+		// 格式 4：异步任务 — 服务返回 task_id + status=processing，需轮询结果
+		if jsonResp.TaskID != "" && (jsonResp.Status == "processing" || jsonResp.Status == "pending") {
+			logger.Printf("[SFXService] AudioLDM async task_id=%s, polling for result...", jsonResp.TaskID)
+			polledData, pollErr := s.pollAudioLDMTask(ctx, jsonResp.TaskID)
+			if pollErr != nil {
+				return "", 0, fmt.Errorf("audioldm poll task_id=%s: %w", jsonResp.TaskID, pollErr)
+			}
+			// 替换 data，继续走后面的 URL / base64 解析逻辑
+			data = polledData
+			if err2 := json.Unmarshal(data, &jsonResp); err2 != nil {
+				return "", 0, fmt.Errorf("audioldm poll parse: %w — body: %.300s", err2, data)
+			}
+		}
+
 		if jsonResp.Duration > 0 {
 			actualDur = jsonResp.Duration
 		}
@@ -1706,6 +1724,64 @@ func (s *SFXService) generateAudioLDMForTag(ctx context.Context, item sfxTagItem
 	}
 	logger.Printf("[SFXService] AudioLDM upload success: url=%s", u)
 	return u, actualDur, nil
+}
+
+// pollAudioLDMTask polls GET {base}/{taskID} until status != "processing"/"pending",
+// returning the final JSON body. Polls every 2s, times out after 5 minutes.
+func (s *SFXService) pollAudioLDMTask(ctx context.Context, taskID string) ([]byte, error) {
+	// Derive base URL from endpoint (strip path, use scheme+host only)
+	parsedURL, err := url.Parse(s.audioLDMEndpoint)
+	if err != nil {
+		return nil, fmt.Errorf("parse endpoint: %w", err)
+	}
+	pollURL := fmt.Sprintf("%s://%s/%s", parsedURL.Scheme, parsedURL.Host, taskID)
+
+	pollCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	ldmClient := &http.Client{Timeout: 30 * time.Second}
+	for {
+		select {
+		case <-pollCtx.Done():
+			return nil, fmt.Errorf("timeout waiting for audioldm task")
+		case <-ticker.C:
+			req, err := http.NewRequestWithContext(pollCtx, http.MethodGet, pollURL, nil)
+			if err != nil {
+				return nil, err
+			}
+			if s.audioLDMKey != "" {
+				req.Header.Set("Authorization", "Bearer "+s.audioLDMKey)
+			}
+			resp, err := ldmClient.Do(req)
+			if err != nil {
+				logger.Printf("[SFXService] AudioLDM poll task_id=%s error: %v", taskID, err)
+				continue
+			}
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024*1024))
+			resp.Body.Close()
+			if resp.StatusCode != http.StatusOK {
+				logger.Printf("[SFXService] AudioLDM poll task_id=%s HTTP %d", taskID, resp.StatusCode)
+				continue
+			}
+			// Check status field
+			var status struct {
+				Status string `json:"status"`
+			}
+			if err := json.Unmarshal(body, &status); err != nil {
+				// Not JSON — might be raw audio bytes, return as-is
+				return body, nil
+			}
+			if status.Status == "processing" || status.Status == "pending" {
+				logger.Printf("[SFXService] AudioLDM poll task_id=%s still %s", taskID, status.Status)
+				continue
+			}
+			logger.Printf("[SFXService] AudioLDM poll task_id=%s done status=%q bodyLen=%d", taskID, status.Status, len(body))
+			return body, nil
+		}
+	}
 }
 
 func (s *SFXService) generateElevenLabsForTag(ctx context.Context, item sfxTagItem, shot *model.StoryboardShot) (string, float64, error) {

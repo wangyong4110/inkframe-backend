@@ -42,6 +42,7 @@ type TaskService struct {
 	repo      *repository.TaskRepository
 	stopCh    chan struct{}  // closed by Shutdown() to stop background goroutines
 	cancelFns sync.Map      // taskID string → context.CancelFunc
+	resumeFns sync.Map      // taskType string → func(*model.AsyncTask)
 }
 
 func NewTaskService(repo *repository.TaskRepository) *TaskService {
@@ -49,11 +50,29 @@ func NewTaskService(repo *repository.TaskRepository) *TaskService {
 		repo:   repo,
 		stopCh: make(chan struct{}),
 	}
-	// Immediately recover tasks left in running/pending state from a previous server session.
-	// Use a short context timeout to avoid blocking startup if DB is slow.
-	svc.recoverOrphaned(10 * time.Second)
 	go svc.runCleanup()
 	return svc
+}
+
+// Boot recovers orphaned tasks from a previous session. Must be called after all
+// RegisterResumeHandler calls so that resumable task types are already registered.
+func (s *TaskService) Boot() {
+	s.recoverOrphaned(10 * time.Second)
+}
+
+// RegisterResumeHandler registers a function that can resume a task of the given type
+// after server restart. The function receives the full AsyncTask (including ParamsJSON).
+func (s *TaskService) RegisterResumeHandler(taskType string, fn func(*model.AsyncTask)) {
+	s.resumeFns.Store(taskType, fn)
+}
+
+// SetParams persists arbitrary resume parameters for a task as JSON.
+func (s *TaskService) SetParams(taskID string, params interface{}) error {
+	b, err := json.Marshal(params)
+	if err != nil {
+		return err
+	}
+	return s.repo.UpdateFields(taskID, map[string]interface{}{"params": string(b)})
 }
 
 // Shutdown stops background goroutines. Call on server exit.
@@ -173,14 +192,44 @@ func (s *TaskService) CancelActiveByEntity(entityType string, entityID uint, tas
 	}
 }
 
-// recoverOrphaned marks tasks stuck in pending/running as failed if not updated within `age`.
+// recoverOrphaned first resumes tasks whose type has a registered resume handler,
+// then marks remaining stale pending/running tasks as failed.
 func (s *TaskService) recoverOrphaned(age time.Duration) {
 	before := time.Now().Add(-age)
+
+	// 1. Collect resumable task types.
+	var resumableTypes []string
+	s.resumeFns.Range(func(k, _ interface{}) bool {
+		resumableTypes = append(resumableTypes, k.(string))
+		return true
+	})
+
+	// 2. Resume matching orphaned tasks (reset to pending so MarkStaleRunning skips them).
+	resumed := 0
+	if len(resumableTypes) > 0 {
+		if tasks, err := s.repo.ListOrphaned(before, resumableTypes); err == nil {
+			for _, t := range tasks {
+				if fn, ok := s.resumeFns.Load(t.Type); ok {
+					_ = s.repo.UpdateFields(t.TaskID, map[string]interface{}{
+						"status": "pending",
+						"error":  "",
+					})
+					go fn.(func(*model.AsyncTask))(t)
+					resumed++
+				}
+			}
+		}
+	}
+
+	// 3. Mark remaining stale tasks as failed.
 	n, err := s.repo.MarkStaleRunning(before)
 	if err != nil {
 		logger.Printf("TaskService: recoverOrphaned error: %v", err)
 	} else if n > 0 {
-		logger.Printf("TaskService: recovered %d orphaned task(s) from previous session", n)
+		logger.Printf("TaskService: recovered %d orphaned task(s) → failed", n)
+	}
+	if resumed > 0 {
+		logger.Printf("TaskService: resumed %d task(s) from previous session", resumed)
 	}
 }
 
