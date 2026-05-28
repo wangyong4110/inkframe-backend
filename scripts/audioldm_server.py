@@ -147,7 +147,7 @@ async def health_check():
 # ==================== 启动服务器（仅当直接运行此脚本时） ====================
 if __name__ == "__main__":
     uvicorn.run(
-        "audioldm_server:app",
+        app,
         host="0.0.0.0",
         port=8000,
         reload=False,
