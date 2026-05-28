@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -41,7 +42,7 @@ type sfxCacheEntry struct {
 const sfxCacheTTL = 24 * time.Hour
 
 // SFXService 自动音效生成服务。
-// 降级链：AI 文生音效 → 本地库 → Freesound API → Pixabay Audio → BBC Sound Effects（爬取） → ElevenLabs（AI生成）。
+// 降级链：AI 文生音效 → 本地库 → AudioLDM（本地模型）→ Freesound API → Pixabay Audio → BBC Sound Effects（爬取） → ElevenLabs（AI生成）。
 type SFXService struct {
 	aiSvc            *AIService
 	storageSvc       storage.Service
@@ -53,6 +54,8 @@ type SFXService struct {
 	freesoundKey     string // Freesound API Token（可选）
 	pixabayKey       string // Pixabay API Key（可选）
 	elevenKey        string // ElevenLabs API Key（可选）
+	audioLDMEndpoint string // 本地 AudioLDM HTTP API 地址（可选，如 http://localhost:8000/generate）
+	audioLDMKey      string // AudioLDM API 鉴权 Token（可选，本地部署通常留空）
 	httpClient       *http.Client
 	localLib         map[string]string // 内置标签 → 文件名（不含目录）
 	localUploadCache sync.Map          // local file path → OSS URL（进程内缓存）
@@ -78,8 +81,10 @@ type SFXServiceConfig struct {
 	FreesoundKey    string // Freesound API Token（环境变量 FREESOUND_API_KEY）
 	PixabayKey      string // Pixabay API Key（环境变量 PIXABAY_API_KEY；启用后搜索 Pixabay 音效库）
 	JamendoClientID string // 保留字段（Jamendo 为音乐平台，SFX 不使用）
-	ElevenLabsKey   string // 环境变量 ELEVENLABS_API_KEY
-	ProxyURL        string // 爬取代理（环境变量 CRAWL_PROXY_URL）；为空则使用系统 HTTPS_PROXY
+	ElevenLabsKey      string // 环境变量 ELEVENLABS_API_KEY
+	AudioLDMEndpoint   string // 本地 AudioLDM API 地址（环境变量 AUDIOLDM_ENDPOINT，如 http://localhost:8000/generate）
+	AudioLDMKey        string // AudioLDM 鉴权 Token（环境变量 AUDIOLDM_KEY，本地通常留空）
+	ProxyURL           string // 爬取代理（环境变量 CRAWL_PROXY_URL）；为空则使用系统 HTTPS_PROXY
 }
 
 // NewSFXService 创建 SFX 服务实例
@@ -96,8 +101,10 @@ func NewSFXService(
 		sfxDir:         cfg.SFXDir,
 		freesoundKey:   cfg.FreesoundKey,
 		pixabayKey:     cfg.PixabayKey,
-		elevenKey:      cfg.ElevenLabsKey,
-		httpClient:     buildCrawlHTTPClient(cfg.ProxyURL, 30*time.Second),
+		elevenKey:        cfg.ElevenLabsKey,
+		audioLDMEndpoint: cfg.AudioLDMEndpoint,
+		audioLDMKey:      cfg.AudioLDMKey,
+		httpClient:       buildCrawlHTTPClient(cfg.ProxyURL, 30*time.Second),
 		localLib:       buildDefaultSFXLib(),
 	}
 }
@@ -592,7 +599,7 @@ func deduplicateAndLimit(items []sfxTagItem, limit int) []sfxTagItem {
 }
 
 // searchOneTag 对单个结构化标签执行多层降级搜索。
-// 优先级：AI 文生音效 → 本地库 → Freesound → Pixabay → BBC Sound Effects → ElevenLabs。
+// 优先级：AI 文生音效 → 本地库 → AudioLDM（本地模型）→ Freesound → Pixabay → BBC Sound Effects → ElevenLabs。
 func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot) sfxHit {
 	sfxDur := maxDur
 	if sfxDur <= 0 {
@@ -617,7 +624,16 @@ func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTa
 		logger.Printf("[SFXService] shot %d local hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 		return sfxHit{url: u, source: "local", durationSecs: dur}
 	}
-	// 3. Freesound API（CC0，需 API Key）
+	// 3. AudioLDM（本地部署模型，免费、无速率限制，优先于远程 API）
+	if s.audioLDMEndpoint != "" {
+		if u, dur, err := s.generateAudioLDMForTag(ctx, item, shot); err == nil && u != "" {
+			logger.Printf("[SFXService] shot %d AudioLDM hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
+			return sfxHit{url: u, source: "audioldm", durationSecs: dur}
+		} else if err != nil {
+			logger.Printf("[SFXService] shot %d AudioLDM failed tag=%q: %v", shot.ID, item.Tag, err)
+		}
+	}
+	// 4. Freesound API（CC0，需 API Key）
 	if s.freesoundKey == "" {
 		logger.Printf("[SFXService] shot %d skip Freesound (no key)", shot.ID)
 	} else if hit := s.searchFreesound(ctx, item, maxDur); hit.url != "" {
@@ -626,7 +642,7 @@ func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTa
 	} else {
 		logger.Printf("[SFXService] shot %d Freesound miss tag=%q", shot.ID, item.Tag)
 	}
-	// 4. Pixabay Audio（CC0，需 API Key）
+	// 5. Pixabay Audio（CC0，需 API Key）
 	if s.pixabayKey == "" {
 		logger.Printf("[SFXService] shot %d skip Pixabay (no key)", shot.ID)
 	} else if hit := s.searchPixabay(ctx, item, maxDur); hit.url != "" {
@@ -635,21 +651,21 @@ func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTa
 	} else {
 		logger.Printf("[SFXService] shot %d Pixabay miss tag=%q", shot.ID, item.Tag)
 	}
-	// 5. BBC Sound Effects（BBC RemArc Licence，无需 API Key，直接爬取）
+	// 6. BBC Sound Effects（BBC RemArc Licence，无需 API Key，直接爬取）
 	if hit := s.searchBBCSFX(ctx, item, maxDur); hit.url != "" {
 		logger.Printf("[SFXService] shot %d BBC-SFX hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
 		return hit
 	} else {
 		logger.Printf("[SFXService] shot %d BBC-SFX miss tag=%q", shot.ID, item.Tag)
 	}
-	// 6. 爱给网（aigei.com，免费音效，无需 API Key）
+	// 7. 爱给网（aigei.com，免费音效，无需 API Key）
 	if hit := s.searchAigei(ctx, item, maxDur); hit.url != "" {
 		logger.Printf("[SFXService] shot %d Aigei hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
 		return hit
 	} else {
 		logger.Printf("[SFXService] shot %d Aigei miss tag=%q", shot.ID, item.Tag)
 	}
-	// 7. ElevenLabs：每个 tag 独立生成，避免多 tag 混音成一条不可分离的音频
+	// 8. ElevenLabs：每个 tag 独立生成，避免多 tag 混音成一条不可分离的音频
 	if u, dur, err := s.generateElevenLabsForTag(ctx, item, shot); err == nil && u != "" {
 		logger.Printf("[SFXService] shot %d ElevenLabs hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 		return sfxHit{url: u, source: "elevenlabs", durationSecs: dur}
@@ -1528,6 +1544,125 @@ func buildElevenLabsPrompt(item sfxTagItem, shot *model.StoryboardShot) string {
 // generateElevenLabsForTag 对单个结构化标签调用 ElevenLabs Sound Generation API。
 // 每个 tag 独立生成，避免多标签混成一条不可分离的音频。
 // prompt_influence=0.7（提高提示词约束力，降低模型自由发挥程度）。
+// generateAudioLDMForTag 调用本地 AudioLDM HTTP API 生成音效并上传至 OSS。
+//
+// 支持三种响应格式（自动检测）：
+//  1. JSON {"url": "http://...", "duration": 5.0}          — 远端 URL，直接使用
+//  2. JSON {"audio_base64": "BASE64WAV", "duration": 5.0}  — base64 编码音频，解码后上传
+//  3. 原始音频字节（Content-Type: audio/*）                 — 直接上传
+//
+// 请求格式：POST endpoint  {"text": "...", "duration": 5.0}
+// 若设置了 audioLDMKey，则附加 Authorization: Bearer {key}
+func (s *SFXService) generateAudioLDMForTag(ctx context.Context, item sfxTagItem, shot *model.StoryboardShot) (string, float64, error) {
+	if s.audioLDMEndpoint == "" {
+		return "", 0, fmt.Errorf("audioldm endpoint not configured")
+	}
+	if s.storageSvc == nil {
+		return "", 0, fmt.Errorf("storage not configured for audioldm upload")
+	}
+
+	prompt := item.Prompt
+	if prompt == "" {
+		prompt = item.Tag
+	}
+
+	dur := shot.Duration
+	if item.SFXType != "ambient" && dur > 10 {
+		dur = 10 // AudioLDM 通常支持最长 10s
+	}
+	if dur <= 0 {
+		dur = 5
+	}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"text":     prompt,
+		"duration": dur,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.audioLDMEndpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if s.audioLDMKey != "" {
+		req.Header.Set("Authorization", "Bearer "+s.audioLDMKey)
+	}
+
+	// 本地调用通常较慢（模型推理），超时延长至 3 分钟
+	ldmClient := &http.Client{Timeout: 3 * time.Minute}
+	resp, err := ldmClient.Do(req)
+	if err != nil {
+		return "", 0, fmt.Errorf("audioldm request: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return "", 0, fmt.Errorf("audioldm HTTP %d: %s", resp.StatusCode, b)
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 32*1024*1024)) // 最大 32MB
+	if err != nil {
+		return "", 0, fmt.Errorf("audioldm read response: %w", err)
+	}
+
+	var audioData []byte
+	mimeType := "audio/wav"
+	actualDur := dur
+
+	if strings.HasPrefix(ct, "audio/") {
+		// 格式 3：原始音频字节
+		audioData = data
+		mimeType = ct
+	} else {
+		// 尝试解析 JSON（格式 1 或 2）
+		var jsonResp struct {
+			URL         string  `json:"url"`
+			Duration    float64 `json:"duration"`
+			AudioBase64 string  `json:"audio_base64"`
+			Audio       string  `json:"audio"` // 兼容别名
+		}
+		if err := json.Unmarshal(data, &jsonResp); err != nil {
+			return "", 0, fmt.Errorf("audioldm parse response: %w — body: %.200s", err, data)
+		}
+		if jsonResp.Duration > 0 {
+			actualDur = jsonResp.Duration
+		}
+		if jsonResp.URL != "" {
+			// 格式 1：已有 URL，直接返回
+			return jsonResp.URL, actualDur, nil
+		}
+		b64 := jsonResp.AudioBase64
+		if b64 == "" {
+			b64 = jsonResp.Audio
+		}
+		if b64 == "" {
+			return "", 0, fmt.Errorf("audioldm: response has no url or audio_base64 field")
+		}
+		audioData, err = base64.StdEncoding.DecodeString(b64)
+		if err != nil {
+			// 尝试 URL-safe base64
+			audioData, err = base64.URLEncoding.DecodeString(b64)
+			if err != nil {
+				return "", 0, fmt.Errorf("audioldm base64 decode: %w", err)
+			}
+		}
+	}
+
+	// 上传到 OSS
+	tagHash := fmt.Sprintf("%x", len(item.Tag)*31+len(item.SFXType))
+	ext := ".wav"
+	if strings.Contains(mimeType, "mpeg") || strings.Contains(mimeType, "mp3") {
+		ext = ".mp3"
+		mimeType = "audio/mpeg"
+	}
+	key := fmt.Sprintf("sfx/video_%d/shot_%d_%s_ldm%s", shot.VideoID, shot.ID, tagHash, ext)
+	u, err := s.storageSvc.Upload(ctx, key, bytes.NewReader(audioData), int64(len(audioData)), mimeType)
+	if err != nil {
+		return "", 0, fmt.Errorf("audioldm upload: %w", err)
+	}
+	return u, actualDur, nil
+}
+
 func (s *SFXService) generateElevenLabsForTag(ctx context.Context, item sfxTagItem, shot *model.StoryboardShot) (string, float64, error) {
 	if s.elevenKey == "" {
 		return "", 0, fmt.Errorf("elevenlabs key not configured")

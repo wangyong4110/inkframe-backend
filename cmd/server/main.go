@@ -144,6 +144,9 @@ func main() {
 	// SFX 音效服务（五层降级：本地库 → Freesound → Pixabay → Jamendo → ElevenLabs）
 	crawlProxyURL := getEnv("CRAWL_PROXY_URL", cfg.Crawl.ProxyURL)
 	services.AssetService.WithCrawlProxy(crawlProxyURL)
+	services.AssetService.WithUnsplashKey(getEnv("UNSPLASH_ACCESS_KEY", cfg.Crawl.UnsplashKey))
+	services.AssetService.WithFreesoundKey(getEnv("FREESOUND_API_KEY", cfg.SFX.FreesoundKey))
+	services.AssetService.WithPixabayKey(getEnv("PIXABAY_API_KEY", cfg.SFX.PixabayKey))
 	services.AssetService.RecoverOrphanedCrawlJobs()
 
 	sfxService := service.NewSFXService(services.AIService, storageSvc, repos.StoryboardRepo, service.SFXServiceConfig{
@@ -151,8 +154,10 @@ func main() {
 		FreesoundKey:    getEnv("FREESOUND_API_KEY", cfg.SFX.FreesoundKey),
 		PixabayKey:      getEnv("PIXABAY_API_KEY", cfg.SFX.PixabayKey),
 		JamendoClientID: getEnv("JAMENDO_CLIENT_ID", cfg.SFX.JamendoClientID),
-		ElevenLabsKey:   getEnv("ELEVENLABS_API_KEY", cfg.SFX.ElevenLabsKey),
-		ProxyURL:        crawlProxyURL,
+		ElevenLabsKey:    getEnv("ELEVENLABS_API_KEY", cfg.SFX.ElevenLabsKey),
+		AudioLDMEndpoint: getEnv("AUDIOLDM_ENDPOINT", ""),
+		AudioLDMKey:      getEnv("AUDIOLDM_KEY", ""),
+		ProxyURL:         crawlProxyURL,
 	})
 	sfxService.WithSFXItemRepo(repos.ShotSFXItemRepo)
 	sfxService.WithAssetRepo(repos.AssetRepo, repos.TagRepo)

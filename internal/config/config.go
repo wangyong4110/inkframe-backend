@@ -55,7 +55,8 @@ type CrawlConfig struct {
 	// 留空则使用系统默认（HTTPS_PROXY 环境变量）。
 	// 示例：http://127.0.0.1:7890 或 socks5://127.0.0.1:1080
 	// 对应环境变量：CRAWL_PROXY_URL
-	ProxyURL string `mapstructure:"proxy_url"`
+	ProxyURL    string `mapstructure:"proxy_url"`
+	UnsplashKey string `mapstructure:"unsplash_key"` // 对应环境变量 UNSPLASH_ACCESS_KEY
 }
 
 // WebSearchConfig 联网搜索配置
