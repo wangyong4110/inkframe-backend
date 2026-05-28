@@ -23,13 +23,10 @@ type KlingProvider struct {
 
 // NewKlingProvider 创建 Kling 视频生成提供者
 func NewKlingProvider(accessKey, secretKey, endpoint string) *KlingProvider {
-	if endpoint == "" {
-		endpoint = "https://api.klingai.com"
-	}
 	return &KlingProvider{
 		accessKey: accessKey,
 		secretKey: secretKey,
-		endpoint:  endpoint,
+		endpoint:  normalizeKlingEndpoint(endpoint, "https://api.klingai.com"),
 		client: &http.Client{
 			Timeout: 60 * time.Second,
 		},

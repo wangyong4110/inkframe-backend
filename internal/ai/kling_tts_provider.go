@@ -63,13 +63,10 @@ type klingTTSQueryResponse struct {
 // accessKey / secretKey: 可灵 AK/SK（与视频生成共用同一对密钥）
 // endpoint: API 端点，留空使用默认 https://api.klingai.com
 func NewKlingTTSProvider(accessKey, secretKey, endpoint string) *KlingTTSProvider {
-	if endpoint == "" {
-		endpoint = klingTTSDefaultEndpoint
-	}
 	return &KlingTTSProvider{
 		accessKey: accessKey,
 		secretKey: secretKey,
-		endpoint:  endpoint,
+		endpoint:  normalizeKlingEndpoint(endpoint, klingTTSDefaultEndpoint),
 		client:    &http.Client{Timeout: 30 * time.Second},
 	}
 }

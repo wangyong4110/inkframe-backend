@@ -52,13 +52,10 @@ type klingImageQueryResponse struct {
 
 // NewKlingImageProvider 创建可灵图像生成提供者
 func NewKlingImageProvider(accessKey, secretKey, endpoint string) *KlingImageProvider {
-	if endpoint == "" {
-		endpoint = klingImageDefaultEndpoint
-	}
 	return &KlingImageProvider{
 		accessKey: accessKey,
 		secretKey: secretKey,
-		endpoint:  endpoint,
+		endpoint:  normalizeKlingEndpoint(endpoint, klingImageDefaultEndpoint),
 		client:    &http.Client{Timeout: 30 * time.Second},
 	}
 }

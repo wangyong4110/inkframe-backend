@@ -62,13 +62,10 @@ type klingSFXQueryResponse struct {
 // accessKey / secretKey: 可灵 AK/SK（与视频生成共用同一对密钥）
 // endpoint: API 端点，留空使用默认 https://api.klingai.com
 func NewKlingSFXProvider(accessKey, secretKey, endpoint string) *KlingSFXProvider {
-	if endpoint == "" {
-		endpoint = klingSFXDefaultEndpoint
-	}
 	return &KlingSFXProvider{
 		accessKey: accessKey,
 		secretKey: secretKey,
-		endpoint:  endpoint,
+		endpoint:  normalizeKlingEndpoint(endpoint, klingSFXDefaultEndpoint),
 		client:    &http.Client{Timeout: 30 * time.Second},
 	}
 }

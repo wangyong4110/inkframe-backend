@@ -1,10 +1,23 @@
 package ai
 
 import (
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
+
+// normalizeKlingEndpoint 规范化可灵 API 端点，去除尾部 "/v1" 和 "/"，
+// 使得所有 Kling provider 内部路径（如 "/v1/audio/text-to-audio"）能正确拼接。
+func normalizeKlingEndpoint(endpoint, defaultEndpoint string) string {
+	if endpoint == "" {
+		return defaultEndpoint
+	}
+	ep := strings.TrimRight(endpoint, "/")
+	ep = strings.TrimSuffix(ep, "/v1")
+	ep = strings.TrimRight(ep, "/")
+	return ep
+}
 
 // klingJWT 生成可灵 API 所需的 JWT Bearer 令牌。
 //
