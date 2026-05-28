@@ -378,6 +378,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.DELETE("/:id/shots/:shot_id", cfg.VideoHandler.DeleteShot)
 			videos.POST("/:id/shots/:shot_id/refine-image", cfg.VideoHandler.RefineShotImage)
 			videos.POST("/:id/shots/:shot_id/sfx", cfg.VideoHandler.GenerateShotSFX)
+			videos.PUT("/:id/shots/:shot_id/sfx-tags", cfg.VideoHandler.UpdateShotSFXTags)
 			// 音效条目（多条）
 			videos.GET("/:id/shots/:shot_id/sfx-items", cfg.VideoHandler.ListShotSFXItems)
 			videos.PUT("/:id/shots/:shot_id/sfx-items/:item_id", cfg.VideoHandler.UpdateShotSFXItem)
@@ -651,6 +652,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			v1.GET("/crawl-jobs", ah.ListCrawlJobs)
 			v1.POST("/crawl-jobs", ah.CreateCrawlJob)
 			v1.GET("/crawl-jobs/:id", ah.GetCrawlJob)
+			v1.POST("/crawl-jobs/:id/cancel", ah.CancelCrawlJob)
 
 			// Admin
 			adminR := v1.Group("/admin")

@@ -142,12 +142,16 @@ func main() {
 	services.NovelImportService.WithStorage(storageSvc).WithAnalysisService(services.NovelAnalysisService).WithAIService(services.AIService)
 
 	// SFX 音效服务（五层降级：本地库 → Freesound → Pixabay → Jamendo → ElevenLabs）
+	crawlProxyURL := getEnv("CRAWL_PROXY_URL", cfg.Crawl.ProxyURL)
+	services.AssetService.WithCrawlProxy(crawlProxyURL)
+
 	sfxService := service.NewSFXService(services.AIService, storageSvc, repos.StoryboardRepo, service.SFXServiceConfig{
 		SFXDir:          getEnv("SFX_DIR", cfg.SFX.Dir),
 		FreesoundKey:    getEnv("FREESOUND_API_KEY", cfg.SFX.FreesoundKey),
 		PixabayKey:      getEnv("PIXABAY_API_KEY", cfg.SFX.PixabayKey),
 		JamendoClientID: getEnv("JAMENDO_CLIENT_ID", cfg.SFX.JamendoClientID),
 		ElevenLabsKey:   getEnv("ELEVENLABS_API_KEY", cfg.SFX.ElevenLabsKey),
+		ProxyURL:        crawlProxyURL,
 	})
 	sfxService.WithSFXItemRepo(repos.ShotSFXItemRepo)
 	sfxService.WithAssetRepo(repos.AssetRepo, repos.TagRepo)
@@ -765,7 +769,7 @@ func seedAIModels(db *gorm.DB) {
 			[]string{"kling-v1", "kling-v1-5", "kling-v2", "kling-v2-1", "kling-v3"}},
 	}
 
-	llmTasks := []string{"chapter", "outline", "storyboard", "quality_check"}
+	llmTasks := []string{"chapter", "outline", "storyboard", "quality_check", "sfx_analyze"}
 	models := []modelSeed{
 		// OpenAI
 		{"openai", "gpt-4o", "GPT-4o", llmTasks, 0.95, 4096},

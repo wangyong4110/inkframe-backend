@@ -254,13 +254,21 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&sfxReq)
 
+	// 获取项目提示词语言设置
+	promptLanguage := "zh"
+	if video, err2 := h.videoService.GetVideo(uint(videoID)); err2 == nil {
+		if novel, err3 := h.videoService.GetNovelByID(video.NovelID); err3 == nil && novel.PromptLanguage != "" {
+			promptLanguage = novel.PromptLanguage
+		}
+	}
+
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeSFXGen, "自动音效生成", "video", uint(videoID))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "create task failed")
 		return
 	}
 
-	go func(taskID string, userContext string) {
+	go func(taskID string, userContext string, lang string) {
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Printf("[VideoHandler] BatchGenerateSFX task %s panic: %v", taskID, r)
@@ -271,7 +279,7 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 		h.taskSvc.UpdateProgress(taskID, 5) //nolint:errcheck
 		ctx := context.Background()
 		// Step 1: AI 批量分析所有分镜，生成精准的自然语言音效搜索词
-		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID, userContext); err != nil {
+		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID, userContext, lang); err != nil {
 			logger.Printf("[VideoHandler] BatchGenerateSFX task %s: AI analyze failed (proceeding): %v", taskID, err)
 		}
 		h.taskSvc.UpdateProgress(taskID, 20) //nolint:errcheck
@@ -280,7 +288,7 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 		success, fail := h.sfxSvc.BatchAutoGenerateSFX(ctx, shots, tenantID, userContext, progressFn)
 		h.taskSvc.Complete(taskID, gin.H{"success": success, "fail": fail}) //nolint:errcheck
 		logger.Printf("[VideoHandler] BatchGenerateSFX task %s done: success=%d fail=%d", taskID, success, fail)
-	}(task.TaskID, sfxReq.UserContext)
+	}(task.TaskID, sfxReq.UserContext, promptLanguage)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
@@ -315,13 +323,21 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&sfxTagsReq)
 
+	// 获取项目提示词语言设置
+	promptLang := "zh"
+	if video, err2 := h.videoService.GetVideo(uint(videoID)); err2 == nil {
+		if novel, err3 := h.videoService.GetNovelByID(video.NovelID); err3 == nil && novel.PromptLanguage != "" {
+			promptLang = novel.PromptLanguage
+		}
+	}
+
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeSFXGen, "AI 音效标签分析", "video", uint(videoID))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "create task failed")
 		return
 	}
 
-	go func(taskID string, userContext string) {
+	go func(taskID string, userContext string, lang string) {
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Printf("[VideoHandler] AnalyzeSFXTags task %s panic: %v", taskID, r)
@@ -330,13 +346,13 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		ctx := context.Background()
-		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID, userContext); err != nil {
+		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID, userContext, lang); err != nil {
 			logger.Printf("[VideoHandler] AnalyzeSFXTags task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
 		h.taskSvc.Complete(taskID, gin.H{"count": len(shots)}) //nolint:errcheck
-	}(task.TaskID, sfxTagsReq.UserContext)
+	}(task.TaskID, sfxTagsReq.UserContext, promptLang)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
@@ -398,6 +414,51 @@ func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
 		"message": "音效生成任务已提交",
 		"data":    gin.H{"task_id": task.TaskID},
 	})
+}
+
+// UpdateShotSFXTags PUT /api/v1/videos/:id/shots/:shot_id/sfx-tags
+// 手动更新单个分镜的 sfx_tags（插入/修改/删除标签），无需重新 AI 分析。
+// Body: {"tags": [{"tag":"...","type":"action|ambient|emotion","prompt":"..."}]}
+func (h *VideoHandler) UpdateShotSFXTags(c *gin.Context) {
+	if h.sfxSvc == nil {
+		respondErr(c, http.StatusNotImplemented, "SFX service not configured")
+		return
+	}
+	shotID, ok := parseID(c, "shot_id")
+	if !ok {
+		return
+	}
+
+	type tagInput struct {
+		Tag    string `json:"tag"`
+		Type   string `json:"type"`
+		Prompt string `json:"prompt,omitempty"`
+	}
+	var req struct {
+		Tags []tagInput `json:"tags"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+
+	// 转换为 sfxTagItem（包内类型）并序列化
+	tags := make([]service.SFXTagItemPublic, 0, len(req.Tags))
+	for _, t := range req.Tags {
+		if t.Tag == "" {
+			continue
+		}
+		sfxType := t.Type
+		if sfxType == "" {
+			sfxType = "action"
+		}
+		tags = append(tags, service.SFXTagItemPublic{Tag: t.Tag, SFXType: sfxType, Prompt: t.Prompt})
+	}
+
+	if err := h.sfxSvc.UpdateShotSFXTagsPublic(uint(shotID), tags); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"shot_id": shotID, "count": len(tags)})
 }
 
 // GenerateShotVoice 为单个分镜异步生成配音

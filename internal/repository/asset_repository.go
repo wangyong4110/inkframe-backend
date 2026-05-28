@@ -453,6 +453,25 @@ func (r *CrawlJobRepository) UpdateProgress(id uint, imported, skipped, failed i
 	}).Error
 }
 
+func (r *CrawlJobRepository) UpdateFinal(id uint, status string, totalFound int, errMsg string, ts *time.Time) error {
+	fields := map[string]interface{}{"status": status}
+	if totalFound > 0 {
+		fields["total_found"] = totalFound
+	}
+	if errMsg != "" {
+		fields["error_msg"] = errMsg
+	}
+	if ts != nil {
+		switch status {
+		case "running":
+			fields["started_at"] = ts
+		default:
+			fields["completed_at"] = ts
+		}
+	}
+	return r.db.Model(&model.CrawlJob{}).Where("id = ?", id).Updates(fields).Error
+}
+
 func (r *CrawlJobRepository) List(page, size int) ([]*model.CrawlJob, int64, error) {
 	var jobs []*model.CrawlJob
 	var total int64

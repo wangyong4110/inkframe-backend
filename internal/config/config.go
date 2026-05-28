@@ -44,6 +44,18 @@ type Config struct {
 
 	// 联网搜索配置
 	WebSearch WebSearchConfig `mapstructure:"web_search"`
+
+	// 爬取配置
+	Crawl CrawlConfig `mapstructure:"crawl"`
+}
+
+// CrawlConfig 资产爬取配置
+type CrawlConfig struct {
+	// ProxyURL 用于访问国内外受限站点的 HTTP/HTTPS 代理。
+	// 留空则使用系统默认（HTTPS_PROXY 环境变量）。
+	// 示例：http://127.0.0.1:7890 或 socks5://127.0.0.1:1080
+	// 对应环境变量：CRAWL_PROXY_URL
+	ProxyURL string `mapstructure:"proxy_url"`
 }
 
 // WebSearchConfig 联网搜索配置

@@ -704,3 +704,13 @@ func (h *AssetHandler) GetCrawlJob(c *gin.Context) {
 	}
 	respondOK(c, job)
 }
+
+// POST /crawl-jobs/:id/cancel
+func (h *AssetHandler) CancelCrawlJob(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err := h.svc.CancelCrawlJob(uint(id)); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"cancelled": true})
+}

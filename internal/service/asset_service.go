@@ -8,7 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -35,6 +39,11 @@ type AssetService struct {
 	storageSvc     storage.Service
 	taskSvc        *TaskService
 	aiSvc          *AIService
+	crawlProxyURL  string // optional proxy for crawl HTTP clients
+
+	// Running crawl cancellation map: jobID → cancelFunc
+	crawlMu      sync.Mutex
+	crawlCancels map[uint]context.CancelFunc
 }
 
 func NewAssetService(
@@ -59,8 +68,13 @@ func NewAssetService(
 		usageRepo: usageRepo, likeRepo: likeRepo, commentRepo: commentRepo,
 		crawlRepo: crawlRepo, shareLinkRepo: shareLinkRepo,
 		searchLogRepo: searchLogRepo, quotaRepo: quotaRepo,
-		taskSvc: taskSvc,
+		taskSvc: taskSvc, crawlCancels: make(map[uint]context.CancelFunc),
 	}
+}
+
+func (s *AssetService) WithCrawlProxy(proxyURL string) *AssetService {
+	s.crawlProxyURL = proxyURL
+	return s
 }
 
 // ─── Upload ───────────────────────────────────────────────────────────────────
@@ -617,22 +631,348 @@ func (s *AssetService) CreateCrawlJob(source, query, assetType, license string, 
 	if err := s.crawlRepo.Create(job); err != nil {
 		return nil, err
 	}
-	// Async crawl — service-level crawl dispatch (pluggable crawler registry)
-	go s.runCrawlJob(context.Background(), job)
+	ctx, cancel := context.WithCancel(context.Background())
+	s.crawlMu.Lock()
+	s.crawlCancels[job.ID] = cancel
+	s.crawlMu.Unlock()
+	go s.runCrawlJob(ctx, job)
 	return job, nil
 }
 
+func (s *AssetService) CancelCrawlJob(id uint) error {
+	s.crawlMu.Lock()
+	cancel, ok := s.crawlCancels[id]
+	s.crawlMu.Unlock()
+	if ok {
+		cancel()
+		return nil
+	}
+	// Job not in memory (e.g. server restarted): mark cancelled directly if still pending/running
+	return s.crawlRepo.UpdateFinal(id, "cancelled", 0, "manually cancelled", nil)
+}
+
 func (s *AssetService) runCrawlJob(ctx context.Context, job *model.CrawlJob) {
+	defer func() {
+		s.crawlMu.Lock()
+		delete(s.crawlCancels, job.ID)
+		s.crawlMu.Unlock()
+	}()
+
 	now := time.Now()
-	_ = s.crawlRepo.Update(&model.CrawlJob{
-		ID: job.ID, Status: "running", StartedAt: &now,
-	})
-	// Crawling is handled by AssetCrawlerService (separate service)
-	// Stub: just mark completed
+	_ = s.crawlRepo.UpdateFinal(job.ID, "running", 0, "", &now)
+
+	var imported, skipped, failed, totalFound int
+	var errMsg string
+
+	switch job.Source {
+	case "aigei":
+		imported, skipped, failed, totalFound, errMsg = s.crawlAigei(ctx, job)
+	case "bbc-sfx":
+		imported, skipped, failed, totalFound, errMsg = s.crawlBBCSFX(ctx, job)
+	default:
+		errMsg = "unsupported crawl source: " + job.Source
+	}
+
 	completed := time.Now()
-	_ = s.crawlRepo.Update(&model.CrawlJob{
-		ID: job.ID, Status: "completed", CompletedAt: &completed,
-	})
+	status := "completed"
+	if ctx.Err() != nil {
+		status = "cancelled"
+		errMsg = ""
+	} else if errMsg != "" && imported == 0 {
+		status = "failed"
+	}
+	_ = s.crawlRepo.UpdateProgress(job.ID, imported, skipped, failed)
+	_ = s.crawlRepo.UpdateFinal(job.ID, status, totalFound, errMsg, &completed)
+}
+
+// crawlAigei fetches audio assets from aigei.com and saves them to the public asset library.
+// Aigei provides two content types: "sound" (音效/SFX) and "music" (背景音乐).
+// asset_type "audio" → searches both; otherwise searches only the matching type.
+func (s *AssetService) crawlAigei(ctx context.Context, job *model.CrawlJob) (imported, skipped, failed, totalFound int, errMsg string) {
+	// Determine Aigei content type(s) to crawl
+	aigeiTypes := []string{"sound", "music"}
+	if job.AssetType == "sfx" {
+		aigeiTypes = []string{"sound"}
+	} else if job.AssetType == "music" || job.AssetType == "bgm" {
+		aigeiTypes = []string{"music"}
+	}
+
+	limit := job.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	perType := limit / len(aigeiTypes)
+	if perType < 1 {
+		perType = 1
+	}
+
+	httpClient := buildCrawlHTTPClient(s.crawlProxyURL, 10*time.Second)
+
+	for _, aigeiType := range aigeiTypes {
+		pageSize := 20
+		page := 1
+		collected := 0
+
+		for collected < perType {
+			if err := ctx.Err(); err != nil {
+				errMsg = "context cancelled"
+				return
+			}
+
+			apiURL := fmt.Sprintf(
+				"https://www.aigei.com/service/sound/search?term=%s&pageSize=%d&page=%d&type=%s",
+				url.QueryEscape(job.Query), pageSize, page, aigeiType,
+			)
+			req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+			if err != nil {
+				errMsg = err.Error()
+				return
+			}
+			req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; InkFrame/1.0)")
+			req.Header.Set("Referer", "https://www.aigei.com/")
+			req.Header.Set("Accept", "application/json, text/plain, */*")
+
+			resp, err := httpClient.Do(req)
+			if err != nil {
+				errMsg = err.Error()
+				return
+			}
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+			resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK {
+				errMsg = fmt.Sprintf("aigei HTTP %d", resp.StatusCode)
+				return
+			}
+
+			var result struct {
+				Data struct {
+					Total int `json:"total"`
+					List  []struct {
+						ID        interface{} `json:"id"`
+						FileTitle string      `json:"fileTitle"`
+						FileTime  string      `json:"fileTime"`
+						PlayURL   string      `json:"playUrl"`
+						DownURL   string      `json:"downUrl"`
+						CoverImg  string      `json:"coverImg"`
+						Tags      string      `json:"tags"`
+					} `json:"list"`
+				} `json:"data"`
+			}
+			if err := json.Unmarshal(body, &result); err != nil {
+				errMsg = "parse error: " + err.Error()
+				return
+			}
+
+			if page == 1 {
+				totalFound += result.Data.Total
+			}
+			if len(result.Data.List) == 0 {
+				break
+			}
+
+			for _, it := range result.Data.List {
+				if collected >= perType {
+					break
+				}
+
+				playURL := it.PlayURL
+				if playURL == "" {
+					playURL = it.DownURL
+				}
+				if playURL == "" {
+					skipped++
+					continue
+				}
+
+				// Build external ID for dedup
+				rawID := ""
+				switch v := it.ID.(type) {
+				case float64:
+					rawID = strconv.FormatInt(int64(v), 10)
+				case string:
+					rawID = v
+				}
+				externalID := fmt.Sprintf("aigei:%s:%s", aigeiType, rawID)
+
+				exists, _ := s.assetRepo.ExistsByExternalID(externalID)
+				if exists {
+					skipped++
+					collected++
+					continue
+				}
+
+				// Determine duration
+				dur := parseAigeiCrawlDuration(it.FileTime)
+
+				// Determine subtype
+				subType := "sfx"
+				if aigeiType == "music" {
+					subType = "bgm"
+				}
+
+				asset := &model.Asset{
+					Scope:        model.AssetScopePublic,
+					Title:        it.FileTitle,
+					Type:         "audio",
+					SubType:      subType,
+					Source:       "crawled",
+					StorageURL:   playURL,
+					ThumbnailURL: it.CoverImg,
+					SourceURL:    fmt.Sprintf("https://www.aigei.com/sound/file/%s/", rawID),
+					ExternalID:   externalID,
+					License:      "aigei-free",
+					Duration:     dur,
+					Status:       model.AssetStatusActive,
+				}
+				if err := s.assetRepo.Create(asset); err != nil {
+					failed++
+				} else {
+					imported++
+					collected++
+				}
+			}
+
+			// Check if there are more pages
+			if len(result.Data.List) < pageSize {
+				break
+			}
+			page++
+		}
+	}
+	return
+}
+
+// parseAigeiCrawlDuration parses Aigei's "M:SS" or plain-seconds duration string.
+func parseAigeiCrawlDuration(s string) float64 {
+	if s == "" {
+		return 0
+	}
+	if idx := strings.Index(s, ":"); idx >= 0 {
+		min, _ := strconv.ParseFloat(s[:idx], 64)
+		sec, _ := strconv.ParseFloat(s[idx+1:], 64)
+		return min*60 + sec
+	}
+	v, _ := strconv.ParseFloat(s, 64)
+	return v
+}
+
+// crawlBBCSFX fetches audio assets from BBC Sound Effects and saves them to the public library.
+// API: https://sound-effects.bbcrewind.co.uk/api/sfx/search?q=<query>&limit=<n>&from=<offset>
+// License: BBC RemArc Licence (free for personal, educational, and research use).
+func (s *AssetService) crawlBBCSFX(ctx context.Context, job *model.CrawlJob) (imported, skipped, failed, totalFound int, errMsg string) {
+	limit := job.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+
+	httpClient := buildCrawlHTTPClient(s.crawlProxyURL, 10*time.Second)
+	pageSize := 20
+	from := 0
+
+	for imported+skipped+failed < limit {
+		if err := ctx.Err(); err != nil {
+			errMsg = "context cancelled"
+			return
+		}
+
+		need := limit - (imported + skipped + failed)
+		batchSize := pageSize
+		if need < batchSize {
+			batchSize = need
+		}
+
+		apiURL := fmt.Sprintf(
+			"https://sound-effects.bbcrewind.co.uk/api/sfx/search?q=%s&limit=%d&from=%d",
+			url.QueryEscape(job.Query), batchSize, from,
+		)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+		if err != nil {
+			errMsg = err.Error()
+			return
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; InkFrame/1.0; +https://inkframe.io)")
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			errMsg = err.Error()
+			return
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			errMsg = fmt.Sprintf("BBC SFX HTTP %d", resp.StatusCode)
+			return
+		}
+
+		var result struct {
+			Count   int `json:"count"`
+			Results []struct {
+				ID          string  `json:"id"`
+				Description string  `json:"description"`
+				Duration    float64 `json:"duration"`
+				Formats     struct {
+					MP3 string `json:"mp3"`
+				} `json:"formats"`
+			} `json:"results"`
+		}
+		if err := json.Unmarshal(body, &result); err != nil {
+			errMsg = "parse error: " + err.Error()
+			return
+		}
+
+		if from == 0 {
+			totalFound = result.Count
+		}
+		if len(result.Results) == 0 {
+			break
+		}
+
+		for _, r := range result.Results {
+			mp3 := r.Formats.MP3
+			if mp3 == "" && r.ID != "" {
+				mp3 = fmt.Sprintf("https://sound-effects-media.bbcrewind.co.uk/mp3/%s.mp3", r.ID)
+			}
+			if mp3 == "" {
+				skipped++
+				continue
+			}
+
+			externalID := "bbc-sfx:" + r.ID
+			exists, _ := s.assetRepo.ExistsByExternalID(externalID)
+			if exists {
+				skipped++
+				continue
+			}
+
+			asset := &model.Asset{
+				Scope:      model.AssetScopePublic,
+				Title:      r.Description,
+				Type:       "audio",
+				SubType:    "sfx",
+				Source:     "crawled",
+				StorageURL: mp3,
+				SourceURL:  fmt.Sprintf("https://sound-effects.bbcrewind.co.uk/#%s", r.ID),
+				ExternalID: externalID,
+				License:    "bbc-remarc",
+				Duration:   r.Duration,
+				Status:     model.AssetStatusActive,
+			}
+			if err := s.assetRepo.Create(asset); err != nil {
+				failed++
+			} else {
+				imported++
+			}
+		}
+
+		from += len(result.Results)
+		if from >= result.Count || len(result.Results) < batchSize {
+			break
+		}
+	}
+	return
 }
 
 func (s *AssetService) GetCrawlJob(id uint) (*model.CrawlJob, error) {

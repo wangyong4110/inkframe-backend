@@ -79,6 +79,7 @@ type SFXServiceConfig struct {
 	PixabayKey      string // Pixabay API Key（环境变量 PIXABAY_API_KEY；启用后搜索 Pixabay 音效库）
 	JamendoClientID string // 保留字段（Jamendo 为音乐平台，SFX 不使用）
 	ElevenLabsKey   string // 环境变量 ELEVENLABS_API_KEY
+	ProxyURL        string // 爬取代理（环境变量 CRAWL_PROXY_URL）；为空则使用系统 HTTPS_PROXY
 }
 
 // NewSFXService 创建 SFX 服务实例
@@ -96,8 +97,8 @@ func NewSFXService(
 		freesoundKey:   cfg.FreesoundKey,
 		pixabayKey:     cfg.PixabayKey,
 		elevenKey:      cfg.ElevenLabsKey,
-		httpClient:      &http.Client{Timeout: 30 * time.Second},
-		localLib:        buildDefaultSFXLib(),
+		httpClient:     buildCrawlHTTPClient(cfg.ProxyURL, 30*time.Second),
+		localLib:       buildDefaultSFXLib(),
 	}
 }
 
@@ -143,9 +144,28 @@ func buildDefaultSFXLib() map[string]string {
 
 // sfxTagItem 结构化音效标签，包含搜索词和分类类型。
 // SFXType: action=动作音（单次触发）/ ambient=环境底层音（循环）/ emotion=情绪点缀（冲击/rise）
+// Tag:    搜索词（英文时为 Freesound/Pixabay/BBC/Aigei 格式；中文时直接用于 Kling SFX）
+// Prompt: AI 生成提示词（用于 Kling SFX/ElevenLabs；通常为中文自然语言描述，为空时退化为 Tag）
 type sfxTagItem struct {
 	Tag     string `json:"tag"`
-	SFXType string `json:"type"` // action / ambient / emotion
+	SFXType string `json:"type"`             // action / ambient / emotion
+	Prompt  string `json:"prompt,omitempty"` // AI 生成提示词（Kling SFX / ElevenLabs 专用）
+}
+
+// SFXTagItemPublic 是 sfxTagItem 的公开版本，供 handler 层使用。
+type SFXTagItemPublic struct {
+	Tag     string `json:"tag"`
+	SFXType string `json:"type"`
+	Prompt  string `json:"prompt,omitempty"`
+}
+
+// UpdateShotSFXTagsPublic 更新单个镜头的 sfx_tags（handler 层专用，接受公开类型）。
+func (s *SFXService) UpdateShotSFXTagsPublic(shotID uint, tags []SFXTagItemPublic) error {
+	items := make([]sfxTagItem, 0, len(tags))
+	for _, t := range tags {
+		items = append(items, sfxTagItem{Tag: t.Tag, SFXType: t.SFXType, Prompt: t.Prompt})
+	}
+	return s.UpdateShotSFXTags(shotID, items)
 }
 
 // parseSFXTags 解析 sfx_tags 字段，兼容旧版纯字符串数组和新版结构化格式。
@@ -217,9 +237,9 @@ func cameraMotionGuide(cameraType string) string {
 }
 
 // analyzeSingleShotSFX 为单个分镜调用 AI 生成结构化音效搜索词，更新 sfx_tags 字段。
-// 输出格式：[{"tag":"...","type":"action|ambient|emotion"}, ...]
-// 景别/运镜/时长全部传入，AI 根据场景信息做专业分层设计。
-func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint, userContext string) error {
+// 输出格式：[{"tag":"...","type":"action|ambient|emotion","prompt":"..."}, ...]
+// promptLanguage: "zh" 输出中文 tag（适合 Kling SFX）；"en" 输出英文 Freesound 格式（默认）。
+func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint, userContext string, promptLanguage string) error {
 	// 构建分镜上下文
 	var sceneCtx strings.Builder
 	fmt.Fprintf(&sceneCtx, "镜头编号：%d\n", shot.ShotNo)
@@ -254,7 +274,29 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 		motionSection = "\n运镜音提示：" + motionGuide
 	}
 
-	prompt := `你是有15年经验的好莱坞级影视音效设计师，负责为分镜脚本设计精准的 Freesound/SoundSnap 搜索词。
+	langInstruction := ""
+	if promptLanguage == "zh" {
+		langInstruction = `
+## 语言要求（中文项目）
+tag 字段使用中文，格式：[声音来源] [材质] [动作] [质感]，每条 2~6 个词。
+示例：
+- {"tag":"木门 嘎吱 开启 室内","type":"action"}
+- {"tag":"森林 鸟鸣 晨间 循环","type":"ambient"}
+- {"tag":"心跳 紧张 特写","type":"emotion"}
+`
+	} else {
+		langInstruction = `
+## Freesound 高命中格式（英文项目）：[物体/来源] [材质/空间] [动作] [音色描述符]
+音色描述符：single/one-shot/burst（触发音）；loop/continuous（循环音）；indoor/outdoor/reverb/dry/distant（空间感）；heavy/light/sharp/soft/subtle/crisp（质感）
+示例：
+- {"tag":"wooden door creak open indoor single","type":"action"}
+- {"tag":"forest birds chirping outdoor loop","type":"ambient"}
+- {"tag":"heartbeat tense pulse close single","type":"emotion"}
+❌ 禁止视觉词（sunlight/morning/warm/bright）、BGM词（ambience/atmosphere/soundscape）、单词笼统词（sword/rain/fire）
+`
+	}
+
+	prompt := `你是有15年经验的好莱坞级影视音效设计师，负责为分镜脚本设计精准的音效搜索词。
 
 ## 核心原则：声音必须真实可被听见
 搜索词只能描述听觉现象——物体发出的真实声音。
@@ -268,37 +310,10 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 | 情绪点缀音 | emotion | 单次触发，场景转折/强调 | 低，谨慎使用 |
 
 ## 景别设计规则
-` + sizeGuide + motionSection + `
-
-## Freesound 高命中格式：[物体/来源] [材质/空间] [动作] [音色描述符]
-
-音色描述符参考：
-- 触发音：single / one-shot / short / burst
-- 循环音：loop / continuous
-- 空间感：indoor / outdoor / reverb / dry / distant / close-up
-- 质感：heavy / light / sharp / soft / subtle / muffled / crisp
-
-✅ 正确示例：
-- {"tag":"wooden door creak open indoor single","type":"action"} → 门开，指定材质+空间+动作
-- {"tag":"metal sword unsheath sharp dry single","type":"action"} → 出剑，指定材质+质感
-- {"tag":"forest birds chirping outdoor loop","type":"ambient"} → 森林环境，无视觉词
-- {"tag":"rain tile roof pattering loop","type":"ambient"} → 雨声，指定落点+质感
-- {"tag":"fire wood crackle close loop","type":"ambient"} → 火焰，指定材料+距离
-- {"tag":"heartbeat tense pulse close single","type":"emotion"} → 心跳特写强调
-- {"tag":"wolf paw dirt footstep soft single","type":"action"} → 狼爪脚步，指定材质
-- {"tag":"qi energy crackle electric whoosh single","type":"action"} → 玄幻能量音
-
-❌ 错误示例（绝对禁止）：
-- "morning sunlight soft loop" → ❌ sunlight/morning 是视觉词
-- "warm indoor ambience loop" → ❌ warm/ambience 是 BGM 词汇
-- "forest atmosphere soundscape" → ❌ atmosphere/soundscape 是 BGM 词汇
-- "room tone wooden house" → ❌ room tone 是音乐制作术语
-- "bright cheerful music loop" → ❌ 音乐不是音效
-- "sword" / "rain" / "fire" → ❌ 单词太笼统，Freesound 搜索无意义
+` + sizeGuide + motionSection + langInstruction + `
 
 ## 输出规则
 - 输出 0~3 条，按 action → ambient → emotion 优先级排列
-- 每条 tag 为 3~7 个英文单词，必须是真实声音
 - 极近景特写（无动作）：只输出 0~1 条 action（细节音），不加 ambient
 - 纯情感特写/空镜：最多 1 条极 subtle 的 ambient
 - 仅输出 JSON 数组，禁止任何额外文字
@@ -340,6 +355,14 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 		}
 	}
 
+	// 为每个 tag 填充中文 Prompt（供 Kling SFX / ElevenLabs AI 文生音效使用）
+	shotPrompt := buildShotAIPrompt(shot)
+	for i := range filtered {
+		if filtered[i].Prompt == "" {
+			filtered[i].Prompt = shotPrompt
+		}
+	}
+
 	tagsJSON, _ := json.Marshal(filtered)
 	shot.SFXTags = string(tagsJSON)
 	if err := s.storyboardRepo.UpdateSFXTags(shot.ID, string(tagsJSON)); err != nil {
@@ -348,19 +371,14 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 	return nil
 }
 
-// AnalyzeSFXForVideo 并行为每个分镜单独调用 AI 生成自然语言音效搜索词，写入 sfx_tags 字段。
-// 若已配置文生音效提供商（如 Kling SFX），跳过本步骤——音效将由提供商直接从分镜信息生成，无需 LLM 中间步骤。
+// AnalyzeSFXForVideo 并行为每个分镜单独调用 AI 生成结构化音效搜索词，写入 sfx_tags 字段。
+// promptLanguage：项目提示词语言（"zh"=中文，"en"=英文）；影响 AI 输出标签语言。
 // 每个分镜独立分析，并发度最多 5，单个失败不影响其余镜头。
-func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.StoryboardShot, tenantID uint, userContext string) error {
+func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.StoryboardShot, tenantID uint, userContext string, promptLanguage string) error {
 	if len(shots) == 0 {
 		return nil
 	}
-	// 已配置文生音效提供商时无需 LLM 标签分析
-	if s.aiSvc != nil && s.aiSvc.HasSFXProvider(tenantID) {
-		logger.Printf("[SFXService] AnalyzeSFXForVideo: sfx provider configured, skip LLM tag analysis")
-		return nil
-	}
-	logger.Printf("[SFXService] AnalyzeSFXForVideo: parallel analysis for %d shots", len(shots))
+	logger.Printf("[SFXService] AnalyzeSFXForVideo: parallel analysis for %d shots (lang=%s)", len(shots), promptLanguage)
 
 	const maxConcurrency = 5
 	sem := make(chan struct{}, maxConcurrency)
@@ -376,7 +394,7 @@ func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.Stor
 		go func(sh *model.StoryboardShot) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			err := s.analyzeSingleShotSFX(ctx, sh, tenantID, userContext)
+			err := s.analyzeSingleShotSFX(ctx, sh, tenantID, userContext, promptLanguage)
 			if err != nil {
 				logger.Printf("[SFXService] AnalyzeSFXForVideo: shot %d failed: %v", sh.ShotNo, err)
 				failed.Add(1)
@@ -388,6 +406,15 @@ func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.Stor
 	wg.Wait()
 	logger.Printf("[SFXService] AnalyzeSFXForVideo: updated=%d failed=%d", updated.Load(), failed.Load())
 	return nil
+}
+
+// UpdateShotSFXTags 直接更新单个镜头的 sfx_tags 字段（用于前端手动插入/修改/删除标签）。
+func (s *SFXService) UpdateShotSFXTags(shotID uint, tags []sfxTagItem) error {
+	data, err := json.Marshal(tags)
+	if err != nil {
+		return fmt.Errorf("marshal tags: %w", err)
+	}
+	return s.storyboardRepo.UpdateSFXTags(shotID, string(data))
 }
 
 // sfxItemConfig 根据标签类型和镜头特征决定单条音效的播放参数。
@@ -439,16 +466,16 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	}
 
 	// 1. 提取结构化标签
-	// 优先级：已存 sfx_tags > 文生音效提供商（直接用分镜信息构建提示词）> LLM 标签分析 > 规则兜底
+	// 优先级：已存 sfx_tags（含 LLM 分析结果及 Prompt 字段）> 实时 LLM 分析 > 规则兜底
+	// 始终通过 LLM 分析填充结构化英文 tag 与中文 Prompt，确保 AI 文生音效和搜索库均能高质量命中
 	tagItems := parseSFXTags(shot.SFXTags)
 	if len(tagItems) == 0 {
-		if s.aiSvc != nil && s.aiSvc.HasSFXProvider(tenantID) {
-			// 已配置文生音效提供商：直接从分镜信息构建提示词，不调用 LLM
-			tagItems = s.buildSFXPromptsFromShot(shot)
-		} else if err := s.analyzeSingleShotSFX(ctx, shot, tenantID, ""); err != nil {
+		if err := s.analyzeSingleShotSFX(ctx, shot, tenantID, "", ""); err != nil {
 			logger.Printf("[SFXService] shot %d AI analyze failed (%v), using rule fallback", shot.ID, err)
+			// 规则兜底：英文搜索词 + 中文 AI 提示词
+			shotPrompt := buildShotAIPrompt(shot)
 			for _, t := range s.fallbackTags(shot) {
-				tagItems = append(tagItems, sfxTagItem{Tag: t, SFXType: guessSFXType(t)})
+				tagItems = append(tagItems, sfxTagItem{Tag: t, SFXType: guessSFXType(t), Prompt: shotPrompt})
 			}
 		} else {
 			tagItems = parseSFXTags(shot.SFXTags)
@@ -572,8 +599,13 @@ func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTa
 		sfxDur = 5
 	}
 	// 1. AI 文生音效（Kling SFX 等 sfx 类型提供商）——优先尝试
+	// 优先使用 Prompt（中文自然语言描述，信息更丰富），降级到英文搜索词 Tag
 	if s.aiSvc != nil {
-		if u, dur, err := s.aiSvc.GenerateSFX(ctx, tenantID, item.Tag, sfxDur); err == nil && u != "" {
+		aiPrompt := item.Prompt
+		if aiPrompt == "" {
+			aiPrompt = item.Tag
+		}
+		if u, dur, err := s.aiSvc.GenerateSFX(ctx, tenantID, aiPrompt, sfxDur); err == nil && u != "" {
 			logger.Printf("[SFXService] shot %d AI-SFX hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 			return sfxHit{url: u, source: "ai-sfx", durationSecs: dur}
 		} else if err != nil && !isNoProviderErr(err) {
@@ -764,9 +796,9 @@ func sceneKeyOf(shot *model.StoryboardShot) string {
 
 // --- 内部方法 ---
 
-// buildSFXPromptsFromShot 在文生音效提供商可用时，直接从分镜字段构建音效提示词，
-// 无需调用 LLM 进行标签分析。提示词包含场景环境、画面描述和情绪基调。
-func (s *SFXService) buildSFXPromptsFromShot(shot *model.StoryboardShot) []sfxTagItem {
+// buildShotAIPrompt 从分镜字段构建中文自然语言描述，供 AI 文生音效提供商（Kling SFX / ElevenLabs）使用。
+// 包含场景环境、画面描述和情绪基调，最多 200 个字符。
+func buildShotAIPrompt(shot *model.StoryboardShot) string {
 	var parts []string
 	if shot.Scene != "" {
 		parts = append(parts, shot.Scene)
@@ -781,15 +813,15 @@ func (s *SFXService) buildSFXPromptsFromShot(shot *model.StoryboardShot) []sfxTa
 	if shot.EmotionalTone != "" {
 		parts = append(parts, shot.EmotionalTone)
 	}
-	prompt := strings.Join(parts, " ")
+	prompt := strings.Join(parts, "。")
 	if prompt == "" {
-		prompt = "ambient sound"
+		return ""
 	}
 	runes := []rune(prompt)
 	if len(runes) > 200 {
-		prompt = string(runes[:200])
+		return string(runes[:200])
 	}
-	return []sfxTagItem{{Tag: prompt, SFXType: guessSFXType(prompt)}}
+	return prompt
 }
 
 // fallbackTags 基于规则从描述 / 情绪基调 / 镜头类型推断标签（LLM 不可用时的降级）。

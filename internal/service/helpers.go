@@ -3,8 +3,32 @@ package service
 import (
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/url"
 	"strings"
+	"time"
 )
+
+// buildCrawlHTTPClient returns an HTTP client for crawling external sites.
+// proxyURL may be empty (falls back to HTTPS_PROXY / HTTP_PROXY env vars via
+// http.ProxyFromEnvironment), or a full URL like "http://127.0.0.1:7890" or
+// "socks5://127.0.0.1:1080".
+func buildCrawlHTTPClient(proxyURL string, timeout time.Duration) *http.Client {
+	proxyFn := http.ProxyFromEnvironment
+	if proxyURL != "" {
+		if parsed, err := url.Parse(proxyURL); err == nil {
+			proxyFn = http.ProxyURL(parsed)
+		}
+	}
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			Proxy:               proxyFn,
+			TLSHandshakeTimeout: 10 * time.Second,
+			DisableKeepAlives:   true,
+		},
+	}
+}
 
 // extractJSON extracts the first JSON object or array from text that may contain
 // markdown code fences or other surrounding content.
