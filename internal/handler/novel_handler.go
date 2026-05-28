@@ -222,6 +222,10 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"novel_id": uint(novelId),
+		"req":      &req,
+	})
 
 	go func(taskID string) {
 		defer func() {

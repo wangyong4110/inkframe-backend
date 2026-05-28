@@ -296,6 +296,10 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 	if resolvedStyle == "" {
 		resolvedStyle = h.characterService.GetNovelImageStyle(character.NovelID)
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"provider": req.Provider,
+		"style":    resolvedStyle,
+	})
 
 	go func(taskID string, charID uint, char *model.Character, style, provider string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
@@ -378,6 +382,10 @@ func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
 	if faceStyle == "" {
 		faceStyle = h.characterService.GetNovelImageStyle(character.NovelID)
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"provider": req.Provider,
+		"style":    faceStyle,
+	})
 
 	go func(taskID string, charID uint, char *model.Character, style, provider string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck

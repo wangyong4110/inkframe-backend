@@ -201,6 +201,11 @@ func (h *ItemHandler) BatchGenerateImages(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"source":   "item_batch",
+		"provider": req.Provider,
+		"force":    req.Force,
+	})
 	go func(taskID string) {
 		defer func() {
 			if r := recover(); r != nil {
@@ -245,6 +250,11 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"source":   "item_single",
+		"ref_url":  refURL,
+		"provider": provider,
+	})
 
 	go func(taskID string) {
 		defer func() {

@@ -119,6 +119,9 @@ func (h *VideoHandler) GenerateSegmentVoice(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"narration_voice": req.NarrationVoice,
+	})
 
 	go func(taskID string, sID uint, narrationVoice string) {
 		defer func() {
@@ -419,6 +422,9 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"narration_voice": narrationVoice,
+	})
 
 	go func(taskID string, shots []*model.StoryboardShot, narrationVoice string, subtitleEnabled bool) {
 		defer func() {
@@ -671,6 +677,9 @@ func (h *VideoHandler) AnalyzeBGMSegments(c *gin.Context) {
 		UserPrompt string `json:"user_prompt"`
 	}
 	_ = c.ShouldBindJSON(&bgmReq)
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"user_prompt": bgmReq.UserPrompt,
+	})
 
 	go func(taskID string, userPrompt string) {
 		defer func() {
@@ -731,6 +740,9 @@ func (h *VideoHandler) GenerateBGM(c *gin.Context) {
 		UserPrompt string `json:"user_prompt"`
 	}
 	_ = c.ShouldBindJSON(&bgmGenReq)
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"user_prompt": bgmGenReq.UserPrompt,
+	})
 
 	go func(taskID string, userPrompt string) {
 		defer func() {

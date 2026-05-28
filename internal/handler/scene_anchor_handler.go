@@ -342,6 +342,11 @@ func (h *SceneAnchorHandler) BatchGenerateRefImages(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"source":   "scene_anchor_batch",
+		"provider": body.Provider,
+		"force":    body.Force,
+	})
 	go func(taskID string) {
 		defer func() {
 			if r := recover(); r != nil {

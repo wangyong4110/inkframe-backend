@@ -54,6 +54,17 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"chapter_id":      req.ChapterID,
+		"characters":      req.Characters,
+		"style":           req.Style,
+		"provider":        req.Provider,
+		"user_prompt":     req.UserPrompt,
+		"max_tokens":      req.MaxTokens,
+		"temperature":     req.Temperature,
+		"timeout_seconds": req.TimeoutSeconds,
+		"voice_mode":      req.VoiceMode,
+	})
 
 	go func(taskID string) {
 		defer func() {
@@ -308,6 +319,10 @@ func (h *VideoHandler) OptimizeStoryboardFromReview(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"review":   req.StoryboardReview,
+		"provider": req.Provider,
+	})
 
 	review := req.StoryboardReview
 	provider := req.Provider

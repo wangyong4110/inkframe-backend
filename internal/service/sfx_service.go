@@ -1669,11 +1669,12 @@ func (s *SFXService) generateAudioLDMForTag(ctx context.Context, item sfxTagItem
 			if pollErr != nil {
 				return "", 0, fmt.Errorf("audioldm poll task_id=%s: %w", jsonResp.TaskID, pollErr)
 			}
-			// 替换 data，继续走后面的 URL / base64 解析逻辑
-			data = polledData
-			if err2 := json.Unmarshal(data, &jsonResp); err2 != nil {
-				return "", 0, fmt.Errorf("audioldm poll parse: %w — body: %.300s", err2, data)
+			// 如果 poll 返回原始音频字节（非 JSON），直接用于上传，跳过 JSON 解析
+			if err2 := json.Unmarshal(polledData, &jsonResp); err2 != nil {
+				audioData = polledData
+				goto uploadAudio
 			}
+			data = polledData
 		}
 
 		if jsonResp.Duration > 0 {
@@ -1706,6 +1707,7 @@ func (s *SFXService) generateAudioLDMForTag(ctx context.Context, item sfxTagItem
 		}
 	}
 
+uploadAudio:
 	// 上传到 OSS
 	if s.storageSvc == nil {
 		return "", 0, fmt.Errorf("storage not configured; cannot save audioldm audio (len=%d)", len(audioData))

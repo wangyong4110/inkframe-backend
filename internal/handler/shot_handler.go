@@ -35,6 +35,12 @@ func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"source":   "single_shot",
+		"video_id": uint(videoID),
+		"shot_id":  uint(shotID),
+		"provider": req.Provider,
+	})
 
 	go func(taskID string) {
 		defer func() {
@@ -82,6 +88,12 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"source":       "batch_shots",
+		"shot_ids":     req.ShotIDs,
+		"quality_tier": req.QualityTier,
+		"provider":     req.Provider,
+	})
 
 	go func(taskID string) {
 		defer func() {
@@ -128,6 +140,10 @@ func (h *VideoHandler) BatchGenerateShotImages(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"source":   "batch_images",
+		"shot_ids": req.ShotIDs,
+	})
 
 	go func(taskID string) {
 		defer func() {
@@ -174,6 +190,10 @@ func (h *VideoHandler) BatchGenerateShotClips(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"source":   "batch_clips",
+		"shot_ids": req.ShotIDs,
+	})
 
 	go func(taskID string) {
 		defer func() {
