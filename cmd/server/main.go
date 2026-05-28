@@ -1126,6 +1126,9 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_literary_analysis", "rhythm_pattern", "TEXT NULL"},
 		{"ink_literary_analysis", "imagery_system", "TEXT NULL"},
 		{"ink_literary_analysis", "inter_chapter_hooks", "TEXT NULL"},
+		// ink_crawl_job TaskService 集成字段（2026-05-28 新增）
+		{"ink_crawl_job", "task_id", "VARCHAR(50) NULL"},
+		{"ink_crawl_job", "tenant_id", "INT UNSIGNED NOT NULL DEFAULT 0"},
 	}
 	for _, a := range additions {
 		// 先查 information_schema，列已存在则跳过，避免触发 GORM 的 Error 1060 日志

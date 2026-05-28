@@ -779,12 +779,17 @@ func (s *AssetService) crawlBBCSFX(ctx context.Context, job *model.CrawlJob) (im
 			b, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
 			resp.Body.Close()
 			if resp.StatusCode >= 500 {
-				fetchErr = fmt.Errorf("BBC SFX HTTP %d", resp.StatusCode)
+				fetchErr = fmt.Errorf("BBC SFX HTTP %d: %.200s", resp.StatusCode, b)
 				continue // retry on server error
 			}
 			if resp.StatusCode != http.StatusOK {
-				errMsg = fmt.Sprintf("BBC SFX HTTP %d", resp.StatusCode)
+				errMsg = fmt.Sprintf("BBC SFX HTTP %d: %.200s", resp.StatusCode, b)
 				return // don't retry on 4xx (permanent error)
+			}
+			ct := resp.Header.Get("Content-Type")
+			if ct != "" && !strings.HasPrefix(ct, "application/json") {
+				errMsg = fmt.Sprintf("BBC SFX unexpected content-type %q: %.200s", ct, b)
+				return
 			}
 			body = b
 			fetchErr = nil
@@ -807,7 +812,7 @@ func (s *AssetService) crawlBBCSFX(ctx context.Context, job *model.CrawlJob) (im
 			} `json:"results"`
 		}
 		if err := json.Unmarshal(body, &result); err != nil {
-			errMsg = "parse error: " + err.Error()
+			errMsg = fmt.Sprintf("parse error: %v — body: %.200s", err, body)
 			return
 		}
 
