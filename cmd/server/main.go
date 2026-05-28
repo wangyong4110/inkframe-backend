@@ -144,6 +144,7 @@ func main() {
 	// SFX 音效服务（五层降级：本地库 → Freesound → Pixabay → Jamendo → ElevenLabs）
 	crawlProxyURL := getEnv("CRAWL_PROXY_URL", cfg.Crawl.ProxyURL)
 	services.AssetService.WithCrawlProxy(crawlProxyURL)
+	services.AssetService.RecoverOrphanedCrawlJobs()
 
 	sfxService := service.NewSFXService(services.AIService, storageSvc, repos.StoryboardRepo, service.SFXServiceConfig{
 		SFXDir:          getEnv("SFX_DIR", cfg.SFX.Dir),

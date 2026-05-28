@@ -453,6 +453,13 @@ func (r *CrawlJobRepository) UpdateProgress(id uint, imported, skipped, failed i
 	}).Error
 }
 
+func (r *CrawlJobRepository) Reset(id uint) error {
+	return r.db.Model(&model.CrawlJob{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"status": "pending", "error_msg": "", "imported": 0, "skipped": 0,
+		"failed": 0, "total_found": 0, "started_at": nil, "completed_at": nil,
+	}).Error
+}
+
 func (r *CrawlJobRepository) UpdateFinal(id uint, status string, totalFound int, errMsg string, ts *time.Time) error {
 	fields := map[string]interface{}{"status": status}
 	if totalFound > 0 {
@@ -478,6 +485,18 @@ func (r *CrawlJobRepository) List(page, size int) ([]*model.CrawlJob, int64, err
 	r.db.Model(&model.CrawlJob{}).Count(&total)
 	err := r.db.Order("created_at DESC").Offset((page - 1) * size).Limit(size).Find(&jobs).Error
 	return jobs, total, err
+}
+
+func (r *CrawlJobRepository) SetTaskID(id uint, taskID string) error {
+	return r.db.Model(&model.CrawlJob{}).Where("id = ?", id).Update("task_id", taskID).Error
+}
+
+// MarkRunningAsFailed marks jobs stuck in "running" or "pending" as "failed".
+// Called on server startup to recover from unclean shutdowns.
+func (r *CrawlJobRepository) MarkRunningAsFailed() error {
+	return r.db.Model(&model.CrawlJob{}).
+		Where("status IN ?", []string{"running", "pending"}).
+		Updates(map[string]interface{}{"status": "failed", "error_msg": "server restarted"}).Error
 }
 
 // ─── ShareLinkRepository ──────────────────────────────────────────────────────

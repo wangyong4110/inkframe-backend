@@ -2265,6 +2265,8 @@ func (AssetCollectionItem) TableName() string { return "ink_asset_collection_ite
 // CrawlJob tracks crawler runs that import assets directly into the public library (ink_crawl_job).
 type CrawlJob struct {
 	ID          uint       `json:"id" gorm:"primaryKey"`
+	TaskID      string     `json:"task_id" gorm:"size:50;index"`            // AsyncTask.TaskID for lifecycle management
+	TenantID    uint       `json:"tenant_id" gorm:"index"`
 	Source      string     `json:"source" gorm:"size:50"` // unsplash|pexels|pixabay|freesound|nasa|wikimedia
 	Query       string     `json:"query" gorm:"size:500"`
 	AssetType   string     `json:"asset_type" gorm:"size:20"`

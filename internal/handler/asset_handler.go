@@ -686,7 +686,7 @@ func (h *AssetHandler) CreateCrawlJob(c *gin.Context) {
 	if body.Limit == 0 {
 		body.Limit = 20
 	}
-	job, err := h.svc.CreateCrawlJob(body.Source, body.Query, body.AssetType, body.License, body.Limit, callerID(c))
+	job, err := h.svc.CreateCrawlJob(tenantID(c), body.Source, body.Query, body.AssetType, body.License, body.Limit, callerID(c))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -700,6 +700,17 @@ func (h *AssetHandler) GetCrawlJob(c *gin.Context) {
 	job, err := h.svc.GetCrawlJob(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, err.Error())
+		return
+	}
+	respondOK(c, job)
+}
+
+// POST /crawl-jobs/:id/retry
+func (h *AssetHandler) RetryCrawlJob(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	job, err := h.svc.RetryCrawlJob(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusBadRequest, err.Error())
 		return
 	}
 	respondOK(c, job)

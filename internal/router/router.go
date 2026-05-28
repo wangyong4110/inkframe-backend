@@ -653,6 +653,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			v1.POST("/crawl-jobs", ah.CreateCrawlJob)
 			v1.GET("/crawl-jobs/:id", ah.GetCrawlJob)
 			v1.POST("/crawl-jobs/:id/cancel", ah.CancelCrawlJob)
+			v1.POST("/crawl-jobs/:id/retry", ah.RetryCrawlJob)
 
 			// Admin
 			adminR := v1.Group("/admin")
