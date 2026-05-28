@@ -405,9 +405,15 @@ func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.Stor
 	var wg sync.WaitGroup
 	var updated, failed atomic.Int32
 
+	var skipped atomic.Int32
 	for _, shot := range shots {
 		if ctx.Err() != nil {
 			break
+		}
+		// 已有有效结构化 tags（非空且含 tag 字段）则跳过，避免重复调用 AI
+		if existing := parseSFXTags(shot.SFXTags); len(existing) > 0 && existing[0].Tag != "" {
+			skipped.Add(1)
+			continue
 		}
 		wg.Add(1)
 		sem <- struct{}{}
@@ -424,7 +430,8 @@ func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.Stor
 		}(shot)
 	}
 	wg.Wait()
-	logger.Printf("[SFXService] AnalyzeSFXForVideo: updated=%d failed=%d", updated.Load(), failed.Load())
+	logger.Printf("[SFXService] AnalyzeSFXForVideo: updated=%d failed=%d skipped=%d(already tagged)",
+		updated.Load(), failed.Load(), skipped.Load())
 	return nil
 }
 
@@ -1587,11 +1594,21 @@ func (s *SFXService) generateAudioLDMForTag(ctx context.Context, item sfxTagItem
 		dur = 5
 	}
 
+	// AudioLDM2 标准 API 字段名：prompt（不是 text）、duration（秒，浮点）
+	// 同时兼容部分实现用 text 字段的情况（两个字段都发送）
 	body, _ := json.Marshal(map[string]interface{}{
-		"text":     prompt,
+		"prompt":   prompt,
+		"text":     prompt, // 兼容旧版实现
 		"duration": dur,
 	})
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.audioLDMEndpoint, bytes.NewReader(body))
+
+	// 确保 endpoint 末尾有斜杠，避免 307 重定向浪费一次 RTT
+	endpoint := s.audioLDMEndpoint
+	if !strings.HasSuffix(endpoint, "/") {
+		endpoint += "/"
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return "", 0, err
 	}
@@ -1608,7 +1625,7 @@ func (s *SFXService) generateAudioLDMForTag(ctx context.Context, item sfxTagItem
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 		return "", 0, fmt.Errorf("audioldm HTTP %d: %s", resp.StatusCode, b)
 	}
 
