@@ -1581,9 +1581,11 @@ func (s *SFXService) generateAudioLDMForTag(ctx context.Context, item sfxTagItem
 		return "", 0, fmt.Errorf("storage not configured for audioldm upload")
 	}
 
-	prompt := item.Prompt
+	// AudioLDM2 在英文 prompt 上效果最好，且部分实现有 ASCII-only 校验。
+	// 优先使用英文 tag（Freesound 四元格式），仅当 tag 为空时才降级到中文 prompt。
+	prompt := item.Tag
 	if prompt == "" {
-		prompt = item.Tag
+		prompt = item.Prompt
 	}
 
 	dur := shot.Duration
