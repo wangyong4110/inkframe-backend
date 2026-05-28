@@ -2402,8 +2402,8 @@ func registerTaskResumeHandlers(svcs *Services) {
 			}
 
 			tenantID := t.TenantID
-			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
+			svcs.TaskService.SetRunning(t.TaskID)                                                              //nolint:errcheck
+			progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) }                    //nolint:errcheck
 			succ, fail, err := svcs.CharacterService.BatchGenerateImages(tenantID, novelID, params.Provider, params.Force, progressFn)
 			if err != nil {
 				logger.Printf("TaskService resume three_view %s failed: %v", t.TaskID, err)
@@ -2412,6 +2412,146 @@ func registerTaskResumeHandlers(svcs *Services) {
 				logger.Printf("TaskService resume three_view %s done: succeeded=%d failed=%d", t.TaskID, succ, fail)
 				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"succeeded": succ, "failed": fail}) //nolint:errcheck
 			}
+		})
+	}
+
+	// char_gen: AI batch generate characters for a novel (idempotent — overwrites existing)
+	if svcs.CharacterService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeCharGen, func(t *model.AsyncTask) {
+			novelID := t.EntityID
+			if novelID == 0 {
+				return
+			}
+			tenantID := t.TenantID
+			svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
+			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
+			chars, err := svcs.CharacterService.AIBatchGenerate(tenantID, novelID)
+			if err != nil {
+				logger.Printf("TaskService resume char_gen %s failed: %v", t.TaskID, err)
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+			} else {
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"count": len(chars)}) //nolint:errcheck
+			}
+		})
+	}
+
+	// item_extract: AI extract items from novel (idempotent — overwrites existing)
+	if svcs.ItemService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeItemExtract, func(t *model.AsyncTask) {
+			novelID := t.EntityID
+			if novelID == 0 {
+				return
+			}
+			tenantID := t.TenantID
+			svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
+			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
+			items, err := svcs.ItemService.AIExtractFromNovel(tenantID, novelID)
+			if err != nil {
+				logger.Printf("TaskService resume item_extract %s failed: %v", t.TaskID, err)
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+			} else {
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"count": len(items)}) //nolint:errcheck
+			}
+		})
+	}
+
+	// plot_extract: AI extract plot points from novel (idempotent — overwrites existing)
+	if svcs.PlotPointService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypePlotExtract, func(t *model.AsyncTask) {
+			novelID := t.EntityID
+			if novelID == 0 {
+				return
+			}
+			tenantID := t.TenantID
+			svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
+			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
+			points, err := svcs.PlotPointService.AIExtractFromNovel(tenantID, novelID)
+			if err != nil {
+				logger.Printf("TaskService resume plot_extract %s failed: %v", t.TaskID, err)
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+			} else {
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"count": len(points)}) //nolint:errcheck
+			}
+		})
+	}
+
+	// chapter_summary_batch: batch generate chapter summaries (idempotent — skips chapters with existing summaries)
+	if svcs.ChapterService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterSummaryBatch, func(t *model.AsyncTask) {
+			novelID := t.EntityID
+			if novelID == 0 {
+				return
+			}
+			tenantID := t.TenantID
+			svcs.TaskService.SetRunning(t.TaskID)                                               //nolint:errcheck
+			progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) }     //nolint:errcheck
+			count, err := svcs.ChapterService.BatchGenerateSummaries(tenantID, novelID, progressFn)
+			if err != nil {
+				logger.Printf("TaskService resume chapter_summary_batch %s failed: %v", t.TaskID, err)
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+			} else {
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"count": count}) //nolint:errcheck
+			}
+		})
+	}
+
+	// storyboard_review: AI review storyboard (creates a new review record, safe to re-run)
+	if svcs.StoryboardService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeStoryboardReview, func(t *model.AsyncTask) {
+			videoID := t.EntityID
+			if videoID == 0 {
+				return
+			}
+			var params struct {
+				Provider      string  `json:"provider"`
+				PreviousScore float64 `json:"previous_score"`
+			}
+			if t.ParamsJSON != "" {
+				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
+			}
+			tenantID := t.TenantID
+			svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
+			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
+			review, recordID, err := svcs.StoryboardService.ReviewStoryboard(tenantID, videoID, params.Provider, params.PreviousScore)
+			if err != nil {
+				logger.Printf("TaskService resume storyboard_review %s failed: %v", t.TaskID, err)
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+				return
+			}
+			type reviewResult struct {
+				*model.StoryboardReview
+				RecordID uint `json:"record_id,omitempty"`
+			}
+			svcs.TaskService.UpdateProgress(t.TaskID, 90)                                                          //nolint:errcheck
+			svcs.TaskService.Complete(t.TaskID, &reviewResult{StoryboardReview: review, RecordID: recordID}) //nolint:errcheck
+		})
+	}
+
+	// chapter_review: AI review chapter content (creates a new review record, safe to re-run)
+	if svcs.QualityControlService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterReview, func(t *model.AsyncTask) {
+			chapterID := t.EntityID
+			if chapterID == 0 {
+				return
+			}
+			var params struct {
+				Provider string `json:"provider"`
+			}
+			if t.ParamsJSON != "" {
+				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
+			}
+			tenantID := t.TenantID
+			svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
+			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
+			_ = tenantID // QualityControlService.ReviewChapter does not take tenantID
+			review, err := svcs.QualityControlService.ReviewChapter(context.Background(), chapterID, params.Provider)
+			if err != nil {
+				logger.Printf("TaskService resume chapter_review %s failed: %v", t.TaskID, err)
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+				return
+			}
+			svcs.TaskService.UpdateProgress(t.TaskID, 90)  //nolint:errcheck
+			svcs.TaskService.Complete(t.TaskID, review)     //nolint:errcheck
 		})
 	}
 }

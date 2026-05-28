@@ -11,6 +11,10 @@ from typing import Optional
 # 抑制 OpenMP 运行时冲突（临时绕行方案，如在生产环境建议使用 conda install nomkl 彻底解决）
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
+# 使用镜像站（如已能访问 huggingface.co 可删除此行）
+if not os.environ.get("HF_ENDPOINT"):
+    os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+
 import torch
 import soundfile as sf
 import uvicorn
@@ -30,9 +34,16 @@ app = FastAPI(
 )
 
 # ==================== 加载模型 ====================
+MODEL_ID = "cvssp/audioldm-s-full-v2"
 print("正在加载 AudioLDM 模型，首次运行会自动下载（约1.2GB），请稍候...")
+# 优先加载本地缓存，缓存缺失时走 HF_ENDPOINT 镜像下载
 # Intel Mac CPU 只能使用 float32，不能使用 float16
-pipe = AudioLDMPipeline.from_pretrained("cvssp/audioldm-s-full-v2", torch_dtype=torch.float32)
+try:
+    pipe = AudioLDMPipeline.from_pretrained(MODEL_ID, torch_dtype=torch.float32, local_files_only=True)
+    print("已从本地缓存加载模型")
+except Exception:
+    print(f"本地缓存未找到，从镜像站下载: {os.environ.get('HF_ENDPOINT', 'huggingface.co')}")
+    pipe = AudioLDMPipeline.from_pretrained(MODEL_ID, torch_dtype=torch.float32)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 pipe = pipe.to(device)
 print(f"模型加载完成，运行设备: {device.upper()}")

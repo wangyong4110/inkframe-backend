@@ -136,6 +136,10 @@ func (h *VideoHandler) ReviewStoryboard(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"provider":       req.Provider,
+		"previous_score": req.PreviousScore,
+	})
 
 	go func(taskID string) {
 		defer func() {
