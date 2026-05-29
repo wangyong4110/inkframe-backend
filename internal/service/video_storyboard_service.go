@@ -1138,18 +1138,18 @@ func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string,
 	// 拉取最近一次已应用的审查反馈，注入提示词避免重复建议
 	var previousFeedback []model.ShotReviewFeedback
 	if s.reviewRecordRepo != nil {
-		if latest, err := s.reviewRecordRepo.GetLatestApplied(videoID); err == nil && latest.ReviewDataJSON != "" {
+		if latest, err := s.reviewRecordRepo.GetLatestApplied(model.ReviewEntityStoryboard, videoID); err == nil && latest.ReviewJSON != "" {
 			var prev model.StoryboardReview
-			if json.Unmarshal([]byte(latest.ReviewDataJSON), &prev) == nil {
+			if json.Unmarshal([]byte(latest.ReviewJSON), &prev) == nil {
 				previousFeedback = prev.ShotFeedback
 			}
 		}
 	}
 
 	// 拉取用户永久忽略的建议
-	var ignoredItems []*model.IgnoredSuggestion
+	var ignoredItems []*model.IgnoredReviewIssue
 	if s.ignoredSuggestionRepo != nil {
-		ignoredItems, _ = s.ignoredSuggestionRepo.ListByVideo(videoID)
+		ignoredItems, _ = s.ignoredSuggestionRepo.ListByEntity(model.ReviewEntityStoryboard, videoID)
 	}
 
 	prompt := buildStoryboardReviewPrompt(shots, chapterContent, previousScore, previousFeedback, ignoredItems)
@@ -1168,12 +1168,13 @@ func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string,
 	var recordID uint
 	if s.reviewRecordRepo != nil {
 		reviewJSON, _ := json.Marshal(review)
-		rec := &model.StoryboardReviewRecord{
-			TenantID:       tenantID,
-			VideoID:        videoID,
-			OverallScore:   review.OverallScore,
-			ReviewDataJSON: string(reviewJSON),
-			Status:         "pending",
+		rec := &model.ReviewRecord{
+			TenantID:     tenantID,
+			EntityType:   model.ReviewEntityStoryboard,
+			EntityID:     videoID,
+			OverallScore: review.OverallScore,
+			ReviewJSON:   string(reviewJSON),
+			Status:       "pending",
 		}
 		if saveErr := s.reviewRecordRepo.Create(rec); saveErr != nil {
 			logger.Printf("ReviewStoryboard: save record failed: %v", saveErr)
@@ -1250,7 +1251,7 @@ func (s *VideoService) ApplyReviewDeletes(videoID uint, shotNos []int) (int, err
 // buildStoryboardReviewPrompt 构建分镜审查提示词
 // chapterContent 非空时注入小说章节原文（用于对比覆盖率、建议插入/删除）。
 // previousScore > 0 时注入上次评分上下文；previousFeedback 非空时注入已修正问题；ignoredItems 非空时注入永久忽略列表。
-func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent string, previousScore float64, previousFeedback []model.ShotReviewFeedback, ignoredItems []*model.IgnoredSuggestion) string {
+func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent string, previousScore float64, previousFeedback []model.ShotReviewFeedback, ignoredItems []*model.IgnoredReviewIssue) string {
 	// 预格式化分镜数据（带截断保护）
 	var sb strings.Builder
 	truncate := func(s string, max int) string {
@@ -1291,7 +1292,11 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent s
 	// 构建忽略列表摘要
 	var ignoredLines []string
 	for _, item := range ignoredItems {
-		ignoredLines = append(ignoredLines, fmt.Sprintf("镜%d: %s", item.ShotNo, item.IssueText))
+		var ctx struct {
+			ShotNo int `json:"shot_no"`
+		}
+		_ = json.Unmarshal([]byte(item.ContextJSON), &ctx)
+		ignoredLines = append(ignoredLines, fmt.Sprintf("镜%d: %s", ctx.ShotNo, item.IssueText))
 	}
 
 	// 截断章节原文（防止过长撑爆上下文，保留前 3000 字）
@@ -1306,7 +1311,7 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent s
 		"HasChapterContent":  truncatedChapter != "",
 		"ChapterContent":     truncatedChapter,
 		"HasPreviousScore":   previousScore > 0,
-		"PreviousScoreStr":   fmt.Sprintf("%.1f", previousScore),
+		"PreviousScoreStr":   fmt.Sprintf("%.0f", previousScore),
 		"HasPreviousFixed":   len(prevFixedLines) > 0,
 		"PreviousFixedText":  strings.Join(prevFixedLines, "\n"),
 		"HasIgnored":         len(ignoredLines) > 0,
@@ -1455,12 +1460,13 @@ func (s *VideoService) OptimizeStoryboardFromReview(tenantID, videoID uint, revi
 	// 保存优化前快照（用于 rollback）
 	if s.reviewRecordRepo != nil {
 		snapshotData, _ := json.Marshal(shots)
-		snap := &model.StoryboardReviewRecord{
-			TenantID:       tenantID,
-			VideoID:        videoID,
-			OverallScore:   review.OverallScore,
-			ReviewDataJSON: string(snapshotData),
-			Status:         "snapshot",
+		snap := &model.ReviewRecord{
+			TenantID:   tenantID,
+			EntityType: model.ReviewEntityStoryboard,
+			EntityID:   videoID,
+			OverallScore: review.OverallScore,
+			ReviewJSON:   string(snapshotData),
+			Status:     "snapshot",
 		}
 		if saveErr := s.reviewRecordRepo.Create(snap); saveErr != nil {
 			logger.Printf("OptimizeStoryboardFromReview: save snapshot failed: %v", saveErr)
@@ -1567,7 +1573,7 @@ func (s *VideoService) RollbackReview(tenantID, videoID, recordID uint) (int, er
 	if err != nil {
 		return 0, fmt.Errorf("审查记录不存在: %w", err)
 	}
-	if rec.VideoID != videoID {
+	if rec.EntityID != videoID {
 		return 0, fmt.Errorf("审查记录不属于该视频")
 	}
 	if rec.Status != "snapshot" {
@@ -1576,7 +1582,7 @@ func (s *VideoService) RollbackReview(tenantID, videoID, recordID uint) (int, er
 
 	// 解析快照中的分镜数据
 	var snapshotShots []*model.StoryboardShot
-	if err := json.Unmarshal([]byte(rec.ReviewDataJSON), &snapshotShots); err != nil {
+	if err := json.Unmarshal([]byte(rec.ReviewJSON), &snapshotShots); err != nil {
 		return 0, fmt.Errorf("快照数据解析失败: %w", err)
 	}
 
@@ -1627,11 +1633,11 @@ func (s *VideoService) RollbackReview(tenantID, videoID, recordID uint) (int, er
 }
 
 // ListReviewRecords 列出视频的所有审查记录
-func (s *VideoService) ListReviewRecords(videoID uint) ([]*model.StoryboardReviewRecord, error) {
+func (s *VideoService) ListReviewRecords(videoID uint) ([]*model.ReviewRecord, error) {
 	if s.reviewRecordRepo == nil {
 		return nil, fmt.Errorf("review record repository not initialized")
 	}
-	return s.reviewRecordRepo.ListByVideo(videoID)
+	return s.reviewRecordRepo.ListByEntity(model.ReviewEntityStoryboard, videoID)
 }
 
 // ─── Ignored suggestions ─────────────────────────────────────────────────────
@@ -1641,16 +1647,17 @@ func issueHash(text string) string {
 	return hex.EncodeToString(sum[:16])
 }
 
-func (s *VideoService) IgnoreSuggestion(tenantID, videoID uint, shotNo int, issueText string) (*model.IgnoredSuggestion, error) {
+func (s *VideoService) IgnoreSuggestion(tenantID, videoID uint, shotNo int, issueText string) (*model.IgnoredReviewIssue, error) {
 	if s.ignoredSuggestionRepo == nil {
 		return nil, fmt.Errorf("ignored suggestion repository not initialized")
 	}
-	item := &model.IgnoredSuggestion{
-		TenantID:  tenantID,
-		VideoID:   videoID,
-		ShotNo:    shotNo,
-		IssueText: issueText,
-		IssueHash: issueHash(issueText),
+	item := &model.IgnoredReviewIssue{
+		TenantID:    tenantID,
+		EntityType:  model.ReviewEntityStoryboard,
+		EntityID:    videoID,
+		IssueText:   issueText,
+		IssueHash:   issueHash(issueText),
+		ContextJSON: fmt.Sprintf(`{"shot_no":%d}`, shotNo),
 	}
 	if err := s.ignoredSuggestionRepo.Create(item); err != nil {
 		return nil, err
@@ -1662,7 +1669,7 @@ func (s *VideoService) UnignoreSuggestion(videoID, id uint) error {
 	if s.ignoredSuggestionRepo == nil {
 		return fmt.Errorf("ignored suggestion repository not initialized")
 	}
-	items, err := s.ignoredSuggestionRepo.ListByVideo(videoID)
+	items, err := s.ignoredSuggestionRepo.ListByEntity(model.ReviewEntityStoryboard, videoID)
 	if err != nil {
 		return err
 	}
@@ -1674,11 +1681,11 @@ func (s *VideoService) UnignoreSuggestion(videoID, id uint) error {
 	return fmt.Errorf("ignored suggestion %d not found for video %d", id, videoID)
 }
 
-func (s *VideoService) ListIgnoredSuggestions(videoID uint) ([]*model.IgnoredSuggestion, error) {
+func (s *VideoService) ListIgnoredSuggestions(videoID uint) ([]*model.IgnoredReviewIssue, error) {
 	if s.ignoredSuggestionRepo == nil {
 		return nil, fmt.Errorf("ignored suggestion repository not initialized")
 	}
-	return s.ignoredSuggestionRepo.ListByVideo(videoID)
+	return s.ignoredSuggestionRepo.ListByEntity(model.ReviewEntityStoryboard, videoID)
 }
 
 // ─── Ensure unused imports are satisfied ─────────────────────────────────────

@@ -46,10 +46,8 @@ type Repositories struct {
 	SceneConsistencyLogRepo *repository.SceneConsistencyLogRepository
 	SystemSettingRepo       *repository.SystemSettingRepository
 	ShotVoiceSegmentRepo       *repository.ShotVoiceSegmentRepository
-	StoryboardReviewRecordRepo  *repository.StoryboardReviewRecordRepository
-	IgnoredSuggestionRepo       *repository.IgnoredSuggestionRepository
-	ChapterReviewRecordRepo     *repository.ChapterReviewRecordRepository
-	ChapterIgnoredIssueRepo     *repository.ChapterIgnoredIssueRepository
+	ReviewRecordRepo            *repository.ReviewRecordRepository
+	IgnoredReviewIssueRepo      *repository.IgnoredReviewIssueRepository
 	ShotSFXItemRepo         *repository.ShotSFXItemRepository
 	VideoBGMSegmentRepo     *repository.VideoBGMSegmentRepository
 	RewriteProjectRepo           *repository.RewriteProjectRepository
@@ -116,10 +114,8 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		SceneConsistencyLogRepo: repository.NewSceneConsistencyLogRepository(db),
 		SystemSettingRepo:       repository.NewSystemSettingRepository(db),
 		ShotVoiceSegmentRepo:       repository.NewShotVoiceSegmentRepository(db),
-		StoryboardReviewRecordRepo: repository.NewStoryboardReviewRecordRepository(db),
-		IgnoredSuggestionRepo:      repository.NewIgnoredSuggestionRepository(db),
-		ChapterReviewRecordRepo:    repository.NewChapterReviewRecordRepository(db),
-		ChapterIgnoredIssueRepo:    repository.NewChapterIgnoredIssueRepository(db),
+		ReviewRecordRepo:       repository.NewReviewRecordRepository(db),
+		IgnoredReviewIssueRepo: repository.NewIgnoredReviewIssueRepository(db),
 		ShotSFXItemRepo:         repository.NewShotSFXItemRepository(db),
 		VideoBGMSegmentRepo:     repository.NewVideoBGMSegmentRepository(db),
 		RewriteProjectRepo:           repository.NewRewriteProjectRepository(db, redis),
@@ -291,7 +287,7 @@ func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *
 
 	// 质量控制服务
 	qualitySvc := service.NewQualityControlService(aiSvc, repos.ChapterRepo, repos.NovelRepo).
-		WithReviewRepos(repos.ChapterReviewRecordRepo, repos.ChapterIgnoredIssueRepo)
+		WithReviewRepos(repos.ReviewRecordRepo, repos.IgnoredReviewIssueRepo)
 
 	return &coreSvcs{AI: aiSvc, Model: modelSvc, Task: taskSvc, PlotPoint: plotPointSvc, Quality: qualitySvc}
 }

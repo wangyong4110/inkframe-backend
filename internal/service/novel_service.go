@@ -368,7 +368,7 @@ func (s *NovelService) UnpublishNovel(id uint) error {
 type GenerateOutlineRequest struct {
 	NovelID        uint     `json:"novel_id" binding:"required"`
 	Prompt         string   `json:"prompt"`
-	ChapterNum     int      `json:"chapter_num" binding:"required"`
+	ChapterNum     int      `json:"chapter_num"` // 0 = AI 自决章节数
 	Keywords       []string `json:"keywords"`
 	MaxTokens      int      `json:"max_tokens,omitempty"`
 	Temperature    float64  `json:"temperature,omitempty"`
@@ -583,7 +583,11 @@ func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutli
 		sb.WriteString(fmt.Sprintf("创作要求：%s\n\n", req.Prompt))
 	}
 
-	sb.WriteString(fmt.Sprintf("请生成%d章的大纲，每章包括：标题、简要概述、预计字数（2000-3000字）、主要剧情点。\n", req.ChapterNum))
+	if req.ChapterNum > 0 {
+		sb.WriteString(fmt.Sprintf("请生成%d章的大纲，每章包括：标题、简要概述、预计字数（2000-3000字）、主要剧情点。\n", req.ChapterNum))
+	} else {
+		sb.WriteString("请根据故事规模自行决定合适的章节数（通常30-200章之间），每章包括：标题、简要概述、预计字数（2000-3000字）、主要剧情点。\n")
+	}
 
 	// 注入未解决剧情点（引导大纲在后续章节中推进解决）
 	if s.plotPointService != nil {

@@ -77,7 +77,7 @@ func (s *StoryboardService) OptimizeStoryboardFromReview(tenantID, videoID uint,
 }
 
 // ListReviewRecords 返回审查历史列表
-func (s *StoryboardService) ListReviewRecords(videoID uint) ([]*model.StoryboardReviewRecord, error) {
+func (s *StoryboardService) ListReviewRecords(videoID uint) ([]*model.ReviewRecord, error) {
 	return s.videoService.ListReviewRecords(videoID)
 }
 

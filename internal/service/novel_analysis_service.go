@@ -975,13 +975,10 @@ func (s *NovelAnalysisService) stepGenerateOutline(
 ) (*OutlineResult, error) {
 	chapterCount, _ := s.chapterRepo.CountByNovel(novel.ID)
 
-	// AI 创建模式：无章节时使用 TargetChapters，最低 30 章
+	// AI 创建模式：无章节时使用 TargetChapters；若为 0 则由 AI 自行决定章节数
 	chapterNum := int(chapterCount)
 	if chapterNum == 0 {
-		chapterNum = novel.TargetChapters
-	}
-	if chapterNum <= 0 {
-		chapterNum = 30
+		chapterNum = novel.TargetChapters // 0 表示让 AI 自决
 	}
 
 	// 大纲 JSON 对 30 章非常庞大（每章含摘要/剧情点/钩子等），
@@ -1004,6 +1001,10 @@ func (s *NovelAnalysisService) stepGenerateOutline(
 	}
 	if novel.Description == "" && outline.Summary != "" {
 		updateFields["description"] = outline.Summary
+	}
+	// 若用户未设置目标章节数，用 AI 生成的实际章节数回填
+	if novel.TargetChapters == 0 && len(outline.Chapters) > 0 {
+		updateFields["target_chapters"] = len(outline.Chapters)
 	}
 	if len(updateFields) > 0 {
 		if err := s.novelRepo.UpdateFields(novel.ID, updateFields); err != nil {

@@ -8,7 +8,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-26-v3"
+const schemaVersion = "2026-05-30-v1"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -144,10 +144,8 @@ func autoMigrate(db *gorm.DB) error {
 		&model.SceneConsistencyLog{},
 		&model.SystemSetting{},
 		&model.ShotVoiceSegment{},
-		&model.StoryboardReviewRecord{},
-		&model.IgnoredSuggestion{},
-		&model.ChapterReviewRecord{},
-		&model.ChapterIgnoredIssue{},
+		&model.ReviewRecord{},
+		&model.IgnoredReviewIssue{},
 		&model.ShotSFXItem{},
 		&model.VideoBGMSegment{},
 		&model.RewriteProject{},

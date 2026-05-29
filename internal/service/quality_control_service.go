@@ -31,12 +31,13 @@ type QualityControlService struct {
 	chapterRepo interface {
 		GetByID(id uint) (*model.Chapter, error)
 		Update(chapter *model.Chapter) error
+		GetRecent(novelID uint, currentChapterNo, count int) ([]*model.Chapter, error)
 	}
 	novelRepo interface {
 		GetByID(id uint) (*model.Novel, error)
 	}
-	reviewRecordRepo *repository.ChapterReviewRecordRepository
-	ignoredIssueRepo *repository.ChapterIgnoredIssueRepository
+	reviewRecordRepo *repository.ReviewRecordRepository
+	ignoredIssueRepo *repository.IgnoredReviewIssueRepository
 }
 
 func NewQualityControlService(
@@ -44,6 +45,7 @@ func NewQualityControlService(
 	chapterRepo interface {
 		GetByID(id uint) (*model.Chapter, error)
 		Update(chapter *model.Chapter) error
+		GetRecent(novelID uint, currentChapterNo, count int) ([]*model.Chapter, error)
 	},
 	novelRepo interface {
 		GetByID(id uint) (*model.Novel, error)
@@ -54,8 +56,8 @@ func NewQualityControlService(
 
 // WithReviewRepos injects the review/ignore repositories.
 func (s *QualityControlService) WithReviewRepos(
-	reviewRepo *repository.ChapterReviewRecordRepository,
-	ignoreRepo *repository.ChapterIgnoredIssueRepository,
+	reviewRepo *repository.ReviewRecordRepository,
+	ignoreRepo *repository.IgnoredReviewIssueRepository,
 ) *QualityControlService {
 	s.reviewRecordRepo = reviewRepo
 	s.ignoredIssueRepo = ignoreRepo
@@ -492,7 +494,49 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 		return nil, fmt.Errorf("novel %d not found: %w", chapter.NovelID, err)
 	}
 
-	// Build numbered paragraph list
+	// Fetch previous review score for longitudinal reference
+	var previousScore float64
+	if s.reviewRecordRepo != nil {
+		if recs, err2 := s.reviewRecordRepo.ListByEntity(model.ReviewEntityChapter, chapterID); err2 == nil && len(recs) > 0 {
+			previousScore = recs[0].OverallScore
+		}
+	}
+
+	// Fetch user-ignored issues to exclude from this review
+	var ignoredLines []string
+	if s.ignoredIssueRepo != nil {
+		if items, err2 := s.ignoredIssueRepo.ListByEntity(model.ReviewEntityChapter, chapterID); err2 == nil {
+			for _, item := range items {
+				ignoredLines = append(ignoredLines, item.IssueText)
+			}
+		}
+	}
+
+	// Fetch up to 2 previous chapters as cross-chapter context
+	type prevChapterInfo struct {
+		ChapterNo int
+		Title     string
+		Content   string
+	}
+	var prevChapters []prevChapterInfo
+	if recent, err2 := s.chapterRepo.GetRecent(novel.ID, chapter.ChapterNo, 2); err2 == nil {
+		// GetRecent returns DESC order; reverse to chronological
+		for i := len(recent) - 1; i >= 0; i-- {
+			c := recent[i]
+			content := c.Content
+			if len([]rune(content)) > 1500 {
+				runes := []rune(content)
+				content = string(runes[:1500]) + "…（已截断）"
+			}
+			prevChapters = append(prevChapters, prevChapterInfo{
+				ChapterNo: c.ChapterNo,
+				Title:     c.Title,
+				Content:   content,
+			})
+		}
+	}
+
+	// Build numbered paragraph list for target chapter
 	paragraphs := strings.Split(strings.TrimSpace(chapter.Content), "\n\n")
 	var sb strings.Builder
 	for i, p := range paragraphs {
@@ -504,9 +548,17 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 	}
 
 	prompt, err := renderPrompt("chapter_review", map[string]interface{}{
-		"Genre":            novel.Genre,
-		"CharacterSummary": "",
-		"Content":          sb.String(),
+		"Genre":             novel.Genre,
+		"CharacterSummary":  "",
+		"ChapterNo":         chapter.ChapterNo,
+		"ChapterTitle":      chapter.Title,
+		"HasPrevChapters":   len(prevChapters) > 0,
+		"PrevChapters":      prevChapters,
+		"Content":           sb.String(),
+		"HasIgnored":        len(ignoredLines) > 0,
+		"IgnoredText":       strings.Join(ignoredLines, "\n"),
+		"HasPreviousScore":  previousScore > 0,
+		"PreviousScoreStr":  fmt.Sprintf("%.0f", previousScore),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render chapter_review: %w", err)
@@ -526,12 +578,13 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 
 	// Persist record
 	reviewBytes, _ := json.Marshal(review)
-	rec := &model.ChapterReviewRecord{
-		ChapterID:       chapterID,
-		OverallScore:    review.OverallScore,
-		Status:          "pending",
-		ReviewJSON:      string(reviewBytes),
-		SnapshotContent: chapter.Content,
+	rec := &model.ReviewRecord{
+		EntityType:   model.ReviewEntityChapter,
+		EntityID:     chapterID,
+		OverallScore: review.OverallScore,
+		Status:       "pending",
+		ReviewJSON:   string(reviewBytes),
+		SnapshotJSON: chapter.Content,
 	}
 	if err := s.reviewRecordRepo.Create(rec); err != nil {
 		logger.Printf("QualityControlService.ReviewChapter: save record failed: %v", err)
@@ -542,14 +595,14 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 	return &review, nil
 }
 
-func (s *QualityControlService) ListReviewRecords(chapterID uint) ([]*model.ChapterReviewRecord, error) {
+func (s *QualityControlService) ListReviewRecords(chapterID uint) ([]*model.ReviewRecord, error) {
 	if s.reviewRecordRepo == nil {
 		return nil, nil
 	}
-	return s.reviewRecordRepo.ListByChapter(chapterID)
+	return s.reviewRecordRepo.ListByEntity(model.ReviewEntityChapter, chapterID)
 }
 
-func (s *QualityControlService) GetReviewRecord(recordID uint) (*model.ChapterReviewRecord, error) {
+func (s *QualityControlService) GetReviewRecord(recordID uint) (*model.ReviewRecord, error) {
 	if s.reviewRecordRepo == nil {
 		return nil, fmt.Errorf("review repos not wired")
 	}
@@ -565,14 +618,14 @@ func (s *QualityControlService) RollbackReview(recordID uint) error {
 	if err != nil {
 		return fmt.Errorf("record %d not found: %w", recordID, err)
 	}
-	if rec.SnapshotContent == "" {
+	if rec.SnapshotJSON == "" {
 		return fmt.Errorf("no snapshot available for record %d", recordID)
 	}
-	chapter, err := s.chapterRepo.GetByID(rec.ChapterID)
+	chapter, err := s.chapterRepo.GetByID(rec.EntityID)
 	if err != nil {
-		return fmt.Errorf("chapter %d not found: %w", rec.ChapterID, err)
+		return fmt.Errorf("chapter %d not found: %w", rec.EntityID, err)
 	}
-	chapter.Content = rec.SnapshotContent
+	chapter.Content = rec.SnapshotJSON
 	if err := s.chapterRepo.Update(chapter); err != nil {
 		return fmt.Errorf("restore chapter content: %w", err)
 	}
@@ -623,11 +676,11 @@ func (s *QualityControlService) ApplyDiffs(chapterID uint, diffs []ParagraphDiff
 	return applied, nil
 }
 
-func (s *QualityControlService) ListIgnoredIssues(chapterID uint) ([]*model.ChapterIgnoredIssue, error) {
+func (s *QualityControlService) ListIgnoredIssues(chapterID uint) ([]*model.IgnoredReviewIssue, error) {
 	if s.ignoredIssueRepo == nil {
 		return nil, nil
 	}
-	return s.ignoredIssueRepo.ListByChapter(chapterID)
+	return s.ignoredIssueRepo.ListByEntity(model.ReviewEntityChapter, chapterID)
 }
 
 // IgnoreIssue adds an issue to the ignored list (idempotent by hash).
@@ -637,11 +690,12 @@ func (s *QualityControlService) IgnoreIssue(chapterID uint, issueText, note stri
 	}
 	h := sha256.Sum256([]byte(issueText))
 	hash := hex.EncodeToString(h[:])
-	item := &model.ChapterIgnoredIssue{
-		ChapterID: chapterID,
-		IssueText: issueText,
-		IssueHash: hash,
-		Note:      note,
+	item := &model.IgnoredReviewIssue{
+		EntityType: model.ReviewEntityChapter,
+		EntityID:   chapterID,
+		IssueText:  issueText,
+		IssueHash:  hash,
+		Note:       note,
 	}
 	return s.ignoredIssueRepo.Create(item)
 }
@@ -650,5 +704,5 @@ func (s *QualityControlService) UnignoreIssue(issueID uint) error {
 	if s.ignoredIssueRepo == nil {
 		return fmt.Errorf("ignore repo not wired")
 	}
-	return s.ignoredIssueRepo.DeleteByID(issueID)
+	return s.ignoredIssueRepo.Delete(issueID)
 }

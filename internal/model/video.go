@@ -312,32 +312,42 @@ type ShotReviewFeedback struct {
 	SuggestedDescription string   `json:"suggested_description,omitempty"`
 }
 
-// IgnoredSuggestion 用户永久忽略的分镜审查建议
-type IgnoredSuggestion struct {
-	ID        uint      `json:"id" gorm:"primaryKey"`
-	TenantID  uint      `json:"tenant_id" gorm:"index;not null;default:1"`
-	VideoID   uint      `json:"video_id" gorm:"index;not null"`
-	ShotNo    int       `json:"shot_no" gorm:"not null"`
-	IssueText string    `json:"issue_text" gorm:"type:text;not null"`
-	IssueHash string    `json:"issue_hash" gorm:"size:32;uniqueIndex:uk_ignored_video_shot_issue"`
-	Note      string    `json:"note" gorm:"size:500"`
-	CreatedAt time.Time `json:"created_at"`
-}
+// ─── 统一审查记录（章节/分镜共用）────────────────────────────────────────────────
 
-func (IgnoredSuggestion) TableName() string { return "ink_ignored_suggestion" }
+const (
+	ReviewEntityChapter    = "chapter"
+	ReviewEntityStoryboard = "storyboard"
+)
 
-// StoryboardReviewRecord 分镜审查历史记录（含应用状态与回滚快照）
-type StoryboardReviewRecord struct {
+// ReviewRecord 统一审查历史记录（章节/分镜共用同一张表）
+type ReviewRecord struct {
 	gorm.Model
-	TenantID             uint       `json:"tenant_id" gorm:"index;not null;default:1"`
-	VideoID              uint       `json:"video_id" gorm:"index;not null"`
-	OverallScore         float64    `json:"overall_score"`
-	ReviewDataJSON       string     `json:"-" gorm:"column:review_data;type:text"`       // full StoryboardReview JSON
-	Status               string     `json:"status" gorm:"size:20;default:'pending'"`     // pending|applied|rolled_back
-	AppliedAt            *time.Time `json:"applied_at,omitempty"`
-	AppliedDiffsJSON     string     `json:"-" gorm:"column:applied_diffs;type:text"`     // []ShotApplyDiff JSON (selected)
-	RollbackSnapshotJSON string     `json:"-" gorm:"column:rollback_snapshot;type:text"` // []ShotRollbackItem JSON
+	TenantID         uint       `json:"tenant_id" gorm:"index;not null;default:1"`
+	EntityType       string     `json:"entity_type" gorm:"size:20;index"`           // "chapter" | "storyboard"
+	EntityID         uint       `json:"entity_id" gorm:"index"`                     // chapter_id 或 video_id
+	OverallScore     float64    `json:"overall_score"`
+	ReviewJSON       string     `json:"-" gorm:"column:review_json;type:text"`      // ChapterReview 或 StoryboardReview JSON
+	Status           string     `json:"status" gorm:"size:20;default:'pending'"`    // pending|applied|rolled_back
+	AppliedAt        *time.Time `json:"applied_at,omitempty"`
+	AppliedDiffsJSON string     `json:"-" gorm:"column:applied_diffs;type:text"`    // 已应用变更 JSON
+	SnapshotJSON     string     `json:"-" gorm:"column:snapshot_json;type:text"`    // 回滚快照 JSON
 }
+
+func (ReviewRecord) TableName() string { return "ink_review_record" }
+
+// IgnoredReviewIssue 统一已忽略的审查问题（章节/分镜共用同一张表）
+type IgnoredReviewIssue struct {
+	gorm.Model
+	TenantID    uint   `json:"tenant_id" gorm:"index;not null;default:1"`
+	EntityType  string `json:"entity_type" gorm:"size:20;index"`
+	EntityID    uint   `json:"entity_id" gorm:"index"`
+	IssueText   string `json:"issue_text" gorm:"type:text"`
+	IssueHash   string `json:"issue_hash,omitempty" gorm:"size:64;index"`
+	ContextJSON string `json:"-" gorm:"column:context_json;type:text"` // 分镜: {"shot_no":3}
+	Note        string `json:"note,omitempty" gorm:"type:text"`
+}
+
+func (IgnoredReviewIssue) TableName() string { return "ink_ignored_review_issue" }
 
 // ShotRollbackItem 回滚快照中的单镜原始内容
 type ShotRollbackItem struct {
@@ -366,11 +376,11 @@ type ShotDeleteSuggestion struct {
 
 // StoryboardReview AI 分镜脚本审查报告
 type StoryboardReview struct {
-	OverallScore      float64                `json:"overall_score"`       // 综合得分 0-10
+	OverallScore      float64                `json:"overall_score"`       // 综合得分 0-100
 	NarrativeScore    float64                `json:"narrative_score"`     // 叙事连贯性
 	VisualScore       float64                `json:"visual_score"`        // 视觉多样性
 	PacingScore       float64                `json:"pacing_score"`        // 节奏控制
-	NarrationScore    float64                `json:"narration_score"`     // 旁白质量
+	VoiceoverScore    float64                `json:"voiceover_score"`     // 旁白质量
 	Summary           string                 `json:"summary"`             // 综合评价
 	Strengths         []string               `json:"strengths"`           // 亮点
 	Weaknesses        []string               `json:"weaknesses"`          // 主要问题
@@ -399,6 +409,8 @@ type ChapterReview struct {
 	CharacterScore    float64             `json:"character_score"`
 	WritingScore      float64             `json:"writing_score"`
 	PacingScore       float64             `json:"pacing_score"`
+	DramaticScore     float64             `json:"dramatic_score"`      // 戏剧张力
+	VisualPotential   float64             `json:"visual_potential"`    // 画面感/可视化潜力
 	Summary           string              `json:"summary"`
 	Strengths         []string            `json:"strengths"`
 	Weaknesses        []string            `json:"weaknesses"`
@@ -407,29 +419,6 @@ type ChapterReview struct {
 	RecordID          uint                `json:"record_id,omitempty"`
 }
 
-// ChapterReviewRecord 章节审查历史记录
-type ChapterReviewRecord struct {
-	gorm.Model
-	ChapterID       uint       `json:"chapter_id" gorm:"index;not null"`
-	OverallScore    float64    `json:"overall_score"`
-	Status          string     `json:"status" gorm:"size:20;default:'pending'"` // pending/applied/rolled_back
-	ReviewJSON      string     `json:"-" gorm:"column:review_json;type:text"`
-	SnapshotContent string     `json:"-" gorm:"type:longtext"`
-	AppliedAt       *time.Time `json:"applied_at,omitempty"`
-}
-
-func (ChapterReviewRecord) TableName() string { return "ink_chapter_review_record" }
-
-// ChapterIgnoredIssue 被忽略的章节审查建议
-type ChapterIgnoredIssue struct {
-	gorm.Model
-	ChapterID uint   `json:"chapter_id" gorm:"index;not null"`
-	IssueText string `json:"issue_text" gorm:"type:text"`
-	IssueHash string `json:"issue_hash" gorm:"size:64;index"`
-	Note      string `json:"note" gorm:"size:500"`
-}
-
-func (ChapterIgnoredIssue) TableName() string { return "ink_chapter_ignored_issue" }
 
 // ─── Video / Storyboard DTOs ───────────────────────────────────────────────────
 

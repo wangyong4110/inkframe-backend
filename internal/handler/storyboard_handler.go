@@ -403,7 +403,7 @@ func (h *VideoHandler) ListReviewRecords(c *gin.Context) {
 		return
 	}
 
-	// 将 ReviewDataJSON 反序列化后附在响应中
+	// 将 ReviewJSON 反序列化后附在响应中
 	type recordResp struct {
 		ID           uint                 `json:"id"`
 		CreatedAt    string               `json:"created_at"`
@@ -424,9 +424,9 @@ func (h *VideoHandler) ListReviewRecords(c *gin.Context) {
 			s := rec.AppliedAt.Format("2006-01-02 15:04:05")
 			r.AppliedAt = &s
 		}
-		if rec.ReviewDataJSON != "" {
+		if rec.ReviewJSON != "" {
 			var rv model.StoryboardReview
-			if err := json.Unmarshal([]byte(rec.ReviewDataJSON), &rv); err == nil {
+			if err := json.Unmarshal([]byte(rec.ReviewJSON), &rv); err == nil {
 				r.Review = &rv
 			}
 		}
@@ -482,7 +482,7 @@ func (h *VideoHandler) IgnoreSuggestion(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	respondOK(c, item)
+	respondOK(c, ignoredIssueToShotDTO(item))
 }
 
 // ListIgnoredSuggestions 列出已忽略的建议
@@ -500,7 +500,11 @@ func (h *VideoHandler) ListIgnoredSuggestions(c *gin.Context) {
 		respondOK(c, []struct{}{})
 		return
 	}
-	respondOK(c, items)
+	dtos := make([]ignoredShotDTO, 0, len(items))
+	for _, it := range items {
+		dtos = append(dtos, ignoredIssueToShotDTO(it))
+	}
+	respondOK(c, dtos)
 }
 
 // UnignoreSuggestion 取消忽略
@@ -782,6 +786,33 @@ func (h *VideoHandler) DownloadVideo(c *gin.Context) {
 	c.Header("Content-Disposition", "attachment; filename=\""+filename+"\"")
 	c.Header("Content-Type", "video/mp4")
 	c.File(outputPath)
+}
+
+// ─── Ignored suggestion DTO helpers ──────────────────────────────────────────
+
+// ignoredShotDTO maps IgnoredReviewIssue to the API response expected by the frontend.
+type ignoredShotDTO struct {
+	ID        uint   `json:"id"`
+	VideoID   uint   `json:"video_id"`
+	ShotNo    int    `json:"shot_no"`
+	IssueText string `json:"issue_text"`
+	IssueHash string `json:"issue_hash"`
+	CreatedAt string `json:"created_at"`
+}
+
+func ignoredIssueToShotDTO(item *model.IgnoredReviewIssue) ignoredShotDTO {
+	var ctx struct {
+		ShotNo int `json:"shot_no"`
+	}
+	_ = json.Unmarshal([]byte(item.ContextJSON), &ctx)
+	return ignoredShotDTO{
+		ID:        item.ID,
+		VideoID:   item.EntityID,
+		ShotNo:    ctx.ShotNo,
+		IssueText: item.IssueText,
+		IssueHash: item.IssueHash,
+		CreatedAt: item.CreatedAt.Format("2006-01-02 15:04:05"),
+	}
 }
 
 // GenerateSingleShot 生成单个分镜（异步任务模式，立即返回 task_id）

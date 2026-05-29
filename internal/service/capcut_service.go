@@ -399,6 +399,11 @@ func buildTextContent(text string, cfg subtitleConfig) string {
 	return string(b2)
 }
 
+// isHTTPURL 判断路径是否为 HTTP/HTTPS 在线 URL
+func isHTTPURL(s string) bool {
+	return strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://")
+}
+
 // capCutTransitionEffect 将分镜 Transition 值映射到剪映转场效果名称。
 // 返回空字符串表示直切（无转场素材）。
 func capCutTransitionEffect(t string) string {
@@ -495,7 +500,13 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		vidMatID := uuid.New().String()
 		vidFilename := strings.ReplaceAll(vidMatID, "-", "") + ext
 
-		if mediaURL != "" {
+		// 剪映支持 HTTP URL 作为素材 path（在线资源，联网时直接加载）。
+		// HTTP URL 时直接使用 CDN 地址，无需下载嵌入 ZIP，减小包体且无需本地绝对路径。
+		// 非 HTTP 路径（本地文件）才下载并嵌入 ZIP，使用相对文件名。
+		vidPath := vidFilename
+		if isHTTPURL(mediaURL) {
+			vidPath = mediaURL
+		} else if mediaURL != "" {
 			if data, err := downloadMediaFile(mediaURL); err == nil {
 				mediaFiles = append(mediaFiles, mediaFile{filename: vidFilename, data: data})
 			}
@@ -511,7 +522,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			ID:             vidMatID,
 			ImportTime:     now,
 			MaterialID:     vidMatID,
-			Path:           vidFilename, // 剪映草稿中媒体文件路径相对于草稿根目录
+			Path:           vidPath, // HTTP URL（CDN 在线资源）或相对文件名（本地嵌入）
 			SourcePlatform: 0,
 			Type:           matType,
 			Width:          width,
@@ -558,18 +569,24 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		// ── 2. 配音音频素材 ───────────────────────────────────────
 		if shot.AudioPath != "" {
 			audMatID := uuid.New().String()
-			audioFilename := strings.ReplaceAll(audMatID, "-", "") + ".mp3" // 默认扩展名，读取成功后更新
+			audFilename := strings.ReplaceAll(audMatID, "-", "") + ".mp3" // 默认扩展名
 
 			// Bug3修复：用实际音频时长替代 shot.Duration。
 			// CapCut 根据 Material.Duration 和 SourceTimerange.Duration 解析音频播放范围；
 			// 若声称时长 > 文件实际时长，CapCut 可能拉伸音频，导致音画不同步。
 			actualAudioDur := durationMicros // fallback：读取失败时用视频段时长
-			if data, err := readLocalOrRemoteFile(shot.AudioPath); err == nil && len(data) > 0 {
-				ext := audioExtension(shot.AudioPath)
-				audioFilename = strings.ReplaceAll(audMatID, "-", "") + ext // 使用 materialID 作为文件名
-				mediaFiles = append(mediaFiles, mediaFile{filename: audioFilename, data: data})
-				if dur := parseAudioDurationMicros(data, ext); dur > 0 {
-					actualAudioDur = dur
+			audPath := audFilename
+			if isHTTPURL(shot.AudioPath) {
+				// HTTP URL：直接使用 CDN 地址，无需下载嵌入 ZIP
+				audPath = shot.AudioPath
+			} else {
+				if data, err := readLocalOrRemoteFile(shot.AudioPath); err == nil && len(data) > 0 {
+					ext := audioExtension(shot.AudioPath)
+					audPath = strings.ReplaceAll(audMatID, "-", "") + ext // 使用 materialID 作为文件名
+					mediaFiles = append(mediaFiles, mediaFile{filename: audPath, data: data})
+					if dur := parseAudioDurationMicros(data, ext); dur > 0 {
+						actualAudioDur = dur
+					}
 				}
 			}
 			// SourceTimerange：告知剪映实际取用的音频长度，不超过视频段时长
@@ -581,7 +598,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			audioMaterials = append(audioMaterials, ccAudioMaterial{
 				CheckFlag:  1,
 				Duration:   actualAudioDur, // 素材真实时长
-				FilePath:   audioFilename,  // 相对于草稿根目录的文件名
+				FilePath:   audPath,        // HTTP URL（CDN）或相对文件名（本地嵌入）
 				ID:         audMatID,
 				Name:       fmt.Sprintf("shot_%03d_audio", shot.ShotNo),
 				Type:       "extract_music",
@@ -612,12 +629,17 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			sfxFilename := strings.ReplaceAll(sfxMatID, "-", "") + ".mp3" // 默认扩展名
 
 			actualSFXDur := durationMicros
-			if data, err := readLocalOrRemoteFile(shot.SFXURL); err == nil && len(data) > 0 {
-				ext := audioExtension(shot.SFXURL)
-				sfxFilename = strings.ReplaceAll(sfxMatID, "-", "") + ext // 使用 materialID 作为文件名
-				mediaFiles = append(mediaFiles, mediaFile{filename: sfxFilename, data: data})
-				if dur := parseAudioDurationMicros(data, ext); dur > 0 {
-					actualSFXDur = dur
+			sfxPath := sfxFilename
+			if isHTTPURL(shot.SFXURL) {
+				sfxPath = shot.SFXURL
+			} else {
+				if data, err := readLocalOrRemoteFile(shot.SFXURL); err == nil && len(data) > 0 {
+					ext := audioExtension(shot.SFXURL)
+					sfxPath = strings.ReplaceAll(sfxMatID, "-", "") + ext
+					mediaFiles = append(mediaFiles, mediaFile{filename: sfxPath, data: data})
+					if dur := parseAudioDurationMicros(data, ext); dur > 0 {
+						actualSFXDur = dur
+					}
 				}
 			}
 			sfxSrcDur := actualSFXDur
@@ -639,7 +661,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			sfxMaterials = append(sfxMaterials, ccAudioMaterial{
 				CheckFlag: 1,
 				Duration:  actualSFXDur,
-				FilePath:  sfxFilename, // 相对于草稿根目录的文件名
+				FilePath:  sfxPath, // HTTP URL（CDN）或相对文件名（本地嵌入）
 				ID:        sfxMatID,
 				Name:      fmt.Sprintf("shot_%03d_sfx", shot.ShotNo),
 				Type:      "extract_music",
@@ -789,8 +811,13 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 			bgmMatID := uuid.New().String()
 			bgmFilename := strings.ReplaceAll(bgmMatID, "-", "") + ".mp3"
-			if data, err := downloadMediaFile(bs.URL); err == nil {
-				mediaFiles = append(mediaFiles, mediaFile{filename: bgmFilename, data: data})
+			bgmPath := bgmFilename
+			if isHTTPURL(bs.URL) {
+				bgmPath = bs.URL
+			} else {
+				if data, err := downloadMediaFile(bs.URL); err == nil {
+					mediaFiles = append(mediaFiles, mediaFile{filename: bgmFilename, data: data})
+				}
 			}
 
 			vol := bs.Volume
@@ -801,7 +828,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			audios = append(audios, ccAudioMaterial{
 				CheckFlag: 1,
 				Duration:  segDur,
-				FilePath:  bgmFilename,
+				FilePath:  bgmPath,
 				ID:        bgmMatID,
 				Name:      bs.TrackName,
 				Type:      "music",
@@ -942,6 +969,11 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		}
 	}
 
+	// README.txt — 导入说明（剪映不直接打开 ZIP，需手动放入草稿目录）
+	if err := writeZip(prefix+"README.txt", []byte(buildCapCutReadme(projectName))); err != nil {
+		return nil, fmt.Errorf("write README.txt: %w", err)
+	}
+
 	if err := zw.Close(); err != nil {
 		logger.Printf("[CapCutService] ExportCapCutDraft: close zip failed: %v", err)
 		return nil, fmt.Errorf("close zip: %w", err)
@@ -958,6 +990,35 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	}
 	logger.Printf("[CapCutService] ExportCapCutDraft done: filename=%s size=%d", result.Filename, len(result.Data))
 	return result, nil
+}
+
+// buildCapCutReadme 生成剪映草稿导入说明文件内容
+func buildCapCutReadme(projectName string) string {
+	return fmt.Sprintf(`InkFrame 剪映草稿 — 导入说明
+================================
+
+草稿名称：%s
+
+【重要】剪映无法直接打开 ZIP 文件，请按以下步骤导入：
+
+macOS
+-----
+1. 解压此 ZIP，得到文件夹「%s」
+2. 将该文件夹移动到：
+   ~/Movies/JianyingPro/User Data/Projects/com.lveditor.draft/
+3. 重新启动剪映，草稿将出现在草稿列表
+
+Windows
+-------
+1. 解压此 ZIP，得到文件夹「%s」
+2. 将该文件夹移动到：
+   %%LOCALAPPDATA%%\JianyingPro\User Data\Projects\com.lveditor.draft\
+3. 重新启动剪映，草稿将出现在草稿列表
+
+【素材说明】
+- 图片/视频/音效使用在线 CDN 链接，打开草稿时需保持网络连接
+- 如提示"素材离线"，请检查网络后重新打开草稿
+`, projectName, projectName, projectName)
 }
 
 // fcpXMLEscapeAttr 转义 XML 属性中的特殊字符
