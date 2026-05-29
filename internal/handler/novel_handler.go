@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
 
@@ -466,7 +468,10 @@ func (h *NovelHandler) GenerateCoverImage(c *gin.Context) {
 		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
-	url, err := h.novelService.GenerateCoverImage(c.Request.Context(), getTenantID(c), uint(id))
+	// 封面生成是长耗时操作（30-120s），使用独立 context 避免受 HTTP WriteTimeout 影响
+	genCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	url, err := h.novelService.GenerateCoverImage(genCtx, getTenantID(c), uint(id))
 	if err != nil {
 		logger.Printf("[NovelHandler] GenerateCoverImage: novelID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())

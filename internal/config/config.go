@@ -433,7 +433,7 @@ func DefaultConfig() *Config {
 			Port:            8080,
 			Mode:            "debug",
 			ReadTimeout:     30 * time.Second,
-			WriteTimeout:    30 * time.Second,
+			WriteTimeout:    300 * time.Second, // AI 图片生成等长耗时接口需要更长的写超时
 			MaxHeaderBytes:  1 << 20,
 			ShutdownTimeout: 10 * time.Second,
 			JWTSecret:       "change-me-in-production",
