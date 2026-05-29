@@ -220,7 +220,7 @@ func (s *ChapterService) GenerateChapterOutline(tenantID, novelID uint, chapterN
 		extraPromptSection = "补充要求：" + extraPrompt
 	}
 
-	prompt := fmt.Sprintf(`请为小说《%s》第%d章生成一段简洁的章节大纲（200字以内）。
+	prompt := fmt.Sprintf(`请为小说《%s》第%d章生成详细的章节大纲（100～300字）。
 
 小说简介：%s
 章节标题：%s
@@ -228,9 +228,11 @@ func (s *ChapterService) GenerateChapterOutline(tenantID, novelID uint, chapterN
 %s
 
 要求：
-- 概述本章的核心情节和转折
-- 点明主要人物行动与目标
-- 语言简练，不超过200字
+- 详细描述本章的核心情节脉络与关键转折
+- 点明主要人物的行动、目标与心理变化
+- 交代场景背景与氛围
+- 说明本章在整体故事中的作用（推进、铺垫或高潮）
+- 字数不少于100字，不超过300字
 - 直接输出大纲文本，不要加前缀或说明`,
 		novel.Title, chapterNo, novel.Description, chapter.Title,
 		recentCtxSection, extraPromptSection,
