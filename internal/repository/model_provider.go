@@ -89,7 +89,11 @@ func (r *ModelProviderRepository) Update(provider *model.ModelProvider) error {
 }
 
 // Delete 硬删除模型提供商（Unscoped，跳过软删除），确保再次创建同名提供商不会冲突。
+// 先级联硬删除关联的 AIModel 记录，避免外键约束报错。
 func (r *ModelProviderRepository) Delete(id uint) error {
+	if err := r.db.Unscoped().Where("provider_id = ?", id).Delete(&model.AIModel{}).Error; err != nil {
+		return err
+	}
 	return r.db.Unscoped().Delete(&model.ModelProvider{}, id).Error
 }
 
