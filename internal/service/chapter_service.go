@@ -316,6 +316,10 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		return nil, err
 	}
 
+	// ── Step 0: 确保角色数据存在（防止主角漂移的关键前置步骤）───────────────────────────
+	// 若 DB 中无角色记录，自动从小说简介中提取并写入，确保后续每章都有固定主角锚点。
+	s.ensureProtagonistExtracted(tenantID, novel)
+
 	// ── Step 1: 层次化上下文 ──────────────────────────────
 	globalCtx := s.buildGlobalContext(novelID, req.ChapterNo, novel)
 
@@ -458,8 +462,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	}
 
 	// ── Step 5b: 同步提取角色快照（必须在返回前完成，下一章生成时依赖主角当前状态）──────────────
-	// 注意：postProcessChapter 里的 writeCharacterSnapshots 已移到此处，
-	// 避免异步竞态导致下一章看不到本章快照。
+	// 注意：使用正确的 tenantID（非 0），确保租户自定义 AI 提供商可以被选中。
 	novelSvcForSnapshot := &NovelService{novelRepo: s.novelRepo, chapterRepo: s.chapterRepo, aiService: s.aiService}
 	if s.characterRepo != nil {
 		novelSvcForSnapshot.characterRepo = s.characterRepo
@@ -467,7 +470,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	if s.snapshotRepo != nil {
 		novelSvcForSnapshot.snapshotRepo = s.snapshotRepo
 	}
-	novelSvcForSnapshot.writeCharacterSnapshots(chapter)
+	novelSvcForSnapshot.writeCharacterSnapshots(tenantID, chapter)
 
 	// ── Step 6: 异步后处理（标题/精修/弧摘要，不再包含角色快照）────────────────────────────────
 	go s.postProcessChapter(tenantID, chapter, novel)
@@ -546,6 +549,72 @@ func (s *ChapterService) extractChapterMeta(novelID uint, chapterNo int) chapter
 	}
 
 	return meta
+}
+
+// ensureProtagonistExtracted 确保 DB 中至少有一个角色（含主角）。
+// 若角色表为空，通过 AI 从小说简介中提取主角信息并写入 DB，防止主角每章漂移。
+func (s *ChapterService) ensureProtagonistExtracted(tenantID uint, novel *model.Novel) {
+	if s.characterRepo == nil {
+		return
+	}
+	chars, err := s.characterRepo.ListByNovel(novel.ID)
+	if err != nil || len(chars) > 0 {
+		return
+	}
+
+	logger.Printf("[ChapterService] ensureProtagonistExtracted: no characters for novel %d, auto-extracting…", novel.ID)
+
+	desc := novel.Description
+	if desc == "" {
+		desc = novel.Title + "（" + novel.Genre + "类型小说）"
+	}
+
+	prompt := fmt.Sprintf(`从以下小说简介中提取主要角色（必须包含主角），最多3个，以JSON数组格式返回。
+《%s》（%s类型）
+%s
+
+只返回JSON数组，格式：
+[{"name":"角色名","role":"protagonist","description":"角色核心特征一句话描述"}]
+role只能是：protagonist / antagonist / supporting
+注意：必须有且仅有一个protagonist`,
+		novel.Title, novel.Genre, truncateForPrompt(desc, 800))
+
+	result, aiErr := s.aiService.GenerateWithProvider(tenantID, novel.ID, "character_extract_mini", prompt, "")
+	if aiErr != nil {
+		logger.Printf("[ChapterService] ensureProtagonistExtracted: AI error: %v", aiErr)
+		return
+	}
+
+	cleaned := extractJSON(strings.TrimSpace(result))
+	var extracted []struct {
+		Name        string `json:"name"`
+		Role        string `json:"role"`
+		Description string `json:"description"`
+	}
+	if jsonErr := json.Unmarshal([]byte(cleaned), &extracted); jsonErr != nil {
+		logger.Printf("[ChapterService] ensureProtagonistExtracted: parse error: %v (raw: %.200s)", jsonErr, cleaned)
+		return
+	}
+
+	for _, c := range extracted {
+		role := c.Role
+		if role != "protagonist" && role != "antagonist" && role != "supporting" {
+			role = "supporting"
+		}
+		char := &model.Character{
+			UUID:        uuid.New().String(),
+			NovelID:     novel.ID,
+			TenantID:    novel.TenantID,
+			Name:        c.Name,
+			Role:        role,
+			Description: c.Description,
+			Status:      "active",
+		}
+		if createErr := s.characterRepo.Create(char); createErr != nil {
+			logger.Printf("[ChapterService] ensureProtagonistExtracted: create %s: %v", c.Name, createErr)
+		}
+	}
+	logger.Printf("[ChapterService] ensureProtagonistExtracted: created %d characters for novel %d", len(extracted), novel.ID)
 }
 
 // buildGlobalContext 构建层次化全局上下文（优先使用 NarrativeMemoryService）

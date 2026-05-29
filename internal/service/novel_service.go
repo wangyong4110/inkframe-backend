@@ -690,16 +690,16 @@ func (s *NovelService) GenerateChapter(req *GenerateChapterRequest) (*model.Chap
 	// 提取剧情点
 	s.extractPlotPoints(chapter)
 
-	// 写入角色状态快照（非阻塞）
+	// 写入角色状态快照（非阻塞；此路径无 tenantID，使用系统级 provider）
 	if s.characterRepo != nil && s.snapshotRepo != nil {
-		go s.writeCharacterSnapshots(chapter)
+		go s.writeCharacterSnapshots(0, chapter)
 	}
 
 	return chapter, nil
 }
 
 // writeCharacterSnapshots 从章节内容中提取角色状态并写入快照
-func (s *NovelService) writeCharacterSnapshots(chapter *model.Chapter) {
+func (s *NovelService) writeCharacterSnapshots(tenantID uint, chapter *model.Chapter) {
 	if s.characterRepo == nil || s.snapshotRepo == nil {
 		return
 	}
@@ -731,7 +731,7 @@ func (s *NovelService) writeCharacterSnapshots(chapter *model.Chapter) {
 {"characters":[{"name":"角色名","mood":"情绪状态","location":"当前位置","motivation":"当前动机","power_level":5}]}`,
 		strings.Join(charNames, "、"), contentPreview)
 
-	result, err := s.aiService.Generate(chapter.NovelID, "character_state", prompt)
+	result, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "character_state", prompt, "")
 	if err != nil {
 		logger.Printf("writeCharacterSnapshots: AI extraction failed for chapter %d: %v", chapter.ID, err)
 		return

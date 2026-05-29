@@ -213,6 +213,10 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 	}
 	for i := len(recentDetailed) - 1; i >= 0; i-- {
 		ch := recentDetailed[i]
+		// 跳过大纲阶段写入的占位章节（无内容也无摘要），避免上下文中出现空洞
+		if ch.Content == "" && ch.Summary == "" {
+			continue
+		}
 		// 取章末 400 字作为 fallback（章末比章头更能体现"上次发生了什么"）
 		tail := ""
 		if runes := []rune(ch.Content); len(runes) > 0 {
