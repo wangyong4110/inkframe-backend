@@ -14,8 +14,8 @@ import (
 const (
 	arcSize          = 10            // 每弧章节数
 	halfArcSize      = arcSize / 2   // 中段预摘要间隔（每5章）
-	recentFullCount  = 2             // 最近N章注入详细摘要
-	recentShortCount = 8             // 再往前N章注入简短摘要（30字）
+	recentFullCount  = 3             // 最近N章注入详细摘要
+	recentShortCount = 7             // 再往前N章注入简短摘要（30字）
 
 	shortSummaryMaxRunes        = 40 // 简短摘要截断字符数
 	repeatWordThreshold         = 5  // 重复词出现 N 次触发精修建议
@@ -392,7 +392,7 @@ func renderHierarchicalContext(ctx *HierarchicalContext) string {
 	}
 
 	if len(ctx.RecentDetailed) > 0 {
-		sb.WriteString("\n【上章详情（直接前情）】\n")
+		sb.WriteString("\n【近三章详情（直接前情）】\n")
 		for _, ch := range ctx.RecentDetailed {
 			sum := ch.Summary
 			if sum == "" {
