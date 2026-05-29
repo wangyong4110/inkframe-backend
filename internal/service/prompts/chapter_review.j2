@@ -73,7 +73,11 @@
 
 注意：
 - paragraph_feedback 中的 index 只对应【待审查章节】的段落序号，不要引用前序章节段落
-- suggested_rewrite 字数应与原文接近，保持原文叙事视角（第一/三人称）和风格基调
+- `action` 字段只有两个合法值：`"rewrite"`（改写，默认）或 `"delete"`（删除此段）
+- `suggested_rewrite` 必须是**纯正文内容**，绝对不允许包含任何括号说明、元指令、编辑注释（如"建议删除"、"与X段合并"等）
+  - `action="rewrite"` 时：提供改写后的完整段落正文，字数与原文接近，保持叙事视角和风格基调
+  - `action="delete"` 时：`suggested_rewrite` 必须为空字符串 `""`
+  - 若建议将两段合并，请将合并后的完整文本写入其中一段的 `suggested_rewrite`，另一段设 `action="delete"`
 - global_suggestions 只输出最重要的 3-5 条整体建议
 
 {% if HasPreviousScore %}
@@ -101,8 +105,18 @@
       "orig_text": "原文前80字...",
       "issues": ["具体问题描述"],
       "suggestion": "简要改进方向",
-      "suggested_rewrite": "完整改写后的段落内容（字数与原文接近，保持原有视角和风格）",
+      "action": "rewrite",
+      "suggested_rewrite": "改写后的完整段落正文，不含任何括号说明或元指令",
       "severity": "warning"
+    },
+    {
+      "index": 5,
+      "orig_text": "原文前80字...",
+      "issues": ["与第4段重复"],
+      "suggestion": "删除此段，内容已在第4段表达",
+      "action": "delete",
+      "suggested_rewrite": "",
+      "severity": "info"
     }
   ]
 }

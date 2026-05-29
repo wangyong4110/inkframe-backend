@@ -653,12 +653,20 @@ func (s *QualityControlService) ApplyDiffs(chapterID uint, diffs []ParagraphDiff
 	applied := 0
 	for i := range paragraphs {
 		if newP, ok := diffMap[i]; ok {
-			paragraphs[i] = newP
+			paragraphs[i] = newP // empty string = marked for deletion
 			applied++
 		}
 	}
 
-	chapter.Content = strings.Join(paragraphs, "\n\n")
+	// Filter out empty paragraphs (deleted ones) and trim each paragraph
+	kept := paragraphs[:0]
+	for _, p := range paragraphs {
+		if strings.TrimSpace(p) != "" {
+			kept = append(kept, p)
+		}
+	}
+
+	chapter.Content = strings.Join(kept, "\n\n")
 	if err := s.chapterRepo.Update(chapter); err != nil {
 		return 0, fmt.Errorf("update chapter content: %w", err)
 	}

@@ -398,7 +398,8 @@ type ParagraphFeedback struct {
 	OrigText         string   `json:"orig_text"`         // 原文摘要(前80字)
 	Issues           []string `json:"issues"`
 	Suggestion       string   `json:"suggestion"`
-	SuggestedRewrite string   `json:"suggested_rewrite"` // 建议改写全文
+	Action           string   `json:"action"`            // "rewrite"(默认) | "delete"
+	SuggestedRewrite string   `json:"suggested_rewrite"` // 改写后正文；action=delete 时为空
 	Severity         string   `json:"severity"`          // info/warning/error
 }
 
