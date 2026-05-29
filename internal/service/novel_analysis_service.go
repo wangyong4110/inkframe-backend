@@ -1098,7 +1098,7 @@ func (s *NovelAnalysisService) generateThreeViewsAsync(ctx context.Context, tena
 
 		// 生成三视图合图（combined turnaround sheet）
 		sheetPrompt := basePrompt + ", character turnaround sheet, front and side and back views side by side, three-view character design sheet, same character multiple angles"
-		url, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", sheetPrompt, "", imageStyle, "")
+		url, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", sheetPrompt, "", imageStyle, "", "")
 		if err != nil {
 			logger.Printf("NovelAnalysis: three-view sheet for char %d: %v", char.ID, err)
 		} else if url != "" {

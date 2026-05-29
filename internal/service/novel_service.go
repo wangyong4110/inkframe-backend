@@ -350,7 +350,7 @@ func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID
 
 	ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title})
 	// existingCover != "" 时走 SeedEditV3（图生图指令编辑），否则走文生图
-	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", prompt, existingCover, novel.ImageStyle, negativePrompt)
+	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", prompt, existingCover, novel.ImageStyle, negativePrompt, "")
 	if err != nil {
 		return "", fmt.Errorf("generate cover image: %w", err)
 	}

@@ -296,9 +296,11 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 
 	// 查询小说的图片风格（用于模型选择）和标题（用于 OSS 路径）
 	imageStyle := ""
+	aspectRatio := ""
 	if s.novelRepo != nil {
 		if novel, err := s.novelRepo.GetByID(anchor.NovelID); err == nil {
 			imageStyle = novel.ImageStyle
+			aspectRatio = novel.VideoConf().VideoAspectRatio
 			if novel.Title != "" {
 				ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title})
 			}
@@ -316,7 +318,8 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	parts = append(parts, "scene background, no characters, cinematic composition")
 	prompt := strings.Join(parts, ", ")
 
-	imageURL, err := s.aiSvc.GenerateCharacterThreeView(ctx, tenantID, providerName, prompt, "", imageStyle, "")
+	sizeOverride := imageAspectRatioToSize(aspectRatio, "")
+	imageURL, err := s.aiSvc.GenerateCharacterThreeView(ctx, tenantID, providerName, prompt, "", imageStyle, "", sizeOverride)
 	if err != nil {
 		return nil, fmt.Errorf("generate ref image: %w", err)
 	}

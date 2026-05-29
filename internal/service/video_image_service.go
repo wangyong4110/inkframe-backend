@@ -485,7 +485,11 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 						char, ok := nameMap[nameLow]
 						if !ok {
 							for n, c := range nameMap {
-								if strings.Contains(nameLow, n) || strings.Contains(n, nameLow) {
+								// 最少2个字的子串匹配，防止单字误命中（如"云"匹配"凌云"导致角色混淆）
+								nRunes := []rune(n)
+								nmRunes := []rune(nameLow)
+								if len(nRunes) >= 2 && len(nmRunes) >= 2 &&
+									(strings.Contains(nameLow, n) || strings.Contains(n, nameLow)) {
 									char = c
 									ok = true
 									break
@@ -535,8 +539,9 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// 角色外观 token 前置注入：与参考图形成文本+图像双重约束，大幅提升角色一致性。
 	// VisualPrompt 由 AI 生成，格式为 "1girl, long silver hair, blue eyes, white hanfu, ..."，
 	// 置于 prompt 最前端能获得最高权重，精确锁定面部、发型、服装特征。
-	// 仅在成功找到角色参考图时注入，避免对无角色镜头造成干扰。
-	if len(characterVisualPrompts) > 0 && len(characterPortraits) > 0 {
+	// 无论是否找到参考图均注入：即使角色尚未生成图片，文字锚点也能约束 Text2ImgV3 维持外貌一致性；
+	// 只要找到了匹配的角色记录（characterVisualPrompts 非空），都应注入。
+	if len(characterVisualPrompts) > 0 {
 		promptText = strings.Join(characterVisualPrompts, ", ") + ", " + promptText
 	}
 
@@ -644,13 +649,15 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	}
 
 	if shot.Prompt != "" {
-		// LLM 生成的 image_prompt 已完整：仅补充项目级色调和风格（若 prompt 中未提及）
+		// LLM 生成的 image_prompt 已完整，只在最前端注入项目级画面风格和色调。
+		// 画面风格无条件注入（不做 Contains 检查）：LLM 嵌入的风格词可能与项目当前设置不一致
+		// （如分镜生成时为"anime"但现在改为"古风仙侠"），以项目设置为最终权威，置于 prompt 首位。
 		var prefix string
+		if artStyle != "" {
+			prefix += artStyle + " style, "
+		}
 		if kw := colorGradeToPromptKeyword(colorGrade); kw != "" {
 			prefix += kw + ", "
-		}
-		if artStyle != "" && !strings.Contains(strings.ToLower(promptText), strings.ToLower(artStyle)) {
-			prefix += artStyle + " style, "
 		}
 		if prefix != "" {
 			promptText = prefix + promptText
@@ -665,6 +672,29 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 			cinematicImgPrefix = artStyle + " style, " + cinematicImgPrefix
 		}
 		promptText = cinematicImgPrefix + promptText
+	}
+
+	// 画质词兜底：旧格式分镜（storyboard.j2）或 description 降级路径不含画质词，
+	// 此处统一补齐，确保新旧分镜生成图片质量基准一致。
+	// 画质词按风格分三类：写实摄影、插画/漫画/动漫、古风/仙侠/水墨（默认归为插画类）
+	if !strings.Contains(strings.ToLower(promptText), "masterpiece") {
+		artLow := strings.ToLower(artStyle)
+		isRealistic := strings.Contains(artLow, "realistic") || strings.Contains(artLow, "写实") ||
+			strings.Contains(artLow, "photorealistic") || strings.Contains(artLow, "photography")
+		isIllustration := strings.Contains(artLow, "anime") || strings.Contains(artLow, "cartoon") ||
+			strings.Contains(artLow, "illustration") || strings.Contains(artLow, "动漫") ||
+			strings.Contains(artLow, "动画") || strings.Contains(artLow, "漫画") ||
+			strings.Contains(artLow, "古风") || strings.Contains(artLow, "仙侠") ||
+			strings.Contains(artLow, "水墨") || strings.Contains(artLow, "xianxia") ||
+			strings.Contains(artLow, "wuxia") || strings.Contains(artLow, "ink painting")
+		if isRealistic {
+			promptText += ", masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting"
+		} else if isIllustration {
+			promptText += ", masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
+		} else {
+			// 未知风格默认使用插画类画质词（更通用，适配大多数非写实风格）
+			promptText += ", masterpiece, best quality, ultra-detailed, vibrant colors, professional digital art"
+		}
 	}
 
 	// 二次读取场景锚点参考图（仅在有角色参考图时才追加）：

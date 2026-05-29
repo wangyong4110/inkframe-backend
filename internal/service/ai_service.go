@@ -820,8 +820,17 @@ func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProvider
 	return result
 }
 
+// isRealisticStyle 判断给定风格字符串是否属于写实/摄影类风格。
+// 支持中英文：realistic / photorealistic / photography / 写实 / 真实 / 摄影
+func isRealisticStyle(style string) bool {
+	s := strings.ToLower(style)
+	return s == "realistic" || strings.Contains(s, "realistic") ||
+		strings.Contains(s, "photorealistic") || strings.Contains(s, "photography") ||
+		strings.Contains(s, "写实") || strings.Contains(s, "真实") || strings.Contains(s, "摄影")
+}
+
 // selectImageModel returns the model to use for the given entry.
-// For volcengine-visual: referenceImage → DreamO; style=="realistic" → PortraitPhoto.
+// For volcengine-visual: referenceImage → DreamO; style == realistic → PortraitPhoto.
 // selectImageModel 根据提供者、参考图、风格和一致性权重选择合适的图像生成模型。
 // consistencyWeight: 0-1，≥0.7 使用 DreamO（角色特征保持），<0.7 使用 SeedEditV3（指令编辑）
 func selectImageModel(entry ai.ImageProviderEntry, referenceImage, style string, consistencyWeight ...float64) string {
@@ -829,7 +838,7 @@ func selectImageModel(entry ai.ImageProviderEntry, referenceImage, style string,
 		// volcengine-visual 始终用内置 req_key，不依赖用户填写的 APIVersion
 		if referenceImage != "" {
 			// 写实风格：即使有参考图也使用 PortraitPhoto，保证生成真实感肖像
-			if style == "realistic" {
+			if isRealisticStyle(style) {
 				return ai.VolcModelPortraitPhoto
 			}
 			weight := 1.0
@@ -854,7 +863,7 @@ func selectImageModel(entry ai.ImageProviderEntry, referenceImage, style string,
 // consistencyWeight（可选）: 0-1，角色一致性强度；默认 1.0（严格）。
 //
 //	≥0.7 → DreamO（角色特征保持），<0.7 → SeedEditV3（指令编辑，scale 线性映射 1-10）
-func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uint, providerName, prompt, referenceImage, style, negativePrompt string, consistencyWeight ...float64) (string, error) {
+func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uint, providerName, prompt, referenceImage, style, negativePrompt, sizeOverride string, consistencyWeight ...float64) (string, error) {
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
 	}
@@ -909,11 +918,15 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 				return "", fmt.Errorf("image provider %q not available: %w", providerName, err)
 			}
 		}
+		sz := sizeOverride
+		if sz == "" {
+			sz = entry.Size
+		}
 		resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
 			Model:             selectImageModel(*entry, referenceImage, style, weight),
 			Prompt:            prompt,
 			NegativePrompt:    negativePrompt,
-			Size:              entry.Size,
+			Size:              sz,
 			ReferenceImage:    referenceImage,
 			CFGScale:          cfgScale,
 			ConsistencyWeight: weight,
@@ -961,11 +974,15 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 		}
 		model := selectImageModel(e, referenceImage, style, weight)
 		logger.Printf("GenerateCharacterThreeView: trying provider=%s model=%s refImage=%v", e.ProviderName, model, referenceImage != "")
+		eSz := sizeOverride
+		if eSz == "" {
+			eSz = e.Size
+		}
 		resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
 			Model:             model,
 			Prompt:            prompt,
 			NegativePrompt:    negativePrompt,
-			Size:              e.Size,
+			Size:              eSz,
 			ReferenceImage:    referenceImage,
 			CFGScale:          cfgScale,
 			ConsistencyWeight: weight,

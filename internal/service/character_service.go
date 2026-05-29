@@ -1257,7 +1257,7 @@ func (s *ImageGenerationService) GenerateThreeViewImage(ctx context.Context, ten
 	if genderNeg != "" {
 		negativePrompt = baseNeg + ", " + genderNeg
 	}
-	url, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt, aiRef, style, negativePrompt)
+	url, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt, aiRef, style, negativePrompt, "")
 	if err != nil {
 		return nil, err
 	}
