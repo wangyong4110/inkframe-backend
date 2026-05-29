@@ -1036,6 +1036,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 			gender := InferGenderTag(char.VisualPrompt, char.Description)
 
 			// 1. 面部特写（兼头像）：force 时无论是否已有图片都重新生成
+			faceRef := char.FaceCloseup // 三视图参考：优先用已有的面部特写
 			if force || char.FaceCloseup == "" {
 				faceImg, faceErr := imgSvc.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, char.Portrait, provider)
 				if faceErr != nil {
@@ -1044,13 +1045,17 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 				} else {
 					updateReq.FaceCloseup = faceImg.URL
 					updateReq.Portrait = faceImg.URL
-					char.Portrait = faceImg.URL // use as reference for three-view below
+					faceRef = faceImg.URL // 使用新生成的面部特写作为三视图参考
 				}
 			}
+			// 面部特写不可用时降级到头像
+			if faceRef == "" {
+				faceRef = char.Portrait
+			}
 
-			// 2. 三视图（使用面部特写或已有头像作为参考）：force 时无论是否已有都重新生成
+			// 2. 三视图（使用面部特写作为参考以锁定面部一致性）：force 时无论是否已有都重新生成
 			if force || char.ThreeViewSheet == "" {
-				threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, char.Portrait, provider)
+				threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, faceRef, provider)
 				if threeErr != nil {
 					logger.Printf("[CharacterService] BatchGenerateImages: three-view char %d (%s) failed: %v", char.ID, char.Name, threeErr)
 					charFailed = true
@@ -1271,57 +1276,73 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	//   - 明确"right 90-degree side profile"而非模糊"侧面"，防止模型生成3/4视角
 	//   - standard A-pose（手臂向外约45°）而非"双手自然垂放"（T-pose/紧贴身体）
 	//   - 用精确 token 约束三视图一致性，而非散文描述
-	var prompt string
-	if style == "realistic" {
-		realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
-		prompt = fmt.Sprintf(
-			"%scharacter model sheet, full body turnaround, "+
-				"front view and right 90-degree side profile and back view arranged horizontally, "+
-				"three views of the same character, same hair color same eye color same outfit across all views, "+
-				"standard A-pose, arms relaxed at 45 degrees from body sides, "+
-				"%s, "+
-				"complete figure from head to toe no cropping, orthographic projection, no perspective distortion, "+
-				"character only, no props, no background elements, no scene elements, "+
-				"realistic photography style, pure white background, clean composition, high quality, "+
-				"professional character design reference, no text, no labels, no watermarks",
-			realisticGender, appearance)
-	} else if genderTag != "" {
-		prompt = fmt.Sprintf(
-			"%s, character model sheet, turnaround reference sheet, "+
-				"front view and right 90-degree side profile and back view arranged horizontally, "+
-				"three views of the same character, same hair color same eye color same outfit across all views, "+
-				"standard A-pose, arms relaxed at 45 degrees from body sides, "+
-				"%s, "+
-				"full body from head to toe complete figure no cropping, orthographic projection, no perspective distortion, "+
-				"character only, no props, no background elements, "+
-				"%s风格, flat color illustration, clean lineart, white background, high quality, "+
-				"model sheet, character reference sheet, no text, no labels, no watermarks",
-			genderTag, appearance, styleStr)
-	} else {
-		prompt = fmt.Sprintf(
-			"character model sheet, turnaround reference sheet, "+
-				"front view and right 90-degree side profile and back view arranged horizontally, "+
-				"three views of the same character, same hair color same eye color same outfit across all views, "+
-				"standard A-pose, arms relaxed at 45 degrees from body sides, "+
-				"%s, "+
-				"full body from head to toe complete figure no cropping, orthographic projection, no perspective distortion, "+
-				"character only, no props, no background elements, "+
-				"%s风格, flat color illustration, clean lineart, white background, high quality, "+
-				"model sheet, character reference sheet, no text, no labels, no watermarks",
-			appearance, styleStr)
-	}
-
 	aiRef := referenceImage
 	if !strings.HasPrefix(aiRef, "http://") && !strings.HasPrefix(aiRef, "https://") {
 		aiRef = ""
 	}
+
+	// 当有参考图时，在提示词头部加入面部一致性锚定指令
+	refPrefix := ""
+	if aiRef != "" {
+		refPrefix = "same face as reference image, identical facial features, consistent face across all views, "
+	}
+
+	var prompt string
+	if style == "realistic" {
+		realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
+		prompt = fmt.Sprintf(
+			"%s%scharacter model sheet, 3-panel turnaround layout: "+
+				"[left panel] strictly 0-degree front-facing full body, "+
+				"[center panel] strictly 90-degree right side profile full body, "+
+				"[right panel] strictly 180-degree back view full body, "+
+				"all three panels show the complete figure from head to toe no cropping, "+
+				"three views of the same person, identical face identical hair identical outfit across all three panels, "+
+				"standard A-pose arms slightly away from body, "+
+				"%s, "+
+				"orthographic projection no perspective, character only pure white background, "+
+				"realistic photography style, high quality professional character design reference, "+
+				"no text no labels no watermarks",
+			refPrefix, realisticGender, appearance)
+	} else if genderTag != "" {
+		prompt = fmt.Sprintf(
+			"%s%s, character model sheet, 3-panel turnaround layout: "+
+				"[left panel] strictly 0-degree front-facing full body, "+
+				"[center panel] strictly 90-degree right side profile full body, "+
+				"[right panel] strictly 180-degree back view full body, "+
+				"all three panels show the complete figure from head to toe no cropping, "+
+				"three views of the same character, identical face identical hair identical outfit across all three panels, "+
+				"standard A-pose arms slightly away from body, "+
+				"%s, "+
+				"orthographic projection no perspective, character only no props no background, "+
+				"%s风格, flat color illustration clean lineart white background, "+
+				"high quality model sheet character reference sheet, no text no labels no watermarks",
+			refPrefix, genderTag, appearance, styleStr)
+	} else {
+		prompt = fmt.Sprintf(
+			"%scharacter model sheet, 3-panel turnaround layout: "+
+				"[left panel] strictly 0-degree front-facing full body, "+
+				"[center panel] strictly 90-degree right side profile full body, "+
+				"[right panel] strictly 180-degree back view full body, "+
+				"all three panels show the complete figure from head to toe no cropping, "+
+				"three views of the same character, identical face identical hair identical outfit across all three panels, "+
+				"standard A-pose arms slightly away from body, "+
+				"%s, "+
+				"orthographic projection no perspective, character only no props no background, "+
+				"%s风格, flat color illustration clean lineart white background, "+
+				"high quality model sheet character reference sheet, no text no labels no watermarks",
+			refPrefix, appearance, styleStr)
+	}
+
 	logger.Printf("GenerateThreeViewSheet: %s ref=%v", name, aiRef != "")
 
 	baseNeg := "text, labels, annotations, watermark, signature, caption, speech bubble, " +
 		"props, weapons, furniture, additional objects, background objects, scene elements, environment, " +
+		"three-quarter view, 45-degree angle, diagonal angle, oblique angle, " +
 		"perspective distortion, foreshortening, dynamic pose, action pose, " +
-		"different characters, inconsistent appearance, different hairstyle, hair color change, costume mismatch, " +
-		"cropped body, cut off feet, missing feet, bottom cut off, partial figure, floating figure, " +
+		"different face, inconsistent face, face change, different person, face inconsistency, " +
+		"different hairstyle, hair color change, costume mismatch, " +
+		"cropped body, cut off feet, missing feet, missing legs, bottom cut off, partial figure, floating figure, " +
+		"incomplete figure, body cutoff, figure cutoff, " +
 		"extra limbs, bad anatomy, nsfw, lowres, poorly drawn"
 	negativePrompt := baseNeg
 	if genderNeg != "" {
