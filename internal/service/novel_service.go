@@ -722,13 +722,7 @@ func (s *NovelService) writeCharacterSnapshots(tenantID uint, chapter *model.Cha
 	}
 	contentPreview := string(runes[start:])
 
-	prompt := fmt.Sprintf(`从以下章节内容中提取主要角色的当前状态，以JSON格式返回：
-角色列表：%s
-章节内容（章末节选）：
-%s
-
-请返回以下JSON格式（只包含章节中出现的角色）：
-{"characters":[{"name":"角色名","mood":"情绪状态","location":"当前位置","motivation":"当前动机","power_level":5}]}`,
+	prompt := fmt.Sprintf("从以下章节内容中提取主要角色的当前状态，以JSON格式返回：\n角色列表：%s\n章节内容（章末节选）：\n%s\n\n【严格要求】\n- 必须返回且只返回一个 JSON 对象，根键为 \"characters\"，值为数组\n- 禁止直接返回裸数组（即禁止以 [ 开头）\n- 禁止在 JSON 前后添加任何说明文字或代码块标记\n- 只包含章节中实际出现的角色\n\n正确格式示例：\n{\"characters\":[{\"name\":\"角色名\",\"mood\":\"情绪状态\",\"location\":\"当前位置\",\"motivation\":\"当前动机\",\"power_level\":5}]}",
 		strings.Join(charNames, "、"), contentPreview)
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "character_state", prompt, "")
