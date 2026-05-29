@@ -645,7 +645,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			WithChapterService(services.ChapterService).
 			WithReadingService(services.ReadingService),
 		AssetHandler:    handler.NewAssetHandler(services.AssetService),
-		ImageHandler:    handler.NewImageHandler(services.AIService, repos.NovelRepo),
+		ImageHandler:    handler.NewImageHandler(services.AIService),
 		WebSearchHandler: handler.NewWebSearchHandler(
 			service.NewWebSearcher(
 				cfg.WebSearch.Provider,

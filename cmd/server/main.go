@@ -123,6 +123,13 @@ func main() {
 	// 注入存储服务
 	services.VideoService.WithStorage(storageSvc)
 	services.AIService.WithStorage(storageSvc)
+	{
+		serverHost := cfg.Server.Host
+		if serverHost == "" || serverHost == "0.0.0.0" {
+			serverHost = "127.0.0.1"
+		}
+		services.AIService.WithServerBaseURL(fmt.Sprintf("http://%s:%d", serverHost, cfg.Server.Port))
+	}
 	services.BGMService.WithStorage(storageSvc)
 	services.AssetService.WithStorage(storageSvc)
 	services.VideoService.WithSceneAnchorService(services.SceneAnchorService)

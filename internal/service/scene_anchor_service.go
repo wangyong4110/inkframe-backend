@@ -318,7 +318,7 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	parts = append(parts, "scene background, no characters, cinematic composition")
 	prompt := strings.Join(parts, ", ")
 
-	sizeOverride := imageAspectRatioToSize(aspectRatio, "")
+	sizeOverride := imageAspectRatioToSize(aspectRatio, "master")
 	imageURL, err := s.aiSvc.GenerateCharacterThreeView(ctx, tenantID, providerName, prompt, "", imageStyle, "", sizeOverride)
 	if err != nil {
 		return nil, fmt.Errorf("generate ref image: %w", err)

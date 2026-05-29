@@ -4,27 +4,21 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
 
 // ImageHandler handles generic image operations.
 type ImageHandler struct {
-	aiSvc     *service.AIService
-	novelRepo *repository.NovelRepository
+	aiSvc *service.AIService
 }
 
-func NewImageHandler(aiSvc *service.AIService, novelRepo ...*repository.NovelRepository) *ImageHandler {
-	h := &ImageHandler{aiSvc: aiSvc}
-	if len(novelRepo) > 0 {
-		h.novelRepo = novelRepo[0]
-	}
-	return h
+func NewImageHandler(aiSvc *service.AIService) *ImageHandler {
+	return &ImageHandler{aiSvc: aiSvc}
 }
 
 // EditImage POST /images/edit
 // Accepts { image_url, instruction, novel_id? } and returns { image_url } with the edited image.
-// novel_id is optional; when provided the handler uses the novel's image_style for consistency.
+// Uses SeedEditV3 with low scale to preserve the original image while applying the instruction.
 func (h *ImageHandler) EditImage(c *gin.Context) {
 	var body struct {
 		ImageURL    string `json:"image_url" binding:"required"`
@@ -35,22 +29,11 @@ func (h *ImageHandler) EditImage(c *gin.Context) {
 		return
 	}
 
-	imageStyle := ""
-	if body.NovelID > 0 && h.novelRepo != nil {
-		if novel, err := h.novelRepo.GetByID(body.NovelID); err == nil {
-			imageStyle = novel.ImageStyle
-		}
-	}
-
-	// consistencyWeight=0.4 (<0.7) routes to SeedEditV3 for instruction-based editing
-	newURL, err := h.aiSvc.GenerateCharacterThreeViewMulti(
-		c.Request.Context(), getTenantID(c), "",
-		body.Instruction,
-		[]string{body.ImageURL},
-		imageStyle, "", "", 0.4,
+	newURL, err := h.aiSvc.EditImageWithInstruction(
+		c.Request.Context(), getTenantID(c), body.ImageURL, body.Instruction,
 	)
 	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to edit image")
+		respondErr(c, http.StatusInternalServerError, "failed to edit image: "+err.Error())
 		return
 	}
 	respondOK(c, gin.H{"image_url": newURL})

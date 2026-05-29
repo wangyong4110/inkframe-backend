@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,6 +28,7 @@ type AIService struct {
 	novelRepo     *repository.NovelRepository
 	storageSvc    storage.Service
 	taskRouting   TaskRouting
+	serverBaseURL string       // base URL for resolving relative media paths, e.g. "http://127.0.0.1:8080"
 	providerCache sync.Map      // key: "tenantID:providerName" → providerCacheEntry
 	imageSem      chan struct{} // nil = unlimited; set via WithImageConcurrency
 	semMu         sync.RWMutex  // protects imageSem replacement
@@ -758,10 +760,10 @@ func (s *AIService) GenerateImage(prompt string, options *ImageGenerationOptions
 
 // knownImageCapableProviders 已知支持图像生成的提供者及其默认模型，用于 DB 动态加载的回退路径。
 var knownImageCapableProviders = []ai.ImageProviderEntry{
-	{ProviderName: "doubao", Model: "seedream-3-0-t2i-250415", Size: "1024x1024"},
+	{ProviderName: "doubao", Model: "seedream-3-0-t2i-250415", Size: "2048x2048"},
 	{ProviderName: "qianwen", Model: "wanx2.1-t2i-turbo", Size: "1024x1024"},
-	{ProviderName: "openai", Model: "dall-e-3", Size: "1024x1024"},
-	{ProviderName: "volcengine-visual", Model: ai.VolcModelText2ImgV3, Size: "1328x1328"},
+	{ProviderName: "openai", Model: "dall-e-3", Size: "1792x1024"},
+	{ProviderName: "volcengine-visual", Model: ai.VolcModelText2ImgV3, Size: "2048x2048"},
 }
 
 // loadDBImageProviderEntries 从 DB 加载 IMAGE 类型的提供者列表，使用实际配置的模型名称（APIVersion）。
@@ -776,10 +778,10 @@ func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProvider
 		return nil
 	}
 	defaultSizeMap := map[string]string{
-		"doubao":                        "1024x1024",
+		"doubao":                        "2048x2048",
 		"qianwen":                       "1024x1024",
-		"openai":                        "1024x1024",
-		ai.ProviderNameVolcengineVisual: "1328x1328",
+		"openai":                        "1792x1024",
+		ai.ProviderNameVolcengineVisual: "2048x2048",
 	}
 	var primary, volcengine []ai.ImageProviderEntry
 	seen := map[string]bool{}
@@ -833,6 +835,25 @@ func isRealisticStyle(style string) bool {
 // For volcengine-visual: referenceImage → DreamO; style == realistic → PortraitPhoto.
 // selectImageModel 根据提供者、参考图、风格和一致性权重选择合适的图像生成模型。
 // consistencyWeight: 0-1，≥0.7 使用 DreamO（角色特征保持），<0.7 使用 SeedEditV3（指令编辑）
+// klingResolutionExtra 当 provider 是 kling-image 且目标尺寸 ≥ 2K（较长边 ≥ 1536px）时，
+// 自动返回 Extra{"resolution": "2k"} 以启用 Kling 2K 高清生成模式。
+// 对其他 provider 返回 nil（Volcengine 等直接通过 width/height 控制分辨率）。
+func klingResolutionExtra(providerName, size string) map[string]interface{} {
+	if providerName != "kling-image" {
+		return nil
+	}
+	var w, h int
+	fmt.Sscanf(size, "%dx%d", &w, &h)
+	maxSide := w
+	if h > maxSide {
+		maxSide = h
+	}
+	if maxSide >= 1536 {
+		return map[string]interface{}{"resolution": "2k"}
+	}
+	return nil
+}
+
 func selectImageModel(entry ai.ImageProviderEntry, referenceImage, style string, consistencyWeight ...float64) string {
 	if entry.ProviderName == ai.ProviderNameVolcengineVisual {
 		// volcengine-visual 始终用内置 req_key，不依赖用户填写的 APIVersion
@@ -930,6 +951,7 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 			ReferenceImage:    referenceImage,
 			CFGScale:          cfgScale,
 			ConsistencyWeight: weight,
+			Extra:             klingResolutionExtra(entry.ProviderName, sz),
 		})
 		if err != nil {
 			return "", err
@@ -986,6 +1008,7 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 			ReferenceImage:    referenceImage,
 			CFGScale:          cfgScale,
 			ConsistencyWeight: weight,
+			Extra:             klingResolutionExtra(e.ProviderName, eSz),
 		})
 		if err != nil {
 			logger.Printf("GenerateCharacterThreeView: provider=%s failed: %v", e.ProviderName, err)
@@ -1205,6 +1228,135 @@ func (s *AIService) uploadImageToStorage(ctx context.Context, tenantID uint, img
 	}
 	logger.Printf("uploadImageToStorage: persisted %s → %s", imgURL, persistURL)
 	return persistURL
+}
+
+// WithServerBaseURL 设置本地服务器基础 URL（如 "http://127.0.0.1:8080"），用于将相对媒体路径
+// 转换为可下载的绝对 URL（DB 存储返回 /api/v1/media/xxx 时需要此配置）。
+func (s *AIService) WithServerBaseURL(baseURL string) {
+	s.serverBaseURL = strings.TrimRight(baseURL, "/")
+}
+
+// fetchImageAsBase64 下载图片并返回 base64 编码的原始数据（不含 data URI 前缀）。
+// 支持绝对 URL（https://...）和相对路径（/api/v1/media/xxx，需已配置 serverBaseURL）。
+// 下载失败时返回空字符串，由调用方决定是否降级。
+func (s *AIService) fetchImageAsBase64(ctx context.Context, imageURL string) string {
+	if imageURL == "" {
+		return ""
+	}
+	fetchURL := imageURL
+	if !strings.HasPrefix(imageURL, "http://") && !strings.HasPrefix(imageURL, "https://") {
+		if s.serverBaseURL == "" {
+			logger.Printf("fetchImageAsBase64: relative URL %q but serverBaseURL not set", imageURL)
+			return ""
+		}
+		fetchURL = s.serverBaseURL + "/" + strings.TrimLeft(imageURL, "/")
+	}
+	dlCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, fetchURL, nil)
+	if err != nil {
+		logger.Printf("fetchImageAsBase64: build request for %s: %v", fetchURL, err)
+		return ""
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		logger.Printf("fetchImageAsBase64: download %s: %v", fetchURL, err)
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		logger.Printf("fetchImageAsBase64: HTTP %d for %s", resp.StatusCode, fetchURL)
+		return ""
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		logger.Printf("fetchImageAsBase64: read body: %v", err)
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(data)
+}
+
+// EditImageWithInstruction 基于已有图片按指令进行局部修改，专用于交互式编辑场景。
+//
+// 与通用 GenerateCharacterThreeView* 的差异：
+//   - 始终使用 SeedEditV3（指令编辑模型），不走 selectImageModel 的模型切换逻辑
+//   - scale=3.0（低于默认 5）：最大程度保留原图结构，仅应用指令描述的修改
+//   - 图片先下载为 base64 再传给 API，解决 OSS/DB/本地相对路径等 URL 不可达问题
+func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint, imageURL, instruction string) (string, error) {
+	if s.aiManager == nil {
+		return "", fmt.Errorf("AI manager not initialized")
+	}
+	s.semMu.RLock()
+	sem := s.imageSem
+	s.semMu.RUnlock()
+	if sem != nil {
+		select {
+		case sem <- struct{}{}:
+			defer func() { <-sem }()
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	}
+
+	// scale=3.0：低指令跟随强度，保留原图整体构图、人物外貌和艺术风格，仅修改用户指定部分
+	const editScale = 3.0
+
+	// 将图片转为 base64，确保 Volcengine 服务器能取到数据（绕过相对路径/OSS 访问限制）
+	imgInput := s.fetchImageAsBase64(ctx, imageURL)
+	if imgInput == "" {
+		// fetch 失败时降级：直接传 URL，仅适用于 Volcengine 可访问的公开 https URL
+		imgInput = imageURL
+		logger.Printf("EditImageWithInstruction: base64 fetch failed, falling back to URL: %s", imageURL)
+	}
+
+	req := &ai.ImageGenerateRequest{
+		Model:          ai.VolcModelSeedEditV3,
+		Prompt:         instruction,
+		ReferenceImage: imgInput,
+		CFGScale:       editScale,
+	}
+
+	var entries []ai.ImageProviderEntry
+	if s.providerRepo != nil {
+		entries = s.loadDBImageProviderEntries(tenantID)
+	} else {
+		entries = s.aiManager.GetImageProviders()
+		if len(entries) == 0 {
+			entries = knownImageCapableProviders
+		}
+	}
+
+	var lastErr error
+	for _, e := range entries {
+		if e.ProviderName != ai.ProviderNameVolcengineVisual {
+			continue // SeedEditV3 仅 volcengine-visual 提供
+		}
+		var provider ai.AIProvider
+		var err error
+		if s.providerRepo != nil {
+			provider, err = s.getTenantProvider(tenantID, e.ProviderName)
+		} else {
+			provider, err = s.aiManager.GetProvider(e.ProviderName)
+		}
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		resp, err := provider.ImageGenerate(ctx, req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.Error != "" {
+			lastErr = fmt.Errorf("%s", resp.Error)
+			continue
+		}
+		return s.uploadImageToStorage(ctx, tenantID, resp.URL), nil
+	}
+	if lastErr != nil {
+		return "", lastErr
+	}
+	return "", fmt.Errorf("no volcengine-visual provider available for image editing")
 }
 
 // imageExtFromContentType 根据 Content-Type 返回图片文件扩展名。

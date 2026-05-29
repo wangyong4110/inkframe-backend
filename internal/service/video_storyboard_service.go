@@ -847,9 +847,11 @@ func qualityTierImageParams(tier string) (width, steps int, cfgScale float64) {
 	case "production":
 		return 1024, 35, 7.5
 	case "master":
-		return 1280, 50, 8.0
+		return 2048, 50, 8.0
+	case "ultra": // alias for master; reserved for future upscaling pipeline
+		return 2048, 50, 8.5
 	default:
-		return 768, 25, 7.0
+		return 1024, 30, 7.5
 	}
 }
 
