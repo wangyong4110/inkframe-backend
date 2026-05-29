@@ -145,6 +145,9 @@ func (s *NovelAnalysisService) StartAnalysis(tenantID, novelID uint, createOutli
 	if s.taskSvc != nil {
 		if dbTask, err := s.taskSvc.Create(tenantID, TaskTypeNovelAnalysis, "小说分析", "novel", novelID); err == nil {
 			externalTaskID = dbTask.TaskID
+			_ = s.taskSvc.SetParams(externalTaskID, map[string]interface{}{
+				"create_outlines": createOutlines,
+			})
 		}
 	}
 
@@ -165,6 +168,32 @@ func (s *NovelAnalysisService) StartAnalysis(tenantID, novelID uint, createOutli
 	return externalTaskID, nil
 }
 
+// ResumeAnalysis resumes an orphaned novel_analysis task reusing its existing task ID.
+func (s *NovelAnalysisService) ResumeAnalysis(t *model.AsyncTask, createOutlines bool) {
+	novel, err := s.novelRepo.GetByID(t.EntityID)
+	if err != nil {
+		if s.taskSvc != nil {
+			_ = s.taskSvc.Fail(t.TaskID, "novel not found: "+err.Error())
+		}
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if s.taskSvc != nil {
+		s.taskSvc.RegisterCancel(t.TaskID, cancel)
+	}
+	task := &AnalysisTask{
+		NovelID:        t.EntityID,
+		Status:         "pending",
+		Progress:       0,
+		Step:           "恢复中...",
+		CreateOutlines: createOutlines,
+		cancel:         cancel,
+		taskSvc:        s.taskSvc,
+		externalTaskID: t.TaskID,
+	}
+	logger.Printf("[NovelAnalysis] ResumeAnalysis: novelID=%d taskID=%s", t.EntityID, t.TaskID)
+	go s.runPipeline(ctx, task, t.TenantID, novel)
+}
 
 // ──────────────────────────────────────────────
 // Pipeline 内部实现

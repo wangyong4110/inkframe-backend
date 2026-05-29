@@ -381,6 +381,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.PUT("/:id/shots/:shot_id/sfx-tags", cfg.VideoHandler.UpdateShotSFXTags)
 			// 音效条目（多条）
 			videos.GET("/:id/shots/:shot_id/sfx-items", cfg.VideoHandler.ListShotSFXItems)
+			videos.POST("/:id/shots/:shot_id/sfx-items", cfg.VideoHandler.ImportShotSFXItem)
 			videos.PUT("/:id/shots/:shot_id/sfx-items/:item_id", cfg.VideoHandler.UpdateShotSFXItem)
 			videos.PATCH("/:id/shots/:shot_id/sfx-items/:item_id/disabled", cfg.VideoHandler.ToggleShotSFXItem)
 			videos.DELETE("/:id/shots/:shot_id/sfx-items/:item_id", cfg.VideoHandler.DeleteShotSFXItem)
@@ -607,6 +608,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			v1.DELETE("/assets/:id", ah.SoftDelete)
 			v1.POST("/assets/:id/restore", ah.Restore)
 			v1.DELETE("/assets/:id/purge", ah.Purge)
+			v1.GET("/assets/:id/stream", ah.Stream)
 
 			// Share workflow
 			v1.POST("/assets/:id/share-request", ah.RequestShare)

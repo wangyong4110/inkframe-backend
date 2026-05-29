@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
@@ -247,6 +249,153 @@ func (h *VideoHandler) DeleteShot(c *gin.Context) {
 		return
 	}
 	respondOK(c, nil)
+}
+
+// ImportShotSFXItem POST /videos/:id/shots/:shot_id/sfx-items
+// 手动导入音效条目，支持三种方式：
+//  1. application/json + {"asset_id": N}: 从素材库导入（复用已有音效）
+//  2. application/json + {"url": "..."}:   直接提供音频 URL
+//  3. multipart/form-data + file 字段:     上传本地音频文件（.mp3/.wav/.ogg/.m4a/.flac）
+func (h *VideoHandler) ImportShotSFXItem(c *gin.Context) {
+	if h.sfxItemRepo == nil {
+		respondErr(c, http.StatusNotImplemented, "SFX item repo not configured")
+		return
+	}
+	shotID, ok := parseID(c, "shot_id")
+	if !ok {
+		return
+	}
+
+	var audioURL, tag, sfxType, source string
+	var volume float64 = 0.4
+	var durationSecs float64
+
+	ct := c.ContentType()
+	if strings.HasPrefix(ct, "multipart/form-data") {
+		// ── 方式3：上传本地音频文件 ────────────────────────────────────────────
+		if h.storageSvc == nil {
+			respondErr(c, http.StatusNotImplemented, "storage not configured")
+			return
+		}
+		file, header, err := c.Request.FormFile("file")
+		if err != nil {
+			respondBadRequest(c, "no file uploaded (field: file)")
+			return
+		}
+		defer file.Close()
+
+		allowedExts := map[string]string{
+			".mp3":  "audio/mpeg",
+			".wav":  "audio/wav",
+			".ogg":  "audio/ogg",
+			".m4a":  "audio/mp4",
+			".flac": "audio/flac",
+		}
+		ext := strings.ToLower(filepath.Ext(header.Filename))
+		mimeType, ok2 := allowedExts[ext]
+		if !ok2 {
+			respondBadRequest(c, "unsupported audio format: "+ext+" (allowed: mp3, wav, ogg, m4a, flac)")
+			return
+		}
+		objectKey := fmt.Sprintf("sfx/import/%s%s", uuid.New().String(), ext)
+		uploadedURL, err := h.storageSvc.Upload(c.Request.Context(), objectKey, file, header.Size, mimeType)
+		if err != nil {
+			respondErr(c, http.StatusInternalServerError, "upload failed: "+err.Error())
+			return
+		}
+		audioURL = uploadedURL
+		tag = c.PostForm("tag")
+		sfxType = c.PostForm("sfx_type")
+		source = "upload"
+		if v := c.PostForm("volume"); v != "" {
+			fmt.Sscanf(v, "%f", &volume)
+		}
+	} else {
+		// ── JSON 模式 ─────────────────────────────────────────────────────────
+		var req struct {
+			AssetID uint    `json:"asset_id"` // 方式1：素材库
+			URL     string  `json:"url"`      // 方式2：直接 URL
+			Tag     string  `json:"tag"`
+			SFXType string  `json:"sfx_type"`
+			Volume  float64 `json:"volume"`
+		}
+		if !bindJSON(c, &req) {
+			return
+		}
+
+		if req.AssetID != 0 {
+			// ── 方式1：从素材库导入 ──────────────────────────────────────────
+			if h.assetRepo == nil {
+				respondErr(c, http.StatusNotImplemented, "asset repo not configured")
+				return
+			}
+			asset, err := h.assetRepo.GetByID(req.AssetID)
+			if err != nil {
+				respondErr(c, http.StatusNotFound, "asset not found")
+				return
+			}
+			if asset.StorageURL == "" {
+				respondBadRequest(c, "asset has no audio URL")
+				return
+			}
+			audioURL = asset.StorageURL
+			durationSecs = asset.Duration
+			if req.Tag != "" {
+				tag = req.Tag
+			} else {
+				tag = asset.Title
+			}
+			source = "asset_lib"
+			// 导入后增加使用计数
+			_ = h.assetRepo.IncrUseCount(req.AssetID)
+		} else {
+			// ── 方式2：直接提供 URL ──────────────────────────────────────────
+			if req.URL == "" {
+				respondBadRequest(c, "asset_id or url is required")
+				return
+			}
+			audioURL = req.URL
+			source = "import"
+		}
+
+		// tag 已在各分支内设置；仅覆写 sfx_type / volume
+		if tag == "" {
+			tag = req.Tag
+		}
+		sfxType = req.SFXType
+		if req.Volume > 0 {
+			volume = req.Volume
+		}
+	}
+
+	if audioURL == "" {
+		respondBadRequest(c, "audio URL is required")
+		return
+	}
+	if sfxType == "" {
+		sfxType = "action"
+	}
+	if volume <= 0 || volume > 1 {
+		volume = 0.4
+	}
+
+	// seq_no = max+1
+	maxSeq, _ := h.sfxItemRepo.MaxSeqNo(shotID)
+	item := &model.ShotSFXItem{
+		ShotID:       shotID,
+		SeqNo:        maxSeq + 1,
+		Tag:          tag,
+		URL:          audioURL,
+		Volume:       volume,
+		Source:       source,
+		SFXType:      sfxType,
+		DurationSecs: durationSecs,
+	}
+	if err := h.sfxItemRepo.Create(item); err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create sfx item")
+		return
+	}
+	respondCreated(c, item)
 }
 
 // ListShotSFXItems GET /videos/:id/shots/:shot_id/sfx-items

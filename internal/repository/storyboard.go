@@ -236,6 +236,19 @@ func (r *ShotSFXItemRepository) CountByShotID(shotID uint) (int64, error) {
 	return count, err
 }
 
+// Create 创建单条音效条目
+func (r *ShotSFXItemRepository) Create(item *model.ShotSFXItem) error {
+	return r.db.Create(item).Error
+}
+
+// MaxSeqNo 返回分镜中最大的 seq_no（无条目时返回 0）
+func (r *ShotSFXItemRepository) MaxSeqNo(shotID uint) (int, error) {
+	var max int
+	err := r.db.Model(&model.ShotSFXItem{}).Where("shot_id = ?", shotID).
+		Select("COALESCE(MAX(seq_no), 0)").Scan(&max).Error
+	return max, err
+}
+
 // BatchCreate 批量创建音效条目
 func (r *ShotSFXItemRepository) BatchCreate(items []*model.ShotSFXItem) error {
 	if len(items) == 0 {

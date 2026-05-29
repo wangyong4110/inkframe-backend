@@ -8,6 +8,11 @@
 # 世界背景与故事记忆
 {{ GlobalContext }}
 
+{% if PreviousChapterEnding %}
+# 上章衔接（本章必须从此处无缝接续，禁止重复或跳过）
+{{ PreviousChapterEnding }}
+{% endif %}
+
 # 场景大纲（严格按此顺序展开）
 {% for scene in Scenes %}
 ## 场景{{ scene.SceneNo }}：{{ scene.Location }}（{{ scene.TimeOfDay }}）
@@ -29,9 +34,14 @@
 {{ ForeshadowHints }}
 {% endif %}
 
-# 角色信息（严格保持角色个性与说话风格）
+# 角色信息（严格保持角色个性与说话风格，主角身份不可改变）
 {% for char in Characters %}
-**{{ char.Name }}**：{{ char.Description }}
+{% if char.IsProtagonist %}**【主角】{{ char.Name }}**（{{ char.Role }}）
+- 人物设定：{{ char.Description }}{% if char.CurrentState %}
+- ⚠️ 当前状态（必须保持连贯）：{{ char.CurrentState }}{% endif %}
+{% else %}**{{ char.Name }}**（{{ char.Role }}）：{{ char.Description }}{% if char.CurrentState %}
+  当前状态：{{ char.CurrentState }}{% endif %}
+{% endif %}
 {% endfor %}
 
 {% if RefStories %}
@@ -65,6 +75,7 @@
    - ❌ 禁止AI惯用句式（如「内心深处涌起复杂情绪」）
    - ❌ 禁止角色知道自己不应该知道的信息
    - ❌ 角色位置/能力必须与上章末状态连续
+   - ❌ **严禁重复前章内容**：绝对不允许重写、复述或改写前章已发生的任何场景、对话或情节；本章必须从上章结束状态向前推进，不得倒退或重演已完成的剧情
 
 6. **戏剧张力规则（强制）**：
    - ❌ **禁止顺风顺水**：主角不得在本章内无障碍完成核心目标；每次进展必须伴随新代价、新威胁或新信息（好消息后面跟坏消息）

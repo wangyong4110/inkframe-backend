@@ -723,6 +723,38 @@ func (s *RewriteService) StartAnalysis(tenantID, projectID uint) (string, error)
 	return task.TaskID, nil
 }
 
+// ResumeAnalysis resumes an orphaned rewrite_analysis task reusing its existing task ID.
+func (s *RewriteService) ResumeAnalysis(t *model.AsyncTask) {
+	project, err := s.projectRepo.GetByID(t.EntityID)
+	if err != nil {
+		_ = s.taskSvc.Fail(t.TaskID, "project not found: "+err.Error())
+		return
+	}
+	go func(taskID string) {
+		ctx, cancel := context.WithCancel(context.Background())
+		s.taskSvc.RegisterCancel(taskID, cancel)
+		defer s.taskSvc.DeregisterCancel(taskID)
+		defer cancel()
+		defer func() {
+			if r := recover(); r != nil {
+				msg := fmt.Sprintf("内部错误: %v", r)
+				s.taskSvc.Fail(taskID, msg)
+				s.projectRepo.UpdateStatus(project.ID, "failed", msg)
+			}
+		}()
+		s.taskSvc.SetRunning(taskID)
+		if err := s.runAnalysis(ctx, taskID, project); err != nil {
+			s.taskSvc.Fail(taskID, err.Error())
+			s.projectRepo.UpdateStatus(project.ID, "failed", err.Error())
+			return
+		}
+		s.taskSvc.Complete(taskID, map[string]interface{}{
+			"project_id": t.EntityID,
+			"status":     "bible_ready",
+		})
+	}(t.TaskID)
+}
+
 func (s *RewriteService) runAnalysis(ctx context.Context, taskID string, project *model.RewriteProject) error {
 	s.projectRepo.UpdateStatus(project.ID, "analyzing", "")
 
@@ -958,6 +990,40 @@ func (s *RewriteService) StartRewriting(tenantID, projectID uint) (string, error
 	}(task.TaskID)
 
 	return task.TaskID, nil
+}
+
+// ResumeRewriting resumes an orphaned rewrite_chapters task reusing its existing task ID.
+func (s *RewriteService) ResumeRewriting(t *model.AsyncTask) {
+	project, err := s.projectRepo.GetByID(t.EntityID)
+	if err != nil {
+		_ = s.taskSvc.Fail(t.TaskID, "project not found: "+err.Error())
+		return
+	}
+	// Reset chapters stuck in "rewriting" from the interrupted run.
+	s.chapterTaskRepo.ResetStaleRewriting(t.EntityID)
+	go func(taskID string) {
+		ctx, cancel := context.WithCancel(context.Background())
+		s.taskSvc.RegisterCancel(taskID, cancel)
+		defer s.taskSvc.DeregisterCancel(taskID)
+		defer cancel()
+		defer func() {
+			if r := recover(); r != nil {
+				msg := fmt.Sprintf("内部错误: %v", r)
+				s.taskSvc.Fail(taskID, msg)
+				s.projectRepo.UpdateStatus(project.ID, "failed", msg)
+			}
+		}()
+		s.taskSvc.SetRunning(taskID)
+		if err := s.runRewriting(ctx, taskID, project); err != nil {
+			s.taskSvc.Fail(taskID, err.Error())
+			s.projectRepo.UpdateStatus(project.ID, "failed", err.Error())
+			return
+		}
+		s.taskSvc.Complete(taskID, map[string]interface{}{
+			"project_id": t.EntityID,
+			"status":     "completed",
+		})
+	}(t.TaskID)
 }
 
 func (s *RewriteService) runRewriting(ctx context.Context, taskID string, project *model.RewriteProject) error {

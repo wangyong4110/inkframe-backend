@@ -40,9 +40,11 @@
 # 上一章结尾状态
 {{ PreviousChapterEnding }}
 
-# 本章必须涉及的角色
-{% for char in Characters %}- {{ char.Name }}（{{ char.Role }}）：当前状态「{{ char.CurrentState }}」
-{% endfor %}
+# 本章必须涉及的角色（主角身份和状态不可改变）
+{% for char in Characters %}{% if char.IsProtagonist %}- ⚠️【主角】{{ char.Name }}（{{ char.Role }}）：当前状态「{{ char.CurrentState }}」
+  人物设定：{{ char.Description }}
+{% else %}- {{ char.Name }}（{{ char.Role }}）：当前状态「{{ char.CurrentState }}」
+{% endif %}{% endfor %}
 
 {% if ForeshadowHints %}
 # 本章伏笔要求
@@ -78,6 +80,7 @@
 {% endif %}
 ⚠️ 场景之间必须有清晰的因果逻辑。
 ⚠️ 角色在场景间的位置和状态必须保持连续。
+⚠️ **严禁重复前章内容**：所有场景必须从前章末尾状态推进，不得规划任何已在前章发生过的场景、对话或情节。
 
 请以JSON格式输出，不要包含markdown代码块：
 {

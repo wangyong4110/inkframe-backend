@@ -88,9 +88,10 @@ type HierarchicalContext struct {
 }
 
 type ChapterBrief struct {
-	ChapterNo int
-	Title     string
-	Summary   string
+	ChapterNo   int
+	Title       string
+	Summary     string
+	ContentHead string // 正文前150字，用于摘要未生成时的临时上下文
 }
 
 type ArcBrief struct {
@@ -195,10 +196,19 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 	}
 	for i := len(recentDetailed) - 1; i >= 0; i-- {
 		ch := recentDetailed[i]
+		head := ""
+		if runes := []rune(ch.Content); len(runes) > 0 {
+			end := 150
+			if end > len(runes) {
+				end = len(runes)
+			}
+			head = string(runes[:end])
+		}
 		ctx.RecentDetailed = append(ctx.RecentDetailed, ChapterBrief{
-			ChapterNo: ch.ChapterNo,
-			Title:     ch.Title,
-			Summary:   ch.Summary,
+			ChapterNo:   ch.ChapterNo,
+			Title:       ch.Title,
+			Summary:     ch.Summary,
+			ContentHead: head,
 		})
 	}
 
@@ -386,7 +396,12 @@ func renderHierarchicalContext(ctx *HierarchicalContext) string {
 		for _, ch := range ctx.RecentDetailed {
 			sum := ch.Summary
 			if sum == "" {
-				sum = "（摘要待生成）"
+				// 摘要尚未生成时，使用正文前150字作为临时上下文
+				if ch.ContentHead != "" {
+					sum = ch.ContentHead + "…"
+				} else {
+					sum = "（内容待生成）"
+				}
 			}
 			sb.WriteString(fmt.Sprintf("第%d章「%s」：%s\n", ch.ChapterNo, ch.Title, sum))
 		}

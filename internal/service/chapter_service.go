@@ -25,7 +25,8 @@ import (
 type ChapterService struct {
 	chapterRepo    *repository.ChapterRepository
 	novelRepo      *repository.NovelRepository
-	characterRepo  *repository.CharacterRepository // 注入角色数据到生成 prompt
+	characterRepo  *repository.CharacterRepository                       // 注入角色数据到生成 prompt
+	snapshotRepo   *repository.CharacterStateSnapshotRepository          // 角色状态快照（注入连贯状态）
 	aiService      *AIService
 	contextSvc     *GenerationContextService
 	narrativeSvc   *NarrativeMemoryService // 层次化记忆 + 摘要 + 标题 + 精修
@@ -59,6 +60,12 @@ func (s *ChapterService) WithNarrativeMemory(svc *NarrativeMemoryService) *Chapt
 // WithCharacterRepo 注入角色仓库（可选），用于将 DB 中的角色信息注入生成 prompt
 func (s *ChapterService) WithCharacterRepo(repo *repository.CharacterRepository) *ChapterService {
 	s.characterRepo = repo
+	return s
+}
+
+// WithSnapshotRepo 注入角色状态快照仓库（可选），用于将最新角色状态注入生成 prompt
+func (s *ChapterService) WithSnapshotRepo(repo *repository.CharacterStateSnapshotRepository) *ChapterService {
+	s.snapshotRepo = repo
 	return s
 }
 
@@ -436,7 +443,19 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 
 	s.syncNovelStats(novelID)
 
-	// ── Step 5: 异步后处理 ───────────────────────────────
+	// ── Step 5: 同步生成摘要（必须在返回前完成，供下一章上下文使用）───────────────────────────────
+	if s.narrativeSvc != nil && chapter.Summary == "" {
+		if summary, err := s.narrativeSvc.GenerateChapterSummary(tenantID, chapter, novel.Title); err == nil {
+			chapter.Summary = summary
+			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
+				logger.Printf("[ChapterService] GenerateChapter: update chapter %d [摘要]: %v", chapter.ID, updateErr)
+			}
+		} else {
+			logger.Printf("[ChapterService] GenerateChapter: summary ch%d: %v", chapter.ChapterNo, err)
+		}
+	}
+
+	// ── Step 6: 异步后处理（标题/精修/角色快照/弧摘要）───────────────────────────────
 	go s.postProcessChapter(tenantID, chapter, novel)
 
 	logger.Printf("[ChapterService] GenerateChapter done: chapterID=%d wordCount=%d", chapter.ID, chapter.WordCount)
@@ -733,8 +752,11 @@ func (s *ChapterService) generateFromSceneOutline(
 	_ = json.Unmarshal([]byte(sceneOutlineJSON), &outlineData)
 	logger.Printf("[ChapterService] generateFromSceneOutline: chapterNo=%d scenes=%d", req.ChapterNo, len(outlineData.Scenes))
 
-	// 获取角色对话风格
+	// 获取角色对话风格（同时包含状态快照）
 	characterVoices := s.getCharacterVoices(novelID)
+
+	// 上一章结尾（正文生成的连贯性锚点）
+	prevEnding := s.getPreviousChapterEnding(novelID, req.ChapterNo)
 
 	// 未解决剧情线（伏笔/冲突）
 	foreshadowHints := s.buildForeshadowHints(novelID, req.ChapterNo)
@@ -759,20 +781,21 @@ func (s *ChapterService) generateFromSceneOutline(
 	}
 
 	chapterPrompt, err := renderPrompt("chapter_from_outline", map[string]interface{}{
-		"NovelTitle":      novel.Title,
-		"ChapterNo":       req.ChapterNo,
-		"ChapterTitle":    chapterTitle,
-		"WordCount":       wordCount,
-		"GlobalContext":   globalCtx,
-		"Scenes":          outlineData.Scenes,
-		"HookSetup":       outlineData.HookSetup,
-		"PeakTension":     peakTension,
-		"Characters":      characterVoices,
-		"ForeshadowHints": foreshadowHints,
-		"UserPrompt":      req.Prompt,
-		"IsStandalone":    req.IsStandalone,
-		"RefStories":      refStories,
-		"WikiContext":     wikiContext,
+		"NovelTitle":            novel.Title,
+		"ChapterNo":             req.ChapterNo,
+		"ChapterTitle":          chapterTitle,
+		"WordCount":             wordCount,
+		"GlobalContext":         globalCtx,
+		"Scenes":                outlineData.Scenes,
+		"HookSetup":             outlineData.HookSetup,
+		"PeakTension":           peakTension,
+		"Characters":            characterVoices,
+		"ForeshadowHints":       foreshadowHints,
+		"PreviousChapterEnding": prevEnding,
+		"UserPrompt":            req.Prompt,
+		"IsStandalone":          req.IsStandalone,
+		"RefStories":            refStories,
+		"WikiContext":           wikiContext,
 	})
 	if err != nil {
 		content, err := s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
@@ -954,27 +977,79 @@ func (s *ChapterService) checkAndAutoResolvePlotPoints(tenantID uint, chapter *m
 type characterForPrompt struct {
 	Name         string
 	Role         string
-	CurrentState string
+	IsProtagonist bool
+	CurrentState string // 来自最新状态快照：位置、健康、心情等
 	Description  string
 }
 
 func (s *ChapterService) getCharactersForPrompt(novelID uint) []characterForPrompt {
 	if s.characterRepo == nil {
+		logger.Printf("[ChapterService] getCharactersForPrompt: characterRepo not wired, no character context injected")
 		return nil
 	}
 	chars, err := s.characterRepo.ListByNovel(novelID)
-	if err != nil || len(chars) == 0 {
+	if err != nil {
+		logger.Printf("[ChapterService] getCharactersForPrompt: ListByNovel error: %v", err)
 		return nil
 	}
+	if len(chars) == 0 {
+		logger.Printf("[ChapterService] getCharactersForPrompt: no characters found for novel %d", novelID)
+		return nil
+	}
+
 	result := make([]characterForPrompt, 0, len(chars))
 	for _, c := range chars {
-		result = append(result, characterForPrompt{
-			Name:        c.Name,
-			Role:        c.Role,
-			Description: c.Description,
-		})
+		cp := characterForPrompt{
+			Name:          c.Name,
+			Role:          c.Role,
+			IsProtagonist: c.Role == "protagonist",
+			Description:   c.Description,
+		}
+		// 加载最新状态快照，补充 CurrentState
+		if s.snapshotRepo != nil {
+			if snap, snapErr := s.snapshotRepo.GetLatestForCharacter(c.ID); snapErr == nil && snap != nil {
+				cp.CurrentState = formatCharacterState(snap)
+			}
+		}
+		result = append(result, cp)
+	}
+
+	// 将主角排在列表最前，确保 AI 优先关注
+	for i, cp := range result {
+		if cp.IsProtagonist && i != 0 {
+			result[0], result[i] = result[i], result[0]
+			break
+		}
 	}
 	return result
+}
+
+// formatCharacterState 将快照字段格式化为简短可读的状态描述，注入到生成 prompt
+func formatCharacterState(snap *model.CharacterStateSnapshot) string {
+	var parts []string
+	if snap.Location != "" {
+		parts = append(parts, "位于「"+snap.Location+"」")
+	}
+	if snap.Health != "" && snap.Health != "healthy" {
+		parts = append(parts, "健康:"+snap.Health)
+	}
+	if snap.Mood != "" {
+		parts = append(parts, "心情:"+snap.Mood)
+	}
+	if snap.Motivation != "" {
+		runes := []rune(snap.Motivation)
+		if len(runes) > 30 {
+			runes = runes[:30]
+		}
+		parts = append(parts, "动机:"+string(runes))
+	}
+	if snap.PowerLevel > 0 {
+		parts = append(parts, fmt.Sprintf("实力等级:%d", snap.PowerLevel))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "，")
 }
 
 func (s *ChapterService) getCharacterVoices(novelID uint) []characterForPrompt {
@@ -982,8 +1057,34 @@ func (s *ChapterService) getCharacterVoices(novelID uint) []characterForPrompt {
 	return s.getCharactersForPrompt(novelID)
 }
 
+// buildCharacterStateString 生成主角当前状态的结构化描述，优先注入场景大纲 prompt
+// 这是防止主角漂移最重要的上下文
 func (s *ChapterService) buildCharacterStateString(novelID uint) string {
-	return ""
+	chars := s.getCharactersForPrompt(novelID)
+	if len(chars) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	// 主角排第一（getCharactersForPrompt 已保证），重点展示
+	for _, c := range chars {
+		if !c.IsProtagonist && sb.Len() > 0 {
+			break // 只展示主角（第一个）的详细状态
+		}
+		if c.IsProtagonist {
+			sb.WriteString(fmt.Sprintf("【主角】%s（%s）\n", c.Name, c.Role))
+			if c.CurrentState != "" {
+				sb.WriteString("  当前状态：" + c.CurrentState + "\n")
+			}
+			if c.Description != "" {
+				desc := []rune(c.Description)
+				if len(desc) > 80 {
+					desc = desc[:80]
+				}
+				sb.WriteString("  人物设定：" + string(desc) + "…\n")
+			}
+		}
+	}
+	return sb.String()
 }
 
 func (s *ChapterService) buildForeshadowHints(novelID uint, chapterNo int) string {
@@ -1037,19 +1138,42 @@ func (s *ChapterService) getPreviousChapterEnding(novelID uint, chapterNo int) s
 	if err != nil || prev == nil {
 		return ""
 	}
-	// 优先使用独立保存的章末钩子
+
+	var sb strings.Builder
+
+	// 1. 优先使用独立保存的章末钩子（直接悬念点）
 	if prev.ChapterHook != "" {
-		return prev.ChapterHook
+		sb.WriteString("【章末情节】" + prev.ChapterHook)
+	} else if prev.Summary != "" {
+		sb.WriteString("【上章摘要】" + prev.Summary)
+	} else {
+		// 从内容末尾截取约300字
+		content := []rune(prev.Content)
+		if len(content) > 300 {
+			content = content[len(content)-300:]
+		}
+		sb.WriteString("【上章结尾】…" + string(content))
 	}
-	if prev.Summary != "" {
-		return prev.Summary
+
+	// 2. 附加主角当前快照状态（防止主角位置/状态漂移）
+	if s.characterRepo != nil && s.snapshotRepo != nil {
+		chars, charErr := s.characterRepo.ListByNovel(novelID)
+		if charErr == nil {
+			for _, c := range chars {
+				if c.Role == "protagonist" {
+					if snap, snapErr := s.snapshotRepo.GetLatestForCharacter(c.ID); snapErr == nil && snap != nil {
+						state := formatCharacterState(snap)
+						if state != "" {
+							sb.WriteString(fmt.Sprintf("\n【主角「%s」当前状态】%s", c.Name, state))
+						}
+					}
+					break
+				}
+			}
+		}
 	}
-	// 从内容末尾截取约200字
-	content := []rune(prev.Content)
-	if len(content) > 200 {
-		content = content[len(content)-200:]
-	}
-	return string(content)
+
+	return sb.String()
 }
 
 // extractChapterHook 从 AI 生成的原始内容中分离正文与章末钩子。

@@ -2,7 +2,10 @@ package handler
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -12,7 +15,13 @@ import (
 
 // AssetHandler handles /api/v1/assets and related routes.
 type AssetHandler struct {
-	svc *service.AssetService
+	svc      *service.AssetService
+	localDir string // 本地存储根目录，默认 "./uploads"
+}
+
+func (h *AssetHandler) WithLocalDir(dir string) *AssetHandler {
+	h.localDir = dir
+	return h
 }
 
 func NewAssetHandler(svc *service.AssetService) *AssetHandler {
@@ -724,4 +733,57 @@ func (h *AssetHandler) CancelCrawlJob(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"cancelled": true})
+}
+
+// ─── 预览 / 播放 ──────────────────────────────────────────────────────────────
+
+// Stream GET /assets/:id/stream
+// 统一的素材预览/播放端点，支持音视频拖动（HTTP Range）。
+//   - 外部 URL（OSS / CDN / http/https）：302 重定向，由 CDN 处理 Range。
+//   - 本地文件（/uploads/...）：通过 http.ServeFile 以 Range 支持直接流式传输。
+//   - DB 存储（/api/v1/media/...）：302 重定向到 ServeMedia（该端点已支持 Range）。
+func (h *AssetHandler) Stream(c *gin.Context) {
+	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
+	asset, err := h.svc.GetByID(uint(id), callerID(c))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "asset not found")
+		return
+	}
+
+	rawURL := asset.StorageURL
+	if rawURL == "" {
+		respondErr(c, http.StatusNotFound, "asset has no storage URL")
+		return
+	}
+
+	// 设置 MIME 类型（有助于浏览器正确初始化播放器）
+	if asset.MimeType != "" {
+		c.Header("Content-Type", asset.MimeType)
+	}
+	c.Header("Accept-Ranges", "bytes")
+	c.Header("Cache-Control", "public, max-age=3600")
+
+	switch {
+	case strings.HasPrefix(rawURL, "http://") || strings.HasPrefix(rawURL, "https://"):
+		// OSS / CDN 公共 URL → 浏览器直接访问，CDN 原生支持 Range
+		c.Redirect(http.StatusFound, rawURL)
+
+	case strings.HasPrefix(rawURL, "/uploads/"):
+		// 本地存储文件 → 使用 http.ServeFile（内置 Range、206、ETag 支持）
+		localDir := h.localDir
+		if localDir == "" {
+			localDir = "./uploads"
+		}
+		rel := strings.TrimPrefix(rawURL, "/uploads/")
+		localPath := filepath.Join(localDir, rel)
+		if _, statErr := os.Stat(localPath); os.IsNotExist(statErr) {
+			respondErr(c, http.StatusNotFound, "file not found on disk")
+			return
+		}
+		http.ServeFile(c.Writer, c.Request, localPath)
+
+	default:
+		// DB 存储（/api/v1/media/:id）或其他相对路径 → 重定向，ServeMedia 已支持 Range
+		c.Redirect(http.StatusFound, rawURL)
+	}
 }

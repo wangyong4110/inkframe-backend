@@ -12,6 +12,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/service"
+	"github.com/inkframe/inkframe-backend/internal/storage"
 )
 
 func timeNow() time.Time { return time.Now() }
@@ -29,6 +30,18 @@ type VideoHandler struct {
 	bgmSvc             *service.BGMService
 	bgmRepo            *repository.VideoBGMSegmentRepository
 	subtitleSvc        *service.SubtitleService
+	storageSvc         storage.Service
+	assetRepo          *repository.AssetRepository
+}
+
+func (h *VideoHandler) WithStorage(svc storage.Service) *VideoHandler {
+	h.storageSvc = svc
+	return h
+}
+
+func (h *VideoHandler) WithAssetRepo(r *repository.AssetRepository) *VideoHandler {
+	h.assetRepo = r
+	return h
 }
 
 func (h *VideoHandler) WithSFXItemRepo(r *repository.ShotSFXItemRepository) *VideoHandler {
