@@ -383,13 +383,15 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	}
 
 	// ── Step 2: 生成场景大纲 ──────────────────────────────
+	// prevEnding 在此处统一计算，避免后续两步各查一次 DB
+	prevEnding := s.getPreviousChapterEnding(novelID, req.ChapterNo)
 	sceneOutlineJSON, suggestedTitle := s.generateSceneOutline(
-		tenantID, novelID, req, novel, globalCtx, chapterMeta, refStories, wikiContext, storyPatternRef,
+		tenantID, novelID, req, novel, globalCtx, chapterMeta, refStories, wikiContext, storyPatternRef, prevEnding,
 	)
 
 	// ── Step 3: 按场景大纲生成章节内容 ───────────────────
 	content, chapterHook, err := s.generateFromSceneOutline(
-		tenantID, novelID, req, novel, sceneOutlineJSON, globalCtx, chapterMeta, refStories, wikiContext,
+		tenantID, novelID, req, novel, sceneOutlineJSON, globalCtx, chapterMeta, refStories, wikiContext, prevEnding,
 	)
 	if err != nil {
 		return nil, err
@@ -455,7 +457,19 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		}
 	}
 
-	// ── Step 6: 异步后处理（标题/精修/角色快照/弧摘要）───────────────────────────────
+	// ── Step 5b: 同步提取角色快照（必须在返回前完成，下一章生成时依赖主角当前状态）──────────────
+	// 注意：postProcessChapter 里的 writeCharacterSnapshots 已移到此处，
+	// 避免异步竞态导致下一章看不到本章快照。
+	novelSvcForSnapshot := &NovelService{novelRepo: s.novelRepo, chapterRepo: s.chapterRepo, aiService: s.aiService}
+	if s.characterRepo != nil {
+		novelSvcForSnapshot.characterRepo = s.characterRepo
+	}
+	if s.snapshotRepo != nil {
+		novelSvcForSnapshot.snapshotRepo = s.snapshotRepo
+	}
+	novelSvcForSnapshot.writeCharacterSnapshots(chapter)
+
+	// ── Step 6: 异步后处理（标题/精修/弧摘要，不再包含角色快照）────────────────────────────────
 	go s.postProcessChapter(tenantID, chapter, novel)
 
 	logger.Printf("[ChapterService] GenerateChapter done: chapterID=%d wordCount=%d", chapter.ID, chapter.WordCount)
@@ -551,8 +565,56 @@ func (s *ChapterService) buildGlobalContext(novelID uint, chapterNo int, novel *
 			return ctx
 		}
 	}
-	// 最终降级
-	return fmt.Sprintf("【故事概要】\n%s", novel.Description)
+	// 最终降级：直接从 repo 拼装基础上下文，确保主角和近章信息不丢失
+	return s.buildMinimalContext(novelID, chapterNo, novel)
+}
+
+// buildMinimalContext 在所有上下文服务均失败时，直接从 repo 拼装最小可用上下文。
+// 保证主角信息和近3章摘要不因服务失败而丢失。
+func (s *ChapterService) buildMinimalContext(novelID uint, chapterNo int, novel *model.Novel) string {
+	var sb strings.Builder
+	sb.WriteString("【故事概要】\n")
+	sb.WriteString(novel.Description)
+
+	if s.characterRepo != nil {
+		if chars, err := s.characterRepo.ListByNovel(novelID); err == nil && len(chars) > 0 {
+			sb.WriteString("\n\n【主要角色】\n")
+			for _, c := range chars {
+				prefix := "- "
+				if isProtagonistRole(c.Role) {
+					prefix = "⚠️【主角】"
+				}
+				sb.WriteString(fmt.Sprintf("%s%s（%s）：%s\n", prefix, c.Name, c.Role, c.Description))
+				if isProtagonistRole(c.Role) && s.snapshotRepo != nil {
+					if snap, err := s.snapshotRepo.GetLatestForCharacter(c.ID); err == nil && snap != nil {
+						if state := formatCharacterState(snap); state != "" {
+							sb.WriteString("  → 当前状态：" + state + "\n")
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if s.chapterRepo != nil && chapterNo > 1 {
+		if recent, err := s.chapterRepo.GetRecent(novelID, chapterNo, 3); err == nil && len(recent) > 0 {
+			sb.WriteString("\n【近期章节】\n")
+			for i := len(recent) - 1; i >= 0; i-- {
+				ch := recent[i]
+				sum := ch.Summary
+				if sum == "" && ch.Content != "" {
+					runes := []rune(ch.Content)
+					start := len(runes) - 200
+					if start < 0 {
+						start = 0
+					}
+					sum = "（章末）…" + string(runes[start:])
+				}
+				sb.WriteString(fmt.Sprintf("第%d章「%s」：%s\n", ch.ChapterNo, ch.Title, sum))
+			}
+		}
+	}
+	return sb.String()
 }
 
 // generateSceneOutline 调用 AI 生成场景级大纲，返回 JSON 字符串和建议标题
@@ -565,18 +627,13 @@ func (s *ChapterService) generateSceneOutline(
 	refStories string,
 	wikiContext string,
 	storyPatternRef string,
+	prevEnding string,
 ) (sceneOutlineJSON, suggestedTitle string) {
-
-	// 获取角色状态
-	charStateStr := s.buildCharacterStateString(novelID)
 
 	// 构建伏笔提示
 	foreshadowHints := s.buildForeshadowHints(novelID, req.ChapterNo)
 
-	// 获取上一章结尾（供连贯性参考）
-	prevEnding := s.getPreviousChapterEnding(novelID, req.ChapterNo)
-
-	// 获取角色列表
+	// 获取角色列表（含快照状态）
 	characters := s.getCharactersForPrompt(novelID)
 
 	// 获取剧情张力状态（供场景大纲决策参考）
@@ -662,7 +719,6 @@ func (s *ChapterService) generateSceneOutline(
 		"PreviousChapterEnding": prevEnding,
 		"Characters":            characters,
 		"ForeshadowHints":       foreshadowHints,
-		"CharacterStates":       charStateStr,
 		"PlotTensionState":      plotTensionState,
 		"RefStories":            refStories,
 		"WikiContext":           wikiContext,
@@ -706,6 +762,7 @@ func (s *ChapterService) generateFromSceneOutline(
 	meta chapterOutlineMeta,
 	refStories string,
 	wikiContext string,
+	prevEnding string,
 ) (string, string, error) {
 
 	// 章节目标字数：优先用显式 WordCount，其次从小说 TargetWordCount 推算，最后默认 3000
@@ -754,9 +811,6 @@ func (s *ChapterService) generateFromSceneOutline(
 
 	// 获取角色对话风格（同时包含状态快照）
 	characterVoices := s.getCharacterVoices(novelID)
-
-	// 上一章结尾（正文生成的连贯性锚点）
-	prevEnding := s.getPreviousChapterEnding(novelID, req.ChapterNo)
 
 	// 未解决剧情线（伏笔/冲突）
 	foreshadowHints := s.buildForeshadowHints(novelID, req.ChapterNo)
@@ -885,16 +939,13 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 		}
 	}
 
-	// 4. 提取角色状态快照（原有逻辑）
-	novelSvc := &NovelService{novelRepo: s.novelRepo, chapterRepo: s.chapterRepo, aiService: s.aiService}
-	novelSvc.writeCharacterSnapshots(chapter)
-
-	// 5. 触发弧摘要（每 arcSize 章触发一次）
+	// 4. 触发弧摘要（每 arcSize 章触发一次）
+	// 注：角色快照已在 GenerateChapter Step 5b 同步提取，此处不再重复。
 	if s.narrativeSvc != nil {
 		s.narrativeSvc.TriggerArcSummaryIfNeeded(tenantID, novel.ID, chapter.ChapterNo)
 	}
 
-	// 6. 自动检查并标记已解决的剧情点（伏笔/冲突）
+	// 5. 自动检查并标记已解决的剧情点（伏笔/冲突）
 	s.checkAndAutoResolvePlotPoints(tenantID, chapter)
 	logger.Printf("[ChapterService] postProcessChapter done: chapterID=%d", chapter.ID)
 }
@@ -1002,7 +1053,7 @@ func (s *ChapterService) getCharactersForPrompt(novelID uint) []characterForProm
 		cp := characterForPrompt{
 			Name:          c.Name,
 			Role:          c.Role,
-			IsProtagonist: c.Role == "protagonist",
+			IsProtagonist: isProtagonistRole(c.Role),
 			Description:   c.Description,
 		}
 		// 加载最新状态快照，补充 CurrentState
@@ -1059,33 +1110,6 @@ func (s *ChapterService) getCharacterVoices(novelID uint) []characterForPrompt {
 
 // buildCharacterStateString 生成主角当前状态的结构化描述，优先注入场景大纲 prompt
 // 这是防止主角漂移最重要的上下文
-func (s *ChapterService) buildCharacterStateString(novelID uint) string {
-	chars := s.getCharactersForPrompt(novelID)
-	if len(chars) == 0 {
-		return ""
-	}
-	var sb strings.Builder
-	// 主角排第一（getCharactersForPrompt 已保证），重点展示
-	for _, c := range chars {
-		if !c.IsProtagonist && sb.Len() > 0 {
-			break // 只展示主角（第一个）的详细状态
-		}
-		if c.IsProtagonist {
-			sb.WriteString(fmt.Sprintf("【主角】%s（%s）\n", c.Name, c.Role))
-			if c.CurrentState != "" {
-				sb.WriteString("  当前状态：" + c.CurrentState + "\n")
-			}
-			if c.Description != "" {
-				desc := []rune(c.Description)
-				if len(desc) > 80 {
-					desc = desc[:80]
-				}
-				sb.WriteString("  人物设定：" + string(desc) + "…\n")
-			}
-		}
-	}
-	return sb.String()
-}
 
 func (s *ChapterService) buildForeshadowHints(novelID uint, chapterNo int) string {
 	var hints strings.Builder
@@ -1160,7 +1184,7 @@ func (s *ChapterService) getPreviousChapterEnding(novelID uint, chapterNo int) s
 		chars, charErr := s.characterRepo.ListByNovel(novelID)
 		if charErr == nil {
 			for _, c := range chars {
-				if c.Role == "protagonist" {
+				if isProtagonistRole(c.Role) {
 					if snap, snapErr := s.snapshotRepo.GetLatestForCharacter(c.ID); snapErr == nil && snap != nil {
 						state := formatCharacterState(snap)
 						if state != "" {
@@ -1190,6 +1214,15 @@ func extractChapterHook(raw string) (content, hook string) {
 }
 
 var chapterHeaderRe = regexp.MustCompile(`^第[零一二三四五六七八九十百千\d]+章`)
+
+// isProtagonistRole 判断角色是否为主角，兼容多种表述方式
+func isProtagonistRole(role string) bool {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case "protagonist", "主角", "hero", "heroine", "main_character", "lead", "主人公", "男主", "女主", "主角色":
+		return true
+	}
+	return false
+}
 
 // cleanChapterOutput strips AI meta-content (preambles, outlines, trailing disclaimers)
 // from raw chapter output, keeping only actual novel prose.

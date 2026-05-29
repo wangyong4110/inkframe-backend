@@ -714,14 +714,17 @@ func (s *NovelService) writeCharacterSnapshots(chapter *model.Chapter) {
 		charNames = append(charNames, c.Name)
 	}
 
-	contentPreview := chapter.Content
-	if len(contentPreview) > 2000 {
-		contentPreview = contentPreview[:2000] + "..."
+	// 取章末 3000 字（rune-safe），章末比章头更能反映角色的当前状态
+	runes := []rune(chapter.Content)
+	start := 0
+	if len(runes) > 3000 {
+		start = len(runes) - 3000
 	}
+	contentPreview := string(runes[start:])
 
 	prompt := fmt.Sprintf(`从以下章节内容中提取主要角色的当前状态，以JSON格式返回：
 角色列表：%s
-章节内容：
+章节内容（章末节选）：
 %s
 
 请返回以下JSON格式（只包含章节中出现的角色）：

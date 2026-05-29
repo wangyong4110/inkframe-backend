@@ -17,7 +17,7 @@ const (
 	recentFullCount  = 3             // 最近N章注入详细摘要
 	recentShortCount = 7             // 再往前N章注入简短摘要（30字）
 
-	shortSummaryMaxRunes        = 40 // 简短摘要截断字符数
+	shortSummaryMaxRunes        = 80 // 简短摘要截断字符数
 	repeatWordThreshold         = 5  // 重复词出现 N 次触发精修建议
 	consecutivePronounThreshold = 4  // 连续以他/她开头的段落数阈值
 )
@@ -39,6 +39,7 @@ type NarrativeMemoryService struct {
 	characterRepo characterLister
 	arcRepo       *repository.ArcSummaryRepository
 	aiService     *AIService
+	snapshotRepo  snapshotLatestGetter
 }
 
 type novelGetter interface {
@@ -58,6 +59,10 @@ type characterLister interface {
 	ListByNovel(novelID uint) ([]*model.Character, error)
 }
 
+type snapshotLatestGetter interface {
+	GetLatestForCharacter(characterID uint) (*model.CharacterStateSnapshot, error)
+}
+
 func NewNarrativeMemoryService(
 	novelRepo novelGetter,
 	chapterRepo chapterMemoryRepo,
@@ -72,6 +77,11 @@ func NewNarrativeMemoryService(
 		arcRepo:       arcRepo,
 		aiService:     aiService,
 	}
+}
+
+func (s *NarrativeMemoryService) WithSnapshotRepo(repo snapshotLatestGetter) *NarrativeMemoryService {
+	s.snapshotRepo = repo
+	return s
 }
 
 // ──────────────────────────────────────────────
@@ -103,9 +113,10 @@ type ArcBrief struct {
 }
 
 type CharacterBrief struct {
-	Name        string
-	Role        string
-	Description string
+	Name         string
+	Role         string
+	Description  string
+	CurrentState string // 最新快照状态，为空表示无快照
 }
 
 // ──────────────────────────────────────────────
@@ -137,14 +148,20 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 		PlotTensionState: s.buildPlotTensionState(novel.ID, currentChapterNo),
 	}
 
-	// 加载角色信息（供 globalCtx 与 Characters 模板变量使用）
+	// 加载角色信息（含最新快照状态，供上下文渲染使用）
 	if chars, err := s.characterRepo.ListByNovel(novel.ID); err == nil {
 		for _, c := range chars {
-			ctx.Characters = append(ctx.Characters, CharacterBrief{
+			brief := CharacterBrief{
 				Name:        c.Name,
 				Role:        c.Role,
 				Description: c.Description,
-			})
+			}
+			if s.snapshotRepo != nil {
+				if snap, snapErr := s.snapshotRepo.GetLatestForCharacter(c.ID); snapErr == nil && snap != nil {
+					brief.CurrentState = formatCharacterState(snap)
+				}
+			}
+			ctx.Characters = append(ctx.Characters, brief)
 		}
 	}
 
@@ -196,19 +213,20 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 	}
 	for i := len(recentDetailed) - 1; i >= 0; i-- {
 		ch := recentDetailed[i]
-		head := ""
+		// 取章末 400 字作为 fallback（章末比章头更能体现"上次发生了什么"）
+		tail := ""
 		if runes := []rune(ch.Content); len(runes) > 0 {
-			end := 150
-			if end > len(runes) {
-				end = len(runes)
+			start := len(runes) - 400
+			if start < 0 {
+				start = 0
 			}
-			head = string(runes[:end])
+			tail = string(runes[start:])
 		}
 		ctx.RecentDetailed = append(ctx.RecentDetailed, ChapterBrief{
 			ChapterNo:   ch.ChapterNo,
 			Title:       ch.Title,
 			Summary:     ch.Summary,
-			ContentHead: head,
+			ContentHead: tail,
 		})
 	}
 
@@ -234,8 +252,20 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 				continue
 			}
 			brief := ch.Summary
+			if brief == "" && ch.Content != "" {
+				// 摘要缺失时，用章末80字兜底（章末比章头更能反映结局状态）
+				r := []rune(ch.Content)
+				s := len(r) - 80
+				if s < 0 {
+					s = 0
+				}
+				brief = "…" + string(r[s:])
+			}
 			if len([]rune(brief)) > shortSummaryMaxRunes {
 				brief = string([]rune(brief)[:shortSummaryMaxRunes]) + "…"
+			}
+			if brief == "" {
+				continue // 既无摘要也无内容，跳过此章
 			}
 			ctx.RecentShort = append(ctx.RecentShort, ChapterBrief{
 				ChapterNo: ch.ChapterNo,
@@ -367,7 +397,19 @@ func renderHierarchicalContext(ctx *HierarchicalContext) string {
 	if len(ctx.Characters) > 0 {
 		sb.WriteString("\n\n【主要角色设定】\n")
 		for _, c := range ctx.Characters {
-			sb.WriteString(fmt.Sprintf("- %s（%s）：%s\n", c.Name, c.Role, c.Description))
+			if isProtagonistRole(c.Role) {
+				sb.WriteString(fmt.Sprintf("⚠️【主角】%s（%s）：%s", c.Name, c.Role, c.Description))
+				if c.CurrentState != "" {
+					sb.WriteString("\n  → 当前状态：" + c.CurrentState)
+				}
+				sb.WriteString("\n")
+			} else {
+				line := fmt.Sprintf("- %s（%s）：%s", c.Name, c.Role, c.Description)
+				if c.CurrentState != "" {
+					line += "【状态：" + c.CurrentState + "】"
+				}
+				sb.WriteString(line + "\n")
+			}
 		}
 	}
 
@@ -396,11 +438,11 @@ func renderHierarchicalContext(ctx *HierarchicalContext) string {
 		for _, ch := range ctx.RecentDetailed {
 			sum := ch.Summary
 			if sum == "" {
-				// 摘要尚未生成时，使用正文前150字作为临时上下文
+				// 摘要尚未生成时，使用章末内容作为临时上下文
 				if ch.ContentHead != "" {
-					sum = ch.ContentHead + "…"
+					sum = "（章末节选）…" + ch.ContentHead
 				} else {
-					sum = "（内容待生成）"
+					sum = "（摘要待生成）"
 				}
 			}
 			sb.WriteString(fmt.Sprintf("第%d章「%s」：%s\n", ch.ChapterNo, ch.Title, sum))
