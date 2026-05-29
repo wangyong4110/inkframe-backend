@@ -216,7 +216,7 @@ func (r *NovelRepository) DeleteWithCascade(id uint) error {
 			`DELETE FROM ink_feedback_record WHERE novel_id = ?`,
 			`DELETE FROM ink_plot_point WHERE novel_id = ?`,
 			`DELETE FROM ink_model_usage_log WHERE novel_id = ?`,
-			`DELETE FROM ink_async_task WHERE novel_id = ?`,
+			`DELETE FROM ink_async_task WHERE entity_id = ? AND entity_type = 'novel'`,
 			`DELETE FROM ink_hook_chain WHERE novel_id = ?`,
 			`DELETE FROM ink_satisfaction_point WHERE novel_id = ?`,
 			`DELETE FROM ink_conflict_arc WHERE novel_id = ?`,
