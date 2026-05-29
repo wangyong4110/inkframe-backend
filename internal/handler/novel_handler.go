@@ -468,10 +468,14 @@ func (h *NovelHandler) GenerateCoverImage(c *gin.Context) {
 		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
+	var req struct {
+		Suggestion string `json:"suggestion"`
+	}
+	_ = c.ShouldBindJSON(&req) // 可选 body，忽略解析错误
 	// 封面生成是长耗时操作（30-120s），使用独立 context 避免受 HTTP WriteTimeout 影响
 	genCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	url, err := h.novelService.GenerateCoverImage(genCtx, getTenantID(c), uint(id))
+	url, err := h.novelService.GenerateCoverImage(genCtx, getTenantID(c), uint(id), req.Suggestion)
 	if err != nil {
 		logger.Printf("[NovelHandler] GenerateCoverImage: novelID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())

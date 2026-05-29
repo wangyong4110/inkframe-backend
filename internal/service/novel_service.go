@@ -289,7 +289,7 @@ func (s *NovelService) UpdateNovel(id uint, req *model.UpdateNovelRequest) (*mod
 }
 
 // GenerateCoverImage 使用 AI 为小说生成封面图，并将 URL 写回 cover_image 字段
-func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID uint) (string, error) {
+func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID uint, suggestion string) (string, error) {
 	novel, err := s.novelRepo.GetByID(novelID)
 	if err != nil {
 		return "", err
@@ -318,16 +318,39 @@ func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID
 		desc = " Theme: " + novel.Description + "."
 	}
 
-	prompt := fmt.Sprintf(
-		"Professional book cover illustration for a Chinese novel titled \"%s\".%s "+
-			"Genre: %s. Style: cinematic, atmospheric, high-quality digital art, dramatic lighting, "+
-			"vibrant colors, detailed, no text, no letters, no watermarks.",
-		novel.Title, desc, genreDesc,
-	)
 	negativePrompt := "text, words, letters, watermark, signature, blurry, low quality, ugly, distorted, nsfw"
 
+	// 判断是否有可用的旧封面作为参考图（图生图模式）
+	existingCover := ""
+	if suggestion != "" && novel.CoverImage != "" &&
+		(strings.HasPrefix(novel.CoverImage, "http://") || strings.HasPrefix(novel.CoverImage, "https://")) {
+		existingCover = novel.CoverImage
+	}
+
+	var prompt string
+	if suggestion != "" && existingCover != "" {
+		// 图生图：以旧封面为参考，按用户指令编辑
+		prompt = suggestion
+	} else if suggestion != "" {
+		// 无旧封面，文生图但加入用户建议
+		prompt = fmt.Sprintf(
+			"Professional book cover illustration for a Chinese novel titled \"%s\". Genre: %s. "+
+				"%s Style: cinematic, atmospheric, high-quality digital art, "+
+				"dramatic lighting, vibrant colors, detailed, no text, no letters, no watermarks.",
+			novel.Title, genreDesc, suggestion,
+		)
+	} else {
+		prompt = fmt.Sprintf(
+			"Professional book cover illustration for a Chinese novel titled \"%s\".%s "+
+				"Genre: %s. Style: cinematic, atmospheric, high-quality digital art, dramatic lighting, "+
+				"vibrant colors, detailed, no text, no letters, no watermarks.",
+			novel.Title, desc, genreDesc,
+		)
+	}
+
 	ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title})
-	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", prompt, "", novel.ImageStyle, negativePrompt)
+	// existingCover != "" 时走 SeedEditV3（图生图指令编辑），否则走文生图
+	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", prompt, existingCover, novel.ImageStyle, negativePrompt)
 	if err != nil {
 		return "", fmt.Errorf("generate cover image: %w", err)
 	}
