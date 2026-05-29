@@ -67,10 +67,11 @@ func (r *ChapterRepository) GetByNovelAndChapterNo(novelID uint, chapterNo int) 
 	return &chapter, nil
 }
 
-// chapterListColumns 章节列表只需元数据字段，排除 content/outline/scene_outline/plot_points/chapter_hook/summary 等大文本列。
-// 100章 × ~3KB content = ~300KB 节省，减少 DB I/O 和网络传输。
+// chapterListColumns 章节列表元数据字段。排除 content/scene_outline/plot_points/chapter_hook 等超大文本列。
+// outline/summary 较短（百字级），保留用于列表摘要展示。
 const chapterListColumns = "id, novel_id, tenant_id, uuid, chapter_no, title, status, word_count, " +
 	"tension_level, act_no, emotional_tone, hook_type, " +
+	"outline, summary, " +
 	"created_at, updated_at, deleted_at"
 
 func (r *ChapterRepository) chapterListCacheKey(novelID uint) string {

@@ -738,6 +738,10 @@ func (s *NovelService) writeCharacterSnapshots(tenantID uint, chapter *model.Cha
 	}
 
 	cleaned := extractJSON(result)
+	// Normalise: AI sometimes returns a bare array instead of {"characters":[...]}
+	if strings.HasPrefix(strings.TrimSpace(cleaned), "[") {
+		cleaned = `{"characters":` + cleaned + `}`
+	}
 	var extraction struct {
 		Characters []struct {
 			Name       string `json:"name"`
