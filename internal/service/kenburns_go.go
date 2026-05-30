@@ -174,14 +174,16 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 
 	encStart := time.Now()
 	logger.Printf("generateKenBurnsPureGo: shot %d starting ffmpeg encode: %d frames → %s vf=%q", shot.ShotNo, totalFrames, outPath, vfFilter)
-	encOut, encErr := runFFmpegCtx(ctx,
+	// Use goroutine timeout: wazero cannot interrupt WASM x264 mid-loop via context cancellation.
+	// -preset ultrafast dramatically reduces WASM libx264 encoding time (same reason as generateStillFrameClip).
+	encOut, encErr := runFFmpegWithGoroutineTimeout(10*time.Minute,
 		"-y",
 		"-framerate", fmt.Sprintf("%d", fps),
 		"-i", inputPattern,
 		"-c:v", "libx264",
+		"-preset", "ultrafast",
 		"-vf", vfFilter,
 		"-r", fmt.Sprintf("%d", fps),
-		"-threads", "1",
 		outPath,
 	)
 	if encErr != nil {

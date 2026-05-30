@@ -114,10 +114,9 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 				// ── 两阶段异步模式 ──────────────────────────────────────────────────
 				// 阶段一（同步，占用 sem）：AI 图片生成 → 下载到本地
 				// 阶段二（异步，释放 sem 后后台执行）：Ken Burns 编码 → OSS 上传，支持自动重试
-				var localImage string
-				var clipDur float64
+				// 只生成图片，不自动合成 MP4（Ken Burns 由独立的 batch-clips 步骤触发）
 				for attempt := 1; attempt <= maxRetries; attempt++ {
-					localImage, clipDur, genErr = s.generateShotImageOnly(sh, aspectRatio)
+					_, _, genErr = s.generateShotImageOnly(sh, aspectRatio)
 					if genErr == nil {
 						break
 					}
@@ -127,19 +126,12 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 					}
 				}
 				if genErr == nil {
-					// 图片就绪：立即标记 completed（progress=50）供前端展示
 					if err := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
-						"status": "completed", "progress": 50,
+						"status": "completed", "progress": 100,
 					}); err != nil {
 						logger.Printf("[VideoService] BatchGenerateShots: failed to update shot %d status: %v", sh.ShotNo, err)
 					}
-					// Ken Burns + OSS 在后台异步执行，完成后 progress=100
-					go func(shotID uint, imgPath string, dur float64, ar string) {
-						bgCtx, bgCancel := context.WithTimeout(context.Background(), 30*time.Minute)
-						defer bgCancel()
-						s.generateClipAndUploadWithRetry(bgCtx, shotID, imgPath, dur, ar)
-					}(sh.ID, localImage, clipDur, aspectRatio)
-					logger.Printf("BatchGenerateShots: shot %d image ready, clip async", sh.ShotNo)
+					logger.Printf("BatchGenerateShots: shot %d image ready", sh.ShotNo)
 				} else {
 					logger.Printf("BatchGenerateShots: shot %d image failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
 				}
@@ -1426,48 +1418,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 		logger.Printf("[VideoService] GenerateSlideshowShotVideo: failed to update shot %d image URL: %v", shot.ShotNo, err)
 	}
 
-	// 2. 下载图片到本地（Volcengine 返回的 URL 后缀为 .image，FFmpeg 无法识别格式，需重命名为 .jpg）
-	logger.Printf("GenerateSlideshowShotVideo: shot %d downloading image for ffmpeg", shot.ShotNo)
-	localImage, err := downloadToTemp(imageURL, fmt.Sprintf("inkframe-img-%d-", shot.ID), ".jpg")
-	if err != nil {
-		logger.Printf("GenerateSlideshowShotVideo: download image failed for shot %d, marking completed with image only: %v", shot.ShotNo, err)
-		shot.Status = "completed"
-		shot.Progress = 100
-		shot.ErrorMessage = fmt.Sprintf("ken burns skipped: %v", err)
-		return s.storyboardRepo.Update(shot)
-	}
-	defer os.Remove(localImage)
-
-	// 3. Ken Burns 动效（缓慢推拉/平移，让静态图更生动）；失败时降级为静止画面
-	// 首选纯 Go 实现（逐帧计算 + WASM 编码）：速度快、可被 context 取消。
-	// 若失败则降级为静止画面（跳过旧的 WASM zoompan 方案以避免长时间阻塞）。
-	logger.Printf("GenerateSlideshowShotVideo: shot %d starting ken burns (pure Go)", shot.ShotNo)
-	clipPath, err := s.generateKenBurnsPureGo(context.Background(), shot, localImage, duration, aspectRatio) // background ctx is intentional: decoupled from HTTP request
-	if err != nil {
-		logger.Printf("GenerateSlideshowShotVideo: ken burns failed for shot %d, falling back to still frame: %v", shot.ShotNo, err)
-		// 降级：用静止画面代替 Ken Burns
-		clipPath, err = s.generateStillFrameClip(localImage, duration, aspectRatio)
-		if err != nil {
-			logger.Printf("GenerateSlideshowShotVideo: still frame fallback also failed for shot %d, completing with image only: %v", shot.ShotNo, err)
-			shot.Status = "completed"
-			shot.Progress = 100
-			shot.ErrorMessage = fmt.Sprintf("ffmpeg unavailable: %v", err)
-			return s.storyboardRepo.Update(shot)
-		}
-		shot.ErrorMessage = "ken burns skipped, used still frame"
-	}
-
-	// 优先上传到 OSS（持久存储），成功后清除本地 file:// 路径并删除临时文件。
-	// 失败时降级保留 file:// 路径（本地可访问但重启后失效）。
-	if ossURL := s.uploadClipToStorage(context.Background(), shot, clipPath); ossURL != "" {
-		shot.VideoURL = ossURL
-		shot.ClipPath = ""
-		os.Remove(clipPath) //nolint:errcheck
-		logger.Printf("GenerateSlideshowShotVideo: shot %d clip uploaded → %s", shot.ShotNo, ossURL)
-	} else {
-		shot.ClipPath = "file://" + clipPath
-		logger.Printf("GenerateSlideshowShotVideo: shot %d completed clip=%s (local only)", shot.ShotNo, clipPath)
-	}
+	// 图片生成完成，不自动合成 MP4（Ken Burns 由独立的 batch-clips 步骤触发）
 	shot.Status = "completed"
 	shot.Progress = 100
 	return s.storyboardRepo.Update(shot)
@@ -1513,18 +1464,7 @@ func (s *VideoService) runSlideshowPipeline(videoID uint) {
 		}(shot)
 	}
 	audioWg.Wait()
-
-	// 拼接
-	if _, err := s.StitchVideo(videoID); err != nil {
-		logger.Printf("runSlideshowPipeline: stitch video %d failed: %v", videoID, err)
-		if v, _ := s.videoRepo.GetByID(videoID); v != nil {
-			v.Status = "failed"
-			v.ErrorMessage = err.Error()
-			if updErr := s.videoRepo.Update(v); updErr != nil {
-				logger.Printf("[VideoService] runSlideshowPipeline: failed to update video %d status to failed: %v", videoID, updErr)
-			}
-		}
-	}
+	// 图片生成完成后不自动拼接；拼接由独立步骤（先生成 Ken Burns 片段，再 StitchVideo）触发
 }
 
 // GenerateAllShotVideos 提交所有待生成分镜的视频任务
