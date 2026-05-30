@@ -14,7 +14,7 @@ import (
 
 // analyzeSingleShotSFX 为单个分镜调用 AI 生成结构化音效搜索词，更新 sfx_tags 字段。
 // 输出格式：[{"tag":"...","type":"action|ambient|emotion","prompt":"..."}, ...]
-// tag 字段始终输出英文（Freesound 四元格式），prompt 字段为中文自然语言（供 Kling SFX / AudioLDM 使用）。
+// tag 字段始终输出英文（最多 3 词），prompt 字段为中文自然语言（供 Kling SFX / AudioLDM 使用）。
 func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint, userContext string, promptLanguage string) error {
 	// 过渡闪切镜头（< 1s）直接跳过 AI 调用，存空数组
 	if shot.Duration < 1.0 {
@@ -90,23 +90,23 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 ## 景别规则
 ` + sizeGuide + motionSection + `
 
-## Tag 格式（英文 Freesound 四元格式）
-结构：[声源/物体] [材质/空间] [动作] [描述符]
-描述符必须从上方强制绑定列表中选取，不得省略。
+## Tag 格式（英文，最多 3 个单词）
+结构：[物体/声源] [动作] [描述符]
+**tag 必须 ≤ 3 个单词**，描述符必须从上方强制绑定列表中选取，不得省略。
 
 示例（覆盖常见场景）：
-- {"tag":"heavy wooden door creak open indoor single","type":"action","prompt":"室内厚重木门缓慢推开的嘎吱声"}
-- {"tag":"stone gravel footsteps walk outdoor single","type":"action","prompt":"室外碎石地面上沉稳的脚步声"}
-- {"tag":"steel blade unsheathe metal scrape single","type":"action","prompt":"钢制刀剑出鞘的金属刮擦声"}
-- {"tag":"desert wind sand drift outdoor loop","type":"ambient","prompt":"荒漠旷野持续低频风沙环境音"}
-- {"tag":"wooden interior room tone quiet indoor loop","type":"ambient","prompt":"室内安静木质空间的底噪环境音"}
-- {"tag":"deep brass sting emotional rise single","type":"emotion","prompt":"戏剧性情感顶点的铜管上扬音效"}
+- {"tag":"door creak single","type":"action","prompt":"室内厚重木门缓慢推开的嘎吱声"}
+- {"tag":"footsteps gravel single","type":"action","prompt":"室外碎石地面上沉稳的脚步声"}
+- {"tag":"blade unsheathe single","type":"action","prompt":"钢制刀剑出鞘的金属刮擦声"}
+- {"tag":"desert wind loop","type":"ambient","prompt":"荒漠旷野持续低频风沙环境音"}
+- {"tag":"room tone loop","type":"ambient","prompt":"室内安静木质空间的底噪环境音"}
+- {"tag":"brass sting single","type":"emotion","prompt":"戏剧性情感顶点的铜管上扬音效"}
 
 ❌ tag 禁止词汇：
 - 视觉词：sunlight / morning / warm / bright / dark / gloomy
 - 情绪形容词：epic / mystical / dramatic / intense / scary
 - BGM 词：ambience / atmosphere / soundscape / mood
-- 笼统单词：sword / rain / fire / wind（必须展开为四元格式）
+- 笼统单词：sword / rain / fire / wind（必须加动作词展开，如 rain splash single）
 - 呼吸声：breath / breathing / exhale（仅画面中有明显喘息肢体动作时才允许）
 
 ## 分镜信息
