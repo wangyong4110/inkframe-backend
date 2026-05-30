@@ -300,8 +300,8 @@ func seedAIModels(db *gorm.DB) {
 		// 可灵文生音效（与视频生成共用 AK/SK）
 		{"kling-sfx", "可灵文生音效", "sfx", "https://api-beijing.klingai.com", true,
 			[]string{"3s", "5s", "7s", "10s"}},
-		// ElevenLabs 文生音效（xi-api-key 鉴权）
-		{"elevenlabs-sfx", "ElevenLabs 文生音效", "sfx", "https://api.elevenlabs.io", true,
+		// ElevenLabs 文生音效（xi-api-key 单密钥鉴权，不需要 SK）
+		{"elevenlabs-sfx", "ElevenLabs 文生音效", "sfx", "https://api.elevenlabs.io", false,
 			[]string{"sound-generation"}},
 		// 可灵语音合成（与视频生成共用 AK/SK）
 		{"kling-tts", "可灵语音合成", "voice", "https://api-beijing.klingai.com", true,
