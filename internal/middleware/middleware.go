@@ -80,16 +80,17 @@ func getBucket(ip string, capacity, rate float64) *tokenBucket {
 	return actual.(*tokenBucket)
 }
 
-// Logger 日志中间件（跳过健康检查路径）
+// Logger 日志中间件（跳过健康检查及任务轮询路径）
 func Logger() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		if c.Request.URL.Path == "/health" {
+		path := c.Request.URL.Path
+		// 跳过高频无噪声路径：健康检查、任务状态轮询
+		if path == "/health" || (c.Request.Method == "GET" && strings.HasPrefix(path, "/api/v1/tasks/")) {
 			c.Next()
 			return
 		}
 
 		start := time.Now()
-		path := c.Request.URL.Path
 		method := c.Request.Method
 
 		c.Next()
@@ -167,10 +168,12 @@ func NewAuth(jwtSecret string) gin.HandlerFunc {
 		// 生产环境未配置 secret — 启动时 panic，防止静默放行
 		panic("jwt_secret is empty in production mode; set APP_ENV=production and provide a valid jwt_secret")
 	}
+	if isDevBypass {
+		logger.Printf("[Auth] WARNING: dev-bypass mode active — all requests granted admin (tenant=1)")
+	}
 	return func(c *gin.Context) {
 		// ── 开发绕过模式（jwt_secret 为空且非生产） ────────────────────────
 		if isDevBypass {
-			logger.Printf("[Auth] WARNING: dev-bypass mode active — all requests granted admin (tenant=1)")
 			c.Set("user_id", uint(1))
 			c.Set("tenant_id", uint(1))
 			c.Set("user_role", "admin")

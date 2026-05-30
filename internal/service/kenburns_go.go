@@ -97,7 +97,12 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 		default:
 		}
 
-		if i > 0 && i%30 == 0 {
+		// 每 10% 打一条进度日志（totalFrames/10 帧间隔，最少每 60 帧）
+		logInterval := totalFrames / 10
+		if logInterval < 60 {
+			logInterval = 60
+		}
+		if i > 0 && i%logInterval == 0 {
 			logger.Printf("generateKenBurnsPureGo: shot %d frame %d/%d (%.0f%%)",
 				shot.ShotNo, i, totalFrames, float64(i)*100/float64(totalFrames))
 		}

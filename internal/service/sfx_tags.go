@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -66,13 +67,13 @@ func guessSFXType(tag string) string {
 func shotSizeGuide(shotSize string) string {
 	switch shotSize {
 	case "extreme_close_up":
-		return "极近景/特写：强调微观细节音（衣物摩擦、皮肤/毛发接触、呼吸、心跳），禁止远景环境音"
+		return "极近景/特写：只保留微观细节音（衣物摩擦、关节/肌肉收紧、细小触碰），环境音一律压到不可感知；动作音选 close-mic dry crisp"
 	case "close_up":
-		return "近景：突出物体近距离动作音，环境音压低至 subtle"
+		return "近景：近距离动作音为主，环境音降低 6–10dB（subtle/soft）；避免大空间混响"
 	case "wide":
-		return "远景/全景：以环境底层音为主，动作音选 distant/reverb 版本"
+		return "远景/全景：环境底层音主导（outdoor/reverb），动作音必须选 distant 版本；不加细节音"
 	default: // medium
-		return "中景：动作音与环境底层音并重，保持自然比例"
+		return "中景：动作音与环境底层音比例均衡（约 1:1），两者互不遮蔽频段"
 	}
 }
 
@@ -80,12 +81,26 @@ func shotSizeGuide(shotSize string) string {
 func cameraMotionGuide(cameraType string) string {
 	switch cameraType {
 	case "pan":
-		return "横移镜头：可加一条极短的 whoosh 扫场音（0.3–0.5s）"
+		return "横移镜头：仅当画面有明显主体扫过时才加 whoosh；无主体移动的摇镜不加额外音"
 	case "zoom":
-		return "推拉镜头：快速推进可加 zoom in swoosh，拉远可不加额外音"
+		return "推拉镜头：快推可加 zoom swoosh（≤0.3s）；慢推/拉远不加"
 	case "tracking":
-		return "跟随镜头：动作音随角色移动节奏，环境音保持稳定"
+		return "跟随镜头：动作音跟随角色节奏，ambient 保持稳定，不随摄影机移动而变化"
 	default:
 		return ""
+	}
+}
+
+// buildDurationStrategy 根据镜头时长返回对应的音效层数/类型策略说明。
+func buildDurationStrategy(dur float64) string {
+	switch {
+	case dur < 1.0:
+		return fmt.Sprintf("%.1fs → 过渡闪切镜头，直接输出 []", dur)
+	case dur < 2.0:
+		return fmt.Sprintf("%.1fs → 极短镜头：最多 1 条 action（必须 single/burst/hit），禁止 ambient 和 emotion", dur)
+	case dur < 5.0:
+		return fmt.Sprintf("%.1fs → 中短镜头：最多 1 action（single）+ 1 ambient（loop）；emotion 仅叙事节点可选", dur)
+	default:
+		return fmt.Sprintf("%.1fs → 长镜头：ambient 必须有且为 loop；action 可 1–2 条；emotion 谨慎，仅叙事顶点", dur)
 	}
 }
