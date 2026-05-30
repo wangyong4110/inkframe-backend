@@ -124,6 +124,16 @@ func (s *AIService) SetImageConcurrency(n int) {
 	}
 }
 
+// ImageConcurrency 返回当前图像并发度上限（0 = 不限制）。
+func (s *AIService) ImageConcurrency() int {
+	s.semMu.RLock()
+	defer s.semMu.RUnlock()
+	if s.imageSem == nil {
+		return 0
+	}
+	return cap(s.imageSem)
+}
+
 // Generate 生成内容（使用系统级提供商，tenantID=0）
 func (s *AIService) Generate(novelID uint, taskType string, prompt string) (string, error) {
 	return s.GenerateWithProvider(0, novelID, taskType, prompt, "")

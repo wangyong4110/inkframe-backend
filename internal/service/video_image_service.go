@@ -206,7 +206,13 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, pro
 	})
 
 	var queued []*model.StoryboardShot
-	sem := make(chan struct{}, maxConcurrentShots)
+	concurrency := maxConcurrentShots
+	if s.aiService != nil {
+		if c := s.aiService.ImageConcurrency(); c > 0 && c < concurrency {
+			concurrency = c
+		}
+	}
+	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
 	total := len(shotIDs)
 	var done atomic.Int32
@@ -236,7 +242,7 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, pro
 		wg.Add(1)
 		go func(sh *model.StoryboardShot, idx int32) {
 			// 前几个并发 goroutine 错开 800ms 启动，避免 API 侧同时收到多个请求导致质量下降
-			if idx > 0 && idx < int32(maxConcurrentShots) {
+			if idx > 0 && idx < int32(concurrency) {
 				time.Sleep(time.Duration(idx) * 800 * time.Millisecond)
 			}
 			defer func() {
@@ -570,7 +576,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		allRefImages = append(allRefImages, sceneRefImage)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 	defer cancel()
 
 	// 获取视频的 ArtStyle、TenantID、质量档位、宽高比、角色一致性权重和色彩调色
