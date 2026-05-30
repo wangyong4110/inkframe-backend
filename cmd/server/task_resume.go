@@ -45,7 +45,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			svcs.TaskService.UpdateProgress(t.TaskID, 5) //nolint:errcheck
 
 			ctx := context.Background()
-			if err := svcs.SFXService.AnalyzeSFXForVideo(ctx, shots, tenantID, params.UserContext, params.Lang); err != nil {
+			if err := svcs.SFXService.AnalyzeSFXForVideo(ctx, shots, tenantID, params.UserContext, params.Lang, false); err != nil {
 				logger.Printf("TaskService resume sfx_gen %s: analyze failed: %v", t.TaskID, err)
 			}
 			svcs.TaskService.UpdateProgress(t.TaskID, 50) //nolint:errcheck

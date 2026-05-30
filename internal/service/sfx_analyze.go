@@ -84,6 +84,11 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 - 每条必须包含 tag（英文搜索词）、type、prompt（中文描述，供 AI 生成使用）三个字段
 - 仅输出 JSON 数组，禁止任何额外文字
 
+## 避免滥用的标签
+- ❌ 呼吸声（breath/breathing/exhale）：只在画面中有明显喘息/憋气等肢体行为时才输出；通用情绪特写禁止
+- ❌ 两字笼统词：wind_howling / desert_wind / fire_crackle 等不符合四元格式，必须展开为完整 4 元描述
+- ❌ 连续镜头 ambient 重复：同场景环境底层音最多出现一次，后续镜头若无场景切换则省略 ambient
+
 ## 分镜信息
 ` + sceneCtx.String() + `
 请输出：`
@@ -162,12 +167,13 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 
 // AnalyzeSFXForVideo 并行为每个分镜单独调用 AI 生成结构化音效搜索词，写入 sfx_tags 字段。
 // promptLanguage：项目提示词语言（"zh"=中文，"en"=英文）；影响 AI 输出标签语言。
+// force=true 时强制重新分析所有镜头（用于用户主动触发），force=false 时跳过已有有效标签的镜头。
 // 每个分镜独立分析，并发度最多 15，单个失败不影响其余镜头。
-func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.StoryboardShot, tenantID uint, userContext string, promptLanguage string) error {
+func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.StoryboardShot, tenantID uint, userContext string, promptLanguage string, force bool) error {
 	if len(shots) == 0 {
 		return nil
 	}
-	logger.Printf("[SFXService] AnalyzeSFXForVideo: parallel analysis for %d shots (lang=%s)", len(shots), promptLanguage)
+	logger.Printf("[SFXService] AnalyzeSFXForVideo: parallel analysis for %d shots (lang=%s force=%v)", len(shots), promptLanguage, force)
 
 	const maxConcurrency = 15
 	sem := make(chan struct{}, maxConcurrency)
@@ -179,10 +185,12 @@ func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.Stor
 		if ctx.Err() != nil {
 			break
 		}
-		// 已有有效结构化 tags（非空且含 tag 字段）则跳过，避免重复调用 AI
-		if existing := parseSFXTags(shot.SFXTags); len(existing) > 0 && existing[0].Tag != "" {
-			skipped.Add(1)
-			continue
+		// 非强制模式：已有有效结构化 tags（非空且含 tag 字段）则跳过，避免重复调用 AI
+		if !force {
+			if existing := parseSFXTags(shot.SFXTags); len(existing) > 0 && existing[0].Tag != "" {
+				skipped.Add(1)
+				continue
+			}
 		}
 		wg.Add(1)
 		sem <- struct{}{}

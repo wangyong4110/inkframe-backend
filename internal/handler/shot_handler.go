@@ -299,8 +299,8 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 		h.taskSvc.SetRunning(taskID)        //nolint:errcheck
 		h.taskSvc.UpdateProgress(taskID, 5) //nolint:errcheck
 		ctx := context.Background()
-		// Step 1: AI 批量分析所有分镜，生成精准的自然语言音效搜索词
-		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID, userContext, lang); err != nil {
+		// Step 1: AI 批量分析所有分镜，生成精准的自然语言音效搜索词（非强制，已有标签的跳过）
+		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID, userContext, lang, false); err != nil {
 			logger.Printf("[VideoHandler] BatchGenerateSFX task %s: AI analyze failed (proceeding): %v", taskID, err)
 		}
 		h.taskSvc.UpdateProgress(taskID, 20) //nolint:errcheck
@@ -373,9 +373,9 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		ctx := context.Background()
 
-		// 阶段一：AI 分析标签（进度 0→50%）
+		// 阶段一：AI 分析标签（进度 0→50%，force=true 强制重新分析所有镜头）
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
-		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID, userContext, lang); err != nil {
+		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID, userContext, lang, true); err != nil {
 			logger.Printf("[VideoHandler] AnalyzeSFXTags task %s phase1 failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
