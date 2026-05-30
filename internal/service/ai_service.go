@@ -229,6 +229,8 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		provider = ai.NewKlingTTSProvider(matched.APIKey, matched.APISecretKey, matched.APIEndpoint)
 	case "kling-image":
 		provider = ai.NewKlingImageProvider(matched.APIKey, matched.APISecretKey, matched.APIEndpoint)
+	case "elevenlabs-sfx":
+		provider = ai.NewElevenLabsSFXProvider(matched.APIKey, matched.APIEndpoint)
 	case "openai":
 		provider = ai.NewOpenAIProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "anthropic":

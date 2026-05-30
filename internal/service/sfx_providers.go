@@ -652,7 +652,11 @@ func (s *SFXService) generateElevenLabsForTag(ctx context.Context, tenantID uint
 
 	// 优先：通过 AIService 从 DB 加载 elevenlabs-sfx 密钥
 	if s.aiSvc != nil {
-		if rawURL, d, err := s.aiSvc.GenerateSFXWithProvider(ctx, tenantID, "elevenlabs-sfx", prompt, dur); err == nil && rawURL != "" {
+		rawURL, d, dbErr := s.aiSvc.GenerateSFXWithProvider(ctx, tenantID, "elevenlabs-sfx", prompt, dur)
+		if dbErr != nil {
+			logger.Printf("[SFXService] generateElevenLabsForTag: DB path failed (tenant=%d): %v", tenantID, dbErr)
+		}
+		if dbErr == nil && rawURL != "" {
 			// ElevenLabsSFXProvider 返回 file:// 临时路径，需上传到 OSS
 			if strings.HasPrefix(rawURL, "file://") && s.storageSvc != nil {
 				localPath := strings.TrimPrefix(rawURL, "file://")
