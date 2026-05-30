@@ -36,6 +36,8 @@ type BGMService struct {
 	bgmDir           string       // 本地 BGM 文件目录（优先）
 	aiSvc            *AIService   // AI 分析（可选）
 	storageSvc       storage.Service
+	assetRepo        *repository.AssetRepository
+	tagRepo          *repository.TagRepository
 	httpClient       *http.Client
 	localUploadCache sync.Map // local path → OSS URL
 	queryCache       sync.Map // "jamendo:query" / "pixabay:query" → bgmCacheEntry
@@ -59,6 +61,13 @@ func (s *BGMService) WithAIService(aiSvc *AIService) *BGMService {
 // WithStorage 注入存储服务（本地文件上传 OSS，生成可公开访问的 URL）
 func (s *BGMService) WithStorage(svc storage.Service) *BGMService {
 	s.storageSvc = svc
+	return s
+}
+
+// WithAssetRepo 注入素材库仓库（可选；注入后生成的 BGM 将自动发布至公共素材库）
+func (s *BGMService) WithAssetRepo(assetRepo *repository.AssetRepository, tagRepo *repository.TagRepository) *BGMService {
+	s.assetRepo = assetRepo
+	s.tagRepo = tagRepo
 	return s
 }
 
@@ -356,7 +365,8 @@ func bgmSegmentVolume(mood, tempo string) float64 {
 	}
 }
 
-// SearchBGMForSegment 为单个 BGM 分段在 Jamendo/Pixabay 搜索匹配曲目，更新 URL/TrackName/TrackArtist/Source。
+// SearchBGMForSegment 为单个 BGM 分段搜索匹配曲目，更新 URL/TrackName/TrackArtist/Source。
+// 优先级：素材库 → 本地目录 → Jamendo → Pixabay。
 func (s *BGMService) SearchBGMForSegment(ctx context.Context, tenantID uint, seg *model.VideoBGMSegment) error {
 	var queries []string
 	if seg.SearchQueries != "" {
@@ -370,7 +380,34 @@ func (s *BGMService) SearchBGMForSegment(ctx context.Context, tenantID uint, seg
 		}
 	}
 
-	// 本地文件优先（上传 OSS 得到可访问 URL）
+	// 0. 素材库（公共 + 个人，优先复用避免重复拉取）
+	if s.assetRepo != nil {
+		for _, q := range queries {
+			assets, _, err := s.assetRepo.Search(repository.AssetSearchParams{
+				Type:     "audio",
+				SubType:  "bgm",
+				Q:        q,
+				Scope:    "all",
+				CallerID: tenantID,
+				Sort:     "use_count",
+				PageSize: 3,
+			})
+			if err == nil {
+				for _, a := range assets {
+					if a.StorageURL != "" {
+						logger.Printf("[BGMService] segment %d (%s) asset-lib hit q=%q", seg.SeqNo, seg.Mood, q)
+						_ = s.assetRepo.IncrUseCount(a.ID)
+						seg.URL = a.StorageURL
+						seg.TrackName = a.Title
+						seg.Source = "asset-lib"
+						return nil
+					}
+				}
+			}
+		}
+	}
+
+	// 1. 本地文件（上传 OSS 得到可访问 URL）
 	if localPath := s.SelectBGM(seg.Mood); localPath != "" {
 		if publicURL, ok := s.resolveLocalBGMURL(ctx, localPath); ok {
 			seg.URL = publicURL
@@ -380,7 +417,7 @@ func (s *BGMService) SearchBGMForSegment(ctx context.Context, tenantID uint, seg
 		// storageSvc 未配置：跳过本地，继续尝试 API
 	}
 
-	// Jamendo 搜索
+	// 2. Jamendo 搜索
 	if jKey, _ := s.bgmProviderCreds(tenantID, "jamendo"); jKey != "" {
 		for _, q := range queries {
 			if trackURL, name, artist := s.jamendoSearch(ctx, tenantID, q); trackURL != "" {
@@ -394,7 +431,7 @@ func (s *BGMService) SearchBGMForSegment(ctx context.Context, tenantID uint, seg
 		logger.Printf("[BGMService] segment %d (%s) Jamendo miss for all queries", seg.SeqNo, seg.Mood)
 	}
 
-	// Pixabay 降级
+	// 3. Pixabay 降级
 	if pKey, _ := s.bgmProviderCreds(tenantID, "pixabay-bgm"); pKey != "" {
 		for _, q := range queries {
 			if trackURL, name := s.pixabaySearchBGM(ctx, tenantID, q); trackURL != "" {
@@ -770,6 +807,10 @@ func (s *BGMService) GenerateBGMSegments(
 					logger.Printf("[BGMService] segment %d Update failed: %v", sg.SeqNo, err)
 				}
 			}
+			// 自动发布到公共素材库（异步，失败不影响主流程）
+			if s.assetRepo != nil && s.tagRepo != nil && sg.URL != "" {
+				go s.saveBGMToAssetLibrary(context.Background(), sg)
+			}
 			n := int(doneCount.Add(1))
 			progress(50 + n*50/total)
 		}(seg)
@@ -861,4 +902,64 @@ func (s *BGMService) MixBGMWithDucking(videoPath, bgmSource, audioTrackPath, out
 		return s.MixBGM(videoPath, bgmSource, outputPath)
 	}
 	return nil
+}
+
+// saveBGMToAssetLibrary 将 BGM 分段发布到公共素材库，以 URL 去重。
+// 失败只记录日志，不影响主流程。
+func (s *BGMService) saveBGMToAssetLibrary(ctx context.Context, seg *model.VideoBGMSegment) {
+	if seg.URL == "" || seg.Source == "none" || seg.Source == "local" {
+		return
+	}
+	if exists, err := s.assetRepo.ExistsByExternalID(seg.URL); err != nil {
+		logger.Printf("[BGMService] AssetLib: ExistsByExternalID error (seg %d): %v", seg.SeqNo, err)
+		return
+	} else if exists {
+		return
+	}
+
+	title := seg.TrackName
+	if title == "" {
+		title = seg.Mood
+	}
+
+	asset := &model.Asset{
+		TenantID:   0,
+		CreatorID:  0,
+		Scope:      model.AssetScopePublic,
+		Type:       "audio",
+		SubType:    "bgm",
+		Title:      title,
+		StorageURL: seg.URL,
+		ExternalID: seg.URL,
+		Source:     "crawled",
+		Duration:   seg.DurationSecs,
+		Status:     "active",
+	}
+	if err := s.assetRepo.Create(asset); err != nil {
+		logger.Printf("[BGMService] AssetLib: create asset failed (seg %d): %v", seg.SeqNo, err)
+		return
+	}
+
+	tagNames := []string{}
+	if seg.Mood != "" {
+		tagNames = append(tagNames, seg.Mood)
+	}
+	if seg.Tempo != "" {
+		tagNames = append(tagNames, seg.Tempo)
+	}
+	if seg.TrackArtist != "" {
+		tagNames = append(tagNames, seg.TrackArtist)
+	}
+	for _, name := range tagNames {
+		tag, err := s.tagRepo.FindOrCreate(name, "audio")
+		if err != nil {
+			logger.Printf("[BGMService] AssetLib: FindOrCreate tag %q failed: %v", name, err)
+			continue
+		}
+		if err := s.tagRepo.AddToAsset(asset.ID, tag.ID, "ai", 1.0); err != nil {
+			logger.Printf("[BGMService] AssetLib: AddToAsset failed (asset %d tag %q): %v", asset.ID, name, err)
+		}
+	}
+	_ = ctx
+	logger.Printf("[BGMService] AssetLib: published asset %d mood=%q source=%s", asset.ID, seg.Mood, seg.Source)
 }

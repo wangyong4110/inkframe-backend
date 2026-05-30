@@ -707,11 +707,10 @@ func mapSFXSource(source string) string {
 	}
 }
 
-// saveToAssetLibrary 将已生成的音效批量存入素材库，并关联对应标签。
+// saveToAssetLibrary 将已生成的音效批量存入公共素材库，并关联对应标签。
 // 以 URL 作为 ExternalID 去重：同一 URL 不重复入库。
 // 失败只记录日志，不影响主流程。
-func (s *SFXService) saveToAssetLibrary(ctx context.Context, shot *model.StoryboardShot, items []*model.ShotSFXItem, tenantID uint) {
-	videoID := shot.VideoID
+func (s *SFXService) saveToAssetLibrary(ctx context.Context, shot *model.StoryboardShot, items []*model.ShotSFXItem, _ uint) {
 	shotID := shot.ID
 
 	for _, item := range items {
@@ -726,11 +725,11 @@ func (s *SFXService) saveToAssetLibrary(ctx context.Context, shot *model.Storybo
 			continue
 		}
 
-		// 构建 Asset 记录
+		// 构建 Asset 记录（公共素材库，所有租户可复用）
 		asset := &model.Asset{
-			TenantID:   tenantID,
-			CreatorID:  tenantID, // personal scope 查询需要 creator_id 匹配
-			Scope:      model.AssetScopePersonal,
+			TenantID:   0,
+			CreatorID:  0,
+			Scope:      model.AssetScopePublic,
 			Type:       "audio",
 			SubType:    "sfx",
 			Title:      item.Tag,
@@ -738,8 +737,6 @@ func (s *SFXService) saveToAssetLibrary(ctx context.Context, shot *model.Storybo
 			ExternalID: item.URL,
 			Source:     mapSFXSource(item.Source),
 			Duration:   item.DurationSecs,
-			VideoID:    &videoID,
-			ShotID:     &shotID,
 			Status:     "active",
 		}
 		if err := s.assetRepo.Create(asset); err != nil {

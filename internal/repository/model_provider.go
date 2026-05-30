@@ -115,12 +115,15 @@ func NewAIModelRepository(db *gorm.DB) *AIModelRepository {
 // GetAvailableByTaskType 获取任务可用的模型。
 // suitable_tasks 列存储 JSON 数组字符串（如 `["chapter","image"]`）；使用 LIKE 在 DB 层过滤，
 // 兼容 MySQL 和 SQLite，无需全量加载后在内存中遍历。
+// 仅返回已配置凭据（api_key 或 api_secret_key 非空）的提供商下的模型，
+// 避免将未激活/未填密钥的种子记录暴露给前端或 AI 调度逻辑。
 func (r *AIModelRepository) GetAvailableByTaskType(taskType string) ([]*model.AIModel, error) {
 	var models []*model.AIModel
-	// LIKE pattern matches `"taskType"` as a JSON array element substring.
 	pattern := `%"` + taskType + `"%`
 	if err := r.db.Preload("Provider").
-		Where("is_active = ? AND is_available = ? AND suitable_tasks LIKE ?", true, true, pattern).
+		Joins("JOIN ink_model_provider p ON p.id = ink_ai_model.provider_id AND p.deleted_at IS NULL").
+		Where("ink_ai_model.is_active = ? AND ink_ai_model.is_available = ? AND ink_ai_model.suitable_tasks LIKE ?"+
+			" AND (p.api_key != '' OR p.api_secret_key != '')", true, true, pattern).
 		Find(&models).Error; err != nil {
 		return nil, err
 	}

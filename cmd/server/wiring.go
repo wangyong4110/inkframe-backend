@@ -398,7 +398,8 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 	storyboardSvc := service.NewStoryboardService(videoSvc, aiSvc)
 	enhancementSvc := service.NewVideoEnhancementService(imageSvc, "/tmp/inkframe-enhance")
 	bgmSvc := service.NewBGMService(getEnv("BGM_DIR", "")).
-		WithAIService(aiSvc)
+		WithAIService(aiSvc).
+		WithAssetRepo(repos.AssetRepo, repos.TagRepo)
 
 	charConsistencySvc := service.NewCharacterConsistencyService(imageSvc, nil, aiSvc)
 

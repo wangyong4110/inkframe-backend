@@ -233,6 +233,9 @@ func seedAIModels(db *gorm.DB) {
 	// 幂等修复：确保该列有 DEFAULT ''，不影响已有数据。
 	db.Exec("ALTER TABLE `ink_ai_model` MODIFY COLUMN `type` VARCHAR(50) NOT NULL DEFAULT ''")
 
+	// 清理废弃的 voice 记录（已从产品中移除，需从 DB 中删除）
+	db.Exec("DELETE FROM `ink_ai_model` WHERE `name` IN ('tts-1','tts-1-hd','2eTp7Le-2rxp53u3ti0f4EFlIKJ83ob3') AND `deleted_at` IS NULL")
+
 	type providerSeed struct {
 		name           string
 		displayName    string
@@ -325,8 +328,6 @@ func seedAIModels(db *gorm.DB) {
 		// OpenAI
 		{"openai", "gpt-4o", "GPT-4o", llmTasks, 0.95, 4096},
 		{"openai", "gpt-4o-mini", "GPT-4o Mini", llmTasks, 0.85, 4096},
-		{"openai", "tts-1", "TTS-1", []string{"voice_gen"}, 0.9, 0},
-		{"openai", "tts-1-hd", "TTS-1 HD", []string{"voice_gen"}, 0.95, 0},
 		{"openai", "dall-e-3", "DALL-E 3", []string{"image_gen"}, 0.95, 0},
 		// Anthropic
 		{"anthropic", "claude-opus-4-5", "Claude Opus 4.5", llmTasks, 0.98, 8192},

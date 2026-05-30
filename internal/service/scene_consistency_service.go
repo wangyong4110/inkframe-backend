@@ -72,7 +72,6 @@ func (s *SceneConsistencyService) ScoreScene(
 		"RefImageURL":       anchor.RefImageURL,
 		"GeneratedImageURL": generatedImageURL,
 		"Description":       anchor.Description,
-		"PromptLock":        anchor.PromptLock,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render scene_consistency_score: %w", err)

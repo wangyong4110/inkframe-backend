@@ -120,10 +120,14 @@ func (s *ItemService) DeleteItem(id uint) error {
 // generateItemImageCore is the shared AI call for item image generation.
 // It builds the prompt, filters the reference URL to HTTP(S) only, sets up storage context,
 // and calls the AI. Used by both GenerateItemImage and BatchGenerateImages.
-func (s *ItemService) generateItemImageCore(ctx context.Context, tenantID uint, item *model.Item, provider, novelTitle, imageStyle, aspectRatio string) (string, error) {
+func (s *ItemService) generateItemImageCore(ctx context.Context, tenantID uint, item *model.Item, provider, novelTitle, imageStyle, aspectRatio, promptLanguage string) (string, error) {
 	prompt := item.VisualPrompt
 	if prompt == "" {
-		prompt = fmt.Sprintf("%s，%s，奇幻物品插画，精细细节，概念艺术", item.Name, item.Description)
+		if promptLanguage == "en" {
+			prompt = fmt.Sprintf("%s, %s, fantasy item illustration, fine details, concept art", item.Name, item.Description)
+		} else {
+			prompt = fmt.Sprintf("%s，%s，奇幻物品插画，精细细节，概念艺术", item.Name, item.Description)
+		}
 	}
 	aiRefURL := item.ReferenceImageURL
 	if !strings.HasPrefix(aiRefURL, "http://") && !strings.HasPrefix(aiRefURL, "https://") {
@@ -135,8 +139,14 @@ func (s *ItemService) generateItemImageCore(ctx context.Context, tenantID uint, 
 	itemNegPrompt := "blurry, low quality, deformed, extra limbs, bad anatomy, malformed, " +
 		"watermark, text, logo, signature, multiple items, cluttered background, " +
 		"oversaturated, overexposed, underexposed, cropped, out of frame"
+	var suffix string
+	if promptLanguage == "en" {
+		suffix = ", item design, white background, studio lighting"
+	} else {
+		suffix = "，物品设计，白色背景，摄影棚光效"
+	}
 	sizeOverride := imageAspectRatioToSize(aspectRatio, "master")
-	return s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt+"，物品设计，白色背景，摄影棚光效", aiRefURL, imageStyle, itemNegPrompt, sizeOverride)
+	return s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt+suffix, aiRefURL, imageStyle, itemNegPrompt, sizeOverride)
 }
 
 // referenceImageURL 可选：用户上传的参考图 URL（已存入 OSS），作为 AI 参考图使用
@@ -157,15 +167,16 @@ func (s *ItemService) GenerateItemImage(tenantID, id uint, referenceImageURL, pr
 	} else {
 		logger.Printf("GenerateItemImage: item=%d no valid reference image, generating without reference", id)
 	}
-	var novelTitle, imageStyle, aspectRatio string
+	var novelTitle, imageStyle, aspectRatio, promptLanguage string
 	if s.novelRepo != nil && item.NovelID > 0 {
 		if novel, e := s.novelRepo.GetByID(item.NovelID); e == nil {
 			novelTitle = novel.Title
 			imageStyle = novel.ImageStyle
 			aspectRatio = novel.VideoConf().VideoAspectRatio
+			promptLanguage = novel.PromptLanguage
 		}
 	}
-	url, err := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle, imageStyle, aspectRatio)
+	url, err := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle, imageStyle, aspectRatio, promptLanguage)
 	if err != nil {
 		return nil, fmt.Errorf("generate image failed: %w", err)
 	}
@@ -191,12 +202,13 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 	}
 	total := len(todo)
 
-	var novelTitle, imageStyle, aspectRatio string
+	var novelTitle, imageStyle, aspectRatio, promptLanguage string
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
 			novelTitle = novel.Title
 			imageStyle = novel.ImageStyle
 			aspectRatio = novel.VideoConf().VideoAspectRatio
+			promptLanguage = novel.PromptLanguage
 		}
 	}
 
@@ -209,7 +221,7 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			url, genErr := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle, imageStyle, aspectRatio)
+			url, genErr := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle, imageStyle, aspectRatio, promptLanguage)
 			if genErr != nil {
 				logger.Printf("[ItemService] BatchGenerateImages: item %d (%s) failed: %v", item.ID, item.Name, genErr)
 				mu.Lock()

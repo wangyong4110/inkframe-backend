@@ -39,7 +39,6 @@ type CreateSceneAnchorReq struct {
 	Name           string `json:"name" binding:"required"`
 	Type           string `json:"type"`
 	Description    string `json:"description"`
-	PromptLock     string `json:"prompt_lock"`
 	Variant        string `json:"variant"`
 	ParentAnchorID *uint  `json:"parent_anchor_id"`
 }
@@ -49,7 +48,6 @@ type UpdateSceneAnchorReq struct {
 	Name           string `json:"name"`
 	Type           string `json:"type"`
 	Description    string `json:"description"`
-	PromptLock     string `json:"prompt_lock"`
 	Variant        string `json:"variant"`
 	ParentAnchorID *uint  `json:"parent_anchor_id"`
 }
@@ -74,7 +72,6 @@ func (s *SceneAnchorService) Create(tenantID, novelID uint, req CreateSceneAncho
 		Name:           req.Name,
 		Type:           req.Type,
 		Description:    req.Description,
-		PromptLock:     req.PromptLock,
 		Variant:        req.Variant,
 		ParentAnchorID: req.ParentAnchorID,
 	}
@@ -97,9 +94,6 @@ func (s *SceneAnchorService) Update(id uint, req UpdateSceneAnchorReq) (*model.S
 	}
 	if req.Description != "" {
 		anchor.Description = req.Description
-	}
-	if req.PromptLock != "" {
-		anchor.PromptLock = req.PromptLock
 	}
 	if req.Variant != "" {
 		anchor.Variant = req.Variant
@@ -151,14 +145,7 @@ func (s *SceneAnchorService) BuildPromptFragment(id uint) (promptFragment string
 	if err != nil {
 		return "", "", err
 	}
-	var parts []string
-	if anchor.Description != "" {
-		parts = append(parts, anchor.Description)
-	}
-	if anchor.PromptLock != "" {
-		parts = append(parts, anchor.PromptLock)
-	}
-	fragment := strings.Join(parts, ", ")
+	fragment := anchor.Description
 	if anchor.Name != "" && fragment != "" {
 		fragment = fmt.Sprintf("[scene: %s] %s", anchor.Name, fragment)
 	}
@@ -180,7 +167,6 @@ type extractedAnchor struct {
 	Name        string `json:"name"`
 	Type        string `json:"type"`
 	Description string `json:"description"`
-	PromptLock  string `json:"prompt_lock"`
 }
 
 // parseAnchorJSONResult parses the LLM response into []extractedAnchor.
@@ -273,7 +259,6 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 			Name:        e.Name,
 			Type:        anchorType,
 			Description: e.Description,
-			PromptLock:  e.PromptLock,
 		}
 		if err := s.repo.Create(anchor); err != nil {
 			logger.Printf("[SceneAnchorService] create anchor %q: %v", e.Name, err)
@@ -308,15 +293,12 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	}
 
 	// 组装图像生成 prompt
-	var parts []string
-	if anchor.Description != "" {
-		parts = append(parts, anchor.Description)
+	prompt := anchor.Description
+	if prompt != "" {
+		prompt += ", scene background, no characters, cinematic composition"
+	} else {
+		prompt = "scene background, no characters, cinematic composition"
 	}
-	if anchor.PromptLock != "" {
-		parts = append(parts, anchor.PromptLock)
-	}
-	parts = append(parts, "scene background, no characters, cinematic composition")
-	prompt := strings.Join(parts, ", ")
 
 	sizeOverride := imageAspectRatioToSize(aspectRatio, "master")
 	imageURL, err := s.aiSvc.GenerateCharacterThreeView(ctx, tenantID, providerName, prompt, "", imageStyle, "", sizeOverride)
