@@ -300,6 +300,9 @@ func seedAIModels(db *gorm.DB) {
 		// 可灵文生音效（与视频生成共用 AK/SK）
 		{"kling-sfx", "可灵文生音效", "sfx", "https://api-beijing.klingai.com", true,
 			[]string{"3s", "5s", "7s", "10s"}},
+		// ElevenLabs 文生音效（xi-api-key 鉴权）
+		{"elevenlabs-sfx", "ElevenLabs 文生音效", "sfx", "https://api.elevenlabs.io", true,
+			[]string{"sound-generation"}},
 		// 可灵语音合成（与视频生成共用 AK/SK）
 		{"kling-tts", "可灵语音合成", "voice", "https://api-beijing.klingai.com", true,
 			[]string{"zh_female_story", "zh_male_story", "oversea_male1", "oversea_female1"}},
@@ -520,6 +523,8 @@ func seedAIModels(db *gorm.DB) {
 		{"kling-sfx", "3s", "3 秒音效（最短）", []string{"sfx_gen"}, 0.90, 0},
 		{"kling-sfx", "7s", "7 秒音效", []string{"sfx_gen"}, 0.92, 0},
 		{"kling-sfx", "10s", "10 秒音效（最长）", []string{"sfx_gen"}, 0.92, 0},
+		// ── ElevenLabs 文生音效 ───────────────────────────────────────────
+		{"elevenlabs-sfx", "sound-generation", "ElevenLabs 音效生成（0.5~22 秒）", []string{"sfx_gen"}, 0.94, 0},
 		// ── 可灵语音合成 ─────────────────────────────────────────────────
 		// voice_id 作为 model 字段；调用时 req.Voice 填写音色 ID
 		{"kling-tts", "zh_female_story", "故事女声（中文）", []string{"voice_gen"}, 0.92, 0},

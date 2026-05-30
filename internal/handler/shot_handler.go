@@ -271,6 +271,7 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 
 	var sfxReq struct {
 		UserContext string `json:"user_context"`
+		Provider    string `json:"provider"`
 	}
 	_ = c.ShouldBindJSON(&sfxReq)
 
@@ -288,7 +289,7 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 		return
 	}
 
-	go func(taskID string, userContext string, lang string) {
+	go func(taskID string, userContext string, lang string, sfxProvider string) {
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Printf("[VideoHandler] BatchGenerateSFX task %s panic: %v", taskID, r)
@@ -305,10 +306,10 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 		h.taskSvc.UpdateProgress(taskID, 20) //nolint:errcheck
 		// Step 2: 用更新后的 sfx_tags 搜索/生成实际音效文件
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, 20+pct*80/100) } //nolint:errcheck
-		success, fail := h.sfxSvc.BatchAutoGenerateSFX(ctx, shots, tenantID, userContext, progressFn)
+		success, fail := h.sfxSvc.BatchAutoGenerateSFX(ctx, shots, tenantID, userContext, sfxProvider, progressFn)
 		h.taskSvc.Complete(taskID, gin.H{"success": success, "fail": fail}) //nolint:errcheck
 		logger.Printf("[VideoHandler] BatchGenerateSFX task %s done: success=%d fail=%d", taskID, success, fail)
-	}(task.TaskID, sfxReq.UserContext, promptLanguage)
+	}(task.TaskID, sfxReq.UserContext, promptLanguage, sfxReq.Provider)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
@@ -340,6 +341,7 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 
 	var sfxTagsReq struct {
 		UserContext string `json:"user_context"`
+		Provider    string `json:"provider"`
 	}
 	_ = c.ShouldBindJSON(&sfxTagsReq)
 
@@ -361,7 +363,7 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 		"lang":         promptLang,
 	})
 
-	go func(taskID string, userContext string, lang string) {
+	go func(taskID string, userContext string, lang string, sfxProvider string) {
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Printf("[VideoHandler] AnalyzeSFXTags task %s panic: %v", taskID, r)
@@ -387,11 +389,11 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 			overall := 50 + pct*45/100
 			h.taskSvc.UpdateProgress(taskID, overall) //nolint:errcheck
 		}
-		success, fail := h.sfxSvc.BatchAutoGenerateSFX(ctx, shots, tenantID, userContext, progressFn)
+		success, fail := h.sfxSvc.BatchAutoGenerateSFX(ctx, shots, tenantID, userContext, sfxProvider, progressFn)
 		logger.Printf("[VideoHandler] AnalyzeSFXTags task %s done: tags=%d sfx_success=%d sfx_fail=%d",
 			taskID, total, success, fail)
 		h.taskSvc.Complete(taskID, gin.H{"count": total, "sfx_success": success, "sfx_fail": fail}) //nolint:errcheck
-	}(task.TaskID, sfxTagsReq.UserContext, promptLang)
+	}(task.TaskID, sfxTagsReq.UserContext, promptLang, sfxTagsReq.Provider)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
@@ -425,13 +427,18 @@ func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
 		return
 	}
 
+	var shotSFXReq struct {
+		Provider string `json:"provider"`
+	}
+	_ = c.ShouldBindJSON(&shotSFXReq)
+
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeSFXGen, "单镜头音效生成", "shot", uint(shotID))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "create task failed")
 		return
 	}
 
-	go func(taskID string, s *model.StoryboardShot) {
+	go func(taskID string, s *model.StoryboardShot, sfxProvider string) {
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Printf("[VideoHandler] GenerateShotSFX task %s panic: %v", taskID, r)
@@ -440,13 +447,13 @@ func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		ctx := context.Background()
-		if err := h.sfxSvc.AutoGenerateSFX(ctx, s, tenantID); err != nil {
+		if err := h.sfxSvc.AutoGenerateSFX(ctx, s, tenantID, sfxProvider); err != nil {
 			logger.Printf("[VideoHandler] GenerateShotSFX task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
 		h.taskSvc.Complete(taskID, gin.H{"shot_id": s.ID, "sfx_url": s.SFXURL}) //nolint:errcheck
-	}(task.TaskID, shot)
+	}(task.TaskID, shot, shotSFXReq.Provider)
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,

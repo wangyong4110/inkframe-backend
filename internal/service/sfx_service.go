@@ -199,7 +199,8 @@ func sfxItemConfig(item sfxTagItem, hasSpeech bool, hasNarration bool) (vol floa
 
 // AutoGenerateSFX 为单个镜头自动选取/生成音效，每个 tag 独立搜索，写入多条 ShotSFXItem。
 // 每次调用都会先清除旧音效条目再写入新结果，确保重新生成时能替换旧音效。
-func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint) error {
+// provider 非空时强制使用指定提供商（如 "elevenlabs-sfx"），为空则走默认降级链。
+func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint, provider string) error {
 	// 清除旧音效条目（先删后建，保证重新生成时能替换）
 	if s.sfxItemRepo != nil {
 		if err := s.sfxItemRepo.DeleteByShotID(shot.ID); err != nil {
@@ -253,7 +254,7 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	var results []sfxResult
 
 	for _, item := range tagItems {
-		hit := s.searchOneTag(ctx, tenantID, item, maxDur, shot)
+		hit := s.searchOneTag(ctx, tenantID, item, maxDur, shot, provider)
 		if hit.url == "" {
 			logger.Printf("[SFXService] shot %d tag=%q: no result", shot.ID, item.Tag)
 			continue
@@ -336,18 +337,29 @@ func deduplicateAndLimit(items []sfxTagItem, limit int) []sfxTagItem {
 // searchOneTag 对单个结构化标签执行多层降级搜索。
 // 优先级：素材库 → AI 文生音效 → 本地库 → AudioLDM（本地模型）→ Freesound → Pixabay → BBC Sound Effects → ElevenLabs。
 // 同一 tag 的结果在进程内按 24h TTL 缓存，批量生成时相同 tag 的分镜共享同一条音效。
-func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot) sfxHit {
-	cacheKey := "onetag:" + normalizeTag(item.Tag)
+// provider 非空时强制使用指定提供商，并在 cacheKey 中区分，避免跨提供商的缓存污染。
+func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot, provider string) sfxHit {
+	cacheKey := "onetag:" + provider + ":" + normalizeTag(item.Tag)
 	return s.cachedQuery(cacheKey, func() sfxHit {
-		return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot)
+		return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot, provider)
 	})
 }
 
 // searchOneTagUncached 是 searchOneTag 的无缓存实现。
-func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot) sfxHit {
+func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot, provider string) sfxHit {
 	sfxDur := maxDur
 	if sfxDur <= 0 {
 		sfxDur = 5
+	}
+	// 强制提供商：跳过降级链，直接使用指定提供商生成
+	if provider == "elevenlabs-sfx" {
+		if u, dur, err := s.generateElevenLabsForTag(ctx, item, shot); err == nil && u != "" {
+			logger.Printf("[SFXService] shot %d ElevenLabs(forced) hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
+			return sfxHit{url: u, source: "elevenlabs", durationSecs: dur}
+		} else if err != nil {
+			logger.Printf("[SFXService] shot %d ElevenLabs(forced) failed tag=%q: %v", shot.ID, item.Tag, err)
+		}
+		return sfxHit{}
 	}
 	// 0. 素材库（已保存的音效，优先复用避免重复生成）
 	if s.assetRepo != nil {
@@ -448,12 +460,14 @@ func isNoProviderErr(err error) bool {
 // BatchAutoGenerateSFX 批量处理视频所有镜头，最多 10 并发。
 // 全部镜头处理完成后执行场景连续性修复：同一场景的连续镜头共用同一条 ambient 底层音，
 // 避免每镜切换环境音导致的听感跳变。
+// provider 非空时强制使用指定提供商（如 "elevenlabs-sfx"），为空则走默认降级链。
 // progressFn 每完成一个镜头时实时调用（0-100）。
 func (s *SFXService) BatchAutoGenerateSFX(
 	ctx context.Context,
 	shots []*model.StoryboardShot,
 	tenantID uint,
 	userContext string,
+	provider string,
 	progressFn func(int),
 ) (success, fail int) {
 	total := len(shots)
@@ -475,7 +489,7 @@ func (s *SFXService) BatchAutoGenerateSFX(
 		go func(s2 *model.StoryboardShot) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			err := s.AutoGenerateSFX(ctx, s2, tenantID)
+			err := s.AutoGenerateSFX(ctx, s2, tenantID, provider)
 			if err != nil {
 				logger.Printf("[SFXService] shot %d: %v", s2.ID, err)
 				failCount.Add(1)

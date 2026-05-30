@@ -149,6 +149,12 @@ func initAIModule(cfg *config.Config) *ai.ModelManager {
 		manager.RegisterProvider("kling-image", ai.NewKlingImageProvider(klingAK, klingSK, cfg.AI.Kling.Endpoint))
 	}
 
+	// ElevenLabs 文生音效（xi-api-key 鉴权，同步接口）
+	if elevenLabsKey := getEnv("ELEVENLABS_API_KEY", ""); elevenLabsKey != "" {
+		elevenLabsEndpoint := getEnv("ELEVENLABS_ENDPOINT", "")
+		manager.RegisterProvider("elevenlabs-sfx", ai.NewElevenLabsSFXProvider(elevenLabsKey, elevenLabsEndpoint))
+	}
+
 	// 为所有 Provider 包装指数退避重试（最多 3 次，基础延迟 500ms）
 	for _, name := range manager.ListProviders() {
 		if err := manager.WrapWithRetry(name, 3, 500*time.Millisecond); err != nil {
