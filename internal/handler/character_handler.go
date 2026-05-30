@@ -21,6 +21,8 @@ func characterToUpdateReq(c *model.Character) *model.UpdateCharacterRequest {
 		Name:           c.Name,
 		Role:           c.Role,
 		Description:    c.Description,
+		InnerConflict:  c.InnerConflict,
+		CoreDesire:     c.CoreDesire,
 		VisualPrompt:   c.VisualPrompt,
 		Portrait:       c.Portrait,
 		ThreeViewSheet: c.ThreeViewSheet,

@@ -704,8 +704,15 @@ func (s *ChapterService) generateSceneOutline(
 	// 构建伏笔提示
 	foreshadowHints := s.buildForeshadowHints(novelID, req.ChapterNo)
 
-	// 获取角色列表（含快照状态）
+	// 获取角色列表（含快照状态 + 内在动机）
 	characters := s.getCharactersForPrompt(novelID)
+
+	// 计算章节叙事预算（结构位置约束）
+	budget := computeChapterBudget(req.ChapterNo, novel.TargetChapters, meta.actNo)
+	budgetText := formatBudgetForPrompt(budget)
+
+	// 构建角色注册表（防命名混淆）
+	characterRegistry := s.buildCharacterRegistry(novelID)
 
 	// 获取剧情张力状态（供场景大纲决策参考）
 	plotTensionState := ""
@@ -794,6 +801,8 @@ func (s *ChapterService) generateSceneOutline(
 		"RefStories":            refStories,
 		"WikiContext":           wikiContext,
 		"StoryPatternRef":       storyPatternRef,
+		"ChapterBudget":         budgetText,
+		"CharacterRegistry":     characterRegistry,
 	})
 	if err != nil {
 		logger.Printf("GenerateChapter: render chapter_scene_outline: %v", err)
@@ -880,11 +889,18 @@ func (s *ChapterService) generateFromSceneOutline(
 	_ = json.Unmarshal([]byte(sceneOutlineJSON), &outlineData)
 	logger.Printf("[ChapterService] generateFromSceneOutline: chapterNo=%d scenes=%d", req.ChapterNo, len(outlineData.Scenes))
 
-	// 获取角色对话风格（同时包含状态快照）
+	// 获取角色对话风格（同时包含状态快照 + 内在动机）
 	characterVoices := s.getCharacterVoices(novelID)
 
 	// 未解决剧情线（伏笔/冲突）
 	foreshadowHints := s.buildForeshadowHints(novelID, req.ChapterNo)
+
+	// 章节叙事预算（防信息过载、防过早化解矛盾）
+	budget := computeChapterBudget(req.ChapterNo, novel.TargetChapters, meta.actNo)
+	budgetText := formatBudgetForPrompt(budget)
+
+	// 角色注册表（防命名混淆）
+	characterRegistry := s.buildCharacterRegistry(novelID)
 
 	// 峰值张力
 	peakTension := 0
@@ -921,6 +937,8 @@ func (s *ChapterService) generateFromSceneOutline(
 		"IsStandalone":          req.IsStandalone,
 		"RefStories":            refStories,
 		"WikiContext":           wikiContext,
+		"ChapterBudget":         budgetText,
+		"CharacterRegistry":     characterRegistry,
 	})
 	if err != nil {
 		content, err := s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
@@ -1097,11 +1115,13 @@ func (s *ChapterService) checkAndAutoResolvePlotPoints(tenantID uint, chapter *m
 // ──────────────────────────────────────────────
 
 type characterForPrompt struct {
-	Name         string
-	Role         string
+	Name          string
+	Role          string
 	IsProtagonist bool
-	CurrentState string // 来自最新状态快照：位置、健康、心情等
-	Description  string
+	CurrentState  string // 来自最新状态快照：位置、健康、心情等
+	Description   string
+	InnerConflict string // 人物内在矛盾（如：渴望自由却害怕失去家人）
+	CoreDesire    string // 核心渴望（如：被认可、复仇、保护所爱之人）
 }
 
 func (s *ChapterService) getCharactersForPrompt(novelID uint) []characterForPrompt {
@@ -1126,6 +1146,8 @@ func (s *ChapterService) getCharactersForPrompt(novelID uint) []characterForProm
 			Role:          c.Role,
 			IsProtagonist: isProtagonistRole(c.Role),
 			Description:   c.Description,
+			InnerConflict: c.InnerConflict,
+			CoreDesire:    c.CoreDesire,
 		}
 		// 加载最新状态快照，补充 CurrentState
 		if s.snapshotRepo != nil {
@@ -1223,6 +1245,26 @@ func (s *ChapterService) buildForeshadowHints(novelID uint, chapterNo int) strin
 	}
 
 	return hints.String()
+}
+
+// buildCharacterRegistry 构建已注册角色名称列表，注入 prompt 以防止命名混淆与角色分裂。
+// AI 生成新角色时必须避免与表中已有名称重复或混淆。
+func (s *ChapterService) buildCharacterRegistry(novelID uint) string {
+	if s.characterRepo == nil {
+		return ""
+	}
+	chars, err := s.characterRepo.ListByNovel(novelID)
+	if err != nil || len(chars) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("已注册角色（全书已出现/规划的命名角色，**新角色禁止使用相同或相似名字**）：\n")
+	for _, c := range chars {
+		roleLabel := c.Role
+		sb.WriteString(fmt.Sprintf("- %s（%s）\n", c.Name, roleLabel))
+	}
+	sb.WriteString("\n⚠️ 若本章需要引入新配角，其名字必须与上表中所有名字明显不同，不得同音、近音或一字之差。\n")
+	return sb.String()
 }
 
 func (s *ChapterService) getPreviousChapterEnding(novelID uint, chapterNo int) string {

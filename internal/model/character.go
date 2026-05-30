@@ -20,6 +20,10 @@ type Character struct {
 	// 统一描述字段（外貌、性格、背景、对话风格等所有描述性信息）
 	Description string `json:"description" gorm:"type:text"`
 
+	// 人物深层动机（驱动角色行为的内在逻辑，用于生成更立体的角色表现）
+	InnerConflict string `json:"inner_conflict,omitempty" gorm:"column:inner_conflict;type:text"` // 内在矛盾/恐惧（如：渴望自由却害怕失去家人）
+	CoreDesire    string `json:"core_desire,omitempty" gorm:"column:core_desire;type:text"`    // 核心渴望（如：被认可、复仇、保护所爱之人）
+
 	// AI 图像生成英文提示词（由 extract_characters 生成，用于三视图/头像生成）
 	VisualPrompt string `json:"visual_prompt" gorm:"type:text"`
 
@@ -185,10 +189,12 @@ type CreateCharacterRequest struct {
 }
 
 type UpdateCharacterRequest struct {
-	Name           string   `json:"name"`
-	Role           string   `json:"role"`
-	Description    string   `json:"description"`
-	VisualPrompt   string   `json:"visual_prompt"`  // AI 图像生成英文提示词
+	Name          string `json:"name"`
+	Role          string `json:"role"`
+	Description   string `json:"description"`
+	InnerConflict string `json:"inner_conflict"` // 内在矛盾（如：渴望自由却害怕失去家人）
+	CoreDesire    string `json:"core_desire"`    // 核心渴望（如：被认可、复仇、保护所爱之人）
+	VisualPrompt  string `json:"visual_prompt"`  // AI 图像生成英文提示词
 	ThreeViewSheet string   `json:"three_view_sheet"`
 	FaceCloseup    string   `json:"face_closeup"`
 	Portrait       string   `json:"portrait"`

@@ -40,15 +40,27 @@
 # 上一章结尾状态
 {{ PreviousChapterEnding }}
 
+{% if CharacterRegistry %}
+# 角色名称注册表（强制遵守）
+{{ CharacterRegistry }}
+{% endif %}
+
 # 本章必须涉及的角色（主角身份和状态不可改变）
 {% for char in Characters %}{% if char.IsProtagonist %}- ⚠️【主角】{{ char.Name }}（{{ char.Role }}）：当前状态「{{ char.CurrentState }}」
   人物设定：{{ char.Description }}
+{% if char.InnerConflict %}  内在矛盾：{{ char.InnerConflict }}{% endif %}
+{% if char.CoreDesire %}  核心渴望：{{ char.CoreDesire }}{% endif %}
 {% else %}- {{ char.Name }}（{{ char.Role }}）：当前状态「{{ char.CurrentState }}」
 {% endif %}{% endfor %}
 
 {% if ForeshadowHints %}
 # 本章伏笔要求
 {{ ForeshadowHints }}
+{% endif %}
+
+{% if ChapterBudget %}
+# 本章叙事预算约束（强制执行，违反则输出无效）
+{{ ChapterBudget }}
 {% endif %}
 
 # 张力设计规则（强制执行）

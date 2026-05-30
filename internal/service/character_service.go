@@ -584,6 +584,13 @@ func (s *CharacterService) UpdateCharacter(id uint, req *model.UpdateCharacterRe
 	if req.Description != "" {
 		character.Description = req.Description
 	}
+	// 内在动机字段：空字符串也允许覆盖（支持清空）
+	if req.InnerConflict != "" {
+		character.InnerConflict = req.InnerConflict
+	}
+	if req.CoreDesire != "" {
+		character.CoreDesire = req.CoreDesire
+	}
 	if req.VisualPrompt != "" {
 		character.VisualPrompt = req.VisualPrompt
 	}

@@ -34,11 +34,18 @@
 {{ ForeshadowHints }}
 {% endif %}
 
+{% if CharacterRegistry %}
+# 角色名称注册表（强制遵守）
+{{ CharacterRegistry }}
+{% endif %}
+
 # 角色信息（严格保持角色个性与说话风格，主角身份不可改变）
 {% for char in Characters %}
 {% if char.IsProtagonist %}**【主角】{{ char.Name }}**（{{ char.Role }}）
 - 人物设定：{{ char.Description }}{% if char.CurrentState %}
 - ⚠️ 当前状态（必须保持连贯）：{{ char.CurrentState }}{% endif %}
+{% if char.InnerConflict %}- 🔴 内在矛盾（驱动行为的深层心理，用于写出非表面化的反应）：{{ char.InnerConflict }}{% endif %}
+{% if char.CoreDesire %}- 🎯 核心渴望（内心深处真正想要的，可与表面目标相冲突）：{{ char.CoreDesire }}{% endif %}
 {% else %}**{{ char.Name }}**（{{ char.Role }}）：{{ char.Description }}{% if char.CurrentState %}
   当前状态：{{ char.CurrentState }}{% endif %}
 {% endif %}
@@ -84,6 +91,11 @@
    - ✅ **对话必含对抗**：每段超过3句的对话必须包含至少1次信息分歧、目的冲突或隐瞒（不是闲聊）
    - ✅ **每2000字设置1次"地面变了"**：即某件事的结果与读者/主角预期相反（哪怕是小反转），保持阅读惊喜
    - ❌ **严禁任何元文本**：不得输出开场白（"当然可以""好的"等）、章节大纲、内容说明、字数限制声明、续写提示、结尾注释（"片段到此""如需续写"等），任何非正文内容一律禁止
+
+{% if ChapterBudget %}
+# 本章叙事预算约束（最高优先级，违反则重写）
+{{ ChapterBudget }}
+{% endif %}
 
 {% if UserPrompt %}
 # 用户额外要求
