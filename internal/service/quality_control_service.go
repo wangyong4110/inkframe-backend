@@ -668,10 +668,13 @@ func (s *QualityControlService) ApplyDiffs(chapterID uint, diffs []ParagraphDiff
 		return 0, fmt.Errorf("chapter %d not found: %w", chapterID, err)
 	}
 
-	paragraphs, _ := splitContentParagraphs(chapter.Content)
+	paragraphs, sep := splitContentParagraphs(chapter.Content)
+	logger.Printf("[ApplyDiffs] chapterID=%d paragraphs=%d sep=%q diffs=%d",
+		chapterID, len(paragraphs), sep, len(diffs))
 	diffMap := make(map[int]string, len(diffs))
 	for _, d := range diffs {
 		diffMap[d.Index] = d.NewContent
+		logger.Printf("[ApplyDiffs] diff index=%d origText=%.40q", d.Index, d.OrigText)
 	}
 
 	// Index-based replacement (matches the numbered paragraphs sent during review).
@@ -682,6 +685,7 @@ func (s *QualityControlService) ApplyDiffs(chapterID uint, diffs []ParagraphDiff
 			applied++
 		}
 	}
+	logger.Printf("[ApplyDiffs] index-based applied=%d", applied)
 
 	// Fallback: if no index matched, try matching by OrigText prefix.
 	if applied == 0 {
