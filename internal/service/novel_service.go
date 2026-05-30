@@ -576,16 +576,17 @@ type OutlineResult struct {
 
 // ChapterOutline 章节大纲
 type ChapterOutline struct {
-	ChapterNo    int      `json:"chapter_no"`
-	Title        string   `json:"title"`
-	Summary      string   `json:"summary"`
-	WordCount    int      `json:"word_count"`
-	PlotPoints   []string `json:"plot_points"`
-	TensionLevel int      `json:"tension_level,omitempty"`
-	Hook         string   `json:"hook,omitempty"`
-	HookType     string   `json:"hook_type,omitempty"`
-	ConflictType string   `json:"conflict_type,omitempty"`
-	Act          int      `json:"act,omitempty"`
+	ChapterNo     int      `json:"chapter_no"`
+	Title         string   `json:"title"`
+	Summary       string   `json:"summary"`
+	WordCount     int      `json:"word_count"`
+	PlotPoints    []string `json:"plot_points"`
+	EmotionalTone string   `json:"emotional_tone,omitempty"`
+	TensionLevel  int      `json:"tension_level,omitempty"`
+	Hook          string   `json:"hook,omitempty"`
+	HookType      string   `json:"hook_type,omitempty"`
+	ConflictType  string   `json:"conflict_type,omitempty"`
+	Act           int      `json:"act,omitempty"`
 }
 
 // buildOutlinePrompt 构建大纲提示词

@@ -67,7 +67,6 @@
 
 # 大纲格式要求
 请按以下JSON格式返回，不要包含任何 markdown 代码块（```）。
-注意：chapters 数组每项只保留以下字段，不要输出 plot_points/conflict_type/word_count/emotional_tone/characters 等额外字段，以控制输出长度。
 
 {
   "title": "{{ Title }}",
@@ -93,7 +92,9 @@
     {
       "chapter_no": 1,
       "title": "章节标题",
-      "summary": "章节概述（30-60字）",
+      "summary": "章节剧情概述（50-80字，明确说明本章发生什么、主角做了什么决策或行动）",
+      "plot_points": ["本章必须发生的关键事件1（15字内）", "关键事件2（15字内）", "关键事件3（15字内）"],
+      "emotional_tone": "情感基调（紧张/轻松/悲伤/兴奋/压抑/热血/感动，选一）",
       "tension_level": 3,
       "hook": "章末悬念钩子（15字内）",
       "hook_type": "question/cliffhanger/revelation/threat",

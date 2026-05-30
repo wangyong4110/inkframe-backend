@@ -68,6 +68,7 @@ func (s *QualityControlService) WithReviewRepos(
 type ParagraphDiff struct {
 	Index      int    `json:"index"`
 	NewContent string `json:"new_content"`
+	OrigText   string `json:"orig_text,omitempty"` // first ~80 chars of original; used for fallback content-based matching
 }
 
 // runAIQualityCheck 调用 AI 对章节内容进行综合质检，返回各维度评分（0-10分制）
@@ -536,8 +537,10 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 		}
 	}
 
-	// Build numbered paragraph list for target chapter
-	paragraphs := strings.Split(strings.TrimSpace(chapter.Content), "\n\n")
+	// Build numbered paragraph list for target chapter.
+	// Uses splitContentParagraphs so the indices sent to the AI match exactly
+	// what ApplyDiffs will use when the user applies suggestions.
+	paragraphs, _ := splitContentParagraphs(chapter.Content)
 	var sb strings.Builder
 	for i, p := range paragraphs {
 		p = strings.TrimSpace(p)
@@ -633,6 +636,27 @@ func (s *QualityControlService) RollbackReview(recordID uint) error {
 	return s.reviewRecordRepo.Update(rec)
 }
 
+// splitContentParagraphs splits novel content into non-empty paragraphs.
+// Tries \n\n first (standard blank-line separation); if that yields only one
+// block, falls back to \n so single-newline formatted content also works.
+// Returns paragraphs with their original indices preserved (empty slots kept as "").
+func splitContentParagraphs(content string) (paragraphs []string, sep string) {
+	content = strings.TrimSpace(content)
+	parts := strings.Split(content, "\n\n")
+	nonEmpty := 0
+	for _, p := range parts {
+		if strings.TrimSpace(p) != "" {
+			nonEmpty++
+		}
+	}
+	if nonEmpty > 1 {
+		return parts, "\n\n"
+	}
+	// Fallback: treat each non-empty line as a paragraph.
+	lines := strings.Split(content, "\n")
+	return lines, "\n"
+}
+
 // ApplyDiffs replaces selected paragraphs in the chapter content.
 // Returns the number of paragraphs actually replaced.
 func (s *QualityControlService) ApplyDiffs(chapterID uint, diffs []ParagraphDiff, recordID uint) (int, error) {
@@ -644,12 +668,13 @@ func (s *QualityControlService) ApplyDiffs(chapterID uint, diffs []ParagraphDiff
 		return 0, fmt.Errorf("chapter %d not found: %w", chapterID, err)
 	}
 
-	paragraphs := strings.Split(chapter.Content, "\n\n")
+	paragraphs, _ := splitContentParagraphs(chapter.Content)
 	diffMap := make(map[int]string, len(diffs))
 	for _, d := range diffs {
 		diffMap[d.Index] = d.NewContent
 	}
 
+	// Index-based replacement (matches the numbered paragraphs sent during review).
 	applied := 0
 	for i := range paragraphs {
 		if newP, ok := diffMap[i]; ok {
@@ -658,11 +683,40 @@ func (s *QualityControlService) ApplyDiffs(chapterID uint, diffs []ParagraphDiff
 		}
 	}
 
-	// Filter out empty paragraphs (deleted ones) and trim each paragraph
+	// Fallback: if no index matched, try matching by OrigText prefix.
+	if applied == 0 {
+		for i, p := range paragraphs {
+			trimmed := strings.TrimSpace(p)
+			if trimmed == "" {
+				continue
+			}
+			for _, d := range diffs {
+				if d.OrigText == "" {
+					continue
+				}
+				prefix := []rune(d.OrigText)
+				if len(prefix) > 80 {
+					prefix = prefix[:80]
+				}
+				pRunes := []rune(trimmed)
+				matchLen := len(prefix)
+				if matchLen > len(pRunes) {
+					matchLen = len(pRunes)
+				}
+				if string(pRunes[:matchLen]) == string(prefix[:matchLen]) {
+					paragraphs[i] = d.NewContent
+					applied++
+					break
+				}
+			}
+		}
+	}
+
+	// Filter out deleted paragraphs and trim each.
 	kept := paragraphs[:0]
 	for _, p := range paragraphs {
 		if strings.TrimSpace(p) != "" {
-			kept = append(kept, p)
+			kept = append(kept, strings.TrimSpace(p))
 		}
 	}
 
