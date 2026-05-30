@@ -18,6 +18,7 @@ import (
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
+	"github.com/inkframe/inkframe-backend/internal/storage"
 )
 
 // normalizeTag 将标签统一为小写下划线格式（兼容空格和连字符）
@@ -630,15 +631,8 @@ func buildElevenLabsPrompt(item sfxTagItem, shot *model.StoryboardShot) string {
 
 // generateElevenLabsForTag 对单个结构化标签调用 ElevenLabs Sound Generation API。
 // 每个 tag 独立生成，避免多标签混成一条不可分离的音频。
-// prompt_influence=0.7（提高提示词约束力，降低模型自由发挥程度）。
-func (s *SFXService) generateElevenLabsForTag(ctx context.Context, item sfxTagItem, shot *model.StoryboardShot) (string, float64, error) {
-	if s.elevenKey == "" {
-		return "", 0, fmt.Errorf("elevenlabs key not configured")
-	}
-	if s.storageSvc == nil {
-		return "", 0, fmt.Errorf("storage not configured for elevenlabs upload")
-	}
-
+// 优先使用 DB 中配置的 elevenlabs-sfx 提供商（模型管理页面），其次使用环境变量 ELEVENLABS_API_KEY。
+func (s *SFXService) generateElevenLabsForTag(ctx context.Context, tenantID uint, item sfxTagItem, shot *model.StoryboardShot) (string, float64, error) {
 	prompt := buildElevenLabsPrompt(item, shot)
 
 	// 时长：ambient 用镜头全长（循环），action/emotion 最多 5s
@@ -653,10 +647,37 @@ func (s *SFXService) generateElevenLabsForTag(ctx context.Context, item sfxTagIt
 		dur = 22
 	}
 
+	tagHash := fmt.Sprintf("%x", len(item.Tag)*31+len(item.SFXType))
+	ossKey := fmt.Sprintf("sfx/video_%d/shot_%d_%s.mp3", shot.VideoID, shot.ID, tagHash)
+
+	// 优先：通过 AIService 从 DB 加载 elevenlabs-sfx 密钥
+	if s.aiSvc != nil {
+		if rawURL, d, err := s.aiSvc.GenerateSFXWithProvider(ctx, tenantID, "elevenlabs-sfx", prompt, dur); err == nil && rawURL != "" {
+			// ElevenLabsSFXProvider 返回 file:// 临时路径，需上传到 OSS
+			if strings.HasPrefix(rawURL, "file://") && s.storageSvc != nil {
+				localPath := strings.TrimPrefix(rawURL, "file://")
+				if u, err2 := uploadLocalFileToOSS(ctx, s.storageSvc, localPath, ossKey); err2 == nil {
+					return u, d, nil
+				}
+				// 上传失败则直接返回本地路径（降级）
+				return rawURL, d, nil
+			}
+			return rawURL, d, nil
+		}
+	}
+
+	// 降级：使用环境变量 ELEVENLABS_API_KEY 直接调用 HTTP
+	if s.elevenKey == "" {
+		return "", 0, fmt.Errorf("elevenlabs key not configured")
+	}
+	if s.storageSvc == nil {
+		return "", 0, fmt.Errorf("storage not configured for elevenlabs upload")
+	}
+
 	body, _ := json.Marshal(map[string]interface{}{
 		"text":             prompt,
 		"duration_seconds": dur,
-		"prompt_influence": 0.7, // 0.3→0.7，提高提示词约束力
+		"prompt_influence": 0.7,
 	})
 
 	req, err := http.NewRequestWithContext(ctx, "POST",
@@ -682,11 +703,25 @@ func (s *SFXService) generateElevenLabsForTag(ctx context.Context, item sfxTagIt
 		return "", 0, err
 	}
 
-	// key 包含 tag 哈希以避免同镜头多条音效覆盖
-	tagHash := fmt.Sprintf("%x", len(item.Tag)*31+len(item.SFXType))
-	key := fmt.Sprintf("sfx/video_%d/shot_%d_%s.mp3", shot.VideoID, shot.ID, tagHash)
-	u, err := s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), "audio/mpeg")
+	u, err := s.storageSvc.Upload(ctx, ossKey, bytes.NewReader(data), int64(len(data)), "audio/mpeg")
 	return u, float64(dur), err
+}
+
+// uploadLocalFileToOSS 读取本地文件并上传到 OSS，上传后删除临时文件。
+func uploadLocalFileToOSS(ctx context.Context, svc storage.Service, localPath, ossKey string) (string, error) {
+	f, err := os.Open(localPath)
+	if err != nil {
+		return "", err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return "", err
+	}
+	u, err := svc.Upload(ctx, ossKey, f, fi.Size(), "audio/mpeg")
+	f.Close()
+	os.Remove(localPath) //nolint:errcheck
+	return u, err
 }
 
 // generateAudioLDMForTag 调用本地 AudioLDM HTTP API 生成音效并上传至 OSS。

@@ -1456,6 +1456,38 @@ func (s *AIService) HasSFXProvider(tenantID uint) bool {
 	return err == nil
 }
 
+// GenerateSFXWithProvider 使用指定名称的 sfx 提供商生成音效（从 DB 加载密钥）。
+// 用于前端明确选择某个提供商（如 "elevenlabs-sfx"）时的强制路由。
+func (s *AIService) GenerateSFXWithProvider(ctx context.Context, tenantID uint, providerName string, prompt string, duration float64) (string, float64, error) {
+	p, err := s.loadDBProviderByName(tenantID, providerName)
+	if err != nil {
+		return "", 0, err
+	}
+	resp, err := p.AudioGenerate(ctx, &ai.AudioGenerateRequest{Text: prompt, Duration: duration})
+	if err != nil {
+		return "", 0, err
+	}
+	return resp.URL, resp.Duration, nil
+}
+
+// loadDBProviderByName 从 DB 中按名称精确查找提供商（不限类型）。
+func (s *AIService) loadDBProviderByName(tenantID uint, name string) (ai.AIProvider, error) {
+	providers, err := s.providerRepo.ListByTenant(tenantID)
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range providers {
+		if !p.IsActive || !strings.EqualFold(p.Name, name) {
+			continue
+		}
+		if !providerHasCredentials(p) {
+			return nil, fmt.Errorf("provider %q has no credentials configured", name)
+		}
+		return s.getTenantProvider(tenantID, p.Name)
+	}
+	return nil, fmt.Errorf("provider %q not found or not active in DB", name)
+}
+
 // loadDBSFXProvider 从 DB 中取第一个有效的 sfx 类型提供商（文生音效）。
 func (s *AIService) loadDBSFXProvider(tenantID uint) (ai.AIProvider, error) {
 	providers, err := s.providerRepo.ListByTenant(tenantID)

@@ -353,7 +353,7 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 	}
 	// 强制提供商：跳过降级链，直接使用指定提供商生成
 	if provider == "elevenlabs-sfx" {
-		if u, dur, err := s.generateElevenLabsForTag(ctx, item, shot); err == nil && u != "" {
+		if u, dur, err := s.generateElevenLabsForTag(ctx, tenantID, item, shot); err == nil && u != "" {
 			logger.Printf("[SFXService] shot %d ElevenLabs(forced) hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 			return sfxHit{url: u, source: "elevenlabs", durationSecs: dur}
 		} else if err != nil {
@@ -443,7 +443,7 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 		logger.Printf("[SFXService] shot %d Aigei miss tag=%q", shot.ID, item.Tag)
 	}
 	// 8. ElevenLabs：每个 tag 独立生成，避免多 tag 混音成一条不可分离的音频
-	if u, dur, err := s.generateElevenLabsForTag(ctx, item, shot); err == nil && u != "" {
+	if u, dur, err := s.generateElevenLabsForTag(ctx, tenantID, item, shot); err == nil && u != "" {
 		logger.Printf("[SFXService] shot %d ElevenLabs hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 		return sfxHit{url: u, source: "elevenlabs", durationSecs: dur}
 	} else if err != nil {
