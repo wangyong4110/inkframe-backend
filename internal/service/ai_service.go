@@ -268,6 +268,10 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 			case "image":
 				logger.Printf("getTenantProvider: provider %q mapped to KlingImageProvider via endpoint+type", matched.Name)
 				provider = ai.NewKlingImageProvider(matched.APIKey, matched.APISecretKey, matched.APIEndpoint)
+			case "video":
+				// video 类型由 GetTenantVideoProvider 处理，AIProvider 路径不支持
+				logger.Printf("getTenantProvider: provider %q type=video — use GetTenantVideoProvider instead", matched.Name)
+				return nil, fmt.Errorf("provider %q is a video provider; use GetTenantVideoProvider", matched.Name)
 			default:
 				logger.Printf("getTenantProvider: provider %q (klingai endpoint, type=%q) — falling back to static aiManager", matched.Name, matched.Type)
 				return s.aiManager.GetProvider(providerName)
@@ -294,6 +298,11 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 
 	// 包装重试
 	provider = ai.NewRetryProvider(provider, 3, 500*time.Millisecond)
+
+	// 并发限制（Concurrency > 0 时限制同时调用数，防止触发提供商 429）
+	if matched.Concurrency > 0 {
+		provider = ai.NewConcurrentProvider(provider, matched.Concurrency)
+	}
 
 	// 写入缓存
 	s.providerCache.Store(cacheKey, providerCacheEntry{
@@ -1552,6 +1561,52 @@ func (s *AIService) loadDBVoiceProvider(tenantID uint) (ai.AIProvider, error) {
 		return provider, nil
 	}
 	return nil, fmt.Errorf("no voice providers configured in DB")
+}
+
+// GetTenantVideoProvider 从 DB 中查找指定租户已配置的视频生成提供商。
+// name 为空时返回第一个可用的视频提供商（kling 优先）。
+func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.VideoProvider, error) {
+	providers, err := s.providerRepo.ListByTenant(tenantID)
+	if err != nil {
+		return nil, err
+	}
+	// 按照 kling → seedance 顺序优先选择
+	preferOrder := []string{"kling", "seedance"}
+	if name != "" {
+		preferOrder = []string{strings.ToLower(name)}
+	}
+	byName := make(map[string]*model.ModelProvider)
+	for _, p := range providers {
+		if !p.IsActive {
+			continue
+		}
+		if strings.ToLower(p.Type) != "video" {
+			continue
+		}
+		if !providerHasCredentials(p) {
+			continue
+		}
+		pname := strings.ToLower(p.Name)
+		if _, exists := byName[pname]; !exists {
+			byName[pname] = p
+		}
+	}
+	for _, pname := range preferOrder {
+		p, ok := byName[pname]
+		if !ok {
+			continue
+		}
+		switch pname {
+		case "kling":
+			return ai.NewKlingProvider(p.APIKey, p.APISecretKey, p.APIEndpoint), nil
+		case "seedance":
+			return ai.NewSeedanceProvider(p.APIKey, p.APIEndpoint), nil
+		}
+	}
+	if name != "" {
+		return nil, fmt.Errorf("video provider %q not configured for tenant %d", name, tenantID)
+	}
+	return nil, fmt.Errorf("no video provider configured for tenant %d", tenantID)
 }
 
 // QualityService 质量服务

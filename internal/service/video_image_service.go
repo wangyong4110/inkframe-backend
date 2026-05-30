@@ -110,7 +110,7 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 			logger.Printf("BatchGenerateShots: shot %d start (mode=%s)", sh.ShotNo, mode)
 			const maxRetries = 3
 			var genErr error
-			if video.Mode == "slideshow" || len(s.videoProviders) == 0 {
+			if video.Mode == "slideshow" || !s.hasVideoProvider(video.TenantID) {
 				// ── 两阶段异步模式 ──────────────────────────────────────────────────
 				// 阶段一（同步，占用 sem）：AI 图片生成 → 下载到本地
 				// 阶段二（异步，释放 sem 后后台执行）：Ken Burns 编码 → OSS 上传，支持自动重试
@@ -860,21 +860,17 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		defer func() { <-vsem }()
 	}
 
-	providerName := "kling"
+	preferredProvider := "kling"
 	if len(providerOverride) > 0 && providerOverride[0] != "" {
-		providerName = providerOverride[0]
+		preferredProvider = providerOverride[0]
 	}
-	provider, ok := s.videoProviders[providerName]
-	if !ok {
-		// fallback to any available
-		for name, p := range s.videoProviders {
-			providerName = name
-			provider = p
-			ok = true
-			break
-		}
+	// Determine tenantID from associated video for DB provider lookup
+	var tenantID uint
+	if video, vErr := s.videoRepo.GetByID(shot.VideoID); vErr == nil {
+		tenantID = video.TenantID
 	}
-	if !ok {
+	provider, providerName, provErr := s.resolveVideoProvider(tenantID, preferredProvider)
+	if provErr != nil {
 		return fmt.Errorf("no video provider configured")
 	}
 

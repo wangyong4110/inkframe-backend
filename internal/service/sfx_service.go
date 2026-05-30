@@ -47,11 +47,12 @@ type SFXService struct {
 	pixabayKey       string // Pixabay API Key（可选）
 	elevenKey        string // ElevenLabs API Key（可选）
 	audioLDMEndpoint string // 本地 AudioLDM HTTP API 地址（可选，如 http://localhost:8000/generate）
-	audioLDMKey      string // AudioLDM API 鉴权 Token（可选，本地部署通常留空）
+	audioLDMKey      string // AudioLDM 鉴权 Token（可选，本地通常留空）
 	httpClient       *http.Client
 	localLib         map[string]string // 内置标签 → 文件名（不含目录）
 	localUploadCache sync.Map          // local file path → OSS URL（进程内缓存）
 	queryCache       sync.Map          // "source:query" → sfxCacheEntry
+	elevenLabsSem    chan struct{}      // 限制 ElevenLabs 并发数（免费版最多 4 路）
 }
 
 // WithSFXItemRepo 注入音效条目仓库（可选；注入后才启用多 item 存储）
@@ -87,17 +88,18 @@ func NewSFXService(
 	cfg SFXServiceConfig,
 ) *SFXService {
 	return &SFXService{
-		aiSvc:          aiSvc,
-		storageSvc:     storageSvc,
-		storyboardRepo: storyboardRepo,
-		sfxDir:         cfg.SFXDir,
-		freesoundKey:   cfg.FreesoundKey,
-		pixabayKey:     cfg.PixabayKey,
+		aiSvc:            aiSvc,
+		storageSvc:       storageSvc,
+		storyboardRepo:   storyboardRepo,
+		sfxDir:           cfg.SFXDir,
+		freesoundKey:     cfg.FreesoundKey,
+		pixabayKey:       cfg.PixabayKey,
 		elevenKey:        cfg.ElevenLabsKey,
 		audioLDMEndpoint: cfg.AudioLDMEndpoint,
 		audioLDMKey:      cfg.AudioLDMKey,
 		httpClient:       buildCrawlHTTPClient(cfg.ProxyURL, 30*time.Second),
-		localLib:       buildDefaultSFXLib(),
+		localLib:         buildDefaultSFXLib(),
+		elevenLabsSem:    make(chan struct{}, 3), // 保守限制 3 路并发，避免触发 ElevenLabs 429
 	}
 }
 

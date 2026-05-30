@@ -2,16 +2,8 @@
 #
 # 使用方式：cp config.example.yaml config.yaml，填写 [必填] 项
 #
-# AI API Key 支持两种方式（环境变量优先，config.yaml 作为备选）：
-#   方式一：直接写入本文件（适合开发/单机部署）
-#   方式二：通过环境变量传入（适合容器/生产部署，优先级更高）
-#     OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_API_KEY
-#     DOUBAO_API_KEY / DEEPSEEK_API_KEY / QIANWEN_API_KEY
-#     DOUBAO_SPEECH_API_KEY / DOUBAO_SPEECH_RESOURCE_ID        (V3 语音合成)
-#     DOUBAO_SPEECH_V1_APP_ID / DOUBAO_SPEECH_V1_TOKEN / DOUBAO_SPEECH_V1_CLUSTER  (V1 语音合成)
-#     KLING_API_KEY / SEEDANCE_API_KEY
-#     VOLCENGINE_ACCESS_KEY / VOLCENGINE_SECRET_KEY
-#     QDRANT_ENDPOINT / QDRANT_API_KEY / CHROMA_ENDPOINT
+# AI 模型/提供商（LLM、TTS、图像、视频、音效）均通过"模型管理"页面由租户配置，
+# 不再从 config.yaml 读取 API Key 或 endpoint。
 
 # 服务器配置
 server:
@@ -46,128 +38,12 @@ redis:
   db: 0
   pool_size: 100
 
-# AI模型配置
-# api_key 可直接填写（env var 优先级更高，可留空改用环境变量）
+# AI并发度配置
+# 所有 AI 提供商（LLM/TTS/图像/视频/音效）均通过"模型管理"页面按租户配置。
+# 以下仅保留图像/视频生成并发度（限速防 429）。
 ai:
-  openai:
-    api_key: ""                      # 或通过 $OPENAI_API_KEY 传入
-    endpoint: "https://api.openai.com/v1"
-    model: "gpt-4o"
-    max_tokens: 4096
-
-  anthropic:
-    api_key: ""                      # 或通过 $ANTHROPIC_API_KEY 传入
-    endpoint: "https://api.anthropic.com/v1"
-    model: "claude-3-5-sonnet-20241022"
-
-  google:
-    api_key: ""                      # 或通过 $GOOGLE_API_KEY 传入
-    endpoint: "https://generativelanguage.googleapis.com/v1"
-    model: "gemini-pro"
-
-  # 豆包（字节跳动火山引擎 Ark，含 Seedream 图像生成）
-  doubao:
-    api_key: ""                      # 或通过 $DOUBAO_API_KEY 传入
-    endpoint: "https://ark.volces.com/api/v3"
-    model: "doubao-pro-32k"
-
-  deepseek:
-    api_key: ""                      # 或通过 $DEEPSEEK_API_KEY 传入
-    endpoint: "https://api.deepseek.com/v1"
-    model: "deepseek-chat"
-
-  # 通义千问（阿里云 DashScope，含 Wan 万象图像生成）
-  qianwen:
-    api_key: ""                      # 或通过 $QIANWEN_API_KEY 传入
-    endpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    model: "qwen-plus"
-
-  # ── 国际新增 Provider ─────────────────────────────────────────
-  xai:
-    api_key: ""                      # 或通过 $XAI_API_KEY 传入
-    endpoint: "https://api.x.ai/v1"
-    model: "grok-3-mini"             # grok-4 / grok-4-0709 / grok-3-mini
-
-  mistral:
-    api_key: ""                      # 或通过 $MISTRAL_API_KEY 传入
-    endpoint: "https://api.mistral.ai/v1"
-    model: "mistral-large-latest"
-
-  meta:
-    api_key: ""                      # 或通过 $META_API_KEY 传入（Meta AI API）
-    endpoint: "https://api.llama.com/compat/v1"
-    model: "Llama-4-Scout-17B-16E-Instruct-FP8"
-
-  # ── 国内新增 Provider ─────────────────────────────────────────
-  # 智谱AI (GLM / Z.AI)：https://open.bigmodel.cn
-  zhipu:
-    api_key: ""                      # 或通过 $ZHIPU_API_KEY 传入
-    endpoint: "https://open.bigmodel.cn/api/paas/v4"
-    model: "glm-4-plus"              # glm-4-plus / glm-4-flash / glm-z1-flash
-
-  # Moonshot AI (Kimi)：https://platform.moonshot.cn
-  moonshot:
-    api_key: ""                      # 或通过 $MOONSHOT_API_KEY 传入
-    endpoint: "https://api.moonshot.cn/v1"
-    model: "moonshot-v1-32k"         # kimi-k2-0711-preview / moonshot-v1-128k
-
-  # 百度文心一言 (ERNIE)：https://cloud.baidu.com/product/wenxinworkshop
-  baidu:
-    api_key: ""                      # 或通过 $BAIDU_API_KEY 传入（百度智能云 API Key）
-    endpoint: "https://qianfan.baidubce.com/v2"
-    model: "ernie-4.5-8k"            # ernie-4.5-128k / ernie-3.5-8k / ernie-speed-128k
-
-  # 腾讯混元 (Hunyuan)：https://cloud.tencent.com/product/hunyuan
-  tencent:
-    api_key: ""                      # 或通过 $TENCENT_API_KEY 传入
-    endpoint: "https://api.hunyuan.cloud.tencent.com/v1"
-    model: "hunyuan-turbo"           # hunyuan-pro / hunyuan-lite
-
-  # 零一万物 (Yi)：https://platform.lingyiwanwu.com
-  yi:
-    api_key: ""                      # 或通过 $YI_API_KEY 传入
-    endpoint: "https://api.lingyiwanwu.com/v1"
-    model: "yi-lightning"            # yi-large / yi-large-turbo
-
-  # Ollama 本地 LLM（需先安装并运行 `ollama serve`，无需 API Key）
-  # 文档：https://ollama.com | 支持模型：llama3.2 / qwen2.5 / deepseek-r1 等
-  ollama:
-    endpoint: ""           # 如 http://localhost:11434/v1，或通过 $OLLAMA_ENDPOINT 传入
-    model: "llama3.2"      # 默认推理模型（ollama pull llama3.2）
-
-  # Seedance 视频生成（火山引擎 Ark，通常与豆包共用同一 Key）
-  seedance:
-    api_key: ""                      # 或通过 $SEEDANCE_API_KEY 传入
-    endpoint: "https://ark.volces.com/api/v3"
-
-  # 快手可灵视频生成
-  kling:
-    api_key: ""                      # 或通过 $KLING_API_KEY 传入
-    endpoint: ""
-
-  # 火山引擎即梦AI图像生成（AK/SK 鉴权）
-  volcengine_visual:
-    access_key: ""                   # 或通过 $VOLCENGINE_ACCESS_KEY 传入
-    secret_key: ""                   # 或通过 $VOLCENGINE_SECRET_KEY 传入
-
-  # 各任务类型使用的 provider（留空则自动选择可用 provider）
-  # 可选值：openai / anthropic / doubao / deepseek / qianwen / ollama / volcengine-visual / kling / seedance
-  tasks:
-    chapter_gen: ""        # 章节生成
-    quality_check: ""      # 质量检查
-    tts: ""                # 语音合成（仅 openai 支持）
-    image_gen: ""          # 图像生成
-    video_gen: ""          # 视频生成
-    embedding: ""          # 向量嵌入
-
-  # 图像/视频生成并发度（默认 1，避免触发提供商限速；可按需提高）
-  image_concurrency: 1
-  video_concurrency: 1
-
-  default:
-    temperature: 0.7
-    top_p: 0.9
-    top_k: 40
+  image_concurrency: 1   # 图像生成并发度（默认 1）
+  video_concurrency: 1   # 视频生成并发度（默认 1）
 
 # 文件存储配置（可选，不配置则跳过资产上传）
 storage:

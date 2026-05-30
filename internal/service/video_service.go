@@ -518,21 +518,15 @@ func (s *VideoService) StartGeneration(id uint) (string, error) {
 		return "", err
 	}
 
-	// 选择 provider：优先 kling，其次 seedance，均无则返回错误
-	providerName := "kling"
-	provider, ok := s.videoProviders[providerName]
-	if !ok {
-		providerName = "seedance"
-		provider, ok = s.videoProviders[providerName]
-	}
-	if !ok {
-		// 无可用 provider：标记失败并返回错误
+	// 选择 provider：优先 kling，其次 seedance，静态 map 或 DB 均可
+	provider, providerName, provErr := s.resolveVideoProvider(video.TenantID, "")
+	if provErr != nil {
 		if updErr := s.videoRepo.UpdateFields(video.ID, map[string]interface{}{
-			"status": "failed", "error_message": "no video provider configured (set KLING_API_KEY or SEEDANCE_API_KEY)",
+			"status": "failed", "error_message": "no video provider configured",
 		}); updErr != nil {
 			logger.Printf("[VideoService] failed to update video %d status: %v", video.ID, updErr)
 		}
-		return "", fmt.Errorf("no video provider configured")
+		return "", provErr
 	}
 
 	// 构建生成请求
@@ -572,12 +566,59 @@ type VideoProvider struct {
 }
 
 // ListVideoProviders returns configured video providers with display names.
+// Falls back to DB lookup for tenant 1 when static map is empty.
 func (s *VideoService) ListVideoProviders() []VideoProvider {
-	result := make([]VideoProvider, 0, len(s.videoProviders))
-	for name := range s.videoProviders {
-		result = append(result, VideoProvider{Name: name, DisplayName: capableProviderDisplayName(name, "")})
+	if len(s.videoProviders) > 0 {
+		result := make([]VideoProvider, 0, len(s.videoProviders))
+		for name := range s.videoProviders {
+			result = append(result, VideoProvider{Name: name, DisplayName: capableProviderDisplayName(name, "")})
+		}
+		return result
 	}
-	return result
+	if s.aiService != nil {
+		for _, name := range []string{"kling", "seedance"} {
+			if _, err := s.aiService.GetTenantVideoProvider(1, name); err == nil {
+				return []VideoProvider{{Name: name, DisplayName: capableProviderDisplayName(name, "")}}
+			}
+		}
+	}
+	return nil
+}
+
+// resolveVideoProvider 选择视频生成提供商：优先静态 map，其次 DB 租户配置。
+// preferredName 为空时按 kling→seedance 顺序尝试。
+func (s *VideoService) resolveVideoProvider(tenantID uint, preferredName string) (ai.VideoProvider, string, error) {
+	names := []string{"kling", "seedance"}
+	if preferredName != "" {
+		names = []string{preferredName, "kling", "seedance"}
+	}
+	// 先查静态 map
+	for _, name := range names {
+		if p, ok := s.videoProviders[name]; ok {
+			return p, name, nil
+		}
+	}
+	// 再查 DB
+	if s.aiService != nil {
+		for _, name := range names {
+			if p, err := s.aiService.GetTenantVideoProvider(tenantID, name); err == nil {
+				return p, name, nil
+			}
+		}
+	}
+	return nil, "", fmt.Errorf("no video provider configured")
+}
+
+// hasVideoProvider 判断当前租户是否存在可用的视频生成提供商（静态或 DB）。
+func (s *VideoService) hasVideoProvider(tenantID uint) bool {
+	if len(s.videoProviders) > 0 {
+		return true
+	}
+	if s.aiService != nil {
+		_, err := s.aiService.GetTenantVideoProvider(tenantID, "")
+		return err == nil
+	}
+	return false
 }
 
 // GetStoryboard 获取分镜列表
@@ -623,7 +664,7 @@ func (s *VideoService) GenerateSingleShot(videoID, shotID uint, provider ...stri
 		return shot, s.GenerateSlideshowShotVideo(shot, aspectRatio)
 	}
 	// AI 视频模式：若没有可用的视频提供商，自动降级为图片解说模式
-	if len(s.videoProviders) == 0 {
+	if !s.hasVideoProvider(video.TenantID) {
 		logger.Printf("GenerateSingleShot: no video provider available, falling back to slideshow for shot %d (video %d)", shotID, videoID)
 		return shot, s.GenerateSlideshowShotVideo(shot, aspectRatio)
 	}

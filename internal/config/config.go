@@ -125,172 +125,12 @@ type RedisConfig struct {
 	PoolSize int    `mapstructure:"pool_size"`
 }
 
-// AIConfig AI模型配置
+// AIConfig AI模型并发度配置
+// 所有模型提供商（LLM/TTS/图像/视频/音效）均通过"模型管理"页面按租户配置，
+// 不再从 config.yaml 读取 API Key 或 endpoint。
 type AIConfig struct {
-	OpenAI           OpenAIConfig           `mapstructure:"openai"`
-	Anthropic        AnthropicConfig        `mapstructure:"anthropic"`
-	Google           GoogleConfig           `mapstructure:"google"`
-	Doubao           DoubaoConfig           `mapstructure:"doubao"`
-	DeepSeek         DeepSeekConfig         `mapstructure:"deepseek"`
-	Qianwen          QianwenConfig          `mapstructure:"qianwen"`
-	Ollama           OllamaConfig           `mapstructure:"ollama"`
-	// 新增提供商
-	XAI      XAIConfig      `mapstructure:"xai"`
-	Mistral  MistralConfig  `mapstructure:"mistral"`
-	Meta     MetaConfig     `mapstructure:"meta"`
-	Zhipu    ZhipuConfig    `mapstructure:"zhipu"`
-	Moonshot MoonshotConfig `mapstructure:"moonshot"`
-	Baidu    BaiduConfig    `mapstructure:"baidu"`
-	Tencent  TencentConfig  `mapstructure:"tencent"`
-	Yi       YiConfig       `mapstructure:"yi"`
-	Seedance         SeedanceConfig         `mapstructure:"seedance"`
-	Kling            KlingConfig            `mapstructure:"kling"`
-	VolcengineVisual VolcengineVisualConfig `mapstructure:"volcengine_visual"`
-	Tasks            TasksConfig            `mapstructure:"tasks"`
-	Default          DefaultAIConfig        `mapstructure:"default"`
-	ImageConcurrency int                    `mapstructure:"image_concurrency"` // 图像生成并发度（默认 1）
-	VideoConcurrency int                    `mapstructure:"video_concurrency"` // 视频生成并发度（默认 1）
-}
-
-// OpenAIConfig OpenAI配置
-type OpenAIConfig struct {
-	APIKey    string `mapstructure:"api_key"`
-	Endpoint  string `mapstructure:"endpoint"`
-	Model     string `mapstructure:"model"`
-	MaxTokens int    `mapstructure:"max_tokens"`
-}
-
-// AnthropicConfig Anthropic配置
-type AnthropicConfig struct {
-	APIKey   string `mapstructure:"api_key"`
-	Endpoint string `mapstructure:"endpoint"`
-	Model    string `mapstructure:"model"`
-}
-
-// GoogleConfig Google配置
-type GoogleConfig struct {
-	APIKey   string `mapstructure:"api_key"`
-	Endpoint string `mapstructure:"endpoint"`
-	Model    string `mapstructure:"model"`
-}
-
-// DoubaoConfig 豆包配置
-type DoubaoConfig struct {
-	APIKey   string `mapstructure:"api_key"`
-	Endpoint string `mapstructure:"endpoint"`
-	Model    string `mapstructure:"model"`
-}
-
-// DeepSeekConfig DeepSeek配置
-type DeepSeekConfig struct {
-	APIKey   string `mapstructure:"api_key"`
-	Endpoint string `mapstructure:"endpoint"`
-	Model    string `mapstructure:"model"`
-}
-
-// QianwenConfig 通义千问配置
-type QianwenConfig struct {
-	APIKey   string `mapstructure:"api_key"`
-	Endpoint string `mapstructure:"endpoint"`
-	Model    string `mapstructure:"model"`
-}
-
-// OllamaConfig Ollama 本地 LLM 配置
-type OllamaConfig struct {
-	Endpoint string `mapstructure:"endpoint"` // 本地 Ollama API 地址，如 http://localhost:11434/v1
-	Model    string `mapstructure:"model"`    // 默认推理模型，如 llama3.2 / qwen2.5:7b
-}
-
-// XAIConfig xAI (Grok) 配置
-type XAIConfig struct {
-	APIKey   string `mapstructure:"api_key"`
-	Endpoint string `mapstructure:"endpoint"`
-	Model    string `mapstructure:"model"`
-}
-
-// MistralConfig Mistral AI 配置
-type MistralConfig struct {
-	APIKey   string `mapstructure:"api_key"`
-	Endpoint string `mapstructure:"endpoint"`
-	Model    string `mapstructure:"model"`
-}
-
-// MetaConfig Meta AI (Llama) 配置
-type MetaConfig struct {
-	APIKey   string `mapstructure:"api_key"`
-	Endpoint string `mapstructure:"endpoint"`
-	Model    string `mapstructure:"model"`
-}
-
-// ZhipuConfig 智谱AI (GLM / Z.AI) 配置
-type ZhipuConfig struct {
-	APIKey   string `mapstructure:"api_key"`
-	Endpoint string `mapstructure:"endpoint"`
-	Model    string `mapstructure:"model"`
-}
-
-// MoonshotConfig Moonshot AI (Kimi) 配置
-type MoonshotConfig struct {
-	APIKey   string `mapstructure:"api_key"`
-	Endpoint string `mapstructure:"endpoint"`
-	Model    string `mapstructure:"model"`
-}
-
-// BaiduConfig 百度文心一言 (ERNIE) 配置
-type BaiduConfig struct {
-	APIKey   string `mapstructure:"api_key"`
-	Endpoint string `mapstructure:"endpoint"`
-	Model    string `mapstructure:"model"`
-}
-
-// TencentConfig 腾讯混元 (Hunyuan) 配置
-type TencentConfig struct {
-	APIKey   string `mapstructure:"api_key"`
-	Endpoint string `mapstructure:"endpoint"`
-	Model    string `mapstructure:"model"`
-}
-
-// YiConfig 零一万物 (Yi) 配置
-type YiConfig struct {
-	APIKey   string `mapstructure:"api_key"`
-	Endpoint string `mapstructure:"endpoint"`
-	Model    string `mapstructure:"model"`
-}
-
-// SeedanceConfig Seedance视频配置
-type SeedanceConfig struct {
-	APIKey   string `mapstructure:"api_key"`
-	Endpoint string `mapstructure:"endpoint"`
-}
-
-// KlingConfig 快手可灵视频配置（AK/SK JWT 鉴权）
-type KlingConfig struct {
-	APIKey    string `mapstructure:"api_key"`    // Access Key（AK）
-	SecretKey string `mapstructure:"secret_key"` // Secret Key（SK），用于生成 JWT
-	Endpoint  string `mapstructure:"endpoint"`
-}
-
-// VolcengineVisualConfig 火山引擎即梦AI图像配置（AK/SK 鉴权）
-type VolcengineVisualConfig struct {
-	AccessKey string `mapstructure:"access_key"`
-	SecretKey string `mapstructure:"secret_key"`
-}
-
-// TasksConfig 各任务类型使用的 provider 名称，留空时使用系统默认或 DB 配置
-type TasksConfig struct {
-	ChapterGen   string `mapstructure:"chapter_gen"`   // 章节生成：openai/anthropic/doubao/deepseek/qianwen
-	QualityCheck string `mapstructure:"quality_check"` // 质量检查
-	TTS          string `mapstructure:"tts"`           // 语音合成：openai
-	ImageGen     string `mapstructure:"image_gen"`     // 图像生成：openai/doubao/qianwen/volcengine-visual
-	VideoGen     string `mapstructure:"video_gen"`     // 视频生成：kling/seedance
-	Embedding    string `mapstructure:"embedding"`     // 向量嵌入：openai
-}
-
-// DefaultAIConfig 默认AI配置
-type DefaultAIConfig struct {
-	Temperature float64 `mapstructure:"temperature"`
-	TopP        float64 `mapstructure:"top_p"`
-	TopK        int     `mapstructure:"top_k"`
+	ImageConcurrency int `mapstructure:"image_concurrency"` // 图像生成并发度（默认 1）
+	VideoConcurrency int `mapstructure:"video_concurrency"` // 视频生成并发度（默认 1）
 }
 
 // StorageConfig 文件存储配置
@@ -396,10 +236,7 @@ func setDefaults() {
 	viper.SetDefault("redis.db", 0)
 	viper.SetDefault("redis.pool_size", 100)
 
-	// AI默认值
-	viper.SetDefault("ai.default.temperature", 0.7)
-	viper.SetDefault("ai.default.top_p", 0.9)
-	viper.SetDefault("ai.default.top_k", 40)
+	// AI并发度默认值
 	viper.SetDefault("ai.image_concurrency", 1)
 	viper.SetDefault("ai.video_concurrency", 1)
 
@@ -453,13 +290,7 @@ func DefaultConfig() *Config {
 			DB:       0,
 			PoolSize: 100,
 		},
-		AI: AIConfig{
-			Default: DefaultAIConfig{
-				Temperature: 0.7,
-				TopP:        0.9,
-				TopK:        40,
-			},
-		},
+		AI: AIConfig{},
 		Logger: LoggerConfig{
 			Level:      "info",
 			Format:     "json",

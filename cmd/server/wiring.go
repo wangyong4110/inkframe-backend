@@ -264,14 +264,6 @@ func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *
 	// AI服务（注入 providerRepo 以支持按租户加载 AK/SK，注入 novelRepo 以读取小说项目级 AI 配置）
 	aiSvc := service.NewAIService(repos.AIModelRepo, repos.TaskModelConfigRepo, aiManager, repos.ModelProviderRepo).
 		WithNovelRepo(repos.NovelRepo).
-		WithTaskRouting(service.TaskRouting{
-			ChapterGen:   cfg.AI.Tasks.ChapterGen,
-			QualityCheck: cfg.AI.Tasks.QualityCheck,
-			TTS:          cfg.AI.Tasks.TTS,
-			ImageGen:     cfg.AI.Tasks.ImageGen,
-			VideoGen:     cfg.AI.Tasks.VideoGen,
-			Embedding:    cfg.AI.Tasks.Embedding,
-		}).
 		WithImageConcurrency(cfg.AI.ImageConcurrency)
 
 	// 模型服务（注入 aiService 以支持 TestProvider 实例化验证）
@@ -395,9 +387,8 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *contentSvcs, cfg *config.Config) *videoSvcs {
 	aiSvc := core.AI
 
-	// 视频服务
-	videoProviders := initVideoProviders(cfg)
-	videoSvc := service.NewVideoService(repos.VideoRepo, repos.StoryboardRepo, repos.ChapterRepo, repos.CharacterRepo, repos.NovelRepo, repos.TenantRepo, aiSvc, videoProviders)
+	// 视频服务（视频提供商从 DB 按租户加载，无需静态注册）
+	videoSvc := service.NewVideoService(repos.VideoRepo, repos.StoryboardRepo, repos.ChapterRepo, repos.CharacterRepo, repos.NovelRepo, repos.TenantRepo, aiSvc, nil)
 
 	// 图像服务（内部，用于视频增强和一致性服务）
 	imageSvc := service.NewImageService(nil)

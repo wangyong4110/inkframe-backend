@@ -27,8 +27,12 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 	if shot.ShotTaskID == "" {
 		return nil
 	}
-	provider, ok := s.videoProviders[shot.ShotProviderName]
-	if !ok {
+	var tenantID uint
+	if v, vErr := s.videoRepo.GetByID(shot.VideoID); vErr == nil {
+		tenantID = v.TenantID
+	}
+	provider, _, provErr := s.resolveVideoProvider(tenantID, shot.ShotProviderName)
+	if provErr != nil {
 		return fmt.Errorf("provider %s not found", shot.ShotProviderName)
 	}
 
@@ -102,10 +106,14 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 	}
 	logger.Printf("[StitchVideo] videoID=%d: found %d completed shots", videoID, len(shots))
 
-	// 获取宽高比（Ken Burns 降级时使用）
+	// 获取宽高比和租户 ID（Ken Burns 降级时使用）
 	aspectRatio := "16:9"
-	if video, verr := s.videoRepo.GetByID(videoID); verr == nil && video != nil && video.AspectRatio != "" {
-		aspectRatio = video.AspectRatio
+	var videoTenantID uint
+	if video, verr := s.videoRepo.GetByID(videoID); verr == nil && video != nil {
+		if video.AspectRatio != "" {
+			aspectRatio = video.AspectRatio
+		}
+		videoTenantID = video.TenantID
 	}
 	logger.Printf("[StitchVideo] videoID=%d: aspectRatio=%s", videoID, aspectRatio)
 
@@ -172,7 +180,7 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 				if err := downloadFile(url, dest); err != nil {
 					// URL 可能已过期，尝试从 provider 重新获取
 					if sh.ShotTaskID != "" && sh.ShotProviderName != "" {
-						if p, ok := s.videoProviders[sh.ShotProviderName]; ok {
+						if p, _, rErr := s.resolveVideoProvider(videoTenantID, sh.ShotProviderName); rErr == nil {
 							rCtx, rCancel := context.WithTimeout(context.Background(), 15*time.Second)
 							freshURL, fErr := p.GetVideoURL(rCtx, sh.ShotTaskID)
 							rCancel()

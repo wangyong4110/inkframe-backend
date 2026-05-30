@@ -651,8 +651,15 @@ func (s *SFXService) generateElevenLabsForTag(ctx context.Context, tenantID uint
 	ossKey := fmt.Sprintf("sfx/video_%d/shot_%d_%s.mp3", shot.VideoID, shot.ID, tagHash)
 
 	// 优先：通过 AIService 从 DB 加载 elevenlabs-sfx 密钥
+	// 使用信号量限制并发，避免触发 ElevenLabs 429（免费版最多 4 路）
 	if s.aiSvc != nil {
+		select {
+		case s.elevenLabsSem <- struct{}{}:
+		case <-ctx.Done():
+			return "", 0, ctx.Err()
+		}
 		rawURL, d, dbErr := s.aiSvc.GenerateSFXWithProvider(ctx, tenantID, "elevenlabs-sfx", prompt, dur)
+		<-s.elevenLabsSem
 		if dbErr != nil {
 			logger.Printf("[SFXService] generateElevenLabsForTag: DB path failed (tenant=%d): %v", tenantID, dbErr)
 		}
@@ -677,6 +684,13 @@ func (s *SFXService) generateElevenLabsForTag(ctx context.Context, tenantID uint
 	if s.storageSvc == nil {
 		return "", 0, fmt.Errorf("storage not configured for elevenlabs upload")
 	}
+
+	select {
+	case s.elevenLabsSem <- struct{}{}:
+	case <-ctx.Done():
+		return "", 0, ctx.Err()
+	}
+	defer func() { <-s.elevenLabsSem }()
 
 	body, _ := json.Marshal(map[string]interface{}{
 		"text":             prompt,

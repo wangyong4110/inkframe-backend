@@ -57,6 +57,8 @@ func ensureCriticalColumns(db *gorm.DB) {
 		// ink_character 人物深层动机（2026-05-30 新增）
 		{"ink_character", "inner_conflict", "TEXT NULL"},
 		{"ink_character", "core_desire", "TEXT NULL"},
+		// ink_model_provider 并发度（2026-05-30 新增）
+		{"ink_model_provider", "concurrency", "INT NOT NULL DEFAULT 0"},
 	}
 	for _, a := range additions {
 		// 先查 information_schema，列已存在则跳过，避免触发 GORM 的 Error 1060 日志
