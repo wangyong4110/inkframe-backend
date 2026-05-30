@@ -382,7 +382,7 @@ func (s *SceneAnchorService) UpdateStats(id uint, score float64) error {
 
 // BatchGenerateRefImages 批量为小说的场景锚点生成参考图。
 // force=false：跳过已有参考图的锚点；force=true：全量重新生成（风格变更时使用）。
-// 并发度由 AIService.imageSem 统一管控（config.yaml ai.image_concurrency）。
+// 并发度由 AIService.imageSem 统一管控（系统设置 image_concurrency）。
 func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantID, novelID uint, provider string, force bool, progressFn func(int)) (succeeded, failed int, err error) {
 	anchors, err := s.repo.ListByNovel(novelID)
 	if err != nil {

@@ -264,7 +264,7 @@ func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *
 	// AI服务（注入 providerRepo 以支持按租户加载 AK/SK，注入 novelRepo 以读取小说项目级 AI 配置）
 	aiSvc := service.NewAIService(repos.AIModelRepo, repos.TaskModelConfigRepo, aiManager, repos.ModelProviderRepo).
 		WithNovelRepo(repos.NovelRepo).
-		WithImageConcurrency(cfg.AI.ImageConcurrency)
+		WithImageConcurrency(1)
 
 	// 模型服务（注入 aiService 以支持 TestProvider 实例化验证）
 	modelSvc := service.NewModelService(repos.AIModelRepo, repos.ModelProviderRepo, repos.TaskModelConfigRepo, repos.ModelComparisonRepo, aiSvc)
@@ -407,7 +407,7 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 	videoSvc.WithBGMService(bgmSvc)
 	videoSvc.WithPlotPointRepo(repos.PlotPointRepo)
 	videoSvc.WithSystemSettingRepo(repos.SystemSettingRepo)
-	videoSvc.WithVideoConcurrency(cfg.AI.VideoConcurrency)
+	videoSvc.WithVideoConcurrency(1)
 	videoSvc.WithAudioConcurrency(3)
 
 	// 帧生成 / 一致性验证 / 小说转视频

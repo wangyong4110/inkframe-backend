@@ -636,24 +636,19 @@ func seedAIModels(db *gorm.DB) {
 }
 
 // seedConcurrencySettings 将并发度配置种子写入 DB（首次启动），或从 DB 加载并应用到运行时服务。
-func seedConcurrencySettings(repo *repository.SystemSettingRepository, cfg *config.Config, aiSvc *service.AIService, videoSvc *service.VideoService) {
-	seed := func(key, desc string, cfgVal int, apply func(int)) {
+// 并发度通过"模型管理 → 系统设置"页面配置，默认值为 1。
+func seedConcurrencySettings(repo *repository.SystemSettingRepository, aiSvc *service.AIService, videoSvc *service.VideoService) {
+	seed := func(key, desc string, apply func(int)) {
 		if v, err := repo.Get(key); err == nil {
-			// 已有记录：加载并应用（DB 优先于 config.yaml）
 			if n, err := strconv.Atoi(v); err == nil && n > 0 {
 				apply(n)
 			}
 		} else {
-			// 首次：写入 config 默认值
-			val := cfgVal
-			if val <= 0 {
-				val = 1
-			}
-			_ = repo.Set(key, strconv.Itoa(val), desc)
+			_ = repo.Set(key, "1", desc)
 		}
 	}
-	seed("image_concurrency", "图像生成最大并发数", cfg.AI.ImageConcurrency, aiSvc.SetImageConcurrency)
-	seed("video_concurrency", "视频生成最大并发数", cfg.AI.VideoConcurrency, videoSvc.SetVideoConcurrency)
+	seed("image_concurrency", "图像生成最大并发数", aiSvc.SetImageConcurrency)
+	seed("video_concurrency", "视频生成最大并发数", videoSvc.SetVideoConcurrency)
 }
 
 // seedWebSearchMcpTool 幂等写入系统内置 web_search MCP 工具

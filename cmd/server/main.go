@@ -162,7 +162,7 @@ func main() {
 	handlers := initHandlers(services, storageSvc, db, repos, cfg)
 
 	// 11a. 种子并发度设置 + 注册运行时变更回调
-	seedConcurrencySettings(repos.SystemSettingRepo, cfg, services.AIService, services.VideoService)
+	seedConcurrencySettings(repos.SystemSettingRepo, services.AIService, services.VideoService)
 	handlers.SystemHandler.RegisterOnChange("image_concurrency", func(v string) {
 		if n, err := strconv.Atoi(v); err == nil {
 			services.AIService.SetImageConcurrency(n)

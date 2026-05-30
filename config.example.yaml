@@ -2,9 +2,7 @@
 #
 # 使用方式：cp config.example.yaml config.yaml，填写 [必填] 项
 #
-# AI 模型/提供商（LLM、TTS、图像、视频、音效/SFX）均通过"模型管理"页面由租户配置，
-# 不再从 config.yaml 读取 API Key 或 endpoint。
-# SFX 本地目录可通过环境变量 SFX_DIR 传入；其余凭据在模型管理页面配置。
+# AI 模型/提供商均通过"模型管理"页面由租户配置，不再从此文件或环境变量读取 API Key。
 
 # 服务器配置
 server:
@@ -38,13 +36,6 @@ redis:
   password: ""
   db: 0
   pool_size: 100
-
-# AI并发度配置
-# 所有 AI 提供商（LLM/TTS/图像/视频/音效）均通过"模型管理"页面按租户配置。
-# 以下仅保留图像/视频生成并发度（限速防 429）。
-ai:
-  image_concurrency: 1   # 图像生成并发度（默认 1）
-  video_concurrency: 1   # 视频生成并发度（默认 1）
 
 # 文件存储配置（可选，不配置则跳过资产上传）
 storage:

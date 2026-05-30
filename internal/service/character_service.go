@@ -990,7 +990,7 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 // BatchGenerateImages 批量为小说的角色生成面部特写（同时用作头像）和三视图合图。
 // 每个角色在同一 goroutine 中顺序执行：先生成面部特写（兼头像），再生成三视图（以面部特写为参考）。
 // force=false：跳过已有对应图片的角色；force=true：全量重新生成（风格变更时使用）。
-// 并发度由 AIService.imageSem 统一管控（config.yaml ai.image_concurrency）。
+// 并发度由 AIService.imageSem 统一管控（系统设置 image_concurrency）。
 func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider string, force bool, progressFn func(int)) (succeeded, failed int, err error) {
 	chars, err := s.characterRepo.ListByNovel(novelID)
 	if err != nil {

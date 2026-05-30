@@ -18,9 +18,6 @@ type Config struct {
 	// Redis配置
 	Redis RedisConfig `mapstructure:"redis"`
 
-	// AI模型配置
-	AI AIConfig `mapstructure:"ai"`
-
 	// 文件存储配置
 	Storage StorageConfig `mapstructure:"storage"`
 
@@ -99,14 +96,6 @@ type RedisConfig struct {
 	Password string `mapstructure:"password"`
 	DB       int    `mapstructure:"db"`
 	PoolSize int    `mapstructure:"pool_size"`
-}
-
-// AIConfig AI模型并发度配置
-// 所有模型提供商（LLM/TTS/图像/视频/音效）均通过"模型管理"页面按租户配置，
-// 不再从 config.yaml 读取 API Key 或 endpoint。
-type AIConfig struct {
-	ImageConcurrency int `mapstructure:"image_concurrency"` // 图像生成并发度（默认 1）
-	VideoConcurrency int `mapstructure:"video_concurrency"` // 视频生成并发度（默认 1）
 }
 
 // StorageConfig 文件存储配置
@@ -212,10 +201,6 @@ func setDefaults() {
 	viper.SetDefault("redis.db", 0)
 	viper.SetDefault("redis.pool_size", 100)
 
-	// AI并发度默认值
-	viper.SetDefault("ai.image_concurrency", 1)
-	viper.SetDefault("ai.video_concurrency", 1)
-
 	// 日志默认值
 	viper.SetDefault("logger.level", "info")
 	viper.SetDefault("logger.format", "json")
@@ -266,7 +251,6 @@ func DefaultConfig() *Config {
 			DB:       0,
 			PoolSize: 100,
 		},
-		AI: AIConfig{},
 		Logger: LoggerConfig{
 			Level:      "info",
 			Format:     "json",
