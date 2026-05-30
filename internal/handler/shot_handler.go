@@ -707,6 +707,9 @@ func (h *VideoHandler) Export(c *gin.Context) {
 		result, err = h.capcutService.ExportOTIO(video, shots)
 	case "csv":
 		result, err = h.capcutService.ExportCSV(video, shots)
+	case "broll":
+		novel, _ := h.videoService.GetNovelByID(video.NovelID)
+		result, err = h.capcutService.ExportBRollDraft(video, shots, novel)
 	default: // "capcut" 或其他
 		novel, _ := h.videoService.GetNovelByID(video.NovelID)
 		var bgmSegs []*model.VideoBGMSegment

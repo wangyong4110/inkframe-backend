@@ -460,27 +460,40 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 				Chapters: chapters,
 			}
 		} else {
-			// 格式 C：尝试修复截断的 JSON（stopReason=length 时常见）
-			repaired := repairTruncatedJSON(cleaned)
-			if out, repErr := tryParse(repaired); repErr == nil {
-				logger.Printf("GenerateOutline: novel %d JSON was truncated, repaired %d chapters from %d chars",
-					req.NovelID, len(out.Chapters), len(cleaned))
+			// 格式 C-1：修复缺失冒号（DeepSeek 偶发 "key" value 格式）
+			fixedObj := repairMissingColons(cleaned)
+			if out, fixErr := tryParse(fixedObj); fixErr == nil {
+				logger.Printf("GenerateOutline: novel %d repaired missing colons → %d chapters", req.NovelID, len(out.Chapters))
+				outline = out
+			} else if out, fixErr2 := tryParse(repairMissingColons(cleanedArr)); fixErr2 == nil {
+				logger.Printf("GenerateOutline: novel %d repaired missing colons (array) → %d chapters", req.NovelID, len(out.Chapters))
 				outline = out
 			} else {
-				// 也尝试修复数组格式
-				repairedArr := repairTruncatedJSON(cleanedArr)
-				if out, repErr2 := tryParse(repairedArr); repErr2 == nil {
-					logger.Printf("GenerateOutline: novel %d array JSON was truncated, repaired %d chapters",
-						req.NovelID, len(out.Chapters))
+				// 格式 C-2：修复截断（stopReason=length 时常见）
+				repaired := repairTruncatedJSON(fixedObj)
+				if out, repErr := tryParse(repaired); repErr == nil {
+					logger.Printf("GenerateOutline: novel %d JSON truncated+colons repaired → %d chapters from %d chars",
+						req.NovelID, len(out.Chapters), len(cleaned))
 					outline = out
 				} else {
-					parseErr := err
-					if parseErr == nil {
-						parseErr = fmt.Errorf("chapters array empty after parse")
+					repairedArr := repairTruncatedJSON(repairMissingColons(cleanedArr))
+					if out, repErr2 := tryParse(repairedArr); repErr2 == nil {
+						logger.Printf("GenerateOutline: novel %d array JSON truncated+colons repaired → %d chapters",
+							req.NovelID, len(out.Chapters))
+						outline = out
+					} else {
+						parseErr := err
+						if parseErr == nil {
+							parseErr = fmt.Errorf("chapters array empty after parse")
+						}
+						preview := cleaned
+						if len(preview) > 500 {
+							preview = preview[:500]
+						}
+						logger.Printf("GenerateOutline: failed to parse AI response for novel %d: %v (object len=%d, array len=%d, preview=%q)",
+							req.NovelID, parseErr, len(cleaned), len(cleanedArr), preview)
+						return nil, fmt.Errorf("outline parse failed: %w", parseErr)
 					}
-					logger.Printf("GenerateOutline: failed to parse AI response for novel %d: %v (object len=%d, array len=%d)",
-						req.NovelID, parseErr, len(cleaned), len(cleanedArr))
-					return nil, fmt.Errorf("outline parse failed: %w", parseErr)
 				}
 			}
 		}
@@ -629,9 +642,30 @@ func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutli
 		}
 	}
 
-	sb.WriteString("\n请以JSON格式返回，必须是一个 JSON 对象（不是数组），格式严格如下：\n")
-	sb.WriteString(`{"title":"小说标题","chapters":[{"chapter_no":1,"title":"章节标题","summary":"章节概述","word_count":2500,"plot_points":["剧情点1","剧情点2"]}]}`)
-	sb.WriteString("\n注意：最外层必须是 {} 对象，chapters 是其中的数组字段，禁止直接返回 [] 数组。")
+	sb.WriteString(`
+## 输出格式（严格遵守）
+仅输出如下 JSON 对象，禁止任何说明文字、markdown 代码块、注释或 schema 以外的额外字段：
+{
+  "title": "小说标题",
+  "chapters": [
+    {
+      "chapter_no": 1,
+      "title": "章节标题",
+      "summary": "100字以内的章节概述",
+      "word_count": 2500,
+      "plot_points": ["剧情点1", "剧情点2"],
+      "emotional_tone": "紧张",
+      "tension_level": 7,
+      "hook": "章节末尾的悬念钩子",
+      "hook_type": "cliffhanger",
+      "conflict_type": "人与人",
+      "act": 1
+    }
+  ]
+}
+字段类型说明：chapter_no/word_count/tension_level/act 必须是整数，其余为字符串或字符串数组。
+最外层必须是 {} 对象，chapters 是其中的数组字段，禁止直接返回 [] 数组。`)
+
 
 	return sb.String()
 }

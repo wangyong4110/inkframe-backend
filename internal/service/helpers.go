@@ -265,6 +265,66 @@ func extractJSONObject(content string) string {
 	return sanitizeJSONStrings(content[objIdx:])
 }
 
+// repairMissingColons fixes a common DeepSeek JSON issue where object key-value
+// pairs are missing the colon separator, e.g. {"key" true} → {"key": true}.
+//
+// Strategy: scan the JSON token by token. After every quoted string token, peek
+// at the next non-whitespace character. If it is not `:`, `,`, `}`, or `]`
+// (i.e., something that would be a bare JSON value), insert ": " before it.
+// This is safe to call on well-formed JSON — it only inserts colons where they
+// are truly absent.
+func repairMissingColons(s string) string {
+	n := len(s)
+	if n == 0 {
+		return s
+	}
+	var buf strings.Builder
+	buf.Grow(n + 16)
+	i := 0
+	for i < n {
+		c := s[i]
+		if c != '"' {
+			buf.WriteByte(c)
+			i++
+			continue
+		}
+		// Consume a quoted string (handles \\ escape sequences).
+		start := i
+		i++
+		for i < n {
+			if s[i] == '\\' {
+				i += 2 // skip escape and next byte
+			} else if s[i] == '"' {
+				i++
+				break
+			} else {
+				i++
+			}
+		}
+		buf.WriteString(s[start:i])
+
+		// Peek past whitespace to see what follows this string.
+		j := i
+		for j < n && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
+			j++
+		}
+		if j >= n {
+			continue
+		}
+		next := s[j]
+		if next == ':' || next == ',' || next == '}' || next == ']' {
+			// Well-formed — no insertion needed.
+			continue
+		}
+		// next is a value token (true/false/null/digit/[/{/") without a colon.
+		// Write the whitespace we skipped, then insert the missing colon.
+		buf.WriteString(s[i:j])
+		buf.WriteString(": ")
+		i = j
+	}
+	return buf.String()
+}
+
 // unmarshalAIJSON extracts JSON from an AI response string and unmarshals it into T.
 func unmarshalAIJSON[T any](raw string) (*T, error) {
 	cleaned := extractJSON(strings.TrimSpace(raw))

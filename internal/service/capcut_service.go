@@ -992,6 +992,373 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	return result, nil
 }
 
+// ExportBRollDraft 导出 B 剪草稿 ZIP（静态图片 + 配音轨 + 字幕轨 + 分镜注释轨，无 Ken Burns / 音效 / BGM）
+// 用途：剪辑师二剪参考稿，镜头顶部叠字注明分镜编号和描述，方便人工替换素材。
+func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.StoryboardShot, novel *model.Novel) (*ExportResult, error) {
+	logger.Printf("[CapCutService] ExportBRollDraft: videoID=%d shots=%d", video.ID, len(shots))
+	now := time.Now().Unix()
+	draftID := uuid.New().String()
+	projectName := sanitizeFilename(video.Title)
+	if projectName == "" {
+		projectName = fmt.Sprintf("video_%d", video.ID)
+	}
+
+	subCfg := newSubtitleConfig(novel)
+	annCfg := subtitleConfig{enabled: true, position: "top", fontSize: 32, color: "#AAAAAA", bgStyle: "none"}
+
+	ratio := video.AspectRatio
+	if ratio == "" {
+		ratio = "16:9"
+	}
+	width, height := aspectRatioDimensions(ratio)
+	defaultCrop := ccCrop{
+		LowerLeftX: 0, LowerLeftY: 1, LowerRightX: 1, LowerRightY: 1,
+		UpperLeftX: 0, UpperLeftY: 0, UpperRightX: 1, UpperRightY: 0,
+	}
+
+	type mediaFile struct {
+		filename string
+		data     []byte
+	}
+	var mediaFiles []mediaFile
+
+	var videoMaterials []ccVideoMaterial
+	var videoSegments []ccSegment
+
+	var audioMaterials []ccAudioMaterial
+	var audioSegments []ccSegment
+
+	var textMaterials []ccTextMaterial
+	var textSegments []ccSegment
+
+	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
+
+	var totalDuration int64
+
+	for _, shot := range shots {
+		durationMicros := int64(shot.Duration * 1_000_000)
+		if durationMicros <= 0 {
+			durationMicros = 5_000_000
+		}
+		startMicros := totalDuration
+
+		// ── 1. 图片素材（始终使用静态图，忽略 VideoURL）────────────────────
+		mediaURL := shot.ImageURL
+		if mediaURL == "" {
+			mediaURL = shot.VideoURL // 兜底：无图时才用视频
+		}
+
+		vidMatID := uuid.New().String()
+		vidFilename := strings.ReplaceAll(vidMatID, "-", "") + ".jpg"
+		vidPath := vidFilename
+		if isHTTPURL(mediaURL) {
+			vidPath = mediaURL
+		} else if mediaURL != "" {
+			if data, err := downloadMediaFile(mediaURL); err == nil {
+				mediaFiles = append(mediaFiles, mediaFile{filename: vidFilename, data: data})
+			}
+		}
+
+		videoMaterials = append(videoMaterials, ccVideoMaterial{
+			CheckFlag:      63487,
+			CropScale:      1,
+			Crop:           defaultCrop,
+			Duration:       durationMicros,
+			HasAudio:       false,
+			Height:         height,
+			ID:             vidMatID,
+			ImportTime:     now,
+			MaterialID:     vidMatID,
+			Path:           vidPath,
+			SourcePlatform: 0,
+			Type:           "photo",
+			Width:          width,
+		})
+
+		videoSegments = append(videoSegments, ccSegment{
+			Clip: ccClip{
+				Alpha: 1.0,
+				Scale: ccScale{X: 1.0, Y: 1.0},
+			},
+			ID:              uuid.New().String(),
+			MaterialID:      vidMatID,
+			Speed:           1.0,
+			SourceTimerange: ccTimeRange{Duration: durationMicros, Start: 0},
+			TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
+			Type:            "video",
+			Visible:         true,
+			Volume:          1.0,
+		})
+
+		// ── 2. 配音音频素材（与 ExportCapCutDraft 逻辑相同）────────────────
+		if shot.AudioPath != "" {
+			audMatID := uuid.New().String()
+			actualAudioDur := durationMicros
+			audPath := strings.ReplaceAll(audMatID, "-", "") + ".mp3"
+			if isHTTPURL(shot.AudioPath) {
+				audPath = shot.AudioPath
+			} else {
+				if data, err := readLocalOrRemoteFile(shot.AudioPath); err == nil && len(data) > 0 {
+					ext := audioExtension(shot.AudioPath)
+					audPath = strings.ReplaceAll(audMatID, "-", "") + ext
+					mediaFiles = append(mediaFiles, mediaFile{filename: audPath, data: data})
+					if dur := parseAudioDurationMicros(data, ext); dur > 0 {
+						actualAudioDur = dur
+					}
+				}
+			}
+			srcDur := actualAudioDur
+			if srcDur > durationMicros {
+				srcDur = durationMicros
+			}
+			audioMaterials = append(audioMaterials, ccAudioMaterial{
+				CheckFlag: 1,
+				Duration:  actualAudioDur,
+				FilePath:  audPath,
+				ID:        audMatID,
+				Name:      fmt.Sprintf("shot_%03d_audio", shot.ShotNo),
+				Type:      "extract_music",
+			})
+			audioSegments = append(audioSegments, ccSegment{
+				Clip:            ccClip{Alpha: 1.0, Scale: ccScale{X: 1.0, Y: 1.0}},
+				ID:              uuid.New().String(),
+				MaterialID:      audMatID,
+				Speed:           1.0,
+				SourceTimerange: ccTimeRange{Duration: srcDur, Start: 0},
+				TargetTimerange: ccTimeRange{Duration: srcDur, Start: startMicros},
+				Type:            "audio",
+				Visible:         true,
+				Volume:          1.0,
+			})
+		}
+
+		// ── 3. 字幕轨（底部旁白/台词） ────────────────────────────────────
+		subtitleText := shot.Dialogue
+		if subtitleText == "" {
+			subtitleText = shot.Narration
+		}
+		if subtitleText == "" {
+			subtitleText = shot.Description
+		}
+		if subtitleText != "" && subCfg.enabled {
+			txtMatID := uuid.New().String()
+			subtitleText = sanitizeSubtitleText(subtitleText)
+			textMaterials = append(textMaterials, ccTextMaterial{
+				CheckFlag:  7,
+				Content:    buildTextContent(subtitleText, subCfg),
+				ID:         txtMatID,
+				IsSubtitle: true,
+				MaterialID: txtMatID,
+				Name:       fmt.Sprintf("shot_%03d_subtitle", shot.ShotNo),
+				Type:       "text",
+			})
+			textSegments = append(textSegments, ccSegment{
+				Clip: ccClip{
+					Alpha: 1.0,
+					Scale: ccScale{X: 1.0, Y: 1.0},
+					Transform: ccTransform{Y: subtitleTransformY(subCfg.position)},
+				},
+				ID:              uuid.New().String(),
+				MaterialID:      txtMatID,
+				Speed:           1.0,
+				SourceTimerange: ccTimeRange{Duration: durationMicros, Start: 0},
+				TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
+				Type:            "text",
+				Visible:         true,
+				Volume:          1.0,
+			})
+		}
+
+		// ── 4. 注释轨（顶部分镜编号 + 描述，供剪辑师参考）────────────────
+		annText := fmt.Sprintf("[镜%d]", shot.ShotNo)
+		if shot.Description != "" {
+			desc := shot.Description
+			if len([]rune(desc)) > 30 {
+				runes := []rune(desc)
+				desc = string(runes[:30]) + "…"
+			}
+			annText = fmt.Sprintf("[镜%d] %s", shot.ShotNo, desc)
+		}
+		annMatID := uuid.New().String()
+		textMaterials = append(textMaterials, ccTextMaterial{
+			CheckFlag:  7,
+			Content:    buildTextContent(annText, annCfg),
+			ID:         annMatID,
+			IsSubtitle: false,
+			MaterialID: annMatID,
+			Name:       fmt.Sprintf("shot_%03d_ann", shot.ShotNo),
+			Type:       "text",
+		})
+		textSegments = append(textSegments, ccSegment{
+			Clip: ccClip{
+				Alpha: 1.0,
+				Scale: ccScale{X: 1.0, Y: 1.0},
+				Transform: ccTransform{Y: subtitleTransformY("top")},
+			},
+			ID:              uuid.New().String(),
+			MaterialID:      annMatID,
+			Speed:           1.0,
+			SourceTimerange: ccTimeRange{Duration: durationMicros, Start: 0},
+			TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
+			Type:            "text",
+			Visible:         true,
+			Volume:          1.0,
+		})
+
+		totalDuration += durationMicros
+	}
+
+	tracks := []ccTrack{
+		{
+			Attribute:     0,
+			Flag:          0,
+			ID:            uuid.New().String(),
+			IsDefaultName: true,
+			Segments:      videoSegments,
+			Type:          "video",
+		},
+	}
+	if len(audioSegments) > 0 {
+		tracks = append(tracks, ccTrack{
+			Attribute:     0,
+			Flag:          0,
+			ID:            uuid.New().String(),
+			IsDefaultName: true,
+			Name:          "配音",
+			Segments:      audioSegments,
+			Type:          "audio",
+		})
+	}
+	if len(textSegments) > 0 {
+		tracks = append(tracks, ccTrack{
+			Attribute:     0,
+			Flag:          0,
+			ID:            uuid.New().String(),
+			IsDefaultName: true,
+			Name:          "字幕 & 注释",
+			Segments:      textSegments,
+			Type:          "text",
+		})
+	}
+
+	if audioMaterials == nil {
+		audioMaterials = []ccAudioMaterial{}
+	}
+	if textMaterials == nil {
+		textMaterials = []ccTextMaterial{}
+	}
+
+	content := ccDraftContent{
+		CanvasConfig:         ccCanvasConfig{Height: height, Ratio: ratio, Width: width},
+		CreateTime:           now,
+		Duration:             totalDuration,
+		FPS:                  30.0,
+		ID:                   draftID,
+		Keyframes:            ccKeyframes{Videos: []ccKeyframeGroup{}},
+		LastModifiedPlatform: "mac",
+		Materials: ccMaterials{
+			Audios:             audioMaterials,
+			Beats:              []interface{}{},
+			Canvases:           []interface{}{},
+			Chromas:            []interface{}{},
+			ColorCurves:        []interface{}{},
+			Filters:            []interface{}{},
+			GreenScreens:       []interface{}{},
+			Masks:              []interface{}{},
+			MaterialAnimations: []interface{}{},
+			Shapes:             []interface{}{},
+			Speed:              []interface{}{},
+			Stickers:           []interface{}{},
+			Texts:              textMaterials,
+			Transitions:        []ccTransitionMaterial{},
+			VideoEffects:       []interface{}{},
+			Videos:             videoMaterials,
+			VocalSeparations:   []interface{}{},
+		},
+		Name:          video.Title + " (B剪)",
+		NewVersion:    "",
+		Platform:      "mac",
+		Relationships: []interface{}{},
+		Tracks:        tracks,
+		UpdateTime:    now,
+		Version:       "3.0.0",
+	}
+
+	meta := ccMetaInfo{
+		DraftCover:               "cover.jpg",
+		DraftFoldPath:            "",
+		DraftID:                  draftID,
+		DraftIsAI:                false,
+		DraftIsArticleVideo:      false,
+		DraftIsInvisible:         false,
+		DraftMaterials:           []interface{}{},
+		DraftName:                video.Title + " (B剪)",
+		DraftNewVersion:          "",
+		DraftRootPath:            "",
+		DraftSegmentExtraInfo:    []interface{}{},
+		DraftTimelineMaterialsV2: []interface{}{},
+		TmDraftCreate:            now,
+		TmDraftModify:            now,
+		TmDuration:               totalDuration,
+	}
+
+	contentJSON, err := json.MarshalIndent(content, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal draft content: %w", err)
+	}
+	metaJSON, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal draft meta: %w", err)
+	}
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	writeZip := func(name string, data []byte) error {
+		w, e := zw.Create(name)
+		if e != nil {
+			return e
+		}
+		_, e = w.Write(data)
+		return e
+	}
+
+	prefix := projectName + "_broll/"
+	if err := writeZip(prefix+"draft_content.json", contentJSON); err != nil {
+		return nil, fmt.Errorf("write draft_content.json: %w", err)
+	}
+	if err := writeZip(prefix+"draft_meta_info.json", metaJSON); err != nil {
+		return nil, fmt.Errorf("write draft_meta_info.json: %w", err)
+	}
+	virtualStoreJSON, _ := json.Marshal(map[string]interface{}{"sub_store": map[string]interface{}{}})
+	if err := writeZip(prefix+"draft_virtual_store.json", virtualStoreJSON); err != nil {
+		return nil, fmt.Errorf("write draft_virtual_store.json: %w", err)
+	}
+	for _, mf := range mediaFiles {
+		if err := writeZip(prefix+mf.filename, mf.data); err != nil {
+			return nil, fmt.Errorf("write media file %s: %w", mf.filename, err)
+		}
+	}
+	if srtContent := buildSRTSubtitles(shots); srtContent != "" {
+		if err := writeZip(prefix+"subtitle.srt", []byte(srtContent)); err != nil {
+			return nil, fmt.Errorf("write subtitle.srt: %w", err)
+		}
+	}
+	if err := writeZip(prefix+"README.txt", []byte(buildCapCutReadme(projectName+"_broll"))); err != nil {
+		return nil, fmt.Errorf("write README.txt: %w", err)
+	}
+	if err := zw.Close(); err != nil {
+		return nil, fmt.Errorf("close zip: %w", err)
+	}
+
+	result := &ExportResult{
+		Data:        buf.Bytes(),
+		Filename:    projectName + "_broll.zip",
+		ContentType: "application/zip",
+	}
+	logger.Printf("[CapCutService] ExportBRollDraft done: filename=%s size=%d", result.Filename, len(result.Data))
+	return result, nil
+}
+
 // buildCapCutReadme 生成剪映草稿导入说明文件内容
 func buildCapCutReadme(projectName string) string {
 	return fmt.Sprintf(`InkFrame 剪映草稿 — 导入说明

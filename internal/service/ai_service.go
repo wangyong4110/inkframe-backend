@@ -599,7 +599,9 @@ const jsonOnlySystemPrompt = `你是一个严格的JSON生成引擎。
 - 只输出纯JSON，不输出任何分析、推理、思考过程或说明文字
 - 禁止输出"我们被要求""根据分析""综上所述"等任何前缀或后缀
 - 禁止markdown代码块（不要用` + "```" + `包裹）
-- 直接以 [ 或 { 开始，以 ] 或 } 结束`
+- 直接以 [ 或 { 开始，以 ] 或 } 结束
+- 每个键值对必须用英文冒号 : 分隔（"key": value），不得省略冒号
+- 禁止添加 schema 示例中未定义的额外字段`
 
 // chapterTaskTypes is the set of task types that generate novel prose.
 var chapterTaskTypes = map[string]bool{
@@ -613,6 +615,7 @@ var jsonOnlyTaskTypes = map[string]bool{
 	"character_state": true, "scene_anchor_extract": true,
 	"storyboard_review": true, "sfx_analyze": true,
 	"chapter_review": true, "extract_items": true,
+	"outline": true, // 大纲生成：强制纯 JSON，防止 DeepSeek 输出思考过程或缺失冒号
 }
 
 func (s *AIService) callAIWithProvider(parentCtx context.Context, tenantID uint, prompt string, config *model.TaskModelConfig, providerName string, modelOverride ...string) (string, error) {
