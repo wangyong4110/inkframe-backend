@@ -303,6 +303,15 @@ func seedAIModels(db *gorm.DB) {
 		// ElevenLabs 文生音效（xi-api-key 单密钥鉴权，不需要 SK）
 		{"elevenlabs-sfx", "ElevenLabs 文生音效", "sfx", "https://api.elevenlabs.io", false,
 			[]string{"sound-generation"}},
+		// Freesound 音效库（CC0，需 API Token）
+		{"freesound", "Freesound 音效库", "sfx", "https://freesound.org/apiv2", false, nil},
+		// Pixabay 音效（CC0，需 API Key）
+		{"pixabay-sfx", "Pixabay 音效", "sfx", "https://pixabay.com/api", false, nil},
+		// AudioLDM（本地部署模型，endpoint 为 HTTP API 地址，key 可选）
+		{"audioldm", "AudioLDM（本地）", "sfx", "http://localhost:8000", false, nil},
+		// 背景音乐
+		{"jamendo", "Jamendo 音乐库", "music", "https://api.jamendo.com/v3.0", false, nil},
+		{"pixabay-bgm", "Pixabay 背景音乐", "music", "https://pixabay.com/api", false, nil},
 		// 可灵语音合成（与视频生成共用 AK/SK）
 		{"kling-tts", "可灵语音合成", "voice", "https://api-beijing.klingai.com", true,
 			[]string{"zh_female_story", "zh_male_story", "oversea_male1", "oversea_female1"}},

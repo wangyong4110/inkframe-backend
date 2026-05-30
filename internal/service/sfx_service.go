@@ -43,11 +43,6 @@ type SFXService struct {
 	assetRepo        *repository.AssetRepository
 	tagRepo          *repository.TagRepository
 	sfxDir           string // 本地音效目录
-	freesoundKey     string // Freesound API Token（可选）
-	pixabayKey       string // Pixabay API Key（可选）
-	elevenKey        string // ElevenLabs API Key（可选）
-	audioLDMEndpoint string // 本地 AudioLDM HTTP API 地址（可选，如 http://localhost:8000/generate）
-	audioLDMKey      string // AudioLDM 鉴权 Token（可选，本地通常留空）
 	httpClient       *http.Client
 	localLib         map[string]string // 内置标签 → 文件名（不含目录）
 	localUploadCache sync.Map          // local file path → OSS URL（进程内缓存）
@@ -70,14 +65,8 @@ func (s *SFXService) WithAssetRepo(assetRepo *repository.AssetRepository, tagRep
 
 // SFXServiceConfig SFXService 构造参数
 type SFXServiceConfig struct {
-	SFXDir          string // 本地音效目录（环境变量 SFX_DIR）
-	FreesoundKey    string // Freesound API Token（环境变量 FREESOUND_API_KEY）
-	PixabayKey      string // Pixabay API Key（环境变量 PIXABAY_API_KEY；启用后搜索 Pixabay 音效库）
-	JamendoClientID string // 保留字段（Jamendo 为音乐平台，SFX 不使用）
-	ElevenLabsKey      string // 环境变量 ELEVENLABS_API_KEY
-	AudioLDMEndpoint   string // 本地 AudioLDM API 地址（环境变量 AUDIOLDM_ENDPOINT，如 http://localhost:8000/generate）
-	AudioLDMKey        string // AudioLDM 鉴权 Token（环境变量 AUDIOLDM_KEY，本地通常留空）
-	ProxyURL           string // 爬取代理（环境变量 CRAWL_PROXY_URL）；为空则使用系统 HTTPS_PROXY
+	SFXDir   string // 本地音效目录（环境变量 SFX_DIR）
+	ProxyURL string // 爬取代理（环境变量 CRAWL_PROXY_URL）；为空则使用系统 HTTPS_PROXY
 }
 
 // NewSFXService 创建 SFX 服务实例
@@ -88,19 +77,22 @@ func NewSFXService(
 	cfg SFXServiceConfig,
 ) *SFXService {
 	return &SFXService{
-		aiSvc:            aiSvc,
-		storageSvc:       storageSvc,
-		storyboardRepo:   storyboardRepo,
-		sfxDir:           cfg.SFXDir,
-		freesoundKey:     cfg.FreesoundKey,
-		pixabayKey:       cfg.PixabayKey,
-		elevenKey:        cfg.ElevenLabsKey,
-		audioLDMEndpoint: cfg.AudioLDMEndpoint,
-		audioLDMKey:      cfg.AudioLDMKey,
-		httpClient:       buildCrawlHTTPClient(cfg.ProxyURL, 30*time.Second),
-		localLib:         buildDefaultSFXLib(),
-		elevenLabsSem:    make(chan struct{}, 3), // 保守限制 3 路并发，避免触发 ElevenLabs 429
+		aiSvc:          aiSvc,
+		storageSvc:     storageSvc,
+		storyboardRepo: storyboardRepo,
+		sfxDir:         cfg.SFXDir,
+		httpClient:     buildCrawlHTTPClient(cfg.ProxyURL, 30*time.Second),
+		localLib:       buildDefaultSFXLib(),
+		elevenLabsSem:  make(chan struct{}, 3), // 保守限制 3 路并发，避免触发 ElevenLabs 429
 	}
+}
+
+// sfxProviderCreds 从 DB 取指定 sfx 供应商的凭据；aiSvc 为 nil 时返回空。
+func (s *SFXService) sfxProviderCreds(tenantID uint, name string) (apiKey, endpoint string) {
+	if s.aiSvc == nil {
+		return "", ""
+	}
+	return s.aiSvc.GetSFXProviderCreds(tenantID, name)
 }
 
 // buildDefaultSFXLib 内置音效标签 → 文件名映射表。
@@ -404,31 +396,21 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 		return sfxHit{url: u, source: "local", durationSecs: dur}
 	}
 	// 3. AudioLDM（本地部署模型，免费、无速率限制，优先于远程 API）
-	if s.audioLDMEndpoint != "" {
-		if u, dur, err := s.generateAudioLDMForTag(ctx, item, shot); err == nil && u != "" {
-			logger.Printf("[SFXService] shot %d AudioLDM hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
-			return sfxHit{url: u, source: "audioldm", durationSecs: dur}
-		} else if err != nil {
-			logger.Printf("[SFXService] shot %d AudioLDM failed tag=%q: %v", shot.ID, item.Tag, err)
-		}
+	if u, dur, err := s.generateAudioLDMForTag(ctx, tenantID, item, shot); err == nil && u != "" {
+		logger.Printf("[SFXService] shot %d AudioLDM hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
+		return sfxHit{url: u, source: "audioldm", durationSecs: dur}
+	} else if err != nil && !strings.Contains(err.Error(), "audioldm not configured") {
+		logger.Printf("[SFXService] shot %d AudioLDM failed tag=%q: %v", shot.ID, item.Tag, err)
 	}
 	// 4. Freesound API（CC0，需 API Key）
-	if s.freesoundKey == "" {
-		logger.Printf("[SFXService] shot %d skip Freesound (no key)", shot.ID)
-	} else if hit := s.searchFreesound(ctx, item, maxDur); hit.url != "" {
+	if hit := s.searchFreesound(ctx, tenantID, item, maxDur); hit.url != "" {
 		logger.Printf("[SFXService] shot %d Freesound hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
 		return hit
-	} else {
-		logger.Printf("[SFXService] shot %d Freesound miss tag=%q", shot.ID, item.Tag)
 	}
 	// 5. Pixabay Audio（CC0，需 API Key）
-	if s.pixabayKey == "" {
-		logger.Printf("[SFXService] shot %d skip Pixabay (no key)", shot.ID)
-	} else if hit := s.searchPixabay(ctx, item, maxDur); hit.url != "" {
+	if hit := s.searchPixabay(ctx, tenantID, item, maxDur); hit.url != "" {
 		logger.Printf("[SFXService] shot %d Pixabay hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
 		return hit
-	} else {
-		logger.Printf("[SFXService] shot %d Pixabay miss tag=%q", shot.ID, item.Tag)
 	}
 	// 6. BBC Sound Effects（BBC RemArc Licence，无需 API Key，直接爬取）
 	if hit := s.searchBBCSFX(ctx, item, maxDur); hit.url != "" {

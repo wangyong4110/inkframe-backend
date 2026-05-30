@@ -213,7 +213,7 @@ func sfxCategoryVolume(tag string) float64 {
 
 // freesoundSearchResults 执行单次 Freesound API 搜索，按相关性排序，返回 top-N 结果。
 // 对 action/emotion 类型限制时长 ≤ maxDuration；对 ambient 类型要求时长 ≥ 2s（用于循环）。
-func (s *SFXService) freesoundSearchResults(ctx context.Context, query string, maxDuration float64, sfxType string) []struct {
+func (s *SFXService) freesoundSearchResults(ctx context.Context, key string, query string, maxDuration float64, sfxType string) []struct {
 	URL      string
 	Duration float64
 } {
@@ -234,7 +234,7 @@ func (s *SFXService) freesoundSearchResults(ctx context.Context, query string, m
 	apiURL := fmt.Sprintf(
 		// sort=score 按相关性排序（而非下载量），page_size=5 取前5个候选
 		"https://freesound.org/apiv2/search/text/?query=%s&filter=%s&fields=id,name,previews,duration&sort=score&page_size=5&token=%s",
-		url.QueryEscape(query), url.QueryEscape(filter), s.freesoundKey,
+		url.QueryEscape(query), url.QueryEscape(filter), key,
 	)
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
@@ -282,15 +282,16 @@ func (s *SFXService) freesoundSearchResults(ctx context.Context, query string, m
 // searchFreesound 通过 Freesound API 搜索 CC0 授权音效。
 // 从 top-5 中挑选最佳：action 选时长最短的（单次触发），ambient 选时长最长的（循环素材）。
 // 不再做单词拆分降级搜索（会产生不可控的误匹配）。
-func (s *SFXService) searchFreesound(ctx context.Context, item sfxTagItem, maxDuration float64) sfxHit {
-	if s.freesoundKey == "" || item.Tag == "" {
+func (s *SFXService) searchFreesound(ctx context.Context, tenantID uint, item sfxTagItem, maxDuration float64) sfxHit {
+	key, _ := s.sfxProviderCreds(tenantID, "freesound")
+	if key == "" || item.Tag == "" {
 		return sfxHit{}
 	}
 	query := strings.ReplaceAll(normalizeTag(item.Tag), "_", " ")
 	cacheKey := fmt.Sprintf("freesound:%s:%s", item.SFXType, query)
 
 	return s.cachedQuery(cacheKey, func() sfxHit {
-		results := s.freesoundSearchResults(ctx, query, maxDuration, item.SFXType)
+		results := s.freesoundSearchResults(ctx, key, query, maxDuration, item.SFXType)
 		if len(results) == 0 {
 			return sfxHit{}
 		}
@@ -316,8 +317,9 @@ func (s *SFXService) searchFreesound(ctx context.Context, item sfxTagItem, maxDu
 
 // searchPixabay 通过 Pixabay Audio API 搜索音效（需配置 PIXABAY_API_KEY）。
 // 返回 CC0 授权音效的直链 URL，ambient 类型选时长最长，其余选时长最短。
-func (s *SFXService) searchPixabay(ctx context.Context, item sfxTagItem, maxDuration float64) sfxHit {
-	if s.pixabayKey == "" || item.Tag == "" {
+func (s *SFXService) searchPixabay(ctx context.Context, tenantID uint, item sfxTagItem, maxDuration float64) sfxHit {
+	key, _ := s.sfxProviderCreds(tenantID, "pixabay-sfx")
+	if key == "" || item.Tag == "" {
 		return sfxHit{}
 	}
 	query := strings.ReplaceAll(normalizeTag(item.Tag), "_", " ")
@@ -326,7 +328,7 @@ func (s *SFXService) searchPixabay(ctx context.Context, item sfxTagItem, maxDura
 	return s.cachedQuery(cacheKey, func() sfxHit {
 		apiURL := fmt.Sprintf(
 			"https://pixabay.com/api/?key=%s&q=%s&media_type=music&page_size=5",
-			s.pixabayKey, url.QueryEscape(query),
+			key, url.QueryEscape(query),
 		)
 		req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 		if err != nil {
@@ -677,52 +679,7 @@ func (s *SFXService) generateElevenLabsForTag(ctx context.Context, tenantID uint
 		}
 	}
 
-	// 降级：使用环境变量 ELEVENLABS_API_KEY 直接调用 HTTP
-	if s.elevenKey == "" {
-		return "", 0, fmt.Errorf("elevenlabs key not configured")
-	}
-	if s.storageSvc == nil {
-		return "", 0, fmt.Errorf("storage not configured for elevenlabs upload")
-	}
-
-	select {
-	case s.elevenLabsSem <- struct{}{}:
-	case <-ctx.Done():
-		return "", 0, ctx.Err()
-	}
-	defer func() { <-s.elevenLabsSem }()
-
-	body, _ := json.Marshal(map[string]interface{}{
-		"text":             prompt,
-		"duration_seconds": dur,
-		"prompt_influence": 0.7,
-	})
-
-	req, err := http.NewRequestWithContext(ctx, "POST",
-		"https://api.elevenlabs.io/v1/sound-generation", bytes.NewReader(body))
-	if err != nil {
-		return "", 0, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("xi-api-key", s.elevenKey)
-
-	resp, err := s.httpClient.Do(req)
-	if err != nil {
-		return "", 0, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return "", 0, fmt.Errorf("elevenlabs HTTP %d: %s", resp.StatusCode, bodyBytes)
-	}
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", 0, err
-	}
-
-	u, err := s.storageSvc.Upload(ctx, ossKey, bytes.NewReader(data), int64(len(data)), "audio/mpeg")
-	return u, float64(dur), err
+	return "", 0, fmt.Errorf("elevenlabs-sfx: no DB credentials configured for tenant %d", tenantID)
 }
 
 // uploadLocalFileToOSS 读取本地文件并上传到 OSS，上传后删除临时文件。
@@ -750,10 +707,11 @@ func uploadLocalFileToOSS(ctx context.Context, svc storage.Service, localPath, o
 //  3. 原始音频字节（Content-Type: audio/*）                 — 直接上传
 //
 // 请求格式：POST endpoint  {"text": "...", "duration": 5.0}
-// 若设置了 audioLDMKey，则附加 Authorization: Bearer {key}
-func (s *SFXService) generateAudioLDMForTag(ctx context.Context, item sfxTagItem, shot *model.StoryboardShot) (string, float64, error) {
-	if s.audioLDMEndpoint == "" {
-		return "", 0, fmt.Errorf("audioldm endpoint not configured")
+// 若设置了 audioLDMKey（DB APIKey），则附加 Authorization: Bearer {key}
+func (s *SFXService) generateAudioLDMForTag(ctx context.Context, tenantID uint, item sfxTagItem, shot *model.StoryboardShot) (string, float64, error) {
+	audioLDMKey, audioLDMEndpoint := s.sfxProviderCreds(tenantID, "audioldm")
+	if audioLDMEndpoint == "" {
+		return "", 0, fmt.Errorf("audioldm not configured")
 	}
 
 	// AudioLDM2 在英文 prompt 上效果最好，且部分实现有 ASCII-only 校验。
@@ -780,7 +738,7 @@ func (s *SFXService) generateAudioLDMForTag(ctx context.Context, item sfxTagItem
 	})
 
 	// 确保 endpoint 末尾有斜杠，避免 307 重定向浪费一次 RTT
-	endpoint := s.audioLDMEndpoint
+	endpoint := audioLDMEndpoint
 	if !strings.HasSuffix(endpoint, "/") {
 		endpoint += "/"
 	}
@@ -790,8 +748,8 @@ func (s *SFXService) generateAudioLDMForTag(ctx context.Context, item sfxTagItem
 		return "", 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if s.audioLDMKey != "" {
-		req.Header.Set("Authorization", "Bearer "+s.audioLDMKey)
+	if audioLDMKey != "" {
+		req.Header.Set("Authorization", "Bearer "+audioLDMKey)
 	}
 
 	// 本地调用通常较慢（模型推理），超时延长至 3 分钟
@@ -843,7 +801,7 @@ func (s *SFXService) generateAudioLDMForTag(ctx context.Context, item sfxTagItem
 		// 格式 4：异步任务 — 服务返回 task_id + status=processing，需轮询结果
 		if jsonResp.TaskID != "" && (jsonResp.Status == "processing" || jsonResp.Status == "pending") {
 			logger.Printf("[SFXService] AudioLDM async task_id=%s, polling for result...", jsonResp.TaskID)
-			polledData, pollErr := s.pollAudioLDMTask(ctx, jsonResp.TaskID)
+			polledData, pollErr := s.pollAudioLDMTask(ctx, jsonResp.TaskID, audioLDMEndpoint, audioLDMKey)
 			if pollErr != nil {
 				return "", 0, fmt.Errorf("audioldm poll task_id=%s: %w", jsonResp.TaskID, pollErr)
 			}
@@ -910,9 +868,9 @@ uploadAudio:
 // returning the final JSON body. Polls every 3s, times out after 10 minutes.
 // Uses context.Background() for the poll loop to avoid inheriting a short-lived
 // parent deadline; explicit parent cancellation is forwarded via a goroutine.
-func (s *SFXService) pollAudioLDMTask(parentCtx context.Context, taskID string) ([]byte, error) {
+func (s *SFXService) pollAudioLDMTask(parentCtx context.Context, taskID string, endpointBase string, authKey string) ([]byte, error) {
 	// Derive base URL from endpoint (strip path, use scheme+host only)
-	parsedURL, err := url.Parse(s.audioLDMEndpoint)
+	parsedURL, err := url.Parse(endpointBase)
 	if err != nil {
 		return nil, fmt.Errorf("parse endpoint: %w", err)
 	}
@@ -946,8 +904,8 @@ func (s *SFXService) pollAudioLDMTask(parentCtx context.Context, taskID string) 
 				reqCancel()
 				return nil, err
 			}
-			if s.audioLDMKey != "" {
-				req.Header.Set("Authorization", "Bearer "+s.audioLDMKey)
+			if authKey != "" {
+				req.Header.Set("Authorization", "Bearer "+authKey)
 			}
 			resp, err := (&http.Client{}).Do(req)
 			reqCancel()
@@ -985,8 +943,8 @@ func (s *SFXService) pollAudioLDMTask(parentCtx context.Context, taskID string) 
 				dlReqCancel()
 				return nil, fmt.Errorf("audioldm download request: %w", err)
 			}
-			if s.audioLDMKey != "" {
-				dlReq.Header.Set("Authorization", "Bearer "+s.audioLDMKey)
+			if authKey != "" {
+				dlReq.Header.Set("Authorization", "Bearer "+authKey)
 			}
 			dlResp, err := (&http.Client{}).Do(dlReq)
 			dlReqCancel()

@@ -397,10 +397,8 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 	intelligentStoryboardSvc := service.NewIntelligentStoryboardService(aiSvc, imageSvc)
 	storyboardSvc := service.NewStoryboardService(videoSvc, aiSvc)
 	enhancementSvc := service.NewVideoEnhancementService(imageSvc, "/tmp/inkframe-enhance")
-	bgmSvc := service.NewBGMService(getEnv("BGM_DIR", cfg.BGM.Dir)).
-		WithAIService(aiSvc).
-		WithJamendo(getEnv("JAMENDO_CLIENT_ID", cfg.BGM.JamendoClientID)).
-		WithPixabay(getEnv("PIXABAY_API_KEY", cfg.BGM.PixabayKey))
+	bgmSvc := service.NewBGMService(getEnv("BGM_DIR", "")).
+		WithAIService(aiSvc)
 
 	charConsistencySvc := service.NewCharacterConsistencyService(imageSvc, nil, aiSvc)
 
@@ -650,7 +648,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		ImageRefSearchHandler: handler.NewImageRefSearchHandler(
 			service.NewImageRefSearcher(
 				"pixabay",
-				getEnv("PIXABAY_API_KEY", cfg.SFX.PixabayKey),
+				getEnv("PIXABAY_API_KEY", ""),
 			),
 		),
 		ColorPaletteHandler: handler.NewColorPaletteHandler(service.NewColorPaletteService()),

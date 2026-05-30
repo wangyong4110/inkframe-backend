@@ -2,8 +2,9 @@
 #
 # 使用方式：cp config.example.yaml config.yaml，填写 [必填] 项
 #
-# AI 模型/提供商（LLM、TTS、图像、视频、音效）均通过"模型管理"页面由租户配置，
+# AI 模型/提供商（LLM、TTS、图像、视频、音效/SFX）均通过"模型管理"页面由租户配置，
 # 不再从 config.yaml 读取 API Key 或 endpoint。
+# SFX 本地目录可通过环境变量 SFX_DIR 传入；其余凭据在模型管理页面配置。
 
 # 服务器配置
 server:
@@ -71,28 +72,6 @@ logger:
   level: "info"            # debug | info | warn | error
   format: "json"           # json | text
   output_path: "stdout"
-
-# 自动音效（SFX）配置
-# 降级链：AI文生音效 → 本地目录 → AudioLDM → Freesound → Pixabay → BBC → 爱给网 → ElevenLabs
-# API Key 也可通过环境变量传入（env var 优先级更高）：
-#   SFX_DIR / AUDIOLDM_ENDPOINT / AUDIOLDM_KEY
-#   FREESOUND_API_KEY / PIXABAY_API_KEY / JAMENDO_CLIENT_ID / ELEVENLABS_API_KEY
-sfx:
-  dir: ""                       # 本地音效库目录，文件名格式：<tag>.mp3
-  audioldm_endpoint: ""         # 本地 AudioLDM HTTP API，如 http://localhost:8000/generate
-  audioldm_key: ""              # AudioLDM 鉴权 Token（本地部署通常留空）
-  freesound_key: ""             # https://freesound.org/apiv2/apply/
-  pixabay_key: ""               # https://pixabay.com/api/docs/（与图片搜索同一 key）
-  jamendo_client_id: ""         # https://devportal.jamendo.com/
-  elevenlabs_key: ""            # https://elevenlabs.io/
-
-# 背景音乐（BGM）配置
-# 三层降级：本地目录 → Jamendo → Pixabay
-# env var 优先级更高：BGM_DIR / JAMENDO_CLIENT_ID / PIXABAY_API_KEY
-bgm:
-  dir: ""                  # 本地 BGM 目录，文件名即情绪词，如 tension.mp3 / default.mp3
-  jamendo_client_id: ""    # 与 sfx.jamendo_client_id 可相同
-  pixabay_key: ""          # 与 sfx.pixabay_key 可相同
 
 # 联网搜索配置（用于章节生成的"联网参考"功能）
 # 启用方式：

@@ -177,7 +177,7 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		// 当未指定具体提供商时，跳过图像/视频/语音/嵌入/多能力类型（这些不做文本生成）
 		if providerName == "" {
 			t := strings.ToLower(p.Type)
-			if t == "image" || t == "video" || t == "voice" || t == "embedding" || t == "sfx" {
+			if t == "image" || t == "video" || t == "voice" || t == "embedding" || t == "sfx" || t == "music" {
 				continue
 			}
 		}
@@ -1561,6 +1561,56 @@ func (s *AIService) loadDBVoiceProvider(tenantID uint) (ai.AIProvider, error) {
 		return provider, nil
 	}
 	return nil, fmt.Errorf("no voice providers configured in DB")
+}
+
+// GetBGMProviderCreds 从 DB 中取指定 music 类型提供商的凭据（apiKey, endpoint）。
+// 找不到返回空字符串；调用方负责判断空值。
+func (s *AIService) GetBGMProviderCreds(tenantID uint, name string) (apiKey, endpoint string) {
+	providers, err := s.providerRepo.ListByTenant(tenantID)
+	if err != nil {
+		return "", ""
+	}
+	for _, p := range providers {
+		if !p.IsActive {
+			continue
+		}
+		if strings.ToLower(p.Type) != "music" {
+			continue
+		}
+		if !strings.EqualFold(p.Name, name) {
+			continue
+		}
+		if !providerHasCredentials(p) {
+			continue
+		}
+		return p.APIKey, p.APIEndpoint
+	}
+	return "", ""
+}
+
+// GetSFXProviderCreds 从 DB 中取指定 sfx 类型提供商的凭据（apiKey, endpoint）。
+// 找不到返回空字符串；调用方负责判断空值。
+func (s *AIService) GetSFXProviderCreds(tenantID uint, name string) (apiKey, endpoint string) {
+	providers, err := s.providerRepo.ListByTenant(tenantID)
+	if err != nil {
+		return "", ""
+	}
+	for _, p := range providers {
+		if !p.IsActive {
+			continue
+		}
+		if strings.ToLower(p.Type) != "sfx" {
+			continue
+		}
+		if !strings.EqualFold(p.Name, name) {
+			continue
+		}
+		if !providerHasCredentials(p) {
+			continue
+		}
+		return p.APIKey, p.APIEndpoint
+	}
+	return "", ""
 }
 
 // GetTenantVideoProvider 从 DB 中查找指定租户已配置的视频生成提供商。

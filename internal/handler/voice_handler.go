@@ -675,11 +675,12 @@ func (h *VideoHandler) JamendoSearchBGM(c *gin.Context) {
 		respondErr(c, http.StatusNotImplemented, "BGM service not configured")
 		return
 	}
+	tenantID := getTenantID(c)
 	bpmMin, _ := strconv.Atoi(c.DefaultQuery("bpm_min", "0"))
 	bpmMax, _ := strconv.Atoi(c.DefaultQuery("bpm_max", "0"))
 	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "10"))
 
-	tracks, err := h.bgmSvc.JamendoSearch(c.Request.Context(), service.JamendoSearchParams{
+	tracks, err := h.bgmSvc.JamendoSearch(c.Request.Context(), tenantID, service.JamendoSearchParams{
 		Query:  c.Query("q"),
 		Tags:   c.Query("tags"),
 		Speed:  c.Query("speed"),

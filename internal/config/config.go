@@ -36,12 +36,6 @@ type Config struct {
 	// OAuth配置
 	OAuth OAuthConfig `mapstructure:"oauth"`
 
-	// 音效配置
-	SFX SFXConfig `mapstructure:"sfx"`
-
-	// 背景音乐配置
-	BGM BGMConfig `mapstructure:"bgm"`
-
 	// 联网搜索配置
 	WebSearch WebSearchConfig `mapstructure:"web_search"`
 
@@ -64,24 +58,6 @@ type WebSearchConfig struct {
 	Provider string `mapstructure:"provider"` // "bing"|"searxng"|"tavily"|""
 	APIKey   string `mapstructure:"api_key"`  // Bing/Tavily key（也可用 WEB_SEARCH_API_KEY 环境变量）
 	Endpoint string `mapstructure:"endpoint"` // SearXNG: http://your-host
-}
-
-// BGMConfig 背景音乐配置
-type BGMConfig struct {
-	Dir             string `mapstructure:"dir"`              // 本地 BGM 目录（优先）
-	JamendoClientID string `mapstructure:"jamendo_client_id"` // Jamendo（第二层）
-	PixabayKey      string `mapstructure:"pixabay_key"`       // Pixabay（第三层）
-}
-
-// SFXConfig 自动音效生成配置
-type SFXConfig struct {
-	Dir              string `mapstructure:"dir"`               // 本地音效库目录（优先层）
-	FreesoundKey     string `mapstructure:"freesound_key"`     // Freesound API key（可选）
-	PixabayKey       string `mapstructure:"pixabay_key"`       // Pixabay API key（可选）
-	JamendoClientID  string `mapstructure:"jamendo_client_id"` // Jamendo client_id（可选）
-	ElevenLabsKey    string `mapstructure:"elevenlabs_key"`    // ElevenLabs API key（可选）
-	AudioLDMEndpoint string `mapstructure:"audioldm_endpoint"` // 本地 AudioLDM HTTP API 地址（可选，如 http://localhost:8000/generate）
-	AudioLDMKey      string `mapstructure:"audioldm_key"`      // AudioLDM 鉴权 Token（可选，本地部署通常留空）
 }
 
 // ServerConfig 服务器配置
