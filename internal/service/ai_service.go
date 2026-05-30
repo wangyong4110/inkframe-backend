@@ -1473,22 +1473,26 @@ func (s *AIService) GenerateSFXWithProvider(ctx context.Context, tenantID uint, 
 }
 
 // loadDBProviderByName 从 DB 中按名称精确查找提供商（不限类型）。
+// 优先使用租户级别（tenant_id=N）有凭证的记录，其次使用系统级（tenant_id=0）有凭证的记录。
+// 同名但无凭证的记录（种子占位符）会被跳过，不会阻断查找。
 func (s *AIService) loadDBProviderByName(tenantID uint, name string) (ai.AIProvider, error) {
 	providers, err := s.providerRepo.ListByTenant(tenantID)
 	if err != nil {
-		logger.Printf("loadDBProviderByName: ListByTenant(tenant=%d) error: %v", tenantID, err)
 		return nil, err
 	}
-	logger.Printf("loadDBProviderByName: tenant=%d name=%q total_providers=%d", tenantID, name, len(providers))
+	nameFound := false
 	for _, p := range providers {
-		logger.Printf("loadDBProviderByName: checking provider name=%q isActive=%v hasKey=%v", p.Name, p.IsActive, strings.TrimSpace(p.APIKey) != "")
 		if !p.IsActive || !strings.EqualFold(p.Name, name) {
 			continue
 		}
+		nameFound = true
 		if !providerHasCredentials(p) {
-			return nil, fmt.Errorf("provider %q has no credentials configured", name)
+			continue // 跳过无凭证的种子占位符，继续查找有凭证的租户记录
 		}
 		return s.getTenantProvider(tenantID, p.Name)
+	}
+	if nameFound {
+		return nil, fmt.Errorf("provider %q has no credentials configured", name)
 	}
 	return nil, fmt.Errorf("provider %q not found or not active in DB", name)
 }

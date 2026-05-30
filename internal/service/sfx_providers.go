@@ -651,14 +651,10 @@ func (s *SFXService) generateElevenLabsForTag(ctx context.Context, tenantID uint
 	ossKey := fmt.Sprintf("sfx/video_%d/shot_%d_%s.mp3", shot.VideoID, shot.ID, tagHash)
 
 	// 优先：通过 AIService 从 DB 加载 elevenlabs-sfx 密钥
-	logger.Printf("[SFXService] generateElevenLabsForTag: tenantID=%d aiSvcNil=%v tag=%q", tenantID, s.aiSvc == nil, item.Tag)
 	if s.aiSvc != nil {
 		rawURL, d, dbErr := s.aiSvc.GenerateSFXWithProvider(ctx, tenantID, "elevenlabs-sfx", prompt, dur)
-		logger.Printf("[SFXService] generateElevenLabsForTag: GenerateSFXWithProvider returned url=%q err=%v", rawURL, dbErr)
 		if dbErr != nil {
 			logger.Printf("[SFXService] generateElevenLabsForTag: DB path failed (tenant=%d): %v", tenantID, dbErr)
-		} else if rawURL == "" {
-			logger.Printf("[SFXService] generateElevenLabsForTag: DB path returned empty URL with no error (tenant=%d)", tenantID)
 		}
 		if dbErr == nil && rawURL != "" {
 			// ElevenLabsSFXProvider 返回 file:// 临时路径，需上传到 OSS
@@ -676,7 +672,7 @@ func (s *SFXService) generateElevenLabsForTag(ctx context.Context, tenantID uint
 
 	// 降级：使用环境变量 ELEVENLABS_API_KEY 直接调用 HTTP
 	if s.elevenKey == "" {
-		return "", 0, fmt.Errorf("elevenlabs key not configured (aiSvcNil=%v)", s.aiSvc == nil)
+		return "", 0, fmt.Errorf("elevenlabs key not configured")
 	}
 	if s.storageSvc == nil {
 		return "", 0, fmt.Errorf("storage not configured for elevenlabs upload")
