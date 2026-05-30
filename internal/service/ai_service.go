@@ -1476,9 +1476,12 @@ func (s *AIService) GenerateSFXWithProvider(ctx context.Context, tenantID uint, 
 func (s *AIService) loadDBProviderByName(tenantID uint, name string) (ai.AIProvider, error) {
 	providers, err := s.providerRepo.ListByTenant(tenantID)
 	if err != nil {
+		logger.Printf("loadDBProviderByName: ListByTenant(tenant=%d) error: %v", tenantID, err)
 		return nil, err
 	}
+	logger.Printf("loadDBProviderByName: tenant=%d name=%q total_providers=%d", tenantID, name, len(providers))
 	for _, p := range providers {
+		logger.Printf("loadDBProviderByName: checking provider name=%q isActive=%v hasKey=%v", p.Name, p.IsActive, strings.TrimSpace(p.APIKey) != "")
 		if !p.IsActive || !strings.EqualFold(p.Name, name) {
 			continue
 		}
