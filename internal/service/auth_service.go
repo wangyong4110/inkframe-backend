@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,19 +13,24 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/middleware"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
 // AuthService 认证服务
 type AuthService struct {
-	db         *gorm.DB
-	userRepo   *repository.UserRepository
-	tenantRepo *repository.TenantRepository
-	tuRepo     *repository.TenantUserRepository
-	jwtSecret  string
-	jwtExpiry  time.Duration
-	smsService *SMSService
+	db          *gorm.DB
+	userRepo    *repository.UserRepository
+	tenantRepo  *repository.TenantRepository
+	tuRepo      *repository.TenantUserRepository
+	jwtSecret   string
+	jwtExpiry   time.Duration
+	smsService  *SMSService
+	tokenRepo   *repository.UserTokenRepository
+	rdb         *redis.Client
+	emailSender EmailSender
+	appBaseURL  string
 }
 
 func NewAuthService(
@@ -48,6 +54,30 @@ func NewAuthService(
 // WithSMSService 注入短信服务（可选）
 func (s *AuthService) WithSMSService(sms *SMSService) *AuthService {
 	s.smsService = sms
+	return s
+}
+
+// WithTokenRepo 注入 UserToken 仓库（密码重置 & 邮箱验证）
+func (s *AuthService) WithTokenRepo(r *repository.UserTokenRepository) *AuthService {
+	s.tokenRepo = r
+	return s
+}
+
+// WithRedis 注入 Redis 客户端（可选，用于 JWT 黑名单）
+func (s *AuthService) WithRedis(rdb *redis.Client) *AuthService {
+	s.rdb = rdb
+	return s
+}
+
+// WithEmailSender 注入邮件发送服务（可选）
+func (s *AuthService) WithEmailSender(sender EmailSender) *AuthService {
+	s.emailSender = sender
+	return s
+}
+
+// WithAppBaseURL 设置应用前端基础 URL（用于生成重置/验证链接）
+func (s *AuthService) WithAppBaseURL(url string) *AuthService {
+	s.appBaseURL = url
 	return s
 }
 
@@ -185,19 +215,32 @@ func (s *AuthService) RefreshToken(tokenStr string) (*AuthResponse, error) {
 		return nil, errors.New("invalid or expired token")
 	}
 
+	// Check if this JTI is blacklisted (logged out)
+	if s.rdb != nil && claims.JTI != "" {
+		blacklistKey := "jwt:blacklist:" + claims.JTI
+		ctx := context.Background()
+		exists, err := s.rdb.Exists(ctx, blacklistKey).Result()
+		if err == nil && exists > 0 {
+			return nil, fmt.Errorf("token has been revoked")
+		}
+	}
+
 	return s.signToken(claims.UserID, claims.TenantID, claims.Role)
 }
 
 // signToken 生成JWT令牌
 func (s *AuthService) signToken(userID, tenantID uint, role string) (*AuthResponse, error) {
 	expiresAt := time.Now().Add(s.jwtExpiry)
+	jti := uuid.New().String()
 	claims := &middleware.JWTClaims{
 		UserID:   userID,
 		TenantID: tenantID,
 		Role:     role,
+		JTI:      jti,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),
+			ID:        jti,
 		},
 	}
 
@@ -222,6 +265,54 @@ func (s *AuthService) signToken(userID, tenantID uint, role string) (*AuthRespon
 	}, nil
 }
 
+// Logout 使 Token 立即失效（将 jti 写入 Redis 黑名单，TTL = token 剩余有效期）
+// 若 Redis 未配置或 token 无 jti，则安全静默（不返回错误，客户端清除 token 即可）。
+func (s *AuthService) Logout(tokenStr string) error {
+	if tokenStr == "" {
+		return nil
+	}
+	claims := &middleware.JWTClaims{}
+	_, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
+		if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, jwt.ErrSignatureInvalid
+		}
+		return []byte(s.jwtSecret), nil
+	})
+	// 即使 token 已过期，ParseWithClaims 也会填充 claims；只要能解出 jti 即可加黑名单
+	if err != nil && claims.RegisteredClaims.ID == "" && claims.JTI == "" {
+		// 无法解析，直接忽略（过期 token 或格式错误）
+		return nil
+	}
+
+	jti := claims.JTI
+	if jti == "" {
+		jti = claims.RegisteredClaims.ID
+	}
+	if jti == "" {
+		return nil
+	}
+
+	if s.rdb == nil {
+		return nil
+	}
+
+	ttl := time.Duration(0)
+	if claims.ExpiresAt != nil {
+		remaining := time.Until(claims.ExpiresAt.Time)
+		if remaining > 0 {
+			ttl = remaining
+		}
+	}
+
+	ctx := context.Background()
+	if ttl > 0 {
+		s.rdb.Set(ctx, "jwt:blacklist:"+jti, "1", ttl)
+	} else {
+		// token 已过期，无需写入黑名单
+	}
+	return nil
+}
+
 // getDefaultTenantUser 获取用户默认租户关联
 func (s *AuthService) getDefaultTenantUser(userID uint) (*model.TenantUser, error) {
 	return s.tuRepo.GetFirstByUser(userID)
@@ -239,6 +330,10 @@ func (s *AuthService) UpdateProfile(userID uint, nickname, email, avatar string)
 		updates["nickname"] = nickname
 	}
 	if email != "" {
+		// Ensure the new email is not already taken by another user.
+		if existing, err := s.userRepo.GetByEmail(email); err == nil && existing.ID != userID {
+			return nil, errors.New("email already in use by another account")
+		}
 		updates["email"] = email
 	}
 	if avatar != "" {
@@ -251,6 +346,20 @@ func (s *AuthService) UpdateProfile(userID uint, nickname, email, avatar string)
 		return nil, err
 	}
 	return s.userRepo.GetByID(userID)
+}
+
+// DeleteAccount 注销账号：验证密码后软删除用户记录。
+func (s *AuthService) DeleteAccount(userID uint, password string) error {
+	user, err := s.userRepo.GetByID(userID)
+	if err != nil {
+		return err
+	}
+	if user.Password != "" {
+		if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)); err != nil {
+			return errors.New("password is incorrect")
+		}
+	}
+	return s.userRepo.Delete(userID)
 }
 
 // ChangePassword 修改密码
@@ -295,45 +404,56 @@ func (s *AuthService) RegisterWithPhone(phone, code, nickname, tenantName string
 	}
 	username := "phone_" + phone
 
-	user := &model.User{
-		UUID:     uuid.New().String(),
-		Username: username,
-		Email:    phone + "@phone.local",
-		Phone:    phone,
-		Password: string(hashed),
-		Nickname: nickname,
-		Status:   "active",
-		Role:     "user",
-	}
-	if err := s.userRepo.Create(user); err != nil {
-		return nil, fmt.Errorf("failed to create user: %w", err)
-	}
-
 	if tenantName == "" {
 		tenantName = nickname + "的空间"
 	}
-	tenant := &model.Tenant{
-		Name:   tenantName,
-		Code:   uuid.New().String()[:8],
-		Plan:   "free",
-		Status: "active",
-	}
-	if err := s.tenantRepo.Create(tenant); err != nil {
-		return nil, fmt.Errorf("failed to create tenant: %w", err)
-	}
 
-	tu := &model.TenantUser{
-		TenantID: tenant.ID,
-		UserID:   user.ID,
-		Role:     "owner",
-		Status:   "active",
-	}
-	if err := s.tuRepo.Create(tu); err != nil {
-		return nil, fmt.Errorf("failed to create tenant user: %w", err)
-	}
-	_ = s.tenantRepo.IncrUsedUsers(tenant.ID)
+	var user *model.User
+	var tenantID uint
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		u := &model.User{
+			UUID:     uuid.New().String(),
+			Username: username,
+			Email:    phone + "@phone.local",
+			Phone:    phone,
+			Password: string(hashed),
+			Nickname: nickname,
+			Status:   "active",
+			Role:     "user",
+		}
+		if err := tx.Create(u).Error; err != nil {
+			return fmt.Errorf("failed to create user: %w", err)
+		}
+		user = u
 
-	return s.signToken(user.ID, tenant.ID, "owner")
+		t := &model.Tenant{
+			Name:   tenantName,
+			Code:   uuid.New().String()[:8],
+			Plan:   "free",
+			Status: "active",
+		}
+		if err := tx.Create(t).Error; err != nil {
+			return fmt.Errorf("failed to create tenant: %w", err)
+		}
+		tenantID = t.ID
+
+		tu := &model.TenantUser{
+			TenantID: t.ID,
+			UserID:   u.ID,
+			Role:     "owner",
+			Status:   "active",
+		}
+		if err := tx.Create(tu).Error; err != nil {
+			return fmt.Errorf("failed to create tenant user: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	_ = s.tenantRepo.IncrUsedUsers(tenantID)
+
+	return s.signToken(user.ID, tenantID, "owner")
 }
 
 // LoginWithPhone 手机号验证码登录
@@ -444,4 +564,127 @@ func (s *AuthService) LoginWithOAuth(info *OAuthUserInfo) (*AuthResponse, error)
 	_ = s.tenantRepo.IncrUsedUsers(tenant.ID)
 
 	return s.signToken(newUser.ID, tenant.ID, "owner")
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 密码重置流程
+// ─────────────────────────────────────────────────────────────────────
+
+// RequestPasswordReset 请求密码重置，生成 30 分钟有效的一次性 token。
+// 无论邮箱是否存在，均返回 nil 错误（防止用户枚举）。
+// 生产环境应在此处发送重置邮件；当前仅返回 token 供调试使用。
+func (s *AuthService) RequestPasswordReset(email string) (token string, err error) {
+	user, err := s.userRepo.GetByEmail(email)
+	if err != nil {
+		// 用户不存在：静默返回（防枚举）
+		return "", nil
+	}
+	if s.tokenRepo == nil {
+		return "", fmt.Errorf("token repository not configured")
+	}
+	// 先删除该用户之前的同类 token
+	_ = s.tokenRepo.DeleteByUser(user.ID, "reset_password")
+
+	rawToken := uuid.New().String()
+	t := &model.UserToken{
+		UserID:    user.ID,
+		Token:     rawToken,
+		TokenType: "reset_password",
+		ExpiresAt: time.Now().Add(30 * time.Minute),
+	}
+	if err := s.tokenRepo.Create(t); err != nil {
+		return "", err
+	}
+	baseURL := s.appBaseURL
+	if baseURL == "" {
+		baseURL = "http://localhost:3000"
+	}
+	resetURL := fmt.Sprintf("%s/reset-password?token=%s", baseURL, rawToken)
+	subject := "【InkFrame】密码重置链接"
+	body := fmt.Sprintf("请点击以下链接重置您的密码（30分钟内有效）：\n\n%s\n\n如非本人操作请忽略此邮件。", resetURL)
+	if s.emailSender != nil {
+		if err := s.emailSender.SendEmail(user.Email, subject, body); err != nil {
+			logger.Printf("RequestPasswordReset: send email failed: %v", err)
+		}
+	}
+	return rawToken, nil
+}
+
+// ResetPassword 使用有效 token 设置新密码。
+func (s *AuthService) ResetPassword(token, newPassword string) error {
+	if s.tokenRepo == nil {
+		return fmt.Errorf("token repository not configured")
+	}
+	t, err := s.tokenRepo.FindValid(token, "reset_password")
+	if err != nil {
+		return fmt.Errorf("invalid or expired reset token")
+	}
+	hashed, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	if err := s.userRepo.UpdatePassword(t.UserID, string(hashed)); err != nil {
+		return err
+	}
+	return s.tokenRepo.MarkUsed(t.ID)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 邮箱验证流程
+// ─────────────────────────────────────────────────────────────────────
+
+// SendEmailVerification 为指定用户生成 24 小时有效的邮箱验证 token。
+// 生产环境应在此处发送验证邮件；当前仅返回 token 供调试使用。
+func (s *AuthService) SendEmailVerification(userID uint) (token string, err error) {
+	if s.tokenRepo == nil {
+		return "", fmt.Errorf("token repository not configured")
+	}
+	// 先删除该用户之前的同类 token
+	_ = s.tokenRepo.DeleteByUser(userID, "verify_email")
+
+	rawToken := uuid.New().String()
+	t := &model.UserToken{
+		UserID:    userID,
+		Token:     rawToken,
+		TokenType: "verify_email",
+		ExpiresAt: time.Now().Add(24 * time.Hour),
+	}
+	if err := s.tokenRepo.Create(t); err != nil {
+		return "", err
+	}
+	user, err := s.userRepo.GetByID(userID)
+	if err != nil {
+		logger.Printf("SendEmailVerification: get user %d failed: %v", userID, err)
+	} else {
+		baseURL := s.appBaseURL
+		if baseURL == "" {
+			baseURL = "http://localhost:3000"
+		}
+		verifyURL := fmt.Sprintf("%s/verify-email?token=%s", baseURL, rawToken)
+		subject := "【InkFrame】邮箱验证"
+		body := fmt.Sprintf("请点击以下链接验证您的邮箱（24小时内有效）：\n\n%s", verifyURL)
+		if s.emailSender != nil {
+			if err := s.emailSender.SendEmail(user.Email, subject, body); err != nil {
+				logger.Printf("SendEmailVerification: send email failed: %v", err)
+			}
+		}
+	}
+	return rawToken, nil
+}
+
+// VerifyEmail 使用有效 token 将用户邮箱标记为已验证。
+func (s *AuthService) VerifyEmail(token string) error {
+	if s.tokenRepo == nil {
+		return fmt.Errorf("token repository not configured")
+	}
+	t, err := s.tokenRepo.FindValid(token, "verify_email")
+	if err != nil {
+		return fmt.Errorf("invalid or expired verification token")
+	}
+	now := time.Now()
+	if err := s.db.Model(&model.User{}).Where("id = ?", t.UserID).
+		Update("email_verified_at", now).Error; err != nil {
+		return err
+	}
+	return s.tokenRepo.MarkUsed(t.ID)
 }

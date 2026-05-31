@@ -142,3 +142,40 @@ func (r *ItemRepository) DeleteChapterItemsByItem(itemID uint) error {
 	return r.db.Where("item_id = ?", itemID).Delete(&model.ChapterItem{}).Error
 }
 
+// SkillRepository 技能仓库
+type SkillRepository struct {
+	db *gorm.DB
+}
+
+func NewSkillRepository(db *gorm.DB) *SkillRepository {
+	return &SkillRepository{db: db}
+}
+
+func (r *SkillRepository) Create(skill *model.Skill) error {
+	return r.db.Create(skill).Error
+}
+
+func (r *SkillRepository) GetByID(id uint) (*model.Skill, error) {
+	var skill model.Skill
+	if err := r.db.First(&skill, id).Error; err != nil {
+		return nil, err
+	}
+	return &skill, nil
+}
+
+func (r *SkillRepository) List(novelID uint) ([]*model.Skill, error) {
+	var skills []*model.Skill
+	if err := r.db.Where("novel_id = ?", novelID).Order("created_at ASC").Find(&skills).Error; err != nil {
+		return nil, err
+	}
+	return skills, nil
+}
+
+func (r *SkillRepository) Update(skill *model.Skill) error {
+	return r.db.Save(skill).Error
+}
+
+func (r *SkillRepository) Delete(id uint) error {
+	return r.db.Delete(&model.Skill{}, id).Error
+}
+

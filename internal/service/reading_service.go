@@ -2,6 +2,8 @@ package service
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -11,11 +13,12 @@ var ErrChapterCommentPermission = errors.New("permission denied")
 
 // ReadingService 管理章节点赞、章节评论、阅读进度与已读记录
 type ReadingService struct {
-	chapterLikeRepo    *repository.ChapterLikeRepository
-	chapterCommentRepo *repository.ChapterCommentRepository
+	chapterLikeRepo     *repository.ChapterLikeRepository
+	chapterCommentRepo  *repository.ChapterCommentRepository
 	readingProgressRepo *repository.ReadingProgressRepository
-	chapterReadRepo    *repository.ChapterReadRecordRepository
-	chapterRepo        *repository.ChapterRepository
+	chapterReadRepo     *repository.ChapterReadRecordRepository
+	chapterRepo         *repository.ChapterRepository
+	novelRepo           *repository.NovelRepository
 }
 
 func NewReadingService(
@@ -26,17 +29,38 @@ func NewReadingService(
 	chapterRepo *repository.ChapterRepository,
 ) *ReadingService {
 	return &ReadingService{
-		chapterLikeRepo:    chapterLikeRepo,
-		chapterCommentRepo: chapterCommentRepo,
+		chapterLikeRepo:     chapterLikeRepo,
+		chapterCommentRepo:  chapterCommentRepo,
 		readingProgressRepo: readingProgressRepo,
-		chapterReadRepo:    chapterReadRepo,
-		chapterRepo:        chapterRepo,
+		chapterReadRepo:     chapterReadRepo,
+		chapterRepo:         chapterRepo,
 	}
+}
+
+// WithNovelRepo 注入小说仓库（用于租户隔离校验）
+func (s *ReadingService) WithNovelRepo(repo *repository.NovelRepository) *ReadingService {
+	s.novelRepo = repo
+	return s
+}
+
+// verifyNovelTenant 验证小说属于指定租户（tenantID=0 时跳过校验）
+func (s *ReadingService) verifyNovelTenant(novelID, tenantID uint) error {
+	if s.novelRepo == nil || tenantID == 0 {
+		return nil
+	}
+	novel, err := s.novelRepo.GetByID(novelID)
+	if err != nil || novel.TenantID != tenantID {
+		return fmt.Errorf("novel not found or access denied")
+	}
+	return nil
 }
 
 // ─── Chapter Like ─────────────────────────────────────────────────────────────
 
-func (s *ReadingService) ToggleChapterLike(chapterID, novelID, userID uint) (liked bool, likeCount int, err error) {
+func (s *ReadingService) ToggleChapterLike(chapterID, novelID, userID, tenantID uint) (liked bool, likeCount int, err error) {
+	if err = s.verifyNovelTenant(novelID, tenantID); err != nil {
+		return
+	}
 	return s.chapterLikeRepo.Toggle(chapterID, novelID, userID)
 }
 
@@ -57,7 +81,19 @@ func (s *ReadingService) ListChapterComments(chapterID uint, page, size int) ([]
 	return s.chapterCommentRepo.ListByChapter(chapterID, page, size)
 }
 
-func (s *ReadingService) AddChapterComment(chapterID, novelID, userID uint, nickname, content string, parentID *uint) (*model.ChapterComment, error) {
+const maxCommentLength = 2000 // characters
+
+func (s *ReadingService) AddChapterComment(chapterID, novelID, userID, tenantID uint, nickname, content string, parentID *uint) (*model.ChapterComment, error) {
+	if err := s.verifyNovelTenant(novelID, tenantID); err != nil {
+		return nil, err
+	}
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil, fmt.Errorf("comment content cannot be empty")
+	}
+	if len([]rune(content)) > maxCommentLength {
+		return nil, fmt.Errorf("comment too long: max %d characters", maxCommentLength)
+	}
 	c := &model.ChapterComment{
 		ChapterID: chapterID,
 		NovelID:   novelID,
@@ -75,10 +111,12 @@ func (s *ReadingService) AddChapterComment(chapterID, novelID, userID uint, nick
 func (s *ReadingService) DeleteChapterComment(commentID, userID uint) error {
 	c, err := s.chapterCommentRepo.GetByID(commentID)
 	if err != nil {
-		return err
+		// Return opaque error to not expose existence to non-owners
+		return fmt.Errorf("not found")
 	}
 	if c.UserID != userID {
-		return ErrChapterCommentPermission
+		// Return opaque error: don't expose that the comment exists
+		return fmt.Errorf("not found")
 	}
 	return s.chapterCommentRepo.Delete(commentID)
 }

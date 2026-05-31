@@ -18,6 +18,9 @@ func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
 	shotID, ok := parseID(c, "shot_id")
 	if !ok {
 		return
@@ -75,6 +78,9 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
 
 	var req model.BatchGenerateShotsRequest
 	if !bindJSON(c, &req) {
@@ -127,6 +133,9 @@ func (h *VideoHandler) BatchGenerateShotImages(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
 
 	var req model.BatchGenerateShotsRequest
 	if !bindJSON(c, &req) {
@@ -177,6 +186,9 @@ func (h *VideoHandler) BatchGenerateShotClips(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
 
 	var req model.BatchGenerateShotsRequest
 	if !bindJSON(c, &req) {
@@ -223,8 +235,11 @@ func (h *VideoHandler) BatchGenerateShotClips(c *gin.Context) {
 // RefineShotImage POST /videos/:id/shots/:shot_id/refine-image
 // 基于用户修改建议重新生成分镜图片（同步，直接返回新图片 URL）。
 func (h *VideoHandler) RefineShotImage(c *gin.Context) {
-	_, ok := parseID(c, "id")
+	videoID, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
 		return
 	}
 	shotID, ok := parseID(c, "shot_id")
@@ -468,6 +483,13 @@ func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
 func (h *VideoHandler) UpdateShotSFXTags(c *gin.Context) {
 	if h.sfxSvc == nil {
 		respondErr(c, http.StatusNotImplemented, "SFX service not configured")
+		return
+	}
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
 		return
 	}
 	shotID, ok := parseID(c, "shot_id")

@@ -17,9 +17,14 @@ func NewTenantHandler(tenantService *service.TenantService) *TenantHandler {
 	return &TenantHandler{tenantService: tenantService}
 }
 
-// ListTenants 获取租户列表
+// ListTenants 获取租户列表（仅 admin 可查看所有租户）
 // GET /api/v1/tenants
 func (h *TenantHandler) ListTenants(c *gin.Context) {
+	if c.GetString("user_role") != "admin" {
+		respondErr(c, http.StatusForbidden, "forbidden: admin only")
+		return
+	}
+
 	p := parsePagination(c)
 
 	tenants, total, err := h.tenantService.ListTenants(p.Page, p.PageSize)
@@ -42,6 +47,11 @@ func (h *TenantHandler) ListTenants(c *gin.Context) {
 func (h *TenantHandler) GetTenant(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+
+	if getTenantID(c) != id && c.GetString("user_role") != "admin" {
+		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
 
@@ -110,6 +120,11 @@ func (h *TenantHandler) UpdateTenant(c *gin.Context) {
 		return
 	}
 
+	if getTenantID(c) != id && c.GetString("user_role") != "admin" {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	tenant, err := h.tenantService.GetTenant(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "tenant not found")
@@ -162,11 +177,16 @@ func (h *TenantHandler) UpdateTenant(c *gin.Context) {
 	respondOK(c, tenant)
 }
 
-// DeleteTenant 删除租户
+// DeleteTenant 删除租户（需要 admin 角色或本租户成员）
 // DELETE /api/v1/tenants/:id
 func (h *TenantHandler) DeleteTenant(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+
+	if c.GetString("user_role") != "admin" && getTenantID(c) != id {
+		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
 
@@ -206,6 +226,11 @@ func (h *TenantHandler) ListMembers(c *gin.Context) {
 		return
 	}
 
+	if getTenantID(c) != id && c.GetString("user_role") != "admin" {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	members, err := h.tenantService.ListMembers(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
@@ -220,6 +245,11 @@ func (h *TenantHandler) ListMembers(c *gin.Context) {
 func (h *TenantHandler) AddMember(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+
+	if getTenantID(c) != id && c.GetString("user_role") != "admin" {
+		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
 
@@ -254,6 +284,11 @@ func (h *TenantHandler) RemoveMember(c *gin.Context) {
 	}
 	userId, ok := parseID(c, "user_id")
 	if !ok {
+		return
+	}
+
+	if getTenantID(c) != id && c.GetString("user_role") != "admin" {
+		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
 

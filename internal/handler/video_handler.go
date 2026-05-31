@@ -370,6 +370,40 @@ func (h *VideoHandler) UnpublishVideo(c *gin.Context) {
 	respondOK(c, gin.H{"unpublished": true})
 }
 
+// GetVideoProgress GET /api/v1/videos/:id/progress
+// Returns generation progress (0-100) based on how many shots have an image URL.
+func (h *VideoHandler) GetVideoProgress(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	video, ok := h.getVideoForTenant(c, uint(id))
+	if !ok {
+		return
+	}
+
+	shots, err := h.videoService.GetStoryboard(video.ID)
+	if err != nil || len(shots) == 0 {
+		respondOK(c, gin.H{"progress": 0, "status": video.Status})
+		return
+	}
+
+	var done int
+	for _, s := range shots {
+		if s.ImageURL != "" {
+			done++
+		}
+	}
+	progress := done * 100 / len(shots)
+	respondOK(c, gin.H{
+		"progress":    progress,
+		"done_shots":  done,
+		"total_shots": len(shots),
+		"status":      video.Status,
+	})
+}
+
 // GenerateStoryboard 生成分镜（异步任务）
 // POST /api/v1/videos/:id/storyboard/generate
 // 立即返回 202 + task_id，轮询 GET /:id/storyboard/generate/:task_id 获取结果

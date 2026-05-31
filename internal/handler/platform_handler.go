@@ -600,7 +600,7 @@ func (h *PlatformHandler) ToggleChapterLike(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "chapter not found")
 		return
 	}
-	liked, likeCount, err := h.readingService.ToggleChapterLike(chapter.ID, uint(novelID), uid)
+	liked, likeCount, err := h.readingService.ToggleChapterLike(chapter.ID, uint(novelID), uid, getTenantID(c))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -687,7 +687,7 @@ func (h *PlatformHandler) AddChapterComment(c *gin.Context) {
 			nickname = s
 		}
 	}
-	comment, err := h.readingService.AddChapterComment(chapter.ID, uint(novelID), uid, nickname, req.Content, req.ParentID)
+	comment, err := h.readingService.AddChapterComment(chapter.ID, uint(novelID), uid, getTenantID(c), nickname, req.Content, req.ParentID)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return

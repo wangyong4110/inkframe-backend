@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -22,10 +25,11 @@ func NewMcpService(db *gorm.DB) *McpService {
 	return &McpService{db: db}
 }
 
-// ListTools 获取所有 MCP 工具
-func (s *McpService) ListTools() ([]*model.McpTool, error) {
+// ListTools 获取 MCP 工具列表（租户隔离）：返回本租户工具 + 系统工具（tenant_id=0）。
+func (s *McpService) ListTools(tenantID uint) ([]*model.McpTool, error) {
 	var tools []*model.McpTool
-	if err := s.db.Order("id asc").Find(&tools).Error; err != nil {
+	if err := s.db.Where("tenant_id = ? OR tenant_id = 0", tenantID).
+		Order("id asc").Find(&tools).Error; err != nil {
 		return nil, err
 	}
 	return tools, nil
@@ -33,6 +37,9 @@ func (s *McpService) ListTools() ([]*model.McpTool, error) {
 
 // CreateTool 创建 MCP 工具
 func (s *McpService) CreateTool(req *model.CreateMcpToolRequest) (*model.McpTool, error) {
+	if err := validateMcpEndpoint(req.Endpoint); err != nil {
+		return nil, fmt.Errorf("endpoint validation failed: %w", err)
+	}
 	headersJSON, err := marshalJSON(req.Headers)
 	if err != nil {
 		return nil, fmt.Errorf("invalid headers: %w", err)
@@ -70,6 +77,16 @@ func (s *McpService) UpdateTool(id uint, req *model.UpdateMcpToolRequest) (*mode
 	var tool model.McpTool
 	if err := s.db.First(&tool, id).Error; err != nil {
 		return nil, err
+	}
+	// Fix 5: 系统内置工具不可修改
+	if tool.IsSystem {
+		return nil, fmt.Errorf("system tools cannot be modified")
+	}
+	// Fix 2: 若请求中包含新 endpoint，校验 SSRF
+	if req.Endpoint != "" {
+		if err := validateMcpEndpoint(req.Endpoint); err != nil {
+			return nil, fmt.Errorf("endpoint validation failed: %w", err)
+		}
 	}
 	if req.DisplayName != "" {
 		tool.DisplayName = req.DisplayName
@@ -133,10 +150,10 @@ func (s *McpService) TestTool(id uint) (map[string]interface{}, error) {
 		"latency_ms": 0,
 	}
 
-	// 对 HTTP/SSE 工具执行简单的 GET 探测
-	if tool.TransportType == "http" || tool.TransportType == "sse" {
+	// 对 HTTP 工具执行简单的 GET 探测
+	if tool.TransportType == "http" {
 		client := &http.Client{Timeout: time.Duration(tool.Timeout) * time.Second}
-		resp, err := client.Get(tool.Endpoint)
+		resp, err := client.Get(tool.Endpoint) //nolint:gosec
 		latency := time.Since(start).Milliseconds()
 		result["latency_ms"] = latency
 		if err != nil {
@@ -148,6 +165,27 @@ func (s *McpService) TestTool(id uint) (map[string]interface{}, error) {
 		if resp.StatusCode >= 500 {
 			result["status"] = "error"
 			result["error"] = fmt.Sprintf("server returned HTTP %d", resp.StatusCode)
+		}
+		return result, nil
+	}
+
+	// 对 SSE 工具验证端点返回 text/event-stream Content-Type
+	if tool.TransportType == "sse" {
+		client := &http.Client{Timeout: time.Duration(tool.Timeout) * time.Second}
+		resp, err := client.Get(tool.Endpoint) //nolint:gosec
+		latency := time.Since(start).Milliseconds()
+		result["latency_ms"] = latency
+		if err != nil {
+			result["status"] = "error"
+			result["error"] = fmt.Sprintf("SSE endpoint unreachable: %s", err.Error())
+			return result, nil
+		}
+		defer resp.Body.Close()
+		ct := resp.Header.Get("Content-Type")
+		if !strings.Contains(ct, "text/event-stream") {
+			result["status"] = "error"
+			result["error"] = fmt.Sprintf("SSE endpoint returned wrong Content-Type: %s (expected text/event-stream)", ct)
+			return result, nil
 		}
 		return result, nil
 	}
@@ -228,6 +266,21 @@ func (s *McpService) GetByName(name string) (*model.McpTool, error) {
 	return &tool, nil
 }
 
+// containsPrivateURL checks whether a JSON string contains references to private/internal URLs.
+func containsPrivateURL(s string) bool {
+	privatePatterns := []string{
+		"localhost", "127.0.0.1", "0.0.0.0", "169.254.", "10.", "172.16.", "192.168.",
+		"::1", "metadata.google", "169.254.169.254",
+	}
+	lower := strings.ToLower(s)
+	for _, p := range privatePatterns {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
 // InvokeTool 调用指定名称的 MCP 工具（向其 Endpoint 发送 POST 请求）
 // params 以 JSON 形式作为请求体发送，响应 JSON 解析后作为 output 返回。
 // 若工具未启用（is_active=false）则返回错误。
@@ -243,10 +296,16 @@ func (s *McpService) InvokeTool(ctx context.Context, toolName string, params map
 		return nil, fmt.Errorf("mcp tool %q has no endpoint configured", toolName)
 	}
 
-	reqBody, err := json.Marshal(params)
-	if err != nil {
-		return nil, fmt.Errorf("mcp tool %q: marshal params: %w", toolName, err)
+	// Validate params: max size, no internal URLs (SSRF protection)
+	paramsJSON, err := json.Marshal(params)
+	if err != nil || len(paramsJSON) > 64*1024 { // 64KB max
+		return nil, fmt.Errorf("params too large or invalid")
 	}
+	if containsPrivateURL(string(paramsJSON)) {
+		return nil, fmt.Errorf("params contain disallowed URLs")
+	}
+
+	reqBody := paramsJSON
 
 	timeout := time.Duration(tool.Timeout) * time.Second
 	if timeout <= 0 {
@@ -291,6 +350,41 @@ func (s *McpService) InvokeTool(ctx context.Context, toolName string, params map
 		return nil, fmt.Errorf("mcp tool %q: parse response: %w", toolName, err)
 	}
 	return output, nil
+}
+
+// validateMcpEndpoint 验证 MCP 工具 endpoint 防止 SSRF 攻击。
+// stdio 工具 endpoint 为空时跳过检查；HTTP/SSE 工具必须使用外网地址。
+func validateMcpEndpoint(endpoint string) error {
+	if endpoint == "" {
+		return nil // stdio 模式无 endpoint，跳过
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("invalid endpoint URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("only http/https endpoints are allowed, got %q", u.Scheme)
+	}
+	host := u.Hostname()
+	ip := net.ParseIP(host)
+	if ip != nil {
+		privateRanges := []string{
+			"10.", "172.16.", "172.17.", "172.18.", "172.19.", "172.20.",
+			"172.21.", "172.22.", "172.23.", "172.24.", "172.25.", "172.26.",
+			"172.27.", "172.28.", "172.29.", "172.30.", "172.31.",
+			"192.168.", "127.", "169.254.", "::1", "fc", "fd",
+		}
+		ipStr := ip.String()
+		for _, prefix := range privateRanges {
+			if strings.HasPrefix(ipStr, prefix) {
+				return fmt.Errorf("requests to private/internal IP addresses are not allowed")
+			}
+		}
+	}
+	if host == "localhost" || host == "0.0.0.0" {
+		return fmt.Errorf("requests to localhost are not allowed")
+	}
+	return nil
 }
 
 // marshalJSON 将 map 序列化为 JSON 字符串；nil map 返回空字符串

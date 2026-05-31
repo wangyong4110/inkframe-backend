@@ -154,17 +154,21 @@ func (s *ModelService) GetProvider(id uint, tenantID uint) (*model.ModelProvider
 	return s.providerRepo.GetByIDAndTenant(id, tenantID)
 }
 
-// suitableTasksForProviderType returns the JSON suitable_tasks array for a provider type.
+// suitableTasksForProviderType returns the suitable_tasks JSON string for a provider type.
 func suitableTasksForProviderType(providerType string) string {
 	switch strings.ToLower(providerType) {
 	case "image":
 		return `["image_gen"]`
+	case "img2img":
+		return `["img2img_gen"]`
 	case "video":
 		return `["video_gen"]`
 	case "embedding":
 		return `["embedding"]`
 	case "voice", "tts":
 		return `["voice_gen"]`
+	case "sfx":
+		return `["sfx_gen"]`
 	default: // "llm" and anything unrecognised
 		return `["chapter"]`
 	}
@@ -176,7 +180,7 @@ func (s *ModelService) seedProviderModel(provider *model.ModelProvider) {
 		return
 	}
 	tasks := suitableTasksForProviderType(provider.Type)
-	existing, _ := s.modelRepo.List(&provider.ID)
+	existing, _ := s.modelRepo.List(&provider.ID, 0)
 	for _, m := range existing {
 		if m.Name == provider.APIVersion {
 			return // already seeded
@@ -207,7 +211,7 @@ func (s *ModelService) SeedAllProviders() {
 	}
 	// One-time fix: activate any manually-created models that have is_active=true
 	// but is_available=false (created before the bug was fixed).
-	all, err := s.modelRepo.List(nil)
+	all, err := s.modelRepo.List(nil, 0)
 	if err != nil {
 		return
 	}
@@ -337,12 +341,20 @@ func (s *ModelService) TestProvider(id uint, tenantID uint) (interface{}, error)
 	return map[string]interface{}{"status": "ok", "provider_id": id}, nil
 }
 
-func (s *ModelService) ListModels(providerID *uint) (interface{}, error) {
-	models, err := s.modelRepo.List(providerID)
+func (s *ModelService) ListModels(providerID *uint, tenantID uint) (interface{}, error) {
+	models, err := s.modelRepo.List(providerID, tenantID)
 	return models, err
 }
 
-func (s *ModelService) CreateModel(req *model.CreateAIModelRequest) (*model.AIModel, error) {
+func (s *ModelService) CreateModel(req *model.CreateAIModelRequest, tenantID uint) (*model.AIModel, error) {
+	// Validate that the target provider belongs to this tenant (or is a system provider).
+	provider, err := s.providerRepo.GetByID(req.ProviderID)
+	if err != nil {
+		return nil, fmt.Errorf("provider not found: %w", err)
+	}
+	if provider.TenantID != 0 && provider.TenantID != tenantID {
+		return nil, fmt.Errorf("provider does not belong to your tenant")
+	}
 	m := &model.AIModel{
 		ProviderID:    req.ProviderID,
 		Name:          req.Name,
@@ -355,13 +367,20 @@ func (s *ModelService) CreateModel(req *model.CreateAIModelRequest) (*model.AIMo
 	return m, s.modelRepo.Create(m)
 }
 
-func (s *ModelService) UpdateModel(id uint, req *model.UpdateAIModelRequest) (*model.AIModel, error) {
+func (s *ModelService) UpdateModel(id uint, tenantID uint, req *model.UpdateAIModelRequest) (*model.AIModel, error) {
 	m, err := s.modelRepo.GetByID(id)
 	if err != nil {
 		return nil, err
 	}
+	// Verify the model's provider belongs to this tenant.
+	if m.Provider != nil && m.Provider.TenantID != 0 && m.Provider.TenantID != tenantID {
+		return nil, fmt.Errorf("model does not belong to your tenant")
+	}
 	if req.Name != "" {
 		m.Name = req.Name
+	}
+	if req.TaskTypes != "" {
+		m.SuitableTasks = req.TaskTypes
 	}
 	if req.MaxTokens != 0 {
 		m.MaxTokens = req.MaxTokens
@@ -372,7 +391,15 @@ func (s *ModelService) UpdateModel(id uint, req *model.UpdateAIModelRequest) (*m
 	return m, s.modelRepo.Update(m)
 }
 
-func (s *ModelService) DeleteModel(id uint) error {
+func (s *ModelService) DeleteModel(id uint, tenantID uint) error {
+	m, err := s.modelRepo.GetByID(id)
+	if err != nil {
+		return err
+	}
+	// Prevent deleting models that belong to another tenant.
+	if m.Provider != nil && m.Provider.TenantID != 0 && m.Provider.TenantID != tenantID {
+		return fmt.Errorf("model does not belong to your tenant")
+	}
 	return s.modelRepo.Delete(id)
 }
 
@@ -572,8 +599,8 @@ func (s *WorldviewService) GenerateWorldview(tenantID uint, novelID uint, genre 
 							prompt += fmt.Sprintf("第%d章《%s》摘要：%s\n", ch.ChapterNo, ch.Title, ch.Summary)
 						} else if ch.Content != "" {
 							content := ch.Content
-							if len(content) > 300 {
-								content = content[:300] + "..."
+							if runes := []rune(content); len(runes) > 300 {
+								content = string(runes[:300]) + "..."
 							}
 							prompt += fmt.Sprintf("第%d章《%s》内容节选：%s\n", ch.ChapterNo, ch.Title, content)
 						}

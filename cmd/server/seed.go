@@ -635,8 +635,8 @@ func seedAIModels(db *gorm.DB) {
 		if !ok {
 			continue
 		}
-		tasksJSON, _ := json.Marshal(m.tasks)
 		var aiModel model.AIModel
+		tasksJSON, _ := json.Marshal(m.tasks)
 		db.Where("provider_id = ? AND name = ?", provID, m.name).FirstOrCreate(&aiModel, model.AIModel{
 			ProviderID:    provID,
 			Name:          m.name,

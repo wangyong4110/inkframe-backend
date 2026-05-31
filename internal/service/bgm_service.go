@@ -89,6 +89,10 @@ func (s *BGMService) SelectBGM(emotion string) string {
 		emotion = "default"
 	}
 	emotion = strings.ToLower(strings.TrimSpace(emotion))
+	// Reject path traversal: emotion must be a plain filename component.
+	if strings.ContainsAny(emotion, "/\\") || strings.Contains(emotion, "..") {
+		emotion = "default"
+	}
 
 	for _, ext := range []string{".mp3", ".wav", ".m4a", ".ogg"} {
 		candidate := filepath.Join(s.bgmDir, emotion+ext)

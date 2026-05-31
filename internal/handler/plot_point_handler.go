@@ -74,7 +74,7 @@ func (h *PlotPointHandler) ExtractFromChapter(c *gin.Context) {
 		respondErr(c, http.StatusServiceUnavailable, "chapter service not configured")
 		return
 	}
-	chapter, err := h.chapterSvc.GetChapter(uint(chapterID))
+	chapter, err := h.chapterSvc.GetChapter(uint(chapterID), getTenantID(c))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "chapter not found")
 		return

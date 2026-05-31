@@ -13,12 +13,14 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/storage"
+	"gorm.io/gorm"
 )
 
 // ─── Voice Segment Types ──────────────────────────────────────────────────────
@@ -73,10 +75,6 @@ func (s *VideoService) InsertVoiceSegment(shotID uint, afterSeqNo int, input Voi
 		return nil, fmt.Errorf("segment repository not initialized")
 	}
 	newSeqNo := afterSeqNo + 1
-	// 把 seq_no >= newSeqNo 的段落全部后移 1 位
-	if err := s.segmentRepo.ShiftSeqNos(shotID, newSeqNo); err != nil {
-		return nil, err
-	}
 	seg := &model.ShotVoiceSegment{
 		ShotID:  shotID,
 		SeqNo:   newSeqNo,
@@ -84,7 +82,20 @@ func (s *VideoService) InsertVoiceSegment(shotID uint, afterSeqNo int, input Voi
 		Speaker: input.Speaker,
 		VoiceID: input.VoiceID,
 	}
-	return seg, s.segmentRepo.Create(seg)
+	// Shift + create must be atomic to avoid a corrupt seq_no sequence on partial failure.
+	err := s.segmentRepo.DB().Transaction(func(tx *gorm.DB) error {
+		if e := tx.Exec(
+			"UPDATE ink_shot_voice_segment SET seq_no = seq_no + 1 WHERE shot_id = ? AND seq_no >= ? AND deleted_at IS NULL",
+			shotID, newSeqNo,
+		).Error; e != nil {
+			return e
+		}
+		return tx.Create(seg).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return seg, nil
 }
 
 // UpdateVoiceSegment 更新段落文本/说话人/声音
@@ -379,6 +390,19 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 		defer func() { <-s.audioSem }()
 	}
 
+	// Skip if audio already generated (idempotency — prevents re-billing TTS on retry)
+	if shot.AudioPath != "" {
+		return nil
+	}
+
+	// If the shot has voice segments, delegate to segment-aware stitching logic.
+	if s.segmentRepo != nil {
+		segs, err := s.segmentRepo.ListByShotID(shot.ID)
+		if err == nil && len(segs) > 0 {
+			return s.generateShotAudioFromSegments(shot, segs, tenantID, narrationVoice)
+		}
+	}
+
 	// Determine the text to synthesize
 	text := shot.Narration
 	if text == "" {
@@ -505,6 +529,132 @@ func formatSRTTimecode(secs float64) string {
 	s := int(secs) % 60
 	ms := int((secs-float64(int(secs)))*1000 + 0.5)
 	return fmt.Sprintf("%02d:%02d:%02d,%03d", h, m, s, ms)
+}
+
+// generateShotAudioFromSegments generates TTS for each segment that lacks audio,
+// then stitches all segment audio files into a single track using ffmpeg and
+// uploads the result to storage, finally updating shot.AudioPath.
+func (s *VideoService) generateShotAudioFromSegments(shot *model.StoryboardShot, segs []*model.ShotVoiceSegment, tenantID uint, defaultVoice string) error {
+	// 1. For each segment without audio, call GenerateSegmentAudio
+	for _, seg := range segs {
+		if seg.AudioPath == "" && seg.Text != "" {
+			if err := s.GenerateSegmentAudio(seg.ID, tenantID, defaultVoice); err != nil {
+				logger.Printf("generateShotAudioFromSegments: segment %d TTS failed: %v", seg.ID, err)
+			}
+		}
+	}
+
+	// 2. Reload segments to get updated AudioPath values
+	freshSegs, err := s.segmentRepo.ListByShotID(shot.ID)
+	if err != nil || len(freshSegs) == 0 {
+		return nil
+	}
+
+	// 3. Collect local audio paths (download http URLs to temp files)
+	tmpDir, err := os.MkdirTemp("", "inkframe_seg_stitch_*")
+	if err != nil {
+		return fmt.Errorf("generateShotAudioFromSegments: mkdtemp: %w", err)
+	}
+	defer os.RemoveAll(tmpDir) //nolint:errcheck
+
+	var localPaths []string
+	for _, seg := range freshSegs {
+		if seg.AudioPath == "" {
+			continue
+		}
+		localPath, err := fetchAudioToLocal(tmpDir, seg.AudioPath, int(seg.ID))
+		if err != nil {
+			logger.Printf("generateShotAudioFromSegments: fetch segment %d audio: %v", seg.ID, err)
+			continue
+		}
+		localPaths = append(localPaths, localPath)
+	}
+	if len(localPaths) == 0 {
+		return nil
+	}
+	if len(localPaths) == 1 {
+		// Only one segment with audio — use it directly without ffmpeg
+		shot.AudioPath = freshSegs[0].AudioPath
+		shot.Duration = alignShotDurationToTTS(shot)
+		return s.storyboardRepo.Update(shot)
+	}
+
+	// 4. Stitch with ffmpeg concat
+	listFile := filepath.Join(tmpDir, "concat.txt")
+	var lines []string
+	for _, p := range localPaths {
+		lines = append(lines, fmt.Sprintf("file '%s'", p))
+	}
+	if err := os.WriteFile(listFile, []byte(strings.Join(lines, "\n")), 0600); err != nil {
+		return fmt.Errorf("generateShotAudioFromSegments: write list: %w", err)
+	}
+	stitchedPath := filepath.Join(tmpDir, fmt.Sprintf("shot_%d_stitched.mp3", shot.ID))
+	out, ffmpegErr := runFFmpegCtx(context.Background(),
+		"-y", "-f", "concat", "-safe", "0", "-i", listFile,
+		"-c", "copy", stitchedPath,
+	)
+	if ffmpegErr != nil {
+		logger.Printf("generateShotAudioFromSegments: ffmpeg failed: %v\n%s", ffmpegErr, string(out))
+		// fallback: use first segment audio
+		shot.AudioPath = freshSegs[0].AudioPath
+		return s.storyboardRepo.Update(shot)
+	}
+
+	stitchedData, err := os.ReadFile(stitchedPath)
+	if err != nil {
+		return fmt.Errorf("generateShotAudioFromSegments: read stitched: %w", err)
+	}
+
+	// 5. Upload stitched audio to persistent storage
+	audioURL := "file://" + stitchedPath
+	if s.storageSvc != nil && len(stitchedData) > 0 {
+		var novelID, chapterID uint
+		if video, e := s.videoRepo.GetByID(shot.VideoID); e == nil {
+			novelID = video.NovelID
+			if video.ChapterID != nil {
+				chapterID = *video.ChapterID
+			}
+		}
+		key := storage.BuildKey(novelID, chapterID, "audio", fmt.Sprintf("shot-%d-stitched.mp3", shot.ID))
+		if ossURL, e := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(stitchedData), int64(len(stitchedData)), "audio/mpeg"); e == nil {
+			audioURL = ossURL
+		} else {
+			logger.Printf("generateShotAudioFromSegments: OSS upload failed for shot %d: %v", shot.ID, e)
+		}
+	}
+
+	shot.AudioPath = audioURL
+	shot.Duration = alignShotDurationToTTS(shot)
+	if err := s.storyboardRepo.Update(shot); err != nil {
+		logger.Printf("generateShotAudioFromSegments: update shot %d: %v", shot.ID, err)
+	}
+	return nil
+}
+
+// fetchAudioToLocal downloads or copies an audio file to a local temp path.
+// Supports file:// paths and http/https URLs.
+func fetchAudioToLocal(dir, audioURL string, id int) (string, error) {
+	localPath := filepath.Join(dir, fmt.Sprintf("seg_%d.mp3", id))
+	if strings.HasPrefix(audioURL, "file://") {
+		data, err := os.ReadFile(strings.TrimPrefix(audioURL, "file://"))
+		if err != nil {
+			return "", err
+		}
+		return localPath, os.WriteFile(localPath, data, 0600)
+	}
+	if strings.HasPrefix(audioURL, "http://") || strings.HasPrefix(audioURL, "https://") {
+		resp, err := http.Get(audioURL) //nolint:gosec
+		if err != nil {
+			return "", err
+		}
+		defer resp.Body.Close()
+		data, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", err
+		}
+		return localPath, os.WriteFile(localPath, data, 0600)
+	}
+	return "", fmt.Errorf("unsupported URL scheme: %s", audioURL)
 }
 
 // resolveVoiceForShot 解析分镜对应角色的配音设置（voice, speed, style）。

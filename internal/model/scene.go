@@ -53,10 +53,11 @@ type KnowledgeBase struct {
 	Tags string `json:"tags" gorm:"type:text"` // JSON数组
 
 	// 关联
-	NovelID     *uint           `json:"novel_id,omitempty" gorm:"index;index:idx_kb_novel_type,priority:1"`
-	Novel       *Novel          `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
-	ReferenceID *uint           `json:"reference_id,omitempty" gorm:"index"`
-	Reference   *ReferenceNovel `json:"reference,omitempty" gorm:"foreignKey:ReferenceID"`
+	NovelID         *uint           `json:"novel_id,omitempty" gorm:"index;index:idx_kb_novel_type,priority:1"`
+	Novel           *Novel          `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
+	SourceChapterID *uint           `json:"source_chapter_id,omitempty" gorm:"index"`
+	ReferenceID     *uint           `json:"reference_id,omitempty" gorm:"index"`
+	Reference       *ReferenceNovel `json:"reference,omitempty" gorm:"foreignKey:ReferenceID"`
 
 	// 向量信息
 	VectorID   string `json:"vector_id" gorm:"size:100"`

@@ -570,10 +570,13 @@ func (s *CharacterService) ListCharacters(novelID uint) ([]*model.Character, err
 	return s.characterRepo.ListByNovel(novelID)
 }
 
-func (s *CharacterService) UpdateCharacter(id uint, req *model.UpdateCharacterRequest) (*model.Character, error) {
+func (s *CharacterService) UpdateCharacter(id, tenantID uint, req *model.UpdateCharacterRequest) (*model.Character, error) {
 	character, err := s.characterRepo.GetByID(id)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("not found")
+	}
+	if character.TenantID != tenantID {
+		return nil, fmt.Errorf("not found")
 	}
 	if req.Name != "" {
 		character.Name = req.Name
@@ -622,7 +625,14 @@ func (s *CharacterService) UpdateCharacter(id uint, req *model.UpdateCharacterRe
 	return character, s.characterRepo.Update(character)
 }
 
-func (s *CharacterService) DeleteCharacter(id uint) error {
+func (s *CharacterService) DeleteCharacter(id, tenantID uint) error {
+	char, err := s.characterRepo.GetByID(id)
+	if err != nil {
+		return fmt.Errorf("not found")
+	}
+	if char.TenantID != tenantID {
+		return fmt.Errorf("not found")
+	}
 	return s.characterRepo.Delete(id)
 }
 
@@ -1072,7 +1082,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 			}
 
 			if updateReq.FaceCloseup != "" || updateReq.ThreeViewSheet != "" {
-				if _, saveErr := s.UpdateCharacter(char.ID, updateReq); saveErr != nil {
+				if _, saveErr := s.UpdateCharacter(char.ID, char.TenantID, updateReq); saveErr != nil {
 					logger.Printf("[CharacterService] BatchGenerateImages: save char %d: %v", char.ID, saveErr)
 					charFailed = true
 				}

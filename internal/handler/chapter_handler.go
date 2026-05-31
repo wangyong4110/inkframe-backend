@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -14,10 +15,12 @@ import (
 
 // ChapterHandler 章节处理器
 type ChapterHandler struct {
-	chapterService *service.ChapterService
-	versionService *service.ChapterVersionService
-	qualityService *service.QualityControlService
-	taskSvc        *service.TaskService
+	chapterService    *service.ChapterService
+	versionService    *service.ChapterVersionService
+	qualityService    *service.QualityControlService
+	taskSvc           *service.TaskService
+	novelService      *service.NovelService
+	continuityService *service.ContinuityService
 }
 
 func NewChapterHandler(
@@ -32,6 +35,31 @@ func NewChapterHandler(
 		qualityService: qualityService,
 		taskSvc:        taskSvc,
 	}
+}
+
+// WithContinuityService injects the ContinuityService for report listing.
+func (h *ChapterHandler) WithContinuityService(cs *service.ContinuityService) *ChapterHandler {
+	h.continuityService = cs
+	return h
+}
+
+// WithNovelService injects the NovelService for novel ownership checks.
+func (h *ChapterHandler) WithNovelService(ns *service.NovelService) *ChapterHandler {
+	h.novelService = ns
+	return h
+}
+
+// checkNovelOwnership verifies the novel exists and belongs to the caller's tenant.
+// Returns true on success; writes an error response and returns false on failure.
+func (h *ChapterHandler) checkNovelOwnership(c *gin.Context, novelId uint) bool {
+	if h.novelService == nil {
+		return true // service not wired — skip check (backward-compat)
+	}
+	if _, err := h.novelService.GetNovel(novelId, getTenantID(c)); err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found")
+		return false
+	}
+	return true
 }
 
 // CreateChapter 创建章节
@@ -65,13 +93,9 @@ func (h *ChapterHandler) GetChapter(c *gin.Context) {
 		return
 	}
 
-	chapter, err := h.chapterService.GetChapter(uint(id))
+	chapter, err := h.chapterService.GetChapter(uint(id), getTenantID(c))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "chapter not found")
-		return
-	}
-	if chapter.TenantID != getTenantID(c) {
-		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
 
@@ -84,6 +108,10 @@ func (h *ChapterHandler) GetChapter(c *gin.Context) {
 func (h *ChapterHandler) ListChapters(c *gin.Context) {
 	novelId, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+
+	if !h.checkNovelOwnership(c, novelId) {
 		return
 	}
 
@@ -124,23 +152,17 @@ func (h *ChapterHandler) UpdateChapter(c *gin.Context) {
 		return
 	}
 
-	existing, err := h.chapterService.GetChapter(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "chapter not found")
-		return
-	}
-	if existing.TenantID != getTenantID(c) {
-		respondErr(c, http.StatusForbidden, "forbidden")
-		return
-	}
-
 	var req model.UpdateChapterRequest
 	if !bindJSON(c, &req) {
 		return
 	}
 
-	chapter, err := h.chapterService.UpdateChapter(uint(id), &req)
+	chapter, err := h.chapterService.UpdateChapter(uint(id), getTenantID(c), &req)
 	if err != nil {
+		if err.Error() == "not found" {
+			respondErr(c, http.StatusNotFound, "chapter not found")
+			return
+		}
 		logger.Printf("[ChapterHandler] UpdateChapter: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -157,17 +179,11 @@ func (h *ChapterHandler) DeleteChapter(c *gin.Context) {
 		return
 	}
 
-	existing, err := h.chapterService.GetChapter(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "chapter not found")
-		return
-	}
-	if existing.TenantID != getTenantID(c) {
-		respondErr(c, http.StatusForbidden, "forbidden")
-		return
-	}
-
-	if err := h.chapterService.DeleteChapter(uint(id)); err != nil {
+	if err := h.chapterService.DeleteChapter(uint(id), getTenantID(c)); err != nil {
+		if err.Error() == "not found" {
+			respondErr(c, http.StatusNotFound, "chapter not found")
+			return
+		}
 		logger.Printf("[ChapterHandler] DeleteChapter: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -184,6 +200,10 @@ func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 		return
 	}
 	logger.Printf("[ChapterHandler] GenerateChapter: novelID=%d chapterNo=%d", req.NovelID, req.ChapterNo)
+
+	if !h.checkNovelOwnership(c, req.NovelID) {
+		return
+	}
 
 	// 支持通过 Header 临时覆盖 AI 模型/provider
 	if override := c.GetHeader("X-Model-Override"); override != "" && req.ModelOverride == "" {
@@ -287,6 +307,14 @@ func (h *ChapterHandler) GetChapterByNo(c *gin.Context) {
 		respondBadRequest(c, "invalid chapter no")
 		return
 	}
+	if chapterNo <= 0 {
+		respondBadRequest(c, "chapter_no must be a positive integer")
+		return
+	}
+
+	if !h.checkNovelOwnership(c, novelId) {
+		return
+	}
 
 	chapter, err := h.chapterService.GetChapterByNo(uint(novelId), chapterNo)
 	if err != nil {
@@ -307,6 +335,14 @@ func (h *ChapterHandler) UpdateChapterByNo(c *gin.Context) {
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
 	if err != nil {
 		respondBadRequest(c, "invalid chapter no")
+		return
+	}
+	if chapterNo <= 0 {
+		respondBadRequest(c, "chapter_no must be a positive integer")
+		return
+	}
+
+	if !h.checkNovelOwnership(c, novelId) {
 		return
 	}
 
@@ -337,6 +373,14 @@ func (h *ChapterHandler) DeleteChapterByNo(c *gin.Context) {
 		respondBadRequest(c, "invalid chapter no")
 		return
 	}
+	if chapterNo <= 0 {
+		respondBadRequest(c, "chapter_no must be a positive integer")
+		return
+	}
+
+	if !h.checkNovelOwnership(c, novelId) {
+		return
+	}
 
 	if err := h.chapterService.DeleteChapterByNo(uint(novelId), chapterNo); err != nil {
 		logger.Printf("[ChapterHandler] DeleteChapterByNo: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
@@ -362,6 +406,15 @@ func (h *ChapterHandler) PublishChapter(c *gin.Context) {
 		respondBadRequest(c, "invalid chapter no")
 		return
 	}
+	if chapterNo <= 0 {
+		respondBadRequest(c, "chapter_no must be a positive integer")
+		return
+	}
+
+	if !h.checkNovelOwnership(c, novelId) {
+		return
+	}
+
 	chapter, err := h.chapterService.PublishChapter(uint(novelId), chapterNo)
 	if err != nil {
 		logger.Printf("[ChapterHandler] PublishChapter: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
@@ -383,6 +436,15 @@ func (h *ChapterHandler) UnpublishChapter(c *gin.Context) {
 		respondBadRequest(c, "invalid chapter no")
 		return
 	}
+	if chapterNo <= 0 {
+		respondBadRequest(c, "chapter_no must be a positive integer")
+		return
+	}
+
+	if !h.checkNovelOwnership(c, novelId) {
+		return
+	}
+
 	chapter, err := h.chapterService.UnpublishChapter(uint(novelId), chapterNo)
 	if err != nil {
 		logger.Printf("[ChapterHandler] UnpublishChapter: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
@@ -418,6 +480,10 @@ func (h *ChapterHandler) GenerateChapterOutline(c *gin.Context) {
 	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
 	if err != nil {
 		respondBadRequest(c, "invalid chapter no")
+		return
+	}
+	if chapterNo <= 0 {
+		respondBadRequest(c, "chapter_no must be a positive integer")
 		return
 	}
 	var req struct {
@@ -620,7 +686,7 @@ func (h *ChapterHandler) ReviewChapter(c *gin.Context) {
 		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 
-		review, reviewErr := h.qualityService.ReviewChapter(c.Request.Context(), uint(id), req.Provider)
+		review, reviewErr := h.qualityService.ReviewChapter(context.Background(), uint(id), req.Provider)
 		if reviewErr != nil {
 			logger.Printf("[ChapterHandler] ReviewChapter task %s failed: chapterID=%d err=%v", taskID, id, reviewErr)
 			h.taskSvc.Fail(taskID, reviewErr.Error()) //nolint:errcheck
@@ -681,7 +747,7 @@ func (h *ChapterHandler) ListChapterReviews(c *gin.Context) {
 // GetChapterReview 获取单条审查记录详情（含完整 ReviewJSON）
 // GET /api/v1/chapters/:id/reviews/:rid
 func (h *ChapterHandler) GetChapterReview(c *gin.Context) {
-	_, ok := parseID(c, "id")
+	id, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
@@ -693,6 +759,11 @@ func (h *ChapterHandler) GetChapterReview(c *gin.Context) {
 	rec, err := h.qualityService.GetReviewRecord(uint(rid))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "record not found")
+		return
+	}
+	// Ensure the review record belongs to the requested chapter.
+	if rec.EntityID != uint(id) {
+		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
 
@@ -726,7 +797,7 @@ func (h *ChapterHandler) GetChapterReview(c *gin.Context) {
 // RollbackChapterReview 回滚章节内容到审查快照
 // POST /api/v1/chapters/:id/reviews/:rid/rollback
 func (h *ChapterHandler) RollbackChapterReview(c *gin.Context) {
-	_, ok := parseID(c, "id")
+	id, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
@@ -735,7 +806,7 @@ func (h *ChapterHandler) RollbackChapterReview(c *gin.Context) {
 		return
 	}
 
-	if err := h.qualityService.RollbackReview(uint(rid)); err != nil {
+	if err := h.qualityService.RollbackReview(uint(rid), uint(id), getTenantID(c)); err != nil {
 		respondErr(c, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -822,5 +893,26 @@ func (h *ChapterHandler) UnignoreChapterIssue(c *gin.Context) {
 		return
 	}
 	respondOK(c, nil)
+}
+
+// ListContinuityReports 获取章节的连续性检查记录列表
+// GET /api/v1/chapters/:id/continuity-reports
+func (h *ChapterHandler) ListContinuityReports(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	if h.continuityService == nil {
+		respondErr(c, http.StatusServiceUnavailable, "continuity service not available")
+		return
+	}
+
+	records, err := h.continuityService.ListReports(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, records)
 }
 

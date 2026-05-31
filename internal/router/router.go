@@ -1,15 +1,21 @@
 package router
 
 import (
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/handler"
 	"github.com/inkframe/inkframe-backend/internal/middleware"
+	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 )
 
 // Config 路由配置
 type Config struct {
 	JWTSecret        string
-	AllowedOrigins   []string // CORS 允许的来源列表；留空表示允许所有（开发模式）
+	AllowedOrigins   []string      // CORS 允许的来源列表；留空表示允许所有（开发模式）
+	RedisClient      *redis.Client // 可选，用于 JWT 黑名单检查
+	DB               *gorm.DB     // 可选，用于 health check 和邮箱验证中间件
 	NovelHandler     *handler.NovelHandler
 	ChapterHandler   *handler.ChapterHandler
 	CharacterHandler *handler.CharacterHandler
@@ -23,6 +29,7 @@ type Config struct {
 	WorldviewHandler *handler.WorldviewHandler
 	TenantHandler    *handler.TenantHandler
 	ItemHandler      *handler.ItemHandler
+	SkillHandler     *handler.SkillHandler
 	UploadHandler    *handler.UploadHandler
 	PlotPointHandler *handler.PlotPointHandler
 	TaskHandler        *handler.TaskHandler
@@ -39,6 +46,8 @@ type Config struct {
 	StoryPatternHandler    *handler.StoryPatternHandler
 	ImageRefSearchHandler  *handler.ImageRefSearchHandler
 	ColorPaletteHandler    *handler.ColorPaletteHandler
+	NotificationHandler    *handler.NotificationHandler
+	KnowledgeHandler       *handler.KnowledgeHandler
 }
 
 // SetupRouter 配置路由
@@ -53,7 +62,23 @@ func SetupRouter(cfg *Config) *gin.Engine {
 
 	// 健康检查（公开）
 	r.GET("/health", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
+		status := gin.H{"status": "ok", "db": "ok", "redis": "ok"}
+		httpStatus := http.StatusOK
+
+		if cfg.DB != nil {
+			sqlDB, err := cfg.DB.DB()
+			if err != nil || sqlDB.Ping() != nil {
+				status["db"] = "error"
+				httpStatus = http.StatusServiceUnavailable
+			}
+		}
+		if cfg.RedisClient != nil {
+			if err := cfg.RedisClient.Ping(c.Request.Context()).Err(); err != nil {
+				status["redis"] = "error"
+				// Redis failure is non-critical, don't set 503
+			}
+		}
+		c.JSON(httpStatus, status)
 	})
 
 	// 本地上传文件静态服务
@@ -91,25 +116,36 @@ func SetupRouter(cfg *Config) *gin.Engine {
 	auth := r.Group("/api/v1/auth")
 	auth.Use(middleware.RateLimit(10, 0.2)) // 10 burst, ~12 req/min
 	{
-		auth.POST("/register", cfg.AuthHandler.Register)
-		auth.POST("/login", cfg.AuthHandler.Login)
+		// Auth endpoints: stricter rate limit — 5 burst, 1 per 20 seconds (~3/min)
+		authStrict := middleware.RateLimit(5, 0.05)
+		auth.POST("/register", authStrict, cfg.AuthHandler.Register)
+		auth.POST("/login", authStrict, cfg.AuthHandler.Login)
 		auth.POST("/refresh", cfg.AuthHandler.RefreshToken)
 		auth.POST("/sms/send", cfg.AuthHandler.SendSMSCode)
 		auth.POST("/phone/register", cfg.AuthHandler.PhoneRegister)
 		auth.POST("/phone/login", cfg.AuthHandler.PhoneLogin)
 		auth.GET("/oauth/:provider/url", cfg.AuthHandler.OAuthURL)
 		auth.GET("/oauth/:provider/callback", cfg.AuthHandler.OAuthCallback)
+		// 密码重置（公开，无需登录）
+		auth.POST("/password-reset/request", cfg.AuthHandler.RequestPasswordReset)
+		auth.POST("/password-reset/confirm", cfg.AuthHandler.ResetPassword)
+		// 邮箱验证回调（公开，链接中携带 token）
+		auth.GET("/email-verification/verify", cfg.AuthHandler.VerifyEmail)
 	}
 
 	// 受保护路由（需要JWT）
 	v1 := r.Group("/api/v1")
 	v1.Use(middleware.RateLimit(60, 10))
-	v1.Use(middleware.NewAuth(cfg.JWTSecret))
+	v1.Use(middleware.NewAuth(cfg.JWTSecret, cfg.RedisClient))
 	{
 		// 当前用户信息 & 资料管理
 		v1.GET("/auth/me", cfg.AuthHandler.GetCurrentUser)
 		v1.PUT("/auth/me", cfg.AuthHandler.UpdateProfile)
 		v1.PUT("/auth/me/password", cfg.AuthHandler.ChangePassword)
+		v1.DELETE("/auth/me", cfg.AuthHandler.DeleteAccount)
+		// 邮箱验证发送（需要登录）
+		v1.POST("/auth/email-verification/send", cfg.AuthHandler.SendEmailVerification)
+		v1.POST("/auth/logout", cfg.AuthHandler.Logout)
 
 		// 统一异步任务
 		if cfg.TaskHandler != nil {
@@ -118,6 +154,18 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				tasks.GET("", cfg.TaskHandler.ListTasks)
 				tasks.GET("/:task_id", cfg.TaskHandler.GetTask)
 				tasks.POST("/:task_id/cancel", cfg.TaskHandler.CancelTask)
+			}
+		}
+
+		// 站内通知
+		if cfg.NotificationHandler != nil {
+			notifications := v1.Group("/notifications")
+			{
+				notifications.GET("", cfg.NotificationHandler.List)
+				notifications.GET("/unread-count", cfg.NotificationHandler.UnreadCount)
+				notifications.PUT("/read-all", cfg.NotificationHandler.MarkAllRead)
+				notifications.PUT("/:id/read", cfg.NotificationHandler.MarkRead)
+				notifications.DELETE("/:id", cfg.NotificationHandler.Delete)
 			}
 		}
 
@@ -147,7 +195,16 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.GET("/:id", cfg.NovelHandler.GetNovel)
 			novels.PUT("/:id", cfg.NovelHandler.UpdateNovel)
 			novels.DELETE("/:id", cfg.NovelHandler.DeleteNovel)
-			novels.POST("/:id/chapters/generate", cfg.NovelHandler.GenerateChapter)
+
+			// Sensitive AI generation routes require verified email
+			if cfg.DB != nil {
+				verifiedNovels := v1.Group("/novels", middleware.RequireEmailVerified(cfg.DB))
+				verifiedNovels.POST("/:id/chapters/generate", cfg.NovelHandler.GenerateChapter)
+				verifiedNovels.POST("/:id/outline", cfg.NovelHandler.GenerateOutline)
+			} else {
+				novels.POST("/:id/chapters/generate", cfg.NovelHandler.GenerateChapter)
+				novels.POST("/:id/outline", cfg.NovelHandler.GenerateOutline)
+			}
 
 			// 伏笔
 			novels.GET("/:id/foreshadows", cfg.NovelHandler.GetForeshadows)
@@ -175,15 +232,13 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.POST("/:id/chapters/:chapter_no/outline", cfg.ChapterHandler.GenerateChapterOutline)
 			novels.POST("/:id/chapters/:chapter_no/character-snapshots", cfg.NovelHandler.SyncCharacterSnapshots)
 
-			// 发布/取消发布
+			// 发布/取消发布/审核
 			novels.POST("/:id/publish", cfg.NovelHandler.PublishNovel)
 			novels.POST("/:id/unpublish", cfg.NovelHandler.UnpublishNovel)
+			novels.PUT("/:id/review", cfg.NovelHandler.ReviewNovel)
 
 			// 封面
 			novels.POST("/:id/cover/generate", cfg.NovelHandler.GenerateCoverImage)
-
-			// 大纲
-			novels.POST("/:id/outline", cfg.NovelHandler.GenerateOutline)
 
 			// 角色
 			novels.GET("/:id/characters", cfg.CharacterHandler.ListCharacters)
@@ -224,6 +279,13 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				novels.POST("/:id/chapters/:chapter_no/items/ai-extract", cfg.ItemHandler.AIExtractChapterItems)
 			}
 
+			// 技能体系
+			if cfg.SkillHandler != nil {
+				novels.GET("/:id/skills", cfg.SkillHandler.ListSkills)
+				novels.POST("/:id/skills", cfg.SkillHandler.CreateSkill)
+				novels.POST("/:id/skills/ai-generate", cfg.SkillHandler.GenerateSkills)
+			}
+
 			// 章节级角色（有效列表 + 覆盖 + AI提取次要角色）
 			novels.GET("/:id/chapters/:chapter_no/characters", cfg.CharacterHandler.ListEffectiveCharacters)
 			novels.POST("/:id/chapters/:chapter_no/characters/:character_id", cfg.CharacterHandler.UpsertChapterCharacter)
@@ -237,6 +299,13 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			}
 
 	
+			// 知识库
+			if cfg.KnowledgeHandler != nil {
+				novels.GET("/:id/knowledge/search", cfg.KnowledgeHandler.SearchKnowledge)
+				novels.GET("/:id/knowledge", cfg.KnowledgeHandler.ListKnowledge)
+				novels.POST("/:id/knowledge", cfg.KnowledgeHandler.CreateKnowledge)
+			}
+
 			// 场景锚点（挂在 novel 下）
 			if cfg.SceneAnchorHandler != nil {
 				novels.GET("/:id/scene-anchors", cfg.SceneAnchorHandler.ListSceneAnchors)
@@ -258,6 +327,17 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				items.POST("/:id/image/upload", cfg.ItemHandler.UploadItemImage)
 				items.POST("/:id/images", cfg.ItemHandler.GenerateItemImage)
 					items.POST("/:id/reference/upload", cfg.ItemHandler.UploadItemReference)
+			}
+		}
+
+		// 技能单条操作
+		if cfg.SkillHandler != nil {
+			skills := v1.Group("/skills")
+			{
+				skills.GET("/:id", cfg.SkillHandler.GetSkill)
+				skills.PUT("/:id", cfg.SkillHandler.UpdateSkill)
+				skills.DELETE("/:id", cfg.SkillHandler.DeleteSkill)
+				skills.POST("/:id/effect", cfg.SkillHandler.GenerateSkillEffect)
 			}
 		}
 
@@ -285,6 +365,9 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			chapters.GET("/:id/ignored-issues", cfg.ChapterHandler.ListChapterIgnoredIssues)
 			chapters.POST("/:id/ignored-issues", cfg.ChapterHandler.IgnoreChapterIssue)
 			chapters.DELETE("/:id/ignored-issues/:iid", cfg.ChapterHandler.UnignoreChapterIssue)
+
+			// 连续性检查记录
+			chapters.GET("/:id/continuity-reports", cfg.ChapterHandler.ListContinuityReports)
 
 			// 剧情点（章节级）
 			if cfg.PlotPointHandler != nil {
@@ -340,6 +423,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.GET("", cfg.VideoHandler.ListVideos)
 			videos.GET("/providers", cfg.VideoHandler.ListVideoProviders)
 			videos.GET("/:id", cfg.VideoHandler.GetVideo)
+			videos.GET("/:id/progress", cfg.VideoHandler.GetVideoProgress)
 			videos.PUT("/:id", cfg.VideoHandler.UpdateVideo)
 			videos.DELETE("/:id", cfg.VideoHandler.DeleteVideo)
 			videos.GET("/:id/storyboard", cfg.VideoHandler.GetStoryboard)
@@ -489,6 +573,11 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		if cfg.StoryPatternHandler != nil {
 			toolsGroup.POST("/story-pattern", cfg.StoryPatternHandler.Search)
 			toolsGroup.GET("/story-pattern/list", cfg.StoryPatternHandler.ListAll)
+
+			// REST 风格端点（供前端直接浏览）
+			v1.GET("/story-patterns", cfg.StoryPatternHandler.ListAll)
+			v1.GET("/story-patterns/:id", cfg.StoryPatternHandler.GetPattern)
+			novels.POST("/:id/story-patterns/suggest", cfg.StoryPatternHandler.SuggestForNovel)
 		}
 		if cfg.ImageRefSearchHandler != nil {
 			toolsGroup.POST("/image-ref-search", cfg.ImageRefSearchHandler.Search)

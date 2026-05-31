@@ -131,22 +131,9 @@ func (s *OAuthService) wechatExchange(code string) (*OAuthUserInfo, error) {
 }
 
 // alipayExchange 支付宝OAuth换取用户信息
-// 完整实现需使用RSA2对参数签名，此处为占位实现，生产环境需接入支付宝SDK完成签名。
-func (s *OAuthService) alipayExchange(code string) (*OAuthUserInfo, error) {
-	if s.cfg.Alipay.AppID == "" {
-		return nil, fmt.Errorf("alipay not configured")
-	}
-	// 实际需要RSA2签名：alipay.system.oauth.token + alipay.user.info.share
-	// 此处返回基于code的占位用户，请在生产环境替换为完整实现
-	openID := "alipay_" + code
-	if len(openID) > 32 {
-		openID = openID[:32]
-	}
-	return &OAuthUserInfo{
-		Provider: "alipay",
-		OpenID:   openID,
-		Nickname: "支付宝用户",
-	}, nil
+// 完整实现需使用RSA2对参数签名，尚未实现，暂不开放。
+func (s *OAuthService) alipayExchange(_ string) (*OAuthUserInfo, error) {
+	return nil, fmt.Errorf("alipay oauth not yet implemented")
 }
 
 // douyinExchange 抖音OAuth换取用户信息

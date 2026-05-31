@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	"github.com/inkframe/inkframe-backend/internal/logger"
+	"context"
 	"net/http"
 	"os"
 	"strings"
@@ -10,6 +10,10 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/model"
+	"github.com/redis/go-redis/v9"
+	"gorm.io/gorm"
 )
 
 // tokenBucket 令牌桶
@@ -152,6 +156,7 @@ type JWTClaims struct {
 	UserID   uint   `json:"user_id"`
 	TenantID uint   `json:"tenant_id"`
 	Role     string `json:"role"`
+	JTI      string `json:"jti"`
 	jwt.RegisteredClaims
 }
 
@@ -162,7 +167,10 @@ type JWTClaims struct {
 //
 // 安全保障：开发旁路模式仅在 GIN_MODE != release 且 APP_ENV != production 时生效，
 // 防止生产配置缺失 jwt_secret 时意外暴露 API。
-func NewAuth(jwtSecret string) gin.HandlerFunc {
+//
+// rdb 为可选的 Redis 客户端，用于检查 JWT 黑名单（Logout 使 Token 立即失效）。
+// 传 nil 则跳过黑名单检查（不影响正常认证）。
+func NewAuth(jwtSecret string, rdb *redis.Client) gin.HandlerFunc {
 	isDevBypass := jwtSecret == "" && gin.Mode() != gin.ReleaseMode && os.Getenv("APP_ENV") != "production"
 	if jwtSecret == "" && !isDevBypass {
 		// 生产环境未配置 secret — 启动时 panic，防止静默放行
@@ -207,6 +215,20 @@ func NewAuth(jwtSecret string) gin.HandlerFunc {
 			return
 		}
 
+		// ── 黑名单检查（若 Redis 可用且 JTI 不为空） ──────────────────────
+		jti := claims.JTI
+		if jti == "" {
+			jti = claims.RegisteredClaims.ID
+		}
+		if rdb != nil && jti != "" {
+			blacklistKey := "jwt:blacklist:" + jti
+			exists, redisErr := rdb.Exists(context.Background(), blacklistKey).Result()
+			if redisErr == nil && exists > 0 {
+				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "token has been revoked"})
+				return
+			}
+		}
+
 		c.Set("user_id", claims.UserID)
 		c.Set("tenant_id", claims.TenantID)
 		c.Set("user_role", claims.Role)
@@ -231,6 +253,30 @@ func MaxBodySize(maxBytes int64) gin.HandlerFunc {
 			return
 		}
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxBytes)
+		c.Next()
+	}
+}
+
+// RequireEmailVerified rejects requests from users whose email is not verified.
+// Pass the DB so it can fetch user.EmailVerifiedAt.
+func RequireEmailVerified(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userID, exists := c.Get("user_id")
+		if !exists {
+			c.Next()
+			return
+		}
+		var user model.User
+		if err := db.Select("email_verified_at").First(&user, userID).Error; err != nil {
+			c.Next()
+			return
+		}
+		if user.EmailVerifiedAt == nil {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"code": 403, "message": "email not verified",
+			})
+			return
+		}
 		c.Next()
 	}
 }

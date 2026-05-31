@@ -65,6 +65,7 @@ type ImportRequest struct {
 	SiteName string       `json:"site_name,omitempty"` // 站点名称（爬取时）
 	NovelID  uint         `json:"novel_id,omitempty"`  // 已有小说ID（追加时）
 	TenantID uint         `json:"tenant_id,omitempty"` // 租户ID（用于去重）
+	UserID   uint         `json:"user_id,omitempty"`   // 发起导入的用户ID（用于站内通知）
 }
 
 // ImportResult 导入结果
@@ -81,6 +82,7 @@ type ImportResult struct {
 
 // CrawlProgress 爬取进度
 type CrawlProgress struct {
+	mu      sync.RWMutex
 	NovelID uint   `json:"novel_id"`
 	Status  string `json:"status"`   // running / paused / completed / failed
 	Total   int    `json:"total"`
@@ -98,6 +100,8 @@ type NovelImportService struct {
 	storageSvc         storage.Service
 	analysisService    *NovelAnalysisService
 	aiService          *AIService
+	notifSvc           *NotificationService // 可选，用于爬取完成通知
+	crawlJobRepo       *repository.NovelCrawlJobRepository
 	crawlProgress      sync.Map // novelID(uint) → *CrawlProgress
 	crawlDoneCallbacks sync.Map // novelID(uint) → func()
 }
@@ -136,6 +140,18 @@ func (s *NovelImportService) WithAnalysisService(svc *NovelAnalysisService) *Nov
 // WithAIService 注入 AI 服务（章节标记不明显时 AI 辅助划分章节）
 func (s *NovelImportService) WithAIService(svc *AIService) *NovelImportService {
 	s.aiService = svc
+	return s
+}
+
+// WithNotificationService 注入通知服务（可选，用于爬取完成后发送站内通知）
+func (s *NovelImportService) WithNotificationService(svc *NotificationService) *NovelImportService {
+	s.notifSvc = svc
+	return s
+}
+
+// WithCrawlJobRepo 注入爬取任务仓库（可选，用于持久化爬取进度）
+func (s *NovelImportService) WithCrawlJobRepo(repo *repository.NovelCrawlJobRepository) *NovelImportService {
+	s.crawlJobRepo = repo
 	return s
 }
 
@@ -181,7 +197,18 @@ func contentTypeFromFilename(name string) string {
 // GetCrawlProgress 获取爬取进度（先查内存，再查数据库）
 func (s *NovelImportService) GetCrawlProgress(novelID uint) (*CrawlProgress, error) {
 	if v, ok := s.crawlProgress.Load(novelID); ok {
-		return v.(*CrawlProgress), nil
+		p := v.(*CrawlProgress)
+		p.mu.RLock()
+		cp := &CrawlProgress{
+			NovelID: p.NovelID,
+			Status:  p.Status,
+			Total:   p.Total,
+			Done:    p.Done,
+			Failed:  p.Failed,
+			Current: p.Current,
+		}
+		p.mu.RUnlock()
+		return cp, nil
 	}
 	// 内存中无记录，查询数据库判断是否有待爬取章节
 	pending, err := s.chapterRepo.ListPendingCrawl(novelID)
@@ -240,7 +267,7 @@ func (s *NovelImportService) ResumeCrawl(novelID uint) error {
 	}
 	s.crawlProgress.Store(novelID, progress)
 
-	go s.crawlChaptersBackground(context.Background(), novelID, novel.Title, parser, pending, progress)
+	go s.crawlChaptersBackground(context.Background(), novelID, novel.Title, parser, pending, progress, novel.TenantID, 0)
 	return nil
 }
 
@@ -252,31 +279,62 @@ func (s *NovelImportService) crawlChaptersBackground(
 	parser crawler.NovelParser,
 	chapters []*model.Chapter,
 	progress *CrawlProgress,
+	tenantID uint,
+	userID uint,
 ) {
+	// 创建 DB 爬取任务记录，获取 jobID 用于后续进度持久化
+	var jobID uint
+	if s.crawlJobRepo != nil {
+		job := &model.NovelCrawlJob{
+			NovelID:    novelID,
+			Status:     "running",
+			Progress:   0,
+			TotalChaps: progress.Total,
+		}
+		if err := s.crawlJobRepo.Create(job); err != nil {
+			logger.Printf("[Crawl] create novel crawl job failed: %v", err)
+		} else {
+			jobID = job.ID
+		}
+	}
 	httpClient := crawler.NewHTTPClient()
 	const rateLimit = 2 * time.Second
 
 	for _, ch := range chapters {
 		select {
 		case <-ctx.Done():
+			progress.mu.Lock()
 			progress.Status = "paused"
+			doneAtPause := progress.Done
+			totalAtPause := progress.Total
+			failedAtPause := progress.Failed
+			progress.mu.Unlock()
+			if jobID > 0 && s.crawlJobRepo != nil {
+				_ = s.crawlJobRepo.Finalize(jobID, "paused", doneAtPause, totalAtPause, failedAtPause)
+			}
 			return
 		default:
 		}
 
 		chapterURL := strings.TrimPrefix(ch.Outline, "crawl:")
 		if chapterURL == "" {
+			progress.mu.Lock()
 			progress.Done++
+			progress.mu.Unlock()
 			continue
 		}
 
+		progress.mu.Lock()
 		progress.Current = ch.Title
+		progress.mu.Unlock()
 
 		// 爬取页面
 		html, err := httpClient.Get(ctx, chapterURL)
 		if err != nil {
 			logger.Printf("[Crawl] chapter %d fetch error: %v", ch.ChapterNo, err)
+			progress.mu.Lock()
 			progress.Failed++
+			progress.mu.Unlock()
 			time.Sleep(rateLimit)
 			continue
 		}
@@ -284,7 +342,9 @@ func (s *NovelImportService) crawlChaptersBackground(
 		doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
 		if err != nil {
 			logger.Printf("[Crawl] chapter %d parse html error: %v", ch.ChapterNo, err)
+			progress.mu.Lock()
 			progress.Failed++
+			progress.mu.Unlock()
 			time.Sleep(rateLimit)
 			continue
 		}
@@ -292,7 +352,9 @@ func (s *NovelImportService) crawlChaptersBackground(
 		content, err := parser.ParseChapter(doc)
 		if err != nil || content.Content == "" {
 			logger.Printf("[Crawl] chapter %d parse content error: %v", ch.ChapterNo, err)
+			progress.mu.Lock()
 			progress.Failed++
+			progress.mu.Unlock()
 			time.Sleep(rateLimit)
 			continue
 		}
@@ -307,13 +369,25 @@ func (s *NovelImportService) crawlChaptersBackground(
 		// 写回数据库
 		if err := s.chapterRepo.UpdateCrawledContent(ch.ID, title, content.Content, wordCount); err != nil {
 			logger.Printf("[Crawl] chapter %d save error: %v", ch.ChapterNo, err)
+			progress.mu.Lock()
 			progress.Failed++
+			progress.mu.Unlock()
 			time.Sleep(rateLimit)
 			continue
 		}
 
+		progress.mu.Lock()
 		progress.Done++
-		logger.Printf("[Crawl] novel=%d chapter=%d/%d done", novelID, progress.Done, progress.Total)
+		doneSoFar := progress.Done
+		totalSoFar := progress.Total
+		failedSoFar := progress.Failed
+		progress.mu.Unlock()
+		logger.Printf("[Crawl] novel=%d chapter=%d/%d done", novelID, doneSoFar, totalSoFar)
+
+		// 每5章持久化一次进度到 DB
+		if jobID > 0 && s.crawlJobRepo != nil && doneSoFar%5 == 0 {
+			_ = s.crawlJobRepo.UpdateProgress(jobID, doneSoFar, totalSoFar, failedSoFar)
+		}
 
 		// 爬取完成后自动生成 AI 摘要
 		if s.narrativeMemory != nil {
@@ -332,20 +406,34 @@ func (s *NovelImportService) crawlChaptersBackground(
 	}
 
 	// 收尾
+	progress.mu.Lock()
 	if progress.Failed == 0 {
 		progress.Status = "completed"
-		s.novelRepo.UpdateFields(novelID, map[string]interface{}{"status": "writing"})
+		s.novelRepo.UpdateFields(novelID, map[string]interface{}{"status": "writing"}) //nolint:errcheck
 	} else if progress.Done == 0 {
 		progress.Status = "failed"
 	} else {
 		progress.Status = "completed"
-		s.novelRepo.UpdateFields(novelID, map[string]interface{}{"status": "writing"})
+		s.novelRepo.UpdateFields(novelID, map[string]interface{}{"status": "writing"}) //nolint:errcheck
 	}
 	progress.Current = ""
-	logger.Printf("[Crawl] novel=%d finished: done=%d failed=%d", novelID, progress.Done, progress.Failed)
+	finalDone := progress.Done
+	finalFailed := progress.Failed
+	finalStatus := progress.Status
+	progress.mu.Unlock()
+	logger.Printf("[Crawl] novel=%d finished: done=%d failed=%d status=%s", novelID, finalDone, finalFailed, finalStatus)
+
+	// 持久化最终状态到 DB
+	if jobID > 0 && s.crawlJobRepo != nil {
+		dbStatus := finalStatus
+		if finalStatus == "completed" && finalFailed > 0 {
+			dbStatus = "partial"
+		}
+		_ = s.crawlJobRepo.Finalize(jobID, dbStatus, finalDone, finalDone+finalFailed, finalFailed)
+	}
 
 	// 将全本内容合并上传到 OSS 备份
-	if s.storageSvc != nil && progress.Status == "completed" {
+	if s.storageSvc != nil && finalStatus == "completed" {
 		go func() {
 			allChapters, err := s.chapterRepo.ListByNovel(novelID)
 			if err != nil || len(allChapters) == 0 {
@@ -370,6 +458,18 @@ func (s *NovelImportService) crawlChaptersBackground(
 	// 触发注册的完成回调（如自动分析）
 	if fn, ok := s.crawlDoneCallbacks.LoadAndDelete(novelID); ok {
 		fn.(func())()
+	}
+
+	// 站内通知：爬取完成
+	if s.notifSvc != nil && userID > 0 && finalStatus == "completed" {
+		_ = s.notifSvc.Send(
+			tenantID, userID,
+			"crawl_done",
+			fmt.Sprintf("《%s》爬取完成", novelTitle),
+			fmt.Sprintf("共 %d 章，成功爬取 %d 章", finalDone+finalFailed, finalDone),
+			"novel", novelID,
+			fmt.Sprintf("/novel/%d", novelID),
+		)
 	}
 }
 
@@ -608,10 +708,15 @@ func (s *NovelImportService) importFromURL(req *ImportRequest) (*ImportResult, e
 	}
 	defer resp.Body.Close()
 
-	data, err := io.ReadAll(resp.Body)
+	const maxImportSize = 50 * 1024 * 1024 // 50MB
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxImportSize+1))
 	if err != nil {
-		return nil, fmt.Errorf("read response failed: %w", err)
+		return nil, fmt.Errorf("read response: %w", err)
 	}
+	if int64(len(body)) > maxImportSize {
+		return nil, fmt.Errorf("response too large (max 50MB)")
+	}
+	data := body
 
 	// 解析内容
 	req.FileData = data
@@ -622,6 +727,10 @@ func (s *NovelImportService) importFromURL(req *ImportRequest) (*ImportResult, e
 
 // 从爬取导入
 func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult, error) {
+	if err := validateImportURL(req.URL); err != nil {
+		return nil, fmt.Errorf("invalid import URL: %w", err)
+	}
+
 	result := &ImportResult{}
 
 	parser, err := s.getParserForURL(req.URL, req.SiteName)
@@ -720,7 +829,7 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 		Done:    0,
 	}
 	s.crawlProgress.Store(novel.ID, progress)
-	go s.crawlChaptersBackground(context.Background(), novel.ID, novel.Title, parser, pendingChapters, progress)
+	go s.crawlChaptersBackground(context.Background(), novel.ID, novel.Title, parser, pendingChapters, progress, req.TenantID, req.UserID)
 
 	return result, nil
 }

@@ -8,7 +8,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-31-v2"
+const schemaVersion = "2026-05-31-v8"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -61,6 +61,17 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_model_provider", "concurrency", "INT NOT NULL DEFAULT 0"},
 		// ink_task_model_config provider 显式绑定（2026-05-31 新增）
 		{"ink_task_model_config", "primary_provider_id", "INT UNSIGNED NOT NULL DEFAULT 0"},
+		// ink_novel 内容审核字段（2026-05-31 新增）
+		{"ink_novel", "review_status", "VARCHAR(20) NOT NULL DEFAULT 'draft'"},
+		{"ink_novel", "review_note", "VARCHAR(500) NULL"},
+		{"ink_novel", "reviewed_at", "DATETIME(3) NULL"},
+		{"ink_novel", "reviewed_by", "INT UNSIGNED NOT NULL DEFAULT 0"},
+		// ink_novel 已发布章节计数（2026-05-31 新增）
+		{"ink_novel", "published_count", "INT NOT NULL DEFAULT 0"},
+		// ink_knowledge_base 来源章节（2026-05-31 新增，用于重提取时去重）
+		{"ink_knowledge_base", "source_chapter_id", "INT UNSIGNED NULL"},
+		// ink_video 分镜审查状态（2026-05-31 新增）
+		{"ink_video", "review_status", "VARCHAR(20) NOT NULL DEFAULT 'none'"},
 	}
 	for _, a := range additions {
 		// 先查 information_schema，列已存在则跳过，避免触发 GORM 的 Error 1060 日志
@@ -140,6 +151,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.ModelMcpBinding{},
 		&model.ArcSummary{},
 		&model.Item{},
+		&model.Skill{},
 		&model.ChapterItem{},
 		&model.ChapterCharacter{},
 		&model.AsyncTask{},
@@ -189,6 +201,14 @@ func autoMigrate(db *gorm.DB) error {
 		&model.ChapterComment{},
 		&model.ReadingProgress{},
 		&model.ChapterReadRecord{},
+		// 用户 token（密码重置 & 邮箱验证）
+		&model.UserToken{},
+		// 小说章节爬取任务（进度持久化）
+		&model.NovelCrawlJob{},
+		// 站内通知
+		&model.Notification{},
+		// 连续性检查报告
+		&model.ContinuityReportRecord{},
 	); err != nil {
 		return err
 	}

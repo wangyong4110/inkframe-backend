@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
@@ -82,9 +83,8 @@ func (h *ImportHandler) checkNovelTenant(c *gin.Context, novelID uint) bool {
 	if h.novelSvc == nil {
 		return true
 	}
-	novel, err := h.novelSvc.GetNovel(novelID)
-	if err != nil || novel.TenantID != getTenantID(c) {
-		respondErr(c, http.StatusForbidden, "forbidden")
+	if _, err := h.novelSvc.GetNovel(novelID, getTenantID(c)); err != nil {
+		respondErr(c, http.StatusNotFound, "not found")
 		return false
 	}
 	return true
@@ -281,12 +281,15 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 		return
 	}
 
+	callerUID, _ := c.Get("user_id")
+	callerUserID, _ := callerUID.(uint)
 	importReq := &service.ImportRequest{
 		Source:   service.SourceCrawl,
 		URL:      req.URL,
 		SiteName: req.SiteName,
 		NovelID:  req.NovelID,
 		TenantID: getTenantID(c),
+		UserID:   callerUserID,
 	}
 	tenantID := getTenantID(c)
 
@@ -469,7 +472,7 @@ func (h *ImportHandler) InitChunkedUpload(c *gin.Context) {
 		return
 	}
 
-	uploadID := fmt.Sprintf("chunk-%d", time.Now().UnixNano())
+	uploadID := "chunk-" + uuid.New().String()
 	tmpDir := filepath.Join(os.TempDir(), "inkframe_chunks", uploadID)
 	if err := os.MkdirAll(tmpDir, 0700); err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create temp dir")
@@ -514,17 +517,28 @@ func (h *ImportHandler) UploadChunk(c *gin.Context) {
 	}
 	sess := v.(*chunkSession)
 
+	if sess.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	if chunkNo > sess.TotalChunks {
 		respondBadRequest(c, fmt.Sprintf("chunk_no %d exceeds total_chunks %d", chunkNo, sess.TotalChunks))
 		return
 	}
 
-	f, _, err := c.Request.FormFile("chunk")
+	f, header, err := c.Request.FormFile("chunk")
 	if err != nil {
 		respondBadRequest(c, "chunk file required")
 		return
 	}
 	defer f.Close()
+
+	const maxChunkSize = 10 * 1024 * 1024 // 10 MB per chunk
+	if header.Size > maxChunkSize {
+		respondBadRequest(c, fmt.Sprintf("chunk too large: max %d bytes", maxChunkSize))
+		return
+	}
 
 	chunkPath := filepath.Join(sess.TmpDir, fmt.Sprintf("chunk_%05d", chunkNo))
 	out, err := os.Create(chunkPath)
@@ -563,6 +577,11 @@ func (h *ImportHandler) CompleteChunkedUpload(c *gin.Context) {
 		return
 	}
 	sess := v.(*chunkSession)
+
+	if sess.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
 
 	sess.mu.Lock()
 	missing := sess.TotalChunks - len(sess.received)

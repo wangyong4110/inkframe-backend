@@ -615,7 +615,8 @@ func (s *QualityControlService) GetReviewRecord(recordID uint) (*model.ReviewRec
 }
 
 // RollbackReview restores the chapter content to the snapshot taken at review time.
-func (s *QualityControlService) RollbackReview(recordID uint) error {
+// chapterID and tenantID are used to verify the caller owns the chapter.
+func (s *QualityControlService) RollbackReview(recordID, chapterID, tenantID uint) error {
 	if s.reviewRecordRepo == nil {
 		return fmt.Errorf("review repos not wired")
 	}
@@ -623,12 +624,19 @@ func (s *QualityControlService) RollbackReview(recordID uint) error {
 	if err != nil {
 		return fmt.Errorf("record %d not found: %w", recordID, err)
 	}
+	// Verify the record actually belongs to the requested chapter.
+	if rec.EntityID != chapterID {
+		return fmt.Errorf("record does not belong to this chapter")
+	}
 	if rec.SnapshotJSON == "" {
 		return fmt.Errorf("no snapshot available for record %d", recordID)
 	}
 	chapter, err := s.chapterRepo.GetByID(rec.EntityID)
 	if err != nil {
 		return fmt.Errorf("chapter %d not found: %w", rec.EntityID, err)
+	}
+	if chapter.TenantID != tenantID {
+		return fmt.Errorf("permission denied")
 	}
 	chapter.Content = rec.SnapshotJSON
 	if err := s.chapterRepo.Update(chapter); err != nil {

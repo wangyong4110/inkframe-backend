@@ -1,10 +1,13 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
+	"github.com/inkframe/inkframe-backend/internal/repository"
 )
 
 // ContinuityService 连续性检查服务
@@ -15,6 +18,7 @@ type ContinuityService struct {
 	chapterRepo interface {
 		GetRecent(novelID uint, chapterNo, count int) ([]*model.Chapter, error)
 	}
+	reportRepo *repository.ContinuityReportRepository
 }
 
 func NewContinuityService(
@@ -29,6 +33,20 @@ func NewContinuityService(
 		characterRepo: charRepo,
 		chapterRepo:   chapterRepo,
 	}
+}
+
+// WithReportRepo injects the persistence layer for continuity reports.
+func (s *ContinuityService) WithReportRepo(r *repository.ContinuityReportRepository) *ContinuityService {
+	s.reportRepo = r
+	return s
+}
+
+// ListReports returns persisted continuity reports for a chapter, newest first.
+func (s *ContinuityService) ListReports(chapterID uint) ([]*model.ContinuityReportRecord, error) {
+	if s.reportRepo == nil {
+		return nil, fmt.Errorf("report repository not configured")
+	}
+	return s.reportRepo.ListByChapter(chapterID)
 }
 
 // ContinuityReport 连续性报告
@@ -67,6 +85,33 @@ type PlotIssue struct {
 	Description string `json:"description"`
 	Location    string `json:"location"`
 	Suggestion  string `json:"suggestion"`
+}
+
+// ValidateChapter 检查连续性并将结果持久化到数据库。
+// chapterID 和 tenantID 用于写入持久化记录；novelID 和 chapterNo 用于上下文查询。
+func (s *ContinuityService) ValidateChapter(novelID, chapterID, tenantID uint, chapterNo int, content string) (*ContinuityReport, error) {
+	report, err := s.CheckContinuity(novelID, chapterNo, content)
+	if err != nil {
+		return nil, err
+	}
+
+	if s.reportRepo != nil {
+		issueCount := len(report.CharacterIssues) + len(report.WorldviewIssues) + len(report.PlotIssues)
+		data, _ := json.Marshal(report)
+		rec := &model.ContinuityReportRecord{
+			NovelID:    novelID,
+			ChapterID:  chapterID,
+			TenantID:   tenantID,
+			ReportJSON: string(data),
+			IssueCount: issueCount,
+			Passed:     !report.HasIssues,
+		}
+		if saveErr := s.reportRepo.Create(rec); saveErr != nil {
+			logger.Printf("ContinuityService: save report: %v", saveErr)
+		}
+	}
+
+	return report, nil
 }
 
 // CheckContinuity 检查连续性
@@ -140,11 +185,11 @@ func (s *ContinuityService) checkPlotContinuity(novelID uint, chapterNo int, con
 	}
 
 	// 简化：检查内容长度
-	if len(content) < 1000 {
+	if len([]rune(content)) < 1000 {
 		issues = append(issues, PlotIssue{
 			Type:        "length",
 			Severity:    "medium",
-			Description: fmt.Sprintf("章节内容过短（%d字），可能不够充实", len(content)),
+			Description: fmt.Sprintf("章节内容过短（%d字），可能不够充实", len([]rune(content))),
 			Suggestion:  "建议增加更多细节描写和对话",
 		})
 	}

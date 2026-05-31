@@ -70,7 +70,7 @@ type AIModel struct {
 	CostPer1K     float64 `json:"cost_per_1k_tokens"`
 
 	// 适用任务
-	SuitableTasks string `json:"suitable_tasks" gorm:"type:text"` // JSON数组
+	SuitableTasks string `json:"suitable_tasks" gorm:"type:text"`
 
 	// 默认参数
 	DefaultTemperature float64 `json:"default_temperature" gorm:"type:decimal(3,2)"`
@@ -194,7 +194,6 @@ func (ExperimentResult) TableName() string {
 }
 
 // ModelUsageLog 模型使用记录
-// ModelID 仅作为软引用（无外键约束），允许关联的 AIModel 被删除而不级联报错。
 type ModelUsageLog struct {
 	ID       uint   `json:"id" gorm:"primaryKey"`
 	ModelID  uint   `json:"model_id" gorm:"index:idx_usage_model_time,priority:1;default:0"` // 软引用，0=未关联
@@ -299,7 +298,7 @@ type CreateAIModelRequest struct {
 
 type UpdateAIModelRequest struct {
 	Name      string  `json:"name"`
-	TaskTypes string  `json:"task_types"`
+	TaskTypes string  `json:"task_types"` // JSON 字符串，如 ["chapter"]
 	MaxTokens int     `json:"max_tokens"`
 	CostPer1K float64 `json:"cost_per_1k"`
 	IsDefault *bool   `json:"is_default"`

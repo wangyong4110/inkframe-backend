@@ -38,6 +38,19 @@ type Config struct {
 
 	// 爬取配置
 	Crawl CrawlConfig `mapstructure:"crawl"`
+
+	// 邮件配置
+	Email EmailConfig `mapstructure:"email"`
+}
+
+// EmailConfig SMTP 邮件配置
+type EmailConfig struct {
+	Host     string `mapstructure:"host"`
+	Port     int    `mapstructure:"port"`
+	Username string `mapstructure:"username"`
+	Password string `mapstructure:"password"`
+	From     string `mapstructure:"from"`
+	UseTLS   bool   `mapstructure:"use_tls"`
 }
 
 // CrawlConfig 资产爬取配置

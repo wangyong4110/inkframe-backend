@@ -64,6 +64,10 @@ func (r *UserRepository) GetByOAuth(provider, oauthID string) (*model.User, erro
 	return &user, err
 }
 
+func (r *UserRepository) Delete(id uint) error {
+	return r.db.Delete(&model.User{}, id).Error
+}
+
 // TenantRepository 租户仓库
 type TenantRepository struct {
 	db *gorm.DB
@@ -156,4 +160,38 @@ func (r *TenantUserRepository) UpdateRole(tenantID, userID uint, role string) er
 	return r.db.Model(&model.TenantUser{}).
 		Where("tenant_id = ? AND user_id = ?", tenantID, userID).
 		Update("role", role).Error
+}
+
+// UserTokenRepository 用于密码重置和邮箱验证 token 的仓库
+type UserTokenRepository struct {
+	db *gorm.DB
+}
+
+func NewUserTokenRepository(db *gorm.DB) *UserTokenRepository {
+	return &UserTokenRepository{db: db}
+}
+
+func (r *UserTokenRepository) Create(t *model.UserToken) error {
+	return r.db.Create(t).Error
+}
+
+// FindValid 查找有效（未过期、未使用、未软删除）的 token
+func (r *UserTokenRepository) FindValid(token, tokenType string) (*model.UserToken, error) {
+	var t model.UserToken
+	err := r.db.Where(
+		"token = ? AND token_type = ? AND expires_at > ? AND used_at IS NULL AND deleted_at IS NULL",
+		token, tokenType, time.Now(),
+	).First(&t).Error
+	return &t, err
+}
+
+// MarkUsed 将 token 标记为已使用
+func (r *UserTokenRepository) MarkUsed(id uint) error {
+	now := time.Now()
+	return r.db.Model(&model.UserToken{}).Where("id = ?", id).Update("used_at", now).Error
+}
+
+// DeleteByUser 软删除指定用户的同类型所有 token（发新 token 前先清旧 token）
+func (r *UserTokenRepository) DeleteByUser(userID uint, tokenType string) error {
+	return r.db.Where("user_id = ? AND token_type = ?", userID, tokenType).Delete(&model.UserToken{}).Error
 }

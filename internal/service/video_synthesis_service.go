@@ -6,11 +6,11 @@ package service
 // extracted from video_service.go. All methods remain on *VideoService.
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -253,9 +253,21 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 
 		finalClip := res.clipFile
 
-		// Merge audio if present
+		// Merge audio — use real audio if present, otherwise generate silent track
+		audioPath := ""
 		if shot.AudioPath != "" {
-			audioPath := strings.TrimPrefix(shot.AudioPath, "file://")
+			audioPath = strings.TrimPrefix(shot.AudioPath, "file://")
+		} else {
+			// Generate a silent audio file so every clip has an audio track.
+			// This prevents FFmpeg concat from failing or producing audio dropouts
+			// when clips with and without audio are mixed.
+			silentPath := generateSilentAudio(tmpDir, shot.ShotNo, shot.Duration)
+			if silentPath != "" {
+				audioPath = silentPath
+				logger.Printf("[StitchVideo] shot %d: no audio — using generated silent track", shot.ShotNo)
+			}
+		}
+		if audioPath != "" {
 			mergedFile := fmt.Sprintf("%s/clip_audio_%d.mp4", tmpDir, i)
 			logger.Printf("[StitchVideo] shot %d: merging audio: %s", shot.ShotNo, audioPath)
 			mergeCtx, mergeCancel := context.WithTimeout(ctx, 60*time.Second)
@@ -350,6 +362,12 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 
 // PollAndStitchVideo 后台轮询所有分镜状态，完成后拼接
 func (s *VideoService) PollAndStitchVideo(videoID uint) {
+	if _, loaded := s.activePoll.LoadOrStore(videoID, struct{}{}); loaded {
+		logger.Printf("PollAndStitchVideo: videoID %d already polling, skip", videoID)
+		return
+	}
+	defer s.activePoll.Delete(videoID)
+
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	deadline := time.Now().Add(2 * time.Hour)
@@ -369,7 +387,12 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 			return
 		}
 
-		<-ticker.C
+		select {
+		case <-s.stopCh:
+			logger.Printf("PollAndStitchVideo: videoID %d shutdown", videoID)
+			return
+		case <-ticker.C:
+		}
 
 		// Retry pending shots (from consistency/failed retry)
 		pending, _ := s.storyboardRepo.ListByVideoAndStatus(videoID, "pending")
@@ -439,6 +462,11 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 			noProgressCount++
 			if noProgressCount >= 5 {
 				logger.Printf("PollAndStitchVideo: videoID %d stalled, stopping", videoID)
+				if vid, err := s.videoRepo.GetByID(videoID); err == nil && vid.Status == "generating" {
+					vid.Status = "failed"
+					vid.ErrorMessage = "generation stalled (no progress)"
+					_ = s.videoRepo.Update(vid)
+				}
 				return
 			}
 		} else {
@@ -746,7 +774,11 @@ func downloadFile(url, dest string) error {
 		return err
 	}
 	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
+	const maxVideoBytes = 500 << 20 // 500 MB
+	n, err := io.Copy(f, io.LimitReader(resp.Body, maxVideoBytes+1))
+	if err == nil && n > maxVideoBytes {
+		return fmt.Errorf("video file too large (>500MB)")
+	}
 	return err
 }
 
@@ -765,9 +797,15 @@ func downloadToTemp(url, prefix, ext string) (string, error) {
 		return "", err
 	}
 	defer tmpFile.Close()
-	if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+	const maxVideoBytes = 500 << 20 // 500 MB
+	n, err := io.Copy(tmpFile, io.LimitReader(resp.Body, maxVideoBytes+1))
+	if err != nil {
 		os.Remove(tmpFile.Name())
 		return "", err
+	}
+	if n > maxVideoBytes {
+		os.Remove(tmpFile.Name())
+		return "", fmt.Errorf("video file too large (>500MB)")
 	}
 	return tmpFile.Name(), nil
 }
@@ -785,6 +823,27 @@ func inkframeTempDir() string {
 	return os.TempDir()
 }
 
+// generateSilentAudio creates a silent MP3 of the given duration and returns its local path.
+// Returns "" if FFmpeg fails, so callers must handle the empty case.
+func generateSilentAudio(dir string, shotNo int, durationSecs float64) string {
+	if durationSecs <= 0 {
+		durationSecs = 5.0
+	}
+	outPath := filepath.Join(dir, fmt.Sprintf("silent_%d.mp3", shotNo))
+	out, err := runFFmpegCtx(context.Background(),
+		"-y",
+		"-f", "lavfi", "-i", fmt.Sprintf("anullsrc=r=44100:cl=stereo"),
+		"-t", fmt.Sprintf("%.3f", durationSecs),
+		"-c:a", "libmp3lame", "-q:a", "9",
+		outPath,
+	)
+	if err != nil {
+		logger.Printf("generateSilentAudio: shot %d ffmpeg failed: %v\n%s", shotNo, err, string(out))
+		return ""
+	}
+	return outPath
+}
+
 // uploadClipToStorage 将本地 MP4 文件上传到持久存储（OSS），返回持久 URL。
 // storageSvc 为 nil 或上传失败时返回 ""（调用方保留 file:// 本地路径）。
 func (s *VideoService) uploadClipToStorage(ctx context.Context, shot *model.StoryboardShot, clipPath string) string {
@@ -797,9 +856,15 @@ func (s *VideoService) uploadClipToStorage(ctx context.Context, shot *model.Stor
 		ctx, cancel = context.WithTimeout(ctx, 5*time.Minute)
 		defer cancel()
 	}
-	data, err := os.ReadFile(clipPath)
+	f, err := os.Open(clipPath)
 	if err != nil {
-		logger.Printf("uploadClipToStorage: read %s: %v", clipPath, err)
+		logger.Printf("uploadClipToStorage: open %s: %v", clipPath, err)
+		return ""
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		logger.Printf("uploadClipToStorage: stat %s: %v", clipPath, err)
 		return ""
 	}
 
@@ -816,7 +881,7 @@ func (s *VideoService) uploadClipToStorage(ctx context.Context, shot *model.Stor
 		}
 	}
 
-	ossURL, err := s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), "video/mp4")
+	ossURL, err := s.storageSvc.Upload(ctx, key, f, fi.Size(), "video/mp4")
 	if err != nil {
 		logger.Printf("uploadClipToStorage: upload failed for shot %d: %v", shot.ShotNo, err)
 		return ""

@@ -96,7 +96,8 @@ type Video struct {
 	Status       string `json:"status" gorm:"size:20;default:planning"`
 	ScriptStatus string `json:"script_status" gorm:"size:20;default:draft"`
 	// draft=脚本草稿（可编辑），confirmed=脚本已确认（可生成素材）
-	Progress float64 `json:"progress" gorm:"type:decimal(5,2);default:0"`
+	Progress     float64 `json:"progress" gorm:"type:decimal(5,2);default:0"`
+	ReviewStatus string  `json:"review_status" gorm:"size:20;default:'none'"` // none/pending/reviewed
 
 	// 质量档位
 	QualityTier string `json:"quality_tier" gorm:"size:20;default:preview"`

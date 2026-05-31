@@ -128,6 +128,9 @@ type User struct {
 	OAuthProvider string `json:"oauth_provider" gorm:"column:oauth_provider;size:20;comment:OAuth提供商"`
 	OAuthID       string `json:"oauth_id"       gorm:"column:oauth_id;size:100;comment:OAuth ID"`
 	
+	// 邮箱验证时间（nil = 未验证）
+	EmailVerifiedAt *time.Time `json:"email_verified_at,omitempty" gorm:"default:null"`
+
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`

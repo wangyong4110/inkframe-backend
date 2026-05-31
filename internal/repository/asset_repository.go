@@ -39,7 +39,7 @@ func (r *AssetRepository) Create(a *model.Asset) error { return r.db.Create(a).E
 
 func (r *AssetRepository) GetByID(id uint) (*model.Asset, error) {
 	var a model.Asset
-	err := r.db.Preload("Tags").First(&a, id).Error
+	err := r.db.Preload("Tags").Where("id = ? AND (deleted_at IS NULL OR status != ?)", id, model.AssetStatusTrash).First(&a).Error
 	return &a, err
 }
 
@@ -70,7 +70,9 @@ func (r *AssetRepository) ListTrash(creatorID uint, page, size int) ([]*model.As
 	var assets []*model.Asset
 	var total int64
 	q := r.db.Model(&model.Asset{}).Where("creator_id = ? AND status = ?", creatorID, model.AssetStatusTrash)
-	q.Count(&total)
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 	err := q.Order("deleted_at DESC").Offset((page - 1) * size).Limit(size).Find(&assets).Error
 	return assets, total, err
 }
@@ -138,7 +140,9 @@ func (r *AssetRepository) Search(p AssetSearchParams) ([]*model.Asset, int64, er
 	}
 
 	var total int64
-	q.Count(&total)
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 
 	// Sort
 	sortField := "created_at"
@@ -223,7 +227,9 @@ func (r *AssetRepository) SearchByColor(hexColor string, _ int, scope string, ca
 		q = q.Where("scope = ? AND creator_id = ?", model.AssetScopePersonal, callerID)
 	}
 	var total int64
-	q.Count(&total)
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 	var assets []*model.Asset
 	err := q.Offset((page - 1) * size).Limit(size).Find(&assets).Error
 	return assets, total, err
@@ -411,7 +417,9 @@ func (r *AssetShareRequestRepository) ListPending(page, size int) ([]*model.Asse
 	var reqs []*model.AssetShareRequest
 	var total int64
 	q := r.db.Model(&model.AssetShareRequest{}).Where("status = ?", "pending")
-	q.Count(&total)
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 	err := q.Order("created_at ASC").Offset((page - 1) * size).Limit(size).Find(&reqs).Error
 	return reqs, total, err
 }
@@ -482,7 +490,9 @@ func (r *CrawlJobRepository) UpdateFinal(id uint, status string, totalFound int,
 func (r *CrawlJobRepository) List(page, size int) ([]*model.CrawlJob, int64, error) {
 	var jobs []*model.CrawlJob
 	var total int64
-	r.db.Model(&model.CrawlJob{}).Count(&total)
+	if err := r.db.Model(&model.CrawlJob{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 	err := r.db.Order("created_at DESC").Offset((page - 1) * size).Limit(size).Find(&jobs).Error
 	return jobs, total, err
 }

@@ -16,6 +16,9 @@ func NewVideoRepository(db *gorm.DB) *VideoRepository {
 	return &VideoRepository{db: db}
 }
 
+// DB exposes the underlying *gorm.DB for use in transactions.
+func (r *VideoRepository) DB() *gorm.DB { return r.db }
+
 // Create 创建视频
 func (r *VideoRepository) Create(video *model.Video) error {
 	// Normalize chapter_id=0 to NULL to avoid FK constraint failures
@@ -49,7 +52,7 @@ func (r *VideoRepository) GetByIDAndTenant(id, tenantID uint) (*model.Video, err
 }
 
 // List 获取视频列表
-func (r *VideoRepository) List(novelID *uint, chapterID *uint, tenantID uint, page, pageSize int) ([]*model.Video, int64, error) {
+func (r *VideoRepository) List(novelID *uint, chapterID *uint, status string, tenantID uint, page, pageSize int) ([]*model.Video, int64, error) {
 	var videos []*model.Video
 	var total int64
 
@@ -62,6 +65,9 @@ func (r *VideoRepository) List(novelID *uint, chapterID *uint, tenantID uint, pa
 	}
 	if chapterID != nil {
 		query = query.Where("chapter_id = ?", *chapterID)
+	}
+	if status != "" {
+		query = query.Where("status = ?", status)
 	}
 
 	if err := query.Count(&total).Error; err != nil {

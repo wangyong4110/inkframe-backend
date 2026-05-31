@@ -135,8 +135,8 @@ func (h *CharacterHandler) GetCharacter(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
-	if tenantID := getTenantID(c); character.TenantID != tenantID {
-		respondErr(c, http.StatusForbidden, "forbidden")
+	if character.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
 
@@ -172,23 +172,17 @@ func (h *CharacterHandler) UpdateCharacter(c *gin.Context) {
 		return
 	}
 
-	existing, err := h.characterService.GetCharacter(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "character not found")
-		return
-	}
-	if tenantID := getTenantID(c); existing.TenantID != tenantID {
-		respondErr(c, http.StatusForbidden, "forbidden")
-		return
-	}
-
 	var req model.UpdateCharacterRequest
 	if !bindJSON(c, &req) {
 		return
 	}
 
-	character, err := h.characterService.UpdateCharacter(uint(id), &req)
+	character, err := h.characterService.UpdateCharacter(uint(id), getTenantID(c), &req)
 	if err != nil {
+		if err.Error() == "not found" {
+			respondErr(c, http.StatusNotFound, "character not found")
+			return
+		}
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -204,17 +198,11 @@ func (h *CharacterHandler) DeleteCharacter(c *gin.Context) {
 		return
 	}
 
-	existing, err := h.characterService.GetCharacter(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "character not found")
-		return
-	}
-	if tenantID := getTenantID(c); existing.TenantID != tenantID {
-		respondErr(c, http.StatusForbidden, "forbidden")
-		return
-	}
-
-	if err := h.characterService.DeleteCharacter(uint(id)); err != nil {
+	if err := h.characterService.DeleteCharacter(uint(id), getTenantID(c)); err != nil {
+		if err.Error() == "not found" {
+			respondErr(c, http.StatusNotFound, "character not found")
+			return
+		}
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -333,7 +321,7 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 		updateReq := characterToUpdateReq(char)
 		updateReq.ThreeViewSheet = img.URL // ThreeViewSheet 存储三合一参考图
 
-		updated, err := h.characterService.UpdateCharacter(charID, updateReq)
+		updated, err := h.characterService.UpdateCharacter(charID, tenantID, updateReq)
 		if err != nil {
 			h.taskSvc.Fail(taskID, "save three-view sheet failed: "+err.Error()) //nolint:errcheck
 			return
@@ -419,7 +407,7 @@ func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
 		updateReq.FaceCloseup = img.URL
 		updateReq.Portrait = img.URL // face closeup doubles as portrait/avatar
 
-		updated, err := h.characterService.UpdateCharacter(charID, updateReq)
+		updated, err := h.characterService.UpdateCharacter(charID, tenantID, updateReq)
 		if err != nil {
 			h.taskSvc.Fail(taskID, "save face closeup failed: "+err.Error()) //nolint:errcheck
 			return
@@ -454,7 +442,7 @@ func (h *CharacterHandler) UploadPortrait(c *gin.Context) {
 	}
 	updateReq := characterToUpdateReq(character)
 	updateReq.Portrait = portraitURL
-	updated, err := h.characterService.UpdateCharacter(uint(id), updateReq)
+	updated, err := h.characterService.UpdateCharacter(uint(id), getTenantID(c), updateReq)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to update portrait")
 		return
@@ -828,7 +816,7 @@ func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
 	if len(rawURL) > 7 && rawURL[:7] == "file://" {
 		playURL = "/api/v1/characters/" + c.Param("id") + "/voice/sample?t=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
 	}
-	h.characterService.UpdateCharacter(uint(id), &model.UpdateCharacterRequest{ //nolint:errcheck
+	h.characterService.UpdateCharacter(uint(id), getTenantID(c), &model.UpdateCharacterRequest{ //nolint:errcheck
 		Name:        character.Name,
 		VoiceSample: rawURL,
 	})

@@ -14,6 +14,8 @@ func NewStoryboardRepository(db *gorm.DB) *StoryboardRepository {
 	return &StoryboardRepository{db: db}
 }
 
+func (r *StoryboardRepository) DB() *gorm.DB { return r.db }
+
 // Create 创建分镜
 func (r *StoryboardRepository) Create(shot *model.StoryboardShot) error {
 	return r.db.Create(shot).Error
@@ -156,6 +158,8 @@ type ShotVoiceSegmentRepository struct {
 func NewShotVoiceSegmentRepository(db *gorm.DB) *ShotVoiceSegmentRepository {
 	return &ShotVoiceSegmentRepository{db: db}
 }
+
+func (r *ShotVoiceSegmentRepository) DB() *gorm.DB { return r.db }
 
 // ListByShotID 获取分镜的所有语音段落，按 seq_no 升序
 func (r *ShotVoiceSegmentRepository) ListByShotID(shotID uint) ([]*model.ShotVoiceSegment, error) {

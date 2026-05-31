@@ -154,13 +154,18 @@ func (r *AIModelRepository) GetByName(name string) (*model.AIModel, error) {
 	return &m, nil
 }
 
-// List 获取所有模型
-func (r *AIModelRepository) List(providerID *uint) ([]*model.AIModel, error) {
+// List 获取模型列表，支持按提供商和租户过滤。
+// tenantID=0 时不进行租户过滤（仅限内部调用）。
+func (r *AIModelRepository) List(providerID *uint, tenantID uint) ([]*model.AIModel, error) {
 	var models []*model.AIModel
-	query := r.db.Preload("Provider")
+	query := r.db.Preload("Provider").
+		Joins("JOIN ink_model_provider p ON p.id = ink_ai_model.provider_id AND p.deleted_at IS NULL")
 
+	if tenantID > 0 {
+		query = query.Where("p.tenant_id = 0 OR p.tenant_id = ?", tenantID)
+	}
 	if providerID != nil {
-		query = query.Where("provider_id = ?", *providerID)
+		query = query.Where("ink_ai_model.provider_id = ?", *providerID)
 	}
 
 	if err := query.Find(&models).Error; err != nil {

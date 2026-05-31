@@ -126,6 +126,10 @@ type UploadAssetParams struct {
 }
 
 func (s *AssetService) Upload(ctx context.Context, r io.Reader, size int64, p UploadAssetParams) (*model.Asset, error) {
+	if s.storageSvc == nil {
+		return nil, fmt.Errorf("storage service not configured")
+	}
+
 	// Quota check
 	quota, err := s.quotaRepo.Get(p.TenantID)
 	if err == nil && quota.StorageUsedBytes+size > quota.StorageLimitBytes {
@@ -383,6 +387,9 @@ func (s *AssetService) ListVersions(assetID uint) ([]*model.AssetVersion, error)
 }
 
 func (s *AssetService) CreateVersion(ctx context.Context, assetID, callerID uint, r io.Reader, size int64, mimeType, note string) (*model.AssetVersion, error) {
+	if s.storageSvc == nil {
+		return nil, fmt.Errorf("storage service not configured")
+	}
 	a, err := s.assetRepo.GetByID(assetID)
 	if err != nil || a.CreatorID != callerID {
 		return nil, errors.New("not found or permission denied")
@@ -550,6 +557,9 @@ type ShareLinkOptions struct {
 }
 
 func (s *AssetService) CreateShareLink(callerID uint, opts ShareLinkOptions) (*model.ShareLink, error) {
+	if (opts.AssetID == nil) == (opts.CollectionID == nil) {
+		return nil, errors.New("exactly one of asset_id or collection_id must be set")
+	}
 	token := randomHex(32)
 	sl := &model.ShareLink{
 		Token: token, CreatedBy: callerID,

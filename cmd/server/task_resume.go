@@ -137,7 +137,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					FaceCloseup:    char.FaceCloseup,
 					Portrait:       char.Portrait,
 				}
-				updated, err := svcs.CharacterService.UpdateCharacter(charID, updateReq)
+				updated, err := svcs.CharacterService.UpdateCharacter(charID, char.TenantID, updateReq)
 				if err != nil {
 					svcs.TaskService.Fail(t.TaskID, "save three-view sheet failed: "+err.Error()) //nolint:errcheck
 					return
@@ -342,7 +342,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				FaceCloseup:    img.URL,
 				Portrait:       img.URL,
 			}
-			updated, err := svcs.CharacterService.UpdateCharacter(charID, updateReq)
+			updated, err := svcs.CharacterService.UpdateCharacter(charID, char.TenantID, updateReq)
 			if err != nil {
 				svcs.TaskService.Fail(t.TaskID, "save face closeup failed: "+err.Error()) //nolint:errcheck
 				return

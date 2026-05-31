@@ -1,0 +1,69 @@
+package repository
+
+import (
+	"github.com/inkframe/inkframe-backend/internal/model"
+	"gorm.io/gorm"
+)
+
+// NotificationRepository 站内通知仓库
+type NotificationRepository struct{ db *gorm.DB }
+
+// NewNotificationRepository 创建通知仓库
+func NewNotificationRepository(db *gorm.DB) *NotificationRepository {
+	return &NotificationRepository{db: db}
+}
+
+// Create 创建通知
+func (r *NotificationRepository) Create(n *model.Notification) error {
+	return r.db.Create(n).Error
+}
+
+// List 分页查询用户通知（最新在前）
+func (r *NotificationRepository) List(userID, tenantID uint, onlyUnread bool, page, size int) ([]*model.Notification, int64, error) {
+	var total int64
+	var items []*model.Notification
+	q := r.db.Model(&model.Notification{}).
+		Where("user_id = ? AND tenant_id = ?", userID, tenantID)
+	if onlyUnread {
+		q = q.Where("is_read = ?", false)
+	}
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	if page < 1 {
+		page = 1
+	}
+	if size < 1 || size > 100 {
+		size = 20
+	}
+	err := q.Order("created_at DESC").Offset((page-1)*size).Limit(size).Find(&items).Error
+	return items, total, err
+}
+
+// UnreadCount 未读数
+func (r *NotificationRepository) UnreadCount(userID, tenantID uint) (int64, error) {
+	var count int64
+	err := r.db.Model(&model.Notification{}).
+		Where("user_id = ? AND tenant_id = ? AND is_read = ?", userID, tenantID, false).
+		Count(&count).Error
+	return count, err
+}
+
+// MarkRead 标记单条已读
+func (r *NotificationRepository) MarkRead(id, userID uint) error {
+	return r.db.Model(&model.Notification{}).
+		Where("id = ? AND user_id = ?", id, userID).
+		Update("is_read", true).Error
+}
+
+// MarkAllRead 标记全部已读
+func (r *NotificationRepository) MarkAllRead(userID, tenantID uint) error {
+	return r.db.Model(&model.Notification{}).
+		Where("user_id = ? AND tenant_id = ? AND is_read = ?", userID, tenantID, false).
+		Update("is_read", true).Error
+}
+
+// Delete 删除单条（软删除）
+func (r *NotificationRepository) Delete(id, userID uint) error {
+	return r.db.Where("id = ? AND user_id = ?", id, userID).Delete(&model.Notification{}).Error
+}

@@ -206,8 +206,67 @@ func (r *NovelRepository) DeleteWithCascade(id uint) error {
 			return e
 		}
 
+		// ── 5b. 分镜子表（通过 shot → video → novel）
+		if e := tryExec(`DELETE FROM ink_shot_voice_segment WHERE shot_id IN (SELECT id FROM ink_storyboard_shot WHERE video_id IN (SELECT id FROM ink_video WHERE novel_id = ?))`, id); e != nil {
+			return e
+		}
+		if e := tryExec(`DELETE FROM ink_shot_sfx_item WHERE shot_id IN (SELECT id FROM ink_storyboard_shot WHERE video_id IN (SELECT id FROM ink_video WHERE novel_id = ?))`, id); e != nil {
+			return e
+		}
+
+		// ── 5c. 视频 BGM 分段（通过 video → novel）
+		if e := tryExec(`DELETE FROM ink_video_bgm_segment WHERE video_id IN (SELECT id FROM ink_video WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+
+		// ── 5d. 改写项目子表（通过 rewrite_project → novel）
+		if e := tryExec(`DELETE FROM ink_chapter_rewrite_task WHERE project_id IN (SELECT id FROM ink_rewrite_project WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+		if e := tryExec(`DELETE FROM ink_literary_analysis WHERE project_id IN (SELECT id FROM ink_rewrite_project WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+		if e := tryExec(`DELETE FROM ink_rewrite_bible WHERE project_id IN (SELECT id FROM ink_rewrite_project WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+		if e := tryExec(`DELETE FROM ink_rewrite_continuity_index WHERE project_id IN (SELECT id FROM ink_rewrite_project WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+		if e := tryExec(`DELETE FROM ink_rewrite_chapter_summary WHERE project_id IN (SELECT id FROM ink_rewrite_project WHERE novel_id = ?)`, id); e != nil {
+			return e
+		}
+
+		// ── 5e. 审查记录（通过 chapter → novel 或 video → novel）
+		if e := tryExec(`DELETE FROM ink_review_record WHERE (entity_type = 'chapter' AND entity_id IN (SELECT id FROM ink_chapter WHERE novel_id = ?)) OR (entity_type = 'storyboard' AND entity_id IN (SELECT id FROM ink_video WHERE novel_id = ?))`, id, id); e != nil {
+			return e
+		}
+		if e := tryExec(`DELETE FROM ink_ignored_review_issue WHERE (entity_type = 'chapter' AND entity_id IN (SELECT id FROM ink_chapter WHERE novel_id = ?)) OR (entity_type = 'storyboard' AND entity_id IN (SELECT id FROM ink_video WHERE novel_id = ?))`, id, id); e != nil {
+			return e
+		}
+
+		// ── 5f. 社交数据（novel_id / chapter_id 直接关联）
+		if e := tryExec(`DELETE FROM ink_novel_like WHERE novel_id = ?`, id); e != nil {
+			return e
+		}
+		if e := tryExec(`DELETE FROM ink_novel_comment WHERE novel_id = ?`, id); e != nil {
+			return e
+		}
+		if e := tryExec(`DELETE FROM ink_chapter_like WHERE novel_id = ?`, id); e != nil {
+			return e
+		}
+		if e := tryExec(`DELETE FROM ink_chapter_comment WHERE novel_id = ?`, id); e != nil {
+			return e
+		}
+		if e := tryExec(`DELETE FROM ink_reading_progress WHERE novel_id = ?`, id); e != nil {
+			return e
+		}
+		if e := tryExec(`DELETE FROM ink_chapter_read_record WHERE novel_id = ?`, id); e != nil {
+			return e
+		}
+
 		// ── 6. 扩展表（novel_id 直接关联；部分表可能尚未迁移，tryExec 会跳过）
 		extStmts := []string{
+			`DELETE FROM ink_rewrite_project WHERE novel_id = ?`,
 			`DELETE FROM ink_video WHERE novel_id = ?`,
 			`DELETE FROM ink_scene_anchor WHERE novel_id = ?`,
 			`DELETE FROM ink_arc_summary WHERE novel_id = ?`,
@@ -257,14 +316,28 @@ func (r *NovelRepository) SyncStats(novelID uint) error {
 		Count int
 		Words int
 	}
-	r.db.Model(&model.Chapter{}).
-		Select("COUNT(*) as count, COALESCE(SUM(word_count), 0) as words").
-		Where("novel_id = ?", novelID).
-		Scan(&result)
+	if err := r.db.Model(&model.Chapter{}).
+		Select("COUNT(*) AS count, COALESCE(SUM(word_count),0) AS words").
+		Where("novel_id = ? AND deleted_at IS NULL", novelID).
+		Scan(&result).Error; err != nil {
+		return err
+	}
 	if err := r.db.Model(&model.Novel{}).Where("id = ?", novelID).Updates(map[string]interface{}{
 		"chapter_count": result.Count,
 		"total_words":   result.Words,
 	}).Error; err != nil {
+		return err
+	}
+	r.invalidateCache(novelID)
+	return nil
+}
+
+// SyncPublishedCount 重新计算并更新已发布章节数（幂等，最终一致）。
+func (r *NovelRepository) SyncPublishedCount(novelID uint) error {
+	if err := r.db.Exec(
+		"UPDATE ink_novel SET published_count = (SELECT COUNT(*) FROM ink_chapter WHERE novel_id = ? AND is_published = TRUE AND deleted_at IS NULL) WHERE id = ?",
+		novelID, novelID,
+	).Error; err != nil {
 		return err
 	}
 	r.invalidateCache(novelID)
@@ -387,25 +460,41 @@ func (r *NovelRepository) GetPublicRanking(rankType, gender string, limit int) (
 
 // IncrNovelViewCount 浏览量+1
 func (r *NovelRepository) IncrNovelViewCount(id uint) error {
-	return r.db.Model(&model.Novel{}).Where("id = ?", id).
-		UpdateColumn("view_count", gorm.Expr("view_count + 1")).Error
+	if err := r.db.Model(&model.Novel{}).Where("id = ?", id).
+		UpdateColumn("view_count", gorm.Expr("view_count + 1")).Error; err != nil {
+		return err
+	}
+	r.invalidateCache(id)
+	return nil
 }
 
 // IncrNovelLikeCount 点赞数 delta（+1 或 -1）
 func (r *NovelRepository) IncrNovelLikeCount(id uint, delta int) error {
-	return r.db.Model(&model.Novel{}).Where("id = ?", id).
-		UpdateColumn("like_count", gorm.Expr("like_count + ?", delta)).Error
+	if err := r.db.Model(&model.Novel{}).Where("id = ?", id).
+		UpdateColumn("like_count", gorm.Expr("like_count + ?", delta)).Error; err != nil {
+		return err
+	}
+	r.invalidateCache(id)
+	return nil
 }
 
 // IncrNovelCommentCount 评论数 delta
 func (r *NovelRepository) IncrNovelCommentCount(id uint, delta int) error {
-	return r.db.Model(&model.Novel{}).Where("id = ?", id).
-		UpdateColumn("comment_count", gorm.Expr("comment_count + ?", delta)).Error
+	if err := r.db.Model(&model.Novel{}).Where("id = ?", id).
+		UpdateColumn("comment_count", gorm.Expr("comment_count + ?", delta)).Error; err != nil {
+		return err
+	}
+	r.invalidateCache(id)
+	return nil
 }
 
 // UpdateNovelHotScore 更新热度分
 func (r *NovelRepository) UpdateNovelHotScore(id uint, score float64) error {
-	return r.db.Model(&model.Novel{}).Where("id = ?", id).Update("hot_score", score).Error
+	if err := r.db.Model(&model.Novel{}).Where("id = ?", id).Update("hot_score", score).Error; err != nil {
+		return err
+	}
+	r.invalidateCache(id)
+	return nil
 }
 
 // ListPublicNovelsForHotCalc 批量拉取公开小说用于热度分计算
@@ -479,4 +568,67 @@ func (r *NovelCommentRepository) GetByID(id uint) (*model.NovelComment, error) {
 
 func (r *NovelCommentRepository) Delete(id uint) error {
 	return r.db.Delete(&model.NovelComment{}, id).Error
+}
+
+// DeleteWithReplies deletes a comment and all its direct replies atomically.
+func (r *NovelCommentRepository) DeleteWithReplies(id uint) (int64, error) {
+	var replyCount int64
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		result := tx.Where("parent_id = ?", id).Delete(&model.NovelComment{})
+		if result.Error != nil {
+			return result.Error
+		}
+		replyCount = result.RowsAffected
+		return tx.Delete(&model.NovelComment{}, id).Error
+	})
+	if err != nil {
+		return 0, err
+	}
+	return replyCount + 1, nil
+}
+
+// ─── NovelCrawlJobRepository ─────────────────────────────────────────────────
+
+type NovelCrawlJobRepository struct{ db *gorm.DB }
+
+func NewNovelCrawlJobRepository(db *gorm.DB) *NovelCrawlJobRepository {
+	return &NovelCrawlJobRepository{db: db}
+}
+
+// Create 创建爬取任务记录
+func (r *NovelCrawlJobRepository) Create(job *model.NovelCrawlJob) error {
+	return r.db.Create(job).Error
+}
+
+// GetLatestByNovelID 获取小说最新的爬取任务
+func (r *NovelCrawlJobRepository) GetLatestByNovelID(novelID uint) (*model.NovelCrawlJob, error) {
+	var job model.NovelCrawlJob
+	err := r.db.Where("novel_id = ?", novelID).Order("id DESC").First(&job).Error
+	if err != nil {
+		return nil, err
+	}
+	return &job, nil
+}
+
+// UpdateProgress 更新爬取进度
+func (r *NovelCrawlJobRepository) UpdateProgress(id uint, done, total, failed int) error {
+	return r.db.Model(&model.NovelCrawlJob{}).Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"progress":     done,
+			"total_chaps":  total,
+			"failed_count": failed,
+		}).Error
+}
+
+// Finalize 完成爬取任务（更新最终状态）
+func (r *NovelCrawlJobRepository) Finalize(id uint, status string, done, total, failed int) error {
+	now := time.Now()
+	return r.db.Model(&model.NovelCrawlJob{}).Where("id = ?", id).
+		Updates(map[string]interface{}{
+			"status":       status,
+			"progress":     done,
+			"total_chaps":  total,
+			"failed_count": failed,
+			"completed_at": &now,
+		}).Error
 }

@@ -642,6 +642,10 @@ func calculateLevelAwareQuality(lexSim, structSim float64, origLen, rewLen int, 
 // ── CRUD ──────────────────────────────────────────────────────────────────────
 
 func (s *RewriteService) CreateProject(tenantID, novelID uint, name string, level int) (*model.RewriteProject, error) {
+	novel, err := s.novelRepo.GetByID(novelID)
+	if err != nil || novel.TenantID != tenantID {
+		return nil, fmt.Errorf("novel not found")
+	}
 	project := &model.RewriteProject{
 		TenantID: tenantID,
 		NovelID:  novelID,
@@ -1197,6 +1201,13 @@ func (s *RewriteService) rewriteChapterWithRetry(
 		if err := s.chapterTaskRepo.AcceptAttempt(task.ID, att.LexSim, att.StructSim, att.SemanticSim, att.Passed); err != nil {
 			return nil, err
 		}
+		// Sync accepted rewrite content back to the source chapter
+		if att.Content != "" {
+			if err := s.chapterRepo.UpdateContent(task.ChapterID, att.Content); err != nil {
+				logger.Printf("AcceptAttempt: sync chapter content failed: %v", err)
+				// non-fatal: task is accepted, chapter update is best-effort
+			}
+		}
 		return att, nil
 	}
 
@@ -1206,6 +1217,13 @@ func (s *RewriteService) rewriteChapterWithRetry(
 		logger.Printf("[Rewrite] chapter %d exhausted retries, accepting degraded result (passed=%v)", task.ChapterNo, lastAttempt.Passed)
 		if err := s.chapterTaskRepo.AcceptAttempt(task.ID, lastAttempt.LexSim, lastAttempt.StructSim, lastAttempt.SemanticSim, false); err != nil {
 			logger.Printf("[Rewrite] AcceptAttempt (degraded) ch%d: %v", task.ChapterNo, err)
+		}
+		// Sync accepted rewrite content back to the source chapter
+		if lastAttempt.Content != "" {
+			if err := s.chapterRepo.UpdateContent(task.ChapterID, lastAttempt.Content); err != nil {
+				logger.Printf("AcceptAttempt: sync chapter content failed: %v", err)
+				// non-fatal: task is accepted, chapter update is best-effort
+			}
 		}
 		return lastAttempt, nil
 	}

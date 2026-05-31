@@ -26,6 +26,7 @@ type NovelService struct {
 	characterRepo    *repository.CharacterRepository
 	snapshotRepo     *repository.CharacterStateSnapshotRepository
 	plotPointService *PlotPointService
+	notifSvc         *NotificationService // 可选，用于章节生成完成通知
 	// 广场社交
 	novelLikeRepo    *repository.NovelLikeRepository
 	novelCommentRepo *repository.NovelCommentRepository
@@ -46,9 +47,13 @@ func NewNovelService(
 	}
 }
 
-// Shutdown 停止所有后台 goroutine（优雅关闭时调用）。
+// Shutdown 停止所有后台 goroutine（优雅关闭时调用）。防止重复关闭 panic。
 func (s *NovelService) Shutdown() {
-	close(s.stopCh)
+	select {
+	case <-s.stopCh:
+	default:
+		close(s.stopCh)
+	}
 }
 
 // WithCharacterRepos 设置角色相关仓库（用于快照写入）
@@ -61,6 +66,12 @@ func (s *NovelService) WithCharacterRepos(characterRepo *repository.CharacterRep
 // WithPlotPointService 注入剧情点服务（用于AI提取后保存）
 func (s *NovelService) WithPlotPointService(svc *PlotPointService) *NovelService {
 	s.plotPointService = svc
+	return s
+}
+
+// WithNotificationService 注入通知服务（可选，用于章节生成完成后发送站内通知）
+func (s *NovelService) WithNotificationService(svc *NotificationService) *NovelService {
+	s.notifSvc = svc
 	return s
 }
 
@@ -109,9 +120,16 @@ func (s *NovelService) Create(req *CreateNovelRequest) (*model.Novel, error) {
 	return novel, nil
 }
 
-// GetNovel 获取小说
-func (s *NovelService) GetNovel(id uint) (*model.Novel, error) {
-	return s.novelRepo.GetByID(id)
+// GetNovel 获取小说（含租户校验）
+func (s *NovelService) GetNovel(id, tenantID uint) (*model.Novel, error) {
+	novel, err := s.novelRepo.GetByID(id)
+	if err != nil {
+		return nil, fmt.Errorf("not found")
+	}
+	if novel.TenantID != tenantID {
+		return nil, fmt.Errorf("not found")
+	}
+	return novel, nil
 }
 
 // ListNovelsFiltered 获取小说列表（带过滤器）
@@ -130,8 +148,15 @@ func (s *NovelService) UpdateNovelEntity(novel *model.Novel) error {
 	return s.novelRepo.Update(novel)
 }
 
-// DeleteNovel 删除小说及其全部关联数据
-func (s *NovelService) DeleteNovel(id uint) error {
+// DeleteNovel 删除小说及其全部关联数据（含租户校验）
+func (s *NovelService) DeleteNovel(id, tenantID uint) error {
+	novel, err := s.novelRepo.GetByID(id)
+	if err != nil {
+		return fmt.Errorf("not found")
+	}
+	if novel.TenantID != tenantID {
+		return fmt.Errorf("not found")
+	}
 	return s.novelRepo.DeleteWithCascade(id)
 }
 
@@ -150,11 +175,14 @@ func (s *NovelService) CreateNovel(req *model.CreateNovelRequest) (*model.Novel,
 	})
 }
 
-// UpdateNovel handler-compatible wrapper
-func (s *NovelService) UpdateNovel(id uint, req *model.UpdateNovelRequest) (*model.Novel, error) {
+// UpdateNovel handler-compatible wrapper（含租户校验）
+func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequest) (*model.Novel, error) {
 	novel, err := s.novelRepo.GetByID(id)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("not found")
+	}
+	if novel.TenantID != tenantID {
+		return nil, fmt.Errorf("not found")
 	}
 	if req.Title != "" {
 		novel.Title = req.Title
@@ -362,26 +390,97 @@ func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID
 	return imageURL, nil
 }
 
-// PublishNovel 发布小说到广场
-func (s *NovelService) PublishNovel(id uint, visibility string) (*model.Novel, error) {
+// PublishNovel 发布小说到广场（含租户校验）
+func (s *NovelService) PublishNovel(id, tenantID uint, visibility string) (*model.Novel, error) {
+	novel, err := s.novelRepo.GetByID(id)
+	if err != nil {
+		return nil, fmt.Errorf("not found")
+	}
+	if novel.TenantID != tenantID {
+		return nil, fmt.Errorf("not found")
+	}
+	if visibility == "" {
+		visibility = "public"
+	}
+	now := time.Now()
+	if novel.ReviewStatus == "approved" {
+		// 已审核通过，直接发布
+		novel.IsPublished = true
+		novel.PublishedAt = &now
+		novel.Visibility = visibility
+		if err := s.novelRepo.UpdateFields(id, map[string]interface{}{
+			"is_published": true, "published_at": &now, "visibility": visibility,
+		}); err != nil {
+			return nil, err
+		}
+	} else {
+		// 提交审核，不直接发布
+		novel.ReviewStatus = "pending_review"
+		novel.Visibility = visibility
+		if err := s.novelRepo.UpdateFields(id, map[string]interface{}{
+			"review_status": "pending_review", "visibility": visibility,
+		}); err != nil {
+			return nil, err
+		}
+	}
+	return novel, nil
+}
+
+// ReviewNovelRequest 审核小说请求
+type ReviewNovelRequest struct {
+	Approved   bool   `json:"approved"`
+	ReviewNote string `json:"review_note"`
+}
+
+// ReviewNovel 审核小说（管理员操作）
+func (s *NovelService) ReviewNovel(id, reviewerID, tenantID uint, req ReviewNovelRequest) (*model.Novel, error) {
 	novel, err := s.novelRepo.GetByID(id)
 	if err != nil {
 		return nil, err
 	}
+	if novel.TenantID != tenantID {
+		return nil, fmt.Errorf("novel not found")
+	}
+	if novel.ReviewStatus != "pending_review" {
+		return nil, fmt.Errorf("novel is not pending review")
+	}
 	now := time.Now()
-	novel.IsPublished = true
-	novel.PublishedAt = &now
-	novel.Visibility = visibility
-	if err := s.novelRepo.UpdateFields(id, map[string]interface{}{
-		"is_published": true, "published_at": &now, "visibility": visibility,
-	}); err != nil {
+	fields := map[string]interface{}{
+		"reviewed_at": &now,
+		"reviewed_by": reviewerID,
+	}
+	if req.Approved {
+		novel.ReviewStatus = "approved"
+		novel.IsPublished = true
+		novel.PublishedAt = &now
+		novel.ReviewedAt = &now
+		novel.ReviewedBy = reviewerID
+		fields["review_status"] = "approved"
+		fields["is_published"] = true
+		fields["published_at"] = &now
+	} else {
+		novel.ReviewStatus = "rejected"
+		novel.ReviewNote = req.ReviewNote
+		novel.ReviewedAt = &now
+		novel.ReviewedBy = reviewerID
+		fields["review_status"] = "rejected"
+		fields["review_note"] = req.ReviewNote
+	}
+	if err := s.novelRepo.UpdateFields(id, fields); err != nil {
 		return nil, err
 	}
 	return novel, nil
 }
 
-// UnpublishNovel 取消发布小说
-func (s *NovelService) UnpublishNovel(id uint) error {
+// UnpublishNovel 取消发布小说（含租户校验）
+func (s *NovelService) UnpublishNovel(id, tenantID uint) error {
+	novel, err := s.novelRepo.GetByID(id)
+	if err != nil {
+		return fmt.Errorf("not found")
+	}
+	if novel.TenantID != tenantID {
+		return fmt.Errorf("not found")
+	}
 	return s.novelRepo.UpdateFields(id, map[string]interface{}{
 		"is_published": false, "visibility": "private",
 	})
@@ -496,6 +595,29 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 					}
 				}
 			}
+		}
+	}
+
+	// 大纲生成成功后，自动创建占位章节（跳过已存在的）
+	for _, chap := range outline.Chapters {
+		if _, err := s.chapterRepo.GetByNovelAndChapterNo(novel.ID, chap.ChapterNo); err == nil {
+			continue // 已存在，跳过
+		}
+		placeholder := &model.Chapter{
+			UUID:          uuid.New().String(),
+			NovelID:       novel.ID,
+			TenantID:      novel.TenantID,
+			ChapterNo:     chap.ChapterNo,
+			Title:         chap.Title,
+			Summary:       chap.Summary,
+			TensionLevel:  chap.TensionLevel,
+			ActNo:         chap.Act,
+			EmotionalTone: chap.EmotionalTone,
+			HookType:      chap.HookType,
+			Status:        "draft",
+		}
+		if err := s.chapterRepo.Create(placeholder); err != nil {
+			logger.Printf("GenerateOutline: create placeholder chapter %d: %v", chap.ChapterNo, err)
 		}
 	}
 
@@ -730,6 +852,18 @@ func (s *NovelService) GenerateChapter(req *GenerateChapterRequest) (*model.Chap
 		go s.writeCharacterSnapshots(0, chapter)
 	}
 
+	// 站内通知：章节生成完成
+	if s.notifSvc != nil {
+		_ = s.notifSvc.Send(
+			novel.TenantID, 0,
+			"chapter_done",
+			"章节生成完成",
+			fmt.Sprintf("《%s》第%d章已生成完毕", novel.Title, chapter.ChapterNo),
+			"chapter", chapter.ID,
+			fmt.Sprintf("/novel/%d", novel.ID),
+		)
+	}
+
 	return chapter, nil
 }
 
@@ -905,8 +1039,8 @@ func (s *NovelService) SyncCharacterSnapshots(
 
 	// 重新生成：结合上章快照 + 本章内容，调用 AI
 	contentPreview := chapter.Content
-	if len(contentPreview) > 3000 {
-		contentPreview = contentPreview[:3000] + "..."
+	if runes := []rune(contentPreview); len(runes) > 3000 {
+		contentPreview = string(runes[:3000]) + "..."
 	}
 
 	for _, char := range chars {
@@ -1050,30 +1184,10 @@ func (s *NovelService) buildChapterPrompt(novel *model.Novel, req *GenerateChapt
 	return sb.String()
 }
 
-// updateNovelStats 更新小说统计
+// updateNovelStats 更新小说统计（使用 DB 聚合避免并发竞态）
 func (s *NovelService) updateNovelStats(novelID uint) {
-	chapters, err := s.chapterRepo.ListByNovel(novelID)
-	if err != nil {
-		logger.Printf("updateNovelStats: list chapters for novel %d: %v", novelID, err)
-		return
-	}
-
-	var totalWords int
-	for _, ch := range chapters {
-		totalWords += ch.WordCount
-	}
-
-	fields := map[string]interface{}{
-		"chapter_count": len(chapters),
-		"total_words":   totalWords,
-	}
-
-	if len(chapters) > 0 {
-		fields["status"] = "writing"
-	}
-
-	if err := s.novelRepo.UpdateFields(novelID, fields); err != nil {
-		logger.Printf("updateNovelStats: update novel %d: %v", novelID, err)
+	if err := s.novelRepo.SyncStats(novelID); err != nil {
+		logger.Printf("updateNovelStats: sync novel %d: %v", novelID, err)
 	}
 }
 
@@ -1158,12 +1272,17 @@ func (s *NovelService) GetNovelRanking(rankType, gender string) ([]*model.Novel,
 // RecordNovelViewDeduped 防刷浏览量（同 IP 对同一小说 1 小时内只计一次）
 func (s *NovelService) RecordNovelViewDeduped(id uint, clientIP string) error {
 	key := fmt.Sprintf("novel:%s:%d", clientIP, id)
-	if v, ok := s.novelViewDedup.Load(key); ok {
-		if expiry, ok2 := v.(time.Time); ok2 && time.Now().Before(expiry) {
+	// LoadOrStore is atomic: only the goroutine that actually stored increments the count.
+	expiry := time.Now().Add(time.Hour)
+	actual, loaded := s.novelViewDedup.LoadOrStore(key, expiry)
+	if loaded {
+		// Key already existed — check whether it has expired.
+		if t, ok := actual.(time.Time); ok && time.Now().Before(t) {
 			return nil
 		}
+		// Expired: replace and count.
+		s.novelViewDedup.Store(key, expiry)
 	}
-	s.novelViewDedup.Store(key, time.Now().Add(time.Hour))
 	return s.novelRepo.IncrNovelViewCount(id)
 }
 
@@ -1229,7 +1348,7 @@ func (s *NovelService) AddNovelComment(novelID, userID uint, nickname, content s
 	return c, nil
 }
 
-// DeleteNovelComment 删除评论（仅作者本人）
+// DeleteNovelComment 删除评论及其子回复（仅作者本人）
 func (s *NovelService) DeleteNovelComment(commentID, userID uint) error {
 	if s.novelCommentRepo == nil {
 		return fmt.Errorf("comment feature not available")
@@ -1241,10 +1360,11 @@ func (s *NovelService) DeleteNovelComment(commentID, userID uint) error {
 	if c.UserID != userID {
 		return ErrPermissionDenied
 	}
-	if err := s.novelCommentRepo.Delete(commentID); err != nil {
+	deleted, err := s.novelCommentRepo.DeleteWithReplies(commentID)
+	if err != nil {
 		return err
 	}
-	_ = s.novelRepo.IncrNovelCommentCount(c.NovelID, -1)
+	_ = s.novelRepo.IncrNovelCommentCount(c.NovelID, -int(deleted))
 	return nil
 }
 

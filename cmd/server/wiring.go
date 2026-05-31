@@ -36,6 +36,7 @@ type Repositories struct {
 	TenantUserRepo          *repository.TenantUserRepository
 	ArcSummaryRepo          *repository.ArcSummaryRepository
 	ItemRepo                *repository.ItemRepository
+	SkillRepo               *repository.SkillRepository
 	ChapterItemRepo         *repository.ChapterItemRepository
 	ChapterCharacterRepo    *repository.ChapterCharacterRepository
 	PlotPointRepo           *repository.PlotPointRepository
@@ -56,8 +57,9 @@ type Repositories struct {
 	ChapterRewriteTaskRepo       *repository.ChapterRewriteTaskRepository
 	RewriteContinuityIndexRepo   *repository.RewriteContinuityIndexRepository
 	RewriteChapterSummaryRepo    *repository.RewriteChapterSummaryRepository
-	PlatformAccountRepo     *repository.PlatformAccountRepository
-	VideoPublishRecordRepo  *repository.VideoPublishRecordRepository
+	PlatformAccountRepo      *repository.PlatformAccountRepository
+	VideoPublishRecordRepo   *repository.VideoPublishRecordRepository
+	ContinuityReportRepo     *repository.ContinuityReportRepository
 	// Asset Library
 	AssetRepo               *repository.AssetRepository
 	TagRepo                 *repository.TagRepository
@@ -79,6 +81,9 @@ type Repositories struct {
 	ChapterCommentRepo      *repository.ChapterCommentRepository
 	ReadingProgressRepo     *repository.ReadingProgressRepository
 	ChapterReadRecordRepo   *repository.ChapterReadRecordRepository
+	UserTokenRepo           *repository.UserTokenRepository
+	NovelCrawlJobRepo       *repository.NovelCrawlJobRepository
+	NotificationRepo        *repository.NotificationRepository
 }
 
 // initRepositories 初始化仓库层
@@ -104,6 +109,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		TenantUserRepo:          repository.NewTenantUserRepository(db),
 		ArcSummaryRepo:          repository.NewArcSummaryRepository(db),
 		ItemRepo:                repository.NewItemRepository(db),
+		SkillRepo:               repository.NewSkillRepository(db),
 		ChapterItemRepo:         repository.NewChapterItemRepository(db),
 		ChapterCharacterRepo:    repository.NewChapterCharacterRepository(db),
 		PlotPointRepo:           repository.NewPlotPointRepository(db),
@@ -124,8 +130,9 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		ChapterRewriteTaskRepo:       repository.NewChapterRewriteTaskRepository(db),
 		RewriteContinuityIndexRepo:   repository.NewRewriteContinuityIndexRepository(db),
 		RewriteChapterSummaryRepo:    repository.NewRewriteChapterSummaryRepository(db),
-		PlatformAccountRepo:     repository.NewPlatformAccountRepository(db),
-		VideoPublishRecordRepo:  repository.NewVideoPublishRecordRepository(db),
+		PlatformAccountRepo:      repository.NewPlatformAccountRepository(db),
+		VideoPublishRecordRepo:   repository.NewVideoPublishRecordRepository(db),
+		ContinuityReportRepo:     repository.NewContinuityReportRepository(db),
 		// Asset Library
 		AssetRepo:             repository.NewAssetRepository(db),
 		TagRepo:               repository.NewTagRepository(db),
@@ -147,6 +154,9 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		ChapterCommentRepo:    repository.NewChapterCommentRepository(db),
 		ReadingProgressRepo:   repository.NewReadingProgressRepository(db),
 		ChapterReadRecordRepo: repository.NewChapterReadRecordRepository(db),
+		UserTokenRepo:         repository.NewUserTokenRepository(db),
+		NovelCrawlJobRepo:     repository.NewNovelCrawlJobRepository(db),
+		NotificationRepo:      repository.NewNotificationRepository(db),
 	}
 }
 
@@ -188,6 +198,7 @@ type Services struct {
 	OAuthService                *service.OAuthService
 	FrontendURL                 string
 	ItemService                 *service.ItemService
+	SkillService                *service.SkillService
 	PlotPointService            *service.PlotPointService
 	TaskService                 *service.TaskService
 	AIService                   *service.AIService
@@ -201,6 +212,7 @@ type Services struct {
 	PlatformPublishService      *service.PlatformPublishService
 	AssetService                *service.AssetService
 	ReadingService              *service.ReadingService
+	NotificationService         *service.NotificationService
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -237,6 +249,7 @@ type contentSvcs struct {
 	ConflictArc       *service.ConflictArcService
 	Pacing            *service.PacingService
 	Item              *service.ItemService
+	Skill             *service.SkillService
 	SceneAnchor       *service.SceneAnchorService
 	NovelAnalysis     *service.NovelAnalysisService
 	NovelImport       *service.NovelImportService
@@ -305,7 +318,8 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 
 	// 提示词 / 连续性
 	promptSvc := service.NewPromptService(nil)
-	continuitySvc := service.NewContinuityService(repos.CharacterRepo, repos.ChapterRepo)
+	continuitySvc := service.NewContinuityService(repos.CharacterRepo, repos.ChapterRepo).
+		WithReportRepo(repos.ContinuityReportRepo)
 
 	// 知识库服务（传入 AI provider 用于向量化）
 	var defaultAIProvider ai.AIProvider
@@ -352,8 +366,10 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 	// 图像生成服务
 	imageGenSvc := service.NewImageGenerationService(aiSvc)
 
-	// 物品 / 场景锚点
+	// 物品 / 技能 / 场景锚点
 	itemSvc := service.NewItemService(repos.ItemRepo, repos.ChapterItemRepo, repos.ChapterRepo, aiSvc).
+		WithNovelRepo(repos.NovelRepo)
+	skillSvc := service.NewSkillService(repos.SkillRepo, aiSvc).
 		WithNovelRepo(repos.NovelRepo)
 	sceneAnchorSvc := service.NewSceneAnchorService(repos.SceneAnchorRepo, repos.StoryboardRepo, aiSvc, repos.NovelRepo).
 		WithChapterRepo(repos.ChapterRepo)
@@ -378,7 +394,7 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 		ChapterVersion: chapterVersionSvc, Foreshadow: foreshadowSvc, Timeline: timelineSvc,
 		CharacterArc: characterArcSvc, Style: styleSvc, GenContext: genCtxSvc,
 		ImageGen: imageGenSvc, HookChain: hookChainSvc, SatisfactionPoint: satisfactionSvc,
-		ConflictArc: conflictArcSvc, Pacing: pacingSvc, Item: itemSvc,
+		ConflictArc: conflictArcSvc, Pacing: pacingSvc, Item: itemSvc, Skill: skillSvc,
 		SceneAnchor: sceneAnchorSvc, NovelAnalysis: novelAnalysisSvc, NovelImport: novelImportSvc,
 		Crawler: crawlerSvc,
 	}
@@ -458,11 +474,36 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 
 	// 认证 / 租户 / 通信服务（依赖 db 和 redisClient，数量少，直接内联）
 	smsSvc := service.NewSMSService(redisClient, cfg.SMS)
+
+	var emailSender service.EmailSender
+	if cfg.Email.Host != "" {
+		emailSender = service.NewSMTPEmailSender(cfg.Email.Host, cfg.Email.Port, cfg.Email.Username, cfg.Email.Password, cfg.Email.From, cfg.Email.UseTLS)
+	} else {
+		emailSender = &service.NoopEmailSender{}
+	}
+
+	frontendURL := cfg.Server.FrontendURL
+	if frontendURL == "" {
+		frontendURL = "http://localhost:3000"
+	}
+
 	authSvc := service.NewAuthService(db, repos.UserRepo, repos.TenantRepo, repos.TenantUserRepo, cfg.Server.JWTSecret, cfg.Server.JWTExpiry).
-		WithSMSService(smsSvc)
+		WithSMSService(smsSvc).
+		WithTokenRepo(repos.UserTokenRepo).
+		WithRedis(redisClient).
+		WithEmailSender(emailSender).
+		WithAppBaseURL(frontendURL)
 	tenantSvc := service.NewTenantService(repos.TenantRepo, repos.TenantUserRepo)
 	oauthSvc  := service.NewOAuthService(cfg.OAuth)
 	mcpSvc    := service.NewMcpService(db)
+
+	// 通知服务（先于内容服务后置注入步骤创建）
+	notifSvc := service.NewNotificationService(repos.NotificationRepo)
+
+	// 后置注入：将通知服务与技能仓库注入章节生成管道
+	content.Novel.WithNotificationService(notifSvc)
+	content.Chapter.WithNotificationService(notifSvc).WithSkillRepo(repos.SkillRepo)
+	content.NovelImport.WithNotificationService(notifSvc).WithCrawlJobRepo(repos.NovelCrawlJobRepo)
 
 	return &Services{
 		// ── AI core ──
@@ -491,6 +532,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		ConflictArcService:       content.ConflictArc,
 		PacingService:            content.Pacing,
 		ItemService:              content.Item,
+		SkillService:             content.Skill,
 		SceneAnchorService:       content.SceneAnchor,
 		NovelAnalysisService:     content.NovelAnalysis,
 		NovelImportService:       content.NovelImport,
@@ -543,7 +585,9 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 			repos.ReadingProgressRepo,
 			repos.ChapterReadRecordRepo,
 			repos.ChapterRepo,
-		),
+		).WithNovelRepo(repos.NovelRepo),
+		// ── Notifications ──
+		NotificationService: notifSvc,
 	}
 }
 
@@ -562,6 +606,7 @@ type Handlers struct {
 	WorldviewHandler   *handler.WorldviewHandler
 	TenantHandler      *handler.TenantHandler
 	ItemHandler        *handler.ItemHandler
+	SkillHandler       *handler.SkillHandler
 	UploadHandler      *handler.UploadHandler
 	PlotPointHandler   *handler.PlotPointHandler
 	TaskHandler        *handler.TaskHandler
@@ -578,6 +623,8 @@ type Handlers struct {
 	StoryPatternHandler   *handler.StoryPatternHandler
 	ImageRefSearchHandler *handler.ImageRefSearchHandler
 	ColorPaletteHandler   *handler.ColorPaletteHandler
+	NotificationHandler   *handler.NotificationHandler
+	KnowledgeHandler      *handler.KnowledgeHandler
 }
 
 // initHandlers 初始化处理器
@@ -589,13 +636,15 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			services.ForeshadowService,
 			services.TimelineService,
 			services.QualityControlService,
-		).WithTaskService(services.TaskService).WithModelService(services.ModelService),
+		).WithTaskService(services.TaskService).WithModelService(services.ModelService).
+			WithNotificationService(services.NotificationService),
 		ChapterHandler: handler.NewChapterHandler(
 			services.ChapterService,
 			services.ChapterVersionService,
 			services.QualityControlService,
 			services.TaskService,
-		),
+		).WithNovelService(services.NovelService).
+			WithContinuityService(services.ContinuityService),
 		CharacterHandler: handler.NewCharacterHandler(
 			services.CharacterService,
 			services.CharacterArcService,
@@ -624,6 +673,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		WorldviewHandler:   handler.NewWorldviewHandler(services.WorldviewService),
 		TenantHandler:      handler.NewTenantHandler(services.TenantService),
 		ItemHandler:        handler.NewItemHandler(services.ItemService, services.ChapterService).WithStorage(storageSvc).WithTaskService(services.TaskService).WithNovelService(services.NovelService),
+		SkillHandler:       handler.NewSkillHandler(services.SkillService).WithNovelService(services.NovelService).WithTaskService(services.TaskService),
 		UploadHandler:      handler.NewUploadHandler(storageSvc),
 		PlotPointHandler:   handler.NewPlotPointHandler(services.PlotPointService).WithChapterService(services.ChapterService).WithTaskService(services.TaskService),
 		TaskHandler:        handler.NewTaskHandler(services.TaskService),
@@ -653,5 +703,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			),
 		),
 		ColorPaletteHandler: handler.NewColorPaletteHandler(service.NewColorPaletteService()),
+		NotificationHandler: handler.NewNotificationHandler(services.NotificationService),
+		KnowledgeHandler:    handler.NewKnowledgeHandler(services.KnowledgeService).WithNovelService(services.NovelService),
 	}
 }

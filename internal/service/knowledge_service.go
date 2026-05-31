@@ -18,6 +18,7 @@ type KnowledgeService struct {
 		Search(keyword string, limit int) ([]*model.KnowledgeBase, error)
 		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
 		GetByID(id uint) (*model.KnowledgeBase, error)
+		DeleteBySourceChapter(novelID, chapterID uint) error
 	}
 	vectorStore *vector.StoreManager
 	aiClient    ai.AIProvider
@@ -29,6 +30,7 @@ func NewKnowledgeService(
 		Search(keyword string, limit int) ([]*model.KnowledgeBase, error)
 		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
 		GetByID(id uint) (*model.KnowledgeBase, error)
+		DeleteBySourceChapter(novelID, chapterID uint) error
 	},
 	vectorStore *vector.StoreManager,
 	aiClient ai.AIProvider,
@@ -38,6 +40,11 @@ func NewKnowledgeService(
 		vectorStore: vectorStore,
 		aiClient:    aiClient,
 	}
+}
+
+// GetByNovel 获取小说的所有知识条目
+func (s *KnowledgeService) GetByNovel(ctx context.Context, novelID uint) ([]*model.KnowledgeBase, error) {
+	return s.kbRepo.GetByNovel(novelID)
 }
 
 // StoreKnowledge 存储知识（含向量化）
@@ -149,7 +156,12 @@ func (s *KnowledgeService) SearchKnowledge(ctx context.Context, query string, li
 }
 
 // ExtractAndStorePlotPoints 提取并存储剧情点
+// 每次运行前先清除该章节的旧记录，避免重复（replace-on-rerun 语义）
 func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapter *model.Chapter, aiClient ai.AIProvider) error {
+	// 清除该章节的旧剧情点记录
+	if err := s.kbRepo.DeleteBySourceChapter(chapter.NovelID, chapter.ID); err != nil {
+		logger.Printf("ExtractAndStorePlotPoints: cleanup failed: %v", err)
+	}
 	// 使用 AI 提取剧情点
 	prompt := fmt.Sprintf(`从以下章节内容中提取关键剧情点，返回JSON数组格式：
 {
@@ -194,14 +206,17 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 		charJSON, _ := json.Marshal(pp.Characters)
 
 		kb := &model.KnowledgeBase{
-			Type:    "plot_point",
-			Title:   pp.Type + ": " + pp.Description[:min(50, len(pp.Description))],
-			Content: pp.Description,
-			Tags:    string(charJSON),
-			NovelID: &chapter.NovelID,
+			Type:            "plot_point",
+			Title:           pp.Type + ": " + pp.Description[:min(50, len(pp.Description))],
+			Content:         pp.Description,
+			Tags:            string(charJSON),
+			NovelID:         &chapter.NovelID,
+			SourceChapterID: &chapter.ID,
 		}
 
-		s.StoreKnowledge(ctx, kb)
+		if err := s.StoreKnowledge(ctx, kb); err != nil {
+			logger.Printf("ExtractAndStorePlotPoints: store failed: %v", err)
+		}
 	}
 
 	return nil

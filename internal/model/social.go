@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
 
 // VideoLike 视频点赞（ink_video_like）
 type VideoLike struct {
@@ -112,6 +116,42 @@ type PlatformAccount struct {
 }
 
 func (PlatformAccount) TableName() string { return "ink_platform_account" }
+
+// BeforeSave encrypts AccessToken and RefreshToken before persisting to the database.
+func (p *PlatformAccount) BeforeSave(tx *gorm.DB) error {
+	if p.AccessToken != "" {
+		enc, err := EncryptField(p.AccessToken)
+		if err != nil {
+			return err
+		}
+		p.AccessToken = enc
+	}
+	if p.RefreshToken != "" {
+		enc, err := EncryptField(p.RefreshToken)
+		if err != nil {
+			return err
+		}
+		p.RefreshToken = enc
+	}
+	return nil
+}
+
+// AfterFind decrypts AccessToken and RefreshToken after loading from the database.
+func (p *PlatformAccount) AfterFind(tx *gorm.DB) error {
+	if p.AccessToken != "" {
+		dec, err := DecryptField(p.AccessToken)
+		if err == nil {
+			p.AccessToken = dec
+		}
+	}
+	if p.RefreshToken != "" {
+		dec, err := DecryptField(p.RefreshToken)
+		if err == nil {
+			p.RefreshToken = dec
+		}
+	}
+	return nil
+}
 
 // VideoPublishRecord 视频外部发布记录
 type VideoPublishRecord struct {

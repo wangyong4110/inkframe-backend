@@ -39,9 +39,12 @@ func (r *PlatformAccountRepository) UpdateStatus(id uint, status string) error {
 }
 
 func (r *PlatformAccountRepository) UpdateTokens(id uint, accessToken, refreshToken string, expiresAt *time.Time) error {
+	// Encrypt tokens before persisting (BeforeSave hook does not fire on map-based Updates).
+	encAccess, _ := model.EncryptField(accessToken)
+	encRefresh, _ := model.EncryptField(refreshToken)
 	return r.db.Model(&model.PlatformAccount{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"access_token":  accessToken,
-		"refresh_token": refreshToken,
+		"access_token":  encAccess,
+		"refresh_token": encRefresh,
 		"expires_at":    expiresAt,
 		"status":        "active",
 	}).Error

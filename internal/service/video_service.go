@@ -47,6 +47,7 @@ type VideoService struct {
 	viewDedupCache   sync.Map     // key "ip:id" → expiry time.Time（防刷播放量）
 	cleanupOnce      sync.Once
 	stopCh           chan struct{} // closed by Shutdown() to stop background goroutines
+	activePoll       sync.Map     // videoID → struct{} (prevents duplicate PollAndStitchVideo goroutines)
 }
 
 // GetNovelByID 通过 novelRepo 加载小说（供 handler 传递给 CapCutService 等下游服务）
@@ -280,7 +281,7 @@ func (s *VideoService) GetVideoByTenant(id, tenantID uint) (*model.Video, error)
 
 // ListVideos 获取视频列表
 func (s *VideoService) ListVideos(novelId *uint, chapterID *uint, status string, tenantID uint, page, pageSize int) ([]*model.Video, int, error) {
-	videos, total, err := s.videoRepo.List(novelId, chapterID, tenantID, page, pageSize)
+	videos, total, err := s.videoRepo.List(novelId, chapterID, status, tenantID, page, pageSize)
 	return videos, int(total), err
 }
 
@@ -496,9 +497,28 @@ func (s *VideoService) RecalcVideoHotScores() error {
 	return nil
 }
 
-// DeleteVideo 删除视频
+// DeleteVideo 删除视频（级联删除所有子记录：分镜、语音段、音效、BGM段）
 func (s *VideoService) DeleteVideo(id uint) error {
-	return s.videoRepo.DeleteByID(id)
+	return s.videoRepo.DB().Transaction(func(tx *gorm.DB) error {
+		// Get all shot IDs for this video
+		var shotIDs []uint
+		tx.Model(&model.StoryboardShot{}).
+			Where("video_id = ? AND deleted_at IS NULL", id).
+			Pluck("id", &shotIDs)
+
+		if len(shotIDs) > 0 {
+			// Delete voice segments
+			tx.Where("shot_id IN ?", shotIDs).Delete(&model.ShotVoiceSegment{})
+			// Delete SFX items
+			tx.Where("shot_id IN ?", shotIDs).Delete(&model.ShotSFXItem{})
+		}
+		// Delete BGM segments
+		tx.Where("video_id = ?", id).Delete(&model.VideoBGMSegment{})
+		// Delete shots
+		tx.Where("video_id = ?", id).Delete(&model.StoryboardShot{})
+		// Delete the video itself
+		return tx.Delete(&model.Video{}, id).Error
+	})
 }
 
 // StartGeneration 开始生成视频（调用真实视频 Provider）

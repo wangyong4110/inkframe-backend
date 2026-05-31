@@ -225,6 +225,34 @@ func (r *ChapterRepository) Delete(id, novelID uint) error {
 	return nil
 }
 
+// DeleteAndRenumber 在事务中软删除章节，并将其后续章节的 chapter_no 减一，消除序号空洞。
+func (r *ChapterRepository) DeleteAndRenumber(id, novelID uint) error {
+	// First fetch the chapter_no before deleting
+	var chapter model.Chapter
+	if err := r.db.Select("id, novel_id, chapter_no").First(&chapter, id).Error; err != nil {
+		// If not found, fall back to plain delete
+		return r.Delete(id, novelID)
+	}
+	deletedNo := chapter.ChapterNo
+
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		// Soft-delete the chapter
+		if err := tx.Delete(&model.Chapter{}, id).Error; err != nil {
+			return err
+		}
+		// Decrement chapter_no for all subsequent chapters in this novel
+		return tx.Exec(
+			"UPDATE ink_chapter SET chapter_no = chapter_no - 1 WHERE novel_id = ? AND chapter_no > ? AND deleted_at IS NULL",
+			novelID, deletedNo,
+		).Error
+	})
+	if err != nil {
+		return err
+	}
+	r.invalidateListCache(novelID)
+	return nil
+}
+
 // CountByNovel 统计小说章节数
 func (r *ChapterRepository) CountByNovel(novelID uint) (int64, error) {
 	var count int64
@@ -240,6 +268,12 @@ func (r *ChapterRepository) ListPendingCrawl(novelID uint) ([]*model.Chapter, er
 	err := r.db.Where("novel_id = ? AND outline LIKE 'crawl:%' AND (content = '' OR content IS NULL)", novelID).
 		Order("chapter_no ASC").Find(&chapters).Error
 	return chapters, err
+}
+
+// UpdateContent 将指定章节的正文内容直接写回数据库（供改写完成后同步使用）。
+func (r *ChapterRepository) UpdateContent(id uint, content string) error {
+	return r.db.Model(&model.Chapter{}).Where("id = ?", id).
+		UpdateColumn("content", content).Error
 }
 
 // UpdateCrawledContent 将爬取完成的内容写回章节（状态置为 completed，发布状态独立管理）
@@ -324,16 +358,17 @@ func NewChapterItemRepository(db *gorm.DB) *ChapterItemRepository {
 
 func (r *ChapterItemRepository) Upsert(ci *model.ChapterItem) error {
 	var existing model.ChapterItem
-	err := r.db.Where("chapter_id = ? AND item_id = ?", ci.ChapterID, ci.ItemID).First(&existing).Error
-	if err == nil {
-		// update
-		existing.Location = ci.Location
-		existing.Owner = ci.Owner
-		existing.Condition = ci.Condition
-		existing.Notes = ci.Notes
-		return r.db.Save(&existing).Error
+	result := r.db.Where("chapter_id = ? AND item_id = ?", ci.ChapterID, ci.ItemID).
+		Attrs(model.ChapterItem{ChapterID: ci.ChapterID, ItemID: ci.ItemID}).
+		FirstOrCreate(&existing)
+	if result.Error != nil {
+		return result.Error
 	}
-	return r.db.Create(ci).Error
+	existing.Location = ci.Location
+	existing.Owner = ci.Owner
+	existing.Condition = ci.Condition
+	existing.Notes = ci.Notes
+	return r.db.Save(&existing).Error
 }
 
 func (r *ChapterItemRepository) GetByChapterAndItem(chapterID, itemID uint) (*model.ChapterItem, error) {

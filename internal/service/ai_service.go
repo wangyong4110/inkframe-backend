@@ -375,15 +375,10 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		}
 	}
 
-	// 包装重试
 	provider = ai.NewRetryProvider(provider, 3, 500*time.Millisecond)
-
-	// 并发限制（Concurrency > 0 时限制同时调用数，防止触发提供商 429）
 	if matched.Concurrency > 0 {
 		provider = ai.NewConcurrentProvider(provider, matched.Concurrency)
 	}
-
-	// 速率限制（RateLimit > 0 时按请求/分钟令牌桶限速）
 	if matched.RateLimit > 0 {
 		provider = ai.NewRateLimitProvider(provider, matched.RateLimit)
 	}
@@ -804,6 +799,9 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 		provider.GetName(), elapsed.Round(time.Millisecond), req.MaxTokens, len(resp.Content),
 		resp.InputTokens, resp.Tokens, resp.StopReason)
 
+	if resp.Content == "" {
+		return "", nil, fmt.Errorf("provider returned empty content (stop_reason=%s)", resp.StopReason)
+	}
 	return resp.Content, resp, nil
 }
 
@@ -898,7 +896,7 @@ func (s *AIService) generateWithRetry(novelID uint, taskType, prompt string, max
 	return "", fmt.Errorf("generateWithRetry failed after %d attempts: %w", maxRetries+1, lastErr)
 }
 
-// logUsage asynchronously records a ModelUsageLog entry using real token counts and latency.
+// logUsage records a ModelUsageLog entry using token counts and latency from the response.
 func (s *AIService) logUsage(config *model.TaskModelConfig, taskType string, resp *ai.GenerateResponse, latencyMs int64) {
 	if s.modelRepo == nil || resp == nil {
 		return
@@ -913,11 +911,9 @@ func (s *AIService) logUsage(config *model.TaskModelConfig, taskType string, res
 		Latency:      float64(latencyMs) / 1000,
 		Success:      true,
 	}
-	if entry.Cost == 0 {
-		// fallback: estimate 0.002 USD per 1K tokens when MaxCostPerTask is not set
-		entry.Cost = float64(entry.TotalTokens) / 1000 * 0.002
+	if err := s.modelRepo.LogUsage(entry); err != nil {
+		logger.Printf("[AI] logUsage failed: %v", err)
 	}
-	go s.modelRepo.LogUsage(entry) //nolint:errcheck
 }
 
 // GenerateImage 调用AI生成图像

@@ -17,10 +17,10 @@ func NewMcpHandler(mcpService *service.McpService) *McpHandler {
 	return &McpHandler{mcpService: mcpService}
 }
 
-// ListMcpTools 获取所有 MCP 工具
+// ListMcpTools 获取所有 MCP 工具（租户隔离）
 // GET /api/v1/mcp-tools
 func (h *McpHandler) ListMcpTools(c *gin.Context) {
-	tools, err := h.mcpService.ListTools()
+	tools, err := h.mcpService.ListTools(getTenantID(c))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return

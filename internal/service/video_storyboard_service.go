@@ -24,6 +24,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
+	"gorm.io/gorm"
 )
 
 // ─── Package-level constants for magic numbers ───────────────────────────────
@@ -72,6 +73,12 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	}
 	if strings.TrimSpace(content) == "" {
 		return nil, fmt.Errorf("章节内容为空，请先在「写作」页面编写章节内容再生成分镜脚本")
+	}
+
+	const minChapterLength = 100 // characters
+	if len([]rune(content)) < minChapterLength {
+		return nil, fmt.Errorf("chapter content too short (%d chars): minimum %d characters required for storyboard generation",
+			len([]rune(content)), minChapterLength)
 	}
 
 	// 并行预取角色、场景锚点、情节点（避免多次串行 DB 查询）
@@ -270,11 +277,16 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		progressFn(95)
 	}
 
-	// 删除旧分镜，再批量插入新分镜（单次 SQL，避免 N 次往返）
-	if err := s.storyboardRepo.DeleteByVideoID(videoID); err != nil {
-		return nil, err
-	}
-	if err := s.storyboardRepo.BatchCreate(shots); err != nil {
+	// 删除旧分镜并批量插入新分镜（包裹在同一事务中，防止删除后插入失败导致数据丢失）
+	if err := s.storyboardRepo.DB().Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("video_id = ?", videoID).Delete(&model.StoryboardShot{}).Error; err != nil {
+			return err
+		}
+		if len(shots) == 0 {
+			return nil
+		}
+		return tx.Create(shots).Error
+	}); err != nil {
 		return nil, fmt.Errorf("保存分镜失败: %w", err)
 	}
 	if progressFn != nil {
@@ -1036,10 +1048,6 @@ func (s *VideoService) SetShotCharacters(shotID uint, ids []uint) error {
 // InsertShot 在 afterShotNo 之后插入一个空分镜（afterShotNo=0 表示插入到最前）
 func (s *VideoService) InsertShot(videoID uint, afterShotNo int, narration, description string, duration float64) (*model.StoryboardShot, error) {
 	newShotNo := afterShotNo + 1
-	// 后移所有 shot_no >= newShotNo 的分镜
-	if err := s.storyboardRepo.ShiftShotNos(videoID, newShotNo, 1); err != nil {
-		return nil, fmt.Errorf("shift shot numbers: %w", err)
-	}
 	if duration <= 0 {
 		duration = defaultShotDurationSecs
 	}
@@ -1056,22 +1064,37 @@ func (s *VideoService) InsertShot(videoID uint, afterShotNo int, narration, desc
 		Transition:  "cut",
 		Status:      "pending",
 	}
-	return shot, s.storyboardRepo.Create(shot)
+	// Shift + create must be atomic to avoid a corrupt shot_no sequence on partial failure.
+	err := s.storyboardRepo.DB().Transaction(func(tx *gorm.DB) error {
+		if e := tx.Exec(
+			"UPDATE ink_storyboard_shot SET shot_no = shot_no + 1 WHERE video_id = ? AND shot_no >= ? AND deleted_at IS NULL",
+			videoID, newShotNo,
+		).Error; e != nil {
+			return e
+		}
+		return tx.Create(shot).Error
+	})
+	if err != nil {
+		return nil, fmt.Errorf("insert shot: %w", err)
+	}
+	return shot, nil
 }
 
-// CopyShotAfter 复制分镜，插入到 afterShotNo 之后（afterShotNo=0 → 复制到最前；afterShotNo=-1 → 紧接源分镜之后）
+// CopyShotAfter 复制分镜，插入到 afterShotNo 之后（afterShotNo=0 → 复制到最前；afterShotNo=-1 → 追加到列表末尾）
 func (s *VideoService) CopyShotAfter(sourceShotID uint, afterShotNo int) (*model.StoryboardShot, error) {
 	src, err := s.storyboardRepo.GetByID(sourceShotID)
 	if err != nil {
 		return nil, fmt.Errorf("source shot not found: %w", err)
 	}
 	if afterShotNo < 0 {
-		afterShotNo = src.ShotNo // 紧接在原分镜之后
+		// append at end: find max shot_no for this video
+		var maxNo int
+		s.storyboardRepo.DB().Model(&model.StoryboardShot{}).
+			Where("video_id = ? AND deleted_at IS NULL", src.VideoID).
+			Select("COALESCE(MAX(shot_no), 0)").Scan(&maxNo)
+		afterShotNo = maxNo
 	}
 	newShotNo := afterShotNo + 1
-	if err := s.storyboardRepo.ShiftShotNos(src.VideoID, newShotNo, 1); err != nil {
-		return nil, fmt.Errorf("shift shot numbers: %w", err)
-	}
 	shot := &model.StoryboardShot{
 		VideoID:        src.VideoID,
 		ChapterID:      src.ChapterID,
@@ -1097,7 +1120,19 @@ func (s *VideoService) CopyShotAfter(sourceShotID uint, afterShotNo int) (*model
 		// ImageURL and VideoURL intentionally NOT copied — copied shot starts fresh
 		Status: "pending",
 	}
-	return shot, s.storyboardRepo.Create(shot)
+	err = s.storyboardRepo.DB().Transaction(func(tx *gorm.DB) error {
+		if e := tx.Exec(
+			"UPDATE ink_storyboard_shot SET shot_no = shot_no + 1 WHERE video_id = ? AND shot_no >= ? AND deleted_at IS NULL",
+			src.VideoID, newShotNo,
+		).Error; e != nil {
+			return e
+		}
+		return tx.Create(shot).Error
+	})
+	if err != nil {
+		return nil, fmt.Errorf("copy shot: %w", err)
+	}
+	return shot, nil
 }
 
 // DeleteShot 删除单个分镜并将后续分镜 shot_no 前移（保持连续）
@@ -1182,6 +1217,15 @@ func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string,
 			logger.Printf("ReviewStoryboard: save record failed: %v", saveErr)
 		} else {
 			recordID = rec.ID
+		}
+	}
+
+	// Mark video as having a pending review
+	if s.videoRepo != nil {
+		if err := s.videoRepo.UpdateFields(videoID, map[string]interface{}{
+			"review_status": "pending",
+		}); err != nil {
+			logger.Printf("ReviewStoryboard: update video review_status: %v", err)
 		}
 	}
 
@@ -1498,6 +1542,11 @@ func (s *VideoService) OptimizeStoryboardFromReview(tenantID, videoID uint, revi
 		sh, ok := shotMap[upd.ShotNo]
 		if !ok {
 			logger.Printf("OptimizeStoryboardFromReview: shot_no=%d not found, skipping", upd.ShotNo)
+			continue
+		}
+		// Never overwrite approved or locked shots
+		if sh.Status == "approved" || sh.Status == "locked" {
+			logger.Printf("OptimizeStoryboard: skipping approved shot %d", sh.ShotNo)
 			continue
 		}
 		fields := upd.toFieldMap()

@@ -62,3 +62,9 @@ func (r *KnowledgeBaseRepository) IncrementUsageCount(id uint) error {
 	return r.db.Model(&model.KnowledgeBase{}).Where("id = ?", id).
 		UpdateColumn("usage_count", gorm.Expr("usage_count + 1")).Error
 }
+
+// DeleteBySourceChapter 删除某章节提取的所有知识条目（用于重新提取时去重）
+func (r *KnowledgeBaseRepository) DeleteBySourceChapter(novelID, chapterID uint) error {
+	return r.db.Where("novel_id = ? AND source_chapter_id = ?", novelID, chapterID).
+		Delete(&model.KnowledgeBase{}).Error
+}

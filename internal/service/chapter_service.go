@@ -35,6 +35,8 @@ type ChapterService struct {
 	arcSvc         *ConflictArcService
 	plotPointRepo  *repository.PlotPointRepository // 未解决剧情点注入
 	mcpService     *McpService                     // 可选：用于联网搜索 MCP 工具
+	notifSvc       *NotificationService            // 可选：用于章节生成完成通知
+	skillRepo      *repository.SkillRepository     // 可选：用于将技能体系注入生成上下文
 }
 
 func NewChapterService(
@@ -81,6 +83,18 @@ func (s *ChapterService) WithMcpService(mcp *McpService) *ChapterService {
 	return s
 }
 
+// WithNotificationService 注入通知服务（可选），用于章节生成完成后发送站内通知
+func (s *ChapterService) WithNotificationService(svc *NotificationService) *ChapterService {
+	s.notifSvc = svc
+	return s
+}
+
+// WithSkillRepo 注入技能仓库（可选），用于将技能体系注入生成上下文
+func (s *ChapterService) WithSkillRepo(repo *repository.SkillRepository) *ChapterService {
+	s.skillRepo = repo
+	return s
+}
+
 // WithDramaticServices 注入戏剧张力服务（可选）
 func (s *ChapterService) WithDramaticServices(hookSvc *HookChainService, spSvc *SatisfactionPointService, arcSvc *ConflictArcService) *ChapterService {
 	s.hookSvc = hookSvc
@@ -116,8 +130,15 @@ func (s *ChapterService) CreateChapter(novelID uint, req *model.CreateChapterReq
 	return chapter, nil
 }
 
-func (s *ChapterService) GetChapter(id uint) (*model.Chapter, error) {
-	return s.chapterRepo.GetByID(id)
+func (s *ChapterService) GetChapter(id, tenantID uint) (*model.Chapter, error) {
+	chapter, err := s.chapterRepo.GetByID(id)
+	if err != nil {
+		return nil, fmt.Errorf("not found")
+	}
+	if chapter.TenantID != tenantID {
+		return nil, fmt.Errorf("not found")
+	}
+	return chapter, nil
 }
 
 func (s *ChapterService) ListChapters(novelID uint) ([]*model.Chapter, error) {
@@ -146,10 +167,13 @@ func applyChapterUpdate(chapter *model.Chapter, req *model.UpdateChapterRequest)
 	}
 }
 
-func (s *ChapterService) UpdateChapter(id uint, req *model.UpdateChapterRequest) (*model.Chapter, error) {
+func (s *ChapterService) UpdateChapter(id, tenantID uint, req *model.UpdateChapterRequest) (*model.Chapter, error) {
 	chapter, err := s.chapterRepo.GetByID(id)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("not found")
+	}
+	if chapter.TenantID != tenantID {
+		return nil, fmt.Errorf("not found")
 	}
 	applyChapterUpdate(chapter, req)
 	if err := s.chapterRepo.Update(chapter); err != nil {
@@ -161,12 +185,15 @@ func (s *ChapterService) UpdateChapter(id uint, req *model.UpdateChapterRequest)
 	return chapter, nil
 }
 
-func (s *ChapterService) DeleteChapter(id uint) error {
+func (s *ChapterService) DeleteChapter(id, tenantID uint) error {
 	chapter, err := s.chapterRepo.GetByID(id)
 	if err != nil {
-		return s.chapterRepo.Delete(id, 0)
+		return fmt.Errorf("not found")
 	}
-	if err := s.chapterRepo.Delete(id, chapter.NovelID); err != nil {
+	if chapter.TenantID != tenantID {
+		return fmt.Errorf("not found")
+	}
+	if err := s.chapterRepo.DeleteAndRenumber(id, chapter.NovelID); err != nil {
 		return err
 	}
 	s.syncNovelStats(chapter.NovelID)
@@ -261,7 +288,7 @@ func (s *ChapterService) DeleteChapterByNo(novelID uint, chapterNo int) error {
 	if err != nil {
 		return err
 	}
-	if err := s.chapterRepo.Delete(chapter.ID, novelID); err != nil {
+	if err := s.chapterRepo.DeleteAndRenumber(chapter.ID, novelID); err != nil {
 		return err
 	}
 	s.syncNovelStats(novelID)
@@ -278,6 +305,7 @@ func (s *ChapterService) PublishChapter(novelID uint, chapterNo int) (*model.Cha
 		return nil, err
 	}
 	chapter.IsPublished = true
+	_ = s.novelRepo.SyncPublishedCount(novelID)
 	return chapter, nil
 }
 
@@ -291,6 +319,7 @@ func (s *ChapterService) UnpublishChapter(novelID uint, chapterNo int) (*model.C
 		return nil, err
 	}
 	chapter.IsPublished = false
+	_ = s.novelRepo.SyncPublishedCount(novelID)
 	return chapter, nil
 }
 
@@ -476,6 +505,18 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 
 	// ── Step 6: 异步后处理（标题/精修/弧摘要，不再包含角色快照）────────────────────────────────
 	go s.postProcessChapter(tenantID, chapter, novel)
+
+	// 站内通知：章节生成完成
+	if s.notifSvc != nil {
+		_ = s.notifSvc.Send(
+			novel.TenantID, 0,
+			"chapter_done",
+			"章节生成完成",
+			fmt.Sprintf("《%s》第%d章已生成完毕", novel.Title, chapter.ChapterNo),
+			"chapter", chapter.ID,
+			fmt.Sprintf("/novel/%d", novel.ID),
+		)
+	}
 
 	logger.Printf("[ChapterService] GenerateChapter done: chapterID=%d wordCount=%d", chapter.ID, chapter.WordCount)
 	return chapter, nil
@@ -685,6 +726,17 @@ func (s *ChapterService) buildMinimalContext(novelID uint, chapterNo int, novel 
 			}
 		}
 	}
+
+	// 注入技能体系
+	if s.skillRepo != nil {
+		if skills, err := s.skillRepo.List(novelID); err == nil && len(skills) > 0 {
+			sb.WriteString("\n\n## 技能体系\n")
+			for _, sk := range skills {
+				sb.WriteString(fmt.Sprintf("【%s】(%s Lv.%d) %s\n", sk.Name, sk.SkillType, sk.Level, sk.Description))
+			}
+		}
+	}
+
 	return sb.String()
 }
 
@@ -945,9 +997,20 @@ func (s *ChapterService) generateFromSceneOutline(
 		return content, "", err
 	}
 
-	raw, err := s.aiService.GenerateWithProvider(tenantID, novelID, "chapter", chapterPrompt, req.ModelOverride, buildChapterOverrides(req, novel))
-	if err != nil {
-		return "", "", err
+	var raw string
+	var genErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		raw, genErr = s.aiService.GenerateWithProvider(tenantID, novelID, "chapter", chapterPrompt, req.ModelOverride, buildChapterOverrides(req, novel))
+		if genErr == nil {
+			break
+		}
+		logger.Printf("[ChapterService] generateFromSceneOutline: attempt %d failed: %v", attempt+1, genErr)
+		if attempt < 2 {
+			time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
+		}
+	}
+	if genErr != nil {
+		return "", "", genErr
 	}
 	raw = cleanChapterOutput(raw)
 	content, hook := extractChapterHook(raw)

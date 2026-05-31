@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"mime"
 	"net/http"
@@ -14,6 +15,24 @@ import (
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/storage"
 )
+
+// sanitizeError prevents internal error details from leaking to clients.
+// Known safe errors are returned as-is; unknown errors become generic messages.
+func sanitizeError(err error) string {
+	if err == nil {
+		return "internal error"
+	}
+	msg := err.Error()
+	// Safe: validation errors, business logic errors (short, user-facing)
+	if len(msg) < 200 && !strings.ContainsAny(msg, `'"`) &&
+		!strings.Contains(strings.ToLower(msg), "sql") &&
+		!strings.Contains(strings.ToLower(msg), "gorm") &&
+		!strings.Contains(strings.ToLower(msg), "duplicate") {
+		return msg
+	}
+	// Unsafe: DB errors, stack traces, internal details
+	return "internal server error"
+}
 
 // isDuplicateKeyError reports whether err is a MySQL/SQLite unique-constraint violation.
 func isDuplicateKeyError(err error) bool {
@@ -42,7 +61,7 @@ func respondErr(c *gin.Context, status int, msg string) {
 	if status >= 500 {
 		logger.Printf("[HTTP] %s %s -> %d: %s", c.Request.Method, c.Request.URL.Path, status, msg)
 	}
-	c.JSON(status, gin.H{"code": status, "message": msg, "data": nil})
+	c.JSON(status, gin.H{"code": status, "message": sanitizeError(errors.New(msg)), "data": nil})
 }
 
 // respondAccepted writes a 202 Accepted response with a task_id payload.

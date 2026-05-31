@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -31,6 +32,15 @@ func NewAssetHandler(svc *service.AssetService) *AssetHandler {
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
 func callerID(c *gin.Context) uint {
+	if v, ok := c.Get("user_id"); ok {
+		if id, ok := v.(uint); ok {
+			return id
+		}
+	}
+	return 0
+}
+
+func tenantID(c *gin.Context) uint {
 	if v, ok := c.Get("tenant_id"); ok {
 		if id, ok := v.(uint); ok {
 			return id
@@ -39,9 +49,9 @@ func callerID(c *gin.Context) uint {
 	return 0
 }
 
-func tenantID(c *gin.Context) uint { return callerID(c) }
-
 // ─── Asset CRUD ───────────────────────────────────────────────────────────────
+
+const maxUploadSize = 100 * 1024 * 1024 // 100 MB
 
 // POST /assets  (multipart upload)
 func (h *AssetHandler) Upload(c *gin.Context) {
@@ -51,6 +61,34 @@ func (h *AssetHandler) Upload(c *gin.Context) {
 		return
 	}
 	defer f.Close()
+
+	// Enforce server-side file size limit
+	if header.Size > maxUploadSize {
+		respondBadRequest(c, "file too large: max 100 MB")
+		return
+	}
+
+	// MIME type whitelist
+	allowedTypes := map[string]bool{
+		"image/jpeg": true, "image/png": true, "image/gif": true, "image/webp": true,
+		"video/mp4": true, "video/webm": true,
+		"audio/mpeg": true, "audio/wav": true, "audio/ogg": true, "audio/mp4": true,
+		"application/pdf": true,
+		"text/plain": true,
+	}
+	// Detect actual MIME type from first 512 bytes (not just filename extension)
+	buf := make([]byte, 512)
+	n, _ := f.Read(buf)
+	detectedType := http.DetectContentType(buf[:n])
+	// Reset reader
+	if _, seekErr := f.Seek(0, io.SeekStart); seekErr != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to process file")
+		return
+	}
+	if !allowedTypes[detectedType] {
+		respondBadRequest(c, "file type not allowed: "+detectedType)
+		return
+	}
 
 	title := c.PostForm("title")
 	if title == "" {
@@ -780,12 +818,17 @@ func (h *AssetHandler) Stream(c *gin.Context) {
 			localDir = "./uploads"
 		}
 		rel := strings.TrimPrefix(rawURL, "/uploads/")
-		localPath := filepath.Join(localDir, rel)
-		if _, statErr := os.Stat(localPath); os.IsNotExist(statErr) {
+		// Path traversal protection
+		cleanedPath := filepath.Clean(filepath.Join(localDir, rel))
+		if !strings.HasPrefix(cleanedPath, filepath.Clean(localDir)+string(filepath.Separator)) {
+			respondErr(c, http.StatusBadRequest, "invalid file path")
+			return
+		}
+		if _, statErr := os.Stat(cleanedPath); os.IsNotExist(statErr) {
 			respondErr(c, http.StatusNotFound, "file not found on disk")
 			return
 		}
-		http.ServeFile(c.Writer, c.Request, localPath)
+		http.ServeFile(c.Writer, c.Request, cleanedPath)
 
 	default:
 		// DB 存储（/api/v1/media/:id）或其他相对路径 → 重定向，ServeMedia 已支持 Range

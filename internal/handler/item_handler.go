@@ -78,9 +78,8 @@ func (h *ItemHandler) checkItemTenant(c *gin.Context, novelID uint) bool {
 	if h.novelSvc == nil {
 		return true // novelSvc 未注入时跳过检查（兼容测试）
 	}
-	novel, err := h.novelSvc.GetNovel(novelID)
-	if err != nil || novel.TenantID != getTenantID(c) {
-		respondErr(c, http.StatusForbidden, "forbidden")
+	if _, err := h.novelSvc.GetNovel(novelID, getTenantID(c)); err != nil {
+		respondErr(c, http.StatusNotFound, "not found")
 		return false
 	}
 	return true

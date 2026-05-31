@@ -114,8 +114,9 @@ type Novel struct {
 	TargetChapters  int    `json:"target_chapters" gorm:"default:0"`   // 目标章节数
 
 	// 统计
-	TotalWords   int `json:"total_words" gorm:"default:0"`
-	ChapterCount int `json:"chapter_count" gorm:"default:0"`
+	TotalWords     int `json:"total_words" gorm:"default:0"`
+	ChapterCount   int `json:"chapter_count" gorm:"default:0"`
+	PublishedCount int `json:"published_count" gorm:"default:0"`
 
 	// 关联
 	WorldviewID *uint      `json:"worldview_id"`
@@ -151,6 +152,12 @@ type Novel struct {
 	CommentCount int        `json:"comment_count" gorm:"default:0"`
 	HotScore     float64    `json:"hot_score" gorm:"default:0;index"`
 	PlazaTags    string     `json:"plaza_tags" gorm:"size:500"` // JSON 数组，如 ["玄幻","古风"]
+
+	// 内容审核
+	ReviewStatus string     `json:"review_status" gorm:"size:20;default:'draft'"` // draft|pending_review|approved|rejected
+	ReviewNote   string     `json:"review_note" gorm:"size:500"`                  // 审核不通过的原因
+	ReviewedAt   *time.Time `json:"reviewed_at,omitempty"`
+	ReviewedBy   uint       `json:"reviewed_by" gorm:"default:0"`
 
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`
@@ -575,6 +582,36 @@ type UpdateNovelRequest struct {
 	ChromaticAberration *bool `json:"chromatic_aberration"`
 	KlingProForAction   *bool `json:"kling_pro_for_action"`
 }
+
+// NovelCrawlJob 小说章节爬取任务（持久化进度，服务重启后可恢复）
+type NovelCrawlJob struct {
+	ID         uint       `json:"id" gorm:"primaryKey"`
+	NovelID    uint       `json:"novel_id" gorm:"index;not null"`
+	Status     string     `json:"status" gorm:"size:20;default:'running'"` // running|completed|partial|failed|paused
+	Progress   int        `json:"progress" gorm:"default:0"`              // 已成功爬取章节数
+	TotalChaps int        `json:"total_chaps" gorm:"default:0"`           // 总章节数
+	FailedCount int       `json:"failed_count" gorm:"default:0"`          // 失败章节数
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+}
+
+func (NovelCrawlJob) TableName() string { return "ink_novel_crawl_job" }
+
+// ContinuityReportRecord 连续性检查记录（持久化）
+type ContinuityReportRecord struct {
+	ID         uint           `json:"id" gorm:"primaryKey"`
+	NovelID    uint           `json:"novel_id" gorm:"index;not null"`
+	ChapterID  uint           `json:"chapter_id" gorm:"index;not null"`
+	TenantID   uint           `json:"tenant_id" gorm:"index;not null"`
+	ReportJSON string         `json:"report_json" gorm:"type:text"` // JSON of ContinuityReport
+	IssueCount int            `json:"issue_count"`
+	Passed     bool           `json:"passed"`
+	CreatedAt  time.Time      `json:"created_at"`
+	DeletedAt  gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
+}
+
+func (ContinuityReportRecord) TableName() string { return "ink_continuity_report" }
 
 type CreateChapterRequest struct {
 	ChapterNo int    `json:"chapter_no"`

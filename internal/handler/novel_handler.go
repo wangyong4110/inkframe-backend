@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
@@ -22,6 +23,7 @@ type NovelHandler struct {
 	qualityControlService *service.QualityControlService
 	taskSvc               *service.TaskService
 	modelService          *service.ModelService
+	notifSvc              *service.NotificationService // 可选
 }
 
 func NewNovelHandler(
@@ -47,6 +49,12 @@ func (h *NovelHandler) WithTaskService(svc *service.TaskService) *NovelHandler {
 
 func (h *NovelHandler) WithModelService(svc *service.ModelService) *NovelHandler {
 	h.modelService = svc
+	return h
+}
+
+// WithNotificationService 注入通知服务（可选）
+func (h *NovelHandler) WithNotificationService(svc *service.NotificationService) *NovelHandler {
+	h.notifSvc = svc
 	return h
 }
 
@@ -89,13 +97,9 @@ func (h *NovelHandler) GetNovel(c *gin.Context) {
 		return
 	}
 
-	novel, err := h.novelService.GetNovel(uint(id))
+	novel, err := h.novelService.GetNovel(uint(id), getTenantID(c))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
-		return
-	}
-	if tenantID := getTenantID(c); novel.TenantID != tenantID {
-		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
 
@@ -142,23 +146,17 @@ func (h *NovelHandler) UpdateNovel(c *gin.Context) {
 		return
 	}
 
-	existing, err := h.novelService.GetNovel(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "novel not found")
-		return
-	}
-	if tenantID := getTenantID(c); existing.TenantID != tenantID {
-		respondErr(c, http.StatusForbidden, "forbidden")
-		return
-	}
-
 	var req model.UpdateNovelRequest
 	if !bindJSON(c, &req) {
 		return
 	}
 
-	novel, err := h.novelService.UpdateNovel(uint(id), &req)
+	novel, err := h.novelService.UpdateNovel(uint(id), getTenantID(c), &req)
 	if err != nil {
+		if err.Error() == "not found" {
+			respondErr(c, http.StatusNotFound, "novel not found")
+			return
+		}
 		logger.Printf("[NovelHandler] UpdateNovel: novelID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -175,17 +173,11 @@ func (h *NovelHandler) DeleteNovel(c *gin.Context) {
 		return
 	}
 
-	existing, err := h.novelService.GetNovel(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "novel not found")
-		return
-	}
-	if tenantID := getTenantID(c); existing.TenantID != tenantID {
-		respondErr(c, http.StatusForbidden, "forbidden")
-		return
-	}
-
-	if err := h.novelService.DeleteNovel(uint(id)); err != nil {
+	if err := h.novelService.DeleteNovel(uint(id), getTenantID(c)); err != nil {
+		if err.Error() == "not found" {
+			respondErr(c, http.StatusNotFound, "novel not found")
+			return
+		}
 		logger.Printf("[NovelHandler] DeleteNovel: novelID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -219,6 +211,9 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
+	userID, _ := c.Get("user_id")
+	callerUserID, _ := userID.(uint)
+
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterGen, "章节生成", "chapter", 0)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
@@ -252,6 +247,18 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 			modelUsed = h.novelService.GetAIService().GetDefaultProviderName()
 		}
 		h.taskSvc.Complete(taskID, map[string]interface{}{"chapter": chapter, "model_used": modelUsed}) //nolint:errcheck
+
+		// 站内通知：章节生成完成
+		if h.notifSvc != nil && callerUserID > 0 {
+			_ = h.notifSvc.Send(
+				tenantID, callerUserID,
+				"chapter_done",
+				fmt.Sprintf("第%d章生成完成", chapter.ChapterNo),
+				chapter.Title,
+				"chapter", chapter.ID,
+				fmt.Sprintf("/novel/%d/chapter/%d", chapter.NovelID, chapter.ChapterNo),
+			)
+		}
 
 		// 后处理：伏笔提取 + 质量检查（非阻塞）
 		go func(ch *model.Chapter) {
@@ -406,27 +413,49 @@ func (h *NovelHandler) PublishNovel(c *gin.Context) {
 	if !ok {
 		return
 	}
-	novel, err := h.novelService.GetNovel(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "novel not found")
-		return
-	}
-	if tenantID := getTenantID(c); novel.TenantID != tenantID {
-		respondErr(c, http.StatusForbidden, "forbidden")
-		return
-	}
 	var req struct {
 		Visibility string `json:"visibility"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil || req.Visibility == "" {
 		req.Visibility = "public"
 	}
-	updated, err := h.novelService.PublishNovel(uint(id), req.Visibility)
+	updated, err := h.novelService.PublishNovel(uint(id), getTenantID(c), req.Visibility)
 	if err != nil {
+		if err.Error() == "not found" {
+			respondErr(c, http.StatusNotFound, "novel not found")
+			return
+		}
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	respondOK(c, updated)
+}
+
+// ReviewNovel 审核小说（管理员操作）
+// PUT /api/v1/novels/:id/review
+func (h *NovelHandler) ReviewNovel(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	role, _ := c.Get("user_role")
+	roleStr, _ := role.(string)
+	if roleStr != "admin" && roleStr != "owner" {
+		respondErr(c, http.StatusForbidden, "admin access required")
+		return
+	}
+	var req service.ReviewNovelRequest
+	if !bindJSON(c, &req) {
+		return
+	}
+	reviewerID, _ := c.Get("user_id")
+	uid, _ := reviewerID.(uint)
+	novel, err := h.novelService.ReviewNovel(uint(id), uid, getTenantID(c), req)
+	if err != nil {
+		respondErr(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondOK(c, novel)
 }
 
 // UnpublishNovel 取消发布小说
@@ -436,16 +465,11 @@ func (h *NovelHandler) UnpublishNovel(c *gin.Context) {
 	if !ok {
 		return
 	}
-	novel, err := h.novelService.GetNovel(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "novel not found")
-		return
-	}
-	if tenantID := getTenantID(c); novel.TenantID != tenantID {
-		respondErr(c, http.StatusForbidden, "forbidden")
-		return
-	}
-	if err := h.novelService.UnpublishNovel(uint(id)); err != nil {
+	if err := h.novelService.UnpublishNovel(uint(id), getTenantID(c)); err != nil {
+		if err.Error() == "not found" {
+			respondErr(c, http.StatusNotFound, "novel not found")
+			return
+		}
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -459,13 +483,8 @@ func (h *NovelHandler) GenerateCoverImage(c *gin.Context) {
 	if !ok {
 		return
 	}
-	novel, err := h.novelService.GetNovel(uint(id))
-	if err != nil {
+	if _, err := h.novelService.GetNovel(uint(id), getTenantID(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
-		return
-	}
-	if tenantID := getTenantID(c); novel.TenantID != tenantID {
-		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
 	var req struct {

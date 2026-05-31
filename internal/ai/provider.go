@@ -333,6 +333,7 @@ func (e *CostEstimator) EstimateCost(provider, model string, inputTokens, output
 
 // UsageLogger 使用日志记录器
 type UsageLogger struct {
+	mu   sync.Mutex
 	logs []UsageLogEntry
 }
 
@@ -351,11 +352,15 @@ type UsageLogEntry struct {
 
 // Log 记录使用
 func (l *UsageLogger) Log(entry UsageLogEntry) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	l.logs = append(l.logs, entry)
 }
 
 // GetStats 获取统计信息
 func (l *UsageLogger) GetStats(provider, model string) *UsageStats {
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	stats := &UsageStats{}
 	for _, log := range l.logs {
 		if provider != "" && log.Provider != provider {
@@ -394,9 +399,10 @@ type UsageStats struct {
 
 // ModelHealthChecker 模型健康检查器
 type ModelHealthChecker struct {
-	providers map[string]AIProvider
+	mu            sync.RWMutex
+	providers     map[string]AIProvider
 	checkInterval time.Duration
-	lastCheck map[string]*HealthStatus
+	lastCheck     map[string]*HealthStatus
 }
 
 type HealthStatus struct {
@@ -415,11 +421,15 @@ func NewModelHealthChecker() *ModelHealthChecker {
 }
 
 func (h *ModelHealthChecker) Register(name string, provider AIProvider) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.providers[name] = provider
 }
 
 func (h *ModelHealthChecker) Check(name string) (*HealthStatus, error) {
+	h.mu.RLock()
 	provider, ok := h.providers[name]
+	h.mu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("provider not found: %s", name)
 	}
@@ -439,13 +449,22 @@ func (h *ModelHealthChecker) Check(name string) (*HealthStatus, error) {
 		status.Message = err.Error()
 	}
 
+	h.mu.Lock()
 	h.lastCheck[name] = status
+	h.mu.Unlock()
 	return status, nil
 }
 
 func (h *ModelHealthChecker) CheckAll() map[string]*HealthStatus {
-	results := make(map[string]*HealthStatus)
+	h.mu.RLock()
+	names := make([]string, 0, len(h.providers))
 	for name := range h.providers {
+		names = append(names, name)
+	}
+	h.mu.RUnlock()
+
+	results := make(map[string]*HealthStatus)
+	for _, name := range names {
 		status, _ := h.Check(name)
 		results[name] = status
 	}
@@ -498,6 +517,7 @@ type RetryProvider struct {
 	provider   AIProvider
 	maxRetries int
 	baseDelay  time.Duration // 基础等待时间，默认 500ms
+	cb         *CircuitBreaker
 }
 
 // NewRetryProvider 创建重试包装器（最多重试 maxRetries 次，基础延迟 baseDelay）
@@ -512,6 +532,7 @@ func NewRetryProvider(provider AIProvider, maxRetries int, baseDelay time.Durati
 		provider:   provider,
 		maxRetries: maxRetries,
 		baseDelay:  baseDelay,
+		cb:         NewCircuitBreaker(5, 30*time.Second),
 	}
 }
 
@@ -556,6 +577,9 @@ func isRetryableStatus(statusCode int) bool {
 }
 
 func (p *RetryProvider) Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
+	if err := p.cb.Err(); err != nil {
+		return nil, err
+	}
 	var lastErr error
 	for attempt := 0; attempt < p.maxRetries; attempt++ {
 		if attempt > 0 {
@@ -572,6 +596,7 @@ func (p *RetryProvider) Generate(ctx context.Context, req *GenerateRequest) (*Ge
 		}
 		resp, err := p.provider.Generate(ctx, req)
 		if err != nil {
+			p.cb.RecordFailure()
 			if isRetryable(err) {
 				lastErr = err
 				continue
@@ -581,17 +606,23 @@ func (p *RetryProvider) Generate(ctx context.Context, req *GenerateRequest) (*Ge
 		// 检查响应中是否包含可重试错误
 		if resp != nil && resp.Error != "" {
 			if isRetryable(fmt.Errorf(resp.Error)) {
+				p.cb.RecordFailure()
 				lastErr = fmt.Errorf(resp.Error)
 				continue
 			}
+			p.cb.RecordSuccess()
 			return resp, nil
 		}
+		p.cb.RecordSuccess()
 		return resp, nil
 	}
 	return nil, fmt.Errorf("RetryProvider.Generate failed after %d attempts: %w", p.maxRetries, lastErr)
 }
 
 func (p *RetryProvider) GenerateStream(ctx context.Context, req *GenerateRequest) (<-chan *GenerateResponse, error) {
+	if err := p.cb.Err(); err != nil {
+		return nil, err
+	}
 	var lastErr error
 	for attempt := 0; attempt < p.maxRetries; attempt++ {
 		if attempt > 0 {
@@ -607,18 +638,23 @@ func (p *RetryProvider) GenerateStream(ctx context.Context, req *GenerateRequest
 		}
 		ch, err := p.provider.GenerateStream(ctx, req)
 		if err != nil {
+			p.cb.RecordFailure()
 			if isRetryable(err) {
 				lastErr = err
 				continue
 			}
 			return nil, err
 		}
+		p.cb.RecordSuccess()
 		return ch, nil
 	}
 	return nil, fmt.Errorf("RetryProvider.GenerateStream failed after %d attempts: %w", p.maxRetries, lastErr)
 }
 
 func (p *RetryProvider) Embed(ctx context.Context, text string) ([]float32, error) {
+	if err := p.cb.Err(); err != nil {
+		return nil, err
+	}
 	var lastErr error
 	for attempt := 0; attempt < p.maxRetries; attempt++ {
 		if attempt > 0 {
@@ -634,23 +670,101 @@ func (p *RetryProvider) Embed(ctx context.Context, text string) ([]float32, erro
 		}
 		result, err := p.provider.Embed(ctx, text)
 		if err != nil {
+			p.cb.RecordFailure()
 			if isRetryable(err) {
 				lastErr = err
 				continue
 			}
 			return nil, err
 		}
+		p.cb.RecordSuccess()
 		return result, nil
 	}
 	return nil, fmt.Errorf("RetryProvider.Embed failed after %d attempts: %w", p.maxRetries, lastErr)
 }
 
 func (p *RetryProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRequest) (*ImageResponse, error) {
-	return p.provider.ImageGenerate(ctx, req)
+	if err := p.cb.Err(); err != nil {
+		return nil, err
+	}
+	var lastErr error
+	for attempt := 0; attempt < p.maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := p.baseDelay * time.Duration(1<<uint(attempt-1))
+			if delay > 32*time.Second {
+				delay = 32 * time.Second
+			}
+			logger.Printf("RetryProvider.ImageGenerate: attempt %d, waiting %v", attempt+1, delay)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		resp, err := p.provider.ImageGenerate(ctx, req)
+		if err != nil {
+			p.cb.RecordFailure()
+			if isRetryable(err) {
+				lastErr = err
+				continue
+			}
+			return nil, err
+		}
+		if resp != nil && resp.Error != "" {
+			if isRetryable(fmt.Errorf(resp.Error)) {
+				p.cb.RecordFailure()
+				lastErr = fmt.Errorf(resp.Error)
+				continue
+			}
+			p.cb.RecordSuccess()
+			return resp, nil
+		}
+		p.cb.RecordSuccess()
+		return resp, nil
+	}
+	return nil, fmt.Errorf("RetryProvider.ImageGenerate failed after %d attempts: %w", p.maxRetries, lastErr)
 }
 
 func (p *RetryProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRequest) (*AudioResponse, error) {
-	return p.provider.AudioGenerate(ctx, req)
+	if err := p.cb.Err(); err != nil {
+		return nil, err
+	}
+	var lastErr error
+	for attempt := 0; attempt < p.maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := p.baseDelay * time.Duration(1<<uint(attempt-1))
+			if delay > 32*time.Second {
+				delay = 32 * time.Second
+			}
+			logger.Printf("RetryProvider.AudioGenerate: attempt %d, waiting %v", attempt+1, delay)
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		resp, err := p.provider.AudioGenerate(ctx, req)
+		if err != nil {
+			p.cb.RecordFailure()
+			if isRetryable(err) {
+				lastErr = err
+				continue
+			}
+			return nil, err
+		}
+		if resp != nil && resp.Error != "" {
+			if isRetryable(fmt.Errorf(resp.Error)) {
+				p.cb.RecordFailure()
+				lastErr = fmt.Errorf(resp.Error)
+				continue
+			}
+			p.cb.RecordSuccess()
+			return resp, nil
+		}
+		p.cb.RecordSuccess()
+		return resp, nil
+	}
+	return nil, fmt.Errorf("RetryProvider.AudioGenerate failed after %d attempts: %w", p.maxRetries, lastErr)
 }
 
 func (p *RetryProvider) GetName() string      { return p.provider.GetName() }

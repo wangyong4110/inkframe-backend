@@ -59,6 +59,11 @@ func main() {
 		cfg = config.DefaultConfig()
 	}
 
+	// 1a. 安全校验：JWT secret 必须至少 32 字符
+	if len(cfg.Server.JWTSecret) < 32 {
+		log.Fatalf("FATAL: jwt_secret must be at least 32 characters (currently %d). Set a strong secret in config.yaml.", len(cfg.Server.JWTSecret))
+	}
+
 	// 2. 初始化数据库
 	db, err := initDatabase(cfg)
 	if err != nil {
@@ -137,7 +142,7 @@ func main() {
 	services.VideoService.WithIgnoredIssueRepo(repos.IgnoredReviewIssueRepo)
 	services.VideoService.WithVideoSocial(repos.VideoLikeRepo, repos.VideoCommentRepo)
 	services.NovelService.WithNovelSocial(repos.NovelLikeRepo, repos.NovelCommentRepo)
-	services.NovelImportService.WithStorage(storageSvc).WithAnalysisService(services.NovelAnalysisService).WithAIService(services.AIService)
+	services.NovelImportService.WithStorage(storageSvc).WithAnalysisService(services.NovelAnalysisService).WithAIService(services.AIService).WithNotificationService(services.NotificationService).WithCrawlJobRepo(repos.NovelCrawlJobRepo)
 
 	// SFX 音效服务（降级链：素材库 → AI文生音效 → 本地库 → AudioLDM → Freesound → Pixabay → BBC → 爱给网 → ElevenLabs）
 	// 所有 API Key 均通过"模型管理"页面配置，不再从环境变量读取。
@@ -169,6 +174,8 @@ func main() {
 	r := router.SetupRouter(&router.Config{
 		JWTSecret:          cfg.Server.JWTSecret,
 		AllowedOrigins:     cfg.Server.AllowedOrigins,
+		RedisClient:        redisClient,
+		DB:                 db,
 		NovelHandler:       handlers.NovelHandler,
 		ChapterHandler:     handlers.ChapterHandler,
 		CharacterHandler:   handlers.CharacterHandler,
@@ -182,6 +189,7 @@ func main() {
 		WorldviewHandler:   handlers.WorldviewHandler,
 		TenantHandler:      handlers.TenantHandler,
 		ItemHandler:        handlers.ItemHandler,
+		SkillHandler:       handlers.SkillHandler,
 		UploadHandler:      handlers.UploadHandler,
 		PlotPointHandler:   handlers.PlotPointHandler,
 		TaskHandler:        handlers.TaskHandler,
@@ -198,6 +206,8 @@ func main() {
 		StoryPatternHandler:   handlers.StoryPatternHandler,
 		ImageRefSearchHandler: handlers.ImageRefSearchHandler,
 		ColorPaletteHandler:   handlers.ColorPaletteHandler,
+		NotificationHandler:   handlers.NotificationHandler,
+		KnowledgeHandler:      handlers.KnowledgeHandler,
 	})
 
 	// 12. 创建服务器
@@ -210,12 +220,12 @@ func main() {
 	}
 
 	// 13. 启动服务器
-	go func() {
+	safeGo("http-server", func() {
 		logger.Printf("Server starting on %s", cfg.Server.GetAddr())
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Fatalf("Server failed to start: %v", err)
 		}
-	}()
+	})
 
 	// 后台定时任务：每小时重新计算热度分（带优雅退出）
 	hotScoreQuit := make(chan struct{})
@@ -223,7 +233,7 @@ func main() {
 	startRecalcLoop("novel-hot-score", hotScoreQuit, services.NovelService.RecalcNovelHotScores)
 
 	// 后台定时任务：每 30 分钟清理超时的分片上传会话（防内存泄漏）
-	go handler.CleanupChunkStore()
+	safeGo("chunk-cleanup", handler.CleanupChunkStore)
 
 	// 注册可续跑任务类型，然后启动任务恢复（必须在所有服务 wiring 完成后调用）
 	if services.TaskService != nil {
@@ -322,7 +332,10 @@ func initRedis(cfg *config.Config) *redis.Client {
 	defer cancel()
 
 	if err := client.Ping(ctx).Err(); err != nil {
-		logger.Printf("Warning: Redis connection failed: %v", err)
+		if cfg.Redis.GetRedisAddr() != "" {
+			logger.Printf("WARNING: Redis connection failed: %v. JWT blacklist, caching, and rate limiting will be degraded.", err)
+		}
+		// Return nil so dependent code uses fallbacks gracefully
 		return nil
 	}
 
@@ -336,4 +349,16 @@ func getEnv(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+// safeGo 启动后台 goroutine，panic 时仅记录日志而不让整个进程崩溃。
+func safeGo(name string, fn func()) {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("PANIC in goroutine %s: %v", name, r)
+			}
+		}()
+		fn()
+	}()
 }

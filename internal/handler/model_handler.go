@@ -3,8 +3,11 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -86,6 +89,7 @@ func (h *ModelHandler) GetProvider(c *gin.Context) {
 	}
 
 	provider.APIKey = maskAPIKey(provider.APIKey)
+	provider.APISecretKey = maskAPIKey(provider.APISecretKey)
 	respondOK(c, provider)
 }
 
@@ -131,6 +135,7 @@ func (h *ModelHandler) UpdateProvider(c *gin.Context) {
 	}
 
 	provider.APIKey = maskAPIKey(provider.APIKey)
+	provider.APISecretKey = maskAPIKey(provider.APISecretKey)
 	respondOK(c, provider)
 }
 
@@ -189,7 +194,7 @@ func (h *ModelHandler) ListModels(c *gin.Context) {
 		}
 	}
 
-	models, err := h.modelService.ListModels(providerId)
+	models, err := h.modelService.ListModels(providerId, getTenantID(c))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -206,7 +211,7 @@ func (h *ModelHandler) CreateModel(c *gin.Context) {
 		return
 	}
 
-	modelEntity, err := h.modelService.CreateModel(&req)
+	modelEntity, err := h.modelService.CreateModel(&req, getTenantID(c))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -228,7 +233,7 @@ func (h *ModelHandler) UpdateModel(c *gin.Context) {
 		return
 	}
 
-	modelEntity, err := h.modelService.UpdateModel(uint(id), &req)
+	modelEntity, err := h.modelService.UpdateModel(uint(id), getTenantID(c), &req)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -245,7 +250,7 @@ func (h *ModelHandler) DeleteModel(c *gin.Context) {
 		return
 	}
 
-	if err := h.modelService.DeleteModel(uint(id)); err != nil {
+	if err := h.modelService.DeleteModel(uint(id), getTenantID(c)); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -456,6 +461,12 @@ func (h *ModelHandler) FetchProviderModels(c *gin.Context) {
 		return
 	}
 
+	// SSRF 防护：校验 endpoint 只允许外网 http/https 地址
+	if err := validateEndpointURL(endpoint); err != nil {
+		respondBadRequest(c, "invalid endpoint: "+err.Error())
+		return
+	}
+
 	// Ollama 本地服务特殊处理：无需 API Key，使用 /api/tags 获取已安装模型列表
 	isOllama := strings.Contains(endpoint, ":11434") || providerNameFromEndpoint(endpoint) == "ollama"
 	if !isOllama && apiKey == "" {
@@ -562,6 +573,38 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 	}
 
 	respondOK(c, result)
+}
+
+// validateEndpointURL 验证 endpoint URL 防止 SSRF 攻击。
+// 仅允许 http/https scheme，拒绝私有 IP 和 localhost。
+func validateEndpointURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("only http/https URLs are allowed, got %q", u.Scheme)
+	}
+	host := u.Hostname()
+	ip := net.ParseIP(host)
+	if ip != nil {
+		privateRanges := []string{
+			"10.", "172.16.", "172.17.", "172.18.", "172.19.", "172.20.",
+			"172.21.", "172.22.", "172.23.", "172.24.", "172.25.", "172.26.",
+			"172.27.", "172.28.", "172.29.", "172.30.", "172.31.",
+			"192.168.", "127.", "169.254.", "::1", "fc", "fd",
+		}
+		ipStr := ip.String()
+		for _, prefix := range privateRanges {
+			if strings.HasPrefix(ipStr, prefix) {
+				return fmt.Errorf("requests to private/internal IP addresses are not allowed")
+			}
+		}
+	}
+	if host == "localhost" || host == "0.0.0.0" {
+		return fmt.Errorf("requests to localhost are not allowed")
+	}
+	return nil
 }
 
 // providerNameFromEndpoint 从 endpoint 推断提供商名称（用于无 API Key 检测）

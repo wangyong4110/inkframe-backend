@@ -17,6 +17,9 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if _, ok := h.getVideoForTenant(c, uint(videoId)); !ok {
+		return
+	}
 
 	var req struct {
 		ChapterID      uint     `json:"chapter_id"`
@@ -191,6 +194,9 @@ func (h *VideoHandler) GetStoryboard(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if _, ok := h.getVideoForTenant(c, uint(videoId)); !ok {
+		return
+	}
 
 	shots, err := h.videoService.GetStoryboard(uint(videoId))
 	if err != nil {
@@ -212,6 +218,13 @@ func (h *VideoHandler) GetStoryboard(c *gin.Context) {
 // ServeAudio 供前端播放配音文件
 // GET /api/v1/videos/:id/storyboard/:shot_id/audio
 func (h *VideoHandler) ServeAudio(c *gin.Context) {
+	videoId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoId)); !ok {
+		return
+	}
 	shotID, ok := parseID(c, "shot_id")
 	if !ok {
 		return
