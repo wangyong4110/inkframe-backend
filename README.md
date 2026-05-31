@@ -160,62 +160,177 @@ git clone <repo-url>
 cd inkframe-backend
 ```
 
-**2. 安装 Go**
+---
 
-macOS（使用 Homebrew）：
+**2. 安装 Go 1.21+**
+
+**macOS（Homebrew）：**
 
 ```bash
+# 安装 Go
 brew install go
-# Homebrew 安装路径与系统 Go 不同，需指定 GOROOT
-export GOROOT=/opt/homebrew/Cellar/go/1.24.4/libexec
-export PATH=$GOROOT/bin:$PATH
+
+# Homebrew Go 路径与系统 Go 不同，需将以下两行写入 ~/.zshrc 或 ~/.bash_profile
+echo 'export GOROOT=/opt/homebrew/opt/go/libexec' >> ~/.zshrc
+echo 'export PATH=$GOROOT/bin:$PATH' >> ~/.zshrc
+source ~/.zshrc
+
+# 验证
+go version
 ```
 
-Linux：
+> 如果版本较旧（`brew install go` 拉取的是最新稳定版），也可指定：`brew install go@1.21`，并将 `/opt/homebrew/opt/go@1.21/libexec` 写入 `GOROOT`。
+
+**Linux（官方二进制，推荐）：**
 
 ```bash
+# 下载并解压（以 1.21.0 amd64 为例，ARM 设备替换为 linux-arm64）
 wget https://go.dev/dl/go1.21.0.linux-amd64.tar.gz
+sudo rm -rf /usr/local/go
 sudo tar -C /usr/local -xzf go1.21.0.linux-amd64.tar.gz
-export PATH=/usr/local/go/bin:$PATH
+
+# 写入环境变量（写入 ~/.bashrc 或 /etc/profile.d/go.sh 使其永久生效）
+echo 'export PATH=/usr/local/go/bin:$PATH' >> ~/.bashrc
+source ~/.bashrc
+
+# 验证
+go version
 ```
+
+Linux（包管理器，版本可能偏旧，不推荐生产）：
+
+```bash
+# Ubuntu / Debian
+sudo apt update && sudo apt install -y golang-go
+
+# CentOS / RHEL / Fedora
+sudo dnf install -y golang
+```
+
+**Windows：**
+
+1. 前往 [https://go.dev/dl/](https://go.dev/dl/) 下载 `go1.21.x.windows-amd64.msi`
+2. 运行安装包，默认安装到 `C:\Program Files\Go`，安装程序自动配置 `PATH`
+3. 打开新 PowerShell 验证：`go version`
+
+---
 
 **3. 安装并初始化 MySQL 8**
 
+**macOS（Homebrew）：**
+
 ```bash
-# macOS
 brew install mysql@8.0
 brew services start mysql@8.0
 
-# Ubuntu / Debian
-sudo apt update && sudo apt install -y mysql-server
-sudo systemctl start mysql
+# 验证连接
+mysql -u root -p
 ```
 
-创建数据库和用户：
+> 首次启动 MySQL 会生成临时 root 密码，在 `/usr/local/var/mysql/<hostname>.err` 中搜索 `temporary password`，或运行 `mysql_secure_installation` 完成初始化。
+
+**Linux（Ubuntu / Debian）：**
+
+```bash
+sudo apt update && sudo apt install -y mysql-server
+sudo systemctl enable mysql && sudo systemctl start mysql
+
+# 安全初始化（设置 root 密码、删除匿名用户、禁止远程 root 登录）
+sudo mysql_secure_installation
+
+# 以 root 身份进入
+sudo mysql
+```
+
+**Linux（CentOS / RHEL 8+）：**
+
+```bash
+sudo dnf install -y mysql-server
+sudo systemctl enable mysqld && sudo systemctl start mysqld
+
+# 查看临时 root 密码
+sudo grep 'temporary password' /var/log/mysqld.log
+
+# 安全初始化
+sudo mysql_secure_installation
+```
+
+**Windows：**
+
+1. 前往 [https://dev.mysql.com/downloads/installer/](https://dev.mysql.com/downloads/installer/) 下载 MySQL Installer
+2. 选择 **MySQL Server 8.0**，安装类型选 `Developer Default`
+3. 安装完成后，MySQL 服务自动注册并启动
+
+**创建数据库和用户（所有平台通用）：**
 
 ```sql
 CREATE DATABASE inkframe CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER 'inkframe'@'localhost' IDENTIFIED BY 'your_password';
 GRANT ALL PRIVILEGES ON inkframe.* TO 'inkframe'@'localhost';
 FLUSH PRIVILEGES;
+EXIT;
 ```
+
+---
 
 **4. 安装 Redis 7**
 
+**macOS（Homebrew）：**
+
 ```bash
-# macOS
 brew install redis
 brew services start redis
 
-# Ubuntu / Debian
-sudo apt install -y redis-server
-sudo systemctl start redis
+# 验证
+redis-cli ping
+# 期望输出：PONG
 ```
+
+**Linux（Ubuntu / Debian）：**
+
+```bash
+sudo apt update && sudo apt install -y redis-server
+
+# 编辑配置（可选：绑定本地地址，禁止外部访问）
+sudo sed -i 's/^bind 127.0.0.1 -::1/bind 127.0.0.1/' /etc/redis/redis.conf
+
+sudo systemctl enable redis-server && sudo systemctl start redis-server
+
+# 验证
+redis-cli ping
+```
+
+**Linux（CentOS / RHEL）：**
+
+```bash
+sudo dnf install -y redis
+sudo systemctl enable redis && sudo systemctl start redis
+redis-cli ping
+```
+
+**Linux（源码编译，获取最新版）：**
+
+```bash
+wget https://download.redis.io/redis-stable.tar.gz
+tar xzf redis-stable.tar.gz && cd redis-stable
+make && sudo make install
+sudo cp redis.conf /etc/redis.conf
+# 按需修改 /etc/redis.conf 中的 daemonize yes
+redis-server /etc/redis.conf
+```
+
+**Windows：** 见"第四节 Windows 本地开发注意事项"。
+
+---
 
 **5. 配置 config.yaml**
 
 ```bash
+# macOS / Linux
 cp config.example.yaml config.yaml
+
+# Windows PowerShell
+Copy-Item config.example.yaml config.yaml
 ```
 
 编辑 `config.yaml`，填写以下核心配置：
@@ -223,7 +338,7 @@ cp config.example.yaml config.yaml
 ```yaml
 server:
   port: 8080
-  mode: debug
+  mode: debug        # 开发时用 debug，生产改为 release
 
 database:
   host: localhost
@@ -231,10 +346,12 @@ database:
   user: inkframe
   password: your_password
   name: inkframe
+  max_idle_conns: 10
+  max_open_conns: 100
 
 redis:
   addr: localhost:6379
-  password: ""
+  password: ""       # 有密码时填写
   db: 0
 
 storage:
@@ -242,27 +359,85 @@ storage:
   oss:
     endpoint: https://oss-cn-shanghai.aliyuncs.com
     bucket: your-bucket
-    access_key_id: ...
-    access_key_secret: ...
+    access_key_id: your-ak
+    access_key_secret: your-sk
+    base_url: https://your-bucket.oss-cn-shanghai.aliyuncs.com
+
+# 向量存储（可选，不填则禁用语义搜索）
+vector_db:
+  provider: qdrant
+  qdrant:
+    endpoint: http://localhost:6333
+    api_key: ""
 ```
+
+---
 
 **6. 安装依赖并启动**
 
+macOS / Linux：
+
 ```bash
-make deps
-make run
+make deps   # 等价于 go mod download && go mod tidy
+make run    # 编译并启动，监听 :8080
 ```
+
+热重载开发模式（需先安装 [reflex](https://github.com/cespare/reflex)）：
+
+```bash
+go install github.com/cespare/reflex@latest
+make dev    # 文件变更时自动重新编译
+```
+
+Windows（PowerShell，`make` 不可用时）：
+
+```powershell
+go mod download
+go run ./cmd/server
+```
+
+> Windows 安装 `make`：`choco install make`（需先安装 [Chocolatey](https://chocolatey.org/)）
+
+---
 
 **7. 数据库表自动创建**
 
-服务首次启动时，GORM AutoMigrate 会自动创建所有 `ink_*` 数据表，无需手动执行 SQL 建表语句。
+服务首次启动时，GORM AutoMigrate 自动创建所有 `ink_*` 数据表，**无需**手动执行任何 SQL 建表语句。升级时只新增列，不删除已有数据，安全幂等。
+
+---
 
 **8. 验证服务**
 
 ```bash
+# macOS / Linux
 curl http://localhost:8080/health
 # 期望响应：{"status":"ok"}
+
+# Windows PowerShell
+Invoke-RestMethod http://localhost:8080/health
 ```
+
+登录管理界面，前往 **AI 模型 → 添加提供商**，配置至少一个 LLM 提供商（如 DeepSeek），即可开始使用所有 AI 功能。
+
+---
+
+**macOS 常见问题**
+
+| 问题 | 原因 | 解决方案 |
+|------|------|----------|
+| `go: command not found` | Homebrew Go 路径未写入 PATH | 确认 `~/.zshrc` 中有 `export PATH=$GOROOT/bin:$PATH`，重新 `source ~/.zshrc` |
+| MySQL 启动失败 | 端口 3306 被占用 | `lsof -i :3306` 查看占用进程，或修改 `config.yaml` 中的 `port` |
+| Redis 连接被拒绝 | 服务未运行 | `brew services list` 确认 redis 状态为 `started` |
+| `make: command not found` | Xcode CLT 未安装 | `xcode-select --install` |
+
+**Linux 常见问题**
+
+| 问题 | 原因 | 解决方案 |
+|------|------|----------|
+| MySQL 无法用密码登录 | 默认 auth_socket 插件 | `ALTER USER 'root'@'localhost' IDENTIFIED WITH mysql_native_password BY 'pwd';` |
+| Redis 外部无法访问 | 绑定了 127.0.0.1 | 修改 `/etc/redis/redis.conf` 中 `bind` 项，并配置防火墙 |
+| `permission denied` 运行二进制 | 文件权限 | `chmod +x ./bin/inkframe-backend` |
+| 端口 8080 被占用 | 其他进程 | `lsof -i :8080` 或修改 `config.yaml` 中 `server.port` |
 
 ---
 
@@ -432,7 +607,65 @@ docker compose down -v
 
 ---
 
-### 四、Linux 生产环境部署（systemd）
+### 四、Windows 本地开发注意事项
+
+> Windows 不支持 `make`，且 Redis 无官方原生版本，建议优先使用 **WSL2 + Docker Desktop** 组合。
+
+#### 推荐工具链
+
+| 工具 | 安装方式 | 说明 |
+|------|----------|------|
+| Git | [git-scm.com](https://git-scm.com/download/win) | 含 Git Bash，可运行 shell 脚本 |
+| Go 1.21+ | [go.dev/dl](https://go.dev/dl/) | 下载 `.msi` 安装包 |
+| MySQL 8 | [MySQL Installer](https://dev.mysql.com/downloads/installer/) | 含图形化配置向导 |
+| Redis | WSL2 / Docker / Memurai | 见下方说明 |
+| make（可选） | `choco install make` | 需先安装 [Chocolatey](https://chocolatey.org/) |
+| WSL2（推荐） | `wsl --install` | 运行 Linux 子系统，最接近生产环境 |
+
+#### WSL2 完整流程（推荐）
+
+```powershell
+# 1. 安装 WSL2（需重启）
+wsl --install
+
+# 2. 进入 Ubuntu 子系统
+wsl -d Ubuntu
+
+# 3. 后续步骤与 Linux 完全相同
+sudo apt update && sudo apt install -y mysql-server redis-server
+sudo service mysql start && sudo service redis start
+# 按照"本地开发环境"的 Linux 步骤继续...
+```
+
+#### 纯 Windows PowerShell 流程
+
+```powershell
+# 安装依赖
+go mod download
+
+# 设置环境变量（当前会话）
+$env:GIN_MODE = "debug"
+
+# 启动服务
+go run ./cmd/server
+
+# 验证
+Invoke-RestMethod http://localhost:8080/health
+```
+
+#### Windows 常见问题
+
+| 问题 | 原因 | 解决方案 |
+|------|------|----------|
+| `make: command not found` | Windows 无内置 `make` | 安装 Chocolatey 后执行 `choco install make`，或直接用 `go run` / `go build` |
+| MySQL 连接被拒绝 | 服务未启动 | 打开「服务」管理器（`services.msc`），确认 MySQL80 服务已运行 |
+| Redis 连接失败 | Windows 无官方 Redis | 使用 WSL2 内的 Redis，或 `docker run -p 6379:6379 redis:7-alpine` |
+| 编译报 CGO 错误 | Windows 缺少 C 编译器 | 设置 `$env:CGO_ENABLED=0`（本项目不依赖 CGO） |
+| 路径分隔符问题 | Windows 用 `\`，Go 用 `/` | 在代码中使用 `filepath.Join`，配置文件路径统一用正斜线 |
+
+---
+
+### 五、Linux 生产环境部署（systemd）
 
 适用于正式生产服务器，以二进制文件 + systemd 守护进程方式运行。
 
@@ -522,7 +755,7 @@ sudo journalctl -u inkframe-backend -n 100
 
 ---
 
-### 五、Nginx 反向代理配置
+### 六、Nginx 反向代理配置
 
 在 Nginx 前端代理 InkFrame 后端，支持 HTTPS 和 WebSocket。
 
@@ -592,7 +825,7 @@ sudo certbot --nginx -d api.yourdomain.com
 
 ---
 
-### 六、config.yaml 完整参考
+### 七、config.yaml 完整参考
 
 以下为带注释的完整配置文件参考，所有字段均有说明：
 
@@ -652,7 +885,7 @@ log:
 
 ---
 
-### 七、数据库迁移说明
+### 八、数据库迁移说明
 
 #### 自动迁移
 
@@ -680,7 +913,7 @@ mysqldump -u inkframe -p inkframe > backup_$(date +%Y%m%d).sql
 
 ---
 
-### 八、升级部署
+### 九、升级部署
 
 以下为在 Linux 生产环境（systemd 方式）的完整升级流程：
 
