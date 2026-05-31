@@ -325,14 +325,15 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 	if s.storageSvc != nil && len(audioData) > 0 {
 		filename := fmt.Sprintf("seg-%d.mp3", segID)
 		key := storage.BuildKey(novelID, chapterID, "audio", filename)
-		if ossURL, e := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(audioData), int64(len(audioData)), "audio/mpeg"); e == nil {
-			if strings.HasPrefix(audioURL, "file://") {
-				os.Remove(strings.TrimPrefix(audioURL, "file://")) //nolint:errcheck
-			}
-			audioURL = ossURL
-		} else {
+		ossURL, e := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(audioData), int64(len(audioData)), "audio/mpeg")
+		if e != nil {
 			logger.Printf("GenerateSegmentAudio: OSS upload failed for segment %d: %v", segID, e)
+			return e
 		}
+		if strings.HasPrefix(audioURL, "file://") {
+			os.Remove(strings.TrimPrefix(audioURL, "file://")) //nolint:errcheck
+		}
+		audioURL = ossURL
 	}
 
 	// Persist audio path + measured duration
@@ -352,6 +353,8 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 
 // syncShotDurationAfterVoice 累加该分镜所有配音段落的 duration_secs，
 // 若合计时长超过当前分镜时长，则更新分镜 duration 为二者中较大值。
+// 若所有配音均失败（totalVoice==0），将分镜时长设置为默认最小值（defaultShotDurationSecs）
+// 以避免 shot.Duration 为零导致后续 FFmpeg 处理出错。
 func (s *VideoService) syncShotDurationAfterVoice(shotID uint) {
 	if s.segmentRepo == nil {
 		return
@@ -366,11 +369,17 @@ func (s *VideoService) syncShotDurationAfterVoice(shotID uint) {
 			totalVoice += sg.DurationSecs
 		}
 	}
-	if totalVoice <= 0 {
-		return
-	}
 	shot, err := s.storyboardRepo.GetByID(shotID)
 	if err != nil || shot == nil {
+		return
+	}
+	if totalVoice <= 0 {
+		// 所有配音段落均失败：确保分镜时长有合理默认值，不跳过更新
+		if shot.Duration <= 0 {
+			if err := s.storyboardRepo.UpdateFields(shotID, map[string]interface{}{"duration": defaultShotDurationSecs}); err != nil {
+				logger.Printf("[VideoService] syncShotDurationAfterVoice: failed to set default duration for shot %d: %v", shotID, err)
+			}
+		}
 		return
 	}
 	if totalVoice <= shot.Duration {

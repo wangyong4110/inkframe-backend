@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -354,14 +355,15 @@ func (h *AuthHandler) OAuthCallback(c *gin.Context) {
 		return
 	}
 
+	// Fix 6: Clear the oauth_state cookie via defer so it is always consumed,
+	// regardless of whether state validation succeeds or fails.
+	defer c.SetCookie("oauth_state", "", -1, "/", "", false, true)
 	// Validate state parameter against the cookie to prevent CSRF.
 	cookieState, err := c.Cookie("oauth_state")
 	if err != nil || cookieState == "" || cookieState != c.Query("state") {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid oauth state"})
 		return
 	}
-	// Consume the state cookie immediately after validation.
-	c.SetCookie("oauth_state", "", -1, "/", "", false, true)
 
 	userInfo, err := h.oauthService.ExchangeUserInfo(provider, code)
 	if err != nil {
@@ -439,6 +441,25 @@ func (h *AuthHandler) SendEmailVerification(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"message": "verification email sent"})
+}
+
+// UnlockUser 管理员手动解除账号锁定
+// POST /api/v1/auth/users/:id/unlock
+func (h *AuthHandler) UnlockUser(c *gin.Context) {
+	if c.GetString("user_role") != "admin" {
+		respondErr(c, http.StatusForbidden, "admin only")
+		return
+	}
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		respondBadRequest(c, "invalid user id")
+		return
+	}
+	if err := h.authService.UnlockUser(uint(id)); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"message": "user unlocked"})
 }
 
 // VerifyEmail 通过 token 验证邮箱（无需登录）

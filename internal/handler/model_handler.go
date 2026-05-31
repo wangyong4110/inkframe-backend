@@ -228,6 +228,17 @@ func (h *ModelHandler) UpdateModel(c *gin.Context) {
 		return
 	}
 
+	// Fix 5: Verify the model belongs to the requesting tenant before updating.
+	existing, err := h.modelService.GetModel(uint(id))
+	if err != nil || existing == nil {
+		respondErr(c, http.StatusNotFound, "model not found")
+		return
+	}
+	if existing.Provider != nil && existing.Provider.TenantID != 0 && existing.Provider.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "unauthorized")
+		return
+	}
+
 	var req model.UpdateAIModelRequest
 	if !bindJSON(c, &req) {
 		return
@@ -250,6 +261,17 @@ func (h *ModelHandler) DeleteModel(c *gin.Context) {
 		return
 	}
 
+	// Fix 5: Verify the model belongs to the requesting tenant before deleting.
+	existing, err := h.modelService.GetModel(uint(id))
+	if err != nil || existing == nil {
+		respondErr(c, http.StatusNotFound, "model not found")
+		return
+	}
+	if existing.Provider != nil && existing.Provider.TenantID != 0 && existing.Provider.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "unauthorized")
+		return
+	}
+
 	if err := h.modelService.DeleteModel(uint(id), getTenantID(c)); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -266,7 +288,8 @@ func (h *ModelHandler) TestModel(c *gin.Context) {
 		return
 	}
 
-	result, err := h.modelService.TestModel(uint(id))
+	// Fix 10: Pass tenantID so the service uses tenant-specific provider credentials.
+	result, err := h.modelService.TestModel(uint(id), getTenantID(c))
 	if err != nil {
 		c.JSON(http.StatusOK, gin.H{
 			"code":    0,

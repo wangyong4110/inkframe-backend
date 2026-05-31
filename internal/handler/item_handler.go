@@ -46,12 +46,16 @@ func (h *ItemHandler) ListItems(c *gin.Context) {
 	if !ok {
 		return
 	}
-	items, err := h.itemService.ListItems(uint(novelID))
+	if !h.checkItemTenant(c, uint(novelID)) {
+		return
+	}
+	p := parsePagination(c)
+	items, total, err := h.itemService.ListItemsPaged(uint(novelID), p.Page, p.PageSize)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	respondOK(c, items)
+	respondOK(c, gin.H{"items": items, "total": total, "page": p.Page, "page_size": p.PageSize})
 }
 
 // CreateItem POST /novels/:id/items
@@ -157,6 +161,10 @@ func (h *ItemHandler) AIExtractFromNovel(c *gin.Context) {
 		return
 	}
 	tenantID := getTenantID(c)
+	// 验证 novel 归属当前租户
+	if !h.checkItemTenant(c, uint(novelID)) {
+		return
+	}
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeItemExtract, "AI提取物品", "novel", uint(novelID))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")

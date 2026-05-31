@@ -59,6 +59,11 @@ func (s *SkillService) ListSkills(novelID uint) ([]*model.Skill, error) {
 	return s.skillRepo.List(novelID)
 }
 
+// ListSkillsPaged 分页列出小说下的技能，返回数据列表和总数
+func (s *SkillService) ListSkillsPaged(novelID uint, page, pageSize int) ([]*model.Skill, int64, error) {
+	return s.skillRepo.ListPaged(novelID, page, pageSize)
+}
+
 // UpdateSkill 更新技能
 func (s *SkillService) UpdateSkill(id uint, req *model.UpdateSkillRequest) (*model.Skill, error) {
 	skill, err := s.skillRepo.GetByID(id)

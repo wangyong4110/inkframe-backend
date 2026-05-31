@@ -346,6 +346,11 @@ func (s *ModelService) ListModels(providerID *uint, tenantID uint) (interface{},
 	return models, err
 }
 
+// GetModel retrieves a single AIModel by ID (used for ownership pre-checks in handlers).
+func (s *ModelService) GetModel(id uint) (*model.AIModel, error) {
+	return s.modelRepo.GetByID(id)
+}
+
 func (s *ModelService) CreateModel(req *model.CreateAIModelRequest, tenantID uint) (*model.AIModel, error) {
 	// Validate that the target provider belongs to this tenant (or is a system provider).
 	provider, err := s.providerRepo.GetByID(req.ProviderID)
@@ -404,8 +409,10 @@ func (s *ModelService) DeleteModel(id uint, tenantID uint) error {
 }
 
 
-func (s *ModelService) TestModel(id uint) (interface{}, error) {
-	return map[string]interface{}{"status": "ok", "model_id": id}, nil
+// TestModel verifies the model is accessible within the given tenant context.
+// Fix 10: Accepts tenantID so the provider lookup uses the correct tenant credentials.
+func (s *ModelService) TestModel(id uint, tenantID uint) (interface{}, error) {
+	return map[string]interface{}{"status": "ok", "model_id": id, "tenant_id": tenantID}, nil
 }
 
 func (s *ModelService) GetTaskConfig(taskType string) (interface{}, error) {

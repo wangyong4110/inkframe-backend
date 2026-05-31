@@ -63,6 +63,16 @@ func (r *KnowledgeBaseRepository) IncrementUsageCount(id uint) error {
 		UpdateColumn("usage_count", gorm.Expr("usage_count + 1")).Error
 }
 
+// ListBySourceChapter 列出某章节提取的所有知识条目（用于删除前获取 ID 列表）
+func (r *KnowledgeBaseRepository) ListBySourceChapter(novelID, chapterID uint) ([]*model.KnowledgeBase, error) {
+	var results []*model.KnowledgeBase
+	if err := r.db.Where("novel_id = ? AND source_chapter_id = ?", novelID, chapterID).
+		Find(&results).Error; err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 // DeleteBySourceChapter 删除某章节提取的所有知识条目（用于重新提取时去重）
 func (r *KnowledgeBaseRepository) DeleteBySourceChapter(novelID, chapterID uint) error {
 	return r.db.Where("novel_id = ? AND source_chapter_id = ?", novelID, chapterID).

@@ -146,6 +146,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		// 邮箱验证发送（需要登录）
 		v1.POST("/auth/email-verification/send", cfg.AuthHandler.SendEmailVerification)
 		v1.POST("/auth/logout", cfg.AuthHandler.Logout)
+		// 管理员解锁账号
+		v1.POST("/auth/users/:id/unlock", cfg.AuthHandler.UnlockUser)
 
 		// 统一异步任务
 		if cfg.TaskHandler != nil {
@@ -415,6 +417,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			characters.POST("/:id/analyze-consistency", cfg.CharacterHandler.AnalyzeCharacterConsistency)
 			characters.POST("/:id/voice/preview", cfg.CharacterHandler.PreviewVoice)
 			characters.GET("/:id/voice/sample", cfg.CharacterHandler.ServeVoiceSample)
+			characters.POST("/:id/extract-voice", cfg.CharacterHandler.ExtractCharacterVoice)
 		}
 
 		// 视频相关

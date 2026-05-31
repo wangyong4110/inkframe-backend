@@ -101,7 +101,7 @@ type ChapterBrief struct {
 	ChapterNo   int
 	Title       string
 	Summary     string
-	ContentHead string // 正文前150字，用于摘要未生成时的临时上下文
+	ContentTail string // 正文前150字，用于摘要未生成时的临时上下文
 }
 
 type ArcBrief struct {
@@ -141,15 +141,7 @@ func (s *NarrativeMemoryService) BuildHierarchicalContext(novelID uint, currentC
 	if err != nil {
 		return "", err
 	}
-	result := renderHierarchicalContext(ctx)
-	if len(result) > maxHierarchicalContextBytes {
-		runes := []rune(result)
-		// 保留尾部（近章内容更重要）
-		maxRunes := maxHierarchicalContextBytes / 3 // 保守估计：每个 rune 约 3 字节
-		if len(runes) > maxRunes {
-			result = "…（上下文已截断）\n" + string(runes[len(runes)-maxRunes:])
-		}
-	}
+	result := renderHierarchicalContextPriority(ctx)
 	return result, nil
 }
 
@@ -241,7 +233,7 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 			ChapterNo:   ch.ChapterNo,
 			Title:       ch.Title,
 			Summary:     ch.Summary,
-			ContentHead: tail,
+			ContentTail: tail,
 		})
 	}
 
@@ -405,6 +397,83 @@ func (s *NarrativeMemoryService) buildGlobalSummary(novel *model.Novel) string {
 	return sb.String()
 }
 
+// renderHierarchicalContextPriority 按重要性优先级拼接上下文，超出50KB时：
+//  1. 先截断 arc 摘要（每条限100字）
+//  2. 保留完整 GlobalSummary + RecentDetailed
+//  3. 最终还是超出则截尾部并加前缀 "…（较早内容已压缩）\n"
+func renderHierarchicalContextPriority(ctx *HierarchicalContext) string {
+	// 第一步：尝试完整渲染
+	result := renderHierarchicalContext(ctx)
+	if len(result) <= maxHierarchicalContextBytes {
+		return result
+	}
+
+	// 第二步：压缩 arc 摘要（每条截至100字）
+	compressed := make([]ArcBrief, len(ctx.ArcSummaries))
+	for i, a := range ctx.ArcSummaries {
+		compressed[i] = a
+		runes := []rune(a.Summary)
+		if len(runes) > 100 {
+			compressed[i].Summary = string(runes[:100]) + "…"
+		}
+	}
+	ctxCompressed := *ctx
+	ctxCompressed.ArcSummaries = compressed
+	result = renderHierarchicalContext(&ctxCompressed)
+	if len(result) <= maxHierarchicalContextBytes {
+		return result
+	}
+
+	// 第三步：按重要性拼接（GlobalSummary + RecentDetailed 优先，ArcSummaries 次之，RecentShort 最后）
+	ctxMin := HierarchicalContext{
+		GlobalSummary:    ctx.GlobalSummary,
+		PlotTensionState: ctx.PlotTensionState,
+		Characters:       ctx.Characters,
+		RecentDetailed:   ctx.RecentDetailed,
+	}
+	base := renderHierarchicalContext(&ctxMin)
+
+	// 逐条追加 arc 摘要，不超限
+	arcLines := []ArcBrief{}
+	for _, a := range compressed {
+		arcLines = append(arcLines, a)
+		ctxTry := ctxMin
+		ctxTry.ArcSummaries = arcLines
+		if len(renderHierarchicalContext(&ctxTry)) > maxHierarchicalContextBytes {
+			arcLines = arcLines[:len(arcLines)-1]
+			break
+		}
+	}
+	ctxMin.ArcSummaries = arcLines
+
+	// 逐条追加 recent short，不超限
+	shortLines := []ChapterBrief{}
+	for _, s := range ctx.RecentShort {
+		shortLines = append(shortLines, s)
+		ctxTry := ctxMin
+		ctxTry.RecentShort = shortLines
+		if len(renderHierarchicalContext(&ctxTry)) > maxHierarchicalContextBytes {
+			shortLines = shortLines[:len(shortLines)-1]
+			break
+		}
+	}
+	ctxMin.RecentShort = shortLines
+
+	result = renderHierarchicalContext(&ctxMin)
+	if len(result) <= maxHierarchicalContextBytes {
+		return result
+	}
+
+	// 最终兜底：截尾部
+	_ = base
+	runes := []rune(result)
+	maxRunes := maxHierarchicalContextBytes / 3
+	if len(runes) > maxRunes {
+		return "…（较早内容已压缩）\n" + string(runes[len(runes)-maxRunes:])
+	}
+	return result
+}
+
 func renderHierarchicalContext(ctx *HierarchicalContext) string {
 	var sb strings.Builder
 	sb.WriteString(ctx.GlobalSummary)
@@ -454,8 +523,8 @@ func renderHierarchicalContext(ctx *HierarchicalContext) string {
 			sum := ch.Summary
 			if sum == "" {
 				// 摘要尚未生成时，使用章末内容作为临时上下文
-				if ch.ContentHead != "" {
-					sum = "（章末节选）…" + ch.ContentHead
+				if ch.ContentTail != "" {
+					sum = "（章末节选）…" + ch.ContentTail
 				} else {
 					sum = "（摘要待生成）"
 				}
@@ -485,17 +554,27 @@ func (s *NarrativeMemoryService) TriggerArcSummaryIfNeeded(tenantID, novelID uin
 		arcNo := completedChapterNo / arcSize
 		startChapter := completedChapterNo - arcSize + 1
 		go func(arcNo, startChapter, endChapter int) {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Printf("[NarrativeMemory] arc summary panic: %v", r)
+				}
+			}()
 			if err := s.generateArcSummary(tenantID, novelID, arcNo, startChapter, endChapter); err != nil {
 				logger.Printf("NarrativeMemory: arc %d summary failed (novel %d): %v", arcNo, novelID, err)
 			} else {
 				logger.Printf("NarrativeMemory: arc %d summary done (novel %d, ch %d-%d)", arcNo, novelID, startChapter, endChapter)
 			}
 		}(arcNo, startChapter, completedChapterNo)
-	case completedChapterNo > halfArcSize && completedChapterNo%halfArcSize == 0:
+	case completedChapterNo%halfArcSize == 0 && completedChapterNo%arcSize != 0:
 		// 弧中段预摘要（第5、15、25...章）；arcNo 用负数标识，不覆盖完整弧
 		midArcNo := -(completedChapterNo / halfArcSize)
 		startChapter := completedChapterNo - halfArcSize + 1
 		go func(midArcNo, startChapter, endChapter int) {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Printf("[NarrativeMemory] arc summary panic: %v", r)
+				}
+			}()
 			if err := s.generateArcSummary(tenantID, novelID, midArcNo, startChapter, endChapter); err != nil {
 				logger.Printf("NarrativeMemory: mid-arc %d summary failed (novel %d): %v", midArcNo, novelID, err)
 			} else {

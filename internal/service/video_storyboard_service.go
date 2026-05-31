@@ -242,14 +242,16 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	var allShots []*model.StoryboardShot
 	shotCounter := 0
 	failedSegs := 0
+	var firstErr error
 	for idx, r := range results {
 		if r.err != nil {
 			failedSegs++
 			if idx == 0 {
-				logger.Printf("[Storyboard] seg 1/%d failed (fatal): %v", len(segments), r.err)
-				return nil, r.err
+				logger.Printf("[Storyboard] seg 1/%d failed: %v", len(segments), r.err)
+				firstErr = r.err
+			} else {
+				logger.Printf("[Storyboard] seg %d/%d failed (non-fatal): %v", idx+1, len(segments), r.err)
 			}
-			logger.Printf("[Storyboard] seg %d/%d failed (non-fatal): %v", idx+1, len(segments), r.err)
 			continue
 		}
 		for _, shot := range r.shots {
@@ -260,6 +262,9 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	}
 
 	if len(allShots) == 0 {
+		if firstErr != nil {
+			return nil, firstErr
+		}
 		return nil, fmt.Errorf("所有段落均未能生成分镜，请检查章节内容或重试")
 	}
 	shots := allShots
@@ -303,6 +308,12 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	logger.Printf("[Storyboard] finished videoID=%d totalShots=%d segments=%d failedSegs=%d elapsed=%s",
 		videoID, len(shots), len(segments), failedSegs, time.Since(totalStart).Round(time.Millisecond))
 
+	// 若存在失败段落，返回包含失败信息的 error（不阻止已成功段落的结果）
+	var returnErr error
+	if failedSegs > 0 && firstErr != nil {
+		returnErr = fmt.Errorf("部分段落生成失败（%d/%d），已返回成功段落的分镜: %w", failedSegs, len(segments), firstErr)
+	}
+
 	// 分镜生成完成后，自动用 sfx_tags 触发音效搜索（后台执行，不阻塞接口返回）
 	if s.sfxService != nil {
 		sfxShots := make([]*model.StoryboardShot, len(shots))
@@ -315,7 +326,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		}()
 	}
 
-	return shots, nil
+	return shots, returnErr
 }
 
 // autoMatchShotAnchors 按场景名称自动将分镜绑定到场景锚点（模糊匹配 scene.location）
@@ -1045,8 +1056,16 @@ func (s *VideoService) SetShotCharacters(shotID uint, ids []uint) error {
 	return s.storyboardRepo.Update(shot)
 }
 
-// InsertShot 在 afterShotNo 之后插入一个空分镜（afterShotNo=0 表示插入到最前）
+// InsertShot 在 afterShotNo 之后插入一个空分镜（afterShotNo=0 表示插入到最前；afterShotNo<0 表示追加到末尾）
 func (s *VideoService) InsertShot(videoID uint, afterShotNo int, narration, description string, duration float64) (*model.StoryboardShot, error) {
+	if afterShotNo < 0 {
+		// Treat as append-to-end: find current max shot_no for this video
+		var maxNo int
+		s.storyboardRepo.DB().Model(&model.StoryboardShot{}).
+			Where("video_id = ? AND deleted_at IS NULL", videoID).
+			Select("COALESCE(MAX(shot_no), 0)").Scan(&maxNo)
+		afterShotNo = maxNo
+	}
 	newShotNo := afterShotNo + 1
 	if duration <= 0 {
 		duration = defaultShotDurationSecs

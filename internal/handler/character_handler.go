@@ -67,6 +67,7 @@ type CharacterHandler struct {
 	taskSvc          *service.TaskService
 	aiService        *service.AIService
 	novelService     *service.NovelService
+	narrativeSvc     *service.NarrativeMemoryService
 }
 
 func NewCharacterHandler(
@@ -103,6 +104,11 @@ func (h *CharacterHandler) WithChapterService(svc *service.ChapterService) *Char
 
 func (h *CharacterHandler) WithNovelService(svc *service.NovelService) *CharacterHandler {
 	h.novelService = svc
+	return h
+}
+
+func (h *CharacterHandler) WithNarrativeService(svc *service.NarrativeMemoryService) *CharacterHandler {
+	h.narrativeSvc = svc
 	return h
 }
 
@@ -772,6 +778,60 @@ func (h *CharacterHandler) AIExtractMinorCharacters(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"characters": chars, "count": len(chars)})
+}
+
+// ExtractCharacterVoice 从小说章节中提取角色对话风格并写回角色的 VoiceStyle 字段
+// POST /api/v1/characters/:id/extract-voice
+func (h *CharacterHandler) ExtractCharacterVoice(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	if h.narrativeSvc == nil {
+		respondErr(c, http.StatusServiceUnavailable, "narrative service not configured")
+		return
+	}
+
+	character, err := h.characterService.GetCharacter(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+	if character.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+
+	var req struct {
+		NovelID uint `json:"novel_id" binding:"required"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+
+	if h.narrativeSvc == nil {
+		respondErr(c, http.StatusServiceUnavailable, "narrative service not available")
+		return
+	}
+	voiceStyle, err := h.narrativeSvc.ExtractCharacterVoice(getTenantID(c), character, req.NovelID)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Persist the extracted voice style to the character's VoiceStyle field.
+	updateReq := characterToUpdateReq(character)
+	updateReq.VoiceStyle = voiceStyle
+	updated, err := h.characterService.UpdateCharacter(uint(id), getTenantID(c), updateReq)
+	if err != nil {
+		logger.Printf("[CharacterHandler] ExtractCharacterVoice: save voice style for char %d: %v", id, err)
+		// Non-fatal: return the extracted style even if persisting failed.
+		respondOK(c, gin.H{"voice_style": voiceStyle, "character_id": id, "saved": false})
+		return
+	}
+
+	respondOK(c, gin.H{"voice_style": voiceStyle, "character_id": id, "saved": true, "character": characterResponse(updated)})
 }
 
 // PreviewVoice 试听角色声音

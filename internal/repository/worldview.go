@@ -138,6 +138,21 @@ func (r *ItemRepository) ListByNovel(novelID uint) ([]*model.Item, error) {
 	return items, nil
 }
 
+// ListByNovelPaged returns a paginated slice and total count.
+func (r *ItemRepository) ListByNovelPaged(novelID uint, page, pageSize int) ([]*model.Item, int64, error) {
+	var items []*model.Item
+	var total int64
+	q := r.db.Model(&model.Item{}).Where("novel_id = ?", novelID)
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	offset := (page - 1) * pageSize
+	if err := q.Order("created_at ASC").Limit(pageSize).Offset(offset).Find(&items).Error; err != nil {
+		return nil, 0, err
+	}
+	return items, total, nil
+}
+
 func (r *ItemRepository) Update(item *model.Item) error {
 	return r.db.Save(item).Error
 }
@@ -178,6 +193,21 @@ func (r *SkillRepository) List(novelID uint) ([]*model.Skill, error) {
 		return nil, err
 	}
 	return skills, nil
+}
+
+// ListPaged returns a paginated slice and total count.
+func (r *SkillRepository) ListPaged(novelID uint, page, pageSize int) ([]*model.Skill, int64, error) {
+	var skills []*model.Skill
+	var total int64
+	q := r.db.Model(&model.Skill{}).Where("novel_id = ?", novelID)
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	offset := (page - 1) * pageSize
+	if err := q.Order("created_at ASC").Limit(pageSize).Offset(offset).Find(&skills).Error; err != nil {
+		return nil, 0, err
+	}
+	return skills, total, nil
 }
 
 func (r *SkillRepository) Update(skill *model.Skill) error {

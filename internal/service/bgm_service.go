@@ -41,6 +41,7 @@ type BGMService struct {
 	httpClient       *http.Client
 	localUploadCache sync.Map // local path → OSS URL
 	queryCache       sync.Map // "jamendo:query" / "pixabay:query" → bgmCacheEntry
+	localFileCache   sync.Map // dirPath → []string (已扫描的文件名列表)
 }
 
 // NewBGMService 创建 BGM 服务
@@ -79,6 +80,25 @@ func (s *BGMService) bgmProviderCreds(tenantID uint, name string) (apiKey, endpo
 	return s.aiSvc.GetBGMProviderCreds(tenantID, name)
 }
 
+// localDirFiles 返回目录内的文件名列表（不含路径），结果缓存在 localFileCache 中。
+// 首次调用时扫描目录，后续调用直接返回缓存结果，避免高并发下重复 os.Stat 系统调用。
+func (s *BGMService) localDirFiles(dir string) []string {
+	if cached, ok := s.localFileCache.Load(dir); ok {
+		return cached.([]string)
+	}
+	entries, err := os.ReadDir(dir)
+	var names []string
+	if err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				names = append(names, e.Name())
+			}
+		}
+	}
+	s.localFileCache.Store(dir, names)
+	return names
+}
+
 // SelectBGM 根据情感关键词在本地目录选择 BGM，返回本地路径（供 MixBGM 使用）。
 // 返回空字符串表示无本地文件。
 func (s *BGMService) SelectBGM(emotion string) string {
@@ -94,17 +114,24 @@ func (s *BGMService) SelectBGM(emotion string) string {
 		emotion = "default"
 	}
 
+	// 使用缓存的文件名列表，避免高并发下对同一目录重复 os.Stat。
+	files := s.localDirFiles(s.bgmDir)
+	fileSet := make(map[string]struct{}, len(files))
+	for _, f := range files {
+		fileSet[f] = struct{}{}
+	}
+
 	for _, ext := range []string{".mp3", ".wav", ".m4a", ".ogg"} {
-		candidate := filepath.Join(s.bgmDir, emotion+ext)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+		name := emotion + ext
+		if _, ok := fileSet[name]; ok {
+			return filepath.Join(s.bgmDir, name)
 		}
 	}
 	// 降级到 default 文件
 	for _, ext := range []string{".mp3", ".wav", ".m4a", ".ogg"} {
-		candidate := filepath.Join(s.bgmDir, "default"+ext)
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+		name := "default" + ext
+		if _, ok := fileSet[name]; ok {
+			return filepath.Join(s.bgmDir, name)
 		}
 	}
 	return ""

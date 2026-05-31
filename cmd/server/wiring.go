@@ -281,6 +281,10 @@ func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *
 
 	// 模型服务（注入 aiService 以支持 TestProvider 实例化验证）
 	modelSvc := service.NewModelService(repos.AIModelRepo, repos.ModelProviderRepo, repos.TaskModelConfigRepo, repos.ModelComparisonRepo, aiSvc)
+	// Fix 11: Assert AIService is non-nil before seeding providers.
+	if aiSvc == nil {
+		panic("FATAL: AIService is nil before SeedAllProviders")
+	}
 	modelSvc.SeedAllProviders()
 
 	// 异步任务服务

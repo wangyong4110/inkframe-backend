@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -142,6 +143,8 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 	const maxDownloadConc = 4
 	sem := make(chan struct{}, maxDownloadConc)
 	var wg sync.WaitGroup
+	totalShots := len(shots)
+	var doneDownloads int32
 
 	for i, shot := range shots {
 		switch {
@@ -157,6 +160,11 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 				tmp, dlErr := downloadToTemp(sh.ImageURL, fmt.Sprintf("inkframe-img-%d-", sh.ID), ".jpg")
 				results[idx].imgFile = tmp
 				results[idx].downloadErr = dlErr
+				if totalShots > 0 {
+					n := int(atomic.AddInt32(&doneDownloads, 1))
+					pct := 10 + n*60/totalShots
+					_ = s.videoRepo.UpdateFields(videoID, map[string]interface{}{"progress": pct})
+				}
 			}(i, shot)
 
 		case strings.HasPrefix(shot.ClipPath, "file://"):
@@ -204,6 +212,11 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 					logger.Printf("[StitchVideo] shot %d: download complete in %.1fs", sh.ShotNo, time.Since(dlStart).Seconds())
 				}
 				results[idx].clipFile = dest
+				if totalShots > 0 {
+					n := int(atomic.AddInt32(&doneDownloads, 1))
+					pct := 10 + n*60/totalShots
+					_ = s.videoRepo.UpdateFields(videoID, map[string]interface{}{"progress": pct})
+				}
 			}(i, shot, remoteURL, clipFile)
 		}
 	}
@@ -318,6 +331,13 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 		stitchedPath,
 	); concatErr != nil {
 		logger.Printf("[StitchVideo] videoID=%d: ffmpeg concat failed: %v\noutput: %s", videoID, concatErr, string(concatOut))
+		if vid, ferr := s.videoRepo.GetByID(videoID); ferr == nil && vid != nil {
+			vid.Status = "failed"
+			vid.ErrorMessage = fmt.Sprintf("ffmpeg stitch failed: %v", concatErr)
+			if updErr := s.videoRepo.Update(vid); updErr != nil {
+				logger.Printf("[StitchVideo] videoID=%d: failed to update status to failed: %v", videoID, updErr)
+			}
+		}
 		return "", fmt.Errorf("ffmpeg stitch failed: %w", concatErr)
 	}
 	logger.Printf("[StitchVideo] videoID=%d: ffmpeg concat done", videoID)
@@ -368,13 +388,16 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 	}
 	defer s.activePoll.Delete(videoID)
 
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
+	defer cancel()
+
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
-	deadline := time.Now().Add(2 * time.Hour)
 	noProgressCount := 0
 
 	for {
-		if time.Now().After(deadline) {
+		select {
+		case <-ctx.Done():
 			logger.Printf("PollAndStitchVideo: videoID %d timed out after 2h", videoID)
 			video, _ := s.videoRepo.GetByID(videoID)
 			if video != nil && video.Status != "completed" {
@@ -385,9 +408,6 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 				}
 			}
 			return
-		}
-
-		select {
 		case <-s.stopCh:
 			logger.Printf("PollAndStitchVideo: videoID %d shutdown", videoID)
 			return
@@ -403,14 +423,22 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 				if video != nil {
 					aspectRatio = video.AspectRatio
 				}
-				s.GenerateShotVideo(shot, aspectRatio) //nolint:errcheck
+				if err := s.GenerateShotVideo(shot, aspectRatio); err != nil {
+					logger.Printf("[PollAndStitch] GenerateShotVideo shot %d failed: %v", shot.ID, err)
+					_ = s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{
+						"status":        "failed",
+						"error_message": fmt.Sprintf("generation failed: %v", err),
+					})
+				}
 			}
 		}
 
 		// Poll processing shots
 		processing, _ := s.storyboardRepo.ListByVideoAndStatus(videoID, "processing")
 		for _, shot := range processing {
-			s.PollShotStatus(shot) //nolint:errcheck
+			if err := s.PollShotStatus(shot); err != nil {
+				logger.Printf("[PollAndStitch] PollShotStatus shot %d failed: %v", shot.ID, err)
+			}
 		}
 
 		// Check if all completed
@@ -431,7 +459,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 
 		if completedCount+failedCount == len(allShots) {
 			if completedCount > 0 {
-				if _, err := s.StitchVideo(videoID); err != nil {
+				if _, err := s.StitchVideoCtx(ctx, videoID); err != nil {
 					logger.Printf("PollAndStitchVideo: stitch failed: %v", err)
 					video, _ := s.videoRepo.GetByID(videoID)
 					if video != nil {
@@ -777,6 +805,8 @@ func downloadFile(url, dest string) error {
 	const maxVideoBytes = 500 << 20 // 500 MB
 	n, err := io.Copy(f, io.LimitReader(resp.Body, maxVideoBytes+1))
 	if err == nil && n > maxVideoBytes {
+		f.Close()
+		os.Remove(dest)
 		return fmt.Errorf("video file too large (>500MB)")
 	}
 	return err

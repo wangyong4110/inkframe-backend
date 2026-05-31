@@ -35,14 +35,16 @@ const (
 	TaskTypeRewriteAnalysis          = "rewrite_analysis" // Phase 0+1: literary analysis + bible generation
 	TaskTypeRewriteChapters          = "rewrite_chapters" // Phase 2: chapter-by-chapter rewriting
 	TaskTypeCrawlJob                 = "crawl_job"
+	TaskTypeSkillGen                 = "skill_gen"
 )
 
 // TaskService manages persistent async tasks.
 type TaskService struct {
-	repo      *repository.TaskRepository
-	stopCh    chan struct{}  // closed by Shutdown() to stop background goroutines
-	cancelFns sync.Map      // taskID string → context.CancelFunc
-	resumeFns sync.Map      // taskType string → func(*model.AsyncTask)
+	repo            *repository.TaskRepository
+	stopCh          chan struct{}  // closed by Shutdown() to stop background goroutines
+	cancelFns       sync.Map      // taskID string → context.CancelFunc
+	resumeFns       sync.Map      // taskType string → func(*model.AsyncTask)
+	cleanupCallbacks []func()     // optional hooks called during the hourly cleanup cycle
 }
 
 func NewTaskService(repo *repository.TaskRepository) *TaskService {
@@ -73,6 +75,13 @@ func (s *TaskService) SetParams(taskID string, params interface{}) error {
 		return err
 	}
 	return s.repo.UpdateFields(taskID, map[string]interface{}{"params": string(b)})
+}
+
+// RegisterCleanupCallback adds a function that is called once per hour during the
+// regular cleanup cycle. Use this to clean up domain-specific data associated with
+// completed or failed tasks (e.g. ChapterRewriteTask records for old rewrite projects).
+func (s *TaskService) RegisterCleanupCallback(fn func()) {
+	s.cleanupCallbacks = append(s.cleanupCallbacks, fn)
 }
 
 // Shutdown stops background goroutines. Call on server exit.
@@ -234,8 +243,9 @@ func (s *TaskService) recoverOrphaned(age time.Duration) {
 	}
 }
 
-// runCleanup deletes completed/failed tasks older than 7 days, and recovers stale
-// running tasks (not updated in >2h), once per hour. Exits when Shutdown() is called.
+// runCleanup deletes completed/failed tasks older than 7 days, recovers stale
+// running tasks (not updated in >2h), and runs any registered cleanup callbacks,
+// once per hour. Exits when Shutdown() is called.
 func (s *TaskService) runCleanup() {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
@@ -249,6 +259,10 @@ func (s *TaskService) runCleanup() {
 			}
 			// Recover tasks stuck in running/pending for more than 2 hours.
 			s.recoverOrphaned(2 * time.Hour)
+			// Run domain-specific cleanup callbacks (e.g. rewrite chapter tasks).
+			for _, fn := range s.cleanupCallbacks {
+				fn()
+			}
 		case <-s.stopCh:
 			return
 		}

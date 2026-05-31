@@ -51,18 +51,19 @@ func (s *SceneConsistencyService) ScoreScene(
 	generatedImageURL string,
 	attempt int,
 ) (*SceneConsistencyReport, error) {
-	// 无参考图时跳过评分
+	// 无参考图时返回中性分并标记需人工审核（不给满分以免掩盖问题）
 	if anchor.RefImageURL == "" {
 		report := &SceneConsistencyReport{
 			ShotID:       shot.ID,
 			AnchorID:     anchor.ID,
-			OverallScore: 1.0,
-			ArchScore:    1.0,
-			LightScore:   1.0,
-			AtmoScore:    1.0,
-			PropScore:    1.0,
-			TimeScore:    1.0,
-			Passed:       true,
+			OverallScore: 0.5,
+			ArchScore:    0.5,
+			LightScore:   0.5,
+			AtmoScore:    0.5,
+			PropScore:    0.5,
+			TimeScore:    0.5,
+			Passed:       false,
+			NeedsHuman:   true,
 		}
 		return report, nil
 	}

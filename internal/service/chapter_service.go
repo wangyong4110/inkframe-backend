@@ -451,7 +451,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		existing.EmotionalTone = chapterMeta.emotionalTone
 		existing.HookType = chapterMeta.hookType
 		existing.ChapterHook = chapterHook
-		existing.Status = "completed"
+		existing.Status = "generating"
 		if err := s.chapterRepo.Update(existing); err != nil {
 			return nil, err
 		}
@@ -471,7 +471,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 			EmotionalTone: chapterMeta.emotionalTone,
 			HookType:      chapterMeta.hookType,
 			ChapterHook:   chapterHook,
-			Status:        "completed",
+			Status:        "generating",
 		}
 		if err := s.chapterRepo.Create(chapter); err != nil {
 			return nil, err
@@ -502,6 +502,12 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		novelSvcForSnapshot.snapshotRepo = s.snapshotRepo
 	}
 	novelSvcForSnapshot.writeCharacterSnapshots(tenantID, chapter)
+
+	// Mark chapter as completed now that all synchronous steps are done.
+	chapter.Status = "completed"
+	if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
+		logger.Printf("[ChapterService] GenerateChapter: update chapter %d [status=completed]: %v", chapter.ID, updateErr)
+	}
 
 	// ── Step 6: 异步后处理（标题/精修/弧摘要，不再包含角色快照）────────────────────────────────
 	go s.postProcessChapter(tenantID, chapter, novel)
@@ -861,7 +867,9 @@ func (s *ChapterService) generateSceneOutline(
 		return "", ""
 	}
 
-	resp, err := s.aiService.GenerateWithProvider(tenantID, novelID, "scene_outline", outlinePrompt, req.ModelOverride, buildChapterOverrides(req, novel))
+	outlineCtx, outlineCancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	resp, err := s.aiService.GenerateWithProviderCtx(outlineCtx, tenantID, novelID, "scene_outline", outlinePrompt, req.ModelOverride, buildChapterOverrides(req, novel))
+	outlineCancel()
 	if err != nil {
 		logger.Printf("GenerateChapter: scene outline AI call failed: %v", err)
 		return "", ""
@@ -1000,7 +1008,9 @@ func (s *ChapterService) generateFromSceneOutline(
 	var raw string
 	var genErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		raw, genErr = s.aiService.GenerateWithProvider(tenantID, novelID, "chapter", chapterPrompt, req.ModelOverride, buildChapterOverrides(req, novel))
+		attemptCtx, attemptCancel := context.WithTimeout(context.Background(), 4*time.Minute)
+		raw, genErr = s.aiService.GenerateWithProviderCtx(attemptCtx, tenantID, novelID, "chapter", chapterPrompt, req.ModelOverride, buildChapterOverrides(req, novel))
+		attemptCancel()
 		if genErr == nil {
 			break
 		}
@@ -1057,6 +1067,14 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 		}
 	}()
 	logger.Printf("[ChapterService] postProcessChapter start: chapterID=%d no=%d", chapter.ID, chapter.ChapterNo)
+
+	// Fetch a fresh copy from DB to avoid mutating the caller's pointer concurrently.
+	if fresh, err := s.chapterRepo.GetByID(chapter.ID); err != nil {
+		logger.Printf("[ChapterService] postProcessChapter: fetch fresh chapter %d failed: %v", chapter.ID, err)
+		return
+	} else {
+		chapter = fresh
+	}
 	// 1. 生成摘要（最重要：供后续章节的上下文使用）
 	if s.narrativeSvc != nil && chapter.Summary == "" {
 		if summary, err := s.narrativeSvc.GenerateChapterSummary(tenantID, chapter, novel.Title); err == nil {

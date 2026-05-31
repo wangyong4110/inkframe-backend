@@ -211,6 +211,11 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
+	// 验证小说归属当前租户
+	if _, err := h.novelService.GetNovel(uint(novelId), tenantID); err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found")
+		return
+	}
 	userID, _ := c.Get("user_id")
 	callerUserID, _ := userID.(uint)
 

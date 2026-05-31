@@ -84,32 +84,37 @@ web_search:
 # ─────────────────────────────────────────────
 
 # 邮件发送配置（用于邮箱验证、密码重置）
-smtp:
+email:
   host: "smtp.example.com"
   port: 587
   username: "noreply@example.com"
   password: ""             # 建议改用 SMTP_PASSWORD 环境变量
   from: "noreply@example.com"
-  tls: false               # true=直连 TLS（端口465），false=STARTTLS（端口587）
+  use_tls: false           # true=直连 TLS（端口465），false=STARTTLS（端口587）
 
-# 短信验证码配置（用于手机号注册/登录）
+# 短信验证码配置（用于手机号注册/登录，目前仅支持阿里云）
 sms:
-  provider: ""             # 暂支持：aliyun | tencent | 留空=禁用
-  access_key: ""
-  secret_key: ""
+  access_key_id: ""        # 阿里云 AccessKey ID
+  access_key_secret: ""    # 阿里云 AccessKey Secret
   sign_name: "InkFrame"
   template_code: ""
 
 # OAuth 第三方登录（每个 provider 可选填，留空=禁用）
+# redirect_uri 需在对应开放平台填写为后端回调地址（不是前端）
 oauth:
-  github:
-    client_id: ""
-    client_secret: ""
-    redirect_url: "http://localhost:3000/oauth/callback/github"
-  google:
-    client_id: ""
-    client_secret: ""
-    redirect_url: "http://localhost:3000/oauth/callback/google"
+  wechat:
+    app_id: ""               # 微信公众平台 AppID
+    app_secret: ""           # 微信公众平台 AppSecret
+    redirect_uri: "http://localhost:8080/api/v1/auth/oauth/wechat/callback"
+  alipay:
+    app_id: ""               # 支付宝开放平台 AppID（暂未实现，留空）
+    private_key: ""          # 应用私钥（RSA2）
+    public_key: ""           # 支付宝公钥
+    redirect_uri: "http://localhost:8080/api/v1/auth/oauth/alipay/callback"
+  douyin:
+    app_id: ""               # 抖音开放平台 client_key
+    app_secret: ""           # 抖音开放平台 client_secret
+    redirect_uri: "http://localhost:8080/api/v1/auth/oauth/douyin/callback"
 
 # 数据库字段加密密钥（用于 AES-256-GCM 加密平台账号 Token 等敏感字段）
 # 必须为 32 字节的 base64 编码字符串，可用以下命令生成：

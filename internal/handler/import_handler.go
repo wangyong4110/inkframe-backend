@@ -337,26 +337,34 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 		})
 
 		// 3. 轮询爬取进度
+		noProgressCount := 0
+		const maxNoProgress = 20 // 最多等 40 秒无变化
 		for {
 			progress, _ := h.importService.GetCrawlProgress(novelID)
 			if progress == nil {
-				break // 无待爬取章节，视为完成
+				noProgressCount++
+				if noProgressCount >= maxNoProgress {
+					logger.Printf("[ImportHandler] crawl progress lost for novel %d, aborting poll", novelID)
+					break
+				}
+			} else {
+				noProgressCount = 0
+				if progress.Status == "completed" || progress.Status == "failed" || progress.Status == "paused" {
+					break
+				}
+				pct := 5
+				if progress.Total > 0 {
+					pct = 5 + int(float64(progress.Done)/float64(progress.Total)*55)
+				}
+				h.taskSvc.UpdateProgress(taskID, pct)             //nolint:errcheck
+				h.taskSvc.SetMeta(taskID, map[string]interface{}{ //nolint:errcheck
+					"step":          "爬取章节内容中...",
+					"novel_id":      novelID,
+					"crawl_done":    progress.Done,
+					"crawl_total":   progress.Total,
+					"crawl_current": progress.Current,
+				})
 			}
-			if progress.Status == "completed" || progress.Status == "failed" || progress.Status == "paused" {
-				break
-			}
-			pct := 5
-			if progress.Total > 0 {
-				pct = 5 + int(float64(progress.Done)/float64(progress.Total)*55)
-			}
-			h.taskSvc.UpdateProgress(taskID, pct)             //nolint:errcheck
-			h.taskSvc.SetMeta(taskID, map[string]interface{}{ //nolint:errcheck
-				"step":          "爬取章节内容中...",
-				"novel_id":      novelID,
-				"crawl_done":    progress.Done,
-				"crawl_total":   progress.Total,
-				"crawl_current": progress.Current,
-			})
 			time.Sleep(2 * time.Second)
 		}
 
@@ -734,7 +742,12 @@ func (h *ImportHandler) ResumeCrawl(c *gin.Context) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		for {
 			progress, _ := h.importService.GetCrawlProgress(nid)
-			if progress == nil || progress.Status == "completed" || progress.Status == "failed" || progress.Status == "paused" {
+			if progress == nil {
+				// Job record gone unexpectedly (e.g. novel deleted mid-crawl)
+				h.taskSvc.Fail(taskID, "crawl job not found") //nolint:errcheck
+				return
+			}
+			if progress.Status == "completed" || progress.Status == "failed" || progress.Status == "paused" {
 				break
 			}
 			pct := 0

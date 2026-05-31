@@ -22,6 +22,7 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
+	"gorm.io/gorm"
 
 	"github.com/inkframe/inkframe-backend/internal/crawler"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -104,6 +105,7 @@ type NovelImportService struct {
 	crawlJobRepo       *repository.NovelCrawlJobRepository
 	crawlProgress      sync.Map // novelID(uint) → *CrawlProgress
 	crawlDoneCallbacks sync.Map // novelID(uint) → func()
+	db                 *gorm.DB // optional: used for transactional novel+chapter creation
 }
 
 // NewNovelImportService 创建小说导入服务
@@ -152,6 +154,12 @@ func (s *NovelImportService) WithNotificationService(svc *NotificationService) *
 // WithCrawlJobRepo 注入爬取任务仓库（可选，用于持久化爬取进度）
 func (s *NovelImportService) WithCrawlJobRepo(repo *repository.NovelCrawlJobRepository) *NovelImportService {
 	s.crawlJobRepo = repo
+	return s
+}
+
+// WithDB 注入 DB（可选，用于小说+章节事务性创建）
+func (s *NovelImportService) WithDB(db *gorm.DB) *NovelImportService {
+	s.db = db
 	return s
 }
 
@@ -267,7 +275,11 @@ func (s *NovelImportService) ResumeCrawl(novelID uint) error {
 	}
 	s.crawlProgress.Store(novelID, progress)
 
-	go s.crawlChaptersBackground(context.Background(), novelID, novel.Title, parser, pending, progress, novel.TenantID, 0)
+	crawlCtx, crawlCancel := context.WithTimeout(context.Background(), 24*time.Hour)
+	go func() {
+		defer crawlCancel()
+		s.crawlChaptersBackground(crawlCtx, novelID, novel.Title, parser, pending, progress, novel.TenantID, 0)
+	}()
 	return nil
 }
 
@@ -389,16 +401,26 @@ func (s *NovelImportService) crawlChaptersBackground(
 			_ = s.crawlJobRepo.UpdateProgress(jobID, doneSoFar, totalSoFar, failedSoFar)
 		}
 
-		// 爬取完成后自动生成 AI 摘要
+		// 爬取完成后自动生成 AI 摘要（失败时重试一次）
 		if s.narrativeMemory != nil {
 			ch.Title = title
 			ch.Content = content.Content
-			summary, err := s.narrativeMemory.GenerateChapterSummary(0, ch, novelTitle)
-			if err != nil {
-				logger.Printf("[Crawl] chapter %d summary error: %v", ch.ChapterNo, err)
-			} else {
+			summary, summaryErr := s.narrativeMemory.GenerateChapterSummary(0, ch, novelTitle)
+			if summaryErr != nil {
+				// Retry once after a brief pause
+				time.Sleep(2 * time.Second)
+				summary, summaryErr = s.narrativeMemory.GenerateChapterSummary(0, ch, novelTitle)
+				if summaryErr != nil {
+					logger.Printf("[Crawl] chapter %d summary generation failed (skipped): %v", ch.ChapterNo, summaryErr)
+				}
+			}
+			if summaryErr == nil && summary != "" {
 				ch.Summary = summary
-				s.chapterRepo.Update(ch)
+				if updateErr := s.chapterRepo.Update(ch); updateErr != nil {
+					logger.Printf("[Crawl] failed to save summary for chapter %d: %v", ch.ChapterNo, updateErr)
+				}
+			} else {
+				logger.Printf("[Crawl] chapter %d summary generation failed (keeping existing): %v", ch.ChapterNo, summaryErr)
 			}
 		}
 
@@ -582,6 +604,38 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 		if novel.ID == 0 {
 			novel.UUID = uuid.New().String()
 			novel.TenantID = req.TenantID
+			// 准备章节数据（需要 novel.ID，所以必须先创建 novel）。
+			// 如果有 DB 连接，使用事务确保 novel + chapters 原子性写入，
+			// 避免 novel 创建成功但 chapters 批量插入失败时出现孤立 novel 记录。
+			if s.db != nil {
+				txErr := s.db.Transaction(func(tx *gorm.DB) error {
+					if err := tx.Create(novel).Error; err != nil {
+						return fmt.Errorf("save novel failed: %w", err)
+					}
+					for i, chapter := range chapters {
+						chapter.NovelID = novel.ID
+						chapter.ChapterNo = i + 1
+						if chapter.UUID == "" {
+							chapter.UUID = uuid.New().String()
+						}
+					}
+					if err := tx.CreateInBatches(chapters, 100).Error; err != nil {
+						return fmt.Errorf("batch create chapters failed: %w", err)
+					}
+					return nil
+				})
+				if txErr != nil {
+					return nil, txErr
+				}
+				result.NovelID = novel.ID
+				result.Title = novel.Title
+				result.TotalChapters = len(chapters)
+				result.ImportedChapters = len(chapters)
+				logger.Printf("[Import] novel=%d batch created %d chapters (tx)", novel.ID, len(chapters))
+				_ = s.novelRepo.SyncStats(novel.ID)
+				return result, nil
+			}
+			// No DB injected — fall back to original non-transactional path
 			if err := s.novelRepo.Create(novel); err != nil {
 				return nil, fmt.Errorf("save novel failed: %w", err)
 			}
@@ -829,7 +883,11 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 		Done:    0,
 	}
 	s.crawlProgress.Store(novel.ID, progress)
-	go s.crawlChaptersBackground(context.Background(), novel.ID, novel.Title, parser, pendingChapters, progress, req.TenantID, req.UserID)
+	crawlCtx, crawlCancel := context.WithTimeout(context.Background(), 24*time.Hour)
+	go func() {
+		defer crawlCancel()
+		s.crawlChaptersBackground(crawlCtx, novel.ID, novel.Title, parser, pendingChapters, progress, req.TenantID, req.UserID)
+	}()
 
 	return result, nil
 }
@@ -1099,8 +1157,34 @@ func (s *NovelImportService) splitByChapters(content, novelTitle string, tenantI
 		return s.buildChaptersFromSplits(content, splits, chapterTitles)
 	}
 
-	// 正则未命中，无章节标记 → 整体作为一章，不强制按字数切割
-	// （splitByLength 会把 6 万字文件拆成 20 章，与用户预期不符）
+	// 正则未命中，无章节标记 → 如果文本超过 5000 字，按固定字数分割；否则整体作为一章
+	const defaultChapterSize = 5000
+	runes := []rune(content)
+	if len(runes) > defaultChapterSize {
+		logger.Printf("[Import] splitByChapters: no chapter markers found, splitting by %d chars (%d total runes)", defaultChapterSize, len(runes))
+		var chapters []*model.Chapter
+		chapterNo := 1
+		for i := 0; i < len(runes); i += defaultChapterSize {
+			end := i + defaultChapterSize
+			if end > len(runes) {
+				end = len(runes)
+			}
+			chunkContent := strings.TrimSpace(string(runes[i:end]))
+			if len([]rune(chunkContent)) == 0 {
+				continue
+			}
+			chapters = append(chapters, &model.Chapter{
+				UUID:      uuid.New().String(),
+				ChapterNo: chapterNo,
+				Title:     fmt.Sprintf("第%d章", chapterNo),
+				Content:   chunkContent,
+				WordCount: len([]rune(chunkContent)),
+				Status:    "completed",
+			})
+			chapterNo++
+		}
+		return chapters
+	}
 	logger.Printf("[Import] splitByChapters: no chapter markers found, treating entire content as 1 chapter")
 	return []*model.Chapter{
 		{

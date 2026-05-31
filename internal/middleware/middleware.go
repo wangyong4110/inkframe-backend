@@ -173,13 +173,13 @@ type JWTClaims struct {
 // rdb 为可选的 Redis 客户端，用于检查 JWT 黑名单（Logout 使 Token 立即失效）。
 // 传 nil 则跳过黑名单检查（不影响正常认证）。
 func NewAuth(jwtSecret string, rdb *redis.Client) gin.HandlerFunc {
-	isDevBypass := jwtSecret == "" && gin.Mode() != gin.ReleaseMode && os.Getenv("APP_ENV") != "production"
-	if jwtSecret == "" && !isDevBypass {
-		// 生产环境未配置 secret — 启动时 panic，防止静默放行
-		panic("jwt_secret is empty in production mode; set APP_ENV=production and provide a valid jwt_secret")
-	}
+	// Fix 2: dev-bypass is only allowed when NEITHER GIN_MODE=release NOR APP_ENV=production.
+	isDevBypass := jwtSecret == ""
 	if isDevBypass {
-		logger.Printf("[Auth] WARNING: dev-bypass mode active — all requests granted admin (tenant=1)")
+		if gin.Mode() == gin.ReleaseMode || os.Getenv("APP_ENV") == "production" {
+			panic("FATAL: jwt_secret is empty in production mode. Set server.jwt_secret in config.yaml")
+		}
+		logger.Printf("[Auth] WARNING: jwt_secret empty — dev-bypass active, all requests granted (tenant=1)")
 	}
 	return func(c *gin.Context) {
 		// ── 开发绕过模式（jwt_secret 为空且非生产） ────────────────────────
@@ -286,7 +286,8 @@ func RequireEmailVerified(db *gorm.DB) gin.HandlerFunc {
 			c.Next()
 			return
 		}
-		if user.EmailVerifiedAt == nil {
+		// Fix 8: Also reject zero-value timestamps (default time.Time{}).
+		if user.EmailVerifiedAt == nil || user.EmailVerifiedAt.IsZero() {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"code": 403, "message": "email not verified",
 			})

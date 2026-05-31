@@ -189,6 +189,35 @@ func parseAnchorJSONResult(raw string) ([]extractedAnchor, error) {
 	return nil, fmt.Errorf("cannot parse as anchor array: %.200s", raw)
 }
 
+// parseAnchorJSONResultWithFallback attempts full parse first; on failure tries
+// streaming partial decode so that a truncated or partially invalid JSON array
+// still yields whatever valid entries were produced before the error.
+func parseAnchorJSONResultWithFallback(raw string) ([]extractedAnchor, error) {
+	// 1. Full parse (including wrapped-object variants)
+	if result, err := parseAnchorJSONResult(raw); err == nil {
+		return result, nil
+	}
+	// 2. Partial recovery via streaming decoder
+	cleaned := extractJSON(strings.TrimSpace(raw))
+	dec := json.NewDecoder(strings.NewReader(cleaned))
+	// Consume the opening '[' token
+	if _, err := dec.Token(); err != nil {
+		return nil, fmt.Errorf("anchor JSON fully unparseable: %v", err)
+	}
+	var partial []extractedAnchor
+	for dec.More() {
+		var item extractedAnchor
+		if err := dec.Decode(&item); err == nil && item.Name != "" {
+			partial = append(partial, item)
+		}
+	}
+	if len(partial) > 0 {
+		logger.Printf("[SceneAnchor] partial JSON recovery: got %d anchors", len(partial))
+		return partial, nil
+	}
+	return nil, fmt.Errorf("anchor JSON fully unparseable")
+}
+
 // ExtractFromChapter 调用 LLM 提取章节中的场景锚点，去重后批量创建
 func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, novelID uint, novelTitle, chapterContent string) ([]*model.SceneAnchor, error) {
 	logger.Printf("[SceneAnchorService] ExtractFromChapter: novelID=%d contentLen=%d", novelID, len(chapterContent))
@@ -236,8 +265,8 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 		return nil, fmt.Errorf("LLM extract anchors: %w", err)
 	}
 
-	// 解析 JSON
-	extracted, err := parseAnchorJSONResult(jsonStr)
+	// 解析 JSON（支持部分恢复）
+	extracted, err := parseAnchorJSONResultWithFallback(jsonStr)
 	if err != nil {
 		logger.Printf("[SceneAnchorService] ExtractFromChapter: JSON parse failed: %v, jsonStr=%q", err, jsonStr)
 		return nil, fmt.Errorf("parse LLM response: %w", err)

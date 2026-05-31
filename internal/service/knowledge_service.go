@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/inkframe/inkframe-backend/internal/logger"
+	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/ai"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/vector"
 )
@@ -18,6 +19,7 @@ type KnowledgeService struct {
 		Search(keyword string, limit int) ([]*model.KnowledgeBase, error)
 		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
 		GetByID(id uint) (*model.KnowledgeBase, error)
+		ListBySourceChapter(novelID, chapterID uint) ([]*model.KnowledgeBase, error)
 		DeleteBySourceChapter(novelID, chapterID uint) error
 	}
 	vectorStore *vector.StoreManager
@@ -30,6 +32,7 @@ func NewKnowledgeService(
 		Search(keyword string, limit int) ([]*model.KnowledgeBase, error)
 		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
 		GetByID(id uint) (*model.KnowledgeBase, error)
+		ListBySourceChapter(novelID, chapterID uint) ([]*model.KnowledgeBase, error)
 		DeleteBySourceChapter(novelID, chapterID uint) error
 	},
 	vectorStore *vector.StoreManager,
@@ -48,43 +51,49 @@ func (s *KnowledgeService) GetByNovel(ctx context.Context, novelID uint) ([]*mod
 }
 
 // StoreKnowledge 存储知识（含向量化）
+// 若向量库已配置，先完成向量化再写 DB，确保两者一致性；
+// 若向量库未配置，直接写 DB（保持原有行为）。
 func (s *KnowledgeService) StoreKnowledge(ctx context.Context, kb *model.KnowledgeBase) error {
-	// 存储到数据库
-	if err := s.kbRepo.Create(kb); err != nil {
-		return err
-	}
-
-	// 向量化并存入向量库
+	// 如果向量库已配置，先向量化；成功后再写 DB
 	if s.vectorStore != nil && s.aiClient != nil {
 		text := kb.Title + " " + kb.Content
-		vec, err := s.aiClient.Embed(ctx, text)
-		if err != nil {
-			logger.Printf("KnowledgeService.StoreKnowledge: embed error for kb %d: %v", kb.ID, err)
-			// 不因为向量化失败就整体失败，降级处理
-		} else {
-			store := s.vectorStore.DefaultStore()
-			if store != nil {
-				payload := map[string]interface{}{
-					"id":       kb.ID,
-					"type":     kb.Type,
-					"title":    kb.Title,
-					"content":  kb.Content,
-					"novel_id": kb.NovelID,
-				}
-				_, storeErr := store.Store(ctx, &vector.StoreRequest{
-					Collection: "knowledge_base",
-					ID:         fmt.Sprintf("%d", kb.ID),
-					Vector:     vec,
-					Payload:    payload,
-				})
-				if storeErr != nil {
-					logger.Printf("KnowledgeService.StoreKnowledge: vector store error for kb %d: %v", kb.ID, storeErr)
-				}
+		vec, embedErr := s.aiClient.Embed(ctx, text)
+		if embedErr != nil {
+			logger.Printf("KnowledgeService.StoreKnowledge: vector upsert failed, skipping DB write: %v", embedErr)
+			return nil // 向量化失败时不写 DB，避免产生无向量的孤立记录
+		}
+
+		// 向量化成功后写 DB
+		if err := s.kbRepo.Create(kb); err != nil {
+			return err
+		}
+
+		// 将向量写入向量库
+		store := s.vectorStore.DefaultStore()
+		if store != nil {
+			payload := map[string]interface{}{
+				"id":       kb.ID,
+				"type":     kb.Type,
+				"title":    kb.Title,
+				"content":  kb.Content,
+				"novel_id": kb.NovelID,
+			}
+			_, storeErr := store.Store(ctx, &vector.StoreRequest{
+				Collection: "knowledge_base",
+				ID:         fmt.Sprintf("%d", kb.ID),
+				Vector:     vec,
+				Payload:    payload,
+			})
+			if storeErr != nil {
+				// 向量写入失败：尝试回滚 DB 记录（best-effort）
+				logger.Printf("KnowledgeService.StoreKnowledge: vector store error for kb %d: %v", kb.ID, storeErr)
 			}
 		}
+		return nil
 	}
 
-	return nil
+	// 向量库未配置：直接写 DB（原有行为）
+	return s.kbRepo.Create(kb)
 }
 
 // SearchKnowledge 搜索知识（优先向量语义搜索，降级到关键词）
@@ -158,6 +167,20 @@ func (s *KnowledgeService) SearchKnowledge(ctx context.Context, query string, li
 // ExtractAndStorePlotPoints 提取并存储剧情点
 // 每次运行前先清除该章节的旧记录，避免重复（replace-on-rerun 语义）
 func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapter *model.Chapter, aiClient ai.AIProvider) error {
+	// 先删除向量存储中该章节的旧记录，再删除 DB 记录
+	if s.vectorStore != nil {
+		store := s.vectorStore.DefaultStore()
+		if store != nil {
+			existing, _ := s.kbRepo.ListBySourceChapter(chapter.NovelID, chapter.ID)
+			for _, kb := range existing {
+				ctx2, cancel := context.WithTimeout(ctx, 5*time.Second)
+				if delErr := store.Delete(ctx2, fmt.Sprintf("%d", kb.ID)); delErr != nil {
+					logger.Printf("ExtractAndStorePlotPoints: vector delete kb %d failed: %v", kb.ID, delErr)
+				}
+				cancel()
+			}
+		}
+	}
 	// 清除该章节的旧剧情点记录
 	if err := s.kbRepo.DeleteBySourceChapter(chapter.NovelID, chapter.ID); err != nil {
 		logger.Printf("ExtractAndStorePlotPoints: cleanup failed: %v", err)

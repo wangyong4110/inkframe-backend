@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -45,6 +46,9 @@ func renderPrompt(name string, ctx map[string]interface{}) (string, error) {
 
 // toContext converts any value to pongo2.Context via JSON round-trip.
 // Accepts map[string]interface{} directly or converts structs via JSON.
+// Uses json.Decoder with UseNumber() so integer/float values are preserved as
+// json.Number instead of float64, avoiding precision loss for large integers.
+// time.Time fields are serialised as RFC3339 strings, which templates can use directly.
 func toContext(data interface{}) (pongo2.Context, error) {
 	if data == nil {
 		return pongo2.Context{}, nil
@@ -56,8 +60,10 @@ func toContext(data interface{}) (pongo2.Context, error) {
 	if err != nil {
 		return nil, fmt.Errorf("marshal template data: %w", err)
 	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
 	var ctx map[string]interface{}
-	if err := json.Unmarshal(b, &ctx); err != nil {
+	if err := dec.Decode(&ctx); err != nil {
 		return nil, fmt.Errorf("unmarshal template context: %w", err)
 	}
 	return pongo2.Context(ctx), nil

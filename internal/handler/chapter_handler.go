@@ -847,7 +847,7 @@ func (h *ChapterHandler) ApplyChapterReviewDiffs(c *gin.Context) {
 		return
 	}
 
-	count, err := h.qualityService.ApplyDiffs(uint(id), req.Diffs, req.RecordID)
+	count, err := h.qualityService.ApplyDiffs(uint(id), req.Diffs, req.RecordID, getTenantID(c))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return

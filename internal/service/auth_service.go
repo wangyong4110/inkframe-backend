@@ -251,6 +251,22 @@ func (s *AuthService) RefreshToken(tokenStr string) (*AuthResponse, error) {
 		}
 	}
 
+	// Fix 1: Blacklist the old JTI before issuing a new token (prevent JWT replay attacks).
+	oldJTI := claims.JTI
+	if oldJTI == "" {
+		oldJTI = claims.RegisteredClaims.ID
+	}
+	if oldJTI != "" && s.rdb != nil {
+		ttl := s.jwtExpiry
+		if claims.ExpiresAt != nil {
+			remaining := time.Until(claims.ExpiresAt.Time)
+			if remaining > 0 {
+				ttl = remaining
+			}
+		}
+		s.rdb.Set(context.Background(), "jwt:blacklist:"+oldJTI, "1", ttl)
+	}
+
 	return s.signToken(claims.UserID, claims.TenantID, claims.Role)
 }
 
@@ -404,7 +420,10 @@ func (s *AuthService) ChangePassword(userID uint, oldPwd, newPwd string) error {
 	if err := s.userRepo.UpdatePassword(userID, string(hashed)); err != nil {
 		return err
 	}
-	s.invalidateUserSessions(userID)
+	// Fix 9: Synchronous call with non-fatal error logging (Redis failure must not block password change).
+	if err := s.invalidateUserSessions(userID); err != nil {
+		logger.Printf("[AuthService] invalidateUserSessions failed for user %d: %v (old sessions may still be valid)", userID, err)
+	}
 	return nil
 }
 
@@ -671,18 +690,22 @@ func (s *AuthService) ResetPassword(token, newPassword string) error {
 	if err := s.tokenRepo.MarkUsed(t.ID); err != nil {
 		return err
 	}
-	s.invalidateUserSessions(t.UserID)
+	// Fix 9: Synchronous call with non-fatal error logging.
+	if err := s.invalidateUserSessions(t.UserID); err != nil {
+		logger.Printf("[AuthService] invalidateUserSessions failed for user %d: %v (old sessions may still be valid)", t.UserID, err)
+	}
 	return nil
 }
 
 // invalidateUserSessions 将用户当前时间戳写入 Redis，使所有颁发时间早于此时的 JWT 失效。
-// TTL 设为 90 天（与最长 token 生命周期对齐）。若 Redis 不可用则静默跳过。
-func (s *AuthService) invalidateUserSessions(userID uint) {
+// TTL 设为 90 天（与最长 token 生命周期对齐）。若 Redis 不可用则返回 nil（非致命）。
+// Fix 9: Returns error so callers can log Redis failures without blocking the main operation.
+func (s *AuthService) invalidateUserSessions(userID uint) error {
 	if s.rdb == nil {
-		return
+		return nil
 	}
 	key := fmt.Sprintf("jwt:user_invalidate:%d", userID)
-	s.rdb.Set(context.Background(), key, time.Now().Unix(), 90*24*time.Hour)
+	return s.rdb.Set(context.Background(), key, time.Now().Unix(), 90*24*time.Hour).Err()
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -726,6 +749,14 @@ func (s *AuthService) SendEmailVerification(userID uint) (token string, err erro
 		}
 	}
 	return rawToken, nil
+}
+
+// UnlockUser 管理员手动解除账号锁定
+func (s *AuthService) UnlockUser(userID uint) error {
+	return s.db.Model(&model.User{}).Where("id = ?", userID).Updates(map[string]interface{}{
+		"failed_login_count": 0,
+		"lock_until":         nil,
+	}).Error
 }
 
 // VerifyEmail 使用有效 token 将用户邮箱标记为已验证。

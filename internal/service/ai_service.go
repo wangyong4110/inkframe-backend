@@ -493,10 +493,15 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 			default: // "balanced" or unrecognised
 				selected = selectBalanced(candidates)
 			}
-			if selected != nil && selected.Provider != nil {
-				resolvedModel = selected.Name
-				providerName = selected.Provider.Name
+			// Fix 4: Guard against nil selected / nil Provider before dereferencing.
+			if selected == nil {
+				return "", fmt.Errorf("no suitable model available for strategy=%q taskType=%q", config.Strategy, taskType)
 			}
+			if selected.Provider == nil {
+				return "", fmt.Errorf("model %d has no provider configured", selected.ID)
+			}
+			resolvedModel = selected.Name
+			providerName = selected.Provider.Name
 		}
 	}
 
@@ -597,10 +602,15 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 			default:
 				selected = selectBalanced(candidates)
 			}
-			if selected != nil && selected.Provider != nil {
-				resolvedModel = selected.Name
-				providerName = selected.Provider.Name
+			// Fix 4: Guard against nil selected / nil Provider before dereferencing.
+			if selected == nil {
+				return "", fmt.Errorf("no suitable model available for strategy=%q taskType=%q", config.Strategy, taskType)
 			}
+			if selected.Provider == nil {
+				return "", fmt.Errorf("model %d has no provider configured", selected.ID)
+			}
+			resolvedModel = selected.Name
+			providerName = selected.Provider.Name
 		}
 	}
 
@@ -806,6 +816,7 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 }
 
 // tryFallbackModels iterates config.FallbackModelIDs and attempts generation on each.
+// Fix 3: Added circular-reference detection (visitedIDs) and aggregated error reporting.
 func (s *AIService) tryFallbackModels(ctx context.Context, tenantID uint, origReq *ai.GenerateRequest, config *model.TaskModelConfig, _ time.Duration) (string, *ai.GenerateResponse, error) {
 	if config.FallbackModelIDs == "" || s.modelRepo == nil {
 		return "", nil, fmt.Errorf("no fallback")
@@ -814,13 +825,21 @@ func (s *AIService) tryFallbackModels(ctx context.Context, tenantID uint, origRe
 	if err := json.Unmarshal([]byte(config.FallbackModelIDs), &ids); err != nil || len(ids) == 0 {
 		return "", nil, fmt.Errorf("no fallback")
 	}
+	visitedIDs := make(map[uint]bool)
+	var errs []string
 	for _, id := range ids {
+		if visitedIDs[id] {
+			return "", nil, fmt.Errorf("circular fallback chain detected at model %d", id)
+		}
+		visitedIDs[id] = true
 		m, err := s.modelRepo.GetByID(id)
 		if err != nil || m == nil || m.Provider == nil {
+			errs = append(errs, fmt.Sprintf("model_%d: not found or no provider", id))
 			continue
 		}
 		fbProvider, err := s.getTenantProvider(tenantID, m.Provider.Name)
 		if err != nil {
+			errs = append(errs, fmt.Sprintf("model_%d: provider load error: %v", id, err))
 			continue
 		}
 		fbReq := *origReq
@@ -833,9 +852,14 @@ func (s *AIService) tryFallbackModels(ctx context.Context, tenantID uint, origRe
 			logger.Printf("[AI fallback] provider=%s model=%s elapsed=%s", m.Provider.Name, m.Name, elapsed.Round(time.Millisecond))
 			return fbResp.Content, fbResp, nil
 		}
-		logger.Printf("[AI fallback] provider=%s model=%s err=%v", m.Provider.Name, m.Name, err)
+		fbErr := err
+		if fbErr == nil && fbResp.Error != "" {
+			fbErr = fmt.Errorf("%s", fbResp.Error)
+		}
+		errs = append(errs, fmt.Sprintf("model_%d: %v", id, fbErr))
+		logger.Printf("[AI fallback] provider=%s model=%s err=%v", m.Provider.Name, m.Name, fbErr)
 	}
-	return "", nil, fmt.Errorf("all fallbacks exhausted")
+	return "", nil, fmt.Errorf("all fallbacks exhausted: %s", strings.Join(errs, "; "))
 }
 
 // generateJSONForTenant 带 tenantID 的 JSON 生成重试（最多重试 maxRetries 次）

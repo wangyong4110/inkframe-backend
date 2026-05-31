@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 
@@ -145,6 +146,8 @@ func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter
 	if aiScores != nil {
 		// 将 AI 返回的 0-10 分转为 0-1
 		report.LogicScore = aiScores.Logic / 10.0
+		// AIQualityScores.Character 字段含义是"角色一致性"；业务上将角色一致性与情节一致性
+		// 合并处理，统一映射到 ConsistencyScore（不改字段名，仅此注释澄清语义）。
 		report.ConsistencyScore = aiScores.Character / 10.0
 		report.QualityScore = aiScores.Writing / 10.0
 		report.StyleScore = aiScores.Pacing / 10.0
@@ -174,8 +177,18 @@ func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter
 		report.Issues = append(report.Issues, s.checkDramatic(chapter)...)
 	}
 
+	// safeScore 保护每个维度分值，防止 NaN/Inf/-Inf 污染加权平均结果
+	safeScore := func(s float64) float64 {
+		if math.IsNaN(s) || math.IsInf(s, 0) || s < 0 {
+			return 0.5
+		}
+		if s > 1.0 {
+			return 1.0
+		}
+		return s
+	}
 	// 计算综合总分（加权平均）: Logic 25% + Consistency 20% + Quality 20% + Style 15% + Dramatic 20%
-	report.OverallScore = report.LogicScore*0.25 + report.ConsistencyScore*0.20 + report.QualityScore*0.20 + report.StyleScore*0.15 + report.DramaticScore*0.20
+	report.OverallScore = safeScore(report.LogicScore)*0.25 + safeScore(report.ConsistencyScore)*0.20 + safeScore(report.QualityScore)*0.20 + safeScore(report.StyleScore)*0.15 + safeScore(report.DramaticScore)*0.20
 	if report.OverallScore > 1.0 {
 		report.OverallScore = 1.0
 	}
@@ -669,7 +682,7 @@ func splitContentParagraphs(content string) (paragraphs []string, sep string) {
 
 // ApplyDiffs replaces selected paragraphs in the chapter content.
 // Returns the number of paragraphs actually replaced.
-func (s *QualityControlService) ApplyDiffs(chapterID uint, diffs []ParagraphDiff, recordID uint) (int, error) {
+func (s *QualityControlService) ApplyDiffs(chapterID uint, diffs []ParagraphDiff, recordID uint, tenantID uint) (int, error) {
 	if len(diffs) == 0 {
 		return 0, nil
 	}
@@ -677,8 +690,20 @@ func (s *QualityControlService) ApplyDiffs(chapterID uint, diffs []ParagraphDiff
 	if err != nil {
 		return 0, fmt.Errorf("chapter %d not found: %w", chapterID, err)
 	}
+	if tenantID != 0 && chapter.TenantID != tenantID {
+		return 0, fmt.Errorf("not found")
+	}
 
-	paragraphs, sep := splitContentParagraphs(chapter.Content)
+	rawParagraphs, sep := splitContentParagraphs(chapter.Content)
+
+	// Fix 3: 先过滤空段落，再做索引校验，避免过滤后索引失效
+	paragraphs := rawParagraphs[:0]
+	for _, p := range rawParagraphs {
+		if strings.TrimSpace(p) != "" {
+			paragraphs = append(paragraphs, p)
+		}
+	}
+
 	logger.Printf("[ApplyDiffs] chapterID=%d paragraphs=%d sep=%q diffs=%d",
 		chapterID, len(paragraphs), sep, len(diffs))
 
@@ -691,7 +716,7 @@ func (s *QualityControlService) ApplyDiffs(chapterID uint, diffs []ParagraphDiff
 		indexSeen[d.Index] = true
 	}
 
-	// Validate that all indices are within range.
+	// Validate that all indices are within range (against filtered paragraphs).
 	for _, d := range diffs {
 		if d.Index < 0 || d.Index >= len(paragraphs) {
 			return 0, fmt.Errorf("diff index %d out of range (chapter has %d paragraphs)", d.Index, len(paragraphs))
@@ -705,46 +730,62 @@ func (s *QualityControlService) ApplyDiffs(chapterID uint, diffs []ParagraphDiff
 	}
 
 	// Index-based replacement (matches the numbered paragraphs sent during review).
+	indexApplied := make(map[int]bool, len(diffs))
 	applied := 0
 	for i := range paragraphs {
 		if newP, ok := diffMap[i]; ok {
 			paragraphs[i] = newP // empty string = marked for deletion
 			applied++
+			indexApplied[i] = true
 		}
 	}
 	logger.Printf("[ApplyDiffs] index-based applied=%d", applied)
 
-	// Fallback: if no index matched, try matching by OrigText prefix.
-	if applied == 0 {
+	// Fix 4: 对每个未被索引匹配的 diff 单独执行 OrigText 前缀 fallback，
+	// 而不是 applied==0 才整体 fallback（确保即使部分 diff 已匹配，剩余仍能走 fallback）。
+	matchedParagraphs := make(map[int]bool, len(diffs))
+	// 先标记已被 index 替换的段落
+	for i := range indexApplied {
+		matchedParagraphs[i] = true
+	}
+	for di, d := range diffs {
+		if d.OrigText == "" {
+			continue
+		}
+		// 已经被 index 成功匹配就跳过
+		if indexApplied[d.Index] {
+			_ = di
+			continue
+		}
+		// 在所有段落中寻找前缀匹配
+		prefix := []rune(d.OrigText)
+		if len(prefix) > 80 {
+			prefix = prefix[:80]
+		}
 		for i, p := range paragraphs {
+			if matchedParagraphs[i] {
+				continue
+			}
 			trimmed := strings.TrimSpace(p)
 			if trimmed == "" {
 				continue
 			}
-			for _, d := range diffs {
-				if d.OrigText == "" {
-					continue
-				}
-				prefix := []rune(d.OrigText)
-				if len(prefix) > 80 {
-					prefix = prefix[:80]
-				}
-				pRunes := []rune(trimmed)
-				matchLen := len(prefix)
-				if matchLen > len(pRunes) {
-					matchLen = len(pRunes)
-				}
-				if string(pRunes[:matchLen]) == string(prefix[:matchLen]) {
-					paragraphs[i] = d.NewContent
-					applied++
-					break
-				}
+			pRunes := []rune(trimmed)
+			matchLen := len(prefix)
+			if matchLen > len(pRunes) {
+				matchLen = len(pRunes)
+			}
+			if string(pRunes[:matchLen]) == string(prefix[:matchLen]) {
+				paragraphs[i] = d.NewContent
+				applied++
+				matchedParagraphs[i] = true
+				break
 			}
 		}
 	}
 
 	// Filter out deleted paragraphs and trim each.
-	kept := paragraphs[:0]
+	kept := make([]string, 0, len(paragraphs))
 	for _, p := range paragraphs {
 		if strings.TrimSpace(p) != "" {
 			kept = append(kept, strings.TrimSpace(p))

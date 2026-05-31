@@ -186,6 +186,7 @@ func (h *RewriteHandler) GetBible(c *gin.Context) {
 }
 
 // ListChapterTasks GET /rewrite/projects/:id/chapters
+// Query params: page (default 1), page_size (default 50, max 200)
 func (h *RewriteHandler) ListChapterTasks(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -195,12 +196,14 @@ func (h *RewriteHandler) ListChapterTasks(c *gin.Context) {
 	if _, ok := h.getProjectForTenant(c, uint(id)); !ok {
 		return
 	}
-	tasks, err := h.rewriteSvc.ListChapterTasks(uint(id))
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
+	tasks, total, err := h.rewriteSvc.ListChapterTasksPaged(uint(id), page, pageSize)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	respondOK(c, gin.H{"items": tasks, "total": len(tasks)})
+	respondOK(c, gin.H{"items": tasks, "total": total, "page": page, "page_size": pageSize})
 }
 
 // GetChapterTask GET /rewrite/projects/:id/chapters/:task_id

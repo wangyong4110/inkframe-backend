@@ -134,6 +134,9 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 					logger.Printf("BatchGenerateShots: shot %d image ready", sh.ShotNo)
 				} else {
 					logger.Printf("BatchGenerateShots: shot %d image failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
+					_ = s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
+						"status": "failed",
+					})
 				}
 			} else {
 				// ── AI 视频模式：原有同步逻辑（提交 → provider 轮询）──────────────
@@ -149,6 +152,9 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 				}
 				if genErr != nil {
 					logger.Printf("BatchGenerateShots: shot %d failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
+					_ = s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
+						"status": "failed",
+					})
 				} else {
 					logger.Printf("BatchGenerateShots: shot %d submitted successfully (taskID=%s)", sh.ShotNo, sh.ShotTaskID)
 				}
@@ -268,6 +274,9 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, pro
 				logger.Printf("BatchGenerateShotImages: shot %d image ready", sh.ShotNo)
 			} else {
 				logger.Printf("BatchGenerateShotImages: shot %d failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
+				_ = s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
+					"status": "failed",
+				})
 			}
 		}(shot, gIdx)
 	}
@@ -891,18 +900,30 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		logger.Printf("GenerateShotVideo: shot %d ImageURL empty, generating image first (charIDs=%v)", shot.ShotNo, shot.CharacterIDs)
 		frameURL, frameErr := s.generateShotReferenceImage(shot)
 		if frameErr != nil {
-			logger.Printf("GenerateShotVideo: shot %d image generation failed (non-fatal, continuing without reference): %v", shot.ShotNo, frameErr)
+			logger.Printf("GenerateShotVideo: shot %d image generation failed: %v", shot.ShotNo, frameErr)
 		} else {
 			logger.Printf("GenerateShotVideo: shot %d image generated: %s", shot.ShotNo, frameURL)
 		}
-		if frameURL != "" {
-			shot.ImageURL = frameURL
-			shot.FrameImageURL = frameURL
-			referenceImage = frameURL
-			// 立即持久化图片 URL，确保视频生成失败时图片不丢失
-			if updateErr := s.storyboardRepo.Update(shot); updateErr != nil {
-				logger.Printf("GenerateShotVideo: shot %d failed to persist ImageURL: %v", shot.ShotNo, updateErr)
+		if frameURL == "" {
+			errMsg := "image generation failed: empty URL returned"
+			if frameErr != nil {
+				errMsg = "image generation failed: " + frameErr.Error()
 			}
+			_ = s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{
+				"status":        "failed",
+				"error_message": errMsg,
+			})
+			if frameErr != nil {
+				return frameErr
+			}
+			return fmt.Errorf("shot %d: %s", shot.ShotNo, errMsg)
+		}
+		shot.ImageURL = frameURL
+		shot.FrameImageURL = frameURL
+		referenceImage = frameURL
+		// 立即持久化图片 URL，确保视频生成失败时图片不丢失
+		if updateErr := s.storyboardRepo.Update(shot); updateErr != nil {
+			logger.Printf("GenerateShotVideo: shot %d failed to persist ImageURL: %v", shot.ShotNo, updateErr)
 		}
 	}
 

@@ -52,12 +52,13 @@ func (h *SkillHandler) ListSkills(c *gin.Context) {
 	if !h.checkSkillTenant(c, novelID) {
 		return
 	}
-	skills, err := h.skillSvc.ListSkills(novelID)
+	p := parsePagination(c)
+	skills, total, err := h.skillSvc.ListSkillsPaged(novelID, p.Page, p.PageSize)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	respondOK(c, skills)
+	respondOK(c, gin.H{"items": skills, "total": total, "page": p.Page, "page_size": p.PageSize})
 }
 
 // CreateSkill POST /novels/:id/skills
@@ -154,7 +155,7 @@ func (h *SkillHandler) GenerateSkills(c *gin.Context) {
 	tenantID := getTenantID(c)
 
 	if h.taskSvc != nil {
-		task, err := h.taskSvc.Create(tenantID, service.TaskTypeItemExtract, "AI生成技能体系", "novel", novelID)
+		task, err := h.taskSvc.Create(tenantID, service.TaskTypeSkillGen, "AI生成技能体系", "novel", novelID)
 		if err != nil {
 			respondErr(c, http.StatusInternalServerError, "failed to create task")
 			return

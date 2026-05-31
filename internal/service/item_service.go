@@ -78,6 +78,11 @@ func (s *ItemService) ListItems(novelID uint) ([]*model.Item, error) {
 	return s.itemRepo.ListByNovel(novelID)
 }
 
+// ListItemsPaged 分页列出项目下的物品，返回数据列表和总数
+func (s *ItemService) ListItemsPaged(novelID uint, page, pageSize int) ([]*model.Item, int64, error) {
+	return s.itemRepo.ListByNovelPaged(novelID, page, pageSize)
+}
+
 // UpdateItem 更新物品
 func (s *ItemService) UpdateItem(id uint, req *model.UpdateItemRequest) (*model.Item, error) {
 	item, err := s.itemRepo.GetByID(id)
