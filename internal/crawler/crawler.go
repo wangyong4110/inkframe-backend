@@ -9,6 +9,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -286,49 +287,97 @@ func (c *HTTPClient) CookieValue(rawURL, name string) string {
 }
 
 func (c *HTTPClient) Get(ctx context.Context, rawURL string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
-	if err != nil {
-		return "", err
+	const maxAttempts = 3
+	var lastErr error
+	retryDelay := 5 * time.Second
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(retryDelay):
+			}
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+		if err != nil {
+			return "", err
+		}
+		for k, v := range c.headers {
+			req.Header.Set(k, v)
+		}
+		resp, err := c.client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			if ra := resp.Header.Get("Retry-After"); ra != "" {
+				if secs, parseErr := strconv.Atoi(ra); parseErr == nil && secs > 0 && secs < 120 {
+					retryDelay = time.Duration(secs) * time.Second
+				}
+			}
+			resp.Body.Close()
+			lastErr = fmt.Errorf("rate limited (429)")
+			continue
+		}
+		defer resp.Body.Close()
+		buf, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", err
+		}
+		return string(buf), nil
 	}
-	for k, v := range c.headers {
-		req.Header.Set(k, v)
-	}
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	buf, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	return string(buf), nil
+	return "", lastErr
 }
 
 // GetJSON 发送带 XHR 标记的 GET 请求，用于调用 Ajax API
 func (c *HTTPClient) GetJSON(ctx context.Context, rawURL string, referer string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
-	if err != nil {
-		return "", err
+	const maxAttempts = 3
+	var lastErr error
+	retryDelay := 5 * time.Second
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(retryDelay):
+			}
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
+		if err != nil {
+			return "", err
+		}
+		for k, v := range c.headers {
+			req.Header.Set(k, v)
+		}
+		req.Header.Set("Accept", "application/json, text/javascript, */*; q=0.01")
+		req.Header.Set("X-Requested-With", "XMLHttpRequest")
+		if referer != "" {
+			req.Header.Set("Referer", referer)
+		}
+		resp, err := c.client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			if ra := resp.Header.Get("Retry-After"); ra != "" {
+				if secs, parseErr := strconv.Atoi(ra); parseErr == nil && secs > 0 && secs < 120 {
+					retryDelay = time.Duration(secs) * time.Second
+				}
+			}
+			resp.Body.Close()
+			lastErr = fmt.Errorf("rate limited (429)")
+			continue
+		}
+		defer resp.Body.Close()
+		buf, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", err
+		}
+		return string(buf), nil
 	}
-	for k, v := range c.headers {
-		req.Header.Set(k, v)
-	}
-	req.Header.Set("Accept", "application/json, text/javascript, */*; q=0.01")
-	req.Header.Set("X-Requested-With", "XMLHttpRequest")
-	if referer != "" {
-		req.Header.Set("Referer", referer)
-	}
-	resp, err := c.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	buf, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	return string(buf), nil
+	return "", lastErr
 }
 
 // QidianParser 起点中文网解析器

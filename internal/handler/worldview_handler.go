@@ -18,13 +18,13 @@ func NewWorldviewHandler(worldviewService *service.WorldviewService) *WorldviewH
 	return &WorldviewHandler{worldviewService: worldviewService}
 }
 
-// ListWorldviews 获取世界观列表
+// ListWorldviews 获取世界观列表（仅返回当前租户的世界观）
 // GET /api/v1/worldviews
 func (h *WorldviewHandler) ListWorldviews(c *gin.Context) {
 	p := parsePagination(c)
 	genre := c.Query("genre")
 
-	worldviews, total, err := h.worldviewService.ListWorldviews(p.Page, p.PageSize, genre)
+	worldviews, total, err := h.worldviewService.ListWorldviews(getTenantID(c), p.Page, p.PageSize, genre)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -47,7 +47,7 @@ func (h *WorldviewHandler) GetWorldview(c *gin.Context) {
 		return
 	}
 
-	worldview, err := h.worldviewService.GetWorldview(uint(id))
+	worldview, err := h.worldviewService.GetWorldview(uint(id), getTenantID(c))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "worldview not found")
 		return
@@ -74,6 +74,7 @@ func (h *WorldviewHandler) CreateWorldview(c *gin.Context) {
 	}
 
 	worldview := &model.Worldview{
+		TenantID:    getTenantID(c),
 		UUID:        uuid.New().String(),
 		Name:        req.Name,
 		Genre:       req.Genre,
@@ -101,7 +102,7 @@ func (h *WorldviewHandler) UpdateWorldview(c *gin.Context) {
 		return
 	}
 
-	worldview, err := h.worldviewService.GetWorldview(uint(id))
+	worldview, err := h.worldviewService.GetWorldview(uint(id), getTenantID(c))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "worldview not found")
 		return
@@ -166,6 +167,12 @@ func (h *WorldviewHandler) DeleteWorldview(c *gin.Context) {
 		return
 	}
 
+	// Verify ownership before deleting.
+	if _, err := h.worldviewService.GetWorldview(uint(id), getTenantID(c)); err != nil {
+		respondErr(c, http.StatusNotFound, "worldview not found")
+		return
+	}
+
 	if err := h.worldviewService.DeleteWorldview(uint(id)); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -193,12 +200,14 @@ func (h *WorldviewHandler) GenerateWorldview(c *gin.Context) {
 		return
 	}
 
-	worldview, err := h.worldviewService.GenerateWorldview(getTenantID(c), req.NovelID, req.Genre, req.Hints)
+	tenantID := getTenantID(c)
+	worldview, err := h.worldviewService.GenerateWorldview(tenantID, req.NovelID, req.Genre, req.Hints)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	worldview.TenantID = tenantID
 	if err := h.worldviewService.CreateWorldview(worldview); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -218,6 +227,11 @@ func (h *WorldviewHandler) ListEntities(c *gin.Context) {
 	if !ok {
 		return
 	}
+	// Verify ownership before listing child entities.
+	if _, err := h.worldviewService.GetWorldview(uint(id), getTenantID(c)); err != nil {
+		respondErr(c, http.StatusNotFound, "worldview not found")
+		return
+	}
 	entities, err := h.worldviewService.GetEntities(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
@@ -231,6 +245,10 @@ func (h *WorldviewHandler) ListEntities(c *gin.Context) {
 func (h *WorldviewHandler) CreateEntity(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+	if _, err := h.worldviewService.GetWorldview(uint(id), getTenantID(c)); err != nil {
+		respondErr(c, http.StatusNotFound, "worldview not found")
 		return
 	}
 	var req struct {

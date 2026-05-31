@@ -131,6 +131,10 @@ type User struct {
 	// 邮箱验证时间（nil = 未验证）
 	EmailVerifiedAt *time.Time `json:"email_verified_at,omitempty" gorm:"default:null"`
 
+	// 登录安全（账号锁定）
+	FailedLoginCount int        `json:"-" gorm:"default:0"`
+	LockUntil        *time.Time `json:"-" gorm:"default:null"`
+
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`

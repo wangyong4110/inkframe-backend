@@ -129,6 +129,8 @@ func (s *NarrativeMemoryService) BuildPlotTensionStateText(novelID uint, current
 }
 
 // BuildHierarchicalContext 返回供 prompt 注入的层次化上下文文本
+const maxHierarchicalContextBytes = 50 * 1024 // 50KB 上下文上限，防止超出 LLM 输入窗口
+
 func (s *NarrativeMemoryService) BuildHierarchicalContext(novelID uint, currentChapterNo int) (string, error) {
 	logger.Printf("[NarrativeMemory] BuildHierarchicalContext: novelID=%d chapterNo=%d", novelID, currentChapterNo)
 	novel, err := s.novelRepo.GetByID(novelID)
@@ -139,7 +141,16 @@ func (s *NarrativeMemoryService) BuildHierarchicalContext(novelID uint, currentC
 	if err != nil {
 		return "", err
 	}
-	return renderHierarchicalContext(ctx), nil
+	result := renderHierarchicalContext(ctx)
+	if len(result) > maxHierarchicalContextBytes {
+		runes := []rune(result)
+		// 保留尾部（近章内容更重要）
+		maxRunes := maxHierarchicalContextBytes / 3 // 保守估计：每个 rune 约 3 字节
+		if len(runes) > maxRunes {
+			result = "…（上下文已截断）\n" + string(runes[len(runes)-maxRunes:])
+		}
+	}
+	return result, nil
 }
 
 func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapterNo int) (*HierarchicalContext, error) {

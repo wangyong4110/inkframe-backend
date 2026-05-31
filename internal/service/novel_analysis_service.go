@@ -758,7 +758,7 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 	// 加载可用音色模型（用于自动推荐，可选）
 	var voiceModels []*model.AIModel
 	if s.modelRepo != nil {
-		voiceModels, _ = s.modelRepo.GetAvailableByTaskType("voice_gen")
+		voiceModels, _ = s.modelRepo.GetAvailableByTaskType("voice_gen", tenantID)
 	}
 
 	const maxMainCharacters = 20

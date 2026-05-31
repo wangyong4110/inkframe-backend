@@ -111,13 +111,14 @@ func (s *AuthService) Register(req *RegisterRequest) (*AuthResponse, error) {
 	if req.TenantName == "" {
 		req.TenantName = req.Username
 	}
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 	// 检查邮箱是否已存在
 	if _, err := s.userRepo.GetByEmail(req.Email); err == nil {
 		return nil, errors.New("email already registered")
 	}
 
 	// 哈希密码
-	hashed, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hashed, err := bcrypt.GenerateFromPassword([]byte(req.Password), 12)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
@@ -174,13 +175,31 @@ func (s *AuthService) Register(req *RegisterRequest) (*AuthResponse, error) {
 }
 
 // Login 登录
+const maxFailedLoginAttempts = 10
+const loginLockDuration = 15 * time.Minute
+
 func (s *AuthService) Login(req *LoginRequest) (*AuthResponse, error) {
+	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 	user, err := s.userRepo.GetByEmail(req.Email)
 	if err != nil {
 		return nil, errors.New("invalid email or password")
 	}
 
+	// 账号锁定检查
+	if user.LockUntil != nil && time.Now().Before(*user.LockUntil) {
+		return nil, fmt.Errorf("account locked due to too many failed attempts, try again after %s",
+			user.LockUntil.Format("15:04:05"))
+	}
+
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
+		// 密码错误：记录失败次数
+		user.FailedLoginCount++
+		if user.FailedLoginCount >= maxFailedLoginAttempts {
+			lockUntil := time.Now().Add(loginLockDuration)
+			user.LockUntil = &lockUntil
+			user.FailedLoginCount = 0
+		}
+		_ = s.db.Model(user).Select("failed_login_count", "lock_until").Updates(user).Error
 		return nil, errors.New("invalid email or password")
 	}
 
@@ -188,8 +207,15 @@ func (s *AuthService) Login(req *LoginRequest) (*AuthResponse, error) {
 		return nil, errors.New("account is not active")
 	}
 
+	// 登录成功：重置失败计数
+	if user.FailedLoginCount > 0 || user.LockUntil != nil {
+		_ = s.db.Model(user).Updates(map[string]interface{}{
+			"failed_login_count": 0,
+			"lock_until":         nil,
+		}).Error
+	}
+
 	// 获取用户的租户信息（取第一个租户）
-	// In a real system, allow selecting tenant if user belongs to multiple
 	tu, err := s.getDefaultTenantUser(user.ID)
 	if err != nil {
 		return nil, errors.New("no tenant associated with this account")
@@ -371,11 +397,15 @@ func (s *AuthService) ChangePassword(userID uint, oldPwd, newPwd string) error {
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(oldPwd)); err != nil {
 		return errors.New("current password is incorrect")
 	}
-	hashed, err := bcrypt.GenerateFromPassword([]byte(newPwd), bcrypt.DefaultCost)
+	hashed, err := bcrypt.GenerateFromPassword([]byte(newPwd), 12)
 	if err != nil {
 		return fmt.Errorf("failed to hash password: %w", err)
 	}
-	return s.userRepo.UpdatePassword(userID, string(hashed))
+	if err := s.userRepo.UpdatePassword(userID, string(hashed)); err != nil {
+		return err
+	}
+	s.invalidateUserSessions(userID)
+	return nil
 }
 
 // RegisterWithPhone 手机号注册
@@ -394,7 +424,7 @@ func (s *AuthService) RegisterWithPhone(phone, code, nickname, tenantName string
 
 	// 随机密码（用户不会直接使用，可通过手机验证码登录）
 	rawPwd := uuid.New().String()
-	hashed, err := bcrypt.GenerateFromPassword([]byte(rawPwd), bcrypt.DefaultCost)
+	hashed, err := bcrypt.GenerateFromPassword([]byte(rawPwd), 12)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
@@ -513,7 +543,7 @@ func (s *AuthService) LoginWithOAuth(info *OAuthUserInfo) (*AuthResponse, error)
 	username = username + "_" + strings.ToLower(uuid.New().String()[:4])
 
 	rawPwd := uuid.New().String()
-	hashed, err := bcrypt.GenerateFromPassword([]byte(rawPwd), bcrypt.DefaultCost)
+	hashed, err := bcrypt.GenerateFromPassword([]byte(rawPwd), 12)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash password: %w", err)
 	}
@@ -574,6 +604,18 @@ func (s *AuthService) LoginWithOAuth(info *OAuthUserInfo) (*AuthResponse, error)
 // 无论邮箱是否存在，均返回 nil 错误（防止用户枚举）。
 // 生产环境应在此处发送重置邮件；当前仅返回 token 供调试使用。
 func (s *AuthService) RequestPasswordReset(email string) (token string, err error) {
+	email = strings.ToLower(strings.TrimSpace(email))
+
+	// per-email 频率限制：每 5 分钟最多发送 1 封重置邮件
+	if s.rdb != nil {
+		rateLimitKey := "pwd_reset_rate:" + email
+		if cnt, _ := s.rdb.Incr(context.Background(), rateLimitKey).Result(); cnt == 1 {
+			s.rdb.Expire(context.Background(), rateLimitKey, 5*time.Minute)
+		} else if cnt > 1 {
+			return "", nil // 静默返回，防枚举同时限速
+		}
+	}
+
 	user, err := s.userRepo.GetByEmail(email)
 	if err != nil {
 		// 用户不存在：静默返回（防枚举）
@@ -619,14 +661,28 @@ func (s *AuthService) ResetPassword(token, newPassword string) error {
 	if err != nil {
 		return fmt.Errorf("invalid or expired reset token")
 	}
-	hashed, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	hashed, err := bcrypt.GenerateFromPassword([]byte(newPassword), 12)
 	if err != nil {
 		return err
 	}
 	if err := s.userRepo.UpdatePassword(t.UserID, string(hashed)); err != nil {
 		return err
 	}
-	return s.tokenRepo.MarkUsed(t.ID)
+	if err := s.tokenRepo.MarkUsed(t.ID); err != nil {
+		return err
+	}
+	s.invalidateUserSessions(t.UserID)
+	return nil
+}
+
+// invalidateUserSessions 将用户当前时间戳写入 Redis，使所有颁发时间早于此时的 JWT 失效。
+// TTL 设为 90 天（与最长 token 生命周期对齐）。若 Redis 不可用则静默跳过。
+func (s *AuthService) invalidateUserSessions(userID uint) {
+	if s.rdb == nil {
+		return
+	}
+	key := fmt.Sprintf("jwt:user_invalidate:%d", userID)
+	s.rdb.Set(context.Background(), key, time.Now().Unix(), 90*24*time.Hour)
 }
 
 // ─────────────────────────────────────────────────────────────────────

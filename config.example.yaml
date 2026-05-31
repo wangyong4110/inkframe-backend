@@ -9,7 +9,7 @@ server:
   host: "0.0.0.0"
   port: 8080
   mode: "debug"            # debug | release | test
-  jwt_secret: ""           # [必填] 生产环境填入随机长字符串
+  jwt_secret: "inkframe-dev-secret-change-in-production-2024"  # 生产环境请替换为 openssl rand -base64 48 生成的随机值
   jwt_expiry: 24h
   read_timeout: 30s
   write_timeout: 30s
@@ -78,3 +78,42 @@ web_search:
   provider: ""             # "searxng" | "bing" | "tavily" | ""（留空=禁用）
   api_key: ""              # Bing/Tavily 的 API Key（或用 WEB_SEARCH_API_KEY 环境变量）
   endpoint: ""             # SearXNG: http://localhost:8888（bing/tavily 留空）
+
+# ─────────────────────────────────────────────
+# 以下为可选功能模块，不配置时相关功能优雅降级
+# ─────────────────────────────────────────────
+
+# 邮件发送配置（用于邮箱验证、密码重置）
+smtp:
+  host: "smtp.example.com"
+  port: 587
+  username: "noreply@example.com"
+  password: ""             # 建议改用 SMTP_PASSWORD 环境变量
+  from: "noreply@example.com"
+  tls: false               # true=直连 TLS（端口465），false=STARTTLS（端口587）
+
+# 短信验证码配置（用于手机号注册/登录）
+sms:
+  provider: ""             # 暂支持：aliyun | tencent | 留空=禁用
+  access_key: ""
+  secret_key: ""
+  sign_name: "InkFrame"
+  template_code: ""
+
+# OAuth 第三方登录（每个 provider 可选填，留空=禁用）
+oauth:
+  github:
+    client_id: ""
+    client_secret: ""
+    redirect_url: "http://localhost:3000/oauth/callback/github"
+  google:
+    client_id: ""
+    client_secret: ""
+    redirect_url: "http://localhost:3000/oauth/callback/google"
+
+# 数据库字段加密密钥（用于 AES-256-GCM 加密平台账号 Token 等敏感字段）
+# 必须为 32 字节的 base64 编码字符串，可用以下命令生成：
+#   openssl rand -base64 32
+# 也可通过 DB_ENCRYPTION_KEY 环境变量传入（推荐，避免写入配置文件）
+encryption:
+  db_key: ""               # 留空则跳过加密（字段明文存储）

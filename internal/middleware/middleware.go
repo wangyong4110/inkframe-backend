@@ -2,8 +2,10 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -226,6 +228,19 @@ func NewAuth(jwtSecret string, rdb *redis.Client) gin.HandlerFunc {
 			if redisErr == nil && exists > 0 {
 				c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "token has been revoked"})
 				return
+			}
+		}
+
+		// ── 密码变更失效检查（若 Redis 可用） ─────────────────────────────
+		if rdb != nil && claims.UserID > 0 {
+			invalidateKey := fmt.Sprintf("jwt:user_invalidate:%d", claims.UserID)
+			if val, redisErr := rdb.Get(context.Background(), invalidateKey).Result(); redisErr == nil {
+				if ts, parseErr := strconv.ParseInt(val, 10, 64); parseErr == nil {
+					if claims.RegisteredClaims.IssuedAt != nil && claims.RegisteredClaims.IssuedAt.Unix() < ts {
+						c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "token has been revoked"})
+						return
+					}
+				}
 			}
 		}
 

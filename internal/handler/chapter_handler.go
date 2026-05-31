@@ -75,6 +75,15 @@ func (h *ChapterHandler) CreateChapter(c *gin.Context) {
 		return
 	}
 
+	if len([]rune(req.Title)) > 200 {
+		respondBadRequest(c, "chapter title exceeds 200 characters")
+		return
+	}
+	if len([]rune(req.Content)) > 100000 {
+		respondBadRequest(c, "chapter content exceeds 100,000 characters")
+		return
+	}
+
 	chapter, err := h.chapterService.CreateChapter(uint(novelId), &req)
 	if err != nil {
 		logger.Printf("[ChapterHandler] CreateChapter: novelID=%d err=%v", novelId, err)
@@ -154,6 +163,15 @@ func (h *ChapterHandler) UpdateChapter(c *gin.Context) {
 
 	var req model.UpdateChapterRequest
 	if !bindJSON(c, &req) {
+		return
+	}
+
+	if req.Title != "" && len([]rune(req.Title)) > 200 {
+		respondBadRequest(c, "chapter title exceeds 200 characters")
+		return
+	}
+	if req.Content != "" && len([]rune(req.Content)) > 100000 {
+		respondBadRequest(c, "chapter content exceeds 100,000 characters")
 		return
 	}
 

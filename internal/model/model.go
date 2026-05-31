@@ -293,7 +293,9 @@ func (Chapter) TableName() string {
 
 // Worldview 世界观
 type Worldview struct {
-	ID          uint   `json:"id" gorm:"primaryKey"`
+	ID       uint `json:"id" gorm:"primaryKey"`
+	TenantID uint `json:"tenant_id" gorm:"index;not null;default:1"`
+
 	UUID        string `json:"uuid" gorm:"uniqueIndex;size:36"`
 	Name        string `json:"name" gorm:"size:255;not null"`
 	Description string `json:"description" gorm:"type:text"`

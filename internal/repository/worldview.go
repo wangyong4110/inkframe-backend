@@ -21,7 +21,7 @@ func (r *WorldviewRepository) Create(worldview *model.Worldview) error {
 	return r.db.Create(worldview).Error
 }
 
-// GetByID 根据ID获取世界观
+// GetByID 根据ID获取世界观（内部使用，不含租户校验）
 func (r *WorldviewRepository) GetByID(id uint) (*model.Worldview, error) {
 	var worldview model.Worldview
 	if err := r.db.First(&worldview, id).Error; err != nil {
@@ -30,12 +30,21 @@ func (r *WorldviewRepository) GetByID(id uint) (*model.Worldview, error) {
 	return &worldview, nil
 }
 
-// List 获取世界观列表
-func (r *WorldviewRepository) List(page, pageSize int, genre string) ([]*model.Worldview, int64, error) {
+// GetByIDAndTenant 根据ID和租户获取世界观（对外接口使用）
+func (r *WorldviewRepository) GetByIDAndTenant(id, tenantID uint) (*model.Worldview, error) {
+	var worldview model.Worldview
+	if err := r.db.Where("id = ? AND tenant_id = ?", id, tenantID).First(&worldview).Error; err != nil {
+		return nil, err
+	}
+	return &worldview, nil
+}
+
+// List 获取世界观列表（仅返回属于指定租户的世界观）
+func (r *WorldviewRepository) List(tenantID uint, page, pageSize int, genre string) ([]*model.Worldview, int64, error) {
 	var worldviews []*model.Worldview
 	var total int64
 
-	query := r.db.Model(&model.Worldview{})
+	query := r.db.Model(&model.Worldview{}).Where("tenant_id = ?", tenantID)
 	if genre != "" {
 		query = query.Where("genre = ?", genre)
 	}

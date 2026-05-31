@@ -8,7 +8,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-31-v8"
+const schemaVersion = "2026-05-31-v9"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -72,6 +72,11 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_knowledge_base", "source_chapter_id", "INT UNSIGNED NULL"},
 		// ink_video 分镜审查状态（2026-05-31 新增）
 		{"ink_video", "review_status", "VARCHAR(20) NOT NULL DEFAULT 'none'"},
+		// ink_worldview 租户隔离（2026-05-31 新增，修复跨租户数据泄露）
+		{"ink_worldview", "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1"},
+		// users 账号安全锁定字段
+		{"users", "failed_login_count", "INT NOT NULL DEFAULT 0"},
+		{"users", "lock_until", "DATETIME(3) NULL"},
 	}
 	for _, a := range additions {
 		// 先查 information_schema，列已存在则跳过，避免触发 GORM 的 Error 1060 日志

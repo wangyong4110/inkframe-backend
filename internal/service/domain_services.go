@@ -455,12 +455,12 @@ func (s *ModelService) StartExperiment(id uint) error {
 	return nil
 }
 
-func (s *ModelService) GetAvailableModels(taskType string) ([]*model.AIModel, error) {
-	return s.modelRepo.GetAvailableByTaskType(taskType)
+func (s *ModelService) GetAvailableModels(taskType string, tenantID uint) ([]*model.AIModel, error) {
+	return s.modelRepo.GetAvailableByTaskType(taskType, tenantID)
 }
 
-func (s *ModelService) SelectModel(taskType, strategy string) (*model.AIModel, error) {
-	models, err := s.modelRepo.GetAvailableByTaskType(taskType)
+func (s *ModelService) SelectModel(taskType, strategy string, tenantID uint) (*model.AIModel, error) {
+	models, err := s.modelRepo.GetAvailableByTaskType(taskType, tenantID)
 	if err != nil {
 		return nil, err
 	}
@@ -523,12 +523,12 @@ func (s *WorldviewService) CreateWorldview(worldview *model.Worldview) error {
 	return s.worldviewRepo.Create(worldview)
 }
 
-func (s *WorldviewService) GetWorldview(id uint) (*model.Worldview, error) {
-	return s.worldviewRepo.GetByID(id)
+func (s *WorldviewService) GetWorldview(id uint, tenantID uint) (*model.Worldview, error) {
+	return s.worldviewRepo.GetByIDAndTenant(id, tenantID)
 }
 
-func (s *WorldviewService) ListWorldviews(page, pageSize int, genre string) ([]*model.Worldview, int64, error) {
-	return s.worldviewRepo.List(page, pageSize, genre)
+func (s *WorldviewService) ListWorldviews(tenantID uint, page, pageSize int, genre string) ([]*model.Worldview, int64, error) {
+	return s.worldviewRepo.List(tenantID, page, pageSize, genre)
 }
 
 func (s *WorldviewService) UpdateWorldview(worldview *model.Worldview) error {

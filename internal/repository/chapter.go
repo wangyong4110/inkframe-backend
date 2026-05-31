@@ -133,11 +133,11 @@ func (r *ChapterRepository) ListByNovelPaged(novelID uint, page, pageSize int) (
 }
 
 // ListByNovelWithContent 获取小说的所有章节，包含 content 和 summary 字段。
-// 用于 AI 提取任务（角色/物品/技能等），不走缓存。
+// 用于 AI 提取任务（角色/物品/技能等），不走缓存。最多返回 300 章，避免超大小说导致 OOM。
 func (r *ChapterRepository) ListByNovelWithContent(novelID uint) ([]*model.Chapter, error) {
 	var chapters []*model.Chapter
 	return chapters, r.db.Where("novel_id = ?", novelID).
-		Order("chapter_no ASC").Find(&chapters).Error
+		Order("chapter_no ASC").Limit(300).Find(&chapters).Error
 }
 
 // GetByNovelAndChapterRange 批量获取章节范围（含首尾，一次 SQL 代替循环 GetByNovelAndChapterNo）

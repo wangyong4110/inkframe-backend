@@ -603,6 +603,12 @@ func (h *ImportHandler) CompleteChunkedUpload(c *gin.Context) {
 		assembled = append(assembled, data...)
 	}
 
+	const maxAssembledSize = 500 * 1024 * 1024 // 500MB max assembled file
+	if len(assembled) > maxAssembledSize {
+		respondErr(c, http.StatusRequestEntityTooLarge, "assembled file exceeds 500MB limit")
+		return
+	}
+
 	// 清理临时目录
 	chunkStore.Delete(body.UploadID)
 	os.RemoveAll(sess.TmpDir) //nolint:errcheck

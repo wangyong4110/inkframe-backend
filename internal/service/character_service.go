@@ -822,7 +822,7 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 	// ── 加载可用音色（一次，用于后续自动推荐）────────────────────────────────
 	var voiceModels []*model.AIModel
 	if s.modelRepo != nil {
-		voiceModels, _ = s.modelRepo.GetAvailableByTaskType("voice_gen")
+		voiceModels, _ = s.modelRepo.GetAvailableByTaskType("voice_gen", tenantID)
 	}
 
 	// ── Upsert ───────────────────────────────────────────────────────────────

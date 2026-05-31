@@ -287,7 +287,7 @@ func (h *ModelHandler) TestModel(c *gin.Context) {
 func (h *ModelHandler) GetAvailableModels(c *gin.Context) {
 	taskType := c.Param("task_type")
 
-	models, err := h.modelService.GetAvailableModels(taskType)
+	models, err := h.modelService.GetAvailableModels(taskType, getTenantID(c))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -307,7 +307,7 @@ func (h *ModelHandler) SelectModel(c *gin.Context) {
 		return
 	}
 
-	selected, err := h.modelService.SelectModel(req.TaskType, req.Strategy)
+	selected, err := h.modelService.SelectModel(req.TaskType, req.Strategy, getTenantID(c))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return

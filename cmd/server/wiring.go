@@ -649,7 +649,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			services.CharacterService,
 			services.CharacterArcService,
 			services.ImageGenerationService,
-		).WithChapterService(services.ChapterService).WithStorage(storageSvc).WithTaskService(services.TaskService).WithAIService(services.AIService),
+		).WithChapterService(services.ChapterService).WithStorage(storageSvc).WithTaskService(services.TaskService).WithAIService(services.AIService).WithNovelService(services.NovelService),
 		VideoHandler: handler.NewVideoHandler(
 			services.VideoService,
 			services.StoryboardService,

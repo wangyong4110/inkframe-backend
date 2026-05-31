@@ -120,17 +120,25 @@ func NewAIModelRepository(db *gorm.DB) *AIModelRepository {
 //   - needs_secret_key=false（如 doubao-speech、openai）：api_key 非空即可
 //
 // 与 providerHasCredentials（domain_services.go）保持一致，避免模型显示但实际调用失败。
-func (r *AIModelRepository) GetAvailableByTaskType(taskType string) ([]*model.AIModel, error) {
+// GetAvailableByTaskType 获取指定任务类型的可用模型。
+// tenantID > 0 时只返回该租户自己的模型 + 系统模型（tenant_id=0）；
+// tenantID = 0 时仅返回系统模型（用于内部无租户上下文的场景）。
+func (r *AIModelRepository) GetAvailableByTaskType(taskType string, tenantID uint) ([]*model.AIModel, error) {
 	var models []*model.AIModel
 	pattern := `%"` + taskType + `"%`
 	credCond := "(CASE WHEN p.needs_secret_key = 1 " +
 		"THEN (p.api_key != '' AND p.api_secret_key != '') " +
 		"ELSE p.api_key != '' END)"
-	if err := r.db.Preload("Provider").
+	query := r.db.Preload("Provider").
 		Joins("JOIN ink_model_provider p ON p.id = ink_ai_model.provider_id AND p.deleted_at IS NULL").
 		Where("ink_ai_model.is_active = ? AND ink_ai_model.is_available = ? AND ink_ai_model.suitable_tasks LIKE ?"+
-			" AND "+credCond, true, true, pattern).
-		Find(&models).Error; err != nil {
+			" AND "+credCond, true, true, pattern)
+	if tenantID > 0 {
+		query = query.Where("p.tenant_id = 0 OR p.tenant_id = ?", tenantID)
+	} else {
+		query = query.Where("p.tenant_id = 0")
+	}
+	if err := query.Find(&models).Error; err != nil {
 		return nil, err
 	}
 	return models, nil

@@ -327,6 +327,11 @@ func (h *NovelHandler) GetForeshadows(c *gin.Context) {
 		return
 	}
 
+	if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c)); err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found")
+		return
+	}
+
 	chapterNo, _ := strconv.Atoi(c.Query("chapter_no"))
 
 	foreshadows, err := h.foreshadowService.GetForeshadows(uint(novelId), chapterNo)
@@ -346,6 +351,12 @@ func (h *NovelHandler) MarkForeshadowFulfilled(c *gin.Context) {
 	if !ok {
 		return
 	}
+
+	if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c)); err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found")
+		return
+	}
+
 	foreshadowId, ok := parseID(c, "foreshadow_id")
 	if !ok {
 		return

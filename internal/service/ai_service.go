@@ -483,7 +483,7 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 
 	// Task#4: 若仍未确定 model/provider，按 strategy 从候选模型中自动选择
 	if resolvedModel == "" && providerName == "" && config.Strategy != "" && s.modelRepo != nil {
-		if candidates, err := s.modelRepo.GetAvailableByTaskType(taskType); err == nil && len(candidates) > 0 {
+		if candidates, err := s.modelRepo.GetAvailableByTaskType(taskType, tenantID); err == nil && len(candidates) > 0 {
 			var selected *model.AIModel
 			switch config.Strategy {
 			case "quality_first":
@@ -587,7 +587,7 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 
 	// Task#4: strategy-based 自动选模
 	if resolvedModel == "" && providerName == "" && config.Strategy != "" && s.modelRepo != nil {
-		if candidates, err := s.modelRepo.GetAvailableByTaskType(taskType); err == nil && len(candidates) > 0 {
+		if candidates, err := s.modelRepo.GetAvailableByTaskType(taskType, tenantID); err == nil && len(candidates) > 0 {
 			var selected *model.AIModel
 			switch config.Strategy {
 			case "quality_first":

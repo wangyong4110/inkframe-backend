@@ -66,6 +66,7 @@ type CharacterHandler struct {
 	storageSvc       storage.Service
 	taskSvc          *service.TaskService
 	aiService        *service.AIService
+	novelService     *service.NovelService
 }
 
 func NewCharacterHandler(
@@ -100,11 +101,32 @@ func (h *CharacterHandler) WithChapterService(svc *service.ChapterService) *Char
 	return h
 }
 
+func (h *CharacterHandler) WithNovelService(svc *service.NovelService) *CharacterHandler {
+	h.novelService = svc
+	return h
+}
+
+// checkNovelAccess verifies the novel exists and belongs to the current tenant.
+func (h *CharacterHandler) checkNovelAccess(c *gin.Context, novelID uint) bool {
+	if h.novelService == nil {
+		return true // fallback: no service wired, allow (should not happen in production)
+	}
+	if _, err := h.novelService.GetNovel(novelID, getTenantID(c)); err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found")
+		return false
+	}
+	return true
+}
+
 // CreateCharacter 创建角色
 // POST /api/v1/novels/:novel_id/characters
 func (h *CharacterHandler) CreateCharacter(c *gin.Context) {
 	novelId, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+
+	if !h.checkNovelAccess(c, uint(novelId)) {
 		return
 	}
 
@@ -148,6 +170,10 @@ func (h *CharacterHandler) GetCharacter(c *gin.Context) {
 func (h *CharacterHandler) ListCharacters(c *gin.Context) {
 	novelId, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+
+	if !h.checkNovelAccess(c, uint(novelId)) {
 		return
 	}
 

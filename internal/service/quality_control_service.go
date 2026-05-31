@@ -681,6 +681,23 @@ func (s *QualityControlService) ApplyDiffs(chapterID uint, diffs []ParagraphDiff
 	paragraphs, sep := splitContentParagraphs(chapter.Content)
 	logger.Printf("[ApplyDiffs] chapterID=%d paragraphs=%d sep=%q diffs=%d",
 		chapterID, len(paragraphs), sep, len(diffs))
+
+	// Validate for duplicate indices — silent overwrite would cause data loss.
+	indexSeen := make(map[int]bool, len(diffs))
+	for _, d := range diffs {
+		if indexSeen[d.Index] {
+			return 0, fmt.Errorf("duplicate diff index %d: each paragraph can only be replaced once", d.Index)
+		}
+		indexSeen[d.Index] = true
+	}
+
+	// Validate that all indices are within range.
+	for _, d := range diffs {
+		if d.Index < 0 || d.Index >= len(paragraphs) {
+			return 0, fmt.Errorf("diff index %d out of range (chapter has %d paragraphs)", d.Index, len(paragraphs))
+		}
+	}
+
 	diffMap := make(map[int]string, len(diffs))
 	for _, d := range diffs {
 		diffMap[d.Index] = d.NewContent
