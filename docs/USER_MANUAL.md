@@ -1,6 +1,6 @@
 # InkFrame Backend 用户手册
 
-> 版本：2026-05 · 适用服务端版本 ≥ 2026-05-30
+> 版本：2026-05-31 · 适用服务端版本 ≥ 2026-05-31
 
 ---
 
@@ -240,6 +240,12 @@ sms:
 | `PIXABAY_API_KEY` | Pixabay 素材爬取 |
 | `SFX_DIR` | 本地音效目录 |
 | `BGM_DIR` | 本地 BGM 目录 |
+| `KLING_API_KEY` | 可灵 API Key（视频/图片/TTS/SFX 共用） |
+| `ALIYUN_TTS_API_KEY` | 阿里云 DashScope TTS Key |
+| `BAIDU_TTS_API_KEY` / `BAIDU_TTS_SECRET_KEY` | 百度 TTS OAuth 凭证 |
+| `MINIMAX_TTS_API_KEY` / `MINIMAX_TTS_GROUP_ID` | MiniMax TTS 凭证 |
+| `TENCENT_TTS_SECRET_ID` / `TENCENT_TTS_SECRET_KEY` | 腾讯云 TTS 签名密钥 |
+| `TENCENT_TTS_REGION` | 腾讯云区域（默认 `ap-guangzhou`） |
 | `GOROOT` | Go 安装路径（macOS Homebrew 需要指定） |
 
 ### 3.3 数据库自动迁移
@@ -559,11 +565,21 @@ POST /api/v1/videos/{id}/shots/{shot_id}/refine-image
 # 批量为所有分镜生成配音
 POST /api/v1/videos/{id}/shots/batch-voice
 {
-  "voice_id": "longxiaochun",   # 阿里云音色 ID，或其他提供商
+  "voice_id": "longxiaochun",   # 音色 ID，见下表
   "speed": 1.0,
   "force": false
 }
 ```
+
+**多 TTS 提供商与常用音色：**
+
+| 提供商 | 注册名 | 常用音色 ID（示例） | 所需环境变量 |
+|--------|--------|---------------------|-------------|
+| 阿里云 DashScope | `aliyun-tts` | longxiaochun, longxiaoxia, longxiaobai, longfei, longjielidou, longmiaomiao, longshu, longwan, longcheng, longhua, longxiang | `ALIYUN_TTS_API_KEY` |
+| 百度 | `baidu-tts` | 0=度小美, 1=度小宇, 3=度逍遥, 4=度丫丫, 5=度小娇, 103=度米朵, 106=度博文, 110=度小童, 111=度小萌 | `BAIDU_TTS_API_KEY` + `BAIDU_TTS_SECRET_KEY` |
+| MiniMax | `minimax-tts` | female-shaonv, female-yujie, female-tianmei, male-qn-qingse, male-qn-jingying, presenter_male, presenter_female, audiobook_male_1, audiobook_female_1 | `MINIMAX_TTS_API_KEY` + `MINIMAX_TTS_GROUP_ID` |
+| 腾讯云 | `tencent-tts` | 101001=智言(男), 101002=智雅(女), 101003=智燕(女/暖), 101050=WeJack(EN男), 101051=WeRose(EN女) | `TENCENT_TTS_SECRET_ID` + `TENCENT_TTS_SECRET_KEY` |
+| 可灵 | `kling`（共用） | — | `KLING_API_KEY` |
 
 **多段配音**（一个分镜多个声音段落）：
 
@@ -611,7 +627,12 @@ DELETE /api/v1/videos/{id}/shots/{shot_id}/sfx-items/{item_id}
 描述符规则：`action` 类必须含 `single/burst/hit/snap`，`ambient` 类必须含 `loop/continuous`，`emotion` 类必须含 `single/rise/sting`。
 
 **SFX 生成优先级链**（自动降级）：
-1. 素材库本地搜索 → 2. AudioLDM 生成 → 3. Freesound 搜索 → 4. Pixabay → 5. BBC → 6. ElevenLabs AI 生成
+1. 素材库本地搜索 → 2. AudioLDM 生成 → 3. Freesound 搜索 → 4. Pixabay → 5. BBC → 6. Kling SFX 文生音效 → 7. ElevenLabs AI 生成
+
+**Kling SFX 文生音效**（第 6 优先级，异步轮询）：
+- 调用 `/v1/audio/text-to-audio` 提交任务，轮询至 `task_status=succeed`，返回 CDN `url_mp3`
+- 音效时长 3~10 秒，通过 `duration` 字段控制
+- 与视频生成共用 `KLING_API_KEY` 环境变量
 
 ### 6.6 背景音乐（BGM）
 
@@ -669,7 +690,42 @@ GET /api/v1/videos/{id}/export/{format}
 2. 将文件夹移动到：`~/Movies/JianyingPro/User Data/Projects/com.lveditor.draft/`
 3. 重启剪映，草稿出现在列表中
 
-### 6.8 分镜管理
+### 6.8 分镜 AI 审查
+
+分镜（Storyboard）同样支持 AI 深度审查，与章节审查共用统一审查表（`entity_type = "storyboard"`）：
+
+```bash
+# 发起分镜审查
+POST /api/v1/videos/{id}/storyboard/review
+# → 返回 review_id
+
+# 列出历史审查记录
+GET /api/v1/videos/{id}/storyboard/reviews
+
+# 获取单条审查详情
+GET /api/v1/videos/{id}/storyboard/reviews/{rid}
+
+# 应用修改建议（选择性）
+POST /api/v1/videos/{id}/storyboard/review/apply-diffs
+{
+  "review_id": 10,
+  "issue_ids": [2, 4]
+}
+
+# 忽略特定问题（含镜头号上下文）
+POST /api/v1/videos/{id}/storyboard/ignored-issues
+{
+  "issue_text": "第 3 镜画面描述过于抽象",
+  "shot_no": 3,
+  "note": "风格刻意为之"
+}
+
+# 查看 / 删除已忽略问题
+GET    /api/v1/videos/{id}/storyboard/ignored-issues
+DELETE /api/v1/videos/{id}/storyboard/ignored-issues/{iid}
+```
+
+### 6.9 分镜管理
 
 ```bash
 # 插入新分镜
@@ -966,10 +1022,14 @@ POST /api/v1/model-providers
 | `openai` | OpenAI 官方 |
 | `openai_compatible` | DeepSeek、豆包、通义千问等兼容接口 |
 | `anthropic` | Claude |
-| `kling` | 快手可灵（视频/图片/TTS/SFX） |
+| `kling` | 快手可灵（视频/图片/TTS/SFX 文生音效） |
 | `seedance` | 生数科技（视频）|
 | `volcengine` | 火山引擎即梦（图片）|
 | `ollama` | 本地 Ollama 服务 |
+| `baidu-tts` | 百度语音合成 |
+| `minimax-tts` | MiniMax 语音合成 |
+| `aliyun-tts` | 阿里云 DashScope 语音合成 |
+| `tencent-tts` | 腾讯云语音合成 |
 
 ### 10.2 添加模型
 
@@ -1433,4 +1493,4 @@ make docs          # 生成 Swagger 文档
 
 ---
 
-*手册最后更新：2026-05-30 · 如发现内容有误或需要补充，请在代码仓库提交 Issue。*
+*手册最后更新：2026-05-31 · 如发现内容有误或需要补充，请在代码仓库提交 Issue。*

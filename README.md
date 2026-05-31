@@ -1,19 +1,47 @@
 # InkFrame Backend
 
-InkFrame 后端服务 — AI 驱动的智能小说创作与视频生成平台
+> **简影**平台后端服务 — AI 驱动的"小说→视频"全链路内容生产系统
 
 ## 功能特性
 
-- **智能小说生成** — 多题材、自动生成高质量中长篇小说，支持大纲、章节逐步创作
-- **章节质量控制** — 一致性、逻辑、文风多维度质量评分，支持版本历史与回滚
-- **角色 & 世界观管理** — 角色弧光追踪、角色关系图谱、世界观实体管理
-- **小说导入** — 支持文件上传、URL 解析、起点/晋江/纵横等平台爬取
-- **AI 分镜生成** — 自动将章节拆解为分镜脚本，支持静态/视频两种生成模式
-- **视频生成** — 对接 Kling / Seedance，支持草稿/预览/正式三档质量
-- **MCP 工具管理** — Model Context Protocol 工具注册、连通性测试、与模型绑定
-- **多模型管理** — OpenAI、Claude、Gemini、豆包、DeepSeek、通义千问，支持任务级分配
-- **风格控制** — 写作风格、图像风格、视频风格的 Prompt 预设与自定义
-- **多租户** — 租户 / 成员 / 配额管理
+### 小说创作
+- 多题材大纲生成（玄幻/都市/言情/历史等 18 种类型）
+- 三步章节流水线：场景大纲 → 正文生成 → 细节润色
+- AI 深度审查与差异化修订（章节/分镜均支持，统一 Review 表）
+- 质量评分（逻辑 30% · 一致性 25% · 文笔 25% · 风格 20%）
+- 剧情点追踪、伏笔管理、时间线构建
+- 叙事记忆系统：全局摘要 → 弧线摘要 → 近期章节，支持 100+ 章不失忆
+
+### 角色 & 世界观
+- 角色状态快照（跨章节状态追踪）、角色弧线
+- 角色形象生成：三视图 / 面部特写 / 肖像
+- 世界观实体管理（地点/组织/神器/种族/生物）
+- 场景锚点：AI 提取 → 生成参考图 → 锁定一致性基准 → 评分追踪
+
+### 视频生成
+- 分镜脚本生成，支持节奏控制（慢/标准/快）和目标时长
+- 图片生成（阿里云 OSS + 火山引擎即梦）、Ken Burns 动效
+- AI 视频片段（Kling / Seedance）
+- 多段配音：每镜头多声音段落，支持插入/删除
+- 音效（SFX）：AI 标签分析 + 6 级优先级降级链（含 Kling 文生音效）
+- BGM：情绪分析 + Jamendo 版权音乐搜索
+- 多格式导出：剪映 / FCP / B 剪 / EDL / OTIO / SRT / VTT / CSV
+
+### AI 提供商
+- 文本 LLM：OpenAI、Anthropic Claude、DeepSeek、豆包、通义千问、Ollama
+- 图片生成：火山引擎即梦（HMAC-SHA256 签名，异步轮询）
+- 视频生成：Kling、Seedance
+- TTS 语音合成：阿里云 DashScope、百度、MiniMax、腾讯云
+- SFX 文生音效：Kling SFX（异步轮询，3~10s）
+- RetryProvider 自动重试：HTTP 429/502/503/504，指数退避，最多 3 次
+
+### 素材库 & 平台
+- 素材版本管理、标签、分享审批工作流
+- 外部素材爬取：Unsplash / Freesound / Pixabay / BBC
+- 小说改写（规避版权风险）
+- 站内社交（点赞/评论/阅读进度）
+- 外部发布（YouTube / 抖音 / Bilibili）
+- 多租户：租户隔离、成员角色（owner/admin/member）、配额管理
 
 ## 技术栈
 
@@ -21,12 +49,15 @@ InkFrame 后端服务 — AI 驱动的智能小说创作与视频生成平台
 |------|------|
 | 语言 | Go 1.21+ |
 | HTTP 框架 | Gin |
-| 数据库 | MySQL 8.0+ (GORM) |
-| 缓存 | Redis |
-| 向量存储 | Qdrant / Chroma |
-| 文件存储 | 阿里云 OSS (HMAC-SHA256 签名) |
-| AI 提供商 | OpenAI / Anthropic / Google / 豆包 / DeepSeek / 通义千问 |
+| 数据库 | MySQL 8.0+（GORM，表前缀 `ink_`） |
+| 缓存 | Redis 7+（热数据 TTL 30min） |
+| 向量存储 | Qdrant / Chroma / DashVector（可选） |
+| 文件存储 | 阿里云 OSS（HMAC-SHA256 签名） |
+| AI LLM | OpenAI / Claude / DeepSeek / 豆包 / 通义 / Ollama |
+| 图片生成 | 火山引擎即梦（volcengine） |
 | 视频生成 | Kling / Seedance |
+| TTS | 阿里云 DashScope / 百度 / MiniMax / 腾讯云 |
+| SFX | Kling SFX / AudioLDM / ElevenLabs / Freesound |
 
 ## 项目结构
 
@@ -34,18 +65,25 @@ InkFrame 后端服务 — AI 驱动的智能小说创作与视频生成平台
 inkframe-backend/
 ├── cmd/server/              # 启动入口，依赖注入 & 路由装配
 ├── internal/
-│   ├── ai/                  # AI 提供商抽象层（openai/claude/doubao/…）
+│   ├── ai/                  # AI 提供商抽象层
+│   │   ├── openai.go        # OpenAI / 兼容接口
+│   │   ├── claude.go        # Anthropic Claude
+│   │   ├── kling_provider.go     # 可灵视频/图片
+│   │   ├── kling_sfx_provider.go # 可灵文生音效
+│   │   ├── volcengine_visual.go  # 火山引擎即梦
+│   │   ├── aliyun_tts.go / baidu_tts.go / minimax_tts.go / tencent_tts.go
+│   │   └── retry_provider.go    # 指数退避重试包装
 │   ├── config/              # Viper YAML 配置
 │   ├── handler/             # Gin HTTP 处理器（一文件对应一领域）
-│   ├── middleware/          # CORS / JWT 鉴权 / 日志 / 限流 / 恢复
-│   ├── model/               # GORM 数据模型（ink_ 前缀表）
+│   ├── middleware/          # CORS / JWT / 限流 / 日志 / 恢复
+│   ├── model/               # GORM 数据模型（model.go + tenant.go）
 │   ├── repository/          # 数据访问层（含 Redis 缓存）
 │   ├── router/              # 所有路由注册
 │   ├── service/             # 业务逻辑层
-│   │   └── prompts/         # AI Prompt 模板
+│   │   └── prompts/         # AI Prompt 模板（.j2 / .tmpl）
 │   ├── vector/              # 向量存储抽象（Qdrant / Chroma）
 │   └── oss/                 # 阿里云 OSS 客户端
-├── config.example.yaml      # 配置示例
+├── config.example.yaml
 └── Makefile
 ```
 
@@ -53,40 +91,57 @@ inkframe-backend/
 
 ### 前置要求
 
-- Go 1.21+
-- MySQL 8.0+
-- Redis
+| 依赖 | 最低版本 |
+|------|----------|
+| Go | 1.21 |
+| MySQL | 8.0（utf8mb4） |
+| Redis | 7.0 |
+| Qdrant | 1.7+（可选，语义搜索） |
 
 ### 安装与运行
 
 ```bash
-# 1. 克隆项目
 git clone <repo-url>
 cd inkframe-backend
-
-# 2. 配置（填入 DB / Redis / AI Key 等）
-cp config.example.yaml config.yaml
-
-# 3. 安装依赖
+cp config.example.yaml config.yaml   # 填写 DB / Redis 连接信息
 make deps
-
-# 4. 运行
-make run
+make run                              # 启动，监听 :8080
 ```
 
-### 环境变量（AI API Key）
+验证：
 
 ```bash
-export OPENAI_API_KEY=sk-...
-export ANTHROPIC_API_KEY=sk-ant-...
-export GOOGLE_API_KEY=...
-export DOUBAO_API_KEY=...
-export DEEPSEEK_API_KEY=...
-export QIANWEN_API_KEY=...
-export KLING_API_KEY=...
-export SEEDANCE_API_KEY=...
+curl http://localhost:8080/health
+# → {"status":"ok"}
+```
+
+### 环境变量
+
+AI API Key 通过管理界面（`/api/v1/model-providers`）配置，下列变量为运行时覆盖项：
+
+```bash
+# 存储 & 向量
 export QDRANT_ENDPOINT=http://localhost:6333
 export QDRANT_API_KEY=...
+export DASHVECTOR_API_KEY=...
+
+# 素材爬取
+export UNSPLASH_ACCESS_KEY=...
+export FREESOUND_API_KEY=...
+export PIXABAY_API_KEY=...
+
+# TTS（也可通过管理界面配置）
+export KLING_API_KEY=...
+export ALIYUN_TTS_API_KEY=...
+export BAIDU_TTS_API_KEY=...
+export BAIDU_TTS_SECRET_KEY=...
+export MINIMAX_TTS_API_KEY=...
+export MINIMAX_TTS_GROUP_ID=...
+export TENCENT_TTS_SECRET_ID=...
+export TENCENT_TTS_SECRET_KEY=...
+
+# macOS Homebrew Go
+export GOROOT=/opt/homebrew/Cellar/go/1.24.4/libexec
 ```
 
 ## 常用命令
@@ -100,205 +155,82 @@ make fmt            # gofmt -s -w
 make vet            # go vet
 make lint           # golangci-lint
 make build          # 输出到 ./bin/inkframe-backend
-make build-linux    # 交叉编译 Linux 版本
-make migrate-up     # 执行数据库迁移
+make build-linux    # 交叉编译 Linux amd64
+make migrate-up     # 执行 migrations/ 下的 SQL
 make migrate-down   # 回滚迁移
 make docs           # 生成 Swagger（swag）
 ```
 
-## API 文档
+## 核心数据表
 
-> 所有受保护接口需要在 `Authorization: Bearer <token>` Header 中携带 JWT。
-
-### 健康检查
-```
-GET  /health
-```
-
-### 认证
-```
-POST /api/v1/auth/register
-POST /api/v1/auth/login
-POST /api/v1/auth/refresh
-GET  /api/v1/auth/me
-```
-
-### 小说
-```
-GET    /api/v1/novels
-POST   /api/v1/novels
-GET    /api/v1/novels/:id
-PUT    /api/v1/novels/:id
-DELETE /api/v1/novels/:id
-POST   /api/v1/novels/:id/outline           # 生成大纲
-POST   /api/v1/novels/:id/chapters/generate # AI 生成章节
-GET    /api/v1/novels/:id/foreshadows       # 伏笔列表
-POST   /api/v1/novels/:id/foreshadows/:foreshadow_id/fulfill
-GET    /api/v1/novels/:id/timeline          # 时间线
-POST   /api/v1/novels/:id/timeline/build
-GET    /api/v1/novels/:id/context
-POST   /api/v1/novels/:id/generate-video    # 从小说生成视频
-```
-
-### 章节
-```
-GET    /api/v1/novels/:novel_id/chapters
-POST   /api/v1/novels/:novel_id/chapters
-GET    /api/v1/novels/:novel_id/chapters/:chapter_no
-PUT    /api/v1/novels/:novel_id/chapters/:chapter_no
-DELETE /api/v1/novels/:novel_id/chapters/:chapter_no
-POST   /api/v1/chapters/:id/regenerate
-GET    /api/v1/chapters/:id/versions
-POST   /api/v1/chapters/:id/versions/:version_no/restore
-POST   /api/v1/chapters/:id/quality-check
-GET    /api/v1/chapters/:id/quality-report
-POST   /api/v1/chapters/:id/approve
-POST   /api/v1/chapters/:id/reject
-```
-
-### 角色
-```
-GET    /api/v1/novels/:novel_id/characters
-POST   /api/v1/novels/:novel_id/characters
-POST   /api/v1/novels/:novel_id/characters/generate
-GET    /api/v1/novels/:novel_id/character-arcs
-GET    /api/v1/novels/:novel_id/character-arcs/:character_id
-PUT    /api/v1/novels/:novel_id/character-arcs/:character_id
-GET    /api/v1/characters/:id
-PUT    /api/v1/characters/:id
-DELETE /api/v1/characters/:id
-POST   /api/v1/characters/:id/images
-POST   /api/v1/characters/:id/analyze-consistency
-```
-
-### 世界观
-```
-GET    /api/v1/worldviews
-POST   /api/v1/worldviews
-POST   /api/v1/worldviews/generate
-GET    /api/v1/worldviews/:id
-PUT    /api/v1/worldviews/:id
-DELETE /api/v1/worldviews/:id
-GET    /api/v1/worldviews/:id/entities
-POST   /api/v1/worldviews/:id/entities
-PUT    /api/v1/worldviews/:id/entities/:entity_id
-DELETE /api/v1/worldviews/:id/entities/:entity_id
-```
-
-### 视频 & 分镜
-```
-GET    /api/v1/novels/:novel_id/videos
-POST   /api/v1/novels/:novel_id/videos           # 创建视频（支持 quality_tier: draft/preview/final）
-GET    /api/v1/videos
-GET    /api/v1/videos/:id
-PUT    /api/v1/videos/:id
-DELETE /api/v1/videos/:id
-POST   /api/v1/videos/:id/storyboard/generate    # AI 生成分镜
-GET    /api/v1/videos/:id/storyboard
-PUT    /api/v1/videos/:id/storyboard/:shot_id    # 更新镜头（支持 generation_mode: static/video）
-GET    /api/v1/videos/:id/shots
-POST   /api/v1/videos/:id/shots/batch-generate   # 批量生成镜头
-POST   /api/v1/videos/:id/shots/:shot_id/generate# 单镜头生成
-POST   /api/v1/videos/:id/generate               # 启动视频生成
-GET    /api/v1/videos/:id/status
-POST   /api/v1/videos/:id/stitch                 # 合成最终视频
-POST   /api/v1/storyboard/analyze-emotions
-POST   /api/v1/video/enhance
-POST   /api/v1/consistency/score
-```
-
-### AI 模型管理
-```
-GET    /api/v1/model-providers
-POST   /api/v1/model-providers
-GET    /api/v1/model-providers/:id
-PUT    /api/v1/model-providers/:id
-DELETE /api/v1/model-providers/:id
-POST   /api/v1/model-providers/:id/test
-GET    /api/v1/models
-POST   /api/v1/models
-GET    /api/v1/models/available/:task_type
-POST   /api/v1/models/select
-PUT    /api/v1/models/:id
-DELETE /api/v1/models/:id
-POST   /api/v1/models/:id/test
-GET    /api/v1/models/:id/mcp-tools              # 获取模型绑定的 MCP 工具
-POST   /api/v1/models/:id/mcp-tools              # 绑定 MCP 工具
-DELETE /api/v1/models/:id/mcp-tools/:tool_id     # 解绑
-GET    /api/v1/task-configs/:task
-PUT    /api/v1/task-configs/:task
-```
-
-### MCP 工具（Model Context Protocol）
-```
-GET    /api/v1/mcp-tools
-POST   /api/v1/mcp-tools
-PUT    /api/v1/mcp-tools/:id
-DELETE /api/v1/mcp-tools/:id
-POST   /api/v1/mcp-tools/:id/test               # 连通性探测
-GET    /api/v1/mcp-tools/:id/models             # 获取绑定此工具的模型
-```
-
-### 导入
-```
-POST   /api/v1/import/novel
-POST   /api/v1/import/novel/file
-POST   /api/v1/import/novel/url
-POST   /api/v1/import/novel/crawl               # 支持起点/晋江/纵横
-POST   /api/v1/import/novel/video
-GET    /api/v1/import/status/:task_id
-```
-
-### 风格 & 租户
-```
-GET    /api/v1/styles/default
-POST   /api/v1/styles/prompt
-GET    /api/v1/styles/presets
-POST   /api/v1/styles/presets/:name/apply
-GET    /api/v1/tenants
-POST   /api/v1/tenants
-GET    /api/v1/tenants/:id
-...
-```
-
-## 数据模型（核心表）
-
-所有表使用 `ink_` 前缀，由 GORM AutoMigrate 在启动时自动创建/更新。
+所有表由 GORM AutoMigrate 在启动时自动创建/更新（只新增列，不删除数据）。
 
 | 表名 | 说明 |
 |------|------|
-| `ink_novel` | 小说基本信息 |
-| `ink_chapter` | 章节内容 & 版本 |
-| `ink_character` | 角色设定 |
+| `ink_novel` | 小说（含 `prompt_language`） |
+| `ink_chapter` | 章节内容 & 状态 |
+| `ink_chapter_version` | 章节版本历史 |
+| `ink_character` | 角色（`description` 统一描述字段） |
+| `ink_character_state_snapshot` | 角色跨章节状态快照 |
 | `ink_worldview` | 世界观 |
-| `ink_worldview_entity` | 世界观实体（势力/地点/物品等）|
-| `ink_video` | 视频任务（含 quality_tier）|
-| `ink_storyboard_shot` | 分镜镜头（含 generation_mode）|
+| `ink_worldview_entity` | 世界观实体 |
+| `ink_item` | 小说物品/道具 |
+| `ink_scene_anchor` | 场景锚点（视觉一致性参考） |
+| `ink_scene_consistency_log` | 场景一致性评分日志 |
+| `ink_arc_summary` | 弧线摘要（叙事记忆） |
+| `ink_video` | 视频项目（含 `pacing` / `target_duration`） |
+| `ink_storyboard_shot` | 分镜镜头 |
+| `ink_shot_voice_segment` | 分镜多段配音 |
+| `ink_review_record` | AI 审查记录（`entity_type`: chapter/storyboard） |
+| `ink_ignored_review_issue` | 忽略的审查问题 |
+| `ink_async_task` | 异步任务（pending→running→completed/failed） |
+| `ink_model_provider` | AI 提供商 |
 | `ink_ai_model` | AI 模型配置 |
-| `ink_model_provider` | 模型提供商 |
+| `ink_task_model_config` | 任务级模型分配 |
 | `ink_mcp_tool` | MCP 工具注册 |
-| `ink_model_mcp_binding` | 模型-工具绑定关系 |
+| `ink_asset` | 素材库 |
 | `ink_tenant` | 租户 |
 | `ink_user` | 用户 |
 
+## 架构说明
+
+### 依赖注入
+
+所有依赖在 `cmd/server/main.go` 的 `initServices()` 中完成装配，服务间通过 functional option（`WithXxx()`）注入可选依赖：
+
+```go
+chapterSvc.WithNarrativeMemory(narrativeMemSvc)
+videoSvc.WithSegmentRepo(segmentRepo).WithReviewRecordRepo(reviewRepo)
+```
+
+### 异步任务
+
+耗时操作以异步任务形式执行，持久化在 `ink_async_task`，重启后自动恢复 running 状态的任务。
+
+### 叙事记忆
+
+`NarrativeMemoryService.BuildHierarchicalContext()` 构建四层上下文：
+全局摘要 → 弧线摘要（每 10 章） → 近期详细（最近 2 章） → 近期摘要（前 8 章 ≤40 字）
+
 ## 开发指南
 
-### 添加新 API
+### 添加新功能
 
-1. 在 `internal/model/` 中定义数据模型
-2. 在 `internal/repository/` 中实现数据访问
-3. 在 `internal/service/` 中实现业务逻辑
-4. 在 `internal/handler/` 中创建处理器
-5. 在 `internal/router/router.go` 中注册路由
-6. 在 `cmd/server/main.go` 中完成依赖注入
+1. `internal/model/` — 定义 GORM 模型
+2. `internal/repository/` — 实现数据访问
+3. `internal/service/` — 实现业务逻辑（Prompt 模板放 `prompts/`）
+4. `internal/handler/` — 创建 Gin 处理器
+5. `internal/router/router.go` — 注册路由
+6. `cmd/server/main.go` — 完成依赖注入 & AutoMigrate 注册
 
 ### 测试
 
 ```bash
 make test
-# 运行单个测试
 go test -v ./internal/service/... -run TestTemplateName
 ```
+
+详细 API 文档见 [`docs/USER_MANUAL.md`](docs/USER_MANUAL.md)。
 
 ## 许可证
 
@@ -306,4 +238,4 @@ MIT License — 详见 LICENSE 文件
 
 ---
 
-**InkFrame** — 让每个人都能创作属于自己的故事
+**简影 (InkFrame)** — 让每个人都能创作属于自己的故事

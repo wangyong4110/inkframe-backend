@@ -205,6 +205,14 @@ func (h *RewriteHandler) ListChapterTasks(c *gin.Context) {
 
 // GetChapterTask GET /rewrite/projects/:id/chapters/:task_id
 func (h *RewriteHandler) GetChapterTask(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		respondBadRequest(c, "invalid id")
+		return
+	}
+	if _, ok := h.getProjectForTenant(c, uint(id)); !ok {
+		return
+	}
 	taskID, _ := strconv.ParseUint(c.Param("task_id"), 10, 64)
 	task, err := h.rewriteSvc.GetChapterTask(uint(taskID))
 	if err != nil {
@@ -216,12 +224,38 @@ func (h *RewriteHandler) GetChapterTask(c *gin.Context) {
 
 // ApproveChapter POST /rewrite/projects/:id/chapters/:task_id/approve
 func (h *RewriteHandler) ApproveChapter(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		respondBadRequest(c, "invalid id")
+		return
+	}
+	if _, ok := h.getProjectForTenant(c, uint(id)); !ok {
+		return
+	}
 	taskID, _ := strconv.ParseUint(c.Param("task_id"), 10, 64)
 	if err := h.rewriteSvc.ApproveChapter(uint(taskID)); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 	respondOK(c, gin.H{"message": "approved"})
+}
+
+// GetComplianceReport GET /rewrite/projects/:id/compliance-report
+func (h *RewriteHandler) GetComplianceReport(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		respondBadRequest(c, "invalid id")
+		return
+	}
+	if _, ok := h.getProjectForTenant(c, uint(id)); !ok {
+		return
+	}
+	report, err := h.rewriteSvc.GetComplianceReport(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, report)
 }
 
 // UpdateBible PUT /rewrite/projects/:id/bible

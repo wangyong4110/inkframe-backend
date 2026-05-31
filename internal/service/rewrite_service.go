@@ -41,11 +41,12 @@ type rewriteLevelConfig struct {
 
 // rewriteAttempt holds the result of a single AI generation attempt.
 type rewriteAttempt struct {
-	Content    string
-	LexSim     float64
-	StructSim  float64
-	Passed     bool // within [TargetLexSimLow, TargetLexSimHigh]
-	TooSimilar bool // lexSim > TargetLexSimHigh → 改写不足, should retry
+	Content     string
+	LexSim      float64
+	StructSim   float64
+	SemanticSim float64 // entity leakage rate: original entities still present in rewrite
+	Passed      bool    // within [TargetLexSimLow, TargetLexSimHigh]
+	TooSimilar  bool    // lexSim > TargetLexSimHigh → 改写不足, should retry
 }
 
 // ForbiddenDialogue represents a signature dialogue pattern that must be completely rewritten.
@@ -1185,7 +1186,7 @@ func (s *RewriteService) rewriteChapterWithRetry(
 		}
 
 		// Accept: promote AttemptContent → RewrittenContent
-		if err := s.chapterTaskRepo.AcceptAttempt(task.ID, att.LexSim, att.StructSim, att.Passed); err != nil {
+		if err := s.chapterTaskRepo.AcceptAttempt(task.ID, att.LexSim, att.StructSim, att.SemanticSim, att.Passed); err != nil {
 			return nil, err
 		}
 		return att, nil
@@ -1195,7 +1196,7 @@ func (s *RewriteService) rewriteChapterWithRetry(
 	if lastAttempt != nil {
 		// Degraded accept: last attempt had content but failed quality gate
 		logger.Printf("[Rewrite] chapter %d exhausted retries, accepting degraded result (passed=%v)", task.ChapterNo, lastAttempt.Passed)
-		if err := s.chapterTaskRepo.AcceptAttempt(task.ID, lastAttempt.LexSim, lastAttempt.StructSim, false); err != nil {
+		if err := s.chapterTaskRepo.AcceptAttempt(task.ID, lastAttempt.LexSim, lastAttempt.StructSim, lastAttempt.SemanticSim, false); err != nil {
 			logger.Printf("[Rewrite] AcceptAttempt (degraded) ch%d: %v", task.ChapterNo, err)
 		}
 		return lastAttempt, nil
@@ -1264,16 +1265,37 @@ func (s *RewriteService) rewriteChapter(
 
 	lexSim := calculateLexicalSimilarity(task.OriginalContent, rewritten)
 	structSim := calculateStructuralSimilarity(task.OriginalContent, rewritten)
+	semanticSim := s.calculateSemanticLeakage(rewritten, project.ID)
 	passed := lexSim >= cfg.TargetLexSimLow && lexSim <= cfg.TargetLexSimHigh
 	tooSimilar := lexSim > cfg.TargetLexSimHigh
 
 	return &rewriteAttempt{
-		Content:    rewritten,
-		LexSim:     lexSim,
-		StructSim:  structSim,
-		Passed:     passed,
-		TooSimilar: tooSimilar,
+		Content:     rewritten,
+		LexSim:      lexSim,
+		StructSim:   structSim,
+		SemanticSim: semanticSim,
+		Passed:      passed,
+		TooSimilar:  tooSimilar,
 	}, nil
+}
+
+// calculateSemanticLeakage measures how many original entity names still appear
+// in the rewritten text. Returns a ratio 0.0–1.0 (lower = fewer original entities leaked).
+func (s *RewriteService) calculateSemanticLeakage(rewritten string, projectID uint) float64 {
+	if s.continuityRepo == nil {
+		return 0
+	}
+	entries, err := s.continuityRepo.GetByProject(projectID)
+	if err != nil || len(entries) == 0 {
+		return 0
+	}
+	leaked := 0
+	for _, e := range entries {
+		if e.EntityKey != "" && strings.Contains(rewritten, e.EntityKey) {
+			leaked++
+		}
+	}
+	return float64(leaked) / float64(len(entries))
 }
 
 // generateChapterSummaryAsync calls AI to produce a semantic summary after each accepted chapter.
@@ -1451,4 +1473,115 @@ func (s *RewriteService) GetChapterTask(taskID uint) (*model.ChapterRewriteTask,
 
 func (s *RewriteService) ApproveChapter(taskID uint) error {
 	return s.chapterTaskRepo.UpdateStatus(taskID, "completed", "")
+}
+
+// ── Compliance Report ─────────────────────────────────────────────────────────
+
+// ChapterComplianceItem is one row in the compliance report.
+type ChapterComplianceItem struct {
+	ChapterNo    int     `json:"chapter_no"`
+	Passed       bool    `json:"passed"`
+	LexicalSim   float64 `json:"lexical_sim"`
+	StructuralSim float64 `json:"structural_sim"`
+	SemanticSim  float64 `json:"semantic_sim"`
+	QualityScore float64 `json:"quality_score"`
+	Rating       string  `json:"rating"` // "green" | "yellow" | "red"
+}
+
+// ComplianceReport aggregates similarity and quality metrics across all chapters.
+type ComplianceReport struct {
+	ProjectID       uint                    `json:"project_id"`
+	Level           int                     `json:"level"`
+	TotalChapters   int                     `json:"total_chapters"`
+	DoneChapters    int                     `json:"done_chapters"`
+	PassedChapters  int                     `json:"passed_chapters"`
+	AvgLexicalSim   float64                 `json:"avg_lexical_sim"`
+	AvgStructuralSim float64                `json:"avg_structural_sim"`
+	AvgSemanticSim  float64                 `json:"avg_semantic_sim"`
+	AvgQualityScore float64                 `json:"avg_quality_score"`
+	OverallRating   string                  `json:"overall_rating"`
+	Chapters        []ChapterComplianceItem `json:"chapters"`
+}
+
+func chapterComplianceRating(passed bool, lexSim float64) string {
+	if passed && lexSim < 0.20 {
+		return "green"
+	}
+	if lexSim >= 0.35 || !passed {
+		return "red"
+	}
+	return "yellow"
+}
+
+// GetComplianceReport computes a compliance report from completed chapter tasks.
+func (s *RewriteService) GetComplianceReport(projectID uint) (*ComplianceReport, error) {
+	project, err := s.projectRepo.GetByID(projectID)
+	if err != nil {
+		return nil, err
+	}
+	tasks, err := s.chapterTaskRepo.ListByProject(projectID)
+	if err != nil {
+		return nil, err
+	}
+
+	report := &ComplianceReport{
+		ProjectID:     projectID,
+		Level:         project.Level,
+		TotalChapters: project.TotalChapters,
+		Chapters:      make([]ChapterComplianceItem, 0, len(tasks)),
+	}
+
+	var sumLex, sumStruct, sumSemantic, sumQuality float64
+	done := 0
+	passed := 0
+
+	for _, t := range tasks {
+		if t.Status != "completed" {
+			continue
+		}
+		done++
+		if t.Passed {
+			passed++
+		}
+		sumLex += t.LexicalSim
+		sumStruct += t.StructuralSim
+		sumSemantic += t.SemanticSim
+		sumQuality += t.QualityScore
+
+		rating := chapterComplianceRating(t.Passed, t.LexicalSim)
+		report.Chapters = append(report.Chapters, ChapterComplianceItem{
+			ChapterNo:     t.ChapterNo,
+			Passed:        t.Passed,
+			LexicalSim:    t.LexicalSim,
+			StructuralSim: t.StructuralSim,
+			SemanticSim:   t.SemanticSim,
+			QualityScore:  t.QualityScore,
+			Rating:        rating,
+		})
+	}
+
+	report.DoneChapters = done
+	report.PassedChapters = passed
+
+	if done > 0 {
+		report.AvgLexicalSim = math.Round(sumLex/float64(done)*1000) / 1000
+		report.AvgStructuralSim = math.Round(sumStruct/float64(done)*1000) / 1000
+		report.AvgSemanticSim = math.Round(sumSemantic/float64(done)*1000) / 1000
+		report.AvgQualityScore = math.Round(sumQuality/float64(done)*10) / 10
+	}
+
+	passRate := 0.0
+	if done > 0 {
+		passRate = float64(passed) / float64(done)
+	}
+	switch {
+	case passRate >= 0.8 && report.AvgLexicalSim < 0.20:
+		report.OverallRating = "green"
+	case passRate < 0.6 || report.AvgLexicalSim >= 0.35:
+		report.OverallRating = "red"
+	default:
+		report.OverallRating = "yellow"
+	}
+
+	return report, nil
 }

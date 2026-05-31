@@ -696,6 +696,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				rewrite.GET("/projects/:id/chapters/:task_id", cfg.RewriteHandler.GetChapterTask)
 				rewrite.POST("/projects/:id/chapters/:task_id/approve", cfg.RewriteHandler.ApproveChapter)
 				rewrite.PUT("/projects/:id/bible", cfg.RewriteHandler.UpdateBible)
+				rewrite.GET("/projects/:id/compliance-report", cfg.RewriteHandler.GetComplianceReport)
 			}
 		}
 	}

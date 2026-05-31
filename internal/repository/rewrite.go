@@ -178,14 +178,14 @@ func (r *ChapterRewriteTaskRepository) SaveAttempt(id uint, content string) erro
 
 // AcceptAttempt promotes AttemptContent → RewrittenContent and marks the task completed.
 // Also records similarity scores. Call only when the attempt passes quality gates.
-func (r *ChapterRewriteTaskRepository) AcceptAttempt(id uint, lexSim, structSim float64, passed bool) error {
+func (r *ChapterRewriteTaskRepository) AcceptAttempt(id uint, lexSim, structSim, semanticSim float64, passed bool) error {
 	combined := (lexSim + structSim) / 2
 
-	// Copy attempt_content into rewritten_content in a single UPDATE
 	return r.db.Model(&model.ChapterRewriteTask{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"rewritten_content": gorm.Expr("attempt_content"),
 		"lexical_sim":       lexSim,
 		"structural_sim":    structSim,
+		"semantic_sim":      semanticSim,
 		"similarity_score":  combined,
 		"passed":            passed,
 		"status":            "completed",
