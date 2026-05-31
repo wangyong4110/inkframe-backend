@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 	"time"
 
@@ -160,21 +159,6 @@ func main() {
 
 	// 11. 初始化处理器
 	handlers := initHandlers(services, storageSvc, db, repos, cfg)
-
-	// 11a. 种子并发度设置 + 注册运行时变更回调
-	seedConcurrencySettings(repos.SystemSettingRepo, services.AIService, services.VideoService)
-	handlers.SystemHandler.RegisterOnChange("image_concurrency", func(v string) {
-		if n, err := strconv.Atoi(v); err == nil {
-			services.AIService.SetImageConcurrency(n)
-			logger.Printf("image_concurrency updated to %d", n)
-		}
-	})
-	handlers.SystemHandler.RegisterOnChange("video_concurrency", func(v string) {
-		if n, err := strconv.Atoi(v); err == nil {
-			services.VideoService.SetVideoConcurrency(n)
-			logger.Printf("video_concurrency updated to %d", n)
-		}
-	})
 
 	// 11b. 设置Gin模式（必须在 SetupRouter 之前）
 	if cfg.Server.Mode == "release" {

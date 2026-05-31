@@ -514,6 +514,11 @@ func (h *ImportHandler) UploadChunk(c *gin.Context) {
 	}
 	sess := v.(*chunkSession)
 
+	if chunkNo > sess.TotalChunks {
+		respondBadRequest(c, fmt.Sprintf("chunk_no %d exceeds total_chunks %d", chunkNo, sess.TotalChunks))
+		return
+	}
+
 	f, _, err := c.Request.FormFile("chunk")
 	if err != nil {
 		respondBadRequest(c, "chunk file required")

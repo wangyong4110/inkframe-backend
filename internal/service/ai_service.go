@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/ai"
+	"github.com/inkframe/inkframe-backend/internal/crypto"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -33,6 +34,7 @@ type AIService struct {
 	imageSem      chan struct{} // nil = unlimited; set via WithImageConcurrency
 	semMu         sync.RWMutex  // protects imageSem replacement
 	stopCh        chan struct{} // closed by Shutdown() to stop background goroutines
+	encKey        string       // AES-256-GCM key for decrypting stored API credentials
 }
 
 func NewAIService(
@@ -51,7 +53,14 @@ func NewAIService(
 		svc.providerRepo = providerRepo[0]
 	}
 	svc.startProviderCacheCleanup()
+	svc.startProviderHealthCheck()
 	return svc
+}
+
+// WithEncryptionKey sets the AES-256-GCM key used to decrypt API credentials stored in the DB.
+func (s *AIService) WithEncryptionKey(key string) *AIService {
+	s.encKey = key
+	return s
 }
 
 // Shutdown stops background goroutines (call on server exit).
@@ -84,6 +93,54 @@ func (s *AIService) startProviderCacheCleanup() {
 			}
 		}
 	}()
+}
+
+// startProviderHealthCheck 每 5 分钟对所有已激活 provider 做一次健康探测，更新 health_check 字段。
+func (s *AIService) startProviderHealthCheck() {
+	ticker := time.NewTicker(5 * time.Minute)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				s.runProviderHealthChecks()
+			case <-s.stopCh:
+				return
+			}
+		}
+	}()
+}
+
+// runProviderHealthChecks iterates active providers and updates their health status.
+func (s *AIService) runProviderHealthChecks() {
+	if s.providerRepo == nil {
+		return
+	}
+	providers, err := s.providerRepo.List()
+	if err != nil {
+		return
+	}
+	for _, p := range providers {
+		if !p.IsActive || !providerHasCredentials(p) {
+			continue
+		}
+		p := p
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			provider, err := s.getTenantProvider(p.TenantID, p.Name)
+			status := "ok"
+			if err != nil {
+				status = "down"
+			} else if hErr := provider.HealthCheck(ctx); hErr != nil {
+				status = "degraded"
+				logger.Printf("[health] provider=%s err=%v", p.Name, hErr)
+			}
+			if upErr := s.providerRepo.UpdateHealthStatus(p.ID, status); upErr != nil {
+				logger.Printf("[health] UpdateHealthStatus provider=%s: %v", p.Name, upErr)
+			}
+		}()
+	}
 }
 
 // WithNovelRepo 注入小说仓库，用于在生成时读取小说级 AI 配置
@@ -226,41 +283,53 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		return s.aiManager.GetProvider(providerName)
 	}
 
+	// Decrypt stored credentials (AES-GCM; plaintext values pass through unchanged).
+	apiKey, err := crypto.Decrypt(matched.APIKey, s.encKey)
+	if err != nil {
+		logger.Printf("getTenantProvider: decrypt APIKey for %q failed: %v", matched.Name, err)
+		return nil, fmt.Errorf("failed to decrypt API key for provider %q", matched.Name)
+	}
+	apiSecretKey, err := crypto.Decrypt(matched.APISecretKey, s.encKey)
+	if err != nil {
+		logger.Printf("getTenantProvider: decrypt APISecretKey for %q failed: %v", matched.Name, err)
+		return nil, fmt.Errorf("failed to decrypt API secret key for provider %q", matched.Name)
+	}
+
 	// Instantiate the provider.
 	// 名称优先匹配已知 key；对自定义名称（如"豆包图片"）则根据 endpoint 推断构造器。
 	timeout := ai.ResolveTimeout(matched.Timeout)
 	var provider ai.AIProvider
 	switch matched.Name {
 	case ai.ProviderNameVolcengineVisual:
-		provider = ai.NewVolcengineVisualProvider(matched.APIKey, matched.APISecretKey)
+		provider = ai.NewVolcengineVisualProvider(apiKey, apiSecretKey)
 	case "kling-sfx":
-		provider = ai.NewKlingSFXProvider(matched.APIKey, matched.APISecretKey, matched.APIEndpoint)
+		provider = ai.NewKlingSFXProvider(apiKey, apiSecretKey, matched.APIEndpoint)
 	case "kling-tts":
-		provider = ai.NewKlingTTSProvider(matched.APIKey, matched.APISecretKey, matched.APIEndpoint)
+		provider = ai.NewKlingTTSProvider(apiKey, apiSecretKey, matched.APIEndpoint)
 	case "kling-image":
-		provider = ai.NewKlingImageProvider(matched.APIKey, matched.APISecretKey, matched.APIEndpoint)
+		provider = ai.NewKlingImageProvider(apiKey, apiSecretKey, matched.APIEndpoint)
 	case "elevenlabs-sfx":
-		provider = ai.NewElevenLabsSFXProvider(matched.APIKey, matched.APIEndpoint)
+		provider = ai.NewElevenLabsSFXProvider(apiKey, matched.APIEndpoint)
 	case "openai":
-		provider = ai.NewOpenAIProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
+		provider = ai.NewOpenAIProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "anthropic":
-		provider = ai.NewAnthropicProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
+		provider = ai.NewAnthropicProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "google":
-		provider = ai.NewGoogleProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
+		provider = ai.NewGoogleProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "doubao":
-		provider = ai.NewDoubaoProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
+		provider = ai.NewDoubaoProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "doubao-speech":
 		// APIKey = X-Api-Key, APIVersion = resourceID（如 "seed-tts-2.0"）
-		provider = ai.NewDoubaoSpeechProvider(matched.APIKey, matched.APIVersion)
+		provider = ai.NewDoubaoSpeechProvider(apiKey, matched.APIVersion)
 	case "doubao-speech-v1":
 		// APIKey = appID, APISecretKey = access_token, APIVersion = cluster（默认 volcano_tts）
-		provider = ai.NewDoubaoSpeechV1Provider(matched.APIKey, matched.APISecretKey, matched.APIVersion)
+		provider = ai.NewDoubaoSpeechV1Provider(apiKey, apiSecretKey, matched.APIVersion)
 	case "deepseek":
-		provider = ai.NewDeepSeekProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
+		provider = ai.NewDeepSeekProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "qianwen":
-		provider = ai.NewQianwenProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
+		provider = ai.NewQianwenProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "azure":
-		provider = ai.NewAzureProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, "", timeout)
+		provider = ai.NewAzureProvider(apiKey, matched.APIEndpoint, matched.APIVersion, "", timeout)
 	default:
 		// 自定义名称：按 endpoint + type 推断底层 API 格式
 		ep := strings.ToLower(matched.APIEndpoint)
@@ -271,13 +340,13 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 			switch provType {
 			case "sfx":
 				logger.Printf("getTenantProvider: provider %q mapped to KlingSFXProvider via endpoint+type", matched.Name)
-				provider = ai.NewKlingSFXProvider(matched.APIKey, matched.APISecretKey, matched.APIEndpoint)
+				provider = ai.NewKlingSFXProvider(apiKey, apiSecretKey, matched.APIEndpoint)
 			case "voice", "tts":
 				logger.Printf("getTenantProvider: provider %q mapped to KlingTTSProvider via endpoint+type", matched.Name)
-				provider = ai.NewKlingTTSProvider(matched.APIKey, matched.APISecretKey, matched.APIEndpoint)
+				provider = ai.NewKlingTTSProvider(apiKey, apiSecretKey, matched.APIEndpoint)
 			case "image":
 				logger.Printf("getTenantProvider: provider %q mapped to KlingImageProvider via endpoint+type", matched.Name)
-				provider = ai.NewKlingImageProvider(matched.APIKey, matched.APISecretKey, matched.APIEndpoint)
+				provider = ai.NewKlingImageProvider(apiKey, apiSecretKey, matched.APIEndpoint)
 			case "video":
 				// video 类型由 GetTenantVideoProvider 处理，AIProvider 路径不支持
 				logger.Printf("getTenantProvider: provider %q type=video — use GetTenantVideoProvider instead", matched.Name)
@@ -289,17 +358,17 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		case strings.Contains(ep, "volces.com") || strings.Contains(ep, "volcengine"):
 			// 火山方舟 / 豆包系列（OpenAI 兼容格式）
 			logger.Printf("getTenantProvider: provider %q mapped to doubao constructor via endpoint", matched.Name)
-			provider = ai.NewDoubaoProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
+			provider = ai.NewDoubaoProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
 		case strings.Contains(ep, "azure.com") || strings.Contains(ep, "openai.azure"):
 			logger.Printf("getTenantProvider: provider %q mapped to azure constructor via endpoint", matched.Name)
-			provider = ai.NewAzureProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, "", timeout)
+			provider = ai.NewAzureProvider(apiKey, matched.APIEndpoint, matched.APIVersion, "", timeout)
 		case strings.Contains(ep, "anthropic.com"):
 			logger.Printf("getTenantProvider: provider %q mapped to anthropic constructor via endpoint", matched.Name)
-			provider = ai.NewAnthropicProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
+			provider = ai.NewAnthropicProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
 		case matched.APIEndpoint != "":
 			// 有自定义 endpoint → 按 OpenAI 兼容格式通用处理
 			logger.Printf("getTenantProvider: provider %q using OpenAI-compatible constructor for endpoint %s", matched.Name, matched.APIEndpoint)
-			provider = ai.NewOpenAIProvider(matched.APIKey, matched.APIEndpoint, matched.APIVersion, timeout)
+			provider = ai.NewOpenAIProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
 		default:
 			logger.Printf("getTenantProvider: unrecognized provider %q with no endpoint — falling back to static aiManager", matched.Name)
 			return s.aiManager.GetProvider(providerName)
@@ -312,6 +381,11 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 	// 并发限制（Concurrency > 0 时限制同时调用数，防止触发提供商 429）
 	if matched.Concurrency > 0 {
 		provider = ai.NewConcurrentProvider(provider, matched.Concurrency)
+	}
+
+	// 速率限制（RateLimit > 0 时按请求/分钟令牌桶限速）
+	if matched.RateLimit > 0 {
+		provider = ai.NewRateLimitProvider(provider, matched.RateLimit)
 	}
 
 	// 写入缓存
@@ -405,6 +479,32 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 		}
 	}
 
+	// Task#6: 若 TaskModelConfig 显式绑定了 provider，优先使用它（消除同名模型歧义）
+	if providerName == "" && config.PrimaryProviderID > 0 && s.providerRepo != nil {
+		if p, err := s.providerRepo.GetByID(config.PrimaryProviderID); err == nil && p != nil {
+			providerName = p.Name
+		}
+	}
+
+	// Task#4: 若仍未确定 model/provider，按 strategy 从候选模型中自动选择
+	if resolvedModel == "" && providerName == "" && config.Strategy != "" && s.modelRepo != nil {
+		if candidates, err := s.modelRepo.GetAvailableByTaskType(taskType); err == nil && len(candidates) > 0 {
+			var selected *model.AIModel
+			switch config.Strategy {
+			case "quality_first":
+				selected = selectByQuality(candidates)
+			case "cost_first":
+				selected = selectByCost(candidates)
+			default: // "balanced" or unrecognised
+				selected = selectBalanced(candidates)
+			}
+			if selected != nil && selected.Provider != nil {
+				resolvedModel = selected.Name
+				providerName = selected.Provider.Name
+			}
+		}
+	}
+
 	// 注入 system prompt：章节写作类阻止元注释；JSON 输出类抑制推理模型的思考过程
 	sysPmt := ""
 	if chapterTaskTypes[taskType] {
@@ -414,13 +514,12 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 	}
 
 	// 调用真实AI API
-	result, err := s.callAIWithProviderSys(context.Background(), tenantID, prompt, sysPmt, &config, providerName, resolvedModel)
+	callStart := time.Now()
+	result, resp, err := s.callAIWithProviderSys(context.Background(), tenantID, prompt, sysPmt, &config, providerName, resolvedModel)
 	if err != nil {
 		return "", fmt.Errorf("AI generation failed: %w", err)
 	}
-
-	// 记录使用
-	s.logUsage(&config, prompt, result)
+	s.logUsage(&config, taskType, resp, time.Since(callStart).Milliseconds())
 
 	return result, nil
 }
@@ -484,6 +583,32 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 		config.MaxTokens = 16384
 	}
 
+	// Task#6: 显式绑定的 provider 优先于自动选择
+	if providerName == "" && config.PrimaryProviderID > 0 && s.providerRepo != nil {
+		if p, err := s.providerRepo.GetByID(config.PrimaryProviderID); err == nil && p != nil {
+			providerName = p.Name
+		}
+	}
+
+	// Task#4: strategy-based 自动选模
+	if resolvedModel == "" && providerName == "" && config.Strategy != "" && s.modelRepo != nil {
+		if candidates, err := s.modelRepo.GetAvailableByTaskType(taskType); err == nil && len(candidates) > 0 {
+			var selected *model.AIModel
+			switch config.Strategy {
+			case "quality_first":
+				selected = selectByQuality(candidates)
+			case "cost_first":
+				selected = selectByCost(candidates)
+			default:
+				selected = selectBalanced(candidates)
+			}
+			if selected != nil && selected.Provider != nil {
+				resolvedModel = selected.Name
+				providerName = selected.Provider.Name
+			}
+		}
+	}
+
 	sysPmt := ""
 	if chapterTaskTypes[taskType] {
 		sysPmt = novelWritingSystemPrompt
@@ -491,11 +616,12 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 		sysPmt = jsonOnlySystemPrompt
 	}
 
-	result, err := s.callAIWithProviderSys(ctx, tenantID, prompt, sysPmt, &config, providerName, resolvedModel)
+	ctxStart := time.Now()
+	result, resp, err := s.callAIWithProviderSys(ctx, tenantID, prompt, sysPmt, &config, providerName, resolvedModel)
 	if err != nil {
 		return "", fmt.Errorf("AI generation failed: %w", err)
 	}
-	s.logUsage(&config, prompt, result)
+	s.logUsage(&config, taskType, resp, time.Since(ctxStart).Milliseconds())
 	return result, nil
 }
 
@@ -619,18 +745,19 @@ var jsonOnlyTaskTypes = map[string]bool{
 }
 
 func (s *AIService) callAIWithProvider(parentCtx context.Context, tenantID uint, prompt string, config *model.TaskModelConfig, providerName string, modelOverride ...string) (string, error) {
-	return s.callAIWithProviderSys(parentCtx, tenantID, prompt, "", config, providerName, modelOverride...)
+	content, _, err := s.callAIWithProviderSys(parentCtx, tenantID, prompt, "", config, providerName, modelOverride...)
+	return content, err
 }
 
-func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID uint, prompt string, systemPrompt string, config *model.TaskModelConfig, providerName string, modelOverride ...string) (string, error) {
+func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID uint, prompt string, systemPrompt string, config *model.TaskModelConfig, providerName string, modelOverride ...string) (string, *ai.GenerateResponse, error) {
 	if s.aiManager == nil {
-		return "", fmt.Errorf("AI manager not initialized")
+		return "", nil, fmt.Errorf("AI manager not initialized")
 	}
 
 	provider, err := s.getTenantProvider(tenantID, providerName)
 	if err != nil {
 		logger.Printf("callAIWithProvider: getTenantProvider failed (tenant=%d, provider=%q): %v", tenantID, providerName, err)
-		return "", fmt.Errorf("failed to get AI provider: %w", err)
+		return "", nil, fmt.Errorf("failed to get AI provider: %w", err)
 	}
 
 	req := &ai.GenerateRequest{
@@ -647,7 +774,6 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 	if provider.GetName() != "anthropic" {
 		req.TopK = config.TopK
 	}
-	// MaxTokens == 0 时不设限，由各 provider 实现决定是否传给 API（doubao/qianwen 已做 >0 判断）
 
 	// 超时：优先使用 config.TimeoutSeconds（由调用方注入），否则默认 5 分钟。
 	timeoutDur := 5 * time.Minute
@@ -660,18 +786,58 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 	logger.Printf("[AI] provider=%s maxTokens=%d temperature=%.2f calling...", provider.GetName(), req.MaxTokens, req.Temperature)
 	callStart := time.Now()
 	resp, err := provider.Generate(ctx, req)
-	elapsed := time.Since(callStart).Round(time.Millisecond)
+	elapsed := time.Since(callStart)
 	if err != nil {
-		logger.Printf("[AI] provider=%s elapsed=%s err=%v", provider.GetName(), elapsed, err)
-		return "", err
+		logger.Printf("[AI] provider=%s elapsed=%s err=%v", provider.GetName(), elapsed.Round(time.Millisecond), err)
+		// Fallback chain: try models listed in config.FallbackModelIDs
+		if fbContent, fbResp, fbErr := s.tryFallbackModels(ctx, tenantID, req, config, elapsed); fbErr == nil {
+			return fbContent, fbResp, nil
+		}
+		return "", nil, err
 	}
 	if resp.Error != "" {
-		logger.Printf("[AI] provider=%s elapsed=%s providerErr=%s", provider.GetName(), elapsed, resp.Error)
-		return "", fmt.Errorf("provider error: %s", resp.Error)
+		logger.Printf("[AI] provider=%s elapsed=%s providerErr=%s", provider.GetName(), elapsed.Round(time.Millisecond), resp.Error)
+		return "", nil, fmt.Errorf("provider error: %s", resp.Error)
 	}
-	logger.Printf("[AI] provider=%s elapsed=%s maxTokens=%d respLen=%d stopReason=%q", provider.GetName(), elapsed, req.MaxTokens, len(resp.Content), resp.StopReason)
+	resp.FinishTime = elapsed.Milliseconds()
+	logger.Printf("[AI] provider=%s elapsed=%s maxTokens=%d respLen=%d in=%d out=%d stopReason=%q",
+		provider.GetName(), elapsed.Round(time.Millisecond), req.MaxTokens, len(resp.Content),
+		resp.InputTokens, resp.Tokens, resp.StopReason)
 
-	return resp.Content, nil
+	return resp.Content, resp, nil
+}
+
+// tryFallbackModels iterates config.FallbackModelIDs and attempts generation on each.
+func (s *AIService) tryFallbackModels(ctx context.Context, tenantID uint, origReq *ai.GenerateRequest, config *model.TaskModelConfig, _ time.Duration) (string, *ai.GenerateResponse, error) {
+	if config.FallbackModelIDs == "" || s.modelRepo == nil {
+		return "", nil, fmt.Errorf("no fallback")
+	}
+	var ids []uint
+	if err := json.Unmarshal([]byte(config.FallbackModelIDs), &ids); err != nil || len(ids) == 0 {
+		return "", nil, fmt.Errorf("no fallback")
+	}
+	for _, id := range ids {
+		m, err := s.modelRepo.GetByID(id)
+		if err != nil || m == nil || m.Provider == nil {
+			continue
+		}
+		fbProvider, err := s.getTenantProvider(tenantID, m.Provider.Name)
+		if err != nil {
+			continue
+		}
+		fbReq := *origReq
+		fbReq.Model = m.Name
+		start := time.Now()
+		fbResp, err := fbProvider.Generate(ctx, &fbReq)
+		elapsed := time.Since(start)
+		if err == nil && fbResp.Error == "" {
+			fbResp.FinishTime = elapsed.Milliseconds()
+			logger.Printf("[AI fallback] provider=%s model=%s elapsed=%s", m.Provider.Name, m.Name, elapsed.Round(time.Millisecond))
+			return fbResp.Content, fbResp, nil
+		}
+		logger.Printf("[AI fallback] provider=%s model=%s err=%v", m.Provider.Name, m.Name, err)
+	}
+	return "", nil, fmt.Errorf("all fallbacks exhausted")
 }
 
 // generateJSONForTenant 带 tenantID 的 JSON 生成重试（最多重试 maxRetries 次）
@@ -732,26 +898,26 @@ func (s *AIService) generateWithRetry(novelID uint, taskType, prompt string, max
 	return "", fmt.Errorf("generateWithRetry failed after %d attempts: %w", maxRetries+1, lastErr)
 }
 
-// logUsage 记录使用
-func (s *AIService) logUsage(config *model.TaskModelConfig, prompt, result string) {
-	if s.modelRepo == nil {
+// logUsage asynchronously records a ModelUsageLog entry using real token counts and latency.
+func (s *AIService) logUsage(config *model.TaskModelConfig, taskType string, resp *ai.GenerateResponse, latencyMs int64) {
+	if s.modelRepo == nil || resp == nil {
 		return
 	}
-	inputTokens := countChineseChars(prompt)
-	outputTokens := countChineseChars(result)
-
-	log := &model.ModelUsageLog{
+	entry := &model.ModelUsageLog{
 		ModelID:      config.PrimaryModelID,
-		TaskType:     "generation",
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		TotalTokens:  inputTokens + outputTokens,
-		Cost:         float64(inputTokens+outputTokens) / 1000 * 0.01,
-		Latency:      1.5,
+		TaskType:     taskType,
+		InputTokens:  resp.InputTokens,
+		OutputTokens: resp.Tokens,
+		TotalTokens:  resp.InputTokens + resp.Tokens,
+		Cost:         float64(resp.InputTokens+resp.Tokens) / 1000 * config.MaxCostPerTask,
+		Latency:      float64(latencyMs) / 1000,
 		Success:      true,
 	}
-
-	s.modelRepo.LogUsage(log)
+	if entry.Cost == 0 {
+		// fallback: estimate 0.002 USD per 1K tokens when MaxCostPerTask is not set
+		entry.Cost = float64(entry.TotalTokens) / 1000 * 0.002
+	}
+	go s.modelRepo.LogUsage(entry) //nolint:errcheck
 }
 
 // GenerateImage 调用AI生成图像

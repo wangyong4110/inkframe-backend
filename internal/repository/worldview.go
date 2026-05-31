@@ -95,6 +95,11 @@ func (r *WorldviewRepository) DeleteEntity(id uint) error {
 	return r.db.Delete(&model.WorldviewEntity{}, id).Error
 }
 
+// DeleteEntitiesByWorldview 删除某世界观下的所有实体
+func (r *WorldviewRepository) DeleteEntitiesByWorldview(worldviewID uint) error {
+	return r.db.Where("worldview_id = ?", worldviewID).Delete(&model.WorldviewEntity{}).Error
+}
+
 // ItemRepository 物品仓库
 type ItemRepository struct {
 	db *gorm.DB
@@ -130,5 +135,10 @@ func (r *ItemRepository) Update(item *model.Item) error {
 
 func (r *ItemRepository) Delete(id uint) error {
 	return r.db.Delete(&model.Item{}, id).Error
+}
+
+// DeleteChapterItemsByItem 删除物品的所有章节覆盖记录
+func (r *ItemRepository) DeleteChapterItemsByItem(itemID uint) error {
+	return r.db.Where("item_id = ?", itemID).Delete(&model.ChapterItem{}).Error
 }
 

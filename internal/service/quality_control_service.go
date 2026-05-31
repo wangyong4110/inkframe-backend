@@ -580,7 +580,10 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 	}
 
 	// Persist record
-	reviewBytes, _ := json.Marshal(review)
+	reviewBytes, err := json.Marshal(review)
+	if err != nil {
+		return nil, fmt.Errorf("marshal review result: %w", err)
+	}
 	rec := &model.ReviewRecord{
 		EntityType:   model.ReviewEntityChapter,
 		EntityID:     chapterID,
@@ -590,10 +593,9 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 		SnapshotJSON: chapter.Content,
 	}
 	if err := s.reviewRecordRepo.Create(rec); err != nil {
-		logger.Printf("QualityControlService.ReviewChapter: save record failed: %v", err)
-	} else {
-		review.RecordID = rec.ID
+		return nil, fmt.Errorf("save review record: %w", err)
 	}
+	review.RecordID = rec.ID
 
 	return &review, nil
 }

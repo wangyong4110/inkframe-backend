@@ -8,7 +8,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-30-v2"
+const schemaVersion = "2026-05-31-v2"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -59,6 +59,8 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_character", "core_desire", "TEXT NULL"},
 		// ink_model_provider 并发度（2026-05-30 新增）
 		{"ink_model_provider", "concurrency", "INT NOT NULL DEFAULT 0"},
+		// ink_task_model_config provider 显式绑定（2026-05-31 新增）
+		{"ink_task_model_config", "primary_provider_id", "INT UNSIGNED NOT NULL DEFAULT 0"},
 	}
 	for _, a := range additions {
 		// 先查 information_schema，列已存在则跳过，避免触发 GORM 的 Error 1060 日志
@@ -390,5 +392,15 @@ func preMigrateCleanup(db *gorm.DB) {
 		AND COLUMN_NAME = 'chapter_id' AND REFERENCED_TABLE_NAME IS NOT NULL`).Scan(&videoChapterFKs)
 	for _, fk := range videoChapterFKs {
 		db.Exec("ALTER TABLE ink_video DROP FOREIGN KEY `" + fk + "`")
+	}
+	// ink_asset.external_id 曾有 uniqueIndex(where:external_id != '')，该语法在 MySQL 不支持。
+	// MySQL 会忽略 WHERE 子句，创建无条件唯一索引，导致本地上传（external_id=''）第二次就报 Duplicate key。
+	// 现改为普通 index，唯一性由应用层 ExistsByExternalID 保证。
+	var extIDIdxCount int64
+	db.Raw(`SELECT COUNT(*) FROM information_schema.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_asset'
+		AND INDEX_NAME = 'uq_external_id'`).Scan(&extIDIdxCount)
+	if extIDIdxCount > 0 {
+		db.Exec("ALTER TABLE ink_asset DROP INDEX uq_external_id")
 	}
 }

@@ -1201,10 +1201,19 @@ func (s *NovelService) ListNovelComments(novelID uint, page, size int) ([]*model
 	return s.novelCommentRepo.ListByNovel(novelID, page, size)
 }
 
-// AddNovelComment 发表评论
+// AddNovelComment 发表评论（最多支持1级回复，不允许无限嵌套）
 func (s *NovelService) AddNovelComment(novelID, userID uint, nickname, content string, parentID *uint) (*model.NovelComment, error) {
 	if s.novelCommentRepo == nil {
 		return nil, fmt.Errorf("comment feature not available")
+	}
+	if parentID != nil {
+		parent, err := s.novelCommentRepo.GetByID(*parentID)
+		if err != nil {
+			return nil, fmt.Errorf("parent comment not found")
+		}
+		if parent.ParentID != nil {
+			return nil, fmt.Errorf("cannot reply to a reply: only one level of nesting is allowed")
+		}
 	}
 	c := &model.NovelComment{
 		NovelID:  novelID,

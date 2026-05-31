@@ -111,8 +111,11 @@ func (s *ItemService) UpdateItem(id uint, req *model.UpdateItemRequest) (*model.
 	return item, s.itemRepo.Update(item)
 }
 
-// DeleteItem 删除物品
+// DeleteItem 删除物品及其所有章节覆盖记录
 func (s *ItemService) DeleteItem(id uint) error {
+	if err := s.itemRepo.DeleteChapterItemsByItem(id); err != nil {
+		return err
+	}
 	return s.itemRepo.Delete(id)
 }
 

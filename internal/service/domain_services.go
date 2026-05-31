@@ -232,6 +232,7 @@ func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, ten
 		IsActive:     req.IsActive,
 		Timeout:      req.Timeout,
 		Concurrency:  req.Concurrency,
+		RateLimit:    req.RateLimit,
 	}
 	if err := s.providerRepo.Create(provider); err != nil {
 		return nil, err
@@ -274,6 +275,9 @@ func (s *ModelService) UpdateProvider(id uint, tenantID uint, req *model.UpdateM
 	}
 	if req.Concurrency != nil {
 		provider.Concurrency = *req.Concurrency
+	}
+	if req.RateLimit != nil {
+		provider.RateLimit = *req.RateLimit
 	}
 	if err := s.providerRepo.Update(provider); err != nil {
 		return nil, err
@@ -505,6 +509,9 @@ func (s *WorldviewService) UpdateWorldview(worldview *model.Worldview) error {
 }
 
 func (s *WorldviewService) DeleteWorldview(id uint) error {
+	if err := s.worldviewRepo.DeleteEntitiesByWorldview(id); err != nil {
+		return err
+	}
 	return s.worldviewRepo.Delete(id)
 }
 

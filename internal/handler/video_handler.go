@@ -217,6 +217,11 @@ func (h *VideoHandler) ListVideos(c *gin.Context) {
 	}
 
 	status := c.Query("status")
+	validStatuses := map[string]bool{"": true, "pending": true, "generating": true, "done": true, "failed": true}
+	if !validStatuses[status] {
+		respondBadRequest(c, "invalid status value")
+		return
+	}
 	p := parsePagination(c)
 
 	videos, total, err := h.videoService.ListVideos(novelId, chapterID, status, getTenantID(c), p.Page, p.PageSize)

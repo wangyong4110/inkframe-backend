@@ -71,7 +71,10 @@ type ServerConfig struct {
 	FrontendURL     string        `mapstructure:"frontend_url"`
 	// AllowedOrigins 允许的 CORS 来源列表。留空表示允许所有来源（开发模式兼容）。
 	// 生产环境应设置为前端 URL，如 ["https://app.example.com"]。
-	AllowedOrigins  []string      `mapstructure:"allowed_origins"`
+	AllowedOrigins []string `mapstructure:"allowed_origins"`
+	// EncryptionKey 用于 AES-256-GCM 加密 DB 中存储的 API Key。
+	// 32 字节以内的字符串（不足则补零）。留空时禁用加密（开发兼容）。
+	EncryptionKey string `mapstructure:"encryption_key"`
 }
 
 // DatabaseConfig 数据库配置

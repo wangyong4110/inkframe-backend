@@ -36,7 +36,7 @@ type Asset struct {
 
 	// Copyright
 	SourceURL   string `json:"source_url" gorm:"type:text"`
-	ExternalID  string `json:"external_id" gorm:"size:200;uniqueIndex:uq_external_id,where:external_id != ''"`
+	ExternalID  string `json:"external_id" gorm:"size:200;index:idx_external_id"`
 	License     string `json:"license" gorm:"size:100;index"` // CC0|CC-BY|CC-BY-SA|CC-BY-NC|PD|unsplash|pexels|pixabay|platform
 	LicenseURL  string `json:"license_url" gorm:"type:text"`
 	Attribution string `json:"attribution" gorm:"type:text"`

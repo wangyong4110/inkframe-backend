@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
 	"path/filepath"
@@ -567,10 +569,40 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 	return result, nil
 }
 
+// validateImportURL 验证导入 URL 防止 SSRF 攻击
+func validateImportURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("only http/https URLs are allowed, got %q", u.Scheme)
+	}
+	host := u.Hostname()
+	// 拒绝私有/内网地址
+	ip := net.ParseIP(host)
+	if ip != nil {
+		private := []string{"10.", "172.16.", "172.17.", "172.18.", "172.19.", "172.20.", "172.21.", "172.22.", "172.23.", "172.24.", "172.25.", "172.26.", "172.27.", "172.28.", "172.29.", "172.30.", "172.31.", "192.168.", "127.", "169.254.", "::1", "fc", "fd"}
+		ipStr := ip.String()
+		for _, prefix := range private {
+			if strings.HasPrefix(ipStr, prefix) {
+				return fmt.Errorf("requests to private/internal IP addresses are not allowed")
+			}
+		}
+	}
+	if host == "localhost" || host == "0.0.0.0" {
+		return fmt.Errorf("requests to localhost are not allowed")
+	}
+	return nil
+}
+
 // 从URL导入
 func (s *NovelImportService) importFromURL(req *ImportRequest) (*ImportResult, error) {
+	if err := validateImportURL(req.URL); err != nil {
+		return nil, fmt.Errorf("URL validation failed: %w", err)
+	}
 	// 下载内容
-	resp, err := http.Get(req.URL)
+	resp, err := http.Get(req.URL) //nolint:gosec // URL already validated above
 	if err != nil {
 		return nil, fmt.Errorf("download failed: %w", err)
 	}

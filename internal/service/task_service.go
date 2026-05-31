@@ -214,6 +214,7 @@ func (s *TaskService) recoverOrphaned(age time.Duration) {
 						"status": "pending",
 						"error":  "",
 					})
+					t.Status = "pending"
 					go fn.(func(*model.AsyncTask))(t)
 					resumed++
 				}

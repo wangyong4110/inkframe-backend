@@ -560,6 +560,9 @@ func (p *RetryProvider) Generate(ctx context.Context, req *GenerateRequest) (*Ge
 	for attempt := 0; attempt < p.maxRetries; attempt++ {
 		if attempt > 0 {
 			delay := p.baseDelay * time.Duration(1<<uint(attempt-1))
+			if delay > 32*time.Second {
+				delay = 32 * time.Second
+			}
 			logger.Printf("RetryProvider.Generate: attempt %d, waiting %v", attempt+1, delay)
 			select {
 			case <-time.After(delay):
@@ -593,6 +596,9 @@ func (p *RetryProvider) GenerateStream(ctx context.Context, req *GenerateRequest
 	for attempt := 0; attempt < p.maxRetries; attempt++ {
 		if attempt > 0 {
 			delay := p.baseDelay * time.Duration(1<<uint(attempt-1))
+			if delay > 32*time.Second {
+				delay = 32 * time.Second
+			}
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
@@ -617,6 +623,9 @@ func (p *RetryProvider) Embed(ctx context.Context, text string) ([]float32, erro
 	for attempt := 0; attempt < p.maxRetries; attempt++ {
 		if attempt > 0 {
 			delay := p.baseDelay * time.Duration(1<<uint(attempt-1))
+			if delay > 32*time.Second {
+				delay = 32 * time.Second
+			}
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():

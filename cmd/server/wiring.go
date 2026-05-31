@@ -264,7 +264,7 @@ func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *
 	// AI服务（注入 providerRepo 以支持按租户加载 AK/SK，注入 novelRepo 以读取小说项目级 AI 配置）
 	aiSvc := service.NewAIService(repos.AIModelRepo, repos.TaskModelConfigRepo, aiManager, repos.ModelProviderRepo).
 		WithNovelRepo(repos.NovelRepo).
-		WithImageConcurrency(1)
+		WithEncryptionKey(cfg.Server.EncryptionKey)
 
 	// 模型服务（注入 aiService 以支持 TestProvider 实例化验证）
 	modelSvc := service.NewModelService(repos.AIModelRepo, repos.ModelProviderRepo, repos.TaskModelConfigRepo, repos.ModelComparisonRepo, aiSvc)

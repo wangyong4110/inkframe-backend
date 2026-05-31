@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -278,7 +280,12 @@ func (h *AuthHandler) OAuthURL(c *gin.Context) {
 	provider := c.Param("provider")
 	state := c.Query("state")
 	if state == "" {
-		state = "default"
+		b := make([]byte, 16)
+		if _, err := rand.Read(b); err == nil {
+			state = hex.EncodeToString(b)
+		} else {
+			state = fmt.Sprintf("s%d", len(state))
+		}
 	}
 	if h.oauthService == nil {
 		respondErr(c, http.StatusServiceUnavailable, "OAuth service not configured")

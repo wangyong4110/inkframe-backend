@@ -321,6 +321,11 @@ func seedAIModels(db *gorm.DB) {
 		// 可灵图像生成（与视频生成共用 AK/SK）
 		{"kling-image", "可灵图像生成", "image", "https://api-beijing.klingai.com", true,
 			[]string{"kling-v1", "kling-v1-5", "kling-v2", "kling-v2-1", "kling-v3"}},
+		// 图生图
+		{"volcengine-i2i", "即梦AI 图生图（火山引擎）", "img2img", "", true,
+			[]string{"seededit_v3.0", "seed3l_single_ip", "i2i_portrait_photo", "i2i_multi_style_zx2x"}},
+		{"kling-i2i", "可灵图生图（快手）", "img2img", "https://api-beijing.klingai.com", true,
+			[]string{"kling-v1-5", "kling-v2", "kling-v2-1", "kling-v3"}},
 	}
 
 	llmTasks := []string{"chapter", "outline", "storyboard", "quality_check", "sfx_analyze"}
@@ -555,6 +560,16 @@ func seedAIModels(db *gorm.DB) {
 		{"kling-image", "kling-v2", "可灵 v2", []string{"image_gen"}, 0.92, 0},
 		{"kling-image", "kling-v2-1", "可灵 v2.1", []string{"image_gen"}, 0.93, 0},
 		{"kling-image", "kling-v3", "可灵 v3（最新）", []string{"image_gen"}, 0.95, 0},
+		// ── 即梦AI 图生图 ─────────────────────────────────────────────────
+		{"volcengine-i2i", "seededit_v3.0", "SeedEdit 3.0 指令编辑", []string{"img2img_gen"}, 0.93, 0},
+		{"volcengine-i2i", "seed3l_single_ip", "DreamO 角色特征保持", []string{"img2img_gen"}, 0.92, 0},
+		{"volcengine-i2i", "i2i_portrait_photo", "人像写真 3.0", []string{"img2img_gen"}, 0.91, 0},
+		{"volcengine-i2i", "i2i_multi_style_zx2x", "图像风格特效", []string{"img2img_gen"}, 0.90, 0},
+		// ── 可灵图生图 ────────────────────────────────────────────────────
+		{"kling-i2i", "kling-v1-5", "可灵 v1.5 图生图", []string{"img2img_gen"}, 0.90, 0},
+		{"kling-i2i", "kling-v2", "可灵 v2 图生图", []string{"img2img_gen"}, 0.92, 0},
+		{"kling-i2i", "kling-v2-1", "可灵 v2.1 图生图", []string{"img2img_gen"}, 0.93, 0},
+		{"kling-i2i", "kling-v3", "可灵 v3 图生图（最新）", []string{"img2img_gen"}, 0.95, 0},
 	}
 
 	// 1. 确保 provider 记录存在（tenant_id=0 系统级）

@@ -87,8 +87,9 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		public.GET("/platform/novels/:id/comments", cfg.PlatformHandler.ListNovelComments)
 	}
 
-	// 公开认证路由（不需要JWT）
+	// 公开认证路由（不需要JWT，但需要限速防暴力破解）
 	auth := r.Group("/api/v1/auth")
+	auth.Use(middleware.RateLimit(10, 0.2)) // 10 burst, ~12 req/min
 	{
 		auth.POST("/register", cfg.AuthHandler.Register)
 		auth.POST("/login", cfg.AuthHandler.Login)

@@ -688,6 +688,14 @@ func (s *RewriteService) StartAnalysis(tenantID, projectID uint) (string, error)
 	if err != nil {
 		return "", err
 	}
+	// Guard: refuse to re-run analysis on a project that already has chapter rewrite data,
+	// since generateBible deletes all ChapterRewriteTask rows before recreating them.
+	switch project.Status {
+	case "pending", "failed":
+		// allowed: either no prior run or prior run failed before chapter data existed
+	default:
+		return "", fmt.Errorf("cannot re-run analysis on a project in status %q; delete and recreate the project to start fresh", project.Status)
+	}
 	if s.taskSvc != nil {
 		s.taskSvc.CancelActiveByEntity("rewrite_project", projectID, TaskTypeRewriteAnalysis)
 	}
@@ -1503,14 +1511,26 @@ type ComplianceReport struct {
 	Chapters        []ChapterComplianceItem `json:"chapters"`
 }
 
-func chapterComplianceRating(passed bool, lexSim float64) string {
-	if passed && lexSim < 0.20 {
-		return "green"
+// chapterComplianceRating computes a compliance rating using level-specific thresholds.
+// Fixed thresholds (0.20/0.35) are wrong for levels 1-3 where high lexical similarity is expected.
+func chapterComplianceRating(passed bool, lexSim float64, level int) string {
+	cfg, ok := rewriteLevelConfigs[level]
+	if !ok {
+		cfg = rewriteLevelConfigs[3]
 	}
-	if lexSim >= 0.35 || !passed {
-		return "red"
+	if passed {
+		// Within acceptable range: green if below midpoint, yellow if toward upper bound
+		mid := (cfg.TargetLexSimLow + cfg.TargetLexSimHigh) / 2.0
+		if lexSim <= mid {
+			return "green"
+		}
+		return "yellow"
 	}
-	return "yellow"
+	// Not passed: distinguish copyright risk (too similar) from quality gap (too different)
+	if lexSim > cfg.TargetLexSimHigh {
+		return "red" // still too similar to original — copyright risk
+	}
+	return "yellow" // too different from expected — quality concern, not copyright risk
 }
 
 // GetComplianceReport computes a compliance report from completed chapter tasks.
@@ -1548,7 +1568,7 @@ func (s *RewriteService) GetComplianceReport(projectID uint) (*ComplianceReport,
 		sumSemantic += t.SemanticSim
 		sumQuality += t.QualityScore
 
-		rating := chapterComplianceRating(t.Passed, t.LexicalSim)
+		rating := chapterComplianceRating(t.Passed, t.LexicalSim, project.Level)
 		report.Chapters = append(report.Chapters, ChapterComplianceItem{
 			ChapterNo:     t.ChapterNo,
 			Passed:        t.Passed,
@@ -1574,10 +1594,16 @@ func (s *RewriteService) GetComplianceReport(projectID uint) (*ComplianceReport,
 	if done > 0 {
 		passRate = float64(passed) / float64(done)
 	}
+	// Use level-aware threshold: passed_rate drives the overall rating since
+	// "passed" already incorporates level-specific lexical similarity targets.
+	cfg := rewriteLevelConfigs[project.Level]
+	if _, ok := rewriteLevelConfigs[project.Level]; !ok {
+		cfg = rewriteLevelConfigs[3]
+	}
 	switch {
-	case passRate >= 0.8 && report.AvgLexicalSim < 0.20:
+	case passRate >= 0.8 && report.AvgLexicalSim <= cfg.TargetLexSimHigh:
 		report.OverallRating = "green"
-	case passRate < 0.6 || report.AvgLexicalSim >= 0.35:
+	case passRate < 0.6 || report.AvgLexicalSim > cfg.TargetLexSimHigh:
 		report.OverallRating = "red"
 	default:
 		report.OverallRating = "yellow"

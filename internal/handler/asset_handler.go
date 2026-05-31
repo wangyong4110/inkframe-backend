@@ -580,8 +580,13 @@ func (h *AssetHandler) RevokeShareLink(c *gin.Context) {
 // GET /share/:token  (public, no auth)
 func (h *AssetHandler) PublicSharePage(c *gin.Context) {
 	token := c.Param("token")
-	sl, err := h.svc.ValidateShareLink(token)
+	password := c.Query("password")
+	sl, err := h.svc.ValidateShareLink(token, password)
 	if err != nil {
+		if err.Error() == "share link requires a password" || err.Error() == "incorrect password" {
+			respondErr(c, http.StatusUnauthorized, err.Error())
+			return
+		}
 		respondErr(c, http.StatusNotFound, err.Error())
 		return
 	}

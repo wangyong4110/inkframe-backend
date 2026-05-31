@@ -213,10 +213,18 @@ func (h *RewriteHandler) GetChapterTask(c *gin.Context) {
 	if _, ok := h.getProjectForTenant(c, uint(id)); !ok {
 		return
 	}
-	taskID, _ := strconv.ParseUint(c.Param("task_id"), 10, 64)
+	taskID, err := strconv.ParseUint(c.Param("task_id"), 10, 64)
+	if err != nil {
+		respondBadRequest(c, "invalid task_id")
+		return
+	}
 	task, err := h.rewriteSvc.GetChapterTask(uint(taskID))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, err.Error())
+		return
+	}
+	if task.ProjectID != uint(id) {
+		respondErr(c, http.StatusForbidden, "task does not belong to this project")
 		return
 	}
 	respondOK(c, task)
@@ -232,7 +240,20 @@ func (h *RewriteHandler) ApproveChapter(c *gin.Context) {
 	if _, ok := h.getProjectForTenant(c, uint(id)); !ok {
 		return
 	}
-	taskID, _ := strconv.ParseUint(c.Param("task_id"), 10, 64)
+	taskID, err := strconv.ParseUint(c.Param("task_id"), 10, 64)
+	if err != nil {
+		respondBadRequest(c, "invalid task_id")
+		return
+	}
+	task, err := h.rewriteSvc.GetChapterTask(uint(taskID))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, err.Error())
+		return
+	}
+	if task.ProjectID != uint(id) {
+		respondErr(c, http.StatusForbidden, "task does not belong to this project")
+		return
+	}
 	if err := h.rewriteSvc.ApproveChapter(uint(taskID)); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return

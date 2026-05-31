@@ -93,23 +93,25 @@ func (s *SMSService) VerifyCode(phone, code string) error {
 	ctx := context.Background()
 
 	countKey := smsCountKeyPrefix + phone
-	count, _ := s.redis.Get(ctx, countKey).Int()
-	if count >= smsMaxVerifyCount {
-		s.redis.Del(ctx, smsCodeKeyPrefix+phone, countKey)
+	codeKey := smsCodeKeyPrefix + phone
+
+	// 先原子递增，避免并发竞态导致超过限制次数仍能通过检查
+	newCount, incrErr := s.redis.Incr(ctx, countKey).Result()
+	if incrErr != nil {
+		return errors.New("验证码不存在或已过期")
+	}
+	if newCount > int64(smsMaxVerifyCount) {
+		s.redis.Del(ctx, codeKey, countKey)
 		return errors.New("验证码已失效，请重新获取")
 	}
 
-	codeKey := smsCodeKeyPrefix + phone
 	stored, err := s.redis.Get(ctx, codeKey).Result()
 	if err != nil {
 		return errors.New("验证码不存在或已过期")
 	}
 
-	// 先递增计数
-	s.redis.Incr(ctx, countKey)
-
 	if stored != code {
-		remaining := smsMaxVerifyCount - count - 1
+		remaining := int64(smsMaxVerifyCount) - newCount
 		if remaining <= 0 {
 			s.redis.Del(ctx, codeKey, countKey)
 			return errors.New("验证码错误次数过多，请重新获取")

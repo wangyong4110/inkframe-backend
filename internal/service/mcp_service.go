@@ -271,7 +271,7 @@ func (s *McpService) InvokeTool(ctx context.Context, toolName string, params map
 		}
 	}
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("mcp tool %q: request failed: %w", toolName, err)

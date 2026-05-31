@@ -95,9 +95,11 @@ type TaskModelConfig struct {
 	ID       uint   `json:"id" gorm:"primaryKey"`
 	TaskType string `json:"task_type" gorm:"size:50;uniqueIndex;not null"`
 
-	PrimaryModelID   uint     `json:"primary_model_id"`
-	PrimaryModel     *AIModel `json:"primary_model,omitempty" gorm:"foreignKey:PrimaryModelID"`
-	FallbackModelIDs string   `json:"fallback_model_ids" gorm:"type:text"` // JSON数组
+	PrimaryModelID    uint           `json:"primary_model_id"`
+	PrimaryModel      *AIModel       `json:"primary_model,omitempty" gorm:"foreignKey:PrimaryModelID"`
+	PrimaryProviderID uint           `json:"primary_provider_id" gorm:"default:0"` // 显式绑定 provider，消除同名模型歧义
+	PrimaryProvider   *ModelProvider `json:"primary_provider,omitempty" gorm:"foreignKey:PrimaryProviderID"`
+	FallbackModelIDs  string         `json:"fallback_model_ids" gorm:"type:text"` // JSON数组
 
 	// 参数
 	Temperature    float64 `json:"temperature" gorm:"type:decimal(3,2)"`
@@ -267,7 +269,8 @@ type CreateModelProviderRequest struct {
 	APIVersion   string `json:"api_version"`
 	IsActive     bool   `json:"is_active"`
 	Timeout      int    `json:"timeout"`      // HTTP 超时秒数，0=默认300s
-	Concurrency  int    `json:"concurrency"` // 最大并发调用数，0=不限制
+	Concurrency  int    `json:"concurrency"`  // 最大并发调用数，0=不限制
+	RateLimit    int    `json:"rate_limit"`   // 请求/分钟，0=不限制
 }
 
 type UpdateModelProviderRequest struct {
@@ -279,8 +282,9 @@ type UpdateModelProviderRequest struct {
 	APISecretKey string `json:"api_secret_key"`
 	APIVersion   string `json:"api_version"`
 	IsActive     *bool  `json:"is_active"`
-	Timeout      *int   `json:"timeout"`      // HTTP 超时秒数，0=默认300s；nil=不修改
-	Concurrency  *int   `json:"concurrency"` // 最大并发调用数，0=不限制；nil=不修改
+	Timeout      *int   `json:"timeout"`      // HTTP 超时秒数；nil=不修改
+	Concurrency  *int   `json:"concurrency"`  // 最大并发调用数；nil=不修改
+	RateLimit    *int   `json:"rate_limit"`   // 请求/分钟；nil=不修改
 }
 
 type CreateAIModelRequest struct {

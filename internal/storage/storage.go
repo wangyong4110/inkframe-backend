@@ -24,6 +24,8 @@ import (
 type Service interface {
 	// Upload stores r under the given object key and returns the public URL.
 	Upload(ctx context.Context, key string, r io.Reader, size int64, contentType string) (url string, err error)
+	// Delete removes the object identified by the given key (best-effort, non-fatal on missing object).
+	Delete(ctx context.Context, key string) error
 }
 
 // Config maps to config.StorageConfig.
@@ -132,6 +134,34 @@ func (s *ossService) Upload(ctx context.Context, key string, r io.Reader, size i
 	return base + "/" + key, nil
 }
 
+func (s *ossService) Delete(ctx context.Context, key string) error {
+	deleteURL := fmt.Sprintf("https://%s.%s/%s",
+		s.cfg.Bucket, strings.TrimPrefix(s.cfg.Endpoint, "https://"), key)
+
+	date := time.Now().UTC().Format(http.TimeFormat)
+	canonicalResource := fmt.Sprintf("/%s/%s", s.cfg.Bucket, key)
+	stringToSign := strings.Join([]string{http.MethodDelete, "", "", date, canonicalResource}, "\n")
+	sig := s.sign(stringToSign)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, deleteURL, nil)
+	if err != nil {
+		return fmt.Errorf("storage: build delete request: %w", err)
+	}
+	req.Header.Set("Date", date)
+	req.Header.Set("Authorization", fmt.Sprintf("OSS %s:%s", s.cfg.AccessKey, sig))
+
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("storage: OSS DELETE: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("storage: OSS delete failed (%s): %s", resp.Status, string(body))
+	}
+	return nil
+}
+
 func (s *ossService) sign(stringToSign string) string {
 	mac := hmac.New(sha1.New, []byte(s.cfg.SecretKey))
 	mac.Write([]byte(stringToSign))
@@ -143,6 +173,14 @@ func (s *ossService) sign(stringToSign string) string {
 type localService struct {
 	dir  string
 	base string
+}
+
+func (s *localService) Delete(_ context.Context, key string) error {
+	dest := filepath.Join(s.dir, filepath.FromSlash(key))
+	if err := os.Remove(dest); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("storage: remove file: %w", err)
+	}
+	return nil
 }
 
 func (s *localService) Upload(_ context.Context, key string, r io.Reader, _ int64, _ string) (string, error) {
@@ -164,6 +202,15 @@ func (s *localService) Upload(_ context.Context, key string, r io.Reader, _ int6
 // ─── DB storage backend ──────────────────────────────────────────────────────
 
 type dbStorageService struct{ db *gorm.DB }
+
+func (s *dbStorageService) Delete(_ context.Context, key string) error {
+	// key for DB storage is the URL path "/api/v1/media/{id}" — extract id
+	parts := strings.Split(strings.TrimPrefix(key, "/api/v1/media/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		return nil
+	}
+	return s.db.Where("id = ?", parts[0]).Delete(&model.MediaAsset{}).Error
+}
 
 func (s *dbStorageService) Upload(_ context.Context, key string, r io.Reader, _ int64, contentType string) (string, error) {
 	data, err := io.ReadAll(r)

@@ -11,11 +11,13 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/storage"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -37,10 +39,12 @@ type AssetService struct {
 	storageSvc    storage.Service
 	taskSvc       *TaskService
 	aiSvc         *AIService
-	crawlProxyURL string // optional proxy for crawl HTTP clients
+	crawlProxyURL string
 	unsplashKey   string
 	freesoundKey  string
 	pixabayKey    string
+	// crawlMu guards the ExistsByExternalID+Create sequence for crawled assets
+	crawlMu sync.Map
 }
 
 func NewAssetService(
@@ -67,6 +71,23 @@ func NewAssetService(
 		searchLogRepo: searchLogRepo, quotaRepo: quotaRepo,
 		taskSvc: taskSvc,
 	}
+}
+
+// crawlUpsert atomically checks whether an asset with the given externalID already exists
+// and, if not, creates it. Returns (true, nil) on insert; (false, nil) if already exists.
+func (s *AssetService) crawlUpsert(externalID string, create func() error) (bool, error) {
+	mu, _ := s.crawlMu.LoadOrStore(externalID, &sync.Mutex{})
+	mu.(*sync.Mutex).Lock()
+	defer mu.(*sync.Mutex).Unlock()
+
+	exists, err := s.assetRepo.ExistsByExternalID(externalID)
+	if err != nil {
+		return false, err
+	}
+	if exists {
+		return false, nil
+	}
+	return true, create()
 }
 
 func (s *AssetService) WithCrawlProxy(proxyURL string) *AssetService {
@@ -215,7 +236,13 @@ func (s *AssetService) PurgeAsset(ctx context.Context, id, callerID uint) error 
 	if err != nil || a.CreatorID != callerID {
 		return errors.New("not found or permission denied")
 	}
-	// Note: storage deletion from OSS would go here if the interface supported it
+	// Best-effort storage deletion; errors are non-fatal
+	if s.storageSvc != nil && a.StorageURL != "" {
+		_ = s.storageSvc.Delete(ctx, a.StorageURL)
+	}
+	if s.storageSvc != nil && a.ThumbnailURL != "" {
+		_ = s.storageSvc.Delete(ctx, a.ThumbnailURL)
+	}
 	_ = s.quotaRepo.SubStorage(a.TenantID, a.FileSize)
 	return s.assetRepo.HardDelete(id)
 }
@@ -519,6 +546,7 @@ type ShareLinkOptions struct {
 	CollectionID    *uint
 	ExpiresIn       int // hours; 0 = no expiry
 	DownloadAllowed bool
+	Password        string // plain-text; will be bcrypt-hashed before storage
 }
 
 func (s *AssetService) CreateShareLink(callerID uint, opts ShareLinkOptions) (*model.ShareLink, error) {
@@ -532,19 +560,34 @@ func (s *AssetService) CreateShareLink(callerID uint, opts ShareLinkOptions) (*m
 		exp := time.Now().Add(time.Duration(opts.ExpiresIn) * time.Hour)
 		sl.ExpiresAt = &exp
 	}
+	if opts.Password != "" {
+		hash, err := bcrypt.GenerateFromPassword([]byte(opts.Password), bcrypt.DefaultCost)
+		if err != nil {
+			return nil, fmt.Errorf("hash password: %w", err)
+		}
+		sl.Password = string(hash)
+	}
 	if err := s.shareLinkRepo.Create(sl); err != nil {
 		return nil, err
 	}
 	return sl, nil
 }
 
-func (s *AssetService) ValidateShareLink(token string) (*model.ShareLink, error) {
+func (s *AssetService) ValidateShareLink(token, password string) (*model.ShareLink, error) {
 	sl, err := s.shareLinkRepo.GetByToken(token)
 	if err != nil {
 		return nil, errors.New("share link not found")
 	}
 	if sl.ExpiresAt != nil && sl.ExpiresAt.Before(time.Now()) {
 		return nil, errors.New("share link expired")
+	}
+	if sl.Password != "" {
+		if password == "" {
+			return nil, errors.New("share link requires a password")
+		}
+		if err := bcrypt.CompareHashAndPassword([]byte(sl.Password), []byte(password)); err != nil {
+			return nil, errors.New("incorrect password")
+		}
 	}
 	_ = s.shareLinkRepo.IncrViewCount(token)
 	return sl, nil
@@ -555,6 +598,13 @@ func (s *AssetService) ListShareLinks(callerID uint) ([]*model.ShareLink, error)
 }
 
 func (s *AssetService) RevokeShareLink(token string, callerID uint) error {
+	sl, err := s.shareLinkRepo.GetByToken(token)
+	if err != nil {
+		return errors.New("share link not found")
+	}
+	if sl.CreatedBy != callerID {
+		return errors.New("permission denied")
+	}
 	return s.shareLinkRepo.Delete(token)
 }
 
@@ -860,12 +910,6 @@ func (s *AssetService) crawlBBCSFX(ctx context.Context, job *model.CrawlJob) (im
 			}
 
 			externalID := "bbc-sfx:" + r.ID
-			exists, _ := s.assetRepo.ExistsByExternalID(externalID)
-			if exists {
-				skipped++
-				continue
-			}
-
 			asset := &model.Asset{
 				Scope:      model.AssetScopePublic,
 				Title:      r.Description,
@@ -879,8 +923,11 @@ func (s *AssetService) crawlBBCSFX(ctx context.Context, job *model.CrawlJob) (im
 				Duration:   r.Duration,
 				Status:     model.AssetStatusActive,
 			}
-			if err := s.assetRepo.Create(asset); err != nil {
+			created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
+			if err != nil {
 				failed++
+			} else if !created {
+				skipped++
 			} else {
 				imported++
 			}
@@ -998,10 +1045,6 @@ func (s *AssetService) crawlFreesound(ctx context.Context, job *model.CrawlJob) 
 			}
 
 			externalID := fmt.Sprintf("freesound:%d", r.ID)
-			if exists, _ := s.assetRepo.ExistsByExternalID(externalID); exists {
-				skipped++
-				continue
-			}
 
 			// Normalize license string to short form
 			license := r.License
@@ -1027,8 +1070,11 @@ func (s *AssetService) crawlFreesound(ctx context.Context, job *model.CrawlJob) 
 				Duration:   r.Duration,
 				Status:     model.AssetStatusActive,
 			}
-			if err := s.assetRepo.Create(asset); err != nil {
+			created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
+			if err != nil {
 				failed++
+			} else if !created {
+				skipped++
 			} else {
 				imported++
 			}
@@ -1124,10 +1170,6 @@ func (s *AssetService) crawlPixabay(ctx context.Context, job *model.CrawlJob) (i
 			}
 
 			externalID := fmt.Sprintf("pixabay:%d", h.ID)
-			if exists, _ := s.assetRepo.ExistsByExternalID(externalID); exists {
-				skipped++
-				continue
-			}
 
 			// Use first tag as title, fall back to "Pixabay audio {id}"
 			title := strings.SplitN(h.Tags, ",", 2)[0]
@@ -1149,8 +1191,11 @@ func (s *AssetService) crawlPixabay(ctx context.Context, job *model.CrawlJob) (i
 				Duration:   h.Duration,
 				Status:     model.AssetStatusActive,
 			}
-			if err := s.assetRepo.Create(asset); err != nil {
+			created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
+			if err != nil {
 				failed++
+			} else if !created {
+				skipped++
 			} else {
 				imported++
 			}
@@ -1283,10 +1328,6 @@ func (s *AssetService) crawlWikimedia(ctx context.Context, job *model.CrawlJob) 
 			}
 
 			externalID := fmt.Sprintf("wikimedia:%d", page.PageID)
-			if exists, _ := s.assetRepo.ExistsByExternalID(externalID); exists {
-				skipped++
-				continue
-			}
 
 			// Clean title: strip "File:" prefix, extension, replace underscores
 			title := strings.TrimPrefix(page.Title, "File:")
@@ -1306,8 +1347,11 @@ func (s *AssetService) crawlWikimedia(ctx context.Context, job *model.CrawlJob) 
 				License:    license,
 				Status:     model.AssetStatusActive,
 			}
-			if err := s.assetRepo.Create(asset); err != nil {
+			created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
+			if err != nil {
 				failed++
+			} else if !created {
+				skipped++
 			} else {
 				imported++
 			}
@@ -1428,10 +1472,6 @@ func (s *AssetService) crawlUnsplash(ctx context.Context, job *model.CrawlJob) (
 			}
 
 			externalID := "unsplash:" + photo.ID
-			if exists, _ := s.assetRepo.ExistsByExternalID(externalID); exists {
-				skipped++
-				continue
-			}
 
 			title := photo.Description
 			if title == "" {
@@ -1452,8 +1492,13 @@ func (s *AssetService) crawlUnsplash(ctx context.Context, job *model.CrawlJob) (
 				License:    "unsplash",
 				Status:     model.AssetStatusActive,
 			}
-			if err := s.assetRepo.Create(asset); err != nil {
+			created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
+			if err != nil {
 				failed++
+				continue
+			}
+			if !created {
+				skipped++
 				continue
 			}
 			imported++

@@ -338,12 +338,12 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	var refStories string
 	if req.WebSearch && s.mcpService != nil {
 		query := buildStorySearchQuery(novel.Genre, chapterMeta.summary)
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-		out, searchErr := s.mcpService.InvokeTool(ctx, "web_search", map[string]interface{}{
+		webCtx, webCancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer webCancel()
+		out, searchErr := s.mcpService.InvokeTool(webCtx, "web_search", map[string]interface{}{
 			"query":       query,
 			"max_results": 3,
 		})
-		cancel()
 		if searchErr == nil {
 			refStories = parseWebSearchOutput(out)
 			logger.Printf("[WebSearch] chapter %d: query=%q results=%d", req.ChapterNo, query, countWebSearchResults(out))
@@ -356,12 +356,12 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	var wikiContext string
 	if req.WikiSearch && s.mcpService != nil {
 		query := buildWikiSearchQuery(novel.Genre, chapterMeta.summary)
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		out, searchErr := s.mcpService.InvokeTool(ctx, "wiki_search", map[string]interface{}{
+		wikiCtx, wikiCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer wikiCancel()
+		out, searchErr := s.mcpService.InvokeTool(wikiCtx, "wiki_search", map[string]interface{}{
 			"query":       query,
 			"max_results": 3,
 		})
-		cancel()
 		if searchErr == nil {
 			wikiContext = parseWikiOutput(out)
 			logger.Printf("[WikiSearch] chapter %d: query=%q", req.ChapterNo, query)
@@ -373,13 +373,13 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	// ── Step 1d: 情节模板查询（可选）─────────────────────
 	var storyPatternRef string
 	if req.UseStoryPattern && s.mcpService != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		out, searchErr := s.mcpService.InvokeTool(ctx, "story_pattern", map[string]interface{}{
+		patternCtx, patternCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer patternCancel()
+		out, searchErr := s.mcpService.InvokeTool(patternCtx, "story_pattern", map[string]interface{}{
 			"genre":       novel.Genre,
 			"archetype":   chapterMeta.emotionalTone,
 			"max_results": 2,
 		})
-		cancel()
 		if searchErr == nil {
 			storyPatternRef = parseStoryPatternOutput(out)
 			logger.Printf("[StoryPattern] chapter %d: genre=%q", req.ChapterNo, novel.Genre)
