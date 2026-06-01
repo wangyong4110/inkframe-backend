@@ -719,6 +719,9 @@ func (s *ChapterService) extractChapterMeta(novelID uint, chapterNo int) chapter
 	if outlineJSON == "" {
 		outlineJSON = novel.StylePrompt // 向后兼容
 	}
+
+	logger.Printf("[extractChapterMeta] novelID=%d chapterNo=%d outlineLen=%d", novelID, chapterNo, len(outlineJSON))
+
 	if outlineJSON != "" {
 		var outline struct {
 			Chapters []struct {
@@ -733,9 +736,14 @@ func (s *ChapterService) extractChapterMeta(novelID uint, chapterNo int) chapter
 				PlotPoints    []string `json:"plot_points"`
 			} `json:"chapters"`
 		}
-		if err := json.Unmarshal([]byte(outlineJSON), &outline); err == nil {
+		if parseErr := json.Unmarshal([]byte(outlineJSON), &outline); parseErr != nil {
+			logger.Printf("[extractChapterMeta] JSON parse error: %v (preview=%q)", parseErr, truncateForPrompt(outlineJSON, 200))
+		} else {
+			logger.Printf("[extractChapterMeta] outline parsed: %d chapters total", len(outline.Chapters))
+			found := false
 			for _, ch := range outline.Chapters {
 				if ch.ChapterNo == chapterNo {
+					found = true
 					meta.tensionLevel  = ch.TensionLevel
 					meta.actNo         = ch.Act
 					meta.emotionalTone = ch.EmotionalTone
@@ -746,23 +754,45 @@ func (s *ChapterService) extractChapterMeta(novelID uint, chapterNo int) chapter
 					meta.summary       = ch.Summary
 					meta.chapterTitle  = ch.Title
 					meta.plotPoints    = ch.PlotPoints
+					logger.Printf("[extractChapterMeta] ch%d found: title=%q summaryLen=%d plotPoints=%d",
+						chapterNo, meta.chapterTitle, len(meta.summary), len(meta.plotPoints))
 					break
 				}
 			}
+			if !found {
+				logger.Printf("[extractChapterMeta] ch%d NOT found in outline (outline has ch_nos: %v)",
+					chapterNo, func() []int {
+						nos := make([]int, 0, len(outline.Chapters))
+						for _, c := range outline.Chapters { nos = append(nos, c.ChapterNo) }
+						return nos
+					}())
+			}
+		}
+	} else {
+		logger.Printf("[extractChapterMeta] novel.Outline is EMPTY — no outline data available for ch%d", chapterNo)
+	}
+
+	// 读取章节记录（chapter.Outline 是用户可见/可编辑的大纲，优先级最高）
+	if existing, err := s.chapterRepo.GetByNovelAndChapterNo(novelID, chapterNo); err == nil && existing != nil {
+		if meta.chapterTitle == "" {
+			meta.chapterTitle = existing.Title
+		}
+		// chapter.Outline（用户可见字段）优先于 novel.Outline JSON 的 summary
+		// 因为用户在 UI 上看到并编辑的是 chapter.Outline，这才是他们期望 AI 遵循的大纲
+		if existing.Outline != "" {
+			if existing.Outline != meta.summary {
+				logger.Printf("[extractChapterMeta] ch%d: chapter.Outline overrides novel.Outline summary (chOutlineLen=%d, novelSummaryLen=%d)",
+					chapterNo, len(existing.Outline), len(meta.summary))
+			}
+			meta.summary = existing.Outline
+		} else if meta.summary == "" {
+			meta.summary = existing.Summary
+			logger.Printf("[extractChapterMeta] ch%d: using chapter.Summary fallback (len=%d)", chapterNo, len(meta.summary))
 		}
 	}
 
-	// 降级：从已有章节占位记录中读取 Title 和 Summary（由 AI 分析阶段写入）
-	if meta.summary == "" || meta.chapterTitle == "" {
-		if existing, err := s.chapterRepo.GetByNovelAndChapterNo(novelID, chapterNo); err == nil && existing != nil {
-			if meta.summary == "" {
-				meta.summary = existing.Summary
-			}
-			if meta.chapterTitle == "" {
-				meta.chapterTitle = existing.Title
-			}
-		}
-	}
+	logger.Printf("[extractChapterMeta] ch%d final: summaryLen=%d plotPoints=%d title=%q",
+		chapterNo, len(meta.summary), len(meta.plotPoints), meta.chapterTitle)
 
 	return meta
 }
@@ -994,6 +1024,9 @@ func (s *ChapterService) generateSceneOutline(
 	if chapterSummary == "" && req.Prompt != "" {
 		chapterSummary = req.Prompt
 	}
+
+	logger.Printf("[generateSceneOutline] ch%d: summaryLen=%d plotPoints=%d chapterSummaryEmpty=%v",
+		req.ChapterNo, len(meta.summary), len(meta.plotPoints), chapterSummary == "")
 
 	// 将大纲剧情点格式化为文本注入 prompt
 	plotPointsText := ""

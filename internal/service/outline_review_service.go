@@ -17,9 +17,9 @@ import (
 
 // OutlineReviewService 章节大纲审查服务
 type OutlineReviewService struct {
-	reviewRepo   *repository.OutlineReviewRepository
+	reviewRepo    *repository.OutlineReviewRepository
 	synthesisRepo *repository.NovelOutlineSynthesisRepository
-	chapterRepo  interface {
+	chapterRepo   interface {
 		GetByID(id uint) (*model.Chapter, error)
 		ListByNovelWithContent(novelID uint) ([]*model.Chapter, error)
 		GetByNovelAndChapterNo(novelID uint, chapterNo int) (*model.Chapter, error)
@@ -27,7 +27,27 @@ type OutlineReviewService struct {
 	novelRepo interface {
 		GetByID(id uint) (*model.Novel, error)
 	}
-	aiService *AIService
+	aiService      *AIService
+	foreshadowRepo interface {
+		ListByNovel(novelID uint, tenantID uint) ([]*model.Foreshadow, error)
+	}
+	arcSummaryRepo interface {
+		ListByNovel(novelID uint) ([]*model.ArcSummary, error)
+	}
+}
+
+func (s *OutlineReviewService) WithForeshadowRepo(r interface {
+	ListByNovel(novelID uint, tenantID uint) ([]*model.Foreshadow, error)
+}) *OutlineReviewService {
+	s.foreshadowRepo = r
+	return s
+}
+
+func (s *OutlineReviewService) WithArcSummaryRepo(r interface {
+	ListByNovel(novelID uint) ([]*model.ArcSummary, error)
+}) *OutlineReviewService {
+	s.arcSummaryRepo = r
+	return s
 }
 
 func NewOutlineReviewService(
@@ -99,7 +119,8 @@ func (s *OutlineReviewService) ReviewChapterOutline(ctx context.Context, tenantI
 		review.CharacterScore = aiResult.DimensionScores.Character
 		review.ConflictScore = aiResult.DimensionScores.Conflict
 		review.HookScore = aiResult.DimensionScores.Hook
-		review.OverallScore = aiResult.OverallScore
+		// 用体裁权重重新计算综合分（覆盖 AI 的等权计算）
+		review.OverallScore = applyWeightedScore(*aiResult, novel.Genre)
 		review.Suggestion = aiResult.Suggestion
 
 		if b, _ := json.Marshal(allIssues); b != nil {
@@ -130,18 +151,19 @@ func (s *OutlineReviewService) BatchReviewNovel(ctx context.Context, tenantID, n
 		return nil, err
 	}
 
-	// 纳入有场景大纲或有文字大纲的章节
+	// 纳入有场景大纲、文字大纲或章节正文的章节
 	var reviewable []*model.Chapter
 	for _, ch := range chapters {
 		hasScene := strings.TrimSpace(ch.SceneOutline) != "" && strings.TrimSpace(ch.SceneOutline) != "{}"
 		hasOutline := strings.TrimSpace(ch.Outline) != ""
-		if hasScene || hasOutline {
+		hasContent := strings.TrimSpace(ch.Content) != ""
+		if hasScene || hasOutline || hasContent {
 			reviewable = append(reviewable, ch)
 		}
 	}
 
 	if len(reviewable) == 0 {
-		return nil, fmt.Errorf("没有找到包含大纲的章节，请先生成章节大纲或场景大纲")
+		return nil, fmt.Errorf("没有找到可审查的章节，请先生成章节内容或大纲")
 	}
 
 	// ── 并行审查（最多3个并发）────────────────────────────
@@ -156,10 +178,11 @@ func (s *OutlineReviewService) BatchReviewNovel(ctx context.Context, tenantID, n
 	total := len(reviewable)
 
 	var wg sync.WaitGroup
+outerLoop:
 	for _, ch := range reviewable {
 		select {
 		case <-ctx.Done():
-			break
+			break outerLoop
 		default:
 		}
 
@@ -542,17 +565,20 @@ func (s *OutlineReviewService) runBatchSynthesisAI(ctx context.Context, tenantID
 		maxAdvice = 5
 	}
 
+	arcForeshadows := s.buildArcOpenForeshadowsText(novel.ID)
+
 	prompt, err := renderPrompt("outline_review_batch", map[string]interface{}{
-		"NovelTitle":       novel.Title,
-		"Genre":            novel.Genre,
-		"Style":            novel.StylePrompt,
-		"TotalChapters":    len(planned),
-		"Act1Count":        arcBalance.Act1Count,
-		"Act2Count":        arcBalance.Act2Count,
-		"Act3Count":        arcBalance.Act3Count,
-		"ChapterPlanTable": chapterPlanTable,
+		"NovelTitle":        novel.Title,
+		"Genre":             novel.Genre,
+		"Style":             novel.StylePrompt,
+		"TotalChapters":     len(planned),
+		"Act1Count":         arcBalance.Act1Count,
+		"Act2Count":         arcBalance.Act2Count,
+		"Act3Count":         arcBalance.Act3Count,
+		"ChapterPlanTable":  chapterPlanTable,
 		"ChapterScoreTable": chapterScoreTable,
-		"MaxAdviceCount":   maxAdvice,
+		"MaxAdviceCount":    maxAdvice,
+		"ArcForeshadows":    arcForeshadows,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render template: %w", err)
@@ -661,7 +687,8 @@ func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.Out
 	}
 	if err := json.Unmarshal([]byte(chapter.SceneOutline), &outline); err == nil {
 		n := len(outline.Scenes)
-		if n < 2 {
+		// 单场景仅对中低张力章节报错；高张力章节（如决战/高潮）可以是一个完整长场景
+		if n < 2 && chapter.TensionLevel < 8 {
 			issues = append(issues, model.OutlineIssue{
 				Dimension:   "structure",
 				Severity:    "error",
@@ -700,20 +727,24 @@ func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.Out
 						Suggestion:  "建议调整场景间的张力梯度，制造张弛有度的节奏曲线",
 					})
 				}
-				allHigh := true
-				for _, l := range levels {
-					if l < 7 {
-						allHigh = false
-						break
+				// 全程高张力警告：只对章节目标张力本身不高的章节触发
+				// 如果章节规划张力就是 8+，全程高张力是预期行为（决战/高潮章）
+				if chapter.TensionLevel < 7 {
+					allHigh := true
+					for _, l := range levels {
+						if l < 7 {
+							allHigh = false
+							break
+						}
 					}
-				}
-				if allHigh {
-					issues = append(issues, model.OutlineIssue{
-						Dimension:   "pacing",
-						Severity:    "info",
-						Description: "章节全程高张力，读者可能产生疲劳感",
-						Suggestion:  "建议在高潮前插入短暂的情感缓冲场景，形成张弛对比",
-					})
+					if allHigh {
+						issues = append(issues, model.OutlineIssue{
+							Dimension:   "pacing",
+							Severity:    "info",
+							Description: "章节全程高张力，读者可能产生疲劳感",
+							Suggestion:  "建议在高潮前插入短暂的情感缓冲场景，形成张弛对比",
+						})
+					}
 				}
 			}
 
@@ -743,12 +774,13 @@ func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.Out
 		})
 	}
 
-	if chapter.ActNo == 1 && chapter.TensionLevel >= 9 {
+	// 第一幕极高张力警告：排除章节号 <= 2 的情况（开场倒叙/in medias res 是经典手法）
+	if chapter.ActNo == 1 && chapter.TensionLevel >= 9 && chapter.ChapterNo > 2 {
 		issues = append(issues, model.OutlineIssue{
 			Dimension:   "pacing",
 			Severity:    "warning",
-			Description: "第一幕出现极高张力（9-10），可能透支叙事空间",
-			Suggestion:  "第一幕建议以铺垫、人物塑造为主，为后续高潮留出空间",
+			Description: fmt.Sprintf("第一幕第%d章出现极高张力（%d/10），可能透支后续叙事空间", chapter.ChapterNo, chapter.TensionLevel),
+			Suggestion:  "第一幕中期建议以铺垫和人物塑造为主，将极高张力节点集中于幕末转折点，为第二幕留出对比空间",
 		})
 	}
 
@@ -805,6 +837,14 @@ func (s *OutlineReviewService) runAIReview(ctx context.Context, tenantID uint, c
 		outlineContent = chapter.Outline
 	}
 
+	openForeshadows := s.buildOpenForeshadowsText(tenantID, chapter.NovelID)
+
+	// 体裁权重摘要（告知 AI 本体裁的审查侧重，辅助其打分）
+	w := getGenreWeights(novel.Genre)
+	weightHint := fmt.Sprintf("结构%.0f%%·节奏%.0f%%·连贯%.0f%%·人物%.0f%%·冲突%.0f%%·钩子%.0f%%",
+		w.Structure*100, w.Pacing*100, w.Continuity*100,
+		w.Character*100, w.Conflict*100, w.Hook*100)
+
 	prompt, err := renderPrompt("outline_review", map[string]interface{}{
 		"NovelTitle":          novel.Title,
 		"Genre":               novel.Genre,
@@ -819,6 +859,8 @@ func (s *OutlineReviewService) runAIReview(ctx context.Context, tenantID uint, c
 		"PrevChapterSummary":  prevSummary,
 		"NextChapterTitle":    nextTitle,
 		"NovelOutlineExcerpt": outlineExcerpt,
+		"OpenForeshadows":     openForeshadows,
+		"WeightHint":          weightHint,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render template: %w", err)
@@ -877,6 +919,118 @@ func (s *OutlineReviewService) buildRuleOnlyReview(review *model.OutlineReview, 
 	}
 	review.Suggestion = "AI 审查暂不可用，已完成基础规则检查。建议配置 AI 服务后重新审查以获得专业建议。"
 	return review
+}
+
+// ── 体裁权重系统 ─────────────────────────────────────────────────────────────
+
+type dimensionWeights struct {
+	Structure  float64
+	Pacing     float64
+	Continuity float64
+	Character  float64
+	Conflict   float64
+	Hook       float64
+}
+
+// 各体裁对六维度的侧重不同：权重之和均为1.0
+var genreWeightMap = map[string]dimensionWeights{
+	"言情": {0.12, 0.15, 0.20, 0.25, 0.15, 0.13},
+	"爱情": {0.12, 0.15, 0.20, 0.25, 0.15, 0.13},
+	"悬疑": {0.15, 0.15, 0.18, 0.10, 0.17, 0.25},
+	"惊悚": {0.15, 0.15, 0.18, 0.10, 0.17, 0.25},
+	"推理": {0.15, 0.15, 0.18, 0.10, 0.17, 0.25},
+	"武侠": {0.15, 0.20, 0.15, 0.15, 0.25, 0.10},
+	"玄幻": {0.15, 0.20, 0.15, 0.15, 0.25, 0.10},
+	"修仙": {0.15, 0.20, 0.15, 0.15, 0.25, 0.10},
+	"奇幻": {0.18, 0.18, 0.16, 0.15, 0.23, 0.10},
+	"科幻": {0.20, 0.15, 0.18, 0.15, 0.22, 0.10},
+	"历史": {0.20, 0.15, 0.22, 0.18, 0.15, 0.10},
+	"都市": {0.15, 0.15, 0.20, 0.20, 0.20, 0.10},
+	"职场": {0.15, 0.15, 0.20, 0.20, 0.20, 0.10},
+}
+
+var equalWeights = dimensionWeights{1.0 / 6, 1.0 / 6, 1.0 / 6, 1.0 / 6, 1.0 / 6, 1.0 / 6}
+
+func getGenreWeights(genre string) dimensionWeights {
+	if w, ok := genreWeightMap[genre]; ok {
+		return w
+	}
+	for k, w := range genreWeightMap {
+		if strings.Contains(genre, k) {
+			return w
+		}
+	}
+	return equalWeights
+}
+
+func applyWeightedScore(d aiReviewResult, genre string) float64 {
+	w := getGenreWeights(genre)
+	score := d.DimensionScores.Structure*w.Structure +
+		d.DimensionScores.Pacing*w.Pacing +
+		d.DimensionScores.Continuity*w.Continuity +
+		d.DimensionScores.Character*w.Character +
+		d.DimensionScores.Conflict*w.Conflict +
+		d.DimensionScores.Hook*w.Hook
+	return math.Max(0, math.Min(100, math.Round(score*10)/10))
+}
+
+// ── 伏笔上下文构建 ───────────────────────────────────────────────────────────
+
+// buildOpenForeshadowsText 返回小说当前未兑现伏笔的摘要文本，注入审查 prompt
+func (s *OutlineReviewService) buildOpenForeshadowsText(tenantID, novelID uint) string {
+	if s.foreshadowRepo == nil {
+		return ""
+	}
+	foreshadows, err := s.foreshadowRepo.ListByNovel(novelID, tenantID)
+	if err != nil || len(foreshadows) == 0 {
+		return ""
+	}
+	var lines []string
+	for _, f := range foreshadows {
+		if f.Status == "planted" {
+			desc := f.Description
+			if len([]rune(desc)) > 60 {
+				desc = string([]rune(desc)[:60]) + "…"
+			}
+			lines = append(lines, fmt.Sprintf("- 【%s】%s", f.Title, desc))
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
+}
+
+// buildArcOpenForeshadowsText 从弧光摘要中聚合跨弧未兑现伏笔，用于综合报告
+func (s *OutlineReviewService) buildArcOpenForeshadowsText(novelID uint) string {
+	if s.arcSummaryRepo == nil {
+		return ""
+	}
+	arcs, err := s.arcSummaryRepo.ListByNovel(novelID)
+	if err != nil || len(arcs) == 0 {
+		return ""
+	}
+	seen := map[string]bool{}
+	var lines []string
+	for _, arc := range arcs {
+		if arc.OpenForeshadows == "" {
+			continue
+		}
+		var items []string
+		if err := json.Unmarshal([]byte(arc.OpenForeshadows), &items); err != nil {
+			continue
+		}
+		for _, item := range items {
+			if !seen[item] {
+				seen[item] = true
+				lines = append(lines, fmt.Sprintf("- %s（源自第%d-%d章）", item, arc.StartChapter, arc.EndChapter))
+			}
+		}
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n")
 }
 
 func scoreToStatus(score float64) string {

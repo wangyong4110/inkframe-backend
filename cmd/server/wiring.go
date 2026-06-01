@@ -653,7 +653,8 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 			repos.ChapterRepo,
 			repos.NovelRepo,
 			core.AI,
-		),
+		).WithForeshadowRepo(repos.ForeshadowRepo).
+			WithArcSummaryRepo(repos.ArcSummaryRepo),
 	}
 }
 
