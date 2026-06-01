@@ -183,12 +183,14 @@ func (s *AuthService) Register(req *RegisterRequest) (interface{}, error) {
 			return fmt.Errorf("failed to create tenant user: %w", err)
 		}
 
-		_ = s.tenantRepo.IncrUsedUsers(tenant.ID)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
+
+	// 事务提交后再递增，避免在同一连接池内对未提交行加锁导致 50s 超时
+	_ = s.tenantRepo.IncrUsedUsers(tenantID)
 
 	if s.requireVerification {
 		// 异步发送验证邮件，不阻塞注册响应
@@ -718,11 +720,26 @@ func (s *AuthService) RequestPasswordReset(email string) (token string, err erro
 	}
 	resetURL := fmt.Sprintf("%s/reset-password?token=%s", baseURL, rawToken)
 	subject := "【InkFrame】密码重置链接"
-	body := fmt.Sprintf("请点击以下链接重置您的密码（30分钟内有效）：\n\n%s\n\n如非本人操作请忽略此邮件。", resetURL)
+	body := fmt.Sprintf(`<!DOCTYPE html>
+<html><body style="font-family:sans-serif;background:#f4f4f4;margin:0;padding:32px">
+<div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;padding:40px;box-shadow:0 2px 8px rgba(0,0,0,.08)">
+  <h2 style="color:#1a1a1a;margin:0 0 8px">密码重置</h2>
+  <p style="color:#555;line-height:1.6">您申请了密码重置，请点击下方按钮设置新密码。链接 <strong>30 分钟</strong>内有效。</p>
+  <div style="text-align:center;margin:32px 0">
+    <a href="%s" style="display:inline-block;background:#6366f1;color:#fff;text-decoration:none;padding:12px 32px;border-radius:8px;font-weight:600;font-size:15px">重置密码</a>
+  </div>
+  <p style="color:#999;font-size:13px;line-height:1.6">如无法点击按钮，请复制以下链接到浏览器：<br><a href="%s" style="color:#6366f1;word-break:break-all">%s</a></p>
+  <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
+  <p style="color:#bbb;font-size:12px;margin:0">如非本人操作，请忽略此邮件，您的账号安全不受影响。</p>
+</div>
+</body></html>`, resetURL, resetURL, resetURL)
 	if s.emailSender != nil {
-		if err := s.emailSender.SendEmail(user.Email, subject, body); err != nil {
-			logger.Printf("RequestPasswordReset: send email failed: %v", err)
-		}
+		email, subj, bd := user.Email, subject, body
+		go func() {
+			if err := s.emailSender.SendEmail(email, subj, bd); err != nil {
+				logger.Printf("RequestPasswordReset: send email failed: %v", err)
+			}
+		}()
 	}
 	return rawToken, nil
 }
@@ -795,13 +812,28 @@ func (s *AuthService) SendEmailVerification(userID uint) (token string, err erro
 		if baseURL == "" {
 			baseURL = "http://localhost:3000"
 		}
-		verifyURL := fmt.Sprintf("%s/verify-email?token=%s", baseURL, rawToken)
+		verifyURL := fmt.Sprintf("%s/auth/verify-email?token=%s", baseURL, rawToken)
 		subject := "【InkFrame】邮箱验证"
-		body := fmt.Sprintf("请点击以下链接验证您的邮箱（24小时内有效）：\n\n%s", verifyURL)
+		body := fmt.Sprintf(`<!DOCTYPE html>
+<html><body style="font-family:sans-serif;background:#f4f4f4;margin:0;padding:32px">
+<div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;padding:40px;box-shadow:0 2px 8px rgba(0,0,0,.08)">
+  <h2 style="color:#1a1a1a;margin:0 0 8px">验证您的邮箱</h2>
+  <p style="color:#555;line-height:1.6">感谢注册 InkFrame！请点击下方按钮完成邮箱验证，链接 <strong>24 小时</strong>内有效。</p>
+  <div style="text-align:center;margin:32px 0">
+    <a href="%s" style="display:inline-block;background:#6366f1;color:#fff;text-decoration:none;padding:12px 32px;border-radius:8px;font-weight:600;font-size:15px">验证邮箱</a>
+  </div>
+  <p style="color:#999;font-size:13px;line-height:1.6">如无法点击按钮，请复制以下链接到浏览器：<br><a href="%s" style="color:#6366f1;word-break:break-all">%s</a></p>
+  <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
+  <p style="color:#bbb;font-size:12px;margin:0">如非本人操作，请忽略此邮件。</p>
+</div>
+</body></html>`, verifyURL, verifyURL, verifyURL)
 		if s.emailSender != nil {
-			if err := s.emailSender.SendEmail(user.Email, subject, body); err != nil {
-				logger.Printf("SendEmailVerification: send email failed: %v", err)
-			}
+			email, subj, bd := user.Email, subject, body
+			go func() {
+				if err := s.emailSender.SendEmail(email, subj, bd); err != nil {
+					logger.Printf("SendEmailVerification: send email failed: %v", err)
+				}
+			}()
 		}
 	}
 	return rawToken, nil
@@ -829,9 +861,12 @@ func (s *AuthService) ResendEmailVerification(email string) error {
 	if user.EmailVerifiedAt != nil && !user.EmailVerifiedAt.IsZero() {
 		return nil // 已验证，静默返回
 	}
-	if _, err := s.SendEmailVerification(user.ID); err != nil {
-		logger.Printf("[ResendEmailVerification] failed for user %d: %v", user.ID, err)
-	}
+	uid := user.ID
+	go func() {
+		if _, err := s.SendEmailVerification(uid); err != nil {
+			logger.Printf("[ResendEmailVerification] failed for user %d: %v", uid, err)
+		}
+	}()
 	return nil
 }
 
