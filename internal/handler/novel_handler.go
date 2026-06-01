@@ -376,31 +376,39 @@ func (h *NovelHandler) BatchGenerateChapters(c *gin.Context) {
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID)                                              //nolint:errcheck
-		h.taskSvc.UpdateProgressAndTitle(taskID, 5, "正在构建叙事圣经与章节蓝图...") //nolint:errcheck
-
-		saved, genErr := h.chapterService.BatchGenerateChaptersSingleCall(
-			tenantID, uint(novelId), toGenerate, req.WordCount, req.ModelOverride,
-		)
-
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		total := len(toGenerate)
-		if genErr != nil {
-			logger.Printf("[BatchGenerate] single-call failed: %v", genErr)
-			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
-			return
+		var generated, failed int
+		var failedChapters []int
+		for i, ch := range toGenerate {
+			progress := (i*90)/total + 5
+			h.taskSvc.UpdateProgressAndTitle(taskID, progress, //nolint:errcheck
+				fmt.Sprintf("正在生成第%d章《%s》（%d/%d）", ch.ChapterNo, ch.Title, i+1, total))
+			genReq := &model.GenerateChapterRequest{
+				NovelID:       uint(novelId),
+				ChapterNo:     ch.ChapterNo,
+				WordCount:     req.WordCount,
+				MaxTokens:     req.MaxTokens,
+				ModelOverride: req.ModelOverride,
+			}
+			if _, genErr := h.chapterService.GenerateChapter(tenantID, uint(novelId), genReq); genErr != nil {
+				logger.Printf("[BatchGenerate] chapter %d failed: %v", ch.ChapterNo, genErr)
+				failed++
+				failedChapters = append(failedChapters, ch.ChapterNo)
+			} else {
+				generated++
+			}
 		}
-
-		generated := len(saved)
-		failed := total - generated
-		resultTitle := fmt.Sprintf("生成完成：成功%d章", generated)
+		resultTitle := fmt.Sprintf("批量生成完成：成功%d章", generated)
 		if failed > 0 {
 			resultTitle += fmt.Sprintf("，失败%d章", failed)
 		}
-		h.taskSvc.UpdateProgressAndTitle(taskID, 95, "正在异步处理摘要与角色快照...") //nolint:errcheck
-		h.taskSvc.Complete(taskID, map[string]interface{}{                      //nolint:errcheck
-			"total":     total,
-			"generated": generated,
-			"failed":    failed,
+		h.taskSvc.UpdateProgressAndTitle(taskID, 99, resultTitle) //nolint:errcheck
+		h.taskSvc.Complete(taskID, map[string]interface{}{        //nolint:errcheck
+			"total":           total,
+			"generated":       generated,
+			"failed":          failed,
+			"failed_chapters": failedChapters,
 		})
 	}(task.TaskID)
 

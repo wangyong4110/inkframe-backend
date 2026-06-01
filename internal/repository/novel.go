@@ -69,6 +69,15 @@ func (r *NovelRepository) GetByID(id uint) (*model.Novel, error) {
 	return &novel, nil
 }
 
+// GetByIDFromDB 直接从数据库读取小说（跳过 Redis 缓存），用于需要最新配置的场景。
+func (r *NovelRepository) GetByIDFromDB(id uint) (*model.Novel, error) {
+	var novel model.Novel
+	if err := r.db.Preload("Worldview").Preload("VideoConfig").First(&novel, id).Error; err != nil {
+		return nil, err
+	}
+	return &novel, nil
+}
+
 // GetByUUID 根据UUID获取小说
 func (r *NovelRepository) GetByUUID(uuid string) (*model.Novel, error) {
 	var novel model.Novel

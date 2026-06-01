@@ -390,7 +390,8 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 		WithSnapshotRepo(repos.SnapshotRepo).
 		WithVersionRepo(repos.ChapterVersionRepo).
 		WithContinuityService(continuitySvc).
-		WithKnowledgeService(knowledgeSvc)
+		WithKnowledgeService(knowledgeSvc).
+		WithQualityService(core.Quality)
 
 	// 图像生成服务
 	imageGenSvc := service.NewImageGenerationService(aiSvc)
