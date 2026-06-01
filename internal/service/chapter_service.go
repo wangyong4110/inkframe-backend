@@ -1464,6 +1464,24 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 		}(chapter)
 	}
 
+	// 4b. 自动审查：章节生成后执行 N 轮 AI 深度审查 + 自动应用修改
+	if s.qualitySvc != nil && novel.AutoReviewRounds > 0 {
+		logger.Printf("[ChapterService] postProcessChapter: starting auto-review for ch%d (%d rounds, minScore=%.0f)",
+			chapter.ChapterNo, novel.AutoReviewRounds, novel.AutoReviewMinScore)
+		reviewCtx, reviewCancel := context.WithTimeout(context.Background(), time.Duration(novel.AutoReviewRounds)*5*time.Minute)
+		finalScore, totalApplied, reviewErr := s.qualitySvc.RunAutoReview(
+			reviewCtx, chapter.ID, tenantID,
+			novel.AutoReviewRounds, novel.AutoReviewMinScore,
+		)
+		reviewCancel()
+		if reviewErr != nil {
+			logger.Printf("[ChapterService] postProcessChapter: auto-review ch%d error (non-fatal): %v", chapter.ChapterNo, reviewErr)
+		} else {
+			logger.Printf("[ChapterService] postProcessChapter: auto-review ch%d done: finalScore=%.1f totalApplied=%d",
+				chapter.ChapterNo, finalScore, totalApplied)
+		}
+	}
+
 	// 5. 触发弧摘要（每 arcSize 章触发一次）
 	// 注：角色快照已在 GenerateChapter Step 5b 同步提取，此处不再重复。
 	if s.narrativeSvc != nil {

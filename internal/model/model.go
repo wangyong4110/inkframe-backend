@@ -147,6 +147,10 @@ type Novel struct {
 	ImageStyle     string `json:"image_style" gorm:"size:50"`      // 视觉/图片风格，如 anime/realistic/ink_painting
 	PromptLanguage string `json:"prompt_language" gorm:"size:10;default:zh"` // AI 提示词语言：zh（中文，默认）/ en（英文）
 
+	// 自动审查配置：章节生成后自动执行 N 轮 AI 审查+优化
+	AutoReviewRounds   int     `json:"auto_review_rounds" gorm:"default:0"`    // 0=关闭，1-3=开启 N 轮
+	AutoReviewMinScore float64 `json:"auto_review_min_score" gorm:"default:80"` // 达到此分数后提前停止
+
 	// 视频/字幕配置（已迁移至 ink_novel_video_config，通过 VideoConfig 关联访问）
 	VideoConfig *NovelVideoConfig `json:"video_config,omitempty" gorm:"foreignKey:NovelID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
 
@@ -588,6 +592,9 @@ type UpdateNovelRequest struct {
 	StylePrompt    string `json:"style_prompt"`
 	ImageStyle     string `json:"image_style"`
 	PromptLanguage string `json:"prompt_language"`
+	// 自动审查
+	AutoReviewRounds   *int     `json:"auto_review_rounds"`
+	AutoReviewMinScore *float64 `json:"auto_review_min_score"`
 	// 创作目标
 	TargetWordCount *int `json:"target_word_count"`
 	TargetChapters  *int `json:"target_chapters"`

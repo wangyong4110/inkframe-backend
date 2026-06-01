@@ -242,6 +242,26 @@ func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequ
 	if req.PromptLanguage != "" {
 		novel.PromptLanguage = req.PromptLanguage
 	}
+	if req.AutoReviewRounds != nil {
+		rounds := *req.AutoReviewRounds
+		if rounds < 0 {
+			rounds = 0
+		}
+		if rounds > 5 {
+			rounds = 5
+		}
+		novel.AutoReviewRounds = rounds
+	}
+	if req.AutoReviewMinScore != nil {
+		score := *req.AutoReviewMinScore
+		if score < 0 {
+			score = 0
+		}
+		if score > 100 {
+			score = 100
+		}
+		novel.AutoReviewMinScore = score
+	}
 	if req.TargetWordCount != nil {
 		novel.TargetWordCount = *req.TargetWordCount
 	}

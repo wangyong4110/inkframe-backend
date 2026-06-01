@@ -888,3 +888,78 @@ func (s *QualityControlService) UnignoreIssue(issueID uint) error {
 	}
 	return s.ignoredIssueRepo.Delete(issueID)
 }
+
+// RunAutoReview 在章节生成后自动执行最多 rounds 轮 AI 深度审查 + 自动应用修改。
+// 每轮：调用 ReviewChapter → 收集 error/warning 级别的改写建议 → ApplyDiffs。
+// 若当轮评分 >= minScore 或无可应用的修改，则提前结束。
+// 返回：最终分数、总共应用的段落数、遇到的错误（非致命，调用方可忽略）。
+func (s *QualityControlService) RunAutoReview(
+	ctx context.Context,
+	chapterID uint,
+	tenantID uint,
+	rounds int,
+	minScore float64,
+) (finalScore float64, totalApplied int, err error) {
+	if rounds <= 0 {
+		return 0, 0, nil
+	}
+	if rounds > 5 {
+		rounds = 5
+	}
+	if minScore <= 0 {
+		minScore = 80
+	}
+
+	for round := 1; round <= rounds; round++ {
+		logger.Printf("[AutoReview] chapterID=%d round=%d/%d", chapterID, round, rounds)
+
+		review, reviewErr := s.ReviewChapter(ctx, chapterID, "")
+		if reviewErr != nil {
+			logger.Printf("[AutoReview] chapterID=%d round=%d review failed: %v", chapterID, round, reviewErr)
+			return finalScore, totalApplied, reviewErr
+		}
+		finalScore = review.OverallScore
+		logger.Printf("[AutoReview] chapterID=%d round=%d score=%.1f", chapterID, round, finalScore)
+
+		// 提前停止：分数已达标
+		if finalScore >= minScore {
+			logger.Printf("[AutoReview] chapterID=%d round=%d: score %.1f >= threshold %.1f, stopping early",
+				chapterID, round, finalScore, minScore)
+			break
+		}
+
+		// 收集 error/warning 级别的改写建议
+		var diffs []ParagraphDiff
+		for _, pf := range review.ParagraphFeedback {
+			if pf.Action != "rewrite" || pf.SuggestedRewrite == "" {
+				continue
+			}
+			if pf.Severity != "error" && pf.Severity != "warning" {
+				continue
+			}
+			diffs = append(diffs, ParagraphDiff{
+				Index:      pf.Index,
+				NewContent: pf.SuggestedRewrite,
+				OrigText:   pf.OrigText,
+			})
+		}
+
+		if len(diffs) == 0 {
+			logger.Printf("[AutoReview] chapterID=%d round=%d: no applicable diffs, stopping", chapterID, round)
+			break
+		}
+
+		applied, applyErr := s.ApplyDiffs(chapterID, diffs, review.RecordID, tenantID)
+		if applyErr != nil {
+			logger.Printf("[AutoReview] chapterID=%d round=%d ApplyDiffs failed: %v", chapterID, round, applyErr)
+			return finalScore, totalApplied, applyErr
+		}
+		totalApplied += applied
+		logger.Printf("[AutoReview] chapterID=%d round=%d: applied %d/%d diffs", chapterID, round, applied, len(diffs))
+
+		if applied == 0 {
+			break
+		}
+	}
+	return finalScore, totalApplied, nil
+}

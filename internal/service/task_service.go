@@ -38,6 +38,7 @@ const (
 	TaskTypeRewriteChapters          = "rewrite_chapters" // Phase 2: chapter-by-chapter rewriting
 	TaskTypeCrawlJob                 = "crawl_job"
 	TaskTypeSkillGen                 = "skill_gen"
+	TaskTypeBatchChapterGen          = "batch_chapter_gen"
 )
 
 // TaskService manages persistent async tasks.
@@ -148,6 +149,18 @@ func (s *TaskService) UpdateProgress(taskID string, progress int) error {
 		progress = 99
 	}
 	return s.repo.UpdateFields(taskID, map[string]interface{}{"progress": progress})
+}
+
+// UpdateProgressAndTitle updates progress percentage and the human-readable task title together.
+// Used by long-running batch tasks to surface per-step status to the frontend.
+func (s *TaskService) UpdateProgressAndTitle(taskID string, progress int, title string) error {
+	if progress < 0 {
+		progress = 0
+	}
+	if progress > 99 {
+		progress = 99
+	}
+	return s.repo.UpdateFields(taskID, map[string]interface{}{"progress": progress, "title": title})
 }
 
 // Complete stores the result and marks the task completed.
