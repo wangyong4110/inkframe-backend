@@ -484,10 +484,18 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	smsSvc := service.NewSMSService(redisClient, cfg.SMS)
 
 	var emailSender service.EmailSender
-	if cfg.Email.Host != "" {
+	switch {
+	case cfg.Email.WebhookURL != "":
+		emailSender = service.NewWebhookEmailSender(cfg.Email.WebhookURL, cfg.Email.WebhookToken)
+		logger.Printf("[Email] Webhook sender configured: url=%s require_verification=%v",
+			cfg.Email.WebhookURL, cfg.Email.RequireVerification)
+	case cfg.Email.Host != "":
 		emailSender = service.NewSMTPEmailSender(cfg.Email.Host, cfg.Email.Port, cfg.Email.Username, cfg.Email.Password, cfg.Email.From, cfg.Email.UseTLS)
-	} else {
+		logger.Printf("[Email] SMTP configured: host=%s port=%d tls=%v require_verification=%v",
+			cfg.Email.Host, cfg.Email.Port, cfg.Email.UseTLS, cfg.Email.RequireVerification)
+	default:
 		emailSender = &service.NoopEmailSender{}
+		logger.Printf("[Email] No sender configured (noop); require_verification=%v", cfg.Email.RequireVerification)
 	}
 
 	frontendURL := cfg.Server.FrontendURL

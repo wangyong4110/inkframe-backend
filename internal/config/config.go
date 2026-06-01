@@ -43,14 +43,25 @@ type Config struct {
 	Email EmailConfig `mapstructure:"email"`
 }
 
-// EmailConfig SMTP 邮件配置
+// EmailConfig 邮件配置
+// 支持两种发送方式（二选一）：
+//   - SMTP：填 host/port/username/password/from/use_tls
+//   - HTTP Webhook：填 webhook_url（+ 可选 webhook_token），SMTP 字段留空
 type EmailConfig struct {
-	Host             string `mapstructure:"host"`
-	Port             int    `mapstructure:"port"`
-	Username         string `mapstructure:"username"`
-	Password         string `mapstructure:"password"`
-	From             string `mapstructure:"from"`
-	UseTLS           bool   `mapstructure:"use_tls"`
+	// SMTP 配置
+	Host     string `mapstructure:"host"`
+	Port     int    `mapstructure:"port"`
+	Username string `mapstructure:"username"`
+	Password string `mapstructure:"password"`
+	From     string `mapstructure:"from"`
+	UseTLS   bool   `mapstructure:"use_tls"`
+
+	// HTTP Webhook 配置（SMTP 不可用时使用）
+	// POST {"to":"...","subject":"...","body":"..."} 到 webhook_url
+	// webhook_token 非空时附加 Authorization: Bearer <token> 请求头
+	WebhookURL   string `mapstructure:"webhook_url"`
+	WebhookToken string `mapstructure:"webhook_token"`
+
 	// RequireVerification 为 true 时，邮箱注册必须完成验证才能登录。
 	// 默认 false：注册即激活，无需验证邮件。
 	RequireVerification bool `mapstructure:"require_verification"`

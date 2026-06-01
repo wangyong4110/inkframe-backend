@@ -86,12 +86,20 @@ web_search:
 # 邮件发送配置（用于邮箱验证、密码重置）
 # 163 邮箱：需在 163 邮箱设置 → POP3/SMTP/IMAP → 开启 SMTP 服务，使用授权码作为 password
 email:
+  # ── 方式一：SMTP（需要出站 465/587 端口可达）──────────────────────────
   host: "smtp.163.com"
   port: 465
-  username: "jianying2027@163.com"   # [必填] 你的 163 邮箱，如 example@163.com
-  password: "6cx3LbGiDPxwU6F"       # [必填] 163 邮箱授权码（非登录密码），建议改用 SMTP_PASSWORD 环境变量
-  from: "jianying2027@163.com"       # 通常与 username 相同
-  use_tls: true                      # 163 465 端口使用直连 TLS；587 端口改 false（STARTTLS）
+  username: "jianying2027@163.com"   # 你的邮箱
+  password: "6cx3LbGiDPxwU6F"       # 邮箱授权码（非登录密码）
+  from: "jianying2027@163.com"
+  use_tls: true                      # 465=true(TLS)；587=false(STARTTLS)
+
+  # ── 方式二：HTTP Webhook（SMTP 被防火墙封锁时使用）────────────────────
+  # webhook_url: "https://your-email-relay.example.com/send"
+  # webhook_token: "your-api-token"   # 可选，作为 Bearer Token 发送
+  # Webhook 服务接收 POST {"to":"...","subject":"...","body":"..."}
+  # 可对接 SendGrid/阿里云邮件推送/自建中继等任意 HTTP 邮件 API
+
   require_verification: false        # true=邮箱注册须验证后才能登录；false=注册即激活（默认）
 
 # 短信验证码配置（用于手机号注册/登录，目前仅支持阿里云）

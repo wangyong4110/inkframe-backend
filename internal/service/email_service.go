@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/smtp"
 	"strings"
 	"syscall"
@@ -109,6 +110,39 @@ func (s *SMTPEmailSender) sendOnce(to, subject, body string) error {
 		return err
 	}
 	return smtp.SendMail(addr, auth, s.From, []string{to}, []byte(msg))
+}
+
+// WebhookEmailSender 通过 HTTP POST 发送邮件（SMTP 不可用时的替代方案）
+// Payload: {"to":"...","subject":"...","body":"..."}
+type WebhookEmailSender struct {
+	URL   string
+	Token string // 非空时附加 Authorization: Bearer <token>
+}
+
+func NewWebhookEmailSender(url, token string) *WebhookEmailSender {
+	return &WebhookEmailSender{URL: url, Token: token}
+}
+
+func (w *WebhookEmailSender) SendEmail(to, subject, body string) error {
+	payload := fmt.Sprintf(`{"to":%q,"subject":%q,"body":%q}`, to, subject, body)
+	req, err := http.NewRequest(http.MethodPost, w.URL, strings.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("webhook email: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if w.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+w.Token)
+	}
+	client := &http.Client{Timeout: 15 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("webhook email: send: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("webhook email: server returned %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // NoopEmailSender 用于未配置邮件时记录日志（不报错）
