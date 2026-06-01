@@ -116,6 +116,10 @@ func (s *QualityControlService) runAIQualityCheck(chapter *model.Chapter, novel 
 	return &scores, nil
 }
 
+// MinAcceptableQualityScore is the minimum OverallScore (0–1 scale) for a chapter
+// to be considered acceptable without triggering a refinement pass.
+const MinAcceptableQualityScore = 0.6
+
 // QualityReport 质量报告
 type QualityReport struct {
 	OverallScore     float64        `json:"overall_score"`
@@ -126,6 +130,23 @@ type QualityReport struct {
 	DramaticScore    float64        `json:"dramatic_score"` // 戏剧性评分
 	Issues           []QualityIssue `json:"issues"`
 	Suggestions      []string       `json:"suggestions"`
+}
+
+// IsAcceptable reports whether the report's overall score meets the minimum threshold.
+func (r *QualityReport) IsAcceptable() bool {
+	return r.OverallScore >= MinAcceptableQualityScore
+}
+
+// SummarizeIssues returns a compact JSON string of all issues (for storage in Chapter.QualityIssues).
+func (r *QualityReport) SummarizeIssues() string {
+	if len(r.Issues) == 0 {
+		return ""
+	}
+	b, err := json.Marshal(r.Issues)
+	if err != nil {
+		return ""
+	}
+	return string(b)
 }
 
 // QualityIssue 质量问题

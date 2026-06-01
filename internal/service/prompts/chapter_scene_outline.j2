@@ -53,8 +53,17 @@
 {% else %}- {{ char.Name }}（{{ char.Role }}）：当前状态「{{ char.CurrentState }}」
 {% endif %}{% endfor %}
 
+{% if TimelineContext %}
+# 时间线约束（必须遵守）
+{{ TimelineContext }}
+{% endif %}
+
+{% if CharacterStates %}
+{{ CharacterStates }}
+{% endif %}
+
 {% if ForeshadowHints %}
-# 本章伏笔要求
+# 需要处理的伏笔
 {{ ForeshadowHints }}
 {% endif %}
 

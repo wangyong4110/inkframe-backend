@@ -587,8 +587,38 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 	synthCtx, synthCancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	go func() {
 		defer synthCancel()
+
+		// 统一管理所有临时文件：goroutine 退出时一并清理（无论成功/失败）
+		var tempFiles []string
+		defer func() {
+			for _, f := range tempFiles {
+				if f != "" {
+					os.Remove(f)
+				}
+			}
+		}()
+
 		if s.taskSvc != nil {
 			_ = s.taskSvc.SetRunning(taskID)
+		}
+
+		// 0. BGM 覆盖率预检（可选；bgmService + bgmRepo 均配置时才检查）
+		if s.bgmService != nil && s.bgmRepo != nil {
+			allShots, shotsErr := s.storyboardRepo.ListByVideo(videoID)
+			if shotsErr == nil && len(allShots) > 0 {
+				if coverErr := s.bgmService.ValidateCoverageBeforeSynthesis(synthCtx, videoID, allShots, s.bgmRepo); coverErr != nil {
+					logger.Printf("[SynthesizeVideo] videoID=%d: BGM coverage check failed: %v", videoID, coverErr)
+					if s.taskSvc != nil {
+						_ = s.taskSvc.Fail(taskID, "synthesis blocked: "+coverErr.Error())
+					}
+					if updErr := s.videoRepo.UpdateFields(video.ID, map[string]interface{}{
+						"status": "failed", "error_message": "synthesis blocked: " + coverErr.Error(),
+					}); updErr != nil {
+						logger.Printf("[SynthesizeVideo] videoID=%d: DB update failed: %v", videoID, updErr)
+					}
+					return
+				}
+			}
 		}
 
 		// 1. 拼接视频
@@ -607,6 +637,7 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 			return
 		}
 		logger.Printf("[SynthesizeVideo] videoID=%d step=1/4: stitch OK → %s", videoID, stitchedPath)
+		tempFiles = append(tempFiles, stitchedPath)
 
 		finalPath := stitchedPath
 
@@ -634,8 +665,10 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 				}
 				assContent := subtitleSvc.GenerateASS(shotSlice, fontName)
 				assPath := fmt.Sprintf("%s/inkframe-%d-subtitles.ass", inkframeTempDir(), videoID)
+				tempFiles = append(tempFiles, assPath)
 				if writeErr := os.WriteFile(assPath, []byte(assContent), 0644); writeErr == nil {
 					burnedPath := fmt.Sprintf("%s/inkframe-%d-burned.mp4", inkframeTempDir(), videoID)
+					tempFiles = append(tempFiles, burnedPath)
 					burnCtx, burnCancel := context.WithTimeout(synthCtx, 20*time.Minute)
 					burnErr := subtitleSvc.BurnSubtitles(burnCtx, stitchedPath, assPath, burnedPath)
 					burnCancel()
@@ -645,7 +678,6 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 					} else {
 						logger.Printf("[SynthesizeVideo] videoID=%d step=2/4: subtitle burn failed: %v — skipping", videoID, burnErr)
 					}
-					os.Remove(assPath)
 				}
 			}
 		} else {
@@ -658,11 +690,11 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 			_ = s.taskSvc.UpdateProgress(taskID, 60)
 		}
 		coverPath := fmt.Sprintf("%s/inkframe-%d-cover.jpg", inkframeTempDir(), videoID)
+		tempFiles = append(tempFiles, coverPath)
 		coverURL := ""
 		if _, err := runFFmpegWithGoroutineTimeout(30*time.Second, "-y", "-ss", "2", "-i", finalPath,
 			"-frames:v", "1", "-vf", "scale=640:-1", coverPath); err == nil {
 			logger.Printf("[SynthesizeVideo] videoID=%d step=3/4: cover extracted → %s", videoID, coverPath)
-			defer os.Remove(coverPath)
 		} else {
 			logger.Printf("[SynthesizeVideo] videoID=%d step=3/4: cover extraction failed: %v — continuing", videoID, err)
 		}
@@ -754,11 +786,7 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 			}
 		}
 
-		// 清理临时文件
-		os.Remove(finalPath)
-		if finalPath != stitchedPath {
-			os.Remove(stitchedPath)
-		}
+		// 临时文件由 goroutine 顶部的 deferred cleanup 统一清理
 		logger.Printf("[SynthesizeVideo] videoID=%d: goroutine done", videoID)
 	}()
 

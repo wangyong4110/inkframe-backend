@@ -28,6 +28,7 @@ type VideoService struct {
 	videoProviders     map[string]ai.VideoProvider
 	consistencyService *CharacterConsistencyService
 	bgmService         *BGMService
+	bgmRepo            *repository.VideoBGMSegmentRepository
 	sfxService         *SFXService
 	storageSvc         storage.Service
 	sceneAnchorSvc       *SceneAnchorService
@@ -48,7 +49,8 @@ type VideoService struct {
 	viewDedupCache   sync.Map     // key "ip:id" → expiry time.Time（防刷播放量）
 	cleanupOnce      sync.Once
 	stopCh           chan struct{} // closed by Shutdown() to stop background goroutines
-	activePoll       sync.Map     // videoID → struct{} (prevents duplicate PollAndStitchVideo goroutines)
+	activePoll            sync.Map     // videoID → struct{} (prevents duplicate PollAndStitchVideo goroutines)
+	generatingStoryboard  sync.Map     // videoID → struct{} (prevents duplicate GenerateStoryboard calls)
 }
 
 // GetNovelByID 通过 novelRepo 加载小说（供 handler 传递给 CapCutService 等下游服务）
@@ -178,6 +180,12 @@ func (s *VideoService) WithBGMService(bgm *BGMService) *VideoService {
 	return s
 }
 
+// WithBGMSegmentRepo 注入 BGM 分段仓库（选填；用于合成前覆盖率校验）
+func (s *VideoService) WithBGMSegmentRepo(r *repository.VideoBGMSegmentRepository) *VideoService {
+	s.bgmRepo = r
+	return s
+}
+
 // WithSFXService 设置音效服务（选填）
 func (s *VideoService) WithSFXService(sfx *SFXService) *VideoService {
 	s.sfxService = sfx
@@ -293,11 +301,14 @@ func (s *VideoService) ListVideos(novelId *uint, chapterID *uint, status string,
 	return videos, int(total), err
 }
 
-// UpdateVideo 更新视频
-func (s *VideoService) UpdateVideo(id uint, req *model.UpdateVideoRequest) (*model.Video, error) {
+// UpdateVideo 更新视频（带租户隔离校验）
+func (s *VideoService) UpdateVideo(id, tenantID uint, req *model.UpdateVideoRequest) (*model.Video, error) {
 	video, err := s.videoRepo.GetByID(id)
 	if err != nil {
 		return nil, err
+	}
+	if tenantID != 0 && video.TenantID != 0 && video.TenantID != tenantID {
+		return nil, fmt.Errorf("video not found or access denied")
 	}
 	if req.Title != "" {
 		video.Title = req.Title
@@ -506,9 +517,48 @@ func (s *VideoService) RecalcVideoHotScores() error {
 }
 
 // DeleteVideo 删除视频（级联删除所有子记录：分镜、语音段、音效、BGM段）
-// 所有操作在同一事务中执行，任何步骤失败均回滚。
-func (s *VideoService) DeleteVideo(id uint) error {
-	return s.videoRepo.DB().Transaction(func(tx *gorm.DB) error {
+// tenantID: 调用方租户 ID；传 0 则跳过租户校验（内部调用）。
+// 所有 DB 操作在同一事务中执行，任何步骤失败均回滚。
+// OSS 文件删除在事务提交前收集 URL，事务成功后执行（best-effort，失败仅记录日志）。
+func (s *VideoService) DeleteVideo(id, tenantID uint) error {
+	// 租户归属校验：确认视频属于调用方租户
+	if tenantID != 0 {
+		var v model.Video
+		if err := s.videoRepo.DB().Select("id, tenant_id").First(&v, id).Error; err != nil {
+			return fmt.Errorf("video not found or access denied")
+		}
+		if v.TenantID != 0 && v.TenantID != tenantID {
+			return fmt.Errorf("video not found or access denied")
+		}
+	}
+
+	// 事务前收集所有需要清理的 OSS URL（读操作，不加锁）
+	var urlsToDelete []string
+	var video model.Video
+	if err := s.videoRepo.DB().Unscoped().First(&video, id).Error; err == nil {
+		if video.FinalVideoURL != "" {
+			urlsToDelete = append(urlsToDelete, video.FinalVideoURL)
+		}
+		if video.CoverURL != "" {
+			urlsToDelete = append(urlsToDelete, video.CoverURL)
+		}
+	}
+	var shots []*model.StoryboardShot
+	if err := s.videoRepo.DB().Unscoped().Where("video_id = ?", id).Find(&shots).Error; err == nil {
+		for _, shot := range shots {
+			if shot.ImageURL != "" {
+				urlsToDelete = append(urlsToDelete, shot.ImageURL)
+			}
+			if shot.VideoURL != "" {
+				urlsToDelete = append(urlsToDelete, shot.VideoURL)
+			}
+			if shot.ClipPath != "" {
+				urlsToDelete = append(urlsToDelete, shot.ClipPath)
+			}
+		}
+	}
+
+	if err := s.videoRepo.DB().Transaction(func(tx *gorm.DB) error {
 		// 1. 获取所有 shot IDs（含软删除记录，确保级联彻底）
 		var shotIDs []uint
 		if err := tx.Unscoped().Model(&model.StoryboardShot{}).
@@ -544,7 +594,34 @@ func (s *VideoService) DeleteVideo(id uint) error {
 			return fmt.Errorf("DeleteVideo: delete video: %w", err)
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+
+	// DB 事务成功后，best-effort 清理 OSS 文件（最多重试3次，指数退避；失败只记录日志，不影响返回值）
+	if s.storageSvc != nil {
+		for _, u := range urlsToDelete {
+			if u == "" {
+				continue
+			}
+			var lastErr error
+			for attempt := 0; attempt < 3; attempt++ {
+				if err := s.storageSvc.Delete(context.Background(), u); err == nil {
+					lastErr = nil
+					break
+				} else {
+					lastErr = err
+					if attempt < 2 {
+						time.Sleep(time.Duration(1<<uint(attempt)) * time.Second)
+					}
+				}
+			}
+			if lastErr != nil {
+				logger.Printf("ALERT: orphaned OSS file not deleted after 3 attempts: %s — %v", u, lastErr)
+			}
+		}
+	}
+	return nil
 }
 
 // StartGeneration 开始生成视频（调用真实视频 Provider）

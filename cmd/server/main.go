@@ -151,6 +151,7 @@ func main() {
 	services.AssetService.WithUnsplashKey(getEnv("UNSPLASH_ACCESS_KEY", cfg.Crawl.UnsplashKey))
 	services.AssetService.WithFreesoundKey(getEnv("FREESOUND_API_KEY", ""))
 	services.AssetService.WithPixabayKey(getEnv("PIXABAY_API_KEY", ""))
+	services.AssetService.WithPexelsKey(getEnv("PEXELS_API_KEY", cfg.Crawl.PexelsKey))
 	services.AssetService.RecoverOrphanedCrawlJobs()
 
 	sfxService := service.NewSFXService(services.AIService, storageSvc, repos.StoryboardRepo, service.SFXServiceConfig{
@@ -174,8 +175,10 @@ func main() {
 	r := router.SetupRouter(&router.Config{
 		JWTSecret:          cfg.Server.JWTSecret,
 		AllowedOrigins:     cfg.Server.AllowedOrigins,
+		TrustedProxies:     cfg.Server.TrustedProxies,
 		RedisClient:        redisClient,
 		DB:                 db,
+		AIService:          services.AIService,
 		NovelHandler:       handlers.NovelHandler,
 		ChapterHandler:     handlers.ChapterHandler,
 		CharacterHandler:   handlers.CharacterHandler,
@@ -210,6 +213,9 @@ func main() {
 		KnowledgeHandler:      handlers.KnowledgeHandler,
 		DramaticHandler:       handlers.DramaticHandler,
 		DashboardHandler:      handlers.DashboardHandler,
+		ForeshadowHandler:     handlers.ForeshadowHandler,
+		WebhookHandler:        handlers.WebhookHandler,
+		AuditHandler:          handlers.AuditHandler,
 	})
 
 	// 12. 创建服务器

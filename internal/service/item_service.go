@@ -116,6 +116,14 @@ func (s *ItemService) UpdateItem(id uint, req *model.UpdateItemRequest) (*model.
 	return item, s.itemRepo.Update(item)
 }
 
+// BatchDeleteItems 批量删除物品，仅删除属于指定小说的物品
+func (s *ItemService) BatchDeleteItems(novelID uint, ids []uint) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return s.itemRepo.BatchDeleteByNovel(novelID, ids)
+}
+
 // DeleteItem 删除物品及其所有章节覆盖记录
 func (s *ItemService) DeleteItem(id uint) error {
 	if err := s.itemRepo.DeleteChapterItemsByItem(id); err != nil {
@@ -367,6 +375,11 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 			}
 			upserted = append(upserted, it)
 		} else {
+			// Deduplication: skip if an item with the same title already exists for this novel.
+			if existing, err := s.itemRepo.GetByTitleAndNovel(e.Name, novelID); err == nil && existing != nil {
+				upserted = append(upserted, existing)
+				continue
+			}
 			item := &model.Item{
 				NovelID:      novelID,
 				UUID:         uuid.New().String(),
@@ -389,6 +402,11 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 
 // UpsertChapterItem 创建或更新章节级物品覆盖
 func (s *ItemService) UpsertChapterItem(novelID, chapterID, itemID uint, req *model.UpsertChapterItemRequest) (*model.ChapterItem, error) {
+	// Validate that the base item belongs to the novel before writing the override.
+	item, err := s.itemRepo.GetByID(itemID)
+	if err != nil || item.NovelID != novelID {
+		return nil, fmt.Errorf("item does not belong to novel")
+	}
 	ci := &model.ChapterItem{
 		ItemID:    itemID,
 		ChapterID: chapterID,

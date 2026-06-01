@@ -170,6 +170,10 @@ func (s *KnowledgeService) SearchKnowledge(ctx context.Context, query string, li
 							if id > 0 {
 								kb, kbErr := s.kbRepo.GetByID(id)
 								if kbErr == nil {
+									// 3b: 过滤掉不属于目标小说的结果
+									if kb.NovelID != nil && novelID != nil && *kb.NovelID != *novelID {
+										continue
+									}
 									kbs = append(kbs, kb)
 								}
 							}
@@ -181,8 +185,12 @@ func (s *KnowledgeService) SearchKnowledge(ctx context.Context, query string, li
 				}
 			}
 		}
-		// 向量搜索失败，降级到关键词搜索
-		logger.Printf("KnowledgeService.SearchKnowledge: vector search failed, fallback to keyword: %v", err)
+		// 3a: 区分 embed 失败 vs 向量搜索无结果
+		if err != nil {
+			logger.Printf("KnowledgeService.SearchKnowledge: embed failed, fallback to keyword: %v", err)
+		} else {
+			logger.Printf("KnowledgeService.SearchKnowledge: vector search returned no results, fallback to keyword")
+		}
 	}
 
 	// 关键词搜索降级
@@ -243,7 +251,14 @@ func (s *KnowledgeService) DeleteKnowledge(ctx context.Context, id uint, novelID
 
 // ExtractAndStorePlotPoints 提取并存储剧情点
 // 每次运行前先清除该章节的旧记录，避免重复（replace-on-rerun 语义）
+// aiClient 为 nil 时使用服务内部的 s.aiClient
 func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapter *model.Chapter, aiClient ai.AIProvider) error {
+	if aiClient == nil {
+		aiClient = s.aiClient
+	}
+	if aiClient == nil {
+		return fmt.Errorf("ExtractAndStorePlotPoints: no AI provider available")
+	}
 	// 先删除向量存储中该章节的旧记录，再删除 DB 记录
 	if s.vectorStore != nil {
 		store := s.vectorStore.DefaultStore()

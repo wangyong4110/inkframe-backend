@@ -39,6 +39,9 @@ type ChapterService struct {
 	mcpService     *McpService                     // 可选：用于联网搜索 MCP 工具
 	notifSvc       *NotificationService            // 可选：用于章节生成完成通知
 	skillRepo      *repository.SkillRepository     // 可选：用于将技能体系注入生成上下文
+	qualitySvc     *QualityControlService          // 可选：用于生成后质量评分与触发精修
+	knowledgeSvc   *KnowledgeService               // 可选：用于异步提取并存储剧情点
+	timelineSvc    *TimelineService                // 可选：时间线约束注入生成 prompt
 
 	// genLocks 防止同一章节并发生成（key: "novelID-chapterNo"）。
 	// DB 层的 AtomicSetGenerating 负责已存在占位章节的乐观锁保护；
@@ -114,6 +117,24 @@ func (s *ChapterService) WithSkillRepo(repo *repository.SkillRepository) *Chapte
 	return s
 }
 
+// WithQualityService 注入质量控制服务（可选），生成后自动评分并触发精修
+func (s *ChapterService) WithQualityService(svc *QualityControlService) *ChapterService {
+	s.qualitySvc = svc
+	return s
+}
+
+// WithKnowledgeService 注入知识库服务（可选），章节生成后异步提取并存储剧情点
+func (s *ChapterService) WithKnowledgeService(svc *KnowledgeService) *ChapterService {
+	s.knowledgeSvc = svc
+	return s
+}
+
+// WithTimelineService 注入时间线服务（可选），用于将时间线约束注入生成 prompt
+func (s *ChapterService) WithTimelineService(svc *TimelineService) *ChapterService {
+	s.timelineSvc = svc
+	return s
+}
+
 // WithDramaticServices 注入戏剧张力服务（可选）
 func (s *ChapterService) WithDramaticServices(hookSvc *HookChainService, spSvc *SatisfactionPointService, arcSvc *ConflictArcService) *ChapterService {
 	s.hookSvc = hookSvc
@@ -129,7 +150,9 @@ func (s *ChapterService) GetDefaultProviderName() string {
 
 // syncNovelStats refreshes chapter_count and total_words on the novel (best-effort).
 func (s *ChapterService) syncNovelStats(novelID uint) {
-	_ = s.novelRepo.SyncStats(novelID)
+	if err := s.novelRepo.SyncStats(novelID); err != nil {
+		logger.Printf("syncNovelStats: novelID=%d: %v", novelID, err)
+	}
 }
 
 func (s *ChapterService) CreateChapter(novelID uint, req *model.CreateChapterRequest) (*model.Chapter, error) {
@@ -235,6 +258,12 @@ func (s *ChapterService) DeleteChapter(id, tenantID uint) error {
 	}
 	if err := s.chapterRepo.DeleteAndRenumber(id, chapter.NovelID); err != nil {
 		return err
+	}
+	// Clean up character state snapshots that reference this chapter.
+	if s.snapshotRepo != nil {
+		if delErr := s.snapshotRepo.DeleteByChapterID(id); delErr != nil {
+			logger.Printf("[ChapterService] DeleteChapter: delete snapshots for chapter %d: %v", id, delErr)
+		}
 	}
 	s.syncNovelStats(chapter.NovelID)
 	return nil
@@ -435,6 +464,18 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	// 若 DB 中无角色记录，自动从小说简介中提取并写入，确保后续每章都有固定主角锚点。
 	s.ensureProtagonistExtracted(tenantID, novel)
 
+	// ── Step 0b: 等待弧摘要完成（防止上一弧摘要还在异步生成时就开始新章节）─────────────
+	// If the previous chapter was the last chapter of an arc, wait for its arc summary to complete
+	// so that BuildHierarchicalContext can include it.
+	const arcSizeConst = 10
+	if req.ChapterNo > 1 && s.narrativeSvc != nil {
+		prevNo := req.ChapterNo - 1
+		if prevNo%arcSizeConst == 0 {
+			arcNo := prevNo / arcSizeConst
+			s.narrativeSvc.WaitForArcSummary(novelID, arcNo, 30*time.Second)
+		}
+	}
+
 	// ── Step 1: 层次化上下文 ──────────────────────────────
 	globalCtx := s.buildGlobalContext(novelID, req.ChapterNo, novel)
 
@@ -531,6 +572,15 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 			}
 		}
 		return nil, err
+	}
+
+	// ── Content length validation ──────────────────────────────────────────────
+	if len([]rune(content)) < 100 {
+		if existing, _ := s.chapterRepo.GetByNovelAndChapterNo(novelID, req.ChapterNo); existing != nil && existing.Status == "generating" {
+			existing.Status = "failed"
+			_ = s.chapterRepo.Update(existing)
+		}
+		return nil, fmt.Errorf("generated content too short (%d chars), expected at least 100 chars", len([]rune(content)))
 	}
 
 	// ── Step 4: 存储章节 (upsert: update if placeholder exists) ──────────────
@@ -941,6 +991,14 @@ func (s *ChapterService) generateSceneOutline(
 		plotPointsText = sb.String()
 	}
 
+	// 获取时间线约束（仅注入与当前章节相近的事件）
+	var timelineContext string
+	if s.timelineSvc != nil {
+		if timeline, tlErr := s.timelineSvc.GetTimeline(novelID); tlErr == nil && timeline != nil {
+			timelineContext = s.timelineSvc.FormatTimelineForPrompt(timeline, req.ChapterNo)
+		}
+	}
+
 	outlinePrompt, err := renderPrompt("chapter_scene_outline", map[string]interface{}{
 		"NovelTitle":            novel.Title,
 		"ChapterNo":             req.ChapterNo,
@@ -962,6 +1020,7 @@ func (s *ChapterService) generateSceneOutline(
 		"StoryPatternRef":       storyPatternRef,
 		"ChapterBudget":         budgetText,
 		"CharacterRegistry":     characterRegistry,
+		"TimelineContext":        timelineContext,
 	})
 	if err != nil {
 		logger.Printf("GenerateChapter: render chapter_scene_outline: %v", err)
@@ -1100,6 +1159,14 @@ func (s *ChapterService) generateFromSceneOutline(
 		return content, "", err
 	}
 
+	// 获取时间线约束（注入正文生成，与场景大纲保持一致）
+	var timelineCtx string
+	if s.timelineSvc != nil {
+		if tl, tlErr := s.timelineSvc.GetTimeline(novelID); tlErr == nil && tl != nil {
+			timelineCtx = s.timelineSvc.FormatTimelineForPrompt(tl, req.ChapterNo)
+		}
+	}
+
 	chapterPrompt, err := renderPrompt("chapter_from_outline", map[string]interface{}{
 		"NovelTitle":            novel.Title,
 		"ChapterNo":             req.ChapterNo,
@@ -1118,6 +1185,7 @@ func (s *ChapterService) generateFromSceneOutline(
 		"WikiContext":           wikiContext,
 		"ChapterBudget":         budgetText,
 		"CharacterRegistry":     characterRegistry,
+		"TimelineContext":        timelineCtx,
 	})
 	if err != nil {
 		content, err := s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
@@ -1195,14 +1263,27 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 		chapter = fresh
 	}
 	// 1. 生成摘要（最重要：供后续章节的上下文使用）
+	// Retry up to 3 times with 1s/2s delays to ensure summary is available for subsequent chapters.
 	if s.narrativeSvc != nil && chapter.Summary == "" {
-		if summary, err := s.narrativeSvc.GenerateChapterSummary(tenantID, chapter, novel.Title); err == nil {
-			chapter.Summary = summary
+		var summaryText string
+		for attempt := 0; attempt < 3; attempt++ {
+			if generated, err := s.narrativeSvc.GenerateChapterSummary(tenantID, chapter, novel.Title); err == nil {
+				summaryText = generated
+				break
+			} else if attempt < 2 {
+				logger.Printf("postProcess: summary ch%d attempt %d failed: %v, retrying", chapter.ChapterNo, attempt+1, err)
+				time.Sleep(time.Duration(attempt+1) * time.Second)
+			} else {
+				logger.Printf("postProcess: summary ch%d attempt %d failed: %v", chapter.ChapterNo, attempt+1, err)
+			}
+		}
+		if summaryText != "" {
+			chapter.Summary = summaryText
 			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
 				logger.Printf("postProcessChapter: update chapter %d [摘要]: %v", chapter.ID, updateErr)
 			}
 		} else {
-			logger.Printf("postProcess: summary ch%d: %v", chapter.ChapterNo, err)
+			logger.Printf("[ChapterService] WARNING: chapter %d has no summary after 3 attempts", chapter.ChapterNo)
 		}
 	}
 
@@ -1225,6 +1306,47 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
 				logger.Printf("postProcessChapter: update chapter %d [精修]: %v", chapter.ID, updateErr)
 			}
+		}
+	}
+
+	// 3b. Quality score gating: if OverallScore < threshold, attempt one extra refinement pass.
+	// If still below threshold after refinement, mark chapter as low quality.
+	if s.qualitySvc != nil && chapter.Content != "" {
+		ctx := context.Background()
+		if report, qErr := s.qualitySvc.CheckChapterQuality(ctx, chapter, novel); qErr == nil && !report.IsAcceptable() {
+			logger.Printf("[ChapterService] postProcessChapter: ch%d quality score %.2f < threshold %.2f, triggering extra refinement",
+				chapter.ChapterNo, report.OverallScore, MinAcceptableQualityScore)
+			stillLow := true
+			if s.narrativeSvc != nil {
+				if refined, refErr := s.narrativeSvc.RefineChapterContent(tenantID, chapter, novel.Title); refErr == nil && refined != chapter.Content {
+					chapter.Content = refined
+					chapter.WordCount = countChineseChars(refined)
+					if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
+						logger.Printf("postProcessChapter: update chapter %d [quality-refinement]: %v", chapter.ID, updateErr)
+					}
+					// Re-check quality after refinement
+					if report2, qErr2 := s.qualitySvc.CheckChapterQuality(ctx, chapter, novel); qErr2 == nil && report2.IsAcceptable() {
+						stillLow = false
+					}
+				} else if refErr != nil {
+					logger.Printf("postProcessChapter: quality-refinement ch%d: %v", chapter.ChapterNo, refErr)
+				}
+			}
+			if stillLow {
+				// Fetch fresh copy to avoid overwriting concurrent field updates
+				if fresh, fetchErr := s.chapterRepo.GetByID(chapter.ID); fetchErr == nil {
+					fresh.QualityStatus = "low"
+					fresh.QualityIssues = report.SummarizeIssues()
+					if updateErr := s.chapterRepo.Update(fresh); updateErr != nil {
+						logger.Printf("postProcessChapter: update chapter %d [quality-status]: %v", chapter.ID, updateErr)
+					} else {
+						logger.Printf("[ChapterService] chapter %d saved with low quality status", chapter.ChapterNo)
+					}
+					chapter = fresh
+				}
+			}
+		} else if qErr != nil {
+			logger.Printf("[ChapterService] postProcessChapter: quality check ch%d failed (non-fatal): %v", chapter.ChapterNo, qErr)
 		}
 	}
 
@@ -1280,6 +1402,16 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 	// 注：角色快照已在 GenerateChapter Step 5b 同步提取，此处不再重复。
 	if s.narrativeSvc != nil {
 		s.narrativeSvc.TriggerArcSummaryIfNeeded(tenantID, novel.ID, chapter.ChapterNo)
+	}
+
+	// 5b. 异步提取并存储本章剧情点（知识库）
+	if s.knowledgeSvc != nil {
+		go func() {
+			ctx := context.Background()
+			if err := s.knowledgeSvc.ExtractAndStorePlotPoints(ctx, chapter, nil); err != nil {
+				logger.Printf("[ChapterService] ExtractAndStorePlotPoints failed for ch%d: %v", chapter.ChapterNo, err)
+			}
+		}()
 	}
 
 	// 5. 自动检查并标记已解决的剧情点（伏笔/冲突）
@@ -1837,6 +1969,20 @@ func NewChapterVersionService(
 
 func (s *ChapterVersionService) GetVersions(chapterID uint) ([]*model.ChapterVersion, error) {
 	return s.versionRepo.List(chapterID)
+}
+
+// GetChapterVersion returns a specific version by its ID, verifying it belongs to chapterID.
+func (s *ChapterVersionService) GetChapterVersion(chapterID, versionID uint) (*model.ChapterVersion, error) {
+	versions, err := s.versionRepo.List(chapterID)
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range versions {
+		if v.ID == versionID {
+			return v, nil
+		}
+	}
+	return nil, fmt.Errorf("version not found")
 }
 
 func (s *ChapterVersionService) RestoreVersion(chapterID uint, versionNo int) (*model.Chapter, error) {

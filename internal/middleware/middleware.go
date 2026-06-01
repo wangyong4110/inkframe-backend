@@ -338,6 +338,107 @@ func RequireEmailVerified(db *gorm.DB) gin.HandlerFunc {
 	}
 }
 
+// tenantSubCache holds a cached subscription status entry.
+type tenantSubCache struct {
+	ok        bool // false = expired or suspended
+	errMsg    string
+	errCode   string
+	httpCode  int
+	expiresAt time.Time // cache TTL
+}
+
+var (
+	tenantSubStore sync.Map // key: uint (tenantID) → *tenantSubCache
+)
+
+// InvalidateTenantSubCache removes the cached subscription status for a tenant,
+// forcing the next request to re-read from the database.
+// Call this after any tenant update that changes status, plan, or expiry.
+func InvalidateTenantSubCache(tenantID uint) {
+	tenantSubStore.Delete(tenantID)
+}
+
+// CheckTenantSubscription validates that the tenant's subscription is active
+// and not suspended. It caches the result for 5 minutes per tenant to avoid
+// hitting the database on every request.
+//
+// Skips the check when tenant_id is 0 (unauthenticated or system calls).
+// A missing or unreadable tenant record is treated as allowed (fail-open)
+// to avoid breaking existing flows when the table is unavailable.
+func CheckTenantSubscription(db *gorm.DB) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if db == nil {
+			c.Next()
+			return
+		}
+		tenantID := uint(0)
+		if v, ok := c.Get("tenant_id"); ok {
+			tenantID, _ = v.(uint)
+		}
+		if tenantID == 0 {
+			c.Next()
+			return
+		}
+
+		// Check cache first
+		if cached, ok := tenantSubStore.Load(tenantID); ok {
+			entry := cached.(*tenantSubCache)
+			if time.Now().Before(entry.expiresAt) {
+				if !entry.ok {
+					c.AbortWithStatusJSON(entry.httpCode, gin.H{
+						"error": entry.errMsg,
+						"code":  entry.errCode,
+					})
+					return
+				}
+				c.Next()
+				return
+			}
+			// Cache expired — fall through to DB check
+			tenantSubStore.Delete(tenantID)
+		}
+
+		// Query DB for subscription status (only two fields needed)
+		var tenant model.Tenant
+		if err := db.Select("expires_at, status").Where("id = ?", tenantID).First(&tenant).Error; err != nil {
+			// DB error — fail-closed: block the request to prevent unauthorized access
+			// during a database outage. Tenant-not-found is treated the same way.
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
+				"error": "subscription check temporarily unavailable",
+				"code":  "subscription_check_failed",
+			})
+			return
+		}
+
+		var entry tenantSubCache
+		entry.expiresAt = time.Now().Add(5 * time.Minute)
+		entry.ok = true
+
+		if tenant.ExpiresAt != nil && time.Now().After(*tenant.ExpiresAt) {
+			entry.ok = false
+			entry.httpCode = http.StatusPaymentRequired
+			entry.errMsg = "subscription has expired"
+			entry.errCode = "subscription_expired"
+		} else if tenant.Status == "suspended" {
+			entry.ok = false
+			entry.httpCode = http.StatusForbidden
+			entry.errMsg = "account suspended"
+			entry.errCode = "account_suspended"
+		}
+
+		tenantSubStore.Store(tenantID, &entry)
+
+		if !entry.ok {
+			c.AbortWithStatusJSON(entry.httpCode, gin.H{
+				"error": entry.errMsg,
+				"code":  entry.errCode,
+			})
+			return
+		}
+		c.Next()
+	}
+}
+
 // SecurityHeaders adds common security response headers to every request.
 // HSTS is intentionally omitted — it should only be set when TLS is terminated
 // by this server directly, not behind a reverse proxy.

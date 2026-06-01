@@ -192,6 +192,23 @@ func (r *ItemRepository) DeleteChapterItemsByItem(itemID uint) error {
 	return r.db.Where("item_id = ?", itemID).Delete(&model.ChapterItem{}).Error
 }
 
+// BatchDeleteByNovel 批量删除属于指定小说的物品（WHERE novel_id = ? AND id IN (?)）
+func (r *ItemRepository) BatchDeleteByNovel(novelID uint, ids []uint) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return r.db.Where("novel_id = ? AND id IN ?", novelID, ids).Delete(&model.Item{}).Error
+}
+
+// GetByTitleAndNovel 按名称和小说 ID 查找物品（用于去重检查）
+func (r *ItemRepository) GetByTitleAndNovel(title string, novelID uint) (*model.Item, error) {
+	var item model.Item
+	if err := r.db.Where("name = ? AND novel_id = ?", title, novelID).First(&item).Error; err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
 // SkillRepository 技能仓库
 type SkillRepository struct {
 	db *gorm.DB
@@ -242,5 +259,13 @@ func (r *SkillRepository) Update(skill *model.Skill) error {
 
 func (r *SkillRepository) Delete(id uint) error {
 	return r.db.Delete(&model.Skill{}, id).Error
+}
+
+// BatchDeleteByNovel 批量删除属于指定小说的技能（WHERE novel_id = ? AND id IN (?)）
+func (r *SkillRepository) BatchDeleteByNovel(novelID uint, ids []uint) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return r.db.Where("novel_id = ? AND id IN ?", novelID, ids).Delete(&model.Skill{}).Error
 }
 

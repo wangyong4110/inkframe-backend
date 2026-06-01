@@ -578,6 +578,11 @@ func (s *CharacterService) ListCharacters(novelID uint) ([]*model.Character, err
 	return s.characterRepo.ListByNovel(novelID)
 }
 
+// ListByNovelFiltered 列出角色，可按 role 过滤（空字符串 = 不过滤）；传播 ctx 用于超时/取消
+func (s *CharacterService) ListByNovelFiltered(ctx context.Context, novelID uint, role string) ([]*model.Character, error) {
+	return s.characterRepo.ListByNovelFilteredCtx(ctx, novelID, role)
+}
+
 func (s *CharacterService) UpdateCharacter(id, tenantID uint, req *model.UpdateCharacterRequest) (*model.Character, error) {
 	character, err := s.characterRepo.GetByID(id)
 	if err != nil {
@@ -651,6 +656,14 @@ func (s *CharacterService) ListCharacterSnapshots(characterID uint) ([]*model.Ch
 		return nil, fmt.Errorf("snapshot repo not configured")
 	}
 	return s.snapshotRepo.ListByCharacter(characterID)
+}
+
+// BatchDeleteCharacters 批量删除角色，仅删除属于指定小说的角色
+func (s *CharacterService) BatchDeleteCharacters(ctx context.Context, novelID uint, ids []uint) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return s.characterRepo.BatchDeleteByNovel(novelID, ids)
 }
 
 // CreateCharacterSnapshot 手动创建角色状态快照

@@ -77,16 +77,22 @@ func newOSSService(cfg Config) *ossService {
 	return &ossService{cfg: cfg, client: &http.Client{Timeout: 60 * time.Second}}
 }
 
+const maxUploadSize = 2 * 1024 * 1024 * 1024 // 2 GB
+
 func (s *ossService) Upload(ctx context.Context, key string, r io.Reader, size int64, contentType string) (string, error) {
-	// Buffer the body so we can set Content-Length reliably.
-	var buf []byte
-	if size > 0 {
-		buf = make([]byte, 0, size)
+	// Reject oversized uploads before reading the body.
+	if size > maxUploadSize {
+		return "", fmt.Errorf("upload size %d exceeds maximum %d bytes", size, maxUploadSize)
 	}
-	var err error
-	buf, err = io.ReadAll(r)
+
+	// Buffer the body so we can set Content-Length reliably.
+	limited := io.LimitReader(r, maxUploadSize+1)
+	buf, err := io.ReadAll(limited)
 	if err != nil {
 		return "", fmt.Errorf("storage: read body: %w", err)
+	}
+	if int64(len(buf)) > maxUploadSize {
+		return "", fmt.Errorf("upload exceeds maximum size of 2GB")
 	}
 
 	date := time.Now().UTC().Format(http.TimeFormat)

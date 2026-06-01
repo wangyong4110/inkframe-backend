@@ -8,6 +8,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1161,6 +1162,49 @@ func (b *BatchCrawler) Wait() {
 func (b *BatchCrawler) Results() <-chan *CrawlResult { return b.results }
 
 // ---------------------------------------------------------------------------
+// Per-domain rate limiter (simple token bucket, no external deps)
+// ---------------------------------------------------------------------------
+
+// domainLimiter is a simple per-domain rate limiter using a last-request timestamp.
+type domainLimiter struct {
+	mu       sync.Mutex
+	lastCall time.Time
+	interval time.Duration // minimum interval between requests
+}
+
+// Wait blocks until a request to this domain is permitted.
+func (l *domainLimiter) Wait(ctx context.Context) error {
+	l.mu.Lock()
+	now := time.Now()
+	next := l.lastCall.Add(l.interval)
+	if wait := next.Sub(now); wait > 0 {
+		l.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(wait):
+		}
+		l.mu.Lock()
+	}
+	l.lastCall = time.Now()
+	l.mu.Unlock()
+	return nil
+}
+
+var crawlLimiters sync.Map // domain -> *domainLimiter
+
+// getCrawlLimiter returns (or creates) a per-domain rate limiter for HTTPClient.Get.
+// Default: 1 request per second per domain.
+func getCrawlLimiter(domain string) *domainLimiter {
+	if v, ok := crawlLimiters.Load(domain); ok {
+		return v.(*domainLimiter)
+	}
+	limiter := &domainLimiter{interval: time.Second}
+	actual, _ := crawlLimiters.LoadOrStore(domain, limiter)
+	return actual.(*domainLimiter)
+}
+
+// ---------------------------------------------------------------------------
 // HTTPClient 简单 HTTP 客户端，供 import_service 等调用
 // ---------------------------------------------------------------------------
 
@@ -1181,38 +1225,67 @@ func NewHTTPClient() *HTTPClient {
 }
 
 // Get fetches the given URL and returns the response body as a string.
+// Applies per-domain rate limiting (1 req/s) and retries on 429/503.
 func (h *HTTPClient) Get(ctx context.Context, rawURL string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	u, err := url.Parse(rawURL)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
-	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-
-	resp, err := h.client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return "", fmt.Errorf("rate limited (429) by %s", rawURL)
-	}
-	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("HTTP %d from %s", resp.StatusCode, rawURL)
+	// Rate limit per domain
+	limiter := getCrawlLimiter(u.Host)
+	if err := limiter.Wait(ctx); err != nil {
+		return "", fmt.Errorf("crawl rate limit: %w", err)
 	}
 
-	var sb strings.Builder
-	buf := make([]byte, 32*1024)
-	for {
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			sb.Write(buf[:n])
+	const maxAttempts = 3
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			return "", err
 		}
-		if readErr != nil {
-			break
+		req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+		req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+		req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+
+		resp, err := h.client.Do(req)
+		if err != nil {
+			return "", err
 		}
+
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == http.StatusServiceUnavailable {
+			waitSec := 5
+			if ra := resp.Header.Get("Retry-After"); ra != "" {
+				if secs, err := strconv.Atoi(ra); err == nil && secs > 0 {
+					waitSec = secs
+				}
+			}
+			resp.Body.Close()
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(time.Duration(waitSec) * time.Second):
+			}
+			continue
+		}
+
+		if resp.StatusCode >= 400 {
+			resp.Body.Close()
+			return "", fmt.Errorf("HTTP %d from %s", resp.StatusCode, rawURL)
+		}
+
+		var sb strings.Builder
+		buf := make([]byte, 32*1024)
+		for {
+			n, readErr := resp.Body.Read(buf)
+			if n > 0 {
+				sb.Write(buf[:n])
+			}
+			if readErr != nil {
+				break
+			}
+		}
+		resp.Body.Close()
+		return sb.String(), nil
 	}
-	return sb.String(), nil
+	return "", fmt.Errorf("all %d attempts failed for %s", maxAttempts, rawURL)
 }

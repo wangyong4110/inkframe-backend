@@ -152,6 +152,42 @@ func (s *AIService) runProviderHealthChecks() {
 	}
 }
 
+// GetOverallHealthStatus returns a single status string summarising all active
+// AI providers based on the health_check field stored in the DB by the
+// background health-check goroutine. Possible return values:
+//   - "ok"       — all active providers are healthy (or no providers configured)
+//   - "degraded" — at least one provider is degraded but none are down
+//   - "down"     — at least one active provider is reported as down
+//
+// This is intentionally non-blocking: it reads from the already-populated DB
+// column rather than performing live network checks, so it is safe to call on
+// every HTTP health-check request.
+func (s *AIService) GetOverallHealthStatus() string {
+	if s.providerRepo == nil {
+		return "ok"
+	}
+	providers, err := s.providerRepo.List()
+	if err != nil {
+		return "ok" // fail-open: don't report degraded when we can't read the DB
+	}
+	anyDegraded := false
+	for _, p := range providers {
+		if !p.IsActive {
+			continue
+		}
+		switch strings.ToLower(p.HealthCheck) {
+		case "down":
+			return "down"
+		case "degraded":
+			anyDegraded = true
+		}
+	}
+	if anyDegraded {
+		return "degraded"
+	}
+	return "ok"
+}
+
 // WithNovelRepo 注入小说仓库，用于在生成时读取小说级 AI 配置
 func (s *AIService) WithNovelRepo(repo *repository.NovelRepository) *AIService {
 	s.novelRepo = repo

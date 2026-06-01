@@ -82,8 +82,10 @@ type Repositories struct {
 	ReadingProgressRepo     *repository.ReadingProgressRepository
 	ChapterReadRecordRepo   *repository.ChapterReadRecordRepository
 	UserTokenRepo           *repository.UserTokenRepository
-	NovelCrawlJobRepo       *repository.NovelCrawlJobRepository
-	NotificationRepo        *repository.NotificationRepository
+	NovelCrawlJobRepo        *repository.NovelCrawlJobRepository
+	NotificationRepo         *repository.NotificationRepository
+	ForeshadowRepo           *repository.ForeshadowRepository
+	NovelOutlineVersionRepo  *repository.NovelOutlineVersionRepository
 }
 
 // initRepositories 初始化仓库层
@@ -155,8 +157,10 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		ReadingProgressRepo:   repository.NewReadingProgressRepository(db),
 		ChapterReadRecordRepo: repository.NewChapterReadRecordRepository(db),
 		UserTokenRepo:         repository.NewUserTokenRepository(db),
-		NovelCrawlJobRepo:     repository.NewNovelCrawlJobRepository(db),
-		NotificationRepo:      repository.NewNotificationRepository(db),
+		NovelCrawlJobRepo:        repository.NewNovelCrawlJobRepository(db),
+		NotificationRepo:         repository.NewNotificationRepository(db),
+		ForeshadowRepo:           repository.NewForeshadowRepository(db),
+		NovelOutlineVersionRepo:  repository.NewNovelOutlineVersionRepository(db),
 	}
 }
 
@@ -213,6 +217,13 @@ type Services struct {
 	AssetService                *service.AssetService
 	ReadingService              *service.ReadingService
 	NotificationService         *service.NotificationService
+	ForeshadowCRUDService       *service.ForeshadowCRUDService
+	// ── Webhook ──
+	WebhookService              *service.WebhookService
+	// ── Audit ──
+	AuditService                *service.AuditService
+	// ── Email notification ──
+	EmailNotificationService    *service.EmailNotificationService
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -309,7 +320,8 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 	// 小说服务
 	novelSvc := service.NewNovelService(repos.NovelRepo, repos.ChapterRepo, aiSvc).
 		WithCharacterRepos(repos.CharacterRepo, repos.SnapshotRepo).
-		WithPlotPointService(core.PlotPoint)
+		WithPlotPointService(core.PlotPoint).
+		WithOutlineVersionRepo(repos.NovelOutlineVersionRepo)
 
 	// 角色服务
 	characterSvc := service.NewCharacterService(repos.CharacterRepo, aiSvc).
@@ -370,7 +382,8 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 		WithCharacterRepo(repos.CharacterRepo).
 		WithSnapshotRepo(repos.SnapshotRepo).
 		WithVersionRepo(repos.ChapterVersionRepo).
-		WithContinuityService(continuitySvc)
+		WithContinuityService(continuitySvc).
+		WithKnowledgeService(knowledgeSvc)
 
 	// 图像生成服务
 	imageGenSvc := service.NewImageGenerationService(aiSvc)
@@ -431,6 +444,7 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 	// 将依赖注回 videoService
 	videoSvc.WithConsistencyService(charConsistencySvc)
 	videoSvc.WithBGMService(bgmSvc)
+	videoSvc.WithBGMSegmentRepo(repos.VideoBGMSegmentRepo)
 	videoSvc.WithPlotPointRepo(repos.PlotPointRepo)
 	videoSvc.WithSystemSettingRepo(repos.SystemSettingRepo)
 	videoSvc.WithVideoConcurrency(1)
@@ -610,6 +624,14 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		).WithNovelRepo(repos.NovelRepo),
 		// ── Notifications ──
 		NotificationService: notifSvc,
+		// ── Dedicated foreshadow table ──
+		ForeshadowCRUDService: service.NewForeshadowCRUDService(repos.ForeshadowRepo),
+		// ── Webhook ──
+		WebhookService: service.NewWebhookService(db),
+		// ── Audit ──
+		AuditService: service.NewAuditService(db),
+		// ── Email notification ──
+		EmailNotificationService: service.NewEmailNotificationService(cfg.Email),
 	}
 }
 
@@ -649,6 +671,9 @@ type Handlers struct {
 	KnowledgeHandler      *handler.KnowledgeHandler
 	DramaticHandler       *handler.DramaticHandler
 	DashboardHandler      *handler.DashboardHandler
+	ForeshadowHandler     *handler.ForeshadowHandler
+	WebhookHandler        *handler.WebhookHandler
+	AuditHandler          *handler.AuditHandler
 }
 
 // initHandlers 初始化处理器
@@ -735,6 +760,9 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			services.ConflictArcService,
 			services.PacingService,
 		),
-		DashboardHandler: handler.NewDashboardHandler(db),
+		DashboardHandler:  handler.NewDashboardHandler(db),
+		ForeshadowHandler: handler.NewForeshadowHandler(services.ForeshadowCRUDService),
+		WebhookHandler:    handler.NewWebhookHandler(services.WebhookService),
+		AuditHandler:      handler.NewAuditHandler(services.AuditService),
 	}
 }

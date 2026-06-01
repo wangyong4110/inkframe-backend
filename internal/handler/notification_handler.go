@@ -2,7 +2,6 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/service"
@@ -23,9 +22,8 @@ func (h *NotificationHandler) List(c *gin.Context) {
 	userID := c.MustGet("user_id").(uint)
 	tenantID := c.MustGet("tenant_id").(uint)
 	onlyUnread := c.Query("unread") == "true"
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	items, total, err := h.svc.List(userID, tenantID, onlyUnread, page, size)
+	pg := parsePagination(c)
+	items, total, err := h.svc.List(userID, tenantID, onlyUnread, pg.Page, pg.PageSize)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return

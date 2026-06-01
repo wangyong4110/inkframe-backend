@@ -95,6 +95,14 @@ func (s *SkillService) UpdateSkill(id uint, req *model.UpdateSkillRequest) (*mod
 	return skill, s.skillRepo.Update(skill)
 }
 
+// BatchDeleteSkills 批量删除技能，仅删除属于指定小说的技能
+func (s *SkillService) BatchDeleteSkills(novelID uint, ids []uint) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	return s.skillRepo.BatchDeleteByNovel(novelID, ids)
+}
+
 // DeleteSkill 删除技能（含租户校验）
 func (s *SkillService) DeleteSkill(id, tenantID uint) error {
 	skill, err := s.skillRepo.GetByID(id)
@@ -116,8 +124,57 @@ type skillJSON struct {
 	Effect      string `json:"effect"`
 }
 
+// parseSkillsJSON attempts to parse a []skillJSON from AI output using multiple strategies:
+// 1. Standard json.Unmarshal after extractJSON cleanup
+// 2. extractJSON again with re-attempt (same as step 1 but explicit)
+// 3. Partial streaming recovery using json.Decoder
+// Returns whatever was successfully parsed (at least an empty slice).
+func parseSkillsJSON(raw string) ([]skillJSON, error) {
+	cleaned := extractJSON(strings.TrimSpace(raw))
+
+	// Strategy 1: standard unmarshal on cleaned output
+	var extracted []skillJSON
+	if err := json.Unmarshal([]byte(cleaned), &extracted); err == nil {
+		return extracted, nil
+	}
+
+	// Strategy 2: partial array recovery via streaming Decoder
+	start := strings.IndexByte(cleaned, '[')
+	if start == -1 {
+		start = strings.IndexByte(raw, '[')
+	}
+	if start >= 0 {
+		src := cleaned[start:]
+		dec := json.NewDecoder(strings.NewReader(src))
+		if _, tokErr := dec.Token(); tokErr == nil { // consume '['
+			for dec.More() {
+				var sk skillJSON
+				if dec.Decode(&sk) != nil {
+					break // truncated — stop here
+				}
+				if sk.Name != "" {
+					extracted = append(extracted, sk)
+				}
+			}
+		}
+		if len(extracted) > 0 {
+			return extracted, nil
+		}
+	}
+
+	return nil, fmt.Errorf("cannot parse skill JSON from response (len=%d)", len(raw))
+}
+
 // GenerateSkills 使用 AI 为小说生成技能体系
-func (s *SkillService) GenerateSkills(tenantID, novelID uint) ([]*model.Skill, error) {
+func (s *SkillService) GenerateSkills(tenantID, novelID uint) (result []*model.Skill, retErr error) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Printf("[SkillService] GenerateSkills: recovered panic: %v", r)
+			if retErr == nil {
+				retErr = fmt.Errorf("GenerateSkills: recovered panic: %v", r)
+			}
+		}
+	}()
 	novelTitle := "本小说"
 	novelGenre := ""
 	if s.novelRepo != nil {
@@ -140,20 +197,29 @@ func (s *SkillService) GenerateSkills(tenantID, novelID uint) ([]*model.Skill, e
 		novelTitle, novelGenre,
 	)
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_items", prompt, "",
+	aiResult, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_items", prompt, "",
 		StoryboardOverrides{MaxTokens: 4096})
 	if err != nil {
 		return nil, fmt.Errorf("AI generation failed: %w", err)
 	}
 
-	var extracted []skillJSON
-	if err := json.Unmarshal([]byte(extractJSON(strings.TrimSpace(result))), &extracted); err != nil {
-		raw := result
+	extracted, parseErr := parseSkillsJSON(aiResult)
+	if parseErr != nil {
+		raw := aiResult
 		if len(raw) > 500 {
 			raw = raw[:500]
 		}
-		logger.Printf("[SkillService] GenerateSkills: JSON parse failed (raw: %s): %v", raw, err)
-		return nil, fmt.Errorf("failed to parse AI response: %w", err)
+		logger.Printf("[SkillService] GenerateSkills: JSON parse failed (raw: %s): %v", raw, parseErr)
+		return nil, fmt.Errorf("AI returned unparseable skill data")
+	}
+	if len(extracted) == 0 {
+		// AI 合法返回了空数组（小说无技能体系），区别于解析失败
+		// 判断依据：原始响应中包含 [] 或 "skills":[]
+		trimmed := strings.TrimSpace(aiResult)
+		if strings.Contains(trimmed, "[]") || strings.Contains(trimmed, `"skills":[]`) || strings.Contains(trimmed, `"skills": []`) {
+			return []*model.Skill{}, nil
+		}
+		return nil, fmt.Errorf("AI returned unparseable skill data")
 	}
 
 	existing, _ := s.skillRepo.List(novelID)
@@ -214,10 +280,12 @@ func (s *SkillService) GenerateSkillEffect(tenantID, id uint, provider string) (
 		return skill, nil // already generated, skip regeneration
 	}
 	visualPrompt := fmt.Sprintf("Magic skill effect for: %s. %s. Dynamic cinematic style, fantasy art", skill.Name, skill.Description)
-	imageURL, err := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, visualPrompt, "", "fantasy", "", "")
-	if err != nil {
-		return nil, fmt.Errorf("generate effect image failed: %w", err)
+	imageURL, imgErr := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, visualPrompt, "", "fantasy", "", "")
+	if imgErr != nil {
+		logger.Printf("[SkillService] GenerateSkillEffect: image generation failed for skill %d: %v", skill.ID, imgErr)
+		// Continue without image — skill metadata is still updated
+	} else {
+		skill.ImagePath = imageURL
 	}
-	skill.ImagePath = imageURL
 	return skill, s.skillRepo.Update(skill)
 }

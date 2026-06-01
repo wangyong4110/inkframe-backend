@@ -143,6 +143,29 @@ func (h *SkillHandler) DeleteSkill(c *gin.Context) {
 	respondOK(c, gin.H{"message": "skill deleted"})
 }
 
+// BatchDeleteSkills 批量删除技能
+// DELETE /api/v1/novels/:id/skills
+func (h *SkillHandler) BatchDeleteSkills(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if !h.checkSkillTenant(c, novelID) {
+		return
+	}
+	var req struct {
+		IDs []uint `json:"ids" binding:"required,min=1"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	if err := h.skillSvc.BatchDeleteSkills(novelID, req.IDs); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"deleted": len(req.IDs)})
+}
+
 // GenerateSkills POST /novels/:id/skills/ai-generate
 func (h *SkillHandler) GenerateSkills(c *gin.Context) {
 	novelID, ok := parseID(c, "id")

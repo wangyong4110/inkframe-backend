@@ -20,13 +20,14 @@ import (
 var ErrPermissionDenied = errors.New("permission denied")
 
 type NovelService struct {
-	novelRepo        *repository.NovelRepository
-	chapterRepo      *repository.ChapterRepository
-	aiService        *AIService
-	characterRepo    *repository.CharacterRepository
-	snapshotRepo     *repository.CharacterStateSnapshotRepository
-	plotPointService *PlotPointService
-	notifSvc         *NotificationService // 可选，用于章节生成完成通知
+	novelRepo           *repository.NovelRepository
+	chapterRepo         *repository.ChapterRepository
+	aiService           *AIService
+	characterRepo       *repository.CharacterRepository
+	snapshotRepo        *repository.CharacterStateSnapshotRepository
+	plotPointService    *PlotPointService
+	notifSvc            *NotificationService // 可选，用于章节生成完成通知
+	outlineVersionRepo  *repository.NovelOutlineVersionRepository // 可选，大纲历史版本快照
 	// 广场社交
 	novelLikeRepo    *repository.NovelLikeRepository
 	novelCommentRepo *repository.NovelCommentRepository
@@ -72,6 +73,12 @@ func (s *NovelService) WithPlotPointService(svc *PlotPointService) *NovelService
 // WithNotificationService 注入通知服务（可选，用于章节生成完成后发送站内通知）
 func (s *NovelService) WithNotificationService(svc *NotificationService) *NovelService {
 	s.notifSvc = svc
+	return s
+}
+
+// WithOutlineVersionRepo 注入大纲历史版本仓库（可选，用于大纲重新生成前自动快照）
+func (s *NovelService) WithOutlineVersionRepo(repo *repository.NovelOutlineVersionRepository) *NovelService {
+	s.outlineVersionRepo = repo
 	return s
 }
 
@@ -604,6 +611,25 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 		}
 	}
 
+	// 大纲版本快照：在用新大纲覆盖之前，将当前大纲存为历史版本
+	if novel.Outline != "" && s.outlineVersionRepo != nil {
+		if maxV, vErr := s.outlineVersionRepo.MaxVersion(novel.ID); vErr == nil {
+			_ = s.outlineVersionRepo.Create(&model.NovelOutlineVersion{
+				TenantID: novel.TenantID,
+				NovelID:  novel.ID,
+				Version:  maxV + 1,
+				Outline:  novel.Outline,
+				Prompt:   req.Prompt,
+			})
+		}
+	}
+
+	// 将新生成的大纲 JSON 持久化回 novel.outline
+	if outlineJSON, marshalErr := json.Marshal(outline); marshalErr == nil {
+		novel.Outline = string(outlineJSON)
+		_ = s.novelRepo.UpdateFields(novel.ID, map[string]interface{}{"outline": novel.Outline})
+	}
+
 	// 大纲生成成功后，自动创建占位章节（跳过已存在的）
 	for _, chap := range outline.Chapters {
 		if _, err := s.chapterRepo.GetByNovelAndChapterNo(novel.ID, chap.ChapterNo); err == nil {
@@ -628,6 +654,14 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 	}
 
 	return outline, nil
+}
+
+// ListOutlineVersions 列出小说大纲历史版本（供前端查看/回滚）
+func (s *NovelService) ListOutlineVersions(novelID uint) ([]*model.NovelOutlineVersion, error) {
+	if s.outlineVersionRepo == nil {
+		return []*model.NovelOutlineVersion{}, nil
+	}
+	return s.outlineVersionRepo.ListByNovel(novelID)
 }
 
 // repairTruncatedJSON 尝试修复因 token 截断而不完整的 JSON 字符串。

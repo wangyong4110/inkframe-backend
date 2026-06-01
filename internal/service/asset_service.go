@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -10,10 +11,13 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/PuerkitoBio/goquery"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/storage"
@@ -43,6 +47,7 @@ type AssetService struct {
 	unsplashKey   string
 	freesoundKey  string
 	pixabayKey    string
+	pexelsKey     string
 	// crawlMu guards the ExistsByExternalID+Create sequence for crawled assets
 	crawlMu sync.Map
 }
@@ -107,6 +112,11 @@ func (s *AssetService) WithFreesoundKey(key string) *AssetService {
 
 func (s *AssetService) WithPixabayKey(key string) *AssetService {
 	s.pixabayKey = key
+	return s
+}
+
+func (s *AssetService) WithPexelsKey(key string) *AssetService {
+	s.pexelsKey = key
 	return s
 }
 
@@ -695,10 +705,11 @@ func (s *AssetService) BatchShareRequest(callerID uint, assetIDs []uint) (submit
 
 // ─── Crawl Jobs ───────────────────────────────────────────────────────────────
 
-func (s *AssetService) CreateCrawlJob(tenantID uint, source, query, assetType, license string, limit int, createdBy uint) (*model.CrawlJob, error) {
+func (s *AssetService) CreateCrawlJob(tenantID uint, source, query, assetType, license string, limit, crawlDepth int, urlPattern string, createdBy uint) (*model.CrawlJob, error) {
 	job := &model.CrawlJob{
 		TenantID: tenantID, Source: source, Query: query, AssetType: assetType,
-		License: license, Limit: limit, CreatedBy: createdBy, Status: "pending",
+		License: license, Limit: limit, CrawlDepth: crawlDepth, URLPattern: urlPattern,
+		CreatedBy: createdBy, Status: "pending",
 	}
 	if err := s.crawlRepo.Create(job); err != nil {
 		return nil, err
@@ -784,6 +795,12 @@ func (s *AssetService) runCrawlJob(ctx context.Context, job *model.CrawlJob) {
 		imported, skipped, failed, totalFound, errMsg = s.crawlFreesound(ctx, job)
 	case "pixabay":
 		imported, skipped, failed, totalFound, errMsg = s.crawlPixabay(ctx, job)
+	case "pexels":
+		imported, skipped, failed, totalFound, errMsg = s.crawlPexels(ctx, job)
+	case "nasa":
+		imported, skipped, failed, totalFound, errMsg = s.crawlNASA(ctx, job)
+	case "webpage":
+		imported, skipped, failed, totalFound, errMsg = s.crawlWebpage(ctx, job)
 	default:
 		errMsg = "unsupported crawl source: " + job.Source
 	}
@@ -1098,8 +1115,8 @@ func (s *AssetService) crawlFreesound(ctx context.Context, job *model.CrawlJob) 
 	return
 }
 
-// crawlPixabay fetches audio assets from Pixabay via the official API.
-// Requires PIXABAY_API_KEY. All Pixabay audio is free for commercial use (Pixabay License).
+// crawlPixabay fetches image, video, or audio assets from Pixabay via the official API.
+// Requires PIXABAY_API_KEY. All Pixabay content is free for commercial use (Pixabay License).
 // API docs: https://pixabay.com/api/docs/
 func (s *AssetService) crawlPixabay(ctx context.Context, job *model.CrawlJob) (imported, skipped, failed, totalFound int, errMsg string) {
 	if s.pixabayKey == "" {
@@ -1112,7 +1129,7 @@ func (s *AssetService) crawlPixabay(ctx context.Context, job *model.CrawlJob) (i
 	}
 
 	httpClient := buildCrawlHTTPClient(s.crawlProxyURL, 15*time.Second)
-	pageSize := 20 // Pixabay max per_page = 200, but keep batches small
+	pageSize := 20
 	page := 1
 
 	for imported+skipped+failed < limit {
@@ -1126,10 +1143,25 @@ func (s *AssetService) crawlPixabay(ctx context.Context, job *model.CrawlJob) (i
 			batchSize = need
 		}
 
-		apiURL := fmt.Sprintf(
-			"https://pixabay.com/api/?key=%s&q=%s&media_type=music&per_page=%d&page=%d",
-			s.pixabayKey, url.QueryEscape(job.Query), batchSize, page,
-		)
+		var apiURL string
+		switch job.AssetType {
+		case "video":
+			apiURL = fmt.Sprintf(
+				"https://pixabay.com/api/videos/?key=%s&q=%s&per_page=%d&page=%d",
+				s.pixabayKey, url.QueryEscape(job.Query), batchSize, page,
+			)
+		case "audio":
+			apiURL = fmt.Sprintf(
+				"https://pixabay.com/api/?key=%s&q=%s&media_type=music&per_page=%d&page=%d",
+				s.pixabayKey, url.QueryEscape(job.Query), batchSize, page,
+			)
+		default: // image
+			apiURL = fmt.Sprintf(
+				"https://pixabay.com/api/?key=%s&q=%s&image_type=photo&per_page=%d&page=%d",
+				s.pixabayKey, url.QueryEscape(job.Query), batchSize, page,
+			)
+		}
+
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 		if err != nil {
 			errMsg = err.Error()
@@ -1151,67 +1183,195 @@ func (s *AssetService) crawlPixabay(ctx context.Context, job *model.CrawlJob) (i
 			return
 		}
 
-		var result struct {
-			Total     int `json:"total"`
-			TotalHits int `json:"totalHits"`
-			Hits      []struct {
-				ID       int     `json:"id"`
-				Tags     string  `json:"tags"`
-				Audio    string  `json:"audio"`
-				Duration float64 `json:"duration"`
-				PageURL  string  `json:"pageURL"`
-			} `json:"hits"`
-		}
-		if err := json.Unmarshal(b, &result); err != nil {
-			errMsg = fmt.Sprintf("parse error: %v — body: %.200s", err, b)
-			return
-		}
-		if page == 1 {
-			totalFound = result.TotalHits
-		}
-		if len(result.Hits) == 0 {
-			break
-		}
-
-		for _, h := range result.Hits {
-			if h.Audio == "" {
-				skipped++
-				continue
+		switch job.AssetType {
+		case "video":
+			var result struct {
+				Total     int `json:"total"`
+				TotalHits int `json:"totalHits"`
+				Hits      []struct {
+					ID       int     `json:"id"`
+					Tags     string  `json:"tags"`
+					PageURL  string  `json:"pageURL"`
+					Duration int     `json:"duration"`
+					Videos   struct {
+						Large  struct{ URL string `json:"url"`; Width int `json:"width"`; Height int `json:"height"` } `json:"large"`
+						Medium struct{ URL string `json:"url"`; Width int `json:"width"`; Height int `json:"height"` } `json:"medium"`
+						Small  struct{ URL string `json:"url"`; Width int `json:"width"`; Height int `json:"height"` } `json:"small"`
+					} `json:"videos"`
+				} `json:"hits"`
+			}
+			if err := json.Unmarshal(b, &result); err != nil {
+				errMsg = fmt.Sprintf("parse error: %v — body: %.200s", err, b)
+				return
+			}
+			if page == 1 {
+				totalFound = result.TotalHits
+			}
+			if len(result.Hits) == 0 {
+				break
+			}
+			for _, h := range result.Hits {
+				videoURL := h.Videos.Large.URL
+				w, ht := h.Videos.Large.Width, h.Videos.Large.Height
+				if videoURL == "" {
+					videoURL = h.Videos.Medium.URL
+					w, ht = h.Videos.Medium.Width, h.Videos.Medium.Height
+				}
+				if videoURL == "" {
+					skipped++
+					continue
+				}
+				externalID := fmt.Sprintf("pixabay-video:%d", h.ID)
+				title := strings.TrimSpace(strings.SplitN(h.Tags, ",", 2)[0])
+				if title == "" {
+					title = fmt.Sprintf("Pixabay video %d", h.ID)
+				}
+				asset := &model.Asset{
+					Scope:       model.AssetScopePublic,
+					Title:       title,
+					Type:        "video",
+					Source:      "crawled",
+					StorageURL:  videoURL,
+					SourceURL:   h.PageURL,
+					ExternalID:  externalID,
+					License:     "pixabay",
+					Duration:    float64(h.Duration),
+					Width:       w,
+					Height:      ht,
+					AspectRatio: calcAspectRatio(w, ht),
+					Status:      model.AssetStatusActive,
+				}
+				created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
+				if err != nil {
+					failed++
+				} else if !created {
+					skipped++
+				} else {
+					imported++
+				}
 			}
 
-			externalID := fmt.Sprintf("pixabay:%d", h.ID)
-
-			// Use first tag as title, fall back to "Pixabay audio {id}"
-			title := strings.SplitN(h.Tags, ",", 2)[0]
-			title = strings.TrimSpace(title)
-			if title == "" {
-				title = fmt.Sprintf("Pixabay audio %d", h.ID)
+		case "audio":
+			var result struct {
+				Total     int `json:"total"`
+				TotalHits int `json:"totalHits"`
+				Hits      []struct {
+					ID       int     `json:"id"`
+					Tags     string  `json:"tags"`
+					Audio    string  `json:"audio"`
+					Duration float64 `json:"duration"`
+					PageURL  string  `json:"pageURL"`
+				} `json:"hits"`
+			}
+			if err := json.Unmarshal(b, &result); err != nil {
+				errMsg = fmt.Sprintf("parse error: %v — body: %.200s", err, b)
+				return
+			}
+			if page == 1 {
+				totalFound = result.TotalHits
+			}
+			if len(result.Hits) == 0 {
+				break
+			}
+			for _, h := range result.Hits {
+				if h.Audio == "" {
+					skipped++
+					continue
+				}
+				externalID := fmt.Sprintf("pixabay-audio:%d", h.ID)
+				title := strings.TrimSpace(strings.SplitN(h.Tags, ",", 2)[0])
+				if title == "" {
+					title = fmt.Sprintf("Pixabay audio %d", h.ID)
+				}
+				asset := &model.Asset{
+					Scope:      model.AssetScopePublic,
+					Title:      title,
+					Type:       "audio",
+					SubType:    "sfx",
+					Source:     "crawled",
+					StorageURL: h.Audio,
+					SourceURL:  h.PageURL,
+					ExternalID: externalID,
+					License:    "pixabay",
+					Duration:   h.Duration,
+					Status:     model.AssetStatusActive,
+				}
+				created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
+				if err != nil {
+					failed++
+				} else if !created {
+					skipped++
+				} else {
+					imported++
+				}
 			}
 
-			asset := &model.Asset{
-				Scope:      model.AssetScopePublic,
-				Title:      title,
-				Type:       "audio",
-				SubType:    "sfx",
-				Source:     "crawled",
-				StorageURL: h.Audio,
-				SourceURL:  h.PageURL,
-				ExternalID: externalID,
-				License:    "pixabay",
-				Duration:   h.Duration,
-				Status:     model.AssetStatusActive,
+		default: // image
+			var result struct {
+				Total     int `json:"total"`
+				TotalHits int `json:"totalHits"`
+				Hits      []struct {
+					ID             int    `json:"id"`
+					Tags           string `json:"tags"`
+					PageURL        string `json:"pageURL"`
+					PreviewURL     string `json:"previewURL"`
+					WebformatURL   string `json:"webformatURL"`
+					LargeImageURL  string `json:"largeImageURL"`
+					ImageWidth     int    `json:"imageWidth"`
+					ImageHeight    int    `json:"imageHeight"`
+				} `json:"hits"`
 			}
-			created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
-			if err != nil {
-				failed++
-			} else if !created {
-				skipped++
-			} else {
-				imported++
+			if err := json.Unmarshal(b, &result); err != nil {
+				errMsg = fmt.Sprintf("parse error: %v — body: %.200s", err, b)
+				return
+			}
+			if page == 1 {
+				totalFound = result.TotalHits
+			}
+			if len(result.Hits) == 0 {
+				break
+			}
+			for _, h := range result.Hits {
+				imgURL := h.LargeImageURL
+				if imgURL == "" {
+					imgURL = h.WebformatURL
+				}
+				if imgURL == "" {
+					skipped++
+					continue
+				}
+				externalID := fmt.Sprintf("pixabay:%d", h.ID)
+				title := strings.TrimSpace(strings.SplitN(h.Tags, ",", 2)[0])
+				if title == "" {
+					title = fmt.Sprintf("Pixabay image %d", h.ID)
+				}
+				asset := &model.Asset{
+					Scope:        model.AssetScopePublic,
+					Title:        title,
+					Type:         "image",
+					Source:       "crawled",
+					StorageURL:   imgURL,
+					ThumbnailURL: h.PreviewURL,
+					SourceURL:    h.PageURL,
+					ExternalID:   externalID,
+					License:      "pixabay",
+					Width:        h.ImageWidth,
+					Height:       h.ImageHeight,
+					AspectRatio:  calcAspectRatio(h.ImageWidth, h.ImageHeight),
+					Status:       model.AssetStatusActive,
+				}
+				created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
+				if err != nil {
+					failed++
+				} else if !created {
+					skipped++
+				} else {
+					imported++
+				}
 			}
 		}
 
-		if imported+skipped+failed >= limit || len(result.Hits) < batchSize {
+		if imported+skipped+failed >= limit {
 			break
 		}
 		page++
@@ -1244,7 +1404,7 @@ func (s *AssetService) crawlWikimedia(ctx context.Context, job *model.CrawlJob) 
 		}
 
 		apiURL := fmt.Sprintf(
-			"https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=%s&gsrnamespace=6&gsrlimit=%d&gsroffset=%d&prop=imageinfo&iiprop=url%%7Cmime%%7Cextmetadata&format=json&formatversion=2",
+			"https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=%s&gsrnamespace=6&gsrlimit=%d&gsroffset=%d&prop=imageinfo&iiprop=url%%7Cmime%%7Cextmetadata%%7Cdimensions%%7Cthumburl&iiurlwidth=400&format=json&formatversion=2",
 			url.QueryEscape(job.Query), batchSize, offset,
 		)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
@@ -1276,8 +1436,11 @@ func (s *AssetService) crawlWikimedia(ctx context.Context, job *model.CrawlJob) 
 					PageID    int    `json:"pageid"`
 					Title     string `json:"title"`
 					ImageInfo []struct {
-						URL  string `json:"url"`
-						Mime string `json:"mime"`
+						URL      string `json:"url"`
+						ThumbURL string `json:"thumburl"`
+						Mime     string `json:"mime"`
+						Width    int    `json:"width"`
+						Height   int    `json:"height"`
 						Extmetadata *struct {
 							LicenseShortName *struct{ Value string `json:"value"` } `json:"LicenseShortName"`
 						} `json:"extmetadata"`
@@ -1347,15 +1510,19 @@ func (s *AssetService) crawlWikimedia(ctx context.Context, job *model.CrawlJob) 
 			title = strings.ReplaceAll(title, "_", " ")
 
 			asset := &model.Asset{
-				Scope:      model.AssetScopePublic,
-				Title:      title,
-				Type:       assetType,
-				Source:     "crawled",
-				StorageURL: info.URL,
-				SourceURL:  fmt.Sprintf("https://commons.wikimedia.org/wiki/%s", url.PathEscape(page.Title)),
-				ExternalID: externalID,
-				License:    license,
-				Status:     model.AssetStatusActive,
+				Scope:        model.AssetScopePublic,
+				Title:        title,
+				Type:         assetType,
+				Source:       "crawled",
+				StorageURL:   info.URL,
+				ThumbnailURL: info.ThumbURL,
+				SourceURL:    fmt.Sprintf("https://commons.wikimedia.org/wiki/%s", url.PathEscape(page.Title)),
+				ExternalID:   externalID,
+				License:      license,
+				Width:        info.Width,
+				Height:       info.Height,
+				AspectRatio:  calcAspectRatio(info.Width, info.Height),
+				Status:       model.AssetStatusActive,
 			}
 			created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
 			if err != nil {
@@ -1371,6 +1538,415 @@ func (s *AssetService) crawlWikimedia(ctx context.Context, job *model.CrawlJob) 
 			break
 		}
 		offset = result.Continue.GsrOffset
+	}
+	return
+}
+
+// calcAspectRatio returns a simplified aspect ratio string like "16:9", "4:3", or "1:1".
+func calcAspectRatio(w, h int) string {
+	if w <= 0 || h <= 0 {
+		return ""
+	}
+	gcd := func(a, b int) int {
+		for b != 0 {
+			a, b = b, a%b
+		}
+		return a
+	}
+	d := gcd(w, h)
+	return fmt.Sprintf("%d:%d", w/d, h/d)
+}
+
+// crawlPexels fetches image or video assets from Pexels via the official API.
+// Requires PEXELS_API_KEY. All Pexels content is free for commercial use (Pexels License).
+// API docs: https://www.pexels.com/api/documentation/
+func (s *AssetService) crawlPexels(ctx context.Context, job *model.CrawlJob) (imported, skipped, failed, totalFound int, errMsg string) {
+	if s.pexelsKey == "" {
+		errMsg = "Pexels API key not configured (set PEXELS_API_KEY)"
+		return
+	}
+	limit := job.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+
+	httpClient := buildCrawlHTTPClient(s.crawlProxyURL, 15*time.Second)
+	pageSize := 20
+	page := 1
+	isVideo := job.AssetType == "video"
+
+	for imported+skipped+failed < limit {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+
+		need := limit - (imported + skipped + failed)
+		batchSize := pageSize
+		if need < batchSize {
+			batchSize = need
+		}
+
+		var apiURL string
+		if isVideo {
+			apiURL = fmt.Sprintf(
+				"https://api.pexels.com/videos/search?query=%s&per_page=%d&page=%d",
+				url.QueryEscape(job.Query), batchSize, page,
+			)
+		} else {
+			apiURL = fmt.Sprintf(
+				"https://api.pexels.com/v1/search?query=%s&per_page=%d&page=%d",
+				url.QueryEscape(job.Query), batchSize, page,
+			)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+		if err != nil {
+			errMsg = err.Error()
+			return
+		}
+		req.Header.Set("Authorization", s.pexelsKey)
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			errMsg = err.Error()
+			return
+		}
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusUnauthorized {
+			errMsg = "Pexels: invalid API key (401)"
+			return
+		}
+		if resp.StatusCode == 429 {
+			errMsg = "Pexels: rate limit exceeded"
+			return
+		}
+		if resp.StatusCode != http.StatusOK {
+			errMsg = fmt.Sprintf("Pexels HTTP %d: %.200s", resp.StatusCode, b)
+			return
+		}
+
+		if isVideo {
+			var result struct {
+				TotalResults int `json:"total_results"`
+				Videos       []struct {
+					ID     int    `json:"id"`
+					Width  int    `json:"width"`
+					Height int    `json:"height"`
+					URL    string `json:"url"`
+					Image  string `json:"image"`
+					User   struct {
+						Name string `json:"name"`
+					} `json:"user"`
+					VideoFiles []struct {
+						Quality  string `json:"quality"`
+						FileType string `json:"file_type"`
+						Width    int    `json:"width"`
+						Height   int    `json:"height"`
+						Link     string `json:"link"`
+					} `json:"video_files"`
+				} `json:"videos"`
+			}
+			if err := json.Unmarshal(b, &result); err != nil {
+				errMsg = fmt.Sprintf("parse error: %v — body: %.200s", err, b)
+				return
+			}
+			if page == 1 {
+				totalFound = result.TotalResults
+			}
+			if len(result.Videos) == 0 {
+				break
+			}
+			for _, v := range result.Videos {
+				var bestURL string
+				var bw, bh int
+				for _, f := range v.VideoFiles {
+					if strings.EqualFold(f.Quality, "hd") {
+						bestURL, bw, bh = f.Link, f.Width, f.Height
+						break
+					}
+				}
+				if bestURL == "" {
+					for _, f := range v.VideoFiles {
+						if strings.EqualFold(f.Quality, "sd") {
+							bestURL, bw, bh = f.Link, f.Width, f.Height
+							break
+						}
+					}
+				}
+				if bestURL == "" && len(v.VideoFiles) > 0 {
+					bestURL = v.VideoFiles[0].Link
+					bw, bh = v.VideoFiles[0].Width, v.VideoFiles[0].Height
+				}
+				if bestURL == "" {
+					skipped++
+					continue
+				}
+				externalID := fmt.Sprintf("pexels-video:%d", v.ID)
+				asset := &model.Asset{
+					Scope:        model.AssetScopePublic,
+					Title:        fmt.Sprintf("Pexels video by %s", v.User.Name),
+					Type:         "video",
+					Source:       "crawled",
+					StorageURL:   bestURL,
+					ThumbnailURL: v.Image,
+					SourceURL:    v.URL,
+					ExternalID:   externalID,
+					License:      "pexels",
+					Attribution:  fmt.Sprintf("Video by %s on Pexels", v.User.Name),
+					Width:        bw,
+					Height:       bh,
+					AspectRatio:  calcAspectRatio(bw, bh),
+					Status:       model.AssetStatusActive,
+				}
+				created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
+				if err != nil {
+					failed++
+				} else if !created {
+					skipped++
+				} else {
+					imported++
+				}
+			}
+		} else {
+			var result struct {
+				TotalResults int `json:"total_results"`
+				TotalPages   int `json:"total_pages"`
+				Photos       []struct {
+					ID           int    `json:"id"`
+					Width        int    `json:"width"`
+					Height       int    `json:"height"`
+					URL          string `json:"url"`
+					Alt          string `json:"alt"`
+					Photographer string `json:"photographer"`
+					Src          struct {
+						Large2x string `json:"large2x"`
+						Large   string `json:"large"`
+						Medium  string `json:"medium"`
+					} `json:"src"`
+				} `json:"photos"`
+			}
+			if err := json.Unmarshal(b, &result); err != nil {
+				errMsg = fmt.Sprintf("parse error: %v — body: %.200s", err, b)
+				return
+			}
+			if page == 1 {
+				totalFound = result.TotalResults
+			}
+			if len(result.Photos) == 0 {
+				break
+			}
+			for _, p := range result.Photos {
+				imgURL := p.Src.Large2x
+				if imgURL == "" {
+					imgURL = p.Src.Large
+				}
+				if imgURL == "" {
+					skipped++
+					continue
+				}
+				externalID := fmt.Sprintf("pexels:%d", p.ID)
+				title := p.Alt
+				if title == "" {
+					title = fmt.Sprintf("Pexels photo by %s", p.Photographer)
+				}
+				asset := &model.Asset{
+					Scope:        model.AssetScopePublic,
+					Title:        title,
+					Type:         "image",
+					Source:       "crawled",
+					StorageURL:   imgURL,
+					ThumbnailURL: p.Src.Medium,
+					SourceURL:    p.URL,
+					ExternalID:   externalID,
+					License:      "pexels",
+					Attribution:  fmt.Sprintf("Photo by %s on Pexels", p.Photographer),
+					Width:        p.Width,
+					Height:       p.Height,
+					AspectRatio:  calcAspectRatio(p.Width, p.Height),
+					Status:       model.AssetStatusActive,
+				}
+				created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
+				if err != nil {
+					failed++
+				} else if !created {
+					skipped++
+				} else {
+					imported++
+				}
+			}
+			if page >= result.TotalPages {
+				break
+			}
+		}
+		page++
+	}
+	return
+}
+
+// crawlNASA fetches image and video assets from the NASA Image and Video Library.
+// No API key required. All NASA content is in the public domain (US Government works).
+// API docs: https://images.nasa.gov/docs/images.nasa.gov_api_docs.pdf
+func (s *AssetService) crawlNASA(ctx context.Context, job *model.CrawlJob) (imported, skipped, failed, totalFound int, errMsg string) {
+	limit := job.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+
+	mediaType := job.AssetType
+	if mediaType == "" || mediaType == "audio" {
+		mediaType = "image"
+	}
+
+	httpClient := buildCrawlHTTPClient(s.crawlProxyURL, 15*time.Second)
+	pageSize := 20
+	page := 1
+
+	for imported+skipped+failed < limit {
+		if err := ctx.Err(); err != nil {
+			return
+		}
+
+		need := limit - (imported + skipped + failed)
+		batchSize := pageSize
+		if need < batchSize {
+			batchSize = need
+		}
+
+		apiURL := fmt.Sprintf(
+			"https://images-api.nasa.gov/search?q=%s&media_type=%s&page_size=%d&page=%d",
+			url.QueryEscape(job.Query), mediaType, batchSize, page,
+		)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
+		if err != nil {
+			errMsg = err.Error()
+			return
+		}
+		req.Header.Set("User-Agent", "InkFrame/1.0 (https://inkframe.io; contact@inkframe.io) Go-http-client")
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			errMsg = err.Error()
+			return
+		}
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+		resp.Body.Close()
+		if resp.StatusCode == 404 {
+			// NASA API returns 404 for empty result pages
+			break
+		}
+		if resp.StatusCode != http.StatusOK {
+			errMsg = fmt.Sprintf("NASA HTTP %d: %.200s", resp.StatusCode, b)
+			return
+		}
+
+		var result struct {
+			Collection struct {
+				Metadata struct {
+					TotalHits int `json:"total_hits"`
+				} `json:"metadata"`
+				Items []struct {
+					Data []struct {
+						NasaID      string `json:"nasa_id"`
+						Title       string `json:"title"`
+						Description string `json:"description"`
+						MediaType   string `json:"media_type"`
+						DateCreated string `json:"date_created"`
+						Center      string `json:"center"`
+					} `json:"data"`
+					Links []struct {
+						Href   string `json:"href"`
+						Rel    string `json:"rel"`
+						Render string `json:"render"`
+					} `json:"links"`
+				} `json:"items"`
+			} `json:"collection"`
+		}
+		if err := json.Unmarshal(b, &result); err != nil {
+			errMsg = fmt.Sprintf("parse error: %v — body: %.200s", err, b)
+			return
+		}
+		if page == 1 {
+			totalFound = result.Collection.Metadata.TotalHits
+		}
+		if len(result.Collection.Items) == 0 {
+			break
+		}
+
+		for _, item := range result.Collection.Items {
+			if len(item.Data) == 0 {
+				skipped++
+				continue
+			}
+			d := item.Data[0]
+			if d.NasaID == "" {
+				skipped++
+				continue
+			}
+
+			// Find the preview link (thumbnail/preview image)
+			var thumbURL string
+			for _, lnk := range item.Links {
+				if lnk.Rel == "preview" {
+					thumbURL = lnk.Href
+					break
+				}
+			}
+			if thumbURL == "" && len(item.Links) > 0 {
+				thumbURL = item.Links[0].Href
+			}
+			if thumbURL == "" {
+				skipped++
+				continue
+			}
+
+			// For images use the ~orig or ~large URL; derive from thumb URL by replacing ~thumb suffix
+			storageURL := thumbURL
+			if strings.Contains(thumbURL, "~thumb.") {
+				storageURL = strings.Replace(thumbURL, "~thumb.", "~orig.", 1)
+			} else if strings.Contains(thumbURL, "~small.") {
+				storageURL = strings.Replace(thumbURL, "~small.", "~orig.", 1)
+			}
+
+			externalID := "nasa:" + d.NasaID
+
+			assetType := d.MediaType
+			if assetType == "" {
+				assetType = mediaType
+			}
+			if assetType != "image" && assetType != "video" {
+				skipped++
+				continue
+			}
+
+			asset := &model.Asset{
+				Scope:        model.AssetScopePublic,
+				Title:        d.Title,
+				Description:  d.Description,
+				Type:         assetType,
+				Source:       "crawled",
+				StorageURL:   storageURL,
+				ThumbnailURL: thumbURL,
+				SourceURL:    fmt.Sprintf("https://images.nasa.gov/details/%s", url.PathEscape(d.NasaID)),
+				ExternalID:   externalID,
+				License:      "PD",
+				Attribution:  fmt.Sprintf("NASA/%s", d.Center),
+				Status:       model.AssetStatusActive,
+			}
+			created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
+			if err != nil {
+				failed++
+			} else if !created {
+				skipped++
+			} else {
+				imported++
+			}
+		}
+
+		if imported+skipped+failed >= limit {
+			break
+		}
+		page++
 	}
 	return
 }
@@ -1440,15 +2016,17 @@ func (s *AssetService) crawlUnsplash(ctx context.Context, job *model.CrawlJob) (
 			Total      int `json:"total"`
 			TotalPages int `json:"total_pages"`
 			Results    []struct {
-				ID              string `json:"id"`
-				Description     string `json:"description"`
-				AltDescription  string `json:"alt_description"`
-				Width           int    `json:"width"`
-				Height          int    `json:"height"`
-				Urls            struct {
+				ID             string `json:"id"`
+				Description    string `json:"description"`
+				AltDescription string `json:"alt_description"`
+				Width          int    `json:"width"`
+				Height         int    `json:"height"`
+				Urls           struct {
 					Raw     string `json:"raw"`
 					Full    string `json:"full"`
 					Regular string `json:"regular"`
+					Small   string `json:"small"`
+					Thumb   string `json:"thumb"`
 				} `json:"urls"`
 				Links struct {
 					HTML             string `json:"html"`
@@ -1481,6 +2059,11 @@ func (s *AssetService) crawlUnsplash(ctx context.Context, job *model.CrawlJob) (
 				continue
 			}
 
+			thumbURL := photo.Urls.Small
+			if thumbURL == "" {
+				thumbURL = photo.Urls.Thumb
+			}
+
 			externalID := "unsplash:" + photo.ID
 
 			title := photo.Description
@@ -1492,15 +2075,20 @@ func (s *AssetService) crawlUnsplash(ctx context.Context, job *model.CrawlJob) (
 			}
 
 			asset := &model.Asset{
-				Scope:      model.AssetScopePublic,
-				Title:      title,
-				Type:       "image",
-				Source:     "crawled",
-				StorageURL: imgURL,
-				SourceURL:  photo.Links.HTML,
-				ExternalID: externalID,
-				License:    "unsplash",
-				Status:     model.AssetStatusActive,
+				Scope:        model.AssetScopePublic,
+				Title:        title,
+				Type:         "image",
+				Source:       "crawled",
+				StorageURL:   imgURL,
+				ThumbnailURL: thumbURL,
+				SourceURL:    photo.Links.HTML,
+				ExternalID:   externalID,
+				License:      "unsplash",
+				Attribution:  fmt.Sprintf("Photo by %s (@%s) on Unsplash", photo.User.Name, photo.User.Username),
+				Width:        photo.Width,
+				Height:       photo.Height,
+				AspectRatio:  calcAspectRatio(photo.Width, photo.Height),
+				Status:       model.AssetStatusActive,
 			}
 			created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
 			if err != nil {
@@ -1671,6 +2259,302 @@ func mimeToExt(mime string) string {
 		return ".ogg"
 	}
 	return ""
+}
+
+// ─── Webpage Crawl ────────────────────────────────────────────────────────────
+
+// crawlWebpage fetches a web page (or a small site tree) and imports linked media assets.
+// job.Query = starting URL
+// job.CrawlDepth = 0: only the given page; 1: also follow same-domain links on that page
+// job.URLPattern = optional regex filter for links to follow (overrides same-domain check)
+// job.AssetType  = "image"|"video"|"audio"|"" (empty = all)
+func (s *AssetService) crawlWebpage(ctx context.Context, job *model.CrawlJob) (imported, skipped, failed, totalFound int, errMsg string) {
+	startURL := strings.TrimSpace(job.Query)
+	if startURL == "" {
+		errMsg = "URL is required for webpage crawl (set query to the target URL)"
+		return
+	}
+	parsedStart, err := url.Parse(startURL)
+	if err != nil || parsedStart.Host == "" {
+		errMsg = "invalid URL: " + startURL
+		return
+	}
+
+	limit := job.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+
+	var urlRe *regexp.Regexp
+	if job.URLPattern != "" {
+		urlRe, err = regexp.Compile(job.URLPattern)
+		if err != nil {
+			errMsg = "invalid url_pattern regexp: " + err.Error()
+			return
+		}
+	}
+
+	httpClient := buildCrawlHTTPClient(s.crawlProxyURL, 20*time.Second)
+
+	visited := make(map[string]bool)
+	toVisit := []string{startURL}
+	const maxPages = 30 // hard cap on pages crawled per job
+
+	for len(toVisit) > 0 && (imported+skipped+failed) < limit && len(visited) < maxPages {
+		if ctx.Err() != nil {
+			return
+		}
+
+		pageURL := toVisit[0]
+		toVisit = toVisit[1:]
+		if visited[pageURL] {
+			continue
+		}
+		visited[pageURL] = true
+
+		assets, links, extractErr := s.extractPageAssets(ctx, httpClient, pageURL, job.AssetType)
+		if extractErr != nil {
+			// non-fatal: log and continue to next page
+			continue
+		}
+
+		totalFound += len(assets)
+
+		for _, a := range assets {
+			if (imported + skipped + failed) >= limit {
+				break
+			}
+			eid := a.ExternalID
+			created, createErr := s.crawlUpsert(eid, func() error { return s.assetRepo.Create(a) })
+			if createErr != nil {
+				failed++
+			} else if !created {
+				skipped++
+			} else {
+				imported++
+			}
+		}
+
+		// Follow links only when depth > 0
+		if job.CrawlDepth > 0 {
+			for _, lnk := range links {
+				if visited[lnk] {
+					continue
+				}
+				lParsed, parseErr := url.Parse(lnk)
+				if parseErr != nil {
+					continue
+				}
+				if urlRe != nil {
+					if !urlRe.MatchString(lnk) {
+						continue
+					}
+				} else if lParsed.Host != parsedStart.Host {
+					continue
+				}
+				toVisit = append(toVisit, lnk)
+			}
+		}
+	}
+	return
+}
+
+// extractPageAssets fetches a single HTML page and returns discovered media assets and
+// navigable links (for depth-following).
+func (s *AssetService) extractPageAssets(ctx context.Context, client *http.Client, pageURL, assetTypeFilter string) ([]*model.Asset, []string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; InkFrame/1.0; +https://inkframe.io)")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,*/*;q=0.8")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	doc, err := goquery.NewDocumentFromReader(io.LimitReader(resp.Body, 10*1024*1024))
+	if err != nil {
+		return nil, nil, err
+	}
+
+	base, _ := url.Parse(pageURL)
+	pageTitle := strings.TrimSpace(doc.Find("title").First().Text())
+
+	seen := make(map[string]bool) // per-page dedup
+	var assets []*model.Asset
+
+	addAsset := func(rawURL, assetType, title string) {
+		abs := webpageResolveURL(base, rawURL)
+		if abs == "" || seen[abs] {
+			return
+		}
+		if assetTypeFilter != "" && assetTypeFilter != assetType {
+			return
+		}
+		seen[abs] = true
+
+		if title == "" {
+			if p, parseErr := url.Parse(abs); parseErr == nil {
+				title = path.Base(p.Path)
+				if title == "." || title == "/" || title == "" {
+					title = pageTitle
+				}
+			}
+		}
+
+		// externalID = "webpage:" + first 24 hex chars of sha256(URL)
+		h := sha256.Sum256([]byte(abs))
+		externalID := "webpage:" + hex.EncodeToString(h[:12])
+
+		assets = append(assets, &model.Asset{
+			Scope:      model.AssetScopePublic,
+			Title:      title,
+			Type:       assetType,
+			Source:     "crawled",
+			StorageURL: abs,
+			SourceURL:  pageURL,
+			ExternalID: externalID,
+			License:    "unknown",
+			Status:     model.AssetStatusActive,
+		})
+	}
+
+	// <img src / data-src / data-original / data-lazy>
+	doc.Find("img").Each(func(_ int, sel *goquery.Selection) {
+		alt, _ := sel.Attr("alt")
+		title, _ := sel.Attr("title")
+		if title == "" {
+			title = alt
+		}
+		for _, attr := range []string{"src", "data-src", "data-original", "data-lazy"} {
+			if src, ok := sel.Attr(attr); ok && src != "" && !strings.HasPrefix(src, "data:") {
+				addAsset(src, "image", title)
+				break
+			}
+		}
+		// srcset
+		if srcset, ok := sel.Attr("srcset"); ok && srcset != "" {
+			for _, part := range strings.Split(srcset, ",") {
+				if fields := strings.Fields(strings.TrimSpace(part)); len(fields) > 0 {
+					addAsset(fields[0], "image", alt)
+				}
+			}
+		}
+	})
+
+	// <picture><source srcset>
+	doc.Find("picture source[srcset]").Each(func(_ int, sel *goquery.Selection) {
+		srcset, _ := sel.Attr("srcset")
+		for _, part := range strings.Split(srcset, ",") {
+			if fields := strings.Fields(strings.TrimSpace(part)); len(fields) > 0 {
+				addAsset(fields[0], "image", "")
+			}
+		}
+	})
+
+	// og:image / twitter:image
+	doc.Find(`meta[property="og:image"], meta[name="twitter:image"]`).Each(func(_ int, sel *goquery.Selection) {
+		if content, ok := sel.Attr("content"); ok && content != "" {
+			addAsset(content, "image", pageTitle)
+		}
+	})
+
+	// <link rel="preload" as="image">
+	doc.Find(`link[rel="preload"][as="image"]`).Each(func(_ int, sel *goquery.Selection) {
+		if href, ok := sel.Attr("href"); ok {
+			addAsset(href, "image", "")
+		}
+	})
+
+	// <video src> and <video><source src>
+	doc.Find("video[src]").Each(func(_ int, sel *goquery.Selection) {
+		src, _ := sel.Attr("src")
+		title, _ := sel.Attr("title")
+		addAsset(src, "video", title)
+	})
+	doc.Find("video source[src]").Each(func(_ int, sel *goquery.Selection) {
+		src, _ := sel.Attr("src")
+		addAsset(src, "video", "")
+	})
+
+	// <audio src> and <audio><source src>
+	doc.Find("audio[src]").Each(func(_ int, sel *goquery.Selection) {
+		src, _ := sel.Attr("src")
+		title, _ := sel.Attr("title")
+		addAsset(src, "audio", title)
+	})
+	doc.Find("audio source[src]").Each(func(_ int, sel *goquery.Selection) {
+		src, _ := sel.Attr("src")
+		addAsset(src, "audio", "")
+	})
+
+	// <a href> pointing to media files (by extension)
+	doc.Find("a[href]").Each(func(_ int, sel *goquery.Selection) {
+		href, _ := sel.Attr("href")
+		if href == "" {
+			return
+		}
+		ext := strings.ToLower(path.Ext(strings.SplitN(href, "?", 2)[0]))
+		var assetType string
+		switch ext {
+		case ".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".avif":
+			assetType = "image"
+		case ".mp4", ".mov", ".avi", ".mkv", ".webm":
+			assetType = "video"
+		case ".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".opus":
+			assetType = "audio"
+		}
+		if assetType != "" {
+			linkText := strings.TrimSpace(sel.Text())
+			addAsset(href, assetType, linkText)
+		}
+	})
+
+	// Collect navigable links for depth-following (HTML pages only)
+	var links []string
+	doc.Find("a[href]").Each(func(_ int, sel *goquery.Selection) {
+		href, _ := sel.Attr("href")
+		if href == "" || strings.HasPrefix(href, "#") ||
+			strings.HasPrefix(href, "javascript:") || strings.HasPrefix(href, "mailto:") {
+			return
+		}
+		abs := webpageResolveURL(base, href)
+		if abs == "" {
+			return
+		}
+		p, parseErr := url.Parse(abs)
+		if parseErr != nil {
+			return
+		}
+		ext := strings.ToLower(path.Ext(p.Path))
+		// Only follow HTML-like URLs
+		if ext == "" || ext == ".html" || ext == ".htm" || ext == ".php" || ext == ".asp" || ext == ".aspx" {
+			links = append(links, abs)
+		}
+	})
+
+	return assets, links, nil
+}
+
+// webpageResolveURL resolves rawURL against base, returning "" for data URIs or parse errors.
+func webpageResolveURL(base *url.URL, rawURL string) string {
+	if rawURL == "" || strings.HasPrefix(rawURL, "data:") {
+		return ""
+	}
+	ref, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	resolved := base.ResolveReference(ref)
+	// Strip fragment
+	resolved.Fragment = ""
+	return resolved.String()
 }
 
 // WithStorage injects the storage service (called after construction).

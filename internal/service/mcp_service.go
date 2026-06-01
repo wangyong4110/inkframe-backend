@@ -284,11 +284,71 @@ func (s *McpService) GetByName(name string) (*model.McpTool, error) {
 // Uses net.IP methods rather than string prefix matching to prevent bypass via
 // alternate representations (e.g., decimal encoding, IPv6 mapped addresses).
 func isPrivateIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	// Also check IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1)
+	if v4 := ip.To4(); v4 != nil {
+		return isPrivateIPv4(v4)
+	}
+	return false
+}
+
+// isPrivateIPv4 checks whether an IPv4 address falls in a private/reserved range.
+func isPrivateIPv4(ip net.IP) bool {
+	privateNets := []net.IPNet{
+		{IP: net.ParseIP("10.0.0.0"), Mask: net.CIDRMask(8, 32)},
+		{IP: net.ParseIP("172.16.0.0"), Mask: net.CIDRMask(12, 32)},
+		{IP: net.ParseIP("192.168.0.0"), Mask: net.CIDRMask(16, 32)},
+		{IP: net.ParseIP("169.254.0.0"), Mask: net.CIDRMask(16, 32)},
+		{IP: net.ParseIP("127.0.0.0"), Mask: net.CIDRMask(8, 32)},
+	}
+	for _, n := range privateNets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// isPrivateOrReservedHost resolves a hostname to its IP addresses and returns
+// true if any of them falls in a private or reserved range. Direct IP addresses
+// are checked without DNS resolution. Uses a custom resolver with a 3-second
+// dial timeout and a 5-second overall context to prevent SSRF via DNS rebinding.
+func isPrivateOrReservedHost(host string) (bool, error) {
+	// Direct IP: no DNS needed
+	if ip := net.ParseIP(host); ip != nil {
+		return isPrivateIP(ip), nil
+	}
+	// Use a custom resolver pinned to 8.8.8.8 with a tight dial timeout
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 3 * time.Second}
+			return d.DialContext(ctx, "udp", "8.8.8.8:53")
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	addrs, err := resolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		// Cannot resolve — treat as unsafe to prevent accessing unresolvable internal hosts
+		return true, fmt.Errorf("hostname %q cannot be resolved: %w", host, err)
+	}
+	for _, addr := range addrs {
+		if isPrivateIP(addr.IP) {
+			return true, fmt.Errorf("hostname %q resolves to private/reserved IP %s", host, addr.IP)
+		}
+	}
+	return false, nil
 }
 
 // checkParamsForSSRF extracts all http(s) URLs from the params JSON and rejects
 // any that resolve to a private/internal address. This prevents SSRF via tool params.
+// Hostname resolution uses isPrivateOrReservedHost which does DNS resolution with a
+// timeout to block bypass attempts like 169.254.0.1.nip.io.
 func checkParamsForSSRF(paramsJSON string) error {
 	urlRe := regexp.MustCompile(`https?://[^\s"'<>]+`)
 	for _, match := range urlRe.FindAllString(paramsJSON, -1) {
@@ -303,11 +363,12 @@ func checkParamsForSSRF(paramsJSON string) error {
 			strings.HasSuffix(lh, ".internal") || lh == "metadata.google.internal" {
 			return fmt.Errorf("parameter contains disallowed internal host: %s", host)
 		}
-		// Parse as IP and check private ranges
-		if ip := net.ParseIP(host); ip != nil {
-			if isPrivateIP(ip) {
-				return fmt.Errorf("parameter contains private network URL: %s", match)
+		// Resolve the hostname (or parse as IP) and reject private ranges
+		if private, resErr := isPrivateOrReservedHost(host); private {
+			if resErr != nil {
+				return fmt.Errorf("parameter contains disallowed host %s: %w", host, resErr)
 			}
+			return fmt.Errorf("parameter contains private network URL: %s", match)
 		}
 	}
 	return nil
@@ -404,6 +465,8 @@ func (s *McpService) InvokeTool(ctx context.Context, tenantID uint, toolName str
 
 // validateMcpEndpoint 验证 MCP 工具 endpoint 防止 SSRF 攻击。
 // stdio 工具 endpoint 为空时跳过检查；HTTP/SSE 工具必须使用外网地址。
+// Hostname resolution is performed with a 5-second timeout to block bypass
+// attempts such as 169.254.0.1.nip.io that string-prefix matching cannot catch.
 func validateMcpEndpoint(endpoint string) error {
 	if endpoint == "" {
 		return nil // stdio 模式无 endpoint，跳过
@@ -416,23 +479,18 @@ func validateMcpEndpoint(endpoint string) error {
 		return fmt.Errorf("only http/https endpoints are allowed, got %q", u.Scheme)
 	}
 	host := u.Hostname()
-	ip := net.ParseIP(host)
-	if ip != nil {
-		privateRanges := []string{
-			"10.", "172.16.", "172.17.", "172.18.", "172.19.", "172.20.",
-			"172.21.", "172.22.", "172.23.", "172.24.", "172.25.", "172.26.",
-			"172.27.", "172.28.", "172.29.", "172.30.", "172.31.",
-			"192.168.", "127.", "169.254.", "::1", "fc", "fd",
-		}
-		ipStr := ip.String()
-		for _, prefix := range privateRanges {
-			if strings.HasPrefix(ipStr, prefix) {
-				return fmt.Errorf("requests to private/internal IP addresses are not allowed")
-			}
-		}
+	// Reject well-known localhost aliases before DNS resolution
+	lh := strings.ToLower(host)
+	if lh == "localhost" || lh == "0.0.0.0" || strings.HasSuffix(lh, ".local") ||
+		strings.HasSuffix(lh, ".internal") || lh == "metadata.google.internal" {
+		return fmt.Errorf("requests to internal/reserved host %q are not allowed", host)
 	}
-	if host == "localhost" || host == "0.0.0.0" {
-		return fmt.Errorf("requests to localhost are not allowed")
+	// Resolve hostname (or parse IP) and reject private/reserved addresses
+	if private, resErr := isPrivateOrReservedHost(host); private {
+		if resErr != nil {
+			return resErr
+		}
+		return fmt.Errorf("endpoint hostname %q resolves to a private/reserved address", host)
 	}
 	return nil
 }

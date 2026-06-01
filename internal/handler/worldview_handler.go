@@ -181,6 +181,39 @@ func (h *WorldviewHandler) DeleteWorldview(c *gin.Context) {
 	respondOK(c, nil)
 }
 
+// UpdateSection 更新世界观的单个字段，不影响其他字段
+// PUT /api/v1/worldviews/:id/sections/:section_key
+func (h *WorldviewHandler) UpdateSection(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	sectionKey := c.Param("section_key")
+	if sectionKey == "" {
+		respondBadRequest(c, "section_key is required")
+		return
+	}
+
+	var req struct {
+		Content string `json:"content" binding:"required"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+
+	wv, err := h.worldviewService.UpdateSection(uint(id), getTenantID(c), sectionKey, req.Content)
+	if err != nil {
+		if err.Error() == "record not found" {
+			respondErr(c, http.StatusNotFound, "worldview not found")
+		} else {
+			respondErr(c, http.StatusBadRequest, err.Error())
+		}
+		return
+	}
+
+	respondOK(c, wv)
+}
+
 // GenerateWorldview AI生成世界观
 // POST /api/v1/worldviews/generate
 func (h *WorldviewHandler) GenerateWorldview(c *gin.Context) {

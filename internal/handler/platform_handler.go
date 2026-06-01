@@ -161,15 +161,8 @@ func (h *PlatformHandler) ListNovelComments(c *gin.Context) {
 	if !ok {
 		return
 	}
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if size < 1 || size > 100 {
-		size = 20
-	}
-	comments, total, err := h.novelService.ListNovelComments(uint(id), page, size)
+	pg := parsePagination(c)
+	comments, total, err := h.novelService.ListNovelComments(uint(id), pg.Page, pg.PageSize)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to list comments")
 		return
@@ -177,9 +170,9 @@ func (h *PlatformHandler) ListNovelComments(c *gin.Context) {
 	respondOK(c, gin.H{
 		"items":      comments,
 		"total":      total,
-		"page":       page,
-		"page_size":  size,
-		"total_page": (total + int64(size) - 1) / int64(size),
+		"page":       pg.Page,
+		"page_size":  pg.PageSize,
+		"total_page": (total + int64(pg.PageSize) - 1) / int64(pg.PageSize),
 	})
 }
 
@@ -381,16 +374,9 @@ func (h *PlatformHandler) ListComments(c *gin.Context) {
 	if !ok {
 		return
 	}
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	if page < 1 {
-		page = 1
-	}
-	if size < 1 || size > 100 {
-		size = 20
-	}
+	pg := parsePagination(c)
 
-	comments, total, err := h.videoService.ListVideoComments(uint(id), page, size)
+	comments, total, err := h.videoService.ListVideoComments(uint(id), pg.Page, pg.PageSize)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to list comments")
 		return
@@ -398,9 +384,9 @@ func (h *PlatformHandler) ListComments(c *gin.Context) {
 	respondOK(c, gin.H{
 		"items":      comments,
 		"total":      total,
-		"page":       page,
-		"page_size":  size,
-		"total_page": (total + int64(size) - 1) / int64(size),
+		"page":       pg.Page,
+		"page_size":  pg.PageSize,
+		"total_page": (total + int64(pg.PageSize) - 1) / int64(pg.PageSize),
 	})
 }
 

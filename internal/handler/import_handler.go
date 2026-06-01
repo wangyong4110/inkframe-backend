@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -56,6 +57,26 @@ func CleanupChunkStore() {
 
 // chunkStore 全局分片会话存储
 var chunkStore sync.Map
+
+// sanitizeFilename strips path components and removes unsafe characters from an upload filename.
+func sanitizeFilename(name string) string {
+	// Extract just the base filename (no path components)
+	name = filepath.Base(name)
+	// Remove any null bytes
+	name = strings.ReplaceAll(name, "\x00", "")
+	// Only allow safe characters
+	safeRe := regexp.MustCompile(`[^a-zA-Z0-9\-_\. ]`)
+	name = safeRe.ReplaceAllString(name, "_")
+	// Trim to reasonable length
+	if len(name) > 255 {
+		ext := filepath.Ext(name)
+		name = name[:255-len(ext)] + ext
+	}
+	if name == "" || name == "." {
+		name = "upload"
+	}
+	return name
+}
 
 // ImportHandler 导入处理器
 type ImportHandler struct {
@@ -197,10 +218,15 @@ func (h *ImportHandler) ImportFromFile(c *gin.Context) {
 		return
 	}
 
-	// ReadAll 保证读取完整内容（file.Read 可能返回部分数据）
-	data, err := io.ReadAll(file)
+	// Use LimitReader to prevent reading beyond limit even if Content-Length is spoofed
+	limitedReader := io.LimitReader(file, maxFileSize+1)
+	data, err := io.ReadAll(limitedReader)
 	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "read file failed")
+		respondErr(c, http.StatusInternalServerError, "failed to read file")
+		return
+	}
+	if int64(len(data)) > maxFileSize {
+		respondBadRequest(c, "file content exceeds 50MB limit")
 		return
 	}
 
@@ -505,7 +531,7 @@ func (h *ImportHandler) InitChunkedUpload(c *gin.Context) {
 		TotalChunks: body.TotalChunks,
 		TotalSize:   body.TotalSize,
 		TenantID:    getTenantID(c),
-		FileName:    body.Filename,
+		FileName:    sanitizeFilename(body.Filename),
 		Format:      body.Format,
 		NovelID:     body.NovelID,
 		TmpDir:      tmpDir,

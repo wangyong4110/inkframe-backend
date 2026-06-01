@@ -83,12 +83,20 @@ func (s *VideoService) InsertVoiceSegment(shotID uint, afterSeqNo int, input Voi
 		VoiceID: input.VoiceID,
 	}
 	// Shift + create must be atomic to avoid a corrupt seq_no sequence on partial failure.
+	// The shift runs first (before the insert) so the unique constraint on (shot_id, seq_no)
+	// is never violated within the transaction.
 	err := s.segmentRepo.DB().Transaction(func(tx *gorm.DB) error {
 		if e := tx.Exec(
 			"UPDATE ink_shot_voice_segment SET seq_no = seq_no + 1 WHERE shot_id = ? AND seq_no >= ? AND deleted_at IS NULL",
 			shotID, newSeqNo,
 		).Error; e != nil {
 			return e
+		}
+		// Verify no duplicate seqno exists after shifting (defensive check)
+		var existing model.ShotVoiceSegment
+		if e := tx.Where("shot_id = ? AND seq_no = ? AND deleted_at IS NULL", shotID, newSeqNo).
+			First(&existing).Error; e == nil {
+			return fmt.Errorf("voice segment with seq_no %d already exists for shot %d after shift", newSeqNo, shotID)
 		}
 		return tx.Create(seg).Error
 	})

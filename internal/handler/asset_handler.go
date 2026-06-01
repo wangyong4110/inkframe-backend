@@ -160,8 +160,7 @@ func (h *AssetHandler) GetAsset(c *gin.Context) {
 
 // GET /assets
 func (h *AssetHandler) SearchAssets(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
+	pg := parsePagination(c)
 	params := repository.AssetSearchParams{
 		Scope:    c.DefaultQuery("scope", "personal"),
 		CallerID: callerID(c), TenantID: tenantID(c),
@@ -169,7 +168,7 @@ func (h *AssetHandler) SearchAssets(c *gin.Context) {
 		SubType: c.Query("sub_type"), Source: c.Query("source"),
 		License: c.Query("license"),
 		Sort:    c.DefaultQuery("sort", "created_at"),
-		Page: page, PageSize: size,
+		Page: pg.Page, PageSize: pg.PageSize,
 		Status: c.Query("status"),
 	}
 	if tags := c.QueryArray("tags"); len(tags) > 0 {
@@ -181,7 +180,7 @@ func (h *AssetHandler) SearchAssets(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	respondOK(c, gin.H{"items": assets, "total": total, "page": page, "page_size": size})
+	respondOK(c, gin.H{"items": assets, "total": total, "page": pg.Page, "page_size": pg.PageSize})
 }
 
 // PUT /assets/:id
@@ -239,9 +238,8 @@ func (h *AssetHandler) Purge(c *gin.Context) {
 
 // GET /assets/trash
 func (h *AssetHandler) ListTrash(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	assets, total, err := h.svc.ListTrash(callerID(c), page, size)
+	pg := parsePagination(c)
+	assets, total, err := h.svc.ListTrash(callerID(c), pg.Page, pg.PageSize)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -297,9 +295,8 @@ func (h *AssetHandler) WithdrawShare(c *gin.Context) {
 
 // GET /admin/share-requests
 func (h *AssetHandler) ListPendingShareRequests(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	reqs, total, err := h.svc.ListPendingShareRequests(page, size)
+	pg := parsePagination(c)
+	reqs, total, err := h.svc.ListPendingShareRequests(pg.Page, pg.PageSize)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -740,9 +737,8 @@ func (h *AssetHandler) GetSearchGaps(c *gin.Context) {
 
 // GET /crawl-jobs
 func (h *AssetHandler) ListCrawlJobs(c *gin.Context) {
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	size, _ := strconv.Atoi(c.DefaultQuery("page_size", "20"))
-	jobs, total, err := h.svc.ListCrawlJobs(page, size)
+	pg := parsePagination(c)
+	jobs, total, err := h.svc.ListCrawlJobs(pg.Page, pg.PageSize)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -753,11 +749,13 @@ func (h *AssetHandler) ListCrawlJobs(c *gin.Context) {
 // POST /crawl-jobs
 func (h *AssetHandler) CreateCrawlJob(c *gin.Context) {
 	var body struct {
-		Source    string `json:"source"`
-		Query     string `json:"query"`
-		AssetType string `json:"asset_type"`
-		License   string `json:"license"`
-		Limit     int    `json:"limit"`
+		Source     string `json:"source"`
+		Query      string `json:"query"`
+		AssetType  string `json:"asset_type"`
+		License    string `json:"license"`
+		Limit      int    `json:"limit"`
+		CrawlDepth int    `json:"crawl_depth"`
+		URLPattern string `json:"url_pattern"`
 	}
 	if err := c.ShouldBindJSON(&body); err != nil || body.Source == "" {
 		respondBadRequest(c, "source and query required")
@@ -766,7 +764,7 @@ func (h *AssetHandler) CreateCrawlJob(c *gin.Context) {
 	if body.Limit == 0 {
 		body.Limit = 20
 	}
-	job, err := h.svc.CreateCrawlJob(tenantID(c), body.Source, body.Query, body.AssetType, body.License, body.Limit, callerID(c))
+	job, err := h.svc.CreateCrawlJob(tenantID(c), body.Source, body.Query, body.AssetType, body.License, body.Limit, body.CrawlDepth, body.URLPattern, callerID(c))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return

@@ -228,8 +228,8 @@ func (StoryboardShot) TableName() string {
 // ShotVoiceSegment 分镜语音段落（一个分镜可包含多条语音/字幕段落）
 type ShotVoiceSegment struct {
 	ID     uint `json:"id" gorm:"primaryKey"`
-	ShotID uint `json:"shot_id" gorm:"not null;index:idx_seg_shot_seq,priority:1"`
-	SeqNo  int  `json:"seq_no" gorm:"not null;default:1;index:idx_seg_shot_seq,priority:2"`
+	ShotID uint `json:"shot_id" gorm:"not null;index:idx_seg_shot_seq,unique,priority:1"`
+	SeqNo  int  `json:"seq_no" gorm:"not null;default:1;index:idx_seg_shot_seq,unique,priority:2"`
 
 	Text     string `json:"text" gorm:"type:text"`    // TTS 朗读文本（旁白或台词内容）
 	Speaker  string `json:"speaker" gorm:"size:100"`  // 空串=旁白，"角色名"=对白

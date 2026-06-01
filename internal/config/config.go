@@ -62,6 +62,9 @@ type EmailConfig struct {
 	WebhookURL   string `mapstructure:"webhook_url"`
 	WebhookToken string `mapstructure:"webhook_token"`
 
+	// Enabled 为 true 时启用通知邮件发送。默认 false。
+	Enabled bool `mapstructure:"enabled"`
+
 	// RequireVerification 为 true 时，邮箱注册必须完成验证才能登录。
 	// 默认 false：注册即激活，无需验证邮件。
 	RequireVerification bool `mapstructure:"require_verification"`
@@ -79,6 +82,7 @@ type CrawlConfig struct {
 	// 对应环境变量：CRAWL_PROXY_URL
 	ProxyURL    string `mapstructure:"proxy_url"`
 	UnsplashKey string `mapstructure:"unsplash_key"` // 对应环境变量 UNSPLASH_ACCESS_KEY
+	PexelsKey   string `mapstructure:"pexels_key"`   // 对应环境变量 PEXELS_API_KEY
 }
 
 // WebSearchConfig 联网搜索配置
@@ -108,6 +112,10 @@ type ServerConfig struct {
 	// EncryptionKey 用于 AES-256-GCM 加密 DB 中存储的 API Key。
 	// 32 字节以内的字符串（不足则补零）。留空时禁用加密（开发兼容）。
 	EncryptionKey string `mapstructure:"encryption_key"`
+	// TrustedProxies 受信任的反向代理 IP 列表（用于正确解析 X-Forwarded-For 以获得真实客户端 IP）。
+	// 留空时默认仅信任本地回环地址 ["127.0.0.1", "::1"]，防止客户端伪造 X-Forwarded-For 绕过限速。
+	// 生产环境部署于 Nginx/LB 之后时，应填入代理服务器 IP，如 ["10.0.0.1"]。
+	TrustedProxies []string `mapstructure:"trusted_proxies"`
 }
 
 // DatabaseConfig 数据库配置

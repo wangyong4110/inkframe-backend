@@ -699,3 +699,36 @@ func (r *NovelCrawlJobRepository) Finalize(id uint, status string, done, total, 
 			"completed_at": &now,
 		}).Error
 }
+
+// ──────────────────────────────────────────────
+// NovelOutlineVersionRepository 小说大纲历史版本仓库
+// ──────────────────────────────────────────────
+
+// NovelOutlineVersionRepository 管理小说大纲历史版本
+type NovelOutlineVersionRepository struct {
+	db *gorm.DB
+}
+
+// NewNovelOutlineVersionRepository 构造函数
+func NewNovelOutlineVersionRepository(db *gorm.DB) *NovelOutlineVersionRepository {
+	return &NovelOutlineVersionRepository{db: db}
+}
+
+// Create 创建版本记录
+func (r *NovelOutlineVersionRepository) Create(v *model.NovelOutlineVersion) error {
+	return r.db.Create(v).Error
+}
+
+// ListByNovel 列出小说的所有版本（降序）
+func (r *NovelOutlineVersionRepository) ListByNovel(novelID uint) ([]*model.NovelOutlineVersion, error) {
+	var list []*model.NovelOutlineVersion
+	return list, r.db.Where("novel_id = ?", novelID).Order("version DESC").Find(&list).Error
+}
+
+// MaxVersion 查询当前最大版本号（无记录时返回 0）
+func (r *NovelOutlineVersionRepository) MaxVersion(novelID uint) (int, error) {
+	var v int
+	err := r.db.Model(&model.NovelOutlineVersion{}).Where("novel_id = ?", novelID).
+		Select("COALESCE(MAX(version),0)").Scan(&v).Error
+	return v, err
+}

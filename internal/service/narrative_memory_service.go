@@ -601,6 +601,21 @@ func (s *NarrativeMemoryService) TriggerArcSummaryIfNeeded(tenantID, novelID uin
 	}
 }
 
+// WaitForArcSummary blocks until the arc summary for the given arcNo of the given novel is done
+// (i.e., the async goroutine has released its lock), or until timeout elapses.
+// Call this before BuildHierarchicalContext when the previous chapter was the last chapter of an arc.
+func (s *NarrativeMemoryService) WaitForArcSummary(novelID uint, arcNo int, timeout time.Duration) {
+	lockKey := fmt.Sprintf("%d-%d", novelID, arcNo)
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, running := s.arcGenLocks.Load(lockKey); !running {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	logger.Printf("[NarrativeMemory] WaitForArcSummary: timeout waiting for arc %d of novel %d", arcNo, novelID)
+}
+
 func (s *NarrativeMemoryService) generateArcSummary(tenantID, novelID uint, arcNo, startChapter, endChapter int) error {
 	logger.Printf("[NarrativeMemory] generateArcSummary: novelID=%d arcNo=%d ch%d~ch%d", novelID, arcNo, startChapter, endChapter)
 	type chSummary struct {

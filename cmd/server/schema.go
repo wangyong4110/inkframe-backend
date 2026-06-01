@@ -8,7 +8,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-06-01-v3"
+const schemaVersion = "2026-06-01-v5"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -95,6 +95,11 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_async_task", "retry_count", "INT NOT NULL DEFAULT 0"},
 		{"ink_async_task", "max_retries", "INT NOT NULL DEFAULT 3"},
 		{"ink_async_task", "failure_log", "TEXT NULL"},
+		// ink_novel 文件去重哈希（2026-06-01 新增）
+		{"ink_novel", "source_file_hash", "VARCHAR(64)"},
+		// ink_chapter 质量状态（2026-06-01 Fix1 新增）
+		{"ink_chapter", "quality_status", "VARCHAR(20) NOT NULL DEFAULT 'ok'"},
+		{"ink_chapter", "quality_issues", "TEXT NULL"},
 	}
 	for _, a := range additions {
 		// 先查 information_schema，列已存在则跳过，避免触发 GORM 的 Error 1060 日志
@@ -232,6 +237,15 @@ func autoMigrate(db *gorm.DB) error {
 		&model.Notification{},
 		// 连续性检查报告
 		&model.ContinuityReportRecord{},
+		// 专用伏笔表
+		&model.Foreshadow{},
+		// Webhook 订阅与投递记录
+		&model.WebhookSubscription{},
+		&model.WebhookDelivery{},
+		// 审计日志
+		&model.AuditLog{},
+		// 小说大纲历史版本
+		&model.NovelOutlineVersion{},
 	); err != nil {
 		return err
 	}

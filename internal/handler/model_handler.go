@@ -96,6 +96,11 @@ func (h *ModelHandler) GetProvider(c *gin.Context) {
 // CreateProvider 创建提供商
 // POST /api/v1/model-providers
 func (h *ModelHandler) CreateProvider(c *gin.Context) {
+	if !isAdminOrOwner(c) {
+		respondErr(c, http.StatusForbidden, "admin or owner role required")
+		return
+	}
+
 	var req model.CreateModelProviderRequest
 	if !bindJSON(c, &req) {
 		return
@@ -118,6 +123,11 @@ func (h *ModelHandler) CreateProvider(c *gin.Context) {
 // UpdateProvider 更新提供商
 // PUT /api/v1/model-providers/:id
 func (h *ModelHandler) UpdateProvider(c *gin.Context) {
+	if !isAdminOrOwner(c) {
+		respondErr(c, http.StatusForbidden, "admin or owner role required")
+		return
+	}
+
 	id, ok := parseID(c, "id")
 	if !ok {
 		return
@@ -142,6 +152,11 @@ func (h *ModelHandler) UpdateProvider(c *gin.Context) {
 // DeleteProvider 删除提供商
 // DELETE /api/v1/model-providers/:id
 func (h *ModelHandler) DeleteProvider(c *gin.Context) {
+	if !isAdminOrOwner(c) {
+		respondErr(c, http.StatusForbidden, "admin or owner role required")
+		return
+	}
+
 	id, ok := parseID(c, "id")
 	if !ok {
 		return
@@ -356,6 +371,11 @@ func (h *ModelHandler) GetTaskConfig(c *gin.Context) {
 // UpdateTaskConfig 更新任务配置
 // PUT /api/v1/task-configs/:task
 func (h *ModelHandler) UpdateTaskConfig(c *gin.Context) {
+	if !isAdminOrOwner(c) {
+		respondErr(c, http.StatusForbidden, "admin or owner role required")
+		return
+	}
+
 	task := c.Param("task")
 
 	var req model.UpdateTaskConfigRequest
@@ -601,6 +621,11 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 // TestModelPrompt 用指定提供商生成文本（前端「生成测试」功能）
 // POST /api/v1/models/test-prompt
 func (h *ModelHandler) TestModelPrompt(c *gin.Context) {
+	if !isAdminOrOwner(c) {
+		respondErr(c, http.StatusForbidden, "admin or owner role required")
+		return
+	}
+
 	var req struct {
 		ProviderID uint   `json:"provider_id" binding:"required"`
 		Prompt     string `json:"prompt" binding:"required"`
@@ -633,6 +658,11 @@ func (h *ModelHandler) GetTaskMappings(c *gin.Context) {
 // UpdateTaskMapping 更新任务-提供商映射
 // PUT /api/v1/models/task-mappings
 func (h *ModelHandler) UpdateTaskMapping(c *gin.Context) {
+	if !isAdminOrOwner(c) {
+		respondErr(c, http.StatusForbidden, "admin or owner role required")
+		return
+	}
+
 	var req struct {
 		TaskType   string `json:"task_type" binding:"required"`
 		ProviderID *uint  `json:"provider_id"`

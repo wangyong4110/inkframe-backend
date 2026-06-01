@@ -41,6 +41,12 @@ const (
 // userPrompt: 用户自定义提示词（可选），将追加到系统 prompt 之后
 // progressFn: 可选的进度回调（0-99），供调用方更新任务进度（传 nil 则跳过）
 func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt string, progressFn func(int), overrides StoryboardOverrides, chapterIDOverride ...*uint) ([]*model.StoryboardShot, error) {
+	// Prevent concurrent storyboard generation for the same video.
+	if _, loaded := s.generatingStoryboard.LoadOrStore(videoID, struct{}{}); loaded {
+		return nil, fmt.Errorf("storyboard generation already in progress for video %d", videoID)
+	}
+	defer s.generatingStoryboard.Delete(videoID)
+
 	totalStart := time.Now()
 
 	video, err := s.videoRepo.GetByID(videoID)
@@ -259,6 +265,18 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			shot.ShotNo = shotCounter
 		}
 		allShots = append(allShots, r.shots...)
+	}
+
+	// 验证合并后的分镜序号连续性（1..N），以防合并逻辑出现 bug 导致序号跳空。
+	// 重编号步骤已保证 1..N，此处仅为安全校验：若检测到序号跳空，尝试二次修复。
+	if err := validateShotSequence(allShots); err != nil {
+		logger.Printf("[Storyboard] WARNING: shot sequence validation failed (%v); attempting re-sequence", err)
+		for i, shot := range allShots {
+			shot.ShotNo = i + 1
+		}
+		if err2 := validateShotSequence(allShots); err2 != nil {
+			logger.Printf("[Storyboard] ERROR: re-sequence also failed: %v", err2)
+		}
 	}
 
 	if len(allShots) == 0 {
@@ -819,6 +837,19 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 		shots = append(shots, shot)
 	}
 	return shots, nil
+}
+
+// validateShotSequence 验证分镜列表序号是否从 1 开始连续递增（无跳空）。
+func validateShotSequence(shots []*model.StoryboardShot) error {
+	if len(shots) == 0 {
+		return fmt.Errorf("no shots generated")
+	}
+	for i, s := range shots {
+		if s.ShotNo != i+1 {
+			return fmt.Errorf("shot sequence gap: expected shot_no %d, got %d", i+1, s.ShotNo)
+		}
+	}
+	return nil
 }
 
 // validTransition 验证过渡方式，无效时返回默认值 cut

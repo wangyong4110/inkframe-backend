@@ -5,6 +5,7 @@ import (
 	"regexp"
 
 	"github.com/gin-gonic/gin"
+	"github.com/inkframe/inkframe-backend/internal/middleware"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
@@ -182,6 +183,9 @@ func (h *TenantHandler) UpdateTenant(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	// Invalidate subscription cache so next request re-reads the updated status/plan/expiry.
+	middleware.InvalidateTenantSubCache(uint(id))
 
 	respondOK(c, tenant)
 }

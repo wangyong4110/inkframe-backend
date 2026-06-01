@@ -269,6 +269,13 @@ func (s *TaskService) Get(taskID string) (*model.AsyncTask, error) {
 	return s.repo.GetByTaskID(taskID)
 }
 
+// Heartbeat updates the updated_at timestamp of a running task to signal it is still alive.
+// Long-running task goroutines should call this periodically to prevent the cleanup loop
+// from treating the task as a zombie and marking it failed.
+func (s *TaskService) Heartbeat(taskID string) error {
+	return s.repo.UpdateFields(taskID, map[string]interface{}{"updated_at": time.Now()})
+}
+
 // GetLatestAnalysisTask returns the most recently created novel_analysis task for the given novel.
 func (s *TaskService) GetLatestAnalysisTask(novelID uint) (*model.AsyncTask, error) {
 	return s.repo.GetLatestByTypeAndEntity(TaskTypeNovelAnalysis, "novel", novelID)
@@ -375,8 +382,9 @@ func (s *TaskService) recoverOrphaned(age time.Duration) {
 }
 
 // runCleanup deletes completed/failed tasks older than 7 days, recovers stale
-// running tasks (not updated in >2h), and runs any registered cleanup callbacks,
-// once per hour. Exits when Shutdown() is called.
+// running tasks (not updated in >2h), expires pending tasks queued for >1h,
+// and runs any registered cleanup callbacks, once per hour.
+// Exits when Shutdown() is called.
 func (s *TaskService) runCleanup() {
 	ticker := time.NewTicker(time.Hour)
 	defer ticker.Stop()
@@ -388,8 +396,15 @@ func (s *TaskService) runCleanup() {
 			if err := s.repo.DeleteOldCompleted(cutoff); err != nil {
 				logger.Printf("TaskService: cleanup error: %v", err)
 			}
-			// Recover tasks stuck in running/pending for more than 2 hours.
+			// Recover tasks stuck in "running" for more than 2h (no heartbeat).
 			s.recoverOrphaned(2 * time.Hour)
+			// Expire tasks stuck in "pending" for more than 1h (never picked up).
+			pendingCutoff := time.Now().Add(-1 * time.Hour)
+			if n, err := s.repo.MarkStalePending(pendingCutoff); err != nil {
+				logger.Printf("TaskService: expire stale pending tasks error: %v", err)
+			} else if n > 0 {
+				logger.Printf("TaskService: expired %d stale pending task(s)", n)
+			}
 			// Run domain-specific cleanup callbacks (e.g. rewrite chapter tasks).
 			for _, fn := range s.cleanupCallbacks {
 				fn()

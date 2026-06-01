@@ -173,6 +173,7 @@ func (h *CharacterHandler) GetCharacter(c *gin.Context) {
 
 // ListCharacters 获取角色列表
 // GET /api/v1/novels/:novel_id/characters
+// 可选查询参数 role: protagonist | antagonist | supporting | extra
 func (h *CharacterHandler) ListCharacters(c *gin.Context) {
 	novelId, ok := parseID(c, "id")
 	if !ok {
@@ -183,7 +184,16 @@ func (h *CharacterHandler) ListCharacters(c *gin.Context) {
 		return
 	}
 
-	characters, err := h.characterService.ListCharacters(uint(novelId))
+	role := c.Query("role")
+	var (
+		characters []*model.Character
+		err        error
+	)
+	if role != "" {
+		characters, err = h.characterService.ListByNovelFiltered(c.Request.Context(), uint(novelId), role)
+	} else {
+		characters, err = h.characterService.ListCharacters(uint(novelId))
+	}
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -239,6 +249,29 @@ func (h *CharacterHandler) DeleteCharacter(c *gin.Context) {
 		return
 	}
 	respondOK(c, nil)
+}
+
+// BatchDeleteCharacters 批量删除角色
+// DELETE /api/v1/novels/:id/characters
+func (h *CharacterHandler) BatchDeleteCharacters(c *gin.Context) {
+	novelId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if !h.checkNovelAccess(c, uint(novelId)) {
+		return
+	}
+	var req struct {
+		IDs []uint `json:"ids" binding:"required,min=1"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	if err := h.characterService.BatchDeleteCharacters(c.Request.Context(), uint(novelId), req.IDs); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"deleted": len(req.IDs)})
 }
 
 // GenerateCharacterImage 生成角色图像

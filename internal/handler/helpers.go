@@ -11,10 +11,11 @@ import (
 
 // parseID parses a uint route parameter, writing a 400 response on failure.
 // Returns (id, true) on success; (0, false) on failure.
+// Rejects zero values — all entity IDs must be positive integers.
 func parseID(c *gin.Context, param string) (uint, bool) {
 	v, err := strconv.ParseUint(c.Param(param), 10, 32)
-	if err != nil {
-		respondBadRequest(c, "invalid "+param)
+	if err != nil || v == 0 {
+		respondBadRequest(c, "invalid "+param+": must be a positive integer")
 		return 0, false
 	}
 	return uint(v), true
@@ -39,6 +40,15 @@ func getTenantID(c *gin.Context) uint {
 		}
 	}
 	return 0
+}
+
+// isAdminOrOwner returns true if the requesting user holds the system "admin"
+// role or the tenant-scoped "owner" or "admin" role.
+// This is a lightweight check based solely on the JWT claim — it does not hit
+// the database and is therefore safe to call on every mutating request.
+func isAdminOrOwner(c *gin.Context) bool {
+	role := c.GetString("user_role")
+	return role == "admin" || role == "owner"
 }
 
 // maskAPIKey masks an API key for safe display in responses.

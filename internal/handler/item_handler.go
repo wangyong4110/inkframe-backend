@@ -153,6 +153,29 @@ func (h *ItemHandler) DeleteItem(c *gin.Context) {
 	respondOK(c, gin.H{"message": "item deleted"})
 }
 
+// BatchDeleteItems 批量删除物品
+// DELETE /api/v1/novels/:id/items
+func (h *ItemHandler) BatchDeleteItems(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if !h.checkItemTenant(c, uint(novelID)) {
+		return
+	}
+	var req struct {
+		IDs []uint `json:"ids" binding:"required,min=1"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	if err := h.itemService.BatchDeleteItems(uint(novelID), req.IDs); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"deleted": len(req.IDs)})
+}
+
 // AIExtractFromNovel AI从章节内容提取物品（异步任务）
 // POST /api/v1/novels/:id/items/ai-extract
 func (h *ItemHandler) AIExtractFromNovel(c *gin.Context) {

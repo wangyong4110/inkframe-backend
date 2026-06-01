@@ -146,6 +146,18 @@ func (r *TaskRepository) CountActive(tenantID uint) (int64, error) {
 	return count, err
 }
 
+// MarkStalePending marks pending tasks created before `before` as failed (expired in queue).
+// Used by the hourly cleanup cycle to discard tasks that were never picked up.
+func (r *TaskRepository) MarkStalePending(before time.Time) (int64, error) {
+	result := r.db.Model(&model.AsyncTask{}).
+		Where("status = 'pending' AND created_at < ?", before).
+		Updates(map[string]interface{}{
+			"status": "failed",
+			"error":  "task expired in queue",
+		})
+	return result.RowsAffected, result.Error
+}
+
 // GetLatestByTypeAndEntity returns the most recently created task of the given type for an entity.
 // entityType and entityID are matched against the entity_type and entity_id columns.
 func (r *TaskRepository) GetLatestByTypeAndEntity(taskType, entityType string, entityID uint) (*model.AsyncTask, error) {

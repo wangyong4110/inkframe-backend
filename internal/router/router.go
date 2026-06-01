@@ -1,11 +1,13 @@
 package router
 
 import (
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/handler"
 	"github.com/inkframe/inkframe-backend/internal/middleware"
+	"github.com/inkframe/inkframe-backend/internal/service"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -14,8 +16,10 @@ import (
 type Config struct {
 	JWTSecret        string
 	AllowedOrigins   []string      // CORS 允许的来源列表；留空表示允许所有（开发模式）
-	RedisClient      *redis.Client // 可选，用于 JWT 黑名单检查
-	DB               *gorm.DB     // 可选，用于 health check 和邮箱验证中间件
+	TrustedProxies   []string      // 受信任的反向代理 IP；留空时默认 ["127.0.0.1", "::1"]
+	RedisClient      *redis.Client  // 可选，用于 JWT 黑名单检查
+	DB               *gorm.DB       // 可选，用于 health check 和邮箱验证中间件
+	AIService        *service.AIService // 可选，用于 /health AI 健康状态
 	NovelHandler     *handler.NovelHandler
 	ChapterHandler   *handler.ChapterHandler
 	CharacterHandler *handler.CharacterHandler
@@ -50,11 +54,25 @@ type Config struct {
 	KnowledgeHandler       *handler.KnowledgeHandler
 	DramaticHandler        *handler.DramaticHandler
 	DashboardHandler       *handler.DashboardHandler
+	ForeshadowHandler      *handler.ForeshadowHandler
+	WebhookHandler         *handler.WebhookHandler
+	AuditHandler           *handler.AuditHandler
 }
 
 // SetupRouter 配置路由
 func SetupRouter(cfg *Config) *gin.Engine {
 	r := gin.New()
+
+	// Configure trusted proxies so c.ClientIP() resolves the real client IP from
+	// X-Forwarded-For only when the request originates from a trusted proxy.
+	// This prevents clients from spoofing X-Forwarded-For to bypass rate limiting.
+	trustedProxies := cfg.TrustedProxies
+	if len(trustedProxies) == 0 {
+		trustedProxies = []string{"127.0.0.1", "::1"}
+	}
+	if err := r.SetTrustedProxies(trustedProxies); err != nil {
+		log.Printf("[Router] SetTrustedProxies warning: %v", err)
+	}
 
 	// 全局中间件
 	r.Use(middleware.SecurityHeaders())
@@ -65,7 +83,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 
 	// 健康检查（公开）
 	r.GET("/health", func(c *gin.Context) {
-		status := gin.H{"status": "ok", "db": "ok", "redis": "ok"}
+		status := gin.H{"status": "ok", "db": "ok", "redis": "ok", "ai": "unknown"}
 		httpStatus := http.StatusOK
 
 		if cfg.DB != nil {
@@ -79,6 +97,13 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			if err := cfg.RedisClient.Ping(c.Request.Context()).Err(); err != nil {
 				status["redis"] = "error"
 				// Redis failure is non-critical, don't set 503
+			}
+		}
+		if cfg.AIService != nil {
+			aiStatus := cfg.AIService.GetOverallHealthStatus()
+			status["ai"] = aiStatus
+			if aiStatus == "down" {
+				httpStatus = http.StatusServiceUnavailable
 			}
 		}
 		c.JSON(httpStatus, status)
@@ -142,6 +167,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 	v1 := r.Group("/api/v1")
 	v1.Use(middleware.RateLimit(60, 10))
 	v1.Use(middleware.NewAuth(cfg.JWTSecret, cfg.RedisClient))
+	v1.Use(middleware.CheckTenantSubscription(cfg.DB))
 	{
 		// 当前用户信息 & 资料管理
 		v1.GET("/auth/me", cfg.AuthHandler.GetCurrentUser)
@@ -202,6 +228,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.GET("/:id", cfg.NovelHandler.GetNovel)
 			novels.PUT("/:id", cfg.NovelHandler.UpdateNovel)
 			novels.DELETE("/:id", cfg.NovelHandler.DeleteNovel)
+			novels.GET("/:id/export", cfg.NovelHandler.ExportNovel)
 
 			// Sensitive AI generation routes require verified email
 			if cfg.DB != nil {
@@ -213,9 +240,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				novels.POST("/:id/outline", cfg.NovelHandler.GenerateOutline)
 			}
 
-			// 伏笔
-			novels.GET("/:id/foreshadows", cfg.NovelHandler.GetForeshadows)
-			novels.POST("/:id/foreshadows/:foreshadow_id/fulfill", cfg.NovelHandler.MarkForeshadowFulfilled)
+			// 大纲历史版本
+			novels.GET("/:id/outline-versions", cfg.NovelHandler.ListOutlineVersions)
 
 			// 时间线
 			novels.GET("/:id/timeline", cfg.NovelHandler.GetTimeline)
@@ -251,6 +277,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			// 角色
 			novels.GET("/:id/characters", cfg.CharacterHandler.ListCharacters)
 			novels.POST("/:id/characters", cfg.CharacterHandler.CreateCharacter)
+			novels.DELETE("/:id/characters", cfg.CharacterHandler.BatchDeleteCharacters)
 			novels.POST("/:id/characters/generate", cfg.CharacterHandler.GenerateCharacterProfile)
 			novels.POST("/:id/characters/ai-batch", cfg.CharacterHandler.AIBatchGenerate)
 			novels.POST("/:id/characters/batch-images", cfg.CharacterHandler.BatchGenerateImages)
@@ -280,6 +307,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			if cfg.ItemHandler != nil {
 				novels.GET("/:id/items", cfg.ItemHandler.ListItems)
 				novels.POST("/:id/items", cfg.ItemHandler.CreateItem)
+				novels.DELETE("/:id/items", cfg.ItemHandler.BatchDeleteItems)
 				novels.POST("/:id/items/ai-extract", cfg.ItemHandler.AIExtractFromNovel)
 				novels.POST("/:id/items/batch-images", cfg.ItemHandler.BatchGenerateImages)
 				// 章节级物品（有效列表 + 覆盖 + AI提取）
@@ -293,6 +321,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			if cfg.SkillHandler != nil {
 				novels.GET("/:id/skills", cfg.SkillHandler.ListSkills)
 				novels.POST("/:id/skills", cfg.SkillHandler.CreateSkill)
+				novels.DELETE("/:id/skills", cfg.SkillHandler.BatchDeleteSkills)
 				novels.POST("/:id/skills/ai-generate", cfg.SkillHandler.GenerateSkills)
 			}
 
@@ -379,6 +408,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			chapters.POST("/:id/regenerate", cfg.ChapterHandler.RegenerateChapter)
 			chapters.GET("/:id/versions", cfg.ChapterHandler.GetVersions)
 			chapters.POST("/:id/versions/:version_no/restore", cfg.ChapterHandler.RestoreVersion)
+			chapters.GET("/:id/versions/:version_id/content", cfg.ChapterHandler.GetVersionContent)
 			chapters.POST("/:id/quality-check", cfg.ChapterHandler.QualityCheck)
 			chapters.GET("/:id/quality-report", cfg.ChapterHandler.GetQualityReport)
 			chapters.POST("/:id/improve", cfg.ChapterHandler.RefineChapter)
@@ -435,6 +465,18 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				arcs.PUT("/:id", cfg.DramaticHandler.UpdateConflictArc)
 				arcs.DELETE("/:id", cfg.DramaticHandler.DeleteConflictArc)
 				arcs.PUT("/:id/advance-phase", cfg.DramaticHandler.AdvancePhase)
+			}
+		}
+
+		// 伏笔（专用表 ink_foreshadow）
+		if cfg.ForeshadowHandler != nil {
+			foreshadows := v1.Group("/novels/:novel_id/foreshadows")
+			{
+				foreshadows.GET("", cfg.ForeshadowHandler.ListForeshadows)
+				foreshadows.POST("", cfg.ForeshadowHandler.CreateForeshadow)
+				foreshadows.GET("/unfulfilled", cfg.ForeshadowHandler.ListUnfulfilledForeshadows)
+				foreshadows.PUT("/:foreshadow_id", cfg.ForeshadowHandler.UpdateForeshadow)
+				foreshadows.DELETE("/:foreshadow_id", cfg.ForeshadowHandler.DeleteForeshadow)
 			}
 		}
 
@@ -669,6 +711,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			worldviews.GET("/:id", cfg.WorldviewHandler.GetWorldview)
 			worldviews.PUT("/:id", cfg.WorldviewHandler.UpdateWorldview)
 			worldviews.DELETE("/:id", cfg.WorldviewHandler.DeleteWorldview)
+			// 单字段更新（不覆盖其他字段）
+			worldviews.PUT("/:id/sections/:section_key", cfg.WorldviewHandler.UpdateSection)
 			// 势力/实体 CRUD
 			worldviews.GET("/:id/entities", cfg.WorldviewHandler.ListEntities)
 			worldviews.POST("/:id/entities", cfg.WorldviewHandler.CreateEntity)
@@ -854,6 +898,22 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				rewrite.GET("/projects/:id/compliance-report", cfg.RewriteHandler.GetComplianceReport)
 				rewrite.POST("/projects/:id/cancel", cfg.RewriteHandler.CancelRewrite)
 			}
+		}
+
+		// Webhook 订阅管理
+		if cfg.WebhookHandler != nil {
+			webhooks := v1.Group("/webhooks")
+			{
+				webhooks.GET("", cfg.WebhookHandler.List)
+				webhooks.POST("", cfg.WebhookHandler.Create)
+				webhooks.DELETE("/:id", cfg.WebhookHandler.Delete)
+				webhooks.POST("/:id/test", cfg.WebhookHandler.TestWebhook)
+			}
+		}
+
+		// 审计日志查询
+		if cfg.AuditHandler != nil {
+			v1.GET("/audit-logs", cfg.AuditHandler.List)
 		}
 	}
 

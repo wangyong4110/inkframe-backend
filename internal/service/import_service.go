@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -79,6 +80,8 @@ type ImportResult struct {
 	Duration         float64  `json:"duration"` // 秒
 	Errors           []string `json:"errors,omitempty"`
 	OSSUrl           string   `json:"oss_url,omitempty"` // 原始文件 OSS 备份地址
+	Duplicate        bool     `json:"duplicate,omitempty"` // 是否为重复导入（内容哈希匹配）
+	Message          string   `json:"message,omitempty"`   // 附加说明（如重复导入提示）
 }
 
 // CrawlProgress 爬取进度
@@ -372,8 +375,8 @@ func (s *NovelImportService) crawlChaptersBackground(
 		progress.mu.Unlock()
 		logger.Printf("[Crawl] novel=%d chapter=%d/%d done", novelID, doneSoFar, totalSoFar)
 
-		// Every 5 chapters: persist progress + update crawler stats on progress
-		if doneSoFar%5 == 0 {
+		// Every 2 chapters (or on the last chapter): persist progress + update crawler stats
+		if doneSoFar%2 == 0 || doneSoFar == totalSoFar {
 			if jobID > 0 && s.crawlJobRepo != nil {
 				_ = s.crawlJobRepo.UpdateProgress(jobID, doneSoFar, totalSoFar, failedSoFar)
 			}
@@ -534,6 +537,25 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 	// 检测格式
 	format := s.detectFormat(req.FileName, req.Format)
 
+	// 文件内容哈希去重：同 tenant 下同一文件内容不重复导入
+	var fileHashHex string
+	if len(req.FileData) > 0 && req.TenantID > 0 && req.NovelID == 0 && s.db != nil {
+		hash := sha256.Sum256(req.FileData)
+		fileHashHex = fmt.Sprintf("%x", hash)
+		var existingNovel model.Novel
+		if err := s.db.Where("tenant_id = ? AND source_file_hash = ?", req.TenantID, fileHashHex).First(&existingNovel).Error; err == nil {
+			logger.Printf("[Import] duplicate file hash detected for tenant %d: novel %d (%s)", req.TenantID, existingNovel.ID, existingNovel.Title)
+			return &ImportResult{
+				NovelID:          existingNovel.ID,
+				Title:            existingNovel.Title,
+				ImportedChapters: existingNovel.ChapterCount,
+				TotalChapters:    existingNovel.ChapterCount,
+				Duplicate:        true,
+				Message:          "file already imported as novel: " + existingNovel.Title,
+			}, nil
+		}
+	}
+
 	// 解析内容
 	var novel *model.Novel
 	var chapters []*model.Chapter
@@ -591,6 +613,9 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 		if novel.ID == 0 {
 			novel.UUID = uuid.New().String()
 			novel.TenantID = req.TenantID
+			if fileHashHex != "" {
+				novel.SourceFileHash = fileHashHex
+			}
 			// 准备章节数据（需要 novel.ID，所以必须先创建 novel）。
 			// 如果有 DB 连接，使用事务确保 novel + chapters 原子性写入，
 			// 避免 novel 创建成功但 chapters 批量插入失败时出现孤立 novel 记录。
@@ -1068,17 +1093,35 @@ func (s *NovelImportService) parseHtmlFile(data []byte, tenantID uint) (*model.N
 	return novel, chapters, nil
 }
 
-// 去除HTML标签
+// 去除HTML标签（含事件处理器、javascript: URL 等潜在 XSS 载体）
 func (s *NovelImportService) stripHtmlTags(html string) string {
-	// 去除script和style
-	re := regexp.MustCompile(`(?s)<script[^>]*>.*?</script>`)
-	html = re.ReplaceAllString(html, "")
-	re = regexp.MustCompile(`(?s)<style[^>]*>.*?</style>`)
-	html = re.ReplaceAllString(html, "")
+	// Remove script tags and their content
+	scriptRe := regexp.MustCompile(`(?si)<script[^>]*>.*?</script>`)
+	html = scriptRe.ReplaceAllString(html, "")
 
-	// 去除所有标签
-	re = regexp.MustCompile(`<[^>]+>`)
-	content := re.ReplaceAllString(html, "\n")
+	// Remove style tags
+	styleRe := regexp.MustCompile(`(?si)<style[^>]*>.*?</style>`)
+	html = styleRe.ReplaceAllString(html, "")
+
+	// Remove ALL event handler attributes (on*)
+	eventRe := regexp.MustCompile(`(?i)\s+on\w+\s*=\s*["'][^"']*["']`)
+	html = eventRe.ReplaceAllString(html, "")
+
+	// Remove javascript: URLs
+	jsUrlRe := regexp.MustCompile(`(?i)(href|src|action)\s*=\s*["']\s*javascript:[^"']*["']`)
+	html = jsUrlRe.ReplaceAllString(html, `$1="#"`)
+
+	// Remove remaining HTML tags (keep text content)
+	tagRe := regexp.MustCompile(`<[^>]*>`)
+	content := tagRe.ReplaceAllString(html, "\n")
+
+	// Decode HTML entities
+	content = strings.ReplaceAll(content, "&amp;", "&")
+	content = strings.ReplaceAll(content, "&lt;", "<")
+	content = strings.ReplaceAll(content, "&gt;", ">")
+	content = strings.ReplaceAll(content, "&quot;", `"`)
+	content = strings.ReplaceAll(content, "&#39;", "'")
+	content = strings.ReplaceAll(content, "&nbsp;", " ")
 
 	// 清理多余空白
 	lines := strings.Split(content, "\n")
@@ -1090,7 +1133,7 @@ func (s *NovelImportService) stripHtmlTags(html string) string {
 		}
 	}
 
-	return strings.Join(cleaned, "\n\n")
+	return strings.TrimSpace(strings.Join(cleaned, "\n\n"))
 }
 
 // 按章节分割

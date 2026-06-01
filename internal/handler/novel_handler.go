@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
@@ -347,6 +348,25 @@ func (h *NovelHandler) GenerateOutline(c *gin.Context) {
 	respondOK(c, result)
 }
 
+// ListOutlineVersions 获取小说大纲历史版本列表
+// GET /api/v1/novels/:id/outline-versions
+func (h *NovelHandler) ListOutlineVersions(c *gin.Context) {
+	novelId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c)); err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found")
+		return
+	}
+	versions, err := h.novelService.ListOutlineVersions(uint(novelId))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, versions)
+}
+
 // GetForeshadows 获取伏笔列表
 // GET /api/v1/novels/:id/foreshadows
 func (h *NovelHandler) GetForeshadows(c *gin.Context) {
@@ -612,4 +632,52 @@ func (h *NovelHandler) GetAnalysisStatus(c *gin.Context) {
 		return
 	}
 	respondOK(c, status)
+}
+
+// ExportNovel 导出小说全文（TXT 格式）
+// GET /api/v1/novels/:id/export?format=txt
+func (h *NovelHandler) ExportNovel(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	tenantID := getTenantID(c)
+	format := c.DefaultQuery("format", "txt")
+	if format != "txt" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "only format=txt supported currently"})
+		return
+	}
+
+	novel, err := h.novelService.GetNovel(uint(novelID), tenantID)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found")
+		return
+	}
+
+	chapters, err := h.chapterService.ListChapters(uint(novelID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to fetch chapters")
+		return
+	}
+
+	var buf strings.Builder
+	buf.WriteString(novel.Title + "\n")
+	buf.WriteString(strings.Repeat("=", len([]rune(novel.Title))) + "\n\n")
+	if novel.Description != "" {
+		buf.WriteString(novel.Description + "\n\n")
+	}
+
+	for _, ch := range chapters {
+		title := ch.Title
+		if title == "" {
+			title = fmt.Sprintf("第%d章", ch.ChapterNo)
+		}
+		buf.WriteString(title + "\n")
+		buf.WriteString(strings.Repeat("-", len([]rune(title))) + "\n\n")
+		buf.WriteString(ch.Content + "\n\n")
+	}
+
+	filename := fmt.Sprintf("%s.txt", novel.Title)
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(buf.String()))
 }

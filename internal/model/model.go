@@ -166,6 +166,9 @@ type Novel struct {
 	ReviewedAt   *time.Time `json:"reviewed_at,omitempty"`
 	ReviewedBy   uint       `json:"reviewed_by" gorm:"default:0"`
 
+	// 文件去重（记录导入来源文件内容哈希，用于防止同一文件重复导入）
+	SourceFileHash string `json:"source_file_hash,omitempty" gorm:"size:64;index"`
+
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -284,6 +287,11 @@ type Chapter struct {
 	// ContinuityBlocked 当连贯性检查发现 high/critical 级别问题时由异步后处理标记为 true。
 	// 不阻塞章节返回，前端根据此字段决定是否提示用户审查。
 	ContinuityBlocked bool `json:"continuity_blocked" gorm:"default:false"`
+
+	// QualityStatus 质量状态：经质检+精修后仍不达标时标记为 "low"，默认 "ok"
+	QualityStatus string `json:"quality_status" gorm:"size:20;default:'ok'"`
+	// QualityIssues 质量问题 JSON 摘要（仅在 QualityStatus="low" 时写入）
+	QualityIssues string `json:"quality_issues,omitempty" gorm:"type:text"`
 
 	// 广场发布状态（与内容状态解耦）
 	IsPublished bool       `json:"is_published" gorm:"default:false;index"`
@@ -469,6 +477,20 @@ func (ArcSummary) TableName() string {
 	return "ink_arc_summary"
 }
 
+// NovelOutlineVersion 小说大纲历史版本（每次重新生成大纲前自动快照）
+type NovelOutlineVersion struct {
+	gorm.Model
+	TenantID uint   `json:"tenant_id" gorm:"index"`
+	NovelID  uint   `json:"novel_id" gorm:"not null;index"`
+	Version  int    `json:"version" gorm:"not null"`
+	Outline  string `json:"outline" gorm:"type:longtext"`
+	Prompt   string `json:"prompt" gorm:"type:text"`
+}
+
+func (NovelOutlineVersion) TableName() string {
+	return "ink_novel_outline_version"
+}
+
 // ReferenceNovel 参考小说
 type ReferenceNovel struct {
 	ID     uint   `json:"id" gorm:"primaryKey"`
@@ -630,6 +652,65 @@ type ContinuityReportRecord struct {
 }
 
 func (ContinuityReportRecord) TableName() string { return "ink_continuity_report" }
+
+// Foreshadow 伏笔/预兆（专用表，替代通过 KnowledgeBase tag 存储的方案）
+type Foreshadow struct {
+	gorm.Model
+	TenantID         uint   `json:"tenant_id" gorm:"index"`
+	NovelID          uint   `json:"novel_id" gorm:"not null;index"`
+	Title            string `json:"title" gorm:"size:200;not null"`
+	Description      string `json:"description" gorm:"type:text"`
+	PlantedChapterID *uint  `json:"planted_chapter_id,omitempty" gorm:"index"`
+	PayoffChapterID  *uint  `json:"payoff_chapter_id,omitempty" gorm:"index"`
+	Status           string `json:"status" gorm:"size:20;default:'planted'"` // planted, paid_off, abandoned
+	Tags             string `json:"tags" gorm:"size:500"`
+}
+
+func (Foreshadow) TableName() string { return "ink_foreshadow" }
+
+// WebhookSubscription 用户配置的 Webhook 订阅
+type WebhookSubscription struct {
+	gorm.Model
+	TenantID  uint   `gorm:"not null;index"`
+	URL       string `gorm:"size:500;not null"`
+	Secret    string `gorm:"size:200"` // for HMAC-SHA256 signing
+	Events    string `gorm:"type:text"` // JSON array of event types
+	IsActive  bool   `gorm:"default:true"`
+	LastError string `gorm:"type:text"`
+	FailCount int    `gorm:"default:0"`
+}
+
+func (WebhookSubscription) TableName() string { return "ink_webhook_subscription" }
+
+// WebhookDelivery 投递记录
+type WebhookDelivery struct {
+	gorm.Model
+	SubscriptionID uint   `gorm:"not null;index"`
+	EventType      string `gorm:"size:100"`
+	Payload        string `gorm:"type:text"`
+	StatusCode     int
+	ResponseBody   string `gorm:"type:text"`
+	Attempt        int    `gorm:"default:1"`
+	Success        bool   `gorm:"default:false"`
+}
+
+func (WebhookDelivery) TableName() string { return "ink_webhook_delivery" }
+
+// AuditLog 审计日志
+type AuditLog struct {
+	ID         uint      `json:"id" gorm:"primaryKey;autoIncrement"`
+	CreatedAt  time.Time `json:"created_at" gorm:"index"`
+	TenantID   uint      `json:"tenant_id" gorm:"index"`
+	UserID     uint      `json:"user_id" gorm:"index"`
+	Action     string    `json:"action" gorm:"size:100;not null"` // e.g. "novel.create", "chapter.delete"
+	EntityType string    `json:"entity_type" gorm:"size:50"`
+	EntityID   uint      `json:"entity_id"`
+	IPAddress  string    `json:"ip_address" gorm:"size:50"`
+	UserAgent  string    `json:"user_agent" gorm:"size:500"`
+	Detail     string    `json:"detail" gorm:"type:text"` // JSON extras
+}
+
+func (AuditLog) TableName() string { return "ink_audit_log" }
 
 type CreateChapterRequest struct {
 	ChapterNo int    `json:"chapter_no"`

@@ -185,11 +185,13 @@ type CrawlJob struct {
 	ID          uint       `json:"id" gorm:"primaryKey"`
 	TaskID      string     `json:"task_id" gorm:"size:50;index"`            // AsyncTask.TaskID for lifecycle management
 	TenantID    uint       `json:"tenant_id" gorm:"index"`
-	Source      string     `json:"source" gorm:"size:50"` // unsplash|pexels|pixabay|freesound|nasa|wikimedia
-	Query       string     `json:"query" gorm:"size:500"`
+	Source      string     `json:"source" gorm:"size:50"` // unsplash|pexels|pixabay|freesound|nasa|wikimedia|webpage
+	Query       string     `json:"query" gorm:"size:500"` // search keyword, or URL when source=webpage
 	AssetType   string     `json:"asset_type" gorm:"size:20"`
 	License     string     `json:"license" gorm:"size:100"`
 	Limit       int        `json:"limit"`
+	CrawlDepth  int        `json:"crawl_depth" gorm:"default:0"`  // webpage: 0=single page, 1=follow links
+	URLPattern  string     `json:"url_pattern" gorm:"size:500"`   // webpage: regex filter for followed links
 	Status      string     `json:"status" gorm:"size:20;default:'pending'"` // pending|running|completed|failed
 	TotalFound  int        `json:"total_found"`
 	Imported    int        `json:"imported"`

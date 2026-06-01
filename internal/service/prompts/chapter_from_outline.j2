@@ -29,8 +29,17 @@
 
 章末钩子设置：{{ HookSetup }}
 
+{% if TimelineContext %}
+# 时间线约束（必须遵守）
+{{ TimelineContext }}
+{% endif %}
+
+{% if CharacterStates %}
+{{ CharacterStates }}
+{% endif %}
+
 {% if ForeshadowHints %}
-# 未解决剧情线（必须关注，在本章中有所推进或回应）
+# 伏笔上下文（未解决剧情线，必须关注，在本章中有所推进或回应）
 {{ ForeshadowHints }}
 {% endif %}
 

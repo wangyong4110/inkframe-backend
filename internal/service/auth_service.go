@@ -133,7 +133,7 @@ func (s *AuthService) WithRequireVerification(v bool) *AuthService {
 // RegisterRequest 注册请求
 type RegisterRequest struct {
 	TenantName string `json:"tenant_name"` // 可选，为空时自动使用用户名
-	Username   string `json:"username" binding:"required"`
+	Username   string `json:"username" binding:"required,min=3,max=50"`
 	Email      string `json:"email" binding:"required,email"`
 	Password   string `json:"password" binding:"required,min=8"`
 	Nickname   string `json:"nickname"`
@@ -349,11 +349,36 @@ func (s *AuthService) RefreshToken(tokenStr string) (*AuthResponse, error) {
 		}
 	}
 
-	// Fix 1: Blacklist the old JTI before issuing a new token (prevent JWT replay attacks).
 	oldJTI := claims.JTI
 	if oldJTI == "" {
 		oldJTI = claims.RegisteredClaims.ID
 	}
+
+	// Atomically mark this refresh token as "in-use" using SETNX to prevent concurrent reuse.
+	// If two concurrent requests try to refresh the same token, only one wins the SETNX lock;
+	// the other gets rejected immediately.
+	// TTL matches jwtExpiry (the access token lifetime) to prevent token replay for the full
+	// token lifetime; minimum 15 minutes to avoid premature expiry on short-lived tokens.
+	if oldJTI != "" && s.rdb != nil {
+		usedKey := "jwt:refresh_used:" + oldJTI
+		usedTTL := s.jwtExpiry
+		if usedTTL < 15*time.Minute {
+			usedTTL = 15 * time.Minute
+		}
+		set, err := s.rdb.SetNX(context.Background(), usedKey, "1", usedTTL).Result()
+		if err == nil && !set {
+			// Another request already used this refresh token
+			return nil, errors.New("refresh token has already been used")
+		}
+	}
+
+	// Issue new token first, then blacklist the old JTI so it cannot be used again.
+	resp, err := s.signToken(claims.UserID, claims.TenantID, claims.Role)
+	if err != nil {
+		return nil, err
+	}
+
+	// Blacklist the old JTI to prevent replay (e.g. if SETNX key expires before token does).
 	if oldJTI != "" && s.rdb != nil {
 		ttl := s.jwtExpiry
 		if claims.ExpiresAt != nil {
@@ -365,7 +390,7 @@ func (s *AuthService) RefreshToken(tokenStr string) (*AuthResponse, error) {
 		s.rdb.Set(context.Background(), "jwt:blacklist:"+oldJTI, "1", ttl)
 	}
 
-	return s.signToken(claims.UserID, claims.TenantID, claims.Role)
+	return resp, nil
 }
 
 // signToken 生成JWT令牌

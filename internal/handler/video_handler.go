@@ -257,7 +257,7 @@ func (h *VideoHandler) UpdateVideo(c *gin.Context) {
 		return
 	}
 
-	video, err := h.videoService.UpdateVideo(uint(id), &req)
+	video, err := h.videoService.UpdateVideo(uint(id), getTenantID(c), &req)
 	if err != nil {
 		logger.Printf("[VideoHandler] UpdateVideo: id=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
@@ -279,7 +279,7 @@ func (h *VideoHandler) DeleteVideo(c *gin.Context) {
 		return
 	}
 
-	if err := h.videoService.DeleteVideo(uint(id)); err != nil {
+	if err := h.videoService.DeleteVideo(uint(id), getTenantID(c)); err != nil {
 		logger.Printf("[VideoHandler] DeleteVideo: id=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return

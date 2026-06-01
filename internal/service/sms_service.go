@@ -23,12 +23,16 @@ import (
 )
 
 const (
-	smsCodeKeyPrefix  = "sms:code:"
-	smsLimitKeyPrefix = "sms:limit:"
-	smsCountKeyPrefix = "sms:count:"
-	smsCodeTTL        = 5 * time.Minute
-	smsLimitTTL       = 60 * time.Second
-	smsMaxVerifyCount = 3
+	smsCodeKeyPrefix      = "sms:code:"
+	smsLimitKeyPrefix     = "sms:limit:"
+	smsCountKeyPrefix     = "sms:count:"
+	smsDailyKeyPrefix     = "sms:daily:"
+	smsVerifyDailyPrefix  = "sms:verify_daily:"
+	smsCodeTTL            = 5 * time.Minute
+	smsLimitTTL           = 60 * time.Second
+	smsMaxVerifyCount     = 3
+	smsDailyMax           = 5
+	smsVerifyDailyMax     = 10
 )
 
 // SMSService 短信服务
@@ -57,6 +61,20 @@ func (s *SMSService) SendCode(phone string) error {
 	}
 	if exists > 0 {
 		return errors.New("请勿频繁发送验证码，请60秒后重试")
+	}
+
+	// 每日发送次数限制
+	dailyKey := smsDailyKeyPrefix + phone
+	dailyCount, err := s.redis.Incr(ctx, dailyKey).Result()
+	if err != nil {
+		return fmt.Errorf("daily limit check failed: %w", err)
+	}
+	if dailyCount == 1 {
+		// First send today — set 24h expiry
+		s.redis.Expire(ctx, dailyKey, 24*time.Hour)
+	}
+	if dailyCount > smsDailyMax {
+		return fmt.Errorf("今日发送验证码次数已达上限（%d次），请明日再试", smsDailyMax)
 	}
 
 	// 生成6位随机验证码
@@ -88,6 +106,9 @@ func (s *SMSService) SendCode(phone string) error {
 }
 
 // VerifyCode 验证验证码
+// Uses a Lua script to atomically check the code and manage attempt counting,
+// preventing race conditions where concurrent requests could both pass verification
+// using the same code before the delete completes.
 func (s *SMSService) VerifyCode(phone, code string) error {
 	if s.redis == nil {
 		return errors.New("redis not available")
@@ -97,33 +118,65 @@ func (s *SMSService) VerifyCode(phone, code string) error {
 	countKey := smsCountKeyPrefix + phone
 	codeKey := smsCodeKeyPrefix + phone
 
-	// 先原子递增，避免并发竞态导致超过限制次数仍能通过检查
-	newCount, incrErr := s.redis.Incr(ctx, countKey).Result()
-	if incrErr != nil {
-		return errors.New("验证码不存在或已过期")
+	// 每日验证次数限制（防暴力枚举）
+	verifyDailyKey := smsVerifyDailyPrefix + phone
+	verifyCount, verifyErr := s.redis.Incr(ctx, verifyDailyKey).Result()
+	if verifyErr != nil {
+		return errors.New("验证服务暂时不可用")
 	}
-	if newCount > int64(smsMaxVerifyCount) {
-		s.redis.Del(ctx, codeKey, countKey)
-		return errors.New("验证码已失效，请重新获取")
+	if verifyCount == 1 {
+		s.redis.Expire(ctx, verifyDailyKey, 24*time.Hour)
+	}
+	if verifyCount > smsVerifyDailyMax {
+		return errors.New("今日验证次数已达上限")
 	}
 
-	stored, err := s.redis.Get(ctx, codeKey).Result()
+	// Lua script: atomically verify code and manage attempt counter.
+	// Returns:
+	//   0  — success (code matched, both keys deleted)
+	//  -1  — code does not exist or has expired
+	//  -2  — too many wrong attempts (keys deleted)
+	//   n  — wrong code, n attempts used so far (code key preserved for remaining attempts)
+	luaScript := redis.NewScript(`
+		local stored = redis.call('GET', KEYS[1])
+		if stored == false then return -1 end
+		local count_key = KEYS[2]
+		local max = tonumber(ARGV[2])
+		if stored ~= ARGV[1] then
+			local n = redis.call('INCR', count_key)
+			redis.call('EXPIRE', count_key, ARGV[3])
+			if n >= max then
+				redis.call('DEL', KEYS[1], count_key)
+				return -2
+			end
+			return n
+		end
+		redis.call('DEL', KEYS[1], count_key)
+		return 0
+	`)
+
+	result, err := luaScript.Run(ctx, s.redis,
+		[]string{codeKey, countKey},
+		code, smsMaxVerifyCount, int(smsCodeTTL.Seconds()),
+	).Int()
 	if err != nil {
-		return errors.New("验证码不存在或已过期")
+		return errors.New("验证服务暂时不可用")
 	}
 
-	if stored != code {
-		remaining := int64(smsMaxVerifyCount) - newCount
+	switch result {
+	case 0:
+		return nil // success
+	case -1:
+		return errors.New("验证码不存在或已过期")
+	case -2:
+		return errors.New("验证码错误次数过多，请重新获取")
+	default:
+		remaining := int64(smsMaxVerifyCount) - int64(result)
 		if remaining <= 0 {
-			s.redis.Del(ctx, codeKey, countKey)
 			return errors.New("验证码错误次数过多，请重新获取")
 		}
 		return fmt.Errorf("验证码错误，还剩 %d 次机会", remaining)
 	}
-
-	// 验证成功，清除
-	s.redis.Del(ctx, codeKey, countKey)
-	return nil
 }
 
 // sendAliyunSMS 调用阿里云短信API（RPC签名方式，dysmsapi.aliyuncs.com）

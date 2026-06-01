@@ -580,6 +580,31 @@ func (s *TimelineService) GetTimeline(novelID uint) (*Timeline, error) {
 	return s.BuildTimeline(novelID)
 }
 
+// FormatTimelineForPrompt 将时间线格式化为 markdown 字符串，仅包含与 chapterNo 相近（±5章）的事件。
+// 返回空字符串表示无相关事件或 timeline 为空。
+func (s *TimelineService) FormatTimelineForPrompt(timeline *Timeline, chapterNo int) string {
+	if timeline == nil || len(timeline.Events) == 0 {
+		return ""
+	}
+	var buf strings.Builder
+	buf.WriteString("## 时间线约束\n")
+	found := false
+	for _, ev := range timeline.Events {
+		if ev.ChapterNo >= chapterNo-5 && ev.ChapterNo <= chapterNo+5 {
+			desc := ev.Description
+			if desc == "" {
+				desc = ev.Title
+			}
+			buf.WriteString(fmt.Sprintf("- 第%d章: %s\n", ev.ChapterNo, desc))
+			found = true
+		}
+	}
+	if !found {
+		return ""
+	}
+	return buf.String()
+}
+
 // ============================================
 // WorldviewService
 // ============================================
@@ -652,6 +677,50 @@ func (s *WorldviewService) UpdateEntity(entity *model.WorldviewEntity) error {
 
 func (s *WorldviewService) DeleteEntity(id uint) error {
 	return s.worldviewRepo.DeleteEntity(id)
+}
+
+// UpdateSection 更新世界观的单个字段，不覆盖其他字段
+// sectionKey 必须是以下之一：magic_system, geography, history, culture, technology, rules, cheat_system,
+// description, factions, core_conflicts, character_archetypes, religion, glossary
+func (s *WorldviewService) UpdateSection(worldviewID uint, tenantID uint, sectionKey, content string) (*model.Worldview, error) {
+	wv, err := s.worldviewRepo.GetByIDAndTenant(worldviewID, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	switch sectionKey {
+	case "magic_system":
+		wv.MagicSystem = content
+	case "geography":
+		wv.Geography = content
+	case "history":
+		wv.History = content
+	case "culture":
+		wv.Culture = content
+	case "technology":
+		wv.Technology = content
+	case "rules":
+		wv.Rules = content
+	case "cheat_system":
+		wv.CheatSystem = content
+	case "description":
+		wv.Description = content
+	case "factions":
+		wv.Factions = content
+	case "core_conflicts":
+		wv.CoreConflicts = content
+	case "character_archetypes":
+		wv.CharacterArchetypes = content
+	case "religion":
+		wv.Religion = content
+	case "glossary":
+		wv.Glossary = content
+	default:
+		return nil, fmt.Errorf("unknown worldview section key: %s", sectionKey)
+	}
+	if err := s.worldviewRepo.Update(wv); err != nil {
+		return nil, err
+	}
+	return wv, nil
 }
 
 // GenerateWorldview AI生成世界观

@@ -804,6 +804,43 @@ func (s *BGMService) jamendoNameSearch(ctx context.Context, tenantID uint, query
 	return tracks, nil
 }
 
+// ValidateCoverageBeforeSynthesis 在视频合成开始前校验 BGM 分段是否完整覆盖所有分镜。
+// 如果存在未覆盖的分镜（gap），返回 error 阻止合成。
+// bgmRepo 或 shots 为 nil/空时直接返回 nil（跳过校验）。
+func (s *BGMService) ValidateCoverageBeforeSynthesis(_ context.Context, videoID uint, shots []*model.StoryboardShot, bgmRepo *repository.VideoBGMSegmentRepository) error {
+	if bgmRepo == nil || len(shots) == 0 {
+		return nil
+	}
+	segs, err := bgmRepo.ListByVideoID(videoID)
+	if err != nil || len(segs) == 0 {
+		// No BGM configured — not an error (BGM is optional)
+		return nil
+	}
+
+	// Convert *model.VideoBGMSegment to bgmSegmentAnalysis for reuse of validateBGMCoverage
+	analyses := make([]bgmSegmentAnalysis, 0, len(segs))
+	for _, seg := range segs {
+		if seg.Disabled {
+			continue
+		}
+		analyses = append(analyses, bgmSegmentAnalysis{
+			StartShotNo: seg.StartShotNo,
+			EndShotNo:   seg.EndShotNo,
+			Mood:        seg.Mood,
+		})
+	}
+	if len(analyses) == 0 {
+		return nil // all segments disabled; skip
+	}
+
+	warns := validateBGMCoverage(shots, analyses)
+	if len(warns) > 0 {
+		return fmt.Errorf("BGM coverage incomplete before synthesis (%d issue(s)): %s",
+			len(warns), strings.Join(warns, "; "))
+	}
+	return nil
+}
+
 // GenerateBGMSegments AI分析 + 并行搜索，一步完成全部BGM分段生成。
 func (s *BGMService) GenerateBGMSegments(
 	ctx context.Context,

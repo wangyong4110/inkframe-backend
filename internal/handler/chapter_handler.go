@@ -348,6 +348,32 @@ func (h *ChapterHandler) RestoreVersion(c *gin.Context) {
 	respondOK(c, chapter)
 }
 
+// GetVersionContent 获取指定章节版本的完整内容（供客户端 diff）
+// GET /api/v1/chapters/:id/versions/:version_id/content
+func (h *ChapterHandler) GetVersionContent(c *gin.Context) {
+	chapterID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	versionID, ok := parseID(c, "version_id")
+	if !ok {
+		return
+	}
+
+	// Verify chapter belongs to tenant.
+	if _, err := h.chapterService.GetChapter(uint(chapterID), getTenantID(c)); err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+
+	version, err := h.versionService.GetChapterVersion(uint(chapterID), uint(versionID))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "version not found")
+		return
+	}
+	respondOK(c, version)
+}
+
 // GetChapterByNo 根据章节号获取章节
 // GET /api/v1/novels/:novel_id/chapters/:chapter_no
 func (h *ChapterHandler) GetChapterByNo(c *gin.Context) {
@@ -462,6 +488,20 @@ func (h *ChapterHandler) PublishChapter(c *gin.Context) {
 	}
 
 	if !h.checkNovelOwnership(c, novelId) {
+		return
+	}
+
+	// Fetch the chapter to check continuity_blocked before publishing.
+	existing, err := h.chapterService.GetChapterByNo(uint(novelId), chapterNo)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	if existing.ContinuityBlocked {
+		c.JSON(http.StatusConflict, gin.H{
+			"error": "chapter has unresolved continuity issues and cannot be published",
+			"code":  "continuity_blocked",
+		})
 		return
 	}
 
