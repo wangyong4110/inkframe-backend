@@ -63,7 +63,7 @@ type NovelAnalysisService struct {
 	aiService          *AIService
 	plotPointService   *PlotPointService
 	sceneAnchorService *SceneAnchorService
-	foreshadowRepo     *repository.ForeshadowRepository
+	foreshadowSvc      *ForeshadowCRUDService
 	taskSvc            *TaskService
 	modelRepo          *repository.AIModelRepository // optional, for voice auto-suggestion
 	cleanupStop        chan struct{} // closed by Shutdown() to stop background goroutines
@@ -128,9 +128,9 @@ func (s *NovelAnalysisService) WithSceneAnchorService(svc *SceneAnchorService) *
 	return s
 }
 
-// WithForeshadowRepo 注入伏笔仓库（可选，支持伏笔提取步骤）
-func (s *NovelAnalysisService) WithForeshadowRepo(repo *repository.ForeshadowRepository) *NovelAnalysisService {
-	s.foreshadowRepo = repo
+// WithForeshadowService 注入伏笔服务（可选，支持伏笔提取步骤）
+func (s *NovelAnalysisService) WithForeshadowService(svc *ForeshadowCRUDService) *NovelAnalysisService {
+	s.foreshadowSvc = svc
 	return s
 }
 
@@ -1220,88 +1220,20 @@ func (s *NovelAnalysisService) stepExtractForeshadows(
 	ctx context.Context, task *AnalysisTask, tenantID uint, novel *model.Novel, chapters []*model.Chapter,
 ) error {
 	logger.Printf("[NovelAnalysis] stepExtractForeshadows: novelID=%d", novel.ID)
-	if s.foreshadowRepo == nil {
+	if s.foreshadowSvc == nil {
 		return nil
 	}
 	// 若已有伏笔则跳过
-	existing, _ := s.foreshadowRepo.ListByNovel(novel.ID, tenantID)
+	existing, _ := s.foreshadowSvc.ListByNovel(ctx, novel.ID, tenantID)
 	if len(existing) > 0 {
 		logger.Printf("NovelAnalysis[%d]: foreshadows already exist (%d), skip", novel.ID, len(existing))
 		return nil
 	}
-
-	summariesText := buildChapterSummariesText(chapters, 20, 8000)
-	if summariesText == "" {
-		return nil
-	}
-
-	// 构建章节编号 → ID 映射，用于关联 planted_chapter_id
-	chapterNoToID := make(map[int]uint, len(chapters))
-	for _, ch := range chapters {
-		chapterNoToID[ch.ChapterNo] = ch.ID
-	}
-
-	prompt, err := renderPrompt("extract_foreshadows", map[string]interface{}{
-		"NovelTitle": novel.Title,
-		"Genre":      novel.Genre,
-		"Summaries":  summariesText,
-	})
+	created, err := s.foreshadowSvc.AIExtractFromNovel(tenantID, novel.ID)
 	if err != nil {
-		return fmt.Errorf("render extract_foreshadows prompt: %w", err)
+		return fmt.Errorf("AIExtractForeshadows: %w", err)
 	}
-
-	result, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "extract_foreshadows", prompt, "",
-		StoryboardOverrides{MaxTokens: 4096})
-	if err != nil {
-		return fmt.Errorf("AI foreshadow extraction: %w", err)
-	}
-
-	type foreshadowJSON struct {
-		Title            string `json:"title"`
-		Description      string `json:"description"`
-		PlantedChapterNo int    `json:"planted_chapter_no"`
-		Status           string `json:"status"`
-		Tags             string `json:"tags"`
-	}
-
-	raw := extractJSON(result)
-	var items []foreshadowJSON
-	var wrapped struct {
-		Foreshadows []foreshadowJSON `json:"foreshadows"`
-	}
-	if err := json.Unmarshal([]byte(raw), &wrapped); err == nil && len(wrapped.Foreshadows) > 0 {
-		items = wrapped.Foreshadows
-	} else if err2 := json.Unmarshal([]byte(raw), &items); err2 != nil {
-		logger.Printf("NovelAnalysis[%d]: foreshadow parse error: %v, raw: %.200s", novel.ID, err, result)
-		return fmt.Errorf("failed to parse foreshadow AI response")
-	}
-
-	for _, item := range items {
-		if item.Title == "" {
-			continue
-		}
-		status := item.Status
-		if status == "" {
-			status = "planted"
-		}
-		f := &model.Foreshadow{
-			TenantID:    tenantID,
-			NovelID:     novel.ID,
-			Title:       item.Title,
-			Description: item.Description,
-			Status:      status,
-			Tags:        item.Tags,
-		}
-		if item.PlantedChapterNo > 0 {
-			if chID, ok := chapterNoToID[item.PlantedChapterNo]; ok {
-				f.PlantedChapterID = &chID
-			}
-		}
-		if err := s.foreshadowRepo.Create(f); err != nil {
-			logger.Printf("NovelAnalysis[%d]: create foreshadow %q: %v", novel.ID, f.Title, err)
-		}
-	}
-	logger.Printf("NovelAnalysis[%d]: created %d foreshadows", novel.ID, len(items))
+	logger.Printf("NovelAnalysis[%d]: extracted %d foreshadows", novel.ID, len(created))
 	return nil
 }
 

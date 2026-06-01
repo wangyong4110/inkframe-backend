@@ -268,6 +268,7 @@ type contentSvcs struct {
 	Item              *service.ItemService
 	Skill             *service.SkillService
 	SceneAnchor       *service.SceneAnchorService
+	ForeshadowCRUD    *service.ForeshadowCRUDService
 	NovelAnalysis     *service.NovelAnalysisService
 	NovelImport       *service.NovelImportService
 	Crawler           *crawler.NovelCrawler
@@ -402,13 +403,17 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 	sceneAnchorSvc := service.NewSceneAnchorService(repos.SceneAnchorRepo, repos.StoryboardRepo, aiSvc, repos.NovelRepo).
 		WithChapterRepo(repos.ChapterRepo)
 
+	// 伏笔 CRUD 服务（带 AI 提取能力）
+	foreshadowCRUDSvc := service.NewForeshadowCRUDService(repos.ForeshadowRepo).
+		WithAIDeps(aiSvc, repos.NovelRepo, repos.ChapterRepo)
+
 	// 小说分析服务（依赖大部分上面的服务）
 	novelAnalysisSvc := service.NewNovelAnalysisService(repos.NovelRepo, repos.ChapterRepo, repos.CharacterRepo, repos.WorldviewRepo, novelSvc, aiSvc).
 		WithItemRepo(repos.ItemRepo).
 		WithItemService(itemSvc).
 		WithPlotPointService(core.PlotPoint).
 		WithSceneAnchorService(sceneAnchorSvc).
-		WithForeshadowRepo(repos.ForeshadowRepo).
+		WithForeshadowService(foreshadowCRUDSvc).
 		WithTaskService(core.Task).
 		WithModelRepo(repos.AIModelRepo)
 
@@ -424,7 +429,8 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 		CharacterArc: characterArcSvc, Style: styleSvc, GenContext: genCtxSvc,
 		ImageGen: imageGenSvc, HookChain: hookChainSvc, SatisfactionPoint: satisfactionSvc,
 		ConflictArc: conflictArcSvc, Pacing: pacingSvc, Item: itemSvc, Skill: skillSvc,
-		SceneAnchor: sceneAnchorSvc, NovelAnalysis: novelAnalysisSvc, NovelImport: novelImportSvc,
+		SceneAnchor: sceneAnchorSvc, ForeshadowCRUD: foreshadowCRUDSvc,
+		NovelAnalysis: novelAnalysisSvc, NovelImport: novelImportSvc,
 		Crawler: crawlerSvc,
 	}
 }
@@ -633,7 +639,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		// ── Notifications ──
 		NotificationService: notifSvc,
 		// ── Dedicated foreshadow table ──
-		ForeshadowCRUDService: service.NewForeshadowCRUDService(repos.ForeshadowRepo),
+		ForeshadowCRUDService: content.ForeshadowCRUD,
 		// ── Webhook ──
 		WebhookService: service.NewWebhookService(db),
 		// ── Audit ──

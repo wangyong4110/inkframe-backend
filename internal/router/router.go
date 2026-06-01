@@ -488,6 +488,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			{
 				foreshadows.GET("", cfg.ForeshadowHandler.ListForeshadows)
 				foreshadows.POST("", cfg.ForeshadowHandler.CreateForeshadow)
+				foreshadows.POST("/extract", cfg.ForeshadowHandler.AIExtractForeshadows)
 				foreshadows.GET("/unfulfilled", cfg.ForeshadowHandler.ListUnfulfilledForeshadows)
 				foreshadows.PUT("/:foreshadow_id", cfg.ForeshadowHandler.UpdateForeshadow)
 				foreshadows.DELETE("/:foreshadow_id", cfg.ForeshadowHandler.DeleteForeshadow)

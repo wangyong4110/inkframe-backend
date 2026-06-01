@@ -100,6 +100,22 @@ func (h *ForeshadowHandler) UpdateForeshadow(c *gin.Context) {
 	respondOK(c, f)
 }
 
+// AIExtractForeshadows POST /novels/:id/foreshadows/extract
+func (h *ForeshadowHandler) AIExtractForeshadows(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	tenantID := getTenantID(c)
+	list, err := h.svc.AIExtractFromNovel(tenantID, novelID)
+	if err != nil {
+		logger.Printf("[ForeshadowHandler] AIExtract: novelID=%d err=%v", novelID, err)
+		respondErr(c, http.StatusInternalServerError, "AI extraction failed: "+err.Error())
+		return
+	}
+	respondOK(c, gin.H{"foreshadows": list, "total": len(list)})
+}
+
 // DeleteForeshadow DELETE /novels/:id/foreshadows/:foreshadow_id
 func (h *ForeshadowHandler) DeleteForeshadow(c *gin.Context) {
 	_, ok := parseID(c, "id")
