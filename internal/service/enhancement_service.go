@@ -48,7 +48,7 @@ type ForeshadowItem struct {
 }
 
 // ExtractForeshadows 从章节中提取伏笔
-func (s *ForeshadowService) ExtractForeshadows(chapter *model.Chapter, novelID uint) ([]*ForeshadowItem, error) {
+func (s *ForeshadowService) ExtractForeshadows(chapter *model.Chapter, tenantID, novelID uint) ([]*ForeshadowItem, error) {
 	prompt := fmt.Sprintf(`请从以下章节内容中识别并提取伏笔/预示/悬念，返回JSON数组格式：
 
 伏笔类型说明：
@@ -73,7 +73,7 @@ func (s *ForeshadowService) ExtractForeshadows(chapter *model.Chapter, novelID u
   ]
 }`, chapter.Content)
 
-	result, err := s.aiService.Generate(novelID, "foreshadow_extraction", prompt)
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "foreshadow_extraction", prompt, "")
 	if err != nil {
 		return nil, err
 	}

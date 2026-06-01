@@ -266,11 +266,11 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 		}
 
 		// 后处理：伏笔提取 + 质量检查（非阻塞）
-		go func(ch *model.Chapter) {
-			if _, err := h.foreshadowService.ExtractForeshadows(ch, ch.NovelID); err != nil {
+		go func(ch *model.Chapter, tid uint) {
+			if _, err := h.foreshadowService.ExtractForeshadows(ch, tid, ch.NovelID); err != nil {
 				logger.Printf("[NovelHandler] GenerateChapter: foreshadow extraction failed (ch %d): %v", ch.ID, err)
 			}
-		}(chapter)
+		}(chapter, tenantID)
 		go func(chID uint) {
 			if _, err := h.qualityControlService.CheckChapter(chID); err != nil {
 				logger.Printf("[NovelHandler] GenerateChapter: quality check failed (ch %d): %v", chID, err)

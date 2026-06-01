@@ -98,7 +98,7 @@ func (s *QualityControlService) runAIQualityCheck(chapter *model.Chapter, novel 
 		return nil, fmt.Errorf("AI quality check failed: %w", err)
 	}
 
-	content := extractJSON(result)
+	content := extractJSONObject(result)
 	var scores AIQualityScores
 	if err := json.Unmarshal([]byte(content), &scores); err != nil {
 		return nil, fmt.Errorf("parse AI quality scores: %w (raw: %s)", err, content)
