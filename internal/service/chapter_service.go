@@ -156,6 +156,10 @@ func (s *ChapterService) syncNovelStats(novelID uint) {
 }
 
 func (s *ChapterService) CreateChapter(novelID uint, req *model.CreateChapterRequest) (*model.Chapter, error) {
+	const maxChapterContentBytes = 512 * 1024 // 512KB
+	if len(req.Content) > maxChapterContentBytes {
+		return nil, fmt.Errorf("chapter content too large (%d bytes, max 512KB)", len(req.Content))
+	}
 	var tenantID uint
 	if novel, err := s.novelRepo.GetByID(novelID); err == nil {
 		tenantID = novel.TenantID
@@ -1013,6 +1017,7 @@ func (s *ChapterService) generateSceneOutline(
 		"IsStandalone":          req.IsStandalone,
 		"PreviousChapterEnding": prevEnding,
 		"Characters":            characters,
+		"CharacterStates":       formatCharacterStates(characters),
 		"ForeshadowHints":       foreshadowHints,
 		"PlotTensionState":      plotTensionState,
 		"RefStories":            refStories,
@@ -1035,16 +1040,17 @@ func (s *ChapterService) generateSceneOutline(
 		return "", "", fmt.Errorf("generateSceneOutline: AI call failed: %w", err)
 	}
 
-	resp = extractJSON(strings.TrimSpace(resp))
+	resp = extractJSONObject(strings.TrimSpace(resp))
 
 	// 提取建议标题，并校验场景数量
 	var outlineResult struct {
 		ChapterTitle string            `json:"chapter_title"`
 		Scenes       []json.RawMessage `json:"scenes"`
 	}
-	if err := json.Unmarshal([]byte(resp), &outlineResult); err == nil {
-		suggestedTitle = outlineResult.ChapterTitle
+	if err := json.Unmarshal([]byte(resp), &outlineResult); err != nil {
+		return "", "", fmt.Errorf("generateSceneOutline: parse outline JSON: %w (raw=%q)", err, truncateForPrompt(resp, 200))
 	}
+	suggestedTitle = outlineResult.ChapterTitle
 
 	sceneCount := len(outlineResult.Scenes)
 	logger.Printf("[ChapterService] generateSceneOutline: chapterNo=%d scenes=%d", req.ChapterNo, sceneCount)
@@ -1177,6 +1183,7 @@ func (s *ChapterService) generateFromSceneOutline(
 		"HookSetup":             outlineData.HookSetup,
 		"PeakTension":           peakTension,
 		"Characters":            characterVoices,
+		"CharacterStates":       formatCharacterStates(characterVoices),
 		"ForeshadowHints":       foreshadowHints,
 		"PreviousChapterEnding": prevEnding,
 		"UserPrompt":            req.Prompt,
@@ -1581,6 +1588,20 @@ func (s *ChapterService) getCharacterVoices(novelID uint) []characterForPrompt {
 	return s.getCharactersForPrompt(novelID)
 }
 
+// formatCharacterStates 将角色列表（含快照状态）格式化为可注入 prompt 的状态描述文本
+func formatCharacterStates(chars []characterForPrompt) string {
+	if len(chars) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, c := range chars {
+		if c.CurrentState != "" {
+			sb.WriteString(fmt.Sprintf("- %s: %s\n", c.Name, c.CurrentState))
+		}
+	}
+	return sb.String()
+}
+
 // buildCharacterStateString 生成主角当前状态的结构化描述，优先注入场景大纲 prompt
 // 这是防止主角漂移最重要的上下文
 
@@ -1869,6 +1890,8 @@ func (s *ChapterService) ApproveChapter(id uint, comment string) error {
 		return err
 	}
 	chapter.Status = "approved"
+	chapter.QualityStatus = "ok"
+	chapter.QualityIssues = ""
 	return s.chapterRepo.Update(chapter)
 }
 

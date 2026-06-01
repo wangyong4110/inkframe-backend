@@ -284,13 +284,17 @@ func (s *McpService) GetByName(name string) (*model.McpTool, error) {
 // Uses net.IP methods rather than string prefix matching to prevent bypass via
 // alternate representations (e.g., decimal encoding, IPv6 mapped addresses).
 func isPrivateIP(ip net.IP) bool {
+	// Explicitly check IPv4-mapped IPv6 (e.g. ::ffff:127.0.0.1)
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+	}
 	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
 		ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
 		return true
 	}
-	// Also check IPv4-mapped IPv6 addresses (e.g. ::ffff:127.0.0.1)
-	if v4 := ip.To4(); v4 != nil {
-		return isPrivateIPv4(v4)
+	// Also run explicit CIDR check for IPv4 addresses
+	if ip.To4() != nil {
+		return isPrivateIPv4(ip)
 	}
 	return false
 }

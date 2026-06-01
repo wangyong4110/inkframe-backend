@@ -144,10 +144,10 @@ func SetupRouter(cfg *Config) *gin.Engine {
 	auth := r.Group("/api/v1/auth")
 	auth.Use(middleware.RateLimit(10, 0.2)) // 10 burst, ~12 req/min
 	{
-		// Auth endpoints: stricter rate limit — 5 burst, 1 per 20 seconds (~3/min)
-		authStrict := middleware.RateLimit(5, 0.05)
-		auth.POST("/register", authStrict, cfg.AuthHandler.Register)
-		auth.POST("/login", authStrict, cfg.AuthHandler.Login)
+		// Auth endpoints: stricter rate limit — 5 req/min per IP
+		authRL := middleware.RateLimitAuth()
+		auth.POST("/register", authRL, cfg.AuthHandler.Register)
+		auth.POST("/login", authRL, cfg.AuthHandler.Login)
 		auth.POST("/refresh", cfg.AuthHandler.RefreshToken)
 		auth.POST("/sms/send", cfg.AuthHandler.SendSMSCode)
 		auth.POST("/phone/register", cfg.AuthHandler.PhoneRegister)

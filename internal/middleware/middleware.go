@@ -472,3 +472,23 @@ func RateLimit(capacity float64, rate float64) gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// RateLimitAuth returns a stricter rate limiter for auth endpoints (5 req/min per IP).
+// Uses the shared token bucket store with a separate key prefix to avoid colliding with
+// the general rate limiter buckets.
+func RateLimitAuth() gin.HandlerFunc {
+	// 5 burst, 1 token per 12 seconds (~5 req/min)
+	const authCapacity = 5.0
+	const authRate = 1.0 / 12.0 // tokens per second
+	return func(c *gin.Context) {
+		ip := "auth:" + c.ClientIP()
+		bucket := getBucket(ip, authCapacity, authRate)
+		if !bucket.allow() {
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
+				"error": "too many requests",
+			})
+			return
+		}
+		c.Next()
+	}
+}

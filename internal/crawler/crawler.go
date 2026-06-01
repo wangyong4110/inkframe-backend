@@ -243,6 +243,13 @@ func (nc *NovelCrawler) newCollector(domain string) *colly.Collector {
 		nc.stats.recordResponse(int64(len(r.Body)))
 	})
 
+	// Enforce minimum safe crawl rate
+	if nc.config.DelayMs < 1000 {
+		nc.config.DelayMs = 1000
+	}
+	if nc.config.Concurrency > 2 {
+		nc.config.Concurrency = 2
+	}
 	_ = col.Limit(&colly.LimitRule{
 		DomainGlob:  "*",
 		Delay:       time.Duration(nc.config.DelayMs) * time.Millisecond,
@@ -294,6 +301,13 @@ func (nc *NovelCrawler) newAsyncCollector(domain string) *colly.Collector {
 		nc.stats.recordResponse(int64(len(r.Body)))
 	})
 
+	// Enforce minimum safe crawl rate
+	if nc.config.DelayMs < 1000 {
+		nc.config.DelayMs = 1000
+	}
+	if nc.config.Concurrency > 2 {
+		nc.config.Concurrency = 2
+	}
 	parallelism := nc.config.Concurrency
 	if parallelism < 1 {
 		parallelism = 1

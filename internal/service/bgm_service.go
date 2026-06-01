@@ -841,6 +841,92 @@ func (s *BGMService) ValidateCoverageBeforeSynthesis(_ context.Context, videoID 
 	return nil
 }
 
+// RepairCoverageGaps 自动修复 BGM 分段覆盖空洞（gap）。
+// 对于每个未被任何分段覆盖的 shot_no，将其前一个分段的 EndShotNo 延伸至覆盖该空洞，
+// 并持久化修改。若无法确定前一分段（gap 在首段之前），则静默跳过。
+// 此方法在合成流程中作为非致命修复步骤调用；任何 DB 错误均只记录日志，不中断合成。
+func (s *BGMService) RepairCoverageGaps(ctx context.Context, videoID uint, shots []*model.StoryboardShot, bgmRepo *repository.VideoBGMSegmentRepository) error {
+	if bgmRepo == nil || len(shots) == 0 {
+		return nil
+	}
+	segs, err := bgmRepo.ListByVideoID(videoID)
+	if err != nil || len(segs) == 0 {
+		return nil
+	}
+
+	// 按 StartShotNo 排序分段（DB 返回顺序通常已排序，但确保正确）
+	sortedSegs := make([]*model.VideoBGMSegment, len(segs))
+	copy(sortedSegs, segs)
+	for i := 1; i < len(sortedSegs); i++ {
+		for j := i; j > 0 && sortedSegs[j].StartShotNo < sortedSegs[j-1].StartShotNo; j-- {
+			sortedSegs[j], sortedSegs[j-1] = sortedSegs[j-1], sortedSegs[j]
+		}
+	}
+
+	// 建立 shot_no → 覆盖状态的映射
+	covered := make(map[int]bool, len(shots))
+	for _, seg := range sortedSegs {
+		if seg.Disabled {
+			continue
+		}
+		for sno := seg.StartShotNo; sno <= seg.EndShotNo; sno++ {
+			covered[sno] = true
+		}
+	}
+
+	// 收集未覆盖的 shot_no，找到各自的前一个分段并延伸其 EndShotNo
+	updated := make(map[uint]bool)
+	for _, sh := range shots {
+		if covered[sh.ShotNo] {
+			continue
+		}
+		// 找到 StartShotNo 最大且 <= sh.ShotNo 的分段
+		var bestSeg *model.VideoBGMSegment
+		for _, seg := range sortedSegs {
+			if seg.Disabled {
+				continue
+			}
+			if seg.StartShotNo <= sh.ShotNo {
+				if bestSeg == nil || seg.StartShotNo > bestSeg.StartShotNo {
+					bestSeg = seg
+				}
+			}
+		}
+		if bestSeg == nil {
+			// gap 出现在所有分段之前，将最早分段的 StartShotNo 延伸
+			if len(sortedSegs) > 0 {
+				bestSeg = sortedSegs[0]
+				if bestSeg.StartShotNo > sh.ShotNo {
+					logger.Printf("[BGMService] RepairCoverageGaps: extending seg %d StartShotNo %d→%d to cover shot %d",
+						bestSeg.SeqNo, bestSeg.StartShotNo, sh.ShotNo, sh.ShotNo)
+					bestSeg.StartShotNo = sh.ShotNo
+					covered[sh.ShotNo] = true
+					updated[bestSeg.ID] = true
+				}
+			}
+			continue
+		}
+		if bestSeg.EndShotNo < sh.ShotNo {
+			logger.Printf("[BGMService] RepairCoverageGaps: extending seg %d EndShotNo %d→%d to cover shot %d",
+				bestSeg.SeqNo, bestSeg.EndShotNo, sh.ShotNo, sh.ShotNo)
+			bestSeg.EndShotNo = sh.ShotNo
+			covered[sh.ShotNo] = true
+			updated[bestSeg.ID] = true
+		}
+	}
+
+	// 持久化修改
+	for _, seg := range sortedSegs {
+		if updated[seg.ID] {
+			if err := bgmRepo.Update(seg); err != nil {
+				logger.Printf("[BGMService] RepairCoverageGaps: failed to update seg %d: %v", seg.SeqNo, err)
+			}
+		}
+	}
+	_ = ctx
+	return nil
+}
+
 // GenerateBGMSegments AI分析 + 并行搜索，一步完成全部BGM分段生成。
 func (s *BGMService) GenerateBGMSegments(
 	ctx context.Context,

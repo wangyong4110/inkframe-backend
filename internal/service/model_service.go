@@ -112,11 +112,14 @@ func (s *ModelService) RunExperiment(id uint) error {
 		}
 		ch := make(chan slot, len(modelIDs))
 		var wg sync.WaitGroup
+		sem := make(chan struct{}, 2)
 
 		for _, mid := range modelIDs {
 			mid := mid
 			wg.Add(1)
 			go func() {
+				sem <- struct{}{}
+				defer func() { <-sem }()
 				defer wg.Done()
 				m, err := s.modelRepo.GetByID(mid)
 				if err != nil || m == nil || m.Provider == nil {

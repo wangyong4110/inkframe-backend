@@ -21,12 +21,12 @@ func (s *ForeshadowCRUDService) Create(ctx context.Context, f *model.Foreshadow)
 	return s.repo.Create(f)
 }
 
-func (s *ForeshadowCRUDService) ListByNovel(ctx context.Context, novelID uint) ([]*model.Foreshadow, error) {
-	return s.repo.ListByNovel(novelID)
+func (s *ForeshadowCRUDService) ListByNovel(ctx context.Context, novelID uint, tenantID uint) ([]*model.Foreshadow, error) {
+	return s.repo.ListByNovel(novelID, tenantID)
 }
 
-func (s *ForeshadowCRUDService) ListUnfulfilled(ctx context.Context, novelID uint) ([]*model.Foreshadow, error) {
-	return s.repo.ListUnfulfilled(novelID)
+func (s *ForeshadowCRUDService) ListUnfulfilled(ctx context.Context, novelID uint, tenantID uint) ([]*model.Foreshadow, error) {
+	return s.repo.ListUnfulfilled(novelID, tenantID)
 }
 
 func (s *ForeshadowCRUDService) Update(ctx context.Context, id uint, updates map[string]interface{}) (*model.Foreshadow, error) {

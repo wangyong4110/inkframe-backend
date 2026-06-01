@@ -24,7 +24,8 @@ func (h *ForeshadowHandler) ListForeshadows(c *gin.Context) {
 	if !ok {
 		return
 	}
-	list, err := h.svc.ListByNovel(c.Request.Context(), novelID)
+	tenantID := getTenantID(c)
+	list, err := h.svc.ListByNovel(c.Request.Context(), novelID, tenantID)
 	if err != nil {
 		logger.Printf("[ForeshadowHandler] ListForeshadows: novelID=%d err=%v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to list foreshadows")
@@ -66,7 +67,8 @@ func (h *ForeshadowHandler) ListUnfulfilledForeshadows(c *gin.Context) {
 	if !ok {
 		return
 	}
-	list, err := h.svc.ListUnfulfilled(c.Request.Context(), novelID)
+	tenantID := getTenantID(c)
+	list, err := h.svc.ListUnfulfilled(c.Request.Context(), novelID, tenantID)
 	if err != nil {
 		logger.Printf("[ForeshadowHandler] ListUnfulfilled: novelID=%d err=%v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to list unfulfilled foreshadows")

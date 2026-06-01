@@ -480,6 +480,7 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 // initServices 初始化服务层
 func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, vectorStore *vector.StoreManager, cfg *config.Config, redisClient *redis.Client) *Services {
 	core    := initCoreServiceGroup(repos, aiManager, cfg)
+	core.Task.WithDB(db)
 	content := initContentServiceGroup(repos, core, aiManager, vectorStore)
 	video   := initVideoServiceGroup(repos, core, content, cfg)
 

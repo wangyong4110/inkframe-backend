@@ -538,6 +538,7 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 	format := s.detectFormat(req.FileName, req.Format)
 
 	// 文件内容哈希去重：同 tenant 下同一文件内容不重复导入
+	// TODO: wrap in transaction for atomicity (the check-then-create is a TOCTOU race under concurrent imports)
 	var fileHashHex string
 	if len(req.FileData) > 0 && req.TenantID > 0 && req.NovelID == 0 && s.db != nil {
 		hash := sha256.Sum256(req.FileData)
@@ -836,6 +837,11 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 	}
 	if err != nil {
 		return nil, fmt.Errorf("parse chapter list failed: %w", err)
+	}
+
+	const maxChaptersPerImport = 10000
+	if len(chapterInfos) > maxChaptersPerImport {
+		return nil, fmt.Errorf("chapter list too large: %d chapters (max %d)", len(chapterInfos), maxChaptersPerImport)
 	}
 
 	// 按标题去重：同 tenant 下同名小说直接追加，不新建项目

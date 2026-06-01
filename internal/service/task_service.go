@@ -11,6 +11,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
+	"gorm.io/gorm"
 )
 
 // Task type constants — used by handlers to tag tasks.
@@ -42,6 +43,7 @@ const (
 // TaskService manages persistent async tasks.
 type TaskService struct {
 	repo             *repository.TaskRepository
+	db               *gorm.DB      // optional: used for cross-table cleanup (e.g. WebhookDelivery)
 	stopCh           chan struct{}  // closed by Shutdown() to stop background goroutines
 	cancelFns        sync.Map      // taskID string → context.CancelFunc
 	resumeFns        sync.Map      // taskType string → func(*model.AsyncTask)
@@ -57,6 +59,13 @@ func NewTaskService(repo *repository.TaskRepository) *TaskService {
 	}
 	go svc.runCleanup()
 	return svc
+}
+
+// WithDB injects an optional *gorm.DB used for cross-table cleanup operations
+// (e.g. purging old WebhookDelivery records). Call before Boot().
+func (s *TaskService) WithDB(db *gorm.DB) *TaskService {
+	s.db = db
+	return s
 }
 
 // Boot recovers orphaned tasks from a previous session. Must be called after all
@@ -404,6 +413,11 @@ func (s *TaskService) runCleanup() {
 				logger.Printf("TaskService: expire stale pending tasks error: %v", err)
 			} else if n > 0 {
 				logger.Printf("TaskService: expired %d stale pending task(s)", n)
+			}
+			// Clean up old webhook delivery records (keep last 30 days)
+			if s.db != nil {
+				cutoff := time.Now().AddDate(0, 0, -30)
+				s.db.Where("created_at < ?", cutoff).Delete(&model.WebhookDelivery{})
 			}
 			// Run domain-specific cleanup callbacks (e.g. rewrite chapter tasks).
 			for _, fn := range s.cleanupCallbacks {

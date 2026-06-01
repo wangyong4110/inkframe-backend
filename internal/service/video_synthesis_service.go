@@ -124,7 +124,12 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
 		return "", err
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Printf("video synthesis: panic in cleanup: %v", r)
+		}
+		os.RemoveAll(tmpDir)
+	}()
 
 // shotDownloadResult 记录一个分镜的下载结果（保序）
 	type shotDownloadResult struct {
@@ -603,20 +608,15 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 		}
 
 		// 0. BGM 覆盖率预检（可选；bgmService + bgmRepo 均配置时才检查）
+		// 覆盖率不完整时：自动修复 gap（延伸前段 EndShotNo）并继续合成，不阻断流程。
 		if s.bgmService != nil && s.bgmRepo != nil {
 			allShots, shotsErr := s.storyboardRepo.ListByVideo(videoID)
 			if shotsErr == nil && len(allShots) > 0 {
 				if coverErr := s.bgmService.ValidateCoverageBeforeSynthesis(synthCtx, videoID, allShots, s.bgmRepo); coverErr != nil {
-					logger.Printf("[SynthesizeVideo] videoID=%d: BGM coverage check failed: %v", videoID, coverErr)
-					if s.taskSvc != nil {
-						_ = s.taskSvc.Fail(taskID, "synthesis blocked: "+coverErr.Error())
+					logger.Printf("[SynthesizeVideo] videoID=%d: BGM coverage gap detected, auto-repairing and continuing: %v", videoID, coverErr)
+					if repairErr := s.bgmService.RepairCoverageGaps(synthCtx, videoID, allShots, s.bgmRepo); repairErr != nil {
+						logger.Printf("[SynthesizeVideo] videoID=%d: BGM gap repair failed, proceeding without full BGM coverage: %v", videoID, repairErr)
 					}
-					if updErr := s.videoRepo.UpdateFields(video.ID, map[string]interface{}{
-						"status": "failed", "error_message": "synthesis blocked: " + coverErr.Error(),
-					}); updErr != nil {
-						logger.Printf("[SynthesizeVideo] videoID=%d: DB update failed: %v", videoID, updErr)
-					}
-					return
 				}
 			}
 		}

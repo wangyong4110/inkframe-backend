@@ -80,6 +80,9 @@ func newOSSService(cfg Config) *ossService {
 const maxUploadSize = 2 * 1024 * 1024 * 1024 // 2 GB
 
 func (s *ossService) Upload(ctx context.Context, key string, r io.Reader, size int64, contentType string) (string, error) {
+	if size <= 0 {
+		return "", fmt.Errorf("storage: upload size must be > 0")
+	}
 	// Reject oversized uploads before reading the body.
 	if size > maxUploadSize {
 		return "", fmt.Errorf("upload size %d exceeds maximum %d bytes", size, maxUploadSize)

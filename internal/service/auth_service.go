@@ -556,9 +556,12 @@ func (s *AuthService) ChangePassword(userID uint, oldPwd, newPwd string) error {
 	if err := s.userRepo.UpdatePassword(userID, string(hashed)); err != nil {
 		return err
 	}
-	// Fix 9: Synchronous call with non-fatal error logging (Redis failure must not block password change).
+	// Password has been updated in DB. Now invalidate existing sessions in Redis.
+	// If Redis fails, return an error so the caller knows old sessions may still be valid,
+	// but the password change itself is not lost.
 	if err := s.invalidateUserSessions(userID); err != nil {
 		logger.Printf("[AuthService] invalidateUserSessions failed for user %d: %v (old sessions may still be valid)", userID, err)
+		return fmt.Errorf("password changed but session invalidation failed, please log out manually: %w", err)
 	}
 	return nil
 }
