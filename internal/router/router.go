@@ -48,6 +48,7 @@ type Config struct {
 	ColorPaletteHandler    *handler.ColorPaletteHandler
 	NotificationHandler    *handler.NotificationHandler
 	KnowledgeHandler       *handler.KnowledgeHandler
+	DramaticHandler        *handler.DramaticHandler
 }
 
 // SetupRouter 配置路由
@@ -312,6 +313,22 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				novels.DELETE("/:id/knowledge/:kb_id", cfg.KnowledgeHandler.DeleteKnowledge)
 			}
 
+			// 戏剧张力管理
+			if cfg.DramaticHandler != nil {
+				// 节奏曲线
+				novels.GET("/:id/pacing-curve", cfg.DramaticHandler.GetPacingCurve)
+				novels.GET("/:id/pacing-health", cfg.DramaticHandler.GetPacingHealth)
+				// 钩子链
+				novels.GET("/:id/hooks", cfg.DramaticHandler.ListHooks)
+				novels.POST("/:id/hooks", cfg.DramaticHandler.CreateHook)
+				// 爽点
+				novels.GET("/:id/satisfaction-points", cfg.DramaticHandler.ListSatisfactionPoints)
+				novels.POST("/:id/satisfaction-points", cfg.DramaticHandler.CreateSatisfactionPoint)
+				// 冲突弧
+				novels.GET("/:id/conflict-arcs", cfg.DramaticHandler.ListConflictArcs)
+				novels.POST("/:id/conflict-arcs", cfg.DramaticHandler.CreateConflictArc)
+			}
+
 			// 场景锚点（挂在 novel 下）
 			if cfg.SceneAnchorHandler != nil {
 				novels.GET("/:id/scene-anchors", cfg.SceneAnchorHandler.ListSceneAnchors)
@@ -390,6 +407,27 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				plotPoints.PUT("/:id", cfg.PlotPointHandler.Update)
 				plotPoints.PUT("/:id/resolve", cfg.PlotPointHandler.MarkResolved)
 				plotPoints.DELETE("/:id", cfg.PlotPointHandler.Delete)
+			}
+		}
+
+		// 戏剧张力单条操作
+		if cfg.DramaticHandler != nil {
+			hooks := v1.Group("/hooks")
+			{
+				hooks.PUT("/:id", cfg.DramaticHandler.UpdateHook)
+				hooks.DELETE("/:id", cfg.DramaticHandler.DeleteHook)
+				hooks.PUT("/:id/fulfill", cfg.DramaticHandler.FulfillHook)
+			}
+			sps := v1.Group("/satisfaction-points")
+			{
+				sps.PUT("/:id", cfg.DramaticHandler.UpdateSatisfactionPoint)
+				sps.DELETE("/:id", cfg.DramaticHandler.DeleteSatisfactionPoint)
+			}
+			arcs := v1.Group("/conflict-arcs")
+			{
+				arcs.PUT("/:id", cfg.DramaticHandler.UpdateConflictArc)
+				arcs.DELETE("/:id", cfg.DramaticHandler.DeleteConflictArc)
+				arcs.PUT("/:id/advance-phase", cfg.DramaticHandler.AdvancePhase)
 			}
 		}
 

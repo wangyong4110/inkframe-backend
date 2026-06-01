@@ -509,6 +509,8 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		WithRedis(redisClient).
 		WithEmailSender(emailSender).
 		WithAppBaseURL(frontendURL).
+		WithAppName(cfg.Server.AppName).
+		WithEmailVerifyTTL(cfg.Email.EmailVerifyTTL).
 		WithRequireVerification(cfg.Email.RequireVerification)
 	tenantSvc := service.NewTenantService(repos.TenantRepo, repos.TenantUserRepo)
 	oauthSvc  := service.NewOAuthService(cfg.OAuth)
@@ -642,6 +644,7 @@ type Handlers struct {
 	ColorPaletteHandler   *handler.ColorPaletteHandler
 	NotificationHandler   *handler.NotificationHandler
 	KnowledgeHandler      *handler.KnowledgeHandler
+	DramaticHandler       *handler.DramaticHandler
 }
 
 // initHandlers 初始化处理器
@@ -722,5 +725,11 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		ColorPaletteHandler: handler.NewColorPaletteHandler(service.NewColorPaletteService()),
 		NotificationHandler: handler.NewNotificationHandler(services.NotificationService),
 		KnowledgeHandler:    handler.NewKnowledgeHandler(services.KnowledgeService).WithNovelService(services.NovelService),
+		DramaticHandler: handler.NewDramaticHandler(
+			services.HookChainService,
+			services.SatisfactionPointService,
+			services.ConflictArcService,
+			services.PacingService,
+		),
 	}
 }

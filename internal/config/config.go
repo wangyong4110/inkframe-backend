@@ -65,6 +65,10 @@ type EmailConfig struct {
 	// RequireVerification 为 true 时，邮箱注册必须完成验证才能登录。
 	// 默认 false：注册即激活，无需验证邮件。
 	RequireVerification bool `mapstructure:"require_verification"`
+
+	// EmailVerifyTTL 验证邮件链接的有效时长，默认 1h。
+	// 支持 Go duration 格式：30m、1h、24h 等。
+	EmailVerifyTTL time.Duration `mapstructure:"email_verify_ttl"`
 }
 
 // CrawlConfig 资产爬取配置
@@ -96,6 +100,8 @@ type ServerConfig struct {
 	JWTSecret       string        `mapstructure:"jwt_secret"`
 	JWTExpiry       time.Duration `mapstructure:"jwt_expiry"`
 	FrontendURL     string        `mapstructure:"frontend_url"`
+	// AppName 应用名称，用于邮件主题、正文等对外展示。留空默认"简影"。
+	AppName         string        `mapstructure:"app_name"`
 	// AllowedOrigins 允许的 CORS 来源列表。留空表示允许所有来源（开发模式兼容）。
 	// 生产环境应设置为前端 URL，如 ["https://app.example.com"]。
 	AllowedOrigins []string `mapstructure:"allowed_origins"`

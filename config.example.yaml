@@ -11,6 +11,7 @@ server:
   mode: "debug"            # debug | release | test
   jwt_secret: "inkframe-dev-secret-change-in-production-2024"  # 生产环境请替换为 openssl rand -base64 48 生成的随机值
   jwt_expiry: 24h
+  app_name: "简影"            # 应用名称，显示在邮件主题和正文中（如"【简影】邮箱验证"）
   read_timeout: 30s
   write_timeout: 30s
   max_header_bytes: 1048576
@@ -101,13 +102,21 @@ email:
   # 可对接 SendGrid/阿里云邮件推送/自建中继等任意 HTTP 邮件 API
 
   require_verification: false        # true=邮箱注册须验证后才能登录；false=注册即激活（默认）
+  email_verify_ttl: 1h              # 验证链接有效时长，支持 Go duration 格式（30m、1h、24h 等），默认 1h
 
-# 短信验证码配置（用于手机号注册/登录，目前仅支持阿里云）
+# 短信验证码配置（手机号注册/登录，阿里云短信服务）
+# 配置步骤：
+#   1. 登录阿里云控制台 → 访问控制 → 创建 RAM 子账号并赋予 AliyunDysmsFullAccess 权限
+#   2. 创建 AccessKey，填入下方 access_key_id / access_key_secret
+#   3. 进入短信服务控制台 → 签名管理 → 申请签名，填入 sign_name（须与控制台一致）
+#   4. 模板管理 → 申请验证码模板，模板内容示例：您的验证码为${code}，5分钟内有效
+#      将模板 CODE 填入 template_code
+# 注意：access_key_id 留空时进入开发模式，验证码打印到日志，不发送真实短信
 sms:
-  access_key_id: ""        # 阿里云 AccessKey ID
-  access_key_secret: ""    # 阿里云 AccessKey Secret
-  sign_name: "简影"
-  template_code: ""
+  access_key_id: ""        # 阿里云 RAM AccessKey ID（留空=开发模式，仅日志输出）
+  access_key_secret: ""    # 阿里云 RAM AccessKey Secret
+  sign_name: "简影"        # 短信签名（须已在控制台申请审核通过）
+  template_code: ""        # 短信模板 CODE（须已在控制台申请审核通过）
 
 # OAuth 第三方登录（每个 provider 可选填，留空=禁用）
 # redirect_uri 需在对应开放平台填写为后端回调地址（不是前端）

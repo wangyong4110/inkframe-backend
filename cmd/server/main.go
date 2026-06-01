@@ -208,6 +208,7 @@ func main() {
 		ColorPaletteHandler:   handlers.ColorPaletteHandler,
 		NotificationHandler:   handlers.NotificationHandler,
 		KnowledgeHandler:      handlers.KnowledgeHandler,
+		DramaticHandler:       handlers.DramaticHandler,
 	})
 
 	// 12. 创建服务器

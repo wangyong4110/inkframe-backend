@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/config"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -124,10 +125,11 @@ func (s *SMSService) VerifyCode(phone, code string) error {
 	return nil
 }
 
-// sendAliyunSMS 调用阿里云短信API（RPC签名方式）
+// sendAliyunSMS 调用阿里云短信API（RPC签名方式，dysmsapi.aliyuncs.com）
 func (s *SMSService) sendAliyunSMS(phone, code string) error {
 	if s.cfg.AccessKeyID == "" {
-		// 开发模式：未配置AK则跳过真实发送
+		// 开发模式：未配置 AccessKey 则跳过真实发送，仅打印验证码方便本地测试
+		logger.Printf("[SMS DEV] phone=%s code=%s (no AccessKeyID configured, SMS not sent)", phone, code)
 		return nil
 	}
 
@@ -155,22 +157,25 @@ func (s *SMSService) sendAliyunSMS(phone, code string) error {
 		body.Set(k, v)
 	}
 
-	resp, err := http.PostForm("https://dysmsapi.aliyuncs.com", body)
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.PostForm("https://dysmsapi.aliyuncs.com", body)
 	if err != nil {
-		return fmt.Errorf("HTTP request failed: %w", err)
+		return fmt.Errorf("SMS HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	var result struct {
-		Code    string `json:"Code"`
-		Message string `json:"Message"`
+		Code      string `json:"Code"`
+		Message   string `json:"Message"`
+		RequestID string `json:"RequestId"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return fmt.Errorf("failed to decode response: %w", err)
+		return fmt.Errorf("failed to decode SMS response: %w", err)
 	}
 	if result.Code != "OK" {
-		return fmt.Errorf("SMS API error: %s", result.Message)
+		return fmt.Errorf("阿里云短信发送失败 [%s]: %s", result.Code, result.Message)
 	}
+	logger.Printf("[SMS] sent to %s requestId=%s", phone, result.RequestID)
 	return nil
 }
 

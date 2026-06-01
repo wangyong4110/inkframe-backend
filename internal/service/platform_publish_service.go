@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
@@ -119,10 +120,12 @@ func (s *PlatformPublishService) PublishToExternal(ctx context.Context, video *m
 		for i, accountID := range accountIDs {
 			account, err := s.accountRepo.GetByID(accountID)
 			if err != nil {
+				logger.Printf("[PlatformPublish] video=%d account=%d: load account: %v", video.ID, accountID, err)
 				continue
 			}
 			p, ok := s.publishers[account.Platform]
 			if !ok {
+				logger.Printf("[PlatformPublish] video=%d account=%d: unsupported platform %q", video.ID, accountID, account.Platform)
 				continue
 			}
 
@@ -134,21 +137,30 @@ func (s *PlatformPublishService) PublishToExternal(ctx context.Context, video *m
 				Status:    "uploading",
 			}
 			if err := s.recordRepo.Create(rec); err != nil {
+				logger.Printf("[PlatformPublish] video=%d account=%d: create record: %v", video.ID, accountID, err)
 				continue
 			}
 
 			// 发布视频
 			externalID, externalURL, pubErr := p.PublishVideo(bgCtx, account, video.FinalVideoURL, opts)
 			if pubErr != nil {
-				_ = s.recordRepo.UpdateStatus(rec.ID, "failed", pubErr.Error(), "", "")
+				logger.Printf("[PlatformPublish] video=%d platform=%s: publish failed: %v", video.ID, account.Platform, pubErr)
+				if err := s.recordRepo.UpdateStatus(rec.ID, "failed", pubErr.Error(), "", ""); err != nil {
+					logger.Printf("[PlatformPublish] record=%d: update failed status: %v", rec.ID, err)
+				}
 			} else {
-				_ = s.recordRepo.UpdateStatus(rec.ID, "published", "", externalID, externalURL)
+				logger.Printf("[PlatformPublish] video=%d platform=%s: published externalID=%s", video.ID, account.Platform, externalID)
+				if err := s.recordRepo.UpdateStatus(rec.ID, "published", "", externalID, externalURL); err != nil {
+					logger.Printf("[PlatformPublish] record=%d: update published status: %v", rec.ID, err)
+				}
 			}
 
 			// 更新进度
 			if s.taskSvc != nil {
 				progress := (i + 1) * 100 / len(accountIDs)
-				_ = s.taskSvc.UpdateProgress(taskID, progress)
+				if err := s.taskSvc.UpdateProgress(taskID, progress); err != nil {
+					logger.Printf("[PlatformPublish] task=%s: update progress: %v", taskID, err)
+				}
 			}
 		}
 

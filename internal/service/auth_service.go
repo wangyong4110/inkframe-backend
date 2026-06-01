@@ -31,7 +31,9 @@ type AuthService struct {
 	rdb                 *redis.Client
 	emailSender         EmailSender
 	appBaseURL          string
-	requireVerification bool // 邮箱注册是否需要验证后才能登录
+	appName             string        // 邮件中展示的应用名称，默认"简影"
+	emailVerifyTTL      time.Duration // 验证邮件链接有效时长，默认 1h
+	requireVerification bool          // 邮箱注册是否需要验证后才能登录
 }
 
 func NewAuthService(
@@ -82,6 +84,46 @@ func (s *AuthService) WithAppBaseURL(url string) *AuthService {
 	return s
 }
 
+// WithAppName 设置邮件中显示的应用名称（默认"简影"）
+func (s *AuthService) WithAppName(name string) *AuthService {
+	s.appName = name
+	return s
+}
+
+// WithEmailVerifyTTL 设置验证邮件链接有效时长（默认 1h）
+func (s *AuthService) WithEmailVerifyTTL(ttl time.Duration) *AuthService {
+	s.emailVerifyTTL = ttl
+	return s
+}
+
+// emailAppName 返回配置的应用名称，未配置时回退到"简影"
+func (s *AuthService) emailAppName() string {
+	if s.appName != "" {
+		return s.appName
+	}
+	return "简影"
+}
+
+// verifyTTL 返回验证链接有效时长，未配置时默认 1h
+func (s *AuthService) verifyTTL() time.Duration {
+	if s.emailVerifyTTL > 0 {
+		return s.emailVerifyTTL
+	}
+	return time.Hour
+}
+
+// formatDuration 将 time.Duration 格式化为中文可读字符串
+func formatDuration(d time.Duration) string {
+	switch {
+	case d >= 24*time.Hour && d%(24*time.Hour) == 0:
+		return fmt.Sprintf("%d 天", int(d.Hours())/24)
+	case d >= time.Hour:
+		return fmt.Sprintf("%d 小时", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%d 分钟", int(d.Minutes()))
+	}
+}
+
 // WithRequireVerification 设置邮箱注册是否必须验证后才能登录
 func (s *AuthService) WithRequireVerification(v bool) *AuthService {
 	s.requireVerification = v
@@ -99,8 +141,9 @@ type RegisterRequest struct {
 
 // RegisterResponse 注册响应（邮箱验证模式下不返回 token，需先完成邮箱验证才可登录）
 type RegisterResponse struct {
-	Message string `json:"message"`
-	Email   string `json:"email"`
+	Message   string `json:"message"`
+	Email     string `json:"email"`
+	ExpiresIn string `json:"expires_in"` // 验证链接有效时长，如"1 小时"
 }
 
 // LoginRequest 登录请求
@@ -130,7 +173,20 @@ func (s *AuthService) Register(req *RegisterRequest) (interface{}, error) {
 		req.TenantName = req.Username
 	}
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
-	if _, err := s.userRepo.GetByEmail(req.Email); err == nil {
+	if existingUser, err := s.userRepo.GetByEmail(req.Email); err == nil {
+		// 邮箱已存在：若开启验证且用户尚未验证，视为"重新发送验证邮件"而非报错
+		if s.requireVerification && existingUser.EmailVerifiedAt == nil {
+			go func() {
+				if _, err := s.SendEmailVerification(existingUser.ID); err != nil {
+					logger.Printf("[Register] resend verification for unverified user %d: %v", existingUser.ID, err)
+				}
+			}()
+			return &RegisterResponse{
+				Message:   "验证邮件已重新发送，请查收邮箱并点击链接完成验证后再登录",
+				Email:     req.Email,
+				ExpiresIn: formatDuration(s.verifyTTL()),
+			}, nil
+		}
 		return nil, errors.New("email already registered")
 	}
 
@@ -200,8 +256,9 @@ func (s *AuthService) Register(req *RegisterRequest) (interface{}, error) {
 			}
 		}()
 		return &RegisterResponse{
-			Message: "注册成功，请查收验证邮件并点击链接完成验证后再登录",
-			Email:   req.Email,
+			Message:   "注册成功，请查收验证邮件并点击链接完成验证后再登录",
+			Email:     req.Email,
+			ExpiresIn: formatDuration(s.verifyTTL()),
 		}, nil
 	}
 
@@ -719,12 +776,13 @@ func (s *AuthService) RequestPasswordReset(email string) (token string, err erro
 		baseURL = "http://localhost:3000"
 	}
 	resetURL := fmt.Sprintf("%s/reset-password?token=%s", baseURL, rawToken)
-	subject := "【InkFrame】密码重置链接"
+	appName := s.emailAppName()
+	subject := fmt.Sprintf("【%s】密码重置链接", appName)
 	body := fmt.Sprintf(`<!DOCTYPE html>
 <html><body style="font-family:sans-serif;background:#f4f4f4;margin:0;padding:32px">
 <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;padding:40px;box-shadow:0 2px 8px rgba(0,0,0,.08)">
   <h2 style="color:#1a1a1a;margin:0 0 8px">密码重置</h2>
-  <p style="color:#555;line-height:1.6">您申请了密码重置，请点击下方按钮设置新密码。链接 <strong>30 分钟</strong>内有效。</p>
+  <p style="color:#555;line-height:1.6">您申请了 %s 账号的密码重置，请点击下方按钮设置新密码。链接 <strong>30 分钟</strong>内有效。</p>
   <div style="text-align:center;margin:32px 0">
     <a href="%s" style="display:inline-block;background:#6366f1;color:#fff;text-decoration:none;padding:12px 32px;border-radius:8px;font-weight:600;font-size:15px">重置密码</a>
   </div>
@@ -732,7 +790,7 @@ func (s *AuthService) RequestPasswordReset(email string) (token string, err erro
   <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
   <p style="color:#bbb;font-size:12px;margin:0">如非本人操作，请忽略此邮件，您的账号安全不受影响。</p>
 </div>
-</body></html>`, resetURL, resetURL, resetURL)
+</body></html>`, appName, resetURL, resetURL, resetURL)
 	if s.emailSender != nil {
 		email, subj, bd := user.Email, subject, body
 		go func() {
@@ -795,11 +853,12 @@ func (s *AuthService) SendEmailVerification(userID uint) (token string, err erro
 	_ = s.tokenRepo.DeleteByUser(userID, "verify_email")
 
 	rawToken := uuid.New().String()
+	ttl := s.verifyTTL()
 	t := &model.UserToken{
 		UserID:    userID,
 		Token:     rawToken,
 		TokenType: "verify_email",
-		ExpiresAt: time.Now().Add(24 * time.Hour),
+		ExpiresAt: time.Now().Add(ttl),
 	}
 	if err := s.tokenRepo.Create(t); err != nil {
 		return "", err
@@ -813,12 +872,13 @@ func (s *AuthService) SendEmailVerification(userID uint) (token string, err erro
 			baseURL = "http://localhost:3000"
 		}
 		verifyURL := fmt.Sprintf("%s/auth/verify-email?token=%s", baseURL, rawToken)
-		subject := "【InkFrame】邮箱验证"
+		appName := s.emailAppName()
+		subject := fmt.Sprintf("【%s】邮箱验证", appName)
 		body := fmt.Sprintf(`<!DOCTYPE html>
 <html><body style="font-family:sans-serif;background:#f4f4f4;margin:0;padding:32px">
 <div style="max-width:480px;margin:0 auto;background:#fff;border-radius:12px;padding:40px;box-shadow:0 2px 8px rgba(0,0,0,.08)">
   <h2 style="color:#1a1a1a;margin:0 0 8px">验证您的邮箱</h2>
-  <p style="color:#555;line-height:1.6">感谢注册 InkFrame！请点击下方按钮完成邮箱验证，链接 <strong>24 小时</strong>内有效。</p>
+  <p style="color:#555;line-height:1.6">感谢注册 %s！请点击下方按钮完成邮箱验证，链接 <strong>%s</strong>内有效。</p>
   <div style="text-align:center;margin:32px 0">
     <a href="%s" style="display:inline-block;background:#6366f1;color:#fff;text-decoration:none;padding:12px 32px;border-radius:8px;font-weight:600;font-size:15px">验证邮箱</a>
   </div>
@@ -826,7 +886,7 @@ func (s *AuthService) SendEmailVerification(userID uint) (token string, err erro
   <hr style="border:none;border-top:1px solid #eee;margin:24px 0">
   <p style="color:#bbb;font-size:12px;margin:0">如非本人操作，请忽略此邮件。</p>
 </div>
-</body></html>`, verifyURL, verifyURL, verifyURL)
+</body></html>`, appName, formatDuration(ttl), verifyURL, verifyURL, verifyURL)
 		if s.emailSender != nil {
 			email, subj, bd := user.Email, subject, body
 			go func() {
