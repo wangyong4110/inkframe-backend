@@ -890,8 +890,10 @@ func (s *QualityControlService) UnignoreIssue(issueID uint) error {
 }
 
 // RunAutoReview 在章节生成后自动执行最多 rounds 轮 AI 深度审查 + 自动应用修改。
-// 每轮：调用 ReviewChapter → 收集 error/warning 级别的改写建议 → ApplyDiffs。
-// 若当轮评分 >= minScore 或无可应用的修改，则提前结束。
+// 结束条件（任一满足即停止）：
+//   1. 已完成 rounds 轮；
+//   2. 当轮评分 >= minScore（minScore=0 表示不设分数阈值，只按轮数控制）。
+//
 // 返回：最终分数、总共应用的段落数、遇到的错误（非致命，调用方可忽略）。
 func (s *QualityControlService) RunAutoReview(
 	ctx context.Context,
@@ -906,12 +908,11 @@ func (s *QualityControlService) RunAutoReview(
 	if rounds > 5 {
 		rounds = 5
 	}
-	if minScore <= 0 {
-		minScore = 80
-	}
+	// minScore=0 表示不启用分数阈值条件，只按轮数控制
+	useScoreThreshold := minScore > 0
 
 	for round := 1; round <= rounds; round++ {
-		logger.Printf("[AutoReview] chapterID=%d round=%d/%d", chapterID, round, rounds)
+		logger.Printf("[AutoReview] chapterID=%d round=%d/%d scoreThreshold=%.1f", chapterID, round, rounds, minScore)
 
 		review, reviewErr := s.ReviewChapter(ctx, chapterID, "")
 		if reviewErr != nil {
@@ -921,9 +922,9 @@ func (s *QualityControlService) RunAutoReview(
 		finalScore = review.OverallScore
 		logger.Printf("[AutoReview] chapterID=%d round=%d score=%.1f", chapterID, round, finalScore)
 
-		// 提前停止：分数已达标
-		if finalScore >= minScore {
-			logger.Printf("[AutoReview] chapterID=%d round=%d: score %.1f >= threshold %.1f, stopping early",
+		// 条件2：分数达标，停止
+		if useScoreThreshold && finalScore >= minScore {
+			logger.Printf("[AutoReview] chapterID=%d round=%d: score %.1f >= threshold %.1f, stopping (score condition)",
 				chapterID, round, finalScore, minScore)
 			break
 		}

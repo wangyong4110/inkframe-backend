@@ -232,6 +232,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.GET("/:id/export", cfg.NovelHandler.ExportNovel)
 
 			novels.POST("/:id/chapters/generate", cfg.NovelHandler.GenerateChapter)
+			novels.POST("/:id/chapters/batch-generate", cfg.NovelHandler.BatchGenerateChapters)
 			novels.POST("/:id/outline", cfg.NovelHandler.GenerateOutline)
 
 			// 大纲历史版本

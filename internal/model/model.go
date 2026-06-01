@@ -815,6 +815,16 @@ type UpdateChapterRequest struct {
 	Outline     string `json:"outline"`
 }
 
+// BatchGenerateChaptersRequest 批量生成章节正文请求
+type BatchGenerateChaptersRequest struct {
+	SkipExisting   bool   `json:"skip_existing"`    // true=跳过已有正文的章节（默认 true）
+	WordCount      int    `json:"word_count"`       // 每章目标字数，0=自动推算
+	MaxTokens      int    `json:"max_tokens"`       // LLM max tokens，0=自动
+	StartChapterNo int    `json:"start_chapter_no"` // 从第几章开始，0=全部
+	EndChapterNo   int    `json:"end_chapter_no"`   // 到第几章结束，0=全部
+	ModelOverride  string `json:"model"`            // 可选：指定 AI 模型/provider
+}
+
 type GenerateChapterRequest struct {
 	NovelID        uint    `json:"novel_id"`
 	ChapterNo      int     `json:"chapter_no" binding:"required,min=1"`

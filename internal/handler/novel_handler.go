@@ -309,6 +309,108 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 	})
 }
 
+// BatchGenerateChapters 批量生成小说所有章节正文（顺序执行，保证叙事连贯性）
+// POST /api/v1/novels/:id/chapters/batch-generate
+// Body: {"skip_existing":true,"word_count":0,"start_chapter_no":0,"end_chapter_no":0,"model":""}
+// Returns HTTP 202 with {task_id}
+func (h *NovelHandler) BatchGenerateChapters(c *gin.Context) {
+	novelId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	var req model.BatchGenerateChaptersRequest
+	req.SkipExisting = true // default: skip chapters that already have content
+	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
+		respondBadRequest(c, "invalid request: "+err.Error())
+		return
+	}
+
+	tenantID := getTenantID(c)
+	if _, err := h.novelService.GetNovel(uint(novelId), tenantID); err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found")
+		return
+	}
+
+	chapters, err := h.chapterService.ListChapters(uint(novelId))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "list chapters failed: "+err.Error())
+		return
+	}
+
+	// Filter chapters to process
+	var toGenerate []*model.Chapter
+	for _, ch := range chapters {
+		if req.StartChapterNo > 0 && ch.ChapterNo < req.StartChapterNo {
+			continue
+		}
+		if req.EndChapterNo > 0 && ch.ChapterNo > req.EndChapterNo {
+			continue
+		}
+		if req.SkipExisting && strings.TrimSpace(ch.Content) != "" {
+			continue
+		}
+		toGenerate = append(toGenerate, ch)
+	}
+
+	if len(toGenerate) == 0 {
+		c.JSON(http.StatusOK, gin.H{
+			"code":    0,
+			"message": "所有章节已有内容，无需生成",
+			"data":    gin.H{"total": 0, "generated": 0},
+		})
+		return
+	}
+
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeBatchChapterGen,
+		fmt.Sprintf("批量生成章节内容（共%d章）", len(toGenerate)), "novel", uint(novelId))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[BatchGenerate] task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID)                                              //nolint:errcheck
+		h.taskSvc.UpdateProgressAndTitle(taskID, 5, "正在构建叙事圣经与章节蓝图...") //nolint:errcheck
+
+		saved, genErr := h.chapterService.BatchGenerateChaptersSingleCall(
+			tenantID, uint(novelId), toGenerate, req.WordCount, req.ModelOverride,
+		)
+
+		total := len(toGenerate)
+		if genErr != nil {
+			logger.Printf("[BatchGenerate] single-call failed: %v", genErr)
+			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
+			return
+		}
+
+		generated := len(saved)
+		failed := total - generated
+		resultTitle := fmt.Sprintf("生成完成：成功%d章", generated)
+		if failed > 0 {
+			resultTitle += fmt.Sprintf("，失败%d章", failed)
+		}
+		h.taskSvc.UpdateProgressAndTitle(taskID, 95, "正在异步处理摘要与角色快照...") //nolint:errcheck
+		h.taskSvc.Complete(taskID, map[string]interface{}{                      //nolint:errcheck
+			"total":     total,
+			"generated": generated,
+			"failed":    failed,
+		})
+	}(task.TaskID)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": fmt.Sprintf("批量生成任务已提交，共%d章", len(toGenerate)),
+		"data":    gin.H{"task_id": task.TaskID, "total": len(toGenerate)},
+	})
+}
+
 // GenerateOutline 生成大纲
 // POST /api/v1/novels/:id/outline
 func (h *NovelHandler) GenerateOutline(c *gin.Context) {
