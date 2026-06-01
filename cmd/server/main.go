@@ -216,6 +216,7 @@ func main() {
 		ForeshadowHandler:     handlers.ForeshadowHandler,
 		WebhookHandler:        handlers.WebhookHandler,
 		AuditHandler:          handlers.AuditHandler,
+		OutlineReviewHandler:  handlers.OutlineReviewHandler,
 	})
 
 	// 12. 创建服务器

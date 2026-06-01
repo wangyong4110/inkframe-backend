@@ -57,6 +57,7 @@ type Config struct {
 	ForeshadowHandler      *handler.ForeshadowHandler
 	WebhookHandler         *handler.WebhookHandler
 	AuditHandler           *handler.AuditHandler
+	OutlineReviewHandler   *handler.OutlineReviewHandler
 }
 
 // SetupRouter 配置路由
@@ -373,6 +374,12 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				novels.POST("/:id/scene-anchors/batch-ref-images", cfg.SceneAnchorHandler.BatchGenerateRefImages)
 				novels.POST("/:id/chapters/:chapter_no/scene-anchors/ai-extract", cfg.SceneAnchorHandler.AIExtractChapterAnchors)
 			}
+
+			// 大纲审查（小说级别）
+			if cfg.OutlineReviewHandler != nil {
+				novels.POST("/:id/outline-review/batch", cfg.OutlineReviewHandler.BatchReviewNovel)
+				novels.GET("/:id/outline-review", cfg.OutlineReviewHandler.ListNovelReviews)
+			}
 		}
 
 		// 物品（单个物品操作）
@@ -424,6 +431,12 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			chapters.GET("/:id/ignored-issues", cfg.ChapterHandler.ListChapterIgnoredIssues)
 			chapters.POST("/:id/ignored-issues", cfg.ChapterHandler.IgnoreChapterIssue)
 			chapters.DELETE("/:id/ignored-issues/:iid", cfg.ChapterHandler.UnignoreChapterIssue)
+
+			// 大纲审查
+			if cfg.OutlineReviewHandler != nil {
+				chapters.POST("/:id/outline-review", cfg.OutlineReviewHandler.ReviewChapter)
+				chapters.GET("/:id/outline-review", cfg.OutlineReviewHandler.GetChapterReview)
+			}
 
 			// 连续性检查记录
 			chapters.GET("/:id/continuity-reports", cfg.ChapterHandler.ListContinuityReports)

@@ -8,7 +8,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-06-01-v5"
+const schemaVersion = "2026-06-01-v6"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -77,6 +77,8 @@ func ensureCriticalColumns(db *gorm.DB) {
 		// users 账号安全锁定字段
 		{"users", "failed_login_count", "INT NOT NULL DEFAULT 0"},
 		{"users", "lock_until", "DATETIME(3) NULL"},
+		// users 最后登录时间（auth_service.go UpdateLastLogin 依赖此列）
+		{"users", "last_login_at", "DATETIME(3) NULL"},
 		// ink_model_usage_log 租户隔离（Fix 1: logUsage 增加 tenantID）
 		{"ink_model_usage_log", "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 0"},
 		// 多租户隔离列补充（Fix 8: 确保关键表均有 tenant_id）
@@ -246,6 +248,8 @@ func autoMigrate(db *gorm.DB) error {
 		&model.AuditLog{},
 		// 小说大纲历史版本
 		&model.NovelOutlineVersion{},
+		// 章节大纲审查
+		&model.OutlineReview{},
 	); err != nil {
 		return err
 	}

@@ -86,6 +86,7 @@ type Repositories struct {
 	NotificationRepo         *repository.NotificationRepository
 	ForeshadowRepo           *repository.ForeshadowRepository
 	NovelOutlineVersionRepo  *repository.NovelOutlineVersionRepository
+	OutlineReviewRepo        *repository.OutlineReviewRepository
 }
 
 // initRepositories 初始化仓库层
@@ -161,6 +162,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		NotificationRepo:         repository.NewNotificationRepository(db),
 		ForeshadowRepo:           repository.NewForeshadowRepository(db),
 		NovelOutlineVersionRepo:  repository.NewNovelOutlineVersionRepository(db),
+		OutlineReviewRepo:        repository.NewOutlineReviewRepository(db),
 	}
 }
 
@@ -224,6 +226,8 @@ type Services struct {
 	AuditService                *service.AuditService
 	// ── Email notification ──
 	EmailNotificationService    *service.EmailNotificationService
+	// ── Outline Review ──
+	OutlineReviewService        *service.OutlineReviewService
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -633,6 +637,13 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		AuditService: service.NewAuditService(db),
 		// ── Email notification ──
 		EmailNotificationService: service.NewEmailNotificationService(cfg.Email),
+		// ── Outline Review ──
+		OutlineReviewService: service.NewOutlineReviewService(
+			repos.OutlineReviewRepo,
+			repos.ChapterRepo,
+			repos.NovelRepo,
+			core.AI,
+		),
 	}
 }
 
@@ -675,6 +686,7 @@ type Handlers struct {
 	ForeshadowHandler     *handler.ForeshadowHandler
 	WebhookHandler        *handler.WebhookHandler
 	AuditHandler          *handler.AuditHandler
+	OutlineReviewHandler  *handler.OutlineReviewHandler
 }
 
 // initHandlers 初始化处理器
@@ -763,7 +775,8 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		),
 		DashboardHandler:  handler.NewDashboardHandler(db),
 		ForeshadowHandler: handler.NewForeshadowHandler(services.ForeshadowCRUDService),
-		WebhookHandler:    handler.NewWebhookHandler(services.WebhookService),
-		AuditHandler:      handler.NewAuditHandler(services.AuditService),
+		WebhookHandler:       handler.NewWebhookHandler(services.WebhookService),
+		AuditHandler:         handler.NewAuditHandler(services.AuditService),
+		OutlineReviewHandler: handler.NewOutlineReviewHandler(services.OutlineReviewService, services.TaskService),
 	}
 }

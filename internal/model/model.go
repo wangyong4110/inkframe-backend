@@ -712,6 +712,37 @@ type AuditLog struct {
 
 func (AuditLog) TableName() string { return "ink_audit_log" }
 
+// OutlineReview 章节大纲审查结果
+type OutlineReview struct {
+	gorm.Model
+	TenantID        uint       `json:"tenant_id" gorm:"index"`
+	NovelID         uint       `json:"novel_id" gorm:"index"`
+	ChapterID       uint       `json:"chapter_id" gorm:"uniqueIndex"` // one latest review per chapter
+	ChapterNo       int        `json:"chapter_no"`
+	Status          string     `json:"status" gorm:"size:20;default:'pending'"` // pending/reviewing/passed/warning/failed
+	OverallScore    float64    `json:"overall_score"`                            // 0-100
+	StructureScore  float64    `json:"structure_score"`
+	PacingScore     float64    `json:"pacing_score"`
+	ContinuityScore float64    `json:"continuity_score"`
+	CharacterScore  float64    `json:"character_score"`
+	ConflictScore   float64    `json:"conflict_score"`
+	HookScore       float64    `json:"hook_score"`
+	IssuesJSON      string     `json:"issues_json" gorm:"type:text"`     // []OutlineIssue JSON
+	HighlightsJSON  string     `json:"highlights_json" gorm:"type:text"` // []string JSON
+	Suggestion      string     `json:"suggestion" gorm:"type:text"`
+	ReviewedAt      *time.Time `json:"reviewed_at"`
+}
+
+func (OutlineReview) TableName() string { return "ink_outline_review" }
+
+// OutlineIssue 大纲审查问题条目
+type OutlineIssue struct {
+	Dimension   string `json:"dimension"`   // structure/pacing/continuity/character/conflict/hook
+	Severity    string `json:"severity"`    // error/warning/info
+	Description string `json:"description"`
+	Suggestion  string `json:"suggestion"`
+}
+
 type CreateChapterRequest struct {
 	ChapterNo int    `json:"chapter_no"`
 	Title     string `json:"title"`

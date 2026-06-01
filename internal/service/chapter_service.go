@@ -341,7 +341,7 @@ func (s *ChapterService) GenerateChapterOutline(tenantID, novelID uint, chapterN
 		extraPromptSection = "补充要求：" + extraPrompt
 	}
 
-	prompt := fmt.Sprintf(`请为小说《%s》第%d章生成详细的章节大纲（100～300字）。
+	prompt := fmt.Sprintf(`请为小说《%s》第%d章生成详细的章节大纲（200～500字）。
 
 小说简介：%s
 章节标题：%s
@@ -353,7 +353,7 @@ func (s *ChapterService) GenerateChapterOutline(tenantID, novelID uint, chapterN
 - 点明主要人物的行动、目标与心理变化
 - 交代场景背景与氛围
 - 说明本章在整体故事中的作用（推进、铺垫或高潮）
-- 字数不少于100字，不超过300字
+- 字数不少于200字，不超过500字
 - 直接输出大纲文本，不要加前缀或说明`,
 		novel.Title, chapterNo, novel.Description, chapter.Title,
 		recentCtxSection, extraPromptSection,
@@ -365,12 +365,23 @@ func (s *ChapterService) GenerateChapterOutline(tenantID, novelID uint, chapterN
 		Temperature:    novel.Temperature,
 		TimeoutSeconds: novel.TimeoutSeconds,
 	}
-	outline, err := s.aiService.GenerateWithProvider(tenantID, novelID, "chapter_outline", prompt, "", chOutlineOverrides)
-	if err != nil {
-		return nil, err
+
+	const minOutlineLen = 200
+	var outline string
+	for attempt := 0; attempt < 2; attempt++ {
+		raw, genErr := s.aiService.GenerateWithProvider(tenantID, novelID, "chapter_outline", prompt, "", chOutlineOverrides)
+		if genErr != nil {
+			return nil, genErr
+		}
+		outline = strings.TrimSpace(raw)
+		if len([]rune(outline)) >= minOutlineLen {
+			break
+		}
+		// AI returned too short — ask it to expand on the second attempt
+		prompt += fmt.Sprintf("\n\n【重要】上次输出仅%d字，不满足最低200字要求，请重新生成更详细的大纲。", len([]rune(outline)))
 	}
 
-	chapter.Outline = strings.TrimSpace(outline)
+	chapter.Outline = outline
 	if err := s.chapterRepo.Update(chapter); err != nil {
 		return nil, err
 	}
@@ -588,9 +599,10 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	}
 
 	// ── Step 4: 存储章节 (upsert: update if placeholder exists) ──────────────
-	title := suggestedTitle
+	// 预规划大纲中的标题优先，AI 建议标题仅在无预规划时兜底，避免两者不一致。
+	title := chapterMeta.chapterTitle
 	if title == "" {
-		title = chapterMeta.chapterTitle // 大纲中的预设标题
+		title = suggestedTitle
 	}
 	if title == "" {
 		title = fmt.Sprintf("第%d章", req.ChapterNo)
@@ -1867,21 +1879,37 @@ func chapterTrailingMeta(s string) bool {
 	return false
 }
 
-func (s *ChapterService) RegenerateChapter(tenantID uint, id uint, prompt string) (*model.Chapter, error) {
+func (s *ChapterService) RegenerateChapter(tenantID uint, id uint, req *model.GenerateChapterRequest) (*model.Chapter, error) {
+	// Load and validate ownership
 	chapter, err := s.chapterRepo.GetByID(id)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("chapter not found")
 	}
 	if chapter.TenantID != tenantID {
 		return nil, fmt.Errorf("not found")
 	}
-	content, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "chapter", prompt, "")
-	if err != nil {
-		return nil, err
+
+	// Save current content as a version before overwriting
+	if s.versionRepo != nil && chapter.Content != "" {
+		nextNo := 1
+		if latest, _ := s.versionRepo.GetLatest(chapter.ID); latest != nil {
+			nextNo = latest.VersionNo + 1
+		}
+		_ = s.versionRepo.Create(&model.ChapterVersion{
+			ChapterID:         chapter.ID,
+			VersionNo:         nextNo,
+			Content:           chapter.Content,
+			ChangeType:        "generation",
+			ChangeDescription: "重新生成前自动存档",
+		})
 	}
-	chapter.Content = content
-	chapter.WordCount = countChineseChars(content)
-	return chapter, s.chapterRepo.Update(chapter)
+
+	// Fill in the novel/chapter identity from the existing record
+	req.NovelID = chapter.NovelID
+	req.ChapterNo = chapter.ChapterNo
+
+	// Delegate to the full generation pipeline (scene outline → full chapter → refinement → post-processing)
+	return s.GenerateChapter(tenantID, chapter.NovelID, req)
 }
 
 func (s *ChapterService) ApproveChapter(id uint, comment string) error {

@@ -62,7 +62,10 @@ func (p *AzureProvider) chatURL() string {
 }
 
 func (p *AzureProvider) HealthCheck(ctx context.Context) error {
-	url := fmt.Sprintf("%s/deployments?api-version=%s", p.endpoint, p.apiVersion)
+	// Check the specific deployment endpoint rather than listing all deployments.
+	// GET {endpoint}/deployments/{deployment}?api-version={version} returns 200 when the
+	// deployment exists and the api-key is valid; 401 on bad key; 404 on missing deployment.
+	url := fmt.Sprintf("%s/deployments/%s?api-version=%s", p.endpoint, p.deployment, p.apiVersion)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return err
@@ -73,6 +76,12 @@ func (p *AzureProvider) HealthCheck(ctx context.Context) error {
 		return err
 	}
 	resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("azure deployment %q not found (404) — check endpoint and deployment name", p.deployment)
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("azure api-key invalid (401)")
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("azure health check failed: status %d", resp.StatusCode)
 	}

@@ -276,29 +276,49 @@ func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 	respondAccepted(c, task.TaskID, "章节生成任务已提交")
 }
 
-// RegenerateChapter 重新生成章节
+// RegenerateChapter 重新生成章节内容（异步）
 // POST /api/v1/chapters/:id/regenerate
+// Body: {"prompt":"...","word_count":0,"max_tokens":0,"model":"","temperature":0,"timeout_seconds":0,"web_search":false,"wiki_search":false,"use_story_pattern":false}
+// Returns HTTP 202 with {task_id, status:"pending"}
 func (h *ChapterHandler) RegenerateChapter(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
 
-	var req struct {
-		Prompt string `json:"prompt"`
-	}
-	if !bindJSON(c, &req) {
-		return
-	}
+	// Optional overrides — all fields are optional
+	var req model.GenerateChapterRequest
+	_ = c.ShouldBindJSON(&req) // ignore parse errors — all fields optional
 
-	chapter, err := h.chapterService.RegenerateChapter(getTenantID(c), uint(id), req.Prompt)
+	tenantID := getTenantID(c)
+
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterGen, "章节重新生成", "chapter", uint(id))
 	if err != nil {
-		logger.Printf("[ChapterHandler] RegenerateChapter: chapterID=%d err=%v", id, err)
-		respondErr(c, http.StatusInternalServerError, err.Error())
+		respondErr(c, http.StatusInternalServerError, "failed to create task: "+err.Error())
 		return
 	}
 
-	respondOK(c, chapter)
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[ChapterHandler] RegenerateChapter task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID)        //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 5) //nolint:errcheck
+
+		chapter, genErr := h.chapterService.RegenerateChapter(tenantID, uint(id), &req)
+		if genErr != nil {
+			logger.Printf("[ChapterHandler] RegenerateChapter task %s failed: chapterID=%d err=%v", taskID, id, genErr)
+			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.UpdateProgress(taskID, 90)                                                      //nolint:errcheck
+		h.taskSvc.Complete(taskID, map[string]interface{}{"chapter": chapter}) //nolint:errcheck
+	}(task.TaskID)
+
+	respondAccepted(c, task.TaskID, "章节重新生成任务已提交")
 }
 
 // GetVersions 获取章节版本历史
