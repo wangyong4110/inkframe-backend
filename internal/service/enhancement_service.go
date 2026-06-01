@@ -409,9 +409,9 @@ func (s *CharacterArcService) GetCharacterArc(novelID, characterID uint) (*Chara
 		Stages:        make([]*CharacterArcStage, 0),
 	}
 
-	for _, snap := range snapshots {
+	for i, snap := range snapshots {
 		stage := &CharacterArcStage{
-			ChapterNo:     s.estimateChapterFromSnapshot(snap),
+			ChapterNo:     len(snapshots) - i,
 			State:         snap.Motivation,
 			PowerLevel:    snap.PowerLevel,
 			Mood:          snap.Mood,
@@ -441,12 +441,6 @@ func (s *CharacterArcService) determineArcType(snapshots []*model.CharacterState
 		return "fall"
 	}
 	return "flat"
-}
-
-// estimateChapterFromSnapshot 从快照估算章节
-func (s *CharacterArcService) estimateChapterFromSnapshot(_ *model.CharacterStateSnapshot) int {
-	// 简化实现
-	return 1
 }
 
 // CreateSnapshot 创建角色状态快照

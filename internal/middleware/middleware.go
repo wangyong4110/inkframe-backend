@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -114,9 +115,44 @@ func Logger() gin.HandlerFunc {
 	}
 }
 
-// Recovery 恢复中间件
+// Recovery 恢复中间件：捕获 panic，记录请求上下文 + 完整堆栈，返回 JSON 500。
+// http.ErrAbortHandler 是 net/http 内部用于中断响应的哨兵值，不应拦截，直接 re-panic。
 func Recovery() gin.HandlerFunc {
-	return gin.Recovery()
+	return func(c *gin.Context) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				return
+			}
+			// net/http 用此值提前中断连接，不属于业务 panic，透传给上层
+			if r == http.ErrAbortHandler {
+				panic(r)
+			}
+
+			// 捕获最多 64 KB 的当前 goroutine 调用栈
+			buf := make([]byte, 64<<10)
+			n := runtime.Stack(buf, false)
+			stack := buf[:n]
+
+			logger.Printf("[PANIC] %v | %s %s | client=%s\n%s",
+				r,
+				c.Request.Method,
+				c.Request.URL.RequestURI(),
+				c.ClientIP(),
+				stack,
+			)
+
+			// 若响应头尚未写出，返回标准 JSON 500；否则只能中止连接
+			if c.Writer.Written() {
+				c.Abort()
+			} else {
+				c.AbortWithStatusJSON(http.StatusInternalServerError, gin.H{
+					"message": "internal server error",
+				})
+			}
+		}()
+		c.Next()
+	}
 }
 
 // CORSMiddleware 跨域中间件。

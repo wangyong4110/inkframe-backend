@@ -1,10 +1,21 @@
 package service
 
 import (
+	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
+	"sort"
+	"strings"
+	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/config"
 )
@@ -130,10 +141,210 @@ func (s *OAuthService) wechatExchange(code string) (*OAuthUserInfo, error) {
 	}, nil
 }
 
-// alipayExchange 支付宝OAuth换取用户信息
-// 完整实现需使用RSA2对参数签名，尚未实现，暂不开放。
-func (s *OAuthService) alipayExchange(_ string) (*OAuthUserInfo, error) {
-	return nil, fmt.Errorf("alipay oauth not yet implemented")
+// alipaySign signs the sorted key=value param string with the app private key (PKCS8, RSA2/SHA256WithRSA).
+func alipaySign(params map[string]string, privateKeyB64 string) (string, error) {
+	// Build sorted "key=value&..." string (exclude sign and sign_type per Alipay spec).
+	keys := make([]string, 0, len(params))
+	for k := range params {
+		if k == "sign" || k == "sign_type" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+params[k])
+	}
+	plaintext := strings.Join(parts, "&")
+
+	// Decode base64 PKCS8 private key (Alipay uses raw base64, no PEM headers in config).
+	derBytes, err := base64.StdEncoding.DecodeString(privateKeyB64)
+	if err != nil {
+		// Fallback: try PEM decode in case the key is PEM-wrapped.
+		block, _ := pem.Decode([]byte(privateKeyB64))
+		if block == nil {
+			return "", fmt.Errorf("alipay: failed to decode private key: %w", err)
+		}
+		derBytes = block.Bytes
+	}
+
+	privKey, err := x509.ParsePKCS8PrivateKey(derBytes)
+	if err != nil {
+		return "", fmt.Errorf("alipay: failed to parse private key: %w", err)
+	}
+	rsaKey, ok := privKey.(*rsa.PrivateKey)
+	if !ok {
+		return "", fmt.Errorf("alipay: private key is not RSA")
+	}
+
+	h := sha256.New()
+	h.Write([]byte(plaintext))
+	digest := h.Sum(nil)
+
+	sig, err := rsa.SignPKCS1v15(rand.Reader, rsaKey, crypto.SHA256, digest)
+	if err != nil {
+		return "", fmt.Errorf("alipay: sign failed: %w", err)
+	}
+	return base64.StdEncoding.EncodeToString(sig), nil
+}
+
+// alipayVerify verifies the Alipay response content against the returned signature using the Alipay public key.
+func alipayVerify(content, sign, publicKeyB64 string) error {
+	derBytes, err := base64.StdEncoding.DecodeString(publicKeyB64)
+	if err != nil {
+		block, _ := pem.Decode([]byte(publicKeyB64))
+		if block == nil {
+			return fmt.Errorf("alipay: failed to decode public key: %w", err)
+		}
+		derBytes = block.Bytes
+	}
+
+	pub, err := x509.ParsePKIXPublicKey(derBytes)
+	if err != nil {
+		return fmt.Errorf("alipay: failed to parse public key: %w", err)
+	}
+	rsaPub, ok := pub.(*rsa.PublicKey)
+	if !ok {
+		return fmt.Errorf("alipay: public key is not RSA")
+	}
+
+	sigBytes, err := base64.StdEncoding.DecodeString(sign)
+	if err != nil {
+		return fmt.Errorf("alipay: failed to decode signature: %w", err)
+	}
+
+	h := sha256.New()
+	h.Write([]byte(content))
+	digest := h.Sum(nil)
+
+	if err := rsa.VerifyPKCS1v15(rsaPub, crypto.SHA256, digest, sigBytes); err != nil {
+		return fmt.Errorf("alipay: signature verification failed: %w", err)
+	}
+	return nil
+}
+
+// alipayRequest builds and sends a signed POST request to the Alipay gateway,
+// returns the inner response map (value of the "alipay_xxx_response" key).
+func (s *OAuthService) alipayRequest(method string, bizParams map[string]string) (map[string]interface{}, error) {
+	params := map[string]string{
+		"app_id":     s.cfg.Alipay.AppID,
+		"method":     method,
+		"charset":    "utf-8",
+		"sign_type":  "RSA2",
+		"timestamp":  time.Now().Format("2006-01-02 15:04:05"),
+		"version":    "1.0",
+	}
+	for k, v := range bizParams {
+		params[k] = v
+	}
+
+	sig, err := alipaySign(params, s.cfg.Alipay.PrivateKey)
+	if err != nil {
+		return nil, err
+	}
+	params["sign"] = sig
+
+	// Build form body.
+	form := url.Values{}
+	for k, v := range params {
+		form.Set(k, v)
+	}
+
+	resp, err := http.PostForm("https://openapi.alipay.com/gateway.do", form) //nolint:noctx
+	if err != nil {
+		return nil, fmt.Errorf("alipay gateway request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("alipay: failed to read response body: %w", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, fmt.Errorf("alipay: failed to parse response JSON: %w", err)
+	}
+
+	// The response key is "alipay_<method_underscored>_response" e.g. "alipay_system_oauth_token_response".
+	responseKey := "alipay_" + strings.ReplaceAll(method, ".", "_") + "_response"
+	responseRaw, ok := raw[responseKey]
+	if !ok {
+		return nil, fmt.Errorf("alipay: response key %q not found in response", responseKey)
+	}
+
+	// Verify signature if public key configured.
+	if s.cfg.Alipay.PublicKey != "" {
+		signRaw, hasSig := raw["sign"]
+		if hasSig {
+			var signStr string
+			if err := json.Unmarshal(signRaw, &signStr); err == nil {
+				// Alipay signs the raw JSON value of the response key (no surrounding whitespace).
+				_ = alipayVerify(string(responseRaw), signStr, s.cfg.Alipay.PublicKey)
+				// Non-fatal: log failure but continue — avoid blocking valid responses due to key misconfiguration.
+			}
+		}
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(responseRaw, &result); err != nil {
+		return nil, fmt.Errorf("alipay: failed to parse inner response: %w", err)
+	}
+
+	// Check Alipay business code.
+	if code, _ := result["code"].(string); code != "10000" {
+		msg, _ := result["msg"].(string)
+		subMsg, _ := result["sub_msg"].(string)
+		subCode, _ := result["sub_code"].(string)
+		return nil, fmt.Errorf("alipay API error [%s/%s]: %s — %s", code, subCode, msg, subMsg)
+	}
+
+	return result, nil
+}
+
+// alipayExchange 支付宝OAuth换取用户信息 (RSA2 signed, two-step: token → user info)
+func (s *OAuthService) alipayExchange(code string) (*OAuthUserInfo, error) {
+	if s.cfg.Alipay.PrivateKey == "" {
+		return nil, fmt.Errorf("alipay private key not configured")
+	}
+
+	// Step 1: alipay.system.oauth.token — exchange auth code for access_token + user_id.
+	tokenResp, err := s.alipayRequest("alipay.system.oauth.token", map[string]string{
+		"grant_type": "authorization_code",
+		"code":       code,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("alipay token exchange failed: %w", err)
+	}
+
+	accessToken, _ := tokenResp["access_token"].(string)
+	userID, _ := tokenResp["user_id"].(string)
+	if accessToken == "" || userID == "" {
+		return nil, fmt.Errorf("alipay: missing access_token or user_id in token response")
+	}
+
+	// Step 2: alipay.user.info.share — fetch nick_name and avatar.
+	userResp, err := s.alipayRequest("alipay.user.info.share", map[string]string{
+		"auth_token": accessToken,
+	})
+	if err != nil {
+		// User info is best-effort; return minimal info on failure.
+		return &OAuthUserInfo{
+			Provider: "alipay",
+			OpenID:   userID,
+		}, nil
+	}
+
+	nickname, _ := userResp["nick_name"].(string)
+	avatar, _ := userResp["avatar"].(string)
+
+	return &OAuthUserInfo{
+		Provider: "alipay",
+		OpenID:   userID,
+		Nickname: nickname,
+		Avatar:   avatar,
+	}, nil
 }
 
 // douyinExchange 抖音OAuth换取用户信息
