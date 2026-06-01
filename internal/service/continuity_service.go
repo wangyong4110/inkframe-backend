@@ -450,9 +450,8 @@ func (s *ContinuityService) checkTimelineConsistency(content string, prevChapter
 func (s *ContinuityService) checkTextQuality(content string) []WorldviewIssue {
 	var issues []WorldviewIssue
 
-	// 1. 检测大量重复字符（排版问题）
-	repeatedCharRe := regexp.MustCompile(`(.)\1{5,}`)
-	if repeatedCharRe.MatchString(content) {
+	// 1. 检测大量重复字符（排版问题）— RE2 不支持反向引用，改用 rune 逐字符计数
+	if hasRepeatedChars(content, 6) {
 		issues = append(issues, WorldviewIssue{
 			Type:        "format",
 			Severity:    "medium",
@@ -615,5 +614,27 @@ func truncate(s string, maxRunes int) string {
 		return s
 	}
 	return string(runes[:maxRunes]) + "…"
+}
+
+// hasRepeatedChars reports whether content contains n or more consecutive identical runes.
+// RE2 (Go regexp) does not support backreferences, so we use a simple rune scan.
+func hasRepeatedChars(content string, n int) bool {
+	if n <= 1 {
+		return true
+	}
+	count := 1
+	prev := rune(-1)
+	for _, r := range content {
+		if r == prev {
+			count++
+			if count >= n {
+				return true
+			}
+		} else {
+			count = 1
+			prev = r
+		}
+	}
+	return false
 }
 
