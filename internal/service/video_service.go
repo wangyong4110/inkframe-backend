@@ -30,8 +30,9 @@ type VideoService struct {
 	bgmService         *BGMService
 	sfxService         *SFXService
 	storageSvc         storage.Service
-	sceneAnchorSvc     *SceneAnchorService
-	plotPointRepo      *repository.PlotPointRepository
+	sceneAnchorSvc       *SceneAnchorService
+	sceneConsistencySvc  *SceneConsistencyService
+	plotPointRepo        *repository.PlotPointRepository
 	systemSettingRepo  *repository.SystemSettingRepository
 	segmentRepo        *repository.ShotVoiceSegmentRepository
 	reviewRecordRepo      *repository.ReviewRecordRepository
@@ -122,6 +123,11 @@ func (s *VideoService) WithTaskService(svc *TaskService) *VideoService {
 
 func (s *VideoService) WithSceneAnchorService(svc *SceneAnchorService) *VideoService {
 	s.sceneAnchorSvc = svc
+	return s
+}
+
+func (s *VideoService) WithSceneConsistencyService(svc *SceneConsistencyService) *VideoService {
+	s.sceneConsistencySvc = svc
 	return s
 }
 

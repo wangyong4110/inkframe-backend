@@ -298,9 +298,16 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 
 	audioURL, err := s.aiService.AudioGenerateWithOptions(ctx, tenantID, text, voice, speed, style)
 	if err != nil {
+		// Clear stale audio_path so the UI shows generation failed rather than showing an old path.
+		if seg.AudioPath != "" {
+			_ = s.segmentRepo.UpdateFields(segID, map[string]interface{}{"audio_path": ""})
+		}
 		return fmt.Errorf("TTS failed for segment %d: %w", segID, err)
 	}
 	if audioURL == "" {
+		if seg.AudioPath != "" {
+			_ = s.segmentRepo.UpdateFields(segID, map[string]interface{}{"audio_path": ""})
+		}
 		return fmt.Errorf("TTS returned empty URL for segment %d", segID)
 	}
 
@@ -638,6 +645,103 @@ func (s *VideoService) generateShotAudioFromSegments(shot *model.StoryboardShot,
 		logger.Printf("generateShotAudioFromSegments: update shot %d: %v", shot.ID, err)
 	}
 	return nil
+}
+
+// MergeVoiceSegments stitches already-generated segment audio files for a shot into a single
+// combined audio track and updates the shot's AudioPath. Only segments with a non-empty
+// AudioPath are included. Returns the merged audio URL.
+func (s *VideoService) MergeVoiceSegments(ctx context.Context, shotID, tenantID uint) (string, error) {
+	if s.segmentRepo == nil || s.storyboardRepo == nil {
+		return "", fmt.Errorf("segment or storyboard repository not configured")
+	}
+	shot, err := s.storyboardRepo.GetByID(shotID)
+	if err != nil {
+		return "", fmt.Errorf("shot %d not found: %w", shotID, err)
+	}
+	segs, err := s.segmentRepo.ListByShotID(shotID)
+	if err != nil {
+		return "", fmt.Errorf("list segments for shot %d: %w", shotID, err)
+	}
+	// Filter to only segments that already have audio.
+	var ready []*model.ShotVoiceSegment
+	for _, seg := range segs {
+		if seg.AudioPath != "" {
+			ready = append(ready, seg)
+		}
+	}
+	if len(ready) == 0 {
+		return "", fmt.Errorf("no generated segment audio found for shot %d", shotID)
+	}
+	if len(ready) == 1 {
+		shot.AudioPath = ready[0].AudioPath
+		_ = s.storyboardRepo.Update(shot)
+		return shot.AudioPath, nil
+	}
+
+	tmpDir, err := os.MkdirTemp("", "inkframe_merge_*")
+	if err != nil {
+		return "", fmt.Errorf("MergeVoiceSegments: mkdtemp: %w", err)
+	}
+	defer os.RemoveAll(tmpDir) //nolint:errcheck
+
+	var localPaths []string
+	for _, seg := range ready {
+		lp, err := fetchAudioToLocal(tmpDir, seg.AudioPath, int(seg.ID))
+		if err != nil {
+			logger.Printf("MergeVoiceSegments: fetch segment %d audio: %v", seg.ID, err)
+			continue
+		}
+		localPaths = append(localPaths, lp)
+	}
+	if len(localPaths) == 0 {
+		return "", fmt.Errorf("MergeVoiceSegments: all audio fetches failed for shot %d", shotID)
+	}
+
+	listFile := filepath.Join(tmpDir, "concat.txt")
+	var buf strings.Builder
+	for _, p := range localPaths {
+		buf.WriteString(fmt.Sprintf("file '%s'\n", p))
+	}
+	if err := os.WriteFile(listFile, []byte(buf.String()), 0600); err != nil {
+		return "", fmt.Errorf("MergeVoiceSegments: write list: %w", err)
+	}
+
+	outPath := filepath.Join(tmpDir, "merged.mp3")
+	out, ffmpegErr := runFFmpegCtx(ctx, "-y", "-f", "concat", "-safe", "0", "-i", listFile, "-c", "copy", outPath)
+	if ffmpegErr != nil {
+		return "", fmt.Errorf("MergeVoiceSegments: ffmpeg failed: %v\n%s", ffmpegErr, string(out))
+	}
+
+	merged, err := os.ReadFile(outPath)
+	if err != nil {
+		return "", fmt.Errorf("MergeVoiceSegments: read merged: %w", err)
+	}
+
+	var audioURL string
+	if s.storageSvc != nil && len(merged) > 0 {
+		var novelID, chapterID uint
+		if s.videoRepo != nil {
+			if video, e := s.videoRepo.GetByID(shot.VideoID); e == nil {
+				novelID = video.NovelID
+				if video.ChapterID != nil {
+					chapterID = *video.ChapterID
+				}
+			}
+		}
+		key := storage.BuildKey(novelID, chapterID, "audio", fmt.Sprintf("shot-%d-merged.mp3", shotID))
+		if ossURL, e := s.storageSvc.Upload(ctx, key, bytes.NewReader(merged), int64(len(merged)), "audio/mpeg"); e == nil {
+			audioURL = ossURL
+		} else {
+			logger.Printf("MergeVoiceSegments: OSS upload failed: %v", e)
+			return "", fmt.Errorf("MergeVoiceSegments: upload failed: %w", e)
+		}
+	} else {
+		audioURL = "file://" + outPath
+	}
+
+	shot.AudioPath = audioURL
+	_ = s.storyboardRepo.Update(shot)
+	return audioURL, nil
 }
 
 // fetchAudioToLocal downloads or copies an audio file to a local temp path.

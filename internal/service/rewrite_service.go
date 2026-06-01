@@ -1053,6 +1053,7 @@ func (s *RewriteService) runRewriting(ctx context.Context, taskID string, projec
 	}
 
 	done := 0
+	failed := 0
 	total := len(tasks)
 	// Excerpt-based fallback context (used when summaryRepo is unavailable or has no data yet)
 	var recentContext []recentChapterInfo
@@ -1077,6 +1078,7 @@ func (s *RewriteService) runRewriting(ctx context.Context, taskID string, projec
 			if ctx.Err() != nil {
 				return fmt.Errorf("task cancelled")
 			}
+			failed++
 			// Chapter marked failed; continue to next chapter
 		} else {
 			done++
@@ -1148,6 +1150,10 @@ func (s *RewriteService) runRewriting(ctx context.Context, taskID string, projec
 
 	if done == 0 && total > 0 {
 		return s.projectRepo.UpdateStatus(project.ID, "failed", "所有章节改写均失败")
+	}
+	if failed > 0 {
+		msg := fmt.Sprintf("%d/%d 章节改写失败，其余章节已完成", failed, total)
+		return s.projectRepo.UpdateStatus(project.ID, "partial_failed", msg)
 	}
 	return s.projectRepo.UpdateStatus(project.ID, "completed", "")
 }
@@ -1551,28 +1557,30 @@ func (s *RewriteService) CancelRewrite(projectID uint) error {
 
 // ChapterComplianceItem is one row in the compliance report.
 type ChapterComplianceItem struct {
-	ChapterNo    int     `json:"chapter_no"`
-	Passed       bool    `json:"passed"`
-	LexicalSim   float64 `json:"lexical_sim"`
-	StructuralSim float64 `json:"structural_sim"`
-	SemanticSim  float64 `json:"semantic_sim"`
-	QualityScore float64 `json:"quality_score"`
-	Rating       string  `json:"rating"` // "green" | "yellow" | "red"
+	ChapterNo           int     `json:"chapter_no"`
+	Passed              bool    `json:"passed"`
+	LexicalSim          float64 `json:"lexical_sim"`
+	StructuralSim       float64 `json:"structural_sim"`
+	SemanticSim         float64 `json:"semantic_sim"`
+	SemanticSimComputed bool    `json:"semantic_sim_computed"` // false means 0 = not computed, not perfect
+	QualityScore        float64 `json:"quality_score"`
+	Rating              string  `json:"rating"` // "green" | "yellow" | "red"
 }
 
 // ComplianceReport aggregates similarity and quality metrics across all chapters.
 type ComplianceReport struct {
-	ProjectID       uint                    `json:"project_id"`
-	Level           int                     `json:"level"`
-	TotalChapters   int                     `json:"total_chapters"`
-	DoneChapters    int                     `json:"done_chapters"`
-	PassedChapters  int                     `json:"passed_chapters"`
-	AvgLexicalSim   float64                 `json:"avg_lexical_sim"`
-	AvgStructuralSim float64                `json:"avg_structural_sim"`
-	AvgSemanticSim  float64                 `json:"avg_semantic_sim"`
-	AvgQualityScore float64                 `json:"avg_quality_score"`
-	OverallRating   string                  `json:"overall_rating"`
-	Chapters        []ChapterComplianceItem `json:"chapters"`
+	ProjectID            uint                    `json:"project_id"`
+	Level                int                     `json:"level"`
+	TotalChapters        int                     `json:"total_chapters"`
+	DoneChapters         int                     `json:"done_chapters"`
+	PassedChapters       int                     `json:"passed_chapters"`
+	AvgLexicalSim        float64                 `json:"avg_lexical_sim"`
+	AvgStructuralSim     float64                 `json:"avg_structural_sim"`
+	AvgSemanticSim       float64                 `json:"avg_semantic_sim"`
+	SemanticSimComputed  bool                    `json:"semantic_sim_computed"` // true when any chapter has real semantic sim
+	AvgQualityScore      float64                 `json:"avg_quality_score"`
+	OverallRating        string                  `json:"overall_rating"`
+	Chapters             []ChapterComplianceItem `json:"chapters"`
 }
 
 // chapterComplianceRating computes a compliance rating using level-specific thresholds.
@@ -1618,6 +1626,7 @@ func (s *RewriteService) GetComplianceReport(projectID uint) (*ComplianceReport,
 	var sumLex, sumStruct, sumSemantic, sumQuality float64
 	done := 0
 	passed := 0
+	anySemanticComputed := false
 
 	for _, t := range tasks {
 		if t.Status != "completed" {
@@ -1629,28 +1638,36 @@ func (s *RewriteService) GetComplianceReport(projectID uint) (*ComplianceReport,
 		}
 		sumLex += t.LexicalSim
 		sumStruct += t.StructuralSim
-		sumSemantic += t.SemanticSim
+		semComputed := t.SemanticSim > 0
+		if semComputed {
+			sumSemantic += t.SemanticSim
+			anySemanticComputed = true
+		}
 		sumQuality += t.QualityScore
 
 		rating := chapterComplianceRating(t.Passed, t.LexicalSim, project.Level)
 		report.Chapters = append(report.Chapters, ChapterComplianceItem{
-			ChapterNo:     t.ChapterNo,
-			Passed:        t.Passed,
-			LexicalSim:    t.LexicalSim,
-			StructuralSim: t.StructuralSim,
-			SemanticSim:   t.SemanticSim,
-			QualityScore:  t.QualityScore,
-			Rating:        rating,
+			ChapterNo:           t.ChapterNo,
+			Passed:              t.Passed,
+			LexicalSim:          t.LexicalSim,
+			StructuralSim:       t.StructuralSim,
+			SemanticSim:         t.SemanticSim,
+			SemanticSimComputed: semComputed,
+			QualityScore:        t.QualityScore,
+			Rating:              rating,
 		})
 	}
 
 	report.DoneChapters = done
 	report.PassedChapters = passed
+	report.SemanticSimComputed = anySemanticComputed
 
 	if done > 0 {
 		report.AvgLexicalSim = math.Round(sumLex/float64(done)*1000) / 1000
 		report.AvgStructuralSim = math.Round(sumStruct/float64(done)*1000) / 1000
-		report.AvgSemanticSim = math.Round(sumSemantic/float64(done)*1000) / 1000
+		if anySemanticComputed {
+			report.AvgSemanticSim = math.Round(sumSemantic/float64(done)*1000) / 1000
+		}
 		report.AvgQualityScore = math.Round(sumQuality/float64(done)*10) / 10
 	}
 

@@ -950,3 +950,26 @@ func (h *VideoHandler) GenerateBGM(c *gin.Context) {
 		"data":    gin.H{"task_id": task.TaskID},
 	})
 }
+
+// MergeVoiceSegments POST /videos/:id/shots/:shot_id/voice/merge
+// 将已生成的多段配音合并为单个音轨并更新分镜 audio_path。
+func (h *VideoHandler) MergeVoiceSegments(c *gin.Context) {
+	videoID, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		respondBadRequest(c, "invalid video id")
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
+	shotID, ok := parseID(c, "shot_id")
+	if !ok {
+		return
+	}
+	audioURL, err := h.videoService.MergeVoiceSegments(c.Request.Context(), uint(shotID), getTenantID(c))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"audio_url": audioURL})
+}

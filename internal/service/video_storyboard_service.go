@@ -321,7 +321,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 			defer cancel()
-			success, fail := s.sfxService.BatchAutoGenerateSFX(ctx, sfxShots, tenantID, "", "", nil)
+			success, fail, _ := s.sfxService.BatchAutoGenerateSFX(ctx, sfxShots, tenantID, "", "", nil)
 			logger.Printf("[Storyboard] auto-SFX done videoID=%d success=%d fail=%d", videoID, success, fail)
 		}()
 	}

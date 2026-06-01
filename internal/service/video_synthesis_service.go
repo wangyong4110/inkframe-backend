@@ -544,7 +544,9 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 		if s.taskSvc != nil {
 			_ = s.taskSvc.UpdateProgress(taskID, 10)
 		}
-		stitchedPath, err := s.StitchVideoCtx(synthCtx, videoID)
+		stitchCtx, stitchCancel := context.WithTimeout(synthCtx, 30*time.Minute)
+		stitchedPath, err := s.StitchVideoCtx(stitchCtx, videoID)
+		stitchCancel()
 		if err != nil {
 			logger.Printf("[SynthesizeVideo] videoID=%d step=1/4: stitch failed: %v", videoID, err)
 			if s.taskSvc != nil {
@@ -582,7 +584,10 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 				assPath := fmt.Sprintf("%s/inkframe-%d-subtitles.ass", inkframeTempDir(), videoID)
 				if writeErr := os.WriteFile(assPath, []byte(assContent), 0644); writeErr == nil {
 					burnedPath := fmt.Sprintf("%s/inkframe-%d-burned.mp4", inkframeTempDir(), videoID)
-					if burnErr := subtitleSvc.BurnSubtitles(synthCtx, stitchedPath, assPath, burnedPath); burnErr == nil {
+					burnCtx, burnCancel := context.WithTimeout(synthCtx, 20*time.Minute)
+					burnErr := subtitleSvc.BurnSubtitles(burnCtx, stitchedPath, assPath, burnedPath)
+					burnCancel()
+					if burnErr == nil {
 						logger.Printf("[SynthesizeVideo] videoID=%d step=2/4: subtitle burn OK → %s", videoID, burnedPath)
 						finalPath = burnedPath
 					} else {
@@ -623,6 +628,8 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 		}
 
 		if s.storageSvc != nil {
+			uploadCtx, uploadCancel := context.WithTimeout(synthCtx, 30*time.Minute)
+			defer uploadCancel()
 			// 上传视频
 			videoUUID := uuid.New().String()
 			var videoKey string
@@ -636,7 +643,7 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 				defer vf.Close()
 				if fi, err := vf.Stat(); err == nil {
 					logger.Printf("[SynthesizeVideo] videoID=%d: video file size=%.1fMB", videoID, float64(fi.Size())/1e6)
-					if ossURL, err := s.storageSvc.Upload(synthCtx, videoKey, vf, fi.Size(), "video/mp4"); err == nil {
+					if ossURL, err := s.storageSvc.Upload(uploadCtx, videoKey, vf, fi.Size(), "video/mp4"); err == nil {
 						logger.Printf("[SynthesizeVideo] videoID=%d: video upload OK → %s", videoID, ossURL)
 						finalVideoURL = ossURL
 					} else {
@@ -651,7 +658,7 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 				if fi, err := cf.Stat(); err == nil {
 					coverKey := videoKey[:len(videoKey)-4] + "_cover.jpg"
 					logger.Printf("[SynthesizeVideo] videoID=%d: uploading cover key=%s", videoID, coverKey)
-					if ossURL, err := s.storageSvc.Upload(synthCtx, coverKey, cf, fi.Size(), "image/jpeg"); err == nil {
+					if ossURL, err := s.storageSvc.Upload(uploadCtx, coverKey, cf, fi.Size(), "image/jpeg"); err == nil {
 						logger.Printf("[SynthesizeVideo] videoID=%d: cover upload OK → %s", videoID, ossURL)
 						coverURL = ossURL
 					} else {

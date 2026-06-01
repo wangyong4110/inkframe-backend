@@ -45,12 +45,15 @@ type Config struct {
 
 // EmailConfig SMTP 邮件配置
 type EmailConfig struct {
-	Host     string `mapstructure:"host"`
-	Port     int    `mapstructure:"port"`
-	Username string `mapstructure:"username"`
-	Password string `mapstructure:"password"`
-	From     string `mapstructure:"from"`
-	UseTLS   bool   `mapstructure:"use_tls"`
+	Host             string `mapstructure:"host"`
+	Port             int    `mapstructure:"port"`
+	Username         string `mapstructure:"username"`
+	Password         string `mapstructure:"password"`
+	From             string `mapstructure:"from"`
+	UseTLS           bool   `mapstructure:"use_tls"`
+	// RequireVerification 为 true 时，邮箱注册必须完成验证才能登录。
+	// 默认 false：注册即激活，无需验证邮件。
+	RequireVerification bool `mapstructure:"require_verification"`
 }
 
 // CrawlConfig 资产爬取配置

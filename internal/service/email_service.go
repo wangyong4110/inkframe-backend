@@ -2,9 +2,11 @@ package service
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"net/smtp"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
@@ -29,6 +31,17 @@ func NewSMTPEmailSender(host string, port int, username, password, from string, 
 	return &SMTPEmailSender{Host: host, Port: port, Username: username, Password: password, From: from, UseTLS: useTLS}
 }
 
+// isRetryableEmailError 判断是否值得重试：网络不可达/被拒等永久性错误不重试
+func isRetryableEmailError(err error) bool {
+	if errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ENETUNREACH) ||
+		errors.Is(err, syscall.ENOEXEC) ||
+		errors.Is(err, syscall.EHOSTUNREACH) {
+		return false
+	}
+	return true
+}
+
 func (s *SMTPEmailSender) SendEmail(to, subject, body string) error {
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
@@ -40,8 +53,11 @@ func (s *SMTPEmailSender) SendEmail(to, subject, body string) error {
 			return nil
 		}
 		logger.Printf("SendEmail attempt %d failed: %v", attempt+1, lastErr)
+		if !isRetryableEmailError(lastErr) {
+			break // 永久性错误，不再重试
+		}
 	}
-	return fmt.Errorf("send email failed after 3 attempts: %w", lastErr)
+	return fmt.Errorf("send email failed: %w", lastErr)
 }
 
 func (s *SMTPEmailSender) sendOnce(to, subject, body string) error {

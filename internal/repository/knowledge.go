@@ -57,6 +57,11 @@ func (r *KnowledgeBaseRepository) Update(kb *model.KnowledgeBase) error {
 	return r.db.Save(kb).Error
 }
 
+// Delete 删除单条知识条目（软删除）
+func (r *KnowledgeBaseRepository) Delete(id uint) error {
+	return r.db.Delete(&model.KnowledgeBase{}, id).Error
+}
+
 // IncrementUsageCount 增加使用次数
 func (r *KnowledgeBaseRepository) IncrementUsageCount(id uint) error {
 	return r.db.Model(&model.KnowledgeBase{}).Where("id = ?", id).

@@ -426,6 +426,20 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 // 邮箱验证 handlers
 // ─────────────────────────────────────────────────────────────────────
 
+// ResendEmailVerification 为未验证账号重发验证邮件（无需登录）
+// POST /api/v1/auth/email-verification/resend
+func (h *AuthHandler) ResendEmailVerification(c *gin.Context) {
+	var req struct {
+		Email string `json:"email" binding:"required,email"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	// 无论邮箱是否存在或已验证，均返回相同响应（防枚举）
+	_ = h.authService.ResendEmailVerification(req.Email)
+	respondOK(c, gin.H{"message": "if the email exists and is unverified, a new verification link has been sent"})
+}
+
 // SendEmailVerification 为当前登录用户发送邮箱验证令牌（需要 JWT）
 // POST /api/v1/auth/email-verification/send
 func (h *AuthHandler) SendEmailVerification(c *gin.Context) {

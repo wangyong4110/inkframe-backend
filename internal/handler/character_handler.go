@@ -606,9 +606,16 @@ func (h *CharacterHandler) GetCharacterArc(c *gin.Context) {
 		return
 	}
 
+	if h.novelService != nil {
+		if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c)); err != nil {
+			respondErr(c, http.StatusNotFound, "novel not found")
+			return
+		}
+	}
+
 	arc, err := h.arcService.GetCharacterArc(uint(novelId), uint(characterId))
 	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
+		respondErr(c, http.StatusNotFound, "character arc not found")
 		return
 	}
 
@@ -621,6 +628,13 @@ func (h *CharacterHandler) GetAllCharacterArcs(c *gin.Context) {
 	novelId, ok := parseID(c, "id")
 	if !ok {
 		return
+	}
+
+	if h.novelService != nil {
+		if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c)); err != nil {
+			respondErr(c, http.StatusNotFound, "novel not found")
+			return
+		}
 	}
 
 	arcs, err := h.arcService.GetAllArcs(uint(novelId))
@@ -642,6 +656,13 @@ func (h *CharacterHandler) UpdateCharacterArc(c *gin.Context) {
 	characterId, ok := parseID(c, "character_id")
 	if !ok {
 		return
+	}
+
+	if h.novelService != nil {
+		if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c)); err != nil {
+			respondErr(c, http.StatusNotFound, "novel not found")
+			return
+		}
 	}
 
 	var req struct {
@@ -945,4 +966,47 @@ func (h *CharacterHandler) ServeVoiceSample(c *gin.Context) {
 	c.Header("Content-Type", "audio/mpeg")
 	c.Header("Cache-Control", "public, max-age=86400")
 	c.File(filePath)
+}
+
+// ListCharacterSnapshots GET /characters/:id/snapshots
+func (h *CharacterHandler) ListCharacterSnapshots(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	character, err := h.characterService.GetCharacter(uint(id))
+	if err != nil || character.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+	snapshots, err := h.characterService.ListCharacterSnapshots(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"snapshots": snapshots, "total": len(snapshots)})
+}
+
+// CreateCharacterSnapshot POST /characters/:id/snapshots
+func (h *CharacterHandler) CreateCharacterSnapshot(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	character, err := h.characterService.GetCharacter(uint(id))
+	if err != nil || character.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+	var req struct {
+		Motivation string `json:"motivation"`
+		Mood       string `json:"mood"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	snap, err := h.characterService.CreateCharacterSnapshot(uint(id), req.Motivation, req.Mood)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondCreated(c, snap)
 }

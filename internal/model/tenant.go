@@ -134,6 +134,7 @@ type User struct {
 	// 登录安全（账号锁定）
 	FailedLoginCount int        `json:"-" gorm:"default:0"`
 	LockUntil        *time.Time `json:"-" gorm:"default:null"`
+	LastLoginAt      *time.Time `json:"last_login_at,omitempty" gorm:"default:null"`
 
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`

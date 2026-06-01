@@ -19,6 +19,8 @@ type KnowledgeService struct {
 		Search(keyword string, limit int) ([]*model.KnowledgeBase, error)
 		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
 		GetByID(id uint) (*model.KnowledgeBase, error)
+		Update(kb *model.KnowledgeBase) error
+		Delete(id uint) error
 		ListBySourceChapter(novelID, chapterID uint) ([]*model.KnowledgeBase, error)
 		DeleteBySourceChapter(novelID, chapterID uint) error
 	}
@@ -32,6 +34,8 @@ func NewKnowledgeService(
 		Search(keyword string, limit int) ([]*model.KnowledgeBase, error)
 		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
 		GetByID(id uint) (*model.KnowledgeBase, error)
+		Update(kb *model.KnowledgeBase) error
+		Delete(id uint) error
 		ListBySourceChapter(novelID, chapterID uint) ([]*model.KnowledgeBase, error)
 		DeleteBySourceChapter(novelID, chapterID uint) error
 	},
@@ -162,6 +166,43 @@ func (s *KnowledgeService) SearchKnowledge(ctx context.Context, query string, li
 	}
 
 	return results, nil
+}
+
+// UpdateKnowledge 更新知识条目（标题/内容/标签）
+func (s *KnowledgeService) UpdateKnowledge(ctx context.Context, id uint, novelID *uint, title, content, tags string) (*model.KnowledgeBase, error) {
+	kb, err := s.kbRepo.GetByID(id)
+	if err != nil {
+		return nil, fmt.Errorf("knowledge entry not found")
+	}
+	// Verify this entry belongs to the expected novel to prevent cross-novel access.
+	if novelID != nil && (kb.NovelID == nil || *kb.NovelID != *novelID) {
+		return nil, fmt.Errorf("knowledge entry does not belong to the specified novel")
+	}
+	if title != "" {
+		kb.Title = title
+	}
+	if content != "" {
+		kb.Content = content
+	}
+	if tags != "" {
+		kb.Tags = tags
+	}
+	if err := s.kbRepo.Update(kb); err != nil {
+		return nil, err
+	}
+	return kb, nil
+}
+
+// DeleteKnowledge 删除单条知识条目
+func (s *KnowledgeService) DeleteKnowledge(ctx context.Context, id uint, novelID *uint) error {
+	kb, err := s.kbRepo.GetByID(id)
+	if err != nil {
+		return fmt.Errorf("knowledge entry not found")
+	}
+	if novelID != nil && (kb.NovelID == nil || *kb.NovelID != *novelID) {
+		return fmt.Errorf("knowledge entry does not belong to the specified novel")
+	}
+	return s.kbRepo.Delete(id)
 }
 
 // ExtractAndStorePlotPoints 提取并存储剧情点

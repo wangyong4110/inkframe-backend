@@ -393,6 +393,9 @@ func (s *CharacterArcService) GetCharacterArc(novelID, characterID uint) (*Chara
 	if err != nil {
 		return nil, err
 	}
+	if char.NovelID != novelID {
+		return nil, fmt.Errorf("character does not belong to the specified novel")
+	}
 
 	snapshots, err := s.snapshotRepo.ListByCharacter(characterID)
 	if err != nil {

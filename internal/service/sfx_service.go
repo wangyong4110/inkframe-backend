@@ -453,7 +453,7 @@ func (s *SFXService) BatchAutoGenerateSFX(
 	userContext string,
 	provider string,
 	progressFn func(int),
-) (success, fail int) {
+) (success, fail int, failedShotIDs []uint) {
 	total := len(shots)
 	if total == 0 {
 		return
@@ -463,6 +463,7 @@ func (s *SFXService) BatchAutoGenerateSFX(
 	var wg sync.WaitGroup
 	var doneCount atomic.Int32
 	var successCount, failCount atomic.Int32
+	var mu sync.Mutex
 
 	for _, shot := range shots {
 		if ctx.Err() != nil {
@@ -477,6 +478,9 @@ func (s *SFXService) BatchAutoGenerateSFX(
 			if err != nil {
 				logger.Printf("[SFXService] shot %d: %v", s2.ID, err)
 				failCount.Add(1)
+				mu.Lock()
+				failedShotIDs = append(failedShotIDs, s2.ID)
+				mu.Unlock()
 			} else {
 				successCount.Add(1)
 			}
@@ -493,7 +497,7 @@ func (s *SFXService) BatchAutoGenerateSFX(
 		s.applySceneContinuity(ctx, shots)
 	}
 
-	return int(successCount.Load()), int(failCount.Load())
+	return int(successCount.Load()), int(failCount.Load()), failedShotIDs
 }
 
 // applySceneContinuity 将同一场景的连续镜头的 ambient 音效统一为该场景首镜的 ambient 音效。

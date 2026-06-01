@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -554,12 +556,22 @@ func (h *ImportHandler) UploadChunk(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to save chunk")
 		return
 	}
-	if _, err := io.Copy(out, f); err != nil {
+	h2 := md5.New()
+	if _, err := io.Copy(io.MultiWriter(out, h2), f); err != nil {
 		out.Close()
 		respondErr(c, http.StatusInternalServerError, "failed to write chunk")
 		return
 	}
 	out.Close()
+
+	if expectedMD5 := c.PostForm("chunk_md5"); expectedMD5 != "" {
+		actualMD5 := hex.EncodeToString(h2.Sum(nil))
+		if !strings.EqualFold(actualMD5, expectedMD5) {
+			os.Remove(chunkPath) //nolint:errcheck
+			respondBadRequest(c, fmt.Sprintf("chunk %d MD5 mismatch: expected %s got %s", chunkNo, expectedMD5, actualMD5))
+			return
+		}
+	}
 
 	sess.mu.Lock()
 	sess.received[chunkNo] = true

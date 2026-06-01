@@ -1319,6 +1319,20 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 		logger.Printf("[VideoService] generateShotImageOnly: failed to update shot %d image URL: %v", shot.ShotNo, err)
 	}
 
+	// Async scene consistency scoring: compare generated image vs scene anchor reference image.
+	if s.sceneConsistencySvc != nil && s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
+		go func(sh *model.StoryboardShot, imgURL string) {
+			anchor, err := s.sceneAnchorSvc.Get(*sh.SceneAnchorID)
+			if err == nil {
+				if report, err := s.sceneConsistencySvc.ScoreScene(sh, anchor, imgURL, 1); err != nil {
+					logger.Printf("[VideoService] ScoreScene shot %d: %v", sh.ShotNo, err)
+				} else {
+					logger.Printf("[VideoService] ScoreScene shot %d: overall=%.2f passed=%v", sh.ShotNo, report.OverallScore, report.Passed)
+				}
+			}
+		}(shot, imageURL)
+	}
+
 	localImage, err = downloadToTemp(imageURL, fmt.Sprintf("inkframe-img-%d-", shot.ID), ".jpg")
 	if err != nil {
 		return "", 0, fmt.Errorf("download image for shot %d: %w", shot.ShotNo, err)

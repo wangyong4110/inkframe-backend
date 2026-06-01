@@ -20,17 +20,18 @@ import (
 
 // AuthService 认证服务
 type AuthService struct {
-	db          *gorm.DB
-	userRepo    *repository.UserRepository
-	tenantRepo  *repository.TenantRepository
-	tuRepo      *repository.TenantUserRepository
-	jwtSecret   string
-	jwtExpiry   time.Duration
-	smsService  *SMSService
-	tokenRepo   *repository.UserTokenRepository
-	rdb         *redis.Client
-	emailSender EmailSender
-	appBaseURL  string
+	db                  *gorm.DB
+	userRepo            *repository.UserRepository
+	tenantRepo          *repository.TenantRepository
+	tuRepo              *repository.TenantUserRepository
+	jwtSecret           string
+	jwtExpiry           time.Duration
+	smsService          *SMSService
+	tokenRepo           *repository.UserTokenRepository
+	rdb                 *redis.Client
+	emailSender         EmailSender
+	appBaseURL          string
+	requireVerification bool // 邮箱注册是否需要验证后才能登录
 }
 
 func NewAuthService(
@@ -81,6 +82,12 @@ func (s *AuthService) WithAppBaseURL(url string) *AuthService {
 	return s
 }
 
+// WithRequireVerification 设置邮箱注册是否必须验证后才能登录
+func (s *AuthService) WithRequireVerification(v bool) *AuthService {
+	s.requireVerification = v
+	return s
+}
+
 // RegisterRequest 注册请求
 type RegisterRequest struct {
 	TenantName string `json:"tenant_name"` // 可选，为空时自动使用用户名
@@ -88,6 +95,12 @@ type RegisterRequest struct {
 	Email      string `json:"email" binding:"required,email"`
 	Password   string `json:"password" binding:"required,min=8"`
 	Nickname   string `json:"nickname"`
+}
+
+// RegisterResponse 注册响应（邮箱验证模式下不返回 token，需先完成邮箱验证才可登录）
+type RegisterResponse struct {
+	Message string `json:"message"`
+	Email   string `json:"email"`
 }
 
 // LoginRequest 登录请求
@@ -98,26 +111,29 @@ type LoginRequest struct {
 
 // AuthResponse 认证响应
 type AuthResponse struct {
-	Token    string      `json:"token"`
-	UserID   uint        `json:"user_id"`
-	TenantID uint        `json:"tenant_id"`
-	Username string      `json:"username"`
-	Role     string      `json:"role"`
-	ExpiresAt time.Time  `json:"expires_at"`
+	Token     string    `json:"token"`
+	UserID    uint      `json:"user_id"`
+	TenantID  uint      `json:"tenant_id"`
+	Username  string    `json:"username"`
+	Nickname  string    `json:"nickname"`
+	Email     string    `json:"email"`
+	Role      string    `json:"role"`
+	ExpiresAt time.Time `json:"expires_at"`
 }
 
-// Register 注册新用户并创建租户
-func (s *AuthService) Register(req *RegisterRequest) (*AuthResponse, error) {
+// Register 注册新用户并创建租户。
+// 若 requireVerification=true：EmailVerifiedAt 留 nil，异步发送验证邮件，
+//   用户须点击邮件链接后才能登录，返回 RegisterResponse（无 token）。
+// 若 requireVerification=false（默认）：注册即激活，直接返回 JWT token。
+func (s *AuthService) Register(req *RegisterRequest) (interface{}, error) {
 	if req.TenantName == "" {
 		req.TenantName = req.Username
 	}
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
-	// 检查邮箱是否已存在
 	if _, err := s.userRepo.GetByEmail(req.Email); err == nil {
 		return nil, errors.New("email already registered")
 	}
 
-	// 哈希密码
 	hashed, err := bcrypt.GenerateFromPassword([]byte(req.Password), 12)
 	if err != nil {
 		return nil, fmt.Errorf("failed to hash password: %w", err)
@@ -127,8 +143,7 @@ func (s *AuthService) Register(req *RegisterRequest) (*AuthResponse, error) {
 	var tenantID uint
 
 	err = s.db.Transaction(func(tx *gorm.DB) error {
-		// 创建用户
-		user = &model.User{
+		u := &model.User{
 			UUID:     uuid.New().String(),
 			Username: req.Username,
 			Email:    req.Email,
@@ -137,11 +152,16 @@ func (s *AuthService) Register(req *RegisterRequest) (*AuthResponse, error) {
 			Status:   "active",
 			Role:     "user",
 		}
-		if err := tx.Create(user).Error; err != nil {
+		// 不开启验证时，注册即标记为已验证
+		if !s.requireVerification {
+			now := time.Now()
+			u.EmailVerifiedAt = &now
+		}
+		if err := tx.Create(u).Error; err != nil {
 			return fmt.Errorf("failed to create user: %w", err)
 		}
+		user = u
 
-		// 创建租户
 		tenant := &model.Tenant{
 			Name:   req.TenantName,
 			Code:   uuid.New().String()[:8],
@@ -153,10 +173,9 @@ func (s *AuthService) Register(req *RegisterRequest) (*AuthResponse, error) {
 		}
 		tenantID = tenant.ID
 
-		// 创建租户-用户关联（owner角色）
 		tu := &model.TenantUser{
 			TenantID: tenant.ID,
-			UserID:   user.ID,
+			UserID:   u.ID,
 			Role:     "owner",
 			Status:   "active",
 		}
@@ -164,13 +183,26 @@ func (s *AuthService) Register(req *RegisterRequest) (*AuthResponse, error) {
 			return fmt.Errorf("failed to create tenant user: %w", err)
 		}
 
+		_ = s.tenantRepo.IncrUsedUsers(tenant.ID)
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	_ = s.tenantRepo.IncrUsedUsers(tenantID)
+	if s.requireVerification {
+		// 异步发送验证邮件，不阻塞注册响应
+		go func() {
+			if _, err := s.SendEmailVerification(user.ID); err != nil {
+				logger.Printf("[Register] send verification email failed for user %d: %v", user.ID, err)
+			}
+		}()
+		return &RegisterResponse{
+			Message: "注册成功，请查收验证邮件并点击链接完成验证后再登录",
+			Email:   req.Email,
+		}, nil
+	}
+
 	return s.signToken(user.ID, tenantID, "owner")
 }
 
@@ -205,6 +237,13 @@ func (s *AuthService) Login(req *LoginRequest) (*AuthResponse, error) {
 
 	if user.Status != "active" {
 		return nil, errors.New("account is not active")
+	}
+
+	// 邮箱验证检查（仅在 requireVerification=true 时生效；OAuth/手机号账号不受此约束）
+	if s.requireVerification && user.OAuthProvider == "" && user.Phone == "" {
+		if user.EmailVerifiedAt == nil || user.EmailVerifiedAt.IsZero() {
+			return nil, errors.New("email not verified, please check your inbox")
+		}
 	}
 
 	// 登录成功：重置失败计数
@@ -302,6 +341,8 @@ func (s *AuthService) signToken(userID, tenantID uint, role string) (*AuthRespon
 		UserID:    userID,
 		TenantID:  tenantID,
 		Username:  user.Username,
+		Nickname:  user.Nickname,
+		Email:     user.Email,
 		Role:      role,
 		ExpiresAt: expiresAt,
 	}, nil
@@ -390,7 +431,9 @@ func (s *AuthService) UpdateProfile(userID uint, nickname, email, avatar string)
 	return s.userRepo.GetByID(userID)
 }
 
-// DeleteAccount 注销账号：验证密码后软删除用户记录。
+// DeleteAccount 注销账号：验证密码后匿名化唯一字段再软删除。
+// 必须先匿名化 email/username/phone，否则软删除后这些值仍占着唯一索引，
+// 导致用同一邮箱重新注册时触发 MySQL Duplicate entry 1062。
 func (s *AuthService) DeleteAccount(userID uint, password string) error {
 	user, err := s.userRepo.GetByID(userID)
 	if err != nil {
@@ -400,6 +443,15 @@ func (s *AuthService) DeleteAccount(userID uint, password string) error {
 		if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(password)); err != nil {
 			return errors.New("password is incorrect")
 		}
+	}
+	// 先匿名化唯一字段，释放唯一索引槽位
+	ghost := fmt.Sprintf("deleted_%d", userID)
+	if err := s.db.Model(&model.User{}).Where("id = ?", userID).Updates(map[string]interface{}{
+		"email":    ghost + "@deleted.local",
+		"username": ghost,
+		"phone":    "",
+	}).Error; err != nil {
+		return fmt.Errorf("failed to anonymize user before deletion: %w", err)
 	}
 	return s.userRepo.Delete(userID)
 }
@@ -460,15 +512,17 @@ func (s *AuthService) RegisterWithPhone(phone, code, nickname, tenantName string
 	var user *model.User
 	var tenantID uint
 	err = s.db.Transaction(func(tx *gorm.DB) error {
+		phoneVerifiedAt := time.Now()
 		u := &model.User{
-			UUID:     uuid.New().String(),
-			Username: username,
-			Email:    phone + "@phone.local",
-			Phone:    phone,
-			Password: string(hashed),
-			Nickname: nickname,
-			Status:   "active",
-			Role:     "user",
+			UUID:            uuid.New().String(),
+			Username:        username,
+			Email:           phone + "@phone.local",
+			Phone:           phone,
+			Password:        string(hashed),
+			Nickname:        nickname,
+			Status:          "active",
+			Role:            "user",
+			EmailVerifiedAt: &phoneVerifiedAt, // 手机验证码注册，视为已验证
 		}
 		if err := tx.Create(u).Error; err != nil {
 			return fmt.Errorf("failed to create user: %w", err)
@@ -572,17 +626,19 @@ func (s *AuthService) LoginWithOAuth(info *OAuthUserInfo) (*AuthResponse, error)
 		nickname = username
 	}
 
+	oauthVerifiedAt := time.Now()
 	newUser := &model.User{
-		UUID:          uuid.New().String(),
-		Username:      username,
-		Email:         username + "@oauth.local",
-		Password:      string(hashed),
-		Nickname:      nickname,
-		Avatar:        info.Avatar,
-		Status:        "active",
-		Role:          "user",
-		OAuthProvider: info.Provider,
-		OAuthID:       info.OpenID,
+		UUID:            uuid.New().String(),
+		Username:        username,
+		Email:           username + "@oauth.local",
+		Password:        string(hashed),
+		Nickname:        nickname,
+		Avatar:          info.Avatar,
+		Status:          "active",
+		Role:            "user",
+		OAuthProvider:   info.Provider,
+		OAuthID:         info.OpenID,
+		EmailVerifiedAt: &oauthVerifiedAt, // OAuth 身份已由第三方验证
 	}
 	if info.Phone != "" {
 		newUser.Phone = info.Phone
@@ -749,6 +805,34 @@ func (s *AuthService) SendEmailVerification(userID uint) (token string, err erro
 		}
 	}
 	return rawToken, nil
+}
+
+// ResendEmailVerification 为未验证的邮箱账号重新发送验证邮件（无需登录）。
+// 无论邮箱是否存在、是否已验证，均静默返回 nil，防止用户枚举。
+// 每个邮箱 5 分钟内最多触发一次（Redis 限速，Redis 不可用时跳过限速）。
+func (s *AuthService) ResendEmailVerification(email string) error {
+	email = strings.ToLower(strings.TrimSpace(email))
+
+	if s.rdb != nil {
+		rateLimitKey := "email_verify_resend_rate:" + email
+		if cnt, _ := s.rdb.Incr(context.Background(), rateLimitKey).Result(); cnt == 1 {
+			s.rdb.Expire(context.Background(), rateLimitKey, 5*time.Minute)
+		} else if cnt > 1 {
+			return nil // 静默限速
+		}
+	}
+
+	user, err := s.userRepo.GetByEmail(email)
+	if err != nil {
+		return nil // 邮箱不存在，静默返回
+	}
+	if user.EmailVerifiedAt != nil && !user.EmailVerifiedAt.IsZero() {
+		return nil // 已验证，静默返回
+	}
+	if _, err := s.SendEmailVerification(user.ID); err != nil {
+		logger.Printf("[ResendEmailVerification] failed for user %d: %v", user.ID, err)
+	}
+	return nil
 }
 
 // UnlockUser 管理员手动解除账号锁定

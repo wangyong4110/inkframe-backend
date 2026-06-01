@@ -88,6 +88,59 @@ func (h *KnowledgeHandler) CreateKnowledge(c *gin.Context) {
 	respondCreated(c, kb)
 }
 
+// UpdateKnowledge 更新知识条目
+// PUT /novels/:id/knowledge/:kb_id
+func (h *KnowledgeHandler) UpdateKnowledge(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if !h.checkNovelOwnership(c, novelID) {
+		return
+	}
+	kbID, ok := parseID(c, "kb_id")
+	if !ok {
+		return
+	}
+	var req struct {
+		Title   string `json:"title"`
+		Content string `json:"content"`
+		Tags    string `json:"tags"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	novelIDPtr := uint(novelID)
+	kb, err := h.knowledgeSvc.UpdateKnowledge(c.Request.Context(), uint(kbID), &novelIDPtr, req.Title, req.Content, req.Tags)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, err.Error())
+		return
+	}
+	respondOK(c, kb)
+}
+
+// DeleteKnowledge 删除知识条目
+// DELETE /novels/:id/knowledge/:kb_id
+func (h *KnowledgeHandler) DeleteKnowledge(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if !h.checkNovelOwnership(c, novelID) {
+		return
+	}
+	kbID, ok := parseID(c, "kb_id")
+	if !ok {
+		return
+	}
+	novelIDPtr := uint(novelID)
+	if err := h.knowledgeSvc.DeleteKnowledge(c.Request.Context(), uint(kbID), &novelIDPtr); err != nil {
+		respondErr(c, http.StatusNotFound, err.Error())
+		return
+	}
+	respondOK(c, nil)
+}
+
 // SearchKnowledge 搜索知识库
 // GET /novels/:id/knowledge/search?q=query&limit=10
 func (h *KnowledgeHandler) SearchKnowledge(c *gin.Context) {

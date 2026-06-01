@@ -54,9 +54,9 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				overall := 50 + pct*45/100
 				svcs.TaskService.UpdateProgress(t.TaskID, overall) //nolint:errcheck
 			}
-			success, fail := svcs.SFXService.BatchAutoGenerateSFX(ctx, shots, tenantID, params.UserContext, "", progressFn)
+			success, fail, failedIDs := svcs.SFXService.BatchAutoGenerateSFX(ctx, shots, tenantID, params.UserContext, "", progressFn)
 			logger.Printf("TaskService resume sfx_gen %s done: sfx_success=%d sfx_fail=%d", t.TaskID, success, fail)
-			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"sfx_success": success, "sfx_fail": fail}) //nolint:errcheck
+			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"sfx_success": success, "sfx_fail": fail, "failed_shot_ids": failedIDs}) //nolint:errcheck
 		})
 	}
 

@@ -27,9 +27,11 @@ type ChapterService struct {
 	novelRepo      *repository.NovelRepository
 	characterRepo  *repository.CharacterRepository                       // 注入角色数据到生成 prompt
 	snapshotRepo   *repository.CharacterStateSnapshotRepository          // 角色状态快照（注入连贯状态）
+	versionRepo    *repository.ChapterVersionRepository                  // 章节版本（手动编辑自动存档）
 	aiService      *AIService
 	contextSvc     *GenerationContextService
 	narrativeSvc   *NarrativeMemoryService // 层次化记忆 + 摘要 + 标题 + 精修
+	continuitySvc  *ContinuityService      // 可选：章节连贯性检查
 	hookSvc        *HookChainService
 	spSvc          *SatisfactionPointService
 	arcSvc         *ConflictArcService
@@ -51,6 +53,18 @@ func NewChapterService(
 		aiService:   aiService,
 		contextSvc:  contextSvc,
 	}
+}
+
+// WithVersionRepo 注入章节版本仓库（可选，注入后手动编辑内容时自动存版本）
+func (s *ChapterService) WithVersionRepo(repo *repository.ChapterVersionRepository) *ChapterService {
+	s.versionRepo = repo
+	return s
+}
+
+// WithContinuityService 注入连贯性检查服务（可选，注入后章节生成完成后自动异步检查）
+func (s *ChapterService) WithContinuityService(svc *ContinuityService) *ChapterService {
+	s.continuitySvc = svc
+	return s
 }
 
 // WithNarrativeMemory 注入层次化记忆服务（可选）
@@ -179,6 +193,20 @@ func (s *ChapterService) UpdateChapter(id, tenantID uint, req *model.UpdateChapt
 	}
 	if chapter.TenantID != tenantID {
 		return nil, fmt.Errorf("not found")
+	}
+	// Snapshot current content before overwriting (best-effort, ignore errors).
+	if req.Content != "" && chapter.Content != "" && s.versionRepo != nil {
+		latest, _ := s.versionRepo.GetLatest(chapter.ID)
+		nextNo := 1
+		if latest != nil {
+			nextNo = latest.VersionNo + 1
+		}
+		_ = s.versionRepo.Create(&model.ChapterVersion{
+			ChapterID:  chapter.ID,
+			VersionNo:  nextNo,
+			Content:    chapter.Content,
+			ChangeType: "manual_edit",
+		})
 	}
 	applyChapterUpdate(chapter, req)
 	if err := s.chapterRepo.Update(chapter); err != nil {
@@ -1131,7 +1159,16 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 		}
 	}
 
-	// 4. 触发弧摘要（每 arcSize 章触发一次）
+	// 4. 连贯性检查（异步，不阻塞；结果持久化到 continuity_report 表供 UI 查询）
+	if s.continuitySvc != nil && chapter.Content != "" {
+		go func(ch *model.Chapter) {
+			if _, err := s.continuitySvc.ValidateChapter(novel.ID, ch.ID, tenantID, ch.ChapterNo, ch.Content); err != nil {
+				logger.Printf("[ChapterService] continuity check ch%d: %v", ch.ChapterNo, err)
+			}
+		}(chapter)
+	}
+
+	// 5. 触发弧摘要（每 arcSize 章触发一次）
 	// 注：角色快照已在 GenerateChapter Step 5b 同步提取，此处不再重复。
 	if s.narrativeSvc != nil {
 		s.narrativeSvc.TriggerArcSummaryIfNeeded(tenantID, novel.ID, chapter.ChapterNo)

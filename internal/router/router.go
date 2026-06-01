@@ -131,6 +131,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		auth.POST("/password-reset/confirm", cfg.AuthHandler.ResetPassword)
 		// 邮箱验证回调（公开，链接中携带 token）
 		auth.GET("/email-verification/verify", cfg.AuthHandler.VerifyEmail)
+		// 重发验证邮件（公开，防枚举静默处理）
+		auth.POST("/email-verification/resend", cfg.AuthHandler.ResendEmailVerification)
 	}
 
 	// 受保护路由（需要JWT）
@@ -306,6 +308,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				novels.GET("/:id/knowledge/search", cfg.KnowledgeHandler.SearchKnowledge)
 				novels.GET("/:id/knowledge", cfg.KnowledgeHandler.ListKnowledge)
 				novels.POST("/:id/knowledge", cfg.KnowledgeHandler.CreateKnowledge)
+				novels.PUT("/:id/knowledge/:kb_id", cfg.KnowledgeHandler.UpdateKnowledge)
+				novels.DELETE("/:id/knowledge/:kb_id", cfg.KnowledgeHandler.DeleteKnowledge)
 			}
 
 			// 场景锚点（挂在 novel 下）
@@ -418,6 +422,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			characters.POST("/:id/voice/preview", cfg.CharacterHandler.PreviewVoice)
 			characters.GET("/:id/voice/sample", cfg.CharacterHandler.ServeVoiceSample)
 			characters.POST("/:id/extract-voice", cfg.CharacterHandler.ExtractCharacterVoice)
+			characters.GET("/:id/snapshots", cfg.CharacterHandler.ListCharacterSnapshots)
+			characters.POST("/:id/snapshots", cfg.CharacterHandler.CreateCharacterSnapshot)
 		}
 
 		// 视频相关
@@ -480,6 +486,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.PUT("/:id/shots/:shot_id/segments/:seg_id", cfg.VideoHandler.UpdateVoiceSegment)
 			videos.DELETE("/:id/shots/:shot_id/segments/:seg_id", cfg.VideoHandler.DeleteVoiceSegment)
 			videos.POST("/:id/shots/:shot_id/segments/:seg_id/voice", cfg.VideoHandler.GenerateSegmentVoice)
+			videos.POST("/:id/shots/:shot_id/voice/merge", cfg.VideoHandler.MergeVoiceSegments)
 			videos.GET("/:id/shots/:shot_id/segments/:seg_id/audio", cfg.VideoHandler.ServeSegmentAudio)
 			videos.POST("/:id/storyboard/:shot_id/voice", cfg.VideoHandler.GenerateShotVoice)
 			videos.GET("/:id/storyboard/:shot_id/audio", cfg.VideoHandler.ServeAudio)

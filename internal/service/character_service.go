@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/logger"
@@ -629,7 +630,44 @@ func (s *CharacterService) UpdateCharacter(id, tenantID uint, req *model.UpdateC
 	if req.VoiceSample != "" {
 		character.VoiceSample = req.VoiceSample
 	}
-	return character, s.characterRepo.Update(character)
+	if err := s.characterRepo.Update(character); err != nil {
+		return nil, err
+	}
+	// Auto-snapshot when key characterization fields change (best-effort).
+	if s.snapshotRepo != nil && (req.Description != "" || req.InnerConflict != "" || req.CoreDesire != "") {
+		snap := &model.CharacterStateSnapshot{
+			CharacterID:  character.ID,
+			Motivation:   character.CoreDesire,
+			SnapshotTime: time.Now(),
+		}
+		_ = s.snapshotRepo.Create(snap) // ignore error
+	}
+	return character, nil
+}
+
+// ListCharacterSnapshots 列出角色状态快照
+func (s *CharacterService) ListCharacterSnapshots(characterID uint) ([]*model.CharacterStateSnapshot, error) {
+	if s.snapshotRepo == nil {
+		return nil, fmt.Errorf("snapshot repo not configured")
+	}
+	return s.snapshotRepo.ListByCharacter(characterID)
+}
+
+// CreateCharacterSnapshot 手动创建角色状态快照
+func (s *CharacterService) CreateCharacterSnapshot(characterID uint, motivation, mood string) (*model.CharacterStateSnapshot, error) {
+	if s.snapshotRepo == nil {
+		return nil, fmt.Errorf("snapshot repo not configured")
+	}
+	snap := &model.CharacterStateSnapshot{
+		CharacterID:  characterID,
+		Motivation:   motivation,
+		Mood:         mood,
+		SnapshotTime: time.Now(),
+	}
+	if err := s.snapshotRepo.Create(snap); err != nil {
+		return nil, err
+	}
+	return snap, nil
 }
 
 func (s *CharacterService) DeleteCharacter(id, tenantID uint) error {
@@ -1130,10 +1168,70 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 }
 
 func (s *CharacterService) AnalyzeConsistency(id uint, images []string) (interface{}, error) {
+	if len(images) == 0 {
+		return map[string]interface{}{
+			"character_id":      id,
+			"consistency_score": 0.0,
+			"images_analyzed":   0,
+			"message":           "no images provided",
+		}, nil
+	}
+	if s.aiService == nil || len(images) == 1 {
+		return map[string]interface{}{
+			"character_id":      id,
+			"consistency_score": 1.0,
+			"images_analyzed":   len(images),
+			"message":           "single image, consistency assumed",
+		}, nil
+	}
+
+	char, err := s.characterRepo.GetByID(id)
+	if err != nil {
+		return nil, fmt.Errorf("character not found: %w", err)
+	}
+
+	prompt := fmt.Sprintf(`You are a visual consistency analyst. Compare the following %d images of the character "%s" and assess their visual consistency.
+
+Rate consistency from 0.0 (completely inconsistent) to 1.0 (perfectly consistent), focusing on:
+- Facial features (face shape, eyes, nose, mouth)
+- Hair color and style
+- Overall art style and proportions
+
+Respond with ONLY a JSON object in this exact format:
+{"score": 0.85, "notes": "brief explanation"}`, len(images), char.Name)
+
+	response, err := s.aiService.GenerateWithVision(prompt, images)
+	if err != nil {
+		logger.Printf("[CharacterService] AnalyzeConsistency: vision call failed for char %d: %v", id, err)
+		return map[string]interface{}{
+			"character_id":      id,
+			"consistency_score": 0.0,
+			"images_analyzed":   len(images),
+			"error":             "vision analysis unavailable",
+		}, nil
+	}
+
+	// Parse the score from the JSON response
+	score := 0.0
+	notes := ""
+	start := strings.Index(response, "{")
+	end := strings.LastIndex(response, "}")
+	if start >= 0 && end > start {
+		var parsed struct {
+			Score float64 `json:"score"`
+			Notes string  `json:"notes"`
+		}
+		if jsonErr := json.Unmarshal([]byte(response[start:end+1]), &parsed); jsonErr == nil {
+			score = parsed.Score
+			notes = parsed.Notes
+		}
+	}
+
 	return map[string]interface{}{
 		"character_id":      id,
-		"consistency_score": 0.9,
+		"consistency_score": score,
 		"images_analyzed":   len(images),
+		"notes":             notes,
 	}, nil
 }
 

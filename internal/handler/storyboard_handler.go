@@ -628,7 +628,15 @@ func (h *VideoHandler) EnhanceVideo(c *gin.Context) {
 		return
 	}
 
-	result, err := h.enhancementService.EnhanceVideo(req.VideoURL, req.Enhancements)
+	svcConfigs := make([]service.EnhancementConfig, 0, len(req.Enhancements))
+	for _, ec := range req.Enhancements {
+		svcConfigs = append(svcConfigs, service.EnhancementConfig{
+			Type:      service.EnhancementType(ec.Type),
+			Enabled:   ec.Enabled,
+			Intensity: ec.Intensity,
+		})
+	}
+	result, err := h.enhancementService.EnhanceVideoWithConfigs(req.VideoURL, svcConfigs)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -655,7 +663,6 @@ func (h *VideoHandler) GetEnhancementRecommendations(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-
 	respondOK(c, result)
 }
 

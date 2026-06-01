@@ -366,7 +366,9 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 		WithDramaticServices(hookChainSvc, satisfactionSvc, conflictArcSvc).
 		WithPlotPointRepo(repos.PlotPointRepo).
 		WithCharacterRepo(repos.CharacterRepo).
-		WithSnapshotRepo(repos.SnapshotRepo)
+		WithSnapshotRepo(repos.SnapshotRepo).
+		WithVersionRepo(repos.ChapterVersionRepo).
+		WithContinuityService(continuitySvc)
 
 	// 图像生成服务
 	imageGenSvc := service.NewImageGenerationService(aiSvc)
@@ -448,6 +450,7 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 	)
 
 	sceneConsistencySvc := service.NewSceneConsistencyService(repos.SceneConsistencyLogRepo, aiSvc)
+	videoSvc.WithSceneConsistencyService(sceneConsistencySvc)
 
 	return &videoSvcs{
 		Video: videoSvc, Storyboard: storyboardSvc, Enhancement: enhancementSvc,
@@ -497,7 +500,8 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		WithTokenRepo(repos.UserTokenRepo).
 		WithRedis(redisClient).
 		WithEmailSender(emailSender).
-		WithAppBaseURL(frontendURL)
+		WithAppBaseURL(frontendURL).
+		WithRequireVerification(cfg.Email.RequireVerification)
 	tenantSvc := service.NewTenantService(repos.TenantRepo, repos.TenantUserRepo)
 	oauthSvc  := service.NewOAuthService(cfg.OAuth)
 	mcpSvc    := service.NewMcpService(db)
