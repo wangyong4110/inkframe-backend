@@ -2136,13 +2136,13 @@ func (s *ChapterService) generateReaderExpectations(tenantID uint, chapter *mode
 		logger.Printf("[ChapterService] generateReaderExpectations ch%d: AI error: %v", chapter.ChapterNo, err)
 		return ""
 	}
-	result = strings.TrimSpace(extractJSON(result))
-	// Validate it's a proper JSON object with reader_expectations key
+	// extractJSONObject (not extractJSON) — extractJSON unwraps {"k":[...]} → [...], losing the wrapper.
+	result = strings.TrimSpace(extractJSONObject(result))
 	var parsed struct {
 		ReaderExpectations []string `json:"reader_expectations"`
 	}
 	if err := json.Unmarshal([]byte(result), &parsed); err != nil || len(parsed.ReaderExpectations) == 0 {
-		logger.Printf("[ChapterService] generateReaderExpectations ch%d: unexpected format: %v", chapter.ChapterNo, err)
+		logger.Printf("[ChapterService] generateReaderExpectations ch%d: unexpected format: %v (raw: %.200s)", chapter.ChapterNo, err, result)
 		return ""
 	}
 	out, _ := json.Marshal(parsed.ReaderExpectations)
@@ -2179,8 +2179,8 @@ func (s *ChapterService) generateChapterEndState(tenantID uint, chapter *model.C
 		logger.Printf("[generateChapterEndState] ch%d AI error: %v", chapter.ChapterNo, err)
 		return ""
 	}
-	cleaned := strings.TrimSpace(extractJSON(result))
-	// Validate JSON structure
+	// extractJSONObject — extractJSON would unwrap {"characters":[...]} → [...], losing the whole structure.
+	cleaned := strings.TrimSpace(extractJSONObject(result))
 	var check struct {
 		Characters    []map[string]string `json:"characters"`
 		SceneEnd      string              `json:"scene_end"`
@@ -2233,7 +2233,8 @@ func (s *ChapterService) checkAndPatchMissingPlotPoints(tenantID uint, chapter *
 		return false
 	}
 
-	cleaned := strings.TrimSpace(extractJSON(result))
+	// extractJSONObject — extractJSON would strip {"coverage":[...],"patches":[...]} to the inner array.
+	cleaned := strings.TrimSpace(extractJSONObject(result))
 	var complianceResult struct {
 		Coverage []struct {
 			PlotPoint string `json:"plot_point"`
