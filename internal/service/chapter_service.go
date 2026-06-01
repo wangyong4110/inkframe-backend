@@ -1185,26 +1185,40 @@ func (s *ChapterService) generateFromSceneOutline(
 		}
 	}
 
+	// 格式化大纲剧情点（用于第二步正文生成的双重约束）
+	outlinePlotPointsText := ""
+	if len(meta.plotPoints) > 0 {
+		var sb strings.Builder
+		for _, pp := range meta.plotPoints {
+			sb.WriteString("- ")
+			sb.WriteString(pp)
+			sb.WriteString("\n")
+		}
+		outlinePlotPointsText = sb.String()
+	}
+
 	chapterPrompt, err := renderPrompt("chapter_from_outline", map[string]interface{}{
-		"NovelTitle":            novel.Title,
-		"ChapterNo":             req.ChapterNo,
-		"ChapterTitle":          chapterTitle,
-		"WordCount":             wordCount,
-		"GlobalContext":         globalCtx,
-		"Scenes":                outlineData.Scenes,
-		"HookSetup":             outlineData.HookSetup,
-		"PeakTension":           peakTension,
-		"Characters":            characterVoices,
-		"CharacterStates":       formatCharacterStates(characterVoices),
-		"ForeshadowHints":       foreshadowHints,
-		"PreviousChapterEnding": prevEnding,
-		"UserPrompt":            req.Prompt,
-		"IsStandalone":          req.IsStandalone,
-		"RefStories":            refStories,
-		"WikiContext":           wikiContext,
-		"ChapterBudget":         budgetText,
-		"CharacterRegistry":     characterRegistry,
-		"TimelineContext":        timelineCtx,
+		"NovelTitle":             novel.Title,
+		"ChapterNo":              req.ChapterNo,
+		"ChapterTitle":           chapterTitle,
+		"WordCount":              wordCount,
+		"GlobalContext":          globalCtx,
+		"Scenes":                 outlineData.Scenes,
+		"HookSetup":              outlineData.HookSetup,
+		"PeakTension":            peakTension,
+		"Characters":             characterVoices,
+		"CharacterStates":        formatCharacterStates(characterVoices),
+		"ForeshadowHints":        foreshadowHints,
+		"PreviousChapterEnding":  prevEnding,
+		"UserPrompt":             req.Prompt,
+		"IsStandalone":           req.IsStandalone,
+		"RefStories":             refStories,
+		"WikiContext":            wikiContext,
+		"ChapterBudget":          budgetText,
+		"CharacterRegistry":      characterRegistry,
+		"TimelineContext":         timelineCtx,
+		"ChapterOutlineSummary":  meta.summary,
+		"OutlinePlotPoints":      outlinePlotPointsText,
 	})
 	if err != nil {
 		content, err := s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)

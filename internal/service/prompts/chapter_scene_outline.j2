@@ -6,16 +6,21 @@
 # 小说背景
 {{ GlobalContext }}
 
+{% if ChapterSummary %}
+# ⚠️ 本章大纲规定剧情（最高优先级 — 所有场景必须忠实还原以下大纲，不得偏离）
+{{ ChapterSummary }}
+{% endif %}
+
+{% if PlotPoints %}
+# ⚠️ 本章必须完成的剧情点（来自大纲，必须全部体现在场景中，一条都不能遗漏）
+{{ PlotPoints }}{% endif %}
+
 # 本章目标
 {% if ChapterTitle %}- 章节标题建议：{{ ChapterTitle }}
-{% endif %}- 章节主题：{{ ChapterSummary }}
-- 情感张力目标：{{ TensionLevel }}/10
+{% endif %}- 情感张力目标：{{ TensionLevel }}/10
 - 所属幕次：第{{ ActNo }}幕
 - 情感基调：{{ EmotionalTone }}
 - 章末钩子类型：{{ HookType }}
-
-{% if PlotPoints %}# 本章必须完成的剧情点（来自大纲，必须全部体现在场景中）
-{{ PlotPoints }}{% endif %}
 
 {% if PlotTensionState %}
 # 当前张力状态（必须参考）

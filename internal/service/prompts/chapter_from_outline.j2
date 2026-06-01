@@ -13,6 +13,16 @@
 {{ PreviousChapterEnding }}
 {% endif %}
 
+{% if ChapterOutlineSummary %}
+# ⚠️ 本章大纲规定剧情（最高约束 — 正文必须忠实还原，不得偏离）
+{{ ChapterOutlineSummary }}
+{% endif %}
+
+{% if OutlinePlotPoints %}
+# ⚠️ 必须完成的剧情点（来自大纲，全部必须在正文中体现）
+{{ OutlinePlotPoints }}
+{% endif %}
+
 # 场景大纲（严格按此顺序展开）
 {% for scene in Scenes %}
 ## 场景{{ scene.SceneNo }}：{{ scene.Location }}（{{ scene.TimeOfDay }}）
