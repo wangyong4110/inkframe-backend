@@ -607,6 +607,12 @@ func (s *CharacterService) UpdateCharacter(id, tenantID uint, req *model.UpdateC
 	if req.CoreDesire != "" {
 		character.CoreDesire = req.CoreDesire
 	}
+	if req.ArcDesign != "" {
+		character.ArcDesign = req.ArcDesign
+	}
+	if req.CurrentArcStage != "" {
+		character.CurrentArcStage = req.CurrentArcStage
+	}
 	if req.VisualPrompt != "" {
 		character.VisualPrompt = req.VisualPrompt
 	}

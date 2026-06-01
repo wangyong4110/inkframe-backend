@@ -24,6 +24,12 @@ type Character struct {
 	InnerConflict string `json:"inner_conflict,omitempty" gorm:"column:inner_conflict;type:text"` // 内在矛盾/恐惧（如：渴望自由却害怕失去家人）
 	CoreDesire    string `json:"core_desire,omitempty" gorm:"column:core_desire;type:text"`    // 核心渴望（如：被认可、复仇、保护所爱之人）
 
+	// 角色弧光设计（规划角色在全书中的心理成长阶段）
+	// JSON格式: [{"stage":"起点","desc":"...","target_range":[1,20]},{"stage":"考验","desc":"...","target_range":[21,60]},...]
+	// stage可选: 起点/考验/最低点/转折/终点
+	ArcDesign       string `json:"arc_design,omitempty" gorm:"type:text"`
+	CurrentArcStage string `json:"current_arc_stage,omitempty" gorm:"size:50"` // 当前所处弧光阶段（自动更新）
+
 	// AI 图像生成英文提示词（由 extract_characters 生成，用于三视图/头像生成）
 	VisualPrompt string `json:"visual_prompt" gorm:"type:text"`
 
@@ -192,9 +198,11 @@ type UpdateCharacterRequest struct {
 	Name          string `json:"name"`
 	Role          string `json:"role"`
 	Description   string `json:"description"`
-	InnerConflict string `json:"inner_conflict"` // 内在矛盾（如：渴望自由却害怕失去家人）
-	CoreDesire    string `json:"core_desire"`    // 核心渴望（如：被认可、复仇、保护所爱之人）
-	VisualPrompt  string `json:"visual_prompt"`  // AI 图像生成英文提示词
+	InnerConflict   string `json:"inner_conflict"`    // 内在矛盾（如：渴望自由却害怕失去家人）
+	CoreDesire      string `json:"core_desire"`       // 核心渴望（如：被认可、复仇、保护所爱之人）
+	ArcDesign       string `json:"arc_design"`        // 弧光设计 JSON（各阶段描述+章节范围）
+	CurrentArcStage string `json:"current_arc_stage"` // 当前弧光阶段（起点/考验/最低点/转折/终点）
+	VisualPrompt    string `json:"visual_prompt"`     // AI 图像生成英文提示词
 	ThreeViewSheet string   `json:"three_view_sheet"`
 	FaceCloseup    string   `json:"face_closeup"`
 	Portrait       string   `json:"portrait"`

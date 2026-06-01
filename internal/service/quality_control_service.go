@@ -603,6 +603,7 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 		"IgnoredText":       strings.Join(ignoredLines, "\n"),
 		"HasPreviousScore":  previousScore > 0,
 		"PreviousScoreStr":  fmt.Sprintf("%.0f", previousScore),
+		"CoreTheme":         novel.CoreTheme,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render chapter_review: %w", err)

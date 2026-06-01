@@ -391,7 +391,8 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 		WithVersionRepo(repos.ChapterVersionRepo).
 		WithContinuityService(continuitySvc).
 		WithKnowledgeService(knowledgeSvc).
-		WithQualityService(core.Quality)
+		WithQualityService(core.Quality).
+		WithForeshadowRepo(repos.ForeshadowRepo)
 
 	// 图像生成服务
 	imageGenSvc := service.NewImageGenerationService(aiSvc)

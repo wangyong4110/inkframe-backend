@@ -42,6 +42,7 @@ type ChapterService struct {
 	qualitySvc     *QualityControlService          // 可选：用于生成后质量评分与触发精修
 	knowledgeSvc   *KnowledgeService               // 可选：用于异步提取并存储剧情点
 	timelineSvc    *TimelineService                // 可选：时间线约束注入生成 prompt
+	foreshadowRepo *repository.ForeshadowRepository // 可选：伏笔生命周期注入生成 prompt
 
 	// genLocks 防止同一章节并发生成（key: "novelID-chapterNo"）。
 	// DB 层的 AtomicSetGenerating 负责已存在占位章节的乐观锁保护；
@@ -132,6 +133,12 @@ func (s *ChapterService) WithKnowledgeService(svc *KnowledgeService) *ChapterSer
 // WithTimelineService 注入时间线服务（可选），用于将时间线约束注入生成 prompt
 func (s *ChapterService) WithTimelineService(svc *TimelineService) *ChapterService {
 	s.timelineSvc = svc
+	return s
+}
+
+// WithForeshadowRepo 注入伏笔仓库（可选），用于伏笔生命周期注入生成 prompt
+func (s *ChapterService) WithForeshadowRepo(repo *repository.ForeshadowRepository) *ChapterService {
+	s.foreshadowRepo = repo
 	return s
 }
 
@@ -1048,6 +1055,15 @@ func (s *ChapterService) generateSceneOutline(
 		}
 	}
 
+	// 读者期待（来自上一章）
+	prevReaderExpectations := s.buildPreviousReaderExpectations(novelID, req.ChapterNo)
+
+	// 角色弧光进度（从角色的 ArcDesign + CurrentArcStage 构建）
+	characterArcContext := s.buildCharacterArcContext(novelID, req.ChapterNo)
+
+	// 张力预算（近几章若全为高张力，提醒插入缓冲章）
+	tensionBudget := s.buildTensionBudget(novelID, req.ChapterNo, tensionLevel)
+
 	outlinePrompt, err := renderPrompt("chapter_scene_outline", map[string]interface{}{
 		"NovelTitle":            novel.Title,
 		"ChapterNo":             req.ChapterNo,
@@ -1059,6 +1075,7 @@ func (s *ChapterService) generateSceneOutline(
 		"ActNo":                 actNo,
 		"EmotionalTone":         emotionalTone,
 		"HookType":              hookType,
+		"ChapterType":           computeChapterType(tensionLevel, hookType, actNo),
 		"IsStandalone":          req.IsStandalone,
 		"PreviousChapterEnding": prevEnding,
 		"Characters":            characters,
@@ -1071,6 +1088,10 @@ func (s *ChapterService) generateSceneOutline(
 		"ChapterBudget":         budgetText,
 		"CharacterRegistry":     characterRegistry,
 		"TimelineContext":        timelineContext,
+		"CoreTheme":             novel.CoreTheme,
+		"ReaderExpectations":    prevReaderExpectations,
+		"CharacterArcContext":   characterArcContext,
+		"TensionBudget":         tensionBudget,
 	})
 	if err != nil {
 		logger.Printf("GenerateChapter: render chapter_scene_outline: %v", err)
@@ -1160,17 +1181,24 @@ func (s *ChapterService) generateFromSceneOutline(
 		HookSetup    string `json:"hook_setup"`
 		ChapterArc   string `json:"chapter_arc"`
 		Scenes       []struct {
-			SceneNo       int      `json:"scene_no"`
-			Location      string   `json:"location"`
-			TimeOfDay     string   `json:"time_of_day"`
-			Characters    []string `json:"characters"`
-			Goal          string   `json:"goal"`
-			OpeningBeat   string   `json:"opening_beat"`
-			KeyBeats      []string `json:"key_beats"`
-			ClosingBeat   string   `json:"closing_beat"`
-			EmotionalShift string  `json:"emotional_shift"`
-			POVCharacter  string   `json:"pov_character"`
-			Tension       int      `json:"tension"`
+			SceneNo          int      `json:"scene_no"`
+			Location         string   `json:"location"`
+			TimeOfDay        string   `json:"time_of_day"`
+			Characters       []string `json:"characters"`
+			Goal             string   `json:"goal"`
+			NarrativePurpose string   `json:"narrative_purpose"`
+			OpeningBeat      string   `json:"opening_beat"`
+			KeyBeats         []string `json:"key_beats"`
+			ClosingBeat      string   `json:"closing_beat"`
+			EmotionalShift   string   `json:"emotional_shift"`
+			DialogueSubtext  string   `json:"dialogue_subtext"`
+			DialogueMode     string   `json:"dialogue_mode"`
+			MicroPacing      string   `json:"micro_pacing"`
+			SceneWeight      string   `json:"scene_weight"` // 核心场景/过渡场景/衔接场景
+			ThemeEcho        string   `json:"theme_echo"`
+			WordBudget       int      `json:"-"` // computed in Go, not from JSON
+			POVCharacter     string   `json:"pov_character"`
+			Tension          int      `json:"tension"`
 		} `json:"scenes"`
 	}
 	if err := json.Unmarshal([]byte(sceneOutlineJSON), &outlineData); err != nil {
@@ -1191,11 +1219,48 @@ func (s *ChapterService) generateFromSceneOutline(
 	// 角色注册表（防命名混淆）
 	characterRegistry := s.buildCharacterRegistry(novelID)
 
-	// 峰值张力
+	// 峰值张力 + 按场景权重分配字数预算
 	peakTension := 0
+	coreCount, transCount := 0, 0
 	for _, sc := range outlineData.Scenes {
 		if sc.Tension > peakTension {
 			peakTension = sc.Tension
+		}
+		switch sc.SceneWeight {
+		case "核心场景":
+			coreCount++
+		case "过渡场景":
+			transCount++
+		}
+	}
+	// 核心场景占60%，过渡场景占30%，衔接场景占10%
+	totalScenes := len(outlineData.Scenes)
+	linkCount := totalScenes - coreCount - transCount
+	if linkCount < 0 {
+		linkCount = 0
+	}
+	coreWords, transWords, linkWords := wordCount*6/10, wordCount*3/10, wordCount*1/10
+	if coreCount > 0 {
+		coreWords = coreWords / coreCount
+	}
+	if transCount > 0 {
+		transWords = transWords / transCount
+	}
+	if linkCount > 0 {
+		linkWords = linkWords / linkCount
+	}
+	for i := range outlineData.Scenes {
+		switch outlineData.Scenes[i].SceneWeight {
+		case "核心场景":
+			outlineData.Scenes[i].WordBudget = coreWords
+		case "过渡场景":
+			outlineData.Scenes[i].WordBudget = transWords
+		default:
+			if linkCount > 0 {
+				outlineData.Scenes[i].WordBudget = linkWords
+			} else {
+				outlineData.Scenes[i].WordBudget = wordCount / totalScenes
+			}
 		}
 	}
 
@@ -1230,6 +1295,9 @@ func (s *ChapterService) generateFromSceneOutline(
 		outlinePlotPointsText = sb.String()
 	}
 
+	// 读者期待（来自上一章，供正文生成保证回应上章悬念）
+	prevReaderExpectations := s.buildPreviousReaderExpectations(novelID, req.ChapterNo)
+
 	chapterPrompt, err := renderPrompt("chapter_from_outline", map[string]interface{}{
 		"NovelTitle":             novel.Title,
 		"ChapterNo":              req.ChapterNo,
@@ -1252,6 +1320,8 @@ func (s *ChapterService) generateFromSceneOutline(
 		"TimelineContext":         timelineCtx,
 		"ChapterOutlineSummary":  meta.summary,
 		"OutlinePlotPoints":      outlinePlotPointsText,
+		"CoreTheme":              novel.CoreTheme,
+		"ReaderExpectations":     prevReaderExpectations,
 	})
 	if err != nil {
 		content, err := s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
@@ -1490,6 +1560,61 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 		}
 	}
 
+	// 4c. 生成读者期待状态（章末读者最想知道的3件事，供下一章生成时约束）
+	// 依赖摘要，所以在摘要生成之后执行；非阻塞，AI 调用失败不影响主流程。
+	if chapter.Summary != "" && chapter.ReaderExpectations == "" {
+		if expectations := s.generateReaderExpectations(tenantID, chapter, novel); expectations != "" {
+			if fresh, fetchErr := s.chapterRepo.GetByID(chapter.ID); fetchErr == nil {
+				fresh.ReaderExpectations = expectations
+				if updateErr := s.chapterRepo.Update(fresh); updateErr != nil {
+					logger.Printf("postProcessChapter: update chapter %d [reader_expectations]: %v", chapter.ID, updateErr)
+				} else {
+					chapter = fresh
+					logger.Printf("[ChapterService] reader_expectations generated for ch%d", chapter.ChapterNo)
+				}
+			}
+		}
+	}
+
+	// 4d. 生成章末精确状态快照（解决前后章节不连贯问题的核心机制）
+	// 提取各角色位置/状态/最后动作 + 悬而未决动作 + 下章接续建议。
+	// 供下一章 getPreviousChapterEnding 使用，使连续性从"情感钩子"升级为"精确叙事状态"。
+	if chapter.ChapterEndState == "" && chapter.Content != "" {
+		if endState := s.generateChapterEndState(tenantID, chapter, novel); endState != "" {
+			if fresh, fetchErr := s.chapterRepo.GetByID(chapter.ID); fetchErr == nil {
+				fresh.ChapterEndState = endState
+				if updateErr := s.chapterRepo.Update(fresh); updateErr != nil {
+					logger.Printf("postProcessChapter: update chapter %d [chapter_end_state]: %v", chapter.ID, updateErr)
+				} else {
+					chapter = fresh
+					logger.Printf("[ChapterService] chapter_end_state generated for ch%d", chapter.ChapterNo)
+				}
+			}
+		}
+	}
+
+	// 4e. 大纲剧情点覆盖率检查（解决章节内容与大纲相关性低的问题）
+	// 提取本章大纲规定的剧情点，检查是否全部在正文中作为实际剧情展开；
+	// 若有缺失，AI 自动补写对应段落并集成到章节内容中。
+	if chapter.Content != "" {
+		meta := s.extractChapterMeta(chapter.NovelID, chapter.ChapterNo)
+		if len(meta.plotPoints) > 0 {
+			logger.Printf("[ChapterService] postProcessChapter: ch%d checking plot point compliance (%d points)",
+				chapter.ChapterNo, len(meta.plotPoints))
+			if fresh, fetchErr := s.chapterRepo.GetByID(chapter.ID); fetchErr == nil {
+				if patched := s.checkAndPatchMissingPlotPoints(tenantID, fresh, novel, meta.plotPoints); patched {
+					if updateErr := s.chapterRepo.Update(fresh); updateErr != nil {
+						logger.Printf("postProcessChapter: update chapter %d [plot_compliance_patch]: %v", chapter.ID, updateErr)
+					} else {
+						chapter = fresh
+						logger.Printf("[ChapterService] plot compliance patch applied for ch%d (new wordCount=%d)",
+							chapter.ChapterNo, chapter.WordCount)
+					}
+				}
+			}
+		}
+	}
+
 	// 5. 触发弧摘要（每 arcSize 章触发一次）
 	// 注：角色快照已在 GenerateChapter Step 5b 同步提取，此处不再重复。
 	if s.narrativeSvc != nil {
@@ -1694,23 +1819,80 @@ func (s *ChapterService) buildForeshadowHints(novelID uint, chapterNo int) strin
 	var hints strings.Builder
 	count := 0
 
-	// 来源1：旧伏笔系统（ForeshadowService）
-	if s.contextSvc != nil && s.contextSvc.foreshadowSvc != nil {
+	// 来源1：专用伏笔表（带生命周期分类）
+	if s.foreshadowRepo != nil {
+		foreshadows, err := s.foreshadowRepo.ListUnfulfilled(novelID, 0) // tenantID=0 means all
+		if err == nil {
+			// 按重要程度排序：critical > major > normal
+			urgency := func(f *model.Foreshadow) int {
+				switch f.Importance {
+				case "critical":
+					return 3
+				case "major":
+					return 2
+				default:
+					return 1
+				}
+			}
+			// 分类显示
+			for _, fs := range foreshadows {
+				if count >= 5 {
+					break
+				}
+				// 判断生命周期状态
+				lifecycle := "planted"
+				if fs.PayoffChapterNo > 0 {
+					remaining := fs.PayoffChapterNo - chapterNo
+					if remaining <= 3 && remaining >= 0 {
+						lifecycle = "ripening" // 临近回收时机
+					} else if remaining < 0 {
+						lifecycle = "overdue" // 已过预期回收时机
+					}
+				}
+				var prefix string
+				switch lifecycle {
+				case "overdue":
+					prefix = fmt.Sprintf("⚠️ 【逾期未回收】「%s」（第%d章种下，预计第%d章回收，已过期%d章）",
+						fs.Title, fs.PlantedChapterNo, fs.PayoffChapterNo, chapterNo-fs.PayoffChapterNo)
+				case "ripening":
+					prefix = fmt.Sprintf("🔔 【即将回收】「%s」（第%d章种下，预计第%d章回收，还剩%d章）",
+						fs.Title, fs.PlantedChapterNo, fs.PayoffChapterNo, fs.PayoffChapterNo-chapterNo)
+				default:
+					if urgency(fs) >= 2 {
+						prefix = fmt.Sprintf("📌 【重要伏笔】「%s」（第%d章种下）",
+							fs.Title, fs.PlantedChapterNo)
+					} else {
+						prefix = fmt.Sprintf("- 未回收伏笔：「%s」（第%d章种下）",
+							fs.Title, fs.PlantedChapterNo)
+					}
+				}
+				if fs.Description != "" {
+					hints.WriteString(prefix + "：" + fs.Description + "\n")
+				} else {
+					hints.WriteString(prefix + "\n")
+				}
+				count++
+			}
+		}
+	}
+
+	// 来源2：旧伏笔系统（ForeshadowService）
+	if s.contextSvc != nil && s.contextSvc.foreshadowSvc != nil && count < 3 {
 		foreshadows, err := s.contextSvc.foreshadowSvc.CheckForeshadowStatus(novelID, chapterNo)
 		if err == nil {
 			for _, fs := range foreshadows {
+				if count >= 5 {
+					break
+				}
 				if !fs.IsFulfilled && chapterNo-fs.ChapterNo >= 3 {
 					hints.WriteString(fmt.Sprintf("- 请考虑回收伏笔：「%s」（第%d章埋设）\n", fs.Description, fs.ChapterNo))
 					count++
-					if count >= 3 {
-						break
-					}
 				}
 			}
 		}
 	}
 
-	// 来源2：PlotPoint 表中未解决的伏笔与冲突（最多补充至5条）
+	// 来源3：PlotPoint 表中未解决的伏笔与冲突（最多补充至5条）
 	if s.plotPointRepo != nil && count < 5 {
 		pps, err := s.plotPointRepo.ListByNovel(novelID, "", true) // unresolved only
 		if err == nil {
@@ -1764,13 +1946,46 @@ func (s *ChapterService) getPreviousChapterEnding(novelID uint, chapterNo int) s
 
 	var sb strings.Builder
 
-	// 1. 优先使用独立保存的章末钩子（直接悬念点）
-	if prev.ChapterHook != "" {
-		sb.WriteString("【章末情节】" + prev.ChapterHook)
+	// 1. 优先使用结构化章末状态快照（最精确的连续性锚点）
+	if prev.ChapterEndState != "" {
+		var endState struct {
+			Characters []struct {
+				Name       string `json:"name"`
+				Location   string `json:"location"`
+				State      string `json:"state"`
+				LastAction string `json:"last_action"`
+			} `json:"characters"`
+			SceneEnd      string `json:"scene_end"`
+			PendingAction string `json:"pending_action"`
+			OpeningHint   string `json:"opening_hint"`
+		}
+		if parseErr := json.Unmarshal([]byte(prev.ChapterEndState), &endState); parseErr == nil {
+			sb.WriteString("【章末精确状态——本章必须从以下状态直接接续，禁止重复任何已发生情节】\n")
+			if endState.SceneEnd != "" {
+				sb.WriteString("场景：" + endState.SceneEnd + "\n")
+			}
+			for _, c := range endState.Characters {
+				sb.WriteString(fmt.Sprintf("  %s → 位置：%s | 状态：%s | 最后动作：%s\n",
+					c.Name, c.Location, c.State, c.LastAction))
+			}
+			if endState.PendingAction != "" {
+				sb.WriteString("⚡ 未完成动作/冲突：" + endState.PendingAction + "\n")
+			}
+			if endState.OpeningHint != "" {
+				sb.WriteString("➤ 下章接续建议：" + endState.OpeningHint + "\n")
+			}
+		} else {
+			// JSON 解析失败，直接用原始内容
+			sb.WriteString("【章末状态】" + prev.ChapterEndState)
+		}
+	} else if prev.ChapterHook != "" {
+		// 2. 次优：章末钩子（情感悬念点）
+		sb.WriteString("【章末悬念】" + prev.ChapterHook)
 	} else if prev.Summary != "" {
+		// 3. 降级：摘要
 		sb.WriteString("【上章摘要】" + prev.Summary)
 	} else {
-		// 从内容末尾截取约300字
+		// 4. 最终降级：末尾 300 字
 		content := []rune(prev.Content)
 		if len(content) > 300 {
 			content = content[len(content)-300:]
@@ -1778,8 +1993,8 @@ func (s *ChapterService) getPreviousChapterEnding(novelID uint, chapterNo int) s
 		sb.WriteString("【上章结尾】…" + string(content))
 	}
 
-	// 2. 附加主角当前快照状态（防止主角位置/状态漂移）
-	if s.characterRepo != nil && s.snapshotRepo != nil {
+	// 仅在无结构化状态时，才附加主角快照（结构化状态已包含角色位置信息）
+	if prev.ChapterEndState == "" && s.characterRepo != nil && s.snapshotRepo != nil {
 		chars, charErr := s.characterRepo.ListByNovel(novelID)
 		if charErr == nil {
 			for _, c := range chars {
@@ -1797,6 +2012,308 @@ func (s *ChapterService) getPreviousChapterEnding(novelID uint, chapterNo int) s
 	}
 
 	return sb.String()
+}
+
+// buildPreviousReaderExpectations fetches the reader_expectations field of the previous
+// chapter (if any) and formats it as a numbered list for prompt injection.
+func (s *ChapterService) buildPreviousReaderExpectations(novelID uint, chapterNo int) string {
+	if chapterNo <= 1 {
+		return ""
+	}
+	prev, err := s.chapterRepo.GetByNovelAndChapterNo(novelID, chapterNo-1)
+	if err != nil || prev == nil || prev.ReaderExpectations == "" {
+		return ""
+	}
+	var expectations []string
+	if err := json.Unmarshal([]byte(prev.ReaderExpectations), &expectations); err != nil {
+		return prev.ReaderExpectations // fallback: return raw string
+	}
+	if len(expectations) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for i, exp := range expectations {
+		sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, exp))
+	}
+	return sb.String()
+}
+
+// buildCharacterArcContext formats the arc design + current stage of protagonist characters
+// into a compact prompt section. Uses Character.ArcDesign (planned arc) and CurrentArcStage.
+func (s *ChapterService) buildCharacterArcContext(novelID uint, chapterNo int) string {
+	if s.characterRepo == nil {
+		return ""
+	}
+	chars, err := s.characterRepo.ListByNovel(novelID)
+	if err != nil || len(chars) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	for _, c := range chars {
+		if c.ArcDesign == "" && c.CurrentArcStage == "" {
+			continue
+		}
+		// Only inject for major characters (protagonist/antagonist)
+		role := strings.ToLower(c.Role)
+		if role != "protagonist" && role != "antagonist" && role != "主角" && role != "反派" {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("**%s**（%s）\n", c.Name, c.Role))
+		if c.CurrentArcStage != "" {
+			sb.WriteString(fmt.Sprintf("  当前弧光阶段：%s\n", c.CurrentArcStage))
+		}
+		if c.ArcDesign != "" {
+			// Parse arc design to find which stage should be active for this chapter
+			var arcStages []struct {
+				Stage       string `json:"stage"`
+				Desc        string `json:"desc"`
+				TargetRange [2]int `json:"target_range"`
+			}
+			if err := json.Unmarshal([]byte(c.ArcDesign), &arcStages); err == nil {
+				for _, stage := range arcStages {
+					if len(stage.TargetRange) == 2 &&
+						chapterNo >= stage.TargetRange[0] && chapterNo <= stage.TargetRange[1] {
+						sb.WriteString(fmt.Sprintf("  弧光设计（第%d-%d章阶段）：【%s】%s\n",
+							stage.TargetRange[0], stage.TargetRange[1], stage.Stage, stage.Desc))
+						break
+					}
+				}
+			}
+		}
+	}
+	return sb.String()
+}
+
+// buildTensionBudget checks if recent chapters have been consecutively high-tension.
+// If 3+ consecutive chapters have tension >= 7, warns to insert a recovery chapter.
+func (s *ChapterService) buildTensionBudget(novelID uint, chapterNo, currentTension int) string {
+	if chapterNo < 4 {
+		return ""
+	}
+	// Look at the last 3 chapters' tension levels
+	highCount := 0
+	for lookback := 1; lookback <= 3; lookback++ {
+		ch, err := s.chapterRepo.GetByNovelAndChapterNo(novelID, chapterNo-lookback)
+		if err != nil || ch == nil {
+			break
+		}
+		if ch.TensionLevel >= 7 {
+			highCount++
+		} else {
+			break // stop at first non-high chapter
+		}
+	}
+	if highCount >= 3 {
+		return fmt.Sprintf("⚠️ 张力预算警告：前%d章持续高张力（≥7），本章建议插入缓冲场景（至少1个张力≤4的场景），让读者喘息并强化下一轮高张力的冲击力。", highCount)
+	}
+	if currentTension <= 4 && highCount >= 2 {
+		return "✅ 缓冲章：本章张力适当降低，有利于节奏恢复。建议至少1个场景深化人物关系或揭示背景信息，为下一波高张力做情感铺垫。"
+	}
+	return ""
+}
+
+// generateReaderExpectations calls AI to extract what readers most want to know after this chapter.
+func (s *ChapterService) generateReaderExpectations(tenantID uint, chapter *model.Chapter, novel *model.Novel) string {
+	if chapter.Summary == "" {
+		return ""
+	}
+	prompt, err := renderPrompt("reader_expectation", map[string]interface{}{
+		"NovelTitle":   novel.Title,
+		"Genre":        novel.Genre,
+		"ChapterNo":    chapter.ChapterNo,
+		"ChapterTitle": chapter.Title,
+		"ChapterHook":  chapter.ChapterHook,
+		"Summary":      chapter.Summary,
+	})
+	if err != nil {
+		logger.Printf("[ChapterService] generateReaderExpectations: render template: %v", err)
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "reader_expectation", prompt, "", StoryboardOverrides{MaxTokens: 512})
+	if err != nil {
+		logger.Printf("[ChapterService] generateReaderExpectations ch%d: AI error: %v", chapter.ChapterNo, err)
+		return ""
+	}
+	result = strings.TrimSpace(extractJSON(result))
+	// Validate it's a proper JSON object with reader_expectations key
+	var parsed struct {
+		ReaderExpectations []string `json:"reader_expectations"`
+	}
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil || len(parsed.ReaderExpectations) == 0 {
+		logger.Printf("[ChapterService] generateReaderExpectations ch%d: unexpected format: %v", chapter.ChapterNo, err)
+		return ""
+	}
+	out, _ := json.Marshal(parsed.ReaderExpectations)
+	return string(out)
+}
+
+// generateChapterEndState extracts a structured end-state snapshot from chapter content.
+// This snapshot is the primary continuity anchor used by the next chapter's getPreviousChapterEnding.
+// It records exact character positions/states/last-actions, scene, and any pending action.
+func (s *ChapterService) generateChapterEndState(tenantID uint, chapter *model.Chapter, novel *model.Novel) string {
+	if chapter.Content == "" {
+		return ""
+	}
+	// Use the last ~1500 runes for extraction (captures end-state context)
+	content := []rune(chapter.Content)
+	ending := string(content)
+	if len(content) > 1500 {
+		ending = string(content[len(content)-1500:])
+	}
+	prompt, err := renderPrompt("chapter_end_state", map[string]interface{}{
+		"NovelTitle":    novel.Title,
+		"ChapterNo":     chapter.ChapterNo,
+		"ChapterTitle":  chapter.Title,
+		"ChapterEnding": ending,
+	})
+	if err != nil {
+		logger.Printf("[generateChapterEndState] render prompt error: %v", err)
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "chapter_end_state", prompt, "", StoryboardOverrides{MaxTokens: 1024})
+	if err != nil {
+		logger.Printf("[generateChapterEndState] ch%d AI error: %v", chapter.ChapterNo, err)
+		return ""
+	}
+	cleaned := strings.TrimSpace(extractJSON(result))
+	// Validate JSON structure
+	var check struct {
+		Characters    []map[string]string `json:"characters"`
+		SceneEnd      string              `json:"scene_end"`
+		PendingAction string              `json:"pending_action"`
+		OpeningHint   string              `json:"opening_hint"`
+	}
+	if jsonErr := json.Unmarshal([]byte(cleaned), &check); jsonErr != nil {
+		logger.Printf("[generateChapterEndState] ch%d invalid JSON: %v (raw: %.200s)", chapter.ChapterNo, jsonErr, cleaned)
+		return ""
+	}
+	return cleaned
+}
+
+// checkAndPatchMissingPlotPoints checks whether all outline plot points are covered in the
+// generated chapter content. If any are missing, it calls AI to write targeted patches
+// and integrates them into the chapter content. This directly solves 章节内容和章节大纲相关性低.
+func (s *ChapterService) checkAndPatchMissingPlotPoints(tenantID uint, chapter *model.Chapter, novel *model.Novel, plotPoints []string) bool {
+	if len(plotPoints) == 0 || chapter.Content == "" {
+		return false
+	}
+
+	// Limit content length sent to AI to avoid token overflow
+	content := chapter.Content
+	contentRunes := []rune(content)
+	if len(contentRunes) > 6000 {
+		content = string(contentRunes[:6000]) + "\n…（正文超长，已截断，以上为前6000字）"
+	}
+
+	plotPointsText := ""
+	for _, pp := range plotPoints {
+		plotPointsText += "- " + pp + "\n"
+	}
+
+	prompt, err := renderPrompt("chapter_plot_compliance", map[string]interface{}{
+		"NovelTitle":     novel.Title,
+		"ChapterNo":      chapter.ChapterNo,
+		"PlotPoints":     plotPointsText,
+		"ChapterContent": content,
+	})
+	if err != nil {
+		logger.Printf("[checkAndPatchMissingPlotPoints] render prompt error: %v", err)
+		return false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "chapter_plot_compliance", prompt, "", StoryboardOverrides{MaxTokens: 4096})
+	if err != nil {
+		logger.Printf("[checkAndPatchMissingPlotPoints] ch%d AI error: %v", chapter.ChapterNo, err)
+		return false
+	}
+
+	cleaned := strings.TrimSpace(extractJSON(result))
+	var complianceResult struct {
+		Coverage []struct {
+			PlotPoint string `json:"plot_point"`
+			Covered   bool   `json:"covered"`
+			Evidence  string `json:"evidence"`
+		} `json:"coverage"`
+		Patches []struct {
+			PlotPoint   string `json:"plot_point"`
+			InsertAfter string `json:"insert_after"`
+			Content     string `json:"content"`
+		} `json:"patches"`
+	}
+	if jsonErr := json.Unmarshal([]byte(cleaned), &complianceResult); jsonErr != nil {
+		logger.Printf("[checkAndPatchMissingPlotPoints] ch%d parse error: %v", chapter.ChapterNo, jsonErr)
+		return false
+	}
+
+	// Log coverage status
+	uncovered := 0
+	for _, cov := range complianceResult.Coverage {
+		if !cov.Covered {
+			uncovered++
+			logger.Printf("[checkAndPatchMissingPlotPoints] ch%d MISSING plot point: %s", chapter.ChapterNo, truncateForPrompt(cov.PlotPoint, 50))
+		}
+	}
+	if uncovered == 0 || len(complianceResult.Patches) == 0 {
+		logger.Printf("[checkAndPatchMissingPlotPoints] ch%d all plot points covered (%d total)", chapter.ChapterNo, len(complianceResult.Coverage))
+		return false
+	}
+
+	// Apply patches: integrate missing plot point content into the chapter
+	patched := chapter.Content
+	for _, p := range complianceResult.Patches {
+		if p.Content == "" {
+			continue
+		}
+		if p.InsertAfter == "章节末尾" || p.InsertAfter == "" {
+			patched = patched + "\n\n" + p.Content
+		} else {
+			// Find insert position by searching for the anchor text
+			if idx := strings.Index(patched, p.InsertAfter); idx >= 0 {
+				// Insert after the paragraph that contains InsertAfter
+				paraEnd := strings.Index(patched[idx:], "\n\n")
+				if paraEnd >= 0 {
+					insertPos := idx + paraEnd + 2
+					patched = patched[:insertPos] + p.Content + "\n\n" + patched[insertPos:]
+				} else {
+					patched = patched + "\n\n" + p.Content
+				}
+			} else {
+				patched = patched + "\n\n" + p.Content
+			}
+		}
+		logger.Printf("[checkAndPatchMissingPlotPoints] ch%d patched missing plot point: %s",
+			chapter.ChapterNo, truncateForPrompt(p.PlotPoint, 50))
+	}
+
+	if patched != chapter.Content {
+		chapter.Content = patched
+		chapter.WordCount = countChineseChars(patched)
+		return true
+	}
+	return false
+}
+
+// computeChapterType classifies the chapter as one of four narrative types based on
+// tension level and hook type. The type drives type-specific scene design rules in
+// chapter_scene_outline.j2.
+func computeChapterType(tensionLevel int, hookType string, actNo int) string {
+	hook := strings.ToLower(hookType)
+	if tensionLevel >= 8 || hook == "cliffhanger" || hook == "revelation" || hook == "大结局" {
+		return "高潮章"
+	}
+	if tensionLevel <= 4 && actNo > 1 {
+		return "反思章"
+	}
+	if tensionLevel >= 6 {
+		return "事件章"
+	}
+	return "关系章"
 }
 
 // extractChapterHook 从 AI 生成的原始内容中分离正文与章末钩子。

@@ -242,6 +242,9 @@ func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequ
 	if req.PromptLanguage != "" {
 		novel.PromptLanguage = req.PromptLanguage
 	}
+	if req.CoreTheme != "" {
+		novel.CoreTheme = req.CoreTheme
+	}
 	if req.AutoReviewRounds != nil {
 		rounds := *req.AutoReviewRounds
 		if rounds < 0 {

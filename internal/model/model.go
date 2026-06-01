@@ -151,6 +151,9 @@ type Novel struct {
 	AutoReviewRounds   int     `json:"auto_review_rounds" gorm:"default:0"`    // 0=关闭，1-3=开启 N 轮
 	AutoReviewMinScore float64 `json:"auto_review_min_score" gorm:"default:80"` // 达到此分数后提前停止
 
+	// 核心主题（全书叙事意图，如"信任比力量更难获得"——指导所有场景的深层意义）
+	CoreTheme string `json:"core_theme,omitempty" gorm:"type:text"`
+
 	// 视频/字幕配置（已迁移至 ink_novel_video_config，通过 VideoConfig 关联访问）
 	VideoConfig *NovelVideoConfig `json:"video_config,omitempty" gorm:"foreignKey:NovelID;constraint:OnUpdate:CASCADE,OnDelete:CASCADE"`
 
@@ -296,6 +299,14 @@ type Chapter struct {
 	QualityStatus string `json:"quality_status" gorm:"size:20;default:'ok'"`
 	// QualityIssues 质量问题 JSON 摘要（仅在 QualityStatus="low" 时写入）
 	QualityIssues string `json:"quality_issues,omitempty" gorm:"type:text"`
+
+	// 读者期待状态（章末 AI 提炼的"读者最想在下章得到解答的问题"，供下一章生成时作为首要约束）
+	ReaderExpectations string `json:"reader_expectations,omitempty" gorm:"type:text"`
+
+	// ChapterEndState 章末精确状态快照（结构化 JSON，记录各角色位置/状态/最后动作 + 场景描述 + 悬而未决动作）
+	// 供下一章 getPreviousChapterEnding 使用，解决前后章节内容不连贯问题。
+	// JSON格式: {"characters":[{"name":"...","location":"...","state":"...","last_action":"..."}],"scene_end":"...","pending_action":"...","opening_hint":"..."}
+	ChapterEndState string `json:"chapter_end_state,omitempty" gorm:"type:text"`
 
 	// 广场发布状态（与内容状态解耦）
 	IsPublished bool       `json:"is_published" gorm:"default:false;index"`
@@ -592,6 +603,7 @@ type UpdateNovelRequest struct {
 	StylePrompt    string `json:"style_prompt"`
 	ImageStyle     string `json:"image_style"`
 	PromptLanguage string `json:"prompt_language"`
+	CoreTheme      string `json:"core_theme"` // 全书核心主题
 	// 自动审查
 	AutoReviewRounds   *int     `json:"auto_review_rounds"`
 	AutoReviewMinScore *float64 `json:"auto_review_min_score"`
@@ -669,8 +681,13 @@ type Foreshadow struct {
 	Description      string `json:"description" gorm:"type:text"`
 	PlantedChapterID *uint  `json:"planted_chapter_id,omitempty" gorm:"index"`
 	PayoffChapterID  *uint  `json:"payoff_chapter_id,omitempty" gorm:"index"`
-	Status           string `json:"status" gorm:"size:20;default:'planted'"` // planted, paid_off, abandoned
+	Status           string `json:"status" gorm:"size:20;default:'planted'"` // planted, ripening, paid_off, abandoned
 	Tags             string `json:"tags" gorm:"size:500"`
+
+	// 生命周期增强字段
+	PlantedChapterNo int    `json:"planted_chapter_no" gorm:"default:0"`       // 种下的章节序号
+	PayoffChapterNo  int    `json:"payoff_chapter_no" gorm:"default:0"`         // 预期回收章节序号（0=未规划）
+	Importance       string `json:"importance" gorm:"size:20;default:'normal'"` // critical/major/minor
 }
 
 func (Foreshadow) TableName() string { return "ink_foreshadow" }

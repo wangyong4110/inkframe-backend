@@ -8,7 +8,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-06-01-v8"
+const schemaVersion = "2026-06-02-v2"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -105,6 +105,16 @@ func ensureCriticalColumns(db *gorm.DB) {
 		// ink_novel 自动审查配置（2026-06-01 新增）
 		{"ink_novel", "auto_review_rounds",    "INT NOT NULL DEFAULT 0"},
 		{"ink_novel", "auto_review_min_score", "DOUBLE NOT NULL DEFAULT 80"},
+		// 专业小说质量改进（2026-06-02 新增）
+		{"ink_novel",      "core_theme",           "TEXT NULL"},                              // 全书核心主题
+		{"ink_chapter",    "reader_expectations",  "TEXT NULL"},                              // 读者期待状态
+		{"ink_character",  "arc_design",           "TEXT NULL"},                              // 角色弧光设计 JSON
+		{"ink_character",  "current_arc_stage",    "VARCHAR(50) NULL"},                       // 当前弧光阶段
+		{"ink_foreshadow", "planted_chapter_no",   "INT NOT NULL DEFAULT 0"},                 // 种下章节序号
+		{"ink_foreshadow", "payoff_chapter_no",    "INT NOT NULL DEFAULT 0"},                 // 预期回收章节序号
+		{"ink_foreshadow", "importance",           "VARCHAR(20) NOT NULL DEFAULT 'normal'"}, // 重要程度
+		// 章节连贯性修复（2026-06-02-v2 新增）
+		{"ink_chapter", "chapter_end_state", "TEXT NULL"}, // 章末精确状态快照（供下一章连续性锚点）
 	}
 	for _, a := range additions {
 		// 先查 information_schema，列已存在则跳过，避免触发 GORM 的 Error 1060 日志
