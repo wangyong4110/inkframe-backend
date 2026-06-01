@@ -408,6 +408,7 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 		WithItemService(itemSvc).
 		WithPlotPointService(core.PlotPoint).
 		WithSceneAnchorService(sceneAnchorSvc).
+		WithForeshadowRepo(repos.ForeshadowRepo).
 		WithTaskService(core.Task).
 		WithModelRepo(repos.AIModelRepo)
 

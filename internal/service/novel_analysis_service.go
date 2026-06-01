@@ -63,6 +63,7 @@ type NovelAnalysisService struct {
 	aiService          *AIService
 	plotPointService   *PlotPointService
 	sceneAnchorService *SceneAnchorService
+	foreshadowRepo     *repository.ForeshadowRepository
 	taskSvc            *TaskService
 	modelRepo          *repository.AIModelRepository // optional, for voice auto-suggestion
 	cleanupStop        chan struct{} // closed by Shutdown() to stop background goroutines
@@ -124,6 +125,12 @@ func (s *NovelAnalysisService) WithPlotPointService(svc *PlotPointService) *Nove
 // WithSceneAnchorService 注入场景锚点服务（可选，支持场景锚点提取步骤）
 func (s *NovelAnalysisService) WithSceneAnchorService(svc *SceneAnchorService) *NovelAnalysisService {
 	s.sceneAnchorService = svc
+	return s
+}
+
+// WithForeshadowRepo 注入伏笔仓库（可选，支持伏笔提取步骤）
+func (s *NovelAnalysisService) WithForeshadowRepo(repo *repository.ForeshadowRepository) *NovelAnalysisService {
+	s.foreshadowRepo = repo
 	return s
 }
 
@@ -247,8 +254,8 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 	}
 	task.setProgress(20)
 
-	// ── Phase 2: 并发提取 角色/物品/世界观/剧情点/场景锚点 (20→70)，最多 6 分钟 ──
-	task.setStep("正在同步提取角色、物品、世界观、剧情点、场景锚点...")
+	// ── Phase 2: 并发提取 角色/物品/世界观/剧情点/场景锚点/伏笔 (20→70)，最多 6 分钟 ──
+	task.setStep("正在同步提取角色、物品、世界观、剧情点、场景锚点、伏笔...")
 	{
 		phase2Ctx, phase2Cancel := context.WithTimeout(ctx, 6*time.Minute)
 		defer phase2Cancel()
@@ -275,6 +282,9 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 			}},
 			{"场景锚点", func() error {
 				return s.stepExtractSceneAnchors(phase2Ctx, task, tenantID, novel, chapters)
+			}},
+			{"伏笔", func() error {
+				return s.stepExtractForeshadows(phase2Ctx, task, tenantID, novel, chapters)
 			}},
 			}
 
@@ -1202,6 +1212,96 @@ func (s *NovelAnalysisService) stepExtractSceneAnchors(
 		}()
 	}
 	wg.Wait()
+	return nil
+}
+
+// stepExtractForeshadows 从章节摘要中提取伏笔线索
+func (s *NovelAnalysisService) stepExtractForeshadows(
+	ctx context.Context, task *AnalysisTask, tenantID uint, novel *model.Novel, chapters []*model.Chapter,
+) error {
+	logger.Printf("[NovelAnalysis] stepExtractForeshadows: novelID=%d", novel.ID)
+	if s.foreshadowRepo == nil {
+		return nil
+	}
+	// 若已有伏笔则跳过
+	existing, _ := s.foreshadowRepo.ListByNovel(novel.ID, tenantID)
+	if len(existing) > 0 {
+		logger.Printf("NovelAnalysis[%d]: foreshadows already exist (%d), skip", novel.ID, len(existing))
+		return nil
+	}
+
+	summariesText := buildChapterSummariesText(chapters, 20, 8000)
+	if summariesText == "" {
+		return nil
+	}
+
+	// 构建章节编号 → ID 映射，用于关联 planted_chapter_id
+	chapterNoToID := make(map[int]uint, len(chapters))
+	for _, ch := range chapters {
+		chapterNoToID[ch.ChapterNo] = ch.ID
+	}
+
+	prompt, err := renderPrompt("extract_foreshadows", map[string]interface{}{
+		"NovelTitle": novel.Title,
+		"Genre":      novel.Genre,
+		"Summaries":  summariesText,
+	})
+	if err != nil {
+		return fmt.Errorf("render extract_foreshadows prompt: %w", err)
+	}
+
+	result, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "extract_foreshadows", prompt, "",
+		StoryboardOverrides{MaxTokens: 4096})
+	if err != nil {
+		return fmt.Errorf("AI foreshadow extraction: %w", err)
+	}
+
+	type foreshadowJSON struct {
+		Title            string `json:"title"`
+		Description      string `json:"description"`
+		PlantedChapterNo int    `json:"planted_chapter_no"`
+		Status           string `json:"status"`
+		Tags             string `json:"tags"`
+	}
+
+	raw := extractJSON(result)
+	var items []foreshadowJSON
+	var wrapped struct {
+		Foreshadows []foreshadowJSON `json:"foreshadows"`
+	}
+	if err := json.Unmarshal([]byte(raw), &wrapped); err == nil && len(wrapped.Foreshadows) > 0 {
+		items = wrapped.Foreshadows
+	} else if err2 := json.Unmarshal([]byte(raw), &items); err2 != nil {
+		logger.Printf("NovelAnalysis[%d]: foreshadow parse error: %v, raw: %.200s", novel.ID, err, result)
+		return fmt.Errorf("failed to parse foreshadow AI response")
+	}
+
+	for _, item := range items {
+		if item.Title == "" {
+			continue
+		}
+		status := item.Status
+		if status == "" {
+			status = "planted"
+		}
+		f := &model.Foreshadow{
+			TenantID:    tenantID,
+			NovelID:     novel.ID,
+			Title:       item.Title,
+			Description: item.Description,
+			Status:      status,
+			Tags:        item.Tags,
+		}
+		if item.PlantedChapterNo > 0 {
+			if chID, ok := chapterNoToID[item.PlantedChapterNo]; ok {
+				f.PlantedChapterID = &chID
+			}
+		}
+		if err := s.foreshadowRepo.Create(f); err != nil {
+			logger.Printf("NovelAnalysis[%d]: create foreshadow %q: %v", novel.ID, f.Title, err)
+		}
+	}
+	logger.Printf("NovelAnalysis[%d]: created %d foreshadows", novel.ID, len(items))
 	return nil
 }
 
