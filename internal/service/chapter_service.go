@@ -1908,6 +1908,10 @@ func (s *ChapterService) RegenerateChapter(tenantID uint, id uint, req *model.Ge
 	req.NovelID = chapter.NovelID
 	req.ChapterNo = chapter.ChapterNo
 
+	// Reset status to "draft" so AtomicSetGenerating in GenerateChapter can acquire the lock.
+	// A completed/generating chapter would otherwise be blocked by the optimistic-lock guard.
+	_ = s.chapterRepo.UpdateStatus(chapter.ID, chapter.NovelID, "draft")
+
 	// Delegate to the full generation pipeline (scene outline → full chapter → refinement → post-processing)
 	return s.GenerateChapter(tenantID, chapter.NovelID, req)
 }
