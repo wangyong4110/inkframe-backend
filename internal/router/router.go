@@ -470,7 +470,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 
 		// 伏笔（专用表 ink_foreshadow）
 		if cfg.ForeshadowHandler != nil {
-			foreshadows := v1.Group("/novels/:novel_id/foreshadows")
+			foreshadows := v1.Group("/novels/:id/foreshadows")
 			{
 				foreshadows.GET("", cfg.ForeshadowHandler.ListForeshadows)
 				foreshadows.POST("", cfg.ForeshadowHandler.CreateForeshadow)

@@ -18,9 +18,9 @@ func NewForeshadowHandler(svc *service.ForeshadowCRUDService) *ForeshadowHandler
 	return &ForeshadowHandler{svc: svc}
 }
 
-// ListForeshadows GET /novels/:novel_id/foreshadows
+// ListForeshadows GET /novels/:id/foreshadows
 func (h *ForeshadowHandler) ListForeshadows(c *gin.Context) {
-	novelID, ok := parseID(c, "novel_id")
+	novelID, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
@@ -33,9 +33,9 @@ func (h *ForeshadowHandler) ListForeshadows(c *gin.Context) {
 	respondOK(c, gin.H{"foreshadows": list, "total": len(list)})
 }
 
-// CreateForeshadow POST /novels/:novel_id/foreshadows
+// CreateForeshadow POST /novels/:id/foreshadows
 func (h *ForeshadowHandler) CreateForeshadow(c *gin.Context) {
-	novelID, ok := parseID(c, "novel_id")
+	novelID, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
@@ -60,9 +60,9 @@ func (h *ForeshadowHandler) CreateForeshadow(c *gin.Context) {
 	respondCreated(c, f)
 }
 
-// ListUnfulfilledForeshadows GET /novels/:novel_id/foreshadows/unfulfilled
+// ListUnfulfilledForeshadows GET /novels/:id/foreshadows/unfulfilled
 func (h *ForeshadowHandler) ListUnfulfilledForeshadows(c *gin.Context) {
-	novelID, ok := parseID(c, "novel_id")
+	novelID, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
@@ -75,9 +75,9 @@ func (h *ForeshadowHandler) ListUnfulfilledForeshadows(c *gin.Context) {
 	respondOK(c, gin.H{"foreshadows": list, "total": len(list)})
 }
 
-// UpdateForeshadow PUT /novels/:novel_id/foreshadows/:foreshadow_id
+// UpdateForeshadow PUT /novels/:id/foreshadows/:foreshadow_id
 func (h *ForeshadowHandler) UpdateForeshadow(c *gin.Context) {
-	_, ok := parseID(c, "novel_id")
+	_, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
@@ -98,9 +98,9 @@ func (h *ForeshadowHandler) UpdateForeshadow(c *gin.Context) {
 	respondOK(c, f)
 }
 
-// DeleteForeshadow DELETE /novels/:novel_id/foreshadows/:foreshadow_id
+// DeleteForeshadow DELETE /novels/:id/foreshadows/:foreshadow_id
 func (h *ForeshadowHandler) DeleteForeshadow(c *gin.Context) {
-	_, ok := parseID(c, "novel_id")
+	_, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
