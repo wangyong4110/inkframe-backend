@@ -216,6 +216,11 @@ func NewAuth(jwtSecret string, rdb *redis.Client) gin.HandlerFunc {
 			panic("FATAL: jwt_secret is empty in production mode. Set server.jwt_secret in config.yaml")
 		}
 		logger.Printf("[Auth] WARNING: jwt_secret empty — dev-bypass active, all requests granted (tenant=1)")
+	} else if len(jwtSecret) < 32 {
+		if gin.Mode() == gin.ReleaseMode || os.Getenv("APP_ENV") == "production" {
+			panic("FATAL: jwt_secret is too short (must be at least 32 characters). Set a strong secret in config.yaml")
+		}
+		logger.Printf("[Auth] WARNING: jwt_secret is shorter than 32 characters — use a stronger secret in production")
 	}
 	return func(c *gin.Context) {
 		// ── 开发绕过模式（jwt_secret 为空且非生产） ────────────────────────
@@ -329,6 +334,18 @@ func RequireEmailVerified(db *gorm.DB) gin.HandlerFunc {
 			})
 			return
 		}
+		c.Next()
+	}
+}
+
+// SecurityHeaders adds common security response headers to every request.
+// HSTS is intentionally omitted — it should only be set when TLS is terminated
+// by this server directly, not behind a reverse proxy.
+func SecurityHeaders() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		c.Header("X-Content-Type-Options", "nosniff")
+		c.Header("X-Frame-Options", "DENY")
+		c.Header("Referrer-Policy", "strict-origin-when-cross-origin")
 		c.Next()
 	}
 }

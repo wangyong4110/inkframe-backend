@@ -60,4 +60,4 @@
 - 不输出结尾注释或说明文字
 - 正文写完即止，之后不再追加任何文字
 
-第{{ ChapterNo }}章 {{ Chapter.Title }}
+第{{ ChapterNo | default(0) }}章 {{ Chapter.Title | default("") }}

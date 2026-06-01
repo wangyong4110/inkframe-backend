@@ -4,49 +4,132 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/gocolly/colly/v2"
+	"github.com/gocolly/colly/v2/extensions"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"gorm.io/gorm"
 )
 
-// NovelCrawler 小说爬虫
+// siteDomains maps site key to allowed colly domain
+var siteDomains = map[string]string{
+	"qidian":   "www.qidian.com",
+	"jjwxc":    "www.jjwxc.net",
+	"zongheng": "book.zongheng.com",
+	"qimao":    "www.qimao.com",
+}
+
+// ---------------------------------------------------------------------------
+// CrawlConfig — per-crawl HTTP/parsing behavior
+// ---------------------------------------------------------------------------
+
+// CrawlConfig configures per-crawl HTTP/parsing behavior
+type CrawlConfig struct {
+	Concurrency   int    `json:"concurrency"`     // max parallel chapter fetches (1–5, default 1)
+	DelayMs       int    `json:"delay_ms"`        // base request delay in ms (default 2000)
+	RandomDelayMs int    `json:"random_delay_ms"` // extra random jitter in ms (default 3000)
+	UARotation    bool   `json:"ua_rotation"`     // rotate browser User-Agents (default true)
+	DetectCharset bool   `json:"detect_charset"`  // auto-detect GBK/GB2312 (default true)
+	CacheEnabled  bool   `json:"cache_enabled"`   // disk-cache responses (default false)
+	CacheDir      string `json:"cache_dir"`       // disk cache path, default "./.crawl_cache"
+	MaxRetries    int    `json:"max_retries"`     // retry attempts on error (default 3)
+	ProxyURL      string `json:"proxy_url"`       // optional HTTP/SOCKS5 proxy URL
+	SkipVIPChaps  bool   `json:"skip_vip_chaps"`  // skip paid chapters
+}
+
+func DefaultCrawlConfig() CrawlConfig {
+	return CrawlConfig{
+		Concurrency:   1,
+		DelayMs:       2000,
+		RandomDelayMs: 3000,
+		UARotation:    true,
+		DetectCharset: true,
+		MaxRetries:    3,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CrawlStats — download metrics across all collectors for one crawl session
+// ---------------------------------------------------------------------------
+
+// CrawlStats tracks download metrics across all collectors for one crawl session
+type CrawlStats struct {
+	mu              sync.Mutex
+	PagesVisited    int       `json:"pages_visited"`
+	BytesDownloaded int64     `json:"bytes_downloaded"`
+	SuccessCount    int       `json:"success_count"`
+	FailCount       int       `json:"fail_count"`
+	StartedAt       time.Time `json:"started_at"`
+}
+
+func (s *CrawlStats) recordResponse(bodyLen int64) {
+	s.mu.Lock()
+	s.PagesVisited++
+	s.BytesDownloaded += bodyLen
+	s.mu.Unlock()
+}
+func (s *CrawlStats) recordSuccess() { s.mu.Lock(); s.SuccessCount++; s.mu.Unlock() }
+func (s *CrawlStats) recordFail()    { s.mu.Lock(); s.FailCount++; s.mu.Unlock() }
+func (s *CrawlStats) ElapsedSeconds() float64 { return time.Since(s.StartedAt).Seconds() }
+func (s *CrawlStats) Snapshot() CrawlStats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return CrawlStats{
+		PagesVisited:    s.PagesVisited,
+		BytesDownloaded: s.BytesDownloaded,
+		SuccessCount:    s.SuccessCount,
+		FailCount:       s.FailCount,
+		StartedAt:       s.StartedAt,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ChapterFetchResult — one result from FetchChapterStream
+// ---------------------------------------------------------------------------
+
+// ChapterFetchResult is one result from FetchChapterStream
+type ChapterFetchResult struct {
+	Index   int // position in the input slice
+	Chapter *ChapterInfo
+	Content *ChapterContent
+	Err     error
+}
+
+// ---------------------------------------------------------------------------
+// NovelCrawler 小说爬虫 (colly-based)
+// ---------------------------------------------------------------------------
+
+// NovelCrawler 小说爬虫 (colly-based)
 type NovelCrawler struct {
-	db         *gorm.DB
-	httpClient *HTTPClient
-	parsers    map[string]NovelParser
-	rateLimit  time.Duration
+	db      *gorm.DB
+	parsers map[string]NovelParser
+	jar     *cookiejar.Jar // shared cookie jar across all collectors
+	config  CrawlConfig
+	stats   CrawlStats
 }
 
-type HTTPClient struct {
-	client  *http.Client
-	headers map[string]string
-}
-
+// NovelParser site-specific HTML parser.
+// root is the goquery.Selection of the <html> element from the page.
 type NovelParser interface {
-	// ParseNovelList 解析小说列表页
-	ParseNovelList(doc *goquery.Document) ([]*NovelInfo, error)
-
-	// ParseNovelDetail 解析小说详情页
-	ParseNovelDetail(doc *goquery.Document, url string) (*NovelDetail, error)
-
-	// ParseChapterList 解析章节列表
-	ParseChapterList(doc *goquery.Document) ([]*ChapterInfo, error)
-
-	// ParseChapter 解析章节内容
-	ParseChapter(doc *goquery.Document) (*ChapterContent, error)
-
-	// GetSiteName 获取站点名称
+	ParseNovelList(root *goquery.Selection) ([]*NovelInfo, error)
+	ParseNovelDetail(root *goquery.Selection, bookURL string) (*NovelDetail, error)
+	ParseChapterList(root *goquery.Selection) ([]*ChapterInfo, error)
+	ParseChapter(root *goquery.Selection) (*ChapterContent, error)
 	GetSiteName() string
+}
+
+// ChapterListFetcher optional extension: parser fetches chapter list via its own HTTP request
+// (e.g., Ajax API). Preferred over ParseChapterList; falls back to HTML parse on error.
+type ChapterListFetcher interface {
+	FetchChapterList(ctx context.Context, jar http.CookieJar, bookURL string) ([]*ChapterInfo, error)
 }
 
 // NovelInfo 小说信息
@@ -60,15 +143,15 @@ type NovelInfo struct {
 
 // NovelDetail 小说详情
 type NovelDetail struct {
-	Title         string `json:"title"`
-	Author        string `json:"author"`
-	Description   string `json:"description"`
-	Genre         string `json:"genre"`
+	Title         string   `json:"title"`
+	Author        string   `json:"author"`
+	Description   string   `json:"description"`
+	Genre         string   `json:"genre"`
 	Tags          []string `json:"tags"`
-	Status        string `json:"status"` // ongoing, completed
-	TotalChapters int    `json:"total_chapters"`
-	TotalWords    int    `json:"total_words"`
-	CoverURL      string `json:"cover_url"`
+	Status        string   `json:"status"` // ongoing, completed
+	TotalChapters int      `json:"total_chapters"`
+	TotalWords    int      `json:"total_words"`
+	CoverURL      string   `json:"cover_url"`
 }
 
 // ChapterInfo 章节信息
@@ -79,319 +162,431 @@ type ChapterInfo struct {
 	IsVip     bool   `json:"is_vip"` // 付费章节（内容可能无法爬取）
 }
 
-// ChapterListFetcher 可选扩展接口：解析器通过独立 HTTP 请求（如 Ajax API）获取章节列表
-// 优先于 ParseChapterList 使用；若失败则回退到 HTML 解析
-type ChapterListFetcher interface {
-	FetchChapterList(ctx context.Context, client *HTTPClient, bookURL string) ([]*ChapterInfo, error)
-}
-
 // ChapterContent 章节内容
 type ChapterContent struct {
-	Title    string `json:"title"`
-	Content  string `json:"content"`
-	PrevURL  string `json:"prev_url"`
-	NextURL  string `json:"next_url"`
+	Title   string `json:"title"`
+	Content string `json:"content"`
+	PrevURL string `json:"prev_url"`
+	NextURL string `json:"next_url"`
 }
 
 // NewNovelCrawler 创建爬虫
 func NewNovelCrawler(db *gorm.DB) *NovelCrawler {
-	crawler := &NovelCrawler{
-		db:        db,
-		httpClient: NewHTTPClient(),
-		parsers:   make(map[string]NovelParser),
-		rateLimit: 2 * time.Second,
+	jar, _ := cookiejar.New(nil)
+	c := &NovelCrawler{
+		db:      db,
+		parsers: make(map[string]NovelParser),
+		jar:     jar,
+		config:  DefaultCrawlConfig(),
 	}
-
-	// 注册解析器
-	crawler.parsers["qidian"] = NewQidianParser()
-	crawler.parsers["jjwxc"] = NewJjwxcParser()
-	crawler.parsers["zongheng"] = NewZonghengParser()
-	crawler.parsers["qimao"] = NewQimaoParser()
-
-	return crawler
+	c.parsers["qidian"] = NewQidianParser()
+	c.parsers["jjwxc"] = NewJjwxcParser()
+	c.parsers["zongheng"] = NewZonghengParser()
+	c.parsers["qimao"] = NewQimaoParser()
+	return c
 }
 
-// CrawlNovel 爬取小说
-func (c *NovelCrawler) CrawlNovel(ctx context.Context, url string) (*model.ReferenceNovel, error) {
-	// 识别站点
-	site := c.identifySite(url)
-	parser, ok := c.parsers[site]
+// SetConfig replaces the current crawl config.
+func (nc *NovelCrawler) SetConfig(cfg CrawlConfig) {
+	nc.config = cfg
+}
+
+// GetStats returns a snapshot of current crawl stats.
+func (nc *NovelCrawler) GetStats() CrawlStats {
+	return nc.stats.Snapshot()
+}
+
+// newCollector creates a colly.Collector configured with the shared cookie jar,
+// standard browser headers, 30 s timeout, and rate limiting based on config.
+func (nc *NovelCrawler) newCollector(domain string) *colly.Collector {
+	opts := []colly.CollectorOption{
+		colly.AllowedDomains(domain),
+		colly.AllowURLRevisit(),
+	}
+	if nc.config.DetectCharset {
+		opts = append(opts, colly.DetectCharset())
+	}
+	if nc.config.CacheEnabled {
+		cacheDir := nc.config.CacheDir
+		if cacheDir == "" {
+			cacheDir = "./.crawl_cache"
+		}
+		opts = append(opts, colly.CacheDir(cacheDir))
+	}
+
+	col := colly.NewCollector(opts...)
+	col.SetCookieJar(nc.jar)
+	col.SetRequestTimeout(30 * time.Second)
+
+	if nc.config.UARotation {
+		extensions.RandomUserAgent(col)
+	} else {
+		col.OnRequest(func(r *colly.Request) {
+			r.Headers.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+		})
+	}
+
+	col.OnRequest(func(r *colly.Request) {
+		r.Headers.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+		r.Headers.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+	})
+
+	if nc.config.ProxyURL != "" {
+		if err := col.SetProxy(nc.config.ProxyURL); err == nil {
+			// proxy set successfully
+			_ = err
+		}
+	}
+
+	col.OnResponse(func(r *colly.Response) {
+		nc.stats.recordResponse(int64(len(r.Body)))
+	})
+
+	_ = col.Limit(&colly.LimitRule{
+		DomainGlob:  "*",
+		Delay:       time.Duration(nc.config.DelayMs) * time.Millisecond,
+		RandomDelay: time.Duration(nc.config.RandomDelayMs) * time.Millisecond,
+	})
+	return col
+}
+
+// newAsyncCollector creates an async colly.Collector with parallelism support.
+func (nc *NovelCrawler) newAsyncCollector(domain string) *colly.Collector {
+	opts := []colly.CollectorOption{
+		colly.AllowedDomains(domain),
+		colly.AllowURLRevisit(),
+		colly.Async(true),
+	}
+	if nc.config.DetectCharset {
+		opts = append(opts, colly.DetectCharset())
+	}
+	if nc.config.CacheEnabled {
+		cacheDir := nc.config.CacheDir
+		if cacheDir == "" {
+			cacheDir = "./.crawl_cache"
+		}
+		opts = append(opts, colly.CacheDir(cacheDir))
+	}
+
+	col := colly.NewCollector(opts...)
+	col.SetCookieJar(nc.jar)
+	col.SetRequestTimeout(30 * time.Second)
+
+	if nc.config.UARotation {
+		extensions.RandomUserAgent(col)
+	} else {
+		col.OnRequest(func(r *colly.Request) {
+			r.Headers.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+		})
+	}
+
+	col.OnRequest(func(r *colly.Request) {
+		r.Headers.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+		r.Headers.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8")
+	})
+
+	if nc.config.ProxyURL != "" {
+		_ = col.SetProxy(nc.config.ProxyURL)
+	}
+
+	col.OnResponse(func(r *colly.Response) {
+		nc.stats.recordResponse(int64(len(r.Body)))
+	})
+
+	parallelism := nc.config.Concurrency
+	if parallelism < 1 {
+		parallelism = 1
+	}
+	_ = col.Limit(&colly.LimitRule{
+		DomainGlob:  "*",
+		Delay:       time.Duration(nc.config.DelayMs) * time.Millisecond,
+		RandomDelay: time.Duration(nc.config.RandomDelayMs) * time.Millisecond,
+		Parallelism: parallelism,
+	})
+	return col
+}
+
+// chaptersDomain returns the host from chapters[0].URL.
+func chaptersDomain(chapters []*ChapterInfo) string {
+	if len(chapters) == 0 {
+		return ""
+	}
+	if u, err := url.Parse(chapters[0].URL); err == nil {
+		return u.Host
+	}
+	return ""
+}
+
+// FetchChapterStream fetches all chapters concurrently using an async collector.
+// Results are delivered in completion order (not necessarily input order).
+// The returned channel is closed after all chapters have been processed.
+func (nc *NovelCrawler) FetchChapterStream(ctx context.Context, chapters []*ChapterInfo, parser NovelParser) <-chan ChapterFetchResult {
+	bufSize := nc.config.Concurrency * 4
+	if bufSize < 4 {
+		bufSize = 4
+	}
+	resultCh := make(chan ChapterFetchResult, bufSize)
+
+	go func() {
+		defer close(resultCh)
+
+		domain := chaptersDomain(chapters)
+		col := nc.newAsyncCollector(domain)
+
+		col.OnHTML("html", func(e *colly.HTMLElement) {
+			idxRaw := e.Request.Ctx.Get("chapter_idx")
+			var idx int
+			fmt.Sscanf(idxRaw, "%d", &idx)
+
+			content, err := parser.ParseChapter(e.DOM)
+			if err != nil {
+				nc.stats.recordFail()
+				select {
+				case resultCh <- ChapterFetchResult{Index: idx, Chapter: chapters[idx], Err: err}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			nc.stats.recordSuccess()
+			select {
+			case resultCh <- ChapterFetchResult{Index: idx, Chapter: chapters[idx], Content: content}:
+			case <-ctx.Done():
+			}
+		})
+
+		col.OnError(func(r *colly.Response, err error) {
+			idxRaw := r.Request.Ctx.Get("chapter_idx")
+			var idx int
+			fmt.Sscanf(idxRaw, "%d", &idx)
+			nc.stats.recordFail()
+			select {
+			case resultCh <- ChapterFetchResult{Index: idx, Chapter: chapters[idx], Err: err}:
+			case <-ctx.Done():
+			}
+		})
+
+		for i, ch := range chapters {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			if ch.IsVip && nc.config.SkipVIPChaps {
+				select {
+				case resultCh <- ChapterFetchResult{Index: i, Chapter: ch, Err: fmt.Errorf("skipped VIP chapter: %s", ch.Title)}:
+				case <-ctx.Done():
+					return
+				}
+				continue
+			}
+
+			rCtx := colly.NewContext()
+			rCtx.Put("chapter_idx", fmt.Sprintf("%d", i))
+			if err := col.Request("GET", ch.URL, nil, rCtx, nil); err != nil {
+				nc.stats.recordFail()
+				select {
+				case resultCh <- ChapterFetchResult{Index: i, Chapter: ch, Err: err}:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+
+		col.Wait()
+	}()
+
+	return resultCh
+}
+
+// fetchHTML visits rawURL with colly and returns the <html> root as a goquery.Selection.
+// Retries up to MaxRetries times with exponential back-off on transient errors.
+func (nc *NovelCrawler) fetchHTML(rawURL, domain string) (*goquery.Selection, error) {
+	maxAttempts := nc.config.MaxRetries
+	if maxAttempts <= 0 {
+		maxAttempts = 3
+	}
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt) * 5 * time.Second)
+		}
+		var (
+			root     *goquery.Selection
+			fetchErr error
+		)
+		col := nc.newCollector(domain)
+		col.OnHTML("html", func(e *colly.HTMLElement) {
+			root = e.DOM
+		})
+		col.OnError(func(_ *colly.Response, err error) {
+			fetchErr = err
+		})
+		if err := col.Visit(rawURL); err != nil {
+			lastErr = err
+			continue
+		}
+		if fetchErr != nil {
+			lastErr = fetchErr
+			continue
+		}
+		if root != nil {
+			return root, nil
+		}
+		lastErr = fmt.Errorf("no HTML content from %s", rawURL)
+	}
+	return nil, lastErr
+}
+
+// FetchPageHTML fetches rawURL and returns the <html> root as a goquery.Selection.
+// The site domain is auto-detected from the URL; unknown sites use the URL's host.
+func (nc *NovelCrawler) FetchPageHTML(rawURL string) (*goquery.Selection, error) {
+	site := nc.identifySite(rawURL)
+	domain, ok := siteDomains[site]
+	if !ok {
+		if u, err := url.Parse(rawURL); err == nil {
+			domain = u.Host
+		}
+	}
+	return nc.fetchHTML(rawURL, domain)
+}
+
+// Jar returns the shared cookie jar used by all collectors.
+func (nc *NovelCrawler) Jar() http.CookieJar { return nc.jar }
+
+// CrawlNovel 爬取小说详情并异步爬取全部章节
+func (nc *NovelCrawler) CrawlNovel(ctx context.Context, rawURL string) (*model.ReferenceNovel, error) {
+	site := nc.identifySite(rawURL)
+	parser, ok := nc.parsers[site]
 	if !ok {
 		return nil, fmt.Errorf("unsupported site: %s", site)
 	}
+	domain := siteDomains[site]
 
-	// 获取页面
-	html, err := c.httpClient.Get(ctx, url)
+	root, err := nc.fetchHTML(rawURL, domain)
 	if err != nil {
 		return nil, err
 	}
 
-	// 解析详情
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
+	detail, err := parser.ParseNovelDetail(root, rawURL)
 	if err != nil {
 		return nil, err
 	}
 
-	detail, err := parser.ParseNovelDetail(doc, url)
-	if err != nil {
-		return nil, err
-	}
-
-	// 创建数据库记录
 	novel := &model.ReferenceNovel{
 		Title:      detail.Title,
 		Author:     detail.Author,
-		SourceURL:  url,
+		SourceURL:  rawURL,
 		SourceSite: site,
 		Genre:      detail.Genre,
 		Status:     "crawling",
 	}
-
-	if err := c.db.Create(novel).Error; err != nil {
+	if err := nc.db.Create(novel).Error; err != nil {
 		return nil, err
 	}
 
-	// 异步爬取章节
-	go c.crawlChaptersAsync(context.Background(), novel.ID, site, parser, url)
-
+	go nc.crawlChaptersAsync(context.Background(), novel.ID, site, parser, rawURL)
 	return novel, nil
 }
 
-// crawlChaptersAsync 异步爬取章节
-func (c *NovelCrawler) crawlChaptersAsync(ctx context.Context, novelID uint, site string, parser NovelParser, baseURL string) {
-	// 获取章节列表页
-	html, err := c.httpClient.Get(ctx, baseURL)
-	if err != nil {
-		c.updateNovelStatus(novelID, "failed")
+// crawlChaptersAsync 异步爬取所有章节，使用 FetchChapterStream 并发下载
+func (nc *NovelCrawler) crawlChaptersAsync(ctx context.Context, novelID uint, site string, parser NovelParser, baseURL string) {
+	nc.stats = CrawlStats{StartedAt: time.Now()}
+
+	domain := siteDomains[site]
+
+	// Fetch chapter list — prefer Ajax API if available, fall back to HTML parse
+	chapters, err := nc.fetchChapterList(ctx, parser, domain, baseURL)
+	if err != nil || len(chapters) == 0 {
+		nc.updateNovelStatus(novelID, "failed")
 		return
 	}
 
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-	if err != nil {
-		c.updateNovelStatus(novelID, "failed")
-		return
-	}
-
-	chapters, err := parser.ParseChapterList(doc)
-	if err != nil {
-		c.updateNovelStatus(novelID, "failed")
-		return
-	}
-
-	// 爬取每一章
-	for i, ch := range chapters {
-		select {
-		case <-ctx.Done():
-			return
-		default:
+	// Filter VIP chapters if configured
+	if nc.config.SkipVIPChaps {
+		var filtered []*ChapterInfo
+		for _, ch := range chapters {
+			if !ch.IsVip {
+				filtered = append(filtered, ch)
+			}
 		}
+		chapters = filtered
+	}
 
-		content, err := c.crawlChapter(ctx, ch.URL, parser)
-		if err != nil {
+	chaptersSaved := 0
+	for result := range nc.FetchChapterStream(ctx, chapters, parser) {
+		if result.Err != nil {
+			continue
+		}
+		if result.Content == nil || result.Content.Content == "" {
 			continue
 		}
 
-		// 保存章节
 		refChapter := &model.ReferenceChapter{
 			NovelID:   novelID,
-			ChapterNo: i + 1,
-			Title:     content.Title,
-			Content:   content.Content,
+			ChapterNo: result.Index + 1,
+			Title:     result.Content.Title,
+			Content:   result.Content.Content,
 		}
-		c.db.Create(refChapter)
-
-		// 限流
-		time.Sleep(c.rateLimit)
+		if createErr := nc.db.Create(refChapter).Error; createErr == nil {
+			chaptersSaved++
+			nc.db.Model(&model.ReferenceNovel{}).Where("id = ?", novelID).
+				Updates(map[string]interface{}{"total_chapters": chaptersSaved})
+		}
 	}
 
-	// 更新状态
-	c.updateNovelStatus(novelID, "completed")
-
-	// 触发分析
-	c.analyzeNovel(novelID)
+	nc.updateNovelStatus(novelID, "completed")
+	nc.analyzeNovel(novelID)
 }
 
-// crawlChapter 爬取单章
-func (c *NovelCrawler) crawlChapter(ctx context.Context, url string, parser NovelParser) (*ChapterContent, error) {
-	html, err := c.httpClient.Get(ctx, url)
+// fetchChapterList tries the ChapterListFetcher Ajax API first, then falls back to HTML parsing.
+func (nc *NovelCrawler) fetchChapterList(ctx context.Context, parser NovelParser, domain, baseURL string) ([]*ChapterInfo, error) {
+	if fetcher, ok := parser.(ChapterListFetcher); ok {
+		chapters, err := fetcher.FetchChapterList(ctx, nc.jar, baseURL)
+		if err == nil && len(chapters) > 0 {
+			return chapters, nil
+		}
+	}
+	root, err := nc.fetchHTML(baseURL, domain)
 	if err != nil {
 		return nil, err
 	}
-
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-	if err != nil {
-		return nil, err
-	}
-
-	return parser.ParseChapter(doc)
+	return parser.ParseChapterList(root)
 }
 
 // updateNovelStatus 更新小说状态
-func (c *NovelCrawler) updateNovelStatus(novelID uint, status string) {
-	c.db.Model(&model.ReferenceNovel{}).Where("id = ?", novelID).Update("status", status)
+func (nc *NovelCrawler) updateNovelStatus(novelID uint, status string) {
+	nc.db.Model(&model.ReferenceNovel{}).Where("id = ?", novelID).Update("status", status)
 }
 
-// analyzeNovel 分析小说
-func (c *NovelCrawler) analyzeNovel(novelID uint) {
-	// 触发分析服务（实际应该在 service 层实现）
-}
+// analyzeNovel 触发小说分析（实际在 service 层完成）
+func (nc *NovelCrawler) analyzeNovel(_ uint) {}
 
-// identifySite 识别站点
-func (c *NovelCrawler) identifySite(url string) string {
-	if strings.Contains(url, "qidian.com") {
+// identifySite 从 URL 识别站点
+func (nc *NovelCrawler) identifySite(rawURL string) string {
+	switch {
+	case strings.Contains(rawURL, "qidian.com"):
 		return "qidian"
-	}
-	if strings.Contains(url, "jjwxc.net") {
+	case strings.Contains(rawURL, "jjwxc.net"):
 		return "jjwxc"
-	}
-	if strings.Contains(url, "zongheng.com") {
+	case strings.Contains(rawURL, "zongheng.com"):
 		return "zongheng"
-	}
-	if strings.Contains(url, "qimao.com") {
+	case strings.Contains(rawURL, "qimao.com"):
 		return "qimao"
 	}
 	return "unknown"
 }
 
-// NewHTTPClient 创建 HTTP 客户端（带 cookie jar，自动保持会话）
-func NewHTTPClient() *HTTPClient {
-	jar, _ := cookiejar.New(nil)
-	return &HTTPClient{
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-			Jar:     jar,
-		},
-		headers: map[string]string{
-			"User-Agent":      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-			"Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-			"Accept":          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-		},
-	}
-}
-
-// CookieValue 返回指定域名下 cookie 的值（需先请求过该域名）
-func (c *HTTPClient) CookieValue(rawURL, name string) string {
-	if c.client.Jar == nil {
-		return ""
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return ""
-	}
-	for _, cookie := range c.client.Jar.Cookies(u) {
-		if cookie.Name == name {
-			return cookie.Value
-		}
-	}
-	return ""
-}
-
-func (c *HTTPClient) Get(ctx context.Context, rawURL string) (string, error) {
-	const maxAttempts = 3
-	var lastErr error
-	retryDelay := 5 * time.Second
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return "", ctx.Err()
-			case <-time.After(retryDelay):
-			}
-		}
-		req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
-		if err != nil {
-			return "", err
-		}
-		for k, v := range c.headers {
-			req.Header.Set(k, v)
-		}
-		resp, err := c.client.Do(req)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if resp.StatusCode == http.StatusTooManyRequests {
-			if ra := resp.Header.Get("Retry-After"); ra != "" {
-				if secs, parseErr := strconv.Atoi(ra); parseErr == nil && secs > 0 && secs < 120 {
-					retryDelay = time.Duration(secs) * time.Second
-				}
-			}
-			resp.Body.Close()
-			lastErr = fmt.Errorf("rate limited (429)")
-			continue
-		}
-		defer resp.Body.Close()
-		buf, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return "", err
-		}
-		return string(buf), nil
-	}
-	return "", lastErr
-}
-
-// GetJSON 发送带 XHR 标记的 GET 请求，用于调用 Ajax API
-func (c *HTTPClient) GetJSON(ctx context.Context, rawURL string, referer string) (string, error) {
-	const maxAttempts = 3
-	var lastErr error
-	retryDelay := 5 * time.Second
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return "", ctx.Err()
-			case <-time.After(retryDelay):
-			}
-		}
-		req, err := http.NewRequestWithContext(ctx, "GET", rawURL, nil)
-		if err != nil {
-			return "", err
-		}
-		for k, v := range c.headers {
-			req.Header.Set(k, v)
-		}
-		req.Header.Set("Accept", "application/json, text/javascript, */*; q=0.01")
-		req.Header.Set("X-Requested-With", "XMLHttpRequest")
-		if referer != "" {
-			req.Header.Set("Referer", referer)
-		}
-		resp, err := c.client.Do(req)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if resp.StatusCode == http.StatusTooManyRequests {
-			if ra := resp.Header.Get("Retry-After"); ra != "" {
-				if secs, parseErr := strconv.Atoi(ra); parseErr == nil && secs > 0 && secs < 120 {
-					retryDelay = time.Duration(secs) * time.Second
-				}
-			}
-			resp.Body.Close()
-			lastErr = fmt.Errorf("rate limited (429)")
-			continue
-		}
-		defer resp.Body.Close()
-		buf, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return "", err
-		}
-		return string(buf), nil
-	}
-	return "", lastErr
-}
-
+// ---------------------------------------------------------------------------
 // QidianParser 起点中文网解析器
+// ---------------------------------------------------------------------------
+
 type QidianParser struct{}
 
-func NewQidianParser() *QidianParser {
-	return &QidianParser{}
-}
+func NewQidianParser() *QidianParser { return &QidianParser{} }
 
-func (p *QidianParser) GetSiteName() string {
-	return "起点中文网"
-}
+func (p *QidianParser) GetSiteName() string { return "起点中文网" }
 
-// extractBookID 从 URL 提取书籍 ID（如 https://www.qidian.com/book/1048727942/）
 func (p *QidianParser) extractBookID(bookURL string) string {
 	re := regexp.MustCompile(`/book/(\d+)`)
 	if m := re.FindStringSubmatch(bookURL); len(m) > 1 {
@@ -400,9 +595,9 @@ func (p *QidianParser) extractBookID(bookURL string) string {
 	return ""
 }
 
-func (p *QidianParser) ParseNovelList(doc *goquery.Document) ([]*NovelInfo, error) {
+func (p *QidianParser) ParseNovelList(root *goquery.Selection) ([]*NovelInfo, error) {
 	var novels []*NovelInfo
-	doc.Find(".book-list li, .work-list li").Each(func(i int, s *goquery.Selection) {
+	root.Find(".book-list li, .work-list li").Each(func(i int, s *goquery.Selection) {
 		title := s.Find(".book-name, .title").Text()
 		author := s.Find(".author").Text()
 		href, _ := s.Find("a").Attr("href")
@@ -415,17 +610,15 @@ func (p *QidianParser) ParseNovelList(doc *goquery.Document) ([]*NovelInfo, erro
 	return novels, nil
 }
 
-// ParseNovelDetail 解析书籍详情页（多选择器回退 + 内嵌 JSON 提取）
-func (p *QidianParser) ParseNovelDetail(doc *goquery.Document, bookURL string) (*NovelDetail, error) {
+// ParseNovelDetail 解析书籍详情页（内嵌 JSON 优先，HTML 选择器回退）
+func (p *QidianParser) ParseNovelDetail(root *goquery.Selection, bookURL string) (*NovelDetail, error) {
 	detail := &NovelDetail{}
 
-	// 尝试从页面内嵌 JSON 提取（起点通常注入 window.g_data 或 __INITIAL_STATE__）
-	doc.Find("script").EachWithBreak(func(_ int, s *goquery.Selection) bool {
+	root.Find("script").EachWithBreak(func(_ int, s *goquery.Selection) bool {
 		src := s.Text()
 		if !strings.Contains(src, "bookName") && !strings.Contains(src, "bookInfo") {
 			return true
 		}
-		// 匹配 "bookName":"xxx"
 		if m := regexp.MustCompile(`"bookName"\s*:\s*"([^"]+)"`).FindStringSubmatch(src); len(m) > 1 {
 			detail.Title = m[1]
 		}
@@ -438,60 +631,49 @@ func (p *QidianParser) ParseNovelDetail(doc *goquery.Document, bookURL string) (
 		if m := regexp.MustCompile(`"categoryName"\s*:\s*"([^"]+)"`).FindStringSubmatch(src); len(m) > 1 {
 			detail.Genre = m[1]
 		}
-		return detail.Title == "" // 找到标题就停止遍历
+		return detail.Title == ""
 	})
 
-	// HTML 选择器回退（多组，优先级从高到低）
 	if detail.Title == "" {
-		for _, sel := range []string{
-			"h1.book-title", "h1.book-info-title", ".book-info h1", "h1",
-		} {
-			if t := strings.TrimSpace(doc.Find(sel).First().Text()); t != "" {
+		for _, sel := range []string{"h1.book-title", "h1.book-info-title", ".book-info h1", "h1"} {
+			if t := strings.TrimSpace(root.Find(sel).First().Text()); t != "" {
 				detail.Title = t
 				break
 			}
 		}
 	}
 	if detail.Author == "" {
-		for _, sel := range []string{
-			"a.writer-name", ".writer-info .name", ".author-name", ".book-author a",
-		} {
-			if a := strings.TrimSpace(doc.Find(sel).First().Text()); a != "" {
+		for _, sel := range []string{"a.writer-name", ".writer-info .name", ".author-name", ".book-author a"} {
+			if a := strings.TrimSpace(root.Find(sel).First().Text()); a != "" {
 				detail.Author = a
 				break
 			}
 		}
 	}
 	if detail.Description == "" {
-		for _, sel := range []string{
-			"p.intro", ".book-intro p", ".book-intro", ".intro",
-		} {
-			if d := strings.TrimSpace(doc.Find(sel).First().Text()); d != "" {
+		for _, sel := range []string{"p.intro", ".book-intro p", ".book-intro", ".intro"} {
+			if d := strings.TrimSpace(root.Find(sel).First().Text()); d != "" {
 				detail.Description = d
 				break
 			}
 		}
 	}
 	if detail.Genre == "" {
-		detail.Genre = strings.TrimSpace(doc.Find(".book-cat a, .tag-list a, .book-label a").First().Text())
+		detail.Genre = strings.TrimSpace(root.Find(".book-cat a, .tag-list a, .book-label a").First().Text())
 	}
-
-	detail.CoverURL, _ = doc.Find(".book-img img, .book-cover img, .cover img").First().Attr("src")
-
-	statusText := strings.ToLower(doc.Find(".book-label, .book-status, .status").First().Text())
-	if strings.Contains(statusText, "完") {
+	detail.CoverURL, _ = root.Find(".book-img img, .book-cover img, .cover img").First().Attr("src")
+	if s := strings.ToLower(root.Find(".book-label, .book-status, .status").First().Text()); strings.Contains(s, "完") {
 		detail.Status = "completed"
 	} else {
 		detail.Status = "ongoing"
 	}
-
 	return detail, nil
 }
 
-// ParseChapterList HTML 回退方案（FetchChapterList 失败时使用）
-func (p *QidianParser) ParseChapterList(doc *goquery.Document) ([]*ChapterInfo, error) {
+// ParseChapterList HTML 回退（FetchChapterList 失败时使用）
+func (p *QidianParser) ParseChapterList(root *goquery.Selection) ([]*ChapterInfo, error) {
 	var chapters []*ChapterInfo
-	doc.Find(".chapter-list li a, .volume-chapter a, .chapter-wrap a").Each(func(i int, s *goquery.Selection) {
+	root.Find(".chapter-list li a, .volume-chapter a, .chapter-wrap a").Each(func(i int, s *goquery.Selection) {
 		title := strings.TrimSpace(s.Text())
 		href, _ := s.Attr("href")
 		if title == "" || href == "" {
@@ -502,16 +684,36 @@ func (p *QidianParser) ParseChapterList(doc *goquery.Document) ([]*ChapterInfo, 
 		} else if strings.HasPrefix(href, "/") {
 			href = "https://www.qidian.com" + href
 		}
-		chapters = append(chapters, &ChapterInfo{
-			Title:     title,
-			URL:       href,
-			ChapterNo: i + 1,
-		})
+		chapters = append(chapters, &ChapterInfo{Title: title, URL: href, ChapterNo: i + 1})
 	})
 	return chapters, nil
 }
 
-// qidianCategoryResp 起点章节目录 Ajax API 响应结构
+// ParseChapter 解析起点章节正文
+func (p *QidianParser) ParseChapter(root *goquery.Selection) (*ChapterContent, error) {
+	content := &ChapterContent{}
+	for _, sel := range []string{".chapter-name", ".j_chapterName", "h1.chapter-name", "h1"} {
+		if t := strings.TrimSpace(root.Find(sel).First().Text()); t != "" {
+			content.Title = t
+			break
+		}
+	}
+	var paragraphs []string
+	contentSel := root.Find("#j_readContent p, .read-content p, .chapter-content p, #j_chapterBox p")
+	if contentSel.Length() > 0 {
+		contentSel.Each(func(_ int, s *goquery.Selection) {
+			if t := strings.TrimSpace(s.Text()); t != "" {
+				paragraphs = append(paragraphs, t)
+			}
+		})
+		content.Content = strings.Join(paragraphs, "\n\n")
+	} else {
+		content.Content = cleanText(root.Find("#j_readContent, .read-content, .chapter-content, #j_chapterBox").First().Text())
+	}
+	return content, nil
+}
+
+// qidianCategoryResp Ajax 章节目录响应结构
 type qidianCategoryResp struct {
 	Code int    `json:"code"`
 	Msg  string `json:"msg"`
@@ -528,341 +730,406 @@ type qidianCategoryResp struct {
 }
 
 // FetchChapterList 通过起点 Ajax API 获取完整章节列表（实现 ChapterListFetcher 接口）
-// API: GET /ajax/book/category?bookId={id}&_csrfToken={token}
-// 访问书籍页面后 cookie jar 中会自动携带 _csrfToken
-func (p *QidianParser) FetchChapterList(ctx context.Context, client *HTTPClient, bookURL string) ([]*ChapterInfo, error) {
+// Cookies（含 _csrfToken）由共享 jar 自动携带。
+func (p *QidianParser) FetchChapterList(_ context.Context, jar http.CookieJar, bookURL string) ([]*ChapterInfo, error) {
 	bookID := p.extractBookID(bookURL)
 	if bookID == "" {
 		return nil, fmt.Errorf("cannot extract book ID from URL: %s", bookURL)
 	}
 
-	csrfToken := client.CookieValue("https://www.qidian.com", "_csrfToken")
-	apiURL := fmt.Sprintf("https://www.qidian.com/ajax/book/category?bookId=%s&_csrfToken=%s", bookID, csrfToken)
-
-	body, err := client.GetJSON(ctx, apiURL, bookURL)
-	if err != nil {
-		return nil, fmt.Errorf("chapter list API request failed: %w", err)
-	}
-
-	var resp qidianCategoryResp
-	if err := json.Unmarshal([]byte(body), &resp); err != nil {
-		return nil, fmt.Errorf("parse chapter list JSON failed: %w (body prefix: %.200s)", err, body)
-	}
-	if resp.Code != 0 {
-		return nil, fmt.Errorf("chapter list API error code=%d msg=%s", resp.Code, resp.Msg)
-	}
-
-	var chapters []*ChapterInfo
-	seq := 1
-	for _, vol := range resp.Data.Vs {
-		for _, ch := range vol.Cs {
-			chapterURL := fmt.Sprintf("https://www.qidian.com/chapter/%s/%d/", bookID, ch.ID)
-			chapters = append(chapters, &ChapterInfo{
-				Title:     ch.Name,
-				URL:       chapterURL,
-				ChapterNo: seq,
-				IsVip:     ch.IsVip != 0,
-			})
-			seq++
+	// 从 jar 读取 _csrfToken（访问详情页后自动存入）
+	var csrfToken string
+	if u, err := url.Parse("https://www.qidian.com"); err == nil {
+		for _, c := range jar.Cookies(u) {
+			if c.Name == "_csrfToken" {
+				csrfToken = c.Value
+				break
+			}
 		}
 	}
 
+	apiURL := fmt.Sprintf("https://www.qidian.com/ajax/book/category?bookId=%s&_csrfToken=%s", bookID, csrfToken)
+
+	// 用独立的 colly collector 发送 XHR 请求；共享 jar 自动携带 cookie
+	col := colly.NewCollector(colly.AllowedDomains("www.qidian.com"))
+	col.SetCookieJar(jar)
+	col.SetRequestTimeout(30 * time.Second)
+	col.OnRequest(func(r *colly.Request) {
+		r.Headers.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+		r.Headers.Set("Accept", "application/json, text/javascript, */*; q=0.01")
+		r.Headers.Set("X-Requested-With", "XMLHttpRequest")
+		r.Headers.Set("Referer", bookURL)
+	})
+
+	var chapters []*ChapterInfo
+	var fetchErr error
+
+	col.OnResponse(func(r *colly.Response) {
+		var resp qidianCategoryResp
+		if err := json.Unmarshal(r.Body, &resp); err != nil {
+			fetchErr = fmt.Errorf("parse chapter list JSON failed: %w (body: %.200s)", err, string(r.Body))
+			return
+		}
+		if resp.Code != 0 {
+			fetchErr = fmt.Errorf("chapter list API error code=%d msg=%s", resp.Code, resp.Msg)
+			return
+		}
+		seq := 1
+		for _, vol := range resp.Data.Vs {
+			for _, ch := range vol.Cs {
+				chapters = append(chapters, &ChapterInfo{
+					Title:     ch.Name,
+					URL:       fmt.Sprintf("https://www.qidian.com/chapter/%s/%d/", bookID, ch.ID),
+					ChapterNo: seq,
+					IsVip:     ch.IsVip != 0,
+				})
+				seq++
+			}
+		}
+	})
+	col.OnError(func(_ *colly.Response, err error) {
+		fetchErr = fmt.Errorf("chapter list API request failed: %w", err)
+	})
+
+	if err := col.Visit(apiURL); err != nil {
+		return nil, fmt.Errorf("chapter list API request failed: %w", err)
+	}
+	if fetchErr != nil {
+		return nil, fetchErr
+	}
 	if len(chapters) == 0 {
 		return nil, fmt.Errorf("chapter list API returned 0 chapters (bookId=%s)", bookID)
 	}
 	return chapters, nil
 }
 
-// ParseChapter 解析起点章节正文
-func (p *QidianParser) ParseChapter(doc *goquery.Document) (*ChapterContent, error) {
-	content := &ChapterContent{}
-
-	// 标题：多选择器回退
-	for _, sel := range []string{
-		".chapter-name", ".j_chapterName", "h1.chapter-name", "h1",
-	} {
-		if t := strings.TrimSpace(doc.Find(sel).First().Text()); t != "" {
-			content.Title = t
-			break
-		}
-	}
-
-	// 正文：起点免费章节内容在 #j_readContent 或 .read-content 下的 <p> 标签
-	var paragraphs []string
-	contentSel := doc.Find("#j_readContent p, .read-content p, .chapter-content p, #j_chapterBox p")
-	if contentSel.Length() > 0 {
-		contentSel.Each(func(_ int, s *goquery.Selection) {
-			if t := strings.TrimSpace(s.Text()); t != "" {
-				paragraphs = append(paragraphs, t)
-			}
-		})
-		content.Content = strings.Join(paragraphs, "\n\n")
-	} else {
-		// 回退到整块文本
-		content.Content = cleanText(doc.Find("#j_readContent, .read-content, .chapter-content, #j_chapterBox").First().Text())
-	}
-
-	return content, nil
-}
-
+// ---------------------------------------------------------------------------
 // JjwxcParser 晋江文学城解析器
+// ---------------------------------------------------------------------------
+
 type JjwxcParser struct{}
 
-func NewJjwxcParser() *JjwxcParser {
-	return &JjwxcParser{}
+func NewJjwxcParser() *JjwxcParser { return &JjwxcParser{} }
+
+func (p *JjwxcParser) GetSiteName() string { return "晋江文学城" }
+
+func (p *JjwxcParser) ParseNovelList(_ *goquery.Selection) ([]*NovelInfo, error) {
+	return nil, nil
 }
 
-func (p *JjwxcParser) GetSiteName() string {
-	return "晋江文学城"
+func (p *JjwxcParser) ParseNovelDetail(root *goquery.Selection, bookURL string) (*NovelDetail, error) {
+	detail := &NovelDetail{}
+
+	// Title: prefer itemprop span, fallback to og:title meta
+	if t := strings.TrimSpace(root.Find(`h2 span[itemprop="name"]`).First().Text()); t != "" {
+		detail.Title = t
+	} else if t, exists := root.Find(`meta[property="og:title"]`).First().Attr("content"); exists {
+		detail.Title = strings.TrimSpace(t)
+	}
+
+	// Author
+	if a := strings.TrimSpace(root.Find(".author_hiddenbio a").First().Text()); a != "" {
+		detail.Author = a
+	} else if a := strings.TrimSpace(root.Find(`[itemprop="author"]`).First().Text()); a != "" {
+		detail.Author = a
+	}
+
+	// Description
+	detail.Description = strings.TrimSpace(root.Find("#novelintro").First().Text())
+
+	// Cover
+	detail.CoverURL, _ = root.Find(".bookimage img").First().Attr("src")
+
+	if detail.Title == "" {
+		return nil, fmt.Errorf("jjwxc: could not parse novel title from %s", bookURL)
+	}
+	return detail, nil
 }
 
-func (p *JjwxcParser) ParseNovelList(doc *goquery.Document) ([]*NovelInfo, error) {
-	var novels []*NovelInfo
-
-	doc.Find(".novel-item").Each(func(i int, s *goquery.Selection) {
-		title := s.Find(".novel-title").Text()
-		author := s.Find(".author").Text()
-
-		novels = append(novels, &NovelInfo{
-			Title:  strings.TrimSpace(title),
-			Author: strings.TrimSpace(author),
-		})
-	})
-
-	return novels, nil
-}
-
-func (p *JjwxcParser) ParseNovelDetail(doc *goquery.Document, url string) (*NovelDetail, error) {
-	return &NovelDetail{}, nil
-}
-
-func (p *JjwxcParser) ParseChapterList(doc *goquery.Document) ([]*ChapterInfo, error) {
+func (p *JjwxcParser) ParseChapterList(root *goquery.Selection) ([]*ChapterInfo, error) {
 	var chapters []*ChapterInfo
-
-	doc.Find(".chapter-list a").Each(func(i int, s *goquery.Selection) {
-		title := s.Text()
-		url, _ := s.Attr("href")
-
-		chapters = append(chapters, &ChapterInfo{
-			Title:    strings.TrimSpace(title),
-			URL:      url,
-			ChapterNo: i + 1,
-		})
+	root.Find("table.css_info td.a2 a").Each(func(i int, s *goquery.Selection) {
+		title := strings.TrimSpace(s.Text())
+		href, _ := s.Attr("href")
+		if title == "" || href == "" {
+			return
+		}
+		if strings.HasPrefix(href, "/") {
+			href = "https://www.jjwxc.net" + href
+		} else if !strings.HasPrefix(href, "http") {
+			href = "https://www.jjwxc.net/" + href
+		}
+		chapters = append(chapters, &ChapterInfo{Title: title, URL: href, ChapterNo: i + 1})
 	})
-
 	return chapters, nil
 }
 
-func (p *JjwxcParser) ParseChapter(doc *goquery.Document) (*ChapterContent, error) {
+func (p *JjwxcParser) ParseChapter(root *goquery.Selection) (*ChapterContent, error) {
 	content := &ChapterContent{}
 
-	content.Title = doc.Find(".chapter-title").First().Text()
-	content.Content = doc.Find("#content").First().Text()
-	content.Content = cleanText(content.Content)
+	// Title: h2 inside .readContent or h2.chapter-title
+	if t := strings.TrimSpace(root.Find(".readContent h2").First().Text()); t != "" {
+		content.Title = t
+	} else if t := strings.TrimSpace(root.Find("h2.chapter-title").First().Text()); t != "" {
+		content.Title = t
+	}
+
+	// Content: div#novelcontent paragraphs
+	var paragraphs []string
+	root.Find("div#novelcontent p").Each(func(_ int, s *goquery.Selection) {
+		if t := strings.TrimSpace(s.Text()); t != "" {
+			paragraphs = append(paragraphs, t)
+		}
+	})
+	content.Content = strings.Join(paragraphs, "\n\n")
 
 	return content, nil
 }
 
+// ---------------------------------------------------------------------------
 // ZonghengParser 纵横中文网解析器
+// ---------------------------------------------------------------------------
+
 type ZonghengParser struct{}
 
-func NewZonghengParser() *ZonghengParser {
-	return &ZonghengParser{}
+func NewZonghengParser() *ZonghengParser { return &ZonghengParser{} }
+
+func (p *ZonghengParser) GetSiteName() string { return "纵横中文网" }
+
+func (p *ZonghengParser) ParseNovelList(_ *goquery.Selection) ([]*NovelInfo, error) {
+	return nil, nil
 }
 
-func (p *ZonghengParser) GetSiteName() string {
-	return "纵横中文网"
+func (p *ZonghengParser) ParseNovelDetail(root *goquery.Selection, _ string) (*NovelDetail, error) {
+	detail := &NovelDetail{}
+
+	// Title
+	detail.Title = strings.TrimSpace(root.Find("h1.bookname, h1.book-name, .booknav h1").First().Text())
+
+	// Author
+	detail.Author = strings.TrimSpace(root.Find(`.bookinfo a[href*="user"]`).First().Text())
+
+	// Description
+	detail.Description = strings.TrimSpace(root.Find("#intro-all p, .intro p").First().Text())
+
+	// Cover
+	detail.CoverURL, _ = root.Find(".bookcover img").First().Attr("src")
+
+	return detail, nil
 }
 
-func (p *ZonghengParser) ParseNovelList(doc *goquery.Document) ([]*NovelInfo, error) {
-	return []*NovelInfo{}, nil
+func (p *ZonghengParser) ParseChapterList(root *goquery.Selection) ([]*ChapterInfo, error) {
+	var chapters []*ChapterInfo
+	root.Find(".chapter-list li a, .chapterlist li a").Each(func(i int, s *goquery.Selection) {
+		title := strings.TrimSpace(s.Text())
+		href, _ := s.Attr("href")
+		if title == "" || href == "" {
+			return
+		}
+		if strings.HasPrefix(href, "/") {
+			href = "https://book.zongheng.com" + href
+		}
+		chapters = append(chapters, &ChapterInfo{Title: title, URL: href, ChapterNo: i + 1})
+	})
+	return chapters, nil
 }
 
-func (p *ZonghengParser) ParseNovelDetail(doc *goquery.Document, url string) (*NovelDetail, error) {
-	return &NovelDetail{}, nil
-}
+func (p *ZonghengParser) ParseChapter(root *goquery.Selection) (*ChapterContent, error) {
+	content := &ChapterContent{}
 
-func (p *ZonghengParser) ParseChapterList(doc *goquery.Document) ([]*ChapterInfo, error) {
-	return []*ChapterInfo{}, nil
-}
+	// Title
+	content.Title = strings.TrimSpace(root.Find("h1.ctitle, .chapter-title h1").First().Text())
 
-func (p *ZonghengParser) ParseChapter(doc *goquery.Document) (*ChapterContent, error) {
-	return &ChapterContent{}, nil
-}
-
-// QimaoParser 七猫小说解析器
-// 书籍详情页: https://www.qimao.com/shuku/{id}/
-// 章节阅读页: https://www.qimao.com/shuku/{id}/{chapter_id}.html
-type QimaoParser struct{}
-
-func NewQimaoParser() *QimaoParser {
-	return &QimaoParser{}
-}
-
-func (p *QimaoParser) GetSiteName() string {
-	return "七猫小说"
-}
-
-func (p *QimaoParser) ParseNovelList(doc *goquery.Document) ([]*NovelInfo, error) {
-	var novels []*NovelInfo
-
-	doc.Find(".book-item, .novel-item, .book-list li").Each(func(i int, s *goquery.Selection) {
-		title := strings.TrimSpace(s.Find(".book-name, .title, h3").First().Text())
-		author := strings.TrimSpace(s.Find(".author, .writer").First().Text())
-		url, _ := s.Find("a").First().Attr("href")
-		cover, _ := s.Find("img").First().Attr("src")
-
-		if title != "" {
-			novels = append(novels, &NovelInfo{
-				Title:    title,
-				Author:   author,
-				URL:      url,
-				CoverURL: cover,
-			})
+	// Content
+	var paragraphs []string
+	root.Find(".readerList p, #content p").Each(func(_ int, s *goquery.Selection) {
+		if t := strings.TrimSpace(s.Text()); t != "" {
+			paragraphs = append(paragraphs, t)
 		}
 	})
+	content.Content = strings.Join(paragraphs, "\n\n")
 
+	return content, nil
+}
+
+// FetchChapterList fetches the chapter list via zongheng's chapter page.
+// Implements ChapterListFetcher.
+func (p *ZonghengParser) FetchChapterList(_ context.Context, jar http.CookieJar, bookURL string) ([]*ChapterInfo, error) {
+	// Extract book ID from URL: /book/(\d+)\.html
+	re := regexp.MustCompile(`/book/(\d+)\.html`)
+	m := re.FindStringSubmatch(bookURL)
+	if len(m) < 2 {
+		return nil, fmt.Errorf("zongheng: cannot extract book ID from URL: %s", bookURL)
+	}
+	bookID := m[1]
+
+	chapterListURL := fmt.Sprintf("https://book.zongheng.com/showchapter/%s.html", bookID)
+
+	col := colly.NewCollector(colly.AllowedDomains("book.zongheng.com"))
+	col.SetCookieJar(jar)
+	col.SetRequestTimeout(30 * time.Second)
+	col.OnRequest(func(r *colly.Request) {
+		r.Headers.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+		r.Headers.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+		r.Headers.Set("Referer", bookURL)
+	})
+
+	var chapters []*ChapterInfo
+	var fetchErr error
+
+	col.OnHTML("html", func(e *colly.HTMLElement) {
+		e.DOM.Find(".chapter-list li a, .chapterlist li a").Each(func(i int, s *goquery.Selection) {
+			title := strings.TrimSpace(s.Text())
+			href, _ := s.Attr("href")
+			if title == "" || href == "" {
+				return
+			}
+			if strings.HasPrefix(href, "/") {
+				href = "https://book.zongheng.com" + href
+			}
+			chapters = append(chapters, &ChapterInfo{Title: title, URL: href, ChapterNo: i + 1})
+		})
+	})
+
+	col.OnError(func(_ *colly.Response, err error) {
+		fetchErr = fmt.Errorf("zongheng: chapter list fetch failed: %w", err)
+	})
+
+	if err := col.Visit(chapterListURL); err != nil {
+		return nil, fmt.Errorf("zongheng: chapter list visit failed: %w", err)
+	}
+	if fetchErr != nil {
+		return nil, fetchErr
+	}
+	return chapters, nil
+}
+
+// ---------------------------------------------------------------------------
+// QimaoParser 七猫小说解析器
+// ---------------------------------------------------------------------------
+
+type QimaoParser struct{}
+
+func NewQimaoParser() *QimaoParser { return &QimaoParser{} }
+
+func (p *QimaoParser) GetSiteName() string { return "七猫小说" }
+
+func (p *QimaoParser) ParseNovelList(root *goquery.Selection) ([]*NovelInfo, error) {
+	var novels []*NovelInfo
+	root.Find(".book-item, .novel-item, .book-list li").Each(func(i int, s *goquery.Selection) {
+		title := strings.TrimSpace(s.Find(".book-name, .title, h3").First().Text())
+		author := strings.TrimSpace(s.Find(".author, .writer").First().Text())
+		u, _ := s.Find("a").First().Attr("href")
+		cover, _ := s.Find("img").First().Attr("src")
+		if title != "" {
+			novels = append(novels, &NovelInfo{Title: title, Author: author, URL: u, CoverURL: cover})
+		}
+	})
 	return novels, nil
 }
 
-func (p *QimaoParser) ParseNovelDetail(doc *goquery.Document, url string) (*NovelDetail, error) {
+func (p *QimaoParser) ParseNovelDetail(root *goquery.Selection, _ string) (*NovelDetail, error) {
 	detail := &NovelDetail{}
-
-	// 书名: <h1 class="book-title"> 或 <h1 class="name">
-	detail.Title = strings.TrimSpace(doc.Find("h1.book-title, h1.name, .detail-title h1").First().Text())
+	detail.Title = strings.TrimSpace(root.Find("h1.book-title, h1.name, .detail-title h1").First().Text())
 	if detail.Title == "" {
-		detail.Title = strings.TrimSpace(doc.Find("h1").First().Text())
+		detail.Title = strings.TrimSpace(root.Find("h1").First().Text())
 	}
-
-	// 作者
-	detail.Author = strings.TrimSpace(doc.Find(".author-name, .author a, .writer").First().Text())
-
-	// 简介
-	detail.Description = strings.TrimSpace(doc.Find(".book-intro, .desc, .intro, .summary").First().Text())
-
-	// 封面
-	detail.CoverURL, _ = doc.Find(".book-cover img, .cover img").First().Attr("src")
-
-	// 类型/标签
-	doc.Find(".tag-item, .book-tag, .label").Each(func(i int, s *goquery.Selection) {
-		tag := strings.TrimSpace(s.Text())
-		if tag != "" {
+	detail.Author = strings.TrimSpace(root.Find(".author-name, .author a, .writer").First().Text())
+	detail.Description = strings.TrimSpace(root.Find(".book-intro, .desc, .intro, .summary").First().Text())
+	detail.CoverURL, _ = root.Find(".book-cover img, .cover img").First().Attr("src")
+	root.Find(".tag-item, .book-tag, .label").Each(func(i int, s *goquery.Selection) {
+		if tag := strings.TrimSpace(s.Text()); tag != "" {
 			detail.Tags = append(detail.Tags, tag)
 		}
 	})
 	if len(detail.Tags) > 0 {
 		detail.Genre = detail.Tags[0]
 	}
-
-	// 状态
-	statusText := strings.TrimSpace(doc.Find(".status, .book-status").First().Text())
-	if strings.Contains(statusText, "完") || strings.Contains(statusText, "完结") {
+	if s := strings.TrimSpace(root.Find(".status, .book-status").First().Text()); strings.Contains(s, "完") {
 		detail.Status = "completed"
 	} else {
 		detail.Status = "ongoing"
 	}
-
-	// 章节数
-	chapterText := doc.Find(".chapter-count, .total-chapter, .chapter-num").First().Text()
-	detail.TotalChapters = extractNumber(chapterText)
-
+	detail.TotalChapters = extractNumber(root.Find(".chapter-count, .total-chapter, .chapter-num").First().Text())
 	return detail, nil
 }
 
-func (p *QimaoParser) ParseChapterList(doc *goquery.Document) ([]*ChapterInfo, error) {
+func (p *QimaoParser) ParseChapterList(root *goquery.Selection) ([]*ChapterInfo, error) {
 	var chapters []*ChapterInfo
-
-	// 七猫章节列表常见选择器
-	doc.Find(".chapter-list a, .catalog-list a, .chapter-item a, ul.list a").Each(func(i int, s *goquery.Selection) {
+	root.Find(".chapter-list a, .catalog-list a, .chapter-item a, ul.list a").Each(func(i int, s *goquery.Selection) {
 		title := strings.TrimSpace(s.Text())
-		chapterURL, _ := s.Attr("href")
-
-		if title == "" || chapterURL == "" {
+		chURL, _ := s.Attr("href")
+		if title == "" || chURL == "" {
 			return
 		}
-
-		// 补全相对路径
-		if strings.HasPrefix(chapterURL, "/") {
-			chapterURL = "https://www.qimao.com" + chapterURL
+		if strings.HasPrefix(chURL, "/") {
+			chURL = "https://www.qimao.com" + chURL
 		}
-
-		chapters = append(chapters, &ChapterInfo{
-			Title:     title,
-			URL:       chapterURL,
-			ChapterNo: i + 1,
-		})
+		chapters = append(chapters, &ChapterInfo{Title: title, URL: chURL, ChapterNo: i + 1})
 	})
-
 	return chapters, nil
 }
 
-func (p *QimaoParser) ParseChapter(doc *goquery.Document) (*ChapterContent, error) {
+func (p *QimaoParser) ParseChapter(root *goquery.Selection) (*ChapterContent, error) {
 	content := &ChapterContent{}
-
-	// 章节标题
-	content.Title = strings.TrimSpace(doc.Find(".chapter-title, .read-title, h1.title").First().Text())
-
-	// 正文内容: 七猫正文一般在 #chapter-content 或 .chapter-content
-	contentSel := doc.Find("#chapter-content, .chapter-content, .read-content, .content")
+	content.Title = strings.TrimSpace(root.Find(".chapter-title, .read-title, h1.title").First().Text())
+	contentSel := root.Find("#chapter-content, .chapter-content, .read-content, .content")
 	if contentSel.Length() == 0 {
-		contentSel = doc.Find("article")
+		contentSel = root.Find("article")
 	}
 	content.Content = cleanText(contentSel.First().Text())
-
-	// 上一章 / 下一章链接
-	content.PrevURL, _ = doc.Find(".prev-chapter a, .btn-prev, a.prev").First().Attr("href")
-	content.NextURL, _ = doc.Find(".next-chapter a, .btn-next, a.next").First().Attr("href")
-
+	content.PrevURL, _ = root.Find(".prev-chapter a, .btn-prev, a.prev").First().Attr("href")
+	content.NextURL, _ = root.Find(".next-chapter a, .btn-next, a.next").First().Attr("href")
 	if strings.HasPrefix(content.PrevURL, "/") {
 		content.PrevURL = "https://www.qimao.com" + content.PrevURL
 	}
 	if strings.HasPrefix(content.NextURL, "/") {
 		content.NextURL = "https://www.qimao.com" + content.NextURL
 	}
-
 	return content, nil
 }
 
-// Helper Functions
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 func extractNumber(text string) int {
-	re := regexp.MustCompile(`\d+`)
-	matches := re.FindAllString(text, -1)
+	matches := regexp.MustCompile(`\d+`).FindAllString(text, -1)
 	if len(matches) > 0 {
-		var num int
-		fmt.Sscanf(matches[len(matches)-1], "%d", &num)
-		return num
+		var n int
+		fmt.Sscanf(matches[len(matches)-1], "%d", &n)
+		return n
 	}
 	return 0
 }
 
 func cleanText(text string) string {
-	// 移除多余空白
 	text = regexp.MustCompile(`\s+`).ReplaceAllString(text, "\n")
-	// 移除特殊字符
-	text = strings.TrimSpace(text)
-	return text
+	return strings.TrimSpace(text)
 }
 
+// ---------------------------------------------------------------------------
 // BatchCrawler 批量爬虫
+// ---------------------------------------------------------------------------
+
 type BatchCrawler struct {
-	crawler  *NovelCrawler
-	workers  int
-	queue    chan string
-	results  chan *CrawlResult
-	wg       sync.WaitGroup
+	crawler *NovelCrawler
+	workers int
+	queue   chan string
+	results chan *CrawlResult
+	wg      sync.WaitGroup
 }
 
 type CrawlResult struct {
-	URL    string
-	Novel  *model.ReferenceNovel
-	Error  error
+	URL   string
+	Novel *model.ReferenceNovel
+	Error error
 }
 
 func NewBatchCrawler(db *gorm.DB, workers int) *BatchCrawler {
 	return &BatchCrawler{
 		crawler: NewNovelCrawler(db),
-		workers:  workers,
+		workers: workers,
 		queue:   make(chan string, 1000),
 		results: make(chan *CrawlResult, 100),
 	}
@@ -877,20 +1144,13 @@ func (b *BatchCrawler) Start() {
 
 func (b *BatchCrawler) worker() {
 	defer b.wg.Done()
-
-	for url := range b.queue {
-		novel, err := b.crawler.CrawlNovel(context.Background(), url)
-		b.results <- &CrawlResult{
-			URL:   url,
-			Novel: novel,
-			Error: err,
-		}
+	for rawURL := range b.queue {
+		novel, err := b.crawler.CrawlNovel(context.Background(), rawURL)
+		b.results <- &CrawlResult{URL: rawURL, Novel: novel, Error: err}
 	}
 }
 
-func (b *BatchCrawler) Add(url string) {
-	b.queue <- url
-}
+func (b *BatchCrawler) Add(rawURL string) { b.queue <- rawURL }
 
 func (b *BatchCrawler) Wait() {
 	close(b.queue)
@@ -898,6 +1158,61 @@ func (b *BatchCrawler) Wait() {
 	close(b.results)
 }
 
-func (b *BatchCrawler) Results() <-chan *CrawlResult {
-	return b.results
+func (b *BatchCrawler) Results() <-chan *CrawlResult { return b.results }
+
+// ---------------------------------------------------------------------------
+// HTTPClient 简单 HTTP 客户端，供 import_service 等调用
+// ---------------------------------------------------------------------------
+
+// HTTPClient wraps a net/http.Client with a shared CookieJar and standard browser headers.
+type HTTPClient struct {
+	client *http.Client
+}
+
+// NewHTTPClient returns an HTTPClient with a 30-second timeout and shared cookie jar.
+func NewHTTPClient() *HTTPClient {
+	jar, _ := cookiejar.New(nil)
+	return &HTTPClient{
+		client: &http.Client{
+			Timeout: 30 * time.Second,
+			Jar:     jar,
+		},
+	}
+}
+
+// Get fetches the given URL and returns the response body as a string.
+func (h *HTTPClient) Get(ctx context.Context, rawURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+	req.Header.Set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
+	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+
+	resp, err := h.client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return "", fmt.Errorf("rate limited (429) by %s", rawURL)
+	}
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("HTTP %d from %s", resp.StatusCode, rawURL)
+	}
+
+	var sb strings.Builder
+	buf := make([]byte, 32*1024)
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			sb.Write(buf[:n])
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	return sb.String(), nil
 }

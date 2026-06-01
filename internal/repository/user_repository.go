@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -117,6 +118,28 @@ func (r *TenantRepository) Update(tenant *model.Tenant) error {
 
 func (r *TenantRepository) Delete(id uint) error {
 	return r.db.Delete(&model.Tenant{}, id).Error
+}
+
+// CheckAndConsumeQuota atomically verifies that tenantID has remaining quota for
+// quotaType and increments the usage counter by amount within a single transaction.
+// Currently supports quotaType = "users".
+func (r *TenantRepository) CheckAndConsumeQuota(tenantID uint, quotaType string, amount int) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var tenant model.Tenant
+		if err := tx.Set("gorm:query_option", "FOR UPDATE").First(&tenant, tenantID).Error; err != nil {
+			return fmt.Errorf("quota check: tenant %d not found: %w", tenantID, err)
+		}
+		switch quotaType {
+		case "users":
+			quota := tenant.GetQuota()
+			if quota.MaxUsers > 0 && tenant.UsedUsers+amount > quota.MaxUsers {
+				return fmt.Errorf("quota exceeded for %s: used %d, max %d", quotaType, tenant.UsedUsers, quota.MaxUsers)
+			}
+			return tx.Model(&tenant).UpdateColumn("used_users", gorm.Expr("used_users + ?", amount)).Error
+		default:
+			return fmt.Errorf("unknown quota type: %s", quotaType)
+		}
+	})
 }
 
 // TenantUserRepository 租户用户关联仓库

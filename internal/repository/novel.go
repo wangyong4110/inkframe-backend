@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
@@ -87,6 +88,21 @@ func (r *NovelRepository) FindByTitle(title string, tenantID uint) (*model.Novel
 	return &novel, nil
 }
 
+// SearchByTitle 按标题模糊搜索小说（限当前租户，防止跨租户数据泄露）
+func (r *NovelRepository) SearchByTitle(title string, tenantID uint, limit int) ([]*model.Novel, error) {
+	var novels []*model.Novel
+	if limit <= 0 {
+		limit = 20
+	}
+	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(title)
+	pattern := "%" + escaped + "%"
+	err := r.db.Where("title LIKE ? AND tenant_id = ? AND deleted_at IS NULL", pattern, tenantID).
+		Order("updated_at DESC").
+		Limit(limit).
+		Find(&novels).Error
+	return novels, err
+}
+
 // List 获取小说列表
 func (r *NovelRepository) List(page, pageSize int, filters map[string]interface{}) ([]*model.Novel, int64, error) {
 	var novels []*model.Novel
@@ -110,10 +126,27 @@ func (r *NovelRepository) List(page, pageSize int, filters map[string]interface{
 		return nil, 0, err
 	}
 
+	// 排序：支持从 filters 传入 sort 和 order，均经过白名单校验
+	allowedSortFields := map[string]bool{
+		"created_at": true, "updated_at": true, "title": true, "status": true,
+	}
+	sortField := "updated_at"
+	if v, ok := filters["sort"]; ok {
+		if s, ok := v.(string); ok && allowedSortFields[s] {
+			sortField = s
+		}
+	}
+	sortOrder := "DESC"
+	if v, ok := filters["order"]; ok {
+		if o, ok := v.(string); ok && (o == "asc" || o == "ASC") {
+			sortOrder = "ASC"
+		}
+	}
+
 	// 分页查询（列表视图不需要 Worldview 完整数据，novel.WorldviewID 字段已足够）
 	offset := (page - 1) * pageSize
 	if err := query.
-		Order("updated_at DESC").
+		Order(sortField + " " + sortOrder).
 		Offset(offset).
 		Limit(pageSize).
 		Find(&novels).Error; err != nil {
@@ -312,20 +345,23 @@ func (r *NovelRepository) DeleteWithCascade(id uint) error {
 
 // SyncStats recalculates chapter_count and total_words from the chapters table.
 func (r *NovelRepository) SyncStats(novelID uint) error {
-	var result struct {
-		Count int
-		Words int
-	}
-	if err := r.db.Model(&model.Chapter{}).
-		Select("COUNT(*) AS count, COALESCE(SUM(word_count),0) AS words").
-		Where("novel_id = ? AND deleted_at IS NULL", novelID).
-		Scan(&result).Error; err != nil {
-		return err
-	}
-	if err := r.db.Model(&model.Novel{}).Where("id = ?", novelID).Updates(map[string]interface{}{
-		"chapter_count": result.Count,
-		"total_words":   result.Words,
-	}).Error; err != nil {
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var result struct {
+			Count int
+			Words int
+		}
+		if err := tx.Model(&model.Chapter{}).
+			Select("COUNT(*) AS count, COALESCE(SUM(word_count),0) AS words").
+			Where("novel_id = ? AND deleted_at IS NULL", novelID).
+			Scan(&result).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.Novel{}).Where("id = ?", novelID).Updates(map[string]interface{}{
+			"chapter_count": result.Count,
+			"total_words":   result.Words,
+		}).Error
+	})
+	if err != nil {
 		return err
 	}
 	r.invalidateCache(novelID)
@@ -338,6 +374,37 @@ func (r *NovelRepository) SyncPublishedCount(novelID uint) error {
 		"UPDATE ink_novel SET published_count = (SELECT COUNT(*) FROM ink_chapter WHERE novel_id = ? AND is_published = TRUE AND deleted_at IS NULL) WHERE id = ?",
 		novelID, novelID,
 	).Error; err != nil {
+		return err
+	}
+	r.invalidateCache(novelID)
+	return nil
+}
+
+// SyncAllStats 在单个事务中原子地重新计算并更新小说的章节数、总字数和已发布章节数。
+func (r *NovelRepository) SyncAllStats(novelID uint) error {
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		var result struct {
+			Count int
+			Words int
+		}
+		if err := tx.Model(&model.Chapter{}).
+			Select("COUNT(*) AS count, COALESCE(SUM(word_count),0) AS words").
+			Where("novel_id = ? AND deleted_at IS NULL", novelID).
+			Scan(&result).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&model.Novel{}).Where("id = ?", novelID).Updates(map[string]interface{}{
+			"chapter_count": result.Count,
+			"total_words":   result.Words,
+		}).Error; err != nil {
+			return err
+		}
+		return tx.Exec(
+			"UPDATE ink_novel SET published_count = (SELECT COUNT(*) FROM ink_chapter WHERE novel_id = ? AND is_published = TRUE AND deleted_at IS NULL) WHERE id = ?",
+			novelID, novelID,
+		).Error
+	})
+	if err != nil {
 		return err
 	}
 	r.invalidateCache(novelID)

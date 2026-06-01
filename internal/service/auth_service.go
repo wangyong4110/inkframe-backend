@@ -703,6 +703,23 @@ func (s *AuthService) LoginWithOAuth(info *OAuthUserInfo) (*AuthResponse, error)
 		newUser.Phone = info.Phone
 	}
 	if err := s.userRepo.Create(newUser); err != nil {
+		if isDuplicateKeyError(err) {
+			// Concurrent OAuth login created the user between our GetByOAuth check and Create.
+			// Re-fetch the existing user and log in instead of returning an error.
+			existing, err2 := s.userRepo.GetByOAuth(info.Provider, info.OpenID)
+			if err2 != nil {
+				return nil, fmt.Errorf("failed to create user: %w", err)
+			}
+			if existing.Status != "active" {
+				return nil, errors.New("account is not active")
+			}
+			tu, err2 := s.getDefaultTenantUser(existing.ID)
+			if err2 != nil {
+				return nil, errors.New("no tenant associated with this account")
+			}
+			_ = s.userRepo.UpdateLastLogin(existing.ID)
+			return s.signToken(existing.ID, tu.TenantID, tu.Role)
+		}
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 
@@ -829,14 +846,30 @@ func (s *AuthService) ResetPassword(token, newPassword string) error {
 }
 
 // invalidateUserSessions 将用户当前时间戳写入 Redis，使所有颁发时间早于此时的 JWT 失效。
-// TTL 设为 90 天（与最长 token 生命周期对齐）。若 Redis 不可用则返回 nil（非致命）。
-// Fix 9: Returns error so callers can log Redis failures without blocking the main operation.
+// TTL 与配置的 JWT 有效期（jwtExpiry）一致，避免黑名单键永久留存或在 token 仍有效时提前过期。
+// 若 Redis 不可用则返回 nil（非致命）。
 func (s *AuthService) invalidateUserSessions(userID uint) error {
 	if s.rdb == nil {
 		return nil
 	}
+	// Use the configured JWT expiry as the blacklist TTL so the key is kept at least as long
+	// as any token that could have been issued. Fall back to 90 days if expiry is not set.
+	ttl := s.jwtExpiry
+	if ttl <= 0 {
+		ttl = 90 * 24 * time.Hour
+	}
 	key := fmt.Sprintf("jwt:user_invalidate:%d", userID)
-	return s.rdb.Set(context.Background(), key, time.Now().Unix(), 90*24*time.Hour).Err()
+	return s.rdb.Set(context.Background(), key, time.Now().Unix(), ttl).Err()
+}
+
+// isDuplicateKeyError returns true if the error originates from a database UNIQUE constraint violation.
+// Handles both MySQL ("Duplicate entry") and SQLite ("UNIQUE constraint failed") error messages.
+func isDuplicateKeyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Duplicate entry") || strings.Contains(msg, "UNIQUE constraint failed")
 }
 
 // ─────────────────────────────────────────────────────────────────────

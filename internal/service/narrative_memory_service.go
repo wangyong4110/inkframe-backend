@@ -3,10 +3,11 @@ package service
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
@@ -40,6 +41,10 @@ type NarrativeMemoryService struct {
 	arcRepo       *repository.ArcSummaryRepository
 	aiService     *AIService
 	snapshotRepo  snapshotLatestGetter
+
+	// arcGenLocks 防止多章节同时完成时，对同一 (novelID, arcNo) 重复生成弧摘要。
+	// key: "novelID-arcNo" (string), value: struct{}{}
+	arcGenLocks sync.Map
 }
 
 type novelGetter interface {
@@ -431,7 +436,6 @@ func renderHierarchicalContextPriority(ctx *HierarchicalContext) string {
 		Characters:       ctx.Characters,
 		RecentDetailed:   ctx.RecentDetailed,
 	}
-	base := renderHierarchicalContext(&ctxMin)
 
 	// 逐条追加 arc 摘要，不超限
 	arcLines := []ArcBrief{}
@@ -465,7 +469,6 @@ func renderHierarchicalContextPriority(ctx *HierarchicalContext) string {
 	}
 
 	// 最终兜底：截尾部
-	_ = base
 	runes := []rune(result)
 	maxRunes := maxHierarchicalContextBytes / 3
 	if len(runes) > maxRunes {
@@ -553,7 +556,14 @@ func (s *NarrativeMemoryService) TriggerArcSummaryIfNeeded(tenantID, novelID uin
 		// 完整弧结束 — 显式传参避免闭包捕获外层变量（防止快速连续调用时的竞态）
 		arcNo := completedChapterNo / arcSize
 		startChapter := completedChapterNo - arcSize + 1
-		go func(arcNo, startChapter, endChapter int) {
+		// 进程内去重：防止多章同时完成时对同一 arcNo 重复生成
+		lockKey := fmt.Sprintf("%d-%d", novelID, arcNo)
+		if _, loaded := s.arcGenLocks.LoadOrStore(lockKey, struct{}{}); loaded {
+			logger.Printf("[NarrativeMemory] arc %d (novel %d) already generating, skip", arcNo, novelID)
+			return
+		}
+		go func(arcNo, startChapter, endChapter int, lockKey string) {
+			defer s.arcGenLocks.Delete(lockKey)
 			defer func() {
 				if r := recover(); r != nil {
 					logger.Printf("[NarrativeMemory] arc summary panic: %v", r)
@@ -564,12 +574,19 @@ func (s *NarrativeMemoryService) TriggerArcSummaryIfNeeded(tenantID, novelID uin
 			} else {
 				logger.Printf("NarrativeMemory: arc %d summary done (novel %d, ch %d-%d)", arcNo, novelID, startChapter, endChapter)
 			}
-		}(arcNo, startChapter, completedChapterNo)
+		}(arcNo, startChapter, completedChapterNo, lockKey)
 	case completedChapterNo%halfArcSize == 0 && completedChapterNo%arcSize != 0:
 		// 弧中段预摘要（第5、15、25...章）；arcNo 用负数标识，不覆盖完整弧
 		midArcNo := -(completedChapterNo / halfArcSize)
 		startChapter := completedChapterNo - halfArcSize + 1
-		go func(midArcNo, startChapter, endChapter int) {
+		// 进程内去重：防止并发触发中段摘要
+		lockKey := fmt.Sprintf("%d-%d", novelID, midArcNo)
+		if _, loaded := s.arcGenLocks.LoadOrStore(lockKey, struct{}{}); loaded {
+			logger.Printf("[NarrativeMemory] mid-arc %d (novel %d) already generating, skip", midArcNo, novelID)
+			return
+		}
+		go func(midArcNo, startChapter, endChapter int, lockKey string) {
+			defer s.arcGenLocks.Delete(lockKey)
 			defer func() {
 				if r := recover(); r != nil {
 					logger.Printf("[NarrativeMemory] arc summary panic: %v", r)
@@ -580,7 +597,7 @@ func (s *NarrativeMemoryService) TriggerArcSummaryIfNeeded(tenantID, novelID uin
 			} else {
 				logger.Printf("NarrativeMemory: mid-arc %d summary done (novel %d, ch %d-%d)", midArcNo, novelID, startChapter, endChapter)
 			}
-		}(midArcNo, startChapter, completedChapterNo)
+		}(midArcNo, startChapter, completedChapterNo, lockKey)
 	}
 }
 
@@ -772,6 +789,10 @@ func (s *NarrativeMemoryService) ExtractCharacterVoice(tenantID uint, character 
 // RefineChapterContent
 // ──────────────────────────────────────────────
 
+// maxRefinementContentRunes 精修时传入 LLM 的最大正文字符数。
+// 保留足够的 token 空间给 prompt overhead 和模型输出，避免超出 context window。
+const maxRefinementContentRunes = 6000
+
 // RefineChapterContent 对章节内容做一轮精修（仅在检测到质量问题时执行）
 func (s *NarrativeMemoryService) RefineChapterContent(tenantID uint, chapter *model.Chapter, novelTitle string) (string, error) {
 	logger.Printf("[NarrativeMemory] RefineChapterContent: novelID=%d chapterNo=%d", chapter.NovelID, chapter.ChapterNo)
@@ -780,11 +801,15 @@ func (s *NarrativeMemoryService) RefineChapterContent(tenantID uint, chapter *mo
 		return chapter.Content, nil
 	}
 
+	// 对超长章节截断传入 prompt 的内容，避免超出 LLM context window。
+	// 精修后若内容被截断，护栏会拒绝字数大幅下降的结果，原文仍会保留。
+	contentForPrompt := truncateForPrompt(chapter.Content, maxRefinementContentRunes)
+
 	prompt, err := renderPrompt("refinement_pass", map[string]interface{}{
 		"NovelTitle":   novelTitle,
 		"ChapterNo":    chapter.ChapterNo,
 		"ChapterTitle": chapter.Title,
-		"Content":      chapter.Content,
+		"Content":      contentForPrompt,
 		"FocusAreas":   focusAreas,
 	})
 	if err != nil {

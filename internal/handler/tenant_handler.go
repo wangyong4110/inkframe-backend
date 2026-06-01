@@ -2,11 +2,15 @@ package handler
 
 import (
 	"net/http"
+	"regexp"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
+
+// tenantCodeRe validates tenant codes: 2-32 alphanumeric chars, hyphens, underscores.
+var tenantCodeRe = regexp.MustCompile(`^[a-zA-Z0-9_-]{2,32}$`)
 
 // TenantHandler 租户管理处理器
 type TenantHandler struct {
@@ -76,6 +80,11 @@ func (h *TenantHandler) CreateTenant(c *gin.Context) {
 		ContactEmail string `json:"contact_email"`
 	}
 	if !bindJSON(c, &req) {
+		return
+	}
+
+	if !tenantCodeRe.MatchString(req.Code) {
+		respondErr(c, http.StatusBadRequest, "tenant code must be 2-32 alphanumeric chars")
 		return
 	}
 
@@ -209,6 +218,11 @@ func (h *TenantHandler) GetQuota(c *gin.Context) {
 		return
 	}
 
+	if getTenantID(c) != id && c.GetString("user_role") != "admin" {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	quota, err := h.tenantService.GetQuota(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
@@ -248,8 +262,8 @@ func (h *TenantHandler) AddMember(c *gin.Context) {
 		return
 	}
 
-	if getTenantID(c) != id && c.GetString("user_role") != "admin" {
-		respondErr(c, http.StatusForbidden, "forbidden")
+	if !h.isAdminOrOwnerOfTenant(c, id) {
+		respondErr(c, http.StatusForbidden, "forbidden: admin or owner required")
 		return
 	}
 
@@ -315,6 +329,11 @@ func (h *TenantHandler) UpdateMemberRole(c *gin.Context) {
 		return
 	}
 
+	if !h.isAdminOrOwnerOfTenant(c, id) {
+		respondErr(c, http.StatusForbidden, "forbidden: admin or owner required")
+		return
+	}
+
 	var req struct {
 		Role string `json:"role" binding:"required"`
 	}
@@ -331,4 +350,23 @@ func (h *TenantHandler) UpdateMemberRole(c *gin.Context) {
 		"code":    0,
 		"message": "success",
 	})
+}
+
+// isAdminOrOwnerOfTenant returns true if the requesting user is:
+//   - a system-level admin (user_role == "admin"), OR
+//   - an owner or admin of the specified tenant.
+func (h *TenantHandler) isAdminOrOwnerOfTenant(c *gin.Context, tenantID uint) bool {
+	if c.GetString("user_role") == "admin" {
+		return true
+	}
+	userID, _ := c.Get("user_id")
+	uid, ok := userID.(uint)
+	if !ok || uid == 0 {
+		return false
+	}
+	role, err := h.tenantService.GetMemberRole(tenantID, uid)
+	if err != nil {
+		return false
+	}
+	return role == "owner" || role == "admin"
 }

@@ -508,6 +508,25 @@ func (h *VideoHandler) DeleteShotSFXItem(c *gin.Context) {
 	respondOK(c, nil)
 }
 
+// ReorderShots POST /videos/:id/shots/reorder
+// 交换两个分镜的 shot_no，实现拖拽排序。
+// body: { from_shot_id: int, to_shot_id: int }
+func (h *VideoHandler) ReorderShots(c *gin.Context) {
+	var req struct {
+		FromShotID uint `json:"from_shot_id" binding:"required"`
+		ToShotID   uint `json:"to_shot_id" binding:"required"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	fromShotNo, toShotNo, err := h.videoService.ReorderShots(req.FromShotID, req.ToShotID)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"from_shot_no": fromShotNo, "to_shot_no": toShotNo})
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // 批量配音（单任务，顺序处理，最多10个，避免TTS限流）
 // ─────────────────────────────────────────────────────────────────────────────

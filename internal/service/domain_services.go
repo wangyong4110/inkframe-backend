@@ -509,6 +509,56 @@ func (s *ModelService) SelectModel(taskType, strategy string, tenantID uint) (*m
 	}
 }
 
+// TestGeneratePrompt 用指定提供商直接生成内容（供前端测试功能使用）
+// providerID 为 model_provider 的 ID；prompt 为用户测试文本。
+func (s *ModelService) TestGeneratePrompt(ctx context.Context, tenantID uint, providerID uint, prompt string) (content string, tokens int, err error) {
+	if s.aiService == nil {
+		return "", 0, fmt.Errorf("AI service not available")
+	}
+	// 解析 provider name
+	provider, lookupErr := s.providerRepo.GetByIDAndTenant(providerID, tenantID)
+	if lookupErr != nil {
+		return "", 0, fmt.Errorf("provider not found: %w", lookupErr)
+	}
+	content, err = s.aiService.GenerateWithProviderCtx(ctx, tenantID, 0, "chapter", prompt, provider.Name)
+	return content, 0, err
+}
+
+// GetTaskProviderMappings 返回各任务类型当前绑定的 ProviderID（0 = 未绑定/使用默认）
+func (s *ModelService) GetTaskProviderMappings() map[string]uint {
+	taskTypes := []string{
+		"chapter_generation", "character_extraction", "storyboard_generation",
+		"image_generation", "tts", "translation",
+	}
+	result := make(map[string]uint, len(taskTypes))
+	for _, tt := range taskTypes {
+		cfg, cfgErr := s.taskRepo.GetByTaskType(tt)
+		if cfgErr == nil {
+			result[tt] = cfg.PrimaryProviderID
+		} else {
+			result[tt] = 0
+		}
+	}
+	return result
+}
+
+// SetTaskProviderMapping 更新指定任务类型的 Provider 绑定（providerID=0 表示清除绑定）
+func (s *ModelService) SetTaskProviderMapping(taskType string, providerID uint) error {
+	cfg, err := s.taskRepo.GetByTaskType(taskType)
+	if err != nil {
+		// 不存在则创建
+		cfg = &model.TaskModelConfig{
+			TaskType:          taskType,
+			PrimaryProviderID: providerID,
+			Temperature:       0.7,
+			IsActive:          true,
+		}
+		return s.taskRepo.Create(cfg)
+	}
+	cfg.PrimaryProviderID = providerID
+	return s.taskRepo.Update(cfg)
+}
+
 // ============================================
 // ForeshadowService adapter methods
 // ============================================
@@ -782,4 +832,20 @@ func (s *TenantService) UpdateMemberRole(tenantID, userID uint, role string) err
 		return fmt.Errorf("invalid role %q: must be owner/admin/member/viewer", role)
 	}
 	return s.tenantUserRepo.UpdateRole(tenantID, userID, role)
+}
+
+// GetMemberRole returns the role of a user within a tenant.
+// Returns ("", err) if the user is not a member.
+func (s *TenantService) GetMemberRole(tenantID, userID uint) (string, error) {
+	tu, err := s.tenantUserRepo.GetByTenantAndUser(tenantID, userID)
+	if err != nil {
+		return "", err
+	}
+	return tu.Role, nil
+}
+
+// checkAndConsumeQuota atomically checks whether tenantID has remaining quota for
+// quotaType and, if so, increments the usage counter by amount.
+func (s *TenantService) checkAndConsumeQuota(tenantID uint, quotaType string, amount int) error {
+	return s.tenantRepo.CheckAndConsumeQuota(tenantID, quotaType, amount)
 }

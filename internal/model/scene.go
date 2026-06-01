@@ -9,8 +9,8 @@ import (
 // PlotPoint 剧情点
 type PlotPoint struct {
 	ID        uint     `json:"id" gorm:"primaryKey"`
-	TenantID  uint     `json:"tenant_id" gorm:"index"`
-	NovelID   uint     `json:"novel_id" gorm:"index:idx_plotpoint_novel_resolved,priority:1;not null"`
+	TenantID  uint     `json:"tenant_id" gorm:"index;index:idx_plotpoint_tenant_novel,composite:tenant"`
+	NovelID   uint     `json:"novel_id" gorm:"index:idx_plotpoint_novel_resolved,priority:1;index:idx_plotpoint_tenant_novel,composite:novel;not null"`
 	ChapterID uint     `json:"chapter_id" gorm:"index;not null"`
 	Chapter   *Chapter `json:"chapter,omitempty" gorm:"foreignKey:ChapterID"`
 	Type      string   `json:"type" gorm:"size:50"`
@@ -43,8 +43,9 @@ type UpdatePlotPointRequest struct {
 
 // KnowledgeBase 知识库
 type KnowledgeBase struct {
-	ID   uint   `json:"id" gorm:"primaryKey"`
-	Type string `json:"type" gorm:"size:50;index;index:idx_kb_novel_type,priority:2"`
+	ID       uint `json:"id" gorm:"primaryKey"`
+	TenantID uint `json:"tenant_id" gorm:"index;index:idx_kb_tenant_novel,composite:tenant;not null;default:1"`
+	Type     string `json:"type" gorm:"size:50;index;index:idx_kb_novel_type,priority:2"`
 	// character_fact=角色事实, lore=世界观知识, writing_technique=写作技巧
 
 	Title   string `json:"title" gorm:"size:255;not null"`
@@ -53,7 +54,7 @@ type KnowledgeBase struct {
 	Tags string `json:"tags" gorm:"type:text"` // JSON数组
 
 	// 关联
-	NovelID         *uint           `json:"novel_id,omitempty" gorm:"index;index:idx_kb_novel_type,priority:1"`
+	NovelID         *uint           `json:"novel_id,omitempty" gorm:"index;index:idx_kb_novel_type,priority:1;index:idx_kb_tenant_novel,composite:novel"`
 	Novel           *Novel          `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
 	SourceChapterID *uint           `json:"source_chapter_id,omitempty" gorm:"index"`
 	ReferenceID     *uint           `json:"reference_id,omitempty" gorm:"index"`
@@ -150,8 +151,8 @@ func (ConflictArc) TableName() string { return "ink_conflict_arc" }
 // SceneAnchor 场景锚点（固定命名场景的视觉描述，确保分镜跨镜头布景一致）
 type SceneAnchor struct {
 	ID       uint `json:"id" gorm:"primaryKey"`
-	TenantID uint `json:"tenant_id" gorm:"index;not null;default:1"`
-	NovelID  uint `json:"novel_id" gorm:"uniqueIndex:idx_scene_anchor_novel_name;not null"`
+	TenantID uint `json:"tenant_id" gorm:"index;index:idx_scene_anchor_tenant_novel,composite:tenant;not null;default:1"`
+	NovelID  uint `json:"novel_id" gorm:"uniqueIndex:idx_scene_anchor_novel_name;index:idx_scene_anchor_tenant_novel,composite:novel;not null"`
 
 	Name        string `json:"name" gorm:"size:255;not null;uniqueIndex:idx_scene_anchor_novel_name"`
 	Type        string `json:"type" gorm:"size:50"` // interior/exterior/imaginary

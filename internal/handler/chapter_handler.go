@@ -215,8 +215,10 @@ func (h *ChapterHandler) DeleteChapter(c *gin.Context) {
 	respondOK(c, nil)
 }
 
-// GenerateChapter 生成章节内容
+// GenerateChapter 生成章节内容（异步任务）
 // POST /api/v1/chapters/generate
+// Returns HTTP 202 with {task_id, status:"pending"} immediately.
+// Poll GET /api/v1/tasks/:id to track progress; on completion result.data.chapter contains the chapter.
 func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 	var req model.GenerateChapterRequest
 	if !bindJSON(c, &req) {
@@ -233,23 +235,45 @@ func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 		req.ModelOverride = override
 	}
 
-	chapter, err := h.chapterService.GenerateChapter(getTenantID(c), req.NovelID, &req)
+	tenantID := getTenantID(c)
+
+	// Cancel any active chapter_gen task for this novel to avoid duplicate runs.
+	h.taskSvc.CancelActiveByEntity("novel", req.NovelID, service.TaskTypeChapterGen)
+
+	// Create an async task and return immediately (HTTP 202).
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterGen, "章节生成", "novel", req.NovelID)
 	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
+		respondErr(c, http.StatusInternalServerError, "failed to create task: "+err.Error())
 		return
 	}
 
-	modelUsed := req.ModelOverride
-	if modelUsed == "" {
-		modelUsed = h.chapterService.GetDefaultProviderName()
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":       0,
-		"message":    "success",
-		"data":       chapter,
-		"model_used": modelUsed,
+	// Persist request parameters so the task can be resumed after a server restart.
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"novel_id": req.NovelID,
+		"req":      req,
 	})
+
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[ChapterHandler] GenerateChapter task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID)        //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 5) //nolint:errcheck
+
+		chapter, genErr := h.chapterService.GenerateChapter(tenantID, req.NovelID, &req)
+		if genErr != nil {
+			logger.Printf("[ChapterHandler] GenerateChapter task %s failed: novelID=%d err=%v", taskID, req.NovelID, genErr)
+			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.UpdateProgress(taskID, 90)                                                      //nolint:errcheck
+		h.taskSvc.Complete(taskID, map[string]interface{}{"chapter": chapter}) //nolint:errcheck
+	}(task.TaskID)
+
+	respondAccepted(c, task.TaskID, "章节生成任务已提交")
 }
 
 // RegenerateChapter 重新生成章节
@@ -417,10 +441,7 @@ func (h *ChapterHandler) DeleteChapterByNo(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-	})
+	respondOK(c, nil)
 }
 
 // PublishChapter 发布章节到广场
@@ -617,10 +638,7 @@ func (h *ChapterHandler) ApproveChapter(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-	})
+	respondOK(c, nil)
 }
 
 // RejectChapter 驳回章节
@@ -644,10 +662,7 @@ func (h *ChapterHandler) RejectChapter(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-	})
+	respondOK(c, nil)
 }
 
 // BatchSummarizeChapters 批量生成章节摘要（异步任务）
@@ -719,6 +734,9 @@ func (h *ChapterHandler) ReviewChapter(c *gin.Context) {
 		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 
+		// Intentionally use context.Background(): this goroutine runs after respondAccepted
+		// returns the HTTP response. c.Request.Context() would be cancelled at that point,
+		// which would abort the long-running AI review call.
 		review, reviewErr := h.qualityService.ReviewChapter(context.Background(), uint(id), req.Provider)
 		if reviewErr != nil {
 			logger.Printf("[ChapterHandler] ReviewChapter task %s failed: chapterID=%d err=%v", taskID, id, reviewErr)
@@ -947,5 +965,39 @@ func (h *ChapterHandler) ListContinuityReports(c *gin.Context) {
 		return
 	}
 	respondOK(c, records)
+}
+
+// BatchDeleteChapters 批量删除章节
+// DELETE /api/v1/novels/:id/chapters
+// Body: {"chapter_ids": [1,2,3]}
+func (h *ChapterHandler) BatchDeleteChapters(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	if !h.checkNovelOwnership(c, novelID) {
+		return
+	}
+
+	var req struct {
+		ChapterIDs []uint `json:"chapter_ids" binding:"required,min=1"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, "invalid request: "+err.Error())
+		return
+	}
+	if len(req.ChapterIDs) == 0 {
+		respondBadRequest(c, "chapter_ids must not be empty")
+		return
+	}
+
+	tenantID := getTenantID(c)
+	if err := h.chapterService.BatchDeleteChapters(c.Request.Context(), novelID, tenantID, req.ChapterIDs); err != nil {
+		logger.Printf("[ChapterHandler] BatchDeleteChapters: novelID=%d err=%v", novelID, err)
+		respondErr(c, http.StatusInternalServerError, "delete failed")
+		return
+	}
+	respondOK(c, gin.H{"deleted": len(req.ChapterIDs)})
 }
 

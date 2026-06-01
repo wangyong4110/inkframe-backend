@@ -68,6 +68,27 @@ func (h *AssetHandler) Upload(c *gin.Context) {
 		return
 	}
 
+	// Extension whitelist — validated first to prevent extension spoofing
+	allowedExtensions := map[string]bool{
+		".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true,
+		".mp4": true, ".webm": true,
+		".mp3": true, ".wav": true, ".ogg": true,
+		".pdf": true,
+		".txt": true,
+	}
+	// Map extensions to expected MIME category prefixes for cross-validation
+	extMIMECategory := map[string]string{
+		".jpg": "image/", ".jpeg": "image/", ".png": "image/", ".gif": "image/", ".webp": "image/",
+		".mp4": "video/", ".webm": "video/",
+		".mp3": "audio/", ".wav": "audio/", ".ogg": "audio/",
+		".pdf": "application/", ".txt": "text/",
+	}
+	fileExt := strings.ToLower(filepath.Ext(header.Filename))
+	if !allowedExtensions[fileExt] {
+		respondBadRequest(c, "unsupported file type: "+fileExt)
+		return
+	}
+
 	// MIME type whitelist
 	allowedTypes := map[string]bool{
 		"image/jpeg": true, "image/png": true, "image/gif": true, "image/webp": true,
@@ -88,6 +109,13 @@ func (h *AssetHandler) Upload(c *gin.Context) {
 	if !allowedTypes[detectedType] {
 		respondBadRequest(c, "file type not allowed: "+detectedType)
 		return
+	}
+	// Cross-validate: extension category must match detected MIME category
+	if expectedCategory, ok := extMIMECategory[fileExt]; ok {
+		if !strings.HasPrefix(detectedType, expectedCategory) {
+			respondBadRequest(c, "file content does not match extension")
+			return
+		}
 	}
 
 	title := c.PostForm("title")

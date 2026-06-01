@@ -15,6 +15,7 @@ type PlotPointHandler struct {
 	svc        *service.PlotPointService
 	chapterSvc *service.ChapterService
 	taskSvc    *service.TaskService
+	novelSvc   *service.NovelService
 }
 
 func NewPlotPointHandler(svc *service.PlotPointService) *PlotPointHandler {
@@ -30,6 +31,25 @@ func (h *PlotPointHandler) WithChapterService(svc *service.ChapterService) *Plot
 func (h *PlotPointHandler) WithTaskService(svc *service.TaskService) *PlotPointHandler {
 	h.taskSvc = svc
 	return h
+}
+
+// WithNovelService 注入小说服务（用于 ListByNovel 时验证小说归属租户）
+func (h *PlotPointHandler) WithNovelService(svc *service.NovelService) *PlotPointHandler {
+	h.novelSvc = svc
+	return h
+}
+
+// checkNovelTenant 校验小说归属当前租户。
+// 返回 false 时已写入错误响应。
+func (h *PlotPointHandler) checkNovelTenant(c *gin.Context, novelID uint) bool {
+	if h.novelSvc == nil {
+		return true // novelSvc 未注入时跳过检查（兼容测试）
+	}
+	if _, err := h.novelSvc.GetNovel(novelID, getTenantID(c)); err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found")
+		return false
+	}
+	return true
 }
 
 // ListByChapter GET /chapters/:id/plot-points
@@ -87,10 +107,31 @@ func (h *PlotPointHandler) ExtractFromChapter(c *gin.Context) {
 	respondOK(c, gin.H{"plot_points": pps, "total": len(pps)})
 }
 
+// Get GET /plot-points/:id
+func (h *PlotPointHandler) Get(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	pp, err := h.svc.Get(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "plot point not found")
+		return
+	}
+	if pp.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
+	respondOK(c, pp)
+}
+
 // ListByNovel GET /novels/:id/plot-points
 func (h *PlotPointHandler) ListByNovel(c *gin.Context) {
 	novelID, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+	if !h.checkNovelTenant(c, uint(novelID)) {
 		return
 	}
 	ppType := c.Query("type")

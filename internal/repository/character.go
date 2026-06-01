@@ -31,7 +31,7 @@ func (r *CharacterRepository) GetByID(id uint) (*model.Character, error) {
 // ListByNovel 获取小说的所有角色
 func (r *CharacterRepository) ListByNovel(novelID uint) ([]*model.Character, error) {
 	var characters []*model.Character
-	if err := r.db.Where("novel_id = ?", novelID).Find(&characters).Error; err != nil {
+	if err := r.db.Where("novel_id = ? AND deleted_at IS NULL", novelID).Find(&characters).Error; err != nil {
 		return nil, err
 	}
 	return characters, nil

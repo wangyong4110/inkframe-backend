@@ -209,6 +209,7 @@ func main() {
 		NotificationHandler:   handlers.NotificationHandler,
 		KnowledgeHandler:      handlers.KnowledgeHandler,
 		DramaticHandler:       handlers.DramaticHandler,
+		DashboardHandler:      handlers.DashboardHandler,
 	})
 
 	// 12. 创建服务器
@@ -220,7 +221,11 @@ func main() {
 		MaxHeaderBytes: cfg.Server.MaxHeaderBytes,
 	}
 
-	// 13. 启动服务器
+	// 13. 创建服务器根 context（在此后所有后台任务使用，shutdown 时统一取消）
+	serverRootCtx, serverRootCancel := context.WithCancel(context.Background())
+	defer serverRootCancel()
+
+	// 13b. 启动服务器
 	safeGo("http-server", func() {
 		logger.Printf("Server starting on %s", cfg.Server.GetAddr())
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -237,10 +242,20 @@ func main() {
 	safeGo("chunk-cleanup", handler.CleanupChunkStore)
 
 	// 注册可续跑任务类型，然后启动任务恢复（必须在所有服务 wiring 完成后调用）
+	// Pass serverRootCtx so resumed goroutines can be cancelled on graceful shutdown.
 	if services.TaskService != nil {
 		registerTaskResumeHandlers(services, repos)
-		services.TaskService.Boot()
+		services.TaskService.Boot(serverRootCtx)
 	}
+
+	// 启动时重置所有卡在 "rewriting" 状态超过 30 分钟的章节改写任务，
+	// 以恢复因服务崩溃或意外重启而中断的改写管道。
+	if services.RewriteService != nil {
+		services.RewriteService.ResetStaleChapters()
+	}
+
+	// 恢复服务重启前仍处于 "generating" 状态的视频轮询任务（非阻塞）。
+	go services.VideoService.RecoverActivePollTasks()
 
 	// 14. 等待中断信号
 	quit := make(chan os.Signal, 1)
@@ -258,6 +273,8 @@ func main() {
 	}
 
 	// 16. 关闭后台服务 goroutines
+	// Cancel server root context first so all resumed task goroutines stop promptly.
+	serverRootCancel()
 	close(hotScoreQuit)
 	services.VideoService.Shutdown()
 	services.NovelService.Shutdown()

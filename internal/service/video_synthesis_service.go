@@ -72,6 +72,8 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 			shot.RetryCount++
 			shot.Status = "pending"
 			shot.ShotTaskID = ""
+		} else {
+			logger.Printf("PollShotStatus: shot %d exceeded max retries (%d), marking as permanently failed", shot.ShotNo, shot.RetryCount)
 		}
 	case "processing", "running", "submitted":
 		shot.Status = "processing"
@@ -247,6 +249,10 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 			os.Remove(res.imgFile)
 			if clipErr != nil {
 				logger.Printf("[StitchVideo] shot %d: still frame failed: %v — skipping", shot.ShotNo, clipErr)
+				_ = s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{
+					"status":        "failed",
+					"error_message": fmt.Sprintf("still frame generation failed: %v", clipErr),
+				})
 				continue
 			}
 			logger.Printf("[StitchVideo] shot %d: still frame ready: %s", shot.ShotNo, clipPath)
@@ -380,6 +386,28 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 
 // ─── Poll & Stitch Pipeline ───────────────────────────────────────────────────
 
+// RecoverActivePollTasks 服务重启后恢复状态为 "generating" 的视频轮询任务。
+// 在 main.go 完成所有服务 wiring 后调用（goroutine 方式，非阻塞）。
+func (s *VideoService) RecoverActivePollTasks() {
+	var videos []model.Video
+	if err := s.videoRepo.DB().
+		Where("status = ?", "generating").
+		Find(&videos).Error; err != nil {
+		logger.Printf("[VideoService] RecoverActivePollTasks: query failed: %v", err)
+		return
+	}
+	for _, v := range videos {
+		v := v
+		if _, loaded := s.activePoll.LoadOrStore(v.ID, struct{}{}); !loaded {
+			logger.Printf("[VideoService] RecoverActivePollTasks: resuming poll for video %d", v.ID)
+			go func() {
+				s.activePoll.Delete(v.ID) // PollAndStitchVideo will re-register
+				s.PollAndStitchVideo(v.ID)
+			}()
+		}
+	}
+}
+
 // PollAndStitchVideo 后台轮询所有分镜状态，完成后拼接
 func (s *VideoService) PollAndStitchVideo(videoID uint) {
 	if _, loaded := s.activePoll.LoadOrStore(videoID, struct{}{}); loaded {
@@ -394,6 +422,12 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	noProgressCount := 0
+
+	// Heartbeat / liveness tracking: record the last time we saw any shot status change.
+	// If 30 minutes pass with no status change at all, treat the pipeline as stalled.
+	const heartbeatStallDuration = 30 * time.Minute
+	lastProgressAt := time.Now()
+	lastCompletedCount := -1 // -1 = not yet measured
 
 	for {
 		select {
@@ -457,6 +491,24 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 			}
 		}
 
+		// Heartbeat: update lastProgressAt whenever completedCount advances.
+		if completedCount != lastCompletedCount {
+			lastProgressAt = time.Now()
+			lastCompletedCount = completedCount
+		}
+
+		// Heartbeat stall detection: no shot has completed in 30 minutes.
+		if time.Since(lastProgressAt) > heartbeatStallDuration {
+			logger.Printf("PollAndStitchVideo: videoID %d stalled — no progress for %.0f minutes",
+				videoID, heartbeatStallDuration.Minutes())
+			if vid, err := s.videoRepo.GetByID(videoID); err == nil && vid != nil && vid.Status == "generating" {
+				vid.Status = "failed"
+				vid.ErrorMessage = fmt.Sprintf("video generation stalled: no progress for %.0f minutes", heartbeatStallDuration.Minutes())
+				_ = s.videoRepo.Update(vid)
+			}
+			return
+		}
+
 		if completedCount+failedCount == len(allShots) {
 			if completedCount > 0 {
 				if _, err := s.StitchVideoCtx(ctx, videoID); err != nil {
@@ -483,13 +535,13 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 			return
 		}
 
-		// Stall detection (no progress after 5 ticks): re-query to get fresh counts
+		// Stall detection (no active work after 5 ticks): re-query to get fresh counts
 		processingNow, _ := s.storyboardRepo.ListByVideoAndStatus(videoID, "processing")
 		pendingNow, _ := s.storyboardRepo.ListByVideoAndStatus(videoID, "pending")
 		if len(processingNow) == 0 && len(pendingNow) == 0 {
 			noProgressCount++
 			if noProgressCount >= 5 {
-				logger.Printf("PollAndStitchVideo: videoID %d stalled, stopping", videoID)
+				logger.Printf("PollAndStitchVideo: videoID %d stalled (no active shots), stopping", videoID)
 				if vid, err := s.videoRepo.GetByID(videoID); err == nil && vid.Status == "generating" {
 					vid.Status = "failed"
 					vid.ErrorMessage = "generation stalled (no progress)"

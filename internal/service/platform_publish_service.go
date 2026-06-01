@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -129,6 +130,19 @@ func (s *PlatformPublishService) PublishToExternal(ctx context.Context, video *m
 				continue
 			}
 
+			// Fix 1: Auto-refresh token if expired or expiring within 5 minutes
+			if account.ExpiresAt != nil && account.ExpiresAt.Before(time.Now().Add(5*time.Minute)) {
+				if refreshErr := p.RefreshToken(bgCtx, account); refreshErr != nil {
+					logger.Printf("[PlatformPublish] token refresh failed for account %d: %v", account.ID, refreshErr)
+					// Continue anyway — let publish attempt reveal the real error
+				} else {
+					// Persist refreshed token
+					if updateErr := s.accountRepo.UpdateTokens(account.ID, account.AccessToken, account.RefreshToken, account.ExpiresAt); updateErr != nil {
+						logger.Printf("[PlatformPublish] failed to persist refreshed token for account %d: %v", account.ID, updateErr)
+					}
+				}
+			}
+
 			// 创建发布记录
 			rec := &model.VideoPublishRecord{
 				VideoID:   video.ID,
@@ -141,8 +155,19 @@ func (s *PlatformPublishService) PublishToExternal(ctx context.Context, video *m
 				continue
 			}
 
-			// 发布视频
-			externalID, externalURL, pubErr := p.PublishVideo(bgCtx, account, video.FinalVideoURL, opts)
+			// Fix 3: Retry publish up to 3 attempts with exponential backoff
+			var externalID, externalURL string
+			var pubErr error
+			for attempt := 0; attempt < 3; attempt++ {
+				externalID, externalURL, pubErr = p.PublishVideo(bgCtx, account, video.FinalVideoURL, opts)
+				if pubErr == nil {
+					break
+				}
+				if attempt < 2 {
+					logger.Printf("[PlatformPublish] attempt %d failed for record %d: %v, retrying...", attempt+1, rec.ID, pubErr)
+					time.Sleep(time.Duration(1<<uint(attempt)) * time.Second) // 1s, 2s
+				}
+			}
 			if pubErr != nil {
 				logger.Printf("[PlatformPublish] video=%d platform=%s: publish failed: %v", video.ID, account.Platform, pubErr)
 				if err := s.recordRepo.UpdateStatus(rec.ID, "failed", pubErr.Error(), "", ""); err != nil {

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"net/http"
 	"strconv"
@@ -50,8 +52,17 @@ func (h *PlatformHandler) GetPlatformNovels(c *gin.Context) {
 	wordMax, _ := strconv.Atoi(c.Query("word_max"))
 	updatedDays, _ := strconv.Atoi(c.Query("updated_days"))
 
+	// Whitelist allowed sort values to prevent injection/unexpected behavior
+	allowedSortValues := map[string]bool{
+		"hot": true, "latest": true, "words": true, "favorites": true,
+	}
+	sortVal := c.DefaultQuery("sort", "hot")
+	if !allowedSortValues[sortVal] {
+		sortVal = "hot"
+	}
+
 	f := repository.NovelPublicFilter{
-		Sort:        c.DefaultQuery("sort", "hot"),
+		Sort:        sortVal,
 		Q:           c.Query("q"),
 		Channel:     c.Query("channel"),
 		Genre:       c.Query("genre"),
@@ -464,25 +475,69 @@ func (h *PlatformHandler) ListAccounts(c *gin.Context) {
 	respondOK(c, accounts)
 }
 
-// ConnectAccount OAuth 跳转
-func (h *PlatformHandler) ConnectAccount(c *gin.Context) {
+// GetOAuthURL Fix 5: returns the OAuth authorization URL as JSON instead of a 302 redirect.
+// GET /api/v1/platform/accounts/oauth-url/:platform?redirect_uri=...
+func (h *PlatformHandler) GetOAuthURL(c *gin.Context) {
 	platform := c.Param("platform")
 	redirectURI := c.Query("redirect_uri")
-	state := c.Query("state")
 	if redirectURI == "" {
 		respondErr(c, http.StatusBadRequest, "redirect_uri is required")
 		return
 	}
-	url, err := h.publishService.GetAuthURL(platform, redirectURI, state)
+
+	// Fix 4: Generate a cryptographically random state for CSRF protection.
+	var stateBuf [16]byte
+	if _, err := rand.Read(stateBuf[:]); err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to generate state")
+		return
+	}
+	state := hex.EncodeToString(stateBuf[:])
+
+	oauthURL, err := h.publishService.GetAuthURL(platform, redirectURI, state)
 	if err != nil {
 		respondErr(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	if url == "" {
+	if oauthURL == "" {
 		respondErr(c, http.StatusNotImplemented, "platform not configured")
 		return
 	}
-	c.Redirect(http.StatusFound, url)
+
+	// Store state in an HttpOnly cookie so OAuthCallback can verify it (CSRF protection).
+	c.SetCookie("platform_oauth_state", state, 600, "/", "", false, true)
+	respondOK(c, gin.H{"oauth_url": oauthURL})
+}
+
+// ConnectAccount OAuth 跳转 (redirect flow — kept for backwards compatibility)
+func (h *PlatformHandler) ConnectAccount(c *gin.Context) {
+	platform := c.Param("platform")
+	redirectURI := c.Query("redirect_uri")
+	if redirectURI == "" {
+		respondErr(c, http.StatusBadRequest, "redirect_uri is required")
+		return
+	}
+
+	// Fix 4: Generate a cryptographically random state for CSRF protection.
+	var stateBuf [16]byte
+	if _, err := rand.Read(stateBuf[:]); err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to generate state")
+		return
+	}
+	state := hex.EncodeToString(stateBuf[:])
+
+	oauthURL, err := h.publishService.GetAuthURL(platform, redirectURI, state)
+	if err != nil {
+		respondErr(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if oauthURL == "" {
+		respondErr(c, http.StatusNotImplemented, "platform not configured")
+		return
+	}
+
+	// Store state in an HttpOnly cookie so OAuthCallback can verify it (CSRF protection).
+	c.SetCookie("platform_oauth_state", state, 600, "/", "", false, true)
+	c.Redirect(http.StatusFound, oauthURL)
 }
 
 // OAuthCallback OAuth 回调
@@ -494,6 +549,15 @@ func (h *PlatformHandler) OAuthCallback(c *gin.Context) {
 		respondErr(c, http.StatusBadRequest, "code is required")
 		return
 	}
+
+	// Fix 4: Validate state parameter against the cookie to prevent CSRF.
+	defer c.SetCookie("platform_oauth_state", "", -1, "/", "", false, true)
+	cookieState, err := c.Cookie("platform_oauth_state")
+	if err != nil || cookieState == "" || cookieState != c.Query("state") {
+		respondErr(c, http.StatusBadRequest, "invalid or expired oauth state")
+		return
+	}
+
 	account, err := h.publishService.ConnectAccount(c.Request.Context(), platform, code, redirectURI, getTenantID(c))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())

@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -279,29 +280,61 @@ func (s *McpService) GetByName(name string) (*model.McpTool, error) {
 	return &tool, nil
 }
 
-// containsPrivateURL checks whether a JSON string contains references to private/internal URLs.
-func containsPrivateURL(s string) bool {
-	privatePatterns := []string{
-		"localhost", "127.0.0.1", "0.0.0.0", "169.254.", "10.", "172.16.", "192.168.",
-		"::1", "metadata.google", "169.254.169.254",
-	}
-	lower := strings.ToLower(s)
-	for _, p := range privatePatterns {
-		if strings.Contains(lower, p) {
-			return true
+// isPrivateIP returns true if the IP is loopback, private, or link-local.
+// Uses net.IP methods rather than string prefix matching to prevent bypass via
+// alternate representations (e.g., decimal encoding, IPv6 mapped addresses).
+func isPrivateIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
+}
+
+// checkParamsForSSRF extracts all http(s) URLs from the params JSON and rejects
+// any that resolve to a private/internal address. This prevents SSRF via tool params.
+func checkParamsForSSRF(paramsJSON string) error {
+	urlRe := regexp.MustCompile(`https?://[^\s"'<>]+`)
+	for _, match := range urlRe.FindAllString(paramsJSON, -1) {
+		u, err := url.Parse(match)
+		if err != nil {
+			continue
+		}
+		host := u.Hostname()
+		// Reject well-known internal hostnames regardless of resolution
+		lh := strings.ToLower(host)
+		if lh == "localhost" || lh == "0.0.0.0" || strings.HasSuffix(lh, ".local") ||
+			strings.HasSuffix(lh, ".internal") || lh == "metadata.google.internal" {
+			return fmt.Errorf("parameter contains disallowed internal host: %s", host)
+		}
+		// Parse as IP and check private ranges
+		if ip := net.ParseIP(host); ip != nil {
+			if isPrivateIP(ip) {
+				return fmt.Errorf("parameter contains private network URL: %s", match)
+			}
 		}
 	}
-	return false
+	return nil
+}
+
+// containsPrivateURL checks whether a JSON string contains references to private/internal URLs.
+// Kept for backward compatibility; new code should prefer checkParamsForSSRF.
+func containsPrivateURL(s string) bool {
+	return checkParamsForSSRF(s) != nil
 }
 
 // InvokeTool 调用指定名称的 MCP 工具（向其 Endpoint 发送 POST 请求）
 // params 以 JSON 形式作为请求体发送，响应 JSON 解析后作为 output 返回。
-// 若工具未启用（is_active=false）则返回错误。
-func (s *McpService) InvokeTool(ctx context.Context, toolName string, params map[string]interface{}) (map[string]interface{}, error) {
+// 若工具未启用（is_active=false）或不属于该租户则返回错误。
+// tenantID=0 表示系统调用，跳过租户校验（仅内部使用）。
+func (s *McpService) InvokeTool(ctx context.Context, tenantID uint, toolName string, params map[string]interface{}) (map[string]interface{}, error) {
 	tool, err := s.GetByName(toolName)
 	if err != nil {
 		return nil, fmt.Errorf("mcp tool %q not found: %w", toolName, err)
 	}
+
+	// Tenant isolation: the tool must belong to this tenant or be a system tool (TenantID=0).
+	// tenantID=0 is reserved for internal/system callers and bypasses this check.
+	if tenantID != 0 && !tool.IsSystem && tool.TenantID != tenantID {
+		return nil, fmt.Errorf("tool not found or access denied")
+	}
+
 	if !tool.IsActive {
 		return nil, fmt.Errorf("mcp tool %q is not active", toolName)
 	}
@@ -309,13 +342,13 @@ func (s *McpService) InvokeTool(ctx context.Context, toolName string, params map
 		return nil, fmt.Errorf("mcp tool %q has no endpoint configured", toolName)
 	}
 
-	// Validate params: max size, no internal URLs (SSRF protection)
+	// Validate params: max size, no internal URLs (SSRF protection via net.IP-based check)
 	paramsJSON, err := json.Marshal(params)
 	if err != nil || len(paramsJSON) > 64*1024 { // 64KB max
 		return nil, fmt.Errorf("params too large or invalid")
 	}
-	if containsPrivateURL(string(paramsJSON)) {
-		return nil, fmt.Errorf("params contain disallowed URLs")
+	if err := checkParamsForSSRF(string(paramsJSON)); err != nil {
+		return nil, fmt.Errorf("SSRF protection: %w", err)
 	}
 
 	reqBody := paramsJSON

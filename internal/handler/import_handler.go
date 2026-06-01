@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/inkframe/inkframe-backend/internal/crawler"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
@@ -24,6 +25,7 @@ import (
 type chunkSession struct {
 	UploadID    string
 	TotalChunks int
+	TotalSize   int64 // declared total file size in bytes (0 = not provided)
 	TenantID    uint
 	FileName    string
 	Format      string
@@ -275,9 +277,10 @@ func (h *ImportHandler) ImportFromURL(c *gin.Context) {
 // POST /api/v1/import/novel/crawl
 func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 	var req struct {
-		URL      string `json:"url" binding:"required"`
-		SiteName string `json:"site_name,omitempty"`
-		NovelID  uint   `json:"novel_id,omitempty"`
+		URL      string               `json:"url" binding:"required"`
+		SiteName string               `json:"site_name,omitempty"`
+		NovelID  uint                 `json:"novel_id,omitempty"`
+		Config   *crawler.CrawlConfig `json:"config,omitempty"`
 	}
 	if !bindJSON(c, &req) {
 		return
@@ -286,12 +289,13 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 	callerUID, _ := c.Get("user_id")
 	callerUserID, _ := callerUID.(uint)
 	importReq := &service.ImportRequest{
-		Source:   service.SourceCrawl,
-		URL:      req.URL,
-		SiteName: req.SiteName,
-		NovelID:  req.NovelID,
-		TenantID: getTenantID(c),
-		UserID:   callerUserID,
+		Source:      service.SourceCrawl,
+		URL:         req.URL,
+		SiteName:    req.SiteName,
+		NovelID:     req.NovelID,
+		TenantID:    getTenantID(c),
+		UserID:      callerUserID,
+		CrawlConfig: req.Config,
 	}
 	tenantID := getTenantID(c)
 
@@ -475,10 +479,17 @@ func (h *ImportHandler) InitChunkedUpload(c *gin.Context) {
 	var body struct {
 		Filename    string `json:"filename" binding:"required"`
 		TotalChunks int    `json:"total_chunks" binding:"required,min=1"`
+		TotalSize   int64  `json:"total_size,omitempty"`  // optional: declared total file size in bytes
 		NovelID     uint   `json:"novel_id,omitempty"`
 		Format      string `json:"format,omitempty"`
 	}
 	if !bindJSON(c, &body) {
+		return
+	}
+
+	const maxTotalSize = 500 * 1024 * 1024 // 500 MB
+	if body.TotalSize > 0 && body.TotalSize > maxTotalSize {
+		respondErr(c, http.StatusRequestEntityTooLarge, "declared file size exceeds 500MB limit")
 		return
 	}
 
@@ -492,6 +503,7 @@ func (h *ImportHandler) InitChunkedUpload(c *gin.Context) {
 	sess := &chunkSession{
 		UploadID:    uploadID,
 		TotalChunks: body.TotalChunks,
+		TotalSize:   body.TotalSize,
 		TenantID:    getTenantID(c),
 		FileName:    body.Filename,
 		Format:      body.Format,

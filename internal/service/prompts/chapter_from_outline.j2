@@ -125,5 +125,5 @@
 
 # 开始创作
 
-第{{ ChapterNo }}章 {{ ChapterTitle }}
+第{{ ChapterNo | default(0) }}章 {{ ChapterTitle | default("") }}
 

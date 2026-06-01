@@ -205,9 +205,11 @@ func (s *VideoService) CreateVideoFromChapter(novelID uint, chapterID *uint) (*m
 		Resolution:  "1080p",
 		AspectRatio: "16:9",
 	}
-	if novel, err := s.novelRepo.GetByID(novelID); err == nil {
-		video.TenantID = novel.TenantID
+	novel, err := s.novelRepo.GetByID(novelID)
+	if err != nil {
+		return nil, fmt.Errorf("novel %d not found: %w", novelID, err)
 	}
+	video.TenantID = novel.TenantID
 
 	if err := s.videoRepo.Create(video); err != nil {
 		return nil, err
@@ -504,26 +506,44 @@ func (s *VideoService) RecalcVideoHotScores() error {
 }
 
 // DeleteVideo 删除视频（级联删除所有子记录：分镜、语音段、音效、BGM段）
+// 所有操作在同一事务中执行，任何步骤失败均回滚。
 func (s *VideoService) DeleteVideo(id uint) error {
 	return s.videoRepo.DB().Transaction(func(tx *gorm.DB) error {
-		// Get all shot IDs for this video
+		// 1. 获取所有 shot IDs（含软删除记录，确保级联彻底）
 		var shotIDs []uint
-		tx.Model(&model.StoryboardShot{}).
-			Where("video_id = ? AND deleted_at IS NULL", id).
-			Pluck("id", &shotIDs)
+		if err := tx.Unscoped().Model(&model.StoryboardShot{}).
+			Where("video_id = ?", id).
+			Pluck("id", &shotIDs).Error; err != nil {
+			return fmt.Errorf("DeleteVideo: pluck shot ids: %w", err)
+		}
 
 		if len(shotIDs) > 0 {
-			// Delete voice segments
-			tx.Where("shot_id IN ?", shotIDs).Delete(&model.ShotVoiceSegment{})
-			// Delete SFX items
-			tx.Where("shot_id IN ?", shotIDs).Delete(&model.ShotSFXItem{})
+			// 2. 删除语音段（硬删除）
+			if err := tx.Unscoped().Where("shot_id IN ?", shotIDs).
+				Delete(&model.ShotVoiceSegment{}).Error; err != nil {
+				return fmt.Errorf("DeleteVideo: delete voice segments: %w", err)
+			}
+			// 3. 删除音效条目（硬删除）
+			if err := tx.Unscoped().Where("shot_id IN ?", shotIDs).
+				Delete(&model.ShotSFXItem{}).Error; err != nil {
+				return fmt.Errorf("DeleteVideo: delete sfx items: %w", err)
+			}
 		}
-		// Delete BGM segments
-		tx.Where("video_id = ?", id).Delete(&model.VideoBGMSegment{})
-		// Delete shots
-		tx.Where("video_id = ?", id).Delete(&model.StoryboardShot{})
-		// Delete the video itself
-		return tx.Delete(&model.Video{}, id).Error
+		// 4. 删除 BGM 分段
+		if err := tx.Unscoped().Where("video_id = ?", id).
+			Delete(&model.VideoBGMSegment{}).Error; err != nil {
+			return fmt.Errorf("DeleteVideo: delete bgm segments: %w", err)
+		}
+		// 5. 删除分镜（硬删除）
+		if err := tx.Unscoped().Where("video_id = ?", id).
+			Delete(&model.StoryboardShot{}).Error; err != nil {
+			return fmt.Errorf("DeleteVideo: delete shots: %w", err)
+		}
+		// 6. 删除视频本体
+		if err := tx.Unscoped().Delete(&model.Video{}, id).Error; err != nil {
+			return fmt.Errorf("DeleteVideo: delete video: %w", err)
+		}
+		return nil
 	})
 }
 

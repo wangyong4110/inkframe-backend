@@ -80,6 +80,32 @@ func (r *WorldviewRepository) IncrementUsageCount(id uint) error {
 		UpdateColumn("used_count", gorm.Expr("used_count + 1")).Error
 }
 
+// ListWithEntities 获取世界观列表并同时加载所有实体（单次 Preload，避免 N+1 查询）。
+func (r *WorldviewRepository) ListWithEntities(tenantID uint, page, pageSize int, genre string) ([]*model.Worldview, int64, error) {
+	var worldviews []*model.Worldview
+	var total int64
+
+	query := r.db.Model(&model.Worldview{}).Where("tenant_id = ?", tenantID)
+	if genre != "" {
+		query = query.Where("genre = ?", genre)
+	}
+
+	if err := query.Session(&gorm.Session{}).Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+
+	offset := (page - 1) * pageSize
+	if err := query.Preload("Entities").
+		Order("used_count DESC").
+		Offset(offset).
+		Limit(pageSize).
+		Find(&worldviews).Error; err != nil {
+		return nil, 0, err
+	}
+
+	return worldviews, total, nil
+}
+
 // GetEntities 获取世界观的所有实体
 func (r *WorldviewRepository) GetEntities(worldviewID uint) ([]*model.WorldviewEntity, error) {
 	var entities []*model.WorldviewEntity

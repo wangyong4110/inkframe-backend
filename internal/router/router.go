@@ -49,6 +49,7 @@ type Config struct {
 	NotificationHandler    *handler.NotificationHandler
 	KnowledgeHandler       *handler.KnowledgeHandler
 	DramaticHandler        *handler.DramaticHandler
+	DashboardHandler       *handler.DashboardHandler
 }
 
 // SetupRouter 配置路由
@@ -56,10 +57,11 @@ func SetupRouter(cfg *Config) *gin.Engine {
 	r := gin.New()
 
 	// 全局中间件
+	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))
 	r.Use(middleware.Logger())
 	r.Use(middleware.Recovery())
-	r.Use(middleware.MaxBodySize(4 * 1024 * 1024)) // 4MB for JSON; upload handlers handle their own limits
+	r.Use(middleware.MaxBodySize(1 * 1024 * 1024)) // 1MB for JSON; multipart/upload routes are excluded by middleware
 
 	// 健康检查（公开）
 	r.GET("/health", func(c *gin.Context) {
@@ -227,6 +229,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			// 章节
 			novels.GET("/:id/chapters", cfg.ChapterHandler.ListChapters)
 			novels.POST("/:id/chapters", cfg.ChapterHandler.CreateChapter)
+			novels.DELETE("/:id/chapters", cfg.ChapterHandler.BatchDeleteChapters)
 			novels.POST("/:id/chapters/batch-summarize", cfg.ChapterHandler.BatchSummarizeChapters)
 			novels.POST("/:id/chapters/batch-publish", cfg.ChapterHandler.BatchPublishChapters)
 			novels.GET("/:id/chapters/:chapter_no", cfg.ChapterHandler.GetChapterByNo)
@@ -266,6 +269,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 
 			// 分析导入的小说（状态通过统一端点 GET /api/v1/tasks/:task_id 查询）
 			novels.POST("/:id/analyze", cfg.ImportHandler.StartAnalysis)
+			// 分析进度查询（直接按 novel_id 查最新分析任务）
+			novels.GET("/:id/analysis/status", cfg.NovelHandler.GetAnalysisStatus)
 
 			// 爬取进度
 			novels.GET("/:id/crawl/status", cfg.ImportHandler.GetCrawlStatus)
@@ -309,6 +314,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				novels.GET("/:id/knowledge/search", cfg.KnowledgeHandler.SearchKnowledge)
 				novels.GET("/:id/knowledge", cfg.KnowledgeHandler.ListKnowledge)
 				novels.POST("/:id/knowledge", cfg.KnowledgeHandler.CreateKnowledge)
+				novels.POST("/:id/knowledge/bulk-import", cfg.KnowledgeHandler.BulkImport)
 				novels.PUT("/:id/knowledge/:kb_id", cfg.KnowledgeHandler.UpdateKnowledge)
 				novels.DELETE("/:id/knowledge/:kb_id", cfg.KnowledgeHandler.DeleteKnowledge)
 			}
@@ -404,6 +410,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		if cfg.PlotPointHandler != nil {
 			plotPoints := v1.Group("/plot-points")
 			{
+				plotPoints.GET("/:id", cfg.PlotPointHandler.Get)
 				plotPoints.PUT("/:id", cfg.PlotPointHandler.Update)
 				plotPoints.PUT("/:id/resolve", cfg.PlotPointHandler.MarkResolved)
 				plotPoints.DELETE("/:id", cfg.PlotPointHandler.Delete)
@@ -494,6 +501,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.POST("/:id/shots/batch-images", cfg.VideoHandler.BatchGenerateShotImages)
 			videos.POST("/:id/shots/batch-clips", cfg.VideoHandler.BatchGenerateShotClips)
 			videos.POST("/:id/shots/insert", cfg.VideoHandler.InsertShot)
+			videos.POST("/:id/shots/reorder", cfg.VideoHandler.ReorderShots)
 			videos.POST("/:id/shots/sfx", cfg.VideoHandler.BatchGenerateSFX)
 			videos.POST("/:id/shots/sfx-tags", cfg.VideoHandler.AnalyzeSFXTags)
 			videos.POST("/:id/shots/batch-voice", cfg.VideoHandler.BatchGenerateVoice)
@@ -590,6 +598,9 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			models.POST("", cfg.ModelHandler.CreateModel)
 			models.GET("/available/:task_type", cfg.ModelHandler.GetAvailableModels)
 			models.POST("/select", cfg.ModelHandler.SelectModel)
+			models.POST("/test-prompt", cfg.ModelHandler.TestModelPrompt)
+			models.GET("/task-mappings", cfg.ModelHandler.GetTaskMappings)
+			models.PUT("/task-mappings", cfg.ModelHandler.UpdateTaskMapping)
 			models.PUT("/:id", cfg.ModelHandler.UpdateModel)
 			models.DELETE("/:id", cfg.ModelHandler.DeleteModel)
 			models.POST("/:id/test", cfg.ModelHandler.TestModel)
@@ -695,6 +706,11 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			system.PUT("/settings/:key", cfg.SystemHandler.UpdateSetting)
 		}
 
+		// 仪表盘统计
+		if cfg.DashboardHandler != nil {
+			v1.GET("/dashboard/stats", cfg.DashboardHandler.GetStats)
+		}
+
 		// 平台广场 + 外部账号（JWT 保护部分）
 		if cfg.PlatformHandler != nil {
 			// JWT 保护的平台路由
@@ -720,6 +736,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				platformR.GET("/me/reading-history", cfg.PlatformHandler.GetReadingHistory)
 				platformR.GET("/accounts", cfg.PlatformHandler.ListAccounts)
 				platformR.GET("/accounts/oauth/:platform", cfg.PlatformHandler.ConnectAccount)
+				platformR.GET("/accounts/oauth-url/:platform", cfg.PlatformHandler.GetOAuthURL)
 				platformR.GET("/accounts/callback/:platform", cfg.PlatformHandler.OAuthCallback)
 				platformR.DELETE("/accounts/:id", cfg.PlatformHandler.DisconnectAccount)
 			}

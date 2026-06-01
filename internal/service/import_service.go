@@ -18,7 +18,6 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/PuerkitoBio/goquery"
 	"github.com/google/uuid"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
@@ -58,15 +57,16 @@ const (
 
 // ImportRequest 导入请求
 type ImportRequest struct {
-	Source   ImportSource `json:"source"`
-	URL      string       `json:"url,omitempty"`       // 导入URL
-	FileData []byte       `json:"file_data,omitempty"` // 文件数据
-	FileName string       `json:"file_name,omitempty"` // 文件名
-	Format   ImportFormat `json:"format,omitempty"`    // 文件格式
-	SiteName string       `json:"site_name,omitempty"` // 站点名称（爬取时）
-	NovelID  uint         `json:"novel_id,omitempty"`  // 已有小说ID（追加时）
-	TenantID uint         `json:"tenant_id,omitempty"` // 租户ID（用于去重）
-	UserID   uint         `json:"user_id,omitempty"`   // 发起导入的用户ID（用于站内通知）
+	Source      ImportSource        `json:"source"`
+	URL         string              `json:"url,omitempty"`       // 导入URL
+	FileData    []byte              `json:"file_data,omitempty"` // 文件数据
+	FileName    string              `json:"file_name,omitempty"` // 文件名
+	Format      ImportFormat        `json:"format,omitempty"`    // 文件格式
+	SiteName    string              `json:"site_name,omitempty"` // 站点名称（爬取时）
+	NovelID     uint                `json:"novel_id,omitempty"`  // 已有小说ID（追加时）
+	TenantID    uint                `json:"tenant_id,omitempty"` // 租户ID（用于去重）
+	UserID      uint                `json:"user_id,omitempty"`   // 发起导入的用户ID（用于站内通知）
+	CrawlConfig *crawler.CrawlConfig `json:"-"`                  // optional per-crawl settings
 }
 
 // ImportResult 导入结果
@@ -90,6 +90,11 @@ type CrawlProgress struct {
 	Done    int    `json:"done"`
 	Failed  int    `json:"failed"`
 	Current string `json:"current"` // 当前正在爬取的章节标题
+	// Populated from crawler stats
+	BytesDownloaded int64   `json:"bytes_downloaded"`
+	PagesVisited    int     `json:"pages_visited"`
+	ElapsedSecs     float64 `json:"elapsed_secs"`
+	SpeedCPS        float64 `json:"speed_cps"` // chars crawled per second
 }
 
 // NovelImportService 小说导入服务
@@ -208,12 +213,16 @@ func (s *NovelImportService) GetCrawlProgress(novelID uint) (*CrawlProgress, err
 		p := v.(*CrawlProgress)
 		p.mu.RLock()
 		cp := &CrawlProgress{
-			NovelID: p.NovelID,
-			Status:  p.Status,
-			Total:   p.Total,
-			Done:    p.Done,
-			Failed:  p.Failed,
-			Current: p.Current,
+			NovelID:         p.NovelID,
+			Status:          p.Status,
+			Total:           p.Total,
+			Done:            p.Done,
+			Failed:          p.Failed,
+			Current:         p.Current,
+			BytesDownloaded: p.BytesDownloaded,
+			PagesVisited:    p.PagesVisited,
+			ElapsedSecs:     p.ElapsedSecs,
+			SpeedCPS:        p.SpeedCPS,
 		}
 		p.mu.RUnlock()
 		return cp, nil
@@ -309,82 +318,49 @@ func (s *NovelImportService) crawlChaptersBackground(
 			jobID = job.ID
 		}
 	}
-	httpClient := crawler.NewHTTPClient()
-	const rateLimit = 2 * time.Second
-
+	// Build fetch list from chapter stubs (those with a "crawl:" URL in Outline)
+	var toFetch []*crawler.ChapterInfo
+	var modelChapters []*model.Chapter
 	for _, ch := range chapters {
-		select {
-		case <-ctx.Done():
-			progress.mu.Lock()
-			progress.Status = "paused"
-			doneAtPause := progress.Done
-			totalAtPause := progress.Total
-			failedAtPause := progress.Failed
-			progress.mu.Unlock()
-			if jobID > 0 && s.crawlJobRepo != nil {
-				_ = s.crawlJobRepo.Finalize(jobID, "paused", doneAtPause, totalAtPause, failedAtPause)
-			}
-			return
-		default:
-		}
-
-		chapterURL := strings.TrimPrefix(ch.Outline, "crawl:")
-		if chapterURL == "" {
+		chURL := strings.TrimPrefix(ch.Outline, "crawl:")
+		if chURL == "" {
 			progress.mu.Lock()
 			progress.Done++
 			progress.mu.Unlock()
 			continue
 		}
+		toFetch = append(toFetch, &crawler.ChapterInfo{
+			Title: ch.Title, URL: chURL, ChapterNo: ch.ChapterNo,
+		})
+		modelChapters = append(modelChapters, ch)
+	}
+
+	for r := range s.crawler.FetchChapterStream(ctx, toFetch, parser) {
+		ch := modelChapters[r.Index]
 
 		progress.mu.Lock()
 		progress.Current = ch.Title
 		progress.mu.Unlock()
 
-		// 爬取页面
-		html, err := httpClient.Get(ctx, chapterURL)
-		if err != nil {
-			logger.Printf("[Crawl] chapter %d fetch error: %v", ch.ChapterNo, err)
+		if r.Err != nil || r.Content == nil || r.Content.Content == "" {
+			logger.Printf("[Crawl] chapter %d fetch/parse error: %v", ch.ChapterNo, r.Err)
 			progress.mu.Lock()
 			progress.Failed++
 			progress.mu.Unlock()
-			time.Sleep(rateLimit)
 			continue
 		}
 
-		doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-		if err != nil {
-			logger.Printf("[Crawl] chapter %d parse html error: %v", ch.ChapterNo, err)
-			progress.mu.Lock()
-			progress.Failed++
-			progress.mu.Unlock()
-			time.Sleep(rateLimit)
-			continue
-		}
-
-		content, err := parser.ParseChapter(doc)
-		if err != nil || content.Content == "" {
-			logger.Printf("[Crawl] chapter %d parse content error: %v", ch.ChapterNo, err)
-			progress.mu.Lock()
-			progress.Failed++
-			progress.mu.Unlock()
-			time.Sleep(rateLimit)
-			continue
-		}
-
-		// 使用爬取到的标题（若非空）
 		title := ch.Title
-		if strings.TrimSpace(content.Title) != "" {
-			title = strings.TrimSpace(content.Title)
+		if strings.TrimSpace(r.Content.Title) != "" {
+			title = strings.TrimSpace(r.Content.Title)
 		}
-		wordCount := len([]rune(content.Content))
+		wordCount := len([]rune(r.Content.Content))
 
-		// 写回数据库
-		if err := s.chapterRepo.UpdateCrawledContent(ch.ID, title, content.Content, wordCount); err != nil {
+		if err := s.chapterRepo.UpdateCrawledContent(ch.ID, title, r.Content.Content, wordCount); err != nil {
 			logger.Printf("[Crawl] chapter %d save error: %v", ch.ChapterNo, err)
 			progress.mu.Lock()
 			progress.Failed++
 			progress.mu.Unlock()
-			time.Sleep(rateLimit)
 			continue
 		}
 
@@ -396,18 +372,31 @@ func (s *NovelImportService) crawlChaptersBackground(
 		progress.mu.Unlock()
 		logger.Printf("[Crawl] novel=%d chapter=%d/%d done", novelID, doneSoFar, totalSoFar)
 
-		// 每5章持久化一次进度到 DB
-		if jobID > 0 && s.crawlJobRepo != nil && doneSoFar%5 == 0 {
-			_ = s.crawlJobRepo.UpdateProgress(jobID, doneSoFar, totalSoFar, failedSoFar)
+		// Every 5 chapters: persist progress + update crawler stats on progress
+		if doneSoFar%5 == 0 {
+			if jobID > 0 && s.crawlJobRepo != nil {
+				_ = s.crawlJobRepo.UpdateProgress(jobID, doneSoFar, totalSoFar, failedSoFar)
+			}
+			stats := s.crawler.GetStats()
+			elapsed := stats.ElapsedSeconds()
+			var speedCPS float64
+			if elapsed > 0 {
+				speedCPS = float64(stats.BytesDownloaded) / elapsed
+			}
+			progress.mu.Lock()
+			progress.BytesDownloaded = stats.BytesDownloaded
+			progress.PagesVisited = stats.PagesVisited
+			progress.ElapsedSecs = elapsed
+			progress.SpeedCPS = speedCPS
+			progress.mu.Unlock()
 		}
 
-		// 爬取完成后自动生成 AI 摘要（失败时重试一次）
+		// AI summary generation after chapter fetch
 		if s.narrativeMemory != nil {
 			ch.Title = title
-			ch.Content = content.Content
+			ch.Content = r.Content.Content
 			summary, summaryErr := s.narrativeMemory.GenerateChapterSummary(0, ch, novelTitle)
 			if summaryErr != nil {
-				// Retry once after a brief pause
 				time.Sleep(2 * time.Second)
 				summary, summaryErr = s.narrativeMemory.GenerateChapterSummary(0, ch, novelTitle)
 				if summaryErr != nil {
@@ -423,8 +412,6 @@ func (s *NovelImportService) crawlChaptersBackground(
 				logger.Printf("[Crawl] chapter %d summary generation failed (keeping existing): %v", ch.ChapterNo, summaryErr)
 			}
 		}
-
-		time.Sleep(rateLimit)
 	}
 
 	// 收尾
@@ -792,21 +779,21 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 		return nil, err
 	}
 
-	httpClient := crawler.NewHTTPClient()
+	// Apply per-request crawl config if provided
+	if req.CrawlConfig != nil {
+		s.crawler.SetConfig(*req.CrawlConfig)
+	} else {
+		s.crawler.SetConfig(crawler.DefaultCrawlConfig())
+	}
 
 	// 下载小说目录页
-	html, err := httpClient.Get(context.Background(), req.URL)
+	root, err := s.crawler.FetchPageHTML(req.URL)
 	if err != nil {
 		return nil, fmt.Errorf("get page failed: %w", err)
 	}
 
-	doc, err := goquery.NewDocumentFromReader(strings.NewReader(html))
-	if err != nil {
-		return nil, fmt.Errorf("parse page failed: %w", err)
-	}
-
 	// 解析小说详情
-	detail, err := parser.ParseNovelDetail(doc, req.URL)
+	detail, err := parser.ParseNovelDetail(root, req.URL)
 	if err != nil {
 		return nil, fmt.Errorf("parse novel detail failed: %w", err)
 	}
@@ -814,13 +801,13 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 	// 解析章节列表：优先使用 Ajax API（如解析器实现了 ChapterListFetcher），失败则回退 HTML 解析
 	var chapterInfos []*crawler.ChapterInfo
 	if fetcher, ok := parser.(crawler.ChapterListFetcher); ok {
-		chapterInfos, err = fetcher.FetchChapterList(context.Background(), httpClient, req.URL)
+		chapterInfos, err = fetcher.FetchChapterList(context.Background(), s.crawler.Jar(), req.URL)
 		if err != nil {
 			logger.Printf("[Import] Ajax chapter list failed (%v), falling back to HTML parse", err)
-			chapterInfos, err = parser.ParseChapterList(doc)
+			chapterInfos, err = parser.ParseChapterList(root)
 		}
 	} else {
-		chapterInfos, err = parser.ParseChapterList(doc)
+		chapterInfos, err = parser.ParseChapterList(root)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("parse chapter list failed: %w", err)

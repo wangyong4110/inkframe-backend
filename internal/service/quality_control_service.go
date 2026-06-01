@@ -98,6 +98,15 @@ func (s *QualityControlService) runAIQualityCheck(chapter *model.Chapter, novel 
 		return nil, fmt.Errorf("AI quality check failed: %w", err)
 	}
 
+	// Strip markdown code fences that LLMs sometimes add
+	result = strings.TrimSpace(result)
+	if strings.HasPrefix(result, "```") {
+		if idx := strings.Index(result, "\n"); idx != -1 {
+			result = result[idx+1:]
+		}
+		result = strings.TrimSuffix(strings.TrimSpace(result), "```")
+	}
+
 	content := extractJSONObject(result)
 	var scores AIQualityScores
 	if err := json.Unmarshal([]byte(content), &scores); err != nil {
@@ -582,6 +591,15 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 		StoryboardOverrides{MaxTokens: 8192})
 	if err != nil {
 		return nil, fmt.Errorf("AI chapter review failed: %w", err)
+	}
+
+	// Strip markdown code fences that LLMs sometimes add
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "```") {
+		if idx := strings.Index(raw, "\n"); idx != -1 {
+			raw = raw[idx+1:]
+		}
+		raw = strings.TrimSuffix(strings.TrimSpace(raw), "```")
 	}
 
 	content := extractJSONObject(raw)

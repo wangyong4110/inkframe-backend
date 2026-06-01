@@ -539,7 +539,10 @@ func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
 		Provider string `json:"provider"` // 可选：指定图像生成提供者
 		Force    bool   `json:"force"`    // true=强制重新生成（风格变更时使用）
 	}
-	_ = c.ShouldBindJSON(&req)
+	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
+		respondBadRequest(c, "invalid request: "+err.Error())
+		return
+	}
 	tenantID := getTenantID(c)
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeThreeView, "批量生成角色图片", "novel", uint(novelID))
 	if err != nil {

@@ -273,7 +273,7 @@ func (p *VolcengineVisualProvider) submitTask(ctx context.Context, params map[st
 	return resp.Data.TaskID, nil
 }
 
-// pollResult 轮询任务结果，最多等待 5 分钟
+// pollResult 轮询任务结果，最多等待 5 分钟（或父 context 更早超时时以父为准）。
 func (p *VolcengineVisualProvider) pollResult(ctx context.Context, reqKey, taskID string, start time.Time) (*ImageResponse, error) {
 	reqJSON := `{"return_url":true}`
 	getParams := map[string]interface{}{
@@ -283,18 +283,26 @@ func (p *VolcengineVisualProvider) pollResult(ctx context.Context, reqKey, taskI
 	}
 	getBody, _ := json.Marshal(getParams)
 
-	deadline := time.Now().Add(5 * time.Minute)
+	const maxPollDuration = 5 * time.Minute
+	deadline := time.Now().Add(maxPollDuration)
+	// 若父 context 有更早的截止时间，以父的为准，避免轮询超过调用方的容忍上限
+	if parentDeadline, ok := ctx.Deadline(); ok && parentDeadline.Before(deadline) {
+		deadline = parentDeadline
+	}
+	pollCtx, cancelPoll := context.WithDeadline(ctx, deadline)
+	defer cancelPoll()
+
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-ticker.C:
-			if time.Now().After(deadline) {
-				return nil, fmt.Errorf("即梦AI: 任务超时（taskID=%s）", taskID)
+		case <-pollCtx.Done():
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
 			}
+			return nil, fmt.Errorf("即梦AI: 任务超时（taskID=%s）", taskID)
+		case <-ticker.C:
 
 			respBody, err := p.doRequest(ctx, volcengineActionGetResult, getBody)
 			if err != nil {

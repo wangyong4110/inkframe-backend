@@ -45,10 +45,11 @@ func (s *JSONUintSlice) Scan(value interface{}) error {
 // 索引说明：
 //   - idx_task_tenant_status: 按租户+状态过滤（ListByTenant、cleanup）
 //   - idx_task_tenant_type_status: 按租户+类型+状态组合查询
+//   - idx_task_tenant_created: 按租户+创建时间过滤（per-tenant fairness 轮询）
 type AsyncTask struct {
 	ID         uint           `json:"id" gorm:"primaryKey"`
 	TaskID     string         `json:"task_id" gorm:"uniqueIndex;size:64;not null"`
-	TenantID   uint           `json:"tenant_id" gorm:"not null;default:1;index:idx_task_tenant_status;index:idx_task_tenant_type_status"`
+	TenantID   uint           `json:"tenant_id" gorm:"not null;default:1;index:idx_task_tenant_status;index:idx_task_tenant_type_status;index:idx_task_tenant_created,priority:1"`
 	Type       string         `json:"type" gorm:"size:50;not null;index:idx_task_tenant_type_status"`
 	Status     string         `json:"status" gorm:"size:20;not null;default:pending;index:idx_task_tenant_status;index:idx_task_tenant_type_status"`
 	Title      string         `json:"title" gorm:"size:255"`
@@ -58,7 +59,12 @@ type AsyncTask struct {
 	ParamsJSON string         `json:"-" gorm:"column:params;type:mediumtext"` // mediumtext 支持 16MB，避免大参数超 text 65KB 限制
 	Error      string         `json:"error,omitempty" gorm:"type:text"`
 	Progress   int            `json:"progress" gorm:"default:0"`
-	CreatedAt  time.Time      `json:"created_at"`
+	// Dead-letter queue fields: track retries and accumulated failure logs.
+	// Status "dead" means all retries exhausted and the task will not be retried.
+	RetryCount int    `json:"retry_count" gorm:"not null;default:0"`
+	MaxRetries int    `json:"max_retries" gorm:"not null;default:3"`
+	FailureLog string `json:"failure_log,omitempty" gorm:"type:text"`
+	CreatedAt  time.Time      `json:"created_at" gorm:"index:idx_task_tenant_created,priority:2"`
 	UpdatedAt  time.Time      `json:"updated_at"`
 	DeletedAt  gorm.DeletedAt `json:"-" gorm:"index"`
 }
@@ -77,6 +83,7 @@ func (t AsyncTask) MarshalJSON() ([]byte, error) {
 		"entity_type": t.EntityType,
 		"entity_id":   t.EntityID,
 		"progress":    t.Progress,
+		"retry_count": t.RetryCount,
 		"created_at":  t.CreatedAt,
 		"updated_at":  t.UpdatedAt,
 	}
@@ -274,6 +281,10 @@ type Chapter struct {
 	Status string `json:"status" gorm:"size:20;index:idx_chapter_novel_status,priority:2;default:draft"`
 	// draft=草稿, generating=生成中, completed=已完成
 
+	// ContinuityBlocked 当连贯性检查发现 high/critical 级别问题时由异步后处理标记为 true。
+	// 不阻塞章节返回，前端根据此字段决定是否提示用户审查。
+	ContinuityBlocked bool `json:"continuity_blocked" gorm:"default:false"`
+
 	// 广场发布状态（与内容状态解耦）
 	IsPublished bool       `json:"is_published" gorm:"default:false;index"`
 	PublishedAt *time.Time `json:"published_at"`
@@ -300,6 +311,9 @@ type Worldview struct {
 	Name        string `json:"name" gorm:"size:255;not null"`
 	Description string `json:"description" gorm:"type:text"`
 	Genre       string `json:"genre" gorm:"size:50;index"`
+
+	// 关联实体（用于 Preload，避免 N+1 查询）
+	Entities []*WorldviewEntity `json:"entities,omitempty" gorm:"foreignKey:WorldviewID"`
 
 	// 世界观元素
 	MagicSystem string `json:"magic_system" gorm:"type:text"`
@@ -363,7 +377,9 @@ func (WorldviewEntity) TableName() string {
 
 // QualityReport 质量报告
 type QualityReport struct {
-	ID         uint   `json:"id" gorm:"primaryKey"`
+	ID       uint `json:"id" gorm:"primaryKey"`
+	TenantID uint `json:"tenant_id" gorm:"index;not null;default:1"`
+
 	UUID       string `json:"uuid" gorm:"uniqueIndex;size:36"`
 	TargetType string `json:"target_type" gorm:"size:50;index:idx_quality_target,priority:1"`
 	// novel=小说, chapter=章节, video=视频

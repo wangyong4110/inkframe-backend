@@ -124,17 +124,22 @@ func (s *AIService) runProviderHealthChecks() {
 	if err != nil {
 		return
 	}
+	sem := make(chan struct{}, 10)
 	for _, p := range providers {
 		if !p.IsActive || !providerHasCredentials(p) {
 			continue
 		}
 		p := p
+		sem <- struct{}{}
 		go func() {
+			defer func() { <-sem }()
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			provider, err := s.getTenantProvider(p.TenantID, p.Name)
 			status := "ok"
 			if err != nil {
+				status = "down"
+			} else if provider == nil {
 				status = "down"
 			} else if hErr := provider.HealthCheck(ctx); hErr != nil {
 				status = "degraded"
@@ -175,9 +180,22 @@ func (s *AIService) WithImageConcurrency(n int) *AIService {
 }
 
 // SetImageConcurrency 运行时动态调整图像并发度（线程安全）。
+// 替换 channel 前先排干旧 channel 中的令牌，避免新旧 channel 并发竞争导致
+// goroutine 持有旧 channel 令牌但向新 channel 归还的情况。
 func (s *AIService) SetImageConcurrency(n int) {
 	s.semMu.Lock()
 	defer s.semMu.Unlock()
+	// 排干旧 channel（非阻塞）
+	if s.imageSem != nil {
+	drainLoop:
+		for {
+			select {
+			case <-s.imageSem:
+			default:
+				break drainLoop
+			}
+		}
+	}
 	if n > 0 {
 		s.imageSem = make(chan struct{}, n)
 	} else {
@@ -283,7 +301,15 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 
 	if matched == nil {
 		// DB 中无配置，降级到内存 aiManager
-		return s.aiManager.GetProvider(providerName)
+		p, err := s.aiManager.GetProvider(providerName)
+		if err != nil {
+			// 区分租户无配置与系统无配置，给出有指导意义的错误信息
+			if tenantID > 0 {
+				return nil, fmt.Errorf("tenant %d has no AI providers configured for task type %q; please add one in Model Management", tenantID, providerName)
+			}
+			return nil, fmt.Errorf("no AI provider available for %q: %w", providerName, err)
+		}
+		return p, nil
 	}
 
 	// Validate credentials before constructing the provider.
@@ -506,9 +532,13 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 			default: // "balanced" or unrecognised
 				selected = selectBalanced(candidates)
 			}
-			// Fix 4: Guard against nil selected / nil Provider before dereferencing.
+			// Fix 4: Guard against nil selected — degrade to balanced selection before giving up.
 			if selected == nil {
-				return "", fmt.Errorf("no suitable model available for strategy=%q taskType=%q", config.Strategy, taskType)
+				selected = selectBalanced(candidates)
+				if selected == nil {
+					return "", fmt.Errorf("no suitable model available for strategy=%q taskType=%q", config.Strategy, taskType)
+				}
+				logger.Printf("[AI] strategy %q found no suitable model, falling back to balanced selection", config.Strategy)
 			}
 			if selected.Provider == nil {
 				return "", fmt.Errorf("model %d has no provider configured", selected.ID)
@@ -615,9 +645,13 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 			default:
 				selected = selectBalanced(candidates)
 			}
-			// Fix 4: Guard against nil selected / nil Provider before dereferencing.
+			// Fix 4: Guard against nil selected — degrade to balanced selection before giving up.
 			if selected == nil {
-				return "", fmt.Errorf("no suitable model available for strategy=%q taskType=%q", config.Strategy, taskType)
+				selected = selectBalanced(candidates)
+				if selected == nil {
+					return "", fmt.Errorf("no suitable model available for strategy=%q taskType=%q", config.Strategy, taskType)
+				}
+				logger.Printf("[AI] strategy %q found no suitable model, falling back to balanced selection", config.Strategy)
 			}
 			if selected.Provider == nil {
 				return "", fmt.Errorf("model %d has no provider configured", selected.ID)
@@ -777,6 +811,9 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 		logger.Printf("callAIWithProvider: getTenantProvider failed (tenant=%d, provider=%q): %v", tenantID, providerName, err)
 		return "", nil, fmt.Errorf("failed to get AI provider: %w", err)
 	}
+	if provider == nil {
+		return "", nil, fmt.Errorf("AI provider resolved to nil for %q", providerName)
+	}
 
 	req := &ai.GenerateRequest{
 		Messages:     []ai.ChatMessage{{Role: "user", Content: prompt}},
@@ -838,6 +875,11 @@ func (s *AIService) tryFallbackModels(ctx context.Context, tenantID uint, origRe
 	if err := json.Unmarshal([]byte(config.FallbackModelIDs), &ids); err != nil || len(ids) == 0 {
 		return "", nil, fmt.Errorf("no fallback")
 	}
+	const maxFallbackDepth = 5
+	if len(ids) > maxFallbackDepth {
+		ids = ids[:maxFallbackDepth]
+		logger.Printf("[AI] fallback chain truncated to %d levels", maxFallbackDepth)
+	}
 	visitedIDs := make(map[uint]bool)
 	var errs []string
 	for _, id := range ids {
@@ -871,10 +913,32 @@ func (s *AIService) tryFallbackModels(ctx context.Context, tenantID uint, origRe
 		if fbErr == nil && fbResp.Error != "" {
 			fbErr = fmt.Errorf("%s", fbResp.Error)
 		}
+		// 认证失败（401/403）不值得继续尝试其他 fallback，立即返回
+		if fbErr != nil && isAuthError(fbErr) {
+			return "", nil, fmt.Errorf("fallback provider %q authentication failed (not retrying): %w", m.Provider.Name, fbErr)
+		}
 		errs = append(errs, fmt.Sprintf("model_%d: %v", id, fbErr))
 		logger.Printf("[AI fallback] provider=%s model=%s err=%v", m.Provider.Name, m.Name, fbErr)
 	}
 	return "", nil, fmt.Errorf("all fallbacks exhausted: %s", strings.Join(errs, "; "))
+}
+
+// isAuthError returns true when the error clearly indicates an authentication
+// or authorisation failure (HTTP 401/403, invalid API key, etc.).
+// These errors are non-retryable and should short-circuit any fallback chain.
+func isAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "401") ||
+		strings.Contains(s, "403") ||
+		strings.Contains(s, "authentication") ||
+		strings.Contains(s, "unauthorized") ||
+		strings.Contains(s, "Unauthorized") ||
+		strings.Contains(s, "invalid_api_key") ||
+		strings.Contains(s, "invalid api key") ||
+		strings.Contains(s, "Forbidden")
 }
 
 // generateJSONForTenant 带 tenantID 的 JSON 生成重试（最多重试 maxRetries 次）

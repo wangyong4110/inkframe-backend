@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"time"
+
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -167,6 +169,17 @@ func (r *ChapterRewriteTaskRepository) ResetStaleRewriting(projectID uint) error
 	return r.db.Model(&model.ChapterRewriteTask{}).
 		Where("project_id = ? AND status = ?", projectID, "rewriting").
 		Update("status", "pending").Error
+}
+
+// ResetAllStaleRewriting resets all chapter tasks stuck in "rewriting" for more than
+// the given staleness threshold across all projects. Used at server startup to recover
+// from an abrupt crash or restart that left tasks in a non-terminal state.
+func (r *ChapterRewriteTaskRepository) ResetAllStaleRewriting(olderThan time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-olderThan)
+	result := r.db.Model(&model.ChapterRewriteTask{}).
+		Where("status = ? AND updated_at < ?", "rewriting", cutoff).
+		Update("status", "pending")
+	return result.RowsAffected, result.Error
 }
 
 // SaveAttempt stores the AI-generated content in AttemptContent without touching

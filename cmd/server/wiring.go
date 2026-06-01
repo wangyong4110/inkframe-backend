@@ -275,9 +275,11 @@ type videoSvcs struct {
 
 func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *config.Config) *coreSvcs {
 	// AI服务（注入 providerRepo 以支持按租户加载 AK/SK，注入 novelRepo 以读取小说项目级 AI 配置）
+	// WithTaskRouting: configure via config.yaml ai.tasks section (no AI.Tasks config key exists yet).
 	aiSvc := service.NewAIService(repos.AIModelRepo, repos.TaskModelConfigRepo, aiManager, repos.ModelProviderRepo).
 		WithNovelRepo(repos.NovelRepo).
-		WithEncryptionKey(cfg.Server.EncryptionKey)
+		WithEncryptionKey(cfg.Server.EncryptionKey).
+		WithImageConcurrency(5)
 
 	// 模型服务（注入 aiService 以支持 TestProvider 实例化验证）
 	modelSvc := service.NewModelService(repos.AIModelRepo, repos.ModelProviderRepo, repos.TaskModelConfigRepo, repos.ModelComparisonRepo, aiSvc)
@@ -478,7 +480,8 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		core.AI,
 	).WithTaskService(core.Task).
 		WithContinuityRepo(repos.RewriteContinuityIndexRepo).
-		WithSummaryRepo(repos.RewriteChapterSummaryRepo)
+		WithSummaryRepo(repos.RewriteChapterSummaryRepo).
+		WithChapterVersionRepo(repos.ChapterVersionRepo)
 
 	// 认证 / 租户 / 通信服务（依赖 db 和 redisClient，数量少，直接内联）
 	smsSvc := service.NewSMSService(redisClient, cfg.SMS)
@@ -645,6 +648,7 @@ type Handlers struct {
 	NotificationHandler   *handler.NotificationHandler
 	KnowledgeHandler      *handler.KnowledgeHandler
 	DramaticHandler       *handler.DramaticHandler
+	DashboardHandler      *handler.DashboardHandler
 }
 
 // initHandlers 初始化处理器
@@ -695,10 +699,10 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		ItemHandler:        handler.NewItemHandler(services.ItemService, services.ChapterService).WithStorage(storageSvc).WithTaskService(services.TaskService).WithNovelService(services.NovelService),
 		SkillHandler:       handler.NewSkillHandler(services.SkillService).WithNovelService(services.NovelService).WithTaskService(services.TaskService),
 		UploadHandler:      handler.NewUploadHandler(storageSvc),
-		PlotPointHandler:   handler.NewPlotPointHandler(services.PlotPointService).WithChapterService(services.ChapterService).WithTaskService(services.TaskService),
+		PlotPointHandler:   handler.NewPlotPointHandler(services.PlotPointService).WithChapterService(services.ChapterService).WithTaskService(services.TaskService).WithNovelService(services.NovelService),
 		TaskHandler:        handler.NewTaskHandler(services.TaskService),
 		MediaHandler:       handler.NewMediaHandler(db),
-		SceneAnchorHandler: handler.NewSceneAnchorHandler(services.SceneAnchorService, services.SceneConsistencyService).WithTaskService(services.TaskService).WithChapterService(services.ChapterService).WithVideoService(services.VideoService),
+		SceneAnchorHandler: handler.NewSceneAnchorHandler(services.SceneAnchorService, services.SceneConsistencyService).WithTaskService(services.TaskService).WithChapterService(services.ChapterService).WithVideoService(services.VideoService).WithNovelService(services.NovelService),
 		SystemHandler: handler.NewSystemHandler(repos.SystemSettingRepo),
 		FsHandler:     handler.NewFsHandler(getEnv("BGM_DIR", "")),
 		RewriteHandler: handler.NewRewriteHandler(services.RewriteService),
@@ -731,5 +735,6 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			services.ConflictArcService,
 			services.PacingService,
 		),
+		DashboardHandler: handler.NewDashboardHandler(db),
 	}
 }

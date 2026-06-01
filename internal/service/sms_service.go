@@ -65,7 +65,8 @@ func (s *SMSService) SendCode(phone string) error {
 		return fmt.Errorf("failed to generate code: %w", err)
 	}
 
-	// 调用阿里云短信API
+	// 调用阿里云短信API（开发模式下跳过真实发送，但仍将验证码存入 Redis，
+	// 验证逻辑与生产环境完全一致，不允许使用任意验证码）。
 	if err := s.sendAliyunSMS(phone, code); err != nil {
 		return fmt.Errorf("failed to send SMS: %w", err)
 	}
@@ -126,10 +127,12 @@ func (s *SMSService) VerifyCode(phone, code string) error {
 }
 
 // sendAliyunSMS 调用阿里云短信API（RPC签名方式，dysmsapi.aliyuncs.com）
+// 开发模式（AccessKeyID 为空）时，跳过真实发送并打印验证码日志，但调用方仍会将
+// 验证码存入 Redis；验证逻辑与生产环境完全相同，不存在"万能验证码"漏洞。
 func (s *SMSService) sendAliyunSMS(phone, code string) error {
 	if s.cfg.AccessKeyID == "" {
-		// 开发模式：未配置 AccessKey 则跳过真实发送，仅打印验证码方便本地测试
-		logger.Printf("[SMS DEV] phone=%s code=%s (no AccessKeyID configured, SMS not sent)", phone, code)
+		// DEV MODE: SMS not sent; code will be stored in Redis by the caller for normal verification.
+		logger.Printf("[SMS DEV MODE] verification code for %s: %s (not sent, dev mode only — AccessKeyID not configured)", phone, code)
 		return nil
 	}
 

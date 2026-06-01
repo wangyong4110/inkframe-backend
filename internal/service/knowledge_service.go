@@ -12,12 +12,21 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/vector"
 )
 
+// KnowledgeImportItem 知识批量导入的单个条目
+type KnowledgeImportItem struct {
+	Type    string `json:"type"`
+	Title   string `json:"title"`
+	Content string `json:"content"`
+	Tags    string `json:"tags,omitempty"`
+}
+
 // KnowledgeService 知识库服务
 type KnowledgeService struct {
 	kbRepo interface {
 		Create(kb *model.KnowledgeBase) error
 		Search(keyword string, limit int) ([]*model.KnowledgeBase, error)
 		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
+		ListByNovelPaged(novelID uint, page, pageSize int) ([]*model.KnowledgeBase, int64, error)
 		GetByID(id uint) (*model.KnowledgeBase, error)
 		Update(kb *model.KnowledgeBase) error
 		Delete(id uint) error
@@ -33,6 +42,7 @@ func NewKnowledgeService(
 		Create(kb *model.KnowledgeBase) error
 		Search(keyword string, limit int) ([]*model.KnowledgeBase, error)
 		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
+		ListByNovelPaged(novelID uint, page, pageSize int) ([]*model.KnowledgeBase, int64, error)
 		GetByID(id uint) (*model.KnowledgeBase, error)
 		Update(kb *model.KnowledgeBase) error
 		Delete(id uint) error
@@ -54,25 +64,54 @@ func (s *KnowledgeService) GetByNovel(ctx context.Context, novelID uint) ([]*mod
 	return s.kbRepo.GetByNovel(novelID)
 }
 
+// GetByNovelPaged 分页获取小说的知识条目，返回数据、总数
+func (s *KnowledgeService) GetByNovelPaged(ctx context.Context, novelID uint, page, pageSize int) ([]*model.KnowledgeBase, int64, error) {
+	return s.kbRepo.ListByNovelPaged(novelID, page, pageSize)
+}
+
+// BulkImport 批量导入知识条目，跳过 title/content 为空的条目，返回成功入库数量
+func (s *KnowledgeService) BulkImport(ctx context.Context, novelID uint, items []KnowledgeImportItem) (int, error) {
+	imported := 0
+	for _, item := range items {
+		if item.Title == "" || item.Content == "" {
+			continue
+		}
+		kb := &model.KnowledgeBase{
+			Type:    item.Type,
+			Title:   item.Title,
+			Content: item.Content,
+			Tags:    item.Tags,
+			NovelID: &novelID,
+		}
+		if err := s.StoreKnowledge(ctx, kb); err != nil {
+			logger.Printf("KnowledgeService.BulkImport: failed to store item %q: %v", item.Title, err)
+			continue
+		}
+		imported++
+	}
+	return imported, nil
+}
+
 // StoreKnowledge 存储知识（含向量化）
-// 若向量库已配置，先完成向量化再写 DB，确保两者一致性；
-// 若向量库未配置，直接写 DB（保持原有行为）。
+// DB 是真实数据源（source of truth）：
+//   - 总是先写 DB；失败则立即返回错误。
+//   - 若向量库已配置，DB 写入成功后再写向量；向量写入失败仅记录警告，不影响返回值。
+//   - 嵌入（embedding）失败时返回实际错误，不静默忽略。
 func (s *KnowledgeService) StoreKnowledge(ctx context.Context, kb *model.KnowledgeBase) error {
-	// 如果向量库已配置，先向量化；成功后再写 DB
+	// 先写 DB（source of truth）
+	if err := s.kbRepo.Create(kb); err != nil {
+		return err
+	}
+
+	// 若向量库已配置，追加写向量（不影响主流程）
 	if s.vectorStore != nil && s.aiClient != nil {
 		text := kb.Title + " " + kb.Content
 		vec, embedErr := s.aiClient.Embed(ctx, text)
 		if embedErr != nil {
-			logger.Printf("KnowledgeService.StoreKnowledge: vector upsert failed, skipping DB write: %v", embedErr)
-			return nil // 向量化失败时不写 DB，避免产生无向量的孤立记录
+			// 嵌入失败：返回实际错误，让调用方感知（DB 记录已存在，数据不丢失）
+			return fmt.Errorf("KnowledgeService.StoreKnowledge: embedding failed for kb %d: %w", kb.ID, embedErr)
 		}
 
-		// 向量化成功后写 DB
-		if err := s.kbRepo.Create(kb); err != nil {
-			return err
-		}
-
-		// 将向量写入向量库
 		store := s.vectorStore.DefaultStore()
 		if store != nil {
 			payload := map[string]interface{}{
@@ -89,15 +128,12 @@ func (s *KnowledgeService) StoreKnowledge(ctx context.Context, kb *model.Knowled
 				Payload:    payload,
 			})
 			if storeErr != nil {
-				// 向量写入失败：尝试回滚 DB 记录（best-effort）
+				// 向量写入失败：仅记录警告，DB 记录已成功，返回 nil
 				logger.Printf("KnowledgeService.StoreKnowledge: vector store error for kb %d: %v", kb.ID, storeErr)
 			}
 		}
-		return nil
 	}
-
-	// 向量库未配置：直接写 DB（原有行为）
-	return s.kbRepo.Create(kb)
+	return nil
 }
 
 // SearchKnowledge 搜索知识（优先向量语义搜索，降级到关键词）

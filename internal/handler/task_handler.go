@@ -40,12 +40,9 @@ func (h *TaskHandler) ListTasks(c *gin.Context) {
 // GetTask GET /api/v1/tasks/:task_id
 func (h *TaskHandler) GetTask(c *gin.Context) {
 	taskID := c.Param("task_id")
-	task, err := h.taskSvc.Get(taskID)
+	// GetForTenant enforces tenant isolation in one call.
+	task, err := h.taskSvc.GetForTenant(taskID, getTenantID(c))
 	if err != nil {
-		respondErr(c, http.StatusNotFound, "task not found")
-		return
-	}
-	if task.TenantID != getTenantID(c) {
 		respondErr(c, http.StatusNotFound, "task not found")
 		return
 	}
@@ -55,12 +52,8 @@ func (h *TaskHandler) GetTask(c *gin.Context) {
 // CancelTask POST /api/v1/tasks/:task_id/cancel
 func (h *TaskHandler) CancelTask(c *gin.Context) {
 	taskID := c.Param("task_id")
-	task, err := h.taskSvc.Get(taskID)
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "task not found")
-		return
-	}
-	if task.TenantID != getTenantID(c) {
+	// GetForTenant enforces tenant isolation in one call.
+	if _, err := h.taskSvc.GetForTenant(taskID, getTenantID(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "task not found")
 		return
 	}

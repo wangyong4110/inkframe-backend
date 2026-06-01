@@ -1166,6 +1166,44 @@ func (s *VideoService) DeleteShot(shotID uint) error {
 	return s.storyboardRepo.CompactShotNosAfter(shot.VideoID, shot.ShotNo)
 }
 
+// ReorderShots 交换两个分镜的 shot_no，实现拖拽排序。
+// fromShotID 和 toShotID 是前端传入的分镜 ID；操作在数据库事务内完成，避免唯一键冲突。
+func (s *VideoService) ReorderShots(fromShotID, toShotID uint) (fromShotNo, toShotNo int, err error) {
+	fromShot, err := s.storyboardRepo.GetByID(fromShotID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("shot %d not found: %w", fromShotID, err)
+	}
+	toShot, err := s.storyboardRepo.GetByID(toShotID)
+	if err != nil {
+		return 0, 0, fmt.Errorf("shot %d not found: %w", toShotID, err)
+	}
+	if fromShot.VideoID != toShot.VideoID {
+		return 0, 0, fmt.Errorf("shots belong to different videos")
+	}
+
+	// Use a large temporary offset to avoid unique-key collisions during swap.
+	const tmpOffset = 100000
+	db := s.storyboardRepo.DB()
+	if err := db.Transaction(func(tx *gorm.DB) error {
+		// Move fromShot to a temp position to avoid conflict
+		if err := tx.Exec("UPDATE ink_storyboard_shot SET shot_no = ? WHERE id = ?",
+			fromShot.ShotNo+tmpOffset, fromShotID).Error; err != nil {
+			return err
+		}
+		// Move toShot to fromShot's original position
+		if err := tx.Exec("UPDATE ink_storyboard_shot SET shot_no = ? WHERE id = ?",
+			fromShot.ShotNo, toShotID).Error; err != nil {
+			return err
+		}
+		// Move fromShot from temp to toShot's original position
+		return tx.Exec("UPDATE ink_storyboard_shot SET shot_no = ? WHERE id = ?",
+			toShot.ShotNo, fromShotID).Error
+	}); err != nil {
+		return 0, 0, err
+	}
+	return toShot.ShotNo, fromShot.ShotNo, nil
+}
+
 // ─── Storyboard Review & Optimize ────────────────────────────────────────────
 
 // ReviewStoryboard 调用 AI 对分镜脚本进行专业审查，返回结构化报告及历史记录 ID。

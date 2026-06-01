@@ -313,6 +313,26 @@ func (s *BGMService) AnalyzeBGMForVideo(
 		for _, w := range warns {
 			logger.Printf("[BGMService] coverage warning: %s", w)
 		}
+		// 自动修复：先修重叠（截短前段的 EndShotNo），再修 gap（延伸前段的 EndShotNo 填满空洞）。
+		// 两次扫描保证顺序处理：overlap pass → gap pass。
+		if len(analyses) > 1 {
+			// Pass 1: 修 overlap（前段 EndShotNo >= 后段 StartShotNo）
+			for i := 0; i < len(analyses)-1; i++ {
+				if analyses[i].EndShotNo >= analyses[i+1].StartShotNo {
+					fixed := analyses[i+1].StartShotNo - 1
+					logger.Printf("[BGMService] fix overlap: seg %d EndShotNo %d→%d", i+1, analyses[i].EndShotNo, fixed)
+					analyses[i].EndShotNo = fixed
+				}
+			}
+			// Pass 2: 修 gap（前段 EndShotNo < 后段 StartShotNo - 1）
+			for i := 0; i < len(analyses)-1; i++ {
+				if analyses[i].EndShotNo < analyses[i+1].StartShotNo-1 {
+					fixed := analyses[i+1].StartShotNo - 1
+					logger.Printf("[BGMService] fix gap: seg %d EndShotNo %d→%d", i+1, analyses[i].EndShotNo, fixed)
+					analyses[i].EndShotNo = fixed
+				}
+			}
+		}
 	}
 
 	// Fix ⑩: volume based on mood/tempo

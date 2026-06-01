@@ -178,10 +178,7 @@ func (h *WorldviewHandler) DeleteWorldview(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-	})
+	respondOK(c, nil)
 }
 
 // GenerateWorldview AI生成世界观
@@ -341,5 +338,5 @@ func (h *WorldviewHandler) DeleteEntity(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
+	respondOK(c, nil)
 }

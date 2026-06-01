@@ -274,16 +274,20 @@ func (s *OAuthService) alipayRequest(method string, bizParams map[string]string)
 		return nil, fmt.Errorf("alipay: response key %q not found in response", responseKey)
 	}
 
-	// Verify signature if public key configured.
+	// Verify signature if public key configured. Verification failure is fatal —
+	// accepting an unverified response would allow an attacker to forge Alipay API results.
 	if s.cfg.Alipay.PublicKey != "" {
 		signRaw, hasSig := raw["sign"]
-		if hasSig {
-			var signStr string
-			if err := json.Unmarshal(signRaw, &signStr); err == nil {
-				// Alipay signs the raw JSON value of the response key (no surrounding whitespace).
-				_ = alipayVerify(string(responseRaw), signStr, s.cfg.Alipay.PublicKey)
-				// Non-fatal: log failure but continue — avoid blocking valid responses due to key misconfiguration.
-			}
+		if !hasSig {
+			return nil, fmt.Errorf("alipay: response missing 'sign' field")
+		}
+		var signStr string
+		if err := json.Unmarshal(signRaw, &signStr); err != nil {
+			return nil, fmt.Errorf("alipay: failed to parse 'sign' field: %w", err)
+		}
+		// Alipay signs the raw JSON value of the response key (no surrounding whitespace).
+		if err := alipayVerify(string(responseRaw), signStr, s.cfg.Alipay.PublicKey); err != nil {
+			return nil, fmt.Errorf("alipay signature verification failed: %w", err)
 		}
 	}
 

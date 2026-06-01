@@ -39,6 +39,11 @@ type ChapterService struct {
 	mcpService     *McpService                     // 可选：用于联网搜索 MCP 工具
 	notifSvc       *NotificationService            // 可选：用于章节生成完成通知
 	skillRepo      *repository.SkillRepository     // 可选：用于将技能体系注入生成上下文
+
+	// genLocks 防止同一章节并发生成（key: "novelID-chapterNo"）。
+	// DB 层的 AtomicSetGenerating 负责已存在占位章节的乐观锁保护；
+	// 此 sync.Map 负责进程内还未写入 DB 的并发请求保护。
+	genLocks sync.Map
 }
 
 func NewChapterService(
@@ -201,12 +206,14 @@ func (s *ChapterService) UpdateChapter(id, tenantID uint, req *model.UpdateChapt
 		if latest != nil {
 			nextNo = latest.VersionNo + 1
 		}
-		_ = s.versionRepo.Create(&model.ChapterVersion{
+		if err := s.versionRepo.Create(&model.ChapterVersion{
 			ChapterID:  chapter.ID,
 			VersionNo:  nextNo,
 			Content:    chapter.Content,
 			ChangeType: "manual_edit",
-		})
+		}); err != nil {
+			logger.Printf("[ChapterService] create version failed: %v", err)
+		}
 	}
 	applyChapterUpdate(chapter, req)
 	if err := s.chapterRepo.Update(chapter); err != nil {
@@ -230,6 +237,27 @@ func (s *ChapterService) DeleteChapter(id, tenantID uint) error {
 		return err
 	}
 	s.syncNovelStats(chapter.NovelID)
+	return nil
+}
+
+// BatchDeleteChapters deletes multiple chapters by ID, verifying novelID and tenantID ownership.
+// Chapters are deleted one by one to ensure renumbering consistency after each deletion.
+func (s *ChapterService) BatchDeleteChapters(ctx context.Context, novelID, tenantID uint, ids []uint) error {
+	for _, id := range ids {
+		chapter, err := s.chapterRepo.GetByID(id)
+		if err != nil {
+			// Skip chapters that don't exist
+			continue
+		}
+		// Verify the chapter belongs to the requested novel and tenant
+		if chapter.NovelID != novelID || chapter.TenantID != tenantID {
+			continue
+		}
+		if err := s.chapterRepo.DeleteAndRenumber(id, chapter.NovelID); err != nil {
+			return fmt.Errorf("failed to delete chapter %d: %w", id, err)
+		}
+	}
+	s.syncNovelStats(novelID)
 	return nil
 }
 
@@ -338,7 +366,9 @@ func (s *ChapterService) PublishChapter(novelID uint, chapterNo int) (*model.Cha
 		return nil, err
 	}
 	chapter.IsPublished = true
-	_ = s.novelRepo.SyncPublishedCount(novelID)
+	if err := s.novelRepo.SyncPublishedCount(novelID); err != nil {
+		logger.Printf("[ChapterService] SyncPublishedCount failed: %v", err)
+	}
 	return chapter, nil
 }
 
@@ -352,7 +382,9 @@ func (s *ChapterService) UnpublishChapter(novelID uint, chapterNo int) (*model.C
 		return nil, err
 	}
 	chapter.IsPublished = false
-	_ = s.novelRepo.SyncPublishedCount(novelID)
+	if err := s.novelRepo.SyncPublishedCount(novelID); err != nil {
+		logger.Printf("[ChapterService] SyncPublishedCount failed: %v", err)
+	}
 	return chapter, nil
 }
 
@@ -380,6 +412,25 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		return nil, err
 	}
 
+	// ── 并发保护：防止同一章节被同时触发两次生成 ────────────────────────────────────────
+	// 1. 进程内 sync.Map 锁：对于尚未写入 DB 的并发请求，在内存层面排斥。
+	genLockKey := fmt.Sprintf("%d-%d", novelID, req.ChapterNo)
+	if _, loaded := s.genLocks.LoadOrStore(genLockKey, struct{}{}); loaded {
+		return nil, fmt.Errorf("chapter %d of novel %d is already being generated", req.ChapterNo, novelID)
+	}
+	defer s.genLocks.Delete(genLockKey)
+
+	// 2. DB 层乐观锁：如果已有占位章节，仅当其 status 不是 generating/completed 时才允许开始。
+	if existing, _ := s.chapterRepo.GetByNovelAndChapterNo(novelID, req.ChapterNo); existing != nil {
+		ok, atomicErr := s.chapterRepo.AtomicSetGenerating(existing.ID, novelID)
+		if atomicErr != nil {
+			return nil, fmt.Errorf("chapter %d: check generating status: %w", req.ChapterNo, atomicErr)
+		}
+		if !ok {
+			return nil, fmt.Errorf("chapter %d of novel %d is already being generated or completed", req.ChapterNo, novelID)
+		}
+	}
+
 	// ── Step 0: 确保角色数据存在（防止主角漂移的关键前置步骤）───────────────────────────
 	// 若 DB 中无角色记录，自动从小说简介中提取并写入，确保后续每章都有固定主角锚点。
 	s.ensureProtagonistExtracted(tenantID, novel)
@@ -402,7 +453,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		query := buildStorySearchQuery(novel.Genre, chapterMeta.summary)
 		webCtx, webCancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer webCancel()
-		out, searchErr := s.mcpService.InvokeTool(webCtx, "web_search", map[string]interface{}{
+		out, searchErr := s.mcpService.InvokeTool(webCtx, tenantID, "web_search", map[string]interface{}{
 			"query":       query,
 			"max_results": 3,
 		})
@@ -420,7 +471,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		query := buildWikiSearchQuery(novel.Genre, chapterMeta.summary)
 		wikiCtx, wikiCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer wikiCancel()
-		out, searchErr := s.mcpService.InvokeTool(wikiCtx, "wiki_search", map[string]interface{}{
+		out, searchErr := s.mcpService.InvokeTool(wikiCtx, tenantID, "wiki_search", map[string]interface{}{
 			"query":       query,
 			"max_results": 3,
 		})
@@ -437,7 +488,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	if req.UseStoryPattern && s.mcpService != nil {
 		patternCtx, patternCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer patternCancel()
-		out, searchErr := s.mcpService.InvokeTool(patternCtx, "story_pattern", map[string]interface{}{
+		out, searchErr := s.mcpService.InvokeTool(patternCtx, tenantID, "story_pattern", map[string]interface{}{
 			"genre":       novel.Genre,
 			"archetype":   chapterMeta.emotionalTone,
 			"max_results": 2,
@@ -927,7 +978,7 @@ func (s *ChapterService) generateSceneOutline(
 
 	resp = extractJSON(strings.TrimSpace(resp))
 
-	// 提取建议标题
+	// 提取建议标题，并校验场景数量
 	var outlineResult struct {
 		ChapterTitle string            `json:"chapter_title"`
 		Scenes       []json.RawMessage `json:"scenes"`
@@ -935,7 +986,23 @@ func (s *ChapterService) generateSceneOutline(
 	if err := json.Unmarshal([]byte(resp), &outlineResult); err == nil {
 		suggestedTitle = outlineResult.ChapterTitle
 	}
-	logger.Printf("[ChapterService] generateSceneOutline: chapterNo=%d scenes=%d", req.ChapterNo, len(outlineResult.Scenes))
+
+	sceneCount := len(outlineResult.Scenes)
+	logger.Printf("[ChapterService] generateSceneOutline: chapterNo=%d scenes=%d", req.ChapterNo, sceneCount)
+
+	// 场景数量越界检查：AI 返回 0 场景说明结构出错，返回错误触发降级；
+	// 超过 7 个场景时截断到 5，防止正文过长或 token 超限。
+	if sceneCount < 1 {
+		return "", "", fmt.Errorf("generateSceneOutline: AI returned 0 scenes, expected 3-5 (chapterNo=%d)", req.ChapterNo)
+	}
+	if sceneCount > 7 {
+		logger.Printf("[ChapterService] generateSceneOutline: chapterNo=%d scenes=%d >7, truncating to 5", req.ChapterNo, sceneCount)
+		outlineResult.Scenes = outlineResult.Scenes[:5]
+		// 重新序列化截断后的 JSON，确保后续步骤使用一致的数据
+		if truncated, marshalErr := json.Marshal(outlineResult); marshalErr == nil {
+			resp = string(truncated)
+		}
+	}
 
 	return resp, suggestedTitle, nil
 }
@@ -996,7 +1063,9 @@ func (s *ChapterService) generateFromSceneOutline(
 			Tension       int      `json:"tension"`
 		} `json:"scenes"`
 	}
-	_ = json.Unmarshal([]byte(sceneOutlineJSON), &outlineData)
+	if err := json.Unmarshal([]byte(sceneOutlineJSON), &outlineData); err != nil {
+		logger.Printf("[ChapterService] generateFromSceneOutline: failed to parse scene outline JSON: %v", err)
+	}
 	logger.Printf("[ChapterService] generateFromSceneOutline: chapterNo=%d scenes=%d", req.ChapterNo, len(outlineData.Scenes))
 
 	// 获取角色对话风格（同时包含状态快照 + 内在动机）
@@ -1159,11 +1228,50 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 		}
 	}
 
-	// 4. 连贯性检查（异步，不阻塞；结果持久化到 continuity_report 表供 UI 查询）
+	// 4. 连贯性检查（不阻塞主流程；结果持久化到 continuity_report 表供 UI 查询）
+	// 若发现 high/critical 级别问题，在章节上打标记 continuity_blocked=true，
+	// 前端据此提示用户审查，但不阻断生成流程。
 	if s.continuitySvc != nil && chapter.Content != "" {
 		go func(ch *model.Chapter) {
-			if _, err := s.continuitySvc.ValidateChapter(novel.ID, ch.ID, tenantID, ch.ChapterNo, ch.Content); err != nil {
+			report, err := s.continuitySvc.ValidateChapter(novel.ID, ch.ID, tenantID, ch.ChapterNo, ch.Content)
+			if err != nil {
 				logger.Printf("[ChapterService] continuity check ch%d: %v", ch.ChapterNo, err)
+				return
+			}
+			// 检测是否存在高危/严重问题
+			blocked := false
+			for _, issue := range report.CharacterIssues {
+				if issue.Severity == "high" || issue.Severity == "critical" {
+					blocked = true
+					break
+				}
+			}
+			if !blocked {
+				for _, issue := range report.WorldviewIssues {
+					if issue.Severity == "high" || issue.Severity == "critical" {
+						blocked = true
+						break
+					}
+				}
+			}
+			if !blocked {
+				for _, issue := range report.PlotIssues {
+					if issue.Severity == "high" || issue.Severity == "critical" {
+						blocked = true
+						break
+					}
+				}
+			}
+			if blocked {
+				// 从 DB 拉最新版本，避免覆盖并发写入的其他字段
+				if fresh, fetchErr := s.chapterRepo.GetByID(ch.ID); fetchErr == nil {
+					fresh.ContinuityBlocked = true
+					if updateErr := s.chapterRepo.Update(fresh); updateErr != nil {
+						logger.Printf("[ChapterService] continuity_blocked update ch%d: %v", ch.ChapterNo, updateErr)
+					} else {
+						logger.Printf("[ChapterService] continuity_blocked=true marked for ch%d (novel %d)", ch.ChapterNo, novel.ID)
+					}
+				}
 			}
 		}(chapter)
 	}

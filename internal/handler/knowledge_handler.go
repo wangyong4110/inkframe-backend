@@ -37,8 +37,8 @@ func (h *KnowledgeHandler) checkNovelOwnership(c *gin.Context, novelID uint) boo
 	return true
 }
 
-// ListKnowledge 获取小说知识库列表
-// GET /novels/:id/knowledge
+// ListKnowledge 获取小说知识库列表（支持分页）
+// GET /novels/:id/knowledge?page=1&page_size=20
 func (h *KnowledgeHandler) ListKnowledge(c *gin.Context) {
 	novelID, ok := parseID(c, "id")
 	if !ok {
@@ -47,12 +47,60 @@ func (h *KnowledgeHandler) ListKnowledge(c *gin.Context) {
 	if !h.checkNovelOwnership(c, novelID) {
 		return
 	}
-	results, err := h.knowledgeSvc.GetByNovel(c.Request.Context(), novelID)
+	pageStr := c.DefaultQuery("page", "1")
+	pageSizeStr := c.DefaultQuery("page_size", "20")
+	pageNum, err := strconv.Atoi(pageStr)
+	if err != nil || pageNum < 1 {
+		pageNum = 1
+	}
+	pageSizeNum, err := strconv.Atoi(pageSizeStr)
+	if err != nil || pageSizeNum < 1 || pageSizeNum > 100 {
+		pageSizeNum = 20
+	}
+	items, total, err := h.knowledgeSvc.GetByNovelPaged(c.Request.Context(), novelID, pageNum, pageSizeNum)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	respondOK(c, results)
+	c.JSON(http.StatusOK, gin.H{
+		"code": 0,
+		"data": gin.H{
+			"items":     items,
+			"total":     total,
+			"page":      pageNum,
+			"page_size": pageSizeNum,
+		},
+	})
+}
+
+// BulkImport 批量导入知识条目
+// POST /novels/:id/knowledge/bulk-import
+// Body: {"items": [...]}
+func (h *KnowledgeHandler) BulkImport(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if !h.checkNovelOwnership(c, novelID) {
+		return
+	}
+	var req struct {
+		Items []service.KnowledgeImportItem `json:"items" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	if len(req.Items) > 500 {
+		respondBadRequest(c, "max 500 items per import")
+		return
+	}
+	count, err := h.knowledgeSvc.BulkImport(c.Request.Context(), novelID, req.Items)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "import failed")
+		return
+	}
+	respondOK(c, gin.H{"imported": count})
 }
 
 // CreateKnowledge 创建知识条目

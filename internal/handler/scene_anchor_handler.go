@@ -18,6 +18,7 @@ type SceneAnchorHandler struct {
 	taskSvc        *service.TaskService
 	chapterSvc     *service.ChapterService
 	videoSvc       *service.VideoService
+	novelSvc       *service.NovelService
 }
 
 func NewSceneAnchorHandler(svc *service.SceneAnchorService, consistencySvc *service.SceneConsistencyService) *SceneAnchorHandler {
@@ -37,6 +38,25 @@ func (h *SceneAnchorHandler) WithChapterService(svc *service.ChapterService) *Sc
 func (h *SceneAnchorHandler) WithVideoService(svc *service.VideoService) *SceneAnchorHandler {
 	h.videoSvc = svc
 	return h
+}
+
+// WithNovelService 注入小说服务（用于 ListSceneAnchors 时验证小说归属租户）
+func (h *SceneAnchorHandler) WithNovelService(svc *service.NovelService) *SceneAnchorHandler {
+	h.novelSvc = svc
+	return h
+}
+
+// checkNovelTenant 校验小说归属当前租户。
+// 返回 false 时已写入错误响应。
+func (h *SceneAnchorHandler) checkNovelTenant(c *gin.Context, novelID uint) bool {
+	if h.novelSvc == nil {
+		return true // novelSvc 未注入时跳过检查（兼容测试）
+	}
+	if _, err := h.novelSvc.GetNovel(novelID, getTenantID(c)); err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found")
+		return false
+	}
+	return true
 }
 
 // GetSceneAnchor GET /scene-anchors/:id
@@ -61,6 +81,9 @@ func (h *SceneAnchorHandler) GetSceneAnchor(c *gin.Context) {
 func (h *SceneAnchorHandler) ListSceneAnchors(c *gin.Context) {
 	novelID, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+	if !h.checkNovelTenant(c, uint(novelID)) {
 		return
 	}
 	anchors, err := h.svc.ListByNovel(uint(novelID))

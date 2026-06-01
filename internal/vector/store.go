@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -107,12 +108,17 @@ func (m *StoreManager) GetStore(name string) (VectorStore, error) {
 	return store, nil
 }
 
-// DefaultStore 默认向量存储
+// DefaultStore 默认向量存储（按注册名称字母序取第一个，确保结果确定）
 func (m *StoreManager) DefaultStore() VectorStore {
-	for _, store := range m.stores {
-		return store
+	if len(m.stores) == 0 {
+		return nil
 	}
-	return nil
+	keys := make([]string, 0, len(m.stores))
+	for k := range m.stores {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return m.stores[keys[0]]
 }
 
 // StoreAndSearch 存储并搜索（一步到位）
@@ -120,6 +126,10 @@ func (m *StoreManager) StoreAndSearch(ctx context.Context, collection string, te
 	store := m.DefaultStore()
 	if store == nil {
 		return nil, fmt.Errorf("no vector store available")
+	}
+
+	if m.embedder == nil {
+		return nil, fmt.Errorf("embedder not configured")
 	}
 
 	// 向量化
@@ -349,28 +359,23 @@ func NewChromaStore(endpoint string) *ChromaStore {
 }
 
 func (s *ChromaStore) HealthCheck(ctx context.Context) error {
-	return nil
+	return fmt.Errorf("chroma vector store not yet implemented")
 }
 
 func (s *ChromaStore) Store(ctx context.Context, req *StoreRequest) (*StoreResponse, error) {
-	// 实现 Chroma 存储逻辑
-	return &StoreResponse{
-		ID:     req.ID,
-		Status: "stored",
-	}, nil
+	return nil, fmt.Errorf("chroma vector store not yet implemented")
 }
 
 func (s *ChromaStore) Search(ctx context.Context, req *SearchRequest) ([]*SearchResult, error) {
-	// 实现 Chroma 搜索逻辑
-	return []*SearchResult{}, nil
+	return nil, fmt.Errorf("chroma vector store not yet implemented")
 }
 
 func (s *ChromaStore) Delete(ctx context.Context, id string) error {
-	return nil
+	return fmt.Errorf("chroma vector store not yet implemented")
 }
 
 func (s *ChromaStore) Get(ctx context.Context, id string) (*VectorItem, error) {
-	return nil, nil
+	return nil, fmt.Errorf("chroma vector store not yet implemented")
 }
 
 // KnowledgeBaseVector 知识库向量操作

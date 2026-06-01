@@ -50,10 +50,21 @@ func (r *TaskRepository) ListByTenant(tenantID uint, taskType, status string, pa
 	return tasks, total, err
 }
 
-// DeleteOldCompleted removes completed/failed tasks older than `before`.
+// DeleteOldCompleted removes completed/failed/dead tasks older than `before`.
 func (r *TaskRepository) DeleteOldCompleted(before time.Time) error {
-	return r.db.Where("status IN ? AND updated_at < ?", []string{"completed", "failed"}, before).
+	return r.db.Where("status IN ? AND updated_at < ?", []string{"completed", "failed", "dead"}, before).
 		Delete(&model.AsyncTask{}).Error
+}
+
+// ListDistinctActiveTenants returns distinct tenant IDs that have pending tasks.
+// Used by per-tenant fairness scheduler to round-robin across tenants.
+func (r *TaskRepository) ListDistinctActiveTenants() ([]uint, error) {
+	var tenantIDs []uint
+	err := r.db.Model(&model.AsyncTask{}).
+		Select("DISTINCT tenant_id").
+		Where("status = ?", "pending").
+		Pluck("tenant_id", &tenantIDs).Error
+	return tenantIDs, err
 }
 
 // ListOrphaned returns pending/running tasks of the given types not updated since `before`.
@@ -133,4 +144,18 @@ func (r *TaskRepository) CountActive(tenantID uint) (int64, error) {
 		Where("tenant_id = ? AND status IN ?", tenantID, []string{"pending", "running"}).
 		Count(&count).Error
 	return count, err
+}
+
+// GetLatestByTypeAndEntity returns the most recently created task of the given type for an entity.
+// entityType and entityID are matched against the entity_type and entity_id columns.
+func (r *TaskRepository) GetLatestByTypeAndEntity(taskType, entityType string, entityID uint) (*model.AsyncTask, error) {
+	var task model.AsyncTask
+	err := r.db.
+		Where("type = ? AND entity_type = ? AND entity_id = ?", taskType, entityType, entityID).
+		Order("created_at DESC").
+		First(&task).Error
+	if err != nil {
+		return nil, err
+	}
+	return &task, nil
 }

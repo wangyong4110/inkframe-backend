@@ -598,6 +598,59 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 	respondOK(c, result)
 }
 
+// TestModelPrompt 用指定提供商生成文本（前端「生成测试」功能）
+// POST /api/v1/models/test-prompt
+func (h *ModelHandler) TestModelPrompt(c *gin.Context) {
+	var req struct {
+		ProviderID uint   `json:"provider_id" binding:"required"`
+		Prompt     string `json:"prompt" binding:"required"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	tenantID := getTenantID(c)
+
+	start := time.Now()
+	content, tokens, err := h.modelService.TestGeneratePrompt(c.Request.Context(), tenantID, req.ProviderID, req.Prompt)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{
+		"content":    content,
+		"tokens":     tokens,
+		"latency_ms": time.Since(start).Milliseconds(),
+	})
+}
+
+// GetTaskMappings 返回任务-提供商映射表
+// GET /api/v1/models/task-mappings
+func (h *ModelHandler) GetTaskMappings(c *gin.Context) {
+	mappings := h.modelService.GetTaskProviderMappings()
+	respondOK(c, mappings)
+}
+
+// UpdateTaskMapping 更新任务-提供商映射
+// PUT /api/v1/models/task-mappings
+func (h *ModelHandler) UpdateTaskMapping(c *gin.Context) {
+	var req struct {
+		TaskType   string `json:"task_type" binding:"required"`
+		ProviderID *uint  `json:"provider_id"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	var pid uint
+	if req.ProviderID != nil {
+		pid = *req.ProviderID
+	}
+	if err := h.modelService.SetTaskProviderMapping(req.TaskType, pid); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"ok": true})
+}
+
 // validateEndpointURL 验证 endpoint URL 防止 SSRF 攻击。
 // 仅允许 http/https scheme，拒绝私有 IP 和 localhost。
 func validateEndpointURL(rawURL string) error {

@@ -17,16 +17,17 @@ import (
 
 // RewriteService handles novel rewriting projects.
 type RewriteService struct {
-	projectRepo     *repository.RewriteProjectRepository
-	analysisRepo    *repository.LiteraryAnalysisRepository
-	bibleRepo       *repository.RewriteBibleRepository
-	chapterTaskRepo *repository.ChapterRewriteTaskRepository
-	chapterRepo     *repository.ChapterRepository
-	novelRepo       *repository.NovelRepository
-	aiSvc           *AIService
-	taskSvc         *TaskService
-	continuityRepo  *repository.RewriteContinuityIndexRepository  // optional; nil = no continuity index
-	summaryRepo     *repository.RewriteChapterSummaryRepository   // optional; nil = use excerpt fallback
+	projectRepo        *repository.RewriteProjectRepository
+	analysisRepo       *repository.LiteraryAnalysisRepository
+	bibleRepo          *repository.RewriteBibleRepository
+	chapterTaskRepo    *repository.ChapterRewriteTaskRepository
+	chapterRepo        *repository.ChapterRepository
+	novelRepo          *repository.NovelRepository
+	aiSvc              *AIService
+	taskSvc            *TaskService
+	continuityRepo     *repository.RewriteContinuityIndexRepository  // optional; nil = no continuity index
+	summaryRepo        *repository.RewriteChapterSummaryRepository   // optional; nil = use excerpt fallback
+	chapterVersionRepo *repository.ChapterVersionRepository          // optional; nil = skip version backup
 }
 
 // rewriteLevelConfig holds per-level parameters.
@@ -117,6 +118,57 @@ func (s *RewriteService) WithContinuityRepo(r *repository.RewriteContinuityIndex
 func (s *RewriteService) WithSummaryRepo(r *repository.RewriteChapterSummaryRepository) *RewriteService {
 	s.summaryRepo = r
 	return s
+}
+
+func (s *RewriteService) WithChapterVersionRepo(r *repository.ChapterVersionRepository) *RewriteService {
+	s.chapterVersionRepo = r
+	return s
+}
+
+// saveChapterVersion 在改写覆盖章节内容前保存一个版本快照（仅首次，保留最原始版本）。
+// 非致命：若版本库不可用或写入失败，仅记录日志，不阻断改写流程。
+func (s *RewriteService) saveChapterVersion(chapterID uint, content string) {
+	if s.chapterVersionRepo == nil || content == "" {
+		return
+	}
+	// 检查是否已有 "before_rewrite" 类型的版本，有则跳过（保留最原始版本）
+	versions, err := s.chapterVersionRepo.List(chapterID)
+	if err == nil {
+		for _, v := range versions {
+			if v.ChangeType == "before_rewrite" {
+				return // 已备份，不覆盖
+			}
+		}
+	}
+	nextNo, err := s.chapterVersionRepo.GetNextVersionNo(chapterID)
+	if err != nil {
+		logger.Printf("[Rewrite] saveChapterVersion: get next version no for chapter %d: %v", chapterID, err)
+		return
+	}
+	if err := s.chapterVersionRepo.Create(&model.ChapterVersion{
+		ChapterID:         chapterID,
+		VersionNo:         nextNo,
+		Content:           content,
+		ChangeType:        "before_rewrite",
+		ChangeDescription: "改写前原始内容备份",
+	}); err != nil {
+		logger.Printf("[Rewrite] saveChapterVersion: chapter %d: %v", chapterID, err)
+	}
+}
+
+// ResetStaleChapters resets all ChapterRewriteTask records that have been stuck in
+// "rewriting" for more than 30 minutes across all projects. Call this once at server
+// startup so an abrupt crash never permanently blocks a project's rewrite pipeline.
+func (s *RewriteService) ResetStaleChapters() {
+	const staleThreshold = 30 * time.Minute
+	n, err := s.chapterTaskRepo.ResetAllStaleRewriting(staleThreshold)
+	if err != nil {
+		logger.Printf("[RewriteService] ResetStaleChapters: %v", err)
+		return
+	}
+	if n > 0 {
+		logger.Printf("[RewriteService] ResetStaleChapters: reset %d stale 'rewriting' tasks to 'pending'", n)
+	}
 }
 
 // ── Prompt helpers ─────────────────────────────────────────────────────────────
@@ -456,12 +508,18 @@ func (s *RewriteService) seedContinuityIndex(projectID uint, bible *model.Rewrit
 	if s.continuityRepo == nil {
 		return
 	}
+	seen := make(map[string]bool) // EntityKey 去重，防止重复 key 导致 BatchUpsert 唯一索引冲突
 	var entries []*model.RewriteContinuityIndex
 	if bible.NewCharNames != "" && bible.NewCharNames != "null" {
 		var nameMap map[string]string
 		if json.Unmarshal([]byte(bible.NewCharNames), &nameMap) == nil {
 			for orig, newName := range nameMap {
 				if orig != "" && newName != "" {
+					if seen[orig] {
+						logger.Printf("[Rewrite] seedContinuityIndex: duplicate key %q (char), skipping", orig)
+						continue
+					}
+					seen[orig] = true
 					entries = append(entries, &model.RewriteContinuityIndex{
 						ProjectID: projectID, EntityKey: orig, EntityType: "char",
 						NewName: newName, FirstSeen: 0,
@@ -475,6 +533,11 @@ func (s *RewriteService) seedContinuityIndex(projectID uint, bible *model.Rewrit
 		if json.Unmarshal([]byte(bible.PropsTransform), &propsMap) == nil {
 			for orig, newProp := range propsMap {
 				if orig != "" && newProp != "" {
+					if seen[orig] {
+						logger.Printf("[Rewrite] seedContinuityIndex: duplicate key %q (prop), skipping", orig)
+						continue
+					}
+					seen[orig] = true
 					entries = append(entries, &model.RewriteContinuityIndex{
 						ProjectID: projectID, EntityKey: orig, EntityType: "prop",
 						NewName: newProp, FirstSeen: 0,
@@ -1175,6 +1238,13 @@ func (s *RewriteService) rewriteChapterWithRetry(
 	var lastAttempt *rewriteAttempt
 	var lastAIErr error
 
+	// 改写前备份原章内容（仅首次，保留最原始版本）
+	if origChapter, err := s.chapterRepo.GetByID(task.ChapterID); err == nil {
+		s.saveChapterVersion(task.ChapterID, origChapter.Content)
+	} else {
+		logger.Printf("[Rewrite] rewriteChapterWithRetry: load chapter %d for backup: %v (non-fatal)", task.ChapterID, err)
+	}
+
 	for attempt := 0; attempt <= maxChapterRetries; attempt++ {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -1519,7 +1589,20 @@ func (s *RewriteService) UpdateBible(projectID uint, req UpdateBibleRequest) err
 	if len(fields) == 0 {
 		return nil
 	}
-	return s.bibleRepo.UpdateFields(projectID, fields)
+	if err := s.bibleRepo.UpdateFields(projectID, fields); err != nil {
+		return err
+	}
+	// Re-seed the continuity index whenever the bible's character/prop mappings change,
+	// so downstream rewrite jobs pick up the latest name substitution tables.
+	// This is best-effort: a failure here does not roll back the bible update.
+	if s.continuityRepo != nil {
+		if bible, fetchErr := s.bibleRepo.GetByProjectID(projectID); fetchErr == nil {
+			s.seedContinuityIndex(projectID, bible)
+		} else {
+			logger.Printf("[RewriteService] UpdateBible: re-seed continuity index skipped (fetch bible failed): %v", fetchErr)
+		}
+	}
+	return nil
 }
 
 // ── Accessors ─────────────────────────────────────────────────────────────────

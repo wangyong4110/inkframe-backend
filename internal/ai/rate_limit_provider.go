@@ -9,6 +9,12 @@ import (
 
 // RateLimitProvider wraps an AIProvider and enforces a per-minute request cap.
 // Uses a simple token-bucket: tokens refill at requestsPerMin/min.
+//
+// NOTE: 当前速率限制为进程内存限制，不跨实例共享。
+// 分布式部署时，多个后端实例的速率计数相互独立，实际对上游 API 的调用量
+// 最多可达 requestsPerMin * 实例数。如需全局限速，需将 token bucket
+// 状态迁移到 Redis（使用 INCR + EXPIRE 或 Lua 脚本实现原子操作）。
+// TODO: 实现基于 Redis 的分布式 token bucket。
 type RateLimitProvider struct {
 	inner   AIProvider
 	mu      sync.Mutex

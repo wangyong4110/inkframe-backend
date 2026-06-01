@@ -61,7 +61,7 @@ func (r *ChapterRepository) GetByID(id uint) (*model.Chapter, error) {
 // GetByNovelAndChapterNo 根据小说ID和章节号获取
 func (r *ChapterRepository) GetByNovelAndChapterNo(novelID uint, chapterNo int) (*model.Chapter, error) {
 	var chapter model.Chapter
-	if err := r.db.Where("novel_id = ? AND chapter_no = ?", novelID, chapterNo).First(&chapter).Error; err != nil {
+	if err := r.db.Where("novel_id = ? AND chapter_no = ? AND deleted_at IS NULL", novelID, chapterNo).First(&chapter).Error; err != nil {
 		return nil, err
 	}
 	return &chapter, nil
@@ -71,7 +71,7 @@ func (r *ChapterRepository) GetByNovelAndChapterNo(novelID uint, chapterNo int) 
 // outline/summary 较短（百字级），保留用于列表摘要展示。
 const chapterListColumns = "id, novel_id, tenant_id, uuid, chapter_no, title, status, word_count, " +
 	"tension_level, act_no, emotional_tone, hook_type, " +
-	"outline, summary, " +
+	"outline, summary, continuity_blocked, " +
 	"created_at, updated_at, deleted_at"
 
 func (r *ChapterRepository) chapterListCacheKey(novelID uint) string {
@@ -136,7 +136,7 @@ func (r *ChapterRepository) ListByNovelPaged(novelID uint, page, pageSize int) (
 // 用于 AI 提取任务（角色/物品/技能等），不走缓存。最多返回 300 章，避免超大小说导致 OOM。
 func (r *ChapterRepository) ListByNovelWithContent(novelID uint) ([]*model.Chapter, error) {
 	var chapters []*model.Chapter
-	return chapters, r.db.Where("novel_id = ?", novelID).
+	return chapters, r.db.Where("novel_id = ? AND deleted_at IS NULL", novelID).
 		Order("chapter_no ASC").Limit(300).Find(&chapters).Error
 }
 
@@ -176,6 +176,22 @@ func (r *ChapterRepository) UpdateStatus(id, novelID uint, status string) error 
 	}
 	r.invalidateListCache(novelID)
 	return nil
+}
+
+// AtomicSetGenerating 使用条件更新（乐观锁）将章节状态从非 generating/completed 状态原子性地切换到
+// "generating"。返回 true 表示本次调用成功抢占到生成权，false 表示该章节已在生成中或已完成。
+func (r *ChapterRepository) AtomicSetGenerating(id, novelID uint) (bool, error) {
+	result := r.db.Model(&model.Chapter{}).
+		Where("id = ? AND novel_id = ? AND status NOT IN ?", id, novelID, []string{"generating", "completed"}).
+		Update("status", "generating")
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return false, nil
+	}
+	r.invalidateListCache(novelID)
+	return true, nil
 }
 
 // ListPublishedByNovel 获取小说已发布章节（按章节号升序）

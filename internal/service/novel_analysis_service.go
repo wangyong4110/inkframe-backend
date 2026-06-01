@@ -293,9 +293,9 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 						task.addWarning(msg)
 					}
 				}()
-				if err := pt.fn(); err != nil {
-					msg := fmt.Sprintf("%s提取失败: %v", pt.name, err)
-					logger.Printf("NovelAnalysis[%d]: step%s warn: %v", novel.ID, pt.name, err)
+				if err := retryStep(3, pt.fn); err != nil {
+					msg := fmt.Sprintf("%s提取失败（已重试3次）: %v", pt.name, err)
+					logger.Printf("NovelAnalysis[%d]: step%s warn after retries: %v", novel.ID, pt.name, err)
 					task.addWarning(msg)
 				}
 				n := int(doneCount.Add(1))
@@ -1203,6 +1203,63 @@ func (s *NovelAnalysisService) stepExtractSceneAnchors(
 	}
 	wg.Wait()
 	return nil
+}
+
+// ──────────────────────────────────────────────
+// Analysis status query
+// ──────────────────────────────────────────────
+
+// AnalysisStatus 小说分析状态（供 API 查询）
+type AnalysisStatus struct {
+	NovelID     uint      `json:"novel_id"`
+	Status      string    `json:"status"` // "not_started", "pending", "running", "completed", "failed", "cancelled"
+	Progress    int       `json:"progress"` // 0-100
+	CurrentStep string    `json:"current_step"`
+	Error       string    `json:"error,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+// GetAnalysisStatus 查询小说的最新分析任务状态。
+// 若从未触发过分析，返回 status="not_started"。
+func (s *NovelAnalysisService) GetAnalysisStatus(novelID uint) (*AnalysisStatus, error) {
+	if s.taskSvc == nil {
+		return &AnalysisStatus{NovelID: novelID, Status: "not_started"}, nil
+	}
+	task, err := s.taskSvc.GetLatestAnalysisTask(novelID)
+	if err != nil {
+		// No task found → not started yet
+		return &AnalysisStatus{NovelID: novelID, Status: "not_started"}, nil
+	}
+	step := ""
+	if task.ResultJSON != "" {
+		var meta struct {
+			Step string `json:"step"`
+		}
+		if jsonErr := json.Unmarshal([]byte(task.ResultJSON), &meta); jsonErr == nil && meta.Step != "" {
+			step = meta.Step
+		}
+	}
+	return &AnalysisStatus{
+		NovelID:     novelID,
+		Status:      task.Status,
+		Progress:    task.Progress,
+		CurrentStep: step,
+		Error:       task.Error,
+		UpdatedAt:   task.UpdatedAt,
+	}, nil
+}
+
+// retryStep 对分析步骤执行最多 maxRetries 次重试，每次重试前等待递增时长。
+// 若所有重试均失败，返回最后一次错误。
+func retryStep(maxRetries int, fn func() error) error {
+	var lastErr error
+	for i := 0; i < maxRetries; i++ {
+		if lastErr = fn(); lastErr == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(i+1) * time.Second)
+	}
+	return lastErr
 }
 
 // stepUpdateNovelSettings 使用 AI 自动填写小说设置（类型、写作风格、图片风格、简介、目标字数/章节数）

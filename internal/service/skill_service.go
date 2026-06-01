@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
@@ -147,6 +148,11 @@ func (s *SkillService) GenerateSkills(tenantID, novelID uint) ([]*model.Skill, e
 
 	var extracted []skillJSON
 	if err := json.Unmarshal([]byte(extractJSON(strings.TrimSpace(result))), &extracted); err != nil {
+		raw := result
+		if len(raw) > 500 {
+			raw = raw[:500]
+		}
+		logger.Printf("[SkillService] GenerateSkills: JSON parse failed (raw: %s): %v", raw, err)
 		return nil, fmt.Errorf("failed to parse AI response: %w", err)
 	}
 
@@ -162,6 +168,18 @@ func (s *SkillService) GenerateSkills(tenantID, novelID uint) ([]*model.Skill, e
 			continue
 		}
 		if sk, ok := byName[e.Name]; ok {
+			// Update existing skill with fresh AI-generated values
+			sk.Description = e.Description
+			sk.Effect = e.Effect
+			if e.SkillType != "" {
+				sk.SkillType = e.SkillType
+			}
+			if e.Level != 0 {
+				sk.Level = e.Level
+			}
+			if updateErr := s.skillRepo.Update(sk); updateErr != nil {
+				logger.Printf("[SkillService] update skill %q failed: %v", e.Name, updateErr)
+			}
 			upserted = append(upserted, sk)
 			continue
 		}
@@ -191,6 +209,9 @@ func (s *SkillService) GenerateSkillEffect(tenantID, id uint, provider string) (
 	skill, err := s.skillRepo.GetByID(id)
 	if err != nil {
 		return nil, fmt.Errorf("skill not found: %w", err)
+	}
+	if skill.ImagePath != "" {
+		return skill, nil // already generated, skip regeneration
 	}
 	visualPrompt := fmt.Sprintf("Magic skill effect for: %s. %s. Dynamic cinematic style, fantasy art", skill.Name, skill.Description)
 	imageURL, err := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, visualPrompt, "", "fantasy", "", "")

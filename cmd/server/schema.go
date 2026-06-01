@@ -8,7 +8,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-05-31-v9"
+const schemaVersion = "2026-06-01-v3"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -85,6 +85,16 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_plot_point",     "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1"},
 		{"ink_scene_anchor",   "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1"},
 		{"ink_knowledge_base", "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1"},
+		// ink_worldview_entity 租户隔离（Fix 5: WorldviewEntity 缺失 tenant_id 补全）
+		{"ink_worldview_entity", "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1"},
+		// ink_quality_report 租户隔离（Fix 2: QualityReport 新增 tenant_id）
+		{"ink_quality_report", "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1"},
+		// ink_chapter 连贯性高危问题标记（2026-06-01 新增）
+		{"ink_chapter", "continuity_blocked", "TINYINT(1) NOT NULL DEFAULT 0"},
+		// ink_async_task 死信队列字段（2026-06-01 新增）
+		{"ink_async_task", "retry_count", "INT NOT NULL DEFAULT 0"},
+		{"ink_async_task", "max_retries", "INT NOT NULL DEFAULT 3"},
+		{"ink_async_task", "failure_log", "TEXT NULL"},
 	}
 	for _, a := range additions {
 		// 先查 information_schema，列已存在则跳过，避免触发 GORM 的 Error 1060 日志

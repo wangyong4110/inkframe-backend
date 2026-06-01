@@ -24,6 +24,7 @@ type NovelHandler struct {
 	taskSvc               *service.TaskService
 	modelService          *service.ModelService
 	notifSvc              *service.NotificationService // 可选
+	analysisSvc           *service.NovelAnalysisService // 可选
 }
 
 func NewNovelHandler(
@@ -55,6 +56,12 @@ func (h *NovelHandler) WithModelService(svc *service.ModelService) *NovelHandler
 // WithNotificationService 注入通知服务（可选）
 func (h *NovelHandler) WithNotificationService(svc *service.NotificationService) *NovelHandler {
 	h.notifSvc = svc
+	return h
+}
+
+// WithAnalysisService 注入小说分析服务（可选，用于分析状态查询）
+func (h *NovelHandler) WithAnalysisService(svc *service.NovelAnalysisService) *NovelHandler {
+	h.analysisSvc = svc
 	return h
 }
 
@@ -107,7 +114,7 @@ func (h *NovelHandler) GetNovel(c *gin.Context) {
 }
 
 // ListNovels 获取小说列表
-// GET /api/v1/novels
+// GET /api/v1/novels?sort=updated_at|created_at|title|status&order=asc|desc
 func (h *NovelHandler) ListNovels(c *gin.Context) {
 	p := parsePagination(c)
 
@@ -121,6 +128,22 @@ func (h *NovelHandler) ListNovels(c *gin.Context) {
 	if genre := c.Query("genre"); genre != "" {
 		filters["genre"] = genre
 	}
+
+	// Sort params with whitelist validation (also validated in repository)
+	allowedSortFields := map[string]bool{
+		"created_at": true, "updated_at": true, "title": true, "status": true,
+	}
+	sortField := c.DefaultQuery("sort", "updated_at")
+	if !allowedSortFields[sortField] {
+		sortField = "updated_at"
+	}
+	filters["sort"] = sortField
+
+	sortOrder := c.DefaultQuery("order", "desc")
+	if sortOrder != "asc" && sortOrder != "desc" {
+		sortOrder = "desc"
+	}
+	filters["order"] = sortOrder
 
 	novels, total, err := h.novelService.ListNovelsFiltered(p.Page, p.PageSize, filters)
 	if err != nil {
@@ -563,4 +586,30 @@ func (h *NovelHandler) SyncCharacterSnapshots(c *gin.Context) {
 	}
 
 	respondOK(c, gin.H{"message": "character snapshots synced"})
+}
+
+// GetAnalysisStatus 查询小说分析进度
+// GET /api/v1/novels/:id/analysis/status
+func (h *NovelHandler) GetAnalysisStatus(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	tenantID := getTenantID(c)
+	// Verify novel belongs to tenant
+	if _, err := h.novelService.GetNovel(uint(id), tenantID); err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found")
+		return
+	}
+	if h.analysisSvc == nil {
+		respondOK(c, gin.H{"novel_id": id, "status": "not_started"})
+		return
+	}
+	status, err := h.analysisSvc.GetAnalysisStatus(uint(id))
+	if err != nil {
+		logger.Printf("[NovelHandler] GetAnalysisStatus: novelID=%d err=%v", id, err)
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, status)
 }
