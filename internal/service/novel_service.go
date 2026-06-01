@@ -788,9 +788,9 @@ func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutli
 	}
 
 	if req.ChapterNum > 0 {
-		sb.WriteString(fmt.Sprintf("请生成%d章的大纲，每章包括：标题、简要概述、预计字数（2000-3000字）、主要剧情点。\n", req.ChapterNum))
+		sb.WriteString(fmt.Sprintf("请生成%d章的大纲，每章包括：标题、详细剧情概述（不少于150字）、预计字数（2000-3000字）、主要剧情点。\n", req.ChapterNum))
 	} else {
-		sb.WriteString("请根据故事规模自行决定合适的章节数（通常30-200章之间），每章包括：标题、简要概述、预计字数（2000-3000字）、主要剧情点。\n")
+		sb.WriteString("请根据故事规模自行决定合适的章节数（通常30-200章之间），每章包括：标题、详细剧情概述（不少于150字）、预计字数（2000-3000字）、主要剧情点。\n")
 	}
 
 	// 注入未解决剧情点（引导大纲在后续章节中推进解决）
@@ -818,12 +818,12 @@ func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutli
     {
       "chapter_no": 1,
       "title": "章节标题",
-      "summary": "100字以内的章节概述",
+      "summary": "章节剧情详细概述，不少于150字。必须涵盖：①场景与开场氛围（人物在哪、在做什么）②本章核心事件的起因、经过、结果③主角的关键决策或行动及其动机④与其他角色的重要互动或冲突⑤本章结尾的情绪落点与对下一章的引导。禁止用空泛语言敷衍，每章概述须有实质内容。",
       "word_count": 2500,
-      "plot_points": ["剧情点1", "剧情点2"],
+      "plot_points": ["剧情点1（含人物+动作+结果，20字内）", "剧情点2", "剧情点3"],
       "emotional_tone": "紧张",
       "tension_level": 7,
-      "hook": "章节末尾的悬念钩子",
+      "hook": "章末悬念钩子（具体描述悬念内容，20字内）",
       "hook_type": "cliffhanger",
       "conflict_type": "人与人",
       "act": 1
@@ -831,7 +831,8 @@ func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutli
   ]
 }
 字段类型说明：chapter_no/word_count/tension_level/act 必须是整数，其余为字符串或字符串数组。
-最外层必须是 {} 对象，chapters 是其中的数组字段，禁止直接返回 [] 数组。`)
+最外层必须是 {} 对象，chapters 是其中的数组字段，禁止直接返回 [] 数组。
+重要：每章 summary 字段不得少于150字，这是硬性要求，AI 不得缩减。`)
 
 
 	return sb.String()
