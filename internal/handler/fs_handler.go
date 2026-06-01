@@ -10,10 +10,16 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-type FsHandler struct{}
+type FsHandler struct {
+	baseDir string // all browsing is restricted to paths within this directory
+}
 
-func NewFsHandler() *FsHandler {
-	return &FsHandler{}
+func NewFsHandler(baseDir string) *FsHandler {
+	cleaned := ""
+	if baseDir != "" {
+		cleaned = filepath.Clean(baseDir)
+	}
+	return &FsHandler{baseDir: cleaned}
 }
 
 type fsDirEntry struct {
@@ -27,11 +33,22 @@ type fsBrowseResponse struct {
 	Entries []fsDirEntry `json:"entries"`
 }
 
-// Browse lists subdirectories at the given path.
+// Browse lists subdirectories at the given path, restricted to baseDir.
 // GET /api/v1/fs/browse?path=/some/path
 func (h *FsHandler) Browse(c *gin.Context) {
-	path := c.DefaultQuery("path", "/")
-	path = filepath.Clean(path)
+	if h.baseDir == "" {
+		respondErr(c, http.StatusForbidden, "filesystem browsing not configured")
+		return
+	}
+
+	raw := c.DefaultQuery("path", h.baseDir)
+	path := filepath.Clean(raw)
+
+	// Enforce that the resolved path stays within the configured base directory.
+	if !strings.HasPrefix(path+string(filepath.Separator), h.baseDir+string(filepath.Separator)) {
+		respondErr(c, http.StatusForbidden, "path outside allowed directory")
+		return
+	}
 
 	info, err := os.Stat(path)
 	if err != nil || !info.IsDir() {
@@ -62,7 +79,8 @@ func (h *FsHandler) Browse(c *gin.Context) {
 	sort.Slice(dirs, func(i, j int) bool { return dirs[i].Name < dirs[j].Name })
 
 	parent := filepath.Dir(path)
-	if parent == path {
+	// Don't expose a parent above the base directory.
+	if parent == path || !strings.HasPrefix(parent+string(filepath.Separator), h.baseDir+string(filepath.Separator)) {
 		parent = ""
 	}
 

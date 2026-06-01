@@ -419,6 +419,7 @@ type EffectiveCharacter struct {
 type CharacterService struct {
 	characterRepo        *repository.CharacterRepository
 	chapterCharacterRepo *repository.ChapterCharacterRepository
+	snapshotRepo         *repository.CharacterStateSnapshotRepository // optional, for cascade delete
 	aiService            *AIService
 	novelRepo            *repository.NovelRepository   // optional, for AIBatchGenerate
 	chapterRepo          *repository.ChapterRepository // optional, for AIBatchGenerate
@@ -535,6 +536,12 @@ func (s *CharacterService) WithChapterCharacterRepo(r *repository.ChapterCharact
 	return s
 }
 
+// WithSnapshotRepo 注入角色状态快照仓库（可选），用于 DeleteCharacter 级联清理
+func (s *CharacterService) WithSnapshotRepo(r *repository.CharacterStateSnapshotRepository) *CharacterService {
+	s.snapshotRepo = r
+	return s
+}
+
 func (s *CharacterService) WithNovelRepo(r *repository.NovelRepository) *CharacterService {
 	s.novelRepo = r
 	return s
@@ -633,6 +640,21 @@ func (s *CharacterService) DeleteCharacter(id, tenantID uint) error {
 	if char.TenantID != tenantID {
 		return fmt.Errorf("not found")
 	}
+
+	// 级联清理关联数据：删除角色状态快照
+	if s.snapshotRepo != nil {
+		if err := s.snapshotRepo.DeleteByCharacter(id); err != nil {
+			logger.Printf("[CharacterService] DeleteCharacter: delete snapshots for char %d: %v", id, err)
+		}
+	}
+
+	// 级联清理章节角色覆盖
+	if s.chapterCharacterRepo != nil {
+		if err := s.chapterCharacterRepo.DeleteByCharacter(id); err != nil {
+			logger.Printf("[CharacterService] DeleteCharacter: delete chapter overrides for char %d: %v", id, err)
+		}
+	}
+
 	return s.characterRepo.Delete(id)
 }
 

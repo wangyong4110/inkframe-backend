@@ -55,7 +55,7 @@ type AsyncTask struct {
 	EntityType string         `json:"entity_type" gorm:"size:50"`
 	EntityID   uint           `json:"entity_id" gorm:"index"`
 	ResultJSON string         `json:"-" gorm:"column:result;type:mediumtext"` // mediumtext 支持 16MB，避免大结果超 text 65KB 限制
-	ParamsJSON string         `json:"-" gorm:"column:params;type:text"`       // 续跑参数快照（用于服务重启后恢复任务）
+	ParamsJSON string         `json:"-" gorm:"column:params;type:mediumtext"` // mediumtext 支持 16MB，避免大参数超 text 65KB 限制
 	Error      string         `json:"error,omitempty" gorm:"type:text"`
 	Progress   int            `json:"progress" gorm:"default:0"`
 	CreatedAt  time.Time      `json:"created_at"`
@@ -151,7 +151,7 @@ type Novel struct {
 	LikeCount    int        `json:"like_count" gorm:"default:0"`
 	CommentCount int        `json:"comment_count" gorm:"default:0"`
 	HotScore     float64    `json:"hot_score" gorm:"default:0;index"`
-	PlazaTags    string     `json:"plaza_tags" gorm:"size:500"` // JSON 数组，如 ["玄幻","古风"]
+	PlazaTags    string     `json:"plaza_tags" gorm:"type:text"` // JSON 数组，如 ["玄幻","古风"]
 
 	// 内容审核
 	ReviewStatus string     `json:"review_status" gorm:"size:20;default:'draft'"` // draft|pending_review|approved|rejected

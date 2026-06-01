@@ -620,11 +620,22 @@ func (s *QualityControlService) ListReviewRecords(chapterID uint) ([]*model.Revi
 	return s.reviewRecordRepo.ListByEntity(model.ReviewEntityChapter, chapterID)
 }
 
-func (s *QualityControlService) GetReviewRecord(recordID uint) (*model.ReviewRecord, error) {
+func (s *QualityControlService) GetReviewRecord(recordID uint, tenantID uint) (*model.ReviewRecord, error) {
 	if s.reviewRecordRepo == nil {
 		return nil, fmt.Errorf("review repos not wired")
 	}
-	return s.reviewRecordRepo.GetByID(recordID)
+	rec, err := s.reviewRecordRepo.GetByID(recordID)
+	if err != nil {
+		return nil, err
+	}
+	// 验证 entity 属于当前租户（chapter 验证）
+	if rec.EntityType == model.ReviewEntityChapter {
+		chapter, err := s.chapterRepo.GetByID(rec.EntityID)
+		if err != nil || chapter.TenantID != tenantID {
+			return nil, fmt.Errorf("review record not found")
+		}
+	}
+	return rec, nil
 }
 
 // RollbackReview restores the chapter content to the snapshot taken at review time.

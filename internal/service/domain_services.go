@@ -446,9 +446,16 @@ func (s *ModelService) ListExperiments() (interface{}, error) {
 }
 
 func (s *ModelService) CreateExperiment(req *model.CreateModelComparisonRequest) (interface{}, error) {
+	modelIDsJSON := "[]"
+	if len(req.ModelIDs) > 0 {
+		if b, err := json.Marshal(req.ModelIDs); err == nil {
+			modelIDsJSON = string(b)
+		}
+	}
 	experiment := &model.ModelComparisonExperiment{
 		Name:     req.Name,
 		TaskType: req.TaskType,
+		ModelIDs: modelIDsJSON,
 		Status:   "pending",
 	}
 	return experiment, s.experimentRepo.Create(experiment)
@@ -459,7 +466,25 @@ func (s *ModelService) GetExperiment(id uint) (interface{}, error) {
 }
 
 func (s *ModelService) StartExperiment(id uint) error {
-	return nil
+	exp, err := s.experimentRepo.GetByID(id)
+	if err != nil {
+		return fmt.Errorf("experiment not found: %w", err)
+	}
+	// 验证至少配置了 2 个模型
+	if exp.ModelIDs == "" || exp.ModelIDs == "[]" || exp.ModelIDs == "null" {
+		return fmt.Errorf("experiment %d requires at least two models in ModelIDs", id)
+	}
+	var ids []uint
+	if jsonErr := json.Unmarshal([]byte(exp.ModelIDs), &ids); jsonErr != nil || len(ids) < 2 {
+		return fmt.Errorf("experiment %d requires at least 2 models for comparison (got: %s)", id, exp.ModelIDs)
+	}
+	if exp.Status == "running" {
+		return fmt.Errorf("experiment %d is already running", id)
+	}
+	exp.Status = "running"
+	exp.Progress = 0
+	exp.UpdatedAt = time.Now()
+	return s.experimentRepo.Update(exp)
 }
 
 func (s *ModelService) GetAvailableModels(taskType string, tenantID uint) ([]*model.AIModel, error) {
@@ -555,10 +580,14 @@ func (s *WorldviewService) GetEntities(worldviewID uint) ([]*model.WorldviewEnti
 	return s.worldviewRepo.GetEntities(worldviewID)
 }
 
-func (s *WorldviewService) GetEntity(id uint) (*model.WorldviewEntity, error) {
+func (s *WorldviewService) GetEntity(id uint, worldviewID uint) (*model.WorldviewEntity, error) {
 	var entity model.WorldviewEntity
 	if err := s.worldviewRepo.DB().First(&entity, id).Error; err != nil {
 		return nil, err
+	}
+	// 验证 entity 属于指定 worldview，防止跨租户访问
+	if worldviewID != 0 && entity.WorldviewID != worldviewID {
+		return nil, fmt.Errorf("entity not found in worldview %d", worldviewID)
 	}
 	return &entity, nil
 }
@@ -660,6 +689,7 @@ func (s *WorldviewService) GenerateWorldview(tenantID uint, novelID uint, genre 
 
 	return &model.Worldview{
 		UUID:        uuid.New().String(),
+		TenantID:    tenantID,
 		Name:        name,
 		Genre:       genre,
 		Description: data.Description,
@@ -723,7 +753,17 @@ func (s *TenantService) ListMembers(tenantID uint) ([]*model.TenantUser, error) 
 	return s.tenantUserRepo.ListByTenant(tenantID)
 }
 
+var validTenantRoles = map[string]bool{
+	"owner": true, "admin": true, "member": true, "viewer": true,
+}
+
 func (s *TenantService) AddMember(tenantID, userID uint, role string) error {
+	if !validTenantRoles[role] {
+		return fmt.Errorf("invalid role %q: must be owner/admin/member/viewer", role)
+	}
+	if existing, err := s.tenantUserRepo.GetByTenantAndUser(tenantID, userID); err == nil && existing != nil {
+		return fmt.Errorf("user %d is already a member of tenant %d", userID, tenantID)
+	}
 	tu := &model.TenantUser{
 		TenantID: tenantID,
 		UserID:   userID,
@@ -738,5 +778,8 @@ func (s *TenantService) RemoveMember(tenantID, userID uint) error {
 }
 
 func (s *TenantService) UpdateMemberRole(tenantID, userID uint, role string) error {
+	if !validTenantRoles[role] {
+		return fmt.Errorf("invalid role %q: must be owner/admin/member/viewer", role)
+	}
 	return s.tenantUserRepo.UpdateRole(tenantID, userID, role)
 }

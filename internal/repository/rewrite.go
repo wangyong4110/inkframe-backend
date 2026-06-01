@@ -62,17 +62,6 @@ func (r *RewriteProjectRepository) Delete(id uint) error {
 	return r.db.Delete(&model.RewriteProject{}, id).Error
 }
 
-// ListOldTerminalIDs returns project IDs in a terminal status (completed/failed)
-// whose updated_at is older than the given cutoff. Used for periodic cleanup.
-func (r *RewriteProjectRepository) ListOldTerminalIDs(cutoff interface{}) ([]uint, error) {
-	var ids []uint
-	err := r.db.Model(&model.RewriteProject{}).
-		Select("id").
-		Where("status IN (?) AND updated_at < ?", []string{"completed", "failed"}, cutoff).
-		Pluck("id", &ids).Error
-	return ids, err
-}
-
 // LiteraryAnalysisRepository handles literary analysis data
 type LiteraryAnalysisRepository struct {
 	db *gorm.DB
@@ -166,18 +155,6 @@ func (r *ChapterRewriteTaskRepository) ListByProject(projectID uint) ([]*model.C
 	return tasks, err
 }
 
-// ListByProjectPaged 分页查询章节改写任务
-func (r *ChapterRewriteTaskRepository) ListByProjectPaged(projectID uint, page, pageSize int) ([]*model.ChapterRewriteTask, int64, error) {
-	var tasks []*model.ChapterRewriteTask
-	var total int64
-	offset := (page - 1) * pageSize
-	if err := r.db.Model(&model.ChapterRewriteTask{}).Where("project_id = ?", projectID).Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	err := r.db.Where("project_id = ?", projectID).Order("chapter_no ASC").Offset(offset).Limit(pageSize).Find(&tasks).Error
-	return tasks, total, err
-}
-
 func (r *ChapterRewriteTaskRepository) UpdateStatus(id uint, status, errMsg string) error {
 	return r.db.Model(&model.ChapterRewriteTask{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"status": status, "error_msg": errMsg,
@@ -243,6 +220,15 @@ func (r *ChapterRewriteTaskRepository) UpdatePostProcess(
 func (r *ChapterRewriteTaskRepository) MarkSummaryWritten(id uint) error {
 	return r.db.Model(&model.ChapterRewriteTask{}).Where("id = ?", id).
 		Update("summary_written", true).Error
+}
+
+// CountByProjectAndStatus returns the number of chapter tasks matching the given status.
+func (r *ChapterRewriteTaskRepository) CountByProjectAndStatus(projectID uint, status string) (int64, error) {
+	var count int64
+	err := r.db.Model(&model.ChapterRewriteTask{}).
+		Where("project_id = ? AND status = ?", projectID, status).
+		Count(&count).Error
+	return count, err
 }
 
 // ── RewriteContinuityIndexRepository ─────────────────────────────────────────

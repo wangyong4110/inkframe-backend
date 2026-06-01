@@ -9,6 +9,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -37,8 +40,18 @@ func (s *McpService) ListTools(tenantID uint) ([]*model.McpTool, error) {
 
 // CreateTool 创建 MCP 工具
 func (s *McpService) CreateTool(req *model.CreateMcpToolRequest) (*model.McpTool, error) {
-	if err := validateMcpEndpoint(req.Endpoint); err != nil {
-		return nil, fmt.Errorf("endpoint validation failed: %w", err)
+	// For stdio transport, Endpoint holds the command path; validate it is executable.
+	if req.TransportType == "stdio" {
+		if req.Endpoint == "" {
+			return nil, fmt.Errorf("stdio transport requires endpoint (command) field")
+		}
+		if err := validateStdioCommand(req.Endpoint); err != nil {
+			return nil, fmt.Errorf("stdio command validation failed: %w", err)
+		}
+	} else {
+		if err := validateMcpEndpoint(req.Endpoint); err != nil {
+			return nil, fmt.Errorf("endpoint validation failed: %w", err)
+		}
 	}
 	headersJSON, err := marshalJSON(req.Headers)
 	if err != nil {
@@ -330,16 +343,20 @@ func (s *McpService) InvokeTool(ctx context.Context, toolName string, params map
 		}
 	}
 
-	client := &http.Client{Timeout: 30 * time.Second}
+	client := &http.Client{Timeout: timeout}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("mcp tool %q: request failed: %w", toolName, err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	const maxMCPResponseBytes = 10 * 1024 * 1024 // 10MB DoS protection
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxMCPResponseBytes))
 	if err != nil {
 		return nil, fmt.Errorf("mcp tool %q: read response: %w", toolName, err)
+	}
+	if int64(len(body)) >= maxMCPResponseBytes {
+		return nil, fmt.Errorf("mcp tool %q: response exceeds 10MB limit", toolName)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("mcp tool %q: HTTP %d: %s", toolName, resp.StatusCode, string(body))
@@ -383,6 +400,21 @@ func validateMcpEndpoint(endpoint string) error {
 	}
 	if host == "localhost" || host == "0.0.0.0" {
 		return fmt.Errorf("requests to localhost are not allowed")
+	}
+	return nil
+}
+
+// validateStdioCommand checks that the stdio command exists on PATH or as an absolute path.
+// For stdio transport the Endpoint field holds the executable path.
+func validateStdioCommand(command string) error {
+	if filepath.IsAbs(command) {
+		if _, err := os.Stat(command); err != nil {
+			return fmt.Errorf("command %q not found: %w", command, err)
+		}
+		return nil
+	}
+	if _, err := exec.LookPath(command); err != nil {
+		return fmt.Errorf("command %q not found in PATH: %w", command, err)
 	}
 	return nil
 }

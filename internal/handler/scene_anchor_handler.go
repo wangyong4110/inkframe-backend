@@ -17,6 +17,7 @@ type SceneAnchorHandler struct {
 	consistencySvc *service.SceneConsistencyService
 	taskSvc        *service.TaskService
 	chapterSvc     *service.ChapterService
+	videoSvc       *service.VideoService
 }
 
 func NewSceneAnchorHandler(svc *service.SceneAnchorService, consistencySvc *service.SceneConsistencyService) *SceneAnchorHandler {
@@ -30,6 +31,11 @@ func (h *SceneAnchorHandler) WithTaskService(svc *service.TaskService) *SceneAnc
 
 func (h *SceneAnchorHandler) WithChapterService(svc *service.ChapterService) *SceneAnchorHandler {
 	h.chapterSvc = svc
+	return h
+}
+
+func (h *SceneAnchorHandler) WithVideoService(svc *service.VideoService) *SceneAnchorHandler {
+	h.videoSvc = svc
 	return h
 }
 
@@ -134,6 +140,16 @@ func (h *SceneAnchorHandler) DeleteSceneAnchor(c *gin.Context) {
 
 // SetShotAnchor PUT /videos/:video_id/shots/:shot_id/anchor
 func (h *SceneAnchorHandler) SetShotAnchor(c *gin.Context) {
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if h.videoSvc != nil {
+		if _, err := h.videoSvc.GetVideoByTenant(uint(videoID), getTenantID(c)); err != nil {
+			respondErr(c, http.StatusNotFound, "video not found")
+			return
+		}
+	}
 	shotID, ok := parseID(c, "shot_id")
 	if !ok {
 		return

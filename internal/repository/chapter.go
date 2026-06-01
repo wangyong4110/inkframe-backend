@@ -433,3 +433,8 @@ func (r *ChapterCharacterRepository) ListByChapter(chapterID uint) ([]*model.Cha
 func (r *ChapterCharacterRepository) Delete(chapterID, characterID uint) error {
 	return r.db.Where("chapter_id = ? AND character_id = ?", chapterID, characterID).Delete(&model.ChapterCharacter{}).Error
 }
+
+// DeleteByCharacter 删除指定角色的所有章节覆盖记录（级联清理用）
+func (r *ChapterCharacterRepository) DeleteByCharacter(characterID uint) error {
+	return r.db.Where("character_id = ?", characterID).Delete(&model.ChapterCharacter{}).Error
+}

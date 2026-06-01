@@ -393,6 +393,10 @@ func (h *NovelHandler) GetTimeline(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c)); err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found")
+		return
+	}
 
 	timeline, err := h.timelineService.GetTimeline(uint(novelId))
 	if err != nil {
@@ -409,6 +413,10 @@ func (h *NovelHandler) GetTimeline(c *gin.Context) {
 func (h *NovelHandler) BuildTimeline(c *gin.Context) {
 	novelId, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+	if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c)); err != nil {
+		respondErr(c, http.StatusNotFound, "novel not found")
 		return
 	}
 

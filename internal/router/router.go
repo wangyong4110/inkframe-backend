@@ -328,7 +328,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				items.DELETE("/:id", cfg.ItemHandler.DeleteItem)
 				items.POST("/:id/image/upload", cfg.ItemHandler.UploadItemImage)
 				items.POST("/:id/images", cfg.ItemHandler.GenerateItemImage)
-					items.POST("/:id/reference/upload", cfg.ItemHandler.UploadItemReference)
+				items.POST("/:id/reference/upload", cfg.ItemHandler.UploadItemReference)
 			}
 		}
 
@@ -790,6 +790,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				rewrite.POST("/projects/:id/chapters/:task_id/approve", cfg.RewriteHandler.ApproveChapter)
 				rewrite.PUT("/projects/:id/bible", cfg.RewriteHandler.UpdateBible)
 				rewrite.GET("/projects/:id/compliance-report", cfg.RewriteHandler.GetComplianceReport)
+				rewrite.POST("/projects/:id/cancel", cfg.RewriteHandler.CancelRewrite)
 			}
 		}
 	}

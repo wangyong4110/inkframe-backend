@@ -260,6 +260,18 @@ func (h *WorldviewHandler) CreateEntity(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
+	// 验证 type 枚举值
+	validEntityTypes := map[string]bool{
+		"location":     true,
+		"organization": true,
+		"artifact":     true,
+		"race":         true,
+		"creature":     true,
+	}
+	if !validEntityTypes[req.Type] {
+		respondBadRequest(c, "invalid type, must be one of: location, organization, artifact, race, creature")
+		return
+	}
 	entity := &model.WorldviewEntity{
 		WorldviewID: uint(id),
 		Type:        req.Type,
@@ -277,11 +289,15 @@ func (h *WorldviewHandler) CreateEntity(c *gin.Context) {
 // UpdateEntity 更新世界观实体
 // PUT /api/v1/worldviews/:id/entities/:entity_id
 func (h *WorldviewHandler) UpdateEntity(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
 	entityID, ok := parseID(c, "entity_id")
 	if !ok {
 		return
 	}
-	entity, err := h.worldviewService.GetEntity(uint(entityID))
+	entity, err := h.worldviewService.GetEntity(uint(entityID), uint(id))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "entity not found")
 		return

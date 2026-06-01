@@ -322,6 +322,9 @@ func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID
 	if err != nil {
 		return "", err
 	}
+	if novel.TenantID != tenantID {
+		return "", fmt.Errorf("not found")
+	}
 
 	genreMap := map[string]string{
 		"fantasy":    "fantasy xianxia cultivation magic world",
@@ -502,6 +505,9 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 	novel, err := s.novelRepo.GetByID(req.NovelID)
 	if err != nil {
 		return nil, err
+	}
+	if novel.TenantID != tenantID {
+		return nil, fmt.Errorf("not found")
 	}
 
 	// 构建提示词
@@ -735,7 +741,12 @@ func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutli
 	}
 
 	if len(req.Keywords) > 0 {
-		sb.WriteString(fmt.Sprintf("关键词：%s\n\n", strings.Join(req.Keywords, ", ")))
+		keywords := req.Keywords
+		if len(keywords) > 10 {
+			logger.Printf("[NovelService] buildOutlinePrompt: truncating keywords from %d to 10", len(keywords))
+			keywords = keywords[:10]
+		}
+		sb.WriteString(fmt.Sprintf("关键词：%s\n\n", strings.Join(keywords, ", ")))
 	}
 
 	if req.Prompt != "" {
@@ -792,80 +803,6 @@ func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutli
 	return sb.String()
 }
 
-// GenerateChapterRequest 生成章节请求
-type GenerateChapterRequest struct {
-	NovelID   uint   `json:"novel_id" binding:"required"`
-	ChapterNo int    `json:"chapter_no" binding:"required"`
-	Prompt    string `json:"prompt"`
-	MaxTokens int    `json:"max_tokens"`
-}
-
-// GenerateChapter 生成章节
-func (s *NovelService) GenerateChapter(req *GenerateChapterRequest) (*model.Chapter, error) {
-	novel, err := s.novelRepo.GetByID(req.NovelID)
-	if err != nil {
-		return nil, err
-	}
-
-	// 获取前几章作为上下文
-	recentChapters, err := s.chapterRepo.GetRecent(req.NovelID, req.ChapterNo, 3)
-	if err != nil {
-		return nil, err
-	}
-
-	// 构建提示词
-	prompt := s.buildChapterPrompt(novel, req, recentChapters)
-
-	// 调用AI生成
-	content, err := s.aiService.Generate(req.NovelID, "chapter", prompt)
-	if err != nil {
-		return nil, err
-	}
-
-	// 创建章节
-	chapter := &model.Chapter{
-		UUID:      uuid.New().String(),
-		NovelID:   req.NovelID,
-		ChapterNo: req.ChapterNo,
-		Title:     fmt.Sprintf("第%d章", req.ChapterNo),
-		Content:   content,
-		WordCount: countChineseChars(content),
-		Status:    "completed",
-	}
-
-	// 生成摘要
-	summary, _ := s.aiService.Generate(req.NovelID, "summary", fmt.Sprintf("请简要概括以下内容，不超过100字：\n%s", content))
-	chapter.Summary = summary
-
-	if err := s.chapterRepo.Create(chapter); err != nil {
-		return nil, err
-	}
-
-	// 更新小说统计
-	s.updateNovelStats(req.NovelID)
-
-	// 提取剧情点
-	s.extractPlotPoints(chapter)
-
-	// 写入角色状态快照（非阻塞；此路径无 tenantID，使用系统级 provider）
-	if s.characterRepo != nil && s.snapshotRepo != nil {
-		go s.writeCharacterSnapshots(0, chapter)
-	}
-
-	// 站内通知：章节生成完成
-	if s.notifSvc != nil {
-		_ = s.notifSvc.Send(
-			novel.TenantID, 0,
-			"chapter_done",
-			"章节生成完成",
-			fmt.Sprintf("《%s》第%d章已生成完毕", novel.Title, chapter.ChapterNo),
-			"chapter", chapter.ID,
-			fmt.Sprintf("/novel/%d", novel.ID),
-		)
-	}
-
-	return chapter, nil
-}
 
 // writeCharacterSnapshots 从章节内容中提取角色状态并写入快照
 func (s *NovelService) writeCharacterSnapshots(tenantID uint, chapter *model.Chapter) {
@@ -1136,54 +1073,6 @@ func (s *NovelService) SyncCharacterSnapshots(
 	return nil
 }
 
-// buildChapterPrompt 构建章节提示词
-func (s *NovelService) buildChapterPrompt(novel *model.Novel, req *GenerateChapterRequest, recentChapters []*model.Chapter) string {
-	var sb strings.Builder
-
-	sb.WriteString(fmt.Sprintf("请为小说《%s》撰写第%d章。\n\n", novel.Title, req.ChapterNo))
-
-	// 添加世界观信息
-	if novel.Worldview != nil {
-		sb.WriteString("【世界观设定】\n")
-		if novel.Worldview.MagicSystem != "" {
-			sb.WriteString(fmt.Sprintf("修炼体系：%s\n", novel.Worldview.MagicSystem))
-		}
-		if novel.Worldview.Geography != "" {
-			sb.WriteString(fmt.Sprintf("地理环境：%s\n", novel.Worldview.Geography))
-		}
-		if novel.Worldview.Culture != "" {
-			sb.WriteString(fmt.Sprintf("文化背景：%s\n", novel.Worldview.Culture))
-		}
-		if novel.Worldview.CheatSystem != "" {
-			sb.WriteString(fmt.Sprintf("金手指/系统：%s\n", novel.Worldview.CheatSystem))
-		}
-		sb.WriteString("\n")
-	}
-
-	// 添加前几章内容作为上下文
-	if len(recentChapters) > 0 {
-		sb.WriteString("【前情提要】\n")
-		for i := len(recentChapters) - 1; i >= 0; i-- {
-			ch := recentChapters[i]
-			sb.WriteString(fmt.Sprintf("第%d章「%s」：%s\n", ch.ChapterNo, ch.Title, ch.Summary))
-		}
-		sb.WriteString("\n")
-	}
-
-	if req.Prompt != "" {
-		sb.WriteString(fmt.Sprintf("【创作要求】%s\n\n", req.Prompt))
-	}
-
-	sb.WriteString(fmt.Sprintf("请撰写第%d章的完整内容，字数要求2000-3000字。\n", req.ChapterNo))
-	sb.WriteString("请注意：\n")
-	sb.WriteString("1. 保持与前文的剧情连贯性\n")
-	sb.WriteString("2. 角色性格和对话风格保持一致\n")
-	sb.WriteString("3. 遵循世界观设定\n")
-	sb.WriteString("4. 适当埋下伏笔，为后续剧情做铺垫")
-
-	return sb.String()
-}
-
 // updateNovelStats 更新小说统计（使用 DB 聚合避免并发竞态）
 func (s *NovelService) updateNovelStats(novelID uint) {
 	if err := s.novelRepo.SyncStats(novelID); err != nil {
@@ -1272,16 +1161,16 @@ func (s *NovelService) GetNovelRanking(rankType, gender string) ([]*model.Novel,
 // RecordNovelViewDeduped 防刷浏览量（同 IP 对同一小说 1 小时内只计一次）
 func (s *NovelService) RecordNovelViewDeduped(id uint, clientIP string) error {
 	key := fmt.Sprintf("novel:%s:%d", clientIP, id)
-	// LoadOrStore is atomic: only the goroutine that actually stored increments the count.
 	expiry := time.Now().Add(time.Hour)
-	actual, loaded := s.novelViewDedup.LoadOrStore(key, expiry)
-	if loaded {
-		// Key already existed — check whether it has expired.
-		if t, ok := actual.(time.Time); ok && time.Now().Before(t) {
+	// Use Swap to atomically replace and check the old value in one operation.
+	old, _ := s.novelViewDedup.Swap(key, expiry)
+	if old != nil {
+		// Key already existed: skip if not yet expired.
+		if t, ok := old.(time.Time); ok && time.Now().Before(t) {
+			// Restore the original expiry so we don't accidentally shorten it.
+			s.novelViewDedup.Store(key, t)
 			return nil
 		}
-		// Expired: replace and count.
-		s.novelViewDedup.Store(key, expiry)
 	}
 	return s.novelRepo.IncrNovelViewCount(id)
 }
@@ -1299,7 +1188,9 @@ func (s *NovelService) ToggleNovelLike(novelID, userID uint) (bool, error) {
 	if !liked {
 		delta = -1
 	}
-	_ = s.novelRepo.IncrNovelLikeCount(novelID, delta)
+	if err := s.novelRepo.IncrNovelLikeCount(novelID, delta); err != nil {
+		logger.Printf("ToggleNovelLike: IncrNovelLikeCount novel=%d delta=%d: %v", novelID, delta, err)
+	}
 	return liked, nil
 }
 
@@ -1325,6 +1216,9 @@ func (s *NovelService) AddNovelComment(novelID, userID uint, nickname, content s
 	if s.novelCommentRepo == nil {
 		return nil, fmt.Errorf("comment feature not available")
 	}
+	if strings.TrimSpace(content) == "" {
+		return nil, fmt.Errorf("comment content cannot be empty")
+	}
 	if parentID != nil {
 		parent, err := s.novelCommentRepo.GetByID(*parentID)
 		if err != nil {
@@ -1344,7 +1238,9 @@ func (s *NovelService) AddNovelComment(novelID, userID uint, nickname, content s
 	if err := s.novelCommentRepo.Create(c); err != nil {
 		return nil, err
 	}
-	_ = s.novelRepo.IncrNovelCommentCount(novelID, 1)
+	if err := s.novelRepo.IncrNovelCommentCount(novelID, 1); err != nil {
+		logger.Printf("AddNovelComment: IncrNovelCommentCount novel=%d: %v", novelID, err)
+	}
 	return c, nil
 }
 

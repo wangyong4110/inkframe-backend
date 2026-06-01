@@ -15,10 +15,6 @@ import (
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-// maxConcurrentChapterRewrites limits the number of chapters being rewritten
-// simultaneously across all projects to avoid flooding the AI provider.
-const maxConcurrentChapterRewrites = 5
-
 // RewriteService handles novel rewriting projects.
 type RewriteService struct {
 	projectRepo     *repository.RewriteProjectRepository
@@ -29,11 +25,8 @@ type RewriteService struct {
 	novelRepo       *repository.NovelRepository
 	aiSvc           *AIService
 	taskSvc         *TaskService
-	continuityRepo  *repository.RewriteContinuityIndexRepository // optional; nil = no continuity index
-	summaryRepo     *repository.RewriteChapterSummaryRepository  // optional; nil = use excerpt fallback
-	// rewriteSem is a counting semaphore that caps concurrent chapter rewrites
-	// at maxConcurrentChapterRewrites. Initialised lazily on first use.
-	rewriteSem chan struct{}
+	continuityRepo  *repository.RewriteContinuityIndexRepository  // optional; nil = no continuity index
+	summaryRepo     *repository.RewriteChapterSummaryRepository   // optional; nil = use excerpt fallback
 }
 
 // rewriteLevelConfig holds per-level parameters.
@@ -48,15 +41,12 @@ type rewriteLevelConfig struct {
 
 // rewriteAttempt holds the result of a single AI generation attempt.
 type rewriteAttempt struct {
-	Content    string
-	LexSim     float64
-	StructSim  float64
-	// SemanticSim here represents the entity leakage rate: the fraction of original
-	// entity names (characters, locations, items) still present in the rewritten text.
-	// Range 0.0 (no leakage) to 1.0 (complete leakage). NOT a vector embedding distance.
-	SemanticSim float64
-	Passed      bool // within [TargetLexSimLow, TargetLexSimHigh]
-	TooSimilar  bool // lexSim > TargetLexSimHigh → 改写不足, should retry
+	Content     string
+	LexSim      float64
+	StructSim   float64
+	SemanticSim float64 // entity leakage rate: original entities still present in rewrite
+	Passed      bool    // within [TargetLexSimLow, TargetLexSimHigh]
+	TooSimilar  bool    // lexSim > TargetLexSimHigh → 改写不足, should retry
 }
 
 // ForbiddenDialogue represents a signature dialogue pattern that must be completely rewritten.
@@ -111,7 +101,6 @@ func NewRewriteService(
 		chapterRepo:     chapterRepo,
 		novelRepo:       novelRepo,
 		aiSvc:           aiSvc,
-		rewriteSem:      make(chan struct{}, maxConcurrentChapterRewrites),
 	}
 }
 
@@ -779,13 +768,6 @@ func (s *RewriteService) ResumeAnalysis(t *model.AsyncTask) {
 	}(t.TaskID)
 }
 
-// runAnalysis transitions the project through "analyzing" → "bible_ready".
-// On any error the caller (StartAnalysis / ResumeAnalysis goroutine) calls
-// projectRepo.UpdateStatus(id, "failed", msg), so the project never stays stuck
-// in "analyzing". generateBible may create a Bible record before failing at the
-// chapter-task seeding stage; in that case the project is still set to "failed"
-// and a subsequent StartAnalysis call (allowed from "failed" status) will recreate
-// all derived data cleanly.
 func (s *RewriteService) runAnalysis(ctx context.Context, taskID string, project *model.RewriteProject) error {
 	s.projectRepo.UpdateStatus(project.ID, "analyzing", "")
 
@@ -964,11 +946,7 @@ func (s *RewriteService) generateBible(ctx context.Context, taskID string, proje
 		}
 	}
 
-	if err := s.projectRepo.UpdateStatus(project.ID, "bible_ready", ""); err != nil {
-		logger.Printf("[Rewrite] generateBible: failed to update status to bible_ready for project %d: %v", project.ID, err)
-		return err
-	}
-	return nil
+	return s.projectRepo.UpdateStatus(project.ID, "bible_ready", "")
 }
 
 // ── Phase 2: Chapter Rewriting ────────────────────────────────────────────────
@@ -1085,7 +1063,7 @@ func (s *RewriteService) runRewriting(ctx context.Context, taskID string, projec
 		}
 		if task.Status == "completed" {
 			done++
-			s.updateRewriteProgress(taskID, project.ID, done, total)
+			s.updateRewriteProgress(taskID, project.ID, total)
 			continue
 		}
 
@@ -1139,15 +1117,24 @@ func (s *RewriteService) runRewriting(ctx context.Context, taskID string, projec
 			// Async: generate chapter summary and update continuity index
 			s.generateChapterSummaryAsync(project.TenantID, project.NovelID, project.ID, task.ID, task.ChapterNo, finalContent)
 
-			// Update excerpt-based fallback context
+			// Update excerpt-based fallback context (Fix 5: dynamic lengths for short chapters)
 			runes := []rune(finalContent)
 			n := len(runes)
-			opening := string(runes[:min(250, n)])
+			openingLen := 250
+			if n < 500 {
+				openingLen = n / 2
+			}
+			closingLen := 200
+			if n-openingLen < 200 {
+				closingLen = n - openingLen
+			}
+			if closingLen < 0 {
+				closingLen = 0
+			}
+			opening := string(runes[:openingLen])
 			closing := ""
-			if n > 200 {
-				closing = string(runes[n-200:])
-			} else {
-				closing = finalContent
+			if closingLen > 0 {
+				closing = string(runes[n-closingLen:])
 			}
 			recentContext = append(recentContext, recentChapterInfo{
 				ChapterNo: task.ChapterNo, Opening: opening, Closing: closing,
@@ -1156,7 +1143,7 @@ func (s *RewriteService) runRewriting(ctx context.Context, taskID string, projec
 				recentContext = recentContext[1:]
 			}
 		}
-		s.updateRewriteProgress(taskID, project.ID, done, total)
+		s.updateRewriteProgress(taskID, project.ID, total)
 	}
 
 	if done == 0 && total > 0 {
@@ -1167,8 +1154,6 @@ func (s *RewriteService) runRewriting(ctx context.Context, taskID string, projec
 
 // rewriteChapterWithRetry manages the full retry loop for a single chapter.
 // It uses the new AttemptContent/AcceptAttempt flow to prevent DB data pollution.
-// A counting semaphore (rewriteSem) caps the number of chapters being processed
-// concurrently across all projects to maxConcurrentChapterRewrites.
 func (s *RewriteService) rewriteChapterWithRetry(
 	ctx context.Context,
 	project *model.RewriteProject,
@@ -1176,14 +1161,6 @@ func (s *RewriteService) rewriteChapterWithRetry(
 	task *model.ChapterRewriteTask,
 	prevContext, continuityCtx, arcStage string,
 ) (*rewriteAttempt, error) {
-	// Acquire semaphore slot; respect context cancellation.
-	select {
-	case s.rewriteSem <- struct{}{}:
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-	defer func() { <-s.rewriteSem }()
-
 	cfg, ok := rewriteLevelConfigs[project.Level]
 	if !ok {
 		cfg = rewriteLevelConfigs[2]
@@ -1216,8 +1193,7 @@ func (s *RewriteService) rewriteChapterWithRetry(
 
 		// Save to AttemptContent only (P0: not RewrittenContent)
 		if saveErr := s.chapterTaskRepo.SaveAttempt(task.ID, att.Content); saveErr != nil {
-			logger.Printf("[Rewrite] SaveAttempt ch%d attempt %d: %v", task.ChapterNo, attempt+1, saveErr)
-			continue // 跳过本次尝试，重试
+			logger.Printf("[Rewrite] SaveAttempt ch%d: %v", task.ChapterNo, saveErr)
 		}
 
 		lastAttempt = att
@@ -1338,22 +1314,19 @@ func (s *RewriteService) rewriteChapter(
 	}, nil
 }
 
-// calculateSemanticLeakage measures entity leakage: the fraction of original entity names
-// (characters, locations, props) from the ContinuityIndex that still appear verbatim in
-// the rewritten text. Returns a ratio 0.0 (no leakage) to 1.0 (complete leakage).
-//
-// Note: despite the field name "SemanticSim", this is NOT a vector embedding similarity.
-// It is a simple string-containment check against the project's continuity index.
+// calculateSemanticLeakage measures how many original entity names still appear
+// in the rewritten text. Returns a ratio 0.0–1.0 (lower = fewer original entities leaked).
 func (s *RewriteService) calculateSemanticLeakage(rewritten string, projectID uint) float64 {
 	if s.continuityRepo == nil {
 		return 0
 	}
 	entries, err := s.continuityRepo.GetByProject(projectID)
 	if err != nil {
-		logger.Printf("[Rewrite] calculateSemanticLeakage: GetByProject(project=%d): %v", projectID, err)
+		logger.Printf("[Rewrite] calculateSemanticLeakage: GetByProject(project=%d): %v — returning 0", projectID, err)
 		return 0
 	}
 	if len(entries) == 0 {
+		logger.Printf("[Rewrite] calculateSemanticLeakage: no continuity entries for project %d (continuityRepo not populated?)", projectID)
 		return 0
 	}
 	leaked := 0
@@ -1385,9 +1358,20 @@ func (s *RewriteService) generateChapterSummaryAsync(tenantID, novelID, projectI
 			return
 		}
 
-		result, err := s.aiSvc.GenerateWithProviderCtx(genCtx, tenantID, novelID, "chapter_gen", prompt, "")
-		if err != nil {
-			logger.Printf("[Rewrite] summary AI ch%d: %v", chapterNo, err)
+		var result string
+		var genErr error
+		for attempt := 0; attempt < 3; attempt++ {
+			if attempt > 0 {
+				time.Sleep(5 * time.Second)
+			}
+			result, genErr = s.aiSvc.GenerateWithProviderCtx(genCtx, tenantID, novelID, "chapter_gen", prompt, "")
+			if genErr == nil && result != "" {
+				break
+			}
+			logger.Printf("[Rewrite] summary AI ch%d attempt %d failed: %v", chapterNo, attempt+1, genErr)
+		}
+		if genErr != nil || result == "" {
+			logger.Printf("[Rewrite] summary AI ch%d: all attempts failed: %v", chapterNo, genErr)
 			return
 		}
 
@@ -1455,15 +1439,23 @@ func (s *RewriteService) deAIPass(ctx context.Context, project *model.RewritePro
 	return result
 }
 
-func (s *RewriteService) updateRewriteProgress(taskID string, projectID uint, done, total int) {
+func (s *RewriteService) updateRewriteProgress(taskID string, projectID uint, total int) {
+	// Query DB for actual completed count — more accurate than an in-memory counter
+	// that can drift if the task is resumed or chapters are skipped.
+	done, err := s.chapterTaskRepo.CountByProjectAndStatus(projectID, "completed")
+	if err != nil {
+		logger.Printf("[Rewrite] updateRewriteProgress: count failed: %v", err)
+		return
+	}
+	pct := 0
 	if total > 0 {
-		pct := done * 100 / total
+		pct = int(done) * 100 / total
 		if pct > 100 {
 			pct = 100
 		}
-		s.taskSvc.UpdateProgress(taskID, pct)
 	}
-	s.projectRepo.UpdateProgress(projectID, done, total)
+	s.taskSvc.UpdateProgress(taskID, pct)
+	s.projectRepo.UpdateProgress(projectID, int(done), total)
 }
 
 // ── Bible editing ─────────────────────────────────────────────────────────────
@@ -1538,23 +1530,21 @@ func (s *RewriteService) ListChapterTasks(projectID uint) ([]*model.ChapterRewri
 	return s.chapterTaskRepo.ListByProject(projectID)
 }
 
-// ListChapterTasksPaged 分页查询章节改写任务
-func (s *RewriteService) ListChapterTasksPaged(projectID uint, page, pageSize int) ([]*model.ChapterRewriteTask, int64, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 200 {
-		pageSize = 50
-	}
-	return s.chapterTaskRepo.ListByProjectPaged(projectID, page, pageSize)
-}
-
 func (s *RewriteService) GetChapterTask(taskID uint) (*model.ChapterRewriteTask, error) {
 	return s.chapterTaskRepo.GetByID(taskID)
 }
 
 func (s *RewriteService) ApproveChapter(taskID uint) error {
 	return s.chapterTaskRepo.UpdateStatus(taskID, "completed", "")
+}
+
+// CancelRewrite cancels active rewrite tasks for a project and marks it cancelled.
+func (s *RewriteService) CancelRewrite(projectID uint) error {
+	if s.taskSvc != nil {
+		s.taskSvc.CancelActiveByEntity("rewrite_project", projectID, TaskTypeRewriteAnalysis)
+		s.taskSvc.CancelActiveByEntity("rewrite_project", projectID, TaskTypeRewriteChapters)
+	}
+	return s.projectRepo.UpdateStatus(projectID, "cancelled", "user cancelled")
 }
 
 // ── Compliance Report ─────────────────────────────────────────────────────────
@@ -1572,17 +1562,13 @@ type ChapterComplianceItem struct {
 
 // ComplianceReport aggregates similarity and quality metrics across all chapters.
 type ComplianceReport struct {
-	ProjectID        uint                    `json:"project_id"`
-	Level            int                     `json:"level"`
-	TotalChapters    int                     `json:"total_chapters"`
-	DoneChapters     int                     `json:"done_chapters"`
-	PassedChapters   int                     `json:"passed_chapters"`
-	AvgLexicalSim    float64                 `json:"avg_lexical_sim"`
-	AvgStructuralSim float64                 `json:"avg_structural_sim"`
-	// AvgSemanticSim is the average entity leakage rate across completed chapters.
-	// It measures what fraction of original entity names (characters, locations, items)
-	// still appear in the rewritten text. Range 0.0 (no leakage) to 1.0 (full leakage).
-	// NOT a vector embedding similarity score.
+	ProjectID       uint                    `json:"project_id"`
+	Level           int                     `json:"level"`
+	TotalChapters   int                     `json:"total_chapters"`
+	DoneChapters    int                     `json:"done_chapters"`
+	PassedChapters  int                     `json:"passed_chapters"`
+	AvgLexicalSim   float64                 `json:"avg_lexical_sim"`
+	AvgStructuralSim float64                `json:"avg_structural_sim"`
 	AvgSemanticSim  float64                 `json:"avg_semantic_sim"`
 	AvgQualityScore float64                 `json:"avg_quality_score"`
 	OverallRating   string                  `json:"overall_rating"`
@@ -1688,31 +1674,4 @@ func (s *RewriteService) GetComplianceReport(projectID uint) (*ComplianceReport,
 	}
 
 	return report, nil
-}
-
-// ── Maintenance ───────────────────────────────────────────────────────────────
-
-// CleanupOldTasks deletes ChapterRewriteTask records belonging to projects that
-// are in a terminal state (completed or failed) and were last updated more than
-// 30 days ago. This prevents unbounded growth of the chapter task table.
-//
-// Register this as a TaskService cleanup callback in wiring:
-//
-//	taskSvc.RegisterCleanupCallback(rewriteSvc.CleanupOldTasks)
-func (s *RewriteService) CleanupOldTasks() {
-	cutoff := time.Now().AddDate(0, 0, -30)
-	ids, err := s.projectRepo.ListOldTerminalIDs(cutoff)
-	if err != nil {
-		logger.Printf("[Rewrite] CleanupOldTasks: list projects: %v", err)
-		return
-	}
-	if len(ids) == 0 {
-		return
-	}
-	for _, id := range ids {
-		if err := s.chapterTaskRepo.DeleteByProjectID(id); err != nil {
-			logger.Printf("[Rewrite] CleanupOldTasks: delete chapter tasks for project %d: %v", id, err)
-		}
-	}
-	logger.Printf("[Rewrite] CleanupOldTasks: cleaned chapter tasks for %d old projects", len(ids))
 }

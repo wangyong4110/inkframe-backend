@@ -114,9 +114,14 @@ func (s *ChapterService) syncNovelStats(novelID uint) {
 }
 
 func (s *ChapterService) CreateChapter(novelID uint, req *model.CreateChapterRequest) (*model.Chapter, error) {
+	var tenantID uint
+	if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+		tenantID = novel.TenantID
+	}
 	chapter := &model.Chapter{
 		UUID:      uuid.New().String(),
 		NovelID:   novelID,
+		TenantID:  tenantID,
 		ChapterNo: req.ChapterNo,
 		Title:     req.Title,
 		Content:   req.Content,
@@ -420,15 +425,32 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	// ── Step 2: 生成场景大纲 ──────────────────────────────
 	// prevEnding 在此处统一计算，避免后续两步各查一次 DB
 	prevEnding := s.getPreviousChapterEnding(novelID, req.ChapterNo)
-	sceneOutlineJSON, suggestedTitle := s.generateSceneOutline(
+	sceneOutlineJSON, suggestedTitle, outlineErr := s.generateSceneOutline(
 		tenantID, novelID, req, novel, globalCtx, chapterMeta, refStories, wikiContext, storyPatternRef, prevEnding,
 	)
+	if outlineErr != nil {
+		// Fix 1+2: 将预置占位章节（如存在）标记为 failed，避免状态卡在 "generating"
+		if existing, _ := s.chapterRepo.GetByNovelAndChapterNo(novelID, req.ChapterNo); existing != nil && existing.Status == "generating" {
+			existing.Status = "failed"
+			if updateErr := s.chapterRepo.Update(existing); updateErr != nil {
+				logger.Printf("[ChapterService] failed to set chapter %d status=failed: %v", existing.ID, updateErr)
+			}
+		}
+		return nil, fmt.Errorf("generate scene outline failed: %w", outlineErr)
+	}
 
 	// ── Step 3: 按场景大纲生成章节内容 ───────────────────
 	content, chapterHook, err := s.generateFromSceneOutline(
 		tenantID, novelID, req, novel, sceneOutlineJSON, globalCtx, chapterMeta, refStories, wikiContext, prevEnding,
 	)
 	if err != nil {
+		// Fix 1: 将预置占位章节（如存在）标记为 failed，避免状态卡在 "generating"
+		if existing, _ := s.chapterRepo.GetByNovelAndChapterNo(novelID, req.ChapterNo); existing != nil && existing.Status == "generating" {
+			existing.Status = "failed"
+			if updateErr := s.chapterRepo.Update(existing); updateErr != nil {
+				logger.Printf("[ChapterService] failed to set chapter %d status=failed: %v", existing.ID, updateErr)
+			}
+		}
 		return nil, err
 	}
 
@@ -757,7 +779,7 @@ func (s *ChapterService) generateSceneOutline(
 	wikiContext string,
 	storyPatternRef string,
 	prevEnding string,
-) (sceneOutlineJSON, suggestedTitle string) {
+) (sceneOutlineJSON, suggestedTitle string, outlineErr error) {
 
 	// 构建伏笔提示
 	foreshadowHints := s.buildForeshadowHints(novelID, req.ChapterNo)
@@ -864,7 +886,7 @@ func (s *ChapterService) generateSceneOutline(
 	})
 	if err != nil {
 		logger.Printf("GenerateChapter: render chapter_scene_outline: %v", err)
-		return "", ""
+		return "", "", fmt.Errorf("generateSceneOutline: render template: %w", err)
 	}
 
 	outlineCtx, outlineCancel := context.WithTimeout(context.Background(), 4*time.Minute)
@@ -872,14 +894,14 @@ func (s *ChapterService) generateSceneOutline(
 	outlineCancel()
 	if err != nil {
 		logger.Printf("GenerateChapter: scene outline AI call failed: %v", err)
-		return "", ""
+		return "", "", fmt.Errorf("generateSceneOutline: AI call failed: %w", err)
 	}
 
 	resp = extractJSON(strings.TrimSpace(resp))
 
 	// 提取建议标题
 	var outlineResult struct {
-		ChapterTitle string `json:"chapter_title"`
+		ChapterTitle string            `json:"chapter_title"`
 		Scenes       []json.RawMessage `json:"scenes"`
 	}
 	if err := json.Unmarshal([]byte(resp), &outlineResult); err == nil {
@@ -887,7 +909,7 @@ func (s *ChapterService) generateSceneOutline(
 	}
 	logger.Printf("[ChapterService] generateSceneOutline: chapterNo=%d scenes=%d", req.ChapterNo, len(outlineResult.Scenes))
 
-	return resp, suggestedTitle
+	return resp, suggestedTitle, nil
 }
 
 // generateFromSceneOutline 根据场景大纲生成章节正文
@@ -1551,6 +1573,9 @@ func (s *ChapterService) RegenerateChapter(tenantID uint, id uint, prompt string
 	chapter, err := s.chapterRepo.GetByID(id)
 	if err != nil {
 		return nil, err
+	}
+	if chapter.TenantID != tenantID {
+		return nil, fmt.Errorf("not found")
 	}
 	content, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "chapter", prompt, "")
 	if err != nil {

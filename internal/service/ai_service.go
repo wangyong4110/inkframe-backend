@@ -96,7 +96,11 @@ func (s *AIService) startProviderCacheCleanup() {
 }
 
 // startProviderHealthCheck 每 5 分钟对所有已激活 provider 做一次健康探测，更新 health_check 字段。
+// Fix 3: 启动时立即执行一次，不等待首个 ticker 信号。
 func (s *AIService) startProviderHealthCheck() {
+	// 立即执行一次，确保启动后 health 状态立刻有效
+	go s.runProviderHealthChecks()
+
 	ticker := time.NewTicker(5 * time.Minute)
 	go func() {
 		defer ticker.Stop()
@@ -241,6 +245,11 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		if !p.IsActive {
 			continue
 		}
+		// Fix 2: 跳过健康检查明确标记为 down 的 provider（degraded 仍可使用）
+		if strings.EqualFold(p.HealthCheck, "down") {
+			logger.Printf("[AI] getTenantProvider: skipping provider %q (health=down)", p.Name)
+			continue
+		}
 		// 当未指定具体提供商时，跳过图像/视频/语音/嵌入/多能力类型（这些不做文本生成）
 		if providerName == "" {
 			t := strings.ToLower(p.Type)
@@ -284,15 +293,19 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 	}
 
 	// Decrypt stored credentials (AES-GCM; plaintext values pass through unchanged).
+	// Fix 7: 区分"未配置密钥"与"密钥解密失败"两种情况，提供更清晰的错误信息。
 	apiKey, err := crypto.Decrypt(matched.APIKey, s.encKey)
 	if err != nil {
-		logger.Printf("getTenantProvider: decrypt APIKey for %q failed: %v", matched.Name, err)
-		return nil, fmt.Errorf("failed to decrypt API key for provider %q", matched.Name)
+		if matched.APIKey == "" {
+			return nil, fmt.Errorf("provider %q has no API key configured", matched.Name)
+		}
+		logger.Printf("getTenantProvider: decrypt APIKey for %q failed (check DB_ENCRYPTION_KEY): %v", matched.Name, err)
+		return nil, fmt.Errorf("failed to decrypt API key for provider %q (verify encryption key configuration)", matched.Name)
 	}
 	apiSecretKey, err := crypto.Decrypt(matched.APISecretKey, s.encKey)
 	if err != nil {
-		logger.Printf("getTenantProvider: decrypt APISecretKey for %q failed: %v", matched.Name, err)
-		return nil, fmt.Errorf("failed to decrypt API secret key for provider %q", matched.Name)
+		logger.Printf("getTenantProvider: decrypt APISecretKey for %q failed (check DB_ENCRYPTION_KEY): %v", matched.Name, err)
+		return nil, fmt.Errorf("failed to decrypt API secret key for provider %q (verify encryption key configuration)", matched.Name)
 	}
 
 	// Instantiate the provider.
@@ -519,7 +532,7 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 	if err != nil {
 		return "", fmt.Errorf("AI generation failed: %w", err)
 	}
-	s.logUsage(&config, taskType, resp, time.Since(callStart).Milliseconds())
+	s.logUsage(tenantID, &config, taskType, resp, time.Since(callStart).Milliseconds())
 
 	return result, nil
 }
@@ -626,7 +639,7 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 	if err != nil {
 		return "", fmt.Errorf("AI generation failed: %w", err)
 	}
-	s.logUsage(&config, taskType, resp, time.Since(ctxStart).Milliseconds())
+	s.logUsage(tenantID, &config, taskType, resp, time.Since(ctxStart).Milliseconds())
 	return result, nil
 }
 
@@ -849,6 +862,8 @@ func (s *AIService) tryFallbackModels(ctx context.Context, tenantID uint, origRe
 		elapsed := time.Since(start)
 		if err == nil && fbResp.Error == "" {
 			fbResp.FinishTime = elapsed.Milliseconds()
+			// Fix 4: 记录实际执行的模型 DB ID，供 logUsage 精确写入 usage log
+			fbResp.ActualModelID = m.ID
 			logger.Printf("[AI fallback] provider=%s model=%s elapsed=%s", m.Provider.Name, m.Name, elapsed.Round(time.Millisecond))
 			return fbResp.Content, fbResp, nil
 		}
@@ -921,12 +936,18 @@ func (s *AIService) generateWithRetry(novelID uint, taskType, prompt string, max
 }
 
 // logUsage records a ModelUsageLog entry using token counts and latency from the response.
-func (s *AIService) logUsage(config *model.TaskModelConfig, taskType string, resp *ai.GenerateResponse, latencyMs int64) {
+// Fix 1: accepts tenantID and uses resp.ActualModelID when available (Fix 4).
+func (s *AIService) logUsage(tenantID uint, config *model.TaskModelConfig, taskType string, resp *ai.GenerateResponse, latencyMs int64) {
 	if s.modelRepo == nil || resp == nil {
 		return
 	}
+	modelID := config.PrimaryModelID
+	if resp.ActualModelID > 0 {
+		modelID = resp.ActualModelID
+	}
 	entry := &model.ModelUsageLog{
-		ModelID:      config.PrimaryModelID,
+		TenantID:     tenantID,
+		ModelID:      modelID,
 		TaskType:     taskType,
 		InputTokens:  resp.InputTokens,
 		OutputTokens: resp.Tokens,
@@ -1403,9 +1424,14 @@ func (s *AIService) uploadImageToStorage(ctx context.Context, tenantID uint, img
 		return imgURL
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(resp.Body)
+	const maxImageSize = 50 << 20 // 50 MB
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageSize+1))
 	if err != nil {
 		logger.Printf("uploadImageToStorage: read body: %v", err)
+		return imgURL
+	}
+	if len(data) > maxImageSize {
+		logger.Printf("uploadImageToStorage: image too large (>50MB) from %s", imgURL)
 		return imgURL
 	}
 	ct := resp.Header.Get("Content-Type")
@@ -1478,9 +1504,14 @@ func (s *AIService) fetchImageAsBase64(ctx context.Context, imageURL string) str
 		logger.Printf("fetchImageAsBase64: HTTP %d for %s", resp.StatusCode, fetchURL)
 		return ""
 	}
-	data, err := io.ReadAll(resp.Body)
+	const maxFetchSize = 20 << 20 // 20 MB
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchSize+1))
 	if err != nil {
 		logger.Printf("fetchImageAsBase64: read body: %v", err)
+		return ""
+	}
+	if len(data) > maxFetchSize {
+		logger.Printf("fetchImageAsBase64: image too large (>20MB) from %s", fetchURL)
 		return ""
 	}
 	return base64.StdEncoding.EncodeToString(data)
@@ -1782,7 +1813,12 @@ func (s *AIService) GetBGMProviderCreds(tenantID uint, name string) (apiKey, end
 		if !providerHasCredentials(p) {
 			continue
 		}
-		return p.APIKey, p.APIEndpoint
+		key, decErr := crypto.Decrypt(p.APIKey, s.encKey)
+		if decErr != nil {
+			logger.Printf("GetBGMProviderCreds: decrypt APIKey for %q: %v", p.Name, decErr)
+			return "", ""
+		}
+		return key, p.APIEndpoint
 	}
 	return "", ""
 }
@@ -1807,7 +1843,12 @@ func (s *AIService) GetSFXProviderCreds(tenantID uint, name string) (apiKey, end
 		if !providerHasCredentials(p) {
 			continue
 		}
-		return p.APIKey, p.APIEndpoint
+		key, decErr := crypto.Decrypt(p.APIKey, s.encKey)
+		if decErr != nil {
+			logger.Printf("GetSFXProviderCreds: decrypt APIKey for %q: %v", p.Name, decErr)
+			return "", ""
+		}
+		return key, p.APIEndpoint
 	}
 	return "", ""
 }
@@ -1845,11 +1886,22 @@ func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.Video
 		if !ok {
 			continue
 		}
+		// Decrypt stored credentials before passing to provider constructors.
+		apiKey, err := crypto.Decrypt(p.APIKey, s.encKey)
+		if err != nil {
+			logger.Printf("GetTenantVideoProvider: decrypt APIKey for %q: %v", p.Name, err)
+			continue
+		}
+		apiSecretKey, err := crypto.Decrypt(p.APISecretKey, s.encKey)
+		if err != nil {
+			logger.Printf("GetTenantVideoProvider: decrypt APISecretKey for %q: %v", p.Name, err)
+			continue
+		}
 		switch pname {
 		case "kling":
-			return ai.NewKlingProvider(p.APIKey, p.APISecretKey, p.APIEndpoint), nil
+			return ai.NewKlingProvider(apiKey, apiSecretKey, p.APIEndpoint), nil
 		case "seedance":
-			return ai.NewSeedanceProvider(p.APIKey, p.APIEndpoint), nil
+			return ai.NewSeedanceProvider(apiKey, p.APIEndpoint), nil
 		}
 	}
 	if name != "" {

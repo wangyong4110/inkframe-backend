@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
@@ -186,7 +187,6 @@ func (h *RewriteHandler) GetBible(c *gin.Context) {
 }
 
 // ListChapterTasks GET /rewrite/projects/:id/chapters
-// Query params: page (default 1), page_size (default 50, max 200)
 func (h *RewriteHandler) ListChapterTasks(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
 	if err != nil {
@@ -196,14 +196,12 @@ func (h *RewriteHandler) ListChapterTasks(c *gin.Context) {
 	if _, ok := h.getProjectForTenant(c, uint(id)); !ok {
 		return
 	}
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
-	tasks, total, err := h.rewriteSvc.ListChapterTasksPaged(uint(id), page, pageSize)
+	tasks, err := h.rewriteSvc.ListChapterTasks(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	respondOK(c, gin.H{"items": tasks, "total": total, "page": page, "page_size": pageSize})
+	respondOK(c, gin.H{"items": tasks, "total": len(tasks)})
 }
 
 // GetChapterTask GET /rewrite/projects/:id/chapters/:task_id
@@ -282,6 +280,24 @@ func (h *RewriteHandler) GetComplianceReport(c *gin.Context) {
 	respondOK(c, report)
 }
 
+// CancelRewrite POST /rewrite/projects/:id/cancel
+// 取消正在进行的改写任务，保留项目数据。
+func (h *RewriteHandler) CancelRewrite(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		respondBadRequest(c, "invalid project id")
+		return
+	}
+	if _, ok := h.getProjectForTenant(c, uint(id)); !ok {
+		return
+	}
+	if err := h.rewriteSvc.CancelRewrite(uint(id)); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"message": "rewrite cancelled"})
+}
+
 // UpdateBible PUT /rewrite/projects/:id/bible
 func (h *RewriteHandler) UpdateBible(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
@@ -296,6 +312,25 @@ func (h *RewriteHandler) UpdateBible(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respondBadRequest(c, err.Error())
 		return
+	}
+	// Validate JSON-encoded fields
+	if req.ForbiddenPhrases != nil && *req.ForbiddenPhrases != "" {
+		if !json.Valid([]byte(*req.ForbiddenPhrases)) {
+			respondBadRequest(c, "forbidden_phrases must be valid JSON")
+			return
+		}
+	}
+	if req.ForbiddenDialogues != nil && *req.ForbiddenDialogues != "" {
+		if !json.Valid([]byte(*req.ForbiddenDialogues)) {
+			respondBadRequest(c, "forbidden_dialogues must be valid JSON")
+			return
+		}
+	}
+	if req.ImageryTransform != nil && *req.ImageryTransform != "" {
+		if !json.Valid([]byte(*req.ImageryTransform)) {
+			respondBadRequest(c, "imagery_transform must be valid JSON")
+			return
+		}
 	}
 	if err := h.rewriteSvc.UpdateBible(uint(id), req); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())

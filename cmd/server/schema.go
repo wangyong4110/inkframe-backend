@@ -77,6 +77,14 @@ func ensureCriticalColumns(db *gorm.DB) {
 		// users 账号安全锁定字段
 		{"users", "failed_login_count", "INT NOT NULL DEFAULT 0"},
 		{"users", "lock_until", "DATETIME(3) NULL"},
+		// ink_model_usage_log 租户隔离（Fix 1: logUsage 增加 tenantID）
+		{"ink_model_usage_log", "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 0"},
+		// 多租户隔离列补充（Fix 8: 确保关键表均有 tenant_id）
+		{"ink_character",      "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1"},
+		{"ink_item",           "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1"},
+		{"ink_plot_point",     "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1"},
+		{"ink_scene_anchor",   "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1"},
+		{"ink_knowledge_base", "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1"},
 	}
 	for _, a := range additions {
 		// 先查 information_schema，列已存在则跳过，避免触发 GORM 的 Error 1060 日志
@@ -427,5 +435,18 @@ func preMigrateCleanup(db *gorm.DB) {
 		AND INDEX_NAME = 'uq_external_id'`).Scan(&extIDIdxCount)
 	if extIDIdxCount > 0 {
 		db.Exec("ALTER TABLE ink_asset DROP INDEX uq_external_id")
+	}
+	// ink_task_model_config.task_type 从 UNIQUE 改为普通 index（Fix 10）：
+	// 允许同类型多条配置共存（如不同 tenant 的配置）。先删旧唯一索引，AutoMigrate 再建普通索引。
+	var taskTypeIdxRows []struct{ NonUnique int }
+	db.Raw(`SELECT NON_UNIQUE FROM information_schema.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_task_model_config'
+		AND COLUMN_NAME = 'task_type' AND INDEX_NAME != 'PRIMARY'`).Scan(&taskTypeIdxRows)
+	for _, row := range taskTypeIdxRows {
+		if row.NonUnique == 0 {
+			// unique index exists — drop it so AutoMigrate can create the non-unique one
+			db.Exec("ALTER TABLE ink_task_model_config DROP INDEX idx_task_model_configs_task_type")
+			db.Exec("ALTER TABLE ink_task_model_config DROP INDEX task_type")
+		}
 	}
 }

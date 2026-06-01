@@ -276,6 +276,9 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 		respondBadRequest(c, "invalid video id")
 		return
 	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
 	tenantID := getTenantID(c)
 
 	shots, err := h.videoService.GetStoryboard(uint(videoID))
@@ -344,6 +347,9 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 	videoID, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		respondBadRequest(c, "invalid video id")
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
 		return
 	}
 	tenantID := getTenantID(c)
@@ -427,6 +433,9 @@ func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
 	videoID, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		respondBadRequest(c, "invalid video id")
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
 		return
 	}
 	shotID, err := strconv.Atoi(c.Param("shot_id"))
@@ -535,6 +544,9 @@ func (h *VideoHandler) UpdateShotSFXTags(c *gin.Context) {
 func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 	videoID, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
 		return
 	}
 	shotID, ok := parseID(c, "shot_id")

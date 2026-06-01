@@ -312,6 +312,7 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 	// 角色服务
 	characterSvc := service.NewCharacterService(repos.CharacterRepo, aiSvc).
 		WithChapterCharacterRepo(repos.ChapterCharacterRepo).
+		WithSnapshotRepo(repos.SnapshotRepo).
 		WithNovelRepo(repos.NovelRepo).
 		WithChapterRepo(repos.ChapterRepo).
 		WithModelRepo(repos.AIModelRepo)
@@ -682,9 +683,9 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		PlotPointHandler:   handler.NewPlotPointHandler(services.PlotPointService).WithChapterService(services.ChapterService).WithTaskService(services.TaskService),
 		TaskHandler:        handler.NewTaskHandler(services.TaskService),
 		MediaHandler:       handler.NewMediaHandler(db),
-		SceneAnchorHandler: handler.NewSceneAnchorHandler(services.SceneAnchorService, services.SceneConsistencyService).WithTaskService(services.TaskService).WithChapterService(services.ChapterService),
+		SceneAnchorHandler: handler.NewSceneAnchorHandler(services.SceneAnchorService, services.SceneConsistencyService).WithTaskService(services.TaskService).WithChapterService(services.ChapterService).WithVideoService(services.VideoService),
 		SystemHandler: handler.NewSystemHandler(repos.SystemSettingRepo),
-		FsHandler:     handler.NewFsHandler(),
+		FsHandler:     handler.NewFsHandler(getEnv("BGM_DIR", "")),
 		RewriteHandler: handler.NewRewriteHandler(services.RewriteService),
 		PlatformHandler: handler.NewPlatformHandler(services.NovelService, services.VideoService, services.PlatformPublishService).
 			WithChapterService(services.ChapterService).

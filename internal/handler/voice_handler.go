@@ -657,6 +657,9 @@ func (h *VideoHandler) ListBGMSegments(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
 	segs, err := h.bgmRepo.ListByVideoID(uint(videoID))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
@@ -702,6 +705,13 @@ func (h *VideoHandler) ApplyBGMTrack(c *gin.Context) {
 		respondErr(c, http.StatusNotImplemented, "BGM repository not configured")
 		return
 	}
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
 	segID, ok := parseID(c, "seg_id")
 	if !ok {
 		return
@@ -731,6 +741,13 @@ func (h *VideoHandler) ApplyBGMTrack(c *gin.Context) {
 func (h *VideoHandler) UpdateBGMSegment(c *gin.Context) {
 	if h.bgmRepo == nil {
 		respondErr(c, http.StatusNotImplemented, "BGM repository not configured")
+		return
+	}
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
 		return
 	}
 	segID, ok := parseID(c, "seg_id")
@@ -774,6 +791,13 @@ func (h *VideoHandler) UpdateBGMSegment(c *gin.Context) {
 func (h *VideoHandler) ToggleBGMSegment(c *gin.Context) {
 	if h.bgmRepo == nil {
 		respondErr(c, http.StatusNotImplemented, "BGM repository not configured")
+		return
+	}
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
 		return
 	}
 	segID, ok := parseID(c, "seg_id")

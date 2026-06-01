@@ -45,12 +45,25 @@ func (h *TaskHandler) GetTask(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "task not found")
 		return
 	}
+	if task.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusNotFound, "task not found")
+		return
+	}
 	respondOK(c, task)
 }
 
 // CancelTask POST /api/v1/tasks/:task_id/cancel
 func (h *TaskHandler) CancelTask(c *gin.Context) {
 	taskID := c.Param("task_id")
+	task, err := h.taskSvc.Get(taskID)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "task not found")
+		return
+	}
+	if task.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusNotFound, "task not found")
+		return
+	}
 	if err := h.taskSvc.Cancel(taskID); err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to cancel task")
 		return

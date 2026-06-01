@@ -264,6 +264,10 @@ func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
+	if character.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
 
 	image, err := h.imageGenService.GenerateCharacterImage(&model.GenerateImageRequest{
 		Subject:     character.Name,
@@ -306,6 +310,10 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
+	if character.TenantID != tenantID {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeThreeView, "角色三视图生成", "character", uint(id))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
@@ -392,6 +400,10 @@ func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
+	if character.TenantID != tenantID {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeFaceCloseup, "角色面部特写生成", "character", uint(id))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
@@ -810,10 +822,6 @@ func (h *CharacterHandler) ExtractCharacterVoice(c *gin.Context) {
 		return
 	}
 
-	if h.narrativeSvc == nil {
-		respondErr(c, http.StatusServiceUnavailable, "narrative service not available")
-		return
-	}
 	voiceStyle, err := h.narrativeSvc.ExtractCharacterVoice(getTenantID(c), character, req.NovelID)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
@@ -848,6 +856,10 @@ func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
 
 	character, err := h.characterService.GetCharacter(uint(id))
 	if err != nil {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+	if character.TenantID != getTenantID(c) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
@@ -919,6 +931,10 @@ func (h *CharacterHandler) ServeVoiceSample(c *gin.Context) {
 	}
 	character, err := h.characterService.GetCharacter(uint(id))
 	if err != nil || character.VoiceSample == "" {
+		respondErr(c, http.StatusNotFound, "no voice sample available")
+		return
+	}
+	if character.TenantID != getTenantID(c) {
 		respondErr(c, http.StatusNotFound, "no voice sample available")
 		return
 	}

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sync"
 	"time"
 
@@ -89,8 +90,18 @@ func (s *TaskService) Shutdown() {
 	close(s.stopCh)
 }
 
+// maxQueuedTasksPerTenant is the maximum number of pending/running tasks allowed per tenant.
+const maxQueuedTasksPerTenant = 10000
+
 // Create inserts a new pending task and returns it.
 func (s *TaskService) Create(tenantID uint, taskType, title, entityType string, entityID uint) (*model.AsyncTask, error) {
+	// Enforce per-tenant queue size limit to prevent resource exhaustion.
+	if count, err := s.repo.CountActive(tenantID); err != nil {
+		logger.Printf("[TaskService] queue size check failed for tenant %d: %v", tenantID, err)
+	} else if count >= maxQueuedTasksPerTenant {
+		return nil, fmt.Errorf("task queue full (%d tasks pending/running); try again later", count)
+	}
+
 	prefix := taskType
 	if len(taskType) >= 2 {
 		prefix = taskType[:2]
@@ -159,7 +170,11 @@ func (s *TaskService) DeregisterCancel(taskID string) {
 // so the running goroutine's context is cancelled.
 func (s *TaskService) Cancel(taskID string) error {
 	if fn, ok := s.cancelFns.Load(taskID); ok {
-		fn.(context.CancelFunc)()
+		if cancel, ok := fn.(context.CancelFunc); ok {
+			cancel()
+		} else {
+			logger.Printf("[TaskService] cancelFns: unexpected type for task %s", taskID)
+		}
 	}
 	return s.repo.CancelIfActive(taskID)
 }
@@ -214,9 +229,13 @@ func (s *TaskService) recoverOrphaned(age time.Duration) {
 	})
 
 	// 2. Resume matching orphaned tasks (reset to pending so MarkStaleRunning skips them).
+	// Limit concurrency to avoid overwhelming the system on startup with many orphaned tasks.
+	const maxRecoveryConcurrency = 20
 	resumed := 0
 	if len(resumableTypes) > 0 {
 		if tasks, err := s.repo.ListOrphaned(before, resumableTypes); err == nil {
+			sem := make(chan struct{}, maxRecoveryConcurrency)
+			var wg sync.WaitGroup
 			for _, t := range tasks {
 				if fn, ok := s.resumeFns.Load(t.Type); ok {
 					_ = s.repo.UpdateFields(t.TaskID, map[string]interface{}{
@@ -224,10 +243,17 @@ func (s *TaskService) recoverOrphaned(age time.Duration) {
 						"error":  "",
 					})
 					t.Status = "pending"
-					go fn.(func(*model.AsyncTask))(t)
+					wg.Add(1)
+					sem <- struct{}{}
+					go func(task *model.AsyncTask, resumeFn interface{}) {
+						defer wg.Done()
+						defer func() { <-sem }()
+						resumeFn.(func(*model.AsyncTask))(task)
+					}(t, fn)
 					resumed++
 				}
 			}
+			wg.Wait()
 		}
 	}
 

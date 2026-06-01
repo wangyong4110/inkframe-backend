@@ -70,6 +70,11 @@ func (h *ChapterHandler) CreateChapter(c *gin.Context) {
 		return
 	}
 
+	// Fix 4: 验证 novel 归属当前租户，防止跨租户写入
+	if !h.checkNovelOwnership(c, novelId) {
+		return
+	}
+
 	var req model.CreateChapterRequest
 	if !bindJSON(c, &req) {
 		return
@@ -277,6 +282,12 @@ func (h *ChapterHandler) RegenerateChapter(c *gin.Context) {
 func (h *ChapterHandler) GetVersions(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
+		return
+	}
+
+	// Fix 5: 验证章节归属当前租户，防止跨租户信息泄露
+	if _, err := h.chapterService.GetChapter(uint(id), getTenantID(c)); err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
 		return
 	}
 
@@ -507,7 +518,11 @@ func (h *ChapterHandler) GenerateChapterOutline(c *gin.Context) {
 	var req struct {
 		Prompt string `json:"prompt"`
 	}
-	_ = c.ShouldBindJSON(&req)
+	// Fix 7: 校验 JSON 绑定错误，避免静默忽略非法请求体
+	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
+		respondBadRequest(c, "invalid request: "+err.Error())
+		return
+	}
 
 	chapter, err := h.chapterService.GenerateChapterOutline(getTenantID(c), uint(novelID), chapterNo, req.Prompt)
 	if err != nil {
@@ -774,7 +789,7 @@ func (h *ChapterHandler) GetChapterReview(c *gin.Context) {
 		return
 	}
 
-	rec, err := h.qualityService.GetReviewRecord(uint(rid))
+	rec, err := h.qualityService.GetReviewRecord(uint(rid), getTenantID(c))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "record not found")
 		return

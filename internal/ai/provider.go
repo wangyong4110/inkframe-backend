@@ -81,6 +81,8 @@ type GenerateResponse struct {
 	StopReason string  `json:"stop_reason"`
 	FinishTime int64   `json:"finish_time"` // 耗时(ms)
 	Error     string   `json:"error,omitempty"`
+	// Fix 4: 实际执行的模型 DB ID（fallback 时与 PrimaryModelID 不同，用于 usage log 精确记录）
+	ActualModelID uint `json:"actual_model_id,omitempty"`
 }
 
 // ImageGenerateRequest 图像生成请求

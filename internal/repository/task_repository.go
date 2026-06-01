@@ -125,3 +125,12 @@ func (r *TaskRepository) CancelIfActive(taskID string) error {
 		Where("task_id = ? AND status IN ?", taskID, []string{"pending", "running"}).
 		Update("status", "cancelled").Error
 }
+
+// CountActive returns the number of pending/running tasks for a tenant.
+func (r *TaskRepository) CountActive(tenantID uint) (int64, error) {
+	var count int64
+	err := r.db.Model(&model.AsyncTask{}).
+		Where("tenant_id = ? AND status IN ?", tenantID, []string{"pending", "running"}).
+		Count(&count).Error
+	return count, err
+}

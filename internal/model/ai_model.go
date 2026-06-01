@@ -93,7 +93,7 @@ func (AIModel) TableName() string {
 // TaskModelConfig 任务模型配置
 type TaskModelConfig struct {
 	ID       uint   `json:"id" gorm:"primaryKey"`
-	TaskType string `json:"task_type" gorm:"size:50;uniqueIndex;not null"`
+	TaskType string `json:"task_type" gorm:"size:50;index;not null"`
 
 	PrimaryModelID    uint           `json:"primary_model_id"`
 	PrimaryModel      *AIModel       `json:"primary_model,omitempty" gorm:"foreignKey:PrimaryModelID"`
@@ -196,6 +196,7 @@ func (ExperimentResult) TableName() string {
 // ModelUsageLog 模型使用记录
 type ModelUsageLog struct {
 	ID       uint   `json:"id" gorm:"primaryKey"`
+	TenantID uint   `json:"tenant_id" gorm:"index;default:0"`
 	ModelID  uint   `json:"model_id" gorm:"index:idx_usage_model_time,priority:1;default:0"` // 软引用，0=未关联
 	TaskType string `json:"task_type" gorm:"size:50;index"`
 
