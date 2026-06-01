@@ -735,6 +735,58 @@ type OutlineReview struct {
 
 func (OutlineReview) TableName() string { return "ink_outline_review" }
 
+// NovelOutlineSynthesis 小说整体大纲批量审查综合报告（每部小说一条，按 novel_id 唯一）
+type NovelOutlineSynthesis struct {
+	gorm.Model
+	TenantID             uint      `json:"tenant_id" gorm:"index"`
+	NovelID              uint      `json:"novel_id" gorm:"uniqueIndex"`
+	TotalChapters        int       `json:"total_chapters"`   // novel.Outline 中规划的总章数
+	ReviewedCount        int       `json:"reviewed_count"`   // 实际完成审查的章数
+	PassedCount          int       `json:"passed_count"`
+	WarningCount         int       `json:"warning_count"`
+	FailedCount          int       `json:"failed_count"`
+	AvgScore             float64   `json:"avg_score"`
+	ArcBalanceJSON       string    `json:"arc_balance_json" gorm:"type:text"`      // 三幕结构分析 JSON
+	TensionCurveJSON     string    `json:"tension_curve_json" gorm:"type:text"`    // 逐章张力曲线 [{chapter_no,tension,score}]
+	RecurringIssuesJSON  string    `json:"recurring_issues_json" gorm:"type:text"` // []OutlineIssue 高频共性问题
+	ChapterAdvicesJSON   string    `json:"chapter_advices_json" gorm:"type:text"`  // []ChapterAdvice 逐章改进建议
+	GlobalSuggestion     string    `json:"global_suggestion" gorm:"type:text"`
+	Status               string    `json:"status" gorm:"size:20"` // completed/partial
+	SynthesizedAt        time.Time `json:"synthesized_at"`
+}
+
+func (NovelOutlineSynthesis) TableName() string { return "ink_outline_synthesis" }
+
+// ChapterAdvice 批量审查中单章的改进建议摘要
+type ChapterAdvice struct {
+	ChapterNo  int     `json:"chapter_no"`
+	Title      string  `json:"title"`
+	Score      float64 `json:"score"`
+	Status     string  `json:"status"` // passed/warning/failed/skipped
+	KeyIssue   string  `json:"key_issue"`
+	Suggestion string  `json:"suggestion"`
+}
+
+// ArcBalance 三幕结构均衡分析
+type ArcBalance struct {
+	Act1Count     int     `json:"act1_count"`
+	Act2Count     int     `json:"act2_count"`
+	Act3Count     int     `json:"act3_count"`
+	Act1AvgScore  float64 `json:"act1_avg_score"`
+	Act2AvgScore  float64 `json:"act2_avg_score"`
+	Act3AvgScore  float64 `json:"act3_avg_score"`
+	Assessment    string  `json:"assessment"` // AI 对幕次分配的评价
+	Suggestion    string  `json:"suggestion"`
+}
+
+// TensionPoint 单章张力点（用于曲线图）
+type TensionPoint struct {
+	ChapterNo    int     `json:"chapter_no"`
+	PlannedLevel int     `json:"planned_level"` // 大纲规划张力 0-10
+	Score        float64 `json:"score"`         // 审查得分 0-100（-1 表示未审查）
+	Status       string  `json:"status"`
+}
+
 // OutlineIssue 大纲审查问题条目
 type OutlineIssue struct {
 	Dimension   string `json:"dimension"`   // structure/pacing/continuity/character/conflict/hook

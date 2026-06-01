@@ -404,7 +404,9 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 	case "qianwen":
 		provider = ai.NewQianwenProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "azure":
-		provider = ai.NewAzureProvider(apiKey, matched.APIEndpoint, matched.APIVersion, "", timeout)
+		// APIEndpoint = Azure resource endpoint; APIVersion = REST API version ("2025-01-01-preview")
+		// Deployment name is resolved at call time from req.Model (AIModel.Name).
+		provider = ai.NewAzureProvider(apiKey, matched.APIEndpoint, "", matched.APIVersion, timeout)
 	default:
 		// 自定义名称：按 endpoint + type 推断底层 API 格式
 		ep := strings.ToLower(matched.APIEndpoint)
@@ -436,7 +438,9 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 			provider = ai.NewDoubaoProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
 		case strings.Contains(ep, "azure.com") || strings.Contains(ep, "openai.azure"):
 			logger.Printf("getTenantProvider: provider %q mapped to azure constructor via endpoint", matched.Name)
-			provider = ai.NewAzureProvider(apiKey, matched.APIEndpoint, matched.APIVersion, "", timeout)
+			// APIEndpoint = Azure resource endpoint; APIVersion = REST API version ("2025-01-01-preview")
+		// Deployment name is resolved at call time from req.Model (AIModel.Name).
+		provider = ai.NewAzureProvider(apiKey, matched.APIEndpoint, "", matched.APIVersion, timeout)
 		case strings.Contains(ep, "anthropic.com"):
 			logger.Printf("getTenantProvider: provider %q mapped to anthropic constructor via endpoint", matched.Name)
 			provider = ai.NewAnthropicProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)

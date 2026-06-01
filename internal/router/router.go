@@ -379,6 +379,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			if cfg.OutlineReviewHandler != nil {
 				novels.POST("/:id/outline-review/batch", cfg.OutlineReviewHandler.BatchReviewNovel)
 				novels.GET("/:id/outline-review", cfg.OutlineReviewHandler.ListNovelReviews)
+				novels.GET("/:id/outline-review/synthesis", cfg.OutlineReviewHandler.GetNovelSynthesis)
 			}
 		}
 

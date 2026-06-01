@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
@@ -15,8 +17,9 @@ import (
 
 // OutlineReviewService 章节大纲审查服务
 type OutlineReviewService struct {
-	reviewRepo  *repository.OutlineReviewRepository
-	chapterRepo interface {
+	reviewRepo   *repository.OutlineReviewRepository
+	synthesisRepo *repository.NovelOutlineSynthesisRepository
+	chapterRepo  interface {
 		GetByID(id uint) (*model.Chapter, error)
 		ListByNovelWithContent(novelID uint) ([]*model.Chapter, error)
 		GetByNovelAndChapterNo(novelID uint, chapterNo int) (*model.Chapter, error)
@@ -29,6 +32,7 @@ type OutlineReviewService struct {
 
 func NewOutlineReviewService(
 	reviewRepo *repository.OutlineReviewRepository,
+	synthesisRepo *repository.NovelOutlineSynthesisRepository,
 	chapterRepo interface {
 		GetByID(id uint) (*model.Chapter, error)
 		ListByNovelWithContent(novelID uint) ([]*model.Chapter, error)
@@ -40,11 +44,18 @@ func NewOutlineReviewService(
 	aiService *AIService,
 ) *OutlineReviewService {
 	return &OutlineReviewService{
-		reviewRepo:  reviewRepo,
-		chapterRepo: chapterRepo,
-		novelRepo:   novelRepo,
-		aiService:   aiService,
+		reviewRepo:    reviewRepo,
+		synthesisRepo: synthesisRepo,
+		chapterRepo:   chapterRepo,
+		novelRepo:     novelRepo,
+		aiService:     aiService,
 	}
+}
+
+// BatchReviewResult 批量审查返回值（章级结果 + 小说级综合报告）
+type BatchReviewResult struct {
+	Reviews   []*model.OutlineReview
+	Synthesis *model.NovelOutlineSynthesis
 }
 
 // ReviewChapterOutline 审查单章大纲（含规则检查 + AI审查）
@@ -79,10 +90,8 @@ func (s *OutlineReviewService) ReviewChapterOutline(ctx context.Context, tenantI
 	aiResult, aiErr := s.runAIReview(ctx, tenantID, chapter, novel)
 	if aiErr != nil {
 		logger.Printf("[OutlineReview] AI review failed for chapter %d: %v, falling back to rule-only", chapterID, aiErr)
-		// 纯规则降级：按规则问题数量估算分数
 		review = s.buildRuleOnlyReview(review, ruleIssues)
 	} else {
-		// 合并规则问题和 AI 问题
 		allIssues := append(ruleIssues, aiResult.Issues...)
 		review.StructureScore = aiResult.DimensionScores.Structure
 		review.PacingScore = aiResult.DimensionScores.Pacing
@@ -109,43 +118,101 @@ func (s *OutlineReviewService) ReviewChapterOutline(ctx context.Context, tenantI
 	return review, nil
 }
 
-// BatchReviewNovel 批量审查小说所有章节大纲
-func (s *OutlineReviewService) BatchReviewNovel(ctx context.Context, tenantID, novelID uint, progressFn func(done, total int)) ([]*model.OutlineReview, error) {
+// BatchReviewNovel 批量审查小说所有章节大纲（并行 + 综合报告）
+func (s *OutlineReviewService) BatchReviewNovel(ctx context.Context, tenantID, novelID uint, progressFn func(done, total int)) (*BatchReviewResult, error) {
+	novel, err := s.novelRepo.GetByID(novelID)
+	if err != nil {
+		return nil, fmt.Errorf("novel not found: %w", err)
+	}
+
 	chapters, err := s.chapterRepo.ListByNovelWithContent(novelID)
 	if err != nil {
 		return nil, err
 	}
 
-	// 只审查有场景大纲的章节
+	// 纳入有场景大纲或有文字大纲的章节
 	var reviewable []*model.Chapter
 	for _, ch := range chapters {
-		if strings.TrimSpace(ch.SceneOutline) != "" && strings.TrimSpace(ch.SceneOutline) != "{}" {
+		hasScene := strings.TrimSpace(ch.SceneOutline) != "" && strings.TrimSpace(ch.SceneOutline) != "{}"
+		hasOutline := strings.TrimSpace(ch.Outline) != ""
+		if hasScene || hasOutline {
 			reviewable = append(reviewable, ch)
 		}
 	}
 
 	if len(reviewable) == 0 {
-		return nil, fmt.Errorf("没有找到包含场景大纲的章节，请先生成章节内容")
+		return nil, fmt.Errorf("没有找到包含大纲的章节，请先生成章节大纲或场景大纲")
 	}
 
-	var results []*model.OutlineReview
-	for i, ch := range reviewable {
+	// ── 并行审查（最多3个并发）────────────────────────────
+	const concurrency = 3
+	sem := make(chan struct{}, concurrency)
+
+	var (
+		mu      sync.Mutex
+		results []*model.OutlineReview
+		done    int32
+	)
+	total := len(reviewable)
+
+	var wg sync.WaitGroup
+	for _, ch := range reviewable {
 		select {
 		case <-ctx.Done():
-			return results, ctx.Err()
+			break
 		default:
 		}
-		review, err := s.ReviewChapterOutline(ctx, tenantID, ch.ID)
-		if err != nil {
-			logger.Printf("[OutlineReview] batch review chapter %d failed: %v", ch.ChapterNo, err)
-			continue
-		}
-		results = append(results, review)
-		if progressFn != nil {
-			progressFn(i+1, len(reviewable))
+
+		wg.Add(1)
+		go func(ch *model.Chapter) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			review, err := s.ReviewChapterOutline(ctx, tenantID, ch.ID)
+			if err != nil {
+				logger.Printf("[OutlineReview] batch review chapter %d failed: %v", ch.ChapterNo, err)
+				review = &model.OutlineReview{
+					TenantID:  tenantID,
+					NovelID:   novelID,
+					ChapterID: ch.ID,
+					ChapterNo: ch.ChapterNo,
+					Status:    "failed",
+					Suggestion: err.Error(),
+				}
+			}
+
+			mu.Lock()
+			results = append(results, review)
+			mu.Unlock()
+
+			n := int(atomic.AddInt32(&done, 1))
+			if progressFn != nil {
+				// 个别章审查阶段占 0-80%
+				progressFn(n*80/total, 100)
+			}
+		}(ch)
+	}
+	wg.Wait()
+
+	// 按章节号排序
+	sortReviewsByChapterNo(results)
+
+	// ── 全局综合报告（占进度 80-100%）────────────────────
+	if progressFn != nil {
+		progressFn(82, 100)
+	}
+	synthesis := s.buildSynthesis(ctx, tenantID, novel, chapters, results)
+	if s.synthesisRepo != nil {
+		if err := s.synthesisRepo.Upsert(synthesis); err != nil {
+			logger.Printf("[OutlineReview] save synthesis failed: %v", err)
 		}
 	}
-	return results, nil
+	if progressFn != nil {
+		progressFn(100, 100)
+	}
+
+	return &BatchReviewResult{Reviews: results, Synthesis: synthesis}, nil
 }
 
 // GetReview 获取章节的最新审查结果
@@ -165,19 +232,417 @@ func (s *OutlineReviewService) ListNovelReviews(tenantID, novelID uint) ([]*mode
 	return s.reviewRepo.ListByNovel(novelID)
 }
 
+// GetSynthesis 获取小说综合审查报告
+func (s *OutlineReviewService) GetSynthesis(tenantID, novelID uint) (*model.NovelOutlineSynthesis, error) {
+	if s.synthesisRepo == nil {
+		return nil, fmt.Errorf("synthesis repo not available")
+	}
+	syn, err := s.synthesisRepo.GetByNovel(novelID)
+	if err != nil {
+		return nil, err
+	}
+	if syn.TenantID != tenantID {
+		return nil, fmt.Errorf("not found")
+	}
+	return syn, nil
+}
+
+// ── 综合报告生成 ────────────────────────────────────────────────────────────
+
+func (s *OutlineReviewService) buildSynthesis(ctx context.Context, tenantID uint, novel *model.Novel, allChapters []*model.Chapter, reviews []*model.OutlineReview) *model.NovelOutlineSynthesis {
+	now := time.Now()
+
+	// 统计
+	reviewMap := make(map[int]*model.OutlineReview, len(reviews))
+	for _, r := range reviews {
+		reviewMap[r.ChapterNo] = r
+	}
+
+	var passed, warning, failed int
+	var scoreSum float64
+	var reviewedCount int
+	for _, r := range reviews {
+		if r.Status == "failed" && r.OverallScore == 0 {
+			failed++
+			continue
+		}
+		reviewedCount++
+		scoreSum += r.OverallScore
+		switch r.Status {
+		case "passed":
+			passed++
+		case "warning":
+			warning++
+		default:
+			failed++
+		}
+	}
+	avgScore := 0.0
+	if reviewedCount > 0 {
+		avgScore = scoreSum / float64(reviewedCount)
+	}
+
+	// 解析 novel.Outline 获取全书章节规划
+	plannedChapters := parseNovelOutlineChapters(novel.Outline)
+	totalPlanned := len(plannedChapters)
+	if totalPlanned == 0 {
+		totalPlanned = len(allChapters)
+	}
+
+	// 幕次统计
+	act1, act2, act3 := countActChapters(plannedChapters, allChapters, reviewMap)
+
+	// 构建张力曲线数据
+	tensionCurve := buildTensionCurve(plannedChapters, allChapters, reviewMap)
+	tensionCurveJSON, _ := json.Marshal(tensionCurve)
+
+	// 幕次均衡 JSON
+	arcBalance := model.ArcBalance{
+		Act1Count: act1.count,
+		Act2Count: act2.count,
+		Act3Count: act3.count,
+		Act1AvgScore: act1.avgScore,
+		Act2AvgScore: act2.avgScore,
+		Act3AvgScore: act3.avgScore,
+	}
+
+	syn := &model.NovelOutlineSynthesis{
+		TenantID:         tenantID,
+		NovelID:          novel.ID,
+		TotalChapters:    totalPlanned,
+		ReviewedCount:    reviewedCount,
+		PassedCount:      passed,
+		WarningCount:     warning,
+		FailedCount:      failed,
+		AvgScore:         math.Round(avgScore*10) / 10,
+		TensionCurveJSON: string(tensionCurveJSON),
+		Status:           "partial",
+		SynthesizedAt:    now,
+	}
+
+	// ── AI 综合分析 ──────────────────────────────────────
+	aiSynResult, aiErr := s.runBatchSynthesisAI(ctx, tenantID, novel, plannedChapters, allChapters, reviews, arcBalance)
+	if aiErr != nil {
+		logger.Printf("[OutlineReview] batch synthesis AI failed: %v", aiErr)
+		// 降级：仅用规则统计
+		syn.GlobalSuggestion = buildRuleFallbackSuggestion(passed, warning, failed, totalPlanned, reviewedCount)
+		syn.Status = "partial"
+	} else {
+		arcBalance.Assessment = aiSynResult.ArcBalance.Assessment
+		arcBalance.Suggestion = aiSynResult.ArcBalance.Suggestion
+		arcBalance.Act1AvgScore = act1.avgScore
+		arcBalance.Act2AvgScore = act2.avgScore
+		arcBalance.Act3AvgScore = act3.avgScore
+
+		if b, _ := json.Marshal(arcBalance); b != nil {
+			syn.ArcBalanceJSON = string(b)
+		}
+		if b, _ := json.Marshal(aiSynResult.RecurringIssues); b != nil {
+			syn.RecurringIssuesJSON = string(b)
+		}
+		if b, _ := json.Marshal(aiSynResult.ChapterAdvices); b != nil {
+			syn.ChapterAdvicesJSON = string(b)
+		}
+		syn.GlobalSuggestion = aiSynResult.GlobalSuggestion
+		syn.Status = "completed"
+	}
+
+	if syn.ArcBalanceJSON == "" {
+		if b, _ := json.Marshal(arcBalance); b != nil {
+			syn.ArcBalanceJSON = string(b)
+		}
+	}
+
+	return syn
+}
+
+type actStats struct {
+	count    int
+	scoreSum float64
+	avgScore float64
+}
+
+func countActChapters(planned []plannedChapter, chapters []*model.Chapter, reviewMap map[int]*model.OutlineReview) (act1, act2, act3 actStats) {
+	actOf := func(chNo, total int) int {
+		if total == 0 {
+			return 1
+		}
+		pct := float64(chNo) / float64(total)
+		if pct <= 0.25 {
+			return 1
+		} else if pct <= 0.75 {
+			return 2
+		}
+		return 3
+	}
+
+	totalPlan := len(planned)
+	totalActual := len(chapters)
+
+	countScore := func(actNum int, chNo int) {
+		a := actNum
+		var stats *actStats
+		switch a {
+		case 1:
+			stats = &act1
+		case 2:
+			stats = &act2
+		case 3:
+			stats = &act3
+		}
+		stats.count++
+		if r, ok := reviewMap[chNo]; ok && r.OverallScore > 0 {
+			stats.scoreSum += r.OverallScore
+		}
+	}
+
+	// 优先用大纲规划的幕次
+	if len(planned) > 0 {
+		for _, p := range planned {
+			actNum := p.Act
+			if actNum == 0 {
+				actNum = actOf(p.ChapterNo, totalPlan)
+			}
+			countScore(actNum, p.ChapterNo)
+		}
+	} else {
+		for _, ch := range chapters {
+			actNum := ch.ActNo
+			if actNum == 0 {
+				actNum = actOf(ch.ChapterNo, totalActual)
+			}
+			countScore(actNum, ch.ChapterNo)
+		}
+	}
+
+	calc := func(s *actStats) {
+		if s.count > 0 && s.scoreSum > 0 {
+			s.avgScore = math.Round(s.scoreSum/float64(s.count)*10) / 10
+		}
+	}
+	calc(&act1)
+	calc(&act2)
+	calc(&act3)
+	return
+}
+
+type plannedChapter struct {
+	ChapterNo    int
+	Title        string
+	TensionLevel int
+	Act          int
+	EmotionalTone string
+	Summary      string
+}
+
+func parseNovelOutlineChapters(outline string) []plannedChapter {
+	if outline == "" {
+		return nil
+	}
+	var raw struct {
+		Chapters []struct {
+			ChapterNo     int    `json:"chapter_no"`
+			Title         string `json:"title"`
+			TensionLevel  int    `json:"tension_level"`
+			Act           int    `json:"act"`
+			EmotionalTone string `json:"emotional_tone"`
+			Summary       string `json:"summary"`
+		} `json:"chapters"`
+	}
+	if err := json.Unmarshal([]byte(outline), &raw); err != nil {
+		return nil
+	}
+	out := make([]plannedChapter, 0, len(raw.Chapters))
+	for _, c := range raw.Chapters {
+		out = append(out, plannedChapter{
+			ChapterNo:     c.ChapterNo,
+			Title:         c.Title,
+			TensionLevel:  c.TensionLevel,
+			Act:           c.Act,
+			EmotionalTone: c.EmotionalTone,
+			Summary:       c.Summary,
+		})
+	}
+	return out
+}
+
+func buildTensionCurve(planned []plannedChapter, chapters []*model.Chapter, reviewMap map[int]*model.OutlineReview) []model.TensionPoint {
+	// 优先用大纲规划；若无规划，退回实际章节
+	if len(planned) > 0 {
+		pts := make([]model.TensionPoint, 0, len(planned))
+		for _, p := range planned {
+			score := -1.0
+			status := "skipped"
+			if r, ok := reviewMap[p.ChapterNo]; ok {
+				score = r.OverallScore
+				status = r.Status
+			}
+			pts = append(pts, model.TensionPoint{
+				ChapterNo:    p.ChapterNo,
+				PlannedLevel: p.TensionLevel,
+				Score:        score,
+				Status:       status,
+			})
+		}
+		return pts
+	}
+	pts := make([]model.TensionPoint, 0, len(chapters))
+	for _, ch := range chapters {
+		score := -1.0
+		status := "skipped"
+		if r, ok := reviewMap[ch.ChapterNo]; ok {
+			score = r.OverallScore
+			status = r.Status
+		}
+		pts = append(pts, model.TensionPoint{
+			ChapterNo:    ch.ChapterNo,
+			PlannedLevel: ch.TensionLevel,
+			Score:        score,
+			Status:       status,
+		})
+	}
+	return pts
+}
+
+// ── AI 综合分析 ──────────────────────────────────────────────────────────────
+
+type batchSynthesisAIResult struct {
+	ArcBalance      model.ArcBalance      `json:"arc_balance"`
+	RecurringIssues []model.OutlineIssue  `json:"recurring_issues"`
+	ChapterAdvices  []model.ChapterAdvice `json:"chapter_advices"`
+	GlobalSuggestion string               `json:"global_suggestion"`
+}
+
+func (s *OutlineReviewService) runBatchSynthesisAI(ctx context.Context, tenantID uint, novel *model.Novel, planned []plannedChapter, chapters []*model.Chapter, reviews []*model.OutlineReview, arcBalance model.ArcBalance) (*batchSynthesisAIResult, error) {
+	if s.aiService == nil {
+		return nil, fmt.Errorf("AI service not available")
+	}
+
+	// 构建章节规划摘要表（截取 summary 前80字）
+	chapterPlanTable := buildChapterPlanTable(planned, chapters)
+	// 构建审查得分表
+	chapterScoreTable := buildChapterScoreTable(reviews)
+
+	// 需要改进建议的章节数（得分<75的，最多20章）
+	maxAdvice := 0
+	for _, r := range reviews {
+		if r.OverallScore < 75 && r.OverallScore > 0 {
+			maxAdvice++
+		}
+	}
+	if maxAdvice > 20 {
+		maxAdvice = 20
+	}
+	if maxAdvice == 0 {
+		maxAdvice = 5
+	}
+
+	prompt, err := renderPrompt("outline_review_batch", map[string]interface{}{
+		"NovelTitle":       novel.Title,
+		"Genre":            novel.Genre,
+		"Style":            novel.StylePrompt,
+		"TotalChapters":    len(planned),
+		"Act1Count":        arcBalance.Act1Count,
+		"Act2Count":        arcBalance.Act2Count,
+		"Act3Count":        arcBalance.Act3Count,
+		"ChapterPlanTable": chapterPlanTable,
+		"ChapterScoreTable": chapterScoreTable,
+		"MaxAdviceCount":   maxAdvice,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render template: %w", err)
+	}
+
+	resp, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "chapter_review", prompt, "", StoryboardOverrides{MaxTokens: 4096})
+	if err != nil {
+		return nil, err
+	}
+
+	cleaned := extractJSONObject(strings.TrimSpace(resp))
+	var result batchSynthesisAIResult
+	if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
+		return nil, fmt.Errorf("parse AI response: %w", err)
+	}
+	return &result, nil
+}
+
+func buildChapterPlanTable(planned []plannedChapter, chapters []*model.Chapter) string {
+	var sb strings.Builder
+	sb.WriteString("章节 | 标题 | 幕次 | 规划张力 | 情感基调 | 情节摘要\n")
+	sb.WriteString("---|---|---|---|---|---\n")
+
+	write := func(no int, title string, act, tension int, tone, summary string) {
+		if len([]rune(summary)) > 80 {
+			summary = string([]rune(summary)[:80]) + "…"
+		}
+		actStr := fmt.Sprintf("第%d幕", act)
+		if act == 0 {
+			actStr = "-"
+		}
+		fmt.Fprintf(&sb, "第%d章 | %s | %s | %d/10 | %s | %s\n",
+			no, title, actStr, tension, tone, summary)
+	}
+
+	if len(planned) > 0 {
+		for _, p := range planned {
+			write(p.ChapterNo, p.Title, p.Act, p.TensionLevel, p.EmotionalTone, p.Summary)
+		}
+	} else {
+		for _, ch := range chapters {
+			write(ch.ChapterNo, ch.Title, ch.ActNo, ch.TensionLevel, ch.EmotionalTone, ch.Summary)
+		}
+	}
+	return sb.String()
+}
+
+func buildChapterScoreTable(reviews []*model.OutlineReview) string {
+	var sb strings.Builder
+	sb.WriteString("章节 | 综合评分 | 结构 | 节奏 | 连贯 | 人物 | 冲突 | 钩子 | 状态\n")
+	sb.WriteString("---|---|---|---|---|---|---|---|---\n")
+	for _, r := range reviews {
+		if r.OverallScore == 0 && r.Status == "failed" {
+			fmt.Fprintf(&sb, "第%d章 | 审查失败 | - | - | - | - | - | - | failed\n", r.ChapterNo)
+			continue
+		}
+		fmt.Fprintf(&sb, "第%d章 | %.0f | %.0f | %.0f | %.0f | %.0f | %.0f | %.0f | %s\n",
+			r.ChapterNo,
+			r.OverallScore,
+			r.StructureScore, r.PacingScore, r.ContinuityScore,
+			r.CharacterScore, r.ConflictScore, r.HookScore,
+			r.Status,
+		)
+	}
+	return sb.String()
+}
+
+func buildRuleFallbackSuggestion(passed, warning, failed, total, reviewed int) string {
+	return fmt.Sprintf(
+		"已完成 %d/%d 章大纲审查（通过: %d，需改进: %d，问题较多: %d）。AI 综合分析暂不可用，建议配置 AI 服务后重新执行批量审查以获得全局战略建议。",
+		reviewed, total, passed, warning, failed,
+	)
+}
+
 // ── 内部：规则检查 ──────────────────────────────────────────────────────────
 
 func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.OutlineIssue {
 	var issues []model.OutlineIssue
 
-	if strings.TrimSpace(chapter.SceneOutline) == "" {
+	hasScene := strings.TrimSpace(chapter.SceneOutline) != "" && strings.TrimSpace(chapter.SceneOutline) != "{}"
+	hasOutline := strings.TrimSpace(chapter.Outline) != ""
+
+	if !hasScene && !hasOutline {
 		issues = append(issues, model.OutlineIssue{
 			Dimension:   "structure",
 			Severity:    "error",
-			Description: "章节缺少场景大纲，无法进行专业审查",
+			Description: "章节缺少大纲，无法进行专业审查",
 			Suggestion:  "请先生成章节场景大纲（可通过 AI 生成或手动编写）",
 		})
-		return issues // 无大纲时其他规则无意义
+		return issues
+	}
+
+	if !hasScene {
+		// 仅有文字大纲，跳过场景 JSON 规则检查
+		return issues
 	}
 
 	// 解析场景大纲
@@ -207,7 +672,6 @@ func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.Out
 			})
 		}
 
-		// 张力曲线检查
 		if n >= 3 {
 			levels := make([]int, 0, n)
 			for _, sc := range outline.Scenes {
@@ -231,7 +695,6 @@ func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.Out
 						Suggestion:  "建议调整场景间的张力梯度，制造张弛有度的节奏曲线",
 					})
 				}
-				// 检查是否全程高张力（缺乏喘息）
 				allHigh := true
 				for _, l := range levels {
 					if l < 7 {
@@ -239,7 +702,7 @@ func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.Out
 						break
 					}
 				}
-				if allHigh && len(levels) >= 3 {
+				if allHigh {
 					issues = append(issues, model.OutlineIssue{
 						Dimension:   "pacing",
 						Severity:    "info",
@@ -249,7 +712,6 @@ func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.Out
 				}
 			}
 
-			// 检查场景目标是否为空
 			emptyGoals := 0
 			for _, sc := range outline.Scenes {
 				if strings.TrimSpace(sc.Goal) == "" {
@@ -267,7 +729,6 @@ func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.Out
 		}
 	}
 
-	// 章末钩子检查
 	if chapter.HookType == "" && chapter.ChapterHook == "" {
 		issues = append(issues, model.OutlineIssue{
 			Dimension:   "hook",
@@ -277,7 +738,6 @@ func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.Out
 		})
 	}
 
-	// 幕次合理性（第1幕不应出现高张力高潮，第3幕不应是低张力）
 	if chapter.ActNo == 1 && chapter.TensionLevel >= 9 {
 		issues = append(issues, model.OutlineIssue{
 			Dimension:   "pacing",
@@ -312,7 +772,6 @@ func (s *OutlineReviewService) runAIReview(ctx context.Context, tenantID uint, c
 		return nil, fmt.Errorf("AI service not available")
 	}
 
-	// 获取上一章摘要
 	prevSummary := ""
 	if chapter.ChapterNo > 1 {
 		if prev, err := s.chapterRepo.GetByNovelAndChapterNo(chapter.NovelID, chapter.ChapterNo-1); err == nil {
@@ -320,13 +779,11 @@ func (s *OutlineReviewService) runAIReview(ctx context.Context, tenantID uint, c
 		}
 	}
 
-	// 获取下一章标题
 	nextTitle := ""
 	if next, err := s.chapterRepo.GetByNovelAndChapterNo(chapter.NovelID, chapter.ChapterNo+1); err == nil {
 		nextTitle = next.Title
 	}
 
-	// 大纲摘录（取前500字）
 	outlineExcerpt := ""
 	if novel.Outline != "" {
 		runes := []rune(novel.Outline)
@@ -335,6 +792,12 @@ func (s *OutlineReviewService) runAIReview(ctx context.Context, tenantID uint, c
 		} else {
 			outlineExcerpt = novel.Outline
 		}
+	}
+
+	// 优先使用场景大纲，降级到文字大纲
+	outlineContent := chapter.SceneOutline
+	if strings.TrimSpace(outlineContent) == "" || strings.TrimSpace(outlineContent) == "{}" {
+		outlineContent = chapter.Outline
 	}
 
 	prompt, err := renderPrompt("outline_review", map[string]interface{}{
@@ -347,7 +810,7 @@ func (s *OutlineReviewService) runAIReview(ctx context.Context, tenantID uint, c
 		"EmotionalTone":       chapter.EmotionalTone,
 		"TensionLevel":        chapter.TensionLevel,
 		"HookType":            chapter.HookType,
-		"SceneOutlineJSON":    chapter.SceneOutline,
+		"SceneOutlineJSON":    outlineContent,
 		"PrevChapterSummary":  prevSummary,
 		"NextChapterTitle":    nextTitle,
 		"NovelOutlineExcerpt": outlineExcerpt,
@@ -367,7 +830,6 @@ func (s *OutlineReviewService) runAIReview(ctx context.Context, tenantID uint, c
 		return nil, fmt.Errorf("parse AI response: %w", err)
 	}
 
-	// 分数边界保护
 	clamp := func(v float64) float64 { return math.Max(0, math.Min(100, v)) }
 	result.OverallScore = clamp(result.OverallScore)
 	result.DimensionScores.Structure = clamp(result.DimensionScores.Structure)
@@ -377,7 +839,6 @@ func (s *OutlineReviewService) runAIReview(ctx context.Context, tenantID uint, c
 	result.DimensionScores.Conflict = clamp(result.DimensionScores.Conflict)
 	result.DimensionScores.Hook = clamp(result.DimensionScores.Hook)
 
-	// 若 AI 未给 overall，取六维平均
 	if result.OverallScore == 0 {
 		d := result.DimensionScores
 		result.OverallScore = clamp((d.Structure + d.Pacing + d.Continuity + d.Character + d.Conflict + d.Hook) / 6)
@@ -397,7 +858,6 @@ func (s *OutlineReviewService) buildRuleOnlyReview(review *model.OutlineReview, 
 			warnCount++
 		}
 	}
-	// 简单估算：每个error扣20分，每个warning扣8分，满分80（无AI加成）
 	score := math.Max(0, 80-float64(errCount)*20-float64(warnCount)*8)
 	review.OverallScore = score
 	review.StructureScore = score
@@ -422,5 +882,13 @@ func scoreToStatus(score float64) string {
 		return "warning"
 	default:
 		return "failed"
+	}
+}
+
+func sortReviewsByChapterNo(reviews []*model.OutlineReview) {
+	for i := 1; i < len(reviews); i++ {
+		for j := i; j > 0 && reviews[j].ChapterNo < reviews[j-1].ChapterNo; j-- {
+			reviews[j], reviews[j-1] = reviews[j-1], reviews[j]
+		}
 	}
 }

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -41,7 +42,7 @@ func (h *OutlineReviewHandler) ReviewChapter(c *gin.Context) {
 			}
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		ctx := c.Request.Context()
+		ctx := context.Background()
 		review, err := h.reviewSvc.ReviewChapterOutline(ctx, tenantID, id)
 		if err != nil {
 			logger.Printf("[OutlineReviewHandler] ReviewChapter failed: chapterID=%d err=%v", id, err)
@@ -93,16 +94,18 @@ func (h *OutlineReviewHandler) BatchReviewNovel(c *gin.Context) {
 			}
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		ctx := c.Request.Context()
-		reviews, err := h.reviewSvc.BatchReviewNovel(ctx, tenantID, novelID, func(done, total int) {
-			progress := int(float64(done) / float64(total) * 90)
-			h.taskSvc.UpdateProgress(taskID, progress) //nolint:errcheck
+		ctx := context.Background()
+		result, err := h.reviewSvc.BatchReviewNovel(ctx, tenantID, novelID, func(done, total int) {
+			h.taskSvc.UpdateProgress(taskID, done) //nolint:errcheck
 		})
 		if err != nil {
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
-		h.taskSvc.Complete(taskID, map[string]interface{}{"reviews": reviews, "count": len(reviews)}) //nolint:errcheck
+		h.taskSvc.Complete(taskID, map[string]interface{}{ //nolint:errcheck
+			"count":     len(result.Reviews),
+			"synthesis": result.Synthesis,
+		})
 	}(task.TaskID)
 
 	respondAccepted(c, task.TaskID, "大纲批量审查任务已提交")
@@ -122,4 +125,20 @@ func (h *OutlineReviewHandler) ListNovelReviews(c *gin.Context) {
 		return
 	}
 	respondOK(c, reviews)
+}
+
+// GetNovelSynthesis 获取小说综合审查报告
+// GET /api/v1/novels/:id/outline-review/synthesis
+func (h *OutlineReviewHandler) GetNovelSynthesis(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	tenantID := getTenantID(c)
+	syn, err := h.reviewSvc.GetSynthesis(tenantID, novelID)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "综合报告尚未生成，请先执行批量审查")
+		return
+	}
+	respondOK(c, syn)
 }

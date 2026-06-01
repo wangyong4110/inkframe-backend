@@ -41,3 +41,29 @@ func (r *OutlineReviewRepository) ListByNovel(novelID uint) ([]*model.OutlineRev
 func (r *OutlineReviewRepository) DeleteByNovel(novelID uint) error {
 	return r.db.Where("novel_id = ?", novelID).Delete(&model.OutlineReview{}).Error
 }
+
+// NovelOutlineSynthesisRepository 小说整体大纲综合报告仓库
+type NovelOutlineSynthesisRepository struct {
+	db *gorm.DB
+}
+
+func NewNovelOutlineSynthesisRepository(db *gorm.DB) *NovelOutlineSynthesisRepository {
+	return &NovelOutlineSynthesisRepository{db: db}
+}
+
+// Upsert 按 novel_id 唯一，存在则全量覆盖，不存在则创建
+func (r *NovelOutlineSynthesisRepository) Upsert(s *model.NovelOutlineSynthesis) error {
+	var existing model.NovelOutlineSynthesis
+	err := r.db.Where("novel_id = ?", s.NovelID).First(&existing).Error
+	if err == nil {
+		s.ID = existing.ID
+		return r.db.Save(s).Error
+	}
+	return r.db.Create(s).Error
+}
+
+// GetByNovel 获取小说最新综合报告
+func (r *NovelOutlineSynthesisRepository) GetByNovel(novelID uint) (*model.NovelOutlineSynthesis, error) {
+	var s model.NovelOutlineSynthesis
+	return &s, r.db.Where("novel_id = ?", novelID).First(&s).Error
+}

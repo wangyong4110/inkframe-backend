@@ -257,6 +257,10 @@ func seedAIModels(db *gorm.DB) {
 		// LLM — 国际
 		{"openai", "OpenAI", "llm", "https://api.openai.com/v1", false, nil},
 		{"anthropic", "Anthropic", "llm", "https://api.anthropic.com/v1", false, nil},
+		// Azure OpenAI: endpoint = https://<resource>.openai.azure.com/openai
+		// APIVersion  = REST API version (e.g. 2025-01-01-preview)
+		// Model name  = Azure deployment name (matches what you created in Azure portal)
+		{"azure", "Azure OpenAI", "llm", "https://YOUR-RESOURCE.openai.azure.com/openai", false, nil},
 		{"google", "Google DeepMind", "llm", "https://generativelanguage.googleapis.com/v1", false, nil},
 		{"xai", "xAI (Grok)", "llm", "https://api.x.ai/v1", false, nil},
 		{"mistral", "Mistral AI", "llm", "https://api.mistral.ai/v1", false, nil},
@@ -334,6 +338,13 @@ func seedAIModels(db *gorm.DB) {
 		{"openai", "gpt-4o", "GPT-4o", llmTasks, 0.95, 4096},
 		{"openai", "gpt-4o-mini", "GPT-4o Mini", llmTasks, 0.85, 4096},
 		{"openai", "dall-e-3", "DALL-E 3", []string{"image_gen"}, 0.95, 0},
+		// Azure OpenAI — 模型名 = Azure portal 中的部署名（Deployment name）
+		// 若用户的部署名不同，可在模型管理界面修改或新增
+		{"azure", "gpt-4o", "GPT-4o（Azure）", llmTasks, 0.95, 4096},
+		{"azure", "gpt-4o-mini", "GPT-4o Mini（Azure）", llmTasks, 0.85, 4096},
+		{"azure", "gpt-4.1", "GPT-4.1（Azure）", llmTasks, 0.96, 4096},
+		{"azure", "gpt-4.1-mini", "GPT-4.1 Mini（Azure）", llmTasks, 0.88, 4096},
+		{"azure", "o3-mini", "o3-mini（Azure）", llmTasks, 0.94, 8192},
 		// Anthropic
 		{"anthropic", "claude-opus-4-5", "Claude Opus 4.5", llmTasks, 0.98, 8192},
 		{"anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5", llmTasks, 0.96, 8192},

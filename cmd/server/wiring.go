@@ -87,6 +87,7 @@ type Repositories struct {
 	ForeshadowRepo           *repository.ForeshadowRepository
 	NovelOutlineVersionRepo  *repository.NovelOutlineVersionRepository
 	OutlineReviewRepo        *repository.OutlineReviewRepository
+	OutlineSynthesisRepo     *repository.NovelOutlineSynthesisRepository
 }
 
 // initRepositories 初始化仓库层
@@ -163,6 +164,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		ForeshadowRepo:           repository.NewForeshadowRepository(db),
 		NovelOutlineVersionRepo:  repository.NewNovelOutlineVersionRepository(db),
 		OutlineReviewRepo:        repository.NewOutlineReviewRepository(db),
+		OutlineSynthesisRepo:     repository.NewNovelOutlineSynthesisRepository(db),
 	}
 }
 
@@ -640,6 +642,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		// ── Outline Review ──
 		OutlineReviewService: service.NewOutlineReviewService(
 			repos.OutlineReviewRepo,
+			repos.OutlineSynthesisRepo,
 			repos.ChapterRepo,
 			repos.NovelRepo,
 			core.AI,

@@ -11,28 +11,29 @@ import (
 )
 
 // AzureProvider implements AIProvider for Azure OpenAI Service.
+//
 // URL:  {endpoint}/deployments/{deployment}/chat/completions?api-version={apiVersion}
 // Auth: api-key header (not Bearer token)
+//
+// Deployment name is resolved dynamically from GenerateRequest.Model at call time,
+// falling back to the defaultDeployment set at construction. This lets one provider
+// record serve multiple deployments—each AIModel.Name maps to one deployment.
 type AzureProvider struct {
-	apiKey           string
-	endpoint         string
-	deployment       string
-	apiVersion       string
-	client           *http.Client
-	maxTokensCap     int // upper bound for max_tokens; 0 = no cap (default: 32768)
+	apiKey            string
+	endpoint          string
+	defaultDeployment string // optional; used when req.Model is empty
+	apiVersion        string
+	client            *http.Client
+	maxTokensCap      int // upper bound for max_tokens; 0 = no cap
 }
 
 // NewAzureProvider creates an Azure OpenAI provider.
-//   - endpoint:   base URL, e.g. https://…cognitiveservices.azure.com/openai
-//   - deployment: deployment / model name, e.g. gpt-4.1
-//   - apiVersion: Azure REST API version, e.g. 2025-01-01-preview
-// NewAzureProvider 创建 Azure OpenAI provider。timeout<=0 时使用默认值 DefaultProviderTimeout。
-func NewAzureProvider(apiKey, endpoint, deployment, apiVersion string, timeout time.Duration) *AzureProvider {
+//   - endpoint:          cognitive-services base URL, e.g. https://…openai.azure.com/openai
+//   - defaultDeployment: fallback deployment name when req.Model is empty; may be ""
+//   - apiVersion:        Azure REST API version, e.g. 2025-01-01-preview
+func NewAzureProvider(apiKey, endpoint, defaultDeployment, apiVersion string, timeout time.Duration) *AzureProvider {
 	if endpoint == "" {
-		endpoint = "https://YOUR-RESOURCE.cognitiveservices.azure.com/openai"
-	}
-	if deployment == "" {
-		deployment = "gpt-4"
+		endpoint = "https://YOUR-RESOURCE.openai.azure.com/openai"
 	}
 	if apiVersion == "" {
 		apiVersion = "2025-01-01-preview"
@@ -41,31 +42,70 @@ func NewAzureProvider(apiKey, endpoint, deployment, apiVersion string, timeout t
 		timeout = DefaultProviderTimeout
 	}
 	return &AzureProvider{
-		apiKey:       apiKey,
-		endpoint:     endpoint,
-		deployment:   deployment,
-		apiVersion:   apiVersion,
-		client:       &http.Client{Timeout: timeout},
-		maxTokensCap: 32768, // safe default; most Azure deployments cap completion tokens at 32768
+		apiKey:            apiKey,
+		endpoint:          endpoint,
+		defaultDeployment: defaultDeployment,
+		apiVersion:        apiVersion,
+		client:            &http.Client{Timeout: timeout},
+		maxTokensCap:      32768,
 	}
 }
 
 func (p *AzureProvider) GetName() string { return "azure" }
 
 func (p *AzureProvider) GetModels() []string {
-	return []string{p.deployment}
+	if p.defaultDeployment != "" {
+		return []string{p.defaultDeployment}
+	}
+	return nil
 }
 
-func (p *AzureProvider) chatURL() string {
+// deploymentOf returns the deployment name to use for a given request.
+// req.Model takes priority over the provider-level defaultDeployment.
+func (p *AzureProvider) deploymentOf(model string) (string, error) {
+	dep := model
+	if dep == "" {
+		dep = p.defaultDeployment
+	}
+	if dep == "" {
+		return "", fmt.Errorf("azure: deployment name required — set the model name in AIModel configuration to match your Azure deployment name")
+	}
+	return dep, nil
+}
+
+func (p *AzureProvider) chatURL(deployment string) string {
 	return fmt.Sprintf("%s/deployments/%s/chat/completions?api-version=%s",
-		p.endpoint, p.deployment, p.apiVersion)
+		p.endpoint, deployment, p.apiVersion)
 }
 
 func (p *AzureProvider) HealthCheck(ctx context.Context) error {
-	// Check the specific deployment endpoint rather than listing all deployments.
-	// GET {endpoint}/deployments/{deployment}?api-version={version} returns 200 when the
-	// deployment exists and the api-key is valid; 401 on bad key; 404 on missing deployment.
-	url := fmt.Sprintf("%s/deployments/%s?api-version=%s", p.endpoint, p.deployment, p.apiVersion)
+	dep := p.defaultDeployment
+	if dep == "" {
+		// No default deployment: just verify the endpoint is reachable and the key works
+		// by hitting the list-deployments endpoint.
+		url := fmt.Sprintf("%s/deployments?api-version=%s", p.endpoint, p.apiVersion)
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("api-key", p.apiKey)
+		resp, err := p.client.Do(req)
+		if err != nil {
+			return err
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusUnauthorized {
+			return fmt.Errorf("azure api-key invalid (401)")
+		}
+		// 404 is fine (endpoint may not support listing); anything else that's not 5xx is ok
+		if resp.StatusCode >= 500 {
+			return fmt.Errorf("azure endpoint error: status %d", resp.StatusCode)
+		}
+		return nil
+	}
+
+	// Verify the specific deployment exists.
+	url := fmt.Sprintf("%s/deployments/%s?api-version=%s", p.endpoint, dep, p.apiVersion)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return err
@@ -77,7 +117,7 @@ func (p *AzureProvider) HealthCheck(ctx context.Context) error {
 	}
 	resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("azure deployment %q not found (404) — check endpoint and deployment name", p.deployment)
+		return fmt.Errorf("azure deployment %q not found (404) — check endpoint and deployment name", dep)
 	}
 	if resp.StatusCode == http.StatusUnauthorized {
 		return fmt.Errorf("azure api-key invalid (401)")
@@ -89,6 +129,11 @@ func (p *AzureProvider) HealthCheck(ctx context.Context) error {
 }
 
 func (p *AzureProvider) Generate(ctx context.Context, req *GenerateRequest) (*GenerateResponse, error) {
+	dep, err := p.deploymentOf(req.Model)
+	if err != nil {
+		return nil, err
+	}
+
 	start := time.Now()
 
 	body, err := json.Marshal(p.buildChatRequest(req))
@@ -96,7 +141,7 @@ func (p *AzureProvider) Generate(ctx context.Context, req *GenerateRequest) (*Ge
 		return nil, err
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.chatURL(), bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.chatURL(dep), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -131,14 +176,20 @@ func (p *AzureProvider) Generate(ctx context.Context, req *GenerateRequest) (*Ge
 
 	return &GenerateResponse{
 		Content:     parsed.Choices[0].Message.Content,
-		Model:       parsed.Model,
+		Model:       dep,
 		InputTokens: parsed.Usage.PromptTokens,
+		Tokens:      parsed.Usage.CompletionTokens,
 		StopReason:  parsed.Choices[0].FinishReason,
 		FinishTime:  time.Since(start).Milliseconds(),
 	}, nil
 }
 
 func (p *AzureProvider) GenerateStream(ctx context.Context, req *GenerateRequest) (<-chan *GenerateResponse, error) {
+	dep, err := p.deploymentOf(req.Model)
+	if err != nil {
+		return nil, err
+	}
+
 	ch := make(chan *GenerateResponse, 100)
 	go func() {
 		defer close(ch)
@@ -152,7 +203,7 @@ func (p *AzureProvider) GenerateStream(ctx context.Context, req *GenerateRequest
 			return
 		}
 
-		httpReq, err := http.NewRequestWithContext(ctx, "POST", p.chatURL(), bytes.NewReader(body))
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", p.chatURL(dep), bytes.NewReader(body))
 		if err != nil {
 			ch <- &GenerateResponse{Error: err.Error()}
 			return

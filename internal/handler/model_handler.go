@@ -590,13 +590,17 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 	}
 
 	type providerTemplate struct {
-		Name           string   `json:"name"`
-		DisplayName    string   `json:"display_name"`
-		Type           string   `json:"type"`
-		APIEndpoint    string   `json:"api_endpoint"`
-		NeedsSecretKey bool     `json:"needs_secret_key"`
-		NoAPIKey       bool     `json:"no_api_key,omitempty"` // 无需 API Key（如 Ollama 本地服务）
-		StaticModels   []string `json:"static_models,omitempty"`
+		Name            string   `json:"name"`
+		DisplayName     string   `json:"display_name"`
+		Type            string   `json:"type"`
+		APIEndpoint     string   `json:"api_endpoint"`
+		NeedsSecretKey  bool     `json:"needs_secret_key"`
+		NoAPIKey        bool     `json:"no_api_key,omitempty"`        // 无需 API Key（如 Ollama）
+		NeedsAPIVersion bool     `json:"needs_api_version,omitempty"` // 需要填写 API 版本号（如 Azure）
+		DeploymentBased bool     `json:"deployment_based,omitempty"`  // 模型名 = 部署名（如 Azure）
+		APIVersionHint  string   `json:"api_version_hint,omitempty"`  // API 版本占位提示
+		ConfigHint      string   `json:"config_hint,omitempty"`       // 配置说明
+		StaticModels    []string `json:"static_models,omitempty"`
 	}
 
 	result := make([]providerTemplate, 0, len(templates))
@@ -608,6 +612,12 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 			APIEndpoint:    p.APIEndpoint,
 			NeedsSecretKey: p.NeedsSecretKey,
 			NoAPIKey:       p.Name == "ollama",
+		}
+		if p.Name == "azure" {
+			t.NeedsAPIVersion = true
+			t.DeploymentBased = true
+			t.APIVersionHint = "2025-01-01-preview"
+			t.ConfigHint = "Endpoint 格式：https://<resource>.openai.azure.com/openai；API Version 填写 Azure REST API 版本；模型名称填写 Azure 部署名（与 Azure 门户中创建的 Deployment name 一致）"
 		}
 		if p.StaticModels != "" {
 			json.Unmarshal([]byte(p.StaticModels), &t.StaticModels) //nolint:errcheck

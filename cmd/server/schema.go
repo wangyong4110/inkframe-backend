@@ -250,6 +250,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.NovelOutlineVersion{},
 		// 章节大纲审查
 		&model.OutlineReview{},
+		&model.NovelOutlineSynthesis{},
 	); err != nil {
 		return err
 	}
