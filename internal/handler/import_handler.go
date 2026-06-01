@@ -718,7 +718,8 @@ func (h *ImportHandler) StartAnalysis(c *gin.Context) {
 	var body struct {
 		CreateChapterOutlines bool `json:"create_chapter_outlines"`
 	}
-	if err := c.ShouldBindJSON(&body); err != nil {
+	// body 是可选的，空 body 时 ShouldBindJSON 会报 EOF，忽略该错误
+	if err := c.ShouldBindJSON(&body); err != nil && err.Error() != "EOF" {
 		respondBadRequest(c, "invalid request body: "+err.Error())
 		return
 	}

@@ -298,13 +298,6 @@ func (s *AuthService) Login(req *LoginRequest) (*AuthResponse, error) {
 		return nil, errors.New("account is not active")
 	}
 
-	// 邮箱验证检查（仅在 requireVerification=true 时生效；OAuth/手机号账号不受此约束）
-	if s.requireVerification && user.OAuthProvider == "" && user.Phone == "" {
-		if user.EmailVerifiedAt == nil || user.EmailVerifiedAt.IsZero() {
-			return nil, errors.New("email not verified, please check your inbox")
-		}
-	}
-
 	// 登录成功：重置失败计数
 	if user.FailedLoginCount > 0 || user.LockUntil != nil {
 		_ = s.db.Model(user).Updates(map[string]interface{}{

@@ -231,15 +231,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.DELETE("/:id", cfg.NovelHandler.DeleteNovel)
 			novels.GET("/:id/export", cfg.NovelHandler.ExportNovel)
 
-			// Sensitive AI generation routes require verified email
-			if cfg.DB != nil {
-				verifiedNovels := v1.Group("/novels", middleware.RequireEmailVerified(cfg.DB))
-				verifiedNovels.POST("/:id/chapters/generate", cfg.NovelHandler.GenerateChapter)
-				verifiedNovels.POST("/:id/outline", cfg.NovelHandler.GenerateOutline)
-			} else {
-				novels.POST("/:id/chapters/generate", cfg.NovelHandler.GenerateChapter)
-				novels.POST("/:id/outline", cfg.NovelHandler.GenerateOutline)
-			}
+			novels.POST("/:id/chapters/generate", cfg.NovelHandler.GenerateChapter)
+			novels.POST("/:id/outline", cfg.NovelHandler.GenerateOutline)
 
 			// 大纲历史版本
 			novels.GET("/:id/outline-versions", cfg.NovelHandler.ListOutlineVersions)

@@ -404,6 +404,12 @@ type ParagraphFeedback struct {
 	Severity         string   `json:"severity"`          // info/warning/error
 }
 
+// WeaknessItem 不足条目，带对应改进建议
+type WeaknessItem struct {
+	Issue      string `json:"issue"`      // 问题描述
+	Suggestion string `json:"suggestion"` // 对应改进建议
+}
+
 // ChapterReview AI章节审查报告
 type ChapterReview struct {
 	OverallScore      float64             `json:"overall_score"`
@@ -411,11 +417,11 @@ type ChapterReview struct {
 	CharacterScore    float64             `json:"character_score"`
 	WritingScore      float64             `json:"writing_score"`
 	PacingScore       float64             `json:"pacing_score"`
-	DramaticScore     float64             `json:"dramatic_score"`      // 戏剧张力
-	VisualPotential   float64             `json:"visual_potential"`    // 画面感/可视化潜力
+	DramaticScore     float64             `json:"dramatic_score"`   // 戏剧张力
+	VisualPotential   float64             `json:"visual_potential"` // 画面感/可视化潜力
 	Summary           string              `json:"summary"`
 	Strengths         []string            `json:"strengths"`
-	Weaknesses        []string            `json:"weaknesses"`
+	Weaknesses        []WeaknessItem      `json:"weaknesses"`
 	GlobalSuggestions []string            `json:"global_suggestions"`
 	ParagraphFeedback []ParagraphFeedback `json:"paragraph_feedback"`
 	RecordID          uint                `json:"record_id,omitempty"`

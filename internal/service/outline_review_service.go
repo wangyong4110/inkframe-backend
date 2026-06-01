@@ -172,13 +172,18 @@ func (s *OutlineReviewService) BatchReviewNovel(ctx context.Context, tenantID, n
 			review, err := s.ReviewChapterOutline(ctx, tenantID, ch.ID)
 			if err != nil {
 				logger.Printf("[OutlineReview] batch review chapter %d failed: %v", ch.ChapterNo, err)
+				now := time.Now()
 				review = &model.OutlineReview{
-					TenantID:  tenantID,
-					NovelID:   novelID,
-					ChapterID: ch.ID,
-					ChapterNo: ch.ChapterNo,
-					Status:    "failed",
+					TenantID:   tenantID,
+					NovelID:    novelID,
+					ChapterID:  ch.ID,
+					ChapterNo:  ch.ChapterNo,
+					Status:     "failed",
 					Suggestion: err.Error(),
+					ReviewedAt: &now,
+				}
+				if saveErr := s.reviewRepo.Upsert(review); saveErr != nil {
+					logger.Printf("[OutlineReview] save failed review for chapter %d: %v", ch.ChapterNo, saveErr)
 				}
 			}
 

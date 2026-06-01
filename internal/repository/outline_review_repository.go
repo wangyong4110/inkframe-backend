@@ -20,6 +20,7 @@ func (r *OutlineReviewRepository) Upsert(review *model.OutlineReview) error {
 	err := r.db.Where("chapter_id = ?", review.ChapterID).First(&existing).Error
 	if err == nil {
 		review.ID = existing.ID
+		review.CreatedAt = existing.CreatedAt
 		return r.db.Save(review).Error
 	}
 	return r.db.Create(review).Error
@@ -57,6 +58,7 @@ func (r *NovelOutlineSynthesisRepository) Upsert(s *model.NovelOutlineSynthesis)
 	err := r.db.Where("novel_id = ?", s.NovelID).First(&existing).Error
 	if err == nil {
 		s.ID = existing.ID
+		s.CreatedAt = existing.CreatedAt // 保留原始创建时间，避免 GORM Save 写入零时间
 		return r.db.Save(s).Error
 	}
 	return r.db.Create(s).Error

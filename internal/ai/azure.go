@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -32,6 +33,16 @@ type AzureProvider struct {
 //   - defaultDeployment: fallback deployment name when req.Model is empty; may be ""
 //   - apiVersion:        Azure REST API version, e.g. 2025-01-01-preview
 func NewAzureProvider(apiKey, endpoint, defaultDeployment, apiVersion string, timeout time.Duration) *AzureProvider {
+	// Tolerate users pasting a full chat-completions URL instead of the base endpoint.
+	// e.g. https://…azure.com/openai/deployments/gpt-4.1/chat/completions
+	//   → endpoint = "https://…azure.com/openai", defaultDeployment = "gpt-4.1"
+	if idx := strings.Index(endpoint, "/deployments/"); idx != -1 {
+		rest := endpoint[idx+len("/deployments/"):]
+		if dep := strings.SplitN(rest, "/", 2)[0]; dep != "" && defaultDeployment == "" {
+			defaultDeployment = dep
+		}
+		endpoint = endpoint[:idx]
+	}
 	if endpoint == "" {
 		endpoint = "https://YOUR-RESOURCE.openai.azure.com/openai"
 	}

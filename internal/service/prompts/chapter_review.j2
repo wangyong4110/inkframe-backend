@@ -78,7 +78,8 @@
   - `action="rewrite"` 时：提供改写后的完整段落正文，字数与原文接近，保持叙事视角和风格基调
   - `action="delete"` 时：`suggested_rewrite` 必须为空字符串 `""`
   - 若建议将两段合并，请将合并后的完整文本写入其中一段的 `suggested_rewrite`，另一段设 `action="delete"`
-- global_suggestions 只输出最重要的 3-5 条整体建议
+- weaknesses 每项必须包含 issue（问题描述，≤20字）和 suggestion（针对该问题的具体改进建议，≤40字），不得留空
+- global_suggestions 只输出最重要的 2-3 条跨问题的整体战略建议（不要重复 weaknesses 中已有的建议）
 
 {% if HasPreviousScore %}
 【历史评分（仅供纵向对比参考，不约束本次评分）】
@@ -97,8 +98,11 @@
   "visual_potential": 65,
   "summary": "总体评价（50字以内）",
   "strengths": ["最突出的优点1", "优点2"],
-  "weaknesses": ["最主要的不足1", "不足2"],
-  "global_suggestions": ["整体建议1（最多5条）"],
+  "weaknesses": [
+    {"issue": "不足问题描述（≤20字）", "suggestion": "针对该问题的具体改进方向（≤40字）"},
+    {"issue": "不足2", "suggestion": "对应改进建议2"}
+  ],
+  "global_suggestions": ["跨问题的整体战略建议1（最多3条）"],
   "paragraph_feedback": [
     {
       "index": 2,

@@ -92,9 +92,20 @@ func (s *ForeshadowCRUDService) AIExtractFromNovel(tenantID, novelID uint) ([]*m
 		return nil, fmt.Errorf("failed to parse AI response")
 	}
 
+	// 按 title 去重：已有同名伏笔直接跳过
+	existing, _ := s.repo.ListByNovel(novelID, tenantID)
+	existingTitles := make(map[string]struct{}, len(existing))
+	for _, e := range existing {
+		existingTitles[e.Title] = struct{}{}
+	}
+
 	var created []*model.Foreshadow
 	for _, item := range items {
 		if item.Title == "" {
+			continue
+		}
+		if _, dup := existingTitles[item.Title]; dup {
+			logger.Printf("ForeshadowCRUDService.AIExtractFromNovel: skip duplicate %q", item.Title)
 			continue
 		}
 		status := item.Status
@@ -118,6 +129,7 @@ func (s *ForeshadowCRUDService) AIExtractFromNovel(tenantID, novelID uint) ([]*m
 			logger.Printf("ForeshadowCRUDService.AIExtractFromNovel: create %q: %v", f.Title, err)
 			continue
 		}
+		existingTitles[item.Title] = struct{}{} // 防止同批次重名
 		created = append(created, f)
 	}
 	logger.Printf("[ForeshadowCRUDService] AIExtractFromNovel: novelID=%d created=%d", novelID, len(created))
