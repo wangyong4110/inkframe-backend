@@ -18,7 +18,7 @@ const (
 	recentFullCount  = 3             // 最近N章注入详细摘要
 	recentShortCount = 7             // 再往前N章注入简短摘要（30字）
 
-	shortSummaryMaxRunes        = 80 // 简短摘要截断字符数
+	shortSummaryMaxRunes        = 300 // 简短摘要截断字符数（80→300：80字丢失关键情节，300字能保留完整章节主线）
 	repeatWordThreshold         = 5  // 重复词出现 N 次触发精修建议
 	consecutivePronounThreshold = 4  // 连续以他/她开头的段落数阈值
 )

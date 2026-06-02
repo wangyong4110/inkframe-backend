@@ -584,7 +584,8 @@ type analysisItemJSON struct {
 	VisualPrompt string `json:"visual_prompt"`
 }
 
-// buildChapterSummariesText 从章节列表构建摘要文本，最多取 maxChapters 章，截断至 maxLen
+// buildChapterSummariesText 从章节列表构建摘要文本，最多取 maxChapters 章，截断至 maxLen。
+// 回退顺序：Summary → Content 前500字 → Outline（用户大纲）→ 跳过该章。
 func buildChapterSummariesText(chapters []*model.Chapter, maxChapters, maxLen int) string {
 	n := len(chapters)
 	if n > maxChapters {
@@ -596,6 +597,9 @@ func buildChapterSummariesText(chapters []*model.Chapter, maxChapters, maxLen in
 		summary := ch.Summary
 		if summary == "" {
 			summary = truncateForPrompt(ch.Content, 500)
+		}
+		if summary == "" {
+			summary = truncateForPrompt(ch.Outline, 200) // 章节大纲兜底（无正文时也能提取信息）
 		}
 		if summary != "" {
 			sb.WriteString(fmt.Sprintf("第%d章「%s」：%s\n", ch.ChapterNo, ch.Title, summary))
@@ -1231,6 +1235,10 @@ func (s *NovelAnalysisService) stepExtractForeshadows(
 	}
 	created, err := s.foreshadowSvc.AIExtractFromNovel(tenantID, novel.ID)
 	if err != nil {
+		if strings.Contains(err.Error(), "no chapter content available") {
+			logger.Printf("NovelAnalysis[%d]: no chapter content for foreshadow extraction, skipping", novel.ID)
+			return nil
+		}
 		return fmt.Errorf("AIExtractForeshadows: %w", err)
 	}
 	logger.Printf("NovelAnalysis[%d]: extracted %d foreshadows", novel.ID, len(created))

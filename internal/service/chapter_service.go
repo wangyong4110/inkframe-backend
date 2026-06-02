@@ -566,9 +566,17 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 
 	// ── Step 2: 生成场景大纲 ──────────────────────────────
 	// prevEnding 在此处统一计算，避免后续两步各查一次 DB
-	prevEnding := s.getPreviousChapterEnding(novelID, req.ChapterNo)
+	prevEnding := s.getPreviousChapterEnding(tenantID, novel, req.ChapterNo)
+
+	// 最终章：提前收集全部未关闭悬线，供场景大纲和正文生成两步共用
+	finalChapterCtx := ""
+	if req.IsStandalone {
+		finalChapterCtx = s.buildFinalChapterContext(novelID, novel)
+		logger.Printf("[GenerateChapter] ch%d: IsStandalone=true, finalChapterCtx len=%d", req.ChapterNo, len(finalChapterCtx))
+	}
+
 	sceneOutlineJSON, suggestedTitle, outlineErr := s.generateSceneOutline(
-		tenantID, novelID, req, novel, globalCtx, chapterMeta, refStories, wikiContext, storyPatternRef, prevEnding,
+		tenantID, novelID, req, novel, globalCtx, chapterMeta, refStories, wikiContext, storyPatternRef, prevEnding, finalChapterCtx,
 	)
 	if outlineErr != nil {
 		// Fix 1+2: 将预置占位章节（如存在）标记为 failed，避免状态卡在 "generating"
@@ -583,7 +591,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 
 	// ── Step 3: 按场景大纲生成章节内容 ───────────────────
 	content, chapterHook, err := s.generateFromSceneOutline(
-		tenantID, novelID, req, novel, sceneOutlineJSON, globalCtx, chapterMeta, refStories, wikiContext, prevEnding,
+		tenantID, novelID, req, novel, sceneOutlineJSON, globalCtx, chapterMeta, refStories, wikiContext, prevEnding, finalChapterCtx,
 	)
 	if err != nil {
 		// Fix 1: 将预置占位章节（如存在）标记为 failed，避免状态卡在 "generating"
@@ -676,6 +684,20 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		novelSvcForSnapshot.snapshotRepo = s.snapshotRepo
 	}
 	novelSvcForSnapshot.writeCharacterSnapshots(tenantID, chapter)
+
+	// ── Step 5c: 同步生成章末精确状态快照（连贯性核心锚点，必须在返回前完成）────────────────────
+	// postProcessChapter 是异步的——若下一章生成早于它完成，ChapterEndState 就是空的，
+	// 导致 getPreviousChapterEnding 退化为 300 字原文兜底。此处同步生成，确保下一章能读到它。
+	if chapter.ChapterEndState == "" && chapter.Content != "" {
+		if endState := s.generateChapterEndState(tenantID, chapter, novel); endState != "" {
+			chapter.ChapterEndState = endState
+			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
+				logger.Printf("[ChapterService] GenerateChapter: update chapter %d [end_state]: %v", chapter.ID, updateErr)
+			} else {
+				logger.Printf("[ChapterService] chapter_end_state generated sync for ch%d", chapter.ChapterNo)
+			}
+		}
+	}
 
 	// Mark chapter as completed now that all synchronous steps are done.
 	chapter.Status = "completed"
@@ -798,10 +820,88 @@ func (s *ChapterService) extractChapterMeta(novelID uint, chapterNo int) chapter
 		}
 	}
 
+	// 若大纲 JSON 中无剧情点，尝试从文本摘要中提取——保证 plot coverage 机制始终有效
+	if len(meta.plotPoints) == 0 && meta.summary != "" {
+		meta.plotPoints = extractPlotPointsFromText(meta.summary)
+		if len(meta.plotPoints) > 0 {
+			logger.Printf("[extractChapterMeta] ch%d: extracted %d plot points from text summary", chapterNo, len(meta.plotPoints))
+		}
+	}
+
 	logger.Printf("[extractChapterMeta] ch%d final: summaryLen=%d plotPoints=%d title=%q",
 		chapterNo, len(meta.summary), len(meta.plotPoints), meta.chapterTitle)
 
 	return meta
+}
+
+// extractPlotPointsFromText 将纯文本的章节概述/大纲转换为剧情点列表。
+// 当 novel.Outline JSON 中没有结构化 plot_points 时使用（如用户手动编辑的大纲文本）。
+func extractPlotPointsFromText(text string) []string {
+	if text == "" {
+		return nil
+	}
+	var points []string
+
+	// 按换行分割，识别列表项（带编号或符号前缀）
+	lines := strings.Split(text, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if len([]rune(line)) < 10 {
+			continue
+		}
+		extracted := ""
+		// 符号前缀: - · • *
+		for _, prefix := range []string{"- ", "· ", "• ", "* "} {
+			if strings.HasPrefix(line, prefix) {
+				extracted = strings.TrimSpace(line[len(prefix):])
+				break
+			}
+		}
+		// 数字编号: "1. " "2. " ... "10. "
+		if extracted == "" {
+			r := []rune(line)
+			for i, ch := range r {
+				if ch == '.' || ch == '、' || ch == '）' {
+					prefix := string(r[:i])
+					// 判断前缀全是数字或序号字符
+					isNum := true
+					for _, c := range prefix {
+						if c < '0' || c > '9' {
+							isNum = false
+							break
+						}
+					}
+					if isNum && i > 0 && i < 4 && len(r) > i+2 {
+						extracted = strings.TrimSpace(string(r[i+1:]))
+					}
+					break
+				}
+			}
+		}
+		if extracted != "" && len([]rune(extracted)) >= 8 {
+			points = append(points, extracted)
+		}
+	}
+
+	if len(points) >= 2 {
+		if len(points) > 5 {
+			points = points[:5]
+		}
+		return points
+	}
+
+	// 兜底：按句号切分，取有意义的句子作为剧情点
+	sentences := strings.Split(text, "。")
+	for _, s := range sentences {
+		s = strings.TrimSpace(s)
+		if len([]rune(s)) >= 15 {
+			points = append(points, s)
+		}
+	}
+	if len(points) > 5 {
+		points = points[:5]
+	}
+	return points
 }
 
 // ensureProtagonistExtracted 确保 DB 中至少有一个角色（含主角）。
@@ -961,6 +1061,7 @@ func (s *ChapterService) generateSceneOutline(
 	wikiContext string,
 	storyPatternRef string,
 	prevEnding string,
+	finalChapterCtx string,
 ) (sceneOutlineJSON, suggestedTitle string, outlineErr error) {
 
 	// 构建伏笔提示
@@ -1077,6 +1178,7 @@ func (s *ChapterService) generateSceneOutline(
 		"HookType":              hookType,
 		"ChapterType":           computeChapterType(tensionLevel, hookType, actNo),
 		"IsStandalone":          req.IsStandalone,
+		"FinalChapterContext":   finalChapterCtx, // 最终章专用：全部未关闭悬线收尾清单
 		"PreviousChapterEnding": prevEnding,
 		"Characters":            characters,
 		"CharacterStates":       formatCharacterStates(characters),
@@ -1112,6 +1214,11 @@ func (s *ChapterService) generateSceneOutline(
 	var outlineResult struct {
 		ChapterTitle string            `json:"chapter_title"`
 		Scenes       []json.RawMessage `json:"scenes"`
+		PlotCoverage []struct {
+			PlotPoint string `json:"plot_point"`
+			SceneNo   int    `json:"scene_no"`
+			KeyBeat   string `json:"key_beat"`
+		} `json:"plot_coverage"`
 	}
 	if err := json.Unmarshal([]byte(resp), &outlineResult); err != nil {
 		return "", "", fmt.Errorf("generateSceneOutline: parse outline JSON: %w (raw=%q)", err, truncateForPrompt(resp, 200))
@@ -1121,21 +1228,121 @@ func (s *ChapterService) generateSceneOutline(
 	sceneCount := len(outlineResult.Scenes)
 	logger.Printf("[ChapterService] generateSceneOutline: chapterNo=%d scenes=%d", req.ChapterNo, sceneCount)
 
-	// 场景数量越界检查：AI 返回 0 场景说明结构出错，返回错误触发降级；
-	// 超过 7 个场景时截断到 5，防止正文过长或 token 超限。
+	// 场景数量越界检查
 	if sceneCount < 1 {
 		return "", "", fmt.Errorf("generateSceneOutline: AI returned 0 scenes, expected 3-5 (chapterNo=%d)", req.ChapterNo)
 	}
 	if sceneCount > 7 {
 		logger.Printf("[ChapterService] generateSceneOutline: chapterNo=%d scenes=%d >7, truncating to 5", req.ChapterNo, sceneCount)
 		outlineResult.Scenes = outlineResult.Scenes[:5]
-		// 重新序列化截断后的 JSON，确保后续步骤使用一致的数据
 		if truncated, marshalErr := json.Marshal(outlineResult); marshalErr == nil {
 			resp = string(truncated)
 		}
 	}
 
+	// ── 剧情点覆盖率验证 ─────────────────────────────────────
+	// 检查 meta.plotPoints 是否全部出现在 plot_coverage 中；
+	// 若有缺失，注入 MissingPlotPoints 后重试一次（不降级生成）。
+	if len(meta.plotPoints) > 0 {
+		missingPoints := findMissingPlotPoints(meta.plotPoints, outlineResult.PlotCoverage)
+		if len(missingPoints) > 0 {
+			logger.Printf("[generateSceneOutline] ch%d: %d/%d plot points missing from coverage, retrying",
+				req.ChapterNo, len(missingPoints), len(meta.plotPoints))
+
+			// 构建缺失剧情点文本
+			var missingText strings.Builder
+			for _, mp := range missingPoints {
+				missingText.WriteString("- " + mp + "\n")
+			}
+			// 重新渲染 prompt，加入 MissingPlotPoints 警告
+			retryPrompt, renderErr := renderPrompt("chapter_scene_outline", map[string]interface{}{
+				"NovelTitle":            novel.Title,
+				"ChapterNo":             req.ChapterNo,
+				"ChapterTitle":          meta.chapterTitle,
+				"GlobalContext":         globalCtx,
+				"ChapterSummary":        chapterSummary,
+				"PlotPoints":            plotPointsText,
+				"MissingPlotPoints":     missingText.String(), // ← 新增
+				"TensionLevel":          tensionLevel,
+				"ActNo":                 actNo,
+				"EmotionalTone":         emotionalTone,
+				"HookType":              hookType,
+				"ChapterType":           computeChapterType(tensionLevel, hookType, actNo),
+				"IsStandalone":          req.IsStandalone,
+				"PreviousChapterEnding": prevEnding,
+				"Characters":            characters,
+				"CharacterStates":       formatCharacterStates(characters),
+				"ForeshadowHints":       foreshadowHints,
+				"PlotTensionState":      plotTensionState,
+				"RefStories":            refStories,
+				"WikiContext":           wikiContext,
+				"StoryPatternRef":       storyPatternRef,
+				"ChapterBudget":         budgetText,
+				"CharacterRegistry":     characterRegistry,
+				"TimelineContext":        timelineContext,
+				"CoreTheme":             novel.CoreTheme,
+				"ReaderExpectations":    prevReaderExpectations,
+				"CharacterArcContext":   characterArcContext,
+				"TensionBudget":         tensionBudget,
+			})
+			if renderErr == nil {
+				retryCtx, retryCancel := context.WithTimeout(context.Background(), 4*time.Minute)
+				retryResp, retryErr := s.aiService.GenerateWithProviderCtx(retryCtx, tenantID, novelID, "scene_outline", retryPrompt, req.ModelOverride, buildChapterOverrides(req, novel))
+				retryCancel()
+				if retryErr == nil {
+					retryResp = extractJSONObject(strings.TrimSpace(retryResp))
+					var retryResult struct {
+						ChapterTitle string            `json:"chapter_title"`
+						Scenes       []json.RawMessage `json:"scenes"`
+					}
+					if jsonErr := json.Unmarshal([]byte(retryResp), &retryResult); jsonErr == nil && len(retryResult.Scenes) > 0 {
+						resp = retryResp
+						suggestedTitle = retryResult.ChapterTitle
+						logger.Printf("[generateSceneOutline] ch%d: retry succeeded with %d scenes", req.ChapterNo, len(retryResult.Scenes))
+					}
+				} else {
+					logger.Printf("[generateSceneOutline] ch%d: retry failed: %v (using original)", req.ChapterNo, retryErr)
+				}
+			}
+		} else {
+			logger.Printf("[generateSceneOutline] ch%d: all %d plot points covered", req.ChapterNo, len(meta.plotPoints))
+		}
+	}
+
 	return resp, suggestedTitle, nil
+}
+
+// findMissingPlotPoints checks which plot points from the plan are absent from the AI-generated
+// plot_coverage field. Uses fuzzy substring matching to handle minor paraphrasing.
+func findMissingPlotPoints(plotPoints []string, coverage []struct {
+	PlotPoint string `json:"plot_point"`
+	SceneNo   int    `json:"scene_no"`
+	KeyBeat   string `json:"key_beat"`
+}) []string {
+	if len(coverage) == 0 {
+		// No coverage field at all — treat all as missing
+		return plotPoints
+	}
+	// Build a combined string of all covered plot points for matching
+	var coveredText strings.Builder
+	for _, c := range coverage {
+		coveredText.WriteString(c.PlotPoint + " ")
+	}
+	covered := coveredText.String()
+
+	var missing []string
+	for _, pp := range plotPoints {
+		// Use first 10 runes as a key phrase (robust to minor paraphrasing)
+		ppRunes := []rune(pp)
+		keyPhrase := string(ppRunes)
+		if len(ppRunes) > 10 {
+			keyPhrase = string(ppRunes[:10])
+		}
+		if !strings.Contains(covered, keyPhrase) {
+			missing = append(missing, pp)
+		}
+	}
+	return missing
 }
 
 // generateFromSceneOutline 根据场景大纲生成章节正文
@@ -1151,13 +1358,12 @@ func (s *ChapterService) generateFromSceneOutline(
 	refStories string,
 	wikiContext string,
 	prevEnding string,
+	finalChapterCtx string,
 ) (string, string, error) {
 
 	// 章节目标字数：优先用显式 WordCount，其次从小说 TargetWordCount 推算，最后默认 3000
-	// 注意：MaxTokens 是 LLM 上下文限制，与章节字数目标无关，不再用于此处
 	wordCount := req.WordCount
 	if wordCount <= 0 && novel.TargetWordCount > 0 {
-		// novel.TargetWordCount 单位是"字"（原始字数），TargetChapters 是总章节数
 		chapters := novel.TargetChapters
 		if chapters <= 0 {
 			chapters = 100
@@ -1167,12 +1373,39 @@ func (s *ChapterService) generateFromSceneOutline(
 	if wordCount <= 0 {
 		wordCount = 3000
 	}
-	// 合理范围限制：单章 500-8000 字
+	// 字数下限
 	if wordCount < 500 {
 		wordCount = 500
 	}
-	if wordCount > 8000 {
-		wordCount = 8000
+	// 字数上限：由 MaxTokens 反推可行上限（中文约 1.3 token/字）；
+	// 若未设置 MaxTokens，硬上限 8000（避免超出模型默认输出窗口）
+	{
+		effectiveMaxTokens := req.MaxTokens
+		if effectiveMaxTokens == 0 {
+			effectiveMaxTokens = novel.MaxTokens
+		}
+		var maxWords int
+		if effectiveMaxTokens > 0 {
+			// token → 字：保留 20% buffer 给 prompt overhead
+			maxWords = int(float64(effectiveMaxTokens) / 1.3 * 0.8)
+			if maxWords < 500 {
+				maxWords = 500
+			}
+		} else {
+			maxWords = 8000 // 未配置 MaxTokens 时的安全上限
+		}
+		if wordCount > maxWords {
+			logger.Printf("[generateFromSceneOutline] ch%d: wordCount %d → capped to %d (effectiveMaxTokens=%d)",
+				req.ChapterNo, wordCount, maxWords, effectiveMaxTokens)
+			wordCount = maxWords
+		}
+	}
+	// 当目标字数 > 默认 8000 且未显式限制 MaxTokens，自动扩大以确保模型能输出足够内容
+	// 中文 ~1.5 token/字 + 25% buffer
+	if wordCount > 3000 && req.MaxTokens == 0 && novel.MaxTokens == 0 {
+		req.MaxTokens = int(float64(wordCount) * 1.5 * 1.25)
+		logger.Printf("[generateFromSceneOutline] ch%d: auto-scaled MaxTokens=%d for wordCount=%d",
+			req.ChapterNo, req.MaxTokens, wordCount)
 	}
 
 	// 解析场景大纲以注入模板
@@ -1197,12 +1430,76 @@ func (s *ChapterService) generateFromSceneOutline(
 			SceneWeight      string   `json:"scene_weight"` // 核心场景/过渡场景/衔接场景
 			ThemeEcho        string   `json:"theme_echo"`
 			WordBudget       int      `json:"-"` // computed in Go, not from JSON
+			RequiredEvent    string   `json:"-"` // plot point that MUST happen in this scene (from plot_coverage cross-ref)
 			POVCharacter     string   `json:"pov_character"`
 			Tension          int      `json:"tension"`
 		} `json:"scenes"`
+		PlotCoverage []struct {
+			PlotPoint string `json:"plot_point"`
+			SceneNo   int    `json:"scene_no"`
+		} `json:"plot_coverage"`
 	}
 	if err := json.Unmarshal([]byte(sceneOutlineJSON), &outlineData); err != nil {
 		logger.Printf("[ChapterService] generateFromSceneOutline: failed to parse scene outline JSON: %v", err)
+	}
+
+	// 将 plot_coverage 中的剧情点映射回对应场景，设置 RequiredEvent
+	// 这样在正文生成模板中，每个场景会得到一个"本场景必须发生的核心剧情"标注
+	if len(outlineData.PlotCoverage) > 0 {
+		for _, pc := range outlineData.PlotCoverage {
+			for i := range outlineData.Scenes {
+				if outlineData.Scenes[i].SceneNo == pc.SceneNo {
+					if outlineData.Scenes[i].RequiredEvent == "" {
+						outlineData.Scenes[i].RequiredEvent = pc.PlotPoint
+					} else {
+						outlineData.Scenes[i].RequiredEvent += " / " + pc.PlotPoint
+					}
+					break
+				}
+			}
+		}
+	} else if len(meta.plotPoints) > 0 && len(outlineData.Scenes) > 0 {
+		// AI 未输出 plot_coverage 字段时的兜底：将剧情点均匀分配给各场景。
+		// 核心场景（scene_weight="核心场景"）优先接收剧情点，其余场景按顺序分配。
+		nScenes := len(outlineData.Scenes)
+		nPoints := len(meta.plotPoints)
+		// 找出核心场景的序号
+		coreIdxs := make([]int, 0, nScenes)
+		otherIdxs := make([]int, 0, nScenes)
+		for i, sc := range outlineData.Scenes {
+			if sc.SceneWeight == "核心场景" {
+				coreIdxs = append(coreIdxs, i)
+			} else {
+				otherIdxs = append(otherIdxs, i)
+			}
+		}
+		priority := append(coreIdxs, otherIdxs...) // 核心场景先分配
+		for pIdx, ppText := range meta.plotPoints {
+			if pIdx >= nScenes {
+				// 多余的剧情点叠加到最后一个核心场景（确保不丢失）
+				lastCore := nScenes - 1
+				if len(coreIdxs) > 0 {
+					lastCore = coreIdxs[len(coreIdxs)-1]
+				}
+				if outlineData.Scenes[lastCore].RequiredEvent == "" {
+					outlineData.Scenes[lastCore].RequiredEvent = ppText
+				} else {
+					outlineData.Scenes[lastCore].RequiredEvent += " / " + ppText
+				}
+				continue
+			}
+			scIdx := priority[pIdx%nScenes] // 循环分配（nPoints > nScenes 时）
+			if nPoints <= nScenes {
+				scIdx = priority[pIdx]
+			}
+			if outlineData.Scenes[scIdx].RequiredEvent == "" {
+				outlineData.Scenes[scIdx].RequiredEvent = ppText
+			} else {
+				outlineData.Scenes[scIdx].RequiredEvent += " / " + ppText
+			}
+		}
+		logger.Printf("[generateFromSceneOutline] ch%d: plot_coverage absent — distributed %d plot points to %d scenes",
+			req.ChapterNo, nPoints, nScenes)
 	}
 	logger.Printf("[ChapterService] generateFromSceneOutline: chapterNo=%d scenes=%d", req.ChapterNo, len(outlineData.Scenes))
 
@@ -1322,12 +1619,167 @@ func (s *ChapterService) generateFromSceneOutline(
 		"OutlinePlotPoints":      outlinePlotPointsText,
 		"CoreTheme":              novel.CoreTheme,
 		"ReaderExpectations":     prevReaderExpectations,
+		"FinalChapterContext":    finalChapterCtx, // 最终章：全部未关闭悬线收尾清单
 	})
 	if err != nil {
 		content, err := s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
 		return content, "", err
 	}
 
+	// ── 主路径：逐场景生成 ──
+	// 每个场景单独调用 AI，使用精简的 scene_write.j2 提示词（~55 行）。
+	// 相比一次性生成整章的 200+ 行提示词，此方式的优点：
+	//   1. 剧情点履约率更高：每次调用只需关注 1 个 RequiredEvent，AI 不会遗忘
+	//   2. 连贯性更强：每个场景获得前一场景的原文末尾作为"零距离接续"约束
+	if len(outlineData.Scenes) > 0 {
+		var sceneParts []string
+		var lastHook string
+		prevSceneEnding := "" // 前一场景原文末尾 300 字，供下一场景零距离接续
+
+		sceneOk := true
+		for scIdx, sc := range outlineData.Scenes {
+			isLastScene := scIdx == len(outlineData.Scenes)-1
+
+			// 按场景字数预算计算 MaxTokens（中文约 1.5 token/字 + 25% overhead）
+			sceneMaxTokens := int(float64(sc.WordBudget)*1.5*1.25) + 256
+			// 不超过章节级 MaxTokens 限制
+			if chMax := req.MaxTokens; chMax > 0 && sceneMaxTokens > chMax {
+				sceneMaxTokens = chMax
+			} else if nm := novel.MaxTokens; nm > 0 && req.MaxTokens == 0 && sceneMaxTokens > nm {
+				sceneMaxTokens = nm
+			}
+			sceneOverrides := StoryboardOverrides{
+				MaxTokens:      sceneMaxTokens,
+				Temperature:    req.Temperature,
+				TimeoutSeconds: 120, // 单场景 2 分钟上限
+			}
+			if sceneOverrides.Temperature == 0 {
+				sceneOverrides.Temperature = novel.Temperature
+			}
+			if ts := req.TimeoutSeconds; ts > 0 {
+				sceneOverrides.TimeoutSeconds = ts
+			} else if ts := novel.TimeoutSeconds; ts > 0 {
+				sceneOverrides.TimeoutSeconds = ts
+			}
+
+			minWordsScene := sc.WordBudget * 7 / 10
+			maxWordsScene := sc.WordBudget * 14 / 10
+			if minWordsScene < 200 {
+				minWordsScene = 200
+			}
+
+			// 场景 1：接上一章结尾；后续场景：接上一场景原文末尾
+			scPrevChapterEnding := ""
+			scPrevSceneEnding := ""
+			if scIdx == 0 {
+				scPrevChapterEnding = prevEnding
+			} else {
+				scPrevSceneEnding = prevSceneEnding
+			}
+
+			// 只传入本场景出场角色的描述（过滤无关角色减少 token 浪费，提高 AI 聚焦度）
+			sceneCharSet := make(map[string]bool, len(sc.Characters))
+			for _, cn := range sc.Characters {
+				sceneCharSet[strings.TrimSpace(cn)] = true
+			}
+			filteredVoices := make([]characterForPrompt, 0, len(sc.Characters)+1)
+			for _, cv := range characterVoices {
+				if sceneCharSet[strings.TrimSpace(cv.Name)] || cv.IsProtagonist {
+					filteredVoices = append(filteredVoices, cv)
+				}
+			}
+			if len(filteredVoices) == 0 {
+				filteredVoices = characterVoices // 过滤结果为空时兜底（名字不匹配）
+			}
+
+			scenePrompt, promptErr := renderPrompt("scene_write", map[string]interface{}{
+				"NovelTitle":            novel.Title,
+				"ChapterNo":             req.ChapterNo,
+				"ChapterTitle":          chapterTitle,
+				"SceneNo":               sc.SceneNo,
+				"TotalScenes":           len(outlineData.Scenes),
+				"RequiredEvent":         sc.RequiredEvent,
+				"ChapterOutlineSummary": meta.summary,                                            // 本章整体大纲（场景不得偏离）
+				"ChapterType":           computeChapterType(meta.tensionLevel, meta.hookType, meta.actNo), // 章节类型约束
+				"PreviousSceneEnding":   scPrevSceneEnding,
+				"PreviousChapterEnding": scPrevChapterEnding,
+				"Location":              sc.Location,
+				"TimeOfDay":             sc.TimeOfDay,
+				"Characters":            strings.Join(sc.Characters, "、"),
+				"POVCharacter":          sc.POVCharacter,
+				"Goal":                  sc.Goal,
+				"NarrativePurpose":      sc.NarrativePurpose,
+				"EmotionalShift":        sc.EmotionalShift,
+				"MicroPacing":           sc.MicroPacing,
+				"DialogueSubtext":       sc.DialogueSubtext,
+				"KeyBeats":              sc.KeyBeats,
+				"OpeningBeat":           sc.OpeningBeat,
+				"ClosingBeat":           sc.ClosingBeat,
+				"WordBudget":            sc.WordBudget,
+				"MinWords":              minWordsScene,
+				"MaxWords":              maxWordsScene,
+				"CharacterVoices":       filteredVoices, // 仅包含本场景出场角色
+				"IsLastScene":           isLastScene,
+				"HookType":              meta.hookType,
+			})
+			if promptErr != nil {
+				logger.Printf("[generateFromSceneOutline] ch%d scene%d: render scene_write failed: %v; falling back to one-shot",
+					req.ChapterNo, sc.SceneNo, promptErr)
+				sceneOk = false
+				break
+			}
+
+			var sceneRaw string
+			var sceneErr error
+			for attempt := 0; attempt < 2; attempt++ {
+				sceneCtx, sceneCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				sceneRaw, sceneErr = s.aiService.GenerateWithProviderCtx(sceneCtx, tenantID, novelID, "chapter", scenePrompt, req.ModelOverride, sceneOverrides)
+				sceneCancel()
+				if sceneErr == nil {
+					break
+				}
+				logger.Printf("[generateFromSceneOutline] ch%d scene%d attempt%d: %v", req.ChapterNo, sc.SceneNo, attempt+1, sceneErr)
+				if attempt < 1 {
+					time.Sleep(3 * time.Second)
+				}
+			}
+			if sceneErr != nil {
+				logger.Printf("[generateFromSceneOutline] ch%d scene%d: all attempts failed (%v); falling back to one-shot", req.ChapterNo, sc.SceneNo, sceneErr)
+				sceneOk = false
+				break
+			}
+
+			sceneRaw = cleanChapterOutput(sceneRaw)
+			if isLastScene {
+				sceneContent, sceneHook := extractChapterHook(sceneRaw)
+				sceneParts = append(sceneParts, sceneContent)
+				lastHook = sceneHook
+			} else {
+				sceneParts = append(sceneParts, sceneRaw)
+			}
+
+			// 更新"前一场景末尾"（供下一场景第一句零距离接续）
+			sceneRunes := []rune(sceneRaw)
+			n := 300
+			if len(sceneRunes) < n {
+				n = len(sceneRunes)
+			}
+			prevSceneEnding = string(sceneRunes[len(sceneRunes)-n:])
+			logger.Printf("[generateFromSceneOutline] ch%d scene%d done: len=%d", req.ChapterNo, sc.SceneNo, len(sceneRaw))
+		}
+
+		if sceneOk && len(sceneParts) == len(outlineData.Scenes) {
+			totalContent := strings.Join(sceneParts, "\n\n")
+			logger.Printf("[ChapterService] generateFromSceneOutline done (scene-by-scene): chapterNo=%d contentLen=%d scenes=%d",
+				req.ChapterNo, len(totalContent), len(sceneParts))
+			return totalContent, lastHook, nil
+		}
+		logger.Printf("[generateFromSceneOutline] ch%d: scene-by-scene incomplete (parts=%d/%d); using one-shot fallback",
+			req.ChapterNo, len(sceneParts), len(outlineData.Scenes))
+	}
+
+	// ── 降级兜底：一次性生成整章 ──
+	// 当逐场景路径失败（模板渲染错误/AI 调用失败）时使用。
 	var raw string
 	var genErr error
 	for attempt := 0; attempt < 3; attempt++ {
@@ -1347,7 +1799,7 @@ func (s *ChapterService) generateFromSceneOutline(
 	}
 	raw = cleanChapterOutput(raw)
 	content, hook := extractChapterHook(raw)
-	logger.Printf("[ChapterService] generateFromSceneOutline done: chapterNo=%d contentLen=%d", req.ChapterNo, len(content))
+	logger.Printf("[ChapterService] generateFromSceneOutline done (one-shot): chapterNo=%d contentLen=%d", req.ChapterNo, len(content))
 	return content, hook, nil
 }
 
@@ -1576,18 +2028,18 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 		}
 	}
 
-	// 4d. 生成章末精确状态快照（解决前后章节不连贯问题的核心机制）
-	// 提取各角色位置/状态/最后动作 + 悬而未决动作 + 下章接续建议。
-	// 供下一章 getPreviousChapterEnding 使用，使连续性从"情感钩子"升级为"精确叙事状态"。
-	if chapter.ChapterEndState == "" && chapter.Content != "" {
+	// 4d. 精修后重新提取章末精确状态快照（重要：精修可能改变章末内容，必须覆盖 Step 5c 的旧快照）
+	// Step 5c 在精修前同步提取，是为了让下一章"立即可用"。
+	// 这里精修已完成，用最终内容覆盖，确保快照基于已精修的章末文本，而非草稿。
+	if chapter.Content != "" {
 		if endState := s.generateChapterEndState(tenantID, chapter, novel); endState != "" {
 			if fresh, fetchErr := s.chapterRepo.GetByID(chapter.ID); fetchErr == nil {
 				fresh.ChapterEndState = endState
 				if updateErr := s.chapterRepo.Update(fresh); updateErr != nil {
-					logger.Printf("postProcessChapter: update chapter %d [chapter_end_state]: %v", chapter.ID, updateErr)
+					logger.Printf("postProcessChapter: update chapter %d [chapter_end_state_refined]: %v", chapter.ID, updateErr)
 				} else {
 					chapter = fresh
-					logger.Printf("[ChapterService] chapter_end_state generated for ch%d", chapter.ChapterNo)
+					logger.Printf("[ChapterService] chapter_end_state refreshed after refinement for ch%d", chapter.ChapterNo)
 				}
 			}
 		}
@@ -1935,13 +2387,25 @@ func (s *ChapterService) buildCharacterRegistry(novelID uint) string {
 	return sb.String()
 }
 
-func (s *ChapterService) getPreviousChapterEnding(novelID uint, chapterNo int) string {
+func (s *ChapterService) getPreviousChapterEnding(tenantID uint, novel *model.Novel, chapterNo int) string {
 	if chapterNo <= 1 {
 		return "（本章为开篇）"
 	}
+	novelID := novel.ID
 	prev, err := s.chapterRepo.GetByNovelAndChapterNo(novelID, chapterNo-1)
 	if err != nil || prev == nil {
 		return ""
+	}
+
+	// 若上一章已有内容但尚无 ChapterEndState（在本功能上线前生成的章节），立即同步生成并持久化。
+	// 这样旧章节只需生成一次，此后每次读取都有结构化锚点。
+	if prev.ChapterEndState == "" && prev.Content != "" && s.aiService != nil {
+		logger.Printf("[getPreviousChapterEnding] ch%d: ChapterEndState missing, generating on-demand", chapterNo-1)
+		if endState := s.generateChapterEndState(tenantID, prev, novel); endState != "" {
+			prev.ChapterEndState = endState
+			_ = s.chapterRepo.Update(prev)
+			logger.Printf("[getPreviousChapterEnding] ch%d: ChapterEndState generated and saved", chapterNo-1)
+		}
 	}
 
 	var sb strings.Builder
@@ -1960,6 +2424,12 @@ func (s *ChapterService) getPreviousChapterEnding(novelID uint, chapterNo int) s
 			OpeningHint   string `json:"opening_hint"`
 		}
 		if parseErr := json.Unmarshal([]byte(prev.ChapterEndState), &endState); parseErr == nil {
+			// 强制接续锚——openingHint 优先放在最顶部，作为本章第一段的硬约束
+			if endState.OpeningHint != "" {
+				sb.WriteString("━━ 本章第一段强制开头（不可跳过，不可替换为背景交代或心理独白）━━\n")
+				sb.WriteString("「" + endState.OpeningHint + "」\n")
+				sb.WriteString("（可调整措辞，但必须保持这个具体动作/感知，且必须是本章正文的第一句）\n\n")
+			}
 			sb.WriteString("【章末精确状态——本章必须从以下状态直接接续，禁止重复任何已发生情节】\n")
 			if endState.SceneEnd != "" {
 				sb.WriteString("场景：" + endState.SceneEnd + "\n")
@@ -1969,10 +2439,7 @@ func (s *ChapterService) getPreviousChapterEnding(novelID uint, chapterNo int) s
 					c.Name, c.Location, c.State, c.LastAction))
 			}
 			if endState.PendingAction != "" {
-				sb.WriteString("⚡ 未完成动作/冲突：" + endState.PendingAction + "\n")
-			}
-			if endState.OpeningHint != "" {
-				sb.WriteString("➤ 下章接续建议：" + endState.OpeningHint + "\n")
+				sb.WriteString("⚡ 未完成动作/冲突（下章第一场景必须立即接续此处）：" + endState.PendingAction + "\n")
 			}
 		} else {
 			// JSON 解析失败，直接用原始内容
@@ -1985,7 +2452,7 @@ func (s *ChapterService) getPreviousChapterEnding(novelID uint, chapterNo int) s
 		// 3. 降级：摘要
 		sb.WriteString("【上章摘要】" + prev.Summary)
 	} else {
-		// 4. 最终降级：末尾 300 字
+		// 4. 最终降级：末尾 300 字（此分支已含原文，下方不再重复追加）
 		content := []rune(prev.Content)
 		if len(content) > 300 {
 			content = content[len(content)-300:]
@@ -2009,6 +2476,23 @@ func (s *ChapterService) getPreviousChapterEnding(novelID uint, chapterNo int) s
 				}
 			}
 		}
+	}
+
+	// 总是追加上章正文末尾原文（400 字）作为直接接续锚。
+	// 结构化 JSON 状态描述的是"情节坐标"，但 AI 需要读到真实的散文句子才能在
+	// 语感和叙事节奏上无缝延续。此原文段落置于最后，确保 AI 最后读到的是可以
+	// 直接在后面续写的真实文字，而不是抽象的状态描述。
+	// 仅当 prev.Content 有内容时追加；最终降级分支已展示过 300 字时仍可追加更多以增强约束。
+	if prev.Content != "" {
+		runes := []rune(prev.Content)
+		n := 400
+		if len(runes) < n {
+			n = len(runes)
+		}
+		rawEnding := string(runes[len(runes)-n:])
+		sb.WriteString("\n\n【上章正文末尾原文 — 本章第一句必须在叙事上接在此处之后，不得重置场景】\n")
+		sb.WriteString("……" + rawEnding + "\n")
+		sb.WriteString("↑ 本章第一句必须直接延伸以上散文（人物动作/位置/情绪保持连续，不得另起炉灶）\n")
 	}
 
 	return sb.String()
@@ -2110,6 +2594,111 @@ func (s *ChapterService) buildTensionBudget(novelID uint, chapterNo, currentTens
 		return "✅ 缓冲章：本章张力适当降低，有利于节奏恢复。建议至少1个场景深化人物关系或揭示背景信息，为下一波高张力做情感铺垫。"
 	}
 	return ""
+}
+
+// buildFinalChapterContext 为最终章收集所有必须解决的悬线（伏笔、冲突、角色弧光）。
+// 普通章节只注入≤5条提示；最终章必须关闭全部悬线——不能遗漏。
+func (s *ChapterService) buildFinalChapterContext(novelID uint, novel *model.Novel) string {
+	var sb strings.Builder
+	sb.WriteString("━━ 最终章收尾清单 ━━\n")
+	sb.WriteString("以下所有悬线必须在本章内完整解决，不得留下任何开放性悬念。\n\n")
+	itemCount := 0
+
+	// 1. 所有未回收的伏笔（全量，不限条数）
+	if s.foreshadowRepo != nil {
+		foreshadows, err := s.foreshadowRepo.ListUnfulfilled(novelID, 0)
+		if err == nil && len(foreshadows) > 0 {
+			sb.WriteString("【必须回收的伏笔】\n")
+			for _, f := range foreshadows {
+				line := fmt.Sprintf("❌ 「%s」（第%d章种下）", f.Title, f.PlantedChapterNo)
+				if f.Description != "" {
+					line += "：" + f.Description
+				}
+				sb.WriteString(line + "\n")
+				itemCount++
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	// 2. 所有未解决的冲突/剧情点（全量）
+	if s.plotPointRepo != nil {
+		pps, err := s.plotPointRepo.ListByNovel(novelID, "", true)
+		if err == nil && len(pps) > 0 {
+			sb.WriteString("【必须解决的冲突/剧情点】\n")
+			for _, pp := range pps {
+				if pp.Type == "foreshadow" || pp.Type == "conflict" || pp.Type == "twist" {
+					sb.WriteString(fmt.Sprintf("❌ [%s] %s\n", pp.Type, pp.Description))
+					itemCount++
+				}
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	// 3. 主要角色弧光收尾（主角/反派的弧光必须完成）
+	if s.characterRepo != nil {
+		chars, err := s.characterRepo.ListByNovel(novelID)
+		if err == nil {
+			arcCount := 0
+			var arcBuf strings.Builder
+			for _, c := range chars {
+				role := strings.ToLower(c.Role)
+				if role != "protagonist" && role != "antagonist" && role != "主角" && role != "反派" && role != "男主" && role != "女主" {
+					continue
+				}
+				if c.ArcDesign == "" && c.CurrentArcStage == "" {
+					continue
+				}
+				arcBuf.WriteString(fmt.Sprintf("- **%s**（%s）", c.Name, c.Role))
+				if c.CurrentArcStage != "" {
+					arcBuf.WriteString(fmt.Sprintf("：当前阶段「%s」", c.CurrentArcStage))
+				}
+				// 尝试提取弧光终态
+				if c.ArcDesign != "" {
+					var arcStages []struct {
+						Stage string `json:"stage"`
+						Desc  string `json:"desc"`
+					}
+					if jsonErr := json.Unmarshal([]byte(c.ArcDesign), &arcStages); jsonErr == nil && len(arcStages) > 0 {
+						last := arcStages[len(arcStages)-1]
+						arcBuf.WriteString(fmt.Sprintf(" → 弧光终态应为【%s】：%s", last.Stage, last.Desc))
+					}
+				}
+				arcBuf.WriteString("\n")
+				arcCount++
+				itemCount++
+			}
+			if arcCount > 0 {
+				sb.WriteString("【角色弧光必须完成】\n")
+				sb.WriteString(arcBuf.String())
+				sb.WriteString("\n")
+			}
+		}
+	}
+
+	// 4. 全书核心矛盾（来自 novel.Summary 或 novel.CoreTheme）
+	if novel.CoreTheme != "" || novel.Description != "" {
+		sb.WriteString("【全书核心矛盾的最终答案】\n")
+		if novel.CoreTheme != "" {
+			sb.WriteString("主题：" + novel.CoreTheme + "\n")
+		}
+		if novel.Description != "" {
+			sb.WriteString("故事核心：" + truncateForPrompt(novel.Description, 200) + "\n")
+		}
+		sb.WriteString("→ 本章必须给出这一矛盾的最终答案（圆满/震撼/余韵均可，但不能回避）\n\n")
+	}
+
+	if itemCount == 0 && novel.CoreTheme == "" && novel.Description == "" {
+		// 什么显式悬线都没有，给出通用收尾指导
+		return "本章为最终章，必须完整收束全部故事线：核心矛盾解决，主角命运明确，情感落地，不留开放性悬念。\n"
+	}
+
+	sb.WriteString("━━ 收尾规则 ━━\n")
+	sb.WriteString("- 上述每条 ❌ 标记的悬线必须在本章转变为 ✅（明确解决或揭示）\n")
+	sb.WriteString("- 不允许用「也许」「或许」「留待将来」等模糊语言回避解决\n")
+	sb.WriteString("- 每条悬线的解决必须通过具体场景/对话/事件展现，不能只用叙述性一笔带过\n")
+	return sb.String()
 }
 
 // generateReaderExpectations calls AI to extract what readers most want to know after this chapter.

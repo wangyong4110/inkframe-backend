@@ -49,7 +49,15 @@ func (s *ForeshadowCRUDService) AIExtractFromNovel(tenantID, novelID uint) ([]*m
 
 	summariesText := buildChapterSummariesText(chapters, 20, 8000)
 	if summariesText == "" {
-		return nil, fmt.Errorf("no chapter content available for extraction")
+		// 章节尚无摘要/内容/大纲时，降级使用小说简介或风格描述作为上下文
+		fallback := novel.Description
+		if fallback == "" {
+			fallback = novel.StylePrompt
+		}
+		if fallback == "" {
+			return nil, fmt.Errorf("no chapter content available for extraction")
+		}
+		summariesText = "【小说简介/大纲】\n" + truncateForPrompt(fallback, 3000)
 	}
 
 	chapterNoToID := make(map[int]uint, len(chapters))
