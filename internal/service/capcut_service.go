@@ -81,8 +81,18 @@ type ccKeyframeGroup struct {
 	PropertyType string       `json:"property_type"`
 }
 
+// ccKeyframes 关键帧集合。
+// CapCut 会访问每一个子数组；若字段缺失或为 null，CapCut 迭代时崩溃 → 草稿点击无响应。
+// 所有子数组必须序列化为 []（非 null）。
 type ccKeyframes struct {
-	Videos []ccKeyframeGroup `json:"videos"`
+	Adjusts     []interface{}    `json:"adjusts"`
+	Audios      []interface{}    `json:"audios"`
+	ColorWheels []interface{}    `json:"color_wheels"`
+	Filters     []interface{}    `json:"filters"`
+	Handwrites  []interface{}    `json:"handwrites"`
+	Stickers    []interface{}    `json:"stickers"`
+	Texts       []interface{}    `json:"texts"`
+	Videos      []ccKeyframeGroup `json:"videos"`
 }
 
 type ccClip struct {
@@ -101,8 +111,8 @@ type ccTimeRange struct {
 type ccSegment struct {
 	Clip              ccClip      `json:"clip"`
 	ID                string      `json:"id"`
-	KeyframeRefs      []string    `json:"keyframe_refs,omitempty"`
-	ExtraMaterialRefs []string    `json:"extra_material_refs,omitempty"`
+	KeyframeRefs      []string    `json:"keyframe_refs"`       // 不用 omitempty：nil 时必须输出 [] 而非 null
+	ExtraMaterialRefs []string    `json:"extra_material_refs"` // 同上，CapCut 迭代 null 会崩溃
 	MaterialID        string      `json:"material_id"`
 	Reverse           bool        `json:"reverse"`
 	Speed             float64     `json:"speed"`
@@ -111,6 +121,47 @@ type ccSegment struct {
 	Type              string      `json:"type"`
 	Visible           bool        `json:"visible"`
 	Volume            float64     `json:"volume"`
+}
+
+// MarshalJSON 确保 KeyframeRefs / ExtraMaterialRefs 始终序列化为 JSON 数组（不为 null）。
+// CapCut 解析草稿时会迭代这两个字段；null 值导致崩溃，表现为"点击草稿无响应"。
+func (s ccSegment) MarshalJSON() ([]byte, error) {
+	kfRefs := s.KeyframeRefs
+	if kfRefs == nil {
+		kfRefs = []string{}
+	}
+	extRefs := s.ExtraMaterialRefs
+	if extRefs == nil {
+		extRefs = []string{}
+	}
+	type seg struct {
+		Clip              ccClip      `json:"clip"`
+		ID                string      `json:"id"`
+		KeyframeRefs      []string    `json:"keyframe_refs"`
+		ExtraMaterialRefs []string    `json:"extra_material_refs"`
+		MaterialID        string      `json:"material_id"`
+		Reverse           bool        `json:"reverse"`
+		Speed             float64     `json:"speed"`
+		SourceTimerange   ccTimeRange `json:"source_timerange"`
+		TargetTimerange   ccTimeRange `json:"target_timerange"`
+		Type              string      `json:"type"`
+		Visible           bool        `json:"visible"`
+		Volume            float64     `json:"volume"`
+	}
+	return json.Marshal(seg{
+		Clip:              s.Clip,
+		ID:                s.ID,
+		KeyframeRefs:      kfRefs,
+		ExtraMaterialRefs: extRefs,
+		MaterialID:        s.MaterialID,
+		Reverse:           s.Reverse,
+		Speed:             s.Speed,
+		SourceTimerange:   s.SourceTimerange,
+		TargetTimerange:   s.TargetTimerange,
+		Type:              s.Type,
+		Visible:           s.Visible,
+		Volume:            s.Volume,
+	})
 }
 
 // ccTransitionMaterial 转场特效素材
@@ -560,20 +611,34 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		vidMatID := uuid.New().String()
 		vidFilename := fmt.Sprintf("%03d%s", shot.ShotNo, ext) // 数字序号命名，便于剪辑师识别
 
-		// 剪映支持 HTTP URL 作为素材 path（在线资源，联网时直接加载）。
-		// HTTP URL 时直接使用 CDN 地址，无需下载嵌入 ZIP，减小包体且无需本地绝对路径。
-		// 非 HTTP 路径（本地文件）才下载并嵌入 ZIP，使用相对文件名。
+		// 根因修复：CapCut 的 path 字段必须是本地文件路径，不支持 HTTP URL。
+		// 若将 CDN URL 写入 path，CapCut 会把它当本地路径查找，文件不存在导致素材全空。
+		// 修复：始终下载并嵌入媒体文件到 ZIP；path 只写文件名，CapCut 从草稿目录自动找到该文件。
+		// 下载失败（超时/超限/鉴权）时才回退使用 CDN URL——此时用户需在 CapCut 内手动重连素材。
 		vidPath := vidFilename
-		if isHTTPURL(mediaURL) {
-			vidPath = mediaURL
-		} else if mediaURL != "" {
-			if data, err := downloadMediaFile(mediaURL); err == nil {
-				if totalLoadedBytes+int64(len(data)) > maxExportMediaBytes {
-					logger.Printf("[ExportCapCutDraft] P2-4: total media exceeds 2GiB, skipping embed for shot %d", shot.ShotNo)
+		if mediaURL != "" {
+			var mediaData []byte
+			var mediaErr error
+			if isHTTPURL(mediaURL) {
+				mediaData, mediaErr = downloadMediaFile(mediaURL)
+			} else {
+				mediaData, mediaErr = readLocalOrRemoteFile(mediaURL)
+			}
+			if mediaErr == nil && len(mediaData) > 0 {
+				if totalLoadedBytes+int64(len(mediaData)) > maxExportMediaBytes {
+					logger.Printf("[ExportCapCutDraft] total media exceeds 2GiB, skipping embed for shot %d; path falls back to URL", shot.ShotNo)
+					if isHTTPURL(mediaURL) {
+						vidPath = mediaURL // 超限时最后手段
+					}
 				} else {
-					totalLoadedBytes += int64(len(data))
-					mediaFiles = append(mediaFiles, mediaFile{filename: vidFilename, data: data})
+					totalLoadedBytes += int64(len(mediaData))
+					mediaFiles = append(mediaFiles, mediaFile{filename: vidFilename, data: mediaData})
+					// vidPath 保持 vidFilename：CapCut 从草稿目录按文件名找到此文件
 				}
+			} else if isHTTPURL(mediaURL) {
+				// 下载失败（网络/鉴权/文件过大）→ 降级用 CDN URL，提示用户手动重连
+				vidPath = mediaURL
+				logger.Printf("[ExportCapCutDraft] media download failed for shot %d (%v), using CDN URL as path fallback", shot.ShotNo, mediaErr)
 			}
 		}
 
@@ -1025,13 +1090,15 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	if textMaterials == nil {
 		textMaterials = []ccTextMaterial{}
 	}
-	// Bug-B：transitionMaterials nil → null，CapCut 部分版本解析失败；应为空数组
 	if transitionMaterials == nil {
 		transitionMaterials = []ccTransitionMaterial{}
 	}
-	// Bug-C：videoMaterials nil → null（空分镜时）；防御性置空数组
 	if videoMaterials == nil {
 		videoMaterials = []ccVideoMaterial{}
+	}
+	// videoSegments nil → "segments":null → CapCut 迭代崩溃（与 keyframe_refs 同理）
+	if videoSegments == nil {
+		videoSegments = []ccSegment{}
 	}
 	content := ccDraftContent{
 		CanvasConfig:         ccCanvasConfig{Height: height, Ratio: aspectRatioFloat(ratio), Width: width}, // P0-2: float64
@@ -1039,7 +1106,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		Duration:             totalDuration,
 		FPS:                  24.0,
 		ID:                   draftID,
-		Keyframes:            ccKeyframes{Videos: allKFGroups},
+		Keyframes:            ccKeyframes{Adjusts: []interface{}{}, Audios: []interface{}{}, ColorWheels: []interface{}{}, Filters: []interface{}{}, Handwrites: []interface{}{}, Stickers: []interface{}{}, Texts: []interface{}{}, Videos: allKFGroups},
 		LastModifiedPlatform: "mac",
 		Materials: ccMaterials{
 			AudioFades:         []interface{}{}, // P1-4
@@ -1275,18 +1342,30 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 
 		vidMatID := uuid.New().String()
 		vidFilename := fmt.Sprintf("%03d.jpg", shot.ShotNo) // 数字序号命名
+		// 根因修复（同 ExportCapCutDraft）：始终下载并嵌入图片；path 只写文件名，不用 CDN URL。
 		vidPath := vidFilename
-		if isHTTPURL(mediaURL) {
-			vidPath = mediaURL
-		} else if mediaURL != "" {
-			if data, err := downloadMediaFile(mediaURL); err == nil {
-				// P1-2: 图片下载纳入 2GiB 总大小保护，与 ExportCapCutDraft 保持一致
-				if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
-					totalLoadedBytes += int64(len(data))
-					mediaFiles = append(mediaFiles, mediaFile{filename: vidFilename, data: data})
+		if mediaURL != "" {
+			var mediaData []byte
+			var mediaErr error
+			if isHTTPURL(mediaURL) {
+				mediaData, mediaErr = downloadMediaFile(mediaURL)
+			} else {
+				mediaData, mediaErr = readLocalOrRemoteFile(mediaURL)
+			}
+			if mediaErr == nil && len(mediaData) > 0 {
+				if totalLoadedBytes+int64(len(mediaData)) <= maxExportMediaBytes {
+					totalLoadedBytes += int64(len(mediaData))
+					mediaFiles = append(mediaFiles, mediaFile{filename: vidFilename, data: mediaData})
+					// vidPath 保持 vidFilename；CapCut 从草稿目录找到此文件
 				} else {
-					logger.Printf("[ExportBRollDraft] P1-2: total media exceeds 2GiB, skipping image embed shot %d", shot.ShotNo)
+					logger.Printf("[ExportBRollDraft] total media exceeds 2GiB, skipping image embed shot %d", shot.ShotNo)
+					if isHTTPURL(mediaURL) {
+						vidPath = mediaURL // 超限时最后手段
+					}
 				}
+			} else if isHTTPURL(mediaURL) {
+				vidPath = mediaURL // 下载失败降级
+				logger.Printf("[ExportBRollDraft] media download failed for shot %d (%v), using CDN URL as path fallback", shot.ShotNo, mediaErr)
 			}
 		}
 
@@ -1568,6 +1647,9 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 	if videoMaterials == nil {
 		videoMaterials = []ccVideoMaterial{}
 	}
+	if videoSegments == nil {
+		videoSegments = []ccSegment{}
+	}
 	// P3-3: 合并两个文本素材列表用于 Materials.Texts
 	allTextMaterials := append(subtitleMaterials, annMaterials...)
 	if allTextMaterials == nil {
@@ -1580,7 +1662,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		Duration:             totalDuration,
 		FPS:                  24.0,
 		ID:                   draftID,
-		Keyframes:            ccKeyframes{Videos: []ccKeyframeGroup{}},
+		Keyframes:            ccKeyframes{Adjusts: []interface{}{}, Audios: []interface{}{}, ColorWheels: []interface{}{}, Filters: []interface{}{}, Handwrites: []interface{}{}, Stickers: []interface{}{}, Texts: []interface{}{}, Videos: []ccKeyframeGroup{}},
 		LastModifiedPlatform: "mac",
 		Materials: ccMaterials{
 			AudioFades:         []interface{}{}, // P1-4
@@ -1755,8 +1837,12 @@ CapCut International (Windows)
 3. 重新启动剪映，草稿将出现在草稿列表
 
 【素材说明】
-- 图片/视频/音效使用在线 CDN 链接，打开草稿时需保持网络连接
-- 如提示"素材离线"，请检查网络后重新打开草稿
+- 图片/视频/音效已打包到 ZIP 内（与草稿 JSON 文件放在同一目录）
+- CapCut 打开草稿时会从草稿目录自动查找同名素材文件，无需联网
+- 若提示"素材离线"或"无法找到文件"：
+  确认已将整个文件夹（含图片/音频）完整移入草稿目录后重启 CapCut
+- 若部分素材显示为红色占位（下载超时/超出 2GiB 限制）：
+  在 CapCut 中右键该片段 → "重新链接素材" → 选择 ZIP 解压后的对应文件
 `, projectName, projectName, projectName, projectName)
 }
 
