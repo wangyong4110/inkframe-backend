@@ -1758,10 +1758,11 @@ func audioExtension(path string) string {
 	return ".mp3"
 }
 
-// downloadMediaFile 从 URL 下载文件，超时 30s
+// downloadMediaFile 从 URL 下载文件，超时 2min，单文件最大 200MB。
+// P2-1: 加 io.LimitReader 防止异常 CDN 大文件耗尽内存。
 func downloadMediaFile(url string) ([]byte, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(url)
+	client := &http.Client{Timeout: 2 * time.Minute}
+	resp, err := client.Get(url) //nolint:gosec
 	if err != nil {
 		return nil, err
 	}
@@ -1769,7 +1770,15 @@ func downloadMediaFile(url string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	const maxBytes = 200 << 20 // 200 MB per file
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("media file too large (>200MB)")
+	}
+	return data, nil
 }
 
 // parseAudioDurationMicros 解析音频文件的实际时长（微秒）。
@@ -1806,6 +1815,10 @@ func wavDurationMicros(data []byte) int64 {
 	for i+8 <= len(data) {
 		chunkID := string(data[i : i+4])
 		chunkSize := int(readU32LE(data, i+4))
+		// P0-3: 防止损坏的 WAV chunkSize 导致下一轮越界
+		if chunkSize < 0 || i+8+chunkSize > len(data) {
+			break
+		}
 		if chunkID == "fmt " && chunkSize >= 16 {
 			// byteRate = sampleRate × numChannels × bitsPerSample/8
 			sampleRate := readU32LE(data, i+8+4)

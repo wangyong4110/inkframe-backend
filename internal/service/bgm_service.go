@@ -198,11 +198,28 @@ func (s *BGMService) MixBGM(videoPath, bgmSource, outputPath string) error {
 		defer os.Remove(bgmLocalPath)
 	}
 
-	// EBU R128 响度标准化混音：
-	// BGM: EQ 去除浑浊低中频(250Hz -2dB) + 压缩刺耳高中频(4kHz -1dB)，归一化至 -23 LUFS（广播 BGM 标准）
-	// 人声: 高通 80Hz（去除低频噪声），归一化至 -16 LUFS（对话目标）
-	// 混音权重：1.0 人声 : 0.3 BGM
-	filterComplex := "[1:a]volume=0.3,equalizer=f=250:t=o:w=2:g=-2,equalizer=f=4000:t=o:w=2:g=-1[bgm_eq];[bgm_eq]loudnorm=I=-23:LRA=7:TP=-2[bgm];[0:a]highpass=f=80,loudnorm=I=-16:LRA=11:TP=-1.5[voice];[voice][bgm]amix=inputs=2:duration=first:weights=1 0.3[out]"
+	// P0-1 + P1-4: 修正 BGM 混音参数
+	// - P0-1: 将 volume=0.3 施加在 BGM 输入上（语义正确），amix 使用 normalize=0（不再除以权重之和）
+	//   旧实现 weights=1 0.3 会将人声压到 77%，与"BGM 30%、人声 100%"的预期相反
+	// - 分别 loudnorm 两路再混合会导致最终 LUFS 不确定；改为只对 BGM 做基础 EQ，不做 loudnorm
+	// - P1-4: 探测视频时长，为 BGM 添加淡入（0.5s）和淡出（1s）以消除突兀感
+	videoDur := probeClipDuration(context.Background(), videoPath)
+	fadeIn := "afade=t=in:st=0:d=0.5"
+	fadeOut := "" // 时长未知时不做淡出
+	if videoDur > 2 {
+		fadeOutSt := videoDur - 1.0
+		if fadeOutSt < 0.5 {
+			fadeOutSt = 0.5
+		}
+		fadeOut = fmt.Sprintf(",afade=t=out:st=%.2f:d=1", fadeOutSt)
+	}
+	// BGM：降至 30% + EQ 去浑浊 + 淡入淡出
+	// 人声：80Hz 高通去低频噪声（不做 loudnorm，保留原始电平）
+	// amix normalize=0：不自动归一化，保留我们的显式音量控制
+	filterComplex := fmt.Sprintf(
+		"[1:a]volume=0.3,equalizer=f=250:t=o:w=2:g=-2,equalizer=f=4000:t=o:w=2:g=-1,%s%s[bgm];[0:a]highpass=f=80[voice];[voice][bgm]amix=inputs=2:duration=first:normalize=0[out]",
+		fadeIn, fadeOut,
+	)
 	if out, err := runFFmpegCtx(context.Background(), "-y",
 		"-i", videoPath,
 		"-stream_loop", "-1",
@@ -266,9 +283,10 @@ func (s *BGMService) AnalyzeBGMForVideo(
 		if len([]rune(desc)) > 80 {
 			desc = string([]rune(desc)[:80]) + "…"
 		}
+		// P1-7: 按 rune 截断，防止截断 UTF-8 序列中间（中文每字 3 字节）
 		narration := sh.Narration
-		if len(narration) > 60 {
-			narration = narration[:60] + "…"
+		if nr := []rune(narration); len(nr) > 60 {
+			narration = string(nr[:60]) + "…"
 		}
 		briefs = append(briefs, bgmShotBrief{
 			ShotID:        sh.ID,

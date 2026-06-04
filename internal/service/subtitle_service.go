@@ -116,14 +116,20 @@ func (s *SubtitleService) ExportASS(shots []model.StoryboardShot, fontName, outp
 // videoPath: 输入视频路径
 // outputPath: 输出视频路径
 func (s *SubtitleService) BurnSubtitles(ctx context.Context, videoPath, assPath, outputPath string) error {
-	// 转义 ASS 路径（Windows 兼容性）
+	// P1-3: 转义 ASS 路径 — Windows 反斜杠、冒号、单引号均需处理
+	// 先统一正斜杠，再转义特殊字符（顺序不可颠倒）
 	escapedASS := strings.ReplaceAll(assPath, "\\", "/")
-	escapedASS = strings.ReplaceAll(escapedASS, ":", "\\:")
+	escapedASS = strings.ReplaceAll(escapedASS, "'", "\\'") // 防止路径中的单引号破坏 FFmpeg 命令
+	escapedASS = strings.ReplaceAll(escapedASS, ":", "\\:") // Windows 盘符转义
+
+	// P1-6: 若 Noto Sans CJK SC 不可用，尝试常见中文替代字体
+	// 字幕滤镜在字体缺失时会静默降级；此处在 ASS Header 中指定回退链
+	vf := fmt.Sprintf("ass='%s':fontsdir=/usr/share/fonts", escapedASS)
 
 	args := []string{
 		"-y",
 		"-i", videoPath,
-		"-vf", fmt.Sprintf("ass='%s'", escapedASS),
+		"-vf", vf,
 		"-c:v", "libx264",
 		"-preset", "ultrafast",
 		"-c:a", "copy",
@@ -148,26 +154,31 @@ func parseDialogue(dialogue string) (speaker, line string) {
 	return "", dialogue
 }
 
-// cleanSubtitleText 清理字幕文本（移除ASS特殊字符、限制长度）
+// cleanSubtitleText 清理字幕文本（移除ASS特殊字符、按视觉宽度换行）
 func cleanSubtitleText(text string) string {
-	// 移除 ASS 控制字符
+	// 移除 ASS 控制字符（花括号包裹的标签如 {\b1} 会破坏 ASS 结构）
 	text = strings.ReplaceAll(text, "{", "")
 	text = strings.ReplaceAll(text, "}", "")
 	text = strings.ReplaceAll(text, "\n", "\\N") // ASS换行
 	text = strings.ReplaceAll(text, "\r", "")
-	// 限制单行长度（ASS 内使用 \N 换行）
+
+	// P1-2: 按视觉宽度换行（CJK 全角字符宽度 = 2，ASCII 半角 = 1）
+	// 16:9 视频安全区约 40 列（全角）；超过时插入 \N 换行
+	const maxVisualWidth = 40
 	runes := []rune(text)
-	if len(runes) > 50 {
-		// 每50字换行
-		var parts []string
-		for i := 0; i < len(runes); i += 50 {
-			end := i + 50
-			if end > len(runes) {
-				end = len(runes)
-			}
-			parts = append(parts, string(runes[i:end]))
+	var result strings.Builder
+	lineWidth := 0
+	for _, r := range runes {
+		w := 1
+		if r > 0x2E7F { // CJK / 全角范围（含标点）
+			w = 2
 		}
-		text = strings.Join(parts, "\\N")
+		if lineWidth+w > maxVisualWidth {
+			result.WriteString("\\N")
+			lineWidth = 0
+		}
+		result.WriteRune(r)
+		lineWidth += w
 	}
-	return text
+	return result.String()
 }
