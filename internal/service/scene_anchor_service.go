@@ -240,7 +240,7 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 		existingNames[a.Name] = true
 	}
 
-	// 获取提示词语言配置（场景锚点模板已为英文，此处备用）
+	// 获取提示词语言配置
 	promptLanguage := "zh"
 	if s.novelRepo != nil {
 		if novel, nErr := s.novelRepo.GetByID(novelID); nErr == nil && novel.PromptLanguage != "" {

@@ -66,7 +66,8 @@
 - 收场/过渡：{{ scene.ClosingBeat }}
 - 情绪变化：{{ scene.EmotionalShift }}
 - 张力值：{{ scene.Tension }}/10{% if scene.MicroPacing %}
-- ⚡ 节奏风格：{{ scene.MicroPacing }}（密集短句=动作碎片化/中等=标准叙事/舒缓=感官细节丰富）{% endif %}{% if scene.SceneWeight %}
+- ⚡ 节奏风格：{{ scene.MicroPacing }}（密集短句=动作碎片化/中等=标准叙事/舒缓=感官细节丰富）{% endif %}{% if scene.TensionDirection %}
+- ⚡ 张力方向：{{ scene.TensionDirection }}（rising=持续升压 / peak=张力顶点 / falling=释放缓冲 / reversal=骤然逆转）{% if scene.TensionDirection == "reversal" %}→ 读者预期的结果必须在正文中被打破，逆转通过具体行动/信息/选择实现{% elif scene.TensionDirection == "peak" %}→ 情绪强度和行动后果达到本章最高点，节奏密集，禁止缓冲性段落{% endif %}{% endif %}{% if scene.SceneWeight %}
 - 📏 场景权重：{{ scene.SceneWeight }}{% if scene.WordBudget %} → 建议字数：{{ scene.WordBudget }}字{% endif %}{% endif %}{% if scene.DialogueMode and scene.DialogueMode != "无" %}
 - 🎯 对话模式：{{ scene.DialogueMode }}（信息战=双方抢占信息/说服战=一方改变另一方/遮掩战=隐藏关键事实/情感博弈=表平静内激烈）{% endif %}{% if scene.DialogueSubtext %}
 - 🎭 对话潜台词（角色不会直说的意图）：{{ scene.DialogueSubtext }}{% endif %}{% if scene.ThemeEcho %}
@@ -101,8 +102,10 @@
 - ⚠️ 当前状态（必须保持连贯）：{{ char.CurrentState }}{% endif %}
 {% if char.InnerConflict %}- 🔴 内在矛盾（驱动行为的深层心理，用于写出非表面化的反应）：{{ char.InnerConflict }}{% endif %}
 {% if char.CoreDesire %}- 🎯 核心渴望（内心深处真正想要的，可与表面目标相冲突）：{{ char.CoreDesire }}{% endif %}
+{% if char.VoiceProfile %}- 🎙️ 声音档案（严格遵守，确保说话方式可辨识）：{{ char.VoiceProfile }}{% endif %}
 {% else %}**{{ char.Name }}**（{{ char.Role }}）：{{ char.Description }}{% if char.CurrentState %}
-  当前状态：{{ char.CurrentState }}{% endif %}
+  当前状态：{{ char.CurrentState }}{% endif %}{% if char.VoiceProfile %}
+  声音档案：{{ char.VoiceProfile }}{% endif %}
 {% endif %}
 {% endfor %}
 

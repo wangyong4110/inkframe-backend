@@ -172,7 +172,7 @@ func (r *NovelRepository) Update(novel *model.Novel) error {
 	}
 	if novel.VideoConfig != nil {
 		novel.VideoConfig.NovelID = novel.ID
-		if err := r.db.Save(novel.VideoConfig).Error; err != nil {
+		if err := r.db.Select("*").Save(novel.VideoConfig).Error; err != nil {
 			logger.Printf("[NovelRepository] Save VideoConfig: %v", err)
 		}
 	}

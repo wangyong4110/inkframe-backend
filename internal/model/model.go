@@ -144,8 +144,8 @@ type Novel struct {
 	Outline     string `json:"outline,omitempty" gorm:"type:text"` // 大纲 JSON（章节列表）
 
 	// 风格配置
-	ImageStyle     string `json:"image_style" gorm:"size:50"`      // 视觉/图片风格，如 anime/realistic/ink_painting
-	PromptLanguage string `json:"prompt_language" gorm:"size:10;default:zh"` // AI 提示词语言：zh（中文，默认）/ en（英文）
+	ImageStyle     string `json:"image_style" gorm:"size:50"`                    // 视觉/图片风格，如 anime/realistic/ink_painting
+	PromptLanguage string `json:"prompt_language" gorm:"size:10;default:zh"` // 提示词语言：zh（中文，默认）/ en（英文）
 
 	// 自动审查配置：章节生成后自动执行 N 轮 AI 审查+优化
 	AutoReviewRounds   int     `json:"auto_review_rounds" gorm:"default:0"`    // 0=关闭，1-3=开启 N 轮

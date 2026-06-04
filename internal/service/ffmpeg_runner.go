@@ -13,6 +13,25 @@ import (
 	"github.com/tetratelabs/wazero"
 )
 
+// runFFprobeCtx runs the embedded FFprobe WASM binary with the given args.
+// Returns combined stdout+stderr output. A non-zero exit code is returned as an error.
+func runFFprobeCtx(ctx context.Context, args ...string) ([]byte, error) {
+	var out bytes.Buffer
+	rc, err := ffmpreg.Ffprobe(ctx, wasm.Args{
+		Args:   args,
+		Stdout: &out,
+		Stderr: &out,
+		Config: rootFSConfig,
+	})
+	if err != nil {
+		return out.Bytes(), err
+	}
+	if rc != 0 {
+		return out.Bytes(), fmt.Errorf("ffprobe exited with code %d\noutput: %s", rc, out.String())
+	}
+	return out.Bytes(), nil
+}
+
 // ffmpegLeakedGoroutines 累计因超时被放弃的 FFmpeg WASM goroutine 数量。
 // wazero 无法中断正在执行的 WASM 模块，超时后 goroutine 仍在后台运行。
 var ffmpegLeakedGoroutines atomic.Int64

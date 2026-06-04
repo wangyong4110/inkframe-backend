@@ -217,6 +217,27 @@ func (r *ChapterRepository) UpdateIsPublished(id, novelID uint, isPublished bool
 	return nil
 }
 
+// UpdateContinuityBlocked 原子性更新连贯性阻塞标记（仅改单列，避免与并发 Update 产生写入竞争）。
+// 与 Update(chapter) 不同，本方法不触及其他字段，适合在独立 goroutine 中安全调用。
+func (r *ChapterRepository) UpdateContinuityBlocked(id, novelID uint, blocked bool) error {
+	if err := r.db.Model(&model.Chapter{}).Where("id = ? AND novel_id = ?", id, novelID).
+		Update("continuity_blocked", blocked).Error; err != nil {
+		return err
+	}
+	r.invalidateListCache(novelID)
+	return nil
+}
+
+// UpdateSummary 只更新摘要字段，不触碰其他字段（防止并发写入覆盖 continuity_blocked 等字段）
+func (r *ChapterRepository) UpdateSummary(id, novelID uint, summary string) error {
+	if err := r.db.Model(&model.Chapter{}).Where("id = ? AND novel_id = ?", id, novelID).
+		Update("summary", summary).Error; err != nil {
+		return err
+	}
+	r.invalidateListCache(novelID)
+	return nil
+}
+
 // BatchUpdateIsPublished 批量更新小说下所有章节的发布状态
 func (r *ChapterRepository) BatchUpdateIsPublished(novelID uint, isPublished bool) (int64, error) {
 	updates := map[string]interface{}{"is_published": isPublished}

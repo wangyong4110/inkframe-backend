@@ -373,7 +373,8 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 
 	// 层次化叙事记忆服务
 	narrativeMemorySvc := service.NewNarrativeMemoryService(repos.NovelRepo, repos.ChapterRepo, repos.CharacterRepo, repos.ArcSummaryRepo, aiSvc).
-		WithSnapshotRepo(repos.SnapshotRepo)
+		WithSnapshotRepo(repos.SnapshotRepo).
+		WithOutlineVersionRepo(repos.NovelOutlineVersionRepo)
 
 	// 戏剧张力服务
 	hookChainSvc := service.NewHookChainService(repos.HookChainRepo)

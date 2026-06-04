@@ -1262,13 +1262,14 @@ func (s *ChapterService) generateSceneOutline(
 				"GlobalContext":         globalCtx,
 				"ChapterSummary":        chapterSummary,
 				"PlotPoints":            plotPointsText,
-				"MissingPlotPoints":     missingText.String(), // ← 新增
+				"MissingPlotPoints":     missingText.String(), // ← 缺失剧情点
 				"TensionLevel":          tensionLevel,
 				"ActNo":                 actNo,
 				"EmotionalTone":         emotionalTone,
 				"HookType":              hookType,
 				"ChapterType":           computeChapterType(tensionLevel, hookType, actNo),
 				"IsStandalone":          req.IsStandalone,
+				"FinalChapterContext":   finalChapterCtx, // ← 重试也需要最终章约束
 				"PreviousChapterEnding": prevEnding,
 				"Characters":            characters,
 				"CharacterStates":       formatCharacterStates(characters),
@@ -1279,7 +1280,7 @@ func (s *ChapterService) generateSceneOutline(
 				"StoryPatternRef":       storyPatternRef,
 				"ChapterBudget":         budgetText,
 				"CharacterRegistry":     characterRegistry,
-				"TimelineContext":        timelineContext,
+				"TimelineContext":       timelineContext,
 				"CoreTheme":             novel.CoreTheme,
 				"ReaderExpectations":    prevReaderExpectations,
 				"CharacterArcContext":   characterArcContext,
@@ -1313,7 +1314,7 @@ func (s *ChapterService) generateSceneOutline(
 }
 
 // findMissingPlotPoints checks which plot points from the plan are absent from the AI-generated
-// plot_coverage field. Uses fuzzy substring matching to handle minor paraphrasing.
+// plot_coverage field. Uses per-entry fuzzy matching to avoid false positives from similar prefixes.
 func findMissingPlotPoints(plotPoints []string, coverage []struct {
 	PlotPoint string `json:"plot_point"`
 	SceneNo   int    `json:"scene_no"`
@@ -1323,22 +1324,27 @@ func findMissingPlotPoints(plotPoints []string, coverage []struct {
 		// No coverage field at all — treat all as missing
 		return plotPoints
 	}
-	// Build a combined string of all covered plot points for matching
-	var coveredText strings.Builder
-	for _, c := range coverage {
-		coveredText.WriteString(c.PlotPoint + " ")
-	}
-	covered := coveredText.String()
 
 	var missing []string
 	for _, pp := range plotPoints {
-		// Use first 10 runes as a key phrase (robust to minor paraphrasing)
 		ppRunes := []rune(pp)
-		keyPhrase := string(ppRunes)
-		if len(ppRunes) > 10 {
-			keyPhrase = string(ppRunes[:10])
+		keyLen := 10
+		if len(ppRunes) < keyLen {
+			keyLen = len(ppRunes)
 		}
-		if !strings.Contains(covered, keyPhrase) {
+		keyPhrase := string(ppRunes[:keyLen])
+
+		// Per-entry matching: each coverage item is checked independently.
+		// Avoids false positives when two plot points share the same 10-char prefix
+		// (e.g. "主角与反派正面交锋" vs "主角与反派秘密交涉" would both match a blob containing either).
+		found := false
+		for _, c := range coverage {
+			if strings.Contains(c.PlotPoint, keyPhrase) || strings.Contains(c.KeyBeat, keyPhrase) {
+				found = true
+				break
+			}
+		}
+		if !found {
 			missing = append(missing, pp)
 		}
 	}
@@ -1427,8 +1433,9 @@ func (s *ChapterService) generateFromSceneOutline(
 			DialogueSubtext  string   `json:"dialogue_subtext"`
 			DialogueMode     string   `json:"dialogue_mode"`
 			MicroPacing      string   `json:"micro_pacing"`
-			SceneWeight      string   `json:"scene_weight"` // 核心场景/过渡场景/衔接场景
-			ThemeEcho        string   `json:"theme_echo"`
+			SceneWeight      string   `json:"scene_weight"`      // 核心场景/过渡场景/衔接场景
+			ThemeEcho        string   `json:"theme_echo"`        // 本场景如何呼应核心主题
+			TensionDirection string   `json:"tension_direction"` // rising/peak/falling/reversal
 			WordBudget       int      `json:"-"` // computed in Go, not from JSON
 			RequiredEvent    string   `json:"-"` // plot point that MUST happen in this scene (from plot_coverage cross-ref)
 			POVCharacter     string   `json:"pov_character"`
@@ -1530,34 +1537,37 @@ func (s *ChapterService) generateFromSceneOutline(
 			transCount++
 		}
 	}
-	// 核心场景占60%，过渡场景占30%，衔接场景占10%
+	// 按场景权重分配字数：核心6分/过渡3分/衔接1分，总份额加权保证 sum == wordCount
 	totalScenes := len(outlineData.Scenes)
 	linkCount := totalScenes - coreCount - transCount
 	if linkCount < 0 {
 		linkCount = 0
 	}
-	coreWords, transWords, linkWords := wordCount*6/10, wordCount*3/10, wordCount*1/10
-	if coreCount > 0 {
-		coreWords = coreWords / coreCount
+	// 计算总权重份额，用比例分配而非固定百分比（防止全核心场景时丢失字数）
+	totalWeight := coreCount*6 + transCount*3 + linkCount*1
+	if totalWeight == 0 {
+		totalWeight = totalScenes // fallback: 均分
 	}
-	if transCount > 0 {
-		transWords = transWords / transCount
+	perCoreWord := wordCount * 6 / totalWeight
+	perTransWord := wordCount * 3 / totalWeight
+	perLinkWord := wordCount * 1 / totalWeight
+	if perCoreWord < 200 {
+		perCoreWord = 200
 	}
-	if linkCount > 0 {
-		linkWords = linkWords / linkCount
+	if perTransWord < 150 {
+		perTransWord = 150
+	}
+	if perLinkWord < 100 {
+		perLinkWord = 100
 	}
 	for i := range outlineData.Scenes {
 		switch outlineData.Scenes[i].SceneWeight {
 		case "核心场景":
-			outlineData.Scenes[i].WordBudget = coreWords
+			outlineData.Scenes[i].WordBudget = perCoreWord
 		case "过渡场景":
-			outlineData.Scenes[i].WordBudget = transWords
+			outlineData.Scenes[i].WordBudget = perTransWord
 		default:
-			if linkCount > 0 {
-				outlineData.Scenes[i].WordBudget = linkWords
-			} else {
-				outlineData.Scenes[i].WordBudget = wordCount / totalScenes
-			}
+			outlineData.Scenes[i].WordBudget = perLinkWord
 		}
 	}
 
@@ -1595,38 +1605,9 @@ func (s *ChapterService) generateFromSceneOutline(
 	// 读者期待（来自上一章，供正文生成保证回应上章悬念）
 	prevReaderExpectations := s.buildPreviousReaderExpectations(novelID, req.ChapterNo)
 
-	chapterPrompt, err := renderPrompt("chapter_from_outline", map[string]interface{}{
-		"NovelTitle":             novel.Title,
-		"ChapterNo":              req.ChapterNo,
-		"ChapterTitle":           chapterTitle,
-		"WordCount":              wordCount,
-		"GlobalContext":          globalCtx,
-		"Scenes":                 outlineData.Scenes,
-		"HookSetup":              outlineData.HookSetup,
-		"PeakTension":            peakTension,
-		"Characters":             characterVoices,
-		"CharacterStates":        formatCharacterStates(characterVoices),
-		"ForeshadowHints":        foreshadowHints,
-		"PreviousChapterEnding":  prevEnding,
-		"UserPrompt":             req.Prompt,
-		"IsStandalone":           req.IsStandalone,
-		"RefStories":             refStories,
-		"WikiContext":            wikiContext,
-		"ChapterBudget":          budgetText,
-		"CharacterRegistry":      characterRegistry,
-		"TimelineContext":         timelineCtx,
-		"ChapterOutlineSummary":  meta.summary,
-		"OutlinePlotPoints":      outlinePlotPointsText,
-		"CoreTheme":              novel.CoreTheme,
-		"ReaderExpectations":     prevReaderExpectations,
-		"FinalChapterContext":    finalChapterCtx, // 最终章：全部未关闭悬线收尾清单
-	})
-	if err != nil {
-		content, err := s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
-		return content, "", err
-	}
-
 	// ── 主路径：逐场景生成 ──
+	// P2-1: chapterPrompt（chapter_from_outline.j2）仅在逐场景路径失败时才渲染（懒加载）。
+	// 主路径使用 scene_write.j2 逐场景调用，chapterPrompt 只作为 ≥1/3 场景失败时的降级兜底。
 	// 每个场景单独调用 AI，使用精简的 scene_write.j2 提示词（~55 行）。
 	// 相比一次性生成整章的 200+ 行提示词，此方式的优点：
 	//   1. 剧情点履约率更高：每次调用只需关注 1 个 RequiredEvent，AI 不会遗忘
@@ -1699,8 +1680,8 @@ func (s *ChapterService) generateFromSceneOutline(
 				"SceneNo":               sc.SceneNo,
 				"TotalScenes":           len(outlineData.Scenes),
 				"RequiredEvent":         sc.RequiredEvent,
-				"ChapterOutlineSummary": meta.summary,                                            // 本章整体大纲（场景不得偏离）
-				"ChapterType":           computeChapterType(meta.tensionLevel, meta.hookType, meta.actNo), // 章节类型约束
+				"ChapterOutlineSummary": meta.summary,
+				"ChapterType":           computeChapterType(meta.tensionLevel, meta.hookType, meta.actNo),
 				"PreviousSceneEnding":   scPrevSceneEnding,
 				"PreviousChapterEnding": scPrevChapterEnding,
 				"Location":              sc.Location,
@@ -1712,15 +1693,23 @@ func (s *ChapterService) generateFromSceneOutline(
 				"EmotionalShift":        sc.EmotionalShift,
 				"MicroPacing":           sc.MicroPacing,
 				"DialogueSubtext":       sc.DialogueSubtext,
+				"DialogueMode":          sc.DialogueMode,    // P1-1: 对话模式（之前被丢弃）
 				"KeyBeats":              sc.KeyBeats,
 				"OpeningBeat":           sc.OpeningBeat,
 				"ClosingBeat":           sc.ClosingBeat,
 				"WordBudget":            sc.WordBudget,
 				"MinWords":              minWordsScene,
 				"MaxWords":              maxWordsScene,
-				"CharacterVoices":       filteredVoices, // 仅包含本场景出场角色
+				"CharacterVoices":       filteredVoices,
 				"IsLastScene":           isLastScene,
+				"IsStandalone":          req.IsStandalone,   // P0-2: 最终章标记
 				"HookType":              meta.hookType,
+				// 场景大纲生成的重要字段
+				"TensionDirection":    sc.TensionDirection,  // rising/peak/falling/reversal
+				"SceneWeight":         sc.SceneWeight,       // 核心场景/过渡场景/衔接场景
+				"ThemeEcho":           sc.ThemeEcho,         // 本场景如何呼应核心主题
+				"CoreTheme":           novel.CoreTheme,      // 全书核心主题
+				"FinalChapterContext": finalChapterCtx,      // P0-2: 最终章未关闭悬线清单
 			})
 			if promptErr != nil {
 				logger.Printf("[generateFromSceneOutline] ch%d scene%d: render scene_write failed: %v; falling back to one-shot",
@@ -1731,11 +1720,21 @@ func (s *ChapterService) generateFromSceneOutline(
 
 			var sceneRaw string
 			var sceneErr error
+			// P1-3: currentOverrides 声明在循环外，确保温度提升在 attempt=1 时真正生效。
+			// 原实现的 retryOverrides 是块级局部变量，continue 后下一轮仍用原始 sceneOverrides。
+			currentOverrides := sceneOverrides
 			for attempt := 0; attempt < 2; attempt++ {
 				sceneCtx, sceneCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-				sceneRaw, sceneErr = s.aiService.GenerateWithProviderCtx(sceneCtx, tenantID, novelID, "chapter", scenePrompt, req.ModelOverride, sceneOverrides)
+				sceneRaw, sceneErr = s.aiService.GenerateWithProviderCtx(sceneCtx, tenantID, novelID, "chapter", scenePrompt, req.ModelOverride, currentOverrides)
 				sceneCancel()
 				if sceneErr == nil {
+					// 字数不足检测：生成成功但内容过短时，提高温度重试（最多1次）
+					if attempt == 0 && len([]rune(cleanChapterOutput(sceneRaw))) < minWordsScene {
+						logger.Printf("[generateFromSceneOutline] ch%d scene%d: content too short (%d < %d), retrying with higher temperature",
+							req.ChapterNo, sc.SceneNo, len([]rune(cleanChapterOutput(sceneRaw))), minWordsScene)
+						currentOverrides.Temperature = 0.85 // 直接修改循环级变量，下次迭代即生效
+						continue                            // attempt++ → attempt=1 再试一次
+					}
 					break
 				}
 				logger.Printf("[generateFromSceneOutline] ch%d scene%d attempt%d: %v", req.ChapterNo, sc.SceneNo, attempt+1, sceneErr)
@@ -1744,9 +1743,14 @@ func (s *ChapterService) generateFromSceneOutline(
 				}
 			}
 			if sceneErr != nil {
-				logger.Printf("[generateFromSceneOutline] ch%d scene%d: all attempts failed (%v); falling back to one-shot", req.ChapterNo, sc.SceneNo, sceneErr)
+				// 场景失败：不立即放弃整章。记录失败并用占位符继续，
+				// 保留已生成的场景，最终判断是否有足够内容。
+				logger.Printf("[generateFromSceneOutline] ch%d scene%d: all attempts failed (%v); using placeholder, continuing",
+					req.ChapterNo, sc.SceneNo, sceneErr)
+				sceneParts = append(sceneParts, "") // 空占位符，后续过滤
 				sceneOk = false
-				break
+				// prevSceneEnding 保持上一个成功场景的末尾，继续为下一场景提供接续锚
+				continue
 			}
 
 			sceneRaw = cleanChapterOutput(sceneRaw)
@@ -1760,7 +1764,7 @@ func (s *ChapterService) generateFromSceneOutline(
 
 			// 更新"前一场景末尾"（供下一场景第一句零距离接续）
 			sceneRunes := []rune(sceneRaw)
-			n := 300
+			n := 500 // P1-6: 300→500 字，复杂场景中段的关键状态变化不再被截断
 			if len(sceneRunes) < n {
 				n = len(sceneRunes)
 			}
@@ -1768,18 +1772,75 @@ func (s *ChapterService) generateFromSceneOutline(
 			logger.Printf("[generateFromSceneOutline] ch%d scene%d done: len=%d", req.ChapterNo, sc.SceneNo, len(sceneRaw))
 		}
 
-		if sceneOk && len(sceneParts) == len(outlineData.Scenes) {
-			totalContent := strings.Join(sceneParts, "\n\n")
-			logger.Printf("[ChapterService] generateFromSceneOutline done (scene-by-scene): chapterNo=%d contentLen=%d scenes=%d",
-				req.ChapterNo, len(totalContent), len(sceneParts))
+		// 统计成功场景数（非空）
+		successCount := 0
+		for _, p := range sceneParts {
+			if p != "" {
+				successCount++
+			}
+		}
+		// 成功场景 >= 2/3 时直接使用，过滤掉空占位符后拼接
+		minSuccessRatio := (len(outlineData.Scenes)*2 + 2) / 3 // ceil(2/3)
+		if successCount >= minSuccessRatio {
+			var nonEmpty []string
+			for _, p := range sceneParts {
+				if p != "" {
+					nonEmpty = append(nonEmpty, p)
+				}
+			}
+			totalContent := strings.Join(nonEmpty, "\n\n")
+			if successCount < len(outlineData.Scenes) {
+				logger.Printf("[generateFromSceneOutline] ch%d: partial success (%d/%d scenes), using available content (len=%d)",
+					req.ChapterNo, successCount, len(outlineData.Scenes), len(totalContent))
+			} else {
+				logger.Printf("[ChapterService] generateFromSceneOutline done (scene-by-scene): chapterNo=%d contentLen=%d scenes=%d",
+					req.ChapterNo, len(totalContent), len(sceneParts))
+			}
+			// P1-4: 最后场景失败时 lastHook 为空，尝试从合并内容提取钩子标记（零成本兜底）
+			if lastHook == "" {
+				_, lastHook = extractChapterHook(totalContent)
+			}
 			return totalContent, lastHook, nil
 		}
-		logger.Printf("[generateFromSceneOutline] ch%d: scene-by-scene incomplete (parts=%d/%d); using one-shot fallback",
-			req.ChapterNo, len(sceneParts), len(outlineData.Scenes))
+		if !sceneOk || successCount < minSuccessRatio {
+			logger.Printf("[generateFromSceneOutline] ch%d: scene-by-scene failed (success=%d/%d); using one-shot fallback",
+				req.ChapterNo, successCount, len(outlineData.Scenes))
+		}
 	}
 
 	// ── 降级兜底：一次性生成整章 ──
-	// 当逐场景路径失败（模板渲染错误/AI 调用失败）时使用。
+	// P2-1: 仅在逐场景路径失败时才渲染 chapter_from_outline.j2（懒加载，避免主路径浪费渲染）。
+	chapterPrompt, renderErr := renderPrompt("chapter_from_outline", map[string]interface{}{
+		"NovelTitle":            novel.Title,
+		"ChapterNo":             req.ChapterNo,
+		"ChapterTitle":          chapterTitle,
+		"WordCount":             wordCount,
+		"GlobalContext":         globalCtx,
+		"Scenes":                outlineData.Scenes,
+		"HookSetup":             outlineData.HookSetup,
+		"PeakTension":           peakTension,
+		"Characters":            characterVoices,
+		"CharacterStates":       formatCharacterStates(characterVoices),
+		"ForeshadowHints":       foreshadowHints,
+		"PreviousChapterEnding": prevEnding,
+		"UserPrompt":            req.Prompt,
+		"IsStandalone":          req.IsStandalone,
+		"RefStories":            refStories,
+		"WikiContext":           wikiContext,
+		"ChapterBudget":         budgetText,
+		"CharacterRegistry":     characterRegistry,
+		"TimelineContext":       timelineCtx,
+		"ChapterOutlineSummary": meta.summary,
+		"OutlinePlotPoints":     outlinePlotPointsText,
+		"CoreTheme":             novel.CoreTheme,
+		"ReaderExpectations":    prevReaderExpectations,
+		"FinalChapterContext":   finalChapterCtx,
+	})
+	if renderErr != nil {
+		logger.Printf("[generateFromSceneOutline] ch%d: one-shot render failed: %v; using simple fallback", req.ChapterNo, renderErr)
+		content, err := s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
+		return content, "", err
+	}
 	var raw string
 	var genErr error
 	for attempt := 0; attempt < 3; attempt++ {
@@ -1858,49 +1919,22 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 	} else {
 		logger.Printf("[ChapterService] postProcessChapter: fetch fresh novel %d failed (non-fatal, using caller copy): %v", chapter.NovelID, err)
 	}
-	// 1. 生成摘要（最重要：供后续章节的上下文使用）
-	// Retry up to 3 times with 1s/2s delays to ensure summary is available for subsequent chapters.
-	if s.narrativeSvc != nil && chapter.Summary == "" {
-		var summaryText string
-		for attempt := 0; attempt < 3; attempt++ {
-			if generated, err := s.narrativeSvc.GenerateChapterSummary(tenantID, chapter, novel.Title); err == nil {
-				summaryText = generated
-				break
-			} else if attempt < 2 {
-				logger.Printf("postProcess: summary ch%d attempt %d failed: %v, retrying", chapter.ChapterNo, attempt+1, err)
-				time.Sleep(time.Duration(attempt+1) * time.Second)
-			} else {
-				logger.Printf("postProcess: summary ch%d attempt %d failed: %v", chapter.ChapterNo, attempt+1, err)
-			}
-		}
-		if summaryText != "" {
-			chapter.Summary = summaryText
-			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
-				logger.Printf("postProcessChapter: update chapter %d [摘要]: %v", chapter.ID, updateErr)
-			}
-		} else {
-			logger.Printf("[ChapterService] WARNING: chapter %d has no summary after 3 attempts", chapter.ChapterNo)
-		}
-	}
-
-	// 2. 如果标题仍是"第N章"，生成创意标题
-	defaultTitle := fmt.Sprintf("第%d章", chapter.ChapterNo)
-	if s.narrativeSvc != nil && chapter.Title == defaultTitle && chapter.Summary != "" {
-		if title, err := s.narrativeSvc.GenerateChapterTitle(tenantID, chapter, novel.Genre, chapter.EmotionalTone); err == nil && title != "" {
-			chapter.Title = fmt.Sprintf("第%d章 %s", chapter.ChapterNo, title)
-			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
-				logger.Printf("postProcessChapter: update chapter %d [标题]: %v", chapter.ID, updateErr)
-			}
-		}
-	}
-
-	// 3. 精修（检测并修复重复词、AI惯用句等）
+	// 1. 精修（先于摘要执行：摘要必须基于最终内容，不能基于草稿）
 	if s.narrativeSvc != nil {
 		if refined, err := s.narrativeSvc.RefineChapterContent(tenantID, chapter, novel.Title); err == nil && refined != chapter.Content {
 			chapter.Content = refined
 			chapter.WordCount = countChineseChars(refined)
 			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
 				logger.Printf("postProcessChapter: update chapter %d [精修]: %v", chapter.ID, updateErr)
+			}
+			// P0-1: 精修可能改变人物位置/状态/心情，Step 5b 是在精修前提取的快照，
+			// 必须用精修后内容重新提取，确保下一章读到的角色状态与实际呈现给读者的内容一致。
+			if s.characterRepo != nil && s.snapshotRepo != nil {
+				snapshotSvc := &NovelService{novelRepo: s.novelRepo, chapterRepo: s.chapterRepo, aiService: s.aiService}
+				snapshotSvc.characterRepo = s.characterRepo
+				snapshotSvc.snapshotRepo = s.snapshotRepo
+				snapshotSvc.writeCharacterSnapshots(tenantID, chapter)
+				logger.Printf("[postProcessChapter] character snapshots refreshed after refinement for ch%d", chapter.ChapterNo)
 			}
 		}
 	}
@@ -1919,6 +1953,15 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 					chapter.WordCount = countChineseChars(refined)
 					if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
 						logger.Printf("postProcessChapter: update chapter %d [quality-refinement]: %v", chapter.ID, updateErr)
+					}
+					// P0-1: quality refinement changes content → refresh snapshots so the next chapter
+					// reads correct character states, not the pre-quality-refinement draft.
+					if s.characterRepo != nil && s.snapshotRepo != nil {
+						snapSvc := &NovelService{novelRepo: s.novelRepo, chapterRepo: s.chapterRepo, aiService: s.aiService}
+						snapSvc.characterRepo = s.characterRepo
+						snapSvc.snapshotRepo = s.snapshotRepo
+						snapSvc.writeCharacterSnapshots(tenantID, chapter)
+						logger.Printf("[postProcessChapter] character snapshots refreshed after quality-refinement for ch%d", chapter.ChapterNo)
 					}
 					// Re-check quality after refinement
 					if report2, qErr2 := s.qualitySvc.CheckChapterQuality(ctx, chapter, novel); qErr2 == nil && report2.IsAcceptable() {
@@ -1943,6 +1986,43 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 			}
 		} else if qErr != nil {
 			logger.Printf("[ChapterService] postProcessChapter: quality check ch%d failed (non-fatal): %v", chapter.ChapterNo, qErr)
+		}
+	}
+
+	// 2. 生成摘要（精修完成后执行，确保摘要基于最终正文而非草稿）
+	// 无论 Summary 是否已有值，均重新生成以确保与精修后内容一致。
+	// Retry up to 3 times with 1s/2s delays.
+	if s.narrativeSvc != nil && chapter.Content != "" {
+		var summaryText string
+		for attempt := 0; attempt < 3; attempt++ {
+			if generated, err := s.narrativeSvc.GenerateChapterSummary(tenantID, chapter, novel.Title); err == nil {
+				summaryText = generated
+				break
+			} else if attempt < 2 {
+				logger.Printf("postProcess: summary ch%d attempt %d failed: %v, retrying", chapter.ChapterNo, attempt+1, err)
+				time.Sleep(time.Duration(attempt+1) * time.Second)
+			} else {
+				logger.Printf("postProcess: summary ch%d attempt %d failed: %v", chapter.ChapterNo, attempt+1, err)
+			}
+		}
+		if summaryText != "" {
+			chapter.Summary = summaryText
+			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
+				logger.Printf("postProcessChapter: update chapter %d [摘要]: %v", chapter.ID, updateErr)
+			}
+		} else {
+			logger.Printf("[ChapterService] WARNING: chapter %d has no summary after 3 attempts", chapter.ChapterNo)
+		}
+	}
+
+	// 3. 如果标题仍是"第N章"，基于精修后内容生成创意标题
+	defaultTitle := fmt.Sprintf("第%d章", chapter.ChapterNo)
+	if s.narrativeSvc != nil && chapter.Title == defaultTitle && chapter.Summary != "" {
+		if title, err := s.narrativeSvc.GenerateChapterTitle(tenantID, chapter, novel.Genre, chapter.EmotionalTone); err == nil && title != "" {
+			chapter.Title = fmt.Sprintf("第%d章 %s", chapter.ChapterNo, title)
+			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
+				logger.Printf("postProcessChapter: update chapter %d [标题]: %v", chapter.ID, updateErr)
+			}
 		}
 	}
 
@@ -1981,13 +2061,22 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 				}
 			}
 			if blocked {
-				// 从 DB 拉最新版本，避免覆盖并发写入的其他字段
-				if fresh, fetchErr := s.chapterRepo.GetByID(ch.ID); fetchErr == nil {
-					fresh.ContinuityBlocked = true
-					if updateErr := s.chapterRepo.Update(fresh); updateErr != nil {
-						logger.Printf("[ChapterService] continuity_blocked update ch%d: %v", ch.ChapterNo, updateErr)
-					} else {
-						logger.Printf("[ChapterService] continuity_blocked=true marked for ch%d (novel %d)", ch.ChapterNo, novel.ID)
+				// P0-2: 使用原子性单列更新，避免与 postProcessChapter 主 goroutine
+				// 的并发写入（steps 4c/4d/4e）产生写入竞争，导致 continuity_blocked=true 被覆盖。
+				if updateErr := s.chapterRepo.UpdateContinuityBlocked(ch.ID, novel.ID, true); updateErr != nil {
+					logger.Printf("[ChapterService] continuity_blocked update ch%d: %v", ch.ChapterNo, updateErr)
+				} else {
+					logger.Printf("[ChapterService] continuity_blocked=true marked for ch%d (novel %d)", ch.ChapterNo, novel.ID)
+					// 主动通知：连贯性问题需要用户介入，不能静默标记
+					if s.notifSvc != nil {
+						_ = s.notifSvc.Send(
+							novel.TenantID, 0,
+							"chapter_continuity_issue",
+							"章节连贯性警告",
+							fmt.Sprintf("《%s》第%d章检测到角色/世界观/情节高危连贯性问题，请检查后继续生成", novel.Title, ch.ChapterNo),
+							"chapter", ch.ID,
+							fmt.Sprintf("/novel/%d", novel.ID),
+						)
 					}
 				}
 			}
@@ -2010,12 +2099,52 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 			logger.Printf("[ChapterService] postProcessChapter: auto-review ch%d done: finalScore=%.1f totalApplied=%d",
 				chapter.ChapterNo, finalScore, totalApplied)
 		}
+
+		// P0-1/P0-2: AutoReview 应用了 diff 修改，步骤 2 生成的摘要和步骤 1 刷新的角色快照均已失效。
+		// 必须用最终内容重新生成，避免后续章节拿到基于"审查前草稿"的错误上下文。
+		if totalApplied > 0 {
+			if fresh, fetchErr := s.chapterRepo.GetByID(chapter.ID); fetchErr == nil {
+				chapter = fresh
+			}
+			// P0-1: 重新生成摘要。
+			// 使用 UpdateSummary（单列更新）而非 Update（全量），避免覆盖 continuity_blocked 等
+			// 可能被连贯性检查 goroutine 并发写入的字段（P1-3 race fix）。
+			if s.narrativeSvc != nil && chapter.Content != "" {
+				if newSummary, sumErr := s.narrativeSvc.GenerateChapterSummary(tenantID, chapter, novel.Title); sumErr == nil && newSummary != "" {
+					if updateErr := s.chapterRepo.UpdateSummary(chapter.ID, chapter.NovelID, newSummary); updateErr != nil {
+						logger.Printf("postProcessChapter: update ch%d [summary-post-review]: %v", chapter.ID, updateErr)
+					} else {
+						chapter.Summary = newSummary // sync in-memory
+						logger.Printf("[ChapterService] summary regenerated after AutoReview for ch%d", chapter.ChapterNo)
+					}
+				}
+			}
+			// P0-2: 刷新角色快照（AutoReview 可能改写角色行为/位置/状态）
+			if s.characterRepo != nil && s.snapshotRepo != nil {
+				snapshotSvc := &NovelService{novelRepo: s.novelRepo, chapterRepo: s.chapterRepo, aiService: s.aiService}
+				snapshotSvc.characterRepo = s.characterRepo
+				snapshotSvc.snapshotRepo = s.snapshotRepo
+				snapshotSvc.writeCharacterSnapshots(tenantID, chapter)
+				logger.Printf("[ChapterService] character snapshots refreshed after AutoReview for ch%d", chapter.ChapterNo)
+			}
+		}
 	}
 
 	// 4c. 生成读者期待状态（章末读者最想知道的3件事，供下一章生成时约束）
-	// 依赖摘要，所以在摘要生成之后执行；非阻塞，AI 调用失败不影响主流程。
+	// 依赖摘要，所以在摘要生成之后执行；AI 调用失败最多重试3次，与摘要生成策略一致。
 	if chapter.Summary != "" && chapter.ReaderExpectations == "" {
-		if expectations := s.generateReaderExpectations(tenantID, chapter, novel); expectations != "" {
+		var expectations string
+		for attempt := 0; attempt < 3; attempt++ {
+			if exp := s.generateReaderExpectations(tenantID, chapter, novel); exp != "" {
+				expectations = exp
+				break
+			}
+			if attempt < 2 {
+				logger.Printf("postProcessChapter: reader_expectations ch%d attempt %d failed, retrying", chapter.ChapterNo, attempt+1)
+				time.Sleep(time.Duration(attempt+1) * time.Second)
+			}
+		}
+		if expectations != "" {
 			if fresh, fetchErr := s.chapterRepo.GetByID(chapter.ID); fetchErr == nil {
 				fresh.ReaderExpectations = expectations
 				if updateErr := s.chapterRepo.Update(fresh); updateErr != nil {
@@ -2025,6 +2154,8 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 					logger.Printf("[ChapterService] reader_expectations generated for ch%d", chapter.ChapterNo)
 				}
 			}
+		} else {
+			logger.Printf("[ChapterService] WARNING: reader_expectations ch%d failed after 3 attempts", chapter.ChapterNo)
 		}
 	}
 
@@ -2061,6 +2192,33 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 						chapter = fresh
 						logger.Printf("[ChapterService] plot compliance patch applied for ch%d (new wordCount=%d)",
 							chapter.ChapterNo, chapter.WordCount)
+						// P1-5: 补写段落是 AI 原始输出，未经精修；对全章再运行一次精修过滤套话/质量问题。
+						// 精修后才重新生成 ChapterEndState，确保快照基于最终定稿内容。
+						if s.narrativeSvc != nil {
+							if refined2, refErr := s.narrativeSvc.RefineChapterContent(tenantID, chapter, novel.Title); refErr == nil && refined2 != chapter.Content {
+								if patchRefined, fetchErr3 := s.chapterRepo.GetByID(chapter.ID); fetchErr3 == nil {
+									patchRefined.Content = refined2
+									patchRefined.WordCount = countChineseChars(refined2)
+									if updateErr3 := s.chapterRepo.Update(patchRefined); updateErr3 == nil {
+										chapter = patchRefined
+										logger.Printf("[ChapterService] patch content refined for ch%d", chapter.ChapterNo)
+									}
+								}
+							} else if refErr != nil {
+								logger.Printf("[ChapterService] patch refinement ch%d (non-fatal): %v", chapter.ChapterNo, refErr)
+							}
+						}
+						// 补写（并精修）改变了章末内容，必须重新生成章末状态快照，
+						// 否则下一章 getPreviousChapterEnding 会读到已过时的快照。
+						if endState := s.generateChapterEndState(tenantID, chapter, novel); endState != "" {
+							if patchFresh, fetchErr2 := s.chapterRepo.GetByID(chapter.ID); fetchErr2 == nil {
+								patchFresh.ChapterEndState = endState
+								if updateErr2 := s.chapterRepo.Update(patchFresh); updateErr2 == nil {
+									chapter = patchFresh
+									logger.Printf("[ChapterService] chapter_end_state refreshed after plot patch for ch%d", chapter.ChapterNo)
+								}
+							}
+						}
 					}
 				}
 			}
@@ -2085,6 +2243,57 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 
 	// 5. 自动检查并标记已解决的剧情点（伏笔/冲突）
 	s.checkAndAutoResolvePlotPoints(tenantID, chapter)
+
+	// 6. 异步更新角色声音档案（每5章更新一次主要角色的声音档案，供后续章节注入使用）
+	// 至少积累5章内容后才有足够的对话样本，过早提取准确度低。
+	if s.narrativeSvc != nil && s.characterRepo != nil && chapter.ChapterNo >= 5 && chapter.ChapterNo%5 == 0 {
+		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					logger.Printf("[ChapterService] voice profile extraction panic: %v", r)
+				}
+			}()
+			chars, charErr := s.characterRepo.ListByNovel(chapter.NovelID)
+			if charErr != nil {
+				return
+			}
+			for _, c := range chars {
+				if c.Role != "protagonist" && c.Role != "antagonist" {
+					continue // 只为主要角色提取声音档案
+				}
+				voiceJSON, vErr := s.narrativeSvc.ExtractCharacterVoice(tenantID, c, chapter.NovelID)
+				if vErr != nil {
+					logger.Printf("[ChapterService] voice profile for %s: %v", c.Name, vErr)
+					continue
+				}
+				voiceJSON = extractJSON(strings.TrimSpace(voiceJSON))
+				if voiceJSON == "" {
+					continue
+				}
+				c.VoiceProfile = voiceJSON
+				if updateErr := s.characterRepo.Update(c); updateErr != nil {
+					logger.Printf("[ChapterService] save voice profile for %s: %v", c.Name, updateErr)
+				} else {
+					logger.Printf("[ChapterService] voice profile updated: character=%s novelID=%d ch=%d", c.Name, chapter.NovelID, chapter.ChapterNo)
+				}
+			}
+		}()
+	}
+
+	// 7. 为下一章生成接续预览摘要，写入下一章的 Summary 字段（仅当该章尚无内容时）。
+	// 使下一章在被生成前已有可读的摘要预览（UI 展示 + 为更后面章节提供"预期上下文"）。
+	// P2-2: 值拷贝传入 goroutine，避免 goroutine 读取到后续对 chapter/novel 指针的并发修改。
+	chSnapForPreview := *chapter
+	novelSnapForPreview := *novel
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Printf("[ChapterService] updateNextChapterPreview panic: %v", r)
+			}
+		}()
+		s.updateNextChapterPreview(tenantID, &chSnapForPreview, &novelSnapForPreview)
+	}()
+
 	logger.Printf("[ChapterService] postProcessChapter done: chapterID=%d", chapter.ID)
 }
 
@@ -2111,15 +2320,22 @@ func (s *ChapterService) checkAndAutoResolvePlotPoints(tenantID uint, chapter *m
 		return
 	}
 
-	// 构建精简 prompt
+	// 构建精简 prompt（头+尾截取策略，覆盖全章，避免遗漏后半章解决的伏笔）
 	var sb strings.Builder
 	sb.WriteString("请分析以下章节内容摘录，判断哪些剧情线在本章中已明确解决（不再是悬念或未完结冲突）：\n\n")
 	sb.WriteString("【章节内容摘录】\n")
-	excerpt := []rune(chapter.Content)
-	if len(excerpt) > 2000 {
-		excerpt = excerpt[:2000]
+	{
+		const maxAutoResolveRunes = 6000
+		runes := []rune(chapter.Content)
+		var excerpt string
+		if len(runes) <= maxAutoResolveRunes {
+			excerpt = string(runes)
+		} else {
+			half := maxAutoResolveRunes / 2
+			excerpt = string(runes[:half]) + "\n…（中间部分已省略）…\n" + string(runes[len(runes)-half:])
+		}
+		sb.WriteString(excerpt)
 	}
-	sb.WriteString(string(excerpt))
 	sb.WriteString("\n\n【待检查的剧情线】\n")
 	for i, pp := range relevant {
 		sb.WriteString(fmt.Sprintf("%d. [%s] %s\n", i+1, pp.Type, pp.Description))
@@ -2171,6 +2387,7 @@ type characterForPrompt struct {
 	Description   string
 	InnerConflict string // 人物内在矛盾（如：渴望自由却害怕失去家人）
 	CoreDesire    string // 核心渴望（如：被认可、复仇、保护所爱之人）
+	VoiceProfile  string // 声音档案摘要：说话风格/口癖/禁忌用语（来自 character_voice.j2 提取）
 }
 
 func (s *ChapterService) getCharactersForPrompt(novelID uint) []characterForPrompt {
@@ -2197,6 +2414,7 @@ func (s *ChapterService) getCharactersForPrompt(novelID uint) []characterForProm
 			Description:   c.Description,
 			InnerConflict: c.InnerConflict,
 			CoreDesire:    c.CoreDesire,
+			VoiceProfile:  formatVoiceProfile(c.VoiceProfile),
 		}
 		// 加载最新状态快照，补充 CurrentState
 		if s.snapshotRepo != nil {
@@ -2245,6 +2463,44 @@ func formatCharacterState(snap *model.CharacterStateSnapshot) string {
 	return strings.Join(parts, "，")
 }
 
+// formatVoiceProfile 将 VoiceProfile JSON 压缩为注入 prompt 的单行摘要
+func formatVoiceProfile(voiceJSON string) string {
+	if voiceJSON == "" {
+		return ""
+	}
+	var vp struct {
+		VocabularyLevel     string   `json:"vocabulary_level"`
+		SpeechHabits        []string `json:"speech_habits"`
+		EmotionalExpression string   `json:"emotional_expression"`
+		ForbiddenPhrases    []string `json:"forbidden_phrases"`
+		SignatureExpressions []string `json:"signature_expressions"`
+		OverallVoice        string   `json:"overall_voice"`
+	}
+	if err := json.Unmarshal([]byte(voiceJSON), &vp); err != nil {
+		return ""
+	}
+	var parts []string
+	if vp.OverallVoice != "" {
+		parts = append(parts, "风格："+vp.OverallVoice)
+	}
+	if vp.VocabularyLevel != "" {
+		parts = append(parts, "用词："+vp.VocabularyLevel)
+	}
+	if len(vp.SignatureExpressions) > 0 {
+		parts = append(parts, "标志性表达：「"+strings.Join(vp.SignatureExpressions, "」「")+"」")
+	}
+	if len(vp.ForbiddenPhrases) > 0 && len(vp.ForbiddenPhrases) <= 3 {
+		parts = append(parts, "⚠️禁止使用：「"+strings.Join(vp.ForbiddenPhrases, "」「")+"」")
+	}
+	if vp.EmotionalExpression != "" {
+		parts = append(parts, "情绪表达："+vp.EmotionalExpression)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, "；")
+}
+
 func (s *ChapterService) getCharacterVoices(novelID uint) []characterForPrompt {
 	// 同 getCharactersForPrompt，供 chapter_from_outline.j2 的 Characters 变量使用
 	return s.getCharactersForPrompt(novelID)
@@ -2270,6 +2526,9 @@ func formatCharacterStates(chars []characterForPrompt) string {
 func (s *ChapterService) buildForeshadowHints(novelID uint, chapterNo int) string {
 	var hints strings.Builder
 	count := 0
+	// P2-8: 跨来源去重集合，防止 ForeshadowRepo 与 PlotPointRepo 注入相同内容。
+	// key 格式：来源前缀 + 标题/描述前12字符。
+	seen := make(map[string]bool)
 
 	// 来源1：专用伏笔表（带生命周期分类）
 	if s.foreshadowRepo != nil {
@@ -2291,6 +2550,20 @@ func (s *ChapterService) buildForeshadowHints(novelID uint, chapterNo int) strin
 				if count >= 5 {
 					break
 				}
+				// 去重：优先以 Title 为键，无 Title 则取 Description 前12字符
+				dedupKey := "fs1:" + fs.Title
+				if fs.Title == "" {
+					r := []rune(fs.Description)
+					end := 12
+					if len(r) < end {
+						end = len(r)
+					}
+					dedupKey = "fs1:" + string(r[:end])
+				}
+				if seen[dedupKey] {
+					continue
+				}
+				seen[dedupKey] = true
 				// 判断生命周期状态
 				lifecycle := "planted"
 				if fs.PayoffChapterNo > 0 {
@@ -2337,6 +2610,16 @@ func (s *ChapterService) buildForeshadowHints(novelID uint, chapterNo int) strin
 					break
 				}
 				if !fs.IsFulfilled && chapterNo-fs.ChapterNo >= 3 {
+					r := []rune(fs.Description)
+					end := 12
+					if len(r) < end {
+						end = len(r)
+					}
+					dedupKey := "fs2:" + string(r[:end])
+					if seen[dedupKey] {
+						continue
+					}
+					seen[dedupKey] = true
 					hints.WriteString(fmt.Sprintf("- 请考虑回收伏笔：「%s」（第%d章埋设）\n", fs.Description, fs.ChapterNo))
 					count++
 				}
@@ -2352,11 +2635,22 @@ func (s *ChapterService) buildForeshadowHints(novelID uint, chapterNo int) strin
 				if count >= 5 {
 					break
 				}
+				r := []rune(pp.Description)
+				end := 12
+				if len(r) < end {
+					end = len(r)
+				}
+				dedupKey := "pp3:" + pp.Type + ":" + string(r[:end])
+				if seen[dedupKey] {
+					continue
+				}
 				switch pp.Type {
 				case "foreshadow":
+					seen[dedupKey] = true
 					hints.WriteString(fmt.Sprintf("- 未回收伏笔：「%s」\n", pp.Description))
 					count++
 				case "conflict":
+					seen[dedupKey] = true
 					hints.WriteString(fmt.Sprintf("- 进行中的冲突：「%s」\n", pp.Description))
 					count++
 				}
@@ -2524,6 +2818,7 @@ func (s *ChapterService) buildPreviousReaderExpectations(novelID uint, chapterNo
 
 // buildCharacterArcContext formats the arc design + current stage of protagonist characters
 // into a compact prompt section. Uses Character.ArcDesign (planned arc) and CurrentArcStage.
+// Falls back to CoreDesire + InnerConflict when ArcDesign is empty (e.g. auto-extracted characters).
 func (s *ChapterService) buildCharacterArcContext(novelID uint, chapterNo int) string {
 	if s.characterRepo == nil {
 		return ""
@@ -2534,20 +2829,13 @@ func (s *ChapterService) buildCharacterArcContext(novelID uint, chapterNo int) s
 	}
 	var sb strings.Builder
 	for _, c := range chars {
-		if c.ArcDesign == "" && c.CurrentArcStage == "" {
-			continue
-		}
 		// Only inject for major characters (protagonist/antagonist)
 		role := strings.ToLower(c.Role)
 		if role != "protagonist" && role != "antagonist" && role != "主角" && role != "反派" {
 			continue
 		}
-		sb.WriteString(fmt.Sprintf("**%s**（%s）\n", c.Name, c.Role))
-		if c.CurrentArcStage != "" {
-			sb.WriteString(fmt.Sprintf("  当前弧光阶段：%s\n", c.CurrentArcStage))
-		}
+		// 有弧光设计时，按章节范围匹配当前阶段
 		if c.ArcDesign != "" {
-			// Parse arc design to find which stage should be active for this chapter
 			var arcStages []struct {
 				Stage       string `json:"stage"`
 				Desc        string `json:"desc"`
@@ -2557,12 +2845,31 @@ func (s *ChapterService) buildCharacterArcContext(novelID uint, chapterNo int) s
 				for _, stage := range arcStages {
 					if len(stage.TargetRange) == 2 &&
 						chapterNo >= stage.TargetRange[0] && chapterNo <= stage.TargetRange[1] {
+						sb.WriteString(fmt.Sprintf("**%s**（%s）\n", c.Name, c.Role))
+						if c.CurrentArcStage != "" {
+							sb.WriteString(fmt.Sprintf("  当前弧光阶段：%s\n", c.CurrentArcStage))
+						}
 						sb.WriteString(fmt.Sprintf("  弧光设计（第%d-%d章阶段）：【%s】%s\n",
 							stage.TargetRange[0], stage.TargetRange[1], stage.Stage, stage.Desc))
 						break
 					}
 				}
 			}
+			continue
+		}
+		// 无弧光设计时，用 CurrentArcStage + CoreDesire + InnerConflict 构建降级版弧光上下文
+		if c.CurrentArcStage == "" && c.CoreDesire == "" && c.InnerConflict == "" {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("**%s**（%s）\n", c.Name, c.Role))
+		if c.CurrentArcStage != "" {
+			sb.WriteString(fmt.Sprintf("  当前弧光阶段：%s\n", c.CurrentArcStage))
+		}
+		if c.CoreDesire != "" {
+			sb.WriteString(fmt.Sprintf("  核心渴望：%s\n", c.CoreDesire))
+		}
+		if c.InnerConflict != "" {
+			sb.WriteString(fmt.Sprintf("  内在矛盾：%s\n", c.InnerConflict))
 		}
 	}
 	return sb.String()
@@ -2574,11 +2881,20 @@ func (s *ChapterService) buildTensionBudget(novelID uint, chapterNo, currentTens
 	if chapterNo < 4 {
 		return ""
 	}
-	// Look at the last 3 chapters' tension levels
+	// 一次批量查询前3章，避免 N+1（3次独立查询 → 1次范围查询）
+	prevChapters, err := s.chapterRepo.GetByNovelAndChapterRange(novelID, chapterNo-3, chapterNo-1)
+	if err != nil || len(prevChapters) == 0 {
+		return ""
+	}
+	// 建立 chapterNo → chapter 映射，便于按顺序访问
+	chMap := make(map[int]*model.Chapter, len(prevChapters))
+	for _, ch := range prevChapters {
+		chMap[ch.ChapterNo] = ch
+	}
 	highCount := 0
 	for lookback := 1; lookback <= 3; lookback++ {
-		ch, err := s.chapterRepo.GetByNovelAndChapterNo(novelID, chapterNo-lookback)
-		if err != nil || ch == nil {
+		ch := chMap[chapterNo-lookback]
+		if ch == nil {
 			break
 		}
 		if ch.TensionLevel >= 7 {
@@ -2701,6 +3017,79 @@ func (s *ChapterService) buildFinalChapterContext(novelID uint, novel *model.Nov
 	return sb.String()
 }
 
+// updateNextChapterPreview 在当前章节写完并后处理完成后，为下一章生成接续预览摘要。
+//
+// 目的：
+//  1. 用户在 UI 中可即时看到下一章的预期内容（不必等到下一章真正生成）
+//  2. 为下下章（N+2）的 BuildHierarchicalContext 提供"下一章（N+1）的预期内容"上下文
+//     ——即使 N+1 尚未写完，BuildHierarchicalContext 可读到 N+1 的预览摘要，
+//     使 N+2 的生成在叙事上更自然地承接 N+1 的预期走向。
+//
+// 条件：下一章必须已存在（大纲占位章节）且尚无正文；
+//       下一章已有真实摘要时跳过（避免覆盖）。
+func (s *ChapterService) updateNextChapterPreview(tenantID uint, chapter *model.Chapter, novel *model.Novel) {
+	nextNo := chapter.ChapterNo + 1
+	next, err := s.chapterRepo.GetByNovelAndChapterNo(chapter.NovelID, nextNo)
+	if err != nil || next == nil {
+		return // 下一章不存在（当前章是最终章，或大纲尚未生成占位章）
+	}
+	if next.Content != "" {
+		return // 下一章已有正文，真实摘要更有价值，不覆盖
+	}
+	if next.Summary != "" {
+		return // 下一章已有摘要（可能是上次运行写入的预览或用户手写），不重复生成
+	}
+
+	// 构建"章末状态"上下文：结构化快照 > 章末钩子 > 章节摘要
+	endingCtx := chapter.ChapterEndState
+	if endingCtx == "" {
+		endingCtx = chapter.ChapterHook
+	}
+	if endingCtx == "" {
+		endingCtx = chapter.Summary
+	}
+
+	prompt, renderErr := renderPrompt("next_chapter_preview", map[string]interface{}{
+		"NovelTitle":         novel.Title,
+		"CurrentChapterNo":   chapter.ChapterNo,
+		"CurrentSummary":     chapter.Summary,
+		"CurrentEnding":      endingCtx,
+		"NextChapterNo":      nextNo,
+		"NextChapterTitle":   next.Title,
+		"NextChapterOutline": next.Outline,
+	})
+	if renderErr != nil {
+		logger.Printf("[ChapterService] updateNextChapterPreview: render failed: %v", renderErr)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	preview, aiErr := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID,
+		"next_chapter_preview", prompt, "", StoryboardOverrides{MaxTokens: 400})
+	if aiErr != nil {
+		logger.Printf("[ChapterService] updateNextChapterPreview ch%d→ch%d: %v", chapter.ChapterNo, nextNo, aiErr)
+		return
+	}
+	preview = strings.TrimSpace(preview)
+	if len([]rune(preview)) < 30 {
+		return
+	}
+
+	// 写入前再次确认下一章仍无摘要（避免并发写入冲突）
+	if latest, fetchErr := s.chapterRepo.GetByNovelAndChapterNo(chapter.NovelID, nextNo); fetchErr == nil {
+		if latest.Summary != "" || latest.Content != "" {
+			return
+		}
+		latest.Summary = preview
+		if updateErr := s.chapterRepo.Update(latest); updateErr != nil {
+			logger.Printf("[ChapterService] updateNextChapterPreview: save ch%d: %v", nextNo, updateErr)
+		} else {
+			logger.Printf("[ChapterService] updateNextChapterPreview: ch%d preview summary set (len=%d chars)", nextNo, len([]rune(preview)))
+		}
+	}
+}
+
 // generateReaderExpectations calls AI to extract what readers most want to know after this chapter.
 func (s *ChapterService) generateReaderExpectations(tenantID uint, chapter *model.Chapter, novel *model.Novel) string {
 	if chapter.Summary == "" {
@@ -2745,11 +3134,17 @@ func (s *ChapterService) generateChapterEndState(tenantID uint, chapter *model.C
 	if chapter.Content == "" {
 		return ""
 	}
-	// Use the last ~1500 runes for extraction (captures end-state context)
+	// 头尾双窗口：章首500字（记录开场状态）+ 章末1000字（记录结束状态）。
+	// 纯末尾截取会遗漏章节中段的重要状态变化（受伤/换位/获得信息）。
 	content := []rune(chapter.Content)
-	ending := string(content)
-	if len(content) > 1500 {
-		ending = string(content[len(content)-1500:])
+	var ending string
+	const headRunes, tailRunes = 500, 1000
+	if len(content) <= headRunes+tailRunes {
+		ending = string(content)
+	} else {
+		ending = string(content[:headRunes]) +
+			"\n…（中间段已省略）…\n" +
+			string(content[len(content)-tailRunes:])
 	}
 	prompt, err := renderPrompt("chapter_end_state", map[string]interface{}{
 		"NovelTitle":    novel.Title,
@@ -2791,11 +3186,14 @@ func (s *ChapterService) checkAndPatchMissingPlotPoints(tenantID uint, chapter *
 		return false
 	}
 
-	// Limit content length sent to AI to avoid token overflow
+	// 截断策略：取前4000字 + 后4000字，覆盖全章而不只看前段。
+	// 只截前段会把后半章中已发生的剧情点误报为"缺失"，触发多余补写。
 	content := chapter.Content
 	contentRunes := []rune(content)
-	if len(contentRunes) > 6000 {
-		content = string(contentRunes[:6000]) + "\n…（正文超长，已截断，以上为前6000字）"
+	const maxContentRunes = 8000
+	if len(contentRunes) > maxContentRunes {
+		half := maxContentRunes / 2
+		content = string(contentRunes[:half]) + "\n…（中间部分已省略）…\n" + string(contentRunes[len(contentRunes)-half:])
 	}
 
 	plotPointsText := ""
@@ -2854,27 +3252,64 @@ func (s *ChapterService) checkAndPatchMissingPlotPoints(tenantID uint, chapter *
 		return false
 	}
 
-	// Apply patches: integrate missing plot point content into the chapter
+	// Apply patches: integrate missing plot point content into the chapter.
+	// 保护章末钩子：【章末钩子】标记之后的内容是悬念段，补写内容必须插在钩子之前，
+	// 否则会破坏章末悬念效果（读者读到的最后一句应是钩子，而非补写的剧情段）。
+	const hookMarker = "【章末钩子】"
 	patched := chapter.Content
+	hookIdx := strings.LastIndex(patched, hookMarker)
 	for _, p := range complianceResult.Patches {
 		if p.Content == "" {
 			continue
 		}
 		if p.InsertAfter == "章节末尾" || p.InsertAfter == "" {
-			patched = patched + "\n\n" + p.Content
+			if hookIdx >= 0 {
+				// 有章末钩子：插在钩子之前，保护悬念位置
+				patched = patched[:hookIdx] + p.Content + "\n\n" + patched[hookIdx:]
+				hookIdx += len(p.Content) + 2 // 更新 hook 位置偏移
+			} else {
+				patched = patched + "\n\n" + p.Content
+			}
 		} else {
-			// Find insert position by searching for the anchor text
-			if idx := strings.Index(patched, p.InsertAfter); idx >= 0 {
-				// Insert after the paragraph that contains InsertAfter
-				paraEnd := strings.Index(patched[idx:], "\n\n")
+			// P1-5: 模糊锚点匹配 — AI 的 insert_after 是段落前15字，可能因精修/格式差异导致精确匹配失败。
+			// 依次尝试原始锚点 → 前10字 → 前8字 → 前6字，首次命中即用。
+			anchorRunes := []rune(p.InsertAfter)
+			matchIdx := -1
+			for _, tryLen := range []int{len(anchorRunes), 10, 8, 6} {
+				if tryLen <= 0 || tryLen > len(anchorRunes) {
+					continue
+				}
+				if idx := strings.Index(patched, string(anchorRunes[:tryLen])); idx >= 0 {
+					matchIdx = idx
+					break
+				}
+			}
+			if matchIdx >= 0 {
+				// 命中锚点：在锚点所在段落之后插入
+				paraEnd := strings.Index(patched[matchIdx:], "\n\n")
 				if paraEnd >= 0 {
-					insertPos := idx + paraEnd + 2
+					insertPos := matchIdx + paraEnd + 2
 					patched = patched[:insertPos] + p.Content + "\n\n" + patched[insertPos:]
+					if hookIdx >= insertPos {
+						hookIdx += len(p.Content) + 2
+					}
+				} else {
+					// 锚点段落后无双换行，退化为追加（仍保护钩子）
+					if hookIdx >= 0 {
+						patched = patched[:hookIdx] + p.Content + "\n\n" + patched[hookIdx:]
+						hookIdx += len(p.Content) + 2
+					} else {
+						patched = patched + "\n\n" + p.Content
+					}
+				}
+			} else {
+				// 所有锚点长度均未命中，退化为追加（仍保护钩子）
+				if hookIdx >= 0 {
+					patched = patched[:hookIdx] + p.Content + "\n\n" + patched[hookIdx:]
+					hookIdx += len(p.Content) + 2
 				} else {
 					patched = patched + "\n\n" + p.Content
 				}
-			} else {
-				patched = patched + "\n\n" + p.Content
 			}
 		}
 		logger.Printf("[checkAndPatchMissingPlotPoints] ch%d patched missing plot point: %s",

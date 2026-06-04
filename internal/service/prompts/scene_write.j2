@@ -26,8 +26,22 @@
 - 叙事功能：{{ NarrativePurpose }}
 - 情绪变化：{{ EmotionalShift }}
 - 节奏风格：{{ MicroPacing }}
+- 场景权重：{{ SceneWeight }}（核心场景需充分展开，过渡场景保持流畅，衔接场景简洁）
+{% if TensionDirection %}
+- 张力方向：{{ TensionDirection }}（rising=持续升压 / peak=张力顶点 / falling=释放缓冲 / reversal=骤然逆转）
+{% endif %}
 {% if DialogueSubtext and DialogueSubtext != "无" %}
-- 对话潜台词：{{ DialogueSubtext }}
+- 对话潜台词：{{ DialogueSubtext }}（角色不会直接说出的意图——必须通过行为/停顿/转移话题暗示）
+{% endif %}
+{% if DialogueMode and DialogueMode != "无" %}
+- 对话模式：{{ DialogueMode }}（信息战=双方抢占信息/说服战=一方改变另一方/遮掩战=隐藏关键事实/情感博弈=表平静内激烈）
+  本场景所有超过3句的对话必须符合此模式，具体体现在：台词选择、信息透露时机、角色的刻意回避或追问。
+{% endif %}
+
+{% if ThemeEcho %}
+# 主题呼应（本场景必须在以下具体方式上体现核心主题，不得省略）
+{% if CoreTheme %}核心主题：{{ CoreTheme }}{% endif %}
+本场景呼应方式：{{ ThemeEcho }}
 {% endif %}
 
 ## 关键节拍（必须按序体现在正文中）
@@ -35,13 +49,19 @@
 {{ loop.index }}. {{ beat }}
 {% endfor %}
 
-开场方式（若与上方"必须接续"处冲突，以"必须接续"处为准）：{{ OpeningBeat }}
+{% if PreviousSceneEnding or PreviousChapterEnding %}
+开场方式（⚠️ 已有"必须接续"约束时忽略此项，以上方接续内容为准）：{{ OpeningBeat }}
+{% else %}
+开场方式：{{ OpeningBeat }}
+{% endif %}
 收场方式：{{ ClosingBeat }}
 
 {% if CharacterVoices %}
-# 角色信息（保持性格与当前状态连贯）
+# 角色信息（保持性格、当前状态与声音风格连贯）
 {% for char in CharacterVoices %}{% if char.IsProtagonist %}- ⚠️【主角】{{ char.Name }}（{{ char.Role }}）：{{ char.Description }}{% if char.CurrentState %}；当前状态：{{ char.CurrentState }}{% endif %}{% if char.InnerConflict %}；内在矛盾：{{ char.InnerConflict }}{% endif %}{% if char.CoreDesire %}；核心渴望：{{ char.CoreDesire }}{% endif %}
+{% if char.VoiceProfile %}  声音档案：{{ char.VoiceProfile }}{% endif %}
 {% else %}- {{ char.Name }}（{{ char.Role }}）：{{ char.Description }}{% if char.CurrentState %}；当前状态：{{ char.CurrentState }}{% endif %}
+{% if char.VoiceProfile %}  声音档案：{{ char.VoiceProfile }}{% endif %}
 {% endif %}{% endfor %}
 {% endif %}
 
@@ -71,20 +91,40 @@
 目标 {{ WordBudget }} 字（下限 {{ MinWords }} 字，上限 {{ MaxWords }} 字）
 
 # 写作规则（违反则输出作废）
-1. 第一句必须零距离接续"本场景第一句必须接续"处——人物位置/状态/动作不得凭空改变
+1. 若有"必须接续"约束，第一句必须零距离延伸——人物位置/状态/动作不得凭空改变
 2. 禁止以「突然」「忽然」「只见」「天空中」开头任何段落
 3. 对话必须嵌在行动描写中，不允许超过3轮的纯对话段落（无动作穿插）
 4. 每3句心理独白之后必须有一个可见的外部行动
 5. 直接输出场景正文，不输出「场景{{ SceneNo }}：」前缀或任何说明文字
 6. 展示而非陈述：❌「他感到愤怒」→ ✅ 下颌咬紧，拳头压着桌沿，指节发白
+{% if TensionDirection == "reversal" %}
+7. ⚡ 本场景为「骤然逆转」——读者预期的结果必须在正文中被打破，且逆转要通过具体行动/信息/选择实现，不能仅靠心理感受
+{% elif TensionDirection == "peak" %}
+7. ⚡ 本场景为「张力顶点」——情绪强度和行动后果必须达到本章最高点，节奏密集，禁止缓冲性段落
+{% endif %}
 {% if RequiredEvent %}
-7. ⚡ 核心剧情必须在正文中作为真实情节完整展开（不是回忆、不是背景提及、是现在发生的事件）：{{ RequiredEvent }}
+8. ⚡ 核心剧情必须在正文中作为真实情节完整展开（不是回忆、不是背景提及、是现在发生的事件）：{{ RequiredEvent }}
 {% endif %}
 
+# 强制写作规范（与上方写作规则同等效力，违反=输出作废）
+- ❌「感到/觉得/内心涌起/不禁/不由得/情绪复杂/内心深处/某种说不清的」→ 改用外化行为（下颌咬紧/手指收紧/脚步放缓/目光移开）
+- ❌ 超过3句的对话必须含信息分歧、目的冲突或刻意隐瞒，禁止纯闲聊推进
+- ❌ 不允许连续2段以上对主角完全有利，第3段必须引入代价/威胁/阻碍/误解
+- ❌「他」「她」不得连续开头超过3个段落；对话角色说话方式须可辨识，禁止风格互换
+- ✅ 对话权力差异：高位角色用短句/命令/不回应问题；低位角色解释过多/绕圈子/隐藏请求
+
 {% if IsLastScene %}
-# 章末钩子（本章最后一场景）
+{% if IsStandalone and FinalChapterContext %}
+# 🔴 全书最终场景 — 收尾清单【最高优先级，每条必须以具体场景/对话/事件展现解决过程（150字以上），禁止叙述性带过】
+{{ FinalChapterContext }}
+{% endif %}
+# 章末结束方式（本章最后一场景）
+{% if IsStandalone %}
+正文以圆满/震撼/余韵方式自然落幕，**不要**输出「【章末钩子】」标记，**不要**写开放式悬念。
+{% else %}
 正文结束后另起一行，固定格式输出：
 【章末钩子】[1-2句，制造无法停止阅读的强力悬念]
+{% endif %}
 {% endif %}
 
 直接输出场景正文：

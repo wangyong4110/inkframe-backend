@@ -9,8 +9,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -55,7 +58,10 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 		}
 		// 下载视频到本地临时文件（供 StitchVideo 使用）
 		localPath := fmt.Sprintf("%s/inkframe-shot-%d-%d.mp4", inkframeTempDir(), shot.ID, time.Now().UnixNano())
-		if err := downloadFile(videoURL, localPath); err != nil {
+		dlCtx, dlCancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		dlErr := downloadFileCtx(dlCtx, videoURL, localPath)
+		dlCancel()
+		if dlErr != nil {
 			// 下载失败不致命：保留远程 URL，StitchVideo 会重试
 			logger.Printf("PollShotStatus: download shot %d video failed (keeping URL): %v", shot.ShotNo, err)
 			shot.VideoURL = videoURL
@@ -192,7 +198,10 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 				sem <- struct{}{}; defer func() { <-sem }()
 				dlStart := time.Now()
 				logger.Printf("[StitchVideo] shot %d: downloading from %s", sh.ShotNo, url)
-				if err := downloadFile(url, dest); err != nil {
+				dlCtx, dlCancel := context.WithTimeout(ctx, 10*time.Minute)
+				dlErr := downloadFileCtx(dlCtx, url, dest)
+				dlCancel()
+				if dlErr != nil {
 					// URL 可能已过期，尝试从 provider 重新获取
 					if sh.ShotTaskID != "" && sh.ShotProviderName != "" {
 						if p, _, rErr := s.resolveVideoProvider(videoTenantID, sh.ShotProviderName); rErr == nil {
@@ -201,15 +210,17 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 							rCancel()
 							if fErr == nil {
 								logger.Printf("[StitchVideo] shot %d: got fresh URL, retrying download", sh.ShotNo)
-								results[idx].downloadErr = downloadFile(freshURL, dest)
+								retryCtx, retryCancel := context.WithTimeout(ctx, 10*time.Minute)
+								results[idx].downloadErr = downloadFileCtx(retryCtx, freshURL, dest)
+								retryCancel()
 							} else {
-								results[idx].downloadErr = fmt.Errorf("download failed and refresh URL failed: %w", err)
+								results[idx].downloadErr = fmt.Errorf("download failed and refresh URL failed: %w", dlErr)
 							}
 						} else {
-							results[idx].downloadErr = err
+							results[idx].downloadErr = dlErr
 						}
 					} else {
-						results[idx].downloadErr = err
+						results[idx].downloadErr = dlErr
 					}
 					return
 				}
@@ -242,15 +253,21 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 			continue
 		}
 
-		// image-only 镜头：生成 still frame（FFmpeg 串行）
+		var videoClipPath string
+
 		if res.imgFile != "" {
+			// P1-2: image-only 镜头优先用纯 Go Ken Burns（可 context 取消，~10-20s/5s clip）。
+			// 失败时降级到 still frame（-loop 1，x264 全 P 帧）。
 			duration := shot.Duration
 			if duration <= 0 {
 				duration = defaultShotDurationSecs
 			}
-			// image-only 镜头：直接用 still frame（-loop 1，x264 全 P 帧，WASM 几秒完成）。
-			// 注意：zoompan / JPEG序列编码在 WASM 单线程下耗时数分钟且 context 无法取消，禁止在合成路径使用。
-			clipPath, clipErr := s.generateStillFrameClip(res.imgFile, duration, aspectRatio)
+			var clipErr error
+			videoClipPath, clipErr = s.generateKenBurnsPureGo(ctx, shot, res.imgFile, duration, aspectRatio)
+			if clipErr != nil {
+				logger.Printf("[StitchVideo] shot %d: Ken Burns failed: %v — falling back to still frame", shot.ShotNo, clipErr)
+				videoClipPath, clipErr = s.generateStillFrameClip(res.imgFile, duration, aspectRatio)
+			}
 			os.Remove(res.imgFile)
 			if clipErr != nil {
 				logger.Printf("[StitchVideo] shot %d: still frame failed: %v — skipping", shot.ShotNo, clipErr)
@@ -260,49 +277,37 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 				})
 				continue
 			}
-			logger.Printf("[StitchVideo] shot %d: still frame ready: %s", shot.ShotNo, clipPath)
-			concatLines = append(concatLines, fmt.Sprintf("file '%s'", clipPath))
-			continue
-		}
-
-		if res.clipFile == "" {
+			logger.Printf("[StitchVideo] shot %d: image clip ready: %s", shot.ShotNo, videoClipPath)
+		} else if res.clipFile != "" {
+			if res.isLocal {
+				defer os.Remove(res.clipFile) //nolint:errcheck
+			}
+			videoClipPath = res.clipFile
+		} else {
 			logger.Printf("[StitchVideo] shot %d: no clip or image — skipping", shot.ShotNo)
 			continue
 		}
 
-		// 本地文件：加入清理列表（file:// 本地缓存）
-		if res.isLocal {
-			defer os.Remove(res.clipFile) //nolint:errcheck
-		}
-
-		finalClip := res.clipFile
-
-		// Merge audio — use real audio if present, otherwise generate silent track
-		audioPath := ""
-		if shot.AudioPath != "" {
-			audioPath = strings.TrimPrefix(shot.AudioPath, "file://")
-		} else {
-			// Generate a silent audio file so every clip has an audio track.
-			// This prevents FFmpeg concat from failing or producing audio dropouts
-			// when clips with and without audio are mixed.
-			silentPath := generateSilentAudio(tmpDir, shot.ShotNo, shot.Duration)
-			if silentPath != "" {
-				audioPath = silentPath
-				logger.Printf("[StitchVideo] shot %d: no audio — using generated silent track", shot.ShotNo)
+		// P0-3: ffprobe 探测实际时长，更新 DB 保证字幕时序准确
+		if actualDur := probeClipDuration(ctx, videoClipPath); actualDur > 0 && math.Abs(actualDur-shot.Duration) > 0.15 {
+			if updErr := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"duration": actualDur}); updErr == nil {
+				logger.Printf("[StitchVideo] shot %d: duration corrected %.2f→%.2f", shot.ShotNo, shot.Duration, actualDur)
+				shot.Duration = actualDur
 			}
 		}
+
+		finalClip := videoClipPath
+
+		// P0-2: 构建音频（优先 VoiceSegments+SFX，降级 AudioPath，再降级静音轨）
+		audioPath := s.buildShotAudio(ctx, shot, tmpDir, i)
 		if audioPath != "" {
 			mergedFile := fmt.Sprintf("%s/clip_audio_%d.mp4", tmpDir, i)
 			logger.Printf("[StitchVideo] shot %d: merging audio: %s", shot.ShotNo, audioPath)
-			mergeCtx, mergeCancel := context.WithTimeout(ctx, 60*time.Second)
-			_, mergeErr := runFFmpegCtx(mergeCtx, "-y",
-				"-i", res.clipFile,
-				"-i", audioPath,
-				"-c:v", "copy",
-				"-c:a", "aac",
-				"-shortest",
-				mergedFile,
-			)
+			mergeCtx, mergeCancel := context.WithTimeout(ctx, 90*time.Second)
+			// P1-4: 根据音频与视频时长决策：音频明显更长时用 tpad 延伸视频末帧
+			mergeArgs := buildAudioMergeArgs(ctx, audioPath, videoClipPath, shot.Duration)
+			allMergeArgs := append([]string{"-y", "-i", videoClipPath, "-i", audioPath}, append(mergeArgs, mergedFile)...)
+			_, mergeErr := runFFmpegCtx(mergeCtx, allMergeArgs...)
 			mergeCancel()
 			if mergeErr != nil {
 				logger.Printf("[StitchVideo] shot %d: audio merge failed: %v — using clip without audio", shot.ShotNo, mergeErr)
@@ -328,17 +333,32 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 
 	stitchedPath := fmt.Sprintf("%s/inkframe-%d-stitched.mp4", inkframeTempDir(), videoID)
 	logger.Printf("[StitchVideo] videoID=%d: running ffmpeg concat → %s", videoID, stitchedPath)
-	// concat 使用 goroutine 超时（wazero 在 WASM 内无法通过 ctx 中断）
-	// -c copy 只是复制流，通常很快；给每个 clip 留 30s 余量，最少 3 分钟
-	concatTimeout := time.Duration(len(concatLines))*30*time.Second + 3*time.Minute
-	if concatTimeout > 30*time.Minute {
-		concatTimeout = 30 * time.Minute
+	// P0-1: 统一编解码/分辨率/帧率，消除 Kling(H.264) vs Seedance(H.265) 等格式不兼容导致的 concat 失败。
+	// 每个 clip 编码留 60s 余量 + 基础 5 分钟，最多 45 分钟。
+	concatTimeout := time.Duration(len(concatLines))*60*time.Second + 5*time.Minute
+	if concatTimeout > 45*time.Minute {
+		concatTimeout = 45 * time.Minute
 	}
+	// 根据宽高比生成规范化 vf
+	normW, normH := "1920", "1080"
+	switch aspectRatio {
+	case "9:16":
+		normW, normH = "1080", "1920"
+	case "1:1":
+		normW, normH = "1080", "1080"
+	case "4:3":
+		normW, normH = "1440", "1080"
+	}
+	normVF := fmt.Sprintf("scale=%s:%s:force_original_aspect_ratio=decrease,pad=%s:%s:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=24", normW, normH, normW, normH)
 	if concatOut, concatErr := runFFmpegWithGoroutineTimeout(concatTimeout, "-y",
 		"-f", "concat",
 		"-safe", "0",
 		"-i", listFile,
-		"-c", "copy",
+		"-vf", normVF,
+		"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+		"-pix_fmt", "yuv420p",
+		"-c:a", "aac", "-b:a", "128k", "-ar", "44100", "-ac", "2",
+		"-movflags", "+faststart",
 		stitchedPath,
 	); concatErr != nil {
 		logger.Printf("[StitchVideo] videoID=%d: ffmpeg concat failed: %v\noutput: %s", videoID, concatErr, string(concatOut))
@@ -356,7 +376,9 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 	// BGM 混音（非致命：失败时使用无BGM版本）
 	outputPath := fmt.Sprintf("%s/inkframe-%d-output.mp4", inkframeTempDir(), videoID)
 	if s.bgmService != nil {
-		bgmURL := s.bgmService.SelectBGM("")
+		// P1-1: 根据分镜情感基调选择 BGM，而非固定传空字符串
+		emotion := dominantEmotion(shots)
+		bgmURL := s.bgmService.SelectBGM(emotion)
 		if bgmURL != "" {
 			logger.Printf("[StitchVideo] videoID=%d: mixing BGM: %s", videoID, bgmURL)
 			if mixErr := s.bgmService.MixBGM(stitchedPath, bgmURL, outputPath); mixErr != nil {
@@ -424,15 +446,16 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	defer cancel()
 
-	ticker := time.NewTicker(15 * time.Second)
+	// P2-2: 自适应轮询间隔（15s→30s→60s），降低空闲时的 DB 压力
+	pollInterval := 15 * time.Second
+	startedAt := time.Now()
+	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	noProgressCount := 0
 
-	// Heartbeat / liveness tracking: record the last time we saw any shot status change.
-	// If 30 minutes pass with no status change at all, treat the pipeline as stalled.
 	const heartbeatStallDuration = 30 * time.Minute
 	lastProgressAt := time.Now()
-	lastCompletedCount := -1 // -1 = not yet measured
+	lastCompletedCount := -1
 
 	for {
 		select {
@@ -453,46 +476,67 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 		case <-ticker.C:
 		}
 
+		// P2-2: 根据已等待时长自适应调整轮询间隔
+		elapsed := time.Since(startedAt)
+		var newInterval time.Duration
+		switch {
+		case elapsed < 5*time.Minute:
+			newInterval = 15 * time.Second
+		case elapsed < 15*time.Minute:
+			newInterval = 30 * time.Second
+		default:
+			newInterval = 60 * time.Second
+		}
+		if newInterval != pollInterval {
+			ticker.Reset(newInterval)
+			pollInterval = newInterval
+			logger.Printf("PollAndStitchVideo: videoID %d poll interval → %v", videoID, pollInterval)
+		}
+
+		// P2-1: 单次查询获取所有分镜，内存分组，避免 N+1 DB 查询
+		allShots, _ := s.storyboardRepo.ListByVideo(videoID)
+		if len(allShots) == 0 {
+			continue
+		}
+		var pending, processing []*model.StoryboardShot
+		completedCount, failedCount := 0, 0
+		for _, shot := range allShots {
+			switch shot.Status {
+			case "pending":
+				pending = append(pending, shot)
+			case "processing":
+				processing = append(processing, shot)
+			case "completed":
+				completedCount++
+			case "failed":
+				failedCount++
+			}
+		}
+
 		// Retry pending shots (from consistency/failed retry)
-		pending, _ := s.storyboardRepo.ListByVideoAndStatus(videoID, "pending")
-		for _, shot := range pending {
-			if shot.ShotTaskID == "" {
-				video, _ := s.videoRepo.GetByID(videoID)
-				aspectRatio := "16:9"
-				if video != nil {
-					aspectRatio = video.AspectRatio
-				}
-				if err := s.GenerateShotVideo(shot, aspectRatio); err != nil {
-					logger.Printf("[PollAndStitch] GenerateShotVideo shot %d failed: %v", shot.ID, err)
-					_ = s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{
-						"status":        "failed",
-						"error_message": fmt.Sprintf("generation failed: %v", err),
-					})
+		if len(pending) > 0 {
+			video, _ := s.videoRepo.GetByID(videoID)
+			aspectRatio := "16:9"
+			if video != nil {
+				aspectRatio = video.AspectRatio
+			}
+			for _, shot := range pending {
+				if shot.ShotTaskID == "" {
+					if err := s.GenerateShotVideo(shot, aspectRatio); err != nil {
+						logger.Printf("[PollAndStitch] GenerateShotVideo shot %d failed: %v", shot.ID, err)
+						_ = s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{
+							"status":        "failed",
+							"error_message": fmt.Sprintf("generation failed: %v", err),
+						})
+					}
 				}
 			}
 		}
 
 		// Poll processing shots
-		processing, _ := s.storyboardRepo.ListByVideoAndStatus(videoID, "processing")
 		for _, shot := range processing {
 			if err := s.PollShotStatus(shot); err != nil {
 				logger.Printf("[PollAndStitch] PollShotStatus shot %d failed: %v", shot.ID, err)
-			}
-		}
-
-		// Check if all completed
-		allShots, _ := s.storyboardRepo.ListByVideo(videoID)
-		if len(allShots) == 0 {
-			continue
-		}
-		completedCount := 0
-		failedCount := 0
-		for _, shot := range allShots {
-			switch shot.Status {
-			case "completed":
-				completedCount++
-			case "failed":
-				failedCount++
 			}
 		}
 
@@ -540,10 +584,8 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 			return
 		}
 
-		// Stall detection (no active work after 5 ticks): re-query to get fresh counts
-		processingNow, _ := s.storyboardRepo.ListByVideoAndStatus(videoID, "processing")
-		pendingNow, _ := s.storyboardRepo.ListByVideoAndStatus(videoID, "pending")
-		if len(processingNow) == 0 && len(pendingNow) == 0 {
+		// Stall detection: no active work after 5 ticks
+		if len(processing) == 0 && len(pending) == 0 {
 			noProgressCount++
 			if noProgressCount >= 5 {
 				logger.Printf("PollAndStitchVideo: videoID %d stalled (no active shots), stopping", videoID)
@@ -692,9 +734,19 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 		coverPath := fmt.Sprintf("%s/inkframe-%d-cover.jpg", inkframeTempDir(), videoID)
 		tempFiles = append(tempFiles, coverPath)
 		coverURL := ""
-		if _, err := runFFmpegWithGoroutineTimeout(30*time.Second, "-y", "-ss", "2", "-i", finalPath,
+		// P1-3: 用视频时长 15% 位置提取封面，比固定 t=2s 更具代表性；失败时回退到 2s
+		coverOffset := 2.0
+		if totalDur := probeClipDuration(synthCtx, finalPath); totalDur > 4 {
+			coverOffset = totalDur * 0.15
+			if coverOffset < 1 {
+				coverOffset = 1
+			}
+		}
+		if _, err := runFFmpegWithGoroutineTimeout(30*time.Second, "-y",
+			"-ss", fmt.Sprintf("%.2f", coverOffset),
+			"-i", finalPath,
 			"-frames:v", "1", "-vf", "scale=640:-1", coverPath); err == nil {
-			logger.Printf("[SynthesizeVideo] videoID=%d step=3/4: cover extracted → %s", videoID, coverPath)
+			logger.Printf("[SynthesizeVideo] videoID=%d step=3/4: cover extracted at %.1fs → %s", videoID, coverOffset, coverPath)
 		} else {
 			logger.Printf("[SynthesizeVideo] videoID=%d step=3/4: cover extraction failed: %v — continuing", videoID, err)
 		}
@@ -712,9 +764,7 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 		}
 
 		if s.storageSvc != nil {
-			uploadCtx, uploadCancel := context.WithTimeout(synthCtx, 30*time.Minute)
-			defer uploadCancel()
-			// 上传视频
+			// P2-4: 将 upload 包在匿名函数中，确保 uploadCancel 在上传完成后立即释放资源
 			videoUUID := uuid.New().String()
 			var videoKey string
 			if novelTitle != "" {
@@ -722,33 +772,54 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 			} else {
 				videoKey = fmt.Sprintf("videos/%s.mp4", videoUUID)
 			}
-			logger.Printf("[SynthesizeVideo] videoID=%d: uploading video to key=%s", videoID, videoKey)
-			if vf, err := os.Open(finalPath); err == nil {
-				defer vf.Close()
-				if fi, err := vf.Stat(); err == nil {
-					logger.Printf("[SynthesizeVideo] videoID=%d: video file size=%.1fMB", videoID, float64(fi.Size())/1e6)
-					if ossURL, err := s.storageSvc.Upload(uploadCtx, videoKey, vf, fi.Size(), "video/mp4"); err == nil {
-						logger.Printf("[SynthesizeVideo] videoID=%d: video upload OK → %s", videoID, ossURL)
-						finalVideoURL = ossURL
-					} else {
-						logger.Printf("[SynthesizeVideo] videoID=%d: video upload failed: %v", videoID, err)
-					}
+			// 上传视频
+			finalVideoURL = func() string {
+				uploadCtx, uploadCancel := context.WithTimeout(synthCtx, 30*time.Minute)
+				defer uploadCancel()
+				logger.Printf("[SynthesizeVideo] videoID=%d: uploading video to key=%s", videoID, videoKey)
+				vf, err := os.Open(finalPath)
+				if err != nil {
+					return ""
 				}
-			}
+				defer vf.Close()
+				fi, err := vf.Stat()
+				if err != nil {
+					return ""
+				}
+				logger.Printf("[SynthesizeVideo] videoID=%d: video file size=%.1fMB", videoID, float64(fi.Size())/1e6)
+				ossURL, err := s.storageSvc.Upload(uploadCtx, videoKey, vf, fi.Size(), "video/mp4")
+				if err != nil {
+					logger.Printf("[SynthesizeVideo] videoID=%d: video upload failed: %v", videoID, err)
+					return ""
+				}
+				logger.Printf("[SynthesizeVideo] videoID=%d: video upload OK → %s", videoID, ossURL)
+				return ossURL
+			}()
 
 			// 上传封面
-			if cf, err := os.Open(coverPath); err == nil {
-				defer cf.Close()
-				if fi, err := cf.Stat(); err == nil {
+			if videoKey != "" {
+				coverURL = func() string {
+					uploadCtx, uploadCancel := context.WithTimeout(synthCtx, 10*time.Minute)
+					defer uploadCancel()
 					coverKey := videoKey[:len(videoKey)-4] + "_cover.jpg"
 					logger.Printf("[SynthesizeVideo] videoID=%d: uploading cover key=%s", videoID, coverKey)
-					if ossURL, err := s.storageSvc.Upload(uploadCtx, coverKey, cf, fi.Size(), "image/jpeg"); err == nil {
-						logger.Printf("[SynthesizeVideo] videoID=%d: cover upload OK → %s", videoID, ossURL)
-						coverURL = ossURL
-					} else {
-						logger.Printf("[SynthesizeVideo] videoID=%d: cover upload failed: %v — continuing", videoID, err)
+					cf, err := os.Open(coverPath)
+					if err != nil {
+						return ""
 					}
-				}
+					defer cf.Close()
+					fi, err := cf.Stat()
+					if err != nil {
+						return ""
+					}
+					ossURL, err := s.storageSvc.Upload(uploadCtx, coverKey, cf, fi.Size(), "image/jpeg")
+					if err != nil {
+						logger.Printf("[SynthesizeVideo] videoID=%d: cover upload failed: %v — continuing", videoID, err)
+						return ""
+					}
+					logger.Printf("[SynthesizeVideo] videoID=%d: cover upload OK → %s", videoID, ossURL)
+					return ossURL
+				}()
 			}
 		} else {
 			logger.Printf("[SynthesizeVideo] videoID=%d step=4/4: storageSvc not configured — skipping upload", videoID)
@@ -877,9 +948,13 @@ func (s *VideoService) checkTenantAccess(novelID uint) error {
 
 // ─── Shared utilities (stitch / clip helpers) ─────────────────────────────────
 
-// downloadFile 下载 HTTP URL 到本地路径
-func downloadFile(url, dest string) error {
-	resp, err := downloadHTTPClient.Get(url) //nolint:gosec
+// downloadFileCtx P1-5: 带 context 的 HTTP 下载，支持超时取消。
+func downloadFileCtx(ctx context.Context, url, dest string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil) //nolint:gosec
+	if err != nil {
+		return err
+	}
+	resp, err := downloadHTTPClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -897,6 +972,11 @@ func downloadFile(url, dest string) error {
 		return fmt.Errorf("video file too large (>500MB)")
 	}
 	return err
+}
+
+// downloadFile 下载 HTTP URL 到本地路径（不带 context，供旧代码兼容）
+func downloadFile(url, dest string) error {
+	return downloadFileCtx(context.Background(), url, dest)
 }
 
 // downloadToTemp 将 URL 下载到临时文件，返回本地路径
@@ -940,18 +1020,19 @@ func inkframeTempDir() string {
 	return os.TempDir()
 }
 
-// generateSilentAudio creates a silent MP3 of the given duration and returns its local path.
+// generateSilentAudio 生成指定时长的静音 AAC 轨道，返回本地路径。
+// P2-3: 直接输出 AAC（而非 MP3 再转码），与合成路径的 -c:a aac 保持一致，减少一次无谓的转码。
 // Returns "" if FFmpeg fails, so callers must handle the empty case.
 func generateSilentAudio(dir string, shotNo int, durationSecs float64) string {
 	if durationSecs <= 0 {
 		durationSecs = 5.0
 	}
-	outPath := filepath.Join(dir, fmt.Sprintf("silent_%d.mp3", shotNo))
+	outPath := filepath.Join(dir, fmt.Sprintf("silent_%d.aac", shotNo))
 	out, err := runFFmpegCtx(context.Background(),
 		"-y",
-		"-f", "lavfi", "-i", fmt.Sprintf("anullsrc=r=44100:cl=stereo"),
+		"-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
 		"-t", fmt.Sprintf("%.3f", durationSecs),
-		"-c:a", "libmp3lame", "-q:a", "9",
+		"-c:a", "aac", "-b:a", "128k",
 		outPath,
 	)
 	if err != nil {
@@ -959,6 +1040,242 @@ func generateSilentAudio(dir string, shotNo int, durationSecs float64) string {
 		return ""
 	}
 	return outPath
+}
+
+// ─── Synthesis helpers ────────────────────────────────────────────────────────
+
+// probeClipDuration P0-3: 用 ffprobe 探测文件实际时长（秒）。失败时返回 0。
+func probeClipDuration(ctx context.Context, path string) float64 {
+	probeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	out, err := runFFprobeCtx(probeCtx,
+		"-v", "quiet",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		path,
+	)
+	if err != nil || len(out) == 0 {
+		return 0
+	}
+	dur, parseErr := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+	if parseErr != nil {
+		return 0
+	}
+	return dur
+}
+
+// buildShotAudio P0-2: 构建分镜音频轨道。
+// 优先级：VoiceSegments（多段拼接）→ SFX 叠加 → 旧版 AudioPath → 静音轨。
+func (s *VideoService) buildShotAudio(ctx context.Context, shot *model.StoryboardShot, tmpDir string, idx int) string {
+	// 1. 收集 VoiceSegment 音频路径（按 SeqNo 排序）
+	var voicePaths []string
+	if s.segmentRepo != nil {
+		segs, err := s.segmentRepo.ListByShotID(shot.ID)
+		if err == nil {
+			for _, seg := range segs {
+				if seg.AudioPath != "" {
+					voicePaths = append(voicePaths, strings.TrimPrefix(seg.AudioPath, "file://"))
+				}
+			}
+		}
+	}
+
+	var speechAudioPath string
+	switch len(voicePaths) {
+	case 0:
+		// 无 VoiceSegment，使用旧版 AudioPath
+		if shot.AudioPath != "" {
+			speechAudioPath = strings.TrimPrefix(shot.AudioPath, "file://")
+		}
+	case 1:
+		speechAudioPath = voicePaths[0]
+	default:
+		// 多段：用 FFmpeg concat 拼接
+		if concatPath, err := concatAudioFiles(ctx, voicePaths, tmpDir, idx); err == nil {
+			speechAudioPath = concatPath
+		} else {
+			logger.Printf("[buildShotAudio] shot %d: audio concat failed: %v — using first segment", shot.ShotNo, err)
+			speechAudioPath = voicePaths[0]
+		}
+	}
+
+	// 2. 叠加 SFX（通过 SFXService）
+	if speechAudioPath != "" && s.sfxService != nil {
+		sfxItems, err := s.sfxService.ListSFXItems(shot.ID)
+		if err == nil && len(sfxItems) > 0 {
+			if mixedPath, mixErr := mixSFXLayers(ctx, speechAudioPath, sfxItems, shot.Duration, tmpDir, idx); mixErr == nil {
+				return mixedPath
+			} else {
+				logger.Printf("[buildShotAudio] shot %d: SFX mix failed: %v — using speech only", shot.ShotNo, mixErr)
+			}
+		}
+	}
+
+	// 3. 如果有语音音轨直接返回
+	if speechAudioPath != "" {
+		return speechAudioPath
+	}
+
+	// 4. 降级：生成静音轨
+	silentPath := generateSilentAudio(tmpDir, shot.ShotNo, shot.Duration)
+	if silentPath != "" {
+		logger.Printf("[buildShotAudio] shot %d: no audio — using generated silent track", shot.ShotNo)
+	}
+	return silentPath
+}
+
+// concatAudioFiles 将多个音频文件用 FFmpeg concat demuxer 拼接为一个 AAC 文件。
+func concatAudioFiles(ctx context.Context, paths []string, tmpDir string, idx int) (string, error) {
+	listPath := fmt.Sprintf("%s/audio_list_%d.txt", tmpDir, idx)
+	var lines []string
+	for _, p := range paths {
+		lines = append(lines, fmt.Sprintf("file '%s'", p))
+	}
+	if err := os.WriteFile(listPath, []byte(strings.Join(lines, "\n")), 0644); err != nil {
+		return "", err
+	}
+	outPath := fmt.Sprintf("%s/audio_concat_%d.aac", tmpDir, idx)
+	concatCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	_, err := runFFmpegCtx(concatCtx,
+		"-y", "-f", "concat", "-safe", "0", "-i", listPath,
+		"-c:a", "aac", "-b:a", "128k",
+		outPath,
+	)
+	if err != nil {
+		return "", fmt.Errorf("concat audio: %w", err)
+	}
+	return outPath, nil
+}
+
+// mixSFXLayers 将 SFX 音效叠加到语音轨道上。
+// 使用 FFmpeg amix 过滤器按音量混合各 SFX 条目。
+func mixSFXLayers(ctx context.Context, speechPath string, sfxItems []*model.ShotSFXItem, shotDuration float64, tmpDir string, idx int) (string, error) {
+	// 过滤有 URL 且未禁用的 SFX 条目
+	var active []*model.ShotSFXItem
+	for _, item := range sfxItems {
+		if !item.Disabled && item.URL != "" {
+			active = append(active, item)
+		}
+	}
+	if len(active) == 0 {
+		return "", fmt.Errorf("no active SFX items")
+	}
+
+	// 下载 SFX 文件到临时目录
+	type sfxFile struct {
+		path        string
+		volume      float64
+		startOffset float64
+	}
+	var sfxFiles []sfxFile
+	for i, item := range active {
+		if item.URL == "" {
+			continue
+		}
+		sfxPath := fmt.Sprintf("%s/sfx_%d_%d", tmpDir, idx, i)
+		dlCtx, dlCancel := context.WithTimeout(ctx, 2*time.Minute)
+		dlErr := downloadFileCtx(dlCtx, item.URL, sfxPath)
+		dlCancel()
+		if dlErr != nil {
+			logger.Printf("[mixSFXLayers] sfx item %d: download failed: %v — skipping", item.ID, dlErr)
+			continue
+		}
+		vol := item.Volume
+		if vol <= 0 {
+			vol = 0.3
+		}
+		sfxFiles = append(sfxFiles, sfxFile{path: sfxPath, volume: vol, startOffset: item.StartOffset})
+	}
+	if len(sfxFiles) == 0 {
+		return "", fmt.Errorf("all SFX downloads failed")
+	}
+
+	// 构建 amix filter_complex：speech + SFX inputs，各 SFX 按 volume 缩放后 adelay 对齐
+	outPath := fmt.Sprintf("%s/audio_sfx_%d.aac", tmpDir, idx)
+	var args []string
+	args = append(args, "-y", "-i", speechPath)
+	for _, sf := range sfxFiles {
+		args = append(args, "-i", sf.path)
+	}
+
+	// 构建 filter_complex
+	n := len(sfxFiles) + 1 // 1 speech + N sfx
+	var filterParts []string
+	// speech input [0:a] → volume=1.0 (保持语音原音量)
+	filterParts = append(filterParts, "[0:a]aformat=sample_rates=44100:channel_layouts=stereo[speech]")
+	for i, sf := range sfxFiles {
+		sfxLabel := fmt.Sprintf("sfx%d", i)
+		delayMs := int(sf.startOffset * 1000)
+		filterParts = append(filterParts, fmt.Sprintf("[%d:a]aformat=sample_rates=44100:channel_layouts=stereo,adelay=%d|%d,volume=%.2f[%s]",
+			i+1, delayMs, delayMs, sf.volume, sfxLabel))
+	}
+	// amix 合并所有轨道
+	var mixInputs []string
+	mixInputs = append(mixInputs, "[speech]")
+	for i := range sfxFiles {
+		mixInputs = append(mixInputs, fmt.Sprintf("[sfx%d]", i))
+	}
+	filterParts = append(filterParts, fmt.Sprintf("%samix=inputs=%d:duration=longest:dropout_transition=3[out]", strings.Join(mixInputs, ""), n))
+	filterComplex := strings.Join(filterParts, ";")
+
+	args = append(args, "-filter_complex", filterComplex, "-map", "[out]",
+		"-c:a", "aac", "-b:a", "128k")
+	if shotDuration > 0 {
+		args = append(args, "-t", fmt.Sprintf("%.3f", shotDuration))
+	}
+	args = append(args, outPath)
+
+	mixCtx, mixCancel := context.WithTimeout(ctx, 60*time.Second)
+	defer mixCancel()
+	_, err := runFFmpegCtx(mixCtx, args...)
+	if err != nil {
+		return "", fmt.Errorf("sfx mix: %w", err)
+	}
+	return outPath, nil
+}
+
+// buildAudioMergeArgs P1-4: 根据音频与视频时长关系选择合适的合并参数。
+// 若音频明显长于视频（>0.3s），用 tpad 延伸视频末帧，避免 TTS 被 -shortest 截断。
+func buildAudioMergeArgs(ctx context.Context, audioPath, videoPath string, shotDuration float64) []string {
+	audioDur := probeClipDuration(ctx, audioPath)
+	clipDur := shotDuration
+	if clipDur <= 0 {
+		clipDur = probeClipDuration(ctx, videoPath)
+	}
+	if audioDur > 0 && clipDur > 0 && audioDur > clipDur+0.3 {
+		// 音频明显更长：用 tpad 克隆最后一帧延伸视频，避免 TTS 末尾被截断
+		extra := audioDur - clipDur
+		return []string{
+			"-filter_complex", fmt.Sprintf("[0:v]tpad=stop_mode=clone:stop_duration=%.3f[v]", extra),
+			"-map", "[v]", "-map", "1:a",
+			"-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+			"-c:a", "aac",
+		}
+	}
+	// 正常情况：视频时长 ≥ 音频时长，用 -shortest 保证输出与视频等长
+	return []string{
+		"-c:v", "copy",
+		"-c:a", "aac",
+		"-shortest",
+	}
+}
+
+// dominantEmotion P1-1: 从分镜列表中计算主导情感基调，用于 BGM 选择。
+func dominantEmotion(shots []*model.StoryboardShot) string {
+	counts := make(map[string]int)
+	for _, sh := range shots {
+		if t := strings.TrimSpace(sh.EmotionalTone); t != "" {
+			counts[t]++
+		}
+	}
+	best, bestN := "", 0
+	for tone, n := range counts {
+		if n > bestN {
+			best, bestN = tone, n
+		}
+	}
+	return best
 }
 
 // uploadClipToStorage 将本地 MP4 文件上传到持久存储（OSS），返回持久 URL。

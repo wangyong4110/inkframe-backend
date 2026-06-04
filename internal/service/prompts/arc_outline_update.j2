@@ -1,0 +1,69 @@
+你是一位专业的小说策划编辑，负责在每弧结束后对后续章节大纲进行自适应修订。
+
+# 任务
+《{{ NovelTitle }}》第{{ ArcNo }}弧（第{{ StartChapter }}-{{ EndChapter }}章）已完成。
+实际生成的内容与原始大纲存在偏差，请根据弧光摘要，对第{{ NextChapter }}章起的剩余大纲进行修订。
+
+**原则：**
+- 只修订剩余章节（{{ NextChapter }}章起），已完成章节不得变动
+- 保持各章 `chapter_no`、`act`、`tension_level`、`hook_type` 不变（除非明显与当前故事状态冲突）
+- 使剩余大纲与实际故事状态（角色位置/能力/关系、未解决悬念）保持连贯
+- 重新激活弧光中提出的未兑现伏笔（`open_foreshadows`）到具体章节
+- 已解决的冲突（`resolved_conflicts`）不得在剩余章节中再次出现为"未解决"状态
+- 主角实力不得在后续章节中降级（参考 `protagonist_power_level`）
+
+# 本弧实际发生的内容
+
+## 弧光总结
+{{ ArcSummary }}
+
+## 关键事件
+{% for ev in KeyEvents %}
+- 第{{ ev.chapter }}章：{{ ev.event }}
+{% endfor %}
+
+## 弧末角色状态
+{% for name, state in CharacterStates %}
+- {{ name }}：{{ state }}
+{% endfor %}
+
+## 世界观/势力格局变化
+{{ WorldUpdates }}
+
+## 未兑现的伏笔（需在剩余章节中安排兑现）
+{% for f in OpenForeshadows %}
+- {{ f }}
+{% endfor %}
+
+## 已解决的冲突（后续章节不得重提为未解决）
+{% for c in ResolvedConflicts %}
+- {{ c }}
+{% endfor %}
+
+# 待修订的剩余章节大纲
+
+以下是原始大纲中尚未生成的章节，请逐章修订：
+
+{{ RemainingOutlineJSON }}
+
+# 输出格式（JSON 数组，不要 markdown 代码块）
+
+只返回修订后的章节数组，结构与原大纲一致：
+[
+  {
+    "chapter_no": 章节号,
+    "title": "章节标题（可保留原标题或根据剧情微调）",
+    "summary": "章节剧情概述（不少于150字，保持与前弧故事状态的连贯性）",
+    "plot_points": ["剧情点1：[触发人物]+[具体行动]+[直接结果/代价]（40字内）", "剧情点2"],
+    "emotional_tone": "情感基调",
+    "tension_level": 原值或调整后的值,
+    "hook": "章末悬念钩子（20字内）",
+    "hook_type": "question/cliffhanger/revelation/threat",
+    "act": 原值
+  }
+]
+
+注意：
+- 数组长度必须等于待修订章节数（{{ RemainingCount }}章）
+- 章节号必须严格匹配原大纲（{{ NextChapter }} 至 {{ LastChapter }}）
+- 不要省略任何章节

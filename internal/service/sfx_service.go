@@ -56,6 +56,14 @@ func (s *SFXService) WithSFXItemRepo(r *repository.ShotSFXItemRepository) *SFXSe
 	return s
 }
 
+// ListSFXItems 返回分镜的所有音效条目（供合成路径使用）
+func (s *SFXService) ListSFXItems(shotID uint) ([]*model.ShotSFXItem, error) {
+	if s.sfxItemRepo == nil {
+		return nil, nil
+	}
+	return s.sfxItemRepo.ListByShotID(shotID)
+}
+
 // WithAssetRepo 注入素材库仓库（可选；注入后生成的音效将自动存入素材库）
 func (s *SFXService) WithAssetRepo(assetRepo *repository.AssetRepository, tagRepo *repository.TagRepository) *SFXService {
 	s.assetRepo = assetRepo

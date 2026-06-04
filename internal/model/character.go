@@ -24,6 +24,10 @@ type Character struct {
 	InnerConflict string `json:"inner_conflict,omitempty" gorm:"column:inner_conflict;type:text"` // 内在矛盾/恐惧（如：渴望自由却害怕失去家人）
 	CoreDesire    string `json:"core_desire,omitempty" gorm:"column:core_desire;type:text"`    // 核心渴望（如：被认可、复仇、保护所爱之人）
 
+	// 角色声音档案（由 character_voice.j2 提取，随章节积累自动更新）
+	// JSON格式: {"vocabulary_level":"...","speech_habits":[...],"emotional_expression":"...","forbidden_phrases":[...],"signature_expressions":[...],"overall_voice":"..."}
+	VoiceProfile string `json:"voice_profile,omitempty" gorm:"column:voice_profile;type:text"`
+
 	// 角色弧光设计（规划角色在全书中的心理成长阶段）
 	// JSON格式: [{"stage":"起点","desc":"...","target_range":[1,20]},{"stage":"考验","desc":"...","target_range":[21,60]},...]
 	// stage可选: 起点/考验/最低点/转折/终点
