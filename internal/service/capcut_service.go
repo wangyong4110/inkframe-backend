@@ -132,14 +132,17 @@ type ccKeyframeGroup struct {
 // CapCut 会访问每一个子数组；若字段缺失或为 null，CapCut 迭代时崩溃 → 草稿点击无响应。
 // 所有子数组必须序列化为 []（非 null）。
 type ccKeyframes struct {
-	Adjusts     []interface{}    `json:"adjusts"`
-	Audios      []interface{}    `json:"audios"`
-	ColorWheels []interface{}    `json:"color_wheels"`
-	Filters     []interface{}    `json:"filters"`
-	Handwrites  []interface{}    `json:"handwrites"`
-	Stickers    []interface{}    `json:"stickers"`
-	Texts       []interface{}    `json:"texts"`
-	Videos      []ccKeyframeGroup `json:"videos"`
+	Adjusts      []interface{}     `json:"adjusts"`
+	Audios       []interface{}     `json:"audios"`
+	ColorWheels  []interface{}     `json:"color_wheels"`
+	Effects      []interface{}     `json:"effects"`       // CapCut International 遍历此数组，缺失即崩溃
+	Filters      []interface{}     `json:"filters"`
+	Handwrites   []interface{}     `json:"handwrites"`
+	SpeedStickers []interface{}    `json:"speed_stickers"` // 同上
+	Stickers     []interface{}     `json:"stickers"`
+	Texts        []interface{}     `json:"texts"`
+	Videos       []ccKeyframeGroup `json:"videos"`
+	VocalSounds  []interface{}     `json:"vocal_sounds"`  // 同上
 }
 
 type ccClip struct {
@@ -609,7 +612,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 	// 四类轨道数据
 	var videoMaterials []ccVideoMaterial
-	var videoSegments []ccSegment
+	videoSegments := []ccSegment{} // 直接初始化为非 nil 空切片：var 声明为 nil，拷贝进 track 后再赋值无法修正
 	allKFGroups := []ccKeyframeGroup{} // 图片分镜的 Ken Burns 运镜关键帧
 
 	var audioMaterials []ccAudioMaterial
@@ -1161,7 +1164,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		Duration:             totalDuration,
 		FPS:                  24.0,
 		ID:                   draftID,
-		Keyframes:            ccKeyframes{Adjusts: []interface{}{}, Audios: []interface{}{}, ColorWheels: []interface{}{}, Filters: []interface{}{}, Handwrites: []interface{}{}, Stickers: []interface{}{}, Texts: []interface{}{}, Videos: allKFGroups},
+		Keyframes:            ccKeyframes{Adjusts: []interface{}{}, Audios: []interface{}{}, ColorWheels: []interface{}{}, Effects: []interface{}{}, Filters: []interface{}{}, Handwrites: []interface{}{}, SpeedStickers: []interface{}{}, Stickers: []interface{}{}, Texts: []interface{}{}, Videos: allKFGroups, VocalSounds: []interface{}{}},
 		LastModifiedPlatform: "mac",
 		Materials: ccMaterials{
 			AudioFades:           []interface{}{},
@@ -1358,7 +1361,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 	var mediaFiles []mediaFile
 
 	var videoMaterials []ccVideoMaterial
-	var videoSegments []ccSegment
+	videoSegments := []ccSegment{} // 直接初始化为非 nil 空切片
 
 	var audioMaterials []ccAudioMaterial
 	var audioSegments []ccSegment
@@ -1703,7 +1706,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		Duration:             totalDuration,
 		FPS:                  24.0,
 		ID:                   draftID,
-		Keyframes:            ccKeyframes{Adjusts: []interface{}{}, Audios: []interface{}{}, ColorWheels: []interface{}{}, Filters: []interface{}{}, Handwrites: []interface{}{}, Stickers: []interface{}{}, Texts: []interface{}{}, Videos: []ccKeyframeGroup{}},
+		Keyframes:            ccKeyframes{Adjusts: []interface{}{}, Audios: []interface{}{}, ColorWheels: []interface{}{}, Effects: []interface{}{}, Filters: []interface{}{}, Handwrites: []interface{}{}, SpeedStickers: []interface{}{}, Stickers: []interface{}{}, Texts: []interface{}{}, Videos: []ccKeyframeGroup{}, VocalSounds: []interface{}{}},
 		LastModifiedPlatform: "mac",
 		Materials: ccMaterials{
 			AudioFades:           []interface{}{},
