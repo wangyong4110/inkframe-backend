@@ -291,16 +291,24 @@ type ccSegment struct {
 	EnableColorCurves     bool               `json:"enable_color_curves"`
 	EnableHslCurves       bool               `json:"enable_hsl_curves"`
 	EnableColorWheels     bool               `json:"enable_color_wheels"`
-	HdrSettings           ccHdrSettings      `json:"hdr_settings"`
+	HdrSettings           *ccHdrSettings     `json:"hdr_settings"`  // 音频段为null，视频段为非null
 	TrackAttribute        int                `json:"track_attribute"`
 	IsPlaceholder         bool               `json:"is_placeholder"`
-	UniformScale          ccUniformScale     `json:"uniform_scale"`
+	UniformScale          *ccUniformScale    `json:"uniform_scale"` // 音频段为null，视频段为非null
 	IsLoop                bool               `json:"is_loop"`
 	IsToneModify          bool               `json:"is_tone_modify"`
 	IntensifiesAudio      bool               `json:"intensifies_audio"`
 	Cartoon               bool               `json:"cartoon"`
 	LastNonzeroVolume     float64            `json:"last_nonzero_volume"`
 	Desc                  string             `json:"desc"`
+	EnableAdjustMask           bool   `json:"enable_adjust_mask"`
+	EnableColorAdjustPro       bool   `json:"enable_color_adjust_pro"`
+	EnableColorCorrectAdjust   bool   `json:"enable_color_correct_adjust"`
+	EnableColorMatchAdjust     bool   `json:"enable_color_match_adjust"`
+	EnableMaskShadow           bool   `json:"enable_mask_shadow"`
+	EnableMaskStroke           bool   `json:"enable_mask_stroke"`
+	ColorCorrectAlgResult      string `json:"color_correct_alg_result"`
+	DigitalHumanTemplateGroupID string `json:"digital_human_template_group_id"`
 	State                 int                `json:"state"`
 	GroupID               string             `json:"group_id"`
 	CommonKeyframes       []interface{}      `json:"common_keyframes"`    // CapCut 迭代此数组，null 崩溃
@@ -358,16 +366,24 @@ func (s ccSegment) MarshalJSON() ([]byte, error) {
 		EnableColorCurves      bool               `json:"enable_color_curves"`
 		EnableHslCurves        bool               `json:"enable_hsl_curves"`
 		EnableColorWheels      bool               `json:"enable_color_wheels"`
-		HdrSettings            ccHdrSettings      `json:"hdr_settings"`
+		HdrSettings            *ccHdrSettings     `json:"hdr_settings"`
 		TrackAttribute         int                `json:"track_attribute"`
 		IsPlaceholder          bool               `json:"is_placeholder"`
-		UniformScale           ccUniformScale     `json:"uniform_scale"`
+		UniformScale           *ccUniformScale    `json:"uniform_scale"`
 		IsLoop                 bool               `json:"is_loop"`
 		IsToneModify           bool               `json:"is_tone_modify"`
 		IntensifiesAudio       bool               `json:"intensifies_audio"`
 		Cartoon                bool               `json:"cartoon"`
 		LastNonzeroVolume      float64            `json:"last_nonzero_volume"`
 		Desc                   string             `json:"desc"`
+		EnableAdjustMask           bool   `json:"enable_adjust_mask"`
+		EnableColorAdjustPro       bool   `json:"enable_color_adjust_pro"`
+		EnableColorCorrectAdjust   bool   `json:"enable_color_correct_adjust"`
+		EnableColorMatchAdjust     bool   `json:"enable_color_match_adjust"`
+		EnableMaskShadow           bool   `json:"enable_mask_shadow"`
+		EnableMaskStroke           bool   `json:"enable_mask_stroke"`
+		ColorCorrectAlgResult      string `json:"color_correct_alg_result"`
+		DigitalHumanTemplateGroupID string `json:"digital_human_template_group_id"`
 		State                  int                `json:"state"`
 		GroupID                string             `json:"group_id"`
 		CommonKeyframes        []interface{}      `json:"common_keyframes"`
@@ -413,6 +429,14 @@ func (s ccSegment) MarshalJSON() ([]byte, error) {
 		Cartoon:                s.Cartoon,
 		LastNonzeroVolume:      s.LastNonzeroVolume,
 		Desc:                   s.Desc,
+		EnableAdjustMask:           s.EnableAdjustMask,
+		EnableColorAdjustPro:       s.EnableColorAdjustPro,
+		EnableColorCorrectAdjust:   s.EnableColorCorrectAdjust,
+		EnableColorMatchAdjust:     s.EnableColorMatchAdjust,
+		EnableMaskShadow:           s.EnableMaskShadow,
+		EnableMaskStroke:           s.EnableMaskStroke,
+		ColorCorrectAlgResult:      s.ColorCorrectAlgResult,
+		DigitalHumanTemplateGroupID: s.DigitalHumanTemplateGroupID,
 		State:                  s.State,
 		GroupID:                s.GroupID,
 		CommonKeyframes:        commonKFs,
@@ -459,52 +483,234 @@ type ccCrop struct {
 	UpperRightY float64 `json:"upper_right_y"`
 }
 
-type ccVideoMaterial struct {
-	CartoonPath       string  `json:"cartoon_path"`
-	CheckFlag         int     `json:"check_flag"`
-	CropScale         float64 `json:"crop_scale"`
-	Crop              ccCrop  `json:"crop"`
-	Duration          int64   `json:"duration"`
-	ExtraInfo         string  `json:"extra_info"`
-	HasAudio          bool    `json:"has_audio"`
-	Height            int     `json:"height"`
-	ID                string  `json:"id"`
-	ImportTime        int64   `json:"import_time"`
-	ImportTimeUs      int64   `json:"import_time_us"`      // 部分版本 CapCut 需要此字段，缺失时可能崩溃
-	LocalMaterialPath string  `json:"local_material_path"` // CapCut 加载素材时访问此字段；缺失时行为未定义
-	LocalVideoPath    string  `json:"local_video_path"`    // 同上；本地草稿留空字符串，CapCut 从 Path 查找
-	MaterialID        string  `json:"material_id"`
-	Path              string  `json:"path"`
-	SourcePlatform    int     `json:"source_platform"`
-	Type              string  `json:"type"` // "photo" / "video"
-	Width             int     `json:"width"`
+type ccVideoAlgorithmStoryConfig struct {
+	TaskID              string `json:"task_id"`
+	IsOverwriteLastVideo bool  `json:"is_overwrite_last_video"`
+	TrackerTaskID       string `json:"tracker_task_id"`
 }
 
-// ccAudioMaterial 音频素材（配音 / BGM）
+type ccVideoAlgorithm struct {
+	Algorithms             []interface{}               `json:"algorithms"`
+	TimeRange              interface{}                 `json:"time_range"`
+	Path                   string                      `json:"path"`
+	GameplayConfigs        []interface{}               `json:"gameplay_configs"`
+	AIInPaintingConfig     []interface{}               `json:"ai_in_painting_config"`
+	ComplementFrameConfig  interface{}                 `json:"complement_frame_config"`
+	MotionBlurConfig       interface{}                 `json:"motion_blur_config"`
+	Deflicker              interface{}                 `json:"deflicker"`
+	NoiseReduction         interface{}                 `json:"noise_reduction"`
+	QualityEnhance         interface{}                 `json:"quality_enhance"`
+	SuperResolution        interface{}                 `json:"super_resolution"`
+	AIBackgroundConfigs    []interface{}               `json:"ai_background_configs"`
+	SmartComplementFrame   interface{}                 `json:"smart_complement_frame"`
+	AIGCGenerate           interface{}                 `json:"aigc_generate"`
+	AIGCGenerateList       []interface{}               `json:"aigc_generate_list"`
+	MouthShapeDriver       interface{}                 `json:"mouth_shape_driver"`
+	AIExpressionDriven     interface{}                 `json:"ai_expression_driven"`
+	AIMotionDriven         interface{}                 `json:"ai_motion_driven"`
+	ImageInterpretation    interface{}                 `json:"image_interpretation"`
+	StoryVideoModifyConfig ccVideoAlgorithmStoryConfig `json:"story_video_modify_video_config"`
+	SkipAlgorithmIndex     []interface{}               `json:"skip_algorithm_index"`
+}
+
+type ccMattingData struct {
+	Flag                int           `json:"flag"`
+	Path                string        `json:"path"`
+	InteractiveTime     []interface{} `json:"interactiveTime"`
+	HasUseQuickBrush    bool          `json:"has_use_quick_brush"`
+	Strokes             []interface{} `json:"strokes"`
+	HasUseQuickEraser   bool          `json:"has_use_quick_eraser"`
+	Expansion           float64       `json:"expansion"`
+	Feather             float64       `json:"feather"`
+	Reverse             bool          `json:"reverse"`
+	CustomMattingID     string        `json:"custom_matting_id"`
+	EnableMattingStroke bool          `json:"enable_matting_stroke"`
+	IsCloud             bool          `json:"is_clould"`
+	MaskVideoPath       string        `json:"mask_video_path"`
+	CloudProductFPS     float64       `json:"cloud_product_fps"`
+}
+
+type ccStableData struct {
+	StableLevel int         `json:"stable_level"`
+	MatrixPath  string      `json:"matrix_path"`
+	TimeRange   ccTimeRange `json:"time_range"`
+}
+
+type ccBeautyFaceAutoPreset struct {
+	PresetID string `json:"preset_id"`
+	Name     string `json:"name"`
+	RateMap  string `json:"rate_map"`
+	Scene    string `json:"scene"`
+}
+
+type ccVideoMaskStroke struct {
+	ResourceID      string  `json:"resource_id"`
+	Path            string  `json:"path"`
+	Type            string  `json:"type"`
+	Color           string  `json:"color"`
+	Size            float64 `json:"size"`
+	Alpha           float64 `json:"alpha"`
+	Distance        float64 `json:"distance"`
+	Texture         float64 `json:"texture"`
+	HorizontalShift float64 `json:"horizontal_shift"`
+	VerticalShift   float64 `json:"vertical_shift"`
+}
+
+type ccVideoMaskShadow struct {
+	ResourceID string  `json:"resource_id"`
+	Path       string  `json:"path"`
+	Color      string  `json:"color"`
+	Alpha      float64 `json:"alpha"`
+	Blur       float64 `json:"blur"`
+	Distance   float64 `json:"distance"`
+	Angle      float64 `json:"angle"`
+}
+
+type ccVideoMaterial struct {
+	AIGCHistoryID           string                 `json:"aigc_history_id"`
+	AIGCItemID              string                 `json:"aigc_item_id"`
+	AIGCType                string                 `json:"aigc_type"`           // "none"
+	AudioFade               interface{}            `json:"audio_fade"`          // null
+	BeautyBodyAutoPreset    interface{}            `json:"beauty_body_auto_preset"` // null
+	BeautyBodyPresetID      string                 `json:"beauty_body_preset_id"`
+	BeautyFaceAutoPreset    ccBeautyFaceAutoPreset `json:"beauty_face_auto_preset"`
+	BeautyFaceAutoPresetInfos []interface{}        `json:"beauty_face_auto_preset_infos"`
+	BeautyFacePresetInfos   []interface{}          `json:"beauty_face_preset_infos"`
+	CartoonPath             string                 `json:"cartoon_path"`
+	CategoryID              string                 `json:"category_id"`
+	CategoryName            string                 `json:"category_name"`       // "local"
+	CheckFlag               int                    `json:"check_flag"`          // 62978047
+	ContentFeatureInfo      interface{}            `json:"content_feature_info"` // null
+	CornerPin               interface{}            `json:"corner_pin"`          // null
+	Crop                    ccCrop                 `json:"crop"`
+	CropRatio               string                 `json:"crop_ratio"`          // "free"
+	CropScale               float64                `json:"crop_scale"`          // 1.0
+	Duration                int64                  `json:"duration"`
+	ExtraTypeOption         int                    `json:"extra_type_option"`   // 0
+	FormulaID               string                 `json:"formula_id"`
+	Freeze                  interface{}            `json:"freeze"`              // null
+	HasAudio                bool                   `json:"has_audio"`
+	HasSoundSeparated       bool                   `json:"has_sound_separated"`
+	Height                  int                    `json:"height"`
+	ID                      string                 `json:"id"`
+	IntensifiesAudioPath    string                 `json:"intensifies_audio_path"`
+	IntensifiesPath         string                 `json:"intensifies_path"`
+	IsAIGenerateContent     bool                   `json:"is_ai_generate_content"`
+	IsCopyright             bool                   `json:"is_copyright"`
+	IsSetBeautyMode         bool                   `json:"is_set_beauty_mode"`
+	IsTextEditOverdub       bool                   `json:"is_text_edit_overdub"`
+	IsUnifiedBeautyMode     bool                   `json:"is_unified_beauty_mode"`
+	LivePhotoCoverPath      string                 `json:"live_photo_cover_path"`
+	LivePhotoTimestamp      int64                  `json:"live_photo_timestamp"` // -1
+	LocalID                 string                 `json:"local_id"`
+	LocalMaterialFrom       string                 `json:"local_material_from"`
+	LocalMaterialID         string                 `json:"local_material_id"`   // UUID
+	MaterialID              string                 `json:"material_id"`
+	MaterialName            string                 `json:"material_name"`       // filename
+	MaterialURL             string                 `json:"material_url"`
+	Matting                 ccMattingData          `json:"matting"`
+	MediaPath               string                 `json:"media_path"`
+	MultiCameraInfo         interface{}            `json:"multi_camera_info"`   // null
+	ObjectLocked            interface{}            `json:"object_locked"`       // null
+	OriginMaterialID        string                 `json:"origin_material_id"`
+	Path                    string                 `json:"path"`
+	PictureFrom             string                 `json:"picture_from"`        // "none"
+	PictureSetCategoryID    string                 `json:"picture_set_category_id"`
+	PictureSetCategoryName  string                 `json:"picture_set_category_name"`
+	RequestID               string                 `json:"request_id"`
+	ReverseIntensifiesPath  string                 `json:"reverse_intensifies_path"`
+	ReversePath             string                 `json:"reverse_path"`
+	SmartMatchInfo          interface{}            `json:"smart_match_info"`    // null
+	SmartMotion             interface{}            `json:"smart_motion"`        // null
+	Source                  int                    `json:"source"`              // 0（注意：int类型，与ccDraftContent.Source的string类型不同）
+	SourcePlatform          int                    `json:"source_platform"`     // 0
+	Stable                  ccStableData           `json:"stable"`
+	SurfaceTrackings        []interface{}          `json:"surface_trackings"`
+	TeamID                  string                 `json:"team_id"`
+	Type                    string                 `json:"type"`
+	UniqueID                string                 `json:"unique_id"`
+	VideoAlgorithm          ccVideoAlgorithm       `json:"video_algorithm"`
+	VideoMaskShadow         ccVideoMaskShadow      `json:"video_mask_shadow"`
+	VideoMaskStroke         ccVideoMaskStroke      `json:"video_mask_stroke"`
+	Width                   int                    `json:"width"`
+}
+
+type ccSimilarMusicInfo struct {
+	OriginalSongID   string `json:"original_song_id"`
+	OriginalSongName string `json:"original_song_name"`
+}
+
+type ccTTSBenefitInfo struct {
+	BenefitType     string `json:"benefit_type"`     // "none"
+	BenefitLogID    string `json:"benefit_log_id"`
+	BenefitLogExtra string `json:"benefit_log_extra"`
+	BenefitAmount   int    `json:"benefit_amount"`   // -1
+}
+
+// ccAudioMaterial 音频素材（配音 / BGM / SFX）
 type ccAudioMaterial struct {
-	CheckFlag       int           `json:"check_flag"`
-	Duration        int64         `json:"duration"`
-	ID              string        `json:"id"`
-	MaterialID      string        `json:"material_id"` // 必须与 ID 相同；CapCut 按此字段索引素材，缺失时 segment 找不到对应素材导致崩溃
-	Name            string        `json:"name"`
-	Path            string        `json:"path"`
-	CategoryName    string        `json:"category_name"`
-	WavePoints      []interface{} `json:"wave_points"`
-	MusicID         string        `json:"music_id"`
-	AppID           int           `json:"app_id"`
-	TextID          string        `json:"text_id"`
-	ToneType        string        `json:"tone_type"`
-	SourcePlatform  int           `json:"source_platform"`
-	VideoID         string        `json:"video_id"`
-	EffectID        string        `json:"effect_id"`
-	ResourceID      string        `json:"resource_id"`
-	ThirdResourceID string        `json:"third_resource_id"`
-	CategoryID      string        `json:"category_id"`
-	IntensifiesPath string        `json:"intensifies_path"`
-	FormulaID       string        `json:"formula_id"`
-	TeamID          string        `json:"team_id"`
-	LocalMaterialID string        `json:"local_material_id"`
-	Type            string        `json:"type"` // "extract_music" = 配音; "music" = BGM
+	AIMusicEnterFrom       string             `json:"ai_music_enter_from"`
+	AIMusicGenerateScene   int                `json:"ai_music_generate_scene"`
+	AIMusicType            int                `json:"ai_music_type"`
+	AIGCHistoryID          string             `json:"aigc_history_id"`
+	AIGCItemID             string             `json:"aigc_item_id"`
+	AppID                  int                `json:"app_id"`
+	CategoryID             string             `json:"category_id"`
+	CategoryName           string             `json:"category_name"`  // "local"
+	CheckFlag              int                `json:"check_flag"`     // 1
+	ClonedModelType        string             `json:"cloned_model_type"`
+	CopyrightLimitType     string             `json:"copyright_limit_type"` // "none"
+	Duration               int64              `json:"duration"`
+	EffectID               string             `json:"effect_id"`
+	FormulaID              string             `json:"formula_id"`
+	ID                     string             `json:"id"`
+	IntensifiesPath        string             `json:"intensifies_path"`
+	IsAICloneTone          bool               `json:"is_ai_clone_tone"`
+	IsAICloneTonePost      bool               `json:"is_ai_clone_tone_post"`
+	IsTextEditOverdub      bool               `json:"is_text_edit_overdub"`
+	IsUGC                  bool               `json:"is_ugc"`
+	LocalMaterialID        string             `json:"local_material_id"`
+	LyricType              int                `json:"lyric_type"`
+	MockToneSpeaker        string             `json:"mock_tone_speaker"`
+	MoyinEmotion           string             `json:"moyin_emotion"`
+	MusicID                string             `json:"music_id"`
+	MusicSource            string             `json:"music_source"`
+	Name                   string             `json:"name"`
+	Path                   string             `json:"path"`
+	PGCID                  string             `json:"pgc_id"`
+	PGCName                string             `json:"pgc_name"`
+	Query                  string             `json:"query"`
+	RequestID              string             `json:"request_id"`
+	ResourceID             string             `json:"resource_id"`
+	SearchID               string             `json:"search_id"`
+	SimilarMusicInfo       ccSimilarMusicInfo `json:"similiar_music_info"`
+	SoundSeparateType      string             `json:"sound_separate_type"`
+	SourceFrom             string             `json:"source_from"`
+	SourcePlatform         int                `json:"source_platform"`
+	TeamID                 string             `json:"team_id"`
+	TextID                 string             `json:"text_id"`
+	ThirdResourceID        string             `json:"third_resource_id"`
+	ToneCategoryID         string             `json:"tone_category_id"`
+	ToneCategoryName       string             `json:"tone_category_name"`
+	ToneEffectID           string             `json:"tone_effect_id"`
+	ToneEffectName         string             `json:"tone_effect_name"`
+	ToneEmotionNameKey     string             `json:"tone_emotion_name_key"`
+	ToneEmotionRole        string             `json:"tone_emotion_role"`
+	ToneEmotionScale       float64            `json:"tone_emotion_scale"`
+	ToneEmotionSelection   string             `json:"tone_emotion_selection"`
+	ToneEmotionStyle       string             `json:"tone_emotion_style"`
+	TonePlatform           string             `json:"tone_platform"`
+	ToneSecondCategoryID   string             `json:"tone_second_category_id"`
+	ToneSecondCategoryName string             `json:"tone_second_category_name"`
+	ToneSpeaker            string             `json:"tone_speaker"`
+	ToneType               string             `json:"tone_type"`
+	TTSBenefitInfo         ccTTSBenefitInfo   `json:"tts_benefit_info"`
+	TTSGenerateScene       string             `json:"tts_generate_scene"`
+	TTSTaskID              string             `json:"tts_task_id"`
+	Type                   string             `json:"type"` // "extract_music" = 配音; "music" = BGM; "audio_effect" = SFX
+	UniqueID               string             `json:"unique_id"`
+	VideoID                string             `json:"video_id"`
+	WavePoints             []interface{}      `json:"wave_points"`
 }
 
 // ccTextMaterial 字幕/文字素材；content 是 JSON 字符串
@@ -722,22 +928,60 @@ type ccDraftContent struct {
 	Version                     int                           `json:"version"` // 整数（真实草稿 360000），CapCut 做 int 类型断言，字符串会崩溃
 }
 
+type ccDraftEnterpriseInfo struct {
+	DraftEnterpriseExtra string        `json:"draft_enterprise_extra"`
+	DraftEnterpriseID    string        `json:"draft_enterprise_id"`
+	DraftEnterpriseName  string        `json:"draft_enterprise_name"`
+	EnterpriseMaterial   []interface{} `json:"enterprise_material"`
+}
+
 type ccMetaInfo struct {
-	DraftCover               string        `json:"draft_cover"`
-	DraftFoldPath            string        `json:"draft_fold_path"`
-	DraftID                  string        `json:"draft_id"`
-	DraftIsAI                bool          `json:"draft_is_ai_shorts"`
-	DraftIsArticleVideo      bool          `json:"draft_is_article_video_draft"`
-	DraftIsInvisible         bool          `json:"draft_is_invisible"`
-	DraftMaterials           []interface{} `json:"draft_materials"`
-	DraftName                string        `json:"draft_name"`
-	DraftNewVersion          string        `json:"draft_new_version"`
-	DraftRootPath            string        `json:"draft_root_path"`
-	DraftSegmentExtraInfo    []interface{} `json:"draft_segment_extra_info"`
-	DraftTimelineMaterialsV2 []interface{} `json:"draft_timeline_materialsv2"`
-	TmDraftCreate            int64         `json:"tm_draft_create"`
-	TmDraftModify            int64         `json:"tm_draft_modified"`
-	TmDuration               int64         `json:"tm_duration"`
+	CloudDraftCover                bool                  `json:"cloud_draft_cover"`
+	CloudDraftSync                 bool                  `json:"cloud_draft_sync"`
+	CloudPackageCompletedTime      string                `json:"cloud_package_completed_time"`
+	DraftCloudCapcutPurchaseInfo   string                `json:"draft_cloud_capcut_purchase_info"`
+	DraftCloudLastActionDownload   bool                  `json:"draft_cloud_last_action_download"`
+	DraftCloudPackageType          string                `json:"draft_cloud_package_type"`
+	DraftCloudPurchaseInfo         string                `json:"draft_cloud_purchase_info"`
+	DraftCloudTemplateID           string                `json:"draft_cloud_template_id"`
+	DraftCloudTutorialInfo         string                `json:"draft_cloud_tutorial_info"`
+	DraftCloudVideocutPurchaseInfo string                `json:"draft_cloud_videocut_purchase_info"`
+	DraftCover                     string                `json:"draft_cover"`
+	DraftDeeplinkURL               string                `json:"draft_deeplink_url"`
+	DraftEnterpriseInfo            ccDraftEnterpriseInfo `json:"draft_enterprise_info"`
+	DraftFoldPath                  string                `json:"draft_fold_path"`
+	DraftID                        string                `json:"draft_id"`
+	DraftIsAEProduce               bool                  `json:"draft_is_ae_produce"`
+	DraftIsAIPackagingUsed         bool                  `json:"draft_is_ai_packaging_used"`
+	DraftIsAI                      bool                  `json:"draft_is_ai_shorts"`
+	DraftIsAITranslate             bool                  `json:"draft_is_ai_translate"`
+	DraftIsArticleVideo            bool                  `json:"draft_is_article_video_draft"`
+	DraftIsCloudTempDraft          bool                  `json:"draft_is_cloud_temp_draft"`
+	DraftIsFromDeeplink            string                `json:"draft_is_from_deeplink"`
+	DraftIsInvisible               bool                  `json:"draft_is_invisible"`
+	DraftIsPippitDraft             bool                  `json:"draft_is_pippit_draft"`
+	DraftIsWebArticleVideo         bool                  `json:"draft_is_web_article_video"`
+	DraftMaterials                 []interface{}         `json:"draft_materials"`
+	DraftMaterialsCopiedInfo       []interface{}         `json:"draft_materials_copied_info"`
+	DraftName                      string                `json:"draft_name"`
+	DraftNeedRenameFolder          bool                  `json:"draft_need_rename_folder"`
+	DraftNewVersion                string                `json:"draft_new_version"`
+	DraftRemovableStorageDevice    string                `json:"draft_removable_storage_device"`
+	DraftRootPath                  string                `json:"draft_root_path"`
+	DraftSegmentExtraInfo          []interface{}         `json:"draft_segment_extra_info"`
+	DraftTimelineMaterialsSize     int64                 `json:"draft_timeline_materials_size_"`
+	DraftType                      string                `json:"draft_type"`
+	DraftWebArticleVideoEnterFrom  string                `json:"draft_web_article_video_enter_from"`
+	TmDraftCloudCompleted          string                `json:"tm_draft_cloud_completed"`
+	TmDraftCloudEntryID            int64                 `json:"tm_draft_cloud_entry_id"`
+	TmDraftCloudModified           int64                 `json:"tm_draft_cloud_modified"`
+	TmDraftCloudParentEntryID      int64                 `json:"tm_draft_cloud_parent_entry_id"`
+	TmDraftCloudSpaceID            int64                 `json:"tm_draft_cloud_space_id"`
+	TmDraftCloudUserID             int64                 `json:"tm_draft_cloud_user_id"`
+	TmDraftCreate                  int64                 `json:"tm_draft_create"`
+	TmDraftModify                  int64                 `json:"tm_draft_modified"`
+	TmDraftRemoved                 int64                 `json:"tm_draft_removed"`
+	TmDuration                     int64                 `json:"tm_duration"`
 }
 
 // ExportResult 导出结果（适用于所有格式）
@@ -960,6 +1204,7 @@ func capCutTransitionEffect(t string) string {
 func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.StoryboardShot, novel *model.Novel, bgmSegs []*model.VideoBGMSegment) (*ExportResult, error) {
 	logger.Printf("[CapCutService] ExportCapCutDraft: videoID=%d title=%q shots=%d", video.ID, video.Title, len(shots))
 	now := time.Now().Unix()
+	nowMicros := time.Now().UnixMicro()
 	draftID := uuid.New().String()
 	projectName := sanitizeFilename(video.Title)
 	if projectName == "" {
@@ -982,6 +1227,16 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		data     []byte
 	}
 	var mediaFiles []mediaFile
+
+	// draft_materials 媒体目录条目（CapCut 用于素材面板索引）
+	type draftMatEntry struct {
+		filename string
+		metetype string // "video" / "photo" / "music"
+		duration int64  // 微秒
+		width    int
+		height   int
+	}
+	var draftMatEntries []draftMatEntry
 
 	// 四类轨道数据
 	var videoMaterials []ccVideoMaterial
@@ -1069,28 +1324,51 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				logger.Printf("[ExportCapCutDraft] media load failed for shot %d url=%q (%v)", shot.ShotNo, mediaURL, mediaErr)
 			}
 		}
+		// 无论下载是否成功都记录到素材目录（CapCut 用于素材面板索引）
+		draftMatEntries = append(draftMatEntries, draftMatEntry{
+			filename: vidFilename,
+			metetype: matType, // "video" or "photo"
+			duration: durationMicros,
+			width:    width,
+			height:   height,
+		})
 
 		matDuration := durationMicros
 		if !isVideo {
 			matDuration = 10_800_000_000 // 图片素材 duration 固定为 3 小时，CapCut 按 SourceTimerange 截取实际时长
 		}
 		videoMaterials = append(videoMaterials, ccVideoMaterial{
-			CheckFlag:         63487,
-			CropScale:         1,
-			Crop:              defaultCrop,
-			Duration:          matDuration,
-			HasAudio:          isVideo && shot.AudioPath != "",
-			Height:            height,
-			ID:                vidMatID,
-			ImportTime:        now,
-			ImportTimeUs:      now,
-			LocalMaterialPath: "",
-			LocalVideoPath:    "",
-			MaterialID:        vidMatID,
-			Path:              vidPath,
-			SourcePlatform:    0,
-			Type:              matType,
-			Width:             width,
+			AIGCType:     "none",
+			CategoryName: "local",
+			CheckFlag:    62978047,
+			Crop:         defaultCrop,
+			CropRatio:    "free",
+			CropScale:    1.0,
+			Duration:     matDuration,
+			HasAudio:     false, // AI 生成的视频无内嵌音频轨道；配音通过独立 audio segment 播放
+			Height:       height,
+			ID:           vidMatID,
+			LivePhotoTimestamp: -1,
+			LocalMaterialID: uuid.New().String(),
+			MaterialName: vidFilename,
+			Matting: ccMattingData{
+				InteractiveTime: []interface{}{},
+				Strokes:         []interface{}{},
+			},
+			Path:             vidPath,
+			PictureFrom:      "none",
+			Stable:           ccStableData{},
+			SurfaceTrackings: []interface{}{},
+			Type:             matType,
+			VideoAlgorithm: ccVideoAlgorithm{
+				Algorithms:          []interface{}{},
+				GameplayConfigs:     []interface{}{},
+				AIInPaintingConfig:  []interface{}{},
+				AIBackgroundConfigs: []interface{}{},
+				AIGCGenerateList:    []interface{}{},
+				SkipAlgorithmIndex:  []interface{}{},
+			},
+			Width: width,
 		})
 
 		segID := uuid.New().String()
@@ -1172,6 +1450,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			} else {
 				logger.Printf("[ExportCapCutDraft] audio load failed shot %d url=%q: %v", shot.ShotNo, shot.AudioPath, err)
 			}
+			draftMatEntries = append(draftMatEntries, draftMatEntry{filename: audPath, metetype: "music", duration: actualAudioDur})
 			// SourceTimerange：告知剪映实际取用的音频长度，不超过视频段时长
 			srcDur := actualAudioDur
 			if srcDur > durationMicros {
@@ -1179,17 +1458,19 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			}
 
 			audioMaterials = append(audioMaterials, ccAudioMaterial{
-				CheckFlag:       1,
-				Duration:        actualAudioDur,
-				ID:              audMatID,
-				MaterialID:      audMatID,
-				Name:            fmt.Sprintf("shot_%03d_audio", shot.ShotNo),
-				Path:            audPath,
-				CategoryName:    "local",
-				WavePoints:      []interface{}{},
-				MusicID:         uuid.New().String(),
-				LocalMaterialID: uuid.New().String(),
-				Type:            "extract_music",
+				CategoryName:       "local",
+				CheckFlag:          1,
+				CopyrightLimitType: "none",
+				Duration:           actualAudioDur,
+				ID:                 audMatID,
+				LocalMaterialID:    uuid.New().String(),
+				MusicID:            uuid.New().String(),
+				Name:               fmt.Sprintf("shot_%03d_audio", shot.ShotNo),
+				Path:               audPath,
+				SimilarMusicInfo:   ccSimilarMusicInfo{},
+				TTSBenefitInfo:     ccTTSBenefitInfo{BenefitType: "none", BenefitAmount: -1},
+				Type:               "extract_music",
+				WavePoints:         []interface{}{},
 			})
 
 			// Bug修复：TargetTimerange.Duration 必须等于 SourceTimerange.Duration（srcDur）。
@@ -1218,7 +1499,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 					Visible:         true,
 					Volume:          1.0,
 				}
-				applyVideoSegmentDefaults(&audSeg)
+				applyAudioSegmentDefaults(&audSeg)
 				audSeg.ExtraMaterialRefs = append(audSeg.ExtraMaterialRefs, audSpd.ID, audPh.ID, audBts.ID, audSc.ID, audVs.ID)
 				audioSegments = append(audioSegments, audSeg)
 			}
@@ -1252,6 +1533,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 					if seg.DurationSecs > 0 {
 						actualSegDur = int64(seg.DurationSecs * 1_000_000)
 					}
+					draftMatEntries = append(draftMatEntries, draftMatEntry{filename: audPath, metetype: "music", duration: actualSegDur})
 					// 不超出镜头剩余时长，避免溢出到下一镜头
 					remaining := startMicros + durationMicros - segOffset
 					srcDur := actualSegDur
@@ -1262,17 +1544,19 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 						break // 镜头时长已用尽
 					}
 					audioMaterials = append(audioMaterials, ccAudioMaterial{
-						CheckFlag:       1,
-						Duration:        actualSegDur,
-						ID:              audMatID,
-						MaterialID:      audMatID,
-						Name:            fmt.Sprintf("shot_%03d_seg%02d", shot.ShotNo, seg.SeqNo),
-						Path:            audPath,
-						CategoryName:    "local",
-						WavePoints:      []interface{}{},
-						MusicID:         uuid.New().String(),
-						LocalMaterialID: uuid.New().String(),
-						Type:            "extract_music",
+						CategoryName:       "local",
+						CheckFlag:          1,
+						CopyrightLimitType: "none",
+						Duration:           actualSegDur,
+						ID:                 audMatID,
+						LocalMaterialID:    uuid.New().String(),
+						MusicID:            uuid.New().String(),
+						Name:               fmt.Sprintf("shot_%03d_seg%02d", shot.ShotNo, seg.SeqNo),
+						Path:               audPath,
+						SimilarMusicInfo:   ccSimilarMusicInfo{},
+						TTSBenefitInfo:     ccTTSBenefitInfo{BenefitType: "none", BenefitAmount: -1},
+						Type:               "extract_music",
+						WavePoints:         []interface{}{},
 					})
 					// 创建 audio segment 伴生素材（5 个）
 					vsSpd := newSpeedMaterial()
@@ -1296,7 +1580,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 						Visible:         true,
 						Volume:          1.0,
 					}
-					applyVideoSegmentDefaults(&vsSegment)
+					applyAudioSegmentDefaults(&vsSegment)
 					vsSegment.ExtraMaterialRefs = append(vsSegment.ExtraMaterialRefs, vsSpd.ID, vsPh.ID, vsBts.ID, vsSc.ID, vsVs.ID)
 					audioSegments = append(audioSegments, vsSegment)
 					segOffset += actualSegDur
@@ -1352,6 +1636,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			} else {
 				logger.Printf("[ExportCapCutDraft] SFX load failed for shot %d sfx %d url=%q: %v", shot.ShotNo, seqLabel, sfxItem.URL, err)
 			}
+			draftMatEntries = append(draftMatEntries, draftMatEntry{filename: sfxPath, metetype: "music", duration: actualSFXDur})
 
 			sfxSrcDur := actualSFXDur
 			if sfxSrcDur > remaining {
@@ -1369,17 +1654,19 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			}
 
 			sfxMaterials = append(sfxMaterials, ccAudioMaterial{
-				CheckFlag:       1,
-				Duration:        actualSFXDur,
-				ID:              sfxMatID,
-				MaterialID:      sfxMatID,
-				Name:            fmt.Sprintf("shot_%03d_sfx%02d", shot.ShotNo, seqLabel),
-				Path:            sfxPath,
-				CategoryName:    "local",
-				WavePoints:      []interface{}{},
-				MusicID:         uuid.New().String(),
-				LocalMaterialID: uuid.New().String(),
-				Type:            "audio_effect",
+				CategoryName:       "local",
+				CheckFlag:          1,
+				CopyrightLimitType: "none",
+				Duration:           actualSFXDur,
+				ID:                 sfxMatID,
+				LocalMaterialID:    uuid.New().String(),
+				MusicID:            uuid.New().String(),
+				Name:               fmt.Sprintf("shot_%03d_sfx%02d", shot.ShotNo, seqLabel),
+				Path:               sfxPath,
+				SimilarMusicInfo:   ccSimilarMusicInfo{},
+				TTSBenefitInfo:     ccTTSBenefitInfo{BenefitType: "none", BenefitAmount: -1},
+				Type:               "audio_effect",
+				WavePoints:         []interface{}{},
 			})
 			// SFX segment 伴生素材（5 个）：speed, placeholder, beats, sound_channel, vocal_sep
 			sfxSpd := newSpeedMaterial()
@@ -1403,7 +1690,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				Visible:         true,
 				Volume:          sfxVol,
 			}
-			applyVideoSegmentDefaults(&sfxSeg)
+			applyAudioSegmentDefaults(&sfxSeg)
 			sfxSeg.ExtraMaterialRefs = append(sfxSeg.ExtraMaterialRefs, sfxSpd.ID, sfxPh.ID, sfxBts.ID, sfxSc.ID, sfxVs.ID)
 			sfxSegments = append(sfxSegments, sfxSeg)
 		}
@@ -1565,6 +1852,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			} else {
 				logger.Printf("[ExportCapCutDraft] BGM load failed for shot %d url=%q: %v", bs.StartShotNo, bs.URL, err)
 			}
+			draftMatEntries = append(draftMatEntries, draftMatEntry{filename: bgmFilename, metetype: "music", duration: bgmActualDur})
 
 			vol := bs.Volume
 			if vol <= 0 {
@@ -1572,17 +1860,19 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			}
 
 			audios = append(audios, ccAudioMaterial{
-				CheckFlag:       1,
-				Duration:        bgmActualDur, // P1-2: 实际文件时长，而非时间轴跨度
-				ID:              bgmMatID,
-				MaterialID:      bgmMatID,
-				Name:            bs.TrackName,
-				Path:            bgmPath,
-				CategoryName:    "local",
-				WavePoints:      []interface{}{},
-				MusicID:         uuid.New().String(),
-				LocalMaterialID: uuid.New().String(),
-				Type:            "music",
+				CategoryName:       "local",
+				CheckFlag:          1,
+				CopyrightLimitType: "none",
+				Duration:           bgmActualDur, // P1-2: 实际文件时长，而非时间轴跨度
+				ID:                 bgmMatID,
+				LocalMaterialID:    uuid.New().String(),
+				MusicID:            uuid.New().String(),
+				Name:               bs.TrackName,
+				Path:               bgmPath,
+				SimilarMusicInfo:   ccSimilarMusicInfo{},
+				TTSBenefitInfo:     ccTTSBenefitInfo{BenefitType: "none", BenefitAmount: -1},
+				Type:               "music",
+				WavePoints:         []interface{}{},
 			})
 			// P0-2: SourceTimerange 不能超出文件实际时长，否则 CapCut 读取 EOF 后行为未定义（静默/循环/崩溃）
 			bgmSrcDur := segDur
@@ -1611,7 +1901,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				Visible:         true,
 				Volume:          vol,
 			}
-			applyVideoSegmentDefaults(&bgmSeg)
+			applyAudioSegmentDefaults(&bgmSeg)
 			bgmSeg.ExtraMaterialRefs = append(bgmSeg.ExtraMaterialRefs, bgmSpd.ID, bgmPh.ID, bgmBts.ID, bgmSc.ID, bgmVs.ID)
 			bgmSegments = append(bgmSegments, bgmSeg)
 		}
@@ -1796,23 +2086,65 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	// P1-1: 有封面图时在 meta 中引用，否则留空（避免 CapCut 显示损坏图标）
 	draftCoverName := ""
 	if len(coverData) > 0 {
-		draftCoverName = "cover.jpg"
+		draftCoverName = "draft_cover.jpg"
+		draftMatEntries = append(draftMatEntries, draftMatEntry{
+			filename: "draft_cover.jpg",
+			metetype: "photo",
+			duration: 5_000_000, // 5s，与真实草稿封面一致
+			width:    width,
+			height:   height,
+		})
 	}
+
+	// 构建 draft_materials（CapCut 素材面板索引，7 个类型组）
+	draftMatValues := make([]interface{}, 0, len(draftMatEntries))
+	for _, e := range draftMatEntries {
+		draftMatValues = append(draftMatValues, map[string]interface{}{
+			"ai_group_type": "",
+			"create_time":   now,
+			"duration":      e.duration,
+			"enter_from":    0,
+			"extra_info":    e.filename,
+			"file_Path":     e.filename,
+			"height":        e.height,
+			"id":            uuid.New().String(),
+			"import_time":   now,
+			"import_time_ms": nowMicros,
+			"item_source":   1,
+			"md5":           "",
+			"metetype":      e.metetype,
+			"roughcut_time_range": map[string]interface{}{"duration": e.duration, "start": int64(0)},
+			"sub_time_range":      map[string]interface{}{"duration": int64(-1), "start": int64(-1)},
+			"type":          0,
+			"width":         e.width,
+		})
+	}
+	draftMaterials := []interface{}{
+		map[string]interface{}{"type": 0, "value": draftMatValues},
+		map[string]interface{}{"type": 1, "value": []interface{}{}},
+		map[string]interface{}{"type": 2, "value": []interface{}{}},
+		map[string]interface{}{"type": 3, "value": []interface{}{}},
+		map[string]interface{}{"type": 6, "value": []interface{}{}},
+		map[string]interface{}{"type": 7, "value": []interface{}{}},
+		map[string]interface{}{"type": 8, "value": []interface{}{}},
+	}
+
 	meta := ccMetaInfo{
 		DraftCover:               draftCoverName,
-		DraftFoldPath:            "",
+		DraftEnterpriseInfo:      ccDraftEnterpriseInfo{EnterpriseMaterial: []interface{}{}},
 		DraftID:                  draftID,
-		DraftIsAI:                false,
-		DraftIsArticleVideo:      false,
-		DraftIsInvisible:         false,
-		DraftMaterials:           []interface{}{},
+		DraftIsFromDeeplink:      "false",
+		DraftMaterials:           draftMaterials,
+		DraftMaterialsCopiedInfo: []interface{}{},
 		DraftName:                video.Title,
-		DraftNewVersion:          "171.0.0",
-		DraftRootPath:            "",
+		DraftNewVersion:          "",
 		DraftSegmentExtraInfo:    []interface{}{},
-		DraftTimelineMaterialsV2: []interface{}{},
-		TmDraftCreate:            now,
-		TmDraftModify:            now,
+		TmDraftCloudEntryID:      -1,
+		TmDraftCloudParentEntryID: -1,
+		TmDraftCloudSpaceID:      -1,
+		TmDraftCloudUserID:       -1,
+		TmDraftCreate:            nowMicros,
+		TmDraftModify:            nowMicros,
 		TmDuration:               totalDuration,
 	}
 
@@ -1900,9 +2232,9 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 	// P1-1: 封面图（草稿列表缩略图）
 	if len(coverData) > 0 {
-		if err := writeZip(prefix+"cover.jpg", coverData); err != nil {
+		if err := writeZip(prefix+"draft_cover.jpg", coverData); err != nil {
 			zipFile.Close()
-			return nil, fmt.Errorf("write cover.jpg: %w", err)
+			return nil, fmt.Errorf("write draft_cover.jpg: %w", err)
 		}
 	}
 
@@ -1960,6 +2292,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.StoryboardShot, novel *model.Novel) (*ExportResult, error) {
 	logger.Printf("[CapCutService] ExportBRollDraft: videoID=%d shots=%d", video.ID, len(shots))
 	now := time.Now().Unix()
+	nowMicros := time.Now().UnixMicro()
 	draftID := uuid.New().String()
 	projectName := sanitizeFilename(video.Title)
 	if projectName == "" {
@@ -1984,6 +2317,16 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		data     []byte
 	}
 	var mediaFiles []mediaFile
+
+	// draft_materials 媒体目录条目
+	type draftMatEntry struct {
+		filename string
+		metetype string
+		duration int64
+		width    int
+		height   int
+	}
+	var draftMatEntries []draftMatEntry
 
 	var videoMaterials []ccVideoMaterial
 	videoSegments := []ccSegment{} // 直接初始化为非 nil 空切片
@@ -2050,24 +2393,46 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 				logger.Printf("[ExportBRollDraft] media load failed for shot %d (%v)", shot.ShotNo, mediaErr)
 			}
 		}
+		draftMatEntries = append(draftMatEntries, draftMatEntry{
+			filename: vidFilename,
+			metetype: "photo",
+			duration: durationMicros,
+			width:    width,
+			height:   height,
+		})
 
 		videoMaterials = append(videoMaterials, ccVideoMaterial{
-			CheckFlag:         63487,
-			CropScale:         1,
-			Crop:              defaultCrop,
-			Duration:          10_800_000_000, // 图片素材固定 3 小时
-			HasAudio:          false,
-			Height:            height,
-			ID:                vidMatID,
-			ImportTime:        now,
-			ImportTimeUs:      now,
-			LocalMaterialPath: "",
-			LocalVideoPath:    "",
-			MaterialID:        vidMatID,
-			Path:              vidPath,
-			SourcePlatform:    0,
-			Type:              "photo",
-			Width:             width,
+			AIGCType:     "none",
+			CategoryName: "local",
+			CheckFlag:    62978047,
+			Crop:         defaultCrop,
+			CropRatio:    "free",
+			CropScale:    1.0,
+			Duration:     10_800_000_000, // 图片素材固定 3 小时
+			HasAudio:     false,
+			Height:       height,
+			ID:           vidMatID,
+			LivePhotoTimestamp: -1,
+			LocalMaterialID: uuid.New().String(),
+			MaterialName: vidFilename,
+			Matting: ccMattingData{
+				InteractiveTime: []interface{}{},
+				Strokes:         []interface{}{},
+			},
+			Path:             vidPath,
+			PictureFrom:      "none",
+			Stable:           ccStableData{},
+			SurfaceTrackings: []interface{}{},
+			Type:             "photo",
+			VideoAlgorithm: ccVideoAlgorithm{
+				Algorithms:          []interface{}{},
+				GameplayConfigs:     []interface{}{},
+				AIInPaintingConfig:  []interface{}{},
+				AIBackgroundConfigs: []interface{}{},
+				AIGCGenerateList:    []interface{}{},
+				SkipAlgorithmIndex:  []interface{}{},
+			},
+			Width: width,
 		})
 
 		{
@@ -2126,22 +2491,25 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			} else {
 				logger.Printf("[ExportBRollDraft] audio load failed shot %d url=%q: %v", shot.ShotNo, shot.AudioPath, err)
 			}
+			draftMatEntries = append(draftMatEntries, draftMatEntry{filename: audPath, metetype: "music", duration: actualAudioDur})
 			srcDur := actualAudioDur
 			if srcDur > durationMicros {
 				srcDur = durationMicros
 			}
 			audioMaterials = append(audioMaterials, ccAudioMaterial{
-				CheckFlag:       1,
-				Duration:        actualAudioDur,
-				ID:              audMatID,
-				MaterialID:      audMatID,
-				Name:            fmt.Sprintf("shot_%03d_audio", shot.ShotNo),
-				Path:            audPath,
-				CategoryName:    "local",
-				WavePoints:      []interface{}{},
-				MusicID:         uuid.New().String(),
-				LocalMaterialID: uuid.New().String(),
-				Type:            "extract_music",
+				CategoryName:       "local",
+				CheckFlag:          1,
+				CopyrightLimitType: "none",
+				Duration:           actualAudioDur,
+				ID:                 audMatID,
+				LocalMaterialID:    uuid.New().String(),
+				MusicID:            uuid.New().String(),
+				Name:               fmt.Sprintf("shot_%03d_audio", shot.ShotNo),
+				Path:               audPath,
+				SimilarMusicInfo:   ccSimilarMusicInfo{},
+				TTSBenefitInfo:     ccTTSBenefitInfo{BenefitType: "none", BenefitAmount: -1},
+				Type:               "extract_music",
+				WavePoints:         []interface{}{},
 			})
 			{
 				// BRoll audio segment 伴生素材（5 个）
@@ -2166,7 +2534,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 					Visible:         true,
 					Volume:          1.0,
 				}
-				applyVideoSegmentDefaults(&baSeg)
+				applyAudioSegmentDefaults(&baSeg)
 				baSeg.ExtraMaterialRefs = append(baSeg.ExtraMaterialRefs, baSpd.ID, baPh.ID, baBts.ID, baSc.ID, baVs.ID)
 				audioSegments = append(audioSegments, baSeg)
 			}
@@ -2199,6 +2567,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 					if seg.DurationSecs > 0 {
 						actualSegDur = int64(seg.DurationSecs * 1_000_000)
 					}
+					draftMatEntries = append(draftMatEntries, draftMatEntry{filename: audPath, metetype: "music", duration: actualSegDur})
 					// cap at remaining shot time to avoid overflow into next shot
 					remaining := startMicros + durationMicros - segOffset
 					srcDur := actualSegDur
@@ -2209,17 +2578,19 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 						break // used up all shot time
 					}
 					audioMaterials = append(audioMaterials, ccAudioMaterial{
-						CheckFlag:       1,
-						Duration:        actualSegDur,
-						ID:              audMatID,
-						MaterialID:      audMatID,
-						Name:            fmt.Sprintf("shot_%03d_seg%02d", shot.ShotNo, seg.SeqNo),
-						Path:            audPath,
-						CategoryName:    "local",
-						WavePoints:      []interface{}{},
-						MusicID:         uuid.New().String(),
-						LocalMaterialID: uuid.New().String(),
-						Type:            "extract_music",
+						CategoryName:       "local",
+						CheckFlag:          1,
+						CopyrightLimitType: "none",
+						Duration:           actualSegDur,
+						ID:                 audMatID,
+						LocalMaterialID:    uuid.New().String(),
+						MusicID:            uuid.New().String(),
+						Name:               fmt.Sprintf("shot_%03d_seg%02d", shot.ShotNo, seg.SeqNo),
+						Path:               audPath,
+						SimilarMusicInfo:   ccSimilarMusicInfo{},
+						TTSBenefitInfo:     ccTTSBenefitInfo{BenefitType: "none", BenefitAmount: -1},
+						Type:               "extract_music",
+						WavePoints:         []interface{}{},
 					})
 					// BRoll VoiceSegment 伴生素材（5 个）
 					bvsSpd := newSpeedMaterial()
@@ -2243,7 +2614,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 						Visible:         true,
 						Volume:          1.0,
 					}
-					applyVideoSegmentDefaults(&bvsSeg)
+					applyAudioSegmentDefaults(&bvsSeg)
 					bvsSeg.ExtraMaterialRefs = append(bvsSeg.ExtraMaterialRefs, bvsSpd.ID, bvsPh.ID, bvsBts.ID, bvsSc.ID, bvsVs.ID)
 					audioSegments = append(audioSegments, bvsSeg)
 					segOffset += actualSegDur
@@ -2563,23 +2934,65 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 	// P1-1: 有封面图时在 meta 中引用
 	brollCoverName := ""
 	if len(coverData) > 0 {
-		brollCoverName = "cover.jpg"
+		brollCoverName = "draft_cover.jpg"
+		draftMatEntries = append(draftMatEntries, draftMatEntry{
+			filename: "draft_cover.jpg",
+			metetype: "photo",
+			duration: 5_000_000,
+			width:    width,
+			height:   height,
+		})
 	}
+
+	// 构建 draft_materials
+	brollDraftMatValues := make([]interface{}, 0, len(draftMatEntries))
+	for _, e := range draftMatEntries {
+		brollDraftMatValues = append(brollDraftMatValues, map[string]interface{}{
+			"ai_group_type": "",
+			"create_time":   now,
+			"duration":      e.duration,
+			"enter_from":    0,
+			"extra_info":    e.filename,
+			"file_Path":     e.filename,
+			"height":        e.height,
+			"id":            uuid.New().String(),
+			"import_time":   now,
+			"import_time_ms": nowMicros,
+			"item_source":   1,
+			"md5":           "",
+			"metetype":      e.metetype,
+			"roughcut_time_range": map[string]interface{}{"duration": e.duration, "start": int64(0)},
+			"sub_time_range":      map[string]interface{}{"duration": int64(-1), "start": int64(-1)},
+			"type":          0,
+			"width":         e.width,
+		})
+	}
+	brollDraftMaterials := []interface{}{
+		map[string]interface{}{"type": 0, "value": brollDraftMatValues},
+		map[string]interface{}{"type": 1, "value": []interface{}{}},
+		map[string]interface{}{"type": 2, "value": []interface{}{}},
+		map[string]interface{}{"type": 3, "value": []interface{}{}},
+		map[string]interface{}{"type": 6, "value": []interface{}{}},
+		map[string]interface{}{"type": 7, "value": []interface{}{}},
+		map[string]interface{}{"type": 8, "value": []interface{}{}},
+	}
+
 	meta := ccMetaInfo{
 		DraftCover:               brollCoverName,
-		DraftFoldPath:            "",
+		DraftEnterpriseInfo:      ccDraftEnterpriseInfo{EnterpriseMaterial: []interface{}{}},
 		DraftID:                  draftID,
-		DraftIsAI:                false,
-		DraftIsArticleVideo:      false,
-		DraftIsInvisible:         false,
-		DraftMaterials:           []interface{}{},
+		DraftIsFromDeeplink:      "false",
+		DraftMaterials:           brollDraftMaterials,
+		DraftMaterialsCopiedInfo: []interface{}{},
 		DraftName:                video.Title + " (B剪)",
-		DraftNewVersion:          "171.0.0",
-		DraftRootPath:            "",
+		DraftNewVersion:          "",
 		DraftSegmentExtraInfo:    []interface{}{},
-		DraftTimelineMaterialsV2: []interface{}{},
-		TmDraftCreate:            now,
-		TmDraftModify:            now,
+		TmDraftCloudEntryID:      -1,
+		TmDraftCloudParentEntryID: -1,
+		TmDraftCloudSpaceID:      -1,
+		TmDraftCloudUserID:       -1,
+		TmDraftCreate:            nowMicros,
+		TmDraftModify:            nowMicros,
 		TmDuration:               totalDuration,
 	}
 
@@ -2662,9 +3075,9 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 
 	// P1-1: 封面图（草稿列表缩略图）
 	if len(coverData) > 0 {
-		if err := writeZip(prefix+"cover.jpg", coverData); err != nil {
+		if err := writeZip(prefix+"draft_cover.jpg", coverData); err != nil {
 			zipFile.Close()
-			return nil, fmt.Errorf("write cover.jpg: %w", err)
+			return nil, fmt.Errorf("write draft_cover.jpg: %w", err)
 		}
 	}
 	for _, mf := range mediaFiles {
@@ -3400,16 +3813,20 @@ func newBeatsMaterial() ccBeatsMaterial {
 	}
 }
 
-// applyVideoSegmentDefaults 为 video segment 填充真实草稿所需的默认字段值
+// applyVideoSegmentDefaults 为 video/text segment 填充真实草稿所需的默认字段值
 func applyVideoSegmentDefaults(seg *ccSegment) {
-	seg.RenderTimerange = seg.TargetTimerange
+	seg.RenderTimerange = ccTimeRange{Start: 0, Duration: 0} // 真实草稿始终为{0,0}
 	seg.EnableLut = true
 	seg.EnableAdjust = true
+	seg.EnableAdjustMask = false         // 真实草稿为 false
+	seg.EnableColorCorrectAdjust = false // 真实草稿为 false
+	seg.EnableColorMatchAdjust = false   // 真实草稿为 false
+	seg.EnableColorAdjustPro = false     // 真实草稿为 false
 	seg.EnableColorCurves = true
 	seg.EnableHslCurves = true
 	seg.EnableColorWheels = true
-	seg.HdrSettings = ccHdrSettings{Mode: 1, Intensity: 1.0, Nits: 1000}
-	seg.UniformScale = ccUniformScale{On: true, Value: 1.0}
+	seg.HdrSettings = &ccHdrSettings{Mode: 1, Intensity: 1.0, Nits: 1000}
+	seg.UniformScale = &ccUniformScale{On: true, Value: 1.0}
 	seg.LastNonzeroVolume = 1.0
 	if seg.CommonKeyframes == nil {
 		seg.CommonKeyframes = []interface{}{}
@@ -3419,6 +3836,34 @@ func applyVideoSegmentDefaults(seg *ccSegment) {
 	}
 	seg.EnableVideoMask = true
 	seg.Source = "segmentsourcenormal"
+	seg.TemplateScene = "default"
+}
+
+// applyAudioSegmentDefaults 为 audio segment（type="audio"）填充真实草稿所需的默认字段值
+// 音频 segment 的 hdr_settings 和 uniform_scale 为 null，部分 enable 字段为 false
+func applyAudioSegmentDefaults(seg *ccSegment) {
+	seg.RenderTimerange = ccTimeRange{Start: 0, Duration: 0}
+	seg.EnableLut = false
+	seg.EnableAdjust = false
+	seg.EnableAdjustMask = false
+	seg.EnableColorCorrectAdjust = false
+	seg.EnableColorMatchAdjust = false
+	seg.EnableColorAdjustPro = false
+	seg.EnableColorCurves = true
+	seg.EnableHslCurves = true
+	seg.EnableColorWheels = true
+	seg.HdrSettings = nil
+	seg.UniformScale = nil
+	seg.LastNonzeroVolume = 1.0
+	if seg.CommonKeyframes == nil {
+		seg.CommonKeyframes = []interface{}{}
+	}
+	if seg.LyricKeyframes == nil {
+		seg.LyricKeyframes = []interface{}{}
+	}
+	seg.EnableVideoMask = true
+	seg.Source = "segmentsourcenormal"
+	seg.TemplateScene = "default"
 }
 
 // buildPhotoMotionKeyframes 为静图分镜生成 Ken Burns 运镜关键帧组。
