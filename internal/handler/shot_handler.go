@@ -691,9 +691,7 @@ func (h *VideoHandler) ExportCapCutDraft(c *gin.Context) {
 	if h.bgmRepo != nil {
 		bgmSegs, _ = h.bgmRepo.ListByVideoID(uint(id))
 	}
-	opts := service.ExportOptions{EmbedMedia: c.Query("embed_media") == "true"}
-
-	result, err := h.capcutService.ExportCapCutDraft(video, shots, novel, bgmSegs, opts)
+	result, err := h.capcutService.ExportCapCutDraft(video, shots, novel, bgmSegs)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -726,8 +724,6 @@ func (h *VideoHandler) Export(c *gin.Context) {
 		return
 	}
 
-	exportOpts := service.ExportOptions{EmbedMedia: c.Query("embed_media") == "true"}
-
 	var result *service.ExportResult
 	switch format {
 	case "fcpxml":
@@ -746,14 +742,14 @@ func (h *VideoHandler) Export(c *gin.Context) {
 		result, err = h.capcutService.ExportCSV(video, shots)
 	case "broll":
 		novel, _ := h.videoService.GetNovelByID(video.NovelID)
-		result, err = h.capcutService.ExportBRollDraft(video, shots, novel, exportOpts)
+		result, err = h.capcutService.ExportBRollDraft(video, shots, novel)
 	default: // "capcut" 或其他
 		novel, _ := h.videoService.GetNovelByID(video.NovelID)
 		var bgmSegs []*model.VideoBGMSegment
 		if h.bgmRepo != nil {
 			bgmSegs, _ = h.bgmRepo.ListByVideoID(uint(id))
 		}
-		result, err = h.capcutService.ExportCapCutDraft(video, shots, novel, bgmSegs, exportOpts)
+		result, err = h.capcutService.ExportCapCutDraft(video, shots, novel, bgmSegs)
 	}
 
 	if err != nil {
