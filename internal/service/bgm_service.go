@@ -174,7 +174,8 @@ func (s *BGMService) resolveLocalBGMURL(ctx context.Context, localPath string) (
 }
 
 // MixBGM 将 BGM 混入视频（BGM 音量 30%，对话优先）
-func (s *BGMService) MixBGM(videoPath, bgmSource, outputPath string) error {
+// P1-3: ctx 传播至 ffprobe/ffmpeg，避免父任务取消后仍占用 WASM worker。
+func (s *BGMService) MixBGM(ctx context.Context, videoPath, bgmSource, outputPath string) error {
 	videoPath = strings.TrimPrefix(videoPath, "file://")
 	bgmSource = strings.TrimPrefix(bgmSource, "file://")
 
@@ -191,9 +192,13 @@ func (s *BGMService) MixBGM(videoPath, bgmSource, outputPath string) error {
 		}
 		tmp.Close()
 		bgmLocalPath = tmp.Name()
-		if err := downloadFile(bgmSource, bgmLocalPath); err != nil {
+		// P1-5: bounded download timeout (3 min) via ctx sub-context
+		dlCtx, dlCancel := context.WithTimeout(ctx, 3*time.Minute)
+		dlErr := downloadFileCtx(dlCtx, bgmSource, bgmLocalPath)
+		dlCancel()
+		if dlErr != nil {
 			os.Remove(bgmLocalPath)
-			return fmt.Errorf("MixBGM: download BGM failed: %w", err)
+			return fmt.Errorf("MixBGM: download BGM failed: %w", dlErr)
 		}
 		defer os.Remove(bgmLocalPath)
 	}
@@ -203,9 +208,14 @@ func (s *BGMService) MixBGM(videoPath, bgmSource, outputPath string) error {
 	//   旧实现 weights=1 0.3 会将人声压到 77%，与"BGM 30%、人声 100%"的预期相反
 	// - 分别 loudnorm 两路再混合会导致最终 LUFS 不确定；改为只对 BGM 做基础 EQ，不做 loudnorm
 	// - P1-4: 探测视频时长，为 BGM 添加淡入（0.5s）和淡出（1s）以消除突兀感
-	videoDur := probeClipDuration(context.Background(), videoPath)
-	fadeIn := "afade=t=in:st=0:d=0.5"
-	fadeOut := "" // 时长未知时不做淡出
+	videoDur := probeClipDuration(ctx, videoPath) // P1-3: use ctx
+	// P2-4: skip fade-in when video is shorter than the fade duration to avoid near-silent BGM
+	fadeIn := ""
+	fadeOut := ""
+	if videoDur <= 0 || videoDur >= 0.6 {
+		// unknown duration or long enough: apply 0.5s fade-in
+		fadeIn = "afade=t=in:st=0:d=0.5"
+	}
 	if videoDur > 2 {
 		fadeOutSt := videoDur - 1.0
 		if fadeOutSt < 0.5 {
@@ -216,11 +226,17 @@ func (s *BGMService) MixBGM(videoPath, bgmSource, outputPath string) error {
 	// BGM：降至 30% + EQ 去浑浊 + 淡入淡出
 	// 人声：80Hz 高通去低频噪声（不做 loudnorm，保留原始电平）
 	// amix normalize=0：不自动归一化，保留我们的显式音量控制
+	// P2-4: build fade chain dynamically to avoid trailing comma when fadeIn is empty
+	bgmChain := "volume=0.3,equalizer=f=250:t=o:w=2:g=-2,equalizer=f=4000:t=o:w=2:g=-1"
+	if fadeIn != "" {
+		bgmChain += "," + fadeIn
+	}
+	bgmChain += fadeOut // fadeOut already starts with "," when non-empty
 	filterComplex := fmt.Sprintf(
-		"[1:a]volume=0.3,equalizer=f=250:t=o:w=2:g=-2,equalizer=f=4000:t=o:w=2:g=-1,%s%s[bgm];[0:a]highpass=f=80[voice];[voice][bgm]amix=inputs=2:duration=first:normalize=0[out]",
-		fadeIn, fadeOut,
+		"[1:a]%s[bgm];[0:a]highpass=f=80[voice];[voice][bgm]amix=inputs=2:duration=first:normalize=0[out]",
+		bgmChain,
 	)
-	if out, err := runFFmpegCtx(context.Background(), "-y",
+	if out, err := runFFmpegCtx(ctx, "-y", // P1-3: use ctx
 		"-i", videoPath,
 		"-stream_loop", "-1",
 		"-i", bgmLocalPath,
@@ -1017,7 +1033,8 @@ func (s *BGMService) GenerateBGMSegments(
 // 否则退化为普通 MixBGM。
 // audioTrackPath: 合并后的人声轨道文件路径（或空串表示无人声）
 // duckingLevel: 闪避后 BGM 的目标音量（0.1-0.5，默认0.15）
-func (s *BGMService) MixBGMWithDucking(videoPath, bgmSource, audioTrackPath, outputPath string, bgmVolume, duckingLevel float64) error {
+// P1-3: ctx 传播至 ffprobe/ffmpeg。
+func (s *BGMService) MixBGMWithDucking(ctx context.Context, videoPath, bgmSource, audioTrackPath, outputPath string, bgmVolume, duckingLevel float64) error {
 	videoPath = strings.TrimPrefix(videoPath, "file://")
 	bgmSource = strings.TrimPrefix(bgmSource, "file://")
 
@@ -1039,16 +1056,20 @@ func (s *BGMService) MixBGMWithDucking(videoPath, bgmSource, audioTrackPath, out
 		}
 		tmp.Close()
 		bgmLocalPath = tmp.Name()
-		if err := downloadFile(bgmSource, bgmLocalPath); err != nil {
+		// P1-5: bounded download timeout
+		dlCtx, dlCancel := context.WithTimeout(ctx, 3*time.Minute)
+		dlErr := downloadFileCtx(dlCtx, bgmSource, bgmLocalPath)
+		dlCancel()
+		if dlErr != nil {
 			os.Remove(bgmLocalPath)
-			return fmt.Errorf("MixBGMWithDucking: download BGM failed: %w", err)
+			return fmt.Errorf("MixBGMWithDucking: download BGM failed: %w", dlErr)
 		}
 		defer os.Remove(bgmLocalPath)
 	}
 
 	// 若无人声轨，退化为普通混音（无需闪避）
 	if audioTrackPath == "" {
-		return s.MixBGM(videoPath, bgmSource, outputPath)
+		return s.MixBGM(ctx, videoPath, bgmSource, outputPath)
 	}
 
 	audioTrackPath = strings.TrimPrefix(audioTrackPath, "file://")
@@ -1087,11 +1108,11 @@ func (s *BGMService) MixBGMWithDucking(videoPath, bgmSource, audioTrackPath, out
 		outputPath,
 	}
 
-	if out, err := runFFmpegCtx(context.Background(), args...); err != nil {
+	if out, err := runFFmpegCtx(ctx, args...); err != nil { // P1-3: use ctx
 		logger.Printf("MixBGMWithDucking: ffmpeg failed: %v\n%s", err, string(out))
 		// 降级到普通混音
 		logger.Printf("MixBGMWithDucking: falling back to simple mix")
-		return s.MixBGM(videoPath, bgmSource, outputPath)
+		return s.MixBGM(ctx, videoPath, bgmSource, outputPath)
 	}
 	return nil
 }

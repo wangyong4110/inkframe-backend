@@ -733,7 +733,8 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			services.CharacterConsistencyService,
 		).WithTaskService(services.TaskService).WithSFXService(services.SFXService).WithSFXItemRepo(repos.ShotSFXItemRepo).
 			WithBGMService(services.BGMService).WithBGMRepo(repos.VideoBGMSegmentRepo).
-			WithSubtitleService(service.NewSubtitleService()).WithStorage(storageSvc).WithAssetRepo(repos.AssetRepo),
+			WithSubtitleService(service.NewSubtitleService()).WithStorage(storageSvc).WithAssetRepo(repos.AssetRepo).
+			WithCapCutSegmentRepo(repos.ShotVoiceSegmentRepo), // P1-2: VoiceSegment audio in CapCut exports
 		ModelHandler:   handler.NewModelHandler(services.ModelService),
 		McpHandler:     handler.NewMcpHandler(services.McpService),
 		StyleHandler:   handler.NewStyleHandler(services.StyleService),

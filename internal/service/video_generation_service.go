@@ -480,8 +480,10 @@ func (s *IntelligentStoryboardService) buildPrompt(shot *StoryboardShot, config 
 		prompt += fmt.Sprintf("in %s, ", shot.Scene)
 	}
 
-	// 添加情感
-	prompt += fmt.Sprintf("%s atmosphere, ", shot.Emotion)
+	// 添加情感（P2-4: 仅非空时追加，避免生成 " atmosphere," 空描述词）
+	if shot.Emotion != "" {
+		prompt += fmt.Sprintf("%s atmosphere, ", shot.Emotion)
+	}
 
 	// 添加风格和质量
 	switch config.ArtStyle {

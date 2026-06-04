@@ -1323,8 +1323,26 @@ func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string,
 // ApplyReviewInserts 将 AI 审查建议的插入分镜依次写入数据库。
 // 从最大 after_shot_no 向小排序插入，避免逐步移位导致编号错乱。
 func (s *VideoService) ApplyReviewInserts(videoID uint, inserts []model.ShotInsertSuggestion) (int, error) {
-	sorted := make([]model.ShotInsertSuggestion, len(inserts))
-	copy(sorted, inserts)
+	// P2-6: 查询当前最大镜头编号，过滤越界插入请求（AI 可能幻构不存在的 shot_no）
+	existingShots, err := s.storyboardRepo.ListByVideo(videoID)
+	if err != nil {
+		return 0, fmt.Errorf("list shots: %w", err)
+	}
+	maxShotNo := 0
+	for _, sh := range existingShots {
+		if sh.ShotNo > maxShotNo {
+			maxShotNo = sh.ShotNo
+		}
+	}
+
+	sorted := make([]model.ShotInsertSuggestion, 0, len(inserts))
+	for _, ins := range inserts {
+		if ins.AfterShotNo < 0 || ins.AfterShotNo > maxShotNo {
+			logger.Printf("[ApplyReviewInserts] videoID=%d: skipping invalid AfterShotNo=%d (max=%d)", videoID, ins.AfterShotNo, maxShotNo)
+			continue
+		}
+		sorted = append(sorted, ins)
+	}
 	sort.Slice(sorted, func(i, j int) bool {
 		return sorted[i].AfterShotNo > sorted[j].AfterShotNo
 	})
@@ -1444,8 +1462,8 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent s
 		"ShotsText":          sb.String(),
 		"HasChapterContent":  truncatedChapter != "",
 		"ChapterContent":     truncatedChapter,
-		"HasPreviousScore":   previousScore > 0,
-		"PreviousScoreStr":   fmt.Sprintf("%.0f", previousScore),
+		"HasPreviousScore":   false, // P2-3: 不注入历史评分，避免 AI 锚定偏差影响本次独立评估
+		"PreviousScoreStr":   "",
 		"HasPreviousFixed":   len(prevFixedLines) > 0,
 		"PreviousFixedText":  strings.Join(prevFixedLines, "\n"),
 		"HasIgnored":         len(ignoredLines) > 0,

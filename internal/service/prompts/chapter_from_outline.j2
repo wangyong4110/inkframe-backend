@@ -181,6 +181,11 @@
 {{ ChapterBudget }}
 {% endif %}
 
+{% if ReviewHints %}
+# ⚠️ 审查反馈——重写必须解决以下问题（最高优先级，每条都需体现在正文中）
+{{ ReviewHints }}
+{% endif %}
+
 {% if UserPrompt %}
 # 用户额外要求
 {{ UserPrompt }}

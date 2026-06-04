@@ -22,6 +22,7 @@ import (
 	"image"
 	"image/draw"
 	"image/jpeg"
+	_ "image/png" // P0-1: register PNG decoder so image.Decode handles PNG inputs
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,7 +39,7 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 	if duration <= 0 {
 		duration = defaultShotDurationSecs
 	}
-	const fps = 30
+	const fps = 24 // P1-4: match synthesis output fps to eliminate concat stuttering
 	totalFrames := int(duration*float64(fps) + 0.5)
 	if totalFrames < 1 {
 		totalFrames = 1
@@ -60,10 +61,10 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 	if err != nil {
 		return "", fmt.Errorf("ken burns go: open: %w", err)
 	}
-	srcImg, err := jpeg.Decode(f)
+	srcImg, _, err := image.Decode(f) // P0-1: image.Decode handles JPEG and PNG (via blank imports)
 	f.Close()
 	if err != nil {
-		return "", fmt.Errorf("ken burns go: jpeg decode: %w", err)
+		return "", fmt.Errorf("ken burns go: image decode: %w", err)
 	}
 
 	// Convert to *image.RGBA for direct byte-slice access.
@@ -86,6 +87,11 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 	defer os.RemoveAll(frameDir)
 
 	renderStart := time.Now()
+	// P2-3: warn when frame disk usage is large (JPEG 85 ≈ 0.1 bytes/pixel)
+	estFrameMB := int64(totalFrames) * int64(outW) * int64(outH) / (10 * 1024 * 1024)
+	if estFrameMB > 200 {
+		logger.Printf("generateKenBurnsPureGo: shot %d WARNING estimated frame disk usage ~%dMB (%d frames %dx%d)", shot.ShotNo, estFrameMB, totalFrames, outW, outH)
+	}
 	logger.Printf("generateKenBurnsPureGo: shot %d rendering %d frames (%dx%d) src=%dx%d camera=%s frameDir=%s",
 		shot.ShotNo, totalFrames, outW, outH, srcW, srcH, shot.CameraType, frameDir)
 

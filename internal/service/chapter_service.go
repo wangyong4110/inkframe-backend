@@ -506,6 +506,12 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	if !req.IsStandalone && novel.TargetChapters > 0 && req.ChapterNo >= novel.TargetChapters {
 		req.IsStandalone = true
 	}
+	// 兜底检测：未设置目标章节数时，检查当前章是否为大纲中最后一章
+	if !req.IsStandalone {
+		if maxNo, err := s.chapterRepo.MaxChapterNo(novelID); err == nil && maxNo > 0 && req.ChapterNo >= maxNo {
+			req.IsStandalone = true
+		}
+	}
 
 	// 从小说大纲获取本章元数据（张力值、幕次、情感基调等）
 	chapterMeta := s.extractChapterMeta(novelID, req.ChapterNo)
@@ -1183,6 +1189,7 @@ func (s *ChapterService) generateSceneOutline(
 		"Characters":            characters,
 		"CharacterStates":       formatCharacterStates(characters),
 		"ForeshadowHints":       foreshadowHints,
+		"ReviewHints":           buildReviewHintsText(req.ReviewHints),
 		"PlotTensionState":      plotTensionState,
 		"RefStories":            refStories,
 		"WikiContext":           wikiContext,
@@ -1824,6 +1831,7 @@ func (s *ChapterService) generateFromSceneOutline(
 		"ForeshadowHints":       foreshadowHints,
 		"PreviousChapterEnding": prevEnding,
 		"UserPrompt":            req.Prompt,
+		"ReviewHints":           buildReviewHintsText(req.ReviewHints),
 		"IsStandalone":          req.IsStandalone,
 		"RefStories":            refStories,
 		"WikiContext":           wikiContext,
@@ -3523,6 +3531,11 @@ func (s *ChapterService) RegenerateChapter(tenantID uint, id uint, req *model.Ge
 	req.NovelID = chapter.NovelID
 	req.ChapterNo = chapter.ChapterNo
 
+	// 审查驱动重生成：将当前章节正文注入 ReviewHints，供 prompt 模板参考
+	if req.ReviewHints != nil && chapter.Content != "" {
+		req.ReviewHints.ExistingContent = chapter.Content
+	}
+
 	// Reset status to "draft" so AtomicSetGenerating in GenerateChapter can acquire the lock.
 	// A completed/generating chapter would otherwise be blocked by the optimistic-lock guard.
 	_ = s.chapterRepo.UpdateStatus(chapter.ID, chapter.NovelID, "draft")
@@ -3702,5 +3715,38 @@ func countWebSearchResults(output map[string]interface{}) int {
 		return len(v)
 	}
 	return 0
+}
+
+// buildReviewHintsText 将审查反馈转为模板可注入的结构化文本
+func buildReviewHintsText(hints *model.ReviewHintsPayload) string {
+	if hints == nil {
+		return ""
+	}
+	var sb strings.Builder
+
+	// 现有章节正文（审查重生成的改写基础）
+	if hints.ExistingContent != "" {
+		sb.WriteString("【当前版本正文——在此基础上改进，保留已经写好的情节骨架和人物关系，针对性解决下列问题】\n")
+		sb.WriteString("```\n")
+		sb.WriteString(hints.ExistingContent)
+		sb.WriteString("\n```\n\n")
+	}
+
+	if len(hints.Weaknesses) > 0 {
+		sb.WriteString("【必须解决的整体不足】\n")
+		for _, w := range hints.Weaknesses {
+			sb.WriteString("• " + w + "\n")
+		}
+	}
+	if len(hints.ParagraphIssues) > 0 {
+		if sb.Len() > 0 {
+			sb.WriteString("\n")
+		}
+		sb.WriteString("【需重点改写的段落问题】\n")
+		for _, p := range hints.ParagraphIssues {
+			sb.WriteString("• " + p + "\n")
+		}
+	}
+	return sb.String()
 }
 

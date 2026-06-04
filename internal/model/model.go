@@ -853,8 +853,16 @@ type GenerateChapterRequest struct {
 	Temperature    float64 `json:"temperature,omitempty"`    // 0=使用项目配置或系统默认
 	TimeoutSeconds int     `json:"timeout_seconds,omitempty"` // 0=使用项目配置或系统默认
 	ModelOverride  string  `json:"model,omitempty"` // 可选：指定使用的 AI 模型/provider
-	IsStandalone    bool    `json:"is_standalone"`    // true=最终章，要求故事完整收尾；可显式传入，也会由系统根据 chapter_no >= target_chapters 自动推断
-	WebSearch       bool    `json:"web_search"`       // true=启用联网参考，搜索相关故事片段注入 prompt
-	WikiSearch      bool    `json:"wiki_search"`      // true=启用百科知识查询，注入世界观准确信息
-	UseStoryPattern bool    `json:"use_story_pattern"` // true=启用情节模板，注入叙事结构参考
+	IsStandalone    bool     `json:"is_standalone"`    // true=最终章，要求故事完整收尾；可显式传入，也会由系统根据 chapter_no >= target_chapters 自动推断
+	WebSearch       bool     `json:"web_search"`       // true=启用联网参考，搜索相关故事片段注入 prompt
+	WikiSearch      bool     `json:"wiki_search"`      // true=启用百科知识查询，注入世界观准确信息
+	UseStoryPattern bool     `json:"use_story_pattern"` // true=启用情节模板，注入叙事结构参考
+	ReviewHints     *ReviewHintsPayload `json:"review_hints,omitempty"` // AI审查反馈，重生成时注入
+}
+
+// ReviewHintsPayload 审查反馈摘要，用于指导重新生成
+type ReviewHintsPayload struct {
+	Weaknesses      []string `json:"weaknesses"`       // 整体不足列表（issue + suggestion 合并）
+	ParagraphIssues []string `json:"paragraph_issues"` // 选中段落的问题描述
+	ExistingContent string   `json:"-"`                // 当前章节正文（由 RegenerateChapter 自动填充，不从请求读取）
 }

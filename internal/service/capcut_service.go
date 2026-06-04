@@ -18,13 +18,25 @@ import (
 	astisub "github.com/asticode/go-astisub"
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/model"
+	"github.com/inkframe/inkframe-backend/internal/repository"
 )
 
+// maxExportMediaBytes P2-4: skip local media embeds beyond this limit to prevent OOM.
+const maxExportMediaBytes int64 = 2 * 1024 * 1024 * 1024 // 2 GiB
+
 // CapCutService 剪映草稿导出服务
-type CapCutService struct{}
+type CapCutService struct {
+	segmentRepo *repository.ShotVoiceSegmentRepository // P1-2: for including multi-segment audio in exports
+}
 
 func NewCapCutService() *CapCutService {
 	return &CapCutService{}
+}
+
+// WithSegmentRepo 注入 VoiceSegment 仓库，使导出时能包含多段配音音频。
+func (s *CapCutService) WithSegmentRepo(r *repository.ShotVoiceSegmentRepository) *CapCutService {
+	s.segmentRepo = r
+	return s
 }
 
 // --- CapCut 草稿 JSON 结构体 ---
@@ -175,6 +187,7 @@ type ccTextMaterial struct {
 }
 
 type ccMaterials struct {
+	AudioFades         []interface{}          `json:"audio_fades"` // P1-4: CapCut 6.x+ 必需字段
 	Audios             []ccAudioMaterial      `json:"audios"`
 	Beats              []interface{}          `json:"beats"`
 	Canvases           []interface{}          `json:"canvases"`
@@ -195,9 +208,9 @@ type ccMaterials struct {
 }
 
 type ccCanvasConfig struct {
-	Height int    `json:"height"`
-	Ratio  string `json:"ratio"`
-	Width  int    `json:"width"`
+	Height int     `json:"height"`
+	Ratio  float64 `json:"ratio"` // P0-2: CapCut 要求 float64（1.7778），非字符串 "16:9"
+	Width  int     `json:"width"`
 }
 
 type ccDraftContent struct {
@@ -255,6 +268,36 @@ func aspectRatioDimensions(ratio string) (int, int) {
 	default: // 16:9
 		return 1920, 1080
 	}
+}
+
+// aspectRatioFloat 将宽高比字符串转换为 CapCut canvas_config.ratio 所需的 float64。
+// P0-2: CapCut 使用 float64 而非字符串（16:9 → 1.7778, 9:16 → 0.5625）。
+func aspectRatioFloat(ratio string) float64 {
+	switch ratio {
+	case "9:16":
+		return float64(9) / float64(16) // 0.5625
+	case "1:1":
+		return 1.0
+	case "4:3":
+		return float64(4) / float64(3) // 1.3333
+	default: // 16:9
+		return float64(16) / float64(9) // 1.7778
+	}
+}
+
+// utf16Len 返回字符串的 UTF-16 编码单元数。
+// P2-3: CapCut 文本 content 的 range 字段使用 UTF-16 单元偏移，
+// 对于辅助平面字符（emoji）一个码点占两个 UTF-16 单元，len([]rune) 会算错。
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		if r >= 0x10000 {
+			n += 2 // 辅助平面字符（emoji 等）占两个 UTF-16 单元
+		} else {
+			n++
+		}
+	}
+	return n
 }
 
 // subtitleConfig 解析小说级字幕配置，返回渲染所需参数（novel 为 nil 时全用默认值）
@@ -350,7 +393,7 @@ func buildTextContent(text string, cfg subtitleConfig) string {
 	sizePt := float64(cfg.fontSize) / 5.0
 
 	style := map[string]interface{}{
-		"range": []int{0, len([]rune(text))},
+		"range": []int{0, utf16Len(text)}, // P2-3: 使用 UTF-16 单元数（兼容 emoji 等辅助平面字符）
 		"fill": map[string]interface{}{
 			"alpha": 1.0,
 			"content": map[string]interface{}{
@@ -472,6 +515,24 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		return shots[i].ShotNo < shots[j].ShotNo
 	})
 
+	// P1-1: 预取第一张分镜图作为草稿封面缩略图
+	var coverData []byte
+	if len(shots) > 0 && shots[0].ImageURL != "" {
+		imgURL := shots[0].ImageURL
+		if isHTTPURL(imgURL) {
+			if data, err := downloadMediaFile(imgURL); err == nil {
+				coverData = data
+			}
+		} else {
+			if data, err := os.ReadFile(strings.TrimPrefix(imgURL, "file://")); err == nil {
+				coverData = data
+			}
+		}
+	}
+
+	// P2-4: track total loaded bytes; skip embeds beyond maxExportMediaBytes to avoid OOM
+	var totalLoadedBytes int64
+
 	var totalDuration int64
 
 	for _, shot := range shots {
@@ -508,7 +569,12 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			vidPath = mediaURL
 		} else if mediaURL != "" {
 			if data, err := downloadMediaFile(mediaURL); err == nil {
-				mediaFiles = append(mediaFiles, mediaFile{filename: vidFilename, data: data})
+				if totalLoadedBytes+int64(len(data)) > maxExportMediaBytes {
+					logger.Printf("[ExportCapCutDraft] P2-4: total media exceeds 2GiB, skipping embed for shot %d", shot.ShotNo)
+				} else {
+					totalLoadedBytes += int64(len(data))
+					mediaFiles = append(mediaFiles, mediaFile{filename: vidFilename, data: data})
+				}
 			}
 		}
 
@@ -583,7 +649,10 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				if data, err := readLocalOrRemoteFile(shot.AudioPath); err == nil && len(data) > 0 {
 					ext := audioExtension(shot.AudioPath)
 					audPath = strings.ReplaceAll(audMatID, "-", "") + ext // 使用 materialID 作为文件名
-					mediaFiles = append(mediaFiles, mediaFile{filename: audPath, data: data})
+					if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
+						totalLoadedBytes += int64(len(data))
+						mediaFiles = append(mediaFiles, mediaFile{filename: audPath, data: data})
+					}
 					if dur := parseAudioDurationMicros(data, ext); dur > 0 {
 						actualAudioDur = dur
 					}
@@ -636,7 +705,13 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				if data, err := readLocalOrRemoteFile(shot.SFXURL); err == nil && len(data) > 0 {
 					ext := audioExtension(shot.SFXURL)
 					sfxPath = strings.ReplaceAll(sfxMatID, "-", "") + ext
-					mediaFiles = append(mediaFiles, mediaFile{filename: sfxPath, data: data})
+					// P2-1: apply same 2GiB guard as video/audio embeds
+					if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
+						totalLoadedBytes += int64(len(data))
+						mediaFiles = append(mediaFiles, mediaFile{filename: sfxPath, data: data})
+					} else {
+						logger.Printf("[ExportCapCutDraft] P2-1: total media exceeds 2GiB, skipping SFX embed for shot %d", shot.ShotNo)
+					}
 					if dur := parseAudioDurationMicros(data, ext); dur > 0 {
 						actualSFXDur = dur
 					}
@@ -812,11 +887,25 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			bgmMatID := uuid.New().String()
 			bgmFilename := strings.ReplaceAll(bgmMatID, "-", "") + ".mp3"
 			bgmPath := bgmFilename
+			bgmActualDur := segDur // P1-2: fallback，HTTP URL 无法 probe 时用时间轴跨度
 			if isHTTPURL(bs.URL) {
 				bgmPath = bs.URL
 			} else {
 				if data, err := downloadMediaFile(bs.URL); err == nil {
-					mediaFiles = append(mediaFiles, mediaFile{filename: bgmFilename, data: data})
+					ext := audioExtension(bs.URL)
+					bgmFilename = strings.ReplaceAll(bgmMatID, "-", "") + ext
+					bgmPath = bgmFilename
+					// P1-3: BGM 也纳入 2GiB 总大小保护
+					if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
+						totalLoadedBytes += int64(len(data))
+						mediaFiles = append(mediaFiles, mediaFile{filename: bgmFilename, data: data})
+					} else {
+						logger.Printf("[ExportCapCutDraft] BGM: total media exceeds 2GiB, skipping embed for shot %d", bs.StartShotNo)
+					}
+					// P1-2: probe 实际音频时长，避免 CapCut 对超出 Duration 的部分做拉伸处理
+					if dur := parseAudioDurationMicros(data, ext); dur > 0 {
+						bgmActualDur = dur
+					}
 				}
 			}
 
@@ -827,7 +916,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 			audios = append(audios, ccAudioMaterial{
 				CheckFlag: 1,
-				Duration:  segDur,
+				Duration:  bgmActualDur, // P1-2: 实际文件时长，而非时间轴跨度
 				FilePath:  bgmPath,
 				ID:        bgmMatID,
 				Name:      bs.TrackName,
@@ -864,14 +953,15 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		textMaterials = []ccTextMaterial{}
 	}
 	content := ccDraftContent{
-		CanvasConfig:         ccCanvasConfig{Height: height, Ratio: ratio, Width: width},
+		CanvasConfig:         ccCanvasConfig{Height: height, Ratio: aspectRatioFloat(ratio), Width: width}, // P0-2: float64
 		CreateTime:           now,
 		Duration:             totalDuration,
-		FPS:                  30.0,
+		FPS:                  24.0,
 		ID:                   draftID,
 		Keyframes:            ccKeyframes{Videos: allKFGroups},
 		LastModifiedPlatform: "mac",
 		Materials: ccMaterials{
+			AudioFades:         []interface{}{}, // P1-4
 			Audios:             audios,
 			Beats:              []interface{}{},
 			Canvases:           []interface{}{},
@@ -891,7 +981,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			VocalSeparations:   []interface{}{},
 		},
 		Name:          video.Title,
-		NewVersion:    "",
+		NewVersion:    "110.0.0", // P2-2: 非空版本号，避免部分 CapCut 版本触发升级提示
 		Platform:      "mac",
 		Relationships: []interface{}{},
 		Tracks:        tracks,
@@ -899,8 +989,13 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		Version:       "3.0.0",
 	}
 
+	// P1-1: 有封面图时在 meta 中引用，否则留空（避免 CapCut 显示损坏图标）
+	draftCoverName := ""
+	if len(coverData) > 0 {
+		draftCoverName = "cover.jpg"
+	}
 	meta := ccMetaInfo{
-		DraftCover:               "cover.jpg",
+		DraftCover:               draftCoverName,
 		DraftFoldPath:            "",
 		DraftID:                  draftID,
 		DraftIsAI:                false,
@@ -908,7 +1003,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		DraftIsInvisible:         false,
 		DraftMaterials:           []interface{}{},
 		DraftName:                video.Title,
-		DraftNewVersion:          "",
+		DraftNewVersion:          "110.0.0", // P2-2
 		DraftRootPath:            "",
 		DraftSegmentExtraInfo:    []interface{}{},
 		DraftTimelineMaterialsV2: []interface{}{},
@@ -928,10 +1023,15 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		return nil, fmt.Errorf("marshal draft meta: %w", err)
 	}
 
-	// 构建 ZIP
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
+	// 构建 ZIP（写入临时文件，避免所有媒体数据同时在内存中双份缓冲）
+	zipFile, err := os.CreateTemp("", "inkframe-capcut-*.zip")
+	if err != nil {
+		return nil, fmt.Errorf("create temp zip file: %w", err)
+	}
+	zipFilePath := zipFile.Name()
+	defer os.Remove(zipFilePath)
 
+	zw := zip.NewWriter(zipFile)
 	writeZip := func(name string, data []byte) error {
 		w, e := zw.Create(name)
 		if e != nil {
@@ -943,21 +1043,33 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 	prefix := projectName + "/"
 	if err := writeZip(prefix+"draft_content.json", contentJSON); err != nil {
+		zipFile.Close()
 		return nil, fmt.Errorf("write draft_content.json: %w", err)
 	}
 	if err := writeZip(prefix+"draft_meta_info.json", metaJSON); err != nil {
+		zipFile.Close()
 		return nil, fmt.Errorf("write draft_meta_info.json: %w", err)
 	}
 
 	// draft_virtual_store.json — 部分版本的剪映需要此文件（资源索引），缺失时草稿可能无法识别
 	virtualStoreJSON, _ := json.Marshal(map[string]interface{}{"sub_store": map[string]interface{}{}})
 	if err := writeZip(prefix+"draft_virtual_store.json", virtualStoreJSON); err != nil {
+		zipFile.Close()
 		return nil, fmt.Errorf("write draft_virtual_store.json: %w", err)
+	}
+
+	// P1-1: 封面图（草稿列表缩略图）
+	if len(coverData) > 0 {
+		if err := writeZip(prefix+"cover.jpg", coverData); err != nil {
+			zipFile.Close()
+			return nil, fmt.Errorf("write cover.jpg: %w", err)
+		}
 	}
 
 	// 媒体文件放在草稿根目录（与剪映真实草稿格式一致），而非 media/ 子目录
 	for _, mf := range mediaFiles {
 		if err := writeZip(prefix+mf.filename, mf.data); err != nil {
+			zipFile.Close()
 			return nil, fmt.Errorf("write media file %s: %w", mf.filename, err)
 		}
 	}
@@ -965,26 +1077,37 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	// SRT 字幕文件（通用格式，可在剪映/其他播放器/字幕工具中独立使用）
 	if srtContent := buildSRTSubtitles(shots); srtContent != "" {
 		if err := writeZip(prefix+"subtitle.srt", []byte(srtContent)); err != nil {
+			zipFile.Close()
 			return nil, fmt.Errorf("write subtitle.srt: %w", err)
 		}
 	}
 
 	// README.txt — 导入说明（剪映不直接打开 ZIP，需手动放入草稿目录）
 	if err := writeZip(prefix+"README.txt", []byte(buildCapCutReadme(projectName))); err != nil {
+		zipFile.Close()
 		return nil, fmt.Errorf("write README.txt: %w", err)
 	}
 
 	if err := zw.Close(); err != nil {
+		zipFile.Close()
 		logger.Printf("[CapCutService] ExportCapCutDraft: close zip failed: %v", err)
 		return nil, fmt.Errorf("close zip: %w", err)
 	}
+	if err := zipFile.Close(); err != nil {
+		return nil, fmt.Errorf("close zip file: %w", err)
+	}
+
+	zipData, err := os.ReadFile(zipFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("read zip: %w", err)
+	}
 
 	const zipWarnThreshold = 500 * 1024 * 1024 // 500 MB
-	if buf.Len() > zipWarnThreshold {
-		logger.Printf("[CapCutService] ExportCapCutDraft WARNING: ZIP size %d bytes exceeds %d MB; consider reducing shot count or media quality", buf.Len(), zipWarnThreshold/1024/1024)
+	if len(zipData) > zipWarnThreshold {
+		logger.Printf("[CapCutService] ExportCapCutDraft WARNING: ZIP size %d bytes exceeds %d MB; consider reducing shot count or media quality", len(zipData), zipWarnThreshold/1024/1024)
 	}
 	result := &ExportResult{
-		Data:        buf.Bytes(),
+		Data:        zipData,
 		Filename:    projectName + ".zip",
 		ContentType: "application/zip",
 	}
@@ -1028,10 +1151,31 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 	var audioMaterials []ccAudioMaterial
 	var audioSegments []ccSegment
 
-	var textMaterials []ccTextMaterial
-	var textSegments []ccSegment
+	// P3-3: 字幕和注释拆分为两个独立轨道，避免同一轨道同时间点多文本遮挡问题
+	var subtitleMaterials []ccTextMaterial
+	var subtitleSegments []ccSegment
+	var annMaterials []ccTextMaterial
+	var annSegments []ccSegment
 
 	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
+
+	// P1-1: 预取第一张分镜图作为草稿封面缩略图
+	var coverData []byte
+	if len(shots) > 0 && shots[0].ImageURL != "" {
+		imgURL := shots[0].ImageURL
+		if isHTTPURL(imgURL) {
+			if data, err := downloadMediaFile(imgURL); err == nil {
+				coverData = data
+			}
+		} else {
+			if data, err := os.ReadFile(strings.TrimPrefix(imgURL, "file://")); err == nil {
+				coverData = data
+			}
+		}
+	}
+
+	// P3-2: track total loaded bytes for 2GiB guard
+	var totalLoadedBytes int64
 
 	var totalDuration int64
 
@@ -1090,7 +1234,10 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			Volume:          1.0,
 		})
 
-		// ── 2. 配音音频素材（与 ExportCapCutDraft 逻辑相同）────────────────
+		// ── 2. 配音音频素材 ────────────────────────────────────────────────
+		// 优先 shot.AudioPath（合成后的整段音频）；
+		// P2-3: 当 AudioPath 为空且有 VoiceSegments 时，逐段加入音频轨道并按 SeqNo 顺序排列，
+		// 确保多段 TTS 全部保留，不再仅取首段。
 		if shot.AudioPath != "" {
 			audMatID := uuid.New().String()
 			actualAudioDur := durationMicros
@@ -1130,6 +1277,72 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 				Visible:         true,
 				Volume:          1.0,
 			})
+		} else if s.segmentRepo != nil {
+			// P2-3: no merged audio — place each VoiceSegment individually at the correct timeline offset
+			segs, segErr := s.segmentRepo.ListByShotID(shot.ID)
+			if segErr == nil && len(segs) > 0 {
+				segOffset := startMicros // running offset within the shot
+				for _, seg := range segs {
+					if seg.AudioPath == "" {
+						continue
+					}
+					audMatID := uuid.New().String()
+					actualSegDur := durationMicros // fallback
+					audPath := strings.ReplaceAll(audMatID, "-", "") + ".mp3"
+					segPath := strings.TrimPrefix(seg.AudioPath, "file://")
+					if isHTTPURL(segPath) {
+						audPath = segPath
+					} else {
+						if data, rdErr := readLocalOrRemoteFile(segPath); rdErr == nil && len(data) > 0 {
+							ext := audioExtension(segPath)
+							audPath = strings.ReplaceAll(audMatID, "-", "") + ext
+							// P3-2: 与 ExportCapCutDraft 保持一致，防止 OOM
+							if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
+								totalLoadedBytes += int64(len(data))
+								mediaFiles = append(mediaFiles, mediaFile{filename: audPath, data: data})
+							} else {
+								logger.Printf("[ExportBRollDraft] P3-2: total media exceeds 2GiB, skipping VoiceSegment embed shot %d seg %d", shot.ShotNo, seg.SeqNo)
+							}
+							if dur := parseAudioDurationMicros(data, ext); dur > 0 {
+								actualSegDur = dur
+							}
+						}
+					}
+					// also use stored DurationSecs if available (avoids re-parsing)
+					if seg.DurationSecs > 0 {
+						actualSegDur = int64(seg.DurationSecs * 1_000_000)
+					}
+					// cap at remaining shot time to avoid overflow into next shot
+					remaining := startMicros + durationMicros - segOffset
+					srcDur := actualSegDur
+					if srcDur > remaining {
+						srcDur = remaining
+					}
+					if srcDur <= 0 {
+						break // used up all shot time
+					}
+					audioMaterials = append(audioMaterials, ccAudioMaterial{
+						CheckFlag: 1,
+						Duration:  actualSegDur,
+						FilePath:  audPath,
+						ID:        audMatID,
+						Name:      fmt.Sprintf("shot_%03d_seg%02d", shot.ShotNo, seg.SeqNo),
+						Type:      "extract_music",
+					})
+					audioSegments = append(audioSegments, ccSegment{
+						Clip:            ccClip{Alpha: 1.0, Scale: ccScale{X: 1.0, Y: 1.0}},
+						ID:              uuid.New().String(),
+						MaterialID:      audMatID,
+						Speed:           1.0,
+						SourceTimerange: ccTimeRange{Duration: srcDur, Start: 0},
+						TargetTimerange: ccTimeRange{Duration: srcDur, Start: segOffset},
+						Type:            "audio",
+						Visible:         true,
+						Volume:          1.0,
+					})
+					segOffset += actualSegDur
+				}
+			}
 		}
 
 		// ── 3. 字幕轨（底部旁白/台词） ────────────────────────────────────
@@ -1143,7 +1356,8 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		if subtitleText != "" && subCfg.enabled {
 			txtMatID := uuid.New().String()
 			subtitleText = sanitizeSubtitleText(subtitleText)
-			textMaterials = append(textMaterials, ccTextMaterial{
+			// P3-3: 字幕素材单独放入 subtitleMaterials
+			subtitleMaterials = append(subtitleMaterials, ccTextMaterial{
 				CheckFlag:  7,
 				Content:    buildTextContent(subtitleText, subCfg),
 				ID:         txtMatID,
@@ -1152,7 +1366,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 				Name:       fmt.Sprintf("shot_%03d_subtitle", shot.ShotNo),
 				Type:       "text",
 			})
-			textSegments = append(textSegments, ccSegment{
+			subtitleSegments = append(subtitleSegments, ccSegment{
 				Clip: ccClip{
 					Alpha: 1.0,
 					Scale: ccScale{X: 1.0, Y: 1.0},
@@ -1170,6 +1384,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		}
 
 		// ── 4. 注释轨（顶部分镜编号 + 描述，供剪辑师参考）────────────────
+		// P3-3: 注释素材单独放入 annMaterials，与字幕轨分离
 		annText := fmt.Sprintf("[镜%d]", shot.ShotNo)
 		if shot.Description != "" {
 			desc := shot.Description
@@ -1180,7 +1395,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			annText = fmt.Sprintf("[镜%d] %s", shot.ShotNo, desc)
 		}
 		annMatID := uuid.New().String()
-		textMaterials = append(textMaterials, ccTextMaterial{
+		annMaterials = append(annMaterials, ccTextMaterial{
 			CheckFlag:  7,
 			Content:    buildTextContent(annText, annCfg),
 			ID:         annMatID,
@@ -1189,7 +1404,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			Name:       fmt.Sprintf("shot_%03d_ann", shot.ShotNo),
 			Type:       "text",
 		})
-		textSegments = append(textSegments, ccSegment{
+		annSegments = append(annSegments, ccSegment{
 			Clip: ccClip{
 				Alpha: 1.0,
 				Scale: ccScale{X: 1.0, Y: 1.0},
@@ -1229,14 +1444,26 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			Type:          "audio",
 		})
 	}
-	if len(textSegments) > 0 {
+	// P3-3: 字幕和注释分两条独立轨道，避免同一轨道同时间点多段文本发生遮挡
+	if len(subtitleSegments) > 0 {
 		tracks = append(tracks, ccTrack{
 			Attribute:     0,
 			Flag:          0,
 			ID:            uuid.New().String(),
 			IsDefaultName: true,
-			Name:          "字幕 & 注释",
-			Segments:      textSegments,
+			Name:          "字幕",
+			Segments:      subtitleSegments,
+			Type:          "text",
+		})
+	}
+	if len(annSegments) > 0 {
+		tracks = append(tracks, ccTrack{
+			Attribute:     0,
+			Flag:          0,
+			ID:            uuid.New().String(),
+			IsDefaultName: true,
+			Name:          "注释",
+			Segments:      annSegments,
 			Type:          "text",
 		})
 	}
@@ -1244,19 +1471,22 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 	if audioMaterials == nil {
 		audioMaterials = []ccAudioMaterial{}
 	}
-	if textMaterials == nil {
-		textMaterials = []ccTextMaterial{}
+	// P3-3: 合并两个文本素材列表用于 Materials.Texts
+	allTextMaterials := append(subtitleMaterials, annMaterials...)
+	if allTextMaterials == nil {
+		allTextMaterials = []ccTextMaterial{}
 	}
 
 	content := ccDraftContent{
-		CanvasConfig:         ccCanvasConfig{Height: height, Ratio: ratio, Width: width},
+		CanvasConfig:         ccCanvasConfig{Height: height, Ratio: aspectRatioFloat(ratio), Width: width}, // P0-2
 		CreateTime:           now,
 		Duration:             totalDuration,
-		FPS:                  30.0,
+		FPS:                  24.0,
 		ID:                   draftID,
 		Keyframes:            ccKeyframes{Videos: []ccKeyframeGroup{}},
 		LastModifiedPlatform: "mac",
 		Materials: ccMaterials{
+			AudioFades:         []interface{}{}, // P1-4
 			Audios:             audioMaterials,
 			Beats:              []interface{}{},
 			Canvases:           []interface{}{},
@@ -1269,14 +1499,14 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			Shapes:             []interface{}{},
 			Speed:              []interface{}{},
 			Stickers:           []interface{}{},
-			Texts:              textMaterials,
+			Texts:              allTextMaterials,
 			Transitions:        []ccTransitionMaterial{},
 			VideoEffects:       []interface{}{},
 			Videos:             videoMaterials,
 			VocalSeparations:   []interface{}{},
 		},
 		Name:          video.Title + " (B剪)",
-		NewVersion:    "",
+		NewVersion:    "110.0.0", // P2-2
 		Platform:      "mac",
 		Relationships: []interface{}{},
 		Tracks:        tracks,
@@ -1284,8 +1514,13 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		Version:       "3.0.0",
 	}
 
+	// P1-1: 有封面图时在 meta 中引用
+	brollCoverName := ""
+	if len(coverData) > 0 {
+		brollCoverName = "cover.jpg"
+	}
 	meta := ccMetaInfo{
-		DraftCover:               "cover.jpg",
+		DraftCover:               brollCoverName,
 		DraftFoldPath:            "",
 		DraftID:                  draftID,
 		DraftIsAI:                false,
@@ -1293,7 +1528,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		DraftIsInvisible:         false,
 		DraftMaterials:           []interface{}{},
 		DraftName:                video.Title + " (B剪)",
-		DraftNewVersion:          "",
+		DraftNewVersion:          "110.0.0", // P2-2
 		DraftRootPath:            "",
 		DraftSegmentExtraInfo:    []interface{}{},
 		DraftTimelineMaterialsV2: []interface{}{},
@@ -1311,8 +1546,14 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		return nil, fmt.Errorf("marshal draft meta: %w", err)
 	}
 
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
+	zipFile, err := os.CreateTemp("", "inkframe-broll-*.zip")
+	if err != nil {
+		return nil, fmt.Errorf("create temp zip file: %w", err)
+	}
+	zipFilePath := zipFile.Name()
+	defer os.Remove(zipFilePath)
+
+	zw := zip.NewWriter(zipFile)
 	writeZip := func(name string, data []byte) error {
 		w, e := zw.Create(name)
 		if e != nil {
@@ -1324,34 +1565,55 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 
 	prefix := projectName + "_broll/"
 	if err := writeZip(prefix+"draft_content.json", contentJSON); err != nil {
+		zipFile.Close()
 		return nil, fmt.Errorf("write draft_content.json: %w", err)
 	}
 	if err := writeZip(prefix+"draft_meta_info.json", metaJSON); err != nil {
+		zipFile.Close()
 		return nil, fmt.Errorf("write draft_meta_info.json: %w", err)
 	}
 	virtualStoreJSON, _ := json.Marshal(map[string]interface{}{"sub_store": map[string]interface{}{}})
 	if err := writeZip(prefix+"draft_virtual_store.json", virtualStoreJSON); err != nil {
+		zipFile.Close()
 		return nil, fmt.Errorf("write draft_virtual_store.json: %w", err)
+	}
+	// P1-1: 封面图（草稿列表缩略图）
+	if len(coverData) > 0 {
+		if err := writeZip(prefix+"cover.jpg", coverData); err != nil {
+			zipFile.Close()
+			return nil, fmt.Errorf("write cover.jpg: %w", err)
+		}
 	}
 	for _, mf := range mediaFiles {
 		if err := writeZip(prefix+mf.filename, mf.data); err != nil {
+			zipFile.Close()
 			return nil, fmt.Errorf("write media file %s: %w", mf.filename, err)
 		}
 	}
 	if srtContent := buildSRTSubtitles(shots); srtContent != "" {
 		if err := writeZip(prefix+"subtitle.srt", []byte(srtContent)); err != nil {
+			zipFile.Close()
 			return nil, fmt.Errorf("write subtitle.srt: %w", err)
 		}
 	}
 	if err := writeZip(prefix+"README.txt", []byte(buildCapCutReadme(projectName+"_broll"))); err != nil {
+		zipFile.Close()
 		return nil, fmt.Errorf("write README.txt: %w", err)
 	}
 	if err := zw.Close(); err != nil {
+		zipFile.Close()
 		return nil, fmt.Errorf("close zip: %w", err)
 	}
+	if err := zipFile.Close(); err != nil {
+		return nil, fmt.Errorf("close zip file: %w", err)
+	}
 
+	zipData, err := os.ReadFile(zipFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("read zip: %w", err)
+	}
 	result := &ExportResult{
-		Data:        buf.Bytes(),
+		Data:        zipData,
 		Filename:    projectName + "_broll.zip",
 		ContentType: "application/zip",
 	}
@@ -1366,26 +1628,39 @@ func buildCapCutReadme(projectName string) string {
 
 草稿名称：%s
 
-【重要】剪映无法直接打开 ZIP 文件，请按以下步骤导入：
+【版本兼容性】
+- CapCut International（国际版）：完全支持
+- 剪映 5.9 及以下：支持
+- 剪映 6.0+（国内版）：不支持（6.0 起草稿文件加密，本导出格式为明文 JSON）
+  推荐使用 CapCut International 导入
 
-macOS
------
+【重要】剪映/CapCut 无法直接打开 ZIP 文件，请按以下步骤导入：
+
+CapCut International (macOS)
+-----------------------------
+1. 解压此 ZIP，得到文件夹「%s」
+2. 将该文件夹移动到：
+   ~/Movies/CapCut/User Data/Projects/com.lveditor.draft/
+3. 重新启动 CapCut，草稿将出现在草稿列表
+
+CapCut International (Windows)
+--------------------------------
+1. 解压此 ZIP，得到文件夹「%s」
+2. 将该文件夹移动到：
+   %%USERPROFILE%%\AppData\Local\CapCut\User Data\Projects\com.lveditor.draft\
+3. 重新启动 CapCut，草稿将出现在草稿列表
+
+剪映 5.9 及以下 (macOS)
+------------------------
 1. 解压此 ZIP，得到文件夹「%s」
 2. 将该文件夹移动到：
    ~/Movies/JianyingPro/User Data/Projects/com.lveditor.draft/
 3. 重新启动剪映，草稿将出现在草稿列表
 
-Windows
--------
-1. 解压此 ZIP，得到文件夹「%s」
-2. 将该文件夹移动到：
-   %%LOCALAPPDATA%%\JianyingPro\User Data\Projects\com.lveditor.draft\
-3. 重新启动剪映，草稿将出现在草稿列表
-
 【素材说明】
 - 图片/视频/音效使用在线 CDN 链接，打开草稿时需保持网络连接
 - 如提示"素材离线"，请检查网络后重新打开草稿
-`, projectName, projectName, projectName)
+`, projectName, projectName, projectName, projectName)
 }
 
 // fcpXMLEscapeAttr 转义 XML 属性中的特殊字符
@@ -1527,9 +1802,15 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 
 	sb.WriteString("</spine>\n</sequence>\n</project></event></library>\n</fcpxml>\n")
 
-	// ── 构建 ZIP ─────────────────────────────────────────────────────────
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
+	// ── 构建 ZIP（写入临时文件）────────────────────────────────────────────
+	zipFile, err := os.CreateTemp("", "inkframe-fcpxml-*.zip")
+	if err != nil {
+		return nil, fmt.Errorf("create temp zip file: %w", err)
+	}
+	zipFilePath := zipFile.Name()
+	defer os.Remove(zipFilePath)
+
+	zw := zip.NewWriter(zipFile)
 	writeZip := func(name string, data []byte) error {
 		w, e := zw.Create(name)
 		if e != nil {
@@ -1541,6 +1822,7 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 
 	prefix := projectName + "_fcpxml/"
 	if err := writeZip(prefix+projectName+".fcpxml", []byte(sb.String())); err != nil {
+		zipFile.Close()
 		return nil, fmt.Errorf("write fcpxml: %w", err)
 	}
 
@@ -1550,12 +1832,14 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 			// 本地 Ken Burns 文件（slideshow 模式）直接读取
 			if data, err := os.ReadFile(a.localClip); err == nil {
 				if e := writeZip(prefix+"media/"+a.filename, data); e != nil {
+					zipFile.Close()
 					return nil, fmt.Errorf("write media %s: %w", a.filename, e)
 				}
 			}
 		} else if a.src != "" && (strings.HasPrefix(a.src, "http://") || strings.HasPrefix(a.src, "https://")) {
 			if data, err := downloadMediaFile(a.src); err == nil {
 				if e := writeZip(prefix+"media/"+a.filename, data); e != nil {
+					zipFile.Close()
 					return nil, fmt.Errorf("write media %s: %w", a.filename, e)
 				}
 			}
@@ -1564,6 +1848,7 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 		if a.audioSrc != "" {
 			if data, err := readLocalOrRemoteFile(a.audioSrc); err == nil && len(data) > 0 {
 				if e := writeZip(prefix+"media/"+a.audioFile, data); e != nil {
+					zipFile.Close()
 					return nil, fmt.Errorf("write audio %s: %w", a.audioFile, e)
 				}
 			}
@@ -1573,17 +1858,26 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 	// SRT 字幕
 	if srtContent := buildSRTSubtitles(shots); srtContent != "" {
 		if err := writeZip(prefix+"subtitle.srt", []byte(srtContent)); err != nil {
+			zipFile.Close()
 			return nil, fmt.Errorf("write subtitle.srt: %w", err)
 		}
 	}
 
 	if err := zw.Close(); err != nil {
+		zipFile.Close()
 		logger.Printf("[CapCutService] ExportFCPXML: close zip failed: %v", err)
 		return nil, fmt.Errorf("close zip: %w", err)
 	}
+	if err := zipFile.Close(); err != nil {
+		return nil, fmt.Errorf("close zip file: %w", err)
+	}
 
+	zipData, err := os.ReadFile(zipFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("read zip: %w", err)
+	}
 	result := &ExportResult{
-		Data:        buf.Bytes(),
+		Data:        zipData,
 		Filename:    projectName + "_fcpxml.zip",
 		ContentType: "application/zip",
 	}
@@ -1613,8 +1907,14 @@ func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.Sto
 		projectName = fmt.Sprintf("video_%d", video.ID)
 	}
 
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
+	zipFile, err := os.CreateTemp("", "inkframe-assets-*.zip")
+	if err != nil {
+		return nil, fmt.Errorf("create temp zip file: %w", err)
+	}
+	zipFilePath := zipFile.Name()
+	defer os.Remove(zipFilePath)
+
+	zw := zip.NewWriter(zipFile)
 	writeZip := func(name string, data []byte) error {
 		w, e := zw.Create(name)
 		if e != nil {
@@ -1623,6 +1923,9 @@ func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.Sto
 		_, e = w.Write(data)
 		return e
 	}
+
+	// P2-4: total size guard for resource ZIP
+	var zipLoadedBytes int64
 
 	var metas []shotJSONMeta
 
@@ -1648,22 +1951,32 @@ func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.Sto
 				data, err = downloadMediaFile(vidSrc)
 			}
 			if err == nil {
-				if e := writeZip("video/"+filename, data); e != nil {
-					return nil, fmt.Errorf("write video/%s: %w", filename, e)
+				if zipLoadedBytes+int64(len(data)) > maxExportMediaBytes {
+					logger.Printf("[ExportResourceZip] P2-4: total media exceeds 2GiB, skipping shot %d video", shot.ShotNo)
+				} else {
+					zipLoadedBytes += int64(len(data))
+					if e := writeZip("video/"+filename, data); e != nil {
+						return nil, fmt.Errorf("write video/%s: %w", filename, e)
+					}
+					meta.VideoFile = "video/" + filename
 				}
-				meta.VideoFile = "video/" + filename
 			}
 		} else if shot.ImageURL != "" {
 			filename := fmt.Sprintf("%03d.jpg", shot.ShotNo)
 			if data, err := downloadMediaFile(shot.ImageURL); err == nil {
-				if e := writeZip("image/"+filename, data); e != nil {
-					return nil, fmt.Errorf("write image/%s: %w", filename, e)
+				if zipLoadedBytes+int64(len(data)) > maxExportMediaBytes {
+					logger.Printf("[ExportResourceZip] P2-4: total media exceeds 2GiB, skipping shot %d image", shot.ShotNo)
+				} else {
+					zipLoadedBytes += int64(len(data))
+					if e := writeZip("image/"+filename, data); e != nil {
+						return nil, fmt.Errorf("write image/%s: %w", filename, e)
+					}
+					meta.ImageFile = "image/" + filename
 				}
-				meta.ImageFile = "image/" + filename
 			}
 		}
 
-		// 音频
+		// 音频：优先 shot.AudioPath，无则取 VoiceSegments（P1-2）
 		if shot.AudioPath != "" {
 			if data, err := readLocalOrRemoteFile(shot.AudioPath); err == nil && len(data) > 0 {
 				ext := audioExtension(shot.AudioPath)
@@ -1672,6 +1985,24 @@ func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.Sto
 					return nil, fmt.Errorf("write audio/%s: %w", filename, e)
 				}
 				meta.AudioFile = "audio/" + filename
+			}
+		} else if s.segmentRepo != nil {
+			// P1-2: include individual VoiceSegment audio files when shot.AudioPath is absent
+			segs, segErr := s.segmentRepo.ListByShotID(shot.ID)
+			if segErr == nil {
+				for _, seg := range segs {
+					if seg.AudioPath == "" {
+						continue
+					}
+					segPath := strings.TrimPrefix(seg.AudioPath, "file://")
+					if data, rdErr := os.ReadFile(segPath); rdErr == nil && len(data) > 0 {
+						ext := audioExtension(segPath)
+						filename := fmt.Sprintf("%03d_seg%02d%s", shot.ShotNo, seg.SeqNo, ext)
+						if e := writeZip("audio/"+filename, data); e == nil && meta.AudioFile == "" {
+							meta.AudioFile = "audio/" + filename // first segment as primary ref
+						}
+					}
+				}
 			}
 		}
 
@@ -1695,12 +2026,20 @@ func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.Sto
 	}
 
 	if err := zw.Close(); err != nil {
+		zipFile.Close()
 		logger.Printf("[CapCutService] ExportResourceZip: close zip failed: %v", err)
 		return nil, fmt.Errorf("close zip: %w", err)
 	}
+	if err := zipFile.Close(); err != nil {
+		return nil, fmt.Errorf("close zip file: %w", err)
+	}
 
+	zipData, err := os.ReadFile(zipFilePath)
+	if err != nil {
+		return nil, fmt.Errorf("read zip: %w", err)
+	}
 	result := &ExportResult{
-		Data:        buf.Bytes(),
+		Data:        zipData,
 		Filename:    projectName + "_assets.zip",
 		ContentType: "application/zip",
 	}
@@ -2096,13 +2435,14 @@ func (s *CapCutService) ExportVTT(video *model.Video, shots []*model.StoryboardS
 // Go 无成熟库，格式极简，手动生成。
 // ─────────────────────────────────────────────────────────────────────────────
 
-// microsToEDLTimecode 将微秒转为 CMX3600 时间码 HH:MM:SS:FF（25fps）
+// microsToEDLTimecode 将微秒转为 CMX3600 时间码 HH:MM:SS:FF（24fps，与合成输出帧率一致）
 func microsToEDLTimecode(micros int64) string {
-	totalFrames := micros * 25 / 1_000_000
-	ff := totalFrames % 25
-	ss := totalFrames / 25 % 60
-	mm := totalFrames / 25 / 60 % 60
-	hh := totalFrames / 25 / 3600
+	const fps int64 = 24
+	totalFrames := micros * fps / 1_000_000
+	ff := totalFrames % fps
+	ss := totalFrames / fps % 60
+	mm := totalFrames / fps / 60 % 60
+	hh := totalFrames / fps / 3600
 	return fmt.Sprintf("%02d:%02d:%02d:%02d", hh, mm, ss, ff)
 }
 
@@ -2244,7 +2584,7 @@ type otioTimeline struct {
 // ExportOTIO 导出 OpenTimelineIO .otio 文件（Pixar 开放标准，Premiere / FCP / DaVinci 均可导入）
 func (s *CapCutService) ExportOTIO(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
 	logger.Printf("[CapCutService] ExportOTIO: videoID=%d shots=%d", video.ID, len(shots))
-	const fps = 25.0
+	const fps = 24.0 // P1-3: match synthesis output fps; 25.0 caused per-second timeline drift in FCP/DaVinci
 	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
 
 	projectName := sanitizeFilename(video.Title)

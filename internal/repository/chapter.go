@@ -291,6 +291,13 @@ func (r *ChapterRepository) DeleteAndRenumber(id, novelID uint) error {
 }
 
 // CountByNovel 统计小说章节数
+func (r *ChapterRepository) MaxChapterNo(novelID uint) (int, error) {
+	var max int
+	err := r.db.Model(&model.Chapter{}).Where("novel_id = ?", novelID).
+		Select("COALESCE(MAX(chapter_no), 0)").Scan(&max).Error
+	return max, err
+}
+
 func (r *ChapterRepository) CountByNovel(novelID uint) (int64, error) {
 	var count int64
 	if err := r.db.Model(&model.Chapter{}).Where("novel_id = ?", novelID).Count(&count).Error; err != nil {

@@ -44,6 +44,12 @@ func (h *VideoHandler) WithAssetRepo(r *repository.AssetRepository) *VideoHandle
 	return h
 }
 
+// WithCapCutSegmentRepo 将 VoiceSegment 仓库注入 CapCutService，使导出包含多段配音音频（P1-2）。
+func (h *VideoHandler) WithCapCutSegmentRepo(r *repository.ShotVoiceSegmentRepository) *VideoHandler {
+	h.capcutService.WithSegmentRepo(r)
+	return h
+}
+
 func (h *VideoHandler) WithSFXItemRepo(r *repository.ShotSFXItemRepository) *VideoHandler {
 	h.sfxItemRepo = r
 	return h

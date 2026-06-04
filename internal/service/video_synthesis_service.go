@@ -126,7 +126,8 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 	}
 	logger.Printf("[StitchVideo] videoID=%d: aspectRatio=%s", videoID, aspectRatio)
 
-	tmpDir := fmt.Sprintf("%s/inkframe-%d", inkframeTempDir(), videoID)
+	// P2-2: include UUID to prevent directory collision when the same videoID is synthesized concurrently
+	tmpDir := fmt.Sprintf("%s/inkframe-%d-%s", inkframeTempDir(), videoID, uuid.New().String()[:8])
 	if err := os.MkdirAll(tmpDir, 0755); err != nil {
 		return "", err
 	}
@@ -299,13 +300,14 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 		finalClip := videoClipPath
 
 		// P0-2: 构建音频（优先 VoiceSegments+SFX，降级 AudioPath，再降级静音轨）
-		audioPath := s.buildShotAudio(ctx, shot, tmpDir, i)
+		// P1-1: buildShotAudio 同时返回音频时长，避免后续 ffprobe 重复探测
+		audioPath, audioDurSecs := s.buildShotAudio(ctx, shot, tmpDir, i)
 		if audioPath != "" {
 			mergedFile := fmt.Sprintf("%s/clip_audio_%d.mp4", tmpDir, i)
 			logger.Printf("[StitchVideo] shot %d: merging audio: %s", shot.ShotNo, audioPath)
 			mergeCtx, mergeCancel := context.WithTimeout(ctx, 90*time.Second)
 			// P1-4: 根据音频与视频时长决策：音频明显更长时用 tpad 延伸视频末帧
-			mergeArgs := buildAudioMergeArgs(ctx, audioPath, videoClipPath, shot.Duration)
+			mergeArgs := buildAudioMergeArgs(audioPath, shot.Duration, audioDurSecs)
 			allMergeArgs := append([]string{"-y", "-i", videoClipPath, "-i", audioPath}, append(mergeArgs, mergedFile)...)
 			_, mergeErr := runFFmpegCtx(mergeCtx, allMergeArgs...)
 			mergeCancel()
@@ -317,7 +319,8 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 			}
 		}
 
-		concatLines = append(concatLines, fmt.Sprintf("file '%s'", finalClip))
+		escapedClip := strings.ReplaceAll(finalClip, "'", "\\'") // P1-1: escape single quotes (same fix as concatAudioFiles)
+		concatLines = append(concatLines, fmt.Sprintf("file '%s'", escapedClip))
 	}
 
 	if len(concatLines) == 0 {
@@ -373,6 +376,24 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 	}
 	logger.Printf("[StitchVideo] videoID=%d: ffmpeg concat done", videoID)
 
+	// P2-5: 端到端时长验证（仅警告，不阻断输出）
+	{
+		var expectedDur float64
+		for _, sh := range shots {
+			if sh.Duration > 0 {
+				expectedDur += sh.Duration
+			}
+		}
+		if expectedDur > 0 {
+			if actualDur := probeClipDuration(ctx, stitchedPath); actualDur > 0 {
+				diff := math.Abs(actualDur-expectedDur) / expectedDur
+				if diff > 0.05 {
+					logger.Printf("[StitchVideo] videoID=%d: duration mismatch: expected=%.2fs actual=%.2fs (%.1f%% diff)", videoID, expectedDur, actualDur, diff*100)
+				}
+			}
+		}
+	}
+
 	// BGM 混音（非致命：失败时使用无BGM版本）
 	outputPath := fmt.Sprintf("%s/inkframe-%d-output.mp4", inkframeTempDir(), videoID)
 	if s.bgmService != nil {
@@ -381,11 +402,14 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 		bgmURL := s.bgmService.SelectBGM(emotion)
 		if bgmURL != "" {
 			logger.Printf("[StitchVideo] videoID=%d: mixing BGM: %s", videoID, bgmURL)
-			if mixErr := s.bgmService.MixBGM(stitchedPath, bgmURL, outputPath); mixErr != nil {
+			if mixErr := s.bgmService.MixBGM(ctx, stitchedPath, bgmURL, outputPath); mixErr != nil {
 				logger.Printf("[StitchVideo] videoID=%d: BGM mix failed: %v — using stitched without BGM", videoID, mixErr)
 				outputPath = stitchedPath
 			} else {
 				logger.Printf("[StitchVideo] videoID=%d: BGM mix done", videoID)
+				// P2-2: stitchedPath is the pre-BGM intermediate; outputPath is now the final.
+				// Remove the intermediate to avoid disk accumulation on long-running servers.
+				os.Remove(stitchedPath) //nolint:errcheck
 			}
 		} else {
 			logger.Printf("[StitchVideo] videoID=%d: no BGM selected", videoID)
@@ -1066,9 +1090,12 @@ func probeClipDuration(ctx context.Context, path string) float64 {
 
 // buildShotAudio P0-2: 构建分镜音频轨道。
 // 优先级：VoiceSegments（多段拼接）→ SFX 叠加 → 旧版 AudioPath → 静音轨。
-func (s *VideoService) buildShotAudio(ctx context.Context, shot *model.StoryboardShot, tmpDir string, idx int) string {
-	// 1. 收集 VoiceSegment 音频路径（按 SeqNo 排序）
+// 返回值：(audioPath, audioDurationSecs)。audioDurationSecs 从 VoiceSegment.DurationSecs 累加，
+// 0 表示未知；调用方应以 shot.Duration 作为兜底值。
+func (s *VideoService) buildShotAudio(ctx context.Context, shot *model.StoryboardShot, tmpDir string, idx int) (string, float64) {
+	// 1. 收集 VoiceSegment 音频路径（按 SeqNo 排序）并累计已知时长
 	var voicePaths []string
+	var segsDurSecs float64
 	if s.segmentRepo != nil {
 		segs, err := s.segmentRepo.ListByShotID(shot.ID)
 		if err == nil {
@@ -1076,23 +1103,31 @@ func (s *VideoService) buildShotAudio(ctx context.Context, shot *model.Storyboar
 				if seg.AudioPath != "" {
 					voicePaths = append(voicePaths, strings.TrimPrefix(seg.AudioPath, "file://"))
 				}
+				segsDurSecs += seg.DurationSecs
 			}
 		}
 	}
 
 	var speechAudioPath string
+	var audioDur float64
 	switch len(voicePaths) {
 	case 0:
 		// 无 VoiceSegment，使用旧版 AudioPath
 		if shot.AudioPath != "" {
 			speechAudioPath = strings.TrimPrefix(shot.AudioPath, "file://")
+			// P1-1: probe duration once so tpad can trigger when audio exceeds video length
+			if d := probeClipDuration(ctx, speechAudioPath); d > 0 {
+				audioDur = d
+			}
 		}
 	case 1:
 		speechAudioPath = voicePaths[0]
+		audioDur = segsDurSecs
 	default:
 		// 多段：用 FFmpeg concat 拼接
 		if concatPath, err := concatAudioFiles(ctx, voicePaths, tmpDir, idx); err == nil {
 			speechAudioPath = concatPath
+			audioDur = segsDurSecs
 		} else {
 			logger.Printf("[buildShotAudio] shot %d: audio concat failed: %v — using first segment", shot.ShotNo, err)
 			speechAudioPath = voicePaths[0]
@@ -1104,7 +1139,7 @@ func (s *VideoService) buildShotAudio(ctx context.Context, shot *model.Storyboar
 		sfxItems, err := s.sfxService.ListSFXItems(shot.ID)
 		if err == nil && len(sfxItems) > 0 {
 			if mixedPath, mixErr := mixSFXLayers(ctx, speechAudioPath, sfxItems, shot.Duration, tmpDir, idx); mixErr == nil {
-				return mixedPath
+				return mixedPath, audioDur
 			} else {
 				logger.Printf("[buildShotAudio] shot %d: SFX mix failed: %v — using speech only", shot.ShotNo, mixErr)
 			}
@@ -1113,7 +1148,7 @@ func (s *VideoService) buildShotAudio(ctx context.Context, shot *model.Storyboar
 
 	// 3. 如果有语音音轨直接返回
 	if speechAudioPath != "" {
-		return speechAudioPath
+		return speechAudioPath, audioDur
 	}
 
 	// 4. 降级：生成静音轨
@@ -1121,7 +1156,7 @@ func (s *VideoService) buildShotAudio(ctx context.Context, shot *model.Storyboar
 	if silentPath != "" {
 		logger.Printf("[buildShotAudio] shot %d: no audio — using generated silent track", shot.ShotNo)
 	}
-	return silentPath
+	return silentPath, 0
 }
 
 // concatAudioFiles 将多个音频文件用 FFmpeg concat demuxer 拼接为一个 AAC 文件。
@@ -1129,7 +1164,8 @@ func concatAudioFiles(ctx context.Context, paths []string, tmpDir string, idx in
 	listPath := fmt.Sprintf("%s/audio_list_%d.txt", tmpDir, idx)
 	var lines []string
 	for _, p := range paths {
-		lines = append(lines, fmt.Sprintf("file '%s'", p))
+		escaped := strings.ReplaceAll(p, "'", "\\'") // P0-3: escape single quotes for FFmpeg concat format
+		lines = append(lines, fmt.Sprintf("file '%s'", escaped))
 	}
 	if err := os.WriteFile(listPath, []byte(strings.Join(lines, "\n")), 0644); err != nil {
 		return "", err
@@ -1185,7 +1221,11 @@ func mixSFXLayers(ctx context.Context, speechPath string, sfxItems []*model.Shot
 		if vol <= 0 {
 			vol = 0.3
 		}
-		sfxFiles = append(sfxFiles, sfxFile{path: sfxPath, volume: vol, startOffset: item.StartOffset})
+		startOff := item.StartOffset
+		if startOff < 0 {
+			startOff = 0 // P2-5: 负偏移在 adelay 中无效，重置为 0
+		}
+		sfxFiles = append(sfxFiles, sfxFile{path: sfxPath, volume: vol, startOffset: startOff})
 	}
 	if len(sfxFiles) == 0 {
 		return "", fmt.Errorf("all SFX downloads failed")
@@ -1237,11 +1277,11 @@ func mixSFXLayers(ctx context.Context, speechPath string, sfxItems []*model.Shot
 
 // buildAudioMergeArgs P1-4: 根据音频与视频时长关系选择合适的合并参数。
 // 若音频明显长于视频（>0.3s），用 tpad 延伸视频末帧，避免 TTS 被 -shortest 截断。
-func buildAudioMergeArgs(ctx context.Context, audioPath, videoPath string, shotDuration float64) []string {
-	audioDur := probeClipDuration(ctx, audioPath)
-	clipDur := shotDuration
-	if clipDur <= 0 {
-		clipDur = probeClipDuration(ctx, videoPath)
+// P1-1: 接受已知时长参数，避免对每个分镜重复 ffprobe（消除每镜额外 15s 探测延迟）。
+// audioDur=0 表示时长未知，此时使用 clipDur 作为兜底。
+func buildAudioMergeArgs(audioPath string, clipDur, audioDur float64) []string {
+	if audioDur <= 0 {
+		audioDur = clipDur // 时长未知时保守处理，不触发 tpad
 	}
 	if audioDur > 0 && clipDur > 0 && audioDur > clipDur+0.3 {
 		// 音频明显更长：用 tpad 克隆最后一帧延伸视频，避免 TTS 末尾被截断
@@ -1261,7 +1301,8 @@ func buildAudioMergeArgs(ctx context.Context, audioPath, videoPath string, shotD
 	}
 }
 
-// dominantEmotion P1-1: 从分镜列表中计算主导情感基调，用于 BGM 选择。
+// dominantEmotion 从分镜列表中计算主导情感基调，用于 BGM 选择。
+// P2-1: lexicographic tiebreak makes result deterministic regardless of map iteration order.
 func dominantEmotion(shots []*model.StoryboardShot) string {
 	counts := make(map[string]int)
 	for _, sh := range shots {
@@ -1271,7 +1312,7 @@ func dominantEmotion(shots []*model.StoryboardShot) string {
 	}
 	best, bestN := "", 0
 	for tone, n := range counts {
-		if n > bestN {
+		if n > bestN || (n == bestN && (best == "" || tone < best)) {
 			best, bestN = tone, n
 		}
 	}

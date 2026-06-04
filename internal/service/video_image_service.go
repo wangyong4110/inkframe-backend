@@ -1202,7 +1202,7 @@ func (s *VideoService) generateKenBurnsClip(shot *model.StoryboardShot, imagePat
 	if duration <= 0 {
 		duration = defaultShotDurationSecs
 	}
-	fps := 30
+	fps := 24 // P1-4: match synthesis output fps to eliminate concat stuttering
 	totalFrames := int(duration * float64(fps))
 
 	resolution := "1920:1080"
@@ -1251,11 +1251,9 @@ func (s *VideoService) generateKenBurnsClip(shot *model.StoryboardShot, imagePat
 	}
 	vf := fmt.Sprintf("scale=%s,%s,scale=%s,setsar=1", preScale, zoompan, resolution)
 
-	// 30s：以 1920:-1 输入跑 zoompan，普通 CPU 通常在 10-25s 内完成；超时则快速降级 still frame。
-	const kenBurnsTimeout = 30 * time.Second
-	kenCtx, kenCancel := context.WithTimeout(context.Background(), kenBurnsTimeout)
-	defer kenCancel()
-	if _, err := runFFmpegCtx(kenCtx, "-y",
+	// P0-2: WASM cannot be interrupted via context.WithTimeout; use goroutine-level timeout.
+	// 30s covers typical zoompan runs (10-25s on a single CPU); on timeout falls back to still frame.
+	if _, err := runFFmpegWithGoroutineTimeout(30*time.Second, "-y",
 		"-loop", "1",
 		"-t", fmt.Sprintf("%.2f", duration),
 		"-i", imagePath,
