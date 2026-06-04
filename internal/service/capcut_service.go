@@ -271,6 +271,7 @@ type ccAudioMaterial struct {
 	ExtraInfo      string `json:"extra_info"`
 	FilePath       string `json:"file_Path"` // CapCut 格式：大写 P
 	ID             string `json:"id"`
+	MaterialID     string `json:"material_id"` // 必须与 ID 相同；CapCut 按此字段索引素材，缺失时 segment 找不到对应素材导致崩溃
 	Name           string `json:"name"`
 	SourcePlatform int    `json:"source_platform"`
 	Type           string `json:"type"` // "extract_music" = 配音; "music" = BGM
@@ -289,24 +290,28 @@ type ccTextMaterial struct {
 }
 
 type ccMaterials struct {
-	AudioFades         []interface{}          `json:"audio_fades"` // P1-4: CapCut 6.x+ 必需字段
-	Audios             []ccAudioMaterial      `json:"audios"`
-	Beats              []interface{}          `json:"beats"`
-	Canvases           []interface{}          `json:"canvases"`
-	Chromas            []interface{}          `json:"chromas"`
-	ColorCurves        []interface{}          `json:"color_curves"`
-	Filters            []interface{}          `json:"filters"`
-	GreenScreens       []interface{}          `json:"green_screens"`
-	Masks              []interface{}          `json:"masks"`
-	MaterialAnimations []interface{}          `json:"material_animations"`
-	Shapes             []interface{}          `json:"shapes"`
-	Speed              []interface{}          `json:"speed"`
-	Stickers           []interface{}          `json:"stickers"`
-	Texts              []ccTextMaterial       `json:"texts"`
-	Transitions        []ccTransitionMaterial `json:"transitions"`
-	VideoEffects       []interface{}          `json:"video_effects"`
-	Videos             []ccVideoMaterial      `json:"videos"`
-	VocalSeparations   []interface{}          `json:"vocal_separations"`
+	AudioFades           []interface{}          `json:"audio_fades"`           // CapCut 6.x+ 必需字段
+	Audios               []ccAudioMaterial      `json:"audios"`
+	Beats                []interface{}          `json:"beats"`
+	Canvases             []interface{}          `json:"canvases"`
+	Chromas              []interface{}          `json:"chromas"`
+	ColorCurves          []interface{}          `json:"color_curves"`
+	Filters              []interface{}          `json:"filters"`
+	GreenScreens         []interface{}          `json:"green_screens"`
+	Masks                []interface{}          `json:"masks"`
+	MaterialAnimations   []interface{}          `json:"material_animations"`
+	PlaceholderInfos     []interface{}          `json:"placeholder_infos"`     // CapCut 遍历此数组；缺失时迭代 null 崩溃
+	Shapes               []interface{}          `json:"shapes"`
+	SoundChannelMappings []interface{}          `json:"sound_channel_mappings"` // 同上
+	Speed                []interface{}          `json:"speed"`
+	Stickers             []interface{}          `json:"stickers"`
+	Texts                []ccTextMaterial       `json:"texts"`
+	TextTemplates        []interface{}          `json:"text_templates"`        // 同上
+	Transitions          []ccTransitionMaterial `json:"transitions"`
+	VideoEffects         []interface{}          `json:"video_effects"`
+	Videos               []ccVideoMaterial      `json:"videos"`
+	VoiceEffects         []interface{}          `json:"voice_effects"`         // 同上
+	VocalSeparations     []interface{}          `json:"vocal_separations"`
 }
 
 type ccCanvasConfig struct {
@@ -774,6 +779,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				Duration:   actualAudioDur, // 素材真实时长
 				FilePath:   audPath,        // HTTP URL（CDN）或相对文件名（本地嵌入）
 				ID:         audMatID,
+				MaterialID: audMatID,
 				Name:       fmt.Sprintf("shot_%03d_audio", shot.ShotNo),
 				Type:       "extract_music",
 			})
@@ -832,12 +838,13 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 						break // 镜头时长已用尽
 					}
 					audioMaterials = append(audioMaterials, ccAudioMaterial{
-						CheckFlag: 1,
-						Duration:  actualSegDur,
-						FilePath:  audPath,
-						ID:        audMatID,
-						Name:      fmt.Sprintf("shot_%03d_seg%02d", shot.ShotNo, seg.SeqNo),
-						Type:      "extract_music",
+						CheckFlag:  1,
+						Duration:   actualSegDur,
+						FilePath:   audPath,
+						ID:         audMatID,
+						MaterialID: audMatID,
+						Name:       fmt.Sprintf("shot_%03d_seg%02d", shot.ShotNo, seg.SeqNo),
+						Type:       "extract_music",
 					})
 					audioSegments = append(audioSegments, ccSegment{
 						Clip:            nil, // 音频轨道必须为 null
@@ -920,12 +927,13 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			}
 
 			sfxMaterials = append(sfxMaterials, ccAudioMaterial{
-				CheckFlag: 1,
-				Duration:  actualSFXDur,
-				FilePath:  sfxPath,
-				ID:        sfxMatID,
-				Name:      fmt.Sprintf("shot_%03d_sfx%02d", shot.ShotNo, seqLabel),
-				Type:      "audio_effect",
+				CheckFlag:  1,
+				Duration:   actualSFXDur,
+				FilePath:   sfxPath,
+				ID:         sfxMatID,
+				MaterialID: sfxMatID,
+				Name:       fmt.Sprintf("shot_%03d_sfx%02d", shot.ShotNo, seqLabel),
+				Type:       "audio_effect",
 			})
 			sfxSegments = append(sfxSegments, ccSegment{
 				Clip:            nil, // 音频轨道必须为 null
@@ -1094,12 +1102,13 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			}
 
 			audios = append(audios, ccAudioMaterial{
-				CheckFlag: 1,
-				Duration:  bgmActualDur, // P1-2: 实际文件时长，而非时间轴跨度
-				FilePath:  bgmPath,
-				ID:        bgmMatID,
-				Name:      bs.TrackName,
-				Type:      "music",
+				CheckFlag:  1,
+				Duration:   bgmActualDur, // P1-2: 实际文件时长，而非时间轴跨度
+				FilePath:   bgmPath,
+				ID:         bgmMatID,
+				MaterialID: bgmMatID,
+				Name:       bs.TrackName,
+				Type:       "music",
 			})
 			// P0-2: SourceTimerange 不能超出文件实际时长，否则 CapCut 读取 EOF 后行为未定义（静默/循环/崩溃）
 			bgmSrcDur := segDur
@@ -1155,24 +1164,28 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		Keyframes:            ccKeyframes{Adjusts: []interface{}{}, Audios: []interface{}{}, ColorWheels: []interface{}{}, Filters: []interface{}{}, Handwrites: []interface{}{}, Stickers: []interface{}{}, Texts: []interface{}{}, Videos: allKFGroups},
 		LastModifiedPlatform: "mac",
 		Materials: ccMaterials{
-			AudioFades:         []interface{}{},
-			Audios:             audios,
-			Beats:              []interface{}{},
-			Canvases:           []interface{}{},
-			Chromas:            []interface{}{},
-			ColorCurves:        []interface{}{},
-			Filters:            []interface{}{},
-			GreenScreens:       []interface{}{},
-			Masks:              []interface{}{},
-			MaterialAnimations: []interface{}{},
-			Shapes:             []interface{}{},
-			Speed:              []interface{}{},
-			Stickers:           []interface{}{},
-			Texts:              textMaterials,
-			Transitions:        transitionMaterials,
-			VideoEffects:       []interface{}{},
-			Videos:             videoMaterials,
-			VocalSeparations:   []interface{}{},
+			AudioFades:           []interface{}{},
+			Audios:               audios,
+			Beats:                []interface{}{},
+			Canvases:             []interface{}{},
+			Chromas:              []interface{}{},
+			ColorCurves:          []interface{}{},
+			Filters:              []interface{}{},
+			GreenScreens:         []interface{}{},
+			Masks:                []interface{}{},
+			MaterialAnimations:   []interface{}{},
+			PlaceholderInfos:     []interface{}{},
+			Shapes:               []interface{}{},
+			SoundChannelMappings: []interface{}{},
+			Speed:                []interface{}{},
+			Stickers:             []interface{}{},
+			Texts:                textMaterials,
+			TextTemplates:        []interface{}{},
+			Transitions:          transitionMaterials,
+			VideoEffects:         []interface{}{},
+			Videos:               videoMaterials,
+			VoiceEffects:         []interface{}{},
+			VocalSeparations:     []interface{}{},
 		},
 		Name:          video.Title,
 		NewVersion:    "110.0.0",
@@ -1463,12 +1476,13 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 				srcDur = durationMicros
 			}
 			audioMaterials = append(audioMaterials, ccAudioMaterial{
-				CheckFlag: 1,
-				Duration:  actualAudioDur,
-				FilePath:  audPath,
-				ID:        audMatID,
-				Name:      fmt.Sprintf("shot_%03d_audio", shot.ShotNo),
-				Type:      "extract_music",
+				CheckFlag:  1,
+				Duration:   actualAudioDur,
+				FilePath:   audPath,
+				ID:         audMatID,
+				MaterialID: audMatID,
+				Name:       fmt.Sprintf("shot_%03d_audio", shot.ShotNo),
+				Type:       "extract_music",
 			})
 			audioSegments = append(audioSegments, ccSegment{
 				Clip:            nil, // 音频轨道必须为 null
@@ -1520,12 +1534,13 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 						break // used up all shot time
 					}
 					audioMaterials = append(audioMaterials, ccAudioMaterial{
-						CheckFlag: 1,
-						Duration:  actualSegDur,
-						FilePath:  audPath,
-						ID:        audMatID,
-						Name:      fmt.Sprintf("shot_%03d_seg%02d", shot.ShotNo, seg.SeqNo),
-						Type:      "extract_music",
+						CheckFlag:  1,
+						Duration:   actualSegDur,
+						FilePath:   audPath,
+						ID:         audMatID,
+						MaterialID: audMatID,
+						Name:       fmt.Sprintf("shot_%03d_seg%02d", shot.ShotNo, seg.SeqNo),
+						Type:       "extract_music",
 					})
 					audioSegments = append(audioSegments, ccSegment{
 						Clip:            nil, // 音频轨道必须为 null
@@ -1691,24 +1706,28 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		Keyframes:            ccKeyframes{Adjusts: []interface{}{}, Audios: []interface{}{}, ColorWheels: []interface{}{}, Filters: []interface{}{}, Handwrites: []interface{}{}, Stickers: []interface{}{}, Texts: []interface{}{}, Videos: []ccKeyframeGroup{}},
 		LastModifiedPlatform: "mac",
 		Materials: ccMaterials{
-			AudioFades:         []interface{}{},
-			Audios:             audioMaterials,
-			Beats:              []interface{}{},
-			Canvases:           []interface{}{},
-			Chromas:            []interface{}{},
-			ColorCurves:        []interface{}{},
-			Filters:            []interface{}{},
-			GreenScreens:       []interface{}{},
-			Masks:              []interface{}{},
-			MaterialAnimations: []interface{}{},
-			Shapes:             []interface{}{},
-			Speed:              []interface{}{},
-			Stickers:           []interface{}{},
-			Texts:              allTextMaterials,
-			Transitions:        []ccTransitionMaterial{},
-			VideoEffects:       []interface{}{},
-			Videos:             videoMaterials,
-			VocalSeparations:   []interface{}{},
+			AudioFades:           []interface{}{},
+			Audios:               audioMaterials,
+			Beats:                []interface{}{},
+			Canvases:             []interface{}{},
+			Chromas:              []interface{}{},
+			ColorCurves:          []interface{}{},
+			Filters:              []interface{}{},
+			GreenScreens:         []interface{}{},
+			Masks:                []interface{}{},
+			MaterialAnimations:   []interface{}{},
+			PlaceholderInfos:     []interface{}{},
+			Shapes:               []interface{}{},
+			SoundChannelMappings: []interface{}{},
+			Speed:                []interface{}{},
+			Stickers:             []interface{}{},
+			Texts:                allTextMaterials,
+			TextTemplates:        []interface{}{},
+			Transitions:          []ccTransitionMaterial{},
+			VideoEffects:         []interface{}{},
+			Videos:               videoMaterials,
+			VoiceEffects:         []interface{}{},
+			VocalSeparations:     []interface{}{},
 		},
 		Name:          video.Title + " (B剪)",
 		NewVersion:    "110.0.0",
