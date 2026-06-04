@@ -691,7 +691,7 @@ func (h *VideoHandler) ExportCapCutDraft(c *gin.Context) {
 	if h.bgmRepo != nil {
 		bgmSegs, _ = h.bgmRepo.ListByVideoID(uint(id))
 	}
-	opts := service.ExportOptions{EmbedMedia: c.Query("embed_media") != "false"}
+	opts := service.ExportOptions{EmbedMedia: c.Query("embed_media") == "true"}
 
 	result, err := h.capcutService.ExportCapCutDraft(video, shots, novel, bgmSegs, opts)
 	if err != nil {
@@ -726,7 +726,7 @@ func (h *VideoHandler) Export(c *gin.Context) {
 		return
 	}
 
-	exportOpts := service.ExportOptions{EmbedMedia: c.Query("embed_media") != "false"}
+	exportOpts := service.ExportOptions{EmbedMedia: c.Query("embed_media") == "true"}
 
 	var result *service.ExportResult
 	switch format {

@@ -308,9 +308,9 @@ type ExportResult struct {
 }
 
 // ExportOptions 控制导出行为。
-// EmbedMedia=true（默认）：将所有媒体下载后嵌入 ZIP，草稿自包含但体积较大。
-// EmbedMedia=false：不下载媒体，draft JSON 中直接写入原始 URL/本地路径，ZIP 体积极小，
-// 但需要用户自行在 CapCut 中重新关联素材（适合本地文件场景）。
+// EmbedMedia=false（默认）：不下载媒体，draft JSON 直接写入原始 URL/本地路径，ZIP 体积极小；
+// 用户需在 CapCut 中手动重新关联素材，或素材已在本地可直接访问。
+// EmbedMedia=true：将所有媒体下载后嵌入 ZIP，草稿自包含但体积较大（?embed_media=true 触发）。
 type ExportOptions struct {
 	EmbedMedia bool
 }
