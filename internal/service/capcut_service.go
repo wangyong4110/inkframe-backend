@@ -557,9 +557,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			matType = "video"
 		}
 
-		// 使用 materialID 作为文件名（与剪映自身草稿格式一致），放在草稿根目录而非子目录
 		vidMatID := uuid.New().String()
-		vidFilename := strings.ReplaceAll(vidMatID, "-", "") + ext
+		vidFilename := fmt.Sprintf("%03d%s", shot.ShotNo, ext) // 数字序号命名，便于剪辑师识别
 
 		// 剪映支持 HTTP URL 作为素材 path（在线资源，联网时直接加载）。
 		// HTTP URL 时直接使用 CDN 地址，无需下载嵌入 ZIP，减小包体且无需本地绝对路径。
@@ -609,8 +608,9 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			Visible:         true,
 			Volume:          1.0,
 		}
-		// 添加 Ken Burns 运镜关键帧（图片：缩放+平移；视频：叠加二次运镜，增强视觉动感）
-		{
+		// P1-1: 仅对静态图片添加 Ken Burns 运镜关键帧。
+		// 视频素材由 Kling/Seedance 已生成摄像机运动，叠加缩放/平移关键帧会产生双重抖动。
+		if !isVideo {
 			kfGroups := buildPhotoMotionKeyframes(segID, shot.CameraType, durationMicros, shot.ShotNo)
 			for _, g := range kfGroups {
 				seg.KeyframeRefs = append(seg.KeyframeRefs, g.ID)
@@ -633,22 +633,23 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		videoSegments = append(videoSegments, seg)
 
 		// ── 2. 配音音频素材 ───────────────────────────────────────
+		// 优先 shot.AudioPath（合成后的整段音频）；
+		// Bug-A修复：AudioPath 为空且有 VoiceSegments 时，逐段加入配音轨道（与 ExportBRollDraft 保持一致）。
 		if shot.AudioPath != "" {
 			audMatID := uuid.New().String()
-			audFilename := strings.ReplaceAll(audMatID, "-", "") + ".mp3" // 默认扩展名
 
 			// Bug3修复：用实际音频时长替代 shot.Duration。
 			// CapCut 根据 Material.Duration 和 SourceTimerange.Duration 解析音频播放范围；
 			// 若声称时长 > 文件实际时长，CapCut 可能拉伸音频，导致音画不同步。
 			actualAudioDur := durationMicros // fallback：读取失败时用视频段时长
-			audPath := audFilename
+			audPath := fmt.Sprintf("%03d_voice.mp3", shot.ShotNo) // 数字序号命名
 			if isHTTPURL(shot.AudioPath) {
 				// HTTP URL：直接使用 CDN 地址，无需下载嵌入 ZIP
 				audPath = shot.AudioPath
 			} else {
 				if data, err := readLocalOrRemoteFile(shot.AudioPath); err == nil && len(data) > 0 {
 					ext := audioExtension(shot.AudioPath)
-					audPath = strings.ReplaceAll(audMatID, "-", "") + ext // 使用 materialID 作为文件名
+					audPath = fmt.Sprintf("%03d_voice%s", shot.ShotNo, ext)
 					if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
 						totalLoadedBytes += int64(len(data))
 						mediaFiles = append(mediaFiles, mediaFile{filename: audPath, data: data})
@@ -690,21 +691,86 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				Visible:         true,
 				Volume:          1.0,
 			})
+		} else if s.segmentRepo != nil {
+			// Bug-A：AudioPath 为空 → 回落到逐段 VoiceSegment，与 ExportBRollDraft 保持一致。
+			// 多段 TTS 场景下 shot.AudioPath 通常为空（各段未合并），若此处不处理则配音轨道完全缺失。
+			segs, segErr := s.segmentRepo.ListByShotID(shot.ID)
+			if segErr == nil && len(segs) > 0 {
+				segOffset := startMicros // 镜头内各段的时间轴起始偏移
+				for _, seg := range segs {
+					if seg.AudioPath == "" {
+						continue
+					}
+					audMatID := uuid.New().String()
+					actualSegDur := durationMicros // fallback：解析失败时用镜头时长
+					audPath := fmt.Sprintf("%03d_seg%02d.mp3", shot.ShotNo, seg.SeqNo)
+					segPath := strings.TrimPrefix(seg.AudioPath, "file://")
+					if isHTTPURL(segPath) {
+						audPath = segPath
+					} else {
+						if data, rdErr := readLocalOrRemoteFile(segPath); rdErr == nil && len(data) > 0 {
+							ext := audioExtension(segPath)
+							audPath = fmt.Sprintf("%03d_seg%02d%s", shot.ShotNo, seg.SeqNo, ext)
+							if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
+								totalLoadedBytes += int64(len(data))
+								mediaFiles = append(mediaFiles, mediaFile{filename: audPath, data: data})
+							} else {
+								logger.Printf("[ExportCapCutDraft] VoiceSegment: total media exceeds 2GiB, skipping shot %d seg %d", shot.ShotNo, seg.SeqNo)
+							}
+							if dur := parseAudioDurationMicros(data, ext); dur > 0 {
+								actualSegDur = dur
+							}
+						}
+					}
+					// 优先使用已存储的 DurationSecs（避免重复解析 PCM header）
+					if seg.DurationSecs > 0 {
+						actualSegDur = int64(seg.DurationSecs * 1_000_000)
+					}
+					// 不超出镜头剩余时长，避免溢出到下一镜头
+					remaining := startMicros + durationMicros - segOffset
+					srcDur := actualSegDur
+					if srcDur > remaining {
+						srcDur = remaining
+					}
+					if srcDur <= 0 {
+						break // 镜头时长已用尽
+					}
+					audioMaterials = append(audioMaterials, ccAudioMaterial{
+						CheckFlag: 1,
+						Duration:  actualSegDur,
+						FilePath:  audPath,
+						ID:        audMatID,
+						Name:      fmt.Sprintf("shot_%03d_seg%02d", shot.ShotNo, seg.SeqNo),
+						Type:      "extract_music",
+					})
+					audioSegments = append(audioSegments, ccSegment{
+						Clip:            ccClip{Alpha: 1.0, Scale: ccScale{X: 1.0, Y: 1.0}},
+						ID:              uuid.New().String(),
+						MaterialID:      audMatID,
+						Speed:           1.0,
+						SourceTimerange: ccTimeRange{Duration: srcDur, Start: 0},
+						TargetTimerange: ccTimeRange{Duration: srcDur, Start: segOffset},
+						Type:            "audio",
+						Visible:         true,
+						Volume:          1.0,
+					})
+					segOffset += actualSegDur
+				}
+			}
 		}
 
 		// ── 3. 音效素材（SFX）────────────────────────────────────
 		if shot.SFXURL != "" {
 			sfxMatID := uuid.New().String()
-			sfxFilename := strings.ReplaceAll(sfxMatID, "-", "") + ".mp3" // 默认扩展名
 
 			actualSFXDur := durationMicros
-			sfxPath := sfxFilename
+			sfxPath := fmt.Sprintf("%03d_sfx.mp3", shot.ShotNo) // 数字序号命名
 			if isHTTPURL(shot.SFXURL) {
 				sfxPath = shot.SFXURL
 			} else {
 				if data, err := readLocalOrRemoteFile(shot.SFXURL); err == nil && len(data) > 0 {
 					ext := audioExtension(shot.SFXURL)
-					sfxPath = strings.ReplaceAll(sfxMatID, "-", "") + ext
+					sfxPath = fmt.Sprintf("%03d_sfx%s", shot.ShotNo, ext)
 					// P2-1: apply same 2GiB guard as video/audio embeds
 					if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
 						totalLoadedBytes += int64(len(data))
@@ -739,7 +805,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				FilePath:  sfxPath, // HTTP URL（CDN）或相对文件名（本地嵌入）
 				ID:        sfxMatID,
 				Name:      fmt.Sprintf("shot_%03d_sfx", shot.ShotNo),
-				Type:      "extract_music",
+				Type:      "audio_effect", // P2-4: 音效类型区别于配音（extract_music）和 BGM（music）
 			})
 			// Bug修复：SFX TargetTimerange.Duration 必须等于 SourceTimerange.Duration（sfxSrcDur），
 			// 否则剪映会拉伸音效填满 durationMicros，导致音效变速、时间线混乱。
@@ -795,7 +861,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
 				Type:            "text",
 				Visible:         true,
-				Volume:          1.0,
+				Volume:          0, // P2-1: 文本轨道无音频，Volume 应为 0
 			})
 		}
 
@@ -866,6 +932,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		}
 
 		var bgmSegments []ccSegment
+		bgmIndex := 0 // BGM 文件序号（用于数字顺序命名）
 		for _, bs := range bgmSegs {
 			if bs.Disabled || bs.URL == "" {
 				continue
@@ -884,8 +951,9 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				continue
 			}
 
+			bgmIndex++
 			bgmMatID := uuid.New().String()
-			bgmFilename := strings.ReplaceAll(bgmMatID, "-", "") + ".mp3"
+			bgmFilename := fmt.Sprintf("bgm_%03d.mp3", bgmIndex) // 数字序号命名
 			bgmPath := bgmFilename
 			bgmActualDur := segDur // P1-2: fallback，HTTP URL 无法 probe 时用时间轴跨度
 			if isHTTPURL(bs.URL) {
@@ -893,7 +961,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			} else {
 				if data, err := downloadMediaFile(bs.URL); err == nil {
 					ext := audioExtension(bs.URL)
-					bgmFilename = strings.ReplaceAll(bgmMatID, "-", "") + ext
+					bgmFilename = fmt.Sprintf("bgm_%03d%s", bgmIndex, ext)
 					bgmPath = bgmFilename
 					// P1-3: BGM 也纳入 2GiB 总大小保护
 					if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
@@ -922,12 +990,17 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				Name:      bs.TrackName,
 				Type:      "music",
 			})
+			// P0-2: SourceTimerange 不能超出文件实际时长，否则 CapCut 读取 EOF 后行为未定义（静默/循环/崩溃）
+			bgmSrcDur := segDur
+			if bgmActualDur > 0 && bgmActualDur < segDur {
+				bgmSrcDur = bgmActualDur
+			}
 			bgmSegments = append(bgmSegments, ccSegment{
 				Clip:            ccClip{Alpha: 1.0, Scale: ccScale{X: 1.0, Y: 1.0}},
 				ID:              uuid.New().String(),
 				MaterialID:      bgmMatID,
 				Speed:           1.0,
-				SourceTimerange: ccTimeRange{Duration: segDur, Start: 0},
+				SourceTimerange: ccTimeRange{Duration: bgmSrcDur, Start: 0}, // P0-2: cap at actual file duration
 				TargetTimerange: ccTimeRange{Duration: segDur, Start: startMicros},
 				Type:            "audio",
 				Visible:         true,
@@ -951,6 +1024,14 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	}
 	if textMaterials == nil {
 		textMaterials = []ccTextMaterial{}
+	}
+	// Bug-B：transitionMaterials nil → null，CapCut 部分版本解析失败；应为空数组
+	if transitionMaterials == nil {
+		transitionMaterials = []ccTransitionMaterial{}
+	}
+	// Bug-C：videoMaterials nil → null（空分镜时）；防御性置空数组
+	if videoMaterials == nil {
+		videoMaterials = []ccVideoMaterial{}
 	}
 	content := ccDraftContent{
 		CanvasConfig:         ccCanvasConfig{Height: height, Ratio: aspectRatioFloat(ratio), Width: width}, // P0-2: float64
@@ -1193,13 +1274,19 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		}
 
 		vidMatID := uuid.New().String()
-		vidFilename := strings.ReplaceAll(vidMatID, "-", "") + ".jpg"
+		vidFilename := fmt.Sprintf("%03d.jpg", shot.ShotNo) // 数字序号命名
 		vidPath := vidFilename
 		if isHTTPURL(mediaURL) {
 			vidPath = mediaURL
 		} else if mediaURL != "" {
 			if data, err := downloadMediaFile(mediaURL); err == nil {
-				mediaFiles = append(mediaFiles, mediaFile{filename: vidFilename, data: data})
+				// P1-2: 图片下载纳入 2GiB 总大小保护，与 ExportCapCutDraft 保持一致
+				if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
+					totalLoadedBytes += int64(len(data))
+					mediaFiles = append(mediaFiles, mediaFile{filename: vidFilename, data: data})
+				} else {
+					logger.Printf("[ExportBRollDraft] P1-2: total media exceeds 2GiB, skipping image embed shot %d", shot.ShotNo)
+				}
 			}
 		}
 
@@ -1241,14 +1328,20 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		if shot.AudioPath != "" {
 			audMatID := uuid.New().String()
 			actualAudioDur := durationMicros
-			audPath := strings.ReplaceAll(audMatID, "-", "") + ".mp3"
+			audPath := fmt.Sprintf("%03d_voice.mp3", shot.ShotNo) // 数字序号命名
 			if isHTTPURL(shot.AudioPath) {
 				audPath = shot.AudioPath
 			} else {
 				if data, err := readLocalOrRemoteFile(shot.AudioPath); err == nil && len(data) > 0 {
 					ext := audioExtension(shot.AudioPath)
-					audPath = strings.ReplaceAll(audMatID, "-", "") + ext
-					mediaFiles = append(mediaFiles, mediaFile{filename: audPath, data: data})
+					audPath = fmt.Sprintf("%03d_voice%s", shot.ShotNo, ext)
+					// Bug-D: 与 ExportCapCutDraft 保持一致，加 2GiB 累积保护防 OOM
+					if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
+						totalLoadedBytes += int64(len(data))
+						mediaFiles = append(mediaFiles, mediaFile{filename: audPath, data: data})
+					} else {
+						logger.Printf("[ExportBRollDraft] audio: total media exceeds 2GiB, skipping audio embed shot %d", shot.ShotNo)
+					}
 					if dur := parseAudioDurationMicros(data, ext); dur > 0 {
 						actualAudioDur = dur
 					}
@@ -1288,14 +1381,14 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 					}
 					audMatID := uuid.New().String()
 					actualSegDur := durationMicros // fallback
-					audPath := strings.ReplaceAll(audMatID, "-", "") + ".mp3"
+					audPath := fmt.Sprintf("%03d_seg%02d.mp3", shot.ShotNo, seg.SeqNo) // 数字序号命名
 					segPath := strings.TrimPrefix(seg.AudioPath, "file://")
 					if isHTTPURL(segPath) {
 						audPath = segPath
 					} else {
 						if data, rdErr := readLocalOrRemoteFile(segPath); rdErr == nil && len(data) > 0 {
 							ext := audioExtension(segPath)
-							audPath = strings.ReplaceAll(audMatID, "-", "") + ext
+							audPath = fmt.Sprintf("%03d_seg%02d%s", shot.ShotNo, seg.SeqNo, ext)
 							// P3-2: 与 ExportCapCutDraft 保持一致，防止 OOM
 							if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
 								totalLoadedBytes += int64(len(data))
@@ -1379,7 +1472,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 				TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
 				Type:            "text",
 				Visible:         true,
-				Volume:          1.0,
+				Volume:          0, // P2-1: 文本轨道无音频，Volume 应为 0
 			})
 		}
 
@@ -1417,7 +1510,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
 			Type:            "text",
 			Visible:         true,
-			Volume:          1.0,
+			Volume:          0, // P2-1: 文本轨道无音频，Volume 应为 0
 		})
 
 		totalDuration += durationMicros
@@ -1470,6 +1563,10 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 
 	if audioMaterials == nil {
 		audioMaterials = []ccAudioMaterial{}
+	}
+	// Bug-E: videoMaterials nil → JSON null，防御性置空数组（0 分镜时触发）
+	if videoMaterials == nil {
+		videoMaterials = []ccVideoMaterial{}
 	}
 	// P3-3: 合并两个文本素材列表用于 Materials.Texts
 	allTextMaterials := append(subtitleMaterials, annMaterials...)
@@ -1740,6 +1837,24 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 			ai.audioID = audID
 			ai.audioSrc = shot.AudioPath
 			ai.audioFile = audFile
+		} else if s.segmentRepo != nil {
+			// Bug-G: AudioPath 为空时回落到首个有效 VoiceSegment（FCPXML 单资产只引用一段音频）
+			segs, segErr := s.segmentRepo.ListByShotID(shot.ID)
+			if segErr == nil {
+				for _, seg := range segs {
+					if seg.AudioPath == "" {
+						continue
+					}
+					audID := fmt.Sprintf("r%d", nextID)
+					nextID++
+					audExt := audioExtension(seg.AudioPath)
+					audFile := fmt.Sprintf("%03d_seg01%s", shot.ShotNo, audExt)
+					ai.audioID = audID
+					ai.audioSrc = seg.AudioPath
+					ai.audioFile = audFile
+					break // 仅取首段
+				}
+			}
 		}
 
 		assets = append(assets, ai)
@@ -1752,7 +1867,9 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 	sb.WriteString("\n<!DOCTYPE fcpxml>\n")
 	sb.WriteString(`<fcpxml version="1.10">`)
 	sb.WriteString("\n<resources>\n")
-	sb.WriteString(fmt.Sprintf(`  <format id="r1" frameDuration="1/25s" width="%d" height="%d"/>`, width, height))
+	// P0-1: frameDuration="1/24s" 与合成输出帧率一致（原为 1/25s 导致 FCP/DaVinci 项目帧率错误）
+	// P2-3: 补充 colorSpace 避免 DaVinci Resolve 导入时弹出颜色空间选择对话框
+	sb.WriteString(fmt.Sprintf(`  <format id="r1" frameDuration="1/24s" width="%d" height="%d" colorSpace="1-1-1 (Rec. 709)"/>`, width, height))
 	sb.WriteString("\n")
 
 	for _, a := range assets {
@@ -1827,29 +1944,46 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 	}
 
 	// 媒体文件打包到 media/（供离线重连）
+	// Bug-F: 加累积 2GiB 保护，防止大项目打包时 OOM
+	var fcpLoadedBytes int64
 	for _, a := range assets {
 		if a.localClip != "" {
 			// 本地 Ken Burns 文件（slideshow 模式）直接读取
 			if data, err := os.ReadFile(a.localClip); err == nil {
-				if e := writeZip(prefix+"media/"+a.filename, data); e != nil {
-					zipFile.Close()
-					return nil, fmt.Errorf("write media %s: %w", a.filename, e)
+				if fcpLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
+					fcpLoadedBytes += int64(len(data))
+					if e := writeZip(prefix+"media/"+a.filename, data); e != nil {
+						zipFile.Close()
+						return nil, fmt.Errorf("write media %s: %w", a.filename, e)
+					}
+				} else {
+					logger.Printf("[ExportFCPXML] total media exceeds 2GiB, skipping local clip %s", a.filename)
 				}
 			}
 		} else if a.src != "" && (strings.HasPrefix(a.src, "http://") || strings.HasPrefix(a.src, "https://")) {
 			if data, err := downloadMediaFile(a.src); err == nil {
-				if e := writeZip(prefix+"media/"+a.filename, data); e != nil {
-					zipFile.Close()
-					return nil, fmt.Errorf("write media %s: %w", a.filename, e)
+				if fcpLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
+					fcpLoadedBytes += int64(len(data))
+					if e := writeZip(prefix+"media/"+a.filename, data); e != nil {
+						zipFile.Close()
+						return nil, fmt.Errorf("write media %s: %w", a.filename, e)
+					}
+				} else {
+					logger.Printf("[ExportFCPXML] total media exceeds 2GiB, skipping remote media %s", a.filename)
 				}
 			}
 		}
 		// 音频文件：本地或远程均打包进 media/
 		if a.audioSrc != "" {
 			if data, err := readLocalOrRemoteFile(a.audioSrc); err == nil && len(data) > 0 {
-				if e := writeZip(prefix+"media/"+a.audioFile, data); e != nil {
-					zipFile.Close()
-					return nil, fmt.Errorf("write audio %s: %w", a.audioFile, e)
+				if fcpLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
+					fcpLoadedBytes += int64(len(data))
+					if e := writeZip(prefix+"media/"+a.audioFile, data); e != nil {
+						zipFile.Close()
+						return nil, fmt.Errorf("write audio %s: %w", a.audioFile, e)
+					}
+				} else {
+					logger.Printf("[ExportFCPXML] total media exceeds 2GiB, skipping audio %s", a.audioFile)
 				}
 			}
 		}
@@ -1979,24 +2113,35 @@ func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.Sto
 		// 音频：优先 shot.AudioPath，无则取 VoiceSegments（P1-2）
 		if shot.AudioPath != "" {
 			if data, err := readLocalOrRemoteFile(shot.AudioPath); err == nil && len(data) > 0 {
-				ext := audioExtension(shot.AudioPath)
-				filename := fmt.Sprintf("%03d%s", shot.ShotNo, ext)
-				if e := writeZip("audio/"+filename, data); e != nil {
-					return nil, fmt.Errorf("write audio/%s: %w", filename, e)
+				// Bug-I: 加 2GiB 累积保护，防止大项目音频 OOM
+				if zipLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
+					zipLoadedBytes += int64(len(data))
+					ext := audioExtension(shot.AudioPath)
+					filename := fmt.Sprintf("%03d%s", shot.ShotNo, ext)
+					if e := writeZip("audio/"+filename, data); e != nil {
+						return nil, fmt.Errorf("write audio/%s: %w", filename, e)
+					}
+					meta.AudioFile = "audio/" + filename
+				} else {
+					logger.Printf("[ExportResourceZip] audio: total media exceeds 2GiB, skipping shot %d audio", shot.ShotNo)
 				}
-				meta.AudioFile = "audio/" + filename
 			}
 		} else if s.segmentRepo != nil {
-			// P1-2: include individual VoiceSegment audio files when shot.AudioPath is absent
+			// P1-2: include individual VoiceSegment audio files when shot.AudioPath is absent.
+			// Bug-H: 原用 os.ReadFile 不支持 HTTP URL，改用 readLocalOrRemoteFile 统一处理本地/CDN 路径。
 			segs, segErr := s.segmentRepo.ListByShotID(shot.ID)
 			if segErr == nil {
 				for _, seg := range segs {
 					if seg.AudioPath == "" {
 						continue
 					}
-					segPath := strings.TrimPrefix(seg.AudioPath, "file://")
-					if data, rdErr := os.ReadFile(segPath); rdErr == nil && len(data) > 0 {
-						ext := audioExtension(segPath)
+					if data, rdErr := readLocalOrRemoteFile(seg.AudioPath); rdErr == nil && len(data) > 0 {
+						if zipLoadedBytes+int64(len(data)) > maxExportMediaBytes {
+							logger.Printf("[ExportResourceZip] VoiceSegment: total media exceeds 2GiB, skipping shot %d seg %d", shot.ShotNo, seg.SeqNo)
+							break
+						}
+						zipLoadedBytes += int64(len(data))
+						ext := audioExtension(seg.AudioPath)
 						filename := fmt.Sprintf("%03d_seg%02d%s", shot.ShotNo, seg.SeqNo, ext)
 						if e := writeZip("audio/"+filename, data); e == nil && meta.AudioFile == "" {
 							meta.AudioFile = "audio/" + filename // first segment as primary ref
