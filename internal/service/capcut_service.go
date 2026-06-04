@@ -307,6 +307,14 @@ type ExportResult struct {
 	ContentType string
 }
 
+// ExportOptions 控制导出行为。
+// EmbedMedia=true（默认）：将所有媒体下载后嵌入 ZIP，草稿自包含但体积较大。
+// EmbedMedia=false：不下载媒体，draft JSON 中直接写入原始 URL/本地路径，ZIP 体积极小，
+// 但需要用户自行在 CapCut 中重新关联素材（适合本地文件场景）。
+type ExportOptions struct {
+	EmbedMedia bool
+}
+
 // aspectRatioDimensions 根据宽高比返回 (width, height)
 func aspectRatioDimensions(ratio string) (int, int) {
 	switch ratio {
@@ -518,7 +526,7 @@ func capCutTransitionEffect(t string) string {
 }
 
 // ExportCapCutDraft 导出剪映草稿 ZIP（含视频/图片、配音、字幕轨道）
-func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.StoryboardShot, novel *model.Novel, bgmSegs []*model.VideoBGMSegment) (*ExportResult, error) {
+func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.StoryboardShot, novel *model.Novel, bgmSegs []*model.VideoBGMSegment, opts ExportOptions) (*ExportResult, error) {
 	logger.Printf("[CapCutService] ExportCapCutDraft: videoID=%d title=%q shots=%d", video.ID, video.Title, len(shots))
 	now := time.Now().Unix()
 	draftID := uuid.New().String()
@@ -566,19 +574,25 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		return shots[i].ShotNo < shots[j].ShotNo
 	})
 
-	// P1-1: 预取第一张分镜图作为草稿封面缩略图
+	// P1-1: 优先使用项目封面，回退到第一张分镜图作为草稿封面缩略图
 	var coverData []byte
-	if len(shots) > 0 && shots[0].ImageURL != "" {
-		imgURL := shots[0].ImageURL
-		if isHTTPURL(imgURL) {
-			if data, err := downloadMediaFile(imgURL); err == nil {
-				coverData = data
+	loadCoverFromURL := func(u string) []byte {
+		if isHTTPURL(u) {
+			if data, err := downloadMediaFile(u); err == nil {
+				return data
 			}
 		} else {
-			if data, err := os.ReadFile(strings.TrimPrefix(imgURL, "file://")); err == nil {
-				coverData = data
+			if data, err := os.ReadFile(strings.TrimPrefix(u, "file://")); err == nil {
+				return data
 			}
 		}
+		return nil
+	}
+	if novel != nil && novel.CoverImage != "" {
+		coverData = loadCoverFromURL(novel.CoverImage)
+	}
+	if len(coverData) == 0 && len(shots) > 0 && shots[0].ImageURL != "" {
+		coverData = loadCoverFromURL(shots[0].ImageURL)
 	}
 
 	// P2-4: track total loaded bytes; skip embeds beyond maxExportMediaBytes to avoid OOM
@@ -611,34 +625,37 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		vidMatID := uuid.New().String()
 		vidFilename := fmt.Sprintf("%03d%s", shot.ShotNo, ext) // 数字序号命名，便于剪辑师识别
 
-		// 根因修复：CapCut 的 path 字段必须是本地文件路径，不支持 HTTP URL。
-		// 若将 CDN URL 写入 path，CapCut 会把它当本地路径查找，文件不存在导致素材全空。
-		// 修复：始终下载并嵌入媒体文件到 ZIP；path 只写文件名，CapCut 从草稿目录自动找到该文件。
-		// 下载失败（超时/超限/鉴权）时才回退使用 CDN URL——此时用户需在 CapCut 内手动重连素材。
+		// CapCut 的 path 字段必须是本地文件路径，不支持 HTTP URL。
+		// EmbedMedia=true（默认）：下载并嵌入 ZIP；path 只写文件名，CapCut 从草稿目录自动找到该文件。
+		// EmbedMedia=false（参考模式）：直接写原始 URL/路径，不下载；用户需在 CapCut 内手动重连素材。
 		vidPath := vidFilename
 		if mediaURL != "" {
-			var mediaData []byte
-			var mediaErr error
-			if isHTTPURL(mediaURL) {
-				mediaData, mediaErr = downloadMediaFile(mediaURL)
-			} else {
-				mediaData, mediaErr = readLocalOrRemoteFile(mediaURL)
-			}
-			if mediaErr == nil && len(mediaData) > 0 {
-				if totalLoadedBytes+int64(len(mediaData)) > maxExportMediaBytes {
-					logger.Printf("[ExportCapCutDraft] total media exceeds 2GiB, skipping embed for shot %d; path falls back to URL", shot.ShotNo)
-					if isHTTPURL(mediaURL) {
-						vidPath = mediaURL // 超限时最后手段
-					}
+			if opts.EmbedMedia {
+				var mediaData []byte
+				var mediaErr error
+				if isHTTPURL(mediaURL) {
+					mediaData, mediaErr = downloadMediaFile(mediaURL)
 				} else {
-					totalLoadedBytes += int64(len(mediaData))
-					mediaFiles = append(mediaFiles, mediaFile{filename: vidFilename, data: mediaData})
-					// vidPath 保持 vidFilename：CapCut 从草稿目录按文件名找到此文件
+					mediaData, mediaErr = readLocalOrRemoteFile(mediaURL)
 				}
-			} else if isHTTPURL(mediaURL) {
-				// 下载失败（网络/鉴权/文件过大）→ 降级用 CDN URL，提示用户手动重连
-				vidPath = mediaURL
-				logger.Printf("[ExportCapCutDraft] media download failed for shot %d (%v), using CDN URL as path fallback", shot.ShotNo, mediaErr)
+				if mediaErr == nil && len(mediaData) > 0 {
+					if totalLoadedBytes+int64(len(mediaData)) > maxExportMediaBytes {
+						logger.Printf("[ExportCapCutDraft] total media exceeds 2GiB, skipping embed for shot %d; path falls back to URL", shot.ShotNo)
+						if isHTTPURL(mediaURL) {
+							vidPath = mediaURL
+						}
+					} else {
+						totalLoadedBytes += int64(len(mediaData))
+						mediaFiles = append(mediaFiles, mediaFile{filename: vidFilename, data: mediaData})
+					}
+				} else if isHTTPURL(mediaURL) {
+					vidPath = mediaURL
+					logger.Printf("[ExportCapCutDraft] media download failed for shot %d (%v), using CDN URL as path fallback", shot.ShotNo, mediaErr)
+				} else {
+					vidPath = mediaURL // 本地路径读取失败，回退
+				}
+			} else {
+				vidPath = mediaURL // 参考模式：直接使用原始 URL/路径
 			}
 		}
 
@@ -709,9 +726,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			actualAudioDur := durationMicros // fallback：读取失败时用视频段时长
 			audPath := fmt.Sprintf("%03d_voice.mp3", shot.ShotNo) // 数字序号命名
 			if isHTTPURL(shot.AudioPath) {
-				// HTTP URL：直接使用 CDN 地址，无需下载嵌入 ZIP
-				audPath = shot.AudioPath
-			} else {
+				audPath = shot.AudioPath // HTTP URL 始终直接引用，不下载
+			} else if opts.EmbedMedia {
 				if data, err := readLocalOrRemoteFile(shot.AudioPath); err == nil && len(data) > 0 {
 					ext := audioExtension(shot.AudioPath)
 					audPath = fmt.Sprintf("%03d_voice%s", shot.ShotNo, ext)
@@ -723,6 +739,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 						actualAudioDur = dur
 					}
 				}
+			} else {
+				audPath = shot.AudioPath // 参考模式：直接使用本地路径
 			}
 			// SourceTimerange：告知剪映实际取用的音频长度，不超过视频段时长
 			srcDur := actualAudioDur
@@ -772,7 +790,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 					segPath := strings.TrimPrefix(seg.AudioPath, "file://")
 					if isHTTPURL(segPath) {
 						audPath = segPath
-					} else {
+					} else if opts.EmbedMedia {
 						if data, rdErr := readLocalOrRemoteFile(segPath); rdErr == nil && len(data) > 0 {
 							ext := audioExtension(segPath)
 							audPath = fmt.Sprintf("%03d_seg%02d%s", shot.ShotNo, seg.SeqNo, ext)
@@ -786,6 +804,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 								actualSegDur = dur
 							}
 						}
+					} else {
+						audPath = segPath // 参考模式：直接使用本地路径
 					}
 					// 优先使用已存储的 DurationSecs（避免重复解析 PCM header）
 					if seg.DurationSecs > 0 {
@@ -832,11 +852,10 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			sfxPath := fmt.Sprintf("%03d_sfx.mp3", shot.ShotNo) // 数字序号命名
 			if isHTTPURL(shot.SFXURL) {
 				sfxPath = shot.SFXURL
-			} else {
+			} else if opts.EmbedMedia {
 				if data, err := readLocalOrRemoteFile(shot.SFXURL); err == nil && len(data) > 0 {
 					ext := audioExtension(shot.SFXURL)
 					sfxPath = fmt.Sprintf("%03d_sfx%s", shot.ShotNo, ext)
-					// P2-1: apply same 2GiB guard as video/audio embeds
 					if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
 						totalLoadedBytes += int64(len(data))
 						mediaFiles = append(mediaFiles, mediaFile{filename: sfxPath, data: data})
@@ -847,6 +866,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 						actualSFXDur = dur
 					}
 				}
+			} else {
+				sfxPath = shot.SFXURL // 参考模式：直接使用本地路径
 			}
 			sfxSrcDur := actualSFXDur
 			if sfxSrcDur > durationMicros {
@@ -1020,26 +1041,26 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			bgmMatID := uuid.New().String()
 			bgmFilename := fmt.Sprintf("bgm_%03d.mp3", bgmIndex) // 数字序号命名
 			bgmPath := bgmFilename
-			bgmActualDur := segDur // P1-2: fallback，HTTP URL 无法 probe 时用时间轴跨度
+			bgmActualDur := segDur // fallback，无法 probe 时用时间轴跨度
 			if isHTTPURL(bs.URL) {
 				bgmPath = bs.URL
-			} else {
-				if data, err := downloadMediaFile(bs.URL); err == nil {
+			} else if opts.EmbedMedia {
+				if data, err := readLocalOrRemoteFile(bs.URL); err == nil && len(data) > 0 {
 					ext := audioExtension(bs.URL)
 					bgmFilename = fmt.Sprintf("bgm_%03d%s", bgmIndex, ext)
 					bgmPath = bgmFilename
-					// P1-3: BGM 也纳入 2GiB 总大小保护
 					if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
 						totalLoadedBytes += int64(len(data))
 						mediaFiles = append(mediaFiles, mediaFile{filename: bgmFilename, data: data})
 					} else {
 						logger.Printf("[ExportCapCutDraft] BGM: total media exceeds 2GiB, skipping embed for shot %d", bs.StartShotNo)
 					}
-					// P1-2: probe 实际音频时长，避免 CapCut 对超出 Duration 的部分做拉伸处理
 					if dur := parseAudioDurationMicros(data, ext); dur > 0 {
 						bgmActualDur = dur
 					}
 				}
+			} else {
+				bgmPath = bs.URL // 参考模式：直接使用本地路径
 			}
 
 			vol := bs.Volume
@@ -1265,7 +1286,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 // ExportBRollDraft 导出 B 剪草稿 ZIP（静态图片 + 配音轨 + 字幕轨 + 分镜注释轨，无 Ken Burns / 音效 / BGM）
 // 用途：剪辑师二剪参考稿，镜头顶部叠字注明分镜编号和描述，方便人工替换素材。
-func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.StoryboardShot, novel *model.Novel) (*ExportResult, error) {
+func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.StoryboardShot, novel *model.Novel, opts ExportOptions) (*ExportResult, error) {
 	logger.Printf("[CapCutService] ExportBRollDraft: videoID=%d shots=%d", video.ID, len(shots))
 	now := time.Now().Unix()
 	draftID := uuid.New().String()
@@ -1307,19 +1328,25 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 
 	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
 
-	// P1-1: 预取第一张分镜图作为草稿封面缩略图
+	// P1-1: 优先使用项目封面，回退到第一张分镜图作为草稿封面缩略图
 	var coverData []byte
-	if len(shots) > 0 && shots[0].ImageURL != "" {
-		imgURL := shots[0].ImageURL
-		if isHTTPURL(imgURL) {
-			if data, err := downloadMediaFile(imgURL); err == nil {
-				coverData = data
+	loadCoverFromURLBRoll := func(u string) []byte {
+		if isHTTPURL(u) {
+			if data, err := downloadMediaFile(u); err == nil {
+				return data
 			}
 		} else {
-			if data, err := os.ReadFile(strings.TrimPrefix(imgURL, "file://")); err == nil {
-				coverData = data
+			if data, err := os.ReadFile(strings.TrimPrefix(u, "file://")); err == nil {
+				return data
 			}
 		}
+		return nil
+	}
+	if novel != nil && novel.CoverImage != "" {
+		coverData = loadCoverFromURLBRoll(novel.CoverImage)
+	}
+	if len(coverData) == 0 && len(shots) > 0 && shots[0].ImageURL != "" {
+		coverData = loadCoverFromURLBRoll(shots[0].ImageURL)
 	}
 
 	// P3-2: track total loaded bytes for 2GiB guard
@@ -1342,30 +1369,34 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 
 		vidMatID := uuid.New().String()
 		vidFilename := fmt.Sprintf("%03d.jpg", shot.ShotNo) // 数字序号命名
-		// 根因修复（同 ExportCapCutDraft）：始终下载并嵌入图片；path 只写文件名，不用 CDN URL。
 		vidPath := vidFilename
 		if mediaURL != "" {
-			var mediaData []byte
-			var mediaErr error
-			if isHTTPURL(mediaURL) {
-				mediaData, mediaErr = downloadMediaFile(mediaURL)
-			} else {
-				mediaData, mediaErr = readLocalOrRemoteFile(mediaURL)
-			}
-			if mediaErr == nil && len(mediaData) > 0 {
-				if totalLoadedBytes+int64(len(mediaData)) <= maxExportMediaBytes {
-					totalLoadedBytes += int64(len(mediaData))
-					mediaFiles = append(mediaFiles, mediaFile{filename: vidFilename, data: mediaData})
-					// vidPath 保持 vidFilename；CapCut 从草稿目录找到此文件
+			if opts.EmbedMedia {
+				var mediaData []byte
+				var mediaErr error
+				if isHTTPURL(mediaURL) {
+					mediaData, mediaErr = downloadMediaFile(mediaURL)
 				} else {
-					logger.Printf("[ExportBRollDraft] total media exceeds 2GiB, skipping image embed shot %d", shot.ShotNo)
-					if isHTTPURL(mediaURL) {
-						vidPath = mediaURL // 超限时最后手段
-					}
+					mediaData, mediaErr = readLocalOrRemoteFile(mediaURL)
 				}
-			} else if isHTTPURL(mediaURL) {
-				vidPath = mediaURL // 下载失败降级
-				logger.Printf("[ExportBRollDraft] media download failed for shot %d (%v), using CDN URL as path fallback", shot.ShotNo, mediaErr)
+				if mediaErr == nil && len(mediaData) > 0 {
+					if totalLoadedBytes+int64(len(mediaData)) <= maxExportMediaBytes {
+						totalLoadedBytes += int64(len(mediaData))
+						mediaFiles = append(mediaFiles, mediaFile{filename: vidFilename, data: mediaData})
+					} else {
+						logger.Printf("[ExportBRollDraft] total media exceeds 2GiB, skipping image embed shot %d", shot.ShotNo)
+						if isHTTPURL(mediaURL) {
+							vidPath = mediaURL
+						}
+					}
+				} else if isHTTPURL(mediaURL) {
+					vidPath = mediaURL
+					logger.Printf("[ExportBRollDraft] media download failed for shot %d (%v), using CDN URL as path fallback", shot.ShotNo, mediaErr)
+				} else {
+					vidPath = mediaURL
+				}
+			} else {
+				vidPath = mediaURL // 参考模式：直接使用原始 URL/路径
 			}
 		}
 
@@ -1410,11 +1441,10 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			audPath := fmt.Sprintf("%03d_voice.mp3", shot.ShotNo) // 数字序号命名
 			if isHTTPURL(shot.AudioPath) {
 				audPath = shot.AudioPath
-			} else {
+			} else if opts.EmbedMedia {
 				if data, err := readLocalOrRemoteFile(shot.AudioPath); err == nil && len(data) > 0 {
 					ext := audioExtension(shot.AudioPath)
 					audPath = fmt.Sprintf("%03d_voice%s", shot.ShotNo, ext)
-					// Bug-D: 与 ExportCapCutDraft 保持一致，加 2GiB 累积保护防 OOM
 					if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
 						totalLoadedBytes += int64(len(data))
 						mediaFiles = append(mediaFiles, mediaFile{filename: audPath, data: data})
@@ -1425,6 +1455,8 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 						actualAudioDur = dur
 					}
 				}
+			} else {
+				audPath = shot.AudioPath // 参考模式：直接使用本地路径
 			}
 			srcDur := actualAudioDur
 			if srcDur > durationMicros {
@@ -1464,11 +1496,10 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 					segPath := strings.TrimPrefix(seg.AudioPath, "file://")
 					if isHTTPURL(segPath) {
 						audPath = segPath
-					} else {
+					} else if opts.EmbedMedia {
 						if data, rdErr := readLocalOrRemoteFile(segPath); rdErr == nil && len(data) > 0 {
 							ext := audioExtension(segPath)
 							audPath = fmt.Sprintf("%03d_seg%02d%s", shot.ShotNo, seg.SeqNo, ext)
-							// P3-2: 与 ExportCapCutDraft 保持一致，防止 OOM
 							if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
 								totalLoadedBytes += int64(len(data))
 								mediaFiles = append(mediaFiles, mediaFile{filename: audPath, data: data})
@@ -1479,6 +1510,8 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 								actualSegDur = dur
 							}
 						}
+					} else {
+						audPath = segPath // 参考模式：直接使用本地路径
 					}
 					// also use stored DurationSecs if available (avoids re-parsing)
 					if seg.DurationSecs > 0 {
