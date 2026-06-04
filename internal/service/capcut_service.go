@@ -111,8 +111,8 @@ type ccPoint struct {
 }
 
 type ccKeyframe struct {
-	CurveType    string    `json:"curveType"`
-	GraphID      string    `json:"graphID"`
+	CurveType    string    `json:"curve_type"`  // snake_case：CapCut 按此键解析曲线类型枚举，camelCase 会导致解析失败崩溃
+	GraphID      string    `json:"graph_id"`    // snake_case：同上
 	ID           string    `json:"id"`
 	LeftControl  ccPoint   `json:"left_control"`
 	RightControl ccPoint   `json:"right_control"`
@@ -244,21 +244,24 @@ type ccCrop struct {
 }
 
 type ccVideoMaterial struct {
-	CartoonPath    string  `json:"cartoon_path"`
-	CheckFlag      int     `json:"check_flag"`
-	CropScale      float64 `json:"crop_scale"`
-	Crop           ccCrop  `json:"crop"`
-	Duration       int64   `json:"duration"`
-	ExtraInfo      string  `json:"extra_info"`
-	HasAudio       bool    `json:"has_audio"`
-	Height         int     `json:"height"`
-	ID             string  `json:"id"`
-	ImportTime     int64   `json:"import_time"`
-	MaterialID     string  `json:"material_id"`
-	Path           string  `json:"path"`
-	SourcePlatform int     `json:"source_platform"`
-	Type           string  `json:"type"` // "photo" / "video"
-	Width          int     `json:"width"`
+	CartoonPath       string  `json:"cartoon_path"`
+	CheckFlag         int     `json:"check_flag"`
+	CropScale         float64 `json:"crop_scale"`
+	Crop              ccCrop  `json:"crop"`
+	Duration          int64   `json:"duration"`
+	ExtraInfo         string  `json:"extra_info"`
+	HasAudio          bool    `json:"has_audio"`
+	Height            int     `json:"height"`
+	ID                string  `json:"id"`
+	ImportTime        int64   `json:"import_time"`
+	ImportTimeUs      int64   `json:"import_time_us"`      // 部分版本 CapCut 需要此字段，缺失时可能崩溃
+	LocalMaterialPath string  `json:"local_material_path"` // CapCut 加载素材时访问此字段；缺失时行为未定义
+	LocalVideoPath    string  `json:"local_video_path"`    // 同上；本地草稿留空字符串，CapCut 从 Path 查找
+	MaterialID        string  `json:"material_id"`
+	Path              string  `json:"path"`
+	SourcePlatform    int     `json:"source_platform"`
+	Type              string  `json:"type"` // "photo" / "video"
+	Width             int     `json:"width"`
 }
 
 // ccAudioMaterial 音频素材（配音 / BGM）
@@ -682,19 +685,22 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			matDuration = 10_800_000_000 // 图片素材 duration 固定为 3 小时，CapCut 按 SourceTimerange 截取实际时长
 		}
 		videoMaterials = append(videoMaterials, ccVideoMaterial{
-			CheckFlag:      63487,
-			CropScale:      1,
-			Crop:           defaultCrop,
-			Duration:       matDuration,
-			HasAudio:       isVideo && shot.AudioPath != "",
-			Height:         height,
-			ID:             vidMatID,
-			ImportTime:     now,
-			MaterialID:     vidMatID,
-			Path:           vidPath,
-			SourcePlatform: 0,
-			Type:           matType,
-			Width:          width,
+			CheckFlag:         63487,
+			CropScale:         1,
+			Crop:              defaultCrop,
+			Duration:          matDuration,
+			HasAudio:          isVideo && shot.AudioPath != "",
+			Height:            height,
+			ID:                vidMatID,
+			ImportTime:        now,
+			ImportTimeUs:      now,
+			LocalMaterialPath: "",
+			LocalVideoPath:    "",
+			MaterialID:        vidMatID,
+			Path:              vidPath,
+			SourcePlatform:    0,
+			Type:              matType,
+			Width:             width,
 		})
 
 		segID := uuid.New().String()
@@ -1396,19 +1402,22 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		}
 
 		videoMaterials = append(videoMaterials, ccVideoMaterial{
-			CheckFlag:      63487,
-			CropScale:      1,
-			Crop:           defaultCrop,
-			Duration:       10_800_000_000, // 图片素材固定 3 小时
-			HasAudio:       false,
-			Height:         height,
-			ID:             vidMatID,
-			ImportTime:     now,
-			MaterialID:     vidMatID,
-			Path:           vidPath,
-			SourcePlatform: 0,
-			Type:           "photo",
-			Width:          width,
+			CheckFlag:         63487,
+			CropScale:         1,
+			Crop:              defaultCrop,
+			Duration:          10_800_000_000, // 图片素材固定 3 小时
+			HasAudio:          false,
+			Height:            height,
+			ID:                vidMatID,
+			ImportTime:        now,
+			ImportTimeUs:      now,
+			LocalMaterialPath: "",
+			LocalVideoPath:    "",
+			MaterialID:        vidMatID,
+			Path:              vidPath,
+			SourcePlatform:    0,
+			Type:              "photo",
+			Width:             width,
 		})
 
 		videoSegments = append(videoSegments, ccSegment{
