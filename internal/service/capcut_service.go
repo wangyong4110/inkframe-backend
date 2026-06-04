@@ -319,13 +319,13 @@ type ccSegment struct {
 	TemplateID            string             `json:"template_id"`
 	TemplateScene         string             `json:"template_scene"`
 	RawSegmentID          string             `json:"raw_segment_id"`
-	LyricKeyframes        []interface{}      `json:"lyric_keyframes"`     // CapCut 迭代此数组，null 崩溃
+	LyricKeyframes        []interface{}      `json:"lyric_keyframes"`     // 真实草稿为 null；保持 nil 即可
 	EnableVideoMask       bool               `json:"enable_video_mask"`
 }
 
 // MarshalJSON 确保:
 //   - KeyframeRefs / ExtraMaterialRefs 始终序列化为 [] 而非 null（CapCut 迭代 null 崩溃）
-//   - CommonKeyframes / LyricKeyframes 始终序列化为 [] 而非 null（CapCut 迭代 null 崩溃）
+//   - CommonKeyframes 始终序列化为 []（真实草稿如此）；LyricKeyframes 保持 null（真实草稿如此）
 //   - Clip 为 nil 时输出 "clip":null（音频轨道要求），非空时输出对象
 func (s ccSegment) MarshalJSON() ([]byte, error) {
 	kfRefs := s.KeyframeRefs
@@ -339,10 +339,6 @@ func (s ccSegment) MarshalJSON() ([]byte, error) {
 	commonKFs := s.CommonKeyframes
 	if commonKFs == nil {
 		commonKFs = []interface{}{}
-	}
-	lyricKFs := s.LyricKeyframes
-	if lyricKFs == nil {
-		lyricKFs = []interface{}{}
 	}
 	type seg struct {
 		Clip                   *ccClip            `json:"clip"`
@@ -447,7 +443,7 @@ func (s ccSegment) MarshalJSON() ([]byte, error) {
 		TemplateID:             s.TemplateID,
 		TemplateScene:          s.TemplateScene,
 		RawSegmentID:           s.RawSegmentID,
-		LyricKeyframes:         lyricKFs,
+		LyricKeyframes:         s.LyricKeyframes,
 		EnableVideoMask:        s.EnableVideoMask,
 	})
 }
@@ -2192,14 +2188,38 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		return nil, fmt.Errorf("write draft_meta_info.json: %w", err)
 	}
 
-	// draft_virtual_store.json — 部分版本的剪映需要此文件（资源索引），缺失时草稿可能无法识别
-	virtualStoreJSON, _ := json.Marshal(map[string]interface{}{"sub_store": map[string]interface{}{}})
+	// draft_virtual_store.json — CapCut 8.7+ 需要正确的两键结构
+	virtualStoreJSON, _ := json.Marshal(map[string]interface{}{
+		"draft_materials": []interface{}{},
+		"draft_virtual_store": []interface{}{
+			map[string]interface{}{"type": 0, "value": []interface{}{}},
+			map[string]interface{}{"type": 1, "value": []interface{}{}},
+			map[string]interface{}{"type": 2, "value": []interface{}{}},
+		},
+	})
 	if err := writeZip(prefix+"draft_virtual_store.json", virtualStoreJSON); err != nil {
 		zipFile.Close()
 		return nil, fmt.Errorf("write draft_virtual_store.json: %w", err)
 	}
 
-	// CapCut International 8.7+ 는 Timelines/ 디렉토리 구조를 필요로 함
+	// timeline_layout.json — CapCut 8.7+ 需要此文件关联时间线到 dock
+	timelineLayoutJSON, _ := json.Marshal(map[string]interface{}{
+		"dockItems": []map[string]interface{}{
+			{
+				"dockIndex":     0,
+				"ratio":         1,
+				"timelineIds":   []string{draftID},
+				"timelineNames": []string{"时间线01"},
+			},
+		},
+		"layoutOrientation": 1,
+	})
+	if err := writeZip(prefix+"timeline_layout.json", timelineLayoutJSON); err != nil {
+		zipFile.Close()
+		return nil, fmt.Errorf("write timeline_layout.json: %w", err)
+	}
+
+	// CapCut International 8.7+ 需要 Timelines/ 目录结构
 	timelineProjectJSON, _ := json.Marshal(map[string]interface{}{
 		"config": map[string]interface{}{
 			"color_space":                -1,
@@ -3036,13 +3056,38 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		zipFile.Close()
 		return nil, fmt.Errorf("write draft_meta_info.json: %w", err)
 	}
-	virtualStoreJSON, _ := json.Marshal(map[string]interface{}{"sub_store": map[string]interface{}{}})
-	if err := writeZip(prefix+"draft_virtual_store.json", virtualStoreJSON); err != nil {
+	// draft_virtual_store.json — CapCut 8.7+ 需要正确的两键结构
+	brollVirtualStoreJSON, _ := json.Marshal(map[string]interface{}{
+		"draft_materials": []interface{}{},
+		"draft_virtual_store": []interface{}{
+			map[string]interface{}{"type": 0, "value": []interface{}{}},
+			map[string]interface{}{"type": 1, "value": []interface{}{}},
+			map[string]interface{}{"type": 2, "value": []interface{}{}},
+		},
+	})
+	if err := writeZip(prefix+"draft_virtual_store.json", brollVirtualStoreJSON); err != nil {
 		zipFile.Close()
 		return nil, fmt.Errorf("write draft_virtual_store.json: %w", err)
 	}
 
-	// CapCut International 8.7+ 는 Timelines/ 디렉토리 구조를 필요로 함
+	// timeline_layout.json — CapCut 8.7+ 需要此文件关联时间线到 dock
+	brollTimelineLayoutJSON, _ := json.Marshal(map[string]interface{}{
+		"dockItems": []map[string]interface{}{
+			{
+				"dockIndex":     0,
+				"ratio":         1,
+				"timelineIds":   []string{draftID},
+				"timelineNames": []string{"时间线01"},
+			},
+		},
+		"layoutOrientation": 1,
+	})
+	if err := writeZip(prefix+"timeline_layout.json", brollTimelineLayoutJSON); err != nil {
+		zipFile.Close()
+		return nil, fmt.Errorf("write timeline_layout.json: %w", err)
+	}
+
+	// CapCut International 8.7+ 需要 Timelines/ 目录结构
 	brollTimelineProjectJSON, _ := json.Marshal(map[string]interface{}{
 		"config": map[string]interface{}{
 			"color_space":                -1,
@@ -3831,9 +3876,7 @@ func applyVideoSegmentDefaults(seg *ccSegment) {
 	if seg.CommonKeyframes == nil {
 		seg.CommonKeyframes = []interface{}{}
 	}
-	if seg.LyricKeyframes == nil {
-		seg.LyricKeyframes = []interface{}{}
-	}
+	// lyric_keyframes 真实草稿为 null，不强制转为 []
 	seg.EnableVideoMask = true
 	seg.Source = "segmentsourcenormal"
 	seg.TemplateScene = "default"
@@ -3855,12 +3898,11 @@ func applyAudioSegmentDefaults(seg *ccSegment) {
 	seg.HdrSettings = nil
 	seg.UniformScale = nil
 	seg.LastNonzeroVolume = 1.0
+	seg.TrackRenderIndex = 1 // 真实草稿 audio track 的 segment track_render_index 为 1
 	if seg.CommonKeyframes == nil {
 		seg.CommonKeyframes = []interface{}{}
 	}
-	if seg.LyricKeyframes == nil {
-		seg.LyricKeyframes = []interface{}{}
-	}
+	// lyric_keyframes 真实草稿为 null，不强制转为 []
 	seg.EnableVideoMask = true
 	seg.Source = "segmentsourcenormal"
 	seg.TemplateScene = "default"
