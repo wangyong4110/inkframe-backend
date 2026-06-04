@@ -145,6 +145,118 @@ type ccKeyframes struct {
 	VocalSounds  []interface{}     `json:"vocal_sounds"`  // 同上
 }
 
+// --- 新增：Segment 辅助字段结构体 ---
+
+type ccHdrSettings struct {
+	Mode      int     `json:"mode"`
+	Intensity float64 `json:"intensity"`
+	Nits      int     `json:"nits"`
+}
+
+type ccUniformScale struct {
+	On    bool    `json:"on"`
+	Value float64 `json:"value"`
+}
+
+type ccResponsiveLayout struct {
+	Enable              bool   `json:"enable"`
+	TargetFollow        string `json:"target_follow"`
+	SizeLayout          int    `json:"size_layout"`
+	HorizontalPosLayout int    `json:"horizontal_pos_layout"`
+	VerticalPosLayout   int    `json:"vertical_pos_layout"`
+}
+
+// --- 新增：伴生素材结构体 ---
+
+// ccSpeedMaterial speed 伴生素材（每个 segment 必须有一个）
+type ccSpeedMaterial struct {
+	ID         string      `json:"id"`
+	Type       string      `json:"type"`        // "speed"
+	Mode       int         `json:"mode"`
+	Speed      float64     `json:"speed"`
+	CurveSpeed interface{} `json:"curve_speed"` // null
+}
+
+// ccPlaceholderInfo placeholder_info 伴生素材
+type ccPlaceholderInfo struct {
+	ID        string `json:"id"`
+	Type      string `json:"type"`      // "placeholder_info"
+	MetaType  string `json:"meta_type"` // "none"
+	ResPath   string `json:"res_path"`
+	ResText   string `json:"res_text"`
+	ErrorPath string `json:"error_path"`
+	ErrorText string `json:"error_text"`
+}
+
+// ccCanvasMaterial canvas_color 伴生素材（video segment 专用）
+type ccCanvasMaterial struct {
+	ID             string  `json:"id"`
+	Type           string  `json:"type"`           // "canvas_color"
+	Color          string  `json:"color"`
+	Blur           float64 `json:"blur"`
+	Image          string  `json:"image"`
+	AlbumImage     string  `json:"album_image"`
+	ImageID        string  `json:"image_id"`
+	ImageName      string  `json:"image_name"`
+	SourcePlatform int     `json:"source_platform"`
+	TeamID         string  `json:"team_id"`
+}
+
+// ccSoundChannelMapping sound_channel_mapping 伴生素材
+type ccSoundChannelMapping struct {
+	ID                  string `json:"id"`
+	Type                string `json:"type"`
+	AudioChannelMapping int    `json:"audio_channel_mapping"`
+	IsConfigOpen        bool   `json:"is_config_open"`
+}
+
+// ccMaterialColor material_colors 伴生素材（video segment 专用）
+type ccMaterialColor struct {
+	ID               string        `json:"id"`
+	IsColorClip      bool          `json:"is_color_clip"`
+	IsGradient       bool          `json:"is_gradient"`
+	SolidColor       string        `json:"solid_color"`
+	GradientColors   []interface{} `json:"gradient_colors"`
+	GradientPercents []interface{} `json:"gradient_percents"`
+	GradientAngle    float64       `json:"gradient_angle"`
+	Width            float64       `json:"width"`
+	Height           float64       `json:"height"`
+}
+
+// ccVocalSeparation vocal_separation 伴生素材
+type ccVocalSeparation struct {
+	ID             string        `json:"id"`
+	Type           string        `json:"type"`           // "vocal_separation"
+	Choice         int           `json:"choice"`
+	RemovedSounds  []interface{} `json:"removed_sounds"`
+	TimeRange      interface{}   `json:"time_range"`     // null
+	ProductionPath string        `json:"production_path"`
+	FinalAlgorithm string        `json:"final_algorithm"`
+	EnterFrom      string        `json:"enter_from"`
+}
+
+// ccAIBeats AI 节拍信息
+type ccAIBeats struct {
+	MelodyURL      string        `json:"melody_url"`
+	MelodyPath     string        `json:"melody_path"`
+	BeatsURL       string        `json:"beats_url"`
+	BeatsPath      string        `json:"beats_path"`
+	BeatSpeedInfos []interface{} `json:"beat_speed_infos"`
+}
+
+// ccBeatsMaterial beats 伴生素材（audio segment 专用）
+type ccBeatsMaterial struct {
+	ID                string      `json:"id"`
+	Type              string      `json:"type"`               // "beats"
+	EnableAIBeats     bool        `json:"enable_ai_beats"`
+	Gear              int         `json:"gear"`               // 404
+	GearCount         int         `json:"gear_count"`
+	Mode              int         `json:"mode"`               // 404
+	UserBeats         []interface{} `json:"user_beats"`
+	UserDeleteAIBeats interface{} `json:"user_delete_ai_beats"` // null
+	AIBeats           ccAIBeats   `json:"ai_beats"`
+}
+
 type ccClip struct {
 	Alpha     float64     `json:"alpha"`
 	Flip      ccFlip      `json:"flip"`
@@ -159,9 +271,9 @@ type ccTimeRange struct {
 }
 
 type ccSegment struct {
-	Clip              *ccClip     `json:"clip"`            // 音频轨道必须为 null；视频/文本轨道必须为非 null 对象
+	Clip              *ccClip     `json:"clip"`                // 音频轨道必须为 null；视频/文本轨道必须为非 null 对象
 	ID                string      `json:"id"`
-	KeyframeRefs      []string    `json:"keyframe_refs"`   // 不用 omitempty：nil 时必须输出 [] 而非 null
+	KeyframeRefs      []string    `json:"keyframe_refs"`       // 不用 omitempty：nil 时必须输出 [] 而非 null
 	ExtraMaterialRefs []string    `json:"extra_material_refs"` // 同上，CapCut 迭代 null 会崩溃
 	MaterialID        string      `json:"material_id"`
 	Reverse           bool        `json:"reverse"`
@@ -171,10 +283,44 @@ type ccSegment struct {
 	Type              string      `json:"type"`
 	Visible           bool        `json:"visible"`
 	Volume            float64     `json:"volume"`
+
+	// --- 以下字段真实草稿必须有，缺失会导致 CapCut 崩溃或行为异常 ---
+	RenderTimerange       ccTimeRange        `json:"render_timerange"`
+	RenderIndex           int                `json:"render_index"`
+	TrackRenderIndex      int                `json:"track_render_index"`
+	EnableLut             bool               `json:"enable_lut"`
+	EnableAdjust          bool               `json:"enable_adjust"`
+	EnableHsl             bool               `json:"enable_hsl"`
+	EnableColorCurves     bool               `json:"enable_color_curves"`
+	EnableHslCurves       bool               `json:"enable_hsl_curves"`
+	EnableColorWheels     bool               `json:"enable_color_wheels"`
+	HdrSettings           ccHdrSettings      `json:"hdr_settings"`
+	TrackAttribute        int                `json:"track_attribute"`
+	IsPlaceholder         bool               `json:"is_placeholder"`
+	UniformScale          ccUniformScale     `json:"uniform_scale"`
+	IsLoop                bool               `json:"is_loop"`
+	IsToneModify          bool               `json:"is_tone_modify"`
+	IntensifiesAudio      bool               `json:"intensifies_audio"`
+	Cartoon               bool               `json:"cartoon"`
+	LastNonzeroVolume     float64            `json:"last_nonzero_volume"`
+	Desc                  string             `json:"desc"`
+	State                 int                `json:"state"`
+	GroupID               string             `json:"group_id"`
+	CommonKeyframes       []interface{}      `json:"common_keyframes"`    // CapCut 迭代此数组，null 崩溃
+	CaptionInfo           interface{}        `json:"caption_info"`
+	ResponsiveLayout      ccResponsiveLayout `json:"responsive_layout"`
+	EnableSmartColorAdjust bool              `json:"enable_smart_color_adjust"`
+	Source                string             `json:"source"`
+	TemplateID            string             `json:"template_id"`
+	TemplateScene         string             `json:"template_scene"`
+	RawSegmentID          string             `json:"raw_segment_id"`
+	LyricKeyframes        []interface{}      `json:"lyric_keyframes"`     // CapCut 迭代此数组，null 崩溃
+	EnableVideoMask       bool               `json:"enable_video_mask"`
 }
 
 // MarshalJSON 确保:
 //   - KeyframeRefs / ExtraMaterialRefs 始终序列化为 [] 而非 null（CapCut 迭代 null 崩溃）
+//   - CommonKeyframes / LyricKeyframes 始终序列化为 [] 而非 null（CapCut 迭代 null 崩溃）
 //   - Clip 为 nil 时输出 "clip":null（音频轨道要求），非空时输出对象
 func (s ccSegment) MarshalJSON() ([]byte, error) {
 	kfRefs := s.KeyframeRefs
@@ -185,33 +331,103 @@ func (s ccSegment) MarshalJSON() ([]byte, error) {
 	if extRefs == nil {
 		extRefs = []string{}
 	}
+	commonKFs := s.CommonKeyframes
+	if commonKFs == nil {
+		commonKFs = []interface{}{}
+	}
+	lyricKFs := s.LyricKeyframes
+	if lyricKFs == nil {
+		lyricKFs = []interface{}{}
+	}
 	type seg struct {
-		Clip              *ccClip     `json:"clip"`
-		ID                string      `json:"id"`
-		KeyframeRefs      []string    `json:"keyframe_refs"`
-		ExtraMaterialRefs []string    `json:"extra_material_refs"`
-		MaterialID        string      `json:"material_id"`
-		Reverse           bool        `json:"reverse"`
-		Speed             float64     `json:"speed"`
-		SourceTimerange   ccTimeRange `json:"source_timerange"`
-		TargetTimerange   ccTimeRange `json:"target_timerange"`
-		Type              string      `json:"type"`
-		Visible           bool        `json:"visible"`
-		Volume            float64     `json:"volume"`
+		Clip                   *ccClip            `json:"clip"`
+		ID                     string             `json:"id"`
+		KeyframeRefs           []string           `json:"keyframe_refs"`
+		ExtraMaterialRefs      []string           `json:"extra_material_refs"`
+		MaterialID             string             `json:"material_id"`
+		Reverse                bool               `json:"reverse"`
+		Speed                  float64            `json:"speed"`
+		SourceTimerange        ccTimeRange        `json:"source_timerange"`
+		TargetTimerange        ccTimeRange        `json:"target_timerange"`
+		Type                   string             `json:"type"`
+		Visible                bool               `json:"visible"`
+		Volume                 float64            `json:"volume"`
+		RenderTimerange        ccTimeRange        `json:"render_timerange"`
+		RenderIndex            int                `json:"render_index"`
+		TrackRenderIndex       int                `json:"track_render_index"`
+		EnableLut              bool               `json:"enable_lut"`
+		EnableAdjust           bool               `json:"enable_adjust"`
+		EnableHsl              bool               `json:"enable_hsl"`
+		EnableColorCurves      bool               `json:"enable_color_curves"`
+		EnableHslCurves        bool               `json:"enable_hsl_curves"`
+		EnableColorWheels      bool               `json:"enable_color_wheels"`
+		HdrSettings            ccHdrSettings      `json:"hdr_settings"`
+		TrackAttribute         int                `json:"track_attribute"`
+		IsPlaceholder          bool               `json:"is_placeholder"`
+		UniformScale           ccUniformScale     `json:"uniform_scale"`
+		IsLoop                 bool               `json:"is_loop"`
+		IsToneModify           bool               `json:"is_tone_modify"`
+		IntensifiesAudio       bool               `json:"intensifies_audio"`
+		Cartoon                bool               `json:"cartoon"`
+		LastNonzeroVolume      float64            `json:"last_nonzero_volume"`
+		Desc                   string             `json:"desc"`
+		State                  int                `json:"state"`
+		GroupID                string             `json:"group_id"`
+		CommonKeyframes        []interface{}      `json:"common_keyframes"`
+		CaptionInfo            interface{}        `json:"caption_info"`
+		ResponsiveLayout       ccResponsiveLayout `json:"responsive_layout"`
+		EnableSmartColorAdjust bool               `json:"enable_smart_color_adjust"`
+		Source                 string             `json:"source"`
+		TemplateID             string             `json:"template_id"`
+		TemplateScene          string             `json:"template_scene"`
+		RawSegmentID           string             `json:"raw_segment_id"`
+		LyricKeyframes         []interface{}      `json:"lyric_keyframes"`
+		EnableVideoMask        bool               `json:"enable_video_mask"`
 	}
 	return json.Marshal(seg{
-		Clip:              s.Clip,
-		ID:                s.ID,
-		KeyframeRefs:      kfRefs,
-		ExtraMaterialRefs: extRefs,
-		MaterialID:        s.MaterialID,
-		Reverse:           s.Reverse,
-		Speed:             s.Speed,
-		SourceTimerange:   s.SourceTimerange,
-		TargetTimerange:   s.TargetTimerange,
-		Type:              s.Type,
-		Visible:           s.Visible,
-		Volume:            s.Volume,
+		Clip:                   s.Clip,
+		ID:                     s.ID,
+		KeyframeRefs:           kfRefs,
+		ExtraMaterialRefs:      extRefs,
+		MaterialID:             s.MaterialID,
+		Reverse:                s.Reverse,
+		Speed:                  s.Speed,
+		SourceTimerange:        s.SourceTimerange,
+		TargetTimerange:        s.TargetTimerange,
+		Type:                   s.Type,
+		Visible:                s.Visible,
+		Volume:                 s.Volume,
+		RenderTimerange:        s.RenderTimerange,
+		RenderIndex:            s.RenderIndex,
+		TrackRenderIndex:       s.TrackRenderIndex,
+		EnableLut:              s.EnableLut,
+		EnableAdjust:           s.EnableAdjust,
+		EnableHsl:              s.EnableHsl,
+		EnableColorCurves:      s.EnableColorCurves,
+		EnableHslCurves:        s.EnableHslCurves,
+		EnableColorWheels:      s.EnableColorWheels,
+		HdrSettings:            s.HdrSettings,
+		TrackAttribute:         s.TrackAttribute,
+		IsPlaceholder:          s.IsPlaceholder,
+		UniformScale:           s.UniformScale,
+		IsLoop:                 s.IsLoop,
+		IsToneModify:           s.IsToneModify,
+		IntensifiesAudio:       s.IntensifiesAudio,
+		Cartoon:                s.Cartoon,
+		LastNonzeroVolume:      s.LastNonzeroVolume,
+		Desc:                   s.Desc,
+		State:                  s.State,
+		GroupID:                s.GroupID,
+		CommonKeyframes:        commonKFs,
+		CaptionInfo:            s.CaptionInfo,
+		ResponsiveLayout:       s.ResponsiveLayout,
+		EnableSmartColorAdjust: s.EnableSmartColorAdjust,
+		Source:                 s.Source,
+		TemplateID:             s.TemplateID,
+		TemplateScene:          s.TemplateScene,
+		RawSegmentID:           s.RawSegmentID,
+		LyricKeyframes:         lyricKFs,
+		EnableVideoMask:        s.EnableVideoMask,
 	})
 }
 
@@ -293,34 +509,36 @@ type ccTextMaterial struct {
 }
 
 type ccMaterials struct {
-	AudioFades           []interface{}          `json:"audio_fades"`           // CapCut 6.x+ 必需字段
+	AudioFades           []interface{}          `json:"audio_fades"`            // CapCut 6.x+ 必需字段
 	Audios               []ccAudioMaterial      `json:"audios"`
-	Beats                []interface{}          `json:"beats"`
-	Canvases             []interface{}          `json:"canvases"`
+	Beats                []ccBeatsMaterial      `json:"beats"`                  // 真实类型（audio segment 伴生素材）
+	Canvases             []ccCanvasMaterial     `json:"canvases"`               // 真实类型（video segment 伴生素材）
 	Chromas              []interface{}          `json:"chromas"`
 	ColorCurves          []interface{}          `json:"color_curves"`
 	Filters              []interface{}          `json:"filters"`
 	GreenScreens         []interface{}          `json:"green_screens"`
 	Masks                []interface{}          `json:"masks"`
 	MaterialAnimations   []interface{}          `json:"material_animations"`
-	PlaceholderInfos     []interface{}          `json:"placeholder_infos"`     // CapCut 遍历此数组；缺失时迭代 null 崩溃
+	MaterialColors       []ccMaterialColor      `json:"material_colors"`        // video segment 伴生素材
+	PlaceholderInfos     []ccPlaceholderInfo    `json:"placeholder_infos"`      // 真实类型；CapCut 遍历此数组，null 崩溃
 	Shapes               []interface{}          `json:"shapes"`
-	SoundChannelMappings []interface{}          `json:"sound_channel_mappings"` // 同上
-	Speed                []interface{}          `json:"speed"`
+	SoundChannelMappings []ccSoundChannelMapping `json:"sound_channel_mappings"` // 真实类型
+	Speeds               []ccSpeedMaterial      `json:"speeds"`                 // 真实字段名为 speeds（复数）
 	Stickers             []interface{}          `json:"stickers"`
 	Texts                []ccTextMaterial       `json:"texts"`
-	TextTemplates        []interface{}          `json:"text_templates"`        // 同上
+	TextTemplates        []interface{}          `json:"text_templates"`
 	Transitions          []ccTransitionMaterial `json:"transitions"`
 	VideoEffects         []interface{}          `json:"video_effects"`
 	Videos               []ccVideoMaterial      `json:"videos"`
-	VoiceEffects         []interface{}          `json:"voice_effects"`         // 同上
-	VocalSeparations     []interface{}          `json:"vocal_separations"`
+	VoiceEffects         []interface{}          `json:"voice_effects"`
+	VocalSeparations     []ccVocalSeparation    `json:"vocal_separations"`      // 真实类型
 }
 
 type ccCanvasConfig struct {
-	Height int    `json:"height"`
-	Ratio  string `json:"ratio"` // 字符串形式："16:9"/"9:16"/"1:1"/"4:5"（CapCut 6.x+ 规范要求）
-	Width  int    `json:"width"`
+	Height     int         `json:"height"`
+	Ratio      string      `json:"ratio"`      // 字符串形式："16:9"/"9:16"/"1:1"/"4:5"（CapCut 6.x+ 规范要求）
+	Width      int         `json:"width"`
+	Background interface{} `json:"background"` // null（真实草稿要求此字段存在）
 }
 
 // ccPlatform 标识草稿所属平台（CapCut 国际版 app_source="cc"，剪映 app_source="lv"）。
@@ -328,7 +546,12 @@ type ccCanvasConfig struct {
 type ccPlatform struct {
 	AppSource  string `json:"app_source"`  // "cc" = CapCut 国际版; "lv" = 剪映
 	AppVersion string `json:"app_version"` // 任意合法版本号，如 "5.0.0"
+	AppID      int    `json:"app_id"`      // CapCut International = 359289
 	OS         string `json:"os"`          // "mac" / "windows"
+	OsVersion  string `json:"os_version"`  // 操作系统版本，如 "11.7.11"
+	DeviceID   string `json:"device_id"`
+	HardDiskID string `json:"hard_disk_id"`
+	MacAddress string `json:"mac_address"`
 }
 
 type ccDraftContent struct {
@@ -338,7 +561,7 @@ type ccDraftContent struct {
 	FPS                  float64        `json:"fps"`
 	ID                   string         `json:"id"`
 	Keyframes            ccKeyframes    `json:"keyframes"`
-	LastModifiedPlatform string         `json:"last_modified_platform"` // "mac" / "windows"（字符串）
+	LastModifiedPlatform ccPlatform     `json:"last_modified_platform"` // 必须为对象（真实草稿），CapCut 做 object 类型断言，字符串会崩溃
 	Materials            ccMaterials    `json:"materials"`
 	Name                 string         `json:"name"`
 	NewVersion           string         `json:"new_version"`
@@ -346,7 +569,7 @@ type ccDraftContent struct {
 	Relationships        []interface{}  `json:"relationships"`
 	Tracks               []ccTrack      `json:"tracks"`
 	UpdateTime           int64          `json:"update_time"`
-	Version              string         `json:"version"`
+	Version              int            `json:"version"` // 整数（真实草稿 360000），CapCut 做 int 类型断言，字符串会崩溃
 }
 
 type ccMetaInfo struct {
@@ -626,6 +849,15 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 	var transitionMaterials []ccTransitionMaterial // 转场素材
 
+	// 伴生素材集合（每个 segment 对应若干条，CapCut 通过 extra_material_refs 引用）
+	var speedsSlice        []ccSpeedMaterial
+	var placeholderSlice   []ccPlaceholderInfo
+	var canvasSlice        []ccCanvasMaterial
+	var soundChannelSlice  []ccSoundChannelMapping
+	var materialColorSlice []ccMaterialColor
+	var vocalSepSlice      []ccVocalSeparation
+	var beatsSlice         []ccBeatsMaterial
+
 	// Bug2修复：按 shot_no 升序排列，确保视频/音频/字幕轨道顺序与分镜编号一致。
 	// 数据库返回顺序不保证有序，直接遍历会导致配音顺序与画面顺序错位。
 	sort.Slice(shots, func(i, j int) bool {
@@ -723,6 +955,25 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			Visible:         true,
 			Volume:          1.0,
 		}
+		// 填充真实草稿所需默认字段
+		applyVideoSegmentDefaults(&seg)
+
+		// 创建 video segment 伴生素材（6 个）并将 ID 写入 ExtraMaterialRefs
+		// 顺序：speed, placeholder_info, canvas, sound_channel_mapping, material_color, vocal_separation
+		spd := newSpeedMaterial()
+		ph := newPlaceholderInfo()
+		cv := newCanvasMaterial()
+		sc := newSoundChannelMapping()
+		mc := newMaterialColor()
+		vs := newVocalSeparation()
+		speedsSlice = append(speedsSlice, spd)
+		placeholderSlice = append(placeholderSlice, ph)
+		canvasSlice = append(canvasSlice, cv)
+		soundChannelSlice = append(soundChannelSlice, sc)
+		materialColorSlice = append(materialColorSlice, mc)
+		vocalSepSlice = append(vocalSepSlice, vs)
+		seg.ExtraMaterialRefs = append(seg.ExtraMaterialRefs, spd.ID, ph.ID, cv.ID, sc.ID, mc.ID, vs.ID)
+
 		// P1-1: 仅对静态图片添加 Ken Burns 运镜关键帧。
 		// 视频素材由 Kling/Seedance 已生成摄像机运动，叠加缩放/平移关键帧会产生双重抖动。
 		if !isVideo {
@@ -732,7 +983,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			}
 			allKFGroups = append(allKFGroups, kfGroups...)
 		}
-		// 转场特效：非直切时创建转场素材并挂载到当前 segment
+		// 转场特效：非直切时创建转场素材并挂载到当前 segment（追加到伴生素材引用末尾）
 		if effect := capCutTransitionEffect(shot.Transition); effect != "" {
 			transMatID := uuid.New().String()
 			transitionMaterials = append(transitionMaterials, ccTransitionMaterial{
@@ -790,17 +1041,33 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			// Bug修复：TargetTimerange.Duration 必须等于 SourceTimerange.Duration（srcDur）。
 			// 若用 durationMicros（视频段时长）而 srcDur < durationMicros，
 			// 剪映会将音频拉伸以填满时间槽，导致音频变慢、音画严重不同步。
-			audioSegments = append(audioSegments, ccSegment{
-				Clip:            nil, // 音频轨道必须为 null
-				ID:              uuid.New().String(),
-				MaterialID:      audMatID,
-				Speed:           1.0,
-				SourceTimerange: ccTimeRange{Duration: srcDur, Start: 0},
-				TargetTimerange: ccTimeRange{Duration: srcDur, Start: startMicros},
-				Type:            "audio",
-				Visible:         true,
-				Volume:          1.0,
-			})
+			{
+				// 创建 audio segment 伴生素材（5 个）：speed, placeholder, beats, sound_channel, vocal_sep
+				audSpd := newSpeedMaterial()
+				audPh := newPlaceholderInfo()
+				audBts := newBeatsMaterial()
+				audSc := newSoundChannelMapping()
+				audVs := newVocalSeparation()
+				speedsSlice = append(speedsSlice, audSpd)
+				placeholderSlice = append(placeholderSlice, audPh)
+				beatsSlice = append(beatsSlice, audBts)
+				soundChannelSlice = append(soundChannelSlice, audSc)
+				vocalSepSlice = append(vocalSepSlice, audVs)
+				audSeg := ccSegment{
+					Clip:            nil, // 音频轨道必须为 null
+					ID:              uuid.New().String(),
+					MaterialID:      audMatID,
+					Speed:           1.0,
+					SourceTimerange: ccTimeRange{Duration: srcDur, Start: 0},
+					TargetTimerange: ccTimeRange{Duration: srcDur, Start: startMicros},
+					Type:            "audio",
+					Visible:         true,
+					Volume:          1.0,
+				}
+				applyVideoSegmentDefaults(&audSeg)
+				audSeg.ExtraMaterialRefs = append(audSeg.ExtraMaterialRefs, audSpd.ID, audPh.ID, audBts.ID, audSc.ID, audVs.ID)
+				audioSegments = append(audioSegments, audSeg)
+			}
 		} else if s.segmentRepo != nil {
 			// Bug-A：AudioPath 为空 → 回落到逐段 VoiceSegment，与 ExportBRollDraft 保持一致。
 			// 多段 TTS 场景下 shot.AudioPath 通常为空（各段未合并），若此处不处理则配音轨道完全缺失。
@@ -849,7 +1116,18 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 						Name:       fmt.Sprintf("shot_%03d_seg%02d", shot.ShotNo, seg.SeqNo),
 						Type:       "extract_music",
 					})
-					audioSegments = append(audioSegments, ccSegment{
+					// 创建 audio segment 伴生素材（5 个）
+					vsSpd := newSpeedMaterial()
+					vsPh := newPlaceholderInfo()
+					vsBts := newBeatsMaterial()
+					vsSc := newSoundChannelMapping()
+					vsVs := newVocalSeparation()
+					speedsSlice = append(speedsSlice, vsSpd)
+					placeholderSlice = append(placeholderSlice, vsPh)
+					beatsSlice = append(beatsSlice, vsBts)
+					soundChannelSlice = append(soundChannelSlice, vsSc)
+					vocalSepSlice = append(vocalSepSlice, vsVs)
+					vsSegment := ccSegment{
 						Clip:            nil, // 音频轨道必须为 null
 						ID:              uuid.New().String(),
 						MaterialID:      audMatID,
@@ -859,7 +1137,10 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 						Type:            "audio",
 						Visible:         true,
 						Volume:          1.0,
-					})
+					}
+					applyVideoSegmentDefaults(&vsSegment)
+					vsSegment.ExtraMaterialRefs = append(vsSegment.ExtraMaterialRefs, vsSpd.ID, vsPh.ID, vsBts.ID, vsSc.ID, vsVs.ID)
+					audioSegments = append(audioSegments, vsSegment)
 					segOffset += actualSegDur
 				}
 			}
@@ -938,7 +1219,18 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				Name:       fmt.Sprintf("shot_%03d_sfx%02d", shot.ShotNo, seqLabel),
 				Type:       "audio_effect",
 			})
-			sfxSegments = append(sfxSegments, ccSegment{
+			// SFX segment 伴生素材（5 个）：speed, placeholder, beats, sound_channel, vocal_sep
+			sfxSpd := newSpeedMaterial()
+			sfxPh := newPlaceholderInfo()
+			sfxBts := newBeatsMaterial()
+			sfxSc := newSoundChannelMapping()
+			sfxVs := newVocalSeparation()
+			speedsSlice = append(speedsSlice, sfxSpd)
+			placeholderSlice = append(placeholderSlice, sfxPh)
+			beatsSlice = append(beatsSlice, sfxBts)
+			soundChannelSlice = append(soundChannelSlice, sfxSc)
+			vocalSepSlice = append(vocalSepSlice, sfxVs)
+			sfxSeg := ccSegment{
 				Clip:            nil, // 音频轨道必须为 null
 				ID:              uuid.New().String(),
 				MaterialID:      sfxMatID,
@@ -948,7 +1240,10 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				Type:            "audio",
 				Visible:         true,
 				Volume:          sfxVol,
-			})
+			}
+			applyVideoSegmentDefaults(&sfxSeg)
+			sfxSeg.ExtraMaterialRefs = append(sfxSeg.ExtraMaterialRefs, sfxSpd.ID, sfxPh.ID, sfxBts.ID, sfxSc.ID, sfxVs.ID)
+			sfxSegments = append(sfxSegments, sfxSeg)
 		}
 
 		// ── 4. 字幕文字素材 ───────────────────────────────────────
@@ -974,7 +1269,14 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				Type:       "text",
 			})
 
-			textSegments = append(textSegments, ccSegment{
+			// text segment 伴生素材（3 个）：speed, placeholder, sound_channel
+			txtSpd := newSpeedMaterial()
+			txtPh := newPlaceholderInfo()
+			txtSc := newSoundChannelMapping()
+			speedsSlice = append(speedsSlice, txtSpd)
+			placeholderSlice = append(placeholderSlice, txtPh)
+			soundChannelSlice = append(soundChannelSlice, txtSc)
+			txtSeg := ccSegment{
 				Clip: &ccClip{
 					Alpha: 1.0,
 					Scale: ccScale{X: 1.0, Y: 1.0},
@@ -988,7 +1290,10 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				Type:            "text",
 				Visible:         true,
 				Volume:          0,
-			})
+			}
+			applyVideoSegmentDefaults(&txtSeg)
+			txtSeg.ExtraMaterialRefs = append(txtSeg.ExtraMaterialRefs, txtSpd.ID, txtPh.ID, txtSc.ID)
+			textSegments = append(textSegments, txtSeg)
 		}
 
 		totalDuration += durationMicros
@@ -1118,7 +1423,18 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			if bgmActualDur > 0 && bgmActualDur < segDur {
 				bgmSrcDur = bgmActualDur
 			}
-			bgmSegments = append(bgmSegments, ccSegment{
+			// BGM segment 伴生素材（5 个）：speed, placeholder, beats, sound_channel, vocal_sep
+			bgmSpd := newSpeedMaterial()
+			bgmPh := newPlaceholderInfo()
+			bgmBts := newBeatsMaterial()
+			bgmSc := newSoundChannelMapping()
+			bgmVs := newVocalSeparation()
+			speedsSlice = append(speedsSlice, bgmSpd)
+			placeholderSlice = append(placeholderSlice, bgmPh)
+			beatsSlice = append(beatsSlice, bgmBts)
+			soundChannelSlice = append(soundChannelSlice, bgmSc)
+			vocalSepSlice = append(vocalSepSlice, bgmVs)
+			bgmSeg := ccSegment{
 				Clip:            nil, // 音频轨道必须为 null
 				ID:              uuid.New().String(),
 				MaterialID:      bgmMatID,
@@ -1128,7 +1444,10 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				Type:            "audio",
 				Visible:         true,
 				Volume:          vol,
-			})
+			}
+			applyVideoSegmentDefaults(&bgmSeg)
+			bgmSeg.ExtraMaterialRefs = append(bgmSeg.ExtraMaterialRefs, bgmSpd.ID, bgmPh.ID, bgmBts.ID, bgmSc.ID, bgmVs.ID)
+			bgmSegments = append(bgmSegments, bgmSeg)
 		}
 		if len(bgmSegments) > 0 {
 			tracks = append(tracks, ccTrack{
@@ -1158,6 +1477,29 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	if videoSegments == nil {
 		videoSegments = []ccSegment{}
 	}
+	// 确保伴生素材切片不为 nil（零条 segment 时切片可能为 nil）
+	if speedsSlice == nil {
+		speedsSlice = []ccSpeedMaterial{}
+	}
+	if placeholderSlice == nil {
+		placeholderSlice = []ccPlaceholderInfo{}
+	}
+	if canvasSlice == nil {
+		canvasSlice = []ccCanvasMaterial{}
+	}
+	if soundChannelSlice == nil {
+		soundChannelSlice = []ccSoundChannelMapping{}
+	}
+	if materialColorSlice == nil {
+		materialColorSlice = []ccMaterialColor{}
+	}
+	if vocalSepSlice == nil {
+		vocalSepSlice = []ccVocalSeparation{}
+	}
+	if beatsSlice == nil {
+		beatsSlice = []ccBeatsMaterial{}
+	}
+
 	content := ccDraftContent{
 		CanvasConfig:         ccCanvasConfig{Height: height, Ratio: aspectRatioString(ratio), Width: width},
 		CreateTime:           now,
@@ -1165,22 +1507,23 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		FPS:                  24.0,
 		ID:                   draftID,
 		Keyframes:            ccKeyframes{Adjusts: []interface{}{}, Audios: []interface{}{}, ColorWheels: []interface{}{}, Effects: []interface{}{}, Filters: []interface{}{}, Handwrites: []interface{}{}, SpeedStickers: []interface{}{}, Stickers: []interface{}{}, Texts: []interface{}{}, Videos: allKFGroups, VocalSounds: []interface{}{}},
-		LastModifiedPlatform: "mac",
+		LastModifiedPlatform: ccPlatform{AppSource: "cc", AppVersion: "5.0.0", OS: "mac"}, // 必须为对象（真实草稿）
 		Materials: ccMaterials{
 			AudioFades:           []interface{}{},
 			Audios:               audios,
-			Beats:                []interface{}{},
-			Canvases:             []interface{}{},
+			Beats:                beatsSlice,
+			Canvases:             canvasSlice,
 			Chromas:              []interface{}{},
 			ColorCurves:          []interface{}{},
 			Filters:              []interface{}{},
 			GreenScreens:         []interface{}{},
 			Masks:                []interface{}{},
 			MaterialAnimations:   []interface{}{},
-			PlaceholderInfos:     []interface{}{},
+			MaterialColors:       materialColorSlice,
+			PlaceholderInfos:     placeholderSlice,
 			Shapes:               []interface{}{},
-			SoundChannelMappings: []interface{}{},
-			Speed:                []interface{}{},
+			SoundChannelMappings: soundChannelSlice,
+			Speeds:               speedsSlice,
 			Stickers:             []interface{}{},
 			Texts:                textMaterials,
 			TextTemplates:        []interface{}{},
@@ -1188,7 +1531,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			VideoEffects:         []interface{}{},
 			Videos:               videoMaterials,
 			VoiceEffects:         []interface{}{},
-			VocalSeparations:     []interface{}{},
+			VocalSeparations:     vocalSepSlice,
 		},
 		Name:          video.Title,
 		NewVersion:    "110.0.0",
@@ -1196,7 +1539,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		Relationships: []interface{}{},
 		Tracks:        tracks,
 		UpdateTime:    now,
-		Version:       "3.0.0",
+		Version:       360000, // 整数（真实草稿），CapCut 做 int 类型断言
 	}
 
 	// P1-1: 有封面图时在 meta 中引用，否则留空（避免 CapCut 显示损坏图标）
@@ -1372,6 +1715,15 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 	var annMaterials []ccTextMaterial
 	var annSegments []ccSegment
 
+	// 伴生素材集合（ExportBRollDraft 与 ExportCapCutDraft 共用相同的伴生素材逻辑）
+	var brollSpeedsSlice        []ccSpeedMaterial
+	var brollPlaceholderSlice   []ccPlaceholderInfo
+	var brollCanvasSlice        []ccCanvasMaterial
+	var brollSoundChannelSlice  []ccSoundChannelMapping
+	var brollMaterialColorSlice []ccMaterialColor
+	var brollVocalSepSlice      []ccVocalSeparation
+	var brollBeatsSlice         []ccBeatsMaterial
+
 	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
 
 	// P1-1: 优先使用项目封面，回退到第一张分镜图作为草稿封面缩略图
@@ -1436,20 +1788,38 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			Width:             width,
 		})
 
-		videoSegments = append(videoSegments, ccSegment{
-			Clip: &ccClip{
-				Alpha: 1.0,
-				Scale: ccScale{X: 1.0, Y: 1.0},
-			},
-			ID:              uuid.New().String(),
-			MaterialID:      vidMatID,
-			Speed:           1.0,
-			SourceTimerange: ccTimeRange{Duration: durationMicros, Start: 0},
-			TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
-			Type:            "video",
-			Visible:         true,
-			Volume:          1.0,
-		})
+		{
+			brollSeg := ccSegment{
+				Clip: &ccClip{
+					Alpha: 1.0,
+					Scale: ccScale{X: 1.0, Y: 1.0},
+				},
+				ID:              uuid.New().String(),
+				MaterialID:      vidMatID,
+				Speed:           1.0,
+				SourceTimerange: ccTimeRange{Duration: durationMicros, Start: 0},
+				TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
+				Type:            "video",
+				Visible:         true,
+				Volume:          1.0,
+			}
+			applyVideoSegmentDefaults(&brollSeg)
+			// 创建 video segment 伴生素材（6 个）
+			bSpd := newSpeedMaterial()
+			bPh := newPlaceholderInfo()
+			bCv := newCanvasMaterial()
+			bSc := newSoundChannelMapping()
+			bMc := newMaterialColor()
+			bVs := newVocalSeparation()
+			brollSpeedsSlice = append(brollSpeedsSlice, bSpd)
+			brollPlaceholderSlice = append(brollPlaceholderSlice, bPh)
+			brollCanvasSlice = append(brollCanvasSlice, bCv)
+			brollSoundChannelSlice = append(brollSoundChannelSlice, bSc)
+			brollMaterialColorSlice = append(brollMaterialColorSlice, bMc)
+			brollVocalSepSlice = append(brollVocalSepSlice, bVs)
+			brollSeg.ExtraMaterialRefs = append(brollSeg.ExtraMaterialRefs, bSpd.ID, bPh.ID, bCv.ID, bSc.ID, bMc.ID, bVs.ID)
+			videoSegments = append(videoSegments, brollSeg)
+		}
 
 		// ── 2. 配音音频素材 ────────────────────────────────────────────────
 		// 优先 shot.AudioPath（合成后的整段音频）；
@@ -1487,17 +1857,33 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 				Name:       fmt.Sprintf("shot_%03d_audio", shot.ShotNo),
 				Type:       "extract_music",
 			})
-			audioSegments = append(audioSegments, ccSegment{
-				Clip:            nil, // 音频轨道必须为 null
-				ID:              uuid.New().String(),
-				MaterialID:      audMatID,
-				Speed:           1.0,
-				SourceTimerange: ccTimeRange{Duration: srcDur, Start: 0},
-				TargetTimerange: ccTimeRange{Duration: srcDur, Start: startMicros},
-				Type:            "audio",
-				Visible:         true,
-				Volume:          1.0,
-			})
+			{
+				// BRoll audio segment 伴生素材（5 个）
+				baSpd := newSpeedMaterial()
+				baPh := newPlaceholderInfo()
+				baBts := newBeatsMaterial()
+				baSc := newSoundChannelMapping()
+				baVs := newVocalSeparation()
+				brollSpeedsSlice = append(brollSpeedsSlice, baSpd)
+				brollPlaceholderSlice = append(brollPlaceholderSlice, baPh)
+				brollBeatsSlice = append(brollBeatsSlice, baBts)
+				brollSoundChannelSlice = append(brollSoundChannelSlice, baSc)
+				brollVocalSepSlice = append(brollVocalSepSlice, baVs)
+				baSeg := ccSegment{
+					Clip:            nil, // 音频轨道必须为 null
+					ID:              uuid.New().String(),
+					MaterialID:      audMatID,
+					Speed:           1.0,
+					SourceTimerange: ccTimeRange{Duration: srcDur, Start: 0},
+					TargetTimerange: ccTimeRange{Duration: srcDur, Start: startMicros},
+					Type:            "audio",
+					Visible:         true,
+					Volume:          1.0,
+				}
+				applyVideoSegmentDefaults(&baSeg)
+				baSeg.ExtraMaterialRefs = append(baSeg.ExtraMaterialRefs, baSpd.ID, baPh.ID, baBts.ID, baSc.ID, baVs.ID)
+				audioSegments = append(audioSegments, baSeg)
+			}
 		} else if s.segmentRepo != nil {
 			// P2-3: no merged audio — place each VoiceSegment individually at the correct timeline offset
 			segs, segErr := s.segmentRepo.ListByShotID(shot.ID)
@@ -1545,7 +1931,18 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 						Name:       fmt.Sprintf("shot_%03d_seg%02d", shot.ShotNo, seg.SeqNo),
 						Type:       "extract_music",
 					})
-					audioSegments = append(audioSegments, ccSegment{
+					// BRoll VoiceSegment 伴生素材（5 个）
+					bvsSpd := newSpeedMaterial()
+					bvsPh := newPlaceholderInfo()
+					bvsBts := newBeatsMaterial()
+					bvsSc := newSoundChannelMapping()
+					bvsVs := newVocalSeparation()
+					brollSpeedsSlice = append(brollSpeedsSlice, bvsSpd)
+					brollPlaceholderSlice = append(brollPlaceholderSlice, bvsPh)
+					brollBeatsSlice = append(brollBeatsSlice, bvsBts)
+					brollSoundChannelSlice = append(brollSoundChannelSlice, bvsSc)
+					brollVocalSepSlice = append(brollVocalSepSlice, bvsVs)
+					bvsSeg := ccSegment{
 						Clip:            nil, // 音频轨道必须为 null
 						ID:              uuid.New().String(),
 						MaterialID:      audMatID,
@@ -1555,7 +1952,10 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 						Type:            "audio",
 						Visible:         true,
 						Volume:          1.0,
-					})
+					}
+					applyVideoSegmentDefaults(&bvsSeg)
+					bvsSeg.ExtraMaterialRefs = append(bvsSeg.ExtraMaterialRefs, bvsSpd.ID, bvsPh.ID, bvsBts.ID, bvsSc.ID, bvsVs.ID)
+					audioSegments = append(audioSegments, bvsSeg)
 					segOffset += actualSegDur
 				}
 			}
@@ -1582,7 +1982,14 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 				Name:       fmt.Sprintf("shot_%03d_subtitle", shot.ShotNo),
 				Type:       "text",
 			})
-			subtitleSegments = append(subtitleSegments, ccSegment{
+			// subtitle segment 伴生素材（3 个）
+			bsubSpd := newSpeedMaterial()
+			bsubPh := newPlaceholderInfo()
+			bsubSc := newSoundChannelMapping()
+			brollSpeedsSlice = append(brollSpeedsSlice, bsubSpd)
+			brollPlaceholderSlice = append(brollPlaceholderSlice, bsubPh)
+			brollSoundChannelSlice = append(brollSoundChannelSlice, bsubSc)
+			bsubSeg := ccSegment{
 				Clip: &ccClip{
 					Alpha: 1.0,
 					Scale: ccScale{X: 1.0, Y: 1.0},
@@ -1596,7 +2003,10 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 				Type:            "text",
 				Visible:         true,
 				Volume:          0,
-			})
+			}
+			applyVideoSegmentDefaults(&bsubSeg)
+			bsubSeg.ExtraMaterialRefs = append(bsubSeg.ExtraMaterialRefs, bsubSpd.ID, bsubPh.ID, bsubSc.ID)
+			subtitleSegments = append(subtitleSegments, bsubSeg)
 		}
 
 		// ── 4. 注释轨（顶部分镜编号 + 描述，供剪辑师参考）────────────────
@@ -1620,7 +2030,14 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			Name:       fmt.Sprintf("shot_%03d_ann", shot.ShotNo),
 			Type:       "text",
 		})
-		annSegments = append(annSegments, ccSegment{
+		// annotation segment 伴生素材（3 个）
+		bannSpd := newSpeedMaterial()
+		bannPh := newPlaceholderInfo()
+		bannSc := newSoundChannelMapping()
+		brollSpeedsSlice = append(brollSpeedsSlice, bannSpd)
+		brollPlaceholderSlice = append(brollPlaceholderSlice, bannPh)
+		brollSoundChannelSlice = append(brollSoundChannelSlice, bannSc)
+		bannSeg := ccSegment{
 			Clip: &ccClip{
 				Alpha: 1.0,
 				Scale: ccScale{X: 1.0, Y: 1.0},
@@ -1634,7 +2051,10 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			Type:            "text",
 			Visible:         true,
 			Volume:          0,
-		})
+		}
+		applyVideoSegmentDefaults(&bannSeg)
+		bannSeg.ExtraMaterialRefs = append(bannSeg.ExtraMaterialRefs, bannSpd.ID, bannPh.ID, bannSc.ID)
+		annSegments = append(annSegments, bannSeg)
 
 		totalDuration += durationMicros
 	}
@@ -1700,6 +2120,29 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		allTextMaterials = []ccTextMaterial{}
 	}
 
+	// 确保 BRoll 伴生素材切片不为 nil
+	if brollSpeedsSlice == nil {
+		brollSpeedsSlice = []ccSpeedMaterial{}
+	}
+	if brollPlaceholderSlice == nil {
+		brollPlaceholderSlice = []ccPlaceholderInfo{}
+	}
+	if brollCanvasSlice == nil {
+		brollCanvasSlice = []ccCanvasMaterial{}
+	}
+	if brollSoundChannelSlice == nil {
+		brollSoundChannelSlice = []ccSoundChannelMapping{}
+	}
+	if brollMaterialColorSlice == nil {
+		brollMaterialColorSlice = []ccMaterialColor{}
+	}
+	if brollVocalSepSlice == nil {
+		brollVocalSepSlice = []ccVocalSeparation{}
+	}
+	if brollBeatsSlice == nil {
+		brollBeatsSlice = []ccBeatsMaterial{}
+	}
+
 	content := ccDraftContent{
 		CanvasConfig:         ccCanvasConfig{Height: height, Ratio: aspectRatioString(ratio), Width: width},
 		CreateTime:           now,
@@ -1707,22 +2150,23 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		FPS:                  24.0,
 		ID:                   draftID,
 		Keyframes:            ccKeyframes{Adjusts: []interface{}{}, Audios: []interface{}{}, ColorWheels: []interface{}{}, Effects: []interface{}{}, Filters: []interface{}{}, Handwrites: []interface{}{}, SpeedStickers: []interface{}{}, Stickers: []interface{}{}, Texts: []interface{}{}, Videos: []ccKeyframeGroup{}, VocalSounds: []interface{}{}},
-		LastModifiedPlatform: "mac",
+		LastModifiedPlatform: ccPlatform{AppSource: "cc", AppVersion: "5.0.0", OS: "mac"}, // 必须为对象（真实草稿）
 		Materials: ccMaterials{
 			AudioFades:           []interface{}{},
 			Audios:               audioMaterials,
-			Beats:                []interface{}{},
-			Canvases:             []interface{}{},
+			Beats:                brollBeatsSlice,
+			Canvases:             brollCanvasSlice,
 			Chromas:              []interface{}{},
 			ColorCurves:          []interface{}{},
 			Filters:              []interface{}{},
 			GreenScreens:         []interface{}{},
 			Masks:                []interface{}{},
 			MaterialAnimations:   []interface{}{},
-			PlaceholderInfos:     []interface{}{},
+			MaterialColors:       brollMaterialColorSlice,
+			PlaceholderInfos:     brollPlaceholderSlice,
 			Shapes:               []interface{}{},
-			SoundChannelMappings: []interface{}{},
-			Speed:                []interface{}{},
+			SoundChannelMappings: brollSoundChannelSlice,
+			Speeds:               brollSpeedsSlice,
 			Stickers:             []interface{}{},
 			Texts:                allTextMaterials,
 			TextTemplates:        []interface{}{},
@@ -1730,7 +2174,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			VideoEffects:         []interface{}{},
 			Videos:               videoMaterials,
 			VoiceEffects:         []interface{}{},
-			VocalSeparations:     []interface{}{},
+			VocalSeparations:     brollVocalSepSlice,
 		},
 		Name:          video.Title + " (B剪)",
 		NewVersion:    "110.0.0",
@@ -1738,7 +2182,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		Relationships: []interface{}{},
 		Tracks:        tracks,
 		UpdateTime:    now,
-		Version:       "3.0.0",
+		Version:       360000, // 整数（真实草稿），CapCut 做 int 类型断言
 	}
 
 	// P1-1: 有封面图时在 meta 中引用
@@ -2498,6 +2942,76 @@ func mp3DurationMicros(data []byte) int64 {
 		return int64(durationSec * 1_000_000)
 	}
 	return 0
+}
+
+// --- 伴生素材创建辅助函数 ---
+
+// newSpeedMaterial 创建 speed 伴生素材（每个 segment 必须有一个）
+func newSpeedMaterial() ccSpeedMaterial {
+	return ccSpeedMaterial{ID: uuid.New().String(), Type: "speed", Mode: 0, Speed: 1.0, CurveSpeed: nil}
+}
+
+// newPlaceholderInfo 创建 placeholder_info 伴生素材
+func newPlaceholderInfo() ccPlaceholderInfo {
+	return ccPlaceholderInfo{ID: uuid.New().String(), Type: "placeholder_info", MetaType: "none"}
+}
+
+// newCanvasMaterial 创建 canvas_color 伴生素材（video segment 专用）
+func newCanvasMaterial() ccCanvasMaterial {
+	return ccCanvasMaterial{ID: uuid.New().String(), Type: "canvas_color"}
+}
+
+// newSoundChannelMapping 创建 sound_channel_mapping 伴生素材
+func newSoundChannelMapping() ccSoundChannelMapping {
+	return ccSoundChannelMapping{ID: uuid.New().String()}
+}
+
+// newMaterialColor 创建 material_colors 伴生素材（video segment 专用）
+func newMaterialColor() ccMaterialColor {
+	return ccMaterialColor{
+		ID:               uuid.New().String(),
+		GradientColors:   []interface{}{},
+		GradientPercents: []interface{}{},
+		GradientAngle:    90.0,
+	}
+}
+
+// newVocalSeparation 创建 vocal_separation 伴生素材
+func newVocalSeparation() ccVocalSeparation {
+	return ccVocalSeparation{ID: uuid.New().String(), Type: "vocal_separation", RemovedSounds: []interface{}{}}
+}
+
+// newBeatsMaterial 创建 beats 伴生素材（audio segment 专用）
+func newBeatsMaterial() ccBeatsMaterial {
+	return ccBeatsMaterial{
+		ID:    uuid.New().String(),
+		Type:  "beats",
+		Gear:  404,
+		Mode:  404,
+		UserBeats: []interface{}{},
+		AIBeats:   ccAIBeats{BeatSpeedInfos: []interface{}{}},
+	}
+}
+
+// applyVideoSegmentDefaults 为 video segment 填充真实草稿所需的默认字段值
+func applyVideoSegmentDefaults(seg *ccSegment) {
+	seg.RenderTimerange = seg.TargetTimerange
+	seg.EnableLut = true
+	seg.EnableAdjust = true
+	seg.EnableColorCurves = true
+	seg.EnableHslCurves = true
+	seg.EnableColorWheels = true
+	seg.HdrSettings = ccHdrSettings{Mode: 1, Intensity: 1.0, Nits: 1000}
+	seg.UniformScale = ccUniformScale{On: true, Value: 1.0}
+	seg.LastNonzeroVolume = 1.0
+	if seg.CommonKeyframes == nil {
+		seg.CommonKeyframes = []interface{}{}
+	}
+	if seg.LyricKeyframes == nil {
+		seg.LyricKeyframes = []interface{}{}
+	}
+	seg.EnableVideoMask = true
+	seg.Source = "segmentsourcenormal"
 }
 
 // buildPhotoMotionKeyframes 为静图分镜生成 Ken Burns 运镜关键帧组。
