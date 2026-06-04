@@ -132,17 +132,14 @@ type ccKeyframeGroup struct {
 // CapCut 会访问每一个子数组；若字段缺失或为 null，CapCut 迭代时崩溃 → 草稿点击无响应。
 // 所有子数组必须序列化为 []（非 null）。
 type ccKeyframes struct {
-	Adjusts      []interface{}     `json:"adjusts"`
-	Audios       []interface{}     `json:"audios"`
-	ColorWheels  []interface{}     `json:"color_wheels"`
-	Effects      []interface{}     `json:"effects"`       // CapCut International 遍历此数组，缺失即崩溃
-	Filters      []interface{}     `json:"filters"`
-	Handwrites   []interface{}     `json:"handwrites"`
-	SpeedStickers []interface{}    `json:"speed_stickers"` // 同上
-	Stickers     []interface{}     `json:"stickers"`
-	Texts        []interface{}     `json:"texts"`
-	Videos       []ccKeyframeGroup `json:"videos"`
-	VocalSounds  []interface{}     `json:"vocal_sounds"`  // 同上
+	Adjusts    []interface{}     `json:"adjusts"`
+	Audios     []interface{}     `json:"audios"`
+	Effects    []interface{}     `json:"effects"`
+	Filters    []interface{}     `json:"filters"`
+	Handwrites []interface{}     `json:"handwrites"`
+	Stickers   []interface{}     `json:"stickers"`
+	Texts      []interface{}     `json:"texts"`
+	Videos     []ccKeyframeGroup `json:"videos"`
 }
 
 // --- 新增：Segment 辅助字段结构体 ---
@@ -485,15 +482,29 @@ type ccVideoMaterial struct {
 
 // ccAudioMaterial 音频素材（配音 / BGM）
 type ccAudioMaterial struct {
-	CheckFlag      int    `json:"check_flag"`
-	Duration       int64  `json:"duration"`
-	ExtraInfo      string `json:"extra_info"`
-	FilePath       string `json:"file_Path"` // CapCut 格式：大写 P
-	ID             string `json:"id"`
-	MaterialID     string `json:"material_id"` // 必须与 ID 相同；CapCut 按此字段索引素材，缺失时 segment 找不到对应素材导致崩溃
-	Name           string `json:"name"`
-	SourcePlatform int    `json:"source_platform"`
-	Type           string `json:"type"` // "extract_music" = 配音; "music" = BGM
+	CheckFlag       int           `json:"check_flag"`
+	Duration        int64         `json:"duration"`
+	ID              string        `json:"id"`
+	MaterialID      string        `json:"material_id"` // 必须与 ID 相同；CapCut 按此字段索引素材，缺失时 segment 找不到对应素材导致崩溃
+	Name            string        `json:"name"`
+	Path            string        `json:"path"`
+	CategoryName    string        `json:"category_name"`
+	WavePoints      []interface{} `json:"wave_points"`
+	MusicID         string        `json:"music_id"`
+	AppID           int           `json:"app_id"`
+	TextID          string        `json:"text_id"`
+	ToneType        string        `json:"tone_type"`
+	SourcePlatform  int           `json:"source_platform"`
+	VideoID         string        `json:"video_id"`
+	EffectID        string        `json:"effect_id"`
+	ResourceID      string        `json:"resource_id"`
+	ThirdResourceID string        `json:"third_resource_id"`
+	CategoryID      string        `json:"category_id"`
+	IntensifiesPath string        `json:"intensifies_path"`
+	FormulaID       string        `json:"formula_id"`
+	TeamID          string        `json:"team_id"`
+	LocalMaterialID string        `json:"local_material_id"`
+	Type            string        `json:"type"` // "extract_music" = 配音; "music" = BGM
 }
 
 // ccTextMaterial 字幕/文字素材；content 是 JSON 字符串
@@ -509,29 +520,60 @@ type ccTextMaterial struct {
 }
 
 type ccMaterials struct {
-	AudioFades           []interface{}          `json:"audio_fades"`            // CapCut 6.x+ 必需字段
-	Audios               []ccAudioMaterial      `json:"audios"`
-	Beats                []ccBeatsMaterial      `json:"beats"`                  // 真实类型（audio segment 伴生素材）
-	Canvases             []ccCanvasMaterial     `json:"canvases"`               // 真实类型（video segment 伴生素材）
-	Chromas              []interface{}          `json:"chromas"`
-	ColorCurves          []interface{}          `json:"color_curves"`
-	Filters              []interface{}          `json:"filters"`
-	GreenScreens         []interface{}          `json:"green_screens"`
-	Masks                []interface{}          `json:"masks"`
-	MaterialAnimations   []interface{}          `json:"material_animations"`
-	MaterialColors       []ccMaterialColor      `json:"material_colors"`        // video segment 伴生素材
-	PlaceholderInfos     []ccPlaceholderInfo    `json:"placeholder_infos"`      // 真实类型；CapCut 遍历此数组，null 崩溃
-	Shapes               []interface{}          `json:"shapes"`
-	SoundChannelMappings []ccSoundChannelMapping `json:"sound_channel_mappings"` // 真实类型
-	Speeds               []ccSpeedMaterial      `json:"speeds"`                 // 真实字段名为 speeds（复数）
-	Stickers             []interface{}          `json:"stickers"`
-	Texts                []ccTextMaterial       `json:"texts"`
-	TextTemplates        []interface{}          `json:"text_templates"`
-	Transitions          []ccTransitionMaterial `json:"transitions"`
-	VideoEffects         []interface{}          `json:"video_effects"`
-	Videos               []ccVideoMaterial      `json:"videos"`
-	VoiceEffects         []interface{}          `json:"voice_effects"`
-	VocalSeparations     []ccVocalSeparation    `json:"vocal_separations"`      // 真实类型
+	AITranslates               []interface{}           `json:"ai_translates"`
+	AudioBalances              []interface{}           `json:"audio_balances"`
+	AudioEffects               []interface{}           `json:"audio_effects"`
+	AudioFades                 []interface{}           `json:"audio_fades"`
+	AudioPannings              []interface{}           `json:"audio_pannings"`
+	AudioPitchShifts           []interface{}           `json:"audio_pitch_shifts"`
+	AudioTrackIndexes          []interface{}           `json:"audio_track_indexes"`
+	Audios                     []ccAudioMaterial       `json:"audios"`
+	Beats                      []ccBeatsMaterial       `json:"beats"`
+	Canvases                   []ccCanvasMaterial      `json:"canvases"`
+	Chromas                    []interface{}           `json:"chromas"`
+	ColorCurves                []interface{}           `json:"color_curves"`
+	CommonMask                 []interface{}           `json:"common_mask"`
+	DigitalHumanModelDressings []interface{}           `json:"digital_human_model_dressing"`
+	DigitalHumans              []interface{}           `json:"digital_humans"`
+	Drafts                     []interface{}           `json:"drafts"`
+	Effects                    []interface{}           `json:"effects"`
+	Flowers                    []interface{}           `json:"flowers"`
+	GreenScreens               []interface{}           `json:"green_screens"`
+	Handwrites                 []interface{}           `json:"handwrites"`
+	Hsl                        []interface{}           `json:"hsl"`
+	HslCurves                  []interface{}           `json:"hsl_curves"`
+	Images                     []interface{}           `json:"images"`
+	LogColorWheels             []interface{}           `json:"log_color_wheels"`
+	Loudnesses                 []interface{}           `json:"loudnesses"`
+	ManualBeautys              []interface{}           `json:"manual_beautys"`
+	ManualDeformations         []interface{}           `json:"manual_deformations"`
+	MaterialAnimations         []interface{}           `json:"material_animations"`
+	MaterialColors             []ccMaterialColor       `json:"material_colors"`
+	MultiLanguageRefs          []interface{}           `json:"multi_language_refs"`
+	PlaceholderInfos           []ccPlaceholderInfo     `json:"placeholder_infos"`
+	Placeholders               []interface{}           `json:"placeholders"`
+	PluginEffects              []interface{}           `json:"plugin_effects"`
+	PrimaryColorWheels         []interface{}           `json:"primary_color_wheels"`
+	RealtimeDenoises           []interface{}           `json:"realtime_denoises"`
+	Shapes                     []interface{}           `json:"shapes"`
+	SmartCrops                 []interface{}           `json:"smart_crops"`
+	SmartRelights              []interface{}           `json:"smart_relights"`
+	SoundChannelMappings       []ccSoundChannelMapping `json:"sound_channel_mappings"`
+	Speeds                     []ccSpeedMaterial       `json:"speeds"`
+	Stickers                   []interface{}           `json:"stickers"`
+	TailLeaders                []interface{}           `json:"tail_leaders"`
+	TextTemplates              []interface{}           `json:"text_templates"`
+	Texts                      []ccTextMaterial        `json:"texts"`
+	TimeMarks                  []interface{}           `json:"time_marks"`
+	Transitions                []ccTransitionMaterial  `json:"transitions"`
+	VideoEffects               []interface{}           `json:"video_effects"`
+	VideoRadius                []interface{}           `json:"video_radius"`
+	VideoShadows               []interface{}           `json:"video_shadows"`
+	VideoStrokes               []interface{}           `json:"video_strokes"`
+	VideoTrackings             []interface{}           `json:"video_trackings"`
+	Videos                     []ccVideoMaterial       `json:"videos"`
+	VocalBeautifys             []interface{}           `json:"vocal_beautifys"`
+	VocalSeparations           []ccVocalSeparation     `json:"vocal_separations"`
 }
 
 type ccCanvasConfig struct {
@@ -554,22 +596,130 @@ type ccPlatform struct {
 	MacAddress string `json:"mac_address"`
 }
 
+// ccDraftConfig 草稿配置
+type ccDraftConfig struct {
+	VideoMute              bool          `json:"video_mute"`
+	RecordAudioLastIndex   int           `json:"record_audio_last_index"`
+	ExtractAudioLastIndex  int           `json:"extract_audio_last_index"`
+	OriginalSoundLastIndex int           `json:"original_sound_last_index"`
+	SubtitleRecognitionID  string        `json:"subtitle_recognition_id"`
+	SubtitleTaskinfo       []interface{} `json:"subtitle_taskinfo"`
+	LyricsRecognitionID    string        `json:"lyrics_recognition_id"`
+	LyricsTaskinfo         []interface{} `json:"lyrics_taskinfo"`
+	SubtitleSync           bool          `json:"subtitle_sync"`
+	LyricsSync             bool          `json:"lyrics_sync"`
+	VoiceChangeSync        bool          `json:"voice_change_sync"`
+	StickerMaxIndex        int           `json:"sticker_max_index"`
+	AdjustMaxIndex         int           `json:"adjust_max_index"`
+	MaterialSaveMode       int           `json:"material_save_mode"`
+	ExportRange            interface{}   `json:"export_range"`
+	MaintrackAdsorb        bool          `json:"maintrack_adsorb"`
+	CombinationMaxIndex    int           `json:"combination_max_index"`
+	AttachmentInfo         []interface{} `json:"attachment_info"`
+	ZoomInfoParams         interface{}   `json:"zoom_info_params"`
+	SystemFontList         []interface{} `json:"system_font_list"`
+	MultiLanguageMode      string        `json:"multi_language_mode"`
+	MultiLanguageMain      string        `json:"multi_language_main"`
+	MultiLanguageCurrent   string        `json:"multi_language_current"`
+	MultiLanguageList      []interface{} `json:"multi_language_list"`
+	SubtitleKeywordsConfig interface{}   `json:"subtitle_keywords_config"`
+	UseFloatRender         bool          `json:"use_float_render"`
+}
+
+type ccUnevenAnimationTemplateInfo struct {
+	Composition         string        `json:"composition"`
+	Content             string        `json:"content"`
+	Order               string        `json:"order"`
+	SubTemplateInfoList []interface{} `json:"sub_template_info_list"`
+}
+
+type ccSmartAdsInfo struct {
+	PageFrom string `json:"page_from"`
+	Routine  string `json:"routine"`
+	DraftURL string `json:"draft_url"`
+}
+
+type ccFPSInfo struct {
+	Num int `json:"num"`
+	Den int `json:"den"`
+}
+
+type ccFunctionAssistantInfo struct {
+	SmartRecApplied                        bool          `json:"smart_rec_applied"`
+	FixedRecApplied                        bool          `json:"fixed_rec_applied"`
+	AutoAdjust                             bool          `json:"auto_adjust"`
+	AutoAdjustSegidList                    []interface{} `json:"auto_adjust_segid_list"`
+	ColorCorrection                        bool          `json:"color_correction"`
+	ColorCorrectionSegidList               []interface{} `json:"color_correction_segid_list"`
+	EnhanceQuality                         bool          `json:"enhance_quality"`
+	SmoothSlowMotion                       bool          `json:"smooth_slow_motion"`
+	DeflickerSegidList                     []interface{} `json:"deflicker_segid_list"`
+	VideoNoiseSegidList                    []interface{} `json:"video_noise_segid_list"`
+	EnhanceQualitySegidList                []interface{} `json:"enhance_quality_segid_list"`
+	SmartSegidList                         []interface{} `json:"smart_segid_list"`
+	Retouch                                bool          `json:"retouch"`
+	RetouchSegidList                       []interface{} `json:"retouch_segid_list"`
+	EnhandeVoice                           bool          `json:"enhande_voice"`
+	EnhanceVoiceSegidList                  []interface{} `json:"enhance_voice_segid_list"`
+	AudioNoiseSegidList                    []interface{} `json:"audio_noise_segid_list"`
+	AutoCaption                            bool          `json:"auto_caption"`
+	AutoCaptionSegidList                   []interface{} `json:"auto_caption_segid_list"`
+	AutoCaptionTemplateID                  string        `json:"auto_caption_template_id"`
+	CaptionOpt                             bool          `json:"caption_opt"`
+	CaptionOptSegidList                    []interface{} `json:"caption_opt_segid_list"`
+	EyeCorrection                          bool          `json:"eye_correction"`
+	EyeCorrectionSegidList                 []interface{} `json:"eye_correction_segid_list"`
+	NormalizeLoudness                      bool          `json:"normalize_loudness"`
+	NormalizeLoudnessSegidList             []interface{} `json:"normalize_loudness_segid_list"`
+	NormalizeLoudnessAudioDenoiseSegidList []interface{} `json:"normalize_loudness_audio_denoise_segid_list"`
+	AutoAdjustFixed                        bool          `json:"auto_adjust_fixed"`
+	AutoAdjustFixedValue                   float64       `json:"auto_adjust_fixed_value"`
+	ColorCorrectionFixed                   bool          `json:"color_correction_fixed"`
+	ColorCorrectionFixedValue              float64       `json:"color_correction_fixed_value"`
+	NormalizeLoudnessFixed                 bool          `json:"normalize_loudness_fixed"`
+	EnhandeVoiceFixed                      bool          `json:"enhande_voice_fixed"`
+	RetouchFixed                           bool          `json:"retouch_fixed"`
+	EnhanceQualityFixed                    bool          `json:"enhance_quality_fixed"`
+	SmoothSlowMotionFixed                  bool          `json:"smooth_slow_motion_fixed"`
+	FPS                                    ccFPSInfo     `json:"fps"`
+}
+
 type ccDraftContent struct {
-	CanvasConfig         ccCanvasConfig `json:"canvas_config"`
-	CreateTime           int64          `json:"create_time"`
-	Duration             int64          `json:"duration"`
-	FPS                  float64        `json:"fps"`
-	ID                   string         `json:"id"`
-	Keyframes            ccKeyframes    `json:"keyframes"`
-	LastModifiedPlatform ccPlatform     `json:"last_modified_platform"` // 必须为对象（真实草稿），CapCut 做 object 类型断言，字符串会崩溃
-	Materials            ccMaterials    `json:"materials"`
-	Name                 string         `json:"name"`
-	NewVersion           string         `json:"new_version"`
-	Platform             ccPlatform     `json:"platform"` // 对象，非字符串
-	Relationships        []interface{}  `json:"relationships"`
-	Tracks               []ccTrack      `json:"tracks"`
-	UpdateTime           int64          `json:"update_time"`
-	Version              int            `json:"version"` // 整数（真实草稿 360000），CapCut 做 int 类型断言，字符串会崩溃
+	CanvasConfig                ccCanvasConfig                `json:"canvas_config"`
+	ColorSpace                  int                           `json:"color_space"`
+	Config                      ccDraftConfig                 `json:"config"`
+	Cover                       interface{}                   `json:"cover"`
+	CreateTime                  int64                         `json:"create_time"`
+	DraftType                   string                        `json:"draft_type"`
+	Duration                    int64                         `json:"duration"`
+	ExtraInfo                   interface{}                   `json:"extra_info"`
+	FPS                         float64                       `json:"fps"`
+	FreeRenderIndexModeOn       bool                          `json:"free_render_index_mode_on"`
+	FunctionAssistantInfo       ccFunctionAssistantInfo       `json:"function_assistant_info"`
+	GroupContainer              interface{}                   `json:"group_container"`
+	ID                          string                        `json:"id"`
+	IsDropFrameTimecode         bool                          `json:"is_drop_frame_timecode"`
+	KeyframeGraphList           []interface{}                 `json:"keyframe_graph_list"`
+	Keyframes                   ccKeyframes                   `json:"keyframes"`
+	LastModifiedPlatform        ccPlatform                    `json:"last_modified_platform"` // 必须为对象（真实草稿），CapCut 做 object 类型断言，字符串会崩溃
+	LyricsEffects               []interface{}                 `json:"lyrics_effects"`
+	Materials                   ccMaterials                   `json:"materials"`
+	MutableConfig               interface{}                   `json:"mutable_config"`
+	Name                        string                        `json:"name"`
+	NewVersion                  string                        `json:"new_version"`
+	Path                        string                        `json:"path"`
+	Platform                    ccPlatform                    `json:"platform"` // 对象，非字符串
+	Relationships               []interface{}                 `json:"relationships"`
+	RenderIndexTrackModeOn      bool                          `json:"render_index_track_mode_on"`
+	RetouchCover                interface{}                   `json:"retouch_cover"`
+	SmartAdsInfo                ccSmartAdsInfo                `json:"smart_ads_info"`
+	Source                      string                        `json:"source"`
+	StaticCoverImagePath        string                        `json:"static_cover_image_path"`
+	TimeMarks                   interface{}                   `json:"time_marks"`
+	Tracks                      []ccTrack                     `json:"tracks"`
+	UnevenAnimationTemplateInfo ccUnevenAnimationTemplateInfo `json:"uneven_animation_template_info"`
+	UpdateTime                  int64                         `json:"update_time"`
+	Version                     int                           `json:"version"` // 整数（真实草稿 360000），CapCut 做 int 类型断言，字符串会崩溃
 }
 
 type ccMetaInfo struct {
@@ -1029,13 +1179,17 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			}
 
 			audioMaterials = append(audioMaterials, ccAudioMaterial{
-				CheckFlag:  1,
-				Duration:   actualAudioDur, // 素材真实时长
-				FilePath:   audPath,        // HTTP URL（CDN）或相对文件名（本地嵌入）
-				ID:         audMatID,
-				MaterialID: audMatID,
-				Name:       fmt.Sprintf("shot_%03d_audio", shot.ShotNo),
-				Type:       "extract_music",
+				CheckFlag:       1,
+				Duration:        actualAudioDur,
+				ID:              audMatID,
+				MaterialID:      audMatID,
+				Name:            fmt.Sprintf("shot_%03d_audio", shot.ShotNo),
+				Path:            audPath,
+				CategoryName:    "local",
+				WavePoints:      []interface{}{},
+				MusicID:         uuid.New().String(),
+				LocalMaterialID: uuid.New().String(),
+				Type:            "extract_music",
 			})
 
 			// Bug修复：TargetTimerange.Duration 必须等于 SourceTimerange.Duration（srcDur）。
@@ -1108,13 +1262,17 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 						break // 镜头时长已用尽
 					}
 					audioMaterials = append(audioMaterials, ccAudioMaterial{
-						CheckFlag:  1,
-						Duration:   actualSegDur,
-						FilePath:   audPath,
-						ID:         audMatID,
-						MaterialID: audMatID,
-						Name:       fmt.Sprintf("shot_%03d_seg%02d", shot.ShotNo, seg.SeqNo),
-						Type:       "extract_music",
+						CheckFlag:       1,
+						Duration:        actualSegDur,
+						ID:              audMatID,
+						MaterialID:      audMatID,
+						Name:            fmt.Sprintf("shot_%03d_seg%02d", shot.ShotNo, seg.SeqNo),
+						Path:            audPath,
+						CategoryName:    "local",
+						WavePoints:      []interface{}{},
+						MusicID:         uuid.New().String(),
+						LocalMaterialID: uuid.New().String(),
+						Type:            "extract_music",
 					})
 					// 创建 audio segment 伴生素材（5 个）
 					vsSpd := newSpeedMaterial()
@@ -1211,13 +1369,17 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			}
 
 			sfxMaterials = append(sfxMaterials, ccAudioMaterial{
-				CheckFlag:  1,
-				Duration:   actualSFXDur,
-				FilePath:   sfxPath,
-				ID:         sfxMatID,
-				MaterialID: sfxMatID,
-				Name:       fmt.Sprintf("shot_%03d_sfx%02d", shot.ShotNo, seqLabel),
-				Type:       "audio_effect",
+				CheckFlag:       1,
+				Duration:        actualSFXDur,
+				ID:              sfxMatID,
+				MaterialID:      sfxMatID,
+				Name:            fmt.Sprintf("shot_%03d_sfx%02d", shot.ShotNo, seqLabel),
+				Path:            sfxPath,
+				CategoryName:    "local",
+				WavePoints:      []interface{}{},
+				MusicID:         uuid.New().String(),
+				LocalMaterialID: uuid.New().String(),
+				Type:            "audio_effect",
 			})
 			// SFX segment 伴生素材（5 个）：speed, placeholder, beats, sound_channel, vocal_sep
 			sfxSpd := newSpeedMaterial()
@@ -1410,13 +1572,17 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			}
 
 			audios = append(audios, ccAudioMaterial{
-				CheckFlag:  1,
-				Duration:   bgmActualDur, // P1-2: 实际文件时长，而非时间轴跨度
-				FilePath:   bgmPath,
-				ID:         bgmMatID,
-				MaterialID: bgmMatID,
-				Name:       bs.TrackName,
-				Type:       "music",
+				CheckFlag:       1,
+				Duration:        bgmActualDur, // P1-2: 实际文件时长，而非时间轴跨度
+				ID:              bgmMatID,
+				MaterialID:      bgmMatID,
+				Name:            bs.TrackName,
+				Path:            bgmPath,
+				CategoryName:    "local",
+				WavePoints:      []interface{}{},
+				MusicID:         uuid.New().String(),
+				LocalMaterialID: uuid.New().String(),
+				Type:            "music",
 			})
 			// P0-2: SourceTimerange 不能超出文件实际时长，否则 CapCut 读取 EOF 后行为未定义（静默/循环/崩溃）
 			bgmSrcDur := segDur
@@ -1501,45 +1667,130 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	}
 
 	content := ccDraftContent{
-		CanvasConfig:         ccCanvasConfig{Height: height, Ratio: aspectRatioString(ratio), Width: width},
-		CreateTime:           now,
-		Duration:             totalDuration,
-		FPS:                  24.0,
-		ID:                   draftID,
-		Keyframes:            ccKeyframes{Adjusts: []interface{}{}, Audios: []interface{}{}, ColorWheels: []interface{}{}, Effects: []interface{}{}, Filters: []interface{}{}, Handwrites: []interface{}{}, SpeedStickers: []interface{}{}, Stickers: []interface{}{}, Texts: []interface{}{}, Videos: allKFGroups, VocalSounds: []interface{}{}},
-		LastModifiedPlatform: ccPlatform{AppSource: "cc", AppVersion: "5.0.0", OS: "mac"}, // 必须为对象（真实草稿）
-		Materials: ccMaterials{
-			AudioFades:           []interface{}{},
-			Audios:               audios,
-			Beats:                beatsSlice,
-			Canvases:             canvasSlice,
-			Chromas:              []interface{}{},
-			ColorCurves:          []interface{}{},
-			Filters:              []interface{}{},
-			GreenScreens:         []interface{}{},
-			Masks:                []interface{}{},
-			MaterialAnimations:   []interface{}{},
-			MaterialColors:       materialColorSlice,
-			PlaceholderInfos:     placeholderSlice,
-			Shapes:               []interface{}{},
-			SoundChannelMappings: soundChannelSlice,
-			Speeds:               speedsSlice,
-			Stickers:             []interface{}{},
-			Texts:                textMaterials,
-			TextTemplates:        []interface{}{},
-			Transitions:          transitionMaterials,
-			VideoEffects:         []interface{}{},
-			Videos:               videoMaterials,
-			VoiceEffects:         []interface{}{},
-			VocalSeparations:     vocalSepSlice,
+		CanvasConfig: ccCanvasConfig{Height: height, Ratio: aspectRatioString(ratio), Width: width},
+		ColorSpace:   -1,
+		Config: ccDraftConfig{
+			SubtitleTaskinfo:     []interface{}{},
+			LyricsTaskinfo:       []interface{}{},
+			SubtitleSync:         true,
+			LyricsSync:           true,
+			StickerMaxIndex:      1,
+			AdjustMaxIndex:       1,
+			MaintrackAdsorb:      true,
+			CombinationMaxIndex:  1,
+			AttachmentInfo:       []interface{}{},
+			SystemFontList:       []interface{}{},
+			MultiLanguageMode:    "none",
+			MultiLanguageMain:    "none",
+			MultiLanguageCurrent: "none",
+			MultiLanguageList:    []interface{}{},
 		},
-		Name:          video.Title,
-		NewVersion:    "110.0.0",
-		Platform:      ccPlatform{AppSource: "cc", AppVersion: "5.0.0", OS: "mac"},
-		Relationships: []interface{}{},
-		Tracks:        tracks,
-		UpdateTime:    now,
-		Version:       360000, // 整数（真实草稿），CapCut 做 int 类型断言
+		CreateTime: now,
+		DraftType:  "video",
+		Duration:   totalDuration,
+		FPS:        30.0,
+		FunctionAssistantInfo: ccFunctionAssistantInfo{
+			AutoAdjustSegidList:                    []interface{}{},
+			ColorCorrectionSegidList:               []interface{}{},
+			DeflickerSegidList:                     []interface{}{},
+			VideoNoiseSegidList:                    []interface{}{},
+			EnhanceQualitySegidList:                []interface{}{},
+			SmartSegidList:                         []interface{}{},
+			RetouchSegidList:                       []interface{}{},
+			EnhanceVoiceSegidList:                  []interface{}{},
+			AudioNoiseSegidList:                    []interface{}{},
+			AutoCaptionSegidList:                   []interface{}{},
+			CaptionOptSegidList:                    []interface{}{},
+			EyeCorrectionSegidList:                 []interface{}{},
+			NormalizeLoudnessSegidList:             []interface{}{},
+			NormalizeLoudnessAudioDenoiseSegidList: []interface{}{},
+			AutoAdjustFixedValue:                   50.0,
+			ColorCorrectionFixedValue:              50.0,
+			FPS:                                    ccFPSInfo{Den: 1},
+		},
+		ID:                draftID,
+		KeyframeGraphList: []interface{}{},
+		Keyframes: ccKeyframes{
+			Adjusts:    []interface{}{},
+			Audios:     []interface{}{},
+			Effects:    []interface{}{},
+			Filters:    []interface{}{},
+			Handwrites: []interface{}{},
+			Stickers:   []interface{}{},
+			Texts:      []interface{}{},
+			Videos:     allKFGroups,
+		},
+		LastModifiedPlatform: ccPlatform{AppSource: "cc", AppVersion: "5.0.0", OS: "mac"}, // 必须为对象（真实草稿）
+		LyricsEffects:        []interface{}{},
+		Materials: ccMaterials{
+			AITranslates:               []interface{}{},
+			AudioBalances:              []interface{}{},
+			AudioEffects:               []interface{}{},
+			AudioFades:                 []interface{}{},
+			AudioPannings:              []interface{}{},
+			AudioPitchShifts:           []interface{}{},
+			AudioTrackIndexes:          []interface{}{},
+			Audios:                     audios,
+			Beats:                      beatsSlice,
+			Canvases:                   canvasSlice,
+			Chromas:                    []interface{}{},
+			ColorCurves:                []interface{}{},
+			CommonMask:                 []interface{}{},
+			DigitalHumanModelDressings: []interface{}{},
+			DigitalHumans:              []interface{}{},
+			Drafts:                     []interface{}{},
+			Effects:                    []interface{}{},
+			Flowers:                    []interface{}{},
+			GreenScreens:               []interface{}{},
+			Handwrites:                 []interface{}{},
+			Hsl:                        []interface{}{},
+			HslCurves:                  []interface{}{},
+			Images:                     []interface{}{},
+			LogColorWheels:             []interface{}{},
+			Loudnesses:                 []interface{}{},
+			ManualBeautys:              []interface{}{},
+			ManualDeformations:         []interface{}{},
+			MaterialAnimations:         []interface{}{},
+			MaterialColors:             materialColorSlice,
+			MultiLanguageRefs:          []interface{}{},
+			PlaceholderInfos:           placeholderSlice,
+			Placeholders:               []interface{}{},
+			PluginEffects:              []interface{}{},
+			PrimaryColorWheels:         []interface{}{},
+			RealtimeDenoises:           []interface{}{},
+			Shapes:                     []interface{}{},
+			SmartCrops:                 []interface{}{},
+			SmartRelights:              []interface{}{},
+			SoundChannelMappings:       soundChannelSlice,
+			Speeds:                     speedsSlice,
+			Stickers:                   []interface{}{},
+			TailLeaders:                []interface{}{},
+			Texts:                      textMaterials,
+			TextTemplates:              []interface{}{},
+			TimeMarks:                  []interface{}{},
+			Transitions:                transitionMaterials,
+			VideoEffects:               []interface{}{},
+			VideoRadius:                []interface{}{},
+			VideoShadows:               []interface{}{},
+			VideoStrokes:               []interface{}{},
+			VideoTrackings:             []interface{}{},
+			Videos:                     videoMaterials,
+			VocalBeautifys:             []interface{}{},
+			VocalSeparations:           vocalSepSlice,
+		},
+		Name:                   video.Title,
+		NewVersion:             "171.0.0",
+		Platform:               ccPlatform{AppSource: "cc", AppVersion: "5.0.0", OS: "mac"},
+		Relationships:          []interface{}{},
+		RenderIndexTrackModeOn: true,
+		SmartAdsInfo:           ccSmartAdsInfo{},
+		Source:                 "default",
+		Tracks:                 tracks,
+		UnevenAnimationTemplateInfo: ccUnevenAnimationTemplateInfo{
+			SubTemplateInfoList: []interface{}{},
+		},
+		UpdateTime: now,
+		Version:    360000, // 整数（真实草稿），CapCut 做 int 类型断言
 	}
 
 	// P1-1: 有封面图时在 meta 中引用，否则留空（避免 CapCut 显示损坏图标）
@@ -1556,7 +1807,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		DraftIsInvisible:         false,
 		DraftMaterials:           []interface{}{},
 		DraftName:                video.Title,
-		DraftNewVersion:          "110.0.0", // P2-2
+		DraftNewVersion:          "171.0.0",
 		DraftRootPath:            "",
 		DraftSegmentExtraInfo:    []interface{}{},
 		DraftTimelineMaterialsV2: []interface{}{},
@@ -1614,6 +1865,37 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	if err := writeZip(prefix+"draft_virtual_store.json", virtualStoreJSON); err != nil {
 		zipFile.Close()
 		return nil, fmt.Errorf("write draft_virtual_store.json: %w", err)
+	}
+
+	// CapCut International 8.7+ 는 Timelines/ 디렉토리 구조를 필요로 함
+	timelineProjectJSON, _ := json.Marshal(map[string]interface{}{
+		"config": map[string]interface{}{
+			"color_space":                -1,
+			"render_index_track_mode_on": false,
+			"use_float_render":           false,
+		},
+		"create_time":      now * 1_000_000,
+		"id":               uuid.New().String(),
+		"main_timeline_id": draftID,
+		"timelines": []map[string]interface{}{
+			{
+				"create_time":      now * 1_000_000,
+				"id":               draftID,
+				"is_marked_delete": false,
+				"name":             "时间线01",
+				"update_time":      now * 1_000_000,
+			},
+		},
+		"update_time": now * 1_000_000,
+		"version":     0,
+	})
+	if err := writeZip(prefix+"Timelines/project.json", timelineProjectJSON); err != nil {
+		zipFile.Close()
+		return nil, fmt.Errorf("write Timelines/project.json: %w", err)
+	}
+	if err := writeZip(prefix+"Timelines/"+draftID+"/draft_info.json", contentJSON); err != nil {
+		zipFile.Close()
+		return nil, fmt.Errorf("write Timelines content: %w", err)
 	}
 
 	// P1-1: 封面图（草稿列表缩略图）
@@ -1849,13 +2131,17 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 				srcDur = durationMicros
 			}
 			audioMaterials = append(audioMaterials, ccAudioMaterial{
-				CheckFlag:  1,
-				Duration:   actualAudioDur,
-				FilePath:   audPath,
-				ID:         audMatID,
-				MaterialID: audMatID,
-				Name:       fmt.Sprintf("shot_%03d_audio", shot.ShotNo),
-				Type:       "extract_music",
+				CheckFlag:       1,
+				Duration:        actualAudioDur,
+				ID:              audMatID,
+				MaterialID:      audMatID,
+				Name:            fmt.Sprintf("shot_%03d_audio", shot.ShotNo),
+				Path:            audPath,
+				CategoryName:    "local",
+				WavePoints:      []interface{}{},
+				MusicID:         uuid.New().String(),
+				LocalMaterialID: uuid.New().String(),
+				Type:            "extract_music",
 			})
 			{
 				// BRoll audio segment 伴生素材（5 个）
@@ -1923,13 +2209,17 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 						break // used up all shot time
 					}
 					audioMaterials = append(audioMaterials, ccAudioMaterial{
-						CheckFlag:  1,
-						Duration:   actualSegDur,
-						FilePath:   audPath,
-						ID:         audMatID,
-						MaterialID: audMatID,
-						Name:       fmt.Sprintf("shot_%03d_seg%02d", shot.ShotNo, seg.SeqNo),
-						Type:       "extract_music",
+						CheckFlag:       1,
+						Duration:        actualSegDur,
+						ID:              audMatID,
+						MaterialID:      audMatID,
+						Name:            fmt.Sprintf("shot_%03d_seg%02d", shot.ShotNo, seg.SeqNo),
+						Path:            audPath,
+						CategoryName:    "local",
+						WavePoints:      []interface{}{},
+						MusicID:         uuid.New().String(),
+						LocalMaterialID: uuid.New().String(),
+						Type:            "extract_music",
 					})
 					// BRoll VoiceSegment 伴生素材（5 个）
 					bvsSpd := newSpeedMaterial()
@@ -2144,45 +2434,130 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 	}
 
 	content := ccDraftContent{
-		CanvasConfig:         ccCanvasConfig{Height: height, Ratio: aspectRatioString(ratio), Width: width},
-		CreateTime:           now,
-		Duration:             totalDuration,
-		FPS:                  24.0,
-		ID:                   draftID,
-		Keyframes:            ccKeyframes{Adjusts: []interface{}{}, Audios: []interface{}{}, ColorWheels: []interface{}{}, Effects: []interface{}{}, Filters: []interface{}{}, Handwrites: []interface{}{}, SpeedStickers: []interface{}{}, Stickers: []interface{}{}, Texts: []interface{}{}, Videos: []ccKeyframeGroup{}, VocalSounds: []interface{}{}},
-		LastModifiedPlatform: ccPlatform{AppSource: "cc", AppVersion: "5.0.0", OS: "mac"}, // 必须为对象（真实草稿）
-		Materials: ccMaterials{
-			AudioFades:           []interface{}{},
-			Audios:               audioMaterials,
-			Beats:                brollBeatsSlice,
-			Canvases:             brollCanvasSlice,
-			Chromas:              []interface{}{},
-			ColorCurves:          []interface{}{},
-			Filters:              []interface{}{},
-			GreenScreens:         []interface{}{},
-			Masks:                []interface{}{},
-			MaterialAnimations:   []interface{}{},
-			MaterialColors:       brollMaterialColorSlice,
-			PlaceholderInfos:     brollPlaceholderSlice,
-			Shapes:               []interface{}{},
-			SoundChannelMappings: brollSoundChannelSlice,
-			Speeds:               brollSpeedsSlice,
-			Stickers:             []interface{}{},
-			Texts:                allTextMaterials,
-			TextTemplates:        []interface{}{},
-			Transitions:          []ccTransitionMaterial{},
-			VideoEffects:         []interface{}{},
-			Videos:               videoMaterials,
-			VoiceEffects:         []interface{}{},
-			VocalSeparations:     brollVocalSepSlice,
+		CanvasConfig: ccCanvasConfig{Height: height, Ratio: aspectRatioString(ratio), Width: width},
+		ColorSpace:   -1,
+		Config: ccDraftConfig{
+			SubtitleTaskinfo:     []interface{}{},
+			LyricsTaskinfo:       []interface{}{},
+			SubtitleSync:         true,
+			LyricsSync:           true,
+			StickerMaxIndex:      1,
+			AdjustMaxIndex:       1,
+			MaintrackAdsorb:      true,
+			CombinationMaxIndex:  1,
+			AttachmentInfo:       []interface{}{},
+			SystemFontList:       []interface{}{},
+			MultiLanguageMode:    "none",
+			MultiLanguageMain:    "none",
+			MultiLanguageCurrent: "none",
+			MultiLanguageList:    []interface{}{},
 		},
-		Name:          video.Title + " (B剪)",
-		NewVersion:    "110.0.0",
-		Platform:      ccPlatform{AppSource: "cc", AppVersion: "5.0.0", OS: "mac"},
-		Relationships: []interface{}{},
-		Tracks:        tracks,
-		UpdateTime:    now,
-		Version:       360000, // 整数（真实草稿），CapCut 做 int 类型断言
+		CreateTime: now,
+		DraftType:  "video",
+		Duration:   totalDuration,
+		FPS:        30.0,
+		FunctionAssistantInfo: ccFunctionAssistantInfo{
+			AutoAdjustSegidList:                    []interface{}{},
+			ColorCorrectionSegidList:               []interface{}{},
+			DeflickerSegidList:                     []interface{}{},
+			VideoNoiseSegidList:                    []interface{}{},
+			EnhanceQualitySegidList:                []interface{}{},
+			SmartSegidList:                         []interface{}{},
+			RetouchSegidList:                       []interface{}{},
+			EnhanceVoiceSegidList:                  []interface{}{},
+			AudioNoiseSegidList:                    []interface{}{},
+			AutoCaptionSegidList:                   []interface{}{},
+			CaptionOptSegidList:                    []interface{}{},
+			EyeCorrectionSegidList:                 []interface{}{},
+			NormalizeLoudnessSegidList:             []interface{}{},
+			NormalizeLoudnessAudioDenoiseSegidList: []interface{}{},
+			AutoAdjustFixedValue:                   50.0,
+			ColorCorrectionFixedValue:              50.0,
+			FPS:                                    ccFPSInfo{Den: 1},
+		},
+		ID:                draftID,
+		KeyframeGraphList: []interface{}{},
+		Keyframes: ccKeyframes{
+			Adjusts:    []interface{}{},
+			Audios:     []interface{}{},
+			Effects:    []interface{}{},
+			Filters:    []interface{}{},
+			Handwrites: []interface{}{},
+			Stickers:   []interface{}{},
+			Texts:      []interface{}{},
+			Videos:     []ccKeyframeGroup{},
+		},
+		LastModifiedPlatform: ccPlatform{AppSource: "cc", AppVersion: "5.0.0", OS: "mac"}, // 必须为对象（真实草稿）
+		LyricsEffects:        []interface{}{},
+		Materials: ccMaterials{
+			AITranslates:               []interface{}{},
+			AudioBalances:              []interface{}{},
+			AudioEffects:               []interface{}{},
+			AudioFades:                 []interface{}{},
+			AudioPannings:              []interface{}{},
+			AudioPitchShifts:           []interface{}{},
+			AudioTrackIndexes:          []interface{}{},
+			Audios:                     audioMaterials,
+			Beats:                      brollBeatsSlice,
+			Canvases:                   brollCanvasSlice,
+			Chromas:                    []interface{}{},
+			ColorCurves:                []interface{}{},
+			CommonMask:                 []interface{}{},
+			DigitalHumanModelDressings: []interface{}{},
+			DigitalHumans:              []interface{}{},
+			Drafts:                     []interface{}{},
+			Effects:                    []interface{}{},
+			Flowers:                    []interface{}{},
+			GreenScreens:               []interface{}{},
+			Handwrites:                 []interface{}{},
+			Hsl:                        []interface{}{},
+			HslCurves:                  []interface{}{},
+			Images:                     []interface{}{},
+			LogColorWheels:             []interface{}{},
+			Loudnesses:                 []interface{}{},
+			ManualBeautys:              []interface{}{},
+			ManualDeformations:         []interface{}{},
+			MaterialAnimations:         []interface{}{},
+			MaterialColors:             brollMaterialColorSlice,
+			MultiLanguageRefs:          []interface{}{},
+			PlaceholderInfos:           brollPlaceholderSlice,
+			Placeholders:               []interface{}{},
+			PluginEffects:              []interface{}{},
+			PrimaryColorWheels:         []interface{}{},
+			RealtimeDenoises:           []interface{}{},
+			Shapes:                     []interface{}{},
+			SmartCrops:                 []interface{}{},
+			SmartRelights:              []interface{}{},
+			SoundChannelMappings:       brollSoundChannelSlice,
+			Speeds:                     brollSpeedsSlice,
+			Stickers:                   []interface{}{},
+			TailLeaders:                []interface{}{},
+			Texts:                      allTextMaterials,
+			TextTemplates:              []interface{}{},
+			TimeMarks:                  []interface{}{},
+			Transitions:                []ccTransitionMaterial{},
+			VideoEffects:               []interface{}{},
+			VideoRadius:                []interface{}{},
+			VideoShadows:               []interface{}{},
+			VideoStrokes:               []interface{}{},
+			VideoTrackings:             []interface{}{},
+			Videos:                     videoMaterials,
+			VocalBeautifys:             []interface{}{},
+			VocalSeparations:           brollVocalSepSlice,
+		},
+		Name:                   video.Title + " (B剪)",
+		NewVersion:             "171.0.0",
+		Platform:               ccPlatform{AppSource: "cc", AppVersion: "5.0.0", OS: "mac"},
+		Relationships:          []interface{}{},
+		RenderIndexTrackModeOn: true,
+		SmartAdsInfo:           ccSmartAdsInfo{},
+		Source:                 "default",
+		Tracks:                 tracks,
+		UnevenAnimationTemplateInfo: ccUnevenAnimationTemplateInfo{
+			SubTemplateInfoList: []interface{}{},
+		},
+		UpdateTime: now,
+		Version:    360000, // 整数（真实草稿），CapCut 做 int 类型断言
 	}
 
 	// P1-1: 有封面图时在 meta 中引用
@@ -2199,7 +2574,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		DraftIsInvisible:         false,
 		DraftMaterials:           []interface{}{},
 		DraftName:                video.Title + " (B剪)",
-		DraftNewVersion:          "110.0.0", // P2-2
+		DraftNewVersion:          "171.0.0",
 		DraftRootPath:            "",
 		DraftSegmentExtraInfo:    []interface{}{},
 		DraftTimelineMaterialsV2: []interface{}{},
@@ -2253,6 +2628,38 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		zipFile.Close()
 		return nil, fmt.Errorf("write draft_virtual_store.json: %w", err)
 	}
+
+	// CapCut International 8.7+ 는 Timelines/ 디렉토리 구조를 필요로 함
+	brollTimelineProjectJSON, _ := json.Marshal(map[string]interface{}{
+		"config": map[string]interface{}{
+			"color_space":                -1,
+			"render_index_track_mode_on": false,
+			"use_float_render":           false,
+		},
+		"create_time":      now * 1_000_000,
+		"id":               uuid.New().String(),
+		"main_timeline_id": draftID,
+		"timelines": []map[string]interface{}{
+			{
+				"create_time":      now * 1_000_000,
+				"id":               draftID,
+				"is_marked_delete": false,
+				"name":             "时间线01",
+				"update_time":      now * 1_000_000,
+			},
+		},
+		"update_time": now * 1_000_000,
+		"version":     0,
+	})
+	if err := writeZip(prefix+"Timelines/project.json", brollTimelineProjectJSON); err != nil {
+		zipFile.Close()
+		return nil, fmt.Errorf("write Timelines/project.json: %w", err)
+	}
+	if err := writeZip(prefix+"Timelines/"+draftID+"/draft_info.json", contentJSON); err != nil {
+		zipFile.Close()
+		return nil, fmt.Errorf("write Timelines content: %w", err)
+	}
+
 	// P1-1: 封面图（草稿列表缩略图）
 	if len(coverData) > 0 {
 		if err := writeZip(prefix+"cover.jpg", coverData); err != nil {
