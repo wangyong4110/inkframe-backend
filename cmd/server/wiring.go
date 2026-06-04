@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+
 	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/config"
 	"github.com/inkframe/inkframe-backend/internal/crawler"
@@ -734,7 +736,8 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		).WithTaskService(services.TaskService).WithSFXService(services.SFXService).WithSFXItemRepo(repos.ShotSFXItemRepo).
 			WithBGMService(services.BGMService).WithBGMRepo(repos.VideoBGMSegmentRepo).
 			WithSubtitleService(service.NewSubtitleService()).WithStorage(storageSvc).WithAssetRepo(repos.AssetRepo).
-			WithCapCutSegmentRepo(repos.ShotVoiceSegmentRepo), // P1-2: VoiceSegment audio in CapCut exports
+			WithCapCutSegmentRepo(repos.ShotVoiceSegmentRepo). // P1-2: VoiceSegment audio in CapCut exports
+			WithServerBaseURL(buildServerBaseURL(cfg)),         // 本地/DB 存储媒体 URL 解析
 		ModelHandler:   handler.NewModelHandler(services.ModelService),
 		McpHandler:     handler.NewMcpHandler(services.McpService),
 		StyleHandler:   handler.NewStyleHandler(services.StyleService),
@@ -794,4 +797,13 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		AuditHandler:         handler.NewAuditHandler(services.AuditService),
 		OutlineReviewHandler: handler.NewOutlineReviewHandler(services.OutlineReviewService, services.TaskService),
 	}
+}
+
+// buildServerBaseURL 从 config 构造服务器自身 base URL，用于解析本地/DB 存储的相对媒体路径。
+func buildServerBaseURL(cfg *config.Config) string {
+	host := cfg.Server.Host
+	if host == "" || host == "0.0.0.0" {
+		host = "127.0.0.1"
+	}
+	return fmt.Sprintf("http://%s:%d", host, cfg.Server.Port)
 }

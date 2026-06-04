@@ -39,6 +39,12 @@ func (h *VideoHandler) WithStorage(svc storage.Service) *VideoHandler {
 	return h
 }
 
+// WithServerBaseURL 将服务器自身 base URL 注入 CapCutService，用于解析本地存储/DB 存储的相对路径媒体 URL。
+func (h *VideoHandler) WithServerBaseURL(u string) *VideoHandler {
+	h.capcutService.WithServerBaseURL(u)
+	return h
+}
+
 func (h *VideoHandler) WithAssetRepo(r *repository.AssetRepository) *VideoHandler {
 	h.assetRepo = r
 	return h
