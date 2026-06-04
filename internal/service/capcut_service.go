@@ -27,10 +27,17 @@ const maxExportMediaBytes int64 = 2 * 1024 * 1024 * 1024 // 2 GiB
 // CapCutService 剪映草稿导出服务
 type CapCutService struct {
 	segmentRepo *repository.ShotVoiceSegmentRepository // P1-2: for including multi-segment audio in exports
+	sfxItemRepo *repository.ShotSFXItemRepository      // for including multi-item SFX in exports
 }
 
 func NewCapCutService() *CapCutService {
 	return &CapCutService{}
+}
+
+// WithSFXItemRepo 注入 ShotSFXItem 仓库，使导出时能包含多条音效（完整 StartOffset/Volume/Duration）。
+func (s *CapCutService) WithSFXItemRepo(r *repository.ShotSFXItemRepository) *CapCutService {
+	s.sfxItemRepo = r
+	return s
 }
 
 // WithSegmentRepo 注入 VoiceSegment 仓库，使导出时能包含多段配音音频。
@@ -109,9 +116,9 @@ type ccTimeRange struct {
 }
 
 type ccSegment struct {
-	Clip              ccClip      `json:"clip"`
+	Clip              *ccClip     `json:"clip"`            // 音频轨道必须为 null；视频/文本轨道必须为非 null 对象
 	ID                string      `json:"id"`
-	KeyframeRefs      []string    `json:"keyframe_refs"`       // 不用 omitempty：nil 时必须输出 [] 而非 null
+	KeyframeRefs      []string    `json:"keyframe_refs"`   // 不用 omitempty：nil 时必须输出 [] 而非 null
 	ExtraMaterialRefs []string    `json:"extra_material_refs"` // 同上，CapCut 迭代 null 会崩溃
 	MaterialID        string      `json:"material_id"`
 	Reverse           bool        `json:"reverse"`
@@ -123,8 +130,9 @@ type ccSegment struct {
 	Volume            float64     `json:"volume"`
 }
 
-// MarshalJSON 确保 KeyframeRefs / ExtraMaterialRefs 始终序列化为 JSON 数组（不为 null）。
-// CapCut 解析草稿时会迭代这两个字段；null 值导致崩溃，表现为"点击草稿无响应"。
+// MarshalJSON 确保:
+//   - KeyframeRefs / ExtraMaterialRefs 始终序列化为 [] 而非 null（CapCut 迭代 null 崩溃）
+//   - Clip 为 nil 时输出 "clip":null（音频轨道要求），非空时输出对象
 func (s ccSegment) MarshalJSON() ([]byte, error) {
 	kfRefs := s.KeyframeRefs
 	if kfRefs == nil {
@@ -135,7 +143,7 @@ func (s ccSegment) MarshalJSON() ([]byte, error) {
 		extRefs = []string{}
 	}
 	type seg struct {
-		Clip              ccClip      `json:"clip"`
+		Clip              *ccClip     `json:"clip"`
 		ID                string      `json:"id"`
 		KeyframeRefs      []string    `json:"keyframe_refs"`
 		ExtraMaterialRefs []string    `json:"extra_material_refs"`
@@ -259,9 +267,17 @@ type ccMaterials struct {
 }
 
 type ccCanvasConfig struct {
-	Height int     `json:"height"`
-	Ratio  float64 `json:"ratio"` // P0-2: CapCut 要求 float64（1.7778），非字符串 "16:9"
-	Width  int     `json:"width"`
+	Height int    `json:"height"`
+	Ratio  string `json:"ratio"` // 字符串形式："16:9"/"9:16"/"1:1"/"4:5"（CapCut 6.x+ 规范要求）
+	Width  int    `json:"width"`
+}
+
+// ccPlatform 标识草稿所属平台（CapCut 国际版 app_source="cc"，剪映 app_source="lv"）。
+// 必须为对象，不能是字符串——CapCut 解析时会断言类型，字符串值导致 JSON 反序列化失败。
+type ccPlatform struct {
+	AppSource  string `json:"app_source"`  // "cc" = CapCut 国际版; "lv" = 剪映
+	AppVersion string `json:"app_version"` // 任意合法版本号，如 "5.0.0"
+	OS         string `json:"os"`          // "mac" / "windows"
 }
 
 type ccDraftContent struct {
@@ -271,11 +287,11 @@ type ccDraftContent struct {
 	FPS                  float64        `json:"fps"`
 	ID                   string         `json:"id"`
 	Keyframes            ccKeyframes    `json:"keyframes"`
-	LastModifiedPlatform string         `json:"last_modified_platform"`
+	LastModifiedPlatform string         `json:"last_modified_platform"` // "mac" / "windows"（字符串）
 	Materials            ccMaterials    `json:"materials"`
 	Name                 string         `json:"name"`
 	NewVersion           string         `json:"new_version"`
-	Platform             string         `json:"platform"`
+	Platform             ccPlatform     `json:"platform"` // 对象，非字符串
 	Relationships        []interface{}  `json:"relationships"`
 	Tracks               []ccTrack      `json:"tracks"`
 	UpdateTime           int64          `json:"update_time"`
@@ -322,18 +338,16 @@ func aspectRatioDimensions(ratio string) (int, int) {
 	}
 }
 
-// aspectRatioFloat 将宽高比字符串转换为 CapCut canvas_config.ratio 所需的 float64。
-// P0-2: CapCut 使用 float64 而非字符串（16:9 → 1.7778, 9:16 → 0.5625）。
-func aspectRatioFloat(ratio string) float64 {
+// aspectRatioString 返回 CapCut canvas_config.ratio 所需的字符串形式。
+// CapCut 6.x+ 规范要求 ratio 为字符串标签（"16:9"），而非 float。
+func aspectRatioString(ratio string) string {
 	switch ratio {
-	case "9:16":
-		return float64(9) / float64(16) // 0.5625
-	case "1:1":
-		return 1.0
+	case "9:16", "1:1", "4:5":
+		return ratio
 	case "4:3":
-		return float64(4) / float64(3) // 1.3333
-	default: // 16:9
-		return float64(16) / float64(9) // 1.7778
+		return "4:3"
+	default:
+		return "16:9"
 	}
 }
 
@@ -642,17 +656,21 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			}
 		}
 
+		matDuration := durationMicros
+		if !isVideo {
+			matDuration = 10_800_000_000 // 图片素材 duration 固定为 3 小时，CapCut 按 SourceTimerange 截取实际时长
+		}
 		videoMaterials = append(videoMaterials, ccVideoMaterial{
 			CheckFlag:      63487,
 			CropScale:      1,
 			Crop:           defaultCrop,
-			Duration:       durationMicros,
+			Duration:       matDuration,
 			HasAudio:       isVideo && shot.AudioPath != "",
 			Height:         height,
 			ID:             vidMatID,
 			ImportTime:     now,
 			MaterialID:     vidMatID,
-			Path:           vidPath, // HTTP URL（CDN 在线资源）或相对文件名（本地嵌入）
+			Path:           vidPath,
 			SourcePlatform: 0,
 			Type:           matType,
 			Width:          width,
@@ -660,10 +678,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 		segID := uuid.New().String()
 		seg := ccSegment{
-			Clip: ccClip{
-				Alpha: 1.0,
-				Scale: ccScale{X: 1.0, Y: 1.0},
-			},
+			Clip: &ccClip{Alpha: 1.0, Scale: ccScale{X: 1.0, Y: 1.0}},
 			ID:              segID,
 			MaterialID:      vidMatID,
 			Speed:           1.0,
@@ -742,10 +757,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			// 若用 durationMicros（视频段时长）而 srcDur < durationMicros，
 			// 剪映会将音频拉伸以填满时间槽，导致音频变慢、音画严重不同步。
 			audioSegments = append(audioSegments, ccSegment{
-				Clip: ccClip{
-					Alpha: 1.0,
-					Scale: ccScale{X: 1.0, Y: 1.0},
-				},
+				Clip:            nil, // 音频轨道必须为 null
 				ID:              uuid.New().String(),
 				MaterialID:      audMatID,
 				Speed:           1.0,
@@ -808,7 +820,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 						Type:      "extract_music",
 					})
 					audioSegments = append(audioSegments, ccSegment{
-						Clip:            ccClip{Alpha: 1.0, Scale: ccScale{X: 1.0, Y: 1.0}},
+						Clip:            nil, // 音频轨道必须为 null
 						ID:              uuid.New().String(),
 						MaterialID:      audMatID,
 						Speed:           1.0,
@@ -824,35 +836,64 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		}
 
 		// ── 3. 音效素材（SFX）────────────────────────────────────
-		if shot.SFXURL != "" {
+		// 优先从 sfxItemRepo 读取多条 ShotSFXItem（含精确 StartOffset / DurationSecs / Volume）；
+		// 若 repo 未注入或该镜头无条目，回退到 shot.SFXURL 单字段（向后兼容）。
+		var sfxItems []*model.ShotSFXItem
+		if s.sfxItemRepo != nil {
+			if items, rerr := s.sfxItemRepo.ListByShotID(shot.ID); rerr == nil {
+				for _, it := range items {
+					if !it.Disabled && it.URL != "" {
+						sfxItems = append(sfxItems, it)
+					}
+				}
+			}
+		}
+		if len(sfxItems) == 0 && shot.SFXURL != "" {
+			// 向后兼容：没有 item 记录时用 shot.SFXURL 构造一条虚拟 item
+			sfxItems = []*model.ShotSFXItem{{URL: shot.SFXURL, Volume: shot.SFXVolume}}
+		}
+		for sfxIdx, sfxItem := range sfxItems {
 			sfxMatID := uuid.New().String()
+			sfxOffsetMicros := int64(sfxItem.StartOffset * 1_000_000) // 音效在镜头内的起始偏移
+			sfxTimelineStart := startMicros + sfxOffsetMicros
+			remaining := startMicros + durationMicros - sfxTimelineStart
+			if remaining <= 0 {
+				continue // 偏移已超出镜头结尾，跳过
+			}
 
-			actualSFXDur := durationMicros
-			sfxPath := fmt.Sprintf("%03d_sfx.mp3", shot.ShotNo)
-			if isHTTPURL(shot.SFXURL) {
-				sfxPath = shot.SFXURL // CDN URL 直接播放
+			actualSFXDur := remaining // fallback：未知时长用剩余镜头时间
+			if sfxItem.DurationSecs > 0 {
+				actualSFXDur = int64(sfxItem.DurationSecs * 1_000_000)
+			}
+
+			seqLabel := sfxIdx + 1
+			sfxPath := fmt.Sprintf("%03d_sfx%02d.mp3", shot.ShotNo, seqLabel)
+			if isHTTPURL(sfxItem.URL) {
+				sfxPath = sfxItem.URL // CDN URL 直接播放
 			} else {
-				if data, err := readLocalOrRemoteFile(shot.SFXURL); err == nil && len(data) > 0 {
-					ext := audioExtension(shot.SFXURL)
-					sfxPath = fmt.Sprintf("%03d_sfx%s", shot.ShotNo, ext)
+				if data, err := readLocalOrRemoteFile(sfxItem.URL); err == nil && len(data) > 0 {
+					ext := audioExtension(sfxItem.URL)
+					sfxPath = fmt.Sprintf("%03d_sfx%02d%s", shot.ShotNo, seqLabel, ext)
 					if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
 						totalLoadedBytes += int64(len(data))
 						mediaFiles = append(mediaFiles, mediaFile{filename: sfxPath, data: data})
 					} else {
-						logger.Printf("[ExportCapCutDraft] P2-1: total media exceeds 2GiB, skipping SFX embed for shot %d", shot.ShotNo)
+						logger.Printf("[ExportCapCutDraft] SFX: total media exceeds 2GiB, skipping shot %d sfx %d", shot.ShotNo, seqLabel)
 					}
-					if dur := parseAudioDurationMicros(data, ext); dur > 0 {
-						actualSFXDur = dur
+					if parsed := parseAudioDurationMicros(data, ext); parsed > 0 {
+						actualSFXDur = parsed
 					}
+				} else {
+					logger.Printf("[ExportCapCutDraft] SFX load failed for shot %d sfx %d url=%q: %v", shot.ShotNo, seqLabel, sfxItem.URL, err)
 				}
 			}
+
 			sfxSrcDur := actualSFXDur
-			if sfxSrcDur > durationMicros {
-				sfxSrcDur = durationMicros
+			if sfxSrcDur > remaining {
+				sfxSrcDur = remaining // 不超出镜头末尾
 			}
 
-			// 混音音量：shot.SFXVolume>0 时使用该值，否则按是否有台词/配音自动估算
-			sfxVol := shot.SFXVolume
+			sfxVol := sfxItem.Volume
 			if sfxVol <= 0 {
 				sfxVol = 0.4
 				if shot.Dialogue != "" {
@@ -865,23 +906,18 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			sfxMaterials = append(sfxMaterials, ccAudioMaterial{
 				CheckFlag: 1,
 				Duration:  actualSFXDur,
-				FilePath:  sfxPath, // HTTP URL（CDN）或相对文件名（本地嵌入）
+				FilePath:  sfxPath,
 				ID:        sfxMatID,
-				Name:      fmt.Sprintf("shot_%03d_sfx", shot.ShotNo),
-				Type:      "audio_effect", // P2-4: 音效类型区别于配音（extract_music）和 BGM（music）
+				Name:      fmt.Sprintf("shot_%03d_sfx%02d", shot.ShotNo, seqLabel),
+				Type:      "audio_effect",
 			})
-			// Bug修复：SFX TargetTimerange.Duration 必须等于 SourceTimerange.Duration（sfxSrcDur），
-			// 否则剪映会拉伸音效填满 durationMicros，导致音效变速、时间线混乱。
 			sfxSegments = append(sfxSegments, ccSegment{
-				Clip: ccClip{
-					Alpha: 1.0,
-					Scale: ccScale{X: 1.0, Y: 1.0},
-				},
+				Clip:            nil, // 音频轨道必须为 null
 				ID:              uuid.New().String(),
 				MaterialID:      sfxMatID,
 				Speed:           1.0,
 				SourceTimerange: ccTimeRange{Duration: sfxSrcDur, Start: 0},
-				TargetTimerange: ccTimeRange{Duration: sfxSrcDur, Start: startMicros},
+				TargetTimerange: ccTimeRange{Duration: sfxSrcDur, Start: sfxTimelineStart},
 				Type:            "audio",
 				Visible:         true,
 				Volume:          sfxVol,
@@ -912,7 +948,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			})
 
 			textSegments = append(textSegments, ccSegment{
-				Clip: ccClip{
+				Clip: &ccClip{
 					Alpha: 1.0,
 					Scale: ccScale{X: 1.0, Y: 1.0},
 					Transform: ccTransform{Y: subtitleTransformY(subCfg.position)},
@@ -924,7 +960,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
 				Type:            "text",
 				Visible:         true,
-				Volume:          0, // P2-1: 文本轨道无音频，Volume 应为 0
+				Volume:          0,
 			})
 		}
 
@@ -1057,11 +1093,11 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				bgmSrcDur = bgmActualDur
 			}
 			bgmSegments = append(bgmSegments, ccSegment{
-				Clip:            ccClip{Alpha: 1.0, Scale: ccScale{X: 1.0, Y: 1.0}},
+				Clip:            nil, // 音频轨道必须为 null
 				ID:              uuid.New().String(),
 				MaterialID:      bgmMatID,
 				Speed:           1.0,
-				SourceTimerange: ccTimeRange{Duration: bgmSrcDur, Start: 0}, // P0-2: cap at actual file duration
+				SourceTimerange: ccTimeRange{Duration: bgmSrcDur, Start: 0},
 				TargetTimerange: ccTimeRange{Duration: segDur, Start: startMicros},
 				Type:            "audio",
 				Visible:         true,
@@ -1097,7 +1133,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		videoSegments = []ccSegment{}
 	}
 	content := ccDraftContent{
-		CanvasConfig:         ccCanvasConfig{Height: height, Ratio: aspectRatioFloat(ratio), Width: width}, // P0-2: float64
+		CanvasConfig:         ccCanvasConfig{Height: height, Ratio: aspectRatioString(ratio), Width: width},
 		CreateTime:           now,
 		Duration:             totalDuration,
 		FPS:                  24.0,
@@ -1105,7 +1141,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		Keyframes:            ccKeyframes{Adjusts: []interface{}{}, Audios: []interface{}{}, ColorWheels: []interface{}{}, Filters: []interface{}{}, Handwrites: []interface{}{}, Stickers: []interface{}{}, Texts: []interface{}{}, Videos: allKFGroups},
 		LastModifiedPlatform: "mac",
 		Materials: ccMaterials{
-			AudioFades:         []interface{}{}, // P1-4
+			AudioFades:         []interface{}{},
 			Audios:             audios,
 			Beats:              []interface{}{},
 			Canvases:           []interface{}{},
@@ -1125,8 +1161,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			VocalSeparations:   []interface{}{},
 		},
 		Name:          video.Title,
-		NewVersion:    "110.0.0", // P2-2: 非空版本号，避免部分 CapCut 版本触发升级提示
-		Platform:      "mac",
+		NewVersion:    "110.0.0",
+		Platform:      ccPlatform{AppSource: "cc", AppVersion: "5.0.0", OS: "mac"},
 		Relationships: []interface{}{},
 		Tracks:        tracks,
 		UpdateTime:    now,
@@ -1189,6 +1225,11 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	if err := writeZip(prefix+"draft_content.json", contentJSON); err != nil {
 		zipFile.Close()
 		return nil, fmt.Errorf("write draft_content.json: %w", err)
+	}
+	// macOS CapCut International 读取 draft_info.json，Windows 读取 draft_content.json；两个文件内容相同
+	if err := writeZip(prefix+"draft_info.json", contentJSON); err != nil {
+		zipFile.Close()
+		return nil, fmt.Errorf("write draft_info.json: %w", err)
 	}
 	if err := writeZip(prefix+"draft_meta_info.json", metaJSON); err != nil {
 		zipFile.Close()
@@ -1369,7 +1410,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			CheckFlag:      63487,
 			CropScale:      1,
 			Crop:           defaultCrop,
-			Duration:       durationMicros,
+			Duration:       10_800_000_000, // 图片素材固定 3 小时
 			HasAudio:       false,
 			Height:         height,
 			ID:             vidMatID,
@@ -1382,7 +1423,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		})
 
 		videoSegments = append(videoSegments, ccSegment{
-			Clip: ccClip{
+			Clip: &ccClip{
 				Alpha: 1.0,
 				Scale: ccScale{X: 1.0, Y: 1.0},
 			},
@@ -1434,7 +1475,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 				Type:      "extract_music",
 			})
 			audioSegments = append(audioSegments, ccSegment{
-				Clip:            ccClip{Alpha: 1.0, Scale: ccScale{X: 1.0, Y: 1.0}},
+				Clip:            nil, // 音频轨道必须为 null
 				ID:              uuid.New().String(),
 				MaterialID:      audMatID,
 				Speed:           1.0,
@@ -1496,7 +1537,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 						Type:      "extract_music",
 					})
 					audioSegments = append(audioSegments, ccSegment{
-						Clip:            ccClip{Alpha: 1.0, Scale: ccScale{X: 1.0, Y: 1.0}},
+						Clip:            nil, // 音频轨道必须为 null
 						ID:              uuid.New().String(),
 						MaterialID:      audMatID,
 						Speed:           1.0,
@@ -1533,7 +1574,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 				Type:       "text",
 			})
 			subtitleSegments = append(subtitleSegments, ccSegment{
-				Clip: ccClip{
+				Clip: &ccClip{
 					Alpha: 1.0,
 					Scale: ccScale{X: 1.0, Y: 1.0},
 					Transform: ccTransform{Y: subtitleTransformY(subCfg.position)},
@@ -1545,7 +1586,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 				TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
 				Type:            "text",
 				Visible:         true,
-				Volume:          0, // P2-1: 文本轨道无音频，Volume 应为 0
+				Volume:          0,
 			})
 		}
 
@@ -1571,7 +1612,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			Type:       "text",
 		})
 		annSegments = append(annSegments, ccSegment{
-			Clip: ccClip{
+			Clip: &ccClip{
 				Alpha: 1.0,
 				Scale: ccScale{X: 1.0, Y: 1.0},
 				Transform: ccTransform{Y: subtitleTransformY("top")},
@@ -1583,7 +1624,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
 			Type:            "text",
 			Visible:         true,
-			Volume:          0, // P2-1: 文本轨道无音频，Volume 应为 0
+			Volume:          0,
 		})
 
 		totalDuration += durationMicros
@@ -1651,7 +1692,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 	}
 
 	content := ccDraftContent{
-		CanvasConfig:         ccCanvasConfig{Height: height, Ratio: aspectRatioFloat(ratio), Width: width}, // P0-2
+		CanvasConfig:         ccCanvasConfig{Height: height, Ratio: aspectRatioString(ratio), Width: width},
 		CreateTime:           now,
 		Duration:             totalDuration,
 		FPS:                  24.0,
@@ -1659,7 +1700,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		Keyframes:            ccKeyframes{Adjusts: []interface{}{}, Audios: []interface{}{}, ColorWheels: []interface{}{}, Filters: []interface{}{}, Handwrites: []interface{}{}, Stickers: []interface{}{}, Texts: []interface{}{}, Videos: []ccKeyframeGroup{}},
 		LastModifiedPlatform: "mac",
 		Materials: ccMaterials{
-			AudioFades:         []interface{}{}, // P1-4
+			AudioFades:         []interface{}{},
 			Audios:             audioMaterials,
 			Beats:              []interface{}{},
 			Canvases:           []interface{}{},
@@ -1679,8 +1720,8 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			VocalSeparations:   []interface{}{},
 		},
 		Name:          video.Title + " (B剪)",
-		NewVersion:    "110.0.0", // P2-2
-		Platform:      "mac",
+		NewVersion:    "110.0.0",
+		Platform:      ccPlatform{AppSource: "cc", AppVersion: "5.0.0", OS: "mac"},
 		Relationships: []interface{}{},
 		Tracks:        tracks,
 		UpdateTime:    now,
@@ -1740,6 +1781,11 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 	if err := writeZip(prefix+"draft_content.json", contentJSON); err != nil {
 		zipFile.Close()
 		return nil, fmt.Errorf("write draft_content.json: %w", err)
+	}
+	// macOS CapCut International 读取 draft_info.json
+	if err := writeZip(prefix+"draft_info.json", contentJSON); err != nil {
+		zipFile.Close()
+		return nil, fmt.Errorf("write draft_info.json: %w", err)
 	}
 	if err := writeZip(prefix+"draft_meta_info.json", metaJSON); err != nil {
 		zipFile.Close()

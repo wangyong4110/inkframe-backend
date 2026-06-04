@@ -52,6 +52,7 @@ func (h *VideoHandler) WithCapCutSegmentRepo(r *repository.ShotVoiceSegmentRepos
 
 func (h *VideoHandler) WithSFXItemRepo(r *repository.ShotSFXItemRepository) *VideoHandler {
 	h.sfxItemRepo = r
+	h.capcutService.WithSFXItemRepo(r) // 同时注入 CapCut 导出服务，使多条 SFX item 能正确导出
 	return h
 }
 
