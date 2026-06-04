@@ -238,6 +238,7 @@ type ccAIBeats struct {
 	MelodyPath     string        `json:"melody_path"`
 	BeatsURL       string        `json:"beats_url"`
 	BeatsPath      string        `json:"beats_path"`
+	MelodyPercents []float64     `json:"melody_percents"` // 真实草稿为 [0.0]，不能省略
 	BeatSpeedInfos []interface{} `json:"beat_speed_infos"`
 }
 
@@ -275,9 +276,10 @@ type ccSegment struct {
 	MaterialID        string      `json:"material_id"`
 	Reverse           bool        `json:"reverse"`
 	Speed             float64     `json:"speed"`
-	SourceTimerange   ccTimeRange `json:"source_timerange"`
-	TargetTimerange   ccTimeRange `json:"target_timerange"`
-	Type              string      `json:"type"`
+	SourceTimerange   *ccTimeRange `json:"source_timerange"` // text segment 为 null；video/audio 为非 null
+	TargetTimerange   ccTimeRange  `json:"target_timerange"`
+	// Type 字段在真实草稿的 segment 中不存在，不输出（omitempty 保证空字符串被省略）
+	Type              string      `json:"type,omitempty"`
 	Visible           bool        `json:"visible"`
 	Volume            float64     `json:"volume"`
 
@@ -348,9 +350,9 @@ func (s ccSegment) MarshalJSON() ([]byte, error) {
 		MaterialID             string             `json:"material_id"`
 		Reverse                bool               `json:"reverse"`
 		Speed                  float64            `json:"speed"`
-		SourceTimerange        ccTimeRange        `json:"source_timerange"`
+		SourceTimerange        *ccTimeRange       `json:"source_timerange"` // text segment 为 null
 		TargetTimerange        ccTimeRange        `json:"target_timerange"`
-		Type                   string             `json:"type"`
+		Type                   string             `json:"type,omitempty"`
 		Visible                bool               `json:"visible"`
 		Volume                 float64            `json:"volume"`
 		RenderTimerange        ccTimeRange        `json:"render_timerange"`
@@ -709,16 +711,194 @@ type ccAudioMaterial struct {
 	WavePoints             []interface{}      `json:"wave_points"`
 }
 
-// ccTextMaterial 字幕/文字素材；content 是 JSON 字符串
+// ccTextMaterial 字幕/文字素材；content 是 JSON 字符串。
 // 注意：剪映要求 id 与 material_id 同值，否则 segment.material_id 引用会失效导致字幕不显示。
+// CapCut 8.7+ 严格校验 text material 的完整字段列表，缺字段会导致加载崩溃。
 type ccTextMaterial struct {
-	CheckFlag  int    `json:"check_flag"`
-	Content    string `json:"content"`
-	ID         string `json:"id"`
-	IsSubtitle bool   `json:"is_subtitle"`
-	MaterialID string `json:"material_id"` // 必须与 ID 相同
-	Name       string `json:"name"`
-	Type       string `json:"type"` // "text"
+	AddType                            int         `json:"add_type"`
+	Alignment                          int         `json:"alignment"`                // 1=center
+	BackgroundAlpha                    float64     `json:"background_alpha"`
+	BackgroundColor                    string      `json:"background_color"`
+	BackgroundFill                     string      `json:"background_fill"`
+	BackgroundHeight                   float64     `json:"background_height"`
+	BackgroundHorizontalOffset         float64     `json:"background_horizontal_offset"`
+	BackgroundRoundRadius              float64     `json:"background_round_radius"`
+	BackgroundStyle                    int         `json:"background_style"`
+	BackgroundVerticalOffset           float64     `json:"background_vertical_offset"`
+	BackgroundWidth                    float64     `json:"background_width"`
+	BaseContent                        string      `json:"base_content"`
+	BoldWidth                          float64     `json:"bold_width"`
+	BorderAlpha                        float64     `json:"border_alpha"`
+	BorderColor                        string      `json:"border_color"`
+	BorderMode                         int         `json:"border_mode"`
+	BorderWidth                        float64     `json:"border_width"`
+	CaptionTemplateInfo                interface{} `json:"caption_template_info"`   // null
+	CheckFlag                          int         `json:"check_flag"`
+	ComboInfo                          interface{} `json:"combo_info"`              // {"text_templates":[]}
+	Content                            string      `json:"content"`
+	CurrentWords                       interface{} `json:"current_words"`           // {"start_time":[],"end_time":[],"text":[]}
+	CutoffPostfix                      string      `json:"cutoff_postfix"`
+	EnablePathTypesetting              bool        `json:"enable_path_typesetting"`
+	FixedHeight                        float64     `json:"fixed_height"`            // -1.0
+	FixedWidth                         float64     `json:"fixed_width"`             // -1.0
+	FontCategoryID                     string      `json:"font_category_id"`
+	FontCategoryName                   string      `json:"font_category_name"`
+	FontID                             string      `json:"font_id"`
+	FontName                           string      `json:"font_name"`
+	FontPath                           string      `json:"font_path"`
+	FontResourceID                     string      `json:"font_resource_id"`
+	FontSize                           float64     `json:"font_size"`
+	FontSourcePlatform                 int         `json:"font_source_platform"`
+	FontTeamID                         string      `json:"font_team_id"`
+	FontThirdResourceID                string      `json:"font_third_resource_id"`
+	FontTitle                          string      `json:"font_title"`              // "none"
+	FontURL                            string      `json:"font_url"`
+	Fonts                              []interface{} `json:"fonts"`
+	ForceApplyLineMaxWidth             bool        `json:"force_apply_line_max_width"`
+	GlobalAlpha                        float64     `json:"global_alpha"`
+	GroupID                            string      `json:"group_id"`
+	HasShadow                          bool        `json:"has_shadow"`
+	ID                                 string      `json:"id"`
+	InitialScale                       float64     `json:"initial_scale"`
+	InnerPadding                       float64     `json:"inner_padding"`           // -1.0
+	IsBatchReplace                     bool        `json:"is_batch_replace"`
+	IsLyricEffect                      bool        `json:"is_lyric_effect"`
+	IsRichText                         bool        `json:"is_rich_text"`
+	IsSubtitle                         bool        `json:"is_subtitle"`
+	IsWordsLinear                      bool        `json:"is_words_linear"`
+	ItalicDegree                       int         `json:"italic_degree"`
+	KTVColor                           string      `json:"ktv_color"`
+	Language                           string      `json:"language"`
+	LayerWeight                        int         `json:"layer_weight"`
+	LetterSpacing                      float64     `json:"letter_spacing"`
+	LineFeed                           int         `json:"line_feed"`               // 1
+	LineMaxWidth                       float64     `json:"line_max_width"`          // 0.82
+	LineSpacing                        float64     `json:"line_spacing"`
+	LyricGroupID                       string      `json:"lyric_group_id"`
+	LyricsTemplate                     interface{} `json:"lyrics_template"`         // {"resource_id":"","resource_name":"","panel":"","effect_id":"","path":""}
+	MaterialID                         string      `json:"material_id"`             // 必须与 ID 相同
+	MultiLanguageCurrent               string      `json:"multi_language_current"`  // "none"
+	Name                               string      `json:"name"`
+	OffsetOnPath                       float64     `json:"offset_on_path"`
+	OnelineCutoff                      bool        `json:"oneline_cutoff"`
+	OperationType                      int         `json:"operation_type"`
+	OriginalSize                       []interface{} `json:"original_size"`
+	PresetCategory                     string      `json:"preset_category"`
+	PresetCategoryID                   string      `json:"preset_category_id"`
+	PresetHasSetAlignment              bool        `json:"preset_has_set_alignment"`
+	PresetID                           string      `json:"preset_id"`
+	PresetIndex                        int         `json:"preset_index"`
+	PresetName                         string      `json:"preset_name"`
+	PuncModel                          string      `json:"punc_model"`
+	RecognizeModel                     string      `json:"recognize_model"`
+	RecognizeTaskID                    string      `json:"recognize_task_id"`
+	RecognizeText                      string      `json:"recognize_text"`
+	RecognizeType                      int         `json:"recognize_type"`
+	RelevanceSegment                   []interface{} `json:"relevance_segment"`
+	ShadowAlpha                        float64     `json:"shadow_alpha"`
+	ShadowAngle                        float64     `json:"shadow_angle"`
+	ShadowColor                        string      `json:"shadow_color"`
+	ShadowDistance                     float64     `json:"shadow_distance"`
+	ShadowPoint                        interface{} `json:"shadow_point"`            // {"x":0,"y":0}
+	ShadowSmoothing                    float64     `json:"shadow_smoothing"`
+	ShadowThicknessProjectionAngle     float64     `json:"shadow_thickness_projection_angle"`
+	ShadowThicknessProjectionDistance  float64     `json:"shadow_thickness_projection_distance"`
+	ShadowThicknessProjectionEnable    bool        `json:"shadow_thickness_projection_enable"`
+	ShapeClipX                         bool        `json:"shape_clip_x"`
+	ShapeClipY                         bool        `json:"shape_clip_y"`
+	SingleCharBgAlpha                  float64     `json:"single_char_bg_alpha"`
+	SingleCharBgColor                  string      `json:"single_char_bg_color"`
+	SingleCharBgEnable                 bool        `json:"single_char_bg_enable"`
+	SingleCharBgHeight                 float64     `json:"single_char_bg_height"`
+	SingleCharBgHorizontalOffset       float64     `json:"single_char_bg_horizontal_offset"`
+	SingleCharBgRoundRadius            float64     `json:"single_char_bg_round_radius"`
+	SingleCharBgVerticalOffset         float64     `json:"single_char_bg_vertical_offset"`
+	SingleCharBgWidth                  float64     `json:"single_char_bg_width"`
+	SourceFrom                         string      `json:"source_from"`
+	SSMLContent                        string      `json:"ssml_content"`
+	StyleName                          string      `json:"style_name"`
+	SubTemplateID                      int         `json:"sub_template_id"`         // -1
+	SubType                            int         `json:"sub_type"`
+	SubtitleKeywords                   interface{} `json:"subtitle_keywords"`       // null
+	SubtitleKeywordsConfig             interface{} `json:"subtitle_keywords_config"` // null
+	SubtitleTemplateOriginalFontsize   float64     `json:"subtitle_template_original_fontsize"`
+	TextAlpha                          float64     `json:"text_alpha"`
+	TextColor                          string      `json:"text_color"`
+	TextCurve                          interface{} `json:"text_curve"`              // null
+	TextExceedsPathProcessType         int         `json:"text_exceeds_path_process_type"`
+	TextLoopOnPath                     bool        `json:"text_loop_on_path"`
+	TextPresetResourceID               string      `json:"text_preset_resource_id"`
+	TextSize                           int         `json:"text_size"`               // 字号（pt）
+	TextToAudioIDs                     []interface{} `json:"text_to_audio_ids"`
+	TextTypesettingPathIndex           int         `json:"text_typesetting_path_index"`
+	TextTypesettingPaths               interface{} `json:"text_typesetting_paths"`  // null
+	TextTypesettingPathsFile           string      `json:"text_typesetting_paths_file"`
+	TranslateOriginalText              string      `json:"translate_original_text"`
+	TTSAutoUpdate                      bool        `json:"tts_auto_update"`
+	Type                               string      `json:"type"`                    // "text"
+	Typesetting                        int         `json:"typesetting"`
+	Underline                          bool        `json:"underline"`
+	UnderlineOffset                    float64     `json:"underline_offset"`
+	UnderlineWidth                     float64     `json:"underline_width"`
+	UseEffectDefaultColor              bool        `json:"use_effect_default_color"`
+	Words                              interface{} `json:"words"`                   // {"start_time":[],"end_time":[],"text":[]}
+}
+
+// newTextMaterial 构造完整的 ccTextMaterial，填充 CapCut 8.7+ 所需的所有字段默认值。
+func newTextMaterial(name, id, content string, isSubtitle bool, textSize int) ccTextMaterial {
+	wordsObj := map[string]interface{}{
+		"start_time": []interface{}{},
+		"end_time":   []interface{}{},
+		"text":       []interface{}{},
+	}
+	return ccTextMaterial{
+		AddType:             0,
+		Alignment:           1,
+		BackgroundAlpha:     1.0,
+		BackgroundHeight:    0.14,
+		BackgroundWidth:     0.14,
+		BoldWidth:           0.0,
+		BorderAlpha:         1.0,
+		BorderWidth:         0.06,
+		CheckFlag:           7,
+		ComboInfo:           map[string]interface{}{"text_templates": []interface{}{}},
+		Content:             content,
+		CurrentWords:        wordsObj,
+		FixedHeight:         -1.0,
+		FixedWidth:          -1.0,
+		FontSize:            float64(textSize) / 2.0,
+		FontTitle:           "none",
+		Fonts:               []interface{}{},
+		GlobalAlpha:         1.0,
+		ID:                  id,
+		InnerPadding:        -1.0,
+		IsSubtitle:          isSubtitle,
+		LineFeed:            1,
+		LineMaxWidth:        0.82,
+		LineSpacing:         0.2,
+		LyricsTemplate: map[string]interface{}{
+			"resource_id": "", "resource_name": "", "panel": "",
+			"effect_id": "", "path": "",
+		},
+		MaterialID:           id,
+		MultiLanguageCurrent: "none",
+		Name:                 name,
+		OriginalSize:         []interface{}{},
+		RelevanceSegment:     []interface{}{},
+		ShadowAlpha:          0.8,
+		ShadowPoint:          map[string]interface{}{"x": 0.0, "y": 0.0},
+		SingleCharBgAlpha:    1.0,
+		SingleCharBgRoundRadius: 0.3,
+		SubTemplateID:        -1,
+		TextAlpha:            1.0,
+		TextSize:             textSize,
+		TextToAudioIDs:       []interface{}{},
+		Type:                 "text",
+		UnderlineOffset:      0.22,
+		UnderlineWidth:       0.05,
+		UseEffectDefaultColor: true,
+		Words:                wordsObj,
+	}
 }
 
 type ccMaterials struct {
@@ -1003,15 +1183,19 @@ func aspectRatioDimensions(ratio string) (int, int) {
 }
 
 // aspectRatioString 返回 CapCut canvas_config.ratio 所需的字符串形式。
-// CapCut 6.x+ 规范要求 ratio 为字符串标签（"16:9"），而非 float。
+// 真实 CapCut 8.7 草稿使用 "original" 而非 "16:9"；width/height 决定实际尺寸。
 func aspectRatioString(ratio string) string {
 	switch ratio {
-	case "9:16", "1:1", "4:5":
-		return ratio
+	case "9:16":
+		return "9:16"
+	case "1:1":
+		return "1:1"
+	case "4:5":
+		return "4:5"
 	case "4:3":
 		return "4:3"
 	default:
-		return "16:9"
+		return "original"
 	}
 }
 
@@ -1373,9 +1557,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			ID:              segID,
 			MaterialID:      vidMatID,
 			Speed:           1.0,
-			SourceTimerange: ccTimeRange{Duration: durationMicros, Start: 0},
+			SourceTimerange: &ccTimeRange{Duration: durationMicros, Start: 0},
 			TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
-			Type:            "video",
 			Visible:         true,
 			Volume:          1.0,
 		}
@@ -1489,9 +1672,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 					ID:              uuid.New().String(),
 					MaterialID:      audMatID,
 					Speed:           1.0,
-					SourceTimerange: ccTimeRange{Duration: srcDur, Start: 0},
+					SourceTimerange: &ccTimeRange{Duration: srcDur, Start: 0},
 					TargetTimerange: ccTimeRange{Duration: srcDur, Start: startMicros},
-					Type:            "audio",
 					Visible:         true,
 					Volume:          1.0,
 				}
@@ -1570,9 +1752,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 						ID:              uuid.New().String(),
 						MaterialID:      audMatID,
 						Speed:           1.0,
-						SourceTimerange: ccTimeRange{Duration: srcDur, Start: 0},
+						SourceTimerange: &ccTimeRange{Duration: srcDur, Start: 0},
 						TargetTimerange: ccTimeRange{Duration: srcDur, Start: segOffset},
-						Type:            "audio",
 						Visible:         true,
 						Volume:          1.0,
 					}
@@ -1680,9 +1861,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				ID:              uuid.New().String(),
 				MaterialID:      sfxMatID,
 				Speed:           1.0,
-				SourceTimerange: ccTimeRange{Duration: sfxSrcDur, Start: 0},
+				SourceTimerange: &ccTimeRange{Duration: sfxSrcDur, Start: 0},
 				TargetTimerange: ccTimeRange{Duration: sfxSrcDur, Start: sfxTimelineStart},
-				Type:            "audio",
 				Visible:         true,
 				Volume:          sfxVol,
 			}
@@ -1704,15 +1884,13 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			txtMatID := uuid.New().String()
 			subtitleText = sanitizeSubtitleText(subtitleText)
 
-			textMaterials = append(textMaterials, ccTextMaterial{
-				CheckFlag:  7,
-				Content:    buildTextContent(subtitleText, subCfg),
-				ID:         txtMatID,
-				IsSubtitle: true,
-				MaterialID: txtMatID, // 必须与 ID 相同，否则 segment.material_id 引用失效
-				Name:       fmt.Sprintf("shot_%03d_subtitle", shot.ShotNo),
-				Type:       "text",
-			})
+			textMaterials = append(textMaterials, newTextMaterial(
+				fmt.Sprintf("shot_%03d_subtitle", shot.ShotNo),
+				txtMatID,
+				buildTextContent(subtitleText, subCfg),
+				true,
+				subCfg.fontSize,
+			))
 
 			// text segment 伴生素材（3 个）：speed, placeholder, sound_channel
 			txtSpd := newSpeedMaterial()
@@ -1730,13 +1908,11 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				ID:              uuid.New().String(),
 				MaterialID:      txtMatID,
 				Speed:           1.0,
-				SourceTimerange: ccTimeRange{Duration: durationMicros, Start: 0},
 				TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
-				Type:            "text",
 				Visible:         true,
 				Volume:          0,
 			}
-			applyVideoSegmentDefaults(&txtSeg)
+			applyTextSegmentDefaults(&txtSeg)
 			txtSeg.ExtraMaterialRefs = append(txtSeg.ExtraMaterialRefs, txtSpd.ID, txtPh.ID, txtSc.ID)
 			textSegments = append(textSegments, txtSeg)
 		}
@@ -1752,7 +1928,6 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			ID:            uuid.New().String(),
 			IsDefaultName: true,
 			Segments:      videoSegments,
-			Type:          "video",
 		},
 	}
 	if len(audioSegments) > 0 {
@@ -1763,7 +1938,6 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			IsDefaultName: true,
 			Name:          "配音",
 			Segments:      audioSegments,
-			Type:          "audio",
 		})
 	}
 	if len(sfxSegments) > 0 {
@@ -1774,7 +1948,6 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			IsDefaultName: true,
 			Name:          "音效",
 			Segments:      sfxSegments,
-			Type:          "audio",
 		})
 	}
 	if len(textSegments) > 0 {
@@ -1785,7 +1958,6 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			IsDefaultName: true,
 			Name:          "字幕",
 			Segments:      textSegments,
-			Type:          "text",
 		})
 	}
 
@@ -1891,9 +2063,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				ID:              uuid.New().String(),
 				MaterialID:      bgmMatID,
 				Speed:           1.0,
-				SourceTimerange: ccTimeRange{Duration: bgmSrcDur, Start: 0},
+				SourceTimerange: &ccTimeRange{Duration: bgmSrcDur, Start: 0},
 				TargetTimerange: ccTimeRange{Duration: segDur, Start: startMicros},
-				Type:            "audio",
 				Visible:         true,
 				Volume:          vol,
 			}
@@ -1909,7 +2080,6 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				IsDefaultName: true,
 				Name:          "背景音乐",
 				Segments:      bgmSegments,
-				Type:          "audio",
 			})
 		}
 	}
@@ -2006,7 +2176,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			Texts:      []interface{}{},
 			Videos:     allKFGroups,
 		},
-		LastModifiedPlatform: ccPlatform{AppSource: "cc", AppVersion: "5.0.0", OS: "mac"}, // 必须为对象（真实草稿）
+		LastModifiedPlatform: ccPlatform{AppSource: "cc", AppVersion: "8.7.0", AppID: 359289, OS: "mac"}, // 必须为对象（真实草稿）
 		LyricsEffects:        []interface{}{},
 		Materials: ccMaterials{
 			AITranslates:               []interface{}{},
@@ -2066,7 +2236,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		},
 		Name:                   video.Title,
 		NewVersion:             "171.0.0",
-		Platform:               ccPlatform{AppSource: "cc", AppVersion: "5.0.0", OS: "mac"},
+		Platform:               ccPlatform{AppSource: "cc", AppVersion: "8.7.0", AppID: 359289, OS: "mac"},
 		Relationships:          []interface{}{},
 		RenderIndexTrackModeOn: true,
 		SmartAdsInfo:           ccSmartAdsInfo{},
@@ -2443,7 +2613,6 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			PictureFrom:      "none",
 			Stable:           ccStableData{},
 			SurfaceTrackings: []interface{}{},
-			Type:             "photo",
 			VideoAlgorithm: ccVideoAlgorithm{
 				Algorithms:          []interface{}{},
 				GameplayConfigs:     []interface{}{},
@@ -2464,9 +2633,8 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 				ID:              uuid.New().String(),
 				MaterialID:      vidMatID,
 				Speed:           1.0,
-				SourceTimerange: ccTimeRange{Duration: durationMicros, Start: 0},
+				SourceTimerange: &ccTimeRange{Duration: durationMicros, Start: 0},
 				TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
-				Type:            "video",
 				Visible:         true,
 				Volume:          1.0,
 			}
@@ -2548,9 +2716,8 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 					ID:              uuid.New().String(),
 					MaterialID:      audMatID,
 					Speed:           1.0,
-					SourceTimerange: ccTimeRange{Duration: srcDur, Start: 0},
+					SourceTimerange: &ccTimeRange{Duration: srcDur, Start: 0},
 					TargetTimerange: ccTimeRange{Duration: srcDur, Start: startMicros},
-					Type:            "audio",
 					Visible:         true,
 					Volume:          1.0,
 				}
@@ -2628,9 +2795,8 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 						ID:              uuid.New().String(),
 						MaterialID:      audMatID,
 						Speed:           1.0,
-						SourceTimerange: ccTimeRange{Duration: srcDur, Start: 0},
+						SourceTimerange: &ccTimeRange{Duration: srcDur, Start: 0},
 						TargetTimerange: ccTimeRange{Duration: srcDur, Start: segOffset},
-						Type:            "audio",
 						Visible:         true,
 						Volume:          1.0,
 					}
@@ -2654,15 +2820,13 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			txtMatID := uuid.New().String()
 			subtitleText = sanitizeSubtitleText(subtitleText)
 			// P3-3: 字幕素材单独放入 subtitleMaterials
-			subtitleMaterials = append(subtitleMaterials, ccTextMaterial{
-				CheckFlag:  7,
-				Content:    buildTextContent(subtitleText, subCfg),
-				ID:         txtMatID,
-				IsSubtitle: true,
-				MaterialID: txtMatID,
-				Name:       fmt.Sprintf("shot_%03d_subtitle", shot.ShotNo),
-				Type:       "text",
-			})
+			subtitleMaterials = append(subtitleMaterials, newTextMaterial(
+				fmt.Sprintf("shot_%03d_subtitle", shot.ShotNo),
+				txtMatID,
+				buildTextContent(subtitleText, subCfg),
+				true,
+				subCfg.fontSize,
+			))
 			// subtitle segment 伴生素材（3 个）
 			bsubSpd := newSpeedMaterial()
 			bsubPh := newPlaceholderInfo()
@@ -2679,13 +2843,11 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 				ID:              uuid.New().String(),
 				MaterialID:      txtMatID,
 				Speed:           1.0,
-				SourceTimerange: ccTimeRange{Duration: durationMicros, Start: 0},
 				TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
-				Type:            "text",
 				Visible:         true,
 				Volume:          0,
 			}
-			applyVideoSegmentDefaults(&bsubSeg)
+			applyTextSegmentDefaults(&bsubSeg)
 			bsubSeg.ExtraMaterialRefs = append(bsubSeg.ExtraMaterialRefs, bsubSpd.ID, bsubPh.ID, bsubSc.ID)
 			subtitleSegments = append(subtitleSegments, bsubSeg)
 		}
@@ -2702,15 +2864,13 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			annText = fmt.Sprintf("[镜%d] %s", shot.ShotNo, desc)
 		}
 		annMatID := uuid.New().String()
-		annMaterials = append(annMaterials, ccTextMaterial{
-			CheckFlag:  7,
-			Content:    buildTextContent(annText, annCfg),
-			ID:         annMatID,
-			IsSubtitle: false,
-			MaterialID: annMatID,
-			Name:       fmt.Sprintf("shot_%03d_ann", shot.ShotNo),
-			Type:       "text",
-		})
+		annMaterials = append(annMaterials, newTextMaterial(
+			fmt.Sprintf("shot_%03d_ann", shot.ShotNo),
+			annMatID,
+			buildTextContent(annText, annCfg),
+			false,
+			annCfg.fontSize,
+		))
 		// annotation segment 伴生素材（3 个）
 		bannSpd := newSpeedMaterial()
 		bannPh := newPlaceholderInfo()
@@ -2727,13 +2887,11 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			ID:              uuid.New().String(),
 			MaterialID:      annMatID,
 			Speed:           1.0,
-			SourceTimerange: ccTimeRange{Duration: durationMicros, Start: 0},
 			TargetTimerange: ccTimeRange{Duration: durationMicros, Start: startMicros},
-			Type:            "text",
 			Visible:         true,
 			Volume:          0,
 		}
-		applyVideoSegmentDefaults(&bannSeg)
+		applyTextSegmentDefaults(&bannSeg)
 		bannSeg.ExtraMaterialRefs = append(bannSeg.ExtraMaterialRefs, bannSpd.ID, bannPh.ID, bannSc.ID)
 		annSegments = append(annSegments, bannSeg)
 
@@ -2747,7 +2905,6 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			ID:            uuid.New().String(),
 			IsDefaultName: true,
 			Segments:      videoSegments,
-			Type:          "video",
 		},
 	}
 	if len(audioSegments) > 0 {
@@ -2758,7 +2915,6 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			IsDefaultName: true,
 			Name:          "配音",
 			Segments:      audioSegments,
-			Type:          "audio",
 		})
 	}
 	// P3-3: 字幕和注释分两条独立轨道，避免同一轨道同时间点多段文本发生遮挡
@@ -2770,7 +2926,6 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			IsDefaultName: true,
 			Name:          "字幕",
 			Segments:      subtitleSegments,
-			Type:          "text",
 		})
 	}
 	if len(annSegments) > 0 {
@@ -2781,7 +2936,6 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			IsDefaultName: true,
 			Name:          "注释",
 			Segments:      annSegments,
-			Type:          "text",
 		})
 	}
 
@@ -2878,7 +3032,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			Texts:      []interface{}{},
 			Videos:     []ccKeyframeGroup{},
 		},
-		LastModifiedPlatform: ccPlatform{AppSource: "cc", AppVersion: "5.0.0", OS: "mac"}, // 必须为对象（真实草稿）
+		LastModifiedPlatform: ccPlatform{AppSource: "cc", AppVersion: "8.7.0", AppID: 359289, OS: "mac"}, // 必须为对象（真实草稿）
 		LyricsEffects:        []interface{}{},
 		Materials: ccMaterials{
 			AITranslates:               []interface{}{},
@@ -2938,7 +3092,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		},
 		Name:                   video.Title + " (B剪)",
 		NewVersion:             "171.0.0",
-		Platform:               ccPlatform{AppSource: "cc", AppVersion: "5.0.0", OS: "mac"},
+		Platform:               ccPlatform{AppSource: "cc", AppVersion: "8.7.0", AppID: 359289, OS: "mac"},
 		Relationships:          []interface{}{},
 		RenderIndexTrackModeOn: true,
 		SmartAdsInfo:           ccSmartAdsInfo{},
@@ -3854,7 +4008,7 @@ func newBeatsMaterial() ccBeatsMaterial {
 		Gear:  404,
 		Mode:  404,
 		UserBeats: []interface{}{},
-		AIBeats:   ccAIBeats{BeatSpeedInfos: []interface{}{}},
+		AIBeats:   ccAIBeats{MelodyPercents: []float64{0.0}, BeatSpeedInfos: []interface{}{}},
 	}
 }
 
@@ -3906,6 +4060,32 @@ func applyAudioSegmentDefaults(seg *ccSegment) {
 	seg.EnableVideoMask = true
 	seg.Source = "segmentsourcenormal"
 	seg.TemplateScene = "default"
+}
+
+// applyTextSegmentDefaults 为 text segment 填充真实草稿所需的默认字段值。
+// text segment 的 source_timerange 为 null（调用前保持 SourceTimerange=nil 即可）；
+// enable_adjust/enable_lut/hdr_settings 均为 false/null（文本无色彩调整）。
+func applyTextSegmentDefaults(seg *ccSegment) {
+	seg.RenderTimerange = ccTimeRange{Start: 0, Duration: 0}
+	seg.EnableLut = false
+	seg.EnableAdjust = false
+	seg.EnableAdjustMask = false
+	seg.EnableColorCorrectAdjust = false
+	seg.EnableColorMatchAdjust = false
+	seg.EnableColorAdjustPro = false
+	seg.EnableColorCurves = true
+	seg.EnableHslCurves = true
+	seg.EnableColorWheels = true
+	seg.HdrSettings = nil
+	seg.UniformScale = &ccUniformScale{On: true, Value: 1.0}
+	seg.LastNonzeroVolume = 1.0
+	if seg.CommonKeyframes == nil {
+		seg.CommonKeyframes = []interface{}{}
+	}
+	seg.EnableVideoMask = true
+	seg.Source = "segmentsourcenormal"
+	seg.TemplateScene = "default"
+	// SourceTimerange 保持 nil → JSON 输出为 null（text material 无时域范围）
 }
 
 // buildPhotoMotionKeyframes 为静图分镜生成 Ken Burns 运镜关键帧组。
