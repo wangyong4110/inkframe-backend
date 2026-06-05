@@ -321,13 +321,14 @@ type ccSegment struct {
 	TemplateID            string             `json:"template_id"`
 	TemplateScene         string             `json:"template_scene"`
 	RawSegmentID          string             `json:"raw_segment_id"`
-	LyricKeyframes        []interface{}      `json:"lyric_keyframes"`     // 真实草稿为 null；保持 nil 即可
+	LyricKeyframes        interface{}        `json:"lyric_keyframes"`     // video/audio: null；text: {"common_keyframes":[],"lyric_keyframes":[]}
 	EnableVideoMask       bool               `json:"enable_video_mask"`
 }
 
 // MarshalJSON 确保:
 //   - KeyframeRefs / ExtraMaterialRefs 始终序列化为 [] 而非 null（CapCut 迭代 null 崩溃）
-//   - CommonKeyframes 始终序列化为 []（真实草稿如此）；LyricKeyframes 保持 null（真实草稿如此）
+//   - CommonKeyframes 始终序列化为 []（真实草稿如此）
+//   - LyricKeyframes: video/audio 为 null，text 为 {"common_keyframes":[],"lyric_keyframes":[]}
 //   - Clip 为 nil 时输出 "clip":null（音频轨道要求），非空时输出对象
 func (s ccSegment) MarshalJSON() ([]byte, error) {
 	kfRefs := s.KeyframeRefs
@@ -392,7 +393,7 @@ func (s ccSegment) MarshalJSON() ([]byte, error) {
 		TemplateID             string             `json:"template_id"`
 		TemplateScene          string             `json:"template_scene"`
 		RawSegmentID           string             `json:"raw_segment_id"`
-		LyricKeyframes         []interface{}      `json:"lyric_keyframes"`
+		LyricKeyframes         interface{}        `json:"lyric_keyframes"`
 		EnableVideoMask        bool               `json:"enable_video_mask"`
 	}
 	return json.Marshal(seg{
@@ -878,7 +879,8 @@ func newTextMaterial(name, id, content string, isSubtitle bool, textSize int) cc
 		LineSpacing:         0.2,
 		LyricsTemplate: map[string]interface{}{
 			"resource_id": "", "resource_name": "", "panel": "",
-			"effect_id": "", "path": "",
+			"effect_id": "", "path": "", "category_id": "",
+			"category_name": "", "request_id": "",
 		},
 		MaterialID:           id,
 		MultiLanguageCurrent: "none",
@@ -4085,6 +4087,11 @@ func applyTextSegmentDefaults(seg *ccSegment) {
 	seg.EnableVideoMask = true
 	seg.Source = "segmentsourcenormal"
 	seg.TemplateScene = "default"
+	// text segment 的 lyric_keyframes 为对象（video/audio 为 null）
+	seg.LyricKeyframes = map[string]interface{}{
+		"common_keyframes": []interface{}{},
+		"lyric_keyframes":  []interface{}{},
+	}
 	// SourceTimerange 保持 nil → JSON 输出为 null（text material 无时域范围）
 }
 
