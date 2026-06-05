@@ -1488,10 +1488,15 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		}
 
 		vidMatID := uuid.New().String()
-		vidFilename := fmt.Sprintf("%03d%s", shot.ShotNo, ext) // 数字序号命名，便于剪辑师识别
+		// 图片/视频分别放入独立子目录，便于剪辑师管理素材
+		mediaSubdir := "images/"
+		if isVideo {
+			mediaSubdir = "videos/"
+		}
+		vidFilename := mediaSubdir + fmt.Sprintf("%03d%s", shot.ShotNo, ext)
 
 		// CapCut 的 path 字段只接受本地文件路径，不能写 HTTP URL（会导致崩溃）。
-		// 下载媒体并嵌入 ZIP；path 只写文件名，CapCut 从草稿目录自动找到该文件。
+		// 下载媒体并嵌入 ZIP；path 写含子目录的相对路径，CapCut 从草稿目录自动找到该文件。
 		// 下载失败时 path 保持文件名，CapCut 显示"素材缺失"。
 		vidPath := vidFilename
 		if mediaURL != "" {
@@ -1619,10 +1624,10 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			// CapCut 根据 Material.Duration 和 SourceTimerange.Duration 解析音频播放范围；
 			// 若声称时长 > 文件实际时长，CapCut 可能拉伸音频，导致音画不同步。
 			actualAudioDur := durationMicros // fallback：读取失败时用视频段时长
-			audPath := fmt.Sprintf("%03d_voice.mp3", shot.ShotNo)
+			audPath := fmt.Sprintf("voice/%03d_voice.mp3", shot.ShotNo)
 			if data, err := s.resolveMedia(shot.AudioPath); err == nil && len(data) > 0 {
 				ext := audioExtension(shot.AudioPath)
-				audPath = fmt.Sprintf("%03d_voice%s", shot.ShotNo, ext)
+				audPath = fmt.Sprintf("voice/%03d_voice%s", shot.ShotNo, ext)
 				if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
 					totalLoadedBytes += int64(len(data))
 					mediaFiles = append(mediaFiles, mediaFile{filename: audPath, data: data})
@@ -1697,10 +1702,10 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 					}
 					audMatID := uuid.New().String()
 					actualSegDur := durationMicros // fallback：解析失败时用镜头时长
-					audPath := fmt.Sprintf("%03d_seg%02d.mp3", shot.ShotNo, seg.SeqNo)
+					audPath := fmt.Sprintf("voice/%03d_seg%02d.mp3", shot.ShotNo, seg.SeqNo)
 					if data, rdErr := s.resolveMedia(seg.AudioPath); rdErr == nil && len(data) > 0 {
 						ext := audioExtension(seg.AudioPath)
-						audPath = fmt.Sprintf("%03d_seg%02d%s", shot.ShotNo, seg.SeqNo, ext)
+						audPath = fmt.Sprintf("voice/%03d_seg%02d%s", shot.ShotNo, seg.SeqNo, ext)
 						if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
 							totalLoadedBytes += int64(len(data))
 							mediaFiles = append(mediaFiles, mediaFile{filename: audPath, data: data})
@@ -1801,10 +1806,10 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			}
 
 			seqLabel := sfxIdx + 1
-			sfxPath := fmt.Sprintf("%03d_sfx%02d.mp3", shot.ShotNo, seqLabel)
+			sfxPath := fmt.Sprintf("sfx/%03d_sfx%02d.mp3", shot.ShotNo, seqLabel)
 			if data, err := s.resolveMedia(sfxItem.URL); err == nil && len(data) > 0 {
 				ext := audioExtension(sfxItem.URL)
-				sfxPath = fmt.Sprintf("%03d_sfx%02d%s", shot.ShotNo, seqLabel, ext)
+				sfxPath = fmt.Sprintf("sfx/%03d_sfx%02d%s", shot.ShotNo, seqLabel, ext)
 				if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
 					totalLoadedBytes += int64(len(data))
 					mediaFiles = append(mediaFiles, mediaFile{filename: sfxPath, data: data})
@@ -2009,12 +2014,12 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 			bgmIndex++
 			bgmMatID := uuid.New().String()
-			bgmFilename := fmt.Sprintf("bgm_%03d.mp3", bgmIndex) // 数字序号命名
+			bgmFilename := fmt.Sprintf("bgm/bgm_%03d.mp3", bgmIndex) // 放入 bgm/ 子目录
 			bgmPath := bgmFilename
 			bgmActualDur := segDur // fallback，无法 probe 时用时间轴跨度
 			if data, err := s.resolveMedia(bs.URL); err == nil && len(data) > 0 {
 				ext := audioExtension(bs.URL)
-				bgmFilename = fmt.Sprintf("bgm_%03d%s", bgmIndex, ext)
+				bgmFilename = fmt.Sprintf("bgm/bgm_%03d%s", bgmIndex, ext)
 				bgmPath = bgmFilename
 				if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
 					totalLoadedBytes += int64(len(data))
@@ -2437,7 +2442,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		}
 	}
 
-	// 媒体文件放在草稿根目录（与剪映真实草稿格式一致），而非 media/ 子目录
+	// 媒体文件按类型放入子目录：images/（图片）、videos/（视频）、voice/（配音）、sfx/（音效）、bgm/（背景音乐）
+	// mf.filename 已含子目录前缀，CapCut 通过 path 字段中的相对路径在草稿目录内定位素材。
 	for _, mf := range mediaFiles {
 		if err := writeZip(prefix+mf.filename, mf.data); err != nil {
 			zipFile.Close()
@@ -4080,8 +4086,10 @@ func applyAudioSegmentDefaults(seg *ccSegment) {
 // applyTextSegmentDefaults 为 text segment 填充真实草稿所需的默认字段值。
 // text segment 的 source_timerange 为 null（调用前保持 SourceTimerange=nil 即可）；
 // enable_adjust/enable_lut/hdr_settings 均为 false/null（文本无色彩调整）。
+// render_index=15000：参考 pyCapCut/pyJianYingDraft，text track render_index=15000，确保字幕渲染在视频之上。
 func applyTextSegmentDefaults(seg *ccSegment) {
 	seg.RenderTimerange = ccTimeRange{Start: 0, Duration: 0}
+	seg.RenderIndex = 15000 // text track 渲染层级，高于 video(0)/audio(0)，确保字幕在最上层显示
 	seg.EnableLut = false
 	seg.EnableAdjust = false
 	seg.EnableAdjustMask = false
