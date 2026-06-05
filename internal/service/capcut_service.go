@@ -1521,6 +1521,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		}
 		videoMaterials = append(videoMaterials, ccVideoMaterial{
 			AIGCType:     "none",
+			BeautyFaceAutoPresetInfos: []interface{}{},
+			BeautyFacePresetInfos:     []interface{}{},
 			CategoryName: "local",
 			CheckFlag:    62978047,
 			Crop:         defaultCrop,
@@ -1929,6 +1931,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			Flag:          0,
 			ID:            uuid.New().String(),
 			IsDefaultName: true,
+			Type:          "video",
 			Segments:      videoSegments,
 		},
 	}
@@ -1939,6 +1942,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			ID:            uuid.New().String(),
 			IsDefaultName: true,
 			Name:          "配音",
+			Type:          "audio",
 			Segments:      audioSegments,
 		})
 	}
@@ -1949,6 +1953,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			ID:            uuid.New().String(),
 			IsDefaultName: true,
 			Name:          "音效",
+			Type:          "audio",
 			Segments:      sfxSegments,
 		})
 	}
@@ -1959,6 +1964,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			ID:            uuid.New().String(),
 			IsDefaultName: true,
 			Name:          "字幕",
+			Type:          "text",
 			Segments:      textSegments,
 		})
 	}
@@ -2081,6 +2087,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				ID:            uuid.New().String(),
 				IsDefaultName: true,
 				Name:          "背景音乐",
+				Type:          "audio",
 				Segments:      bgmSegments,
 			})
 		}
@@ -2595,6 +2602,8 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 
 		videoMaterials = append(videoMaterials, ccVideoMaterial{
 			AIGCType:     "none",
+			BeautyFaceAutoPresetInfos: []interface{}{},
+			BeautyFacePresetInfos:     []interface{}{},
 			CategoryName: "local",
 			CheckFlag:    62978047,
 			Crop:         defaultCrop,
@@ -2906,6 +2915,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			Flag:          0,
 			ID:            uuid.New().String(),
 			IsDefaultName: true,
+			Type:          "video",
 			Segments:      videoSegments,
 		},
 	}
@@ -2916,6 +2926,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			ID:            uuid.New().String(),
 			IsDefaultName: true,
 			Name:          "配音",
+			Type:          "audio",
 			Segments:      audioSegments,
 		})
 	}
@@ -2927,6 +2938,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			ID:            uuid.New().String(),
 			IsDefaultName: true,
 			Name:          "字幕",
+			Type:          "text",
 			Segments:      subtitleSegments,
 		})
 	}
@@ -2937,6 +2949,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 			ID:            uuid.New().String(),
 			IsDefaultName: true,
 			Name:          "注释",
+			Type:          "text",
 			Segments:      annSegments,
 		})
 	}
