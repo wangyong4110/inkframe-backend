@@ -1334,6 +1334,7 @@ func resolveStyleDesc(style string) string {
 	m := map[string]string{
 		"anime":             "日系动漫插画",
 		"realistic":         "写实摄影",
+		"real_person":       "真实人像摄影",
 		"ink_painting":      "水墨中国风插画",
 		"cyberpunk":         "赛博朋克风格插画",
 		"xianxia_style":     "古典仙侠国风插画",
@@ -1361,7 +1362,7 @@ func resolveStyleDesc(style string) string {
 // 返回值："realistic" / "anime" / "classic_illustration" / "dark_stylized" / "pixel" / "render_3d" / "" (未知)
 func resolveStyleCategory(styleID string) string {
 	switch styleID {
-	case "realistic", "game_concept":
+	case "realistic", "real_person", "game_concept":
 		return "realistic"
 	case "anime", "chinese_animation", "ukiyo_e":
 		return "anime"
