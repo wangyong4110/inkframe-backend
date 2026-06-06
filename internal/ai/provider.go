@@ -229,7 +229,6 @@ func NewGenerateRequestBuilder() *GenerateRequestBuilder {
 	return &GenerateRequestBuilder{
 		req: &GenerateRequest{
 			Temperature: 0.7,
-			MaxTokens:   4096,
 			TopP:        0.9,
 			TopK:        40,
 		},

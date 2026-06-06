@@ -75,7 +75,7 @@ func (s *ForeshadowCRUDService) AIExtractFromNovel(tenantID, novelID uint) ([]*m
 	}
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_foreshadows", prompt, "",
-		StoryboardOverrides{MaxTokens: 4096})
+		StoryboardOverrides{})
 	if err != nil {
 		return nil, fmt.Errorf("AI extraction: %w", err)
 	}

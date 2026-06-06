@@ -198,7 +198,7 @@ func (s *SkillService) GenerateSkills(tenantID, novelID uint) (result []*model.S
 	)
 
 	aiResult, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_items", prompt, "",
-		StoryboardOverrides{MaxTokens: 4096})
+		StoryboardOverrides{})
 	if err != nil {
 		return nil, fmt.Errorf("AI generation failed: %w", err)
 	}

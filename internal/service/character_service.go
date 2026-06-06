@@ -317,7 +317,7 @@ func (s *CharacterService) generateOneCharacterProfile(
 	}
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "generate_character_profile", prompt, "",
-		StoryboardOverrides{MaxTokens: 8192})
+		StoryboardOverrides{})
 	if err != nil {
 		logger.Printf("[CharacterService] generateOneCharacterProfile: AI call failed for %q: %v", entry.Name, err)
 		return nil, fmt.Errorf("AI call: %w", err)
@@ -815,7 +815,7 @@ func (s *CharacterService) GenerateProfile(tenantID uint, novelID uint, descript
   "visual_prompt": "专业角色造型描述，最少150字，按顺序覆盖：[1]性别体型 [2]面部骨骼 [3]眼睛 [4]眉毛眼妆 [5]鼻唇 [6]肤色肌感 [7]发型 [8]服装逐层 [9]鞋履 [10]配饰道具 [11]体态 [12]色彩叙事（主色/辅色/点缀色+象征含义）[13]整体廓形（1-3词）[14]标志性造型元素（具体描述）[15]造型逻辑（2句话说明造型与角色内心的关联）。禁止出现画风、质量标签或渲染词汇。"
 }`, description)
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "character_profile", prompt, "",
-		StoryboardOverrides{MaxTokens: 4096})
+		StoryboardOverrides{})
 	if err != nil {
 		return nil, err
 	}
@@ -1053,7 +1053,7 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 	}
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_minor_characters", minorCharsPrompt, "",
-		StoryboardOverrides{MaxTokens: 4096})
+		StoryboardOverrides{})
 	if err != nil {
 		return nil, fmt.Errorf("AI extract minor chars: %w", err)
 	}
@@ -1852,7 +1852,7 @@ Appearance change: %s
 
 English visual prompt:`, basePrompt, lookDesc)
 	result, err := s.aiService.GenerateWithProvider(tenantID, char.NovelID, "character_profile", prompt, "",
-		StoryboardOverrides{MaxTokens: 512})
+		StoryboardOverrides{})
 	if err != nil {
 		return "", err
 	}

@@ -3074,7 +3074,7 @@ func (s *ChapterService) updateNextChapterPreview(tenantID uint, chapter *model.
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	preview, aiErr := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID,
-		"next_chapter_preview", prompt, "", StoryboardOverrides{MaxTokens: 400})
+		"next_chapter_preview", prompt, "", StoryboardOverrides{})
 	if aiErr != nil {
 		logger.Printf("[ChapterService] updateNextChapterPreview ch%d→ch%d: %v", chapter.ChapterNo, nextNo, aiErr)
 		return
@@ -3117,7 +3117,7 @@ func (s *ChapterService) generateReaderExpectations(tenantID uint, chapter *mode
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "reader_expectation", prompt, "", StoryboardOverrides{MaxTokens: 512})
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "reader_expectation", prompt, "", StoryboardOverrides{})
 	if err != nil {
 		logger.Printf("[ChapterService] generateReaderExpectations ch%d: AI error: %v", chapter.ChapterNo, err)
 		return ""
@@ -3166,7 +3166,7 @@ func (s *ChapterService) generateChapterEndState(tenantID uint, chapter *model.C
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "chapter_end_state", prompt, "", StoryboardOverrides{MaxTokens: 1024})
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "chapter_end_state", prompt, "", StoryboardOverrides{})
 	if err != nil {
 		logger.Printf("[generateChapterEndState] ch%d AI error: %v", chapter.ChapterNo, err)
 		return ""
@@ -3222,7 +3222,7 @@ func (s *ChapterService) checkAndPatchMissingPlotPoints(tenantID uint, chapter *
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "chapter_plot_compliance", prompt, "", StoryboardOverrides{MaxTokens: 4096})
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "chapter_plot_compliance", prompt, "", StoryboardOverrides{})
 	if err != nil {
 		logger.Printf("[checkAndPatchMissingPlotPoints] ch%d AI error: %v", chapter.ChapterNo, err)
 		return false

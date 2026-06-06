@@ -778,7 +778,6 @@ func (s *AIService) GenerateWithVision(prompt string, imageURLs []string) (strin
 				ImageURLs: imageURLs,
 			},
 		},
-		MaxTokens:   512,
 		Temperature: 0.1,
 	}
 

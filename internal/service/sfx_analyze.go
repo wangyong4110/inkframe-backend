@@ -119,7 +119,7 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 	// TimeoutSeconds=30：正常请求 10-15s 完成，30s 为宽裕上限。
 	callResult := func() (string, error) {
 		return s.aiSvc.GenerateWithProvider(tenantID, 0, "sfx_analyze", prompt, "",
-			StoryboardOverrides{TimeoutSeconds: 30, MaxTokens: 3000})
+			StoryboardOverrides{TimeoutSeconds: 30})
 	}
 	result, err := callResult()
 	if err != nil {

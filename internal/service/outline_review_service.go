@@ -584,7 +584,7 @@ func (s *OutlineReviewService) runBatchSynthesisAI(ctx context.Context, tenantID
 		return nil, fmt.Errorf("render template: %w", err)
 	}
 
-	resp, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "chapter_review", prompt, "", StoryboardOverrides{MaxTokens: 4096})
+	resp, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "chapter_review", prompt, "", StoryboardOverrides{})
 	if err != nil {
 		return nil, err
 	}
@@ -866,7 +866,7 @@ func (s *OutlineReviewService) runAIReview(ctx context.Context, tenantID uint, c
 		return nil, fmt.Errorf("render template: %w", err)
 	}
 
-	resp, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "chapter_review", prompt, "", StoryboardOverrides{MaxTokens: 2048})
+	resp, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "chapter_review", prompt, "", StoryboardOverrides{})
 	if err != nil {
 		return nil, err
 	}

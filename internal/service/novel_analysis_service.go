@@ -461,7 +461,7 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 						})
 						if pErr == nil {
 							result, aErr := s.aiService.GenerateWithProvider(tenantID, novel.ID, "extract_characters", extractPrompt, "",
-								StoryboardOverrides{MaxTokens: 8192})
+								StoryboardOverrides{})
 							if aErr == nil {
 								chars, pErr2 := parseCharacterJSONResult(result)
 								if pErr2 == nil {
@@ -752,7 +752,7 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 	}
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "extract_characters", extractCharsPrompt, "",
-		StoryboardOverrides{MaxTokens: 8192})
+		StoryboardOverrides{})
 	if err != nil {
 		return fmt.Errorf("AI extract_characters: %w", err)
 	}
@@ -988,13 +988,9 @@ func (s *NovelAnalysisService) stepGenerateOutline(
 		chapterNum = novel.TargetChapters // 0 表示让 AI 自决
 	}
 
-	// 大纲 JSON 对 30 章非常庞大（每章含摘要/剧情点/钩子等），
-	// 默认 4096 token 会截断导致 JSON 解析失败；强制给定最低 8192 token。
-	const minOutlineTokens = 8192
 	req := &GenerateOutlineRequest{
 		NovelID:    novel.ID,
 		ChapterNum: chapterNum,
-		MaxTokens:  minOutlineTokens,
 	}
 	outline, err := s.novelService.GenerateOutline(tenantID, req)
 	if err != nil {

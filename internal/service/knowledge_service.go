@@ -293,7 +293,6 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 
 	req := ai.NewGenerateRequestBuilder().
 		UserMessage(prompt).
-		MaxTokens(2000).
 		Temperature(0.3).
 		Build()
 

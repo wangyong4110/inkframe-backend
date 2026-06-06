@@ -610,7 +610,7 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 	}
 
 	raw, err := s.aiSvc.GenerateWithProvider(novel.TenantID, novel.ID, "chapter_review", prompt, provider,
-		StoryboardOverrides{MaxTokens: 8192})
+		StoryboardOverrides{})
 	if err != nil {
 		return nil, fmt.Errorf("AI chapter review failed: %w", err)
 	}

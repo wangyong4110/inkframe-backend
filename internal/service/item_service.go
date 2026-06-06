@@ -335,7 +335,7 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 	}
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_items", itemsPrompt, "",
-		StoryboardOverrides{MaxTokens: 8192})
+		StoryboardOverrides{})
 	if err != nil {
 		return nil, fmt.Errorf("AI extraction failed: %w", err)
 	}
@@ -487,7 +487,7 @@ func (s *ItemService) extractItemsFromContent(
 	}
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_chapter_items", chItemsPrompt, "",
-		StoryboardOverrides{MaxTokens: 8192})
+		StoryboardOverrides{})
 	if err != nil {
 		return nil, err
 	}
@@ -695,7 +695,7 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint) (
 	}
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_chapter_items", chItemsPrompt2, "",
-		StoryboardOverrides{MaxTokens: 8192})
+		StoryboardOverrides{})
 	if err != nil {
 		return nil, fmt.Errorf("AI extract chapter items: %w", err)
 	}
