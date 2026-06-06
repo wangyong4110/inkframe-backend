@@ -208,6 +208,10 @@ func (s *ModelService) SeedAllProviders() {
 	}
 	for _, p := range providers {
 		s.seedProviderModel(p)
+		// 补全租户私有非 LLM 供应商的模型（可能是用户之前新建时漏复制的）
+		if p.TenantID != 0 && p.Type != "llm" && p.Type != "embedding" {
+			s.copySystemModels(p)
+		}
 	}
 	// One-time fix: activate any manually-created models that have is_active=true
 	// but is_available=false (created before the bug was fixed).
@@ -220,6 +224,38 @@ func (s *ModelService) SeedAllProviders() {
 			m.IsAvailable = true
 			_ = s.modelRepo.Update(m)
 		}
+	}
+}
+
+// copySystemModels copies active system-level (tenant_id=0) models to a
+// tenant-specific provider of the same name. Called when a user creates a
+// non-LLM provider so that voice/image/video models are immediately available.
+func (s *ModelService) copySystemModels(target *model.ModelProvider) {
+	if target.TenantID == 0 {
+		return // system provider; models are seeded globally
+	}
+	sysProv, err := s.providerRepo.GetSystemProvider(target.Name)
+	if err != nil {
+		return // no system provider with this name
+	}
+	sysModels, err := s.modelRepo.List(&sysProv.ID, 0)
+	if err != nil || len(sysModels) == 0 {
+		return
+	}
+	for _, m := range sysModels {
+		if !m.IsActive || !m.IsAvailable {
+			continue
+		}
+		newM := &model.AIModel{
+			ProviderID:    target.ID,
+			Name:          m.Name,
+			DisplayName:   m.DisplayName,
+			SuitableTasks: m.SuitableTasks,
+			Quality:       m.Quality,
+			IsActive:      true,
+			IsAvailable:   true,
+		}
+		_ = s.modelRepo.FirstOrCreate(newM)
 	}
 }
 
@@ -242,6 +278,11 @@ func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, ten
 		return nil, err
 	}
 	s.seedProviderModel(provider)
+	// 非 LLM 供应商（语音/图像/视频/音效）：从同名系统供应商复制音色/模型记录，
+	// 确保租户私有供应商创建后立即可在角色配音等界面选到音色。
+	if provider.Type != "llm" && provider.Type != "embedding" {
+		s.copySystemModels(provider)
+	}
 	return provider, nil
 }
 
