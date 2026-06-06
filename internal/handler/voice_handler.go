@@ -128,7 +128,7 @@ func (h *VideoHandler) GenerateSegmentVoice(c *gin.Context) {
 	go func(taskID string, sID uint, narrationVoice string) {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Printf("[VideoHandler] GenerateSegmentVoice task %s panic: %v", taskID, r)
+				logger.Errorf("[VideoHandler] GenerateSegmentVoice task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -597,7 +597,7 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 	go func(taskID string, shots []*model.StoryboardShot, narrationVoice string, subtitleEnabled bool) {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Printf("[VideoHandler] BatchGenerateVoice task %s panic: %v", taskID, r)
+				logger.Errorf("[VideoHandler] BatchGenerateVoice task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -619,7 +619,7 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 				go func(s *model.StoryboardShot) {
 					defer wg.Done()
 					if err := h.videoService.GenerateShotAudio(s, tenantID, narrationVoice); err != nil {
-						logger.Printf("[VideoHandler] BatchGenerateVoice task %s shot %d failed: %v", taskID, s.ShotNo, err)
+						logger.Errorf("[VideoHandler] BatchGenerateVoice task %s shot %d failed: %v", taskID, s.ShotNo, err)
 					}
 					done := int(doneCount.Add(1))
 					h.taskSvc.UpdateProgress(taskID, done*100/total) //nolint:errcheck
@@ -877,7 +877,7 @@ func (h *VideoHandler) AnalyzeBGMSegments(c *gin.Context) {
 	go func(taskID string, userPrompt string) {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Printf("[VideoHandler] AnalyzeBGMSegments task %s panic: %v", taskID, r)
+				logger.Errorf("[VideoHandler] AnalyzeBGMSegments task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -885,7 +885,7 @@ func (h *VideoHandler) AnalyzeBGMSegments(c *gin.Context) {
 		ctx := context.Background()
 		segs, err := h.bgmSvc.AnalyzeBGMForVideo(ctx, shots, h.bgmRepo, uint(videoID), tenantID, userPrompt)
 		if err != nil {
-			logger.Printf("[VideoHandler] AnalyzeBGMSegments task %s failed: %v", taskID, err)
+			logger.Errorf("[VideoHandler] AnalyzeBGMSegments task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -940,7 +940,7 @@ func (h *VideoHandler) GenerateBGM(c *gin.Context) {
 	go func(taskID string, userPrompt string) {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Printf("[VideoHandler] GenerateBGM task %s panic: %v", taskID, r)
+				logger.Errorf("[VideoHandler] GenerateBGM task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -949,7 +949,7 @@ func (h *VideoHandler) GenerateBGM(c *gin.Context) {
 		ctx := context.Background()
 		segs, err := h.bgmSvc.GenerateBGMSegments(ctx, shots, h.bgmRepo, uint(videoID), tenantID, userPrompt, progressFn)
 		if err != nil {
-			logger.Printf("[VideoHandler] GenerateBGM task %s failed: %v", taskID, err)
+			logger.Errorf("[VideoHandler] GenerateBGM task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}

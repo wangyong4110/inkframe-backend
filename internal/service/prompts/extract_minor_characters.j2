@@ -22,8 +22,8 @@
    [3] SKIN: skin tone and finish, any notable marks
    [4] HAIR: color, texture, length, styling
    [5] OUTFIT: garment type, silhouette, fabric, color
-   [6] POSTURE: default stance or habitual gesture{% else %}5. visual_prompt（英文）：用于图像生成的角色造型描述，80–150词，必须用英文输出。按顺序覆盖以下6个维度，禁止添加任何画风、质量或渲染词汇：
-   [1] 性别与体型：性别、年龄感、身高印象、整体体型
+   [6] POSTURE: default stance or habitual gesture{% else %}5. visual_prompt（中文）：用于图像生成的角色造型描述，80–150字，必须用中文输出。按顺序覆盖以下6个维度，禁止添加任何画风、质量或渲染词汇：
+   [1] 性别体型：性别、年龄感、身高印象、整体体型
    [2] 面部与眼睛：脸型、眼型、瞳色、标志性面部特征
    [3] 肤色：肤色色调与质感、特殊标记
    [4] 发型：发色、发质、发长、造型
@@ -49,6 +49,6 @@
       "patterns": ["爱用敬语"],
       "speech_habits": "客气圆滑"
     },
-    "visual_prompt": "middle-aged male merchant, slightly overweight build, approximately 170cm. Round face with chubby cheeks, small shrewd eyes under thin arched brows, faint smile lines at corners. Warm tan skin, slightly oily sheen. Short black hair, neatly combed flat with minimal styling. Plain dark grey merchant robe with wide sleeves, worn brown leather belt, simple cloth shoes. Upright but relaxed posture, hands often clasped before him in a deferential gesture."
+    "visual_prompt": "{% if PromptLanguage == "en" %}middle-aged male merchant, slightly overweight build, approximately 170cm. Round face with chubby cheeks, small shrewd eyes under thin arched brows, faint smile lines at corners. Warm tan skin, slightly oily sheen. Short black hair, neatly combed flat with minimal styling. Plain dark grey merchant robe with wide sleeves, worn brown leather belt, simple cloth shoes. Upright but relaxed posture, hands often clasped before him in a deferential gesture.{% else %}中年男性，身材微胖，身高约170厘米。圆脸，双颊丰腴，细小精明的眼睛，浅弧形眉，唇角有浅笑纹。温暖小麦肤色，略有光泽。黑发短而整洁，梳平无造型。灰色宽袖商人长袍，陈旧棕色皮带，布鞋。站姿端正而随和，双手习惯性叠于腹前作揖状。{% endif %}"
   }
 ]

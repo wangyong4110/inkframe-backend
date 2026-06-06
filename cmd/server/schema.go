@@ -131,7 +131,7 @@ func ensureCriticalColumns(db *gorm.DB) {
 		}
 		sql := "ALTER TABLE `" + a.table + "` ADD COLUMN `" + a.col + "` " + a.def
 		if err := db.Exec(sql).Error; err != nil {
-			logger.Warnf("ensureCriticalColumns: %s.%s: %v", a.table, a.col, err)
+			logger.Errorf("ensureCriticalColumns: %s.%s: %v", a.table, a.col, err)
 		} else {
 			logger.Infof("ensureCriticalColumns: added column %s.%s", a.table, a.col)
 		}
@@ -170,7 +170,7 @@ func dropLegacyCharacterColumns(db *gorm.DB) {
 			continue
 		}
 		if err := db.Exec("ALTER TABLE `" + d.table + "` DROP COLUMN `" + d.col + "`").Error; err != nil {
-			logger.Printf("[dropLegacyCharacterColumns] drop %s.%s: %v", d.table, d.col, err)
+			logger.Errorf("[dropLegacyCharacterColumns] drop %s.%s: %v", d.table, d.col, err)
 		}
 	}
 }
@@ -313,15 +313,15 @@ func autoMigrate(db *gorm.DB) error {
 
 	// 数据迁移：将历史 status='published' 的章节修正为 is_published=true, status='completed'
 	if err := db.Exec(`UPDATE ink_chapter SET is_published = 1, status = 'completed' WHERE status = 'published'`).Error; err != nil {
-		logger.Warnf("autoMigrate: chapter status migration failed: %v", err)
+		logger.Errorf("autoMigrate: chapter status migration failed: %v", err)
 	}
 
 	// 数据迁移（H-1）：将 style_prompt 中误存的大纲 JSON 迁移到 outline 字段
 	if err := db.Exec(`UPDATE ink_novel SET outline = style_prompt WHERE style_prompt LIKE '{"chapters":%' AND (outline = '' OR outline IS NULL)`).Error; err != nil {
-		logger.Warnf("autoMigrate: outline backfill failed: %v", err)
+		logger.Errorf("autoMigrate: outline backfill failed: %v", err)
 	}
 	if err := db.Exec(`UPDATE ink_novel SET style_prompt = '' WHERE style_prompt LIKE '{"chapters":%'`).Error; err != nil {
-		logger.Warnf("autoMigrate: style_prompt cleanup failed: %v", err)
+		logger.Errorf("autoMigrate: style_prompt cleanup failed: %v", err)
 	}
 
 	// 数据迁移（2026-05-15-v2）：将 Character 旧字段合并到 description
@@ -341,7 +341,7 @@ func autoMigrate(db *gorm.DB) error {
 				OR background IS NOT NULL AND background != ''
 				OR character_arc IS NOT NULL AND character_arc != ''
 				OR dialogue_style IS NOT NULL AND dialogue_style != '')`).Error; err != nil {
-			logger.Warnf("autoMigrate: character description migration failed: %v", err)
+			logger.Errorf("autoMigrate: character description migration failed: %v", err)
 		}
 	}
 
@@ -355,7 +355,7 @@ func autoMigrate(db *gorm.DB) error {
 			IF(description != '' AND description IS NOT NULL, description, NULL),
 			IF(appearance != '' AND appearance IS NOT NULL, appearance, NULL)
 		) WHERE (category IS NOT NULL AND category != '') OR (appearance IS NOT NULL AND appearance != '')`).Error; err != nil {
-			logger.Warnf("autoMigrate: item description migration failed: %v", err)
+			logger.Errorf("autoMigrate: item description migration failed: %v", err)
 		}
 	}
 
@@ -368,7 +368,7 @@ func autoMigrate(db *gorm.DB) error {
 		  AND m.name IN ('seed-tts-2.0', 'seed-tts-1.0')
 		  AND m.deleted_at IS NULL
 		  AND m.suitable_tasks LIKE '%voice_gen%'`).Error; err != nil {
-		logger.Warnf("autoMigrate: doubao-speech task fix failed: %v", err)
+		logger.Errorf("autoMigrate: doubao-speech task fix failed: %v", err)
 	}
 
 	// 数据迁移（2026-06-06-v6）：doubao-speech V3 中错误添加的 _moon_bigtts 音色
@@ -379,7 +379,7 @@ func autoMigrate(db *gorm.DB) error {
 		WHERE p.name = 'doubao-speech'
 		  AND m.name LIKE '%_moon_bigtts'
 		  AND m.deleted_at IS NULL`).Error; err != nil {
-		logger.Warnf("autoMigrate: doubao-speech moon_bigtts disable failed: %v", err)
+		logger.Errorf("autoMigrate: doubao-speech moon_bigtts disable failed: %v", err)
 	}
 
 	// 数据迁移（2026-06-06-v6）：修正 doubao-speech-v1 中 阳光青年 2.0 音色显示名称错误
@@ -391,7 +391,7 @@ func autoMigrate(db *gorm.DB) error {
 		  AND m.name = 'zh_male_yangguangqingnian_uranus_bigtts'
 		  AND m.display_name = '天才童声 2.0'
 		  AND m.deleted_at IS NULL`).Error; err != nil {
-		logger.Warnf("autoMigrate: doubao-speech-v1 yangguang display_name fix failed: %v", err)
+		logger.Errorf("autoMigrate: doubao-speech-v1 yangguang display_name fix failed: %v", err)
 	}
 
 	// 迁移成功后写入新版本号（UPSERT）
@@ -407,7 +407,7 @@ func runSchemaCleanup(db *gorm.DB) {
 		JOIN ink_novel n ON c.novel_id = n.id
 		SET c.tenant_id = n.tenant_id
 		WHERE c.tenant_id = 0`).Error; err != nil {
-		logger.Printf("[runSchemaCleanup] backfill chapter tenant_id: %v", err)
+		logger.Errorf("[runSchemaCleanup] backfill chapter tenant_id: %v", err)
 	}
 
 	// ── 2. 回填 Character.tenant_id
@@ -415,7 +415,7 @@ func runSchemaCleanup(db *gorm.DB) {
 		JOIN ink_novel n ON c.novel_id = n.id
 		SET c.tenant_id = n.tenant_id
 		WHERE c.tenant_id = 0`).Error; err != nil {
-		logger.Printf("[runSchemaCleanup] backfill character tenant_id: %v", err)
+		logger.Errorf("[runSchemaCleanup] backfill character tenant_id: %v", err)
 	}
 
 	// ── 3. 迁移视频配置：ink_novel → ink_novel_video_config（INSERT IGNORE 幂等）
@@ -445,7 +445,7 @@ func runSchemaCleanup(db *gorm.DB) {
 			       NOW(), NOW()
 			FROM ink_novel n
 			WHERE NOT EXISTS (SELECT 1 FROM ink_novel_video_config vc WHERE vc.novel_id = n.id)`).Error; err != nil {
-			logger.Printf("[runSchemaCleanup] migrate video config: %v", err)
+			logger.Errorf("[runSchemaCleanup] migrate video config: %v", err)
 		}
 	}
 
@@ -540,7 +540,7 @@ func runSchemaCleanup(db *gorm.DB) {
 		// so no external input can reach this code path.
 		sql := "ALTER TABLE `" + d.table + "` DROP COLUMN `" + d.col + "`"
 		if err := db.Exec(sql).Error; err != nil {
-			logger.Printf("[runSchemaCleanup] drop %s.%s: %v", d.table, d.col, err)
+			logger.Errorf("[runSchemaCleanup] drop %s.%s: %v", d.table, d.col, err)
 		}
 	}
 }

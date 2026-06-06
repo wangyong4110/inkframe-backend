@@ -96,7 +96,7 @@ func (s *ForeshadowCRUDService) AIExtractFromNovel(tenantID, novelID uint) ([]*m
 	if err := json.Unmarshal([]byte(raw), &wrapped); err == nil && len(wrapped.Foreshadows) > 0 {
 		items = wrapped.Foreshadows
 	} else if err2 := json.Unmarshal([]byte(raw), &items); err2 != nil {
-		logger.Printf("ForeshadowCRUDService.AIExtractFromNovel: parse error: %v, raw: %.200s", err, result)
+		logger.Errorf("ForeshadowCRUDService.AIExtractFromNovel: parse error: %v, raw: %.200s", err, result)
 		return nil, fmt.Errorf("failed to parse AI response")
 	}
 
@@ -134,7 +134,7 @@ func (s *ForeshadowCRUDService) AIExtractFromNovel(tenantID, novelID uint) ([]*m
 			}
 		}
 		if err := s.repo.Create(f); err != nil {
-			logger.Printf("ForeshadowCRUDService.AIExtractFromNovel: create %q: %v", f.Title, err)
+			logger.Errorf("ForeshadowCRUDService.AIExtractFromNovel: create %q: %v", f.Title, err)
 			continue
 		}
 		existingTitles[item.Title] = struct{}{} // 防止同批次重名

@@ -178,7 +178,7 @@ func (s *AuthService) Register(req *RegisterRequest) (interface{}, error) {
 		if s.requireVerification && existingUser.EmailVerifiedAt == nil {
 			go func() {
 				if _, err := s.SendEmailVerification(existingUser.ID); err != nil {
-					logger.Printf("[Register] resend verification for unverified user %d: %v", existingUser.ID, err)
+					logger.Errorf("[Register] resend verification for unverified user %d: %v", existingUser.ID, err)
 				}
 			}()
 			return &RegisterResponse{
@@ -252,7 +252,7 @@ func (s *AuthService) Register(req *RegisterRequest) (interface{}, error) {
 		// 异步发送验证邮件，不阻塞注册响应
 		go func() {
 			if _, err := s.SendEmailVerification(user.ID); err != nil {
-				logger.Printf("[Register] send verification email failed for user %d: %v", user.ID, err)
+				logger.Errorf("[Register] send verification email failed for user %d: %v", user.ID, err)
 			}
 		}()
 		return &RegisterResponse{
@@ -313,7 +313,7 @@ func (s *AuthService) Login(req *LoginRequest) (*AuthResponse, error) {
 	}
 
 	if err := s.userRepo.UpdateLastLogin(user.ID); err != nil {
-		logger.Printf("[AuthService] failed to update last login for user %d: %v", user.ID, err)
+		logger.Errorf("[AuthService] failed to update last login for user %d: %v", user.ID, err)
 	}
 
 	return s.signToken(user.ID, tu.TenantID, tu.Role)
@@ -553,7 +553,7 @@ func (s *AuthService) ChangePassword(userID uint, oldPwd, newPwd string) error {
 	// If Redis fails, return an error so the caller knows old sessions may still be valid,
 	// but the password change itself is not lost.
 	if err := s.invalidateUserSessions(userID); err != nil {
-		logger.Printf("[AuthService] invalidateUserSessions failed for user %d: %v (old sessions may still be valid)", userID, err)
+		logger.Errorf("[AuthService] invalidateUserSessions failed for user %d: %v (old sessions may still be valid)", userID, err)
 		return fmt.Errorf("password changed but session invalidation failed, please log out manually: %w", err)
 	}
 	return nil
@@ -662,7 +662,7 @@ func (s *AuthService) LoginWithPhone(phone, code string) (*AuthResponse, error) 
 	}
 
 	if err := s.userRepo.UpdateLastLogin(user.ID); err != nil {
-		logger.Printf("[AuthService] failed to update last login for user %d: %v", user.ID, err)
+		logger.Errorf("[AuthService] failed to update last login for user %d: %v", user.ID, err)
 	}
 	return s.signToken(user.ID, tu.TenantID, tu.Role)
 }
@@ -681,7 +681,7 @@ func (s *AuthService) LoginWithOAuth(info *OAuthUserInfo) (*AuthResponse, error)
 			return nil, errors.New("no tenant associated with this account")
 		}
 		if err := s.userRepo.UpdateLastLogin(user.ID); err != nil {
-			logger.Printf("[AuthService] failed to update last login for user %d: %v", user.ID, err)
+			logger.Errorf("[AuthService] failed to update last login for user %d: %v", user.ID, err)
 		}
 		return s.signToken(user.ID, tu.TenantID, tu.Role)
 	}
@@ -833,7 +833,7 @@ func (s *AuthService) RequestPasswordReset(email string) (token string, err erro
 		email, subj, bd := user.Email, subject, body
 		go func() {
 			if err := s.emailSender.SendEmail(email, subj, bd); err != nil {
-				logger.Printf("RequestPasswordReset: send email failed: %v", err)
+				logger.Errorf("RequestPasswordReset: send email failed: %v", err)
 			}
 		}()
 	}
@@ -861,7 +861,7 @@ func (s *AuthService) ResetPassword(token, newPassword string) error {
 	}
 	// Fix 9: Synchronous call with non-fatal error logging.
 	if err := s.invalidateUserSessions(t.UserID); err != nil {
-		logger.Printf("[AuthService] invalidateUserSessions failed for user %d: %v (old sessions may still be valid)", t.UserID, err)
+		logger.Errorf("[AuthService] invalidateUserSessions failed for user %d: %v (old sessions may still be valid)", t.UserID, err)
 	}
 	return nil
 }
@@ -919,7 +919,7 @@ func (s *AuthService) SendEmailVerification(userID uint) (token string, err erro
 	}
 	user, err := s.userRepo.GetByID(userID)
 	if err != nil {
-		logger.Printf("SendEmailVerification: get user %d failed: %v", userID, err)
+		logger.Errorf("SendEmailVerification: get user %d failed: %v", userID, err)
 	} else {
 		baseURL := s.appBaseURL
 		if baseURL == "" {
@@ -945,7 +945,7 @@ func (s *AuthService) SendEmailVerification(userID uint) (token string, err erro
 			email, subj, bd := user.Email, subject, body
 			go func() {
 				if err := s.emailSender.SendEmail(email, subj, bd); err != nil {
-					logger.Printf("SendEmailVerification: send email failed: %v", err)
+					logger.Errorf("SendEmailVerification: send email failed: %v", err)
 				}
 			}()
 		}
@@ -978,7 +978,7 @@ func (s *AuthService) ResendEmailVerification(email string) error {
 	uid := user.ID
 	go func() {
 		if _, err := s.SendEmailVerification(uid); err != nil {
-			logger.Printf("[ResendEmailVerification] failed for user %d: %v", uid, err)
+			logger.Errorf("[ResendEmailVerification] failed for user %d: %v", uid, err)
 		}
 	}()
 	return nil

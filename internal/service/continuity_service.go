@@ -108,7 +108,7 @@ func (s *ContinuityService) ValidateChapter(novelID, chapterID, tenantID uint, c
 			Passed:     !report.HasIssues,
 		}
 		if saveErr := s.reportRepo.Create(rec); saveErr != nil {
-			logger.Printf("ContinuityService: save report: %v", saveErr)
+			logger.Errorf("ContinuityService: save report: %v", saveErr)
 		}
 	}
 

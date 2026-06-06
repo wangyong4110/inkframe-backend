@@ -207,7 +207,7 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	// 清除旧音效条目（先删后建，保证重新生成时能替换）
 	if s.sfxItemRepo != nil {
 		if err := s.sfxItemRepo.DeleteByShotID(shot.ID); err != nil {
-			logger.Printf("[SFXService] shot %d: clear old sfx items failed: %v", shot.ID, err)
+			logger.Errorf("[SFXService] shot %d: clear old sfx items failed: %v", shot.ID, err)
 		}
 	}
 
@@ -217,7 +217,7 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	tagItems := parseSFXTags(shot.SFXTags)
 	if len(tagItems) == 0 {
 		if err := s.analyzeSingleShotSFX(ctx, shot, tenantID, "", ""); err != nil {
-			logger.Printf("[SFXService] shot %d AI analyze failed (%v), using rule fallback", shot.ID, err)
+			logger.Errorf("[SFXService] shot %d AI analyze failed (%v), using rule fallback", shot.ID, err)
 			// 规则兜底：英文搜索词 + 中文 AI 提示词
 			shotPrompt := buildShotAIPrompt(shot)
 			for _, t := range s.fallbackTags(shot) {
@@ -360,7 +360,7 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 			logger.Printf("[SFXService] shot %d ElevenLabs(forced) hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 			return sfxHit{url: u, source: "elevenlabs", durationSecs: dur}
 		} else if err != nil {
-			logger.Printf("[SFXService] shot %d ElevenLabs(forced) failed tag=%q: %v", shot.ID, item.Tag, err)
+			logger.Errorf("[SFXService] shot %d ElevenLabs(forced) failed tag=%q: %v", shot.ID, item.Tag, err)
 		}
 		return sfxHit{}
 	}
@@ -407,7 +407,7 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 				if ossURL, uploadErr := downloadURLAndUploadToOSS(ctx, s.storageSvc, u, ossKey); uploadErr == nil {
 					u = ossURL
 				} else {
-					logger.Printf("[SFXService] shot %d AI-SFX upload failed (using CDN URL, noCache): %v", shot.ID, uploadErr)
+					logger.Errorf("[SFXService] shot %d AI-SFX upload failed (using CDN URL, noCache): %v", shot.ID, uploadErr)
 					noCacheFlag = true
 				}
 			} else if strings.HasPrefix(u, "https://") {
@@ -417,7 +417,7 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 			logger.Printf("[SFXService] shot %d AI-SFX hit tag=%q (%.1fs) noCache=%v", shot.ID, item.Tag, dur, noCacheFlag)
 			return sfxHit{url: u, source: "ai-sfx", durationSecs: dur, noCache: noCacheFlag}
 		} else if err != nil && !isNoProviderErr(err) {
-			logger.Printf("[SFXService] shot %d AI-SFX failed tag=%q: %v", shot.ID, item.Tag, err)
+			logger.Errorf("[SFXService] shot %d AI-SFX failed tag=%q: %v", shot.ID, item.Tag, err)
 		}
 	}
 	// 2. 本地音效库
@@ -430,7 +430,7 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 		logger.Printf("[SFXService] shot %d AudioLDM hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 		return sfxHit{url: u, source: "audioldm", durationSecs: dur}
 	} else if err != nil && !strings.Contains(err.Error(), "audioldm not configured") {
-		logger.Printf("[SFXService] shot %d AudioLDM failed tag=%q: %v", shot.ID, item.Tag, err)
+		logger.Errorf("[SFXService] shot %d AudioLDM failed tag=%q: %v", shot.ID, item.Tag, err)
 	}
 	// 4. Freesound API（CC0，需 API Key）
 	if hit := s.searchFreesound(ctx, tenantID, item, maxDur); hit.url != "" {
@@ -461,7 +461,7 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 		logger.Printf("[SFXService] shot %d ElevenLabs hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 		return sfxHit{url: u, source: "elevenlabs", durationSecs: dur}
 	} else if err != nil {
-		logger.Printf("[SFXService] shot %d ElevenLabs failed tag=%q: %v", shot.ID, item.Tag, err)
+		logger.Errorf("[SFXService] shot %d ElevenLabs failed tag=%q: %v", shot.ID, item.Tag, err)
 	}
 	return sfxHit{}
 }
@@ -506,7 +506,7 @@ func (s *SFXService) BatchAutoGenerateSFX(
 			defer func() { <-sem }()
 			err := s.AutoGenerateSFX(ctx, s2, tenantID, provider)
 			if err != nil {
-				logger.Printf("[SFXService] shot %d: %v", s2.ID, err)
+				logger.Errorf("[SFXService] shot %d: %v", s2.ID, err)
 				failCount.Add(1)
 				mu.Lock()
 				failedShotIDs = append(failedShotIDs, s2.ID)
@@ -581,7 +581,7 @@ func (s *SFXService) applySceneContinuity(ctx context.Context, shots []*model.St
 			ambientItem.URL = current.ambientURL
 			ambientItem.Volume = current.ambientVol
 			if err := s.sfxItemRepo.Update(ambientItem); err != nil {
-				logger.Printf("[SFXService] scene continuity: update shot %d ambient failed: %v", shot.ID, err)
+				logger.Errorf("[SFXService] scene continuity: update shot %d ambient failed: %v", shot.ID, err)
 			} else {
 				logger.Printf("[SFXService] scene continuity: shot %d ambient unified to scene %q", shot.ID, sceneKey[:min(len(sceneKey), 20)])
 			}
@@ -758,7 +758,7 @@ func (s *SFXService) saveToAssetLibrary(ctx context.Context, shot *model.Storybo
 		}
 		// 去重：同 URL 已存在则跳过
 		if exists, err := s.assetRepo.ExistsByExternalID(item.URL); err != nil {
-			logger.Printf("[SFXService] AssetLib: ExistsByExternalID error (shot %d tag=%q): %v", shotID, item.Tag, err)
+			logger.Errorf("[SFXService] AssetLib: ExistsByExternalID error (shot %d tag=%q): %v", shotID, item.Tag, err)
 			continue
 		} else if exists {
 			continue
@@ -779,7 +779,7 @@ func (s *SFXService) saveToAssetLibrary(ctx context.Context, shot *model.Storybo
 			Status:     "active",
 		}
 		if err := s.assetRepo.Create(asset); err != nil {
-			logger.Printf("[SFXService] AssetLib: create asset failed (shot %d tag=%q): %v", shotID, item.Tag, err)
+			logger.Errorf("[SFXService] AssetLib: create asset failed (shot %d tag=%q): %v", shotID, item.Tag, err)
 			continue
 		}
 
@@ -791,11 +791,11 @@ func (s *SFXService) saveToAssetLibrary(ctx context.Context, shot *model.Storybo
 		for _, name := range tagNames {
 			tag, err := s.tagRepo.FindOrCreate(name, "audio")
 			if err != nil {
-				logger.Printf("[SFXService] AssetLib: FindOrCreate tag %q failed: %v", name, err)
+				logger.Errorf("[SFXService] AssetLib: FindOrCreate tag %q failed: %v", name, err)
 				continue
 			}
 			if err := s.tagRepo.AddToAsset(asset.ID, tag.ID, "ai", 1.0); err != nil {
-				logger.Printf("[SFXService] AssetLib: AddToAsset failed (asset %d tag %q): %v", asset.ID, name, err)
+				logger.Errorf("[SFXService] AssetLib: AddToAsset failed (asset %d tag %q): %v", asset.ID, name, err)
 			}
 		}
 		logger.Printf("[SFXService] AssetLib: saved asset %d tag=%q source=%s", asset.ID, item.Tag, item.Source)

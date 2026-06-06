@@ -345,7 +345,7 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 		}
 	}
 	if err != nil {
-		logger.Printf("warn: could not read audio for segment %d: %v", segID, err)
+		logger.Errorf("warn: could not read audio for segment %d: %v", segID, err)
 	}
 
 	// 上传到持久存储（如果配置了 storageSvc）
@@ -355,7 +355,7 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 		key := storage.BuildKey(novelID, chapterID, "audio", filename)
 		ossURL, e := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(audioData), int64(len(audioData)), "audio/mpeg")
 		if e != nil {
-			logger.Printf("GenerateSegmentAudio: OSS upload failed for segment %d: %v", segID, e)
+			logger.Errorf("GenerateSegmentAudio: OSS upload failed for segment %d: %v", segID, e)
 			return e
 		}
 		if strings.HasPrefix(audioURL, "file://") {
@@ -370,7 +370,7 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 		fields["duration_secs"] = d
 	}
 	if err := s.segmentRepo.UpdateFields(segID, fields); err != nil {
-		logger.Printf("[VideoService] GenerateSegmentAudio: failed to update segment %d fields: %v", segID, err)
+		logger.Errorf("[VideoService] GenerateSegmentAudio: failed to update segment %d fields: %v", segID, err)
 	}
 
 	// 配音生成完成后，同步更新分镜时长：取视频时长与所有配音段落累计时长中的较大值
@@ -405,7 +405,7 @@ func (s *VideoService) syncShotDurationAfterVoice(shotID uint) {
 		// 所有配音段落均失败：确保分镜时长有合理默认值，不跳过更新
 		if shot.Duration <= 0 {
 			if err := s.storyboardRepo.UpdateFields(shotID, map[string]interface{}{"duration": defaultShotDurationSecs}); err != nil {
-				logger.Printf("[VideoService] syncShotDurationAfterVoice: failed to set default duration for shot %d: %v", shotID, err)
+				logger.Errorf("[VideoService] syncShotDurationAfterVoice: failed to set default duration for shot %d: %v", shotID, err)
 			}
 		}
 		return
@@ -414,7 +414,7 @@ func (s *VideoService) syncShotDurationAfterVoice(shotID uint) {
 		return // 配音比当前时长短，不需要更新
 	}
 	if err := s.storyboardRepo.UpdateFields(shotID, map[string]interface{}{"duration": totalVoice}); err != nil {
-		logger.Printf("[VideoService] syncShotDurationAfterVoice: failed to update shot %d duration: %v", shotID, err)
+		logger.Errorf("[VideoService] syncShotDurationAfterVoice: failed to update shot %d duration: %v", shotID, err)
 	}
 }
 
@@ -470,7 +470,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 
 	localAudioURL, err := s.aiService.AudioGenerateWithOptions(ctx, tenantID, text, voice, speed, style)
 	if err != nil {
-		logger.Printf("GenerateShotAudio: TTS failed for shot %d: %v", shot.ShotNo, err)
+		logger.Errorf("GenerateShotAudio: TTS failed for shot %d: %v", shot.ShotNo, err)
 		return err
 	}
 	if localAudioURL == "" {
@@ -488,7 +488,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 	if s.storageSvc != nil {
 		persistURL, uploadErr := s.uploadAudioToStorage(ctx, shot, audioURL, novelID, chapterID)
 		if uploadErr != nil {
-			logger.Printf("GenerateShotAudio: storage upload failed (falling back to local): %v", uploadErr)
+			logger.Errorf("GenerateShotAudio: storage upload failed (falling back to local): %v", uploadErr)
 		} else {
 			audioURL = persistURL
 			logger.Printf("GenerateShotAudio: shot %d audio stored at %s", shot.ShotNo, audioURL)
@@ -501,7 +501,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 
 	shot.AudioPath = audioURL
 	if err := s.storyboardRepo.Update(shot); err != nil {
-		logger.Printf("[VideoService] GenerateShotAudio: failed to update shot %d audio path: %v", shot.ShotNo, err)
+		logger.Errorf("[VideoService] GenerateShotAudio: failed to update shot %d audio path: %v", shot.ShotNo, err)
 	}
 	return nil
 }
@@ -576,7 +576,7 @@ func (s *VideoService) generateShotAudioFromSegments(shot *model.StoryboardShot,
 	for _, seg := range segs {
 		if seg.AudioPath == "" && seg.Text != "" {
 			if err := s.GenerateSegmentAudio(seg.ID, tenantID, defaultVoice); err != nil {
-				logger.Printf("generateShotAudioFromSegments: segment %d TTS failed: %v", seg.ID, err)
+				logger.Errorf("generateShotAudioFromSegments: segment %d TTS failed: %v", seg.ID, err)
 			}
 		}
 	}
@@ -601,7 +601,7 @@ func (s *VideoService) generateShotAudioFromSegments(shot *model.StoryboardShot,
 		}
 		localPath, err := fetchAudioToLocal(tmpDir, seg.AudioPath, int(seg.ID))
 		if err != nil {
-			logger.Printf("generateShotAudioFromSegments: fetch segment %d audio: %v", seg.ID, err)
+			logger.Errorf("generateShotAudioFromSegments: fetch segment %d audio: %v", seg.ID, err)
 			continue
 		}
 		localPaths = append(localPaths, localPath)
@@ -631,7 +631,7 @@ func (s *VideoService) generateShotAudioFromSegments(shot *model.StoryboardShot,
 		"-c", "copy", stitchedPath,
 	)
 	if ffmpegErr != nil {
-		logger.Printf("generateShotAudioFromSegments: ffmpeg failed: %v\n%s", ffmpegErr, string(out))
+		logger.Errorf("generateShotAudioFromSegments: ffmpeg failed: %v\n%s", ffmpegErr, string(out))
 		// fallback: use first segment audio
 		shot.AudioPath = freshSegs[0].AudioPath
 		return s.storyboardRepo.Update(shot)
@@ -656,14 +656,14 @@ func (s *VideoService) generateShotAudioFromSegments(shot *model.StoryboardShot,
 		if ossURL, e := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(stitchedData), int64(len(stitchedData)), "audio/mpeg"); e == nil {
 			audioURL = ossURL
 		} else {
-			logger.Printf("generateShotAudioFromSegments: OSS upload failed for shot %d: %v", shot.ID, e)
+			logger.Errorf("generateShotAudioFromSegments: OSS upload failed for shot %d: %v", shot.ID, e)
 		}
 	}
 
 	shot.AudioPath = audioURL
 	shot.Duration = alignShotDurationToTTS(shot)
 	if err := s.storyboardRepo.Update(shot); err != nil {
-		logger.Printf("generateShotAudioFromSegments: update shot %d: %v", shot.ID, err)
+		logger.Errorf("generateShotAudioFromSegments: update shot %d: %v", shot.ID, err)
 	}
 	return nil
 }
@@ -711,7 +711,7 @@ func (s *VideoService) MergeVoiceSegments(ctx context.Context, shotID, tenantID 
 	for _, seg := range ready {
 		lp, err := fetchAudioToLocal(tmpDir, seg.AudioPath, int(seg.ID))
 		if err != nil {
-			logger.Printf("MergeVoiceSegments: fetch segment %d audio: %v", seg.ID, err)
+			logger.Errorf("MergeVoiceSegments: fetch segment %d audio: %v", seg.ID, err)
 			continue
 		}
 		localPaths = append(localPaths, lp)
@@ -755,7 +755,7 @@ func (s *VideoService) MergeVoiceSegments(ctx context.Context, shotID, tenantID 
 		if ossURL, e := s.storageSvc.Upload(ctx, key, bytes.NewReader(merged), int64(len(merged)), "audio/mpeg"); e == nil {
 			audioURL = ossURL
 		} else {
-			logger.Printf("MergeVoiceSegments: OSS upload failed: %v", e)
+			logger.Errorf("MergeVoiceSegments: OSS upload failed: %v", e)
 			return "", fmt.Errorf("MergeVoiceSegments: upload failed: %w", e)
 		}
 	} else {

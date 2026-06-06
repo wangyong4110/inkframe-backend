@@ -848,7 +848,7 @@ func (s *VideoEnhancementService) applyFrameInterpolation(ctx context.Context, v
 		"-c:a", "copy",
 		outputPath,
 	); runErr != nil {
-		logger.Printf("[enhancement] frame_interpolation failed: %v\n%s", runErr, string(out))
+		logger.Errorf("[enhancement] frame_interpolation failed: %v\n%s", runErr, string(out))
 		return videoURL, nil // 非致命：返回原始
 	}
 	return "file://" + outputPath, nil
@@ -881,7 +881,7 @@ func (s *VideoEnhancementService) applySuperResolution(ctx context.Context, vide
 		"-c:a", "copy",
 		outputPath,
 	); runErr != nil {
-		logger.Printf("[enhancement] super_resolution failed: %v\n%s", runErr, string(out))
+		logger.Errorf("[enhancement] super_resolution failed: %v\n%s", runErr, string(out))
 		return videoURL, nil
 	}
 	return "file://" + outputPath, nil
@@ -925,7 +925,7 @@ func (s *VideoEnhancementService) applyColorGrading(ctx context.Context, videoUR
 		"-c:a", "copy",
 		outputPath,
 	); runErr != nil {
-		logger.Printf("[enhancement] color_grading failed: %v\n%s", runErr, string(out))
+		logger.Errorf("[enhancement] color_grading failed: %v\n%s", runErr, string(out))
 		return videoURL, nil
 	}
 	return "file://" + outputPath, nil
@@ -962,12 +962,12 @@ func (s *VideoEnhancementService) applyStabilization(ctx context.Context, videoU
 				"-c:a", "copy",
 				outputPath,
 			); dErr != nil {
-				logger.Printf("[enhancement] deshake also failed: %v\n%s", dErr, string(dOut))
+				logger.Errorf("[enhancement] deshake also failed: %v\n%s", dErr, string(dOut))
 				return videoURL, nil
 			}
 			return "file://" + outputPath, nil
 		}
-		logger.Printf("[enhancement] vidstabdetect failed: %v\n%s", pass1Err, string(out))
+		logger.Errorf("[enhancement] vidstabdetect failed: %v\n%s", pass1Err, string(out))
 		return videoURL, nil
 	}
 
@@ -981,7 +981,7 @@ func (s *VideoEnhancementService) applyStabilization(ctx context.Context, videoU
 		"-c:a", "copy",
 		outputPath,
 	); pass2Err != nil {
-		logger.Printf("[enhancement] vidstabtransform failed: %v\n%s", pass2Err, string(out))
+		logger.Errorf("[enhancement] vidstabtransform failed: %v\n%s", pass2Err, string(out))
 		return videoURL, nil
 	}
 	return "file://" + outputPath, nil
@@ -1024,7 +1024,7 @@ func (s *VideoEnhancementService) applyStyleTransfer(ctx context.Context, videoU
 		"-c:a", "copy",
 		outputPath,
 	); runErr != nil {
-		logger.Printf("[enhancement] style_transfer failed: %v\n%s", runErr, string(out))
+		logger.Errorf("[enhancement] style_transfer failed: %v\n%s", runErr, string(out))
 		return videoURL, nil
 	}
 	return "file://" + outputPath, nil

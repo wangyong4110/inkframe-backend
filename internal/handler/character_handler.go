@@ -398,7 +398,7 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 		sheetGender := service.InferGenderTag(char.VisualPrompt, char.Description)
 		img, err := h.imageGenService.GenerateThreeViewSheet(genCtx, tenantID, char.Name, sheetAppearance, style, sheetGender, sheetRef, provider)
 		if err != nil {
-			logger.Printf("[CharacterHandler] GenerateThreeView task %s failed: %v", taskID, err)
+			logger.Errorf("[CharacterHandler] GenerateThreeView task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, "generate three-view sheet failed: "+err.Error()) //nolint:errcheck
 			return
 		}
@@ -487,7 +487,7 @@ func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
 		faceGender := service.InferGenderTag(char.VisualPrompt, char.Description)
 		img, err := h.imageGenService.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, faceAppearance, style, faceGender, referenceImage, provider)
 		if err != nil {
-			logger.Printf("[CharacterHandler] GenerateFaceCloseup task %s failed: %v", taskID, err)
+			logger.Errorf("[CharacterHandler] GenerateFaceCloseup task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, "generate face closeup failed: "+err.Error()) //nolint:errcheck
 			return
 		}
@@ -632,7 +632,7 @@ func (h *CharacterHandler) AIBatchGenerate(c *gin.Context) {
 	go func(taskID string) {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Printf("[CharacterHandler] AIBatchGenerate task %s panic: %v", taskID, r)
+				logger.Errorf("[CharacterHandler] AIBatchGenerate task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -640,7 +640,7 @@ func (h *CharacterHandler) AIBatchGenerate(c *gin.Context) {
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		chars, err := h.characterService.AIBatchGenerate(tenantID, uint(novelID))
 		if err != nil {
-			logger.Printf("[CharacterHandler] AIBatchGenerate task %s failed: %v", taskID, err)
+			logger.Errorf("[CharacterHandler] AIBatchGenerate task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"characters": chars, "count": len(chars)}) //nolint:errcheck
@@ -677,7 +677,7 @@ func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
 	go func(taskID string) {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Printf("[CharacterHandler] BatchGenerateImages task %s panic: %v", taskID, r)
+				logger.Errorf("[CharacterHandler] BatchGenerateImages task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -685,7 +685,7 @@ func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		succ, fail, err := h.characterService.BatchGenerateImages(tenantID, uint(novelID), req.Provider, req.Force, progressFn)
 		if err != nil {
-			logger.Printf("[CharacterHandler] BatchGenerateImages task %s failed: %v", taskID, err)
+			logger.Errorf("[CharacterHandler] BatchGenerateImages task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"succeeded": succ, "failed": fail}) //nolint:errcheck
@@ -978,7 +978,7 @@ func (h *CharacterHandler) ExtractCharacterVoice(c *gin.Context) {
 	updateReq.VoiceStyle = voiceStyle
 	updated, err := h.characterService.UpdateCharacter(uint(id), getTenantID(c), updateReq)
 	if err != nil {
-		logger.Printf("[CharacterHandler] ExtractCharacterVoice: save voice style for char %d: %v", id, err)
+		logger.Errorf("[CharacterHandler] ExtractCharacterVoice: save voice style for char %d: %v", id, err)
 		// Non-fatal: return the extracted style even if persisting failed.
 		respondOK(c, gin.H{"voice_style": voiceStyle, "character_id": id, "saved": false})
 		return
@@ -1049,7 +1049,7 @@ func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
 
 	rawURL, err := h.aiService.AudioGenerateWithOptions(ctx, getTenantID(c), req.Text, voice, speed, style, lang)
 	if err != nil {
-		logger.Printf("PreviewVoice: TTS generation failed for character %d voice=%q: %v", id, voice, err)
+		logger.Errorf("PreviewVoice: TTS generation failed for character %d voice=%q: %v", id, voice, err)
 		respondErr(c, http.StatusInternalServerError, "voice generation failed: "+err.Error())
 		return
 	}

@@ -121,7 +121,7 @@ func (s *PlatformPublishService) PublishToExternal(ctx context.Context, video *m
 		for i, accountID := range accountIDs {
 			account, err := s.accountRepo.GetByID(accountID)
 			if err != nil {
-				logger.Printf("[PlatformPublish] video=%d account=%d: load account: %v", video.ID, accountID, err)
+				logger.Errorf("[PlatformPublish] video=%d account=%d: load account: %v", video.ID, accountID, err)
 				continue
 			}
 			p, ok := s.publishers[account.Platform]
@@ -133,12 +133,12 @@ func (s *PlatformPublishService) PublishToExternal(ctx context.Context, video *m
 			// Fix 1: Auto-refresh token if expired or expiring within 5 minutes
 			if account.ExpiresAt != nil && account.ExpiresAt.Before(time.Now().Add(5*time.Minute)) {
 				if refreshErr := p.RefreshToken(bgCtx, account); refreshErr != nil {
-					logger.Printf("[PlatformPublish] token refresh failed for account %d: %v", account.ID, refreshErr)
+					logger.Errorf("[PlatformPublish] token refresh failed for account %d: %v", account.ID, refreshErr)
 					// Continue anyway — let publish attempt reveal the real error
 				} else {
 					// Persist refreshed token
 					if updateErr := s.accountRepo.UpdateTokens(account.ID, account.AccessToken, account.RefreshToken, account.ExpiresAt); updateErr != nil {
-						logger.Printf("[PlatformPublish] failed to persist refreshed token for account %d: %v", account.ID, updateErr)
+						logger.Errorf("[PlatformPublish] failed to persist refreshed token for account %d: %v", account.ID, updateErr)
 					}
 				}
 			}
@@ -151,7 +151,7 @@ func (s *PlatformPublishService) PublishToExternal(ctx context.Context, video *m
 				Status:    "uploading",
 			}
 			if err := s.recordRepo.Create(rec); err != nil {
-				logger.Printf("[PlatformPublish] video=%d account=%d: create record: %v", video.ID, accountID, err)
+				logger.Errorf("[PlatformPublish] video=%d account=%d: create record: %v", video.ID, accountID, err)
 				continue
 			}
 
@@ -164,19 +164,19 @@ func (s *PlatformPublishService) PublishToExternal(ctx context.Context, video *m
 					break
 				}
 				if attempt < 2 {
-					logger.Printf("[PlatformPublish] attempt %d failed for record %d: %v, retrying...", attempt+1, rec.ID, pubErr)
+					logger.Errorf("[PlatformPublish] attempt %d failed for record %d: %v, retrying...", attempt+1, rec.ID, pubErr)
 					time.Sleep(time.Duration(1<<uint(attempt)) * time.Second) // 1s, 2s
 				}
 			}
 			if pubErr != nil {
-				logger.Printf("[PlatformPublish] video=%d platform=%s: publish failed: %v", video.ID, account.Platform, pubErr)
+				logger.Errorf("[PlatformPublish] video=%d platform=%s: publish failed: %v", video.ID, account.Platform, pubErr)
 				if err := s.recordRepo.UpdateStatus(rec.ID, "failed", pubErr.Error(), "", ""); err != nil {
-					logger.Printf("[PlatformPublish] record=%d: update failed status: %v", rec.ID, err)
+					logger.Errorf("[PlatformPublish] record=%d: update failed status: %v", rec.ID, err)
 				}
 			} else {
 				logger.Printf("[PlatformPublish] video=%d platform=%s: published externalID=%s", video.ID, account.Platform, externalID)
 				if err := s.recordRepo.UpdateStatus(rec.ID, "published", "", externalID, externalURL); err != nil {
-					logger.Printf("[PlatformPublish] record=%d: update published status: %v", rec.ID, err)
+					logger.Errorf("[PlatformPublish] record=%d: update published status: %v", rec.ID, err)
 				}
 			}
 
@@ -184,7 +184,7 @@ func (s *PlatformPublishService) PublishToExternal(ctx context.Context, video *m
 			if s.taskSvc != nil {
 				progress := (i + 1) * 100 / len(accountIDs)
 				if err := s.taskSvc.UpdateProgress(taskID, progress); err != nil {
-					logger.Printf("[PlatformPublish] task=%s: update progress: %v", taskID, err)
+					logger.Errorf("[PlatformPublish] task=%s: update progress: %v", taskID, err)
 				}
 			}
 		}

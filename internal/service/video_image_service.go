@@ -91,7 +91,7 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 		}
 		shot.Status = "generating"
 		if err := s.storyboardRepo.Update(shot); err != nil {
-			logger.Printf("[VideoService] BatchGenerateShots: failed to update shot %d status: %v", shot.ShotNo, err)
+			logger.Errorf("[VideoService] BatchGenerateShots: failed to update shot %d status: %v", shot.ShotNo, err)
 		}
 		queued = append(queued, shot)
 		sem <- struct{}{}
@@ -120,7 +120,7 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 					if genErr == nil {
 						break
 					}
-					logger.Printf("BatchGenerateShots: shot %d image attempt %d/%d failed: %v", sh.ShotNo, attempt, maxRetries, genErr)
+					logger.Errorf("BatchGenerateShots: shot %d image attempt %d/%d failed: %v", sh.ShotNo, attempt, maxRetries, genErr)
 					if attempt < maxRetries {
 						time.Sleep(time.Duration(attempt*2) * time.Second)
 					}
@@ -129,11 +129,11 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 					if err := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
 						"status": "completed", "progress": 100,
 					}); err != nil {
-						logger.Printf("[VideoService] BatchGenerateShots: failed to update shot %d status: %v", sh.ShotNo, err)
+						logger.Errorf("[VideoService] BatchGenerateShots: failed to update shot %d status: %v", sh.ShotNo, err)
 					}
 					logger.Printf("BatchGenerateShots: shot %d image ready", sh.ShotNo)
 				} else {
-					logger.Printf("BatchGenerateShots: shot %d image failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
+					logger.Errorf("BatchGenerateShots: shot %d image failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
 					if e := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{"status": "failed"}); e != nil {
 						logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d status=failed: %v", sh.ID, e)
 					}
@@ -145,13 +145,13 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 					if genErr == nil {
 						break
 					}
-					logger.Printf("BatchGenerateShots: shot %d attempt %d/%d failed: %v", sh.ShotNo, attempt, maxRetries, genErr)
+					logger.Errorf("BatchGenerateShots: shot %d attempt %d/%d failed: %v", sh.ShotNo, attempt, maxRetries, genErr)
 					if attempt < maxRetries {
 						time.Sleep(time.Duration(attempt*2) * time.Second)
 					}
 				}
 				if genErr != nil {
-					logger.Printf("BatchGenerateShots: shot %d failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
+					logger.Errorf("BatchGenerateShots: shot %d failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
 					if e := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{"status": "failed"}); e != nil {
 						logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d status=failed: %v", sh.ID, e)
 					}
@@ -257,7 +257,7 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, pro
 				if genErr == nil {
 					break
 				}
-				logger.Printf("BatchGenerateShotImages: shot %d attempt %d/%d failed: %v", sh.ShotNo, attempt, maxRetries, genErr)
+				logger.Errorf("BatchGenerateShotImages: shot %d attempt %d/%d failed: %v", sh.ShotNo, attempt, maxRetries, genErr)
 				if attempt < maxRetries {
 					time.Sleep(time.Duration(attempt*2) * time.Second)
 				}
@@ -269,11 +269,11 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, pro
 				if err := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
 					"status": "completed", "progress": 50,
 				}); err != nil {
-					logger.Printf("[VideoService] BatchGenerateShotImages: failed to update shot %d status: %v", sh.ShotNo, err)
+					logger.Errorf("[VideoService] BatchGenerateShotImages: failed to update shot %d status: %v", sh.ShotNo, err)
 				}
 				logger.Printf("BatchGenerateShotImages: shot %d image ready", sh.ShotNo)
 			} else {
-				logger.Printf("BatchGenerateShotImages: shot %d failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
+				logger.Errorf("BatchGenerateShotImages: shot %d failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
 				if e := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{"status": "failed"}); e != nil {
 					logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d status=failed: %v", sh.ID, e)
 				}
@@ -316,7 +316,7 @@ func (s *VideoService) compositeRefImages(ctx context.Context, imageURLs []strin
 	for _, u := range imageURLs {
 		localPath, dlErr := downloadToTemp(u, "inkframe-ref-", ".jpg")
 		if dlErr != nil {
-			logger.Printf("compositeRefImages: download failed (%s): %v", u, dlErr)
+			logger.Errorf("compositeRefImages: download failed (%s): %v", u, dlErr)
 			continue
 		}
 		f, openErr := os.Open(localPath)
@@ -328,7 +328,7 @@ func (s *VideoService) compositeRefImages(ctx context.Context, imageURLs []strin
 		f.Close()
 		os.Remove(localPath) //nolint:errcheck
 		if decErr != nil {
-			logger.Printf("compositeRefImages: decode failed (%s): %v", u, decErr)
+			logger.Errorf("compositeRefImages: decode failed (%s): %v", u, decErr)
 			continue
 		}
 		decoded = append(decoded, imgEntry{img: img, url: u})
@@ -379,7 +379,7 @@ func (s *VideoService) compositeRefImages(ctx context.Context, imageURLs []strin
 		if upErr == nil {
 			return ossURL, nil
 		}
-		logger.Printf("compositeRefImages: OSS upload failed (falling back to temp file): %v", upErr)
+		logger.Errorf("compositeRefImages: OSS upload failed (falling back to temp file): %v", upErr)
 	}
 
 	// 降级：保存为临时文件，返回 file:// URL
@@ -539,7 +539,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	logger.Printf("generateShotReferenceImage: shot %d charIDs=%v sources=%v portraits=%d",
 		shot.ShotNo, shot.CharacterIDs, refSources, len(characterPortraits))
 	if len(shot.CharacterIDs) > 0 && len(characterPortraits) == 0 {
-		logger.Printf("[WARN] generateShotReferenceImage: shot %d has CharacterIDs=%v but no portrait/ThreeViewSheet found — characters may not have images generated yet", shot.ShotNo, shot.CharacterIDs)
+		logger.Errorf("[WARN] generateShotReferenceImage: shot %d has CharacterIDs=%v but no portrait/ThreeViewSheet found — characters may not have images generated yet", shot.ShotNo, shot.CharacterIDs)
 	}
 
 	promptText := shot.Prompt
@@ -718,7 +718,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	logger.Printf("generateShotReferenceImage: shot %d prompt=%q negPrompt=%q", shot.ShotNo, promptText[:min(len(promptText), 120)], negPrompt[:min(len(negPrompt), 80)])
 	imageURL, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, allRefImages, artStyle, negPrompt, imageSize, charConsistencyWeight)
 	if err != nil {
-		logger.Printf("generateShotReferenceImage: image gen failed for shot %d: %v", shot.ShotNo, err)
+		logger.Errorf("generateShotReferenceImage: image gen failed for shot %d: %v", shot.ShotNo, err)
 		return "", err
 	}
 	if imageURL == "" {
@@ -729,7 +729,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// 首图锁定：场景锚点无参考图时，将本次生成结果存为参考图
 	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
 		if err := s.sceneAnchorSvc.AutoSetRefImage(*shot.SceneAnchorID, imageURL); err != nil {
-			logger.Printf("[VideoService] AutoSetRefImage: %v", err)
+			logger.Errorf("[VideoService] AutoSetRefImage: %v", err)
 		}
 	}
 
@@ -763,7 +763,7 @@ func (s *VideoService) RefineShotImage(shotID uint, suggestion string) (string, 
 
 	// 持久化新图片 URL
 	if err := s.storyboardRepo.UpdateFields(shotID, map[string]interface{}{"image_url": newURL}); err != nil {
-		logger.Printf("[VideoService] RefineShot: failed to update shot %d image URL: %v", shotID, err)
+		logger.Errorf("[VideoService] RefineShot: failed to update shot %d image URL: %v", shotID, err)
 	}
 	return newURL, nil
 }
@@ -892,7 +892,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		logger.Printf("GenerateShotVideo: shot %d ImageURL empty, generating image first (charIDs=%v)", shot.ShotNo, shot.CharacterIDs)
 		frameURL, frameErr := s.generateShotReferenceImage(shot)
 		if frameErr != nil {
-			logger.Printf("GenerateShotVideo: shot %d image generation failed: %v", shot.ShotNo, frameErr)
+			logger.Errorf("GenerateShotVideo: shot %d image generation failed: %v", shot.ShotNo, frameErr)
 		} else {
 			logger.Printf("GenerateShotVideo: shot %d image generated: %s", shot.ShotNo, frameURL)
 		}
@@ -914,7 +914,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		referenceImage = frameURL
 		// 立即持久化图片 URL，确保视频生成失败时图片不丢失
 		if updateErr := s.storyboardRepo.Update(shot); updateErr != nil {
-			logger.Printf("GenerateShotVideo: shot %d failed to persist ImageURL: %v", shot.ShotNo, updateErr)
+			logger.Errorf("GenerateShotVideo: shot %d failed to persist ImageURL: %v", shot.ShotNo, updateErr)
 		}
 	}
 
@@ -1042,7 +1042,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 
 	task, err := provider.GenerateVideo(ctx, req)
 	if err != nil {
-		logger.Printf("GenerateShotVideo: shot %d submit failed: %v", shot.ShotNo, err)
+		logger.Errorf("GenerateShotVideo: shot %d submit failed: %v", shot.ShotNo, err)
 		return fmt.Errorf("shot video generation failed: %w", err)
 	}
 
@@ -1182,7 +1182,7 @@ func (s *VideoService) generateStillFrameClip(imagePath string, duration float64
 		outPath,
 	)
 	if err != nil {
-		logger.Printf("generateStillFrameClip: failed after %.1fs: %v\noutput: %s", time.Since(encStart).Seconds(), err, string(out))
+		logger.Errorf("generateStillFrameClip: failed after %.1fs: %v\noutput: %s", time.Since(encStart).Seconds(), err, string(out))
 		return "", fmt.Errorf("ffmpeg still frame: %w", err)
 	}
 	logger.Printf("generateStillFrameClip: done in %.1fs → %s", time.Since(encStart).Seconds(), outPath)
@@ -1284,7 +1284,7 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 	shot.GenerationMode = "static"
 	shot.Status = "generating"
 	if err := s.storyboardRepo.Update(shot); err != nil {
-		logger.Printf("[VideoService] generateShotImageOnly: failed to update shot %d status to generating: %v", shot.ShotNo, err)
+		logger.Errorf("[VideoService] generateShotImageOnly: failed to update shot %d status to generating: %v", shot.ShotNo, err)
 	}
 
 	imageURL, imgErr := s.generateShotReferenceImage(shot)
@@ -1296,7 +1296,7 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 		shot.Status = "failed"
 		shot.ErrorMessage = errMsg
 		if err := s.storyboardRepo.Update(shot); err != nil {
-			logger.Printf("[VideoService] generateShotImageOnly: failed to update shot %d status to failed: %v", shot.ShotNo, err)
+			logger.Errorf("[VideoService] generateShotImageOnly: failed to update shot %d status to failed: %v", shot.ShotNo, err)
 		}
 		if imgErr != nil {
 			return "", 0, fmt.Errorf("image generation failed for shot %d: %w", shot.ShotNo, imgErr)
@@ -1305,7 +1305,7 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 	}
 	shot.ImageURL = imageURL
 	if err := s.storyboardRepo.Update(shot); err != nil {
-		logger.Printf("[VideoService] generateShotImageOnly: failed to update shot %d image URL: %v", shot.ShotNo, err)
+		logger.Errorf("[VideoService] generateShotImageOnly: failed to update shot %d image URL: %v", shot.ShotNo, err)
 	}
 
 	// Async scene consistency scoring: compare generated image vs scene anchor reference image.
@@ -1314,7 +1314,7 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 			anchor, err := s.sceneAnchorSvc.Get(*sh.SceneAnchorID)
 			if err == nil {
 				if report, err := s.sceneConsistencySvc.ScoreScene(sh, anchor, imgURL, 1); err != nil {
-					logger.Printf("[VideoService] ScoreScene shot %d: %v", sh.ShotNo, err)
+					logger.Errorf("[VideoService] ScoreScene shot %d: %v", sh.ShotNo, err)
 				} else {
 					logger.Printf("[VideoService] ScoreScene shot %d: overall=%.2f passed=%v", sh.ShotNo, report.OverallScore, report.Passed)
 				}
@@ -1339,7 +1339,7 @@ func (s *VideoService) generateClipAndUploadWithRetry(ctx context.Context, shotI
 
 	shot, err := s.storyboardRepo.GetByID(shotID)
 	if err != nil {
-		logger.Printf("generateClipAndUploadWithRetry: shot %d not found: %v", shotID, err)
+		logger.Errorf("generateClipAndUploadWithRetry: shot %d not found: %v", shotID, err)
 		return
 	}
 
@@ -1350,13 +1350,13 @@ func (s *VideoService) generateClipAndUploadWithRetry(ctx context.Context, shotI
 		// 优先纯 Go Ken Burns；失败时降级为静止画面
 		clipPath, lastErr = s.generateKenBurnsPureGo(ctx, shot, localImage, duration, aspectRatio)
 		if lastErr != nil {
-			logger.Printf("generateClipAndUploadWithRetry: shot %d ken burns attempt %d/%d: %v", shot.ShotNo, attempt, maxClipRetries, lastErr)
+			logger.Errorf("generateClipAndUploadWithRetry: shot %d ken burns attempt %d/%d: %v", shot.ShotNo, attempt, maxClipRetries, lastErr)
 			clipPath, lastErr = s.generateStillFrameClip(localImage, duration, aspectRatio)
 		}
 		if lastErr == nil {
 			break
 		}
-		logger.Printf("generateClipAndUploadWithRetry: shot %d still frame attempt %d/%d: %v", shot.ShotNo, attempt, maxClipRetries, lastErr)
+		logger.Errorf("generateClipAndUploadWithRetry: shot %d still frame attempt %d/%d: %v", shot.ShotNo, attempt, maxClipRetries, lastErr)
 		if attempt < maxClipRetries {
 			select {
 			case <-time.After(time.Duration(attempt*5) * time.Second):
@@ -1369,7 +1369,7 @@ func (s *VideoService) generateClipAndUploadWithRetry(ctx context.Context, shotI
 
 	fields := map[string]interface{}{"progress": 100}
 	if lastErr != nil {
-		logger.Printf("generateClipAndUploadWithRetry: shot %d clip failed after %d attempts, keeping image-only: %v", shot.ShotNo, maxClipRetries, lastErr)
+		logger.Errorf("generateClipAndUploadWithRetry: shot %d clip failed after %d attempts, keeping image-only: %v", shot.ShotNo, maxClipRetries, lastErr)
 	} else if ossURL := s.uploadClipToStorage(context.Background(), shot, clipPath); ossURL != "" {
 		fields["video_url"] = ossURL
 		fields["clip_path"] = ""
@@ -1380,7 +1380,7 @@ func (s *VideoService) generateClipAndUploadWithRetry(ctx context.Context, shotI
 		logger.Printf("generateClipAndUploadWithRetry: shot %d clip done (local only)", shot.ShotNo)
 	}
 	if err := s.storyboardRepo.UpdateFields(shotID, fields); err != nil {
-		logger.Printf("[VideoService] generateClipAndUploadWithRetry: failed to update shot %d fields: %v", shotID, err)
+		logger.Errorf("[VideoService] generateClipAndUploadWithRetry: failed to update shot %d fields: %v", shotID, err)
 	}
 }
 
@@ -1414,7 +1414,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	shot.GenerationMode = "static"
 	shot.Status = "generating"
 	if err := s.storyboardRepo.Update(shot); err != nil {
-		logger.Printf("[VideoService] GenerateSlideshowShotVideo: failed to update shot %d status to generating: %v", shot.ShotNo, err)
+		logger.Errorf("[VideoService] GenerateSlideshowShotVideo: failed to update shot %d status to generating: %v", shot.ShotNo, err)
 	}
 
 	// 1. 生成图片
@@ -1424,11 +1424,11 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 		if imgErr != nil {
 			errMsg = imgErr.Error()
 		}
-		logger.Printf("GenerateSlideshowShotVideo: image gen failed for shot %d: %s", shot.ShotNo, errMsg)
+		logger.Errorf("GenerateSlideshowShotVideo: image gen failed for shot %d: %s", shot.ShotNo, errMsg)
 		shot.Status = "failed"
 		shot.ErrorMessage = errMsg
 		if err := s.storyboardRepo.Update(shot); err != nil {
-			logger.Printf("[VideoService] GenerateSlideshowShotVideo: failed to update shot %d status to failed: %v", shot.ShotNo, err)
+			logger.Errorf("[VideoService] GenerateSlideshowShotVideo: failed to update shot %d status to failed: %v", shot.ShotNo, err)
 		}
 		if imgErr != nil {
 			return fmt.Errorf("image generation failed for shot %d: %w", shot.ShotNo, imgErr)
@@ -1439,7 +1439,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	logger.Printf("GenerateSlideshowShotVideo: shot %d storing image_url=%q (len=%d)", shot.ShotNo, imageURL, len(imageURL))
 	// 保存图片 URL（后续步骤失败时图片仍可用）
 	if err := s.storyboardRepo.Update(shot); err != nil {
-		logger.Printf("[VideoService] GenerateSlideshowShotVideo: failed to update shot %d image URL: %v", shot.ShotNo, err)
+		logger.Errorf("[VideoService] GenerateSlideshowShotVideo: failed to update shot %d image URL: %v", shot.ShotNo, err)
 	}
 
 	// 图片生成完成，不自动合成 MP4（Ken Burns 由独立的 batch-clips 步骤触发）
@@ -1458,7 +1458,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 func (s *VideoService) runSlideshowPipeline(videoID uint) {
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
-		logger.Printf("runSlideshowPipeline: get video %d failed: %v", videoID, err)
+		logger.Errorf("runSlideshowPipeline: get video %d failed: %v", videoID, err)
 		return
 	}
 
@@ -1477,13 +1477,13 @@ func (s *VideoService) runSlideshowPipeline(videoID uint) {
 	var audioWg sync.WaitGroup
 	for _, shot := range shots {
 		if err := s.GenerateSlideshowShotVideo(shot, video.AspectRatio); err != nil {
-			logger.Printf("runSlideshowPipeline: shot %d failed: %v", shot.ShotNo, err)
+			logger.Errorf("runSlideshowPipeline: shot %d failed: %v", shot.ShotNo, err)
 		}
 		audioWg.Add(1)
 		go func(sh *model.StoryboardShot) {
 			defer audioWg.Done()
 			if err := s.GenerateShotAudio(sh, video.TenantID, narrationVoice); err != nil {
-				logger.Printf("runSlideshowPipeline: audio gen failed for shot %d: %v", sh.ShotNo, err)
+				logger.Errorf("runSlideshowPipeline: audio gen failed for shot %d: %v", sh.ShotNo, err)
 			}
 		}(shot)
 	}
@@ -1507,7 +1507,7 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 		video.Status = "generating"
 		video.ErrorMessage = ""
 		if err := s.videoRepo.Update(video); err != nil {
-			logger.Printf("[VideoService] GenerateAllShotVideos: failed to update video %d status to generating: %v", videoID, err)
+			logger.Errorf("[VideoService] GenerateAllShotVideos: failed to update video %d status to generating: %v", videoID, err)
 		}
 		go s.runSlideshowPipeline(videoID)
 		return nil
@@ -1525,7 +1525,7 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 	video.Status = "generating"
 	video.ErrorMessage = ""
 	if err := s.videoRepo.Update(video); err != nil {
-		logger.Printf("[VideoService] GenerateAllShotVideos: failed to update video %d status to generating: %v", videoID, err)
+		logger.Errorf("[VideoService] GenerateAllShotVideos: failed to update video %d status to generating: %v", videoID, err)
 	}
 
 	// 从小说视频配置读取旁白音色
@@ -1536,7 +1536,7 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 
 	for _, shot := range shots {
 		if err := s.GenerateShotVideo(shot, video.AspectRatio); err != nil {
-			logger.Printf("GenerateAllShotVideos: shot %d failed: %v", shot.ShotNo, err)
+			logger.Errorf("GenerateAllShotVideos: shot %d failed: %v", shot.ShotNo, err)
 			continue
 		}
 		// TTS audio in parallel

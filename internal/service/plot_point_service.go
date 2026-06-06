@@ -155,7 +155,7 @@ func (s *PlotPointService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.
 			defer func() { <-sem; wg.Done() }()
 			pps, err := s.ExtractFromChapter(tenantID, ch)
 			if err != nil {
-				logger.Printf("PlotPointService.AIExtractFromNovel: chapter %d: %v", ch.ID, err)
+				logger.Errorf("PlotPointService.AIExtractFromNovel: chapter %d: %v", ch.ID, err)
 				return
 			}
 			mu.Lock()
@@ -216,7 +216,7 @@ func (s *PlotPointService) ExtractFromChapter(tenantID uint, chapter *model.Chap
 	if err := json.Unmarshal([]byte(raw), &wrapped); err == nil {
 		items = wrapped.PlotPoints
 	} else if err2 := json.Unmarshal([]byte(raw), &items); err2 != nil {
-		logger.Printf("PlotPointService.ExtractFromChapter: parse error: %v, raw: %.200s", err, result)
+		logger.Errorf("PlotPointService.ExtractFromChapter: parse error: %v, raw: %.200s", err, result)
 		return nil, fmt.Errorf("failed to parse AI response")
 	}
 

@@ -27,7 +27,7 @@ func (h *ForeshadowHandler) ListForeshadows(c *gin.Context) {
 	tenantID := getTenantID(c)
 	list, err := h.svc.ListByNovel(c.Request.Context(), novelID, tenantID)
 	if err != nil {
-		logger.Printf("[ForeshadowHandler] ListForeshadows: novelID=%d err=%v", novelID, err)
+		logger.Errorf("[ForeshadowHandler] ListForeshadows: novelID=%d err=%v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to list foreshadows")
 		return
 	}
@@ -54,7 +54,7 @@ func (h *ForeshadowHandler) CreateForeshadow(c *gin.Context) {
 		f.Status = "planted"
 	}
 	if err := h.svc.Create(c.Request.Context(), &f); err != nil {
-		logger.Printf("[ForeshadowHandler] CreateForeshadow: novelID=%d err=%v", novelID, err)
+		logger.Errorf("[ForeshadowHandler] CreateForeshadow: novelID=%d err=%v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to create foreshadow")
 		return
 	}
@@ -70,7 +70,7 @@ func (h *ForeshadowHandler) ListUnfulfilledForeshadows(c *gin.Context) {
 	tenantID := getTenantID(c)
 	list, err := h.svc.ListUnfulfilled(c.Request.Context(), novelID, tenantID)
 	if err != nil {
-		logger.Printf("[ForeshadowHandler] ListUnfulfilled: novelID=%d err=%v", novelID, err)
+		logger.Errorf("[ForeshadowHandler] ListUnfulfilled: novelID=%d err=%v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to list unfulfilled foreshadows")
 		return
 	}
@@ -93,7 +93,7 @@ func (h *ForeshadowHandler) UpdateForeshadow(c *gin.Context) {
 	}
 	f, err := h.svc.Update(c.Request.Context(), foreshadowID, updates)
 	if err != nil {
-		logger.Printf("[ForeshadowHandler] UpdateForeshadow: id=%d err=%v", foreshadowID, err)
+		logger.Errorf("[ForeshadowHandler] UpdateForeshadow: id=%d err=%v", foreshadowID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to update foreshadow")
 		return
 	}
@@ -109,7 +109,7 @@ func (h *ForeshadowHandler) AIExtractForeshadows(c *gin.Context) {
 	tenantID := getTenantID(c)
 	list, err := h.svc.AIExtractFromNovel(tenantID, novelID)
 	if err != nil {
-		logger.Printf("[ForeshadowHandler] AIExtract: novelID=%d err=%v", novelID, err)
+		logger.Errorf("[ForeshadowHandler] AIExtract: novelID=%d err=%v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "AI extraction failed: "+err.Error())
 		return
 	}
@@ -127,7 +127,7 @@ func (h *ForeshadowHandler) DeleteForeshadow(c *gin.Context) {
 		return
 	}
 	if err := h.svc.Delete(c.Request.Context(), foreshadowID); err != nil {
-		logger.Printf("[ForeshadowHandler] DeleteForeshadow: id=%d err=%v", foreshadowID, err)
+		logger.Errorf("[ForeshadowHandler] DeleteForeshadow: id=%d err=%v", foreshadowID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to delete foreshadow")
 		return
 	}

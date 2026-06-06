@@ -46,7 +46,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 
 			ctx := context.Background()
 			if err := svcs.SFXService.AnalyzeSFXForVideo(ctx, shots, tenantID, params.UserContext, params.Lang, false); err != nil {
-				logger.Printf("TaskService resume sfx_gen %s: analyze failed: %v", t.TaskID, err)
+				logger.Errorf("TaskService resume sfx_gen %s: analyze failed: %v", t.TaskID, err)
 			}
 			svcs.TaskService.UpdateProgress(t.TaskID, 50) //nolint:errcheck
 
@@ -81,7 +81,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) }                 //nolint:errcheck
 				succ, fail, err := svcs.CharacterService.BatchGenerateImages(tenantID, novelID, params.Provider, params.Force, progressFn)
 				if err != nil {
-					logger.Printf("TaskService resume three_view %s failed: %v", t.TaskID, err)
+					logger.Errorf("TaskService resume three_view %s failed: %v", t.TaskID, err)
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				} else {
 					logger.Printf("TaskService resume three_view %s done: succeeded=%d failed=%d", t.TaskID, succ, fail)
@@ -164,7 +164,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
 			chars, err := svcs.CharacterService.AIBatchGenerate(tenantID, novelID)
 			if err != nil {
-				logger.Printf("TaskService resume char_gen %s failed: %v", t.TaskID, err)
+				logger.Errorf("TaskService resume char_gen %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 			} else {
 				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"count": len(chars)}) //nolint:errcheck
@@ -184,7 +184,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
 			items, err := svcs.ItemService.AIExtractFromNovel(tenantID, novelID)
 			if err != nil {
-				logger.Printf("TaskService resume item_extract %s failed: %v", t.TaskID, err)
+				logger.Errorf("TaskService resume item_extract %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 			} else {
 				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"count": len(items)}) //nolint:errcheck
@@ -204,7 +204,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
 			points, err := svcs.PlotPointService.AIExtractFromNovel(tenantID, novelID)
 			if err != nil {
-				logger.Printf("TaskService resume plot_extract %s failed: %v", t.TaskID, err)
+				logger.Errorf("TaskService resume plot_extract %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 			} else {
 				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"count": len(points)}) //nolint:errcheck
@@ -224,7 +224,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) }     //nolint:errcheck
 			count, err := svcs.ChapterService.BatchGenerateSummaries(tenantID, novelID, progressFn)
 			if err != nil {
-				logger.Printf("TaskService resume chapter_summary_batch %s failed: %v", t.TaskID, err)
+				logger.Errorf("TaskService resume chapter_summary_batch %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 			} else {
 				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"count": count}) //nolint:errcheck
@@ -251,7 +251,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
 			review, recordID, err := svcs.StoryboardService.ReviewStoryboard(tenantID, videoID, params.Provider, params.PreviousScore)
 			if err != nil {
-				logger.Printf("TaskService resume storyboard_review %s failed: %v", t.TaskID, err)
+				logger.Errorf("TaskService resume storyboard_review %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				return
 			}
@@ -283,7 +283,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			_ = tenantID // QualityControlService.ReviewChapter does not take tenantID
 			review, err := svcs.QualityControlService.ReviewChapter(context.Background(), chapterID, params.Provider)
 			if err != nil {
-				logger.Printf("TaskService resume chapter_review %s failed: %v", t.TaskID, err)
+				logger.Errorf("TaskService resume chapter_review %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				return
 			}
@@ -421,7 +421,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					go func(s *model.StoryboardShot) {
 						defer wg.Done()
 						if err := svcs.VideoService.GenerateShotAudio(s, tenantID, params.NarrationVoice); err != nil {
-							logger.Printf("TaskService resume voice_gen %s shot %d: %v", t.TaskID, s.ShotNo, err)
+							logger.Errorf("TaskService resume voice_gen %s shot %d: %v", t.TaskID, s.ShotNo, err)
 						}
 						done := int(doneCount.Add(1))
 						svcs.TaskService.UpdateProgress(t.TaskID, done*100/total) //nolint:errcheck
@@ -666,7 +666,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			svcs.TaskService.UpdateProgress(t.TaskID, 5) //nolint:errcheck
 			chapter, err := svcs.ChapterService.GenerateChapter(tenantID, params.NovelID, &params.Req)
 			if err != nil {
-				logger.Printf("TaskService resume chapter_gen %s failed: %v", t.TaskID, err)
+				logger.Errorf("TaskService resume chapter_gen %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				return
 			}

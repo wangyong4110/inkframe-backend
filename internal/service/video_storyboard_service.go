@@ -67,7 +67,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		// 同步更新 video 记录，保持一致性
 		video.ChapterID = chapterID
 		if err := s.videoRepo.Update(video); err != nil {
-			logger.Printf("[VideoService] failed to update video chapterID: %v", err)
+			logger.Errorf("[VideoService] failed to update video chapterID: %v", err)
 		}
 	}
 
@@ -219,7 +219,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 				result, aiErr = s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", p, provider, overrides)
 				aiElapsed := time.Since(aiStart).Round(time.Millisecond)
 				if aiErr != nil {
-					logger.Printf("[Storyboard] seg %d/%d attempt=%d AI error elapsed=%s err=%v", idx+1, len(segments), attempt, aiElapsed, aiErr)
+					logger.Errorf("[Storyboard] seg %d/%d attempt=%d AI error elapsed=%s err=%v", idx+1, len(segments), attempt, aiElapsed, aiErr)
 					if ai.IsTimeoutError(aiErr) {
 						break
 					}
@@ -231,7 +231,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 				}
 				parsed, parseErr := s.parseStoryboardResult(videoID, chapterID, result)
 				if parseErr != nil {
-					logger.Printf("[Storyboard] seg %d/%d attempt=%d parse failed: %v", idx+1, len(segments), attempt, parseErr)
+					logger.Errorf("[Storyboard] seg %d/%d attempt=%d parse failed: %v", idx+1, len(segments), attempt, parseErr)
 					continue
 				}
 				// Retry if AI returned far fewer shots than requested (< 50% of target).
@@ -273,10 +273,10 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		if r.err != nil {
 			failedSegs++
 			if idx == 0 {
-				logger.Printf("[Storyboard] seg 1/%d failed: %v", len(segments), r.err)
+				logger.Errorf("[Storyboard] seg 1/%d failed: %v", len(segments), r.err)
 				firstErr = r.err
 			} else {
-				logger.Printf("[Storyboard] seg %d/%d failed (non-fatal): %v", idx+1, len(segments), r.err)
+				logger.Errorf("[Storyboard] seg %d/%d failed (non-fatal): %v", idx+1, len(segments), r.err)
 			}
 			continue
 		}
@@ -290,12 +290,12 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	// 验证合并后的分镜序号连续性（1..N），以防合并逻辑出现 bug 导致序号跳空。
 	// 重编号步骤已保证 1..N，此处仅为安全校验：若检测到序号跳空，尝试二次修复。
 	if err := validateShotSequence(allShots); err != nil {
-		logger.Printf("[Storyboard] WARNING: shot sequence validation failed (%v); attempting re-sequence", err)
+		logger.Errorf("[Storyboard] WARNING: shot sequence validation failed (%v); attempting re-sequence", err)
 		for i, shot := range allShots {
 			shot.ShotNo = i + 1
 		}
 		if err2 := validateShotSequence(allShots); err2 != nil {
-			logger.Printf("[Storyboard] ERROR: re-sequence also failed: %v", err2)
+			logger.Errorf("[Storyboard] ERROR: re-sequence also failed: %v", err2)
 		}
 	}
 
@@ -340,10 +340,10 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	video.TotalShots = len(shots)
 	video.Status = "storyboard"
 	if err := s.videoRepo.Update(video); err != nil {
-		logger.Printf("[VideoService] failed to update video %d status: %v", video.ID, err)
+		logger.Errorf("[VideoService] failed to update video %d status: %v", video.ID, err)
 	}
 
-	logger.Printf("[Storyboard] finished videoID=%d totalShots=%d segments=%d failedSegs=%d elapsed=%s",
+	logger.Errorf("[Storyboard] finished videoID=%d totalShots=%d segments=%d failedSegs=%d elapsed=%s",
 		videoID, len(shots), len(segments), failedSegs, time.Since(totalStart).Round(time.Millisecond))
 
 	// 若存在失败段落，返回包含失败信息的 error（不阻止已成功段落的结果）
@@ -710,7 +710,7 @@ func (s *VideoService) buildStoryboardPrompt(
 	}
 	result, err := renderPrompt("storyboard_generate", ctx)
 	if err != nil {
-		logger.Printf("[buildStoryboardPrompt] renderPrompt error: %v", err)
+		logger.Errorf("[buildStoryboardPrompt] renderPrompt error: %v", err)
 		return ""
 	}
 	return result
@@ -763,7 +763,7 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 		}
 	}
 	if parseErr != nil || len(rawShots) == 0 {
-		logger.Printf("[VideoService] parseStoryboardResult: JSON parse failed (%v)\n===== AI RAW RESPONSE (len=%d) =====\n%s\n===== END =====", parseErr, len(result), result)
+		logger.Errorf("[VideoService] parseStoryboardResult: JSON parse failed (%v)\n===== AI RAW RESPONSE (len=%d) =====\n%s\n===== END =====", parseErr, len(result), result)
 		if parseErr != nil {
 			return nil, fmt.Errorf("分镜JSON解析失败（JSON 疑似被模型截断，建议在高级参数中增大 Max Tokens ≥16384 或减少目标分镜数量）: %w", parseErr)
 		}
@@ -1340,7 +1340,7 @@ func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string,
 			Status:       "pending",
 		}
 		if saveErr := s.reviewRecordRepo.Create(rec); saveErr != nil {
-			logger.Printf("ReviewStoryboard: save record failed: %v", saveErr)
+			logger.Errorf("ReviewStoryboard: save record failed: %v", saveErr)
 		} else {
 			recordID = rec.ID
 		}
@@ -1351,7 +1351,7 @@ func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string,
 		if err := s.videoRepo.UpdateFields(videoID, map[string]interface{}{
 			"review_status": "pending",
 		}); err != nil {
-			logger.Printf("ReviewStoryboard: update video review_status: %v", err)
+			logger.Errorf("ReviewStoryboard: update video review_status: %v", err)
 		}
 	}
 
@@ -1376,7 +1376,7 @@ func (s *VideoService) ApplyReviewInserts(videoID uint, inserts []model.ShotInse
 	sorted := make([]model.ShotInsertSuggestion, 0, len(inserts))
 	for _, ins := range inserts {
 		if ins.AfterShotNo < 0 || ins.AfterShotNo > maxShotNo {
-			logger.Printf("[ApplyReviewInserts] videoID=%d: skipping invalid AfterShotNo=%d (max=%d)", videoID, ins.AfterShotNo, maxShotNo)
+			logger.Errorf("[ApplyReviewInserts] videoID=%d: skipping invalid AfterShotNo=%d (max=%d)", videoID, ins.AfterShotNo, maxShotNo)
 			continue
 		}
 		sorted = append(sorted, ins)
@@ -1509,7 +1509,7 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent s
 	}
 	result, err := renderPrompt("storyboard_review", ctx)
 	if err != nil {
-		logger.Printf("[buildStoryboardReviewPrompt] renderPrompt error: %v", err)
+		logger.Errorf("[buildStoryboardReviewPrompt] renderPrompt error: %v", err)
 		return ""
 	}
 	return result
@@ -1526,7 +1526,7 @@ func parseStoryboardReview(result string) (*model.StoryboardReview, error) {
 		if err2 := json.Unmarshal([]byte(repaired), &review); err2 != nil {
 			return nil, fmt.Errorf("解析审查报告失败: %w; AI响应(前300字符): %.300s", err, result)
 		}
-		logger.Printf("[parseStoryboardReview] JSON repaired successfully (original err: %v)", err)
+		logger.Errorf("[parseStoryboardReview] JSON repaired successfully (original err: %v)", err)
 	}
 	return &review, nil
 }
@@ -1619,7 +1619,7 @@ func buildStoryboardOptimizePrompt(shots []*model.StoryboardShot, review *model.
 	}
 	result, err := renderPrompt("storyboard_optimize", ctx)
 	if err != nil {
-		logger.Printf("[buildStoryboardOptimizePrompt] renderPrompt error: %v", err)
+		logger.Errorf("[buildStoryboardOptimizePrompt] renderPrompt error: %v", err)
 		return ""
 	}
 	return result
@@ -1665,7 +1665,7 @@ func (s *VideoService) OptimizeStoryboardFromReview(tenantID, videoID uint, revi
 			Status:     "snapshot",
 		}
 		if saveErr := s.reviewRecordRepo.Create(snap); saveErr != nil {
-			logger.Printf("OptimizeStoryboardFromReview: save snapshot failed: %v", saveErr)
+			logger.Errorf("OptimizeStoryboardFromReview: save snapshot failed: %v", saveErr)
 		}
 	}
 
@@ -1704,7 +1704,7 @@ func (s *VideoService) OptimizeStoryboardFromReview(tenantID, videoID uint, revi
 			continue
 		}
 		if err := s.storyboardRepo.UpdateFields(sh.ID, fields); err != nil {
-			logger.Printf("OptimizeStoryboardFromReview: update shot %d failed: %v", sh.ShotNo, err)
+			logger.Errorf("OptimizeStoryboardFromReview: update shot %d failed: %v", sh.ShotNo, err)
 			continue
 		}
 		updatedCount++
@@ -1743,7 +1743,7 @@ func (s *VideoService) ApplyStoryboardDiffs(videoID uint, diffs []ShotApplyDiff,
 			continue
 		}
 		if err := s.storyboardRepo.UpdateFields(sh.ID, diff.Fields); err != nil {
-			logger.Printf("ApplyStoryboardDiffs: update shot %d failed: %v", diff.ShotNo, err)
+			logger.Errorf("ApplyStoryboardDiffs: update shot %d failed: %v", diff.ShotNo, err)
 			continue
 		}
 		applied++
@@ -1756,7 +1756,7 @@ func (s *VideoService) ApplyStoryboardDiffs(videoID uint, diffs []ShotApplyDiff,
 			rec.Status = "applied"
 			rec.AppliedAt = &now
 			if err2 := s.reviewRecordRepo.Update(rec); err2 != nil {
-				logger.Printf("ApplyStoryboardDiffs: update record %d status failed: %v", recordID, err2)
+				logger.Errorf("ApplyStoryboardDiffs: update record %d status failed: %v", recordID, err2)
 			}
 		}
 	}
@@ -1815,7 +1815,7 @@ func (s *VideoService) RollbackReview(tenantID, videoID, recordID uint) (int, er
 			"transition":     snap.Transition,
 		}
 		if err := s.storyboardRepo.UpdateFields(current.ID, fields); err != nil {
-			logger.Printf("RollbackReview: update shot %d failed: %v", snap.ShotNo, err)
+			logger.Errorf("RollbackReview: update shot %d failed: %v", snap.ShotNo, err)
 			continue
 		}
 		restored++
@@ -1825,7 +1825,7 @@ func (s *VideoService) RollbackReview(tenantID, videoID, recordID uint) (int, er
 	if rollbackRec, err := s.reviewRecordRepo.GetByID(recordID); err == nil {
 		rollbackRec.Status = "rolled_back"
 		if err2 := s.reviewRecordRepo.Update(rollbackRec); err2 != nil {
-			logger.Printf("RollbackReview: update record %d status failed: %v", recordID, err2)
+			logger.Errorf("RollbackReview: update record %d status failed: %v", recordID, err2)
 		}
 	}
 

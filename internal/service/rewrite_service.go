@@ -142,7 +142,7 @@ func (s *RewriteService) saveChapterVersion(chapterID uint, content string) {
 	}
 	nextNo, err := s.chapterVersionRepo.GetNextVersionNo(chapterID)
 	if err != nil {
-		logger.Printf("[Rewrite] saveChapterVersion: get next version no for chapter %d: %v", chapterID, err)
+		logger.Errorf("[Rewrite] saveChapterVersion: get next version no for chapter %d: %v", chapterID, err)
 		return
 	}
 	if err := s.chapterVersionRepo.Create(&model.ChapterVersion{
@@ -152,7 +152,7 @@ func (s *RewriteService) saveChapterVersion(chapterID uint, content string) {
 		ChangeType:        "before_rewrite",
 		ChangeDescription: "改写前原始内容备份",
 	}); err != nil {
-		logger.Printf("[Rewrite] saveChapterVersion: chapter %d: %v", chapterID, err)
+		logger.Errorf("[Rewrite] saveChapterVersion: chapter %d: %v", chapterID, err)
 	}
 }
 
@@ -163,7 +163,7 @@ func (s *RewriteService) ResetStaleChapters() {
 	const staleThreshold = 30 * time.Minute
 	n, err := s.chapterTaskRepo.ResetAllStaleRewriting(staleThreshold)
 	if err != nil {
-		logger.Printf("[RewriteService] ResetStaleChapters: %v", err)
+		logger.Errorf("[RewriteService] ResetStaleChapters: %v", err)
 		return
 	}
 	if n > 0 {
@@ -548,7 +548,7 @@ func (s *RewriteService) seedContinuityIndex(projectID uint, bible *model.Rewrit
 	}
 	if len(entries) > 0 {
 		if err := s.continuityRepo.BatchUpsert(entries); err != nil {
-			logger.Printf("[Rewrite] seedContinuityIndex: %v", err)
+			logger.Errorf("[Rewrite] seedContinuityIndex: %v", err)
 		}
 	}
 }
@@ -1176,7 +1176,7 @@ func (s *RewriteService) runRewriting(ctx context.Context, taskID string, projec
 
 			// Persist final content + metadata
 			if err := s.chapterTaskRepo.UpdatePostProcess(task.ID, finalContent, qualityScore, deaiApplied, issuesJSON); err != nil {
-				logger.Printf("[Rewrite] UpdatePostProcess ch%d: %v", task.ChapterNo, err)
+				logger.Errorf("[Rewrite] UpdatePostProcess ch%d: %v", task.ChapterNo, err)
 			}
 
 			// Async: generate chapter summary and update continuity index
@@ -1242,7 +1242,7 @@ func (s *RewriteService) rewriteChapterWithRetry(
 	if origChapter, err := s.chapterRepo.GetByID(task.ChapterID); err == nil {
 		s.saveChapterVersion(task.ChapterID, origChapter.Content)
 	} else {
-		logger.Printf("[Rewrite] rewriteChapterWithRetry: load chapter %d for backup: %v (non-fatal)", task.ChapterID, err)
+		logger.Errorf("[Rewrite] rewriteChapterWithRetry: load chapter %d for backup: %v (non-fatal)", task.ChapterID, err)
 	}
 
 	for attempt := 0; attempt <= maxChapterRetries; attempt++ {
@@ -1259,7 +1259,7 @@ func (s *RewriteService) rewriteChapterWithRetry(
 		if err != nil {
 			// AI call or template failure — no content generated
 			lastAIErr = err
-			logger.Printf("[Rewrite] chapter %d attempt %d/%d AI error: %v",
+			logger.Errorf("[Rewrite] chapter %d attempt %d/%d AI error: %v",
 				task.ChapterNo, attempt+1, maxChapterRetries+1, err)
 			if attempt < maxChapterRetries {
 				s.chapterTaskRepo.UpdateStatus(task.ID, "pending", "")
@@ -1269,7 +1269,7 @@ func (s *RewriteService) rewriteChapterWithRetry(
 
 		// Save to AttemptContent only (P0: not RewrittenContent)
 		if saveErr := s.chapterTaskRepo.SaveAttempt(task.ID, att.Content); saveErr != nil {
-			logger.Printf("[Rewrite] SaveAttempt ch%d: %v", task.ChapterNo, saveErr)
+			logger.Errorf("[Rewrite] SaveAttempt ch%d: %v", task.ChapterNo, saveErr)
 		}
 
 		lastAttempt = att
@@ -1289,7 +1289,7 @@ func (s *RewriteService) rewriteChapterWithRetry(
 		// Sync accepted rewrite content back to the source chapter
 		if att.Content != "" {
 			if err := s.chapterRepo.UpdateContent(task.ChapterID, att.Content); err != nil {
-				logger.Printf("AcceptAttempt: sync chapter content failed: %v", err)
+				logger.Errorf("AcceptAttempt: sync chapter content failed: %v", err)
 				// non-fatal: task is accepted, chapter update is best-effort
 			}
 		}
@@ -1301,12 +1301,12 @@ func (s *RewriteService) rewriteChapterWithRetry(
 		// Degraded accept: last attempt had content but failed quality gate
 		logger.Printf("[Rewrite] chapter %d exhausted retries, accepting degraded result (passed=%v)", task.ChapterNo, lastAttempt.Passed)
 		if err := s.chapterTaskRepo.AcceptAttempt(task.ID, lastAttempt.LexSim, lastAttempt.StructSim, lastAttempt.SemanticSim, false); err != nil {
-			logger.Printf("[Rewrite] AcceptAttempt (degraded) ch%d: %v", task.ChapterNo, err)
+			logger.Errorf("[Rewrite] AcceptAttempt (degraded) ch%d: %v", task.ChapterNo, err)
 		}
 		// Sync accepted rewrite content back to the source chapter
 		if lastAttempt.Content != "" {
 			if err := s.chapterRepo.UpdateContent(task.ChapterID, lastAttempt.Content); err != nil {
-				logger.Printf("AcceptAttempt: sync chapter content failed: %v", err)
+				logger.Errorf("AcceptAttempt: sync chapter content failed: %v", err)
 				// non-fatal: task is accepted, chapter update is best-effort
 			}
 		}
@@ -1398,7 +1398,7 @@ func (s *RewriteService) calculateSemanticLeakage(rewritten string, projectID ui
 	}
 	entries, err := s.continuityRepo.GetByProject(projectID)
 	if err != nil {
-		logger.Printf("[Rewrite] calculateSemanticLeakage: GetByProject(project=%d): %v — returning 0", projectID, err)
+		logger.Errorf("[Rewrite] calculateSemanticLeakage: GetByProject(project=%d): %v — returning 0", projectID, err)
 		return 0
 	}
 	if len(entries) == 0 {
@@ -1430,7 +1430,7 @@ func (s *RewriteService) generateChapterSummaryAsync(tenantID, novelID, projectI
 			"Content":   content,
 		})
 		if err != nil {
-			logger.Printf("[Rewrite] summary template ch%d: %v", chapterNo, err)
+			logger.Errorf("[Rewrite] summary template ch%d: %v", chapterNo, err)
 			return
 		}
 
@@ -1444,10 +1444,10 @@ func (s *RewriteService) generateChapterSummaryAsync(tenantID, novelID, projectI
 			if genErr == nil && result != "" {
 				break
 			}
-			logger.Printf("[Rewrite] summary AI ch%d attempt %d failed: %v", chapterNo, attempt+1, genErr)
+			logger.Errorf("[Rewrite] summary AI ch%d attempt %d failed: %v", chapterNo, attempt+1, genErr)
 		}
 		if genErr != nil || result == "" {
-			logger.Printf("[Rewrite] summary AI ch%d: all attempts failed: %v", chapterNo, genErr)
+			logger.Errorf("[Rewrite] summary AI ch%d: all attempts failed: %v", chapterNo, genErr)
 			return
 		}
 
@@ -1462,13 +1462,13 @@ func (s *RewriteService) generateChapterSummaryAsync(tenantID, novelID, projectI
 			} `json:"new_entities"`
 		}
 		if err := json.Unmarshal([]byte(jsonStr), &meta); err != nil {
-			logger.Printf("[Rewrite] summary parse ch%d: %v", chapterNo, err)
+			logger.Errorf("[Rewrite] summary parse ch%d: %v", chapterNo, err)
 			return
 		}
 
 		charStateJSON, _ := json.Marshal(meta.CharState)
 		if err := s.summaryRepo.Upsert(projectID, chapterNo, meta.Summary, string(charStateJSON)); err != nil {
-			logger.Printf("[Rewrite] summaryRepo.Upsert ch%d: %v", chapterNo, err)
+			logger.Errorf("[Rewrite] summaryRepo.Upsert ch%d: %v", chapterNo, err)
 		}
 
 		// Update continuity index with newly confirmed entity names
@@ -1476,13 +1476,13 @@ func (s *RewriteService) generateChapterSummaryAsync(tenantID, novelID, projectI
 			for _, e := range meta.NewEntities {
 				if e.Key != "" && e.Name != "" {
 					if err := s.continuityRepo.Upsert(projectID, e.Key, e.Type, e.Name, chapterNo); err != nil {
-						logger.Printf("[Rewrite] continuityRepo.Upsert ch%d %s: %v", chapterNo, e.Key, err)
+						logger.Errorf("[Rewrite] continuityRepo.Upsert ch%d %s: %v", chapterNo, e.Key, err)
 					}
 				}
 			}
 		}
 		if err := s.chapterTaskRepo.MarkSummaryWritten(taskID); err != nil {
-			logger.Printf("[Rewrite] MarkSummaryWritten ch%d: %v", chapterNo, err)
+			logger.Errorf("[Rewrite] MarkSummaryWritten ch%d: %v", chapterNo, err)
 		}
 		logger.Printf("[Rewrite] summary written ch%d", chapterNo)
 	}()
@@ -1501,12 +1501,12 @@ func (s *RewriteService) deAIPass(ctx context.Context, project *model.RewritePro
 		"VocabularyRegister": extractVocabRegister(bible.StyleGuide),
 	})
 	if err != nil {
-		logger.Printf("[Rewrite] deAIPass render: %v", err)
+		logger.Errorf("[Rewrite] deAIPass render: %v", err)
 		return ""
 	}
 	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, project.TenantID, project.NovelID, "chapter_gen", prompt, "")
 	if err != nil {
-		logger.Printf("[Rewrite] deAIPass generate: %v", err)
+		logger.Errorf("[Rewrite] deAIPass generate: %v", err)
 		return ""
 	}
 	if strings.TrimSpace(result) == "" {
@@ -1520,7 +1520,7 @@ func (s *RewriteService) updateRewriteProgress(taskID string, projectID uint, to
 	// that can drift if the task is resumed or chapters are skipped.
 	done, err := s.chapterTaskRepo.CountByProjectAndStatus(projectID, "completed")
 	if err != nil {
-		logger.Printf("[Rewrite] updateRewriteProgress: count failed: %v", err)
+		logger.Errorf("[Rewrite] updateRewriteProgress: count failed: %v", err)
 		return
 	}
 	pct := 0
@@ -1599,7 +1599,7 @@ func (s *RewriteService) UpdateBible(projectID uint, req UpdateBibleRequest) err
 		if bible, fetchErr := s.bibleRepo.GetByProjectID(projectID); fetchErr == nil {
 			s.seedContinuityIndex(projectID, bible)
 		} else {
-			logger.Printf("[RewriteService] UpdateBible: re-seed continuity index skipped (fetch bible failed): %v", fetchErr)
+			logger.Errorf("[RewriteService] UpdateBible: re-seed continuity index skipped (fetch bible failed): %v", fetchErr)
 		}
 	}
 	return nil

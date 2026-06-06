@@ -135,7 +135,7 @@ func (h *ImportHandler) runImportAndAnalyze(taskID string, req *service.ImportRe
 
 	result, err := h.importService.Import(req)
 	if err != nil {
-		logger.Printf("[ImportHandler] runImportAndAnalyze task %s failed: %v", taskID, err)
+		logger.Errorf("[ImportHandler] runImportAndAnalyze task %s failed: %v", taskID, err)
 		h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		return
 	}
@@ -175,14 +175,14 @@ func (h *ImportHandler) ImportNovel(c *gin.Context) {
 	go func(taskID string, r service.ImportRequest) {
 		defer func() {
 			if rc := recover(); rc != nil {
-				logger.Printf("[ImportHandler] ImportNovel task %s panic: %v", taskID, rc)
+				logger.Errorf("[ImportHandler] ImportNovel task %s panic: %v", taskID, rc)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		result, err := h.importService.Import(&r)
 		if err != nil {
-			logger.Printf("[ImportHandler] ImportNovel task %s failed: %v", taskID, err)
+			logger.Errorf("[ImportHandler] ImportNovel task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -300,7 +300,7 @@ func (h *ImportHandler) ImportFromURL(c *gin.Context) {
 	go func(taskID string, r *service.ImportRequest) {
 		defer func() {
 			if rc := recover(); rc != nil {
-				logger.Printf("[ImportHandler] ImportFromURL task %s panic: %v", taskID, rc)
+				logger.Errorf("[ImportHandler] ImportFromURL task %s panic: %v", taskID, rc)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -350,7 +350,7 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 	go func(taskID string, r *service.ImportRequest) {
 		defer func() {
 			if rc := recover(); rc != nil {
-				logger.Printf("[ImportHandler] ImportFromCrawl task %s panic: %v", taskID, rc)
+				logger.Errorf("[ImportHandler] ImportFromCrawl task %s panic: %v", taskID, rc)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -359,7 +359,7 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 		// 1. 创建章节存根，启动后台爬取
 		result, err := h.importService.Import(r)
 		if err != nil {
-			logger.Printf("[ImportHandler] Crawl import task %s failed: %v", taskID, err)
+			logger.Errorf("[ImportHandler] Crawl import task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -801,7 +801,7 @@ func (h *ImportHandler) ResumeCrawl(c *gin.Context) {
 	go func(taskID string, nid uint) {
 		defer func() {
 			if rc := recover(); rc != nil {
-				logger.Printf("[ImportHandler] ResumeCrawl task %s panic: %v", taskID, rc)
+				logger.Errorf("[ImportHandler] ResumeCrawl task %s panic: %v", taskID, rc)
 				h.taskSvc.Fail(taskID, "内部错误") //nolint:errcheck
 			}
 		}()

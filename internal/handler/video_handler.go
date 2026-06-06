@@ -176,7 +176,7 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 	tenantID := getTenantID(c)
 	video, err := h.videoService.CreateVideo(uint(novelId), &req, tenantID)
 	if err != nil {
-		logger.Printf("[VideoHandler] CreateVideo: novelID=%d err=%v", novelId, err)
+		logger.Errorf("[VideoHandler] CreateVideo: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -239,7 +239,7 @@ func (h *VideoHandler) ListVideos(c *gin.Context) {
 
 	videos, total, err := h.videoService.ListVideos(novelId, chapterID, status, getTenantID(c), p.Page, p.PageSize)
 	if err != nil {
-		logger.Printf("[VideoHandler] ListVideos: err=%v", err)
+		logger.Errorf("[VideoHandler] ListVideos: err=%v", err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -272,7 +272,7 @@ func (h *VideoHandler) UpdateVideo(c *gin.Context) {
 
 	video, err := h.videoService.UpdateVideo(uint(id), getTenantID(c), &req)
 	if err != nil {
-		logger.Printf("[VideoHandler] UpdateVideo: id=%d err=%v", id, err)
+		logger.Errorf("[VideoHandler] UpdateVideo: id=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -293,7 +293,7 @@ func (h *VideoHandler) DeleteVideo(c *gin.Context) {
 	}
 
 	if err := h.videoService.DeleteVideo(uint(id), getTenantID(c)); err != nil {
-		logger.Printf("[VideoHandler] DeleteVideo: id=%d err=%v", id, err)
+		logger.Errorf("[VideoHandler] DeleteVideo: id=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}

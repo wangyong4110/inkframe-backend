@@ -849,7 +849,7 @@ func (s *WorldviewService) GenerateWorldview(tenantID uint, novelID uint, genre 
 		CheatSystem string `json:"cheat_system"`
 	}
 	if err := json.Unmarshal([]byte(extractJSON(result)), &data); err != nil {
-		logger.Printf("GenerateWorldview: failed to parse AI response: %v, raw: %.300s", err, result)
+		logger.Errorf("GenerateWorldview: failed to parse AI response: %v, raw: %.300s", err, result)
 	}
 
 	name := data.Name

@@ -1508,7 +1508,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 					mediaFiles = append(mediaFiles, mediaFile{filename: vidFilename, data: mediaData})
 				}
 			} else {
-				logger.Printf("[ExportCapCutDraft] media load failed for shot %d url=%q (%v)", shot.ShotNo, mediaURL, mediaErr)
+				logger.Errorf("[ExportCapCutDraft] media load failed for shot %d url=%q (%v)", shot.ShotNo, mediaURL, mediaErr)
 			}
 		}
 		// 无论下载是否成功都记录到素材目录（CapCut 用于素材面板索引）
@@ -1636,7 +1636,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 					actualAudioDur = dur
 				}
 			} else {
-				logger.Printf("[ExportCapCutDraft] audio load failed shot %d url=%q: %v", shot.ShotNo, shot.AudioPath, err)
+				logger.Errorf("[ExportCapCutDraft] audio load failed shot %d url=%q: %v", shot.ShotNo, shot.AudioPath, err)
 			}
 			draftMatEntries = append(draftMatEntries, draftMatEntry{filename: audPath, metetype: "music", duration: actualAudioDur})
 			// SourceTimerange：告知剪映实际取用的音频长度，不超过视频段时长
@@ -1820,7 +1820,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 					actualSFXDur = parsed
 				}
 			} else {
-				logger.Printf("[ExportCapCutDraft] SFX load failed for shot %d sfx %d url=%q: %v", shot.ShotNo, seqLabel, sfxItem.URL, err)
+				logger.Errorf("[ExportCapCutDraft] SFX load failed for shot %d sfx %d url=%q: %v", shot.ShotNo, seqLabel, sfxItem.URL, err)
 			}
 			draftMatEntries = append(draftMatEntries, draftMatEntry{filename: sfxPath, metetype: "music", duration: actualSFXDur})
 
@@ -2031,7 +2031,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 					bgmActualDur = dur
 				}
 			} else {
-				logger.Printf("[ExportCapCutDraft] BGM load failed for shot %d url=%q: %v", bs.StartShotNo, bs.URL, err)
+				logger.Errorf("[ExportCapCutDraft] BGM load failed for shot %d url=%q: %v", bs.StartShotNo, bs.URL, err)
 			}
 			draftMatEntries = append(draftMatEntries, draftMatEntry{filename: bgmFilename, metetype: "music", duration: bgmActualDur})
 
@@ -2330,12 +2330,12 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 	contentJSON, err := json.MarshalIndent(content, "", "  ")
 	if err != nil {
-		logger.Printf("[CapCutService] ExportCapCutDraft: marshal draft content failed: %v", err)
+		logger.Errorf("[CapCutService] ExportCapCutDraft: marshal draft content failed: %v", err)
 		return nil, fmt.Errorf("marshal draft content: %w", err)
 	}
 	metaJSON, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
-		logger.Printf("[CapCutService] ExportCapCutDraft: marshal draft meta failed: %v", err)
+		logger.Errorf("[CapCutService] ExportCapCutDraft: marshal draft meta failed: %v", err)
 		return nil, fmt.Errorf("marshal draft meta: %w", err)
 	}
 
@@ -2467,7 +2467,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 	if err := zw.Close(); err != nil {
 		zipFile.Close()
-		logger.Printf("[CapCutService] ExportCapCutDraft: close zip failed: %v", err)
+		logger.Errorf("[CapCutService] ExportCapCutDraft: close zip failed: %v", err)
 		return nil, fmt.Errorf("close zip: %w", err)
 	}
 	if err := zipFile.Close(); err != nil {
@@ -2481,7 +2481,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 	const zipWarnThreshold = 500 * 1024 * 1024 // 500 MB
 	if len(zipData) > zipWarnThreshold {
-		logger.Printf("[CapCutService] ExportCapCutDraft WARNING: ZIP size %d bytes exceeds %d MB; consider reducing shot count or media quality", len(zipData), zipWarnThreshold/1024/1024)
+		logger.Errorf("[CapCutService] ExportCapCutDraft WARNING: ZIP size %d bytes exceeds %d MB; consider reducing shot count or media quality", len(zipData), zipWarnThreshold/1024/1024)
 	}
 	result := &ExportResult{
 		Data:        zipData,
@@ -2595,7 +2595,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 					logger.Printf("[ExportBRollDraft] total media exceeds 2GiB, skipping image embed shot %d", shot.ShotNo)
 				}
 			} else {
-				logger.Printf("[ExportBRollDraft] media load failed for shot %d (%v)", shot.ShotNo, mediaErr)
+				logger.Errorf("[ExportBRollDraft] media load failed for shot %d (%v)", shot.ShotNo, mediaErr)
 			}
 		}
 		draftMatEntries = append(draftMatEntries, draftMatEntry{
@@ -2694,7 +2694,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 					actualAudioDur = dur
 				}
 			} else {
-				logger.Printf("[ExportBRollDraft] audio load failed shot %d url=%q: %v", shot.ShotNo, shot.AudioPath, err)
+				logger.Errorf("[ExportBRollDraft] audio load failed shot %d url=%q: %v", shot.ShotNo, shot.AudioPath, err)
 			}
 			draftMatEntries = append(draftMatEntries, draftMatEntry{filename: audPath, metetype: "music", duration: actualAudioDur})
 			srcDur := actualAudioDur
@@ -3622,7 +3622,7 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 
 	if err := zw.Close(); err != nil {
 		zipFile.Close()
-		logger.Printf("[CapCutService] ExportFCPXML: close zip failed: %v", err)
+		logger.Errorf("[CapCutService] ExportFCPXML: close zip failed: %v", err)
 		return nil, fmt.Errorf("close zip: %w", err)
 	}
 	if err := zipFile.Close(); err != nil {
@@ -3785,7 +3785,7 @@ func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.Sto
 
 	if err := zw.Close(); err != nil {
 		zipFile.Close()
-		logger.Printf("[CapCutService] ExportResourceZip: close zip failed: %v", err)
+		logger.Errorf("[CapCutService] ExportResourceZip: close zip failed: %v", err)
 		return nil, fmt.Errorf("close zip: %w", err)
 	}
 	if err := zipFile.Close(); err != nil {
@@ -4317,7 +4317,7 @@ func (s *CapCutService) ExportVTT(video *model.Video, shots []*model.StoryboardS
 
 	var buf bytes.Buffer
 	if err := subs.WriteToWebVTT(&buf); err != nil {
-		logger.Printf("[CapCutService] ExportVTT: write vtt failed: %v", err)
+		logger.Errorf("[CapCutService] ExportVTT: write vtt failed: %v", err)
 		return nil, fmt.Errorf("write vtt: %w", err)
 	}
 
@@ -4591,7 +4591,7 @@ func (s *CapCutService) ExportOTIO(video *model.Video, shots []*model.Storyboard
 
 	data, err := json.MarshalIndent(timeline, "", "  ")
 	if err != nil {
-		logger.Printf("[CapCutService] ExportOTIO: marshal failed: %v", err)
+		logger.Errorf("[CapCutService] ExportOTIO: marshal failed: %v", err)
 		return nil, fmt.Errorf("marshal otio: %w", err)
 	}
 
@@ -4642,7 +4642,7 @@ func (s *CapCutService) ExportCSV(video *model.Video, shots []*model.StoryboardS
 	}
 	w.Flush()
 	if err := w.Error(); err != nil {
-		logger.Printf("[CapCutService] ExportCSV: flush failed: %v", err)
+		logger.Errorf("[CapCutService] ExportCSV: flush failed: %v", err)
 		return nil, fmt.Errorf("write csv: %w", err)
 	}
 

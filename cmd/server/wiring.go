@@ -358,11 +358,11 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 		if p, err := aiManager.GetProvider(""); err == nil {
 			defaultAIProvider = p
 		} else {
-			logger.Printf("Warning: could not load default AI provider: %v — knowledge base embedding will be unavailable", err)
+			logger.Errorf("Warning: could not load default AI provider: %v — knowledge base embedding will be unavailable", err)
 		}
 	}
 	if defaultAIProvider == nil {
-		logger.Printf("Warning: no default AI provider available; knowledge base embedding disabled")
+		logger.Errorf("Warning: no default AI provider available; knowledge base embedding disabled")
 	}
 	knowledgeSvc := service.NewKnowledgeService(repos.KnowledgeBaseRepo, vectorStore, defaultAIProvider)
 

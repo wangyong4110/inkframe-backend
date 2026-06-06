@@ -94,7 +94,7 @@ func (s *CharacterService) extractCharNamesFromContent(
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_character_names", prompt, "")
 	if err != nil {
-		logger.Printf("[CharacterService] extractCharNamesFromContent: AI call failed: %v", err)
+		logger.Errorf("[CharacterService] extractCharNamesFromContent: AI call failed: %v", err)
 		return nil, err
 	}
 
@@ -203,7 +203,7 @@ func (s *CharacterService) extractCharacterNamesFromChapters(
 			logger.Printf("[CharacterService] consolidateCharacterNames: %d → %d entries", len(merged), len(consolidated))
 			merged = consolidated
 		} else if err != nil {
-			logger.Printf("[CharacterService] consolidateCharacterNames: warn: %v (keeping original list)", err)
+			logger.Errorf("[CharacterService] consolidateCharacterNames: warn: %v (keeping original list)", err)
 		}
 	}
 	return merged, nil
@@ -319,7 +319,7 @@ func (s *CharacterService) generateOneCharacterProfile(
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "generate_character_profile", prompt, "",
 		StoryboardOverrides{})
 	if err != nil {
-		logger.Printf("[CharacterService] generateOneCharacterProfile: AI call failed for %q: %v", entry.Name, err)
+		logger.Errorf("[CharacterService] generateOneCharacterProfile: AI call failed for %q: %v", entry.Name, err)
 		return nil, fmt.Errorf("AI call: %w", err)
 	}
 
@@ -583,7 +583,7 @@ func (s *CharacterService) GetCharacter(id uint) (*model.Character, error) {
 // FixTenantID 修正角色的 tenant_id（用于自愈历史数据中 tenant_id=0 的记录）
 func (s *CharacterService) FixTenantID(id, tenantID uint) {
 	if err := s.characterRepo.UpdateTenantID(id, tenantID); err != nil {
-		logger.Warnf("CharacterService.FixTenantID: id=%d tenant=%d err=%v", id, tenantID, err)
+		logger.Errorf("CharacterService.FixTenantID: id=%d tenant=%d err=%v", id, tenantID, err)
 	}
 }
 
@@ -714,14 +714,14 @@ func (s *CharacterService) DeleteCharacter(id, tenantID uint) error {
 	// 级联清理关联数据：删除角色状态快照
 	if s.snapshotRepo != nil {
 		if err := s.snapshotRepo.DeleteByCharacter(id); err != nil {
-			logger.Printf("[CharacterService] DeleteCharacter: delete snapshots for char %d: %v", id, err)
+			logger.Errorf("[CharacterService] DeleteCharacter: delete snapshots for char %d: %v", id, err)
 		}
 	}
 
 	// 级联清理章节角色覆盖
 	if s.chapterCharacterRepo != nil {
 		if err := s.chapterCharacterRepo.DeleteByCharacter(id); err != nil {
-			logger.Printf("[CharacterService] DeleteCharacter: delete chapter overrides for char %d: %v", id, err)
+			logger.Errorf("[CharacterService] DeleteCharacter: delete chapter overrides for char %d: %v", id, err)
 		}
 	}
 
@@ -932,7 +932,7 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 	upserted := make([]*model.Character, 0, len(nameList))
 	for i, res := range results {
 		if res.err != nil {
-			logger.Printf("CharacterService.AIBatchGenerate: generate profile for %q: %v", nameList[i].Name, res.err)
+			logger.Errorf("CharacterService.AIBatchGenerate: generate profile for %q: %v", nameList[i].Name, res.err)
 			continue
 		}
 		p := res.profile
@@ -972,7 +972,7 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			if v, ok := fillIfEmpty(ch.Role, role); ok { ch.Role = v }
 			if v, ok := fillIfEmpty(ch.VoiceID, suggestedVoice); ok { ch.VoiceID = v }
 			if err := s.characterRepo.Update(ch); err != nil {
-				logger.Printf("CharacterService.AIBatchGenerate: update %s: %v", ch.Name, err)
+				logger.Errorf("CharacterService.AIBatchGenerate: update %s: %v", ch.Name, err)
 				continue
 			}
 			upserted = append(upserted, ch)
@@ -989,7 +989,7 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 				Status:       "active",
 			}
 			if err := s.characterRepo.Create(character); err != nil {
-				logger.Printf("CharacterService.AIBatchGenerate: create %s: %v", p.Name, err)
+				logger.Errorf("CharacterService.AIBatchGenerate: create %s: %v", p.Name, err)
 				continue
 			}
 			upserted = append(upserted, character)
@@ -1113,7 +1113,7 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 			Status:       "active",
 		}
 		if e := s.characterRepo.Create(char); e != nil {
-			logger.Printf("CharacterService.AIExtractMinorChars: create %q: %v", c.Name, e)
+			logger.Errorf("CharacterService.AIExtractMinorChars: create %q: %v", c.Name, e)
 			continue
 		}
 		existingNameSet[strings.ToLower(c.Name)] = true
@@ -1125,7 +1125,7 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 				NovelID:     novelID,
 			}
 			if e := s.chapterCharacterRepo.Upsert(cc); e != nil {
-				logger.Printf("CharacterService.AIExtractMinorChars: link chapter %v: %v", chapterID, e)
+				logger.Errorf("CharacterService.AIExtractMinorChars: link chapter %v: %v", chapterID, e)
 			}
 		}
 		created = append(created, char)
@@ -1193,7 +1193,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 			if force || char.FaceCloseup == "" {
 				faceImg, faceErr := imgSvc.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, char.Portrait, provider)
 				if faceErr != nil {
-					logger.Printf("[CharacterService] BatchGenerateImages: face closeup char %d (%s) failed: %v", char.ID, char.Name, faceErr)
+					logger.Errorf("[CharacterService] BatchGenerateImages: face closeup char %d (%s) failed: %v", char.ID, char.Name, faceErr)
 					charFailed = true
 				} else {
 					updateReq.FaceCloseup = faceImg.URL
@@ -1210,7 +1210,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 			if force || char.ThreeViewSheet == "" {
 				threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, faceRef, provider)
 				if threeErr != nil {
-					logger.Printf("[CharacterService] BatchGenerateImages: three-view char %d (%s) failed: %v", char.ID, char.Name, threeErr)
+					logger.Errorf("[CharacterService] BatchGenerateImages: three-view char %d (%s) failed: %v", char.ID, char.Name, threeErr)
 					charFailed = true
 				} else {
 					updateReq.ThreeViewSheet = threeImg.URL
@@ -1219,7 +1219,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 
 			if updateReq.FaceCloseup != "" || updateReq.ThreeViewSheet != "" {
 				if _, saveErr := s.UpdateCharacter(char.ID, char.TenantID, updateReq); saveErr != nil {
-					logger.Printf("[CharacterService] BatchGenerateImages: save char %d: %v", char.ID, saveErr)
+					logger.Errorf("[CharacterService] BatchGenerateImages: save char %d: %v", char.ID, saveErr)
 					charFailed = true
 				}
 			}
@@ -1278,7 +1278,7 @@ Respond with ONLY a JSON object in this exact format:
 
 	response, err := s.aiService.GenerateWithVision(prompt, images)
 	if err != nil {
-		logger.Printf("[CharacterService] AnalyzeConsistency: vision call failed for char %d: %v", id, err)
+		logger.Errorf("[CharacterService] AnalyzeConsistency: vision call failed for char %d: %v", id, err)
 		return map[string]interface{}{
 			"character_id":      id,
 			"consistency_score": 0.0,

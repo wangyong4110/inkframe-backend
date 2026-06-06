@@ -120,13 +120,13 @@ func (s *WebhookService) Dispatch(tenantID uint, eventType string, payload inter
 		"data":       payload,
 	})
 	if err != nil {
-		logger.Warnf("[WebhookService] Dispatch marshal error: %v", err)
+		logger.Errorf("[WebhookService] Dispatch marshal error: %v", err)
 		return
 	}
 
 	var subs []*model.WebhookSubscription
 	if err := s.db.Where("tenant_id = ? AND is_active = ?", tenantID, true).Find(&subs).Error; err != nil {
-		logger.Warnf("[WebhookService] Dispatch query error: %v", err)
+		logger.Errorf("[WebhookService] Dispatch query error: %v", err)
 		return
 	}
 
@@ -190,7 +190,7 @@ func (s *WebhookService) deliverWithRetry(sub *model.WebhookSubscription, eventT
 			lastErr = fmt.Sprintf("HTTP %d: %s", code, respBody)
 		}
 		lastCode = code
-		logger.Warnf("[WebhookService] delivery attempt %d failed for subscription %d: %s", attempt, sub.ID, lastErr)
+		logger.Errorf("[WebhookService] delivery attempt %d failed for subscription %d: %s", attempt, sub.ID, lastErr)
 	}
 
 	// All 3 attempts failed
@@ -205,7 +205,7 @@ func (s *WebhookService) deliverWithRetry(sub *model.WebhookSubscription, eventT
 	s.db.First(&updated, sub.ID)
 	if updated.FailCount >= 3 {
 		s.db.Model(sub).Update("is_active", false)
-		logger.Warnf("[WebhookService] subscription %d disabled after %d consecutive failures", sub.ID, updated.FailCount)
+		logger.Errorf("[WebhookService] subscription %d disabled after %d consecutive failures", sub.ID, updated.FailCount)
 	}
 }
 

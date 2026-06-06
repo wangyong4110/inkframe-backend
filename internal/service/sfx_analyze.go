@@ -219,7 +219,7 @@ func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.Stor
 			defer func() { <-sem }()
 			err := s.analyzeSingleShotSFX(ctx, sh, tenantID, userContext, promptLanguage)
 			if err != nil {
-				logger.Printf("[SFXService] AnalyzeSFXForVideo: shot %d failed: %v", sh.ShotNo, err)
+				logger.Errorf("[SFXService] AnalyzeSFXForVideo: shot %d failed: %v", sh.ShotNo, err)
 				failed.Add(1)
 			} else {
 				updated.Add(1)

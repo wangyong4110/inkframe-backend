@@ -63,7 +63,7 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 		dlCancel()
 		if dlErr != nil {
 			// 下载失败不致命：保留远程 URL，StitchVideo 会重试
-			logger.Printf("PollShotStatus: download shot %d video failed (keeping URL): %v", shot.ShotNo, err)
+			logger.Errorf("PollShotStatus: download shot %d video failed (keeping URL): %v", shot.ShotNo, err)
 			shot.VideoURL = videoURL
 			shot.ClipPath = ""
 		} else {
@@ -79,7 +79,7 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 			shot.Status = "pending"
 			shot.ShotTaskID = ""
 		} else {
-			logger.Printf("PollShotStatus: shot %d exceeded max retries (%d), marking as permanently failed", shot.ShotNo, shot.RetryCount)
+			logger.Errorf("PollShotStatus: shot %d exceeded max retries (%d), marking as permanently failed", shot.ShotNo, shot.RetryCount)
 		}
 	case "processing", "running", "submitted":
 		shot.Status = "processing"
@@ -133,7 +133,7 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 	}
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Printf("video synthesis: panic in cleanup: %v", r)
+			logger.Errorf("video synthesis: panic in cleanup: %v", r)
 		}
 		os.RemoveAll(tmpDir)
 	}()
@@ -246,11 +246,11 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 	var concatLines []string
 	for i, res := range results {
 		shot := res.shot
-		logger.Printf("[StitchVideo] shot %d: processing (clipFile=%q imgFile=%q err=%v)",
+		logger.Errorf("[StitchVideo] shot %d: processing (clipFile=%q imgFile=%q err=%v)",
 			shot.ShotNo, res.clipFile, res.imgFile, res.downloadErr)
 
 		if res.downloadErr != nil {
-			logger.Printf("[StitchVideo] shot %d: download error — skipping: %v", shot.ShotNo, res.downloadErr)
+			logger.Errorf("[StitchVideo] shot %d: download error — skipping: %v", shot.ShotNo, res.downloadErr)
 			continue
 		}
 
@@ -266,12 +266,12 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 			var clipErr error
 			videoClipPath, clipErr = s.generateKenBurnsPureGo(ctx, shot, res.imgFile, duration, aspectRatio)
 			if clipErr != nil {
-				logger.Printf("[StitchVideo] shot %d: Ken Burns failed: %v — falling back to still frame", shot.ShotNo, clipErr)
+				logger.Errorf("[StitchVideo] shot %d: Ken Burns failed: %v — falling back to still frame", shot.ShotNo, clipErr)
 				videoClipPath, clipErr = s.generateStillFrameClip(res.imgFile, duration, aspectRatio)
 			}
 			os.Remove(res.imgFile)
 			if clipErr != nil {
-				logger.Printf("[StitchVideo] shot %d: still frame failed: %v — skipping", shot.ShotNo, clipErr)
+				logger.Errorf("[StitchVideo] shot %d: still frame failed: %v — skipping", shot.ShotNo, clipErr)
 				if e := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"status": "failed", "error_message": fmt.Sprintf("still frame generation failed: %v", clipErr)}); e != nil {
 					logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d: %v", shot.ID, e)
 				}
@@ -311,7 +311,7 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 			_, mergeErr := runFFmpegCtx(mergeCtx, allMergeArgs...)
 			mergeCancel()
 			if mergeErr != nil {
-				logger.Printf("[StitchVideo] shot %d: audio merge failed: %v — using clip without audio", shot.ShotNo, mergeErr)
+				logger.Errorf("[StitchVideo] shot %d: audio merge failed: %v — using clip without audio", shot.ShotNo, mergeErr)
 			} else {
 				logger.Printf("[StitchVideo] shot %d: audio merged OK", shot.ShotNo)
 				finalClip = mergedFile
@@ -363,12 +363,12 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 		"-movflags", "+faststart",
 		stitchedPath,
 	); concatErr != nil {
-		logger.Printf("[StitchVideo] videoID=%d: ffmpeg concat failed: %v\noutput: %s", videoID, concatErr, string(concatOut))
+		logger.Errorf("[StitchVideo] videoID=%d: ffmpeg concat failed: %v\noutput: %s", videoID, concatErr, string(concatOut))
 		if vid, ferr := s.videoRepo.GetByID(videoID); ferr == nil && vid != nil {
 			vid.Status = "failed"
 			vid.ErrorMessage = fmt.Sprintf("ffmpeg stitch failed: %v", concatErr)
 			if updErr := s.videoRepo.Update(vid); updErr != nil {
-				logger.Printf("[StitchVideo] videoID=%d: failed to update status to failed: %v", videoID, updErr)
+				logger.Errorf("[StitchVideo] videoID=%d: failed to update status to failed: %v", videoID, updErr)
 			}
 		}
 		return "", fmt.Errorf("ffmpeg stitch failed: %w", concatErr)
@@ -402,7 +402,7 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 		if bgmURL != "" {
 			logger.Printf("[StitchVideo] videoID=%d: mixing BGM: %s", videoID, bgmURL)
 			if mixErr := s.bgmService.MixBGM(ctx, stitchedPath, bgmURL, outputPath); mixErr != nil {
-				logger.Printf("[StitchVideo] videoID=%d: BGM mix failed: %v — using stitched without BGM", videoID, mixErr)
+				logger.Errorf("[StitchVideo] videoID=%d: BGM mix failed: %v — using stitched without BGM", videoID, mixErr)
 				outputPath = stitchedPath
 			} else {
 				logger.Printf("[StitchVideo] videoID=%d: BGM mix done", videoID)
@@ -421,13 +421,13 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 	// Update video record — must succeed for status to be reflected in DB
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
-		logger.Printf("[StitchVideo] videoID=%d: video record not found after stitch, status NOT updated: %v", videoID, err)
+		logger.Errorf("[StitchVideo] videoID=%d: video record not found after stitch, status NOT updated: %v", videoID, err)
 		return outputPath, fmt.Errorf("stitch succeeded but video record not found: %w", err)
 	}
 	video.VideoPath = outputPath
 	video.Status = "completed"
 	if err := s.videoRepo.Update(video); err != nil {
-		logger.Printf("[StitchVideo] videoID=%d: failed to update status to completed: %v", videoID, err)
+		logger.Errorf("[StitchVideo] videoID=%d: failed to update status to completed: %v", videoID, err)
 	}
 
 	logger.Printf("[StitchVideo] videoID=%d: done → %s", videoID, outputPath)
@@ -443,7 +443,7 @@ func (s *VideoService) RecoverActivePollTasks() {
 	if err := s.videoRepo.DB().
 		Where("status = ?", "generating").
 		Find(&videos).Error; err != nil {
-		logger.Printf("[VideoService] RecoverActivePollTasks: query failed: %v", err)
+		logger.Errorf("[VideoService] RecoverActivePollTasks: query failed: %v", err)
 		return
 	}
 	for _, v := range videos {
@@ -489,7 +489,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 				video.Status = "failed"
 				video.ErrorMessage = "stitch pipeline timed out (>2h)"
 				if err := s.videoRepo.Update(video); err != nil {
-					logger.Printf("[VideoService] PollAndStitchVideo: failed to update video %d status to failed (timeout): %v", videoID, err)
+					logger.Errorf("[VideoService] PollAndStitchVideo: failed to update video %d status to failed (timeout): %v", videoID, err)
 				}
 			}
 			return
@@ -546,7 +546,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 			for _, shot := range pending {
 				if shot.ShotTaskID == "" {
 					if err := s.GenerateShotVideo(shot, aspectRatio); err != nil {
-						logger.Printf("[PollAndStitch] GenerateShotVideo shot %d failed: %v", shot.ID, err)
+						logger.Errorf("[PollAndStitch] GenerateShotVideo shot %d failed: %v", shot.ID, err)
 						if e := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"status": "failed", "error_message": fmt.Sprintf("generation failed: %v", err)}); e != nil {
 							logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d: %v", shot.ID, e)
 						}
@@ -558,7 +558,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 		// Poll processing shots
 		for _, shot := range processing {
 			if err := s.PollShotStatus(shot); err != nil {
-				logger.Printf("[PollAndStitch] PollShotStatus shot %d failed: %v", shot.ID, err)
+				logger.Errorf("[PollAndStitch] PollShotStatus shot %d failed: %v", shot.ID, err)
 			}
 		}
 
@@ -583,13 +583,13 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 		if completedCount+failedCount == len(allShots) {
 			if completedCount > 0 {
 				if _, err := s.StitchVideoCtx(ctx, videoID); err != nil {
-					logger.Printf("PollAndStitchVideo: stitch failed: %v", err)
+					logger.Errorf("PollAndStitchVideo: stitch failed: %v", err)
 					video, _ := s.videoRepo.GetByID(videoID)
 					if video != nil {
 						video.Status = "failed"
 						video.ErrorMessage = err.Error()
 						if updErr := s.videoRepo.Update(video); updErr != nil {
-							logger.Printf("[VideoService] PollAndStitchVideo: failed to update video %d status to failed (stitch error): %v", videoID, updErr)
+							logger.Errorf("[VideoService] PollAndStitchVideo: failed to update video %d status to failed (stitch error): %v", videoID, updErr)
 						}
 					}
 				}
@@ -599,7 +599,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 					video.Status = "failed"
 					video.ErrorMessage = "all shots failed"
 					if updErr := s.videoRepo.Update(video); updErr != nil {
-						logger.Printf("[VideoService] PollAndStitchVideo: failed to update video %d status to failed (all shots failed): %v", videoID, updErr)
+						logger.Errorf("[VideoService] PollAndStitchVideo: failed to update video %d status to failed (all shots failed): %v", videoID, updErr)
 					}
 				}
 			}
@@ -677,9 +677,9 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 			allShots, shotsErr := s.storyboardRepo.ListByVideo(videoID)
 			if shotsErr == nil && len(allShots) > 0 {
 				if coverErr := s.bgmService.ValidateCoverageBeforeSynthesis(synthCtx, videoID, allShots, s.bgmRepo); coverErr != nil {
-					logger.Printf("[SynthesizeVideo] videoID=%d: BGM coverage gap detected, auto-repairing and continuing: %v", videoID, coverErr)
+					logger.Errorf("[SynthesizeVideo] videoID=%d: BGM coverage gap detected, auto-repairing and continuing: %v", videoID, coverErr)
 					if repairErr := s.bgmService.RepairCoverageGaps(synthCtx, videoID, allShots, s.bgmRepo); repairErr != nil {
-						logger.Printf("[SynthesizeVideo] videoID=%d: BGM gap repair failed, proceeding without full BGM coverage: %v", videoID, repairErr)
+						logger.Errorf("[SynthesizeVideo] videoID=%d: BGM gap repair failed, proceeding without full BGM coverage: %v", videoID, repairErr)
 					}
 				}
 			}
@@ -694,7 +694,7 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 		stitchedPath, err := s.StitchVideoCtx(stitchCtx, videoID)
 		stitchCancel()
 		if err != nil {
-			logger.Printf("[SynthesizeVideo] videoID=%d step=1/4: stitch failed: %v", videoID, err)
+			logger.Errorf("[SynthesizeVideo] videoID=%d step=1/4: stitch failed: %v", videoID, err)
 			if s.taskSvc != nil {
 				_ = s.taskSvc.Fail(taskID, "stitch failed: "+err.Error())
 			}
@@ -740,7 +740,7 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 						logger.Printf("[SynthesizeVideo] videoID=%d step=2/4: subtitle burn OK → %s", videoID, burnedPath)
 						finalPath = burnedPath
 					} else {
-						logger.Printf("[SynthesizeVideo] videoID=%d step=2/4: subtitle burn failed: %v — skipping", videoID, burnErr)
+						logger.Errorf("[SynthesizeVideo] videoID=%d step=2/4: subtitle burn failed: %v — skipping", videoID, burnErr)
 					}
 				}
 			}
@@ -770,7 +770,7 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 			"-frames:v", "1", "-vf", "scale=640:-1", coverPath); err == nil {
 			logger.Printf("[SynthesizeVideo] videoID=%d step=3/4: cover extracted at %.1fs → %s", videoID, coverOffset, coverPath)
 		} else {
-			logger.Printf("[SynthesizeVideo] videoID=%d step=3/4: cover extraction failed: %v — continuing", videoID, err)
+			logger.Errorf("[SynthesizeVideo] videoID=%d step=3/4: cover extraction failed: %v — continuing", videoID, err)
 		}
 
 		// 4. 上传视频和封面到 OSS
@@ -811,7 +811,7 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 				logger.Printf("[SynthesizeVideo] videoID=%d: video file size=%.1fMB", videoID, float64(fi.Size())/1e6)
 				ossURL, err := s.storageSvc.Upload(uploadCtx, videoKey, vf, fi.Size(), "video/mp4")
 				if err != nil {
-					logger.Printf("[SynthesizeVideo] videoID=%d: video upload failed: %v", videoID, err)
+					logger.Errorf("[SynthesizeVideo] videoID=%d: video upload failed: %v", videoID, err)
 					return ""
 				}
 				logger.Printf("[SynthesizeVideo] videoID=%d: video upload OK → %s", videoID, ossURL)
@@ -836,7 +836,7 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 					}
 					ossURL, err := s.storageSvc.Upload(uploadCtx, coverKey, cf, fi.Size(), "image/jpeg")
 					if err != nil {
-						logger.Printf("[SynthesizeVideo] videoID=%d: cover upload failed: %v — continuing", videoID, err)
+						logger.Errorf("[SynthesizeVideo] videoID=%d: cover upload failed: %v — continuing", videoID, err)
 						return ""
 					}
 					logger.Printf("[SynthesizeVideo] videoID=%d: cover upload OK → %s", videoID, ossURL)
@@ -864,10 +864,10 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 			logger.Printf("[SynthesizeVideo] videoID=%d: pipeline complete", videoID)
 		} else {
 			video.Status = "failed"
-			logger.Printf("[SynthesizeVideo] videoID=%d: upload failed — marking video as failed", videoID)
+			logger.Errorf("[SynthesizeVideo] videoID=%d: upload failed — marking video as failed", videoID)
 		}
 		if err := s.videoRepo.Update(video); err != nil {
-			logger.Printf("[SynthesizeVideo] videoID=%d: DB update failed: %v", videoID, err)
+			logger.Errorf("[SynthesizeVideo] videoID=%d: DB update failed: %v", videoID, err)
 		}
 
 		if s.taskSvc != nil {
@@ -1058,7 +1058,7 @@ func generateSilentAudio(dir string, shotNo int, durationSecs float64) string {
 		outPath,
 	)
 	if err != nil {
-		logger.Printf("generateSilentAudio: shot %d ffmpeg failed: %v\n%s", shotNo, err, string(out))
+		logger.Errorf("generateSilentAudio: shot %d ffmpeg failed: %v\n%s", shotNo, err, string(out))
 		return ""
 	}
 	return outPath
@@ -1127,7 +1127,7 @@ func (s *VideoService) buildShotAudio(ctx context.Context, shot *model.Storyboar
 			speechAudioPath = concatPath
 			audioDur = segsDurSecs
 		} else {
-			logger.Printf("[buildShotAudio] shot %d: audio concat failed: %v — using first segment", shot.ShotNo, err)
+			logger.Errorf("[buildShotAudio] shot %d: audio concat failed: %v — using first segment", shot.ShotNo, err)
 			speechAudioPath = voicePaths[0]
 		}
 	}
@@ -1139,7 +1139,7 @@ func (s *VideoService) buildShotAudio(ctx context.Context, shot *model.Storyboar
 			if mixedPath, mixErr := mixSFXLayers(ctx, speechAudioPath, sfxItems, shot.Duration, tmpDir, idx); mixErr == nil {
 				return mixedPath, audioDur
 			} else {
-				logger.Printf("[buildShotAudio] shot %d: SFX mix failed: %v — using speech only", shot.ShotNo, mixErr)
+				logger.Errorf("[buildShotAudio] shot %d: SFX mix failed: %v — using speech only", shot.ShotNo, mixErr)
 			}
 		}
 	}
@@ -1212,7 +1212,7 @@ func mixSFXLayers(ctx context.Context, speechPath string, sfxItems []*model.Shot
 		dlErr := downloadFileCtx(dlCtx, item.URL, sfxPath)
 		dlCancel()
 		if dlErr != nil {
-			logger.Printf("[mixSFXLayers] sfx item %d: download failed: %v — skipping", item.ID, dlErr)
+			logger.Errorf("[mixSFXLayers] sfx item %d: download failed: %v — skipping", item.ID, dlErr)
 			continue
 		}
 		vol := item.Volume
@@ -1331,13 +1331,13 @@ func (s *VideoService) uploadClipToStorage(ctx context.Context, shot *model.Stor
 	}
 	f, err := os.Open(clipPath)
 	if err != nil {
-		logger.Printf("uploadClipToStorage: open %s: %v", clipPath, err)
+		logger.Errorf("uploadClipToStorage: open %s: %v", clipPath, err)
 		return ""
 	}
 	defer f.Close()
 	fi, err := f.Stat()
 	if err != nil {
-		logger.Printf("uploadClipToStorage: stat %s: %v", clipPath, err)
+		logger.Errorf("uploadClipToStorage: stat %s: %v", clipPath, err)
 		return ""
 	}
 
@@ -1356,7 +1356,7 @@ func (s *VideoService) uploadClipToStorage(ctx context.Context, shot *model.Stor
 
 	ossURL, err := s.storageSvc.Upload(ctx, key, f, fi.Size(), "video/mp4")
 	if err != nil {
-		logger.Printf("uploadClipToStorage: upload failed for shot %d: %v", shot.ShotNo, err)
+		logger.Errorf("uploadClipToStorage: upload failed for shot %d: %v", shot.ShotNo, err)
 		return ""
 	}
 	return ossURL

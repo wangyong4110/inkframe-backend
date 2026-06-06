@@ -28,7 +28,7 @@ func (s *AuditService) Log(tenantID, userID uint, action, entityType string, ent
 		defer cancel()
 		detailJSON, err := json.Marshal(detail)
 		if err != nil {
-			logger.Warnf("[AuditService] marshal detail: %v", err)
+			logger.Errorf("[AuditService] marshal detail: %v", err)
 			detailJSON = []byte("{}")
 		}
 		entry := &model.AuditLog{
@@ -42,7 +42,7 @@ func (s *AuditService) Log(tenantID, userID uint, action, entityType string, ent
 			Detail:     string(detailJSON),
 		}
 		if err := s.db.WithContext(ctx).Create(entry).Error; err != nil {
-			logger.Warnf("[AuditService] create log: %v", err)
+			logger.Errorf("[AuditService] create log: %v", err)
 		}
 	}()
 }

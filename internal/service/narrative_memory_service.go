@@ -209,7 +209,7 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 	completedArcs := (currentChapterNo - 1) / arcSize
 	allArcs, arcErr := s.arcRepo.ListByNovel(novel.ID)
 	if arcErr != nil {
-		logger.Printf("[NarrativeMemory] gatherContext: arc query failed (novel %d): %v — arc context skipped", novel.ID, arcErr)
+		logger.Errorf("[NarrativeMemory] gatherContext: arc query failed (novel %d): %v — arc context skipped", novel.ID, arcErr)
 	}
 	arcMap := make(map[int]*model.ArcSummary, len(allArcs))
 	for _, a := range allArcs {
@@ -252,7 +252,7 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 	// 近章详细摘要（最近 recentFullCount 章）
 	recentDetailed, recentErr := s.chapterRepo.GetRecent(novel.ID, currentChapterNo, recentFullCount)
 	if recentErr != nil {
-		logger.Printf("[NarrativeMemory] gatherContext: recent chapters query failed (novel %d): %v — recent context skipped", novel.ID, recentErr)
+		logger.Errorf("[NarrativeMemory] gatherContext: recent chapters query failed (novel %d): %v — recent context skipped", novel.ID, recentErr)
 	}
 	for i := len(recentDetailed) - 1; i >= 0; i-- {
 		ch := recentDetailed[i]
@@ -287,7 +287,7 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 	if shortEnd >= shortStart {
 		shortChapters, shortErr := s.chapterRepo.GetByNovelAndChapterRange(novel.ID, shortStart, shortEnd)
 		if shortErr != nil {
-			logger.Printf("[NarrativeMemory] gatherContext: short chapters query failed (novel %d): %v — short context skipped", novel.ID, shortErr)
+			logger.Errorf("[NarrativeMemory] gatherContext: short chapters query failed (novel %d): %v — short context skipped", novel.ID, shortErr)
 		}
 		chMap := make(map[int]*model.Chapter, len(shortChapters))
 		for _, ch := range shortChapters {
@@ -622,11 +622,11 @@ func (s *NarrativeMemoryService) TriggerArcSummaryIfNeeded(tenantID, novelID uin
 			defer s.arcGenLocks.Delete(lockKey)
 			defer func() {
 				if r := recover(); r != nil {
-					logger.Printf("[NarrativeMemory] arc summary panic: %v", r)
+					logger.Errorf("[NarrativeMemory] arc summary panic: %v", r)
 				}
 			}()
 			if err := s.generateArcSummary(tenantID, novelID, arcNo, startChapter, endChapter); err != nil {
-				logger.Printf("NarrativeMemory: arc %d summary failed (novel %d): %v", arcNo, novelID, err)
+				logger.Errorf("NarrativeMemory: arc %d summary failed (novel %d): %v", arcNo, novelID, err)
 			} else {
 				logger.Printf("NarrativeMemory: arc %d summary done (novel %d, ch %d-%d)", arcNo, novelID, startChapter, endChapter)
 			}
@@ -645,11 +645,11 @@ func (s *NarrativeMemoryService) TriggerArcSummaryIfNeeded(tenantID, novelID uin
 			defer s.arcGenLocks.Delete(lockKey)
 			defer func() {
 				if r := recover(); r != nil {
-					logger.Printf("[NarrativeMemory] arc summary panic: %v", r)
+					logger.Errorf("[NarrativeMemory] arc summary panic: %v", r)
 				}
 			}()
 			if err := s.generateArcSummary(tenantID, novelID, midArcNo, startChapter, endChapter); err != nil {
-				logger.Printf("NarrativeMemory: mid-arc %d summary failed (novel %d): %v", midArcNo, novelID, err)
+				logger.Errorf("NarrativeMemory: mid-arc %d summary failed (novel %d): %v", midArcNo, novelID, err)
 			} else {
 				logger.Printf("NarrativeMemory: mid-arc %d summary done (novel %d, ch %d-%d)", midArcNo, novelID, startChapter, endChapter)
 			}
@@ -818,13 +818,13 @@ func (s *NarrativeMemoryService) generateArcSummary(tenantID, novelID uint, arcN
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					logger.Printf("[NarrativeMemory] adaptOutlineAfterArc panic: %v", r)
+					logger.Errorf("[NarrativeMemory] adaptOutlineAfterArc panic: %v", r)
 				}
 			}()
 			if err := s.adaptOutlineAfterArc(tenantID, novelID, arcNo, endChapter, result.ArcSummary,
 				result.KeyEvents, charMap, result.WorldUpdates,
 				result.OpenForeshadows, result.ResolvedConflicts, result.ProtagonistPower); err != nil {
-				logger.Printf("[NarrativeMemory] adaptOutlineAfterArc failed: novelID=%d arcNo=%d: %v", novelID, arcNo, err)
+				logger.Errorf("[NarrativeMemory] adaptOutlineAfterArc failed: novelID=%d arcNo=%d: %v", novelID, arcNo, err)
 			}
 		}()
 	}
@@ -1030,7 +1030,7 @@ func (s *NarrativeMemoryService) GenerateChapterSummary(tenantID uint, chapter *
 	for attempt := 0; attempt < 3; attempt++ {
 		summary, err = s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "chapter_summary", prompt, "")
 		if err != nil {
-			logger.Printf("[NarrativeMemory] GenerateChapterSummary AI error: chapterNo=%d attempt=%d err=%v", chapter.ChapterNo, attempt+1, err)
+			logger.Errorf("[NarrativeMemory] GenerateChapterSummary AI error: chapterNo=%d attempt=%d err=%v", chapter.ChapterNo, attempt+1, err)
 			return "", err
 		}
 		summary = strings.TrimSpace(summary)
@@ -1062,7 +1062,7 @@ func (s *NarrativeMemoryService) GenerateChapterTitle(tenantID uint, chapter *mo
 	}
 	title, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "chapter_title", prompt, "")
 	if err != nil {
-		logger.Printf("[NarrativeMemory] GenerateChapterTitle AI error: chapterNo=%d err=%v", chapter.ChapterNo, err)
+		logger.Errorf("[NarrativeMemory] GenerateChapterTitle AI error: chapterNo=%d err=%v", chapter.ChapterNo, err)
 		return "", err
 	}
 	title = strings.TrimSpace(strings.Trim(title, "「」『』\"'【】"))
@@ -1156,7 +1156,7 @@ func (s *NarrativeMemoryService) RefineChapterContent(tenantID uint, chapter *mo
 
 	refined, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "refinement", prompt, "")
 	if err != nil {
-		logger.Printf("NarrativeMemory: refinement ch%d failed: %v — using original", chapter.ChapterNo, err)
+		logger.Errorf("NarrativeMemory: refinement ch%d failed: %v — using original", chapter.ChapterNo, err)
 		return chapter.Content, nil
 	}
 	refined = strings.TrimSpace(refined)
@@ -1183,7 +1183,7 @@ func (s *NarrativeMemoryService) RefineChapterContent(tenantID uint, chapter *mo
 			return string(merged), nil
 		}
 		// P1-6: 合并条件不满足（AI 输出过短无法对齐头尾），保守返回原文，避免中间内容丢失
-		logger.Printf("NarrativeMemory: refinement ch%d wasTruncated but merge failed (refinedLen=%d < half=%d) — using original",
+		logger.Errorf("NarrativeMemory: refinement ch%d wasTruncated but merge failed (refinedLen=%d < half=%d) — using original",
 			chapter.ChapterNo, len(refinedRunes2), half)
 		return chapter.Content, nil
 	}

@@ -90,7 +90,7 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 	// P2-3: warn when frame disk usage is large (JPEG 85 ≈ 0.1 bytes/pixel)
 	estFrameMB := int64(totalFrames) * int64(outW) * int64(outH) / (10 * 1024 * 1024)
 	if estFrameMB > 200 {
-		logger.Printf("generateKenBurnsPureGo: shot %d WARNING estimated frame disk usage ~%dMB (%d frames %dx%d)", shot.ShotNo, estFrameMB, totalFrames, outW, outH)
+		logger.Errorf("generateKenBurnsPureGo: shot %d WARNING estimated frame disk usage ~%dMB (%d frames %dx%d)", shot.ShotNo, estFrameMB, totalFrames, outW, outH)
 	}
 	logger.Printf("generateKenBurnsPureGo: shot %d rendering %d frames (%dx%d) src=%dx%d camera=%s frameDir=%s",
 		shot.ShotNo, totalFrames, outW, outH, srcW, srcH, shot.CameraType, frameDir)
@@ -193,7 +193,7 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 		outPath,
 	)
 	if encErr != nil {
-		logger.Printf("generateKenBurnsPureGo: shot %d ffmpeg encode failed after %.1fs: %v\noutput: %s",
+		logger.Errorf("generateKenBurnsPureGo: shot %d ffmpeg encode failed after %.1fs: %v\noutput: %s",
 			shot.ShotNo, time.Since(encStart).Seconds(), encErr, string(encOut))
 		return "", fmt.Errorf("ken burns go: ffmpeg encode: %w", encErr)
 	}

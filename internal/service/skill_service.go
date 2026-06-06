@@ -169,7 +169,7 @@ func parseSkillsJSON(raw string) ([]skillJSON, error) {
 func (s *SkillService) GenerateSkills(tenantID, novelID uint) (result []*model.Skill, retErr error) {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Printf("[SkillService] GenerateSkills: recovered panic: %v", r)
+			logger.Errorf("[SkillService] GenerateSkills: recovered panic: %v", r)
 			if retErr == nil {
 				retErr = fmt.Errorf("GenerateSkills: recovered panic: %v", r)
 			}
@@ -209,7 +209,7 @@ func (s *SkillService) GenerateSkills(tenantID, novelID uint) (result []*model.S
 		if len(raw) > 500 {
 			raw = raw[:500]
 		}
-		logger.Printf("[SkillService] GenerateSkills: JSON parse failed (raw: %s): %v", raw, parseErr)
+		logger.Errorf("[SkillService] GenerateSkills: JSON parse failed (raw: %s): %v", raw, parseErr)
 		return nil, fmt.Errorf("AI returned unparseable skill data")
 	}
 	if len(extracted) == 0 {
@@ -244,7 +244,7 @@ func (s *SkillService) GenerateSkills(tenantID, novelID uint) (result []*model.S
 				sk.Level = e.Level
 			}
 			if updateErr := s.skillRepo.Update(sk); updateErr != nil {
-				logger.Printf("[SkillService] update skill %q failed: %v", e.Name, updateErr)
+				logger.Errorf("[SkillService] update skill %q failed: %v", e.Name, updateErr)
 			}
 			upserted = append(upserted, sk)
 			continue
@@ -282,7 +282,7 @@ func (s *SkillService) GenerateSkillEffect(tenantID, id uint, provider string) (
 	visualPrompt := fmt.Sprintf("Magic skill effect for: %s. %s. Dynamic cinematic style, fantasy art", skill.Name, skill.Description)
 	imageURL, imgErr := s.aiService.GenerateCharacterThreeView(context.Background(), tenantID, provider, visualPrompt, "", "fantasy", "", "")
 	if imgErr != nil {
-		logger.Printf("[SkillService] GenerateSkillEffect: image generation failed for skill %d: %v", skill.ID, imgErr)
+		logger.Errorf("[SkillService] GenerateSkillEffect: image generation failed for skill %d: %v", skill.ID, imgErr)
 		// Continue without image — skill metadata is still updated
 	} else {
 		skill.ImagePath = imageURL

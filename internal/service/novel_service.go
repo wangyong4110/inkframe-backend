@@ -625,7 +625,7 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 						if len(preview) > 500 {
 							preview = preview[:500]
 						}
-						logger.Printf("GenerateOutline: failed to parse AI response for novel %d: %v (object len=%d, array len=%d, preview=%q)",
+						logger.Errorf("GenerateOutline: failed to parse AI response for novel %d: %v (object len=%d, array len=%d, preview=%q)",
 							req.NovelID, parseErr, len(cleaned), len(cleanedArr), preview)
 						return nil, fmt.Errorf("outline parse failed: %w", parseErr)
 					}
@@ -672,7 +672,7 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 			Status:        "draft",
 		}
 		if err := s.chapterRepo.Create(placeholder); err != nil {
-			logger.Printf("GenerateOutline: create placeholder chapter %d: %v", chap.ChapterNo, err)
+			logger.Errorf("GenerateOutline: create placeholder chapter %d: %v", chap.ChapterNo, err)
 		}
 	}
 
@@ -891,7 +891,7 @@ func (s *NovelService) writeCharacterSnapshots(tenantID uint, chapter *model.Cha
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "character_state", prompt, "")
 	if err != nil {
-		logger.Printf("writeCharacterSnapshots: AI extraction failed for chapter %d: %v", chapter.ID, err)
+		logger.Errorf("writeCharacterSnapshots: AI extraction failed for chapter %d: %v", chapter.ID, err)
 		return
 	}
 
@@ -911,7 +911,7 @@ func (s *NovelService) writeCharacterSnapshots(tenantID uint, chapter *model.Cha
 	}
 
 	if err := json.Unmarshal([]byte(cleaned), &extraction); err != nil {
-		logger.Printf("writeCharacterSnapshots: parse failed: %v", err)
+		logger.Errorf("writeCharacterSnapshots: parse failed: %v", err)
 		return
 	}
 
@@ -936,7 +936,7 @@ func (s *NovelService) writeCharacterSnapshots(tenantID uint, chapter *model.Cha
 			SnapshotTime: chapter.CreatedAt,
 		}
 		if err := s.snapshotRepo.Create(snapshot); err != nil {
-			logger.Printf("writeCharacterSnapshots: create snapshot failed for char %d: %v", char.ID, err)
+			logger.Errorf("writeCharacterSnapshots: create snapshot failed for char %d: %v", char.ID, err)
 		}
 	}
 }
@@ -1026,7 +1026,7 @@ func (s *NovelService) SyncCharacterSnapshots(
 				SnapshotTime:   chapter.CreatedAt,
 			}
 			if e := s.snapshotRepo.Create(snap); e != nil {
-				logger.Printf("SyncCharacterSnapshots: copy snapshot char %d: %v", char.ID, e)
+				logger.Errorf("SyncCharacterSnapshots: copy snapshot char %d: %v", char.ID, e)
 			}
 		}
 		return nil
@@ -1075,7 +1075,7 @@ func (s *NovelService) SyncCharacterSnapshots(
 
 		result, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "character_state", prompt, "")
 		if err != nil {
-			logger.Printf("SyncCharacterSnapshots: AI failed for char %d: %v", char.ID, err)
+			logger.Errorf("SyncCharacterSnapshots: AI failed for char %d: %v", char.ID, err)
 			continue
 		}
 
@@ -1089,7 +1089,7 @@ func (s *NovelService) SyncCharacterSnapshots(
 		}
 		cleaned := extractJSON(strings.TrimSpace(result))
 		if e := json.Unmarshal([]byte(cleaned), &state); e != nil {
-			logger.Printf("SyncCharacterSnapshots: parse failed char %d: %v", char.ID, e)
+			logger.Errorf("SyncCharacterSnapshots: parse failed char %d: %v", char.ID, e)
 			continue
 		}
 
@@ -1125,7 +1125,7 @@ func (s *NovelService) SyncCharacterSnapshots(
 			SnapshotTime: chapter.CreatedAt,
 		}
 		if e := s.snapshotRepo.Create(snap); e != nil {
-			logger.Printf("SyncCharacterSnapshots: create snapshot char %d: %v", char.ID, e)
+			logger.Errorf("SyncCharacterSnapshots: create snapshot char %d: %v", char.ID, e)
 		}
 	}
 	return nil
@@ -1134,7 +1134,7 @@ func (s *NovelService) SyncCharacterSnapshots(
 // updateNovelStats 更新小说统计（使用 DB 聚合避免并发竞态）
 func (s *NovelService) updateNovelStats(novelID uint) {
 	if err := s.novelRepo.SyncStats(novelID); err != nil {
-		logger.Printf("updateNovelStats: sync novel %d: %v", novelID, err)
+		logger.Errorf("updateNovelStats: sync novel %d: %v", novelID, err)
 	}
 }
 
@@ -1144,7 +1144,7 @@ func (s *NovelService) extractPlotPoints(chapter *model.Chapter) {
 		return
 	}
 	if _, err := s.plotPointService.ExtractFromChapter(0, chapter); err != nil {
-		logger.Printf("extractPlotPoints chapter %d: %v", chapter.ID, err)
+		logger.Errorf("extractPlotPoints chapter %d: %v", chapter.ID, err)
 	}
 }
 
@@ -1247,7 +1247,7 @@ func (s *NovelService) ToggleNovelLike(novelID, userID uint) (bool, error) {
 		delta = -1
 	}
 	if err := s.novelRepo.IncrNovelLikeCount(novelID, delta); err != nil {
-		logger.Printf("ToggleNovelLike: IncrNovelLikeCount novel=%d delta=%d: %v", novelID, delta, err)
+		logger.Errorf("ToggleNovelLike: IncrNovelLikeCount novel=%d delta=%d: %v", novelID, delta, err)
 	}
 	return liked, nil
 }
@@ -1297,7 +1297,7 @@ func (s *NovelService) AddNovelComment(novelID, userID uint, nickname, content s
 		return nil, err
 	}
 	if err := s.novelRepo.IncrNovelCommentCount(novelID, 1); err != nil {
-		logger.Printf("AddNovelComment: IncrNovelCommentCount novel=%d: %v", novelID, err)
+		logger.Errorf("AddNovelComment: IncrNovelCommentCount novel=%d: %v", novelID, err)
 	}
 	return c, nil
 }
@@ -1338,7 +1338,7 @@ func (s *NovelService) RecalcNovelHotScores() error {
 		base := float64(n.ViewCount)*0.5 + float64(n.LikeCount)*0.3 + float64(n.CommentCount)*0.2
 		score := base / (1 + ageDays*0.1)
 		if err := s.novelRepo.UpdateNovelHotScore(n.ID, score); err != nil {
-			logger.Printf("RecalcNovelHotScores: failed to update novel %d: %v", n.ID, err)
+			logger.Errorf("RecalcNovelHotScores: failed to update novel %d: %v", n.ID, err)
 		}
 	}
 	return nil

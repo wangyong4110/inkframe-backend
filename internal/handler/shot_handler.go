@@ -48,7 +48,7 @@ func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 	go func(taskID string) {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Printf("[VideoHandler] GenerateSingleShot task %s panic: %v", taskID, r)
+				logger.Errorf("[VideoHandler] GenerateSingleShot task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -56,7 +56,7 @@ func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		shot, genErr := h.videoService.GenerateSingleShot(uint(videoID), uint(shotID), req.Provider)
 		if genErr != nil {
-			logger.Printf("[VideoHandler] GenerateSingleShot task %s failed: %v", taskID, genErr)
+			logger.Errorf("[VideoHandler] GenerateSingleShot task %s failed: %v", taskID, genErr)
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
 			return
 		}
@@ -104,7 +104,7 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 	go func(taskID string) {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Printf("[VideoHandler] BatchGenerateShots task %s panic: %v", taskID, r)
+				logger.Errorf("[VideoHandler] BatchGenerateShots task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -112,7 +112,7 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		shots, genErr := h.videoService.BatchGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, progressFn, req.Provider)
 		if genErr != nil {
-			logger.Printf("[VideoHandler] BatchGenerateShots task %s failed: %v", taskID, genErr)
+			logger.Errorf("[VideoHandler] BatchGenerateShots task %s failed: %v", taskID, genErr)
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
 			return
 		}
@@ -157,7 +157,7 @@ func (h *VideoHandler) BatchGenerateShotImages(c *gin.Context) {
 	go func(taskID string) {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Printf("[VideoHandler] BatchGenerateShotImages task %s panic: %v", taskID, r)
+				logger.Errorf("[VideoHandler] BatchGenerateShotImages task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -165,7 +165,7 @@ func (h *VideoHandler) BatchGenerateShotImages(c *gin.Context) {
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		shots, genErr := h.videoService.BatchGenerateShotImages(uint(videoID), req.ShotIDs, progressFn)
 		if genErr != nil {
-			logger.Printf("[VideoHandler] BatchGenerateShotImages task %s failed: %v", taskID, genErr)
+			logger.Errorf("[VideoHandler] BatchGenerateShotImages task %s failed: %v", taskID, genErr)
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
 			return
 		}
@@ -210,7 +210,7 @@ func (h *VideoHandler) BatchGenerateShotClips(c *gin.Context) {
 	go func(taskID string) {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Printf("[VideoHandler] BatchGenerateShotClips task %s panic: %v", taskID, r)
+				logger.Errorf("[VideoHandler] BatchGenerateShotClips task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -218,7 +218,7 @@ func (h *VideoHandler) BatchGenerateShotClips(c *gin.Context) {
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		shots, genErr := h.videoService.BatchGenerateShotClips(uint(videoID), req.ShotIDs, progressFn)
 		if genErr != nil {
-			logger.Printf("[VideoHandler] BatchGenerateShotClips task %s failed: %v", taskID, genErr)
+			logger.Errorf("[VideoHandler] BatchGenerateShotClips task %s failed: %v", taskID, genErr)
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
 			return
 		}
@@ -256,7 +256,7 @@ func (h *VideoHandler) RefineShotImage(c *gin.Context) {
 
 	newURL, err := h.videoService.RefineShotImage(uint(shotID), req.Suggestion)
 	if err != nil {
-		logger.Printf("[VideoHandler] RefineShotImage shot %d failed: %v", shotID, err)
+		logger.Errorf("[VideoHandler] RefineShotImage shot %d failed: %v", shotID, err)
 		respondErr(c, http.StatusInternalServerError, "图片重新生成失败，请重试")
 		return
 	}
@@ -310,7 +310,7 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 	go func(taskID string, userContext string, lang string, sfxProvider string) {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Printf("[VideoHandler] BatchGenerateSFX task %s panic: %v", taskID, r)
+				logger.Errorf("[VideoHandler] BatchGenerateSFX task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -319,7 +319,7 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 		ctx := context.Background()
 		// Step 1: AI 批量分析所有分镜，生成精准的自然语言音效搜索词（非强制，已有标签的跳过）
 		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID, userContext, lang, false); err != nil {
-			logger.Printf("[VideoHandler] BatchGenerateSFX task %s: AI analyze failed (proceeding): %v", taskID, err)
+			logger.Errorf("[VideoHandler] BatchGenerateSFX task %s: AI analyze failed (proceeding): %v", taskID, err)
 		}
 		h.taskSvc.UpdateProgress(taskID, 20) //nolint:errcheck
 		// Step 2: 用更新后的 sfx_tags 搜索/生成实际音效文件
@@ -387,7 +387,7 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 	go func(taskID string, userContext string, lang string, sfxProvider string) {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Printf("[VideoHandler] AnalyzeSFXTags task %s panic: %v", taskID, r)
+				logger.Errorf("[VideoHandler] AnalyzeSFXTags task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -397,7 +397,7 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 		// 阶段一：AI 分析标签（进度 0→50%，force=true 强制重新分析所有镜头）
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID, userContext, lang, true); err != nil {
-			logger.Printf("[VideoHandler] AnalyzeSFXTags task %s phase1 failed: %v", taskID, err)
+			logger.Errorf("[VideoHandler] AnalyzeSFXTags task %s phase1 failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -465,14 +465,14 @@ func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
 	go func(taskID string, s *model.StoryboardShot, sfxProvider string) {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Printf("[VideoHandler] GenerateShotSFX task %s panic: %v", taskID, r)
+				logger.Errorf("[VideoHandler] GenerateShotSFX task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		ctx := context.Background()
 		if err := h.sfxSvc.AutoGenerateSFX(ctx, s, tenantID, sfxProvider); err != nil {
-			logger.Printf("[VideoHandler] GenerateShotSFX task %s failed: %v", taskID, err)
+			logger.Errorf("[VideoHandler] GenerateShotSFX task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -588,7 +588,7 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 	go func(taskID string, shot *model.StoryboardShot, narrationVoice string, subtitleEnabled bool, vID uint) {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Printf("[VideoHandler] GenerateShotVoice task %s panic: %v", taskID, r)
+				logger.Errorf("[VideoHandler] GenerateShotVoice task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -602,7 +602,7 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 			if audioErr == nil {
 				break
 			}
-			logger.Printf("[VideoHandler] GenerateShotVoice task %s shot %d attempt %d/%d failed: %v", taskID, shot.ShotNo, attempt, maxRetries, audioErr)
+			logger.Errorf("[VideoHandler] GenerateShotVoice task %s shot %d attempt %d/%d failed: %v", taskID, shot.ShotNo, attempt, maxRetries, audioErr)
 			if attempt < maxRetries {
 				time.Sleep(time.Duration(attempt*2) * time.Second)
 			}
@@ -659,7 +659,7 @@ func (h *VideoHandler) CalculateConsistencyScore(c *gin.Context) {
 
 	score, err := h.consistencyService.CalculateConsistencyScore(req.ReferenceImage, req.GeneratedImages)
 	if err != nil {
-		logger.Printf("[VideoHandler] CalculateConsistencyScore: err=%v", err)
+		logger.Errorf("[VideoHandler] CalculateConsistencyScore: err=%v", err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -719,7 +719,7 @@ func (h *VideoHandler) Export(c *gin.Context) {
 
 	shots, err := h.videoService.GetStoryboard(uint(id))
 	if err != nil {
-		logger.Printf("[VideoHandler] Export: videoID=%d get storyboard err=%v", id, err)
+		logger.Errorf("[VideoHandler] Export: videoID=%d get storyboard err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -753,7 +753,7 @@ func (h *VideoHandler) Export(c *gin.Context) {
 	}
 
 	if err != nil {
-		logger.Printf("[VideoHandler] Export: videoID=%d format=%s err=%v", id, format, err)
+		logger.Errorf("[VideoHandler] Export: videoID=%d format=%s err=%v", id, format, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}

@@ -29,7 +29,7 @@ func startRecalcLoop(tag string, quit <-chan struct{}, fn func() error) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Printf("[%s] goroutine panic: %v", tag, r)
+				logger.Errorf("[%s] goroutine panic: %v", tag, r)
 			}
 		}()
 		ticker := time.NewTicker(time.Hour)
@@ -38,7 +38,7 @@ func startRecalcLoop(tag string, quit <-chan struct{}, fn func() error) {
 			select {
 			case <-ticker.C:
 				if err := fn(); err != nil {
-					logger.Printf("[%s] recalc error: %v", tag, err)
+					logger.Errorf("[%s] recalc error: %v", tag, err)
 				}
 			case <-quit:
 				return
@@ -358,7 +358,7 @@ func initRedis(cfg *config.Config) *redis.Client {
 
 	if err := client.Ping(ctx).Err(); err != nil {
 		if cfg.Redis.GetRedisAddr() != "" {
-			logger.Printf("WARNING: Redis connection failed: %v. JWT blacklist, caching, and rate limiting will be degraded.", err)
+			logger.Errorf("WARNING: Redis connection failed: %v. JWT blacklist, caching, and rate limiting will be degraded.", err)
 		}
 		// Return nil so dependent code uses fallbacks gracefully
 		return nil

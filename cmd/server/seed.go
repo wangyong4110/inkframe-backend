@@ -50,7 +50,7 @@ func seedDefaultUser(services *Services) {
 		if err.Error() == "email already registered" {
 			logger.Printf("[seed] default user already exists (%s)", email)
 		} else {
-			logger.Printf("[seed] failed to create default user: %v", err)
+			logger.Errorf("[seed] failed to create default user: %v", err)
 		}
 		return
 	}
@@ -863,7 +863,7 @@ func seedAIModels(db *gorm.DB) {
 		// 先查询，避免 FirstOrCreate 触发 GORM 错误日志（1062 duplicate key）
 		if err := db.Where("name = ? AND tenant_id = 0", p.name).First(&prov).Error; err != nil {
 			if !errors.Is(err, gorm.ErrRecordNotFound) {
-				logger.Printf("seedAIModels: provider %q: lookup: %v", p.name, err)
+				logger.Errorf("seedAIModels: provider %q: lookup: %v", p.name, err)
 				continue
 			}
 			// 不存在则创建
@@ -881,11 +881,11 @@ func seedAIModels(db *gorm.DB) {
 				// 并发创建时可能仍触发 1062，此时 fetch 已有记录
 				if strings.Contains(err2.Error(), "1062") || strings.Contains(err2.Error(), "Duplicate entry") {
 					if err3 := db.Where("name = ? AND tenant_id = 0", p.name).First(&prov).Error; err3 != nil {
-						logger.Printf("seedAIModels: provider %q: fetch after race: %v", p.name, err3)
+						logger.Errorf("seedAIModels: provider %q: fetch after race: %v", p.name, err3)
 						continue
 					}
 				} else {
-					logger.Printf("seedAIModels: provider %q: create: %v", p.name, err2)
+					logger.Errorf("seedAIModels: provider %q: create: %v", p.name, err2)
 					continue
 				}
 			}
@@ -970,14 +970,14 @@ func seedWebSearchMcpTool(db *gorm.DB, cfg *config.Config) {
 			IsSystem:      true,
 		}
 		if createErr := db.Create(&tool).Error; createErr != nil {
-			logger.Printf("[Seed] web_search MCP tool create failed: %v", createErr)
+			logger.Errorf("[Seed] web_search MCP tool create failed: %v", createErr)
 			return
 		}
 		logger.Printf("[Seed] web_search MCP tool registered (is_active=false, endpoint=%s)", endpoint)
 	} else {
 		// Already exists — only update endpoint (preserve user's is_active setting)
 		if updateErr := db.Model(&existing).Update("endpoint", endpoint).Error; updateErr != nil {
-			logger.Printf("[Seed] web_search MCP tool update endpoint failed: %v", updateErr)
+			logger.Errorf("[Seed] web_search MCP tool update endpoint failed: %v", updateErr)
 		}
 	}
 }
@@ -997,13 +997,13 @@ func seedMcpTool(db *gorm.DB, name, displayName, description, endpoint string) {
 			IsSystem:      true,
 		}
 		if createErr := db.Create(&tool).Error; createErr != nil {
-			logger.Printf("[Seed] %s MCP tool create failed: %v", name, createErr)
+			logger.Errorf("[Seed] %s MCP tool create failed: %v", name, createErr)
 			return
 		}
 		logger.Printf("[Seed] %s MCP tool registered (is_active=false, endpoint=%s)", name, endpoint)
 	} else {
 		if updateErr := db.Model(&existing).Update("endpoint", endpoint).Error; updateErr != nil {
-			logger.Printf("[Seed] %s MCP tool update endpoint failed: %v", name, updateErr)
+			logger.Errorf("[Seed] %s MCP tool update endpoint failed: %v", name, updateErr)
 		}
 	}
 }

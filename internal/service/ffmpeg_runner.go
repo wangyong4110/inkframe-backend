@@ -90,7 +90,7 @@ func runFFmpegWithGoroutineTimeout(timeout time.Duration, args ...string) ([]byt
 		return res.out, res.err
 	case <-time.After(timeout):
 		n := ffmpegLeakedGoroutines.Add(1)
-		logger.Printf("[FFmpegRunner] WARN: goroutine timeout after %v — WASM still running in background (total leaked: %d)", timeout, n)
+		logger.Errorf("[FFmpegRunner] WARN: goroutine timeout after %v — WASM still running in background (total leaked: %d)", timeout, n)
 		return nil, fmt.Errorf("ffmpeg goroutine timeout after %v (wasm still running in background)", timeout)
 	}
 }

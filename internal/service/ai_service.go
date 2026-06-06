@@ -143,10 +143,10 @@ func (s *AIService) runProviderHealthChecks() {
 				status = "down"
 			} else if hErr := provider.HealthCheck(ctx); hErr != nil {
 				status = "degraded"
-				logger.Printf("[health] provider=%s err=%v", p.Name, hErr)
+				logger.Errorf("[health] provider=%s err=%v", p.Name, hErr)
 			}
 			if upErr := s.providerRepo.UpdateHealthStatus(p.ID, status); upErr != nil {
-				logger.Printf("[health] UpdateHealthStatus provider=%s: %v", p.Name, upErr)
+				logger.Errorf("[health] UpdateHealthStatus provider=%s: %v", p.Name, upErr)
 			}
 		}()
 	}
@@ -361,12 +361,12 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		if matched.APIKey == "" {
 			return nil, fmt.Errorf("provider %q has no API key configured", matched.Name)
 		}
-		logger.Printf("getTenantProvider: decrypt APIKey for %q failed (check DB_ENCRYPTION_KEY): %v", matched.Name, err)
+		logger.Errorf("getTenantProvider: decrypt APIKey for %q failed (check DB_ENCRYPTION_KEY): %v", matched.Name, err)
 		return nil, fmt.Errorf("failed to decrypt API key for provider %q (verify encryption key configuration)", matched.Name)
 	}
 	apiSecretKey, err := crypto.Decrypt(matched.APISecretKey, s.encKey)
 	if err != nil {
-		logger.Printf("getTenantProvider: decrypt APISecretKey for %q failed (check DB_ENCRYPTION_KEY): %v", matched.Name, err)
+		logger.Errorf("getTenantProvider: decrypt APISecretKey for %q failed (check DB_ENCRYPTION_KEY): %v", matched.Name, err)
 		return nil, fmt.Errorf("failed to decrypt API secret key for provider %q (verify encryption key configuration)", matched.Name)
 	}
 
@@ -856,7 +856,7 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 
 	provider, err := s.getTenantProvider(tenantID, providerName)
 	if err != nil {
-		logger.Printf("callAIWithProvider: getTenantProvider failed (tenant=%d, provider=%q): %v", tenantID, providerName, err)
+		logger.Errorf("callAIWithProvider: getTenantProvider failed (tenant=%d, provider=%q): %v", tenantID, providerName, err)
 		return "", nil, fmt.Errorf("failed to get AI provider: %w", err)
 	}
 	if provider == nil {
@@ -891,7 +891,7 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 	resp, err := provider.Generate(ctx, req)
 	elapsed := time.Since(callStart)
 	if err != nil {
-		logger.Printf("[AI] provider=%s elapsed=%s err=%v", provider.GetName(), elapsed.Round(time.Millisecond), err)
+		logger.Errorf("[AI] provider=%s elapsed=%s err=%v", provider.GetName(), elapsed.Round(time.Millisecond), err)
 		// Fallback chain: try models listed in config.FallbackModelIDs
 		if fbContent, fbResp, fbErr := s.tryFallbackModels(ctx, tenantID, req, config, elapsed); fbErr == nil {
 			return fbContent, fbResp, nil
@@ -899,7 +899,7 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 		return "", nil, err
 	}
 	if resp.Error != "" {
-		logger.Printf("[AI] provider=%s elapsed=%s providerErr=%s", provider.GetName(), elapsed.Round(time.Millisecond), resp.Error)
+		logger.Errorf("[AI] provider=%s elapsed=%s providerErr=%s", provider.GetName(), elapsed.Round(time.Millisecond), resp.Error)
 		return "", nil, fmt.Errorf("provider error: %s", resp.Error)
 	}
 	resp.FinishTime = elapsed.Milliseconds()
@@ -966,7 +966,7 @@ func (s *AIService) tryFallbackModels(ctx context.Context, tenantID uint, origRe
 			return "", nil, fmt.Errorf("fallback provider %q authentication failed (not retrying): %w", m.Provider.Name, fbErr)
 		}
 		errs = append(errs, fmt.Sprintf("model_%d: %v", id, fbErr))
-		logger.Printf("[AI fallback] provider=%s model=%s err=%v", m.Provider.Name, m.Name, fbErr)
+		logger.Errorf("[AI fallback] provider=%s model=%s err=%v", m.Provider.Name, m.Name, fbErr)
 	}
 	return "", nil, fmt.Errorf("all fallbacks exhausted: %s", strings.Join(errs, "; "))
 }
@@ -1012,7 +1012,7 @@ func (s *AIService) generateJSONForTenant(tenantID, novelID uint, taskType, prom
 			return cleaned, nil
 		}
 		lastErr = fmt.Errorf("invalid JSON on attempt %d: %s", attempt+1, cleaned[:min(100, len(cleaned))])
-		logger.Printf("generateJSONForTenant: %v", lastErr)
+		logger.Errorf("generateJSONForTenant: %v", lastErr)
 	}
 	return "", fmt.Errorf("generateJSONForTenant failed after %d attempts: %w", maxRetries+1, lastErr)
 }
@@ -1042,7 +1042,7 @@ func (s *AIService) generateWithRetry(novelID uint, taskType, prompt string, max
 			return cleaned, nil
 		}
 		lastErr = fmt.Errorf("invalid JSON on attempt %d: %s", attempt+1, cleaned[:min(100, len(cleaned))])
-		logger.Printf("generateWithRetry: %v", lastErr)
+		logger.Errorf("generateWithRetry: %v", lastErr)
 	}
 	return "", fmt.Errorf("generateWithRetry failed after %d attempts: %w", maxRetries+1, lastErr)
 }
@@ -1069,7 +1069,7 @@ func (s *AIService) logUsage(tenantID uint, config *model.TaskModelConfig, taskT
 		Success:      true,
 	}
 	if err := s.modelRepo.LogUsage(entry); err != nil {
-		logger.Printf("[AI] logUsage failed: %v", err)
+		logger.Errorf("[AI] logUsage failed: %v", err)
 	}
 }
 
@@ -1356,12 +1356,12 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 			Extra:             klingResolutionExtra(e.ProviderName, eSz),
 		})
 		if err != nil {
-			logger.Printf("GenerateCharacterThreeView: provider=%s failed: %v", e.ProviderName, err)
+			logger.Errorf("GenerateCharacterThreeView: provider=%s failed: %v", e.ProviderName, err)
 			lastErr = err
 			continue
 		}
 		if resp.Error != "" {
-			logger.Printf("GenerateCharacterThreeView: provider=%s error: %s", e.ProviderName, resp.Error)
+			logger.Errorf("GenerateCharacterThreeView: provider=%s error: %s", e.ProviderName, resp.Error)
 			lastErr = fmt.Errorf("image generation failed: %s", resp.Error)
 			continue
 		}
@@ -1487,12 +1487,12 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		logger.Printf("GenerateCharacterThreeViewMulti: trying provider=%s model=%s refs=%d", e.ProviderName, model, len(referenceImages))
 		resp, err := provider.ImageGenerate(ctx, buildReq(model, e.Size))
 		if err != nil {
-			logger.Printf("GenerateCharacterThreeViewMulti: provider=%s failed: %v", e.ProviderName, err)
+			logger.Errorf("GenerateCharacterThreeViewMulti: provider=%s failed: %v", e.ProviderName, err)
 			lastErr = err
 			continue
 		}
 		if resp.Error != "" {
-			logger.Printf("GenerateCharacterThreeViewMulti: provider=%s error: %s", e.ProviderName, resp.Error)
+			logger.Errorf("GenerateCharacterThreeViewMulti: provider=%s error: %s", e.ProviderName, resp.Error)
 			lastErr = fmt.Errorf("image generation failed: %s", resp.Error)
 			continue
 		}
@@ -1529,19 +1529,19 @@ func (s *AIService) uploadImageToStorage(ctx context.Context, tenantID uint, img
 	defer cancel()
 	req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, imgURL, nil)
 	if err != nil {
-		logger.Printf("uploadImageToStorage: build request: %v", err)
+		logger.Errorf("uploadImageToStorage: build request: %v", err)
 		return imgURL
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		logger.Printf("uploadImageToStorage: download %s: %v", imgURL, err)
+		logger.Errorf("uploadImageToStorage: download %s: %v", imgURL, err)
 		return imgURL
 	}
 	defer resp.Body.Close()
 	const maxImageSize = 50 << 20 // 50 MB
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageSize+1))
 	if err != nil {
-		logger.Printf("uploadImageToStorage: read body: %v", err)
+		logger.Errorf("uploadImageToStorage: read body: %v", err)
 		return imgURL
 	}
 	if len(data) > maxImageSize {
@@ -1573,7 +1573,7 @@ func (s *AIService) uploadImageToStorage(ctx context.Context, tenantID uint, img
 
 	persistURL, uploadErr := s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), ct)
 	if uploadErr != nil {
-		logger.Printf("uploadImageToStorage: upload failed (falling back to original URL): %v", uploadErr)
+		logger.Errorf("uploadImageToStorage: upload failed (falling back to original URL): %v", uploadErr)
 		return imgURL
 	}
 	logger.Printf("uploadImageToStorage: persisted %s → %s", imgURL, persistURL)
@@ -1605,12 +1605,12 @@ func (s *AIService) fetchImageAsBase64(ctx context.Context, imageURL string) str
 	defer cancel()
 	req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, fetchURL, nil)
 	if err != nil {
-		logger.Printf("fetchImageAsBase64: build request for %s: %v", fetchURL, err)
+		logger.Errorf("fetchImageAsBase64: build request for %s: %v", fetchURL, err)
 		return ""
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		logger.Printf("fetchImageAsBase64: download %s: %v", fetchURL, err)
+		logger.Errorf("fetchImageAsBase64: download %s: %v", fetchURL, err)
 		return ""
 	}
 	defer resp.Body.Close()
@@ -1621,7 +1621,7 @@ func (s *AIService) fetchImageAsBase64(ctx context.Context, imageURL string) str
 	const maxFetchSize = 20 << 20 // 20 MB
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchSize+1))
 	if err != nil {
-		logger.Printf("fetchImageAsBase64: read body: %v", err)
+		logger.Errorf("fetchImageAsBase64: read body: %v", err)
 		return ""
 	}
 	if len(data) > maxFetchSize {
@@ -1661,7 +1661,7 @@ func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint,
 	if imgInput == "" {
 		// fetch 失败时降级：直接传 URL，仅适用于 Volcengine 可访问的公开 https URL
 		imgInput = imageURL
-		logger.Printf("EditImageWithInstruction: base64 fetch failed, falling back to URL: %s", imageURL)
+		logger.Errorf("EditImageWithInstruction: base64 fetch failed, falling back to URL: %s", imageURL)
 	}
 
 	req := &ai.ImageGenerateRequest{
@@ -1869,7 +1869,7 @@ func (s *AIService) loadDBSFXProvider(tenantID uint) (ai.AIProvider, error) {
 		}
 		provider, err := s.getTenantProvider(tenantID, p.Name)
 		if err != nil {
-			logger.Printf("loadDBSFXProvider: failed to instantiate provider %q: %v", p.Name, err)
+			logger.Errorf("loadDBSFXProvider: failed to instantiate provider %q: %v", p.Name, err)
 			continue
 		}
 		logger.Printf("loadDBSFXProvider: using sfx provider %q", p.Name)
@@ -1898,7 +1898,7 @@ func (s *AIService) loadDBVoiceProvider(tenantID uint) (ai.AIProvider, error) {
 		}
 		provider, err := s.getTenantProvider(tenantID, p.Name)
 		if err != nil {
-			logger.Printf("loadDBVoiceProvider: failed to instantiate provider %q: %v", p.Name, err)
+			logger.Errorf("loadDBVoiceProvider: failed to instantiate provider %q: %v", p.Name, err)
 			continue
 		}
 		logger.Printf("loadDBVoiceProvider: using voice provider %q model=%q", p.Name, p.APIVersion)
@@ -1929,7 +1929,7 @@ func (s *AIService) GetBGMProviderCreds(tenantID uint, name string) (apiKey, end
 		}
 		key, decErr := crypto.Decrypt(p.APIKey, s.encKey)
 		if decErr != nil {
-			logger.Printf("GetBGMProviderCreds: decrypt APIKey for %q: %v", p.Name, decErr)
+			logger.Errorf("GetBGMProviderCreds: decrypt APIKey for %q: %v", p.Name, decErr)
 			return "", ""
 		}
 		return key, p.APIEndpoint
@@ -1959,7 +1959,7 @@ func (s *AIService) GetSFXProviderCreds(tenantID uint, name string) (apiKey, end
 		}
 		key, decErr := crypto.Decrypt(p.APIKey, s.encKey)
 		if decErr != nil {
-			logger.Printf("GetSFXProviderCreds: decrypt APIKey for %q: %v", p.Name, decErr)
+			logger.Errorf("GetSFXProviderCreds: decrypt APIKey for %q: %v", p.Name, decErr)
 			return "", ""
 		}
 		return key, p.APIEndpoint
@@ -2003,12 +2003,12 @@ func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.Video
 		// Decrypt stored credentials before passing to provider constructors.
 		apiKey, err := crypto.Decrypt(p.APIKey, s.encKey)
 		if err != nil {
-			logger.Printf("GetTenantVideoProvider: decrypt APIKey for %q: %v", p.Name, err)
+			logger.Errorf("GetTenantVideoProvider: decrypt APIKey for %q: %v", p.Name, err)
 			continue
 		}
 		apiSecretKey, err := crypto.Decrypt(p.APISecretKey, s.encKey)
 		if err != nil {
-			logger.Printf("GetTenantVideoProvider: decrypt APISecretKey for %q: %v", p.Name, err)
+			logger.Errorf("GetTenantVideoProvider: decrypt APISecretKey for %q: %v", p.Name, err)
 			continue
 		}
 		switch pname {

@@ -112,7 +112,7 @@ const maxQueuedTasksPerTenant = 10000
 func (s *TaskService) Create(tenantID uint, taskType, title, entityType string, entityID uint) (*model.AsyncTask, error) {
 	// Enforce per-tenant queue size limit to prevent resource exhaustion.
 	if count, err := s.repo.CountActive(tenantID); err != nil {
-		logger.Printf("[TaskService] queue size check failed for tenant %d: %v", tenantID, err)
+		logger.Errorf("[TaskService] queue size check failed for tenant %d: %v", tenantID, err)
 	} else if count >= maxQueuedTasksPerTenant {
 		return nil, fmt.Errorf("task queue full (%d tasks pending/running); try again later", count)
 	}
@@ -206,7 +206,7 @@ func (s *TaskService) Fail(taskID string, errMsg string) error {
 func (s *TaskService) MarkTaskFailed(taskID string, err error) {
 	task, dbErr := s.repo.GetByTaskID(taskID)
 	if dbErr != nil {
-		logger.Printf("[TaskService] MarkTaskFailed: cannot load task %s: %v", taskID, dbErr)
+		logger.Errorf("[TaskService] MarkTaskFailed: cannot load task %s: %v", taskID, dbErr)
 		return
 	}
 	// Accumulate failure log (truncate to 8KB to avoid unbounded growth).
@@ -241,7 +241,7 @@ func (s *TaskService) MarkTaskFailed(taskID string, err error) {
 		logger.Printf("[TaskService] task %s moved to dead-letter queue after %d retries", taskID, task.RetryCount)
 	}
 	if saveErr := s.repo.Update(task); saveErr != nil {
-		logger.Printf("[TaskService] MarkTaskFailed: save task %s failed: %v", taskID, saveErr)
+		logger.Errorf("[TaskService] MarkTaskFailed: save task %s failed: %v", taskID, saveErr)
 	}
 }
 
@@ -334,7 +334,7 @@ func (s *TaskService) List(tenantID uint, taskType, status string, page, pageSiz
 // Used before creating a replacement task; cancelled status makes goroutine Complete/Fail no-ops.
 func (s *TaskService) CancelActiveByEntity(entityType string, entityID uint, taskType string) {
 	if err := s.repo.CancelActiveByEntity(entityType, entityID, taskType); err != nil {
-		logger.Printf("TaskService: CancelActiveByEntity %s/%d/%s: %v", entityType, entityID, taskType, err)
+		logger.Errorf("TaskService: CancelActiveByEntity %s/%d/%s: %v", entityType, entityID, taskType, err)
 	}
 }
 
@@ -410,9 +410,9 @@ func (s *TaskService) recoverOrphaned(age time.Duration) {
 	// 3. Mark remaining stale tasks as failed.
 	n, err := s.repo.MarkStaleRunning(before)
 	if err != nil {
-		logger.Printf("TaskService: recoverOrphaned error: %v", err)
+		logger.Errorf("TaskService: recoverOrphaned error: %v", err)
 	} else if n > 0 {
-		logger.Printf("TaskService: recovered %d orphaned task(s) → failed", n)
+		logger.Errorf("TaskService: recovered %d orphaned task(s) → failed", n)
 	}
 	if resumed > 0 {
 		logger.Printf("TaskService: resumed %d task(s) from previous session", resumed)
@@ -432,14 +432,14 @@ func (s *TaskService) runCleanup() {
 			// Delete old terminal tasks.
 			cutoff := time.Now().AddDate(0, 0, -7)
 			if err := s.repo.DeleteOldCompleted(cutoff); err != nil {
-				logger.Printf("TaskService: cleanup error: %v", err)
+				logger.Errorf("TaskService: cleanup error: %v", err)
 			}
 			// Recover tasks stuck in "running" for more than 2h (no heartbeat).
 			s.recoverOrphaned(2 * time.Hour)
 			// Expire tasks stuck in "pending" for more than 1h (never picked up).
 			pendingCutoff := time.Now().Add(-1 * time.Hour)
 			if n, err := s.repo.MarkStalePending(pendingCutoff); err != nil {
-				logger.Printf("TaskService: expire stale pending tasks error: %v", err)
+				logger.Errorf("TaskService: expire stale pending tasks error: %v", err)
 			} else if n > 0 {
 				logger.Printf("TaskService: expired %d stale pending task(s)", n)
 			}

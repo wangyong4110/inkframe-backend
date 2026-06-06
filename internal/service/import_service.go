@@ -186,7 +186,7 @@ func (s *NovelImportService) uploadRawToOSS(ctx context.Context, tenantID, novel
 	url, err := s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)),
 		contentTypeFromFilename(filename))
 	if err != nil {
-		logger.Printf("[Import] OSS upload failed for novel %d: %v", novelID, err)
+		logger.Errorf("[Import] OSS upload failed for novel %d: %v", novelID, err)
 		return ""
 	}
 	return url
@@ -316,7 +316,7 @@ func (s *NovelImportService) crawlChaptersBackground(
 			TotalChaps: progress.Total,
 		}
 		if err := s.crawlJobRepo.Create(job); err != nil {
-			logger.Printf("[Crawl] create novel crawl job failed: %v", err)
+			logger.Errorf("[Crawl] create novel crawl job failed: %v", err)
 		} else {
 			jobID = job.ID
 		}
@@ -346,7 +346,7 @@ func (s *NovelImportService) crawlChaptersBackground(
 		progress.mu.Unlock()
 
 		if r.Err != nil || r.Content == nil || r.Content.Content == "" {
-			logger.Printf("[Crawl] chapter %d fetch/parse error: %v", ch.ChapterNo, r.Err)
+			logger.Errorf("[Crawl] chapter %d fetch/parse error: %v", ch.ChapterNo, r.Err)
 			progress.mu.Lock()
 			progress.Failed++
 			progress.mu.Unlock()
@@ -360,7 +360,7 @@ func (s *NovelImportService) crawlChaptersBackground(
 		wordCount := len([]rune(r.Content.Content))
 
 		if err := s.chapterRepo.UpdateCrawledContent(ch.ID, title, r.Content.Content, wordCount); err != nil {
-			logger.Printf("[Crawl] chapter %d save error: %v", ch.ChapterNo, err)
+			logger.Errorf("[Crawl] chapter %d save error: %v", ch.ChapterNo, err)
 			progress.mu.Lock()
 			progress.Failed++
 			progress.mu.Unlock()
@@ -403,16 +403,16 @@ func (s *NovelImportService) crawlChaptersBackground(
 				time.Sleep(2 * time.Second)
 				summary, summaryErr = s.narrativeMemory.GenerateChapterSummary(0, ch, novelTitle)
 				if summaryErr != nil {
-					logger.Printf("[Crawl] chapter %d summary generation failed (skipped): %v", ch.ChapterNo, summaryErr)
+					logger.Errorf("[Crawl] chapter %d summary generation failed (skipped): %v", ch.ChapterNo, summaryErr)
 				}
 			}
 			if summaryErr == nil && summary != "" {
 				ch.Summary = summary
 				if updateErr := s.chapterRepo.Update(ch); updateErr != nil {
-					logger.Printf("[Crawl] failed to save summary for chapter %d: %v", ch.ChapterNo, updateErr)
+					logger.Errorf("[Crawl] failed to save summary for chapter %d: %v", ch.ChapterNo, updateErr)
 				}
 			} else {
-				logger.Printf("[Crawl] chapter %d summary generation failed (keeping existing): %v", ch.ChapterNo, summaryErr)
+				logger.Errorf("[Crawl] chapter %d summary generation failed (keeping existing): %v", ch.ChapterNo, summaryErr)
 			}
 		}
 	}
@@ -678,7 +678,7 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 		if err := s.chapterRepo.CreateInBatches(chapters, 100); err != nil {
 			result.FailedChapters = len(chapters)
 			result.Errors = append(result.Errors, fmt.Sprintf("batch create failed: %v", err))
-			logger.Printf("[Import] novel=%d batch create failed: %v", novel.ID, err)
+			logger.Errorf("[Import] novel=%d batch create failed: %v", novel.ID, err)
 		} else {
 			result.ImportedChapters = len(chapters)
 			logger.Printf("[Import] novel=%d batch created %d chapters", novel.ID, len(chapters))
@@ -708,7 +708,7 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 				existing.Status = chapter.Status
 				if err := s.chapterRepo.Update(existing); err != nil {
 					result.FailedChapters++
-					logger.Printf("[Import] novel=%d chapter %d update failed: %v", novel.ID, chapter.ChapterNo, err)
+					logger.Errorf("[Import] novel=%d chapter %d update failed: %v", novel.ID, chapter.ChapterNo, err)
 					result.Errors = append(result.Errors, fmt.Sprintf("chapter %d update failed: %v", chapter.ChapterNo, err))
 				} else {
 					result.ImportedChapters++
@@ -725,7 +725,7 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 		if err := s.chapterRepo.CreateInBatches(toCreate, 100); err != nil {
 			result.FailedChapters += len(toCreate)
 			result.Errors = append(result.Errors, fmt.Sprintf("batch create failed: %v", err))
-			logger.Printf("[Import] novel=%d batch create %d chapters failed: %v", novel.ID, len(toCreate), err)
+			logger.Errorf("[Import] novel=%d batch create %d chapters failed: %v", novel.ID, len(toCreate), err)
 		} else {
 			result.ImportedChapters += len(toCreate)
 			logger.Printf("[Import] novel=%d batch created %d new chapters", novel.ID, len(toCreate))
@@ -829,7 +829,7 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 	if fetcher, ok := parser.(crawler.ChapterListFetcher); ok {
 		chapterInfos, err = fetcher.FetchChapterList(context.Background(), s.crawler.Jar(), req.URL)
 		if err != nil {
-			logger.Printf("[Import] Ajax chapter list failed (%v), falling back to HTML parse", err)
+			logger.Errorf("[Import] Ajax chapter list failed (%v), falling back to HTML parse", err)
 			chapterInfos, err = parser.ParseChapterList(root)
 		}
 	} else {
@@ -1284,7 +1284,7 @@ func (s *NovelImportService) splitByChaptersWithAI(content string, tenantID uint
 
 	resp, err := s.aiService.GenerateWithProvider(tenantID, 0, "chapter", prompt, "", StoryboardOverrides{TimeoutSeconds: 30})
 	if err != nil || strings.TrimSpace(resp) == "" {
-		logger.Printf("[Import] AI chapter split error: %v", err)
+		logger.Errorf("[Import] AI chapter split error: %v", err)
 		return nil
 	}
 
@@ -1297,7 +1297,7 @@ func (s *NovelImportService) splitByChaptersWithAI(content string, tenantID uint
 	}
 	var titles []string
 	if err := json.Unmarshal([]byte(raw), &titles); err != nil || len(titles) == 0 {
-		logger.Printf("[Import] AI chapter split JSON parse error: %v, raw=%q", err, raw)
+		logger.Errorf("[Import] AI chapter split JSON parse error: %v, raw=%q", err, raw)
 		return nil
 	}
 
@@ -1567,7 +1567,7 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 			}
 			if s.storyboardRepo != nil {
 				if err := s.storyboardRepo.Create(dbShot); err != nil {
-					logger.Printf("save storyboard shot failed (chapter %d, shot %d): %v", chapter.ChapterNo, idx+1, err)
+					logger.Errorf("save storyboard shot failed (chapter %d, shot %d): %v", chapter.ChapterNo, idx+1, err)
 				}
 			}
 			totalShots++

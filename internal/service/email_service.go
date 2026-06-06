@@ -53,7 +53,7 @@ func (s *SMTPEmailSender) SendEmail(to, subject, body string) error {
 		if lastErr == nil {
 			return nil
 		}
-		logger.Printf("SendEmail attempt %d failed: %v", attempt+1, lastErr)
+		logger.Errorf("SendEmail attempt %d failed: %v", attempt+1, lastErr)
 		if !isRetryableEmailError(lastErr) {
 			break // 永久性错误，不再重试
 		}

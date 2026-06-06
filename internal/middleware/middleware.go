@@ -134,7 +134,7 @@ func Recovery() gin.HandlerFunc {
 			n := runtime.Stack(buf, false)
 			stack := buf[:n]
 
-			logger.Printf("[PANIC] %v | %s %s | client=%s\n%s",
+			logger.Errorf("[PANIC] %v | %s %s | client=%s\n%s",
 				r,
 				c.Request.Method,
 				c.Request.URL.RequestURI(),
@@ -215,12 +215,12 @@ func NewAuth(jwtSecret string, rdb *redis.Client) gin.HandlerFunc {
 		if gin.Mode() == gin.ReleaseMode || os.Getenv("APP_ENV") == "production" {
 			panic("FATAL: jwt_secret is empty in production mode. Set server.jwt_secret in config.yaml")
 		}
-		logger.Printf("[Auth] WARNING: jwt_secret empty — dev-bypass active, all requests granted (tenant=1)")
+		logger.Errorf("[Auth] WARNING: jwt_secret empty — dev-bypass active, all requests granted (tenant=1)")
 	} else if len(jwtSecret) < 32 {
 		if gin.Mode() == gin.ReleaseMode || os.Getenv("APP_ENV") == "production" {
 			panic("FATAL: jwt_secret is too short (must be at least 32 characters). Set a strong secret in config.yaml")
 		}
-		logger.Printf("[Auth] WARNING: jwt_secret is shorter than 32 characters — use a stronger secret in production")
+		logger.Errorf("[Auth] WARNING: jwt_secret is shorter than 32 characters — use a stronger secret in production")
 	}
 	return func(c *gin.Context) {
 		// ── 开发绕过模式（jwt_secret 为空且非生产） ────────────────────────

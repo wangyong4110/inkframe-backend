@@ -37,7 +37,7 @@ func (s *EmailNotificationService) SendNotification(to, subject, body string) {
 	}
 	go func() {
 		if err := s.sender.SendEmail(to, subject, body); err != nil {
-			logger.Printf("[EmailNotificationService] SendNotification to=%s: %v", to, err)
+			logger.Errorf("[EmailNotificationService] SendNotification to=%s: %v", to, err)
 		}
 	}()
 }

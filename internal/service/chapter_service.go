@@ -158,7 +158,7 @@ func (s *ChapterService) GetDefaultProviderName() string {
 // syncNovelStats refreshes chapter_count and total_words on the novel (best-effort).
 func (s *ChapterService) syncNovelStats(novelID uint) {
 	if err := s.novelRepo.SyncStats(novelID); err != nil {
-		logger.Printf("syncNovelStats: novelID=%d: %v", novelID, err)
+		logger.Errorf("syncNovelStats: novelID=%d: %v", novelID, err)
 	}
 }
 
@@ -246,7 +246,7 @@ func (s *ChapterService) UpdateChapter(id, tenantID uint, req *model.UpdateChapt
 			Content:    chapter.Content,
 			ChangeType: "manual_edit",
 		}); err != nil {
-			logger.Printf("[ChapterService] create version failed: %v", err)
+			logger.Errorf("[ChapterService] create version failed: %v", err)
 		}
 	}
 	applyChapterUpdate(chapter, req)
@@ -273,7 +273,7 @@ func (s *ChapterService) DeleteChapter(id, tenantID uint) error {
 	// Clean up character state snapshots that reference this chapter.
 	if s.snapshotRepo != nil {
 		if delErr := s.snapshotRepo.DeleteByChapterID(id); delErr != nil {
-			logger.Printf("[ChapterService] DeleteChapter: delete snapshots for chapter %d: %v", id, delErr)
+			logger.Errorf("[ChapterService] DeleteChapter: delete snapshots for chapter %d: %v", id, delErr)
 		}
 	}
 	s.syncNovelStats(chapter.NovelID)
@@ -418,7 +418,7 @@ func (s *ChapterService) PublishChapter(novelID uint, chapterNo int) (*model.Cha
 	}
 	chapter.IsPublished = true
 	if err := s.novelRepo.SyncPublishedCount(novelID); err != nil {
-		logger.Printf("[ChapterService] SyncPublishedCount failed: %v", err)
+		logger.Errorf("[ChapterService] SyncPublishedCount failed: %v", err)
 	}
 	return chapter, nil
 }
@@ -434,7 +434,7 @@ func (s *ChapterService) UnpublishChapter(novelID uint, chapterNo int) (*model.C
 	}
 	chapter.IsPublished = false
 	if err := s.novelRepo.SyncPublishedCount(novelID); err != nil {
-		logger.Printf("[ChapterService] SyncPublishedCount failed: %v", err)
+		logger.Errorf("[ChapterService] SyncPublishedCount failed: %v", err)
 	}
 	return chapter, nil
 }
@@ -530,7 +530,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 			refStories = parseWebSearchOutput(out)
 			logger.Printf("[WebSearch] chapter %d: query=%q results=%d", req.ChapterNo, query, countWebSearchResults(out))
 		} else {
-			logger.Printf("[WebSearch] chapter %d: skipped: %v", req.ChapterNo, searchErr)
+			logger.Errorf("[WebSearch] chapter %d: skipped: %v", req.ChapterNo, searchErr)
 		}
 	}
 
@@ -548,7 +548,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 			wikiContext = parseWikiOutput(out)
 			logger.Printf("[WikiSearch] chapter %d: query=%q", req.ChapterNo, query)
 		} else {
-			logger.Printf("[WikiSearch] chapter %d: skipped: %v", req.ChapterNo, searchErr)
+			logger.Errorf("[WikiSearch] chapter %d: skipped: %v", req.ChapterNo, searchErr)
 		}
 	}
 
@@ -566,7 +566,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 			storyPatternRef = parseStoryPatternOutput(out)
 			logger.Printf("[StoryPattern] chapter %d: genre=%q", req.ChapterNo, novel.Genre)
 		} else {
-			logger.Printf("[StoryPattern] chapter %d: skipped: %v", req.ChapterNo, searchErr)
+			logger.Errorf("[StoryPattern] chapter %d: skipped: %v", req.ChapterNo, searchErr)
 		}
 	}
 
@@ -589,7 +589,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		if existing, _ := s.chapterRepo.GetByNovelAndChapterNo(novelID, req.ChapterNo); existing != nil && existing.Status == "generating" {
 			existing.Status = "failed"
 			if updateErr := s.chapterRepo.Update(existing); updateErr != nil {
-				logger.Printf("[ChapterService] failed to set chapter %d status=failed: %v", existing.ID, updateErr)
+				logger.Errorf("[ChapterService] failed to set chapter %d status=failed: %v", existing.ID, updateErr)
 			}
 		}
 		return nil, fmt.Errorf("generate scene outline failed: %w", outlineErr)
@@ -604,7 +604,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		if existing, _ := s.chapterRepo.GetByNovelAndChapterNo(novelID, req.ChapterNo); existing != nil && existing.Status == "generating" {
 			existing.Status = "failed"
 			if updateErr := s.chapterRepo.Update(existing); updateErr != nil {
-				logger.Printf("[ChapterService] failed to set chapter %d status=failed: %v", existing.ID, updateErr)
+				logger.Errorf("[ChapterService] failed to set chapter %d status=failed: %v", existing.ID, updateErr)
 			}
 		}
 		return nil, err
@@ -673,10 +673,10 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		if summary, err := s.narrativeSvc.GenerateChapterSummary(tenantID, chapter, novel.Title); err == nil {
 			chapter.Summary = summary
 			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
-				logger.Printf("[ChapterService] GenerateChapter: update chapter %d [摘要]: %v", chapter.ID, updateErr)
+				logger.Errorf("[ChapterService] GenerateChapter: update chapter %d [摘要]: %v", chapter.ID, updateErr)
 			}
 		} else {
-			logger.Printf("[ChapterService] GenerateChapter: summary ch%d: %v", chapter.ChapterNo, err)
+			logger.Errorf("[ChapterService] GenerateChapter: summary ch%d: %v", chapter.ChapterNo, err)
 		}
 	}
 
@@ -698,7 +698,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		if endState := s.generateChapterEndState(tenantID, chapter, novel); endState != "" {
 			chapter.ChapterEndState = endState
 			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
-				logger.Printf("[ChapterService] GenerateChapter: update chapter %d [end_state]: %v", chapter.ID, updateErr)
+				logger.Errorf("[ChapterService] GenerateChapter: update chapter %d [end_state]: %v", chapter.ID, updateErr)
 			} else {
 				logger.Printf("[ChapterService] chapter_end_state generated sync for ch%d", chapter.ChapterNo)
 			}
@@ -708,7 +708,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	// Mark chapter as completed now that all synchronous steps are done.
 	chapter.Status = "completed"
 	if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
-		logger.Printf("[ChapterService] GenerateChapter: update chapter %d [status=completed]: %v", chapter.ID, updateErr)
+		logger.Errorf("[ChapterService] GenerateChapter: update chapter %d [status=completed]: %v", chapter.ID, updateErr)
 	}
 
 	// ── Step 6: 异步后处理（标题/精修/弧摘要，不再包含角色快照）────────────────────────────────
@@ -772,7 +772,7 @@ func (s *ChapterService) extractChapterMeta(novelID uint, chapterNo int) chapter
 			} `json:"chapters"`
 		}
 		if parseErr := json.Unmarshal([]byte(outlineJSON), &outline); parseErr != nil {
-			logger.Printf("[extractChapterMeta] JSON parse error: %v (preview=%q)", parseErr, truncateForPrompt(outlineJSON, 200))
+			logger.Errorf("[extractChapterMeta] JSON parse error: %v (preview=%q)", parseErr, truncateForPrompt(outlineJSON, 200))
 		} else {
 			logger.Printf("[extractChapterMeta] outline parsed: %d chapters total", len(outline.Chapters))
 			found := false
@@ -940,7 +940,7 @@ role只能是：protagonist / antagonist / supporting
 
 	result, aiErr := s.aiService.GenerateWithProvider(tenantID, novel.ID, "character_extract_mini", prompt, "")
 	if aiErr != nil {
-		logger.Printf("[ChapterService] ensureProtagonistExtracted: AI error: %v", aiErr)
+		logger.Errorf("[ChapterService] ensureProtagonistExtracted: AI error: %v", aiErr)
 		return
 	}
 
@@ -951,7 +951,7 @@ role只能是：protagonist / antagonist / supporting
 		Description string `json:"description"`
 	}
 	if jsonErr := json.Unmarshal([]byte(cleaned), &extracted); jsonErr != nil {
-		logger.Printf("[ChapterService] ensureProtagonistExtracted: parse error: %v (raw: %.200s)", jsonErr, cleaned)
+		logger.Errorf("[ChapterService] ensureProtagonistExtracted: parse error: %v (raw: %.200s)", jsonErr, cleaned)
 		return
 	}
 
@@ -970,7 +970,7 @@ role只能是：protagonist / antagonist / supporting
 			Status:      "active",
 		}
 		if createErr := s.characterRepo.Create(char); createErr != nil {
-			logger.Printf("[ChapterService] ensureProtagonistExtracted: create %s: %v", c.Name, createErr)
+			logger.Errorf("[ChapterService] ensureProtagonistExtracted: create %s: %v", c.Name, createErr)
 		}
 	}
 	logger.Printf("[ChapterService] ensureProtagonistExtracted: created %d characters for novel %d", len(extracted), novel.ID)
@@ -984,7 +984,7 @@ func (s *ChapterService) buildGlobalContext(novelID uint, chapterNo int, novel *
 		if err == nil && ctx != "" {
 			return ctx
 		}
-		logger.Printf("GenerateChapter: hierarchical context failed: %v — fallback", err)
+		logger.Errorf("GenerateChapter: hierarchical context failed: %v — fallback", err)
 	}
 	// 降级到原 GenerationContextService
 	if s.contextSvc != nil {
@@ -1203,7 +1203,7 @@ func (s *ChapterService) generateSceneOutline(
 		"TensionBudget":         tensionBudget,
 	})
 	if err != nil {
-		logger.Printf("GenerateChapter: render chapter_scene_outline: %v", err)
+		logger.Errorf("GenerateChapter: render chapter_scene_outline: %v", err)
 		return "", "", fmt.Errorf("generateSceneOutline: render template: %w", err)
 	}
 
@@ -1211,7 +1211,7 @@ func (s *ChapterService) generateSceneOutline(
 	resp, err := s.aiService.GenerateWithProviderCtx(outlineCtx, tenantID, novelID, "scene_outline", outlinePrompt, req.ModelOverride, buildChapterOverrides(req, novel))
 	outlineCancel()
 	if err != nil {
-		logger.Printf("GenerateChapter: scene outline AI call failed: %v", err)
+		logger.Errorf("GenerateChapter: scene outline AI call failed: %v", err)
 		return "", "", fmt.Errorf("generateSceneOutline: AI call failed: %w", err)
 	}
 
@@ -1309,7 +1309,7 @@ func (s *ChapterService) generateSceneOutline(
 						logger.Printf("[generateSceneOutline] ch%d: retry succeeded with %d scenes", req.ChapterNo, len(retryResult.Scenes))
 					}
 				} else {
-					logger.Printf("[generateSceneOutline] ch%d: retry failed: %v (using original)", req.ChapterNo, retryErr)
+					logger.Errorf("[generateSceneOutline] ch%d: retry failed: %v (using original)", req.ChapterNo, retryErr)
 				}
 			}
 		} else {
@@ -1454,7 +1454,7 @@ func (s *ChapterService) generateFromSceneOutline(
 		} `json:"plot_coverage"`
 	}
 	if err := json.Unmarshal([]byte(sceneOutlineJSON), &outlineData); err != nil {
-		logger.Printf("[ChapterService] generateFromSceneOutline: failed to parse scene outline JSON: %v", err)
+		logger.Errorf("[ChapterService] generateFromSceneOutline: failed to parse scene outline JSON: %v", err)
 	}
 
 	// 将 plot_coverage 中的剧情点映射回对应场景，设置 RequiredEvent
@@ -1719,7 +1719,7 @@ func (s *ChapterService) generateFromSceneOutline(
 				"FinalChapterContext": finalChapterCtx,      // P0-2: 最终章未关闭悬线清单
 			})
 			if promptErr != nil {
-				logger.Printf("[generateFromSceneOutline] ch%d scene%d: render scene_write failed: %v; falling back to one-shot",
+				logger.Errorf("[generateFromSceneOutline] ch%d scene%d: render scene_write failed: %v; falling back to one-shot",
 					req.ChapterNo, sc.SceneNo, promptErr)
 				sceneOk = false
 				break
@@ -1744,7 +1744,7 @@ func (s *ChapterService) generateFromSceneOutline(
 					}
 					break
 				}
-				logger.Printf("[generateFromSceneOutline] ch%d scene%d attempt%d: %v", req.ChapterNo, sc.SceneNo, attempt+1, sceneErr)
+				logger.Errorf("[generateFromSceneOutline] ch%d scene%d attempt%d: %v", req.ChapterNo, sc.SceneNo, attempt+1, sceneErr)
 				if attempt < 1 {
 					time.Sleep(3 * time.Second)
 				}
@@ -1752,7 +1752,7 @@ func (s *ChapterService) generateFromSceneOutline(
 			if sceneErr != nil {
 				// 场景失败：不立即放弃整章。记录失败并用占位符继续，
 				// 保留已生成的场景，最终判断是否有足够内容。
-				logger.Printf("[generateFromSceneOutline] ch%d scene%d: all attempts failed (%v); using placeholder, continuing",
+				logger.Errorf("[generateFromSceneOutline] ch%d scene%d: all attempts failed (%v); using placeholder, continuing",
 					req.ChapterNo, sc.SceneNo, sceneErr)
 				sceneParts = append(sceneParts, "") // 空占位符，后续过滤
 				sceneOk = false
@@ -1810,7 +1810,7 @@ func (s *ChapterService) generateFromSceneOutline(
 			return totalContent, lastHook, nil
 		}
 		if !sceneOk || successCount < minSuccessRatio {
-			logger.Printf("[generateFromSceneOutline] ch%d: scene-by-scene failed (success=%d/%d); using one-shot fallback",
+			logger.Errorf("[generateFromSceneOutline] ch%d: scene-by-scene failed (success=%d/%d); using one-shot fallback",
 				req.ChapterNo, successCount, len(outlineData.Scenes))
 		}
 	}
@@ -1845,7 +1845,7 @@ func (s *ChapterService) generateFromSceneOutline(
 		"FinalChapterContext":   finalChapterCtx,
 	})
 	if renderErr != nil {
-		logger.Printf("[generateFromSceneOutline] ch%d: one-shot render failed: %v; using simple fallback", req.ChapterNo, renderErr)
+		logger.Errorf("[generateFromSceneOutline] ch%d: one-shot render failed: %v; using simple fallback", req.ChapterNo, renderErr)
 		content, err := s.generateFallbackChapter(tenantID, novelID, req, novel, globalCtx)
 		return content, "", err
 	}
@@ -1858,7 +1858,7 @@ func (s *ChapterService) generateFromSceneOutline(
 		if genErr == nil {
 			break
 		}
-		logger.Printf("[ChapterService] generateFromSceneOutline: attempt %d failed: %v", attempt+1, genErr)
+		logger.Errorf("[ChapterService] generateFromSceneOutline: attempt %d failed: %v", attempt+1, genErr)
 		if attempt < 2 {
 			time.Sleep(time.Duration(attempt+1) * 2 * time.Second)
 		}
@@ -1907,14 +1907,14 @@ func (s *ChapterService) generateFallbackChapter(tenantID, novelID uint, req *mo
 func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapter, novel *model.Novel) {
 	defer func() {
 		if r := recover(); r != nil {
-			logger.Printf("[ChapterService] postProcessChapter panic recovered: %v\n%s", r, debug.Stack())
+			logger.Errorf("[ChapterService] postProcessChapter panic recovered: %v\n%s", r, debug.Stack())
 		}
 	}()
 	logger.Printf("[ChapterService] postProcessChapter start: chapterID=%d no=%d", chapter.ID, chapter.ChapterNo)
 
 	// Fetch a fresh copy from DB to avoid mutating the caller's pointer concurrently.
 	if fresh, err := s.chapterRepo.GetByID(chapter.ID); err != nil {
-		logger.Printf("[ChapterService] postProcessChapter: fetch fresh chapter %d failed: %v", chapter.ID, err)
+		logger.Errorf("[ChapterService] postProcessChapter: fetch fresh chapter %d failed: %v", chapter.ID, err)
 		return
 	} else {
 		chapter = fresh
@@ -1925,7 +1925,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 	if freshNovel, err := s.novelRepo.GetByIDFromDB(chapter.NovelID); err == nil {
 		novel = freshNovel
 	} else {
-		logger.Printf("[ChapterService] postProcessChapter: fetch fresh novel %d failed (non-fatal, using caller copy): %v", chapter.NovelID, err)
+		logger.Errorf("[ChapterService] postProcessChapter: fetch fresh novel %d failed (non-fatal, using caller copy): %v", chapter.NovelID, err)
 	}
 	// 1. 精修（先于摘要执行：摘要必须基于最终内容，不能基于草稿）
 	if s.narrativeSvc != nil {
@@ -1933,7 +1933,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 			chapter.Content = refined
 			chapter.WordCount = countChineseChars(refined)
 			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
-				logger.Printf("postProcessChapter: update chapter %d [精修]: %v", chapter.ID, updateErr)
+				logger.Errorf("postProcessChapter: update chapter %d [精修]: %v", chapter.ID, updateErr)
 			}
 			// P0-1: 精修可能改变人物位置/状态/心情，Step 5b 是在精修前提取的快照，
 			// 必须用精修后内容重新提取，确保下一章读到的角色状态与实际呈现给读者的内容一致。
@@ -1960,7 +1960,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 					chapter.Content = refined
 					chapter.WordCount = countChineseChars(refined)
 					if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
-						logger.Printf("postProcessChapter: update chapter %d [quality-refinement]: %v", chapter.ID, updateErr)
+						logger.Errorf("postProcessChapter: update chapter %d [quality-refinement]: %v", chapter.ID, updateErr)
 					}
 					// P0-1: quality refinement changes content → refresh snapshots so the next chapter
 					// reads correct character states, not the pre-quality-refinement draft.
@@ -1976,7 +1976,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 						stillLow = false
 					}
 				} else if refErr != nil {
-					logger.Printf("postProcessChapter: quality-refinement ch%d: %v", chapter.ChapterNo, refErr)
+					logger.Errorf("postProcessChapter: quality-refinement ch%d: %v", chapter.ChapterNo, refErr)
 				}
 			}
 			if stillLow {
@@ -1985,7 +1985,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 					fresh.QualityStatus = "low"
 					fresh.QualityIssues = report.SummarizeIssues()
 					if updateErr := s.chapterRepo.Update(fresh); updateErr != nil {
-						logger.Printf("postProcessChapter: update chapter %d [quality-status]: %v", chapter.ID, updateErr)
+						logger.Errorf("postProcessChapter: update chapter %d [quality-status]: %v", chapter.ID, updateErr)
 					} else {
 						logger.Printf("[ChapterService] chapter %d saved with low quality status", chapter.ChapterNo)
 					}
@@ -1993,7 +1993,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 				}
 			}
 		} else if qErr != nil {
-			logger.Printf("[ChapterService] postProcessChapter: quality check ch%d failed (non-fatal): %v", chapter.ChapterNo, qErr)
+			logger.Errorf("[ChapterService] postProcessChapter: quality check ch%d failed (non-fatal): %v", chapter.ChapterNo, qErr)
 		}
 	}
 
@@ -2007,19 +2007,19 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 				summaryText = generated
 				break
 			} else if attempt < 2 {
-				logger.Printf("postProcess: summary ch%d attempt %d failed: %v, retrying", chapter.ChapterNo, attempt+1, err)
+				logger.Errorf("postProcess: summary ch%d attempt %d failed: %v, retrying", chapter.ChapterNo, attempt+1, err)
 				time.Sleep(time.Duration(attempt+1) * time.Second)
 			} else {
-				logger.Printf("postProcess: summary ch%d attempt %d failed: %v", chapter.ChapterNo, attempt+1, err)
+				logger.Errorf("postProcess: summary ch%d attempt %d failed: %v", chapter.ChapterNo, attempt+1, err)
 			}
 		}
 		if summaryText != "" {
 			chapter.Summary = summaryText
 			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
-				logger.Printf("postProcessChapter: update chapter %d [摘要]: %v", chapter.ID, updateErr)
+				logger.Errorf("postProcessChapter: update chapter %d [摘要]: %v", chapter.ID, updateErr)
 			}
 		} else {
-			logger.Printf("[ChapterService] WARNING: chapter %d has no summary after 3 attempts", chapter.ChapterNo)
+			logger.Errorf("[ChapterService] WARNING: chapter %d has no summary after 3 attempts", chapter.ChapterNo)
 		}
 	}
 
@@ -2029,7 +2029,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 		if title, err := s.narrativeSvc.GenerateChapterTitle(tenantID, chapter, novel.Genre, chapter.EmotionalTone); err == nil && title != "" {
 			chapter.Title = fmt.Sprintf("第%d章 %s", chapter.ChapterNo, title)
 			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
-				logger.Printf("postProcessChapter: update chapter %d [标题]: %v", chapter.ID, updateErr)
+				logger.Errorf("postProcessChapter: update chapter %d [标题]: %v", chapter.ID, updateErr)
 			}
 		}
 	}
@@ -2041,7 +2041,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 		go func(ch *model.Chapter) {
 			report, err := s.continuitySvc.ValidateChapter(novel.ID, ch.ID, tenantID, ch.ChapterNo, ch.Content)
 			if err != nil {
-				logger.Printf("[ChapterService] continuity check ch%d: %v", ch.ChapterNo, err)
+				logger.Errorf("[ChapterService] continuity check ch%d: %v", ch.ChapterNo, err)
 				return
 			}
 			// 检测是否存在高危/严重问题
@@ -2072,7 +2072,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 				// P0-2: 使用原子性单列更新，避免与 postProcessChapter 主 goroutine
 				// 的并发写入（steps 4c/4d/4e）产生写入竞争，导致 continuity_blocked=true 被覆盖。
 				if updateErr := s.chapterRepo.UpdateContinuityBlocked(ch.ID, novel.ID, true); updateErr != nil {
-					logger.Printf("[ChapterService] continuity_blocked update ch%d: %v", ch.ChapterNo, updateErr)
+					logger.Errorf("[ChapterService] continuity_blocked update ch%d: %v", ch.ChapterNo, updateErr)
 				} else {
 					logger.Printf("[ChapterService] continuity_blocked=true marked for ch%d (novel %d)", ch.ChapterNo, novel.ID)
 					// 主动通知：连贯性问题需要用户介入，不能静默标记
@@ -2102,7 +2102,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 		)
 		reviewCancel()
 		if reviewErr != nil {
-			logger.Printf("[ChapterService] postProcessChapter: auto-review ch%d error (non-fatal): %v", chapter.ChapterNo, reviewErr)
+			logger.Errorf("[ChapterService] postProcessChapter: auto-review ch%d error (non-fatal): %v", chapter.ChapterNo, reviewErr)
 		} else {
 			logger.Printf("[ChapterService] postProcessChapter: auto-review ch%d done: finalScore=%.1f totalApplied=%d",
 				chapter.ChapterNo, finalScore, totalApplied)
@@ -2120,7 +2120,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 			if s.narrativeSvc != nil && chapter.Content != "" {
 				if newSummary, sumErr := s.narrativeSvc.GenerateChapterSummary(tenantID, chapter, novel.Title); sumErr == nil && newSummary != "" {
 					if updateErr := s.chapterRepo.UpdateSummary(chapter.ID, chapter.NovelID, newSummary); updateErr != nil {
-						logger.Printf("postProcessChapter: update ch%d [summary-post-review]: %v", chapter.ID, updateErr)
+						logger.Errorf("postProcessChapter: update ch%d [summary-post-review]: %v", chapter.ID, updateErr)
 					} else {
 						chapter.Summary = newSummary // sync in-memory
 						logger.Printf("[ChapterService] summary regenerated after AutoReview for ch%d", chapter.ChapterNo)
@@ -2148,7 +2148,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 				break
 			}
 			if attempt < 2 {
-				logger.Printf("postProcessChapter: reader_expectations ch%d attempt %d failed, retrying", chapter.ChapterNo, attempt+1)
+				logger.Errorf("postProcessChapter: reader_expectations ch%d attempt %d failed, retrying", chapter.ChapterNo, attempt+1)
 				time.Sleep(time.Duration(attempt+1) * time.Second)
 			}
 		}
@@ -2156,14 +2156,14 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 			if fresh, fetchErr := s.chapterRepo.GetByID(chapter.ID); fetchErr == nil {
 				fresh.ReaderExpectations = expectations
 				if updateErr := s.chapterRepo.Update(fresh); updateErr != nil {
-					logger.Printf("postProcessChapter: update chapter %d [reader_expectations]: %v", chapter.ID, updateErr)
+					logger.Errorf("postProcessChapter: update chapter %d [reader_expectations]: %v", chapter.ID, updateErr)
 				} else {
 					chapter = fresh
 					logger.Printf("[ChapterService] reader_expectations generated for ch%d", chapter.ChapterNo)
 				}
 			}
 		} else {
-			logger.Printf("[ChapterService] WARNING: reader_expectations ch%d failed after 3 attempts", chapter.ChapterNo)
+			logger.Errorf("[ChapterService] WARNING: reader_expectations ch%d failed after 3 attempts", chapter.ChapterNo)
 		}
 	}
 
@@ -2175,7 +2175,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 			if fresh, fetchErr := s.chapterRepo.GetByID(chapter.ID); fetchErr == nil {
 				fresh.ChapterEndState = endState
 				if updateErr := s.chapterRepo.Update(fresh); updateErr != nil {
-					logger.Printf("postProcessChapter: update chapter %d [chapter_end_state_refined]: %v", chapter.ID, updateErr)
+					logger.Errorf("postProcessChapter: update chapter %d [chapter_end_state_refined]: %v", chapter.ID, updateErr)
 				} else {
 					chapter = fresh
 					logger.Printf("[ChapterService] chapter_end_state refreshed after refinement for ch%d", chapter.ChapterNo)
@@ -2195,7 +2195,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 			if fresh, fetchErr := s.chapterRepo.GetByID(chapter.ID); fetchErr == nil {
 				if patched := s.checkAndPatchMissingPlotPoints(tenantID, fresh, novel, meta.plotPoints); patched {
 					if updateErr := s.chapterRepo.Update(fresh); updateErr != nil {
-						logger.Printf("postProcessChapter: update chapter %d [plot_compliance_patch]: %v", chapter.ID, updateErr)
+						logger.Errorf("postProcessChapter: update chapter %d [plot_compliance_patch]: %v", chapter.ID, updateErr)
 					} else {
 						chapter = fresh
 						logger.Printf("[ChapterService] plot compliance patch applied for ch%d (new wordCount=%d)",
@@ -2213,7 +2213,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 									}
 								}
 							} else if refErr != nil {
-								logger.Printf("[ChapterService] patch refinement ch%d (non-fatal): %v", chapter.ChapterNo, refErr)
+								logger.Errorf("[ChapterService] patch refinement ch%d (non-fatal): %v", chapter.ChapterNo, refErr)
 							}
 						}
 						// 补写（并精修）改变了章末内容，必须重新生成章末状态快照，
@@ -2244,7 +2244,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 		go func() {
 			ctx := context.Background()
 			if err := s.knowledgeSvc.ExtractAndStorePlotPoints(ctx, chapter, nil); err != nil {
-				logger.Printf("[ChapterService] ExtractAndStorePlotPoints failed for ch%d: %v", chapter.ChapterNo, err)
+				logger.Errorf("[ChapterService] ExtractAndStorePlotPoints failed for ch%d: %v", chapter.ChapterNo, err)
 			}
 		}()
 	}
@@ -2258,7 +2258,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					logger.Printf("[ChapterService] voice profile extraction panic: %v", r)
+					logger.Errorf("[ChapterService] voice profile extraction panic: %v", r)
 				}
 			}()
 			chars, charErr := s.characterRepo.ListByNovel(chapter.NovelID)
@@ -2271,7 +2271,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 				}
 				voiceJSON, vErr := s.narrativeSvc.ExtractCharacterVoice(tenantID, c, chapter.NovelID)
 				if vErr != nil {
-					logger.Printf("[ChapterService] voice profile for %s: %v", c.Name, vErr)
+					logger.Errorf("[ChapterService] voice profile for %s: %v", c.Name, vErr)
 					continue
 				}
 				voiceJSON = extractJSON(strings.TrimSpace(voiceJSON))
@@ -2280,7 +2280,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 				}
 				c.VoiceProfile = voiceJSON
 				if updateErr := s.characterRepo.Update(c); updateErr != nil {
-					logger.Printf("[ChapterService] save voice profile for %s: %v", c.Name, updateErr)
+					logger.Errorf("[ChapterService] save voice profile for %s: %v", c.Name, updateErr)
 				} else {
 					logger.Printf("[ChapterService] voice profile updated: character=%s novelID=%d ch=%d", c.Name, chapter.NovelID, chapter.ChapterNo)
 				}
@@ -2296,7 +2296,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Printf("[ChapterService] updateNextChapterPreview panic: %v", r)
+				logger.Errorf("[ChapterService] updateNextChapterPreview panic: %v", r)
 			}
 		}()
 		s.updateNextChapterPreview(tenantID, &chSnapForPreview, &novelSnapForPreview)
@@ -2353,7 +2353,7 @@ func (s *ChapterService) checkAndAutoResolvePlotPoints(tenantID uint, chapter *m
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "plot_resolution_check", sb.String(), "")
 	if err != nil {
-		logger.Printf("checkAndAutoResolvePlotPoints[%d]: AI error: %v", chapter.NovelID, err)
+		logger.Errorf("checkAndAutoResolvePlotPoints[%d]: AI error: %v", chapter.NovelID, err)
 		return
 	}
 
@@ -2371,7 +2371,7 @@ func (s *ChapterService) checkAndAutoResolvePlotPoints(tenantID uint, chapter *m
 		pp.IsResolved = true
 		pp.ResolvedIn = &chapter.ID
 		if err := s.plotPointRepo.Update(pp); err != nil {
-			logger.Printf("checkAndAutoResolvePlotPoints: update pp#%d: %v", pp.ID, err)
+			logger.Errorf("checkAndAutoResolvePlotPoints: update pp#%d: %v", pp.ID, err)
 		} else {
 			desc := pp.Description
 			if len([]rune(desc)) > 40 {
@@ -2400,12 +2400,12 @@ type characterForPrompt struct {
 
 func (s *ChapterService) getCharactersForPrompt(novelID uint) []characterForPrompt {
 	if s.characterRepo == nil {
-		logger.Printf("[ChapterService] getCharactersForPrompt: characterRepo not wired, no character context injected")
+		logger.Errorf("[ChapterService] getCharactersForPrompt: characterRepo not wired, no character context injected")
 		return nil
 	}
 	chars, err := s.characterRepo.ListByNovel(novelID)
 	if err != nil {
-		logger.Printf("[ChapterService] getCharactersForPrompt: ListByNovel error: %v", err)
+		logger.Errorf("[ChapterService] getCharactersForPrompt: ListByNovel error: %v", err)
 		return nil
 	}
 	if len(chars) == 0 {
@@ -3067,7 +3067,7 @@ func (s *ChapterService) updateNextChapterPreview(tenantID uint, chapter *model.
 		"NextChapterOutline": next.Outline,
 	})
 	if renderErr != nil {
-		logger.Printf("[ChapterService] updateNextChapterPreview: render failed: %v", renderErr)
+		logger.Errorf("[ChapterService] updateNextChapterPreview: render failed: %v", renderErr)
 		return
 	}
 
@@ -3076,7 +3076,7 @@ func (s *ChapterService) updateNextChapterPreview(tenantID uint, chapter *model.
 	preview, aiErr := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID,
 		"next_chapter_preview", prompt, "", StoryboardOverrides{})
 	if aiErr != nil {
-		logger.Printf("[ChapterService] updateNextChapterPreview ch%d→ch%d: %v", chapter.ChapterNo, nextNo, aiErr)
+		logger.Errorf("[ChapterService] updateNextChapterPreview ch%d→ch%d: %v", chapter.ChapterNo, nextNo, aiErr)
 		return
 	}
 	preview = strings.TrimSpace(preview)
@@ -3091,7 +3091,7 @@ func (s *ChapterService) updateNextChapterPreview(tenantID uint, chapter *model.
 		}
 		latest.Summary = preview
 		if updateErr := s.chapterRepo.Update(latest); updateErr != nil {
-			logger.Printf("[ChapterService] updateNextChapterPreview: save ch%d: %v", nextNo, updateErr)
+			logger.Errorf("[ChapterService] updateNextChapterPreview: save ch%d: %v", nextNo, updateErr)
 		} else {
 			logger.Printf("[ChapterService] updateNextChapterPreview: ch%d preview summary set (len=%d chars)", nextNo, len([]rune(preview)))
 		}
@@ -3112,14 +3112,14 @@ func (s *ChapterService) generateReaderExpectations(tenantID uint, chapter *mode
 		"Summary":      chapter.Summary,
 	})
 	if err != nil {
-		logger.Printf("[ChapterService] generateReaderExpectations: render template: %v", err)
+		logger.Errorf("[ChapterService] generateReaderExpectations: render template: %v", err)
 		return ""
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "reader_expectation", prompt, "", StoryboardOverrides{})
 	if err != nil {
-		logger.Printf("[ChapterService] generateReaderExpectations ch%d: AI error: %v", chapter.ChapterNo, err)
+		logger.Errorf("[ChapterService] generateReaderExpectations ch%d: AI error: %v", chapter.ChapterNo, err)
 		return ""
 	}
 	// extractJSONObject (not extractJSON) — extractJSON unwraps {"k":[...]} → [...], losing the wrapper.
@@ -3128,7 +3128,7 @@ func (s *ChapterService) generateReaderExpectations(tenantID uint, chapter *mode
 		ReaderExpectations []string `json:"reader_expectations"`
 	}
 	if err := json.Unmarshal([]byte(result), &parsed); err != nil || len(parsed.ReaderExpectations) == 0 {
-		logger.Printf("[ChapterService] generateReaderExpectations ch%d: unexpected format: %v (raw: %.200s)", chapter.ChapterNo, err, result)
+		logger.Errorf("[ChapterService] generateReaderExpectations ch%d: unexpected format: %v (raw: %.200s)", chapter.ChapterNo, err, result)
 		return ""
 	}
 	out, _ := json.Marshal(parsed.ReaderExpectations)
@@ -3161,14 +3161,14 @@ func (s *ChapterService) generateChapterEndState(tenantID uint, chapter *model.C
 		"ChapterEnding": ending,
 	})
 	if err != nil {
-		logger.Printf("[generateChapterEndState] render prompt error: %v", err)
+		logger.Errorf("[generateChapterEndState] render prompt error: %v", err)
 		return ""
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "chapter_end_state", prompt, "", StoryboardOverrides{})
 	if err != nil {
-		logger.Printf("[generateChapterEndState] ch%d AI error: %v", chapter.ChapterNo, err)
+		logger.Errorf("[generateChapterEndState] ch%d AI error: %v", chapter.ChapterNo, err)
 		return ""
 	}
 	// extractJSONObject — extractJSON would unwrap {"characters":[...]} → [...], losing the whole structure.
@@ -3180,7 +3180,7 @@ func (s *ChapterService) generateChapterEndState(tenantID uint, chapter *model.C
 		OpeningHint   string              `json:"opening_hint"`
 	}
 	if jsonErr := json.Unmarshal([]byte(cleaned), &check); jsonErr != nil {
-		logger.Printf("[generateChapterEndState] ch%d invalid JSON: %v (raw: %.200s)", chapter.ChapterNo, jsonErr, cleaned)
+		logger.Errorf("[generateChapterEndState] ch%d invalid JSON: %v (raw: %.200s)", chapter.ChapterNo, jsonErr, cleaned)
 		return ""
 	}
 	return cleaned
@@ -3216,7 +3216,7 @@ func (s *ChapterService) checkAndPatchMissingPlotPoints(tenantID uint, chapter *
 		"ChapterContent": content,
 	})
 	if err != nil {
-		logger.Printf("[checkAndPatchMissingPlotPoints] render prompt error: %v", err)
+		logger.Errorf("[checkAndPatchMissingPlotPoints] render prompt error: %v", err)
 		return false
 	}
 
@@ -3224,7 +3224,7 @@ func (s *ChapterService) checkAndPatchMissingPlotPoints(tenantID uint, chapter *
 	defer cancel()
 	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "chapter_plot_compliance", prompt, "", StoryboardOverrides{})
 	if err != nil {
-		logger.Printf("[checkAndPatchMissingPlotPoints] ch%d AI error: %v", chapter.ChapterNo, err)
+		logger.Errorf("[checkAndPatchMissingPlotPoints] ch%d AI error: %v", chapter.ChapterNo, err)
 		return false
 	}
 
@@ -3243,7 +3243,7 @@ func (s *ChapterService) checkAndPatchMissingPlotPoints(tenantID uint, chapter *
 		} `json:"patches"`
 	}
 	if jsonErr := json.Unmarshal([]byte(cleaned), &complianceResult); jsonErr != nil {
-		logger.Printf("[checkAndPatchMissingPlotPoints] ch%d parse error: %v", chapter.ChapterNo, jsonErr)
+		logger.Errorf("[checkAndPatchMissingPlotPoints] ch%d parse error: %v", chapter.ChapterNo, jsonErr)
 		return false
 	}
 
@@ -3611,11 +3611,11 @@ func (s *ChapterService) BatchGenerateSummaries(tenantID, novelID uint, progress
 
 			summary, err := s.narrativeSvc.GenerateChapterSummary(tenantID, ch, novelTitle)
 			if err != nil {
-				logger.Printf("BatchGenerateSummaries: ch%d: %v", ch.ChapterNo, err)
+				logger.Errorf("BatchGenerateSummaries: ch%d: %v", ch.ChapterNo, err)
 			} else {
 				ch.Summary = strings.TrimSpace(summary)
 				if err := s.chapterRepo.Update(ch); err != nil {
-					logger.Printf("BatchGenerateSummaries: save ch%d: %v", ch.ChapterNo, err)
+					logger.Errorf("BatchGenerateSummaries: save ch%d: %v", ch.ChapterNo, err)
 				} else {
 					atomic.AddInt32(&count, 1)
 				}

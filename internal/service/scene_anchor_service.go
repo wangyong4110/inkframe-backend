@@ -274,7 +274,7 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 	// 解析 JSON（支持部分恢复）
 	extracted, err := parseAnchorJSONResultWithFallback(jsonStr)
 	if err != nil {
-		logger.Printf("[SceneAnchorService] ExtractFromChapter: JSON parse failed: %v, jsonStr=%q", err, jsonStr)
+		logger.Errorf("[SceneAnchorService] ExtractFromChapter: JSON parse failed: %v, jsonStr=%q", err, jsonStr)
 		return nil, fmt.Errorf("parse LLM response: %w", err)
 	}
 
@@ -326,7 +326,7 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 			}
 		}
 		if err := s.repo.Create(anchor); err != nil {
-			logger.Printf("[SceneAnchorService] create anchor %q: %v", e.Name, err)
+			logger.Errorf("[SceneAnchorService] create anchor %q: %v", e.Name, err)
 			continue
 		}
 		created = append(created, anchor)
@@ -474,7 +474,7 @@ func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantI
 		go func() {
 			defer func() { <-sem; wg.Done() }()
 			if _, genErr := s.GenerateRefImage(ctx, tenantID, anchor.ID, provider); genErr != nil {
-				logger.Printf("[SceneAnchorService] BatchGenerateRefImages: anchor %d (%s) failed: %v", anchor.ID, anchor.Name, genErr)
+				logger.Errorf("[SceneAnchorService] BatchGenerateRefImages: anchor %d (%s) failed: %v", anchor.ID, anchor.Name, genErr)
 				mu.Lock()
 				failed++
 				done++
@@ -550,7 +550,7 @@ func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint, progr
 			mu.Lock()
 			done++
 			if err != nil {
-				logger.Printf("[SceneAnchorService] AIExtractAllFromNovel chapter %d: %v", ch.ID, err)
+				logger.Errorf("[SceneAnchorService] AIExtractAllFromNovel chapter %d: %v", ch.ID, err)
 				failCount++
 			} else {
 				allCreated = append(allCreated, anchors...)

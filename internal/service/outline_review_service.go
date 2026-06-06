@@ -109,7 +109,7 @@ func (s *OutlineReviewService) ReviewChapterOutline(ctx context.Context, tenantI
 	// ── 阶段2：AI 审查 ──────────────────────────────────
 	aiResult, aiErr := s.runAIReview(ctx, tenantID, chapter, novel)
 	if aiErr != nil {
-		logger.Printf("[OutlineReview] AI review failed for chapter %d: %v, falling back to rule-only", chapterID, aiErr)
+		logger.Errorf("[OutlineReview] AI review failed for chapter %d: %v, falling back to rule-only", chapterID, aiErr)
 		review = s.buildRuleOnlyReview(review, ruleIssues)
 	} else {
 		allIssues := append(ruleIssues, aiResult.Issues...)
@@ -194,7 +194,7 @@ outerLoop:
 
 			review, err := s.ReviewChapterOutline(ctx, tenantID, ch.ID)
 			if err != nil {
-				logger.Printf("[OutlineReview] batch review chapter %d failed: %v", ch.ChapterNo, err)
+				logger.Errorf("[OutlineReview] batch review chapter %d failed: %v", ch.ChapterNo, err)
 				now := time.Now()
 				review = &model.OutlineReview{
 					TenantID:   tenantID,
@@ -206,7 +206,7 @@ outerLoop:
 					ReviewedAt: &now,
 				}
 				if saveErr := s.reviewRepo.Upsert(review); saveErr != nil {
-					logger.Printf("[OutlineReview] save failed review for chapter %d: %v", ch.ChapterNo, saveErr)
+					logger.Errorf("[OutlineReview] save failed review for chapter %d: %v", ch.ChapterNo, saveErr)
 				}
 			}
 
@@ -233,7 +233,7 @@ outerLoop:
 	synthesis := s.buildSynthesis(ctx, tenantID, novel, chapters, results)
 	if s.synthesisRepo != nil {
 		if err := s.synthesisRepo.Upsert(synthesis); err != nil {
-			logger.Printf("[OutlineReview] save synthesis failed: %v", err)
+			logger.Errorf("[OutlineReview] save synthesis failed: %v", err)
 		}
 	}
 	if progressFn != nil {
@@ -351,7 +351,7 @@ func (s *OutlineReviewService) buildSynthesis(ctx context.Context, tenantID uint
 	// ── AI 综合分析 ──────────────────────────────────────
 	aiSynResult, aiErr := s.runBatchSynthesisAI(ctx, tenantID, novel, plannedChapters, allChapters, reviews, arcBalance)
 	if aiErr != nil {
-		logger.Printf("[OutlineReview] batch synthesis AI failed: %v", aiErr)
+		logger.Errorf("[OutlineReview] batch synthesis AI failed: %v", aiErr)
 		// 降级：仅用规则统计
 		syn.GlobalSuggestion = buildRuleFallbackSuggestion(passed, warning, failed, totalPlanned, reviewedCount)
 		syn.Status = "partial"

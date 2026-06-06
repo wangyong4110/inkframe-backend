@@ -509,7 +509,7 @@ func (s *VideoService) RecalcVideoHotScores() error {
 			updates[v.ID] = (float64(v.ViewCount)*0.5 + float64(v.LikeCount)*0.3 + float64(v.CommentCount)*0.2) * decay
 		}
 		if err := s.videoRepo.BatchUpdateHotScores(updates); err != nil {
-			logger.Printf("RecalcVideoHotScores: batch update failed: %v", err)
+			logger.Errorf("RecalcVideoHotScores: batch update failed: %v", err)
 		}
 		offset += batchSize
 	}
@@ -617,7 +617,7 @@ func (s *VideoService) DeleteVideo(id, tenantID uint) error {
 				}
 			}
 			if lastErr != nil {
-				logger.Printf("ALERT: orphaned OSS file not deleted after 3 attempts: %s — %v", u, lastErr)
+				logger.Errorf("ALERT: orphaned OSS file not deleted after 3 attempts: %s — %v", u, lastErr)
 			}
 		}
 	}
@@ -636,7 +636,7 @@ func (s *VideoService) StartGeneration(id uint) (string, error) {
 		if updErr := s.videoRepo.UpdateFields(video.ID, map[string]interface{}{
 			"status": "failed", "error_message": err.Error(),
 		}); updErr != nil {
-			logger.Printf("[VideoService] failed to update video %d status: %v", video.ID, updErr)
+			logger.Errorf("[VideoService] failed to update video %d status: %v", video.ID, updErr)
 		}
 		return "", err
 	}
@@ -647,7 +647,7 @@ func (s *VideoService) StartGeneration(id uint) (string, error) {
 		if updErr := s.videoRepo.UpdateFields(video.ID, map[string]interface{}{
 			"status": "failed", "error_message": "no video provider configured",
 		}); updErr != nil {
-			logger.Printf("[VideoService] failed to update video %d status: %v", video.ID, updErr)
+			logger.Errorf("[VideoService] failed to update video %d status: %v", video.ID, updErr)
 		}
 		return "", provErr
 	}
@@ -667,7 +667,7 @@ func (s *VideoService) StartGeneration(id uint) (string, error) {
 		if updErr := s.videoRepo.UpdateFields(video.ID, map[string]interface{}{
 			"status": "failed", "error_message": err.Error(), "retry_count": gorm.Expr("retry_count + 1"),
 		}); updErr != nil {
-			logger.Printf("[VideoService] failed to update video %d status: %v", video.ID, updErr)
+			logger.Errorf("[VideoService] failed to update video %d status: %v", video.ID, updErr)
 		}
 		return "", fmt.Errorf("video generation start failed: %w", err)
 	}
@@ -676,7 +676,7 @@ func (s *VideoService) StartGeneration(id uint) (string, error) {
 	if updErr := s.videoRepo.UpdateFields(video.ID, map[string]interface{}{
 		"status": "generating", "provider_name": providerName, "task_id": task.TaskID, "error_message": "",
 	}); updErr != nil {
-		logger.Printf("[VideoService] failed to update video %d status: %v", video.ID, updErr)
+		logger.Errorf("[VideoService] failed to update video %d status: %v", video.ID, updErr)
 	}
 
 	return task.TaskID, nil
@@ -781,7 +781,7 @@ func (s *VideoService) GenerateSingleShot(videoID, shotID uint, provider ...stri
 
 	shot.Status = "generating"
 	if err := s.storyboardRepo.Update(shot); err != nil {
-		logger.Printf("[VideoService] failed to update shot status to generating: %v", err)
+		logger.Errorf("[VideoService] failed to update shot status to generating: %v", err)
 	}
 	if video.Mode == "slideshow" {
 		return shot, s.GenerateSlideshowShotVideo(shot, aspectRatio)
@@ -866,7 +866,7 @@ func (s *VideoService) BatchGenerateShotClips(videoID uint, shotIDs []uint, prog
 			}
 			localImage, dlErr := downloadToTemp(sh.ImageURL, fmt.Sprintf("inkframe-img-%d-", sh.ID), ".jpg")
 			if dlErr != nil {
-				logger.Printf("BatchGenerateShotClips: shot %d download failed: %v", sh.ShotNo, dlErr)
+				logger.Errorf("BatchGenerateShotClips: shot %d download failed: %v", sh.ShotNo, dlErr)
 				return
 			}
 			defer os.Remove(localImage)
@@ -882,7 +882,7 @@ func (s *VideoService) BatchGenerateShotClips(videoID uint, shotIDs []uint, prog
 				if lastErr == nil {
 					break
 				}
-				logger.Printf("BatchGenerateShotClips: shot %d attempt %d/%d: %v", sh.ShotNo, attempt, maxClipRetries, lastErr)
+				logger.Errorf("BatchGenerateShotClips: shot %d attempt %d/%d: %v", sh.ShotNo, attempt, maxClipRetries, lastErr)
 				if attempt < maxClipRetries {
 					time.Sleep(time.Duration(attempt*5) * time.Second)
 				}
@@ -890,7 +890,7 @@ func (s *VideoService) BatchGenerateShotClips(videoID uint, shotIDs []uint, prog
 
 			fields := map[string]interface{}{"progress": 100}
 			if lastErr != nil {
-				logger.Printf("BatchGenerateShotClips: shot %d clip failed: %v", sh.ShotNo, lastErr)
+				logger.Errorf("BatchGenerateShotClips: shot %d clip failed: %v", sh.ShotNo, lastErr)
 			} else if ossURL := s.uploadClipToStorage(context.Background(), sh, clipPath); ossURL != "" {
 				fields["video_url"] = ossURL
 				fields["clip_path"] = ""
@@ -900,7 +900,7 @@ func (s *VideoService) BatchGenerateShotClips(videoID uint, shotIDs []uint, prog
 				fields["clip_path"] = "file://" + clipPath
 			}
 			if err := s.storyboardRepo.UpdateFields(sh.ID, fields); err != nil {
-				logger.Printf("[VideoService] BatchGenerateShotClips: failed to update shot %d fields: %v", sh.ShotNo, err)
+				logger.Errorf("[VideoService] BatchGenerateShotClips: failed to update shot %d fields: %v", sh.ShotNo, err)
 			}
 		}(shot)
 	}

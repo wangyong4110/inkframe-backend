@@ -149,7 +149,7 @@ func (s *BGMService) resolveLocalBGMURL(ctx context.Context, localPath string) (
 	}
 	f, err := os.Open(localPath)
 	if err != nil {
-		logger.Printf("[BGMService] open local file failed (%s): %v", localPath, err)
+		logger.Errorf("[BGMService] open local file failed (%s): %v", localPath, err)
 		return "", false
 	}
 	defer f.Close()
@@ -166,7 +166,7 @@ func (s *BGMService) resolveLocalBGMURL(ctx context.Context, localPath string) (
 	ossKey := fmt.Sprintf("bgm/local/%s", filepath.Base(localPath))
 	u, err := s.storageSvc.Upload(ctx, ossKey, f, fi.Size(), mime)
 	if err != nil {
-		logger.Printf("[BGMService] OSS upload failed (%s): %v", filepath.Base(localPath), err)
+		logger.Errorf("[BGMService] OSS upload failed (%s): %v", filepath.Base(localPath), err)
 		return "", false
 	}
 	s.localUploadCache.Store(localPath, u)
@@ -248,7 +248,7 @@ func (s *BGMService) MixBGM(ctx context.Context, videoPath, bgmSource, outputPat
 		"-shortest",
 		outputPath,
 	); err != nil {
-		logger.Printf("MixBGM: ffmpeg failed: %v\n%s", err, string(out))
+		logger.Errorf("MixBGM: ffmpeg failed: %v\n%s", err, string(out))
 		return fmt.Errorf("ffmpeg BGM mix failed: %w", err)
 	}
 	return nil
@@ -345,7 +345,7 @@ func (s *BGMService) AnalyzeBGMForVideo(
 	// Fix ⑤: validate that segments cover all shot_nos without gaps or overlaps
 	if warns := validateBGMCoverage(shots, analyses); len(warns) > 0 {
 		for _, w := range warns {
-			logger.Printf("[BGMService] coverage warning: %s", w)
+			logger.Errorf("[BGMService] coverage warning: %s", w)
 		}
 		// 自动修复：先修重叠（截短前段的 EndShotNo），再修 gap（延伸前段的 EndShotNo 填满空洞）。
 		// 两次扫描保证顺序处理：overlap pass → gap pass。
@@ -717,7 +717,7 @@ func (s *BGMService) pixabaySearchBGM(ctx context.Context, tenantID uint, query 
 	}
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		logger.Printf("[BGMService] Pixabay request error for %q: %v", query, err)
+		logger.Errorf("[BGMService] Pixabay request error for %q: %v", query, err)
 		return "", ""
 	}
 	defer resp.Body.Close()
@@ -763,13 +763,13 @@ func (s *BGMService) jamendoSearch(ctx context.Context, tenantID uint, query str
 	// Fix ④: try fuzzytags (comma-separated keywords) first
 	tracks, err := s.JamendoSearch(ctx, tenantID, JamendoSearchParams{Query: query, Limit: 5})
 	if err != nil {
-		logger.Printf("[BGMService] Jamendo search error for %q: %v", query, err)
+		logger.Errorf("[BGMService] Jamendo search error for %q: %v", query, err)
 	}
 	// namesearch fallback: search by full phrase as track name
 	if len(tracks) == 0 {
 		tracks2, err2 := s.jamendoNameSearch(ctx, tenantID, query)
 		if err2 != nil {
-			logger.Printf("[BGMService] Jamendo namesearch error for %q: %v", query, err2)
+			logger.Errorf("[BGMService] Jamendo namesearch error for %q: %v", query, err2)
 		}
 		tracks = append(tracks, tracks2...)
 	}
@@ -953,7 +953,7 @@ func (s *BGMService) RepairCoverageGaps(ctx context.Context, videoID uint, shots
 	for _, seg := range sortedSegs {
 		if updated[seg.ID] {
 			if err := bgmRepo.Update(seg); err != nil {
-				logger.Printf("[BGMService] RepairCoverageGaps: failed to update seg %d: %v", seg.SeqNo, err)
+				logger.Errorf("[BGMService] RepairCoverageGaps: failed to update seg %d: %v", seg.SeqNo, err)
 			}
 		}
 	}
@@ -978,7 +978,7 @@ func (s *BGMService) GenerateBGMSegments(
 	}
 
 	if s.bgmDir == "" && s.aiSvc == nil {
-		logger.Printf("[BGMService] WARNING: no audio source configured; segments will be saved without audio URLs")
+		logger.Errorf("[BGMService] WARNING: no audio source configured; segments will be saved without audio URLs")
 	}
 
 	// Step 1: AI 分析（生成分段计划）
@@ -1007,12 +1007,12 @@ func (s *BGMService) GenerateBGMSegments(
 			defer wg.Done()
 			defer func() { <-sem }()
 			if err := s.SearchBGMForSegment(ctx, tenantID, sg); err != nil {
-				logger.Printf("[BGMService] segment %d search error: %v", sg.SeqNo, err)
+				logger.Errorf("[BGMService] segment %d search error: %v", sg.SeqNo, err)
 			}
 			logger.Printf("[BGMService] segment %d (%s): url=%q source=%q", sg.SeqNo, sg.Mood, sg.URL, sg.Source)
 			if bgmRepo != nil && sg.ID > 0 {
 				if err := bgmRepo.Update(sg); err != nil {
-					logger.Printf("[BGMService] segment %d Update failed: %v", sg.SeqNo, err)
+					logger.Errorf("[BGMService] segment %d Update failed: %v", sg.SeqNo, err)
 				}
 			}
 			// 自动发布到公共素材库（异步，失败不影响主流程）
@@ -1109,7 +1109,7 @@ func (s *BGMService) MixBGMWithDucking(ctx context.Context, videoPath, bgmSource
 	}
 
 	if out, err := runFFmpegCtx(ctx, args...); err != nil { // P1-3: use ctx
-		logger.Printf("MixBGMWithDucking: ffmpeg failed: %v\n%s", err, string(out))
+		logger.Errorf("MixBGMWithDucking: ffmpeg failed: %v\n%s", err, string(out))
 		// 降级到普通混音
 		logger.Printf("MixBGMWithDucking: falling back to simple mix")
 		return s.MixBGM(ctx, videoPath, bgmSource, outputPath)
@@ -1124,7 +1124,7 @@ func (s *BGMService) saveBGMToAssetLibrary(ctx context.Context, seg *model.Video
 		return
 	}
 	if exists, err := s.assetRepo.ExistsByExternalID(seg.URL); err != nil {
-		logger.Printf("[BGMService] AssetLib: ExistsByExternalID error (seg %d): %v", seg.SeqNo, err)
+		logger.Errorf("[BGMService] AssetLib: ExistsByExternalID error (seg %d): %v", seg.SeqNo, err)
 		return
 	} else if exists {
 		return
@@ -1149,7 +1149,7 @@ func (s *BGMService) saveBGMToAssetLibrary(ctx context.Context, seg *model.Video
 		Status:     "active",
 	}
 	if err := s.assetRepo.Create(asset); err != nil {
-		logger.Printf("[BGMService] AssetLib: create asset failed (seg %d): %v", seg.SeqNo, err)
+		logger.Errorf("[BGMService] AssetLib: create asset failed (seg %d): %v", seg.SeqNo, err)
 		return
 	}
 
@@ -1166,11 +1166,11 @@ func (s *BGMService) saveBGMToAssetLibrary(ctx context.Context, seg *model.Video
 	for _, name := range tagNames {
 		tag, err := s.tagRepo.FindOrCreate(name, "audio")
 		if err != nil {
-			logger.Printf("[BGMService] AssetLib: FindOrCreate tag %q failed: %v", name, err)
+			logger.Errorf("[BGMService] AssetLib: FindOrCreate tag %q failed: %v", name, err)
 			continue
 		}
 		if err := s.tagRepo.AddToAsset(asset.ID, tag.ID, "ai", 1.0); err != nil {
-			logger.Printf("[BGMService] AssetLib: AddToAsset failed (asset %d tag %q): %v", asset.ID, name, err)
+			logger.Errorf("[BGMService] AssetLib: AddToAsset failed (asset %d tag %q): %v", asset.ID, name, err)
 		}
 	}
 	_ = ctx

@@ -239,7 +239,7 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 			defer wg.Done()
 			url, genErr := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle, imageStyle, aspectRatio, promptLanguage)
 			if genErr != nil {
-				logger.Printf("[ItemService] BatchGenerateImages: item %d (%s) failed: %v", item.ID, item.Name, genErr)
+				logger.Errorf("[ItemService] BatchGenerateImages: item %d (%s) failed: %v", item.ID, item.Name, genErr)
 				mu.Lock()
 				failed++
 				done++
@@ -252,7 +252,7 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 			}
 			item.ImageURL = url
 			if saveErr := s.itemRepo.Update(item); saveErr != nil {
-				logger.Printf("[ItemService] BatchGenerateImages: save item %d: %v", item.ID, saveErr)
+				logger.Errorf("[ItemService] BatchGenerateImages: save item %d: %v", item.ID, saveErr)
 				mu.Lock()
 				failed++
 				done++
@@ -342,7 +342,7 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 
 	var extracted []analysisItemJSON
 	if err := json.Unmarshal([]byte(extractJSON(strings.TrimSpace(result))), &extracted); err != nil {
-		logger.Printf("ItemService.AIExtractFromNovel: parse error: %v, raw: %.200s", err, result)
+		logger.Errorf("ItemService.AIExtractFromNovel: parse error: %v, raw: %.200s", err, result)
 		return nil, fmt.Errorf("failed to parse AI response")
 	}
 
@@ -370,7 +370,7 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 				continue
 			}
 			if err := s.itemRepo.Update(it); err != nil {
-				logger.Printf("ItemService.AIExtractFromNovel: update %s: %v", e.Name, err)
+				logger.Errorf("ItemService.AIExtractFromNovel: update %s: %v", e.Name, err)
 				continue
 			}
 			upserted = append(upserted, it)
@@ -391,7 +391,7 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 				Status:       "active",
 			}
 			if err := s.itemRepo.Create(item); err != nil {
-				logger.Printf("ItemService.AIExtractFromNovel: create %s: %v", e.Name, err)
+				logger.Errorf("ItemService.AIExtractFromNovel: create %s: %v", e.Name, err)
 				continue
 			}
 			upserted = append(upserted, item)
@@ -593,7 +593,7 @@ func (s *ItemService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.It
 	itemMap := make(map[string]*itemEntry) // key = lowercase name
 	for _, r := range results {
 		if r.err != nil {
-			logger.Printf("ItemService.AIExtractAllFromNovel: chapter extract error: %v", r.err)
+			logger.Errorf("ItemService.AIExtractAllFromNovel: chapter extract error: %v", r.err)
 			continue
 		}
 		seenThisChapter := make(map[string]bool)
@@ -643,7 +643,7 @@ func (s *ItemService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.It
 			Status:       "active",
 		}
 		if err := s.itemRepo.Create(item); err != nil {
-			logger.Printf("ItemService.AIExtractAllFromNovel: create %q: %v", e.Name, err)
+			logger.Errorf("ItemService.AIExtractAllFromNovel: create %q: %v", e.Name, err)
 			continue
 		}
 		upserted = append(upserted, item)
@@ -731,7 +731,7 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint) (
 			Status:       "active",
 		}
 		if e := s.itemRepo.Create(item); e != nil {
-			logger.Printf("ItemService.AIExtractChapterItems: create %q: %v", it.Name, e)
+			logger.Errorf("ItemService.AIExtractChapterItems: create %q: %v", it.Name, e)
 			continue
 		}
 		existingNameSet[strings.ToLower(it.Name)] = true
@@ -744,7 +744,7 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint) (
 			Owner:     it.Owner,
 		}
 		if e := s.chapterItemRepo.Upsert(ci); e != nil {
-			logger.Printf("ItemService.AIExtractChapterItems: link chapter: %v", e)
+			logger.Errorf("ItemService.AIExtractChapterItems: link chapter: %v", e)
 		}
 		created = append(created, item)
 	}

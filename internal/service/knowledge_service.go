@@ -84,7 +84,7 @@ func (s *KnowledgeService) BulkImport(ctx context.Context, novelID uint, items [
 			NovelID: &novelID,
 		}
 		if err := s.StoreKnowledge(ctx, kb); err != nil {
-			logger.Printf("KnowledgeService.BulkImport: failed to store item %q: %v", item.Title, err)
+			logger.Errorf("KnowledgeService.BulkImport: failed to store item %q: %v", item.Title, err)
 			continue
 		}
 		imported++
@@ -129,7 +129,7 @@ func (s *KnowledgeService) StoreKnowledge(ctx context.Context, kb *model.Knowled
 			})
 			if storeErr != nil {
 				// 向量写入失败：仅记录警告，DB 记录已成功，返回 nil
-				logger.Printf("KnowledgeService.StoreKnowledge: vector store error for kb %d: %v", kb.ID, storeErr)
+				logger.Errorf("KnowledgeService.StoreKnowledge: vector store error for kb %d: %v", kb.ID, storeErr)
 			}
 		}
 	}
@@ -187,7 +187,7 @@ func (s *KnowledgeService) SearchKnowledge(ctx context.Context, query string, li
 		}
 		// 3a: 区分 embed 失败 vs 向量搜索无结果
 		if err != nil {
-			logger.Printf("KnowledgeService.SearchKnowledge: embed failed, fallback to keyword: %v", err)
+			logger.Errorf("KnowledgeService.SearchKnowledge: embed failed, fallback to keyword: %v", err)
 		} else {
 			logger.Printf("KnowledgeService.SearchKnowledge: vector search returned no results, fallback to keyword")
 		}
@@ -267,7 +267,7 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 			for _, kb := range existing {
 				ctx2, cancel := context.WithTimeout(ctx, 5*time.Second)
 				if delErr := store.Delete(ctx2, fmt.Sprintf("%d", kb.ID)); delErr != nil {
-					logger.Printf("ExtractAndStorePlotPoints: vector delete kb %d failed: %v", kb.ID, delErr)
+					logger.Errorf("ExtractAndStorePlotPoints: vector delete kb %d failed: %v", kb.ID, delErr)
 				}
 				cancel()
 			}
@@ -275,7 +275,7 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 	}
 	// 清除该章节的旧剧情点记录
 	if err := s.kbRepo.DeleteBySourceChapter(chapter.NovelID, chapter.ID); err != nil {
-		logger.Printf("ExtractAndStorePlotPoints: cleanup failed: %v", err)
+		logger.Errorf("ExtractAndStorePlotPoints: cleanup failed: %v", err)
 	}
 	// 使用 AI 提取剧情点
 	prompt := fmt.Sprintf(`从以下章节内容中提取关键剧情点，返回JSON数组格式：
@@ -329,7 +329,7 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 		}
 
 		if err := s.StoreKnowledge(ctx, kb); err != nil {
-			logger.Printf("ExtractAndStorePlotPoints: store failed: %v", err)
+			logger.Errorf("ExtractAndStorePlotPoints: store failed: %v", err)
 		}
 	}
 

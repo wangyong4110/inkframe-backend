@@ -87,7 +87,7 @@ func (s *SceneConsistencyService) ScoreScene(
 
 	report, err := parseConsistencyResponse(raw, shot.ID, anchor.ID)
 	if err != nil {
-		logger.Printf("[SceneConsistencyService] parse failed for shot %d: %v, raw=%q", shot.ID, err, raw)
+		logger.Errorf("[SceneConsistencyService] parse failed for shot %d: %v, raw=%q", shot.ID, err, raw)
 		// 解析失败时标记人工审核，不给高分静默通过
 		report = &SceneConsistencyReport{
 			ShotID:       shot.ID,
@@ -126,7 +126,7 @@ func (s *SceneConsistencyService) ScoreScene(
 		Passed:       report.Passed, // 使用 report.Passed（score>=0.85），而非 !NeedsHuman
 	}
 	if err := s.logRepo.Create(logEntry); err != nil {
-		logger.Printf("[SceneConsistencyService] save log: %v", err)
+		logger.Errorf("[SceneConsistencyService] save log: %v", err)
 	}
 
 	return report, nil

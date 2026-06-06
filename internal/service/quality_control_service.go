@@ -168,7 +168,7 @@ func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter
 	// 1. AI 综合质检（获取真实分数）
 	aiScores, err := s.runAIQualityCheck(chapter, novel)
 	if err != nil {
-		logger.Printf("QualityControlService: AI quality check failed: %v, falling back to rule-based", err)
+		logger.Errorf("QualityControlService: AI quality check failed: %v, falling back to rule-based", err)
 		// AI 失败时降级到规则检查
 		aiScores = nil
 	}
@@ -632,7 +632,7 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 		if err2 := json.Unmarshal([]byte(repaired), &review); err2 != nil {
 			return nil, fmt.Errorf("parse chapter review JSON: %w (raw: %.200s)", err, content)
 		}
-		logger.Printf("[ReviewChapter] JSON repaired successfully (original err: %v)", err)
+		logger.Errorf("[ReviewChapter] JSON repaired successfully (original err: %v)", err)
 	}
 
 	// Persist record
@@ -922,7 +922,7 @@ func (s *QualityControlService) RunAutoReview(
 
 		review, reviewErr := s.ReviewChapter(ctx, chapterID, "")
 		if reviewErr != nil {
-			logger.Printf("[AutoReview] chapterID=%d round=%d review failed: %v", chapterID, round, reviewErr)
+			logger.Errorf("[AutoReview] chapterID=%d round=%d review failed: %v", chapterID, round, reviewErr)
 			return finalScore, totalApplied, reviewErr
 		}
 		finalScore = review.OverallScore
@@ -958,7 +958,7 @@ func (s *QualityControlService) RunAutoReview(
 
 		applied, applyErr := s.ApplyDiffs(chapterID, diffs, review.RecordID, tenantID)
 		if applyErr != nil {
-			logger.Printf("[AutoReview] chapterID=%d round=%d ApplyDiffs failed: %v", chapterID, round, applyErr)
+			logger.Errorf("[AutoReview] chapterID=%d round=%d ApplyDiffs failed: %v", chapterID, round, applyErr)
 			return finalScore, totalApplied, applyErr
 		}
 		totalApplied += applied

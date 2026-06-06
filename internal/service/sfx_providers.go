@@ -172,7 +172,7 @@ func (s *SFXService) searchLocalLib(ctx context.Context, tenantID uint, phrase s
 				s.localUploadCache.Store(localPath, u)
 				return u, dur
 			} else {
-				logger.Printf("[SFXService] local OSS upload failed (%s): %v", filename, err)
+				logger.Errorf("[SFXService] local OSS upload failed (%s): %v", filename, err)
 			}
 		}
 	}
@@ -242,7 +242,7 @@ func (s *SFXService) freesoundSearchResults(ctx context.Context, key string, que
 	}
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		logger.Printf("[SFXService] Freesound request error for %q: %v", query, err)
+		logger.Errorf("[SFXService] Freesound request error for %q: %v", query, err)
 		return nil
 	}
 	defer resp.Body.Close()
@@ -336,7 +336,7 @@ func (s *SFXService) searchPixabay(ctx context.Context, tenantID uint, item sfxT
 		}
 		resp, err := s.httpClient.Do(req)
 		if err != nil {
-			logger.Printf("[SFXService] Pixabay request error for %q: %v", query, err)
+			logger.Errorf("[SFXService] Pixabay request error for %q: %v", query, err)
 			return sfxHit{}
 		}
 		defer resp.Body.Close()
@@ -421,7 +421,7 @@ func (s *SFXService) searchBBCSFX(ctx context.Context, item sfxTagItem, maxDurat
 
 		resp, err := s.httpClient.Do(req)
 		if err != nil {
-			logger.Printf("[SFXService] BBC SFX request error for %q: %v", query, err)
+			logger.Errorf("[SFXService] BBC SFX request error for %q: %v", query, err)
 			return sfxHit{}
 		}
 		defer resp.Body.Close()
@@ -663,7 +663,7 @@ func (s *SFXService) generateElevenLabsForTag(ctx context.Context, tenantID uint
 		rawURL, d, dbErr := s.aiSvc.GenerateSFXWithProvider(ctx, tenantID, "elevenlabs-sfx", prompt, dur)
 		<-s.elevenLabsSem
 		if dbErr != nil {
-			logger.Printf("[SFXService] generateElevenLabsForTag: DB path failed (tenant=%d): %v", tenantID, dbErr)
+			logger.Errorf("[SFXService] generateElevenLabsForTag: DB path failed (tenant=%d): %v", tenantID, dbErr)
 		}
 		if dbErr == nil && rawURL != "" {
 			// ElevenLabsSFXProvider 返回 file:// 临时路径，需上传到 OSS
@@ -936,7 +936,7 @@ func (s *SFXService) pollAudioLDMTask(parentCtx context.Context, taskID string, 
 			resp, err := (&http.Client{}).Do(req)
 			reqCancel()
 			if err != nil {
-				logger.Printf("[SFXService] AudioLDM poll task_id=%s error: %v", taskID, err)
+				logger.Errorf("[SFXService] AudioLDM poll task_id=%s error: %v", taskID, err)
 				continue
 			}
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024*1024))

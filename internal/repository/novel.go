@@ -30,7 +30,7 @@ func (r *NovelRepository) Create(novel *model.Novel) error {
 	err := r.db.Create(novel).Error
 	if err != nil && (isSchemaMissing(err)) {
 		// 广场社交列尚未迁移到 DB，降级：剔除这些列（它们均有 DB default，不影响业务）
-		logger.Warnf("NovelRepository.Create: social columns missing, retrying without them: %v", err)
+		logger.Errorf("NovelRepository.Create: social columns missing, retrying without them: %v", err)
 		err = r.db.Omit("view_count", "like_count", "comment_count", "hot_score",
 			"is_published", "published_at", "visibility", "plaza_tags").Create(novel).Error
 	}
@@ -173,7 +173,7 @@ func (r *NovelRepository) Update(novel *model.Novel) error {
 	if novel.VideoConfig != nil {
 		novel.VideoConfig.NovelID = novel.ID
 		if err := r.db.Select("*").Save(novel.VideoConfig).Error; err != nil {
-			logger.Printf("[NovelRepository] Save VideoConfig: %v", err)
+			logger.Errorf("[NovelRepository] Save VideoConfig: %v", err)
 		}
 	}
 	r.invalidateCache(novel.ID)
@@ -206,7 +206,7 @@ func (r *NovelRepository) DeleteWithCascade(id uint) error {
 		tryExec := func(sql string, args ...interface{}) error {
 			if e := tx.Exec(sql, args...).Error; e != nil {
 				if isSchemaMissing(e) {
-					logger.Printf("[DeleteNovel] skip (schema not ready): %v", e)
+					logger.Errorf("[DeleteNovel] skip (schema not ready): %v", e)
 					return nil
 				}
 				return e
