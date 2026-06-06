@@ -307,7 +307,7 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		// 当未指定具体提供商时，跳过图像/视频/语音/嵌入/多能力类型（这些不做文本生成）
 		if providerName == "" {
 			t := strings.ToLower(p.Type)
-			if t == "image" || t == "video" || t == "voice" || t == "embedding" || t == "sfx" || t == "music" {
+			if t == "image" || t == "video" || t == "voice" || t == "tts" || t == "embedding" || t == "sfx" || t == "music" {
 				continue
 			}
 		}
