@@ -325,6 +325,159 @@ func repairMissingColons(s string) string {
 	return buf.String()
 }
 
+// repairAIJSON 修复 AI 生成的 JSON 中常见的两类问题：
+//  1. 字段间出现中文注释/说明文字（非 ASCII 字节出现在字符串字面量外）
+//  2. 因上述中文文字替换了逗号分隔符后导致的缺失逗号
+//
+// 修复流程：
+//   step-1 stripNonAsciiOutsideStrings — 移除 JSON 字符串外的非 ASCII 字节序列（UTF-8 多字节）
+//   step-2 insertMissingCommasJSON     — 在相邻值之间插入缺失的逗号
+func repairAIJSON(s string) string {
+	s = stripNonAsciiOutsideStrings(s)
+	s = insertMissingCommasJSON(s)
+	return s
+}
+
+// stripNonAsciiOutsideStrings 移除 JSON 字符串字面量外的非 ASCII 字节序列（包括中文字符）。
+// JSON 合法结构字符（{} [] : ,）均在 ASCII 范围内，因此此操作不影响 JSON 结构。
+func stripNonAsciiOutsideStrings(s string) string {
+	var buf strings.Builder
+	buf.Grow(len(s))
+	inStr := false
+	i := 0
+	for i < len(s) {
+		b := s[i]
+		if inStr {
+			switch {
+			case b == '\\':
+				buf.WriteByte(b)
+				i++
+				if i < len(s) {
+					buf.WriteByte(s[i])
+					i++
+				}
+			case b == '"':
+				inStr = false
+				buf.WriteByte(b)
+				i++
+			default:
+				buf.WriteByte(b)
+				i++
+			}
+		} else {
+			if b == '"' {
+				inStr = true
+				buf.WriteByte(b)
+				i++
+			} else if b >= 0x80 {
+				// 跳过完整的 UTF-8 多字节序列（0x80-0xBF 为续字节）
+				i++
+				for i < len(s) && (s[i]&0xC0) == 0x80 {
+					i++
+				}
+			} else {
+				buf.WriteByte(b)
+				i++
+			}
+		}
+	}
+	return buf.String()
+}
+
+// insertMissingCommasJSON 在 JSON 中相邻值之间插入缺失的逗号。
+// 当 AI 输出的中文注释被移除后，原先夹在值之间的逗号可能随之消失，此函数负责补全。
+// 规则：在完整的 JSON 值（], }, 字符串, 字面量）之后，如果下一个非空白 token 是
+// 新的值起始符（", [, {），则插入 ","。
+func insertMissingCommasJSON(s string) string {
+	n := len(s)
+	var buf strings.Builder
+	buf.Grow(n + 64)
+	i := 0
+	prevWasValue := false // 上一个有意义 token 是否是完整值的结尾
+
+	for i < n {
+		c := s[i]
+
+		// 空白原样写入
+		if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+			buf.WriteByte(c)
+			i++
+			continue
+		}
+
+		// 分隔符复位标志
+		if c == ',' || c == ':' {
+			prevWasValue = false
+			buf.WriteByte(c)
+			i++
+			continue
+		}
+
+		// 容器起始 — 不是"值"，不触发逗号插入
+		if c == '[' || c == '{' {
+			prevWasValue = false
+			buf.WriteByte(c)
+			i++
+			continue
+		}
+
+		// 容器结束 — 是"值"
+		if c == ']' || c == '}' {
+			buf.WriteByte(c)
+			i++
+			prevWasValue = true
+			continue
+		}
+
+		// 字符串
+		if c == '"' {
+			if prevWasValue {
+				buf.WriteByte(',') // 补逗号
+			}
+			prevWasValue = false
+			start := i
+			i++ // 跳过开头 "
+			for i < n {
+				if s[i] == '\\' {
+					i += 2
+				} else if s[i] == '"' {
+					i++
+					break
+				} else {
+					i++
+				}
+			}
+			buf.WriteString(s[start:i])
+			prevWasValue = true
+			continue
+		}
+
+		// 数字 / 字面量（true false null）
+		if c == '-' || (c >= '0' && c <= '9') || c == 't' || c == 'f' || c == 'n' {
+			if prevWasValue {
+				buf.WriteByte(',')
+			}
+			prevWasValue = false
+			start := i
+			for i < n {
+				ch := s[i]
+				if ch == ',' || ch == '}' || ch == ']' || ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' {
+					break
+				}
+				i++
+			}
+			buf.WriteString(s[start:i])
+			prevWasValue = true
+			continue
+		}
+
+		// 其他字符（不应出现，直接写入保留原样）
+		buf.WriteByte(c)
+		i++
+	}
+	return buf.String()
+}
+
 // unmarshalAIJSON extracts JSON from an AI response string and unmarshals it into T.
 func unmarshalAIJSON[T any](raw string) (*T, error) {
 	cleaned := extractJSON(strings.TrimSpace(raw))

@@ -627,7 +627,12 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 	content := extractJSONObject(raw)
 	var review model.ChapterReview
 	if err := json.Unmarshal([]byte(content), &review); err != nil {
-		return nil, fmt.Errorf("parse chapter review JSON: %w (raw: %.200s)", err, content)
+		// 兜底修复：移除字符串外的中文注释，补全缺失逗号
+		repaired := repairAIJSON(content)
+		if err2 := json.Unmarshal([]byte(repaired), &review); err2 != nil {
+			return nil, fmt.Errorf("parse chapter review JSON: %w (raw: %.200s)", err, content)
+		}
+		logger.Printf("[ReviewChapter] JSON repaired successfully (original err: %v)", err)
 	}
 
 	// Persist record

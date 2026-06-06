@@ -1501,7 +1501,13 @@ func parseStoryboardReview(result string) (*model.StoryboardReview, error) {
 	cleaned := extractJSONObject(result)
 	var review model.StoryboardReview
 	if err := json.Unmarshal([]byte(cleaned), &review); err != nil {
-		return nil, fmt.Errorf("解析审查报告失败: %w; AI响应(前300字符): %.300s", err, result)
+		// DeepSeek 等模型有时在 JSON 字段间插入中文注释，导致 0xE8（è）等非 ASCII 字节
+		// 出现在期望逗号/}的位置。尝试修复：移除字符串外非 ASCII 内容 + 补全缺失逗号。
+		repaired := repairAIJSON(cleaned)
+		if err2 := json.Unmarshal([]byte(repaired), &review); err2 != nil {
+			return nil, fmt.Errorf("解析审查报告失败: %w; AI响应(前300字符): %.300s", err, result)
+		}
+		logger.Printf("[parseStoryboardReview] JSON repaired successfully (original err: %v)", err)
 	}
 	return &review, nil
 }
