@@ -440,16 +440,14 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 		}
 	}
 
-	// Determine the text to synthesize
+	// Determine the text to synthesize: narration > dialogue.
+	// description is for image/video generation only — never read it aloud.
 	text := shot.Narration
 	if text == "" {
 		text = stripDialogueSpeakerPrefix(shot.Dialogue)
 	}
 	if text == "" {
-		text = shot.Description
-	}
-	if text == "" {
-		return nil
+		return nil // no voice text; shot is silent
 	}
 
 	// 需要 novelID 以便角色声音查询和存储 key
