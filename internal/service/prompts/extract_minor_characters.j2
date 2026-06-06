@@ -15,29 +15,33 @@
 1. 只提取本章中出现的次要角色（龙套、路人、临时出场的角色），不超过10个
 2. 不要重复提取已有角色列表中的角色
 3. role 固定为 "minor"
-{% if PromptLanguage == "en" %}4. description (English): one coherent paragraph covering appearance, personality, backstory, and how they relate to the main story. 80 words max.{% else %}4. description（中文）：包含外貌特征、性格特点、背景来历、与主线的关系，写成连贯段落，80字以内{% endif %}
-{% if PromptLanguage == "en" %}5. visual_prompt (English): character appearance description for image generation. 80–150 words. Cover ALL 6 dimensions below in order. Do NOT include any art style, quality, or rendering tags:
+4. gender：性别，只能是 male / female / neutral 之一
+5. age：年龄或年龄感，简短字符串，如 "16" / "约25岁" / "少年" / "中年"
+{% if PromptLanguage == "en" %}6. description (English): one coherent paragraph covering appearance, personality, backstory, and how they relate to the main story. 80 words max.{% else %}6. description（中文）：包含外貌特征、性格特点、背景来历、与主线的关系，写成连贯段落，80字以内{% endif %}
+{% if PromptLanguage == "en" %}7. visual_prompt (English): character appearance description for image generation. 80–150 words. Cover ALL 6 dimensions below in order. Do NOT include any art style, quality, or rendering tags:
    [1] GENDER & BUILD: gender, apparent age, height impression, overall body type
    [2] FACE & EYES: face shape, eye shape, eye color, notable facial features
    [3] SKIN: skin tone and finish, any notable marks
    [4] HAIR: color, texture, length, styling
    [5] OUTFIT: garment type, silhouette, fabric, color
-   [6] POSTURE: default stance or habitual gesture{% else %}5. visual_prompt（中文）：用于图像生成的角色造型描述，80–150字，必须用中文输出。按顺序覆盖以下6个维度，禁止添加任何画风、质量或渲染词汇：
+   [6] POSTURE: default stance or habitual gesture{% else %}7. visual_prompt（中文）：用于图像生成的角色造型描述，80–150字，必须用中文输出。按顺序覆盖以下6个维度，禁止添加任何画风、质量或渲染词汇：
    [1] 性别体型：性别、年龄感、身高印象、整体体型
    [2] 面部与眼睛：脸型、眼型、瞳色、标志性面部特征
    [3] 肤色：肤色色调与质感、特殊标记
    [4] 发型：发色、发质、发长、造型
    [5] 服装：服装类别、廓形、面料、颜色
    [6] 体态：默认站姿或惯常动作{% endif %}
-6. personality_tags：2–4个简短性格标签（中文词）
-7. 若章节中无明显次要角色，输出空数组 []
-8. 严格输出 JSON 数组，不含任何说明文字
+8. personality_tags：2–4个简短性格标签（中文词）
+9. 若章节中无明显次要角色，输出空数组 []
+10. 严格输出 JSON 数组，不含任何说明文字
 
 # 输出格式（JSON 数组）
 [
   {
     "name": "角色名",
     "role": "minor",
+    "gender": "male",
+    "age": "中年",
     "description": "中年男性，体型微胖，性格圆滑市侩，见风使舵。本章中以商人身份出现，为主角提供了关键情报，背后隐有势力背景。",
     "appearance": "中年男性，身材微胖，一脸精明",
     "personality": "圆滑市侩，见风使舵",

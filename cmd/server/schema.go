@@ -118,6 +118,9 @@ func ensureCriticalColumns(db *gorm.DB) {
 		// 场景一致性日志新增字段（2026-06-06-v1 新增）
 		{"ink_scene_consistency_log", "time_score",     "DECIMAL(4,3) NOT NULL DEFAULT 1"},
 		{"ink_scene_consistency_log", "suggested_fix",  "TEXT NULL"},
+		// ink_character 性别与年龄（2026-06-07 新增）
+		{"ink_character", "gender", "VARCHAR(20) NULL"},
+		{"ink_character", "age",    "VARCHAR(50) NULL"},
 	}
 	for _, a := range additions {
 		// 先查 information_schema，列已存在则跳过，避免触发 GORM 的 Error 1060 日志

@@ -9,14 +9,16 @@
 {{ Summaries }}
 
 # 要求
-1. appearance：外貌概述，一段话，100字以内（与 visual_prompt 互补，此处侧重叙事印象）
-2. personality：深度性格，包含核心特质、行为模式、内在矛盾与核心恐惧
-3. personality_tags：3-5个短标签，每个不超过4字，如["孤傲冷峻","腹黑算计"]
-4. background：详细背景，包含出身、成长经历、重要转折
-5. character_arc：角色成长轨迹，描述起点、关键转变、最终归宿
-6. abilities：核心能力，每项包含 name 和 description
-7. dialogue_style：说话风格（vocabulary_level / patterns 2-4条 / speech_habits 一句话总结）
-8. archetype：角色原型，如英雄、智者、导师、反派、守护者、叛逆者等
+1. gender：性别，只能是 male / female / neutral 之一
+2. age：年龄或年龄感，简短字符串，如 "16" / "约25岁" / "少年" / "中年"
+3. appearance：外貌概述，一段话，100字以内（与 visual_prompt 互补，此处侧重叙事印象）
+4. personality：深度性格，包含核心特质、行为模式、内在矛盾与核心恐惧
+5. personality_tags：3-5个短标签，每个不超过4字，如["孤傲冷峻","腹黑算计"]
+6. background：详细背景，包含出身、成长经历、重要转折
+7. character_arc：角色成长轨迹，描述起点、关键转变、最终归宿
+8. abilities：核心能力，每项包含 name 和 description
+9. dialogue_style：说话风格（vocabulary_level / patterns 2-4条 / speech_habits 一句话总结）
+10. archetype：角色原型，如英雄、智者、导师、反派、守护者、叛逆者等
 {% if PromptLanguage == "en" %}9. visual_prompt (English): image generation prompt, ~150 words, covering 12 dimensions in order. No art style, quality, or rendering tags:
 
    [1] GENDER & BUILD: gender, age range, ethnicity, height, body type, shoulder-to-hip ratio
@@ -50,6 +52,8 @@
 {
   "name": "{{ CharacterName }}",
   "role": "{{ CharacterRole }}",
+  "gender": "male/female/neutral",
+  "age": "如 16 / 约25岁 / 少年 / 中年",
   "archetype": "角色原型",
   "appearance": "叙事性外貌概述，100字以内",
   "personality": "...",

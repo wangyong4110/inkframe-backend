@@ -17,6 +17,10 @@ type Character struct {
 	Name string `json:"name" gorm:"size:100;not null"`
 	Role string `json:"role" gorm:"size:50"` // protagonist/antagonist/supporting/minor
 
+	// 基本属性
+	Gender string `json:"gender" gorm:"size:20"` // male/female/neutral
+	Age    string `json:"age" gorm:"size:50"`    // 如 "16" / "约25岁" / "少年"
+
 	// 统一描述字段（外貌、性格、背景、对话风格等所有描述性信息）
 	Description string `json:"description" gorm:"type:text"`
 
@@ -226,12 +230,16 @@ func (CharacterLook) TableName() string { return "ink_character_look" }
 type CreateCharacterRequest struct {
 	Name        string `json:"name" binding:"required"`
 	Role        string `json:"role"`
+	Gender      string `json:"gender"`
+	Age         string `json:"age"`
 	Description string `json:"description"`
 }
 
 type UpdateCharacterRequest struct {
 	Name          string `json:"name"`
 	Role          string `json:"role"`
+	Gender        string `json:"gender"`
+	Age           string `json:"age"`
 	Description   string `json:"description"`
 	InnerConflict   string `json:"inner_conflict"`    // 内在矛盾（如：渴望自由却害怕失去家人）
 	CoreDesire      string `json:"core_desire"`       // 核心渴望（如：被认可、复仇、保护所爱之人）

@@ -563,6 +563,8 @@ type analysisDialogueStyleJSON struct {
 type analysisCharJSON struct {
 	Name            string                    `json:"name"`
 	Role            string                    `json:"role"`
+	Gender          string                    `json:"gender"`          // male/female/neutral
+	Age             string                    `json:"age"`             // 如 "16" / "约25岁"
 	Description     string                    `json:"description"`     // 统一中文描述（新格式）
 	Archetype       string                    `json:"archetype"`       // 旧格式兼容
 	Appearance      string                    `json:"appearance"`      // 旧格式兼容
@@ -813,18 +815,24 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 			}
 			finalDesc = strings.Join(descParts, "\n")
 		}
-		// 自动推荐音色
-		suggestedVoice := suggestVoiceForCharacter(finalDesc, c.PersonalityTags, role, voiceModels)
+		// 自动推荐配音设置
+		suggestedVoice := suggestVoiceForCharacter(finalDesc, c.Gender, c.PersonalityTags, role, voiceModels)
+		suggestedStyle := suggestVoiceStyle(c.Gender, c.Age, role, c.PersonalityTags, finalDesc)
+		suggestedLang := suggestVoiceLanguage(novel.PromptLanguage)
 		char := &model.Character{
-			NovelID:      novel.ID,
-			TenantID:     tenantID,
-			UUID:         uuid.New().String(),
-			Name:         c.Name,
-			Role:         role,
-			Description:  finalDesc,
-			VisualPrompt: c.VisualPrompt,
-			VoiceID:      suggestedVoice,
-			Status:       "active",
+			NovelID:       novel.ID,
+			TenantID:      tenantID,
+			UUID:          uuid.New().String(),
+			Name:          c.Name,
+			Role:          role,
+			Gender:        c.Gender,
+			Age:           c.Age,
+			Description:   finalDesc,
+			VisualPrompt:  c.VisualPrompt,
+			VoiceID:       suggestedVoice,
+			VoiceStyle:    suggestedStyle,
+			VoiceLanguage: suggestedLang,
+			Status:        "active",
 		}
 		if err := s.characterRepo.Create(char); err != nil {
 			logger.Errorf("NovelAnalysis: create character %q: %v", c.Name, err)

@@ -519,6 +519,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			characters.POST("/:id/analyze-consistency", cfg.CharacterHandler.AnalyzeCharacterConsistency)
 			characters.POST("/:id/voice/preview", cfg.CharacterHandler.PreviewVoice)
 			characters.GET("/:id/voice/sample", cfg.CharacterHandler.ServeVoiceSample)
+			characters.POST("/:id/reanalyze", cfg.CharacterHandler.ReanalyzeCharacter)
 			characters.POST("/:id/extract-voice", cfg.CharacterHandler.ExtractCharacterVoice)
 			characters.GET("/:id/snapshots", cfg.CharacterHandler.ListCharacterSnapshots)
 			characters.POST("/:id/snapshots", cfg.CharacterHandler.CreateCharacterSnapshot)

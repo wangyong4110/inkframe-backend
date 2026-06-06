@@ -22,6 +22,8 @@ func characterToUpdateReq(c *model.Character) *model.UpdateCharacterRequest {
 	return &model.UpdateCharacterRequest{
 		Name:           c.Name,
 		Role:           c.Role,
+		Gender:         c.Gender,
+		Age:            c.Age,
 		Description:    c.Description,
 		InnerConflict:  c.InnerConflict,
 		CoreDesire:     c.CoreDesire,
@@ -43,6 +45,8 @@ func characterResponse(c *model.Character) gin.H {
 		"uuid":             c.UUID,
 		"name":             c.Name,
 		"role":             c.Role,
+		"gender":           c.Gender,
+		"age":              c.Age,
 		"description":      c.Description,
 		"visual_prompt":    c.VisualPrompt,
 		"three_view_sheet": c.ThreeViewSheet,
@@ -935,6 +939,20 @@ func (h *CharacterHandler) AIExtractMinorCharacters(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"characters": chars, "count": len(chars)})
+}
+
+// ReanalyzeCharacter POST /api/v1/characters/:id/reanalyze
+func (h *CharacterHandler) ReanalyzeCharacter(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	char, err := h.characterService.ReanalyzeCharacter(getTenantID(c), uint(id))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "reanalyze failed: "+err.Error())
+		return
+	}
+	respondOK(c, characterResponse(char))
 }
 
 // ExtractCharacterVoice 从小说章节中提取角色对话风格并写回角色的 VoiceStyle 字段

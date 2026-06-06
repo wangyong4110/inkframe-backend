@@ -449,16 +449,18 @@ func inferGenderFromText(text string) string {
 	return ""
 }
 
-// suggestVoiceForCharacter 根据角色描述/标签/角色类型从可用音色中自动选择合适的音色 ID。
-// 若无可用音色，返回空字符串（调用方保持 VoiceID 为空）。
-func suggestVoiceForCharacter(description string, personalityTags []string, role string, voices []*model.AIModel) string {
+// suggestVoiceForCharacter 根据角色性别/描述/标签从可用音色中自动选择合适的音色 ID。
+// gender 为显式性别（male/female/neutral），优先于从文本推断；若无可用音色返回空字符串。
+func suggestVoiceForCharacter(description, gender string, personalityTags []string, role string, voices []*model.AIModel) string {
 	if len(voices) == 0 {
 		return ""
 	}
 
-	// 合并描述和标签，用于性别推断
-	combined := description + " " + strings.Join(personalityTags, " ")
-	gender := inferGenderFromText(combined)
+	// 优先使用显式 gender，否则从描述/标签推断
+	if gender == "" || gender == "neutral" {
+		combined := description + " " + strings.Join(personalityTags, " ")
+		gender = inferGenderFromText(combined)
+	}
 
 	femaleKws := []string{"female", "女", "girl", "woman", "f_"}
 	maleKws := []string{"male", "男", "boy", "man", "m_"}
@@ -496,8 +498,81 @@ func suggestVoiceForCharacter(description string, personalityTags []string, role
 			return maleVoices[0].Name
 		}
 	}
-	// 性别不明或无对应性别音色，返回第一个可用音色
 	return voices[0].Name
+}
+
+// suggestVoiceStyle 根据性别、年龄感、角色定位和性格标签推断最合适的语音风格。
+// 返回值为 STYLES 枚举：""(默认)/calm/excited/sad/angry/cheerful/serious
+func suggestVoiceStyle(gender, age, role string, personalityTags []string, description string) string {
+	combined := strings.ToLower(age + " " + strings.Join(personalityTags, " ") + " " + description)
+
+	// 儿童/幼年 → 欢快
+	childKws := []string{"儿童", "幼儿", "孩童", "幼年", "小孩", "baby", "child", "kid", "toddler"}
+	for _, kw := range childKws {
+		if strings.Contains(combined, kw) {
+			return "cheerful"
+		}
+	}
+	// 少年/少女/青少年 → 欢快（活力）
+	youthKws := []string{"少年", "少女", "青少年", "teenager", "teen", "young"}
+	for _, kw := range youthKws {
+		if strings.Contains(combined, kw) {
+			return "cheerful"
+		}
+	}
+	// 老年/年迈 → 平静
+	elderKws := []string{"老年", "年迈", "苍老", "老人", "老者", "elderly", "elder", "old"}
+	for _, kw := range elderKws {
+		if strings.Contains(combined, kw) {
+			return "calm"
+		}
+	}
+
+	// 性格关键词优先
+	calmKws := []string{"冷静", "沉稳", "淡漠", "冷淡", "冷峻", "内敛", "沉默", "平静", "calm"}
+	for _, kw := range calmKws {
+		if strings.Contains(combined, kw) {
+			return "calm"
+		}
+	}
+	cheerfulKws := []string{"活泼", "开朗", "欢快", "乐观", "开心", "欢乐", "sunny", "cheerful"}
+	for _, kw := range cheerfulKws {
+		if strings.Contains(combined, kw) {
+			return "cheerful"
+		}
+	}
+	sadKws := []string{"忧郁", "悲伤", "哀愁", "忧愁", "悲苦", "sad", "melancholy"}
+	for _, kw := range sadKws {
+		if strings.Contains(combined, kw) {
+			return "sad"
+		}
+	}
+	angryKws := []string{"暴躁", "愤怒", "易怒", "火爆", "激进", "angry"}
+	for _, kw := range angryKws {
+		if strings.Contains(combined, kw) {
+			return "angry"
+		}
+	}
+
+	// 反派默认严肃
+	if role == "antagonist" {
+		return "serious"
+	}
+	return ""
+}
+
+// suggestVoiceLanguage 根据小说 PromptLanguage 推断配音语言编码（存入 voice_language 字段）。
+func suggestVoiceLanguage(promptLanguage string) string {
+	switch promptLanguage {
+	case "en":
+		return "en"
+	case "ja":
+		return "ja"
+	case "ko":
+		return "ko"
+	default:
+		return "zh-cmn" // 中文普通话
+	}
 }
 
 func NewCharacterService(
@@ -609,6 +684,12 @@ func (s *CharacterService) UpdateCharacter(id, tenantID uint, req *model.UpdateC
 	}
 	if req.Role != "" {
 		character.Role = req.Role
+	}
+	if req.Gender != "" {
+		character.Gender = req.Gender
+	}
+	if req.Age != "" {
+		character.Age = req.Age
 	}
 	if req.Description != "" {
 		character.Description = req.Description
@@ -961,16 +1042,22 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			description = strings.Join(descParts, "\n")
 		}
 
-		suggestedVoice := suggestVoiceForCharacter(description, p.PersonalityTags, role, voiceModels)
+		suggestedVoice := suggestVoiceForCharacter(description, p.Gender, p.PersonalityTags, role, voiceModels)
+		suggestedStyle := suggestVoiceStyle(p.Gender, p.Age, role, p.PersonalityTags, description)
+		suggestedLang := suggestVoiceLanguage(novelPromptLanguage)
 
 		if ch, ok := byName[p.Name]; ok {
 			logger.Printf("[CharacterService] AIBatchGenerate upsert(update) %q", p.Name)
 			// AI 生成字段直接覆盖（用户点击"AI 更新角色"语义就是刷新）
 			if description != "" { ch.Description = description }
 			if p.VisualPrompt != "" { ch.VisualPrompt = p.VisualPrompt }
+			if p.Gender != "" { ch.Gender = p.Gender }
+			if p.Age != "" { ch.Age = p.Age }
 			// 用户手动配置字段仅在空时填充
 			if v, ok := fillIfEmpty(ch.Role, role); ok { ch.Role = v }
 			if v, ok := fillIfEmpty(ch.VoiceID, suggestedVoice); ok { ch.VoiceID = v }
+			if v, ok := fillIfEmpty(ch.VoiceStyle, suggestedStyle); ok { ch.VoiceStyle = v }
+			if v, ok := fillIfEmpty(ch.VoiceLanguage, suggestedLang); ok { ch.VoiceLanguage = v }
 			if err := s.characterRepo.Update(ch); err != nil {
 				logger.Errorf("CharacterService.AIBatchGenerate: update %s: %v", ch.Name, err)
 				continue
@@ -978,15 +1065,19 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			upserted = append(upserted, ch)
 		} else {
 			character := &model.Character{
-				UUID:         uuid.New().String(),
-				NovelID:      novelID,
-				TenantID:     tenantID,
-				Name:         p.Name,
-				Role:         role,
-				Description:  description,
-				VisualPrompt: p.VisualPrompt,
-				VoiceID:      suggestedVoice,
-				Status:       "active",
+				UUID:          uuid.New().String(),
+				NovelID:       novelID,
+				TenantID:      tenantID,
+				Name:          p.Name,
+				Role:          role,
+				Gender:        p.Gender,
+				Age:           p.Age,
+				Description:   description,
+				VisualPrompt:  p.VisualPrompt,
+				VoiceID:       suggestedVoice,
+				VoiceStyle:    suggestedStyle,
+				VoiceLanguage: suggestedLang,
+				Status:        "active",
 			}
 			if err := s.characterRepo.Create(character); err != nil {
 				logger.Errorf("CharacterService.AIBatchGenerate: create %s: %v", p.Name, err)
@@ -1001,6 +1092,86 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 	}
 	logger.Printf("[CharacterService] AIBatchGenerate done: novelID=%d upserted=%d", novelID, len(upserted))
 	return upserted, nil
+}
+
+// ReanalyzeCharacter 重新分析并生成单个角色的信息（description / visual_prompt）。
+// 基于小说全部章节摘要，调用与 AIBatchGenerate 相同的 generateOneCharacterProfile 逻辑。
+func (s *CharacterService) ReanalyzeCharacter(tenantID, characterID uint) (*model.Character, error) {
+	char, err := s.characterRepo.GetByID(characterID)
+	if err != nil {
+		return nil, fmt.Errorf("character not found: %w", err)
+	}
+	if char.TenantID != tenantID {
+		return nil, fmt.Errorf("character not found")
+	}
+
+	novelTitle := "本小说"
+	novelGenre := ""
+	novelPromptLanguage := "zh"
+	if s.novelRepo != nil {
+		if novel, e := s.novelRepo.GetByID(char.NovelID); e == nil {
+			novelTitle = novel.Title
+			novelGenre = novel.Genre
+			if novel.PromptLanguage != "" {
+				novelPromptLanguage = novel.PromptLanguage
+			}
+		}
+	}
+
+	var shortSummaries string
+	if s.chapterRepo != nil {
+		if chapters, e := s.chapterRepo.ListByNovelWithContent(char.NovelID); e == nil {
+			shortSummaries = buildChapterSummariesText(chapters, 5, 2000)
+			if shortSummaries == "" {
+				shortSummaries = collectContent(chapters, 5, 2000)
+			}
+		}
+	}
+
+	role := char.Role
+	if role != "protagonist" && role != "antagonist" && role != "supporting" {
+		role = "supporting"
+	}
+	entry := charNameEntry{
+		Name:  char.Name,
+		Role:  role,
+		Brief: char.Description,
+	}
+
+	profile, err := s.generateOneCharacterProfile(tenantID, char.NovelID, novelTitle, novelGenre, novelPromptLanguage, entry, shortSummaries)
+	if err != nil {
+		return nil, fmt.Errorf("AI reanalyze: %w", err)
+	}
+
+	if profile.Description != "" {
+		char.Description = profile.Description
+	}
+	if profile.VisualPrompt != "" {
+		char.VisualPrompt = profile.VisualPrompt
+	}
+	if profile.Gender != "" {
+		char.Gender = profile.Gender
+	}
+	if profile.Age != "" {
+		char.Age = profile.Age
+	}
+
+	// 根据最新 gender/age/role 重新推荐配音设置（仅在用户未手动配置时填充）
+	var voiceModels []*model.AIModel
+	if s.modelRepo != nil {
+		voiceModels, _ = s.modelRepo.GetAvailableByTaskType("voice_gen", tenantID)
+	}
+	suggestedVoice := suggestVoiceForCharacter(char.Description, char.Gender, profile.PersonalityTags, char.Role, voiceModels)
+	suggestedStyle := suggestVoiceStyle(char.Gender, char.Age, char.Role, profile.PersonalityTags, char.Description)
+	suggestedLang := suggestVoiceLanguage(novelPromptLanguage)
+	if v, ok := fillIfEmpty(char.VoiceID, suggestedVoice); ok { char.VoiceID = v }
+	if v, ok := fillIfEmpty(char.VoiceStyle, suggestedStyle); ok { char.VoiceStyle = v }
+	if v, ok := fillIfEmpty(char.VoiceLanguage, suggestedLang); ok { char.VoiceLanguage = v }
+
+	if err := s.characterRepo.Update(char); err != nil {
+		return nil, fmt.Errorf("save character: %w", err)
+	}
+	return char, nil
 }
 
 // AIExtractMinorChars 从单章内容中提取次要角色（role=minor），并写入 ChapterCharacter 关联。
@@ -1100,17 +1271,23 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 			finalDesc = strings.Join(parts, "\n")
 		}
 
-		suggestedVoice := suggestVoiceForCharacter(finalDesc, c.PersonalityTags, "minor", voiceModels)
+		suggestedVoice := suggestVoiceForCharacter(finalDesc, c.Gender, c.PersonalityTags, "minor", voiceModels)
+		suggestedStyle := suggestVoiceStyle(c.Gender, c.Age, "minor", c.PersonalityTags, finalDesc)
+		suggestedLang := suggestVoiceLanguage(novelPromptLanguage)
 
 		char := &model.Character{
-			NovelID:      novelID,
-			UUID:         uuid.New().String(),
-			Name:         c.Name,
-			Role:         "minor",
-			Description:  finalDesc,
-			VisualPrompt: c.VisualPrompt,
-			VoiceID:      suggestedVoice,
-			Status:       "active",
+			NovelID:       novelID,
+			UUID:          uuid.New().String(),
+			Name:          c.Name,
+			Role:          "minor",
+			Gender:        c.Gender,
+			Age:           c.Age,
+			Description:   finalDesc,
+			VisualPrompt:  c.VisualPrompt,
+			VoiceID:       suggestedVoice,
+			VoiceStyle:    suggestedStyle,
+			VoiceLanguage: suggestedLang,
+			Status:        "active",
 		}
 		if e := s.characterRepo.Create(char); e != nil {
 			logger.Errorf("CharacterService.AIExtractMinorChars: create %q: %v", c.Name, e)

@@ -11,7 +11,9 @@
 1. 只提取主要角色：protagonist（主角）、antagonist（反派）、supporting（重要配角）；最多8个
 2. 不要提取次要/龙套/仅一次性出场的角色
 3. role 只能是：protagonist / antagonist / supporting
-{% if PromptLanguage == "en" %}4. description (English): include appearance, personality, backstory, speaking style, character arc — one coherent paragraph, 300 words max{% else %}4. description（中文）：包含外貌特征、性格特点、背景故事、说话风格、角色弧光等所有描述性信息，写成连贯段落，300字以内{% endif %}
+4. gender：性别，只能是 male / female / neutral 之一
+5. age：年龄或年龄感，简短字符串，如 "16" / "约25岁" / "少年" / "中年"
+{% if PromptLanguage == "en" %}6. description (English): include appearance, personality, backstory, speaking style, character arc — one coherent paragraph, 300 words max{% else %}6. description（中文）：包含外貌特征、性格特点、背景故事、说话风格、角色弧光等所有描述性信息，写成连贯段落，300字以内{% endif %}
 {% if PromptLanguage == "en" %}5. visual_prompt (English): image generation prompt, ~150 words, covering 12 dimensions in order. No art style, quality, or rendering tags:
 
    [1] GENDER & BUILD: gender, age range, ethnicity, height, body type, shoulder-to-hip ratio
@@ -39,14 +41,16 @@
    [10] 配饰：逐件——名称、材质、风格、佩戴位置、身份关联；武器完整描述
    [11] 体态：默认站姿、手部位置、特征性倾斜
    [12] 标志性元素：最具辨识度的单一视觉细节，具体描述材质/状态/位置{% endif %}
-6. 若信息不足，结合小说类型和角色定位合理推断，不要留空
-7. 严格输出 JSON 数组，不含任何说明文字
+7. 若信息不足，结合小说类型和角色定位合理推断，不要留空
+8. 严格输出 JSON 数组，不含任何说明文字
 
 # 输出格式（JSON 数组）
 [
   {
     "name": "角色名",
     "role": "protagonist",
+    "gender": "male",
+    "age": "约20岁",
     "description": "外貌：身高约1.82米，体型精瘦有力，乌黑长发束以白玉簪，剑眉斜飞入鬓，漆黑眼眸深邃冷峻，面容线条分明，常着白色绣银纹长袍，腰悬古朴长剑，气质出尘。性格：外表冷漠疏离，内心热忱，因早年背叛筑起心墙，对认可之人极度忠诚，做事果决，关键时刻为弱者挺身。背景：出身修仙世家，因遭背叛独行天涯，立誓复仇，核心能力：天罚剑诀（凌厉速攻）、元神感知（百米气机感应）。弧光：从孤立复仇者逐渐开放心扉，最终成为守护众人的存在。说话风格：惜字如金，语气平淡，绝不废话。",
     "visual_prompt": "{% if PromptLanguage == "en" %}young male cultivator, appears early-to-mid 20s, East Asian facial features. Tall lean build, approximately 185 cm, broad shoulders tapering to a narrow waist, long limbs with understated lean muscle.
 
