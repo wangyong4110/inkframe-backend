@@ -149,6 +149,10 @@ func (s *SceneAnchorService) BuildPromptFragment(id uint) (promptFragment string
 	if anchor.Name != "" && fragment != "" {
 		fragment = fmt.Sprintf("[scene: %s] %s", anchor.Name, fragment)
 	}
+	// 追加 PromptLock 锁定关键词（风格/色调/光线等约束）
+	if anchor.PromptLock != "" {
+		fragment = fragment + ", " + anchor.PromptLock
+	}
 	return fragment, anchor.RefImageURL, nil
 }
 
@@ -167,6 +171,8 @@ type extractedAnchor struct {
 	Name        string `json:"name"`
 	Type        string `json:"type"`
 	Description string `json:"description"`
+	Variant     string `json:"variant"`      // day/night/winter/battle 等变体标签
+	ParentName  string `json:"parent_name"`  // 父级锚点名称（变体时填写，用于解析 ParentAnchorID）
 }
 
 // parseAnchorJSONResult parses the LLM response into []extractedAnchor.
@@ -272,10 +278,29 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 		return nil, fmt.Errorf("parse LLM response: %w", err)
 	}
 
-	// 批量创建（跳过已存在名称）
+	// 构建规范化名称集合（用于语义去重：忽略大小写 + 空格）
+	normalizedNames := make(map[string]bool, len(existing))
+	for name := range existingNames {
+		normalizedNames[normalizeAnchorName(name)] = true
+	}
+
+	// 批量创建（改进去重：精确匹配 + 规范化匹配 + 子串包含匹配）
 	created := make([]*model.SceneAnchor, 0, len(extracted))
 	for _, e := range extracted {
+		if e.Name == "" {
+			continue
+		}
+		normName := normalizeAnchorName(e.Name)
+		// 精确匹配
 		if existingNames[e.Name] {
+			continue
+		}
+		// 规范化匹配（大小写/空格变体）
+		if normalizedNames[normName] {
+			continue
+		}
+		// 子串包含匹配（防止"皇宫"和"皇宫正殿"重复注册）
+		if anchorNameOverlaps(normName, normalizedNames) {
 			continue
 		}
 		anchorType := e.Type
@@ -288,6 +313,17 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 			Name:        e.Name,
 			Type:        anchorType,
 			Description: e.Description,
+			Variant:     e.Variant,
+		}
+		// 解析父级锚点 ID（变体场景）
+		if e.ParentName != "" {
+			for _, a := range existing {
+				if a.Name == e.ParentName || normalizeAnchorName(a.Name) == normalizeAnchorName(e.ParentName) {
+					id := a.ID
+					anchor.ParentAnchorID = &id
+					break
+				}
+			}
 		}
 		if err := s.repo.Create(anchor); err != nil {
 			logger.Printf("[SceneAnchorService] create anchor %q: %v", e.Name, err)
@@ -295,6 +331,7 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 		}
 		created = append(created, anchor)
 		existingNames[e.Name] = true
+		normalizedNames[normName] = true
 	}
 
 	logger.Printf("[SceneAnchorService] ExtractFromChapter done: novelID=%d created=%d", novelID, len(created))
@@ -321,13 +358,29 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 		}
 	}
 
-	// 组装图像生成 prompt
+	// 组装图像生成 prompt（注入场景描述 + PromptLock + 标准化场景生成词）
 	prompt := anchor.Description
-	if prompt != "" {
-		prompt += ", scene background, no characters, cinematic composition"
-	} else {
-		prompt = "scene background, no characters, cinematic composition"
+	if anchor.PromptLock != "" {
+		prompt += ", " + anchor.PromptLock
 	}
+	sceneType := anchor.Type
+	if sceneType == "" {
+		sceneType = "exterior"
+	}
+	sceneSuffix := "establishing shot, " + sceneType + " scene, no humans, no people, no figures, " +
+		"cinematic composition, three depth layers foreground midground background, " +
+		"architectural detail, atmospheric lighting, masterpiece, best quality, ultra-detailed, 8k uhd, " +
+		"photorealistic, sharp focus"
+	if prompt != "" {
+		prompt += ", " + sceneSuffix
+	} else {
+		prompt = sceneSuffix
+	}
+	// negative prompt 通过 imageStyle 字段携带（GenerateCharacterThreeView 支持）
+	// 此处额外追加场景专用 negative 词到 prompt 注释段（不同模型处理方式不同，此为兜底）
+	negativeHint := " | negative: person, people, human, man, woman, figure, silhouette, character, " +
+		"blurry, low quality, watermark, text, floating objects, modern elements"
+	prompt += negativeHint
 
 	sizeOverride := imageAspectRatioToSize(aspectRatio, "master")
 	imageURL, err := s.aiSvc.GenerateCharacterThreeView(ctx, tenantID, providerName, prompt, "", imageStyle, "", sizeOverride)
@@ -393,7 +446,7 @@ func (s *SceneAnchorService) UpdateStats(id uint, score float64) error {
 
 // BatchGenerateRefImages 批量为小说的场景锚点生成参考图。
 // force=false：跳过已有参考图的锚点；force=true：全量重新生成（风格变更时使用）。
-// 并发度由 AIService.imageSem 统一管控（系统设置 image_concurrency）。
+// 外层并发度固定为 3（避免大批量时无限创建 goroutine），内层 imageSem 进一步限流。
 func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantID, novelID uint, provider string, force bool, progressFn func(int)) (succeeded, failed int, err error) {
 	anchors, err := s.repo.ListByNovel(novelID)
 	if err != nil {
@@ -408,15 +461,18 @@ func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantI
 	}
 	total := len(todo)
 
+	const outerConcurrency = 3
+	sem := make(chan struct{}, outerConcurrency)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var done int
 
 	for _, anchor := range todo {
 		anchor := anchor
+		sem <- struct{}{}
 		wg.Add(1)
 		go func() {
-			defer wg.Done()
+			defer func() { <-sem; wg.Done() }()
 			if _, genErr := s.GenerateRefImage(ctx, tenantID, anchor.ID, provider); genErr != nil {
 				logger.Printf("[SceneAnchorService] BatchGenerateRefImages: anchor %d (%s) failed: %v", anchor.ID, anchor.Name, genErr)
 				mu.Lock()
@@ -444,7 +500,8 @@ func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantI
 	return succeeded, failed, nil
 }
 
-// AIExtractAllFromNovel 批量从小说前 10 章中提取场景锚点（并发 3 goroutine）
+// AIExtractAllFromNovel 批量从小说所有章节中提取场景锚点（并发 3 goroutine）。
+// 无章节数量上限，支持增量提取（已有同名锚点自动跳过）。
 func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint, progressFn func(int)) ([]*model.SceneAnchor, error) {
 	logger.Printf("[SceneAnchorService] AIExtractAllFromNovel: novelID=%d", novelID)
 	if s.chapterRepo == nil {
@@ -462,10 +519,10 @@ func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint, progr
 		}
 	}
 
-	const maxCh = 10
+	// 收集所有有内容的章节（无数量上限，支持全量提取）
 	var candidates []*model.Chapter
 	for _, ch := range chapters {
-		if ch.Content != "" && len(candidates) < maxCh {
+		if ch.Content != "" {
 			candidates = append(candidates, ch)
 		}
 	}
@@ -511,4 +568,22 @@ func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint, progr
 		return nil, fmt.Errorf("所有章节场景锚点提取均失败，请检查 AI 提供商配置")
 	}
 	return allCreated, nil
+}
+
+// normalizeAnchorName 规范化场景名称用于去重比较（转小写，去除多余空格）
+func normalizeAnchorName(name string) string {
+	return strings.ToLower(strings.Join(strings.Fields(name), ""))
+}
+
+// anchorNameOverlaps 检测 normName 与 existing 集合中是否存在高重叠（防止同质化锚点）。
+// 若 normName 是某个已有名称的子串，或某个已有名称是 normName 的子串，视为重叠。
+func anchorNameOverlaps(normName string, existing map[string]bool) bool {
+	for en := range existing {
+		if len(en) >= 2 && len(normName) >= 2 {
+			if strings.Contains(normName, en) || strings.Contains(en, normName) {
+				return true
+			}
+		}
+	}
+	return false
 }

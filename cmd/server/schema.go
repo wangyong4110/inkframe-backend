@@ -8,7 +8,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-06-02-v2"
+const schemaVersion = "2026-06-06-v2"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -115,6 +115,9 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_foreshadow", "importance",           "VARCHAR(20) NOT NULL DEFAULT 'normal'"}, // 重要程度
 		// 章节连贯性修复（2026-06-02-v2 新增）
 		{"ink_chapter", "chapter_end_state", "TEXT NULL"}, // 章末精确状态快照（供下一章连续性锚点）
+		// 场景一致性日志新增字段（2026-06-06-v1 新增）
+		{"ink_scene_consistency_log", "time_score",     "DECIMAL(4,3) NOT NULL DEFAULT 1"},
+		{"ink_scene_consistency_log", "suggested_fix",  "TEXT NULL"},
 	}
 	for _, a := range additions {
 		// 先查 information_schema，列已存在则跳过，避免触发 GORM 的 Error 1060 日志
@@ -401,6 +404,20 @@ func runSchemaCleanup(db *gorm.DB) {
 		// 废弃的 tenant 列
 		{"tenants", "used_projects"},
 		{"tenants", "used_storage_mb"},
+		// 废弃的 ink_video 成本列（2026-06-06 删除，无任何代码引用）
+		{"ink_video", "generation_cost"},
+		// 废弃的 ink_asset 列（2026-06-06 删除，无任何代码引用）
+		{"ink_asset", "waveform_url"},
+		{"ink_asset", "hls_url"},
+		{"ink_asset", "license_url"},
+		{"ink_asset", "text_vector"},
+		{"ink_asset", "image_vector"},
+		{"ink_asset", "ocr_text"},
+		// 废弃的 ink_ai_model 默认参数列（2026-06-06 删除，无任何代码引用）
+		{"ink_ai_model", "default_top_p"},
+		{"ink_ai_model", "default_top_k"},
+		// 废弃的 ink_task_model_config 质量阈值列（2026-06-06 删除，无任何代码引用）
+		{"ink_task_model_config", "min_quality_score"},
 	}
 	// Allowlist of valid (table, col) pairs — any entry NOT in this list is skipped.
 	allowedDrops := map[string]bool{}

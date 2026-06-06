@@ -31,14 +31,11 @@ type Asset struct {
 	StorageURL   string `json:"storage_url" gorm:"type:text"`
 	ThumbnailURL string `json:"thumbnail_url" gorm:"type:text"`
 	PreviewURL   string `json:"preview_url" gorm:"type:text"`
-	WaveformURL  string `json:"waveform_url" gorm:"type:text"`
-	HlsURL       string `json:"hls_url" gorm:"type:text"`
 
 	// Copyright
 	SourceURL   string `json:"source_url" gorm:"type:text"`
 	ExternalID  string `json:"external_id" gorm:"size:200;index:idx_external_id"`
 	License     string `json:"license" gorm:"size:100;index"` // CC0|CC-BY|CC-BY-SA|CC-BY-NC|PD|unsplash|pexels|pixabay|platform
-	LicenseURL  string `json:"license_url" gorm:"type:text"`
 	Attribution string `json:"attribution" gorm:"type:text"`
 
 	// Media metadata
@@ -61,13 +58,6 @@ type Asset struct {
 	// Color
 	DominantColor string `json:"dominant_color" gorm:"size:10"`
 	ColorPalette  string `json:"color_palette" gorm:"size:200"` // JSON array of hex strings
-
-	// Vectors (stored as JSON text; migrate to Qdrant at scale)
-	TextVector  string `json:"text_vector,omitempty" gorm:"type:text"`
-	ImageVector string `json:"image_vector,omitempty" gorm:"type:text"`
-
-	// OCR
-	OcrText string `json:"ocr_text,omitempty" gorm:"type:text"`
 
 	// Extended metadata (JSON blob, type-specific)
 	Metadata string `json:"metadata,omitempty" gorm:"type:text"`

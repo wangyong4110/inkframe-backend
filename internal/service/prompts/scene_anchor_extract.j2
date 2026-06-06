@@ -3,7 +3,7 @@ You are a visual production designer analyzing the novel "{{ NovelTitle }}" to e
 Your task: identify all visually distinct, recurring locations from the chapter content below that have strong visual identity and will appear across multiple shots.
 
 {% if ExistingAnchors %}
-Already registered scene anchors — do NOT duplicate these:
+Already registered scene anchors — do NOT duplicate these (including partial name matches):
 {% for anchor in ExistingAnchors %}- {{ anchor.Name }}: {{ anchor.Description }}
 {% endfor %}
 {% endif %}
@@ -20,24 +20,36 @@ Chapter content:
 3. `type` must be one of: `interior` / `exterior` / `imaginary`
 {% if PromptLanguage == "en" %}
 4. `name`: 2–6 English words, specific and memorable (e.g. "Imperial Throne Hall", not "palace").
-5. `description`: Detailed English visual description for AI image generation, **100–180 words**. Cover ALL of these dimensions:
-   - **Architecture / structure**: spatial scale, layout, ceiling height, key structural elements
-   - **Materials & textures**: stone, wood, metal, fabric — color and surface quality
-   - **Lighting**: source, direction, quality, color temperature
-   - **Atmosphere & mood**: the emotional feel of the space
-   - **Distinctive visual elements**: unique props, decorations, vegetation, water features, symbols
-   - **Time / weather / season** if relevant
+5. `description`: Detailed English visual description for AI image generation, **minimum 150 words**. You MUST cover ALL of these dimensions — missing any dimension will degrade image quality:
+   - **Architecture / structure**: spatial scale, layout, ceiling height, key structural elements (pillars, arches, walls, windows, gates)
+   - **Materials & textures**: stone, wood, metal, fabric — color and specific surface quality (weathered / polished / cracked / mossy)
+   - **Color palette**: dominant colors, accent colors, forbidden colors (e.g. "no neon, no white walls") — this is the single most important dimension for cross-shot consistency
+   - **Depth layers**: what is in foreground / mid-ground / background; distance markers
+   - **Lighting**: source (sunlight / torchlight / moonlight / magic glow), direction, quality (hard / soft / diffused), color temperature in Kelvin
+   - **Atmosphere & mood**: emotional feel of the space (oppressive / serene / mysterious / grand / ruined), atmospheric particles (dust / fog / smoke / rain)
+   - **Distinctive visual elements**: unique props, decorations, vegetation, water features, symbols that make this scene instantly recognizable
+   - **Scale sense**: spatial scale relative to human figure (intimate / vast / monumental / claustrophobic)
+   - **Dynamic elements**: any recurring motion in the scene (flowing water / swaying trees / flickering torches / drifting incense smoke)
+   - **Time / weather / season** if relevant to the scene's primary representation
+6. `variant`: ONLY fill this if the scene is a variant of an existing scene (e.g. "night" for a daytime scene's nighttime version). Valid values: `day` / `night` / `dawn` / `dusk` / `winter` / `summer` / `battle` / `ruined`. Leave empty for primary scenes.
+7. `parent_name`: ONLY fill this when `variant` is set. Use the exact name of the parent scene from the existing anchors list. Leave empty for primary scenes.
 {% else %}
 4. `name`: 2–8 Chinese characters, specific and memorable (e.g. 皇宫正殿, not 宫殿).
-5. `description`: Detailed Chinese visual description for AI image generation, **100–200 characters**. Cover ALL of these dimensions:
+5. `description`: Detailed Chinese visual description for AI image generation, **minimum 150 characters**. You MUST cover ALL of these dimensions — missing any dimension will degrade image quality:
    - **建筑结构**: 空间规模、格局、层高、主要结构元素（柱、拱、墙、窗、门）
-   - **材质与质感**: 石、木、金属、织物的颜色与表面质地
-   - **光线**: 来源（阳光/火炬/月光/魔法）、方向、质感（柔和/强烈/漫射）、色温
-   - **氛围与情绪**: 空间给人的情感感受（压抑、宁静、神秘、宏伟、破败…）
+   - **材质与质感**: 石、木、金属、织物的颜色与具体表面质地（风化/抛光/龟裂/苔藓覆盖）
+   - **色彩调色板**: 主色调、辅助色、禁用色（如"禁止霓虹、禁止白墙"）——这是跨镜头视觉一致性最关键的维度
+   - **纵深层次**: 前景/中景/背景各自的主视觉元素；距离感标记
+   - **光线**: 来源（阳光/火炬/月光/魔法光效）、方向、质感（硬朗/柔和/漫射）、色温（开尔文值）
+   - **氛围与情绪**: 空间给人的情感感受（压抑/宁静/神秘/宏伟/破败），大气粒子（尘埃/薄雾/烟雾/降雨）
    - **标志性视觉元素**: 使该场景一眼可辨的独特道具、装饰、植被、水景、符号
+   - **空间比例感**: 场景相对于人体的尺度感（亲密/广阔/纪念碑式/幽闭）
+   - **动态特性**: 场景中的持续运动元素（流水/摆动树木/闪烁火炬/飘动香烟）
    - **时间/天气/季节**（若与场景主要表现相关）
+6. `variant`: 仅当该场景是已有场景的变体时填写（如某白天场景的夜晚版）。可选值：`day` / `night` / `dawn` / `dusk` / `winter` / `summer` / `battle` / `ruined`。主要场景留空。
+7. `parent_name`: 仅当 `variant` 有值时填写。使用已注册锚点列表中父级场景的精确名称。主要场景留空。
 {% endif %}
-6. Output ONLY a valid JSON array — no markdown fences, no explanation text.
+8. Output ONLY a valid JSON array — no markdown fences, no explanation text.
 
 # Output format
 
@@ -46,7 +58,16 @@ Chapter content:
   {
     "name": "Imperial Throne Hall",
     "type": "interior",
-    "description": "An immense imperial throne hall of overwhelming scale, roughly 60 meters long and 30 meters wide, with a 15-meter coffered ceiling supported by twelve massive vermillion-lacquered pillars carved with coiling golden dragons. The polished jade-green marble floor reflects the blaze of hundreds of white candles in iron chandeliers above. At the far end, a tiered black granite throne dais rises seven steps, flanked by two incense burners trailing white smoke. Walls are hung with heavy crimson silk banners embroidered with golden phoenixes. Daylight filters through narrow lattice windows high on the north wall, casting long diagonal bars of cold morning light across the smoke-filled air, creating a mood of absolute imperial authority and latent menace."
+    "description": "An immense imperial throne hall of overwhelming scale, roughly 60 meters long and 30 meters wide, with a 15-meter coffered ceiling supported by twelve massive vermillion-lacquered pillars carved with coiling golden dragons. The polished jade-green marble floor reflects the blaze of hundreds of white candles in iron chandeliers above. At the far end, a tiered black granite throne dais rises seven steps, flanked by two incense burners trailing white smoke. Walls are hung with heavy crimson silk banners embroidered with golden phoenixes. Daylight filters through narrow lattice windows high on the north wall, casting long diagonal bars of cold morning light (5500K) across the smoke-filled air. Color palette: dominant deep crimson and gold, jade-green floor, black granite accents; no bright white, no pastel tones. Depth layers: foreground — polished marble floor reflecting candle light; mid-ground — six pairs of vermillion pillars flanking a wide central aisle; background — the seven-step throne dais receding into semi-darkness. Scale sense: monumental, humans appear ant-like. Dynamic elements: white incense smoke drifting upward from two flanking burners, candle flames in iron chandeliers flickering at 2Hz. Atmosphere: absolute imperial authority and latent menace, smoke-filled air with suspended dust motes in window light shafts.",
+    "variant": "",
+    "parent_name": ""
+  },
+  {
+    "name": "Imperial Throne Hall Night",
+    "type": "interior",
+    "description": "Same space as the Imperial Throne Hall, now in total darkness except for torch brackets on every pillar — 24 warm amber torches (2800K) casting dramatic hard-edged shadows of pillar carvings across the jade floor. Candle chandeliers are unlit. Crimson silk banners hang motionless in still air. The throne dais emerges from deep shadow, only the top step and the throne's gilded arms catching torch reflections. Color palette: dominant deep amber and shadow-black, jade-green floor now appearing dark teal, gold catching warm reflections only at high-contrast points. No cool tones, no window light. Dynamic: torch flames at each pillar flickering irregularly at 1.5-3Hz, shadows pulsing with flame rhythm.",
+    "variant": "night",
+    "parent_name": "Imperial Throne Hall"
   }
 ]
 {% else %}
@@ -54,7 +75,16 @@ Chapter content:
   {
     "name": "皇宫正殿",
     "type": "interior",
-    "description": "气势磅礴的皇家朝堂，长约六十米、宽三十米，十五米高的藻井由十二根朱红雕龙巨柱支撑。翡翠色大理石地面映出铁制枝形吊灯上数百根白烛的光芒。殿尽头七级黑花岗岩台阶上矗立御座，两侧各置一口白烟袅袅的熏炉。大殿四壁悬挂绣金凤的猩红绸缎龙旗。北墙高处狭窄花格窗透入清晨斜阳，穿过弥漫的香烟投下长长的冷光条，营造出至高皇权与暗藏杀机的氛围。"
+    "description": "气势磅礴的皇家朝堂，长约六十米、宽三十米，十五米高的藻井由十二根朱红雕龙巨柱支撑。翡翠色大理石地面映出铁制枝形吊灯上数百根白烛的光芒。殿尽头七级黑花岗岩台阶上矗立御座，两侧各置一口白烟袅袅的熏炉。大殿四壁悬挂绣金凤的猩红绸缎龙旗。北墙高处狭窄花格窗透入清晨斜阳（5500K冷白），穿过弥漫的香烟投下长长斜向光条。色彩调色板：主色调深朱红与金色、翡翠色地面、黑花岗岩点缀，禁止亮白色和粉色调。纵深层次：前景——抛光大理石地面反射烛光；中景——六对朱红巨柱夹持宽阔中央通道；背景——七级台阶御座消隐于半明半暗中。空间比例：纪念碑式宏大，人体在此显得如蚂蚁一般微小。动态特性：熏炉白烟袅袅向上漂移，铁质枝形灯架上烛焰以约2Hz频率轻微摇曳。氛围：至高皇权与暗藏杀机，烟雾弥漫中窗口光柱内有悬浮尘埃粒子。",
+    "variant": "",
+    "parent_name": ""
+  },
+  {
+    "name": "皇宫正殿·夜",
+    "type": "interior",
+    "description": "与皇宫正殿相同空间，现处于一片黑暗中，仅每根巨柱上的火炬托架点亮——二十四支暖琥珀色火炬（2800K），将巨柱龙纹浮雕的硬边阴影投射至翡翠地面。枝形吊灯蜡烛全部熄灭。猩红丝绸龙旗在静止的空气中垂挂无风。御座台阶从深沉阴影中浮现，仅最高一级台阶和御座鎏金扶手捕捉到火炬反射。色彩调色板：主色深琥珀与阴影黑、翡翠绿地面现呈深青绿色、仅高对比度处有金色反光。禁止冷色调，禁止窗口采光。动态：各柱火炬以1.5-3Hz不规律频率摇曳，阴影随焰动脉冲。",
+    "variant": "night",
+    "parent_name": "皇宫正殿"
   }
 ]
 {% endif %}

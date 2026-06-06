@@ -74,8 +74,6 @@ type AIModel struct {
 
 	// 默认参数
 	DefaultTemperature float64 `json:"default_temperature" gorm:"type:decimal(3,2)"`
-	DefaultTopP        float64 `json:"default_top_p" gorm:"type:decimal(3,2)"`
-	DefaultTopK        int     `json:"default_top_k"`
 
 	// 状态
 	IsActive    bool `json:"is_active" gorm:"default:true"`
@@ -111,9 +109,6 @@ type TaskModelConfig struct {
 
 	// 限制
 	MaxCostPerTask float64 `json:"max_cost_per_task"`
-
-	// 质量要求
-	MinQualityScore float64 `json:"min_quality_score" gorm:"type:decimal(3,2)"`
 
 	// 策略
 	Strategy string `json:"strategy" gorm:"size:20;default:balanced"`

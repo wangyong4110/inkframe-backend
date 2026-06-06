@@ -107,9 +107,6 @@ type Video struct {
 	VisualMode  string `json:"visual_mode" gorm:"size:30;default:'standard'"` // standard/hd/3d/hd_3d
 	ThreeDStyle string `json:"three_d_style" gorm:"size:50;default:'cg'"`     // cg/pixar/anime3d/realistic3d
 
-	// 成本
-	GenerationCost float64 `json:"generation_cost" gorm:"type:decimal(10,2)"`
-
 	// 异步任务追踪
 	ProviderName string `json:"provider_name" gorm:"size:50"`             // kling/seedance
 	TaskID       string `json:"task_id" gorm:"size:255;index"`            // 外部 API 任务 ID

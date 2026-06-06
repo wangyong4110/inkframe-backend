@@ -185,7 +185,10 @@ type SceneConsistencyLog struct {
 	LightScore   float64 `gorm:"type:decimal(4,3)" json:"light_score"`
 	AtmoScore    float64 `gorm:"type:decimal(4,3)" json:"atmo_score"`
 	PropScore    float64 `gorm:"type:decimal(4,3)" json:"prop_score"`
+	TimeScore    float64 `gorm:"type:decimal(4,3);default:1" json:"time_score"`
 	Issues       string  `gorm:"type:json" json:"issues"`
+	// SuggestedFix 由 LLM 生成的下次图像生成 prompt 修正关键词（供重试时使用）
+	SuggestedFix string  `gorm:"type:text" json:"suggested_fix,omitempty"`
 	IPWeight     float64 `json:"ip_weight"`
 	Passed       bool    `json:"passed"`
 	CreatedAt    time.Time `json:"created_at"`

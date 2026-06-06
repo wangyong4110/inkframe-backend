@@ -28,6 +28,8 @@ type SceneConsistencyReport struct {
 	PropScore    float64
 	TimeScore    float64 // 时间/季节一致性
 	Issues       []SceneIssue
+	// SuggestedFix 由 LLM 生成的下次图像生成 prompt 修正关键词，NeedsRetry 时注入重试 prompt
+	SuggestedFix string
 	Passed       bool
 	NeedsRetry   bool // 0.70 <= score < 0.85
 	NeedsHuman   bool // score < 0.70
@@ -86,25 +88,28 @@ func (s *SceneConsistencyService) ScoreScene(
 	report, err := parseConsistencyResponse(raw, shot.ID, anchor.ID)
 	if err != nil {
 		logger.Printf("[SceneConsistencyService] parse failed for shot %d: %v, raw=%q", shot.ID, err, raw)
-		// 解析失败时给中性分，不阻断流程
+		// 解析失败时标记人工审核，不给高分静默通过
 		report = &SceneConsistencyReport{
 			ShotID:       shot.ID,
 			AnchorID:     anchor.ID,
-			OverallScore: 0.8,
-			ArchScore:    0.8,
-			LightScore:   0.8,
-			AtmoScore:    0.8,
-			PropScore:    0.8,
-			TimeScore:    0.8,
-			Passed:       true,
+			OverallScore: 0.5,
+			ArchScore:    0.5,
+			LightScore:   0.5,
+			AtmoScore:    0.5,
+			PropScore:    0.5,
+			TimeScore:    0.5,
+			Passed:       false,
+			NeedsHuman:   true,
 		}
 	}
 
-	// 确定是否需要重试或人工干预
-	report.NeedsRetry = report.OverallScore >= 0.70 && report.OverallScore < 0.85
-	report.NeedsHuman = report.OverallScore < 0.70
+	// 确定是否需要重试或人工干预（仅在解析成功时重新判定，parse 失败已设好）
+	if err == nil {
+		report.NeedsRetry = report.OverallScore >= 0.70 && report.OverallScore < 0.85
+		report.NeedsHuman = report.OverallScore < 0.70
+	}
 
-	// 持久化评分日志
+	// 持久化评分日志（修复：同时写入 PropScore、TimeScore、Passed 和 SuggestedFix）
 	issuesJSON, _ := json.Marshal(report.Issues)
 	logEntry := &model.SceneConsistencyLog{
 		ShotID:       shot.ID,
@@ -114,8 +119,11 @@ func (s *SceneConsistencyService) ScoreScene(
 		ArchScore:    report.ArchScore,
 		LightScore:   report.LightScore,
 		AtmoScore:    report.AtmoScore,
+		PropScore:    report.PropScore,
+		TimeScore:    report.TimeScore,
 		Issues:       string(issuesJSON),
-		Passed:       !report.NeedsHuman,
+		SuggestedFix: report.SuggestedFix,
+		Passed:       report.Passed, // 使用 report.Passed（score>=0.85），而非 !NeedsHuman
 	}
 	if err := s.logRepo.Create(logEntry); err != nil {
 		logger.Printf("[SceneConsistencyService] save log: %v", err)
@@ -144,6 +152,8 @@ type consistencyLLMResponse struct {
 	PropScore    float64      `json:"prop_score"`
 	TimeScore    float64      `json:"time_score"`
 	Issues       []SceneIssue `json:"issues"`
+	// SuggestedFix 下次图像生成的 prompt 修正关键词（score<0.85 时 LLM 填写）
+	SuggestedFix string `json:"suggested_fix"`
 }
 
 func parseConsistencyResponse(raw string, shotID, anchorID uint) (*SceneConsistencyReport, error) {
@@ -156,6 +166,14 @@ func parseConsistencyResponse(raw string, shotID, anchorID uint) (*SceneConsiste
 	if resp.TimeScore == 0 {
 		resp.TimeScore = 1.0
 	}
+	// overall_score 校验：若 LLM 未按权重公式返回，在此重算保证一致性
+	// 权重：arch×0.35 + light×0.25 + atmo×0.20 + prop×0.15 + time×0.05
+	if resp.ArchScore > 0 || resp.LightScore > 0 {
+		weighted := resp.ArchScore*0.35 + resp.LightScore*0.25 +
+			resp.AtmoScore*0.20 + resp.PropScore*0.15 + resp.TimeScore*0.05
+		// 取 LLM 给出的 overall 与加权值的均值，保留 LLM 的整体判断同时约束偏差
+		resp.OverallScore = (resp.OverallScore + weighted) / 2.0
+	}
 	return &SceneConsistencyReport{
 		ShotID:       shotID,
 		AnchorID:     anchorID,
@@ -166,6 +184,7 @@ func parseConsistencyResponse(raw string, shotID, anchorID uint) (*SceneConsiste
 		PropScore:    resp.PropScore,
 		TimeScore:    resp.TimeScore,
 		Issues:       resp.Issues,
+		SuggestedFix: resp.SuggestedFix,
 		Passed:       resp.OverallScore >= 0.85,
 	}, nil
 }
