@@ -390,28 +390,44 @@ func (s *VideoService) autoMatchShotAnchors(shots []*model.StoryboardShot, ancho
 			loc = shot.Description
 		}
 		loc = strings.ToLower(loc)
-		if loc == "" {
-			continue
-		}
-		// 精确匹配优先，其次包含匹配
-		if id, ok := anchorMap[loc]; ok {
-			id := id
-			shot.SceneAnchorID = &id
-			continue
-		}
-		for name, id := range anchorMap {
-			if strings.Contains(loc, name) || strings.Contains(name, loc) {
+
+		// tryAnchor 从给定文本中查找场景锚点，找到则设置并返回 true。
+		tryAnchor := func(text string) bool {
+			text = strings.ToLower(text)
+			if text == "" {
+				return false
+			}
+			if id, ok := anchorMap[text]; ok {
 				id := id
 				shot.SceneAnchorID = &id
-				break
+				return true
 			}
+			for name, id := range anchorMap {
+				if strings.Contains(text, name) || strings.Contains(name, text) {
+					id := id
+					shot.SceneAnchorID = &id
+					return true
+				}
+			}
+			return false
 		}
+
+		// ① location 精确/包含匹配
+		if loc != "" && tryAnchor(loc) {
+			continue
+		}
+		// ② narration 关键词扫描
+		if tryAnchor(shot.Narration) {
+			continue
+		}
+		// ③ description 关键词扫描（英文环境描述，最后兜底）
+		tryAnchor(shot.Description)
 	}
 }
 
-// autoMatchShotCharacters 按 shot.Characters JSON 中的名称匹配小说角色，写入 CharacterIDs
+// autoMatchShotCharacters 按多来源匹配小说角色，写入 CharacterIDs。
+// 匹配优先级：① shot.Characters JSON → ② shot.Dialogue "角色名：台词" → ③ shot.Narration 关键词扫描。
 // 已有 CharacterIDs 时不覆盖（保留手动绑定结果）。
-// chars 为调用方预取的数据（避免重复查 DB）。
 func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, chars []*model.Character) {
 	if len(chars) == 0 {
 		return
@@ -421,43 +437,73 @@ func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, ch
 	for _, c := range chars {
 		nameMap[strings.ToLower(c.Name)] = c.ID
 	}
+
+	// tryMatch 尝试将一个原始名称加入 matched；跳过已知占位符。
+	tryMatch := func(rawName string, seen map[uint]bool, matched *model.JSONUintSlice) {
+		nameLower := strings.ToLower(strings.TrimSpace(rawName))
+		if nameLower == "" || nameLower == "角色名" || nameLower == "character" {
+			return
+		}
+		if id, ok := nameMap[nameLower]; ok && !seen[id] {
+			*matched = append(*matched, id)
+			seen[id] = true
+			return
+		}
+		for name, id := range nameMap {
+			if strings.Contains(nameLower, name) || strings.Contains(name, nameLower) ||
+				charRuneOverlap(nameLower, name) >= charRuneOverlapThreshold {
+				if !seen[id] {
+					*matched = append(*matched, id)
+					seen[id] = true
+				}
+				return
+			}
+		}
+	}
+
 	for _, shot := range shots {
 		if len(shot.CharacterIDs) > 0 {
 			continue // 已手动绑定，不覆盖
 		}
-		// shot.Characters = JSON array: [{"name":"...","expression":"...","pose":"..."}]
-		var shotChars []struct {
-			Name string `json:"name"`
-		}
-		if shot.Characters == "" {
-			continue
-		}
-		if err := json.Unmarshal([]byte(shot.Characters), &shotChars); err != nil {
-			continue
-		}
 		var matched model.JSONUintSlice
 		seen := make(map[uint]bool)
-		for _, sc := range shotChars {
-			nameLower := strings.ToLower(sc.Name)
-			if id, ok := nameMap[nameLower]; ok {
-				if !seen[id] {
-					matched = append(matched, id)
-					seen[id] = true
-				}
-				continue
+
+		// ① Characters JSON: [{"name":"..."}]
+		if shot.Characters != "" {
+			var shotChars []struct {
+				Name string `json:"name"`
 			}
-			// 模糊匹配：子串包含 + 汉字字符级重叠（阈值 50%，适配"萧炎"vs"炎少"等写法）
-			for name, id := range nameMap {
-				if strings.Contains(nameLower, name) || strings.Contains(name, nameLower) ||
-					charRuneOverlap(nameLower, name) >= charRuneOverlapThreshold {
-					if !seen[id] {
-						matched = append(matched, id)
-						seen[id] = true
+			if err := json.Unmarshal([]byte(shot.Characters), &shotChars); err == nil {
+				for _, sc := range shotChars {
+					tryMatch(sc.Name, seen, &matched)
+				}
+			}
+		}
+
+		// ② Dialogue: "角色名：台词" — 提取冒号前的角色名
+		if len(matched) == 0 && shot.Dialogue != "" {
+			for _, sep := range []string{"：", ":"} {
+				if idx := strings.Index(shot.Dialogue, sep); idx > 0 {
+					name := shot.Dialogue[:idx]
+					if len([]rune(name)) <= 10 { // 合理的角色名长度
+						tryMatch(name, seen, &matched)
 					}
 					break
 				}
 			}
 		}
+
+		// ③ Narration: 全文扫描角色名关键词
+		if len(matched) == 0 && shot.Narration != "" {
+			narrLower := strings.ToLower(shot.Narration)
+			for name, id := range nameMap {
+				if strings.Contains(narrLower, name) && !seen[id] {
+					matched = append(matched, id)
+					seen[id] = true
+				}
+			}
+		}
+
 		if len(matched) > 0 {
 			shot.CharacterIDs = matched
 		}
