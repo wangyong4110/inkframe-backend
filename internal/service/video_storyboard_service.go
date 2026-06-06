@@ -322,7 +322,17 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 
 	// 删除旧分镜并批量插入新分镜（包裹在同一事务中，防止删除后插入失败导致数据丢失）
 	if err := s.storyboardRepo.DB().Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("video_id = ?", videoID).Delete(&model.StoryboardShot{}).Error; err != nil {
+		// 先收集旧 shot IDs，用于级联清理配音段
+		var oldShotIDs []uint
+		tx.Model(&model.StoryboardShot{}).Where("video_id = ?", videoID).Pluck("id", &oldShotIDs)
+		if len(oldShotIDs) > 0 {
+			// 物理删除孤立的配音段（soft delete 不够，外键引用已失效的行仍会留在表中）
+			if err := tx.Unscoped().Where("shot_id IN ?", oldShotIDs).Delete(&model.ShotVoiceSegment{}).Error; err != nil {
+				return err
+			}
+		}
+		// 必须物理删除（Unscoped），软删除行仍触发 uk_video_shot 唯一键冲突
+		if err := tx.Unscoped().Where("video_id = ?", videoID).Delete(&model.StoryboardShot{}).Error; err != nil {
 			return err
 		}
 		if len(shots) == 0 {
