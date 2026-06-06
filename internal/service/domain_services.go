@@ -124,15 +124,25 @@ func capableProviderDisplayName(providerName, dbDisplayName string) string {
 	return providerName
 }
 
+// normalizeProviderType canonicalizes type aliases so "tts"=="voice", "img2img"=="img2img", etc.
+func normalizeProviderType(t string) string {
+	switch strings.ToLower(t) {
+	case "tts":
+		return "voice"
+	}
+	return strings.ToLower(t)
+}
+
 // listCapableProviders returns active, key-bearing providers whose Type field matches typeFilter.
 func (s *ModelService) listCapableProviders(tenantID uint, typeFilter string) ([]CapableProvider, error) {
 	providers, err := s.providerRepo.ListByTenant(tenantID)
 	if err != nil {
 		return nil, err
 	}
+	want := normalizeProviderType(typeFilter)
 	var result []CapableProvider
 	for _, p := range providers {
-		if !p.IsActive || !strings.EqualFold(p.Type, typeFilter) {
+		if !p.IsActive || normalizeProviderType(p.Type) != want {
 			continue
 		}
 		if providerHasCredentials(p) {
