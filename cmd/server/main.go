@@ -381,7 +381,7 @@ func safeGo(name string, fn func()) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("PANIC in goroutine %s: %v", name, r)
+				logger.Errorf("PANIC in goroutine %s: %v", name, r)
 			}
 		}()
 		fn()

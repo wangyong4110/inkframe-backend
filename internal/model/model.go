@@ -4,9 +4,9 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"fmt"
-	"log"
 	"time"
 
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"gorm.io/gorm"
 )
 
@@ -94,7 +94,7 @@ func (t AsyncTask) MarshalJSON() ([]byte, error) {
 		var data interface{}
 		if err := json.Unmarshal([]byte(t.ResultJSON), &data); err != nil {
 			// ResultJSON 损坏时记录警告，避免静默丢失数据
-			log.Printf("[AsyncTask] task %s: ResultJSON unmarshal failed: %v", t.TaskID, err)
+			logger.Errorf("[AsyncTask] task %s: ResultJSON unmarshal failed: %v", t.TaskID, err)
 		} else {
 			m["data"] = data
 		}

@@ -1,11 +1,11 @@
 package router
 
 import (
-	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/handler"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/middleware"
 	"github.com/inkframe/inkframe-backend/internal/service"
 	"github.com/redis/go-redis/v9"
@@ -72,7 +72,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		trustedProxies = []string{"127.0.0.1", "::1"}
 	}
 	if err := r.SetTrustedProxies(trustedProxies); err != nil {
-		log.Printf("[Router] SetTrustedProxies warning: %v", err)
+		logger.Errorf("[Router] SetTrustedProxies: %v", err)
 	}
 
 	// 全局中间件
