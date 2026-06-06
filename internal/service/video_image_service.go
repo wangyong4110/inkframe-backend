@@ -274,9 +274,9 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, pro
 				logger.Printf("BatchGenerateShotImages: shot %d image ready", sh.ShotNo)
 			} else {
 				logger.Printf("BatchGenerateShotImages: shot %d failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
-				_ = s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
-					"status": "failed",
-				})
+				if e := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{"status": "failed"}); e != nil {
+					logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d status=failed: %v", sh.ID, e)
+				}
 			}
 		}(shot, gIdx)
 	}
@@ -901,10 +901,9 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 			if frameErr != nil {
 				errMsg = "image generation failed: " + frameErr.Error()
 			}
-			_ = s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{
-				"status":        "failed",
-				"error_message": errMsg,
-			})
+			if e := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"status": "failed", "error_message": errMsg}); e != nil {
+				logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d status=failed: %v", shot.ID, e)
+			}
 			if frameErr != nil {
 				return frameErr
 			}

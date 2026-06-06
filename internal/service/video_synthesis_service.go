@@ -177,7 +177,7 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 				if totalShots > 0 {
 					n := int(atomic.AddInt32(&doneDownloads, 1))
 					pct := 10 + n*60/totalShots
-					_ = s.videoRepo.UpdateFields(videoID, map[string]interface{}{"progress": pct})
+					if e := s.videoRepo.UpdateFields(videoID, map[string]interface{}{"progress": pct}); e != nil { logger.Errorf("[VideoService] videoRepo.UpdateFields progress videoID=%d: %v", videoID, e) }
 				}
 			}(i, shot)
 
@@ -234,7 +234,7 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 				if totalShots > 0 {
 					n := int(atomic.AddInt32(&doneDownloads, 1))
 					pct := 10 + n*60/totalShots
-					_ = s.videoRepo.UpdateFields(videoID, map[string]interface{}{"progress": pct})
+					if e := s.videoRepo.UpdateFields(videoID, map[string]interface{}{"progress": pct}); e != nil { logger.Errorf("[VideoService] videoRepo.UpdateFields progress videoID=%d: %v", videoID, e) }
 				}
 			}(i, shot, remoteURL, clipFile)
 		}
@@ -272,10 +272,9 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 			os.Remove(res.imgFile)
 			if clipErr != nil {
 				logger.Printf("[StitchVideo] shot %d: still frame failed: %v — skipping", shot.ShotNo, clipErr)
-				_ = s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{
-					"status":        "failed",
-					"error_message": fmt.Sprintf("still frame generation failed: %v", clipErr),
-				})
+				if e := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"status": "failed", "error_message": fmt.Sprintf("still frame generation failed: %v", clipErr)}); e != nil {
+					logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d: %v", shot.ID, e)
+				}
 				continue
 			}
 			logger.Printf("[StitchVideo] shot %d: image clip ready: %s", shot.ShotNo, videoClipPath)
@@ -548,10 +547,9 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 				if shot.ShotTaskID == "" {
 					if err := s.GenerateShotVideo(shot, aspectRatio); err != nil {
 						logger.Printf("[PollAndStitch] GenerateShotVideo shot %d failed: %v", shot.ID, err)
-						_ = s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{
-							"status":        "failed",
-							"error_message": fmt.Sprintf("generation failed: %v", err),
-						})
+						if e := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"status": "failed", "error_message": fmt.Sprintf("generation failed: %v", err)}); e != nil {
+							logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d: %v", shot.ID, e)
+						}
 					}
 				}
 			}
@@ -577,7 +575,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 			if vid, err := s.videoRepo.GetByID(videoID); err == nil && vid != nil && vid.Status == "generating" {
 				vid.Status = "failed"
 				vid.ErrorMessage = fmt.Sprintf("video generation stalled: no progress for %.0f minutes", heartbeatStallDuration.Minutes())
-				_ = s.videoRepo.Update(vid)
+				if e := s.videoRepo.Update(vid); e != nil { logger.Errorf("[VideoService] videoRepo.Update videoID=%d: %v", vid.ID, e) }
 			}
 			return
 		}
@@ -616,7 +614,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 				if vid, err := s.videoRepo.GetByID(videoID); err == nil && vid.Status == "generating" {
 					vid.Status = "failed"
 					vid.ErrorMessage = "generation stalled (no progress)"
-					_ = s.videoRepo.Update(vid)
+					if e := s.videoRepo.Update(vid); e != nil { logger.Errorf("[VideoService] videoRepo.Update videoID=%d: %v", vid.ID, e) }
 				}
 				return
 			}

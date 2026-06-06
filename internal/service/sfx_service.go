@@ -21,6 +21,7 @@ type sfxHit struct {
 	url          string
 	source       string
 	durationSecs float64 // 音效时长（秒）；0 = 未知
+	noCache      bool    // true = 不缓存此结果（CDN 临时链接未持久化到存储）
 }
 
 // sfxCacheEntry caches API search results to avoid duplicate requests for the same query.
@@ -376,11 +377,16 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 		})
 		if err == nil {
 			for _, a := range assets {
-				if a.StorageURL != "" {
-					logger.Printf("[SFXService] shot %d asset-lib hit tag=%q (%.1fs)", shot.ID, item.Tag, a.Duration)
-					_ = s.assetRepo.IncrUseCount(a.ID)
-					return sfxHit{url: a.StorageURL, source: mapSFXSource(a.Source), durationSecs: a.Duration}
+				if a.StorageURL == "" {
+					continue
 				}
+				// 跳过 platform（ai-sfx）来源的外部 https CDN URL——可能已过期
+				if a.Source == "platform" && strings.HasPrefix(a.StorageURL, "https://") {
+					continue
+				}
+				logger.Printf("[SFXService] shot %d asset-lib hit tag=%q (%.1fs)", shot.ID, item.Tag, a.Duration)
+				_ = s.assetRepo.IncrUseCount(a.ID)
+				return sfxHit{url: a.StorageURL, source: mapSFXSource(a.Source), durationSecs: a.Duration}
 			}
 		}
 	}
@@ -393,17 +399,23 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 		}
 		if u, dur, err := s.aiSvc.GenerateSFX(ctx, tenantID, aiPrompt, sfxDur); err == nil && u != "" {
 			// Kling SFX 等返回 CDN 临时链接（24~48h 后过期）；
-			// 生成后立即下载并上传 OSS，保证长期可访问。
+			// 生成后立即下载并上传存储，保证长期可访问。
+			// 上传成功 → 永久 URL，可以缓存；上传失败 → 继续使用 CDN URL，但标记不缓存。
+			noCacheFlag := false
 			if s.storageSvc != nil && strings.HasPrefix(u, "https://") {
 				ossKey := fmt.Sprintf("sfx/video_%d/shot_%d_ai.mp3", shot.VideoID, shot.ID)
 				if ossURL, uploadErr := downloadURLAndUploadToOSS(ctx, s.storageSvc, u, ossKey); uploadErr == nil {
 					u = ossURL
 				} else {
-					logger.Printf("[SFXService] shot %d AI-SFX OSS upload failed (using CDN URL): %v", shot.ID, uploadErr)
+					logger.Printf("[SFXService] shot %d AI-SFX upload failed (using CDN URL, noCache): %v", shot.ID, uploadErr)
+					noCacheFlag = true
 				}
+			} else if strings.HasPrefix(u, "https://") {
+				// 无存储服务，CDN 临时链接不缓存
+				noCacheFlag = true
 			}
-			logger.Printf("[SFXService] shot %d AI-SFX hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
-			return sfxHit{url: u, source: "ai-sfx", durationSecs: dur}
+			logger.Printf("[SFXService] shot %d AI-SFX hit tag=%q (%.1fs) noCache=%v", shot.ID, item.Tag, dur, noCacheFlag)
+			return sfxHit{url: u, source: "ai-sfx", durationSecs: dur, noCache: noCacheFlag}
 		} else if err != nil && !isNoProviderErr(err) {
 			logger.Printf("[SFXService] shot %d AI-SFX failed tag=%q: %v", shot.ID, item.Tag, err)
 		}
@@ -708,7 +720,7 @@ func (s *SFXService) cachedQuery(cacheKey string, fn func() sfxHit) sfxHit {
 		s.queryCache.Delete(cacheKey)
 	}
 	hit := fn()
-	if hit.url != "" {
+	if hit.url != "" && !hit.noCache {
 		s.queryCache.Store(cacheKey, sfxCacheEntry{
 			url: hit.url, source: hit.source, durationSecs: hit.durationSecs,
 			expiresAt: time.Now().Add(sfxCacheTTL),
@@ -737,6 +749,11 @@ func (s *SFXService) saveToAssetLibrary(ctx context.Context, shot *model.Storybo
 
 	for _, item := range items {
 		if item.URL == "" {
+			continue
+		}
+		// ai-sfx 来源：仅当 URL 已持久化（相对路径 /api/ 或 /uploads/，而非外部 CDN https://）时才入库。
+		// CDN 临时链接过期后会导致素材库命中返回失效 URL，跳过入库避免污染。
+		if item.Source == "ai-sfx" && strings.HasPrefix(item.URL, "https://") {
 			continue
 		}
 		// 去重：同 URL 已存在则跳过
