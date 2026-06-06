@@ -415,9 +415,21 @@ func seedAIModels(db *gorm.DB) {
 		// 视频
 		{"kling", "kling-v1-6", "可灵 v1.6", []string{"video_gen"}, 0.9, 0},
 		{"seedance", "seedance-01-lite", "Seedance 01 Lite", []string{"video_gen"}, 0.88, 0},
-		// 豆包语音合成 V3（seed-tts 系列）
-		{"doubao-speech", "seed-tts-2.0", "豆包 Seed TTS 2.0", []string{"voice_gen"}, 0.92, 0},
-		{"doubao-speech", "seed-tts-1.0", "豆包 Seed TTS 1.0", []string{"voice_gen"}, 0.88, 0},
+		// 豆包语音合成 V3（seed-tts 资源端点，不是音色 ID，不应出现在音色选择列表中）
+		{"doubao-speech", "seed-tts-2.0", "豆包 Seed TTS 2.0（资源端点）", []string{"tts_resource"}, 0.92, 0},
+		{"doubao-speech", "seed-tts-1.0", "豆包 Seed TTS 1.0（资源端点）", []string{"tts_resource"}, 0.88, 0},
+		// 豆包语音合成 V3 月亮系列（seed-tts-2.0 资源下的发音人，供角色音色选择）
+		// 对应 AudioGenerate req.Voice，资源端点由 provider 的 APIVersion 字段决定（默认 seed-tts-2.0）
+		{"doubao-speech", "zh_female_shuangkuaisisi_moon_bigtts", "爽快思思", []string{"voice_gen"}, 0.92, 0},
+		{"doubao-speech", "zh_male_jingqiangkanye_moon_bigtts", "精英男声", []string{"voice_gen"}, 0.91, 0},
+		{"doubao-speech", "zh_female_linjingzhu_moon_bigtts", "甜美林静竹", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech", "zh_male_chunhou_moon_bigtts", "醇厚男声", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech", "zh_female_wanqingxiaochun_moon_bigtts", "温情晓春", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech", "zh_male_zhubo_moon_bigtts", "主播男声", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech", "zh_female_qingche_moon_bigtts", "清澈女声", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech", "zh_male_yusheng_moon_bigtts", "浑厚低沉男声", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech", "zh_female_wenrou_moon_bigtts", "温柔女声", []string{"voice_gen"}, 0.90, 0},
+		{"doubao-speech", "zh_male_chengshu_moon_bigtts", "成熟男声", []string{"voice_gen"}, 0.90, 0},
 		// 豆包语音合成 V1（appid/token 鉴权，volcano_mega 集群，豆包2.0大模型音色）
 		// ── 通用场景 ──────────────────────────────────────────────────
 		{"doubao-speech-v1", "zh_female_vv_uranus_bigtts", "Vivi 2.0", []string{"voice_gen"}, 0.92, 0},

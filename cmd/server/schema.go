@@ -8,7 +8,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-06-06-v4"
+const schemaVersion = "2026-06-06-v5"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -346,6 +346,18 @@ func autoMigrate(db *gorm.DB) error {
 		IF(appearance != '' AND appearance IS NOT NULL, appearance, NULL)
 	) WHERE (category IS NOT NULL AND category != '') OR (appearance IS NOT NULL AND appearance != '')`).Error; err != nil {
 		logger.Warnf("autoMigrate: item description migration failed: %v", err)
+	}
+
+	// 数据迁移（2026-06-06-v5）：修正 doubao-speech 的 seed-tts-2.0/1.0 任务类型
+	// 这两个是资源端点 ID，不应出现在角色音色选择列表（voice_gen）中
+	if err := db.Exec(`UPDATE ink_ai_model m
+		JOIN ink_model_provider p ON p.id = m.provider_id AND p.deleted_at IS NULL
+		SET m.suitable_tasks = '["tts_resource"]', m.is_available = 0
+		WHERE p.name = 'doubao-speech'
+		  AND m.name IN ('seed-tts-2.0', 'seed-tts-1.0')
+		  AND m.deleted_at IS NULL
+		  AND m.suitable_tasks LIKE '%voice_gen%'`).Error; err != nil {
+		logger.Warnf("autoMigrate: doubao-speech task fix failed: %v", err)
 	}
 
 	// 迁移成功后写入新版本号（UPSERT）
