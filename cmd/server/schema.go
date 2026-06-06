@@ -145,9 +145,9 @@ func ensureCriticalColumns(db *gorm.DB) {
 // 使用 information_schema 检查列存在性，幂等安全，可重复调用。
 func dropLegacyCharacterColumns(db *gorm.DB) {
 	legacy := []struct{ table, col string }{
-		// ink_character: Gender/Archetype/Appearance/Personality/Background/Relations/
+		// ink_character: Archetype/Appearance/Personality/Background/Relations/
 		// CharacterArc/DialogueStyle/VisualDesign/CoverImage → 合并为 Description
-		{"ink_character", "gender"},
+		// gender/age 保留（结构体仍在使用）
 		{"ink_character", "archetype"},
 		{"ink_character", "appearance"},
 		{"ink_character", "personality"},
