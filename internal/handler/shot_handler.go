@@ -585,7 +585,7 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 		return
 	}
 
-	go func(taskID string, shot *model.StoryboardShot, narrationVoice string, subtitleEnabled bool) {
+	go func(taskID string, shot *model.StoryboardShot, narrationVoice string, subtitleEnabled bool, vID uint) {
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Printf("[VideoHandler] GenerateShotVoice task %s panic: %v", taskID, r)
@@ -613,7 +613,7 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 		}
 		h.taskSvc.UpdateProgress(taskID, 90) //nolint:errcheck
 
-		result := gin.H{"audio_url": shot.AudioPath, "shot_id": shot.ID}
+		result := gin.H{"audio_url": resolveAudioURL(vID, shot), "shot_id": shot.ID}
 		if subtitleEnabled {
 			srt := service.GenerateShotSRT(shot)
 			if srt != "" {
@@ -621,7 +621,7 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 			}
 		}
 		h.taskSvc.Complete(taskID, result) //nolint:errcheck
-	}(task.TaskID, shot, req.NarrationVoice, req.SubtitleEnabled)
+	}(task.TaskID, shot, req.NarrationVoice, req.SubtitleEnabled, uint(videoID))
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
