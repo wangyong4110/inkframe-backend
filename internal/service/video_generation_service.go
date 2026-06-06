@@ -996,10 +996,26 @@ func (b *ImagePromptBuilder) BuildVisualPrompt(shot *StoryboardShot, config *Ima
 	}
 
 	// 风格标签 + 风格特定质量词
+	// 优先匹配 IMAGE_PRESETS 定义的 15 种风格 ID（与 resolveStyleDesc 保持一致），
+	// 保留旧有键名（ink_wash / 3d_* / cinematic）以兼容历史视频配置。
 	styleQualityTokens := map[string]string{
-		"realistic":    "8K uhd, photorealistic, film grain, anamorphic lens, RAW photo, professional photography",
-		"anime":        "anime style, key visual, vibrant colors, detailed linework, Studio Ghibli quality",
-		"watercolor":   "watercolor painting style, soft edges, transparent washes, painterly, flowing colors",
+		// IMAGE_PRESETS 15 种风格
+		"realistic":         "8K uhd, photorealistic, film grain, anamorphic lens, RAW photo, professional photography",
+		"anime":             "anime style, key visual, vibrant colors, detailed linework, Studio Ghibli quality",
+		"chinese_animation": "Chinese animation style, bold outlines, vibrant colors, dynamic linework, guoman aesthetic",
+		"ink_painting":      "Chinese ink wash painting, 水墨风格, monochromatic, elegant brushwork, traditional",
+		"xianxia_style":     "ancient Chinese immortal cultivation style, 仙侠国风, ethereal atmosphere, flowing robes, misty mountains",
+		"cyberpunk":         "cyberpunk neon noir, holographic glitch, rain-slicked streets, high-tech low-life, vivid neon palette",
+		"oil_painting":      "oil painting style, thick impasto texture, rich deep colors, classical master technique, painterly",
+		"watercolor":        "watercolor painting style, soft edges, transparent washes, painterly, flowing colors",
+		"pixel_art":         "pixel art style, retro game aesthetic, clean sharp pixels, 8-bit or 16-bit resolution",
+		"sketch":            "pencil sketch style, delicate linework, cross-hatching, monochrome graphite shading",
+		"render_3d":         "3D render, ray tracing, volumetric lighting, subsurface scattering, high-fidelity 3D",
+		"ukiyo_e":           "ukiyo-e woodblock print style, flat color blocks, bold outlines, Edo period Japanese aesthetic",
+		"gothic_dark":       "gothic dark fantasy style, deep shadows, ornate dark details, moody atmospheric lighting",
+		"steampunk":         "steampunk Victorian machinery aesthetic, brass and copper tones, gears and steam, retro-futuristic",
+		"game_concept":      "game concept art style, detailed environment design, polished illustration, professional game art",
+		// 旧有键名（兼容历史数据）
 		"ink_wash":     "Chinese ink wash painting, 水墨风格, monochromatic, elegant brushwork, traditional",
 		"cinematic":    "cinematic 4K, anamorphic lens, color graded, shallow DOF, Arri Alexa, film grain",
 		"3d_cg":        "3D CGI animation, ray tracing, volumetric lighting, subsurface scattering, photorealistic 3D render, high-fidelity 3D",

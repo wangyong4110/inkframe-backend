@@ -792,18 +792,28 @@ func (s *CharacterService) DeleteChapterCharacter(chapterID, characterID uint) e
 }
 
 func (s *CharacterService) GenerateProfile(tenantID uint, novelID uint, description string) (*model.Character, error) {
-	prompt := fmt.Sprintf("根据以下描述生成小说角色档案：%s\n以JSON格式返回：{\"name\":\"角色名\",\"role\":\"protagonist/antagonist/supporting\",\"description\":\"外貌、性格、背景等综合描述\"}", description)
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "character_profile", prompt, "")
+	prompt := fmt.Sprintf(`根据以下描述生成小说角色档案：%s
+
+请以单个JSON对象格式返回，包含以下字段：
+{
+  "name": "角色名",
+  "role": "protagonist/antagonist/supporting",
+  "description": "连贯段落，涵盖外貌概述、性格特点、背景故事、说话风格，200字以内",
+  "visual_prompt": "专业角色造型描述，最少150字，按顺序覆盖：[1]性别体型 [2]面部骨骼 [3]眼睛 [4]眉毛眼妆 [5]鼻唇 [6]肤色肌感 [7]发型 [8]服装逐层 [9]鞋履 [10]配饰道具 [11]体态 [12]色彩叙事（主色/辅色/点缀色+象征含义）[13]整体廓形（1-3词）[14]标志性造型元素（具体描述）[15]造型逻辑（2句话说明造型与角色内心的关联）。禁止出现画风、质量标签或渲染词汇。"
+}`, description)
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "character_profile", prompt, "",
+		StoryboardOverrides{MaxTokens: 4096})
 	if err != nil {
 		return nil, err
 	}
 
 	var profile struct {
-		Name        string `json:"name"`
-		Role        string `json:"role"`
-		Description string `json:"description"`
+		Name         string `json:"name"`
+		Role         string `json:"role"`
+		Description  string `json:"description"`
+		VisualPrompt string `json:"visual_prompt"`
 	}
-	if err := json.Unmarshal([]byte(extractJSON(result)), &profile); err != nil {
+	if err := json.Unmarshal([]byte(extractJSONObject(strings.TrimSpace(result))), &profile); err != nil {
 		return &model.Character{
 			UUID:        uuid.New().String(),
 			NovelID:     novelID,
@@ -814,12 +824,13 @@ func (s *CharacterService) GenerateProfile(tenantID uint, novelID uint, descript
 		}, nil
 	}
 	return &model.Character{
-		UUID:        uuid.New().String(),
-		NovelID:     novelID,
-		Name:        profile.Name,
-		Role:        profile.Role,
-		Description: profile.Description,
-		Status:      "active",
+		UUID:         uuid.New().String(),
+		NovelID:      novelID,
+		Name:         profile.Name,
+		Role:         profile.Role,
+		Description:  profile.Description,
+		VisualPrompt: profile.VisualPrompt,
+		Status:       "active",
 	}, nil
 }
 
@@ -1341,6 +1352,46 @@ func resolveStyleDesc(style string) string {
 	}
 	return "日系动漫插画"
 }
+
+// resolveStyleCategory 将风格 ID 归入大类，用于选择匹配的质量提升词。
+// 返回值："realistic" / "anime" / "classic_illustration" / "dark_stylized" / "pixel" / "render_3d" / "" (未知)
+func resolveStyleCategory(styleID string) string {
+	switch styleID {
+	case "realistic", "game_concept":
+		return "realistic"
+	case "anime", "chinese_animation", "ukiyo_e":
+		return "anime"
+	case "ink_painting", "xianxia_style", "watercolor", "oil_painting":
+		return "classic_illustration"
+	case "cyberpunk", "steampunk", "gothic_dark":
+		return "dark_stylized"
+	case "pixel_art", "sketch":
+		return "pixel"
+	case "render_3d":
+		return "render_3d"
+	}
+	return ""
+}
+
+// resolveStyleQualityTokens 返回与风格匹配的英文质量提升词串，末尾不加逗号。
+// 场景图和角色图共用同一套质量词，保证输出基准一致。
+func resolveStyleQualityTokens(styleID string) string {
+	switch resolveStyleCategory(styleID) {
+	case "realistic":
+		return "masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting"
+	case "render_3d":
+		return "masterpiece, best quality, ultra-detailed, 3D render, ray tracing, volumetric lighting, high-fidelity 3D"
+	case "pixel":
+		return "masterpiece, best quality, crisp pixel art, clean sharp pixels, retro game aesthetic"
+	case "classic_illustration":
+		return "masterpiece, best quality, ultra-detailed, exquisite brushwork, vibrant colors, professional illustration"
+	case "dark_stylized":
+		return "masterpiece, best quality, ultra-detailed, dramatic atmosphere, vibrant colors, professional digital art"
+	default: // anime, unknown
+		return "masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
+	}
+}
+
 
 // resolveGenderInfo returns (promptTag, negativeFragment) for a given gender.
 // promptTag is the booru-style leading token for positive prompts ("1boy" / "1girl" / "中性" / "").

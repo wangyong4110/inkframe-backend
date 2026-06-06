@@ -655,13 +655,18 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		lensType = "standard lens 50mm"
 	}
 
+	// 将风格 ID 解析为图像模型可识别的中文描述词，与 GenerateThreeViewSheet / GenerateFaceCloseupImage 保持一致。
+	// 无条件注入（不做 Contains 检查）：LLM 生成的分镜 prompt 可能使用旧风格词，以项目当前设置为最终权威。
+	styleDesc := ""
+	if artStyle != "" {
+		styleDesc = resolveStyleDesc(artStyle) + "风格"
+	}
+
 	if shot.Prompt != "" {
 		// LLM 生成的 image_prompt 已完整，只在最前端注入项目级画面风格和色调。
-		// 画面风格无条件注入（不做 Contains 检查）：LLM 嵌入的风格词可能与项目当前设置不一致
-		// （如分镜生成时为"anime"但现在改为"古风仙侠"），以项目设置为最终权威，置于 prompt 首位。
 		var prefix string
-		if artStyle != "" {
-			prefix += artStyle + " style, "
+		if styleDesc != "" {
+			prefix += styleDesc + ", "
 		}
 		if kw := colorGradeToPromptKeyword(colorGrade); kw != "" {
 			prefix += kw + ", "
@@ -675,33 +680,16 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		if kw := colorGradeToPromptKeyword(colorGrade); kw != "" {
 			cinematicImgPrefix = kw + ", " + cinematicImgPrefix
 		}
-		if artStyle != "" {
-			cinematicImgPrefix = artStyle + " style, " + cinematicImgPrefix
+		if styleDesc != "" {
+			cinematicImgPrefix = styleDesc + ", " + cinematicImgPrefix
 		}
 		promptText = cinematicImgPrefix + promptText
 	}
 
-	// 画质词兜底：旧格式分镜（storyboard.j2）或 description 降级路径不含画质词，
-	// 此处统一补齐，确保新旧分镜生成图片质量基准一致。
-	// 画质词按风格分三类：写实摄影、插画/漫画/动漫、古风/仙侠/水墨（默认归为插画类）
+	// 画质词兜底：旧格式分镜或 description 降级路径不含画质词，统一补齐。
+	// 使用 resolveStyleQualityTokens 按风格 ID 分类，覆盖全部 15 种预设风格。
 	if !strings.Contains(strings.ToLower(promptText), "masterpiece") {
-		artLow := strings.ToLower(artStyle)
-		isRealistic := strings.Contains(artLow, "realistic") || strings.Contains(artLow, "写实") ||
-			strings.Contains(artLow, "photorealistic") || strings.Contains(artLow, "photography")
-		isIllustration := strings.Contains(artLow, "anime") || strings.Contains(artLow, "cartoon") ||
-			strings.Contains(artLow, "illustration") || strings.Contains(artLow, "动漫") ||
-			strings.Contains(artLow, "动画") || strings.Contains(artLow, "漫画") ||
-			strings.Contains(artLow, "古风") || strings.Contains(artLow, "仙侠") ||
-			strings.Contains(artLow, "水墨") || strings.Contains(artLow, "xianxia") ||
-			strings.Contains(artLow, "wuxia") || strings.Contains(artLow, "ink painting")
-		if isRealistic {
-			promptText += ", masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting"
-		} else if isIllustration {
-			promptText += ", masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
-		} else {
-			// 未知风格默认使用插画类画质词（更通用，适配大多数非写实风格）
-			promptText += ", masterpiece, best quality, ultra-detailed, vibrant colors, professional digital art"
-		}
+		promptText += ", " + resolveStyleQualityTokens(artStyle)
 	}
 
 	// 二次读取场景锚点参考图（仅在有角色参考图时才追加）：

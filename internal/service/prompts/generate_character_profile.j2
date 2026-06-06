@@ -9,15 +9,47 @@
 {{ Summaries }}
 
 # 要求
-1. appearance：详细外貌，包含身高体型、发色发型、眼睛颜色神态、面部特征、常见服装
-2. personality：深度性格，包含核心特质、行为模式、内在矛盾
+1. appearance：外貌概述，一段话，100字以内（与 visual_prompt 互补，此处侧重叙事印象）
+2. personality：深度性格，包含核心特质、行为模式、内在矛盾与核心恐惧
 3. personality_tags：3-5个短标签，每个不超过4字，如["孤傲冷峻","腹黑算计"]
 4. background：详细背景，包含出身、成长经历、重要转折
 5. character_arc：角色成长轨迹，描述起点、关键转变、最终归宿
 6. abilities：核心能力，每项包含 name 和 description
 7. dialogue_style：说话风格（vocabulary_level / patterns 2-4条 / speech_habits 一句话总结）
-{% if PromptLanguage == "en" %}8. visual_prompt (English): image generation prompt in English, max 150 words. Focus only on character appearance (body, face, hair, outfit, accessories, posture). Do NOT include art style, quality boosters, or rendering tags.{% else %}8. visual_prompt（中文）：中文图像生成提示词，不超过150字。只描述角色外观（身形、面部、发型、服装、配饰、体态），禁止出现画风、质量标签或渲染词汇。{% endif %}
-9. archetype：角色原型，如英雄、智者、导师、反派、守护者、叛逆者等
+8. archetype：角色原型，如英雄、智者、导师、反派、守护者、叛逆者等
+{% if PromptLanguage == "en" %}9. visual_prompt (English): professional character styling prompt for image generation. **Minimum 250 words.** Must cover ALL 15 dimensions below in order. Do NOT include any art style, quality boosters, or rendering tags:
+
+   [1] GENDER & BUILD: gender, apparent age range, ethnicity, height impression, overall body type (petite/tall/athletic/slender/voluptuous/stocky etc.), shoulder width, waist-to-hip ratio, limb proportions
+   [2] FACIAL STRUCTURE: face shape (oval/round/square/heart/diamond/long), three-zone proportion (forehead height, midface length, chin length), cheekbone prominence, jawline definition, chin shape, eye spacing (close-set/standard/wide-set)
+   [3] EYES: eye shape (almond/round/hooded/monolid/upturned/downturned/phoenix), size relative to face, iris color with precise hue (e.g. "warm amber", "steel grey-blue", "deep obsidian"), pupil visibility, default gaze direction and emotional quality
+   [4] BROWS & EYE MAKEUP: eyebrow shape (arch height, tail angle, head position), brow thickness and density, brow color tone; eye makeup: eyeliner style (none/tight-line/winged cat-eye/full-line), eyeshadow color and blend range, lash length and curl
+   [5] NOSE & LIPS: nose bridge height (flat/medium/high), nose tip shape (rounded/pointed/bulbous/upturned), nostril width; lip fullness (thin/medium/full), cupid's bow definition, lip color (bare/tinted/bold red etc.), lip texture (matte/glossy/gradient-stained)
+   [6] SKIN: skin tone with precise descriptor (e.g. "cool porcelain", "warm ivory", "golden tan", "deep mahogany"), surface finish (matte/dewy/satin), any notable features (freckles, birthmarks, scars, tattoos — exact location and description)
+   [7] HAIR: exact color (base tone + any highlights/ombre/dye pattern), natural vs. chemically treated, texture (bone-straight/wavy/loose-curl/tight-curl), density, length (to which body landmark), styling method (loose/ponytail/braided/pinned — specific shape and structure), hairline shape, bangs type (none/curtain/blunt/wispy/side-swept)
+   [8] OUTFIT — LAYER BY LAYER: from innermost to outermost, for each garment: item name, silhouette/cut (fitted/oversized/A-line/structured/draped), neckline type, sleeve style, hem length, fabric type (silk/linen/leather/knit/sheer etc.), fabric surface (matte/glossy/textured/sheer), primary color + accent colors, signature decorative details (embroidery pattern, print, metal hardware, trim etc.)
+   [9] FOOTWEAR: shoe type, heel height, material, color, notable details
+   [10] ACCESSORIES & PROPS: each piece separately — item name, material (gold/silver/jade/leather/crystal etc.), style register (minimalist/ornate/ethnic/futuristic), placement on body, and how it signals character identity, social status, or power; weapons or signature props described in full
+   [11] POSTURE & GESTURE: default standing or sitting posture, habitual hand or arm position, any characteristic lean or tilt that reveals personality
+   [12] COLOR STORY: list the complete coordinated palette as: primary color (name + ~percentage of total look) / secondary color / accent color. Describe how the colors interact and what emotional or symbolic impression this palette creates for this specific character
+   [13] OVERALL SILHOUETTE: in 1-3 words, the shape of the complete look from a distance (e.g. "inverted triangle", "elongated column", "hourglass", "A-line drama", "asymmetric angular")
+   [14] SIGNATURE ICONIC ELEMENT: the single most memorable visual detail — the one element that would make this character instantly recognizable in a lineup. Be specific: not "a sword" but "a corroded short bronze sword with a cracked jade pommel worn edge-forward through the belt"
+   [15] STYLING NARRATIVE: 2-3 sentences explaining how the complete look expresses this character's inner world, social position, and story arc — the "why" behind the styling choices{% else %}9. visual_prompt（中文）：专业角色造型描述，用于图像生成。**最少250字**。必须按顺序覆盖以下全部15个维度，禁止添加任何画风、质量标签或渲染词汇：
+
+   [1] 性别与体型：性别、年龄感区间、种族特征、身高印象、整体体型（娇小/高挑/运动/纤细/丰腴/壮实等）、肩宽印象、腰臀比例、四肢比例
+   [2] 面部骨骼结构：脸型（鹅蛋/圆/方/心形/菱形/长形）、三庭比例（额高/中庭/下庭的长度关系）、颧骨突出程度、下颌线清晰度、下巴形态（尖/圆/方）、眼距（近/标准/宽）
+   [3] 眼睛：眼型（杏眼/圆眼/丹凤眼/单眼皮/上扬/下垂）、眼睛相对脸的大小、瞳色（精确色调，如"暖琥珀色"/"钢铁灰蓝"/"深邃漆黑"）、瞳孔可见度、默认目光方向与情感质感
+   [4] 眉毛与眼部妆容：眉形（眉峰高度、眉尾走向、眉头位置）、眉毛粗细与密度、眉色色调；眼妆：眼线类型（无/内眼线/上扬猫眼/全包眼线），眼影颜色与晕染范围，睫毛长度与卷翘度
+   [5] 鼻部与唇部：鼻梁高度（塌/中等/高挺）、鼻头形态（圆润/尖挺/宽阔/上翘）、鼻翼宽窄；唇部丰厚度（薄/适中/丰厚）、唇峰清晰度、唇色（裸唇/染唇/正红/深红等）、唇面质感（哑光/水润/渐变）
+   [6] 肤色与肌肤：精确肤色描述词（如"冷调瓷白"/"暖象牙"/"健康小麦"/"深棕"）、肤感（哑光/水光/绸缎感）、特殊标记（雀斑/胎记/疤痕/纹身——精确位置与描述）
+   [7] 发型：发色（底色色调+挑染/渐染/ombre效果）、天然发质 vs 烫染后状态、发丝质感（骨直/微卷/大波浪/自然卷/爆炸卷）、发量密度、发长（到哪个身体部位为参照）、造型方式（散披/马尾/编发/盘发——具体形态与结构）、发际线形状与刘海类型（无/中分/斜刘海/空气刘海/齐刘海）
+   [8] 服装逐层描述：从内到外，每件衣物单独描述：品类名称、廓形/版型（修身/宽松/A字/廓形结构/垂坠等）、领口类型、袖型、下摆长度、面料（真丝/亚麻/皮革/针织/薄纱等）、面料质感（哑面/亮面/透明感/厚重感）、主色+辅色搭配、标志性装饰细节（刺绣纹样/印花图案/金属扣件/拼接方式等）
+   [9] 鞋履：鞋型、跟高、材质、颜色、值得一提的细节
+   [10] 配饰与道具：逐件描述——配件名称、材质（黄金/925银/翡翠/皮革/水晶等）、风格档次（极简/繁复/民族风/未来感）、佩戴位置，以及其与角色身份、社会地位或能力的关联；若有武器或标志性道具，需完整描述
+   [11] 体态与习惯动作：默认站姿或坐姿、惯常手臂位置、能揭示性格的特征性倾斜或姿势
+   [12] 色彩叙事：将完整造型的色彩作为一个系统列出：主色（名称+占整体约几成）/辅色/点缀色。描述这套色彩组合如何互动，以及它为这个特定角色创造出怎样的情感基调或象征含义
+   [13] 整体廓形：用1-3个词描述完整造型从远处看的形状语言（如"倒三角廓形"、"修长立柱形"、"沙漏型"、"A字戏剧感"、"不对称棱角感"）
+   [14] 标志性造型元素：这个角色最令人难忘的单一视觉细节——在人群中一眼认出的那个元素。要具体而非笼统：不是"一把剑"，而是"一把镶嵌碎裂碧玉剑柄的锈蚀短铜剑，正向穿过腰带佩戴"
+   [15] 造型逻辑：用2-3句话阐述整套造型如何表达这个角色的内心世界、社会地位与故事弧光——造型选择背后的"为什么"{% endif %}
 10. 严格输出单个 JSON 对象，不含任何说明文字
 
 # 输出格式（单个 JSON 对象）
@@ -25,7 +57,7 @@
   "name": "{{ CharacterName }}",
   "role": "{{ CharacterRole }}",
   "archetype": "角色原型",
-  "appearance": "...",
+  "appearance": "叙事性外貌概述，100字以内",
   "personality": "...",
   "personality_tags": ["...", "..."],
   "background": "...",
@@ -36,5 +68,5 @@
     "patterns": ["...", "..."],
     "speech_habits": "..."
   },
-  "visual_prompt": "..."
+  "visual_prompt": "按15个维度撰写的专业造型描述，最少250字"
 }
