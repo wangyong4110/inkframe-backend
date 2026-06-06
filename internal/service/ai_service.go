@@ -1170,9 +1170,11 @@ func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProvider
 // 支持中英文：realistic / photorealistic / photography / 写实 / 真实 / 摄影
 func isRealisticStyle(style string) bool {
 	s := strings.ToLower(style)
-	return s == "realistic" || strings.Contains(s, "realistic") ||
+	return s == "realistic" || s == "real_person" ||
+		strings.Contains(s, "realistic") ||
 		strings.Contains(s, "photorealistic") || strings.Contains(s, "photography") ||
-		strings.Contains(s, "写实") || strings.Contains(s, "真实") || strings.Contains(s, "摄影")
+		strings.Contains(s, "写实") || strings.Contains(s, "真实") || strings.Contains(s, "摄影") ||
+		strings.Contains(s, "真人")
 }
 
 // selectImageModel returns the model to use for the given entry.

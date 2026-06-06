@@ -999,8 +999,9 @@ func (b *ImagePromptBuilder) BuildVisualPrompt(shot *StoryboardShot, config *Ima
 	// 优先匹配 IMAGE_PRESETS 定义的 15 种风格 ID（与 resolveStyleDesc 保持一致），
 	// 保留旧有键名（ink_wash / 3d_* / cinematic）以兼容历史视频配置。
 	styleQualityTokens := map[string]string{
-		// IMAGE_PRESETS 15 种风格
+		// IMAGE_PRESETS 16 种风格
 		"realistic":         "8K uhd, photorealistic, film grain, anamorphic lens, RAW photo, professional photography",
+		"real_person":       "photorealistic human, professional portrait photography, 8K uhd, RAW photo, natural skin texture, realistic facial features, sharp focus, cinematic lighting",
 		"anime":             "anime style, key visual, vibrant colors, detailed linework, Studio Ghibli quality",
 		"chinese_animation": "Chinese animation style, bold outlines, vibrant colors, dynamic linework, guoman aesthetic",
 		"ink_painting":      "Chinese ink wash painting, 水墨风格, monochromatic, elegant brushwork, traditional",

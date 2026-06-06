@@ -997,7 +997,8 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 	return upserted, nil
 }
 
-// AIExtractMinorChars 从单章内容中提取次要角色（role=minor），并写入 ChapterCharacter 关联
+// AIExtractMinorChars 从单章内容中提取次要角色（role=minor），并写入 ChapterCharacter 关联。
+// 复用与主角色分析相同的 description/visual_prompt/音色推荐逻辑，保证次要角色档案质量一致。
 func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint) ([]*model.Character, error) {
 	if s.chapterRepo == nil {
 		return nil, fmt.Errorf("chapter repository not configured")
@@ -1016,10 +1017,12 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 
 	novelTitle := "本小说"
 	novelGenre := ""
+	novelPromptLanguage := ""
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
 			novelTitle = novel.Title
 			novelGenre = novel.Genre
+			novelPromptLanguage = novel.PromptLanguage
 		}
 	}
 
@@ -1033,16 +1036,18 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 	}
 
 	minorCharsPrompt, err := renderPrompt("extract_minor_characters", map[string]interface{}{
-		"NovelTitle":    novelTitle,
-		"Genre":         novelGenre,
-		"ExistingNames": existingNames,
-		"Content":       content,
+		"NovelTitle":     novelTitle,
+		"Genre":          novelGenre,
+		"ExistingNames":  existingNames,
+		"Content":        content,
+		"PromptLanguage": novelPromptLanguage,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render extract_minor_characters: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_minor_characters", minorCharsPrompt, "")
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_minor_characters", minorCharsPrompt, "",
+		StoryboardOverrides{MaxTokens: 4096})
 	if err != nil {
 		return nil, fmt.Errorf("AI extract minor chars: %w", err)
 	}
@@ -1053,23 +1058,53 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 		return nil, fmt.Errorf("parse minor chars JSON: %w", err)
 	}
 
+	// 加载可用音色，用于自动推荐（与主角色提取逻辑一致）
+	var voiceModels []*model.AIModel
+	if s.modelRepo != nil {
+		voiceModels, _ = s.modelRepo.GetAvailableByTaskType("voice_gen", tenantID)
+	}
+
 	var created []*model.Character
 	for _, c := range chars {
 		if c.Name == "" || existingNameSet[strings.ToLower(c.Name)] {
 			continue
 		}
-		var minorDescParts []string
-		if c.Appearance != "" { minorDescParts = append(minorDescParts, "外貌："+c.Appearance) }
-		if c.Personality != "" { minorDescParts = append(minorDescParts, "性格："+c.Personality) }
-		if c.Background != "" { minorDescParts = append(minorDescParts, "背景："+c.Background) }
-		if c.CharacterArc != "" { minorDescParts = append(minorDescParts, "弧光："+c.CharacterArc) }
+
+		// 优先使用 AI 生成的统一 description，兼容旧格式分离字段（与主角色提取逻辑一致）
+		finalDesc := c.Description
+		if finalDesc == "" {
+			var parts []string
+			if c.Appearance != "" {
+				parts = append(parts, "外貌："+c.Appearance)
+			}
+			if c.Personality != "" {
+				parts = append(parts, "性格："+c.Personality)
+			}
+			if c.Background != "" {
+				parts = append(parts, "背景："+c.Background)
+			}
+			if c.CharacterArc != "" {
+				parts = append(parts, "弧光："+c.CharacterArc)
+			}
+			if c.DialogueStyle.SpeechHabits != "" {
+				parts = append(parts, "说话风格："+c.DialogueStyle.SpeechHabits)
+			} else if len(c.DialogueStyle.Patterns) > 0 {
+				parts = append(parts, "说话风格："+strings.Join(c.DialogueStyle.Patterns, "；"))
+			}
+			finalDesc = strings.Join(parts, "\n")
+		}
+
+		suggestedVoice := suggestVoiceForCharacter(finalDesc, c.PersonalityTags, "minor", voiceModels)
+
 		char := &model.Character{
-			NovelID:     novelID,
-			UUID:        uuid.New().String(),
-			Name:        c.Name,
-			Role:        "minor",
-			Description: strings.Join(minorDescParts, "\n"),
-			Status:      "active",
+			NovelID:      novelID,
+			UUID:         uuid.New().String(),
+			Name:         c.Name,
+			Role:         "minor",
+			Description:  finalDesc,
+			VisualPrompt: c.VisualPrompt,
+			VoiceID:      suggestedVoice,
+			Status:       "active",
 		}
 		if e := s.characterRepo.Create(char); e != nil {
 			logger.Printf("CharacterService.AIExtractMinorChars: create %q: %v", c.Name, e)
@@ -1434,14 +1469,17 @@ func (s *ImageGenerationService) GenerateThreeViewImage(ctx context.Context, ten
 	genderTag, genderNeg := resolveGenderInfo(gender)
 
 	var prompt string
-	if style == "realistic" {
+	if style == "realistic" || style == "real_person" {
 		realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
+		photoQuality := "realistic photography style, pure white background, detailed features, clean composition, high quality"
+		if style == "real_person" {
+			photoQuality = "photorealistic portrait photography, ultra-realistic skin texture, natural lighting, DSLR quality, 8k uhd, pure white background, sharp focus, high quality"
+		}
 		prompt = fmt.Sprintf(
 			"%ssolo, full body, %s, %s, "+
-				"realistic photography style, pure white background, "+
-				"detailed features, clean composition, high quality, "+
+				"%s, "+
 				"no props, no background elements, no text, no watermarks",
-			realisticGender, appearance, angleDesc)
+			realisticGender, appearance, angleDesc, photoQuality)
 	} else if genderTag != "" {
 		// 英文 booru 标签（1boy/1girl）对插画模型权重最高，置于最前
 		prompt = fmt.Sprintf(
@@ -1509,8 +1547,12 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	}
 
 	var prompt string
-	if style == "realistic" {
+	if style == "realistic" || style == "real_person" {
 		realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
+		sheetStyle := "realistic photography style, high quality professional character design reference"
+		if style == "real_person" {
+			sheetStyle = "photorealistic portrait photography, ultra-realistic skin texture, natural studio lighting, DSLR quality, 8k uhd, sharp focus, professional character design reference"
+		}
 		prompt = fmt.Sprintf(
 			"%s%scharacter model sheet, 3-panel turnaround layout: "+
 				"[left panel] strictly 0-degree front-facing full body, "+
@@ -1521,9 +1563,9 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 				"standard A-pose arms slightly away from body, "+
 				"%s, "+
 				"orthographic projection no perspective, character only pure white background, "+
-				"realistic photography style, high quality professional character design reference, "+
+				"%s, "+
 				"no text no labels no watermarks",
-			refPrefix, realisticGender, appearance)
+			refPrefix, realisticGender, appearance, sheetStyle)
 	} else if genderTag != "" {
 		prompt = fmt.Sprintf(
 			"%s%s, character model sheet, 3-panel turnaround layout: "+
@@ -1591,19 +1633,24 @@ func (s *ImageGenerationService) GenerateFaceCloseupImage(ctx context.Context, t
 	// 注意：不要在提示词中加入 "identity preservation" / "face lock reference" / "IP-Adapter portrait"
 	// 这些是框架工具名（非 SD prompt token），不被扩散模型识别，只会占用 token 权重、干扰生成。
 	var prompt string
-	if style == "realistic" {
+	if style == "realistic" || style == "real_person" {
 		realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
+		faceStyle := "skin texture, hair strand detail, eye catchlight, high quality portrait photo"
+		if style == "real_person" {
+			faceStyle = "ultra-realistic skin texture, pore detail, hair strand detail, eye catchlight, catchlight in iris, " +
+				"professional studio lighting, 85mm portrait lens, bokeh background, DSLR quality, 8k uhd portrait photo"
+		}
 		prompt = fmt.Sprintf(
 			"%sbust shot, upper body portrait, front view only, face centered in frame, "+
 				"single view, not a turnaround, not a character sheet, "+
 				"solo, %s, "+
 				"soft even lighting, studio light, no harsh shadows, "+
 				"detailed facial features, sharp focus on face, "+
-				"skin texture, hair strand detail, eye catchlight, "+
+				"%s, "+
 				"neutral expression, looking at camera, "+
-				"character only, no props, pure white background, high quality portrait photo, "+
+				"character only, no props, pure white background, "+
 				"no text, no labels, no watermarks",
-			realisticGender, appearance)
+			realisticGender, appearance, faceStyle)
 	} else if genderTag != "" {
 		prompt = fmt.Sprintf(
 			"%s, solo, bust shot, upper body portrait, head and shoulders, face centered, "+
