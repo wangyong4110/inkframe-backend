@@ -163,9 +163,21 @@ func (h *CharacterHandler) GetCharacter(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
-	if character.TenantID != getTenantID(c) {
-		respondErr(c, http.StatusNotFound, "character not found")
-		return
+	tenantID := getTenantID(c)
+	if character.TenantID != tenantID {
+		// 自愈：tenant_id=0 是历史数据缺陷，通过 novel 归属验证后修复
+		if character.TenantID == 0 && h.novelService != nil {
+			if _, e := h.novelService.GetNovel(character.NovelID, tenantID); e == nil {
+				go h.characterService.FixTenantID(character.ID, tenantID)
+				character.TenantID = tenantID
+			} else {
+				respondErr(c, http.StatusNotFound, "character not found")
+				return
+			}
+		} else {
+			respondErr(c, http.StatusNotFound, "character not found")
+			return
+		}
 	}
 
 	respondOK(c, characterResponse(character))

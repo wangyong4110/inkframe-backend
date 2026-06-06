@@ -262,10 +262,12 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 		return nil
 	}
 
-	// 预加载 shot + video 一次，同时用于：① 角色声音查找 ② OSS 存储 key（避免重复查询）
+	// 预加载 shot + video 一次，同时用于：① 角色声音查找 ② EmotionalTone ③ OSS 存储 key
 	var novelID, chapterID uint
+	var shotEmotionalTone string
 	if s.storyboardRepo != nil && s.videoRepo != nil {
 		if shot, e := s.storyboardRepo.GetByID(seg.ShotID); e == nil {
+			shotEmotionalTone = shot.EmotionalTone
 			if video, e := s.videoRepo.GetByID(shot.VideoID); e == nil {
 				novelID = video.NovelID
 				if video.ChapterID != nil {
@@ -289,9 +291,16 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 					} else {
 						voice = autoVoices[c.ID%uint(len(autoVoices))]
 					}
+					style = c.VoiceStyle // 角色静态风格作为基准情感
 					break
 				}
 			}
+		}
+	}
+	// 分镜情绪基调覆盖角色静态风格（动态优先级更高）
+	if shotEmotionalTone != "" {
+		if mapped := mapEmotionalToneToTTS(shotEmotionalTone); mapped != "" {
+			style = mapped
 		}
 	}
 	if voice == "" {
@@ -863,5 +872,37 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 		}
 	}
 
+	// 步骤四：用分镜情绪基调覆盖角色静态风格（动态优先级更高）
+	if shot.EmotionalTone != "" {
+		if mapped := mapEmotionalToneToTTS(shot.EmotionalTone); mapped != "" {
+			style = mapped
+		}
+	}
+
 	return
+}
+
+// mapEmotionalToneToTTS 将分镜情绪基调（中文）映射为 TTS 通用情感标签。
+// 返回空串表示无法映射，调用方应保持当前 style 不变。
+func mapEmotionalToneToTTS(tone string) string {
+	switch {
+	case strings.ContainsAny(tone, "紧张") || strings.Contains(tone, "恐惧") || strings.Contains(tone, "害怕") || strings.Contains(tone, "惶恐"):
+		return "fear"
+	case strings.Contains(tone, "愤怒") || strings.Contains(tone, "愤") || strings.Contains(tone, "怒") || strings.Contains(tone, "激怒"):
+		return "angry"
+	case strings.Contains(tone, "悲伤") || strings.Contains(tone, "悲") || strings.Contains(tone, "哀") || strings.Contains(tone, "哭") || strings.Contains(tone, "伤心"):
+		return "sad"
+	case strings.Contains(tone, "快乐") || strings.Contains(tone, "开心") || strings.Contains(tone, "喜悦") || strings.Contains(tone, "兴奋") || strings.Contains(tone, "欢"):
+		return "happy"
+	case strings.Contains(tone, "平静") || strings.Contains(tone, "宁静") || strings.Contains(tone, "淡然") || strings.Contains(tone, "释怀"):
+		return "calm"
+	case strings.Contains(tone, "浪漫") || strings.Contains(tone, "温柔") || strings.Contains(tone, "温情"):
+		return "happy"
+	case strings.Contains(tone, "惊讶") || strings.Contains(tone, "惊") || strings.Contains(tone, "讶"):
+		return "surprised"
+	case strings.Contains(tone, "压抑") || strings.Contains(tone, "沉重") || strings.Contains(tone, "绝望"):
+		return "sad"
+	default:
+		return ""
+	}
 }

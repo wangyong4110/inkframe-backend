@@ -574,6 +574,13 @@ func (s *CharacterService) GetCharacter(id uint) (*model.Character, error) {
 	return s.characterRepo.GetByID(id)
 }
 
+// FixTenantID 修正角色的 tenant_id（用于自愈历史数据中 tenant_id=0 的记录）
+func (s *CharacterService) FixTenantID(id, tenantID uint) {
+	if err := s.characterRepo.UpdateTenantID(id, tenantID); err != nil {
+		logger.Warnf("CharacterService.FixTenantID: id=%d tenant=%d err=%v", id, tenantID, err)
+	}
+}
+
 func (s *CharacterService) ListCharacters(novelID uint) ([]*model.Character, error) {
 	return s.characterRepo.ListByNovel(novelID)
 }
@@ -951,16 +958,13 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 		suggestedVoice := suggestVoiceForCharacter(description, p.PersonalityTags, role, voiceModels)
 
 		if ch, ok := byName[p.Name]; ok {
-			logger.Printf("[CharacterService] AIBatchGenerate upsert(update) %q: p.VisualPrompt=%q ch.VisualPrompt(existing)=%q", p.Name, p.VisualPrompt, ch.VisualPrompt)
-			changed := false
-			if v, ok := fillIfEmpty(ch.Role, role); ok { ch.Role = v; changed = true }
-			if v, ok := fillIfEmpty(ch.Description, description); ok { ch.Description = v; changed = true }
-			if v, ok := fillIfEmpty(ch.VisualPrompt, p.VisualPrompt); ok { ch.VisualPrompt = v; changed = true }
-			if v, ok := fillIfEmpty(ch.VoiceID, suggestedVoice); ok { ch.VoiceID = v; changed = true }
-			if !changed {
-				upserted = append(upserted, ch)
-				continue
-			}
+			logger.Printf("[CharacterService] AIBatchGenerate upsert(update) %q", p.Name)
+			// AI 生成字段直接覆盖（用户点击"AI 更新角色"语义就是刷新）
+			if description != "" { ch.Description = description }
+			if p.VisualPrompt != "" { ch.VisualPrompt = p.VisualPrompt }
+			// 用户手动配置字段仅在空时填充
+			if v, ok := fillIfEmpty(ch.Role, role); ok { ch.Role = v }
+			if v, ok := fillIfEmpty(ch.VoiceID, suggestedVoice); ok { ch.VoiceID = v }
 			if err := s.characterRepo.Update(ch); err != nil {
 				logger.Printf("CharacterService.AIBatchGenerate: update %s: %v", ch.Name, err)
 				continue

@@ -56,9 +56,10 @@ type minimaxTTSRequest struct {
 
 type minimaxVoiceSetting struct {
 	VoiceID string  `json:"voice_id"`
-	Speed   float64 `json:"speed"` // 0.5~2.0
-	Pitch   int     `json:"pitch"` // -12~12 半音
-	Vol     float64 `json:"vol"`   // 0.1~10.0
+	Speed   float64 `json:"speed"`            // 0.5~2.0
+	Pitch   int     `json:"pitch"`            // -12~12 半音
+	Vol     float64 `json:"vol"`              // 0.1~10.0
+	Emotion string  `json:"emotion,omitempty"` // happy/sad/angry/fearful/surprised/neutral
 }
 
 type minimaxAudioSetting struct {
@@ -140,9 +141,10 @@ func (p *MinimaxTTSProvider) ImageGenerate(ctx context.Context, req *ImageGenera
 
 // AudioGenerate 调用 MiniMax T2A V2 语音合成，返回 MP3 文件路径。
 //
-// req.Voice:  音色 ID（见音色列表），留空默认 "female-shaonv"
-// req.Speed:  语速（0.5~2.0，1.0 正常）
-// req.Pitch:  音调（-12~12 半音，0 正常）；req.Pitch 字段为 0~2 浮点，映射到 -12~12
+// req.Voice:   音色 ID（见音色列表），留空默认 "female-shaonv"
+// req.Speed:   语速（0.5~2.0，1.0 正常）
+// req.Pitch:   音调（-12~12 半音，0 正常）；req.Pitch 字段为 0~2 浮点，映射到 -12~12
+// req.Emotion: 情感标签（happy/sad/angry/fearful/surprised/neutral），留空不设置
 func (p *MinimaxTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRequest) (*AudioResponse, error) {
 	start := time.Now()
 
@@ -181,6 +183,7 @@ func (p *MinimaxTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenera
 			Speed:   speed,
 			Pitch:   pitch,
 			Vol:     1.0,
+			Emotion: req.Emotion,
 		},
 		AudioSetting: minimaxAudioSetting{
 			SampleRate: 32000,

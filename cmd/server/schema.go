@@ -8,7 +8,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-06-06-v5"
+const schemaVersion = "2026-06-06-v6"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -324,28 +324,38 @@ func autoMigrate(db *gorm.DB) error {
 	}
 
 	// 数据迁移（2026-05-15-v2）：将 Character 旧字段合并到 description
-	if err := db.Exec(`UPDATE ink_character SET description = CONCAT_WS('\n',
-		IF(appearance != '' AND appearance IS NOT NULL, CONCAT('外貌：', appearance), NULL),
-		IF(personality != '' AND personality IS NOT NULL, CONCAT('性格：', personality), NULL),
-		IF(background != '' AND background IS NOT NULL, CONCAT('背景：', background), NULL),
-		IF(character_arc != '' AND character_arc IS NOT NULL, CONCAT('弧光：', character_arc), NULL),
-		IF(dialogue_style != '' AND dialogue_style IS NOT NULL, CONCAT('说话风格：', dialogue_style), NULL)
-	) WHERE (description = '' OR description IS NULL)
-		AND (appearance IS NOT NULL AND appearance != ''
-			OR personality IS NOT NULL AND personality != ''
-			OR background IS NOT NULL AND background != ''
-			OR character_arc IS NOT NULL AND character_arc != ''
-			OR dialogue_style IS NOT NULL AND dialogue_style != '')`).Error; err != nil {
-		logger.Warnf("autoMigrate: character description migration failed: %v", err)
+	// 仅在旧列尚未删除时执行（列已删则跳过，避免 Unknown column 错误）
+	var charAppearanceExists int64
+	db.Raw(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_character' AND COLUMN_NAME = 'appearance'`).Scan(&charAppearanceExists)
+	if charAppearanceExists > 0 {
+		if err := db.Exec(`UPDATE ink_character SET description = CONCAT_WS('\n',
+			IF(appearance != '' AND appearance IS NOT NULL, CONCAT('外貌：', appearance), NULL),
+			IF(personality != '' AND personality IS NOT NULL, CONCAT('性格：', personality), NULL),
+			IF(background != '' AND background IS NOT NULL, CONCAT('背景：', background), NULL),
+			IF(character_arc != '' AND character_arc IS NOT NULL, CONCAT('弧光：', character_arc), NULL),
+			IF(dialogue_style != '' AND dialogue_style IS NOT NULL, CONCAT('说话风格：', dialogue_style), NULL)
+		) WHERE (description = '' OR description IS NULL)
+			AND (appearance IS NOT NULL AND appearance != ''
+				OR personality IS NOT NULL AND personality != ''
+				OR background IS NOT NULL AND background != ''
+				OR character_arc IS NOT NULL AND character_arc != ''
+				OR dialogue_style IS NOT NULL AND dialogue_style != '')`).Error; err != nil {
+			logger.Warnf("autoMigrate: character description migration failed: %v", err)
+		}
 	}
 
 	// 数据迁移（2026-05-15-v2）：将 Item 旧字段合并到 description
-	if err := db.Exec(`UPDATE ink_item SET description = CONCAT_WS('，',
-		IF(category != '' AND category IS NOT NULL, category, NULL),
-		IF(description != '' AND description IS NOT NULL, description, NULL),
-		IF(appearance != '' AND appearance IS NOT NULL, appearance, NULL)
-	) WHERE (category IS NOT NULL AND category != '') OR (appearance IS NOT NULL AND appearance != '')`).Error; err != nil {
-		logger.Warnf("autoMigrate: item description migration failed: %v", err)
+	// 仅在旧列尚未删除时执行（列已删则跳过，避免 Unknown column 错误）
+	var itemCategoryExists int64
+	db.Raw(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_item' AND COLUMN_NAME = 'category'`).Scan(&itemCategoryExists)
+	if itemCategoryExists > 0 {
+		if err := db.Exec(`UPDATE ink_item SET description = CONCAT_WS('，',
+			IF(category != '' AND category IS NOT NULL, category, NULL),
+			IF(description != '' AND description IS NOT NULL, description, NULL),
+			IF(appearance != '' AND appearance IS NOT NULL, appearance, NULL)
+		) WHERE (category IS NOT NULL AND category != '') OR (appearance IS NOT NULL AND appearance != '')`).Error; err != nil {
+			logger.Warnf("autoMigrate: item description migration failed: %v", err)
+		}
 	}
 
 	// 数据迁移（2026-06-06-v5）：修正 doubao-speech 的 seed-tts-2.0/1.0 任务类型
@@ -358,6 +368,29 @@ func autoMigrate(db *gorm.DB) error {
 		  AND m.deleted_at IS NULL
 		  AND m.suitable_tasks LIKE '%voice_gen%'`).Error; err != nil {
 		logger.Warnf("autoMigrate: doubao-speech task fix failed: %v", err)
+	}
+
+	// 数据迁移（2026-06-06-v6）：doubao-speech V3 中错误添加的 _moon_bigtts 音色
+	// 月亮系列属于 seed-tts-1.0 资源，V3 provider 的 2.0 发音人应为 _uranus_bigtts
+	if err := db.Exec(`UPDATE ink_ai_model m
+		JOIN ink_model_provider p ON p.id = m.provider_id AND p.deleted_at IS NULL
+		SET m.suitable_tasks = '["legacy_voice"]', m.is_available = 0
+		WHERE p.name = 'doubao-speech'
+		  AND m.name LIKE '%_moon_bigtts'
+		  AND m.deleted_at IS NULL`).Error; err != nil {
+		logger.Warnf("autoMigrate: doubao-speech moon_bigtts disable failed: %v", err)
+	}
+
+	// 数据迁移（2026-06-06-v6）：修正 doubao-speech-v1 中 阳光青年 2.0 音色显示名称错误
+	// zh_male_yangguangqingnian_uranus_bigtts 之前被错误命名为"天才童声 2.0"
+	if err := db.Exec(`UPDATE ink_ai_model m
+		JOIN ink_model_provider p ON p.id = m.provider_id AND p.deleted_at IS NULL
+		SET m.display_name = '阳光青年 2.0'
+		WHERE p.name = 'doubao-speech-v1'
+		  AND m.name = 'zh_male_yangguangqingnian_uranus_bigtts'
+		  AND m.display_name = '天才童声 2.0'
+		  AND m.deleted_at IS NULL`).Error; err != nil {
+		logger.Warnf("autoMigrate: doubao-speech-v1 yangguang display_name fix failed: %v", err)
 	}
 
 	// 迁移成功后写入新版本号（UPSERT）

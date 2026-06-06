@@ -57,9 +57,10 @@ type aliyunTTSInput struct {
 }
 
 type aliyunTTSParam struct {
-	Volume     int `json:"volume,omitempty"`     // 0~100，默认 50
-	SpeechRate int `json:"speech_rate,omitempty"` // -500~500，0 为正常
-	PitchRate  int `json:"pitch_rate,omitempty"`  // -500~500，0 为正常
+	Volume     int    `json:"volume,omitempty"`      // 0~100，默认 50
+	SpeechRate int    `json:"speech_rate,omitempty"` // -500~500，0 为正常
+	PitchRate  int    `json:"pitch_rate,omitempty"`  // -500~500，0 为正常
+	Emotion    string `json:"emotion,omitempty"`     // happy/sad/angry/fear/neutral（cosyvoice-v2 支持）
 }
 
 // aliyunSSEChunk SSE 事件数据
@@ -131,10 +132,11 @@ func (p *AliyunTTSProvider) ImageGenerate(ctx context.Context, req *ImageGenerat
 
 // AudioGenerate 调用阿里云 CosyVoice 语音合成，返回 MP3 文件路径。
 //
-// req.Voice:  音色名称（见音色列表），留空默认 "longxiaochun"
-// req.Speed:  语速（0.5~2.0，1.0=正常，映射到 speech_rate -500~500）
-// req.Pitch:  音调（0.5~1.5，1.0=正常，映射到 pitch_rate -500~500）
-// req.Model:  覆盖模型名（如 "cosyvoice-v2"），留空使用 cosyvoice-v1
+// req.Voice:   音色名称（见音色列表），留空默认 "longxiaochun"
+// req.Speed:   语速（0.5~2.0，1.0=正常，映射到 speech_rate -500~500）
+// req.Pitch:   音调（0.5~1.5，1.0=正常，映射到 pitch_rate -500~500）
+// req.Model:   覆盖模型名（如 "cosyvoice-v2"），留空使用 cosyvoice-v1
+// req.Emotion: 情感标签（happy/sad/angry/fear/neutral），cosyvoice-v2 支持，v1 静默忽略
 func (p *AliyunTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRequest) (*AudioResponse, error) {
 	start := time.Now()
 
@@ -179,6 +181,7 @@ func (p *AliyunTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenerat
 			Volume:     50,
 			SpeechRate: speechRate,
 			PitchRate:  pitchRate,
+			Emotion:    req.Emotion,
 		},
 	}
 
