@@ -239,9 +239,6 @@ func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequ
 	if req.ImageStyle != "" {
 		novel.ImageStyle = req.ImageStyle
 	}
-	if req.ReferenceStyle != "" {
-		novel.ReferenceStyle = req.ReferenceStyle
-	}
 	if req.PromptLanguage != "" {
 		novel.PromptLanguage = req.PromptLanguage
 	}
