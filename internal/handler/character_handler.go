@@ -389,11 +389,10 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 		if sheetAppearance == "" {
 			sheetAppearance = char.Description
 		}
-		// 用已有头像作为参考图，锁定面部特征；推断性别以锁定性别 token
-		sheetRef := char.Portrait
-		if sheetRef == "" {
-			sheetRef = char.FaceCloseup
-		}
+		// 三视图不传参考图：DreamO 模型会优先保留参考图的画风（包括旧风格），
+		// 导致 style 变更后仍渲染旧风格。去掉参考图后走 Text2ImgV3 纯文本生成，
+		// prompt 中的 %s风格 指令能完整生效。角色外形由 VisualPrompt 文本描述保障。
+		sheetRef := ""
 		sheetGender := service.InferGenderTag(char.VisualPrompt, char.Description)
 		img, err := h.imageGenService.GenerateThreeViewSheet(genCtx, tenantID, char.Name, sheetAppearance, style, sheetGender, sheetRef, provider)
 		if err != nil {
