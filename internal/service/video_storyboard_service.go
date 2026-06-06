@@ -382,13 +382,18 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 // anchors 为调用方预取的数据（避免重复查 DB）。
 func (s *VideoService) autoMatchShotAnchors(shots []*model.StoryboardShot, anchors []*model.SceneAnchor) {
 	if len(anchors) == 0 {
+		logger.Printf("[AutoMatch] scene: no anchors in DB, skipping")
 		return
 	}
 	// 构建名称→ID映射（小写，方便模糊匹配）
 	anchorMap := make(map[string]uint, len(anchors))
+	anchorNames := make([]string, 0, len(anchors))
 	for _, a := range anchors {
 		anchorMap[strings.ToLower(a.Name)] = a.ID
+		anchorNames = append(anchorNames, a.Name)
 	}
+	logger.Printf("[AutoMatch] scene: %d anchors available: %v", len(anchors), anchorNames)
+	matchCount := 0
 	for _, shot := range shots {
 		if shot.SceneAnchorID != nil {
 			continue // 已手动绑定，不覆盖
@@ -424,15 +429,25 @@ func (s *VideoService) autoMatchShotAnchors(shots []*model.StoryboardShot, ancho
 
 		// ① location 精确/包含匹配
 		if loc != "" && tryAnchor(loc) {
+			matchCount++
+			logger.Printf("[AutoMatch] scene: shot#%d location=%q → anchorID=%d", shot.ShotNo, loc, *shot.SceneAnchorID)
 			continue
 		}
 		// ② narration 关键词扫描
 		if tryAnchor(shot.Narration) {
+			matchCount++
+			logger.Printf("[AutoMatch] scene: shot#%d narration match → anchorID=%d", shot.ShotNo, *shot.SceneAnchorID)
 			continue
 		}
 		// ③ description 关键词扫描（英文环境描述，最后兜底）
-		tryAnchor(shot.Description)
+		if tryAnchor(shot.Description) {
+			matchCount++
+			logger.Printf("[AutoMatch] scene: shot#%d description match → anchorID=%d", shot.ShotNo, *shot.SceneAnchorID)
+		} else {
+			logger.Printf("[AutoMatch] scene: shot#%d no match (location=%q)", shot.ShotNo, loc)
+		}
 	}
+	logger.Printf("[AutoMatch] scene: matched %d/%d shots", matchCount, len(shots))
 }
 
 // autoMatchShotCharacters 按多来源匹配小说角色，写入 CharacterIDs。
@@ -440,13 +455,17 @@ func (s *VideoService) autoMatchShotAnchors(shots []*model.StoryboardShot, ancho
 // 已有 CharacterIDs 时不覆盖（保留手动绑定结果）。
 func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, chars []*model.Character) {
 	if len(chars) == 0 {
+		logger.Printf("[AutoMatch] char: no characters in DB, skipping")
 		return
 	}
 	// 构建 小写名→ID map
 	nameMap := make(map[string]uint, len(chars))
+	charNames := make([]string, 0, len(chars))
 	for _, c := range chars {
 		nameMap[strings.ToLower(c.Name)] = c.ID
+		charNames = append(charNames, c.Name)
 	}
+	logger.Printf("[AutoMatch] char: %d characters available: %v", len(chars), charNames)
 
 	// tryMatch 尝试将一个原始名称加入 matched；跳过已知占位符。
 	tryMatch := func(rawName string, seen map[uint]bool, matched *model.JSONUintSlice) {
@@ -471,6 +490,7 @@ func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, ch
 		}
 	}
 
+	charMatchCount := 0
 	for _, shot := range shots {
 		if len(shot.CharacterIDs) > 0 {
 			continue // 已手动绑定，不覆盖
@@ -487,6 +507,8 @@ func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, ch
 				for _, sc := range shotChars {
 					tryMatch(sc.Name, seen, &matched)
 				}
+			} else {
+				logger.Printf("[AutoMatch] char: shot#%d Characters JSON parse err: %v (raw=%q)", shot.ShotNo, err, shot.Characters)
 			}
 		}
 
@@ -516,8 +538,13 @@ func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, ch
 
 		if len(matched) > 0 {
 			shot.CharacterIDs = matched
+			charMatchCount++
+			logger.Printf("[AutoMatch] char: shot#%d → charIDs=%v (chars_json=%q)", shot.ShotNo, []uint(matched), shot.Characters)
+		} else {
+			logger.Printf("[AutoMatch] char: shot#%d no match (chars_json=%q)", shot.ShotNo, shot.Characters)
 		}
 	}
+	logger.Printf("[AutoMatch] char: matched %d/%d shots", charMatchCount, len(shots))
 }
 
 // charRuneOverlap 返回两个字符串的汉字级重叠比例（以较短串为分母）。
