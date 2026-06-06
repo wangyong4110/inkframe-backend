@@ -959,6 +959,7 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			character := &model.Character{
 				UUID:         uuid.New().String(),
 				NovelID:      novelID,
+				TenantID:     tenantID,
 				Name:         p.Name,
 				Role:         role,
 				Description:  description,
@@ -1316,13 +1317,21 @@ func InferGenderTag(visualPrompt, description string) string {
 // Falls back to the raw style string, or "日系动漫插画" when style is empty.
 func resolveStyleDesc(style string) string {
 	m := map[string]string{
-		"anime":         "日系动漫插画",
-		"realistic":     "写实摄影",
-		"ink_painting":  "水墨中国风插画",
-		"cyberpunk":     "赛博朋克风格插画",
-		"xianxia_style": "古典仙侠国风插画",
-		"oil_painting":  "油画风格插画",
-		"watercolor":    "水彩插画",
+		"anime":             "日系动漫插画",
+		"realistic":         "写实摄影",
+		"ink_painting":      "水墨中国风插画",
+		"cyberpunk":         "赛博朋克风格插画",
+		"xianxia_style":     "古典仙侠国风插画",
+		"oil_painting":      "油画风格插画",
+		"watercolor":        "水彩插画",
+		"pixel_art":         "像素复古风格插画",
+		"chinese_animation": "国产动漫插画",
+		"game_concept":      "游戏原画概念设计",
+		"steampunk":         "蒸汽朋克风格插画",
+		"sketch":            "铅笔素描黑白插画",
+		"render_3d":         "三维立体渲染风格",
+		"ukiyo_e":           "日本浮世绘风格",
+		"gothic_dark":       "哥特暗黑风格插画",
 	}
 	if d, ok := m[style]; ok {
 		return d

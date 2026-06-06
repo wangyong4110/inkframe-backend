@@ -85,8 +85,6 @@ type Video struct {
 	// 统计
 	Duration    float64 `json:"duration"` // 秒
 	TotalShots  int     `json:"total_shots" gorm:"default:0"`
-	TotalFrames int     `json:"total_frames" gorm:"default:0"`
-	TotalWords  int     `json:"total_words" gorm:"default:0"`
 
 	// 文件
 	VideoPath string `json:"video_path" gorm:"size:500"`

@@ -358,9 +358,6 @@ type Worldview struct {
 	Religion            string `json:"religion" gorm:"type:text"`             // 宗教与信仰
 	Glossary            string `json:"glossary" gorm:"type:text"`             // 术语词汇表
 
-	// 封面
-	CoverImage string `json:"cover_image" gorm:"size:500"`
-
 	// 使用统计
 	UsedCount int `json:"used_count" gorm:"default:0"`
 
@@ -415,12 +412,6 @@ type QualityReport struct {
 	ConsistencyScore float64 `json:"consistency_score" gorm:"type:decimal(5,4)"`
 	CreativityScore  float64 `json:"creativity_score" gorm:"type:decimal(5,4)"`
 
-	// 问题统计
-	TotalIssues    int `json:"total_issues"`
-	HighPriority   int `json:"high_priority"`
-	MediumPriority int `json:"medium_priority"`
-	LowPriority    int `json:"low_priority"`
-
 	// 详细报告（JSON）
 	Issues      string `json:"issues" gorm:"type:text"`
 	Suggestions string `json:"suggestions" gorm:"type:text"`
@@ -445,10 +436,6 @@ type ChapterVersion struct {
 	// generation=AI生成, manual_edit=手动编辑, ai_revision=AI修改, rollback=回滚
 
 	ChangeDescription string `json:"change_description" gorm:"type:text"`
-	ChangeAuthorID    *uint  `json:"change_author_id,omitempty"`
-
-	QualityScore     float64 `json:"quality_score" gorm:"type:decimal(5,4)"`
-	ConsistencyScore float64 `json:"consistency_score" gorm:"type:decimal(5,4)"`
 
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -480,9 +467,8 @@ type ArcSummary struct {
 	// 未解决的伏笔 JSON: ["伏笔描述"]
 	OpenForeshadows string `json:"open_foreshadows" gorm:"type:text"`
 
-	// 张力曲线（本弧最高/最低张力点）
+	// 张力曲线（本弧最高张力点）
 	PeakTension int `json:"peak_tension" gorm:"default:0"`
-	LowTension  int `json:"low_tension" gorm:"default:0"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

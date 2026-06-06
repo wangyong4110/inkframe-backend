@@ -8,7 +8,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-06-06-v2"
+const schemaVersion = "2026-06-06-v4"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -138,6 +138,43 @@ func ensureCriticalColumns(db *gorm.DB) {
 	}
 }
 
+// dropLegacyCharacterColumns 删除 2026-05-15 角色/道具/场景锚点字段简化后遗留的旧列。
+// 使用 information_schema 检查列存在性，幂等安全，可重复调用。
+func dropLegacyCharacterColumns(db *gorm.DB) {
+	legacy := []struct{ table, col string }{
+		// ink_character: Gender/Archetype/Appearance/Personality/Background/Relations/
+		// CharacterArc/DialogueStyle/VisualDesign/CoverImage → 合并为 Description
+		{"ink_character", "gender"},
+		{"ink_character", "archetype"},
+		{"ink_character", "appearance"},
+		{"ink_character", "personality"},
+		{"ink_character", "background"},
+		{"ink_character", "relations"},
+		{"ink_character", "character_arc"},
+		{"ink_character", "dialogue_style"},
+		{"ink_character", "visual_design"},
+		{"ink_character", "cover_image"},
+		// ink_item: Category/Appearance → 合并为 Description
+		{"ink_item", "category"},
+		{"ink_item", "appearance"},
+		// ink_scene_anchor: RefImageShotID → 已删除
+		{"ink_scene_anchor", "ref_image_shot_id"},
+	}
+	for _, d := range legacy {
+		var cnt int64
+		db.Raw(
+			"SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?",
+			d.table, d.col,
+		).Scan(&cnt)
+		if cnt == 0 {
+			continue
+		}
+		if err := db.Exec("ALTER TABLE `" + d.table + "` DROP COLUMN `" + d.col + "`").Error; err != nil {
+			logger.Printf("[dropLegacyCharacterColumns] drop %s.%s: %v", d.table, d.col, err)
+		}
+	}
+}
+
 // autoMigrate 自动迁移（带版本跳过优化）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
 // 当模型变更时，请同时更新 schemaVersion 常量。
@@ -153,6 +190,8 @@ func autoMigrate(db *gorm.DB) error {
 
 	// 无条件补全关键列（防止版本跳过导致列缺失）
 	ensureCriticalColumns(db)
+	// 删除遗留列（2026-05-15 模型简化后遗留在 DB 中的旧字段）
+	dropLegacyCharacterColumns(db)
 
 	// 读取当前已迁移版本
 	var storedVer string
@@ -418,6 +457,22 @@ func runSchemaCleanup(db *gorm.DB) {
 		{"ink_ai_model", "default_top_k"},
 		// 废弃的 ink_task_model_config 质量阈值列（2026-06-06 删除，无任何代码引用）
 		{"ink_task_model_config", "min_quality_score"},
+		// 废弃的 ink_video 统计列（2026-06-06-v3 删除，无任何代码引用）
+		{"ink_video", "total_frames"},
+		{"ink_video", "total_words"},
+		// 废弃的 ink_arc_summary 低谷张力列（2026-06-06-v3 删除）
+		{"ink_arc_summary", "low_tension"},
+		// 废弃的 ink_quality_report 统计列（2026-06-06-v3 删除，无任何代码引用）
+		{"ink_quality_report", "total_issues"},
+		{"ink_quality_report", "high_priority"},
+		{"ink_quality_report", "medium_priority"},
+		{"ink_quality_report", "low_priority"},
+		// 废弃的 ink_chapter_version 评分与作者列（2026-06-06-v3 删除）
+		{"ink_chapter_version", "quality_score"},
+		{"ink_chapter_version", "consistency_score"},
+		{"ink_chapter_version", "change_author_id"},
+		// 废弃的 ink_worldview 封面列（2026-06-06-v3 删除）
+		{"ink_worldview", "cover_image"},
 	}
 	// Allowlist of valid (table, col) pairs — any entry NOT in this list is skipped.
 	allowedDrops := map[string]bool{}
