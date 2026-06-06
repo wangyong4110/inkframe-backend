@@ -874,23 +874,25 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 	result.TotalChapters = len(chapterInfos)
 
 	// 创建章节存根，Outline 存储章节爬取 URL（用于断点续爬）
-	var pendingChapters []*model.Chapter
+	stubs := make([]*model.Chapter, 0, len(chapterInfos))
 	for i, info := range chapterInfos {
-		chapter := &model.Chapter{
+		stubs = append(stubs, &model.Chapter{
+			UUID:      uuid.New().String(),
 			NovelID:   novel.ID,
 			ChapterNo: chapterOffset + i + 1,
 			Title:     info.Title,
 			Content:   "",
 			Outline:   "crawl:" + info.URL,
 			Status:    "draft",
-		}
-		if err := s.chapterRepo.Create(chapter); err != nil {
-			result.FailedChapters++
-			result.Errors = append(result.Errors, fmt.Sprintf("chapter %d save failed: %v", i+1, err))
-		} else {
-			result.ImportedChapters++
-			pendingChapters = append(pendingChapters, chapter)
-		}
+		})
+	}
+	var pendingChapters []*model.Chapter
+	if err := s.chapterRepo.CreateInBatches(stubs, 100); err != nil {
+		result.FailedChapters = len(stubs)
+		result.Errors = append(result.Errors, fmt.Sprintf("batch create chapter stubs failed: %v", err))
+	} else {
+		result.ImportedChapters = len(stubs)
+		pendingChapters = stubs
 	}
 
 	// 初始化进度并启动后台爬取
@@ -1591,12 +1593,3 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 	return result, nil
 }
 
-// ============================================
-// 辅助类型
-// ============================================
-
-// json解析辅助
-func jsonMarshal(v interface{}) ([]byte, error) {
-	// 简单的JSON序列化，避免导入第三方库
-	return []byte(fmt.Sprintf("%+v", v)), nil
-}

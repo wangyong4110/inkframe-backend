@@ -270,7 +270,7 @@ func (h *ImportHandler) ImportFromFile(c *gin.Context) {
 	})
 }
 
-// ImportFromURL URL导入小说
+// ImportFromURL URL导入小说（异步）
 // POST /api/v1/import/novel/url
 func (h *ImportHandler) ImportFromURL(c *gin.Context) {
 	var req struct {
@@ -282,21 +282,36 @@ func (h *ImportHandler) ImportFromURL(c *gin.Context) {
 		return
 	}
 
+	tenantID := getTenantID(c)
 	importReq := &service.ImportRequest{
 		Source:   service.SourceURL,
 		URL:      req.URL,
 		SiteName: req.SiteName,
 		NovelID:  req.NovelID,
-		TenantID: getTenantID(c),
+		TenantID: tenantID,
 	}
 
-	result, err := h.importService.Import(importReq)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImport, "URL导入", "novel", 0)
 	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
 
-	respondOK(c, result)
+	go func(taskID string, r *service.ImportRequest) {
+		defer func() {
+			if rc := recover(); rc != nil {
+				logger.Printf("[ImportHandler] ImportFromURL task %s panic: %v", taskID, rc)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.runImportAndAnalyze(taskID, r, tenantID)
+	}(task.TaskID, importReq)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "import started",
+		"data":    gin.H{"task_id": task.TaskID},
+	})
 }
 
 // ImportFromCrawl 爬取导入小说（异步）

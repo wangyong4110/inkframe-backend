@@ -142,7 +142,7 @@ func main() {
 	services.VideoService.WithIgnoredIssueRepo(repos.IgnoredReviewIssueRepo)
 	services.VideoService.WithVideoSocial(repos.VideoLikeRepo, repos.VideoCommentRepo)
 	services.NovelService.WithNovelSocial(repos.NovelLikeRepo, repos.NovelCommentRepo)
-	services.NovelImportService.WithStorage(storageSvc).WithAnalysisService(services.NovelAnalysisService).WithAIService(services.AIService).WithNotificationService(services.NotificationService).WithCrawlJobRepo(repos.NovelCrawlJobRepo)
+	services.NovelImportService.WithDB(db).WithStorage(storageSvc).WithAnalysisService(services.NovelAnalysisService).WithAIService(services.AIService).WithNotificationService(services.NotificationService).WithCrawlJobRepo(repos.NovelCrawlJobRepo)
 
 	// SFX 音效服务（降级链：素材库 → AI文生音效 → 本地库 → AudioLDM → Freesound → Pixabay → BBC → 爱给网 → ElevenLabs）
 	// 所有 API Key 均通过"模型管理"页面配置，不再从环境变量读取。

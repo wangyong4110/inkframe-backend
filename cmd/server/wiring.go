@@ -323,7 +323,7 @@ func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *
 	return &coreSvcs{AI: aiSvc, Model: modelSvc, Task: taskSvc, PlotPoint: plotPointSvc, Quality: qualitySvc}
 }
 
-func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.ModelManager, vectorStore *vector.StoreManager) *contentSvcs {
+func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, aiManager *ai.ModelManager, vectorStore *vector.StoreManager) *contentSvcs {
 	aiSvc := core.AI
 
 	// 小说服务
@@ -423,7 +423,7 @@ func initContentServiceGroup(repos *Repositories, core *coreSvcs, aiManager *ai.
 		WithModelRepo(repos.AIModelRepo)
 
 	// 导入服务
-	crawlerSvc := crawler.NewNovelCrawler(nil)
+	crawlerSvc := crawler.NewNovelCrawler(db)
 	novelImportSvc := service.NewNovelImportService(repos.NovelRepo, repos.ChapterRepo, crawlerSvc).
 		WithNarrativeMemory(narrativeMemorySvc)
 
@@ -499,7 +499,7 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, vectorStore *vector.StoreManager, cfg *config.Config, redisClient *redis.Client) *Services {
 	core    := initCoreServiceGroup(repos, aiManager, cfg)
 	core.Task.WithDB(db)
-	content := initContentServiceGroup(repos, core, aiManager, vectorStore)
+	content := initContentServiceGroup(db, repos, core, aiManager, vectorStore)
 	video   := initVideoServiceGroup(repos, core, content, cfg)
 
 	// 改写服务（依赖统一异步任务系统）
@@ -558,7 +558,8 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	// 后置注入：将通知服务与技能仓库注入章节生成管道
 	content.Novel.WithNotificationService(notifSvc)
 	content.Chapter.WithNotificationService(notifSvc).WithSkillRepo(repos.SkillRepo)
-	content.NovelImport.WithNotificationService(notifSvc).WithCrawlJobRepo(repos.NovelCrawlJobRepo)
+	// NOTE: WithStorage/WithDB/WithAnalysisService/WithAIService/WithNotificationService/WithCrawlJobRepo
+	// are injected in main.go after storageSvc and db are available.
 
 	return &Services{
 		// ── AI core ──
