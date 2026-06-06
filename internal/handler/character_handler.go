@@ -2,7 +2,9 @@ package handler
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
@@ -972,15 +974,23 @@ func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
 
 	rawURL, err := h.aiService.AudioGenerateWithOptions(ctx, getTenantID(c), req.Text, voice, speed, style, lang)
 	if err != nil {
+		logger.Printf("PreviewVoice: TTS generation failed for character %d voice=%q: %v", id, voice, err)
 		respondErr(c, http.StatusInternalServerError, "voice generation failed: "+err.Error())
 		return
 	}
 
-	// Store raw path for serving; return API endpoint if local file.
-	// Append a timestamp so the browser never serves a cached response when the voice changes.
+	// For local file:// URLs, encode as base64 data URL so the browser plays it
+	// inline without depending on the tmp file persisting across requests.
+	// For remote URLs (CDN), pass them through directly.
 	playURL := rawURL
 	if len(rawURL) > 7 && rawURL[:7] == "file://" {
-		playURL = "/api/v1/characters/" + c.Param("id") + "/voice/sample?t=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
+		filePath := rawURL[7:]
+		if data, readErr := os.ReadFile(filePath); readErr == nil && len(data) > 0 {
+			playURL = "data:audio/mpeg;base64," + base64.StdEncoding.EncodeToString(data)
+		} else {
+			// Fallback to sample endpoint if file cannot be read.
+			playURL = "/api/v1/characters/" + c.Param("id") + "/voice/sample?t=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
+		}
 	}
 	h.characterService.UpdateCharacter(uint(id), getTenantID(c), &model.UpdateCharacterRequest{ //nolint:errcheck
 		Name:        character.Name,

@@ -166,11 +166,18 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 
 	// 读取分块 JSON 响应：每行一个 JSON 对象，data 字段为 base64 编码的 MP3 分块
 	// 最终分块的 code 为 20000000
+	// 同时兼容 SSE 格式（行首可能带 "data:" 前缀）
 	var audioData []byte
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1MB 缓冲，避免大分块截断
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		// 兼容 SSE 格式：去掉 "data:" 前缀
+		line = bytes.TrimPrefix(line, []byte("data:"))
+		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue
 		}
@@ -385,11 +392,18 @@ func (p *DoubaoSpeechV1Provider) AudioGenerate(ctx context.Context, req *AudioGe
 		audio.EnableEmotion = true
 	}
 
+	// _bigtts 和 _uranus_bigtts 等豆包 2.0 音色需要 volcano_mega 集群；
+	// 若用户仍配置了旧的 volcano_tts，自动升级避免返回空音频。
+	cluster := p.cluster
+	if cluster == "volcano_tts" && strings.HasSuffix(voiceType, "_bigtts") {
+		cluster = "volcano_mega"
+	}
+
 	ttsReq := doubaoV1Request{
 		App: doubaoV1App{
 			AppID:   p.appID,
 			Token:   p.accessToken,
-			Cluster: p.cluster,
+			Cluster: cluster,
 		},
 		User: doubaoV1User{UID: "inkframe"},
 		Audio: audio,
