@@ -1373,17 +1373,30 @@ func (s *VideoService) ApplyReviewInserts(videoID uint, inserts []model.ShotInse
 		}
 	}
 
-	sorted := make([]model.ShotInsertSuggestion, 0, len(inserts))
-	for _, ins := range inserts {
+	type indexedIns struct {
+		ins   model.ShotInsertSuggestion
+		origIdx int
+	}
+	indexed := make([]indexedIns, 0, len(inserts))
+	for i, ins := range inserts {
 		if ins.AfterShotNo < 0 || ins.AfterShotNo > maxShotNo {
 			logger.Errorf("[ApplyReviewInserts] videoID=%d: skipping invalid AfterShotNo=%d (max=%d)", videoID, ins.AfterShotNo, maxShotNo)
 			continue
 		}
-		sorted = append(sorted, ins)
+		indexed = append(indexed, indexedIns{ins: ins, origIdx: i})
 	}
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].AfterShotNo > sorted[j].AfterShotNo
+	// 按 AfterShotNo 降序；同一位置内按原始序号降序（反向插入），
+	// 使同组多条建议最终以原始顺序排列（后插的出现在前面，先插的被推后）。
+	sort.SliceStable(indexed, func(i, j int) bool {
+		if indexed[i].ins.AfterShotNo != indexed[j].ins.AfterShotNo {
+			return indexed[i].ins.AfterShotNo > indexed[j].ins.AfterShotNo
+		}
+		return indexed[i].origIdx > indexed[j].origIdx
 	})
+	sorted := make([]model.ShotInsertSuggestion, 0, len(indexed))
+	for _, item := range indexed {
+		sorted = append(sorted, item.ins)
+	}
 	count := 0
 	for _, ins := range sorted {
 		// 对白镜头：narration 留空，由 dialogue 填充
