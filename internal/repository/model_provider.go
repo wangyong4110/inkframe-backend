@@ -115,29 +115,45 @@ func NewAIModelRepository(db *gorm.DB) *AIModelRepository {
 // GetAvailableByTaskType 获取任务可用的模型。
 // suitable_tasks 列存储 JSON 数组字符串（如 `["chapter","image"]`）；使用 LIKE 在 DB 层过滤，
 // 兼容 MySQL 和 SQLite，无需全量加载后在内存中遍历。
-// 仅返回已配置完整凭据的提供商下的模型：
+// 凭据检查规则：
 //   - needs_secret_key=true（如 doubao-speech-v1、kling 系列）：api_key 和 api_secret_key 均非空
 //   - needs_secret_key=false（如 doubao-speech、openai）：api_key 非空即可
 //
-// 与 providerHasCredentials（domain_services.go）保持一致，避免模型显示但实际调用失败。
-// GetAvailableByTaskType 获取指定任务类型的可用模型。
-// tenantID > 0 时只返回该租户自己的模型 + 系统模型（tenant_id=0）；
+// 对于系统级 provider（tenant_id=0）的模型，若租户创建了同名的私有 provider 并配置了凭据，
+// 则视为该租户的模型可用——解决"系统模型 + 租户私有 API Key"的常见配置模式。
+//
+// tenantID > 0 时返回该租户自己的模型 + 系统模型（tenant_id=0）；
 // tenantID = 0 时仅返回系统模型（用于内部无租户上下文的场景）。
 func (r *AIModelRepository) GetAvailableByTaskType(taskType string, tenantID uint) ([]*model.AIModel, error) {
 	var models []*model.AIModel
 	pattern := `%"` + taskType + `"%`
+	// 凭据检查：基于模型所属的 provider p
 	credCond := "(CASE WHEN p.needs_secret_key = 1 " +
 		"THEN (p.api_key != '' AND p.api_secret_key != '') " +
 		"ELSE p.api_key != '' END)"
+
+	if tenantID == 0 {
+		// 内部调用（无租户上下文）：仅检查系统 provider 自身凭据
+		query := r.db.Preload("Provider").
+			Joins("JOIN ink_model_provider p ON p.id = ink_ai_model.provider_id AND p.deleted_at IS NULL").
+			Where("ink_ai_model.is_active = ? AND ink_ai_model.is_available = ? AND ink_ai_model.suitable_tasks LIKE ?"+
+				" AND p.tenant_id = 0 AND "+credCond, true, true, pattern)
+		return models, query.Find(&models).Error
+	}
+
+	// 租户调用：对系统 provider 的模型，若租户配置了同名私有 provider 也视为可用
+	// tp = 租户私有同名 provider（可能不存在，LEFT JOIN）
+	tenantOverrideCred := "(CASE WHEN p.needs_secret_key = 1 " +
+		"THEN (tp.api_key != '' AND tp.api_secret_key != '') " +
+		"ELSE tp.api_key != '' END)"
 	query := r.db.Preload("Provider").
 		Joins("JOIN ink_model_provider p ON p.id = ink_ai_model.provider_id AND p.deleted_at IS NULL").
-		Where("ink_ai_model.is_active = ? AND ink_ai_model.is_available = ? AND ink_ai_model.suitable_tasks LIKE ?"+
-			" AND "+credCond, true, true, pattern)
-	if tenantID > 0 {
-		query = query.Where("p.tenant_id = 0 OR p.tenant_id = ?", tenantID)
-	} else {
-		query = query.Where("p.tenant_id = 0")
-	}
+		Joins("LEFT JOIN ink_model_provider tp ON tp.name = p.name AND tp.tenant_id = ? AND tp.deleted_at IS NULL", tenantID).
+		Where("ink_ai_model.is_active = ? AND ink_ai_model.is_available = ?"+
+			" AND ink_ai_model.suitable_tasks LIKE ?"+
+			" AND (p.tenant_id = 0 OR p.tenant_id = ?)"+
+			" AND ("+credCond+" OR (p.tenant_id = 0 AND tp.id IS NOT NULL AND "+tenantOverrideCred+"))",
+			true, true, pattern, tenantID)
 	if err := query.Find(&models).Error; err != nil {
 		return nil, err
 	}

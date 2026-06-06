@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  InkFrame 一键部署脚本 — Linux
-#  适用：Ubuntu 20.04+  /  Debian 11+  /  CentOS 8+  /  AlmaLinux 8+  /  RHEL 8+
+#  适用：Ubuntu 20.04+  /  Debian 11+  /  AlmaLinux 8+  /  Rocky Linux 8+  /  RHEL 8+
 #
 #  用法：
 #    bash scripts/deploy-linux.sh          # 生产模式
@@ -59,6 +59,12 @@ run_privileged() {
   fi
 }
 
+# ─── sed 转义辅助（避免变量中的特殊字符破坏 sed 命令） ───────────────────────
+# 对 sed 替换字段（使用 | 作为分隔符）中的特殊字符进行转义：\ & |
+sed_esc() {
+  printf '%s' "$1" | sed 's/\\/\\\\/g; s/&/\\&/g; s/|/\\|/g'
+}
+
 # =============================================================================
 echo -e "\n${BOLD}${CYAN}"
 echo "  ╔══════════════════════════════════════╗"
@@ -80,18 +86,23 @@ if [[ "$MODE" == "stop" ]]; then
       rm -f "$pid_file"
     fi
   done
-  # 同时检查 systemd 服务
-  for svc in inkframe-backend inkframe-frontend; do
-    if systemctl is-active --quiet "$svc" 2>/dev/null; then
-      run_privileged systemctl stop "$svc"
-      ok "已停止 systemd 服务 $svc"
-    fi
-  done
+  # 同时检查 systemd 服务（如可用）
+  if command -v systemctl &>/dev/null; then
+    for svc in inkframe-backend inkframe-frontend; do
+      if systemctl is-active --quiet "$svc" 2>/dev/null; then
+        run_privileged systemctl stop "$svc"
+        ok "已停止 systemd 服务 $svc"
+      fi
+    done
+  fi
   info "服务已停止"
   exit 0
 fi
 
-mkdir -p "$LOG_DIR" "$PID_DIR"
+mkdir -p "$LOG_DIR" "$PID_DIR" || {
+  error "无法创建目录 $LOG_DIR / $PID_DIR"
+  exit 1
+}
 
 # =============================================================================
 step "1 / 7  检测 Linux 发行版"
@@ -118,7 +129,7 @@ esac
 
 if [[ "$PKG_FAMILY" == "unknown" ]]; then
   error "不支持的发行版: $DISTRO_ID"
-  error "已测试: Ubuntu 20.04+, Debian 11+, CentOS 8+, AlmaLinux 8+, RHEL 8+, Fedora 36+"
+  error "已测试: Ubuntu 20.04+, Debian 11+, AlmaLinux 8+, Rocky Linux 8+, RHEL 8+, Fedora 36+"
   exit 1
 fi
 ok "发行版: ${PRETTY_NAME:-$DISTRO_ID}  (包系: $PKG_FAMILY)"
@@ -138,19 +149,39 @@ ok "基础工具已就绪"
 # ── Go ───────────────────────────────────────────────────────────────────────
 INSTALLED_GO_OK=false
 if command -v go &>/dev/null; then
+  # grep -oE 'go[0-9]+\.[0-9]+' 只取 major.minor（如 go1.24），不含 patch
   go_ver=$(go version | grep -oE 'go[0-9]+\.[0-9]+' | head -1 | tr -d go)
-  major=${go_ver%%.*}; minor=${go_ver#*.}
-  (( major > 1 || (major == 1 && minor >= 24) )) && INSTALLED_GO_OK=true
+  go_major=${go_ver%%.*}
+  go_minor=${go_ver#*.}
+  (( go_major > 1 || (go_major == 1 && go_minor >= 24) )) && INSTALLED_GO_OK=true
 fi
 
 if ! $INSTALLED_GO_OK; then
   info "安装 Go ${GO_VERSION}..."
   ARCH=$(uname -m)
-  [[ "$ARCH" == "x86_64" ]] && GOARCH="amd64"
-  [[ "$ARCH" == "aarch64" ]] && GOARCH="arm64"
+  case "$ARCH" in
+    x86_64)  GOARCH="amd64" ;;
+    aarch64) GOARCH="arm64" ;;
+    *)
+      error "不支持的架构: $ARCH"
+      exit 1 ;;
+  esac
   GOTAR="go${GO_VERSION}.linux-${GOARCH}.tar.gz"
-  wget -q --show-progress -O "/tmp/$GOTAR" \
+
+  info "下载 Go $GO_VERSION..."
+  wget -q --https-only --show-progress -O "/tmp/$GOTAR" \
     "https://go.dev/dl/$GOTAR"
+
+  info "验证 SHA256 校验和..."
+  EXPECTED_SHA=$(wget -q --https-only -O- "https://go.dev/dl/$GOTAR.sha256")
+  ACTUAL_SHA=$(sha256sum "/tmp/$GOTAR" | awk '{print $1}')
+  if [[ "$EXPECTED_SHA" != "$ACTUAL_SHA" ]]; then
+    error "Go 安装包 SHA256 校验失败，可能已损坏或被篡改，中止安装。"
+    rm -f "/tmp/$GOTAR"
+    exit 1
+  fi
+  ok "SHA256 校验通过"
+
   run_privileged rm -rf /usr/local/go
   run_privileged tar -C /usr/local -xzf "/tmp/$GOTAR"
   rm -f "/tmp/$GOTAR"
@@ -171,11 +202,21 @@ fi
 
 if $NEED_NODE; then
   info "安装 Node.js ${NODE_LTS_MAJOR}..."
+  # 下载 setup 脚本到临时文件后再执行，避免直接管道执行远程脚本
+  SETUP_SCRIPT="/tmp/nodesource_setup_${NODE_LTS_MAJOR}.sh"
   if [[ "$PKG_FAMILY" == "debian" ]]; then
-    curl -fsSL "https://deb.nodesource.com/setup_${NODE_LTS_MAJOR}.x" | run_privileged bash -
+    curl -fsSL --proto '=https' \
+      "https://deb.nodesource.com/setup_${NODE_LTS_MAJOR}.x" \
+      -o "$SETUP_SCRIPT"
+    run_privileged bash "$SETUP_SCRIPT"
+    rm -f "$SETUP_SCRIPT"
     run_privileged apt-get install -y -q nodejs
   else
-    curl -fsSL "https://rpm.nodesource.com/setup_${NODE_LTS_MAJOR}.x" | run_privileged bash -
+    curl -fsSL --proto '=https' \
+      "https://rpm.nodesource.com/setup_${NODE_LTS_MAJOR}.x" \
+      -o "$SETUP_SCRIPT"
+    run_privileged bash "$SETUP_SCRIPT"
+    rm -f "$SETUP_SCRIPT"
     run_privileged dnf install -y nodejs 2>/dev/null || run_privileged yum install -y nodejs
   fi
 fi
@@ -187,7 +228,6 @@ if ! command -v mysqld &>/dev/null && ! command -v mysqld_safe &>/dev/null; then
   if [[ "$PKG_FAMILY" == "debian" ]]; then
     run_privileged apt-get install -y -q mysql-server
   else
-    # RHEL 系用 MySQL Community Repo
     if ! rpm -q mysql-community-server &>/dev/null 2>&1; then
       MYSQL_RPM_URL="https://dev.mysql.com/get/mysql80-community-release-el9-1.noarch.rpm"
       wget -q -O /tmp/mysql-repo.rpm "$MYSQL_RPM_URL"
@@ -214,10 +254,14 @@ ok "Redis 已安装"
 # =============================================================================
 step "3 / 7  启动 MySQL / Redis 服务"
 # =============================================================================
-for svc in mysql mysqld redis redis-server; do
-  systemctl list-unit-files "${svc}.service" &>/dev/null || continue
-  run_privileged systemctl enable --now "$svc" 2>/dev/null || true
-done
+if command -v systemctl &>/dev/null; then
+  for svc in mysql mysqld redis redis-server; do
+    systemctl list-unit-files "${svc}.service" &>/dev/null || continue
+    run_privileged systemctl enable --now "$svc" 2>/dev/null || true
+  done
+else
+  warn "systemd 不可用（容器环境？），请手动确认 MySQL 和 Redis 已运行"
+fi
 
 sleep 2
 
@@ -225,7 +269,6 @@ sleep 2
 if mysql -u root --connect-timeout=3 -e "SELECT 1" &>/dev/null 2>&1; then
   ok "MySQL 服务运行中（root 无密码）"
 elif [[ -f /var/log/mysqld.log ]]; then
-  # MySQL 8 初始化后有临时密码
   TMP_PASS=$(grep -oP '(?<=temporary password is generated for root@localhost: )\S+' /var/log/mysqld.log | tail -1 || true)
   if [[ -n "$TMP_PASS" ]]; then
     warn "MySQL 8 检测到临时 root 密码，请在配置步骤中输入新密码"
@@ -244,6 +287,10 @@ CONFIG="$BACKEND_DIR/config.yaml"
 if [[ ! -f "$CONFIG" ]]; then
   cp "$BACKEND_DIR/config.example.yaml" "$CONFIG"
   info "已从 config.example.yaml 创建 config.yaml"
+else
+  # 重复运行时备份现有配置
+  cp "$CONFIG" "${CONFIG}.bak.$(date +%s)"
+  info "已备份现有 config.yaml"
 fi
 
 echo ""
@@ -256,40 +303,53 @@ read -rsp "  密码          (空=无密码): " db_pass; echo
 read -rp "  后端端口      [8080]: "       be_port;  be_port="${be_port:-8080}"
 read -rp "  前端端口      [3000]: "       fe_port;  fe_port="${fe_port:-3000}"
 
-sed -i "s|host: \"localhost\"        # \[必填\]|host: \"${db_host}\"|" "$CONFIG"
-sed -i "s|port: 3306|port: ${db_port}|"                                 "$CONFIG"
-sed -i "s|database: \"inkframe\"     # \[必填\]|database: \"${db_name}\"|" "$CONFIG"
-sed -i "s|username: \"root\"         # \[必填\]|username: \"${db_user}\"|" "$CONFIG"
-sed -i "s|password: \"\"             # \[必填\]|password: \"${db_pass}\"|" "$CONFIG"
-sed -i "s|port: 8080|port: ${be_port}|"                                   "$CONFIG"
+# 转义变量中的 sed 特殊字符（& \ |），防止注入
+sed -i "s|host: \"localhost\"        # \[必填\]|host: \"$(sed_esc "$db_host")\"|"     "$CONFIG"
+sed -i "s|port: 3306|port: ${db_port}|"                                                "$CONFIG"
+sed -i "s|database: \"inkframe\"     # \[必填\]|database: \"$(sed_esc "$db_name")\"|" "$CONFIG"
+sed -i "s|username: \"root\"         # \[必填\]|username: \"$(sed_esc "$db_user")\"|" "$CONFIG"
+sed -i "s|password: \"\"             # \[必填\]|password: \"$(sed_esc "$db_pass")\"|" "$CONFIG"
+sed -i "s|port: 8080|port: ${be_port}|"                                                "$CONFIG"
 if [[ "$MODE" == "production" ]]; then
   JWT=$(openssl rand -base64 48 | tr -d '\n')
-  sed -i "s|jwt_secret: \"inkframe-dev-secret-change-in-production-2024\"|jwt_secret: \"${JWT}\"|" "$CONFIG"
+  sed -i "s|jwt_secret: \"inkframe-dev-secret-change-in-production-2024\"|jwt_secret: \"$(sed_esc "$JWT")\"|" "$CONFIG"
+  unset JWT
 fi
 ok "config.yaml 已更新"
 
-# 创建数据库
-MYSQL_AUTH="-u ${db_user}"
-[[ -n "$db_pass" ]] && MYSQL_AUTH="$MYSQL_AUTH -p${db_pass}"
-if mysql -h "${db_host}" -P "${db_port}" $MYSQL_AUTH -e \
+# 创建数据库：密码通过 --defaults-extra-file 传入，不在进程参数中暴露
+_MYSQL_CNF_FILE=""
+if [[ -n "$db_pass" ]]; then
+  _MYSQL_CNF_FILE=$(mktemp)
+  chmod 600 "$_MYSQL_CNF_FILE"
+  printf '[client]\npassword=%s\n' "$db_pass" > "$_MYSQL_CNF_FILE"
+  _MYSQL_AUTH="--defaults-extra-file=$_MYSQL_CNF_FILE"
+else
+  _MYSQL_AUTH=""
+fi
+
+if mysql $_MYSQL_AUTH -h "${db_host}" -P "${db_port}" -u "${db_user}" -e \
     "CREATE DATABASE IF NOT EXISTS \`${db_name}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;" 2>/dev/null; then
   ok "数据库 '${db_name}' 就绪"
 else
   warn "数据库创建失败，请手动执行：CREATE DATABASE \`${db_name}\` CHARACTER SET utf8mb4;"
 fi
+[[ -n "$_MYSQL_CNF_FILE" ]] && rm -f "$_MYSQL_CNF_FILE"
+unset db_pass _MYSQL_CNF_FILE _MYSQL_AUTH
 
 # =============================================================================
 step "5 / 7  构建后端"
 # =============================================================================
 cd "$BACKEND_DIR"
 info "下载 Go 依赖..."
-go mod download
-go mod tidy
+go mod download || { error "go mod download 失败，请检查网络或 go.sum 文件"; exit 1; }
+go mod tidy     || { error "go mod tidy 失败"; exit 1; }
 
 if [[ "$MODE" == "production" ]]; then
   info "编译后端..."
   mkdir -p bin
-  CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/inkframe-backend ./cmd/server
+  CGO_ENABLED=0 go build -ldflags "-s -w" -o bin/inkframe-backend ./cmd/server \
+    || { error "后端编译失败"; exit 1; }
   ok "后端二进制: $BACKEND_DIR/bin/inkframe-backend"
 else
   ok "开发模式：跳过编译"
@@ -306,11 +366,13 @@ fi
 
 cd "$FRONTEND_DIR"
 info "安装 npm 依赖..."
-npm install --prefer-offline 2>&1 | tail -5
+npm install --prefer-offline 2>&1 | tail -5 \
+  || { error "npm install 失败，请检查 Node.js 版本或网络"; exit 1; }
 
 if [[ "$MODE" == "production" ]]; then
   info "构建前端..."
-  NUXT_PUBLIC_API_BASE="http://localhost:${be_port}/api/v1" npm run build 2>&1 | tail -10
+  NUXT_PUBLIC_API_BASE="http://localhost:${be_port}/api/v1" npm run build 2>&1 | tail -10 \
+    || { error "前端构建失败，请查看以上输出"; exit 1; }
   ok "前端构建完成"
 else
   ok "开发模式：跳过构建"
@@ -332,10 +394,11 @@ for f in backend frontend; do
 done
 
 if [[ "$MODE" == "production" ]]; then
-  # ── 生成 systemd 服务单元 ──────────────────────────────────────────────────
-  CURRENT_USER=$(id -un)
+  if command -v systemctl &>/dev/null; then
+    # ── 生成 systemd 服务单元 ────────────────────────────────────────────────
+    CURRENT_USER=$(id -un)
 
-  run_privileged tee /etc/systemd/system/inkframe-backend.service > /dev/null << EOF
+    run_privileged tee /etc/systemd/system/inkframe-backend.service > /dev/null << EOF
 [Unit]
 Description=InkFrame Backend
 After=network.target mysql.service mysqld.service redis.service
@@ -354,7 +417,7 @@ StandardError=append:$LOG_DIR/backend.log
 WantedBy=multi-user.target
 EOF
 
-  run_privileged tee /etc/systemd/system/inkframe-frontend.service > /dev/null << EOF
+    run_privileged tee /etc/systemd/system/inkframe-frontend.service > /dev/null << EOF
 [Unit]
 Description=InkFrame Frontend
 After=network.target inkframe-backend.service
@@ -374,30 +437,70 @@ StandardError=append:$LOG_DIR/frontend.log
 WantedBy=multi-user.target
 EOF
 
-  run_privileged systemctl daemon-reload
-  run_privileged systemctl enable --now inkframe-backend
-  run_privileged systemctl enable --now inkframe-frontend
-  ok "systemd 服务已注册并启动"
-  ok "后端日志: journalctl -u inkframe-backend -f"
-  ok "前端日志: journalctl -u inkframe-frontend -f"
+    run_privileged systemctl daemon-reload
+    run_privileged systemctl enable --now inkframe-backend
+    run_privileged systemctl enable --now inkframe-frontend
+    ok "systemd 服务已注册并启动"
+    ok "后端日志: journalctl -u inkframe-backend -f"
+    ok "前端日志: journalctl -u inkframe-frontend -f"
+
+  else
+    warn "systemd 不可用，降级为后台进程模式"
+    nohup ./bin/inkframe-backend > "$LOG_DIR/backend.log" 2>&1 &
+    _be_pid=$!
+    if kill -0 "$_be_pid" 2>/dev/null; then
+      echo "$_be_pid" > "$PID_DIR/backend.pid"
+      ok "后端已启动 (PID $_be_pid, 日志: logs/backend.log)"
+    else
+      error "后端启动失败，请查看 $LOG_DIR/backend.log"; exit 1
+    fi
+
+    cd "$FRONTEND_DIR"
+    PORT=$fe_port nohup node .output/server/index.mjs > "$LOG_DIR/frontend.log" 2>&1 &
+    _fe_pid=$!
+    if kill -0 "$_fe_pid" 2>/dev/null; then
+      echo "$_fe_pid" > "$PID_DIR/frontend.pid"
+      ok "前端已启动 (PID $_fe_pid, 日志: logs/frontend.log)"
+    else
+      error "前端启动失败，请查看 $LOG_DIR/frontend.log"; exit 1
+    fi
+  fi
 
 else
   # 开发模式
+  cd "$BACKEND_DIR"
   nohup go run ./cmd/server > "$LOG_DIR/backend.log" 2>&1 &
-  echo $! > "$PID_DIR/backend.pid"
-  ok "后端已启动 (PID $!, 日志: logs/backend.log)"
+  _be_pid=$!
+  if kill -0 "$_be_pid" 2>/dev/null; then
+    echo "$_be_pid" > "$PID_DIR/backend.pid"
+    ok "后端已启动 (PID $_be_pid, 日志: logs/backend.log)"
+  else
+    error "后端启动失败，请查看 $LOG_DIR/backend.log"; exit 1
+  fi
 
   cd "$FRONTEND_DIR"
   PORT=$fe_port nohup npm run dev > "$LOG_DIR/frontend.log" 2>&1 &
-  echo $! > "$PID_DIR/frontend.pid"
-  ok "前端已启动 (PID $!, 日志: logs/frontend.log)"
+  _fe_pid=$!
+  if kill -0 "$_fe_pid" 2>/dev/null; then
+    echo "$_fe_pid" > "$PID_DIR/frontend.pid"
+    ok "前端已启动 (PID $_fe_pid, 日志: logs/frontend.log)"
+  else
+    error "前端启动失败，请查看 $LOG_DIR/frontend.log"; exit 1
+  fi
 fi
 
-# 等待就绪
+# 等待后端就绪（最多 30 秒）
 info "等待后端就绪..."
-for i in $(seq 1 20); do
-  curl -sf "http://localhost:${be_port}/health" &>/dev/null && break || sleep 1
+_BE_READY=false
+for i in $(seq 1 30); do
+  if curl -sf "http://localhost:${be_port}/health" &>/dev/null; then
+    _BE_READY=true; break
+  fi
+  sleep 1
 done
+if ! $_BE_READY; then
+  warn "后端在 30 秒内未响应 /health，请检查日志: $LOG_DIR/backend.log"
+fi
 
 echo ""
 echo -e "${BOLD}${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -406,7 +509,7 @@ echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━
 echo -e "  前端地址: ${CYAN}http://localhost:${fe_port}${NC}"
 echo -e "  后端地址: ${CYAN}http://localhost:${be_port}${NC}"
 echo -e "  日志目录: ${CYAN}$LOG_DIR${NC}"
-if [[ "$MODE" == "production" ]]; then
+if [[ "$MODE" == "production" ]] && command -v systemctl &>/dev/null; then
   echo -e "  停止服务: ${CYAN}sudo systemctl stop inkframe-backend inkframe-frontend${NC}"
 else
   echo -e "  停止服务: ${CYAN}bash scripts/deploy-linux.sh --stop${NC}"
