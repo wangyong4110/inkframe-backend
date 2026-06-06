@@ -72,7 +72,10 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 
 	var content string
 	if chapterID != nil {
-		chapter, _ := s.chapterRepo.GetByID(*chapterID)
+		chapter, chErr := s.chapterRepo.GetByID(*chapterID)
+		if chErr != nil {
+			logger.Errorf("[Storyboard] GetByID chapterID=%d: %v", *chapterID, chErr)
+		}
 		if chapter != nil {
 			content = chapter.Content
 		}
@@ -100,13 +103,21 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			wgPre.Add(1)
 			go func() {
 				defer wgPre.Done()
-				characters, _ = s.characterRepo.ListByNovel(novelID)
+				var e error
+				characters, e = s.characterRepo.ListByNovel(novelID)
+				if e != nil {
+					logger.Errorf("[Storyboard] characterRepo.ListByNovel novelID=%d: %v", novelID, e)
+				}
 			}()
 			if s.sceneAnchorSvc != nil {
 				wgPre.Add(1)
 				go func() {
 					defer wgPre.Done()
-					anchors, _ = s.sceneAnchorSvc.ListByNovel(novelID)
+					var e error
+					anchors, e = s.sceneAnchorSvc.ListByNovel(novelID)
+					if e != nil {
+						logger.Errorf("[Storyboard] sceneAnchorSvc.ListByNovel novelID=%d: %v", novelID, e)
+					}
 				}()
 			}
 		}
@@ -114,13 +125,21 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			wgPre.Add(1)
 			go func() {
 				defer wgPre.Done()
-				plotPoints, _ = s.plotPointRepo.ListByChapter(*chapterID)
+				var e error
+				plotPoints, e = s.plotPointRepo.ListByChapter(*chapterID)
+				if e != nil {
+					logger.Errorf("[Storyboard] plotPointRepo.ListByChapter chapterID=%d: %v", *chapterID, e)
+				}
 			}()
 		}
 		wgPre.Wait()
 		// 如果章节内无情节点，降级到小说级别
 		if s.plotPointRepo != nil && len(plotPoints) == 0 && novelID > 0 {
-			plotPoints, _ = s.plotPointRepo.ListByNovel(novelID, "", true)
+			var e error
+			plotPoints, e = s.plotPointRepo.ListByNovel(novelID, "", true)
+			if e != nil {
+				logger.Errorf("[Storyboard] plotPointRepo.ListByNovel novelID=%d: %v", novelID, e)
+			}
 		}
 	}
 
@@ -143,8 +162,8 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	if chapterID != nil {
 		chIDStr = fmt.Sprintf("%d", *chapterID)
 	}
-	logger.Printf("[Storyboard] start videoID=%d chapterID=%s provider=%q totalRunes=%d segments=%d expectedShots=%d chars=%d anchors=%d plotPoints=%d",
-		videoID, chIDStr, provider, totalRunes, len(segments), totalShots, len(characters), len(anchors), len(plotPoints))
+	logger.Printf("[Storyboard] start videoID=%d chapterID=%s provider=%q voiceMode=%q totalRunes=%d segments=%d expectedShots=%d chars=%d anchors=%d plotPoints=%d",
+		videoID, chIDStr, provider, overrides.VoiceMode, totalRunes, len(segments), totalShots, len(characters), len(anchors), len(plotPoints))
 
 	// 并行处理各段落：段间内容本身保证情节连贯（AI 读段落文本即可自然衔接），
 	// 不再传递 prevTailShots，换取所有段同时发起 AI 调用。

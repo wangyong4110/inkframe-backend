@@ -392,6 +392,16 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 			aiPrompt = item.Tag
 		}
 		if u, dur, err := s.aiSvc.GenerateSFX(ctx, tenantID, aiPrompt, sfxDur); err == nil && u != "" {
+			// Kling SFX 等返回 CDN 临时链接（24~48h 后过期）；
+			// 生成后立即下载并上传 OSS，保证长期可访问。
+			if s.storageSvc != nil && strings.HasPrefix(u, "https://") {
+				ossKey := fmt.Sprintf("sfx/video_%d/shot_%d_ai.mp3", shot.VideoID, shot.ID)
+				if ossURL, uploadErr := downloadURLAndUploadToOSS(ctx, s.storageSvc, u, ossKey); uploadErr == nil {
+					u = ossURL
+				} else {
+					logger.Printf("[SFXService] shot %d AI-SFX OSS upload failed (using CDN URL): %v", shot.ID, uploadErr)
+				}
+			}
 			logger.Printf("[SFXService] shot %d AI-SFX hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 			return sfxHit{url: u, source: "ai-sfx", durationSecs: dur}
 		} else if err != nil && !isNoProviderErr(err) {

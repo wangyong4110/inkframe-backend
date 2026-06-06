@@ -317,13 +317,17 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 	if err != nil {
 		// Clear stale audio_path so the UI shows generation failed rather than showing an old path.
 		if seg.AudioPath != "" {
-			_ = s.segmentRepo.UpdateFields(segID, map[string]interface{}{"audio_path": ""})
+			if clearErr := s.segmentRepo.UpdateFields(segID, map[string]interface{}{"audio_path": ""}); clearErr != nil {
+				logger.Errorf("[VideoService] GenerateSegmentAudio: clear audio_path for segment %d: %v", segID, clearErr)
+			}
 		}
 		return fmt.Errorf("TTS failed for segment %d: %w", segID, err)
 	}
 	if audioURL == "" {
 		if seg.AudioPath != "" {
-			_ = s.segmentRepo.UpdateFields(segID, map[string]interface{}{"audio_path": ""})
+			if clearErr := s.segmentRepo.UpdateFields(segID, map[string]interface{}{"audio_path": ""}); clearErr != nil {
+				logger.Errorf("[VideoService] GenerateSegmentAudio: clear audio_path for segment %d: %v", segID, clearErr)
+			}
 		}
 		return fmt.Errorf("TTS returned empty URL for segment %d", segID)
 	}
@@ -691,7 +695,9 @@ func (s *VideoService) MergeVoiceSegments(ctx context.Context, shotID, tenantID 
 	}
 	if len(ready) == 1 {
 		shot.AudioPath = ready[0].AudioPath
-		_ = s.storyboardRepo.Update(shot)
+		if err := s.storyboardRepo.Update(shot); err != nil {
+			logger.Errorf("[VideoService] MergeVoiceSegments: storyboardRepo.Update shot %d: %v", shot.ID, err)
+		}
 		return shot.AudioPath, nil
 	}
 
@@ -757,7 +763,9 @@ func (s *VideoService) MergeVoiceSegments(ctx context.Context, shotID, tenantID 
 	}
 
 	shot.AudioPath = audioURL
-	_ = s.storyboardRepo.Update(shot)
+	if err := s.storyboardRepo.Update(shot); err != nil {
+		logger.Errorf("[VideoService] MergeVoiceSegments: storyboardRepo.Update shot %d: %v", shot.ID, err)
+	}
 	return audioURL, nil
 }
 

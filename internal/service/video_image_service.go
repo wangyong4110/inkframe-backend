@@ -134,9 +134,9 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 					logger.Printf("BatchGenerateShots: shot %d image ready", sh.ShotNo)
 				} else {
 					logger.Printf("BatchGenerateShots: shot %d image failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
-					_ = s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
-						"status": "failed",
-					})
+					if e := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{"status": "failed"}); e != nil {
+						logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d status=failed: %v", sh.ID, e)
+					}
 				}
 			} else {
 				// ── AI 视频模式：原有同步逻辑（提交 → provider 轮询）──────────────
@@ -152,9 +152,9 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 				}
 				if genErr != nil {
 					logger.Printf("BatchGenerateShots: shot %d failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
-					_ = s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
-						"status": "failed",
-					})
+					if e := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{"status": "failed"}); e != nil {
+						logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d status=failed: %v", sh.ID, e)
+					}
 				} else {
 					logger.Printf("BatchGenerateShots: shot %d submitted successfully (taskID=%s)", sh.ShotNo, sh.ShotTaskID)
 				}
@@ -477,7 +477,11 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		if err := json.Unmarshal([]byte(shot.Characters), &shotChars); err == nil && len(shotChars) > 0 {
 			if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil && video.NovelID > 0 {
 				if cachedNovelChars == nil {
-					cachedNovelChars, _ = s.characterRepo.ListByNovel(video.NovelID)
+					var e error
+					cachedNovelChars, e = s.characterRepo.ListByNovel(video.NovelID)
+					if e != nil {
+						logger.Errorf("[VideoService] characterRepo.ListByNovel novelID=%d: %v", video.NovelID, e)
+					}
 				}
 				if len(cachedNovelChars) > 0 {
 					nameMap := make(map[string]*model.Character, len(cachedNovelChars))

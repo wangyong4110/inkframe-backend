@@ -682,6 +682,32 @@ func (s *SFXService) generateElevenLabsForTag(ctx context.Context, tenantID uint
 	return "", 0, fmt.Errorf("elevenlabs-sfx: no DB credentials configured for tenant %d", tenantID)
 }
 
+// downloadURLAndUploadToOSS 从远端 URL 下载音频并上传到 OSS，返回 OSS 永久 URL。
+// 用于将 Kling SFX / ElevenLabs 等 CDN 临时链接转为永久可访问地址。
+func downloadURLAndUploadToOSS(ctx context.Context, svc storage.Service, srcURL, ossKey string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, srcURL, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := (&http.Client{Timeout: 60 * time.Second}).Do(req)
+	if err != nil {
+		return "", fmt.Errorf("download %s: %w", srcURL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("download %s: HTTP %d", srcURL, resp.StatusCode)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 32*1024*1024)) // 最大 32MB
+	if err != nil {
+		return "", fmt.Errorf("read %s: %w", srcURL, err)
+	}
+	ct := resp.Header.Get("Content-Type")
+	if ct == "" || !strings.HasPrefix(ct, "audio/") {
+		ct = "audio/mpeg"
+	}
+	return svc.Upload(ctx, ossKey, bytes.NewReader(data), int64(len(data)), ct)
+}
+
 // uploadLocalFileToOSS 读取本地文件并上传到 OSS，上传后删除临时文件。
 func uploadLocalFileToOSS(ctx context.Context, svc storage.Service, localPath, ossKey string) (string, error) {
 	f, err := os.Open(localPath)

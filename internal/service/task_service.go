@@ -135,7 +135,11 @@ func (s *TaskService) Create(tenantID uint, taskType, title, entityType string, 
 
 // SetRunning transitions the task to running.
 func (s *TaskService) SetRunning(taskID string) error {
-	return s.repo.UpdateFields(taskID, map[string]interface{}{"status": "running"})
+	if err := s.repo.UpdateFields(taskID, map[string]interface{}{"status": "running"}); err != nil {
+		logger.Errorf("[TaskService] SetRunning(%s): %v", taskID, err)
+		return err
+	}
+	return nil
 }
 
 // UpdateProgress updates the task's progress percentage (0-99).
@@ -148,7 +152,11 @@ func (s *TaskService) UpdateProgress(taskID string, progress int) error {
 	if progress > 99 {
 		progress = 99
 	}
-	return s.repo.UpdateFields(taskID, map[string]interface{}{"progress": progress})
+	if err := s.repo.UpdateFields(taskID, map[string]interface{}{"progress": progress}); err != nil {
+		logger.Errorf("[TaskService] UpdateProgress(%s, %d): %v", taskID, progress, err)
+		return err
+	}
+	return nil
 }
 
 // UpdateProgressAndTitle updates progress percentage and the human-readable task title together.
@@ -172,13 +180,21 @@ func (s *TaskService) Complete(taskID string, result interface{}) error {
 			resultJSON = string(b)
 		}
 	}
-	return s.repo.CompleteIfNotCancelled(taskID, resultJSON)
+	if err := s.repo.CompleteIfNotCancelled(taskID, resultJSON); err != nil {
+		logger.Errorf("[TaskService] Complete(%s): %v", taskID, err)
+		return err
+	}
+	return nil
 }
 
 // Fail records the error message and marks the task failed.
 // No-op if the task has already been cancelled.
 func (s *TaskService) Fail(taskID string, errMsg string) error {
-	return s.repo.FailIfNotCancelled(taskID, errMsg)
+	if err := s.repo.FailIfNotCancelled(taskID, errMsg); err != nil {
+		logger.Errorf("[TaskService] Fail(%s) reason=%q: %v", taskID, errMsg, err)
+		return err
+	}
+	return nil
 }
 
 // MarkTaskFailed implements dead-letter queue semantics.

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
 
@@ -73,4 +74,18 @@ func maskAPIKey(key string) string {
 		return "****"
 	}
 	return key[:4] + "****" + key[len(key)-4:]
+}
+
+// taskFail 标记任务失败并记录日志；若 taskSvc.Fail 本身出错也打印。
+func taskFail(svc interface{ Fail(string, string) error }, taskID, reason string) {
+	if err := svc.Fail(taskID, reason); err != nil {
+		logger.Errorf("[task] Fail(%s) error: %v", taskID, err)
+	}
+}
+
+// taskComplete 标记任务完成并记录日志；若 taskSvc.Complete 本身出错也打印。
+func taskComplete(svc interface{ Complete(string, interface{}) error }, taskID string, data interface{}) {
+	if err := svc.Complete(taskID, data); err != nil {
+		logger.Errorf("[task] Complete(%s) error: %v", taskID, err)
+	}
 }
