@@ -421,6 +421,7 @@ type CharacterService struct {
 	characterRepo        *repository.CharacterRepository
 	chapterCharacterRepo *repository.ChapterCharacterRepository
 	snapshotRepo         *repository.CharacterStateSnapshotRepository // optional, for cascade delete
+	lookRepo             *repository.CharacterLookRepository          // optional, for look management
 	aiService            *AIService
 	novelRepo            *repository.NovelRepository   // optional, for AIBatchGenerate
 	chapterRepo          *repository.ChapterRepository // optional, for AIBatchGenerate
@@ -532,6 +533,11 @@ func (s *CharacterService) GetNovelImageStyle(novelID uint) string {
 }
 
 // WithChapterCharacterRepo 注入章节角色覆盖仓库（可选）
+func (s *CharacterService) WithLookRepo(r *repository.CharacterLookRepository) *CharacterService {
+	s.lookRepo = r
+	return s
+}
+
 func (s *CharacterService) WithChapterCharacterRepo(r *repository.ChapterCharacterRepository) *CharacterService {
 	s.chapterCharacterRepo = r
 	return s
@@ -1702,4 +1708,128 @@ func (s *ImageGenerationService) GenerateFaceCloseupImage(ctx context.Context, t
 		return nil, err
 	}
 	return &GeneratedCharacterImage{URL: url, Description: name + " face closeup"}, nil
+}
+
+// ─── CharacterLook methods ────────────────────────────────────────────────────
+
+func (s *CharacterService) CreateLook(characterID, novelID uint, req *model.CreateCharacterLookRequest) (*model.CharacterLook, error) {
+	if s.lookRepo == nil {
+		return nil, fmt.Errorf("look repository not wired")
+	}
+	look := &model.CharacterLook{
+		CharacterID:  characterID,
+		NovelID:      novelID,
+		Label:        req.Label,
+		ChapterFrom:  req.ChapterFrom,
+		ChapterTo:    req.ChapterTo,
+		IsDefault:    req.IsDefault,
+		SortOrder:    req.SortOrder,
+		Description:  req.Description,
+		VisualPrompt: req.VisualPrompt,
+	}
+	if look.ChapterFrom == 0 {
+		look.ChapterFrom = 1
+	}
+	if err := s.lookRepo.Create(look); err != nil {
+		return nil, err
+	}
+	return look, nil
+}
+
+func (s *CharacterService) GetLook(id uint) (*model.CharacterLook, error) {
+	if s.lookRepo == nil {
+		return nil, fmt.Errorf("look repository not wired")
+	}
+	return s.lookRepo.GetByID(id)
+}
+
+func (s *CharacterService) ListLooks(characterID uint) ([]*model.CharacterLook, error) {
+	if s.lookRepo == nil {
+		return nil, fmt.Errorf("look repository not wired")
+	}
+	return s.lookRepo.ListByCharacter(characterID)
+}
+
+func (s *CharacterService) UpdateLook(id uint, req *model.UpdateCharacterLookRequest) (*model.CharacterLook, error) {
+	if s.lookRepo == nil {
+		return nil, fmt.Errorf("look repository not wired")
+	}
+	look, err := s.lookRepo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if req.Label != nil {
+		look.Label = *req.Label
+	}
+	if req.ChapterFrom != nil {
+		look.ChapterFrom = *req.ChapterFrom
+	}
+	if req.ChapterTo != nil {
+		look.ChapterTo = *req.ChapterTo
+	}
+	if req.IsDefault != nil {
+		look.IsDefault = *req.IsDefault
+	}
+	if req.SortOrder != nil {
+		look.SortOrder = *req.SortOrder
+	}
+	if req.Description != nil {
+		look.Description = *req.Description
+	}
+	if req.VisualPrompt != nil {
+		look.VisualPrompt = *req.VisualPrompt
+	}
+	if req.ThreeViewSheet != nil {
+		look.ThreeViewSheet = *req.ThreeViewSheet
+	}
+	if req.FaceCloseup != nil {
+		look.FaceCloseup = *req.FaceCloseup
+	}
+	if req.Portrait != nil {
+		look.Portrait = *req.Portrait
+	}
+	if err := s.lookRepo.Update(look); err != nil {
+		return nil, err
+	}
+	return look, nil
+}
+
+func (s *CharacterService) DeleteLook(id uint) error {
+	if s.lookRepo == nil {
+		return fmt.Errorf("look repository not wired")
+	}
+	return s.lookRepo.Delete(id)
+}
+
+// GetActiveLook 返回指定章节号的激活形象，未找到则返回 nil（调用方回退到 Character.VisualPrompt）。
+func (s *CharacterService) GetActiveLook(characterID uint, chapterNo int) (*model.CharacterLook, error) {
+	if s.lookRepo == nil {
+		return nil, nil //nolint:nilnil
+	}
+	return s.lookRepo.GetActiveLook(characterID, chapterNo)
+}
+
+// GenerateLookVisualPrompt 根据角色基础描述和形象描述生成 AI 图像英文 Prompt。
+func (s *CharacterService) GenerateLookVisualPrompt(tenantID, characterID uint, lookDesc string) (string, error) {
+	char, err := s.characterRepo.GetByID(characterID)
+	if err != nil {
+		return "", err
+	}
+	basePrompt := char.VisualPrompt
+	if basePrompt == "" {
+		basePrompt = char.Description
+	}
+	prompt := fmt.Sprintf(`You are a professional visual designer for novels. Given a character's base description and a specific appearance change description, generate a concise English visual prompt suitable for AI image generation. The prompt should describe physical appearance only (clothing, hair, accessories, body features). Keep it under 200 words. Output only the prompt, no explanation.
+
+Base character: %s
+
+Appearance change: %s
+
+English visual prompt:`, basePrompt, lookDesc)
+	result, err := s.aiService.GenerateWithProvider(tenantID, char.NovelID, "character_profile", prompt, "",
+		StoryboardOverrides{MaxTokens: 512})
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(result), nil
 }

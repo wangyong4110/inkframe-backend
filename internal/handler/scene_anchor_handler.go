@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/storage"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/service"
@@ -19,10 +20,16 @@ type SceneAnchorHandler struct {
 	chapterSvc     *service.ChapterService
 	videoSvc       *service.VideoService
 	novelSvc       *service.NovelService
+	storageSvc     storage.Service
 }
 
 func NewSceneAnchorHandler(svc *service.SceneAnchorService, consistencySvc *service.SceneConsistencyService) *SceneAnchorHandler {
 	return &SceneAnchorHandler{svc: svc, consistencySvc: consistencySvc}
+}
+
+func (h *SceneAnchorHandler) WithStorageService(svc storage.Service) *SceneAnchorHandler {
+	h.storageSvc = svc
+	return h
 }
 
 func (h *SceneAnchorHandler) WithTaskService(svc *service.TaskService) *SceneAnchorHandler {
@@ -239,6 +246,34 @@ func (h *SceneAnchorHandler) LockRefImage(c *gin.Context) {
 		return
 	}
 	respondOK(c, nil)
+}
+
+// UploadRefImage POST /scene-anchors/:id/ref-image/upload
+// 上传本地图片作为场景参考图，上传后自动调用 SetRefImage 锁定。
+func (h *SceneAnchorHandler) UploadRefImage(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	existing, err := h.svc.Get(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "scene anchor not found")
+		return
+	}
+	if existing.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
+	imgURL, ok := receiveAndUpload(c, "scene-ref-images", h.storageSvc, []string{".jpg", ".jpeg", ".png", ".webp"})
+	if !ok {
+		return
+	}
+	if err := h.svc.SetRefImage(uint(id), imgURL, nil); err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to save ref image")
+		return
+	}
+	updated, _ := h.svc.Get(uint(id))
+	respondOK(c, gin.H{"url": imgURL, "anchor": updated})
 }
 
 // GenerateRefImage POST /scene-anchors/:id/generate-ref-image

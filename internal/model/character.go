@@ -190,6 +190,37 @@ type ChapterCharacter struct {
 
 func (ChapterCharacter) TableName() string { return "ink_chapter_character" }
 
+// CharacterLook 角色形象（不同时期的外观版本）
+// 选取规则：chapter_from <= chapterNo AND (chapter_to == 0 OR chapter_to >= chapterNo)
+// 多条匹配时取 chapter_from 最大的；无匹配时取 is_default=true 的；再无则用 Character.VisualPrompt。
+type CharacterLook struct {
+	ID          uint `json:"id" gorm:"primaryKey"`
+	CharacterID uint `json:"character_id" gorm:"index:idx_look_char_novel,priority:1;not null"`
+	NovelID     uint `json:"novel_id" gorm:"index:idx_look_char_novel,priority:2;not null"`
+
+	Label       string `json:"label" gorm:"size:100"`      // 形象名称，如"少年时期""伪装成书生""觉醒后"
+	ChapterFrom int    `json:"chapter_from" gorm:"default:1"` // 起始章节（含）；0=从头
+	ChapterTo   int    `json:"chapter_to" gorm:"default:0"`   // 结束章节（含）；0=无限延伸
+	IsDefault   bool   `json:"is_default" gorm:"default:false"` // 兜底形象（无范围匹配时使用）
+	SortOrder   int    `json:"sort_order" gorm:"default:0"`
+
+	// 外观描述（中文，供用户阅读和编辑）
+	Description string `json:"description" gorm:"type:text"`
+	// AI 图像生成英文提示词（基于外观描述生成/编辑）
+	VisualPrompt string `json:"visual_prompt" gorm:"type:text"`
+
+	// 该形象的参考图像
+	ThreeViewSheet string `json:"three_view_sheet" gorm:"size:1000"`
+	FaceCloseup    string `json:"face_closeup" gorm:"size:1000"`
+	Portrait       string `json:"portrait" gorm:"size:1000"`
+
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
+}
+
+func (CharacterLook) TableName() string { return "ink_character_look" }
+
 // ─── Character / Item / ChapterCharacter DTOs ─────────────────────────────────
 
 type CreateCharacterRequest struct {
@@ -260,4 +291,29 @@ type UpsertChapterCharacterRequest struct {
 	Status      string `json:"status"`
 	Location    string `json:"location"`
 	Notes       string `json:"notes"`
+}
+
+// CreateCharacterLookRequest 创建角色形象请求
+type CreateCharacterLookRequest struct {
+	Label        string `json:"label"`
+	ChapterFrom  int    `json:"chapter_from"`
+	ChapterTo    int    `json:"chapter_to"`
+	IsDefault    bool   `json:"is_default"`
+	SortOrder    int    `json:"sort_order"`
+	Description  string `json:"description"`
+	VisualPrompt string `json:"visual_prompt"`
+}
+
+// UpdateCharacterLookRequest 更新角色形象请求
+type UpdateCharacterLookRequest struct {
+	Label        *string `json:"label"`
+	ChapterFrom  *int    `json:"chapter_from"`
+	ChapterTo    *int    `json:"chapter_to"`
+	IsDefault    *bool   `json:"is_default"`
+	SortOrder    *int    `json:"sort_order"`
+	Description  *string `json:"description"`
+	VisualPrompt *string `json:"visual_prompt"`
+	ThreeViewSheet *string `json:"three_view_sheet"`
+	FaceCloseup    *string `json:"face_closeup"`
+	Portrait       *string `json:"portrait"`
 }

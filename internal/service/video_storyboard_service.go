@@ -30,9 +30,10 @@ import (
 // ─── Package-level constants for magic numbers ───────────────────────────────
 
 const (
-	defaultShotDurationSecs  = 5.0  // 默认分镜时长（秒）
-	maxSegmentRunes          = 3500 // 每段最多字符数（约 25 个镜头，≈5000 tokens）
-	charRuneOverlapThreshold = 0.7  // 角色名模糊匹配汉字重叠比例阈值（需≥70%重叠，避免"炎少"误匹配"萧炎"）
+	defaultShotDurationSecs  = 5.0   // 默认分镜时长（秒）
+	maxSegmentRunes          = 3500  // 每段最多字符数（约 25 个镜头，≈5000 tokens）
+	charRuneOverlapThreshold = 0.7   // 角色名模糊匹配汉字重叠比例阈值（需≥70%重叠，避免"炎少"误匹配"萧炎"）
+	shiftTempOffset          = 100000 // 两阶段 shot_no 位移时使用的临时偏移量，避免 MySQL 唯一键冲突
 )
 
 // ─── Storyboard Generation ────────────────────────────────────────────────────
@@ -199,7 +200,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			}
 			logger.Printf("[Storyboard] seg %d/%d start runes=%d expectedShots=%d", idx+1, len(segments), segRunes, segShotCount)
 
-			prompt := s.buildStoryboardPrompt(video, content, userPrompt, idx+1, len(segments), segShotCount, characters, anchors, plotPoints, nil, overrides.VoiceMode, promptLanguage)
+			prompt := s.buildStoryboardPrompt(video, content, userPrompt, idx+1, len(segments), segShotCount, characters, anchors, plotPoints, nil, overrides.VoiceMode, promptLanguage, video.Pacing)
 
 			var result string
 			var aiErr error
@@ -590,6 +591,7 @@ func (s *VideoService) buildStoryboardPrompt(
 	prevShots []*model.StoryboardShot,
 	voiceMode string,
 	promptLanguage string,
+	pacing string,
 ) string {
 	isEn := promptLanguage == "en"
 
@@ -693,17 +695,18 @@ func (s *VideoService) buildStoryboardPrompt(
 	}
 
 	ctx := map[string]interface{}{
-		"IsEn":              isEn,
-		"SegLabel":          segLabel,
-		"ExpectedShots":     expectedShots,
+		"IsEn":                isEn,
+		"SegLabel":            segLabel,
+		"ExpectedShots":       expectedShots,
 		"ExpectedShotsMinus2": expectedShotsMinus2,
-		"VoiceMode":         voiceMode,
-		"PrevShots":         prevShotsData,
-		"Characters":        matchedChars,
-		"Anchors":           matchedAnchors,
-		"PlotPoints":        ppData,
-		"Content":           content,
-		"UserPrompt":        userPrompt,
+		"VoiceMode":           voiceMode,
+		"Pacing":              pacing,
+		"PrevShots":           prevShotsData,
+		"Characters":          matchedChars,
+		"Anchors":             matchedAnchors,
+		"PlotPoints":          ppData,
+		"Content":             content,
+		"UserPrompt":          userPrompt,
 	}
 	result, err := renderPrompt("storyboard_generate", ctx)
 	if err != nil {
@@ -1134,10 +1137,20 @@ func (s *VideoService) InsertShot(videoID uint, afterShotNo int, narration, desc
 		Status:      "pending",
 	}
 	// Shift + create must be atomic to avoid a corrupt shot_no sequence on partial failure.
+	// Two-phase UPDATE: first shift all affected rows into a collision-free temp range
+	// (+shiftTempOffset), then shift back to the intended position. A single-step UPDATE
+	// causes MySQL to process rows one by one and trigger the unique key constraint
+	// mid-scan (e.g. shot 7→8 conflicts while shot 8 still exists).
 	err := s.storyboardRepo.DB().Transaction(func(tx *gorm.DB) error {
 		if e := tx.Exec(
-			"UPDATE ink_storyboard_shot SET shot_no = shot_no + 1 WHERE video_id = ? AND shot_no >= ? AND deleted_at IS NULL",
-			videoID, newShotNo,
+			"UPDATE ink_storyboard_shot SET shot_no = shot_no + ? WHERE video_id = ? AND shot_no >= ? AND deleted_at IS NULL",
+			shiftTempOffset, videoID, newShotNo,
+		).Error; e != nil {
+			return e
+		}
+		if e := tx.Exec(
+			"UPDATE ink_storyboard_shot SET shot_no = shot_no - ? + 1 WHERE video_id = ? AND shot_no >= ? AND deleted_at IS NULL",
+			shiftTempOffset, videoID, newShotNo+shiftTempOffset,
 		).Error; e != nil {
 			return e
 		}
@@ -1191,8 +1204,14 @@ func (s *VideoService) CopyShotAfter(sourceShotID uint, afterShotNo int) (*model
 	}
 	err = s.storyboardRepo.DB().Transaction(func(tx *gorm.DB) error {
 		if e := tx.Exec(
-			"UPDATE ink_storyboard_shot SET shot_no = shot_no + 1 WHERE video_id = ? AND shot_no >= ? AND deleted_at IS NULL",
-			src.VideoID, newShotNo,
+			"UPDATE ink_storyboard_shot SET shot_no = shot_no + ? WHERE video_id = ? AND shot_no >= ? AND deleted_at IS NULL",
+			shiftTempOffset, src.VideoID, newShotNo,
+		).Error; e != nil {
+			return e
+		}
+		if e := tx.Exec(
+			"UPDATE ink_storyboard_shot SET shot_no = shot_no - ? + 1 WHERE video_id = ? AND shot_no >= ? AND deleted_at IS NULL",
+			shiftTempOffset, src.VideoID, newShotNo+shiftTempOffset,
 		).Error; e != nil {
 			return e
 		}

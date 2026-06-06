@@ -497,6 +497,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				sceneAnchors.PUT("/:id", cfg.SceneAnchorHandler.UpdateSceneAnchor)
 				sceneAnchors.DELETE("/:id", cfg.SceneAnchorHandler.DeleteSceneAnchor)
 				sceneAnchors.PUT("/:id/ref-image", cfg.SceneAnchorHandler.LockRefImage)
+				sceneAnchors.POST("/:id/ref-image/upload", cfg.SceneAnchorHandler.UploadRefImage)
 				sceneAnchors.POST("/:id/generate-ref-image", cfg.SceneAnchorHandler.GenerateRefImage)
 				sceneAnchors.POST("/:id/edit-ref-image", cfg.SceneAnchorHandler.EditRefImage)
 				sceneAnchors.GET("/:id/consistency-logs", cfg.SceneAnchorHandler.GetConsistencyLogs)
@@ -514,12 +515,22 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			characters.POST("/:id/three-view", cfg.CharacterHandler.GenerateThreeView)
 			characters.POST("/:id/face-closeup", cfg.CharacterHandler.GenerateFaceCloseup)
 			characters.POST("/:id/portrait/upload", cfg.CharacterHandler.UploadPortrait)
+			characters.POST("/:id/image/upload", cfg.CharacterHandler.UploadCharacterImage)
 			characters.POST("/:id/analyze-consistency", cfg.CharacterHandler.AnalyzeCharacterConsistency)
 			characters.POST("/:id/voice/preview", cfg.CharacterHandler.PreviewVoice)
 			characters.GET("/:id/voice/sample", cfg.CharacterHandler.ServeVoiceSample)
 			characters.POST("/:id/extract-voice", cfg.CharacterHandler.ExtractCharacterVoice)
 			characters.GET("/:id/snapshots", cfg.CharacterHandler.ListCharacterSnapshots)
 			characters.POST("/:id/snapshots", cfg.CharacterHandler.CreateCharacterSnapshot)
+			// 角色形象（不同时期外观管理）
+			characters.GET("/:id/looks", cfg.CharacterHandler.ListCharacterLooks)
+			characters.POST("/:id/looks", cfg.CharacterHandler.CreateCharacterLook)
+			characters.GET("/:id/looks/active", cfg.CharacterHandler.GetActiveLook)
+			characters.POST("/:id/looks/generate-prompt", cfg.CharacterHandler.GenerateLookVisualPrompt)
+			characters.PUT("/:id/looks/:look_id", cfg.CharacterHandler.UpdateCharacterLook)
+			characters.DELETE("/:id/looks/:look_id", cfg.CharacterHandler.DeleteCharacterLook)
+			characters.POST("/:id/looks/:look_id/images", cfg.CharacterHandler.GenerateLookImages)
+			characters.POST("/:id/looks/:look_id/upload", cfg.CharacterHandler.UploadCharacterLookImage)
 		}
 
 		// 视频相关

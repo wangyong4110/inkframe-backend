@@ -33,6 +33,7 @@ type Repositories struct {
 
 	ChapterVersionRepo      *repository.ChapterVersionRepository
 	SnapshotRepo            *repository.CharacterStateSnapshotRepository
+	CharacterLookRepo       *repository.CharacterLookRepository
 	UserRepo                *repository.UserRepository
 	TenantRepo              *repository.TenantRepository
 	TenantUserRepo          *repository.TenantUserRepository
@@ -110,6 +111,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 
 		ChapterVersionRepo:      repository.NewChapterVersionRepository(db),
 		SnapshotRepo:            repository.NewCharacterStateSnapshotRepository(db),
+		CharacterLookRepo:       repository.NewCharacterLookRepository(db),
 		UserRepo:                repository.NewUserRepository(db),
 		TenantRepo:              repository.NewTenantRepository(db),
 		TenantUserRepo:          repository.NewTenantUserRepository(db),
@@ -336,6 +338,7 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 	characterSvc := service.NewCharacterService(repos.CharacterRepo, aiSvc).
 		WithChapterCharacterRepo(repos.ChapterCharacterRepo).
 		WithSnapshotRepo(repos.SnapshotRepo).
+		WithLookRepo(repos.CharacterLookRepo).
 		WithNovelRepo(repos.NovelRepo).
 		WithChapterRepo(repos.ChapterRepo).
 		WithModelRepo(repos.AIModelRepo)
@@ -759,7 +762,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		PlotPointHandler:   handler.NewPlotPointHandler(services.PlotPointService).WithChapterService(services.ChapterService).WithTaskService(services.TaskService).WithNovelService(services.NovelService),
 		TaskHandler:        handler.NewTaskHandler(services.TaskService),
 		MediaHandler:       handler.NewMediaHandler(db),
-		SceneAnchorHandler: handler.NewSceneAnchorHandler(services.SceneAnchorService, services.SceneConsistencyService).WithTaskService(services.TaskService).WithChapterService(services.ChapterService).WithVideoService(services.VideoService).WithNovelService(services.NovelService),
+		SceneAnchorHandler: handler.NewSceneAnchorHandler(services.SceneAnchorService, services.SceneConsistencyService).WithTaskService(services.TaskService).WithChapterService(services.ChapterService).WithVideoService(services.VideoService).WithNovelService(services.NovelService).WithStorageService(storageSvc),
 		SystemHandler: handler.NewSystemHandler(repos.SystemSettingRepo),
 		FsHandler:     handler.NewFsHandler(getEnv("BGM_DIR", "")),
 		RewriteHandler: handler.NewRewriteHandler(services.RewriteService),

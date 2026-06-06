@@ -541,6 +541,81 @@ func (h *CharacterHandler) UploadPortrait(c *gin.Context) {
 	respondOK(c, gin.H{"url": portraitURL, "character": updated})
 }
 
+// UploadCharacterImage 上传角色图片到指定字段
+// POST /api/v1/characters/:id/image/upload?type=portrait|three_view|face_closeup
+func (h *CharacterHandler) UploadCharacterImage(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	character, err := h.characterService.GetCharacter(uint(id))
+	if err != nil || character.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+	imgURL, ok := receiveAndUpload(c, "character-images", h.storageSvc, []string{".jpg", ".jpeg", ".png", ".webp"})
+	if !ok {
+		return
+	}
+	updateReq := characterToUpdateReq(character)
+	imgType := c.Query("type")
+	switch imgType {
+	case "three_view":
+		updateReq.ThreeViewSheet = imgURL
+	case "face_closeup":
+		updateReq.FaceCloseup = imgURL
+		updateReq.Portrait = imgURL
+	default: // "portrait" or empty
+		updateReq.Portrait = imgURL
+	}
+	updated, err := h.characterService.UpdateCharacter(uint(id), getTenantID(c), updateReq)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to save image")
+		return
+	}
+	respondOK(c, gin.H{"url": imgURL, "character": updated})
+}
+
+// UploadCharacterLookImage 上传角色形象图片到指定形象
+// POST /api/v1/characters/:id/looks/:look_id/upload?type=portrait|three_view|face_closeup
+func (h *CharacterHandler) UploadCharacterLookImage(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	lookID, ok := parseID(c, "look_id")
+	if !ok {
+		return
+	}
+	char, err := h.characterService.GetCharacter(uint(id))
+	if err != nil || char.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+	imgURL, ok := receiveAndUpload(c, "character-look-images", h.storageSvc, []string{".jpg", ".jpeg", ".png", ".webp"})
+	if !ok {
+		return
+	}
+	imgType := c.Query("type")
+	updateReq := &model.UpdateCharacterLookRequest{}
+	switch imgType {
+	case "three_view":
+		updateReq.ThreeViewSheet = &imgURL
+	case "face_closeup":
+		updateReq.FaceCloseup = &imgURL
+		updateReq.Portrait = &imgURL
+	default: // "portrait" or empty
+		updateReq.Portrait = &imgURL
+		updateReq.FaceCloseup = &imgURL
+	}
+	look, err := h.characterService.UpdateLook(uint(lookID), updateReq)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to save look image")
+		return
+	}
+	respondOK(c, gin.H{"url": imgURL, "look": look})
+}
+
 // AIBatchGenerate AI批量生成/更新角色（异步任务）
 // POST /api/v1/novels/:id/characters/ai-batch
 func (h *CharacterHandler) AIBatchGenerate(c *gin.Context) {
@@ -1066,4 +1141,214 @@ func (h *CharacterHandler) CreateCharacterSnapshot(c *gin.Context) {
 		return
 	}
 	respondCreated(c, snap)
+}
+
+// ─── CharacterLook handlers ───────────────────────────────────────────────────
+
+// ListCharacterLooks GET /characters/:id/looks
+func (h *CharacterHandler) ListCharacterLooks(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	char, err := h.characterService.GetCharacter(uint(id))
+	if err != nil || char.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+	looks, err := h.characterService.ListLooks(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"looks": looks, "total": len(looks)})
+}
+
+// CreateCharacterLook POST /characters/:id/looks
+func (h *CharacterHandler) CreateCharacterLook(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	char, err := h.characterService.GetCharacter(uint(id))
+	if err != nil || char.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+	var req model.CreateCharacterLookRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	look, err := h.characterService.CreateLook(uint(id), char.NovelID, &req)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondCreated(c, look)
+}
+
+// UpdateCharacterLook PUT /characters/:id/looks/:look_id
+func (h *CharacterHandler) UpdateCharacterLook(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	lookID, ok := parseID(c, "look_id")
+	if !ok {
+		return
+	}
+	char, err := h.characterService.GetCharacter(uint(id))
+	if err != nil || char.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+	var req model.UpdateCharacterLookRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	look, err := h.characterService.UpdateLook(uint(lookID), &req)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, look)
+}
+
+// DeleteCharacterLook DELETE /characters/:id/looks/:look_id
+func (h *CharacterHandler) DeleteCharacterLook(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	lookID, ok := parseID(c, "look_id")
+	if !ok {
+		return
+	}
+	char, err := h.characterService.GetCharacter(uint(id))
+	if err != nil || char.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+	_ = char
+	if err := h.characterService.DeleteLook(uint(lookID)); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"message": "deleted"})
+}
+
+// GetActiveLook GET /characters/:id/looks/active?chapter_no=N
+func (h *CharacterHandler) GetActiveLook(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	char, err := h.characterService.GetCharacter(uint(id))
+	if err != nil || char.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+	chapterNo, _ := strconv.Atoi(c.Query("chapter_no"))
+	look, err := h.characterService.GetActiveLook(uint(id), chapterNo)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if look == nil {
+		respondOK(c, gin.H{"look": nil})
+		return
+	}
+	respondOK(c, gin.H{"look": look})
+}
+
+// GenerateLookVisualPrompt POST /characters/:id/looks/generate-prompt
+func (h *CharacterHandler) GenerateLookVisualPrompt(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	char, err := h.characterService.GetCharacter(uint(id))
+	if err != nil || char.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+	var req struct {
+		Description string `json:"description" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	prompt, err := h.characterService.GenerateLookVisualPrompt(getTenantID(c), uint(id), req.Description)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"visual_prompt": prompt})
+}
+
+// GenerateLookImages POST /characters/:id/looks/:look_id/images
+func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	lookID, ok := parseID(c, "look_id")
+	if !ok {
+		return
+	}
+	char, err := h.characterService.GetCharacter(uint(id))
+	if err != nil || char.TenantID != getTenantID(c) {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+	look, err := h.characterService.GetLook(uint(lookID))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "look not found")
+		return
+	}
+	var req struct {
+		Type     string `json:"type"`     // "three_view" | "face_closeup" | "portrait"
+		Provider string `json:"provider"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+
+	tenantID := getTenantID(c)
+	visualPrompt := look.VisualPrompt
+	if visualPrompt == "" {
+		visualPrompt = char.VisualPrompt
+	}
+
+	style := h.characterService.GetNovelImageStyle(char.NovelID)
+
+	var imageURL string
+	switch req.Type {
+	case "face_closeup", "portrait", "":
+		img, err := h.imageGenService.GenerateFaceCloseupImage(c.Request.Context(), tenantID, char.Name, visualPrompt, style, "", look.Portrait, req.Provider)
+		if err != nil {
+			respondErr(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		imageURL = img.URL
+		updateReq := &model.UpdateCharacterLookRequest{FaceCloseup: &imageURL, Portrait: &imageURL}
+		look, _ = h.characterService.UpdateLook(uint(lookID), updateReq)
+	case "three_view":
+		img, err := h.imageGenService.GenerateThreeViewSheet(c.Request.Context(), tenantID, char.Name, visualPrompt, style, "", look.ThreeViewSheet, req.Provider)
+		if err != nil {
+			respondErr(c, http.StatusInternalServerError, err.Error())
+			return
+		}
+		imageURL = img.URL
+		updateReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &imageURL}
+		look, _ = h.characterService.UpdateLook(uint(lookID), updateReq)
+	default:
+		respondBadRequest(c, "type must be 'three_view', 'face_closeup', or 'portrait'")
+		return
+	}
+	respondOK(c, look)
 }

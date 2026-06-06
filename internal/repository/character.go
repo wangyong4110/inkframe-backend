@@ -164,3 +164,67 @@ func (r *CharacterStateSnapshotRepository) DeleteByCharacter(characterID uint) e
 func (r *CharacterStateSnapshotRepository) DeleteByChapterID(chapterID uint) error {
 	return r.db.Where("chapter_id = ?", chapterID).Delete(&model.CharacterStateSnapshot{}).Error
 }
+
+// ─── CharacterLookRepository ──────────────────────────────────────────────────
+
+type CharacterLookRepository struct{ db *gorm.DB }
+
+func NewCharacterLookRepository(db *gorm.DB) *CharacterLookRepository {
+	return &CharacterLookRepository{db: db}
+}
+
+func (r *CharacterLookRepository) Create(look *model.CharacterLook) error {
+	return r.db.Create(look).Error
+}
+
+func (r *CharacterLookRepository) GetByID(id uint) (*model.CharacterLook, error) {
+	var look model.CharacterLook
+	if err := r.db.First(&look, id).Error; err != nil {
+		return nil, err
+	}
+	return &look, nil
+}
+
+func (r *CharacterLookRepository) ListByCharacter(characterID uint) ([]*model.CharacterLook, error) {
+	var looks []*model.CharacterLook
+	if err := r.db.Where("character_id = ?", characterID).
+		Order("sort_order ASC, chapter_from ASC").
+		Find(&looks).Error; err != nil {
+		return nil, err
+	}
+	return looks, nil
+}
+
+func (r *CharacterLookRepository) Update(look *model.CharacterLook) error {
+	return r.db.Save(look).Error
+}
+
+func (r *CharacterLookRepository) Delete(id uint) error {
+	return r.db.Delete(&model.CharacterLook{}, id).Error
+}
+
+func (r *CharacterLookRepository) DeleteByCharacter(characterID uint) error {
+	return r.db.Where("character_id = ?", characterID).Delete(&model.CharacterLook{}).Error
+}
+
+// GetActiveLook 返回指定章节号下角色的激活形象。
+// 选取规则：chapter_from <= chapterNo AND (chapter_to=0 OR chapter_to >= chapterNo)，取 chapter_from 最大者。
+// 无匹配时返回 is_default=true 的兜底形象；仍无则返回 nil。
+func (r *CharacterLookRepository) GetActiveLook(characterID uint, chapterNo int) (*model.CharacterLook, error) {
+	var look model.CharacterLook
+	// First try range match
+	err := r.db.Where("character_id = ? AND chapter_from <= ? AND (chapter_to = 0 OR chapter_to >= ?)",
+		characterID, chapterNo, chapterNo).
+		Order("chapter_from DESC").
+		First(&look).Error
+	if err == nil {
+		return &look, nil
+	}
+	// Fallback: default look
+	var def model.CharacterLook
+	if err2 := r.db.Where("character_id = ? AND is_default = ?", characterID, true).
+		First(&def).Error; err2 == nil {
+		return &def, nil
+	}
+	return nil, nil //nolint:nilnil
+}
