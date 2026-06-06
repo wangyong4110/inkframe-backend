@@ -834,6 +834,15 @@ var jsonOnlyTaskTypes = map[string]bool{
 	"storyboard_review": true, "sfx_analyze": true,
 	"chapter_review": true, "extract_items": true,
 	"outline": true, // 大纲生成：强制纯 JSON，防止 DeepSeek 输出思考过程或缺失冒号
+	// 角色/物品/世界观提取——均输出 JSON，需抑制推理模型的思维链输出
+	"extract_characters":       true,
+	"extract_character_names":  true,
+	"consolidate_character_names": true,
+	"generate_character_profile": true,
+	"extract_minor_characters": true,
+	"extract_chapter_items":    true,
+	"extract_worldview":        true,
+	"extract_foreshadows":      true,
 }
 
 func (s *AIService) callAIWithProvider(parentCtx context.Context, tenantID uint, prompt string, config *model.TaskModelConfig, providerName string, modelOverride ...string) (string, error) {

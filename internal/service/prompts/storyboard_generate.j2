@@ -1,5 +1,8 @@
 你是专业影视分镜师，同时负责撰写旁白文案。请将以下章节内容{% if SegLabel %} {{ SegLabel }}{% endif %}转化为约{{ ExpectedShots }}个分镜，返回JSON数组。
 
+⚠️ 全局强制规则——视觉提示词禁止出现人物：
+description、image_prompt、video_prompt 三个字段均为纯环境/场景提示词，严禁描写任何人物（角色姿态、肢体、表情、服装、人形轮廓、角色名字一律不得出现）。画面通过景别、环境、道具、光线、大气来传递叙事情绪。每个字段字数/词数不少于 100 字/词，过短将导致生成质量大幅下降。
+
 【输出字段规范——严格遵守，违反规范将导致输出无法使用】
 ▸ camera_type（运镜方式）——必须体现多样性，禁止全部使用 static
   可选值（选其中一个填入）：static | push | pull | pan | track | crane_up | crane_down | follow | arc | tilt | whip_pan | zoom
@@ -13,139 +16,129 @@
   可选值：extreme_wide | wide | full | medium | close_up | extreme_close_up
 
 {% if IsEn %}
-▸ description（English only — objective visual description for image/video generation AI）
-  - Pure visual description. NO narrative sentences, NO inner thoughts, NO story context.
-  - Must cover ALL five layers below. Thin descriptions that skip layers will produce poor images.
-    ① Character body: exact position in frame (foreground-center / background-right / etc.), precise posture
-       (limb angles, hand grip tension, spine curvature, weight distribution), facial micro-expression
-       (specific muscle tension: furrowed brows, jaw clench, eye direction, lip state)
-    ② Props & spatial relations: every key prop in frame, exact position relative to character and camera
-       (e.g. "a glowing azure sword gripped at chest height with both hands, blade angled 45° upward")
-    ③ Scene & atmosphere: ground texture (cracked clay / wet cobblestone / polished marble), mid-ground
-       elements, background depth layers, any atmospheric particles (dust motes / smoke wisps / fog density)
-    ④ Lighting setup: light source type (directional sunlight / diffused overcast / practical candlelight /
-       magic glow), angle (top-front / upper-left rim / underlit), color temperature (warm golden 3200K /
-       neutral white 5500K / cool blue 8000K), shadow quality (hard-edged / soft diffused), secondary fill
-    ⑤ Composition & optics: shot size echoing shot_size field, camera angle echoing camera_angle field,
-       estimated focal length feel (wide 24mm / standard 50mm / telephoto 85-135mm), depth-of-field mood
-  - Example (full-elements, xianxia confrontation):
-    "Young male cultivator, early 20s, stands foreground-center-left, weight shifted onto right foot, left
-    hand raised palm-out at shoulder height in a halting gesture, right hand gripping glowing azure sword
-    pommel at hip — knuckles white, jaw set, eyes narrowed with cold fury meeting the elder's gaze.
-    Black-iron-armored elder stands background-right, taller, arms partly extended with dark energy tendrils
-    coiling around both forearms. Between them: crumbling stone floor with a 10cm-wide fissure running
-    diagonally frame-left to frame-center. Background: ruined training hall, three stone pillars — leftmost
-    collapsed, center cracked, rightmost intact — ancient pagoda silhouette visible through dust haze.
-    Light: dramatic dual-source — cool blue magic glow from elder's energy left of center, warm amber rim
-    light from shattered window upper-right, casting hard shadow of cultivator leftward across rubble floor.
-    Color: desaturated blue-silver with amber accent. 50mm feel, shallow depth of field f/2.8, pagoda
-    background softly out of focus."
+▸ description（English only — objective visual description of the scene environment; NO characters or people）
+  - Pure environmental visual description. Absolutely NO characters, NO people, NO human figures, NO silhouettes,
+    NO body parts, NO clothing, NO character names. Focus entirely on place, objects, atmosphere, and light.
+  - MINIMUM LENGTH: At least 100 English words. Short descriptions will produce poor images.
+  - Must cover ALL five layers. Missing layers degrade image quality.
+    ① Ground layer: precise surface texture (cracked clay / wet cobblestone / polished marble / weathered wood),
+       ground-level objects, debris, shadow patterns cast on the ground surface, any pooled liquid or dust
+    ② Foreground objects/props: 1-3 named environment objects with exact position, material, and dimension detail
+       (e.g. "a weathered granite stele 1.8m tall, diagonal hairline cracks across face, moss creeping from base")
+    ③ Mid-ground architecture or nature: structural elements, spatial depth, light/shadow transitions,
+       openings (doorways, archways, gaps), secondary environmental details with material specifics
+    ④ Background depth and atmosphere: far-field elements, sky or ceiling state, atmospheric particles
+       (dust motes / smoke wisps / fog density / rain veils / ember sparks), distance fade quality,
+       distant silhouettes or outlines
+    ⑤ Lighting setup: light source type (directional sunlight / diffused overcast / candlelight / magic glow),
+       angle (top-front / upper-left rim / underlit), color temperature (warm golden 3200K / neutral 5500K /
+       cool blue 8000K), shadow quality (hard-edged / soft diffused), where shadows fall and their length
+  - Composition & optics: shot size matching shot_size, camera angle matching camera_angle,
+    focal length feel (wide 24mm / standard 50mm / telephoto 85-135mm), depth-of-field character
+  - Example (full-layers, ruined mountain courtyard at dusk):
+    "Crumbling stone courtyard floor with irregular slate tiles — multiple tiles cracked diagonally,
+    some displaced upward by encroaching tree roots 3-5cm above grade, thin moss film covering shaded
+    corners, fine powdered debris collecting in crevices. Foreground-left: a collapsed stone incense
+    burner lying on its side, 60cm diameter bowl half-buried in rubble, weathered bronze-green surface
+    with flaking patina, three unlit incense stubs protruding from accumulated grey ash. Center-foreground:
+    a 1.8m granite stone stele with face angled toward camera, chiseled inscription weathered to near-
+    illegibility, base encircled by dried flower offerings in various states of decay, dead petals
+    scattered on stone. Mid-ground: two stone pillars flanking a wide stone gateway — left pillar intact,
+    right pillar sheared at mid-height with jagged fracture edge, structural lintel partially collapsed
+    with one end resting on rubble. Background: dense pine forest starting at courtyard perimeter, canopy
+    at 8-10m height filtering amber late-afternoon light into scattered vertical shafts, distant mountain
+    ridge barely visible through soft golden haze at the treeline. Light: warm directional sunlight from
+    upper-right at 30° angle, 3200K amber cast, casting long hard shadows of standing pillar leftward
+    across stone tiles, deep blue-grey shadow pooling in collapsed rubble zones. Atmospheric: fine dust
+    motes suspended in each light shaft, thin ground-level mist at 10-15cm height in shadowed areas.
+    Medium shot, eye-level angle, 50mm f/4 feel, foreground tiles sharp, pine forest background soft."
 
 {% else %}
-▸ description（画面描述——供图片/视频生成AI使用的客观视觉描述）
-  - 纯客观视觉陈述，禁止出现叙事句、内心描写、故事背景信息
+▸ description（画面描述——纯环境场景视觉描述，禁止出现任何人物）
+  - 纯客观环境陈述，绝对禁止出现任何人物、角色、人形轮廓、肢体、服装或角色名字
+  - 最低字数：不少于100字，过短将导致生成图片质量大幅下降
   - 必须覆盖以下五层，任何一层缺失都会导致生成图片质量下降：
-    ① 角色身体细节：在画框中的精确位置（前景中央/后景右侧等）+ 姿态细节（四肢角度、手部握力紧张感、
-       脊柱弧度、重心分配）+ 面部微表情（具体肌肉状态：眉间纵纹、咬合程度、视线方向、嘴唇状态）
-    ② 道具与空间关系：画面内所有关键道具的位置及与角色/镜头的空间关系，需指定角度和距离感
-       （如"双手持握发光蓝剑于胸前，刀刃向上偏斜45度"）
-    ③ 场景与氛围：地面质感（龟裂荒土/湿润石板/大理石地面等）、中景元素、背景纵深层次、
-       大气粒子感（尘埃浮粒/烟雾浓度/薄雾能见度）
-    ④ 光线设置：光源类型（定向阳光/阴天散射/烛火实际光源/魔法光效）+ 方向（斜顶前/左侧逆光/
-       仰角底光）+ 色温（暖金3200K/中性白5500K/冷蓝8000K）+ 阴影质量（硬边/柔和漫射）+ 辅助补光
-    ⑤ 构图与镜头感：与 shot_size 字段呼应的景别感、与 camera_angle 呼应的机位感、
-       焦距感（广角24mm/标准50mm/中长焦85-135mm）、景深氛围
-  - 示例（五层全要素，仙侠对峙场景）：
-    "年轻男修士，约二十岁，立于前景偏左中央，重心压在右脚，左掌平举至肩高作阻拦状，右手扣住腰间
-    发光蓝剑剑柄——指节泛白，下颌收紧，双目微眯以冷怒注视对方。黑铁甲老者立于后景右侧，身形更高，
-    双臂半展、黑色能量丝线缠绕于两侧前臂。两人之间：破碎石板地面，一道10厘米宽的裂缝从画面左下
-    向中央斜切。背景：废墟练功堂，三根石柱——最左侧已倒塌，中间裂开，右侧完好——远处古塔轮廓在
-    尘埃薄雾中若隐若现。光线：戏剧性双光源——左侧老者能量散发的冷蓝魔光，右上角残破窗口透入的
-    暖琥珀色逆光，将修士身影向左投出硬边长影至碎石地面。色调：去饱和蓝银为主，琥珀点缀。
-    50mm焦距感，浅景深f/2.8，古塔背景柔焦虚化。"
+    ① 地面层：精确地面材质（龟裂荒土/湿润石板/大理石地面/风化木板等）+ 地面级物件、碎片、
+       积尘、液体、地面投影图案
+    ② 前景物件：1-3个命名环境物体，标注精确位置、材质和尺寸细节
+       （如"一座约1.8米高花岗岩石碑，碑面斜向裂缝，底座苔藓蔓延"）
+    ③ 中景建筑/自然：建筑结构元素、空间纵深、明暗过渡、开口（门洞/拱道/缺口）、
+       次级环境细节，需说明材质
+    ④ 背景纵深与大气：远景元素、天空/顶部状态、大气粒子（尘埃浮粒/烟雾/薄雾/雨幕/火星）、
+       纵深消散质感、远处轮廓或剪影（建筑/山/树线）
+    ⑤ 光线设置：光源类型+方向+色温+阴影质量+阴影投向位置及长度
+  - 构图与镜头感：与 shot_size 呼应的景别感、与 camera_angle 呼应的机位感、焦距感、景深
+  - 示例（五层全要素，黄昏废墟山庭院）：
+    "庭院石板地面，石砖排列不规则，多处石板沿对角方向开裂，局部被入侵树根顶起约3-5厘米，阴暗角落
+    积有薄层苔藓，石缝间堆积细碎粉尘。前景偏左：一座倒卧石质香炉，直径约60厘米，炉碗半埋碎石中，
+    表面风化铜绿大面积剥落，三根残香斜插炉灰。前景居中：约1.8米花岗岩石碑，碑面斜向镜头，刻字因
+    风化几近漫漶，碑基四周摆放各色枯萎供花，枯叶散落石板。中景：两根石柱夹持宽阔石门洞——左侧完好，
+    右侧在中部被剪断，断口参差不齐，横架石梁一端坠落于碎石堆上。背景：庭院边缘以外松林密布，树冠层
+    约8-10米高，树间隙中投射出垂直琥珀色光柱，远处山脊轮廓在金色薄雾中隐约可见。光线：右上方约
+    30度暖向阳光，色温3200K琥珀调，将完好石柱硬边阴影向左下方投射至石板地面，倒塌区域碎石处积聚
+    深沉蓝灰色阴影。大气：光柱中细小尘埃粒子悬浮，阴暗区域地面10-15厘米高度有薄层地气流动。
+    中景，平视角，50mm焦距感，前景石板清晰，松林背景柔焦虚化。"
 
 {% endif %}
 {% if IsEn %}
-▸ image_prompt（English only — drives image AI directly; prompt quality = image quality）
-  ⚠️  CRITICAL: poor image_prompt → physically impossible images (floating objects, wrong proportions, extra limbs). Follow ALL rules.
+▸ image_prompt（English only — drives image AI directly; NO characters/people allowed）
+  ⚠️  CRITICAL: NO humans, NO people, NO figures, NO silhouettes of persons. This is a pure environment/scene prompt.
+  MINIMUM LENGTH: At least 100 English words.
 
   MANDATORY STRUCTURE (all sections in order, none may be skipped):
-    [ArtStyle] → [Composition] → [CharacterBlock] → [PropsBlock] → [SceneBlock] → [LightingBlock] → [ColorPalette] → [OpticsBlock] → [QualityBoosters]
+    [ArtStyle] → [Composition] → [GroundLayer] → [ForegroundObjectsBlock] → [MidgroundBlock] → [BackgroundBlock] → [LightingBlock] → [AtmosphereBlock] → [ColorPalette] → [OpticsBlock] → [QualityBoosters]
 
   COMPOSITION — must match shot_size exactly:
-    extreme_close_up → face or single hand ONLY; no body below chest
-    close_up          → head + shoulders + upper chest; feet never visible
-    medium            → waist-up or ¾ body; character height fills 60-80% of frame
-    full              → complete body head-to-feet; shoes explicitly touching ground surface
-    wide/extreme_wide → character silhouette small relative to environment
+    extreme_close_up → extreme detail of a single object or surface; no wide environment
+    close_up          → one primary object or architectural detail fills frame
+    medium            → 2-3 environment elements with spatial relationship visible
+    wide/extreme_wide → broad landscape or architectural scene, environment dominates frame
 
-  CHARACTER BLOCK — anatomy-safe rules (failures cause extra limbs / floating poses):
-    ⓪ CAST ROSTER — write this FIRST, before any individual character descriptions:
-       Explicitly declare EVERY character who must appear in this shot, with frame position.
-       ✅ "PRESENT IN SHOT: Hunter (foreground-left), Grandmother (on bed, mid-right), Little Red Riding Hood (standing beside bed, center); Wolf (on bed near grandmother's feet)"
-       ❌ Describing characters individually without a roster → AI silently drops characters with no spatial anchor in the prompt
-       — Any named character who must NOT appear: add to negative_prompt (e.g., "no hunter figure, hunter absent from scene")
-    ① Frame position: every character needs an EXPLICIT position label
-       e.g. "foreground-center-left" / "background-right" / "mid-ground-center"
-    ② Ground contact (⚠️ most violated rule): ALWAYS write "[character] standing/sitting/kneeling ON [surface]"
-       NEVER describe a character without stating what surface they are on
-    ③ Posture + body orientation — TWO parts required, both mandatory:
-       Posture: standing / sitting / crouching / kneeling / lying on back / lying on side / leaning forward
-       Body orientation: "facing camera full-on" / "body turned ¾ left" / "right-side profile to camera" / "facing away" / "angled 45° toward [other character]"
-       ✅ "standing upright, body turned ¾ toward left, leaning slightly forward at the waist"
-       ❌ "standing there" / "nearby" → AI defaults to front-facing standing, ignoring scene logic
-    ④ Hand specificity — each visible hand described separately with full detail:
-       ✅ "right hand gripping sword pommel at hip level, knuckles white, all five fingers fully wrapped around hilt"
-       ✅ "left arm raised, palm facing outward at shoulder height, fingers extended and spread apart"
-       ❌ "holding a sword" — causes AI to invent wrong anatomy (extra/missing fingers, fused hands)
-    ⑤ ONE LIMB = ONE ACTION (⚠️ prevents phantom/merged arm errors like hunter arm problem):
-       Each arm/hand may be assigned EXACTLY ONE action. Before writing, verify: is it physically possible for one person to do both actions with two separate arms?
-       ✅ "LEFT hand resting on grandmother's right shoulder from behind; RIGHT hand holding open scissors at waist height, blades apart 8cm, tip pointing toward wolf carcass"
-       ❌ "holding scissors while supporting grandmother" — AI assigns both to the same arm, generating extra limbs or anatomically impossible merges
-       ❌ "left hand on shoulder, also holding scissors" — contradicts itself, AI fabricates a third arm
-    ⑥ Head direction per character: "facing camera full-on" / "turned ¾ right profile" / "head bowed downward" / "looking at [specific target]"
-    ⑦ Facial expression — mandatory for every character whose face is visible in frame:
-       Must describe specific muscle states, NOT vague emotion labels:
-       ✅ "jaw slightly open, upper lip pulled back, brows drawn sharply together and lowered, eyes wide with pupils dilated"
-       ✅ "mouth pressed into a thin tight line, single deep vertical crease between brows, jaw set, eyes narrowed with cold focus"
-       ✅ "corners of mouth lifted 3-4mm, crow's-feet creased at outer eye corners, lower eyelid slightly raised, eyes soft"
-       ❌ "angry expression" / "happy face" / "surprised" — vague labels, AI fills with generic default face
-       Expression must match the scene emotion; inconsistent expression (e.g. smiling during crisis) destroys narrative believability
-    ⑧ Only describe limbs VISIBLE within the shot_size frame; do not describe what the frame cuts off
-    ⑨ ATTRIBUTE OWNERSHIP — every body state, wound, and anomaly must name its owner explicitly:
-       Physical properties (swollen belly, wound, distension, bleeding, mark, cut garment) must always include "[character name]'s [body part]"
-       NEVER use an orphan body-part noun — AI attaches it to whichever character is most visually prominent in the scene
-       ✅ "wolf's abdomen visibly distended, fur showing a 15cm vertical cut; grandmother's abdomen flat, hands folded at chest"
-       ❌ "abdomen distended with a cut visible on it" → AI assigns this to the most prominent bed occupant (grandmother)
-       When two characters share a scene with similar anatomy, BOTH must be explicitly described (even if one is "flat / normal / uninjured")
-    ⑩ OUT-OF-DISTRIBUTION CONCEPT RULE — describe the visual RESULT, not the concept label:
-       When a prompt involves a concept rare in training data (animal in human clothing, hybrid creature posture, physically impossible state),
-       describe exactly what it LOOKS LIKE, not what it IS:
-       ✅ "wolf's torso draped with a loose white cotton nightgown, two front paws extending from sleeve cuffs, paw pads visible at wrist level;
-           wolf lying on its side, limbs curled naturally along wolf anatomy, white nightcap straps looped around both ears —
-           NO human hands, NO human arms visible anywhere on the wolf's body"
-       ❌ "wolf wearing grandmother's nightgown lying in bed" → AI resolves concept collision to nearest training pattern: wolf body + human arms
-       For every out-of-distribution concept: enumerate what SHOULD be visible + what should NOT be visible (add the NOT list to negative_prompt)
+  GROUND LAYER — always required, even for interior shots:
+    — State the precise ground surface material: cracked clay / polished marble / weathered wood planks /
+      wet cobblestone / packed dirt / snow-dusted stone / submerged stone steps / etc.
+    — Describe ground-level details: debris scatter, puddle reflections, fallen objects, shadow patterns
+    ✅ "cracked grey flagstone floor with displaced tiles at irregular intervals, dust accumulation in joints,
+        scattered broken ceramic shards foreground-right"
+    ❌ "stone floor" → no depth, AI fills with generic result
 
-  PROPS BLOCK — size anchoring + physical connection (prevent floating / wrong-scale props):
-    — Size: state prop dimensions relative to character body: "sword blade from hip to chin height" / "scroll half forearm length"
-    — Ownership: assign prop to a SPECIFIC limb: "in RIGHT hand" / "in LEFT hand" / "hanging from left hip" / "resting on right shoulder"
-       NEVER write "in hand" — ambiguous ownership causes AI to attach prop to wrong or duplicate limb
-    — Connection: state exactly how prop attaches: "gripped in right hand" / "resting flat on table surface" / "hanging from belt loop"
-    — Every prop needs SIZE + SPECIFIC LIMB OWNERSHIP + CONNECTION; none may be omitted
-    ✅ "a 1.2-meter black iron spear held vertically in RIGHT hand, butt-end resting on stone floor, tip 20cm above head"
-    ❌ "holding a spear" → wrong scale, floating result, ambiguous which hand
+  FOREGROUND OBJECTS BLOCK — 1-3 named objects with full physical detail:
+    — Each object: name + material + dimensions relative to frame + exact position in frame
+    — State how object connects to ground (resting on / embedded in / leaning against / hanging from)
+    — Describe surface wear, weathering, or any emitted light/effect
+    ✅ "a 1.8m granite stele foreground-center, face angled 20° toward camera, diagonal hairline crack from
+        upper-left to mid-face, base 40cm deep in earth, moss creeping 30cm up each side"
+    ❌ "a stele" → no spatial anchor, AI places it randomly
 
-  SCENE BLOCK — three depth layers, grounded (prevent floating environments):
-    Layer 1 (foreground ground): surface texture + what characters contact ("cracked stone floor [character A stands on it]")
-    Layer 2 (mid-ground): 1-3 named elements with position relative to characters
-    Layer 3 (background): distance markers + atmosphere
-    ✅ "wet mossy stone floor [character stands on it], collapsed stone arch mid-ground left-of-center, dense fog background concealing tree line"
-    ❌ "ancient ruins background" → no depth, AI fills randomly
+  MID-GROUND BLOCK — spatial structure defining depth:
+    — 1-3 named structural or natural elements with material and position
+    — State relative distances and overlapping relationships
+    — Include any openings (archway / doorway / gap / window) that create depth cues
+    ✅ "two stone columns flanking a 3m-wide gateway mid-ground-center, left column intact, right column
+        sheared at 2m height with jagged fracture, stone lintel partially collapsed"
+    ❌ "columns in the background" → no material, no position, no detail
+
+  BACKGROUND BLOCK — atmospheric depth:
+    — Name far-field elements (mountain ridge / forest canopy / palace wall / cave ceiling)
+    — State sky or ceiling conditions and color
+    — Include atmospheric effects with density and extent
+    ✅ "dense pine forest canopy at 10m height background, warm amber light filtering through gaps as
+        scattered vertical shafts, distant mountain silhouette faint through 20% haze"
+    ❌ "forest background" → AI fills randomly
 
   LIGHTING BLOCK — name source, angle, temperature, AND where shadow falls:
-    ✅ "single directional moonlight from upper-right, cool silver 8000K, casting hard shadow of cultivator leftward across stone floor"
-    ❌ "dramatic lighting" → AI picks randomly, produces inconsistent results
+    — Source type: directional sunlight / overcast diffuse / torch / candle / magic glow / moonlight
+    — Angle: upper-left / upper-right / top-down / underlit / side-rim
+    — Color temperature in Kelvin
+    — Shadow description: hard-edged / soft diffused, direction, length, surface they fall on
+    ✅ "single directional amber sunlight from upper-right at 35°, 3000K warm cast, casting long hard shadow
+        of stele diagonally left-and-down across flagstone, cool blue-grey shadow pooling in recessed areas"
+    ❌ "dramatic lighting" → AI picks randomly
+
+  ATMOSPHERE BLOCK — environmental particles and air quality:
+    — Describe any suspended particles: dust motes / smoke wisps / fog / rain / ember sparks / pollen
+    — State density, drift direction, where they concentrate (in light shafts / near ground / etc.)
+    — If no particles: state "clear air, no atmospheric haze" to prevent AI adding random effects
 
   OPTICS BLOCK — focal length matched to shot_size:
     extreme_close_up/close_up → "85-100mm f/1.8-2.8, subject razor-sharp, background fully blurred"
@@ -157,100 +150,74 @@
     Anime/illust: "masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
 
   PRE-SUBMIT CHECKLIST (verify each before writing the field):
-    □ CAST ROSTER written: all expected characters explicitly listed with frame positions; absent characters named in negative_prompt
-    □ Every character: explicit frame position (foreground/mid/background + left/center/right) stated
-    □ Every character: ground contact surface stated (standing/sitting/lying ON what)
-    □ Every character: posture stated (standing/sitting/crouching/lying) + body orientation angle stated
-    □ Every character: each visible arm assigned exactly ONE action; verify no single arm does two things
-    □ Every character with visible face: facial expression described as specific muscle states (NOT emotion labels)
-    □ Every visual anomaly (wound, swelling, distension, mark): owner stated as "[character name]'s [body part]"; co-present characters with similar anatomy explicitly described even if normal
-    □ Every out-of-distribution concept (animal in clothes, hybrid): visual result described (not concept label); negative_prompt lists what must NOT appear
-    □ Every prop: size relative to body + SPECIFIC owning limb (left/right hand) + physical connection all stated
-    □ Each visible hand described individually with specific action
-    □ Composition detail level matches shot_size (no full body in close_up)
+    □ NO humans/people/figures anywhere in the prompt
+    □ Word count ≥ 100 words
+    □ Ground surface material and detail stated
+    □ 1-3 foreground objects with exact position, material, dimensions stated
+    □ Mid-ground structural elements with spatial relationships stated
+    □ Background depth elements and atmosphere stated
+    □ Lighting: source type + angle + color temperature + shadow direction and surface all stated
+    □ Atmospheric particles described (or explicitly stated as absent)
     □ Focal length stated and matches shot_size
     □ Quality boosters at the very end
 
 {% else %}
-▸ image_prompt（图片生成专用提示词——直接驱动图片AI，此处质量=图片质量）
-  ⚠️  核心警告：低质量 image_prompt 将导致物理上不合理的图片（悬浮物体/额外肢体/比例失调）。必须遵守以下全部规则。
+▸ image_prompt（图片生成专用提示词——纯环境场景，禁止出现任何人物）
+  ⚠️  核心警告：禁止描写任何人物、角色、人形轮廓、肢体、服装。纯环境/场景提示词。
+  最低字数：不少于100字。
 
   强制结构（所有区块按顺序拼接，不得跳过任何一个）：
-    [画风] → [构图] → [角色区块] → [道具区块] → [场景区块] → [光线区块] → [色调] → [镜头参数] → [画质词]
+    [画风] → [构图] → [地面层] → [前景物件区块] → [中景区块] → [背景区块] → [光线区块] → [大气区块] → [色调] → [镜头参数] → [画质词]
 
   构图——必须与 shot_size 字段精确对应：
-    extreme_close_up → 仅面部或单手特写，胸部以下不可出现
-    close_up          → 头部+肩颈+上胸；脚部绝不可见
-    medium            → 腰部以上或四分之三身体；角色高度占画面60-80%
-    full              → 头顶到脚底完整身形；鞋底必须明确踩在地面材质上
-    wide/extreme_wide → 角色轮廓相对于环境较小
+    extreme_close_up → 单件物体或单一表面极致细节特写
+    close_up          → 一个主体物件或建筑细节占满画框
+    medium            → 2-3个环境元素，空间关系清晰可见
+    wide/extreme_wide → 广阔景观或建筑场景，环境主导画面
 
-  角色区块——解剖安全规则（违反将产生额外肢体/悬浮姿势）：
-    ⓪ 出场角色名单——在所有单个角色描述之前，必须先写此项：
-       明确列出本镜头内必须出现的每一个角色，并标注画框位置。
-       ✅ "本镜头出场角色：猎人（前景左侧）、奶奶（床上中景右侧）、小红帽（床旁中央站立）；狼（床上靠奶奶脚边）"
-       ❌ 直接分别描述各角色但不写总名单 → AI会无声地遗漏没有空间锚点的角色
-       — 本镜头不应出现的命名角色，须在 negative_prompt 中注明（如 "no hunter, hunter absent from scene"）
-    ① 画框位置：每个角色必须有明确位置标注
-       如"前景中央偏左"/"后景右侧"/"中景居中"
-    ② 地面接触（⚠️ 最常违反的规则）：必须写"[角色]站在/坐在/跪在[地面材质]上"
-       任何角色描述都不得省略与地面的接触关系
-    ③ 姿态+身体朝向——两项均为必填：
-       姿态：站立/坐着/蹲伏/跪地/仰躺/侧躺/前倾
-       身体朝向："正面朝向镜头"/"身体四分之三向左转"/"右侧侧面对镜头"/"背对镜头"/"身体斜45度朝向[另一角色]"
-       ✅ "直立站姿，身体四分之三向左转，腰部略微前倾"
-       ❌ "站在那里"/"在附近" → AI默认正面直立，无视场景逻辑
-    ④ 手部具体描述——每只可见的手单独说明：
-       ✅ "右手扣住腰间剑柄，指节泛白，五指完整握满"
-       ✅ "左臂抬起，掌心向外平举至肩高，手指伸展张开"
-       ❌ "手持一把剑"——过于模糊，导致AI创造错误解剖（额外/缺失手指、手掌变形）
-    ⑤ 一个肢体只能有一个动作（⚠️ 防止"猎人胳膊"类型错误）：
-       每条手臂/每只手只能被分配恰好一个动作。写之前先验证：两个动作是否真的可以由两条独立的手臂分别完成？
-       ✅ "左手从身后搭在奶奶右肩上；右手在腰部高度握住张开的剪刀，刀刃分开约8厘米，剪尖朝向狼的尸体"
-       ❌ "一边握着剪刀一边扶着奶奶" → AI将两个动作分配给同一条手臂，产生额外肢体或解剖上不可能的合并
-       ❌ "左手放在肩上，同时还拿着剪刀" → 自相矛盾，AI会凭空生成第三条手臂
-    ⑥ 每个角色头部朝向："正面朝向镜头"/"右侧四分之三侧面"/"低头俯视"/"视线对准[具体目标]"
-    ⑦ 面部表情——凡是画框内可见脸部的角色，必须逐一描述具体肌肉状态，禁止使用情绪标签：
-       ✅ "嘴微张，上唇轻微向后拉，双眉用力向中间皱拢并向下压，双眼睁大瞳孔放大"
-       ✅ "嘴唇紧抿成一条细线，眉间深压出一道纵纹，下颌咬紧，双眼微眯神情冷峻"
-       ✅ "嘴角上扬约3-4毫米，眼角外侧出现细纹，下眼睑微微上提，目光柔和"
-       ❌ "愤怒的表情"/"开心的脸"/"惊讶" → 情绪标签过于模糊，AI用通用默认表情填充
-       表情必须与场景情绪吻合；表情与场景不符（如危机中微笑）将彻底破坏叙事可信度
-    ⑧ 只描述在 shot_size 景别内可见的肢体，不描述被画框切断的部分
-    ⑨ 属性归属——每一个身体状态、伤口、异常都必须指名道姓：
-       外观属性（腹部膨胀、伤口、肿胀、出血、异常标记、衣物划口）必须带上"[角色名]的[身体部位]"
-       绝不使用无主语的身体部位名词——AI会将其附加到场景中视觉上最显眼的角色身上
-       ✅ "狼的腹部明显隆起，皮毛上有一道15厘米长的竖向切口；奶奶的腹部平坦，双手交叠于胸前"
-       ❌ "腹部隆起，上面有一道切口" → AI将此属性分配给床上最显眼的占据者（奶奶）
-       当两个角色共享场景且解剖结构相似时，两者都必须被显式描述（即使其中一个只是"腹部平坦/正常/无伤"）
-    ⑩ 分布外概念规则——描述视觉结果，而不是描述概念标签：
-       当提示词包含训练数据中罕见的概念（动物穿人类服装、混合体姿势、物理上极端罕见的状态）时，
-       描述它"看起来是什么样"，而不是它"是什么"：
-       ✅ "狼的躯干上宽松覆盖着白色棉布睡袍，两条前爪从袖口末端伸出，爪垫在袖口边缘可见；
-           狼侧躺，四肢按狼的自然解剖结构蜷曲，白色睡帽带子绕过两耳固定——
-           狼身上任何位置均不可见人类手部或人类手臂"
-       ❌ "狼穿着奶奶的睡袍躺在床上" → AI将概念冲突解析为最近邻训练模式：狼躯体+人类手臂
-       对于每一个分布外概念：列举出"应该可见的内容" + "不应该出现的内容"（将后者加入negative_prompt）
+  地面层——必填，室内室外均适用：
+    — 精确描述地面材质：龟裂荒土/大理石抛光/风化木板/湿润石板/压实泥土/积雪石面/水下石阶等
+    — 地面级细节：碎片散布、水坑反射、倒伏物体、投影图案
+    ✅ "前景灰色不规则碎石板地面，多处石板错位移动，石缝积尘，右前景散落破碎陶器碎片"
+    ❌ "石板地面" → 无纵深，AI随机填充
 
-  道具区块——尺寸锚定+归属肢体+物理连接（防止道具悬浮或比例失调）：
-    — 尺寸：相对于角色身体标注道具大小："剑身从腰部延伸至下巴高度"/"卷轴约前臂一半长"
-    — 归属肢体：必须指定具体是哪只手/哪个身体部位："握于右手"/"握于左手"/"挂于左腰"/"搭在右肩"
-       绝不能只写"握在手中"——归属不明确将导致AI将道具附着在错误或重复的肢体上
-    — 连接：精确说明道具如何附着："紧握于右手"/"平放在桌面"/"挂于腰带扣上"
-    — 每件道具必须同时包含尺寸+具体归属肢体+物理连接，三项缺一不可
-    ✅ "一杆一米二长黑铁长枪竖立握于右手，枪尾抵在石板地面，枪尖高于头顶约二十厘米"
-    ❌ "手持一杆枪"→ 导致比例错误、悬浮、归属肢体不明
+  前景物件区块——1-3个命名物体，配完整物理细节：
+    — 每件物体：名称+材质+相对画框尺寸+精确位置
+    — 说明物体如何与地面连接（置于/嵌入/倚靠/悬挂于）
+    — 描述表面磨损、风化状态，或发出的光效
+    ✅ "前景居中约1.8米高花岗岩石碑，碑面斜20度朝向镜头，从左上至中部有发丝宽斜向裂缝，底部
+        40厘米嵌入地面，碑身两侧苔藓向上蔓延约30厘米"
+    ❌ "一块石碑" → 无空间定位，AI随机放置
 
-  场景区块——三层纵深，有实质接地感（防止环境悬浮）：
-    第一层（前景地面）：地面质感+角色接触点（"龟裂石板地面，角色站立其上"）
-    第二层（中景）：1-3个命名元素及与角色的空间关系
-    第三层（背景）：纵深标记+大气感
-    ✅ "湿润青苔石板地面（角色站立其上），中景左侧坍塌石拱门，远景浓雾遮掩树线"
-    ❌ "古代废墟背景"→ 无纵深，AI随机填充
+  中景区块——构建纵深的空间结构：
+    — 1-3个命名结构或自然元素，说明材质和画框位置
+    — 描述相对距离和叠压关系
+    — 包含任何制造纵深线索的开口（拱门/门洞/缺口/窗口）
+    ✅ "中景居中两根石柱夹持约3米宽门洞，左柱完好，右柱在2米高处被齐断，断口参差不齐，横梁
+        石架部分坍塌"
+    ❌ "背景有柱子" → 无材质、无位置、无细节
+
+  背景区块——大气纵深：
+    — 命名远景元素（山脊/森林树冠/宫墙/洞穴顶壁）
+    — 描述天空或顶部状态及色彩
+    — 包含大气效果，说明密度和范围
+    ✅ "背景10米高松林树冠，暖琥珀光从间隙中以垂直光柱形式透射而下，远处山脊在20%能见度薄雾
+        中隐约可见"
+    ❌ "森林背景" → AI随机填充
 
   光线区块——命名光源、角度、色温，并说明阴影投向：
-    ✅ "右上方单一月光，冷银色8000K，将修士硬边阴影投向左侧石板地面"
-    ❌ "戏剧性光线"→ AI随机发挥，结果不稳定
+    — 光源类型：定向阳光/阴天散射/火炬/烛火/魔法光效/月光
+    — 角度：左上方/右上方/顶部正射/仰角底光/侧逆光
+    — 色温（开尔文值）
+    — 阴影描述：硬边/柔和漫射，投向，长度，落在哪个地面材质上
+    ✅ "右上方约35度单一琥珀色阳光，色温3000K，将石碑硬边阴影斜向投射至左下方石板地面，
+        凹陷区域积聚冷蓝灰色阴影"
+    ❌ "戏剧性光线" → AI随机发挥，结果不稳定
+
+  大气区块——环境粒子与空气质感：
+    — 描述悬浮粒子：尘埃浮粒/烟雾/薄雾/降雨/火星/花粉/光尘
+    — 说明密度、漂移方向、集中区域（光柱中/近地面/etc.）
+    — 若无粒子：明确写"空气清透，无大气薄雾"，防止AI随机添加
 
   镜头参数——焦距必须与 shot_size 对应：
     extreme_close_up/close_up → "85-100mm，f/1.8-2.8，主体极清晰，背景完全虚化"
@@ -262,17 +229,14 @@
     动漫/插画："masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
 
   输出前自检清单（每条验证后再写字段）：
-    □ 出场角色名单已写：本镜头所有预期角色均已明确列出并标注画框位置；不应出现的角色已在negative_prompt中注明
-    □ 每个角色：明确画框位置（前景/中景/后景 + 左/中/右）已标注
-    □ 每个角色：地面接触材质已说明（站/坐/躺在什么上面）
-    □ 每个角色：姿态已说明（站立/坐着/躺下等）+ 身体朝向角度已说明
-    □ 每个角色：每条可见手臂只分配了一个动作，没有一条手臂同时做两件事
-    □ 每个角色面部可见：表情已用具体肌肉状态描述（禁止情绪标签）
-    □ 每一个视觉异常（伤口、肿胀、膨胀、标记）：已以"[角色名]的[身体部位]"格式明确归属；场景中解剖相似的其他角色也已显式描述（即使正常）
-    □ 每个分布外概念（动物穿衣、混合体）：已描述视觉结果而非概念标签；不应出现的内容已加入negative_prompt
-    □ 每件道具：尺寸相对身体+具体归属肢体（左手/右手）+物理连接 均已说明
-    □ 每只可见的手单独描述具体动作
-    □ 构图细节与 shot_size 匹配（close_up 不出现全身）
+    □ 提示词中无任何人物/角色/人形轮廓/肢体/服装
+    □ 字数不少于100字
+    □ 地面材质和细节已说明
+    □ 1-3件前景物体的精确位置、材质、尺寸已说明
+    □ 中景结构元素和空间关系已说明
+    □ 背景纵深元素和大气效果已说明
+    □ 光线：光源类型+角度+色温+阴影方向及落地材质 均已说明
+    □ 大气粒子已描述（或明确标注为无）
     □ 焦距已标注且与景别对应
     □ 画质词在最末尾
 
