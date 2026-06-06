@@ -1439,8 +1439,34 @@ func resolveStyleQualityTokens(styleID string) string {
 }
 
 
+// resolveStyleIllustrationDesc returns English-language style descriptor tokens for non-realistic styles.
+// Replaces the Chinese-language style names that were previously embedded in English prompts,
+// improving tokenizer coverage and semantic precision.
+func resolveStyleIllustrationDesc(style string) string {
+	m := map[string]string{
+		"anime":             "anime illustration style, vibrant colors, clean lineart, flat color cel shading",
+		"chinese_animation": "Chinese donghua animation style, clean lineart, vibrant flat colors",
+		"ink_painting":      "Chinese ink wash painting style, brush stroke texture, monochrome ink wash, xuan paper aesthetic",
+		"xianxia_style":     "Chinese xianxia fantasy illustration, ethereal ink-wash atmosphere, intricate traditional patterns",
+		"oil_painting":      "oil painting style, rich impasto texture, visible brushstrokes, classical portrait painting",
+		"watercolor":        "watercolor illustration style, soft color washes, wet-on-wet blending, translucent layered pigment",
+		"pixel_art":         "pixel art style, crisp retro pixels, limited palette, 16-bit game sprite aesthetic",
+		"cyberpunk":         "cyberpunk digital concept art, neon accent lighting, high contrast, near-future sci-fi aesthetic",
+		"steampunk":         "steampunk illustration, intricate mechanical details, warm brass and sepia tones, Victorian industrial fantasy",
+		"gothic_dark":       "gothic dark fantasy illustration, dramatic chiaroscuro shadows, deep jewel tones, macabre atmosphere",
+		"sketch":            "pencil sketch illustration, graphite line work, subtle cross-hatching, monochrome drawing",
+		"render_3d":         "3D rendered character, subsurface scattering skin, physically-based rendering, high-fidelity 3D model",
+		"ukiyo_e":           "ukiyo-e woodblock print style, flat bold color areas, strong black outlines, traditional Japanese Edo period art",
+		"game_concept":      "game concept art illustration, professional character design, detailed rendering, RPG fantasy style",
+	}
+	if d, ok := m[style]; ok {
+		return d
+	}
+	return "detailed digital illustration, professional character design, clean linework"
+}
+
 // resolveGenderInfo returns (promptTag, negativeFragment) for a given gender.
-// promptTag is the booru-style leading token for positive prompts ("1boy" / "1girl" / "中性" / "").
+// promptTag is the booru-style leading token for positive prompts ("1boy" / "1girl" / "androgynous" / "").
 // negativeFragment lists opposite-gender tokens to suppress in the negative prompt.
 func resolveGenderInfo(gender string) (tag string, neg string) {
 	switch gender {
@@ -1449,10 +1475,28 @@ func resolveGenderInfo(gender string) (tag string, neg string) {
 	case "female":
 		return "1girl", "male, man, boy, 男性, 男生, 胡须, beard, mustache, masculine"
 	case "neutral":
-		return "中性", ""
+		return "androgynous", ""
 	default:
 		return "", ""
 	}
+}
+
+// condenseVisualPrompt trims s to at most maxWords space-separated tokens,
+// preferring to break at a comma boundary (within the last 10 words of the budget)
+// to avoid cutting mid-phrase.
+func condenseVisualPrompt(s string, maxWords int) string {
+	words := strings.Fields(s)
+	if len(words) <= maxWords {
+		return s
+	}
+	cutIdx := maxWords
+	for i := maxWords; i > maxWords-10 && i > 0; i-- {
+		if strings.HasSuffix(words[i-1], ",") {
+			cutIdx = i
+			break
+		}
+	}
+	return strings.TrimRight(strings.Join(words[:cutIdx], " "), ", ")
 }
 
 // GenerateThreeViewImage 生成单个视角的角色三视图
@@ -1517,6 +1561,7 @@ func (s *ImageGenerationService) GenerateThreeViewImage(ctx context.Context, ten
 	baseNeg := "multiple people, two people, duo, couple, group, 多人, nsfw, lowres, bad anatomy, " +
 		"cropped body, cut off at legs, missing feet, bottom cut off, partial body, floating figure, " +
 		"different character, inconsistent appearance, " +
+		"makeup, eyeshadow, eye shadow, eyeliner, eye liner, mascara, lipstick, blush, rouge, cosmetics, " +
 		"text, labels, watermark, signature"
 	negativePrompt := baseNeg
 	if genderNeg != "" {
@@ -1533,85 +1578,79 @@ func (s *ImageGenerationService) GenerateThreeViewImage(ctx context.Context, ten
 // 与 GenerateThreeViewImage 的区别：使用 turnaround sheet 提示词，期望 AI 在单张图内展示三个视角。
 // ctx 可携带 ImageStorageHint 用于 OSS 路径构建。
 func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, tenantID uint, name, appearance, style, gender, referenceImage, provider string) (*GeneratedCharacterImage, error) {
-	styleStr := resolveStyleDesc(style)
 	genderTag, genderNeg := resolveGenderInfo(gender)
+	qualityTokens := resolveStyleQualityTokens(style)
 
-	// 三合一参考图使用 turnaround/character sheet 专用提示词。
-	// 关键实践：
-	//   - 明确"right 90-degree side profile"而非模糊"侧面"，防止模型生成3/4视角
-	//   - standard A-pose（手臂向外约45°）而非"双手自然垂放"（T-pose/紧贴身体）
-	//   - 用精确 token 约束三视图一致性，而非散文描述
 	aiRef := referenceImage
 	if !strings.HasPrefix(aiRef, "http://") && !strings.HasPrefix(aiRef, "https://") {
 		aiRef = ""
 	}
 
-	// 当有参考图时，在提示词头部加入面部一致性锚定指令
-	refPrefix := ""
-	if aiRef != "" {
-		refPrefix = "same face as reference image, identical facial features, consistent face across all views, "
-	}
+	// 结构控制词置于提示词最前段，确保在 cross-attention 中获得最高权重。
+	// 精简至 ~38 词，为 appearance 保留足够预算，使总提示词落在 100-150 词。
+	// 关键实践：
+	//   - "equal-width 3-panel" 约束三格等宽，避免中格（正面）占据过多画布
+	//   - "right side profile" 消除侧视方向歧义
+	//   - "A-pose arms 30-45 degrees" 量化手臂角度，避免 T-pose 或紧贴身体
+	//   - "same ground baseline" 对齐三格脚底基线，符合三视图标准规范
+	//   - "horizontal wide format" 强化横版构图，匹配 1280×720 输出尺寸
+	layoutFrame :=
+		"character model sheet, equal-width 3-panel turnaround, horizontal wide format: " +
+			"[left] 0-degree front-facing full body, " +
+			"[center] 90-degree right side profile full body, " +
+			"[right] 180-degree back view full body, " +
+			"A-pose arms 30-45 degrees from sides, " +
+			"same ground baseline, identical appearance across all panels"
+
+	// appearance 截断至 50 词，与结构词（~38）、修饰词（~35）合计控制在 100-150 词范围内。
+	// 参考图通过图像编码通道（IP-Adapter）处理面部一致性；
+	// 文字层面无法传递实际面部特征，故不使用文字前缀锚定。
+	condensedAppearance := condenseVisualPrompt(appearance, 50)
 
 	var prompt string
 	if style == "realistic" || style == "real_person" {
-		realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
-		sheetStyle := "realistic photography style, high quality professional character design reference"
+		genderPrefix := map[string]string{
+			"male": "1man, male, ", "female": "1woman, female, ", "neutral": "androgynous person, ",
+		}[gender]
+		sheetStyle := "photorealistic character design reference, natural even studio lighting"
 		if style == "real_person" {
-			sheetStyle = "photorealistic portrait photography, ultra-realistic skin texture, natural studio lighting, DSLR quality, 8k uhd, sharp focus, professional character design reference"
+			sheetStyle = "ultra-realistic skin texture, natural studio lighting, DSLR quality, 8k uhd, sharp focus"
 		}
-		prompt = fmt.Sprintf(
-			"%s%scharacter model sheet, 3-panel turnaround layout: "+
-				"[left panel] strictly 0-degree front-facing full body, "+
-				"[center panel] strictly 90-degree right side profile full body, "+
-				"[right panel] strictly 180-degree back view full body, "+
-				"all three panels show the complete figure from head to toe no cropping, "+
-				"three views of the same person, identical face identical hair identical outfit across all three panels, "+
-				"standard A-pose arms slightly away from body, "+
-				"%s, "+
-				"orthographic projection no perspective, character only pure white background, "+
-				"%s, "+
-				"no text no labels no watermarks",
-			refPrefix, realisticGender, appearance, sheetStyle)
-	} else if genderTag != "" {
-		prompt = fmt.Sprintf(
-			"%s%s, character model sheet, 3-panel turnaround layout: "+
-				"[left panel] strictly 0-degree front-facing full body, "+
-				"[center panel] strictly 90-degree right side profile full body, "+
-				"[right panel] strictly 180-degree back view full body, "+
-				"all three panels show the complete figure from head to toe no cropping, "+
-				"three views of the same character, identical face identical hair identical outfit across all three panels, "+
-				"standard A-pose arms slightly away from body, "+
-				"%s, "+
-				"orthographic projection no perspective, character only no props no background, "+
-				"%s风格, flat color illustration clean lineart white background, "+
-				"high quality model sheet character reference sheet, no text no labels no watermarks",
-			refPrefix, genderTag, appearance, styleStr)
+		prompt = genderPrefix + layoutFrame + ", " +
+			condensedAppearance + ", " +
+			"no makeup natural bare face, " +
+			"orthographic projection, character only pure white background, " +
+			sheetStyle + ", " +
+			qualityTokens + ", " +
+			"no text no labels no watermarks"
 	} else {
-		prompt = fmt.Sprintf(
-			"%scharacter model sheet, 3-panel turnaround layout: "+
-				"[left panel] strictly 0-degree front-facing full body, "+
-				"[center panel] strictly 90-degree right side profile full body, "+
-				"[right panel] strictly 180-degree back view full body, "+
-				"all three panels show the complete figure from head to toe no cropping, "+
-				"three views of the same character, identical face identical hair identical outfit across all three panels, "+
-				"standard A-pose arms slightly away from body, "+
-				"%s, "+
-				"orthographic projection no perspective, character only no props no background, "+
-				"%s风格, flat color illustration clean lineart white background, "+
-				"high quality model sheet character reference sheet, no text no labels no watermarks",
-			refPrefix, appearance, styleStr)
+		styleDesc := resolveStyleIllustrationDesc(style)
+		genderPrefix := ""
+		if genderTag != "" {
+			genderPrefix = genderTag + ", "
+		}
+		prompt = genderPrefix + layoutFrame + ", " +
+			condensedAppearance + ", " +
+			"no makeup natural bare face, " +
+			"orthographic projection, character only white background, " +
+			styleDesc + ", " +
+			qualityTokens + ", " +
+			"no text no labels no watermarks"
 	}
 
-	logger.Printf("GenerateThreeViewSheet: %s ref=%v", name, aiRef != "")
+	logger.Printf("GenerateThreeViewSheet: %s style=%s ref=%v", name, style, aiRef != "")
 
 	baseNeg := "text, labels, annotations, watermark, signature, caption, speech bubble, " +
-		"props, weapons, furniture, additional objects, background objects, scene elements, environment, " +
+		"background objects, scene elements, environment, complex background, " +
+		"T-pose, arms straight horizontal, arms glued to body, " +
 		"three-quarter view, 45-degree angle, diagonal angle, oblique angle, " +
 		"perspective distortion, foreshortening, dynamic pose, action pose, " +
 		"different face, inconsistent face, face change, different person, face inconsistency, " +
 		"different hairstyle, hair color change, costume mismatch, " +
+		"merged panels, overlapping panels, panels bleeding into each other, " +
 		"cropped body, cut off feet, missing feet, missing legs, bottom cut off, partial figure, floating figure, " +
 		"incomplete figure, body cutoff, figure cutoff, " +
+		"makeup, eyeshadow, eyeliner, mascara, lipstick, blush, rouge, cosmetics, " +
 		"extra limbs, bad anatomy, nsfw, lowres, poorly drawn"
 	negativePrompt := baseNeg
 	if genderNeg != "" {
@@ -1633,52 +1672,37 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 // GenerateFaceCloseupImage 生成角色面部特写图片。
 // ctx 可携带 ImageStorageHint 用于 OSS 路径构建。
 func (s *ImageGenerationService) GenerateFaceCloseupImage(ctx context.Context, tenantID uint, name, appearance, style, gender, referenceImage, provider string) (*GeneratedCharacterImage, error) {
-	styleStr := resolveStyleDesc(style)
 	genderTag, genderNeg := resolveGenderInfo(gender)
+	qualityTokens := resolveStyleQualityTokens(style)
+	condensed := condenseVisualPrompt(appearance, 40)
 
-	// 注意：不要在提示词中加入 "identity preservation" / "face lock reference" / "IP-Adapter portrait"
-	// 这些是框架工具名（非 SD prompt token），不被扩散模型识别，只会占用 token 权重、干扰生成。
 	var prompt string
 	if style == "realistic" || style == "real_person" {
-		realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
-		faceStyle := "skin texture, hair strand detail, eye catchlight, high quality portrait photo"
+		genderPrefix := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": "androgynous person, "}[gender]
+		faceStyle := "natural studio lighting, sharp focus on face, high quality portrait"
 		if style == "real_person" {
-			faceStyle = "ultra-realistic skin texture, pore detail, hair strand detail, eye catchlight, catchlight in iris, " +
-				"professional studio lighting, 85mm portrait lens, bokeh background, DSLR quality, 8k uhd portrait photo"
+			faceStyle = "ultra-realistic skin texture, 85mm portrait lens, natural studio lighting, DSLR quality, 8k uhd"
 		}
-		prompt = fmt.Sprintf(
-			"%sbust shot, upper body portrait, front view only, face centered in frame, "+
-				"single view, not a turnaround, not a character sheet, "+
-				"solo, %s, "+
-				"soft even lighting, studio light, no harsh shadows, "+
-				"detailed facial features, sharp focus on face, "+
-				"%s, "+
-				"neutral expression, looking at camera, "+
-				"character only, no props, pure white background, "+
-				"no text, no labels, no watermarks",
-			realisticGender, appearance, faceStyle)
-	} else if genderTag != "" {
-		prompt = fmt.Sprintf(
-			"%s, solo, bust shot, upper body portrait, head and shoulders, face centered, "+
-				"%s, "+
-				"detailed facial features, expressive eyes, looking at viewer, neutral expression, "+
-				"soft even lighting, no harsh shadows, sharp focus on face, "+
-				"character only, no props, no background elements, "+
-				"front view only, single view, "+
-				"%s风格, flat color illustration, clean lineart, white background, high quality, "+
-				"no text, no labels, no watermarks",
-			genderTag, appearance, styleStr)
+		prompt = genderPrefix +
+			"bust shot, face centered, front view, solo, " +
+			condensed + ", " +
+			"no makeup natural bare face, soft even lighting, " +
+			faceStyle + ", " +
+			qualityTokens + ", " +
+			"character only, pure white background, no text no watermarks"
 	} else {
-		prompt = fmt.Sprintf(
-			"solo, bust shot, upper body portrait, head and shoulders, face centered, "+
-				"%s, "+
-				"detailed facial features, expressive eyes, looking at viewer, neutral expression, "+
-				"soft even lighting, no harsh shadows, sharp focus on face, "+
-				"character only, no props, no background elements, "+
-				"front view only, single view, "+
-				"%s风格, flat color illustration, clean lineart, white background, high quality, "+
-				"no text, no labels, no watermarks",
-			appearance, styleStr)
+		styleDesc := resolveStyleIllustrationDesc(style)
+		genderPrefix := ""
+		if genderTag != "" {
+			genderPrefix = genderTag + ", "
+		}
+		prompt = genderPrefix +
+			"bust shot, face centered, front view, solo, " +
+			condensed + ", " +
+			"no makeup natural bare face, soft even lighting, sharp focus on face, " +
+			styleDesc + ", " +
+			qualityTokens + ", " +
+			"character only, white background, no text no watermarks"
 	}
 
 	aiRef := referenceImage
@@ -1691,6 +1715,7 @@ func (s *ImageGenerationService) GenerateFaceCloseupImage(ctx context.Context, t
 		"full body, feet, legs below waist, body below chest, waist and below, " +
 		"turnaround, multiple views, front and side and back, three views, character sheet, model sheet, " +
 		"props, weapons, furniture, additional objects, background objects, scene elements, environment, " +
+		"makeup, eyeshadow, eye shadow, eyeliner, eye liner, mascara, lipstick, blush, rouge, cosmetics, " +
 		"text, labels, annotations, watermark, signature, caption, " +
 		"harsh shadows, dramatic lighting, complex background"
 	negativePrompt := baseNeg
