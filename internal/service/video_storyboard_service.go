@@ -1386,12 +1386,20 @@ func (s *VideoService) ApplyReviewInserts(videoID uint, inserts []model.ShotInse
 	})
 	count := 0
 	for _, ins := range sorted {
-		shot, err := s.InsertShot(videoID, ins.AfterShotNo, ins.Narration, ins.Description, ins.Duration)
+		// 对白镜头：narration 留空，由 dialogue 填充
+		insertNarration := ins.Narration
+		if ins.Dialogue != "" {
+			insertNarration = ""
+		}
+		shot, err := s.InsertShot(videoID, ins.AfterShotNo, insertNarration, ins.Description, ins.Duration)
 		if err != nil {
 			return count, fmt.Errorf("insert after shot %d: %w", ins.AfterShotNo, err)
 		}
-		// Apply optional shot_size / camera_type from the suggestion
+		// Apply optional fields from the suggestion
 		fields := map[string]interface{}{}
+		if ins.Dialogue != "" {
+			fields["dialogue"] = ins.Dialogue
+		}
 		if ins.ShotSize != "" {
 			fields["shot_size"] = ins.ShotSize
 		}

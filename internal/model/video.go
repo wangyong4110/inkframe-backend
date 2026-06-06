@@ -305,6 +305,7 @@ type ShotReviewFeedback struct {
 	Suggestion           string   `json:"suggestion"`
 	Severity             string   `json:"severity"` // info / warning / error
 	SuggestedNarration   string   `json:"suggested_narration,omitempty"`
+	SuggestedDialogue    string   `json:"suggested_dialogue,omitempty"`    // 建议对白（替换 dialogue 字段，同时清空 narration）
 	SuggestedDescription string   `json:"suggested_description,omitempty"`
 }
 
@@ -357,6 +358,7 @@ type ShotRollbackItem struct {
 type ShotInsertSuggestion struct {
 	AfterShotNo int     `json:"after_shot_no"` // 在此编号镜头之后插入；0=插入到最前
 	Narration   string  `json:"narration"`
+	Dialogue    string  `json:"dialogue,omitempty"` // 对白镜头：与 narration 互斥，同时出现时 dialogue 优先
 	Description string  `json:"description"`
 	Duration    float64 `json:"duration"`
 	ShotSize    string  `json:"shot_size,omitempty"`

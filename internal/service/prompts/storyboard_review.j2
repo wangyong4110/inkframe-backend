@@ -87,7 +87,17 @@
       "severity": "error",
       "issues": ["旁白含禁用词「镜头」，破坏第四堵墙"],
       "suggestion": "将「镜头切到」改为叙事性描述",
-      "suggested_narration": "烛火摇曳，他的身影在墙上拉出长长的影，沉默中暗流涌动。",
+      "suggested_narration": "烛火摇曳，暗流在沉默中涌动。",
+      "suggested_dialogue": "",
+      "suggested_description": ""
+    },
+    {
+      "shot_no": 6,
+      "severity": "error",
+      "issues": ["旁白字段包含多个角色台词，应拆分为独立对白镜头"],
+      "suggestion": "清空旁白，在本镜头后插入两个对白镜头，各含一句台词",
+      "suggested_narration": "",
+      "suggested_dialogue": "",
       "suggested_description": ""
     }
   ],
@@ -95,11 +105,32 @@
     {
       "after_shot_no": 3,
       "narration": "黑暗中，一双眼睛缓缓睁开，带着不为人知的算计。",
+      "dialogue": "",
       "description": "近景，反派角色在暗处凝视，表情阴冷，光线仅照亮半张脸。",
       "duration": 3.5,
       "shot_size": "close_up",
       "camera_type": "static",
       "reason": "原文第3段写到「幕后黑手在暗中观察」，当前分镜缺少此视角切换，叙事出现断层。"
+    },
+    {
+      "after_shot_no": 6,
+      "narration": "",
+      "dialogue": "狼：你要去哪里，小红帽？",
+      "description": "中景，狼面带笑容开口询问。",
+      "duration": 3.0,
+      "shot_size": "medium",
+      "camera_type": "static",
+      "reason": "原文中狼先开口搭话，需独立对白镜头。"
+    },
+    {
+      "after_shot_no": 7,
+      "narration": "",
+      "dialogue": "小红帽：我要去奶奶家。",
+      "description": "中景，小红帽回答，眼神清澈。",
+      "duration": 3.0,
+      "shot_size": "medium",
+      "camera_type": "static",
+      "reason": "小红帽回应独立成镜，对白严格单角色单镜头。"
     }
   ],
   "suggested_deletes": [
@@ -114,10 +145,22 @@
 - overall_score = narrative_score×0.35 + visual_score×0.25 + pacing_score×0.20 + voiceover_score×0.20，结果四舍五入取整数
 - severity 只能取 "error"（严重，影响观看体验）/ "warning"（中等，明显削弱质量）/ "info"（轻微，建议性优化）
 - shot_feedback 仅列出有问题的镜头，无问题镜头不输出
-- suggested_narration / suggested_description 必须是完整替换文本，不得是diff或注释；无需修改时填空字符串""
+- suggested_narration / suggested_dialogue / suggested_description 必须是完整替换文本，不得是diff或注释；无需修改时填空字符串""
 - 【重要】只要 issues 里含有视觉/结构改进建议，必须在 suggested_description 里提供改写后的完整画面描述
 - 【重要】只要 issues 里含有旁白/叙事问题，必须在 suggested_narration 里提供改写后的完整旁白
-- suggested_narration / suggested_description 至少其中一项非空，否则该镜头不应出现在 shot_feedback 中
+- suggested_narration / suggested_dialogue / suggested_description 至少其中一项非空，否则该镜头不应出现在 shot_feedback 中
+
+- 【台词与旁白严格分离规则——违反将导致建议无法应用】
+  ① suggested_narration：纯第三人称叙事，不超过25字，严禁任何台词格式（"角色名：内容"），严禁镜头操作词
+  ② suggested_dialogue：单个角色的一句台词，格式固定为"角色名：台词"，不超过20字，旁白镜头时留空""
+  ③ 当原镜头的旁白字段（narration）包含角色台词时，处理规则如下：
+     - 若只有一个角色说话 → suggested_narration="" 清空旁白，suggested_dialogue="角色名：台词内容"
+     - 若有多个角色说话 → suggested_narration="" 清空旁白，在 suggested_inserts 中为每个角色分别插入一个对白镜头
+  ④ suggested_inserts 中的对白镜头：narration 留空""，dialogue 填写"角色名：台词"（单角色单镜头）
+  ✅ 旁白示例：suggested_narration="狼与小红帽在林间相遇，笑容下暗藏算计。" suggested_dialogue=""
+  ✅ 单角色对白：suggested_narration="" suggested_dialogue="狼：你要去哪里，小红帽？"
+  ✅ 多角色拆分：suggested_narration="" + suggested_inserts=[{dialogue:"狼：你好，小红帽。",...},{dialogue:"小红帽：谢谢你，狼先生。",...}]
+  ❌ 禁止：suggested_narration="狼：你好，小红帽。小红帽：谢谢你。"（台词塞进旁白字段）
 - suggested_inserts：仅在有充分原文依据时才输出；reason 字段必须引用原文具体内容；无需插入时输出空数组 []
 - suggested_deletes：仅在镜头与原文明显冲突或高度冗余时才输出；无需删除时输出空数组 []
 - summary 控制在50字以内，概括本组分镜的核心优缺点
