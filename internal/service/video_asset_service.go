@@ -807,7 +807,9 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 
 	// 以下逻辑只在纯对白镜头（Narration 为空，Dialogue 非空）时执行。
 
-	// 步骤一：从对话中解析发言角色（格式：角色名：对话内容 或 角色名:对话内容）
+	// 步骤一：从对话中解析发言角色（格式：角色名：对话内容 或 角色名:对话内容）。
+	// 若找不到"角色名："前缀，说明 dialogue 内容不是规范对白（可能是 LLM 把旁白错填入此字段），
+	// 此时不尝试推断角色音色，直接沿用 narrationVoice。
 	speakerName := ""
 	for _, sep := range []string{"：", ":"} {
 		if idx := strings.Index(shot.Dialogue, sep); idx > 0 && idx < 20 {
@@ -815,21 +817,26 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 			break
 		}
 	}
-	if speakerName != "" {
-		// 使用带 TTL 缓存的角色列表（批量配音时避免 N+1 查询）
-		characters, err := s.listCharsByNovelCached(novelID)
-		if err != nil {
+	if speakerName == "" {
+		// 无法识别发言角色，当成旁白处理
+		return
+	}
+
+	// 找到了发言角色名，按优先级逐级查找对应音色：
+	// 步骤一b：精确名称匹配
+	characters, err := s.listCharsByNovelCached(novelID)
+	if err != nil {
+		return
+	}
+	for _, c := range characters {
+		if strings.EqualFold(c.Name, speakerName) {
+			applyCharVoice(c)
 			return
-		}
-		for _, c := range characters {
-			if strings.EqualFold(c.Name, speakerName) {
-				applyCharVoice(c)
-				return
-			}
 		}
 	}
 
-	// 步骤二：从 CharacterIDs 取第一个角色的音色
+	// 步骤二：名称未完全匹配，降级用 CharacterIDs 第一个角色兜底
+	// （角色名可能因 LLM 别称/简写导致精确匹配失败）
 	if len(shot.CharacterIDs) > 0 {
 		char, err := s.characterRepo.GetByID(shot.CharacterIDs[0])
 		if err == nil && char != nil {
@@ -838,23 +845,20 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 		}
 	}
 
-	// 步骤三：CharacterIDs 为空时降级到 shot.Characters JSON（名称匹配）
+	// 步骤三：继续降级到 shot.Characters JSON 名称模糊匹配
 	if shot.Characters != "" {
 		var shotChars []struct {
 			Name string `json:"name"`
 		}
 		if err := json.Unmarshal([]byte(shot.Characters), &shotChars); err == nil && len(shotChars) > 0 {
-			characters, err := s.listCharsByNovelCached(novelID)
-			if err == nil {
-				nameMap := make(map[string]*model.Character, len(characters))
-				for _, c := range characters {
-					nameMap[strings.ToLower(c.Name)] = c
-				}
-				for _, sc := range shotChars {
-					if char, ok := nameMap[strings.ToLower(sc.Name)]; ok {
-						applyCharVoice(char)
-						return
-					}
+			nameMap := make(map[string]*model.Character, len(characters))
+			for _, c := range characters {
+				nameMap[strings.ToLower(c.Name)] = c
+			}
+			for _, sc := range shotChars {
+				if char, ok := nameMap[strings.ToLower(sc.Name)]; ok {
+					applyCharVoice(char)
+					return
 				}
 			}
 		}
