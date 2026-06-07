@@ -579,8 +579,9 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	prevEnding := s.getPreviousChapterEnding(tenantID, novel, req.ChapterNo)
 
 	// 最终章：提前收集全部未关闭悬线，供场景大纲和正文生成两步共用
+	// 独立成篇模式不需要：每章自成一体，不收束全局悬线
 	finalChapterCtx := ""
-	if req.IsStandalone {
+	if req.IsStandalone && novel.ChapterMode != "independent" {
 		finalChapterCtx = s.buildFinalChapterContext(novelID, novel)
 		logger.Printf("[GenerateChapter] ch%d: IsStandalone=true, finalChapterCtx len=%d", req.ChapterNo, len(finalChapterCtx))
 	}
@@ -1188,6 +1189,7 @@ func (s *ChapterService) generateSceneOutline(
 		"HookType":              hookType,
 		"ChapterType":           computeChapterType(tensionLevel, hookType, actNo),
 		"IsStandalone":          req.IsStandalone,
+		"ChapterMode":           novel.ChapterMode,
 		"FinalChapterContext":   finalChapterCtx, // 最终章专用：全部未关闭悬线收尾清单
 		"PreviousChapterEnding": prevEnding,
 		"Characters":            characters,
@@ -1280,6 +1282,7 @@ func (s *ChapterService) generateSceneOutline(
 				"HookType":              hookType,
 				"ChapterType":           computeChapterType(tensionLevel, hookType, actNo),
 				"IsStandalone":          req.IsStandalone,
+				"ChapterMode":           novel.ChapterMode,
 				"FinalChapterContext":   finalChapterCtx, // ← 重试也需要最终章约束
 				"PreviousChapterEnding": prevEnding,
 				"Characters":            characters,
@@ -1714,6 +1717,7 @@ func (s *ChapterService) generateFromSceneOutline(
 				"CharacterVoices":       filteredVoices,
 				"IsLastScene":           isLastScene,
 				"IsStandalone":          req.IsStandalone,   // P0-2: 最终章标记
+				"ChapterMode":           novel.ChapterMode,
 				"HookType":              meta.hookType,
 				// 场景大纲生成的重要字段
 				"TensionDirection":    sc.TensionDirection,  // rising/peak/falling/reversal
@@ -1837,6 +1841,7 @@ func (s *ChapterService) generateFromSceneOutline(
 		"UserPrompt":            req.Prompt,
 		"ReviewHints":           buildReviewHintsText(req.ReviewHints),
 		"IsStandalone":          req.IsStandalone,
+		"ChapterMode":           novel.ChapterMode,
 		"RefStories":            refStories,
 		"WikiContext":           wikiContext,
 		"ChapterBudget":         budgetText,
