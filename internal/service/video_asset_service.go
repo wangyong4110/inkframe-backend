@@ -782,15 +782,6 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 		return
 	}
 
-	// 步骤一：从对话中解析发言角色（格式：角色名：对话内容 或 角色名:对话内容）
-	speakerName := ""
-	for _, sep := range []string{"：", ":"} {
-		if idx := strings.Index(shot.Dialogue, sep); idx > 0 && idx < 20 {
-			speakerName = strings.TrimSpace(shot.Dialogue[:idx])
-			break
-		}
-	}
-
 	applyCharVoice := func(c *model.Character) {
 		if c.VoiceID != "" {
 			voice = c.VoiceID
@@ -806,16 +797,28 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 		style = c.VoiceStyle
 	}
 
-	if speakerName != "" {
-		// 使用带 TTL 缓存的角色列表（批量配音时避免 N+1 查询）
-		characters, err := s.listCharsByNovelCached(novelID)
-		if err != nil {
-			return
+	// 步骤一：从对话中解析发言角色（格式：角色名：对话内容 或 角色名:对话内容）。
+	// 仅在 Narration 为空时执行——若 Narration 非空，GenerateShotAudio 合成的是旁白文字，
+	// 不应让 Dialogue 里的角色名把旁白音色替换成角色音色。
+	if shot.Narration == "" {
+		speakerName := ""
+		for _, sep := range []string{"：", ":"} {
+			if idx := strings.Index(shot.Dialogue, sep); idx > 0 && idx < 20 {
+				speakerName = strings.TrimSpace(shot.Dialogue[:idx])
+				break
+			}
 		}
-		for _, c := range characters {
-			if strings.EqualFold(c.Name, speakerName) {
-				applyCharVoice(c)
+		if speakerName != "" {
+			// 使用带 TTL 缓存的角色列表（批量配音时避免 N+1 查询）
+			characters, err := s.listCharsByNovelCached(novelID)
+			if err != nil {
 				return
+			}
+			for _, c := range characters {
+				if strings.EqualFold(c.Name, speakerName) {
+					applyCharVoice(c)
+					return
+				}
 			}
 		}
 	}
