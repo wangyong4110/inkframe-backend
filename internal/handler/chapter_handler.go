@@ -342,7 +342,7 @@ func (h *ChapterHandler) GetVersions(c *gin.Context) {
 		return
 	}
 
-	respondOK(c, versions)
+	respondOK(c, gin.H{"versions": versions})
 }
 
 // RestoreVersion 恢复版本
