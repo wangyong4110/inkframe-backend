@@ -815,6 +815,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			v1.GET("/assets/tags", ah.ListTags)
 			v1.GET("/assets/tags/suggest", ah.SuggestTags)
 			v1.GET("/assets/trash", ah.ListTrash)
+			v1.DELETE("/assets/trash", ah.EmptyTrash)
+			v1.DELETE("/assets/clear-personal", ah.ClearPersonalAssets)
 			v1.GET("/assets/stats/ranking", ah.GetValueRanking)
 			v1.GET("/assets/stats/search-gaps", ah.GetSearchGaps)
 			v1.POST("/assets/batch-delete", ah.BatchDelete)

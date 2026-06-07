@@ -265,6 +265,16 @@ func (s *AssetService) ListTrash(creatorID uint, page, size int) ([]*model.Asset
 	return s.assetRepo.ListTrash(creatorID, page, size)
 }
 
+// ClearPersonalAssets soft-deletes all active personal-scope assets for the caller.
+func (s *AssetService) ClearPersonalAssets(callerID uint) (int64, error) {
+	return s.assetRepo.SoftDeleteAllByCreator(callerID)
+}
+
+// EmptyTrash permanently purges all trashed assets for the caller.
+func (s *AssetService) EmptyTrash(callerID uint) (int64, error) {
+	return s.assetRepo.HardDeleteAllTrash(callerID)
+}
+
 // ─── Sharing Workflow ─────────────────────────────────────────────────────────
 
 func (s *AssetService) RequestShare(assetID, callerID uint) (*model.AssetShareRequest, error) {

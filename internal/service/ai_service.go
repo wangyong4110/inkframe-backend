@@ -1556,20 +1556,7 @@ func (s *AIService) uploadImageToStorage(ctx context.Context, tenantID uint, img
 	filename := uuid.New().String() + ext
 	logger.Printf("uploadImageToStorage: generated filename=%q from imgURL=%q", filename, imgURL)
 
-	var key string
-	if hint, ok := ctx.Value(imageStorageHintKey{}).(ImageStorageHint); ok && hint.NovelTitle != "" {
-		sanitized := sanitizeStorageName(hint.NovelTitle)
-		if sanitized != "" {
-			if hint.ChapterNo > 0 {
-				key = fmt.Sprintf("novels/%s/chapters/%d/images/%s", sanitized, hint.ChapterNo, filename)
-			} else {
-				key = fmt.Sprintf("novels/%s/images/%s", sanitized, filename)
-			}
-		}
-	}
-	if key == "" {
-		key = fmt.Sprintf("images/%d/%s", tenantID, filename)
-	}
+	key := fmt.Sprintf("images/%s", filename)
 
 	persistURL, uploadErr := s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), ct)
 	if uploadErr != nil {

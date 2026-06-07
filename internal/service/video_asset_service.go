@@ -17,9 +17,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
-	"github.com/inkframe/inkframe-backend/internal/storage"
 	"gorm.io/gorm"
 )
 
@@ -262,17 +262,14 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 		return nil
 	}
 
-	// 预加载 shot + video 一次，同时用于：① 角色声音查找 ② EmotionalTone ③ OSS 存储 key
-	var novelID, chapterID uint
+	// 预加载 shot + video 一次，同时用于：① 角色声音查找 ② EmotionalTone
+	var novelID uint
 	var shotEmotionalTone string
 	if s.storyboardRepo != nil && s.videoRepo != nil {
 		if shot, e := s.storyboardRepo.GetByID(seg.ShotID); e == nil {
 			shotEmotionalTone = shot.EmotionalTone
 			if video, e := s.videoRepo.GetByID(shot.VideoID); e == nil {
 				novelID = video.NovelID
-				if video.ChapterID != nil {
-					chapterID = *video.ChapterID
-				}
 			}
 		}
 	}
@@ -349,10 +346,8 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 	}
 
 	// 上传到持久存储（如果配置了 storageSvc）
-	// key 格式：novels/{novelID}/chapters/{chapterID}/audio/seg-{segID}.mp3
 	if s.storageSvc != nil && len(audioData) > 0 {
-		filename := fmt.Sprintf("seg-%d.mp3", segID)
-		key := storage.BuildKey(novelID, chapterID, "audio", filename)
+		key := fmt.Sprintf("audio/%s.mp3", uuid.New().String())
 		ossURL, e := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(audioData), int64(len(audioData)), "audio/mpeg")
 		if e != nil {
 			logger.Errorf("GenerateSegmentAudio: OSS upload failed for segment %d: %v", segID, e)
@@ -450,14 +445,11 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 		return nil // no voice text; shot is silent
 	}
 
-	// 需要 novelID 以便角色声音查询和存储 key
-	var novelID, chapterID uint
+	// 需要 novelID 以便角色声音查询
+	var novelID uint
 	if s.videoRepo != nil {
 		if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil {
 			novelID = video.NovelID
-			if video.ChapterID != nil {
-				chapterID = *video.ChapterID
-			}
 		}
 	}
 
@@ -484,7 +476,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 
 	// 上传到持久存储（持久化音频避免本地 /tmp 文件重启后消失）
 	if s.storageSvc != nil {
-		persistURL, uploadErr := s.uploadAudioToStorage(ctx, shot, audioURL, novelID, chapterID)
+		persistURL, uploadErr := s.uploadAudioToStorage(ctx, shot, audioURL)
 		if uploadErr != nil {
 			logger.Errorf("GenerateShotAudio: storage upload failed (falling back to local): %v", uploadErr)
 		} else {
@@ -506,7 +498,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 
 // uploadAudioToStorage 读取 TTS 输出（file:// 路径或 HTTP URL），上传并返回持久 URL。
 // novelID/chapterID 由调用方提供，避免重复查询 video 记录。
-func (s *VideoService) uploadAudioToStorage(ctx context.Context, shot *model.StoryboardShot, audioURL string, novelID, chapterID uint) (string, error) {
+func (s *VideoService) uploadAudioToStorage(ctx context.Context, shot *model.StoryboardShot, audioURL string) (string, error) {
 	var data []byte
 	var readErr error
 
@@ -526,8 +518,7 @@ func (s *VideoService) uploadAudioToStorage(ctx context.Context, shot *model.Sto
 		return "", readErr
 	}
 
-	filename := fmt.Sprintf("shot-%d.mp3", shot.ID)
-	key := storage.BuildKey(novelID, chapterID, "audio", filename)
+	key := fmt.Sprintf("audio/%s.mp3", uuid.New().String())
 	return s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), "audio/mpeg")
 }
 
@@ -643,14 +634,7 @@ func (s *VideoService) generateShotAudioFromSegments(shot *model.StoryboardShot,
 	// 5. Upload stitched audio to persistent storage
 	audioURL := "file://" + stitchedPath
 	if s.storageSvc != nil && len(stitchedData) > 0 {
-		var novelID, chapterID uint
-		if video, e := s.videoRepo.GetByID(shot.VideoID); e == nil {
-			novelID = video.NovelID
-			if video.ChapterID != nil {
-				chapterID = *video.ChapterID
-			}
-		}
-		key := storage.BuildKey(novelID, chapterID, "audio", fmt.Sprintf("shot-%d-stitched.mp3", shot.ID))
+		key := fmt.Sprintf("audio/%s.mp3", uuid.New().String())
 		if ossURL, e := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(stitchedData), int64(len(stitchedData)), "audio/mpeg"); e == nil {
 			audioURL = ossURL
 		} else {
@@ -740,16 +724,7 @@ func (s *VideoService) MergeVoiceSegments(ctx context.Context, shotID, tenantID 
 
 	var audioURL string
 	if s.storageSvc != nil && len(merged) > 0 {
-		var novelID, chapterID uint
-		if s.videoRepo != nil {
-			if video, e := s.videoRepo.GetByID(shot.VideoID); e == nil {
-				novelID = video.NovelID
-				if video.ChapterID != nil {
-					chapterID = *video.ChapterID
-				}
-			}
-		}
-		key := storage.BuildKey(novelID, chapterID, "audio", fmt.Sprintf("shot-%d-merged.mp3", shotID))
+		key := fmt.Sprintf("audio/%s.mp3", uuid.New().String())
 		if ossURL, e := s.storageSvc.Upload(ctx, key, bytes.NewReader(merged), int64(len(merged)), "audio/mpeg"); e == nil {
 			audioURL = ossURL
 		} else {

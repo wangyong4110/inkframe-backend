@@ -379,6 +379,8 @@ type StoryboardReview struct {
 	VisualScore       float64                `json:"visual_score"`        // 视觉多样性
 	PacingScore       float64                `json:"pacing_score"`        // 节奏控制
 	VoiceoverScore    float64                `json:"voiceover_score"`     // 旁白质量
+	DialogueScore     float64                `json:"dialogue_score"`      // 台词质量（潜台词/戏剧功能）
+	ArcScore          float64                `json:"arc_score"`           // 情感节奏曲线完整性
 	Summary           string                 `json:"summary"`             // 综合评价
 	Strengths         []string               `json:"strengths"`           // 亮点
 	Weaknesses        []string               `json:"weaknesses"`          // 主要问题

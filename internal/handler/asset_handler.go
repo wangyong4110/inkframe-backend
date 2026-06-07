@@ -247,6 +247,26 @@ func (h *AssetHandler) ListTrash(c *gin.Context) {
 	respondOK(c, gin.H{"items": assets, "total": total})
 }
 
+// DELETE /assets/trash  — permanently purge all trashed assets for the caller
+func (h *AssetHandler) EmptyTrash(c *gin.Context) {
+	count, err := h.svc.EmptyTrash(callerID(c))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"deleted": count})
+}
+
+// DELETE /assets/clear-personal  — soft-delete all active personal assets for the caller
+func (h *AssetHandler) ClearPersonalAssets(c *gin.Context) {
+	count, err := h.svc.ClearPersonalAssets(callerID(c))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"moved_to_trash": count})
+}
+
 // ─── Share Workflow ───────────────────────────────────────────────────────────
 
 // POST /assets/:id/share-request

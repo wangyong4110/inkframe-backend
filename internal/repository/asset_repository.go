@@ -66,6 +66,26 @@ func (r *AssetRepository) HardDelete(id uint) error {
 	return r.db.Unscoped().Delete(&model.Asset{}, id).Error
 }
 
+// SoftDeleteAllByCreator soft-deletes all active personal-scope assets owned by creatorID.
+// Returns the number of rows affected.
+func (r *AssetRepository) SoftDeleteAllByCreator(creatorID uint) (int64, error) {
+	now := time.Now()
+	tx := r.db.Model(&model.Asset{}).
+		Where("creator_id = ? AND scope = ? AND status = ?", creatorID, model.AssetScopePersonal, model.AssetStatusActive).
+		Updates(map[string]interface{}{
+			"status": model.AssetStatusTrash, "deleted_at": now, "deleted_by": creatorID,
+		})
+	return tx.RowsAffected, tx.Error
+}
+
+// HardDeleteAllTrash permanently removes every trash item belonging to creatorID.
+// Returns the number of rows deleted.
+func (r *AssetRepository) HardDeleteAllTrash(creatorID uint) (int64, error) {
+	tx := r.db.Unscoped().Where("creator_id = ? AND status = ?", creatorID, model.AssetStatusTrash).
+		Delete(&model.Asset{})
+	return tx.RowsAffected, tx.Error
+}
+
 func (r *AssetRepository) ListTrash(creatorID uint, page, size int) ([]*model.Asset, int64, error) {
 	var assets []*model.Asset
 	var total int64

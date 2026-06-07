@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/storage"
@@ -649,8 +650,7 @@ func (s *SFXService) generateElevenLabsForTag(ctx context.Context, tenantID uint
 		dur = 22
 	}
 
-	tagHash := fmt.Sprintf("%x", len(item.Tag)*31+len(item.SFXType))
-	ossKey := fmt.Sprintf("sfx/video_%d/shot_%d_%s.mp3", shot.VideoID, shot.ID, tagHash)
+	ossKey := fmt.Sprintf("sfx/%s.mp3", uuid.New().String())
 
 	// 优先：通过 AIService 从 DB 加载 elevenlabs-sfx 密钥
 	// 使用信号量限制并发，避免触发 ElevenLabs 429（免费版最多 4 路）
@@ -874,13 +874,12 @@ uploadAudio:
 	if s.storageSvc == nil {
 		return "", 0, fmt.Errorf("storage not configured; cannot save audioldm audio (len=%d)", len(audioData))
 	}
-	tagHash := fmt.Sprintf("%x", len(item.Tag)*31+len(item.SFXType))
 	ext := ".wav"
 	if strings.Contains(mimeType, "mpeg") || strings.Contains(mimeType, "mp3") {
 		ext = ".mp3"
 		mimeType = "audio/mpeg"
 	}
-	key := fmt.Sprintf("sfx/video_%d/shot_%d_%s_ldm%s", shot.VideoID, shot.ID, tagHash, ext)
+	key := fmt.Sprintf("sfx/%s%s", uuid.New().String(), ext)
 	logger.Printf("[SFXService] AudioLDM uploading: key=%s audioLen=%d", key, len(audioData))
 	u, err := s.storageSvc.Upload(ctx, key, bytes.NewReader(audioData), int64(len(audioData)), mimeType)
 	if err != nil {

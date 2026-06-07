@@ -152,6 +152,12 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		}
 	}
 
+	// 前置：生成情感弧线骨架（轻量调用，用于指导每个分段的叙事节奏）
+	arcPlan := s.generateStoryboardArc(content, tenantID, video.NovelID, provider)
+	if arcPlan != "" {
+		logger.Printf("[Storyboard] arc plan generated (%d chars)", len(arcPlan))
+	}
+
 	// 分段生成：长章节按 maxSegmentRunes 字切割，每段独立调用 AI，合并后顺序重编号。
 	// 短章节（≤maxSegmentRunes 字）等同于原单段调用路径，行为完全一致。
 	segments := splitContentSegments(content, maxSegmentRunes)
@@ -200,7 +206,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			}
 			logger.Printf("[Storyboard] seg %d/%d start runes=%d expectedShots=%d", idx+1, len(segments), segRunes, segShotCount)
 
-			prompt := s.buildStoryboardPrompt(video, content, userPrompt, idx+1, len(segments), segShotCount, characters, anchors, plotPoints, nil, overrides.VoiceMode, promptLanguage, video.Pacing)
+			prompt := s.buildStoryboardPrompt(video, content, userPrompt, idx+1, len(segments), segShotCount, characters, anchors, plotPoints, nil, overrides.VoiceMode, promptLanguage, video.Pacing, arcPlan)
 
 			var result string
 			var aiErr error
@@ -675,8 +681,12 @@ func (s *VideoService) buildStoryboardPrompt(
 	voiceMode string,
 	promptLanguage string,
 	pacing string,
+	arcPlan string,
 ) string {
-	isEn := promptLanguage == "en"
+	// image_prompt / video_prompt 始终使用英文，因为即梦AI/Kling/Seedance 模型对英文prompt响应更好。
+	// narration/dialogue 保持中文（不受 IsEn 控制）。
+	// promptLanguage="en" 仅在用户主动选择时设置，此处不影响该逻辑。
+	isEn := promptLanguage == "en" || true // image/video prompt 强制英文
 
 	segLabel := ""
 	if totalSegs > 1 {
@@ -790,6 +800,7 @@ func (s *VideoService) buildStoryboardPrompt(
 		"PlotPoints":          ppData,
 		"Content":             content,
 		"UserPrompt":          userPrompt,
+		"ArcPlan":             arcPlan,
 	}
 	result, err := renderPrompt("storyboard_generate", ctx)
 	if err != nil {
@@ -969,31 +980,66 @@ func validTransition(t string) string {
 	return "cut"
 }
 
-// buildMotionPrompt 根据分镜信息构建运动提示词
+// buildMotionPrompt 根据分镜信息构建运动提示词（降级方案，LLM 生成的 video_prompt 优先）
 func buildMotionPrompt(shot *model.StoryboardShot) string {
 	motionMap := map[string]string{
-		"static":     "locked-off camera, stable frame, no camera movement",
-		"push":       "slow cinematic push in toward subject",
-		"pull":       "slow cinematic pull back from subject",
-		"pan":        "smooth horizontal camera pan",
-		"track":      "smooth tracking shot following subject",
-		"crane_up":   "crane shot slowly rising upward",
-		"crane_down": "crane shot slowly descending",
-		"follow":     "handheld follow shot tracking subject",
-		"arc":        "smooth arc shot orbiting around subject",
-		"tilt":       "smooth camera tilt",
-		"whip_pan":   "fast whip pan transition",
-		"zoom":       "smooth zoom toward subject",
+		"static":     "locked-off camera with organic micro-stabilization, imperceptible ±0.3px breathing drift, no intentional camera movement",
+		"push":       "slow cinematic dolly-push at 0.2x speed closing distance to subject by approximately 30% over shot duration, horizon held stable",
+		"pull":       "steady dolly-pull at 0.15x speed, environment expanding outward from center frame as distance increases",
+		"pan":        "smooth horizontal camera pan at 12°/sec, horizon line held level throughout, subject tracking smoothly from left-to-right",
+		"track":      "smooth tracking shot following primary subject at constant distance, camera maintaining framing as subject moves",
+		"crane_up":   "slow vertical crane rise at 0.1m/sec, horizon line gradually descending in frame, environment expanding into view below",
+		"crane_down": "slow vertical crane descent at 0.1m/sec, camera closing toward ground, horizon rising in frame",
+		"follow":     "handheld follow shot with subtle organic stabilization tracking subject, slight natural camera float maintaining close framing",
+		"arc":        "smooth arc shot orbiting around subject at constant radius, background environment rotating behind while subject stays centered",
+		"tilt":       "smooth vertical camera tilt revealing scene from top to bottom at steady pace, maintaining horizontal level throughout",
+		"whip_pan":   "fast whip pan transition sweeping frame left-to-right in 0.3s, motion blur trail visible during sweep, settling to stable frame",
+		"zoom":       "smooth optical zoom closing in on subject, focal length increasing gradually over shot duration, background compression effect visible",
 	}
 	motion := motionMap[shot.CameraType]
 	if motion == "" {
-		motion = "smooth camera movement"
+		motion = "smooth camera movement with organic micro-stabilization, imperceptible breathing drift"
 	}
+
+	// 从 shot.Scene 中提取时间/天气用于大气描述
+	timeOfDay := "daytime"
+	if shot.Scene != "" {
+		var sceneData map[string]string
+		if err := json.Unmarshal([]byte(shot.Scene), &sceneData); err == nil {
+			if tod := sceneData["time_of_day"]; tod != "" {
+				timeOfDay = tod
+			}
+		}
+	}
+
+	atmos := "ambient dust motes drifting slowly in available light shafts at 0.3cm/sec"
+	if strings.Contains(timeOfDay, "night") || strings.Contains(timeOfDay, "dusk") || strings.Contains(timeOfDay, "evening") {
+		atmos = "subtle ground-level mist at 5-10cm height drifting slowly, torch or moonlight casting soft moving shadows"
+	}
+
+	shotSizeDesc := map[string]string{
+		"extreme_close_up": "extreme close-up framing, subject fills frame edge-to-edge",
+		"close_up":         "close-up framing, subject fills majority of frame",
+		"medium":           "medium shot framing, subject and immediate environment both visible",
+		"wide":             "wide shot framing, broad environment context dominates",
+		"extreme_wide":     "extreme wide shot, vast environment with subject small in frame",
+		"full":             "full-body shot framing, subject visible head to toe",
+	}
+	framing := shotSizeDesc[shot.ShotSize]
+	if framing == "" {
+		framing = "standard shot framing"
+	}
+
 	desc := shot.Description
-	if len(desc) > 200 {
-		desc = desc[:200]
+	if len([]rune(desc)) > 150 {
+		runes := []rune(desc)
+		desc = string(runes[:150])
 	}
-	return fmt.Sprintf("%s, %s", motion, desc)
+
+	return fmt.Sprintf("cinematic sequence, professional cinematography, %s, %s — scene: %s — atmosphere: %s — "+
+		"lighting holds stable throughout with natural subtle variation, shadows maintain direction, "+
+		"no abrupt scene changes, smooth temporal consistency from first to last frame",
+		motion, framing, desc, atmos)
 }
 
 // qualityTierImageParams 返回图片生成质量档位对应的参数（宽度、步数、CFG scale）
@@ -1991,6 +2037,41 @@ func (s *VideoService) ListIgnoredSuggestions(videoID uint) ([]*model.IgnoredRev
 		return nil, fmt.Errorf("ignored suggestion repository not initialized")
 	}
 	return s.ignoredSuggestionRepo.ListByEntity(model.ReviewEntityStoryboard, videoID)
+}
+
+// generateStoryboardArc 在分段生成前调用 AI，从完整章节内容中提取情感弧线骨架。
+// 返回 JSON 字符串（storyboard_arc.j2 格式），失败时返回空字符串（不阻塞主流程）。
+func (s *VideoService) generateStoryboardArc(content string, tenantID, novelID uint, provider string) string {
+	if s.aiService == nil {
+		return ""
+	}
+	// 截断过长内容，弧线分析只需把握全局走向
+	arcContent := content
+	const maxArcRunes = 6000
+	if len([]rune(arcContent)) > maxArcRunes {
+		arcContent = string([]rune(arcContent)[:maxArcRunes]) + "…（已截断，请基于前段内容推断全章情感弧线）"
+	}
+	ctx := map[string]interface{}{"Content": arcContent}
+	prompt, err := renderPrompt("storyboard_arc", ctx)
+	if err != nil {
+		logger.Errorf("[Storyboard] generateStoryboardArc renderPrompt: %v", err)
+		return ""
+	}
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "storyboard_arc", prompt, provider,
+		StoryboardOverrides{MaxTokens: 1024})
+	if err != nil {
+		logger.Errorf("[Storyboard] generateStoryboardArc AI call failed: %v", err)
+		return ""
+	}
+	// 提取 JSON（AI 偶尔会包裹 markdown 代码块）
+	result = strings.TrimSpace(result)
+	if idx := strings.Index(result, "{"); idx > 0 {
+		result = result[idx:]
+	}
+	if idx := strings.LastIndex(result, "}"); idx >= 0 && idx < len(result)-1 {
+		result = result[:idx+1]
+	}
+	return result
 }
 
 // ─── Ensure unused imports are satisfied ─────────────────────────────────────

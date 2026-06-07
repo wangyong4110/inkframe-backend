@@ -374,7 +374,7 @@ func (s *VideoService) compositeRefImages(ctx context.Context, imageURLs []strin
 
 	// 上传到 OSS（若配置了 storageSvc）
 	if s.storageSvc != nil {
-		key := fmt.Sprintf("composites/%d/ref-%d.jpg", tenantID, time.Now().UnixNano())
+		key := fmt.Sprintf("images/%s.jpg", uuid.New().String())
 		ossURL, upErr := s.storageSvc.Upload(ctx, key, bytes.NewReader(buf.Bytes()), int64(buf.Len()), "image/jpeg")
 		if upErr == nil {
 			return ossURL, nil
@@ -556,6 +556,32 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		promptText = strings.Join(characterVisualPrompts, ", ") + ", " + promptText
 	}
 
+	// 角色动作/姿态注入：DreamO 负责外貌一致性，但需要动作提示才能正确摆姿势。
+	// 从 shot.Characters 提取每个角色的 pose 和 expression，拼接为动作描述词注入 prompt。
+	// 只注入动作/表情类词语（如 "standing", "walking", "determined expression"），
+	// 不注入外貌描述（外貌由 VisualPrompt 和参考图负责），避免与 DreamO 参考图冲突。
+	if shot.Characters != "" && len(characterPortraits) > 0 {
+		var shotCharsAction []struct {
+			Name       string `json:"name"`
+			Pose       string `json:"pose"`
+			Expression string `json:"expression"`
+		}
+		if err := json.Unmarshal([]byte(shot.Characters), &shotCharsAction); err == nil && len(shotCharsAction) > 0 {
+			var actionTokens []string
+			for _, c := range shotCharsAction {
+				if c.Pose != "" {
+					actionTokens = append(actionTokens, c.Pose)
+				}
+				if c.Expression != "" {
+					actionTokens = append(actionTokens, c.Expression)
+				}
+			}
+			if len(actionTokens) > 0 {
+				promptText += ", " + strings.Join(actionTokens, ", ")
+			}
+		}
+	}
+
 	// 场景锚点：注入锁定词，并收集场景参考图
 	var sceneRefImage string
 	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
@@ -587,8 +613,8 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// 获取视频的 ArtStyle、TenantID、质量档位、宽高比、角色一致性权重和色彩调色
 	artStyle := ""
 	var tenantID uint
-	charConsistencyWeight := 1.0 // 默认严格一致
-	qualityTier := "preview"     // 默认质量档位
+	charConsistencyWeight := 0.75  // 默认中等一致性：DreamO scale≈7.75，场景prompt与角色参考图均衡影响
+	qualityTier := "production"   // 默认质量档位（preview=768px 对视频参考帧质量不够）
 	var imageAspectRatio, colorGrade string
 	if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil {
 		artStyle = video.ArtStyle
@@ -626,10 +652,13 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 
 	// 根据宽高比+质量档位计算实际图片尺寸（WxH），直接传给 API
 	imageSize := imageAspectRatioToSize(imageAspectRatio, qualityTier)
-	logger.Printf("generateShotReferenceImage: shot %d qualityTier=%s aspectRatio=%s imageSize=%s", shot.ShotNo, qualityTier, imageAspectRatio, imageSize)
+	// 质量档位对应的 CFG scale（引导强度），无参考图时注入 Text2ImgV3 的 scale 参数
+	_, _, qualityCFG := qualityTierImageParams(qualityTier)
+	logger.Printf("generateShotReferenceImage: shot %d qualityTier=%s aspectRatio=%s imageSize=%s qualityCFG=%.1f", shot.ShotNo, qualityTier, imageAspectRatio, imageSize, qualityCFG)
 
 	// 构建负向提示词：基础解剖/物理规律排除词 + 分镜 LLM 生成的镜头专项排除词
 	// 图像生成必须有负向提示词，否则极易出现变形肢体、违反物理规律、比例失调等问题
+	// 纯环境镜头（无角色参考图时）：强制加入无人物排除词，防止 Text2ImgV3 随机生成人物
 	imgNegBase := "worst quality, low quality, jpeg artifacts, noise, blurry, " +
 		"deformed, ugly, bad anatomy, extra limbs, missing limbs, floating limbs, disconnected limbs, " +
 		"malformed hands, missing fingers, fused fingers, extra fingers, poorly drawn hands, extra arms, extra legs, " +
@@ -638,6 +667,11 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		"text, watermark, logo, signature, " +
 		"impossible physics, floating objects, gravity defying, " +
 		"oversaturated, overexposed, underexposed"
+	// 无角色参考图时（Text2ImgV3 纯文生图），确保排除词中有无人物约束
+	noPersonNeg := "person, people, human, man, woman, figure, silhouette, character, face, body, limbs, hands, clothing, portrait"
+	if len(characterPortraits) == 0 && (shot.NegativePrompt == "" || !strings.Contains(shot.NegativePrompt, "person")) {
+		imgNegBase = noPersonNeg + ", " + imgNegBase
+	}
 	negPrompt := imgNegBase
 	if shot.NegativePrompt != "" {
 		negPrompt = imgNegBase + ", " + shot.NegativePrompt
@@ -716,7 +750,14 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	}
 
 	logger.Printf("generateShotReferenceImage: shot %d prompt=%q negPrompt=%q", shot.ShotNo, promptText[:min(len(promptText), 120)], negPrompt[:min(len(negPrompt), 80)])
-	imageURL, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, allRefImages, artStyle, negPrompt, imageSize, charConsistencyWeight)
+	// 无角色参考图时（Text2ImgV3 纯文生图）：用质量档位 CFG 替代 consistencyWeight，让文生图遵从 prompt；
+	// 有参考图时（DreamO）：consistencyWeight 控制 IP-Adapter 强度（0.75 → scale≈7.75）。
+	imageConsistencyWeight := charConsistencyWeight
+	if len(allRefImages) == 0 {
+		// Text2ImgV3 scale 参数（默认2.5，范围1-10），用质量 CFG 映射到合理范围（draft:6→0.56, production:7.5→0.72, master:8→0.78）
+		imageConsistencyWeight = (qualityCFG - 1.0) / 9.0
+	}
+	imageURL, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, allRefImages, artStyle, negPrompt, imageSize, imageConsistencyWeight)
 	if err != nil {
 		logger.Errorf("generateShotReferenceImage: image gen failed for shot %d: %v", shot.ShotNo, err)
 		return "", err
@@ -844,7 +885,8 @@ func emotionToKlingParams(emotion, cameraType string) (mode string, cfgScale flo
 		return "std", 0.65, 5
 
 	default:
-		return "std", 0.5, 5
+		// 默认 CFG=0.65：偏高忠实度，视频贴近参考帧，减少偏离场景的随机发挥
+		return "std", 0.65, 5
 	}
 }
 

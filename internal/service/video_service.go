@@ -599,6 +599,25 @@ func (s *VideoService) DeleteVideo(id, tenantID uint) error {
 	}
 
 	// DB 事务成功后，best-effort 清理 OSS 文件（最多重试3次，指数退避；失败只记录日志，不影响返回值）
+	// 已分享到公共素材库的文件不删除，保证素材库链接持续有效。
+	if len(urlsToDelete) > 0 {
+		var sharedURLs []string
+		s.videoRepo.DB().Raw(
+			"SELECT storage_url FROM ink_asset WHERE storage_url IN ? AND status != 'trash' AND deleted_at IS NULL",
+			urlsToDelete,
+		).Scan(&sharedURLs)
+		sharedSet := make(map[string]bool, len(sharedURLs))
+		for _, u := range sharedURLs {
+			sharedSet[u] = true
+		}
+		filtered := urlsToDelete[:0]
+		for _, u := range urlsToDelete {
+			if !sharedSet[u] {
+				filtered = append(filtered, u)
+			}
+		}
+		urlsToDelete = filtered
+	}
 	if s.storageSvc != nil {
 		for _, u := range urlsToDelete {
 			if u == "" {

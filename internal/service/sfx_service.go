@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -403,7 +404,7 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 			// 上传成功 → 永久 URL，可以缓存；上传失败 → 继续使用 CDN URL，但标记不缓存。
 			noCacheFlag := false
 			if s.storageSvc != nil && strings.HasPrefix(u, "https://") {
-				ossKey := fmt.Sprintf("sfx/video_%d/shot_%d_ai.mp3", shot.VideoID, shot.ID)
+				ossKey := fmt.Sprintf("sfx/%s.mp3", uuid.New().String())
 				if ossURL, uploadErr := downloadURLAndUploadToOSS(ctx, s.storageSvc, u, ossKey); uploadErr == nil {
 					u = ossURL
 				} else {

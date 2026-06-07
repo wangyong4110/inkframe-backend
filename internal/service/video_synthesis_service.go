@@ -779,21 +779,10 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 			_ = s.taskSvc.UpdateProgress(taskID, 70)
 		}
 		finalVideoURL := ""
-		novel, _ := s.novelRepo.GetByID(video.NovelID)
-		novelTitle := ""
-		if novel != nil {
-			novelTitle = sanitizeStorageName(novel.Title)
-		}
 
 		if s.storageSvc != nil {
 			// P2-4: 将 upload 包在匿名函数中，确保 uploadCancel 在上传完成后立即释放资源
-			videoUUID := uuid.New().String()
-			var videoKey string
-			if novelTitle != "" {
-				videoKey = fmt.Sprintf("novels/%s/videos/%s.mp4", novelTitle, videoUUID)
-			} else {
-				videoKey = fmt.Sprintf("videos/%s.mp4", videoUUID)
-			}
+			videoKey := fmt.Sprintf("videos/%s.mp4", uuid.New().String())
 			// 上传视频
 			finalVideoURL = func() string {
 				uploadCtx, uploadCancel := context.WithTimeout(synthCtx, 30*time.Minute)
@@ -1342,17 +1331,7 @@ func (s *VideoService) uploadClipToStorage(ctx context.Context, shot *model.Stor
 	}
 
 	filename := uuid.New().String() + ".mp4"
-	key := fmt.Sprintf("videos/%s", filename) // fallback key
-
-	if shot.ChapterID != nil {
-		if ch, err := s.chapterRepo.GetByID(*shot.ChapterID); err == nil {
-			if novel, err := s.novelRepo.GetByID(ch.NovelID); err == nil && novel.Title != "" {
-				if sanitized := sanitizeStorageName(novel.Title); sanitized != "" {
-					key = fmt.Sprintf("novels/%s/chapters/%d/videos/%s", sanitized, ch.ChapterNo, filename)
-				}
-			}
-		}
-	}
+	key := fmt.Sprintf("videos/%s", filename)
 
 	ossURL, err := s.storageSvc.Upload(ctx, key, f, fi.Size(), "video/mp4")
 	if err != nil {
