@@ -856,8 +856,9 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			Expression string `json:"expression"`
 			Pose       string `json:"pose"`
 		} `json:"characters"`
-		Transition string   `json:"transition"`
-		SFXTags    []string `json:"sfx_tags"`
+		Transition    string   `json:"transition"`
+		SFXTags       []string `json:"sfx_tags"`
+		EmotionalTone string   `json:"emotional_tone"`
 	}
 
 	var rawShots []rawShotType
@@ -967,6 +968,7 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			Characters:     charsJSON,
 			Scene:          sceneJSON,
 			SFXTags:        sfxTagsJSON,
+			EmotionalTone:  r.EmotionalTone,
 			Status:         "pending",
 		}
 		shots = append(shots, shot)
