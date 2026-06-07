@@ -1631,11 +1631,12 @@ func (s *AIService) fetchImageAsBase64(ctx context.Context, imageURL string) str
 	return base64.StdEncoding.EncodeToString(data)
 }
 
-// EditImageWithInstruction 基于已有图片按指令进行局部修改，专用于交互式编辑场景。
+// EditImageWithInstruction 以文生图模型（DreamO）重新生成图片，将原图作为参考图保持风格/角色一致性。
 //
-// 与通用 GenerateCharacterThreeView* 的差异：
-//   - 始终使用 SeedEditV3（指令编辑模型），不走 selectImageModel 的模型切换逻辑
-//   - scale=3.0（低于默认 5）：最大程度保留原图结构，仅应用指令描述的修改
+// 与 SeedEditV3 的差异：
+//   - DreamO 是文生图模型，instruction 作为完整提示词驱动新构图，而非对原图局部修改
+//   - 原图作为参考（reference image），保持角色外貌/视觉风格一致性
+//   - scale=6：中等参考强度，兼顾提示词创意与原图风格一致
 //   - 图片先下载为 base64 再传给 API，解决 OSS/DB/本地相对路径等 URL 不可达问题
 func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint, imageURL, instruction string) (string, error) {
 	if s.aiManager == nil {
@@ -1653,8 +1654,8 @@ func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint,
 		}
 	}
 
-	// scale=3.0：低指令跟随强度，保留原图整体构图、人物外貌和艺术风格，仅修改用户指定部分
-	const editScale = 3.0
+	// scale=6：中等参考强度，让文本提示词充分驱动新构图，同时保持原图角色/风格一致性
+	const refScale = 6.0
 
 	// 将图片转为 base64，确保 Volcengine 服务器能取到数据（绕过相对路径/OSS 访问限制）
 	imgInput := s.fetchImageAsBase64(ctx, imageURL)
@@ -1665,10 +1666,10 @@ func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint,
 	}
 
 	req := &ai.ImageGenerateRequest{
-		Model:          ai.VolcModelSeedEditV3,
+		Model:          ai.VolcModelDreamO,
 		Prompt:         instruction,
 		ReferenceImage: imgInput,
-		CFGScale:       editScale,
+		CFGScale:       refScale,
 	}
 
 	var entries []ai.ImageProviderEntry
@@ -1684,7 +1685,7 @@ func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint,
 	var lastErr error
 	for _, e := range entries {
 		if e.ProviderName != ai.ProviderNameVolcengineVisual {
-			continue // SeedEditV3 仅 volcengine-visual 提供
+			continue // DreamO 仅 volcengine-visual 提供
 		}
 		var provider ai.AIProvider
 		var err error
@@ -1711,7 +1712,7 @@ func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint,
 	if lastErr != nil {
 		return "", lastErr
 	}
-	return "", fmt.Errorf("no volcengine-visual provider available for image editing")
+	return "", fmt.Errorf("no volcengine-visual provider available for image regeneration (DreamO)")
 }
 
 // imageExtFromContentType 根据 Content-Type 返回图片文件扩展名。
