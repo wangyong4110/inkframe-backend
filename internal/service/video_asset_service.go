@@ -778,93 +778,79 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 	}
 	speed = 1.0
 
-	if novelID == 0 || s.characterRepo == nil {
-		return
-	}
+	if novelID != 0 && s.characterRepo != nil && shot.Narration == "" {
+		// 对白镜头：尝试按发言角色查找专属音色和静态风格。
+		// 旁白镜头（Narration 非空）直接使用 narrationVoice，不做角色音色覆盖。
+		// 注意：autoMatchShotCharacters 会把旁白中出现的角色名写入 CharacterIDs，
+		// 这些 CharacterIDs 仅用于图像生成，不应影响配音音色。
 
-	applyCharVoice := func(c *model.Character) {
-		if c.VoiceID != "" {
-			voice = c.VoiceID
-		} else {
-			// 角色无显式 voice_id 时，按角色 ID 取模自动分配内置音色。
-			// 保证不同角色始终使用不同音色，无需手动配置。
-			autoVoices := []string{"alloy", "echo", "fable", "nova", "onyx", "shimmer"}
-			voice = autoVoices[c.ID%uint(len(autoVoices))]
-		}
-		if c.VoiceSpeed > 0 {
-			speed = c.VoiceSpeed
-		}
-		style = c.VoiceStyle
-	}
-
-	// 旁白镜头（Narration 非空）：GenerateShotAudio 合成的是旁白文字，
-	// 直接使用 narrationVoice，不做任何角色音色覆盖。
-	// 注意：autoMatchShotCharacters 会把旁白中出现的角色名写入 CharacterIDs，
-	// 这些 CharacterIDs 仅用于图像生成，不应影响配音音色。
-	if shot.Narration != "" {
-		return
-	}
-
-	// 以下逻辑只在纯对白镜头（Narration 为空，Dialogue 非空）时执行。
-
-	// 步骤一：从对话中解析发言角色（格式：角色名：对话内容 或 角色名:对话内容）。
-	// 若找不到"角色名："前缀，说明 dialogue 内容不是规范对白（可能是 LLM 把旁白错填入此字段），
-	// 此时不尝试推断角色音色，直接沿用 narrationVoice。
-	speakerName := ""
-	for _, sep := range []string{"：", ":"} {
-		if idx := strings.Index(shot.Dialogue, sep); idx > 0 && idx < 20 {
-			speakerName = strings.TrimSpace(shot.Dialogue[:idx])
-			break
-		}
-	}
-	if speakerName == "" {
-		// 无法识别发言角色，当成旁白处理
-		return
-	}
-
-	// 找到了发言角色名，按优先级逐级查找对应音色：
-	// 步骤一b：精确名称匹配
-	characters, err := s.listCharsByNovelCached(novelID)
-	if err != nil {
-		return
-	}
-	for _, c := range characters {
-		if strings.EqualFold(c.Name, speakerName) {
-			applyCharVoice(c)
-			return
-		}
-	}
-
-	// 步骤二：名称未完全匹配，降级用 CharacterIDs 第一个角色兜底
-	// （角色名可能因 LLM 别称/简写导致精确匹配失败）
-	if len(shot.CharacterIDs) > 0 {
-		char, err := s.characterRepo.GetByID(shot.CharacterIDs[0])
-		if err == nil && char != nil {
-			applyCharVoice(char)
-			return
-		}
-	}
-
-	// 步骤三：继续降级到 shot.Characters JSON 名称模糊匹配
-	if shot.Characters != "" {
-		var shotChars []struct {
-			Name string `json:"name"`
-		}
-		if err := json.Unmarshal([]byte(shot.Characters), &shotChars); err == nil && len(shotChars) > 0 {
-			nameMap := make(map[string]*model.Character, len(characters))
-			for _, c := range characters {
-				nameMap[strings.ToLower(c.Name)] = c
+		applyCharVoice := func(c *model.Character) {
+			if c.VoiceID != "" {
+				voice = c.VoiceID
+			} else {
+				// 角色无显式 voice_id 时，按角色 ID 取模自动分配内置音色。
+				autoVoices := []string{"alloy", "echo", "fable", "nova", "onyx", "shimmer"}
+				voice = autoVoices[c.ID%uint(len(autoVoices))]
 			}
-			for _, sc := range shotChars {
-				if char, ok := nameMap[strings.ToLower(sc.Name)]; ok {
-					applyCharVoice(char)
-					return
+			if c.VoiceSpeed > 0 {
+				speed = c.VoiceSpeed
+			}
+			style = c.VoiceStyle // 角色静态风格作为基准，后续被情感覆盖
+		}
+
+		// 步骤一：从对话中解析发言角色（格式：角色名：对话内容 或 角色名:对话内容）。
+		speakerName := ""
+		for _, sep := range []string{"：", ":"} {
+			if idx := strings.Index(shot.Dialogue, sep); idx > 0 && idx < 20 {
+				speakerName = strings.TrimSpace(shot.Dialogue[:idx])
+				break
+			}
+		}
+
+		if speakerName != "" {
+			characters, err := s.listCharsByNovelCached(novelID)
+			if err == nil {
+				// 精确名称匹配
+				for _, c := range characters {
+					if strings.EqualFold(c.Name, speakerName) {
+						applyCharVoice(c)
+						goto applyEmotion
+					}
+				}
+
+				// 降级：CharacterIDs 第一个角色兜底
+				if len(shot.CharacterIDs) > 0 {
+					if char, err := s.characterRepo.GetByID(shot.CharacterIDs[0]); err == nil && char != nil {
+						applyCharVoice(char)
+						goto applyEmotion
+					}
+				}
+
+				// 降级：shot.Characters JSON 名称模糊匹配
+				if shot.Characters != "" {
+					var shotChars []struct {
+						Name string `json:"name"`
+					}
+					if err := json.Unmarshal([]byte(shot.Characters), &shotChars); err == nil && len(shotChars) > 0 {
+						nameMap := make(map[string]*model.Character, len(characters))
+						for _, c := range characters {
+							nameMap[strings.ToLower(c.Name)] = c
+						}
+						for _, sc := range shotChars {
+							if char, ok := nameMap[strings.ToLower(sc.Name)]; ok {
+								applyCharVoice(char)
+								goto applyEmotion
+							}
+						}
+					}
 				}
 			}
 		}
 	}
 
-	// 步骤四：用分镜情绪基调覆盖角色静态风格（动态优先级更高）
+applyEmotion:
+	// 分镜情绪基调始终作为最终覆盖，优先级高于角色静态风格。
+	// 旁白和对白镜头均适用。
 	if shot.EmotionalTone != "" {
 		if mapped := mapEmotionalToneToTTS(shot.EmotionalTone); mapped != "" {
 			style = mapped
@@ -878,22 +864,25 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 // 返回空串表示无法映射，调用方应保持当前 style 不变。
 func mapEmotionalToneToTTS(tone string) string {
 	switch {
-	case strings.ContainsAny(tone, "紧张") || strings.Contains(tone, "恐惧") || strings.Contains(tone, "害怕") || strings.Contains(tone, "惶恐"):
+	// 惊恐必须在"惊讶/惊"之前，否则"惊"字会误捕获
+	case strings.Contains(tone, "惊恐") || strings.Contains(tone, "恐惧") || strings.Contains(tone, "害怕") || strings.Contains(tone, "惶恐"):
+		return "fear"
+	case strings.Contains(tone, "紧张") || strings.Contains(tone, "悬疑"):
 		return "fear"
 	case strings.Contains(tone, "愤怒") || strings.Contains(tone, "愤") || strings.Contains(tone, "怒") || strings.Contains(tone, "激怒"):
 		return "angry"
 	case strings.Contains(tone, "悲伤") || strings.Contains(tone, "悲") || strings.Contains(tone, "哀") || strings.Contains(tone, "哭") || strings.Contains(tone, "伤心"):
 		return "sad"
+	case strings.Contains(tone, "压抑") || strings.Contains(tone, "沉重") || strings.Contains(tone, "绝望"):
+		return "sad"
 	case strings.Contains(tone, "快乐") || strings.Contains(tone, "开心") || strings.Contains(tone, "喜悦") || strings.Contains(tone, "兴奋") || strings.Contains(tone, "欢"):
+		return "happy"
+	case strings.Contains(tone, "振奋") || strings.Contains(tone, "浪漫") || strings.Contains(tone, "温柔") || strings.Contains(tone, "温情"):
 		return "happy"
 	case strings.Contains(tone, "平静") || strings.Contains(tone, "宁静") || strings.Contains(tone, "淡然") || strings.Contains(tone, "释怀"):
 		return "calm"
-	case strings.Contains(tone, "浪漫") || strings.Contains(tone, "温柔") || strings.Contains(tone, "温情"):
-		return "happy"
-	case strings.Contains(tone, "惊讶") || strings.Contains(tone, "惊") || strings.Contains(tone, "讶"):
+	case strings.Contains(tone, "惊讶") || strings.Contains(tone, "惊"):
 		return "surprised"
-	case strings.Contains(tone, "压抑") || strings.Contains(tone, "沉重") || strings.Contains(tone, "绝望"):
-		return "sad"
 	default:
 		return ""
 	}
