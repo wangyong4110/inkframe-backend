@@ -585,6 +585,29 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 			}
 			resolvedModel = selected.Name
 			providerName = selected.Provider.Name
+			// 策略选择路径：直接从已加载的 AIModel 取 MaxTokens，无需额外 DB 查询
+			if config.MaxTokens == 0 && selected.MaxTokens > 0 {
+				config.MaxTokens = selected.MaxTokens
+			}
+		}
+	}
+
+	// AIModel 级别 MaxTokens（novel.AIModel 路径：仅有 model name，需通过 DB 查找）
+	if config.MaxTokens == 0 && resolvedModel != "" && s.modelRepo != nil {
+		if m, err := s.modelRepo.GetByName(resolvedModel); err == nil && m != nil && m.MaxTokens > 0 {
+			config.MaxTokens = m.MaxTokens
+		}
+	}
+
+	// provider 级别 MaxTokens（兜底，优先级低于 AIModel 配置）
+	if config.MaxTokens == 0 && providerName != "" && s.providerRepo != nil {
+		if providers, err := s.providerRepo.ListByTenant(tenantID); err == nil {
+			for _, p := range providers {
+				if p.Name == providerName && p.MaxTokens > 0 {
+					config.MaxTokens = p.MaxTokens
+					break
+				}
+			}
 		}
 	}
 
@@ -698,6 +721,28 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 			}
 			resolvedModel = selected.Name
 			providerName = selected.Provider.Name
+			if config.MaxTokens == 0 && selected.MaxTokens > 0 {
+				config.MaxTokens = selected.MaxTokens
+			}
+		}
+	}
+
+	// AIModel 级别 MaxTokens（novel.AIModel 路径）
+	if config.MaxTokens == 0 && resolvedModel != "" && s.modelRepo != nil {
+		if m, err := s.modelRepo.GetByName(resolvedModel); err == nil && m != nil && m.MaxTokens > 0 {
+			config.MaxTokens = m.MaxTokens
+		}
+	}
+
+	// provider 级别 MaxTokens（兜底，优先级低于 AIModel 配置）
+	if config.MaxTokens == 0 && providerName != "" && s.providerRepo != nil {
+		if providers, err := s.providerRepo.ListByTenant(tenantID); err == nil {
+			for _, p := range providers {
+				if p.Name == providerName && p.MaxTokens > 0 {
+					config.MaxTokens = p.MaxTokens
+					break
+				}
+			}
 		}
 	}
 

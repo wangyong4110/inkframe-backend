@@ -283,6 +283,7 @@ func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, ten
 		Timeout:      req.Timeout,
 		Concurrency:  req.Concurrency,
 		RateLimit:    req.RateLimit,
+		MaxTokens:    req.MaxTokens,
 	}
 	if err := s.providerRepo.Create(provider); err != nil {
 		return nil, err
@@ -333,6 +334,9 @@ func (s *ModelService) UpdateProvider(id uint, tenantID uint, req *model.UpdateM
 	}
 	if req.RateLimit != nil {
 		provider.RateLimit = *req.RateLimit
+	}
+	if req.MaxTokens != nil {
+		provider.MaxTokens = *req.MaxTokens
 	}
 	if err := s.providerRepo.Update(provider); err != nil {
 		return nil, err

@@ -48,8 +48,8 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	// 若该视频已有 pending/running 的分镜生成任务，先将其标记为 cancelled，
-	// 让僵尸 goroutine 的 Complete/Fail 调用自动变 no-op，避免状态污染。
+	// 取消正在运行的旧 goroutine（通知其 context 取消），再标记旧任务为 cancelled。
+	h.videoService.CancelStoryboardGeneration(uint(videoId))
 	h.taskSvc.CancelActiveByEntity("video", uint(videoId), service.TaskTypeStoryboardGen)
 
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeStoryboardGen, "分镜脚本生成", "video", uint(videoId))

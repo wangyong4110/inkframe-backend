@@ -41,12 +41,28 @@ const (
 // GenerateStoryboard 生成分镜
 // userPrompt: 用户自定义提示词（可选），将追加到系统 prompt 之后
 // progressFn: 可选的进度回调（0-99），供调用方更新任务进度（传 nil 则跳过）
+// CancelStoryboardGeneration 取消正在进行的分镜生成（若有）。
+// handler 在提交新任务前调用，让旧 goroutine 尽快退出，避免 "already in progress" 错误。
+func (s *VideoService) CancelStoryboardGeneration(videoID uint) {
+	if val, ok := s.generatingStoryboard.LoadAndDelete(videoID); ok {
+		if cancelFn, ok := val.(context.CancelFunc); ok {
+			cancelFn()
+		}
+	}
+}
+
 func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt string, progressFn func(int), overrides StoryboardOverrides, chapterIDOverride ...*uint) ([]*model.StoryboardShot, error) {
 	// Prevent concurrent storyboard generation for the same video.
-	if _, loaded := s.generatingStoryboard.LoadOrStore(videoID, struct{}{}); loaded {
+	// Store the cancel function so that CancelStoryboardGeneration can interrupt this goroutine.
+	genCtxInner, cancelInner := context.WithCancel(context.Background())
+	if _, loaded := s.generatingStoryboard.LoadOrStore(videoID, cancelInner); loaded {
+		cancelInner() // discard the context we just created
 		return nil, fmt.Errorf("storyboard generation already in progress for video %d", videoID)
 	}
-	defer s.generatingStoryboard.Delete(videoID)
+	defer func() {
+		s.generatingStoryboard.Delete(videoID)
+		cancelInner()
+	}()
 
 	totalStart := time.Now()
 
@@ -185,7 +201,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	var wg sync.WaitGroup
 	var doneCount int32
 
-	genCtx := context.Background()
+	genCtx := genCtxInner
 	for segIdx, seg := range segments {
 		wg.Add(1)
 		go func(idx int, content string) {

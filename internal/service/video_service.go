@@ -50,7 +50,7 @@ type VideoService struct {
 	cleanupOnce      sync.Once
 	stopCh           chan struct{} // closed by Shutdown() to stop background goroutines
 	activePoll            sync.Map     // videoID → struct{} (prevents duplicate PollAndStitchVideo goroutines)
-	generatingStoryboard  sync.Map     // videoID → struct{} (prevents duplicate GenerateStoryboard calls)
+	generatingStoryboard  sync.Map     // videoID → context.CancelFunc (cancels in-progress GenerateStoryboard)
 }
 
 // GetNovelByID 通过 novelRepo 加载小说（供 handler 传递给 CapCutService 等下游服务）

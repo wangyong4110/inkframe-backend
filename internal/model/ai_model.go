@@ -266,6 +266,7 @@ type CreateModelProviderRequest struct {
 	Timeout      int    `json:"timeout"`      // HTTP 超时秒数，0=默认300s
 	Concurrency  int    `json:"concurrency"`  // 最大并发调用数，0=不限制
 	RateLimit    int    `json:"rate_limit"`   // 请求/分钟，0=不限制
+	MaxTokens    int    `json:"max_tokens"`   // 最大输出 token 数，0=不限制（使用模型默认值）
 }
 
 type UpdateModelProviderRequest struct {
@@ -280,6 +281,7 @@ type UpdateModelProviderRequest struct {
 	Timeout      *int   `json:"timeout"`      // HTTP 超时秒数；nil=不修改
 	Concurrency  *int   `json:"concurrency"`  // 最大并发调用数；nil=不修改
 	RateLimit    *int   `json:"rate_limit"`   // 请求/分钟；nil=不修改
+	MaxTokens    *int   `json:"max_tokens"`   // 最大输出 token 数；nil=不修改
 }
 
 type CreateAIModelRequest struct {
