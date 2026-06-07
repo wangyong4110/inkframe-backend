@@ -31,6 +31,8 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_character", "visual_prompt", "TEXT NULL"},
 		// ink_novel 提示词语言（2026-05-26 新增）
 		{"ink_novel", "prompt_language", "VARCHAR(10) NOT NULL DEFAULT 'zh'"},
+		// ink_novel 章节模式（2026-06-07 新增）
+		{"ink_novel", "chapter_mode", "VARCHAR(20) NOT NULL DEFAULT 'sequential'"},
 		// ink_rewrite_bible 命名风格 & 道具映射（2026-05-26 新增）
 		{"ink_rewrite_bible", "naming_style", "TEXT NULL"},
 		{"ink_rewrite_bible", "props_transform", "TEXT NULL"},

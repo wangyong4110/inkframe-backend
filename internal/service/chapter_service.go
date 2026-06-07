@@ -501,6 +501,10 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	// ── Step 1: 层次化上下文 ──────────────────────────────
 	globalCtx := s.buildGlobalContext(novelID, req.ChapterNo, novel)
 
+	// 独立成篇模式：每章都必须是完整故事
+	if novel.ChapterMode == "independent" {
+		req.IsStandalone = true
+	}
 	// 自动检测最终章：当前章节号达到小说目标章节数时，确保故事完整收尾
 	// 用户也可通过 is_standalone=true 显式触发（如临时想提前收尾）
 	if !req.IsStandalone && novel.TargetChapters > 0 && req.ChapterNo >= novel.TargetChapters {

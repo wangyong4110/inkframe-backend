@@ -97,6 +97,7 @@ type CreateNovelRequest struct {
 	Channel         string `json:"channel"`
 	TargetWordCount int    `json:"target_word_count"`
 	TargetChapters  int    `json:"target_chapters"`
+	ChapterMode     string `json:"chapter_mode"`
 	TenantID        uint
 }
 
@@ -105,6 +106,10 @@ func (s *NovelService) Create(req *CreateNovelRequest) (*model.Novel, error) {
 	tenantID := req.TenantID
 	if tenantID == 0 {
 		return nil, fmt.Errorf("tenant_id is required")
+	}
+	chapterMode := req.ChapterMode
+	if chapterMode == "" {
+		chapterMode = "sequential"
 	}
 	novel := &model.Novel{
 		UUID:            uuid.New().String(),
@@ -118,6 +123,7 @@ func (s *NovelService) Create(req *CreateNovelRequest) (*model.Novel, error) {
 		Channel:         req.Channel,
 		TargetWordCount: req.TargetWordCount,
 		TargetChapters:  req.TargetChapters,
+		ChapterMode:     chapterMode,
 	}
 
 	if err := s.novelRepo.Create(novel); err != nil {
@@ -178,6 +184,7 @@ func (s *NovelService) CreateNovel(req *model.CreateNovelRequest) (*model.Novel,
 		Channel:         req.Channel,
 		TargetWordCount: req.TargetWordCount,
 		TargetChapters:  req.TargetChapters,
+		ChapterMode:     req.ChapterMode,
 		TenantID:        req.TenantID,
 	})
 }
@@ -241,6 +248,9 @@ func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequ
 	}
 	if req.PromptLanguage != "" {
 		novel.PromptLanguage = req.PromptLanguage
+	}
+	if req.ChapterMode != "" {
+		novel.ChapterMode = req.ChapterMode
 	}
 	if req.CoreTheme != "" {
 		novel.CoreTheme = req.CoreTheme

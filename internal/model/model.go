@@ -146,6 +146,7 @@ type Novel struct {
 	// 风格配置
 	ImageStyle      string `json:"image_style" gorm:"size:50"`              // 视觉/图片风格，如 anime/realistic/ink_painting
 	PromptLanguage  string `json:"prompt_language" gorm:"size:10;default:zh"` // 提示词语言：zh（中文，默认）/ en（英文）
+	ChapterMode     string `json:"chapter_mode" gorm:"size:20;default:sequential"` // sequential=连贯剧情（默认）/ independent=独立成篇
 
 	// 自动审查配置：章节生成后自动执行 N 轮 AI 审查+优化
 	AutoReviewRounds   int     `json:"auto_review_rounds" gorm:"default:0"`    // 0=关闭，1-3=开启 N 轮
@@ -568,6 +569,7 @@ type CreateNovelRequest struct {
 	Channel         string `json:"channel"`
 	TargetWordCount int    `json:"target_word_count"`
 	TargetChapters  int    `json:"target_chapters"`
+	ChapterMode     string `json:"chapter_mode"` // sequential / independent
 	TenantID        uint   `json:"-"`
 }
 
@@ -589,6 +591,7 @@ type UpdateNovelRequest struct {
 	StylePrompt    string `json:"style_prompt"`
 	ImageStyle     string `json:"image_style"`
 	PromptLanguage string `json:"prompt_language"`
+	ChapterMode    string `json:"chapter_mode"` // sequential / independent
 	CoreTheme      string `json:"core_theme"` // 全书核心主题
 	// 自动审查
 	AutoReviewRounds   *int     `json:"auto_review_rounds"`
