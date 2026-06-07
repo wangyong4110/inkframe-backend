@@ -389,7 +389,7 @@ func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID
 		desc = " Theme: " + novel.Description + "."
 	}
 
-	negativePrompt := "text, words, letters, watermark, signature, blurry, low quality, ugly, distorted, nsfw"
+	negativePrompt := "watermark, signature, blurry, low quality, ugly, distorted, nsfw"
 
 	// 判断是否有可用的旧封面作为参考图（图生图模式）
 	existingCover := ""
@@ -398,24 +398,31 @@ func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID
 		existingCover = novel.CoverImage
 	}
 
+	// 书名文字要求：封面必须在醒目位置渲染书名
+	titleText := fmt.Sprintf(
+		"The novel title \"%s\" must be clearly and prominently displayed on the cover in large, stylized Chinese characters, "+
+			"integrated into the design as the main title text.",
+		novel.Title,
+	)
+
 	var prompt string
 	if suggestion != "" && existingCover != "" {
-		// 图生图：以旧封面为参考，按用户指令编辑
-		prompt = suggestion
+		// 图生图：以旧封面为参考，按用户指令编辑，保留书名要求
+		prompt = fmt.Sprintf("%s %s", suggestion, titleText)
 	} else if suggestion != "" {
 		// 无旧封面，文生图但加入用户建议
 		prompt = fmt.Sprintf(
-			"Professional book cover illustration for a Chinese novel titled \"%s\". Genre: %s. "+
-				"%s Style: cinematic, atmospheric, high-quality digital art, "+
-				"dramatic lighting, vibrant colors, detailed, no text, no letters, no watermarks.",
-			novel.Title, genreDesc, suggestion,
+			"Professional book cover illustration for a Chinese novel. Genre: %s. "+
+				"%s %s Style: cinematic, atmospheric, high-quality digital art, "+
+				"dramatic lighting, vibrant colors, detailed.",
+			genreDesc, suggestion, titleText,
 		)
 	} else {
 		prompt = fmt.Sprintf(
-			"Professional book cover illustration for a Chinese novel titled \"%s\".%s "+
-				"Genre: %s. Style: cinematic, atmospheric, high-quality digital art, dramatic lighting, "+
-				"vibrant colors, detailed, no text, no letters, no watermarks.",
-			novel.Title, desc, genreDesc,
+			"Professional book cover illustration for a Chinese novel.%s "+
+				"Genre: %s. %s Style: cinematic, atmospheric, high-quality digital art, dramatic lighting, "+
+				"vibrant colors, detailed.",
+			desc, genreDesc, titleText,
 		)
 	}
 
