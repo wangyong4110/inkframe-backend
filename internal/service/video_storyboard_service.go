@@ -683,10 +683,11 @@ func (s *VideoService) buildStoryboardPrompt(
 	pacing string,
 	arcPlan string,
 ) string {
-	// image_prompt / video_prompt 始终使用英文，因为即梦AI/Kling/Seedance 模型对英文prompt响应更好。
-	// narration/dialogue 保持中文（不受 IsEn 控制）。
-	// promptLanguage="en" 仅在用户主动选择时设置，此处不影响该逻辑。
-	isEn := promptLanguage == "en" || true // image/video prompt 强制英文
+	// isEn 控制 description 及整体指令语言（由用户 promptLanguage 决定，默认 false=中文）。
+	// isImageEn 始终为 true：image_prompt/video_prompt/negative_prompt 强制英文，对图像AI效果最佳。
+	// 两个变量分离，避免 isEn=true 时将旁白/对白指令语境污染成英文导致中英混杂。
+	isEn := promptLanguage == "en"
+	isImageEn := true
 
 	segLabel := ""
 	if totalSegs > 1 {
@@ -789,6 +790,7 @@ func (s *VideoService) buildStoryboardPrompt(
 
 	ctx := map[string]interface{}{
 		"IsEn":                isEn,
+		"IsImageEn":           isImageEn,
 		"SegLabel":            segLabel,
 		"ExpectedShots":       expectedShots,
 		"ExpectedShotsMinus2": expectedShotsMinus2,
