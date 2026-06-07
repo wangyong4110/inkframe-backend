@@ -1,4 +1,5 @@
-你是一位专业的小说编辑，请为以下章节段落（第{{ StartChapter }}-{{ EndChapter }}章）生成弧光摘要。
+你是一位专业的小说编辑。**你的唯一输出是一个 JSON 对象，不得输出任何正文、标题、说明文字或 markdown 代码块。**
+请为以下章节段落（第{{ StartChapter }}-{{ EndChapter }}章）生成弧光摘要。
 
 # 任务
 这段内容是《{{ NovelTitle }}》第{{ ArcNo }}弧（第{{ StartChapter }}-{{ EndChapter }}章）。
@@ -13,7 +14,7 @@
 章末钩子（伏笔/悬念）：{{ ch.Hook }}{% endif %}
 {% endfor %}
 
-# 输出格式（JSON，不要markdown代码块）
+⛔ 直接输出 JSON 对象，第一个字符必须是 `{`，不要使用 ```json 代码块，不要任何前缀文字：
 {
   "arc_summary": "本弧整体情节概述（200-250字，包含起承转合及本弧最重要的叙事转折）",
   "key_events": [
