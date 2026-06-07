@@ -577,6 +577,16 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req)
 
+	// 若前端未传 narration_voice，从视频配置中读取（与批量配音接口行为一致）
+	narrationVoice := req.NarrationVoice
+	if narrationVoice == "" {
+		if video, err := h.videoService.GetVideo(uint(videoID)); err == nil {
+			if vc := h.videoService.GetNovelVideoConfig(video.NovelID); vc != nil {
+				narrationVoice = vc.NarrationVoice
+			}
+		}
+	}
+
 	tenantID := getTenantID(c)
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeVoiceGen,
 		fmt.Sprintf("镜头 #%d 配音生成", shot.ShotNo), "shot", uint(shotID))
@@ -621,7 +631,7 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 			}
 		}
 		h.taskSvc.Complete(taskID, result) //nolint:errcheck
-	}(task.TaskID, shot, req.NarrationVoice, req.SubtitleEnabled, uint(videoID))
+	}(task.TaskID, shot, narrationVoice, req.SubtitleEnabled, uint(videoID))
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,

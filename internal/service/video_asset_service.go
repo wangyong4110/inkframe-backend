@@ -797,35 +797,40 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 		style = c.VoiceStyle
 	}
 
-	// 步骤一：从对话中解析发言角色（格式：角色名：对话内容 或 角色名:对话内容）。
-	// 仅在 Narration 为空时执行——若 Narration 非空，GenerateShotAudio 合成的是旁白文字，
-	// 不应让 Dialogue 里的角色名把旁白音色替换成角色音色。
-	if shot.Narration == "" {
-		speakerName := ""
-		for _, sep := range []string{"：", ":"} {
-			if idx := strings.Index(shot.Dialogue, sep); idx > 0 && idx < 20 {
-				speakerName = strings.TrimSpace(shot.Dialogue[:idx])
-				break
-			}
+	// 旁白镜头（Narration 非空）：GenerateShotAudio 合成的是旁白文字，
+	// 直接使用 narrationVoice，不做任何角色音色覆盖。
+	// 注意：autoMatchShotCharacters 会把旁白中出现的角色名写入 CharacterIDs，
+	// 这些 CharacterIDs 仅用于图像生成，不应影响配音音色。
+	if shot.Narration != "" {
+		return
+	}
+
+	// 以下逻辑只在纯对白镜头（Narration 为空，Dialogue 非空）时执行。
+
+	// 步骤一：从对话中解析发言角色（格式：角色名：对话内容 或 角色名:对话内容）
+	speakerName := ""
+	for _, sep := range []string{"：", ":"} {
+		if idx := strings.Index(shot.Dialogue, sep); idx > 0 && idx < 20 {
+			speakerName = strings.TrimSpace(shot.Dialogue[:idx])
+			break
 		}
-		if speakerName != "" {
-			// 使用带 TTL 缓存的角色列表（批量配音时避免 N+1 查询）
-			characters, err := s.listCharsByNovelCached(novelID)
-			if err != nil {
+	}
+	if speakerName != "" {
+		// 使用带 TTL 缓存的角色列表（批量配音时避免 N+1 查询）
+		characters, err := s.listCharsByNovelCached(novelID)
+		if err != nil {
+			return
+		}
+		for _, c := range characters {
+			if strings.EqualFold(c.Name, speakerName) {
+				applyCharVoice(c)
 				return
-			}
-			for _, c := range characters {
-				if strings.EqualFold(c.Name, speakerName) {
-					applyCharVoice(c)
-					return
-				}
 			}
 		}
 	}
 
-	// 步骤二：仅当分镜有角色台词（Dialogue 非空）时，才使用第一个绑定角色的音色。
-	// 旁白/描述文本不应被角色音色覆盖，应沿用 narrationVoice。
-	if len(shot.CharacterIDs) > 0 && shot.Dialogue != "" {
+	// 步骤二：从 CharacterIDs 取第一个角色的音色
+	if len(shot.CharacterIDs) > 0 {
 		char, err := s.characterRepo.GetByID(shot.CharacterIDs[0])
 		if err == nil && char != nil {
 			applyCharVoice(char)
@@ -833,9 +838,8 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 		}
 	}
 
-	// 步骤三：CharacterIDs 为空时降级到 shot.Characters JSON（名称匹配）。
-	// autoMatchShotCharacters 可能未命中，但 Characters JSON 由 LLM 直接写入，更可靠。
-	if shot.Dialogue != "" && shot.Characters != "" {
+	// 步骤三：CharacterIDs 为空时降级到 shot.Characters JSON（名称匹配）
+	if shot.Characters != "" {
 		var shotChars []struct {
 			Name string `json:"name"`
 		}
