@@ -718,6 +718,7 @@ func (s *VideoService) buildStoryboardPrompt(
 				"Role":         c.Role,
 				"Description":  c.Description,
 				"VisualPrompt": c.VisualPrompt,
+				"DialogueLang": voiceLangToDialogueLang(c.VoiceLanguage),
 			})
 		}
 	}
@@ -2074,6 +2075,21 @@ func (s *VideoService) generateStoryboardArc(content string, tenantID, novelID u
 		result = result[:idx+1]
 	}
 	return result
+}
+
+// voiceLangToDialogueLang 将 Character.VoiceLanguage 转换为模板中展示给 LLM 的台词语言说明。
+// TTS 的语言代码（zh/en/ja 等）直接决定对白应该使用什么文字，旁白始终固定为简体中文。
+func voiceLangToDialogueLang(vl string) string {
+	switch vl {
+	case "en":
+		return "English"
+	case "ja":
+		return "日文"
+	case "zh-yue":
+		return "粤语（中文）"
+	default:
+		return "简体中文"
+	}
 }
 
 // ─── Ensure unused imports are satisfied ─────────────────────────────────────
