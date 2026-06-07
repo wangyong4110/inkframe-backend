@@ -395,8 +395,8 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	return s.repo.GetByID(id)
 }
 
-// EditRefImageWithInstruction 使用指令对现有参考图进行编辑（SeedEditV3 图生图）
-// instruction 为自然语言编辑指令，如"让场景更暗，增加烟雾"
+// EditRefImageWithInstruction 以文生图模型（DreamO）重新生成参考图，原图作为参考保持风格一致性。
+// instruction 为自然语言提示词，如"让场景更暗，增加烟雾"
 func (s *SceneAnchorService) EditRefImageWithInstruction(ctx context.Context, tenantID, id uint, instruction string) (*model.SceneAnchor, error) {
 	anchor, err := s.repo.GetByID(id)
 	if err != nil {
@@ -414,12 +414,12 @@ func (s *SceneAnchorService) EditRefImageWithInstruction(ctx context.Context, te
 		}
 	}
 
-	// consistencyWeight < 0.7 → GenerateCharacterThreeViewMulti 自动选用 SeedEditV3 指令编辑
-	// scale = weight * 10 = 4（中等编辑强度）
+	// consistencyWeight=0.7 → GenerateCharacterThreeViewMulti 自动选用 DreamO（文生图+参考图）
+	// scale = weight * 10 = 7（中等参考强度，兼顾提示词创意与原图风格一致性）
 	imageURL, err := s.aiSvc.GenerateCharacterThreeViewMulti(
 		ctx, tenantID, "", instruction,
 		[]string{anchor.RefImageURL},
-		imageStyle, "", "", 0.4,
+		imageStyle, "", "", 0.7,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("edit ref image: %w", err)

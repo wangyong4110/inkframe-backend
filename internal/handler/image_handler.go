@@ -17,8 +17,8 @@ func NewImageHandler(aiSvc *service.AIService) *ImageHandler {
 }
 
 // EditImage POST /images/edit
-// Accepts { image_url, instruction, novel_id? } and returns { image_url } with the edited image.
-// Uses SeedEditV3 with low scale to preserve the original image while applying the instruction.
+// Accepts { image_url, instruction, novel_id? } and returns { image_url } with the regenerated image.
+// Uses DreamO (text-to-image with reference): instruction drives new composition, original image provides style/character consistency.
 func (h *ImageHandler) EditImage(c *gin.Context) {
 	var body struct {
 		ImageURL    string `json:"image_url" binding:"required"`
