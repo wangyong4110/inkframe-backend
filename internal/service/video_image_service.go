@@ -229,8 +229,8 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, pro
 			advanceProgress()
 			continue
 		}
-		if shot.ImageURL != "" {
-			// Already has image — skip (idempotent).
+		if shot.ImageURL != "" || shot.Status == "generating" {
+			// Already has image or currently generating — skip (idempotent).
 			advanceProgress()
 			continue
 		}

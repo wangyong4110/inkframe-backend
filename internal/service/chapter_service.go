@@ -18,6 +18,32 @@ import (
 )
 
 
+// flexString 兼容 AI 偶发将字段返回为数字的情况（如 key_beat: 25 而非 "25%"）
+type flexString string
+
+func (f *flexString) UnmarshalJSON(data []byte) error {
+	// 先尝试字符串
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*f = flexString(s)
+		return nil
+	}
+	// 降级：数字转字符串
+	var n json.Number
+	if err := json.Unmarshal(data, &n); err == nil {
+		*f = flexString(n.String())
+		return nil
+	}
+	return fmt.Errorf("flexString: cannot unmarshal %s", data)
+}
+
+// plotCoverageEntry 场景大纲的剧情点覆盖条目（KeyBeat 兼容字符串/数字）
+type plotCoverageEntry struct {
+	PlotPoint string     `json:"plot_point"`
+	SceneNo   int        `json:"scene_no"`
+	KeyBeat   flexString `json:"key_beat"`
+}
+
 // ============================================
 // ChapterService 章节服务
 // ============================================
@@ -1225,13 +1251,9 @@ func (s *ChapterService) generateSceneOutline(
 
 	// 提取建议标题，并校验场景数量
 	var outlineResult struct {
-		ChapterTitle string            `json:"chapter_title"`
-		Scenes       []json.RawMessage `json:"scenes"`
-		PlotCoverage []struct {
-			PlotPoint string `json:"plot_point"`
-			SceneNo   int    `json:"scene_no"`
-			KeyBeat   string `json:"key_beat"`
-		} `json:"plot_coverage"`
+		ChapterTitle string              `json:"chapter_title"`
+		Scenes       []json.RawMessage   `json:"scenes"`
+		PlotCoverage []plotCoverageEntry `json:"plot_coverage"`
 	}
 	if err := json.Unmarshal([]byte(resp), &outlineResult); err != nil {
 		return "", "", fmt.Errorf("generateSceneOutline: parse outline JSON: %w (raw=%q)", err, truncateForPrompt(resp, 200))
@@ -1329,11 +1351,7 @@ func (s *ChapterService) generateSceneOutline(
 
 // findMissingPlotPoints checks which plot points from the plan are absent from the AI-generated
 // plot_coverage field. Uses per-entry fuzzy matching to avoid false positives from similar prefixes.
-func findMissingPlotPoints(plotPoints []string, coverage []struct {
-	PlotPoint string `json:"plot_point"`
-	SceneNo   int    `json:"scene_no"`
-	KeyBeat   string `json:"key_beat"`
-}) []string {
+func findMissingPlotPoints(plotPoints []string, coverage []plotCoverageEntry) []string {
 	if len(coverage) == 0 {
 		// No coverage field at all — treat all as missing
 		return plotPoints
@@ -1353,7 +1371,7 @@ func findMissingPlotPoints(plotPoints []string, coverage []struct {
 		// (e.g. "主角与反派正面交锋" vs "主角与反派秘密交涉" would both match a blob containing either).
 		found := false
 		for _, c := range coverage {
-			if strings.Contains(c.PlotPoint, keyPhrase) || strings.Contains(c.KeyBeat, keyPhrase) {
+			if strings.Contains(c.PlotPoint, keyPhrase) || strings.Contains(string(c.KeyBeat), keyPhrase) {
 				found = true
 				break
 			}
