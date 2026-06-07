@@ -799,9 +799,15 @@ type ChapterOutline struct {
 
 // buildOutlinePrompt 构建大纲提示词
 func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutlineRequest) string {
+	independent := novel.ChapterMode == "independent"
 	var sb strings.Builder
 
-	sb.WriteString(fmt.Sprintf("请为小说《%s》生成一个详细的大纲。\n\n", novel.Title))
+	if independent {
+		sb.WriteString(fmt.Sprintf("请为小说集《%s》生成一个详细的章节大纲。\n\n", novel.Title))
+		sb.WriteString("⚠️ 章节模式：**独立成篇**——每一章都是一个完整独立的故事，有自己的起承转合与结局，章节之间无剧情关联、无悬念延续、无跨章伏笔。\n\n")
+	} else {
+		sb.WriteString(fmt.Sprintf("请为小说《%s》生成一个详细的大纲。\n\n", novel.Title))
+	}
 
 	if novel.Description != "" {
 		sb.WriteString(fmt.Sprintf("故事简介：%s\n\n", novel.Description))
@@ -820,29 +826,72 @@ func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutli
 		sb.WriteString(fmt.Sprintf("创作要求：%s\n\n", req.Prompt))
 	}
 
-	if req.ChapterNum > 0 {
-		sb.WriteString(fmt.Sprintf("请生成%d章的大纲，每章包括：标题、详细剧情概述（不少于150字）、预计字数（2000-3000字）、主要剧情点。\n", req.ChapterNum))
-	} else {
-		sb.WriteString("请根据故事规模自行决定合适的章节数（通常30-200章之间），每章包括：标题、详细剧情概述（不少于150字）、预计字数（2000-3000字）、主要剧情点。\n")
-	}
+	if independent {
+		if req.ChapterNum > 0 {
+			sb.WriteString(fmt.Sprintf("请生成 %d 个独立故事的大纲，每个故事（即每章）必须包含：标题、完整的故事概述（不少于150字，含开场/冲突/高潮/结局）、预计字数（2000-3000字）、主要剧情点。\n", req.ChapterNum))
+		} else {
+			sb.WriteString("请根据题材自行决定合适的故事数量（通常10-50个），每个故事（即每章）必须包含：标题、完整的故事概述（不少于150字，含开场/冲突/高潮/结局）、预计字数（2000-3000字）、主要剧情点。\n")
+		}
+		sb.WriteString(`
+## 每章（每个独立故事）的创作要求
+- **完整性**：必须包含清晰的开场（建立人物/处境）、核心冲突（矛盾激化）、高潮（关键对决/转折）、结局（冲突解决，情感落地）
+- **独立性**：不引用其他章节的人物、事件或伏笔；读者无需阅读其他章节即可完全理解本章
+- **禁止**：章末悬念钩子、"待续"式结尾、跨章伏笔、依赖外部背景的开头
+- **summary 必须描述完整的故事弧光**：从开场到结局，让读者知道这个故事讲了什么、如何结尾
 
-	// 注入未解决剧情点（引导大纲在后续章节中推进解决）
-	if s.plotPointService != nil {
-		pps, _ := s.plotPointService.ListByNovel(novel.ID, "", true)
-		if len(pps) > 0 {
-			sb.WriteString("\n【未解决的剧情线（大纲需在后续章节中推进解决）】\n")
-			max := 8
-			if len(pps) < max {
-				max = len(pps)
+`)
+	} else {
+		if req.ChapterNum > 0 {
+			sb.WriteString(fmt.Sprintf("请生成%d章的大纲，每章包括：标题、详细剧情概述（不少于150字）、预计字数（2000-3000字）、主要剧情点。\n", req.ChapterNum))
+		} else {
+			sb.WriteString("请根据故事规模自行决定合适的章节数（通常30-200章之间），每章包括：标题、详细剧情概述（不少于150字）、预计字数（2000-3000字）、主要剧情点。\n")
+		}
+
+		// 注入未解决剧情点（仅连贯模式需要跨章推进）
+		if s.plotPointService != nil {
+			pps, _ := s.plotPointService.ListByNovel(novel.ID, "", true)
+			if len(pps) > 0 {
+				sb.WriteString("\n【未解决的剧情线（大纲需在后续章节中推进解决）】\n")
+				max := 8
+				if len(pps) < max {
+					max = len(pps)
+				}
+				for i := 0; i < max; i++ {
+					sb.WriteString(fmt.Sprintf("- [%s] %s\n", pps[i].Type, pps[i].Description))
+				}
+				sb.WriteString("\n")
 			}
-			for i := 0; i < max; i++ {
-				sb.WriteString(fmt.Sprintf("- [%s] %s\n", pps[i].Type, pps[i].Description))
-			}
-			sb.WriteString("\n")
 		}
 	}
 
-	sb.WriteString(`
+	if independent {
+		sb.WriteString(`
+## 输出格式（严格遵守）
+仅输出如下 JSON 对象，禁止任何说明文字、markdown 代码块、注释或 schema 以外的额外字段：
+{
+  "title": "小说集标题",
+  "chapters": [
+    {
+      "chapter_no": 1,
+      "title": "故事标题",
+      "summary": "完整故事概述，不少于150字。必须涵盖：①开场（人物处境/矛盾引入）②核心冲突（矛盾激化过程）③高潮（关键转折或对决）④结局（冲突如何解决，情感如何落地）。禁止以悬念或"待续"结尾。",
+      "word_count": 2500,
+      "plot_points": ["剧情点1（含人物+动作+结果，20字内）", "剧情点2", "剧情点3"],
+      "emotional_tone": "紧张",
+      "tension_level": 7,
+      "hook": "",
+      "hook_type": "",
+      "conflict_type": "人与人",
+      "act": 1
+    }
+  ]
+}
+字段类型说明：chapter_no/word_count/tension_level/act 必须是整数，其余为字符串或字符串数组。
+hook 和 hook_type 在独立成篇模式下必须为空字符串。
+最外层必须是 {} 对象，chapters 是其中的数组字段，禁止直接返回 [] 数组。
+重要：每章 summary 字段不得少于150字，且必须描述完整的故事弧光（含结局），这是硬性要求。`)
+	} else {
+		sb.WriteString(`
 ## 输出格式（严格遵守）
 仅输出如下 JSON 对象，禁止任何说明文字、markdown 代码块、注释或 schema 以外的额外字段：
 {
@@ -866,7 +915,7 @@ func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutli
 字段类型说明：chapter_no/word_count/tension_level/act 必须是整数，其余为字符串或字符串数组。
 最外层必须是 {} 对象，chapters 是其中的数组字段，禁止直接返回 [] 数组。
 重要：每章 summary 字段不得少于150字，这是硬性要求，AI 不得缩减。`)
-
+	}
 
 	return sb.String()
 }
