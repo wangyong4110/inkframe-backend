@@ -421,9 +421,10 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	}
 
 	// 精准匹配：批量加载 shot.CharacterIDs 中的所有角色参考图（最多 maxCompositeImages-1 张，留槽给场景锚点）
-	// 参考图优先级：FaceCloseup > Portrait > ThreeViewSheet
-	// 理由：DreamO IP-Adapter 对高分辨率面部特写效果最佳（720×1280 face vs 三视图中每视角仅约 427px）。
-	// 单角色时同时传 FaceCloseup + ThreeViewSheet，兼顾面部锁定和服装/体型一致性。
+	// 两轮分配策略，最大化角色一致性：
+	//   轮次1：为每个角色分配 FaceCloseup（面部/身份锁定），确保每个出场角色都有面部参考
+	//   轮次2：用剩余槽位为各角色补充 ThreeViewSheet（服装/体型锁定），从主角开始分配
+	// 效果：1角色 → face+body；2角色 → face+face+(body if slot)；3角色 → face+face+face
 	const maxCharRefs = maxCompositeImages - 1
 	var characterPortraits []string // 可能包含多个角色的图
 	var characterVisualPrompts []string // 角色外观 token 串，用于注入 shot prompt（文本+图像双重约束）
@@ -432,34 +433,57 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		ids := []uint(shot.CharacterIDs)
 		batchChars, batchErr := s.characterRepo.ListByIDs(ids)
 		if batchErr == nil {
-			singleChar := len(batchChars) == 1
+			type charRef struct {
+				id       uint
+				faceRef  string
+				bodyRef  string
+				vprompt  string
+			}
+			collected := make([]charRef, 0, len(batchChars))
 			for _, char := range batchChars {
-				if len(characterPortraits) >= maxCharRefs {
-					break
-				}
-				remaining := maxCharRefs - len(characterPortraits)
-				// 收集外观 token 用于 prompt 注入
-				if char.VisualPrompt != "" {
-					characterVisualPrompts = append(characterVisualPrompts, char.VisualPrompt)
-				}
-				// FaceCloseup > Portrait（面部参考）; ThreeViewSheet（服装/体型参考）
 				faceRef := char.FaceCloseup
 				if faceRef == "" {
 					faceRef = char.Portrait
 				}
-				bodyRef := char.ThreeViewSheet
-				if singleChar && remaining >= 2 && faceRef != "" && bodyRef != "" {
-					// 单角色且槽位充足：face + three-view 双引用，同时锁定面部特征和服装设计
-					characterPortraits = append(characterPortraits, faceRef, bodyRef)
-					refSources = append(refSources,
-						fmt.Sprintf("charID=%d FaceCloseup/Portrait", char.ID),
-						fmt.Sprintf("charID=%d ThreeViewSheet", char.ID))
-				} else if faceRef != "" {
-					characterPortraits = append(characterPortraits, faceRef)
-					refSources = append(refSources, fmt.Sprintf("charID=%d FaceCloseup/Portrait", char.ID))
-				} else if bodyRef != "" {
-					characterPortraits = append(characterPortraits, bodyRef)
-					refSources = append(refSources, fmt.Sprintf("charID=%d ThreeViewSheet(fallback)", char.ID))
+				collected = append(collected, charRef{
+					id:      char.ID,
+					faceRef: faceRef,
+					bodyRef: char.ThreeViewSheet,
+					vprompt: char.VisualPrompt,
+				})
+				if char.VisualPrompt != "" {
+					characterVisualPrompts = append(characterVisualPrompts, char.VisualPrompt)
+				}
+			}
+			// 轮次1：每个角色分配一张面部参考图（FaceCloseup > Portrait）
+			for _, cr := range collected {
+				if len(characterPortraits) >= maxCharRefs {
+					break
+				}
+				if cr.faceRef != "" {
+					characterPortraits = append(characterPortraits, cr.faceRef)
+					refSources = append(refSources, fmt.Sprintf("charID=%d FaceCloseup/Portrait", cr.id))
+				}
+			}
+			// 轮次2：用剩余槽位为各角色补充三视图（ThreeViewSheet），服装/体型一致性
+			for _, cr := range collected {
+				if len(characterPortraits) >= maxCharRefs {
+					break
+				}
+				if cr.bodyRef != "" && cr.faceRef != "" {
+					// 已在轮次1分配了面部图，才补充三视图（避免重复）
+					characterPortraits = append(characterPortraits, cr.bodyRef)
+					refSources = append(refSources, fmt.Sprintf("charID=%d ThreeViewSheet", cr.id))
+				}
+			}
+			// 降级：face 为空但有三视图的角色（轮次1未加入），在有槽时补充三视图
+			for _, cr := range collected {
+				if len(characterPortraits) >= maxCharRefs {
+					break
+				}
+				if cr.faceRef == "" && cr.bodyRef != "" {
+					characterPortraits = append(characterPortraits, cr.bodyRef)
+					refSources = append(refSources, fmt.Sprintf("charID=%d ThreeViewSheet(no-face-fallback)", cr.id))
 				}
 			}
 		}
@@ -488,15 +512,18 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 					for _, c := range cachedNovelChars {
 						nameMap[strings.ToLower(c.Name)] = c
 					}
+					// 匹配并收集所有命中角色
+					type inlineRef struct {
+						name    string
+						char    *model.Character
+					}
+					var inlineChars []inlineRef
+					seenIDs := make(map[uint]bool)
 					for _, sc := range shotChars {
-						if len(characterPortraits) >= maxCharRefs {
-							break
-						}
 						nameLow := strings.ToLower(sc.Name)
 						char, ok := nameMap[nameLow]
 						if !ok {
 							for n, c := range nameMap {
-								// 最少2个字的子串匹配，防止单字误命中（如"云"匹配"凌云"导致角色混淆）
 								nRunes := []rune(n)
 								nmRunes := []rune(nameLow)
 								if len(nRunes) >= 2 && len(nmRunes) >= 2 &&
@@ -507,21 +534,53 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 								}
 							}
 						}
-						if ok && char != nil {
+						if ok && char != nil && !seenIDs[char.ID] {
+							seenIDs[char.ID] = true
+							inlineChars = append(inlineChars, inlineRef{name: sc.Name, char: char})
 							if char.VisualPrompt != "" {
 								characterVisualPrompts = append(characterVisualPrompts, char.VisualPrompt)
 							}
-							inlineFaceRef := char.FaceCloseup
-							if inlineFaceRef == "" {
-								inlineFaceRef = char.Portrait
-							}
-							if inlineFaceRef != "" {
-								characterPortraits = append(characterPortraits, inlineFaceRef)
-								refSources = append(refSources, fmt.Sprintf("inline name=%q FaceCloseup/Portrait", sc.Name))
-							} else if char.ThreeViewSheet != "" {
-								characterPortraits = append(characterPortraits, char.ThreeViewSheet)
-								refSources = append(refSources, fmt.Sprintf("inline name=%q ThreeViewSheet(fallback)", sc.Name))
-							}
+						}
+					}
+					// 同样采用两轮策略：先面部，再三视图
+					for _, ir := range inlineChars {
+						if len(characterPortraits) >= maxCharRefs {
+							break
+						}
+						faceRef := ir.char.FaceCloseup
+						if faceRef == "" {
+							faceRef = ir.char.Portrait
+						}
+						if faceRef != "" {
+							characterPortraits = append(characterPortraits, faceRef)
+							refSources = append(refSources, fmt.Sprintf("inline name=%q FaceCloseup/Portrait", ir.name))
+						}
+					}
+					for _, ir := range inlineChars {
+						if len(characterPortraits) >= maxCharRefs {
+							break
+						}
+						faceRef := ir.char.FaceCloseup
+						if faceRef == "" {
+							faceRef = ir.char.Portrait
+						}
+						if ir.char.ThreeViewSheet != "" && faceRef != "" {
+							characterPortraits = append(characterPortraits, ir.char.ThreeViewSheet)
+							refSources = append(refSources, fmt.Sprintf("inline name=%q ThreeViewSheet", ir.name))
+						}
+					}
+					// 降级：只有三视图无面部的角色
+					for _, ir := range inlineChars {
+						if len(characterPortraits) >= maxCharRefs {
+							break
+						}
+						faceRef := ir.char.FaceCloseup
+						if faceRef == "" {
+							faceRef = ir.char.Portrait
+						}
+						if ir.char.ThreeViewSheet != "" && faceRef == "" {
+							characterPortraits = append(characterPortraits, ir.char.ThreeViewSheet)
+							refSources = append(refSources, fmt.Sprintf("inline name=%q ThreeViewSheet(no-face-fallback)", ir.name))
 						}
 					}
 				}
