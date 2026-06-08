@@ -356,6 +356,100 @@ func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequ
 	return novel, nil
 }
 
+// coverCharacterRoleRank 主角优先排序权重
+func coverCharacterRoleRank(role string) int {
+	switch role {
+	case "protagonist":
+		return 0
+	case "antagonist":
+		return 1
+	case "supporting":
+		return 2
+	default:
+		return 3
+	}
+}
+
+// generateCoverBrief 调用 LLM 根据小说角色、世界观、简介，生成一段具体的封面视觉描述（英文 image prompt）。
+// 失败时返回空字符串，调用方降级回旧模板。
+func (s *NovelService) generateCoverBrief(novel *model.Novel) string {
+	var sb strings.Builder
+	sb.WriteString("You are a professional book cover art director. Based on the novel information below, write a 80–110 word English image generation prompt for an AI image model.\n")
+	sb.WriteString("Requirements:\n")
+	sb.WriteString("- Describe specific visual elements: protagonist appearance (hair, clothing, expression, posture) + iconic scene or prop\n")
+	sb.WriteString("- Reflect the emotional tone and visual style of the genre\n")
+	sb.WriteString("- Use concrete, sensory descriptors — avoid abstract words like \"epic\" or \"amazing\"\n")
+	sb.WriteString("- End with: Professional Chinese novel book cover, cinematic lighting, vibrant colors, highly detailed illustration\n")
+	sb.WriteString("- Output the English prompt ONLY, no explanation\n\n")
+
+	sb.WriteString(fmt.Sprintf("Title: %s\n", novel.Title))
+	sb.WriteString(fmt.Sprintf("Genre: %s\n", novel.Genre))
+	if novel.Description != "" {
+		desc := novel.Description
+		if len([]rune(desc)) > 250 {
+			desc = string([]rune(desc)[:250])
+		}
+		sb.WriteString(fmt.Sprintf("Synopsis: %s\n", desc))
+	}
+
+	// 角色（最多3个，主角优先）
+	if s.characterRepo != nil {
+		chars, _ := s.characterRepo.ListByNovel(novel.ID)
+		// 主角优先排序
+		for i := 0; i < len(chars); i++ {
+			for j := i + 1; j < len(chars); j++ {
+				if coverCharacterRoleRank(chars[i].Role) > coverCharacterRoleRank(chars[j].Role) {
+					chars[i], chars[j] = chars[j], chars[i]
+				}
+			}
+		}
+		added := 0
+		for _, c := range chars {
+			if added >= 3 {
+				break
+			}
+			if c.Description == "" {
+				continue
+			}
+			desc := c.Description
+			if len([]rune(desc)) > 200 {
+				desc = string([]rune(desc)[:200])
+			}
+			if added == 0 {
+				sb.WriteString("Characters:\n")
+			}
+			sb.WriteString(fmt.Sprintf("- %s (%s): %s\n", c.Name, c.Role, desc))
+			added++
+		}
+	}
+
+	// 世界观背景（描述 + 地理，截取前300字）
+	if novel.Worldview != nil {
+		wv := novel.Worldview
+		var wvParts []string
+		if wv.Description != "" {
+			wvParts = append(wvParts, wv.Description)
+		}
+		if wv.Geography != "" {
+			wvParts = append(wvParts, "Geography: "+wv.Geography)
+		}
+		if len(wvParts) > 0 {
+			wvText := strings.Join(wvParts, " ")
+			if len([]rune(wvText)) > 300 {
+				wvText = string([]rune(wvText)[:300])
+			}
+			sb.WriteString(fmt.Sprintf("World setting: %s\n", wvText))
+		}
+	}
+
+	brief, err := s.aiService.Generate(novel.ID, "cover_brief", sb.String())
+	if err != nil {
+		logger.Warn("generateCoverBrief LLM call failed", "err", err)
+		return ""
+	}
+	return strings.TrimSpace(brief)
+}
+
 // GenerateCoverImage 使用 AI 为小说生成封面图，并将 URL 写回 cover_image 字段
 func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID uint, suggestion string) (string, error) {
 	novel, err := s.novelRepo.GetByID(novelID)
@@ -364,29 +458,6 @@ func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID
 	}
 	if novel.TenantID != tenantID {
 		return "", fmt.Errorf("not found")
-	}
-
-	genreMap := map[string]string{
-		"fantasy":    "fantasy xianxia cultivation magic world",
-		"xianxia":    "xianxia immortal cultivation Chinese fantasy",
-		"urban":      "modern Chinese urban city",
-		"romance":    "romance love story elegant",
-		"historical": "ancient Chinese historical palace dynasty",
-		"scifi":      "science fiction futuristic space technology",
-		"mystery":    "mystery thriller suspense dark",
-		"wuxia":      "Chinese martial arts wuxia sword hero",
-		"horror":     "horror supernatural dark eerie",
-		"apocalypse": "post-apocalyptic wasteland survival",
-		"rebirth":    "time travel rebirth second chance",
-	}
-	genreDesc := genreMap[novel.Genre]
-	if genreDesc == "" {
-		genreDesc = novel.Genre
-	}
-
-	desc := ""
-	if novel.Description != "" && len(novel.Description) <= 150 {
-		desc = " Theme: " + novel.Description + "."
 	}
 
 	negativePrompt := "watermark, signature, blurry, low quality, ugly, distorted, nsfw"
@@ -410,20 +481,51 @@ func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID
 		// 图生图：以旧封面为参考，按用户指令编辑，保留书名要求
 		prompt = fmt.Sprintf("%s %s", suggestion, titleText)
 	} else if suggestion != "" {
-		// 无旧封面，文生图但加入用户建议
-		prompt = fmt.Sprintf(
-			"Professional book cover illustration for a Chinese novel. Genre: %s. "+
-				"%s %s Style: cinematic, atmospheric, high-quality digital art, "+
-				"dramatic lighting, vibrant colors, detailed.",
-			genreDesc, suggestion, titleText,
-		)
+		// 有用户建议但无旧封面：LLM brief + 用户建议融合
+		brief := s.generateCoverBrief(novel)
+		if brief != "" {
+			prompt = fmt.Sprintf("%s Additional style direction: %s %s", brief, suggestion, titleText)
+		} else {
+			prompt = fmt.Sprintf(
+				"Professional book cover illustration for a Chinese novel. Genre: %s. "+
+					"%s %s Style: cinematic, atmospheric, high-quality digital art, dramatic lighting, vibrant colors, detailed.",
+				novel.Genre, suggestion, titleText,
+			)
+		}
 	} else {
-		prompt = fmt.Sprintf(
-			"Professional book cover illustration for a Chinese novel.%s "+
-				"Genre: %s. %s Style: cinematic, atmospheric, high-quality digital art, dramatic lighting, "+
-				"vibrant colors, detailed.",
-			desc, genreDesc, titleText,
-		)
+		// 纯自动生成：先用 LLM 生成封面视觉简报，降级回旧模板
+		brief := s.generateCoverBrief(novel)
+		if brief != "" {
+			prompt = fmt.Sprintf("%s %s", brief, titleText)
+		} else {
+			genreMap := map[string]string{
+				"fantasy":    "fantasy xianxia cultivation magic world",
+				"xianxia":    "xianxia immortal cultivation Chinese fantasy",
+				"urban":      "modern Chinese urban city",
+				"romance":    "romance love story elegant",
+				"historical": "ancient Chinese historical palace dynasty",
+				"scifi":      "science fiction futuristic space technology",
+				"mystery":    "mystery thriller suspense dark",
+				"wuxia":      "Chinese martial arts wuxia sword hero",
+				"horror":     "horror supernatural dark eerie",
+				"apocalypse": "post-apocalyptic wasteland survival",
+				"rebirth":    "time travel rebirth second chance",
+			}
+			genreDesc := genreMap[novel.Genre]
+			if genreDesc == "" {
+				genreDesc = novel.Genre
+			}
+			desc := ""
+			if novel.Description != "" && len(novel.Description) <= 150 {
+				desc = " Theme: " + novel.Description + "."
+			}
+			prompt = fmt.Sprintf(
+				"Professional book cover illustration for a Chinese novel.%s "+
+					"Genre: %s. %s Style: cinematic, atmospheric, high-quality digital art, dramatic lighting, "+
+					"vibrant colors, detailed.",
+				desc, genreDesc, titleText,
+			)
+		}
 	}
 
 	ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title})
