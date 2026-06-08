@@ -714,11 +714,9 @@ func (s *VideoService) buildStoryboardPrompt(
 	pacing string,
 	arcPlan string,
 ) string {
-	// isEn 控制 description 及整体指令语言（由用户 promptLanguage 决定，默认 false=中文）。
-	// isImageEn 始终为 true：image_prompt/video_prompt/negative_prompt 强制英文，对图像AI效果最佳。
-	// 两个变量分离，避免 isEn=true 时将旁白/对白指令语境污染成英文导致中英混杂。
+	// isEn / isImageEn 均由 novel.PromptLanguage 决定，与项目「AI 提示词的语言」设置保持一致。
 	isEn := promptLanguage == "en"
-	isImageEn := true
+	isImageEn := promptLanguage == "en"
 
 	segLabel := ""
 	if totalSegs > 1 {
