@@ -248,6 +248,19 @@ func main() {
 	// 后台定时任务：每 30 分钟清理超时的分片上传会话（防内存泄漏）
 	safeGo("chunk-cleanup", handler.CleanupChunkStore)
 
+	// 后台定时任务：每 24 小时清理 7 天前的章节历史版本
+	startRecalcLoop("chapter-version-cleanup", hotScoreQuit, func() error {
+		cutoff := time.Now().AddDate(0, 0, -7)
+		n, err := repos.ChapterVersionRepo.DeleteOlderThan(cutoff)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			logger.Printf("[chapter-version-cleanup] deleted %d versions older than %s", n, cutoff.Format("2006-01-02"))
+		}
+		return nil
+	})
+
 	// 注册可续跑任务类型，然后启动任务恢复（必须在所有服务 wiring 完成后调用）
 	// Pass serverRootCtx so resumed goroutines can be cancelled on graceful shutdown.
 	if services.TaskService != nil {

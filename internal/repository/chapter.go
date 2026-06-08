@@ -391,6 +391,12 @@ func (r *ChapterVersionRepository) GetNextVersionNo(chapterID uint) (int, error)
 	return *maxNo + 1, nil
 }
 
+// DeleteOlderThan 删除早于 cutoff 时间的历史版本，返回删除条数
+func (r *ChapterVersionRepository) DeleteOlderThan(cutoff time.Time) (int64, error) {
+	result := r.db.Where("created_at < ?", cutoff).Delete(&model.ChapterVersion{})
+	return result.RowsAffected, result.Error
+}
+
 // ChapterItemRepository 章节物品覆盖仓库
 type ChapterItemRepository struct {
 	db *gorm.DB
