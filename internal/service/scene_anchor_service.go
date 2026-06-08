@@ -374,48 +374,56 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 		existingNameToID[strings.ToLower(e.Name)] = anchor.ID
 	}
 
-	logger.Printf("[SceneAnchorService] ExtractFromChapter done: novelID=%d created=%d appearing=%d",
-		novelID, len(created), len(parsed.AppearingAnchors))
+	logger.Printf("[SceneAnchorService] ExtractFromChapter done: novelID=%d created=%d appearing=%d chapterID=%v",
+		novelID, len(created), len(parsed.AppearingAnchors), chapterID)
 
 	// 若传入 chapterID，绑定新建锚点 + appearing 已有锚点到该章节
-	if len(chapterID) > 0 && chapterID[0] > 0 && s.chapterSceneAnchorRepo != nil {
+	if len(chapterID) > 0 && chapterID[0] > 0 {
 		chapID := chapterID[0]
-		// 绑定新建锚点
-		for _, a := range created {
-			if err := s.chapterSceneAnchorRepo.Upsert(&model.ChapterSceneAnchor{
-				ChapterID: chapID, NovelID: novelID, SceneAnchorID: a.ID,
-			}); err != nil {
-				logger.Errorf("[SceneAnchorService] bind created anchor %d to chapter %d: %v", a.ID, chapID, err)
-			}
-		}
-		// 绑定 appearing 已有锚点（语义名称匹配）
-		for _, name := range parsed.AppearingAnchors {
-			anchorID, ok := existingNameToID[strings.ToLower(name)]
-			if !ok {
-				// 二次模糊查找：规范化匹配
-				normName := normalizeAnchorName(name)
-				for existingNorm, aid := range func() map[string]uint {
-					m := make(map[string]uint, len(existing))
-					for _, a := range existing {
-						m[normalizeAnchorName(a.Name)] = a.ID
-					}
-					return m
-				}() {
-					if existingNorm == normName {
-						anchorID = aid
-						ok = true
-						break
-					}
+		if s.chapterSceneAnchorRepo == nil {
+			logger.Errorf("[SceneAnchorService] chapterSceneAnchorRepo is nil, skipping chapter bindings for chapterID=%d", chapID)
+		} else {
+			// 绑定新建锚点
+			for _, a := range created {
+				if err := s.chapterSceneAnchorRepo.Upsert(&model.ChapterSceneAnchor{
+					ChapterID: chapID, NovelID: novelID, SceneAnchorID: a.ID,
+				}); err != nil {
+					logger.Errorf("[SceneAnchorService] bind created anchor %d to chapter %d: %v", a.ID, chapID, err)
+				} else {
+					logger.Printf("[SceneAnchorService] bound new anchor %q (id=%d) to chapterID=%d", a.Name, a.ID, chapID)
 				}
 			}
-			if !ok {
-				logger.Printf("[SceneAnchorService] appearing anchor %q not found in novel %d, skipping", name, novelID)
-				continue
-			}
-			if err := s.chapterSceneAnchorRepo.Upsert(&model.ChapterSceneAnchor{
-				ChapterID: chapID, NovelID: novelID, SceneAnchorID: anchorID,
-			}); err != nil {
-				logger.Errorf("[SceneAnchorService] bind appearing anchor %d to chapter %d: %v", anchorID, chapID, err)
+			// 绑定 appearing 已有锚点（语义名称匹配）
+			for _, name := range parsed.AppearingAnchors {
+				anchorID, ok := existingNameToID[strings.ToLower(name)]
+				if !ok {
+					// 二次模糊查找：规范化匹配
+					normName := normalizeAnchorName(name)
+					for existingNorm, aid := range func() map[string]uint {
+						m := make(map[string]uint, len(existing))
+						for _, a := range existing {
+							m[normalizeAnchorName(a.Name)] = a.ID
+						}
+						return m
+					}() {
+						if existingNorm == normName {
+							anchorID = aid
+							ok = true
+							break
+						}
+					}
+				}
+				if !ok {
+					logger.Printf("[SceneAnchorService] appearing anchor %q not found in novel %d, skipping", name, novelID)
+					continue
+				}
+				if err := s.chapterSceneAnchorRepo.Upsert(&model.ChapterSceneAnchor{
+					ChapterID: chapID, NovelID: novelID, SceneAnchorID: anchorID,
+				}); err != nil {
+					logger.Errorf("[SceneAnchorService] bind appearing anchor %d %q to chapter %d: %v", anchorID, name, chapID, err)
+				} else {
+					logger.Printf("[SceneAnchorService] bound existing anchor %q (id=%d) to chapterID=%d", name, anchorID, chapID)
+				}
 			}
 		}
 	}

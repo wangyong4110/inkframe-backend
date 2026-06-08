@@ -1410,7 +1410,7 @@ func (h *CharacterHandler) GenerateChapterCharacterImages(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeThreeView, "章节角色形象生成", "chapter", chapter.ID)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterReview, "章节角色形象生成", "chapter", chapter.ID)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return

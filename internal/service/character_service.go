@@ -1184,6 +1184,7 @@ func (s *CharacterService) ReanalyzeCharacter(tenantID, characterID uint) (*mode
 // AIExtractMinorChars 从单章内容中提取次要角色（role=minor），并写入 ChapterCharacter 关联。
 // 复用与主角色分析相同的 description/visual_prompt/音色推荐逻辑，保证次要角色档案质量一致。
 func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint) ([]*model.Character, error) {
+	logger.Printf("[CharacterService] AIExtractMinorChars: tenantID=%d novelID=%d chapterID=%d", tenantID, novelID, chapterID)
 	if s.chapterRepo == nil {
 		return nil, fmt.Errorf("chapter repository not configured")
 	}
@@ -1198,6 +1199,7 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 	if content == "" {
 		return nil, fmt.Errorf("chapter has no content")
 	}
+	logger.Printf("[CharacterService] AIExtractMinorChars: chapterID=%d contentLen=%d", chapterID, len(content))
 
 	novelTitle := "本小说"
 	novelGenre := ""
@@ -1218,6 +1220,7 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 		existingNames = append(existingNames, c.Name)
 		existingNameSet[strings.ToLower(c.Name)] = true
 	}
+	logger.Printf("[CharacterService] AIExtractMinorChars: novelID=%d existingChars=%d existingNames=%v", novelID, len(existing), existingNames)
 
 	minorCharsPrompt, err := renderPrompt("extract_minor_characters", map[string]interface{}{
 		"NovelTitle":     novelTitle,
@@ -1233,8 +1236,10 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_minor_characters", minorCharsPrompt, "",
 		StoryboardOverrides{})
 	if err != nil {
+		logger.Errorf("[CharacterService] AIExtractMinorChars: AI call failed: %v", err)
 		return nil, fmt.Errorf("AI extract minor chars: %w", err)
 	}
+	logger.Printf("[CharacterService] AIExtractMinorChars: AI response len=%d raw=%.300s", len(result), result)
 
 	// 解析新格式 {"new_characters": [...], "appearing_characters": [...]}
 	var aiResp extractMinorCharsResponse
@@ -1243,10 +1248,13 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 		// 兼容旧格式：直接是数组
 		var chars []analysisCharJSON
 		if err2 := json.Unmarshal([]byte(cleaned), &chars); err2 != nil {
+			logger.Errorf("[CharacterService] AIExtractMinorChars: JSON parse failed: %v, cleaned=%.300s", err, cleaned)
 			return nil, fmt.Errorf("parse minor chars JSON: %w", err)
 		}
 		aiResp.NewCharacters = chars
 	}
+	logger.Printf("[CharacterService] AIExtractMinorChars: parsed new_characters=%d appearing_characters=%v",
+		len(aiResp.NewCharacters), aiResp.AppearingCharacters)
 
 	// 加载可用音色，用于自动推荐（与主角色提取逻辑一致）
 	var voiceModels []*model.AIModel
@@ -1258,6 +1266,10 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 	existingNameToID := make(map[string]uint, len(existing))
 	for _, c := range existing {
 		existingNameToID[strings.ToLower(c.Name)] = c.ID
+	}
+
+	if s.chapterCharacterRepo == nil {
+		logger.Errorf("[CharacterService] AIExtractMinorChars: chapterCharacterRepo is nil, chapter bindings will be skipped")
 	}
 
 	var created []*model.Character
@@ -1309,9 +1321,10 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 			Status:        "active",
 		}
 		if e := s.characterRepo.Create(char); e != nil {
-			logger.Errorf("CharacterService.AIExtractMinorChars: create %q: %v", c.Name, e)
+			logger.Errorf("[CharacterService] AIExtractMinorChars: create %q: %v", c.Name, e)
 			continue
 		}
+		logger.Printf("[CharacterService] AIExtractMinorChars: created character %q id=%d", char.Name, char.ID)
 		existingNameSet[strings.ToLower(c.Name)] = true
 		// 关联到章节
 		if s.chapterCharacterRepo != nil {
@@ -1321,7 +1334,9 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 				NovelID:     novelID,
 			}
 			if e := s.chapterCharacterRepo.Upsert(cc); e != nil {
-				logger.Errorf("CharacterService.AIExtractMinorChars: link chapter %v: %v", chapterID, e)
+				logger.Errorf("[CharacterService] AIExtractMinorChars: link charID=%d to chapterID=%d: %v", char.ID, chapterID, e)
+			} else {
+				logger.Printf("[CharacterService] AIExtractMinorChars: bound new char %q (id=%d) to chapterID=%d", char.Name, char.ID, chapterID)
 			}
 		}
 		created = append(created, char)
@@ -1332,6 +1347,7 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 		for _, name := range aiResp.AppearingCharacters {
 			charID, ok := existingNameToID[strings.ToLower(name)]
 			if !ok {
+				logger.Printf("[CharacterService] AIExtractMinorChars: appearing char %q not found in existing list, skipping", name)
 				continue
 			}
 			cc := &model.ChapterCharacter{
@@ -1340,11 +1356,15 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 				NovelID:     novelID,
 			}
 			if e := s.chapterCharacterRepo.Upsert(cc); e != nil {
-				logger.Errorf("CharacterService.AIExtractMinorChars: bind appearing char %q: %v", name, e)
+				logger.Errorf("[CharacterService] AIExtractMinorChars: bind appearing charID=%d %q to chapterID=%d: %v", charID, name, chapterID, e)
+			} else {
+				logger.Printf("[CharacterService] AIExtractMinorChars: bound existing char %q (id=%d) to chapterID=%d", name, charID, chapterID)
 			}
 		}
 	}
 
+	logger.Printf("[CharacterService] AIExtractMinorChars done: chapterID=%d newCreated=%d appearing=%d",
+		chapterID, len(created), len(aiResp.AppearingCharacters))
 	return created, nil
 }
 
@@ -2074,51 +2094,23 @@ English visual prompt:`, basePrompt, lookDesc)
 	return strings.TrimSpace(result), nil
 }
 
-// GenerateChapterAppearanceNote 使用 AI 生成角色在本章场景中的外形补充说明（用于图像生成）。
-// 出错时返回空字符串（非致命），由调用方降级使用基础 visual_prompt。
-func (s *CharacterService) GenerateChapterAppearanceNote(tenantID uint, char *model.Character, chapterContent, promptLanguage string) string {
-	if s.aiService == nil || chapterContent == "" {
-		return ""
-	}
-	baseDesc := char.VisualPrompt
-	if baseDesc == "" {
-		baseDesc = char.Description
-	}
-	promptText, err := renderPrompt("chapter_character_appearance", map[string]interface{}{
-		"CharacterName":        char.Name,
-		"CharacterDescription": baseDesc,
-		"ChapterContent":       truncateForPrompt(chapterContent, 4000),
-		"PromptLanguage":       promptLanguage,
-	})
-	if err != nil {
-		logger.Errorf("[CharacterService] GenerateChapterAppearanceNote render: %v", err)
-		return ""
-	}
-	result, err := s.aiService.GenerateWithProvider(tenantID, char.NovelID, "chapter_character_appearance", promptText, "",
-		StoryboardOverrides{MaxTokens: 256})
-	if err != nil {
-		logger.Errorf("[CharacterService] GenerateChapterAppearanceNote LLM: %v", err)
-		return ""
-	}
-	note := strings.TrimSpace(result)
-	if note == `""` || note == "''" {
-		return ""
-	}
-	return note
+// chapterAppearanceResult AI 返回的角色形象更新结果
+type chapterAppearanceResult struct {
+	VisualPrompt string `json:"visual_prompt"`
+	Description  string `json:"description"`
 }
 
-// GenerateChapterImages 为章节内绑定的角色批量生成形象图（三视图），
-// 每个角色先用 AI 生成本章外形补充说明，再与 VisualPrompt 合并后生成图像。
+// GenerateChapterImages 根据章节内容，用 AI 重写选定角色的视觉描述（visual_prompt + description）。
+// 不依赖图像生成提供商，纯 LLM 更新角色文本档案。
 // 返回 (succeeded, failed, error)。
 func (s *CharacterService) GenerateChapterImages(
 	ctx context.Context,
 	tenantID, novelID uint,
 	chapter *model.Chapter,
 	characterIDs []uint,
-	provider string,
+	_ string, // provider 参数保留，暂不使用
 	progressFn func(int),
 ) (succeeded, failed int, err error) {
-	// 取目标角色列表
 	all, e := s.characterRepo.ListByNovel(novelID)
 	if e != nil {
 		return 0, 0, fmt.Errorf("list characters: %w", e)
@@ -2137,20 +2129,13 @@ func (s *CharacterService) GenerateChapterImages(
 		return 0, 0, nil
 	}
 
-	imageStyle := ""
 	promptLanguage := "zh"
-	novelTitle := ""
 	if s.novelRepo != nil {
-		if novel, e2 := s.novelRepo.GetByID(novelID); e2 == nil {
-			imageStyle = novel.ImageStyle
-			novelTitle = novel.Title
-			if novel.PromptLanguage != "" {
-				promptLanguage = novel.PromptLanguage
-			}
+		if novel, e2 := s.novelRepo.GetByID(novelID); e2 == nil && novel.PromptLanguage != "" {
+			promptLanguage = novel.PromptLanguage
 		}
 	}
 
-	imgSvc := NewImageGenerationService(s.aiService)
 	total := len(chars)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -2161,37 +2146,46 @@ func (s *CharacterService) GenerateChapterImages(
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			genCtx := ctx
-			if novelTitle != "" {
-				genCtx = WithImageStorageHint(genCtx, ImageStorageHint{NovelTitle: novelTitle})
-			}
-
-			// 1. 生成本章外形补充说明（非致命，失败则使用基础描述）
-			appearanceNote := s.GenerateChapterAppearanceNote(tenantID, char, chapter.Content, promptLanguage)
-
-			// 2. 合并基础 visual_prompt 与章节外形补充
-			baseAppearance := char.VisualPrompt
-			if baseAppearance == "" {
-				baseAppearance = char.Description
-			}
-			finalAppearance := baseAppearance
-			if appearanceNote != "" {
-				finalAppearance = baseAppearance + ", " + appearanceNote
-			}
-
-			gender := InferGenderTag(char.VisualPrompt, char.Description)
-
-			// 3. 生成三视图
-			threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, finalAppearance, imageStyle, gender, "", provider)
 			charFailed := false
-			if threeErr != nil {
-				logger.Errorf("[CharacterService] GenerateChapterImages: three-view char %d (%s) failed: %v", char.ID, char.Name, threeErr)
+
+			baseDesc := char.VisualPrompt
+			if baseDesc == "" {
+				baseDesc = char.Description
+			}
+			promptText, renderErr := renderPrompt("chapter_character_appearance", map[string]interface{}{
+				"CharacterName":        char.Name,
+				"CharacterDescription": baseDesc,
+				"ChapterContent":       truncateForPrompt(chapter.Content, 4000),
+				"PromptLanguage":       promptLanguage,
+			})
+			if renderErr != nil {
+				logger.Errorf("[CharacterService] GenerateChapterImages render char %d: %v", char.ID, renderErr)
 				charFailed = true
 			} else {
-				updateReq := &model.UpdateCharacterRequest{Name: char.Name, ThreeViewSheet: threeImg.URL}
-				if _, saveErr := s.UpdateCharacter(char.ID, tenantID, updateReq); saveErr != nil {
-					logger.Errorf("[CharacterService] GenerateChapterImages: save char %d: %v", char.ID, saveErr)
+				result, llmErr := s.aiService.GenerateWithProvider(tenantID, novelID, "chapter_character_appearance",
+					promptText, "", StoryboardOverrides{MaxTokens: 1024})
+				if llmErr != nil {
+					logger.Errorf("[CharacterService] GenerateChapterImages LLM char %d (%s): %v", char.ID, char.Name, llmErr)
 					charFailed = true
+				} else {
+					cleaned := extractJSON(strings.TrimSpace(result))
+					var res chapterAppearanceResult
+					if jsonErr := json.Unmarshal([]byte(cleaned), &res); jsonErr != nil {
+						logger.Errorf("[CharacterService] GenerateChapterImages parse char %d: %v raw=%q", char.ID, jsonErr, result)
+						charFailed = true
+					} else {
+						updateReq := &model.UpdateCharacterRequest{Name: char.Name}
+						if res.VisualPrompt != "" {
+							updateReq.VisualPrompt = res.VisualPrompt
+						}
+						if res.Description != "" {
+							updateReq.Description = res.Description
+						}
+						if _, saveErr := s.UpdateCharacter(char.ID, tenantID, updateReq); saveErr != nil {
+							logger.Errorf("[CharacterService] GenerateChapterImages save char %d: %v", char.ID, saveErr)
+							charFailed = true
+						}
+					}
 				}
 			}
 
