@@ -357,7 +357,7 @@ func (s *ChapterService) GenerateChapterOutline(tenantID, novelID uint, chapterN
 		return nil, err
 	}
 
-	// 构建上下文：近期章节摘要
+	// 构建上下文：近期章节摘要（NarrativeMemory）
 	var recentCtx string
 	if s.narrativeSvc != nil {
 		if ctx, err := s.narrativeSvc.BuildHierarchicalContext(novelID, chapterNo); err == nil {
@@ -365,23 +365,53 @@ func (s *ChapterService) GenerateChapterOutline(tenantID, novelID uint, chapterN
 		}
 	}
 
+	// 补充：取前 5 章的 Outline 字段作为直接大纲参考
+	var prevOutlineSection string
+	if allChapters, err := s.chapterRepo.ListByNovel(novelID); err == nil {
+		var prevChapters []*model.Chapter
+		for _, ch := range allChapters {
+			if ch.ChapterNo < chapterNo && ch.Outline != "" {
+				prevChapters = append(prevChapters, ch)
+			}
+		}
+		// 取最近 5 章
+		if len(prevChapters) > 5 {
+			prevChapters = prevChapters[len(prevChapters)-5:]
+		}
+		if len(prevChapters) > 0 {
+			var sb strings.Builder
+			sb.WriteString("【前续章节大纲（供情节衔接参考）】\n")
+			for _, ch := range prevChapters {
+				title := ch.Title
+				if title == "" {
+					title = fmt.Sprintf("第%d章", ch.ChapterNo)
+				}
+				sb.WriteString(fmt.Sprintf("第%d章《%s》：%s\n\n", ch.ChapterNo, title, ch.Outline))
+			}
+			prevOutlineSection = sb.String()
+		}
+	}
+
 	recentCtxSection := ""
 	if recentCtx != "" {
-		recentCtxSection = "叙事上下文：\n" + recentCtx
+		recentCtxSection = "【叙事上下文】\n" + recentCtx
 	}
 	extraPromptSection := ""
 	if extraPrompt != "" {
-		extraPromptSection = "补充要求：" + extraPrompt
+		extraPromptSection = "【用户要求】\n" + extraPrompt
 	}
 
 	prompt := fmt.Sprintf(`请为小说《%s》第%d章生成详细的章节大纲（200～500字）。
 
 小说简介：%s
-章节标题：%s
+本章标题：%s
+
+%s
 %s
 %s
 
 要求：
+- 情节须与前续章节大纲自然衔接，避免重复或矛盾
 - 详细描述本章的核心情节脉络与关键转折
 - 点明主要人物的行动、目标与心理变化
 - 交代场景背景与氛围
@@ -389,7 +419,7 @@ func (s *ChapterService) GenerateChapterOutline(tenantID, novelID uint, chapterN
 - 字数不少于200字，不超过500字
 - 直接输出大纲文本，不要加前缀或说明`,
 		novel.Title, chapterNo, novel.Description, chapter.Title,
-		recentCtxSection, extraPromptSection,
+		prevOutlineSection, recentCtxSection, extraPromptSection,
 	)
 
 	// 从项目配置读取参数默认值
