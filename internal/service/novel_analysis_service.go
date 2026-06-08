@@ -576,6 +576,11 @@ type analysisCharJSON struct {
 	VisualPrompt    string                    `json:"visual_prompt"`
 }
 
+type extractMinorCharsResponse struct {
+	NewCharacters       []analysisCharJSON `json:"new_characters"`
+	AppearingCharacters []string           `json:"appearing_characters"`
+}
+
 type analysisItemJSON struct {
 	Name         string `json:"name"`
 	Category     string `json:"category"`

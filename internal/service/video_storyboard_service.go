@@ -567,6 +567,17 @@ func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, ch
 			}
 		}
 
+		// ④ Description: 全文扫描角色名关键词（兜底）
+		if len(matched) == 0 && shot.Description != "" {
+			descLower := strings.ToLower(shot.Description)
+			for name, id := range nameMap {
+				if strings.Contains(descLower, name) && !seen[id] {
+					matched = append(matched, id)
+					seen[id] = true
+				}
+			}
+		}
+
 		if len(matched) > 0 {
 			shot.CharacterIDs = matched
 			charMatchCount++
@@ -726,22 +737,41 @@ func (s *VideoService) buildStoryboardPrompt(
 	// 过滤角色：优先匹配内容中出现的角色，否则回退到主角
 	var matchedChars []map[string]interface{}
 	if len(characters) > 0 {
+		// 始终将所有角色传给 AI（最多 10 个），避免 AI 因拿不到角色名而写出无法匹配的随机字符串。
+		// 优先级：① 名字字面出现在本段内容中 → ② 主角 → ③ 配角 → ④ 其余角色。
+		const maxCharsInPrompt = 10
 		contentLower := strings.ToLower(content)
-		var matched []*model.Character
+
+		type scoredChar struct {
+			c     *model.Character
+			score int // 越大优先级越高
+		}
+		scored := make([]scoredChar, 0, len(characters))
 		for _, c := range characters {
+			s := 0
 			if strings.Contains(contentLower, strings.ToLower(c.Name)) {
-				matched = append(matched, c)
+				s += 4
 			}
-		}
-		if len(matched) == 0 {
-			for _, c := range characters {
-				if c.Role == "protagonist" {
-					matched = append(matched, c)
-				}
+			switch c.Role {
+			case "protagonist":
+				s += 3
+			case "supporting":
+				s += 2
+			case "minor":
+				s += 1
 			}
+			scored = append(scored, scoredChar{c, s})
 		}
-		matchedChars = make([]map[string]interface{}, 0, len(matched))
-		for _, c := range matched {
+		// 稳定排序（score 相同保持原顺序）
+		sort.SliceStable(scored, func(i, j int) bool { return scored[i].score > scored[j].score })
+
+		limit := len(scored)
+		if limit > maxCharsInPrompt {
+			limit = maxCharsInPrompt
+		}
+		matchedChars = make([]map[string]interface{}, 0, limit)
+		for _, sc := range scored[:limit] {
+			c := sc.c
 			matchedChars = append(matchedChars, map[string]interface{}{
 				"Name":         c.Name,
 				"Role":         c.Role,

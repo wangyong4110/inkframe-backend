@@ -229,8 +229,14 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, pro
 			advanceProgress()
 			continue
 		}
-		if shot.ImageURL != "" || shot.Status == "generating" {
-			// Already has image or currently generating — skip (idempotent).
+		if shot.Status == "generating" {
+			// Currently generating in another goroutine — skip.
+			advanceProgress()
+			continue
+		}
+		if shot.ImageURL != "" && shot.Status != "failed" {
+			// Already has a successfully generated image — skip (idempotent).
+			// "failed" shots keep their ImageURL from a partial run but should be retried.
 			advanceProgress()
 			continue
 		}
@@ -606,12 +612,11 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		promptText = shot.Description
 	}
 
-	// 角色外观 token 前置注入：与参考图形成文本+图像双重约束，大幅提升角色一致性。
-	// VisualPrompt 由 AI 生成，格式为 "1girl, long silver hair, blue eyes, white hanfu, ..."，
-	// 置于 prompt 最前端能获得最高权重，精确锁定面部、发型、服装特征。
-	// 无论是否找到参考图均注入：即使角色尚未生成图片，文字锚点也能约束 Text2ImgV3 维持外貌一致性；
-	// 只要找到了匹配的角色记录（characterVisualPrompts 非空），都应注入。
-	if len(characterVisualPrompts) > 0 {
+	// 角色外观 token 前置注入：
+	// - Text2ImgV3（无参考图）：注入 VisualPrompt 文字锚点，约束角色外貌一致性。
+	// - DreamO（有参考图）：外貌已由参考图的 IP-Adapter 保证，无需文字描述；
+	//   注入长描述反而稀释场景/动作信息，导致生成图偏离 image_prompt 的场景设定。
+	if len(characterVisualPrompts) > 0 && len(characterPortraits) == 0 {
 		promptText = strings.Join(characterVisualPrompts, ", ") + ", " + promptText
 	}
 
@@ -787,6 +792,16 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// 使用 resolveStyleQualityTokens 按风格 ID 分类，覆盖全部 15 种预设风格。
 	if !strings.Contains(strings.ToLower(promptText), "masterpiece") {
 		promptText += ", " + resolveStyleQualityTokens(artStyle)
+	}
+
+	// DreamO 模式（有角色参考图）：IP-Adapter 已保证角色外貌，过长的 prompt 会分散注意力。
+	// 截断至 600 字符，优先保留前段（场景/构图/动作），最多保留到最近一个逗号边界。
+	if len(characterPortraits) > 0 && len(promptText) > 600 {
+		truncated := promptText[:600]
+		if idx := strings.LastIndex(truncated, ","); idx > 300 {
+			truncated = truncated[:idx]
+		}
+		promptText = truncated
 	}
 
 	// 二次读取场景锚点参考图（仅在有角色参考图时才追加）：
@@ -1423,9 +1438,14 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 		}(shot, imageURL)
 	}
 
-	localImage, err = downloadToTemp(imageURL, fmt.Sprintf("inkframe-img-%d-", shot.ID), ".jpg")
-	if err != nil {
-		return "", 0, fmt.Errorf("download image for shot %d: %w", shot.ShotNo, err)
+	// 只对绝对 URL（CDN/OSS）执行下载。相对路径（/api/v1/media/...，本地 DB 存储）
+	// 无法被独立 http.Client 访问；而两个调用方（BatchGenerateShots/BatchGenerateShotImages）
+	// 拿到 localImage 后立即 os.Remove——ImageURL 已存 DB，本地文件实际上无需下载。
+	if strings.HasPrefix(imageURL, "http://") || strings.HasPrefix(imageURL, "https://") {
+		localImage, err = downloadToTemp(imageURL, fmt.Sprintf("inkframe-img-%d-", shot.ID), ".jpg")
+		if err != nil {
+			return "", 0, fmt.Errorf("download image for shot %d: %w", shot.ShotNo, err)
+		}
 	}
 	return localImage, duration, nil
 }

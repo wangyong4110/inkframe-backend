@@ -809,31 +809,38 @@ func (s *CharacterService) DeleteCharacter(id, tenantID uint) error {
 	return s.characterRepo.Delete(id)
 }
 
-// ListEffectiveCharacters 获取章节的有效角色列表（章节级覆盖优先）
+// ListEffectiveCharacters 获取章节绑定的角色列表（仅返回已绑定到本章节的角色，章节级覆盖优先）
 func (s *CharacterService) ListEffectiveCharacters(novelID, chapterID uint) ([]*EffectiveCharacter, error) {
-	chars, err := s.characterRepo.ListByNovel(novelID)
-	if err != nil {
-		return nil, err
-	}
 	overrideMap := make(map[uint]*model.ChapterCharacter)
+	boundIDs := make(map[uint]bool)
 	if s.chapterCharacterRepo != nil {
 		overrides, _ := s.chapterCharacterRepo.ListByChapter(chapterID)
 		for _, o := range overrides {
 			overrideMap[o.CharacterID] = o
+			boundIDs[o.CharacterID] = true
 		}
 	}
-	result := make([]*EffectiveCharacter, 0, len(chars))
+	chars, err := s.characterRepo.ListByNovel(novelID)
+	if err != nil {
+		return nil, err
+	}
+	// No chapter-specific bindings: show all novel characters (protagonist/supporting appear on every chapter by default).
+	// When bindings exist, only show explicitly bound characters (supports chapter-specific overrides).
+	hasBindings := len(boundIDs) > 0
+	result := make([]*EffectiveCharacter, 0)
 	for _, ch := range chars {
+		if hasBindings && !boundIDs[ch.ID] {
+			continue
+		}
 		ec := &EffectiveCharacter{Character: *ch}
 		if o, ok := overrideMap[ch.ID]; ok {
 			ec.ChapterOverride = o
-			// Merge chapter-level appearance/personality overrides into description
 			base := ch.Description
-			var overrides []string
-			if o.Appearance != "" { overrides = append(overrides, "外貌（本章）："+o.Appearance) }
-			if o.Personality != "" { overrides = append(overrides, "性格（本章）："+o.Personality) }
-			if len(overrides) > 0 {
-				ec.EffectiveDescription = base + "\n" + strings.Join(overrides, "\n")
+			var parts []string
+			if o.Appearance != "" { parts = append(parts, "外貌（本章）："+o.Appearance) }
+			if o.Personality != "" { parts = append(parts, "性格（本章）："+o.Personality) }
+			if len(parts) > 0 {
+				ec.EffectiveDescription = base + "\n" + strings.Join(parts, "\n")
 			} else {
 				ec.EffectiveDescription = base
 			}
@@ -1229,10 +1236,16 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 		return nil, fmt.Errorf("AI extract minor chars: %w", err)
 	}
 
-	var chars []analysisCharJSON
+	// 解析新格式 {"new_characters": [...], "appearing_characters": [...]}
+	var aiResp extractMinorCharsResponse
 	cleaned := extractJSON(strings.TrimSpace(result))
-	if err := json.Unmarshal([]byte(cleaned), &chars); err != nil {
-		return nil, fmt.Errorf("parse minor chars JSON: %w", err)
+	if err := json.Unmarshal([]byte(cleaned), &aiResp); err != nil {
+		// 兼容旧格式：直接是数组
+		var chars []analysisCharJSON
+		if err2 := json.Unmarshal([]byte(cleaned), &chars); err2 != nil {
+			return nil, fmt.Errorf("parse minor chars JSON: %w", err)
+		}
+		aiResp.NewCharacters = chars
 	}
 
 	// 加载可用音色，用于自动推荐（与主角色提取逻辑一致）
@@ -1241,8 +1254,14 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 		voiceModels, _ = s.modelRepo.GetAvailableByTaskType("voice_gen", tenantID)
 	}
 
+	// 构建已有角色名→ID 映射，用于 AI 识别的出场角色绑定
+	existingNameToID := make(map[string]uint, len(existing))
+	for _, c := range existing {
+		existingNameToID[strings.ToLower(c.Name)] = c.ID
+	}
+
 	var created []*model.Character
-	for _, c := range chars {
+	for _, c := range aiResp.NewCharacters {
 		if c.Name == "" || existingNameSet[strings.ToLower(c.Name)] {
 			continue
 		}
@@ -1307,6 +1326,25 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 		}
 		created = append(created, char)
 	}
+
+	// 将 AI 识别的已有出场角色绑定到本章节
+	if s.chapterCharacterRepo != nil {
+		for _, name := range aiResp.AppearingCharacters {
+			charID, ok := existingNameToID[strings.ToLower(name)]
+			if !ok {
+				continue
+			}
+			cc := &model.ChapterCharacter{
+				CharacterID: charID,
+				ChapterID:   chapterID,
+				NovelID:     novelID,
+			}
+			if e := s.chapterCharacterRepo.Upsert(cc); e != nil {
+				logger.Errorf("CharacterService.AIExtractMinorChars: bind appearing char %q: %v", name, e)
+			}
+		}
+	}
+
 	return created, nil
 }
 
@@ -2034,4 +2072,145 @@ English visual prompt:`, basePrompt, lookDesc)
 		return "", err
 	}
 	return strings.TrimSpace(result), nil
+}
+
+// GenerateChapterAppearanceNote 使用 AI 生成角色在本章场景中的外形补充说明（用于图像生成）。
+// 出错时返回空字符串（非致命），由调用方降级使用基础 visual_prompt。
+func (s *CharacterService) GenerateChapterAppearanceNote(tenantID uint, char *model.Character, chapterContent, promptLanguage string) string {
+	if s.aiService == nil || chapterContent == "" {
+		return ""
+	}
+	baseDesc := char.VisualPrompt
+	if baseDesc == "" {
+		baseDesc = char.Description
+	}
+	promptText, err := renderPrompt("chapter_character_appearance", map[string]interface{}{
+		"CharacterName":        char.Name,
+		"CharacterDescription": baseDesc,
+		"ChapterContent":       truncateForPrompt(chapterContent, 4000),
+		"PromptLanguage":       promptLanguage,
+	})
+	if err != nil {
+		logger.Errorf("[CharacterService] GenerateChapterAppearanceNote render: %v", err)
+		return ""
+	}
+	result, err := s.aiService.GenerateWithProvider(tenantID, char.NovelID, "chapter_character_appearance", promptText, "",
+		StoryboardOverrides{MaxTokens: 256})
+	if err != nil {
+		logger.Errorf("[CharacterService] GenerateChapterAppearanceNote LLM: %v", err)
+		return ""
+	}
+	note := strings.TrimSpace(result)
+	if note == `""` || note == "''" {
+		return ""
+	}
+	return note
+}
+
+// GenerateChapterImages 为章节内绑定的角色批量生成形象图（三视图），
+// 每个角色先用 AI 生成本章外形补充说明，再与 VisualPrompt 合并后生成图像。
+// 返回 (succeeded, failed, error)。
+func (s *CharacterService) GenerateChapterImages(
+	ctx context.Context,
+	tenantID, novelID uint,
+	chapter *model.Chapter,
+	characterIDs []uint,
+	provider string,
+	progressFn func(int),
+) (succeeded, failed int, err error) {
+	// 取目标角色列表
+	all, e := s.characterRepo.ListByNovel(novelID)
+	if e != nil {
+		return 0, 0, fmt.Errorf("list characters: %w", e)
+	}
+	idSet := make(map[uint]bool, len(characterIDs))
+	for _, id := range characterIDs {
+		idSet[id] = true
+	}
+	var chars []*model.Character
+	for _, c := range all {
+		if idSet[c.ID] {
+			chars = append(chars, c)
+		}
+	}
+	if len(chars) == 0 {
+		return 0, 0, nil
+	}
+
+	imageStyle := ""
+	promptLanguage := "zh"
+	novelTitle := ""
+	if s.novelRepo != nil {
+		if novel, e2 := s.novelRepo.GetByID(novelID); e2 == nil {
+			imageStyle = novel.ImageStyle
+			novelTitle = novel.Title
+			if novel.PromptLanguage != "" {
+				promptLanguage = novel.PromptLanguage
+			}
+		}
+	}
+
+	imgSvc := NewImageGenerationService(s.aiService)
+	total := len(chars)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var done int
+
+	for _, char := range chars {
+		char := char
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			genCtx := ctx
+			if novelTitle != "" {
+				genCtx = WithImageStorageHint(genCtx, ImageStorageHint{NovelTitle: novelTitle})
+			}
+
+			// 1. 生成本章外形补充说明（非致命，失败则使用基础描述）
+			appearanceNote := s.GenerateChapterAppearanceNote(tenantID, char, chapter.Content, promptLanguage)
+
+			// 2. 合并基础 visual_prompt 与章节外形补充
+			baseAppearance := char.VisualPrompt
+			if baseAppearance == "" {
+				baseAppearance = char.Description
+			}
+			finalAppearance := baseAppearance
+			if appearanceNote != "" {
+				finalAppearance = baseAppearance + ", " + appearanceNote
+			}
+
+			gender := InferGenderTag(char.VisualPrompt, char.Description)
+
+			// 3. 生成三视图
+			threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, finalAppearance, imageStyle, gender, "", provider)
+			charFailed := false
+			if threeErr != nil {
+				logger.Errorf("[CharacterService] GenerateChapterImages: three-view char %d (%s) failed: %v", char.ID, char.Name, threeErr)
+				charFailed = true
+			} else {
+				updateReq := &model.UpdateCharacterRequest{Name: char.Name, ThreeViewSheet: threeImg.URL}
+				if _, saveErr := s.UpdateCharacter(char.ID, tenantID, updateReq); saveErr != nil {
+					logger.Errorf("[CharacterService] GenerateChapterImages: save char %d: %v", char.ID, saveErr)
+					charFailed = true
+				}
+			}
+
+			mu.Lock()
+			if charFailed {
+				failed++
+			} else {
+				succeeded++
+			}
+			done++
+			cur := done
+			mu.Unlock()
+			if progressFn != nil && total > 0 {
+				progressFn(cur * 99 / total)
+			}
+		}()
+	}
+	wg.Wait()
+	logger.Printf("[CharacterService] GenerateChapterImages done: novelID=%d chapterNo=%d succeeded=%d failed=%d",
+		novelID, chapter.ChapterNo, succeeded, failed)
+	return succeeded, failed, nil
 }

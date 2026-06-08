@@ -46,8 +46,9 @@ type Repositories struct {
 	HookChainRepo           *repository.HookChainRepository
 	SatisfactionPointRepo   *repository.SatisfactionPointRepository
 	ConflictArcRepo         *repository.ConflictArcRepository
-	SceneAnchorRepo         *repository.SceneAnchorRepository
-	SceneConsistencyLogRepo *repository.SceneConsistencyLogRepository
+	SceneAnchorRepo            *repository.SceneAnchorRepository
+	ChapterSceneAnchorRepo     *repository.ChapterSceneAnchorRepository
+	SceneConsistencyLogRepo    *repository.SceneConsistencyLogRepository
 	SystemSettingRepo       *repository.SystemSettingRepository
 	ShotVoiceSegmentRepo       *repository.ShotVoiceSegmentRepository
 	ReviewRecordRepo            *repository.ReviewRecordRepository
@@ -125,6 +126,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		SatisfactionPointRepo:   repository.NewSatisfactionPointRepository(db),
 		ConflictArcRepo:         repository.NewConflictArcRepository(db),
 		SceneAnchorRepo:         repository.NewSceneAnchorRepository(db),
+		ChapterSceneAnchorRepo:  repository.NewChapterSceneAnchorRepository(db),
 		SceneConsistencyLogRepo: repository.NewSceneConsistencyLogRepository(db),
 		SystemSettingRepo:       repository.NewSystemSettingRepository(db),
 		ShotVoiceSegmentRepo:       repository.NewShotVoiceSegmentRepository(db),
@@ -409,7 +411,8 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 	skillSvc := service.NewSkillService(repos.SkillRepo, aiSvc).
 		WithNovelRepo(repos.NovelRepo)
 	sceneAnchorSvc := service.NewSceneAnchorService(repos.SceneAnchorRepo, repos.StoryboardRepo, aiSvc, repos.NovelRepo).
-		WithChapterRepo(repos.ChapterRepo)
+		WithChapterRepo(repos.ChapterRepo).
+		WithChapterSceneAnchorRepo(repos.ChapterSceneAnchorRepo)
 
 	// 伏笔 CRUD 服务（带 AI 提取能力）
 	foreshadowCRUDSvc := service.NewForeshadowCRUDService(repos.ForeshadowRepo).

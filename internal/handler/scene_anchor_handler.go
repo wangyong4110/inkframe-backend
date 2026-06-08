@@ -385,13 +385,91 @@ func (h *SceneAnchorHandler) AIExtractChapterAnchors(c *gin.Context) {
 		respondBadRequest(c, "chapter has no content")
 		return
 	}
-	anchors, err := h.svc.ExtractFromChapter(context.Background(), getTenantID(c), uint(novelID), "", content)
+	anchors, err := h.svc.ExtractFromChapter(context.Background(), getTenantID(c), uint(novelID), "", content, chapter.ID)
 	if err != nil {
 		logger.Errorf("[SceneAnchorHandler] AIExtractChapterAnchors: %v", err)
 		respondErr(c, http.StatusInternalServerError, "failed to extract chapter scene anchors")
 		return
 	}
-	respondOK(c, gin.H{"scene_anchors": anchors, "total": len(anchors)})
+	respondOK(c, gin.H{"scene_anchors": anchors, "new_count": len(anchors)})
+}
+
+// ListChapterAnchors GET /novels/:id/chapters/:chapter_no/scene-anchors
+func (h *SceneAnchorHandler) ListChapterAnchors(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+	chapter, err := h.chapterSvc.GetChapterByNo(uint(novelID), chapterNo)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	anchors, err := h.svc.ListChapterAnchors(uint(novelID), chapter.ID)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, anchors)
+}
+
+// BindChapterAnchor PUT /novels/:id/chapters/:chapter_no/scene-anchors/:anchor_id
+func (h *SceneAnchorHandler) BindChapterAnchor(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+	anchorID, ok2 := parseID(c, "anchor_id")
+	if !ok2 {
+		return
+	}
+	chapter, err := h.chapterSvc.GetChapterByNo(uint(novelID), chapterNo)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	if err := h.svc.BindChapterAnchor(chapter.ID, uint(novelID), uint(anchorID)); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, nil)
+}
+
+// UnbindChapterAnchor DELETE /novels/:id/chapters/:chapter_no/scene-anchors/:anchor_id
+func (h *SceneAnchorHandler) UnbindChapterAnchor(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+	anchorID, ok2 := parseID(c, "anchor_id")
+	if !ok2 {
+		return
+	}
+	chapter, err := h.chapterSvc.GetChapterByNo(uint(novelID), chapterNo)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	if err := h.svc.UnbindChapterAnchor(chapter.ID, uint(anchorID)); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, nil)
 }
 
 // BatchGenerateRefImages POST /novels/:id/scene-anchors/batch-ref-images

@@ -39,6 +39,34 @@ func (r *SceneAnchorRepository) ListByNovel(novelID uint) ([]*model.SceneAnchor,
 	return items, err
 }
 
+// ─── ChapterSceneAnchorRepository 章节-场景绑定仓库 ──────────────────────────
+
+type ChapterSceneAnchorRepository struct{ db *gorm.DB }
+
+func NewChapterSceneAnchorRepository(db *gorm.DB) *ChapterSceneAnchorRepository {
+	return &ChapterSceneAnchorRepository{db: db}
+}
+
+func (r *ChapterSceneAnchorRepository) Upsert(csa *model.ChapterSceneAnchor) error {
+	return r.db.Where(model.ChapterSceneAnchor{ChapterID: csa.ChapterID, SceneAnchorID: csa.SceneAnchorID}).
+		FirstOrCreate(csa).Error
+}
+
+func (r *ChapterSceneAnchorRepository) ListByChapter(chapterID uint) ([]*model.ChapterSceneAnchor, error) {
+	var items []*model.ChapterSceneAnchor
+	err := r.db.Where("chapter_id = ?", chapterID).Find(&items).Error
+	return items, err
+}
+
+func (r *ChapterSceneAnchorRepository) Delete(chapterID, sceneAnchorID uint) error {
+	return r.db.Where("chapter_id = ? AND scene_anchor_id = ?", chapterID, sceneAnchorID).
+		Delete(&model.ChapterSceneAnchor{}).Error
+}
+
+func (r *ChapterSceneAnchorRepository) DeleteByAnchor(sceneAnchorID uint) error {
+	return r.db.Where("scene_anchor_id = ?", sceneAnchorID).Delete(&model.ChapterSceneAnchor{}).Error
+}
+
 // ─── SceneConsistencyLogRepository 场景一致性日志仓库 ────────────────────────
 
 type SceneConsistencyLogRepository struct{ db *gorm.DB }

@@ -174,6 +174,17 @@ type SceneAnchor struct {
 
 func (SceneAnchor) TableName() string { return "ink_scene_anchor" }
 
+// ChapterSceneAnchor 章节与场景锚点的绑定关系
+type ChapterSceneAnchor struct {
+	ID            uint      `gorm:"primaryKey" json:"id"`
+	ChapterID     uint      `gorm:"uniqueIndex:idx_chapter_scene_anchor;not null" json:"chapter_id"`
+	SceneAnchorID uint      `gorm:"uniqueIndex:idx_chapter_scene_anchor;not null" json:"scene_anchor_id"`
+	NovelID       uint      `gorm:"index;not null" json:"novel_id"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+func (ChapterSceneAnchor) TableName() string { return "ink_chapter_scene_anchor" }
+
 // SceneConsistencyLog 场景一致性评分日志
 type SceneConsistencyLog struct {
 	ID           uint    `gorm:"primaryKey" json:"id"`

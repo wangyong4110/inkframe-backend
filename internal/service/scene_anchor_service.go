@@ -17,21 +17,74 @@ import (
 // 将命名场景的视觉描述、风格 token 和参考图固定下来，
 // 在分镜图像生成时强制注入，确保跨镜头布景一致。
 type SceneAnchorService struct {
-	repo        *repository.SceneAnchorRepository
-	shotRepo    *repository.StoryboardRepository
-	novelRepo   *repository.NovelRepository
-	chapterRepo *repository.ChapterRepository // optional, for AIExtractAllFromNovel
-	aiSvc       *AIService
+	repo                   *repository.SceneAnchorRepository
+	chapterSceneAnchorRepo *repository.ChapterSceneAnchorRepository
+	shotRepo               *repository.StoryboardRepository
+	novelRepo              *repository.NovelRepository
+	chapterRepo            *repository.ChapterRepository
+	aiSvc                  *AIService
 }
 
 func NewSceneAnchorService(repo *repository.SceneAnchorRepository, shotRepo *repository.StoryboardRepository, aiSvc *AIService, novelRepo *repository.NovelRepository) *SceneAnchorService {
 	return &SceneAnchorService{repo: repo, shotRepo: shotRepo, aiSvc: aiSvc, novelRepo: novelRepo}
 }
 
+func (s *SceneAnchorService) WithChapterSceneAnchorRepo(r *repository.ChapterSceneAnchorRepository) *SceneAnchorService {
+	s.chapterSceneAnchorRepo = r
+	return s
+}
+
 // WithChapterRepo 注入章节仓库（可选，用于批量提取所有章节的场景锚点）
 func (s *SceneAnchorService) WithChapterRepo(r *repository.ChapterRepository) *SceneAnchorService {
 	s.chapterRepo = r
 	return s
+}
+
+// ListChapterAnchors 返回绑定到指定章节的场景锚点列表
+func (s *SceneAnchorService) ListChapterAnchors(novelID, chapterID uint) ([]*model.SceneAnchor, error) {
+	if s.chapterSceneAnchorRepo == nil {
+		return []*model.SceneAnchor{}, nil
+	}
+	bindings, err := s.chapterSceneAnchorRepo.ListByChapter(chapterID)
+	if err != nil {
+		return nil, err
+	}
+	if len(bindings) == 0 {
+		return []*model.SceneAnchor{}, nil
+	}
+	all, err := s.repo.ListByNovel(novelID)
+	if err != nil {
+		return nil, err
+	}
+	boundIDs := make(map[uint]bool, len(bindings))
+	for _, b := range bindings {
+		boundIDs[b.SceneAnchorID] = true
+	}
+	result := make([]*model.SceneAnchor, 0, len(bindings))
+	for _, a := range all {
+		if boundIDs[a.ID] {
+			result = append(result, a)
+		}
+	}
+	return result, nil
+}
+
+// BindChapterAnchor 手动绑定场景锚点到章节
+func (s *SceneAnchorService) BindChapterAnchor(chapterID, novelID, anchorID uint) error {
+	if s.chapterSceneAnchorRepo == nil {
+		return fmt.Errorf("chapter scene anchor repository not configured")
+	}
+	return s.chapterSceneAnchorRepo.Upsert(&model.ChapterSceneAnchor{
+		ChapterID: chapterID, NovelID: novelID, SceneAnchorID: anchorID,
+	})
+}
+
+// UnbindChapterAnchor 解除章节与场景锚点的绑定
+func (s *SceneAnchorService) UnbindChapterAnchor(chapterID, anchorID uint) error {
+	if s.chapterSceneAnchorRepo == nil {
+		return fmt.Errorf("chapter scene anchor repository not configured")
+	}
+	return s.chapterSceneAnchorRepo.Delete(chapterID, anchorID)
 }
 
 // CreateSceneAnchorReq 创建请求
@@ -175,61 +228,55 @@ type extractedAnchor struct {
 	ParentName  string `json:"parent_name"`  // 父级锚点名称（变体时填写，用于解析 ParentAnchorID）
 }
 
-// parseAnchorJSONResult parses the LLM response into []extractedAnchor.
-// Handles both bare arrays and wrapped objects like {"scene_anchors":[...]}.
-func parseAnchorJSONResult(raw string) ([]extractedAnchor, error) {
-	cleaned := extractJSON(strings.TrimSpace(raw))
-	var result []extractedAnchor
-	if err := json.Unmarshal([]byte(cleaned), &result); err == nil {
-		return result, nil
-	}
-	// Try wrapped object: {"scene_anchors":[...]} or {"data":[...]} etc.
-	var wrapper map[string]json.RawMessage
-	if json.Unmarshal([]byte(cleaned), &wrapper) == nil {
-		for _, v := range wrapper {
-			if json.Unmarshal(v, &result) == nil {
-				return result, nil
-			}
-		}
-	}
-	return nil, fmt.Errorf("cannot parse as anchor array: %.200s", raw)
+// extractAnchorResponse 是新版 LLM 返回格式
+type extractAnchorResponse struct {
+	NewAnchors       []extractedAnchor `json:"new_anchors"`
+	AppearingAnchors []string          `json:"appearing_anchors"`
 }
 
-// parseAnchorJSONResultWithFallback attempts full parse first; on failure tries
-// streaming partial decode so that a truncated or partially invalid JSON array
-// still yields whatever valid entries were produced before the error.
-func parseAnchorJSONResultWithFallback(raw string) ([]extractedAnchor, error) {
-	// 1. Full parse (including wrapped-object variants)
-	if result, err := parseAnchorJSONResult(raw); err == nil {
-		return result, nil
-	}
-	// 2. Partial recovery via streaming decoder
+// parseExtractAnchorResponse 解析 LLM 返回。
+// 新格式：{"new_anchors":[...],"appearing_anchors":[...]}
+// 旧格式（向后兼容）：bare array [...]
+func parseExtractAnchorResponse(raw string) (extractAnchorResponse, error) {
 	cleaned := extractJSON(strings.TrimSpace(raw))
-	dec := json.NewDecoder(strings.NewReader(cleaned))
-	// Consume the opening '[' token
-	if _, err := dec.Token(); err != nil {
-		return nil, fmt.Errorf("anchor JSON fully unparseable: %v", err)
+
+	// 1. 尝试新对象格式
+	var resp extractAnchorResponse
+	if err := json.Unmarshal([]byte(cleaned), &resp); err == nil && (len(resp.NewAnchors) > 0 || len(resp.AppearingAnchors) > 0) {
+		return resp, nil
 	}
-	var partial []extractedAnchor
-	for dec.More() {
-		var item extractedAnchor
-		if err := dec.Decode(&item); err == nil && item.Name != "" {
-			partial = append(partial, item)
+
+	// 2. 向后兼容：bare array
+	var arr []extractedAnchor
+	if err := json.Unmarshal([]byte(cleaned), &arr); err == nil {
+		return extractAnchorResponse{NewAnchors: arr}, nil
+	}
+
+	// 3. 部分恢复：streaming decoder on array
+	dec := json.NewDecoder(strings.NewReader(cleaned))
+	if _, err := dec.Token(); err == nil {
+		var partial []extractedAnchor
+		for dec.More() {
+			var item extractedAnchor
+			if err := dec.Decode(&item); err == nil && item.Name != "" {
+				partial = append(partial, item)
+			}
+		}
+		if len(partial) > 0 {
+			logger.Printf("[SceneAnchor] partial JSON recovery: got %d anchors", len(partial))
+			return extractAnchorResponse{NewAnchors: partial}, nil
 		}
 	}
-	if len(partial) > 0 {
-		logger.Printf("[SceneAnchor] partial JSON recovery: got %d anchors", len(partial))
-		return partial, nil
-	}
-	return nil, fmt.Errorf("anchor JSON fully unparseable")
+
+	return extractAnchorResponse{}, fmt.Errorf("anchor JSON fully unparseable: %.200s", raw)
 }
 
 // ExtractFromChapter 调用 LLM 提取章节中的场景锚点，去重后批量创建
-func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, novelID uint, novelTitle, chapterContent string) ([]*model.SceneAnchor, error) {
+func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, novelID uint, novelTitle, chapterContent string, chapterID ...uint) ([]*model.SceneAnchor, error) {
 	logger.Printf("[SceneAnchorService] ExtractFromChapter: novelID=%d contentLen=%d", novelID, len(chapterContent))
 	_ = ctx // 未来可传 context 给 AI provider
 
-	// 获取已存在锚点（去重用）
+	// 获取已存在锚点（去重用 + appearing 绑定用）
 	existing, err := s.repo.ListByNovel(novelID)
 	if err != nil {
 		return nil, fmt.Errorf("list existing anchors: %w", err)
@@ -241,9 +288,11 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 	}
 	existingEntries := make([]existingEntry, 0, len(existing))
 	existingNames := make(map[string]bool, len(existing))
+	existingNameToID := make(map[string]uint, len(existing)) // 规范化名→ID，用于绑定
 	for _, a := range existing {
 		existingEntries = append(existingEntries, existingEntry{Name: a.Name, Description: a.Description})
 		existingNames[a.Name] = true
+		existingNameToID[strings.ToLower(a.Name)] = a.ID
 	}
 
 	// 获取提示词语言配置
@@ -271,8 +320,8 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 		return nil, fmt.Errorf("LLM extract anchors: %w", err)
 	}
 
-	// 解析 JSON（支持部分恢复）
-	extracted, err := parseAnchorJSONResultWithFallback(jsonStr)
+	// 解析 JSON（新格式：{new_anchors,appearing_anchors}；兼容旧裸数组格式）
+	parsed, err := parseExtractAnchorResponse(jsonStr)
 	if err != nil {
 		logger.Errorf("[SceneAnchorService] ExtractFromChapter: JSON parse failed: %v, jsonStr=%q", err, jsonStr)
 		return nil, fmt.Errorf("parse LLM response: %w", err)
@@ -284,23 +333,14 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 		normalizedNames[normalizeAnchorName(name)] = true
 	}
 
-	// 批量创建（改进去重：精确匹配 + 规范化匹配 + 子串包含匹配）
-	created := make([]*model.SceneAnchor, 0, len(extracted))
-	for _, e := range extracted {
+	// 批量创建新锚点（改进去重：精确匹配 + 规范化匹配 + 子串包含匹配）
+	created := make([]*model.SceneAnchor, 0, len(parsed.NewAnchors))
+	for _, e := range parsed.NewAnchors {
 		if e.Name == "" {
 			continue
 		}
 		normName := normalizeAnchorName(e.Name)
-		// 精确匹配
-		if existingNames[e.Name] {
-			continue
-		}
-		// 规范化匹配（大小写/空格变体）
-		if normalizedNames[normName] {
-			continue
-		}
-		// 子串包含匹配（防止"皇宫"和"皇宫正殿"重复注册）
-		if anchorNameOverlaps(normName, normalizedNames) {
+		if existingNames[e.Name] || normalizedNames[normName] || anchorNameOverlaps(normName, normalizedNames) {
 			continue
 		}
 		anchorType := e.Type
@@ -315,7 +355,6 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 			Description: e.Description,
 			Variant:     e.Variant,
 		}
-		// 解析父级锚点 ID（变体场景）
 		if e.ParentName != "" {
 			for _, a := range existing {
 				if a.Name == e.ParentName || normalizeAnchorName(a.Name) == normalizeAnchorName(e.ParentName) {
@@ -332,9 +371,55 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 		created = append(created, anchor)
 		existingNames[e.Name] = true
 		normalizedNames[normName] = true
+		existingNameToID[strings.ToLower(e.Name)] = anchor.ID
 	}
 
-	logger.Printf("[SceneAnchorService] ExtractFromChapter done: novelID=%d created=%d", novelID, len(created))
+	logger.Printf("[SceneAnchorService] ExtractFromChapter done: novelID=%d created=%d appearing=%d",
+		novelID, len(created), len(parsed.AppearingAnchors))
+
+	// 若传入 chapterID，绑定新建锚点 + appearing 已有锚点到该章节
+	if len(chapterID) > 0 && chapterID[0] > 0 && s.chapterSceneAnchorRepo != nil {
+		chapID := chapterID[0]
+		// 绑定新建锚点
+		for _, a := range created {
+			if err := s.chapterSceneAnchorRepo.Upsert(&model.ChapterSceneAnchor{
+				ChapterID: chapID, NovelID: novelID, SceneAnchorID: a.ID,
+			}); err != nil {
+				logger.Errorf("[SceneAnchorService] bind created anchor %d to chapter %d: %v", a.ID, chapID, err)
+			}
+		}
+		// 绑定 appearing 已有锚点（语义名称匹配）
+		for _, name := range parsed.AppearingAnchors {
+			anchorID, ok := existingNameToID[strings.ToLower(name)]
+			if !ok {
+				// 二次模糊查找：规范化匹配
+				normName := normalizeAnchorName(name)
+				for existingNorm, aid := range func() map[string]uint {
+					m := make(map[string]uint, len(existing))
+					for _, a := range existing {
+						m[normalizeAnchorName(a.Name)] = a.ID
+					}
+					return m
+				}() {
+					if existingNorm == normName {
+						anchorID = aid
+						ok = true
+						break
+					}
+				}
+			}
+			if !ok {
+				logger.Printf("[SceneAnchorService] appearing anchor %q not found in novel %d, skipping", name, novelID)
+				continue
+			}
+			if err := s.chapterSceneAnchorRepo.Upsert(&model.ChapterSceneAnchor{
+				ChapterID: chapID, NovelID: novelID, SceneAnchorID: anchorID,
+			}); err != nil {
+				logger.Errorf("[SceneAnchorService] bind appearing anchor %d to chapter %d: %v", anchorID, chapID, err)
+			}
+		}
+	}
+
 	return created, nil
 }
 

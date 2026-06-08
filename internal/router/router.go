@@ -320,11 +320,12 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				novels.POST("/:id/skills/ai-generate", cfg.SkillHandler.GenerateSkills)
 			}
 
-			// 章节级角色（有效列表 + 覆盖 + AI提取次要角色）
+			// 章节级角色（有效列表 + 覆盖 + AI提取次要角色 + 形象生成）
 			novels.GET("/:id/chapters/:chapter_no/characters", cfg.CharacterHandler.ListEffectiveCharacters)
 			novels.POST("/:id/chapters/:chapter_no/characters/:character_id", cfg.CharacterHandler.UpsertChapterCharacter)
 			novels.DELETE("/:id/chapters/:chapter_no/characters/:character_id", cfg.CharacterHandler.DeleteChapterCharacter)
 			novels.POST("/:id/chapters/:chapter_no/characters/ai-extract", cfg.CharacterHandler.AIExtractMinorCharacters)
+			novels.POST("/:id/chapters/:chapter_no/characters/generate-images", cfg.CharacterHandler.GenerateChapterCharacterImages)
 
 			// 剧情点（小说级）
 			if cfg.PlotPointHandler != nil {
@@ -367,6 +368,9 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				novels.POST("/:id/scene-anchors/ai-extract", cfg.SceneAnchorHandler.AIExtractFromNovel)
 				novels.POST("/:id/scene-anchors/batch-ref-images", cfg.SceneAnchorHandler.BatchGenerateRefImages)
 				novels.POST("/:id/chapters/:chapter_no/scene-anchors/ai-extract", cfg.SceneAnchorHandler.AIExtractChapterAnchors)
+				novels.GET("/:id/chapters/:chapter_no/scene-anchors", cfg.SceneAnchorHandler.ListChapterAnchors)
+				novels.PUT("/:id/chapters/:chapter_no/scene-anchors/:anchor_id", cfg.SceneAnchorHandler.BindChapterAnchor)
+				novels.DELETE("/:id/chapters/:chapter_no/scene-anchors/:anchor_id", cfg.SceneAnchorHandler.UnbindChapterAnchor)
 			}
 
 			// 大纲审查（小说级别）

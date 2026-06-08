@@ -3,9 +3,11 @@ package handler
 import (
 	"context"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
@@ -879,8 +881,11 @@ func (h *CharacterHandler) UpsertChapterCharacter(c *gin.Context) {
 		return
 	}
 	var req model.UpsertChapterCharacterRequest
-	if !bindJSON(c, &req) {
-		return
+	if err := c.ShouldBindJSON(&req); err != nil {
+		if e := err.Error(); e != "EOF" && !strings.HasPrefix(e, "unexpected end") {
+			respondBadRequest(c, "invalid request: "+e)
+			return
+		}
 	}
 	cc, err := h.characterService.UpsertChapterCharacter(uint(novelID), chapter.ID, uint(characterID), &req)
 	if err != nil {
@@ -938,7 +943,7 @@ func (h *CharacterHandler) AIExtractMinorCharacters(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to extract minor characters: "+err.Error())
 		return
 	}
-	respondOK(c, gin.H{"characters": chars, "count": len(chars)})
+	respondOK(c, gin.H{"characters": chars, "new_count": len(chars)})
 }
 
 // ReanalyzeCharacter POST /api/v1/characters/:id/reanalyze
@@ -1369,4 +1374,68 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 		return
 	}
 	respondOK(c, look)
+}
+
+// GenerateChapterCharacterImages POST /api/v1/novels/:id/chapters/:chapter_no/characters/generate-images
+// 根据章节内容为选定角色生成形象图（三视图），先用 AI 生成章节外形补充说明再合并生成。
+// 异步任务，立即返回 task_id。
+func (h *CharacterHandler) GenerateChapterCharacterImages(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+
+	var req struct {
+		CharacterIDs []uint `json:"character_ids"`
+		Provider     string `json:"provider,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	if len(req.CharacterIDs) == 0 {
+		respondBadRequest(c, "character_ids is required")
+		return
+	}
+
+	chapter, err := h.chapterSvc.GetChapterByNo(uint(novelID), chapterNo)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeThreeView, "章节角色形象生成", "chapter", chapter.ID)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+
+	go func(taskID string) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		ctx := context.Background()
+		succeeded, failed, genErr := h.characterService.GenerateChapterImages(
+			ctx, tenantID, uint(novelID), chapter, req.CharacterIDs, req.Provider,
+			func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) }, //nolint:errcheck
+		)
+		if genErr != nil {
+			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
+			return
+		}
+		if failed > 0 && succeeded == 0 {
+			h.taskSvc.Fail(taskID, fmt.Sprintf("all %d character image generations failed", failed)) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, map[string]interface{}{ //nolint:errcheck
+			"succeeded": succeeded,
+			"failed":    failed,
+		})
+	}(task.TaskID)
+
+	respondAccepted(c, task.TaskID, "角色形象生成任务已提交")
 }
