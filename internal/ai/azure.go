@@ -58,7 +58,7 @@ func NewAzureProvider(apiKey, endpoint, defaultDeployment, apiVersion string, ti
 		defaultDeployment: defaultDeployment,
 		apiVersion:        apiVersion,
 		client:            &http.Client{Timeout: timeout},
-		maxTokensCap:      32768,
+		// maxTokensCap defaults to 0 (no cap); model management MaxTokens is the authoritative limit
 	}
 }
 

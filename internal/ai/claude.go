@@ -421,16 +421,17 @@ func (p *GoogleProvider) Generate(ctx context.Context, req *GenerateRequest) (*G
 	}
 
 	generationConfig := map[string]interface{}{
-		"temperature":  req.Temperature,
-		"maxOutputTokens": req.MaxTokens,
+		"temperature": req.Temperature,
 	}
-
+	if req.MaxTokens > 0 {
+		generationConfig["maxOutputTokens"] = req.MaxTokens
+	}
 	if req.TopP > 0 {
 		generationConfig["topP"] = req.TopP
 	}
 
 	googleReq := map[string]interface{}{
-		"contents":          contents,
+		"contents":         contents,
 		"generationConfig": generationConfig,
 	}
 
@@ -515,8 +516,10 @@ func (p *GoogleProvider) GenerateStream(ctx context.Context, req *GenerateReques
 		}
 
 		generationConfig := map[string]interface{}{
-			"temperature":     req.Temperature,
-			"maxOutputTokens": req.MaxTokens,
+			"temperature": req.Temperature,
+		}
+		if req.MaxTokens > 0 {
+			generationConfig["maxOutputTokens"] = req.MaxTokens
 		}
 		if req.TopP > 0 {
 			generationConfig["topP"] = req.TopP
