@@ -813,6 +813,7 @@ func (s *VideoService) buildStoryboardPrompt(
 		"ExpectedShotsMinus2": expectedShotsMinus2,
 		"VoiceMode":           voiceMode,
 		"Pacing":              pacing,
+		"AutoDuration":        video.TargetDuration == 0,
 		"PrevShots":           prevShotsData,
 		"Characters":          matchedChars,
 		"Anchors":             matchedAnchors,
