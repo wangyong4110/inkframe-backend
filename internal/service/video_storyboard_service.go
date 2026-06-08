@@ -622,13 +622,13 @@ func calcTotalShots(totalRunes, targetDuration int, pacing string) int {
 		}
 		return n
 	}
-	// 降级：字数估算
-	n := totalRunes / 280
+	// 自动模式：情节完整覆盖优先，用更密集的分镜密度（约 80 字一个镜头），不设严格上限
+	n := totalRunes / 80
 	if n < 5 {
 		n = 5
 	}
-	if n > 60 {
-		n = 60
+	if n > 200 {
+		n = 200
 	}
 	return n
 }
