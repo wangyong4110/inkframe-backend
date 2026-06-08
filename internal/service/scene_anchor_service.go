@@ -273,12 +273,14 @@ func parseExtractAnchorResponse(raw string) (extractAnchorResponse, error) {
 
 // ExtractFromChapter 调用 LLM 提取章节中的场景锚点，去重后批量创建
 func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, novelID uint, novelTitle, chapterContent string, chapterID ...uint) ([]*model.SceneAnchor, error) {
-	logger.Printf("[SceneAnchorService] ExtractFromChapter: novelID=%d contentLen=%d", novelID, len(chapterContent))
+	logger.Printf("[SceneAnchorService] ExtractFromChapter: tenantID=%d novelID=%d chapterID=%v contentLen=%d",
+		tenantID, novelID, chapterID, len(chapterContent))
 	_ = ctx // 未来可传 context 给 AI provider
 
 	// 获取已存在锚点（去重用 + appearing 绑定用）
 	existing, err := s.repo.ListByNovel(novelID)
 	if err != nil {
+		logger.Errorf("[SceneAnchorService] ExtractFromChapter: list existing anchors failed: %v", err)
 		return nil, fmt.Errorf("list existing anchors: %w", err)
 	}
 
@@ -289,11 +291,15 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 	existingEntries := make([]existingEntry, 0, len(existing))
 	existingNames := make(map[string]bool, len(existing))
 	existingNameToID := make(map[string]uint, len(existing)) // 规范化名→ID，用于绑定
+	existingNameList := make([]string, 0, len(existing))
 	for _, a := range existing {
 		existingEntries = append(existingEntries, existingEntry{Name: a.Name, Description: a.Description})
 		existingNames[a.Name] = true
 		existingNameToID[strings.ToLower(a.Name)] = a.ID
+		existingNameList = append(existingNameList, a.Name)
 	}
+	logger.Printf("[SceneAnchorService] ExtractFromChapter: novelID=%d existingAnchors=%d names=%v",
+		novelID, len(existing), existingNameList)
 
 	// 获取提示词语言配置
 	promptLanguage := "zh"
@@ -311,14 +317,17 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 		"PromptLanguage":  promptLanguage,
 	})
 	if err != nil {
+		logger.Errorf("[SceneAnchorService] ExtractFromChapter: render prompt failed: %v", err)
 		return nil, fmt.Errorf("render scene_anchor_extract: %w", err)
 	}
 
 	// 调用 LLM（带租户 ID，确保使用正确的 provider）
 	jsonStr, err := s.aiSvc.generateJSONForTenant(tenantID, novelID, "scene_anchor_extract", anchorPrompt, 2)
 	if err != nil {
+		logger.Errorf("[SceneAnchorService] ExtractFromChapter: LLM call failed: %v", err)
 		return nil, fmt.Errorf("LLM extract anchors: %w", err)
 	}
+	logger.Printf("[SceneAnchorService] ExtractFromChapter: AI response len=%d raw=%.400s", len(jsonStr), jsonStr)
 
 	// 解析 JSON（新格式：{new_anchors,appearing_anchors}；兼容旧裸数组格式）
 	parsed, err := parseExtractAnchorResponse(jsonStr)
@@ -326,6 +335,8 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 		logger.Errorf("[SceneAnchorService] ExtractFromChapter: JSON parse failed: %v, jsonStr=%q", err, jsonStr)
 		return nil, fmt.Errorf("parse LLM response: %w", err)
 	}
+	logger.Printf("[SceneAnchorService] ExtractFromChapter: parsed new_anchors=%d appearing_anchors=%v",
+		len(parsed.NewAnchors), parsed.AppearingAnchors)
 
 	// 构建规范化名称集合（用于语义去重：忽略大小写 + 空格）
 	normalizedNames := make(map[string]bool, len(existing))
@@ -341,6 +352,7 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 		}
 		normName := normalizeAnchorName(e.Name)
 		if existingNames[e.Name] || normalizedNames[normName] || anchorNameOverlaps(normName, normalizedNames) {
+			logger.Printf("[SceneAnchorService] ExtractFromChapter: skip duplicate anchor %q", e.Name)
 			continue
 		}
 		anchorType := e.Type
@@ -365,9 +377,10 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 			}
 		}
 		if err := s.repo.Create(anchor); err != nil {
-			logger.Errorf("[SceneAnchorService] create anchor %q: %v", e.Name, err)
+			logger.Errorf("[SceneAnchorService] ExtractFromChapter: create anchor %q: %v", e.Name, err)
 			continue
 		}
+		logger.Printf("[SceneAnchorService] ExtractFromChapter: created anchor %q id=%d type=%s", anchor.Name, anchor.ID, anchor.Type)
 		created = append(created, anchor)
 		existingNames[e.Name] = true
 		normalizedNames[normName] = true
