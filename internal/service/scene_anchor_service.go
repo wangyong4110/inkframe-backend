@@ -238,7 +238,7 @@ type extractAnchorResponse struct {
 // 新格式：{"new_anchors":[...],"appearing_anchors":[...]}
 // 旧格式（向后兼容）：bare array [...]
 func parseExtractAnchorResponse(raw string) (extractAnchorResponse, error) {
-	cleaned := extractJSON(strings.TrimSpace(raw))
+	cleaned := extractJSONObject(strings.TrimSpace(raw))
 
 	// 1. 尝试新对象格式
 	var resp extractAnchorResponse

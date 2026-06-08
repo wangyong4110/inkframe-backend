@@ -1242,8 +1242,10 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 	logger.Printf("[CharacterService] AIExtractMinorChars: AI response len=%d raw=%.300s", len(result), result)
 
 	// 解析新格式 {"new_characters": [...], "appearing_characters": [...]}
+	// 注意：必须用 extractJSONObject 而非 extractJSON，后者会把内嵌的第一个 [ 提取出来，
+	// 导致 appearing_characters 字段丢失（new_characters 为空数组时尤其明显）。
 	var aiResp extractMinorCharsResponse
-	cleaned := extractJSON(strings.TrimSpace(result))
+	cleaned := extractJSONObject(strings.TrimSpace(result))
 	if err := json.Unmarshal([]byte(cleaned), &aiResp); err != nil {
 		// 兼容旧格式：直接是数组
 		var chars []analysisCharJSON
