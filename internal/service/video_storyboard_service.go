@@ -608,22 +608,28 @@ func charRuneOverlap(a, b string) float64 {
 }
 
 // calcTotalShots 按目标时长+节奏计算全章期望分镜总数。
-// targetDuration=0 时降级为字数密度估算（向后兼容）。
+// targetDuration=0 时按字数密度+节奏估算（自动模式）。
 func calcTotalShots(totalRunes, targetDuration int, pacing string) int {
+	// 各节奏对应平均单镜时长（秒）
+	avgSec := map[string]int{"slow": 8, "normal": 5, "fast": 3}
+	s, ok := avgSec[pacing]
+	if !ok {
+		s = 5
+	}
+
 	if targetDuration > 0 {
-		avg := map[string]int{"slow": 8, "normal": 5, "fast": 3}
-		s, ok := avg[pacing]
-		if !ok {
-			s = 5
-		}
 		n := targetDuration / s
 		if n < 3 {
 			n = 3
 		}
 		return n
 	}
-	// 自动模式：情节完整覆盖优先，用更密集的分镜密度（约 80 字一个镜头），不设严格上限
-	n := totalRunes / 80
+
+	// 自动模式：先估算视频时长，再折算分镜数。
+	// 汉字阅读速度约 300 字/分钟，视频精炼比约 0.4（10 分钟文章 → 4 分钟视频）。
+	// 视频时长（秒）= totalRunes / 300 * 60 * 0.4 = totalRunes / 12.5
+	estimatedSecs := totalRunes * 2 / 25 // ≈ totalRunes / 12.5
+	n := estimatedSecs / s
 	if n < 5 {
 		n = 5
 	}
