@@ -111,7 +111,7 @@ func (p *AnthropicProvider) Generate(ctx context.Context, req *GenerateRequest) 
 
 	maxTok := req.MaxTokens
 	if maxTok <= 0 {
-		maxTok = 4096 // Anthropic requires a positive integer; use a safe default
+		maxTok = 1024 // Anthropic requires a positive integer; production value comes from model management MaxTokens config
 	}
 	anthropicReq := map[string]interface{}{
 		"model": func() string {
@@ -222,7 +222,7 @@ func (p *AnthropicProvider) GenerateStream(ctx context.Context, req *GenerateReq
 
 		streamMaxTok := req.MaxTokens
 		if streamMaxTok <= 0 {
-			streamMaxTok = 4096
+			streamMaxTok = 1024 // Anthropic requires a positive integer; production value comes from model management MaxTokens config
 		}
 		anthropicReq := map[string]interface{}{
 			"model":       p.model,

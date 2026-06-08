@@ -609,13 +609,7 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 		return nil, fmt.Errorf("render chapter_review: %w", err)
 	}
 
-	// chapter_review JSON 可能包含大量 paragraph_feedback，8192 token 保证不被截断
-	reviewMaxTokens := 8192
-	if novel.MaxTokens > reviewMaxTokens {
-		reviewMaxTokens = novel.MaxTokens
-	}
-	raw, err := s.aiSvc.GenerateWithProvider(novel.TenantID, novel.ID, "chapter_review", prompt, provider,
-		StoryboardOverrides{MaxTokens: reviewMaxTokens})
+	raw, err := s.aiSvc.GenerateWithProvider(novel.TenantID, novel.ID, "chapter_review", prompt, provider)
 	if err != nil {
 		return nil, fmt.Errorf("AI chapter review failed: %w", err)
 	}

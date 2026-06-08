@@ -174,19 +174,28 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		logger.Printf("[Storyboard] arc plan generated (%d chars)", len(arcPlan))
 	}
 
-	// 分段生成：长章节按 maxSegmentRunes 字切割，每段独立调用 AI，合并后顺序重编号。
-	// 短章节（≤maxSegmentRunes 字）等同于原单段调用路径，行为完全一致。
-	segments := splitContentSegments(content, maxSegmentRunes)
-
 	totalRunes := len([]rune(content))
 	totalShots := calcTotalShots(totalRunes, video.TargetDuration, video.Pacing)
+
+	// 动态分段：确保每段期望镜头数 ≤ maxShotsPerAICall，防止超出 AI 模型输出 token 上限。
+	// 大多数模型输出上限 8192-16384 tokens；每个镜头约 700 tokens；12 镜 × 700 = 8400 tokens。
+	const maxShotsPerAICall = 12
+	dynSegRunes := maxSegmentRunes
+	if totalShots > maxShotsPerAICall && totalRunes > 0 {
+		// 使每段镜头数 ≤ maxShotsPerAICall：segRunes = totalRunes * maxShotsPerAICall / totalShots
+		dynSegRunes = totalRunes * maxShotsPerAICall / totalShots
+		if dynSegRunes < 500 {
+			dynSegRunes = 500 // 最小 500 字保证 AI 上下文充足
+		}
+	}
+	segments := splitContentSegments(content, dynSegRunes)
 
 	chIDStr := "nil"
 	if chapterID != nil {
 		chIDStr = fmt.Sprintf("%d", *chapterID)
 	}
-	logger.Printf("[Storyboard] start videoID=%d chapterID=%s provider=%q voiceMode=%q totalRunes=%d segments=%d expectedShots=%d chars=%d anchors=%d plotPoints=%d",
-		videoID, chIDStr, provider, overrides.VoiceMode, totalRunes, len(segments), totalShots, len(characters), len(anchors), len(plotPoints))
+	logger.Printf("[Storyboard] start videoID=%d chapterID=%s provider=%q voiceMode=%q totalRunes=%d totalShots=%d dynSegRunes=%d segments=%d chars=%d anchors=%d plotPoints=%d",
+		videoID, chIDStr, provider, overrides.VoiceMode, totalRunes, totalShots, dynSegRunes, len(segments), len(characters), len(anchors), len(plotPoints))
 
 	// 并行处理各段落：段间内容本身保证情节连贯（AI 读段落文本即可自然衔接），
 	// 不再传递 prevTailShots，换取所有段同时发起 AI 调用。
@@ -256,9 +265,9 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 					logger.Errorf("[Storyboard] seg %d/%d attempt=%d parse failed: %v", idx+1, len(segments), attempt, parseErr)
 					continue
 				}
-				// Retry if AI returned far fewer shots than requested (< 50% of target).
-				if len(parsed) < segShotCount/2 && attempt < 2 {
-					logger.Printf("[Storyboard] seg %d/%d attempt=%d too few shots got=%d expected=%d, retrying", idx+1, len(segments), attempt, len(parsed), segShotCount)
+				// Retry if AI returned fewer than 70% of requested shots.
+				if len(parsed) < segShotCount*7/10 && attempt < 2 {
+					logger.Printf("[Storyboard] seg %d/%d attempt=%d too few shots got=%d expected=%d (threshold 70%%), retrying", idx+1, len(segments), attempt, len(parsed), segShotCount)
 					shots = parsed // keep as fallback
 					continue
 				}
@@ -801,9 +810,10 @@ func (s *VideoService) buildStoryboardPrompt(
 		})
 	}
 
-	// 截断内容（byte-level，保持与原行为一致）
-	if len(content) > 10000 {
-		content = content[:10000] + "…（已截断）"
+	// 截断内容（rune 级别，避免 byte-level slice 截断 UTF-8 汉字）
+	// 3500 rune × 3 bytes = 10500 bytes；原 [:10000] 会漏掉末尾约 167 字
+	if cr := []rune(content); len(cr) > 3200 {
+		content = string(cr[:3200]) + "…（已截断）"
 	}
 
 	expectedShotsMinus2 := expectedShots - 2
@@ -2085,8 +2095,7 @@ func (s *VideoService) generateStoryboardArc(content string, tenantID, novelID u
 		logger.Errorf("[Storyboard] generateStoryboardArc renderPrompt: %v", err)
 		return ""
 	}
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "storyboard_arc", prompt, provider,
-		StoryboardOverrides{MaxTokens: 1024})
+	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "storyboard_arc", prompt, provider)
 	if err != nil {
 		logger.Errorf("[Storyboard] generateStoryboardArc AI call failed: %v", err)
 		return ""

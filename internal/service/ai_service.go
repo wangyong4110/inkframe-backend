@@ -611,6 +611,21 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 		}
 	}
 
+	// 任务类型兜底 MaxTokens：仅在配置链全部为 0 时生效，不覆盖任何已配置值。
+	// 生产环境请在「模型管理 → 编辑提供商 / 模型 → 最大 Tokens」处配置（优先级高于此处）。
+	if config.MaxTokens == 0 {
+		switch taskType {
+		case "storyboard":
+			config.MaxTokens = 16384 // 每段 ~12 镜 × 700 tokens = 8400 tokens
+		case "outline":
+			config.MaxTokens = 16384 // 100 章大纲 JSON 约 20K+ 字符
+		case "chapter_review", "storyboard_review":
+			config.MaxTokens = 8192 // 段落级反馈 JSON，单章不超过 8K tokens
+		case "storyboard_arc":
+			config.MaxTokens = 2048 // 短弧线骨架 JSON
+		}
+	}
+
 	// 注入 system prompt：章节写作类阻止元注释；JSON 输出类抑制推理模型的思考过程
 	sysPmt := ""
 	if chapterTaskTypes[taskType] {
@@ -683,12 +698,6 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 		}
 	}
 
-	// 大纲生成需要较多输出 token（100 章大纲 ≈ 20K+ 字符），
-	// 若用户或项目配置的 maxTokens 低于 16384，自动提升到 16384，避免 JSON 截断。
-	if taskType == "outline" && config.MaxTokens > 0 && config.MaxTokens < 16384 {
-		config.MaxTokens = 16384
-	}
-
 	// Task#6: 显式绑定的 provider 优先于自动选择
 	if providerName == "" && config.PrimaryProviderID > 0 && s.providerRepo != nil {
 		if p, err := s.providerRepo.GetByID(config.PrimaryProviderID); err == nil && p != nil {
@@ -743,6 +752,20 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 					break
 				}
 			}
+		}
+	}
+
+	// 任务类型兜底 MaxTokens（同 GenerateWithProvider，仅在配置链全为 0 时生效）。
+	if config.MaxTokens == 0 {
+		switch taskType {
+		case "storyboard":
+			config.MaxTokens = 16384
+		case "outline":
+			config.MaxTokens = 16384
+		case "chapter_review", "storyboard_review":
+			config.MaxTokens = 8192
+		case "storyboard_arc":
+			config.MaxTokens = 2048
 		}
 	}
 
