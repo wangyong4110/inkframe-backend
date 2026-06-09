@@ -432,16 +432,29 @@ func (p *VolcengineVisualProvider) doRequest(ctx context.Context, action string,
 	return respBody, nil
 }
 
-// parseSizeWH 将 "1024x1024" 转换为宽高，默认 1328x1328
+// parseSizeWH 将尺寸字符串转换为宽高，默认 1328x1328。
+// 支持两种格式：
+//   - "1024x1024" — 直接宽高像素
+//   - "16:9" / "9:16" / "4:3" / "1:1" 等宽高比 — 以 1328px 为长边换算
 func parseSizeWH(size string) (int, int) {
+	const base = 1328
 	if size == "" {
-		return 1328, 1328
+		return base, base
 	}
+	// WxH 格式
 	var w, h int
 	if _, err := fmt.Sscanf(size, "%dx%d", &w, &h); err == nil && w > 0 && h > 0 {
 		return w, h
 	}
-	return 1328, 1328
+	// W:H 比例格式
+	var rw, rh int
+	if _, err := fmt.Sscanf(size, "%d:%d", &rw, &rh); err == nil && rw > 0 && rh > 0 {
+		if rw >= rh {
+			return base, base * rh / rw
+		}
+		return base * rw / rh, base
+	}
+	return base, base
 }
 
 // volcSHA256Hex 计算 SHA256 十六进制摘要

@@ -564,7 +564,11 @@ func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID
 		novel.ID, novel.ImageStyle, promptSource, len(prompt), prompt)
 
 	ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title})
-	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", prompt, existingCover, novel.ImageStyle, negativePrompt, "")
+	sizeOverride := ""
+	if novel.VideoConfig != nil && novel.VideoConfig.VideoAspectRatio != "" {
+		sizeOverride = novel.VideoConfig.VideoAspectRatio // e.g. "16:9", "9:16", "1:1"
+	}
+	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", prompt, existingCover, novel.ImageStyle, negativePrompt, sizeOverride)
 	if err != nil {
 		return "", fmt.Errorf("generate cover image: %w", err)
 	}
