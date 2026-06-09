@@ -71,6 +71,13 @@ func (r *CharacterRepository) Update(character *model.Character) error {
 	return r.db.Save(character).Error
 }
 
+// UpdateDefaultLookID 仅更新 default_look_id 字段。
+func (r *CharacterRepository) UpdateDefaultLookID(characterID, lookID uint) error {
+	return r.db.Model(&model.Character{}).
+		Where("id = ?", characterID).
+		Update("default_look_id", lookID).Error
+}
+
 // UpdateTenantID 仅更新 tenant_id（用于自愈历史 tenant_id=0 的记录）
 func (r *CharacterRepository) UpdateTenantID(id, tenantID uint) error {
 	return r.db.Model(&model.Character{}).
@@ -207,24 +214,32 @@ func (r *CharacterLookRepository) DeleteByCharacter(characterID uint) error {
 	return r.db.Where("character_id = ?", characterID).Delete(&model.CharacterLook{}).Error
 }
 
-// GetActiveLook 返回指定章节号下角色的激活形象。
+// BatchGetLooksByIDs 批量按 look ID 查询，返回 lookID → look 映射。
+func (r *CharacterLookRepository) BatchGetLooksByIDs(lookIDs []uint) (map[uint]*model.CharacterLook, error) {
+	if len(lookIDs) == 0 {
+		return nil, nil
+	}
+	var looks []*model.CharacterLook
+	if err := r.db.Where("id IN ?", lookIDs).Find(&looks).Error; err != nil {
+		return nil, err
+	}
+	result := make(map[uint]*model.CharacterLook, len(looks))
+	for _, l := range looks {
+		result[l.ID] = l
+	}
+	return result, nil
+}
+
+// GetActiveLook 返回指定章节号下角色的激活形象（仅章节范围匹配，无兜底）。
 // 选取规则：chapter_from <= chapterNo AND (chapter_to=0 OR chapter_to >= chapterNo)，取 chapter_from 最大者。
-// 无匹配时返回 is_default=true 的兜底形象；仍无则返回 nil。
 func (r *CharacterLookRepository) GetActiveLook(characterID uint, chapterNo int) (*model.CharacterLook, error) {
 	var look model.CharacterLook
-	// First try range match
 	err := r.db.Where("character_id = ? AND chapter_from <= ? AND (chapter_to = 0 OR chapter_to >= ?)",
 		characterID, chapterNo, chapterNo).
 		Order("chapter_from DESC").
 		First(&look).Error
 	if err == nil {
 		return &look, nil
-	}
-	// Fallback: default look
-	var def model.CharacterLook
-	if err2 := r.db.Where("character_id = ? AND is_default = ?", characterID, true).
-		First(&def).Error; err2 == nil {
-		return &def, nil
 	}
 	return nil, nil //nolint:nilnil
 }

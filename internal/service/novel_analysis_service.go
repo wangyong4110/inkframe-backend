@@ -66,6 +66,7 @@ type NovelAnalysisService struct {
 	foreshadowSvc      *ForeshadowCRUDService
 	taskSvc            *TaskService
 	modelRepo          *repository.AIModelRepository // optional, for voice auto-suggestion
+	lookRepo           *repository.CharacterLookRepository // optional, auto-create default look
 	cleanupStop        chan struct{} // closed by Shutdown() to stop background goroutines
 }
 
@@ -101,6 +102,12 @@ func (s *NovelAnalysisService) Shutdown() {
 // WithTaskService 注入统一任务服务（可选，注入后任务状态持久化到 DB）
 func (s *NovelAnalysisService) WithTaskService(svc *TaskService) *NovelAnalysisService {
 	s.taskSvc = svc
+	return s
+}
+
+// WithLookRepo 注入形象仓库（可选，AI 分析角色后自动创建默认形象）
+func (s *NovelAnalysisService) WithLookRepo(r *repository.CharacterLookRepository) *NovelAnalysisService {
+	s.lookRepo = r
 	return s
 }
 
@@ -433,12 +440,12 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 				}
 			}
 		}
-		// 补跑角色信息丰富（Phase2 时无章节内容，Description/VisualPrompt 可能为空）
+		// 补跑角色信息丰富（Phase2 时无章节内容，Description 可能为空）
 		{
 			existingChars, _ := s.characterRepo.ListByNovel(novel.ID)
 			var emptyChars []*model.Character
 			for _, c := range existingChars {
-				if c.Description == "" || c.VisualPrompt == "" {
+				if c.Description == "" {
 					emptyChars = append(emptyChars, c)
 				}
 			}
@@ -475,7 +482,7 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 										if !ok {
 											continue
 										}
-										enriched := false
+										descEnriched := false
 										if ec.Description == "" {
 											// 优先新格式的统一 description，兼容旧格式分离字段
 											desc := c.Description
@@ -495,18 +502,36 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 											}
 											if desc != "" {
 												ec.Description = desc
-												enriched = true
+												descEnriched = true
 											}
 										}
-										if ec.VisualPrompt == "" && c.VisualPrompt != "" {
-											ec.VisualPrompt = c.VisualPrompt
-											enriched = true
-										}
-										if enriched {
+										if descEnriched {
 											if err := s.characterRepo.Update(ec); err != nil {
 												logger.Errorf("NovelAnalysis[%d]: Phase4.5 update char %q: %v", novel.ID, ec.Name, err)
 											} else {
 												logger.Printf("NovelAnalysis[%d]: Phase4.5 enriched char %q", novel.ID, ec.Name)
+											}
+										}
+										// 确保有默认形象，并同步 VisualPrompt
+										if s.lookRepo != nil {
+											if ec.DefaultLookID != 0 {
+												if c.VisualPrompt != "" {
+													if look, e := s.lookRepo.GetByID(ec.DefaultLookID); e == nil && look.VisualPrompt == "" {
+														look.VisualPrompt = c.VisualPrompt
+														s.lookRepo.Update(look) //nolint:errcheck
+													}
+												}
+											} else {
+												newLook := &model.CharacterLook{
+													CharacterID:  ec.ID,
+													NovelID:      ec.NovelID,
+													Label:        "默认形象",
+													ChapterFrom:  1,
+													VisualPrompt: c.VisualPrompt,
+												}
+												if s.lookRepo.Create(newLook) == nil { //nolint:errcheck
+													s.characterRepo.UpdateDefaultLookID(ec.ID, newLook.ID) //nolint:errcheck
+												}
 											}
 										}
 									}
@@ -833,7 +858,6 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 			Gender:        c.Gender,
 			Age:           c.Age,
 			Description:   finalDesc,
-			VisualPrompt:  c.VisualPrompt,
 			VoiceID:       suggestedVoice,
 			VoiceStyle:    suggestedStyle,
 			VoiceLanguage: suggestedLang,
@@ -842,6 +866,20 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 		if err := s.characterRepo.Create(char); err != nil {
 			logger.Errorf("NovelAnalysis: create character %q: %v", c.Name, err)
 			continue
+		}
+		if s.lookRepo != nil {
+			defaultLook := &model.CharacterLook{
+				CharacterID:  char.ID,
+				NovelID:      char.NovelID,
+				Label:        "默认形象",
+				ChapterFrom:  1,
+				VisualPrompt: c.VisualPrompt,
+			}
+			if err := s.lookRepo.Create(defaultLook); err != nil {
+				logger.Errorf("NovelAnalysis: create default look for %q: %v", char.Name, err)
+			} else {
+				_ = s.characterRepo.UpdateDefaultLookID(char.ID, defaultLook.ID)
+			}
 		}
 		existingNames[strings.ToLower(c.Name)] = true
 		createdChars = append(createdChars, char)
@@ -1109,25 +1147,51 @@ func (s *NovelAnalysisService) generateThreeViewsAsync(ctx context.Context, tena
 	}
 
 	for _, char := range sorted {
+		// 优先从默认形象获取 VisualPrompt，降级使用 Description
+		visualPrompt := ""
+		if s.lookRepo != nil && char.DefaultLookID != 0 {
+			if look, err := s.lookRepo.GetByID(char.DefaultLookID); err == nil {
+				visualPrompt = look.VisualPrompt
+			}
+		}
 		basePrompt := ""
-		if char.VisualPrompt != "" {
-			// 优先使用 AI 生成的英文视觉提示词（避免中文描述影响图像质量）
-			basePrompt = fmt.Sprintf("character named %s, %s, high quality illustration", char.Name, char.VisualPrompt)
+		if visualPrompt != "" {
+			basePrompt = fmt.Sprintf("character named %s, %s, high quality illustration", char.Name, visualPrompt)
 		} else if char.Description != "" {
 			basePrompt = fmt.Sprintf("character named %s, %s, high quality illustration", char.Name, char.Description)
 		} else {
 			basePrompt = fmt.Sprintf("character named %s, full body, high quality illustration", char.Name)
 		}
 
-		// 生成三视图合图（combined turnaround sheet）
+		// 生成三视图合图（combined turnaround sheet），结果存入默认形象
 		sheetPrompt := basePrompt + ", character turnaround sheet, front and side and back views side by side, three-view character design sheet, same character multiple angles"
 		url, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", sheetPrompt, "", imageStyle, "", "")
 		if err != nil {
 			logger.Errorf("NovelAnalysis: three-view sheet for char %d: %v", char.ID, err)
-		} else if url != "" {
-			char.ThreeViewSheet = url
-			if err := s.characterRepo.Update(char); err != nil {
-				logger.Errorf("NovelAnalysis: save three-view for char %d: %v", char.ID, err)
+			continue
+		}
+		if url == "" {
+			continue
+		}
+		if s.lookRepo != nil {
+			if char.DefaultLookID != 0 {
+				if look, e := s.lookRepo.GetByID(char.DefaultLookID); e == nil {
+					look.ThreeViewSheet = url
+					if err := s.lookRepo.Update(look); err != nil {
+						logger.Errorf("NovelAnalysis: save three-view to look for char %d: %v", char.ID, err)
+					}
+				}
+			} else {
+				newLook := &model.CharacterLook{
+					CharacterID:    char.ID,
+					NovelID:        char.NovelID,
+					Label:          "默认形象",
+					ChapterFrom:    1,
+					ThreeViewSheet: url,
+				}
+				if s.lookRepo.Create(newLook) == nil {
+					_ = s.characterRepo.UpdateDefaultLookID(char.ID, newLook.ID)
+				}
 			}
 		}
 	}

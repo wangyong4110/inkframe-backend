@@ -607,6 +607,34 @@ func (s *CharacterService) GetNovelImageStyle(novelID uint) string {
 	return ""
 }
 
+// InjectDefaultLooks 批量查询一组角色的默认形象，将三视图 URL 注入 DefaultThreeView 字段。
+func (s *CharacterService) InjectDefaultLooks(characters []*model.Character) {
+	if s.lookRepo == nil || len(characters) == 0 {
+		return
+	}
+	// Collect distinct DefaultLookIDs
+	lookIDs := make([]uint, 0, len(characters))
+	charByLookID := make(map[uint]*model.Character, len(characters))
+	for _, c := range characters {
+		if c.DefaultLookID != 0 {
+			lookIDs = append(lookIDs, c.DefaultLookID)
+			charByLookID[c.DefaultLookID] = c
+		}
+	}
+	if len(lookIDs) == 0 {
+		return
+	}
+	lookMap, err := s.lookRepo.BatchGetLooksByIDs(lookIDs)
+	if err != nil || lookMap == nil {
+		return
+	}
+	for lookID, look := range lookMap {
+		if c, ok := charByLookID[lookID]; ok && look.ThreeViewSheet != "" {
+			c.DefaultThreeView = look.ThreeViewSheet
+		}
+	}
+}
+
 // WithChapterCharacterRepo 注入章节角色覆盖仓库（可选）
 func (s *CharacterService) WithLookRepo(r *repository.CharacterLookRepository) *CharacterService {
 	s.lookRepo = r
@@ -706,15 +734,6 @@ func (s *CharacterService) UpdateCharacter(id, tenantID uint, req *model.UpdateC
 	}
 	if req.CurrentArcStage != "" {
 		character.CurrentArcStage = req.CurrentArcStage
-	}
-	if req.VisualPrompt != "" {
-		character.VisualPrompt = req.VisualPrompt
-	}
-	if req.ThreeViewSheet != "" {
-		character.ThreeViewSheet = req.ThreeViewSheet
-	}
-	if req.FaceCloseup != "" {
-		character.FaceCloseup = req.FaceCloseup
 	}
 	if req.Portrait != "" {
 		character.Portrait = req.Portrait
@@ -925,13 +944,12 @@ func (s *CharacterService) GenerateProfile(tenantID uint, novelID uint, descript
 		}, nil
 	}
 	return &model.Character{
-		UUID:         uuid.New().String(),
-		NovelID:      novelID,
-		Name:         profile.Name,
-		Role:         profile.Role,
-		Description:  profile.Description,
-		VisualPrompt: profile.VisualPrompt,
-		Status:       "active",
+		UUID:        uuid.New().String(),
+		NovelID:     novelID,
+		Name:        profile.Name,
+		Role:        profile.Role,
+		Description: profile.Description,
+		Status:      "active",
 	}, nil
 }
 
@@ -1057,7 +1075,6 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			logger.Printf("[CharacterService] AIBatchGenerate upsert(update) %q", p.Name)
 			// AI 生成字段直接覆盖（用户点击"AI 更新角色"语义就是刷新）
 			if description != "" { ch.Description = description }
-			if p.VisualPrompt != "" { ch.VisualPrompt = p.VisualPrompt }
 			if p.Gender != "" { ch.Gender = p.Gender }
 			if p.Age != "" { ch.Age = p.Age }
 			// 用户手动配置字段仅在空时填充
@@ -1068,6 +1085,10 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			if err := s.characterRepo.Update(ch); err != nil {
 				logger.Errorf("CharacterService.AIBatchGenerate: update %s: %v", ch.Name, err)
 				continue
+			}
+			// 同步默认形象的 VisualPrompt
+			if p.VisualPrompt != "" {
+				s.upsertDefaultLookVisualPrompt(ch.ID, ch.NovelID, p.VisualPrompt)
 			}
 			upserted = append(upserted, ch)
 		} else {
@@ -1080,7 +1101,6 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 				Gender:        p.Gender,
 				Age:           p.Age,
 				Description:   description,
-				VisualPrompt:  p.VisualPrompt,
 				VoiceID:       suggestedVoice,
 				VoiceStyle:    suggestedStyle,
 				VoiceLanguage: suggestedLang,
@@ -1089,6 +1109,10 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			if err := s.characterRepo.Create(character); err != nil {
 				logger.Errorf("CharacterService.AIBatchGenerate: create %s: %v", p.Name, err)
 				continue
+			}
+			// 为新角色创建携带 VisualPrompt 的默认形象
+			if p.VisualPrompt != "" {
+				s.upsertDefaultLookVisualPrompt(character.ID, character.NovelID, p.VisualPrompt)
 			}
 			upserted = append(upserted, character)
 		}
@@ -1153,9 +1177,6 @@ func (s *CharacterService) ReanalyzeCharacter(tenantID, characterID uint) (*mode
 	if profile.Description != "" {
 		char.Description = profile.Description
 	}
-	if profile.VisualPrompt != "" {
-		char.VisualPrompt = profile.VisualPrompt
-	}
 	if profile.Gender != "" {
 		char.Gender = profile.Gender
 	}
@@ -1177,6 +1198,10 @@ func (s *CharacterService) ReanalyzeCharacter(tenantID, characterID uint) (*mode
 
 	if err := s.characterRepo.Update(char); err != nil {
 		return nil, fmt.Errorf("save character: %w", err)
+	}
+	// 同步默认形象的 VisualPrompt
+	if profile.VisualPrompt != "" {
+		s.upsertDefaultLookVisualPrompt(char.ID, char.NovelID, profile.VisualPrompt)
 	}
 	return char, nil
 }
@@ -1316,7 +1341,6 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 			Gender:        c.Gender,
 			Age:           c.Age,
 			Description:   finalDesc,
-			VisualPrompt:  c.VisualPrompt,
 			VoiceID:       suggestedVoice,
 			VoiceStyle:    suggestedStyle,
 			VoiceLanguage: suggestedLang,
@@ -1325,6 +1349,20 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 		if e := s.characterRepo.Create(char); e != nil {
 			logger.Errorf("[CharacterService] AIExtractMinorChars: create %q: %v", c.Name, e)
 			continue
+		}
+		if s.lookRepo != nil && c.VisualPrompt != "" {
+			defaultLook := &model.CharacterLook{
+				CharacterID:  char.ID,
+				NovelID:      char.NovelID,
+				Label:        "默认形象",
+				ChapterFrom:  1,
+				VisualPrompt: c.VisualPrompt,
+			}
+			if e := s.lookRepo.Create(defaultLook); e != nil {
+				logger.Errorf("[CharacterService] AIExtractMinorChars: create default look for %q: %v", char.Name, e)
+			} else {
+				_ = s.characterRepo.UpdateDefaultLookID(char.ID, defaultLook.ID)
+			}
 		}
 		logger.Printf("[CharacterService] AIExtractMinorChars: created character %q id=%d", char.Name, char.ID)
 		existingNameSet[strings.ToLower(c.Name)] = true
@@ -1389,10 +1427,34 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 		}
 	}
 
+	// 批量预取默认形象，用于判断哪些角色需要生成图片
+	lookIDs := make([]uint, 0, len(chars))
+	charByLookID := make(map[uint]*model.Character, len(chars))
+	for _, c := range chars {
+		if c.DefaultLookID != 0 {
+			lookIDs = append(lookIDs, c.DefaultLookID)
+			charByLookID[c.DefaultLookID] = c
+		}
+	}
+	var defaultLookMap map[uint]*model.CharacterLook // charID → look
+	if s.lookRepo != nil && len(lookIDs) > 0 {
+		byLookID, _ := s.lookRepo.BatchGetLooksByIDs(lookIDs)
+		defaultLookMap = make(map[uint]*model.CharacterLook, len(byLookID))
+		for lid, look := range byLookID {
+			if c, ok := charByLookID[lid]; ok {
+				defaultLookMap[c.ID] = look
+			}
+		}
+	}
+	if defaultLookMap == nil {
+		defaultLookMap = map[uint]*model.CharacterLook{}
+	}
+
 	// force=true 全量重新生成；否则仅处理缺图的角色
 	var todo []*model.Character
 	for _, c := range chars {
-		if force || c.FaceCloseup == "" || c.ThreeViewSheet == "" {
+		look := defaultLookMap[c.ID]
+		if force || look == nil || look.FaceCloseup == "" || look.ThreeViewSheet == "" {
 			todo = append(todo, c)
 		}
 	}
@@ -1413,51 +1475,92 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 				genCtx = WithImageStorageHint(genCtx, ImageStorageHint{NovelTitle: novelTitle})
 			}
 
-			updateReq := &model.UpdateCharacterRequest{Name: char.Name}
+			look := defaultLookMap[char.ID]
 			charFailed := false
 
-			// 优先使用 visual_prompt（图像生成专用提示词，含质量标签），降级使用 description
-			charAppearance := char.VisualPrompt
+			// 优先使用默认形象的 visual_prompt，降级使用 description
+			charAppearance := ""
+			if look != nil && look.VisualPrompt != "" {
+				charAppearance = look.VisualPrompt
+			}
 			if charAppearance == "" {
 				charAppearance = char.Description
 			}
-			// 从 VisualPrompt / Description 推断性别，注入到所有生成调用中以锁定性别特征。
-			// VisualPrompt 由 AI 生成，通常以 "1girl" / "1boy" 开头，识别率极高。
-			gender := InferGenderTag(char.VisualPrompt, char.Description)
+			gender := InferGenderTag(charAppearance, char.Description)
 
-			// 1. 面部特写（兼头像）：force 时无论是否已有图片都重新生成
-			faceRef := char.FaceCloseup // 三视图参考：优先用已有的面部特写
-			if force || char.FaceCloseup == "" {
-				faceImg, faceErr := imgSvc.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, char.Portrait, provider)
+			var newFaceURL, newThreeURL string
+
+			// 1. 面部特写
+			faceRef := char.Portrait
+			if look != nil && look.Portrait != "" {
+				faceRef = look.Portrait
+			}
+			if force || look == nil || look.FaceCloseup == "" {
+				faceImg, faceErr := imgSvc.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, faceRef, provider)
 				if faceErr != nil {
 					logger.Errorf("[CharacterService] BatchGenerateImages: face closeup char %d (%s) failed: %v", char.ID, char.Name, faceErr)
 					charFailed = true
 				} else {
-					updateReq.FaceCloseup = faceImg.URL
-					updateReq.Portrait = faceImg.URL
-					faceRef = faceImg.URL // 使用新生成的面部特写作为三视图参考
+					newFaceURL = faceImg.URL
+					faceRef = faceImg.URL
 				}
 			}
-			// 面部特写不可用时降级到头像
-			if faceRef == "" {
-				faceRef = char.Portrait
+			if faceRef == "" && look != nil {
+				faceRef = look.FaceCloseup
 			}
 
-			// 2. 三视图（使用面部特写作为参考以锁定面部一致性）：force 时无论是否已有都重新生成
-			if force || char.ThreeViewSheet == "" {
+			// 2. 三视图（使用面部特写作为参考以锁定面部一致性）
+			if force || look == nil || look.ThreeViewSheet == "" {
 				threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, faceRef, provider)
 				if threeErr != nil {
 					logger.Errorf("[CharacterService] BatchGenerateImages: three-view char %d (%s) failed: %v", char.ID, char.Name, threeErr)
 					charFailed = true
 				} else {
-					updateReq.ThreeViewSheet = threeImg.URL
+					newThreeURL = threeImg.URL
 				}
 			}
 
-			if updateReq.FaceCloseup != "" || updateReq.ThreeViewSheet != "" {
-				if _, saveErr := s.UpdateCharacter(char.ID, char.TenantID, updateReq); saveErr != nil {
-					logger.Errorf("[CharacterService] BatchGenerateImages: save char %d: %v", char.ID, saveErr)
-					charFailed = true
+			if newFaceURL != "" || newThreeURL != "" {
+				if s.lookRepo != nil {
+					if look != nil {
+						lookUpdateReq := &model.UpdateCharacterLookRequest{}
+						if newFaceURL != "" {
+							lookUpdateReq.FaceCloseup = &newFaceURL
+							lookUpdateReq.Portrait = &newFaceURL
+						}
+						if newThreeURL != "" {
+							lookUpdateReq.ThreeViewSheet = &newThreeURL
+						}
+						if _, saveErr := s.UpdateLook(look.ID, lookUpdateReq); saveErr != nil {
+							logger.Errorf("[CharacterService] BatchGenerateImages: save look for char %d: %v", char.ID, saveErr)
+							charFailed = true
+						}
+					} else {
+						// 角色尚无默认形象，自动创建
+						newLook := &model.CharacterLook{
+							CharacterID:    char.ID,
+							NovelID:        char.NovelID,
+							Label:          "默认形象",
+							ChapterFrom:    1,
+							VisualPrompt:   charAppearance,
+							FaceCloseup:    newFaceURL,
+							Portrait:       newFaceURL,
+							ThreeViewSheet: newThreeURL,
+						}
+						if createErr := s.lookRepo.Create(newLook); createErr != nil {
+							logger.Errorf("[CharacterService] BatchGenerateImages: create default look for char %d: %v", char.ID, createErr)
+							charFailed = true
+						} else {
+							_ = s.characterRepo.UpdateDefaultLookID(char.ID, newLook.ID)
+						}
+					}
+				}
+				// 同步更新 Character.Portrait 用于列表头像显示
+				if newFaceURL != "" {
+					portraitReq := &model.UpdateCharacterRequest{Name: char.Name, Portrait: newFaceURL}
+					if _, saveErr := s.UpdateCharacter(char.ID, char.TenantID, portraitReq); saveErr != nil {
+						logger.Errorf("[CharacterService] BatchGenerateImages: save portrait for char %d: %v", char.ID, saveErr)
+					}
 				}
 			}
 
@@ -1979,15 +2082,17 @@ func (s *CharacterService) CreateLook(characterID, novelID uint, req *model.Crea
 		return nil, fmt.Errorf("look repository not wired")
 	}
 	look := &model.CharacterLook{
-		CharacterID:  characterID,
-		NovelID:      novelID,
-		Label:        req.Label,
-		ChapterFrom:  req.ChapterFrom,
-		ChapterTo:    req.ChapterTo,
-		IsDefault:    req.IsDefault,
-		SortOrder:    req.SortOrder,
-		Description:  req.Description,
-		VisualPrompt: req.VisualPrompt,
+		CharacterID:    characterID,
+		NovelID:        novelID,
+		Label:          req.Label,
+		ChapterFrom:    req.ChapterFrom,
+		ChapterTo:      req.ChapterTo,
+		SortOrder:      req.SortOrder,
+		Description:    req.Description,
+		VisualPrompt:   req.VisualPrompt,
+		ThreeViewSheet: req.ThreeViewSheet,
+		FaceCloseup:    req.FaceCloseup,
+		Portrait:       req.Portrait,
 	}
 	if look.ChapterFrom == 0 {
 		look.ChapterFrom = 1
@@ -1995,7 +2100,50 @@ func (s *CharacterService) CreateLook(characterID, novelID uint, req *model.Crea
 	if err := s.lookRepo.Create(look); err != nil {
 		return nil, err
 	}
+	if req.SetAsDefault {
+		_ = s.characterRepo.UpdateDefaultLookID(characterID, look.ID)
+	}
 	return look, nil
+}
+
+// GetDefaultLook 返回角色的默认形象，取 Character.DefaultLookID 指向的 look；未设置则返回 nil。
+func (s *CharacterService) GetDefaultLook(characterID uint) (*model.CharacterLook, error) {
+	if s.lookRepo == nil {
+		return nil, nil //nolint:nilnil
+	}
+	char, err := s.characterRepo.GetByID(characterID)
+	if err != nil || char.DefaultLookID == 0 {
+		return nil, nil //nolint:nilnil
+	}
+	return s.lookRepo.GetByID(char.DefaultLookID)
+}
+
+// upsertDefaultLookVisualPrompt 将 visualPrompt 写入默认形象；若不存在则创建并设为默认。
+func (s *CharacterService) upsertDefaultLookVisualPrompt(charID, novelID uint, visualPrompt string) {
+	if s.lookRepo == nil || visualPrompt == "" {
+		return
+	}
+	defaultLook, err := s.GetDefaultLook(charID)
+	if err != nil {
+		return
+	}
+	if defaultLook != nil {
+		defaultLook.VisualPrompt = visualPrompt
+		if err := s.lookRepo.Update(defaultLook); err != nil {
+			logger.Errorf("[CharacterService] upsertDefaultLookVisualPrompt: update look %d: %v", defaultLook.ID, err)
+		}
+	} else {
+		newLook := &model.CharacterLook{
+			CharacterID:  charID,
+			NovelID:      novelID,
+			Label:        "默认形象",
+			ChapterFrom:  1,
+			VisualPrompt: visualPrompt,
+		}
+		if err := s.lookRepo.Create(newLook); err == nil {
+			_ = s.characterRepo.UpdateDefaultLookID(charID, newLook.ID)
+		}
+	}
 }
 
 func (s *CharacterService) GetLook(id uint) (*model.CharacterLook, error) {
@@ -2029,8 +2177,8 @@ func (s *CharacterService) UpdateLook(id uint, req *model.UpdateCharacterLookReq
 	if req.ChapterTo != nil {
 		look.ChapterTo = *req.ChapterTo
 	}
-	if req.IsDefault != nil {
-		look.IsDefault = *req.IsDefault
+	if req.SetAsDefault != nil && *req.SetAsDefault {
+		_ = s.characterRepo.UpdateDefaultLookID(look.CharacterID, look.ID)
 	}
 	if req.SortOrder != nil {
 		look.SortOrder = *req.SortOrder
@@ -2060,35 +2208,83 @@ func (s *CharacterService) DeleteLook(id uint) error {
 	if s.lookRepo == nil {
 		return fmt.Errorf("look repository not wired")
 	}
-	return s.lookRepo.Delete(id)
+	look, err := s.lookRepo.GetByID(id)
+	if err != nil {
+		return err
+	}
+	remaining, err := s.lookRepo.ListByCharacter(look.CharacterID)
+	if err != nil {
+		return err
+	}
+	if len(remaining) <= 1 {
+		return fmt.Errorf("角色至少需要保留一个形象")
+	}
+	characterID := look.CharacterID
+	char, _ := s.characterRepo.GetByID(characterID)
+	wasDefault := char != nil && char.DefaultLookID == id
+	if err := s.lookRepo.Delete(id); err != nil {
+		return err
+	}
+	if wasDefault {
+		remaining, err := s.lookRepo.ListByCharacter(characterID)
+		if err == nil && len(remaining) > 0 {
+			_ = s.characterRepo.UpdateDefaultLookID(characterID, remaining[0].ID)
+		} else {
+			_ = s.characterRepo.UpdateDefaultLookID(characterID, 0)
+		}
+	}
+	return nil
 }
 
-// GetActiveLook 返回指定章节号的激活形象，未找到则返回 nil（调用方回退到 Character.VisualPrompt）。
+// GetActiveLook 返回指定章节号的激活形象；先按章节范围匹配，无匹配则返回默认形象。
 func (s *CharacterService) GetActiveLook(characterID uint, chapterNo int) (*model.CharacterLook, error) {
 	if s.lookRepo == nil {
 		return nil, nil //nolint:nilnil
 	}
-	return s.lookRepo.GetActiveLook(characterID, chapterNo)
+	look, err := s.lookRepo.GetActiveLook(characterID, chapterNo)
+	if err != nil {
+		return nil, err
+	}
+	if look != nil {
+		return look, nil
+	}
+	// Fallback: default look
+	return s.GetDefaultLook(characterID)
 }
 
-// GenerateLookVisualPrompt 根据角色基础描述和形象描述生成 AI 图像英文 Prompt。
+// GenerateLookVisualPrompt 根据角色基础描述和形象描述生成 AI 图像 Prompt。
+// 语言跟随小说 PromptLanguage 设置：zh 输出中文，en 输出英文。
 func (s *CharacterService) GenerateLookVisualPrompt(tenantID, characterID uint, lookDesc string) (string, error) {
 	char, err := s.characterRepo.GetByID(characterID)
 	if err != nil {
 		return "", err
 	}
-	basePrompt := char.VisualPrompt
-	if basePrompt == "" {
-		basePrompt = char.Description
+	promptLanguage := "zh"
+	if s.novelRepo != nil {
+		if novel, e := s.novelRepo.GetByID(char.NovelID); e == nil && novel.PromptLanguage != "" {
+			promptLanguage = novel.PromptLanguage
+		}
 	}
-	prompt := fmt.Sprintf(`You are a professional visual designer for novels. Given a character's base description and a specific appearance change description, generate a concise English visual prompt suitable for AI image generation. The prompt should describe physical appearance only (clothing, hair, accessories, body features). Keep it under 200 words. Output only the prompt, no explanation.
+	basePrompt := char.Description
+	var sysPrompt string
+	if promptLanguage == "en" {
+		sysPrompt = fmt.Sprintf(`You are a professional visual designer for novels. Given a character's base description and a specific appearance change description, generate a concise English visual prompt suitable for AI image generation. The prompt should describe physical appearance only (clothing, hair, accessories, body features). Keep it under 200 words. Output only the prompt, no explanation.
 
 Base character: %s
 
 Appearance change: %s
 
 English visual prompt:`, basePrompt, lookDesc)
-	result, err := s.aiService.GenerateWithProvider(tenantID, char.NovelID, "character_profile", prompt, "",
+	} else {
+		sysPrompt = fmt.Sprintf(`你是专业的小说视觉设计师。根据角色基础描述和形象描述，生成适合 AI 图像生成的简洁中文视觉提示词。提示词只描述外貌（服装、发型、配饰、体型特征），不超过200字。只输出提示词，不要任何解释。
+
+角色基础描述：%s
+
+形象描述：%s
+
+中文视觉提示词：`, basePrompt, lookDesc)
+	}
+	result, err := s.aiService.GenerateWithProvider(tenantID, char.NovelID, "character_profile", sysPrompt, "",
 		StoryboardOverrides{})
 	if err != nil {
 		return "", err
@@ -2150,10 +2346,7 @@ func (s *CharacterService) GenerateChapterImages(
 			defer wg.Done()
 			charFailed := false
 
-			baseDesc := char.VisualPrompt
-			if baseDesc == "" {
-				baseDesc = char.Description
-			}
+			baseDesc := char.Description
 			promptText, renderErr := renderPrompt("chapter_character_appearance", map[string]interface{}{
 				"CharacterName":        char.Name,
 				"CharacterDescription": baseDesc,
@@ -2176,16 +2369,16 @@ func (s *CharacterService) GenerateChapterImages(
 						logger.Errorf("[CharacterService] GenerateChapterImages parse char %d: %v raw=%q", char.ID, jsonErr, result)
 						charFailed = true
 					} else {
-						updateReq := &model.UpdateCharacterRequest{Name: char.Name}
-						if res.VisualPrompt != "" {
-							updateReq.VisualPrompt = res.VisualPrompt
-						}
 						if res.Description != "" {
-							updateReq.Description = res.Description
+							updateReq := &model.UpdateCharacterRequest{Name: char.Name, Description: res.Description}
+							if _, saveErr := s.UpdateCharacter(char.ID, tenantID, updateReq); saveErr != nil {
+								logger.Errorf("[CharacterService] GenerateChapterImages save char %d: %v", char.ID, saveErr)
+								charFailed = true
+							}
 						}
-						if _, saveErr := s.UpdateCharacter(char.ID, tenantID, updateReq); saveErr != nil {
-							logger.Errorf("[CharacterService] GenerateChapterImages save char %d: %v", char.ID, saveErr)
-							charFailed = true
+						// 更新默认形象的 VisualPrompt
+						if res.VisualPrompt != "" {
+							s.upsertDefaultLookVisualPrompt(char.ID, char.NovelID, res.VisualPrompt)
 						}
 					}
 				}

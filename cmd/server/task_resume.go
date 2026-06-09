@@ -113,37 +113,34 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				if novelTitle != "" {
 					ctx = service.WithImageStorageHint(ctx, service.ImageStorageHint{NovelTitle: novelTitle})
 				}
-				appearance := char.VisualPrompt
-				if appearance == "" {
-					appearance = char.Description
+				defaultLook, _ := svcs.CharacterService.GetDefaultLook(charID)
+				appearance := char.Description
+				if defaultLook != nil && defaultLook.VisualPrompt != "" {
+					appearance = defaultLook.VisualPrompt
 				}
-				ref := char.Portrait
-				if ref == "" {
-					ref = char.FaceCloseup
-				}
-				gender := service.InferGenderTag(char.VisualPrompt, char.Description)
-				img, err := svcs.ImageGenerationService.GenerateThreeViewSheet(ctx, tenantID, char.Name, appearance, params.Style, gender, ref, params.Provider)
+				gender := service.InferGenderTag(appearance, char.Description)
+				img, err := svcs.ImageGenerationService.GenerateThreeViewSheet(ctx, tenantID, char.Name, appearance, params.Style, gender, "", params.Provider)
 				if err != nil {
 					svcs.TaskService.Fail(t.TaskID, "generate three-view sheet failed: "+err.Error()) //nolint:errcheck
 					return
 				}
 				svcs.TaskService.UpdateProgress(t.TaskID, 99) //nolint:errcheck
-				updateReq := &model.UpdateCharacterRequest{
-					Name:           char.Name,
-					Role:           char.Role,
-					Description:    char.Description,
-					VisualPrompt:   char.VisualPrompt,
-					ThreeViewSheet: img.URL,
-					FaceCloseup:    char.FaceCloseup,
-					Portrait:       char.Portrait,
+				threeURL := img.URL
+				lookReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &threeURL}
+				var updatedLook *model.CharacterLook
+				if defaultLook != nil {
+					updatedLook, err = svcs.CharacterService.UpdateLook(defaultLook.ID, lookReq)
+				} else {
+					updatedLook, err = svcs.CharacterService.CreateLook(charID, char.NovelID, &model.CreateCharacterLookRequest{
+						Label: "默认形象", SetAsDefault: true, ChapterFrom: 1, ThreeViewSheet: threeURL,
+					})
 				}
-				updated, err := svcs.CharacterService.UpdateCharacter(charID, char.TenantID, updateReq)
 				if err != nil {
 					svcs.TaskService.Fail(t.TaskID, "save three-view sheet failed: "+err.Error()) //nolint:errcheck
 					return
 				}
 				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{ //nolint:errcheck
-					"character": updated,
+					"look":      updatedLook,
 					"generated": map[string]string{"sheet": img.URL},
 				})
 				return
@@ -318,37 +315,45 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			if novelTitle != "" {
 				ctx = service.WithImageStorageHint(ctx, service.ImageStorageHint{NovelTitle: novelTitle})
 			}
+			defaultLook, _ := svcs.CharacterService.GetDefaultLook(charID)
+			appearance := char.Description
 			ref := char.Portrait
-			if ref == "" {
-				ref = char.ThreeViewSheet
+			if defaultLook != nil {
+				if defaultLook.VisualPrompt != "" {
+					appearance = defaultLook.VisualPrompt
+				}
+				if defaultLook.Portrait != "" {
+					ref = defaultLook.Portrait
+				} else if defaultLook.ThreeViewSheet != "" {
+					ref = defaultLook.ThreeViewSheet
+				}
 			}
-			appearance := char.VisualPrompt
-			if appearance == "" {
-				appearance = char.Description
-			}
-			gender := service.InferGenderTag(char.VisualPrompt, char.Description)
+			gender := service.InferGenderTag(appearance, char.Description)
 			img, err := svcs.ImageGenerationService.GenerateFaceCloseupImage(ctx, tenantID, char.Name, appearance, params.Style, gender, ref, params.Provider)
 			if err != nil {
 				svcs.TaskService.Fail(t.TaskID, "generate face closeup failed: "+err.Error()) //nolint:errcheck
 				return
 			}
 			svcs.TaskService.UpdateProgress(t.TaskID, 99) //nolint:errcheck
-			updateReq := &model.UpdateCharacterRequest{
-				Name:           char.Name,
-				Role:           char.Role,
-				Description:    char.Description,
-				VisualPrompt:   char.VisualPrompt,
-				ThreeViewSheet: char.ThreeViewSheet,
-				FaceCloseup:    img.URL,
-				Portrait:       img.URL,
+			faceURL := img.URL
+			lookReq := &model.UpdateCharacterLookRequest{FaceCloseup: &faceURL, Portrait: &faceURL}
+			var updatedLook *model.CharacterLook
+			if defaultLook != nil {
+				updatedLook, err = svcs.CharacterService.UpdateLook(defaultLook.ID, lookReq)
+			} else {
+				updatedLook, err = svcs.CharacterService.CreateLook(charID, char.NovelID, &model.CreateCharacterLookRequest{
+					Label: "默认形象", SetAsDefault: true, ChapterFrom: 1, FaceCloseup: faceURL, Portrait: faceURL,
+				})
 			}
-			updated, err := svcs.CharacterService.UpdateCharacter(charID, char.TenantID, updateReq)
 			if err != nil {
 				svcs.TaskService.Fail(t.TaskID, "save face closeup failed: "+err.Error()) //nolint:errcheck
 				return
 			}
+			// 同步 Character.Portrait
+			portraitReq := &model.UpdateCharacterRequest{Name: char.Name, Portrait: img.URL}
+			svcs.CharacterService.UpdateCharacter(charID, char.TenantID, portraitReq) //nolint:errcheck
 			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{ //nolint:errcheck
-				"character": updated,
+				"look":      updatedLook,
 				"generated": map[string]string{"face_closeup": img.URL},
 			})
 		})

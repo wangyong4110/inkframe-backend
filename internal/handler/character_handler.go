@@ -22,20 +22,17 @@ import (
 // UpdateCharacterRequest, preserving existing values before a partial update.
 func characterToUpdateReq(c *model.Character) *model.UpdateCharacterRequest {
 	return &model.UpdateCharacterRequest{
-		Name:           c.Name,
-		Role:           c.Role,
-		Gender:         c.Gender,
-		Age:            c.Age,
-		Description:    c.Description,
-		InnerConflict:  c.InnerConflict,
-		CoreDesire:     c.CoreDesire,
-		VisualPrompt:   c.VisualPrompt,
-		Portrait:       c.Portrait,
-		ThreeViewSheet: c.ThreeViewSheet,
-		FaceCloseup:    c.FaceCloseup,
-		VoiceID:        c.VoiceID,
-		VoiceSpeed:     &c.VoiceSpeed,
-		VoiceStyle:     c.VoiceStyle,
+		Name:          c.Name,
+		Role:          c.Role,
+		Gender:        c.Gender,
+		Age:           c.Age,
+		Description:   c.Description,
+		InnerConflict: c.InnerConflict,
+		CoreDesire:    c.CoreDesire,
+		Portrait:      c.Portrait,
+		VoiceID:       c.VoiceID,
+		VoiceSpeed:    &c.VoiceSpeed,
+		VoiceStyle:    c.VoiceStyle,
 	}
 }
 
@@ -49,11 +46,9 @@ func characterResponse(c *model.Character) gin.H {
 		"role":             c.Role,
 		"gender":           c.Gender,
 		"age":              c.Age,
-		"description":      c.Description,
-		"visual_prompt":    c.VisualPrompt,
-		"three_view_sheet": c.ThreeViewSheet,
-		"face_closeup":     c.FaceCloseup,
-		"portrait":         c.Portrait,
+		"description":        c.Description,
+		"default_three_view": c.DefaultThreeView,
+		"portrait":           c.Portrait,
 		"voice_id":         c.VoiceID,
 		"voice_speed":      c.VoiceSpeed,
 		"voice_style":      c.VoiceStyle,
@@ -218,6 +213,8 @@ func (h *CharacterHandler) ListCharacters(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	h.characterService.InjectDefaultLooks(characters)
 
 	resp := make([]gin.H, 0, len(characters))
 	for _, ch := range characters {
@@ -391,18 +388,15 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 		if novelTitle != "" {
 			genCtx = service.WithImageStorageHint(genCtx, service.ImageStorageHint{NovelTitle: novelTitle})
 		}
-		// 生成三合一参考图（正视+侧视+背视放在同一张图中）
-		// 优先使用 visual_prompt（图像生成专用提示词，含质量标签），降级使用 description
-		sheetAppearance := char.VisualPrompt
-		if sheetAppearance == "" {
-			sheetAppearance = char.Description
+		// 优先从默认形象获取 VisualPrompt，降级使用 description
+		defaultLook, _ := h.characterService.GetDefaultLook(charID)
+		sheetAppearance := char.Description
+		if defaultLook != nil && defaultLook.VisualPrompt != "" {
+			sheetAppearance = defaultLook.VisualPrompt
 		}
-		// 三视图不传参考图：DreamO 模型会优先保留参考图的画风（包括旧风格），
-		// 导致 style 变更后仍渲染旧风格。去掉参考图后走 Text2ImgV3 纯文本生成，
-		// prompt 中的 %s风格 指令能完整生效。角色外形由 VisualPrompt 文本描述保障。
-		sheetRef := ""
-		sheetGender := service.InferGenderTag(char.VisualPrompt, char.Description)
-		img, err := h.imageGenService.GenerateThreeViewSheet(genCtx, tenantID, char.Name, sheetAppearance, style, sheetGender, sheetRef, provider)
+		// 三视图不传参考图，走纯文本生成以确保风格设置完整生效
+		sheetGender := service.InferGenderTag(sheetAppearance, char.Description)
+		img, err := h.imageGenService.GenerateThreeViewSheet(genCtx, tenantID, char.Name, sheetAppearance, style, sheetGender, "", provider)
 		if err != nil {
 			logger.Errorf("[CharacterHandler] GenerateThreeView task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, "generate three-view sheet failed: "+err.Error()) //nolint:errcheck
@@ -410,17 +404,24 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 		}
 		h.taskSvc.UpdateProgress(taskID, 99) //nolint:errcheck
 
-		updateReq := characterToUpdateReq(char)
-		updateReq.ThreeViewSheet = img.URL // ThreeViewSheet 存储三合一参考图
-
-		updated, err := h.characterService.UpdateCharacter(charID, tenantID, updateReq)
+		// 保存到默认形象
+		threeURL := img.URL
+		lookReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &threeURL}
+		var updatedLook *model.CharacterLook
+		if defaultLook != nil {
+			updatedLook, err = h.characterService.UpdateLook(defaultLook.ID, lookReq)
+		} else {
+			updatedLook, err = h.characterService.CreateLook(charID, char.NovelID, &model.CreateCharacterLookRequest{
+				Label: "默认形象", SetAsDefault: true, ChapterFrom: 1, ThreeViewSheet: threeURL,
+			})
+		}
 		if err != nil {
 			h.taskSvc.Fail(taskID, "save three-view sheet failed: "+err.Error()) //nolint:errcheck
 			return
 		}
 
 		h.taskSvc.Complete(taskID, map[string]interface{}{ //nolint:errcheck
-			"character": updated,
+			"look":      updatedLook,
 			"generated": map[string]string{"sheet": img.URL},
 		})
 	}(task.TaskID, uint(id), character, resolvedStyle, req.Provider)
@@ -480,17 +481,21 @@ func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
 		if novelTitle != "" {
 			genCtx = service.WithImageStorageHint(genCtx, service.ImageStorageHint{NovelTitle: novelTitle})
 		}
-		// 使用肖像图作为参考（若有），保持面部一致性；推断性别以锁定性别 token
+		// 从默认形象获取参考图和 VisualPrompt
+		defaultLook, _ := h.characterService.GetDefaultLook(charID)
+		faceAppearance := char.Description
 		referenceImage := char.Portrait
-		if referenceImage == "" {
-			referenceImage = char.ThreeViewSheet
+		if defaultLook != nil {
+			if defaultLook.VisualPrompt != "" {
+				faceAppearance = defaultLook.VisualPrompt
+			}
+			if defaultLook.Portrait != "" {
+				referenceImage = defaultLook.Portrait
+			} else if defaultLook.ThreeViewSheet != "" {
+				referenceImage = defaultLook.ThreeViewSheet
+			}
 		}
-		// 优先使用 visual_prompt（图像生成专用提示词，含质量标签），降级使用 description
-		faceAppearance := char.VisualPrompt
-		if faceAppearance == "" {
-			faceAppearance = char.Description
-		}
-		faceGender := service.InferGenderTag(char.VisualPrompt, char.Description)
+		faceGender := service.InferGenderTag(faceAppearance, char.Description)
 		img, err := h.imageGenService.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, faceAppearance, style, faceGender, referenceImage, provider)
 		if err != nil {
 			logger.Errorf("[CharacterHandler] GenerateFaceCloseup task %s failed: %v", taskID, err)
@@ -499,18 +504,28 @@ func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
 		}
 		h.taskSvc.UpdateProgress(taskID, 99) //nolint:errcheck
 
-		updateReq := characterToUpdateReq(char)
-		updateReq.FaceCloseup = img.URL
-		updateReq.Portrait = img.URL // face closeup doubles as portrait/avatar
-
-		updated, err := h.characterService.UpdateCharacter(charID, tenantID, updateReq)
+		// 保存到默认形象
+		faceURL := img.URL
+		lookReq := &model.UpdateCharacterLookRequest{FaceCloseup: &faceURL, Portrait: &faceURL}
+		var updatedLook *model.CharacterLook
+		if defaultLook != nil {
+			updatedLook, err = h.characterService.UpdateLook(defaultLook.ID, lookReq)
+		} else {
+			updatedLook, err = h.characterService.CreateLook(charID, char.NovelID, &model.CreateCharacterLookRequest{
+				Label: "默认形象", SetAsDefault: true, ChapterFrom: 1, FaceCloseup: faceURL, Portrait: faceURL,
+			})
+		}
 		if err != nil {
 			h.taskSvc.Fail(taskID, "save face closeup failed: "+err.Error()) //nolint:errcheck
 			return
 		}
+		// 同步更新 Character.Portrait 供列表头像显示
+		portraitReq := characterToUpdateReq(char)
+		portraitReq.Portrait = img.URL
+		h.characterService.UpdateCharacter(charID, tenantID, portraitReq) //nolint:errcheck
 
 		h.taskSvc.Complete(taskID, map[string]interface{}{ //nolint:errcheck
-			"character": updated,
+			"look":      updatedLook,
 			"generated": map[string]string{"face_closeup": img.URL},
 		})
 	}(task.TaskID, uint(id), character, faceStyle, req.Provider)
@@ -549,6 +564,7 @@ func (h *CharacterHandler) UploadPortrait(c *gin.Context) {
 
 // UploadCharacterImage 上传角色图片到指定字段
 // POST /api/v1/characters/:id/image/upload?type=portrait|three_view|face_closeup
+// three_view / face_closeup 会写入默认形象（CharacterLook），portrait 直接更新角色头像。
 func (h *CharacterHandler) UploadCharacterImage(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -563,23 +579,50 @@ func (h *CharacterHandler) UploadCharacterImage(c *gin.Context) {
 	if !ok {
 		return
 	}
-	updateReq := characterToUpdateReq(character)
 	imgType := c.Query("type")
 	switch imgType {
-	case "three_view":
-		updateReq.ThreeViewSheet = imgURL
-	case "face_closeup":
-		updateReq.FaceCloseup = imgURL
-		updateReq.Portrait = imgURL
+	case "three_view", "face_closeup":
+		// 写入默认形象（不存在时自动创建）
+		defaultLook, _ := h.characterService.GetDefaultLook(uint(id))
+		lookReq := &model.UpdateCharacterLookRequest{}
+		if imgType == "three_view" {
+			lookReq.ThreeViewSheet = &imgURL
+		} else {
+			lookReq.FaceCloseup = &imgURL
+			lookReq.Portrait = &imgURL
+		}
+		var updatedLook *model.CharacterLook
+		if defaultLook != nil {
+			updatedLook, err = h.characterService.UpdateLook(defaultLook.ID, lookReq)
+		} else {
+			updatedLook, err = h.characterService.CreateLook(uint(id), character.NovelID, &model.CreateCharacterLookRequest{
+				Label: "默认形象", SetAsDefault: true, ChapterFrom: 1,
+			})
+			if err == nil {
+				updatedLook, err = h.characterService.UpdateLook(updatedLook.ID, lookReq)
+			}
+		}
+		if err != nil {
+			respondErr(c, http.StatusInternalServerError, "failed to save image to look")
+			return
+		}
+		if imgType == "face_closeup" {
+			// 同步 Character.Portrait 供列表头像显示
+			updateReq := characterToUpdateReq(character)
+			updateReq.Portrait = imgURL
+			h.characterService.UpdateCharacter(uint(id), getTenantID(c), updateReq) //nolint:errcheck
+		}
+		respondOK(c, gin.H{"url": imgURL, "look": updatedLook})
 	default: // "portrait" or empty
+		updateReq := characterToUpdateReq(character)
 		updateReq.Portrait = imgURL
+		updated, err := h.characterService.UpdateCharacter(uint(id), getTenantID(c), updateReq)
+		if err != nil {
+			respondErr(c, http.StatusInternalServerError, "failed to save image")
+			return
+		}
+		respondOK(c, gin.H{"url": imgURL, "character": updated})
 	}
-	updated, err := h.characterService.UpdateCharacter(uint(id), getTenantID(c), updateReq)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to save image")
-		return
-	}
-	respondOK(c, gin.H{"url": imgURL, "character": updated})
 }
 
 // UploadCharacterLookImage 上传角色形象图片到指定形象
@@ -1344,7 +1387,7 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 	tenantID := getTenantID(c)
 	visualPrompt := look.VisualPrompt
 	if visualPrompt == "" {
-		visualPrompt = char.VisualPrompt
+		visualPrompt = char.Description
 	}
 
 	style := h.characterService.GetNovelImageStyle(char.NovelID)

@@ -13,7 +13,7 @@
 3. role 只能是：protagonist / antagonist / supporting
 4. gender：性别，只能是 male / female / neutral 之一
 5. age：年龄或年龄感，简短字符串，如 "16" / "约25岁" / "少年" / "中年"
-{% if PromptLanguage == "en" %}6. description (English): include appearance, personality, backstory, speaking style, character arc — one coherent paragraph, 300 words max{% else %}6. description（中文）：包含外貌特征、性格特点、背景故事、说话风格、角色弧光等所有描述性信息，写成连贯段落，300字以内{% endif %}
+{% if PromptLanguage == "en" %}6. description (English): background story only — origin, key experiences, motivations, and how they became who they are. One coherent paragraph, 150 words max{% else %}6. description（中文）：仅描述背景故事——出身来历、成长经历、关键转折、动机与目标，写成连贯段落，150字以内{% endif %}
 {% if PromptLanguage == "en" %}5. visual_prompt (English): image generation prompt, ~150 words, covering 12 dimensions in order. No art style, quality, or rendering tags:
 
    [1] GENDER & BUILD: gender, age range, ethnicity, height, body type, shoulder-to-hip ratio
@@ -51,7 +51,7 @@
     "role": "protagonist",
     "gender": "male",
     "age": "约20岁",
-    "description": "外貌：身高约1.82米，体型精瘦有力，乌黑长发束以白玉簪，剑眉斜飞入鬓，漆黑眼眸深邃冷峻，面容线条分明，常着白色绣银纹长袍，腰悬古朴长剑，气质出尘。性格：外表冷漠疏离，内心热忱，因早年背叛筑起心墙，对认可之人极度忠诚，做事果决，关键时刻为弱者挺身。背景：出身修仙世家，因遭背叛独行天涯，立誓复仇，核心能力：天罚剑诀（凌厉速攻）、元神感知（百米气机感应）。弧光：从孤立复仇者逐渐开放心扉，最终成为守护众人的存在。说话风格：惜字如金，语气平淡，绝不废话。",
+    "description": "出身修仙世家，自幼被视为天才传人，却在十六岁那年遭至亲与同门联手背叛，家族覆灭，身负重伤流亡天涯。此后独自修行，以复仇为唯一支柱，游历各地历经磨砺，逐渐掌握失传已久的天罚剑诀。数年追查真相的过程中，他意外发现背叛背后另有更大阴谋，复仇的目标从个人恩怨扩展至整个修仙界的黑暗势力。",
     "visual_prompt": "{% if PromptLanguage == "en" %}young male cultivator, appears early-to-mid 20s, East Asian facial features. Tall lean build, approximately 185 cm, broad shoulders tapering to a narrow waist, long limbs with understated lean muscle.
 
 Facial structure: sharply angular oval face with slightly elongated proportions, prominent high cheekbones, clean defined jawline, pointed chin, standard eye spacing. Skin: cool porcelain complexion, smooth satin finish, flawless and nearly luminous, no visible blemishes.

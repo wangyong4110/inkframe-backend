@@ -38,14 +38,11 @@ type Character struct {
 	ArcDesign       string `json:"arc_design,omitempty" gorm:"type:text"`
 	CurrentArcStage string `json:"current_arc_stage,omitempty" gorm:"size:50"` // 当前所处弧光阶段（自动更新）
 
-	// AI 图像生成英文提示词（由 extract_characters 生成，用于三视图/头像生成）
-	VisualPrompt string `json:"visual_prompt" gorm:"type:text"`
+	// 默认形象 ID（指向 ink_character_look 主键；0 表示未设置）
+	DefaultLookID uint `json:"default_look_id" gorm:"default:0"`
 
-	// 三视图合一参考图（一张图展示正/侧/背三个视角）
-	ThreeViewSheet string `json:"three_view_sheet" gorm:"column:three_view_front;size:1000"`
-
-	// 面部特写图
-	FaceCloseup string `json:"face_closeup" gorm:"size:1000"`
+	// 默认形象的三视图（虚字段，不存库，由服务层批量注入）
+	DefaultThreeView string `json:"default_three_view" gorm:"-"`
 
 	// 头像
 	Portrait string `json:"portrait" gorm:"size:1000"`
@@ -196,16 +193,15 @@ func (ChapterCharacter) TableName() string { return "ink_chapter_character" }
 
 // CharacterLook 角色形象（不同时期的外观版本）
 // 选取规则：chapter_from <= chapterNo AND (chapter_to == 0 OR chapter_to >= chapterNo)
-// 多条匹配时取 chapter_from 最大的；无匹配时取 is_default=true 的；再无则用 Character.VisualPrompt。
+// 多条匹配时取 chapter_from 最大的；无匹配时使用 Character.DefaultLookID 指向的形象。
 type CharacterLook struct {
 	ID          uint `json:"id" gorm:"primaryKey"`
 	CharacterID uint `json:"character_id" gorm:"index:idx_look_char_novel,priority:1;not null"`
 	NovelID     uint `json:"novel_id" gorm:"index:idx_look_char_novel,priority:2;not null"`
 
-	Label       string `json:"label" gorm:"size:100"`      // 形象名称，如"少年时期""伪装成书生""觉醒后"
+	Label       string `json:"label" gorm:"size:100"`         // 形象名称，如"少年时期""伪装成书生""觉醒后"
 	ChapterFrom int    `json:"chapter_from" gorm:"default:1"` // 起始章节（含）；0=从头
 	ChapterTo   int    `json:"chapter_to" gorm:"default:0"`   // 结束章节（含）；0=无限延伸
-	IsDefault   bool   `json:"is_default" gorm:"default:false"` // 兜底形象（无范围匹配时使用）
 	SortOrder   int    `json:"sort_order" gorm:"default:0"`
 
 	// 外观描述（中文，供用户阅读和编辑）
@@ -245,9 +241,6 @@ type UpdateCharacterRequest struct {
 	CoreDesire      string `json:"core_desire"`       // 核心渴望（如：被认可、复仇、保护所爱之人）
 	ArcDesign       string `json:"arc_design"`        // 弧光设计 JSON（各阶段描述+章节范围）
 	CurrentArcStage string `json:"current_arc_stage"` // 当前弧光阶段（起点/考验/最低点/转折/终点）
-	VisualPrompt    string `json:"visual_prompt"`     // AI 图像生成英文提示词
-	ThreeViewSheet string   `json:"three_view_sheet"`
-	FaceCloseup    string   `json:"face_closeup"`
 	Portrait       string   `json:"portrait"`
 	// 配音设置
 	VoiceID       string   `json:"voice_id"`
@@ -303,24 +296,27 @@ type UpsertChapterCharacterRequest struct {
 
 // CreateCharacterLookRequest 创建角色形象请求
 type CreateCharacterLookRequest struct {
-	Label        string `json:"label"`
-	ChapterFrom  int    `json:"chapter_from"`
-	ChapterTo    int    `json:"chapter_to"`
-	IsDefault    bool   `json:"is_default"`
-	SortOrder    int    `json:"sort_order"`
-	Description  string `json:"description"`
-	VisualPrompt string `json:"visual_prompt"`
+	Label          string `json:"label"`
+	ChapterFrom    int    `json:"chapter_from"`
+	ChapterTo      int    `json:"chapter_to"`
+	SetAsDefault   bool   `json:"set_as_default"` // 是否将此形象设为默认
+	SortOrder      int    `json:"sort_order"`
+	Description    string `json:"description"`
+	VisualPrompt   string `json:"visual_prompt"`
+	ThreeViewSheet string `json:"three_view_sheet"`
+	FaceCloseup    string `json:"face_closeup"`
+	Portrait       string `json:"portrait"`
 }
 
 // UpdateCharacterLookRequest 更新角色形象请求
 type UpdateCharacterLookRequest struct {
-	Label        *string `json:"label"`
-	ChapterFrom  *int    `json:"chapter_from"`
-	ChapterTo    *int    `json:"chapter_to"`
-	IsDefault    *bool   `json:"is_default"`
-	SortOrder    *int    `json:"sort_order"`
-	Description  *string `json:"description"`
-	VisualPrompt *string `json:"visual_prompt"`
+	Label          *string `json:"label"`
+	ChapterFrom    *int    `json:"chapter_from"`
+	ChapterTo      *int    `json:"chapter_to"`
+	SetAsDefault   *bool   `json:"set_as_default"` // 是否将此形象设为默认
+	SortOrder      *int    `json:"sort_order"`
+	Description    *string `json:"description"`
+	VisualPrompt   *string `json:"visual_prompt"`
 	ThreeViewSheet *string `json:"three_view_sheet"`
 	FaceCloseup    *string `json:"face_closeup"`
 	Portrait       *string `json:"portrait"`

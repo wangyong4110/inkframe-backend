@@ -20,7 +20,7 @@
 3. role 固定为 "minor"
 3. gender：性别，只能是 male / female / neutral 之一
 4. age：年龄或年龄感，简短字符串，如 "16" / "约25岁" / "少年" / "中年"
-{% if PromptLanguage == "en" %}5. description (English): one coherent paragraph covering appearance, personality, backstory, and how they relate to the main story. 150 words max.{% else %}5. description（中文）：包含外貌特征、性格特点、背景来历、与主线的关系，写成连贯段落，150字以内{% endif %}
+{% if PromptLanguage == "en" %}5. description (English): background story only — origin, key experiences, and how they relate to the main story. One coherent paragraph, 100 words max.{% else %}5. description（中文）：仅描述背景故事——来历、经历、与主线的关系，写成连贯段落，100字以内{% endif %}
 {% if PromptLanguage == "en" %}6. visual_prompt (English): image generation prompt, ~150 words, covering 12 dimensions in order. No art style, quality, or rendering tags:
    [1] GENDER & BUILD: gender, age range, height, body type, shoulder-to-hip ratio
    [2] FACE: face shape, three-zone proportion, cheekbones, jawline, chin, eye spacing
@@ -65,7 +65,7 @@
       "role": "minor",
       "gender": "male",
       "age": "中年",
-      "description": "中年男性，体型微胖，性格圆滑市侩，见风使舵。本章中以商人身份出现，为主角提供了关键情报，背后隐有势力背景。",
+      "description": "江湖行商出身，早年靠倒卖消息在各势力间周旋谋生，积累了广泛的情报网络。本章以商人身份出现，向主角透露了关键线索，其背后所属势力尚未明朗。",
       "personality_tags": ["圆滑", "精明", "势利"],
       "visual_prompt": "{% if PromptLanguage == "en" %}middle-aged male merchant, slightly overweight build, approximately 170cm, wide shoulders and round belly. Round face, high rounded cheekbones, soft jawline, rounded chin, standard eye spacing. Small narrow eyes with slight outer droop, warm brown irises, calculating default gaze. Thin arched brows, medium density, dark brown; short natural lashes. Broad low nose bridge, round tip, medium nostrils; medium-full lips, subtle cupid's bow, bare tan-rose tone, slightly glossy. Warm tan skin, slightly oily sheen, faint forehead lines. Short black hair, neatly combed flat, no styling product visible. Plain dark grey merchant robe with wide sleeves, stand collar, single-button closure; simple brown leather belt cinched at waist; dark grey loose trousers; plain black cloth shoes with flat soles. No accessories. Upright but relaxed posture, slight belly forward, hands often clasped before him in a deferential gesture. Signature: the clasped-hands posture combined with the perpetual faint smile — a practiced merchant's mask.{% else %}中年男性，身材微胖，身高约170厘米，宽肩圆腹。圆脸，颧骨圆润，下颌线柔和，下巴圆钝，眼距标准。细小稍下垂的单眼皮，暖棕色瞳孔，目光精明惯算。浅弧形细眉，密度适中，深棕色；睫毛自然短促。宽低鼻梁，圆钝鼻头，鼻翼适中；唇型丰厚，唇峰不明显，裸唇色偏暖棕玫，略有油光。肤色小麦偏暖，肤感略油，额纹隐现。黑发短而整洁，梳平无造型。深灰色宽袖商人长袍，立领、单排扣；腰间束陈旧棕色皮带；深灰色宽松长裤；黑色平底布鞋。无配饰。站姿端正微前倾，腹部略前突，双手习惯性叠于腹前作揖状。标志性元素：永远维持的那个双手叠腹的揖礼姿势与唇角浅笑——一个老练商人经年练就的处世面具。{% endif %}"
     }

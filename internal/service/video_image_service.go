@@ -419,11 +419,28 @@ func refCompositeDrawScaled(dst draw.Image, dstRect image.Rectangle, src image.I
 	}
 }
 
+// getCharActiveLook 返回角色在指定章节的激活形象（一次 DB 查询）。
+func (s *VideoService) getCharActiveLook(characterID uint, chapterNo int) *model.CharacterLook {
+	if s.lookRepo == nil {
+		return nil
+	}
+	look, _ := s.lookRepo.GetActiveLook(characterID, chapterNo)
+	return look
+}
+
 // ─── 分镜参考图生成 ──────────────────────────────────────────────────────────
 
 func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (string, error) {
 	if s.aiService == nil {
 		return "", fmt.Errorf("AI service not initialized")
+	}
+
+	// 提前计算章节序号，用于按章节匹配角色形象
+	var chapterNo int
+	if shot.ChapterID != nil && s.chapterRepo != nil {
+		if chapter, err := s.chapterRepo.GetByID(*shot.ChapterID); err == nil && chapter != nil {
+			chapterNo = chapter.ChapterNo
+		}
 	}
 
 	// 精准匹配：批量加载 shot.CharacterIDs 中的所有角色参考图（最多 maxCompositeImages-1 张，留槽给场景锚点）
@@ -447,18 +464,27 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 			}
 			collected := make([]charRef, 0, len(batchChars))
 			for _, char := range batchChars {
-				faceRef := char.FaceCloseup
-				if faceRef == "" {
-					faceRef = char.Portrait
+				// 从形象管理获取当前章节的激活形象（FaceCloseup/ThreeViewSheet/VisualPrompt）
+				activeLook := s.getCharActiveLook(char.ID, chapterNo)
+				faceRef := char.Portrait // 兜底：角色头像
+				var bodyRef, vprompt string
+				if activeLook != nil {
+					if activeLook.FaceCloseup != "" {
+						faceRef = activeLook.FaceCloseup
+					} else if activeLook.Portrait != "" {
+						faceRef = activeLook.Portrait
+					}
+					bodyRef = activeLook.ThreeViewSheet
+					vprompt = activeLook.VisualPrompt
 				}
 				collected = append(collected, charRef{
 					id:      char.ID,
 					faceRef: faceRef,
-					bodyRef: char.ThreeViewSheet,
-					vprompt: char.VisualPrompt,
+					bodyRef: bodyRef,
+					vprompt: vprompt,
 				})
-				if char.VisualPrompt != "" {
-					characterVisualPrompts = append(characterVisualPrompts, char.VisualPrompt)
+				if vprompt != "" {
+					characterVisualPrompts = append(characterVisualPrompts, vprompt)
 				}
 			}
 			// 轮次1：每个角色分配一张面部参考图（FaceCloseup > Portrait）
@@ -522,6 +548,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 					type inlineRef struct {
 						name    string
 						char    *model.Character
+						look    *model.CharacterLook // 预取的激活形象
 					}
 					var inlineChars []inlineRef
 					seenIDs := make(map[uint]bool)
@@ -542,9 +569,10 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 						}
 						if ok && char != nil && !seenIDs[char.ID] {
 							seenIDs[char.ID] = true
-							inlineChars = append(inlineChars, inlineRef{name: sc.Name, char: char})
-							if char.VisualPrompt != "" {
-								characterVisualPrompts = append(characterVisualPrompts, char.VisualPrompt)
+							activeLook := s.getCharActiveLook(char.ID, chapterNo)
+							inlineChars = append(inlineChars, inlineRef{name: sc.Name, char: char, look: activeLook})
+							if activeLook != nil && activeLook.VisualPrompt != "" {
+								characterVisualPrompts = append(characterVisualPrompts, activeLook.VisualPrompt)
 							}
 						}
 					}
@@ -553,9 +581,13 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 						if len(characterPortraits) >= maxCharRefs {
 							break
 						}
-						faceRef := ir.char.FaceCloseup
-						if faceRef == "" {
-							faceRef = ir.char.Portrait
+						faceRef := ir.char.Portrait // 兜底
+						if ir.look != nil {
+							if ir.look.FaceCloseup != "" {
+								faceRef = ir.look.FaceCloseup
+							} else if ir.look.Portrait != "" {
+								faceRef = ir.look.Portrait
+							}
 						}
 						if faceRef != "" {
 							characterPortraits = append(characterPortraits, faceRef)
@@ -566,12 +598,20 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 						if len(characterPortraits) >= maxCharRefs {
 							break
 						}
-						faceRef := ir.char.FaceCloseup
-						if faceRef == "" {
-							faceRef = ir.char.Portrait
+						faceRef := ir.char.Portrait
+						if ir.look != nil {
+							if ir.look.FaceCloseup != "" {
+								faceRef = ir.look.FaceCloseup
+							} else if ir.look.Portrait != "" {
+								faceRef = ir.look.Portrait
+							}
 						}
-						if ir.char.ThreeViewSheet != "" && faceRef != "" {
-							characterPortraits = append(characterPortraits, ir.char.ThreeViewSheet)
+						bodyRef := ""
+						if ir.look != nil {
+							bodyRef = ir.look.ThreeViewSheet
+						}
+						if bodyRef != "" && faceRef != "" {
+							characterPortraits = append(characterPortraits, bodyRef)
 							refSources = append(refSources, fmt.Sprintf("inline name=%q ThreeViewSheet", ir.name))
 						}
 					}
@@ -580,12 +620,20 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 						if len(characterPortraits) >= maxCharRefs {
 							break
 						}
-						faceRef := ir.char.FaceCloseup
-						if faceRef == "" {
-							faceRef = ir.char.Portrait
+						faceRef := ir.char.Portrait
+						if ir.look != nil {
+							if ir.look.FaceCloseup != "" {
+								faceRef = ir.look.FaceCloseup
+							} else if ir.look.Portrait != "" {
+								faceRef = ir.look.Portrait
+							}
 						}
-						if ir.char.ThreeViewSheet != "" && faceRef == "" {
-							characterPortraits = append(characterPortraits, ir.char.ThreeViewSheet)
+						bodyRef := ""
+						if ir.look != nil {
+							bodyRef = ir.look.ThreeViewSheet
+						}
+						if bodyRef != "" && faceRef == "" {
+							characterPortraits = append(characterPortraits, bodyRef)
 							refSources = append(refSources, fmt.Sprintf("inline name=%q ThreeViewSheet(no-face-fallback)", ir.name))
 						}
 					}
@@ -594,13 +642,6 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// 获取章节序号用于 OSS 路径（不再降级注入第一个角色，避免把错误角色注入非角色镜头）
-	var chapterNo int
-	if shot.ChapterID != nil && s.chapterRepo != nil {
-		if chapter, err := s.chapterRepo.GetByID(*shot.ChapterID); err == nil && chapter != nil {
-			chapterNo = chapter.ChapterNo
-		}
-	}
 	logger.Printf("generateShotReferenceImage: shot %d charIDs=%v sources=%v portraits=%d",
 		shot.ShotNo, shot.CharacterIDs, refSources, len(characterPortraits))
 	if len(shot.CharacterIDs) > 0 && len(characterPortraits) == 0 {
@@ -1111,21 +1152,45 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		negativePrompt = negativeBase + ", " + shot.NegativePrompt
 	}
 
-	// Seedance / Kling 均支持多张参考图：在主参考图（scene image）之外追加角色三视图和场景锚点图，
+	// Seedance / Kling 均支持多张参考图：在主参考图（scene image）之外追加角色形象图和场景锚点图，
 	// 提升角色一致性和场景一致性。
 	var extraRefImages []string
 	multiImageProviders := map[string]bool{"seedance": true, "kling": true}
 	if multiImageProviders[providerName] && s.characterRepo != nil && len(shot.CharacterIDs) > 0 {
 		if chars, charErr := s.characterRepo.ListByIDs([]uint(shot.CharacterIDs)); charErr == nil {
+			// 批量获取默认形象（通过 Character.DefaultLookID）
+			lookIDs := make([]uint, 0, len(chars))
+			charByLookID := make(map[uint]*model.Character, len(chars))
 			for _, c := range chars {
-				// FaceCloseup > Portrait > ThreeViewSheet — 与 generateShotReferenceImage 保持一致
+				if c.DefaultLookID != 0 {
+					lookIDs = append(lookIDs, c.DefaultLookID)
+					charByLookID[c.DefaultLookID] = c
+				}
+			}
+			defaultLooksMap := map[uint]*model.CharacterLook{} // charID → look
+			if s.lookRepo != nil && len(lookIDs) > 0 {
+				if lm, lErr := s.lookRepo.BatchGetLooksByIDs(lookIDs); lErr == nil {
+					for lid, look := range lm {
+						if c, ok := charByLookID[lid]; ok {
+							defaultLooksMap[c.ID] = look
+						}
+					}
+				}
+			}
+			for _, c := range chars {
+				// FaceCloseup(look) > Portrait(look) > ThreeViewSheet(look) > Portrait(char)
 				var img string
-				if c.FaceCloseup != "" {
-					img = c.FaceCloseup
-				} else if c.Portrait != "" {
+				if look, ok := defaultLooksMap[c.ID]; ok {
+					if look.FaceCloseup != "" {
+						img = look.FaceCloseup
+					} else if look.Portrait != "" {
+						img = look.Portrait
+					} else {
+						img = look.ThreeViewSheet
+					}
+				}
+				if img == "" {
 					img = c.Portrait
-				} else if c.ThreeViewSheet != "" {
-					img = c.ThreeViewSheet
 				}
 				if img != "" && img != referenceImage {
 					extraRefImages = append(extraRefImages, img)

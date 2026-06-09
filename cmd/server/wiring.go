@@ -426,7 +426,8 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 		WithSceneAnchorService(sceneAnchorSvc).
 		WithForeshadowService(foreshadowCRUDSvc).
 		WithTaskService(core.Task).
-		WithModelRepo(repos.AIModelRepo)
+		WithModelRepo(repos.AIModelRepo).
+		WithLookRepo(repos.CharacterLookRepo)
 
 	// 导入服务
 	crawlerSvc := crawler.NewNovelCrawler(db)
@@ -472,6 +473,7 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 	videoSvc.WithPlotPointRepo(repos.PlotPointRepo)
 	videoSvc.WithSystemSettingRepo(repos.SystemSettingRepo)
 	videoSvc.WithChapterCharacterRepo(repos.ChapterCharacterRepo)
+	videoSvc.WithLookRepo(repos.CharacterLookRepo)
 	videoSvc.WithVideoConcurrency(1)
 	videoSvc.WithAudioConcurrency(3)
 

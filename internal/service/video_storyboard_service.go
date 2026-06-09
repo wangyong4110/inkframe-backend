@@ -811,7 +811,7 @@ func (s *VideoService) buildStoryboardPrompt(
 				"Name":         c.Name,
 				"Role":         c.Role,
 				"Description":  c.Description,
-				"VisualPrompt": c.VisualPrompt,
+				"VisualPrompt": "",
 				"DialogueLang": voiceLangToDialogueLang(c.VoiceLanguage),
 			})
 		}
