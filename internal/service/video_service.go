@@ -31,8 +31,9 @@ type VideoService struct {
 	bgmRepo            *repository.VideoBGMSegmentRepository
 	sfxService         *SFXService
 	storageSvc         storage.Service
-	sceneAnchorSvc       *SceneAnchorService
-	sceneConsistencySvc  *SceneConsistencyService
+	sceneAnchorSvc           *SceneAnchorService
+	sceneConsistencySvc      *SceneConsistencyService
+	chapterCharacterRepo     *repository.ChapterCharacterRepository
 	plotPointRepo        *repository.PlotPointRepository
 	systemSettingRepo  *repository.SystemSettingRepository
 	segmentRepo        *repository.ShotVoiceSegmentRepository
@@ -135,6 +136,11 @@ func (s *VideoService) WithSceneConsistencyService(svc *SceneConsistencyService)
 
 func (s *VideoService) WithPlotPointRepo(repo *repository.PlotPointRepository) *VideoService {
 	s.plotPointRepo = repo
+	return s
+}
+
+func (s *VideoService) WithChapterCharacterRepo(r *repository.ChapterCharacterRepository) *VideoService {
+	s.chapterCharacterRepo = r
 	return s
 }
 

@@ -471,6 +471,7 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 	videoSvc.WithBGMSegmentRepo(repos.VideoBGMSegmentRepo)
 	videoSvc.WithPlotPointRepo(repos.PlotPointRepo)
 	videoSvc.WithSystemSettingRepo(repos.SystemSettingRepo)
+	videoSvc.WithChapterCharacterRepo(repos.ChapterCharacterRepo)
 	videoSvc.WithVideoConcurrency(1)
 	videoSvc.WithAudioConcurrency(3)
 

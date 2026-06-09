@@ -120,21 +120,56 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			wgPre.Add(1)
 			go func() {
 				defer wgPre.Done()
+				// 优先使用章节级绑定的角色；无绑定或 repo 未配置时退回小说全量
+				if chapterID != nil && s.chapterCharacterRepo != nil {
+					bindings, e := s.chapterCharacterRepo.ListByChapter(*chapterID)
+					if e != nil {
+						logger.Errorf("[Storyboard] chapterCharacterRepo.ListByChapter chapterID=%d: %v", *chapterID, e)
+					}
+					if len(bindings) > 0 {
+						ids := make([]uint, 0, len(bindings))
+						for _, b := range bindings {
+							ids = append(ids, b.CharacterID)
+						}
+						chars, e2 := s.characterRepo.ListByIDs(ids)
+						if e2 != nil {
+							logger.Errorf("[Storyboard] characterRepo.ListByIDs chapterID=%d: %v", *chapterID, e2)
+						} else {
+							characters = chars
+							logger.Printf("[Storyboard] using chapter-bound characters chapterID=%d count=%d", *chapterID, len(characters))
+							return
+						}
+					}
+				}
 				var e error
 				characters, e = s.characterRepo.ListByNovel(novelID)
 				if e != nil {
 					logger.Errorf("[Storyboard] characterRepo.ListByNovel novelID=%d: %v", novelID, e)
 				}
+				logger.Printf("[Storyboard] using novel-level characters novelID=%d count=%d", novelID, len(characters))
 			}()
 			if s.sceneAnchorSvc != nil {
 				wgPre.Add(1)
 				go func() {
 					defer wgPre.Done()
+					// 优先使用章节级绑定的场景锚点；无绑定时退回小说全量
+					if chapterID != nil {
+						chAnchors, e := s.sceneAnchorSvc.ListChapterAnchors(novelID, *chapterID)
+						if e != nil {
+							logger.Errorf("[Storyboard] sceneAnchorSvc.ListChapterAnchors chapterID=%d: %v", *chapterID, e)
+						}
+						if len(chAnchors) > 0 {
+							anchors = chAnchors
+							logger.Printf("[Storyboard] using chapter-bound anchors chapterID=%d count=%d", *chapterID, len(anchors))
+							return
+						}
+					}
 					var e error
 					anchors, e = s.sceneAnchorSvc.ListByNovel(novelID)
 					if e != nil {
 						logger.Errorf("[Storyboard] sceneAnchorSvc.ListByNovel novelID=%d: %v", novelID, e)
 					}
+					logger.Printf("[Storyboard] using novel-level anchors novelID=%d count=%d", novelID, len(anchors))
 				}()
 			}
 		}
