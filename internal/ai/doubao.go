@@ -276,10 +276,7 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 		model = "seedream-3-0-t2i-250415"
 	}
 
-	size := req.Size
-	if size == "" {
-		size = "1024x1024"
-	}
+	size := seedreamSize(req.Size)
 
 	apiReq := map[string]interface{}{
 		"model":  model,
@@ -389,4 +386,32 @@ func (p *DoubaoProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRe
 		Duration:  float64(len(req.Text)) / 10.0,
 		LatencyMs: time.Since(start).Milliseconds(),
 	}, nil
+}
+
+// seedreamSize 将尺寸字符串规范化为 Seedream 接受的 "WIDTHxHEIGHT" 格式。
+// Seedream 不接受 "W:H" 比例字符串，需转换为实际像素。
+func seedreamSize(size string) string {
+	if size == "" {
+		return "1024x1024"
+	}
+	// 已经是 WxH 格式，直接返回
+	var w, h int
+	if _, err := fmt.Sscanf(size, "%dx%d", &w, &h); err == nil && w > 0 && h > 0 {
+		return size
+	}
+	// "1k"/"2k"/"4k" 快捷方式，直接透传
+	switch size {
+	case "1k", "2k", "4k":
+		return size
+	}
+	// W:H 比例字符串 → 以 1024 为短边换算
+	var rw, rh int
+	if _, err := fmt.Sscanf(size, "%d:%d", &rw, &rh); err == nil && rw > 0 && rh > 0 {
+		const base = 1024
+		if rw >= rh {
+			return fmt.Sprintf("%dx%d", base*rw/rh, base)
+		}
+		return fmt.Sprintf("%dx%d", base, base*rh/rw)
+	}
+	return "1024x1024"
 }
