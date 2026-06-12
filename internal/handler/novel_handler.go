@@ -86,6 +86,7 @@ func (h *NovelHandler) CreateNovel(c *gin.Context) {
 		return
 	}
 	req.TenantID = tenantID
+	req.UserID = getUserIDFromCtx(c)
 
 	novel, err := h.novelService.CreateNovel(&req)
 	if err != nil {
@@ -105,7 +106,7 @@ func (h *NovelHandler) GetNovel(c *gin.Context) {
 		return
 	}
 
-	novel, err := h.novelService.GetNovel(uint(id), getTenantID(c))
+	novel, err := h.novelService.GetNovel(uint(id), getTenantID(c), getUserIDFromCtx(c))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return
@@ -122,6 +123,9 @@ func (h *NovelHandler) ListNovels(c *gin.Context) {
 	filters := map[string]interface{}{}
 	if tenantID, ok := c.Get("tenant_id"); ok {
 		filters["tenant_id"] = tenantID
+	}
+	if userID, ok := c.Get("user_id"); ok {
+		filters["user_id"] = userID
 	}
 	if status := c.Query("status"); status != "" {
 		filters["status"] = status
@@ -236,7 +240,7 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 
 	tenantID := getTenantID(c)
 	// 验证小说归属当前租户
-	if _, err := h.novelService.GetNovel(uint(novelId), tenantID); err != nil {
+	if _, err := h.novelService.GetNovel(uint(novelId), tenantID, getUserIDFromCtx(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return
 	}
@@ -327,7 +331,7 @@ func (h *NovelHandler) BatchGenerateChapters(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	if _, err := h.novelService.GetNovel(uint(novelId), tenantID); err != nil {
+	if _, err := h.novelService.GetNovel(uint(novelId), tenantID, getUserIDFromCtx(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return
 	}
@@ -478,7 +482,7 @@ func (h *NovelHandler) ListOutlineVersions(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c)); err != nil {
+	if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c), getUserIDFromCtx(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return
 	}
@@ -498,7 +502,7 @@ func (h *NovelHandler) GetForeshadows(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c)); err != nil {
+	if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c), getUserIDFromCtx(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return
 	}
@@ -523,7 +527,7 @@ func (h *NovelHandler) MarkForeshadowFulfilled(c *gin.Context) {
 		return
 	}
 
-	if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c)); err != nil {
+	if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c), getUserIDFromCtx(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return
 	}
@@ -559,7 +563,7 @@ func (h *NovelHandler) GetTimeline(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c)); err != nil {
+	if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c), getUserIDFromCtx(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return
 	}
@@ -581,7 +585,7 @@ func (h *NovelHandler) BuildTimeline(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c)); err != nil {
+	if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c), getUserIDFromCtx(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return
 	}
@@ -674,7 +678,7 @@ func (h *NovelHandler) GenerateCoverImage(c *gin.Context) {
 		return
 	}
 	tenantID := getTenantID(c)
-	if _, err := h.novelService.GetNovel(uint(id), tenantID); err != nil {
+	if _, err := h.novelService.GetNovel(uint(id), tenantID, getUserIDFromCtx(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return
 	}
@@ -763,7 +767,7 @@ func (h *NovelHandler) GetAnalysisStatus(c *gin.Context) {
 	}
 	tenantID := getTenantID(c)
 	// Verify novel belongs to tenant
-	if _, err := h.novelService.GetNovel(uint(id), tenantID); err != nil {
+	if _, err := h.novelService.GetNovel(uint(id), tenantID, getUserIDFromCtx(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return
 	}
@@ -794,7 +798,7 @@ func (h *NovelHandler) ExportNovel(c *gin.Context) {
 		return
 	}
 
-	novel, err := h.novelService.GetNovel(uint(novelID), tenantID)
+	novel, err := h.novelService.GetNovel(uint(novelID), tenantID, getUserIDFromCtx(c))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return

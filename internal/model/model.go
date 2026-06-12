@@ -177,6 +177,9 @@ type Novel struct {
 	// 文件去重（记录导入来源文件内容哈希，用于防止同一文件重复导入）
 	SourceFileHash string `json:"source_file_hash,omitempty" gorm:"size:64;index"`
 
+	// 创建者（协作权限快速判断用）
+	CreatedBy uint `json:"created_by" gorm:"index;not null;default:0"`
+
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -574,6 +577,7 @@ type CreateNovelRequest struct {
 	TargetChapters  int    `json:"target_chapters"`
 	ChapterMode     string `json:"chapter_mode"` // sequential / independent
 	TenantID        uint   `json:"-"`
+	UserID          uint   `json:"-"`
 }
 
 type UpdateNovelRequest struct {

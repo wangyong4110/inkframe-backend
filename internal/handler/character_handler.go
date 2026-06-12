@@ -120,7 +120,7 @@ func (h *CharacterHandler) checkNovelAccess(c *gin.Context, novelID uint) bool {
 	if h.novelService == nil {
 		return true // fallback: no service wired, allow (should not happen in production)
 	}
-	if _, err := h.novelService.GetNovel(novelID, getTenantID(c)); err != nil {
+	if _, err := h.novelService.GetNovel(novelID, getTenantID(c), getUserIDFromCtx(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return false
 	}
@@ -135,7 +135,7 @@ func (h *CharacterHandler) CreateCharacter(c *gin.Context) {
 		return
 	}
 
-	if !h.checkNovelAccess(c, uint(novelId)) {
+	if !requireNovelEditorRole(c, h.novelService, uint(novelId)) {
 		return
 	}
 
@@ -170,7 +170,7 @@ func (h *CharacterHandler) GetCharacter(c *gin.Context) {
 	if character.TenantID != tenantID {
 		// 自愈：tenant_id=0 是历史数据缺陷，通过 novel 归属验证后修复
 		if character.TenantID == 0 && h.novelService != nil {
-			if _, e := h.novelService.GetNovel(character.NovelID, tenantID); e == nil {
+			if _, e := h.novelService.GetNovel(character.NovelID, tenantID, getUserIDFromCtx(c)); e == nil {
 				go h.characterService.FixTenantID(character.ID, tenantID)
 				character.TenantID = tenantID
 			} else {
@@ -275,7 +275,7 @@ func (h *CharacterHandler) BatchDeleteCharacters(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !h.checkNovelAccess(c, uint(novelId)) {
+	if !requireNovelEditorRole(c, h.novelService, uint(novelId)) {
 		return
 	}
 	var req struct {
@@ -826,7 +826,7 @@ func (h *CharacterHandler) GetCharacterArc(c *gin.Context) {
 	}
 
 	if h.novelService != nil {
-		if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c)); err != nil {
+		if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c), getUserIDFromCtx(c)); err != nil {
 			respondErr(c, http.StatusNotFound, "novel not found")
 			return
 		}
@@ -850,7 +850,7 @@ func (h *CharacterHandler) GetAllCharacterArcs(c *gin.Context) {
 	}
 
 	if h.novelService != nil {
-		if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c)); err != nil {
+		if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c), getUserIDFromCtx(c)); err != nil {
 			respondErr(c, http.StatusNotFound, "novel not found")
 			return
 		}
@@ -878,7 +878,7 @@ func (h *CharacterHandler) UpdateCharacterArc(c *gin.Context) {
 	}
 
 	if h.novelService != nil {
-		if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c)); err != nil {
+		if _, err := h.novelService.GetNovel(uint(novelId), getTenantID(c), getUserIDFromCtx(c)); err != nil {
 			respondErr(c, http.StatusNotFound, "novel not found")
 			return
 		}

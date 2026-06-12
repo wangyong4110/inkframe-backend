@@ -472,6 +472,7 @@ func (s *ItemService) ListEffectiveItems(novelID uint, chapterID uint) ([]*Effec
 
 // extractItemsFromContent 从章节内容中提取物品（纯 AI 提取，不操作 DB）
 func (s *ItemService) extractItemsFromContent(
+	ctx context.Context,
 	tenantID, novelID uint,
 	novelTitle, genre, content string,
 	existingNames []string,
@@ -486,7 +487,7 @@ func (s *ItemService) extractItemsFromContent(
 		return nil, fmt.Errorf("render extract_chapter_items: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_chapter_items", chItemsPrompt, "",
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "extract_chapter_items", chItemsPrompt, "",
 		StoryboardOverrides{})
 	if err != nil {
 		return nil, err
@@ -516,7 +517,7 @@ func (s *ItemService) extractItemsFromContent(
 }
 
 // AIExtractAllFromNovel 逐章并发提取物品：先并发 AI 提取，再统一去重、入库
-func (s *ItemService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.Item, error) {
+func (s *ItemService) AIExtractAllFromNovel(ctx context.Context, tenantID, novelID uint) ([]*model.Item, error) {
 	logger.Printf("[ItemService] AIExtractAllFromNovel: novelID=%d", novelID)
 	if s.chapterRepo == nil {
 		return nil, fmt.Errorf("chapter repository not configured")
@@ -573,13 +574,18 @@ func (s *ItemService) AIExtractAllFromNovel(tenantID, novelID uint) ([]*model.It
 		wg.Add(1)
 		go func(idx int, c *model.Chapter) {
 			defer wg.Done()
-			sem <- struct{}{}
+			select {
+			case <-ctx.Done():
+				results[idx] = chResult{err: ctx.Err()}
+				return
+			case sem <- struct{}{}:
+			}
 			defer func() { <-sem }()
 			content := c.Content
 			if content == "" {
 				content = c.Summary
 			}
-			items, err := s.extractItemsFromContent(tenantID, novelID, novelTitle, novelGenre, content, existingNames)
+			items, err := s.extractItemsFromContent(ctx, tenantID, novelID, novelTitle, novelGenre, content, existingNames)
 			results[idx] = chResult{items, err}
 		}(i, ch)
 	}

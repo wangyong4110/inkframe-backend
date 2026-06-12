@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
@@ -27,14 +28,35 @@ func (r *NovelMemberRepository) GetByNovelAndUser(novelID, userID uint) (*model.
 
 func (r *NovelMemberRepository) GetByInviteToken(token string) (*model.NovelMember, error) {
 	var m model.NovelMember
-	err := r.db.Where("invite_token = ? AND status = 'pending'", token).First(&m).Error
-	return &m, err
+	if err := r.db.Where("invite_token = ? AND status = 'pending'", token).First(&m).Error; err != nil {
+		return nil, err
+	}
+	if m.InviteExpiresAt != nil && m.InviteExpiresAt.Before(time.Now()) {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return &m, nil
 }
 
 func (r *NovelMemberRepository) ListByNovel(novelID uint) ([]*model.NovelMember, error) {
 	var list []*model.NovelMember
-	err := r.db.Where("novel_id = ? AND status = 'active'", novelID).Find(&list).Error
+	// Include active members plus non-expired pending invites so inviter can track them.
+	err := r.db.Where(
+		"novel_id = ? AND (status = 'active' OR (status = 'pending' AND (invite_expires_at IS NULL OR invite_expires_at > ?)))",
+		novelID, time.Now(),
+	).Find(&list).Error
 	return list, err
+}
+
+// EnsureOwner creates the owner record if it doesn't already exist (upsert-style, race-safe).
+func (r *NovelMemberRepository) EnsureOwner(novelID, ownerUserID uint, joinedAt time.Time) error {
+	m := &model.NovelMember{
+		NovelID:  novelID,
+		UserID:   ownerUserID,
+		Role:     "owner",
+		Status:   "active",
+		JoinedAt: &joinedAt,
+	}
+	return r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(m).Error
 }
 
 func (r *NovelMemberRepository) Update(m *model.NovelMember) error {
@@ -58,37 +80,57 @@ func NewEditingLockRepository(db *gorm.DB) *EditingLockRepository {
 	return &EditingLockRepository{db: db}
 }
 
-// Acquire 尝试获取锁。若已有其他用户持有且未过期则返回 false。
+// Acquire 原子性地获取锁。使用事务+SELECT FOR UPDATE 防止并发竞态。
+// 若已有其他用户持有且未过期则返回 (existingLock, false)。
 func (r *EditingLockRepository) Acquire(entityType string, entityID, userID uint, userName string, ttl time.Duration) (*model.EditingLock, bool) {
 	expires := time.Now().Add(ttl)
-	var lock model.EditingLock
-	result := r.db.Where("entity_type = ? AND entity_id = ?", entityType, entityID).First(&lock)
-	if result.Error != nil {
-		// 无锁，直接创建
-		lock = model.EditingLock{
-			EntityType:   entityType,
-			EntityID:     entityID,
-			LockedBy:     userID,
-			LockedByName: userName,
-			ExpiresAt:    expires,
+	var resultLock model.EditingLock
+	acquired := false
+
+	_ = r.db.Transaction(func(tx *gorm.DB) error {
+		var lock model.EditingLock
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("entity_type = ? AND entity_id = ?", entityType, entityID).
+			First(&lock).Error
+
+		if err != nil {
+			// 无锁记录，创建新锁
+			lock = model.EditingLock{
+				EntityType:   entityType,
+				EntityID:     entityID,
+				LockedBy:     userID,
+				LockedByName: userName,
+				ExpiresAt:    expires,
+			}
+			if cErr := tx.Create(&lock).Error; cErr != nil {
+				return cErr
+			}
+			resultLock = lock
+			acquired = true
+			return nil
 		}
-		if err := r.db.Create(&lock).Error; err != nil {
-			return nil, false
+
+		resultLock = lock
+
+		// 他人持有有效锁
+		if lock.LockedBy != userID && time.Now().Before(lock.ExpiresAt) {
+			acquired = false
+			return nil
 		}
-		return &lock, true
-	}
-	// 已有锁
-	if lock.LockedBy != userID && time.Now().Before(lock.ExpiresAt) {
-		return &lock, false // 他人持有有效锁
-	}
-	// 自己的锁或已过期，更新
-	lock.LockedBy = userID
-	lock.LockedByName = userName
-	lock.ExpiresAt = expires
-	if err := r.db.Save(&lock).Error; err != nil {
-		return nil, false
-	}
-	return &lock, true
+
+		// 自己的锁或已过期，续约/重置
+		lock.LockedBy = userID
+		lock.LockedByName = userName
+		lock.ExpiresAt = expires
+		if sErr := tx.Save(&lock).Error; sErr != nil {
+			return sErr
+		}
+		resultLock = lock
+		acquired = true
+		return nil
+	})
+
+	return &resultLock, acquired
 }
 
 func (r *EditingLockRepository) Release(entityType string, entityID, userID uint) error {

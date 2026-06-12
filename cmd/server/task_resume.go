@@ -246,7 +246,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			tenantID := t.TenantID
 			svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
 			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
-			points, err := svcs.PlotPointService.AIExtractFromNovel(tenantID, novelID)
+			points, err := svcs.PlotPointService.AIExtractFromNovel(context.Background(), tenantID, novelID)
 			if err != nil {
 				logger.Errorf("TaskService resume plot_extract %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck

@@ -1,11 +1,11 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
-	"github.com/inkframe/inkframe-backend/internal/logger"
-
 	"github.com/gin-gonic/gin"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
@@ -45,7 +45,7 @@ func (h *PlotPointHandler) checkNovelTenant(c *gin.Context, novelID uint) bool {
 	if h.novelSvc == nil {
 		return true // novelSvc 未注入时跳过检查（兼容测试）
 	}
-	if _, err := h.novelSvc.GetNovel(novelID, getTenantID(c)); err != nil {
+	if _, err := h.novelSvc.GetNovel(novelID, getTenantID(c), getUserIDFromCtx(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return false
 	}
@@ -99,7 +99,7 @@ func (h *PlotPointHandler) ExtractFromChapter(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "chapter not found")
 		return
 	}
-	pps, err := h.svc.ExtractFromChapter(getTenantID(c), chapter)
+	pps, err := h.svc.ExtractFromChapter(c.Request.Context(), getTenantID(c), chapter)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to extract plot points: "+err.Error())
 		return
@@ -248,7 +248,7 @@ func (h *PlotPointHandler) AIExtractFromNovel(c *gin.Context) {
 		}()
 		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
-		pps, err := h.svc.AIExtractFromNovel(tenantID, uint(novelID))
+		pps, err := h.svc.AIExtractFromNovel(context.Background(), tenantID, uint(novelID))
 		if err != nil {
 			logger.Errorf("[PlotPointHandler] AIExtractFromNovel task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck

@@ -32,7 +32,7 @@ func (s *ForeshadowCRUDService) WithAIDeps(aiSvc *AIService, novelRepo *reposito
 }
 
 // AIExtractFromNovel 使用 AI 从小说章节摘要中提取伏笔（已有伏笔时跳过）
-func (s *ForeshadowCRUDService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Foreshadow, error) {
+func (s *ForeshadowCRUDService) AIExtractFromNovel(ctx context.Context, tenantID, novelID uint) ([]*model.Foreshadow, error) {
 	if s.aiService == nil || s.novelRepo == nil || s.chapterRepo == nil {
 		return nil, fmt.Errorf("AI dependencies not configured")
 	}
@@ -74,7 +74,7 @@ func (s *ForeshadowCRUDService) AIExtractFromNovel(tenantID, novelID uint) ([]*m
 		return nil, fmt.Errorf("render prompt: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_foreshadows", prompt, "",
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "extract_foreshadows", prompt, "",
 		StoryboardOverrides{})
 	if err != nil {
 		return nil, fmt.Errorf("AI extraction: %w", err)

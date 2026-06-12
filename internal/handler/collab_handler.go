@@ -44,22 +44,23 @@ func (h *CollabHandler) ListMembers(c *gin.Context) {
 	respondOK(c, gin.H{"members": members})
 }
 
-// POST /novels/:id/members/invite  { email, role }
+// POST /novels/:id/members/invite  { email, role, ttl_minutes }
 func (h *CollabHandler) InviteMember(c *gin.Context) {
 	novelID, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
 	var req struct {
-		Email string `json:"email" binding:"required,email"`
-		Role  string `json:"role"`
+		Email      string `json:"email" binding:"required,email"`
+		Role       string `json:"role"`
+		TTLMinutes int    `json:"ttl_minutes"` // 0 = default (10 min)
 	}
 	if !bindJSON(c, &req) {
 		return
 	}
 	userID := getUserIDFromCtx(c)
 
-	token, err := h.collabSvc.InviteMember(novelID, userID, req.Email, req.Role)
+	token, err := h.collabSvc.InviteMember(novelID, userID, req.Email, req.Role, req.TTLMinutes)
 	if err != nil {
 		respondErr(c, http.StatusBadRequest, err.Error())
 		return
@@ -123,6 +124,20 @@ func (h *CollabHandler) UpdateMemberRole(c *gin.Context) {
 	}
 	userID := getUserIDFromCtx(c)
 	if err := h.collabSvc.UpdateMemberRole(novelID, userID, targetUID, req.Role); err != nil {
+		respondErr(c, http.StatusForbidden, err.Error())
+		return
+	}
+	respondOK(c, gin.H{})
+}
+
+// DELETE /novels/:id/members/me  — 当前用户主动退出协作
+func (h *CollabHandler) LeaveNovel(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	userID := getUserIDFromCtx(c)
+	if err := h.collabSvc.LeaveNovel(novelID, userID); err != nil {
 		respondErr(c, http.StatusForbidden, err.Error())
 		return
 	}

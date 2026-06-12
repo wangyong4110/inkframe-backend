@@ -242,6 +242,7 @@ func applyChapterUpdate(chapter *model.Chapter, req *model.UpdateChapterRequest)
 	if req.Content != "" {
 		chapter.Content = req.Content
 		chapter.WordCount = countChineseChars(req.Content)
+		chapter.ContentVersion++ // increment on every content write
 	}
 	if req.ChapterHook != "" {
 		chapter.ChapterHook = req.ChapterHook
@@ -273,6 +274,8 @@ func (s *ChapterService) UpdateChapter(id, tenantID uint, req *model.UpdateChapt
 			ChangeType: "manual_edit",
 		}); err != nil {
 			logger.Errorf("[ChapterService] create version failed: %v", err)
+		} else {
+			_ = s.versionRepo.DeleteExcessVersions(chapter.ID, 20)
 		}
 	}
 	applyChapterUpdate(chapter, req)
@@ -3575,13 +3578,15 @@ func (s *ChapterService) RegenerateChapter(tenantID uint, id uint, req *model.Ge
 		if latest, _ := s.versionRepo.GetLatest(chapter.ID); latest != nil {
 			nextNo = latest.VersionNo + 1
 		}
-		_ = s.versionRepo.Create(&model.ChapterVersion{
+		if err := s.versionRepo.Create(&model.ChapterVersion{
 			ChapterID:         chapter.ID,
 			VersionNo:         nextNo,
 			Content:           chapter.Content,
 			ChangeType:        "generation",
 			ChangeDescription: "重新生成前自动存档",
-		})
+		}); err == nil {
+			_ = s.versionRepo.DeleteExcessVersions(chapter.ID, 20)
+		}
 	}
 
 	// Fill in the novel/chapter identity from the existing record

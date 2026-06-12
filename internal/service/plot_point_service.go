@@ -1,11 +1,12 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"sync"
 
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
@@ -111,7 +112,7 @@ func (s *PlotPointService) MarkResolved(id uint, resolvedInChapterID uint) (*mod
 }
 
 // AIExtractFromNovel 从小说所有章节中并发提取剧情点（跳过已有剧情点的章节）
-func (s *PlotPointService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.PlotPoint, error) {
+func (s *PlotPointService) AIExtractFromNovel(ctx context.Context, tenantID, novelID uint) ([]*model.PlotPoint, error) {
 	logger.Printf("[PlotPointService] AIExtractFromNovel: novelID=%d", novelID)
 	const maxConcurrent = 3
 
@@ -149,11 +150,18 @@ func (s *PlotPointService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.
 			continue
 		}
 		ch := ch
-		sem <- struct{}{}
+		select {
+		case <-ctx.Done():
+			break
+		case sem <- struct{}{}:
+		}
+		if ctx.Err() != nil {
+			break
+		}
 		wg.Add(1)
 		go func() {
 			defer func() { <-sem; wg.Done() }()
-			pps, err := s.ExtractFromChapter(tenantID, ch)
+			pps, err := s.ExtractFromChapter(ctx, tenantID, ch)
 			if err != nil {
 				logger.Errorf("PlotPointService.AIExtractFromNovel: chapter %d: %v", ch.ID, err)
 				return
@@ -169,7 +177,7 @@ func (s *PlotPointService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.
 }
 
 // ExtractFromChapter 使用AI从章节内容提取剧情点并保存
-func (s *PlotPointService) ExtractFromChapter(tenantID uint, chapter *model.Chapter) ([]*model.PlotPoint, error) {
+func (s *PlotPointService) ExtractFromChapter(ctx context.Context, tenantID uint, chapter *model.Chapter) ([]*model.PlotPoint, error) {
 	logger.Printf("[PlotPointService] ExtractFromChapter: novelID=%d chapterNo=%d", chapter.NovelID, chapter.ChapterNo)
 	if chapter.Content == "" {
 		return nil, fmt.Errorf("chapter content is empty")
@@ -194,7 +202,7 @@ func (s *PlotPointService) ExtractFromChapter(tenantID uint, chapter *model.Chap
 }
 章节内容：%s`, textForAI)
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "plot_extraction", prompt, "")
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "plot_extraction", prompt, "")
 	if err != nil {
 		return nil, fmt.Errorf("AI extraction failed: %w", err)
 	}

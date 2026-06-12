@@ -12,7 +12,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
 
-const lockTTL = 5 * time.Minute
+const lockTTL = 90 * time.Second
 
 // CollabEvent SSE 推送事件
 type CollabEvent struct {
@@ -31,26 +31,30 @@ func (e CollabEvent) ToSSE() string {
 
 // NovelMemberDTO 成员信息（含用户资料）
 type NovelMemberDTO struct {
-	ID       uint       `json:"id"`
-	NovelID  uint       `json:"novel_id"`
-	UserID   uint       `json:"user_id"`
-	Role     string     `json:"role"`
-	Status   string     `json:"status"`
-	Nickname string     `json:"nickname"`
-	Email    string     `json:"email"`
-	Avatar   string     `json:"avatar"`
-	JoinedAt *time.Time `json:"joined_at"`
+	ID              uint       `json:"id"`
+	NovelID         uint       `json:"novel_id"`
+	UserID          uint       `json:"user_id"`
+	Role            string     `json:"role"`
+	Status          string     `json:"status"`
+	Nickname        string     `json:"nickname"`
+	Email           string     `json:"email"`
+	Avatar          string     `json:"avatar"`
+	JoinedAt        *time.Time `json:"joined_at"`
+	InviteExpiresAt *time.Time `json:"invite_expires_at,omitempty"`
 }
 
 // CollabService 协作服务
 type CollabService struct {
-	memberRepo *repository.NovelMemberRepository
-	lockRepo   *repository.EditingLockRepository
-	userRepo   *repository.UserRepository
-	novelRepo  *repository.NovelRepository
+	memberRepo     *repository.NovelMemberRepository
+	lockRepo       *repository.EditingLockRepository
+	userRepo       *repository.UserRepository
+	novelRepo      *repository.NovelRepository
+	tenantUserRepo *repository.TenantUserRepository // 用于查询被邀请者的 TenantID
+	notifSvc       *NotificationService              // 站内信发送
 
 	mu         sync.RWMutex
 	sseClients map[uint][]chan CollabEvent // novelID → subscriber channels
+	stopCh     chan struct{}
 }
 
 func NewCollabService(
@@ -65,15 +69,43 @@ func NewCollabService(
 		userRepo:   userRepo,
 		novelRepo:  novelRepo,
 		sseClients: make(map[uint][]chan CollabEvent),
+		stopCh:     make(chan struct{}),
 	}
 	// 后台定期清理过期锁
 	go func() {
 		ticker := time.NewTicker(2 * time.Minute)
-		for range ticker.C {
-			lockRepo.CleanupExpired()
+		defer ticker.Stop()
+		for {
+			select {
+			case <-svc.stopCh:
+				return
+			case <-ticker.C:
+				lockRepo.CleanupExpired()
+			}
 		}
 	}()
 	return svc
+}
+
+// Shutdown 停止所有后台 goroutine（优雅关闭时调用）。
+func (s *CollabService) Shutdown() {
+	select {
+	case <-s.stopCh:
+	default:
+		close(s.stopCh)
+	}
+}
+
+// WithTenantUserRepo 注入租户用户仓库（用于获取被邀请者的 TenantID）
+func (s *CollabService) WithTenantUserRepo(r *repository.TenantUserRepository) *CollabService {
+	s.tenantUserRepo = r
+	return s
+}
+
+// WithNotificationService 注入站内信服务
+func (s *CollabService) WithNotificationService(svc *NotificationService) *CollabService {
+	s.notifSvc = svc
+	return s
 }
 
 // ─── 成员管理 ──────────────────────────────────────────────────────────────────
@@ -86,19 +118,21 @@ func (s *CollabService) GetMemberRole(novelID, userID uint) string {
 	return m.Role
 }
 
-// EnsureOwner 确保小说所有者在成员表中（首次访问时自动注册）
+// EnsureOwner 确保小说所有者在成员表中（首次访问时自动注册，原子 upsert 防竞态）。
 func (s *CollabService) EnsureOwner(novelID, ownerUserID uint) error {
-	if _, err := s.memberRepo.GetByNovelAndUser(novelID, ownerUserID); err == nil {
-		return nil // already exists
+	return s.memberRepo.EnsureOwner(novelID, ownerUserID, time.Now())
+}
+
+// LeaveNovel 当前用户主动退出协作（owner 不能退出）。
+func (s *CollabService) LeaveNovel(novelID, userID uint) error {
+	role := s.GetMemberRole(novelID, userID)
+	if role == "" {
+		return fmt.Errorf("不是该项目的协作成员")
 	}
-	now := time.Now()
-	return s.memberRepo.Create(&model.NovelMember{
-		NovelID:  novelID,
-		UserID:   ownerUserID,
-		Role:     "owner",
-		Status:   "active",
-		JoinedAt: &now,
-	})
+	if role == "owner" {
+		return fmt.Errorf("所有者不能退出，请先转让所有权")
+	}
+	return s.memberRepo.Delete(novelID, userID)
 }
 
 func (s *CollabService) ListMembers(novelID uint) ([]*NovelMemberDTO, error) {
@@ -106,17 +140,31 @@ func (s *CollabService) ListMembers(novelID uint) ([]*NovelMemberDTO, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// batch-fetch users in one query to avoid N+1
+	userIDs := make([]uint, 0, len(members))
+	for _, m := range members {
+		userIDs = append(userIDs, m.UserID)
+	}
+	userMap := make(map[uint]*model.User)
+	if users, err := s.userRepo.GetByIDs(userIDs); err == nil {
+		for _, u := range users {
+			userMap[u.ID] = u
+		}
+	}
+
 	dtos := make([]*NovelMemberDTO, 0, len(members))
 	for _, m := range members {
 		dto := &NovelMemberDTO{
-			ID:       m.ID,
-			NovelID:  m.NovelID,
-			UserID:   m.UserID,
-			Role:     m.Role,
-			Status:   m.Status,
-			JoinedAt: m.JoinedAt,
+			ID:              m.ID,
+			NovelID:         m.NovelID,
+			UserID:          m.UserID,
+			Role:            m.Role,
+			Status:          m.Status,
+			JoinedAt:        m.JoinedAt,
+			InviteExpiresAt: m.InviteExpiresAt,
 		}
-		if u, err := s.userRepo.GetByID(m.UserID); err == nil {
+		if u, ok := userMap[m.UserID]; ok {
 			dto.Nickname = u.Nickname
 			if dto.Nickname == "" {
 				dto.Nickname = u.Username
@@ -129,42 +177,89 @@ func (s *CollabService) ListMembers(novelID uint) ([]*NovelMemberDTO, error) {
 	return dtos, nil
 }
 
-// InviteMember 邀请用户（通过 email）。返回邀请链接 token。
-func (s *CollabService) InviteMember(novelID, inviterUserID uint, email, role string) (string, error) {
+// InviteMember 邀请用户（通过 email）。
+// ttlMinutes：邀请链接有效期（分钟），0 表示使用默认值 10 分钟。
+// 返回邀请 token，并向被邀请者发送站内信。
+func (s *CollabService) InviteMember(novelID, inviterUserID uint, email, role string, ttlMinutes int) (string, error) {
 	if role != "editor" && role != "viewer" {
 		role = "viewer"
+	}
+	if ttlMinutes <= 0 {
+		ttlMinutes = 10
 	}
 	target, err := s.userRepo.GetByEmail(email)
 	if err != nil {
 		return "", fmt.Errorf("用户不存在: %s", email)
 	}
+	expiresAt := time.Now().Add(time.Duration(ttlMinutes) * time.Minute)
+	token := uuid.New().String()
+
 	// 检查是否已是成员
 	if existing, err := s.memberRepo.GetByNovelAndUser(novelID, target.ID); err == nil {
 		if existing.Status == "active" {
 			return "", fmt.Errorf("该用户已是协作成员")
 		}
-		// 重新邀请 pending 成员
-		token := uuid.New().String()
+		// 重新邀请 pending 成员（刷新 token 和有效期）
 		existing.InviteToken = token
+		existing.InviteExpiresAt = &expiresAt
 		existing.Role = role
 		existing.Status = "pending"
 		existing.InvitedBy = inviterUserID
-		s.memberRepo.Update(existing)
-		return token, nil
+		if err := s.memberRepo.Update(existing); err != nil {
+			return "", err
+		}
+	} else {
+		m := &model.NovelMember{
+			NovelID:         novelID,
+			UserID:          target.ID,
+			Role:            role,
+			Status:          "pending",
+			InvitedBy:       inviterUserID,
+			InviteToken:     token,
+			InviteExpiresAt: &expiresAt,
+		}
+		if err := s.memberRepo.Create(m); err != nil {
+			return "", err
+		}
 	}
-	token := uuid.New().String()
-	m := &model.NovelMember{
-		NovelID:     novelID,
-		UserID:      target.ID,
-		Role:        role,
-		Status:      "pending",
-		InvitedBy:   inviterUserID,
-		InviteToken: token,
-	}
-	if err := s.memberRepo.Create(m); err != nil {
-		return "", err
-	}
+
+	// 发送站内信通知（失败不影响主流程）
+	go s.sendCollabInviteNotif(novelID, inviterUserID, target.ID, role, token, ttlMinutes)
 	return token, nil
+}
+
+// sendCollabInviteNotif 向被邀请者发送协作邀请站内信
+func (s *CollabService) sendCollabInviteNotif(novelID, inviterUserID, targetUserID uint, role, token string, ttlMinutes int) {
+	if s.notifSvc == nil {
+		return
+	}
+	novelTitle := "未知项目"
+	if n, err := s.novelRepo.GetByID(novelID); err == nil {
+		novelTitle = n.Title
+	}
+	inviterName := "协作者"
+	if u, err := s.userRepo.GetByID(inviterUserID); err == nil {
+		inviterName = u.Nickname
+		if inviterName == "" {
+			inviterName = u.Username
+		}
+	}
+	roleLabel := "浏览者"
+	if role == "editor" {
+		roleLabel = "编辑者"
+	}
+	title := fmt.Sprintf("%s 邀请你协作编辑《%s》", inviterName, novelTitle)
+	body := fmt.Sprintf("你被邀请以【%s】身份加入《%s》的协作，邀请链接 %d 分钟内有效，请尽快接受。", roleLabel, novelTitle, ttlMinutes)
+	linkPath := fmt.Sprintf("/collab/accept?token=%s", token)
+
+	// 查询被邀请者所在的 Tenant
+	targetTenantID := uint(0)
+	if s.tenantUserRepo != nil {
+		if tu, err := s.tenantUserRepo.GetFirstByUser(targetUserID); err == nil {
+			targetTenantID = tu.TenantID
+		}
+	}
+	_ = s.notifSvc.Send(targetTenantID, targetUserID, "collab_invite", title, body, "novel", novelID, linkPath)
 }
 
 // AcceptInvite 接受邀请

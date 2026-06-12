@@ -119,9 +119,16 @@ func (r *NovelRepository) List(page, pageSize int, filters map[string]interface{
 
 	query := r.db.Model(&model.Novel{})
 
-	// 应用过滤
+	// 应用过滤：owner 视图 + 协作成员视图（取并集）
 	if tenantID, ok := filters["tenant_id"]; ok {
-		query = query.Where("tenant_id = ?", tenantID)
+		if userID, ok2 := filters["user_id"]; ok2 {
+			query = query.Where(
+				"tenant_id = ? OR id IN (SELECT novel_id FROM ink_novel_member WHERE user_id = ? AND status = 'active')",
+				tenantID, userID,
+			)
+		} else {
+			query = query.Where("tenant_id = ?", tenantID)
+		}
 	}
 	if status, ok := filters["status"]; ok {
 		query = query.Where("status = ?", status)

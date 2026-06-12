@@ -9,7 +9,7 @@ import (
 // Notification 站内通知
 type Notification struct {
 	ID         uint           `json:"id" gorm:"primaryKey"`
-	TenantID   uint           `json:"tenant_id" gorm:"not null;index"`
+	TenantID   uint           `json:"tenant_id" gorm:"not null"`
 	UserID     uint           `json:"user_id" gorm:"not null;index:idx_notif_user_read"`
 	IsRead     bool           `json:"is_read" gorm:"default:false;index:idx_notif_user_read"`
 	EventType  string         `json:"event_type" gorm:"size:50;not null"` // "chapter_done"|"novel_done"|"review_done"|"crawl_done"|"publish_done"

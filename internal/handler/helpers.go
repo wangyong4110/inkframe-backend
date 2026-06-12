@@ -2,12 +2,14 @@ package handler
 
 import (
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
+	"github.com/inkframe/inkframe-backend/internal/service"
 )
 
 // parseID parses a uint route parameter, writing a 400 response on failure.
@@ -74,6 +76,20 @@ func maskAPIKey(key string) string {
 		return "****"
 	}
 	return key[:4] + "****" + key[len(key)-4:]
+}
+
+// requireNovelEditorRole checks that the user has at least "editor" role for the given novel.
+// Returns false and writes 403 if the check fails. Skips check when novelSvc is nil.
+func requireNovelEditorRole(c *gin.Context, novelSvc *service.NovelService, novelID uint) bool {
+	if novelSvc == nil {
+		return true
+	}
+	role := novelSvc.GetRoleForUser(novelID, getTenantID(c), getUserIDFromCtx(c))
+	if role != "editor" && role != "owner" {
+		respondErr(c, http.StatusForbidden, "需要编辑权限")
+		return false
+	}
+	return true
 }
 
 // taskFail 标记任务失败并记录日志；若 taskSvc.Fail 本身出错也打印。

@@ -16,7 +16,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -232,103 +231,113 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	logger.Printf("[Storyboard] start videoID=%d chapterID=%s provider=%q voiceMode=%q totalRunes=%d totalShots=%d dynSegRunes=%d segments=%d chars=%d anchors=%d plotPoints=%d",
 		videoID, chIDStr, provider, overrides.VoiceMode, totalRunes, totalShots, dynSegRunes, len(segments), len(characters), len(anchors), len(plotPoints))
 
-	// 并行处理各段落：段间内容本身保证情节连贯（AI 读段落文本即可自然衔接），
-	// 不再传递 prevTailShots，换取所有段同时发起 AI 调用。
-	// 最多允许 3 段并发，避免超出大多数 API 的并发限制。
-	const maxParallelSegs = 3
+	// 顺序处理各段落：每段将上一段末尾 3 个镜头作为 prevShots 传入，
+	// 确保跨段落的情节、场景、情绪连贯性（storyboard_generate.j2 中的【上一段末尾分镜】规则生效）。
+	// 牺牲并发换取叙事连贯——对于用户可感知的质量提升，这是必要的权衡。
+	const prevTailN = 3 // 传递上一段末尾多少个镜头
 	type segResult struct {
 		shots []*model.StoryboardShot
 		err   error
 	}
 	results := make([]segResult, len(segments))
-	sem := make(chan struct{}, maxParallelSegs)
-	var wg sync.WaitGroup
-	var doneCount int32
 
 	genCtx := genCtxInner
+	var prevTailShots []*model.StoryboardShot // 上一段末尾镜头，首段为 nil
+
 	for segIdx, seg := range segments {
-		wg.Add(1)
-		go func(idx int, content string) {
-			defer wg.Done()
-			select {
-			case <-genCtx.Done():
-				results[idx] = segResult{err: genCtx.Err()}
-				return
-			case sem <- struct{}{}:
+		// 检查是否已取消
+		select {
+		case <-genCtx.Done():
+			results[segIdx] = segResult{err: genCtx.Err()}
+			// 后续段落也标记取消
+			for i := segIdx + 1; i < len(segments); i++ {
+				results[i] = segResult{err: genCtx.Err()}
 			}
-			defer func() { <-sem }()
+			break
+		default:
+		}
+		if results[segIdx].err != nil {
+			break
+		}
 
-			segStart := time.Now()
-			segRunes := len([]rune(content))
-			segShotCount := totalShots * segRunes / max(totalRunes, 1)
-			if segShotCount < 3 {
-				segShotCount = 3
+		segStart := time.Now()
+		segRunes := len([]rune(seg))
+		segShotCount := totalShots * segRunes / max(totalRunes, 1)
+		if segShotCount < 3 {
+			segShotCount = 3
+		}
+		logger.Printf("[Storyboard] seg %d/%d start runes=%d expectedShots=%d prevTail=%d",
+			segIdx+1, len(segments), segRunes, segShotCount, len(prevTailShots))
+
+		prompt := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, len(segments), segShotCount,
+			characters, anchors, plotPoints, prevTailShots, overrides.VoiceMode, promptLanguage, video.Pacing, arcPlan)
+
+		var aiResult string
+		var aiErr error
+		var shots []*model.StoryboardShot
+		for attempt := 0; attempt < 3; attempt++ {
+			p := prompt
+			switch attempt {
+			case 1:
+				p = prompt + "\n\n⚠️ 重要提示：请只返回纯 JSON 数组，不要包含任何 markdown 代码块（```）或说明文字。"
+				logger.Printf("[Storyboard] seg %d/%d retry attempt=%d (format hint)", segIdx+1, len(segments), attempt)
+			case 2:
+				p = prompt + fmt.Sprintf("\n\n⚠️ 极重要：上一次你只返回了很少的分镜，请务必生成全部%d个分镜，只返回JSON数组不要截断。", segShotCount)
+				logger.Printf("[Storyboard] seg %d/%d retry attempt=%d (shot count hint)", segIdx+1, len(segments), attempt)
 			}
-			logger.Printf("[Storyboard] seg %d/%d start runes=%d expectedShots=%d", idx+1, len(segments), segRunes, segShotCount)
-
-			prompt := s.buildStoryboardPrompt(video, content, userPrompt, idx+1, len(segments), segShotCount, characters, anchors, plotPoints, nil, overrides.VoiceMode, promptLanguage, video.Pacing, arcPlan)
-
-			var result string
-			var aiErr error
-			var shots []*model.StoryboardShot
-			for attempt := 0; attempt < 3; attempt++ {
-				p := prompt
-				switch attempt {
-				case 1:
-					p = prompt + "\n\n⚠️ 重要提示：请只返回纯 JSON 数组，不要包含任何 markdown 代码块（```）或说明文字。"
-					logger.Printf("[Storyboard] seg %d/%d retry attempt=%d (format hint)", idx+1, len(segments), attempt)
-				case 2:
-					p = prompt + fmt.Sprintf("\n\n⚠️ 极重要：上一次你只返回了很少的分镜，请务必生成全部%d个分镜，只返回JSON数组不要截断。", segShotCount)
-					logger.Printf("[Storyboard] seg %d/%d retry attempt=%d (shot count hint)", idx+1, len(segments), attempt)
+			aiStart := time.Now()
+			aiResult, aiErr = s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", p, provider, overrides)
+			aiElapsed := time.Since(aiStart).Round(time.Millisecond)
+			if aiErr != nil {
+				logger.Errorf("[Storyboard] seg %d/%d attempt=%d AI error elapsed=%s err=%v", segIdx+1, len(segments), attempt, aiElapsed, aiErr)
+				if ai.IsTimeoutError(aiErr) {
+					break
 				}
-				aiStart := time.Now()
-				result, aiErr = s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", p, provider, overrides)
-				aiElapsed := time.Since(aiStart).Round(time.Millisecond)
-				if aiErr != nil {
-					logger.Errorf("[Storyboard] seg %d/%d attempt=%d AI error elapsed=%s err=%v", idx+1, len(segments), attempt, aiElapsed, aiErr)
-					if ai.IsTimeoutError(aiErr) {
-						break
-					}
-					continue
-				}
-				logger.Printf("[Storyboard] seg %d/%d attempt=%d AI ok elapsed=%s responseLen=%d", idx+1, len(segments), attempt, aiElapsed, len(result))
-				if strings.TrimSpace(result) == "" {
-					continue
-				}
-				parsed, parseErr := s.parseStoryboardResult(videoID, chapterID, result)
-				if parseErr != nil {
-					logger.Errorf("[Storyboard] seg %d/%d attempt=%d parse failed: %v", idx+1, len(segments), attempt, parseErr)
-					continue
-				}
-				// Retry if AI returned fewer than 70% of requested shots.
-				if len(parsed) < segShotCount*7/10 && attempt < 2 {
-					logger.Printf("[Storyboard] seg %d/%d attempt=%d too few shots got=%d expected=%d (threshold 70%%), retrying", idx+1, len(segments), attempt, len(parsed), segShotCount)
-					shots = parsed // keep as fallback
-					continue
-				}
+				continue
+			}
+			logger.Printf("[Storyboard] seg %d/%d attempt=%d AI ok elapsed=%s responseLen=%d", segIdx+1, len(segments), attempt, aiElapsed, len(aiResult))
+			if strings.TrimSpace(aiResult) == "" {
+				continue
+			}
+			parsed, parseErr := s.parseStoryboardResult(videoID, chapterID, aiResult)
+			if parseErr != nil {
+				logger.Errorf("[Storyboard] seg %d/%d attempt=%d parse failed: %v", segIdx+1, len(segments), attempt, parseErr)
+				continue
+			}
+			if len(parsed) < segShotCount*7/10 && attempt < 2 {
+				logger.Printf("[Storyboard] seg %d/%d attempt=%d too few shots got=%d expected=%d (threshold 70%%), retrying", segIdx+1, len(segments), attempt, len(parsed), segShotCount)
 				shots = parsed
-				break
+				continue
 			}
-			if aiErr != nil && shots == nil {
-				results[idx] = segResult{err: aiErr}
-				return
-			}
-			if shots == nil {
-				logger.Printf("[Storyboard] seg %d/%d fatal: AI returned empty or unparseable response after all retries", idx+1, len(segments))
-				results[idx] = segResult{err: fmt.Errorf("AI返回空响应，请检查模型配置或更换提供商")}
-				return
-			}
-			logger.Printf("[Storyboard] seg %d/%d done shots=%d elapsed=%s", idx+1, len(segments), len(shots), time.Since(segStart).Round(time.Millisecond))
-			results[idx] = segResult{shots: shots}
+			shots = parsed
+			break
+		}
+		if aiErr != nil && shots == nil {
+			results[segIdx] = segResult{err: aiErr}
+			// 非首段失败不终止，后续段落继续（会缺少 prevTail 但比完全失败好）
+			prevTailShots = nil
+			continue
+		}
+		if shots == nil {
+			logger.Printf("[Storyboard] seg %d/%d fatal: AI returned empty or unparseable response after all retries", segIdx+1, len(segments))
+			results[segIdx] = segResult{err: fmt.Errorf("AI返回空响应，请检查模型配置或更换提供商")}
+			prevTailShots = nil
+			continue
+		}
+		logger.Printf("[Storyboard] seg %d/%d done shots=%d elapsed=%s", segIdx+1, len(segments), len(shots), time.Since(segStart).Round(time.Millisecond))
+		results[segIdx] = segResult{shots: shots}
 
-			// 进度回调：每段完成即上报（并发完成顺序不定，取当前已完成数比例）
-			if progressFn != nil {
-				done := int(atomic.AddInt32(&doneCount, 1))
-				progressFn(done * 90 / len(segments))
-			}
-		}(segIdx, seg)
+		// 取本段末尾 prevTailN 个镜头，传给下一段
+		if len(shots) > prevTailN {
+			prevTailShots = shots[len(shots)-prevTailN:]
+		} else {
+			prevTailShots = shots
+		}
+
+		if progressFn != nil {
+			progressFn((segIdx + 1) * 90 / len(segments))
+		}
 	}
-	wg.Wait()
 
 	// 按原始顺序合并结果，统一重编号
 	var allShots []*model.StoryboardShot
@@ -859,7 +868,7 @@ func (s *VideoService) buildStoryboardPrompt(
 		})
 	}
 
-	// 上一段末尾分镜
+	// 上一段末尾分镜（携带完整状态供 AI 做无缝衔接）
 	prevShotsData := make([]map[string]interface{}, 0, len(prevShots))
 	for _, ps := range prevShots {
 		narrOrDesc := ps.Narration
@@ -867,9 +876,13 @@ func (s *VideoService) buildStoryboardPrompt(
 			narrOrDesc = ps.Description
 		}
 		prevShotsData = append(prevShotsData, map[string]interface{}{
-			"ShotNo":     ps.ShotNo,
-			"NarrOrDesc": narrOrDesc,
-			"Dialogue":   ps.Dialogue,
+			"ShotNo":        ps.ShotNo,
+			"NarrOrDesc":    narrOrDesc,
+			"Dialogue":      ps.Dialogue,
+			"EmotionalTone": ps.EmotionalTone,
+			"ShotSize":      ps.ShotSize,
+			"CameraType":    ps.CameraType,
+			"Location":      extractLocationFromScene(ps.Scene),
 		})
 	}
 

@@ -397,6 +397,29 @@ func (r *ChapterVersionRepository) DeleteOlderThan(cutoff time.Time) (int64, err
 	return result.RowsAffected, result.Error
 }
 
+// DeleteExcessVersions 保留指定章节的最新 keepN 个版本，删除其余旧版本
+func (r *ChapterVersionRepository) DeleteExcessVersions(chapterID uint, keepN int) error {
+	if keepN <= 0 {
+		keepN = 20
+	}
+	// MySQL 不允许在 DELETE 的 WHERE 子查询中直接引用被删除的表，
+	// 需要通过派生表（double-subquery）绕过该限制。
+	return r.db.Exec(`
+		DELETE FROM ink_chapter_version
+		WHERE chapter_id = ? AND version_no < (
+			SELECT min_no FROM (
+				SELECT MIN(version_no) AS min_no
+				FROM (
+					SELECT version_no FROM ink_chapter_version
+					WHERE chapter_id = ?
+					ORDER BY version_no DESC
+					LIMIT ?
+				) AS top_n
+			) AS sub
+		)
+	`, chapterID, chapterID, keepN).Error
+}
+
 // ChapterItemRepository 章节物品覆盖仓库
 type ChapterItemRepository struct {
 	db *gorm.DB

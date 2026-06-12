@@ -18,12 +18,12 @@ func (r *NotificationRepository) Create(n *model.Notification) error {
 	return r.db.Create(n).Error
 }
 
-// List 分页查询用户通知（最新在前）
+// List 分页查询用户通知（最新在前）。
+// 仅按 user_id 过滤，跨租户协作邀请通知也可正常显示。
 func (r *NotificationRepository) List(userID, tenantID uint, onlyUnread bool, page, size int) ([]*model.Notification, int64, error) {
 	var total int64
 	var items []*model.Notification
-	q := r.db.Model(&model.Notification{}).
-		Where("user_id = ? AND tenant_id = ?", userID, tenantID)
+	q := r.db.Model(&model.Notification{}).Where("user_id = ?", userID)
 	if onlyUnread {
 		q = q.Where("is_read = ?", false)
 	}
@@ -40,11 +40,11 @@ func (r *NotificationRepository) List(userID, tenantID uint, onlyUnread bool, pa
 	return items, total, err
 }
 
-// UnreadCount 未读数
+// UnreadCount 未读数（按 user_id 过滤）。
 func (r *NotificationRepository) UnreadCount(userID, tenantID uint) (int64, error) {
 	var count int64
 	err := r.db.Model(&model.Notification{}).
-		Where("user_id = ? AND tenant_id = ? AND is_read = ?", userID, tenantID, false).
+		Where("user_id = ? AND is_read = ?", userID, false).
 		Count(&count).Error
 	return count, err
 }
@@ -59,7 +59,7 @@ func (r *NotificationRepository) MarkRead(id, userID uint) error {
 // MarkAllRead 标记全部已读
 func (r *NotificationRepository) MarkAllRead(userID, tenantID uint) error {
 	return r.db.Model(&model.Notification{}).
-		Where("user_id = ? AND tenant_id = ? AND is_read = ?", userID, tenantID, false).
+		Where("user_id = ? AND is_read = ?", userID, false).
 		Update("is_read", true).Error
 }
 

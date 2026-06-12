@@ -28,6 +28,7 @@ type NovelService struct {
 	plotPointService    *PlotPointService
 	notifSvc            *NotificationService // 可选，用于章节生成完成通知
 	outlineVersionRepo  *repository.NovelOutlineVersionRepository // 可选，大纲历史版本快照
+	memberRepo          *repository.NovelMemberRepository // 可选，用于协作成员访问校验
 	// 广场社交
 	novelLikeRepo    *repository.NovelLikeRepository
 	novelCommentRepo *repository.NovelCommentRepository
@@ -70,6 +71,12 @@ func (s *NovelService) WithPlotPointService(svc *PlotPointService) *NovelService
 	return s
 }
 
+// WithMemberRepo 注入协作成员仓库（用于跨租户访问校验）
+func (s *NovelService) WithMemberRepo(repo *repository.NovelMemberRepository) *NovelService {
+	s.memberRepo = repo
+	return s
+}
+
 // WithNotificationService 注入通知服务（可选，用于章节生成完成后发送站内通知）
 func (s *NovelService) WithNotificationService(svc *NotificationService) *NovelService {
 	s.notifSvc = svc
@@ -99,6 +106,7 @@ type CreateNovelRequest struct {
 	TargetChapters  int    `json:"target_chapters"`
 	ChapterMode     string `json:"chapter_mode"`
 	TenantID        uint
+	UserID          uint
 }
 
 // Create 创建小说
@@ -114,6 +122,7 @@ func (s *NovelService) Create(req *CreateNovelRequest) (*model.Novel, error) {
 	novel := &model.Novel{
 		UUID:            uuid.New().String(),
 		TenantID:        tenantID,
+		CreatedBy:       req.UserID,
 		Title:           req.Title,
 		Description:     req.Description,
 		Genre:           req.Genre,
@@ -134,15 +143,44 @@ func (s *NovelService) Create(req *CreateNovelRequest) (*model.Novel, error) {
 }
 
 // GetNovel 获取小说（含租户校验）
-func (s *NovelService) GetNovel(id, tenantID uint) (*model.Novel, error) {
+// GetNovel 获取小说，验证所有权或协作成员资格。
+// userIDs 可选：若提供且不为 0，当 tenant_id 不匹配时回退检查 ink_novel_member 表。
+func (s *NovelService) GetNovel(id, tenantID uint, userIDs ...uint) (*model.Novel, error) {
 	novel, err := s.novelRepo.GetByID(id)
 	if err != nil {
 		return nil, fmt.Errorf("not found")
 	}
-	if novel.TenantID != tenantID {
-		return nil, fmt.Errorf("not found")
+	if novel.TenantID == tenantID {
+		return novel, nil
 	}
-	return novel, nil
+	// 回退：检查是否为协作成员
+	if len(userIDs) > 0 && userIDs[0] > 0 && s.memberRepo != nil {
+		m, err := s.memberRepo.GetByNovelAndUser(id, userIDs[0])
+		if err == nil && m.Status == "active" {
+			return novel, nil
+		}
+	}
+	return nil, fmt.Errorf("not found")
+}
+
+// GetRoleForUser 返回用户对指定小说的角色。
+// 同租户用户 → "owner"；跨租户协作成员 → 成员角色；无权限 → ""。
+func (s *NovelService) GetRoleForUser(novelID, tenantID, userID uint) string {
+	novel, err := s.novelRepo.GetByID(novelID)
+	if err != nil {
+		return ""
+	}
+	// 同租户 或 是创建者 → owner
+	if novel.TenantID == tenantID || (userID > 0 && novel.CreatedBy == userID) {
+		return "owner"
+	}
+	if s.memberRepo != nil && userID > 0 {
+		m, err := s.memberRepo.GetByNovelAndUser(novelID, userID)
+		if err == nil && m.Status == "active" {
+			return m.Role
+		}
+	}
+	return ""
 }
 
 // ListNovelsFiltered 获取小说列表（带过滤器）
@@ -186,6 +224,7 @@ func (s *NovelService) CreateNovel(req *model.CreateNovelRequest) (*model.Novel,
 		TargetChapters:  req.TargetChapters,
 		ChapterMode:     req.ChapterMode,
 		TenantID:        req.TenantID,
+		UserID:          req.UserID,
 	})
 }
 
@@ -1349,7 +1388,7 @@ func (s *NovelService) extractPlotPoints(chapter *model.Chapter) {
 	if s.plotPointService == nil {
 		return
 	}
-	if _, err := s.plotPointService.ExtractFromChapter(0, chapter); err != nil {
+	if _, err := s.plotPointService.ExtractFromChapter(context.Background(), 0, chapter); err != nil {
 		logger.Errorf("extractPlotPoints chapter %d: %v", chapter.ID, err)
 	}
 }

@@ -310,7 +310,7 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 						task.addWarning(msg)
 					}
 				}()
-				if err := retryStep(3, pt.fn); err != nil {
+				if err := retryStepCtx(phase2Ctx, 3, pt.fn); err != nil {
 					msg := fmt.Sprintf("%s提取失败（已重试3次）: %v", pt.name, err)
 					logger.Errorf("NovelAnalysis[%d]: step%s warn after retries: %v", novel.ID, pt.name, err)
 					task.addWarning(msg)
@@ -394,7 +394,7 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 			if len(existingItems) == 0 {
 				logger.Printf("NovelAnalysis[%d]: Phase4.5 re-running item extraction (chapters now have summaries)", novel.ID)
 				task.setStep("正在补充提取物品...")
-				if items, err := s.itemService.AIExtractAllFromNovel(tenantID, novel.ID); err != nil {
+				if items, err := s.itemService.AIExtractAllFromNovel(ctx, tenantID, novel.ID); err != nil {
 					logger.Errorf("NovelAnalysis[%d]: Phase4.5 item extraction warn: %v", novel.ID, err)
 				} else {
 					logger.Printf("NovelAnalysis[%d]: Phase4.5 item extraction done: %d items", novel.ID, len(items))
@@ -1209,7 +1209,7 @@ func (s *NovelAnalysisService) stepExtractItems(
 		return nil
 	}
 
-	items, err := s.itemService.AIExtractAllFromNovel(tenantID, novel.ID)
+	items, err := s.itemService.AIExtractAllFromNovel(ctx, tenantID, novel.ID)
 	if err != nil {
 		return fmt.Errorf("AIExtractAllFromNovel items: %w", err)
 	}
@@ -1231,7 +1231,7 @@ func (s *NovelAnalysisService) stepExtractPlotPoints(
 		logger.Printf("NovelAnalysis[%d]: plot points already exist (%d), skip", novel.ID, len(existing))
 		return nil
 	}
-	pps, err := s.plotPointService.AIExtractFromNovel(tenantID, novel.ID)
+	pps, err := s.plotPointService.AIExtractFromNovel(ctx, tenantID, novel.ID)
 	if err != nil {
 		return fmt.Errorf("AIExtractPlotPoints: %w", err)
 	}
@@ -1306,7 +1306,7 @@ func (s *NovelAnalysisService) stepExtractForeshadows(
 		logger.Printf("NovelAnalysis[%d]: foreshadows already exist (%d), skip", novel.ID, len(existing))
 		return nil
 	}
-	created, err := s.foreshadowSvc.AIExtractFromNovel(tenantID, novel.ID)
+	created, err := s.foreshadowSvc.AIExtractFromNovel(ctx, tenantID, novel.ID)
 	if err != nil {
 		if strings.Contains(err.Error(), "no chapter content available") {
 			logger.Printf("NovelAnalysis[%d]: no chapter content for foreshadow extraction, skipping", novel.ID)
@@ -1365,12 +1365,30 @@ func (s *NovelAnalysisService) GetAnalysisStatus(novelID uint) (*AnalysisStatus,
 // retryStep 对分析步骤执行最多 maxRetries 次重试，每次重试前等待递增时长。
 // 若所有重试均失败，返回最后一次错误。
 func retryStep(maxRetries int, fn func() error) error {
+	return retryStepCtx(context.Background(), maxRetries, fn)
+}
+
+// retryStepCtx 与 retryStep 相同，但会在重试间隔检查 ctx，context 取消时立即停止重试。
+// 注意：若 fn() 内部未感知 ctx，正在执行中的 fn() 不会被中断，ctx 取消仅阻止启动下一次重试。
+func retryStepCtx(ctx context.Context, maxRetries int, fn func() error) error {
 	var lastErr error
 	for i := 0; i < maxRetries; i++ {
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return lastErr
+			}
+			return ctx.Err()
+		default:
+		}
 		if lastErr = fn(); lastErr == nil {
 			return nil
 		}
-		time.Sleep(time.Duration(i+1) * time.Second)
+		select {
+		case <-ctx.Done():
+			return lastErr
+		case <-time.After(time.Duration(i+1) * time.Second):
+		}
 	}
 	return lastErr
 }

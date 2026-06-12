@@ -108,7 +108,7 @@ func (h *ImportHandler) checkNovelTenant(c *gin.Context, novelID uint) bool {
 	if h.novelSvc == nil {
 		return true
 	}
-	if _, err := h.novelSvc.GetNovel(novelID, getTenantID(c)); err != nil {
+	if _, err := h.novelSvc.GetNovel(novelID, getTenantID(c), getUserIDFromCtx(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "not found")
 		return false
 	}

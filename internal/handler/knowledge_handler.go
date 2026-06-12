@@ -30,7 +30,7 @@ func (h *KnowledgeHandler) checkNovelOwnership(c *gin.Context, novelID uint) boo
 	if h.novelSvc == nil {
 		return true
 	}
-	if _, err := h.novelSvc.GetNovel(novelID, getTenantID(c)); err != nil {
+	if _, err := h.novelSvc.GetNovel(novelID, getTenantID(c), getUserIDFromCtx(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return false
 	}
@@ -81,7 +81,7 @@ func (h *KnowledgeHandler) BulkImport(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !h.checkNovelOwnership(c, novelID) {
+	if !requireNovelEditorRole(c, h.novelSvc, novelID) {
 		return
 	}
 	var req struct {
@@ -110,7 +110,7 @@ func (h *KnowledgeHandler) CreateKnowledge(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !h.checkNovelOwnership(c, novelID) {
+	if !requireNovelEditorRole(c, h.novelSvc, novelID) {
 		return
 	}
 	var req struct {
@@ -143,7 +143,7 @@ func (h *KnowledgeHandler) UpdateKnowledge(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !h.checkNovelOwnership(c, novelID) {
+	if !requireNovelEditorRole(c, h.novelSvc, novelID) {
 		return
 	}
 	kbID, ok := parseID(c, "kb_id")
@@ -174,7 +174,7 @@ func (h *KnowledgeHandler) DeleteKnowledge(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !h.checkNovelOwnership(c, novelID) {
+	if !requireNovelEditorRole(c, h.novelSvc, novelID) {
 		return
 	}
 	kbID, ok := parseID(c, "kb_id")

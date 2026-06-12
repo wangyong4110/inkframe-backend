@@ -107,7 +107,7 @@ func (h *ForeshadowHandler) AIExtractForeshadows(c *gin.Context) {
 		return
 	}
 	tenantID := getTenantID(c)
-	list, err := h.svc.AIExtractFromNovel(tenantID, novelID)
+	list, err := h.svc.AIExtractFromNovel(c.Request.Context(), tenantID, novelID)
 	if err != nil {
 		logger.Errorf("[ForeshadowHandler] AIExtract: novelID=%d err=%v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "AI extraction failed: "+err.Error())

@@ -55,7 +55,7 @@ func (h *ChapterHandler) checkNovelOwnership(c *gin.Context, novelId uint) bool 
 	if h.novelService == nil {
 		return true // service not wired — skip check (backward-compat)
 	}
-	if _, err := h.novelService.GetNovel(novelId, getTenantID(c)); err != nil {
+	if _, err := h.novelService.GetNovel(novelId, getTenantID(c), getUserIDFromCtx(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return false
 	}
@@ -70,8 +70,7 @@ func (h *ChapterHandler) CreateChapter(c *gin.Context) {
 		return
 	}
 
-	// Fix 4: 验证 novel 归属当前租户，防止跨租户写入
-	if !h.checkNovelOwnership(c, novelId) {
+	if !requireNovelEditorRole(c, h.novelService, novelId) {
 		return
 	}
 
@@ -226,7 +225,7 @@ func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 	}
 	logger.Printf("[ChapterHandler] GenerateChapter: novelID=%d chapterNo=%d", req.NovelID, req.ChapterNo)
 
-	if !h.checkNovelOwnership(c, req.NovelID) {
+	if !requireNovelEditorRole(c, h.novelService, req.NovelID) {
 		return
 	}
 
@@ -441,7 +440,7 @@ func (h *ChapterHandler) UpdateChapterByNo(c *gin.Context) {
 		return
 	}
 
-	if !h.checkNovelOwnership(c, novelId) {
+	if !requireNovelEditorRole(c, h.novelService, novelId) {
 		return
 	}
 
@@ -477,7 +476,7 @@ func (h *ChapterHandler) DeleteChapterByNo(c *gin.Context) {
 		return
 	}
 
-	if !h.checkNovelOwnership(c, novelId) {
+	if !requireNovelEditorRole(c, h.novelService, novelId) {
 		return
 	}
 
@@ -507,7 +506,7 @@ func (h *ChapterHandler) PublishChapter(c *gin.Context) {
 		return
 	}
 
-	if !h.checkNovelOwnership(c, novelId) {
+	if !requireNovelEditorRole(c, h.novelService, novelId) {
 		return
 	}
 
@@ -551,7 +550,7 @@ func (h *ChapterHandler) UnpublishChapter(c *gin.Context) {
 		return
 	}
 
-	if !h.checkNovelOwnership(c, novelId) {
+	if !requireNovelEditorRole(c, h.novelService, novelId) {
 		return
 	}
 
@@ -1036,7 +1035,7 @@ func (h *ChapterHandler) BatchDeleteChapters(c *gin.Context) {
 		return
 	}
 
-	if !h.checkNovelOwnership(c, novelID) {
+	if !requireNovelEditorRole(c, h.novelService, novelID) {
 		return
 	}
 

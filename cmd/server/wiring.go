@@ -340,7 +340,8 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 	novelSvc := service.NewNovelService(repos.NovelRepo, repos.ChapterRepo, aiSvc).
 		WithCharacterRepos(repos.CharacterRepo, repos.SnapshotRepo).
 		WithPlotPointService(core.PlotPoint).
-		WithOutlineVersionRepo(repos.NovelOutlineVersionRepo)
+		WithOutlineVersionRepo(repos.NovelOutlineVersionRepo).
+		WithMemberRepo(repos.NovelMemberRepo)
 
 	// 角色服务
 	characterSvc := service.NewCharacterService(repos.CharacterRepo, aiSvc).
@@ -682,7 +683,8 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 			repos.EditingLockRepo,
 			repos.UserRepo,
 			repos.NovelRepo,
-		),
+		).WithTenantUserRepo(repos.TenantUserRepo).
+			WithNotificationService(notifSvc),
 	}
 }
 

@@ -949,6 +949,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			v1.GET("/novels/:id/events", cfg.CollabHandler.SSEStream)
 			v1.GET("/novels/:id/members", cfg.CollabHandler.ListMembers)
 			v1.POST("/novels/:id/members/invite", cfg.CollabHandler.InviteMember)
+			v1.DELETE("/novels/:id/members/me", cfg.CollabHandler.LeaveNovel)
 			v1.DELETE("/novels/:id/members/:uid", cfg.CollabHandler.RemoveMember)
 			v1.PUT("/novels/:id/members/:uid", cfg.CollabHandler.UpdateMemberRole)
 			v1.POST("/collab/accept", cfg.CollabHandler.AcceptInvite)
