@@ -96,7 +96,7 @@ func (s *ForeshadowCRUDService) AIExtractFromNovel(ctx context.Context, tenantID
 	if err := json.Unmarshal([]byte(raw), &wrapped); err == nil && len(wrapped.Foreshadows) > 0 {
 		items = wrapped.Foreshadows
 	} else if err2 := json.Unmarshal([]byte(raw), &items); err2 != nil {
-		logger.Errorf("ForeshadowCRUDService.AIExtractFromNovel: parse error: %v, raw: %.200s", err, result)
+		logger.Errorf("ForeshadowCRUDService.AIExtractFromNovel: parse error: %v, raw: %.200s", err2, result)
 		return nil, fmt.Errorf("failed to parse AI response")
 	}
 

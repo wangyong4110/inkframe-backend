@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -156,6 +157,7 @@ func (s *PlotPointService) AIExtractFromNovel(ctx context.Context, tenantID, nov
 		case sem <- struct{}{}:
 		}
 		if ctx.Err() != nil {
+			logger.Warnf("[PlotPointService.AIExtractFromNovel] novelID=%d loop interrupted by context: %v", novelID, ctx.Err())
 			break
 		}
 		wg.Add(1)
@@ -163,7 +165,11 @@ func (s *PlotPointService) AIExtractFromNovel(ctx context.Context, tenantID, nov
 			defer func() { <-sem; wg.Done() }()
 			pps, err := s.ExtractFromChapter(ctx, tenantID, ch)
 			if err != nil {
-				logger.Errorf("PlotPointService.AIExtractFromNovel: chapter %d: %v", ch.ID, err)
+				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+					logger.Warnf("[PlotPointService.AIExtractFromNovel] chapterID=%d extraction cancelled: %v", ch.ID, err)
+				} else {
+					logger.Errorf("[PlotPointService.AIExtractFromNovel] chapterID=%d: %v", ch.ID, err)
+				}
 				return
 			}
 			mu.Lock()

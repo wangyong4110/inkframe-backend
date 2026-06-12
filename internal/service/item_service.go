@@ -3,10 +3,12 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"strings"
 	"sync"
+
+	"github.com/inkframe/inkframe-backend/internal/logger"
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -599,7 +601,11 @@ func (s *ItemService) AIExtractAllFromNovel(ctx context.Context, tenantID, novel
 	itemMap := make(map[string]*itemEntry) // key = lowercase name
 	for _, r := range results {
 		if r.err != nil {
-			logger.Errorf("ItemService.AIExtractAllFromNovel: chapter extract error: %v", r.err)
+			if errors.Is(r.err, context.Canceled) || errors.Is(r.err, context.DeadlineExceeded) {
+				logger.Warnf("[ItemService.AIExtractAllFromNovel] novelID=%d chapter extraction cancelled: %v", novelID, r.err)
+			} else {
+				logger.Errorf("[ItemService.AIExtractAllFromNovel] novelID=%d chapter extract error: %v", novelID, r.err)
+			}
 			continue
 		}
 		seenThisChapter := make(map[string]bool)

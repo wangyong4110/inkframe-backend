@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -311,9 +312,14 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 					}
 				}()
 				if err := retryStepCtx(phase2Ctx, 3, pt.fn); err != nil {
-					msg := fmt.Sprintf("%s提取失败（已重试3次）: %v", pt.name, err)
-					logger.Errorf("NovelAnalysis[%d]: step%s warn after retries: %v", novel.ID, pt.name, err)
-					task.addWarning(msg)
+					if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+						logger.Warnf("NovelAnalysis[%d]: step%s skipped: phase2 timeout/cancelled (%v)", novel.ID, pt.name, err)
+						task.addWarning(pt.name + "提取因超时跳过")
+					} else {
+						msg := fmt.Sprintf("%s提取失败（已重试3次）: %v", pt.name, err)
+						logger.Errorf("NovelAnalysis[%d]: step%s error after retries: %v", novel.ID, pt.name, err)
+						task.addWarning(msg)
+					}
 				}
 				n := int(doneCount.Add(1))
 				task.setProgress(20 + n*50/total)
@@ -1375,6 +1381,7 @@ func retryStepCtx(ctx context.Context, maxRetries int, fn func() error) error {
 	for i := 0; i < maxRetries; i++ {
 		select {
 		case <-ctx.Done():
+			logger.Warnf("[retryStepCtx] context cancelled before attempt %d: %v", i+1, ctx.Err())
 			if lastErr != nil {
 				return lastErr
 			}
@@ -1386,6 +1393,7 @@ func retryStepCtx(ctx context.Context, maxRetries int, fn func() error) error {
 		}
 		select {
 		case <-ctx.Done():
+			logger.Warnf("[retryStepCtx] context cancelled after attempt %d (err=%v): %v", i+1, lastErr, ctx.Err())
 			return lastErr
 		case <-time.After(time.Duration(i+1) * time.Second):
 		}

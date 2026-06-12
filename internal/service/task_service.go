@@ -86,7 +86,11 @@ func (s *TaskService) WithDB(db *gorm.DB) *TaskService {
 // inherit it (and are cancelled when the server shuts down).
 func (s *TaskService) Boot(ctx context.Context) {
 	s.rootCtx = ctx
-	s.recoverOrphaned(10 * time.Second)
+	// Use 0 age so ALL pending/running tasks from the previous session are recovered,
+	// regardless of how recently they were last updated. Boot is called once at startup
+	// before any goroutines in the current process can create tasks, so every
+	// pending/running record in the DB is an orphan from a previous instance.
+	s.recoverOrphaned(0)
 }
 
 // RegisterResumeHandler registers a function that can resume a task of the given type
