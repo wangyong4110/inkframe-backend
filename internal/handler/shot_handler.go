@@ -461,6 +461,11 @@ func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "create task failed")
 		return
 	}
+	h.taskSvc.SetParams(task.TaskID, map[string]interface{}{ //nolint:errcheck
+		"shot_id":  uint(shotID),
+		"video_id": uint(videoID),
+		"provider": shotSFXReq.Provider,
+	})
 
 	go func(taskID string, s *model.StoryboardShot, sfxProvider string) {
 		defer func() {

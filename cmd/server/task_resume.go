@@ -21,6 +21,35 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 	// sfx_gen: SFX tag analysis + batch generation (idempotent — skips shots that already have tags/sfx)
 	if svcs.SFXService != nil && svcs.VideoService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeSFXGen, func(t *model.AsyncTask) {
+			// Single-shot SFX: entity_type == "shot", params carry {shot_id, video_id, provider}
+			if t.EntityType == "shot" {
+				var params struct {
+					ShotID   uint   `json:"shot_id"`
+					VideoID  uint   `json:"video_id"`
+					Provider string `json:"provider"`
+				}
+				if t.ParamsJSON != "" {
+					_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
+				}
+				if params.ShotID == 0 {
+					svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+					return
+				}
+				shot, err := svcs.VideoService.GetShotByID(params.VideoID, params.ShotID)
+				if err != nil {
+					svcs.TaskService.Fail(t.TaskID, "shot not found on resume") //nolint:errcheck
+					return
+				}
+				svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
+				if err := svcs.SFXService.AutoGenerateSFX(context.Background(), shot, t.TenantID, params.Provider); err != nil {
+					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+				} else {
+					svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"shot_id": shot.ID, "sfx_url": shot.SFXURL}) //nolint:errcheck
+				}
+				return
+			}
+
+			// Video-level batch SFX: entity_type == "video"
 			videoID := t.EntityID
 			if videoID == 0 {
 				return
@@ -226,7 +255,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			tenantID := t.TenantID
 			svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
 			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
-			items, err := svcs.ItemService.AIExtractFromNovel(tenantID, novelID)
+			items, err := svcs.ItemService.AIExtractAllFromNovel(context.Background(), tenantID, novelID)
 			if err != nil {
 				logger.Errorf("TaskService resume item_extract %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -591,7 +620,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			tenantID := t.TenantID
 			svcs.TaskService.SetRunning(t.TaskID)                                             //nolint:errcheck
 			progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) }   //nolint:errcheck
-			anchors, err := svcs.SceneAnchorService.AIExtractAllFromNovel(tenantID, novelID, progressFn)
+			anchors, err := svcs.SceneAnchorService.AIExtractAllFromNovel(context.Background(), tenantID, novelID, progressFn)
 			if err != nil {
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 			} else {
@@ -728,7 +757,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		})
 	}
 
-	// novel_outline_gen: regenerate novel outline
+	// novel_outline_gen: regenerate novel outline with original params
 	if svcs.NovelService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeNovelOutlineGen, func(t *model.AsyncTask) {
 			novelID := t.EntityID
@@ -736,11 +765,16 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
 				return
 			}
+			var req service.GenerateOutlineRequest
+			if t.ParamsJSON != "" {
+				_ = json.Unmarshal([]byte(t.ParamsJSON), &req)
+			}
+			req.NovelID = novelID
+			if req.ChapterNum == 0 {
+				req.ChapterNum = 10 // fallback for tasks created before params were saved
+			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			result, err := svcs.NovelService.GenerateOutline(t.TenantID, &service.GenerateOutlineRequest{
-				NovelID:    novelID,
-				ChapterNum: 10,
-			})
+			result, err := svcs.NovelService.GenerateOutline(t.TenantID, &req)
 			if err != nil {
 				logger.Errorf("TaskService resume novel_outline_gen %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -1135,6 +1169,29 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		})
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeRewriteChapters, func(t *model.AsyncTask) {
 			svcs.RewriteService.ResumeRewriting(t)
+		})
+	}
+
+	// outline_review_batch: batch review all chapter outlines in a novel (idempotent — creates new review records)
+	if svcs.OutlineReviewService != nil {
+		svcs.TaskService.RegisterResumeHandler("outline_review_batch", func(t *model.AsyncTask) {
+			novelID := t.EntityID
+			if novelID == 0 {
+				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+				return
+			}
+			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
+			progressFn := func(done, total int) {
+				if total > 0 {
+					svcs.TaskService.UpdateProgress(t.TaskID, done*99/total) //nolint:errcheck
+				}
+			}
+			result, err := svcs.OutlineReviewService.BatchReviewNovel(context.Background(), t.TenantID, novelID, progressFn)
+			if err != nil {
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+			} else {
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"count": len(result.Reviews), "synthesis": result.Synthesis}) //nolint:errcheck
+			}
 		})
 	}
 

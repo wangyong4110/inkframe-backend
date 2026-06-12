@@ -608,7 +608,7 @@ func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantI
 
 // AIExtractAllFromNovel 批量从小说所有章节中提取场景锚点（并发 3 goroutine）。
 // 无章节数量上限，支持增量提取（已有同名锚点自动跳过）。
-func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint, progressFn func(int)) ([]*model.SceneAnchor, error) {
+func (s *SceneAnchorService) AIExtractAllFromNovel(ctx context.Context, tenantID, novelID uint, progressFn func(int)) ([]*model.SceneAnchor, error) {
 	logger.Printf("[SceneAnchorService] AIExtractAllFromNovel: novelID=%d", novelID)
 	if s.chapterRepo == nil {
 		return nil, fmt.Errorf("chapterRepo not configured")
@@ -636,7 +636,6 @@ func (s *SceneAnchorService) AIExtractAllFromNovel(tenantID, novelID uint, progr
 		return nil, nil
 	}
 
-	ctx := context.Background()
 	const maxConcurrent = 3
 	sem := make(chan struct{}, maxConcurrent)
 	var mu sync.Mutex

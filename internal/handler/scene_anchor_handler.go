@@ -563,7 +563,7 @@ func (h *SceneAnchorHandler) AIExtractFromNovel(c *gin.Context) {
 		}()
 		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
-		anchors, err := h.svc.AIExtractAllFromNovel(tenantID, uint(novelID), progressFn)
+		anchors, err := h.svc.AIExtractAllFromNovel(c.Request.Context(), tenantID, uint(novelID), progressFn)
 		if err != nil {
 			logger.Errorf("[SceneAnchorHandler] AIExtractFromNovel: %v", err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck

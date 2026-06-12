@@ -460,6 +460,7 @@ func (h *NovelHandler) GenerateOutline(c *gin.Context) {
 		Temperature:    req.Temperature,
 		TimeoutSeconds: req.TimeoutSeconds,
 	}
+	h.taskSvc.SetParams(task.TaskID, outlineReq) //nolint:errcheck
 
 	go func(taskID string, tID uint, r *service.GenerateOutlineRequest) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
