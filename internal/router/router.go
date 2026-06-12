@@ -58,6 +58,7 @@ type Config struct {
 	WebhookHandler         *handler.WebhookHandler
 	AuditHandler           *handler.AuditHandler
 	OutlineReviewHandler   *handler.OutlineReviewHandler
+	CollabHandler          *handler.CollabHandler
 }
 
 // SetupRouter 配置路由
@@ -941,6 +942,20 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		// 审计日志查询
 		if cfg.AuditHandler != nil {
 			v1.GET("/audit-logs", cfg.AuditHandler.List)
+		}
+
+		// 协作
+		if cfg.CollabHandler != nil {
+			v1.GET("/novels/:id/events", cfg.CollabHandler.SSEStream)
+			v1.GET("/novels/:id/members", cfg.CollabHandler.ListMembers)
+			v1.POST("/novels/:id/members/invite", cfg.CollabHandler.InviteMember)
+			v1.DELETE("/novels/:id/members/:uid", cfg.CollabHandler.RemoveMember)
+			v1.PUT("/novels/:id/members/:uid", cfg.CollabHandler.UpdateMemberRole)
+			v1.POST("/collab/accept", cfg.CollabHandler.AcceptInvite)
+			v1.POST("/editing-locks", cfg.CollabHandler.AcquireLock)
+			v1.DELETE("/editing-locks/:type/:entity_id", cfg.CollabHandler.ReleaseLock)
+			v1.PUT("/editing-locks/:type/:entity_id/heartbeat", cfg.CollabHandler.HeartbeatLock)
+			v1.GET("/editing-locks/:type/:entity_id", cfg.CollabHandler.GetLock)
 		}
 	}
 

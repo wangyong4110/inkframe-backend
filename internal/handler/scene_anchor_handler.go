@@ -385,13 +385,31 @@ func (h *SceneAnchorHandler) AIExtractChapterAnchors(c *gin.Context) {
 		respondBadRequest(c, "chapter has no content")
 		return
 	}
-	anchors, err := h.svc.ExtractFromChapter(context.Background(), getTenantID(c), uint(novelID), "", content, chapter.ID)
+
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterSceneExtract, "场景分析", "chapter", chapter.ID)
 	if err != nil {
-		logger.Errorf("[SceneAnchorHandler] AIExtractChapterAnchors: %v", err)
-		respondErr(c, http.StatusInternalServerError, "failed to extract chapter scene anchors")
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	respondOK(c, gin.H{"scene_anchors": anchors, "new_count": len(anchors)})
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"novel_id":   novelID,
+		"chapter_no": chapterNo,
+		"content":    content,
+	})
+
+	go func(taskID string, tID, nID, chapID uint, chContent string) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		anchors, err := h.svc.ExtractFromChapter(context.Background(), tID, nID, "", chContent, chapID)
+		if err != nil {
+			logger.Errorf("[SceneAnchorHandler] AIExtractChapterAnchors task %s failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, map[string]interface{}{"new_count": len(anchors)}) //nolint:errcheck
+	}(task.TaskID, tenantID, uint(novelID), chapter.ID, content)
+
+	respondAccepted(c, task.TaskID, "场景分析任务已提交")
 }
 
 // ListChapterAnchors GET /novels/:id/chapters/:chapter_no/scene-anchors

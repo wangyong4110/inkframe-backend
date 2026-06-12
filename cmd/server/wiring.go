@@ -92,6 +92,8 @@ type Repositories struct {
 	NovelOutlineVersionRepo  *repository.NovelOutlineVersionRepository
 	OutlineReviewRepo        *repository.OutlineReviewRepository
 	OutlineSynthesisRepo     *repository.NovelOutlineSynthesisRepository
+	NovelMemberRepo          *repository.NovelMemberRepository
+	EditingLockRepo          *repository.EditingLockRepository
 }
 
 // initRepositories 初始化仓库层
@@ -171,6 +173,8 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		NovelOutlineVersionRepo:  repository.NewNovelOutlineVersionRepository(db),
 		OutlineReviewRepo:        repository.NewOutlineReviewRepository(db),
 		OutlineSynthesisRepo:     repository.NewNovelOutlineSynthesisRepository(db),
+		NovelMemberRepo:          repository.NewNovelMemberRepository(db),
+		EditingLockRepo:          repository.NewEditingLockRepository(db),
 	}
 }
 
@@ -236,6 +240,8 @@ type Services struct {
 	EmailNotificationService    *service.EmailNotificationService
 	// ── Outline Review ──
 	OutlineReviewService        *service.OutlineReviewService
+	// ── Collab ──
+	CollabService               *service.CollabService
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -670,6 +676,13 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 			core.AI,
 		).WithForeshadowRepo(repos.ForeshadowRepo).
 			WithArcSummaryRepo(repos.ArcSummaryRepo),
+		// ── Collab ──
+		CollabService: service.NewCollabService(
+			repos.NovelMemberRepo,
+			repos.EditingLockRepo,
+			repos.UserRepo,
+			repos.NovelRepo,
+		),
 	}
 }
 
@@ -713,6 +726,7 @@ type Handlers struct {
 	WebhookHandler        *handler.WebhookHandler
 	AuditHandler          *handler.AuditHandler
 	OutlineReviewHandler  *handler.OutlineReviewHandler
+	CollabHandler         *handler.CollabHandler
 }
 
 // initHandlers 初始化处理器
@@ -776,7 +790,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			WithChapterService(services.ChapterService).
 			WithReadingService(services.ReadingService),
 		AssetHandler:    handler.NewAssetHandler(services.AssetService),
-		ImageHandler:    handler.NewImageHandler(services.AIService),
+		ImageHandler:    handler.NewImageHandler(services.AIService).WithTaskService(services.TaskService),
 		WebSearchHandler: handler.NewWebSearchHandler(
 			service.NewWebSearcher(
 				cfg.WebSearch.Provider,
@@ -806,6 +820,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		WebhookHandler:       handler.NewWebhookHandler(services.WebhookService),
 		AuditHandler:         handler.NewAuditHandler(services.AuditService),
 		OutlineReviewHandler: handler.NewOutlineReviewHandler(services.OutlineReviewService, services.TaskService),
+		CollabHandler:        handler.NewCollabHandler(services.CollabService),
 	}
 }
 

@@ -291,7 +291,7 @@ func (h *CharacterHandler) BatchDeleteCharacters(c *gin.Context) {
 	respondOK(c, gin.H{"deleted": len(req.IDs)})
 }
 
-// GenerateCharacterImage 生成角色图像
+// GenerateCharacterImage 生成角色图像（异步任务）
 // POST /api/v1/characters/:id/images
 func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 	id, ok := parseID(c, "id")
@@ -314,25 +314,49 @@ func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
-	if character.TenantID != getTenantID(c) {
+	tenantID := getTenantID(c)
+	if character.TenantID != tenantID {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
 
-	image, err := h.imageGenService.GenerateCharacterImage(&model.GenerateImageRequest{
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeCharImageGen, "角色图片生成", "character", uint(id))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"type":    req.Type,
+		"emotion": req.Emotion,
+		"action":  req.Action,
+		"style":   req.Style,
+	})
+
+	imgReq := &model.GenerateImageRequest{
 		Subject:     character.Name,
 		Description: character.Description,
 		Type:        req.Type,
 		Emotion:     req.Emotion,
 		Action:      req.Action,
 		Style:       req.Style,
-	})
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
 	}
-
-	respondOK(c, image)
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[CharacterHandler] GenerateCharacterImage task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		image, err := h.imageGenService.GenerateCharacterImage(imgReq)
+		if err != nil {
+			logger.Errorf("[CharacterHandler] GenerateCharacterImage task %s failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+		} else {
+			h.taskSvc.Complete(taskID, map[string]interface{}{"image": image}) //nolint:errcheck
+		}
+	}(task.TaskID)
+	respondAccepted(c, task.TaskID, "角色图片生成任务已提交")
 }
 
 // GenerateThreeView AI生成角色三视图合图（正视/侧视/背视放在同一张图中，异步任务）
@@ -743,7 +767,7 @@ func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
 	respondAccepted(c, task.TaskID, "角色图片批量生成任务已提交")
 }
 
-// GenerateCharacterProfile AI生成角色档案
+// GenerateCharacterProfile AI生成角色档案（异步任务）
 // POST /api/v1/novels/:novel_id/characters/generate
 func (h *CharacterHandler) GenerateCharacterProfile(c *gin.Context) {
 	novelId, ok := parseID(c, "id")
@@ -758,13 +782,35 @@ func (h *CharacterHandler) GenerateCharacterProfile(c *gin.Context) {
 		return
 	}
 
-	character, err := h.characterService.GenerateProfile(getTenantID(c), uint(novelId), req.Description)
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeCharProfileGen, "角色档案生成", "novel", uint(novelId))
 	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"description": req.Description,
+	})
 
-	respondOK(c, character)
+	description := req.Description
+	novelID := uint(novelId)
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[CharacterHandler] GenerateCharacterProfile task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		character, err := h.characterService.GenerateProfile(tenantID, novelID, description)
+		if err != nil {
+			logger.Errorf("[CharacterHandler] GenerateCharacterProfile task %s failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+		} else {
+			h.taskSvc.Complete(taskID, map[string]interface{}{"character": character}) //nolint:errcheck
+		}
+	}(task.TaskID)
+	respondAccepted(c, task.TaskID, "角色档案生成任务已提交")
 }
 
 // GetCharacterArc 获取角色弧光
@@ -981,12 +1027,30 @@ func (h *CharacterHandler) AIExtractMinorCharacters(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "chapter not found")
 		return
 	}
-	chars, err := h.characterService.AIExtractMinorChars(getTenantID(c), uint(novelID), chapter.ID)
+
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterCharExtract, "角色分析", "chapter", chapter.ID)
 	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to extract minor characters: "+err.Error())
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	respondOK(c, gin.H{"characters": chars, "new_count": len(chars)})
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"novel_id":   novelID,
+		"chapter_no": chapterNo,
+	})
+
+	go func(taskID string, tID, nID, chapID uint) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		chars, err := h.characterService.AIExtractMinorChars(tID, nID, chapID)
+		if err != nil {
+			logger.Errorf("[CharacterHandler] AIExtractMinorCharacters task %s failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, map[string]interface{}{"new_count": len(chars)}) //nolint:errcheck
+	}(task.TaskID, tenantID, uint(novelID), chapter.ID)
+
+	respondAccepted(c, task.TaskID, "角色分析任务已提交")
 }
 
 // ReanalyzeCharacter POST /api/v1/characters/:id/reanalyze
@@ -995,12 +1059,26 @@ func (h *CharacterHandler) ReanalyzeCharacter(c *gin.Context) {
 	if !ok {
 		return
 	}
-	char, err := h.characterService.ReanalyzeCharacter(getTenantID(c), uint(id))
+	tenantID := getTenantID(c)
+
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeCharReanalyze, "角色重新分析", "character", uint(id))
 	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "reanalyze failed: "+err.Error())
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	respondOK(c, characterResponse(char))
+
+	go func(taskID string, charID uint) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		char, err := h.characterService.ReanalyzeCharacter(tenantID, charID)
+		if err != nil {
+			logger.Errorf("[CharacterHandler] ReanalyzeCharacter task %s failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, map[string]interface{}{"character": characterResponse(char)}) //nolint:errcheck
+	}(task.TaskID, uint(id))
+
+	respondAccepted(c, task.TaskID, "重新分析任务已提交")
 }
 
 // ExtractCharacterVoice 从小说章节中提取角色对话风格并写回角色的 VoiceStyle 字段
@@ -1053,7 +1131,7 @@ func (h *CharacterHandler) ExtractCharacterVoice(c *gin.Context) {
 	respondOK(c, gin.H{"voice_style": voiceStyle, "character_id": id, "saved": true, "character": characterResponse(updated)})
 }
 
-// PreviewVoice 试听角色声音
+// PreviewVoice 试听角色声音（异步任务）
 // POST /api/v1/characters/:id/voice/preview
 func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
 	id, ok := parseID(c, "id")
@@ -1070,7 +1148,8 @@ func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
-	if character.TenantID != getTenantID(c) {
+	tenantID := getTenantID(c)
+	if character.TenantID != tenantID {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
@@ -1110,35 +1189,59 @@ func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
 		lang = character.VoiceLanguage
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	rawURL, err := h.aiService.AudioGenerateWithOptions(ctx, getTenantID(c), req.Text, voice, speed, style, lang)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeVoicePreview, "语音试听生成", "character", uint(id))
 	if err != nil {
-		logger.Errorf("PreviewVoice: TTS generation failed for character %d voice=%q: %v", id, voice, err)
-		respondErr(c, http.StatusInternalServerError, "voice generation failed: "+err.Error())
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-
-	// For local file:// URLs, encode as base64 data URL so the browser plays it
-	// inline without depending on the tmp file persisting across requests.
-	// For remote URLs (CDN), pass them through directly.
-	playURL := rawURL
-	if len(rawURL) > 7 && rawURL[:7] == "file://" {
-		filePath := rawURL[7:]
-		if data, readErr := os.ReadFile(filePath); readErr == nil && len(data) > 0 {
-			playURL = "data:audio/mpeg;base64," + base64.StdEncoding.EncodeToString(data)
-		} else {
-			// Fallback to sample endpoint if file cannot be read.
-			playURL = "/api/v1/characters/" + c.Param("id") + "/voice/sample?t=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
-		}
-	}
-	h.characterService.UpdateCharacter(uint(id), getTenantID(c), &model.UpdateCharacterRequest{ //nolint:errcheck
-		Name:        character.Name,
-		VoiceSample: rawURL,
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"text":         req.Text,
+		"voice_id":     voice,
+		"voice_speed":  speed,
+		"voice_style":  style,
+		"voice_lang":   lang,
+		"char_name":    character.Name,
+		"char_id_path": c.Param("id"),
 	})
 
-	respondOK(c, gin.H{"audio_url": playURL, "voice_id": voice, "voice_speed": speed})
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[CharacterHandler] PreviewVoice task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		rawURL, err := h.aiService.AudioGenerateWithOptions(ctx, tenantID, req.Text, voice, speed, style, lang)
+		if err != nil {
+			logger.Errorf("PreviewVoice: TTS generation failed for character %d voice=%q: %v", id, voice, err)
+			h.taskSvc.Fail(taskID, "voice generation failed: "+err.Error()) //nolint:errcheck
+			return
+		}
+
+		// For local file:// URLs, encode as base64 data URL so the browser plays it
+		// inline without depending on the tmp file persisting across requests.
+		// For remote URLs (CDN), pass them through directly.
+		playURL := rawURL
+		if len(rawURL) > 7 && rawURL[:7] == "file://" {
+			filePath := rawURL[7:]
+			if data, readErr := os.ReadFile(filePath); readErr == nil && len(data) > 0 {
+				playURL = "data:audio/mpeg;base64," + base64.StdEncoding.EncodeToString(data)
+			} else {
+				// Fallback to sample endpoint if file cannot be read.
+				playURL = "/api/v1/characters/" + strconv.FormatUint(uint64(id), 10) + "/voice/sample?t=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
+			}
+		}
+		h.characterService.UpdateCharacter(uint(id), tenantID, &model.UpdateCharacterRequest{ //nolint:errcheck
+			Name:        character.Name,
+			VoiceSample: rawURL,
+		})
+		h.taskSvc.Complete(taskID, map[string]interface{}{"audio_url": playURL, "voice_id": voice, "voice_speed": speed}) //nolint:errcheck
+	}(task.TaskID)
+	respondAccepted(c, task.TaskID, "语音试听生成任务已提交")
 }
 
 // ServeVoiceSample 播放角色声音样本（file:// 路径转 HTTP 流）
@@ -1329,14 +1432,15 @@ func (h *CharacterHandler) GetActiveLook(c *gin.Context) {
 	respondOK(c, gin.H{"look": look})
 }
 
-// GenerateLookVisualPrompt POST /characters/:id/looks/generate-prompt
+// GenerateLookVisualPrompt POST /characters/:id/looks/generate-prompt（异步任务）
 func (h *CharacterHandler) GenerateLookVisualPrompt(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
+	tenantID := getTenantID(c)
 	char, err := h.characterService.GetCharacter(uint(id))
-	if err != nil || char.TenantID != getTenantID(c) {
+	if err != nil || char.TenantID != tenantID {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
@@ -1347,15 +1451,37 @@ func (h *CharacterHandler) GenerateLookVisualPrompt(c *gin.Context) {
 		respondBadRequest(c, err.Error())
 		return
 	}
-	prompt, err := h.characterService.GenerateLookVisualPrompt(getTenantID(c), uint(id), req.Description)
+
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeLookPromptGen, "形象提示词生成", "character", uint(id))
 	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	respondOK(c, gin.H{"visual_prompt": prompt})
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"description": req.Description,
+	})
+
+	description := req.Description
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[CharacterHandler] GenerateLookVisualPrompt task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		prompt, err := h.characterService.GenerateLookVisualPrompt(tenantID, uint(id), description)
+		if err != nil {
+			logger.Errorf("[CharacterHandler] GenerateLookVisualPrompt task %s failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+		} else {
+			h.taskSvc.Complete(taskID, map[string]interface{}{"visual_prompt": prompt}) //nolint:errcheck
+		}
+	}(task.TaskID)
+	respondAccepted(c, task.TaskID, "形象提示词生成任务已提交")
 }
 
-// GenerateLookImages POST /characters/:id/looks/:look_id/images
+// GenerateLookImages POST /characters/:id/looks/:look_id/images（异步任务）
 func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -1365,8 +1491,9 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 	if !ok {
 		return
 	}
+	tenantID := getTenantID(c)
 	char, err := h.characterService.GetCharacter(uint(id))
-	if err != nil || char.TenantID != getTenantID(c) {
+	if err != nil || char.TenantID != tenantID {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
@@ -1384,39 +1511,65 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 		return
 	}
 
-	tenantID := getTenantID(c)
+	// Capture variables needed in goroutine before returning the HTTP response
 	visualPrompt := look.VisualPrompt
 	if visualPrompt == "" {
 		visualPrompt = char.Description
 	}
-
 	style := h.characterService.GetNovelImageStyle(char.NovelID)
+	charName := char.Name
+	currentPortrait := look.Portrait
+	currentThreeViewSheet := look.ThreeViewSheet
 
-	var imageURL string
-	switch req.Type {
-	case "face_closeup", "portrait", "":
-		img, err := h.imageGenService.GenerateFaceCloseupImage(c.Request.Context(), tenantID, char.Name, visualPrompt, style, "", look.Portrait, req.Provider)
-		if err != nil {
-			respondErr(c, http.StatusInternalServerError, err.Error())
-			return
-		}
-		imageURL = img.URL
-		updateReq := &model.UpdateCharacterLookRequest{FaceCloseup: &imageURL, Portrait: &imageURL}
-		look, _ = h.characterService.UpdateLook(uint(lookID), updateReq)
-	case "three_view":
-		img, err := h.imageGenService.GenerateThreeViewSheet(c.Request.Context(), tenantID, char.Name, visualPrompt, style, "", look.ThreeViewSheet, req.Provider)
-		if err != nil {
-			respondErr(c, http.StatusInternalServerError, err.Error())
-			return
-		}
-		imageURL = img.URL
-		updateReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &imageURL}
-		look, _ = h.characterService.UpdateLook(uint(lookID), updateReq)
-	default:
-		respondBadRequest(c, "type must be 'three_view', 'face_closeup', or 'portrait'")
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeLookImageGen, "形象图片生成", "look", uint(lookID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	respondOK(c, look)
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"type":     req.Type,
+		"char_id":  id,
+		"provider": req.Provider,
+	})
+
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[CharacterHandler] GenerateLookImages task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		ctx := context.Background()
+		var updatedLook *model.CharacterLook
+		switch req.Type {
+		case "face_closeup", "portrait", "":
+			img, err := h.imageGenService.GenerateFaceCloseupImage(ctx, tenantID, charName, visualPrompt, style, "", currentPortrait, req.Provider)
+			if err != nil {
+				logger.Errorf("[CharacterHandler] GenerateLookImages task %s face_closeup failed: %v", taskID, err)
+				h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+				return
+			}
+			imageURL := img.URL
+			updateReq := &model.UpdateCharacterLookRequest{FaceCloseup: &imageURL, Portrait: &imageURL}
+			updatedLook, _ = h.characterService.UpdateLook(uint(lookID), updateReq)
+		case "three_view":
+			img, err := h.imageGenService.GenerateThreeViewSheet(ctx, tenantID, charName, visualPrompt, style, "", currentThreeViewSheet, req.Provider)
+			if err != nil {
+				logger.Errorf("[CharacterHandler] GenerateLookImages task %s three_view failed: %v", taskID, err)
+				h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+				return
+			}
+			imageURL := img.URL
+			updateReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &imageURL}
+			updatedLook, _ = h.characterService.UpdateLook(uint(lookID), updateReq)
+		default:
+			h.taskSvc.Fail(taskID, "type must be 'three_view', 'face_closeup', or 'portrait'") //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, map[string]interface{}{"look": updatedLook}) //nolint:errcheck
+	}(task.TaskID)
+	respondAccepted(c, task.TaskID, "形象图片生成任务已提交")
 }
 
 // GenerateChapterCharacterImages POST /api/v1/novels/:id/chapters/:chapter_no/characters/generate-images

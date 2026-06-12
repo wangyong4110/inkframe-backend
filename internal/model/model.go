@@ -316,6 +316,9 @@ type Chapter struct {
 	// 广场社交数据
 	LikeCount int `json:"like_count" gorm:"default:0"`
 
+	// 乐观锁版本号（协作编辑冲突检测）
+	ContentVersion uint `json:"content_version" gorm:"default:1"`
+
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`

@@ -440,7 +440,14 @@ func (h *NovelHandler) GenerateOutline(c *gin.Context) {
 		return
 	}
 
-	result, err := h.novelService.GenerateOutline(getTenantID(c), &service.GenerateOutlineRequest{
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeNovelOutlineGen, "生成大纲", "novel", uint(novelId))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+
+	outlineReq := &service.GenerateOutlineRequest{
 		NovelID:        uint(novelId),
 		ChapterNum:     req.ChapterNum,
 		Prompt:         req.Prompt,
@@ -448,14 +455,20 @@ func (h *NovelHandler) GenerateOutline(c *gin.Context) {
 		MaxTokens:      req.MaxTokens,
 		Temperature:    req.Temperature,
 		TimeoutSeconds: req.TimeoutSeconds,
-	})
-	if err != nil {
-		logger.Errorf("[NovelHandler] GenerateOutline: novelID=%d err=%v", novelId, err)
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
 	}
 
-	respondOK(c, result)
+	go func(taskID string, tID uint, r *service.GenerateOutlineRequest) {
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		result, err := h.novelService.GenerateOutline(tID, r)
+		if err != nil {
+			logger.Errorf("[NovelHandler] GenerateOutline task %s: novelID=%d err=%v", taskID, r.NovelID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, map[string]interface{}{"outline": result}) //nolint:errcheck
+	}(task.TaskID, tenantID, outlineReq)
+
+	respondAccepted(c, task.TaskID, "大纲生成任务已提交")
 }
 
 // ListOutlineVersions 获取小说大纲历史版本列表
@@ -653,14 +666,15 @@ func (h *NovelHandler) UnpublishNovel(c *gin.Context) {
 	respondOK(c, gin.H{"unpublished": true})
 }
 
-// GenerateCoverImage 使用 AI 为小说生成封面（异步不适用，直接同步返回 URL）
+// GenerateCoverImage 使用 AI 为小说生成封面（异步任务）
 // POST /api/v1/novels/:id/cover/generate
 func (h *NovelHandler) GenerateCoverImage(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
-	if _, err := h.novelService.GetNovel(uint(id), getTenantID(c)); err != nil {
+	tenantID := getTenantID(c)
+	if _, err := h.novelService.GetNovel(uint(id), tenantID); err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return
 	}
@@ -668,16 +682,38 @@ func (h *NovelHandler) GenerateCoverImage(c *gin.Context) {
 		Suggestion string `json:"suggestion"`
 	}
 	_ = c.ShouldBindJSON(&req) // 可选 body，忽略解析错误
-	// 封面生成是长耗时操作（30-120s），使用独立 context 避免受 HTTP WriteTimeout 影响
-	genCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	url, err := h.novelService.GenerateCoverImage(genCtx, getTenantID(c), uint(id), req.Suggestion)
+
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeCoverImageGen, "封面图生成", "novel", uint(id))
 	if err != nil {
-		logger.Errorf("[NovelHandler] GenerateCoverImage: novelID=%d err=%v", id, err)
-		respondErr(c, http.StatusInternalServerError, err.Error())
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	respondOK(c, gin.H{"url": url})
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"suggestion": req.Suggestion,
+	})
+
+	novelID := uint(id)
+	suggestion := req.Suggestion
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[NovelHandler] GenerateCoverImage task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		// 封面生成是长耗时操作（30-120s），使用独立 context 避免受 HTTP WriteTimeout 影响
+		genCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		url, err := h.novelService.GenerateCoverImage(genCtx, tenantID, novelID, suggestion)
+		if err != nil {
+			logger.Errorf("[NovelHandler] GenerateCoverImage task %s: novelID=%d err=%v", taskID, novelID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, map[string]interface{}{"url": url}) //nolint:errcheck
+	}(task.TaskID)
+	respondAccepted(c, task.TaskID, "封面图生成任务已提交")
 }
 
 // SyncCharacterSnapshots 同步章节角色状态快照

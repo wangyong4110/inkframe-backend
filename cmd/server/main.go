@@ -217,6 +217,7 @@ func main() {
 		WebhookHandler:        handlers.WebhookHandler,
 		AuditHandler:          handlers.AuditHandler,
 		OutlineReviewHandler:  handlers.OutlineReviewHandler,
+		CollabHandler:         handlers.CollabHandler,
 	})
 
 	// 12. 创建服务器

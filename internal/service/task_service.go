@@ -39,6 +39,17 @@ const (
 	TaskTypeCrawlJob                 = "crawl_job"
 	TaskTypeSkillGen                 = "skill_gen"
 	TaskTypeBatchChapterGen          = "batch_chapter_gen"
+	TaskTypeCharReanalyze            = "char_reanalyze"
+	TaskTypeChapterCharExtract       = "chapter_char_extract"
+	TaskTypeChapterSceneExtract      = "chapter_scene_extract"
+	TaskTypeNovelOutlineGen          = "novel_outline_gen"
+	TaskTypeCharImageGen             = "char_image_gen"
+	TaskTypeCharProfileGen           = "char_profile_gen"
+	TaskTypeVoicePreview             = "voice_preview"
+	TaskTypeLookPromptGen            = "look_prompt_gen"
+	TaskTypeLookImageGen             = "look_image_gen"
+	TaskTypeCoverImageGen            = "cover_image_gen"
+	TaskTypeImageEdit                = "image_edit"
 )
 
 // TaskService manages persistent async tasks.

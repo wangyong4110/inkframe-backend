@@ -1,25 +1,20 @@
-请为小说《{{ NovelTitle }}》中的角色「{{ CharacterName }}」生成完整角色档案。
+请基于以下小说内容，为角色「{{ CharacterName }}」重新生成角色档案。
 
-# 角色基本信息
-- 姓名：{{ CharacterName }}
-- 定位：{{ CharacterRole }}
-- 简介：{{ CharacterBrief }}
+# 小说信息
+- 标题：《{{ NovelTitle }}》
+- 类型：{{ Genre }}
+- 角色定位：{{ CharacterRole }}
+- 角色简介：{{ CharacterBrief }}
 
-# 相关小说内容
+# 相关章节摘要
 {{ Summaries }}
 
 # 要求
-1. gender：性别，只能是 male / female / neutral 之一
-2. age：年龄或年龄感，简短字符串，如 "16" / "约25岁" / "少年" / "中年"
-3. appearance：外貌概述，一段话，100字以内（与 visual_prompt 互补，此处侧重叙事印象）
-4. personality：深度性格，包含核心特质、行为模式、内在矛盾与核心恐惧
-5. personality_tags：3-5个短标签，每个不超过4字，如["孤傲冷峻","腹黑算计"]
-6. background：详细背景，包含出身、成长经历、重要转折
-7. character_arc：角色成长轨迹，描述起点、关键转变、最终归宿
-8. abilities：核心能力，每项包含 name 和 description
-9. dialogue_style：说话风格（vocabulary_level / patterns 2-4条 / speech_habits 一句话总结）
-10. archetype：角色原型，如英雄、智者、导师、反派、守护者、叛逆者等
-{% if PromptLanguage == "en" %}9. visual_prompt (English): image generation prompt, ~150 words, covering 12 dimensions in order. No art style, quality, or rendering tags:
+1. role 只能是：protagonist / antagonist / supporting
+2. gender：性别，只能是 male / female / neutral 之一
+3. age：年龄或年龄感，简短字符串，如 "16" / "约25岁" / "少年" / "中年"
+{% if PromptLanguage == "en" %}4. description (English): background story only — origin, key experiences, motivations, and how they became who they are. One coherent paragraph, 150 words max{% else %}4. description（中文）：仅描述背景故事——出身来历、成长经历、关键转折、动机与目标，写成连贯段落，150字以内{% endif %}
+{% if PromptLanguage == "en" %}5. visual_prompt (English): image generation prompt, ~150 words, covering 12 dimensions in order. No art style, quality, or rendering tags:
 
    [1] GENDER & BUILD: gender, age range, ethnicity, height, body type, shoulder-to-hip ratio
    [2] FACE: face shape, three-zone proportion, cheekbones, jawline, chin, eye spacing
@@ -32,7 +27,7 @@
    [9] FOOTWEAR: type, heel, material, color
    [10] ACCESSORIES: each item — name, material, style, placement, identity significance; weapons in full detail
    [11] POSTURE: default stance, hand position, characteristic tilt
-   [12] SIGNATURE ELEMENT: the single most recognizable visual detail, described with specific material/condition/placement{% else %}9. visual_prompt（中文）：图像生成提示词，约150字，按序覆盖12个维度，禁止添加画风/质量/渲染标签：
+   [12] SIGNATURE ELEMENT: the single most recognizable visual detail, described with specific material/condition/placement{% else %}5. visual_prompt（中文）：图像生成提示词，约150字，按序覆盖12个维度，禁止添加画风/质量/渲染标签：
 
    [1] 性别体型：性别、年龄感、种族、身高、体型、肩宽、腰臀比
    [2] 面部结构：脸型、三庭比例、颧骨、下颌线、下巴形态、眼距
@@ -46,25 +41,15 @@
    [10] 配饰：逐件——名称、材质、风格、佩戴位置、身份关联；武器完整描述
    [11] 体态：默认站姿、手部位置、特征性倾斜
    [12] 标志性元素：最具辨识度的单一视觉细节，具体描述材质/状态/位置{% endif %}
-10. 严格输出单个 JSON 对象，不含任何说明文字
+6. 若信息不足，结合小说类型和角色定位合理推断，不要留空
+7. 严格输出单个 JSON 对象，不含任何说明文字
 
 # 输出格式（单个 JSON 对象）
 {
   "name": "{{ CharacterName }}",
-  "role": "{{ CharacterRole }}",
+  "role": "protagonist/antagonist/supporting",
   "gender": "male/female/neutral",
   "age": "如 16 / 约25岁 / 少年 / 中年",
-  "archetype": "角色原型",
-  "appearance": "叙事性外貌概述，100字以内",
-  "personality": "...",
-  "personality_tags": ["...", "..."],
-  "background": "...",
-  "character_arc": "...",
-  "abilities": [{"name": "...", "description": "..."}],
-  "dialogue_style": {
-    "vocabulary_level": "武侠",
-    "patterns": ["...", "..."],
-    "speech_habits": "..."
-  },
+  "description": "出身来历、成长经历、关键转折、动机与目标，150字以内",
   "visual_prompt": "按12个维度撰写的图像生成提示词，约150字"
 }
