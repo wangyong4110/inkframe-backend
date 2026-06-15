@@ -941,6 +941,30 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 	if len(modelOverride) > 0 && modelOverride[0] != "" {
 		req.Model = modelOverride[0]
 	}
+	// 兜底：req.MaxTokens == 0 时从 DB provider 记录补充。
+	// 上层 GenerateWithProvider/Ctx 中 provider 级 MaxTokens 查找有 providerName!="" 前置条件，
+	// 当调用方传 providerName="" 时会被跳过。此处用已解析 provider 的名称精确匹配，覆盖所有路径。
+	if req.MaxTokens == 0 && s.providerRepo != nil {
+		if dbProviders, dbErr := s.providerRepo.ListByTenant(tenantID); dbErr == nil {
+			resolvedName := provider.GetName()
+			var sysMT int
+			for _, p := range dbProviders {
+				if p.Name != resolvedName || p.MaxTokens <= 0 {
+					continue
+				}
+				if p.TenantID == tenantID {
+					req.MaxTokens = p.MaxTokens
+					break
+				}
+				if sysMT == 0 {
+					sysMT = p.MaxTokens // 系统级兜底
+				}
+			}
+			if req.MaxTokens == 0 {
+				req.MaxTokens = sysMT
+			}
+		}
+	}
 	// Claude 不支持 top_k，仅在非 Anthropic provider 时传入
 	if provider.GetName() != "anthropic" {
 		req.TopK = config.TopK
