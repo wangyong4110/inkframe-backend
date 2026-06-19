@@ -29,7 +29,7 @@ type OutlineReviewService struct {
 	}
 	aiService      *AIService
 	foreshadowRepo interface {
-		ListByNovel(novelID uint, tenantID uint) ([]*model.Foreshadow, error)
+		ListByNovel(novelID uint) ([]*model.Foreshadow, error)
 	}
 	arcSummaryRepo interface {
 		ListByNovel(novelID uint) ([]*model.ArcSummary, error)
@@ -37,7 +37,7 @@ type OutlineReviewService struct {
 }
 
 func (s *OutlineReviewService) WithForeshadowRepo(r interface {
-	ListByNovel(novelID uint, tenantID uint) ([]*model.Foreshadow, error)
+	ListByNovel(novelID uint) ([]*model.Foreshadow, error)
 }) *OutlineReviewService {
 	s.foreshadowRepo = r
 	return s
@@ -119,8 +119,7 @@ func (s *OutlineReviewService) ReviewChapterOutline(ctx context.Context, tenantI
 
 	now := time.Now()
 	review := &model.OutlineReview{
-		TenantID:   tenantID,
-		NovelID:    chapter.NovelID,
+		NovelID: chapter.NovelID,
 		ChapterID:  chapterID,
 		ChapterNo:  chapter.ChapterNo,
 		Status:     "reviewing",
@@ -221,8 +220,7 @@ outerLoop:
 				logger.Errorf("[OutlineReview] batch review chapter %d failed: %v", ch.ChapterNo, err)
 				now := time.Now()
 				review = &model.OutlineReview{
-					TenantID:   tenantID,
-					NovelID:    novelID,
+					NovelID: novelID,
 					ChapterID:  ch.ID,
 					ChapterNo:  ch.ChapterNo,
 					Status:     "failed",
@@ -359,8 +357,7 @@ func (s *OutlineReviewService) buildSynthesis(ctx context.Context, tenantID uint
 	}
 
 	syn := &model.NovelOutlineSynthesis{
-		TenantID:         tenantID,
-		NovelID:          novel.ID,
+		NovelID: novel.ID,
 		TotalChapters:    totalPlanned,
 		ReviewedCount:    reviewedCount,
 		PassedCount:      passed,
@@ -861,7 +858,7 @@ func (s *OutlineReviewService) runAIReview(ctx context.Context, tenantID uint, c
 		outlineContent = chapter.Outline
 	}
 
-	openForeshadows := s.buildOpenForeshadowsText(tenantID, chapter.NovelID)
+	openForeshadows := s.buildOpenForeshadowsText(chapter.NovelID)
 
 	// 体裁权重摘要（告知 AI 本体裁的审查侧重，辅助其打分）
 	w := getGenreWeights(novel.Genre)
@@ -1001,11 +998,11 @@ func applyWeightedScore(d aiReviewResult, genre string) float64 {
 // ── 伏笔上下文构建 ───────────────────────────────────────────────────────────
 
 // buildOpenForeshadowsText 返回小说当前未兑现伏笔的摘要文本，注入审查 prompt
-func (s *OutlineReviewService) buildOpenForeshadowsText(tenantID, novelID uint) string {
+func (s *OutlineReviewService) buildOpenForeshadowsText(novelID uint) string {
 	if s.foreshadowRepo == nil {
 		return ""
 	}
-	foreshadows, err := s.foreshadowRepo.ListByNovel(novelID, tenantID)
+	foreshadows, err := s.foreshadowRepo.ListByNovel(novelID)
 	if err != nil || len(foreshadows) == 0 {
 		return ""
 	}

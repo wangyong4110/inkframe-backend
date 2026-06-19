@@ -427,7 +427,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			}
 			// 同步 Character.Portrait
 			portraitReq := &model.UpdateCharacterRequest{Name: char.Name, Portrait: img.URL}
-			svcs.CharacterService.UpdateCharacter(charID, char.TenantID, portraitReq) //nolint:errcheck
+			svcs.CharacterService.UpdateCharacter(charID, t.TenantID, portraitReq) //nolint:errcheck
 			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{ //nolint:errcheck
 				"look":      updatedLook,
 				"generated": map[string]string{"face_closeup": img.URL},

@@ -12,9 +12,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/storage"
+	"github.com/redis/go-redis/v9"
 )
 
 // sfxHit holds the result of a single SFX search.
@@ -33,6 +35,14 @@ type sfxCacheEntry struct {
 	expiresAt    time.Time
 }
 
+// sfxCacheEntryJSON is the Redis-serializable form of sfxCacheEntry (exported fields).
+type sfxCacheEntryJSON struct {
+	URL          string    `json:"u"`
+	Source       string    `json:"s"`
+	DurationSecs float64   `json:"d"`
+	ExpiresAt    time.Time `json:"e"`
+}
+
 const sfxCacheTTL = 24 * time.Hour
 
 // SFXService 自动音效生成服务。
@@ -48,8 +58,15 @@ type SFXService struct {
 	httpClient       *http.Client
 	localLib         map[string]string // 内置标签 → 文件名（不含目录）
 	localUploadCache sync.Map          // local file path → OSS URL（进程内缓存）
-	queryCache       sync.Map          // "source:query" → sfxCacheEntry
+	queryCache       sync.Map          // "source:query" → sfxCacheEntry（进程内二级缓存）
 	elevenLabsSem    chan struct{}      // 限制 ElevenLabs 并发数（免费版最多 4 路）
+	cache            *redis.Client     // optional: shared query cache across instances
+}
+
+// WithRedis enables a Redis-backed shared query cache so all instances reuse search results.
+func (s *SFXService) WithRedis(c *redis.Client) *SFXService {
+	s.cache = c
+	return s
 }
 
 // WithSFXItemRepo 注入音效条目仓库（可选；注入后才启用多 item 存储）
@@ -270,6 +287,7 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	}
 
 	if len(results) == 0 {
+		metrics.SFXGenerationTotal.WithLabelValues("none", "error").Inc()
 		return fmt.Errorf("no SFX found for shot %d (tags: %s)", shot.ID, tagsJSON)
 	}
 
@@ -297,6 +315,16 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 			return fmt.Errorf("save sfx items shot %d: %w", shot.ID, err)
 		}
 	}
+
+	// 按 source 统计命中数量（library/ai/cache/...）
+	for _, r := range results {
+		src := r.hit.source
+		if src == "" {
+			src = "unknown"
+		}
+		metrics.SFXGenerationTotal.WithLabelValues(src, "success").Inc()
+	}
+
 	// 自动存入素材库（异步，失败不影响主流程）
 	if s.assetRepo != nil && s.tagRepo != nil {
 		go s.saveToAssetLibrary(context.Background(), shot, dbItems, tenantID)
@@ -710,9 +738,22 @@ func (s *SFXService) fallbackTags(shot *model.StoryboardShot) []string {
 	return tags
 }
 
-// cachedQuery 用进程内缓存包装一次 API 搜索，TTL = sfxCacheTTL。
+// cachedQuery 用 Redis（共享）+ 进程内 sync.Map（二级）缓存包装一次 API 搜索，TTL = sfxCacheTTL。
 // cacheKey 格式建议："source:query"。
 func (s *SFXService) cachedQuery(cacheKey string, fn func() sfxHit) sfxHit {
+	const redisPrefix = "sfx:qcache:"
+
+	// 1. 检查 Redis 共享缓存（跨实例命中）
+	if s.cache != nil {
+		if val, err := s.cache.Get(context.Background(), redisPrefix+cacheKey).Result(); err == nil {
+			var j sfxCacheEntryJSON
+			if json.Unmarshal([]byte(val), &j) == nil && time.Now().Before(j.ExpiresAt) {
+				return sfxHit{url: j.URL, source: j.Source, durationSecs: j.DurationSecs}
+			}
+		}
+	}
+
+	// 2. 检查进程内缓存（同实例二次命中，无网络开销）
 	if v, ok := s.queryCache.Load(cacheKey); ok {
 		entry := v.(sfxCacheEntry)
 		if time.Now().Before(entry.expiresAt) {
@@ -720,12 +761,20 @@ func (s *SFXService) cachedQuery(cacheKey string, fn func() sfxHit) sfxHit {
 		}
 		s.queryCache.Delete(cacheKey)
 	}
+
 	hit := fn()
 	if hit.url != "" && !hit.noCache {
+		expiresAt := time.Now().Add(sfxCacheTTL)
 		s.queryCache.Store(cacheKey, sfxCacheEntry{
 			url: hit.url, source: hit.source, durationSecs: hit.durationSecs,
-			expiresAt: time.Now().Add(sfxCacheTTL),
+			expiresAt: expiresAt,
 		})
+		if s.cache != nil {
+			j := sfxCacheEntryJSON{URL: hit.url, Source: hit.source, DurationSecs: hit.durationSecs, ExpiresAt: expiresAt}
+			if b, err := json.Marshal(j); err == nil {
+				s.cache.Set(context.Background(), redisPrefix+cacheKey, string(b), sfxCacheTTL) //nolint:errcheck
+			}
+		}
 	}
 	return hit
 }

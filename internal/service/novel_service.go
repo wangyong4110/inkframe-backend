@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/redis/go-redis/v9"
@@ -144,9 +145,11 @@ func (s *NovelService) Create(req *CreateNovelRequest) (*model.Novel, error) {
 	}
 
 	if err := s.novelRepo.Create(novel); err != nil {
+		metrics.NovelCreationTotal.WithLabelValues("error").Inc()
 		return nil, err
 	}
 
+	metrics.NovelCreationTotal.WithLabelValues("success").Inc()
 	return novel, nil
 }
 
@@ -679,11 +682,19 @@ type GenerateOutlineRequest struct {
 
 // GenerateOutline 生成大纲
 func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineRequest) (*OutlineResult, error) {
+	outlineStart := time.Now()
+	recordOutline := func(status string) {
+		metrics.OutlineGenerationTotal.WithLabelValues(status).Inc()
+		metrics.OutlineGenerationDuration.Observe(time.Since(outlineStart).Seconds())
+	}
+
 	novel, err := s.novelRepo.GetByID(req.NovelID)
 	if err != nil {
+		recordOutline("error")
 		return nil, err
 	}
 	if novel.TenantID != tenantID {
+		recordOutline("error")
 		return nil, fmt.Errorf("not found")
 	}
 
@@ -709,6 +720,7 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 	// 调用AI生成（使用租户提供商）
 	result, err := s.aiService.GenerateWithProvider(tenantID, req.NovelID, "outline", prompt, "", outlineOverrides)
 	if err != nil {
+		recordOutline("error")
 		return nil, err
 	}
 
@@ -774,6 +786,7 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 						}
 						logger.Errorf("GenerateOutline: failed to parse AI response for novel %d: %v (object len=%d, array len=%d, preview=%q)",
 							req.NovelID, parseErr, len(cleaned), len(cleanedArr), preview)
+						recordOutline("error")
 						return nil, fmt.Errorf("outline parse failed: %w", parseErr)
 					}
 				}
@@ -783,15 +796,11 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 
 	// 大纲版本快照：在用新大纲覆盖之前，将当前大纲存为历史版本
 	if novel.Outline != "" && s.outlineVersionRepo != nil {
-		if maxV, vErr := s.outlineVersionRepo.MaxVersion(novel.ID); vErr == nil {
-			_ = s.outlineVersionRepo.Create(&model.NovelOutlineVersion{
-				TenantID: novel.TenantID,
-				NovelID:  novel.ID,
-				Version:  maxV + 1,
-				Outline:  novel.Outline,
-				Prompt:   req.Prompt,
-			})
-		}
+		_ = s.outlineVersionRepo.CreateVersionAtomic(&model.NovelOutlineVersion{
+			NovelID: novel.ID,
+			Outline: novel.Outline,
+			Prompt:  req.Prompt,
+		})
 	}
 
 	// 将新生成的大纲 JSON 持久化回 novel.outline
@@ -825,10 +834,9 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 			continue
 		}
 		placeholder := &model.Chapter{
-			UUID:          uuid.New().String(),
-			NovelID:       novel.ID,
-			TenantID:      novel.TenantID,
-			ChapterNo:     chap.ChapterNo,
+			UUID:      uuid.New().String(),
+			NovelID:   novel.ID,
+			ChapterNo: chap.ChapterNo,
 			Title:         chap.Title,
 			Summary:       chap.Summary,
 			TensionLevel:  chap.TensionLevel,
@@ -842,6 +850,7 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 		}
 	}
 
+	recordOutline("success")
 	return outline, nil
 }
 
@@ -1496,7 +1505,7 @@ func (s *NovelService) ListNovelComments(novelID uint, page, size int) ([]*model
 }
 
 // AddNovelComment 发表评论（最多支持1级回复，不允许无限嵌套）
-func (s *NovelService) AddNovelComment(novelID, userID uint, nickname, content string, parentID *uint) (*model.NovelComment, error) {
+func (s *NovelService) AddNovelComment(novelID, userID uint, content string, parentID *uint) (*model.NovelComment, error) {
 	if s.novelCommentRepo == nil {
 		return nil, fmt.Errorf("comment feature not available")
 	}
@@ -1515,7 +1524,6 @@ func (s *NovelService) AddNovelComment(novelID, userID uint, nickname, content s
 	c := &model.NovelComment{
 		NovelID:  novelID,
 		UserID:   userID,
-		Nickname: nickname,
 		Content:  content,
 		ParentID: parentID,
 	}

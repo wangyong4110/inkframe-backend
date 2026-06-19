@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
 
@@ -110,7 +111,7 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 			logger.Printf("BatchGenerateShots: shot %d start (mode=%s)", sh.ShotNo, mode)
 			const maxRetries = 3
 			var genErr error
-			if video.Mode == "slideshow" || !s.hasVideoProvider(video.TenantID) {
+			if video.Mode == "slideshow" || !s.hasVideoProvider(s.videoTenantID(video)) {
 				// ── 两阶段异步模式 ──────────────────────────────────────────────────
 				// 阶段一（同步，占用 sem）：AI 图片生成 → 下载到本地
 				// 阶段二（异步，释放 sem 后后台执行）：Ken Burns 编码 → OSS 上传，支持自动重试
@@ -249,7 +250,9 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, pro
 			if idx > 0 && idx < int32(concurrency) {
 				time.Sleep(time.Duration(idx) * 800 * time.Millisecond)
 			}
+			metrics.ShotImageGenerationInFlight.Inc()
 			defer func() {
+				metrics.ShotImageGenerationInFlight.Dec()
 				<-sem
 				wg.Done()
 				advanceProgress()
@@ -272,6 +275,7 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, pro
 				os.Remove(localImage) //nolint:errcheck  // temp file not needed; ImageURL is in DB
 			}
 			if genErr == nil {
+				metrics.ShotImageGenerationTotal.WithLabelValues("success").Inc()
 				if err := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
 					"status": "completed", "progress": 50,
 				}); err != nil {
@@ -279,6 +283,7 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, pro
 				}
 				logger.Printf("BatchGenerateShotImages: shot %d image ready", sh.ShotNo)
 			} else {
+				metrics.ShotImageGenerationTotal.WithLabelValues("error").Inc()
 				logger.Errorf("BatchGenerateShotImages: shot %d failed after %d attempts: %v", sh.ShotNo, maxRetries, genErr)
 				if e := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{"status": "failed"}); e != nil {
 					logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d status=failed: %v", sh.ID, e)
@@ -722,7 +727,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	var imageAspectRatio, colorGrade string
 	if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil {
 		artStyle = video.ArtStyle
-		tenantID = video.TenantID
+		tenantID = s.videoTenantID(video)
 		imageAspectRatio = video.AspectRatio
 		if video.QualityTier != "" {
 			qualityTier = video.QualityTier
@@ -1022,7 +1027,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	// Determine tenantID from associated video for DB provider lookup
 	var tenantID uint
 	if video, vErr := s.videoRepo.GetByID(shot.VideoID); vErr == nil {
-		tenantID = video.TenantID
+		tenantID = s.videoTenantID(video)
 	}
 	provider, providerName, provErr := s.resolveVideoProvider(tenantID, preferredProvider)
 	if provErr != nil {
@@ -1222,10 +1227,12 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 
 	task, err := provider.GenerateVideo(ctx, req)
 	if err != nil {
+		metrics.ShotVideoSubmissionTotal.WithLabelValues(providerName, "error").Inc()
 		logger.Errorf("GenerateShotVideo: shot %d submit failed: %v", shot.ShotNo, err)
 		return fmt.Errorf("shot video generation failed: %w", err)
 	}
 
+	metrics.ShotVideoSubmissionTotal.WithLabelValues(providerName, "success").Inc()
 	logger.Printf("GenerateShotVideo: shot %d submitted taskID=%s", shot.ShotNo, task.TaskID)
 	shot.ShotTaskID = task.TaskID
 	shot.ShotProviderName = providerName
@@ -1667,7 +1674,7 @@ func (s *VideoService) runSlideshowPipeline(videoID uint) {
 		audioWg.Add(1)
 		go func(sh *model.StoryboardShot) {
 			defer audioWg.Done()
-			if err := s.GenerateShotAudio(sh, video.TenantID, narrationVoice); err != nil {
+			if err := s.GenerateShotAudio(sh, s.videoTenantID(video), narrationVoice); err != nil {
 				logger.Errorf("runSlideshowPipeline: audio gen failed for shot %d: %v", sh.ShotNo, err)
 			}
 		}(shot)
@@ -1725,7 +1732,7 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 			continue
 		}
 		// TTS audio in parallel
-		go s.GenerateShotAudio(shot, video.TenantID, narrationVoice) //nolint:errcheck
+		go s.GenerateShotAudio(shot, s.videoTenantID(video), narrationVoice) //nolint:errcheck
 	}
 	return nil
 }

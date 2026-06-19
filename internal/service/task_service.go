@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/redis/go-redis/v9"
@@ -189,7 +191,11 @@ func (s *TaskService) Create(tenantID uint, taskType, title, entityType string, 
 		EntityType: entityType,
 		EntityID:   entityID,
 	}
-	return task, s.repo.Create(task)
+	if err := s.repo.Create(task); err != nil {
+		return nil, err
+	}
+	metrics.TaskCreatedTotal.WithLabelValues(taskType).Inc()
+	return task, nil
 }
 
 // SetRunning transitions the task to running.
@@ -243,6 +249,8 @@ func (s *TaskService) Complete(taskID string, result interface{}) error {
 		logger.Errorf("[TaskService] Complete(%s): %v", taskID, err)
 		return err
 	}
+	taskType := taskTypeFromID(taskID)
+	metrics.TaskCompletedTotal.WithLabelValues(taskType, "success").Inc()
 	return nil
 }
 
@@ -253,7 +261,17 @@ func (s *TaskService) Fail(taskID string, errMsg string) error {
 		logger.Errorf("[TaskService] Fail(%s) reason=%q: %v", taskID, errMsg, err)
 		return err
 	}
+	taskType := taskTypeFromID(taskID)
+	metrics.TaskCompletedTotal.WithLabelValues(taskType, "error").Inc()
 	return nil
+}
+
+// taskTypeFromID extracts the task type prefix from a task ID (e.g. "st-abc12345" → "st").
+func taskTypeFromID(taskID string) string {
+	if i := strings.Index(taskID, "-"); i > 0 {
+		return taskID[:i]
+	}
+	return "unknown"
 }
 
 // MarkTaskFailed implements dead-letter queue semantics.
@@ -477,6 +495,9 @@ func (s *TaskService) recoverOrphaned(age time.Duration) {
 	}
 
 	// 3. Mark remaining stale tasks as failed.
+	// Heartbeat all tasks currently running on this instance first so they are not
+	// falsely considered stale by MarkStaleRunning (cross-instance safety).
+	s.heartbeatRunning()
 	n, err := s.repo.MarkStaleRunning(before)
 	if err != nil {
 		logger.Errorf("TaskService: recoverOrphaned error: %v", err)
@@ -485,6 +506,27 @@ func (s *TaskService) recoverOrphaned(age time.Duration) {
 	}
 	if resumed > 0 {
 		logger.Printf("TaskService: resumed %d task(s) from previous session", resumed)
+	}
+}
+
+// heartbeatRunning refreshes updated_at for all tasks currently running on this instance.
+// Called before MarkStaleRunning so that long-running tasks on this instance are not
+// incorrectly marked as failed by another instance running the periodic cleanup.
+func (s *TaskService) heartbeatRunning() {
+	var ids []string
+	s.cancelFns.Range(func(k, _ interface{}) bool {
+		if id, ok := k.(string); ok {
+			ids = append(ids, id)
+		}
+		return true
+	})
+	if len(ids) == 0 || s.db == nil {
+		return
+	}
+	if err := s.db.Model(&model.AsyncTask{}).
+		Where("task_id IN ?", ids).
+		Update("updated_at", time.Now()).Error; err != nil {
+		logger.Errorf("[TaskService] heartbeatRunning: %v", err)
 	}
 }
 

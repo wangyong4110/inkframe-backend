@@ -27,7 +27,6 @@ func (s *HookChainService) ListByNovel(novelID uint) ([]*model.HookChain, error)
 }
 
 func (s *HookChainService) Create(tenantID, novelID uint, req *model.HookChain) (*model.HookChain, error) {
-	req.TenantID = tenantID
 	req.NovelID = novelID
 	req.IsFulfilled = false
 	if err := s.repo.Create(req); err != nil {
@@ -165,7 +164,6 @@ func (s *SatisfactionPointService) ListByNovel(novelID uint) ([]*model.Satisfact
 }
 
 func (s *SatisfactionPointService) Create(tenantID, novelID uint, req *model.SatisfactionPoint) (*model.SatisfactionPoint, error) {
-	req.TenantID = tenantID
 	req.NovelID = novelID
 	req.IsPlanned = true
 	if err := s.repo.Create(req); err != nil {
@@ -272,7 +270,6 @@ func (s *ConflictArcService) ListByNovel(novelID uint) ([]*model.ConflictArc, er
 }
 
 func (s *ConflictArcService) Create(tenantID, novelID uint, req *model.ConflictArc) (*model.ConflictArc, error) {
-	req.TenantID = tenantID
 	req.NovelID = novelID
 	if req.CurrentPhase == "" {
 		req.CurrentPhase = "setup"

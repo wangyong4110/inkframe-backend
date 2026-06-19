@@ -57,8 +57,7 @@ func (NovelVideoConfig) TableName() string { return "ink_novel_video_config" }
 
 // Video 视频
 type Video struct {
-	ID       uint `json:"id" gorm:"primaryKey"`
-	TenantID uint `json:"tenant_id" gorm:"index;default:0"`
+	ID       uint   `json:"id" gorm:"primaryKey"`
 	UUID     string `json:"uuid" gorm:"uniqueIndex;size:36"`
 	NovelID  uint   `json:"novel_id" gorm:"index;not null"`
 	Novel     *Novel   `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
@@ -319,7 +318,6 @@ const (
 // ReviewRecord 统一审查历史记录（章节/分镜共用同一张表）
 type ReviewRecord struct {
 	gorm.Model
-	TenantID         uint       `json:"tenant_id" gorm:"index;not null;default:1"`
 	EntityType       string     `json:"entity_type" gorm:"size:20;index"`           // "chapter" | "storyboard"
 	EntityID         uint       `json:"entity_id" gorm:"index"`                     // chapter_id 或 video_id
 	OverallScore     float64    `json:"overall_score"`
@@ -335,7 +333,6 @@ func (ReviewRecord) TableName() string { return "ink_review_record" }
 // IgnoredReviewIssue 统一已忽略的审查问题（章节/分镜共用同一张表）
 type IgnoredReviewIssue struct {
 	gorm.Model
-	TenantID    uint   `json:"tenant_id" gorm:"index;not null;default:1"`
 	EntityType  string `json:"entity_type" gorm:"size:20;index"`
 	EntityID    uint   `json:"entity_id" gorm:"index"`
 	IssueText   string `json:"issue_text" gorm:"type:text"`

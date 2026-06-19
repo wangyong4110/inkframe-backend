@@ -95,7 +95,7 @@ func (s *ForeshadowCRUDService) AIExtractFromNovel(ctx context.Context, tenantID
 		return nil, fmt.Errorf("failed to parse AI response")
 	}
 
-	existing, _ := s.repo.ListByNovel(novelID, tenantID)
+	existing, _ := s.repo.ListByNovel(novelID)
 	existingTitles := make(map[string]struct{}, len(existing))
 	for _, e := range existing {
 		existingTitles[e.Title] = struct{}{}
@@ -130,7 +130,6 @@ func (s *ForeshadowCRUDService) AIExtractFromNovel(ctx context.Context, tenantID
 			conf = "medium"
 		}
 		f := &model.Foreshadow{
-			TenantID:              tenantID,
 			NovelID:               novelID,
 			Title:                 item.Title,
 			Description:           item.Description,
@@ -173,12 +172,12 @@ func (s *ForeshadowCRUDService) Create(ctx context.Context, f *model.Foreshadow)
 	return s.repo.Create(f)
 }
 
-func (s *ForeshadowCRUDService) ListByNovel(ctx context.Context, novelID uint, tenantID uint) ([]*model.Foreshadow, error) {
-	return s.repo.ListByNovel(novelID, tenantID)
+func (s *ForeshadowCRUDService) ListByNovel(ctx context.Context, novelID uint) ([]*model.Foreshadow, error) {
+	return s.repo.ListByNovel(novelID)
 }
 
-func (s *ForeshadowCRUDService) ListUnfulfilled(ctx context.Context, novelID uint, tenantID uint) ([]*model.Foreshadow, error) {
-	return s.repo.ListUnfulfilled(novelID, tenantID)
+func (s *ForeshadowCRUDService) ListUnfulfilled(ctx context.Context, novelID uint) ([]*model.Foreshadow, error) {
+	return s.repo.ListUnfulfilled(novelID)
 }
 
 func (s *ForeshadowCRUDService) Update(ctx context.Context, id uint, updates map[string]interface{}) (*model.Foreshadow, error) {
@@ -299,8 +298,8 @@ type ForeshadowTreeNode struct {
 }
 
 // GetTree 返回按父子关系组织的伏笔树结构
-func (s *ForeshadowCRUDService) GetTree(ctx context.Context, novelID, tenantID uint) ([]*ForeshadowTreeNode, error) {
-	list, err := s.repo.ListByNovel(novelID, tenantID)
+func (s *ForeshadowCRUDService) GetTree(ctx context.Context, novelID uint) ([]*ForeshadowTreeNode, error) {
+	list, err := s.repo.ListByNovel(novelID)
 	if err != nil {
 		return nil, err
 	}
@@ -334,8 +333,8 @@ type ForeshadowStats struct {
 	ByConfidence  map[string]int `json:"by_confidence"`
 }
 
-func (s *ForeshadowCRUDService) GetStats(ctx context.Context, novelID, tenantID uint, currentChapterNo int) (*ForeshadowStats, error) {
-	list, err := s.repo.ListByNovel(novelID, tenantID)
+func (s *ForeshadowCRUDService) GetStats(ctx context.Context, novelID uint, currentChapterNo int) (*ForeshadowStats, error) {
+	list, err := s.repo.ListByNovel(novelID)
 	if err != nil {
 		return nil, err
 	}

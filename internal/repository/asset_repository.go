@@ -345,6 +345,22 @@ func (r *AssetVersionRepository) MaxVersionNo(assetID uint) (int, error) {
 	return max, err
 }
 
+// CreateVersionAtomic assigns the next version_no and creates the record in a single
+// transaction, preventing duplicate version numbers when multiple instances upload concurrently.
+func (r *AssetVersionRepository) CreateVersionAtomic(v *model.AssetVersion) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var maxNo int
+		if err := tx.Raw(
+			"SELECT COALESCE(MAX(version_no), 0) FROM ink_asset_version WHERE asset_id = ? FOR UPDATE",
+			v.AssetID,
+		).Scan(&maxNo).Error; err != nil {
+			return err
+		}
+		v.VersionNo = maxNo + 1
+		return tx.Create(v).Error
+	})
+}
+
 // ─── AssetCollectionRepository ───────────────────────────────────────────────
 
 type AssetCollectionRepository struct{ db *gorm.DB }

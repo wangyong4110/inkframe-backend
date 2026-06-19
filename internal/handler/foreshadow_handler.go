@@ -25,8 +25,7 @@ func (h *ForeshadowHandler) ListForeshadows(c *gin.Context) {
 	if !ok {
 		return
 	}
-	tenantID := getTenantID(c)
-	list, err := h.svc.ListByNovel(c.Request.Context(), novelID, tenantID)
+	list, err := h.svc.ListByNovel(c.Request.Context(), novelID)
 	if err != nil {
 		logger.Errorf("[ForeshadowHandler] ListForeshadows: novelID=%d err=%v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to list foreshadows")
@@ -50,7 +49,6 @@ func (h *ForeshadowHandler) CreateForeshadow(c *gin.Context) {
 		return
 	}
 	f.NovelID = novelID
-	f.TenantID = getTenantID(c)
 	if f.Status == "" {
 		f.Status = "planted"
 	}
@@ -71,8 +69,7 @@ func (h *ForeshadowHandler) ListUnfulfilledForeshadows(c *gin.Context) {
 	if !ok {
 		return
 	}
-	tenantID := getTenantID(c)
-	list, err := h.svc.ListUnfulfilled(c.Request.Context(), novelID, tenantID)
+	list, err := h.svc.ListUnfulfilled(c.Request.Context(), novelID)
 	if err != nil {
 		logger.Errorf("[ForeshadowHandler] ListUnfulfilled: novelID=%d err=%v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to list unfulfilled foreshadows")
@@ -126,14 +123,13 @@ func (h *ForeshadowHandler) GetForeshadowStats(c *gin.Context) {
 	if !ok {
 		return
 	}
-	tenantID := getTenantID(c)
 	currentChapterNo := 0
 	if v := c.Query("current_chapter"); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			currentChapterNo = n
 		}
 	}
-	stats, err := h.svc.GetStats(c.Request.Context(), novelID, tenantID, currentChapterNo)
+	stats, err := h.svc.GetStats(c.Request.Context(), novelID, currentChapterNo)
 	if err != nil {
 		logger.Errorf("[ForeshadowHandler] GetStats: novelID=%d err=%v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to get foreshadow stats")
@@ -192,8 +188,7 @@ func (h *ForeshadowHandler) GetForeshadowTree(c *gin.Context) {
 	if !ok {
 		return
 	}
-	tenantID := getTenantID(c)
-	tree, err := h.svc.GetTree(c.Request.Context(), novelID, tenantID)
+	tree, err := h.svc.GetTree(c.Request.Context(), novelID)
 	if err != nil {
 		logger.Errorf("[ForeshadowHandler] GetTree: novelID=%d err=%v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to get foreshadow tree")

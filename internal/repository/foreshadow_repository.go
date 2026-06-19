@@ -23,14 +23,14 @@ func (r *ForeshadowRepository) GetByID(id uint) (*model.Foreshadow, error) {
 	return &f, r.db.First(&f, id).Error
 }
 
-func (r *ForeshadowRepository) ListByNovel(novelID uint, tenantID uint) ([]*model.Foreshadow, error) {
+func (r *ForeshadowRepository) ListByNovel(novelID uint) ([]*model.Foreshadow, error) {
 	var list []*model.Foreshadow
-	return list, r.db.Where("novel_id = ? AND tenant_id = ?", novelID, tenantID).Order("created_at DESC").Find(&list).Error
+	return list, r.db.Where("novel_id = ?", novelID).Order("created_at DESC").Find(&list).Error
 }
 
-func (r *ForeshadowRepository) ListUnfulfilled(novelID uint, tenantID uint) ([]*model.Foreshadow, error) {
+func (r *ForeshadowRepository) ListUnfulfilled(novelID uint) ([]*model.Foreshadow, error) {
 	var list []*model.Foreshadow
-	return list, r.db.Where("novel_id = ? AND status = 'planted' AND tenant_id = ?", novelID, tenantID).Order("created_at DESC").Find(&list).Error
+	return list, r.db.Where("novel_id = ? AND status = 'planted'", novelID).Order("created_at DESC").Find(&list).Error
 }
 
 func (r *ForeshadowRepository) Update(f *model.Foreshadow) error {

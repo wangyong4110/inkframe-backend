@@ -239,7 +239,6 @@ func (s *PlotPointService) ExtractFromChapter(ctx context.Context, tenantID uint
 		chars, _ := json.Marshal(p.Characters)
 		locs, _ := json.Marshal(p.Locations)
 		pps = append(pps, &model.PlotPoint{
-			TenantID:    tenantID,
 			NovelID:     chapter.NovelID,
 			ChapterID:   chapter.ID,
 			Type:        p.Type,

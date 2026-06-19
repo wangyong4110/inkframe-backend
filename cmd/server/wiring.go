@@ -536,6 +536,9 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	middleware.SetTenantSubRedis(redisClient)
 	middleware.StartTenantSubInvalidator(context.Background(), redisClient)
 
+	// Cross-instance crawl-done callback delivery via Redis Pub/Sub.
+	content.NovelImport.StartCrawlDoneSubscriber(context.Background())
+
 	// 改写服务（依赖统一异步任务系统）
 	rewriteSvc := service.NewRewriteService(
 		repos.RewriteProjectRepo,
@@ -667,7 +670,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 			repos.SearchLogRepo,
 			repos.TenantQuotaRepo,
 			core.Task,
-		),
+		).WithRedis(redisClient), // Fix: cross-instance asset crawl dedup
 		// ── Reading / Chapter Social ──
 		ReadingService: service.NewReadingService(
 			repos.ChapterLikeRepo,
@@ -751,7 +754,7 @@ type Handlers struct {
 }
 
 // initHandlers 初始化处理器
-func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, repos *Repositories, cfg *config.Config) *Handlers {
+func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, repos *Repositories, cfg *config.Config, redisClient *redis.Client) *Handlers {
 	return &Handlers{
 		NovelHandler: handler.NewNovelHandler(
 			services.NovelService,
@@ -794,7 +797,8 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		ImportHandler: handler.NewImportHandler(services.NovelImportService, services.NovelToVideoService).
 			SetAnalysisService(services.NovelAnalysisService).
 			WithTaskService(services.TaskService).
-			WithNovelService(services.NovelService),
+			WithNovelService(services.NovelService).
+			WithRedis(redisClient), // Fix: cross-instance chunked upload session storage
 		WorldviewHandler:   handler.NewWorldviewHandler(services.WorldviewService),
 		TenantHandler:      handler.NewTenantHandler(services.TenantService),
 		ItemHandler:        handler.NewItemHandler(services.ItemService, services.ChapterService).WithStorage(storageSvc).WithTaskService(services.TaskService).WithNovelService(services.NovelService),

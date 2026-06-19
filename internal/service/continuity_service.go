@@ -102,7 +102,6 @@ func (s *ContinuityService) ValidateChapter(novelID, chapterID, tenantID uint, c
 		rec := &model.ContinuityReportRecord{
 			NovelID:    novelID,
 			ChapterID:  chapterID,
-			TenantID:   tenantID,
 			ReportJSON: string(data),
 			IssueCount: issueCount,
 			Passed:     !report.HasIssues,

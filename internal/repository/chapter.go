@@ -69,7 +69,7 @@ func (r *ChapterRepository) GetByNovelAndChapterNo(novelID uint, chapterNo int) 
 
 // chapterListColumns 章节列表元数据字段。排除 content/scene_outline/plot_points/chapter_hook 等超大文本列。
 // outline/summary 较短（百字级），保留用于列表摘要展示。
-const chapterListColumns = "id, novel_id, tenant_id, uuid, chapter_no, title, status, word_count, " +
+const chapterListColumns = "id, novel_id, uuid, chapter_no, title, status, word_count, " +
 	"tension_level, act_no, emotional_tone, hook_type, " +
 	"outline, summary, continuity_blocked, " +
 	"created_at, updated_at, deleted_at"
@@ -208,7 +208,7 @@ func (r *ChapterRepository) AtomicSetGenerating(id, novelID uint) (bool, error) 
 // ListPublishedByNovel 获取小说已发布章节（按章节号升序）
 func (r *ChapterRepository) ListPublishedByNovel(novelID uint) ([]*model.Chapter, error) {
 	var chapters []*model.Chapter
-	err := r.db.Select("id, novel_id, tenant_id, uuid, chapter_no, title, summary, status, is_published, published_at, word_count, created_at, updated_at").
+	err := r.db.Select("id, novel_id, uuid, chapter_no, title, summary, status, is_published, published_at, word_count, created_at, updated_at").
 		Where("novel_id = ? AND is_published = ?", novelID, true).
 		Order("chapter_no ASC").Find(&chapters).Error
 	return chapters, err

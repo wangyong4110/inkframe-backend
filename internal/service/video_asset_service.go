@@ -15,9 +15,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"gorm.io/gorm"
 )
@@ -49,23 +51,18 @@ func (s *VideoService) ListVoiceSegments(shotID uint) ([]*model.ShotVoiceSegment
 	return s.segmentRepo.ListByShotID(shotID)
 }
 
-// AppendVoiceSegment 追加段落到分镜末尾
+// AppendVoiceSegment 追加段落到分镜末尾（seq_no 由事务内 FOR UPDATE 原子分配，防止并发重复）
 func (s *VideoService) AppendVoiceSegment(shotID uint, input VoiceSegmentInput) (*model.ShotVoiceSegment, error) {
 	if s.segmentRepo == nil {
 		return nil, fmt.Errorf("segment repository not initialized")
 	}
-	maxSeq, err := s.segmentRepo.MaxSeqNo(shotID)
-	if err != nil {
-		return nil, err
-	}
 	seg := &model.ShotVoiceSegment{
 		ShotID:  shotID,
-		SeqNo:   maxSeq + 1,
 		Text:    input.Text,
 		Speaker: input.Speaker,
 		VoiceID: input.VoiceID,
 	}
-	return seg, s.segmentRepo.Create(seg)
+	return seg, s.segmentRepo.AppendAtomic(seg)
 }
 
 // InsertVoiceSegment 在 afterSeqNo 之后插入新段落（afterSeqNo=0 表示插入到最前）
@@ -258,8 +255,11 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 	}
 	text := stripDialogueSpeakerPrefix(seg.Text)
 	if text == "" {
+		metrics.TTSGenerationTotal.WithLabelValues("skipped").Inc()
 		return nil
 	}
+
+	ttsStart := time.Now()
 
 	// 预加载 shot + video 一次，同时用于：① 角色声音查找 ② EmotionalTone
 	var novelID uint
@@ -308,6 +308,8 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 
 	audioURL, err := s.aiService.AudioGenerateWithOptions(context.Background(), tenantID, text, voice, speed, style)
 	if err != nil {
+		metrics.TTSGenerationTotal.WithLabelValues("error").Inc()
+		metrics.TTSGenerationDuration.Observe(time.Since(ttsStart).Seconds())
 		// Clear stale audio_path so the UI shows generation failed rather than showing an old path.
 		if seg.AudioPath != "" {
 			if clearErr := s.segmentRepo.UpdateFields(segID, map[string]interface{}{"audio_path": ""}); clearErr != nil {
@@ -317,6 +319,8 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 		return fmt.Errorf("TTS failed for segment %d: %w", segID, err)
 	}
 	if audioURL == "" {
+		metrics.TTSGenerationTotal.WithLabelValues("error").Inc()
+		metrics.TTSGenerationDuration.Observe(time.Since(ttsStart).Seconds())
 		if seg.AudioPath != "" {
 			if clearErr := s.segmentRepo.UpdateFields(segID, map[string]interface{}{"audio_path": ""}); clearErr != nil {
 				logger.Errorf("[VideoService] GenerateSegmentAudio: clear audio_path for segment %d: %v", segID, clearErr)
@@ -324,6 +328,8 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 		}
 		return fmt.Errorf("TTS returned empty URL for segment %d", segID)
 	}
+	metrics.TTSGenerationTotal.WithLabelValues("success").Inc()
+	metrics.TTSGenerationDuration.Observe(time.Since(ttsStart).Seconds())
 
 	// Download audio bytes (needed for OSS upload and duration calculation)
 	var audioData []byte

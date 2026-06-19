@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/redis/go-redis/v9"
@@ -700,20 +701,38 @@ func (s *NarrativeMemoryService) TriggerArcSummaryIfNeeded(tenantID, novelID uin
 
 // WaitForArcSummary blocks until the arc summary for the given arcNo of the given novel is done
 // (i.e., the async goroutine has released its lock), or until timeout elapses.
-// Call this before BuildHierarchicalContext when the previous chapter was the last chapter of an arc.
+// Checks both the process-local arcGenLocks and the Redis key so cross-instance arc generation
+// on other instances is also detected.
 func (s *NarrativeMemoryService) WaitForArcSummary(novelID uint, arcNo int, timeout time.Duration) {
 	lockKey := fmt.Sprintf("%d-%d", novelID, arcNo)
+	redisKey := "lock:arc:gen:" + lockKey
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if _, running := s.arcGenLocks.Load(lockKey); !running {
-			return
+		if _, localRunning := s.arcGenLocks.Load(lockKey); localRunning {
+			time.Sleep(200 * time.Millisecond)
+			continue
 		}
-		time.Sleep(200 * time.Millisecond)
+		if s.cache != nil {
+			if n, err := s.cache.Exists(context.Background(), redisKey).Result(); err == nil && n > 0 {
+				time.Sleep(200 * time.Millisecond)
+				continue
+			}
+		}
+		return
 	}
 	logger.Printf("[NarrativeMemory] WaitForArcSummary: timeout waiting for arc %d of novel %d", arcNo, novelID)
 }
 
-func (s *NarrativeMemoryService) generateArcSummary(tenantID, novelID uint, arcNo, startChapter, endChapter int) error {
+func (s *NarrativeMemoryService) generateArcSummary(tenantID, novelID uint, arcNo, startChapter, endChapter int) (retErr error) {
+	arcStart := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.ArcSummaryTotal.WithLabelValues(status).Inc()
+		metrics.ArcSummaryDuration.Observe(time.Since(arcStart).Seconds())
+	}()
 	logger.Printf("[NarrativeMemory] generateArcSummary: novelID=%d arcNo=%d ch%d~ch%d", novelID, arcNo, startChapter, endChapter)
 	// chSummary 除摘要外，额外携带章首/章末原文节选和章末钩子。
 	// 弧摘要 AI 只靠摘要（约200字/章）会丢失大量细节（伏笔措辞、对话权力博弈、世界观细节）；
@@ -1029,7 +1048,16 @@ func (s *NarrativeMemoryService) adaptOutlineAfterArc(
 // ──────────────────────────────────────────────
 
 // GenerateChapterSummary 为已生成章节内容生成80-120字摘要
-func (s *NarrativeMemoryService) GenerateChapterSummary(tenantID uint, chapter *model.Chapter, novelTitle string) (string, error) {
+func (s *NarrativeMemoryService) GenerateChapterSummary(tenantID uint, chapter *model.Chapter, novelTitle string) (retSummary string, retErr error) {
+	summaryStart := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.ChapterSummaryTotal.WithLabelValues(status).Inc()
+		metrics.ChapterSummaryDuration.Observe(time.Since(summaryStart).Seconds())
+	}()
 	logger.Printf("[NarrativeMemory] GenerateChapterSummary: novelID=%d chapterNo=%d", chapter.NovelID, chapter.ChapterNo)
 
 	// P0-1: 头尾截断，确保章末结局状态也被摘要覆盖（前6000字只看开头，无法感知章末事件）
@@ -1078,7 +1106,14 @@ func (s *NarrativeMemoryService) GenerateChapterSummary(tenantID uint, chapter *
 // ──────────────────────────────────────────────
 
 // GenerateChapterTitle 根据摘要和情感基调生成创意章节标题
-func (s *NarrativeMemoryService) GenerateChapterTitle(tenantID uint, chapter *model.Chapter, genre, emotionalTone string) (string, error) {
+func (s *NarrativeMemoryService) GenerateChapterTitle(tenantID uint, chapter *model.Chapter, genre, emotionalTone string) (retTitle string, retErr error) {
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.ChapterTitleTotal.WithLabelValues(status).Inc()
+	}()
 	logger.Printf("[NarrativeMemory] GenerateChapterTitle: novelID=%d chapterNo=%d", chapter.NovelID, chapter.ChapterNo)
 	prompt, err := renderPrompt("chapter_title", map[string]interface{}{
 		"Genre":         genre,

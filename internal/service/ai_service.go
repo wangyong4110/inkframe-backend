@@ -16,6 +16,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/crypto"
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/storage"
@@ -682,11 +683,30 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 	}
 
 	// 调用真实AI API
+	effectiveProvider := providerName
+	if effectiveProvider == "" {
+		effectiveProvider = "default"
+	}
+	metrics.AIRequestsInFlight.WithLabelValues(taskType, effectiveProvider).Inc()
 	callStart := time.Now()
 	result, resp, err := s.callAIWithProviderSys(context.Background(), tenantID, prompt, sysPmt, &config, providerName, resolvedModel)
+	elapsed := time.Since(callStart).Seconds()
+	metrics.AIRequestsInFlight.WithLabelValues(taskType, effectiveProvider).Dec()
+
+	// Prometheus 指标：AI 调用结果
 	if err != nil {
+		metrics.AIRequestsTotal.WithLabelValues(taskType, effectiveProvider, "error").Inc()
 		return "", fmt.Errorf("AI generation failed: %w", err)
 	}
+	metrics.AIRequestsTotal.WithLabelValues(taskType, effectiveProvider, "success").Inc()
+	metrics.AIRequestDuration.WithLabelValues(taskType, effectiveProvider).Observe(elapsed)
+	if resp.InputTokens > 0 {
+		metrics.AITokensTotal.WithLabelValues(taskType, effectiveProvider, "prompt").Add(float64(resp.InputTokens))
+	}
+	if resp.Tokens > 0 {
+		metrics.AITokensTotal.WithLabelValues(taskType, effectiveProvider, "completion").Add(float64(resp.Tokens))
+	}
+
 	s.logUsage(tenantID, &config, taskType, resp, time.Since(callStart).Milliseconds())
 
 	return result, nil

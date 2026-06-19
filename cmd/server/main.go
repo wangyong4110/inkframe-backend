@@ -14,9 +14,11 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/config"
 	"github.com/inkframe/inkframe-backend/internal/handler"
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/router"
 	"github.com/inkframe/inkframe-backend/internal/service"
 	"github.com/inkframe/inkframe-backend/internal/storage"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -24,8 +26,10 @@ import (
 )
 
 // startRecalcLoop runs fn every hour in a background goroutine; panics are recovered.
+// If rdb is non-nil, a Redis SETNX lock (TTL 55min) ensures only one instance executes
+// per cycle — preventing duplicate DB writes in multi-instance deployments.
 // The goroutine exits when quit is closed.
-func startRecalcLoop(tag string, quit <-chan struct{}, fn func() error) {
+func startRecalcLoop(tag string, quit <-chan struct{}, rdb *redis.Client, fn func() error) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -37,6 +41,13 @@ func startRecalcLoop(tag string, quit <-chan struct{}, fn func() error) {
 		for {
 			select {
 			case <-ticker.C:
+				if rdb != nil {
+					lockKey := "recalc:lock:" + tag
+					ok, err := rdb.SetNX(context.Background(), lockKey, "1", 55*time.Minute).Result()
+					if err != nil || !ok {
+						continue // another instance is already running this cycle
+					}
+				}
 				if err := fn(); err != nil {
 					logger.Errorf("[%s] recalc error: %v", tag, err)
 				}
@@ -94,6 +105,14 @@ func main() {
 
 	// 4. 初始化Redis
 	redisClient := initRedis(cfg)
+
+	// 4a. 注册 DB/Redis 连接池 Prometheus Collector（每次 Scrape 读取实时连接池数据）
+	if sqlDB, err2 := db.DB(); err2 == nil {
+		prometheus.MustRegister(metrics.NewDBStatsCollector(sqlDB))
+	}
+	if redisClient != nil {
+		prometheus.MustRegister(metrics.NewRedisStatsCollector(redisClient))
+	}
 
 	// 5. 初始化AI模块（含图像生成提供者注册）
 	aiManager := initAIModule(cfg)
@@ -164,11 +183,12 @@ func main() {
 	})
 	sfxService.WithSFXItemRepo(repos.ShotSFXItemRepo)
 	sfxService.WithAssetRepo(repos.AssetRepo, repos.TagRepo)
+	sfxService.WithRedis(redisClient) // Fix: cross-instance SFX query cache sharing
 	services.SFXService = sfxService
 	services.VideoService.WithSFXService(sfxService)
 
 	// 11. 初始化处理器
-	handlers := initHandlers(services, storageSvc, db, repos, cfg)
+	handlers := initHandlers(services, storageSvc, db, repos, cfg, redisClient)
 
 	// 11b. 设置Gin模式（必须在 SetupRouter 之前）
 	if cfg.Server.Mode == "release" {
@@ -247,14 +267,14 @@ func main() {
 
 	// 后台定时任务：每小时重新计算热度分（带优雅退出）
 	hotScoreQuit := make(chan struct{})
-	startRecalcLoop("hot-score", hotScoreQuit, services.VideoService.RecalcVideoHotScores)
-	startRecalcLoop("novel-hot-score", hotScoreQuit, services.NovelService.RecalcNovelHotScores)
+	startRecalcLoop("hot-score", hotScoreQuit, redisClient, services.VideoService.RecalcVideoHotScores)
+	startRecalcLoop("novel-hot-score", hotScoreQuit, redisClient, services.NovelService.RecalcNovelHotScores)
 
 	// 后台定时任务：每 30 分钟清理超时的分片上传会话（防内存泄漏）
 	safeGo("chunk-cleanup", handler.CleanupChunkStore)
 
 	// 后台定时任务：每 24 小时清理 7 天前的章节历史版本
-	startRecalcLoop("chapter-version-cleanup", hotScoreQuit, func() error {
+	startRecalcLoop("chapter-version-cleanup", hotScoreQuit, redisClient, func() error {
 		cutoff := time.Now().AddDate(0, 0, -7)
 		n, err := repos.ChapterVersionRepo.DeleteOlderThan(cutoff)
 		if err != nil {
@@ -358,7 +378,49 @@ func initDatabase(cfg *config.Config) (*gorm.DB, error) {
 	sqlDB.SetConnMaxLifetime(time.Hour)
 	sqlDB.SetConnMaxIdleTime(15 * time.Minute)
 
+	// Prometheus GORM 回调：记录每次 DB 操作的耗时和次数。
+	// 使用 Statement.Table 作为表名标签（GORM 解析后可用）。
+	registerGORMMetrics(db)
+
 	return db, nil
+}
+
+// registerGORMMetrics 注册 GORM 回调，采集 DB 查询指标到 Prometheus。
+// 使用 InstanceSet/InstanceGet（不产生 clone）在同一 Statement 的 before/after 回调间传递计时起点。
+func registerGORMMetrics(db *gorm.DB) {
+	const startKey = "metrics:start"
+
+	// before 回调：记录开始时间到 Statement 的 InstanceSettings（不 clone，跨回调可见）
+	beforeFn := func(db *gorm.DB) { db.InstanceSet(startKey, time.Now()) }
+
+	afterFn := func(sqlOp string) func(*gorm.DB) {
+		return func(db *gorm.DB) {
+			v, ok := db.InstanceGet(startKey)
+			if !ok {
+				return
+			}
+			elapsed := time.Since(v.(time.Time)).Seconds()
+			table := db.Statement.Table
+			if table == "" {
+				table = "unknown"
+			}
+			errLabel := "false"
+			if db.Error != nil {
+				errLabel = "true"
+			}
+			metrics.DBQueriesTotal.WithLabelValues(table, sqlOp, errLabel).Inc()
+			metrics.DBQueryDuration.WithLabelValues(table, sqlOp).Observe(elapsed)
+		}
+	}
+
+	db.Callback().Create().Before("gorm:create").Register("metrics:before_create", beforeFn)
+	db.Callback().Create().After("gorm:after_create").Register("metrics:after_create", afterFn("INSERT"))
+	db.Callback().Query().Before("gorm:query").Register("metrics:before_query", beforeFn)
+	db.Callback().Query().After("gorm:after_query").Register("metrics:after_query", afterFn("SELECT"))
+	db.Callback().Update().Before("gorm:update").Register("metrics:before_update", beforeFn)
+	db.Callback().Update().After("gorm:after_update").Register("metrics:after_update", afterFn("UPDATE"))
+	db.Callback().Delete().Before("gorm:delete").Register("metrics:before_delete", beforeFn)
+	db.Callback().Delete().After("gorm:after_delete").Register("metrics:after_delete", afterFn("DELETE"))
 }
 
 // initRedis 初始化Redis

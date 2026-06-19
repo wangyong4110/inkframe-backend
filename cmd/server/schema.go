@@ -10,7 +10,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-06-17-v2"
+const schemaVersion = "2026-06-20-v4"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -85,16 +85,8 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"users", "last_login_at", "DATETIME(3) NULL"},
 		// ink_model_usage_log 租户隔离（Fix 1: logUsage 增加 tenantID）
 		{"ink_model_usage_log", "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 0"},
-		// 多租户隔离列补充（Fix 8: 确保关键表均有 tenant_id）
-		{"ink_character",      "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1"},
-		{"ink_item",           "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1"},
-		{"ink_plot_point",     "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1"},
-		{"ink_scene_anchor",   "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1"},
-		{"ink_knowledge_base", "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1"},
 		// ink_worldview_entity 租户隔离（Fix 5: WorldviewEntity 缺失 tenant_id 补全）
 		{"ink_worldview_entity", "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1"},
-		// ink_quality_report 租户隔离（Fix 2: QualityReport 新增 tenant_id）
-		{"ink_quality_report", "tenant_id", "BIGINT UNSIGNED NOT NULL DEFAULT 1"},
 		// ink_chapter 连贯性高危问题标记（2026-06-01 新增）
 		{"ink_chapter", "continuity_blocked", "TINYINT(1) NOT NULL DEFAULT 0"},
 		// ink_async_task 死信队列字段（2026-06-01 新增）
@@ -190,6 +182,31 @@ func dropLegacyCharacterColumns(db *gorm.DB) {
 		{"ink_item", "appearance"},
 		// ink_scene_anchor: RefImageShotID → 已删除
 		{"ink_scene_anchor", "ref_image_shot_id"},
+		// 2026-06-20: 删除冗余 tenant_id（通过 novel_id → novel.tenant_id 链校验）
+		{"ink_plot_point",             "tenant_id"},
+		{"ink_scene_anchor",           "tenant_id"},
+		{"ink_skill",                  "tenant_id"},
+		{"ink_character",              "tenant_id"},
+		{"ink_chapter",                "tenant_id"},
+		{"ink_quality_report",         "tenant_id"},
+		{"ink_novel_outline_version",  "tenant_id"},
+		{"ink_continuity_report",      "tenant_id"},
+		{"ink_knowledge_base",         "tenant_id"},
+		{"ink_hook_chain",             "tenant_id"},
+		{"ink_satisfaction_point",     "tenant_id"},
+		{"ink_conflict_arc",           "tenant_id"},
+		{"ink_outline_review",         "tenant_id"},
+		{"ink_outline_synthesis",      "tenant_id"},
+		// 2026-06-20-v3: 删除剩余冗余 tenant_id（通过 novel_id → novel.tenant_id 链校验）
+		{"ink_video",                  "tenant_id"},
+		{"ink_review_record",          "tenant_id"},
+		{"ink_ignored_review_issue",   "tenant_id"},
+		{"ink_foreshadow",             "tenant_id"},
+		{"ink_rewrite_project",        "tenant_id"},
+		// 2026-06-20-v4: 删除评论表冗余 nickname（从 users.nickname 实时读取）
+		{"ink_video_comment",          "nickname"},
+		{"ink_novel_comment",          "nickname"},
+		{"ink_chapter_comment",        "nickname"},
 	}
 	for _, d := range legacy {
 		var cnt int64

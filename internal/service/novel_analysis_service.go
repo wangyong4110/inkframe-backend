@@ -960,10 +960,9 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 		suggestedStyle := suggestVoiceStyle(c.Gender, c.Age, role, c.PersonalityTags, finalDesc)
 		suggestedLang := suggestVoiceLanguage(novel.PromptLanguage)
 		char := &model.Character{
-			NovelID:       novel.ID,
-			TenantID:      tenantID,
-			UUID:          uuid.New().String(),
-			Name:          c.Name,
+			NovelID: novel.ID,
+			UUID:    uuid.New().String(),
+			Name:    c.Name,
 			Role:          role,
 			Gender:        c.Gender,
 			Age:           c.Age,
@@ -1215,7 +1214,6 @@ func (s *NovelAnalysisService) stepCreateChapterOutlines(
 		ch := &model.Chapter{
 			UUID:      uuid.New().String(),
 			NovelID:   novel.ID,
-			TenantID:  novel.TenantID,
 			ChapterNo: co.ChapterNo,
 			Title:     co.Title,
 			Summary:   co.Summary,
@@ -1467,7 +1465,7 @@ func (s *NovelAnalysisService) stepExtractForeshadows(
 		return nil
 	}
 	// 若已有伏笔则跳过
-	existing, listErr := s.foreshadowSvc.ListByNovel(ctx, novel.ID, tenantID)
+	existing, listErr := s.foreshadowSvc.ListByNovel(ctx, novel.ID)
 	if listErr != nil {
 		logger.Warnf("[NovelAnalysis] stepExtractForeshadows: list existing foreshadows failed (will proceed): %v", listErr)
 	}

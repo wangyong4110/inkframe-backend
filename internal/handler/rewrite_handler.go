@@ -24,13 +24,13 @@ func NewRewriteHandler(rewriteSvc *service.RewriteService) *RewriteHandler {
 
 // getProjectForTenant 提取租户鉴权公共逻辑。返回 false 时已写入错误响应。
 func (h *RewriteHandler) getProjectForTenant(c *gin.Context, id uint) (*model.RewriteProject, bool) {
-	project, err := h.rewriteSvc.GetProject(id)
+	project, err := h.rewriteSvc.GetProjectForTenant(id, c.GetUint("tenant_id"))
 	if err != nil {
-		respondErr(c, http.StatusNotFound, err.Error())
-		return nil, false
-	}
-	if project.TenantID != c.GetUint("tenant_id") {
-		respondErr(c, http.StatusForbidden, "forbidden")
+		if err.Error() == "forbidden" {
+			respondErr(c, http.StatusForbidden, "forbidden")
+		} else {
+			respondErr(c, http.StatusNotFound, err.Error())
+		}
 		return nil, false
 	}
 	return project, true

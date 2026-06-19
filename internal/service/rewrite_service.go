@@ -702,6 +702,15 @@ func calculateLevelAwareQuality(lexSim, structSim float64, origLen, rewLen int, 
 	return math.Round(math.Min(math.Max(score, 0), 100)*10) / 10
 }
 
+// projectTenantID returns the tenantID for a project via its parent novel.
+func (s *RewriteService) projectTenantID(project *model.RewriteProject) uint {
+	novel, err := s.novelRepo.GetByID(project.NovelID)
+	if err != nil {
+		return 0
+	}
+	return novel.TenantID
+}
+
 // ── CRUD ──────────────────────────────────────────────────────────────────────
 
 func (s *RewriteService) CreateProject(tenantID, novelID uint, name string, level int) (*model.RewriteProject, error) {
@@ -710,11 +719,10 @@ func (s *RewriteService) CreateProject(tenantID, novelID uint, name string, leve
 		return nil, fmt.Errorf("novel not found")
 	}
 	project := &model.RewriteProject{
-		TenantID: tenantID,
-		NovelID:  novelID,
-		Name:     name,
-		Level:    level,
-		Status:   "pending",
+		NovelID: novelID,
+		Name:    name,
+		Level:   level,
+		Status:  "pending",
 	}
 	if err := s.projectRepo.Create(project); err != nil {
 		return nil, err
@@ -728,6 +736,22 @@ func (s *RewriteService) ListProjects(tenantID uint, page, pageSize int) ([]*mod
 
 func (s *RewriteService) GetProject(id uint) (*model.RewriteProject, error) {
 	return s.projectRepo.GetByID(id)
+}
+
+// GetProjectForTenant fetches the project and verifies it belongs to tenantID (via novel chain).
+func (s *RewriteService) GetProjectForTenant(id, tenantID uint) (*model.RewriteProject, error) {
+	project, err := s.projectRepo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if tenantID == 0 {
+		return project, nil
+	}
+	novel, err := s.novelRepo.GetByID(project.NovelID)
+	if err != nil || (novel.TenantID != 0 && novel.TenantID != tenantID) {
+		return nil, fmt.Errorf("forbidden")
+	}
+	return project, nil
 }
 
 func (s *RewriteService) DeleteProject(id uint) error {
@@ -861,7 +885,7 @@ func (s *RewriteService) runAnalysis(ctx context.Context, taskID string, project
 		return fmt.Errorf("task cancelled")
 	}
 
-	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, project.TenantID, project.NovelID, "chapter_gen", prompt, "")
+	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, novel.TenantID, project.NovelID, "chapter_gen", prompt, "")
 	if err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("task cancelled")
@@ -909,7 +933,6 @@ func (s *RewriteService) runAnalysis(ctx context.Context, taskID string, project
 }
 
 func (s *RewriteService) generateBible(ctx context.Context, taskID string, project *model.RewriteProject, analysis *model.LiteraryAnalysis, novel *model.Novel) error {
-	_ = novel
 
 	toObj := func(raw string) interface{} {
 		var v interface{}
@@ -947,7 +970,7 @@ func (s *RewriteService) generateBible(ctx context.Context, taskID string, proje
 		return err
 	}
 
-	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, project.TenantID, project.NovelID, "chapter_gen", prompt, "")
+	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, novel.TenantID, project.NovelID, "chapter_gen", prompt, "")
 	if err != nil {
 		if ctx.Err() != nil {
 			return fmt.Errorf("task cancelled")
@@ -1180,7 +1203,7 @@ func (s *RewriteService) runRewriting(ctx context.Context, taskID string, projec
 			}
 
 			// Async: generate chapter summary and update continuity index
-			s.generateChapterSummaryAsync(project.TenantID, project.NovelID, project.ID, task.ID, task.ChapterNo, finalContent)
+			s.generateChapterSummaryAsync(s.projectTenantID(project), project.NovelID, project.ID, task.ID, task.ChapterNo, finalContent)
 
 			// Update excerpt-based fallback context (Fix 5: dynamic lengths for short chapters)
 			runes := []rune(finalContent)
@@ -1369,7 +1392,7 @@ func (s *RewriteService) rewriteChapter(
 		return nil, err
 	}
 
-	rewritten, err := s.aiSvc.GenerateWithProviderCtx(ctx, project.TenantID, project.NovelID, "chapter_gen", prompt, "")
+	rewritten, err := s.aiSvc.GenerateWithProviderCtx(ctx, s.projectTenantID(project), project.NovelID, "chapter_gen", prompt, "")
 	if err != nil {
 		return nil, err
 	}
@@ -1503,7 +1526,7 @@ func (s *RewriteService) deAIPass(ctx context.Context, project *model.RewritePro
 		logger.Errorf("[Rewrite] deAIPass render: %v", err)
 		return ""
 	}
-	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, project.TenantID, project.NovelID, "chapter_gen", prompt, "")
+	result, err := s.aiSvc.GenerateWithProviderCtx(ctx, s.projectTenantID(project), project.NovelID, "chapter_gen", prompt, "")
 	if err != nil {
 		logger.Errorf("[Rewrite] deAIPass generate: %v", err)
 		return ""

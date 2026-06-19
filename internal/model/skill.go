@@ -8,9 +8,8 @@ import (
 
 // Skill 小说技能/功法体系
 type Skill struct {
-	ID       uint           `json:"id" gorm:"primaryKey"`
-	TenantID uint           `json:"tenant_id" gorm:"index;index:idx_skill_novel_tenant,priority:2;not null"`
-	NovelID  uint           `json:"novel_id" gorm:"index;index:idx_skill_novel_tenant,priority:1;not null"`
+	ID      uint           `json:"id" gorm:"primaryKey"`
+	NovelID uint           `json:"novel_id" gorm:"index;not null"`
 	Name        string         `json:"name" gorm:"size:100;not null"`
 	SkillType   string         `json:"skill_type" gorm:"size:50"`   // 主动/被动/天赋/武技/法术/功法
 	Level       int            `json:"level" gorm:"default:1"`

@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/redis/go-redis/v9"
@@ -212,14 +213,9 @@ func (s *ChapterService) CreateChapter(novelID uint, req *model.CreateChapterReq
 	if len(req.Content) > maxChapterContentBytes {
 		return nil, fmt.Errorf("chapter content too large (%d bytes, max 512KB)", len(req.Content))
 	}
-	var tenantID uint
-	if novel, err := s.novelRepo.GetByID(novelID); err == nil {
-		tenantID = novel.TenantID
-	}
 	chapter := &model.Chapter{
 		UUID:      uuid.New().String(),
 		NovelID:   novelID,
-		TenantID:  tenantID,
 		ChapterNo: req.ChapterNo,
 		Title:     req.Title,
 		Content:   req.Content,
@@ -528,17 +524,12 @@ func (s *ChapterService) ReorderChapters(novelID uint, orders []repository.Chapt
 // afterChapterNo=0 表示插入到第一章前面。
 func (s *ChapterService) InsertChapterAfter(novelID uint, afterChapterNo int) (*model.Chapter, error) {
 	newNo := afterChapterNo + 1
-	var tenantID uint
-	if novel, err := s.novelRepo.GetByID(novelID); err == nil {
-		tenantID = novel.TenantID
-	}
 	if err := s.chapterRepo.ShiftUp(novelID, newNo); err != nil {
 		return nil, err
 	}
 	chapter := &model.Chapter{
 		UUID:      uuid.New().String(),
 		NovelID:   novelID,
-		TenantID:  tenantID,
 		ChapterNo: newNo,
 		Title:     "",
 		Status:    "draft",
@@ -601,8 +592,21 @@ func (s *ChapterService) ListPublishedChapters(novelID uint) ([]*model.Chapter, 
 //  Step 5  异步后处理：摘要生成、标题生成、精修、角色状态提取、弧摘要触发
 func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model.GenerateChapterRequest) (*model.Chapter, error) {
 	logger.Printf("[ChapterService] GenerateChapter: tenantID=%d novelID=%d chapterNo=%d", tenantID, novelID, req.ChapterNo)
+
+	metrics.ChapterGenerationInFlight.Inc()
+	defer metrics.ChapterGenerationInFlight.Dec()
+	genStart := time.Now()
+
+	recordChapterGen := func(status string) {
+		metrics.ChapterGenerationTotal.WithLabelValues(status).Inc()
+		if status != "conflict" {
+			metrics.ChapterGenerationDuration.Observe(time.Since(genStart).Seconds())
+		}
+	}
+
 	novel, err := s.novelRepo.GetByID(novelID)
 	if err != nil {
+		recordChapterGen("error")
 		return nil, err
 	}
 
@@ -614,10 +618,12 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		if err != nil {
 			logger.Errorf("[ChapterService] Redis SETNX for gen lock: %v, falling back to local lock", err)
 			if _, loaded := s.genLocks.LoadOrStore(genLockKey, struct{}{}); loaded {
+				recordChapterGen("conflict")
 				return nil, fmt.Errorf("chapter %d of novel %d is already being generated", req.ChapterNo, novelID)
 			}
 			defer s.genLocks.Delete(genLockKey)
 		} else if !ok {
+			recordChapterGen("conflict")
 			return nil, fmt.Errorf("chapter %d of novel %d is already being generated", req.ChapterNo, novelID)
 		} else {
 			s.genLocks.Store(genLockKey, struct{}{})
@@ -628,6 +634,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		}
 	} else {
 		if _, loaded := s.genLocks.LoadOrStore(genLockKey, struct{}{}); loaded {
+			recordChapterGen("conflict")
 			return nil, fmt.Errorf("chapter %d of novel %d is already being generated", req.ChapterNo, novelID)
 		}
 		defer s.genLocks.Delete(genLockKey)
@@ -638,9 +645,11 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	if existing, _ := s.chapterRepo.GetByNovelAndChapterNo(novelID, req.ChapterNo); existing != nil {
 		ok, atomicErr := s.chapterRepo.AtomicSetGenerating(existing.ID, novelID)
 		if atomicErr != nil {
+			recordChapterGen("error")
 			return nil, fmt.Errorf("chapter %d: check generating status: %w", req.ChapterNo, atomicErr)
 		}
 		if !ok {
+			recordChapterGen("conflict")
 			return nil, fmt.Errorf("chapter %d of novel %d is already being generated", req.ChapterNo, novelID)
 		}
 	}
@@ -760,6 +769,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 				logger.Errorf("[ChapterService] failed to set chapter %d status=failed: %v", existing.ID, updateErr)
 			}
 		}
+		recordChapterGen("error")
 		return nil, fmt.Errorf("generate scene outline failed: %w", outlineErr)
 	}
 
@@ -775,6 +785,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 				logger.Errorf("[ChapterService] failed to set chapter %d status=failed: %v", existing.ID, updateErr)
 			}
 		}
+		recordChapterGen("error")
 		return nil, err
 	}
 
@@ -784,6 +795,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 			existing.Status = "failed"
 			_ = s.chapterRepo.Update(existing)
 		}
+		recordChapterGen("error")
 		return nil, fmt.Errorf("generated content too short (%d chars), expected at least 100 chars", len([]rune(content)))
 	}
 
@@ -809,6 +821,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		existing.ChapterHook = chapterHook
 		existing.Status = "generating"
 		if err := s.chapterRepo.Update(existing); err != nil {
+			recordChapterGen("error")
 			return nil, err
 		}
 		chapter = existing
@@ -816,7 +829,6 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		chapter = &model.Chapter{
 			UUID:          uuid.New().String(),
 			NovelID:       novelID,
-			TenantID:      novel.TenantID,
 			ChapterNo:     req.ChapterNo,
 			Title:         title,
 			Content:       content,
@@ -830,6 +842,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 			Status:        "generating",
 		}
 		if err := s.chapterRepo.Create(chapter); err != nil {
+			recordChapterGen("error")
 			return nil, err
 		}
 	}
@@ -882,6 +895,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	// ── Step 6: 异步后处理（标题/精修/弧摘要，不再包含角色快照）────────────────────────────────
 	go s.postProcessChapter(tenantID, chapter, novel)
 
+	recordChapterGen("success")
 	logger.Printf("[ChapterService] GenerateChapter done: chapterID=%d wordCount=%d", chapter.ID, chapter.WordCount)
 	return chapter, nil
 }
@@ -1119,7 +1133,6 @@ role只能是：protagonist / antagonist / supporting
 		char := &model.Character{
 			UUID:        uuid.New().String(),
 			NovelID:     novel.ID,
-			TenantID:    novel.TenantID,
 			Name:        c.Name,
 			Role:        role,
 			Description: c.Description,
@@ -2715,7 +2728,7 @@ func (s *ChapterService) buildForeshadowHints(novelID uint, chapterNo int) strin
 
 	// 来源1：专用伏笔表（带生命周期分类）
 	if s.foreshadowRepo != nil {
-		foreshadows, err := s.foreshadowRepo.ListUnfulfilled(novelID, 0) // tenantID=0 means all
+		foreshadows, err := s.foreshadowRepo.ListUnfulfilled(novelID)
 		if err == nil {
 			// 按重要程度排序：critical > major > normal
 			urgency := func(f *model.Foreshadow) int {
@@ -3105,7 +3118,7 @@ func (s *ChapterService) buildFinalChapterContext(novelID uint, novel *model.Nov
 
 	// 1. 所有未回收的伏笔（全量，不限条数）
 	if s.foreshadowRepo != nil {
-		foreshadows, err := s.foreshadowRepo.ListUnfulfilled(novelID, 0)
+		foreshadows, err := s.foreshadowRepo.ListUnfulfilled(novelID)
 		if err == nil && len(foreshadows) > 0 {
 			sb.WriteString("【必须回收的伏笔】\n")
 			for _, f := range foreshadows {

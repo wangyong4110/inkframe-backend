@@ -93,12 +93,6 @@ func (r *CharacterRepository) UpdateDefaultLookID(characterID, lookID uint) erro
 		Update("default_look_id", lookID).Error
 }
 
-// UpdateTenantID 仅更新 tenant_id（用于自愈历史 tenant_id=0 的记录）
-func (r *CharacterRepository) UpdateTenantID(id, tenantID uint) error {
-	return r.db.Model(&model.Character{}).
-		Where("id = ? AND tenant_id = 0", id).
-		Update("tenant_id", tenantID).Error
-}
 
 // Delete 删除角色
 func (r *CharacterRepository) Delete(id uint) error {

@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"gorm.io/gorm"
@@ -51,12 +52,17 @@ func (s *VideoService) CancelStoryboardGeneration(videoID uint) {
 }
 
 func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt string, progressFn func(int), overrides StoryboardOverrides, chapterIDOverride ...*uint) ([]*model.StoryboardShot, error) {
+	metrics.StoryboardGenerationInFlight.Inc()
+	defer metrics.StoryboardGenerationInFlight.Dec()
+	sbStart := time.Now()
+
 	// Prevent concurrent storyboard generation for the same video — across instances via Redis SETNX.
 	if s.cache != nil {
 		redisKey := fmt.Sprintf("lock:storyboard:gen:%d", videoID)
 		ok, err := s.cache.SetNX(context.Background(), redisKey, "1", 30*time.Minute).Result()
 		if err == nil {
 			if !ok {
+				metrics.StoryboardGenerationTotal.WithLabelValues("conflict").Inc()
 				return nil, fmt.Errorf("storyboard generation already in progress for video %d", videoID)
 			}
 			defer s.cache.Del(context.Background(), redisKey)
@@ -68,6 +74,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	genCtxInner, cancelInner := context.WithCancel(context.Background())
 	if _, loaded := s.generatingStoryboard.LoadOrStore(videoID, cancelInner); loaded {
 		cancelInner() // discard the context we just created
+		metrics.StoryboardGenerationTotal.WithLabelValues("conflict").Inc()
 		return nil, fmt.Errorf("storyboard generation already in progress for video %d", videoID)
 	}
 	defer func() {
@@ -79,11 +86,13 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
+		metrics.StoryboardGenerationTotal.WithLabelValues("error").Inc()
 		return nil, err
 	}
 
 	// 租户状态校验（与 StartGeneration 保持一致）
 	if err := s.checkTenantAccess(video.NovelID); err != nil {
+		metrics.StoryboardGenerationTotal.WithLabelValues("error").Inc()
 		return nil, err
 	}
 
@@ -109,18 +118,19 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		}
 	}
 	if strings.TrimSpace(content) == "" {
+		metrics.StoryboardGenerationTotal.WithLabelValues("error").Inc()
 		return nil, fmt.Errorf("章节内容为空，请先在「写作」页面编写章节内容再生成分镜脚本")
 	}
 
 	const minChapterLength = 100 // characters
 	if len([]rune(content)) < minChapterLength {
+		metrics.StoryboardGenerationTotal.WithLabelValues("error").Inc()
 		return nil, fmt.Errorf("chapter content too short (%d chars): minimum %d characters required for storyboard generation",
 			len([]rune(content)), minChapterLength)
 	}
 
 	// 并行预取角色、场景锚点、情节点（避免多次串行 DB 查询）
-	// tenantID 直接从已加载的 video 取，无需额外查小说。
-	tenantID := video.TenantID
+	tenantID := s.videoTenantID(video)
 	var characters []*model.Character
 	var anchors []*model.SceneAnchor
 	var plotPoints []*model.PlotPoint
@@ -450,6 +460,14 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 
 	logger.Errorf("[Storyboard] finished videoID=%d totalShots=%d segments=%d failedSegs=%d elapsed=%s",
 		videoID, len(shots), len(segments), failedSegs, time.Since(totalStart).Round(time.Millisecond))
+
+	sbStatus := "success"
+	if failedSegs > 0 {
+		sbStatus = "partial"
+	}
+	metrics.StoryboardGenerationTotal.WithLabelValues(sbStatus).Inc()
+	metrics.StoryboardGenerationDuration.Observe(time.Since(sbStart).Seconds())
+	metrics.StoryboardShotsGenerated.Observe(float64(len(shots)))
 
 	// 若存在失败段落，返回包含失败信息的 error（不阻止已成功段落的结果）
 	var returnErr error
@@ -1372,21 +1390,12 @@ func (s *VideoService) SetShotCharacters(shotID uint, ids []uint) error {
 
 // InsertShot 在 afterShotNo 之后插入一个空分镜（afterShotNo=0 表示插入到最前；afterShotNo<0 表示追加到末尾）
 func (s *VideoService) InsertShot(videoID uint, afterShotNo int, narration, description string, duration float64) (*model.StoryboardShot, error) {
-	if afterShotNo < 0 {
-		// Treat as append-to-end: find current max shot_no for this video
-		var maxNo int
-		s.storyboardRepo.DB().Model(&model.StoryboardShot{}).
-			Where("video_id = ? AND deleted_at IS NULL", videoID).
-			Select("COALESCE(MAX(shot_no), 0)").Scan(&maxNo)
-		afterShotNo = maxNo
-	}
-	newShotNo := afterShotNo + 1
+	appendToEnd := afterShotNo < 0
 	if duration <= 0 {
 		duration = defaultShotDurationSecs
 	}
 	shot := &model.StoryboardShot{
 		VideoID:     videoID,
-		ShotNo:      newShotNo,
 		UUID:        uuid.New().String(),
 		Narration:   narration,
 		Description: description,
@@ -1402,7 +1411,22 @@ func (s *VideoService) InsertShot(videoID uint, afterShotNo int, narration, desc
 	// (+shiftTempOffset), then shift back to the intended position. A single-step UPDATE
 	// causes MySQL to process rows one by one and trigger the unique key constraint
 	// mid-scan (e.g. shot 7→8 conflicts while shot 8 still exists).
+	// When appending to end, the MAX query runs inside the transaction under FOR UPDATE to
+	// prevent two concurrent appends from computing the same shot_no.
 	err := s.storyboardRepo.DB().Transaction(func(tx *gorm.DB) error {
+		resolvedAfter := afterShotNo
+		if appendToEnd {
+			var maxNo int
+			if e := tx.Raw(
+				"SELECT COALESCE(MAX(shot_no), 0) FROM ink_storyboard_shot WHERE video_id = ? AND deleted_at IS NULL FOR UPDATE",
+				videoID,
+			).Scan(&maxNo).Error; e != nil {
+				return e
+			}
+			resolvedAfter = maxNo
+		}
+		newShotNo := resolvedAfter + 1
+		shot.ShotNo = newShotNo
 		if e := tx.Exec(
 			"UPDATE ink_storyboard_shot SET shot_no = shot_no + ? WHERE video_id = ? AND shot_no >= ? AND deleted_at IS NULL",
 			shiftTempOffset, videoID, newShotNo,
@@ -1429,19 +1453,10 @@ func (s *VideoService) CopyShotAfter(sourceShotID uint, afterShotNo int) (*model
 	if err != nil {
 		return nil, fmt.Errorf("source shot not found: %w", err)
 	}
-	if afterShotNo < 0 {
-		// append at end: find max shot_no for this video
-		var maxNo int
-		s.storyboardRepo.DB().Model(&model.StoryboardShot{}).
-			Where("video_id = ? AND deleted_at IS NULL", src.VideoID).
-			Select("COALESCE(MAX(shot_no), 0)").Scan(&maxNo)
-		afterShotNo = maxNo
-	}
-	newShotNo := afterShotNo + 1
+	appendToEnd := afterShotNo < 0
 	shot := &model.StoryboardShot{
 		VideoID:        src.VideoID,
 		ChapterID:      src.ChapterID,
-		ShotNo:         newShotNo,
 		UUID:           uuid.New().String(),
 		Description:    src.Description,
 		Narration:      src.Narration,
@@ -1464,6 +1479,14 @@ func (s *VideoService) CopyShotAfter(sourceShotID uint, afterShotNo int) (*model
 		Status: "pending",
 	}
 	err = s.storyboardRepo.DB().Transaction(func(tx *gorm.DB) error {
+		resolvedAfter := afterShotNo
+		if appendToEnd {
+			var maxNo int
+			tx.Raw("SELECT COALESCE(MAX(shot_no), 0) FROM ink_storyboard_shot WHERE video_id = ? AND deleted_at IS NULL FOR UPDATE", src.VideoID).Scan(&maxNo)
+			resolvedAfter = maxNo
+		}
+		newShotNo := resolvedAfter + 1
+		shot.ShotNo = newShotNo
 		if e := tx.Exec(
 			"UPDATE ink_storyboard_shot SET shot_no = shot_no + ? WHERE video_id = ? AND shot_no >= ? AND deleted_at IS NULL",
 			shiftTempOffset, src.VideoID, newShotNo,
@@ -1593,7 +1616,6 @@ func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string,
 	if s.reviewRecordRepo != nil {
 		reviewJSON, _ := json.Marshal(review)
 		rec := &model.ReviewRecord{
-			TenantID:     tenantID,
 			EntityType:   model.ReviewEntityStoryboard,
 			EntityID:     videoID,
 			OverallScore: review.OverallScore,
@@ -1939,12 +1961,11 @@ func (s *VideoService) OptimizeStoryboardFromReview(tenantID, videoID uint, revi
 	if s.reviewRecordRepo != nil {
 		snapshotData, _ := json.Marshal(shots)
 		snap := &model.ReviewRecord{
-			TenantID:   tenantID,
-			EntityType: model.ReviewEntityStoryboard,
-			EntityID:   videoID,
+			EntityType:   model.ReviewEntityStoryboard,
+			EntityID:     videoID,
 			OverallScore: review.OverallScore,
 			ReviewJSON:   string(snapshotData),
-			Status:     "snapshot",
+			Status:       "snapshot",
 		}
 		if saveErr := s.reviewRecordRepo.Create(snap); saveErr != nil {
 			logger.Errorf("OptimizeStoryboardFromReview: save snapshot failed: %v", saveErr)
@@ -2135,7 +2156,6 @@ func (s *VideoService) IgnoreSuggestion(tenantID, videoID uint, shotNo int, issu
 		return nil, fmt.Errorf("ignored suggestion repository not initialized")
 	}
 	item := &model.IgnoredReviewIssue{
-		TenantID:    tenantID,
 		EntityType:  model.ReviewEntityStoryboard,
 		EntityID:    videoID,
 		IssueText:   issueText,

@@ -26,6 +26,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/inkframe/inkframe-backend/internal/crawler"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/storage"
@@ -198,6 +199,29 @@ func (s *NovelImportService) storeCrawlProgressToRedis(p *CrawlProgress) {
 	s.cache.Set(context.Background(), crawlProgressRedisKey(p.NovelID), b, 2*time.Hour) //nolint:errcheck
 }
 
+const crawlDonePubSubChannel = "inkframe:crawl:done"
+
+// StartCrawlDoneSubscriber 启动 Redis Pub/Sub 订阅，接收其他实例发出的爬取完成事件并触发本地回调。
+// 应在 WithRedis 注入之后调用（Redis 不可用时为空操作）。
+func (s *NovelImportService) StartCrawlDoneSubscriber(ctx context.Context) {
+	if s.cache == nil {
+		return
+	}
+	go func() {
+		sub := s.cache.Subscribe(ctx, crawlDonePubSubChannel)
+		defer sub.Close()
+		for msg := range sub.Channel() {
+			var novelID uint
+			if _, err := fmt.Sscan(msg.Payload, &novelID); err != nil {
+				continue
+			}
+			if fn, ok := s.crawlDoneCallbacks.LoadAndDelete(novelID); ok {
+				fn.(func())()
+			}
+		}
+	}()
+}
+
 // RegisterCrawlDoneCallback 注册爬取完成回调（一次性，触发后自动移除）
 func (s *NovelImportService) RegisterCrawlDoneCallback(novelID uint, fn func()) {
 	s.crawlDoneCallbacks.Store(novelID, fn)
@@ -342,6 +366,9 @@ func (s *NovelImportService) crawlChaptersBackground(
 	tenantID uint,
 	userID uint,
 ) {
+	metrics.CrawlJobsInFlight.Inc()
+	defer metrics.CrawlJobsInFlight.Dec()
+
 	// 创建 DB 爬取任务记录，获取 jobID 用于后续进度持久化
 	var jobID uint
 	if s.crawlJobRepo != nil {
@@ -383,6 +410,7 @@ func (s *NovelImportService) crawlChaptersBackground(
 
 		if r.Err != nil || r.Content == nil || r.Content.Content == "" {
 			logger.Errorf("[Crawl] chapter %d fetch/parse error: %v", ch.ChapterNo, r.Err)
+			metrics.CrawlChaptersTotal.WithLabelValues("error").Inc()
 			progress.mu.Lock()
 			progress.Failed++
 			progress.mu.Unlock()
@@ -397,11 +425,14 @@ func (s *NovelImportService) crawlChaptersBackground(
 
 		if err := s.chapterRepo.UpdateCrawledContent(ch.ID, title, r.Content.Content, wordCount); err != nil {
 			logger.Errorf("[Crawl] chapter %d save error: %v", ch.ChapterNo, err)
+			metrics.CrawlChaptersTotal.WithLabelValues("error").Inc()
 			progress.mu.Lock()
 			progress.Failed++
 			progress.mu.Unlock()
 			continue
 		}
+
+		metrics.CrawlChaptersTotal.WithLabelValues("success").Inc()
 
 		progress.mu.Lock()
 		progress.Done++
@@ -475,6 +506,12 @@ func (s *NovelImportService) crawlChaptersBackground(
 	// Persist final status to Redis (shorter TTL — result only needs to be readable briefly).
 	s.storeCrawlProgressToRedis(progress)
 
+	jobMetricStatus := finalStatus
+	if finalStatus == "completed" && finalFailed > 0 {
+		jobMetricStatus = "partial"
+	}
+	metrics.CrawlJobsTotal.WithLabelValues(jobMetricStatus).Inc()
+
 	// 持久化最终状态到 DB
 	if jobID > 0 && s.crawlJobRepo != nil {
 		dbStatus := finalStatus
@@ -508,8 +545,13 @@ func (s *NovelImportService) crawlChaptersBackground(
 	}
 
 	// 触发注册的完成回调（如自动分析）
+	// 先触发本实例的本地回调（即时无延迟）
 	if fn, ok := s.crawlDoneCallbacks.LoadAndDelete(novelID); ok {
 		fn.(func())()
+	}
+	// 同时广播到其他实例（跨实例场景：回调注册在不同实例时触发）
+	if s.cache != nil {
+		s.cache.Publish(context.Background(), crawlDonePubSubChannel, fmt.Sprintf("%d", novelID)) //nolint:errcheck
 	}
 
 }

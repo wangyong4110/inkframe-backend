@@ -8,6 +8,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/middleware"
 	"github.com/inkframe/inkframe-backend/internal/service"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
@@ -77,11 +78,15 @@ func SetupRouter(cfg *Config) *gin.Engine {
 	}
 
 	// 全局中间件
+	r.Use(middleware.PrometheusMiddleware()) // 最前注册，覆盖所有路由
 	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))
 	r.Use(middleware.Logger())
 	r.Use(middleware.Recovery())
 	r.Use(middleware.MaxBodySize(1 * 1024 * 1024)) // 1MB for JSON; multipart/upload routes are excluded by middleware
+
+	// Prometheus 指标端点（不经过 JWT 认证，供 Prometheus Scraper 抓取）
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	// 健康检查（公开）
 	r.GET("/health", func(c *gin.Context) {

@@ -1,8 +1,10 @@
 package handler
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -17,12 +19,13 @@ import (
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/crawler"
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
 
-// chunkSession 分片上传会话
+// chunkSession 分片上传会话（进程内，Redis 不可用时使用）
 type chunkSession struct {
 	UploadID    string
 	TotalChunks int
@@ -35,6 +38,26 @@ type chunkSession struct {
 	CreatedAt   time.Time
 	mu          sync.Mutex
 	received    map[int]bool
+}
+
+// chunkSessionMeta is the Redis-serializable view of a chunk upload session.
+type chunkSessionMeta struct {
+	UploadID    string    `json:"upload_id"`
+	TotalChunks int       `json:"total_chunks"`
+	TotalSize   int64     `json:"total_size"`
+	TenantID    uint      `json:"tenant_id"`
+	FileName    string    `json:"file_name"`
+	Format      string    `json:"format"`
+	NovelID     uint      `json:"novel_id"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+const chunkRedisTTL = 2 * time.Hour
+
+func chunkSessionKey(uploadID string) string  { return "chunk:session:" + uploadID }
+func chunkReceivedKey(uploadID string) string  { return "chunk:received:" + uploadID }
+func chunkDataKey(uploadID string, no int) string {
+	return fmt.Sprintf("chunk:data:%s:%05d", uploadID, no)
 }
 
 // CleanupChunkStore 清理超过 2 小时未完成的分片上传会话（防内存泄漏）。
@@ -85,6 +108,13 @@ type ImportHandler struct {
 	analysisService     *service.NovelAnalysisService
 	taskSvc             *service.TaskService
 	novelSvc            *service.NovelService
+	cache               *redis.Client // optional: cross-instance chunked-upload session storage
+}
+
+// WithRedis injects a Redis client so chunked-upload sessions survive cross-instance routing.
+func (h *ImportHandler) WithRedis(c *redis.Client) *ImportHandler {
+	h.cache = c
+	return h
 }
 
 func NewImportHandler(
@@ -555,6 +585,18 @@ func (h *ImportHandler) InitChunkedUpload(c *gin.Context) {
 	}
 	chunkStore.Store(uploadID, sess)
 
+	// Persist to Redis so other instances can serve subsequent chunk requests.
+	if h.cache != nil {
+		meta := chunkSessionMeta{
+			UploadID: uploadID, TotalChunks: body.TotalChunks, TotalSize: body.TotalSize,
+			TenantID: sess.TenantID, FileName: sess.FileName, Format: body.Format,
+			NovelID: body.NovelID, CreatedAt: sess.CreatedAt,
+		}
+		if b, err := json.Marshal(meta); err == nil {
+			h.cache.Set(context.Background(), chunkSessionKey(uploadID), b, chunkRedisTTL) //nolint:errcheck
+		}
+	}
+
 	respondOK(c, gin.H{"upload_id": uploadID})
 }
 
@@ -573,20 +615,46 @@ func (h *ImportHandler) UploadChunk(c *gin.Context) {
 		return
 	}
 
-	v, ok := chunkStore.Load(uploadID)
-	if !ok {
+	// Load session: local first (same instance), then Redis fallback (other instance).
+	var sess *chunkSession
+	var redisMeta *chunkSessionMeta
+	if v, ok := chunkStore.Load(uploadID); ok {
+		sess = v.(*chunkSession)
+	} else if h.cache != nil {
+		raw, err := h.cache.Get(context.Background(), chunkSessionKey(uploadID)).Bytes()
+		if err != nil {
+			respondErr(c, http.StatusNotFound, "upload session not found")
+			return
+		}
+		var meta chunkSessionMeta
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			respondErr(c, http.StatusInternalServerError, "corrupt upload session")
+			return
+		}
+		redisMeta = &meta
+	} else {
 		respondErr(c, http.StatusNotFound, "upload session not found")
 		return
 	}
-	sess := v.(*chunkSession)
 
-	if sess.TenantID != getTenantID(c) {
-		respondErr(c, http.StatusForbidden, "forbidden")
-		return
+	tenantID := getTenantID(c)
+	totalChunks := 0
+	if sess != nil {
+		if sess.TenantID != tenantID {
+			respondErr(c, http.StatusForbidden, "forbidden")
+			return
+		}
+		totalChunks = sess.TotalChunks
+	} else {
+		if redisMeta.TenantID != tenantID {
+			respondErr(c, http.StatusForbidden, "forbidden")
+			return
+		}
+		totalChunks = redisMeta.TotalChunks
 	}
 
-	if chunkNo > sess.TotalChunks {
-		respondBadRequest(c, fmt.Sprintf("chunk_no %d exceeds total_chunks %d", chunkNo, sess.TotalChunks))
+	if chunkNo > totalChunks {
+		respondBadRequest(c, fmt.Sprintf("chunk_no %d exceeds total_chunks %d", chunkNo, totalChunks))
 		return
 	}
 
@@ -603,35 +671,51 @@ func (h *ImportHandler) UploadChunk(c *gin.Context) {
 		return
 	}
 
-	chunkPath := filepath.Join(sess.TmpDir, fmt.Sprintf("chunk_%05d", chunkNo))
-	out, err := os.Create(chunkPath)
+	chunkBytes, err := io.ReadAll(io.LimitReader(f, maxChunkSize+1))
 	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to save chunk")
+		respondErr(c, http.StatusInternalServerError, "failed to read chunk")
 		return
 	}
-	h2 := md5.New()
-	if _, err := io.Copy(io.MultiWriter(out, h2), f); err != nil {
-		out.Close()
-		respondErr(c, http.StatusInternalServerError, "failed to write chunk")
-		return
-	}
-	out.Close()
 
+	h2 := md5.New()
+	h2.Write(chunkBytes) //nolint:errcheck
 	if expectedMD5 := c.PostForm("chunk_md5"); expectedMD5 != "" {
 		actualMD5 := hex.EncodeToString(h2.Sum(nil))
 		if !strings.EqualFold(actualMD5, expectedMD5) {
-			os.Remove(chunkPath) //nolint:errcheck
 			respondBadRequest(c, fmt.Sprintf("chunk %d MD5 mismatch: expected %s got %s", chunkNo, expectedMD5, actualMD5))
 			return
 		}
 	}
 
-	sess.mu.Lock()
-	sess.received[chunkNo] = true
-	received := len(sess.received)
-	sess.mu.Unlock()
+	var received int
+	if sess != nil {
+		// Local session: write to temp file.
+		chunkPath := filepath.Join(sess.TmpDir, fmt.Sprintf("chunk_%05d", chunkNo))
+		if err := os.WriteFile(chunkPath, chunkBytes, 0600); err != nil {
+			respondErr(c, http.StatusInternalServerError, "failed to save chunk")
+			return
+		}
+		sess.mu.Lock()
+		sess.received[chunkNo] = true
+		received = len(sess.received)
+		sess.mu.Unlock()
+	}
 
-	respondOK(c, gin.H{"received": received, "total": sess.TotalChunks})
+	// Store chunk in Redis (required when redisMeta != nil; also mirrors local chunks for redundancy).
+	if h.cache != nil {
+		pipe := h.cache.Pipeline()
+		pipe.Set(context.Background(), chunkDataKey(uploadID, chunkNo), chunkBytes, chunkRedisTTL)
+		pipe.SAdd(context.Background(), chunkReceivedKey(uploadID), strconv.Itoa(chunkNo))
+		pipe.Expire(context.Background(), chunkReceivedKey(uploadID), chunkRedisTTL)
+		if _, err := pipe.Exec(context.Background()); err != nil {
+			logger.Errorf("[UploadChunk] Redis pipeline failed for %s chunk %d: %v", uploadID, chunkNo, err)
+		}
+		// Get cross-instance received count from Redis Set.
+		n, _ := h.cache.SCard(context.Background(), chunkReceivedKey(uploadID)).Result()
+		received = int(n)
+	}
+
+	respondOK(c, gin.H{"received": received, "total": totalChunks})
 }
 
 // CompleteChunkedUpload 完成分片上传，组装文件并触发导入
@@ -644,36 +728,90 @@ func (h *ImportHandler) CompleteChunkedUpload(c *gin.Context) {
 		return
 	}
 
-	v, ok := chunkStore.Load(body.UploadID)
-	if !ok {
+	uploadID := body.UploadID
+
+	// Load session: local sync.Map first, then Redis.
+	var localSess *chunkSession
+	var redisMeta *chunkSessionMeta
+	if v, ok := chunkStore.Load(uploadID); ok {
+		localSess = v.(*chunkSession)
+	} else if h.cache != nil {
+		raw, err := h.cache.Get(context.Background(), chunkSessionKey(uploadID)).Bytes()
+		if err != nil {
+			respondErr(c, http.StatusNotFound, "upload session not found")
+			return
+		}
+		var meta chunkSessionMeta
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			respondErr(c, http.StatusInternalServerError, "corrupt upload session")
+			return
+		}
+		redisMeta = &meta
+	} else {
 		respondErr(c, http.StatusNotFound, "upload session not found")
 		return
 	}
-	sess := v.(*chunkSession)
 
-	if sess.TenantID != getTenantID(c) {
-		respondErr(c, http.StatusForbidden, "forbidden")
-		return
-	}
+	tenantID := getTenantID(c)
+	var fileName, format string
+	var novelID uint
+	var totalChunks int
 
-	sess.mu.Lock()
-	missing := sess.TotalChunks - len(sess.received)
-	sess.mu.Unlock()
-	if missing > 0 {
-		respondBadRequest(c, fmt.Sprintf("%d chunks not yet received", missing))
-		return
+	if localSess != nil {
+		if localSess.TenantID != tenantID {
+			respondErr(c, http.StatusForbidden, "forbidden")
+			return
+		}
+		localSess.mu.Lock()
+		missing := localSess.TotalChunks - len(localSess.received)
+		localSess.mu.Unlock()
+		if missing > 0 {
+			respondBadRequest(c, fmt.Sprintf("%d chunks not yet received", missing))
+			return
+		}
+		fileName, format, novelID, totalChunks = localSess.FileName, localSess.Format, localSess.NovelID, localSess.TotalChunks
+	} else {
+		if redisMeta.TenantID != tenantID {
+			respondErr(c, http.StatusForbidden, "forbidden")
+			return
+		}
+		n, _ := h.cache.SCard(context.Background(), chunkReceivedKey(uploadID)).Result()
+		if int(n) < redisMeta.TotalChunks {
+			respondBadRequest(c, fmt.Sprintf("%d chunks not yet received", redisMeta.TotalChunks-int(n)))
+			return
+		}
+		fileName, format, novelID, totalChunks = redisMeta.FileName, redisMeta.Format, redisMeta.NovelID, redisMeta.TotalChunks
 	}
 
 	// 按序拼装分片
 	var assembled []byte
-	for i := 1; i <= sess.TotalChunks; i++ {
-		chunkPath := filepath.Join(sess.TmpDir, fmt.Sprintf("chunk_%05d", i))
-		data, err := os.ReadFile(chunkPath)
-		if err != nil {
-			respondErr(c, http.StatusInternalServerError, fmt.Sprintf("chunk %d missing", i))
-			return
+	if localSess != nil && redisMeta == nil {
+		// Read from local temp files (same instance).
+		for i := 1; i <= totalChunks; i++ {
+			chunkPath := filepath.Join(localSess.TmpDir, fmt.Sprintf("chunk_%05d", i))
+			data, err := os.ReadFile(chunkPath)
+			if err != nil {
+				// Fallback: try Redis if chunk file is missing.
+				if h.cache != nil {
+					data, err = h.cache.Get(context.Background(), chunkDataKey(uploadID, i)).Bytes()
+				}
+				if err != nil {
+					respondErr(c, http.StatusInternalServerError, fmt.Sprintf("chunk %d missing", i))
+					return
+				}
+			}
+			assembled = append(assembled, data...)
 		}
-		assembled = append(assembled, data...)
+	} else {
+		// Read all chunks from Redis.
+		for i := 1; i <= totalChunks; i++ {
+			data, err := h.cache.Get(context.Background(), chunkDataKey(uploadID, i)).Bytes()
+			if err != nil {
+				respondErr(c, http.StatusInternalServerError, fmt.Sprintf("chunk %d missing from Redis", i))
+				return
+			}
+			assembled = append(assembled, data...)
+		}
 	}
 
 	const maxAssembledSize = 500 * 1024 * 1024 // 500MB max assembled file
@@ -682,23 +820,33 @@ func (h *ImportHandler) CompleteChunkedUpload(c *gin.Context) {
 		return
 	}
 
-	// 清理临时目录
-	chunkStore.Delete(body.UploadID)
-	os.RemoveAll(sess.TmpDir) //nolint:errcheck
+	// 清理
+	if localSess != nil {
+		chunkStore.Delete(uploadID)
+		os.RemoveAll(localSess.TmpDir) //nolint:errcheck
+	}
+	if h.cache != nil {
+		pipe := h.cache.Pipeline()
+		pipe.Del(context.Background(), chunkSessionKey(uploadID))
+		pipe.Del(context.Background(), chunkReceivedKey(uploadID))
+		for i := 1; i <= totalChunks; i++ {
+			pipe.Del(context.Background(), chunkDataKey(uploadID, i))
+		}
+		pipe.Exec(context.Background()) //nolint:errcheck
+	}
 
 	req := &service.ImportRequest{
 		Source:   service.SourceFile,
 		FileData: assembled,
-		FileName: sess.FileName,
-		Format:   service.ImportFormat(sess.Format),
-		TenantID: sess.TenantID,
-		NovelID:  sess.NovelID,
+		FileName: fileName,
+		Format:   service.ImportFormat(format),
+		TenantID: tenantID,
+		NovelID:  novelID,
 	}
 	if req.Format == "" {
-		req.Format = service.ImportFormat(detectFormatFromFilename(sess.FileName))
+		req.Format = service.ImportFormat(detectFormatFromFilename(fileName))
 	}
 
-	tenantID := sess.TenantID
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImport, "分片文件导入", "novel", 0)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")

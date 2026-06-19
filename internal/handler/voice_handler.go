@@ -379,11 +379,8 @@ func (h *VideoHandler) ImportShotSFXItem(c *gin.Context) {
 		volume = 0.4
 	}
 
-	// seq_no = max+1
-	maxSeq, _ := h.sfxItemRepo.MaxSeqNo(shotID)
 	item := &model.ShotSFXItem{
 		ShotID:       shotID,
-		SeqNo:        maxSeq + 1,
 		Tag:          tag,
 		URL:          audioURL,
 		Volume:       volume,
@@ -391,7 +388,7 @@ func (h *VideoHandler) ImportShotSFXItem(c *gin.Context) {
 		SFXType:      sfxType,
 		DurationSecs: durationSecs,
 	}
-	if err := h.sfxItemRepo.Create(item); err != nil {
+	if err := h.sfxItemRepo.AppendAtomic(item); err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create sfx item")
 		return
 	}

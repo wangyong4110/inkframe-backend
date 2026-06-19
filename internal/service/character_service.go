@@ -707,12 +707,6 @@ func (s *CharacterService) GetCharacter(id uint) (*model.Character, error) {
 	return s.characterRepo.GetByID(id)
 }
 
-// FixTenantID 修正角色的 tenant_id（用于自愈历史数据中 tenant_id=0 的记录）
-func (s *CharacterService) FixTenantID(id, tenantID uint) {
-	if err := s.characterRepo.UpdateTenantID(id, tenantID); err != nil {
-		logger.Errorf("CharacterService.FixTenantID: id=%d tenant=%d err=%v", id, tenantID, err)
-	}
-}
 
 func (s *CharacterService) ListCharacters(novelID uint) ([]*model.Character, error) {
 	return s.characterRepo.ListByNovel(novelID)
@@ -1117,10 +1111,9 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			upserted = append(upserted, ch)
 		} else {
 			character := &model.Character{
-				UUID:          uuid.New().String(),
-				NovelID:       novelID,
-				TenantID:      tenantID,
-				Name:          p.Name,
+				UUID:    uuid.New().String(),
+				NovelID: novelID,
+				Name:    p.Name,
 				Role:          role,
 				Gender:        p.Gender,
 				Age:           p.Age,
@@ -1630,7 +1623,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 				// 同步更新 Character.Portrait 用于列表头像显示
 				if newFaceURL != "" {
 					portraitReq := &model.UpdateCharacterRequest{Name: char.Name, Portrait: newFaceURL}
-					if _, saveErr := s.UpdateCharacter(char.ID, char.TenantID, portraitReq); saveErr != nil {
+					if _, saveErr := s.UpdateCharacter(char.ID, tenantID, portraitReq); saveErr != nil {
 						logger.Errorf("[CharacterService] BatchGenerateImages: save portrait for char %d: %v", char.ID, saveErr)
 					}
 				}

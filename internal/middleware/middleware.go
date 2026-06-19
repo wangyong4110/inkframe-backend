@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
@@ -139,6 +140,7 @@ func Recovery() gin.HandlerFunc {
 			n := runtime.Stack(buf, false)
 			stack := buf[:n]
 
+			metrics.HTTPPanicsTotal.Inc()
 			logger.Errorf("[PANIC] %v | %s %s | client=%s\n%s",
 				r,
 				c.Request.Method,
@@ -543,6 +545,7 @@ func RateLimitWithRedis(rdb *redis.Client, capacity, rate float64) gin.HandlerFu
 			rdb.Expire(ctx, key, 2*time.Second)
 		}
 		if cnt > ratePerSec {
+			metrics.HTTPRateLimitedTotal.WithLabelValues("ip").Inc()
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
 				"error": "rate limit exceeded, please slow down",
 			})
@@ -563,6 +566,7 @@ func RateLimitAuth() gin.HandlerFunc {
 		ip := "auth:" + c.ClientIP()
 		bucket := getBucket(ip, authCapacity, authRate)
 		if !bucket.allow() {
+			metrics.HTTPRateLimitedTotal.WithLabelValues("auth").Inc()
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
 				"error": "too many requests",
 			})

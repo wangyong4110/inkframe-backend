@@ -120,7 +120,6 @@ func (s *SceneAnchorService) ListByNovel(novelID uint) ([]*model.SceneAnchor, er
 
 func (s *SceneAnchorService) Create(tenantID, novelID uint, req CreateSceneAnchorReq) (*model.SceneAnchor, error) {
 	anchor := &model.SceneAnchor{
-		TenantID:       tenantID,
 		NovelID:        novelID,
 		Name:           req.Name,
 		Type:           req.Type,
@@ -388,7 +387,6 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 			anchorType = "exterior"
 		}
 		anchor := &model.SceneAnchor{
-			TenantID:    tenantID,
 			NovelID:     novelID,
 			Name:        e.Name,
 			Type:        anchorType,

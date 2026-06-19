@@ -8,10 +8,9 @@ import (
 
 // Character 角色
 type Character struct {
-	ID       uint   `json:"id" gorm:"primaryKey"`
-	NovelID  uint   `json:"novel_id" gorm:"index;index:idx_char_novel_tenant,priority:1;not null"`
-	TenantID uint   `json:"tenant_id" gorm:"index;index:idx_char_novel_tenant,priority:2;not null;default:1"`
-	Novel    *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
+	ID      uint   `json:"id" gorm:"primaryKey"`
+	NovelID uint   `json:"novel_id" gorm:"index;not null"`
+	Novel   *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
 	UUID    string `json:"uuid" gorm:"uniqueIndex;size:36"`
 
 	Name string `json:"name" gorm:"size:100;not null"`

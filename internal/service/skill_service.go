@@ -34,7 +34,6 @@ func (s *SkillService) WithNovelRepo(r *repository.NovelRepository) *SkillServic
 // CreateSkill 创建技能
 func (s *SkillService) CreateSkill(tenantID, novelID uint, req *model.CreateSkillRequest) (*model.Skill, error) {
 	skill := &model.Skill{
-		TenantID:    tenantID,
 		NovelID:     novelID,
 		Name:        req.Name,
 		SkillType:   req.SkillType,
@@ -257,7 +256,6 @@ func (s *SkillService) GenerateSkills(tenantID, novelID uint) (result []*model.S
 			level = 1
 		}
 		skill := &model.Skill{
-			TenantID:    tenantID,
 			NovelID:     novelID,
 			Name:        e.Name,
 			SkillType:   e.SkillType,

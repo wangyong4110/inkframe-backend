@@ -268,9 +268,8 @@ func (n Novel) MarshalJSON() ([]byte, error) {
 // Chapter 章节
 type Chapter struct {
 	ID       uint   `json:"id" gorm:"primaryKey"`
-	NovelID  uint   `json:"novel_id" gorm:"index;uniqueIndex:idx_chapter_novel_no,priority:1;index:idx_chapter_novel_status,priority:1;not null"`
-	TenantID uint   `json:"tenant_id" gorm:"index;not null;default:1"`
-	Novel    *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
+	NovelID uint   `json:"novel_id" gorm:"index;uniqueIndex:idx_chapter_novel_no,priority:1;index:idx_chapter_novel_status,priority:1;not null"`
+	Novel   *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
 	UUID      string `json:"uuid" gorm:"uniqueIndex;size:36"`
 	ChapterNo int    `json:"chapter_no" gorm:"uniqueIndex:idx_chapter_novel_no,priority:2;not null"`
 	Title     string `json:"title" gorm:"size:255"`
@@ -397,10 +396,8 @@ func (WorldviewEntity) TableName() string {
 
 // QualityReport 质量报告
 type QualityReport struct {
-	ID       uint `json:"id" gorm:"primaryKey"`
-	TenantID uint `json:"tenant_id" gorm:"index;not null;default:1"`
-
-	UUID       string `json:"uuid" gorm:"uniqueIndex;size:36"`
+	ID   uint `json:"id" gorm:"primaryKey"`
+	UUID string `json:"uuid" gorm:"uniqueIndex;size:36"`
 	TargetType string `json:"target_type" gorm:"size:50;index:idx_quality_target,priority:1"`
 	// novel=小说, chapter=章节, video=视频
 
@@ -481,8 +478,7 @@ func (ArcSummary) TableName() string {
 // NovelOutlineVersion 小说大纲历史版本（每次重新生成大纲前自动快照）
 type NovelOutlineVersion struct {
 	gorm.Model
-	TenantID uint   `json:"tenant_id" gorm:"index"`
-	NovelID  uint   `json:"novel_id" gorm:"not null;index"`
+	NovelID uint `json:"novel_id" gorm:"not null;index"`
 	Version  int    `json:"version" gorm:"not null"`
 	Outline  string `json:"outline" gorm:"type:longtext"`
 	Prompt   string `json:"prompt" gorm:"type:text"`
@@ -651,7 +647,6 @@ type ContinuityReportRecord struct {
 	ID         uint           `json:"id" gorm:"primaryKey"`
 	NovelID    uint           `json:"novel_id" gorm:"index;not null"`
 	ChapterID  uint           `json:"chapter_id" gorm:"index;not null"`
-	TenantID   uint           `json:"tenant_id" gorm:"index;not null"`
 	ReportJSON string         `json:"report_json" gorm:"type:text"` // JSON of ContinuityReport
 	IssueCount int            `json:"issue_count"`
 	Passed     bool           `json:"passed"`
@@ -664,7 +659,6 @@ func (ContinuityReportRecord) TableName() string { return "ink_continuity_report
 // Foreshadow 伏笔/预兆（专用表，替代通过 KnowledgeBase tag 存储的方案）
 type Foreshadow struct {
 	gorm.Model
-	TenantID         uint   `json:"tenant_id" gorm:"index"`
 	NovelID          uint   `json:"novel_id" gorm:"not null;index"`
 	Title            string `json:"title" gorm:"size:200;not null"`
 	Description      string `json:"description" gorm:"type:text"`
@@ -741,8 +735,7 @@ func (AuditLog) TableName() string { return "ink_audit_log" }
 // OutlineReview 章节大纲审查结果
 type OutlineReview struct {
 	gorm.Model
-	TenantID        uint       `json:"tenant_id" gorm:"index"`
-	NovelID         uint       `json:"novel_id" gorm:"index"`
+	NovelID uint `json:"novel_id" gorm:"index"`
 	ChapterID       uint       `json:"chapter_id" gorm:"uniqueIndex"` // one latest review per chapter
 	ChapterNo       int        `json:"chapter_no"`
 	Status          string     `json:"status" gorm:"size:20;default:'pending'"` // pending/reviewing/passed/warning/failed
@@ -764,8 +757,7 @@ func (OutlineReview) TableName() string { return "ink_outline_review" }
 // NovelOutlineSynthesis 小说整体大纲批量审查综合报告（每部小说一条，按 novel_id 唯一）
 type NovelOutlineSynthesis struct {
 	gorm.Model
-	TenantID             uint      `json:"tenant_id" gorm:"index"`
-	NovelID              uint      `json:"novel_id" gorm:"uniqueIndex"`
+	NovelID uint `json:"novel_id" gorm:"uniqueIndex"`
 	TotalChapters        int       `json:"total_chapters"`   // novel.Outline 中规划的总章数
 	ReviewedCount        int       `json:"reviewed_count"`   // 实际完成审查的章数
 	PassedCount          int       `json:"passed_count"`

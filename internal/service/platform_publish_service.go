@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
@@ -158,6 +159,7 @@ func (s *PlatformPublishService) PublishToExternal(ctx context.Context, video *m
 			// Fix 3: Retry publish up to 3 attempts with exponential backoff
 			var externalID, externalURL string
 			var pubErr error
+			pubStart := time.Now()
 			for attempt := 0; attempt < 3; attempt++ {
 				externalID, externalURL, pubErr = p.PublishVideo(bgCtx, account, video.FinalVideoURL, opts)
 				if pubErr == nil {
@@ -169,11 +171,15 @@ func (s *PlatformPublishService) PublishToExternal(ctx context.Context, video *m
 				}
 			}
 			if pubErr != nil {
+				metrics.PublishTotal.WithLabelValues(account.Platform, "error").Inc()
+				metrics.PublishDuration.WithLabelValues(account.Platform).Observe(time.Since(pubStart).Seconds())
 				logger.Errorf("[PlatformPublish] video=%d platform=%s: publish failed: %v", video.ID, account.Platform, pubErr)
 				if err := s.recordRepo.UpdateStatus(rec.ID, "failed", pubErr.Error(), "", ""); err != nil {
 					logger.Errorf("[PlatformPublish] record=%d: update failed status: %v", rec.ID, err)
 				}
 			} else {
+				metrics.PublishTotal.WithLabelValues(account.Platform, "success").Inc()
+				metrics.PublishDuration.WithLabelValues(account.Platform).Observe(time.Since(pubStart).Seconds())
 				logger.Printf("[PlatformPublish] video=%d platform=%s: published externalID=%s", video.ID, account.Platform, externalID)
 				if err := s.recordRepo.UpdateStatus(rec.ID, "published", "", externalID, externalURL); err != nil {
 					logger.Errorf("[PlatformPublish] record=%d: update published status: %v", rec.ID, err)

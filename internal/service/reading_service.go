@@ -83,7 +83,7 @@ func (s *ReadingService) ListChapterComments(chapterID uint, page, size int) ([]
 
 const maxCommentLength = 2000 // characters
 
-func (s *ReadingService) AddChapterComment(chapterID, novelID, userID, tenantID uint, nickname, content string, parentID *uint) (*model.ChapterComment, error) {
+func (s *ReadingService) AddChapterComment(chapterID, novelID, userID, tenantID uint, content string, parentID *uint) (*model.ChapterComment, error) {
 	if err := s.verifyNovelTenant(novelID, tenantID); err != nil {
 		return nil, err
 	}
@@ -98,7 +98,6 @@ func (s *ReadingService) AddChapterComment(chapterID, novelID, userID, tenantID 
 		ChapterID: chapterID,
 		NovelID:   novelID,
 		UserID:    userID,
-		Nickname:  nickname,
 		Content:   content,
 		ParentID:  parentID,
 	}

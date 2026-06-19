@@ -18,6 +18,7 @@ func NewChapterLikeRepository(db *gorm.DB) *ChapterLikeRepository {
 }
 
 // Toggle 点赞/取消，返回最终状态及最新 like_count
+// like_count 在事务内读取（原子 UPDATE 之后），避免事务提交后 SELECT 读到其他并发写的值。
 func (r *ChapterLikeRepository) Toggle(chapterID, novelID, userID uint) (liked bool, likeCount int, err error) {
 	err = r.db.Transaction(func(tx *gorm.DB) error {
 		var existing model.ChapterLike
@@ -28,24 +29,28 @@ func (r *ChapterLikeRepository) Toggle(chapterID, novelID, userID uint) (liked b
 				return err2
 			}
 			liked = true
-			return tx.Model(&model.Chapter{}).Where("id = ?", chapterID).
-				UpdateColumn("like_count", gorm.Expr("like_count + 1")).Error
+			if err2 := tx.Model(&model.Chapter{}).Where("id = ?", chapterID).
+				UpdateColumn("like_count", gorm.Expr("like_count + 1")).Error; err2 != nil {
+				return err2
+			}
+		} else {
+			// Found → delete (unlike)
+			if err2 := tx.Delete(&model.ChapterLike{}, "chapter_id = ? AND user_id = ?", chapterID, userID).Error; err2 != nil {
+				return err2
+			}
+			liked = false
+			if err2 := tx.Model(&model.Chapter{}).Where("id = ?", chapterID).
+				UpdateColumn("like_count", gorm.Expr("GREATEST(0, like_count - 1)")).Error; err2 != nil {
+				return err2
+			}
 		}
-		// Found → delete (unlike)
-		if err2 := tx.Delete(&model.ChapterLike{}, "chapter_id = ? AND user_id = ?", chapterID, userID).Error; err2 != nil {
-			return err2
+		// Read the updated value inside the transaction to avoid post-commit race.
+		var ch model.Chapter
+		if e := tx.Select("like_count").First(&ch, chapterID).Error; e == nil {
+			likeCount = ch.LikeCount
 		}
-		liked = false
-		return tx.Model(&model.Chapter{}).Where("id = ?", chapterID).
-			UpdateColumn("like_count", gorm.Expr("GREATEST(0, like_count - 1)")).Error
+		return nil
 	})
-	if err != nil {
-		return
-	}
-	var ch model.Chapter
-	if e := r.db.Select("like_count").First(&ch, chapterID).Error; e == nil {
-		likeCount = ch.LikeCount
-	}
 	return
 }
 

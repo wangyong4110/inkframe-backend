@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
 
@@ -33,7 +34,7 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 	}
 	var tenantID uint
 	if v, vErr := s.videoRepo.GetByID(shot.VideoID); vErr == nil {
-		tenantID = v.TenantID
+		tenantID = s.videoTenantID(v)
 	}
 	provider, _, provErr := s.resolveVideoProvider(tenantID, shot.ShotProviderName)
 	if provErr != nil {
@@ -122,7 +123,7 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 		if video.AspectRatio != "" {
 			aspectRatio = video.AspectRatio
 		}
-		videoTenantID = video.TenantID
+		videoTenantID = s.videoTenantID(video)
 	}
 	logger.Printf("[StitchVideo] videoID=%d: aspectRatio=%s", videoID, aspectRatio)
 
@@ -670,6 +671,10 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 	go func() {
 		defer synthCancel()
 
+		metrics.VideoSynthesisInFlight.Inc()
+		defer metrics.VideoSynthesisInFlight.Dec()
+		synthStart := time.Now()
+
 		// 统一管理所有临时文件：goroutine 退出时一并清理（无论成功/失败）
 		var tempFiles []string
 		defer func() {
@@ -708,6 +713,8 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 		stitchCancel()
 		if err != nil {
 			logger.Errorf("[SynthesizeVideo] videoID=%d step=1/4: stitch failed: %v", videoID, err)
+			metrics.VideoSynthesisTotal.WithLabelValues("error").Inc()
+			metrics.VideoSynthesisDuration.Observe(time.Since(synthStart).Seconds())
 			if s.taskSvc != nil {
 				_ = s.taskSvc.Fail(taskID, "stitch failed: "+err.Error())
 			}
@@ -863,9 +870,13 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 		// 仅当视频成功上传（有 URL）才标记 completed；否则标记 failed 以告知用户
 		if finalVideoURL != "" {
 			video.Status = "completed"
+			metrics.VideoSynthesisTotal.WithLabelValues("success").Inc()
+			metrics.VideoSynthesisDuration.Observe(time.Since(synthStart).Seconds())
 			logger.Printf("[SynthesizeVideo] videoID=%d: pipeline complete", videoID)
 		} else {
 			video.Status = "failed"
+			metrics.VideoSynthesisTotal.WithLabelValues("error").Inc()
+			metrics.VideoSynthesisDuration.Observe(time.Since(synthStart).Seconds())
 			logger.Errorf("[SynthesizeVideo] videoID=%d: upload failed — marking video as failed", videoID)
 		}
 		if err := s.videoRepo.Update(video); err != nil {

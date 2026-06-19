@@ -20,7 +20,6 @@ type VideoComment struct {
 	ID        uint      `json:"id" gorm:"primaryKey"`
 	VideoID   uint      `json:"video_id" gorm:"index"`
 	UserID    uint      `json:"user_id"`
-	Nickname  string    `json:"nickname" gorm:"size:100"` // 冗余，避免 JOIN
 	Content   string    `json:"content" gorm:"size:2000"`
 	ParentID  *uint     `json:"parent_id"` // 二级回复
 	CreatedAt time.Time `json:"created_at"`
@@ -43,7 +42,6 @@ type NovelComment struct {
 	ID        uint      `json:"id" gorm:"primaryKey"`
 	NovelID   uint      `json:"novel_id" gorm:"index"`
 	UserID    uint      `json:"user_id"`
-	Nickname  string    `json:"nickname" gorm:"size:100"`
 	Content   string    `json:"content" gorm:"size:2000"`
 	ParentID  *uint     `json:"parent_id"`
 	CreatedAt time.Time `json:"created_at"`
@@ -68,7 +66,6 @@ type ChapterComment struct {
 	ChapterID uint      `gorm:"index:idx_chcomment_chapter" json:"chapter_id"`
 	NovelID   uint      `gorm:"index" json:"novel_id"`
 	UserID    uint      `json:"user_id"`
-	Nickname  string    `gorm:"size:100" json:"nickname"`
 	Content   string    `gorm:"size:2000" json:"content"`
 	ParentID  *uint     `json:"parent_id,omitempty"`
 	CreatedAt time.Time `json:"created_at"`

@@ -201,6 +201,22 @@ func (r *ShotVoiceSegmentRepository) MaxSeqNo(shotID uint) (int, error) {
 	return max, err
 }
 
+// AppendAtomic assigns the next seq_no and creates the segment in a single transaction,
+// eliminating the read-then-write race under concurrent appends.
+func (r *ShotVoiceSegmentRepository) AppendAtomic(seg *model.ShotVoiceSegment) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var maxSeq int
+		if err := tx.Raw(
+			"SELECT COALESCE(MAX(seq_no), 0) FROM ink_shot_voice_segment WHERE shot_id = ? AND deleted_at IS NULL FOR UPDATE",
+			seg.ShotID,
+		).Scan(&maxSeq).Error; err != nil {
+			return err
+		}
+		seg.SeqNo = maxSeq + 1
+		return tx.Create(seg).Error
+	})
+}
+
 // ShiftSeqNos 将 shot_id 下所有 seq_no >= fromSeqNo 的段落的 seq_no 加 1（为插入腾出位置）
 func (r *ShotVoiceSegmentRepository) ShiftSeqNos(shotID uint, fromSeqNo int) error {
 	return r.db.Exec(
@@ -243,6 +259,17 @@ func (r *ShotSFXItemRepository) CountByShotID(shotID uint) (int64, error) {
 // Create 创建单条音效条目
 func (r *ShotSFXItemRepository) Create(item *model.ShotSFXItem) error {
 	return r.db.Create(item).Error
+}
+
+// AppendAtomic atomically assigns seq_no = MAX(seq_no)+1 inside a transaction to prevent
+// duplicate seq_no when multiple instances append simultaneously.
+func (r *ShotSFXItemRepository) AppendAtomic(item *model.ShotSFXItem) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var maxSeq int
+		tx.Raw("SELECT COALESCE(MAX(seq_no), 0) FROM ink_shot_sfx_item WHERE shot_id = ? FOR UPDATE", item.ShotID).Scan(&maxSeq)
+		item.SeqNo = maxSeq + 1
+		return tx.Create(item).Error
+	})
 }
 
 // MaxSeqNo 返回分镜中最大的 seq_no（无条目时返回 0）

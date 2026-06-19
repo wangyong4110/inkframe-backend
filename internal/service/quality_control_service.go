@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
@@ -49,7 +50,7 @@ type QualityControlService struct {
 		ListByNovel(novelID uint) ([]*model.ArcSummary, error)
 	}
 	foreshadowRepo interface {
-		ListUnfulfilled(novelID uint, tenantID uint) ([]*model.Foreshadow, error)
+		ListUnfulfilled(novelID uint) ([]*model.Foreshadow, error)
 	}
 }
 
@@ -104,7 +105,7 @@ func (s *QualityControlService) WithArcSummaryRepo(r interface {
 }
 
 func (s *QualityControlService) WithForeshadowRepo(r interface {
-	ListUnfulfilled(novelID uint, tenantID uint) ([]*model.Foreshadow, error)
+	ListUnfulfilled(novelID uint) ([]*model.Foreshadow, error)
 }) *QualityControlService {
 	s.foreshadowRepo = r
 	return s
@@ -273,6 +274,19 @@ func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter
 
 	// 追加通用建议
 	report.Suggestions = append(report.Suggestions, s.generateQualitySuggestions(report)...)
+
+	// 记录检查方式和分数分布
+	method := "rule"
+	if aiScores != nil {
+		method = "ai"
+	}
+	metrics.QualityCheckTotal.WithLabelValues(method).Inc()
+	metrics.QualityScoreOverall.Observe(report.OverallScore)
+	metrics.QualityScoreByDimension.WithLabelValues("logic").Observe(report.LogicScore)
+	metrics.QualityScoreByDimension.WithLabelValues("consistency").Observe(report.ConsistencyScore)
+	metrics.QualityScoreByDimension.WithLabelValues("quality").Observe(report.QualityScore)
+	metrics.QualityScoreByDimension.WithLabelValues("style").Observe(report.StyleScore)
+	metrics.QualityScoreByDimension.WithLabelValues("dramatic").Observe(report.DramaticScore)
 
 	return report, nil
 }
@@ -635,7 +649,11 @@ func (s *QualityControlService) RefineSelection(ctx context.Context, chapterID u
 		return "", fmt.Errorf("render selection_refine: %w", err)
 	}
 
-	result, err := s.aiSvc.GenerateWithProvider(chapter.TenantID, chapter.NovelID, "selection_refine", prompt, "")
+	var tenantID uint
+	if novel, nErr := s.novelRepo.GetByID(chapter.NovelID); nErr == nil {
+		tenantID = novel.TenantID
+	}
+	result, err := s.aiSvc.GenerateWithProvider(tenantID, chapter.NovelID, "selection_refine", prompt, "")
 	if err != nil {
 		return "", fmt.Errorf("AI refine selection failed: %w", err)
 	}
@@ -732,7 +750,7 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 
 	charSummary := s.buildCharacterVoiceSummary(chapter.NovelID)
 	arcContext := s.buildArcContext(chapter.NovelID, chapter.ChapterNo)
-	foreshadowContext := s.buildForeshadowContext(chapter.NovelID, novel.TenantID)
+	foreshadowContext := s.buildForeshadowContext(chapter.NovelID)
 
 	prompt, err := renderPrompt("chapter_review", map[string]interface{}{
 		"Genre":              novel.Genre,
@@ -1211,11 +1229,11 @@ func (s *QualityControlService) buildArcContext(novelID uint, currentChapterNo i
 
 // buildForeshadowContext returns open (unresolved) foreshadows for injection
 // into the chapter review prompt.
-func (s *QualityControlService) buildForeshadowContext(novelID uint, tenantID uint) string {
+func (s *QualityControlService) buildForeshadowContext(novelID uint) string {
 	if s.foreshadowRepo == nil {
 		return ""
 	}
-	foreshadows, err := s.foreshadowRepo.ListUnfulfilled(novelID, tenantID)
+	foreshadows, err := s.foreshadowRepo.ListUnfulfilled(novelID)
 	if err != nil || len(foreshadows) == 0 {
 		return ""
 	}

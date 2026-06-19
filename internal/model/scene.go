@@ -8,9 +8,8 @@ import (
 
 // PlotPoint 剧情点
 type PlotPoint struct {
-	ID        uint     `json:"id" gorm:"primaryKey"`
-	TenantID  uint     `json:"tenant_id" gorm:"index;index:idx_plotpoint_tenant_novel,composite:tenant"`
-	NovelID   uint     `json:"novel_id" gorm:"index:idx_plotpoint_novel_resolved,priority:1;index:idx_plotpoint_tenant_novel,composite:novel;not null"`
+	ID      uint     `json:"id" gorm:"primaryKey"`
+	NovelID uint     `json:"novel_id" gorm:"index:idx_plotpoint_novel_resolved,priority:1;index;not null"`
 	ChapterID uint     `json:"chapter_id" gorm:"index;not null"`
 	Chapter   *Chapter `json:"chapter,omitempty" gorm:"foreignKey:ChapterID"`
 	Type      string   `json:"type" gorm:"size:50"`
@@ -43,9 +42,8 @@ type UpdatePlotPointRequest struct {
 
 // KnowledgeBase 知识库
 type KnowledgeBase struct {
-	ID       uint `json:"id" gorm:"primaryKey"`
-	TenantID uint `json:"tenant_id" gorm:"index;index:idx_kb_tenant_novel,composite:tenant;not null;default:1"`
-	Type     string `json:"type" gorm:"size:50;index;index:idx_kb_novel_type,priority:2"`
+	ID   uint   `json:"id" gorm:"primaryKey"`
+	Type string `json:"type" gorm:"size:50;index;index:idx_kb_novel_type,priority:2"`
 	// character_fact=角色事实, lore=世界观知识, writing_technique=写作技巧
 
 	Title   string `json:"title" gorm:"size:255;not null"`
@@ -54,7 +52,7 @@ type KnowledgeBase struct {
 	Tags string `json:"tags" gorm:"type:text"` // JSON数组
 
 	// 关联
-	NovelID         *uint           `json:"novel_id,omitempty" gorm:"index;index:idx_kb_novel_type,priority:1;index:idx_kb_tenant_novel,composite:novel"`
+	NovelID         *uint           `json:"novel_id,omitempty" gorm:"index;index:idx_kb_novel_type,priority:1"`
 	Novel           *Novel          `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
 	SourceChapterID *uint           `json:"source_chapter_id,omitempty" gorm:"index"`
 	ReferenceID     *uint           `json:"reference_id,omitempty" gorm:"index"`
@@ -78,9 +76,8 @@ func (KnowledgeBase) TableName() string {
 
 // HookChain 钩子链（章末悬念/情感/谜题/威胁/承诺）
 type HookChain struct {
-	ID       uint `json:"id" gorm:"primaryKey"`
-	TenantID uint `json:"tenant_id" gorm:"index;not null;default:1"`
-	NovelID  uint `json:"novel_id" gorm:"index;index:idx_hook_novel_fulfilled,priority:1;not null"`
+	ID      uint `json:"id" gorm:"primaryKey"`
+	NovelID uint `json:"novel_id" gorm:"index;index:idx_hook_novel_fulfilled,priority:1;not null"`
 
 	Type        string `json:"type" gorm:"size:50;not null"`
 	// chapter_end/emotional/mystery/threat/promise/revelation/decision/action
@@ -104,9 +101,8 @@ func (HookChain) TableName() string { return "ink_hook_chain" }
 
 // SatisfactionPoint 爽点（打脸/突破/揭秘/重逢/复仇/认可/其他）
 type SatisfactionPoint struct {
-	ID       uint `json:"id" gorm:"primaryKey"`
-	TenantID uint `json:"tenant_id" gorm:"index;not null;default:1"`
-	NovelID  uint `json:"novel_id" gorm:"index;not null"`
+	ID      uint `json:"id" gorm:"primaryKey"`
+	NovelID uint `json:"novel_id" gorm:"index;not null"`
 
 	ChapterID      *uint  `json:"chapter_id" gorm:"index"` // 实际发生章节（nil=仅计划）
 	PlannedChapter int    `json:"planned_chapter" gorm:"default:0"` // 计划发生章节号
@@ -127,9 +123,8 @@ func (SatisfactionPoint) TableName() string { return "ink_satisfaction_point" }
 
 // ConflictArc 冲突弧（内部/人际/社会）
 type ConflictArc struct {
-	ID       uint `json:"id" gorm:"primaryKey"`
-	TenantID uint `json:"tenant_id" gorm:"index;not null;default:1"`
-	NovelID  uint `json:"novel_id" gorm:"index;not null"`
+	ID      uint `json:"id" gorm:"primaryKey"`
+	NovelID uint `json:"novel_id" gorm:"index;not null"`
 
 	Title        string `json:"title" gorm:"size:255;not null"`
 	Type         string `json:"type" gorm:"size:50;not null"`
@@ -154,9 +149,8 @@ func (ConflictArc) TableName() string { return "ink_conflict_arc" }
 
 // SceneAnchor 场景锚点（固定命名场景的视觉描述，确保分镜跨镜头布景一致）
 type SceneAnchor struct {
-	ID       uint `json:"id" gorm:"primaryKey"`
-	TenantID uint `json:"tenant_id" gorm:"index;index:idx_scene_anchor_tenant_novel,composite:tenant;not null;default:1"`
-	NovelID  uint `json:"novel_id" gorm:"uniqueIndex:idx_scene_anchor_novel_name;index:idx_scene_anchor_tenant_novel,composite:novel;not null"`
+	ID      uint `json:"id" gorm:"primaryKey"`
+	NovelID uint `json:"novel_id" gorm:"uniqueIndex:idx_scene_anchor_novel_name;index;not null"`
 
 	Name        string `json:"name" gorm:"size:255;not null;uniqueIndex:idx_scene_anchor_novel_name"`
 	Type        string `json:"type" gorm:"size:50"` // interior/exterior/imaginary

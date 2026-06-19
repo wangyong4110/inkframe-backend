@@ -21,6 +21,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/storage"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -48,8 +49,15 @@ type AssetService struct {
 	freesoundKey  string
 	pixabayKey    string
 	pexelsKey     string
-	// crawlMu guards the ExistsByExternalID+Create sequence for crawled assets
+	// crawlMu guards the ExistsByExternalID+Create sequence for crawled assets (local fallback)
 	crawlMu sync.Map
+	cache   *redis.Client // optional: cross-instance crawl dedup lock
+}
+
+// WithRedis injects a Redis client for cross-instance crawl deduplication.
+func (s *AssetService) WithRedis(c *redis.Client) *AssetService {
+	s.cache = c
+	return s
 }
 
 func NewAssetService(
@@ -80,7 +88,29 @@ func NewAssetService(
 
 // crawlUpsert atomically checks whether an asset with the given externalID already exists
 // and, if not, creates it. Returns (true, nil) on insert; (false, nil) if already exists.
+// Redis SETNX provides cross-instance mutual exclusion; local sync.Map is the fallback.
 func (s *AssetService) crawlUpsert(externalID string, create func() error) (bool, error) {
+	if s.cache != nil {
+		// Use a short hash so the lock key stays within Redis key size limits.
+		h := sha256.Sum256([]byte(externalID))
+		redisKey := "lock:asset:crawl:" + hex.EncodeToString(h[:16])
+		ok, err := s.cache.SetNX(context.Background(), redisKey, "1", 30*time.Second).Result()
+		if err == nil {
+			if !ok {
+				return false, nil // another instance is already creating this asset
+			}
+			defer s.cache.Del(context.Background(), redisKey) //nolint:errcheck
+			exists, err := s.assetRepo.ExistsByExternalID(externalID)
+			if err != nil {
+				return false, err
+			}
+			if exists {
+				return false, nil
+			}
+			return true, create()
+		}
+		// Redis unavailable — fall through to local mutex
+	}
 	mu, _ := s.crawlMu.LoadOrStore(externalID, &sync.Mutex{})
 	mu.(*sync.Mutex).Lock()
 	defer mu.(*sync.Mutex).Unlock()
@@ -420,13 +450,12 @@ func (s *AssetService) CreateVersion(ctx context.Context, assetID, callerID uint
 	if err != nil {
 		return nil, err
 	}
-	maxV, _ := s.versionRepo.MaxVersionNo(assetID)
 	v := &model.AssetVersion{
-		AssetID: assetID, VersionNo: maxV + 1,
+		AssetID:    assetID,
 		StorageURL: url, FileSize: size,
 		ChangeNote: note, CreatedBy: callerID,
 	}
-	if err := s.versionRepo.Create(v); err != nil {
+	if err := s.versionRepo.CreateVersionAtomic(v); err != nil {
 		return nil, err
 	}
 	// Update asset storage URL to latest version

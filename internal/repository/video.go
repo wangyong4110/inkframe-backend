@@ -38,12 +38,12 @@ func (r *VideoRepository) GetByID(id uint) (*model.Video, error) {
 }
 
 // GetByIDAndTenant 根据ID和租户获取视频（防止越权访问）
-// 优先使用 ink_videos.tenant_id 直接过滤（无需 JOIN）；
-// tenant_id=0 的旧记录视为公共数据，任意租户均可访问（兼容迁移前数据）。
+// 通过 novel.tenant_id 校验归属（novel_id → ink_novel.tenant_id）。
+// tenant_id=0 的小说视为公共数据，任意租户均可访问。
 func (r *VideoRepository) GetByIDAndTenant(id, tenantID uint) (*model.Video, error) {
 	var video model.Video
 	err := r.db.
-		Where("id = ? AND (tenant_id = ? OR tenant_id = 0)", id, tenantID).
+		Where("id = ? AND novel_id IN (SELECT id FROM ink_novel WHERE (tenant_id = ? OR tenant_id = 0) AND deleted_at IS NULL)", id, tenantID).
 		First(&video).Error
 	if err != nil {
 		return nil, err
@@ -58,7 +58,7 @@ func (r *VideoRepository) List(novelID *uint, chapterID *uint, status string, te
 
 	query := r.db.Model(&model.Video{}).Session(&gorm.Session{})
 	if tenantID > 0 {
-		query = query.Where("tenant_id = ? OR tenant_id = 0", tenantID)
+		query = query.Where("novel_id IN (SELECT id FROM ink_novel WHERE (tenant_id = ? OR tenant_id = 0) AND deleted_at IS NULL)", tenantID)
 	}
 	if novelID != nil {
 		query = query.Where("novel_id = ?", *novelID)

@@ -252,13 +252,7 @@ func (h *PlatformHandler) AddNovelComment(c *gin.Context) {
 		respondErr(c, http.StatusBadRequest, "content is required")
 		return
 	}
-	nickname := ""
-	if n, exists := c.Get("nickname"); exists {
-		if s, ok2 := n.(string); ok2 {
-			nickname = s
-		}
-	}
-	comment, err := h.novelService.AddNovelComment(uint(id), uid, nickname, req.Content, req.ParentID)
+	comment, err := h.novelService.AddNovelComment(uint(id), uid, req.Content, req.ParentID)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -412,15 +406,7 @@ func (h *PlatformHandler) AddComment(c *gin.Context) {
 		return
 	}
 
-	// 从 JWT claims 取昵称（graceful fallback）
-	nickname := ""
-	if n, exists := c.Get("nickname"); exists {
-		if s, ok2 := n.(string); ok2 {
-			nickname = s
-		}
-	}
-
-	comment, err := h.videoService.AddVideoComment(uint(id), uid, nickname, req.Content, req.ParentID)
+	comment, err := h.videoService.AddVideoComment(uint(id), uid, req.Content, req.ParentID)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -731,13 +717,7 @@ func (h *PlatformHandler) AddChapterComment(c *gin.Context) {
 		respondBadRequest(c, "content is required")
 		return
 	}
-	nickname := ""
-	if n, exists := c.Get("nickname"); exists {
-		if s, ok2 := n.(string); ok2 {
-			nickname = s
-		}
-	}
-	comment, err := h.readingService.AddChapterComment(chapter.ID, uint(novelID), uid, getTenantID(c), nickname, req.Content, req.ParentID)
+	comment, err := h.readingService.AddChapterComment(chapter.ID, uint(novelID), uid, getTenantID(c), req.Content, req.ParentID)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return

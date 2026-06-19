@@ -74,6 +74,18 @@ func (s *VideoService) videoBelongsToTenant(video *model.Video, tenantID uint) b
 	return novel.TenantID == 0 || novel.TenantID == tenantID
 }
 
+// videoTenantID returns the tenantID for a video via its parent novel.
+func (s *VideoService) videoTenantID(video *model.Video) uint {
+	if s.novelRepo == nil {
+		return 0
+	}
+	novel, err := s.novelRepo.GetByID(video.NovelID)
+	if err != nil {
+		return 0
+	}
+	return novel.TenantID
+}
+
 // GetNovelVideoConfig 获取小说的视频配置（供 handler 层使用）
 func (s *VideoService) GetNovelVideoConfig(novelID uint) *model.NovelVideoConfig {
 	if s.novelRepo == nil {
@@ -245,12 +257,6 @@ func (s *VideoService) CreateVideoFromChapter(novelID uint, chapterID *uint) (*m
 		Resolution:  "1080p",
 		AspectRatio: "16:9",
 	}
-	novel, err := s.novelRepo.GetByID(novelID)
-	if err != nil {
-		return nil, fmt.Errorf("novel %d not found: %w", novelID, err)
-	}
-	video.TenantID = novel.TenantID
-
 	if err := s.videoRepo.Create(video); err != nil {
 		return nil, err
 	}
@@ -294,7 +300,6 @@ func (s *VideoService) CreateVideoFromReq(novelID uint, req *model.CreateVideoRe
 	if callerTenantID != 0 && novel.TenantID != 0 && novel.TenantID != callerTenantID {
 		return nil, fmt.Errorf("novel %d does not belong to tenant %d", novelID, callerTenantID)
 	}
-	video.TenantID = novel.TenantID
 	// 默认画面风格：继承项目设置中的画面风格
 	if video.ArtStyle == "" && novel.ImageStyle != "" {
 		video.ArtStyle = novel.ImageStyle
@@ -495,14 +500,13 @@ func (s *VideoService) ListVideoComments(videoID uint, page, size int) ([]*model
 }
 
 // AddVideoComment 发表评论
-func (s *VideoService) AddVideoComment(videoID, userID uint, nickname, content string, parentID *uint) (*model.VideoComment, error) {
+func (s *VideoService) AddVideoComment(videoID, userID uint, content string, parentID *uint) (*model.VideoComment, error) {
 	if s.videoCommentRepo == nil {
 		return nil, fmt.Errorf("comment feature not available")
 	}
 	c := &model.VideoComment{
 		VideoID:  videoID,
 		UserID:   userID,
-		Nickname: nickname,
 		Content:  content,
 		ParentID: parentID,
 	}
@@ -707,7 +711,7 @@ func (s *VideoService) StartGeneration(id uint) (string, error) {
 	}
 
 	// 选择 provider：优先 kling，其次 seedance，静态 map 或 DB 均可
-	provider, providerName, provErr := s.resolveVideoProvider(video.TenantID, "")
+	provider, providerName, provErr := s.resolveVideoProvider(s.videoTenantID(video), "")
 	if provErr != nil {
 		if updErr := s.videoRepo.UpdateFields(video.ID, map[string]interface{}{
 			"status": "failed", "error_message": "no video provider configured",
@@ -852,7 +856,7 @@ func (s *VideoService) GenerateSingleShot(videoID, shotID uint, provider ...stri
 		return shot, s.GenerateSlideshowShotVideo(shot, aspectRatio)
 	}
 	// AI 视频模式：若没有可用的视频提供商，自动降级为图片解说模式
-	if !s.hasVideoProvider(video.TenantID) {
+	if !s.hasVideoProvider(s.videoTenantID(video)) {
 		logger.Printf("GenerateSingleShot: no video provider available, falling back to slideshow for shot %d (video %d)", shotID, videoID)
 		return shot, s.GenerateSlideshowShotVideo(shot, aspectRatio)
 	}
