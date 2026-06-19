@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -510,7 +511,7 @@ type DALLEResponse struct {
 
 // SSEReader SSE流式读取器
 type SSEReader struct {
-	reader *io.Reader
+	scanner *bufio.Scanner
 }
 
 type SSEEvent struct {
@@ -519,28 +520,24 @@ type SSEEvent struct {
 }
 
 func NewSSEReader(r io.Reader) *SSEReader {
-	return &SSEReader{reader: &r}
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 64*1024), 64*1024)
+	return &SSEReader{scanner: scanner}
 }
 
 func (r *SSEReader) Read() (*SSEEvent, error) {
-	// 简化实现
-	buf := make([]byte, 1024)
-	n, err := (*r.reader).Read(buf)
-	if err != nil {
+	for r.scanner.Scan() {
+		line := r.scanner.Text()
+		if strings.HasPrefix(line, "data: ") {
+			data := strings.TrimPrefix(line, "data: ")
+			if data == "[DONE]" {
+				return nil, io.EOF
+			}
+			return &SSEEvent{Data: data}, nil
+		}
+	}
+	if err := r.scanner.Err(); err != nil {
 		return nil, err
 	}
-
-	content := string(buf[:n])
-	if strings.Contains(content, "data: ") {
-		start := strings.Index(content, "data: ") + 6
-		end := strings.Index(content, "\n")
-		if end == -1 {
-			end = len(content)
-		}
-		return &SSEEvent{
-			Data: strings.TrimSpace(content[start:end]),
-		}, nil
-	}
-
 	return nil, io.EOF
 }

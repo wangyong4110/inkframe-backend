@@ -394,13 +394,15 @@ type StoryboardReview struct {
 
 // ParagraphFeedback 段落级审查反馈（嵌入 JSON，不单独建表）
 type ParagraphFeedback struct {
-	Index            int      `json:"index"`             // 段落序号(0起)
-	OrigText         string   `json:"orig_text"`         // 原文摘要(前80字)
-	Issues           []string `json:"issues"`
-	Suggestion       string   `json:"suggestion"`
-	Action           string   `json:"action"`            // "rewrite"(默认) | "delete"
-	SuggestedRewrite string   `json:"suggested_rewrite"` // 改写后正文；action=delete 时为空
-	Severity         string   `json:"severity"`          // info/warning/error
+	Index             int      `json:"index"`              // 段落序号(0起)
+	OrigText          string   `json:"orig_text"`          // 原文摘要(前80字)
+	Issues            []string `json:"issues"`
+	Suggestion        string   `json:"suggestion"`
+	Action            string   `json:"action"`             // "rewrite" | "delete" | "restructure"
+	SuggestedRewrite  string   `json:"suggested_rewrite"`  // 改写后正文；action=delete 时为空
+	Severity          string   `json:"severity"`           // info/warning/error
+	NarrativeImpact   string   `json:"narrative_impact"`   // "plot_critical"|"quality"|"style"
+	PreservedFunction string   `json:"preserved_function"` // restructure/delete 时说明原文叙事功能
 }
 
 // WeaknessItem 不足条目，带对应改进建议
@@ -409,21 +411,45 @@ type WeaknessItem struct {
 	Suggestion string `json:"suggestion"` // 对应改进建议
 }
 
+// SceneAnalysisItem 场景层 3C 结构分析（嵌入 JSON）
+type SceneAnalysisItem struct {
+	SceneNo    int    `json:"scene_no"`
+	StartIndex int    `json:"start_index"` // 场景起始段落序号
+	EndIndex   int    `json:"end_index"`   // 场景结束段落序号（含）
+	Goal       string `json:"goal"`        // 场景目标
+	Conflict   string `json:"conflict"`    // 场景冲突/阻力
+	Change     string `json:"change"`      // 场景结束后的变化
+	C3Score    int    `json:"c3_score"`    // 3C 结构完整度 0-100
+	Note       string `json:"note"`        // 编辑意见（可选）
+}
+
+// HookAnalysis 章末钩子专项评估（嵌入 JSON）
+type HookAnalysis struct {
+	Type             string `json:"type"`               // cliffhanger|emotional|action|reversal|none
+	Strength         int    `json:"strength"`            // 0-100
+	HookText         string `json:"hook_text"`           // 章末关键句原文引用
+	NextChapterSetup string `json:"next_chapter_setup"` // 读者最想知道的问题
+}
+
 // ChapterReview AI章节审查报告
 type ChapterReview struct {
-	OverallScore      float64             `json:"overall_score"`
-	NarrativeScore    float64             `json:"narrative_score"`
-	CharacterScore    float64             `json:"character_score"`
-	WritingScore      float64             `json:"writing_score"`
-	PacingScore       float64             `json:"pacing_score"`
-	DramaticScore     float64             `json:"dramatic_score"`   // 戏剧张力
-	VisualPotential   float64             `json:"visual_potential"` // 画面感/可视化潜力
-	Summary           string              `json:"summary"`
-	Strengths         []string            `json:"strengths"`
-	Weaknesses        []WeaknessItem      `json:"weaknesses"`
-	GlobalSuggestions []string            `json:"global_suggestions"`
-	ParagraphFeedback []ParagraphFeedback `json:"paragraph_feedback"`
-	RecordID          uint                `json:"record_id,omitempty"`
+	OverallScore       float64             `json:"overall_score"`
+	NarrativeScore     float64             `json:"narrative_score"`
+	CharacterScore     float64             `json:"character_score"`
+	WritingScore       float64             `json:"writing_score"`
+	PacingScore        float64             `json:"pacing_score"`
+	DramaticScore      float64             `json:"dramatic_score"`       // 戏剧张力
+	NarrativeNecessity float64             `json:"narrative_necessity"`  // 叙事必要性
+	EmotionalResonance float64             `json:"emotional_resonance"`  // 情感共鸣
+	VisualPotential    float64             `json:"visual_potential"`     // 画面感/可视化潜力
+	Summary            string              `json:"summary"`
+	Strengths          []string            `json:"strengths"`
+	Weaknesses         []WeaknessItem      `json:"weaknesses"`
+	GlobalSuggestions  []string            `json:"global_suggestions"`
+	HookAnalysis       *HookAnalysis       `json:"hook_analysis,omitempty"`
+	SceneAnalysis      []SceneAnalysisItem `json:"scene_analysis,omitempty"`
+	ParagraphFeedback  []ParagraphFeedback `json:"paragraph_feedback"`
+	RecordID           uint                `json:"record_id,omitempty"`
 }
 
 

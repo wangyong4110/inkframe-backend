@@ -83,14 +83,17 @@ type HookChain struct {
 	NovelID  uint `json:"novel_id" gorm:"index;index:idx_hook_novel_fulfilled,priority:1;not null"`
 
 	Type        string `json:"type" gorm:"size:50;not null"`
-	// chapter_end/emotional/mystery/threat/promise
+	// chapter_end/emotional/mystery/threat/promise/revelation/decision/action
 	Description     string `json:"description" gorm:"type:text;not null"`
 	PlantedAt       int    `json:"planted_at" gorm:"not null"`                // 埋下章节号
 	PlannedPayoffAt int    `json:"planned_payoff_at" gorm:"default:0"`        // 计划兑现章节号（0=未规划）
 	ActualPayoffAt  int    `json:"actual_payoff_at" gorm:"default:0"`         // 实际兑现章节号
 	Intensity       int    `json:"intensity" gorm:"not null;default:5"`       // 1-10
 	IsFulfilled     bool   `json:"is_fulfilled" gorm:"index:idx_hook_novel_fulfilled,priority:2;default:false"`
+	ForeshadowID    *uint  `json:"foreshadow_id,omitempty" gorm:"index"`      // 关联伏笔 ID
 	Notes           string `json:"notes" gorm:"type:text"`
+	PayoffQuality   int    `json:"payoff_quality" gorm:"default:0"` // 1-5兑现质量评分
+	PayoffNotes     string `json:"payoff_notes" gorm:"type:text"`   // 兑现质量说明
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -137,9 +140,10 @@ type ConflictArc struct {
 	PeakChapter  int    `json:"peak_chapter" gorm:"default:0"`  // 预计高潮章节
 	EndChapter   int    `json:"end_chapter" gorm:"default:0"`   // 预计解决章节（0=未规划）
 	CurrentPhase string `json:"current_phase" gorm:"size:30;default:setup"`
-	// setup/escalation/climax/resolution
-	IsResolved bool   `json:"is_resolved" gorm:"default:false"`
-	Notes      string `json:"notes" gorm:"type:text"`
+	// setup/ignition/escalation/turning_point/climax/aftershock (三幕六阶段)
+	IsResolved    bool   `json:"is_resolved" gorm:"default:false"`
+	Notes         string `json:"notes" gorm:"type:text"`
+	TensionLevels string `json:"tension_levels" gorm:"type:text"` // JSON: {"setup":3,"ignition":6,...} 各阶段张力值1-10
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`

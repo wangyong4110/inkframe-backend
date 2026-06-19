@@ -163,6 +163,8 @@ func (s *NovelAnalysisService) StartAnalysis(tenantID, novelID uint, createOutli
 			_ = s.taskSvc.SetParams(externalTaskID, map[string]interface{}{
 				"create_outlines": createOutlines,
 			})
+		} else {
+			logger.Errorf("[NovelAnalysis] StartAnalysis: create async task failed (novelID=%d): %v; falling back to UUID taskID", novelID, err)
 		}
 	}
 
@@ -187,6 +189,7 @@ func (s *NovelAnalysisService) StartAnalysis(tenantID, novelID uint, createOutli
 func (s *NovelAnalysisService) ResumeAnalysis(t *model.AsyncTask, createOutlines bool) {
 	novel, err := s.novelRepo.GetByID(t.EntityID)
 	if err != nil {
+		logger.Errorf("[NovelAnalysis] ResumeAnalysis: novel not found (novelID=%d taskID=%s): %v", t.EntityID, t.TaskID, err)
 		if s.taskSvc != nil {
 			_ = s.taskSvc.Fail(t.TaskID, "novel not found: "+err.Error())
 		}
@@ -246,55 +249,50 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 		return
 	}
 
-	// ── Phase 1: 章节摘要 (0→20)，最多 3 分钟 ──────────────────────────────
+	// ── Phase 1: 章节摘要 (0→20) ──────────────────────────────
 	if len(chapters) > 0 {
 		task.setStep("正在生成章节摘要...")
-		phase1Ctx, phase1Cancel := context.WithTimeout(ctx, 3*time.Minute)
-		if err := s.stepSummarizeChapters(phase1Ctx, task, tenantID, novel, chapters); err != nil {
-			logger.Errorf("NovelAnalysis[%d]: stepSummarizeChapters warn: %v", novel.ID, err)
+		if err := s.stepSummarizeChapters(ctx, task, tenantID, novel, chapters); err != nil {
+			logger.Warnf("NovelAnalysis[%d]: stepSummarizeChapters failed (non-fatal): %v", novel.ID, err)
 			task.addWarning("章节摘要生成失败: " + err.Error())
 		}
-		phase1Cancel()
 		// 刷新章节（含更新后的摘要和内容）
 		if refreshed, err := s.chapterRepo.ListByNovelWithContent(novel.ID); err == nil {
 			chapters = refreshed
+		} else {
+			logger.Errorf("NovelAnalysis[%d]: refresh chapters after Phase1 summarize failed: %v", novel.ID, err)
 		}
 	}
 	task.setProgress(20)
 
-	// ── Phase 2: 并发提取 角色/物品/世界观/剧情点/场景锚点/伏笔 (20→70)，最多 6 分钟 ──
-	task.setStep("正在同步提取角色、物品、世界观、剧情点、场景锚点、伏笔...")
+	// ── Phase 2: 并发提取 角色/物品/世界观/剧情点/伏笔 (20→70) ──
+	// 场景锚点单独后台 goroutine 处理（见下方），超时由模型管理的"请求超时"配置控制。
+	task.setStep("正在同步提取角色、物品、世界观、剧情点、伏笔...")
 	{
-		phase2Ctx, phase2Cancel := context.WithTimeout(ctx, 6*time.Minute)
-		defer phase2Cancel()
-
 		type phaseTask struct {
 			name string
 			fn   func() error
 		}
 		phaseTasks := []phaseTask{
 			{"角色", func() error {
-				return s.stepExtractCharacters(phase2Ctx, task, tenantID, novel, chapters)
+				return s.stepExtractCharacters(ctx, task, tenantID, novel, chapters)
 			}},
 			{"物品", func() error {
 				if s.itemRepo == nil {
 					return nil
 				}
-				return s.stepExtractItems(phase2Ctx, task, tenantID, novel, chapters)
+				return s.stepExtractItems(ctx, task, tenantID, novel, chapters)
 			}},
 			{"世界观", func() error {
-				return s.stepExtractWorldview(phase2Ctx, task, tenantID, novel, chapters)
+				return s.stepExtractWorldview(ctx, task, tenantID, novel, chapters)
 			}},
 			{"剧情点", func() error {
-				return s.stepExtractPlotPoints(phase2Ctx, task, tenantID, novel, chapters)
-			}},
-			{"场景锚点", func() error {
-				return s.stepExtractSceneAnchors(phase2Ctx, task, tenantID, novel, chapters)
+				return s.stepExtractPlotPoints(ctx, task, tenantID, novel, chapters)
 			}},
 			{"伏笔", func() error {
-				return s.stepExtractForeshadows(phase2Ctx, task, tenantID, novel, chapters)
+				return s.stepExtractForeshadows(ctx, task, tenantID, novel, chapters)
 			}},
-			}
+		}
 
 		var phWg sync.WaitGroup
 		var doneCount atomic.Int32
@@ -311,10 +309,10 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 						task.addWarning(msg)
 					}
 				}()
-				if err := retryStepCtx(phase2Ctx, 3, pt.fn); err != nil {
+				if err := retryStepCtx(ctx, 3, pt.fn); err != nil {
 					if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-						logger.Warnf("NovelAnalysis[%d]: step%s skipped: phase2 timeout/cancelled (%v)", novel.ID, pt.name, err)
-						task.addWarning(pt.name + "提取因超时跳过")
+						logger.Warnf("NovelAnalysis[%d]: step%s skipped: cancelled (%v)", novel.ID, pt.name, err)
+						task.addWarning(pt.name + "提取被取消")
 					} else {
 						msg := fmt.Sprintf("%s提取失败（已重试3次）: %v", pt.name, err)
 						logger.Errorf("NovelAnalysis[%d]: step%s error after retries: %v", novel.ID, pt.name, err)
@@ -329,43 +327,53 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 	}
 	task.setProgress(70)
 
-	// ── Phase 3: 大纲 + 设置 并行 (70→88)，大纲最多 5 分钟 ─────────────────
-	task.setStep("正在生成大纲与设置...")
+	// ── 场景锚点: 独立后台 goroutine，与 Phase 3/4 并行，不占用主流水线时间 ──
+	// 超时由模型管理的"请求超时"配置控制，此处不叠加额外限制。
+	if s.sceneAnchorService != nil {
+		capturedChapters := chapters
+		capturedNovel := novel
+		go func() {
+			saCtx := context.Background()
+			logger.Printf("NovelAnalysis[%d]: scene anchor background extraction start", capturedNovel.ID)
+			if err := s.stepExtractSceneAnchors(saCtx, task, tenantID, capturedNovel, capturedChapters); err != nil {
+				logger.Warnf("NovelAnalysis[%d]: scene anchor background extraction failed: %v", capturedNovel.ID, err)
+			} else {
+				logger.Printf("NovelAnalysis[%d]: scene anchor background extraction done", capturedNovel.ID)
+			}
+		}()
+	}
+
+	// ── Phase 3a: 项目设置 (70→78) ────────────────────────────
+	// 先完成设置推断，让 description/genre 落库，供后续大纲生成使用
+	task.setStep("正在推断项目设置...")
+	if err := s.stepUpdateNovelSettings(ctx, task, tenantID, novel, chapters); err != nil {
+		logger.Warnf("NovelAnalysis[%d]: stepUpdateNovelSettings failed (non-fatal): %v", novel.ID, err)
+	}
+	task.setProgress(78)
+
+	// ── Phase 3b: 故事大纲 (78→88) ────────────────────────────
+	// 此时 description/genre 已落库，GenerateOutline 内部会重新 GetByID 读到最新值
+	task.setStep("正在生成故事大纲...")
 	var outline *OutlineResult
 	{
-		var phWg sync.WaitGroup
-		phWg.Add(2)
-		go func() {
-			defer phWg.Done()
-			outlineCtx, outlineCancel := context.WithTimeout(ctx, 5*time.Minute)
-			defer outlineCancel()
-			var oErr error
-			outline, oErr = s.stepGenerateOutline(outlineCtx, task, tenantID, novel)
-			if oErr != nil {
-				logger.Errorf("NovelAnalysis[%d]: stepGenerateOutline warn: %v", novel.ID, oErr)
-			}
-		}()
-		go func() {
-			defer phWg.Done()
-			settingsCtx, settingsCancel := context.WithTimeout(ctx, 2*time.Minute)
-			defer settingsCancel()
-			if err := s.stepUpdateNovelSettings(settingsCtx, task, tenantID, novel, chapters); err != nil {
-				logger.Errorf("NovelAnalysis[%d]: stepUpdateNovelSettings warn: %v", novel.ID, err)
-			}
-		}()
-		phWg.Wait()
+		var oErr error
+		outline, oErr = s.stepGenerateOutline(ctx, task, tenantID, novel)
+		if oErr != nil {
+			logger.Errorf("NovelAnalysis[%d]: stepGenerateOutline failed (Phase4+4.5 will be skipped): %v", novel.ID, oErr)
+		}
 	}
 	task.setProgress(88)
 
 	// ── Phase 4: 章节大纲 (88→95) ─────────────────────────────────────────────
 	phase4Created := false
 	if outline != nil && len(outline.Chapters) > 0 {
-		logger.Printf("NovelAnalysis[%d]: Phase4 creating chapter outlines: %d chapters", novel.ID, len(outline.Chapters))
+		logger.Printf("NovelAnalysis[%d]: Phase4 start: creating chapter outlines, chapters=%d", novel.ID, len(outline.Chapters))
 		task.setStep("正在创建章节大纲...")
 		if err := s.stepCreateChapterOutlines(ctx, task, novel, outline); err != nil {
-			logger.Errorf("NovelAnalysis[%d]: stepCreateChapterOutlines warn: %v", novel.ID, err)
+			logger.Errorf("NovelAnalysis[%d]: Phase4 stepCreateChapterOutlines failed (Phase4.5 will be skipped): %v", novel.ID, err)
 		} else {
 			phase4Created = true
+			logger.Printf("NovelAnalysis[%d]: Phase4 done", novel.ID)
 		}
 	} else {
 		if outline == nil {
@@ -375,46 +383,87 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 		}
 	}
 
-	// ── Phase 4.5: 补跑物品/场景/设置提取（仅当 Phase2 时无章节内容，Phase4 后有摘要可用）──
+	// ── Phase 4.5: 补跑物品/场景/设置提取（后台执行，不阻塞主流水线进度）──
+	// 这些都是辅助性提取，不影响核心产物（大纲/章节），放后台避免 AI 慢响应卡住流水线。
+	logger.Printf("NovelAnalysis[%d]: Phase4.5 check: phase4Created=%v", novel.ID, phase4Created)
 	if phase4Created {
-		// 补跑小说设置（genre/description/style_prompt 等）
-		freshNovel, _ := s.novelRepo.GetByID(novel.ID)
+		go func() {
+			bgCtx := context.Background()
+			logger.Printf("NovelAnalysis[%d]: Phase4.5 start (background)", novel.ID)
+
+			// ── 4.5.1 补跑小说设置 ──
+			logger.Printf("NovelAnalysis[%d]: Phase4.5 [1/4] settings: reloading novel", novel.ID)
+			freshNovel, freshErr := s.novelRepo.GetByID(novel.ID)
+		if freshErr != nil {
+			logger.Errorf("NovelAnalysis[%d]: Phase4.5 reload novel failed: %v", novel.ID, freshErr)
+		}
 		needSettings := freshNovel != nil && (freshNovel.Genre == "" || freshNovel.Genre == "unknown" ||
 			freshNovel.Description == "" || freshNovel.StylePrompt == "")
+		logger.Printf("NovelAnalysis[%d]: Phase4.5 [1/4] settings: needSettings=%v (genre=%q desc_empty=%v style_empty=%v)",
+			novel.ID, needSettings,
+			func() string {
+				if freshNovel != nil {
+					return freshNovel.Genre
+				}
+				return "<nil>"
+			}(),
+			freshNovel != nil && freshNovel.Description == "",
+			freshNovel != nil && freshNovel.StylePrompt == "")
 		if needSettings {
-			logger.Printf("NovelAnalysis[%d]: Phase4.5 re-running novel settings update", novel.ID)
 			task.setStep("正在补充生成设置...")
-			// 用 outline.Summary 填充临时 description，让 settings 有素材可用
 			novelForSettings := *freshNovel
 			if novelForSettings.Description == "" && outline != nil && outline.Summary != "" {
 				novelForSettings.Description = outline.Summary
 			}
-			freshChaptersForSettings, _ := s.chapterRepo.ListByNovelWithContent(novel.ID)
-			if err := s.stepUpdateNovelSettings(ctx, task, tenantID, &novelForSettings, freshChaptersForSettings); err != nil {
-				logger.Errorf("NovelAnalysis[%d]: Phase4.5 settings update warn: %v", novel.ID, err)
+			freshChaptersForSettings, chErr := s.chapterRepo.ListByNovelWithContent(novel.ID)
+			if chErr != nil {
+				logger.Errorf("NovelAnalysis[%d]: Phase4.5 list chapters for settings failed: %v", novel.ID, chErr)
 			}
+			logger.Printf("NovelAnalysis[%d]: Phase4.5 [1/4] settings: calling stepUpdateNovelSettings", novel.ID)
+			if err := s.stepUpdateNovelSettings(bgCtx, task, tenantID, &novelForSettings, freshChaptersForSettings); err != nil {
+				logger.Warnf("NovelAnalysis[%d]: Phase4.5 [1/4] settings update failed (non-fatal): %v", novel.ID, err)
+			}
+			logger.Printf("NovelAnalysis[%d]: Phase4.5 [1/4] settings: done", novel.ID)
+		} else {
+			logger.Printf("NovelAnalysis[%d]: Phase4.5 [1/4] settings: skipped (all fields present)", novel.ID)
 		}
-		// 补跑物品提取
+
+		// ── 4.5.2 补跑物品提取 ──
+		logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: checking", novel.ID)
 		if s.itemRepo != nil && s.itemService != nil {
-			existingItems, _ := s.itemRepo.ListByNovel(novel.ID)
-			if len(existingItems) == 0 {
-				logger.Printf("NovelAnalysis[%d]: Phase4.5 re-running item extraction (chapters now have summaries)", novel.ID)
-				task.setStep("正在补充提取物品...")
-				if items, err := s.itemService.AIExtractAllFromNovel(ctx, tenantID, novel.ID); err != nil {
-					logger.Errorf("NovelAnalysis[%d]: Phase4.5 item extraction warn: %v", novel.ID, err)
-				} else {
-					logger.Printf("NovelAnalysis[%d]: Phase4.5 item extraction done: %d items", novel.ID, len(items))
-				}
+			existingItems, itemListErr := s.itemRepo.ListByNovel(novel.ID)
+			if itemListErr != nil {
+				logger.Warnf("NovelAnalysis[%d]: Phase4.5 [2/4] items: list failed (will re-extract): %v", novel.ID, itemListErr)
 			}
+			logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: existing=%d", novel.ID, len(existingItems))
+			if len(existingItems) == 0 {
+				task.setStep("正在补充提取物品...")
+				logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: calling AIExtractAllFromNovel", novel.ID)
+				if items, err := s.itemService.AIExtractAllFromNovel(bgCtx, tenantID, novel.ID); err != nil {
+					logger.Warnf("NovelAnalysis[%d]: Phase4.5 [2/4] items: extraction failed (non-fatal): %v", novel.ID, err)
+				} else {
+					logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: done, extracted=%d", novel.ID, len(items))
+				}
+			} else {
+				logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: skipped (already have %d items)", novel.ID, len(existingItems))
+			}
+		} else {
+			logger.Printf("NovelAnalysis[%d]: Phase4.5 [2/4] items: skipped (itemRepo or itemService nil)", novel.ID)
 		}
-		// 补跑场景锚点提取（用章节 summary 代替 content）
+
+		// ── 4.5.3 补跑场景锚点提取 ──
+		logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: checking", novel.ID)
 		if s.sceneAnchorService != nil {
-			existingAnchors, _ := s.sceneAnchorService.ListByNovel(novel.ID)
+			existingAnchors, anchorListErr := s.sceneAnchorService.ListByNovel(novel.ID)
+			if anchorListErr != nil {
+				logger.Warnf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: list failed (will re-extract): %v", novel.ID, anchorListErr)
+			}
+			logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: existing=%d", novel.ID, len(existingAnchors))
 			if len(existingAnchors) == 0 {
-				logger.Printf("NovelAnalysis[%d]: Phase4.5 re-running scene anchor extraction (using chapter summaries)", novel.ID)
 				task.setStep("正在补充提取场景...")
-				// 重新加载章节（Phase4 创建的带 summary 的 draft 章节）
-				if freshChapters, err := s.chapterRepo.ListByNovelWithContent(novel.ID); err == nil {
+				if freshChapters, err := s.chapterRepo.ListByNovelWithContent(novel.ID); err != nil {
+					logger.Errorf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: list chapters failed: %v", novel.ID, err)
+				} else {
 					const maxConcurrent = 3
 					sem := make(chan struct{}, maxConcurrent)
 					var wg sync.WaitGroup
@@ -423,6 +472,9 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 						text := ch.Content
 						if text == "" {
 							text = ch.Summary
+						}
+						if text == "" {
+							text = truncateForPrompt(ch.Outline, 500)
 						}
 						if text == "" || count >= 10 {
 							continue
@@ -434,37 +486,57 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 						wg.Add(1)
 						go func() {
 							defer func() { <-sem; wg.Done() }()
-							anchors, err := s.sceneAnchorService.ExtractFromChapter(ctx, tenantID, novel.ID, novel.Title, capturedText)
+							logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: ch%d extracting...", novel.ID, ch.ChapterNo)
+							anchors, err := s.sceneAnchorService.ExtractFromChapter(bgCtx, tenantID, novel.ID, novel.Title, capturedText)
 							if err != nil {
-								logger.Errorf("NovelAnalysis[%d]: Phase4.5 scene anchor ch%d warn: %v", novel.ID, ch.ChapterNo, err)
+								logger.Warnf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: ch%d failed (non-fatal): %v", novel.ID, ch.ChapterNo, err)
 							} else {
-								logger.Printf("NovelAnalysis[%d]: Phase4.5 scene anchor ch%d: %d anchors", novel.ID, ch.ChapterNo, len(anchors))
+								logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: ch%d done, anchors=%d", novel.ID, ch.ChapterNo, len(anchors))
 							}
 						}()
 					}
+					logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: waiting for %d goroutines", novel.ID, count)
 					wg.Wait()
+					logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: all goroutines done", novel.ID)
 				}
+			} else {
+				logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: skipped (already have %d anchors)", novel.ID, len(existingAnchors))
 			}
+		} else {
+			logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: skipped (sceneAnchorService nil)", novel.ID)
 		}
-		// 补跑角色信息丰富（Phase2 时无章节内容，Description 可能为空）
+
+		// ── 4.5.4 补跑角色信息丰富 ──
+		logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: checking", novel.ID)
 		{
-			existingChars, _ := s.characterRepo.ListByNovel(novel.ID)
+			existingChars, charListErr := s.characterRepo.ListByNovel(novel.ID)
+			if charListErr != nil {
+				logger.Warnf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: list failed: %v", novel.ID, charListErr)
+			}
 			var emptyChars []*model.Character
 			for _, c := range existingChars {
 				if c.Description == "" {
 					emptyChars = append(emptyChars, c)
 				}
 			}
+			logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: total=%d empty=%d", novel.ID, len(existingChars), len(emptyChars))
 			if len(emptyChars) > 0 {
-				logger.Printf("NovelAnalysis[%d]: Phase4.5 enriching %d characters with empty fields", novel.ID, len(emptyChars))
 				task.setStep("正在补充角色信息...")
 				novelForChar := freshNovel
 				if novelForChar == nil {
-					novelForChar, _ = s.novelRepo.GetByID(novel.ID)
+					var ncErr error
+					novelForChar, ncErr = s.novelRepo.GetByID(novel.ID)
+					if ncErr != nil {
+						logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: reload novel failed: %v", novel.ID, ncErr)
+					}
 				}
 				if novelForChar != nil {
-					freshChaptersForChar, _ := s.chapterRepo.ListByNovelWithContent(novel.ID)
+					freshChaptersForChar, chForCharErr := s.chapterRepo.ListByNovelWithContent(novel.ID)
+					if chForCharErr != nil {
+						logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: list chapters failed: %v", novel.ID, chForCharErr)
+					}
 					summariesText := buildChapterSummariesText(freshChaptersForChar, 15, 8000)
+					logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: summaries_len=%d", novel.ID, len(summariesText))
 					if summariesText != "" {
 						extractPrompt, pErr := renderPrompt("extract_characters", map[string]interface{}{
 							"NovelTitle":     novelForChar.Title,
@@ -472,13 +544,23 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 							"Summaries":      summariesText,
 							"PromptLanguage": novelForChar.PromptLanguage,
 						})
+						if pErr != nil {
+							logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: render prompt failed: %v", novel.ID, pErr)
+						}
 						if pErr == nil {
-							result, aErr := s.aiService.GenerateWithProvider(tenantID, novel.ID, "extract_characters", extractPrompt, "",
+							logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: calling AI (extract_characters)", novel.ID)
+							result, aErr := s.aiService.GenerateWithProviderCtx(bgCtx, tenantID, novel.ID, "extract_characters", extractPrompt, "",
 								StoryboardOverrides{})
+							if aErr != nil {
+								logger.Warnf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: AI call failed (non-fatal): %v", novel.ID, aErr)
+							}
 							if aErr == nil {
+								logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: AI done, parsing result len=%d", novel.ID, len(result))
 								chars, pErr2 := parseCharacterJSONResult(result)
+								if pErr2 != nil {
+									logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: parse JSON failed: %v", novel.ID, pErr2)
+								}
 								if pErr2 == nil {
-									// 建立 name→emptyChar 映射，只更新空字段
 									emptyByName := make(map[string]*model.Character, len(emptyChars))
 									for _, c := range emptyChars {
 										emptyByName[strings.ToLower(c.Name)] = c
@@ -490,7 +572,6 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 										}
 										descEnriched := false
 										if ec.Description == "" {
-											// 优先新格式的统一 description，兼容旧格式分离字段
 											desc := c.Description
 											if desc == "" {
 												var parts []string
@@ -512,19 +593,21 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 											}
 										}
 										if descEnriched {
+											logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: updating char %q", novel.ID, ec.Name)
 											if err := s.characterRepo.Update(ec); err != nil {
-												logger.Errorf("NovelAnalysis[%d]: Phase4.5 update char %q: %v", novel.ID, ec.Name, err)
+												logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: update char %q failed: %v", novel.ID, ec.Name, err)
 											} else {
-												logger.Printf("NovelAnalysis[%d]: Phase4.5 enriched char %q", novel.ID, ec.Name)
+												logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: enriched char %q", novel.ID, ec.Name)
 											}
 										}
-										// 确保有默认形象，并同步 VisualPrompt
 										if s.lookRepo != nil {
 											if ec.DefaultLookID != 0 {
 												if c.VisualPrompt != "" {
 													if look, e := s.lookRepo.GetByID(ec.DefaultLookID); e == nil && look.VisualPrompt == "" {
 														look.VisualPrompt = c.VisualPrompt
-														s.lookRepo.Update(look) //nolint:errcheck
+														if uErr := s.lookRepo.Update(look); uErr != nil {
+															logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] update look visual_prompt for char %q: %v", novel.ID, ec.Name, uErr)
+														}
 													}
 												}
 											} else {
@@ -535,28 +618,37 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 													ChapterFrom:  1,
 													VisualPrompt: c.VisualPrompt,
 												}
-												if s.lookRepo.Create(newLook) == nil { //nolint:errcheck
-													s.characterRepo.UpdateDefaultLookID(ec.ID, newLook.ID) //nolint:errcheck
+												if cErr := s.lookRepo.Create(newLook); cErr != nil {
+													logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] create default look for char %q: %v", novel.ID, ec.Name, cErr)
+												} else {
+													if uErr := s.characterRepo.UpdateDefaultLookID(ec.ID, newLook.ID); uErr != nil {
+														logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] set default_look_id for char %q: %v", novel.ID, ec.Name, uErr)
+													}
 												}
 											}
 										}
 									}
 								}
-							} else {
-								logger.Errorf("NovelAnalysis[%d]: Phase4.5 character enrichment AI error: %v", novel.ID, aErr)
 							}
 						}
+					} else {
+						logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: skipped (no summaries available)", novel.ID)
 					}
 				}
+			} else {
+				logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: skipped (all chars have description)", novel.ID)
 			}
 		}
+		logger.Printf("NovelAnalysis[%d]: Phase4.5 done (background)", novel.ID)
+		}()
 	}
+	logger.Printf("NovelAnalysis[%d]: reaching setProgress(95)", novel.ID)
 	task.setProgress(95)
 
 	// ── Phase 5: 收尾 (95→100) ────────────────────────────────────────────────
 	task.setStep("收尾中...")
 	if err := s.stepFinalize(task, novel); err != nil {
-		logger.Errorf("NovelAnalysis[%d]: stepFinalize warn: %v", novel.ID, err)
+		logger.Errorf("NovelAnalysis[%d]: stepFinalize failed (novel status may remain stale): %v", novel.ID, err)
 	}
 
 	task.setProgress(100)
@@ -693,7 +785,7 @@ func (s *NovelAnalysisService) stepSummarizeChapters(
 			})
 			if pErr != nil {
 				logger.Errorf("NovelAnalysis: chapter %d render prompt: %v", ch.ChapterNo, pErr)
-			} else if summary, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "chapter_summary", prompt, ""); err != nil {
+			} else if summary, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novel.ID, "chapter_summary", prompt, ""); err != nil {
 				logger.Errorf("NovelAnalysis: chapter %d summary AI error: %v", ch.ChapterNo, err)
 			} else {
 				ch.Summary = strings.TrimSpace(summary)
@@ -747,11 +839,16 @@ func (s *NovelAnalysisService) summarizeChaptersBackground(
 				"Content":      truncateForPrompt(ch.Content, 6000),
 			})
 			if err != nil {
+				logger.Errorf("NovelAnalysis[bg][%d]: chapter %d render prompt failed: %v", novel.ID, ch.ChapterNo, err)
 				return
 			}
-			summary, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "chapter_summary", prompt, "")
+			summary, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novel.ID, "chapter_summary", prompt, "")
 			if err != nil {
-				logger.Errorf("NovelAnalysis[bg][%d]: chapter %d summary error: %v", novel.ID, ch.ChapterNo, err)
+				if ctx.Err() != nil {
+					logger.Warnf("NovelAnalysis[bg][%d]: chapter %d summary cancelled: %v", novel.ID, ch.ChapterNo, ctx.Err())
+				} else {
+					logger.Errorf("NovelAnalysis[bg][%d]: chapter %d summary AI error: %v", novel.ID, ch.ChapterNo, err)
+				}
 				return
 			}
 			ch.Summary = strings.TrimSpace(summary)
@@ -786,22 +883,29 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 		"PromptLanguage": novel.PromptLanguage,
 	})
 	if err != nil {
+		logger.Errorf("NovelAnalysis[%d]: stepExtractCharacters render prompt failed: %v", novel.ID, err)
 		return fmt.Errorf("render extract_characters: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "extract_characters", extractCharsPrompt, "",
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novel.ID, "extract_characters", extractCharsPrompt, "",
 		StoryboardOverrides{})
 	if err != nil {
+		logger.Errorf("NovelAnalysis[%d]: stepExtractCharacters AI call failed: %v", novel.ID, err)
 		return fmt.Errorf("AI extract_characters: %w", err)
 	}
+	logger.Printf("NovelAnalysis[%d]: stepExtractCharacters AI response len=%d", novel.ID, len(result))
 
 	chars, err := parseCharacterJSONResult(result)
 	if err != nil {
+		logger.Errorf("NovelAnalysis[%d]: stepExtractCharacters parse JSON failed: %v (raw=%.200s)", novel.ID, err, result)
 		return fmt.Errorf("parse characters JSON: %w", err)
 	}
 
 	// 获取已有角色，用于去重
-	existingChars, _ := s.characterRepo.ListByNovel(novel.ID)
+	existingChars, existErr := s.characterRepo.ListByNovel(novel.ID)
+	if existErr != nil {
+		logger.Warnf("[NovelAnalysis] stepExtractCharacters: list existing characters failed (may create duplicates): %v", existErr)
+	}
 	existingNames := make(map[string]bool, len(existingChars))
 	for _, ec := range existingChars {
 		existingNames[strings.ToLower(ec.Name)] = true
@@ -892,7 +996,7 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 	}
 
 	// 角色图片由用户手动触发，分析阶段不自动生成
-	logger.Printf("[NovelAnalysis] stepExtractCharacters done: novelID=%d characters created", novel.ID)
+	logger.Printf("[NovelAnalysis] stepExtractCharacters done: novelID=%d created=%d skipped(existing)=%d", novel.ID, len(createdChars), len(existingChars))
 	return nil
 }
 
@@ -901,16 +1005,8 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 	ctx context.Context, task *AnalysisTask, tenantID uint, novel *model.Novel, chapters []*model.Chapter,
 ) error {
 	logger.Printf("[NovelAnalysis] stepExtractWorldview: novelID=%d", novel.ID)
-	var summariesText string
-	if len(chapters) > 0 {
-		var sb strings.Builder
-		for _, ch := range chapters {
-			if ch.Summary != "" {
-				sb.WriteString(fmt.Sprintf("第%d章：%s\n", ch.ChapterNo, ch.Summary))
-			}
-		}
-		summariesText = truncateForPrompt(sb.String(), 2000)
-	}
+	// 使用 buildChapterSummariesText 保证 Summary→Content→Outline 三级兜底
+	summariesText := buildChapterSummariesText(chapters, 20, 4000)
 	if summariesText == "" {
 		if novel.Description != "" {
 			summariesText = novel.Description
@@ -925,13 +1021,16 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 		"Summaries":  summariesText,
 	})
 	if err != nil {
+		logger.Errorf("NovelAnalysis[%d]: stepExtractWorldview render prompt failed: %v", novel.ID, err)
 		return fmt.Errorf("render extract_worldview: %w", err)
 	}
 
-	result, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "extract_worldview", worldviewPrompt, "")
+	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novel.ID, "extract_worldview", worldviewPrompt, "")
 	if err != nil {
+		logger.Errorf("NovelAnalysis[%d]: stepExtractWorldview AI call failed: %v", novel.ID, err)
 		return fmt.Errorf("AI extract_worldview: %w", err)
 	}
+	logger.Printf("NovelAnalysis[%d]: stepExtractWorldview AI response len=%d", novel.ID, len(result))
 	type wvRaw struct {
 		Name        json.RawMessage `json:"name"`
 		Description json.RawMessage `json:"description"`
@@ -939,13 +1038,14 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 		Geography   json.RawMessage `json:"geography"`
 		History     json.RawMessage `json:"history"`
 		Culture     json.RawMessage `json:"culture"`
-		Technology  json.RawMessage `json:"technology"`
 		Rules       json.RawMessage `json:"rules"`
-		CheatSystem json.RawMessage `json:"cheat_system"`
+		Factions    json.RawMessage `json:"factions"`
+		Glossary    json.RawMessage `json:"glossary"`
 	}
 	var raw wvRaw
-	cleaned := extractJSON(strings.TrimSpace(result))
+	cleaned := extractJSONObject(strings.TrimSpace(result))
 	if err := json.Unmarshal([]byte(cleaned), &raw); err != nil {
+		logger.Errorf("NovelAnalysis[%d]: stepExtractWorldview parse worldview JSON failed: %v (cleaned=%.300s)", novel.ID, err, cleaned)
 		return fmt.Errorf("parse worldview JSON: %w", err)
 	}
 	parseField := func(data json.RawMessage) string {
@@ -963,7 +1063,7 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 		return strings.Trim(string(data), `"`)
 	}
 	type wvParsed struct {
-		Name, Description, MagicSystem, Geography, History, Culture, Technology, Rules, CheatSystem string
+		Name, Description, MagicSystem, Geography, History, Culture, Rules, Factions, Glossary string
 	}
 	wv := wvParsed{
 		Name:        parseField(raw.Name),
@@ -972,9 +1072,9 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 		Geography:   parseField(raw.Geography),
 		History:     parseField(raw.History),
 		Culture:     parseField(raw.Culture),
-		Technology:  parseField(raw.Technology),
 		Rules:       parseField(raw.Rules),
-		CheatSystem: parseField(raw.CheatSystem),
+		Factions:    parseField(raw.Factions),
+		Glossary:    parseField(raw.Glossary),
 	}
 
 	if wv.Name == "" {
@@ -984,7 +1084,11 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 	// 若小说已关联世界观，直接更新（复用），不重复创建
 	if novel.WorldviewID != nil {
 		existing, err := s.worldviewRepo.GetByID(*novel.WorldviewID)
+		if err != nil {
+			logger.Errorf("NovelAnalysis[%d]: worldview id=%d referenced but not found in DB, will create new: %v", novel.ID, *novel.WorldviewID, err)
+		}
 		if err == nil {
+			existing.TenantID = tenantID
 			existing.Name = wv.Name
 			existing.Description = wv.Description
 			existing.Genre = novel.Genre
@@ -992,9 +1096,9 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 			existing.Geography = wv.Geography
 			existing.History = wv.History
 			existing.Culture = wv.Culture
-			existing.Technology = wv.Technology
 			existing.Rules = wv.Rules
-			existing.CheatSystem = wv.CheatSystem
+			existing.Factions = wv.Factions
+			existing.Glossary = wv.Glossary
 			logger.Printf("NovelAnalysis[%d]: updating existing worldview id=%d %q", novel.ID, existing.ID, existing.Name)
 			if err := s.worldviewRepo.Update(existing); err != nil {
 				logger.Errorf("NovelAnalysis: update worldview %d: %v", existing.ID, err)
@@ -1005,6 +1109,7 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 	}
 
 	worldview := &model.Worldview{
+		TenantID:    tenantID,
 		UUID:        uuid.New().String(),
 		Name:        wv.Name,
 		Description: wv.Description,
@@ -1013,12 +1118,13 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 		Geography:   wv.Geography,
 		History:     wv.History,
 		Culture:     wv.Culture,
-		Technology:  wv.Technology,
 		Rules:       wv.Rules,
-		CheatSystem: wv.CheatSystem,
+		Factions:    wv.Factions,
+		Glossary:    wv.Glossary,
 	}
 	logger.Printf("NovelAnalysis[%d]: creating worldview %q", novel.ID, worldview.Name)
 	if err := s.worldviewRepo.Create(worldview); err != nil {
+		logger.Errorf("NovelAnalysis[%d]: stepExtractWorldview create worldview %q failed: %v", novel.ID, worldview.Name, err)
 		return fmt.Errorf("save worldview: %w", err)
 	}
 
@@ -1037,7 +1143,10 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 func (s *NovelAnalysisService) stepGenerateOutline(
 	ctx context.Context, task *AnalysisTask, tenantID uint, novel *model.Novel,
 ) (*OutlineResult, error) {
-	chapterCount, _ := s.chapterRepo.CountByNovel(novel.ID)
+	chapterCount, countErr := s.chapterRepo.CountByNovel(novel.ID)
+	if countErr != nil {
+		logger.Errorf("NovelAnalysis[%d]: stepGenerateOutline CountByNovel failed: %v; assuming 0 chapters", novel.ID, countErr)
+	}
 
 	// AI 创建模式：无章节时使用 TargetChapters；若为 0 则由 AI 自行决定章节数
 	chapterNum := int(chapterCount)
@@ -1051,13 +1160,17 @@ func (s *NovelAnalysisService) stepGenerateOutline(
 	}
 	outline, err := s.novelService.GenerateOutline(tenantID, req)
 	if err != nil {
+		logger.Errorf("NovelAnalysis[%d]: stepGenerateOutline GenerateOutline failed: %v", novel.ID, err)
 		return nil, fmt.Errorf("GenerateOutline: %w", err)
 	}
+	logger.Printf("NovelAnalysis[%d]: stepGenerateOutline done: %d chapters summary=%q", novel.ID, len(outline.Chapters), truncateForPrompt(outline.Summary, 80))
 
 	// 保存完整大纲 JSON 到 novel.Outline，供章节生成时使用
 	updateFields := map[string]interface{}{}
 	if outlineJSON, err := json.Marshal(outline); err == nil {
 		updateFields["outline"] = string(outlineJSON)
+	} else {
+		logger.Errorf("NovelAnalysis[%d]: stepGenerateOutline marshal outline JSON failed: %v", novel.ID, err)
 	}
 	if novel.Description == "" && outline.Summary != "" {
 		updateFields["description"] = outline.Summary
@@ -1110,7 +1223,9 @@ func (s *NovelAnalysisService) stepCreateChapterOutlines(
 	}
 	logger.Printf("NovelAnalysis[%d]: stepCreateChapterOutlines done: created=%d skipped=%d", novel.ID, created, skipped)
 	if created > 0 {
-		_ = s.novelRepo.SyncStats(novel.ID)
+		if err := s.novelRepo.SyncStats(novel.ID); err != nil {
+			logger.Errorf("NovelAnalysis[%d]: stepCreateChapterOutlines SyncStats failed: %v", novel.ID, err)
+		}
 	}
 	return nil
 }
@@ -1195,8 +1310,10 @@ func (s *NovelAnalysisService) generateThreeViewsAsync(ctx context.Context, tena
 					ChapterFrom:    1,
 					ThreeViewSheet: url,
 				}
-				if s.lookRepo.Create(newLook) == nil {
-					_ = s.characterRepo.UpdateDefaultLookID(char.ID, newLook.ID)
+				if err := s.lookRepo.Create(newLook); err != nil {
+					logger.Errorf("NovelAnalysis: three-view create new look for char %d: %v", char.ID, err)
+				} else if err := s.characterRepo.UpdateDefaultLookID(char.ID, newLook.ID); err != nil {
+					logger.Errorf("NovelAnalysis: three-view set default_look_id for char %d: %v", char.ID, err)
 				}
 			}
 		}
@@ -1209,7 +1326,10 @@ func (s *NovelAnalysisService) stepExtractItems(
 ) error {
 	logger.Printf("[NovelAnalysis] stepExtractItems: novelID=%d", novel.ID)
 	// 若已有物品则跳过
-	existing, _ := s.itemRepo.ListByNovel(novel.ID)
+	existing, listErr := s.itemRepo.ListByNovel(novel.ID)
+	if listErr != nil {
+		logger.Warnf("[NovelAnalysis] stepExtractItems: list existing items failed (will proceed with extraction): %v", listErr)
+	}
 	if len(existing) > 0 {
 		logger.Printf("NovelAnalysis[%d]: items already exist (%d), skip", novel.ID, len(existing))
 		return nil
@@ -1217,6 +1337,7 @@ func (s *NovelAnalysisService) stepExtractItems(
 
 	items, err := s.itemService.AIExtractAllFromNovel(ctx, tenantID, novel.ID)
 	if err != nil {
+		logger.Errorf("NovelAnalysis[%d]: stepExtractItems AIExtractAllFromNovel failed: %v", novel.ID, err)
 		return fmt.Errorf("AIExtractAllFromNovel items: %w", err)
 	}
 	logger.Printf("NovelAnalysis[%d]: extracted %d items", novel.ID, len(items))
@@ -1232,13 +1353,17 @@ func (s *NovelAnalysisService) stepExtractPlotPoints(
 		return nil
 	}
 	// 若已有剧情点则跳过
-	existing, _ := s.plotPointService.ListByNovel(novel.ID, "", false)
+	existing, listErr := s.plotPointService.ListByNovel(novel.ID, "", false)
+	if listErr != nil {
+		logger.Warnf("[NovelAnalysis] stepExtractPlotPoints: list existing plot points failed (will proceed): %v", listErr)
+	}
 	if len(existing) > 0 {
 		logger.Printf("NovelAnalysis[%d]: plot points already exist (%d), skip", novel.ID, len(existing))
 		return nil
 	}
 	pps, err := s.plotPointService.AIExtractFromNovel(ctx, tenantID, novel.ID)
 	if err != nil {
+		logger.Errorf("NovelAnalysis[%d]: stepExtractPlotPoints AIExtractFromNovel failed: %v", novel.ID, err)
 		return fmt.Errorf("AIExtractPlotPoints: %w", err)
 	}
 	logger.Printf("NovelAnalysis[%d]: extracted %d plot points", novel.ID, len(pps))
@@ -1254,7 +1379,10 @@ func (s *NovelAnalysisService) stepExtractSceneAnchors(
 		return nil
 	}
 	// 若已有锚点则跳过
-	existing, _ := s.sceneAnchorService.ListByNovel(novel.ID)
+	existing, listErr := s.sceneAnchorService.ListByNovel(novel.ID)
+	if listErr != nil {
+		logger.Warnf("[NovelAnalysis] stepExtractSceneAnchors: list existing anchors failed (will proceed): %v", listErr)
+	}
 	if len(existing) > 0 {
 		logger.Printf("NovelAnalysis[%d]: scene anchors already exist (%d), skip", novel.ID, len(existing))
 		return nil
@@ -1265,33 +1393,58 @@ func (s *NovelAnalysisService) stepExtractSceneAnchors(
 		maxCh = len(chapters)
 	}
 
-	// 过滤出有内容的章节
-	candidates := make([]*model.Chapter, 0, maxCh)
+	// 过滤出有内容的章节；优先用正文，回退到摘要，再回退到章节大纲
+	type chapterText struct {
+		ch   *model.Chapter
+		text string
+	}
+	candidates := make([]chapterText, 0, maxCh)
 	for i := 0; i < maxCh; i++ {
-		if chapters[i].Content != "" {
-			candidates = append(candidates, chapters[i])
+		ch := chapters[i]
+		text := ch.Content
+		if text == "" {
+			text = ch.Summary
+		}
+		if text == "" {
+			text = truncateForPrompt(ch.Outline, 500)
+		}
+		if text != "" {
+			candidates = append(candidates, chapterText{ch: ch, text: text})
 		}
 	}
 	if len(candidates) == 0 {
+		logger.Printf("NovelAnalysis[%d]: stepExtractSceneAnchors: no chapters with content or summary, skip", novel.ID)
 		return nil
 	}
 
-	// 并发提取，最多 3 个并发
+	// 并发提取，最多 3 个并发；sem 获取用 select 以支持 ctx 取消
 	const maxConcurrent = 3
 	sem := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
-	for _, ch := range candidates {
-		ch := ch
-		sem <- struct{}{}
+	for _, ct := range candidates {
+		ct := ct
+		select {
+		case <-ctx.Done():
+			logger.Warnf("NovelAnalysis[%d]: stepExtractSceneAnchors cancelled before ch%d: %v", novel.ID, ct.ch.ChapterNo, ctx.Err())
+			break
+		case sem <- struct{}{}:
+		}
+		if ctx.Err() != nil {
+			break
+		}
 		wg.Add(1)
 		go func() {
 			defer func() { <-sem; wg.Done() }()
-			anchors, err := s.sceneAnchorService.ExtractFromChapter(ctx, tenantID, novel.ID, novel.Title, ch.Content)
+			anchors, err := s.sceneAnchorService.ExtractFromChapter(ctx, tenantID, novel.ID, novel.Title, ct.text)
 			if err != nil {
-				logger.Errorf("NovelAnalysis[%d]: ExtractSceneAnchors ch%d warn: %v", novel.ID, ch.ChapterNo, err)
+				if ctx.Err() != nil {
+					logger.Warnf("NovelAnalysis[%d]: ExtractSceneAnchors ch%d cancelled: %v", novel.ID, ct.ch.ChapterNo, ctx.Err())
+				} else {
+					logger.Errorf("NovelAnalysis[%d]: ExtractSceneAnchors ch%d warn: %v", novel.ID, ct.ch.ChapterNo, err)
+				}
 				return
 			}
-			logger.Printf("NovelAnalysis[%d]: extracted %d scene anchors from ch%d", novel.ID, len(anchors), ch.ChapterNo)
+			logger.Printf("NovelAnalysis[%d]: extracted %d scene anchors from ch%d", novel.ID, len(anchors), ct.ch.ChapterNo)
 		}()
 	}
 	wg.Wait()
@@ -1307,7 +1460,10 @@ func (s *NovelAnalysisService) stepExtractForeshadows(
 		return nil
 	}
 	// 若已有伏笔则跳过
-	existing, _ := s.foreshadowSvc.ListByNovel(ctx, novel.ID, tenantID)
+	existing, listErr := s.foreshadowSvc.ListByNovel(ctx, novel.ID, tenantID)
+	if listErr != nil {
+		logger.Warnf("[NovelAnalysis] stepExtractForeshadows: list existing foreshadows failed (will proceed): %v", listErr)
+	}
 	if len(existing) > 0 {
 		logger.Printf("NovelAnalysis[%d]: foreshadows already exist (%d), skip", novel.ID, len(existing))
 		return nil
@@ -1318,6 +1474,7 @@ func (s *NovelAnalysisService) stepExtractForeshadows(
 			logger.Printf("NovelAnalysis[%d]: no chapter content for foreshadow extraction, skipping", novel.ID)
 			return nil
 		}
+		logger.Errorf("NovelAnalysis[%d]: stepExtractForeshadows AIExtractFromNovel failed: %v", novel.ID, err)
 		return fmt.Errorf("AIExtractForeshadows: %w", err)
 	}
 	logger.Printf("NovelAnalysis[%d]: extracted %d foreshadows", novel.ID, len(created))
@@ -1406,13 +1563,19 @@ func retryStepCtx(ctx context.Context, maxRetries int, fn func() error) error {
 func (s *NovelAnalysisService) stepUpdateNovelSettings(
 	ctx context.Context, task *AnalysisTask, tenantID uint, novel *model.Novel, chapters []*model.Chapter,
 ) error {
+	validGenreSet := map[string]bool{
+		"玄幻奇幻": true, "仙侠修仙": true, "都市现代": true, "言情爱情": true, "历史古代": true, "科幻未来": true,
+		"悬疑推理": true, "武侠江湖": true, "灵异恐怖": true, "游戏竞技": true, "军事战争": true, "体育竞技": true,
+		"青春校园": true, "末世废土": true, "重生穿越": true, "宫斗宅斗": true, "系统流": true, "其他": true,
+	}
 	needStylePrompt := novel.StylePrompt == ""
 	needDescription := novel.Description == ""
-	needGenre := novel.Genre == "" || novel.Genre == "unknown"
+	needGenre := novel.Genre == "" || novel.Genre == "unknown" || !validGenreSet[novel.Genre]
 	needImageStyle := novel.ImageStyle == ""
 	needTargets := novel.TargetChapters == 0 || novel.TargetWordCount == 0
+	needChapterMode := novel.ChapterMode == "" || novel.ChapterMode == "sequential"
 
-	if !needStylePrompt && !needDescription && !needGenre && !needImageStyle && !needTargets {
+	if !needStylePrompt && !needDescription && !needGenre && !needImageStyle && !needTargets && !needChapterMode {
 		return nil // 所有字段已填，无需更新
 	}
 
@@ -1443,18 +1606,19 @@ func (s *NovelAnalysisService) stepUpdateNovelSettings(
 	updates := map[string]interface{}{}
 
 	validGenres := []string{
-		"现代言情", "古代言情", "幻想言情", "历史", "军事", "科幻",
-		"游戏", "游戏竞技", "玄幻奇幻", "都市", "奇闻异事", "武侠仙侠",
-		"体育", "N次元", "文学艺术",
+		"玄幻奇幻", "仙侠修仙", "都市现代", "言情爱情", "历史古代", "科幻未来",
+		"悬疑推理", "武侠江湖", "灵异恐怖", "游戏竞技", "军事战争", "体育竞技",
+		"青春校园", "末世废土", "重生穿越", "宫斗宅斗", "系统流", "其他",
 	}
 
-	// ── 1. 合并 AI 调用：一次返回 genre/style_prompt/description ─────────────
+	// ── 1. 合并 AI 调用：一次返回 genre/style_prompt/description/chapter_mode ─
 	// 只请求实际缺失的字段，最多 1 次 AI 往返（原来最多 3 次）
-	if needGenre || needStylePrompt || needDescription {
+	if needGenre || needStylePrompt || needDescription || needChapterMode {
 		type settingsJSON struct {
 			Genre       string `json:"genre"`
 			StylePrompt string `json:"style_prompt"`
 			Description string `json:"description"`
+			ChapterMode string `json:"chapter_mode"`
 		}
 		var fieldDescs []string
 		if needGenre {
@@ -1467,11 +1631,21 @@ func (s *NovelAnalysisService) stepUpdateNovelSettings(
 		if needDescription {
 			fieldDescs = append(fieldDescs, `  "description": "150字以内作品简介：故事背景、主人公、核心冲突，不剧透结局，语言生动"`)
 		}
+		if needChapterMode {
+			fieldDescs = append(fieldDescs, `  "chapter_mode": "sequential（各章衔接的连贯长篇）或 independent（每章独立故事的单元剧/短篇合集）"`)
+		}
 		combinedPrompt := fmt.Sprintf("小说《%s》部分章节内容：\n%s\n\n请用JSON格式返回以下字段：\n{\n%s\n}\n只输出JSON对象，不要任何其他内容。",
 			novel.Title, sampleContent, strings.Join(fieldDescs, ",\n"))
-		if resp, err := s.aiService.GenerateWithProvider(tenantID, novel.ID, "novel_settings", combinedPrompt, ""); err == nil {
+		if resp, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novel.ID, "novel_settings", combinedPrompt, ""); err != nil {
+			logger.Errorf("NovelAnalysis[%d]: stepUpdateNovelSettings AI error: %v", novel.ID, err)
+		} else {
 			var res settingsJSON
-			if cleaned := extractJSON(strings.TrimSpace(resp)); json.Unmarshal([]byte(cleaned), &res) == nil {
+			cleaned := extractJSON(strings.TrimSpace(resp))
+			jsonErr := json.Unmarshal([]byte(cleaned), &res)
+			if jsonErr != nil {
+				logger.Errorf("NovelAnalysis[%d]: stepUpdateNovelSettings parse JSON failed: %v (resp=%q)", novel.ID, jsonErr, truncateForPrompt(resp, 200))
+			}
+			if jsonErr == nil {
 				if needGenre && res.Genre != "" {
 					for _, vg := range validGenres {
 						if strings.Contains(res.Genre, vg) {
@@ -1491,6 +1665,11 @@ func (s *NovelAnalysisService) stepUpdateNovelSettings(
 						updates["description"] = desc
 					}
 				}
+				if needChapterMode {
+					if cm := strings.TrimSpace(res.ChapterMode); cm == "independent" || cm == "sequential" {
+						updates["chapter_mode"] = cm
+					}
+				}
 			}
 		}
 	}
@@ -1498,10 +1677,10 @@ func (s *NovelAnalysisService) stepUpdateNovelSettings(
 	// ── 2. 根据类型自动推断图片风格（无需 AI，纯映射）────────────────────────
 	if needImageStyle {
 		genreStyleMap := map[string]string{
-			"武侠仙侠": "ink_painting", "古代言情": "ink_painting", "历史": "ink_painting",
-			"玄幻奇幻": "anime", "幻想言情": "anime", "游戏": "anime", "游戏竞技": "anime", "N次元": "anime",
-			"科幻": "cyberpunk", "军事": "realistic",
-			"都市": "realistic", "现代言情": "realistic", "体育": "realistic",
+			"武侠江湖": "ink_painting", "历史古代": "ink_painting", "宫斗宅斗": "ink_painting",
+			"玄幻奇幻": "anime", "仙侠修仙": "anime", "游戏竞技": "anime", "灵异恐怖": "anime", "末世废土": "anime", "重生穿越": "anime", "系统流": "anime",
+			"科幻未来": "cyberpunk",
+			"都市现代": "realistic", "言情爱情": "realistic", "军事战争": "realistic", "体育竞技": "realistic", "悬疑推理": "realistic", "青春校园": "realistic",
 		}
 		if style, ok := genreStyleMap[novel.Genre]; ok {
 			updates["image_style"] = style
@@ -1529,5 +1708,19 @@ func (s *NovelAnalysisService) stepUpdateNovelSettings(
 	if len(updates) == 0 {
 		return nil
 	}
-	return s.novelRepo.UpdateFields(novel.ID, updates)
+	if err := s.novelRepo.UpdateFields(novel.ID, updates); err != nil {
+		logger.Errorf("NovelAnalysis[%d]: stepUpdateNovelSettings UpdateFields failed (keys=%v): %v", novel.ID, updateKeys(updates), err)
+		return err
+	}
+	logger.Printf("NovelAnalysis[%d]: stepUpdateNovelSettings saved fields: %v", novel.ID, updateKeys(updates))
+	return nil
+}
+
+// updateKeys returns the keys of a map for logging.
+func updateKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }

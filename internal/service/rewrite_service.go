@@ -1422,8 +1422,7 @@ func (s *RewriteService) generateChapterSummaryAsync(tenantID, novelID, projectI
 	}
 	go func() {
 		defer func() { recover() }()
-		genCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-		defer cancel()
+		genCtx := context.Background()
 
 		prompt, err := renderRewriteTemplate("rewrite_chapter_summary", map[string]interface{}{
 			"ChapterNo": chapterNo,

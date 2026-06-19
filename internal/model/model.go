@@ -347,23 +347,16 @@ type Worldview struct {
 
 	// 世界观元素
 	MagicSystem string `json:"magic_system" gorm:"type:text"`
-	Geography   string `json:"geography" gorm:"type:text"`
+	Geography   string `json:"geography" gorm:"type:text"` // 地理格局，含文明发展水平
 	History     string `json:"history" gorm:"type:text"`
-	Culture     string `json:"culture" gorm:"type:text"`
-	Technology  string `json:"technology" gorm:"type:text"`
+	Culture     string `json:"culture" gorm:"type:text"` // 文化习俗，含宗教信仰
 
 	// 约束规则
 	Rules string `json:"rules" gorm:"type:text"`
 
-	// 金手指/系统（可选）
-	CheatSystem string `json:"cheat_system" gorm:"type:text"`
-
-	// 扩展世界观元素
-	Factions            string `json:"factions" gorm:"type:text"`             // 势力格局
-	CoreConflicts       string `json:"core_conflicts" gorm:"type:text"`       // 核心矛盾
-	CharacterArchetypes string `json:"character_archetypes" gorm:"type:text"` // 典型人物原型
-	Religion            string `json:"religion" gorm:"type:text"`             // 宗教与信仰
-	Glossary            string `json:"glossary" gorm:"type:text"`             // 术语词汇表
+	// 势力与术语
+	Factions string `json:"factions" gorm:"type:text"` // 主要势力格局
+	Glossary string `json:"glossary" gorm:"type:text"` // 世界专属术语表
 
 	// 使用统计
 	UsedCount int `json:"used_count" gorm:"default:0"`
@@ -681,9 +674,22 @@ type Foreshadow struct {
 	Tags             string `json:"tags" gorm:"size:500"`
 
 	// 生命周期增强字段
-	PlantedChapterNo int    `json:"planted_chapter_no" gorm:"default:0"`       // 种下的章节序号
-	PayoffChapterNo  int    `json:"payoff_chapter_no" gorm:"default:0"`         // 预期回收章节序号（0=未规划）
-	Importance       string `json:"importance" gorm:"size:20;default:'normal'"` // critical/major/minor
+	PlantedChapterNo     int    `json:"planted_chapter_no" gorm:"default:0"`          // 种下的章节序号
+	PayoffChapterNo      int    `json:"payoff_chapter_no" gorm:"default:0"`           // 预期回收章节序号（0=未规划）
+	ActualPayoffChapterNo int   `json:"actual_payoff_chapter_no" gorm:"default:0"`    // 实际兑现章节序号（0=未兑现）
+	Importance           string `json:"importance" gorm:"size:20;default:'normal'"`   // critical/major/minor
+	Level                string `json:"level" gorm:"size:20;default:'sub'"`           // main/sub/detail 主线/支线/细节
+	ForeshadowType       string `json:"foreshadow_type" gorm:"size:30;default:''"`    // prop/dialogue/behavior/scene/prophecy
+	LinkedHookID         *uint  `json:"linked_hook_id,omitempty" gorm:"index"`        // 关联的钩子 ID
+	LinkedArcID          *uint  `json:"linked_arc_id,omitempty" gorm:"index"`         // 关联的冲突弧 ID
+
+	// 专业叙事分析字段（2026-06-17-v2 新增）
+	Confidence            string `json:"confidence" gorm:"size:20;default:'medium'"`       // high/medium/low AI提取可信度
+	ParentID              *uint  `json:"parent_id,omitempty" gorm:"index"`                  // 父伏笔 ID（支持层叠关系）
+	CharacterIDs          string `json:"character_ids" gorm:"type:text"`                    // JSON array of character IDs
+	ReinforcementChapters string `json:"reinforcement_chapters" gorm:"type:text"`           // JSON: [{"chapter_no":5,"note":"..."}]
+	PayoffQuality         int    `json:"payoff_quality" gorm:"default:0"`                   // 1-5兑现质量评分（0=未评）
+	PayoffNotes           string `json:"payoff_notes" gorm:"type:text"`                     // 兑现质量说明
 }
 
 func (Foreshadow) TableName() string { return "ink_foreshadow" }

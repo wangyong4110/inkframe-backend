@@ -178,11 +178,12 @@ func (r *ChapterRepository) UpdateStatus(id, novelID uint, status string) error 
 	return nil
 }
 
-// AtomicSetGenerating 使用条件更新（乐观锁）将章节状态从非 generating/completed 状态原子性地切换到
-// "generating"。返回 true 表示本次调用成功抢占到生成权，false 表示该章节已在生成中或已完成。
+// AtomicSetGenerating 使用条件更新（乐观锁）将章节状态从非 generating 状态原子性地切换到
+// "generating"。返回 true 表示本次调用成功抢占到生成权，false 表示该章节正在生成中（并发冲突）。
+// completed 章节允许重新生成（不在排斥集合中）。
 func (r *ChapterRepository) AtomicSetGenerating(id, novelID uint) (bool, error) {
 	result := r.db.Model(&model.Chapter{}).
-		Where("id = ? AND novel_id = ? AND status NOT IN ?", id, novelID, []string{"generating", "completed"}).
+		Where("id = ? AND novel_id = ? AND status != ?", id, novelID, "generating").
 		Update("status", "generating")
 	if result.Error != nil {
 		return false, result.Error
@@ -256,6 +257,53 @@ func (r *ChapterRepository) BatchUpdateIsPublished(novelID uint, isPublished boo
 // Delete 删除章节（novelID 用于缓存失效）
 func (r *ChapterRepository) Delete(id, novelID uint) error {
 	if err := r.db.Delete(&model.Chapter{}, id).Error; err != nil {
+		return err
+	}
+	r.invalidateListCache(novelID)
+	return nil
+}
+
+// ShiftUp 将 novelID 下 chapter_no >= fromChapterNo 的章节全部 +1，为插入腾出位置。
+func (r *ChapterRepository) ShiftUp(novelID uint, fromChapterNo int) error {
+	err := r.db.Exec(
+		"UPDATE ink_chapter SET chapter_no = chapter_no + 1 WHERE novel_id = ? AND chapter_no >= ? AND deleted_at IS NULL",
+		novelID, fromChapterNo,
+	).Error
+	if err != nil {
+		return err
+	}
+	r.invalidateListCache(novelID)
+	return nil
+}
+
+// ChapterOrder holds a chapter id → new chapter_no mapping for batch reorder.
+type ChapterOrder struct {
+	ID        uint
+	ChapterNo int
+}
+
+// BatchReorderChapters 在事务中将每个章节更新为新的 chapter_no，用于拖拽排序。
+// 调用前应确保 orders 覆盖小说的全部章节且 chapter_no 连续无重复。
+func (r *ChapterRepository) BatchReorderChapters(novelID uint, orders []ChapterOrder) error {
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		// 先将所有章节的 chapter_no 设为负数，避免唯一约束冲突（如果有的话）
+		if err := tx.Exec(
+			"UPDATE ink_chapter SET chapter_no = -chapter_no WHERE novel_id = ? AND deleted_at IS NULL",
+			novelID,
+		).Error; err != nil {
+			return err
+		}
+		for _, o := range orders {
+			if err := tx.Exec(
+				"UPDATE ink_chapter SET chapter_no = ? WHERE id = ? AND novel_id = ? AND deleted_at IS NULL",
+				o.ChapterNo, o.ID, novelID,
+			).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	r.invalidateListCache(novelID)

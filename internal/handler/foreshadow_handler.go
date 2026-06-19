@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/logger"
@@ -52,6 +53,9 @@ func (h *ForeshadowHandler) CreateForeshadow(c *gin.Context) {
 	f.TenantID = getTenantID(c)
 	if f.Status == "" {
 		f.Status = "planted"
+	}
+	if f.Level == "" {
+		f.Level = "sub"
 	}
 	if err := h.svc.Create(c.Request.Context(), &f); err != nil {
 		logger.Errorf("[ForeshadowHandler] CreateForeshadow: novelID=%d err=%v", novelID, err)
@@ -116,6 +120,28 @@ func (h *ForeshadowHandler) AIExtractForeshadows(c *gin.Context) {
 	respondOK(c, gin.H{"foreshadows": list, "total": len(list)})
 }
 
+// GetForeshadowStats GET /novels/:id/foreshadows/stats?current_chapter=N
+func (h *ForeshadowHandler) GetForeshadowStats(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	tenantID := getTenantID(c)
+	currentChapterNo := 0
+	if v := c.Query("current_chapter"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			currentChapterNo = n
+		}
+	}
+	stats, err := h.svc.GetStats(c.Request.Context(), novelID, tenantID, currentChapterNo)
+	if err != nil {
+		logger.Errorf("[ForeshadowHandler] GetStats: novelID=%d err=%v", novelID, err)
+		respondErr(c, http.StatusInternalServerError, "failed to get foreshadow stats")
+		return
+	}
+	respondOK(c, stats)
+}
+
 // DeleteForeshadow DELETE /novels/:id/foreshadows/:foreshadow_id
 func (h *ForeshadowHandler) DeleteForeshadow(c *gin.Context) {
 	_, ok := parseID(c, "id")
@@ -132,4 +158,46 @@ func (h *ForeshadowHandler) DeleteForeshadow(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"deleted": true})
+}
+
+// AddReinforcement POST /novels/:id/foreshadows/:foreshadow_id/reinforce
+func (h *ForeshadowHandler) AddReinforcement(c *gin.Context) {
+	_, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	foreshadowID, ok := parseID(c, "foreshadow_id")
+	if !ok {
+		return
+	}
+	var body struct {
+		ChapterNo int    `json:"chapter_no" binding:"required"`
+		Note      string `json:"note"`
+	}
+	if !bindJSON(c, &body) {
+		return
+	}
+	f, err := h.svc.AddReinforcement(c.Request.Context(), foreshadowID, body.ChapterNo, body.Note)
+	if err != nil {
+		logger.Errorf("[ForeshadowHandler] AddReinforcement: id=%d err=%v", foreshadowID, err)
+		respondErr(c, http.StatusInternalServerError, "failed to add reinforcement")
+		return
+	}
+	respondOK(c, f)
+}
+
+// GetForeshadowTree GET /novels/:id/foreshadows/tree
+func (h *ForeshadowHandler) GetForeshadowTree(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	tenantID := getTenantID(c)
+	tree, err := h.svc.GetTree(c.Request.Context(), novelID, tenantID)
+	if err != nil {
+		logger.Errorf("[ForeshadowHandler] GetTree: novelID=%d err=%v", novelID, err)
+		respondErr(c, http.StatusInternalServerError, "failed to get foreshadow tree")
+		return
+	}
+	respondOK(c, gin.H{"tree": tree, "total": len(tree)})
 }

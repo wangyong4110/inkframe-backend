@@ -3,13 +3,16 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
+	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
 
@@ -95,6 +98,62 @@ func (h *ChapterHandler) CreateChapter(c *gin.Context) {
 		return
 	}
 
+	respondCreated(c, chapter)
+}
+
+// ReorderChapters 批量调整章节顺序
+// PUT /api/v1/novels/:id/chapters/reorder
+func (h *ChapterHandler) ReorderChapters(c *gin.Context) {
+	novelId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if !requireNovelEditorRole(c, h.novelService, novelId) {
+		return
+	}
+	var req struct {
+		Orders []struct {
+			ChapterID int `json:"chapter_id"`
+			ChapterNo int `json:"chapter_no"`
+		} `json:"orders" binding:"required"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	orders := make([]repository.ChapterOrder, 0, len(req.Orders))
+	for _, o := range req.Orders {
+		orders = append(orders, repository.ChapterOrder{ID: uint(o.ChapterID), ChapterNo: o.ChapterNo})
+	}
+	if err := h.chapterService.ReorderChapters(uint(novelId), orders); err != nil {
+		logger.Errorf("[ChapterHandler] ReorderChapters: novelID=%d err=%v", novelId, err)
+		respondErr(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondOK(c, nil)
+}
+
+// InsertChapter 在指定章节后插入新章节
+// POST /api/v1/novels/:id/chapters/insert
+func (h *ChapterHandler) InsertChapter(c *gin.Context) {
+	novelId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if !requireNovelEditorRole(c, h.novelService, novelId) {
+		return
+	}
+	var req struct {
+		AfterChapterNo int `json:"after_chapter_no"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	chapter, err := h.chapterService.InsertChapterAfter(uint(novelId), req.AfterChapterNo)
+	if err != nil {
+		logger.Errorf("[ChapterHandler] InsertChapter: novelID=%d err=%v", novelId, err)
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
 	respondCreated(c, chapter)
 }
 
@@ -760,6 +819,42 @@ func (h *ChapterHandler) BatchSummarizeChapters(c *gin.Context) {
 
 // ─── Chapter AI Review Handlers ──────────────────────────────────────────────
 
+// BatchReviewChapters 批量启动所有章节的正文 AI 审查（异步任务）
+// POST /api/v1/novels/:id/chapters/batch-review
+func (h *ChapterHandler) BatchReviewChapters(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterReviewBatch, "批量章节正文审查", "novel", uint(novelID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[ChapterHandler] BatchReviewChapters task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		progressFn := func(done, total int) {
+			if total > 0 {
+				h.taskSvc.UpdateProgress(taskID, done*100/total) //nolint:errcheck
+			}
+		}
+		if err := h.qualityService.BatchReviewNovelChapters(context.Background(), tenantID, uint(novelID), progressFn); err != nil {
+			logger.Errorf("[ChapterHandler] BatchReviewChapters task %s failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, map[string]interface{}{"novel_id": novelID}) //nolint:errcheck
+	}(task.TaskID)
+	respondAccepted(c, task.TaskID, "章节正文批量审查任务已提交")
+}
+
 // ReviewChapter 启动章节 AI 审查（异步任务）
 // POST /api/v1/chapters/:id/review
 func (h *ChapterHandler) ReviewChapter(c *gin.Context) {
@@ -1058,5 +1153,198 @@ func (h *ChapterHandler) BatchDeleteChapters(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"deleted": len(req.ChapterIDs)})
+}
+
+// RewriteChapterByInstruction POST /api/v1/chapters/:id/rewrite
+// 根据用户自然语言指令异步重写章节内容，完成后作为新版本保存。
+func (h *ChapterHandler) RewriteChapterByInstruction(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Instruction string `json:"instruction"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	if strings.TrimSpace(req.Instruction) == "" {
+		respondBadRequest(c, "instruction is required")
+		return
+	}
+
+	tenantID := getTenantID(c)
+	// Verify ownership
+	chapter, err := h.chapterService.GetChapter(uint(id), tenantID)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+	if chapter.Content == "" {
+		respondErr(c, http.StatusBadRequest, "chapter has no content to rewrite")
+		return
+	}
+
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterRewriteInstr, "按指令修改章节", "chapter", uint(id))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task: "+err.Error())
+		return
+	}
+
+	instruction := req.Instruction
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[ChapterHandler] RewriteByInstruction task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
+
+		newContent, rewriteErr := h.qualityService.RewriteByInstruction(context.Background(), uint(id), instruction)
+		if rewriteErr != nil {
+			logger.Errorf("[ChapterHandler] RewriteByInstruction task %s failed: chapterID=%d err=%v", taskID, id, rewriteErr)
+			h.taskSvc.Fail(taskID, rewriteErr.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.UpdateProgress(taskID, 80) //nolint:errcheck
+
+		// Save current content as a version before overwriting
+		if err2 := h.chapterService.ArchiveVersionBeforeRewrite(uint(id), instruction); err2 != nil {
+			logger.Errorf("[ChapterHandler] RewriteByInstruction archive version failed: %v", err2)
+		}
+
+		// Apply new content
+		updated, applyErr := h.chapterService.ApplyRewrittenContent(uint(id), newContent)
+		if applyErr != nil {
+			logger.Errorf("[ChapterHandler] RewriteByInstruction apply content failed: %v", applyErr)
+			h.taskSvc.Fail(taskID, "保存修改内容失败: "+applyErr.Error()) //nolint:errcheck
+			return
+		}
+
+		h.taskSvc.Complete(taskID, map[string]interface{}{"chapter": updated}) //nolint:errcheck
+	}(task.TaskID)
+
+	respondAccepted(c, task.TaskID, "按指令修改任务已提交")
+}
+
+// ChapterChatStream POST /api/v1/chapters/:id/chat/stream
+// 与 AI 编辑对话，修改章节内容（SSE 流式）
+func (h *ChapterHandler) ChapterChatStream(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	var req struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	if len(req.Messages) == 0 {
+		respondBadRequest(c, "messages is required")
+		return
+	}
+
+	tenantID := getTenantID(c)
+	chapter, err := h.chapterService.GetChapter(uint(id), tenantID)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+
+	if h.novelService == nil {
+		respondErr(c, http.StatusInternalServerError, "service not initialized")
+		return
+	}
+
+	systemPrompt := buildChapterChatSystemPrompt(chapter)
+	msgs := buildChatMessages(req.Messages)
+
+	aiSvc := h.novelService.GetAIService()
+	ch, streamErr := aiSvc.StreamWithMessagesCtx(c.Request.Context(), tenantID, "novel_chat", msgs, systemPrompt)
+	if streamErr != nil {
+		logger.Errorf("[ChapterChatStream] chapterID=%d err=%v", id, streamErr)
+		respondErr(c, http.StatusInternalServerError, "AI 响应失败: "+streamErr.Error())
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Writer.WriteHeader(http.StatusOK)
+	c.Writer.Flush()
+
+	var fullContent strings.Builder
+	for chunk := range ch {
+		if chunk.Error != "" {
+			payload, _ := json.Marshal(map[string]string{"error": chunk.Error})
+			fmt.Fprintf(c.Writer, "data: %s\n\n", payload)
+			c.Writer.Flush()
+			return
+		}
+		if chunk.Content == "" {
+			continue
+		}
+		fullContent.WriteString(chunk.Content)
+		payload, _ := json.Marshal(map[string]string{"delta": chunk.Content})
+		fmt.Fprintf(c.Writer, "data: %s\n\n", payload)
+		c.Writer.Flush()
+	}
+
+	modifiedContent := extractChapterModifiedContent(fullContent.String())
+	donePayload, _ := json.Marshal(map[string]interface{}{
+		"done":             true,
+		"modified_content": modifiedContent,
+	})
+	fmt.Fprintf(c.Writer, "data: %s\n\n", donePayload)
+	c.Writer.Flush()
+}
+
+func buildChapterChatSystemPrompt(chapter *model.Chapter) string {
+	content := chapter.Content
+	runes := []rune(content)
+	if len(runes) > 6000 {
+		content = string(runes[:6000]) + "\n...（正文过长已截断）"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("你是一位专业小说编辑，正在协助作者修改章节内容。\n\n")
+	fmt.Fprintf(&sb, "当前章节：第 %d 章「%s」\n\n", chapter.ChapterNo, chapter.Title)
+	if chapter.Outline != "" {
+		fmt.Fprintf(&sb, "章节大纲：%s\n\n", chapter.Outline)
+	}
+	sb.WriteString("当前章节正文：\n---\n")
+	sb.WriteString(content)
+	sb.WriteString("\n---\n\n")
+	sb.WriteString("工作规则：\n")
+	sb.WriteString("1. 针对用户的修改需求，给出专业、具体的改写方案\n")
+	sb.WriteString("2. 段落级别的局部修改直接在回复中给出修改内容即可\n")
+	sb.WriteString("3. 若用户要求对整章进行重大修改，将修改后的完整正文放在以下标记之间（标记各占独立一行）：\n")
+	sb.WriteString("   【REVISED_CONTENT_START】\n   （修改后全文）\n   【REVISED_CONTENT_END】\n")
+	sb.WriteString("4. 保持原文写作风格和叙事连贯性，除非用户明确要求改变\n")
+	sb.WriteString("5. 用中文回复")
+	return sb.String()
+}
+
+func extractChapterModifiedContent(text string) string {
+	const startMark = "【REVISED_CONTENT_START】"
+	const endMark = "【REVISED_CONTENT_END】"
+	s := strings.Index(text, startMark)
+	if s == -1 {
+		return ""
+	}
+	e := strings.Index(text, endMark)
+	if e == -1 || e <= s {
+		return ""
+	}
+	return strings.TrimSpace(text[s+len(startMark) : e])
 }
 

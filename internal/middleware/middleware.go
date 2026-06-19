@@ -105,13 +105,18 @@ func Logger() gin.HandlerFunc {
 		latency := time.Since(start)
 		status := c.Writer.Status()
 
-		logger.Printf("[%s] %s %s %d %v",
+		msg := fmt.Sprintf("[%s] %s %s %d %v",
 			time.Now().Format("2006-01-02 15:04:05"),
 			method,
 			path,
 			status,
 			latency,
 		)
+		if method == "GET" {
+			logger.Debugf("%s", msg)
+		} else {
+			logger.Printf("%s", msg)
+		}
 	}
 }
 

@@ -422,17 +422,20 @@ func (s *NarrativeMemoryService) buildGlobalSummary(novel *model.Novel) string {
 	sb.WriteString("【故事概要】\n" + novel.Description)
 	if novel.Worldview != nil {
 		sb.WriteString("\n\n【世界观】\n")
+		if novel.Worldview.Description != "" {
+			sb.WriteString("概述：" + novel.Worldview.Description + "\n")
+		}
 		if novel.Worldview.MagicSystem != "" {
 			sb.WriteString("修炼体系：" + novel.Worldview.MagicSystem + "\n")
 		}
 		if novel.Worldview.Geography != "" {
-			sb.WriteString("地理：" + novel.Worldview.Geography + "\n")
+			sb.WriteString("关键地点：" + novel.Worldview.Geography + "\n")
 		}
-		if novel.Worldview.Culture != "" {
-			sb.WriteString("文化：" + novel.Worldview.Culture + "\n")
+		if novel.Worldview.History != "" {
+			sb.WriteString("背景矛盾：" + novel.Worldview.History + "\n")
 		}
-		if novel.Worldview.CheatSystem != "" {
-			sb.WriteString("金手指/系统：" + novel.Worldview.CheatSystem + "\n")
+		if novel.Worldview.Rules != "" {
+			sb.WriteString("【⚠️世界规则（必须严格遵守）】\n" + novel.Worldview.Rules + "\n")
 		}
 	}
 	return sb.String()

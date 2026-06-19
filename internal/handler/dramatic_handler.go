@@ -283,3 +283,45 @@ func (h *DramaticHandler) AdvancePhase(c *gin.Context) {
 	}
 	respondOK(c, arc)
 }
+
+// RateHookPayoff PUT /hooks/:id/payoff-quality
+func (h *DramaticHandler) RateHookPayoff(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	var body struct {
+		Quality int    `json:"quality" binding:"required"`
+		Notes   string `json:"notes"`
+	}
+	if !bindJSON(c, &body) {
+		return
+	}
+	hook, err := h.hookSvc.RatePayoff(uint(id), body.Quality, body.Notes)
+	if err != nil {
+		respondErr(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondOK(c, hook)
+}
+
+// UpdateArcTension PUT /conflict-arcs/:id/tension
+func (h *DramaticHandler) UpdateArcTension(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	var body struct {
+		Phase string `json:"phase" binding:"required"`
+		Level int    `json:"level" binding:"required"`
+	}
+	if !bindJSON(c, &body) {
+		return
+	}
+	arc, err := h.arcSvc.UpdateTension(uint(id), body.Phase, body.Level)
+	if err != nil {
+		respondErr(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondOK(c, arc)
+}

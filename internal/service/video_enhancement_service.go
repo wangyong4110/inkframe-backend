@@ -774,12 +774,9 @@ func (s *VideoEnhancementService) EnhanceVideoWithConfigs(
 			CreatedAt: time.Now().Format("2006-01-02 15:04:05"),
 		}
 
-		// 使用带超时的 context（5 分钟）
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		go func(j *EnhancementJob, videoURL string, cancelFn context.CancelFunc) {
-			defer cancelFn()
-			s.processEnhancement(ctx, j, videoURL)
-		}(job, videoURL, cancel)
+		go func(j *EnhancementJob, videoURL string) {
+			s.processEnhancement(context.Background(), j, videoURL)
+		}(job, videoURL)
 
 		jobs = append(jobs, job)
 	}

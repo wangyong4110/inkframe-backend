@@ -229,170 +229,113 @@ func (s *NovelService) CreateNovel(req *model.CreateNovelRequest) (*model.Novel,
 }
 
 // UpdateNovel handler-compatible wrapper（含租户校验）
+//
+// Uses atomic UpdateFields for all ink_novel columns so concurrent partial
+// updates (e.g. worldview binding racing against a settings save) cannot
+// overwrite each other's changes via the classic read-modify-write pattern.
 func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequest) (*model.Novel, error) {
-	novel, err := s.novelRepo.GetByID(id)
+	// Always read from DB (skip Redis) for the auth check so we don't trust a
+	// stale cache for ownership validation.
+	novel, err := s.novelRepo.GetByIDFromDB(id)
 	if err != nil {
 		return nil, fmt.Errorf("not found")
 	}
 	if novel.TenantID != tenantID {
 		return nil, fmt.Errorf("not found")
 	}
-	if req.Title != "" {
-		novel.Title = req.Title
-	}
-	if req.Description != "" {
-		novel.Description = req.Description
-	}
-	if req.Genre != "" {
-		novel.Genre = req.Genre
-	}
-	if req.Status != "" {
-		novel.Status = req.Status
-	}
+
+	// ── Step 1: build the set of ink_novel columns to update atomically ──────
+	fields := map[string]interface{}{}
+	if req.Title != ""        { fields["title"] = req.Title }
+	if req.Description != ""  { fields["description"] = req.Description }
+	if req.Genre != ""        { fields["genre"] = req.Genre }
+	if req.Status != ""       { fields["status"] = req.Status }
 	if req.WorldviewID != nil {
-		novel.WorldviewID = req.WorldviewID
+		if *req.WorldviewID == 0 {
+			fields["worldview_id"] = nil
+		} else {
+			fields["worldview_id"] = *req.WorldviewID
+		}
 	}
-	if req.CoverImage != "" {
-		novel.CoverImage = req.CoverImage
-	}
-	if req.AIModel != "" {
-		novel.AIModel = req.AIModel
-	}
-	if req.ImageModel != "" {
-		novel.ImageModel = req.ImageModel
-	}
-	if req.VideoModel != "" {
-		novel.VideoModel = req.VideoModel
-	}
-	if req.TTSModel != "" {
-		novel.TTSModel = req.TTSModel
-	}
-	if req.Temperature != nil {
-		novel.Temperature = *req.Temperature
-	}
-	if req.TopP != nil {
-		novel.TopP = *req.TopP
-	}
-	if req.TopK != nil {
-		novel.TopK = *req.TopK
-	}
-	if req.MaxTokens != nil {
-		novel.MaxTokens = *req.MaxTokens
-	}
-	if req.StylePrompt != "" {
-		novel.StylePrompt = req.StylePrompt
-	}
-	if req.ImageStyle != "" {
-		novel.ImageStyle = req.ImageStyle
-	}
-	if req.PromptLanguage != "" {
-		novel.PromptLanguage = req.PromptLanguage
-	}
-	if req.ChapterMode != "" {
-		novel.ChapterMode = req.ChapterMode
-	}
-	if req.CoreTheme != "" {
-		novel.CoreTheme = req.CoreTheme
-	}
+	if req.CoverImage != ""     { fields["cover_image"] = req.CoverImage }
+	if req.AIModel != ""        { fields["ai_model"] = req.AIModel }
+	if req.ImageModel != ""     { fields["image_model"] = req.ImageModel }
+	if req.VideoModel != ""     { fields["video_model"] = req.VideoModel }
+	if req.TTSModel != ""       { fields["tts_model"] = req.TTSModel }
+	if req.Temperature != nil   { fields["temperature"] = *req.Temperature }
+	if req.TopP != nil          { fields["top_p"] = *req.TopP }
+	if req.TopK != nil          { fields["top_k"] = *req.TopK }
+	if req.MaxTokens != nil     { fields["max_tokens"] = *req.MaxTokens }
+	if req.StylePrompt != ""    { fields["style_prompt"] = req.StylePrompt }
+	if req.ImageStyle != ""     { fields["image_style"] = req.ImageStyle }
+	if req.PromptLanguage != "" { fields["prompt_language"] = req.PromptLanguage }
+	if req.ChapterMode != ""    { fields["chapter_mode"] = req.ChapterMode }
+	if req.CoreTheme != ""      { fields["core_theme"] = req.CoreTheme }
 	if req.AutoReviewRounds != nil {
 		rounds := *req.AutoReviewRounds
-		if rounds < 0 {
-			rounds = 0
-		}
-		if rounds > 5 {
-			rounds = 5
-		}
-		novel.AutoReviewRounds = rounds
+		if rounds < 0 { rounds = 0 }
+		if rounds > 5 { rounds = 5 }
+		fields["auto_review_rounds"] = rounds
 	}
 	if req.AutoReviewMinScore != nil {
 		score := *req.AutoReviewMinScore
-		if score < 0 {
-			score = 0
+		if score < 0 { score = 0 }
+		if score > 100 { score = 100 }
+		fields["auto_review_min_score"] = score
+	}
+	if req.TargetWordCount != nil { fields["target_word_count"] = *req.TargetWordCount }
+	if req.TargetChapters != nil  { fields["target_chapters"] = *req.TargetChapters }
+	if req.TimeoutSeconds != nil  { fields["timeout_seconds"] = *req.TimeoutSeconds }
+
+	if len(fields) > 0 {
+		if err := s.novelRepo.UpdateFields(id, fields); err != nil {
+			return nil, err
 		}
-		if score > 100 {
-			score = 100
+	}
+
+	// ── Step 2: VideoConfig lives in a separate table; read-modify-write is
+	// acceptable here because video settings races are non-critical. ──────────
+	hasVideoFields := req.VideoType != "" || req.VideoResolution != "" || req.VideoFPS != nil ||
+		req.VideoAspectRatio != "" || req.CharConsistencyWeight != nil || req.AssetExportPath != "" ||
+		req.NarrationVoice != "" || req.SubtitleEnabled != nil || req.SubtitlePosition != "" ||
+		req.SubtitleFontSize != nil || req.SubtitleColor != "" || req.SubtitleBgStyle != "" ||
+		req.SubtitleFont != "" || req.ColorGrade != "" || req.ContrastLevel != nil ||
+		req.Saturation != nil || req.FilmGrain != nil || req.Vignette != nil ||
+		req.ChromaticAberration != nil || req.KlingProForAction != nil
+	if hasVideoFields {
+		fresh, err := s.novelRepo.GetByIDFromDB(id)
+		if err != nil {
+			return nil, err
 		}
-		novel.AutoReviewMinScore = score
+		vc := fresh.EnsureVideoConfig()
+		vc.NovelID = id
+		if req.VideoType != ""             { vc.VideoType = req.VideoType }
+		if req.VideoResolution != ""       { vc.VideoResolution = req.VideoResolution }
+		if req.VideoFPS != nil             { vc.VideoFPS = *req.VideoFPS }
+		if req.VideoAspectRatio != ""      { vc.VideoAspectRatio = req.VideoAspectRatio }
+		if req.CharConsistencyWeight != nil { vc.CharConsistencyWeight = *req.CharConsistencyWeight }
+		if req.AssetExportPath != ""       { vc.AssetExportPath = req.AssetExportPath }
+		if req.NarrationVoice != ""        { vc.NarrationVoice = req.NarrationVoice }
+		if req.SubtitleEnabled != nil      { vc.SubtitleEnabled = *req.SubtitleEnabled }
+		if req.SubtitlePosition != ""      { vc.SubtitlePosition = req.SubtitlePosition }
+		if req.SubtitleFontSize != nil     { vc.SubtitleFontSize = *req.SubtitleFontSize }
+		if req.SubtitleColor != ""         { vc.SubtitleColor = req.SubtitleColor }
+		if req.SubtitleBgStyle != ""       { vc.SubtitleBgStyle = req.SubtitleBgStyle }
+		if req.SubtitleFont != ""          { vc.SubtitleFont = req.SubtitleFont }
+		if req.ColorGrade != ""            { vc.ColorGrade = req.ColorGrade }
+		if req.ContrastLevel != nil        { vc.ContrastLevel = *req.ContrastLevel }
+		if req.Saturation != nil           { vc.Saturation = *req.Saturation }
+		if req.FilmGrain != nil            { vc.FilmGrain = *req.FilmGrain }
+		if req.Vignette != nil             { vc.Vignette = *req.Vignette }
+		if req.ChromaticAberration != nil  { vc.ChromaticAberration = *req.ChromaticAberration }
+		if req.KlingProForAction != nil    { vc.KlingProForAction = *req.KlingProForAction }
+		if err := s.novelRepo.SaveVideoConfig(vc); err != nil {
+			logger.Errorf("[NovelService] UpdateNovel SaveVideoConfig: %v", err)
+		}
 	}
-	if req.TargetWordCount != nil {
-		novel.TargetWordCount = *req.TargetWordCount
-	}
-	if req.TargetChapters != nil {
-		novel.TargetChapters = *req.TargetChapters
-	}
-	// 视频/字幕配置写入 VideoConfig（通过 EnsureVideoConfig 懒初始化）
-	vc := novel.EnsureVideoConfig()
-	if req.VideoType != "" {
-		vc.VideoType = req.VideoType
-	}
-	if req.VideoResolution != "" {
-		vc.VideoResolution = req.VideoResolution
-	}
-	if req.VideoFPS != nil {
-		vc.VideoFPS = *req.VideoFPS
-	}
-	if req.VideoAspectRatio != "" {
-		vc.VideoAspectRatio = req.VideoAspectRatio
-	}
-	if req.CharConsistencyWeight != nil {
-		vc.CharConsistencyWeight = *req.CharConsistencyWeight
-	}
-	if req.AssetExportPath != "" {
-		vc.AssetExportPath = req.AssetExportPath
-	}
-	if req.NarrationVoice != "" {
-		vc.NarrationVoice = req.NarrationVoice
-	}
-	// 字幕配置（可清空）
-	if req.SubtitleEnabled != nil {
-		vc.SubtitleEnabled = *req.SubtitleEnabled
-	}
-	if req.SubtitlePosition != "" {
-		vc.SubtitlePosition = req.SubtitlePosition
-	}
-	if req.SubtitleFontSize != nil {
-		vc.SubtitleFontSize = *req.SubtitleFontSize
-	}
-	if req.SubtitleColor != "" {
-		vc.SubtitleColor = req.SubtitleColor
-	}
-	if req.SubtitleBgStyle != "" {
-		vc.SubtitleBgStyle = req.SubtitleBgStyle
-	}
-	if req.SubtitleFont != "" {
-		vc.SubtitleFont = req.SubtitleFont
-	}
-	// 超时
-	if req.TimeoutSeconds != nil {
-		novel.TimeoutSeconds = *req.TimeoutSeconds
-	}
-	// 色彩调色
-	if req.ColorGrade != "" {
-		vc.ColorGrade = req.ColorGrade
-	}
-	if req.ContrastLevel != nil {
-		vc.ContrastLevel = *req.ContrastLevel
-	}
-	if req.Saturation != nil {
-		vc.Saturation = *req.Saturation
-	}
-	// 镜头特效（bool 用指针，false 也要写入）
-	if req.FilmGrain != nil {
-		vc.FilmGrain = *req.FilmGrain
-	}
-	if req.Vignette != nil {
-		vc.Vignette = *req.Vignette
-	}
-	if req.ChromaticAberration != nil {
-		vc.ChromaticAberration = *req.ChromaticAberration
-	}
-	if req.KlingProForAction != nil {
-		vc.KlingProForAction = *req.KlingProForAction
-	}
-	if err := s.novelRepo.Update(novel); err != nil {
-		return nil, err
-	}
-	return novel, nil
+
+	// ── Step 3: return fresh state from DB ───────────────────────────────────
+	return s.novelRepo.GetByIDFromDB(id)
 }
 
 // coverCharacterRoleRank 主角优先排序权重
@@ -849,10 +792,29 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 		_ = s.novelRepo.UpdateFields(novel.ID, map[string]interface{}{"outline": novel.Outline})
 	}
 
-	// 大纲生成成功后，自动创建占位章节（跳过已存在的）
+	// 大纲生成成功后，更新/创建章节占位记录
+	// - 已存在且未完成（draft/outline）的章节：用新大纲更新 summary/title/meta
+	// - 已存在且已完成（has content）的章节：仅在独立成篇模式下更新 summary（不动内容/状态）
+	// - 不存在的章节：创建新占位记录
 	for _, chap := range outline.Chapters {
-		if _, err := s.chapterRepo.GetByNovelAndChapterNo(novel.ID, chap.ChapterNo); err == nil {
-			continue // 已存在，跳过
+		existing, err := s.chapterRepo.GetByNovelAndChapterNo(novel.ID, chap.ChapterNo)
+		if err == nil && existing != nil {
+			// 已完成（有正文）的章节在连贯模式下不覆盖
+			if existing.Content != "" && novel.ChapterMode != "independent" {
+				continue
+			}
+			existing.Summary = chap.Summary
+			if chap.Title != "" {
+				existing.Title = chap.Title
+			}
+			existing.TensionLevel = chap.TensionLevel
+			existing.ActNo = chap.Act
+			existing.EmotionalTone = chap.EmotionalTone
+			existing.HookType = chap.HookType
+			if err := s.chapterRepo.Update(existing); err != nil {
+				logger.Errorf("GenerateOutline: update chapter %d: %v", chap.ChapterNo, err)
+			}
+			continue
 		}
 		placeholder := &model.Chapter{
 			UUID:          uuid.New().String(),

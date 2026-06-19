@@ -442,9 +442,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		sfxShots := make([]*model.StoryboardShot, len(shots))
 		copy(sfxShots, shots)
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
-			defer cancel()
-			success, fail, _ := s.sfxService.BatchAutoGenerateSFX(ctx, sfxShots, tenantID, "", "", nil)
+			success, fail, _ := s.sfxService.BatchAutoGenerateSFX(context.Background(), sfxShots, tenantID, "", "", nil)
 			logger.Printf("[Storyboard] auto-SFX done videoID=%d success=%d fail=%d", videoID, success, fail)
 		}()
 	}

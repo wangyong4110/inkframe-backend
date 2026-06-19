@@ -30,6 +30,7 @@ const (
 	TaskTypeChapterSummaryBatch      = "chapter_summary_batch"
 	TaskTypeSFXGen                   = "sfx_gen"
 	TaskTypeChapterReview            = "chapter_review"
+	TaskTypeChapterReviewBatch       = "chapter_review_batch"
 	TaskTypeStoryboardReview         = "storyboard_review"
 	TaskTypeStoryboardOptimize       = "storyboard_optimize"
 	TaskTypeImport                   = "import"
@@ -50,6 +51,7 @@ const (
 	TaskTypeLookImageGen             = "look_image_gen"
 	TaskTypeCoverImageGen            = "cover_image_gen"
 	TaskTypeImageEdit                = "image_edit"
+	TaskTypeChapterRewriteInstr      = "chapter_rewrite_instr"
 )
 
 // TaskService manages persistent async tasks.

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
@@ -33,12 +35,22 @@ type QualityControlService struct {
 		GetByID(id uint) (*model.Chapter, error)
 		Update(chapter *model.Chapter) error
 		GetRecent(novelID uint, currentChapterNo, count int) ([]*model.Chapter, error)
+		ListByNovelWithContent(novelID uint) ([]*model.Chapter, error)
 	}
 	novelRepo interface {
 		GetByID(id uint) (*model.Novel, error)
 	}
 	reviewRecordRepo *repository.ReviewRecordRepository
 	ignoredIssueRepo *repository.IgnoredReviewIssueRepository
+	characterRepo    interface {
+		ListByNovel(novelID uint) ([]*model.Character, error)
+	}
+	arcSummaryRepo interface {
+		ListByNovel(novelID uint) ([]*model.ArcSummary, error)
+	}
+	foreshadowRepo interface {
+		ListUnfulfilled(novelID uint, tenantID uint) ([]*model.Foreshadow, error)
+	}
 }
 
 func NewQualityControlService(
@@ -47,6 +59,7 @@ func NewQualityControlService(
 		GetByID(id uint) (*model.Chapter, error)
 		Update(chapter *model.Chapter) error
 		GetRecent(novelID uint, currentChapterNo, count int) ([]*model.Chapter, error)
+		ListByNovelWithContent(novelID uint) ([]*model.Chapter, error)
 	},
 	novelRepo interface {
 		GetByID(id uint) (*model.Novel, error)
@@ -55,13 +68,33 @@ func NewQualityControlService(
 	return &QualityControlService{aiSvc: aiSvc, chapterRepo: chapterRepo, novelRepo: novelRepo}
 }
 
-// WithReviewRepos injects the review/ignore repositories.
 func (s *QualityControlService) WithReviewRepos(
 	reviewRepo *repository.ReviewRecordRepository,
 	ignoreRepo *repository.IgnoredReviewIssueRepository,
 ) *QualityControlService {
 	s.reviewRecordRepo = reviewRepo
 	s.ignoredIssueRepo = ignoreRepo
+	return s
+}
+
+func (s *QualityControlService) WithCharacterRepo(r interface {
+	ListByNovel(novelID uint) ([]*model.Character, error)
+}) *QualityControlService {
+	s.characterRepo = r
+	return s
+}
+
+func (s *QualityControlService) WithArcSummaryRepo(r interface {
+	ListByNovel(novelID uint) ([]*model.ArcSummary, error)
+}) *QualityControlService {
+	s.arcSummaryRepo = r
+	return s
+}
+
+func (s *QualityControlService) WithForeshadowRepo(r interface {
+	ListUnfulfilled(novelID uint, tenantID uint) ([]*model.Foreshadow, error)
+}) *QualityControlService {
+	s.foreshadowRepo = r
 	return s
 }
 
@@ -519,6 +552,45 @@ func (s *QualityControlService) RefineWithSuggestions(chapterID uint, suggestion
 	return strings.TrimSpace(result), nil
 }
 
+// RewriteByInstruction rewrites a chapter according to a user-supplied natural-language instruction.
+// Returns the modified full chapter content (not saved — caller persists it).
+func (s *QualityControlService) RewriteByInstruction(ctx context.Context, chapterID uint, instruction string) (string, error) {
+	if s.aiSvc == nil {
+		return "", fmt.Errorf("AI client not initialized")
+	}
+	chapter, err := s.chapterRepo.GetByID(chapterID)
+	if err != nil {
+		return "", fmt.Errorf("chapter not found: %w", err)
+	}
+	if chapter.Content == "" {
+		return "", fmt.Errorf("chapter has no content to rewrite")
+	}
+	if strings.TrimSpace(instruction) == "" {
+		return "", fmt.Errorf("instruction must not be empty")
+	}
+
+	novel, err := s.novelRepo.GetByID(chapter.NovelID)
+	if err != nil {
+		return "", fmt.Errorf("novel %d not found: %w", chapter.NovelID, err)
+	}
+
+	prompt, err := renderPrompt("chapter_rewrite", map[string]interface{}{
+		"ChapterNo":    chapter.ChapterNo,
+		"ChapterTitle": chapter.Title,
+		"Content":      chapter.Content,
+		"Instruction":  instruction,
+	})
+	if err != nil {
+		return "", fmt.Errorf("render chapter_rewrite: %w", err)
+	}
+
+	result, err := s.aiSvc.GenerateWithProvider(novel.TenantID, novel.ID, "chapter_rewrite", prompt, "")
+	if err != nil {
+		return "", fmt.Errorf("AI rewrite failed: %w", err)
+	}
+	return strings.TrimSpace(result), nil
+}
+
 // ─── Chapter AI Review ────────────────────────────────────────────────────────
 
 // ReviewChapter performs a deep AI review of a chapter and stores the record.
@@ -536,11 +608,27 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 		return nil, fmt.Errorf("novel %d not found: %w", chapter.NovelID, err)
 	}
 
-	// Fetch previous review score for longitudinal reference
+	// Fetch previous review score and weaknesses for verification mode
 	var previousScore float64
+	var previousWeaknessesText string
 	if s.reviewRecordRepo != nil {
 		if recs, err2 := s.reviewRecordRepo.ListByEntity(model.ReviewEntityChapter, chapterID); err2 == nil && len(recs) > 0 {
 			previousScore = recs[0].OverallScore
+			// Extract weaknesses from previous review JSON for verification mode
+			if recs[0].ReviewJSON != "" {
+				var prevReview model.ChapterReview
+				if json.Unmarshal([]byte(recs[0].ReviewJSON), &prevReview) == nil && len(prevReview.Weaknesses) > 0 {
+					var wLines []string
+					for i, w := range prevReview.Weaknesses {
+						line := fmt.Sprintf("%d. 【问题】%s", i+1, w.Issue)
+						if w.Suggestion != "" {
+							line += "  【上轮建议】" + w.Suggestion
+						}
+						wLines = append(wLines, line)
+					}
+					previousWeaknessesText = strings.Join(wLines, "\n")
+				}
+			}
 		}
 	}
 
@@ -591,19 +679,28 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 		fmt.Fprintf(&sb, "[%d] %s\n\n", i, p)
 	}
 
+	charSummary := s.buildCharacterVoiceSummary(chapter.NovelID)
+	arcContext := s.buildArcContext(chapter.NovelID, chapter.ChapterNo)
+	foreshadowContext := s.buildForeshadowContext(chapter.NovelID, novel.TenantID)
+
 	prompt, err := renderPrompt("chapter_review", map[string]interface{}{
-		"Genre":             novel.Genre,
-		"CharacterSummary":  "",
-		"ChapterNo":         chapter.ChapterNo,
-		"ChapterTitle":      chapter.Title,
-		"HasPrevChapters":   len(prevChapters) > 0,
-		"PrevChapters":      prevChapters,
-		"Content":           sb.String(),
-		"HasIgnored":        len(ignoredLines) > 0,
-		"IgnoredText":       strings.Join(ignoredLines, "\n"),
-		"HasPreviousScore":  previousScore > 0,
-		"PreviousScoreStr":  fmt.Sprintf("%.0f", previousScore),
-		"CoreTheme":         novel.CoreTheme,
+		"Genre":              novel.Genre,
+		"CharacterSummary":   charSummary,
+		"ChapterNo":          chapter.ChapterNo,
+		"ChapterTitle":       chapter.Title,
+		"HasPrevChapters":    len(prevChapters) > 0,
+		"PrevChapters":       prevChapters,
+		"Content":            sb.String(),
+		"HasIgnored":         len(ignoredLines) > 0,
+		"IgnoredText":        strings.Join(ignoredLines, "\n"),
+		"HasPreviousScore":    previousScore > 0,
+		"PreviousScoreStr":    fmt.Sprintf("%.0f", previousScore),
+		"PreviousWeaknesses":  previousWeaknessesText,
+		"CoreTheme":           novel.CoreTheme,
+		"HasArcContext":      arcContext != "",
+		"ArcContext":         arcContext,
+		"HasForeshadows":     foreshadowContext != "",
+		"OpenForeshadows":    foreshadowContext,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render chapter_review: %w", err)
@@ -968,4 +1065,177 @@ func (s *QualityControlService) RunAutoReview(
 		}
 	}
 	return finalScore, totalApplied, nil
+}
+
+// ── Context builders ──────────────────────────────────────────────────────────
+
+// buildCharacterVoiceSummary builds a compact voice profile summary for all
+// major characters in the novel. This is injected into the chapter review
+// prompt so the AI can check dialogue voice consistency.
+func (s *QualityControlService) buildCharacterVoiceSummary(novelID uint) string {
+	if s.characterRepo == nil {
+		return ""
+	}
+	chars, err := s.characterRepo.ListByNovel(novelID)
+	if err != nil || len(chars) == 0 {
+		return ""
+	}
+	var lines []string
+	for _, c := range chars {
+		if c.VoiceProfile == "" && c.Description == "" {
+			continue
+		}
+		// Only include protagonist/antagonist/supporting roles
+		role := c.Role
+		if role != "protagonist" && role != "antagonist" && role != "supporting" {
+			continue
+		}
+		var voiceLine string
+		if c.VoiceProfile != "" {
+			// Extract overall_voice field from JSON without full parse
+			var vp struct {
+				OverallVoice   string   `json:"overall_voice"`
+				SpeechHabits   []string `json:"speech_habits"`
+				VocabularyLevel string  `json:"vocabulary_level"`
+			}
+			if err2 := json.Unmarshal([]byte(c.VoiceProfile), &vp); err2 == nil && vp.OverallVoice != "" {
+				voiceLine = vp.OverallVoice
+				if len(vp.SpeechHabits) > 0 {
+					habits := vp.SpeechHabits
+					if len(habits) > 3 {
+						habits = habits[:3]
+					}
+					voiceLine += "；口头禅/习惯：" + strings.Join(habits, "、")
+				}
+			}
+		}
+		if voiceLine == "" && c.Description != "" {
+			desc := c.Description
+			if len([]rune(desc)) > 60 {
+				desc = string([]rune(desc)[:60]) + "…"
+			}
+			voiceLine = desc
+		}
+		lines = append(lines, fmt.Sprintf("- %s（%s）：%s", c.Name, roleLabel(role), voiceLine))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func roleLabel(role string) string {
+	switch role {
+	case "protagonist":
+		return "主角"
+	case "antagonist":
+		return "反派"
+	case "supporting":
+		return "配角"
+	default:
+		return role
+	}
+}
+
+// buildArcContext returns arc summaries for arcs that precede the current
+// chapter, giving the reviewer long-range narrative context.
+func (s *QualityControlService) buildArcContext(novelID uint, currentChapterNo int) string {
+	if s.arcSummaryRepo == nil {
+		return ""
+	}
+	arcs, err := s.arcSummaryRepo.ListByNovel(novelID)
+	if err != nil || len(arcs) == 0 {
+		return ""
+	}
+	var lines []string
+	for _, arc := range arcs {
+		if arc.EndChapter >= currentChapterNo {
+			continue // only past arcs provide useful context
+		}
+		summary := arc.Summary
+		if len([]rune(summary)) > 120 {
+			summary = string([]rune(summary)[:120]) + "…"
+		}
+		lines = append(lines, fmt.Sprintf("- 第%d-%d章（第%d弧）：%s", arc.StartChapter, arc.EndChapter, arc.ArcNo, summary))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// buildForeshadowContext returns open (unresolved) foreshadows for injection
+// into the chapter review prompt.
+func (s *QualityControlService) buildForeshadowContext(novelID uint, tenantID uint) string {
+	if s.foreshadowRepo == nil {
+		return ""
+	}
+	foreshadows, err := s.foreshadowRepo.ListUnfulfilled(novelID, tenantID)
+	if err != nil || len(foreshadows) == 0 {
+		return ""
+	}
+	var lines []string
+	for _, f := range foreshadows {
+		desc := f.Description
+		if len([]rune(desc)) > 60 {
+			desc = string([]rune(desc)[:60]) + "…"
+		}
+		lines = append(lines, fmt.Sprintf("- 【%s】%s", f.Title, desc))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// ── Batch chapter content review ─────────────────────────────────────────────
+
+// BatchReviewNovelChapters reviews all chapters with content in parallel
+// (max 3 concurrent). It skips chapters with no content.
+// progressFn is called with (done, total) after each chapter finishes.
+func (s *QualityControlService) BatchReviewNovelChapters(ctx context.Context, tenantID, novelID uint, progressFn func(done, total int)) error {
+	novel, err := s.novelRepo.GetByID(novelID)
+	if err != nil {
+		return fmt.Errorf("novel not found: %w", err)
+	}
+	if novel.TenantID != tenantID {
+		return fmt.Errorf("not found")
+	}
+
+	chapters, err := s.chapterRepo.ListByNovelWithContent(novelID)
+	if err != nil {
+		return err
+	}
+
+	var reviewable []*model.Chapter
+	for _, ch := range chapters {
+		if strings.TrimSpace(ch.Content) != "" {
+			reviewable = append(reviewable, ch)
+		}
+	}
+	if len(reviewable) == 0 {
+		return fmt.Errorf("没有找到有正文内容的章节，请先生成章节内容")
+	}
+
+	const concurrency = 3
+	sem := make(chan struct{}, concurrency)
+	total := len(reviewable)
+	done := int32(0)
+	var wg sync.WaitGroup
+
+outerLoop:
+	for _, ch := range reviewable {
+		select {
+		case <-ctx.Done():
+			break outerLoop
+		default:
+		}
+		wg.Add(1)
+		go func(ch *model.Chapter) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			if _, err := s.ReviewChapter(ctx, ch.ID, ""); err != nil {
+				logger.Errorf("[BatchReviewChapters] chapter %d failed: %v", ch.ChapterNo, err)
+			}
+			n := int(atomic.AddInt32(&done, 1))
+			if progressFn != nil {
+				progressFn(n, total)
+			}
+		}(ch)
+	}
+	wg.Wait()
+	return nil
 }

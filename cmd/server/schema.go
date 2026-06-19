@@ -8,7 +8,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-06-13-v1"
+const schemaVersion = "2026-06-17-v2"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -127,6 +127,26 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_character", "default_look_id", "BIGINT UNSIGNED NOT NULL DEFAULT 0"},
 		// ink_novel 创建者（2026-06-13 新增，协作权限快速判断）
 		{"ink_novel", "created_by", "BIGINT UNSIGNED NOT NULL DEFAULT 0"},
+		// ink_foreshadow 专业伏笔管理字段（2026-06-17 新增）
+		{"ink_foreshadow", "actual_payoff_chapter_no", "INT NOT NULL DEFAULT 0"},   // 实际兑现章节序号
+		{"ink_foreshadow", "level",                    "VARCHAR(20) NOT NULL DEFAULT 'sub'"},  // 主线/支线/细节
+		{"ink_foreshadow", "foreshadow_type",          "VARCHAR(30) NOT NULL DEFAULT ''"},     // 类型
+		{"ink_foreshadow", "linked_hook_id",           "INT UNSIGNED NULL"},                   // 关联钩子
+		{"ink_foreshadow", "linked_arc_id",            "INT UNSIGNED NULL"},                   // 关联冲突弧
+		// ink_hook_chain 关联伏笔（2026-06-17 新增）
+		{"ink_hook_chain", "foreshadow_id", "INT UNSIGNED NULL"},
+		// ink_foreshadow 专业叙事分析字段（2026-06-17-v2 新增）
+		{"ink_foreshadow", "confidence",             "VARCHAR(20) NOT NULL DEFAULT 'medium'"},
+		{"ink_foreshadow", "parent_id",              "INT UNSIGNED NULL"},
+		{"ink_foreshadow", "character_ids",          "TEXT NULL"},
+		{"ink_foreshadow", "reinforcement_chapters", "TEXT NULL"},
+		{"ink_foreshadow", "payoff_quality",         "INT NOT NULL DEFAULT 0"},
+		{"ink_foreshadow", "payoff_notes",           "TEXT NULL"},
+		// ink_hook_chain 兑现质量（2026-06-17-v2 新增）
+		{"ink_hook_chain", "payoff_quality", "INT NOT NULL DEFAULT 0"},
+		{"ink_hook_chain", "payoff_notes",   "TEXT NULL"},
+		// ink_conflict_arc 张力曲线（2026-06-17-v2 新增）
+		{"ink_conflict_arc", "tension_levels", "TEXT NULL"},
 	}
 	for _, a := range additions {
 		// 先查 information_schema，列已存在则跳过，避免触发 GORM 的 Error 1060 日志
@@ -327,6 +347,23 @@ func autoMigrate(db *gorm.DB) error {
 	// 数据迁移：将历史 status='published' 的章节修正为 is_published=true, status='completed'
 	if err := db.Exec(`UPDATE ink_chapter SET is_published = 1, status = 'completed' WHERE status = 'published'`).Error; err != nil {
 		logger.Errorf("autoMigrate: chapter status migration failed: %v", err)
+	}
+
+	// 数据迁移（2026-06-17）：世界观字段合并 — technology → geography，religion → culture
+	// 仅在旧列存在时执行（幂等安全，GORM AutoMigrate 不删旧列）
+	var wvTechExists int64
+	db.Raw(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_worldview' AND COLUMN_NAME = 'technology'`).Scan(&wvTechExists)
+	if wvTechExists > 0 {
+		if err := db.Exec(`UPDATE ink_worldview SET geography = CONCAT(geography, '\n\n[文明水平] ', technology) WHERE technology IS NOT NULL AND technology != '' AND technology != '无'`).Error; err != nil {
+			logger.Errorf("autoMigrate: worldview technology→geography merge failed: %v", err)
+		}
+	}
+	var wvReligionExists int64
+	db.Raw(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_worldview' AND COLUMN_NAME = 'religion'`).Scan(&wvReligionExists)
+	if wvReligionExists > 0 {
+		if err := db.Exec(`UPDATE ink_worldview SET culture = CONCAT(culture, '\n\n[宗教信仰] ', religion) WHERE religion IS NOT NULL AND religion != '' AND religion != '无'`).Error; err != nil {
+			logger.Errorf("autoMigrate: worldview religion→culture merge failed: %v", err)
+		}
 	}
 
 	// 数据迁移（H-1）：将 style_prompt 中误存的大纲 JSON 迁移到 outline 字段

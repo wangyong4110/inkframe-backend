@@ -48,7 +48,7 @@ func startRecalcLoop(tag string, quit <-chan struct{}, fn func() error) {
 }
 
 func main() {
-	// 初始化 zap logger（开发模式：彩色可读格式）
+	// 启动前临时使用 debug logger，配置加载后按 server.mode 重新初始化
 	logger.Init(true)
 	defer logger.Sync()
 
@@ -58,6 +58,10 @@ func main() {
 		logger.Printf("Config file not found, using defaults")
 		cfg = config.DefaultConfig()
 	}
+
+	// 按 server.mode 重新初始化 logger：debug → 彩色+DEBUG级别；其他 → 纯文本+INFO级别
+	logger.Init(cfg.Server.Mode == "debug")
+	defer logger.Sync()
 
 	// 1a. 安全校验：JWT secret 必须至少 32 字符
 	if len(cfg.Server.JWTSecret) < 32 {

@@ -472,17 +472,6 @@ func (s *NovelImportService) crawlChaptersBackground(
 		fn.(func())()
 	}
 
-	// 站内通知：爬取完成
-	if s.notifSvc != nil && userID > 0 && finalStatus == "completed" {
-		_ = s.notifSvc.Send(
-			tenantID, userID,
-			"crawl_done",
-			fmt.Sprintf("《%s》爬取完成", novelTitle),
-			fmt.Sprintf("共 %d 章，成功爬取 %d 章", finalDone+finalFailed, finalDone),
-			"novel", novelID,
-			fmt.Sprintf("/novel/%d", novelID),
-		)
-	}
 }
 
 // getParserForURL 根据 URL（或 siteName 提示）返回对应解析器

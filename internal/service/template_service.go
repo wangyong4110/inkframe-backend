@@ -44,6 +44,16 @@ func renderPrompt(name string, ctx map[string]interface{}) (string, error) {
 	return out, nil
 }
 
+// LoadRawPrompt reads a prompt file by name (without extension) from the embedded FS.
+// It returns the raw text without any template rendering.
+func LoadRawPrompt(name string) (string, error) {
+	data, err := promptTemplates.ReadFile("prompts/" + name + ".j2")
+	if err != nil {
+		return "", fmt.Errorf("load prompt %s: %w", name, err)
+	}
+	return strings.TrimSpace(string(data)), nil
+}
+
 // toContext converts any value to pongo2.Context via JSON round-trip.
 // Accepts map[string]interface{} directly or converts structs via JSON.
 // Uses json.Decoder with UseNumber() so integer/float values are preserved as

@@ -712,8 +712,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		allRefImages = append(allRefImages, sceneRefImage)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
-	defer cancel()
+	ctx := context.Background()
 
 	// 获取视频的 ArtStyle、TenantID、质量档位、宽高比、角色一致性权重和色彩调色
 	artStyle := ""

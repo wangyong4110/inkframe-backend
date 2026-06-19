@@ -785,6 +785,242 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 	return result, nil
 }
 
+// resolveTaskConfig 提取 GenerateWithProviderCtx 中的配置解析逻辑，供多轮/流式方法复用。
+// 返回已填充好参数的 config、最终 providerName、resolvedModel。
+func (s *AIService) resolveTaskConfig(tenantID uint, novelID uint, taskType string, providerName string, overrides []StoryboardOverrides) (model.TaskModelConfig, string, string) {
+	base, err := s.taskRepo.GetByTaskType(taskType)
+	if err != nil {
+		base = &model.TaskModelConfig{Temperature: 0.7, MaxTokens: 0}
+	}
+	config := *base
+	resolvedModel := ""
+
+	if novelID > 0 && s.novelRepo != nil {
+		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+			if novel.Temperature > 0 {
+				config.Temperature = novel.Temperature
+			}
+			if novel.TopP > 0 {
+				config.TopP = novel.TopP
+			}
+			if novel.TopK > 0 {
+				config.TopK = novel.TopK
+			}
+			if novel.MaxTokens > 0 {
+				config.MaxTokens = novel.MaxTokens
+			}
+			if providerName == "" && novel.AIModel != "" {
+				resolvedModel = novel.AIModel
+				if pName := s.resolveProviderFromModel(tenantID, novel.AIModel); pName != "" {
+					providerName = pName
+				}
+			}
+		}
+	}
+
+	if len(overrides) > 0 {
+		o := overrides[0]
+		if o.MaxTokens > 0 {
+			config.MaxTokens = o.MaxTokens
+		}
+		if o.Temperature > 0 {
+			config.Temperature = o.Temperature
+		}
+		if o.TimeoutSeconds > 0 {
+			config.TimeoutSeconds = o.TimeoutSeconds
+		}
+	}
+
+	if providerName == "" && config.PrimaryProviderID > 0 && s.providerRepo != nil {
+		if p, err := s.providerRepo.GetByID(config.PrimaryProviderID); err == nil && p != nil {
+			providerName = p.Name
+		}
+	}
+
+	if resolvedModel == "" && providerName == "" && config.Strategy != "" && s.modelRepo != nil {
+		if candidates, err := s.modelRepo.GetAvailableByTaskType(taskType, tenantID); err == nil && len(candidates) > 0 {
+			var selected *model.AIModel
+			switch config.Strategy {
+			case "quality_first":
+				selected = selectByQuality(candidates)
+			case "cost_first":
+				selected = selectByCost(candidates)
+			default:
+				selected = selectBalanced(candidates)
+			}
+			if selected == nil {
+				selected = selectBalanced(candidates)
+			}
+			if selected != nil && selected.Provider != nil {
+				resolvedModel = selected.Name
+				providerName = selected.Provider.Name
+				if config.MaxTokens == 0 && selected.MaxTokens > 0 {
+					config.MaxTokens = selected.MaxTokens
+				}
+			}
+		}
+	}
+
+	if config.MaxTokens == 0 && resolvedModel != "" && s.modelRepo != nil {
+		if m, err := s.modelRepo.GetByName(resolvedModel); err == nil && m != nil && m.MaxTokens > 0 {
+			config.MaxTokens = m.MaxTokens
+		}
+	}
+
+	if config.MaxTokens == 0 && providerName != "" && s.providerRepo != nil {
+		if providers, err := s.providerRepo.ListByTenant(tenantID); err == nil {
+			for _, p := range providers {
+				if p.Name == providerName && p.MaxTokens > 0 {
+					config.MaxTokens = p.MaxTokens
+					break
+				}
+			}
+		}
+	}
+
+	return config, providerName, resolvedModel
+}
+
+// GenerateWithMessagesCtx calls the AI with a full conversation history (messages array).
+// Unlike GenerateWithProviderCtx which takes a single prompt string, this method passes
+// the complete message thread natively so the model sees proper role-based multi-turn context.
+func (s *AIService) GenerateWithMessagesCtx(ctx context.Context, tenantID uint, taskType string, messages []ai.ChatMessage, systemPrompt string, overrides ...StoryboardOverrides) (string, error) {
+	config, providerName, resolvedModel := s.resolveTaskConfig(tenantID, 0, taskType, "", overrides)
+
+	if s.aiManager == nil {
+		return "", fmt.Errorf("AI manager not initialized")
+	}
+	provider, err := s.getTenantProvider(tenantID, providerName)
+	if err != nil {
+		return "", fmt.Errorf("failed to get AI provider: %w", err)
+	}
+	if provider == nil {
+		return "", fmt.Errorf("AI provider resolved to nil for %q", providerName)
+	}
+
+	req := &ai.GenerateRequest{
+		Messages:     messages,
+		SystemPrompt: systemPrompt,
+		MaxTokens:    config.MaxTokens,
+		Temperature:  config.Temperature,
+		TopP:         config.TopP,
+	}
+	if resolvedModel != "" {
+		req.Model = resolvedModel
+	}
+	if provider.GetName() != "anthropic" {
+		req.TopK = config.TopK
+	}
+	if req.MaxTokens == 0 && s.providerRepo != nil {
+		if dbProviders, dbErr := s.providerRepo.ListByTenant(tenantID); dbErr == nil {
+			resolvedName := provider.GetName()
+			for _, p := range dbProviders {
+				if p.Name == resolvedName && p.MaxTokens > 0 && p.TenantID == tenantID {
+					req.MaxTokens = p.MaxTokens
+					break
+				}
+			}
+		}
+	}
+
+	timeoutDur := 5 * time.Minute
+	if config.TimeoutSeconds > 0 {
+		timeoutDur = time.Duration(config.TimeoutSeconds) * time.Second
+	}
+	tctx, cancel := context.WithTimeout(ctx, timeoutDur)
+	defer cancel()
+
+	logger.Printf("[AI/chat] provider=%s maxTokens=%d temperature=%.2f msgs=%d calling...",
+		provider.GetName(), req.MaxTokens, req.Temperature, len(messages))
+
+	callStart := time.Now()
+	resp, err := provider.Generate(tctx, req)
+	elapsed := time.Since(callStart)
+	if err != nil {
+		logger.Errorf("[AI/chat] provider=%s elapsed=%s err=%v", provider.GetName(), elapsed.Round(time.Millisecond), err)
+		return "", err
+	}
+	if resp.Error != "" {
+		return "", fmt.Errorf("provider error: %s", resp.Error)
+	}
+	resp.FinishTime = elapsed.Milliseconds()
+	logger.Printf("[AI/chat] provider=%s elapsed=%s respLen=%d in=%d out=%d",
+		provider.GetName(), elapsed.Round(time.Millisecond), len(resp.Content), resp.InputTokens, resp.Tokens)
+	if resp.Content == "" {
+		return "", fmt.Errorf("provider returned empty content (stop_reason=%s)", resp.StopReason)
+	}
+	s.logUsage(tenantID, &config, taskType, resp, elapsed.Milliseconds())
+	return resp.Content, nil
+}
+
+// StreamWithMessagesCtx streams AI response tokens for a multi-turn conversation.
+// It returns a channel that emits content chunks; the caller must drain the channel fully.
+// The last item may carry an empty Content with a non-empty Error field.
+func (s *AIService) StreamWithMessagesCtx(ctx context.Context, tenantID uint, taskType string, messages []ai.ChatMessage, systemPrompt string, overrides ...StoryboardOverrides) (<-chan *ai.GenerateResponse, error) {
+	config, providerName, resolvedModel := s.resolveTaskConfig(tenantID, 0, taskType, "", overrides)
+
+	if s.aiManager == nil {
+		return nil, fmt.Errorf("AI manager not initialized")
+	}
+	provider, err := s.getTenantProvider(tenantID, providerName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get AI provider: %w", err)
+	}
+	if provider == nil {
+		return nil, fmt.Errorf("AI provider resolved to nil for %q", providerName)
+	}
+
+	req := &ai.GenerateRequest{
+		Messages:     messages,
+		SystemPrompt: systemPrompt,
+		MaxTokens:    config.MaxTokens,
+		Temperature:  config.Temperature,
+		TopP:         config.TopP,
+		Stream:       true,
+	}
+	if resolvedModel != "" {
+		req.Model = resolvedModel
+	}
+	if provider.GetName() != "anthropic" {
+		req.TopK = config.TopK
+	}
+	if req.MaxTokens == 0 && s.providerRepo != nil {
+		if dbProviders, dbErr := s.providerRepo.ListByTenant(tenantID); dbErr == nil {
+			resolvedName := provider.GetName()
+			for _, p := range dbProviders {
+				if p.Name == resolvedName && p.MaxTokens > 0 && p.TenantID == tenantID {
+					req.MaxTokens = p.MaxTokens
+					break
+				}
+			}
+		}
+	}
+
+	timeoutDur := 5 * time.Minute
+	if config.TimeoutSeconds > 0 {
+		timeoutDur = time.Duration(config.TimeoutSeconds) * time.Second
+	}
+	streamCtx, cancel := context.WithTimeout(ctx, timeoutDur)
+
+	ch, err := provider.GenerateStream(streamCtx, req)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	// Wrap the provider channel to ensure cancel is called when the stream ends.
+	wrapped := make(chan *ai.GenerateResponse, 64)
+	go func() {
+		defer cancel()
+		defer close(wrapped)
+		for chunk := range ch {
+			wrapped <- chunk
+		}
+	}()
+
+	return wrapped, nil
+}
+
 // resolveProviderFromModel 通过模型名（如 "deepseek-chat"）在 DB 中查找对应的 provider name（如 "deepseek"）
 // 若查找失败则静默返回空字符串（由 getTenantProvider 兜底选择第一个可用 provider）
 func (s *AIService) resolveProviderFromModel(tenantID uint, modelName string) string {
@@ -849,9 +1085,7 @@ func (s *AIService) GenerateWithVision(prompt string, imageURLs []string) (strin
 		Temperature: 0.1,
 	}
 
-	visionCtx, visionCancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer visionCancel()
-	resp, err := provider.Generate(visionCtx, req)
+	resp, err := provider.Generate(context.Background(), req)
 	if err != nil {
 		return "", err
 	}
@@ -1083,19 +1317,35 @@ func isAuthError(err error) bool {
 
 // generateJSONForTenant 带 tenantID 的 JSON 生成重试（最多重试 maxRetries 次）
 func (s *AIService) generateJSONForTenant(tenantID, novelID uint, taskType, prompt string, maxRetries int) (string, error) {
+	return s.generateJSONForTenantCtx(context.Background(), tenantID, novelID, taskType, prompt, maxRetries)
+}
+
+// generateJSONForTenantCtx 与 generateJSONForTenant 相同，但支持 context 取消/超时。
+func (s *AIService) generateJSONForTenantCtx(ctx context.Context, tenantID, novelID uint, taskType, prompt string, maxRetries int) (string, error) {
 	if maxRetries <= 0 {
 		maxRetries = 2
 	}
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if ctx.Err() != nil {
+			return "", ctx.Err()
+		}
 		p := prompt
 		if attempt > 0 {
 			p = prompt + "\n\n⚠️ 重要提示：请只返回纯 JSON，不要包含任何 markdown 代码块（```）或说明文字。"
-			logger.Printf("generateJSONForTenant: attempt %d for taskType=%s, novelID=%d", attempt+1, taskType, novelID)
+			logger.Printf("generateJSONForTenantCtx: attempt %d for taskType=%s, novelID=%d", attempt+1, taskType, novelID)
 		}
-		result, err := s.GenerateWithProvider(tenantID, novelID, taskType, p, "")
+		result, err := s.GenerateWithProviderCtx(ctx, tenantID, novelID, taskType, p, "")
 		if err != nil {
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
 			lastErr = err
+			// 4xx provider errors (e.g. "max_tokens too large") are not retryable
+			if strings.Contains(err.Error(), "provider error:") {
+				logger.Errorf("generateJSONForTenantCtx: non-retryable provider error on attempt %d taskType=%s: %v", attempt+1, taskType, err)
+				break
+			}
 			continue
 		}
 		cleaned := extractJSON(result)
@@ -1104,9 +1354,9 @@ func (s *AIService) generateJSONForTenant(tenantID, novelID uint, taskType, prom
 			return cleaned, nil
 		}
 		lastErr = fmt.Errorf("invalid JSON on attempt %d: %s", attempt+1, cleaned[:min(100, len(cleaned))])
-		logger.Errorf("generateJSONForTenant: %v", lastErr)
+		logger.Errorf("generateJSONForTenantCtx: %v", lastErr)
 	}
-	return "", fmt.Errorf("generateJSONForTenant failed after %d attempts: %w", maxRetries+1, lastErr)
+	return "", fmt.Errorf("generateJSONForTenantCtx failed after %d attempts: %w", maxRetries+1, lastErr)
 }
 
 // generateWithRetry 带容错重试的 JSON 生成（最多重试 2 次）

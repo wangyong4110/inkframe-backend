@@ -67,7 +67,9 @@ func (h *WorldviewHandler) CreateWorldview(c *gin.Context) {
 		Geography   string `json:"geography"`
 		Culture     string `json:"culture"`
 		History     string `json:"history"`
-		Technology  string `json:"technology"`
+		Rules       string `json:"rules"`
+		Factions    string `json:"factions"`
+		Glossary    string `json:"glossary"`
 	}
 	if !bindJSON(c, &req) {
 		return
@@ -83,7 +85,9 @@ func (h *WorldviewHandler) CreateWorldview(c *gin.Context) {
 		Geography:   req.Geography,
 		Culture:     req.Culture,
 		History:     req.History,
-		Technology:  req.Technology,
+		Rules:       req.Rules,
+		Factions:    req.Factions,
+		Glossary:    req.Glossary,
 	}
 
 	if err := h.worldviewService.CreateWorldview(worldview); err != nil {
@@ -116,8 +120,9 @@ func (h *WorldviewHandler) UpdateWorldview(c *gin.Context) {
 		Geography   *string `json:"geography"`
 		Culture     *string `json:"culture"`
 		History     *string `json:"history"`
-		Technology  *string `json:"technology"`
 		Rules       *string `json:"rules"`
+		Factions *string `json:"factions"`
+		Glossary *string `json:"glossary"`
 	}
 	if !bindJSON(c, &req) {
 		return
@@ -144,11 +149,14 @@ func (h *WorldviewHandler) UpdateWorldview(c *gin.Context) {
 	if req.History != nil {
 		worldview.History = *req.History
 	}
-	if req.Technology != nil {
-		worldview.Technology = *req.Technology
-	}
 	if req.Rules != nil {
 		worldview.Rules = *req.Rules
+	}
+	if req.Factions != nil {
+		worldview.Factions = *req.Factions
+	}
+	if req.Glossary != nil {
+		worldview.Glossary = *req.Glossary
 	}
 
 	if err := h.worldviewService.UpdateWorldview(worldview); err != nil {
@@ -297,9 +305,10 @@ func (h *WorldviewHandler) CreateEntity(c *gin.Context) {
 		"artifact":     true,
 		"race":         true,
 		"creature":     true,
+		"other":        true,
 	}
 	if !validEntityTypes[req.Type] {
-		respondBadRequest(c, "invalid type, must be one of: location, organization, artifact, race, creature")
+		respondBadRequest(c, "invalid type, must be one of: location, organization, artifact, race, creature, other")
 		return
 	}
 	entity := &model.WorldviewEntity{

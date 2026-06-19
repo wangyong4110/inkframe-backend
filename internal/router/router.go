@@ -209,6 +209,10 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			v1.POST("/upload/image", cfg.UploadHandler.UploadImage)
 		}
 
+		// AI 对话式小说创建
+		v1.POST("/ai/novel-chat", cfg.NovelHandler.NovelChat)
+		v1.POST("/ai/novel-chat/stream", cfg.NovelHandler.NovelChatStream)
+
 		// 导入
 		importGroup := v1.Group("/import")
 		{
@@ -234,6 +238,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 
 			novels.POST("/:id/chapters/generate", cfg.NovelHandler.GenerateChapter)
 			novels.POST("/:id/chapters/batch-generate", cfg.NovelHandler.BatchGenerateChapters)
+			novels.POST("/:id/chapters/batch-review", cfg.ChapterHandler.BatchReviewChapters)
 			novels.POST("/:id/outline", cfg.NovelHandler.GenerateOutline)
 
 			// 大纲历史版本
@@ -251,6 +256,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			// 章节
 			novels.GET("/:id/chapters", cfg.ChapterHandler.ListChapters)
 			novels.POST("/:id/chapters", cfg.ChapterHandler.CreateChapter)
+			novels.POST("/:id/chapters/insert", cfg.ChapterHandler.InsertChapter)
+			novels.PUT("/:id/chapters/reorder", cfg.ChapterHandler.ReorderChapters)
 			novels.DELETE("/:id/chapters", cfg.ChapterHandler.BatchDeleteChapters)
 			novels.POST("/:id/chapters/batch-summarize", cfg.ChapterHandler.BatchSummarizeChapters)
 			novels.POST("/:id/chapters/batch-publish", cfg.ChapterHandler.BatchPublishChapters)
@@ -419,6 +426,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			chapters.POST("/:id/quality-check", cfg.ChapterHandler.QualityCheck)
 			chapters.GET("/:id/quality-report", cfg.ChapterHandler.GetQualityReport)
 			chapters.POST("/:id/improve", cfg.ChapterHandler.RefineChapter)
+			chapters.POST("/:id/rewrite", cfg.ChapterHandler.RewriteChapterByInstruction)
+			chapters.POST("/:id/chat/stream", cfg.ChapterHandler.ChapterChatStream)
 			chapters.POST("/:id/approve", cfg.ChapterHandler.ApproveChapter)
 			chapters.POST("/:id/reject", cfg.ChapterHandler.RejectChapter)
 
@@ -467,6 +476,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				hooks.PUT("/:id", cfg.DramaticHandler.UpdateHook)
 				hooks.DELETE("/:id", cfg.DramaticHandler.DeleteHook)
 				hooks.PUT("/:id/fulfill", cfg.DramaticHandler.FulfillHook)
+				hooks.PUT("/:id/payoff-quality", cfg.DramaticHandler.RateHookPayoff)
 			}
 			sps := v1.Group("/satisfaction-points")
 			{
@@ -478,6 +488,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				arcs.PUT("/:id", cfg.DramaticHandler.UpdateConflictArc)
 				arcs.DELETE("/:id", cfg.DramaticHandler.DeleteConflictArc)
 				arcs.PUT("/:id/advance-phase", cfg.DramaticHandler.AdvancePhase)
+				arcs.PUT("/:id/tension", cfg.DramaticHandler.UpdateArcTension)
 			}
 		}
 
@@ -489,8 +500,11 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				foreshadows.POST("", cfg.ForeshadowHandler.CreateForeshadow)
 				foreshadows.POST("/extract", cfg.ForeshadowHandler.AIExtractForeshadows)
 				foreshadows.GET("/unfulfilled", cfg.ForeshadowHandler.ListUnfulfilledForeshadows)
+				foreshadows.GET("/stats", cfg.ForeshadowHandler.GetForeshadowStats)
 				foreshadows.PUT("/:foreshadow_id", cfg.ForeshadowHandler.UpdateForeshadow)
 				foreshadows.DELETE("/:foreshadow_id", cfg.ForeshadowHandler.DeleteForeshadow)
+				foreshadows.POST("/:foreshadow_id/reinforce", cfg.ForeshadowHandler.AddReinforcement)
+				foreshadows.GET("/tree", cfg.ForeshadowHandler.GetForeshadowTree)
 			}
 		}
 

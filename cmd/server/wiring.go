@@ -328,7 +328,10 @@ func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *
 
 	// 质量控制服务
 	qualitySvc := service.NewQualityControlService(aiSvc, repos.ChapterRepo, repos.NovelRepo).
-		WithReviewRepos(repos.ReviewRecordRepo, repos.IgnoredReviewIssueRepo)
+		WithReviewRepos(repos.ReviewRecordRepo, repos.IgnoredReviewIssueRepo).
+		WithCharacterRepo(repos.CharacterRepo).
+		WithArcSummaryRepo(repos.ArcSummaryRepo).
+		WithForeshadowRepo(repos.ForeshadowRepo)
 
 	return &coreSvcs{AI: aiSvc, Model: modelSvc, Task: taskSvc, PlotPoint: plotPointSvc, Quality: qualitySvc}
 }

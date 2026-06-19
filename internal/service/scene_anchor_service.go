@@ -275,7 +275,6 @@ func parseExtractAnchorResponse(raw string) (extractAnchorResponse, error) {
 func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, novelID uint, novelTitle, chapterContent string, chapterID ...uint) ([]*model.SceneAnchor, error) {
 	logger.Printf("[SceneAnchorService] ExtractFromChapter: tenantID=%d novelID=%d chapterID=%v contentLen=%d",
 		tenantID, novelID, chapterID, len(chapterContent))
-	_ = ctx // 未来可传 context 给 AI provider
 
 	// 获取已存在锚点（去重用 + appearing 绑定用）
 	existing, err := s.repo.ListByNovel(novelID)
@@ -321,8 +320,8 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 		return nil, fmt.Errorf("render scene_anchor_extract: %w", err)
 	}
 
-	// 调用 LLM（带租户 ID，确保使用正确的 provider）
-	jsonStr, err := s.aiSvc.generateJSONForTenant(tenantID, novelID, "scene_anchor_extract", anchorPrompt, 2)
+	// 调用 LLM（带租户 ID + ctx，确保使用正确的 provider 且可被超时/取消）
+	jsonStr, err := s.aiSvc.generateJSONForTenantCtx(ctx, tenantID, novelID, "scene_anchor_extract", anchorPrompt, 2)
 	if err != nil {
 		logger.Errorf("[SceneAnchorService] ExtractFromChapter: LLM call failed: %v", err)
 		return nil, fmt.Errorf("LLM extract anchors: %w", err)

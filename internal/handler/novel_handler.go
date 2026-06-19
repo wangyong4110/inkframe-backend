@@ -2,18 +2,50 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
+	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
+
+var (
+	novelChatSystemPromptOnce    sync.Once
+	novelChatSystemPromptVal     string
+	novelChatExtractPromptOnce   sync.Once
+	novelChatExtractPromptVal    string
+)
+
+func getNovelChatSystemPrompt() string {
+	novelChatSystemPromptOnce.Do(func() {
+		p, err := service.LoadRawPrompt("novel_chat_system")
+		if err != nil {
+			logger.Errorf("failed to load novel_chat_system prompt: %v", err)
+		}
+		novelChatSystemPromptVal = p
+	})
+	return novelChatSystemPromptVal
+}
+
+func getNovelChatExtractPrompt() string {
+	novelChatExtractPromptOnce.Do(func() {
+		p, err := service.LoadRawPrompt("novel_chat_extract")
+		if err != nil {
+			logger.Errorf("failed to load novel_chat_extract prompt: %v", err)
+		}
+		novelChatExtractPromptVal = p
+	})
+	return novelChatExtractPromptVal
+}
 
 // NovelHandler 小说处理器
 type NovelHandler struct {
@@ -831,4 +863,259 @@ func (h *NovelHandler) ExportNovel(c *gin.Context) {
 	filename := fmt.Sprintf("%s.txt", novel.Title)
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
 	c.Data(http.StatusOK, "text/plain; charset=utf-8", []byte(buf.String()))
+}
+
+
+// novelChatNovelParams is the extracted novel parameters from the AI response.
+type novelChatNovelParams struct {
+	Title          string `json:"title"`
+	Genre          string `json:"genre"`
+	Description    string `json:"description"`
+	TargetChapters int    `json:"target_chapters"`
+	ChapterMode    string `json:"chapter_mode"` // "sequential" or "independent"
+}
+
+// extractNovelParams parses the ---NOVEL_PARAMS--- block from result.
+// Returns (displayMsg, *params). displayMsg has the params block stripped.
+func extractNovelParams(result string) (string, *novelChatNovelParams) {
+	const startMark = "---NOVEL_PARAMS---"
+	const endMark = "---END_PARAMS---"
+	si := strings.Index(result, startMark)
+	if si < 0 {
+		return strings.TrimSpace(result), nil
+	}
+	ei := strings.Index(result, endMark)
+	if ei <= si {
+		return strings.TrimSpace(result), nil
+	}
+	jsonStr := strings.TrimSpace(result[si+len(startMark) : ei])
+	var p novelChatNovelParams
+	if err := json.Unmarshal([]byte(jsonStr), &p); err != nil || p.Title == "" {
+		return strings.TrimSpace(result), nil
+	}
+	displayMsg := strings.TrimSpace(result[:si])
+	after := strings.TrimSpace(result[ei+len(endMark):])
+	if after != "" {
+		displayMsg += "\n\n" + after
+	}
+	return strings.TrimSpace(displayMsg), &p
+}
+
+// isCreationTrigger reports whether the last user message contains one of the
+// explicit "generate now" keywords that should force NOVEL_PARAMS output.
+func isCreationTrigger(messages []ai.ChatMessage) bool {
+	triggers := []string{
+		"开始创作", "整理小说参数", "生成参数",
+		"我觉得信息差不多了", "可以创建了", "直接创建",
+	}
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" {
+			for _, t := range triggers {
+				if strings.Contains(messages[i].Content, t) {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	return false
+}
+
+// forcedExtractNovelParams is a fallback used when the main streaming response
+// did not include a NOVEL_PARAMS block. It makes a focused extraction-only AI
+// call that just outputs a JSON object.
+func forcedExtractNovelParams(ctx context.Context, aiSvc *service.AIService, tenantID uint, history []ai.ChatMessage) *novelChatNovelParams {
+	// Only pass the last 10 messages to avoid huge context and model hallucination.
+	start := 0
+	if len(history) > 10 {
+		start = len(history) - 10
+	}
+	msgs := make([]ai.ChatMessage, 0, len(history)-start+1)
+	msgs = append(msgs, history[start:]...)
+	msgs = append(msgs, ai.ChatMessage{
+		Role:    "user",
+		Content: "请从以上对话提取小说参数，严格按照指定JSON格式输出，不要任何其他内容。",
+	})
+
+	result, err := aiSvc.GenerateWithMessagesCtx(ctx, tenantID, "novel_chat", msgs, getNovelChatExtractPrompt())
+	if err != nil {
+		logger.Printf("[NovelChatStream] forced extraction AI error: %v", err)
+		return nil
+	}
+	result = strings.TrimSpace(result)
+	// Strip markdown code fences if present.
+	if strings.HasPrefix(result, "```") {
+		if end := strings.LastIndex(result, "```"); end > 3 {
+			result = strings.TrimSpace(result[strings.Index(result, "\n")+1 : end])
+		}
+	}
+	// Locate outermost JSON object.
+	if idx := strings.Index(result, "{"); idx > 0 {
+		result = result[idx:]
+	}
+	if idx := strings.LastIndex(result, "}"); idx >= 0 && idx < len(result)-1 {
+		result = result[:idx+1]
+	}
+
+	// Use a flexible struct to tolerate genre being a string or array.
+	var raw struct {
+		Title          string          `json:"title"`
+		Genre          json.RawMessage `json:"genre"`
+		Description    string          `json:"description"`
+		TargetChapters int             `json:"target_chapters"`
+	}
+	if err := json.Unmarshal([]byte(result), &raw); err != nil || raw.Title == "" {
+		logger.Printf("[NovelChatStream] forced extraction parse failed: %v raw=%q", err, result)
+		return nil
+	}
+	p := &novelChatNovelParams{
+		Title:          raw.Title,
+		Description:    raw.Description,
+		TargetChapters: raw.TargetChapters,
+	}
+	// genre may be a string or []string; normalise to string.
+	var genreStr string
+	if err := json.Unmarshal(raw.Genre, &genreStr); err != nil {
+		var genreArr []string
+		if json.Unmarshal(raw.Genre, &genreArr) == nil && len(genreArr) > 0 {
+			genreStr = genreArr[0]
+		}
+	}
+	p.Genre = genreStr
+	if p.Genre == "" {
+		p.Genre = "其他"
+	}
+	logger.Printf("[NovelChatStream] forced extraction success: title=%q genre=%q", p.Title, p.Genre)
+	return p
+}
+
+// buildChatMessages converts the request messages (user/assistant turns) into ai.ChatMessage slice.
+// The system prompt is passed separately as GenerateRequest.SystemPrompt.
+func buildChatMessages(reqMsgs []struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}) []ai.ChatMessage {
+	msgs := make([]ai.ChatMessage, 0, len(reqMsgs))
+	for _, m := range reqMsgs {
+		role := m.Role
+		if role != "user" && role != "assistant" {
+			role = "user"
+		}
+		msgs = append(msgs, ai.ChatMessage{Role: role, Content: m.Content})
+	}
+	return msgs
+}
+
+// NovelChat POST /api/v1/ai/novel-chat — 多轮对话式小说创建助手（非流式）
+func (h *NovelHandler) NovelChat(c *gin.Context) {
+	var req struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	if len(req.Messages) == 0 {
+		respondBadRequest(c, "messages is required")
+		return
+	}
+
+	tenantID := getTenantID(c)
+	aiSvc := h.novelService.GetAIService()
+	messages := buildChatMessages(req.Messages)
+
+	result, err := aiSvc.GenerateWithMessagesCtx(c.Request.Context(), tenantID, "novel_chat", messages,
+		getNovelChatSystemPrompt())
+	if err != nil {
+		logger.Errorf("[NovelChat] generate error: %v", err)
+		respondErr(c, http.StatusInternalServerError, "AI 响应失败: "+err.Error())
+		return
+	}
+
+	displayMsg, extracted := extractNovelParams(result)
+	respondOK(c, gin.H{
+		"message":   displayMsg,
+		"extracted": extracted,
+	})
+}
+
+// NovelChatStream POST /api/v1/ai/novel-chat/stream — 流式多轮对话式小说创建助手（SSE）
+// 响应格式：text/event-stream，每个 chunk 是 JSON 对象 {"delta":"..."} 或最终 {"done":true,"extracted":{...}}
+func (h *NovelHandler) NovelChatStream(c *gin.Context) {
+	var req struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	if len(req.Messages) == 0 {
+		respondBadRequest(c, "messages is required")
+		return
+	}
+
+	tenantID := getTenantID(c)
+	aiSvc := h.novelService.GetAIService()
+	messages := buildChatMessages(req.Messages)
+
+	ch, err := aiSvc.StreamWithMessagesCtx(c.Request.Context(), tenantID, "novel_chat", messages,
+		getNovelChatSystemPrompt())
+	if err != nil {
+		logger.Errorf("[NovelChatStream] stream init error: %v", err)
+		respondErr(c, http.StatusInternalServerError, "AI 流式响应失败: "+err.Error())
+		return
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+	c.Writer.WriteHeader(http.StatusOK)
+	c.Writer.Flush()
+
+	var fullContent strings.Builder
+	for chunk := range ch {
+		if chunk.Error != "" {
+			payload, _ := json.Marshal(map[string]string{"error": chunk.Error})
+			fmt.Fprintf(c.Writer, "data: %s\n\n", payload)
+			c.Writer.Flush()
+			return
+		}
+		if chunk.Content == "" {
+			continue
+		}
+		fullContent.WriteString(chunk.Content)
+		payload, _ := json.Marshal(map[string]string{"delta": chunk.Content})
+		fmt.Fprintf(c.Writer, "data: %s\n\n", payload)
+		c.Writer.Flush()
+	}
+
+	// After streaming completes, strip the NOVEL_PARAMS block and send final event.
+	displayMsg, extracted := extractNovelParams(fullContent.String())
+
+	// Fallback: if no params in the stream but the user triggered creation, attempt
+	// a focused extraction-only call so the frontend can still proceed.
+	if extracted == nil && isCreationTrigger(messages) {
+		logger.Printf("[NovelChatStream] no NOVEL_PARAMS in stream, attempting forced extraction")
+		if fp := forcedExtractNovelParams(c.Request.Context(), aiSvc, tenantID, messages); fp != nil {
+			extracted = fp
+		}
+	}
+
+	finalPayload := map[string]interface{}{
+		"done":      true,
+		"extracted": extracted,
+	}
+	if extracted != nil {
+		// Tell the frontend to replace the streamed content (which contains the raw params block)
+		// with the clean display message.
+		finalPayload["correction"] = displayMsg
+	}
+	donePayload, _ := json.Marshal(finalPayload)
+	fmt.Fprintf(c.Writer, "data: %s\n\n", donePayload)
+	c.Writer.Flush()
 }

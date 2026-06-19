@@ -735,8 +735,8 @@ func (s *WorldviewService) DeleteEntity(id uint) error {
 }
 
 // UpdateSection 更新世界观的单个字段，不覆盖其他字段
-// sectionKey 必须是以下之一：magic_system, geography, history, culture, technology, rules, cheat_system,
-// description, factions, core_conflicts, character_archetypes, religion, glossary
+// sectionKey 必须是以下之一：magic_system, geography, history, culture, rules,
+// description, factions, glossary
 func (s *WorldviewService) UpdateSection(worldviewID uint, tenantID uint, sectionKey, content string) (*model.Worldview, error) {
 	wv, err := s.worldviewRepo.GetByIDAndTenant(worldviewID, tenantID)
 	if err != nil {
@@ -751,22 +751,12 @@ func (s *WorldviewService) UpdateSection(worldviewID uint, tenantID uint, sectio
 		wv.History = content
 	case "culture":
 		wv.Culture = content
-	case "technology":
-		wv.Technology = content
 	case "rules":
 		wv.Rules = content
-	case "cheat_system":
-		wv.CheatSystem = content
 	case "description":
 		wv.Description = content
 	case "factions":
 		wv.Factions = content
-	case "core_conflicts":
-		wv.CoreConflicts = content
-	case "character_archetypes":
-		wv.CharacterArchetypes = content
-	case "religion":
-		wv.Religion = content
 	case "glossary":
 		wv.Glossary = content
 	default:
@@ -823,17 +813,15 @@ func (s *WorldviewService) GenerateWorldview(tenantID uint, novelID uint, genre 
 	}
 	prompt += `
 
-请严格按以下 JSON 格式返回，所有字段均需填写，内容尽量详实（每字段不少于100字）：
+请严格按以下 JSON 格式返回，所有字段均需填写，内容尽量详实（每字段不少于50字）：
 {
   "name": "世界观名称（富有特色的专有名词，非类型名）",
-  "description": "世界观总体概述，包括核心世界观念、整体氛围和主要冲突主题",
-  "magic_system": "修炼/魔法/异能体系的详细描述，包括力量来源、境界划分、修炼方式、天花板设定",
-  "geography": "世界地理格局描述，包括主要大陆/区域、重要城市/圣地、地理特征与禁区",
-  "history": "世界历史背景，包括重大历史事件、时代更迭、上古传说、现存历史遗留问题",
-  "culture": "世界的文化风俗，包括种族/文明构成、宗教信仰、礼仪习俗、价值观念",
-  "technology": "世界的科技/炼器/阵法水平，与修炼体系的关系，普通人与修炼者的生活差异",
-  "rules": "世界运行的核心规则与禁忌，包括天道法则、禁术禁地、不可违背的世界规律",
-  "cheat_system": "主角金手指/系统描述（可选，无则留空）：系统名称、核心功能、等级/点数机制、触发条件"
+  "description": "世界观总体概述：核心世界观念、整体氛围、故事将面对的主要张力",
+  "magic_system": "修炼/魔法/异能体系：力量来源、境界划分（列出各级名称）、修炼方式、天花板设定、突破代价",
+  "geography": "关键地点（只列出故事实际会发生的场景，3-6处）：每处说明控制方、叙事意义、进入难度",
+  "history": "背景矛盾（只写仍在影响当前故事的过去事件）：每条说明该历史如何制造了当前的紧张局势",
+  "rules": "世界核心规则与禁忌（每行一条）：天道法则、不可违背的世界规律、违反后果",
+  "glossary": "世界专属术语表（每行一条，格式：词语 — 含义）：重要专有名词、境界名称、地名缩写等"
 }`
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, 0, "worldview", prompt, "")
@@ -847,10 +835,8 @@ func (s *WorldviewService) GenerateWorldview(tenantID uint, novelID uint, genre 
 		MagicSystem string `json:"magic_system"`
 		Geography   string `json:"geography"`
 		History     string `json:"history"`
-		Culture     string `json:"culture"`
-		Technology  string `json:"technology"`
 		Rules       string `json:"rules"`
-		CheatSystem string `json:"cheat_system"`
+		Glossary    string `json:"glossary"`
 	}
 	if err := json.Unmarshal([]byte(extractJSON(result)), &data); err != nil {
 		logger.Errorf("GenerateWorldview: failed to parse AI response: %v, raw: %.300s", err, result)
@@ -870,10 +856,8 @@ func (s *WorldviewService) GenerateWorldview(tenantID uint, novelID uint, genre 
 		MagicSystem: data.MagicSystem,
 		Geography:   data.Geography,
 		History:     data.History,
-		Culture:     data.Culture,
-		Technology:  data.Technology,
 		Rules:       data.Rules,
-		CheatSystem: data.CheatSystem,
+		Glossary:    data.Glossary,
 	}, nil
 }
 

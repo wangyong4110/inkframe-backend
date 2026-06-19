@@ -15,7 +15,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/logger"
@@ -307,10 +306,7 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 		voice = "alloy"
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	audioURL, err := s.aiService.AudioGenerateWithOptions(ctx, tenantID, text, voice, speed, style)
+	audioURL, err := s.aiService.AudioGenerateWithOptions(context.Background(), tenantID, text, voice, speed, style)
 	if err != nil {
 		// Clear stale audio_path so the UI shows generation failed rather than showing an old path.
 		if seg.AudioPath != "" {
@@ -455,10 +451,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 
 	voice, speed, style := s.resolveVoiceForShot(shot, narrationVoice, novelID)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-
-	localAudioURL, err := s.aiService.AudioGenerateWithOptions(ctx, tenantID, text, voice, speed, style)
+	localAudioURL, err := s.aiService.AudioGenerateWithOptions(context.Background(), tenantID, text, voice, speed, style)
 	if err != nil {
 		logger.Errorf("GenerateShotAudio: TTS failed for shot %d: %v", shot.ShotNo, err)
 		return err
@@ -476,7 +469,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 
 	// 上传到持久存储（持久化音频避免本地 /tmp 文件重启后消失）
 	if s.storageSvc != nil {
-		persistURL, uploadErr := s.uploadAudioToStorage(ctx, shot, audioURL)
+		persistURL, uploadErr := s.uploadAudioToStorage(context.Background(), shot, audioURL)
 		if uploadErr != nil {
 			logger.Errorf("GenerateShotAudio: storage upload failed (falling back to local): %v", uploadErr)
 		} else {

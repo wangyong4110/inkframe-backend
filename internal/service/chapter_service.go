@@ -360,51 +360,74 @@ func (s *ChapterService) GenerateChapterOutline(tenantID, novelID uint, chapterN
 		return nil, err
 	}
 
-	// 构建上下文：近期章节摘要（NarrativeMemory）
-	var recentCtx string
-	if s.narrativeSvc != nil {
-		if ctx, err := s.narrativeSvc.BuildHierarchicalContext(novelID, chapterNo); err == nil {
-			recentCtx = ctx
-		}
-	}
-
-	// 补充：取前 5 章的 Outline 字段作为直接大纲参考
-	var prevOutlineSection string
-	if allChapters, err := s.chapterRepo.ListByNovel(novelID); err == nil {
-		var prevChapters []*model.Chapter
-		for _, ch := range allChapters {
-			if ch.ChapterNo < chapterNo && ch.Outline != "" {
-				prevChapters = append(prevChapters, ch)
-			}
-		}
-		// 取最近 5 章
-		if len(prevChapters) > 5 {
-			prevChapters = prevChapters[len(prevChapters)-5:]
-		}
-		if len(prevChapters) > 0 {
-			var sb strings.Builder
-			sb.WriteString("【前续章节大纲（供情节衔接参考）】\n")
-			for _, ch := range prevChapters {
-				title := ch.Title
-				if title == "" {
-					title = fmt.Sprintf("第%d章", ch.ChapterNo)
-				}
-				sb.WriteString(fmt.Sprintf("第%d章《%s》：%s\n\n", ch.ChapterNo, title, ch.Outline))
-			}
-			prevOutlineSection = sb.String()
-		}
-	}
-
-	recentCtxSection := ""
-	if recentCtx != "" {
-		recentCtxSection = "【叙事上下文】\n" + recentCtx
-	}
 	extraPromptSection := ""
 	if extraPrompt != "" {
 		extraPromptSection = "【用户要求】\n" + extraPrompt
 	}
 
-	prompt := fmt.Sprintf(`请为小说《%s》第%d章生成详细的章节大纲（200～500字）。
+	var prompt string
+	if novel.ChapterMode == "independent" {
+		// 独立成篇：每章是自完结的独立故事，不引用其他章节
+		prompt = fmt.Sprintf(`请为小说集《%s》第%d章生成详细的章节大纲（200～500字）。
+
+小说集简介：%s
+本章标题：%s
+
+%s
+
+⚠️ 章节模式：独立成篇——本章是一个完整独立的故事，不依赖任何其他章节。
+
+要求：
+- 必须包含完整的故事弧光：①开场（人物处境/矛盾引入）②冲突升级（矛盾激化过程）③高潮（关键转折或对决）④结局（冲突如何解决，情感如何落地）
+- 核心冲突必须在本章内完全解决，不留悬念、不依赖后续章节
+- 点明主要人物的行动、目标与心理变化
+- 交代场景背景与氛围
+- 禁止：章末钩子、"待续"式结尾、跨章伏笔、引用其他章节的人物或事件
+- 字数不少于200字，不超过500字
+- 直接输出大纲文本，不要加前缀或说明`,
+			novel.Title, chapterNo, novel.Description, chapter.Title,
+			extraPromptSection,
+		)
+	} else {
+		// 连贯剧情：构建近期章节上下文供情节衔接
+		var recentCtx string
+		if s.narrativeSvc != nil {
+			if ctx, err := s.narrativeSvc.BuildHierarchicalContext(novelID, chapterNo); err == nil {
+				recentCtx = ctx
+			}
+		}
+
+		var prevOutlineSection string
+		if allChapters, err := s.chapterRepo.ListByNovel(novelID); err == nil {
+			var prevChapters []*model.Chapter
+			for _, ch := range allChapters {
+				if ch.ChapterNo < chapterNo && ch.Outline != "" {
+					prevChapters = append(prevChapters, ch)
+				}
+			}
+			if len(prevChapters) > 5 {
+				prevChapters = prevChapters[len(prevChapters)-5:]
+			}
+			if len(prevChapters) > 0 {
+				var sb strings.Builder
+				sb.WriteString("【前续章节大纲（供情节衔接参考）】\n")
+				for _, ch := range prevChapters {
+					title := ch.Title
+					if title == "" {
+						title = fmt.Sprintf("第%d章", ch.ChapterNo)
+					}
+					sb.WriteString(fmt.Sprintf("第%d章《%s》：%s\n\n", ch.ChapterNo, title, ch.Outline))
+				}
+				prevOutlineSection = sb.String()
+			}
+		}
+
+		recentCtxSection := ""
+		if recentCtx != "" {
+			recentCtxSection = "【叙事上下文】\n" + recentCtx
+		}
+
+		prompt = fmt.Sprintf(`请为小说《%s》第%d章生成详细的章节大纲（200～500字）。
 
 小说简介：%s
 本章标题：%s
@@ -421,9 +444,10 @@ func (s *ChapterService) GenerateChapterOutline(tenantID, novelID uint, chapterN
 - 说明本章在整体故事中的作用（推进、铺垫或高潮）
 - 字数不少于200字，不超过500字
 - 直接输出大纲文本，不要加前缀或说明`,
-		novel.Title, chapterNo, novel.Description, chapter.Title,
-		prevOutlineSection, recentCtxSection, extraPromptSection,
-	)
+			novel.Title, chapterNo, novel.Description, chapter.Title,
+			prevOutlineSection, recentCtxSection, extraPromptSection,
+		)
+	}
 
 	// 从项目配置读取参数默认值
 	chOutlineOverrides := StoryboardOverrides{
@@ -464,6 +488,53 @@ func (s *ChapterService) DeleteChapterByNo(novelID uint, chapterNo int) error {
 	}
 	s.syncNovelStats(novelID)
 	return nil
+}
+
+// ReorderChapters 按新顺序批量更新章节号。orders 中每项为 {ChapterID, ChapterNo}，
+// 必须覆盖该小说的全部章节，chapter_no 必须从 1 开始连续。
+func (s *ChapterService) ReorderChapters(novelID uint, orders []repository.ChapterOrder) error {
+	if len(orders) == 0 {
+		return fmt.Errorf("orders is empty")
+	}
+	// 简单校验：所有 chapter_no 必须唯一且 > 0
+	seen := make(map[int]bool, len(orders))
+	for _, o := range orders {
+		if o.ChapterNo <= 0 || seen[o.ChapterNo] {
+			return fmt.Errorf("invalid or duplicate chapter_no: %d", o.ChapterNo)
+		}
+		seen[o.ChapterNo] = true
+	}
+	if err := s.chapterRepo.BatchReorderChapters(novelID, orders); err != nil {
+		return err
+	}
+	s.syncNovelStats(novelID)
+	return nil
+}
+
+// InsertChapterAfter 在 afterChapterNo 后插入新章节：先将后续章节 +1，再创建新章节。
+// afterChapterNo=0 表示插入到第一章前面。
+func (s *ChapterService) InsertChapterAfter(novelID uint, afterChapterNo int) (*model.Chapter, error) {
+	newNo := afterChapterNo + 1
+	var tenantID uint
+	if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+		tenantID = novel.TenantID
+	}
+	if err := s.chapterRepo.ShiftUp(novelID, newNo); err != nil {
+		return nil, err
+	}
+	chapter := &model.Chapter{
+		UUID:      uuid.New().String(),
+		NovelID:   novelID,
+		TenantID:  tenantID,
+		ChapterNo: newNo,
+		Title:     "",
+		Status:    "draft",
+	}
+	if err := s.chapterRepo.Create(chapter); err != nil {
+		return nil, err
+	}
+	s.syncNovelStats(novelID)
+	return chapter, nil
 }
 
 // PublishChapter 将章节标记为已发布（不改变内容 status）
@@ -530,14 +601,15 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	}
 	defer s.genLocks.Delete(genLockKey)
 
-	// 2. DB 层乐观锁：如果已有占位章节，仅当其 status 不是 generating/completed 时才允许开始。
+	// 2. DB 层乐观锁：如果已有占位章节，仅当其 status 为 generating 时阻断（并发冲突）。
+	// completed 章节允许重新生成，AtomicSetGenerating 会直接将其切换回 generating。
 	if existing, _ := s.chapterRepo.GetByNovelAndChapterNo(novelID, req.ChapterNo); existing != nil {
 		ok, atomicErr := s.chapterRepo.AtomicSetGenerating(existing.ID, novelID)
 		if atomicErr != nil {
 			return nil, fmt.Errorf("chapter %d: check generating status: %w", req.ChapterNo, atomicErr)
 		}
 		if !ok {
-			return nil, fmt.Errorf("chapter %d of novel %d is already being generated or completed", req.ChapterNo, novelID)
+			return nil, fmt.Errorf("chapter %d of novel %d is already being generated", req.ChapterNo, novelID)
 		}
 	}
 
@@ -777,18 +849,6 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 
 	// ── Step 6: 异步后处理（标题/精修/弧摘要，不再包含角色快照）────────────────────────────────
 	go s.postProcessChapter(tenantID, chapter, novel)
-
-	// 站内通知：章节生成完成
-	if s.notifSvc != nil {
-		_ = s.notifSvc.Send(
-			novel.TenantID, 0,
-			"chapter_done",
-			"章节生成完成",
-			fmt.Sprintf("《%s》第%d章已生成完毕", novel.Title, chapter.ChapterNo),
-			"chapter", chapter.ID,
-			fmt.Sprintf("/novel/%d", novel.ID),
-		)
-	}
 
 	logger.Printf("[ChapterService] GenerateChapter done: chapterID=%d wordCount=%d", chapter.ID, chapter.WordCount)
 	return chapter, nil
@@ -1137,6 +1197,11 @@ func (s *ChapterService) generateSceneOutline(
 	// 构建伏笔提示
 	foreshadowHints := s.buildForeshadowHints(novelID, req.ChapterNo)
 
+	worldviewRules := ""
+	if novel.Worldview != nil {
+		worldviewRules = novel.Worldview.Rules
+	}
+
 	// 获取角色列表（含快照状态 + 内在动机）
 	characters := s.getCharactersForPrompt(novelID)
 
@@ -1266,15 +1331,15 @@ func (s *ChapterService) generateSceneOutline(
 		"ReaderExpectations":    prevReaderExpectations,
 		"CharacterArcContext":   characterArcContext,
 		"TensionBudget":         tensionBudget,
+		"WorldRules":            worldviewRules,
+		"UserPrompt":            req.Prompt,
 	})
 	if err != nil {
 		logger.Errorf("GenerateChapter: render chapter_scene_outline: %v", err)
 		return "", "", fmt.Errorf("generateSceneOutline: render template: %w", err)
 	}
 
-	outlineCtx, outlineCancel := context.WithTimeout(context.Background(), 4*time.Minute)
-	resp, err := s.aiService.GenerateWithProviderCtx(outlineCtx, tenantID, novelID, "scene_outline", outlinePrompt, req.ModelOverride, buildChapterOverrides(req, novel))
-	outlineCancel()
+	resp, err := s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, novelID, "scene_outline", outlinePrompt, req.ModelOverride, buildChapterOverrides(req, novel))
 	if err != nil {
 		logger.Errorf("GenerateChapter: scene outline AI call failed: %v", err)
 		return "", "", fmt.Errorf("generateSceneOutline: AI call failed: %w", err)
@@ -1354,11 +1419,11 @@ func (s *ChapterService) generateSceneOutline(
 				"ReaderExpectations":    prevReaderExpectations,
 				"CharacterArcContext":   characterArcContext,
 				"TensionBudget":         tensionBudget,
+				"WorldRules":            worldviewRules,
+				"UserPrompt":            req.Prompt,
 			})
 			if renderErr == nil {
-				retryCtx, retryCancel := context.WithTimeout(context.Background(), 4*time.Minute)
-				retryResp, retryErr := s.aiService.GenerateWithProviderCtx(retryCtx, tenantID, novelID, "scene_outline", retryPrompt, req.ModelOverride, buildChapterOverrides(req, novel))
-				retryCancel()
+				retryResp, retryErr := s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, novelID, "scene_outline", retryPrompt, req.ModelOverride, buildChapterOverrides(req, novel))
 				if retryErr == nil {
 					retryResp = extractJSONObject(strings.TrimSpace(retryResp))
 					var retryResult struct {
@@ -1581,6 +1646,11 @@ func (s *ChapterService) generateFromSceneOutline(
 	// 未解决剧情线（伏笔/冲突）
 	foreshadowHints := s.buildForeshadowHints(novelID, req.ChapterNo)
 
+	worldviewRulesFromOutline := ""
+	if novel.Worldview != nil {
+		worldviewRulesFromOutline = novel.Worldview.Rules
+	}
+
 	// 章节叙事预算（防信息过载、防过早化解矛盾）
 	budget := computeChapterBudget(req.ChapterNo, novel.TargetChapters, meta.actNo)
 	budgetText := formatBudgetForPrompt(budget)
@@ -1602,38 +1672,56 @@ func (s *ChapterService) generateFromSceneOutline(
 			transCount++
 		}
 	}
-	// 按场景权重分配字数：核心6分/过渡3分/衔接1分，总份额加权保证 sum == wordCount
+	// 按场景权重+张力值分配字数
+	// 基础份额：核心6分/过渡3分/衔接1分
+	// 张力加成：tension>=8 额外+3分，tension_direction=="peak" 额外+2分
+	// 确保高潮场景获得足够字数，避免叙事头重脚轻
 	totalScenes := len(outlineData.Scenes)
-	linkCount := totalScenes - coreCount - transCount
-	if linkCount < 0 {
-		linkCount = 0
+	sceneWeights := make([]int, totalScenes)
+	for i, sc := range outlineData.Scenes {
+		base := 1
+		switch sc.SceneWeight {
+		case "核心场景":
+			base = 6
+		case "过渡场景":
+			base = 3
+		}
+		// 张力加成
+		if sc.Tension >= 8 {
+			base += 3
+		} else if sc.Tension >= 6 {
+			base += 1
+		}
+		if sc.TensionDirection == "peak" {
+			base += 2
+		}
+		sceneWeights[i] = base
 	}
-	// 计算总权重份额，用比例分配而非固定百分比（防止全核心场景时丢失字数）
-	totalWeight := coreCount*6 + transCount*3 + linkCount*1
+	totalWeight := 0
+	for _, w := range sceneWeights {
+		totalWeight += w
+	}
 	if totalWeight == 0 {
-		totalWeight = totalScenes // fallback: 均分
-	}
-	perCoreWord := wordCount * 6 / totalWeight
-	perTransWord := wordCount * 3 / totalWeight
-	perLinkWord := wordCount * 1 / totalWeight
-	if perCoreWord < 200 {
-		perCoreWord = 200
-	}
-	if perTransWord < 150 {
-		perTransWord = 150
-	}
-	if perLinkWord < 100 {
-		perLinkWord = 100
+		totalWeight = totalScenes
 	}
 	for i := range outlineData.Scenes {
+		budget := wordCount * sceneWeights[i] / totalWeight
+		// 最低字数保障
 		switch outlineData.Scenes[i].SceneWeight {
 		case "核心场景":
-			outlineData.Scenes[i].WordBudget = perCoreWord
+			if budget < 200 {
+				budget = 200
+			}
 		case "过渡场景":
-			outlineData.Scenes[i].WordBudget = perTransWord
+			if budget < 150 {
+				budget = 150
+			}
 		default:
-			outlineData.Scenes[i].WordBudget = perLinkWord
+			if budget < 100 {
+				budget = 100
+			}
 		}
+		outlineData.Scenes[i].WordBudget = budget
 	}
 
 	chapterTitle := outlineData.ChapterTitle
@@ -1688,6 +1776,10 @@ func (s *ChapterService) generateFromSceneOutline(
 
 			// 按场景字数预算计算 MaxTokens（中文约 1.5 token/字 + 25% overhead）
 			sceneMaxTokens := int(float64(sc.WordBudget)*1.5*1.25) + 256
+			// 最后一个场景额外保障 40% token：章末钩子、收尾段落往往比预算更长
+			if isLastScene {
+				sceneMaxTokens = int(float64(sceneMaxTokens) * 1.4)
+			}
 			// 不超过章节级 MaxTokens 限制
 			if chMax := req.MaxTokens; chMax > 0 && sceneMaxTokens > chMax {
 				sceneMaxTokens = chMax
@@ -1776,6 +1868,8 @@ func (s *ChapterService) generateFromSceneOutline(
 				"ThemeEcho":           sc.ThemeEcho,         // 本场景如何呼应核心主题
 				"CoreTheme":           novel.CoreTheme,      // 全书核心主题
 				"FinalChapterContext": finalChapterCtx,      // P0-2: 最终章未关闭悬线清单
+				"WorldRules":          worldviewRulesFromOutline,
+				"UserPrompt":          req.Prompt,
 			})
 			if promptErr != nil {
 				logger.Errorf("[generateFromSceneOutline] ch%d scene%d: render scene_write failed: %v; falling back to one-shot",
@@ -1790,9 +1884,7 @@ func (s *ChapterService) generateFromSceneOutline(
 			// 原实现的 retryOverrides 是块级局部变量，continue 后下一轮仍用原始 sceneOverrides。
 			currentOverrides := sceneOverrides
 			for attempt := 0; attempt < 2; attempt++ {
-				sceneCtx, sceneCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-				sceneRaw, sceneErr = s.aiService.GenerateWithProviderCtx(sceneCtx, tenantID, novelID, "chapter", scenePrompt, req.ModelOverride, currentOverrides)
-				sceneCancel()
+				sceneRaw, sceneErr = s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, novelID, "chapter", scenePrompt, req.ModelOverride, currentOverrides)
 				if sceneErr == nil {
 					// 字数不足检测：生成成功但内容过短时，提高温度重试（最多1次）
 					if attempt == 0 && len([]rune(cleanChapterOutput(sceneRaw))) < minWordsScene {
@@ -1903,6 +1995,7 @@ func (s *ChapterService) generateFromSceneOutline(
 		"CoreTheme":             novel.CoreTheme,
 		"ReaderExpectations":    prevReaderExpectations,
 		"FinalChapterContext":   finalChapterCtx,
+		"WorldRules":            worldviewRulesFromOutline,
 	})
 	if renderErr != nil {
 		logger.Errorf("[generateFromSceneOutline] ch%d: one-shot render failed: %v; using simple fallback", req.ChapterNo, renderErr)
@@ -1912,9 +2005,7 @@ func (s *ChapterService) generateFromSceneOutline(
 	var raw string
 	var genErr error
 	for attempt := 0; attempt < 3; attempt++ {
-		attemptCtx, attemptCancel := context.WithTimeout(context.Background(), 4*time.Minute)
-		raw, genErr = s.aiService.GenerateWithProviderCtx(attemptCtx, tenantID, novelID, "chapter", chapterPrompt, req.ModelOverride, buildChapterOverrides(req, novel))
-		attemptCancel()
+		raw, genErr = s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, novelID, "chapter", chapterPrompt, req.ModelOverride, buildChapterOverrides(req, novel))
 		if genErr == nil {
 			break
 		}
@@ -2135,17 +2226,6 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 					logger.Errorf("[ChapterService] continuity_blocked update ch%d: %v", ch.ChapterNo, updateErr)
 				} else {
 					logger.Printf("[ChapterService] continuity_blocked=true marked for ch%d (novel %d)", ch.ChapterNo, novel.ID)
-					// 主动通知：连贯性问题需要用户介入，不能静默标记
-					if s.notifSvc != nil {
-						_ = s.notifSvc.Send(
-							novel.TenantID, 0,
-							"chapter_continuity_issue",
-							"章节连贯性警告",
-							fmt.Sprintf("《%s》第%d章检测到角色/世界观/情节高危连贯性问题，请检查后继续生成", novel.Title, ch.ChapterNo),
-							"chapter", ch.ID,
-							fmt.Sprintf("/novel/%d", novel.ID),
-						)
-					}
 				}
 			}
 		}(chapter)
@@ -2155,12 +2235,10 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 	if s.qualitySvc != nil && novel.AutoReviewRounds > 0 {
 		logger.Printf("[ChapterService] postProcessChapter: starting auto-review for ch%d (%d rounds, minScore=%.0f)",
 			chapter.ChapterNo, novel.AutoReviewRounds, novel.AutoReviewMinScore)
-		reviewCtx, reviewCancel := context.WithTimeout(context.Background(), time.Duration(novel.AutoReviewRounds)*5*time.Minute)
 		finalScore, totalApplied, reviewErr := s.qualitySvc.RunAutoReview(
-			reviewCtx, chapter.ID, tenantID,
+			context.Background(), chapter.ID, tenantID,
 			novel.AutoReviewRounds, novel.AutoReviewMinScore,
 		)
-		reviewCancel()
 		if reviewErr != nil {
 			logger.Errorf("[ChapterService] postProcessChapter: auto-review ch%d error (non-fatal): %v", chapter.ChapterNo, reviewErr)
 		} else {
@@ -2199,8 +2277,9 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 	}
 
 	// 4c. 生成读者期待状态（章末读者最想知道的3件事，供下一章生成时约束）
+	// 独立成篇模式：章章独立，无需下章接续，跳过生成。
 	// 依赖摘要，所以在摘要生成之后执行；AI 调用失败最多重试3次，与摘要生成策略一致。
-	if chapter.Summary != "" && chapter.ReaderExpectations == "" {
+	if novel.ChapterMode != "independent" && chapter.Summary != "" && chapter.ReaderExpectations == "" {
 		var expectations string
 		for attempt := 0; attempt < 3; attempt++ {
 			if exp := s.generateReaderExpectations(tenantID, chapter, novel); exp != "" {
@@ -2230,7 +2309,8 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 	// 4d. 精修后重新提取章末精确状态快照（重要：精修可能改变章末内容，必须覆盖 Step 5c 的旧快照）
 	// Step 5c 在精修前同步提取，是为了让下一章"立即可用"。
 	// 这里精修已完成，用最终内容覆盖，确保快照基于已精修的章末文本，而非草稿。
-	if chapter.Content != "" {
+	// 独立成篇模式：章章独立，无需下章接续，跳过章末状态快照生成。
+	if novel.ChapterMode != "independent" && chapter.Content != "" {
 		if endState := s.generateChapterEndState(tenantID, chapter, novel); endState != "" {
 			if fresh, fetchErr := s.chapterRepo.GetByID(chapter.ID); fetchErr == nil {
 				fresh.ChapterEndState = endState
@@ -3131,9 +3211,7 @@ func (s *ChapterService) updateNextChapterPreview(tenantID uint, chapter *model.
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	preview, aiErr := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID,
+	preview, aiErr := s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, chapter.NovelID,
 		"next_chapter_preview", prompt, "", StoryboardOverrides{})
 	if aiErr != nil {
 		logger.Errorf("[ChapterService] updateNextChapterPreview ch%d→ch%d: %v", chapter.ChapterNo, nextNo, aiErr)
@@ -3175,9 +3253,7 @@ func (s *ChapterService) generateReaderExpectations(tenantID uint, chapter *mode
 		logger.Errorf("[ChapterService] generateReaderExpectations: render template: %v", err)
 		return ""
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "reader_expectation", prompt, "", StoryboardOverrides{})
+	result, err := s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, chapter.NovelID, "reader_expectation", prompt, "", StoryboardOverrides{})
 	if err != nil {
 		logger.Errorf("[ChapterService] generateReaderExpectations ch%d: AI error: %v", chapter.ChapterNo, err)
 		return ""
@@ -3224,9 +3300,7 @@ func (s *ChapterService) generateChapterEndState(tenantID uint, chapter *model.C
 		logger.Errorf("[generateChapterEndState] render prompt error: %v", err)
 		return ""
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "chapter_end_state", prompt, "", StoryboardOverrides{})
+	result, err := s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, chapter.NovelID, "chapter_end_state", prompt, "", StoryboardOverrides{})
 	if err != nil {
 		logger.Errorf("[generateChapterEndState] ch%d AI error: %v", chapter.ChapterNo, err)
 		return ""
@@ -3280,9 +3354,7 @@ func (s *ChapterService) checkAndPatchMissingPlotPoints(tenantID uint, chapter *
 		return false
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, chapter.NovelID, "chapter_plot_compliance", prompt, "", StoryboardOverrides{})
+	result, err := s.aiService.GenerateWithProviderCtx(context.Background(), tenantID, chapter.NovelID, "chapter_plot_compliance", prompt, "", StoryboardOverrides{})
 	if err != nil {
 		logger.Errorf("[checkAndPatchMissingPlotPoints] ch%d AI error: %v", chapter.ChapterNo, err)
 		return false
@@ -3604,6 +3676,53 @@ func (s *ChapterService) RegenerateChapter(tenantID uint, id uint, req *model.Ge
 
 	// Delegate to the full generation pipeline (scene outline → full chapter → refinement → post-processing)
 	return s.GenerateChapter(tenantID, chapter.NovelID, req)
+}
+
+// ArchiveVersionBeforeRewrite saves the current chapter content as a version before rewriting.
+func (s *ChapterService) ArchiveVersionBeforeRewrite(chapterID uint, instruction string) error {
+	if s.versionRepo == nil {
+		return nil
+	}
+	chapter, err := s.chapterRepo.GetByID(chapterID)
+	if err != nil || chapter.Content == "" {
+		return err
+	}
+	nextNo := 1
+	if latest, _ := s.versionRepo.GetLatest(chapter.ID); latest != nil {
+		nextNo = latest.VersionNo + 1
+	}
+	desc := "按指令修改前自动存档"
+	if instruction != "" {
+		desc = fmt.Sprintf("按指令修改前存档：%s", instruction)
+		if len([]rune(desc)) > 100 {
+			desc = string([]rune(desc)[:100]) + "..."
+		}
+	}
+	if err := s.versionRepo.Create(&model.ChapterVersion{
+		ChapterID:         chapter.ID,
+		VersionNo:         nextNo,
+		Content:           chapter.Content,
+		ChangeType:        "rewrite",
+		ChangeDescription: desc,
+	}); err == nil {
+		_ = s.versionRepo.DeleteExcessVersions(chapter.ID, 20)
+	}
+	return nil
+}
+
+// ApplyRewrittenContent updates a chapter's content with AI-rewritten text.
+func (s *ChapterService) ApplyRewrittenContent(chapterID uint, newContent string) (*model.Chapter, error) {
+	chapter, err := s.chapterRepo.GetByID(chapterID)
+	if err != nil {
+		return nil, fmt.Errorf("chapter not found: %w", err)
+	}
+	chapter.Content = newContent
+	chapter.WordCount = len([]rune(newContent))
+	chapter.Status = "completed"
+	if err := s.chapterRepo.Update(chapter); err != nil {
+		return nil, fmt.Errorf("update chapter: %w", err)
+	}
+	return chapter, nil
 }
 
 func (s *ChapterService) ApproveChapter(id uint, comment string) error {

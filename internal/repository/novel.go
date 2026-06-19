@@ -187,6 +187,16 @@ func (r *NovelRepository) Update(novel *model.Novel) error {
 	return nil
 }
 
+// SaveVideoConfig upserts the video config for a novel (select all columns to
+// allow zero-value writes) and invalidates the novel cache.
+func (r *NovelRepository) SaveVideoConfig(vc *model.NovelVideoConfig) error {
+	if err := r.db.Select("*").Save(vc).Error; err != nil {
+		return err
+	}
+	r.invalidateCache(vc.NovelID)
+	return nil
+}
+
 // UpdateFields 更新小说指定字段（避免 Save 写零值导致数据丢失）
 func (r *NovelRepository) UpdateFields(id uint, fields map[string]interface{}) error {
 	if err := r.db.Model(&model.Novel{}).Where("id = ?", id).Updates(fields).Error; err != nil {

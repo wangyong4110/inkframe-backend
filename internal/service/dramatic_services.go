@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -76,6 +77,23 @@ func (s *HookChainService) Fulfill(id uint, actualChapter int) (*model.HookChain
 	}
 	h.IsFulfilled = true
 	h.ActualPayoffAt = actualChapter
+	if err := s.repo.Update(h); err != nil {
+		return nil, err
+	}
+	return h, nil
+}
+
+// RatePayoff 评分钩子兑现质量
+func (s *HookChainService) RatePayoff(id uint, quality int, notes string) (*model.HookChain, error) {
+	h, err := s.repo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if quality < 1 || quality > 5 {
+		return nil, fmt.Errorf("quality must be 1-5")
+	}
+	h.PayoffQuality = quality
+	h.PayoffNotes = notes
 	if err := s.repo.Update(h); err != nil {
 		return nil, err
 	}
@@ -237,7 +255,9 @@ func (s *SatisfactionPointService) GetInjectionContext(novelID uint, currentChap
 // ConflictArcService 冲突弧服务
 // ============================================
 
-var conflictPhases = []string{"setup", "escalation", "climax", "resolution"}
+// conflictPhases 三幕六阶段：铺垫→点燃→升级→转折→高潮→余震
+// 兼容旧数据：resolution→aftershock 视为同义，escalation 直接映射
+var conflictPhases = []string{"setup", "ignition", "escalation", "turning_point", "climax", "aftershock"}
 
 type ConflictArcService struct {
 	repo *repository.ConflictArcRepository
@@ -303,13 +323,22 @@ func (s *ConflictArcService) Delete(id uint) error {
 	return s.repo.Delete(id)
 }
 
-// AdvancePhase 循环推进阶段 setup→escalation→climax→resolution
+// AdvancePhase 推进阶段（三幕六阶段：setup→ignition→escalation→turning_point→climax→aftershock）
 func (s *ConflictArcService) AdvancePhase(id uint) (*model.ConflictArc, error) {
 	arc, err := s.repo.GetByID(id)
 	if err != nil {
 		return nil, err
 	}
-	nextPhase := "setup"
+	// 兼容旧数据：resolution 映射到 aftershock
+	if arc.CurrentPhase == "resolution" {
+		arc.CurrentPhase = "aftershock"
+		arc.IsResolved = true
+		if err := s.repo.Update(arc); err != nil {
+			return nil, err
+		}
+		return arc, nil
+	}
+	nextPhase := conflictPhases[0]
 	for i, p := range conflictPhases {
 		if p == arc.CurrentPhase && i+1 < len(conflictPhases) {
 			nextPhase = conflictPhases[i+1]
@@ -317,9 +346,31 @@ func (s *ConflictArcService) AdvancePhase(id uint) (*model.ConflictArc, error) {
 		}
 	}
 	arc.CurrentPhase = nextPhase
-	if nextPhase == "resolution" {
+	if nextPhase == "aftershock" {
 		arc.IsResolved = true
 	}
+	if err := s.repo.Update(arc); err != nil {
+		return nil, err
+	}
+	return arc, nil
+}
+
+// UpdateTension 更新指定阶段的张力值
+func (s *ConflictArcService) UpdateTension(id uint, phase string, level int) (*model.ConflictArc, error) {
+	arc, err := s.repo.GetByID(id)
+	if err != nil {
+		return nil, err
+	}
+	if level < 1 || level > 10 {
+		return nil, fmt.Errorf("tension level must be 1-10")
+	}
+	tensionMap := make(map[string]int)
+	if arc.TensionLevels != "" {
+		_ = json.Unmarshal([]byte(arc.TensionLevels), &tensionMap)
+	}
+	tensionMap[phase] = level
+	data, _ := json.Marshal(tensionMap)
+	arc.TensionLevels = string(data)
 	if err := s.repo.Update(arc); err != nil {
 		return nil, err
 	}
