@@ -335,16 +335,16 @@ func seedAIModels(db *gorm.DB) {
 	llmTasks := []string{"chapter", "outline", "storyboard", "quality_check", "sfx_analyze"}
 	models := []modelSeed{
 		// OpenAI
-		{"openai", "gpt-4o", "GPT-4o", llmTasks, 0.95, 4096},
-		{"openai", "gpt-4o-mini", "GPT-4o Mini", llmTasks, 0.85, 4096},
+		{"openai", "gpt-4o", "GPT-4o", llmTasks, 0.95, 16384},
+		{"openai", "gpt-4o-mini", "GPT-4o Mini", llmTasks, 0.85, 16384},
 		{"openai", "dall-e-3", "DALL-E 3", []string{"image_gen"}, 0.95, 0},
 		// Azure OpenAI — 模型名 = Azure portal 中的部署名（Deployment name）
 		// 若用户的部署名不同，可在模型管理界面修改或新增
-		{"azure", "gpt-4o", "GPT-4o（Azure）", llmTasks, 0.95, 4096},
-		{"azure", "gpt-4o-mini", "GPT-4o Mini（Azure）", llmTasks, 0.85, 4096},
-		{"azure", "gpt-4.1", "GPT-4.1（Azure）", llmTasks, 0.96, 4096},
-		{"azure", "gpt-4.1-mini", "GPT-4.1 Mini（Azure）", llmTasks, 0.88, 4096},
-		{"azure", "o3-mini", "o3-mini（Azure）", llmTasks, 0.94, 8192},
+		{"azure", "gpt-4o", "GPT-4o（Azure）", llmTasks, 0.95, 16384},
+		{"azure", "gpt-4o-mini", "GPT-4o Mini（Azure）", llmTasks, 0.85, 16384},
+		{"azure", "gpt-4.1", "GPT-4.1（Azure）", llmTasks, 0.96, 32768},
+		{"azure", "gpt-4.1-mini", "GPT-4.1 Mini（Azure）", llmTasks, 0.88, 16384},
+		{"azure", "o3-mini", "o3-mini（Azure）", llmTasks, 0.94, 65536},
 		// Anthropic
 		{"anthropic", "claude-opus-4-5", "Claude Opus 4.5", llmTasks, 0.98, 8192},
 		{"anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5", llmTasks, 0.96, 8192},
@@ -367,11 +367,11 @@ func seedAIModels(db *gorm.DB) {
 		{"meta", "Llama-4-Maverick-17B-128E-Instruct-FP8", "Llama 4 Maverick", llmTasks, 0.92, 8192},
 		{"meta", "Llama-3.3-70B-Instruct", "Llama 3.3 70B", llmTasks, 0.87, 8192},
 		// 豆包
-		{"doubao", "doubao-pro-32k", "豆包 Pro 32K", llmTasks, 0.88, 4096},
-		{"doubao", "doubao-lite-32k", "豆包 Lite 32K", llmTasks, 0.75, 4096},
+		{"doubao", "doubao-pro-32k", "豆包 Pro 32K", llmTasks, 0.88, 16384},
+		{"doubao", "doubao-lite-32k", "豆包 Lite 32K", llmTasks, 0.75, 16384},
 		{"doubao", "seedream-3-0-t2i-250415", "Seedream 3.0 文生图", []string{"image_gen"}, 0.9, 0},
 		// DeepSeek
-		{"deepseek", "deepseek-chat", "DeepSeek V3", llmTasks, 0.90, 4096},
+		{"deepseek", "deepseek-chat", "DeepSeek V3", llmTasks, 0.90, 16384},
 		{"deepseek", "deepseek-reasoner", "DeepSeek R1", llmTasks, 0.94, 8192},
 		// 通义千问
 		{"qianwen", "qwen3-max", "Qwen3 Max", llmTasks, 0.93, 8192},

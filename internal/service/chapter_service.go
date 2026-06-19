@@ -15,6 +15,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
+	"github.com/redis/go-redis/v9"
 )
 
 
@@ -70,9 +71,9 @@ type ChapterService struct {
 	timelineSvc    *TimelineService                // 可选：时间线约束注入生成 prompt
 	foreshadowRepo *repository.ForeshadowRepository // 可选：伏笔生命周期注入生成 prompt
 
-	// genLocks 防止同一章节并发生成（key: "novelID-chapterNo"）。
-	// DB 层的 AtomicSetGenerating 负责已存在占位章节的乐观锁保护；
-	// 此 sync.Map 负责进程内还未写入 DB 的并发请求保护。
+	cache    *redis.Client // optional: cross-instance chapter generation lock
+
+	// genLocks 进程内去重（无 Redis 或 Redis 出错时的兜底）
 	genLocks sync.Map
 }
 
@@ -88,6 +89,12 @@ func NewChapterService(
 		aiService:   aiService,
 		contextSvc:  contextSvc,
 	}
+}
+
+// WithRedis enables cross-instance chapter generation deduplication via Redis SETNX.
+func (s *ChapterService) WithRedis(c *redis.Client) *ChapterService {
+	s.cache = c
+	return s
 }
 
 // WithVersionRepo 注入章节版本仓库（可选，注入后手动编辑内容时自动存版本）
@@ -176,6 +183,18 @@ func (s *ChapterService) WithDramaticServices(hookSvc *HookChainService, spSvc *
 	return s
 }
 
+// chapterBelongsToTenant verifies chapter ownership via novel.TenantID (novel-based ownership).
+func (s *ChapterService) chapterBelongsToTenant(chapter *model.Chapter, tenantID uint) bool {
+	if s.novelRepo == nil {
+		return true
+	}
+	novel, err := s.novelRepo.GetByID(chapter.NovelID)
+	if err != nil {
+		return false
+	}
+	return novel.TenantID == 0 || novel.TenantID == tenantID
+}
+
 // GetDefaultProviderName 返回默认 AI provider 名称
 func (s *ChapterService) GetDefaultProviderName() string {
 	return s.aiService.GetDefaultProviderName()
@@ -219,7 +238,7 @@ func (s *ChapterService) GetChapter(id, tenantID uint) (*model.Chapter, error) {
 	if err != nil {
 		return nil, fmt.Errorf("not found")
 	}
-	if chapter.TenantID != tenantID {
+	if !s.chapterBelongsToTenant(chapter, tenantID) {
 		return nil, fmt.Errorf("not found")
 	}
 	return chapter, nil
@@ -257,19 +276,13 @@ func (s *ChapterService) UpdateChapter(id, tenantID uint, req *model.UpdateChapt
 	if err != nil {
 		return nil, fmt.Errorf("not found")
 	}
-	if chapter.TenantID != tenantID {
+	if !s.chapterBelongsToTenant(chapter, tenantID) {
 		return nil, fmt.Errorf("not found")
 	}
 	// Snapshot current content before overwriting (best-effort, ignore errors).
 	if req.Content != "" && chapter.Content != "" && s.versionRepo != nil {
-		latest, _ := s.versionRepo.GetLatest(chapter.ID)
-		nextNo := 1
-		if latest != nil {
-			nextNo = latest.VersionNo + 1
-		}
-		if err := s.versionRepo.Create(&model.ChapterVersion{
+		if err := s.versionRepo.CreateAtomic(&model.ChapterVersion{
 			ChapterID:  chapter.ID,
-			VersionNo:  nextNo,
 			Content:    chapter.Content,
 			ChangeType: "manual_edit",
 		}); err != nil {
@@ -293,7 +306,7 @@ func (s *ChapterService) DeleteChapter(id, tenantID uint) error {
 	if err != nil {
 		return fmt.Errorf("not found")
 	}
-	if chapter.TenantID != tenantID {
+	if !s.chapterBelongsToTenant(chapter, tenantID) {
 		return fmt.Errorf("not found")
 	}
 	if err := s.chapterRepo.DeleteAndRenumber(id, chapter.NovelID); err != nil {
@@ -319,7 +332,7 @@ func (s *ChapterService) BatchDeleteChapters(ctx context.Context, novelID, tenan
 			continue
 		}
 		// Verify the chapter belongs to the requested novel and tenant
-		if chapter.NovelID != novelID || chapter.TenantID != tenantID {
+		if chapter.NovelID != novelID || !s.chapterBelongsToTenant(chapter, tenantID) {
 			continue
 		}
 		if err := s.chapterRepo.DeleteAndRenumber(id, chapter.NovelID); err != nil {
@@ -593,13 +606,32 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		return nil, err
 	}
 
-	// ── 并发保护：防止同一章节被同时触发两次生成 ────────────────────────────────────────
-	// 1. 进程内 sync.Map 锁：对于尚未写入 DB 的并发请求，在内存层面排斥。
+	// ── 并发保护：防止同一章节被同时触发两次生成（跨实例） ──────────────────────────────
 	genLockKey := fmt.Sprintf("%d-%d", novelID, req.ChapterNo)
-	if _, loaded := s.genLocks.LoadOrStore(genLockKey, struct{}{}); loaded {
-		return nil, fmt.Errorf("chapter %d of novel %d is already being generated", req.ChapterNo, novelID)
+	if s.cache != nil {
+		redisKey := "lock:chgen:" + genLockKey
+		ok, err := s.cache.SetNX(context.Background(), redisKey, "1", 30*time.Minute).Result()
+		if err != nil {
+			logger.Errorf("[ChapterService] Redis SETNX for gen lock: %v, falling back to local lock", err)
+			if _, loaded := s.genLocks.LoadOrStore(genLockKey, struct{}{}); loaded {
+				return nil, fmt.Errorf("chapter %d of novel %d is already being generated", req.ChapterNo, novelID)
+			}
+			defer s.genLocks.Delete(genLockKey)
+		} else if !ok {
+			return nil, fmt.Errorf("chapter %d of novel %d is already being generated", req.ChapterNo, novelID)
+		} else {
+			s.genLocks.Store(genLockKey, struct{}{})
+			defer func() {
+				s.cache.Del(context.Background(), redisKey)
+				s.genLocks.Delete(genLockKey)
+			}()
+		}
+	} else {
+		if _, loaded := s.genLocks.LoadOrStore(genLockKey, struct{}{}); loaded {
+			return nil, fmt.Errorf("chapter %d of novel %d is already being generated", req.ChapterNo, novelID)
+		}
+		defer s.genLocks.Delete(genLockKey)
 	}
-	defer s.genLocks.Delete(genLockKey)
 
 	// 2. DB 层乐观锁：如果已有占位章节，仅当其 status 为 generating 时阻断（并发冲突）。
 	// completed 章节允许重新生成，AtomicSetGenerating 会直接将其切换回 generating。
@@ -2083,7 +2115,9 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 		if refined, err := s.narrativeSvc.RefineChapterContent(tenantID, chapter, novel.Title); err == nil && refined != chapter.Content {
 			chapter.Content = refined
 			chapter.WordCount = countChineseChars(refined)
-			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
+			if updateErr := s.chapterRepo.UpdateFields(chapter.ID, chapter.NovelID, map[string]interface{}{
+				"content": chapter.Content, "word_count": chapter.WordCount,
+			}); updateErr != nil {
 				logger.Errorf("postProcessChapter: update chapter %d [精修]: %v", chapter.ID, updateErr)
 			}
 			// P0-1: 精修可能改变人物位置/状态/心情，Step 5b 是在精修前提取的快照，
@@ -2110,7 +2144,9 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 				if refined, refErr := s.narrativeSvc.RefineChapterContent(tenantID, chapter, novel.Title); refErr == nil && refined != chapter.Content {
 					chapter.Content = refined
 					chapter.WordCount = countChineseChars(refined)
-					if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
+					if updateErr := s.chapterRepo.UpdateFields(chapter.ID, chapter.NovelID, map[string]interface{}{
+						"content": chapter.Content, "word_count": chapter.WordCount,
+					}); updateErr != nil {
 						logger.Errorf("postProcessChapter: update chapter %d [quality-refinement]: %v", chapter.ID, updateErr)
 					}
 					// P0-1: quality refinement changes content → refresh snapshots so the next chapter
@@ -2131,16 +2167,15 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 				}
 			}
 			if stillLow {
-				// Fetch fresh copy to avoid overwriting concurrent field updates
-				if fresh, fetchErr := s.chapterRepo.GetByID(chapter.ID); fetchErr == nil {
-					fresh.QualityStatus = "low"
-					fresh.QualityIssues = report.SummarizeIssues()
-					if updateErr := s.chapterRepo.Update(fresh); updateErr != nil {
-						logger.Errorf("postProcessChapter: update chapter %d [quality-status]: %v", chapter.ID, updateErr)
-					} else {
-						logger.Printf("[ChapterService] chapter %d saved with low quality status", chapter.ChapterNo)
-					}
-					chapter = fresh
+				issues := report.SummarizeIssues()
+				if updateErr := s.chapterRepo.UpdateFields(chapter.ID, chapter.NovelID, map[string]interface{}{
+					"quality_status": "low", "quality_issues": issues,
+				}); updateErr != nil {
+					logger.Errorf("postProcessChapter: update chapter %d [quality-status]: %v", chapter.ID, updateErr)
+				} else {
+					chapter.QualityStatus = "low"
+					chapter.QualityIssues = issues
+					logger.Printf("[ChapterService] chapter %d saved with low quality status", chapter.ChapterNo)
 				}
 			}
 		} else if qErr != nil {
@@ -2166,7 +2201,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 		}
 		if summaryText != "" {
 			chapter.Summary = summaryText
-			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
+			if updateErr := s.chapterRepo.UpdateSummary(chapter.ID, chapter.NovelID, summaryText); updateErr != nil {
 				logger.Errorf("postProcessChapter: update chapter %d [摘要]: %v", chapter.ID, updateErr)
 			}
 		} else {
@@ -2179,7 +2214,9 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 	if s.narrativeSvc != nil && chapter.Title == defaultTitle && chapter.Summary != "" {
 		if title, err := s.narrativeSvc.GenerateChapterTitle(tenantID, chapter, novel.Genre, chapter.EmotionalTone); err == nil && title != "" {
 			chapter.Title = fmt.Sprintf("第%d章 %s", chapter.ChapterNo, title)
-			if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
+			if updateErr := s.chapterRepo.UpdateFields(chapter.ID, chapter.NovelID, map[string]interface{}{
+				"title": chapter.Title,
+			}); updateErr != nil {
 				logger.Errorf("postProcessChapter: update chapter %d [标题]: %v", chapter.ID, updateErr)
 			}
 		}
@@ -2292,14 +2329,13 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 			}
 		}
 		if expectations != "" {
-			if fresh, fetchErr := s.chapterRepo.GetByID(chapter.ID); fetchErr == nil {
-				fresh.ReaderExpectations = expectations
-				if updateErr := s.chapterRepo.Update(fresh); updateErr != nil {
-					logger.Errorf("postProcessChapter: update chapter %d [reader_expectations]: %v", chapter.ID, updateErr)
-				} else {
-					chapter = fresh
-					logger.Printf("[ChapterService] reader_expectations generated for ch%d", chapter.ChapterNo)
-				}
+			if updateErr := s.chapterRepo.UpdateFields(chapter.ID, chapter.NovelID, map[string]interface{}{
+				"reader_expectations": expectations,
+			}); updateErr != nil {
+				logger.Errorf("postProcessChapter: update chapter %d [reader_expectations]: %v", chapter.ID, updateErr)
+			} else {
+				chapter.ReaderExpectations = expectations
+				logger.Printf("[ChapterService] reader_expectations generated for ch%d", chapter.ChapterNo)
 			}
 		} else {
 			logger.Errorf("[ChapterService] WARNING: reader_expectations ch%d failed after 3 attempts", chapter.ChapterNo)
@@ -2312,14 +2348,13 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 	// 独立成篇模式：章章独立，无需下章接续，跳过章末状态快照生成。
 	if novel.ChapterMode != "independent" && chapter.Content != "" {
 		if endState := s.generateChapterEndState(tenantID, chapter, novel); endState != "" {
-			if fresh, fetchErr := s.chapterRepo.GetByID(chapter.ID); fetchErr == nil {
-				fresh.ChapterEndState = endState
-				if updateErr := s.chapterRepo.Update(fresh); updateErr != nil {
-					logger.Errorf("postProcessChapter: update chapter %d [chapter_end_state_refined]: %v", chapter.ID, updateErr)
-				} else {
-					chapter = fresh
-					logger.Printf("[ChapterService] chapter_end_state refreshed after refinement for ch%d", chapter.ChapterNo)
-				}
+			if updateErr := s.chapterRepo.UpdateFields(chapter.ID, chapter.NovelID, map[string]interface{}{
+				"chapter_end_state": endState,
+			}); updateErr != nil {
+				logger.Errorf("postProcessChapter: update chapter %d [chapter_end_state_refined]: %v", chapter.ID, updateErr)
+			} else {
+				chapter.ChapterEndState = endState
+				logger.Printf("[ChapterService] chapter_end_state refreshed after refinement for ch%d", chapter.ChapterNo)
 			}
 		}
 	}
@@ -2334,7 +2369,9 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 				chapter.ChapterNo, len(meta.plotPoints))
 			if fresh, fetchErr := s.chapterRepo.GetByID(chapter.ID); fetchErr == nil {
 				if patched := s.checkAndPatchMissingPlotPoints(tenantID, fresh, novel, meta.plotPoints); patched {
-					if updateErr := s.chapterRepo.Update(fresh); updateErr != nil {
+					if updateErr := s.chapterRepo.UpdateFields(fresh.ID, fresh.NovelID, map[string]interface{}{
+						"content": fresh.Content, "word_count": fresh.WordCount,
+					}); updateErr != nil {
 						logger.Errorf("postProcessChapter: update chapter %d [plot_compliance_patch]: %v", chapter.ID, updateErr)
 					} else {
 						chapter = fresh
@@ -2344,13 +2381,12 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 						// 精修后才重新生成 ChapterEndState，确保快照基于最终定稿内容。
 						if s.narrativeSvc != nil {
 							if refined2, refErr := s.narrativeSvc.RefineChapterContent(tenantID, chapter, novel.Title); refErr == nil && refined2 != chapter.Content {
-								if patchRefined, fetchErr3 := s.chapterRepo.GetByID(chapter.ID); fetchErr3 == nil {
-									patchRefined.Content = refined2
-									patchRefined.WordCount = countChineseChars(refined2)
-									if updateErr3 := s.chapterRepo.Update(patchRefined); updateErr3 == nil {
-										chapter = patchRefined
-										logger.Printf("[ChapterService] patch content refined for ch%d", chapter.ChapterNo)
-									}
+								chapter.Content = refined2
+								chapter.WordCount = countChineseChars(refined2)
+								if updateErr3 := s.chapterRepo.UpdateFields(chapter.ID, chapter.NovelID, map[string]interface{}{
+									"content": chapter.Content, "word_count": chapter.WordCount,
+								}); updateErr3 == nil {
+									logger.Printf("[ChapterService] patch content refined for ch%d", chapter.ChapterNo)
 								}
 							} else if refErr != nil {
 								logger.Errorf("[ChapterService] patch refinement ch%d (non-fatal): %v", chapter.ChapterNo, refErr)
@@ -2359,12 +2395,11 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 						// 补写（并精修）改变了章末内容，必须重新生成章末状态快照，
 						// 否则下一章 getPreviousChapterEnding 会读到已过时的快照。
 						if endState := s.generateChapterEndState(tenantID, chapter, novel); endState != "" {
-							if patchFresh, fetchErr2 := s.chapterRepo.GetByID(chapter.ID); fetchErr2 == nil {
-								patchFresh.ChapterEndState = endState
-								if updateErr2 := s.chapterRepo.Update(patchFresh); updateErr2 == nil {
-									chapter = patchFresh
-									logger.Printf("[ChapterService] chapter_end_state refreshed after plot patch for ch%d", chapter.ChapterNo)
-								}
+							if updateErr2 := s.chapterRepo.UpdateFields(chapter.ID, chapter.NovelID, map[string]interface{}{
+								"chapter_end_state": endState,
+							}); updateErr2 == nil {
+								chapter.ChapterEndState = endState
+								logger.Printf("[ChapterService] chapter_end_state refreshed after plot patch for ch%d", chapter.ChapterNo)
 							}
 						}
 					}
@@ -3640,19 +3675,14 @@ func (s *ChapterService) RegenerateChapter(tenantID uint, id uint, req *model.Ge
 	if err != nil {
 		return nil, fmt.Errorf("chapter not found")
 	}
-	if chapter.TenantID != tenantID {
+	if !s.chapterBelongsToTenant(chapter, tenantID) {
 		return nil, fmt.Errorf("not found")
 	}
 
 	// Save current content as a version before overwriting
 	if s.versionRepo != nil && chapter.Content != "" {
-		nextNo := 1
-		if latest, _ := s.versionRepo.GetLatest(chapter.ID); latest != nil {
-			nextNo = latest.VersionNo + 1
-		}
-		if err := s.versionRepo.Create(&model.ChapterVersion{
+		if err := s.versionRepo.CreateAtomic(&model.ChapterVersion{
 			ChapterID:         chapter.ID,
-			VersionNo:         nextNo,
 			Content:           chapter.Content,
 			ChangeType:        "generation",
 			ChangeDescription: "重新生成前自动存档",
@@ -3687,10 +3717,6 @@ func (s *ChapterService) ArchiveVersionBeforeRewrite(chapterID uint, instruction
 	if err != nil || chapter.Content == "" {
 		return err
 	}
-	nextNo := 1
-	if latest, _ := s.versionRepo.GetLatest(chapter.ID); latest != nil {
-		nextNo = latest.VersionNo + 1
-	}
 	desc := "按指令修改前自动存档"
 	if instruction != "" {
 		desc = fmt.Sprintf("按指令修改前存档：%s", instruction)
@@ -3698,9 +3724,8 @@ func (s *ChapterService) ArchiveVersionBeforeRewrite(chapterID uint, instruction
 			desc = string([]rune(desc)[:100]) + "..."
 		}
 	}
-	if err := s.versionRepo.Create(&model.ChapterVersion{
+	if err := s.versionRepo.CreateAtomic(&model.ChapterVersion{
 		ChapterID:         chapter.ID,
-		VersionNo:         nextNo,
 		Content:           chapter.Content,
 		ChangeType:        "rewrite",
 		ChangeDescription: desc,

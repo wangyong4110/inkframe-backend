@@ -103,14 +103,17 @@ func (s *SkillService) BatchDeleteSkills(novelID uint, ids []uint) error {
 	return s.skillRepo.BatchDeleteByNovel(novelID, ids)
 }
 
-// DeleteSkill 删除技能（含租户校验）
+// DeleteSkill 删除技能（含租户校验：通过小说归属验证，而非直接比较 skill.TenantID）
 func (s *SkillService) DeleteSkill(id, tenantID uint) error {
 	skill, err := s.skillRepo.GetByID(id)
 	if err != nil {
 		return fmt.Errorf("not found")
 	}
-	if skill.TenantID != tenantID {
-		return fmt.Errorf("not found")
+	if s.novelRepo != nil {
+		novel, err := s.novelRepo.GetByID(skill.NovelID)
+		if err != nil || (novel.TenantID != 0 && novel.TenantID != tenantID) {
+			return fmt.Errorf("not found")
+		}
 	}
 	return s.skillRepo.Delete(id)
 }

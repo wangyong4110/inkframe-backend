@@ -411,7 +411,11 @@ func (h *ItemHandler) AIExtractChapterItems(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "chapter not found")
 		return
 	}
-	items, err := h.itemService.AIExtractChapterItems(getTenantID(c), uint(novelID), chapter.ID)
+	var body struct {
+		UserPrompt string `json:"user_prompt"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	items, err := h.itemService.AIExtractChapterItems(getTenantID(c), uint(novelID), chapter.ID, body.UserPrompt)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to extract chapter items: "+err.Error())
 		return

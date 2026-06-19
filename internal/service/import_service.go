@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 	"golang.org/x/text/encoding/simplifiedchinese"
 	"golang.org/x/text/transform"
 	"gorm.io/gorm"
@@ -111,6 +112,7 @@ type NovelImportService struct {
 	aiService          *AIService
 	notifSvc           *NotificationService // 可选，用于爬取完成通知
 	crawlJobRepo       *repository.NovelCrawlJobRepository
+	cache              *redis.Client // optional: cross-instance crawl progress sharing
 	crawlProgress      sync.Map // novelID(uint) → *CrawlProgress
 	crawlDoneCallbacks sync.Map // novelID(uint) → func()
 	db                 *gorm.DB // optional: used for transactional novel+chapter creation
@@ -171,6 +173,31 @@ func (s *NovelImportService) WithDB(db *gorm.DB) *NovelImportService {
 	return s
 }
 
+// WithRedis injects a Redis client for cross-instance crawl progress sharing.
+func (s *NovelImportService) WithRedis(c *redis.Client) *NovelImportService {
+	s.cache = c
+	return s
+}
+
+// crawlProgressRedisKey returns the Redis key for crawl progress of a novel.
+func crawlProgressRedisKey(novelID uint) string {
+	return fmt.Sprintf("crawl:progress:%d", novelID)
+}
+
+// storeCrawlProgressToRedis writes the current progress snapshot to Redis (best-effort).
+func (s *NovelImportService) storeCrawlProgressToRedis(p *CrawlProgress) {
+	if s.cache == nil {
+		return
+	}
+	p.mu.RLock()
+	b, err := json.Marshal(p)
+	p.mu.RUnlock()
+	if err != nil {
+		return
+	}
+	s.cache.Set(context.Background(), crawlProgressRedisKey(p.NovelID), b, 2*time.Hour) //nolint:errcheck
+}
+
 // RegisterCrawlDoneCallback 注册爬取完成回调（一次性，触发后自动移除）
 func (s *NovelImportService) RegisterCrawlDoneCallback(novelID uint, fn func()) {
 	s.crawlDoneCallbacks.Store(novelID, fn)
@@ -210,7 +237,7 @@ func contentTypeFromFilename(name string) string {
 	}
 }
 
-// GetCrawlProgress 获取爬取进度（先查内存，再查数据库）
+// GetCrawlProgress 获取爬取进度（先查本地内存，再查 Redis，最后查数据库）
 func (s *NovelImportService) GetCrawlProgress(novelID uint) (*CrawlProgress, error) {
 	if v, ok := s.crawlProgress.Load(novelID); ok {
 		p := v.(*CrawlProgress)
@@ -229,6 +256,15 @@ func (s *NovelImportService) GetCrawlProgress(novelID uint) (*CrawlProgress, err
 		}
 		p.mu.RUnlock()
 		return cp, nil
+	}
+	// 本地无记录，尝试从 Redis 读取（另一实例正在爬取）
+	if s.cache != nil {
+		if raw, err := s.cache.Get(context.Background(), crawlProgressRedisKey(novelID)).Bytes(); err == nil {
+			var cp CrawlProgress
+			if json.Unmarshal(raw, &cp) == nil {
+				return &cp, nil
+			}
+		}
 	}
 	// 内存中无记录，查询数据库判断是否有待爬取章节
 	pending, err := s.chapterRepo.ListPendingCrawl(novelID)
@@ -392,6 +428,8 @@ func (s *NovelImportService) crawlChaptersBackground(
 			progress.ElapsedSecs = elapsed
 			progress.SpeedCPS = speedCPS
 			progress.mu.Unlock()
+			// Sync progress to Redis so other instances can observe it.
+			s.storeCrawlProgressToRedis(progress)
 		}
 
 		// AI summary generation after chapter fetch
@@ -434,6 +472,8 @@ func (s *NovelImportService) crawlChaptersBackground(
 	finalStatus := progress.Status
 	progress.mu.Unlock()
 	logger.Printf("[Crawl] novel=%d finished: done=%d failed=%d status=%s", novelID, finalDone, finalFailed, finalStatus)
+	// Persist final status to Redis (shorter TTL — result only needs to be readable briefly).
+	s.storeCrawlProgressToRedis(progress)
 
 	// 持久化最终状态到 DB
 	if jobID > 0 && s.crawlJobRepo != nil {

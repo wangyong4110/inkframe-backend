@@ -168,18 +168,24 @@ func (s *SceneAnchorService) Delete(id uint) error {
 func (s *SceneAnchorService) SetRefImage(id uint, imageURL string, shotID *uint) error {
 	anchor, err := s.repo.GetByID(id)
 	if err != nil {
+		logger.Errorf("[SceneAnchorService] SetRefImage: getByID id=%d: %v", id, err)
 		return err
 	}
 	anchor.RefImageURL = imageURL
 	now := time.Now()
 	anchor.RefImageLockedAt = &now
-	return s.repo.Update(anchor)
+	if err := s.repo.Update(anchor); err != nil {
+		logger.Errorf("[SceneAnchorService] SetRefImage: update id=%d: %v", id, err)
+		return err
+	}
+	return nil
 }
 
 // AutoSetRefImage 首次自动锁定参考图（仅当 RefImageURL 为空时更新）
 func (s *SceneAnchorService) AutoSetRefImage(id uint, imageURL string) error {
 	anchor, err := s.repo.GetByID(id)
 	if err != nil {
+		logger.Errorf("[SceneAnchorService] AutoSetRefImage: getByID id=%d: %v", id, err)
 		return err
 	}
 	if anchor.RefImageURL != "" {
@@ -188,7 +194,11 @@ func (s *SceneAnchorService) AutoSetRefImage(id uint, imageURL string) error {
 	anchor.RefImageURL = imageURL
 	now := time.Now()
 	anchor.RefImageLockedAt = &now
-	return s.repo.Update(anchor)
+	if err := s.repo.Update(anchor); err != nil {
+		logger.Errorf("[SceneAnchorService] AutoSetRefImage: update id=%d: %v", id, err)
+		return err
+	}
+	return nil
 }
 
 // BuildPromptFragment 返回拼接好的 prompt 片段和参考图URL
@@ -238,7 +248,20 @@ type extractAnchorResponse struct {
 // 新格式：{"new_anchors":[...],"appearing_anchors":[...]}
 // 旧格式（向后兼容）：bare array [...]
 func parseExtractAnchorResponse(raw string) (extractAnchorResponse, error) {
-	cleaned := extractJSONObject(strings.TrimSpace(raw))
+	trimmed := strings.TrimSpace(raw)
+
+	// Detect top-level JSON type before extracting.
+	// When the LLM returns a bare array [...], extractJSONObject would truncate
+	// it to the first element object {…}, causing the streaming-decoder fallback
+	// (step 3) to spin indefinitely on object-internal ':' / ',' tokens that
+	// dec.More() cannot distinguish from array separators.
+	firstSig := strings.IndexAny(trimmed, "[{")
+	var cleaned string
+	if firstSig >= 0 && trimmed[firstSig] == '[' {
+		cleaned = extractJSON(trimmed) // preserves full bare array
+	} else {
+		cleaned = extractJSONObject(trimmed) // preserves full object
+	}
 
 	// 1. 尝试新对象格式
 	var resp extractAnchorResponse
@@ -252,28 +275,33 @@ func parseExtractAnchorResponse(raw string) (extractAnchorResponse, error) {
 		return extractAnchorResponse{NewAnchors: arr}, nil
 	}
 
-	// 3. 部分恢复：streaming decoder on array
-	dec := json.NewDecoder(strings.NewReader(cleaned))
-	if _, err := dec.Token(); err == nil {
-		var partial []extractedAnchor
-		for dec.More() {
-			var item extractedAnchor
-			if err := dec.Decode(&item); err == nil && item.Name != "" {
-				partial = append(partial, item)
+	// 3. 部分恢复：streaming decoder — only for arrays.
+	// Never run on objects: dec.More() returns true for ':' and ',' tokens
+	// inside an object context, causing Decode to spin without advancing.
+	if strings.HasPrefix(strings.TrimSpace(cleaned), "[") {
+		dec := json.NewDecoder(strings.NewReader(cleaned))
+		if _, err := dec.Token(); err == nil {
+			var partial []extractedAnchor
+			for dec.More() {
+				var item extractedAnchor
+				if err := dec.Decode(&item); err == nil && item.Name != "" {
+					partial = append(partial, item)
+				}
 			}
-		}
-		if len(partial) > 0 {
-			logger.Printf("[SceneAnchor] partial JSON recovery: got %d anchors", len(partial))
-			return extractAnchorResponse{NewAnchors: partial}, nil
+			if len(partial) > 0 {
+				logger.Printf("[SceneAnchor] partial JSON recovery: got %d anchors", len(partial))
+				return extractAnchorResponse{NewAnchors: partial}, nil
+			}
 		}
 	}
 
 	return extractAnchorResponse{}, fmt.Errorf("anchor JSON fully unparseable: %.200s", raw)
 }
 
-// ExtractFromChapter 调用 LLM 提取章节中的场景锚点，去重后批量创建
-func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, novelID uint, novelTitle, chapterContent string, chapterID ...uint) ([]*model.SceneAnchor, error) {
-	logger.Printf("[SceneAnchorService] ExtractFromChapter: tenantID=%d novelID=%d chapterID=%v contentLen=%d",
+// ExtractFromChapter 调用 LLM 提取章节中的场景锚点，去重后批量创建。
+// chapterID=0 表示不绑定章节；userPrompt 为空表示无附加指令。
+func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, novelID uint, novelTitle, chapterContent string, chapterID uint, userPrompt string) ([]*model.SceneAnchor, error) {
+	logger.Printf("[SceneAnchorService] ExtractFromChapter: tenantID=%d novelID=%d chapterID=%d contentLen=%d",
 		tenantID, novelID, chapterID, len(chapterContent))
 
 	// 获取已存在锚点（去重用 + appearing 绑定用）
@@ -314,6 +342,7 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 		"ExistingAnchors": existingEntries,
 		"ChapterContent":  truncateForPrompt(chapterContent, 8000),
 		"PromptLanguage":  promptLanguage,
+		"UserPrompt":      userPrompt,
 	})
 	if err != nil {
 		logger.Errorf("[SceneAnchorService] ExtractFromChapter: render prompt failed: %v", err)
@@ -386,12 +415,12 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 		existingNameToID[strings.ToLower(e.Name)] = anchor.ID
 	}
 
-	logger.Printf("[SceneAnchorService] ExtractFromChapter done: novelID=%d created=%d appearing=%d chapterID=%v",
+	logger.Printf("[SceneAnchorService] ExtractFromChapter done: novelID=%d created=%d appearing=%d chapterID=%d",
 		novelID, len(created), len(parsed.AppearingAnchors), chapterID)
 
 	// 若传入 chapterID，绑定新建锚点 + appearing 已有锚点到该章节
-	if len(chapterID) > 0 && chapterID[0] > 0 {
-		chapID := chapterID[0]
+	if chapterID > 0 {
+		chapID := chapterID
 		if s.chapterSceneAnchorRepo == nil {
 			logger.Errorf("[SceneAnchorService] chapterSceneAnchorRepo is nil, skipping chapter bindings for chapterID=%d", chapID)
 		} else {
@@ -445,8 +474,10 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 
 // GenerateRefImage 使用 AI 图像生成为锚点生成参考图并锁定
 func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id uint, providerName string) (*model.SceneAnchor, error) {
+	logger.Printf("[SceneAnchorService] GenerateRefImage: tenantID=%d anchorID=%d provider=%s", tenantID, id, providerName)
 	anchor, err := s.repo.GetByID(id)
 	if err != nil {
+		logger.Errorf("[SceneAnchorService] GenerateRefImage: getByID id=%d: %v", id, err)
 		return nil, fmt.Errorf("anchor not found: %w", err)
 	}
 
@@ -454,7 +485,9 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	imageStyle := ""
 	aspectRatio := ""
 	if s.novelRepo != nil {
-		if novel, err := s.novelRepo.GetByID(anchor.NovelID); err == nil {
+		if novel, nErr := s.novelRepo.GetByID(anchor.NovelID); nErr != nil {
+			logger.Errorf("[SceneAnchorService] GenerateRefImage: fetch novel novelID=%d: %v (using defaults)", anchor.NovelID, nErr)
+		} else {
 			imageStyle = novel.ImageStyle
 			aspectRatio = novel.VideoConf().VideoAspectRatio
 			if novel.Title != "" {
@@ -490,21 +523,26 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	sizeOverride := imageAspectRatioToSize(aspectRatio, "master")
 	imageURL, err := s.aiSvc.GenerateCharacterThreeView(ctx, tenantID, providerName, prompt, "", imageStyle, "", sizeOverride)
 	if err != nil {
+		logger.Errorf("[SceneAnchorService] GenerateRefImage: AI generate failed anchorID=%d: %v", id, err)
 		return nil, fmt.Errorf("generate ref image: %w", err)
 	}
 
 	if err := s.SetRefImage(id, imageURL, nil); err != nil {
+		logger.Errorf("[SceneAnchorService] GenerateRefImage: save ref image anchorID=%d url=%s: %v", id, imageURL, err)
 		return nil, fmt.Errorf("save ref image: %w", err)
 	}
 
+	logger.Printf("[SceneAnchorService] GenerateRefImage: done anchorID=%d url=%s", id, imageURL)
 	return s.repo.GetByID(id)
 }
 
 // EditRefImageWithInstruction 以文生图模型（DreamO）重新生成参考图，原图作为参考保持风格一致性。
 // instruction 为自然语言提示词，如"让场景更暗，增加烟雾"
 func (s *SceneAnchorService) EditRefImageWithInstruction(ctx context.Context, tenantID, id uint, instruction string) (*model.SceneAnchor, error) {
+	logger.Printf("[SceneAnchorService] EditRefImageWithInstruction: tenantID=%d anchorID=%d instruction=%.100s", tenantID, id, instruction)
 	anchor, err := s.repo.GetByID(id)
 	if err != nil {
+		logger.Errorf("[SceneAnchorService] EditRefImageWithInstruction: getByID id=%d: %v", id, err)
 		return nil, fmt.Errorf("anchor not found: %w", err)
 	}
 	if anchor.RefImageURL == "" {
@@ -527,10 +565,12 @@ func (s *SceneAnchorService) EditRefImageWithInstruction(ctx context.Context, te
 		imageStyle, "", "", 0.7,
 	)
 	if err != nil {
+		logger.Errorf("[SceneAnchorService] EditRefImageWithInstruction: AI generate failed anchorID=%d: %v", id, err)
 		return nil, fmt.Errorf("edit ref image: %w", err)
 	}
 
 	if err := s.SetRefImage(id, imageURL, nil); err != nil {
+		logger.Errorf("[SceneAnchorService] EditRefImageWithInstruction: save edited ref image anchorID=%d: %v", id, err)
 		return nil, fmt.Errorf("save edited ref image: %w", err)
 	}
 	logger.Printf("[SceneAnchorService] EditRefImageWithInstruction: anchor %d edited, url=%s", id, imageURL)
@@ -650,7 +690,7 @@ func (s *SceneAnchorService) AIExtractAllFromNovel(ctx context.Context, tenantID
 		wg.Add(1)
 		go func() {
 			defer func() { <-sem; wg.Done() }()
-			anchors, err := s.ExtractFromChapter(ctx, tenantID, novelID, novelTitle, ch.Content)
+			anchors, err := s.ExtractFromChapter(ctx, tenantID, novelID, novelTitle, ch.Content, 0, "")
 			mu.Lock()
 			done++
 			if err != nil {
@@ -667,9 +707,12 @@ func (s *SceneAnchorService) AIExtractAllFromNovel(ctx context.Context, tenantID
 		}()
 	}
 	wg.Wait()
-	logger.Printf("[SceneAnchorService] AIExtractAllFromNovel done: novelID=%d created=%d", novelID, len(allCreated))
+	logger.Printf("[SceneAnchorService] AIExtractAllFromNovel done: novelID=%d total=%d created=%d failed=%d", novelID, total, len(allCreated), failCount)
 	if failCount == len(candidates) {
 		return nil, fmt.Errorf("所有章节场景锚点提取均失败，请检查 AI 提供商配置")
+	}
+	if failCount > 0 {
+		logger.Errorf("[SceneAnchorService] AIExtractAllFromNovel: partial failure novelID=%d failed=%d/%d", novelID, failCount, total)
 	}
 	return allCreated, nil
 }

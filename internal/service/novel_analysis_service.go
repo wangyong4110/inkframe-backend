@@ -487,7 +487,7 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 						go func() {
 							defer func() { <-sem; wg.Done() }()
 							logger.Printf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: ch%d extracting...", novel.ID, ch.ChapterNo)
-							anchors, err := s.sceneAnchorService.ExtractFromChapter(bgCtx, tenantID, novel.ID, novel.Title, capturedText)
+							anchors, err := s.sceneAnchorService.ExtractFromChapter(bgCtx, tenantID, novel.ID, novel.Title, capturedText, 0, "")
 							if err != nil {
 								logger.Warnf("NovelAnalysis[%d]: Phase4.5 [3/4] scene anchors: ch%d failed (non-fatal): %v", novel.ID, ch.ChapterNo, err)
 							} else {
@@ -973,6 +973,13 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 			VoiceLanguage: suggestedLang,
 			Status:        "active",
 		}
+		// DB 级兜底：AIExtractMinorChars 可能与本函数并发运行（两者持有不同的锁），
+		// 需在 Create 前最后确认 (novel_id, name) 确实不存在。
+		if dup, _ := s.characterRepo.FindByNovelAndName(novel.ID, c.Name); dup != nil {
+			logger.Printf("[NovelAnalysis] stepExtractCharacters: DB dedup: %q already exists (id=%d), skipping", c.Name, dup.ID)
+			existingNames[strings.ToLower(c.Name)] = true
+			continue
+		}
 		if err := s.characterRepo.Create(char); err != nil {
 			logger.Errorf("NovelAnalysis: create character %q: %v", c.Name, err)
 			continue
@@ -1435,7 +1442,7 @@ func (s *NovelAnalysisService) stepExtractSceneAnchors(
 		wg.Add(1)
 		go func() {
 			defer func() { <-sem; wg.Done() }()
-			anchors, err := s.sceneAnchorService.ExtractFromChapter(ctx, tenantID, novel.ID, novel.Title, ct.text)
+			anchors, err := s.sceneAnchorService.ExtractFromChapter(ctx, tenantID, novel.ID, novel.Title, ct.text, 0, "")
 			if err != nil {
 				if ctx.Err() != nil {
 					logger.Warnf("NovelAnalysis[%d]: ExtractSceneAnchors ch%d cancelled: %v", novel.ID, ct.ch.ChapterNo, ctx.Err())

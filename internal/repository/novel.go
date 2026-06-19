@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
@@ -13,10 +14,19 @@ import (
 	"gorm.io/gorm"
 )
 
+// novelCall 用于 singleflight：持有一次 DB 查询的结果和同步通道
+type novelCall struct {
+	wg    sync.WaitGroup
+	novel *model.Novel
+	err   error
+}
+
 // NovelRepository 小说仓库
 type NovelRepository struct {
 	db    *gorm.DB
 	cache *redis.Client
+	// inflight 用于 singleflight：对同一 novel_id 的并发 cache miss 只发起一次 DB 查询
+	inflight sync.Map // key: uint novel_id → *novelCall
 }
 
 const novelCacheTTL = 30 * time.Minute
@@ -41,7 +51,7 @@ func (r *NovelRepository) Create(novel *model.Novel) error {
 	return nil
 }
 
-// GetByID 根据ID获取小说
+// GetByID 根据ID获取小说（Redis 缓存 + singleflight 防 DB 击穿）
 func (r *NovelRepository) GetByID(id uint) (*model.Novel, error) {
 	// 1. 尝试 Redis 缓存
 	if r.cache != nil {
@@ -54,11 +64,28 @@ func (r *NovelRepository) GetByID(id uint) (*model.Novel, error) {
 		}
 	}
 
-	// 2. 查 DB
+	// 2. Singleflight：同一进程内对相同 novel_id 的并发 cache miss 只发起一次 DB 查询。
+	//    LoadOrStore 返回已有 call → 等待它完成并共享结果；否则自己做 DB 查询。
+	call := &novelCall{}
+	call.wg.Add(1)
+	if actual, loaded := r.inflight.LoadOrStore(id, call); loaded {
+		// 等待先到的 goroutine 完成
+		existing := actual.(*novelCall)
+		existing.wg.Wait()
+		return existing.novel, existing.err
+	}
+	// 自己执行 DB 查询，完成后广播结果
+	defer func() {
+		call.wg.Done()
+		r.inflight.Delete(id)
+	}()
+
 	var novel model.Novel
 	if err := r.db.Preload("Worldview").Preload("VideoConfig").First(&novel, id).Error; err != nil {
+		call.err = err
 		return nil, err
 	}
+	call.novel = &novel
 
 	// 3. 写入缓存
 	if r.cache != nil {
@@ -757,4 +784,24 @@ func (r *NovelOutlineVersionRepository) MaxVersion(novelID uint) (int, error) {
 	err := r.db.Model(&model.NovelOutlineVersion{}).Where("novel_id = ?", novelID).
 		Select("COALESCE(MAX(version),0)").Scan(&v).Error
 	return v, err
+}
+
+// CreateVersionAtomic assigns a monotonic version number and persists the record in a single
+// transaction, eliminating the read-then-write race when multiple instances run concurrently.
+func (r *NovelOutlineVersionRepository) CreateVersionAtomic(v *model.NovelOutlineVersion) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var maxNo struct{ V *int }
+		if err := tx.Raw(
+			"SELECT COALESCE(MAX(version), 0) AS v FROM ink_novel_outline_version WHERE novel_id = ? FOR UPDATE",
+			v.NovelID,
+		).Scan(&maxNo).Error; err != nil {
+			return err
+		}
+		if maxNo.V == nil {
+			v.Version = 1
+		} else {
+			v.Version = *maxNo.V + 1
+		}
+		return tx.Create(v).Error
+	})
 }

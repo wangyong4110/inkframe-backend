@@ -19,6 +19,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/storage"
+	"github.com/redis/go-redis/v9"
 )
 
 type AIService struct {
@@ -35,6 +36,13 @@ type AIService struct {
 	semMu         sync.RWMutex  // protects imageSem replacement
 	stopCh        chan struct{} // closed by Shutdown() to stop background goroutines
 	encKey        string       // AES-256-GCM key for decrypting stored API credentials
+	cache         redisPublisher // optional: for cross-instance provider cache invalidation
+}
+
+// redisPublisher is the subset of redis.Client used by AIService (allows nil-safe injection).
+type redisPublisher interface {
+	Publish(ctx context.Context, channel string, message interface{}) *redis.IntCmd
+	Subscribe(ctx context.Context, channels ...string) *redis.PubSub
 }
 
 func NewAIService(
@@ -477,16 +485,55 @@ func (s *AIService) CheckAvailability(tenantID uint) error {
 	return err
 }
 
-// InvalidateProviderCache 删除指定提供商在所有租户下的缓存，供 DeleteProvider/UpdateProvider 调用。
-func (s *AIService) InvalidateProviderCache(providerName string) {
+// WithRedis 注入 Redis 客户端，用于跨实例 provider 缓存失效广播。
+// 可选：不注入时退化为单实例行为（仅清本实例内存缓存）。
+func (s *AIService) WithRedis(c *redis.Client) *AIService {
+	s.cache = c
+	if c != nil {
+		go s.startProviderInvalidateSubscriber()
+	}
+	return s
+}
+
+const redisChanProviderInvalidate = "inkframe:provider:invalidate"
+
+// startProviderInvalidateSubscriber 订阅 Redis 频道，收到消息后清除本实例的 provider 缓存。
+func (s *AIService) startProviderInvalidateSubscriber() {
+	sub := s.cache.Subscribe(context.Background(), redisChanProviderInvalidate)
+	defer sub.Close()
+	ch := sub.Channel()
+	for {
+		select {
+		case msg, ok := <-ch:
+			if !ok {
+				return
+			}
+			s.invalidateLocalProviderCache(msg.Payload)
+		case <-s.stopCh:
+			return
+		}
+	}
+}
+
+// invalidateLocalProviderCache 仅清除本实例内存缓存（不发布 Pub/Sub，防止循环）。
+func (s *AIService) invalidateLocalProviderCache(providerName string) {
 	s.providerCache.Range(func(k, _ any) bool {
 		key, ok := k.(string)
-		// key format: "tenantID:providerName"
 		if ok && strings.HasSuffix(key, ":"+providerName) {
 			s.providerCache.Delete(k)
 		}
 		return true
 	})
+}
+
+// InvalidateProviderCache 清除本实例缓存并向其它实例广播失效通知。
+// 供 DeleteProvider/UpdateProvider 调用。
+func (s *AIService) InvalidateProviderCache(providerName string) {
+	s.invalidateLocalProviderCache(providerName)
+	// 广播给其它实例（Redis Pub/Sub）
+	if s.cache != nil {
+		_ = s.cache.Publish(context.Background(), redisChanProviderInvalidate, providerName).Err()
+	}
 }
 
 // GenerateWithProvider 使用指定 Provider 生成内容（providerName 为空则使用默认）

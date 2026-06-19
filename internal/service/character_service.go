@@ -12,6 +12,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
+	"github.com/redis/go-redis/v9"
 )
 
 
@@ -426,6 +427,16 @@ type CharacterService struct {
 	novelRepo            *repository.NovelRepository   // optional, for AIBatchGenerate
 	chapterRepo          *repository.ChapterRepository // optional, for AIBatchGenerate
 	modelRepo            *repository.AIModelRepository // optional, for voice auto-suggestion
+	cache                *redis.Client                 // optional: cross-instance extract lock
+
+	// extractLocks 防止同一 novel 并发提取导致角色重复：key = novelID
+	extractLocks sync.Map
+}
+
+// WithRedis injects a Redis client for cross-instance character extraction deduplication.
+func (s *CharacterService) WithRedis(c *redis.Client) *CharacterService {
+	s.cache = c
+	return s
 }
 
 // inferGenderFromText 从角色描述文本中推断性别，返回 "male"/"female"/""
@@ -657,6 +668,19 @@ func (s *CharacterService) WithNovelRepo(r *repository.NovelRepository) *Charact
 	return s
 }
 
+// characterBelongsToTenant 通过小说验证角色归属（角色 → 小说 → 租户，而非直接比较 character.TenantID）。
+// novelRepo 未注入时降级为允许（内部调用不做跨租户隔离）。
+func (s *CharacterService) characterBelongsToTenant(char *model.Character, tenantID uint) bool {
+	if s.novelRepo == nil {
+		return true
+	}
+	novel, err := s.novelRepo.GetByID(char.NovelID)
+	if err != nil {
+		return false
+	}
+	return novel.TenantID == 0 || novel.TenantID == tenantID
+}
+
 func (s *CharacterService) WithChapterRepo(r *repository.ChapterRepository) *CharacterService {
 	s.chapterRepo = r
 	return s
@@ -704,7 +728,7 @@ func (s *CharacterService) UpdateCharacter(id, tenantID uint, req *model.UpdateC
 	if err != nil {
 		return nil, fmt.Errorf("not found")
 	}
-	if character.TenantID != tenantID {
+	if !s.characterBelongsToTenant(character, tenantID) {
 		return nil, fmt.Errorf("not found")
 	}
 	if req.Name != "" {
@@ -807,7 +831,7 @@ func (s *CharacterService) DeleteCharacter(id, tenantID uint) error {
 	if err != nil {
 		return fmt.Errorf("not found")
 	}
-	if char.TenantID != tenantID {
+	if !s.characterBelongsToTenant(char, tenantID) {
 		return fmt.Errorf("not found")
 	}
 
@@ -1132,7 +1156,7 @@ func (s *CharacterService) ReanalyzeCharacter(tenantID, characterID uint) (*mode
 	if err != nil {
 		return nil, fmt.Errorf("character not found: %w", err)
 	}
-	if char.TenantID != tenantID {
+	if !s.characterBelongsToTenant(char, tenantID) {
 		return nil, fmt.Errorf("character not found")
 	}
 
@@ -1208,8 +1232,33 @@ func (s *CharacterService) ReanalyzeCharacter(tenantID, characterID uint) (*mode
 
 // AIExtractMinorChars 从单章内容中提取次要角色（role=minor），并写入 ChapterCharacter 关联。
 // 复用与主角色分析相同的 description/visual_prompt/音色推荐逻辑，保证次要角色档案质量一致。
-func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint) ([]*model.Character, error) {
+func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint, userPrompt string) ([]*model.Character, error) {
 	logger.Printf("[CharacterService] AIExtractMinorChars: tenantID=%d novelID=%d chapterID=%d", tenantID, novelID, chapterID)
+
+	// 序列化同一 novel 的并发提取，防止两个任务同时读到空的 existingNames 而重复创建角色。
+	// Redis SETNX 提供跨实例互斥；本地 mutex 作为 fallback（Redis 不可用时）及进程内二次防护。
+	redisLockKey := fmt.Sprintf("lock:char:extract:%d", novelID)
+	redisLocked := false
+	if s.cache != nil {
+		ok, err := s.cache.SetNX(context.Background(), redisLockKey, "1", 10*time.Minute).Result()
+		if err == nil {
+			if !ok {
+				return nil, fmt.Errorf("character extraction for novel %d is already in progress on another instance", novelID)
+			}
+			redisLocked = true
+			defer s.cache.Del(context.Background(), redisLockKey)
+		}
+		// err != nil: Redis unavailable, fall through to local mutex
+	}
+	// 注意：mutex 永不从 map 中删除。若先 Unlock 再 Delete，第三个 goroutine 可在 Delete
+	// 窗口内创建新 mutex 并绕过串行化；保持 mutex 常驻（每 novel 仅占 8B）是最简正确方案。
+	if !redisLocked {
+		lockVal, _ := s.extractLocks.LoadOrStore(novelID, &sync.Mutex{})
+		mu := lockVal.(*sync.Mutex)
+		mu.Lock()
+		defer mu.Unlock()
+	}
+
 	if s.chapterRepo == nil {
 		return nil, fmt.Errorf("chapter repository not configured")
 	}
@@ -1253,6 +1302,7 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 		"ExistingNames":  existingNames,
 		"Content":        content,
 		"PromptLanguage": novelPromptLanguage,
+		"UserPrompt":     userPrompt,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render extract_minor_characters: %w", err)
@@ -1346,6 +1396,21 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 			VoiceLanguage: suggestedLang,
 			Status:        "active",
 		}
+		// 插入前再次确认（mutex 内，但 reload 防止极端情况）
+		existingNameSet[strings.ToLower(c.Name)] = true // 先占位，防止同批次重复
+		// DB 级二次兜底：mutex 内仍有极小窗口让 NovelAnalysisService 同时创建相同角色。
+		// 找到已存在记录时，仍需将其绑定到本章节（角色是真实出场的）。
+		if dup, _ := s.characterRepo.FindByNovelAndName(novelID, c.Name); dup != nil {
+			logger.Printf("[CharacterService] AIExtractMinorChars: DB dedup: %q already exists (id=%d), binding to chapter instead", c.Name, dup.ID)
+			if s.chapterCharacterRepo != nil {
+				_ = s.chapterCharacterRepo.Upsert(&model.ChapterCharacter{
+					CharacterID: dup.ID,
+					ChapterID:   chapterID,
+					NovelID:     novelID,
+				})
+			}
+			continue
+		}
 		if e := s.characterRepo.Create(char); e != nil {
 			logger.Errorf("[CharacterService] AIExtractMinorChars: create %q: %v", c.Name, e)
 			continue
@@ -1365,7 +1430,6 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 			}
 		}
 		logger.Printf("[CharacterService] AIExtractMinorChars: created character %q id=%d", char.Name, char.ID)
-		existingNameSet[strings.ToLower(c.Name)] = true
 		// 关联到章节
 		if s.chapterCharacterRepo != nil {
 			cc := &model.ChapterCharacter{
@@ -1382,7 +1446,15 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 		created = append(created, char)
 	}
 
-	// 将 AI 识别的已有出场角色绑定到本章节
+	// 将 AI 识别的已有出场角色绑定到本章节。
+	// 重新从 DB 加载最新角色列表：AI 调用期间（30s+）可能有新角色被其他 goroutine 创建，
+	// 仅依赖函数开始时的快照会遗漏这些角色的绑定。
+	if freshChars, freshErr := s.characterRepo.ListByNovel(novelID); freshErr == nil {
+		existingNameToID = make(map[string]uint, len(freshChars))
+		for _, fc := range freshChars {
+			existingNameToID[strings.ToLower(fc.Name)] = fc.ID
+		}
+	}
 	if s.chapterCharacterRepo != nil {
 		for _, name := range aiResp.AppearingCharacters {
 			charID, ok := existingNameToID[strings.ToLower(name)]

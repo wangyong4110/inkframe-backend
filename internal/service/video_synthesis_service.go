@@ -460,6 +460,19 @@ func (s *VideoService) RecoverActivePollTasks() {
 
 // PollAndStitchVideo 后台轮询所有分镜状态，完成后拼接
 func (s *VideoService) PollAndStitchVideo(videoID uint) {
+	// Cross-instance dedup via Redis SETNX; fallback to local sync.Map.
+	if s.cache != nil {
+		redisKey := fmt.Sprintf("lock:video:poll:%d", videoID)
+		ok, err := s.cache.SetNX(context.Background(), redisKey, "1", 2*time.Hour).Result()
+		if err == nil {
+			if !ok {
+				logger.Printf("PollAndStitchVideo: videoID %d already polling on another instance, skip", videoID)
+				return
+			}
+			defer s.cache.Del(context.Background(), redisKey)
+		}
+		// err != nil: Redis unavailable, fall through to local check
+	}
 	if _, loaded := s.activePoll.LoadOrStore(videoID, struct{}{}); loaded {
 		logger.Printf("PollAndStitchVideo: videoID %d already polling, skip", videoID)
 		return
@@ -635,8 +648,8 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 		return "", fmt.Errorf("video not found: %w", err)
 	}
 
-	// 租户隔离校验
-	if tenantID != 0 && video.TenantID != 0 && video.TenantID != tenantID {
+	// 租户隔离校验（通过小说归属验证，而非直接比较 video.TenantID）
+	if tenantID != 0 && !s.videoBelongsToTenant(video, tenantID) {
 		return "", fmt.Errorf("access denied: video %d does not belong to tenant %d", videoID, tenantID)
 	}
 

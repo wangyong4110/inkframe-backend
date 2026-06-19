@@ -14,6 +14,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
+	"github.com/redis/go-redis/v9"
 )
 
 // ErrPermissionDenied is returned when a user tries to modify a resource they don't own.
@@ -32,7 +33,8 @@ type NovelService struct {
 	// 广场社交
 	novelLikeRepo    *repository.NovelLikeRepository
 	novelCommentRepo *repository.NovelCommentRepository
-	novelViewDedup   sync.Map     // key "ip:id" → expiry time.Time
+	novelViewDedup   sync.Map     // fallback in-process dedup when Redis unavailable
+	cache            *redis.Client // optional: cross-instance view dedup
 	stopCh           chan struct{} // closed by Shutdown() to stop background goroutines
 }
 
@@ -68,6 +70,12 @@ func (s *NovelService) WithCharacterRepos(characterRepo *repository.CharacterRep
 // WithPlotPointService 注入剧情点服务（用于AI提取后保存）
 func (s *NovelService) WithPlotPointService(svc *PlotPointService) *NovelService {
 	s.plotPointService = svc
+	return s
+}
+
+// WithRedis enables cross-instance novel view deduplication via Redis SETNX.
+func (s *NovelService) WithRedis(c *redis.Client) *NovelService {
+	s.cache = c
 	return s
 }
 
@@ -1424,16 +1432,27 @@ func (s *NovelService) GetNovelRanking(rankType, gender string) ([]*model.Novel,
 }
 
 // RecordNovelViewDeduped 防刷浏览量（同 IP 对同一小说 1 小时内只计一次）
+// Redis 可用时跨实例去重；否则降级为进程内去重。
 func (s *NovelService) RecordNovelViewDeduped(id uint, clientIP string) error {
-	key := fmt.Sprintf("novel:%s:%d", clientIP, id)
+	if s.cache != nil {
+		redisKey := fmt.Sprintf("view:novel:%d:%s", id, clientIP)
+		ok, err := s.cache.SetNX(context.Background(), redisKey, "1", time.Hour).Result()
+		if err != nil {
+			logger.Errorf("[NovelService] Redis view dedup error: %v, fallback to local", err)
+			// fall through to local dedup
+		} else if !ok {
+			return nil // 已由某实例记录
+		} else {
+			return s.novelRepo.IncrNovelViewCount(id)
+		}
+	}
+	// 进程内兜底
+	localKey := fmt.Sprintf("novel:%s:%d", clientIP, id)
 	expiry := time.Now().Add(time.Hour)
-	// Use Swap to atomically replace and check the old value in one operation.
-	old, _ := s.novelViewDedup.Swap(key, expiry)
+	old, _ := s.novelViewDedup.Swap(localKey, expiry)
 	if old != nil {
-		// Key already existed: skip if not yet expired.
 		if t, ok := old.(time.Time); ok && time.Now().Before(t) {
-			// Restore the original expiry so we don't accidentally shorten it.
-			s.novelViewDedup.Store(key, t)
+			s.novelViewDedup.Store(localKey, t)
 			return nil
 		}
 	}

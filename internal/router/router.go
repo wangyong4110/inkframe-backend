@@ -127,7 +127,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 	// 公开平台广场路由（无需 JWT，只限速）
 	if cfg.PlatformHandler != nil {
 		public := r.Group("/api/v1")
-		public.Use(middleware.RateLimit(60, 10))
+		public.Use(middleware.RateLimitWithRedis(cfg.RedisClient, 60, 10))
 		public.GET("/platform/videos", cfg.PlatformHandler.GetPlatformFeed)
 		public.GET("/platform/videos/:id", cfg.PlatformHandler.GetPlatformVideo)
 		public.POST("/platform/videos/:id/view", cfg.PlatformHandler.RecordView)
@@ -144,7 +144,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 
 	// 公开认证路由（不需要JWT，但需要限速防暴力破解）
 	auth := r.Group("/api/v1/auth")
-	auth.Use(middleware.RateLimit(10, 0.2)) // 10 burst, ~12 req/min
+	auth.Use(middleware.RateLimitWithRedis(cfg.RedisClient, 10, 0.2)) // 10 burst, ~12 req/min
 	{
 		// Auth endpoints: stricter rate limit — 5 req/min per IP
 		authRL := middleware.RateLimitAuth()
@@ -167,7 +167,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 
 	// 受保护路由（需要JWT）
 	v1 := r.Group("/api/v1")
-	v1.Use(middleware.RateLimit(60, 10))
+	v1.Use(middleware.RateLimitWithRedis(cfg.RedisClient, 60, 10))
 	v1.Use(middleware.NewAuth(cfg.JWTSecret, cfg.RedisClient))
 	v1.Use(middleware.CheckTenantSubscription(cfg.DB))
 	{
@@ -427,6 +427,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			chapters.GET("/:id/quality-report", cfg.ChapterHandler.GetQualityReport)
 			chapters.POST("/:id/improve", cfg.ChapterHandler.RefineChapter)
 			chapters.POST("/:id/rewrite", cfg.ChapterHandler.RewriteChapterByInstruction)
+			chapters.POST("/:id/refine-selection", cfg.ChapterHandler.RefineSelection)
 			chapters.POST("/:id/chat/stream", cfg.ChapterHandler.ChapterChatStream)
 			chapters.POST("/:id/approve", cfg.ChapterHandler.ApproveChapter)
 			chapters.POST("/:id/reject", cfg.ChapterHandler.RejectChapter)

@@ -14,6 +14,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/storage"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -48,7 +49,8 @@ type VideoService struct {
 	// 广场社交
 	videoLikeRepo    *repository.VideoLikeRepository
 	videoCommentRepo *repository.VideoCommentRepository
-	viewDedupCache   sync.Map     // key "ip:id" → expiry time.Time（防刷播放量）
+	viewDedupCache   sync.Map     // fallback in-process dedup when Redis unavailable
+	cache            *redis.Client // optional: cross-instance view dedup
 	cleanupOnce      sync.Once
 	stopCh           chan struct{} // closed by Shutdown() to stop background goroutines
 	activePoll            sync.Map     // videoID → struct{} (prevents duplicate PollAndStitchVideo goroutines)
@@ -58,6 +60,18 @@ type VideoService struct {
 // GetNovelByID 通过 novelRepo 加载小说（供 handler 传递给 CapCutService 等下游服务）
 func (s *VideoService) GetNovelByID(id uint) (*model.Novel, error) {
 	return s.novelRepo.GetByID(id)
+}
+
+// videoBelongsToTenant verifies video ownership via novel.TenantID (novel-based ownership).
+func (s *VideoService) videoBelongsToTenant(video *model.Video, tenantID uint) bool {
+	if s.novelRepo == nil {
+		return true
+	}
+	novel, err := s.novelRepo.GetByID(video.NovelID)
+	if err != nil {
+		return false
+	}
+	return novel.TenantID == 0 || novel.TenantID == tenantID
 }
 
 // GetNovelVideoConfig 获取小说的视频配置（供 handler 层使用）
@@ -198,6 +212,12 @@ func (s *VideoService) WithBGMSegmentRepo(r *repository.VideoBGMSegmentRepositor
 	return s
 }
 
+// WithRedis enables cross-instance view deduplication via Redis SETNX.
+func (s *VideoService) WithRedis(c *redis.Client) *VideoService {
+	s.cache = c
+	return s
+}
+
 // WithSFXService 设置音效服务（选填）
 func (s *VideoService) WithSFXService(sfx *SFXService) *VideoService {
 	s.sfxService = sfx
@@ -319,7 +339,7 @@ func (s *VideoService) UpdateVideo(id, tenantID uint, req *model.UpdateVideoRequ
 	if err != nil {
 		return nil, err
 	}
-	if tenantID != 0 && video.TenantID != 0 && video.TenantID != tenantID {
+	if tenantID != 0 && !s.videoBelongsToTenant(video, tenantID) {
 		return nil, fmt.Errorf("video not found or access denied")
 	}
 	if req.Title != "" {
@@ -402,14 +422,28 @@ func (s *VideoService) IncrVideoViewCount(id uint) error {
 }
 
 // RecordViewDeduped 防刷播放量（同一 IP 对同一视频 1 小时内只计一次）
+// Redis 可用时跨实例去重；否则降级为进程内去重。
 func (s *VideoService) RecordViewDeduped(id uint, clientIP string) error {
-	key := fmt.Sprintf("%s:%d", clientIP, id)
-	if v, ok := s.viewDedupCache.Load(key); ok {
-		if expiry, ok2 := v.(time.Time); ok2 && time.Now().Before(expiry) {
-			return nil // 已记录，跳过
+	localKey := fmt.Sprintf("%s:%d", clientIP, id)
+	if s.cache != nil {
+		redisKey := fmt.Sprintf("view:video:%d:%s", id, clientIP)
+		ok, err := s.cache.SetNX(context.Background(), redisKey, "1", time.Hour).Result()
+		if err != nil {
+			logger.Errorf("[VideoService] Redis view dedup error: %v, fallback to local", err)
+			// fall through to local dedup
+		} else if !ok {
+			return nil // 已由某实例记录
+		} else {
+			return s.videoRepo.IncrViewCount(id)
 		}
 	}
-	s.viewDedupCache.Store(key, time.Now().Add(time.Hour))
+	// 进程内兜底
+	if v, ok := s.viewDedupCache.Load(localKey); ok {
+		if expiry, ok2 := v.(time.Time); ok2 && time.Now().Before(expiry) {
+			return nil
+		}
+	}
+	s.viewDedupCache.Store(localKey, time.Now().Add(time.Hour))
 	return s.videoRepo.IncrViewCount(id)
 }
 
@@ -535,11 +569,11 @@ func (s *VideoService) RecalcVideoHotScores() error {
 func (s *VideoService) DeleteVideo(id, tenantID uint) error {
 	// 租户归属校验：确认视频属于调用方租户
 	if tenantID != 0 {
-		var v model.Video
-		if err := s.videoRepo.DB().Select("id, tenant_id").First(&v, id).Error; err != nil {
+		v, err := s.videoRepo.GetByID(id)
+		if err != nil {
 			return fmt.Errorf("video not found or access denied")
 		}
-		if v.TenantID != 0 && v.TenantID != tenantID {
+		if !s.videoBelongsToTenant(v, tenantID) {
 			return fmt.Errorf("video not found or access denied")
 		}
 	}

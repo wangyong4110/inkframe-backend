@@ -1,74 +1,79 @@
-请对以下章节内容进行角色分析，完成两项任务：
-① 提取本章新出现的次要角色，生成角色档案
+你是一位专业的小说角色档案编辑。请对以下章节内容完成两项任务：
+① 提取本章首次出现的次要角色，生成角色档案
 ② 从已有角色列表中，识别哪些角色在本章中出现过
 
 # 小说信息
 - 标题：《{{ NovelTitle }}》
 - 类型：{{ Genre }}
 
-# 已有角色（从中识别本章出现的角色，并在 appearing_characters 中列出）
-{% for name in ExistingNames %}- {{ name }}
-{% endfor %}
+# 已有角色列表（严禁重复创建其中任何人）
+{% if ExistingNames %}{% for name in ExistingNames %}- {{ name }}
+{% endfor %}{% else %}（暂无）{% endif %}
 
 # 本章内容
 {{ Content }}
 
-# 要求
-## 任务①：新次要角色（new_characters）
-1. 只提取本章中出现的、不在已有角色列表中的次要角色（配角、路人、临时出场等），不超过10个
-2. **去重判断基于语义而非字面**：若章节中某角色以称谓（如"母亲"）、小名、外号、职位等出现，但与已有角色列表中某角色是同一人，则视为已有角色，不得重复创建；在任务②中将其对应到已有角色名
-3. role 固定为 "minor"
-3. gender：性别，只能是 male / female / neutral 之一
-4. age：年龄或年龄感，简短字符串，如 "16" / "约25岁" / "少年" / "中年"
-{% if PromptLanguage == "en" %}5. description (English): background story only — origin, key experiences, and how they relate to the main story. One coherent paragraph, 100 words max.{% else %}5. description（中文）：仅描述背景故事——来历、经历、与主线的关系，写成连贯段落，100字以内{% endif %}
-{% if PromptLanguage == "en" %}6. visual_prompt (English): image generation prompt, ~150 words, covering 12 dimensions in order. No art style, quality, or rendering tags:
-   [1] GENDER & BUILD: gender, age range, height, body type, shoulder-to-hip ratio
-   [2] FACE: face shape, three-zone proportion, cheekbones, jawline, chin, eye spacing
-   [3] EYES: eye shape, size, iris color (precise hue), default gaze quality
-   [4] BROWS (natural): shape, density, color; natural lash length — no cosmetics
-   [5] NOSE & LIPS: bridge height, tip shape, nostril width; lip fullness, cupid's bow, bare lip color and texture
-   [6] SKIN: precise tone, surface finish, notable marks
-   [7] HAIR: color and treatment, texture, density, length, styling, bangs
-   [8] OUTFIT (layer by layer): each garment — type, cut, neckline, sleeves, hem, fabric, colors, decorative details
-   [9] FOOTWEAR: type, heel, material, color
-   [10] ACCESSORIES: each item — name, material, style, placement; weapons in full detail
-   [11] POSTURE: default stance, hand position, characteristic tilt
-   [12] SIGNATURE ELEMENT: the single most recognizable visual detail{% else %}6. visual_prompt（中文）：图像生成提示词，约150字，按序覆盖12个维度，禁止添加画风/质量/渲染标签：
-   [1] 性别体型：性别、年龄感、身高、体型、肩宽腰臀比
-   [2] 面部结构：脸型、三庭比例、颧骨、下颌线、下巴形态、眼距
-   [3] 眼睛：眼型、大小、精确瞳色、默认目光质感
-   [4] 眉毛（自然）：眉形、密度、眉色；自然睫毛形态——禁止任何妆容描述
-   [5] 鼻唇：鼻梁高度、鼻头形态、鼻翼；唇厚、唇峰、裸唇色与质感
-   [6] 肤色：精确肤色描述词、肤感、特殊标记
-   [7] 发型：发色与处理方式、发质、发量、发长、造型方式、刘海
-   [8] 服装（逐层）：每件——品类、廓形、领口、袖型、下摆、面料、颜色、装饰细节
-   [9] 鞋履：鞋型、跟高、材质、颜色
-   [10] 配饰：逐件——名称、材质、风格、佩戴位置；武器完整描述
-   [11] 体态：默认站姿、手部位置、特征性倾斜
-   [12] 标志性元素：最具辨识度的单一视觉细节{% endif %}
-7. personality_tags：2–4个简短性格标签（中文词）
-8. 若章节中无新次要角色，new_characters 输出空数组 []
+---
+{% if UserPrompt %}
+# 用户补充指令
 
-## 任务②：已有角色出场识别（appearing_characters）
-从"已有角色"列表中，找出在本章内容中**确实出现、被提及或直接参与情节**的角色名。匹配规则：
-- **语义匹配，不限字面**：同一人物可能以姓名、简称、称谓（妈妈/母亲/娘）、外号、职衔等多种形式出现，只要判断是同一人即视为出场
-- 输出已有角色列表中的**原始名字**（不是章节中出现的称谓），输出字符串数组
-- 若无已有角色出场，输出空数组 []
+{{ UserPrompt }}
 
-# 严格输出 JSON 对象，不含任何说明文字
+{% endif %}
+# 任务① 规则：新次要角色（new_characters）
 
-## 输出格式
+## 提取标准
+- 只提取本章**有台词、有行动或对情节有影响**的次要角色，纯粹的背景板路人不提取
+- 最多提取 **8 个**；若确实没有值得提取的新角色，输出空数组
+
+## 去重与合并（最重要，违反则输出无效）
+1. **与已有角色去重**：对照"已有角色列表"，逐一语义判断。若章节中某角色以小名、外号、职称、称谓（"母亲""老板""师父"）等形式出现，但与已有角色列表中某人是同一人，**绝对禁止**重复创建，在任务②中标注出场即可
+2. **同批次内去重**：本次 new_characters 数组中不得有两个角色指向同一人（即使名字措辞略有差异）
+3. **群体角色合并**：若章节中某类配角以群体形式出现（如"几名侍卫""一群仆人""侍女们"），无论出现几次，**只提取为一个**代表性角色（取最常用的称谓作为名字），不要分裂成多条记录
+4. **相似称谓归一**："女吸血鬼仆人""吸血鬼女仆""吸血鬼仕女"若指同一类角色，只保留一个，名字取章节中最常用的那个
+
+## 命名规范
+- 使用章节中**出现频率最高**的那个称谓作为 name，避免自造别名
+- 若章节中该角色始终以职衔/称谓出现（如"管家"），name 直接用该称谓，不要加小说角色惯用词如"某某管家"
+
+## 字段说明
+- role：固定 "minor"
+- gender：只能是 male / female / neutral
+- age：简短年龄感，如 "16" / "约25岁" / "少年" / "中年" / "老年"
+{% if PromptLanguage == "en" %}- description (English): background only — origin, key experiences, relation to main plot. One paragraph, ≤100 words{% else %}- description（中文）：仅写背景——来历、经历、与主线关系，连贯段落，100字以内{% endif %}
+{% if PromptLanguage == "en" %}- visual_prompt (English): ~150-word image generation prompt covering 12 dimensions in order. No art style / quality / rendering tags:
+  [1] GENDER & BUILD [2] FACE STRUCTURE [3] EYES [4] BROWS & LASHES [5] NOSE & LIPS
+  [6] SKIN [7] HAIR [8] OUTFIT (layer by layer) [9] FOOTWEAR [10] ACCESSORIES
+  [11] POSTURE [12] SIGNATURE ELEMENT{% else %}- visual_prompt（中文）：约150字图像生成提示词，按序覆盖12维度，禁止画风/质量/渲染标签：
+  [1]性别体型 [2]面部结构 [3]眼睛 [4]眉毛睫毛 [5]鼻唇
+  [6]肤色 [7]发型 [8]服装（逐层） [9]鞋履 [10]配饰
+  [11]体态 [12]标志性元素{% endif %}
+- personality_tags：2–4个简短性格标签
+
+---
+
+# 任务② 规则：已有角色出场识别（appearing_characters）
+- 从"已有角色列表"中，找出本章**确实出现、被提及或直接参与情节**的角色
+- **语义匹配**：同一人物可能以姓名、简称、称谓、外号、职衔等多种形式出现，只要判断是同一人即视为出场
+- 输出已有角色列表中的**原始名字**（字符串数组）；若无已有角色出场，输出空数组
+
+---
+
+# 输出（严格 JSON，不含任何说明文字）
+
+```json
 {
   "new_characters": [
     {
       "name": "角色名",
       "role": "minor",
-      "gender": "male",
+      "gender": "female",
       "age": "中年",
-      "description": "江湖行商出身，早年靠倒卖消息在各势力间周旋谋生，积累了广泛的情报网络。本章以商人身份出现，向主角透露了关键线索，其背后所属势力尚未明朗。",
-      "personality_tags": ["圆滑", "精明", "势利"],
-      "visual_prompt": "{% if PromptLanguage == "en" %}middle-aged male merchant, slightly overweight build, approximately 170cm, wide shoulders and round belly. Round face, high rounded cheekbones, soft jawline, rounded chin, standard eye spacing. Small narrow eyes with slight outer droop, warm brown irises, calculating default gaze. Thin arched brows, medium density, dark brown; short natural lashes. Broad low nose bridge, round tip, medium nostrils; medium-full lips, subtle cupid's bow, bare tan-rose tone, slightly glossy. Warm tan skin, slightly oily sheen, faint forehead lines. Short black hair, neatly combed flat, no styling product visible. Plain dark grey merchant robe with wide sleeves, stand collar, single-button closure; simple brown leather belt cinched at waist; dark grey loose trousers; plain black cloth shoes with flat soles. No accessories. Upright but relaxed posture, slight belly forward, hands often clasped before him in a deferential gesture. Signature: the clasped-hands posture combined with the perpetual faint smile — a practiced merchant's mask.{% else %}中年男性，身材微胖，身高约170厘米，宽肩圆腹。圆脸，颧骨圆润，下颌线柔和，下巴圆钝，眼距标准。细小稍下垂的单眼皮，暖棕色瞳孔，目光精明惯算。浅弧形细眉，密度适中，深棕色；睫毛自然短促。宽低鼻梁，圆钝鼻头，鼻翼适中；唇型丰厚，唇峰不明显，裸唇色偏暖棕玫，略有油光。肤色小麦偏暖，肤感略油，额纹隐现。黑发短而整洁，梳平无造型。深灰色宽袖商人长袍，立领、单排扣；腰间束陈旧棕色皮带；深灰色宽松长裤；黑色平底布鞋。无配饰。站姿端正微前倾，腹部略前突，双手习惯性叠于腹前作揖状。标志性元素：永远维持的那个双手叠腹的揖礼姿势与唇角浅笑——一个老练商人经年练就的处世面具。{% endif %}"
+      "description": "背景故事……",
+      "personality_tags": ["冷静", "忠诚"],
+      "visual_prompt": "……"
     }
   ],
   "appearing_characters": ["已有角色名A", "已有角色名B"]
 }
+```

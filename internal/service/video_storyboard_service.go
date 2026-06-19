@@ -51,7 +51,19 @@ func (s *VideoService) CancelStoryboardGeneration(videoID uint) {
 }
 
 func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt string, progressFn func(int), overrides StoryboardOverrides, chapterIDOverride ...*uint) ([]*model.StoryboardShot, error) {
-	// Prevent concurrent storyboard generation for the same video.
+	// Prevent concurrent storyboard generation for the same video — across instances via Redis SETNX.
+	if s.cache != nil {
+		redisKey := fmt.Sprintf("lock:storyboard:gen:%d", videoID)
+		ok, err := s.cache.SetNX(context.Background(), redisKey, "1", 30*time.Minute).Result()
+		if err == nil {
+			if !ok {
+				return nil, fmt.Errorf("storyboard generation already in progress for video %d", videoID)
+			}
+			defer s.cache.Del(context.Background(), redisKey)
+		}
+		// err != nil: Redis unavailable, fall through to local sync.Map check
+	}
+
 	// Store the cancel function so that CancelStoryboardGeneration can interrupt this goroutine.
 	genCtxInner, cancelInner := context.WithCancel(context.Background())
 	if _, loaded := s.generatingStoryboard.LoadOrStore(videoID, cancelInner); loaded {
@@ -244,6 +256,14 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	genCtx := genCtxInner
 	var prevTailShots []*model.StoryboardShot // 上一段末尾镜头，首段为 nil
 
+	// Each segment produces 8–15K chars of JSON. A 4096-token limit truncates it.
+	// The AI API silently caps max_tokens at the model's own maximum when it exceeds it,
+	// so requesting 16384 on a model that only supports 4096 is safe (no API error).
+	segOverrides := overrides
+	if segOverrides.MaxTokens < 16384 {
+		segOverrides.MaxTokens = 16384
+	}
+
 	for segIdx, seg := range segments {
 		// 检查是否已取消
 		select {
@@ -286,7 +306,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 				logger.Printf("[Storyboard] seg %d/%d retry attempt=%d (shot count hint)", segIdx+1, len(segments), attempt)
 			}
 			aiStart := time.Now()
-			aiResult, aiErr = s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", p, provider, overrides)
+			aiResult, aiErr = s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", p, provider, segOverrides)
 			aiElapsed := time.Since(aiStart).Round(time.Millisecond)
 			if aiErr != nil {
 				logger.Errorf("[Storyboard] seg %d/%d attempt=%d AI error elapsed=%s err=%v", segIdx+1, len(segments), attempt, aiElapsed, aiErr)

@@ -10,6 +10,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/vector"
+	"github.com/redis/go-redis/v9"
 )
 
 // KnowledgeImportItem 知识批量导入的单个条目
@@ -35,6 +36,7 @@ type KnowledgeService struct {
 	}
 	vectorStore *vector.StoreManager
 	aiClient    ai.AIProvider
+	cache       *redis.Client // optional: for cross-instance idempotency in ExtractAndStorePlotPoints
 }
 
 func NewKnowledgeService(
@@ -57,6 +59,12 @@ func NewKnowledgeService(
 		vectorStore: vectorStore,
 		aiClient:    aiClient,
 	}
+}
+
+// WithRedis enables cross-instance idempotency in ExtractAndStorePlotPoints via Redis SETNX.
+func (s *KnowledgeService) WithRedis(c *redis.Client) *KnowledgeService {
+	s.cache = c
+	return s
 }
 
 // GetByNovel 获取小说的所有知识条目
@@ -253,6 +261,21 @@ func (s *KnowledgeService) DeleteKnowledge(ctx context.Context, id uint, novelID
 // 每次运行前先清除该章节的旧记录，避免重复（replace-on-rerun 语义）
 // aiClient 为 nil 时使用服务内部的 s.aiClient
 func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapter *model.Chapter, aiClient ai.AIProvider) error {
+	// 跨实例幂等性：Redis SETNX 保证同一章节在同一时刻只有一个实例执行向量写入。
+	if s.cache != nil {
+		lockKey := fmt.Sprintf("lock:kv:pp:%d", chapter.ID)
+		ok, err := s.cache.SetNX(ctx, lockKey, "1", time.Hour).Result()
+		if err != nil {
+			logger.Errorf("KnowledgeService.ExtractAndStorePlotPoints: Redis SETNX error: %v", err)
+			// 非致命：继续执行（最多重复写入，不会丢数据）
+		} else if !ok {
+			logger.Printf("KnowledgeService.ExtractAndStorePlotPoints: chapter %d already processing by another instance, skip", chapter.ID)
+			return nil
+		} else {
+			defer s.cache.Del(context.Background(), lockKey)
+		}
+	}
+
 	if aiClient == nil {
 		aiClient = s.aiClient
 	}

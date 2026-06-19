@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/storage"
@@ -77,7 +78,7 @@ func (h *SceneAnchorHandler) GetSceneAnchor(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "scene anchor not found")
 		return
 	}
-	if anchor.TenantID != getTenantID(c) {
+	if !h.checkNovelTenant(c, anchor.NovelID) {
 		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -95,6 +96,7 @@ func (h *SceneAnchorHandler) ListSceneAnchors(c *gin.Context) {
 	}
 	anchors, err := h.svc.ListByNovel(uint(novelID))
 	if err != nil {
+		logger.Errorf("[SceneAnchorHandler] ListSceneAnchors novelID=%d: %v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to list scene anchors")
 		return
 	}
@@ -113,6 +115,7 @@ func (h *SceneAnchorHandler) CreateSceneAnchor(c *gin.Context) {
 	}
 	anchor, err := h.svc.Create(getTenantID(c), uint(novelID), req)
 	if err != nil {
+		logger.Errorf("[SceneAnchorHandler] CreateSceneAnchor novelID=%d name=%q: %v", novelID, req.Name, err)
 		respondErr(c, http.StatusInternalServerError, "failed to create scene anchor")
 		return
 	}
@@ -130,7 +133,7 @@ func (h *SceneAnchorHandler) UpdateSceneAnchor(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "scene anchor not found")
 		return
 	}
-	if existing.TenantID != getTenantID(c) {
+	if !h.checkNovelTenant(c, existing.NovelID) {
 		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -140,6 +143,7 @@ func (h *SceneAnchorHandler) UpdateSceneAnchor(c *gin.Context) {
 	}
 	anchor, err := h.svc.Update(uint(id), req)
 	if err != nil {
+		logger.Errorf("[SceneAnchorHandler] UpdateSceneAnchor id=%d: %v", id, err)
 		respondErr(c, http.StatusInternalServerError, "failed to update scene anchor")
 		return
 	}
@@ -157,11 +161,12 @@ func (h *SceneAnchorHandler) DeleteSceneAnchor(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "scene anchor not found")
 		return
 	}
-	if existing.TenantID != getTenantID(c) {
+	if !h.checkNovelTenant(c, existing.NovelID) {
 		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
 	if err := h.svc.Delete(uint(id)); err != nil {
+		logger.Errorf("[SceneAnchorHandler] DeleteSceneAnchor id=%d: %v", id, err)
 		respondErr(c, http.StatusInternalServerError, "failed to delete scene anchor")
 		return
 	}
@@ -191,6 +196,7 @@ func (h *SceneAnchorHandler) SetShotAnchor(c *gin.Context) {
 		return
 	}
 	if err := h.svc.SetShotAnchor(uint(shotID), body.AnchorID); err != nil {
+		logger.Errorf("[SceneAnchorHandler] SetShotAnchor shotID=%d anchorID=%v: %v", shotID, body.AnchorID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to set shot anchor")
 		return
 	}
@@ -210,7 +216,7 @@ func (h *SceneAnchorHandler) ExtractSceneAnchors(c *gin.Context) {
 	if !bindJSON(c, &body) {
 		return
 	}
-	anchors, err := h.svc.ExtractFromChapter(c.Request.Context(), getTenantID(c), uint(novelID), body.NovelTitle, body.ChapterContent)
+	anchors, err := h.svc.ExtractFromChapter(c.Request.Context(), getTenantID(c), uint(novelID), body.NovelTitle, body.ChapterContent, 0, "")
 	if err != nil {
 		logger.Errorf("[SceneAnchorHandler] ExtractSceneAnchors error: %v", err)
 		respondErr(c, http.StatusInternalServerError, "failed to extract scene anchors")
@@ -230,7 +236,7 @@ func (h *SceneAnchorHandler) LockRefImage(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "scene anchor not found")
 		return
 	}
-	if existing.TenantID != getTenantID(c) {
+	if !h.checkNovelTenant(c, existing.NovelID) {
 		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -242,6 +248,7 @@ func (h *SceneAnchorHandler) LockRefImage(c *gin.Context) {
 		return
 	}
 	if err := h.svc.SetRefImage(uint(id), body.ImageURL, body.ShotID); err != nil {
+		logger.Errorf("[SceneAnchorHandler] LockRefImage id=%d: %v", id, err)
 		respondErr(c, http.StatusInternalServerError, "failed to lock ref image")
 		return
 	}
@@ -260,7 +267,7 @@ func (h *SceneAnchorHandler) UploadRefImage(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "scene anchor not found")
 		return
 	}
-	if existing.TenantID != getTenantID(c) {
+	if !h.checkNovelTenant(c, existing.NovelID) {
 		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -269,6 +276,7 @@ func (h *SceneAnchorHandler) UploadRefImage(c *gin.Context) {
 		return
 	}
 	if err := h.svc.SetRefImage(uint(id), imgURL, nil); err != nil {
+		logger.Errorf("[SceneAnchorHandler] UploadRefImage id=%d: %v", id, err)
 		respondErr(c, http.StatusInternalServerError, "failed to save ref image")
 		return
 	}
@@ -287,7 +295,7 @@ func (h *SceneAnchorHandler) GenerateRefImage(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "scene anchor not found")
 		return
 	}
-	if existing.TenantID != getTenantID(c) {
+	if !h.checkNovelTenant(c, existing.NovelID) {
 		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -315,7 +323,7 @@ func (h *SceneAnchorHandler) EditRefImage(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "scene anchor not found")
 		return
 	}
-	if existing.TenantID != getTenantID(c) {
+	if !h.checkNovelTenant(c, existing.NovelID) {
 		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -345,12 +353,13 @@ func (h *SceneAnchorHandler) GetConsistencyLogs(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "scene anchor not found")
 		return
 	}
-	if anchor.TenantID != getTenantID(c) {
+	if !h.checkNovelTenant(c, anchor.NovelID) {
 		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
 	logs, err := h.consistencySvc.GetLogsByAnchorID(uint(id))
 	if err != nil {
+		logger.Errorf("[SceneAnchorHandler] GetConsistencyLogs anchorID=%d: %v", id, err)
 		respondErr(c, http.StatusInternalServerError, "failed to get consistency logs")
 		return
 	}
@@ -386,9 +395,15 @@ func (h *SceneAnchorHandler) AIExtractChapterAnchors(c *gin.Context) {
 		return
 	}
 
+	var body struct {
+		UserPrompt string `json:"user_prompt"`
+	}
+	_ = c.ShouldBindJSON(&body)
+
 	tenantID := getTenantID(c)
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterSceneExtract, "场景分析", "chapter", chapter.ID)
 	if err != nil {
+		logger.Errorf("[SceneAnchorHandler] AIExtractChapterAnchors create task novelID=%d chapterNo=%d: %v", novelID, chapterNo, err)
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
@@ -398,16 +413,26 @@ func (h *SceneAnchorHandler) AIExtractChapterAnchors(c *gin.Context) {
 		"content":    content,
 	})
 
-	go func(taskID string, tID, nID, chapID uint, chContent string) {
+	go func(taskID string, tID, nID, chapID uint, chContent, userPrompt string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[SceneAnchorHandler] AIExtractChapterAnchors task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+		defer cancel()
+		logger.Printf("[SceneAnchorHandler] AIExtractChapterAnchors task %s started: novelID=%d chapterID=%d contentLen=%d", taskID, nID, chapID, len(chContent))
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		anchors, err := h.svc.ExtractFromChapter(context.Background(), tID, nID, "", chContent, chapID)
+		anchors, err := h.svc.ExtractFromChapter(ctx, tID, nID, "", chContent, chapID, userPrompt)
 		if err != nil {
-			logger.Errorf("[SceneAnchorHandler] AIExtractChapterAnchors task %s failed: %v", taskID, err)
+			logger.Errorf("[SceneAnchorHandler] AIExtractChapterAnchors task %s failed: novelID=%d chapterID=%d err=%v", taskID, nID, chapID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
+		logger.Printf("[SceneAnchorHandler] AIExtractChapterAnchors task %s completed: novelID=%d chapterID=%d newAnchors=%d", taskID, nID, chapID, len(anchors))
 		h.taskSvc.Complete(taskID, map[string]interface{}{"new_count": len(anchors)}) //nolint:errcheck
-	}(task.TaskID, tenantID, uint(novelID), chapter.ID, content)
+	}(task.TaskID, tenantID, uint(novelID), chapter.ID, content, body.UserPrompt)
 
 	respondAccepted(c, task.TaskID, "场景分析任务已提交")
 }
@@ -430,6 +455,7 @@ func (h *SceneAnchorHandler) ListChapterAnchors(c *gin.Context) {
 	}
 	anchors, err := h.svc.ListChapterAnchors(uint(novelID), chapter.ID)
 	if err != nil {
+		logger.Errorf("[SceneAnchorHandler] ListChapterAnchors novelID=%d chapterNo=%d: %v", novelID, chapterNo, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -457,6 +483,7 @@ func (h *SceneAnchorHandler) BindChapterAnchor(c *gin.Context) {
 		return
 	}
 	if err := h.svc.BindChapterAnchor(chapter.ID, uint(novelID), uint(anchorID)); err != nil {
+		logger.Errorf("[SceneAnchorHandler] BindChapterAnchor chapterID=%d novelID=%d anchorID=%d: %v", chapter.ID, novelID, anchorID, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -484,6 +511,7 @@ func (h *SceneAnchorHandler) UnbindChapterAnchor(c *gin.Context) {
 		return
 	}
 	if err := h.svc.UnbindChapterAnchor(chapter.ID, uint(anchorID)); err != nil {
+		logger.Errorf("[SceneAnchorHandler] UnbindChapterAnchor chapterID=%d anchorID=%d: %v", chapter.ID, anchorID, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}

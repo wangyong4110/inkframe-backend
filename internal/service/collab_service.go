@@ -1,8 +1,11 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -10,6 +13,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
+	"github.com/redis/go-redis/v9"
 )
 
 const lockTTL = 90 * time.Second
@@ -43,6 +47,10 @@ type NovelMemberDTO struct {
 	InviteExpiresAt *time.Time `json:"invite_expires_at,omitempty"`
 }
 
+// redisChanCollab is the Redis Pub/Sub channel for cross-instance SSE broadcast.
+// Message format: "{novelID}:{JSON-encoded CollabEvent}"
+const redisChanCollab = "inkframe:collab"
+
 // CollabService 协作服务
 type CollabService struct {
 	memberRepo     *repository.NovelMemberRepository
@@ -51,6 +59,7 @@ type CollabService struct {
 	novelRepo      *repository.NovelRepository
 	tenantUserRepo *repository.TenantUserRepository // 用于查询被邀请者的 TenantID
 	notifSvc       *NotificationService              // 站内信发送
+	cache          *redis.Client                     // optional: cross-instance SSE broadcast
 
 	mu         sync.RWMutex
 	sseClients map[uint][]chan CollabEvent // novelID → subscriber channels
@@ -93,6 +102,49 @@ func (s *CollabService) Shutdown() {
 	case <-s.stopCh:
 	default:
 		close(s.stopCh)
+	}
+}
+
+// WithRedis enables cross-instance SSE broadcast via Redis Pub/Sub.
+// Must be called before any goroutines call Subscribe or Broadcast.
+func (s *CollabService) WithRedis(c *redis.Client) *CollabService {
+	s.cache = c
+	if c != nil {
+		go s.startCollabSubscriber()
+	}
+	return s
+}
+
+// startCollabSubscriber subscribes to the Redis collab channel and fans events
+// out to all local SSE connections for the relevant novel.
+func (s *CollabService) startCollabSubscriber() {
+	sub := s.cache.Subscribe(context.Background(), redisChanCollab)
+	defer sub.Close()
+	ch := sub.Channel()
+	for {
+		select {
+		case msg, ok := <-ch:
+			if !ok {
+				return
+			}
+			// Message format: "{novelID}:{JSON}"
+			sep := strings.IndexByte(msg.Payload, ':')
+			if sep < 1 {
+				continue
+			}
+			novelID64, err := strconv.ParseUint(msg.Payload[:sep], 10, 64)
+			if err != nil {
+				continue
+			}
+			novelID := uint(novelID64)
+			var event CollabEvent
+			if err := json.Unmarshal([]byte(msg.Payload[sep+1:]), &event); err != nil {
+				continue
+			}
+			s.broadcastLocal(novelID, event)
+		case <-s.stopCh:
+			return
+		}
 	}
 }
 
@@ -401,8 +453,8 @@ func (s *CollabService) Subscribe(novelID uint) (<-chan CollabEvent, func()) {
 	return ch, unsub
 }
 
-// Broadcast 向某小说的所有订阅者广播事件。
-func (s *CollabService) Broadcast(novelID uint, event CollabEvent) {
+// broadcastLocal pushes an event to all SSE connections on this instance for novelID.
+func (s *CollabService) broadcastLocal(novelID uint, event CollabEvent) {
 	s.mu.RLock()
 	list := s.sseClients[novelID]
 	s.mu.RUnlock()
@@ -410,6 +462,21 @@ func (s *CollabService) Broadcast(novelID uint, event CollabEvent) {
 		select {
 		case ch <- event:
 		default: // 客户端消费太慢，丢弃
+		}
+	}
+}
+
+// Broadcast 向某小说的所有订阅者广播事件（包括其他实例上的 SSE 连接）。
+// Redis 可用时通过 Pub/Sub 跨实例广播；否则仅推送本实例的连接。
+func (s *CollabService) Broadcast(novelID uint, event CollabEvent) {
+	s.broadcastLocal(novelID, event) // 推送本实例连接
+	if s.cache != nil {
+		b, err := json.Marshal(event)
+		if err == nil {
+			msg := fmt.Sprintf("%d:%s", novelID, b)
+			if err := s.cache.Publish(context.Background(), redisChanCollab, msg).Err(); err != nil {
+				logger.Errorf("[CollabService] Redis publish failed: %v", err)
+			}
 		}
 	}
 }

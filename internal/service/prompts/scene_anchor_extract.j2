@@ -17,6 +17,12 @@ Chapter content:
 {{ ChapterContent }}
 ---
 
+{% if UserPrompt %}
+# Additional instructions from the user
+
+{{ UserPrompt }}
+
+{% endif %}
 # Rules
 
 1. `new_anchors`: only scenes that appear in this chapter AND are not semantically equivalent to any registered anchor (including partial name / alias matches).

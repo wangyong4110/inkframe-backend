@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
+	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -56,8 +58,9 @@ type NarrativeMemoryService struct {
 	aiService          *AIService
 	snapshotRepo       snapshotLatestGetter
 	outlineVersionRepo outlineVersionCreator
+	cache              *redis.Client // optional: for cross-instance arc gen deduplication
 
-	// arcGenLocks 防止多章节同时完成时，对同一 (novelID, arcNo) 重复生成弧摘要。
+	// arcGenLocks 进程内去重锁（无 Redis 时使用；Redis 可用时同时维护以支持 WaitForArcSummary）。
 	// key: "novelID-arcNo" (string), value: struct{}{}
 	arcGenLocks sync.Map
 }
@@ -90,6 +93,7 @@ type snapshotLatestGetter interface {
 type outlineVersionCreator interface {
 	Create(v *model.NovelOutlineVersion) error
 	MaxVersion(novelID uint) (int, error)
+	CreateVersionAtomic(v *model.NovelOutlineVersion) error
 }
 
 func NewNarrativeMemoryService(
@@ -111,6 +115,42 @@ func NewNarrativeMemoryService(
 func (s *NarrativeMemoryService) WithSnapshotRepo(repo snapshotLatestGetter) *NarrativeMemoryService {
 	s.snapshotRepo = repo
 	return s
+}
+
+// WithRedis enables cross-instance arc summary deduplication via Redis SETNX.
+func (s *NarrativeMemoryService) WithRedis(c *redis.Client) *NarrativeMemoryService {
+	s.cache = c
+	return s
+}
+
+// tryLockArc acquires the generation lock for the given arc.
+// Redis SETNX is the primary gate (cross-instance); arcGenLocks is also set
+// so WaitForArcSummary can poll process-locally.
+// Returns true if this caller acquired the lock.
+func (s *NarrativeMemoryService) tryLockArc(lockKey string) bool {
+	if s.cache != nil {
+		ok, err := s.cache.SetNX(context.Background(), "lock:arc:gen:"+lockKey, "1", 10*time.Minute).Result()
+		if err != nil {
+			logger.Errorf("[NarrativeMemory] Redis SETNX arc lock %s: %v, fallback to local lock", lockKey, err)
+			_, loaded := s.arcGenLocks.LoadOrStore(lockKey, struct{}{})
+			return !loaded
+		}
+		if !ok {
+			return false
+		}
+		s.arcGenLocks.Store(lockKey, struct{}{})
+		return true
+	}
+	_, loaded := s.arcGenLocks.LoadOrStore(lockKey, struct{}{})
+	return !loaded
+}
+
+// unlockArc releases the generation lock for the given arc.
+func (s *NarrativeMemoryService) unlockArc(lockKey string) {
+	s.arcGenLocks.Delete(lockKey)
+	if s.cache != nil {
+		_ = s.cache.Del(context.Background(), "lock:arc:gen:"+lockKey).Err()
+	}
 }
 
 func (s *NarrativeMemoryService) WithOutlineVersionRepo(repo outlineVersionCreator) *NarrativeMemoryService {
@@ -615,14 +655,13 @@ func (s *NarrativeMemoryService) TriggerArcSummaryIfNeeded(tenantID, novelID uin
 		// 完整弧结束 — 显式传参避免闭包捕获外层变量（防止快速连续调用时的竞态）
 		arcNo := completedChapterNo / arcSize
 		startChapter := completedChapterNo - arcSize + 1
-		// 进程内去重：防止多章同时完成时对同一 arcNo 重复生成
 		lockKey := fmt.Sprintf("%d-%d", novelID, arcNo)
-		if _, loaded := s.arcGenLocks.LoadOrStore(lockKey, struct{}{}); loaded {
+		if !s.tryLockArc(lockKey) {
 			logger.Printf("[NarrativeMemory] arc %d (novel %d) already generating, skip", arcNo, novelID)
 			return
 		}
 		go func(arcNo, startChapter, endChapter int, lockKey string) {
-			defer s.arcGenLocks.Delete(lockKey)
+			defer s.unlockArc(lockKey)
 			defer func() {
 				if r := recover(); r != nil {
 					logger.Errorf("[NarrativeMemory] arc summary panic: %v", r)
@@ -638,14 +677,13 @@ func (s *NarrativeMemoryService) TriggerArcSummaryIfNeeded(tenantID, novelID uin
 		// 弧中段预摘要（第5、15、25...章）；arcNo 用负数标识，不覆盖完整弧
 		midArcNo := -(completedChapterNo / halfArcSize)
 		startChapter := completedChapterNo - halfArcSize + 1
-		// 进程内去重：防止并发触发中段摘要
 		lockKey := fmt.Sprintf("%d-%d", novelID, midArcNo)
-		if _, loaded := s.arcGenLocks.LoadOrStore(lockKey, struct{}{}); loaded {
+		if !s.tryLockArc(lockKey) {
 			logger.Printf("[NarrativeMemory] mid-arc %d (novel %d) already generating, skip", midArcNo, novelID)
 			return
 		}
 		go func(midArcNo, startChapter, endChapter int, lockKey string) {
-			defer s.arcGenLocks.Delete(lockKey)
+			defer s.unlockArc(lockKey)
 			defer func() {
 				if r := recover(); r != nil {
 					logger.Errorf("[NarrativeMemory] arc summary panic: %v", r)
@@ -789,31 +827,20 @@ func (s *NarrativeMemoryService) generateArcSummary(tenantID, novelID uint, arcN
 
 	logger.Printf("[NarrativeMemory] generateArcSummary done: novelID=%d arcNo=%d summaryLen=%d", novelID, arcNo, len(fullSummary))
 	now := time.Now()
-	existing, _ := s.arcRepo.GetByNovelAndArcNo(novelID, arcNo)
-	if existing != nil {
-		existing.Summary = fullSummary
-		existing.KeyEvents = string(keyEventsJSON)
-		existing.CharacterChanges = string(charChangesJSON)
-		existing.OpenForeshadows = string(openForeshadowsJSON)
-		existing.UpdatedAt = now
-		if err := s.arcRepo.Update(existing); err != nil {
-			return err
-		}
-	} else {
-		if err := s.arcRepo.Create(&model.ArcSummary{
-			NovelID:          novelID,
-			ArcNo:            arcNo,
-			StartChapter:     startChapter,
-			EndChapter:       endChapter,
-			Summary:          fullSummary,
-			KeyEvents:        string(keyEventsJSON),
-			CharacterChanges: string(charChangesJSON),
-			OpenForeshadows:  string(openForeshadowsJSON),
-			CreatedAt:        now,
-			UpdatedAt:        now,
-		}); err != nil {
-			return err
-		}
+	// Upsert: ON DUPLICATE KEY UPDATE — 多实例并发时第二个写入直接覆盖而不会产生重复行。
+	if err := s.arcRepo.Upsert(&model.ArcSummary{
+		NovelID:          novelID,
+		ArcNo:            arcNo,
+		StartChapter:     startChapter,
+		EndChapter:       endChapter,
+		Summary:          fullSummary,
+		KeyEvents:        string(keyEventsJSON),
+		CharacterChanges: string(charChangesJSON),
+		OpenForeshadows:  string(openForeshadowsJSON),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}); err != nil {
+		return err
 	}
 
 	// 正向弧（非中段预摘要）结束后，自适应修订后续章节大纲
@@ -945,10 +972,8 @@ func (s *NarrativeMemoryService) adaptOutlineAfterArc(
 
 	// 快照旧大纲（快照失败不阻断更新）
 	if s.outlineVersionRepo != nil {
-		ver, _ := s.outlineVersionRepo.MaxVersion(novelID)
-		_ = s.outlineVersionRepo.Create(&model.NovelOutlineVersion{
+		_ = s.outlineVersionRepo.CreateVersionAtomic(&model.NovelOutlineVersion{
 			NovelID: novelID,
-			Version: ver + 1,
 			Prompt:  fmt.Sprintf("弧%d自适应更新（第%d-%d章完成后）", arcNo, endChapter-arcSize+1, endChapter),
 			Outline: novel.Outline,
 		})

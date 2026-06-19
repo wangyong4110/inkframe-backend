@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"gorm.io/gorm"
@@ -14,6 +15,20 @@ type CharacterRepository struct {
 
 func NewCharacterRepository(db *gorm.DB) *CharacterRepository {
 	return &CharacterRepository{db: db}
+}
+
+// FindByNovelAndName 按 novel_id + name 查找未删除角色（用于去重兜底）。
+// 返回 nil, nil 表示不存在（区别于 gorm.ErrRecordNotFound 被归一化为 nil）。
+func (r *CharacterRepository) FindByNovelAndName(novelID uint, name string) (*model.Character, error) {
+	var c model.Character
+	err := r.db.Where("novel_id = ? AND name = ? AND deleted_at IS NULL", novelID, name).First(&c).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &c, nil
 }
 
 // Create 创建角色

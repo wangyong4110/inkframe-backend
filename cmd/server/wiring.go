@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/inkframe/inkframe-backend/internal/ai"
@@ -8,6 +9,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/crawler"
 	"github.com/inkframe/inkframe-backend/internal/handler"
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/middleware"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/service"
 	"github.com/inkframe/inkframe-backend/internal/storage"
@@ -303,13 +305,14 @@ type videoSvcs struct {
 // Group initializers
 // ──────────────────────────────────────────────────────────────
 
-func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *config.Config) *coreSvcs {
+func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *config.Config, redisClient *redis.Client) *coreSvcs {
 	// AI服务（注入 providerRepo 以支持按租户加载 AK/SK，注入 novelRepo 以读取小说项目级 AI 配置）
 	// WithTaskRouting: configure via config.yaml ai.tasks section (no AI.Tasks config key exists yet).
 	aiSvc := service.NewAIService(repos.AIModelRepo, repos.TaskModelConfigRepo, aiManager, repos.ModelProviderRepo).
 		WithNovelRepo(repos.NovelRepo).
 		WithEncryptionKey(cfg.Server.EncryptionKey).
-		WithImageConcurrency(5)
+		WithImageConcurrency(5).
+		WithRedis(redisClient) // Fix: cross-instance provider cache invalidation
 
 	// 模型服务（注入 aiService 以支持 TestProvider 实例化验证）
 	modelSvc := service.NewModelService(repos.AIModelRepo, repos.ModelProviderRepo, repos.TaskModelConfigRepo, repos.ModelComparisonRepo, aiSvc)
@@ -320,7 +323,8 @@ func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *
 	modelSvc.SeedAllProviders()
 
 	// 异步任务服务
-	taskSvc := service.NewTaskService(repos.TaskRepo)
+	taskSvc := service.NewTaskService(repos.TaskRepo).
+		WithRedis(redisClient) // Fix: cross-instance task cancel broadcast
 
 	// 剧情点服务
 	plotPointSvc := service.NewPlotPointService(repos.PlotPointRepo, aiSvc).
@@ -336,7 +340,7 @@ func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *
 	return &coreSvcs{AI: aiSvc, Model: modelSvc, Task: taskSvc, PlotPoint: plotPointSvc, Quality: qualitySvc}
 }
 
-func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, aiManager *ai.ModelManager, vectorStore *vector.StoreManager) *contentSvcs {
+func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, aiManager *ai.ModelManager, vectorStore *vector.StoreManager, redisClient *redis.Client) *contentSvcs {
 	aiSvc := core.AI
 
 	// 小说服务
@@ -344,7 +348,8 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 		WithCharacterRepos(repos.CharacterRepo, repos.SnapshotRepo).
 		WithPlotPointService(core.PlotPoint).
 		WithOutlineVersionRepo(repos.NovelOutlineVersionRepo).
-		WithMemberRepo(repos.NovelMemberRepo)
+		WithMemberRepo(repos.NovelMemberRepo).
+		WithRedis(redisClient) // Fix: cross-instance novel view dedup
 
 	// 角色服务
 	characterSvc := service.NewCharacterService(repos.CharacterRepo, aiSvc).
@@ -353,7 +358,8 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 		WithLookRepo(repos.CharacterLookRepo).
 		WithNovelRepo(repos.NovelRepo).
 		WithChapterRepo(repos.ChapterRepo).
-		WithModelRepo(repos.AIModelRepo)
+		WithModelRepo(repos.AIModelRepo).
+		WithRedis(redisClient) // Fix: cross-instance character extraction dedup
 
 	// 世界观服务
 	worldviewSvc := service.NewWorldviewService(repos.WorldviewRepo, aiSvc).
@@ -376,7 +382,8 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 	if defaultAIProvider == nil {
 		logger.Errorf("Warning: no default AI provider available; knowledge base embedding disabled")
 	}
-	knowledgeSvc := service.NewKnowledgeService(repos.KnowledgeBaseRepo, vectorStore, defaultAIProvider)
+	knowledgeSvc := service.NewKnowledgeService(repos.KnowledgeBaseRepo, vectorStore, defaultAIProvider).
+		WithRedis(redisClient) // Fix: cross-instance idempotency for plot point extraction
 
 	// 章节版本 / 伏笔 / 时间线 / 角色弧光 / 风格
 	chapterVersionSvc := service.NewChapterVersionService(repos.ChapterVersionRepo, repos.ChapterRepo)
@@ -391,7 +398,8 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 	// 层次化叙事记忆服务
 	narrativeMemorySvc := service.NewNarrativeMemoryService(repos.NovelRepo, repos.ChapterRepo, repos.CharacterRepo, repos.ArcSummaryRepo, aiSvc).
 		WithSnapshotRepo(repos.SnapshotRepo).
-		WithOutlineVersionRepo(repos.NovelOutlineVersionRepo)
+		WithOutlineVersionRepo(repos.NovelOutlineVersionRepo).
+		WithRedis(redisClient) // Fix: cross-instance arc summary deduplication
 
 	// 戏剧张力服务
 	hookChainSvc := service.NewHookChainService(repos.HookChainRepo)
@@ -410,7 +418,8 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 		WithContinuityService(continuitySvc).
 		WithKnowledgeService(knowledgeSvc).
 		WithQualityService(core.Quality).
-		WithForeshadowRepo(repos.ForeshadowRepo)
+		WithForeshadowRepo(repos.ForeshadowRepo).
+		WithRedis(redisClient) // Fix: cross-instance chapter generation dedup
 
 	// 图像生成服务
 	imageGenSvc := service.NewImageGenerationService(aiSvc)
@@ -442,7 +451,8 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 	// 导入服务
 	crawlerSvc := crawler.NewNovelCrawler(db)
 	novelImportSvc := service.NewNovelImportService(repos.NovelRepo, repos.ChapterRepo, crawlerSvc).
-		WithNarrativeMemory(narrativeMemorySvc)
+		WithNarrativeMemory(narrativeMemorySvc).
+		WithRedis(redisClient) // Fix: cross-instance crawl progress sharing
 
 	return &contentSvcs{
 		Novel: novelSvc, Chapter: chapterSvc, Character: characterSvc, Worldview: worldviewSvc,
@@ -457,11 +467,12 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 	}
 }
 
-func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *contentSvcs, cfg *config.Config) *videoSvcs {
+func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *contentSvcs, cfg *config.Config, redisClient *redis.Client) *videoSvcs {
 	aiSvc := core.AI
 
 	// 视频服务（视频提供商从 DB 按租户加载，无需静态注册）
-	videoSvc := service.NewVideoService(repos.VideoRepo, repos.StoryboardRepo, repos.ChapterRepo, repos.CharacterRepo, repos.NovelRepo, repos.TenantRepo, aiSvc, nil)
+	videoSvc := service.NewVideoService(repos.VideoRepo, repos.StoryboardRepo, repos.ChapterRepo, repos.CharacterRepo, repos.NovelRepo, repos.TenantRepo, aiSvc, nil).
+		WithRedis(redisClient) // Fix: cross-instance video view dedup
 
 	// 图像服务（内部，用于视频增强和一致性服务）
 	imageSvc := service.NewImageService(nil)
@@ -516,10 +527,14 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 
 // initServices 初始化服务层
 func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, vectorStore *vector.StoreManager, cfg *config.Config, redisClient *redis.Client) *Services {
-	core    := initCoreServiceGroup(repos, aiManager, cfg)
+	core    := initCoreServiceGroup(repos, aiManager, cfg, redisClient)
 	core.Task.WithDB(db)
-	content := initContentServiceGroup(db, repos, core, aiManager, vectorStore)
-	video   := initVideoServiceGroup(repos, core, content, cfg)
+	content := initContentServiceGroup(db, repos, core, aiManager, vectorStore, redisClient)
+	video   := initVideoServiceGroup(repos, core, content, cfg, redisClient)
+
+	// Cross-instance tenant subscription cache invalidation via Redis Pub/Sub.
+	middleware.SetTenantSubRedis(redisClient)
+	middleware.StartTenantSubInvalidator(context.Background(), redisClient)
 
 	// 改写服务（依赖统一异步任务系统）
 	rewriteSvc := service.NewRewriteService(
@@ -687,7 +702,8 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 			repos.UserRepo,
 			repos.NovelRepo,
 		).WithTenantUserRepo(repos.TenantUserRepo).
-			WithNotificationService(notifSvc),
+			WithNotificationService(notifSvc).
+			WithRedis(redisClient), // Fix: cross-instance SSE broadcast
 	}
 }
 

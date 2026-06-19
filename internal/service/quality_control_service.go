@@ -77,6 +77,18 @@ func (s *QualityControlService) WithReviewRepos(
 	return s
 }
 
+// chapterBelongsToTenant verifies chapter ownership via novel.TenantID (novel-based ownership).
+func (s *QualityControlService) chapterBelongsToTenant(chapter *model.Chapter, tenantID uint) bool {
+	if s.novelRepo == nil {
+		return true
+	}
+	novel, err := s.novelRepo.GetByID(chapter.NovelID)
+	if err != nil {
+		return false
+	}
+	return novel.TenantID == 0 || novel.TenantID == tenantID
+}
+
 func (s *QualityControlService) WithCharacterRepo(r interface {
 	ListByNovel(novelID uint) ([]*model.Character, error)
 }) *QualityControlService {
@@ -591,6 +603,45 @@ func (s *QualityControlService) RewriteByInstruction(ctx context.Context, chapte
 	return strings.TrimSpace(result), nil
 }
 
+// RefineSelection rewrites a short selected text fragment according to a user instruction.
+// Returns only the refined fragment (not saved — caller replaces it in the content).
+func (s *QualityControlService) RefineSelection(ctx context.Context, chapterID uint, selectedText, instruction string) (string, error) {
+	if s.aiSvc == nil {
+		return "", fmt.Errorf("AI client not initialized")
+	}
+	if strings.TrimSpace(selectedText) == "" {
+		return "", fmt.Errorf("selected text must not be empty")
+	}
+	if strings.TrimSpace(instruction) == "" {
+		return "", fmt.Errorf("instruction must not be empty")
+	}
+
+	chapter, err := s.chapterRepo.GetByID(chapterID)
+	if err != nil {
+		return "", fmt.Errorf("chapter not found: %w", err)
+	}
+	if chapter.Content == "" {
+		return "", fmt.Errorf("chapter has no content")
+	}
+
+	prompt, err := renderPrompt("selection_refine", map[string]interface{}{
+		"ChapterNo":      chapter.ChapterNo,
+		"ChapterTitle":   chapter.Title,
+		"ChapterContent": chapter.Content,
+		"SelectedText":   selectedText,
+		"Instruction":    instruction,
+	})
+	if err != nil {
+		return "", fmt.Errorf("render selection_refine: %w", err)
+	}
+
+	result, err := s.aiSvc.GenerateWithProvider(chapter.TenantID, chapter.NovelID, "selection_refine", prompt, "")
+	if err != nil {
+		return "", fmt.Errorf("AI refine selection failed: %w", err)
+	}
+	return strings.TrimSpace(result), nil
+}
+
 // ─── Chapter AI Review ────────────────────────────────────────────────────────
 
 // ReviewChapter performs a deep AI review of a chapter and stores the record.
@@ -770,7 +821,7 @@ func (s *QualityControlService) GetReviewRecord(recordID uint, tenantID uint) (*
 	// 验证 entity 属于当前租户（chapter 验证）
 	if rec.EntityType == model.ReviewEntityChapter {
 		chapter, err := s.chapterRepo.GetByID(rec.EntityID)
-		if err != nil || chapter.TenantID != tenantID {
+		if err != nil || !s.chapterBelongsToTenant(chapter, tenantID) {
 			return nil, fmt.Errorf("review record not found")
 		}
 	}
@@ -798,7 +849,7 @@ func (s *QualityControlService) RollbackReview(recordID, chapterID, tenantID uin
 	if err != nil {
 		return fmt.Errorf("chapter %d not found: %w", rec.EntityID, err)
 	}
-	if chapter.TenantID != tenantID {
+	if !s.chapterBelongsToTenant(chapter, tenantID) {
 		return fmt.Errorf("permission denied")
 	}
 	chapter.Content = rec.SnapshotJSON
@@ -840,7 +891,7 @@ func (s *QualityControlService) ApplyDiffs(chapterID uint, diffs []ParagraphDiff
 	if err != nil {
 		return 0, fmt.Errorf("chapter %d not found: %w", chapterID, err)
 	}
-	if tenantID != 0 && chapter.TenantID != tenantID {
+	if tenantID != 0 && !s.chapterBelongsToTenant(chapter, tenantID) {
 		return 0, fmt.Errorf("not found")
 	}
 

@@ -353,14 +353,52 @@ type tenantSubCache struct {
 }
 
 var (
-	tenantSubStore sync.Map // key: uint (tenantID) → *tenantSubCache
+	tenantSubStore  sync.Map     // key: uint (tenantID) → *tenantSubCache
+	tenantSubRedis  *redis.Client // optional: set via SetTenantSubRedis for cross-instance invalidation
 )
 
-// InvalidateTenantSubCache removes the cached subscription status for a tenant,
-// forcing the next request to re-read from the database.
-// Call this after any tenant update that changes status, plan, or expiry.
+const redisChanTenantSub = "inkframe:tenant:sub:invalidate"
+
+// SetTenantSubRedis configures the Redis client used for cross-instance cache invalidation.
+// Call once at startup before serving requests.
+func SetTenantSubRedis(rdb *redis.Client) {
+	tenantSubRedis = rdb
+}
+
+// InvalidateTenantSubCache removes the cached subscription status for a tenant
+// and publishes an invalidation message to Redis so peer instances also drop their entry.
 func InvalidateTenantSubCache(tenantID uint) {
 	tenantSubStore.Delete(tenantID)
+	if tenantSubRedis != nil {
+		tenantSubRedis.Publish(context.Background(), redisChanTenantSub, strconv.FormatUint(uint64(tenantID), 10)) //nolint:errcheck
+	}
+}
+
+// StartTenantSubInvalidator subscribes to the Redis invalidation channel and removes
+// local cache entries whenever another instance broadcasts an invalidation.
+// Call once at startup.
+func StartTenantSubInvalidator(ctx context.Context, rdb *redis.Client) {
+	if rdb == nil {
+		return
+	}
+	go func() {
+		sub := rdb.Subscribe(ctx, redisChanTenantSub)
+		defer sub.Close()
+		for {
+			select {
+			case msg, ok := <-sub.Channel():
+				if !ok {
+					return
+				}
+				id, err := strconv.ParseUint(msg.Payload, 10, 64)
+				if err == nil {
+					tenantSubStore.Delete(uint(id))
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 }
 
 // CheckTenantSubscription validates that the tenant's subscription is active
@@ -456,7 +494,7 @@ func SecurityHeaders() gin.HandlerFunc {
 	}
 }
 
-// RateLimit 限流中间件
+// RateLimit 限流中间件（进程内令牌桶，单实例有效）
 // capacity: 令牌桶容量（突发请求数）, rate: 每秒补充速率
 func RateLimit(capacity float64, rate float64) gin.HandlerFunc {
 	if capacity <= 0 {
@@ -469,6 +507,42 @@ func RateLimit(capacity float64, rate float64) gin.HandlerFunc {
 		ip := c.ClientIP()
 		bucket := getBucket(ip, capacity, rate)
 		if !bucket.allow() {
+			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
+				"error": "rate limit exceeded, please slow down",
+			})
+			return
+		}
+		c.Next()
+	}
+}
+
+// RateLimitWithRedis 跨实例限流中间件（Redis 固定窗口计数）。
+// 多实例场景下使用 Redis INCR 全局计数，保证 N 个实例合计不超过 rate req/s。
+// Redis 不可用时自动降级为进程内令牌桶。
+// capacity: 突发容量（降级时使用）; rate: 每秒允许请求数（Redis 计数时使用）。
+func RateLimitWithRedis(rdb *redis.Client, capacity, rate float64) gin.HandlerFunc {
+	local := RateLimit(capacity, rate)
+	ratePerSec := int64(rate)
+	if ratePerSec <= 0 {
+		ratePerSec = 10
+	}
+	return func(c *gin.Context) {
+		if rdb == nil {
+			local(c)
+			return
+		}
+		ctx := c.Request.Context()
+		ip := c.ClientIP()
+		key := fmt.Sprintf("rl:%s:%d", ip, time.Now().Unix())
+		cnt, err := rdb.Incr(ctx, key).Result()
+		if err != nil {
+			local(c) // Redis 故障：降级为进程内限流
+			return
+		}
+		if cnt == 1 {
+			rdb.Expire(ctx, key, 2*time.Second)
+		}
+		if cnt > ratePerSec {
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, gin.H{
 				"error": "rate limit exceeded, please slow down",
 			})

@@ -159,12 +159,22 @@ func (r *ChapterRepository) GetRecent(novelID uint, currentChapterNo, count int)
 	return chapters, nil
 }
 
-// Update 更新章节
+// Update 更新章节（全量 Save，适用于用户手动编辑等需要写入所有字段的场景）
 func (r *ChapterRepository) Update(chapter *model.Chapter) error {
 	if err := r.db.Save(chapter).Error; err != nil {
 		return err
 	}
 	r.invalidateListCache(chapter.NovelID)
+	return nil
+}
+
+// UpdateFields 仅更新指定字段（避免全量 Save 写入大文本列，减少写放大）。
+// fields 的 key 必须是数据库列名（snake_case），如 "content"/"summary"/"title"。
+func (r *ChapterRepository) UpdateFields(id, novelID uint, fields map[string]interface{}) error {
+	if err := r.db.Model(&model.Chapter{}).Where("id = ? AND novel_id = ?", id, novelID).Updates(fields).Error; err != nil {
+		return err
+	}
+	r.invalidateListCache(novelID)
 	return nil
 }
 
@@ -388,9 +398,29 @@ func NewChapterVersionRepository(db *gorm.DB) *ChapterVersionRepository {
 	return &ChapterVersionRepository{db: db}
 }
 
-// Create 创建版本
+// Create 创建版本（调用者须先自行确定 VersionNo）
 func (r *ChapterVersionRepository) Create(version *model.ChapterVersion) error {
 	return r.db.Create(version).Error
+}
+
+// CreateAtomic 在事务内用 SELECT MAX FOR UPDATE 原子分配 version_no 后插入版本记录。
+// 多实例并发时不会产生重复 version_no（唯一索引 idx_version_chapter 作为最后一道防线）。
+func (r *ChapterVersionRepository) CreateAtomic(version *model.ChapterVersion) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var maxNo struct{ V *int }
+		if err := tx.Raw(
+			"SELECT MAX(version_no) AS v FROM ink_chapter_version WHERE chapter_id = ? FOR UPDATE",
+			version.ChapterID,
+		).Scan(&maxNo).Error; err != nil {
+			return err
+		}
+		if maxNo.V == nil {
+			version.VersionNo = 1
+		} else {
+			version.VersionNo = *maxNo.V + 1
+		}
+		return tx.Create(version).Error
+	})
 }
 
 // GetLatest 获取最新版本
@@ -522,17 +552,21 @@ func NewChapterCharacterRepository(db *gorm.DB) *ChapterCharacterRepository {
 }
 
 func (r *ChapterCharacterRepository) Upsert(cc *model.ChapterCharacter) error {
-	var existing model.ChapterCharacter
-	err := r.db.Where("chapter_id = ? AND character_id = ?", cc.ChapterID, cc.CharacterID).First(&existing).Error
-	if err == nil {
-		existing.Appearance = cc.Appearance
-		existing.Personality = cc.Personality
-		existing.Status = cc.Status
-		existing.Location = cc.Location
-		existing.Notes = cc.Notes
-		return r.db.Save(&existing).Error
-	}
-	return r.db.Create(cc).Error
+	// 使用 ON DUPLICATE KEY UPDATE 保证并发安全，避免 TOCTOU 竞争导致
+	// unique constraint violation（uniq_chapter_char: character_id + chapter_id）。
+	return r.db.Exec(`INSERT INTO ink_chapter_character
+		(character_id, chapter_id, novel_id, appearance, personality, status, location, notes, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+		ON DUPLICATE KEY UPDATE
+		  appearance   = VALUES(appearance),
+		  personality  = VALUES(personality),
+		  status       = VALUES(status),
+		  location     = VALUES(location),
+		  notes        = VALUES(notes),
+		  updated_at   = NOW()`,
+		cc.CharacterID, cc.ChapterID, cc.NovelID,
+		cc.Appearance, cc.Personality, cc.Status, cc.Location, cc.Notes,
+	).Error
 }
 
 func (r *ChapterCharacterRepository) GetByChapterAndCharacter(chapterID, characterID uint) (*model.ChapterCharacter, error) {

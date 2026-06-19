@@ -118,7 +118,7 @@ func (h *PlotPointHandler) Get(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "plot point not found")
 		return
 	}
-	if pp.TenantID != getTenantID(c) {
+	if !h.checkNovelTenant(c, pp.NovelID) {
 		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -156,7 +156,7 @@ func (h *PlotPointHandler) Update(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "plot point not found")
 		return
 	}
-	if existing.TenantID != getTenantID(c) {
+	if !h.checkNovelTenant(c, existing.NovelID) {
 		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -183,7 +183,7 @@ func (h *PlotPointHandler) MarkResolved(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "plot point not found")
 		return
 	}
-	if existing.TenantID != getTenantID(c) {
+	if !h.checkNovelTenant(c, existing.NovelID) {
 		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -212,7 +212,7 @@ func (h *PlotPointHandler) Delete(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "plot point not found")
 		return
 	}
-	if existing.TenantID != getTenantID(c) {
+	if !h.checkNovelTenant(c, existing.NovelID) {
 		respondErr(c, http.StatusForbidden, "forbidden")
 		return
 	}

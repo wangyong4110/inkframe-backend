@@ -1230,6 +1230,45 @@ func (h *ChapterHandler) RewriteChapterByInstruction(c *gin.Context) {
 	respondAccepted(c, task.TaskID, "按指令修改任务已提交")
 }
 
+// RefineSelection POST /api/v1/chapters/:id/refine-selection
+// 对选中片段按指令同步精修，返回改写后的文字（不保存）
+func (h *ChapterHandler) RefineSelection(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+
+	var req struct {
+		SelectedText string `json:"selected_text"`
+		Instruction  string `json:"instruction"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+	if strings.TrimSpace(req.SelectedText) == "" {
+		respondBadRequest(c, "selected_text is required")
+		return
+	}
+	if strings.TrimSpace(req.Instruction) == "" {
+		respondBadRequest(c, "instruction is required")
+		return
+	}
+
+	tenantID := getTenantID(c)
+	if _, err := h.chapterService.GetChapter(uint(id), tenantID); err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+
+	refinedText, err := h.qualityService.RefineSelection(c.Request.Context(), uint(id), req.SelectedText, req.Instruction)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	respondOK(c, gin.H{"refined_text": refinedText})
+}
+
 // ChapterChatStream POST /api/v1/chapters/:id/chat/stream
 // 与 AI 编辑对话，修改章节内容（SSE 流式）
 func (h *ChapterHandler) ChapterChatStream(c *gin.Context) {

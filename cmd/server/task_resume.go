@@ -196,7 +196,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			chars, err := svcs.CharacterService.AIExtractMinorChars(t.TenantID, params.NovelID, chapterID)
+			chars, err := svcs.CharacterService.AIExtractMinorChars(t.TenantID, params.NovelID, chapterID, "")
 			if err != nil {
 				logger.Errorf("TaskService resume chapter_char_extract %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -600,7 +600,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			anchors, err := svcs.SceneAnchorService.ExtractFromChapter(context.Background(), t.TenantID, params.NovelID, "", params.Content, chapterID)
+			anchors, err := svcs.SceneAnchorService.ExtractFromChapter(context.Background(), t.TenantID, params.NovelID, "", params.Content, chapterID, "")
 			if err != nil {
 				logger.Errorf("TaskService resume chapter_scene_extract %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck

@@ -153,6 +153,16 @@ func (h *CharacterHandler) CreateCharacter(c *gin.Context) {
 	respondCreated(c, characterResponse(character))
 }
 
+// charBelongsToTenant verifies character ownership via novel (char → novel → tenant).
+// Falls back to allow when novelService is not wired (internal/batch calls).
+func (h *CharacterHandler) charBelongsToTenant(char *model.Character, c *gin.Context) bool {
+	if h.novelService == nil {
+		return true
+	}
+	_, err := h.novelService.GetNovel(char.NovelID, getTenantID(c), getUserIDFromCtx(c))
+	return err == nil
+}
+
 // GetCharacter 获取角色详情
 // GET /api/v1/characters/:id
 func (h *CharacterHandler) GetCharacter(c *gin.Context) {
@@ -166,21 +176,9 @@ func (h *CharacterHandler) GetCharacter(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
-	tenantID := getTenantID(c)
-	if character.TenantID != tenantID {
-		// 自愈：tenant_id=0 是历史数据缺陷，通过 novel 归属验证后修复
-		if character.TenantID == 0 && h.novelService != nil {
-			if _, e := h.novelService.GetNovel(character.NovelID, tenantID, getUserIDFromCtx(c)); e == nil {
-				go h.characterService.FixTenantID(character.ID, tenantID)
-				character.TenantID = tenantID
-			} else {
-				respondErr(c, http.StatusNotFound, "character not found")
-				return
-			}
-		} else {
-			respondErr(c, http.StatusNotFound, "character not found")
-			return
-		}
+	if !h.charBelongsToTenant(character, c) {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
 	}
 
 	respondOK(c, characterResponse(character))
@@ -314,11 +312,11 @@ func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
-	tenantID := getTenantID(c)
-	if character.TenantID != tenantID {
+	if !h.charBelongsToTenant(character, c) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
+	tenantID := getTenantID(c)
 
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeCharImageGen, "角色图片生成", "character", uint(id))
 	if err != nil {
@@ -383,11 +381,11 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 		return
 	}
 
-	tenantID := getTenantID(c)
-	if character.TenantID != tenantID {
+	if !h.charBelongsToTenant(character, c) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
+	tenantID := getTenantID(c)
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeThreeView, "角色三视图生成", "character", uint(id))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
@@ -476,11 +474,11 @@ func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
 		return
 	}
 
-	tenantID := getTenantID(c)
-	if character.TenantID != tenantID {
+	if !h.charBelongsToTenant(character, c) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
+	tenantID := getTenantID(c)
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeFaceCloseup, "角色面部特写生成", "character", uint(id))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
@@ -595,7 +593,7 @@ func (h *CharacterHandler) UploadCharacterImage(c *gin.Context) {
 		return
 	}
 	character, err := h.characterService.GetCharacter(uint(id))
-	if err != nil || character.TenantID != getTenantID(c) {
+	if err != nil || !h.charBelongsToTenant(character, c) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
@@ -661,7 +659,7 @@ func (h *CharacterHandler) UploadCharacterLookImage(c *gin.Context) {
 		return
 	}
 	char, err := h.characterService.GetCharacter(uint(id))
-	if err != nil || char.TenantID != getTenantID(c) {
+	if err != nil || !h.charBelongsToTenant(char, c) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
@@ -1028,6 +1026,11 @@ func (h *CharacterHandler) AIExtractMinorCharacters(c *gin.Context) {
 		return
 	}
 
+	var body struct {
+		UserPrompt string `json:"user_prompt"`
+	}
+	_ = c.ShouldBindJSON(&body)
+
 	tenantID := getTenantID(c)
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterCharExtract, "角色分析", "chapter", chapter.ID)
 	if err != nil {
@@ -1039,16 +1042,16 @@ func (h *CharacterHandler) AIExtractMinorCharacters(c *gin.Context) {
 		"chapter_no": chapterNo,
 	})
 
-	go func(taskID string, tID, nID, chapID uint) {
+	go func(taskID string, tID, nID, chapID uint, userPrompt string) {
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		chars, err := h.characterService.AIExtractMinorChars(tID, nID, chapID)
+		chars, err := h.characterService.AIExtractMinorChars(tID, nID, chapID, userPrompt)
 		if err != nil {
 			logger.Errorf("[CharacterHandler] AIExtractMinorCharacters task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
 		h.taskSvc.Complete(taskID, map[string]interface{}{"new_count": len(chars)}) //nolint:errcheck
-	}(task.TaskID, tenantID, uint(novelID), chapter.ID)
+	}(task.TaskID, tenantID, uint(novelID), chapter.ID, body.UserPrompt)
 
 	respondAccepted(c, task.TaskID, "角色分析任务已提交")
 }
@@ -1099,7 +1102,7 @@ func (h *CharacterHandler) ExtractCharacterVoice(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
-	if character.TenantID != getTenantID(c) {
+	if !h.charBelongsToTenant(character, c) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
@@ -1148,11 +1151,11 @@ func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
-	tenantID := getTenantID(c)
-	if character.TenantID != tenantID {
+	if !h.charBelongsToTenant(character, c) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
+	tenantID := getTenantID(c)
 
 	var req struct {
 		Text          string   `json:"text"`
@@ -1256,7 +1259,7 @@ func (h *CharacterHandler) ServeVoiceSample(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "no voice sample available")
 		return
 	}
-	if character.TenantID != getTenantID(c) {
+	if !h.charBelongsToTenant(character, c) {
 		respondErr(c, http.StatusNotFound, "no voice sample available")
 		return
 	}
@@ -1276,7 +1279,7 @@ func (h *CharacterHandler) ListCharacterSnapshots(c *gin.Context) {
 		return
 	}
 	character, err := h.characterService.GetCharacter(uint(id))
-	if err != nil || character.TenantID != getTenantID(c) {
+	if err != nil || !h.charBelongsToTenant(character, c) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
@@ -1295,7 +1298,7 @@ func (h *CharacterHandler) CreateCharacterSnapshot(c *gin.Context) {
 		return
 	}
 	character, err := h.characterService.GetCharacter(uint(id))
-	if err != nil || character.TenantID != getTenantID(c) {
+	if err != nil || !h.charBelongsToTenant(character, c) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
@@ -1321,7 +1324,7 @@ func (h *CharacterHandler) ListCharacterLooks(c *gin.Context) {
 		return
 	}
 	char, err := h.characterService.GetCharacter(uint(id))
-	if err != nil || char.TenantID != getTenantID(c) {
+	if err != nil || !h.charBelongsToTenant(char, c) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
@@ -1340,7 +1343,7 @@ func (h *CharacterHandler) CreateCharacterLook(c *gin.Context) {
 		return
 	}
 	char, err := h.characterService.GetCharacter(uint(id))
-	if err != nil || char.TenantID != getTenantID(c) {
+	if err != nil || !h.charBelongsToTenant(char, c) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
@@ -1368,7 +1371,7 @@ func (h *CharacterHandler) UpdateCharacterLook(c *gin.Context) {
 		return
 	}
 	char, err := h.characterService.GetCharacter(uint(id))
-	if err != nil || char.TenantID != getTenantID(c) {
+	if err != nil || !h.charBelongsToTenant(char, c) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
@@ -1396,7 +1399,7 @@ func (h *CharacterHandler) DeleteCharacterLook(c *gin.Context) {
 		return
 	}
 	char, err := h.characterService.GetCharacter(uint(id))
-	if err != nil || char.TenantID != getTenantID(c) {
+	if err != nil || !h.charBelongsToTenant(char, c) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
@@ -1415,7 +1418,7 @@ func (h *CharacterHandler) GetActiveLook(c *gin.Context) {
 		return
 	}
 	char, err := h.characterService.GetCharacter(uint(id))
-	if err != nil || char.TenantID != getTenantID(c) {
+	if err != nil || !h.charBelongsToTenant(char, c) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
@@ -1440,7 +1443,7 @@ func (h *CharacterHandler) GenerateLookVisualPrompt(c *gin.Context) {
 	}
 	tenantID := getTenantID(c)
 	char, err := h.characterService.GetCharacter(uint(id))
-	if err != nil || char.TenantID != tenantID {
+	if err != nil || !h.charBelongsToTenant(char, c) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}
@@ -1493,7 +1496,7 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 	}
 	tenantID := getTenantID(c)
 	char, err := h.characterService.GetCharacter(uint(id))
-	if err != nil || char.TenantID != tenantID {
+	if err != nil || !h.charBelongsToTenant(char, c) {
 		respondErr(c, http.StatusNotFound, "character not found")
 		return
 	}

@@ -72,6 +72,30 @@ func NewOutlineReviewService(
 	}
 }
 
+// chapterBelongsToTenant verifies chapter ownership via novel.TenantID (novel-based ownership).
+func (s *OutlineReviewService) chapterBelongsToTenant(chapter *model.Chapter, tenantID uint) bool {
+	if s.novelRepo == nil {
+		return true
+	}
+	novel, err := s.novelRepo.GetByID(chapter.NovelID)
+	if err != nil {
+		return false
+	}
+	return novel.TenantID == 0 || novel.TenantID == tenantID
+}
+
+// novelBelongsToTenant verifies novel ownership via novel.TenantID.
+func (s *OutlineReviewService) novelBelongsToTenant(novelID uint, tenantID uint) bool {
+	if s.novelRepo == nil {
+		return true
+	}
+	novel, err := s.novelRepo.GetByID(novelID)
+	if err != nil {
+		return false
+	}
+	return novel.TenantID == 0 || novel.TenantID == tenantID
+}
+
 // BatchReviewResult 批量审查返回值（章级结果 + 小说级综合报告）
 type BatchReviewResult struct {
 	Reviews   []*model.OutlineReview
@@ -84,7 +108,7 @@ func (s *OutlineReviewService) ReviewChapterOutline(ctx context.Context, tenantI
 	if err != nil {
 		return nil, fmt.Errorf("chapter not found: %w", err)
 	}
-	if chapter.TenantID != tenantID {
+	if !s.chapterBelongsToTenant(chapter, tenantID) {
 		return nil, fmt.Errorf("not found")
 	}
 
@@ -249,7 +273,7 @@ func (s *OutlineReviewService) GetReview(tenantID, chapterID uint) (*model.Outli
 	if err != nil {
 		return nil, err
 	}
-	if review.TenantID != tenantID {
+	if !s.novelBelongsToTenant(review.NovelID, tenantID) {
 		return nil, fmt.Errorf("not found")
 	}
 	return review, nil
@@ -269,7 +293,7 @@ func (s *OutlineReviewService) GetSynthesis(tenantID, novelID uint) (*model.Nove
 	if err != nil {
 		return nil, err
 	}
-	if syn.TenantID != tenantID {
+	if !s.novelBelongsToTenant(novelID, tenantID) {
 		return nil, fmt.Errorf("not found")
 	}
 	return syn, nil

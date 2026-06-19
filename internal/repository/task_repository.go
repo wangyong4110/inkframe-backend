@@ -137,6 +137,17 @@ func (r *TaskRepository) CancelIfActive(taskID string) error {
 		Update("status", "cancelled").Error
 }
 
+// ClaimForResume atomically transitions a task from pending → running.
+// Returns (true, nil) only when this instance wins the claim (rowsAffected==1).
+// Returns (false, nil) when another instance already claimed it.
+// Used by recoverOrphaned to prevent two instances from executing the same task.
+func (r *TaskRepository) ClaimForResume(taskID string) (bool, error) {
+	result := r.db.Model(&model.AsyncTask{}).
+		Where("task_id = ? AND status = ?", taskID, "pending").
+		Update("status", "running")
+	return result.RowsAffected == 1, result.Error
+}
+
 // CountActive returns the number of pending/running tasks for a tenant.
 func (r *TaskRepository) CountActive(tenantID uint) (int64, error) {
 	var count int64

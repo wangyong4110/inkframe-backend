@@ -11,6 +11,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 )
 
@@ -57,11 +58,12 @@ const (
 // TaskService manages persistent async tasks.
 type TaskService struct {
 	repo             *repository.TaskRepository
-	db               *gorm.DB      // optional: used for cross-table cleanup (e.g. WebhookDelivery)
-	stopCh           chan struct{}  // closed by Shutdown() to stop background goroutines
-	cancelFns        sync.Map      // taskID string → context.CancelFunc
-	resumeFns        sync.Map      // taskType string → func(*model.AsyncTask)
-	cleanupCallbacks []func()      // optional hooks called during the hourly cleanup cycle
+	db               *gorm.DB        // optional: used for cross-table cleanup (e.g. WebhookDelivery)
+	cache            *redis.Client   // optional: for cross-instance task cancel broadcast
+	stopCh           chan struct{}    // closed by Shutdown() to stop background goroutines
+	cancelFns        sync.Map        // taskID string → context.CancelFunc
+	resumeFns        sync.Map        // taskType string → func(*model.AsyncTask)
+	cleanupCallbacks []func()        // optional hooks called during the hourly cleanup cycle
 	rootCtx          context.Context // server root context; cancelled on graceful shutdown
 }
 
@@ -80,6 +82,46 @@ func NewTaskService(repo *repository.TaskRepository) *TaskService {
 func (s *TaskService) WithDB(db *gorm.DB) *TaskService {
 	s.db = db
 	return s
+}
+
+const redisChanTaskCancel = "inkframe:task:cancel"
+
+// WithRedis enables cross-instance task cancellation via Redis Pub/Sub.
+// When Cancel() is called on any instance, the cancellation is broadcast to all
+// other instances so their in-flight goroutines also receive context cancellation.
+func (s *TaskService) WithRedis(c *redis.Client) *TaskService {
+	s.cache = c
+	if c != nil {
+		go s.startCancelSubscriber()
+	}
+	return s
+}
+
+func (s *TaskService) startCancelSubscriber() {
+	sub := s.cache.Subscribe(context.Background(), redisChanTaskCancel)
+	defer sub.Close()
+	ch := sub.Channel()
+	for {
+		select {
+		case msg, ok := <-ch:
+			if !ok {
+				return
+			}
+			s.cancelLocalTask(msg.Payload)
+		case <-s.stopCh:
+			return
+		}
+	}
+}
+
+// cancelLocalTask invokes the in-process cancel function for taskID if registered.
+func (s *TaskService) cancelLocalTask(taskID string) {
+	if fn, ok := s.cancelFns.Load(taskID); ok {
+		if cancel, ok := fn.(context.CancelFunc); ok {
+			cancel()
+			logger.Printf("[TaskService] cancelled local goroutine for task %s (cross-instance signal)", taskID)
+		}
+	}
 }
 
 // Boot recovers orphaned tasks from a previous session. Must be called after all
@@ -295,13 +337,11 @@ func (s *TaskService) DeregisterCancel(taskID string) {
 // Cancel marks the task as cancelled only if it is still pending or running.
 // If a cancel function is registered (task is in-flight), it is invoked immediately
 // so the running goroutine's context is cancelled.
+// When Redis is wired, the cancellation is also broadcast to all other instances.
 func (s *TaskService) Cancel(taskID string) error {
-	if fn, ok := s.cancelFns.Load(taskID); ok {
-		if cancel, ok := fn.(context.CancelFunc); ok {
-			cancel()
-		} else {
-			logger.Printf("[TaskService] cancelFns: unexpected type for task %s", taskID)
-		}
+	s.cancelLocalTask(taskID)
+	if s.cache != nil {
+		_ = s.cache.Publish(context.Background(), redisChanTaskCancel, taskID).Err()
 	}
 	return s.repo.CancelIfActive(taskID)
 }
@@ -396,6 +436,8 @@ func (s *TaskService) recoverOrphaned(age time.Duration) {
 			var wg sync.WaitGroup
 			for _, t := range tasks {
 				if fn, ok := s.resumeFns.Load(t.Type); ok {
+					// Reset to pending so ClaimForResume can use a deterministic pending→running
+					// transition. Both instances may do this — it's idempotent.
 					_ = s.repo.UpdateFields(t.TaskID, map[string]interface{}{
 						"status": "pending",
 						"error":  "",
@@ -411,10 +453,20 @@ func (s *TaskService) recoverOrphaned(age time.Duration) {
 						defer wg.Done()
 						defer func() { <-sem }()
 						defer taskCancel()
-						// Store cancel so that Cancel() can interrupt this resumed task.
+						// Atomic claim: exactly one instance wins per task_id.
+						// ClaimForResume does UPDATE ... WHERE status='pending' — MySQL row lock
+						// guarantees only one caller gets rowsAffected==1.
+						if ok, claimErr := s.repo.ClaimForResume(task.TaskID); !ok || claimErr != nil {
+							if claimErr != nil {
+								logger.Errorf("[TaskService] ClaimForResume(%s): %v", task.TaskID, claimErr)
+							} else {
+								logger.Printf("[TaskService] task %s claimed by another instance, skipping", task.TaskID)
+							}
+							return
+						}
 						s.cancelFns.Store(task.TaskID, taskCancel)
 						defer s.cancelFns.Delete(task.TaskID)
-						_ = taskCtx // available to resume handler if it needs ctx in future
+						_ = taskCtx
 						resumeFn.(func(*model.AsyncTask))(task)
 					}()
 					resumed++

@@ -665,7 +665,7 @@ func (s *ItemService) AIExtractAllFromNovel(ctx context.Context, tenantID, novel
 }
 
 // AIExtractChapterItems 从单章内容中提取物品，写入 ink_item + ink_chapter_item
-func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint) ([]*model.Item, error) {
+func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint, userPrompt string) ([]*model.Item, error) {
 	logger.Printf("[ItemService] AIExtractChapterItems: novelID=%d chapterID=%d", novelID, chapterID)
 	chapter, err := s.chapterRepo.GetByID(chapterID)
 	if err != nil {
@@ -701,6 +701,7 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint) (
 		"Genre":         novelGenre,
 		"ExistingNames": existingNames,
 		"Content":       content,
+		"UserPrompt":    userPrompt,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render extract_chapter_items: %w", err)
