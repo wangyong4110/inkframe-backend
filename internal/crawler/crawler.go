@@ -1318,11 +1318,6 @@ func (p *GenericParser) ParseChapterList(root *goquery.Selection) ([]*ChapterInf
 		}
 	}
 
-	type linkEntry struct {
-		title string
-		href  string
-	}
-
 	// 从书目 URL 路径中提取纯数字书本 ID（如 /book-chapter/748198 → "748198"）。
 	// 用于宽松路径匹配：当章节 URL 与书目 URL 路径前缀不同时（如 /book-reader/748198/1），
 	// 只要路径中包含书本 ID 即认为是有效章节链接。
@@ -1396,8 +1391,15 @@ func (p *GenericParser) ParseChapterList(root *goquery.Selection) ([]*ChapterInf
 		candidates = append(candidates, linkEntry{title: title, href: linkURL.String()})
 	})
 
+	// 路径前缀规则未找到候选时，退回到「公共前缀聚类」策略：
+	// 收集同域所有疑似章节链接（标题符合章节命名），按两级路径前缀分组，
+	// 取最大组（>=3 条）作为章节列表。适用于章节 URL 与书目 URL 不共享前缀的站点
+	// （如 fanqienovel.com：书目 /page/ID，章节 /reader/CHAPTER_ID）。
 	if len(candidates) == 0 {
-		// 统计页面总链接数，帮助判断是 JS 渲染（总链接极少）还是路径过滤太严
+		candidates = clusterChapterLinks(root, allowedHosts, bookParsed, navKeywords)
+	}
+
+	if len(candidates) == 0 {
 		totalLinks := root.Find("a[href]").Length()
 		if totalLinks < 5 {
 			return nil, fmt.Errorf("generic: 页面几乎无链接（共%d个），可能为 JS 渲染页面，不支持爬取（bookURL=%s）", totalLinks, p.bookURL)
@@ -1500,6 +1502,93 @@ func (p *GenericParser) ParseChapter(root *goquery.Selection) (*ChapterContent, 
 		content.Content = strings.Join(bodyParagraphs, "\n\n")
 	}
 	return content, nil
+}
+
+// clusterChapterLinks 在路径前缀规则失败后作为回退：
+// 收集同域所有符合章节标题特征的链接，按两级路径前缀聚类，返回最大簇（>=3条）。
+// 典型场景：fanqienovel.com 书目页 /page/ID，章节全在 /reader/CHAPTER_ID（无公共前缀）。
+type linkEntry struct {
+	title string
+	href  string
+}
+
+func clusterChapterLinks(root *goquery.Selection, allowedHosts map[string]struct{}, bookParsed *url.URL, navKeywords []string) []linkEntry {
+	// 收集同域、标题合法的所有链接
+	var all []linkEntry
+	root.Find("a[href]").Each(func(_ int, s *goquery.Selection) {
+		href, _ := s.Attr("href")
+		title := strings.TrimSpace(s.Text())
+		if href == "" || title == "" {
+			return
+		}
+		titleRunes := []rune(title)
+		if len(titleRunes) < 2 || len(titleRunes) > 40 {
+			return
+		}
+		titleLower := strings.ToLower(title)
+		for _, kw := range navKeywords {
+			if strings.Contains(titleLower, kw) {
+				return
+			}
+		}
+		linkURL, err := url.Parse(href)
+		if err != nil {
+			return
+		}
+		if !linkURL.IsAbs() {
+			if bookParsed == nil {
+				return
+			}
+			linkURL = bookParsed.ResolveReference(linkURL)
+		}
+		if len(allowedHosts) > 0 {
+			if _, ok := allowedHosts[linkURL.Host]; !ok {
+				return
+			}
+		}
+		linkPath := strings.TrimRight(linkURL.Path, "/")
+		for _, ext := range []string{".js", ".css", ".png", ".jpg", ".gif", ".ico"} {
+			if strings.HasSuffix(linkPath, ext) {
+				return
+			}
+		}
+		all = append(all, linkEntry{title: title, href: linkURL.String()})
+	})
+
+	if len(all) == 0 {
+		return nil
+	}
+
+	// 按两级路径前缀分组（如 /reader 或 /book/123）
+	groups := make(map[string][]linkEntry)
+	for _, e := range all {
+		u, err := url.Parse(e.href)
+		if err != nil {
+			continue
+		}
+		parts := strings.SplitN(strings.TrimLeft(u.Path, "/"), "/", 3)
+		var prefix string
+		if len(parts) >= 2 {
+			prefix = "/" + parts[0] + "/" + parts[1]
+		} else if len(parts) == 1 && parts[0] != "" {
+			prefix = "/" + parts[0]
+		} else {
+			continue
+		}
+		groups[prefix] = append(groups[prefix], e)
+	}
+
+	// 找最大簇（至少 3 条）
+	var best []linkEntry
+	for _, entries := range groups {
+		if len(entries) > len(best) {
+			best = entries
+		}
+	}
+	if len(best) < 3 {
+		return nil
+	}
+	return best
 }
 
 // extractArticleNodeText 从 readability 提取的正文 *html.Node 中按段落结构提取文本。
