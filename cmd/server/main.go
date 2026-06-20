@@ -308,6 +308,9 @@ func main() {
 	// 多实例环境下通过 Redis SETNX 保证每条记录只被一个实例处理。
 	go services.PlatformPublishService.RecoverStalePublishRecords(serverRootCtx)
 
+	// 恢复因服务崩溃或重启而中断的小说爬取任务（status="running" 的孤儿任务）。
+	go services.NovelImportService.RecoverStaleCrawlJobs(serverRootCtx)
+
 	// 14. 等待中断信号
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)

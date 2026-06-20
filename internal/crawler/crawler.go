@@ -19,6 +19,7 @@ import (
 	"github.com/gocolly/colly/v2"
 	"github.com/gocolly/colly/v2/extensions"
 	"github.com/inkframe/inkframe-backend/internal/model"
+	"golang.org/x/net/html"
 	"gorm.io/gorm"
 )
 
@@ -1414,10 +1415,14 @@ func (p *GenericParser) ParseChapter(root *goquery.Selection) (*ChapterContent, 
 		pageURL = &url.URL{Scheme: "https", Host: "unknown"}
 	}
 
-	// go-readability FromDocument 直接操作 *html.Node，root.Get(0) 即 <html> 节点
+	// readability.FromDocument 需要 DocumentNode；colly OnHTML("html") 传入的是 ElementNode，
+	// 取其 Parent 获得正确的 DocumentNode。
 	htmlNode := root.Get(0)
 	if htmlNode == nil {
 		return content, nil
+	}
+	if htmlNode.Type == html.ElementNode && htmlNode.Parent != nil && htmlNode.Parent.Type == html.DocumentNode {
+		htmlNode = htmlNode.Parent
 	}
 	article, err := readability.FromDocument(htmlNode, pageURL)
 	if err == nil && len(strings.TrimSpace(article.TextContent)) > 50 {

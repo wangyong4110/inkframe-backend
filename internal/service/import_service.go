@@ -310,6 +310,36 @@ func (s *NovelImportService) GetCrawlProgress(novelID uint) (*CrawlProgress, err
 	return progress, nil
 }
 
+// RecoverStaleCrawlJobs 在服务启动时自动恢复上次未完成的爬取任务。
+// 查询所有 status="running" 的 NovelCrawlJob，对每个任务调用 ResumeCrawl。
+// 若章节内容已全部抓取完（ListPendingCrawl 返回空），ResumeCrawl 会报错跳过，属正常。
+func (s *NovelImportService) RecoverStaleCrawlJobs(ctx context.Context) {
+	if s.crawlJobRepo == nil {
+		return
+	}
+	jobs, err := s.crawlJobRepo.ListRunning()
+	if err != nil {
+		logger.Errorf("[CrawlRecover] list running jobs failed: %v", err)
+		return
+	}
+	if len(jobs) == 0 {
+		return
+	}
+	logger.Printf("[CrawlRecover] found %d stale crawl job(s), resuming...", len(jobs))
+	for _, job := range jobs {
+		if ctx.Err() != nil {
+			return
+		}
+		// Mark the DB record as failed first; ResumeCrawl will create a new job record.
+		_ = s.crawlJobRepo.Finalize(job.ID, "failed", job.Progress, job.TotalChaps, job.FailedCount)
+		if err := s.ResumeCrawl(job.NovelID); err != nil {
+			logger.Errorf("[CrawlRecover] novel %d resume failed: %v", job.NovelID, err)
+		} else {
+			logger.Printf("[CrawlRecover] novel %d resumed", job.NovelID)
+		}
+	}
+}
+
 // ResumeCrawl 从断点继续爬取
 func (s *NovelImportService) ResumeCrawl(novelID uint) error {
 	// 检查是否已有运行中的任务

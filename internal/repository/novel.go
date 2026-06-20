@@ -740,6 +740,13 @@ func (r *NovelCrawlJobRepository) UpdateProgress(id uint, done, total, failed in
 		}).Error
 }
 
+// ListRunning 返回所有处于 running 状态的爬取任务（用于启动时恢复）
+func (r *NovelCrawlJobRepository) ListRunning() ([]*model.NovelCrawlJob, error) {
+	var jobs []*model.NovelCrawlJob
+	err := r.db.Where("status = ?", "running").Order("id ASC").Find(&jobs).Error
+	return jobs, err
+}
+
 // Finalize 完成爬取任务（更新最终状态）
 func (r *NovelCrawlJobRepository) Finalize(id uint, status string, done, total, failed int) error {
 	now := time.Now()
