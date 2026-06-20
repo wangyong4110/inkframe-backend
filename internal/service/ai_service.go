@@ -489,8 +489,10 @@ func (s *AIService) CheckAvailability(tenantID uint) error {
 // WithRedis 注入 Redis 客户端，用于跨实例 provider 缓存失效广播。
 // 可选：不注入时退化为单实例行为（仅清本实例内存缓存）。
 func (s *AIService) WithRedis(c *redis.Client) *AIService {
-	s.cache = c
+	// 仅在 c 非 nil 时赋值：避免将 (*redis.Client)(nil) 存入 interface 后
+	// interface != nil 判断为 true，但方法调用仍会 panic（Go interface nil 陷阱）
 	if c != nil {
+		s.cache = c
 		go s.startProviderInvalidateSubscriber()
 	}
 	return s
