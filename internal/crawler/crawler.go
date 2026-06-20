@@ -1105,6 +1105,88 @@ func (p *QimaoParser) ParseChapter(root *goquery.Selection) (*ChapterContent, er
 }
 
 // ---------------------------------------------------------------------------
+// HongxiuParser 红袖添香解析器（hongxiu.com）
+// 书目 URL 格式：https://www.hongxiu.com/book/<bookID>
+// ---------------------------------------------------------------------------
+
+type HongxiuParser struct{}
+
+func NewHongxiuParser() *HongxiuParser { return &HongxiuParser{} }
+
+func (p *HongxiuParser) GetSiteName() string { return "红袖添香" }
+
+func (p *HongxiuParser) extractBookID(bookURL string) string {
+	re := regexp.MustCompile(`/book/(\d+)`)
+	if m := re.FindStringSubmatch(bookURL); len(m) > 1 {
+		return m[1]
+	}
+	return ""
+}
+
+func (p *HongxiuParser) ParseNovelList(root *goquery.Selection) ([]*NovelInfo, error) {
+	var novels []*NovelInfo
+	root.Find(".book-list li, .works-list li").Each(func(_ int, s *goquery.Selection) {
+		title := strings.TrimSpace(s.Find(".book-name, .title, h3").First().Text())
+		author := strings.TrimSpace(s.Find(".author, .writer").First().Text())
+		href, _ := s.Find("a").First().Attr("href")
+		if title != "" {
+			novels = append(novels, &NovelInfo{Title: title, Author: author, URL: href})
+		}
+	})
+	return novels, nil
+}
+
+func (p *HongxiuParser) ParseNovelDetail(root *goquery.Selection, bookURL string) (*NovelDetail, error) {
+	detail := &NovelDetail{}
+	detail.Title = strings.TrimSpace(root.Find("h1.book-title, .book-name h1, .intro-name").First().Text())
+	if detail.Title == "" {
+		detail.Title = strings.TrimSpace(root.Find("h1").First().Text())
+	}
+	detail.Author = strings.TrimSpace(root.Find(".author-name, .book-author a").First().Text())
+	detail.Description = strings.TrimSpace(root.Find(".book-intro, .intro-content, .desc").First().Text())
+	detail.Genre = strings.TrimSpace(root.Find(".book-type a, .category a").First().Text())
+	if detail.Title == "" {
+		return nil, fmt.Errorf("hongxiu: 无法解析书名，请确认 URL 为书目页（/book/<ID>），不是搜索页")
+	}
+	return detail, nil
+}
+
+func (p *HongxiuParser) ParseChapterList(root *goquery.Selection) ([]*ChapterInfo, error) {
+	var chapters []*ChapterInfo
+	root.Find(".chapter-list li a, .catalog-list li a, #chapterList li a").Each(func(_ int, s *goquery.Selection) {
+		title := strings.TrimSpace(s.Text())
+		href, exists := s.Attr("href")
+		if !exists || title == "" {
+			return
+		}
+		if strings.HasPrefix(href, "/") {
+			href = "https://www.hongxiu.com" + href
+		}
+		chapters = append(chapters, &ChapterInfo{Title: title, URL: href})
+	})
+	return chapters, nil
+}
+
+func (p *HongxiuParser) ParseChapter(root *goquery.Selection) (*ChapterContent, error) {
+	content := &ChapterContent{}
+	content.Title = strings.TrimSpace(root.Find(".chapter-title, .read-title, h1").First().Text())
+	contentSel := root.Find("#readContent, .chapter-content, .read-content, .content-text")
+	if contentSel.Length() == 0 {
+		contentSel = root.Find("article")
+	}
+	content.Content = cleanText(contentSel.First().Text())
+	content.PrevURL, _ = root.Find(".btn-prev a, .pre-chapter a, a.prev").First().Attr("href")
+	content.NextURL, _ = root.Find(".btn-next a, .next-chapter a, a.next").First().Attr("href")
+	if strings.HasPrefix(content.PrevURL, "/") {
+		content.PrevURL = "https://www.hongxiu.com" + content.PrevURL
+	}
+	if strings.HasPrefix(content.NextURL, "/") {
+		content.NextURL = "https://www.hongxiu.com" + content.NextURL
+	}
+	return content, nil
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

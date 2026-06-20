@@ -566,7 +566,14 @@ func (s *NovelImportService) crawlChaptersBackground(
 func (s *NovelImportService) getParserForURL(url string, siteName string) (crawler.NovelParser, error) {
 	site := s.detectSiteFromURL(url)
 	if site == "default" && siteName != "" {
-		site = strings.ToLower(siteName)
+		// 用户显式指定了站点：校验 URL 域名与站点是否匹配，防止解析器错用。
+		sn := strings.ToLower(siteName)
+		if expected, ok := siteExpectedDomain[sn]; ok {
+			if !strings.Contains(strings.ToLower(url), expected) {
+				return nil, fmt.Errorf("URL 域名与所选站点不匹配：所选站点 %q 期望域名含 %q，但 URL 为 %s", sn, expected, url)
+			}
+		}
+		site = sn
 	}
 	switch site {
 	case "qidian":
@@ -577,8 +584,10 @@ func (s *NovelImportService) getParserForURL(url string, siteName string) (crawl
 		return crawler.NewZonghengParser(), nil
 	case "qimao":
 		return crawler.NewQimaoParser(), nil
+	case "hongxiu":
+		return crawler.NewHongxiuParser(), nil
 	default:
-		return nil, fmt.Errorf("unsupported site %q: please select the correct site", site)
+		return nil, fmt.Errorf("不支持的站点（URL: %s）：目前支持起点、晋江、纵横、七猫、红袖添香", url)
 	}
 }
 
@@ -1029,7 +1038,19 @@ func (s *NovelImportService) detectSiteFromURL(url string) string {
 	if strings.Contains(url, "qimao.com") {
 		return "qimao"
 	}
+	if strings.Contains(url, "hongxiu.com") {
+		return "hongxiu"
+	}
 	return "default"
+}
+
+// siteExpectedDomain 返回站点对应的域名关键字，用于 URL 与 site_name 一致性校验。
+var siteExpectedDomain = map[string]string{
+	"qidian":   "qidian.com",
+	"jjwxc":    "jjwxc.net",
+	"zongheng": "zongheng.com",
+	"qimao":    "qimao.com",
+	"hongxiu":  "hongxiu.com",
 }
 
 // toUTF8Text 将文本字节转换为 UTF-8 字符串。
