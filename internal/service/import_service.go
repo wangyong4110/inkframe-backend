@@ -1032,7 +1032,12 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 		result.Errors = append(result.Errors, fmt.Sprintf("batch create chapter stubs failed: %v", err))
 	} else {
 		result.ImportedChapters = len(stubs)
-		pendingChapters = stubs
+		// 重新从 DB 按 chapter_no ASC 查询，避免依赖 GORM 的 LastInsertId 回填（并发插入时 ID 不连续会导致回填错位）
+		if fetched, err := s.chapterRepo.ListPendingCrawl(novel.ID); err == nil && len(fetched) > 0 {
+			pendingChapters = fetched
+		} else {
+			pendingChapters = stubs // fallback：极少情况下 DB 查询失败
+		}
 	}
 
 	// 初始化进度并启动后台爬取

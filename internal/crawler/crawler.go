@@ -1578,10 +1578,12 @@ func clusterChapterLinks(root *goquery.Selection, allowedHosts map[string]struct
 		groups[prefix] = append(groups[prefix], e)
 	}
 
-	// 找最大簇（至少 3 条）
+	// 找最大簇（至少 3 条）；相同大小时取字典序最小的前缀，保证确定性
+	var bestPrefix string
 	var best []linkEntry
-	for _, entries := range groups {
-		if len(entries) > len(best) {
+	for prefix, entries := range groups {
+		if len(entries) > len(best) || (len(entries) == len(best) && prefix < bestPrefix) {
+			bestPrefix = prefix
 			best = entries
 		}
 	}
