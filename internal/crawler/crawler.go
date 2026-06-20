@@ -1323,7 +1323,21 @@ func (p *GenericParser) ParseChapterList(root *goquery.Selection) ([]*ChapterInf
 		href  string
 	}
 
-	// 收集候选链接：允许域 + 路径在书目页之下 + 标题长度 2-40
+	// 从书目 URL 路径中提取纯数字书本 ID（如 /book-chapter/748198 → "748198"）。
+	// 用于宽松路径匹配：当章节 URL 与书目 URL 路径前缀不同时（如 /book-reader/748198/1），
+	// 只要路径中包含书本 ID 即认为是有效章节链接。
+	bookID := ""
+	if basePath != "" {
+		parts := strings.Split(strings.Trim(basePath, "/"), "/")
+		if len(parts) > 0 {
+			last := parts[len(parts)-1]
+			if regexp.MustCompile(`^\d{4,}$`).MatchString(last) {
+				bookID = last
+			}
+		}
+	}
+
+	// 收集候选链接：允许域 + 路径在书目页之下（或含书本 ID）+ 标题长度 2-40
 	navKeywords := []string{"prev", "next", "上一", "下一", "首页", "末页", "登录", "注册", "home", "login", "register"}
 	var candidates []linkEntry
 
@@ -1362,9 +1376,16 @@ func (p *GenericParser) ParseChapterList(root *goquery.Selection) ([]*ChapterInf
 			}
 		}
 		linkPath := strings.TrimRight(linkURL.Path, "/")
-		// 链接路径必须比书目页更深
-		if basePath != "" && !strings.HasPrefix(linkPath, basePath+"/") {
-			return
+		// 路径过滤：满足以下任一条件即可
+		//   1. 精确前缀：链接路径是书目路径的子路径（如 /book/123 → /book/123/1）
+		//   2. 含书本 ID：路径中包含书本 ID 段（如 /book-reader/748198/1），
+		//      处理书目与章节 URL 前缀不同的站点（如 book.qq.com 的 book-chapter vs book-reader）
+		if basePath != "" {
+			isUnderBase := strings.HasPrefix(linkPath, basePath+"/")
+			containsID := bookID != "" && (strings.Contains(linkPath, "/"+bookID+"/") || strings.HasSuffix(linkPath, "/"+bookID))
+			if !isUnderBase && !containsID {
+				return
+			}
 		}
 		// 排除 .js/.css 等资源
 		for _, ext := range []string{".js", ".css", ".png", ".jpg", ".gif", ".ico"} {
@@ -1376,7 +1397,12 @@ func (p *GenericParser) ParseChapterList(root *goquery.Selection) ([]*ChapterInf
 	})
 
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("generic: 未找到章节链接（bookURL=%s）", p.bookURL)
+		// 统计页面总链接数，帮助判断是 JS 渲染（总链接极少）还是路径过滤太严
+		totalLinks := root.Find("a[href]").Length()
+		if totalLinks < 5 {
+			return nil, fmt.Errorf("generic: 页面几乎无链接（共%d个），可能为 JS 渲染页面，不支持爬取（bookURL=%s）", totalLinks, p.bookURL)
+		}
+		return nil, fmt.Errorf("generic: 未找章节链接（共%d个链接，均不符合章节路径规则）（bookURL=%s）", totalLinks, p.bookURL)
 	}
 
 	// 去重（保留首次出现的顺序）
