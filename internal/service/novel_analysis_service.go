@@ -601,10 +601,11 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 											}
 										}
 										if s.lookRepo != nil {
+											filteredVP := s.aiService.FilterPrompt(c.VisualPrompt)
 											if ec.DefaultLookID != 0 {
-												if c.VisualPrompt != "" {
+												if filteredVP != "" {
 													if look, e := s.lookRepo.GetByID(ec.DefaultLookID); e == nil && look.VisualPrompt == "" {
-														look.VisualPrompt = c.VisualPrompt
+														look.VisualPrompt = filteredVP
 														if uErr := s.lookRepo.Update(look); uErr != nil {
 															logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] update look visual_prompt for char %q: %v", novel.ID, ec.Name, uErr)
 														}
@@ -616,7 +617,7 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 													NovelID:      ec.NovelID,
 													Label:        "默认形象",
 													ChapterFrom:  1,
-													VisualPrompt: c.VisualPrompt,
+													VisualPrompt: filteredVP,
 												}
 												if cErr := s.lookRepo.Create(newLook); cErr != nil {
 													logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] create default look for char %q: %v", novel.ID, ec.Name, cErr)

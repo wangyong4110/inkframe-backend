@@ -858,3 +858,16 @@ type ReviewHintsPayload struct {
 	ParagraphIssues []string `json:"paragraph_issues"` // 选中段落的问题描述
 	ExistingContent string   `json:"-"`                // 当前章节正文（由 RegenerateChapter 自动填充，不从请求读取）
 }
+
+// SensitiveWordRule 敏感词替换规则（DB 可配置，管理员增删改）。
+// 图像生成 prompt 在发往 AI API 前，PromptFilter 会依次应用所有启用的规则。
+type SensitiveWordRule struct {
+	ID          uint      `gorm:"primaryKey" json:"id"`
+	TenantID    uint      `gorm:"index" json:"tenant_id"`
+	Word        string    `gorm:"size:200;uniqueIndex:idx_sw_tenant_word" json:"word"`
+	Replacement string    `gorm:"size:200" json:"replacement"`
+	Category    string    `gorm:"size:50" json:"category"` // violence / adult / political / other
+	Enabled     bool      `gorm:"default:true" json:"enabled"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}

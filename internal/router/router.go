@@ -61,6 +61,7 @@ type Config struct {
 	OutlineReviewHandler   *handler.OutlineReviewHandler
 	CollabHandler          *handler.CollabHandler
 	SysAdminHandler        *handler.SysAdminHandler
+	SensitiveWordHandler   *handler.SensitiveWordHandler
 }
 
 // SetupRouter 配置路由
@@ -697,6 +698,17 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			models.GET("/:id/mcp-tools", cfg.McpHandler.GetModelMcpTools)
 			models.POST("/:id/mcp-tools", cfg.McpHandler.BindMcpTool)
 			models.DELETE("/:id/mcp-tools/:tool_id", cfg.McpHandler.UnbindMcpTool)
+		}
+
+		// 敏感词管理（管理员）
+		if cfg.SensitiveWordHandler != nil {
+			sw := v1.Group("/admin/sensitive-words")
+			{
+				sw.GET("", cfg.SensitiveWordHandler.List)
+				sw.POST("", cfg.SensitiveWordHandler.Create)
+				sw.PUT("/:id", cfg.SensitiveWordHandler.Update)
+				sw.DELETE("/:id", cfg.SensitiveWordHandler.Delete)
+			}
 		}
 
 		// MCP 工具管理

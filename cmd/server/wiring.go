@@ -96,6 +96,7 @@ type Repositories struct {
 	OutlineSynthesisRepo     *repository.NovelOutlineSynthesisRepository
 	NovelMemberRepo          *repository.NovelMemberRepository
 	EditingLockRepo          *repository.EditingLockRepository
+	SensitiveWordRepo        *repository.SensitiveWordRuleRepository
 }
 
 // initRepositories 初始化仓库层
@@ -177,6 +178,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		OutlineSynthesisRepo:     repository.NewNovelOutlineSynthesisRepository(db),
 		NovelMemberRepo:          repository.NewNovelMemberRepository(db),
 		EditingLockRepo:          repository.NewEditingLockRepository(db),
+		SensitiveWordRepo:        repository.NewSensitiveWordRuleRepository(db),
 	}
 }
 
@@ -308,11 +310,14 @@ type videoSvcs struct {
 func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *config.Config, redisClient *redis.Client) *coreSvcs {
 	// AI服务（注入 providerRepo 以支持按租户加载 AK/SK，注入 novelRepo 以读取小说项目级 AI 配置）
 	// WithTaskRouting: configure via config.yaml ai.tasks section (no AI.Tasks config key exists yet).
+	promptFilter := service.NewPromptFilter(repos.SensitiveWordRepo)
+
 	aiSvc := service.NewAIService(repos.AIModelRepo, repos.TaskModelConfigRepo, aiManager, repos.ModelProviderRepo).
 		WithNovelRepo(repos.NovelRepo).
 		WithEncryptionKey(cfg.Server.EncryptionKey).
 		WithImageConcurrency(5).
-		WithRedis(redisClient) // Fix: cross-instance provider cache invalidation
+		WithRedis(redisClient). // Fix: cross-instance provider cache invalidation
+		WithPromptFilter(promptFilter)
 
 	// 模型服务（注入 aiService 以支持 TestProvider 实例化验证）
 	modelSvc := service.NewModelService(repos.AIModelRepo, repos.ModelProviderRepo, repos.TaskModelConfigRepo, repos.ModelComparisonRepo, aiSvc)
@@ -753,6 +758,7 @@ type Handlers struct {
 	OutlineReviewHandler  *handler.OutlineReviewHandler
 	CollabHandler         *handler.CollabHandler
 	SysAdminHandler       *handler.SysAdminHandler
+	SensitiveWordHandler  *handler.SensitiveWordHandler
 }
 
 // initHandlers 初始化处理器
@@ -851,6 +857,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		SysAdminHandler: handler.NewSysAdminHandler(
 			service.NewSysAdminService(db, cfg.Server.JWTSecret, cfg.Server.JWTExpiry),
 		),
+		SensitiveWordHandler: handler.NewSensitiveWordHandler(repos.SensitiveWordRepo),
 	}
 }
 

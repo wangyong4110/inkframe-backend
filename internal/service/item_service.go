@@ -366,7 +366,7 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 			if v, ok := fillIfEmpty(it.Description, extractedDesc); ok { it.Description = v; changed = true }
 			if v, ok := fillIfEmpty(it.Location, e.Location); ok { it.Location = v; changed = true }
 			if v, ok := fillIfEmpty(it.Owner, e.Owner); ok { it.Owner = v; changed = true }
-			if v, ok := fillIfEmpty(it.VisualPrompt, e.VisualPrompt); ok { it.VisualPrompt = v; changed = true }
+			if v, ok := fillIfEmpty(it.VisualPrompt, s.aiService.FilterPrompt(e.VisualPrompt)); ok { it.VisualPrompt = v; changed = true }
 			if !changed {
 				upserted = append(upserted, it)
 				continue
@@ -389,7 +389,7 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 				Description:  extractedDesc,
 				Location:     e.Location,
 				Owner:        e.Owner,
-				VisualPrompt: e.VisualPrompt,
+				VisualPrompt: s.aiService.FilterPrompt(e.VisualPrompt),
 				Status:       "active",
 			}
 			if err := s.itemRepo.Create(item); err != nil {
@@ -740,7 +740,7 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint, u
 			Description:  buildItemDescription(it.Category, it.Appearance, it.Description),
 			Location:     it.Location,
 			Owner:        it.Owner,
-			VisualPrompt: it.VisualPrompt,
+			VisualPrompt: s.aiService.FilterPrompt(it.VisualPrompt),
 			Status:       "active",
 		}
 		if e := s.itemRepo.Create(item); e != nil {

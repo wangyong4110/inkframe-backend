@@ -244,6 +244,7 @@ func main() {
 		OutlineReviewHandler:  handlers.OutlineReviewHandler,
 		CollabHandler:         handlers.CollabHandler,
 		SysAdminHandler:       handlers.SysAdminHandler,
+		SensitiveWordHandler:  handlers.SensitiveWordHandler,
 	})
 
 	// 12. 创建服务器

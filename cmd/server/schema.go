@@ -380,6 +380,8 @@ func autoMigrate(db *gorm.DB) error {
 		// 多人协作
 		&model.NovelMember{},
 		&model.EditingLock{},
+		// 敏感词规则
+		&model.SensitiveWordRule{},
 	); err != nil {
 		return err
 	}

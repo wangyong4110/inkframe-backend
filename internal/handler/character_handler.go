@@ -1448,10 +1448,15 @@ func (h *CharacterHandler) GenerateLookVisualPrompt(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Description string `json:"description" binding:"required"`
+		Description string `json:"description"`
 	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
+	_ = c.ShouldBindJSON(&req)
+	description := req.Description
+	if description == "" {
+		description = char.Description
+	}
+	if description == "" {
+		respondBadRequest(c, "角色描述不能为空，请先填写角色描述")
 		return
 	}
 
@@ -1461,10 +1466,8 @@ func (h *CharacterHandler) GenerateLookVisualPrompt(c *gin.Context) {
 		return
 	}
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"description": req.Description,
+		"description": description,
 	})
-
-	description := req.Description
 	go func(taskID string) {
 		defer func() {
 			if r := recover(); r != nil {

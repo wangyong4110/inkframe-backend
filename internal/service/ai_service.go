@@ -38,6 +38,7 @@ type AIService struct {
 	stopCh        chan struct{} // closed by Shutdown() to stop background goroutines
 	encKey        string       // AES-256-GCM key for decrypting stored API credentials
 	cache         redisPublisher // optional: for cross-instance provider cache invalidation
+	promptFilter  *PromptFilter  // optional: proactive sensitive-word filtering for image prompts
 }
 
 // redisPublisher is the subset of redis.Client used by AIService (allows nil-safe injection).
@@ -70,6 +71,22 @@ func NewAIService(
 func (s *AIService) WithEncryptionKey(key string) *AIService {
 	s.encKey = key
 	return s
+}
+
+// WithPromptFilter injects a PromptFilter used to sanitize LLM-generated image prompts.
+func (s *AIService) WithPromptFilter(f *PromptFilter) *AIService {
+	s.promptFilter = f
+	return s
+}
+
+// FilterPrompt applies the sensitive-word filter to a prompt.
+// Called by other services (CharacterService, ItemService, NovelAnalysisService) right after
+// the LLM generates a visual prompt, before it is persisted to the database.
+func (s *AIService) FilterPrompt(prompt string) string {
+	if s.promptFilter == nil {
+		return prompt
+	}
+	return s.promptFilter.Apply(prompt)
 }
 
 // Shutdown stops background goroutines (call on server exit).

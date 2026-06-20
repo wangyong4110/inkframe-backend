@@ -2191,6 +2191,9 @@ func (s *CharacterService) upsertDefaultLookVisualPrompt(charID, novelID uint, v
 	if s.lookRepo == nil || visualPrompt == "" {
 		return
 	}
+	if s.aiService != nil {
+		visualPrompt = s.aiService.FilterPrompt(visualPrompt)
+	}
 	defaultLook, err := s.GetDefaultLook(charID)
 	if err != nil {
 		return

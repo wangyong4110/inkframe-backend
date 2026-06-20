@@ -14,33 +14,34 @@
 4. gender：性别，只能是 male / female / neutral 之一
 5. age：年龄或年龄感，简短字符串，如 "16" / "约25岁" / "少年" / "中年"
 {% if PromptLanguage == "en" %}6. description (English): background story only — origin, key experiences, motivations, and how they became who they are. One coherent paragraph, 150 words max{% else %}6. description（中文）：仅描述背景故事——出身来历、成长经历、关键转折、动机与目标，写成连贯段落，150字以内{% endif %}
-{% if PromptLanguage == "en" %}5. visual_prompt (English): image generation prompt, ~150 words, covering 12 dimensions in order. No art style, quality, or rendering tags:
+{% if PromptLanguage == "en" %}5. visual_prompt (English): image generation prompt, ~150 words, covering 12 dimensions in order. No art style, quality, or rendering tags. No violent, gory, or death-related content.
 
    [1] GENDER & BUILD: gender, age range, ethnicity, height, body type, shoulder-to-hip ratio
    [2] FACE: face shape, three-zone proportion, cheekbones, jawline, chin, eye spacing
    [3] EYES: eye shape, size, iris color (precise hue), default gaze quality
    [4] BROWS (natural): shape, density, color; natural lash length — no cosmetics
    [5] NOSE & LIPS: bridge height, tip shape, nostril width; lip fullness, cupid's bow, bare lip color and texture
-   [6] SKIN: precise tone, surface finish, notable marks
+   [6] SKIN: precise tone, surface finish, birthmarks or natural distinguishing marks only
    [7] HAIR: color and treatment, texture, density, length, styling, bangs
    [8] OUTFIT (layer by layer): each garment — type, cut, neckline, sleeves, hem, fabric, colors, decorative details
    [9] FOOTWEAR: type, heel, material, color
-   [10] ACCESSORIES: each item — name, material, style, placement, identity significance; weapons in full detail
-   [11] POSTURE: default stance, hand position, characteristic tilt
-   [12] SIGNATURE ELEMENT: the single most recognizable visual detail, described with specific material/condition/placement{% else %}5. visual_prompt（中文）：图像生成提示词，约150字，按序覆盖12个维度，禁止添加画风/质量/渲染标签：
+   [10] ACCESSORIES & CARRIED ITEMS: each item — name, material, style, placement; for weapons/implements describe visual form and ornamentation only
+   [11] POSTURE: default standing pose, hand position, characteristic tilt
+   [12] SIGNATURE ELEMENT: the single most recognizable visual detail, described with specific material/finish/placement{% else %}5. visual_prompt（中文）：图像生成提示词，约150字，按序覆盖12个维度，禁止画风/质量/渲染标签。
+   ⚠️ 严禁出现暴力、血腥、伤亡相关敏感词。
 
    [1] 性别体型：性别、年龄感、种族、身高、体型、肩宽、腰臀比
    [2] 面部结构：脸型、三庭比例、颧骨、下颌线、下巴形态、眼距
    [3] 眼睛：眼型、大小、精确瞳色、默认目光质感
    [4] 眉毛（自然）：眉形、密度、眉色；自然睫毛形态——禁止任何妆容描述
    [5] 鼻唇：鼻梁高度、鼻头形态、鼻翼；唇厚、唇峰、裸唇色与质感
-   [6] 肤色：精确肤色描述词、肤感、特殊标记
+   [6] 肤色：精确肤色描述词、肤感，仅可写先天性标记（痣、胎记）
    [7] 发型：发色与处理方式、发质、发量、发长、造型方式、刘海
    [8] 服装（逐层）：每件——品类、廓形、领口、袖型、下摆、面料、颜色、装饰细节
    [9] 鞋履：鞋型、跟高、材质、颜色
-   [10] 配饰：逐件——名称、材质、风格、佩戴位置、身份关联；武器完整描述
+   [10] 配饰与随身物件：逐件描述外观——名称、材质、风格、佩戴位置
    [11] 体态：默认站姿、手部位置、特征性倾斜
-   [12] 标志性元素：最具辨识度的单一视觉细节，具体描述材质/状态/位置{% endif %}
+   [12] 标志性元素：最具辨识度的单一视觉细节，具体描述材质/光泽/位置{% endif %}
 7. 若信息不足，结合小说类型和角色定位合理推断，不要留空
 8. 严格输出 JSON 数组，不含任何说明文字
 
