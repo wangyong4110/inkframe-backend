@@ -654,7 +654,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 			repos.PlatformAccountRepo,
 			repos.VideoPublishRecordRepo,
 			core.Task,
-		),
+		).WithRedis(redisClient), // Fix: cross-instance stale record recovery dedup
 		// ── Asset Library ──
 		AssetService: service.NewAssetService(
 			repos.AssetRepo,

@@ -9,6 +9,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
+	"github.com/redis/go-redis/v9"
 )
 
 // PublishOptions 发布选项
@@ -35,6 +36,37 @@ type PlatformPublishService struct {
 	recordRepo  *repository.VideoPublishRecordRepository
 	publishers  map[string]PlatformPublisher
 	taskSvc     *TaskService
+	cache       *redis.Client // 跨实例恢复去重
+}
+
+// WithRedis 注入 Redis 客户端（用于跨实例发布记录恢复去重）
+func (s *PlatformPublishService) WithRedis(r *redis.Client) *PlatformPublishService {
+	s.cache = r
+	return s
+}
+
+// RecoverStalePublishRecords 将卡在 uploading 超过 30 分钟的发布记录重置为 failed。
+// 多实例下通过 Redis SETNX 保证每条记录只被一个实例处理。
+func (s *PlatformPublishService) RecoverStalePublishRecords(ctx context.Context) {
+	stale, err := s.recordRepo.ListStaleUploading(time.Now().Add(-30 * time.Minute))
+	if err != nil {
+		logger.Errorf("[PlatformPublish] RecoverStalePublishRecords: query failed: %v", err)
+		return
+	}
+	for _, rec := range stale {
+		if s.cache != nil {
+			lockKey := fmt.Sprintf("lock:pub:recover:%d", rec.ID)
+			ok, lockErr := s.cache.SetNX(ctx, lockKey, "1", 5*time.Minute).Result()
+			if lockErr != nil || !ok {
+				continue // 另一实例正在处理
+			}
+		}
+		if err := s.recordRepo.UpdateStatus(rec.ID, "failed", "recovered: upload interrupted by service restart", "", ""); err != nil {
+			logger.Errorf("[PlatformPublish] RecoverStalePublishRecords: reset record %d: %v", rec.ID, err)
+		} else {
+			logger.Printf("[PlatformPublish] RecoverStalePublishRecords: reset stale record %d (videoID=%d platform=%s)", rec.ID, rec.VideoID, rec.Platform)
+		}
+	}
 }
 
 // NewPlatformPublishService 创建平台发布服务
@@ -114,6 +146,14 @@ func (s *PlatformPublishService) PublishToExternal(ctx context.Context, video *m
 	}
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[PlatformPublish] panic recovered: %v", r)
+				if s.taskSvc != nil {
+					_ = s.taskSvc.Fail(taskID, fmt.Sprintf("panic: %v", r))
+				}
+			}
+		}()
 		bgCtx := context.Background()
 		if s.taskSvc != nil {
 			_ = s.taskSvc.SetRunning(taskID)

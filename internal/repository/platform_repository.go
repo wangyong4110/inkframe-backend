@@ -81,6 +81,13 @@ func (r *VideoPublishRecordRepository) ListByVideo(videoID uint) ([]*model.Video
 	return records, err
 }
 
+// ListStaleUploading 返回 status=uploading 且创建时间早于 before 的发布记录（用于启动时恢复）
+func (r *VideoPublishRecordRepository) ListStaleUploading(before time.Time) ([]*model.VideoPublishRecord, error) {
+	var records []*model.VideoPublishRecord
+	err := r.db.Where("status = ? AND created_at < ?", "uploading", before).Find(&records).Error
+	return records, err
+}
+
 func (r *VideoPublishRecordRepository) UpdateStatus(id uint, status, errMsg, externalID, externalURL string) error {
 	updates := map[string]interface{}{
 		"status":   status,

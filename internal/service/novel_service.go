@@ -1091,6 +1091,20 @@ func (s *NovelService) writeCharacterSnapshots(tenantID uint, chapter *model.Cha
 	if s.characterRepo == nil || s.snapshotRepo == nil {
 		return
 	}
+	// 分布式锁：防止多实例并发生成同一章节的角色快照（key TTL=5min 足以覆盖 AI 调用）
+	if s.cache != nil {
+		lockKey := fmt.Sprintf("lock:char:snap:%d", chapter.ID)
+		ok, lockErr := s.cache.SetNX(context.Background(), lockKey, "1", 5*time.Minute).Result()
+		if lockErr != nil {
+			logger.Errorf("writeCharacterSnapshots: Redis lock error ch%d: %v, continuing without lock", chapter.ID, lockErr)
+		} else if !ok {
+			logger.Printf("writeCharacterSnapshots: chapter %d already processing by another instance, skip", chapter.ID)
+			metrics.CharacterSnapshotExtractionTotal.WithLabelValues("skipped").Inc()
+			return
+		} else {
+			defer s.cache.Del(context.Background(), lockKey)
+		}
+	}
 	characters, err := s.characterRepo.ListByNovel(chapter.NovelID)
 	if err != nil || len(characters) == 0 {
 		metrics.CharacterSnapshotExtractionTotal.WithLabelValues("skipped").Inc()

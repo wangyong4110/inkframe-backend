@@ -486,23 +486,7 @@ func autoMigrate(db *gorm.DB) error {
 // runSchemaCleanup 幂等数据迁移与废弃列清理（AutoMigrate 不删列，需手动执行）
 // 安全：所有操作均有 IF EXISTS 或 WHERE 守卫，可重复执行。
 func runSchemaCleanup(db *gorm.DB) {
-	// ── 1. 回填 Chapter.tenant_id（只处理 tenant_id=0 的行）
-	if err := db.Exec(`UPDATE ink_chapter c
-		JOIN ink_novel n ON c.novel_id = n.id
-		SET c.tenant_id = n.tenant_id
-		WHERE c.tenant_id = 0`).Error; err != nil {
-		logger.Errorf("[runSchemaCleanup] backfill chapter tenant_id: %v", err)
-	}
-
-	// ── 2. 回填 Character.tenant_id
-	if err := db.Exec(`UPDATE ink_character c
-		JOIN ink_novel n ON c.novel_id = n.id
-		SET c.tenant_id = n.tenant_id
-		WHERE c.tenant_id = 0`).Error; err != nil {
-		logger.Errorf("[runSchemaCleanup] backfill character tenant_id: %v", err)
-	}
-
-	// ── 3. 迁移视频配置：ink_novel → ink_novel_video_config（INSERT IGNORE 幂等）
+	// ── 1. 迁移视频配置：ink_novel → ink_novel_video_config（INSERT IGNORE 幂等）
 	// 仅在 ink_novel.video_type 列尚未删除时执行（避免重复迁移报错）
 	var videoTypeExists int
 	db.Raw(`SELECT COUNT(*) FROM information_schema.COLUMNS

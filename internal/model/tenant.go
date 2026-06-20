@@ -145,3 +145,10 @@ type User struct {
 func (User) TableName() string {
 	return "users"
 }
+
+// Role constants for system-level roles
+const (
+	RoleSystemAdmin = "system_admin"
+	RoleUser        = "user"
+	RoleAdmin       = "admin" // legacy tenant admin
+)

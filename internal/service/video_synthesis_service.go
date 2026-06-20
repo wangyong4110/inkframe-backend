@@ -670,6 +670,12 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 	synthCtx, synthCancel := context.WithTimeout(context.Background(), 2*time.Hour)
 	go func() {
 		defer synthCancel()
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[SynthesizeVideo] panic recovered videoID=%d: %v", videoID, r)
+				metrics.VideoSynthesisTotal.WithLabelValues("error").Inc()
+			}
+		}()
 
 		metrics.VideoSynthesisInFlight.Inc()
 		defer metrics.VideoSynthesisInFlight.Dec()

@@ -350,6 +350,14 @@ func (s *NovelImportService) ResumeCrawl(novelID uint) error {
 	crawlCtx, crawlCancel := context.WithTimeout(context.Background(), 24*time.Hour)
 	go func() {
 		defer crawlCancel()
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[CrawlChapters] panic recovered novelID=%d: %v", novelID, r)
+				// CrawlJobsInFlight.Dec() fires via defer in crawlChaptersBackground before panic propagates.
+				// Only record the failed job count here.
+				metrics.CrawlJobsTotal.WithLabelValues("failed").Inc()
+			}
+		}()
 		s.crawlChaptersBackground(crawlCtx, novelID, novel.Title, parser, pending, progress, novel.TenantID, 0)
 	}()
 	return nil

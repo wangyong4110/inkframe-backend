@@ -41,6 +41,15 @@ type Config struct {
 
 	// 邮件配置
 	Email EmailConfig `mapstructure:"email"`
+
+	// 系统管理员配置
+	Admin AdminConfig `mapstructure:"admin"`
+}
+
+// AdminConfig 系统管理员初始化配置
+type AdminConfig struct {
+	Email    string `mapstructure:"email"`
+	Password string `mapstructure:"password"` // initial password (plaintext in config, bcrypt in DB)
 }
 
 // EmailConfig 邮件配置
@@ -232,6 +241,10 @@ func setDefaults() {
 	viper.SetDefault("server.jwt_secret", "change-me-in-production")
 	viper.SetDefault("server.jwt_expiry", 24*time.Hour)
 	viper.SetDefault("server.frontend_url", "http://localhost:3000")
+
+	// 系统管理员默认值
+	viper.SetDefault("admin.email", "admin@inkframe.io")
+	viper.SetDefault("admin.password", "Admin@123456")
 
 	// 数据库默认值
 	viper.SetDefault("database.driver", "mysql")

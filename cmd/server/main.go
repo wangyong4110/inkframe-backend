@@ -302,6 +302,10 @@ func main() {
 	// 恢复服务重启前仍处于 "generating" 状态的视频轮询任务（非阻塞）。
 	go services.VideoService.RecoverActivePollTasks()
 
+	// 恢复因服务崩溃或重启而卡在 "uploading" 状态超过 30 分钟的外部平台发布记录。
+	// 多实例环境下通过 Redis SETNX 保证每条记录只被一个实例处理。
+	go services.PlatformPublishService.RecoverStalePublishRecords(serverRootCtx)
+
 	// 14. 等待中断信号
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
