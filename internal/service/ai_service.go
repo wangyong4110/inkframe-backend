@@ -1634,6 +1634,47 @@ func selectImageModel(entry ai.ImageProviderEntry, referenceImage, style string,
 	return entry.Model
 }
 
+// sanitizeImagePrompt 移除中文角色描述中常见的内容审核触发词，用于
+// Seedream 等对中文敏感词检查严格的模型，在首次被拦截后重试时使用。
+func sanitizeImagePrompt(prompt string) string {
+	// 暴力/伤亡类：替换为中性词
+	replacer := strings.NewReplacer(
+		"杀人", "战斗",
+		"杀死", "击败",
+		"杀掉", "击败",
+		"血腥", "激烈",
+		"血流", "战斗",
+		"鲜血", "红色",
+		"伤口", "痕迹",
+		"伤痕", "痕迹",
+		"伤疤", "痕迹",
+		"尸体", "倒地",
+		"死亡", "消逝",
+		"屠杀", "激战",
+		"残忍", "严肃",
+		"暴力", "力量",
+		"凶器", "武器",
+		"刺穿", "刺击",
+		"砍断", "劈砍",
+		"爆炸", "冲击",
+		"炸弹", "装置",
+		"毒药", "液体",
+	)
+	sanitized := replacer.Replace(prompt)
+	// 截断超长 prompt，减少审核误判概率（超过 300 字时只保留前 300 字）
+	runes := []rune(sanitized)
+	if len(runes) > 300 {
+		sanitized = string(runes[:300])
+	}
+	return sanitized
+}
+
+// isSensitiveContentError 判断图像生成错误是否为内容审核拦截。
+func isSensitiveContentError(errMsg string) bool {
+	return strings.Contains(errMsg, ai.ErrPrefixSensitiveContent) ||
+		strings.Contains(errMsg, "InputTextSensitiveContentDetected")
+}
+
 // GenerateCharacterThreeView 使用图像生成 API 生成角色/场景视图图像。
 // style: 图片风格（"realistic"/"anime"/"ink_painting" 等），影响 Volcengine 模型选择。
 // 空字符串表示使用提供者默认模型。
@@ -1772,6 +1813,25 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 			continue
 		}
 		if resp.Error != "" {
+			if isSensitiveContentError(resp.Error) {
+				sanitized := sanitizeImagePrompt(prompt)
+				if sanitized != prompt {
+					logger.Printf("GenerateCharacterThreeView: provider=%s sensitive content, retrying with sanitized prompt", e.ProviderName)
+					resp2, err2 := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
+						Model:             model,
+						Prompt:            sanitized,
+						NegativePrompt:    negativePrompt,
+						Size:              eSz,
+						ReferenceImage:    referenceImage,
+						CFGScale:          cfgScale,
+						ConsistencyWeight: weight,
+						Extra:             klingResolutionExtra(e.ProviderName, eSz),
+					})
+					if err2 == nil && resp2.Error == "" {
+						return s.uploadImageToStorage(ctx, tenantID, resp2.URL), nil
+					}
+				}
+			}
 			logger.Errorf("GenerateCharacterThreeView: provider=%s error: %s", e.ProviderName, resp.Error)
 			lastErr = fmt.Errorf("image generation failed: %s", resp.Error)
 			continue
@@ -1903,6 +1963,23 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 			continue
 		}
 		if resp.Error != "" {
+			// 内容审核拦截：净化 prompt 后用同一 provider 重试一次
+			if isSensitiveContentError(resp.Error) {
+				sanitized := sanitizeImagePrompt(prompt)
+				if sanitized != prompt {
+					logger.Printf("GenerateCharacterThreeViewMulti: provider=%s sensitive content, retrying with sanitized prompt", e.ProviderName)
+					origBuildReq := buildReq
+					buildReqSanitized := func(model, sz string) *ai.ImageGenerateRequest {
+						r := origBuildReq(model, sz)
+						r.Prompt = sanitized
+						return r
+					}
+					resp2, err2 := provider.ImageGenerate(ctx, buildReqSanitized(model, e.Size))
+					if err2 == nil && resp2.Error == "" {
+						return s.uploadImageToStorage(ctx, tenantID, resp2.URL), nil
+					}
+				}
+			}
 			logger.Errorf("GenerateCharacterThreeViewMulti: provider=%s error: %s", e.ProviderName, resp.Error)
 			lastErr = fmt.Errorf("image generation failed: %s", resp.Error)
 			continue

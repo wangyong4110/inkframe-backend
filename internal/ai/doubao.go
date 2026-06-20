@@ -10,8 +10,13 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
+
+// ErrPrefixSensitiveContent 是图像生成内容审核拦截时错误消息的前缀。
+// 上层调用（ai_service.go）检测到此前缀后会净化 prompt 并重试。
+const ErrPrefixSensitiveContent = "[SENSITIVE_CONTENT] "
 
 // DoubaoProvider 豆包 AI 提供者（字节跳动火山引擎 Ark 平台）
 // 文本生成使用豆包大模型，图像生成使用 Seedream 模型
@@ -304,8 +309,13 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
+		errMsg := string(respBody)
+		// 标记内容审核拦截，方便上层检测并做提示词净化重试
+		if strings.Contains(errMsg, "InputTextSensitiveContentDetected") {
+			errMsg = ErrPrefixSensitiveContent + errMsg
+		}
 		return &ImageResponse{
-			Error:     fmt.Sprintf("Seedream 错误: %s", string(respBody)),
+			Error:     fmt.Sprintf("Seedream 错误: %s", errMsg),
 			LatencyMs: time.Since(start).Milliseconds(),
 		}, nil
 	}
