@@ -420,7 +420,12 @@ func (s *NovelImportService) crawlChaptersBackground(
 		progress.mu.Unlock()
 
 		if r.Err != nil || r.Content == nil || r.Content.Content == "" {
-			logger.Errorf("[Crawl] chapter %d fetch/parse error: %v", ch.ChapterNo, r.Err)
+			chURL := strings.TrimPrefix(ch.Outline, "crawl:")
+			if r.Err != nil {
+				logger.Errorf("[Crawl] chapter %d fetch error: %v (url=%s)", ch.ChapterNo, r.Err, chURL)
+			} else {
+				logger.Errorf("[Crawl] chapter %d content empty after parse (url=%s) — likely JS-rendered page or parser mismatch", ch.ChapterNo, chURL)
+			}
 			metrics.CrawlChaptersTotal.WithLabelValues("error").Inc()
 			progress.mu.Lock()
 			progress.Failed++

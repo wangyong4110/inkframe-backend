@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -200,10 +201,13 @@ func (nc *NovelCrawler) GetStats() CrawlStats {
 
 // newCollector creates a colly.Collector configured with the shared cookie jar,
 // standard browser headers, 30 s timeout, and rate limiting based on config.
+// If domain is empty, no AllowedDomains restriction is applied (for generic/unknown sites).
 func (nc *NovelCrawler) newCollector(domain string) *colly.Collector {
 	opts := []colly.CollectorOption{
-		colly.AllowedDomains(domain),
 		colly.AllowURLRevisit(),
+	}
+	if domain != "" {
+		opts = append(opts, colly.AllowedDomains(domain))
 	}
 	if nc.config.DetectCharset {
 		opts = append(opts, colly.DetectCharset())
@@ -260,11 +264,14 @@ func (nc *NovelCrawler) newCollector(domain string) *colly.Collector {
 }
 
 // newAsyncCollector creates an async colly.Collector with parallelism support.
+// If domain is empty, no AllowedDomains restriction is applied (for generic/unknown sites).
 func (nc *NovelCrawler) newAsyncCollector(domain string) *colly.Collector {
 	opts := []colly.CollectorOption{
-		colly.AllowedDomains(domain),
 		colly.AllowURLRevisit(),
 		colly.Async(true),
+	}
+	if domain != "" {
+		opts = append(opts, colly.AllowedDomains(domain))
 	}
 	if nc.config.DetectCharset {
 		opts = append(opts, colly.DetectCharset())
@@ -347,6 +354,10 @@ func (nc *NovelCrawler) FetchChapterStream(ctx context.Context, chapters []*Chap
 		defer close(resultCh)
 
 		domain := chaptersDomain(chapters)
+		// GenericParser 不限制域名：未知站点可能重定向到 CDN 或不同域名
+		if _, isGeneric := parser.(*GenericParser); isGeneric {
+			domain = ""
+		}
 		col := nc.newAsyncCollector(domain)
 
 		col.OnHTML("html", func(e *colly.HTMLElement) {
@@ -362,6 +373,11 @@ func (nc *NovelCrawler) FetchChapterStream(ctx context.Context, chapters []*Chap
 				case <-ctx.Done():
 				}
 				return
+			}
+			if content == nil || content.Content == "" {
+				// 页面已加载但正文为空：记录页面大小帮助诊断（JS 渲染 / 反爬 / 选择器不匹配）
+				log.Printf("[Crawler] WARN idx=%d url=%s pageBytes=%d: content empty after parse (possible JS-rendered or anti-bot page)",
+					idx, e.Request.URL.String(), len(e.Response.Body))
 			}
 			nc.stats.recordSuccess()
 			select {
@@ -455,15 +471,11 @@ func (nc *NovelCrawler) fetchHTML(rawURL, domain string) (*goquery.Selection, er
 }
 
 // FetchPageHTML fetches rawURL and returns the <html> root as a goquery.Selection.
-// The site domain is auto-detected from the URL; unknown sites use the URL's host.
+// Known sites use their fixed domain; unknown sites use no domain restriction
+// because they may redirect to CDN or different domains.
 func (nc *NovelCrawler) FetchPageHTML(rawURL string) (*goquery.Selection, error) {
 	site := nc.identifySite(rawURL)
-	domain, ok := siteDomains[site]
-	if !ok {
-		if u, err := url.Parse(rawURL); err == nil {
-			domain = u.Host
-		}
-	}
+	domain := siteDomains[site] // empty string for unknown sites → no restriction
 	return nc.fetchHTML(rawURL, domain)
 }
 
@@ -1259,9 +1271,13 @@ func (p *GenericParser) ParseNovelDetail(root *goquery.Selection, bookURL string
 // ParseChapterList 基于「相同域名 + URL 公共前缀」自动识别章节目录链接。
 func (p *GenericParser) ParseChapterList(root *goquery.Selection) ([]*ChapterInfo, error) {
 	var baseHost, basePath string
-	if u, err := url.Parse(p.bookURL); err == nil {
-		baseHost = u.Host
-		basePath = strings.TrimRight(u.Path, "/")
+	var bookParsed *url.URL
+	if p.bookURL != "" {
+		if u, err := url.Parse(p.bookURL); err == nil {
+			bookParsed = u
+			baseHost = u.Host
+			basePath = strings.TrimRight(u.Path, "/")
+		}
 	}
 
 	type linkEntry struct {
@@ -1294,12 +1310,12 @@ func (p *GenericParser) ParseChapterList(root *goquery.Selection) ([]*ChapterInf
 		if err != nil {
 			return
 		}
-		// 补全相对 URL
+		// 补全相对 URL：使用书目页 URL 作为基准正确解析（含相对路径如 1/ 或 ../chapter/1）
 		if !linkURL.IsAbs() {
-			if baseHost != "" {
-				linkURL.Host = baseHost
-				linkURL.Scheme = "https"
+			if bookParsed == nil {
+				return
 			}
+			linkURL = bookParsed.ResolveReference(linkURL)
 		}
 		if linkURL.Host != baseHost && baseHost != "" {
 			return // 非同域
@@ -1405,6 +1421,18 @@ func (p *GenericParser) ParseChapter(root *goquery.Selection) (*ChapterContent, 
 		}
 	}
 
+	// 最后兜底：从 <body> 提取所有长段落（readability 和 CSS 选择器均失败时使用）
+	var bodyParagraphs []string
+	root.Find("body p").Each(func(_ int, s *goquery.Selection) {
+		t := strings.TrimSpace(s.Text())
+		// 过滤极短段落（导航、提示、广告）
+		if len([]rune(t)) >= 20 {
+			bodyParagraphs = append(bodyParagraphs, t)
+		}
+	})
+	if len(bodyParagraphs) >= 3 {
+		content.Content = strings.Join(bodyParagraphs, "\n\n")
+	}
 	return content, nil
 }
 
