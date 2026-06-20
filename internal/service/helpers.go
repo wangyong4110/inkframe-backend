@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -323,6 +324,24 @@ func repairMissingColons(s string) string {
 		i = j
 	}
 	return buf.String()
+}
+
+// corruptedTitleKeyRe matches the pattern where an AI output omits the field name
+// and colon for a chapter title, producing:  ,"" ChineseTitle"
+// instead of:                                ,"title": "ChineseTitle"
+//
+// Root cause: the model emits `"title": "ChineseTitle"` but the leading `title": `
+// (8 bytes) gets truncated or corrupted, leaving an empty key followed by the
+// value text without its opening quote.  The pattern is:
+//
+//	comma + optional whitespace + "" + non-quote text + closing quote
+var corruptedTitleKeyRe = regexp.MustCompile(`,(\s*)""([^"]+)"`)
+
+// repairCorruptedTitleKey fixes the pattern ,"" ChineseTitle" → ,"title": "ChineseTitle".
+// It is safe to call on well-formed JSON because a bare empty-string key followed
+// directly by unquoted text is always invalid JSON.
+func repairCorruptedTitleKey(s string) string {
+	return corruptedTitleKeyRe.ReplaceAllString(s, `,$1"title": "$2"`)
 }
 
 // repairAIJSON 修复 AI 生成的 JSON 中常见的两类问题：

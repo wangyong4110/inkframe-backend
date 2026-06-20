@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
+	readability "github.com/go-shiori/go-readability"
 	"github.com/gocolly/colly/v2"
 	"github.com/gocolly/colly/v2/extensions"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -1184,6 +1185,240 @@ func (p *HongxiuParser) ParseChapter(root *goquery.Selection) (*ChapterContent, 
 		content.NextURL = "https://www.hongxiu.com" + content.NextURL
 	}
 	return content, nil
+}
+
+// ---------------------------------------------------------------------------
+// GenericParser 通用解析器
+//
+// 无需为每个站点单独实现选择器。
+// - ParseNovelDetail  : meta/OG 标签 + h1 降级
+// - ParseChapterList  : 基于 URL 前缀匹配 + 链接密度自动识别目录容器
+// - ParseChapter      : 文本密度算法找正文节点，提取 <p> 段落
+// ---------------------------------------------------------------------------
+
+type GenericParser struct {
+	bookURL string // 书目页 URL，用于 ParseChapterList 中计算路径前缀
+}
+
+func NewGenericParser() *GenericParser { return &GenericParser{} }
+
+// NewGenericParserWithURL 创建带书目 URL 的通用解析器，ParseChapterList 用于过滤章节链接。
+func NewGenericParserWithURL(bookURL string) *GenericParser { return &GenericParser{bookURL: bookURL} }
+
+func (p *GenericParser) GetSiteName() string { return "通用" }
+
+func (p *GenericParser) ParseNovelList(_ *goquery.Selection) ([]*NovelInfo, error) {
+	return nil, nil
+}
+
+func (p *GenericParser) ParseNovelDetail(root *goquery.Selection, bookURL string) (*NovelDetail, error) {
+	detail := &NovelDetail{}
+
+	// 标题：og:title > title 标签 > h1
+	if t, ok := root.Find(`meta[property="og:title"]`).Attr("content"); ok {
+		detail.Title = strings.TrimSpace(t)
+	}
+	if detail.Title == "" {
+		detail.Title = strings.TrimSpace(root.Find("title").First().Text())
+		// 去掉站点后缀（如 "书名 - 起点小说"）
+		if idx := strings.LastIndex(detail.Title, " - "); idx > 0 {
+			detail.Title = strings.TrimSpace(detail.Title[:idx])
+		}
+		if idx := strings.LastIndex(detail.Title, "_"); idx > 0 {
+			detail.Title = strings.TrimSpace(detail.Title[:idx])
+		}
+	}
+	if detail.Title == "" {
+		detail.Title = strings.TrimSpace(root.Find("h1").First().Text())
+	}
+
+	// 简介：og:description > meta description
+	if d, ok := root.Find(`meta[property="og:description"]`).Attr("content"); ok && d != "" {
+		detail.Description = strings.TrimSpace(d)
+	}
+	if detail.Description == "" {
+		if d, ok := root.Find(`meta[name="description"]`).Attr("content"); ok {
+			detail.Description = strings.TrimSpace(d)
+		}
+	}
+
+	// 作者：常见 class
+	for _, sel := range []string{".author a", ".writer a", `[itemprop="author"]`, ".book-author"} {
+		if a := strings.TrimSpace(root.Find(sel).First().Text()); a != "" {
+			detail.Author = a
+			break
+		}
+	}
+
+	if detail.Title == "" {
+		return nil, fmt.Errorf("generic: 无法从页面提取书名（URL: %s）", bookURL)
+	}
+	return detail, nil
+}
+
+// ParseChapterList 基于「相同域名 + URL 公共前缀」自动识别章节目录链接。
+func (p *GenericParser) ParseChapterList(root *goquery.Selection) ([]*ChapterInfo, error) {
+	var baseHost, basePath string
+	if u, err := url.Parse(p.bookURL); err == nil {
+		baseHost = u.Host
+		basePath = strings.TrimRight(u.Path, "/")
+	}
+
+	type linkEntry struct {
+		title string
+		href  string
+	}
+
+	// 收集候选链接：同域 + 路径在书目页之下 + 标题长度 2-40
+	navKeywords := []string{"prev", "next", "上一", "下一", "首页", "末页", "登录", "注册", "home", "login", "register"}
+	var candidates []linkEntry
+
+	root.Find("a[href]").Each(func(_ int, s *goquery.Selection) {
+		href, _ := s.Attr("href")
+		title := strings.TrimSpace(s.Text())
+		if href == "" || title == "" {
+			return
+		}
+		titleRunes := []rune(title)
+		if len(titleRunes) < 2 || len(titleRunes) > 40 {
+			return
+		}
+		titleLower := strings.ToLower(title)
+		for _, kw := range navKeywords {
+			if strings.Contains(titleLower, kw) {
+				return
+			}
+		}
+		// 解析链接 URL
+		linkURL, err := url.Parse(href)
+		if err != nil {
+			return
+		}
+		// 补全相对 URL
+		if !linkURL.IsAbs() {
+			if baseHost != "" {
+				linkURL.Host = baseHost
+				linkURL.Scheme = "https"
+			}
+		}
+		if linkURL.Host != baseHost && baseHost != "" {
+			return // 非同域
+		}
+		linkPath := strings.TrimRight(linkURL.Path, "/")
+		// 链接路径必须比书目页更深
+		if basePath != "" && !strings.HasPrefix(linkPath, basePath+"/") {
+			return
+		}
+		// 排除 .js/.css 等资源
+		for _, ext := range []string{".js", ".css", ".png", ".jpg", ".gif", ".ico"} {
+			if strings.HasSuffix(linkPath, ext) {
+				return
+			}
+		}
+		candidates = append(candidates, linkEntry{title: title, href: linkURL.String()})
+	})
+
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("generic: 未找到章节链接（bookURL=%s）", p.bookURL)
+	}
+
+	// 去重（保留首次出现的顺序）
+	seen := make(map[string]struct{}, len(candidates))
+	chapters := make([]*ChapterInfo, 0, len(candidates))
+	for i, c := range candidates {
+		if _, dup := seen[c.href]; dup {
+			continue
+		}
+		seen[c.href] = struct{}{}
+		chapters = append(chapters, &ChapterInfo{
+			Title:     c.title,
+			URL:       c.href,
+			ChapterNo: i + 1,
+		})
+	}
+
+	if len(chapters) == 0 {
+		return nil, fmt.Errorf("generic: 章节列表为空（bookURL=%s）", p.bookURL)
+	}
+	// 重新按顺序编号
+	for i := range chapters {
+		chapters[i].ChapterNo = i + 1
+	}
+	return chapters, nil
+}
+
+// ParseChapter 使用 go-readability（Mozilla Readability 算法）提取正文。
+// 直接传入 goquery DOM 节点，无需二次序列化。
+func (p *GenericParser) ParseChapter(root *goquery.Selection) (*ChapterContent, error) {
+	content := &ChapterContent{}
+
+	// 构造一个章节 URL 供 readability 解析相对路径（用书目 URL 的 origin 即可）
+	pageURL, _ := url.Parse(p.bookURL)
+	if pageURL == nil {
+		pageURL = &url.URL{Scheme: "https", Host: "unknown"}
+	}
+
+	// go-readability FromDocument 直接操作 *html.Node，root.Get(0) 即 <html> 节点
+	htmlNode := root.Get(0)
+	if htmlNode == nil {
+		return content, nil
+	}
+	article, err := readability.FromDocument(htmlNode, pageURL)
+	if err == nil && len(strings.TrimSpace(article.TextContent)) > 50 {
+		// 用 readability 结果
+		if article.Title != "" {
+			content.Title = article.Title
+		}
+		content.Content = cleanReadabilityText(article.TextContent)
+		return content, nil
+	}
+
+	// readability 失败时降级：找 <h1> 标题 + 常见正文选择器提取 <p> 段落
+	content.Title = strings.TrimSpace(root.Find("h1").First().Text())
+	if content.Title == "" {
+		if t, ok := root.Find(`meta[property="og:title"]`).Attr("content"); ok {
+			content.Title = strings.TrimSpace(t)
+		}
+	}
+	for _, sel := range []string{
+		"article", "main", "#content", ".content",
+		"#chapter-content", ".chapter-content", "#novelcontent",
+		"#readContent", ".read-content", "#chapterContent",
+	} {
+		node := root.Find(sel).First()
+		if node.Length() == 0 {
+			continue
+		}
+		var paragraphs []string
+		node.Find("p").Each(func(_ int, s *goquery.Selection) {
+			if t := strings.TrimSpace(s.Text()); len([]rune(t)) >= 5 {
+				paragraphs = append(paragraphs, t)
+			}
+		})
+		if len(paragraphs) > 0 {
+			content.Content = strings.Join(paragraphs, "\n\n")
+			return content, nil
+		}
+		if t := strings.TrimSpace(node.Text()); len([]rune(t)) > 100 {
+			content.Content = cleanText(t)
+			return content, nil
+		}
+	}
+
+	return content, nil
+}
+
+// cleanReadabilityText 清理 readability 返回的 TextContent（去多余空行和空白）。
+func cleanReadabilityText(text string) string {
+	lines := strings.Split(text, "\n")
+	var out []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			out = append(out, line)
+		}
+	}
+	return strings.Join(out, "\n\n")
 }
 
 // ---------------------------------------------------------------------------

@@ -743,6 +743,8 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 	}
 
 	outline := &OutlineResult{}
+	// Pre-repair: fix the ""ChineseTitle" corruption before any other parse attempt.
+	result = repairCorruptedTitleKey(result)
 	cleaned := extractJSONObject(result)
 	if err := json.Unmarshal([]byte(cleaned), outline); err != nil || len(outline.Chapters) == 0 {
 		// 降级：尝试格式 B（纯 chapters 数组）

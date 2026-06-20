@@ -598,7 +598,8 @@ func (s *NovelImportService) getParserForURL(url string, siteName string) (crawl
 	case "hongxiu":
 		return crawler.NewHongxiuParser(), nil
 	default:
-		return nil, fmt.Errorf("不支持的站点（URL: %s）：目前支持起点、晋江、纵横、七猫、红袖添香", url)
+		// 未知站点：降级到通用解析器（传入书目 URL 用于链接前缀过滤）
+		return crawler.NewGenericParserWithURL(url), nil
 	}
 }
 
