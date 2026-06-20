@@ -1093,6 +1093,7 @@ func (s *NovelService) writeCharacterSnapshots(tenantID uint, chapter *model.Cha
 	}
 	characters, err := s.characterRepo.ListByNovel(chapter.NovelID)
 	if err != nil || len(characters) == 0 {
+		metrics.CharacterSnapshotExtractionTotal.WithLabelValues("skipped").Inc()
 		return
 	}
 
@@ -1116,6 +1117,7 @@ func (s *NovelService) writeCharacterSnapshots(tenantID uint, chapter *model.Cha
 	result, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "character_state", prompt, "")
 	if err != nil {
 		logger.Errorf("writeCharacterSnapshots: AI extraction failed for chapter %d: %v", chapter.ID, err)
+		metrics.CharacterSnapshotExtractionTotal.WithLabelValues("ai_error").Inc()
 		return
 	}
 
@@ -1136,6 +1138,7 @@ func (s *NovelService) writeCharacterSnapshots(tenantID uint, chapter *model.Cha
 
 	if err := json.Unmarshal([]byte(cleaned), &extraction); err != nil {
 		logger.Errorf("writeCharacterSnapshots: parse failed: %v", err)
+		metrics.CharacterSnapshotExtractionTotal.WithLabelValues("parse_error").Inc()
 		return
 	}
 
@@ -1161,8 +1164,12 @@ func (s *NovelService) writeCharacterSnapshots(tenantID uint, chapter *model.Cha
 		}
 		if err := s.snapshotRepo.Create(snapshot); err != nil {
 			logger.Errorf("writeCharacterSnapshots: create snapshot failed for char %d: %v", char.ID, err)
+			metrics.CharacterSnapshotTotal.WithLabelValues("error").Inc()
+		} else {
+			metrics.CharacterSnapshotTotal.WithLabelValues("success").Inc()
 		}
 	}
+	metrics.CharacterSnapshotExtractionTotal.WithLabelValues("success").Inc()
 }
 
 // SyncCharacterSnapshots 为章节同步角色状态快照

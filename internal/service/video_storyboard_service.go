@@ -265,6 +265,9 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 
 	genCtx := genCtxInner
 	var prevTailShots []*model.StoryboardShot // 上一段末尾镜头，首段为 nil
+	// 累积已分配镜头数和已处理字数，避免逐段整除截断导致总数偏少
+	shotsAllocated := 0
+	runesProcessed := 0
 
 	// Each segment produces 8–15K chars of JSON. A 4096-token limit truncates it.
 	// The AI API silently caps max_tokens at the model's own maximum when it exceeds it,
@@ -292,10 +295,20 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 
 		segStart := time.Now()
 		segRunes := len([]rune(seg))
-		segShotCount := totalShots * segRunes / max(totalRunes, 1)
+		runesProcessed += segRunes
+		// 累积分配：用"到目前为止应分配的总镜头数 - 已分配数"计算本段，
+		// 最后一段直接取剩余全部，保证各段加总恰好等于 totalShots。
+		var segShotCount int
+		if segIdx == len(segments)-1 {
+			segShotCount = totalShots - shotsAllocated
+		} else {
+			cumTarget := totalShots * runesProcessed / max(totalRunes, 1)
+			segShotCount = cumTarget - shotsAllocated
+		}
 		if segShotCount < 3 {
 			segShotCount = 3
 		}
+		shotsAllocated += segShotCount
 		logger.Printf("[Storyboard] seg %d/%d start runes=%d expectedShots=%d prevTail=%d",
 			segIdx+1, len(segments), segRunes, segShotCount, len(prevTailShots))
 
@@ -305,6 +318,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		var aiResult string
 		var aiErr error
 		var shots []*model.StoryboardShot
+		var bestShots []*model.StoryboardShot // 历次尝试中镜头数最多的结果
 		for attempt := 0; attempt < 3; attempt++ {
 			p := prompt
 			switch attempt {
@@ -334,13 +348,19 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 				logger.Errorf("[Storyboard] seg %d/%d attempt=%d parse failed: %v", segIdx+1, len(segments), attempt, parseErr)
 				continue
 			}
-			if len(parsed) < segShotCount*7/10 && attempt < 2 {
-				logger.Printf("[Storyboard] seg %d/%d attempt=%d too few shots got=%d expected=%d (threshold 70%%), retrying", segIdx+1, len(segments), attempt, len(parsed), segShotCount)
-				shots = parsed
+			// 始终保留历次中镜头数最多的结果
+			if len(parsed) > len(bestShots) {
+				bestShots = parsed
+			}
+			if len(parsed) < segShotCount*4/5 && attempt < 2 {
+				logger.Printf("[Storyboard] seg %d/%d attempt=%d too few shots got=%d expected=%d (threshold 80%%), retrying", segIdx+1, len(segments), attempt, len(parsed), segShotCount)
 				continue
 			}
-			shots = parsed
+			shots = bestShots
 			break
+		}
+		if shots == nil && len(bestShots) > 0 {
+			shots = bestShots // 全部 attempt 均未达标时，仍用最佳部分结果
 		}
 		if aiErr != nil && shots == nil {
 			results[segIdx] = segResult{err: aiErr}
@@ -714,7 +734,7 @@ func calcTotalShots(totalRunes, targetDuration int, pacing string) int {
 	avgSec := map[string]int{"slow": 8, "normal": 5, "fast": 3}
 	s, ok := avgSec[pacing]
 	if !ok {
-		s = 5
+		s = 4 // 自动节奏：比 normal(5s) 略快，镜头更丰富
 	}
 
 	if targetDuration > 0 {
@@ -726,9 +746,9 @@ func calcTotalShots(totalRunes, targetDuration int, pacing string) int {
 	}
 
 	// 自动模式：先估算视频时长，再折算分镜数。
-	// 汉字阅读速度约 300 字/分钟，视频精炼比约 0.4（10 分钟文章 → 4 分钟视频）。
-	// 视频时长（秒）= totalRunes / 300 * 60 * 0.4 = totalRunes / 12.5
-	estimatedSecs := totalRunes * 2 / 25 // ≈ totalRunes / 12.5
+	// 汉字阅读速度约 300 字/分钟，视频精炼比约 0.5（10 分钟文章 → 5 分钟视频）。
+	// 视频时长（秒）= totalRunes / 300 * 60 * 0.5 = totalRunes / 10
+	estimatedSecs := totalRunes / 10
 	n := estimatedSecs / s
 	if n < 5 {
 		n = 5

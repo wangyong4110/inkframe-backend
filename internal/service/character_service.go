@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/redis/go-redis/v9"
@@ -1632,8 +1633,10 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 			mu.Lock()
 			if charFailed {
 				failed++
+				metrics.CharacterImageBatchTotal.WithLabelValues("failed").Inc()
 			} else {
 				succeeded++
+				metrics.CharacterImageBatchTotal.WithLabelValues("succeeded").Inc()
 			}
 			done++
 			cur := done

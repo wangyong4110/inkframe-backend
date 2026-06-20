@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/ai"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 )
 
 // ============================================
@@ -810,12 +811,14 @@ func (s *VideoEnhancementService) processEnhancement(ctx context.Context, job *E
 		job.Status = "failed"
 		job.Error = processErr.Error()
 		job.Progress = 0
+		metrics.VideoEnhancementTotal.WithLabelValues(string(job.Type), "failed").Inc()
 		return
 	}
 
 	job.Status = "completed"
 	job.Progress = 100
 	job.ResultURL = resultURL
+	metrics.VideoEnhancementTotal.WithLabelValues(string(job.Type), "completed").Inc()
 }
 
 // applyFrameInterpolation 帧插值（FFmpeg minterpolate）

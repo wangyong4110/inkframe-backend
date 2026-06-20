@@ -317,6 +317,95 @@ var (
 	})
 )
 
+// ─── 业务指标：场景一致性与视频增强 ──────────────────────────────────────────
+
+var (
+	SceneConsistencyScoreHist = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "inkframe_scene_consistency_score",
+		Help:    "分镜场景一致性综合评分分布（0–1）",
+		Buckets: []float64{0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.75, 0.8, 0.85, 0.9, 1.0},
+	})
+
+	SceneConsistencyTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "inkframe_scene_consistency_total",
+		Help: "分镜场景一致性评分总数（按结果分组）",
+	}, []string{"outcome"}) // outcome: passed / retry / human / noref
+
+	VideoEnhancementTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "inkframe_video_enhancement_total",
+		Help: "视频增强任务总数（按类型、结果分组）",
+	}, []string{"type", "status"}) // type: frame_interpolation/super_resolution/color_grading/stabilize/style_transfer; status: completed/failed
+)
+
+// ─── 业务指标：知识库与导出 ──────────────────────────────────────────────────
+
+var (
+	KnowledgeSearchTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "inkframe_knowledge_search_total",
+		Help: "知识库搜索总数（按检索方式分组）",
+	}, []string{"method"}) // method: vector / keyword
+
+	KnowledgeExtractTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "inkframe_knowledge_extract_total",
+		Help: "章节剧情点提取总数（按结果状态分组）",
+	}, []string{"status"}) // status: success / error / skipped
+
+	ExportCapCutTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "inkframe_export_capcut_total",
+		Help: "CapCut 草稿导出总数（按格式、结果状态分组）",
+	}, []string{"format", "status"}) // format: capcut/broll/fcpxml/resource/srt/vtt/edl/otio/csv; status: success/error
+
+	ExportCapCutDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "inkframe_export_capcut_duration_seconds",
+		Help:    "CapCut/剪映草稿导出耗时分布（秒）",
+		Buckets: []float64{0.5, 1, 2, 5, 10, 30, 60, 120},
+	}, []string{"format"})
+)
+
+// ─── 业务指标：章节 AI 深度审查 ──────────────────────────────────────────────
+
+var (
+	ChapterDeepReviewTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "inkframe_chapter_deep_review_total",
+		Help: "章节 AI 深度审查（ReviewChapter）总数（按结果状态分组）",
+	}, []string{"status"}) // status: success / error
+
+	ChapterDeepReviewDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "inkframe_chapter_deep_review_duration_seconds",
+		Help:    "章节 AI 深度审查端到端耗时分布（秒）",
+		Buckets: []float64{5, 10, 20, 30, 60, 120, 300},
+	})
+
+	ChapterApplyDiffsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "inkframe_chapter_apply_diffs_total",
+		Help: "ApplyDiffs 调用总数（按结果状态分组）",
+	}, []string{"status"}) // status: success / error
+
+	ChapterDiffsApplied = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "inkframe_chapter_diffs_applied_total",
+		Help: "ApplyDiffs 实际修改的段落总数",
+	})
+)
+
+// ─── 业务指标：角色与快照 ────────────────────────────────────────────────────
+
+var (
+	CharacterSnapshotExtractionTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "inkframe_character_snapshot_extraction_total",
+		Help: "每章角色状态提取任务总数（按结果状态分组）",
+	}, []string{"status"}) // status: skipped / ai_error / parse_error / success
+
+	CharacterSnapshotTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "inkframe_character_snapshot_total",
+		Help: "角色状态快照写入总数（按结果状态分组）",
+	}, []string{"status"}) // status: success / error
+
+	CharacterImageBatchTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "inkframe_character_image_batch_total",
+		Help: "角色图片批量生成：按每个角色的结果（succeeded/failed）计数",
+	}, []string{"status"}) // status: succeeded / failed
+)
+
 // ─── 连接池指标（自定义 Collector） ──────────────────────────────────────────
 
 // DBStatsCollector 将 sql.DB 连接池统计暴露为 Prometheus Gauge。

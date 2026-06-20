@@ -8,6 +8,7 @@ import (
 
 	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/vector"
 	"github.com/redis/go-redis/v9"
@@ -188,6 +189,7 @@ func (s *KnowledgeService) SearchKnowledge(ctx context.Context, query string, li
 						}
 					}
 					if len(kbs) > 0 {
+						metrics.KnowledgeSearchTotal.WithLabelValues("vector").Inc()
 						return kbs, nil
 					}
 				}
@@ -202,6 +204,7 @@ func (s *KnowledgeService) SearchKnowledge(ctx context.Context, query string, li
 	}
 
 	// 关键词搜索降级
+	metrics.KnowledgeSearchTotal.WithLabelValues("keyword").Inc()
 	results, err := s.kbRepo.Search(query, limit)
 	if err != nil {
 		return nil, err
@@ -261,6 +264,8 @@ func (s *KnowledgeService) DeleteKnowledge(ctx context.Context, id uint, novelID
 // 每次运行前先清除该章节的旧记录，避免重复（replace-on-rerun 语义）
 // aiClient 为 nil 时使用服务内部的 s.aiClient
 func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapter *model.Chapter, aiClient ai.AIProvider) error {
+	extractStatus := "success"
+	defer func() { metrics.KnowledgeExtractTotal.WithLabelValues(extractStatus).Inc() }()
 	// 跨实例幂等性：Redis SETNX 保证同一章节在同一时刻只有一个实例执行向量写入。
 	if s.cache != nil {
 		lockKey := fmt.Sprintf("lock:kv:pp:%d", chapter.ID)
@@ -270,6 +275,7 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 			// 非致命：继续执行（最多重复写入，不会丢数据）
 		} else if !ok {
 			logger.Printf("KnowledgeService.ExtractAndStorePlotPoints: chapter %d already processing by another instance, skip", chapter.ID)
+			extractStatus = "skipped"
 			return nil
 		} else {
 			defer s.cache.Del(context.Background(), lockKey)
@@ -280,6 +286,7 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 		aiClient = s.aiClient
 	}
 	if aiClient == nil {
+		extractStatus = "error"
 		return fmt.Errorf("ExtractAndStorePlotPoints: no AI provider available")
 	}
 	// 先删除向量存储中该章节的旧记录，再删除 DB 记录
@@ -321,6 +328,7 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 
 	resp, err := aiClient.Generate(ctx, req)
 	if err != nil {
+		extractStatus = "error"
 		return err
 	}
 
@@ -335,6 +343,7 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 	}
 
 	if err := json.Unmarshal([]byte(resp.Content), &result); err != nil {
+		extractStatus = "error"
 		return err
 	}
 

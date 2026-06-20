@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/inkframe/inkframe-backend/internal/logger"
-
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
@@ -55,6 +55,7 @@ func (s *SceneConsistencyService) ScoreScene(
 ) (*SceneConsistencyReport, error) {
 	// 无参考图时返回中性分并标记需人工审核（不给满分以免掩盖问题）
 	if anchor.RefImageURL == "" {
+		metrics.SceneConsistencyTotal.WithLabelValues("noref").Inc()
 		report := &SceneConsistencyReport{
 			ShotID:       shot.ID,
 			AnchorID:     anchor.ID,
@@ -107,6 +108,17 @@ func (s *SceneConsistencyService) ScoreScene(
 	if err == nil {
 		report.NeedsRetry = report.OverallScore >= 0.70 && report.OverallScore < 0.85
 		report.NeedsHuman = report.OverallScore < 0.70
+	}
+
+	// 记录 Prometheus 指标
+	metrics.SceneConsistencyScoreHist.Observe(report.OverallScore)
+	switch {
+	case report.Passed:
+		metrics.SceneConsistencyTotal.WithLabelValues("passed").Inc()
+	case report.NeedsRetry:
+		metrics.SceneConsistencyTotal.WithLabelValues("retry").Inc()
+	default:
+		metrics.SceneConsistencyTotal.WithLabelValues("human").Inc()
 	}
 
 	// 持久化评分日志（修复：同时写入 PropScore、TimeScore、Passed 和 SuggestedFix）

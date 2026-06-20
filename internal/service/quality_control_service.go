@@ -663,7 +663,16 @@ func (s *QualityControlService) RefineSelection(ctx context.Context, chapterID u
 // ─── Chapter AI Review ────────────────────────────────────────────────────────
 
 // ReviewChapter performs a deep AI review of a chapter and stores the record.
-func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uint, provider string) (*model.ChapterReview, error) {
+func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uint, provider string) (retReview *model.ChapterReview, retErr error) {
+	reviewStart := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.ChapterDeepReviewTotal.WithLabelValues(status).Inc()
+		metrics.ChapterDeepReviewDuration.Observe(time.Since(reviewStart).Seconds())
+	}()
 	if s.reviewRecordRepo == nil {
 		return nil, fmt.Errorf("review repos not wired")
 	}
@@ -1013,6 +1022,7 @@ func (s *QualityControlService) ApplyDiffs(chapterID uint, diffs []ParagraphDiff
 
 	chapter.Content = strings.Join(kept, "\n\n")
 	if err := s.chapterRepo.Update(chapter); err != nil {
+		metrics.ChapterApplyDiffsTotal.WithLabelValues("error").Inc()
 		return 0, fmt.Errorf("update chapter content: %w", err)
 	}
 
@@ -1026,6 +1036,8 @@ func (s *QualityControlService) ApplyDiffs(chapterID uint, diffs []ParagraphDiff
 		}
 	}
 
+	metrics.ChapterApplyDiffsTotal.WithLabelValues("success").Inc()
+	metrics.ChapterDiffsApplied.Add(float64(applied))
 	return applied, nil
 }
 

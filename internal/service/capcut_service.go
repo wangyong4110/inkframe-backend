@@ -17,6 +17,7 @@ import (
 
 	astisub "github.com/asticode/go-astisub"
 	"github.com/google/uuid"
+	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 )
@@ -1383,7 +1384,16 @@ func capCutTransitionEffect(t string) string {
 }
 
 // ExportCapCutDraft 导出剪映草稿 ZIP（含视频/图片、配音、字幕轨道）
-func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.StoryboardShot, novel *model.Novel, bgmSegs []*model.VideoBGMSegment) (*ExportResult, error) {
+func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.StoryboardShot, novel *model.Novel, bgmSegs []*model.VideoBGMSegment) (retResult *ExportResult, retErr error) {
+	exportStart := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.ExportCapCutTotal.WithLabelValues("capcut", status).Inc()
+		metrics.ExportCapCutDuration.WithLabelValues("capcut").Observe(time.Since(exportStart).Seconds())
+	}()
 	logger.Printf("[CapCutService] ExportCapCutDraft: videoID=%d title=%q shots=%d", video.ID, video.Title, len(shots))
 	now := time.Now().Unix()
 	nowMicros := time.Now().UnixMicro()
@@ -2494,7 +2504,16 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 // ExportBRollDraft 导出 B 剪草稿 ZIP（静态图片 + 配音轨 + 字幕轨 + 分镜注释轨，无 Ken Burns / 音效 / BGM）
 // 用途：剪辑师二剪参考稿，镜头顶部叠字注明分镜编号和描述，方便人工替换素材。
-func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.StoryboardShot, novel *model.Novel) (*ExportResult, error) {
+func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.StoryboardShot, novel *model.Novel) (retResult *ExportResult, retErr error) {
+	exportStart := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.ExportCapCutTotal.WithLabelValues("broll", status).Inc()
+		metrics.ExportCapCutDuration.WithLabelValues("broll").Observe(time.Since(exportStart).Seconds())
+	}()
 	logger.Printf("[CapCutService] ExportBRollDraft: videoID=%d shots=%d", video.ID, len(shots))
 	now := time.Now().Unix()
 	nowMicros := time.Now().UnixMicro()
@@ -3394,7 +3413,16 @@ func fcpXMLEscapeAttr(s string) string {
 
 // ExportFCPXML 导出 FCPXML 1.10 格式 ZIP（可在 DaVinci Resolve / Final Cut Pro 导入）
 // src 使用原始 CDN URL，同时将媒体文件打包到 media/ 供离线重连。
-func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
+func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.StoryboardShot) (retResult *ExportResult, retErr error) {
+	exportStart := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.ExportCapCutTotal.WithLabelValues("fcpxml", status).Inc()
+		metrics.ExportCapCutDuration.WithLabelValues("fcpxml").Observe(time.Since(exportStart).Seconds())
+	}()
 	logger.Printf("[CapCutService] ExportFCPXML: videoID=%d shots=%d", video.ID, len(shots))
 	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
 
@@ -3655,7 +3683,16 @@ type shotJSONMeta struct {
 }
 
 // ExportResourceZip 导出素材包 ZIP（图片/视频 + 音频 + SRT + shots.json，可用于任意剪辑软件）
-func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.StoryboardShot) (*ExportResult, error) {
+func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.StoryboardShot) (retResult *ExportResult, retErr error) {
+	exportStart := time.Now()
+	defer func() {
+		status := "success"
+		if retErr != nil {
+			status = "error"
+		}
+		metrics.ExportCapCutTotal.WithLabelValues("resource", status).Inc()
+		metrics.ExportCapCutDuration.WithLabelValues("resource").Observe(time.Since(exportStart).Seconds())
+	}()
 	logger.Printf("[CapCutService] ExportResourceZip: videoID=%d shots=%d", video.ID, len(shots))
 	sort.Slice(shots, func(i, j int) bool { return shots[i].ShotNo < shots[j].ShotNo })
 

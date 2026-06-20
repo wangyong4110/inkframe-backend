@@ -1197,8 +1197,11 @@ const maxRefinementContentRunes = 9000
 // RefineChapterContent 对章节内容做一轮精修（仅在检测到质量问题时执行）
 func (s *NarrativeMemoryService) RefineChapterContent(tenantID uint, chapter *model.Chapter, novelTitle string) (string, error) {
 	logger.Printf("[NarrativeMemory] RefineChapterContent: novelID=%d chapterNo=%d", chapter.NovelID, chapter.ChapterNo)
+	refineStatus := "success"
+	defer func() { metrics.ChapterRefinementTotal.WithLabelValues(refineStatus).Inc() }()
 	focusAreas := detectRefinementNeeds(chapter.Content)
 	if focusAreas == "" {
+		refineStatus = "skipped"
 		return chapter.Content, nil
 	}
 
@@ -1220,6 +1223,7 @@ func (s *NarrativeMemoryService) RefineChapterContent(tenantID uint, chapter *mo
 	refined, err := s.aiService.GenerateWithProvider(tenantID, chapter.NovelID, "refinement", prompt, "")
 	if err != nil {
 		logger.Errorf("NarrativeMemory: refinement ch%d failed: %v — using original", chapter.ChapterNo, err)
+		refineStatus = "error"
 		return chapter.Content, nil
 	}
 	refined = strings.TrimSpace(refined)
@@ -1230,6 +1234,7 @@ func (s *NarrativeMemoryService) RefineChapterContent(tenantID uint, chapter *mo
 	refinedRunes := len([]rune(refined))
 	if baseRunes > 0 && refinedRunes < baseRunes*80/100 {
 		logger.Printf("NarrativeMemory: refinement ch%d rejected — word count dropped %d→%d (>20%%)", chapter.ChapterNo, baseRunes, refinedRunes)
+		refineStatus = "rejected"
 		return chapter.Content, nil
 	}
 
@@ -1248,6 +1253,7 @@ func (s *NarrativeMemoryService) RefineChapterContent(tenantID uint, chapter *mo
 		// P1-6: 合并条件不满足（AI 输出过短无法对齐头尾），保守返回原文，避免中间内容丢失
 		logger.Errorf("NarrativeMemory: refinement ch%d wasTruncated but merge failed (refinedLen=%d < half=%d) — using original",
 			chapter.ChapterNo, len(refinedRunes2), half)
+		refineStatus = "rejected"
 		return chapter.Content, nil
 	}
 
