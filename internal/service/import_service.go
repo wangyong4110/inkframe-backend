@@ -377,6 +377,9 @@ func (s *NovelImportService) crawlChaptersBackground(
 	metrics.CrawlJobsInFlight.Inc()
 	defer metrics.CrawlJobsInFlight.Dec()
 
+	// summarySem：AI 摘要异步化——最多 3 并发，主循环不阻塞（fire-and-forget）
+	summarySem := make(chan struct{}, 3)
+
 	// 创建 DB 爬取任务记录，获取 jobID 用于后续进度持久化
 	var jobID uint
 	if s.crawlJobRepo != nil {
@@ -469,26 +472,34 @@ func (s *NovelImportService) crawlChaptersBackground(
 		// Sync progress to Redis so other instances can observe it.
 		s.storeCrawlProgressToRedis(progress)
 
-		// AI summary generation after chapter fetch
+		// AI 摘要：异步 fire-and-forget，不阻塞主爬取循环
+		// 主循环只负责拉 channel，不等 AI；摘要后台写入 DB（最多 3 并发）
 		if s.narrativeMemory != nil {
-			ch.Title = title
-			ch.Content = r.Content.Content
-			summary, summaryErr := s.narrativeMemory.GenerateChapterSummary(0, ch, novelTitle)
-			if summaryErr != nil {
-				time.Sleep(2 * time.Second)
-				summary, summaryErr = s.narrativeMemory.GenerateChapterSummary(0, ch, novelTitle)
+			chCopy := *ch
+			chCopy.Title = title
+			chCopy.Content = r.Content.Content
+			nm := s.narrativeMemory
+			repo := s.chapterRepo
+			nTitle := novelTitle
+			go func() {
+				summarySem <- struct{}{}
+				defer func() { <-summarySem }()
+				summary, summaryErr := nm.GenerateChapterSummary(0, &chCopy, nTitle)
 				if summaryErr != nil {
-					logger.Errorf("[Crawl] chapter %d summary generation failed (skipped): %v", ch.ChapterNo, summaryErr)
+					time.Sleep(2 * time.Second)
+					summary, summaryErr = nm.GenerateChapterSummary(0, &chCopy, nTitle)
+					if summaryErr != nil {
+						logger.Errorf("[Crawl] chapter %d summary failed (skipped): %v", chCopy.ChapterNo, summaryErr)
+						return
+					}
 				}
-			}
-			if summaryErr == nil && summary != "" {
-				ch.Summary = summary
-				if updateErr := s.chapterRepo.Update(ch); updateErr != nil {
-					logger.Errorf("[Crawl] failed to save summary for chapter %d: %v", ch.ChapterNo, updateErr)
+				if summary != "" {
+					chCopy.Summary = summary
+					if updateErr := repo.Update(&chCopy); updateErr != nil {
+						logger.Errorf("[Crawl] chapter %d summary save failed: %v", chCopy.ChapterNo, updateErr)
+					}
 				}
-			} else {
-				logger.Errorf("[Crawl] chapter %d summary generation failed (keeping existing): %v", ch.ChapterNo, summaryErr)
-			}
+			}()
 		}
 	}
 
