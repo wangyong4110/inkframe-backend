@@ -947,16 +947,22 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 		return nil, fmt.Errorf("chapter list too large: %d chapters (max %d)", len(chapterInfos), maxChaptersPerImport)
 	}
 
-	// 按标题去重：同 tenant 下同名小说直接追加，不新建项目
+	// 爬取不按标题自动匹配已有小说，避免同名 AI 小说被意外追加爬取内容。
+	// 仅在调用方明确传入 novel_id 时才追加到已有项目。
 	var novel *model.Novel
 	chapterOffset := 0
-	if req.TenantID > 0 {
-		if existing, err := s.novelRepo.FindByTitle(detail.Title, req.TenantID); err == nil && existing != nil {
-			novel = existing
-			count, _ := s.chapterRepo.CountByNovel(existing.ID)
-			chapterOffset = int(count)
-			logger.Printf("[Import] crawl: novel %q already exists (id=%d), appending from offset %d", novel.Title, novel.ID, chapterOffset)
+	if req.NovelID > 0 {
+		existing, err := s.novelRepo.GetByID(req.NovelID)
+		if err != nil {
+			return nil, fmt.Errorf("novel not found: %w", err)
 		}
+		if req.TenantID > 0 && existing.TenantID != req.TenantID {
+			return nil, fmt.Errorf("novel does not belong to this tenant")
+		}
+		novel = existing
+		count, _ := s.chapterRepo.CountByNovel(existing.ID)
+		chapterOffset = int(count)
+		logger.Printf("[Import] crawl: appending to novel %q (id=%d) from offset %d", novel.Title, novel.ID, chapterOffset)
 	}
 	if novel == nil {
 		novel = &model.Novel{
