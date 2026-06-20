@@ -1091,10 +1091,10 @@ func (s *NovelService) writeCharacterSnapshots(tenantID uint, chapter *model.Cha
 	if s.characterRepo == nil || s.snapshotRepo == nil {
 		return
 	}
-	// 分布式锁：防止多实例并发生成同一章节的角色快照（key TTL=5min 足以覆盖 AI 调用）
+	// 分布式心跳锁：30 s base TTL（每10s续期），实例崩溃后最多30s自动释放。
 	if s.cache != nil {
 		lockKey := fmt.Sprintf("lock:char:snap:%d", chapter.ID)
-		ok, lockErr := s.cache.SetNX(context.Background(), lockKey, "1", 5*time.Minute).Result()
+		lock, ok, lockErr := acquireDistLock(s.cache, lockKey, 30*time.Second)
 		if lockErr != nil {
 			logger.Errorf("writeCharacterSnapshots: Redis lock error ch%d: %v, continuing without lock", chapter.ID, lockErr)
 		} else if !ok {
@@ -1102,7 +1102,7 @@ func (s *NovelService) writeCharacterSnapshots(tenantID uint, chapter *model.Cha
 			metrics.CharacterSnapshotExtractionTotal.WithLabelValues("skipped").Inc()
 			return
 		} else {
-			defer s.cache.Del(context.Background(), lockKey)
+			defer lock.release()
 		}
 	}
 	characters, err := s.characterRepo.ListByNovel(chapter.NovelID)

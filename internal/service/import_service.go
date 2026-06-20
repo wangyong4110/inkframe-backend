@@ -450,26 +450,24 @@ func (s *NovelImportService) crawlChaptersBackground(
 		progress.mu.Unlock()
 		logger.Printf("[Crawl] novel=%d chapter=%d/%d done", novelID, doneSoFar, totalSoFar)
 
-		// Every 2 chapters (or on the last chapter): persist progress + update crawler stats
-		if doneSoFar%2 == 0 || doneSoFar == totalSoFar {
-			if jobID > 0 && s.crawlJobRepo != nil {
-				_ = s.crawlJobRepo.UpdateProgress(jobID, doneSoFar, totalSoFar, failedSoFar)
-			}
-			stats := s.crawler.GetStats()
-			elapsed := stats.ElapsedSeconds()
-			var speedCPS float64
-			if elapsed > 0 {
-				speedCPS = float64(stats.BytesDownloaded) / elapsed
-			}
-			progress.mu.Lock()
-			progress.BytesDownloaded = stats.BytesDownloaded
-			progress.PagesVisited = stats.PagesVisited
-			progress.ElapsedSecs = elapsed
-			progress.SpeedCPS = speedCPS
-			progress.mu.Unlock()
-			// Sync progress to Redis so other instances can observe it.
-			s.storeCrawlProgressToRedis(progress)
+		// Persist progress after every chapter so any instance can serve GetCrawlProgress.
+		if jobID > 0 && s.crawlJobRepo != nil {
+			_ = s.crawlJobRepo.UpdateProgress(jobID, doneSoFar, totalSoFar, failedSoFar)
 		}
+		stats := s.crawler.GetStats()
+		elapsed := stats.ElapsedSeconds()
+		var speedCPS float64
+		if elapsed > 0 {
+			speedCPS = float64(stats.BytesDownloaded) / elapsed
+		}
+		progress.mu.Lock()
+		progress.BytesDownloaded = stats.BytesDownloaded
+		progress.PagesVisited = stats.PagesVisited
+		progress.ElapsedSecs = elapsed
+		progress.SpeedCPS = speedCPS
+		progress.mu.Unlock()
+		// Sync progress to Redis so other instances can observe it.
+		s.storeCrawlProgressToRedis(progress)
 
 		// AI summary generation after chapter fetch
 		if s.narrativeMemory != nil {

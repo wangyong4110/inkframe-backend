@@ -63,7 +63,8 @@ type NarrativeMemoryService struct {
 
 	// arcGenLocks 进程内去重锁（无 Redis 时使用；Redis 可用时同时维护以支持 WaitForArcSummary）。
 	// key: "novelID-arcNo" (string), value: struct{}{}
-	arcGenLocks sync.Map
+	arcGenLocks  sync.Map
+	arcDistLocks sync.Map // key → *distLock; heartbeat keeps TTL alive
 }
 
 type novelGetterUpdater interface {
@@ -125,20 +126,22 @@ func (s *NarrativeMemoryService) WithRedis(c *redis.Client) *NarrativeMemoryServ
 }
 
 // tryLockArc acquires the generation lock for the given arc.
-// Redis SETNX is the primary gate (cross-instance); arcGenLocks is also set
-// so WaitForArcSummary can poll process-locally.
+// Uses a heartbeat-based distributed lock (60 s base TTL, renewed every 20 s)
+// so a crashed holder releases the key within 60 s instead of 10 minutes.
+// arcGenLocks is also set so WaitForArcSummary can poll process-locally.
 // Returns true if this caller acquired the lock.
 func (s *NarrativeMemoryService) tryLockArc(lockKey string) bool {
 	if s.cache != nil {
-		ok, err := s.cache.SetNX(context.Background(), "lock:arc:gen:"+lockKey, "1", 10*time.Minute).Result()
+		lock, ok, err := acquireDistLock(s.cache, "lock:arc:gen:"+lockKey, 60*time.Second)
 		if err != nil {
-			logger.Errorf("[NarrativeMemory] Redis SETNX arc lock %s: %v, fallback to local lock", lockKey, err)
+			logger.Errorf("[NarrativeMemory] Redis distlock arc %s: %v, fallback to local lock", lockKey, err)
 			_, loaded := s.arcGenLocks.LoadOrStore(lockKey, struct{}{})
 			return !loaded
 		}
 		if !ok {
 			return false
 		}
+		s.arcDistLocks.Store(lockKey, lock)
 		s.arcGenLocks.Store(lockKey, struct{}{})
 		return true
 	}
@@ -149,7 +152,9 @@ func (s *NarrativeMemoryService) tryLockArc(lockKey string) bool {
 // unlockArc releases the generation lock for the given arc.
 func (s *NarrativeMemoryService) unlockArc(lockKey string) {
 	s.arcGenLocks.Delete(lockKey)
-	if s.cache != nil {
+	if v, ok := s.arcDistLocks.LoadAndDelete(lockKey); ok {
+		v.(*distLock).release()
+	} else if s.cache != nil {
 		_ = s.cache.Del(context.Background(), "lock:arc:gen:"+lockKey).Err()
 	}
 }

@@ -146,9 +146,8 @@ func (User) TableName() string {
 	return "users"
 }
 
-// Role constants for system-level roles
+// System-level role constants (tenant-level roles are in constants.go)
 const (
 	RoleSystemAdmin = "system_admin"
 	RoleUser        = "user"
-	RoleAdmin       = "admin" // legacy tenant admin
 )

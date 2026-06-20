@@ -266,19 +266,19 @@ func (s *KnowledgeService) DeleteKnowledge(ctx context.Context, id uint, novelID
 func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapter *model.Chapter, aiClient ai.AIProvider) error {
 	extractStatus := "success"
 	defer func() { metrics.KnowledgeExtractTotal.WithLabelValues(extractStatus).Inc() }()
-	// 跨实例幂等性：Redis SETNX 保证同一章节在同一时刻只有一个实例执行向量写入。
+	// 跨实例幂等性：心跳锁（60s base TTL）防止重复写入；实例崩溃后60s内自动释放。
 	if s.cache != nil {
 		lockKey := fmt.Sprintf("lock:kv:pp:%d", chapter.ID)
-		ok, err := s.cache.SetNX(ctx, lockKey, "1", time.Hour).Result()
-		if err != nil {
-			logger.Errorf("KnowledgeService.ExtractAndStorePlotPoints: Redis SETNX error: %v", err)
+		lock, ok, lockErr := acquireDistLock(s.cache, lockKey, 60*time.Second)
+		if lockErr != nil {
+			logger.Errorf("KnowledgeService.ExtractAndStorePlotPoints: Redis lock error: %v", lockErr)
 			// 非致命：继续执行（最多重复写入，不会丢数据）
 		} else if !ok {
 			logger.Printf("KnowledgeService.ExtractAndStorePlotPoints: chapter %d already processing by another instance, skip", chapter.ID)
 			extractStatus = "skipped"
 			return nil
 		} else {
-			defer s.cache.Del(context.Background(), lockKey)
+			defer lock.release()
 		}
 	}
 

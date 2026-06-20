@@ -5,6 +5,7 @@ import "time"
 // RewriteProject represents a novel rewriting project
 type RewriteProject struct {
 	ID            uint      `json:"id" gorm:"primaryKey"`
+	TenantID      uint      `json:"tenant_id" gorm:"index;not null;default:0"`
 	NovelID       uint      `json:"novel_id" gorm:"index"`
 	Name          string    `json:"name" gorm:"size:200"`
 	Level         int       `json:"level" gorm:"default:1"` // 1=字词润色 2=文学精炼 3=情节调整 4=结构重构 5=精神蒸馏

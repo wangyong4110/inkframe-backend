@@ -262,6 +262,29 @@ func (h *RewriteHandler) ApproveChapter(c *gin.Context) {
 	respondOK(c, gin.H{"message": "approved"})
 }
 
+// ApplyRewriteToChapter POST /rewrite/projects/:id/chapters/:task_id/apply
+// 将改写结果同步回原始章节（明确的用户操作，不再由改写流程自动执行）
+func (h *RewriteHandler) ApplyRewriteToChapter(c *gin.Context) {
+	id, err := strconv.ParseUint(c.Param("id"), 10, 64)
+	if err != nil {
+		respondBadRequest(c, "invalid id")
+		return
+	}
+	if _, ok := h.getProjectForTenant(c, uint(id)); !ok {
+		return
+	}
+	taskID, err := strconv.ParseUint(c.Param("task_id"), 10, 64)
+	if err != nil {
+		respondBadRequest(c, "invalid task_id")
+		return
+	}
+	if err := h.rewriteSvc.ApplyRewriteToChapter(uint(taskID)); err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, gin.H{"message": "applied"})
+}
+
 // GetComplianceReport GET /rewrite/projects/:id/compliance-report
 func (h *RewriteHandler) GetComplianceReport(c *gin.Context) {
 	id, err := strconv.ParseUint(c.Param("id"), 10, 64)

@@ -575,3 +575,15 @@ func RateLimitAuth() gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// RequireSystemAdmin rejects requests where user_role != "system_admin".
+func RequireSystemAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		role, _ := c.Get("user_role")
+		if role != "system_admin" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{"error": "system admin access required"})
+			return
+		}
+		c.Next()
+	}
+}

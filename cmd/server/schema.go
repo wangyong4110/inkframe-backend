@@ -2,15 +2,19 @@ package main
 
 import (
 	"fmt"
+	"time"
 
+	"github.com/google/uuid"
+	"github.com/inkframe/inkframe-backend/internal/config"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-06-20-v4"
+const schemaVersion = "2026-06-20-v5"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -127,6 +131,8 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_foreshadow", "foreshadow_type",          "VARCHAR(30) NOT NULL DEFAULT ''"},     // 类型
 		{"ink_foreshadow", "linked_hook_id",           "INT UNSIGNED NULL"},                   // 关联钩子
 		{"ink_foreshadow", "linked_arc_id",            "INT UNSIGNED NULL"},                   // 关联冲突弧
+		// ink_rewrite_project 租户直接隔离（2026-06-20-v5 新增，改写项目列表查询优化）
+		{"ink_rewrite_project", "tenant_id", "INT UNSIGNED NOT NULL DEFAULT 0"},
 		// ink_hook_chain 关联伏笔（2026-06-17 新增）
 		{"ink_hook_chain", "foreshadow_id", "INT UNSIGNED NULL"},
 		// ink_foreshadow 专业叙事分析字段（2026-06-17-v2 新增）
@@ -202,7 +208,7 @@ func dropLegacyCharacterColumns(db *gorm.DB) {
 		{"ink_review_record",          "tenant_id"},
 		{"ink_ignored_review_issue",   "tenant_id"},
 		{"ink_foreshadow",             "tenant_id"},
-		{"ink_rewrite_project",        "tenant_id"},
+		// ink_rewrite_project.tenant_id 已在 2026-06-20-v5 重新启用，从此列表移除
 		// 2026-06-20-v4: 删除评论表冗余 nickname（从 users.nickname 实时读取）
 		{"ink_video_comment",          "nickname"},
 		{"ink_novel_comment",          "nickname"},
@@ -478,6 +484,15 @@ func autoMigrate(db *gorm.DB) error {
 		logger.Errorf("autoMigrate: doubao-speech-v1 yangguang display_name fix failed: %v", err)
 	}
 
+	// 数据迁移（2026-06-20-v5）：回填 ink_rewrite_project.tenant_id（从关联 ink_novel 获取）
+	// 新增列 tenant_id 时旧行默认为 0，需要从关联小说的 tenant_id 补全，确保列表查询与详情查询一致。
+	if err := db.Exec(`UPDATE ink_rewrite_project rp
+		INNER JOIN ink_novel n ON rp.novel_id = n.id
+		SET rp.tenant_id = n.tenant_id
+		WHERE rp.tenant_id = 0 AND n.deleted_at IS NULL`).Error; err != nil {
+		logger.Errorf("autoMigrate: rewrite_project tenant_id backfill failed: %v", err)
+	}
+
 	// 迁移成功后写入新版本号（UPSERT）
 	return db.Exec("INSERT INTO ink_schema_version (id, ver) VALUES (1, ?) ON DUPLICATE KEY UPDATE ver = ?",
 		schemaVersion, schemaVersion).Error
@@ -626,6 +641,47 @@ func runSchemaCleanup(db *gorm.DB) {
 			logger.Errorf("[runSchemaCleanup] drop %s.%s: %v", d.table, d.col, err)
 		}
 	}
+}
+
+// initSystemAdmin creates the system admin user if it doesn't exist.
+// Call this from main.go after DB is ready.
+func initSystemAdmin(db *gorm.DB, cfg *config.Config) {
+	email := cfg.Admin.Email
+	if email == "" {
+		email = "admin@inkframe.io"
+	}
+	password := cfg.Admin.Password
+	if password == "" {
+		password = "Admin@123456"
+	}
+
+	var user model.User
+	if err := db.Where("role = ?", model.RoleSystemAdmin).First(&user).Error; err == nil {
+		return // already exists
+	}
+
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), 12)
+	if err != nil {
+		logger.Errorf("[initSystemAdmin] bcrypt: %v", err)
+		return
+	}
+
+	now := time.Now()
+	admin := &model.User{
+		UUID:            uuid.New().String(),
+		Username:        "sysadmin",
+		Email:           email,
+		Password:        string(hashed),
+		Nickname:        "System Admin",
+		Status:          "active",
+		Role:            model.RoleSystemAdmin,
+		EmailVerifiedAt: &now,
+	}
+	if err := db.Create(admin).Error; err != nil {
+		logger.Errorf("[initSystemAdmin] create: %v", err)
+		return
+	}
+	logger.Printf("[initSystemAdmin] created system admin: %s", email)
 }
 
 // preMigrateCleanup 清理会阻塞 AutoMigrate 唯一索引迁移的无效行

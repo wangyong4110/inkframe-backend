@@ -60,6 +60,7 @@ type Config struct {
 	AuditHandler           *handler.AuditHandler
 	OutlineReviewHandler   *handler.OutlineReviewHandler
 	CollabHandler          *handler.CollabHandler
+	SysAdminHandler        *handler.SysAdminHandler
 }
 
 // SetupRouter 配置路由
@@ -942,6 +943,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				rewrite.GET("/projects/:id/chapters", cfg.RewriteHandler.ListChapterTasks)
 				rewrite.GET("/projects/:id/chapters/:task_id", cfg.RewriteHandler.GetChapterTask)
 				rewrite.POST("/projects/:id/chapters/:task_id/approve", cfg.RewriteHandler.ApproveChapter)
+				rewrite.POST("/projects/:id/chapters/:task_id/apply", cfg.RewriteHandler.ApplyRewriteToChapter)
 				rewrite.PUT("/projects/:id/bible", cfg.RewriteHandler.UpdateBible)
 				rewrite.GET("/projects/:id/compliance-report", cfg.RewriteHandler.GetComplianceReport)
 				rewrite.POST("/projects/:id/cancel", cfg.RewriteHandler.CancelRewrite)
@@ -977,6 +979,37 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			v1.DELETE("/editing-locks/:type/:entity_id", cfg.CollabHandler.ReleaseLock)
 			v1.PUT("/editing-locks/:type/:entity_id/heartbeat", cfg.CollabHandler.HeartbeatLock)
 			v1.GET("/editing-locks/:type/:entity_id", cfg.CollabHandler.GetLock)
+		}
+	}
+
+	// System admin routes (require system_admin JWT) — registered outside v1 to use its own auth chain
+	if cfg.SysAdminHandler != nil {
+		sa := r.Group("/api/v1/sysadmin")
+		sa.Use(middleware.NewAuth(cfg.JWTSecret, cfg.RedisClient))
+		sa.Use(middleware.RequireSystemAdmin())
+		{
+			sa.GET("/overview", cfg.SysAdminHandler.GetOverview)
+			sa.GET("/tenants", cfg.SysAdminHandler.ListTenants)
+			sa.GET("/tenants/:id", cfg.SysAdminHandler.GetTenant)
+			sa.PUT("/tenants/:id", cfg.SysAdminHandler.UpdateTenant)
+			sa.DELETE("/tenants/:id", cfg.SysAdminHandler.DeleteTenant)
+			sa.GET("/users", cfg.SysAdminHandler.ListUsers)
+			sa.GET("/users/:id", cfg.SysAdminHandler.GetUser)
+			sa.PUT("/users/:id", cfg.SysAdminHandler.UpdateUser)
+			sa.POST("/users/:id/impersonate", cfg.SysAdminHandler.ImpersonateUser)
+			sa.POST("/users/:id/reset-password", cfg.SysAdminHandler.ResetUserPassword)
+			sa.GET("/tasks", cfg.SysAdminHandler.ListTasks)
+			sa.POST("/tasks/:id/cancel", cfg.SysAdminHandler.CancelTask)
+			sa.GET("/audit-logs", cfg.SysAdminHandler.ListAuditLogs)
+			sa.GET("/settings", cfg.SysAdminHandler.ListSettings)
+			sa.PUT("/settings", cfg.SysAdminHandler.UpdateSettings)
+			sa.GET("/content-review/novels", cfg.SysAdminHandler.ListNovels)
+			sa.GET("/asset-governance", cfg.SysAdminHandler.GetAssetGovernance)
+			sa.GET("/ai-infra", cfg.SysAdminHandler.GetAIInfra)
+			sa.POST("/notifications/broadcast", cfg.SysAdminHandler.BroadcastNotification)
+			sa.POST("/notifications/tenant/:id", cfg.SysAdminHandler.NotifyTenant)
+			sa.GET("/experiments", cfg.SysAdminHandler.ListExperiments)
+			sa.POST("/change-password", cfg.SysAdminHandler.ChangePassword)
 		}
 	}
 

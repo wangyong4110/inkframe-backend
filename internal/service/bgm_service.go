@@ -18,6 +18,7 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/storage"
+	"github.com/redis/go-redis/v9"
 )
 
 // bgmCacheEntry caches API search results to avoid duplicate Jamendo/Pixabay requests.
@@ -39,7 +40,8 @@ type BGMService struct {
 	assetRepo        *repository.AssetRepository
 	tagRepo          *repository.TagRepository
 	httpClient       *http.Client
-	localUploadCache sync.Map // local path → OSS URL
+	cache            *redis.Client // optional: cross-instance BGM URL cache
+	localUploadCache sync.Map // local path → OSS URL (process-local fallback)
 	queryCache       sync.Map // "jamendo:query" / "pixabay:query" → bgmCacheEntry
 	localFileCache   sync.Map // dirPath → []string (已扫描的文件名列表)
 }
@@ -62,6 +64,13 @@ func (s *BGMService) WithAIService(aiSvc *AIService) *BGMService {
 // WithStorage 注入存储服务（本地文件上传 OSS，生成可公开访问的 URL）
 func (s *BGMService) WithStorage(svc storage.Service) *BGMService {
 	s.storageSvc = svc
+	return s
+}
+
+// WithRedis enables cross-instance BGM URL caching so multiple instances share
+// the same local-file→OSS-URL mapping instead of re-uploading the same file.
+func (s *BGMService) WithRedis(c *redis.Client) *BGMService {
+	s.cache = c
 	return s
 }
 
@@ -138,14 +147,47 @@ func (s *BGMService) SelectBGM(emotion string) string {
 }
 
 // resolveLocalBGMURL 将本地文件路径转为可公开访问的 OSS URL。
-// 首次调用时上传至 OSS，之后从进程内缓存返回。
+// 查找顺序：进程内缓存 → Redis 缓存 → OSS 上传（加分布式锁防重复上传）。
 // storageSvc 未配置时返回 ("", false)；调用方应降级到下一个来源。
 func (s *BGMService) resolveLocalBGMURL(ctx context.Context, localPath string) (string, bool) {
 	if s.storageSvc == nil || localPath == "" {
 		return "", false
 	}
+	// 1. Process-local cache (fastest)
 	if cached, ok := s.localUploadCache.Load(localPath); ok {
 		return cached.(string), true
+	}
+	filename := filepath.Base(localPath)
+	redisKey := fmt.Sprintf("bgm:local:%s", filename)
+	// 2. Redis cache (cross-instance)
+	if s.cache != nil {
+		if u, err := s.cache.Get(ctx, redisKey).Result(); err == nil && u != "" {
+			s.localUploadCache.Store(localPath, u)
+			return u, true
+		}
+	}
+	// 3. Upload to OSS — use a distributed lock so only one instance uploads.
+	if s.cache != nil {
+		lockKey := fmt.Sprintf("lock:bgm:upload:%s", filename)
+		lock, acquired, lockErr := acquireDistLock(s.cache, lockKey, 30*time.Second)
+		if lockErr != nil {
+			logger.Errorf("[BGMService] distlock error for %s: %v, proceeding without lock", filename, lockErr)
+		} else if !acquired {
+			// Another instance is uploading; wait briefly then re-check Redis.
+			time.Sleep(3 * time.Second)
+			if u, err := s.cache.Get(ctx, redisKey).Result(); err == nil && u != "" {
+				s.localUploadCache.Store(localPath, u)
+				return u, true
+			}
+			// Still not ready — fall through and upload ourselves.
+		} else {
+			defer lock.release()
+			// Re-check Redis after acquiring lock (another instance may have finished).
+			if u, err := s.cache.Get(ctx, redisKey).Result(); err == nil && u != "" {
+				s.localUploadCache.Store(localPath, u)
+				return u, true
+			}
+		}
 	}
 	f, err := os.Open(localPath)
 	if err != nil {
@@ -163,13 +205,16 @@ func (s *BGMService) resolveLocalBGMURL(ctx context.Context, localPath string) (
 	} else if ext == ".m4a" {
 		mime = "audio/mp4"
 	}
-	ossKey := fmt.Sprintf("bgm/local/%s", filepath.Base(localPath))
+	ossKey := fmt.Sprintf("bgm/local/%s", filename)
 	u, err := s.storageSvc.Upload(ctx, ossKey, f, fi.Size(), mime)
 	if err != nil {
-		logger.Errorf("[BGMService] OSS upload failed (%s): %v", filepath.Base(localPath), err)
+		logger.Errorf("[BGMService] OSS upload failed (%s): %v", filename, err)
 		return "", false
 	}
 	s.localUploadCache.Store(localPath, u)
+	if s.cache != nil {
+		_ = s.cache.Set(ctx, redisKey, u, 7*24*time.Hour).Err()
+	}
 	return u, true
 }
 

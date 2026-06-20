@@ -306,6 +306,14 @@ func (s *AuthService) Login(req *LoginRequest) (*AuthResponse, error) {
 		}).Error
 	}
 
+	// System admin: skip tenant lookup, sign with TenantID=0
+	if user.Role == "system_admin" {
+		if err := s.userRepo.UpdateLastLogin(user.ID); err != nil {
+			logger.Errorf("[AuthService] failed to update last login for user %d: %v", user.ID, err)
+		}
+		return s.signToken(user.ID, 0, "system_admin")
+	}
+
 	// 获取用户的租户信息（取第一个租户）
 	tu, err := s.getDefaultTenantUser(user.ID)
 	if err != nil {

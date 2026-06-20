@@ -35,9 +35,15 @@ func (r *RewriteProjectRepository) ListByTenant(tenantID uint, page, pageSize in
 	var projects []*model.RewriteProject
 	var total int64
 	offset := (page - 1) * pageSize
-	subq := "novel_id IN (SELECT id FROM ink_novel WHERE tenant_id = ? AND deleted_at IS NULL)"
-	r.db.Model(&model.RewriteProject{}).Where(subq, tenantID).Count(&total)
-	err := r.db.Where(subq, tenantID).Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&projects).Error
+	q := r.db.Model(&model.RewriteProject{})
+	if tenantID == 0 {
+		// system_admin: see all projects
+	} else {
+		// Prefer direct tenant_id column; fall back to novel join for rows that predate the column.
+		q = q.Where("tenant_id = ? OR (tenant_id = 0 AND novel_id IN (SELECT id FROM ink_novel WHERE tenant_id = ? AND deleted_at IS NULL))", tenantID, tenantID)
+	}
+	q.Count(&total)
+	err := q.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&projects).Error
 	return projects, total, err
 }
 

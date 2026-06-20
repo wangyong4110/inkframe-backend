@@ -719,10 +719,11 @@ func (s *RewriteService) CreateProject(tenantID, novelID uint, name string, leve
 		return nil, fmt.Errorf("novel not found")
 	}
 	project := &model.RewriteProject{
-		NovelID: novelID,
-		Name:    name,
-		Level:   level,
-		Status:  "pending",
+		TenantID: tenantID,
+		NovelID:  novelID,
+		Name:     name,
+		Level:    level,
+		Status:   "pending",
 	}
 	if err := s.projectRepo.Create(project); err != nil {
 		return nil, err
@@ -1309,13 +1310,6 @@ func (s *RewriteService) rewriteChapterWithRetry(
 		if err := s.chapterTaskRepo.AcceptAttempt(task.ID, att.LexSim, att.StructSim, att.SemanticSim, att.Passed); err != nil {
 			return nil, err
 		}
-		// Sync accepted rewrite content back to the source chapter
-		if att.Content != "" {
-			if err := s.chapterRepo.UpdateContent(task.ChapterID, att.Content); err != nil {
-				logger.Errorf("AcceptAttempt: sync chapter content failed: %v", err)
-				// non-fatal: task is accepted, chapter update is best-effort
-			}
-		}
 		return att, nil
 	}
 
@@ -1325,13 +1319,6 @@ func (s *RewriteService) rewriteChapterWithRetry(
 		logger.Printf("[Rewrite] chapter %d exhausted retries, accepting degraded result (passed=%v)", task.ChapterNo, lastAttempt.Passed)
 		if err := s.chapterTaskRepo.AcceptAttempt(task.ID, lastAttempt.LexSim, lastAttempt.StructSim, lastAttempt.SemanticSim, false); err != nil {
 			logger.Errorf("[Rewrite] AcceptAttempt (degraded) ch%d: %v", task.ChapterNo, err)
-		}
-		// Sync accepted rewrite content back to the source chapter
-		if lastAttempt.Content != "" {
-			if err := s.chapterRepo.UpdateContent(task.ChapterID, lastAttempt.Content); err != nil {
-				logger.Errorf("AcceptAttempt: sync chapter content failed: %v", err)
-				// non-fatal: task is accepted, chapter update is best-effort
-			}
 		}
 		return lastAttempt, nil
 	}
@@ -1647,6 +1634,20 @@ func (s *RewriteService) GetChapterTask(taskID uint) (*model.ChapterRewriteTask,
 
 func (s *RewriteService) ApproveChapter(taskID uint) error {
 	return s.chapterTaskRepo.UpdateStatus(taskID, "completed", "")
+}
+
+// ApplyRewriteToChapter copies RewrittenContent back to the source chapter.
+// This is an explicit user action — the rewrite pipeline no longer does this automatically
+// to preserve the original chapter content for future rewrite projects.
+func (s *RewriteService) ApplyRewriteToChapter(taskID uint) error {
+	task, err := s.chapterTaskRepo.GetByID(taskID)
+	if err != nil {
+		return err
+	}
+	if task.RewrittenContent == "" {
+		return fmt.Errorf("chapter task %d has no rewritten content", taskID)
+	}
+	return s.chapterRepo.UpdateContent(task.ChapterID, task.RewrittenContent)
 }
 
 // CancelRewrite cancels active rewrite tasks for a project and marks it cancelled.

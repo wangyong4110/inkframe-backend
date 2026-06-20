@@ -150,3 +150,11 @@ crawl:
 # 也可通过 DB_ENCRYPTION_KEY 环境变量传入（推荐，避免写入配置文件）
 encryption:
   db_key: ""               # 留空则跳过加密（字段明文存储）
+
+# 系统管理员初始化配置
+# 仅在首次启动时（数据库中尚不存在 system_admin 账号）生效，已存在则跳过。
+# 登录入口与普通用户相同（POST /api/v1/auth/login），登录后跳转 /sysadmin 后台。
+# 生产环境强烈建议修改默认密码，也可通过 /sysadmin/settings 页面后续修改。
+admin:
+  email: "admin@inkframe.io"    # 管理员登录邮箱
+  password: "Admin@123456"      # 管理员初始密码（生产环境请修改）

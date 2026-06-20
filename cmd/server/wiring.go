@@ -483,7 +483,8 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 	enhancementSvc := service.NewVideoEnhancementService(imageSvc, "/tmp/inkframe-enhance")
 	bgmSvc := service.NewBGMService(getEnv("BGM_DIR", "")).
 		WithAIService(aiSvc).
-		WithAssetRepo(repos.AssetRepo, repos.TagRepo)
+		WithAssetRepo(repos.AssetRepo, repos.TagRepo).
+		WithRedis(redisClient) // Fix: cross-instance BGM URL cache
 
 	charConsistencySvc := service.NewCharacterConsistencyService(imageSvc, nil, aiSvc)
 
@@ -751,6 +752,7 @@ type Handlers struct {
 	AuditHandler          *handler.AuditHandler
 	OutlineReviewHandler  *handler.OutlineReviewHandler
 	CollabHandler         *handler.CollabHandler
+	SysAdminHandler       *handler.SysAdminHandler
 }
 
 // initHandlers 初始化处理器
@@ -846,6 +848,9 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		AuditHandler:         handler.NewAuditHandler(services.AuditService),
 		OutlineReviewHandler: handler.NewOutlineReviewHandler(services.OutlineReviewService, services.TaskService),
 		CollabHandler:        handler.NewCollabHandler(services.CollabService),
+		SysAdminHandler: handler.NewSysAdminHandler(
+			service.NewSysAdminService(db, cfg.Server.JWTSecret, cfg.Server.JWTExpiry),
+		),
 	}
 }
 

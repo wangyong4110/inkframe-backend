@@ -97,6 +97,7 @@ func main() {
 	// 3b. 预置默认数据（INSERT IGNORE，幂等安全）
 	seedDefaultData(db)
 	seedAIModels(db)
+	initSystemAdmin(db, cfg)
 	seedWebSearchMcpTool(db, cfg)
 	seedWikiSearchMcpTool(db, cfg)
 	seedStoryPatternMcpTool(db, cfg)
@@ -242,6 +243,7 @@ func main() {
 		AuditHandler:          handlers.AuditHandler,
 		OutlineReviewHandler:  handlers.OutlineReviewHandler,
 		CollabHandler:         handlers.CollabHandler,
+		SysAdminHandler:       handlers.SysAdminHandler,
 	})
 
 	// 12. 创建服务器
