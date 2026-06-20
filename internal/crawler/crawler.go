@@ -360,6 +360,16 @@ func (nc *NovelCrawler) FetchChapterStream(ctx context.Context, chapters []*Chap
 		}
 		col := nc.newAsyncCollector(domain)
 
+		// 为 GenericParser 添加 Referer（减少反爬拦截）
+		if gp, isGeneric := parser.(*GenericParser); isGeneric && gp.bookURL != "" {
+			referer := gp.bookURL
+			col.OnRequest(func(r *colly.Request) {
+				if r.Headers.Get("Referer") == "" {
+					r.Headers.Set("Referer", referer)
+				}
+			})
+		}
+
 		col.OnHTML("html", func(e *colly.HTMLElement) {
 			idxRaw := e.Request.Ctx.Get("chapter_idx")
 			var idx int
@@ -1268,7 +1278,7 @@ func (p *GenericParser) ParseNovelDetail(root *goquery.Selection, bookURL string
 	return detail, nil
 }
 
-// ParseChapterList 基于「相同域名 + URL 公共前缀」自动识别章节目录链接。
+// ParseChapterList 基于「URL 公共前缀 + 允许域名」自动识别章节目录链接。
 func (p *GenericParser) ParseChapterList(root *goquery.Selection) ([]*ChapterInfo, error) {
 	var baseHost, basePath string
 	var bookParsed *url.URL
@@ -1280,12 +1290,39 @@ func (p *GenericParser) ParseChapterList(root *goquery.Selection) ([]*ChapterInf
 		}
 	}
 
+	// 允许的域名集合：书目页域名 + 页面实际域名（重定向后 og:url / canonical 中的域）
+	// 这样当书目页被重定向到 CDN 域（如 qindi.935666.xyz）时，该域的链接也能被识别
+	allowedHosts := map[string]struct{}{}
+	if baseHost != "" {
+		allowedHosts[baseHost] = struct{}{}
+	}
+	for _, sel := range []string{`meta[property="og:url"]`, `link[rel="canonical"]`} {
+		if val, ok := root.Find(sel).Attr("content"); !ok {
+			if val, ok = root.Find(sel).Attr("href"); ok {
+				if u, err := url.Parse(val); err == nil && u.Host != "" {
+					allowedHosts[u.Host] = struct{}{}
+					// 如果实际域名与书目域名不同，用实际路径更新 basePath
+					if u.Host != baseHost && basePath == "" {
+						basePath = strings.TrimRight(u.Path, "/")
+					}
+				}
+			}
+		} else {
+			if u, err := url.Parse(val); err == nil && u.Host != "" {
+				allowedHosts[u.Host] = struct{}{}
+				if u.Host != baseHost && basePath == "" {
+					basePath = strings.TrimRight(u.Path, "/")
+				}
+			}
+		}
+	}
+
 	type linkEntry struct {
 		title string
 		href  string
 	}
 
-	// 收集候选链接：同域 + 路径在书目页之下 + 标题长度 2-40
+	// 收集候选链接：允许域 + 路径在书目页之下 + 标题长度 2-40
 	navKeywords := []string{"prev", "next", "上一", "下一", "首页", "末页", "登录", "注册", "home", "login", "register"}
 	var candidates []linkEntry
 
@@ -1317,8 +1354,11 @@ func (p *GenericParser) ParseChapterList(root *goquery.Selection) ([]*ChapterInf
 			}
 			linkURL = bookParsed.ResolveReference(linkURL)
 		}
-		if linkURL.Host != baseHost && baseHost != "" {
-			return // 非同域
+		// 域名检查：仅在允许集合非空时过滤（允许书目域 + 重定向后实际域）
+		if len(allowedHosts) > 0 {
+			if _, ok := allowedHosts[linkURL.Host]; !ok {
+				return
+			}
 		}
 		linkPath := strings.TrimRight(linkURL.Path, "/")
 		// 链接路径必须比书目页更深

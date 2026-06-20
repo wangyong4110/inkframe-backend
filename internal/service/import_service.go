@@ -489,10 +489,10 @@ func (s *NovelImportService) crawlChaptersBackground(
 			go func() {
 				summarySem <- struct{}{}
 				defer func() { <-summarySem }()
-				summary, summaryErr := nm.GenerateChapterSummary(0, &chCopy, nTitle)
+				summary, summaryErr := nm.GenerateChapterSummary(tenantID, &chCopy, nTitle)
 				if summaryErr != nil {
 					time.Sleep(2 * time.Second)
-					summary, summaryErr = nm.GenerateChapterSummary(0, &chCopy, nTitle)
+					summary, summaryErr = nm.GenerateChapterSummary(tenantID, &chCopy, nTitle)
 					if summaryErr != nil {
 						logger.Errorf("[Crawl] chapter %d summary failed (skipped): %v", chCopy.ChapterNo, summaryErr)
 						return
