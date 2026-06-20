@@ -41,12 +41,12 @@
 - gender：只能是 male / female / neutral
 - age：简短年龄感，如 "16" / "约25岁" / "少年" / "中年" / "老年"
 {% if PromptLanguage == "en" %}- description (English): background only — origin, key experiences, relation to main plot. One paragraph, ≤100 words{% else %}- description（中文）：仅写背景——来历、经历、与主线关系，连贯段落，100字以内{% endif %}
-{% if PromptLanguage == "en" %}- visual_prompt (English): ~150-word image generation prompt covering 12 dimensions in order. No art style / quality / rendering tags. No violent, gory, or death-related content.
+{% if PromptLanguage == "en" %}- visual_prompt (English): ~150-word image generation prompt covering 12 dimensions in order. No art style / quality / rendering tags. No violent, gory, death-related, or sexually explicit content.
   [1] GENDER & BUILD [2] FACE STRUCTURE [3] EYES [4] BROWS (natural, no cosmetics) [5] NOSE & LIPS
   [6] SKIN (birthmarks or natural marks only) [7] HAIR [8] OUTFIT (layer by layer) [9] FOOTWEAR
   [10] ACCESSORIES & CARRIED ITEMS (weapons: visual form and ornamentation only)
   [11] POSTURE [12] SIGNATURE ELEMENT{% else %}- visual_prompt（中文）：约150字图像生成提示词，按序覆盖12维度，禁止画风/质量/渲染标签。
-  ⚠️ 严禁出现暴力、血腥、伤亡相关敏感词。
+  ⚠️ 严禁出现暴力、血腥、伤亡、色情相关敏感词。
   [1]性别体型 [2]面部结构 [3]眼睛 [4]眉毛（自然，禁妆容） [5]鼻唇
   [6]肤色（仅先天性标记） [7]发型 [8]服装（逐层） [9]鞋履
   [10]配饰与随身物件（兵器/法器仅写形制与装饰）
