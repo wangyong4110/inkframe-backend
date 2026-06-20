@@ -529,8 +529,9 @@ func (s *NovelImportService) crawlChaptersBackground(
 					}
 				}
 				if summary != "" {
-					chCopy.Summary = summary
-					if updateErr := repo.Update(&chCopy); updateErr != nil {
+					if updateErr := repo.UpdateFields(chCopy.ID, chCopy.NovelID, map[string]interface{}{
+						"summary": summary,
+					}); updateErr != nil {
 						logger.Errorf("[Crawl] chapter %d summary save failed: %v", chCopy.ChapterNo, updateErr)
 					}
 				}
