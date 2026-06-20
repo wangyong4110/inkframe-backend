@@ -1425,13 +1425,19 @@ func (p *GenericParser) ParseChapter(root *goquery.Selection) (*ChapterContent, 
 		htmlNode = htmlNode.Parent
 	}
 	article, err := readability.FromDocument(htmlNode, pageURL)
-	if err == nil && len(strings.TrimSpace(article.TextContent)) > 50 {
-		// 用 readability 结果
+	if err == nil && article.Node != nil && len(strings.TrimSpace(article.TextContent)) > 50 {
 		if article.Title != "" {
 			content.Title = article.Title
 		}
-		content.Content = cleanReadabilityText(article.TextContent)
-		return content, nil
+		// 用 article.Node（已提取的正文 HTML 子树）按段落提取，保留分段结构
+		content.Content = extractArticleNodeText(article.Node)
+		if content.Content == "" {
+			// 降级：TextContent 去噪
+			content.Content = cleanReadabilityText(article.TextContent)
+		}
+		if content.Content != "" {
+			return content, nil
+		}
 	}
 
 	// readability 失败时降级：找 <h1> 标题 + 常见正文选择器提取 <p> 段落
@@ -1450,18 +1456,8 @@ func (p *GenericParser) ParseChapter(root *goquery.Selection) (*ChapterContent, 
 		if node.Length() == 0 {
 			continue
 		}
-		var paragraphs []string
-		node.Find("p").Each(func(_ int, s *goquery.Selection) {
-			if t := strings.TrimSpace(s.Text()); len([]rune(t)) >= 5 {
-				paragraphs = append(paragraphs, t)
-			}
-		})
-		if len(paragraphs) > 0 {
-			content.Content = strings.Join(paragraphs, "\n\n")
-			return content, nil
-		}
-		if t := strings.TrimSpace(node.Text()); len([]rune(t)) > 100 {
-			content.Content = cleanText(t)
+		if text := extractArticleNodeText(node.Get(0)); text != "" {
+			content.Content = text
 			return content, nil
 		}
 	}
@@ -1470,8 +1466,7 @@ func (p *GenericParser) ParseChapter(root *goquery.Selection) (*ChapterContent, 
 	var bodyParagraphs []string
 	root.Find("body p").Each(func(_ int, s *goquery.Selection) {
 		t := strings.TrimSpace(s.Text())
-		// 过滤极短段落（导航、提示、广告）
-		if len([]rune(t)) >= 20 {
+		if len([]rune(t)) >= 20 && !isNoiseLine(t) {
 			bodyParagraphs = append(bodyParagraphs, t)
 		}
 	})
@@ -1481,17 +1476,85 @@ func (p *GenericParser) ParseChapter(root *goquery.Selection) (*ChapterContent, 
 	return content, nil
 }
 
-// cleanReadabilityText 清理 readability 返回的 TextContent（去多余空行和空白）。
+// extractArticleNodeText 从 readability 提取的正文 *html.Node 中按段落结构提取文本。
+// 优先按 <p> 分段；若无 <p> 则按 <br> 分行；最后降级到整块文本。
+func extractArticleNodeText(node *html.Node) string {
+	doc := goquery.NewDocumentFromNode(node)
+
+	// 1. 尝试按 <p> 段落提取
+	var paragraphs []string
+	doc.Find("p").Each(func(_ int, s *goquery.Selection) {
+		t := strings.TrimSpace(s.Text())
+		if len([]rune(t)) >= 5 && !isNoiseLine(t) {
+			paragraphs = append(paragraphs, t)
+		}
+	})
+	if len(paragraphs) > 0 {
+		return strings.Join(paragraphs, "\n\n")
+	}
+
+	// 2. 无 <p> 标签：把 <br> 替换为换行符后提取整块文本
+	// 先把 br 节点替换成文本节点 "\n"
+	doc.Find("br").Each(func(_ int, s *goquery.Selection) {
+		s.ReplaceWithHtml("\n")
+	})
+	raw := strings.TrimSpace(doc.Text())
+	if raw == "" {
+		return ""
+	}
+	// 按换行分割，过滤噪音行
+	lines := strings.Split(raw, "\n")
+	var out []string
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || isNoiseLine(line) {
+			continue
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n\n")
+}
+
+// noisePatterns 匹配小说站注入的广告/防盗/版权提示行，这些不属于正文内容。
+var noisePatterns = []*regexp.Regexp{
+	// 站点防盗提示（含域名/网址）
+	regexp.MustCompile(`(?i)(记住本站|本站网址|www\.[a-z0-9\-]+\.(net|com|org|xyz)|\.net|\.com).{0,60}(阅读|小说|书友|转码|退出)`),
+	regexp.MustCompile(`(?i)(若被|浏.?览.?器.?转.?码|退出转.?码|感谢支持|收藏本站|书签|手机版)`),
+	// 版权/防盗水印类
+	regexp.MustCompile(`(?i)(本章.{0,10}(完|结束)|最新章节|全文免费|点击下载|下载.*?app)`),
+	regexp.MustCompile(`(?i)(一秒记住|快速导航|返回目录|上一章|下一章|章节错误.{0,20}举报)`),
+	regexp.MustCompile(`(?i)(笔趣阁|顶点小说|起点中文|纵横中文|晋江文学|飞卢小说|书客居|七猫.{0,5}小说)`),
+}
+
+// cleanReadabilityText 清理 readability 返回的 TextContent（去多余空行、广告注入行）。
 func cleanReadabilityText(text string) string {
 	lines := strings.Split(text, "\n")
 	var out []string
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if line != "" {
-			out = append(out, line)
+		if line == "" {
+			continue
 		}
+		if isNoiseLine(line) {
+			continue
+		}
+		out = append(out, line)
 	}
 	return strings.Join(out, "\n\n")
+}
+
+// isNoiseLine 判断一行文本是否是小说站注入的噪音（广告、防盗提示等）。
+func isNoiseLine(line string) bool {
+	// 极短行（纯导航/符号）
+	if len([]rune(line)) < 8 {
+		return false // 短行留给调用方判断，不在此过滤（可能是章节标题）
+	}
+	for _, re := range noisePatterns {
+		if re.MatchString(line) {
+			return true
+		}
+	}
+	return false
 }
 
 // ---------------------------------------------------------------------------
