@@ -688,7 +688,8 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 		metrics.OutlineGenerationDuration.Observe(time.Since(outlineStart).Seconds())
 	}
 
-	novel, err := s.novelRepo.GetByID(req.NovelID)
+	// 写操作必须绕过 Redis 缓存直读 DB，避免缓存过期数据导致后续章节外键约束失败
+	novel, err := s.novelRepo.GetByIDFromDB(req.NovelID)
 	if err != nil {
 		recordOutline("error")
 		return nil, err
@@ -847,6 +848,8 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 		}
 		if err := s.chapterRepo.Create(placeholder); err != nil {
 			logger.Errorf("GenerateOutline: create placeholder chapter %d: %v", chap.ChapterNo, err)
+			recordOutline("error")
+			return nil, fmt.Errorf("create placeholder chapter %d: %w", chap.ChapterNo, err)
 		}
 	}
 
