@@ -141,12 +141,14 @@ func (h *SceneAnchorHandler) UpdateSceneAnchor(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
+	logger.Printf("[SceneAnchorHandler] UpdateSceneAnchor id=%d: HTTP body parsed: description_len=%d description_preview=%.120q", id, len(req.Description), req.Description)
 	anchor, err := h.svc.Update(uint(id), req)
 	if err != nil {
 		logger.Errorf("[SceneAnchorHandler] UpdateSceneAnchor id=%d: %v", id, err)
 		respondErr(c, http.StatusInternalServerError, "failed to update scene anchor")
 		return
 	}
+	logger.Printf("[SceneAnchorHandler] UpdateSceneAnchor id=%d: response description_len=%d", id, len(anchor.Description))
 	respondOK(c, anchor)
 }
 
@@ -282,6 +284,31 @@ func (h *SceneAnchorHandler) UploadRefImage(c *gin.Context) {
 	}
 	updated, _ := h.svc.Get(uint(id))
 	respondOK(c, gin.H{"url": imgURL, "anchor": updated})
+}
+
+// AIAnalyzeSceneAnchor POST /scene-anchors/:id/ai-analyze
+// 使用 AI 分析场景，返回建议的 type / description / variant，不自动保存。
+func (h *SceneAnchorHandler) AIAnalyzeSceneAnchor(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	existing, err := h.svc.Get(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "scene anchor not found")
+		return
+	}
+	if !h.checkNovelTenant(c, existing.NovelID) {
+		respondErr(c, http.StatusForbidden, "forbidden")
+		return
+	}
+	result, err := h.svc.AIAnalyze(c.Request.Context(), getTenantID(c), uint(id))
+	if err != nil {
+		logger.Errorf("[SceneAnchorHandler] AIAnalyzeSceneAnchor id=%d: %v", id, err)
+		respondErr(c, http.StatusInternalServerError, "AI分析失败："+err.Error())
+		return
+	}
+	respondOK(c, result)
 }
 
 // GenerateRefImage POST /scene-anchors/:id/generate-ref-image
@@ -591,7 +618,7 @@ func (h *SceneAnchorHandler) AIExtractFromNovel(c *gin.Context) {
 		}()
 		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
-		anchors, err := h.svc.AIExtractAllFromNovel(c.Request.Context(), tenantID, uint(novelID), progressFn)
+		anchors, err := h.svc.AIExtractAllFromNovel(context.Background(), tenantID, uint(novelID), progressFn)
 		if err != nil {
 			logger.Errorf("[SceneAnchorHandler] AIExtractFromNovel: %v", err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck

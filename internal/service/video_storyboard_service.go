@@ -831,6 +831,7 @@ func (s *VideoService) buildStoryboardPrompt(
 	arcPlan string,
 ) string {
 	// isEn / isImageEn 均由 novel.PromptLanguage 决定，与项目「AI 提示词的语言」设置保持一致。
+	// image_prompt 在生图前会经过自动翻译（translatePromptToEnglish），保持中文可供用户编辑。
 	isEn := promptLanguage == "en"
 	isImageEn := promptLanguage == "en"
 
@@ -1388,6 +1389,7 @@ func (s *VideoService) UpdateShotPartial(id uint, fields map[string]interface{})
 		"camera_type": true, "camera_angle": true, "shot_size": true, "duration": true,
 		"emotional_tone": true, "transition": true, "status": true, "generation_mode": true,
 		"image_url": true, "sfx_volume": true,
+		"prompt": true, "motion_prompt": true,
 	}
 	safe := make(map[string]interface{}, len(fields))
 	for k, v := range fields {

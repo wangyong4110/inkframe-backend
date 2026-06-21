@@ -145,10 +145,11 @@ func (s *SceneAnchorService) Update(id uint, req UpdateSceneAnchorReq) (*model.S
 		anchor.Type = req.Type
 	}
 	if req.Description != "" {
-		logger.Printf("[SceneAnchorService] Update id=%d: saving description len=%d preview=%.80q", id, len(req.Description), req.Description)
+		logger.Printf("[SceneAnchorService] Update id=%d: description BEFORE len=%d prev=%.120q", id, len(anchor.Description), anchor.Description)
+		logger.Printf("[SceneAnchorService] Update id=%d: description AFTER  len=%d new=%.120q", id, len(req.Description), req.Description)
 		anchor.Description = req.Description
 	} else {
-		logger.Printf("[SceneAnchorService] Update id=%d: req.Description is empty, description NOT updated (current len=%d)", id, len(anchor.Description))
+		logger.Printf("[SceneAnchorService] Update id=%d: req.Description is empty, NOT updated (DB has len=%d val=%.80q)", id, len(anchor.Description), anchor.Description)
 	}
 	if req.Variant != "" {
 		anchor.Variant = req.Variant
@@ -474,6 +475,123 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 	return created, nil
 }
 
+// AIAnalyzeSceneAnchorResult AI 分析返回的建议字段（不含 name，name 由用户维护）
+type AIAnalyzeSceneAnchorResult struct {
+	Type        string `json:"type"`        // interior / exterior / imaginary
+	Description string `json:"description"` // 视觉提示词
+	Variant     string `json:"variant"`     // 可选变体，如 day/night/winter
+}
+
+// AIAnalyze 用 AI 分析场景锚点，返回建议参数（不自动保存，由前端填入表单后用户确认）
+func (s *SceneAnchorService) AIAnalyze(ctx context.Context, tenantID, id uint) (*AIAnalyzeSceneAnchorResult, error) {
+	anchor, err := s.repo.GetByID(id)
+	if err != nil {
+		return nil, fmt.Errorf("anchor not found: %w", err)
+	}
+
+	novelTitle := ""
+	novelDesc := ""
+	novelGenre := ""
+	promptLanguage := "zh"
+	if s.novelRepo != nil {
+		if novel, nErr := s.novelRepo.GetByID(anchor.NovelID); nErr == nil {
+			novelTitle = novel.Title
+			novelDesc = novel.Description
+			novelGenre = novel.Genre
+			if novel.PromptLanguage != "" {
+				promptLanguage = novel.PromptLanguage
+			}
+		}
+	}
+
+	// 搜索提到该场景名称的章节片段（最多取 3 章，每章截取前后 500 字）
+	var excerpts []string
+	if s.chapterRepo != nil {
+		if chapters, cErr := s.chapterRepo.ListByNovelWithContent(anchor.NovelID); cErr == nil {
+			for _, ch := range chapters {
+				if ch.Content == "" || !strings.Contains(ch.Content, anchor.Name) {
+					continue
+				}
+				content := ch.Content
+				if idx := strings.Index(content, anchor.Name); idx >= 0 {
+					lo := idx - 500
+					if lo < 0 {
+						lo = 0
+					}
+					hi := idx + 500
+					if hi > len(content) {
+						hi = len(content)
+					}
+					excerpts = append(excerpts, fmt.Sprintf("（第%d章节选）…%s…", ch.ChapterNo, content[lo:hi]))
+				}
+				if len(excerpts) >= 3 {
+					break
+				}
+			}
+		}
+	}
+
+	// 构建 prompt
+	descTarget := "请用中文描述视觉细节"
+	if promptLanguage == "en" {
+		descTarget = "Describe all visual details in English"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("你是专业的场景设计师，请根据以下信息为**场景锚点**补全各字段，输出纯 JSON，不要其他内容。\n\n")
+	sb.WriteString(fmt.Sprintf("场景名称：%s\n", anchor.Name))
+	if novelTitle != "" {
+		sb.WriteString(fmt.Sprintf("所属小说：《%s》", novelTitle))
+		if novelGenre != "" {
+			sb.WriteString(fmt.Sprintf("（%s）", novelGenre))
+		}
+		sb.WriteString("\n")
+	}
+	if novelDesc != "" {
+		sb.WriteString(fmt.Sprintf("小说简介：%s\n", truncateForPrompt(novelDesc, 300)))
+	}
+	if len(excerpts) > 0 {
+		sb.WriteString("\n相关章节片段：\n")
+		for _, e := range excerpts {
+			sb.WriteString(truncateForPrompt(e, 800))
+			sb.WriteString("\n---\n")
+		}
+	}
+	if anchor.Description != "" {
+		sb.WriteString(fmt.Sprintf("\n现有描述（可参考）：%s\n", truncateForPrompt(anchor.Description, 300)))
+	}
+	sb.WriteString(fmt.Sprintf("\n请输出如下 JSON（%s）：\n", descTarget))
+	sb.WriteString(`{
+  "type": "interior|exterior|imaginary（三选一）",
+  "description": "场景完整视觉描述：建筑结构、陈设、光线、氛围、色调等，适合直接用作图像生成提示词，不少于30字",
+  "variant": "可选变体（如 day/night/winter/battle），若无明显变体则留空字符串"
+}`)
+
+	jsonStr, err := s.aiSvc.generateJSONForTenantCtx(ctx, tenantID, anchor.NovelID, "scene_anchor_analyze", sb.String(), 2)
+	if err != nil {
+		return nil, fmt.Errorf("AI analyze: %w", err)
+	}
+
+	clean := extractJSON(jsonStr)
+	var result AIAnalyzeSceneAnchorResult
+	if err := json.Unmarshal([]byte(clean), &result); err != nil {
+		return nil, fmt.Errorf("parse AI response: %w (raw: %.200s)", err, jsonStr)
+	}
+
+	// 校验并兜底 type
+	switch result.Type {
+	case "interior", "exterior", "imaginary":
+	default:
+		if anchor.Type != "" {
+			result.Type = anchor.Type
+		} else {
+			result.Type = "exterior"
+		}
+	}
+
+	return &result, nil
+}
+
 // GenerateRefImage 使用 AI 图像生成为锚点生成参考图并锁定
 func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id uint, providerName string) (*model.SceneAnchor, error) {
 	logger.Printf("[SceneAnchorService] GenerateRefImage: tenantID=%d anchorID=%d provider=%s", tenantID, id, providerName)
@@ -499,7 +617,7 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	}
 
 	// 组装图像生成 prompt（注入场景描述 + PromptLock + 标准化场景生成词）
-	logger.Printf("[SceneAnchorService] GenerateRefImage: anchorID=%d description len=%d preview=%.80q promptLock=%.40q", id, len(anchor.Description), anchor.Description, anchor.PromptLock)
+	logger.Printf("[SceneAnchorService] GenerateRefImage: anchorID=%d description_len=%d description=%.200q promptLock=%.80q", id, len(anchor.Description), anchor.Description, anchor.PromptLock)
 	prompt := anchor.Description
 	if anchor.PromptLock != "" {
 		prompt += ", " + anchor.PromptLock

@@ -526,6 +526,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				sceneAnchors.PUT("/:id/ref-image", cfg.SceneAnchorHandler.LockRefImage)
 				sceneAnchors.POST("/:id/ref-image/upload", cfg.SceneAnchorHandler.UploadRefImage)
 				sceneAnchors.POST("/:id/generate-ref-image", cfg.SceneAnchorHandler.GenerateRefImage)
+				sceneAnchors.POST("/:id/ai-analyze", cfg.SceneAnchorHandler.AIAnalyzeSceneAnchor)
 				sceneAnchors.POST("/:id/edit-ref-image", cfg.SceneAnchorHandler.EditRefImage)
 				sceneAnchors.GET("/:id/consistency-logs", cfg.SceneAnchorHandler.GetConsistencyLogs)
 			}
