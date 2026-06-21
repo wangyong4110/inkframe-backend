@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"image"
+	"image/color"
 	"image/jpeg"
 	"image/png"
 	"io"
@@ -2594,10 +2595,47 @@ func (s *AIService) downloadImageBytes(ctx context.Context, imageURL string) ([]
 	return data, ct, nil
 }
 
-// upscaleImageBicubic CatmullRom 双三次插值放大，不依赖任何 AI 接口。
+// applySharpen 对放大后的 RGBA 图像应用 3×3 锐化卷积核，使边缘更清晰。
+// 核：中心 5，上下左右各 -1，角不参与（等价于 USM 的快速近似）。
+func applySharpen(src *image.RGBA) *image.RGBA {
+	b := src.Bounds()
+	dst := image.NewRGBA(b)
+	clamp := func(v int) uint8 {
+		if v < 0 {
+			return 0
+		}
+		if v > 255 {
+			return 255
+		}
+		return uint8(v)
+	}
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if x == b.Min.X || x == b.Max.X-1 || y == b.Min.Y || y == b.Max.Y-1 {
+				dst.Set(x, y, src.At(x, y))
+				continue
+			}
+			c := src.RGBAAt(x, y)
+			t := src.RGBAAt(x, y-1)
+			bm := src.RGBAAt(x, y+1)
+			l := src.RGBAAt(x-1, y)
+			r := src.RGBAAt(x+1, y)
+			dst.SetRGBA(x, y, color.RGBA{
+				R: clamp(5*int(c.R) - int(t.R) - int(bm.R) - int(l.R) - int(r.R)),
+				G: clamp(5*int(c.G) - int(t.G) - int(bm.G) - int(l.G) - int(r.G)),
+				B: clamp(5*int(c.B) - int(t.B) - int(bm.B) - int(l.B) - int(r.B)),
+				A: c.A,
+			})
+		}
+	}
+	return dst
+}
+
+// upscaleImageBicubic CatmullRom 双三次插值放大 + 锐化，不依赖任何 AI 接口。
 func (s *AIService) upscaleImageBicubic(ctx context.Context, src image.Image, srcB image.Rectangle, format, _ string, dstW, dstH int) (string, error) {
-	dst := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
-	draw.CatmullRom.Scale(dst, dst.Bounds(), src, srcB, draw.Over, nil)
+	scaled := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
+	draw.CatmullRom.Scale(scaled, scaled.Bounds(), src, srcB, draw.Over, nil)
+	dst := applySharpen(scaled)
 
 	var buf bytes.Buffer
 	var outCT string
