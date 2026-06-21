@@ -1439,7 +1439,7 @@ func (s *NovelImportService) splitByChaptersWithAI(content string, tenantID uint
 小说文本（前10000字）：
 ` + sample
 
-	resp, err := s.aiService.GenerateWithProvider(tenantID, 0, "chapter", prompt, "", StoryboardOverrides{TimeoutSeconds: 30})
+	resp, err := s.aiService.GenerateWithProvider(tenantID, 0, "chapter", prompt, "")
 	if err != nil || strings.TrimSpace(resp) == "" {
 		logger.Errorf("[Import] AI chapter split error: %v", err)
 		return nil

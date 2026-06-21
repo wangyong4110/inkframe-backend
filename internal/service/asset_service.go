@@ -52,7 +52,8 @@ type AssetService struct {
 	// crawlMu guards the ExistsByExternalID+Create sequence for crawled assets (local fallback)
 	crawlMu         sync.Map
 	cache           *redis.Client // optional: cross-instance crawl dedup lock
-	onDeleteSFXHook func(tag string) // fired when an SFX audio asset is deleted
+	onDeleteSFXHook func(tag string)      // fired when an SFX audio asset is deleted
+	onDeleteBGMHook func(filename string) // fired when a BGM audio asset is deleted
 }
 
 // OnDeleteSFX registers a callback fired when an SFX audio asset is soft- or hard-deleted.
@@ -61,9 +62,28 @@ func (s *AssetService) OnDeleteSFX(fn func(tag string)) {
 	s.onDeleteSFXHook = fn
 }
 
+// OnDeleteBGM registers a callback fired when a BGM audio asset is soft- or hard-deleted.
+// The callback receives the filename extracted from the asset's URL for cache invalidation.
+func (s *AssetService) OnDeleteBGM(fn func(filename string)) {
+	s.onDeleteBGMHook = fn
+}
+
 func (s *AssetService) fireDeleteHooks(a *model.Asset) {
-	if s.onDeleteSFXHook != nil && a.Type == "audio" && a.SubType == "sfx" {
-		s.onDeleteSFXHook(a.Title)
+	if a.Type == "audio" {
+		switch a.SubType {
+		case "sfx":
+			if s.onDeleteSFXHook != nil {
+				s.onDeleteSFXHook(a.Title)
+			}
+		case "bgm":
+			if s.onDeleteBGMHook != nil {
+				// Derive filename from the OSS URL path (e.g. ".../bgm/local/happy.mp3" → "happy.mp3")
+				filename := path.Base(a.StorageURL)
+				if filename != "" && filename != "." {
+					s.onDeleteBGMHook(filename)
+				}
+			}
+		}
 	}
 }
 

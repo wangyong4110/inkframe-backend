@@ -723,6 +723,22 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		})
 	}
 
+	// 素材删除后清理 BGM 本地上传缓存（防止 stale OSS URL）
+	if result.BGMService != nil {
+		bgmSvcRef := result.BGMService
+		result.AssetService.OnDeleteBGM(func(filename string) {
+			bgmSvcRef.InvalidateCacheByFile(filename)
+		})
+	}
+
+	// 角色删除后清理 VideoService 的角色列表缓存（防止脏数据用于配音生成）
+	if result.VideoService != nil {
+		videoSvcRef := result.VideoService
+		result.CharacterService.OnDeleteCharacter(func(novelID uint) {
+			videoSvcRef.InvalidateCharListCache(novelID)
+		})
+	}
+
 	return &result
 }
 

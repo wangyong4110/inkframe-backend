@@ -1832,9 +1832,8 @@ func (s *ChapterService) generateFromSceneOutline(
 				sceneMaxTokens = nm
 			}
 			sceneOverrides := StoryboardOverrides{
-				MaxTokens:      sceneMaxTokens,
-				Temperature:    req.Temperature,
-				TimeoutSeconds: 120, // 单场景 2 分钟上限
+				MaxTokens:   sceneMaxTokens,
+				Temperature: req.Temperature,
 			}
 			if sceneOverrides.Temperature == 0 {
 				sceneOverrides.Temperature = novel.Temperature

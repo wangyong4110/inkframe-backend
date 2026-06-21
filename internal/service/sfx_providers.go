@@ -239,6 +239,7 @@ func (s *SFXService) freesoundSearchResults(ctx context.Context, key string, que
 	)
 	req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 	if err != nil {
+		logger.Errorf("[SFXService] Freesound build request error for %q: %v", query, err)
 		return nil
 	}
 	resp, err := s.httpClient.Do(req)
@@ -249,7 +250,7 @@ func (s *SFXService) freesoundSearchResults(ctx context.Context, key string, que
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		logger.Printf("[SFXService] Freesound HTTP %d for %q: %s", resp.StatusCode, query, body)
+		logger.Errorf("[SFXService] Freesound HTTP %d for %q: %s", resp.StatusCode, query, body)
 		return nil
 	}
 
@@ -262,6 +263,7 @@ func (s *SFXService) freesoundSearchResults(ctx context.Context, key string, que
 		} `json:"results"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		logger.Errorf("[SFXService] Freesound JSON decode error for %q: %v", query, err)
 		return nil
 	}
 
@@ -285,7 +287,12 @@ func (s *SFXService) freesoundSearchResults(ctx context.Context, key string, que
 // 不再做单词拆分降级搜索（会产生不可控的误匹配）。
 func (s *SFXService) searchFreesound(ctx context.Context, tenantID uint, item sfxTagItem, maxDuration float64) sfxHit {
 	key, _ := s.sfxProviderCreds(tenantID, "freesound")
-	if key == "" || item.Tag == "" {
+	if key == "" {
+		logger.Printf("[SFXService] Freesound skipped: no API key for tenant %d", tenantID)
+		return sfxHit{}
+	}
+	if item.Tag == "" {
+		logger.Printf("[SFXService] Freesound skipped: empty tag")
 		return sfxHit{}
 	}
 	query := strings.ReplaceAll(normalizeTag(item.Tag), "_", " ")
@@ -320,7 +327,12 @@ func (s *SFXService) searchFreesound(ctx context.Context, tenantID uint, item sf
 // 返回 CC0 授权音效的直链 URL，ambient 类型选时长最长，其余选时长最短。
 func (s *SFXService) searchPixabay(ctx context.Context, tenantID uint, item sfxTagItem, maxDuration float64) sfxHit {
 	key, _ := s.sfxProviderCreds(tenantID, "pixabay-sfx")
-	if key == "" || item.Tag == "" {
+	if key == "" {
+		logger.Printf("[SFXService] Pixabay skipped: no API key for tenant %d", tenantID)
+		return sfxHit{}
+	}
+	if item.Tag == "" {
+		logger.Printf("[SFXService] Pixabay skipped: empty tag")
 		return sfxHit{}
 	}
 	query := strings.ReplaceAll(normalizeTag(item.Tag), "_", " ")
@@ -333,6 +345,7 @@ func (s *SFXService) searchPixabay(ctx context.Context, tenantID uint, item sfxT
 		)
 		req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 		if err != nil {
+			logger.Errorf("[SFXService] Pixabay build request error for %q: %v", query, err)
 			return sfxHit{}
 		}
 		resp, err := s.httpClient.Do(req)
@@ -343,7 +356,7 @@ func (s *SFXService) searchPixabay(ctx context.Context, tenantID uint, item sfxT
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-			logger.Printf("[SFXService] Pixabay HTTP %d for %q: %s", resp.StatusCode, query, body)
+			logger.Errorf("[SFXService] Pixabay HTTP %d for %q: %s", resp.StatusCode, query, body)
 			return sfxHit{}
 		}
 
@@ -354,7 +367,12 @@ func (s *SFXService) searchPixabay(ctx context.Context, tenantID uint, item sfxT
 				Tags     string  `json:"tags"`
 			} `json:"hits"`
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Hits) == 0 {
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			logger.Errorf("[SFXService] Pixabay JSON decode error for %q: %v", query, err)
+			return sfxHit{}
+		}
+		if len(result.Hits) == 0 {
+			logger.Printf("[SFXService] Pixabay miss: no results for %q", query)
 			return sfxHit{}
 		}
 
@@ -403,6 +421,7 @@ func (s *SFXService) searchPixabay(ctx context.Context, tenantID uint, item sfxT
 // 爬取策略：搜索 → 取最佳候选（ambient 选最长，其余选最短）→ 返回 MP3 直链。
 func (s *SFXService) searchBBCSFX(ctx context.Context, item sfxTagItem, maxDuration float64) sfxHit {
 	if item.Tag == "" {
+		logger.Printf("[SFXService] BBC SFX skipped: empty tag")
 		return sfxHit{}
 	}
 	query := strings.ReplaceAll(normalizeTag(item.Tag), "_", " ")
@@ -415,6 +434,7 @@ func (s *SFXService) searchBBCSFX(ctx context.Context, item sfxTagItem, maxDurat
 		)
 		req, err := http.NewRequestWithContext(ctx, "GET", apiURL, nil)
 		if err != nil {
+			logger.Errorf("[SFXService] BBC SFX build request error for %q: %v", query, err)
 			return sfxHit{}
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; InkFrame/1.0; +https://inkframe.io)")
@@ -427,6 +447,8 @@ func (s *SFXService) searchBBCSFX(ctx context.Context, item sfxTagItem, maxDurat
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			logger.Errorf("[SFXService] BBC SFX HTTP %d for %q: %s", resp.StatusCode, query, body)
 			return sfxHit{}
 		}
 
@@ -441,7 +463,12 @@ func (s *SFXService) searchBBCSFX(ctx context.Context, item sfxTagItem, maxDurat
 				} `json:"formats"`
 			} `json:"results"`
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil || len(result.Results) == 0 {
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			logger.Errorf("[SFXService] BBC SFX JSON decode error for %q: %v", query, err)
+			return sfxHit{}
+		}
+		if len(result.Results) == 0 {
+			logger.Printf("[SFXService] BBC SFX miss: no results for %q", query)
 			return sfxHit{}
 		}
 
@@ -500,6 +527,7 @@ func (s *SFXService) searchBBCSFX(ctx context.Context, item sfxTagItem, maxDurat
 // API 路径：https://www.aigei.com/service/sound/search
 func (s *SFXService) searchAigei(ctx context.Context, item sfxTagItem, maxDuration float64) sfxHit {
 	if item.Tag == "" {
+		logger.Printf("[SFXService] Aigei skipped: empty tag")
 		return sfxHit{}
 	}
 	query := strings.ReplaceAll(normalizeTag(item.Tag), "_", " ")
@@ -511,6 +539,7 @@ func (s *SFXService) searchAigei(ctx context.Context, item sfxTagItem, maxDurati
 		)
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 		if err != nil {
+			logger.Errorf("[SFXService] Aigei build request error for %q: %v", query, err)
 			return sfxHit{}
 		}
 		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; InkFrame/1.0)")
@@ -520,15 +549,19 @@ func (s *SFXService) searchAigei(ctx context.Context, item sfxTagItem, maxDurati
 		client := &http.Client{Timeout: 8 * time.Second}
 		resp, err := client.Do(req)
 		if err != nil {
+			logger.Errorf("[SFXService] Aigei HTTP error for %q: %v", query, err)
 			return sfxHit{}
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			logger.Errorf("[SFXService] Aigei HTTP %d for %q: %s", resp.StatusCode, query, body)
 			return sfxHit{}
 		}
 
 		body, err := io.ReadAll(io.LimitReader(resp.Body, 128*1024))
 		if err != nil {
+			logger.Errorf("[SFXService] Aigei read body error for %q: %v", query, err)
 			return sfxHit{}
 		}
 
@@ -544,6 +577,7 @@ func (s *SFXService) searchAigei(ctx context.Context, item sfxTagItem, maxDurati
 			} `json:"data"`
 		}
 		if err := json.Unmarshal(body, &result); err != nil {
+			logger.Errorf("[SFXService] Aigei JSON unmarshal error for %q: %v", query, err)
 			return sfxHit{}
 		}
 
@@ -567,6 +601,7 @@ func (s *SFXService) searchAigei(ctx context.Context, item sfxTagItem, maxDurati
 			candidates = append(candidates, candidate{url: u, dur: dur})
 		}
 		if len(candidates) == 0 {
+			logger.Printf("[SFXService] Aigei miss: no candidates after filtering for %q (maxDur=%.1fs)", query, maxDuration)
 			return sfxHit{}
 		}
 		best := candidates[0]
@@ -675,6 +710,8 @@ func (s *SFXService) generateElevenLabsForTag(ctx context.Context, tenantID uint
 					} else {
 						logger.Errorf("[SFXService] generateElevenLabsForTag: OSS upload failed: %v", err2)
 					}
+				} else {
+					logger.Errorf("[SFXService] generateElevenLabsForTag: storageSvc nil, cannot upload local file %s", rawURL)
 				}
 				// storageSvc 未配置或上传失败：丢弃临时路径，不返回不可访问的 file:// URL
 				return "", 0, fmt.Errorf("elevenlabs-sfx: local file generated but OSS not configured or upload failed")
@@ -775,6 +812,7 @@ func (s *SFXService) generateAudioLDMForTag(ctx context.Context, tenantID uint, 
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
+		logger.Errorf("[SFXService] AudioLDM build request error for tag=%q: %v", item.Tag, err)
 		return "", 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -939,6 +977,7 @@ func (s *SFXService) pollAudioLDMTask(parentCtx context.Context, taskID string, 
 			req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, pollURL, nil)
 			if err != nil {
 				reqCancel()
+				logger.Errorf("[SFXService] AudioLDM poll build request error for task_id=%s: %v", taskID, err)
 				return nil, err
 			}
 			if authKey != "" {
@@ -1002,7 +1041,11 @@ func (s *SFXService) pollAudioLDMTask(parentCtx context.Context, taskID string, 
 // file:// → 上传本地文件；http(s):// → 下载后上传。
 // 存储服务未配置时原样返回；上传失败时清空 URL（不保存不可访问的地址），并标记 noCache。
 func (s *SFXService) ensureOSSHit(ctx context.Context, hit sfxHit) sfxHit {
-	if s.storageSvc == nil || hit.url == "" {
+	if hit.url == "" {
+		return hit
+	}
+	if s.storageSvc == nil {
+		logger.Printf("[SFXService] ensureOSSHit: storageSvc not configured, returning raw URL %s", hit.url)
 		return hit
 	}
 	ossKey := fmt.Sprintf("sfx/%s.mp3", uuid.New().String())

@@ -223,6 +223,9 @@ func sfxItemConfig(item sfxTagItem, hasSpeech bool, hasNarration bool) (vol floa
 // provider 非空时强制使用指定提供商（如 "elevenlabs-sfx"），为空则走默认降级链。
 // force=true 跳过 24h tag 结果缓存，强制重新调用 AI/搜索接口（用于用户主动重新生成）。
 func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint, provider string, force bool) error {
+	logger.Printf("[SFXService] shot %d AutoGenerateSFX start tenantID=%d provider=%q force=%v shotNo=%d",
+		shot.ID, tenantID, provider, force, shot.ShotNo)
+
 	// 清除旧音效条目（先删后建，保证重新生成时能替换）
 	if s.sfxItemRepo != nil {
 		if err := s.sfxItemRepo.DeleteByShotID(shot.ID); err != nil {
@@ -235,6 +238,7 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	// 始终通过 LLM 分析填充结构化英文 tag 与中文 Prompt，确保 AI 文生音效和搜索库均能高质量命中
 	tagItems := parseSFXTags(shot.SFXTags)
 	if len(tagItems) == 0 {
+		logger.Printf("[SFXService] shot %d no cached tags, calling AI analyze", shot.ID)
 		if err := s.analyzeSingleShotSFX(ctx, shot, tenantID, "", ""); err != nil {
 			logger.Errorf("[SFXService] shot %d AI analyze failed (%v), using rule fallback", shot.ID, err)
 			// 规则兜底：英文搜索词 + 中文 AI 提示词
@@ -247,9 +251,14 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 		}
 	}
 	if len(tagItems) == 0 {
+		logger.Errorf("[SFXService] shot %d AI analyze returned no tags, applying hard rule fallback", shot.ID)
 		for _, t := range s.fallbackTags(shot) {
 			tagItems = append(tagItems, sfxTagItem{Tag: t, SFXType: guessSFXType(t)})
 		}
+	}
+	if len(tagItems) == 0 {
+		logger.Errorf("[SFXService] shot %d no SFX tags after all fallbacks, aborting", shot.ID)
+		return fmt.Errorf("no SFX tags for shot %d", shot.ID)
 	}
 	// 最多取前 5 个（action 优先，ambient 最多 1 个）
 	tagItems = deduplicateAndLimit(tagItems, 5)
@@ -346,7 +355,10 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 		}
 		return ss
 	}())
-	_ = s.storyboardRepo.UpdateSFX(shot.ID, results[0].hit.url, string(allTagsJSON), results[0].vol)
+	if err := s.storyboardRepo.UpdateSFX(shot.ID, results[0].hit.url, string(allTagsJSON), results[0].vol); err != nil {
+		logger.Errorf("[SFXService] shot %d UpdateSFX compat field failed: %v", shot.ID, err)
+	}
+	logger.Printf("[SFXService] shot %d AutoGenerateSFX done: %d items saved", shot.ID, len(results))
 	return nil
 }
 
@@ -417,7 +429,9 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 			Sort:     "use_count",
 			PageSize: 3,
 		})
-		if err == nil {
+		if err != nil {
+			logger.Errorf("[SFXService] shot %d asset-lib search error tag=%q: %v", shot.ID, item.Tag, err)
+		} else {
 			for _, a := range assets {
 				if a.StorageURL == "" {
 					continue
@@ -426,6 +440,7 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 				_ = s.assetRepo.IncrUseCount(a.ID)
 				return sfxHit{url: a.StorageURL, source: mapSFXSource(a.Source), durationSecs: a.Duration}
 			}
+			logger.Printf("[SFXService] shot %d asset-lib miss tag=%q (found %d assets, none with URL)", shot.ID, item.Tag, len(assets))
 		}
 	}
 	// 1. AI 文生音效（Kling SFX 等 sfx 类型提供商）——优先尝试
@@ -474,11 +489,15 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 	if hit := s.ensureOSSHit(ctx, s.searchFreesound(ctx, tenantID, item, maxDur)); hit.url != "" {
 		logger.Printf("[SFXService] shot %d Freesound hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
 		return hit
+	} else {
+		logger.Printf("[SFXService] shot %d Freesound miss tag=%q", shot.ID, item.Tag)
 	}
 	// 5. Pixabay Audio（CC0，需 API Key）
 	if hit := s.ensureOSSHit(ctx, s.searchPixabay(ctx, tenantID, item, maxDur)); hit.url != "" {
 		logger.Printf("[SFXService] shot %d Pixabay hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
 		return hit
+	} else {
+		logger.Printf("[SFXService] shot %d Pixabay miss tag=%q", shot.ID, item.Tag)
 	}
 	// 6. BBC Sound Effects（BBC RemArc Licence，无需 API Key，直接爬取）
 	if hit := s.ensureOSSHit(ctx, s.searchBBCSFX(ctx, item, maxDur)); hit.url != "" {
@@ -536,6 +555,7 @@ func (s *SFXService) BatchAutoGenerateSFX(
 	if total == 0 {
 		return
 	}
+	logger.Printf("[SFXService] BatchAutoGenerateSFX start tenantID=%d provider=%q total=%d", tenantID, provider, total)
 	const maxConcurrency = 10
 	sem := make(chan struct{}, maxConcurrency)
 	var wg sync.WaitGroup
@@ -575,7 +595,9 @@ func (s *SFXService) BatchAutoGenerateSFX(
 		s.applySceneContinuity(ctx, shots)
 	}
 
-	return int(successCount.Load()), int(failCount.Load()), failedShotIDs
+	s2, f2 := int(successCount.Load()), int(failCount.Load())
+	logger.Printf("[SFXService] BatchAutoGenerateSFX done tenantID=%d total=%d success=%d fail=%d", tenantID, total, s2, f2)
+	return s2, f2, failedShotIDs
 }
 
 // applySceneContinuity 将同一场景的连续镜头的 ambient 音效统一为该场景首镜的 ambient 音效。

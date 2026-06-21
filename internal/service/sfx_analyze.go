@@ -116,10 +116,9 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 	// MaxTokens=3000：推理模型（如 DeepSeek-R1）会先输出思考过程再输出 JSON，
 	// 3000 token 足以容纳思考过程（~500-800 tok）+ JSON 输出（~100-200 tok）。
 	// jsonOnlySystemPrompt（由 ai_service 注入）会抑制大多数推理模型的思考输出。
-	// TimeoutSeconds=30：正常请求 10-15s 完成，30s 为宽裕上限。
+	// Timeout 由模型管理页面中 sfx_analyze 任务配置决定，不在此处硬编码。
 	callResult := func() (string, error) {
-		return s.aiSvc.GenerateWithProvider(tenantID, 0, "sfx_analyze", prompt, "",
-			StoryboardOverrides{TimeoutSeconds: 30})
+		return s.aiSvc.GenerateWithProvider(tenantID, 0, "sfx_analyze", prompt, "")
 	}
 	result, err := callResult()
 	if err != nil {

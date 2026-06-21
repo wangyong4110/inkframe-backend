@@ -35,6 +35,12 @@ func (s *VideoService) startCharListCacheCleanup() {
 	}()
 }
 
+// InvalidateCharListCache removes the cached character list for the given novel,
+// ensuring deleted characters are not served from stale cache.
+func (s *VideoService) InvalidateCharListCache(novelID uint) {
+	s.charListCache.Delete(novelID)
+}
+
 // listCharsByNovelCached returns the character list for a novel, using a 60-second
 // in-process cache to avoid repeated DB calls during batch voice generation.
 func (s *VideoService) listCharsByNovelCached(novelID uint) ([]*model.Character, error) {

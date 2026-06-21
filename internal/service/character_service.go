@@ -433,6 +433,14 @@ type CharacterService struct {
 
 	// extractLocks 防止同一 novel 并发提取导致角色重复：key = novelID
 	extractLocks sync.Map
+
+	onDeleteHook func(novelID uint) // fired after a character is deleted
+}
+
+// OnDeleteCharacter registers a callback fired whenever a character is deleted.
+// The callback receives the novel ID so downstream caches can be invalidated.
+func (s *CharacterService) OnDeleteCharacter(fn func(novelID uint)) {
+	s.onDeleteHook = fn
 }
 
 // WithRedis injects a Redis client for cross-instance character extraction deduplication.
@@ -808,7 +816,13 @@ func (s *CharacterService) BatchDeleteCharacters(ctx context.Context, novelID ui
 	if len(ids) == 0 {
 		return nil
 	}
-	return s.characterRepo.BatchDeleteByNovel(novelID, ids)
+	if err := s.characterRepo.BatchDeleteByNovel(novelID, ids); err != nil {
+		return err
+	}
+	if s.onDeleteHook != nil {
+		s.onDeleteHook(novelID)
+	}
+	return nil
 }
 
 // CreateCharacterSnapshot 手动创建角色状态快照
@@ -851,7 +865,13 @@ func (s *CharacterService) DeleteCharacter(id, tenantID uint) error {
 		}
 	}
 
-	return s.characterRepo.Delete(id)
+	if err := s.characterRepo.Delete(id); err != nil {
+		return err
+	}
+	if s.onDeleteHook != nil {
+		s.onDeleteHook(char.NovelID)
+	}
+	return nil
 }
 
 // ListEffectiveCharacters 获取章节绑定的角色列表（仅返回已绑定到本章节的角色，章节级覆盖优先）

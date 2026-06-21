@@ -219,6 +219,21 @@ func (s *BGMService) resolveLocalBGMURL(ctx context.Context, localPath string) (
 	return u, true
 }
 
+// InvalidateCacheByFile removes all cached entries associated with the given filename,
+// covering both the in-process localUploadCache and the Redis bgm:local:{filename} key.
+func (s *BGMService) InvalidateCacheByFile(filename string) {
+	if s.cache != nil {
+		redisKey := fmt.Sprintf("bgm:local:%s", filename)
+		s.cache.Del(context.Background(), redisKey)
+	}
+	s.localUploadCache.Range(func(k, _ any) bool {
+		if p, ok := k.(string); ok && filepath.Base(p) == filename {
+			s.localUploadCache.Delete(k)
+		}
+		return true
+	})
+}
+
 // MixBGM 将 BGM 混入视频（BGM 音量 30%，对话优先）
 // P1-3: ctx 传播至 ffprobe/ffmpeg，避免父任务取消后仍占用 WASM worker。
 func (s *BGMService) MixBGM(ctx context.Context, videoPath, bgmSource, outputPath string) error {
