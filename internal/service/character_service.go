@@ -2209,16 +2209,28 @@ func (s *CharacterService) CreateLook(characterID, novelID uint, req *model.Crea
 	return look, nil
 }
 
-// GetDefaultLook 返回角色的默认形象，取 Character.DefaultLookID 指向的 look；未设置则返回 nil。
+// GetDefaultLook 返回角色的默认形象。
+// 若 DefaultLookID 已设置，直接返回该 look；
+// 若未设置但角色有形象列表，则将第一个形象自动升级为默认并返回。
 func (s *CharacterService) GetDefaultLook(characterID uint) (*model.CharacterLook, error) {
 	if s.lookRepo == nil {
 		return nil, nil //nolint:nilnil
 	}
 	char, err := s.characterRepo.GetByID(characterID)
-	if err != nil || char.DefaultLookID == 0 {
+	if err != nil {
 		return nil, nil //nolint:nilnil
 	}
-	return s.lookRepo.GetByID(char.DefaultLookID)
+	if char.DefaultLookID != 0 {
+		return s.lookRepo.GetByID(char.DefaultLookID)
+	}
+	// DefaultLookID 未设置：取第一个形象并自动设为默认
+	looks, err := s.lookRepo.ListByCharacter(characterID)
+	if err != nil || len(looks) == 0 {
+		return nil, nil //nolint:nilnil
+	}
+	first := looks[0]
+	_ = s.characterRepo.UpdateDefaultLookID(characterID, first.ID)
+	return first, nil
 }
 
 // upsertDefaultLookVisualPrompt 将 visualPrompt 写入默认形象；若不存在则创建并设为默认。
