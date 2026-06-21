@@ -2296,7 +2296,9 @@ func (s *CharacterService) UpdateLook(id uint, req *model.UpdateCharacterLookReq
 		look.ChapterTo = *req.ChapterTo
 	}
 	if req.SetAsDefault != nil && *req.SetAsDefault {
-		_ = s.characterRepo.UpdateDefaultLookID(look.CharacterID, look.ID)
+		if err := s.characterRepo.UpdateDefaultLookID(look.CharacterID, look.ID); err != nil {
+			return nil, fmt.Errorf("set default look: %w", err)
+		}
 	}
 	if req.SortOrder != nil {
 		look.SortOrder = *req.SortOrder
