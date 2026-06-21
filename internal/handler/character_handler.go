@@ -48,6 +48,7 @@ func characterResponse(c *model.Character) gin.H {
 		"age":              c.Age,
 		"description":        c.Description,
 		"default_three_view": c.DefaultThreeView,
+		"default_look_id":    c.DefaultLookID,
 		"portrait":           c.Portrait,
 		"voice_id":         c.VoiceID,
 		"voice_speed":      c.VoiceSpeed,
