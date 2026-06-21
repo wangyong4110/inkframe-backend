@@ -51,7 +51,7 @@ type CrawlConfig struct {
 
 func DefaultCrawlConfig() CrawlConfig {
 	return CrawlConfig{
-		Concurrency:   3,
+		Concurrency:   5,
 		DelayMs:       1500,
 		RandomDelayMs: 2000,
 		UARotation:    true,
@@ -315,8 +315,8 @@ func (nc *NovelCrawler) newAsyncCollector(domain string) *colly.Collector {
 	if parallelism < 1 {
 		parallelism = 1
 	}
-	if parallelism > 5 {
-		parallelism = 5
+	if parallelism > 10 {
+		parallelism = 10
 	}
 	_ = col.Limit(&colly.LimitRule{
 		DomainGlob:  "*",
