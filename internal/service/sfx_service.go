@@ -421,6 +421,45 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 		}
 		return sfxHit{}
 	}
+	if provider == "kling-sfx" {
+		if s.aiSvc == nil {
+			logger.Errorf("[SFXService] shot %d Kling-SFX(forced): aiSvc not wired", shot.ID)
+			return sfxHit{}
+		}
+		aiPrompt := item.Prompt
+		if aiPrompt == "" {
+			aiPrompt = item.Tag
+		}
+		select {
+		case s.aiSfxSem <- struct{}{}:
+		case <-ctx.Done():
+			return sfxHit{}
+		}
+		u, dur, err := s.aiSvc.GenerateSFX(ctx, tenantID, aiPrompt, sfxDur)
+		<-s.aiSfxSem
+		if err != nil {
+			logger.Errorf("[SFXService] shot %d Kling-SFX(forced) failed tag=%q: %v", shot.ID, item.Tag, err)
+			return sfxHit{}
+		}
+		if u == "" {
+			logger.Errorf("[SFXService] shot %d Kling-SFX(forced) empty URL tag=%q", shot.ID, item.Tag)
+			return sfxHit{}
+		}
+		noCacheFlag := false
+		if s.storageSvc != nil && strings.HasPrefix(u, "https://") {
+			ossKey := fmt.Sprintf("sfx/%s.mp3", uuid.New().String())
+			if ossURL, uploadErr := downloadURLAndUploadToOSS(ctx, s.storageSvc, u, ossKey); uploadErr == nil {
+				u = ossURL
+			} else {
+				logger.Errorf("[SFXService] shot %d Kling-SFX(forced) OSS upload failed: %v", shot.ID, uploadErr)
+				noCacheFlag = true
+			}
+		} else if strings.HasPrefix(u, "https://") {
+			noCacheFlag = true
+		}
+		logger.Printf("[SFXService] shot %d Kling-SFX(forced) hit tag=%q (%.1fs) noCache=%v", shot.ID, item.Tag, dur, noCacheFlag)
+		return sfxHit{url: u, source: "ai-sfx", durationSecs: dur, noCache: noCacheFlag}
+	}
 	// 0. 素材库（已保存的音效，优先复用避免重复生成）
 	// force=true 时跳过，确保用户主动重新生成时不复用旧资产链接。
 	if s.assetRepo != nil && !force {

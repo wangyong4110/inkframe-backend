@@ -446,12 +446,11 @@ func CheckTenantSubscription(db *gorm.DB) gin.HandlerFunc {
 		// Query DB for subscription status (only two fields needed)
 		var tenant model.Tenant
 		if err := db.Select("expires_at, status").Where("id = ?", tenantID).First(&tenant).Error; err != nil {
-			// DB error — fail-closed: block the request to prevent unauthorized access
-			// during a database outage. Tenant-not-found is treated the same way.
-			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{
-				"error": "subscription check temporarily unavailable",
-				"code":  "subscription_check_failed",
-			})
+			// DB error or tenant not found — fail-open so a brief DB hiccup doesn't
+			// block all authenticated users. Access control for truly invalid tenants
+			// is enforced at login time (JWT issuance).
+			logger.Warnf("[CheckTenantSub] DB lookup failed for tenant=%d: %v", tenantID, err)
+			c.Next()
 			return
 		}
 

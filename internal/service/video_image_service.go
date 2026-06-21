@@ -490,6 +490,11 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				})
 				if vprompt != "" {
 					characterVisualPrompts = append(characterVisualPrompts, vprompt)
+				} else {
+					// 无 VisualPrompt：用角色名+描述作为文本锚点，
+					// 确保 Text2ImgV3（无参考图路径）至少知道角色应出现在画面中。
+					// 若后续找到参考图（DreamO 路径），此文本不会被注入（line 665 的 guard 过滤）。
+					characterVisualPrompts = append(characterVisualPrompts, buildCharTextAnchor(char))
 				}
 			}
 			// 轮次1：每个角色分配一张面部参考图（FaceCloseup > Portrait）
@@ -578,6 +583,9 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 							inlineChars = append(inlineChars, inlineRef{name: sc.Name, char: char, look: activeLook})
 							if activeLook != nil && activeLook.VisualPrompt != "" {
 								characterVisualPrompts = append(characterVisualPrompts, activeLook.VisualPrompt)
+							} else {
+								// 无 VisualPrompt：用角色名+描述作为文本锚点（兜底同上）
+								characterVisualPrompts = append(characterVisualPrompts, buildCharTextAnchor(char))
 							}
 						}
 					}
@@ -904,6 +912,20 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	return imageURL, nil
 }
 
+// buildCharTextAnchor 从角色基本信息构建文本锚点，用于无 VisualPrompt 时的最低限度外貌约束。
+// 注入后图像模型至少知道此角色应出现在画面中，避免生成纯背景图。
+// 描述截断为 50 个 rune，防止大量文本稀释场景/动作信息。
+func buildCharTextAnchor(char *model.Character) string {
+	anchor := char.Name
+	if char.Description != "" {
+		desc := char.Description
+		if runes := []rune(desc); len(runes) > 50 {
+			desc = string(runes[:50])
+		}
+		anchor += ", " + desc
+	}
+	return anchor
+}
 
 // 成功后自动更新 DB 中的 ImageURL 并返回新 URL。
 func (s *VideoService) RefineShotImage(shotID uint, suggestion string) (string, error) {
