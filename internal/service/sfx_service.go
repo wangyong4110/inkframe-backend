@@ -60,6 +60,7 @@ type SFXService struct {
 	localUploadCache sync.Map          // local file path → OSS URL（进程内缓存）
 	queryCache       sync.Map          // "source:query" → sfxCacheEntry（进程内二级缓存）
 	elevenLabsSem    chan struct{}      // 限制 ElevenLabs 并发数（免费版最多 4 路）
+	aiSfxSem         chan struct{}      // 限制 AI 文生音效（Kling 等）并发数，避免触发资源包超限
 	cache            *redis.Client     // optional: shared query cache across instances
 }
 
@@ -111,6 +112,7 @@ func NewSFXService(
 		httpClient:     buildCrawlHTTPClient(cfg.ProxyURL, 30*time.Second),
 		localLib:       buildDefaultSFXLib(),
 		elevenLabsSem:  make(chan struct{}, 3), // 保守限制 3 路并发，避免触发 ElevenLabs 429
+		aiSfxSem:       make(chan struct{}, 3), // 限制 Kling 等 AI SFX 并发，避免触发资源包超限
 	}
 }
 
@@ -460,7 +462,9 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 		logger.Printf("[SFXService] shot %d ElevenLabs hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 		return sfxHit{url: u, source: "elevenlabs", durationSecs: dur}
 	} else if err != nil {
-		logger.Errorf("[SFXService] shot %d ElevenLabs failed tag=%q: %v", shot.ID, item.Tag, err)
+		if !strings.Contains(err.Error(), "no credentials") && !strings.Contains(err.Error(), "not configured") {
+			logger.Warnf("[SFXService] shot %d ElevenLabs failed tag=%q: %v", shot.ID, item.Tag, err)
+		}
 	}
 	// 2. AI 文生音效（Kling SFX 等 sfx 类型提供商）
 	// 优先使用 Prompt（中文自然语言描述，信息更丰富），降级到英文搜索词 Tag
@@ -469,7 +473,14 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 		if aiPrompt == "" {
 			aiPrompt = item.Tag
 		}
-		if u, dur, err := s.aiSvc.GenerateSFX(ctx, tenantID, aiPrompt, sfxDur); err == nil && u != "" {
+		select {
+		case s.aiSfxSem <- struct{}{}:
+		case <-ctx.Done():
+			return sfxHit{}
+		}
+		u, dur, err := s.aiSvc.GenerateSFX(ctx, tenantID, aiPrompt, sfxDur)
+		<-s.aiSfxSem
+		if err == nil && u != "" {
 			// Kling SFX 等返回 CDN 临时链接（24~48h 后过期）；
 			// 生成后立即下载并上传存储，保证长期可访问。
 			// 上传成功 → 永久 URL，可以缓存；上传失败 → 继续使用 CDN URL，但标记不缓存。
@@ -489,7 +500,7 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 			logger.Printf("[SFXService] shot %d AI-SFX hit tag=%q (%.1fs) noCache=%v", shot.ID, item.Tag, dur, noCacheFlag)
 			return sfxHit{url: u, source: "ai-sfx", durationSecs: dur, noCache: noCacheFlag}
 		} else if err != nil && !isNoProviderErr(err) {
-			logger.Errorf("[SFXService] shot %d AI-SFX failed tag=%q: %v", shot.ID, item.Tag, err)
+			logger.Warnf("[SFXService] shot %d AI-SFX failed tag=%q: %v", shot.ID, item.Tag, err)
 		}
 	}
 	// 3. 本地音效库
