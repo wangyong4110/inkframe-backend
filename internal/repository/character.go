@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"gorm.io/gorm"
 )
@@ -43,6 +44,7 @@ func (r *CharacterRepository) GetByID(id uint) (*model.Character, error) {
 	if err := r.db.First(&character, id).Error; err != nil {
 		return nil, err
 	}
+	logger.Printf("[CharacterRepo] GetByID: id=%d defaultLookID=%d", id, character.DefaultLookID)
 	return &character, nil
 }
 
@@ -92,6 +94,8 @@ func (r *CharacterRepository) UpdateDefaultLookID(characterID, lookID uint) erro
 	tx := r.db.Model(&model.Character{}).
 		Where("id = ?", characterID).
 		Update("default_look_id", lookID)
+	logger.Printf("[CharacterRepo] UpdateDefaultLookID: characterID=%d lookID=%d rowsAffected=%d err=%v",
+		characterID, lookID, tx.RowsAffected, tx.Error)
 	if tx.Error != nil {
 		return tx.Error
 	}
