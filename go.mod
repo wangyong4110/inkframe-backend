@@ -1,6 +1,6 @@
 module github.com/inkframe/inkframe-backend
 
-go 1.25.0
+go 1.24.0
 
 require (
 	codeberg.org/gruf/go-ffmpreg v0.6.19
@@ -18,9 +18,9 @@ require (
 	github.com/tetratelabs/wazero v1.10.1
 	go.uber.org/zap v1.28.0
 	golang.org/x/crypto v0.44.0
-	golang.org/x/image v0.27.0
+	golang.org/x/image v0.23.0
 	golang.org/x/net v0.47.0
-	golang.org/x/text v0.38.0
+	golang.org/x/text v0.31.0
 	gorm.io/driver/mysql v1.5.2
 	gorm.io/gorm v1.25.5
 )
