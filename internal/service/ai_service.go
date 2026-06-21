@@ -2181,6 +2181,7 @@ func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint,
 			lastErr = err
 			continue
 		}
+		req.Model = selectImageModel(e, imgInput, "")
 		resp, err := provider.ImageGenerate(ctx, req)
 		if err != nil {
 			lastErr = err
