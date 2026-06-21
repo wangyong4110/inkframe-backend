@@ -29,6 +29,11 @@ func (r *SceneAnchorRepository) Update(a *model.SceneAnchor) error {
 	return r.db.Save(a).Error
 }
 
+// UpdateFields 只更新指定字段，不影响其他列（防止全量读-改-写导致的 lost-update 并发问题）
+func (r *SceneAnchorRepository) UpdateFields(id uint, fields map[string]interface{}) error {
+	return r.db.Model(&model.SceneAnchor{}).Where("id = ?", id).Updates(fields).Error
+}
+
 func (r *SceneAnchorRepository) Delete(id uint) error {
 	return r.db.Delete(&model.SceneAnchor{}, id).Error
 }

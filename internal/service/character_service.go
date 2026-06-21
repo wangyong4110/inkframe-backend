@@ -642,8 +642,14 @@ func (s *CharacterService) InjectDefaultLooks(characters []*model.Character) {
 		return
 	}
 	for lookID, look := range lookMap {
-		if c, ok := charByLookID[lookID]; ok && look.ThreeViewSheet != "" {
-			c.DefaultThreeView = look.ThreeViewSheet
+		if c, ok := charByLookID[lookID]; ok {
+			if look.ThreeViewSheet != "" {
+				c.DefaultThreeView = look.ThreeViewSheet
+			} else if look.FaceCloseup != "" {
+				c.DefaultThreeView = look.FaceCloseup
+			} else if look.Portrait != "" {
+				c.DefaultThreeView = look.Portrait
+			}
 		}
 	}
 }

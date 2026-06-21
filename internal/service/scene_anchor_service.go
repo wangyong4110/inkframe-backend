@@ -168,17 +168,14 @@ func (s *SceneAnchorService) Delete(id uint) error {
 	return s.repo.Delete(id)
 }
 
-// SetRefImage 锁定参考图（强制覆盖）
+// SetRefImage 锁定参考图（强制覆盖）。
+// 使用 UpdateFields 只写 ref_image_url/ref_image_locked_at，避免全量 Save 覆盖其他字段（如 description）。
 func (s *SceneAnchorService) SetRefImage(id uint, imageURL string, shotID *uint) error {
-	anchor, err := s.repo.GetByID(id)
-	if err != nil {
-		logger.Errorf("[SceneAnchorService] SetRefImage: getByID id=%d: %v", id, err)
-		return err
-	}
-	anchor.RefImageURL = imageURL
 	now := time.Now()
-	anchor.RefImageLockedAt = &now
-	if err := s.repo.Update(anchor); err != nil {
+	if err := s.repo.UpdateFields(id, map[string]interface{}{
+		"ref_image_url":       imageURL,
+		"ref_image_locked_at": now,
+	}); err != nil {
 		logger.Errorf("[SceneAnchorService] SetRefImage: update id=%d: %v", id, err)
 		return err
 	}
@@ -195,10 +192,11 @@ func (s *SceneAnchorService) AutoSetRefImage(id uint, imageURL string) error {
 	if anchor.RefImageURL != "" {
 		return nil // already locked
 	}
-	anchor.RefImageURL = imageURL
 	now := time.Now()
-	anchor.RefImageLockedAt = &now
-	if err := s.repo.Update(anchor); err != nil {
+	if err := s.repo.UpdateFields(id, map[string]interface{}{
+		"ref_image_url":       imageURL,
+		"ref_image_locked_at": now,
+	}); err != nil {
 		logger.Errorf("[SceneAnchorService] AutoSetRefImage: update id=%d: %v", id, err)
 		return err
 	}
@@ -697,15 +695,19 @@ func (s *SceneAnchorService) EditRefImageWithInstruction(ctx context.Context, te
 }
 
 // UpdateStats 更新锚点使用统计（usage_count++，avg_cons_score 滚动平均）
+// 使用 UpdateFields 只写统计字段，不触碰 description 等内容字段。
 func (s *SceneAnchorService) UpdateStats(id uint, score float64) error {
 	anchor, err := s.repo.GetByID(id)
 	if err != nil {
 		return err
 	}
 	n := float64(anchor.UsageCount)
-	anchor.AvgConsScore = (anchor.AvgConsScore*n + score) / (n + 1)
-	anchor.UsageCount++
-	return s.repo.Update(anchor)
+	newAvg := (anchor.AvgConsScore*n + score) / (n + 1)
+	newCount := anchor.UsageCount + 1
+	return s.repo.UpdateFields(id, map[string]interface{}{
+		"usage_count":    newCount,
+		"avg_cons_score": newAvg,
+	})
 }
 
 // BatchGenerateRefImages 批量为小说的场景锚点生成参考图。
