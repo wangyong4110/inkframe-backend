@@ -273,6 +273,7 @@ func (p *DoubaoProvider) Embed(ctx context.Context, text string) ([]float32, err
 
 // ImageGenerate 使用 Seedream 模型生成图像
 // Seedream API 兼容 OpenAI images/generations 格式
+// 支持参考图：当 req.ReferenceImage 非空时，传入 image_url 字段（Seedream 3.5+/4.0 参考图生成）
 func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRequest) (*ImageResponse, error) {
 	start := time.Now()
 
@@ -291,6 +292,15 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 	}
 	if req.NegativePrompt != "" {
 		apiReq["negative_prompt"] = req.NegativePrompt
+	}
+	// 参考图：Seedream 4.0 / Ark 通过 image_url 传参考图（用于参考引导生成）
+	// base64 数据传 image_base64，URL 传 image_url
+	if req.ReferenceImage != "" {
+		if strings.HasPrefix(req.ReferenceImage, "http://") || strings.HasPrefix(req.ReferenceImage, "https://") {
+			apiReq["image_url"] = req.ReferenceImage
+		} else {
+			apiReq["image_base64"] = req.ReferenceImage
+		}
 	}
 
 	body, _ := json.Marshal(apiReq)

@@ -308,6 +308,14 @@ func (p *QianwenProvider) ImageGenerate(ctx context.Context, req *ImageGenerateR
 	if req.NegativePrompt != "" {
 		apiReq["negative_prompt"] = req.NegativePrompt
 	}
+	// 参考图：通义万象通过 ref_image_url 传参考图
+	if req.ReferenceImage != "" {
+		if strings.HasPrefix(req.ReferenceImage, "http://") || strings.HasPrefix(req.ReferenceImage, "https://") {
+			apiReq["ref_image_url"] = req.ReferenceImage
+		} else {
+			apiReq["ref_image_base64"] = req.ReferenceImage
+		}
+	}
 
 	body, _ := json.Marshal(apiReq)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint+"/images/generations", bytes.NewReader(body))
