@@ -2145,9 +2145,16 @@ func (s *AIService) fetchImageAsBase64(ctx context.Context, imageURL string) str
 	return base64.StdEncoding.EncodeToString(data)
 }
 
-// EditImageWithInstruction 使用文生图模型重新生成图片，将原图作为参考图保持风格/角色一致性。
-// instruction 作为完整提示词驱动新构图，原图作为 reference image 保持视觉一致性。
-// 自动选用第一个可用的图片生成 provider，不限定具体厂商。
+// referenceImageProviders 是真正支持参考图引导生成的 provider 集合。
+// 这些 provider 的 ImageGenerate 实现会将 ReferenceImage 实际传给 API 并由模型处理。
+// doubao/qianwen 的 T2I 端点（/images/generations OpenAI 兼容格式）会静默忽略参考图字段，不能用于此场景。
+var referenceImageProviders = map[string]bool{
+	ai.ProviderNameVolcengineVisual: true, // DreamO（角色一致性）/ SeedEditV3（指令编辑）
+	"kling-image":                   true, // 可灵图片，subject reference
+}
+
+// EditImageWithInstruction 使用支持参考图的文生图模型重新生成图片，将原图作为参考图保持视觉一致性。
+// 只使用 referenceImageProviders 中列出的 provider（doubao/qianwen T2I 端点不支持参考图，会静默忽略）。
 func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint, imageURL, instruction string) (string, error) {
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
@@ -2187,7 +2194,12 @@ func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint,
 	}
 
 	var lastErr error
+	var skipped []string
 	for _, e := range entries {
+		if !referenceImageProviders[e.ProviderName] {
+			skipped = append(skipped, e.ProviderName)
+			continue
+		}
 		var provider ai.AIProvider
 		var err error
 		if s.providerRepo != nil {
@@ -2214,7 +2226,10 @@ func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint,
 	if lastErr != nil {
 		return "", lastErr
 	}
-	return "", fmt.Errorf("no image provider available for image editing")
+	if len(skipped) > 0 {
+		return "", fmt.Errorf("已配置的图片提供商（%s）不支持参考图编辑，请配置 volcengine-visual 或 kling-image 提供商", strings.Join(skipped, ", "))
+	}
+	return "", fmt.Errorf("未配置支持参考图编辑的图片提供商，请配置 volcengine-visual（即梦AI）或 kling-image（可灵）")
 }
 
 // imageExtFromContentType 根据 Content-Type 返回图片文件扩展名。

@@ -145,7 +145,10 @@ func (s *SceneAnchorService) Update(id uint, req UpdateSceneAnchorReq) (*model.S
 		anchor.Type = req.Type
 	}
 	if req.Description != "" {
+		logger.Printf("[SceneAnchorService] Update id=%d: saving description len=%d preview=%.80q", id, len(req.Description), req.Description)
 		anchor.Description = req.Description
+	} else {
+		logger.Printf("[SceneAnchorService] Update id=%d: req.Description is empty, description NOT updated (current len=%d)", id, len(anchor.Description))
 	}
 	if req.Variant != "" {
 		anchor.Variant = req.Variant
@@ -156,6 +159,7 @@ func (s *SceneAnchorService) Update(id uint, req UpdateSceneAnchorReq) (*model.S
 	if err := s.repo.Update(anchor); err != nil {
 		return nil, err
 	}
+	logger.Printf("[SceneAnchorService] Update id=%d: saved OK, description len=%d", id, len(anchor.Description))
 	return anchor, nil
 }
 
@@ -495,6 +499,7 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	}
 
 	// 组装图像生成 prompt（注入场景描述 + PromptLock + 标准化场景生成词）
+	logger.Printf("[SceneAnchorService] GenerateRefImage: anchorID=%d description len=%d preview=%.80q promptLock=%.40q", id, len(anchor.Description), anchor.Description, anchor.PromptLock)
 	prompt := anchor.Description
 	if anchor.PromptLock != "" {
 		prompt += ", " + anchor.PromptLock
