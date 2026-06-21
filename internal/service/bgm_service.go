@@ -512,7 +512,38 @@ func (s *BGMService) SearchBGMForSegment(ctx context.Context, tenantID uint, seg
 	}
 
 	// 0. 素材库（公共 + 个人，优先复用避免重复拉取）
+	// 双路搜索：① 标签匹配（mood/tempo 词精确命中）→ ② 关键词搜索（title/description LIKE）
 	if s.assetRepo != nil {
+		// 0a. 标签匹配：以 mood 及 searchQueries 中各词作为 OR 标签搜索
+		tagCandidates := make([]string, 0, len(queries)+1)
+		if seg.Mood != "" {
+			tagCandidates = append(tagCandidates, seg.Mood)
+		}
+		tagCandidates = append(tagCandidates, queries...)
+		if len(tagCandidates) > 0 {
+			assets, _, err := s.assetRepo.Search(repository.AssetSearchParams{
+				Type:     "audio",
+				SubType:  "bgm",
+				TagsOr:   tagCandidates,
+				Scope:    "all",
+				CallerID: tenantID,
+				Sort:     "use_count",
+				PageSize: 3,
+			})
+			if err == nil {
+				for _, a := range assets {
+					if a.StorageURL != "" {
+						logger.Printf("[BGMService] segment %d (%s) asset-lib tag-hit tags=%v", seg.SeqNo, seg.Mood, tagCandidates)
+						_ = s.assetRepo.IncrUseCount(a.ID)
+						seg.URL = a.StorageURL
+						seg.TrackName = a.Title
+						seg.Source = "asset-lib"
+						return nil
+					}
+				}
+			}
+		}
+		// 0b. 关键词搜索：按 searchQueries 逐个 LIKE 匹配 title/description
 		for _, q := range queries {
 			assets, _, err := s.assetRepo.Search(repository.AssetSearchParams{
 				Type:     "audio",
@@ -526,7 +557,7 @@ func (s *BGMService) SearchBGMForSegment(ctx context.Context, tenantID uint, seg
 			if err == nil {
 				for _, a := range assets {
 					if a.StorageURL != "" {
-						logger.Printf("[BGMService] segment %d (%s) asset-lib hit q=%q", seg.SeqNo, seg.Mood, q)
+						logger.Printf("[BGMService] segment %d (%s) asset-lib q-hit q=%q", seg.SeqNo, seg.Mood, q)
 						_ = s.assetRepo.IncrUseCount(a.ID)
 						seg.URL = a.StorageURL
 						seg.TrackName = a.Title
@@ -1218,15 +1249,29 @@ func (s *BGMService) saveBGMToAssetLibrary(ctx context.Context, seg *model.Video
 		return
 	}
 
-	tagNames := []string{}
-	if seg.Mood != "" {
-		tagNames = append(tagNames, seg.Mood)
+	// 标签：mood + tempo + artist + searchQueries 各词（提升标签维度搜索命中率）
+	seen := make(map[string]bool)
+	var tagNames []string
+	addTag := func(s string) {
+		s = strings.TrimSpace(s)
+		if s != "" && !seen[s] {
+			seen[s] = true
+			tagNames = append(tagNames, s)
+		}
 	}
-	if seg.Tempo != "" {
-		tagNames = append(tagNames, seg.Tempo)
+	addTag(seg.Mood)
+	addTag(seg.Tempo)
+	addTag(seg.TrackArtist)
+	var queries []string
+	if seg.SearchQueries != "" {
+		_ = json.Unmarshal([]byte(seg.SearchQueries), &queries)
 	}
-	if seg.TrackArtist != "" {
-		tagNames = append(tagNames, seg.TrackArtist)
+	for _, q := range queries {
+		for _, word := range strings.Fields(q) {
+			if len(word) > 2 {
+				addTag(strings.ToLower(word))
+			}
+		}
 	}
 	for _, name := range tagNames {
 		tag, err := s.tagRepo.FindOrCreate(name, "audio")

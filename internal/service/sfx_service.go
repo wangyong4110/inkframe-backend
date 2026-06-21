@@ -326,9 +326,17 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 		metrics.SFXGenerationTotal.WithLabelValues(src, "success").Inc()
 	}
 
-	// 自动存入素材库（异步，失败不影响主流程）
+	// 自动存入素材库（仅保存已上传至 OSS 的永久 URL；noCache=true 的临时 CDN URL 不入库，避免过期污染）
 	if s.assetRepo != nil && s.tagRepo != nil {
-		go s.saveToAssetLibrary(context.Background(), shot, dbItems, tenantID)
+		var permanentItems []*model.ShotSFXItem
+		for i, r := range results {
+			if !r.hit.noCache {
+				permanentItems = append(permanentItems, dbItems[i])
+			}
+		}
+		if len(permanentItems) > 0 {
+			go s.saveToAssetLibrary(context.Background(), shot, permanentItems, tenantID)
+		}
 	}
 	// 同步更新旧字段（向后兼容时间线播放）
 	allTagsJSON, _ := json.Marshal(func() []string {
@@ -371,19 +379,20 @@ func deduplicateAndLimit(items []sfxTagItem, limit int) []sfxTagItem {
 // 优先级：素材库 → AI 文生音效 → 本地库 → AudioLDM（本地模型）→ Freesound → Pixabay → BBC Sound Effects → ElevenLabs。
 // 同一 tag 的结果在进程内按 24h TTL 缓存，批量生成时相同 tag 的分镜共享同一条音效。
 // provider 非空时强制使用指定提供商，并在 cacheKey 中区分，避免跨提供商的缓存污染。
-// force=true 跳过缓存，直接调用 searchOneTagUncached（用于用户主动重新生成）。
+// force=true 跳过内存缓存和素材库复用，直接调用 AI 重新生成（用于用户主动重新生成）。
 func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot, provider string, force bool) sfxHit {
 	if force {
-		return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot, provider)
+		return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot, provider, true)
 	}
 	cacheKey := "onetag:" + provider + ":" + normalizeTag(item.Tag)
 	return s.cachedQuery(cacheKey, func() sfxHit {
-		return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot, provider)
+		return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot, provider, false)
 	})
 }
 
 // searchOneTagUncached 是 searchOneTag 的无缓存实现。
-func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot, provider string) sfxHit {
+// force=true 时跳过素材库复用，直接走 AI/搜索生成链。
+func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot, provider string, force bool) sfxHit {
 	sfxDur := maxDur
 	if sfxDur <= 0 {
 		sfxDur = 5
@@ -399,7 +408,8 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 		return sfxHit{}
 	}
 	// 0. 素材库（已保存的音效，优先复用避免重复生成）
-	if s.assetRepo != nil {
+	// force=true 时跳过，确保重新生成时调用 AI 而不是复用缓存结果。
+	if !force && s.assetRepo != nil {
 		assets, _, err := s.assetRepo.Search(repository.AssetSearchParams{
 			Type:     "audio",
 			SubType:  "sfx",
@@ -414,11 +424,7 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 				if a.StorageURL == "" {
 					continue
 				}
-				// 跳过 platform（ai-sfx）来源的外部 https CDN URL——可能已过期
-				if a.Source == "platform" && strings.HasPrefix(a.StorageURL, "https://") {
-					continue
-				}
-				logger.Printf("[SFXService] shot %d asset-lib hit tag=%q (%.1fs)", shot.ID, item.Tag, a.Duration)
+				logger.Printf("[SFXService] shot %d asset-lib hit tag=%q source=%s (%.1fs)", shot.ID, item.Tag, a.Source, a.Duration)
 				_ = s.assetRepo.IncrUseCount(a.ID)
 				return sfxHit{url: a.StorageURL, source: mapSFXSource(a.Source), durationSecs: a.Duration}
 			}
@@ -816,11 +822,7 @@ func (s *SFXService) saveToAssetLibrary(ctx context.Context, shot *model.Storybo
 		if item.URL == "" {
 			continue
 		}
-		// ai-sfx 来源：仅当 URL 已持久化（相对路径 /api/ 或 /uploads/，而非外部 CDN https://）时才入库。
-		// CDN 临时链接过期后会导致素材库命中返回失效 URL，跳过入库避免污染。
-		if item.Source == "ai-sfx" && strings.HasPrefix(item.URL, "https://") {
-			continue
-		}
+		// 所有 URL 已统一上传至 OSS，直接入库，不再过滤来源
 		// 去重：同 URL 已存在则跳过
 		if exists, err := s.assetRepo.ExistsByExternalID(item.URL); err != nil {
 			logger.Errorf("[SFXService] AssetLib: ExistsByExternalID error (shot %d tag=%q): %v", shotID, item.Tag, err)
