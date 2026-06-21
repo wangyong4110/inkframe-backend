@@ -1082,6 +1082,10 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 				imagePrompt += ", " + r.Lighting + " lighting"
 			}
 		}
+		// LLM 有时会漏掉质量词，在存储前统一补齐，确保 UI 展示和生图时均包含画质词
+		if !strings.Contains(strings.ToLower(imagePrompt), "masterpiece") {
+			imagePrompt += ", masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting"
+		}
 
 		// video_prompt: 优先使用 LLM 生成的专业视频提示词，兜底用 buildMotionPrompt 生成
 		cameraType := validCameraType(r.CameraType)
