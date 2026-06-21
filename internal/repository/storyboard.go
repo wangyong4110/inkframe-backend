@@ -303,6 +303,14 @@ func (r *ShotSFXItemRepository) UpdateDisabled(id uint, disabled bool) error {
 }
 
 // Delete 物理删除单条音效条目
+func (r *ShotSFXItemRepository) GetByID(id uint) (*model.ShotSFXItem, error) {
+	var item model.ShotSFXItem
+	if err := r.db.First(&item, id).Error; err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
 func (r *ShotSFXItemRepository) Delete(id uint) error {
 	return r.db.Unscoped().Delete(&model.ShotSFXItem{}, id).Error
 }

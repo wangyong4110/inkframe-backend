@@ -221,7 +221,8 @@ func sfxItemConfig(item sfxTagItem, hasSpeech bool, hasNarration bool) (vol floa
 // AutoGenerateSFX 为单个镜头自动选取/生成音效，每个 tag 独立搜索，写入多条 ShotSFXItem。
 // 每次调用都会先清除旧音效条目再写入新结果，确保重新生成时能替换旧音效。
 // provider 非空时强制使用指定提供商（如 "elevenlabs-sfx"），为空则走默认降级链。
-func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint, provider string) error {
+// force=true 跳过 24h tag 结果缓存，强制重新调用 AI/搜索接口（用于用户主动重新生成）。
+func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint, provider string, force bool) error {
 	// 清除旧音效条目（先删后建，保证重新生成时能替换）
 	if s.sfxItemRepo != nil {
 		if err := s.sfxItemRepo.DeleteByShotID(shot.ID); err != nil {
@@ -275,7 +276,7 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	var results []sfxResult
 
 	for _, item := range tagItems {
-		hit := s.searchOneTag(ctx, tenantID, item, maxDur, shot, provider)
+		hit := s.searchOneTag(ctx, tenantID, item, maxDur, shot, provider, force)
 		if hit.url == "" {
 			logger.Printf("[SFXService] shot %d tag=%q: no result", shot.ID, item.Tag)
 			continue
@@ -370,7 +371,11 @@ func deduplicateAndLimit(items []sfxTagItem, limit int) []sfxTagItem {
 // 优先级：素材库 → AI 文生音效 → 本地库 → AudioLDM（本地模型）→ Freesound → Pixabay → BBC Sound Effects → ElevenLabs。
 // 同一 tag 的结果在进程内按 24h TTL 缓存，批量生成时相同 tag 的分镜共享同一条音效。
 // provider 非空时强制使用指定提供商，并在 cacheKey 中区分，避免跨提供商的缓存污染。
-func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot, provider string) sfxHit {
+// force=true 跳过缓存，直接调用 searchOneTagUncached（用于用户主动重新生成）。
+func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot, provider string, force bool) sfxHit {
+	if force {
+		return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot, provider)
+	}
 	cacheKey := "onetag:" + provider + ":" + normalizeTag(item.Tag)
 	return s.cachedQuery(cacheKey, func() sfxHit {
 		return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot, provider)
@@ -462,24 +467,24 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 		logger.Errorf("[SFXService] shot %d AudioLDM failed tag=%q: %v", shot.ID, item.Tag, err)
 	}
 	// 4. Freesound API（CC0，需 API Key）
-	if hit := s.searchFreesound(ctx, tenantID, item, maxDur); hit.url != "" {
+	if hit := s.ensureOSSHit(ctx, s.searchFreesound(ctx, tenantID, item, maxDur)); hit.url != "" {
 		logger.Printf("[SFXService] shot %d Freesound hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
 		return hit
 	}
 	// 5. Pixabay Audio（CC0，需 API Key）
-	if hit := s.searchPixabay(ctx, tenantID, item, maxDur); hit.url != "" {
+	if hit := s.ensureOSSHit(ctx, s.searchPixabay(ctx, tenantID, item, maxDur)); hit.url != "" {
 		logger.Printf("[SFXService] shot %d Pixabay hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
 		return hit
 	}
 	// 6. BBC Sound Effects（BBC RemArc Licence，无需 API Key，直接爬取）
-	if hit := s.searchBBCSFX(ctx, item, maxDur); hit.url != "" {
+	if hit := s.ensureOSSHit(ctx, s.searchBBCSFX(ctx, item, maxDur)); hit.url != "" {
 		logger.Printf("[SFXService] shot %d BBC-SFX hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
 		return hit
 	} else {
 		logger.Printf("[SFXService] shot %d BBC-SFX miss tag=%q", shot.ID, item.Tag)
 	}
 	// 7. 爱给网（aigei.com，免费音效，无需 API Key）
-	if hit := s.searchAigei(ctx, item, maxDur); hit.url != "" {
+	if hit := s.ensureOSSHit(ctx, s.searchAigei(ctx, item, maxDur)); hit.url != "" {
 		logger.Printf("[SFXService] shot %d Aigei hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
 		return hit
 	} else {
@@ -487,6 +492,16 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 	}
 	// 8. ElevenLabs：每个 tag 独立生成，避免多 tag 混音成一条不可分离的音频
 	if u, dur, err := s.generateElevenLabsForTag(ctx, tenantID, item, shot); err == nil && u != "" {
+		// ElevenLabs 返回 file:// 临时文件路径，浏览器无法直接访问，需上传至 OSS
+		if s.storageSvc != nil && strings.HasPrefix(u, "file://") {
+			localPath := strings.TrimPrefix(u, "file://")
+			ossKey := fmt.Sprintf("sfx/%s.mp3", uuid.New().String())
+			if ossURL, uploadErr := uploadLocalFileToOSS(ctx, s.storageSvc, localPath, ossKey); uploadErr == nil {
+				u = ossURL
+			} else {
+				logger.Errorf("[SFXService] shot %d ElevenLabs OSS upload failed: %v", shot.ID, uploadErr)
+			}
+		}
 		logger.Printf("[SFXService] shot %d ElevenLabs hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 		return sfxHit{url: u, source: "elevenlabs", durationSecs: dur}
 	} else if err != nil {
@@ -533,7 +548,7 @@ func (s *SFXService) BatchAutoGenerateSFX(
 		go func(s2 *model.StoryboardShot) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			err := s.AutoGenerateSFX(ctx, s2, tenantID, provider)
+			err := s.AutoGenerateSFX(ctx, s2, tenantID, provider, false)
 			if err != nil {
 				logger.Errorf("[SFXService] shot %d: %v", s2.ID, err)
 				failCount.Add(1)

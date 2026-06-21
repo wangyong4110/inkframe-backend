@@ -395,6 +395,13 @@ func (h *VideoHandler) ImportShotSFXItem(c *gin.Context) {
 	respondCreated(c, item)
 }
 
+// sfxItemDTO wraps ShotSFXItem and adds a computed audio_url field for browser playback.
+// file:// URLs (local server files) are replaced with a backend proxy URL.
+type sfxItemDTO struct {
+	*model.ShotSFXItem
+	AudioURL string `json:"audio_url"`
+}
+
 // ListShotSFXItems GET /videos/:id/shots/:shot_id/sfx-items
 func (h *VideoHandler) ListShotSFXItems(c *gin.Context) {
 	if h.sfxItemRepo == nil {
@@ -411,7 +418,43 @@ func (h *VideoHandler) ListShotSFXItems(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to list sfx items")
 		return
 	}
-	respondOK(c, items)
+	dtos := make([]sfxItemDTO, len(items))
+	for i, item := range items {
+		audioURL := item.URL
+		if strings.HasPrefix(item.URL, "file://") {
+			audioURL = fmt.Sprintf("/api/v1/sfx-items/%d/audio", item.ID)
+		}
+		dtos[i] = sfxItemDTO{ShotSFXItem: item, AudioURL: audioURL}
+	}
+	respondOK(c, dtos)
+}
+
+// ServeSFXItemAudio GET /api/v1/sfx-items/:item_id/audio
+// 代理播放 file:// 本地音效文件（ElevenLabs/AudioLDM 生成但 OSS 上传失败时的兜底）。
+func (h *VideoHandler) ServeSFXItemAudio(c *gin.Context) {
+	if h.sfxItemRepo == nil {
+		respondErr(c, http.StatusNotImplemented, "SFX item repo not configured")
+		return
+	}
+	itemID, err := strconv.Atoi(c.Param("item_id"))
+	if err != nil {
+		respondBadRequest(c, "invalid item id")
+		return
+	}
+	item, err := h.sfxItemRepo.GetByID(uint(itemID))
+	if err != nil || item == nil {
+		respondErr(c, http.StatusNotFound, "sfx item not found")
+		return
+	}
+	if !strings.HasPrefix(item.URL, "file://") {
+		// https:// URL — redirect to it directly
+		c.Redirect(http.StatusFound, item.URL)
+		return
+	}
+	filePath := strings.TrimPrefix(item.URL, "file://")
+	c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+	c.Header("Content-Type", "audio/mpeg")
+	c.File(filePath)
 }
 
 // UpdateShotSFXItem PUT /videos/:id/shots/:shot_id/sfx-items/:item_id

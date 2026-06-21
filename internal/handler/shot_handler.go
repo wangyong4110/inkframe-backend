@@ -163,7 +163,7 @@ func (h *VideoHandler) BatchGenerateShotImages(c *gin.Context) {
 		}()
 		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
-		shots, genErr := h.videoService.BatchGenerateShotImages(uint(videoID), req.ShotIDs, progressFn)
+		shots, genErr := h.videoService.BatchGenerateShotImages(uint(videoID), req.ShotIDs, req.Force, progressFn)
 		if genErr != nil {
 			logger.Errorf("[VideoHandler] BatchGenerateShotImages task %s failed: %v", taskID, genErr)
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
@@ -476,7 +476,7 @@ func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		ctx := context.Background()
-		if err := h.sfxSvc.AutoGenerateSFX(ctx, s, tenantID, sfxProvider); err != nil {
+		if err := h.sfxSvc.AutoGenerateSFX(ctx, s, tenantID, sfxProvider, true); err != nil {
 			logger.Errorf("[VideoHandler] GenerateShotSFX task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return

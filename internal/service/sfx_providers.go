@@ -666,14 +666,18 @@ func (s *SFXService) generateElevenLabsForTag(ctx context.Context, tenantID uint
 			logger.Errorf("[SFXService] generateElevenLabsForTag: DB path failed (tenant=%d): %v", tenantID, dbErr)
 		}
 		if dbErr == nil && rawURL != "" {
-			// ElevenLabsSFXProvider 返回 file:// 临时路径，需上传到 OSS
-			if strings.HasPrefix(rawURL, "file://") && s.storageSvc != nil {
-				localPath := strings.TrimPrefix(rawURL, "file://")
-				if u, err2 := uploadLocalFileToOSS(ctx, s.storageSvc, localPath, ossKey); err2 == nil {
-					return u, d, nil
+			// ElevenLabsSFXProvider 返回 file:// 临时路径，必须上传到 OSS 才能公开访问
+			if strings.HasPrefix(rawURL, "file://") {
+				if s.storageSvc != nil {
+					localPath := strings.TrimPrefix(rawURL, "file://")
+					if u, err2 := uploadLocalFileToOSS(ctx, s.storageSvc, localPath, ossKey); err2 == nil {
+						return u, d, nil
+					} else {
+						logger.Errorf("[SFXService] generateElevenLabsForTag: OSS upload failed: %v", err2)
+					}
 				}
-				// 上传失败则直接返回本地路径（降级）
-				return rawURL, d, nil
+				// storageSvc 未配置或上传失败：丢弃临时路径，不返回不可访问的 file:// URL
+				return "", 0, fmt.Errorf("elevenlabs-sfx: local file generated but OSS not configured or upload failed")
 			}
 			return rawURL, d, nil
 		}
@@ -843,8 +847,16 @@ func (s *SFXService) generateAudioLDMForTag(ctx context.Context, tenantID uint, 
 			actualDur = jsonResp.Duration
 		}
 		if jsonResp.URL != "" {
-			// 格式 1：已有 URL，直接返回（不需要 OSS）
+			// 格式 1：已有 URL，下载后上传到 OSS 保证长期可访问
 			logger.Printf("[SFXService] AudioLDM format=url url=%s dur=%.1f", jsonResp.URL, actualDur)
+			if s.storageSvc != nil {
+				ossKey2 := fmt.Sprintf("sfx/%s.mp3", uuid.New().String())
+				if u, uploadErr := downloadURLAndUploadToOSS(ctx, s.storageSvc, jsonResp.URL, ossKey2); uploadErr == nil {
+					return u, actualDur, nil
+				} else {
+					logger.Warnf("[SFXService] AudioLDM format=url OSS upload failed, using remote URL: %v", uploadErr)
+				}
+			}
 			return jsonResp.URL, actualDur, nil
 		}
 		// 格式 2：base64 编码音频（audio_base64 / audio / audio_data）
@@ -984,4 +996,34 @@ func (s *SFXService) pollAudioLDMTask(parentCtx context.Context, taskID string, 
 			return audioBytes, nil
 		}
 	}
+}
+
+// ensureOSSHit 确保 sfxHit.url 是可持久访问的 OSS 链接。
+// file:// → 上传本地文件；http(s):// → 下载后上传。
+// 存储服务未配置时原样返回；上传失败时清空 URL（不保存不可访问的地址），并标记 noCache。
+func (s *SFXService) ensureOSSHit(ctx context.Context, hit sfxHit) sfxHit {
+	if s.storageSvc == nil || hit.url == "" {
+		return hit
+	}
+	ossKey := fmt.Sprintf("sfx/%s.mp3", uuid.New().String())
+	if strings.HasPrefix(hit.url, "file://") {
+		localPath := strings.TrimPrefix(hit.url, "file://")
+		if u, err := uploadLocalFileToOSS(ctx, s.storageSvc, localPath, ossKey); err == nil {
+			hit.url = u
+		} else {
+			logger.Errorf("[SFXService] ensureOSSHit: local upload failed (%s): %v", localPath, err)
+			hit.url = ""
+			hit.noCache = true
+		}
+		return hit
+	}
+	if strings.HasPrefix(hit.url, "http://") || strings.HasPrefix(hit.url, "https://") {
+		if u, err := downloadURLAndUploadToOSS(ctx, s.storageSvc, hit.url, ossKey); err == nil {
+			hit.url = u
+		} else {
+			logger.Errorf("[SFXService] ensureOSSHit: CDN download/upload failed (%s): %v", hit.url, err)
+			hit.noCache = true // 临时 CDN URL 仍可用，但不缓存
+		}
+	}
+	return hit
 }

@@ -41,7 +41,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					return
 				}
 				svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-				if err := svcs.SFXService.AutoGenerateSFX(context.Background(), shot, t.TenantID, params.Provider); err != nil {
+				if err := svcs.SFXService.AutoGenerateSFX(context.Background(), shot, t.TenantID, params.Provider, true); err != nil {
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				} else {
 					svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"shot_id": shot.ID, "sfx_url": shot.SFXURL}) //nolint:errcheck
@@ -1126,7 +1126,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					return
 				}
 				svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-				shots, err := svcs.VideoService.BatchGenerateShotImages(videoID, params.ShotIDs, progressFn)
+				shots, err := svcs.VideoService.BatchGenerateShotImages(videoID, params.ShotIDs, false, progressFn)
 				if err != nil {
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				} else {

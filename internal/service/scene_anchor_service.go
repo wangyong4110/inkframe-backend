@@ -495,12 +495,13 @@ func (s *SceneAnchorService) AIAnalyze(ctx context.Context, tenantID, id uint) (
 		if novel, nErr := s.novelRepo.GetByID(anchor.NovelID); nErr == nil {
 			novelTitle = novel.Title
 			novelDesc = novel.Description
-			novelGenre = novel.Genre
+			novelGenre = novel.Genre // 与 NovelDesc 合并传给模板
 			if novel.PromptLanguage != "" {
 				promptLanguage = novel.PromptLanguage
 			}
 		}
 	}
+	_ = novelGenre // 合入 NovelDesc 字段，避免 unused 警告
 
 	// 搜索提到该场景名称的章节片段（最多取 3 章，每章截取前后 500 字）
 	var excerpts []string
@@ -529,43 +530,20 @@ func (s *SceneAnchorService) AIAnalyze(ctx context.Context, tenantID, id uint) (
 		}
 	}
 
-	// 构建 prompt
-	descTarget := "请用中文描述视觉细节"
-	if promptLanguage == "en" {
-		descTarget = "Describe all visual details in English"
+	// 渲染 scene_anchor_analyze 模板（与 scene_anchor_extract 使用相同的描述规则）
+	prompt, err := renderPrompt("scene_anchor_analyze", map[string]interface{}{
+		"AnchorName":          anchor.Name,
+		"NovelTitle":          novelTitle,
+		"NovelDesc":           truncateForPrompt(novelDesc+novelGenre, 400),
+		"ChapterExcerpts":     excerpts,
+		"ExistingDescription": truncateForPrompt(anchor.Description, 400),
+		"PromptLanguage":      promptLanguage,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("render scene_anchor_analyze: %w", err)
 	}
 
-	var sb strings.Builder
-	sb.WriteString("你是专业的场景设计师，请根据以下信息为**场景锚点**补全各字段，输出纯 JSON，不要其他内容。\n\n")
-	sb.WriteString(fmt.Sprintf("场景名称：%s\n", anchor.Name))
-	if novelTitle != "" {
-		sb.WriteString(fmt.Sprintf("所属小说：《%s》", novelTitle))
-		if novelGenre != "" {
-			sb.WriteString(fmt.Sprintf("（%s）", novelGenre))
-		}
-		sb.WriteString("\n")
-	}
-	if novelDesc != "" {
-		sb.WriteString(fmt.Sprintf("小说简介：%s\n", truncateForPrompt(novelDesc, 300)))
-	}
-	if len(excerpts) > 0 {
-		sb.WriteString("\n相关章节片段：\n")
-		for _, e := range excerpts {
-			sb.WriteString(truncateForPrompt(e, 800))
-			sb.WriteString("\n---\n")
-		}
-	}
-	if anchor.Description != "" {
-		sb.WriteString(fmt.Sprintf("\n现有描述（可参考）：%s\n", truncateForPrompt(anchor.Description, 300)))
-	}
-	sb.WriteString(fmt.Sprintf("\n请输出如下 JSON（%s）：\n", descTarget))
-	sb.WriteString(`{
-  "type": "interior|exterior|imaginary（三选一）",
-  "description": "场景完整视觉描述：建筑结构、陈设、光线、氛围、色调等，适合直接用作图像生成提示词，不少于30字",
-  "variant": "可选变体（如 day/night/winter/battle），若无明显变体则留空字符串"
-}`)
-
-	jsonStr, err := s.aiSvc.generateJSONForTenantCtx(ctx, tenantID, anchor.NovelID, "scene_anchor_analyze", sb.String(), 2)
+	jsonStr, err := s.aiSvc.generateJSONForTenantCtx(ctx, tenantID, anchor.NovelID, "scene_anchor_analyze", prompt, 2)
 	if err != nil {
 		return nil, fmt.Errorf("AI analyze: %w", err)
 	}

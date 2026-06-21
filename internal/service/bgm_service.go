@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -784,10 +785,20 @@ func (s *BGMService) pixabaySearchBGM(ctx context.Context, tenantID uint, query 
 	}
 	for _, hit := range result.Hits {
 		if hit.AudioURL != "" {
+			audioURL := hit.AudioURL
+			// 上传到 OSS，保证 Pixabay CDN 链接过期后仍可访问
+			if s.storageSvc != nil {
+				ossKey := fmt.Sprintf("bgm/%s.mp3", uuid.New().String())
+				if ossURL, err := downloadURLAndUploadToOSS(ctx, s.storageSvc, audioURL, ossKey); err == nil {
+					audioURL = ossURL
+				} else {
+					logger.Warnf("[BGMService] Pixabay OSS upload failed: %v", err)
+				}
+			}
 			s.queryCache.Store(cacheKey, bgmCacheEntry{
-				url: hit.AudioURL, name: hit.Tags, expiresAt: time.Now().Add(bgmCacheTTL),
+				url: audioURL, name: hit.Tags, expiresAt: time.Now().Add(bgmCacheTTL),
 			})
-			return hit.AudioURL, hit.Tags
+			return audioURL, hit.Tags
 		}
 	}
 	return "", ""
@@ -821,6 +832,15 @@ func (s *BGMService) jamendoSearch(ctx context.Context, tenantID uint, query str
 
 	for _, t := range tracks {
 		if u := t.PlayURL(); u != "" {
+			// 上传到 OSS，保证 CDN 临时链接过期后仍可访问
+			if s.storageSvc != nil {
+				ossKey := fmt.Sprintf("bgm/%s.mp3", uuid.New().String())
+				if ossURL, err := downloadURLAndUploadToOSS(ctx, s.storageSvc, u, ossKey); err == nil {
+					u = ossURL
+				} else {
+					logger.Warnf("[BGMService] Jamendo OSS upload failed for %q: %v", t.Name, err)
+				}
+			}
 			s.queryCache.Store(cacheKey, bgmCacheEntry{
 				url: u, name: t.Name, artist: t.ArtistName,
 				expiresAt: time.Now().Add(bgmCacheTTL),

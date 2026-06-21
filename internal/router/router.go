@@ -616,6 +616,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.PUT("/:id/shots/:shot_id/sfx-items/:item_id", cfg.VideoHandler.UpdateShotSFXItem)
 			videos.PATCH("/:id/shots/:shot_id/sfx-items/:item_id/disabled", cfg.VideoHandler.ToggleShotSFXItem)
 			videos.DELETE("/:id/shots/:shot_id/sfx-items/:item_id", cfg.VideoHandler.DeleteShotSFXItem)
+			// 音效文件代理（file:// 本地文件通过此端点供浏览器播放）
+			v1.GET("/sfx-items/:item_id/audio", cfg.VideoHandler.ServeSFXItemAudio)
 			// 语音段落
 			videos.GET("/:id/shots/:shot_id/segments", cfg.VideoHandler.ListVoiceSegments)
 			videos.POST("/:id/shots/:shot_id/segments", cfg.VideoHandler.AppendVoiceSegment)

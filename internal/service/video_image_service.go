@@ -169,7 +169,7 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 
 // BatchGenerateShotImages 批量为分镜生成参考图片（幂等：已有 ImageURL 的分镜自动跳过）。
 // 只执行阶段一（AI 图片生成），不启动 Ken Burns 编码。
-func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, progressFn func(int)) ([]*model.StoryboardShot, error) {
+func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, force bool, progressFn func(int)) ([]*model.StoryboardShot, error) {
 	video, err := s.videoRepo.GetByID(videoID)
 	if err != nil {
 		return nil, err
@@ -235,7 +235,7 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, pro
 			advanceProgress()
 			continue
 		}
-		if shot.ImageURL != "" && shot.Status != "failed" {
+		if shot.ImageURL != "" && shot.Status != "failed" && !force {
 			// Already has a successfully generated image — skip (idempotent).
 			// "failed" shots keep their ImageURL from a partial run but should be retried.
 			advanceProgress()
@@ -781,9 +781,12 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		"text, watermark, logo, signature, " +
 		"impossible physics, floating objects, gravity defying, " +
 		"oversaturated, overexposed, underexposed"
-	// 无角色参考图时（Text2ImgV3 纯文生图），确保排除词中有无人物约束
+	// 无角色参考图且分镜中确实没有任何角色时，加无人物排除词（纯环境镜头）。
+	// 若分镜有角色（即使是没有参考图的路人），不加此约束，让模型根据 image_prompt 自行生成角色形象。
+	shotHasAnyCharacter := len(characterPortraits) > 0 ||
+		(shot.Characters != "" && shot.Characters != "[]" && shot.Characters != "null")
 	noPersonNeg := "person, people, human, man, woman, figure, silhouette, character, face, body, limbs, hands, clothing, portrait"
-	if len(characterPortraits) == 0 && (shot.NegativePrompt == "" || !strings.Contains(shot.NegativePrompt, "person")) {
+	if !shotHasAnyCharacter && (shot.NegativePrompt == "" || !strings.Contains(shot.NegativePrompt, "person")) {
 		imgNegBase = noPersonNeg + ", " + imgNegBase
 	}
 	negPrompt := imgNegBase

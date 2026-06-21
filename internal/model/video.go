@@ -487,4 +487,5 @@ type BatchGenerateShotsRequest struct {
 	ShotIDs     []uint `json:"shot_ids" binding:"required"`
 	QualityTier string `json:"quality_tier"` // override; empty = use video's quality_tier
 	Provider    string `json:"provider"`     // video provider override (e.g. "kling", "seedance")
+	Force       bool   `json:"force"`        // true = regenerate even if image already exists
 }
