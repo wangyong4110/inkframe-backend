@@ -2200,7 +2200,10 @@ func (s *CharacterService) CreateLook(characterID, novelID uint, req *model.Crea
 	if err := s.lookRepo.Create(look); err != nil {
 		return nil, err
 	}
+	// 明确要求设为默认，或角色尚无默认形象（第一个形象自动成为默认）
 	if req.SetAsDefault {
+		_ = s.characterRepo.UpdateDefaultLookID(characterID, look.ID)
+	} else if char, err := s.characterRepo.GetByID(characterID); err == nil && char.DefaultLookID == 0 {
 		_ = s.characterRepo.UpdateDefaultLookID(characterID, look.ID)
 	}
 	return look, nil
