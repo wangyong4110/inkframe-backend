@@ -1914,10 +1914,21 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 
 	if providerName != "" {
 		var entry *ai.ImageProviderEntry
-		for _, e := range knownImageCapableProviders {
-			if e.ProviderName == providerName {
-				entry = &e
-				break
+		// DB 模式优先：使用 DB 中实际配置的模型名称
+		if s.providerRepo != nil {
+			for _, e := range s.loadDBImageProviderEntries(tenantID) {
+				if e.ProviderName == providerName {
+					entry = &e
+					break
+				}
+			}
+		}
+		if entry == nil {
+			for _, e := range knownImageCapableProviders {
+				if e.ProviderName == providerName {
+					entry = &e
+					break
+				}
 			}
 		}
 		if entry == nil {
@@ -1931,12 +1942,18 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		if entry == nil {
 			return "", fmt.Errorf("unknown image provider: %s", providerName)
 		}
-		provider, err := s.aiManager.GetProvider(providerName)
-		if err != nil {
+		var provider ai.AIProvider
+		var err error
+		if s.providerRepo != nil {
 			provider, err = s.getTenantProvider(tenantID, providerName)
+		} else {
+			provider, err = s.aiManager.GetProvider(providerName)
 			if err != nil {
-				return "", fmt.Errorf("image provider %q not available: %w", providerName, err)
+				provider, err = s.getTenantProvider(tenantID, providerName)
 			}
+		}
+		if err != nil {
+			return "", fmt.Errorf("image provider %q not available: %w", providerName, err)
 		}
 		resp, err := provider.ImageGenerate(ctx, buildReq(selectImageModel(*entry, firstRef, style, weight), entry.Size))
 		if err != nil {
@@ -2541,10 +2558,18 @@ func (s *AIService) UpscaleImage(ctx context.Context, tenantID, novelID uint, im
 }
 
 // downloadImageBytes 下载图片到内存，返回 (data, contentType, error)。
+// 支持绝对 URL 和相对路径（/api/v1/media/xxx），相对路径需已配置 serverBaseURL。
 func (s *AIService) downloadImageBytes(ctx context.Context, imageURL string) ([]byte, string, error) {
+	fetchURL := imageURL
+	if !strings.HasPrefix(imageURL, "http://") && !strings.HasPrefix(imageURL, "https://") {
+		if s.serverBaseURL == "" {
+			return nil, "", fmt.Errorf("relative URL %q but serverBaseURL not configured", imageURL)
+		}
+		fetchURL = s.serverBaseURL + "/" + strings.TrimLeft(imageURL, "/")
+	}
 	dlCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, imageURL, nil)
+	req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, fetchURL, nil)
 	if err != nil {
 		return nil, "", fmt.Errorf("build request: %w", err)
 	}
