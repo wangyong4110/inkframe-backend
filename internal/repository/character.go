@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"gorm.io/gorm"
@@ -88,9 +89,16 @@ func (r *CharacterRepository) Update(character *model.Character) error {
 
 // UpdateDefaultLookID 仅更新 default_look_id 字段。
 func (r *CharacterRepository) UpdateDefaultLookID(characterID, lookID uint) error {
-	return r.db.Model(&model.Character{}).
+	tx := r.db.Model(&model.Character{}).
 		Where("id = ?", characterID).
-		Update("default_look_id", lookID).Error
+		Update("default_look_id", lookID)
+	if tx.Error != nil {
+		return tx.Error
+	}
+	if tx.RowsAffected == 0 {
+		return fmt.Errorf("character %d not found or already deleted", characterID)
+	}
+	return nil
 }
 
 
