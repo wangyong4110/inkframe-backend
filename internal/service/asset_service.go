@@ -50,8 +50,21 @@ type AssetService struct {
 	pixabayKey    string
 	pexelsKey     string
 	// crawlMu guards the ExistsByExternalID+Create sequence for crawled assets (local fallback)
-	crawlMu sync.Map
-	cache   *redis.Client // optional: cross-instance crawl dedup lock
+	crawlMu         sync.Map
+	cache           *redis.Client // optional: cross-instance crawl dedup lock
+	onDeleteSFXHook func(tag string) // fired when an SFX audio asset is deleted
+}
+
+// OnDeleteSFX registers a callback fired when an SFX audio asset is soft- or hard-deleted.
+// The callback receives the asset title (tag name) for cache invalidation.
+func (s *AssetService) OnDeleteSFX(fn func(tag string)) {
+	s.onDeleteSFXHook = fn
+}
+
+func (s *AssetService) fireDeleteHooks(a *model.Asset) {
+	if s.onDeleteSFXHook != nil && a.Type == "audio" && a.SubType == "sfx" {
+		s.onDeleteSFXHook(a.Title)
+	}
 }
 
 // WithRedis injects a Redis client for cross-instance crawl deduplication.
@@ -264,7 +277,11 @@ func (s *AssetService) SoftDelete(id, callerID uint) error {
 	if err != nil || a.CreatorID != callerID {
 		return errors.New("not found or permission denied")
 	}
-	return s.assetRepo.SoftDelete(id, callerID)
+	if err := s.assetRepo.SoftDelete(id, callerID); err != nil {
+		return err
+	}
+	s.fireDeleteHooks(a)
+	return nil
 }
 
 func (s *AssetService) RestoreFromTrash(id, callerID uint) error {
@@ -288,7 +305,11 @@ func (s *AssetService) PurgeAsset(ctx context.Context, id, callerID uint) error 
 		_ = s.storageSvc.Delete(ctx, a.ThumbnailURL)
 	}
 	_ = s.quotaRepo.SubStorage(a.TenantID, a.FileSize)
-	return s.assetRepo.HardDelete(id)
+	if err := s.assetRepo.HardDelete(id); err != nil {
+		return err
+	}
+	s.fireDeleteHooks(a)
+	return nil
 }
 
 func (s *AssetService) ListTrash(creatorID uint, page, size int) ([]*model.Asset, int64, error) {

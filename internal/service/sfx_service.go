@@ -379,20 +379,19 @@ func deduplicateAndLimit(items []sfxTagItem, limit int) []sfxTagItem {
 // 优先级：素材库 → AI 文生音效 → 本地库 → AudioLDM（本地模型）→ Freesound → Pixabay → BBC Sound Effects → ElevenLabs。
 // 同一 tag 的结果在进程内按 24h TTL 缓存，批量生成时相同 tag 的分镜共享同一条音效。
 // provider 非空时强制使用指定提供商，并在 cacheKey 中区分，避免跨提供商的缓存污染。
-// force=true 跳过内存缓存和素材库复用，直接调用 AI 重新生成（用于用户主动重新生成）。
+// force=true 跳过内存/Redis 缓存，直接调用 searchOneTagUncached（素材库仍正常查询）。
 func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot, provider string, force bool) sfxHit {
 	if force {
-		return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot, provider, true)
+		return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot, provider)
 	}
 	cacheKey := "onetag:" + provider + ":" + normalizeTag(item.Tag)
 	return s.cachedQuery(cacheKey, func() sfxHit {
-		return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot, provider, false)
+		return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot, provider)
 	})
 }
 
 // searchOneTagUncached 是 searchOneTag 的无缓存实现。
-// force=true 时跳过素材库复用，直接走 AI/搜索生成链。
-func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot, provider string, force bool) sfxHit {
+func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot, provider string) sfxHit {
 	sfxDur := maxDur
 	if sfxDur <= 0 {
 		sfxDur = 5
@@ -408,8 +407,7 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 		return sfxHit{}
 	}
 	// 0. 素材库（已保存的音效，优先复用避免重复生成）
-	// force=true 时跳过，确保重新生成时调用 AI 而不是复用缓存结果。
-	if !force && s.assetRepo != nil {
+	if s.assetRepo != nil {
 		assets, _, err := s.assetRepo.Search(repository.AssetSearchParams{
 			Type:     "audio",
 			SubType:  "sfx",
@@ -798,6 +796,28 @@ func (s *SFXService) cachedQuery(cacheKey string, fn func() sfxHit) sfxHit {
 		}
 	}
 	return hit
+}
+
+// InvalidateCacheByTag 清除指定 tag 在进程内缓存和 Redis 中的所有条目。
+// 在素材从资产库删除时调用，防止缓存继续命中已删除的音效。
+func (s *SFXService) InvalidateCacheByTag(tag string) {
+	normalized := normalizeTag(tag)
+	s.queryCache.Range(func(k, _ any) bool {
+		key, ok := k.(string)
+		// cacheKey 格式：onetag:{provider}:{normalizedTag}
+		if ok && strings.HasSuffix(key, ":"+normalized) {
+			s.queryCache.Delete(key)
+		}
+		return true
+	})
+	if s.cache != nil {
+		const redisPrefix = "sfx:qcache:"
+		pattern := redisPrefix + "onetag:*:" + normalized
+		keys, err := s.cache.Keys(context.Background(), pattern).Result()
+		if err == nil && len(keys) > 0 {
+			s.cache.Del(context.Background(), keys...) //nolint:errcheck
+		}
+	}
 }
 
 // mapSFXSource 将音效来源映射为素材库 Asset.Source 枚举值。

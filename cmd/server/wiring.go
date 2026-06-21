@@ -604,7 +604,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	// NOTE: WithStorage/WithDB/WithAnalysisService/WithAIService/WithNotificationService/WithCrawlJobRepo
 	// are injected in main.go after storageSvc and db are available.
 
-	return &Services{
+	result := Services{
 		// ── AI core ──
 		AIService:             core.AI,
 		ModelService:          core.Model,
@@ -714,6 +714,16 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 			WithNotificationService(notifSvc).
 			WithRedis(redisClient), // Fix: cross-instance SSE broadcast
 	}
+
+	// 素材删除后清理 SFX 查询缓存（防止已删除音效继续被复用）
+	if result.SFXService != nil {
+		sfxSvcRef := result.SFXService
+		result.AssetService.OnDeleteSFX(func(tag string) {
+			sfxSvcRef.InvalidateCacheByTag(tag)
+		})
+	}
+
+	return &result
 }
 
 // Handlers 处理器
