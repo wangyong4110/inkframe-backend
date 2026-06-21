@@ -481,7 +481,12 @@ func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
-		h.taskSvc.Complete(taskID, gin.H{"shot_id": s.ID, "sfx_url": s.SFXURL}) //nolint:errcheck
+		// 重新从 DB 加载 shot 以获取最新 sfx_url（AutoGenerateSFX 只更新 DB，不修改内存中的 s.SFXURL）
+		freshShot, err := h.videoService.GetShotByID(uint(videoID), s.ID)
+		if err != nil {
+			freshShot = s
+		}
+		h.taskSvc.Complete(taskID, gin.H{"shot_id": s.ID, "sfx_url": freshShot.SFXURL}) //nolint:errcheck
 	}(task.TaskID, shot, shotSFXReq.Provider)
 
 	c.JSON(http.StatusAccepted, gin.H{

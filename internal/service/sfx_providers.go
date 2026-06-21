@@ -447,8 +447,12 @@ func (s *SFXService) searchBBCSFX(ctx context.Context, item sfxTagItem, maxDurat
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-			logger.Errorf("[SFXService] BBC SFX HTTP %d for %q: %s", resp.StatusCode, query, body)
+			logger.Warnf("[SFXService] BBC SFX HTTP %d for %q", resp.StatusCode, query)
+			return sfxHit{}
+		}
+		// Check Content-Type before decoding: API occasionally returns HTML error pages with 200 OK.
+		if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "json") {
+			logger.Warnf("[SFXService] BBC SFX non-JSON response for %q (Content-Type: %q) — API may be down", query, ct)
 			return sfxHit{}
 		}
 
@@ -464,7 +468,7 @@ func (s *SFXService) searchBBCSFX(ctx context.Context, item sfxTagItem, maxDurat
 			} `json:"results"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			logger.Errorf("[SFXService] BBC SFX JSON decode error for %q: %v", query, err)
+			logger.Warnf("[SFXService] BBC SFX JSON decode error for %q: %v", query, err)
 			return sfxHit{}
 		}
 		if len(result.Results) == 0 {
@@ -554,8 +558,11 @@ func (s *SFXService) searchAigei(ctx context.Context, item sfxTagItem, maxDurati
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-			logger.Errorf("[SFXService] Aigei HTTP %d for %q: %s", resp.StatusCode, query, body)
+			if resp.StatusCode == http.StatusForbidden {
+				logger.Warnf("[SFXService] Aigei IP banned (403) for %q — skipping", query)
+			} else {
+				logger.Warnf("[SFXService] Aigei HTTP %d for %q", resp.StatusCode, query)
+			}
 			return sfxHit{}
 		}
 

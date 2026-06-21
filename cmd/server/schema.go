@@ -147,6 +147,8 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_hook_chain", "payoff_notes",   "TEXT NULL"},
 		// ink_conflict_arc 张力曲线（2026-06-17-v2 新增）
 		{"ink_conflict_arc", "tension_levels", "TEXT NULL"},
+		// ink_shot_sfx_item 循环播放次数（2026-06-21 新增）
+		{"ink_shot_sfx_item", "play_count", "INT NOT NULL DEFAULT 1"},
 	}
 	for _, a := range additions {
 		// 先查 information_schema，列已存在则跳过，避免触发 GORM 的 Error 1060 日志

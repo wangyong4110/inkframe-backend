@@ -635,6 +635,8 @@ type JamendoTrack struct {
 	AudioDownload        string   `json:"audiodownload"`
 	AudioDownloadAllowed bool     `json:"audiodownload_allowed"`
 	Tags                 []string `json:"tags,omitempty"`
+	// PreviewURL 是前端直接用于播放预览的最佳 URL（download > stream），由服务层在搜索后填充。
+	PreviewURL string `json:"preview_url,omitempty"`
 }
 
 // PlayURL 返回优先可下载的播放 URL
@@ -737,7 +739,7 @@ func (s *BGMService) JamendoSearch(ctx context.Context, tenantID uint, p Jamendo
 	tracks := make([]JamendoTrack, 0, len(result.Results))
 	for _, r := range result.Results {
 		tags := append(r.MusicInfo.Tags.Genres, r.MusicInfo.Tags.Vartags...)
-		tracks = append(tracks, JamendoTrack{
+		t := JamendoTrack{
 			ID:                   r.ID,
 			Name:                 r.Name,
 			ArtistName:           r.ArtistName,
@@ -746,7 +748,9 @@ func (s *BGMService) JamendoSearch(ctx context.Context, tenantID uint, p Jamendo
 			AudioDownload:        r.AudioDownload,
 			AudioDownloadAllowed: r.AudioDownloadAllowed,
 			Tags:                 tags,
-		})
+		}
+		t.PreviewURL = t.PlayURL()
+		tracks = append(tracks, t)
 	}
 	return tracks, nil
 }

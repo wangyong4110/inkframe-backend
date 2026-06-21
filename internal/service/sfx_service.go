@@ -391,19 +391,20 @@ func deduplicateAndLimit(items []sfxTagItem, limit int) []sfxTagItem {
 // 优先级：素材库 → AI 文生音效 → 本地库 → AudioLDM（本地模型）→ Freesound → Pixabay → BBC Sound Effects → ElevenLabs。
 // 同一 tag 的结果在进程内按 24h TTL 缓存，批量生成时相同 tag 的分镜共享同一条音效。
 // provider 非空时强制使用指定提供商，并在 cacheKey 中区分，避免跨提供商的缓存污染。
-// force=true 跳过内存/Redis 缓存，直接调用 searchOneTagUncached（素材库仍正常查询）。
+// force=true 跳过内存/Redis 缓存且跳过素材库（步骤 0），强制重新生成全新音效文件。
 func (s *SFXService) searchOneTag(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot, provider string, force bool) sfxHit {
 	if force {
-		return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot, provider)
+		return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot, provider, true)
 	}
 	cacheKey := "onetag:" + provider + ":" + normalizeTag(item.Tag)
 	return s.cachedQuery(cacheKey, func() sfxHit {
-		return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot, provider)
+		return s.searchOneTagUncached(ctx, tenantID, item, maxDur, shot, provider, false)
 	})
 }
 
 // searchOneTagUncached 是 searchOneTag 的无缓存实现。
-func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot, provider string) sfxHit {
+// force=true 时跳过步骤 0（素材库），确保重新生成而非复用旧资产链接。
+func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, item sfxTagItem, maxDur float64, shot *model.StoryboardShot, provider string, force bool) sfxHit {
 	sfxDur := maxDur
 	if sfxDur <= 0 {
 		sfxDur = 5
@@ -419,7 +420,8 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 		return sfxHit{}
 	}
 	// 0. 素材库（已保存的音效，优先复用避免重复生成）
-	if s.assetRepo != nil {
+	// force=true 时跳过，确保用户主动重新生成时不复用旧资产链接。
+	if s.assetRepo != nil && !force {
 		assets, _, err := s.assetRepo.Search(repository.AssetSearchParams{
 			Type:     "audio",
 			SubType:  "sfx",
@@ -443,7 +445,24 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 			logger.Printf("[SFXService] shot %d asset-lib miss tag=%q (found %d assets, none with URL)", shot.ID, item.Tag, len(assets))
 		}
 	}
-	// 1. AI 文生音效（Kling SFX 等 sfx 类型提供商）——优先尝试
+	// 1. ElevenLabs：每个 tag 独立生成，避免多 tag 混音成一条不可分离的音频
+	if u, dur, err := s.generateElevenLabsForTag(ctx, tenantID, item, shot); err == nil && u != "" {
+		// ElevenLabs 返回 file:// 临时文件路径，浏览器无法直接访问，需上传至 OSS
+		if s.storageSvc != nil && strings.HasPrefix(u, "file://") {
+			localPath := strings.TrimPrefix(u, "file://")
+			ossKey := fmt.Sprintf("sfx/%s.mp3", uuid.New().String())
+			if ossURL, uploadErr := uploadLocalFileToOSS(ctx, s.storageSvc, localPath, ossKey); uploadErr == nil {
+				u = ossURL
+			} else {
+				logger.Errorf("[SFXService] shot %d ElevenLabs OSS upload failed: %v", shot.ID, uploadErr)
+			}
+		}
+		logger.Printf("[SFXService] shot %d ElevenLabs hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
+		return sfxHit{url: u, source: "elevenlabs", durationSecs: dur}
+	} else if err != nil {
+		logger.Errorf("[SFXService] shot %d ElevenLabs failed tag=%q: %v", shot.ID, item.Tag, err)
+	}
+	// 2. AI 文生音效（Kling SFX 等 sfx 类型提供商）
 	// 优先使用 Prompt（中文自然语言描述，信息更丰富），降级到英文搜索词 Tag
 	if s.aiSvc != nil {
 		aiPrompt := item.Prompt
@@ -473,62 +492,31 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 			logger.Errorf("[SFXService] shot %d AI-SFX failed tag=%q: %v", shot.ID, item.Tag, err)
 		}
 	}
-	// 2. 本地音效库
+	// 3. 本地音效库
 	if u, dur := s.searchLocalLib(ctx, tenantID, item.Tag); u != "" {
 		logger.Printf("[SFXService] shot %d local hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 		return sfxHit{url: u, source: "local", durationSecs: dur}
 	}
-	// 3. AudioLDM（本地部署模型，免费、无速率限制，优先于远程 API）
+	// 4. AudioLDM（本地部署模型，免费、无速率限制）
 	if u, dur, err := s.generateAudioLDMForTag(ctx, tenantID, item, shot); err == nil && u != "" {
 		logger.Printf("[SFXService] shot %d AudioLDM hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
 		return sfxHit{url: u, source: "audioldm", durationSecs: dur}
 	} else if err != nil && !strings.Contains(err.Error(), "audioldm not configured") {
 		logger.Errorf("[SFXService] shot %d AudioLDM failed tag=%q: %v", shot.ID, item.Tag, err)
 	}
-	// 4. Freesound API（CC0，需 API Key）
+	// 5. Freesound API（CC0，需 API Key）
 	if hit := s.ensureOSSHit(ctx, s.searchFreesound(ctx, tenantID, item, maxDur)); hit.url != "" {
 		logger.Printf("[SFXService] shot %d Freesound hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
 		return hit
 	} else {
 		logger.Printf("[SFXService] shot %d Freesound miss tag=%q", shot.ID, item.Tag)
 	}
-	// 5. Pixabay Audio（CC0，需 API Key）
+	// 6. Pixabay Audio（CC0，需 API Key）
 	if hit := s.ensureOSSHit(ctx, s.searchPixabay(ctx, tenantID, item, maxDur)); hit.url != "" {
 		logger.Printf("[SFXService] shot %d Pixabay hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
 		return hit
 	} else {
 		logger.Printf("[SFXService] shot %d Pixabay miss tag=%q", shot.ID, item.Tag)
-	}
-	// 6. BBC Sound Effects（BBC RemArc Licence，无需 API Key，直接爬取）
-	if hit := s.ensureOSSHit(ctx, s.searchBBCSFX(ctx, item, maxDur)); hit.url != "" {
-		logger.Printf("[SFXService] shot %d BBC-SFX hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
-		return hit
-	} else {
-		logger.Printf("[SFXService] shot %d BBC-SFX miss tag=%q", shot.ID, item.Tag)
-	}
-	// 7. 爱给网（aigei.com，免费音效，无需 API Key）
-	if hit := s.ensureOSSHit(ctx, s.searchAigei(ctx, item, maxDur)); hit.url != "" {
-		logger.Printf("[SFXService] shot %d Aigei hit tag=%q (%.1fs)", shot.ID, item.Tag, hit.durationSecs)
-		return hit
-	} else {
-		logger.Printf("[SFXService] shot %d Aigei miss tag=%q", shot.ID, item.Tag)
-	}
-	// 8. ElevenLabs：每个 tag 独立生成，避免多 tag 混音成一条不可分离的音频
-	if u, dur, err := s.generateElevenLabsForTag(ctx, tenantID, item, shot); err == nil && u != "" {
-		// ElevenLabs 返回 file:// 临时文件路径，浏览器无法直接访问，需上传至 OSS
-		if s.storageSvc != nil && strings.HasPrefix(u, "file://") {
-			localPath := strings.TrimPrefix(u, "file://")
-			ossKey := fmt.Sprintf("sfx/%s.mp3", uuid.New().String())
-			if ossURL, uploadErr := uploadLocalFileToOSS(ctx, s.storageSvc, localPath, ossKey); uploadErr == nil {
-				u = ossURL
-			} else {
-				logger.Errorf("[SFXService] shot %d ElevenLabs OSS upload failed: %v", shot.ID, uploadErr)
-			}
-		}
-		logger.Printf("[SFXService] shot %d ElevenLabs hit tag=%q (%.1fs)", shot.ID, item.Tag, dur)
-		return sfxHit{url: u, source: "elevenlabs", durationSecs: dur}
-	} else if err != nil {
-		logger.Errorf("[SFXService] shot %d ElevenLabs failed tag=%q: %v", shot.ID, item.Tag, err)
 	}
 	return sfxHit{}
 }
@@ -707,58 +695,58 @@ func buildShotAIPrompt(shot *model.StoryboardShot) string {
 }
 
 // fallbackTags 基于规则从描述 / 情绪基调 / 镜头类型推断标签（LLM 不可用时的降级）。
-// 遵循 Freesound 四元格式：[物体] [材质/空间] [动作] [音色描述符]
+// 格式：[物体/声源] [动作/质感]，不含 loop / single 等描述符。
 func (s *SFXService) fallbackTags(shot *model.StoryboardShot) []string {
 	desc := strings.ToLower(shot.Description + " " + shot.EmotionalTone + " " + shot.Scene + " " + shot.Narration)
 	// [中文关键词] → [Freesound 有效搜索词]
 	rules := [][2]string{
 		// 天气/自然环境
-		{"大雨", "heavy rain outdoor rooftop loop"},
-		{"小雨", "light rain window glass indoor loop"},
-		{"雨", "rain outdoor ambient loop"},
-		{"雪", "blizzard wind cold outdoor loop"},
-		{"风", "wind outdoor howling loop"},
-		{"雷", "thunder rumble distant outdoor single"},
-		{"闪电", "thunder lightning crack sharp single"},
-		{"森林", "forest birds morning ambient outdoor loop"},
-		{"鸟", "birds chirping outdoor morning ambient"},
-		{"虫鸣", "crickets insects night outdoor loop"},
-		{"河", "river stream flowing water outdoor loop"},
-		{"海", "ocean waves beach outdoor loop"},
-		{"火", "fire wood crackle burning close loop"},
+		{"大雨", "heavy rain outdoor rooftop"},
+		{"小雨", "light rain window glass indoor"},
+		{"雨", "rain outdoor ambient"},
+		{"雪", "blizzard wind cold outdoor"},
+		{"风", "wind outdoor howling"},
+		{"雷", "thunder rumble distant outdoor"},
+		{"闪电", "thunder lightning crack sharp"},
+		{"森林", "forest birds morning ambient outdoor"},
+		{"鸟", "birds chirping outdoor morning"},
+		{"虫鸣", "crickets insects night outdoor"},
+		{"河", "river stream flowing water outdoor"},
+		{"海", "ocean waves beach outdoor"},
+		{"火", "fire wood crackle burning close"},
 		// 城市/室内环境
-		{"城市", "city street traffic ambient outdoor loop"},
-		{"集市", "crowd market outdoor bustling ambient"},
-		{"人群", "crowd outdoor distant reverb ambient"},
-		{"室内", "room indoor ambience subtle loop"},
+		{"城市", "city street traffic ambient outdoor"},
+		{"集市", "crowd market outdoor bustling"},
+		{"人群", "crowd outdoor distant reverb"},
+		{"室内", "room indoor ambience subtle"},
 		{"酒馆", "tavern crowd indoor ambient murmur"},
 		{"宫殿", "palace hall reverb footsteps stone"},
 		// 战斗/武侠/玄幻动作
-		{"战斗", "sword metal clash impact dry single"},
-		{"拔剑", "metal sword unsheath sharp single"},
-		{"剑", "sword slash whoosh sharp single"},
-		{"刀", "blade metal swing whoosh single"},
-		{"弓箭", "arrow whoosh release outdoor single"},
-		{"拳", "punch impact thud dry single"},
-		{"爆炸", "explosion blast impact outdoor single"},
-		{"真气", "qi energy crackle electric whoosh single"},
-		{"灵气", "spiritual energy hum ethereal loop"},
-		{"施法", "magic spell cast swoosh energy single"},
-		{"突破", "power surge energy burst impact single"},
+		{"战斗", "sword metal clash impact dry"},
+		{"拔剑", "metal sword unsheath sharp"},
+		{"剑", "sword slash whoosh sharp"},
+		{"刀", "blade metal swing whoosh"},
+		{"弓箭", "arrow whoosh release outdoor"},
+		{"拳", "punch impact thud dry"},
+		{"爆炸", "explosion blast impact outdoor"},
+		{"真气", "qi energy crackle electric whoosh"},
+		{"灵气", "spiritual energy hum ethereal"},
+		{"施法", "magic spell cast swoosh energy"},
+		{"突破", "power surge energy burst impact"},
 		{"马", "horse gallop hooves dirt outdoor"},
 		// 日常动作
-		{"奔跑", "footsteps running stone floor indoor"},
+		{"奔跑", "footsteps running stone floor"},
 		{"脚步", "footsteps walking stone corridor reverb"},
 		{"走", "footsteps slow walk indoor"},
-		{"开门", "wooden door open creak single"},
-		{"关门", "door close slam wood single"},
+		{"开门", "wooden door open creak"},
+		{"关门", "door close slam wood"},
 		{"门", "wooden door creak open indoor"},
 		// 情绪/氛围
-		{"紧张", "heartbeat pulse tense close-up single"},
-		{"恐惧", "heartbeat fast tense horror single"},
-		{"悬疑", "suspense stinger short single"},
-		{"钟", "clock ticking mechanical indoor loop"},
-		{"铃", "bell ring resonant single"},
+		{"紧张", "heartbeat pulse tense"},
+		{"恐惧", "heartbeat fast tense horror"},
+		{"悬疑", "suspense stinger short"},
+		{"钟", "clock ticking mechanical indoor"},
+		{"铃", "bell ring resonant"},
 		{"笑声", "crowd laugh indoor distant"},
 		{"掌声", "applause crowd indoor"},
 	}
@@ -774,7 +762,7 @@ func (s *SFXService) fallbackTags(shot *model.StoryboardShot) []string {
 		}
 	}
 	if len(tags) == 0 {
-		tags = []string{"room indoor ambience subtle loop"}
+		tags = []string{"room indoor ambience subtle"}
 	}
 	return tags
 }

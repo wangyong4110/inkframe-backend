@@ -258,6 +258,7 @@ type ShotSFXItem struct {
 	LoopEnabled bool   `json:"loop_enabled" gorm:"default:false"`         // true=循环播放直到镜头结束
 	FadeInMs    int    `json:"fade_in_ms" gorm:"default:0"`               // 淡入时长（毫秒）
 	FadeOutMs   int    `json:"fade_out_ms" gorm:"default:200"`            // 淡出时长（毫秒）
+	PlayCount   int    `json:"play_count" gorm:"not null;default:1"`      // 循环播放次数（1=播放一次，0=无限循环）
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`

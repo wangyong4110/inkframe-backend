@@ -599,6 +599,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			// BGM 背景音乐
 			videos.GET("/:id/bgm/segments", cfg.VideoHandler.ListBGMSegments)
 			videos.GET("/:id/bgm/search", cfg.VideoHandler.JamendoSearchBGM)
+			videos.GET("/:id/bgm/proxy", cfg.VideoHandler.ProxyBGMAudio)
 			videos.PUT("/:id/bgm/segments/:seg_id", cfg.VideoHandler.UpdateBGMSegment)
 			videos.PATCH("/:id/bgm/segments/:seg_id/track", cfg.VideoHandler.ApplyBGMTrack)
 			videos.PATCH("/:id/bgm/segments/:seg_id/disabled", cfg.VideoHandler.ToggleBGMSegment)

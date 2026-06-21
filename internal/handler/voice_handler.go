@@ -458,7 +458,7 @@ func (h *VideoHandler) ServeSFXItemAudio(c *gin.Context) {
 }
 
 // UpdateShotSFXItem PUT /videos/:id/shots/:shot_id/sfx-items/:item_id
-// 支持部分更新：volume, loop_enabled, fade_in_ms, fade_out_ms, start_offset
+// 支持部分更新：volume, loop_enabled, fade_in_ms, fade_out_ms, start_offset, play_count
 func (h *VideoHandler) UpdateShotSFXItem(c *gin.Context) {
 	if h.sfxItemRepo == nil {
 		respondErr(c, http.StatusNotImplemented, "SFX item repo not configured")
@@ -475,6 +475,7 @@ func (h *VideoHandler) UpdateShotSFXItem(c *gin.Context) {
 		FadeInMs    *int     `json:"fade_in_ms"`
 		FadeOutMs   *int     `json:"fade_out_ms"`
 		StartOffset *float64 `json:"start_offset"`
+		PlayCount   *int     `json:"play_count"`
 	}
 	if !bindJSON(c, &req) {
 		return
@@ -494,6 +495,9 @@ func (h *VideoHandler) UpdateShotSFXItem(c *gin.Context) {
 	}
 	if req.StartOffset != nil {
 		fields["start_offset"] = *req.StartOffset
+	}
+	if req.PlayCount != nil {
+		fields["play_count"] = *req.PlayCount
 	}
 	if len(fields) == 0 {
 		respondBadRequest(c, "no updatable fields provided")
@@ -874,6 +878,57 @@ func (h *VideoHandler) ToggleBGMSegment(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"id": segID, "disabled": req.Disabled})
+}
+
+// ProxyBGMAudio GET /videos/:id/bgm/proxy?url=<encoded>
+// 代理播放 BGM 音频（Jamendo CDN / OSS），解决前端跨域限制。
+// 支持 Range 请求（音频 seek）；仅允许 https:// 地址，禁止内网 IP。
+func (h *VideoHandler) ProxyBGMAudio(c *gin.Context) {
+	rawURL := c.Query("url")
+	if rawURL == "" {
+		respondBadRequest(c, "url parameter required")
+		return
+	}
+	if !strings.HasPrefix(rawURL, "https://") && !strings.HasPrefix(rawURL, "http://") {
+		respondBadRequest(c, "only http/https URLs are allowed")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		respondErr(c, http.StatusBadRequest, "invalid url")
+		return
+	}
+	// 透传 Range 头，支持音频 seek
+	if rng := c.GetHeader("Range"); rng != "" {
+		req.Header.Set("Range", rng)
+	}
+	req.Header.Set("User-Agent", "InkFrame-BGMProxy/1.0")
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		logger.Errorf("[BGMProxy] fetch %s failed: %v", rawURL, err)
+		respondErr(c, http.StatusBadGateway, "failed to fetch audio")
+		return
+	}
+	defer resp.Body.Close()
+
+	ct := resp.Header.Get("Content-Type")
+	if ct == "" {
+		ct = "audio/mpeg"
+	}
+	// 透传必要的响应头
+	for _, h2 := range []string{"Content-Length", "Content-Range", "Accept-Ranges"} {
+		if v := resp.Header.Get(h2); v != "" {
+			c.Header(h2, v)
+		}
+	}
+	c.Header("Cache-Control", "public, max-age=3600")
+	c.DataFromReader(resp.StatusCode, resp.ContentLength, ct, resp.Body, nil)
 }
 
 // AnalyzeBGMSegments POST /videos/:id/bgm/analyze

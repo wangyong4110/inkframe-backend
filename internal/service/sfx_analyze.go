@@ -71,14 +71,14 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 当前镜头：` + durationStrategy + `
 | 时长 | 层数上限 | ambient | action/emotion |
 |------|---------|---------|----------------|
-| 1–2s | 1 条    | 禁止    | 仅 single/burst/hit |
-| 2–5s | 2 条    | 可选，必须 loop | single |
-| >5s  | 3 条    | 必须有，loop | 可叠加 1–2 条 |
+| 1–2s | 1 条    | 禁止    | 仅瞬态冲击音 |
+| 2–5s | 2 条    | 可选    | 1 条 |
+| >5s  | 3 条    | 必须有  | 可叠加 1–2 条 |
 
-## type 与描述符强制绑定（违反视为错误输出）
-- **action** → tag 末尾必须含 single / one-shot / burst / hit / snap 之一
-- **ambient** → tag 末尾必须含 loop / continuous 之一
-- **emotion** → tag 末尾必须含 single / one-shot / rise / sting 之一
+## type 规则
+- **action**：单次动作、冲击、碰撞等瞬态音效
+- **ambient**：场景底噪、持续环境音
+- **emotion**：戏剧性情感顶点音效
 
 ## emotion 严格触发条件（必须满足其一，否则禁用）
 - 角色死亡、重伤、意识消失瞬间
@@ -91,22 +91,23 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 ` + sizeGuide + motionSection + `
 
 ## Tag 格式（英文，最多 3 个单词）
-结构：[物体/声源] [动作] [描述符]
-**tag 必须 ≤ 3 个单词**，描述符必须从上方强制绑定列表中选取，不得省略。
+结构：[物体/声源] [动作/质感]
+**tag 必须 ≤ 3 个单词**，禁止使用 loop / single / continuous / one-shot 等描述符。
 
 示例（覆盖常见场景）：
-- {"tag":"door creak single","type":"action","prompt":"室内厚重木门缓慢推开的嘎吱声"}
-- {"tag":"footsteps gravel single","type":"action","prompt":"室外碎石地面上沉稳的脚步声"}
-- {"tag":"blade unsheathe single","type":"action","prompt":"钢制刀剑出鞘的金属刮擦声"}
-- {"tag":"desert wind loop","type":"ambient","prompt":"荒漠旷野持续低频风沙环境音"}
-- {"tag":"room tone loop","type":"ambient","prompt":"室内安静木质空间的底噪环境音"}
-- {"tag":"brass sting single","type":"emotion","prompt":"戏剧性情感顶点的铜管上扬音效"}
+- {"tag":"door creak","type":"action","prompt":"室内厚重木门缓慢推开的嘎吱声"}
+- {"tag":"footsteps gravel","type":"action","prompt":"室外碎石地面上沉稳的脚步声"}
+- {"tag":"blade unsheathe","type":"action","prompt":"钢制刀剑出鞘的金属刮擦声"}
+- {"tag":"desert wind","type":"ambient","prompt":"荒漠旷野持续低频风沙环境音"}
+- {"tag":"room tone","type":"ambient","prompt":"室内安静木质空间的底噪环境音"}
+- {"tag":"brass sting","type":"emotion","prompt":"戏剧性情感顶点的铜管上扬音效"}
 
 ❌ tag 禁止词汇：
 - 视觉词：sunlight / morning / warm / bright / dark / gloomy
 - 情绪形容词：epic / mystical / dramatic / intense / scary
 - BGM 词：ambience / atmosphere / soundscape / mood
-- 笼统单词：sword / rain / fire / wind（必须加动作词展开，如 rain splash single）
+- 描述符词：loop / single / continuous / one-shot / burst / hit / snap / rise / sting
+- 笼统单词：sword / rain / fire / wind（必须加动作词展开，如 rain splash）
 - 呼吸声：breath / breathing / exhale（仅画面中有明显喘息肢体动作时才允许）
 
 ## 分镜信息
