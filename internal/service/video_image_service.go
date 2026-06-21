@@ -424,13 +424,24 @@ func refCompositeDrawScaled(dst draw.Image, dstRect image.Rectangle, src image.I
 	}
 }
 
-// getCharActiveLook 返回角色在指定章节的激活形象（一次 DB 查询）。
-func (s *VideoService) getCharActiveLook(characterID uint, chapterNo int) *model.CharacterLook {
+// getCharActiveLook 返回角色在指定章节的激活形象。
+// 优先按章节范围匹配；无匹配时回退到角色设置的默认形象（DefaultLookID）。
+func (s *VideoService) getCharActiveLook(char *model.Character, chapterNo int) *model.CharacterLook {
 	if s.lookRepo == nil {
 		return nil
 	}
-	look, _ := s.lookRepo.GetActiveLook(characterID, chapterNo)
-	return look
+	look, _ := s.lookRepo.GetActiveLook(char.ID, chapterNo)
+	if look != nil {
+		return look
+	}
+	// 无章节范围匹配（含 chapterNo=0 的降级场景）：回退到角色默认形象
+	if char.DefaultLookID != 0 {
+		if defaultLook, err := s.lookRepo.GetByID(char.DefaultLookID); err == nil && defaultLook != nil {
+			logger.Printf("[getCharActiveLook] charID=%d chapterNo=%d: no range match, using DefaultLookID=%d", char.ID, chapterNo, char.DefaultLookID)
+			return defaultLook
+		}
+	}
+	return nil
 }
 
 // ─── 分镜参考图生成 ──────────────────────────────────────────────────────────
@@ -470,7 +481,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 			collected := make([]charRef, 0, len(batchChars))
 			for _, char := range batchChars {
 				// 从形象管理获取当前章节的激活形象（FaceCloseup/ThreeViewSheet/VisualPrompt）
-				activeLook := s.getCharActiveLook(char.ID, chapterNo)
+				activeLook := s.getCharActiveLook(char, chapterNo)
 				faceRef := char.Portrait // 兜底：角色头像
 				var bodyRef, vprompt string
 				if activeLook != nil {
@@ -579,7 +590,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 						}
 						if ok && char != nil && !seenIDs[char.ID] {
 							seenIDs[char.ID] = true
-							activeLook := s.getCharActiveLook(char.ID, chapterNo)
+							activeLook := s.getCharActiveLook(char, chapterNo)
 							inlineChars = append(inlineChars, inlineRef{name: sc.Name, char: char, look: activeLook})
 							if activeLook != nil && activeLook.VisualPrompt != "" {
 								characterVisualPrompts = append(characterVisualPrompts, activeLook.VisualPrompt)
