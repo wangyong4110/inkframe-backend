@@ -37,6 +37,12 @@ type NovelService struct {
 	novelViewDedup   sync.Map     // fallback in-process dedup when Redis unavailable
 	cache            *redis.Client // optional: cross-instance view dedup
 	stopCh           chan struct{} // closed by Shutdown() to stop background goroutines
+	onDeleteHook     func(novelID uint) // fired after a novel is deleted
+}
+
+// OnDeleteNovel registers a callback fired after a novel is successfully deleted.
+func (s *NovelService) OnDeleteNovel(fn func(novelID uint)) {
+	s.onDeleteHook = fn
 }
 
 func NewNovelService(
@@ -219,7 +225,21 @@ func (s *NovelService) DeleteNovel(id, tenantID uint) error {
 	if novel.TenantID != tenantID {
 		return fmt.Errorf("not found")
 	}
-	return s.novelRepo.DeleteWithCascade(id)
+	// 清理视图去重缓存（进程内），避免已删除小说的去重记录残留。
+	suffix := fmt.Sprintf(":%d", id)
+	s.novelViewDedup.Range(func(k, _ any) bool {
+		if key, ok := k.(string); ok && strings.HasSuffix(key, suffix) {
+			s.novelViewDedup.Delete(k)
+		}
+		return true
+	})
+	if err := s.novelRepo.DeleteWithCascade(id); err != nil {
+		return err
+	}
+	if s.onDeleteHook != nil {
+		s.onDeleteHook(id)
+	}
+	return nil
 }
 
 // CreateNovel handler-compatible wrapper

@@ -64,7 +64,7 @@ func (s *ForeshadowCRUDService) AIExtractFromNovel(ctx context.Context, tenantID
 		return nil, fmt.Errorf("render prompt: %w", err)
 	}
 	result, err := s.aiService.GenerateWithProviderCtx(ctx, tenantID, novelID, "extract_foreshadows", prompt, "",
-		StoryboardOverrides{MaxTokens: 8192})
+)
 	if err != nil {
 		return nil, fmt.Errorf("AI extraction: %w", err)
 	}

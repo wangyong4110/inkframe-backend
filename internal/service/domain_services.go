@@ -460,7 +460,14 @@ func (s *ModelService) DeleteModel(id uint, tenantID uint) error {
 	if m.Provider != nil && m.Provider.TenantID != 0 && m.Provider.TenantID != tenantID {
 		return fmt.Errorf("model does not belong to your tenant")
 	}
-	return s.modelRepo.Delete(id)
+	if err := s.modelRepo.Delete(id); err != nil {
+		return err
+	}
+	// Invalidate provider cache so stale model config is not served after deletion.
+	if s.aiService != nil && m.Provider != nil {
+		s.aiService.InvalidateProviderCache(m.Provider.Name)
+	}
+	return nil
 }
 
 

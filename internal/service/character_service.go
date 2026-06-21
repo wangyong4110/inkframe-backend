@@ -2467,7 +2467,7 @@ func (s *CharacterService) GenerateChapterImages(
 				charFailed = true
 			} else {
 				result, llmErr := s.aiService.GenerateWithProvider(tenantID, novelID, "chapter_character_appearance",
-					promptText, "", StoryboardOverrides{MaxTokens: 1024})
+					promptText, "")
 				if llmErr != nil {
 					logger.Errorf("[CharacterService] GenerateChapterImages LLM char %d (%s): %v", char.ID, char.Name, llmErr)
 					charFailed = true

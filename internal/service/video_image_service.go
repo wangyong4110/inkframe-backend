@@ -1770,12 +1770,8 @@ func (s *VideoService) translatePromptToEnglish(ctx context.Context, tenantID ui
 		"Preserve all visual descriptors, art style terms, camera/lens parameters, lighting descriptions, and quality boosters exactly.\n\n" +
 		text
 
-	tCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-
 	translated, err := s.aiService.GenerateWithProviderCtx(
-		tCtx, tenantID, novelID, "chapter_review", instruction, "",
-		StoryboardOverrides{Temperature: 0.1},
+		ctx, tenantID, novelID, "chapter_review", instruction, "",
 	)
 	if err != nil {
 		logger.Warnf("[translatePromptToEnglish] translation failed, using original Chinese prompt: %v", err)

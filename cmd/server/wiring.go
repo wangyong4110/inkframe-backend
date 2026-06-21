@@ -739,6 +739,14 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		})
 	}
 
+	// 小说删除后清理爬取进度缓存（防止查询已删除小说时返回脏数据）
+	if result.NovelImportService != nil {
+		importSvcRef := result.NovelImportService
+		result.NovelService.OnDeleteNovel(func(novelID uint) {
+			importSvcRef.CleanupForNovel(novelID)
+		})
+	}
+
 	return &result
 }
 

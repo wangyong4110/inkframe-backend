@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -688,6 +689,21 @@ func (s *VideoService) DeleteVideo(id, tenantID uint) error {
 			if lastErr != nil {
 				logger.Errorf("ALERT: orphaned OSS file not deleted after 3 attempts: %s — %v", u, lastErr)
 			}
+		}
+	}
+
+	// 清理视图去重缓存，避免已删除视频的去重记录残留。
+	suffix := fmt.Sprintf(":%d", id)
+	s.viewDedupCache.Range(func(k, _ any) bool {
+		if key, ok := k.(string); ok && strings.HasSuffix(key, suffix) {
+			s.viewDedupCache.Delete(k)
+		}
+		return true
+	})
+	if s.cache != nil {
+		pattern := fmt.Sprintf("view:video:%d:*", id)
+		if keys, err := s.cache.Keys(context.Background(), pattern).Result(); err == nil && len(keys) > 0 {
+			s.cache.Del(context.Background(), keys...)
 		}
 	}
 	return nil

@@ -185,6 +185,15 @@ func crawlProgressRedisKey(novelID uint) string {
 	return fmt.Sprintf("crawl:progress:%d", novelID)
 }
 
+// CleanupForNovel removes crawl progress data for the given novel from both in-memory
+// and Redis caches. Call this when the novel is deleted to prevent stale progress reads.
+func (s *NovelImportService) CleanupForNovel(novelID uint) {
+	s.crawlProgress.Delete(novelID)
+	if s.cache != nil {
+		s.cache.Del(context.Background(), crawlProgressRedisKey(novelID))
+	}
+}
+
 // storeCrawlProgressToRedis writes the current progress snapshot to Redis (best-effort).
 func (s *NovelImportService) storeCrawlProgressToRedis(p *CrawlProgress) {
 	if s.cache == nil {
