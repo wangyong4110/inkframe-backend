@@ -54,6 +54,7 @@ const (
 	TaskTypeLookImageGen             = "look_image_gen"
 	TaskTypeCoverImageGen            = "cover_image_gen"
 	TaskTypeImageEdit                = "image_edit"
+	TaskTypeImageUpscale             = "image_upscale"
 	TaskTypeChapterRewriteInstr      = "chapter_rewrite_instr"
 )
 

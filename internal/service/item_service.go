@@ -159,9 +159,9 @@ func (s *ItemService) generateItemImageCore(ctx context.Context, tenantID uint, 
 		"oversaturated, overexposed, underexposed, cropped, out of frame"
 	var suffix string
 	if promptLanguage == "en" {
-		suffix = ", item design, white background, studio lighting"
+		suffix = ", item design, white background, studio lighting, " + universalQualityTags
 	} else {
-		suffix = "，物品设计，白色背景，摄影棚光效"
+		suffix = "，物品设计，白色背景，摄影棚光效，" + universalQualityTags
 	}
 	sizeOverride := imageAspectRatioToSize(aspectRatio, "master")
 	return s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt+suffix, aiRefURL, imageStyle, itemNegPrompt, sizeOverride)

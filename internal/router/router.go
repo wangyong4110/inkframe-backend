@@ -930,9 +930,10 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		// Public share page (no auth required — placed outside v1 auth middleware)
 		// NOTE: registered separately below on the root group
 
-		// 通用图像编辑
+		// 通用图像编辑 / 高清放大
 		if cfg.ImageHandler != nil {
 			v1.POST("/images/edit", cfg.ImageHandler.EditImage)
+			v1.POST("/images/upscale", cfg.ImageHandler.UpscaleImage)
 		}
 
 		// 本地文件系统浏览（本地部署工具专用）

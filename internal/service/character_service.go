@@ -1829,22 +1829,26 @@ func resolveStyleCategory(styleID string) string {
 	return ""
 }
 
+// universalQualityTags 是所有图像生成 prompt 必须携带的通用质量指令，保证输出基准一致。
+const universalQualityTags = "masterpiece, best quality, ultra-detailed, sharp focus, 8K, ultra high resolution, professional"
+
 // resolveStyleQualityTokens 返回与风格匹配的英文质量提升词串，末尾不加逗号。
 // 场景图和角色图共用同一套质量词，保证输出基准一致。
 func resolveStyleQualityTokens(styleID string) string {
+	base := universalQualityTags
 	switch resolveStyleCategory(styleID) {
 	case "realistic":
-		return "masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting"
+		return base + ", photorealistic, cinematic lighting, 8k uhd"
 	case "render_3d":
-		return "masterpiece, best quality, ultra-detailed, 3D render, ray tracing, volumetric lighting, high-fidelity 3D"
+		return base + ", 3D render, ray tracing, volumetric lighting, high-fidelity 3D"
 	case "pixel":
-		return "masterpiece, best quality, crisp pixel art, clean sharp pixels, retro game aesthetic"
+		return base + ", crisp pixel art, clean sharp pixels, retro game aesthetic"
 	case "classic_illustration":
-		return "masterpiece, best quality, ultra-detailed, exquisite brushwork, vibrant colors, professional illustration"
+		return base + ", exquisite brushwork, vibrant colors, professional illustration"
 	case "dark_stylized":
-		return "masterpiece, best quality, ultra-detailed, dramatic atmosphere, vibrant colors, professional digital art"
+		return base + ", dramatic atmosphere, vibrant colors, professional digital art"
 	default: // anime, unknown
-		return "masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
+		return base + ", vibrant colors, clean linework, professional illustration"
 	}
 }
 
@@ -1931,9 +1935,9 @@ func (s *ImageGenerationService) GenerateThreeViewImage(ctx context.Context, ten
 	var prompt string
 	if style == "realistic" || style == "real_person" {
 		realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
-		photoQuality := "realistic photography style, pure white background, detailed features, clean composition, high quality"
+		photoQuality := universalQualityTags + ", realistic photography style, pure white background, detailed features, clean composition"
 		if style == "real_person" {
-			photoQuality = "photorealistic portrait photography, ultra-realistic skin texture, natural lighting, DSLR quality, 8k uhd, pure white background, sharp focus, high quality"
+			photoQuality = universalQualityTags + ", photorealistic portrait photography, ultra-realistic skin texture, natural lighting, DSLR quality, 8k uhd, pure white background"
 		}
 		prompt = fmt.Sprintf(
 			"%ssolo, full body, %s, %s, "+
@@ -1945,16 +1949,16 @@ func (s *ImageGenerationService) GenerateThreeViewImage(ctx context.Context, ten
 		prompt = fmt.Sprintf(
 			"%s, solo, full body, %s, %s, "+
 				"%s风格, flat color illustration, clean lineart, character design, "+
-				"white background, high quality, "+
+				"white background, %s, "+
 				"no props, no background elements, no text, no watermarks",
-			genderTag, appearance, angleDesc, styleStr)
+			genderTag, appearance, angleDesc, styleStr, universalQualityTags)
 	} else {
 		prompt = fmt.Sprintf(
 			"solo, full body, %s, %s, "+
 				"%s风格, flat color illustration, clean lineart, character design, "+
-				"white background, high quality, "+
+				"white background, %s, "+
 				"no props, no background elements, no text, no watermarks",
-			appearance, angleDesc, styleStr)
+			appearance, angleDesc, styleStr, universalQualityTags)
 	}
 
 	// Only pass an absolute HTTP(S) URL — local/relative paths cannot be fetched by remote APIs.
@@ -1997,20 +2001,21 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	}
 
 	// 结构控制词置于提示词最前段，确保在 cross-attention 中获得最高权重。
-	// 精简至 ~38 词，为 appearance 保留足够预算，使总提示词落在 100-150 词。
+	// 4 格布局：前三格为全身三视图，第四格为面部特写，合并在同一张横版图中。
 	// 关键实践：
-	//   - "equal-width 3-panel" 约束三格等宽，避免中格（正面）占据过多画布
-	//   - "right side profile" 消除侧视方向歧义
-	//   - "A-pose arms 30-45 degrees" 量化手臂角度，避免 T-pose 或紧贴身体
-	//   - "same ground baseline" 对齐三格脚底基线，符合三视图标准规范
-	//   - "horizontal wide format" 强化横版构图，匹配 1280×720 输出尺寸
+	//   - "equal-width 4-panel" 约束四格等宽
+	//   - panel 4 明确为 bust/face closeup，与全身格区分
+	//   - "A-pose arms 30-45 degrees" 量化手臂角度，避免 T-pose
+	//   - "same ground baseline" 对齐全身三格脚底基线
+	//   - "horizontal wide format" 强化横版构图，匹配 1600×720 输出尺寸
 	layoutFrame :=
-		"character model sheet, equal-width 3-panel turnaround, horizontal wide format: " +
-			"[left] 0-degree front-facing full body, " +
-			"[center] 90-degree right side profile full body, " +
-			"[right] 180-degree back view full body, " +
-			"A-pose arms 30-45 degrees from sides, " +
-			"same ground baseline, identical appearance across all panels"
+		"character model sheet, equal-width 4-panel reference sheet, horizontal wide format: " +
+			"[panel 1] face closeup bust shot front view, neutral expression, " +
+			"[panel 2] 0-degree front-facing full body, " +
+			"[panel 3] 90-degree right side profile full body, " +
+			"[panel 4] 180-degree back view full body, " +
+			"A-pose arms 30-45 degrees from sides on full-body panels, " +
+			"same ground baseline for full-body panels, identical appearance across all panels"
 
 	// appearance 截断至 50 词，与结构词（~38）、修饰词（~35）合计控制在 100-150 词范围内。
 	// 参考图通过图像编码通道（IP-Adapter）处理面部一致性；
@@ -2058,8 +2063,7 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 		"different face, inconsistent face, face change, different person, face inconsistency, " +
 		"different hairstyle, hair color change, costume mismatch, " +
 		"merged panels, overlapping panels, panels bleeding into each other, " +
-		"cropped body, cut off feet, missing feet, missing legs, bottom cut off, partial figure, floating figure, " +
-		"incomplete figure, body cutoff, figure cutoff, " +
+		"cut off feet on full-body panels, missing feet, missing legs on body panels, " +
 		"makeup, eyeshadow, eyeliner, mascara, lipstick, blush, rouge, cosmetics, " +
 		"extra limbs, bad anatomy, nsfw, lowres, poorly drawn"
 	negativePrompt := baseNeg
@@ -2067,16 +2071,16 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 		negativePrompt = baseNeg + ", " + genderNeg
 	}
 
-	// 三视图使用 16:9（1280x720）横版布局，适合横向排列三个视角
+	// 4 格参考图使用 1600x720 横版布局（比三视图 1280x720 更宽，为第 4 格面部特写留出空间）
 	refs := []string{}
 	if aiRef != "" {
 		refs = []string{aiRef}
 	}
-	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, "1280x720")
+	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, "1600x720")
 	if err != nil {
 		return nil, err
 	}
-	return &GeneratedCharacterImage{URL: url, Description: name + " three-view sheet"}, nil
+	return &GeneratedCharacterImage{URL: url, Description: name + " character sheet with face closeup"}, nil
 }
 
 // GenerateFaceCloseupImage 生成角色面部特写图片。

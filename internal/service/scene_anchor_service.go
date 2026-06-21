@@ -505,8 +505,8 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	}
 	sceneSuffix := "establishing shot, " + sceneType + " scene, no humans, no people, no figures, " +
 		"cinematic composition, three depth layers foreground midground background, " +
-		"architectural detail, atmospheric lighting, masterpiece, best quality, ultra-detailed, 8k uhd, " +
-		"photorealistic, sharp focus"
+		"architectural detail, atmospheric lighting, photorealistic, " +
+		universalQualityTags
 	if prompt != "" {
 		prompt += ", " + sceneSuffix
 	} else {
