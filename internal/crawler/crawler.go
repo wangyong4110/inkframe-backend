@@ -51,9 +51,9 @@ type CrawlConfig struct {
 
 func DefaultCrawlConfig() CrawlConfig {
 	return CrawlConfig{
-		Concurrency:   1,
-		DelayMs:       2000,
-		RandomDelayMs: 3000,
+		Concurrency:   3,
+		DelayMs:       1500,
+		RandomDelayMs: 2000,
 		UARotation:    true,
 		DetectCharset: true,
 		MaxRetries:    3,
@@ -253,9 +253,6 @@ func (nc *NovelCrawler) newCollector(domain string) *colly.Collector {
 	if nc.config.DelayMs < 1000 {
 		nc.config.DelayMs = 1000
 	}
-	if nc.config.Concurrency > 2 {
-		nc.config.Concurrency = 2
-	}
 	_ = col.Limit(&colly.LimitRule{
 		DomainGlob:  "*",
 		Delay:       time.Duration(nc.config.DelayMs) * time.Millisecond,
@@ -310,16 +307,16 @@ func (nc *NovelCrawler) newAsyncCollector(domain string) *colly.Collector {
 		nc.stats.recordResponse(int64(len(r.Body)))
 	})
 
-	// Enforce minimum safe crawl rate
-	if nc.config.DelayMs < 1000 {
-		nc.config.DelayMs = 1000
-	}
-	if nc.config.Concurrency > 2 {
-		nc.config.Concurrency = 2
+	// Enforce minimum safe crawl rate (hard floor: 800ms, hard ceiling: 5 workers)
+	if nc.config.DelayMs < 800 {
+		nc.config.DelayMs = 800
 	}
 	parallelism := nc.config.Concurrency
 	if parallelism < 1 {
 		parallelism = 1
+	}
+	if parallelism > 5 {
+		parallelism = 5
 	}
 	_ = col.Limit(&colly.LimitRule{
 		DomainGlob:  "*",

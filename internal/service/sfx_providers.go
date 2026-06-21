@@ -705,7 +705,11 @@ func (s *SFXService) generateElevenLabsForTag(ctx context.Context, tenantID uint
 		rawURL, d, dbErr := s.aiSvc.GenerateSFXWithProvider(ctx, tenantID, "elevenlabs-sfx", prompt, dur)
 		<-s.elevenLabsSem
 		if dbErr != nil {
-			logger.Errorf("[SFXService] generateElevenLabsForTag: DB path failed (tenant=%d): %v", tenantID, dbErr)
+			if strings.Contains(dbErr.Error(), "no credentials") {
+				logger.Printf("[SFXService] generateElevenLabsForTag: elevenlabs-sfx not configured for tenant=%d, skipping", tenantID)
+			} else {
+				logger.Warnf("[SFXService] generateElevenLabsForTag: tenant=%d: %v", tenantID, dbErr)
+			}
 		}
 		if dbErr == nil && rawURL != "" {
 			// ElevenLabsSFXProvider 返回 file:// 临时路径，必须上传到 OSS 才能公开访问
