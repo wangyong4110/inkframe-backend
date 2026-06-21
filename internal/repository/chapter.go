@@ -335,6 +335,15 @@ func (r *ChapterRepository) DeleteAndRenumber(id, novelID uint) error {
 		if err := tx.Delete(&model.Chapter{}, id).Error; err != nil {
 			return err
 		}
+		// Clear chapter_no on the soft-deleted record to avoid unique-key conflict when
+		// renumbering: uk_novel_chapter covers (novel_id, chapter_no) without a deleted_at
+		// partial index, so the deleted row still occupies the slot.
+		if err := tx.Exec(
+			"UPDATE ink_chapter SET chapter_no = 0 WHERE id = ? AND deleted_at IS NOT NULL",
+			id,
+		).Error; err != nil {
+			return err
+		}
 		// Decrement chapter_no for all subsequent chapters in this novel
 		return tx.Exec(
 			"UPDATE ink_chapter SET chapter_no = chapter_no - 1 WHERE novel_id = ? AND chapter_no > ? AND deleted_at IS NULL",
