@@ -97,7 +97,7 @@ type Video struct {
 	ReviewStatus string  `json:"review_status" gorm:"size:20;default:'none'"` // none/pending/reviewed
 
 	// 质量档位
-	QualityTier string `json:"quality_tier" gorm:"size:20;default:preview"`
+	QualityTier string `json:"quality_tier" gorm:"size:20;default:production"`
 	// draft=草稿(静图+Pan), preview=预览(720p短片), final=正式(1080p+)
 
 	// 高清 & 3D 视觉模式

@@ -216,11 +216,15 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		}
 	}
 
-	// 获取小说的 PromptLanguage 设置（决定 description/image_prompt/video_prompt 使用中文还是英文）
+	// 获取小说的 PromptLanguage 和 Genre（决定 description/image_prompt/video_prompt 使用中文还是英文，以及类型视觉风格）
 	promptLanguage := "zh"
+	genre := ""
 	if s.novelRepo != nil && video.NovelID > 0 {
-		if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil && novel.PromptLanguage != "" {
-			promptLanguage = novel.PromptLanguage
+		if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil {
+			if novel.PromptLanguage != "" {
+				promptLanguage = novel.PromptLanguage
+			}
+			genre = novel.Genre
 		}
 	}
 
@@ -313,7 +317,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			segIdx+1, len(segments), segRunes, segShotCount, len(prevTailShots))
 
 		prompt := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, len(segments), segShotCount,
-			characters, anchors, plotPoints, prevTailShots, overrides.VoiceMode, promptLanguage, video.Pacing, arcPlan)
+			characters, anchors, plotPoints, prevTailShots, overrides.VoiceMode, promptLanguage, genre, video.Pacing, arcPlan)
 
 		var aiResult string
 		var aiErr error
@@ -822,6 +826,7 @@ func (s *VideoService) buildStoryboardPrompt(
 	prevShots []*model.StoryboardShot,
 	voiceMode string,
 	promptLanguage string,
+	genre string,
 	pacing string,
 	arcPlan string,
 ) string {
@@ -969,6 +974,7 @@ func (s *VideoService) buildStoryboardPrompt(
 		"Content":             content,
 		"UserPrompt":          userPrompt,
 		"ArcPlan":             arcPlan,
+		"GenreVisualHints":    genreVisualHints(genre),
 	}
 	result, err := renderPrompt("storyboard_generate", ctx)
 	if err != nil {

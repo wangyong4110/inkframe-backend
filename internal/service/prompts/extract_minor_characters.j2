@@ -41,16 +41,34 @@
 - gender：只能是 male / female / neutral
 - age：简短年龄感，如 "16" / "约25岁" / "少年" / "中年" / "老年"
 {% if PromptLanguage == "en" %}- description (English): background only — origin, key experiences, relation to main plot. One paragraph, ≤100 words{% else %}- description（中文）：仅写背景——来历、经历、与主线关系，连贯段落，100字以内{% endif %}
-{% if PromptLanguage == "en" %}- visual_prompt (English): ~150-word image generation prompt covering 12 dimensions in order. No art style / quality / rendering tags. No violent, gory, death-related, or sexually explicit content.
-  [1] GENDER & BUILD [2] FACE STRUCTURE [3] EYES [4] BROWS (natural, no cosmetics) [5] NOSE & LIPS
-  [6] SKIN (birthmarks or natural marks only) [7] HAIR [8] OUTFIT (layer by layer) [9] FOOTWEAR
-  [10] ACCESSORIES & CARRIED ITEMS (weapons: visual form and ornamentation only)
-  [11] POSTURE [12] SIGNATURE ELEMENT{% else %}- visual_prompt（中文）：约150字图像生成提示词，按序覆盖12维度，禁止画风/质量/渲染标签。
-  ⚠️ 严禁出现暴力、血腥、伤亡、色情相关敏感词。
-  [1]性别体型 [2]面部结构 [3]眼睛 [4]眉毛（自然，禁妆容） [5]鼻唇
-  [6]肤色（仅先天性标记） [7]发型 [8]服装（逐层） [9]鞋履
-  [10]配饰与随身物件（兵器/法器仅写形制与装饰）
-  [11]体态 [12]标志性元素{% endif %}
+{% if PromptLanguage == "en" %}- visual_prompt (English): image generation prompt, ~150 words, covering 12 dimensions in order. No art style, quality, or rendering tags. No violent, gory, death-related, or sexually explicit content.{% if GenreVisualHints %} {{ GenreVisualHints }}{% endif %}
+
+  [1] GENDER & BUILD: gender, age range, ethnicity, height, body type, shoulder-to-hip ratio
+  [2] FACE: face shape, three-zone proportion, cheekbones, jawline, chin, eye spacing
+  [3] EYES: eye shape, size, iris color (precise hue), default gaze quality
+  [4] BROWS (natural): shape, density, color; natural lash length — no cosmetics
+  [5] NOSE & LIPS: bridge height, tip shape, nostril width; lip fullness, cupid's bow, bare lip color and texture
+  [6] SKIN: precise tone, surface finish, birthmarks or natural distinguishing marks only
+  [7] HAIR: color and treatment, texture, density, length, styling, bangs
+  [8] OUTFIT (layer by layer): each garment — type, cut, neckline, sleeves, hem, fabric, colors, decorative details
+  [9] FOOTWEAR: type, heel, material, color
+  [10] ACCESSORIES & CARRIED ITEMS: each item — name, material, style, placement; for weapons/implements describe visual form and ornamentation only
+  [11] POSTURE: default standing pose, hand position, characteristic tilt
+  [12] SIGNATURE ELEMENT: the single most recognizable visual detail, described with specific material/finish/placement{% else %}- visual_prompt（中文）：图像生成提示词，约150字，按序覆盖12个维度，禁止画风/质量/渲染标签。
+  ⚠️ 严禁出现暴力、血腥、伤亡、色情相关敏感词。{% if GenreVisualHints %} {{ GenreVisualHints }}{% endif %}
+
+  [1] 性别体型：性别、年龄感、种族、身高、体型、肩宽、腰臀比
+  [2] 面部结构：脸型、三庭比例、颧骨、下颌线、下巴形态、眼距
+  [3] 眼睛：眼型、大小、精确瞳色、默认目光质感
+  [4] 眉毛（自然）：眉形、密度、眉色；自然睫毛形态——禁止任何妆容描述
+  [5] 鼻唇：鼻梁高度、鼻头形态、鼻翼；唇厚、唇峰、裸唇色与质感
+  [6] 肤色：精确肤色描述词、肤感，仅可写先天性标记（痣、胎记）
+  [7] 发型：发色与处理方式、发质、发量、发长、造型方式、刘海
+  [8] 服装（逐层）：每件——品类、廓形、领口、袖型、下摆、面料、颜色、装饰细节
+  [9] 鞋履：鞋型、跟高、材质、颜色
+  [10] 配饰与随身物件：逐件描述外观——名称、材质、风格、佩戴位置；兵器/法器仅写形制与装饰
+  [11] 体态：默认站姿、手部位置、特征性倾斜
+  [12] 标志性元素：最具辨识度的单一视觉细节，具体描述材质/光泽/位置{% endif %}
 - personality_tags：2–4个简短性格标签
 
 ---

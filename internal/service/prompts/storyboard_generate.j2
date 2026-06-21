@@ -1,7 +1,10 @@
 你是专业影视分镜师，同时负责撰写旁白文案。请将以下章节内容{% if SegLabel %} {{ SegLabel }}{% endif %}转化为约{{ ExpectedShots }}个分镜，返回JSON数组。{% if AutoDuration %}（该数量由系统根据章节字数自动估算，应覆盖全部情节；若某些情节密度确实更高，可适当增减±20%，但必须以内容完整覆盖为首要目标）{% endif %}
 
 ⚠️ 全局规则——所有视觉字段最低字数/词数不少于 100 字/词，过短将导致生成质量大幅下降。
-
+⚠️ 视觉内容安全规则：description / image_prompt / video_prompt 字段中，严禁出现暴力、血腥、伤亡、色情相关敏感词。
+{% if GenreVisualHints %}
+{{ GenreVisualHints }}
+{% endif %}
 【故事连贯性与镜头过渡——顶级强制规则，违反将导致整个输出被拒绝】
 ① **叙事链完整**：所有分镜必须构成一条前后贯通的故事链。每个镜头须与相邻镜头在场景、人物动作、情绪上保持逻辑衔接，严禁无铺垫的画面跳跃或情节断层。
 ② **场景切换必须有过渡**：若前后镜头发生地点变换（室内→室外、A地→B地），必须插入过渡镜头（角色起身/走出门/奔跑途中/环境空镜转场），禁止同一人物在相邻两镜中无缘由地出现在不同地点。
@@ -33,6 +36,7 @@
 ▸ description（English only — complete visual description of the scene including environment AND characters）
   - Describe the full visual scene: environment AND any characters present (their position in frame, posture, action, expression). If no characters appear in this shot, describe environment only.
   - MINIMUM LENGTH: At least 100 English words. Short descriptions will produce poor images.
+  - No violent, gory, death-related, or sexually explicit content.
   - Must cover ALL five layers. Missing layers degrade image quality.
     ① Ground layer: precise surface texture (cracked clay / wet cobblestone / polished marble / weathered wood),
        ground-level objects, debris, shadow patterns cast on the ground surface, any pooled liquid or dust
@@ -71,6 +75,7 @@
 ▸ description（画面描述——完整视觉描述，包含环境和角色）
   - 客观描述完整画面：环境场景 + 镜头中出现的角色（位置、姿态、动作、表情）。若该镜头无角色出场，描述环境即可。
   - 最低字数：不少于100字，过短将导致生成图片质量大幅下降
+  - ⚠️ 严禁出现暴力、血腥、伤亡、色情相关敏感词
   - 必须覆盖以下五层，任何一层缺失都会导致生成图片质量下降：
     ① 地面层：精确地面材质（龟裂荒土/湿润石板/大理石地面/风化木板等）+ 地面级物件、碎片、
        积尘、液体、地面投影图案
@@ -98,6 +103,7 @@
 {% if IsImageEn %}
 ▸ image_prompt（English only — drives image AI directly; describe environment AND characters）
   MINIMUM LENGTH: At least 100 English words.
+  No violent, gory, death-related, or sexually explicit content.
 
   MANDATORY STRUCTURE (all sections in order, none may be skipped):
     [ArtStyle] → [Composition] → [GroundLayer] → [ForegroundObjectsBlock] → [MidgroundBlock] → [BackgroundBlock] → [LightingBlock] → [AtmosphereBlock] → [CharactersBlock] → [ColorPalette] → [OpticsBlock] → [QualityBoosters]
@@ -187,6 +193,7 @@
 {% else %}
 ▸ image_prompt（图片生成专用提示词——描述环境场景和角色）
   最低字数：不少于100字。
+  ⚠️ 严禁出现暴力、血腥、伤亡、色情相关敏感词。
 
   强制结构（所有区块按顺序拼接，不得跳过任何一个）：
     [画风] → [构图] → [地面层] → [前景物件区块] → [中景区块] → [背景区块] → [光线区块] → [大气区块] → [角色区块] → [色调] → [镜头参数] → [画质词]

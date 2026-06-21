@@ -539,10 +539,11 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 					logger.Printf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: summaries_len=%d", novel.ID, len(summariesText))
 					if summariesText != "" {
 						extractPrompt, pErr := renderPrompt("extract_characters", map[string]interface{}{
-							"NovelTitle":     novelForChar.Title,
-							"Genre":          novelForChar.Genre,
-							"Summaries":      summariesText,
-							"PromptLanguage": novelForChar.PromptLanguage,
+							"NovelTitle":       novelForChar.Title,
+							"Genre":            novelForChar.Genre,
+							"Summaries":        summariesText,
+							"PromptLanguage":   novelForChar.PromptLanguage,
+							"GenreVisualHints": genreVisualHints(novelForChar.Genre),
 						})
 						if pErr != nil {
 							logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: render prompt failed: %v", novel.ID, pErr)
@@ -878,10 +879,11 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 	}
 
 	extractCharsPrompt, err := renderPrompt("extract_characters", map[string]interface{}{
-		"NovelTitle":     novel.Title,
-		"Genre":          novel.Genre,
-		"Summaries":      summariesText,
-		"PromptLanguage": novel.PromptLanguage,
+		"NovelTitle":       novel.Title,
+		"Genre":            novel.Genre,
+		"Summaries":        summariesText,
+		"PromptLanguage":   novel.PromptLanguage,
+		"GenreVisualHints": genreVisualHints(novel.Genre),
 	})
 	if err != nil {
 		logger.Errorf("NovelAnalysis[%d]: stepExtractCharacters render prompt failed: %v", novel.ID, err)

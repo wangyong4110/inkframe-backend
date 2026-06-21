@@ -31,7 +31,7 @@ Chapter content:
 4. `type` must be one of: `interior` / `exterior` / `imaginary`
 {% if PromptLanguage == "en" %}
 5. `name` (new anchors only): 2–6 English words, specific and memorable (e.g. "Imperial Throne Hall", not "palace").
-6. `description` (new anchors only): Detailed English visual description for AI image generation, **minimum 150 words**. You MUST cover ALL of these dimensions — missing any dimension will degrade image quality:
+6. `description` (new anchors only): Detailed English visual description for AI image generation, **minimum 150 words**. **CRITICAL: DO NOT mention any people, characters, figures, humans, silhouettes, or body parts — describe only the environment itself.** You MUST cover ALL of these dimensions — missing any dimension will degrade image quality:
    - **Architecture / structure**: spatial scale, layout, ceiling height, key structural elements (pillars, arches, walls, windows, gates)
    - **Materials & textures**: stone, wood, metal, fabric — color and specific surface quality (weathered / polished / cracked / mossy)
    - **Color palette**: dominant colors, accent colors, forbidden colors (e.g. "no neon, no white walls") — this is the single most important dimension for cross-shot consistency
@@ -39,14 +39,14 @@ Chapter content:
    - **Lighting**: source (sunlight / torchlight / moonlight / magic glow), direction, quality (hard / soft / diffused), color temperature in Kelvin
    - **Atmosphere & mood**: emotional feel of the space (oppressive / serene / mysterious / grand / ruined), atmospheric particles (dust / fog / smoke / rain)
    - **Distinctive visual elements**: unique props, decorations, vegetation, water features, symbols that make this scene instantly recognizable
-   - **Scale sense**: spatial scale relative to human figure (intimate / vast / monumental / claustrophobic)
+   - **Scale sense**: spatial scale expressed through architecture or objects — NOT by comparison to human body (e.g. "ceiling soars 15m high", "doorway wide enough for two carts", NOT "humans appear ant-like")
    - **Dynamic elements**: any recurring motion in the scene (flowing water / swaying trees / flickering torches / drifting incense smoke)
    - **Time / weather / season** if relevant to the scene's primary representation
 7. `variant`: ONLY fill this if the scene is a variant of an existing scene (e.g. "night" for a daytime scene's nighttime version). Valid values: `day` / `night` / `dawn` / `dusk` / `winter` / `summer` / `battle` / `ruined`. Leave empty for primary scenes.
 8. `parent_name`: ONLY fill this when `variant` is set. Use the exact name of the parent scene from the existing anchors list. Leave empty for primary scenes.
 {% else %}
 5. `name` (new anchors only): 2–8 Chinese characters, specific and memorable (e.g. 皇宫正殿, not 宫殿).
-6. `description` (new anchors only): Detailed Chinese visual description for AI image generation, **minimum 150 characters**. You MUST cover ALL of these dimensions — missing any dimension will degrade image quality:
+6. `description` (new anchors only): Detailed Chinese visual description for AI image generation, **minimum 150 characters**. **重要：禁止出现任何人物、角色、人影、人体、轮廓等描写，只描述环境本身。** You MUST cover ALL of these dimensions — missing any dimension will degrade image quality:
    - **建筑结构**: 空间规模、格局、层高、主要结构元素（柱、拱、墙、窗、门）
    - **材质与质感**: 石、木、金属、织物的颜色与具体表面质地（风化/抛光/龟裂/苔藓覆盖）
    - **色彩调色板**: 主色调、辅助色、禁用色（如"禁止霓虹、禁止白墙"）——这是跨镜头视觉一致性最关键的维度
@@ -54,7 +54,7 @@ Chapter content:
    - **光线**: 来源（阳光/火炬/月光/魔法光效）、方向、质感（硬朗/柔和/漫射）、色温（开尔文值）
    - **氛围与情绪**: 空间给人的情感感受（压抑/宁静/神秘/宏伟/破败），大气粒子（尘埃/薄雾/烟雾/降雨）
    - **标志性视觉元素**: 使该场景一眼可辨的独特道具、装饰、植被、水景、符号
-   - **空间比例感**: 场景相对于人体的尺度感（亲密/广阔/纪念碑式/幽闭）
+   - **空间比例感**: 通过建筑或物体本身表达尺度，禁止用人体做参照（如"门洞高达五米"，而非"人站在这里显得渺小"）
    - **动态特性**: 场景中的持续运动元素（流水/摆动树木/闪烁火炬/飘动香烟）
    - **时间/天气/季节**（若与场景主要表现相关）
 7. `variant`: 仅当该场景是已有场景的变体时填写（如某白天场景的夜晚版）。可选值：`day` / `night` / `dawn` / `dusk` / `winter` / `summer` / `battle` / `ruined`。主要场景留空。

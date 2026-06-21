@@ -512,14 +512,12 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 	} else {
 		prompt = sceneSuffix
 	}
-	// negative prompt 通过 imageStyle 字段携带（GenerateCharacterThreeView 支持）
-	// 此处额外追加场景专用 negative 词到 prompt 注释段（不同模型处理方式不同，此为兜底）
-	negativeHint := " | negative: person, people, human, man, woman, figure, silhouette, character, " +
+	sceneNegative := "person, people, human, man, woman, boy, girl, figure, silhouette, character, body, face, hands, " +
+		"crowd, group, portrait, anime character, cartoon character, " +
 		"blurry, low quality, watermark, text, floating objects, modern elements"
-	prompt += negativeHint
 
 	sizeOverride := imageAspectRatioToSize(aspectRatio, "master")
-	imageURL, err := s.aiSvc.GenerateCharacterThreeView(ctx, tenantID, providerName, prompt, "", imageStyle, "", sizeOverride)
+	imageURL, err := s.aiSvc.GenerateCharacterThreeView(ctx, tenantID, providerName, prompt, "", imageStyle, sceneNegative, sizeOverride)
 	if err != nil {
 		logger.Errorf("[SceneAnchorService] GenerateRefImage: AI generate failed anchorID=%d: %v", id, err)
 		return nil, fmt.Errorf("generate ref image: %w", err)

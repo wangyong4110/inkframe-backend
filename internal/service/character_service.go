@@ -306,13 +306,14 @@ func (s *CharacterService) generateOneCharacterProfile(
 	shortSummaries string,
 ) (*analysisCharJSON, error) {
 	prompt, err := renderPrompt("generate_character_profile", map[string]interface{}{
-		"NovelTitle":     novelTitle,
-		"Genre":          genre,
-		"CharacterName":  entry.Name,
-		"CharacterRole":  entry.Role,
-		"CharacterBrief": entry.Brief,
-		"Summaries":      shortSummaries,
-		"PromptLanguage": promptLanguage,
+		"NovelTitle":       novelTitle,
+		"Genre":            genre,
+		"CharacterName":    entry.Name,
+		"CharacterRole":    entry.Role,
+		"CharacterBrief":   entry.Brief,
+		"Summaries":        shortSummaries,
+		"PromptLanguage":   promptLanguage,
+		"GenreVisualHints": genreVisualHints(genre),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render generate_character_profile: %w", err)
@@ -1291,12 +1292,13 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 	logger.Printf("[CharacterService] AIExtractMinorChars: novelID=%d existingChars=%d existingNames=%v", novelID, len(existing), existingNames)
 
 	minorCharsPrompt, err := renderPrompt("extract_minor_characters", map[string]interface{}{
-		"NovelTitle":     novelTitle,
-		"Genre":          novelGenre,
-		"ExistingNames":  existingNames,
-		"Content":        content,
-		"PromptLanguage": novelPromptLanguage,
-		"UserPrompt":     userPrompt,
+		"NovelTitle":       novelTitle,
+		"Genre":            novelGenre,
+		"ExistingNames":    existingNames,
+		"Content":          content,
+		"PromptLanguage":   novelPromptLanguage,
+		"UserPrompt":       userPrompt,
+		"GenreVisualHints": genreVisualHints(novelGenre),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render extract_minor_characters: %w", err)
@@ -1739,7 +1741,7 @@ type GeneratedCharacterImage struct {
 func (s *ImageGenerationService) GenerateCharacterImage(req *model.GenerateImageRequest) (*GeneratedCharacterImage, error) {
 	options := &ImageGenerationOptions{
 		Prompt:   fmt.Sprintf("%s, %s, %s style", req.Subject, req.Description, req.Style),
-		Size:     "512x512",
+		Size:     "1024x1024",
 		Steps:    50,
 		CFGScale: 7.5,
 	}
@@ -2369,15 +2371,14 @@ type chapterAppearanceResult struct {
 	Description  string `json:"description"`
 }
 
-// GenerateChapterImages 根据章节内容，用 AI 重写选定角色的视觉描述（visual_prompt + description）。
-// 不依赖图像生成提供商，纯 LLM 更新角色文本档案。
+// GenerateChapterImages 根据章节内容，用 AI 重写选定角色的视觉描述（visual_prompt + description），并生成形象图片。
 // 返回 (succeeded, failed, error)。
 func (s *CharacterService) GenerateChapterImages(
 	ctx context.Context,
 	tenantID, novelID uint,
 	chapter *model.Chapter,
 	characterIDs []uint,
-	_ string, // provider 参数保留，暂不使用
+	provider string,
 	progressFn func(int),
 ) (succeeded, failed int, err error) {
 	all, e := s.characterRepo.ListByNovel(novelID)
@@ -2399,12 +2400,19 @@ func (s *CharacterService) GenerateChapterImages(
 	}
 
 	promptLanguage := "zh"
+	imageStyle := ""
+	var novelTitle string
 	if s.novelRepo != nil {
-		if novel, e2 := s.novelRepo.GetByID(novelID); e2 == nil && novel.PromptLanguage != "" {
-			promptLanguage = novel.PromptLanguage
+		if novel, e2 := s.novelRepo.GetByID(novelID); e2 == nil {
+			if novel.PromptLanguage != "" {
+				promptLanguage = novel.PromptLanguage
+			}
+			imageStyle = novel.ImageStyle
+			novelTitle = novel.Title
 		}
 	}
 
+	imgSvc := NewImageGenerationService(s.aiService)
 	total := len(chars)
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -2447,9 +2455,44 @@ func (s *CharacterService) GenerateChapterImages(
 								charFailed = true
 							}
 						}
-						// 更新默认形象的 VisualPrompt
 						if res.VisualPrompt != "" {
 							s.upsertDefaultLookVisualPrompt(char.ID, char.NovelID, res.VisualPrompt)
+
+							// 生成实际图片：面部特写 + 三视图
+							genCtx := ctx
+							if novelTitle != "" {
+								genCtx = WithImageStorageHint(genCtx, ImageStorageHint{NovelTitle: novelTitle})
+							}
+							appearance := res.VisualPrompt
+							gender := InferGenderTag(appearance, res.Description)
+
+							lookUpdateReq := &model.UpdateCharacterLookRequest{}
+							needUpdate := false
+
+							faceRef := ""
+							if faceImg, faceErr := imgSvc.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, appearance, imageStyle, gender, "", provider); faceErr == nil {
+								lookUpdateReq.FaceCloseup = &faceImg.URL
+								lookUpdateReq.Portrait = &faceImg.URL
+								faceRef = faceImg.URL
+								needUpdate = true
+							} else {
+								logger.Errorf("[CharacterService] GenerateChapterImages face char %d (%s): %v", char.ID, char.Name, faceErr)
+							}
+
+							if threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, appearance, imageStyle, gender, faceRef, provider); threeErr == nil {
+								lookUpdateReq.ThreeViewSheet = &threeImg.URL
+								needUpdate = true
+							} else {
+								logger.Errorf("[CharacterService] GenerateChapterImages three-view char %d (%s): %v", char.ID, char.Name, threeErr)
+							}
+
+							if needUpdate {
+								if defaultLook, e3 := s.GetDefaultLook(char.ID); e3 == nil && defaultLook != nil {
+									if _, saveErr := s.UpdateLook(defaultLook.ID, lookUpdateReq); saveErr != nil {
+										logger.Errorf("[CharacterService] GenerateChapterImages save look %d: %v", defaultLook.ID, saveErr)
+									}
+								}
+							}
 						}
 					}
 				}

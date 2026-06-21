@@ -14,7 +14,7 @@
 2. gender：性别，只能是 male / female / neutral 之一
 3. age：年龄或年龄感，简短字符串，如 "16" / "约25岁" / "少年" / "中年"
 {% if PromptLanguage == "en" %}4. description (English): background story only — origin, key experiences, motivations, and how they became who they are. One coherent paragraph, 150 words max{% else %}4. description（中文）：仅描述背景故事——出身来历、成长经历、关键转折、动机与目标，写成连贯段落，150字以内{% endif %}
-{% if PromptLanguage == "en" %}5. visual_prompt (English): image generation prompt, ~150 words, covering 12 dimensions in order. No art style, quality, or rendering tags. No violent, gory, death-related, or sexually explicit content.
+{% if PromptLanguage == "en" %}5. visual_prompt (English): image generation prompt, ~150 words, covering 12 dimensions in order. No art style, quality, or rendering tags. No violent, gory, death-related, or sexually explicit content.{% if GenreVisualHints %} {{ GenreVisualHints }}{% endif %}
 
    [1] GENDER & BUILD: gender, age range, ethnicity, height, body type, shoulder-to-hip ratio
    [2] FACE: face shape, three-zone proportion, cheekbones, jawline, chin, eye spacing
@@ -29,7 +29,8 @@
    [11] POSTURE: default standing pose, hand position, characteristic tilt
    [12] SIGNATURE ELEMENT: the single most recognizable visual detail, described with specific material/finish/placement{% else %}5. visual_prompt（中文）：图像生成提示词，约150字，按序覆盖12个维度，禁止画风/质量/渲染标签。
    ⚠️ 严禁出现暴力、血腥、伤亡、色情相关敏感词。
-
+{% if GenreVisualHints %}   {{ GenreVisualHints }}
+{% endif %}
    [1] 性别体型：性别、年龄感、种族、身高、体型、肩宽、腰臀比
    [2] 面部结构：脸型、三庭比例、颧骨、下颌线、下巴形态、眼距
    [3] 眼睛：眼型、大小、精确瞳色、默认目光质感

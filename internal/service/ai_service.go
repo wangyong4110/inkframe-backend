@@ -1434,7 +1434,7 @@ func (s *AIService) generateJSONForTenantCtx(ctx context.Context, tenantID, nove
 			}
 			continue
 		}
-		cleaned := extractJSON(result)
+		cleaned := extractJSONAuto(result)
 		var v interface{}
 		if jsonErr := json.Unmarshal([]byte(cleaned), &v); jsonErr == nil {
 			return cleaned, nil

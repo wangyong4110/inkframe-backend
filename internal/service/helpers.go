@@ -218,6 +218,35 @@ func sanitizeStorageName(s string) string {
 	return string(runes)
 }
 
+// extractJSONAuto picks the right extractor based on whether the AI response is an object or
+// array. For objects, it preserves the full structure (no inner-array unwrapping). For arrays
+// it falls through to extractJSON which handles truncated arrays and bare arrays.
+// This is the correct extractor for generateJSONForTenantCtx: storyboard tasks that return
+// {"shots":[...]} used extractJSON which silently discarded the object wrapper; tasks that
+// return multi-key objects like {"new_anchors":[...],"appearing_anchors":[...]} need the
+// full object to survive.
+func extractJSONAuto(content string) string {
+	stripped := strings.TrimSpace(content)
+	if idx := strings.Index(stripped, "```json"); idx != -1 {
+		stripped = stripped[idx+7:]
+		if end := strings.Index(stripped, "```"); end != -1 {
+			stripped = stripped[:end]
+		}
+	} else if idx := strings.Index(stripped, "```"); idx != -1 {
+		stripped = stripped[idx+3:]
+		if end := strings.Index(stripped, "```"); end != -1 {
+			stripped = stripped[:end]
+		}
+	}
+	stripped = strings.TrimSpace(stripped)
+	objIdx := strings.Index(stripped, "{")
+	arrIdx := strings.Index(stripped, "[")
+	if objIdx != -1 && (arrIdx == -1 || objIdx < arrIdx) {
+		return extractJSONObject(content)
+	}
+	return extractJSON(content)
+}
+
 // extractJSONObject extracts the first top-level JSON object {...} from an AI response,
 // without unwrapping any inner arrays. Use this when the expected result is an object,
 // not an array (contrast with extractJSON which prefers arrays for storyboard use).
