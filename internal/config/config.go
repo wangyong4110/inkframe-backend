@@ -125,6 +125,10 @@ type ServerConfig struct {
 	// 留空时默认仅信任本地回环地址 ["127.0.0.1", "::1"]，防止客户端伪造 X-Forwarded-For 绕过限速。
 	// 生产环境部署于 Nginx/LB 之后时，应填入代理服务器 IP，如 ["10.0.0.1"]。
 	TrustedProxies []string `mapstructure:"trusted_proxies"`
+	// PublicURL 后端对外可访问的根 URL，如 "http://192.168.1.10:8080" 或 "https://api.example.com"。
+	// 用于将 /api/v1/media/* 相对路径拼成完整 URL 后传给第三方 API（如即梦视频）。
+	// 留空时自动回退到 http://127.0.0.1:<port>（仅适合本机测试）。
+	PublicURL string `mapstructure:"public_url"`
 }
 
 // DatabaseConfig 数据库配置

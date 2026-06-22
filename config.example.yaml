@@ -20,6 +20,9 @@ server:
   # allowed_origins:
   #   - "http://localhost:3000"
   #   - "https://yourdomain.com"
+  # 后端对外可访问的根 URL。用于将 /api/v1/media/* 拼成完整 URL 后传给第三方 API（如即梦视频）。
+  # 留空时自动使用 http://127.0.0.1:<port>（仅适合本机回环测试）。
+  # public_url: "http://192.168.1.10:8080"
 
 # 数据库配置（必填）
 database:

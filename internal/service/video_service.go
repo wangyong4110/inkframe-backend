@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -56,6 +57,7 @@ type VideoService struct {
 	stopCh           chan struct{} // closed by Shutdown() to stop background goroutines
 	activePoll            sync.Map     // videoID → struct{} (prevents duplicate PollAndStitchVideo goroutines)
 	generatingStoryboard  sync.Map     // videoID → context.CancelFunc (cancels in-progress GenerateStoryboard)
+	backendBaseURL        string       // e.g. "http://192.168.1.10:8080"; used to resolve relative /api/v1/media/* URLs
 }
 
 // GetNovelByID 通过 novelRepo 加载小说（供 handler 传递给 CapCutService 等下游服务）
@@ -241,6 +243,41 @@ func (s *VideoService) WithSFXService(sfx *SFXService) *VideoService {
 func (s *VideoService) WithStorage(svc storage.Service) *VideoService {
 	s.storageSvc = svc
 	return s
+}
+
+// WithBackendBaseURL 设置后端对外可访问的根 URL（如 "http://192.168.1.10:8080"），
+// 用于将 /api/v1/media/* 相对路径解析为第三方 API 可访问的完整 URL。
+func (s *VideoService) WithBackendBaseURL(baseURL string) *VideoService {
+	s.backendBaseURL = strings.TrimRight(baseURL, "/")
+	return s
+}
+
+// resolveAbsURL 将相对路径（/api/v1/media/...）转换为第三方 API 可访问的绝对 URL。
+// 优先级：
+//  1. 已是 http(s):// → 原样返回
+//  2. storageSvc 已配置 → 从 DB/本地存储读出图片数据，上传 OSS 拿到公网 CDN URL
+//  3. 回退：backendBaseURL + 相对路径
+//  4. 以上均不满足 → 原样返回（让调用方决定是否报错）
+func (s *VideoService) resolveAbsURL(u string) string {
+	if u == "" || strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
+		return u
+	}
+	// 尝试通过 storageSvc 读取并重新上传到 OSS
+	if s.storageSvc != nil && strings.HasPrefix(u, "/api/v1/media/") {
+		data, err := s.storageSvc.Get(context.Background(), u)
+		if err == nil && len(data) > 0 {
+			key := fmt.Sprintf("images/shot-ref-%s.jpg", uuid.New().String())
+			ossURL, uploadErr := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(data), int64(len(data)), "image/jpeg")
+			if uploadErr == nil && (strings.HasPrefix(ossURL, "http://") || strings.HasPrefix(ossURL, "https://")) {
+				return ossURL
+			}
+		}
+	}
+	// 回退：拼接后端公网 URL
+	if s.backendBaseURL != "" {
+		return s.backendBaseURL + u
+	}
+	return u
 }
 
 // CreateVideoFromChapter 从章节创建视频

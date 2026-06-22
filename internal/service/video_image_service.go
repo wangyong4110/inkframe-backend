@@ -1164,13 +1164,20 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		}
 	}
 
+	// 外部 API 不能访问相对路径，将 /api/v1/media/* 补全为绝对 URL
+	absRef := s.resolveAbsURL(referenceImage)
+	absExtras := make([]string, len(extraRefImages))
+	for i, u := range extraRefImages {
+		absExtras[i] = s.resolveAbsURL(u)
+	}
+
 	req := &ai.VideoGenerateRequest{
 		Prompt:         videoPromptFinal,
 		NegativePrompt: negativePrompt,
 		Duration:       shotDuration,
 		AspectRatio:    videoAspectRatio,
-		ImageURL:       referenceImage, // 主参考图（生成的场景图），image-to-video；空时退化为 text-to-video
-		ImageURLs:      extraRefImages, // 额外参考图（Seedance 多图支持）
+		ImageURL:       absRef,     // 主参考图（生成的场景图），image-to-video；空时退化为 text-to-video
+		ImageURLs:      absExtras,  // 额外参考图（Seedance 多图支持）
 		CFGScale:       klingCFG,
 		Mode:           klingMode,
 		Model:          klingModelOverride,
