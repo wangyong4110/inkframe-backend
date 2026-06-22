@@ -662,20 +662,21 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// DreamO 注意：selectImageModel 用 firstRef 判断是否启用 DreamO。
 	//   有角色时 firstRef 是角色三视图 → 正确触发 DreamO（角色特征保持）；
 	//   无角色时 firstRef 是场景图 → 正确触发 Text2ImgV3（纯文生图）。
-	allRefImages := make([]string, 0, len(characterPortraits)+1)
-	allRefImages = append(allRefImages, characterPortraits...)
+	cappedPortraits := characterPortraits
+	allRefImages := make([]string, 0, len(cappedPortraits)+1)
+	allRefImages = append(allRefImages, cappedPortraits...)
 	if sceneRefImage != "" {
 		allRefImages = append(allRefImages, sceneRefImage)
 	}
 	logger.Printf("generateShotReferenceImage: shot %d allRefImages=%d (charPortraits=%d sceneRef=%v)",
-		shot.ShotNo, len(allRefImages), len(characterPortraits), sceneRefImage != "")
+		shot.ShotNo, len(allRefImages), len(cappedPortraits), sceneRefImage != "")
 
 	ctx := context.Background()
 
 	// 获取视频的 ArtStyle、TenantID、质量档位、宽高比、角色一致性权重和色彩调色
 	artStyle := ""
 	var tenantID uint
-	charConsistencyWeight := 0.75  // 默认中等一致性：DreamO scale≈7.75，场景prompt与角色参考图均衡影响
+	charConsistencyWeight := 0.85  // 较高一致性：DreamO scale≈8.65，优先保持角色面部特征清晰
 	qualityTier := "production"   // 默认质量档位（preview=768px 对视频参考帧质量不够）
 	var imageAspectRatio, colorGrade string
 	if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil {
@@ -737,6 +738,13 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	if !shotHasAnyCharacter && (shot.NegativePrompt == "" || !strings.Contains(shot.NegativePrompt, "person")) {
 		imgNegBase = noPersonNeg + ", " + imgNegBase
 	}
+	// 有角色时追加面部模糊专项负向词
+	faceNeg := "blurry face, out of focus face, soft focus face, unfocused face, " +
+		"pixelated face, low res face, motion blur on face, smeared face, smudged face, " +
+		"faceless, featureless face, undefined face, indistinct face"
+	if shotHasAnyCharacter {
+		imgNegBase = imgNegBase + ", " + faceNeg
+	}
 	negPrompt := imgNegBase
 	if shot.NegativePrompt != "" {
 		negPrompt = imgNegBase + ", " + shot.NegativePrompt
@@ -795,9 +803,14 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		promptText += ", " + resolveStyleQualityTokens(artStyle)
 	}
 
+	// 有角色时追加面部锐化词，解决 DreamO 多参考图下面部模糊问题
+	if len(cappedPortraits) > 0 {
+		promptText += ", sharp face, detailed face, crisp facial features, high facial detail, perfect face"
+	}
+
 	// DreamO 模式（有角色参考图）：IP-Adapter 已保证角色外貌，过长的 prompt 会分散注意力。
 	// 截断至 600 字符，优先保留前段（场景/构图/动作），最多保留到最近一个逗号边界。
-	if len(characterPortraits) > 0 && len(promptText) > 600 {
+	if len(cappedPortraits) > 0 && len(promptText) > 600 {
 		truncated := promptText[:600]
 		if idx := strings.LastIndex(truncated, ","); idx > 300 {
 			truncated = truncated[:idx]

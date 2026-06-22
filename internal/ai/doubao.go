@@ -300,6 +300,18 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 	if req.Seed != 0 {
 		apiReq["seed"] = req.Seed
 	}
+	// guidance_scale（提示词遵从强度）：Seedream 4.0+ 支持，默认约 3.5，建议 4.5-6.5。
+	// 较高的 guidance_scale 使模型更严格遵从 prompt（包括面部锐化词），有助于改善面部模糊问题。
+	// 内部 CFGScale 范围 1-10（由 1.0+weight*9.0 计算），重映射为 Seedream 的 3.0-7.0 区间：
+	//   guidance_scale = 3.0 + (CFGScale-1.0)/9.0 * 4.0
+	// CFGScale=0（未设置）时默认使用 5.5（适合角色参考图场景，强调面部细节）。
+	if req.CFGScale > 0 {
+		gs := 3.0 + (math.Min(req.CFGScale, 10.0)-1.0)/9.0*4.0
+		apiReq["guidance_scale"] = gs
+	} else if len(req.ReferenceImages) > 0 || req.ReferenceImage != "" {
+		// 有参考图时默认 5.5，增强面部特征保持
+		apiReq["guidance_scale"] = 5.5
+	}
 	// 参考图：Seedream 4.0+ 官方 API 使用 "image" 字段，支持 URL 或 Base64 data URI。
 	// - URL：直接传入 https:// 地址
 	// - Base64：必须带 data URI 前缀，格式 "data:image/<格式>;base64,<数据>"
