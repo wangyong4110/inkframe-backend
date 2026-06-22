@@ -393,7 +393,11 @@ func (h *VideoHandler) ImportShotSFXItem(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create sfx item")
 		return
 	}
-	respondCreated(c, item)
+	proxyURL := ""
+	if item.URL != "" {
+		proxyURL = fmt.Sprintf("/api/v1/sfx-items/%d/audio", item.ID)
+	}
+	respondCreated(c, sfxItemDTO{ShotSFXItem: item, AudioURL: proxyURL})
 }
 
 // sfxItemDTO wraps ShotSFXItem and adds a computed audio_url field for browser playback.

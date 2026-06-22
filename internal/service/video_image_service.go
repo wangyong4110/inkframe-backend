@@ -588,18 +588,19 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		promptText = shot.Description
 	}
 
-	// 角色外观 token 前置注入：
-	// - Text2ImgV3（无参考图）：注入 VisualPrompt 文字锚点，约束角色外貌一致性。
-	// - DreamO（有参考图）：外貌已由参考图的 IP-Adapter 保证，无需文字描述；
-	//   注入长描述反而稀释场景/动作信息，导致生成图偏离 image_prompt 的场景设定。
-	if len(characterVisualPrompts) > 0 && len(characterPortraits) == 0 {
+	// 角色外观 token 前置注入（始终注入）：
+	// - DreamO（有参考图）：IP-Adapter 负责外貌精准还原，文字描述提供存在性约束；
+	//   后续 600 字截断确保文字不过度稀释场景/动作信息。
+	// - Seedream/其他非 IP-Adapter 提供商（有参考图）：reference 仅作风格提示，
+	//   必须依赖文字描述让模型知晓角色外貌，否则画面中不会出现角色。
+	// - 无参考图（Text2ImgV3）：文字锚点是约束外貌的唯一手段。
+	if len(characterVisualPrompts) > 0 {
 		promptText = strings.Join(characterVisualPrompts, ", ") + ", " + promptText
 	}
 
-	// DreamO 路径（有参考图）：
-	// 1. 注入角色名 — 让模型知道画面中应有该角色出现（IP-Adapter 负责外貌，prompt 负责存在性）；
-	// 2. 注入动作/姿态 — 指导角色摆姿势，避免外貌正确但动作僵硬。
-	// 外貌描述不再注入（由参考图保证），避免与 IP-Adapter 产生冲突稀释场景信息。
+	// 有参考图路径（DreamO / Seedream）：
+	// 1. 注入角色名 — 让模型知道画面中应有该角色出现；
+	// 2. 注入动作/姿态 — 指导角色摆姿势，避免动作僵硬。
 	if len(characterPortraits) > 0 {
 		var presenceTokens []string // 人物存在性 + 动作/表情
 		if shot.Characters != "" {
