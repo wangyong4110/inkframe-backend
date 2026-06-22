@@ -83,6 +83,13 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 		} else {
 			logger.Printf("PollShotStatus: shot %d 视频下载完成 path=%s", shot.ShotNo, localPath)
 			shot.ClipPath = "file://" + localPath
+			// 上传到 OSS 持久化，用 OSS URL 替换临时本地路径
+			if ossURL := s.uploadClipToStorage(context.Background(), shot, localPath); ossURL != "" {
+				logger.Printf("PollShotStatus: shot %d 上传 OSS 成功 url=%s", shot.ShotNo, ossURL)
+				shot.ClipPath = ossURL
+				shot.VideoURL = ossURL
+				os.Remove(localPath) //nolint:errcheck
+			}
 		}
 		shot.Status = "completed"
 		shot.Progress = 100
