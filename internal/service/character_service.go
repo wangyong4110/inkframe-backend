@@ -2059,7 +2059,7 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	if aiRef != "" {
 		refs = []string{aiRef}
 	}
-	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, "1600x720")
+	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, "1600x720", 0)
 	if err != nil {
 		return nil, err
 	}

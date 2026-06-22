@@ -236,6 +236,7 @@ type extractedAnchor struct {
 	Name        string `json:"name"`
 	Type        string `json:"type"`
 	Description string `json:"description"`
+	PromptLock  string `json:"prompt_lock"`  // 视觉锁定词，逗号分隔，注入每个分镜 prompt
 	Variant     string `json:"variant"`      // day/night/winter/battle 等变体标签
 	ParentName  string `json:"parent_name"`  // 父级锚点名称（变体时填写，用于解析 ParentAnchorID）
 }
@@ -394,6 +395,7 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 			Name:        e.Name,
 			Type:        anchorType,
 			Description: e.Description,
+			PromptLock:  e.PromptLock,
 			Variant:     e.Variant,
 		}
 		if e.ParentName != "" {
@@ -657,7 +659,7 @@ func (s *SceneAnchorService) EditRefImageWithInstruction(ctx context.Context, te
 	imageURL, err := s.aiSvc.GenerateCharacterThreeViewMulti(
 		ctx, tenantID, "", instruction,
 		[]string{anchor.RefImageURL},
-		imageStyle, "", "", 0.7,
+		imageStyle, "", "", 0, 0.7,
 	)
 	if err != nil {
 		logger.Errorf("[SceneAnchorService] EditRefImageWithInstruction: AI generate failed anchorID=%d: %v", id, err)

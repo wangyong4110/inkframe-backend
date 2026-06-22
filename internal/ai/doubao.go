@@ -297,6 +297,9 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 	if req.NegativePrompt != "" {
 		apiReq["negative_prompt"] = req.NegativePrompt
 	}
+	if req.Seed != 0 {
+		apiReq["seed"] = req.Seed
+	}
 	// 参考图：Seedream 4.0+ 官方 API 使用 "image" 字段，支持 URL 或 Base64 data URI。
 	// - URL：直接传入 https:// 地址
 	// - Base64：必须带 data URI 前缀，格式 "data:image/<格式>;base64,<数据>"

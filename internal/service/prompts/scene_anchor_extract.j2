@@ -44,8 +44,9 @@ Chapter content:
    - **Scale sense**: spatial scale expressed through architecture or objects — NOT by comparison to human body (e.g. "ceiling soars 15m high", "doorway wide enough for two carts", NOT "humans appear ant-like")
    - **Dynamic elements**: any recurring motion in the scene (flowing water / swaying trees / flickering torches / drifting incense smoke)
    - **Time / weather / season** if relevant to the scene's primary representation
-7. `variant`: ONLY fill this if the scene is a variant of an existing scene (e.g. "night" for a daytime scene's nighttime version). Valid values: `day` / `night` / `dawn` / `dusk` / `winter` / `summer` / `battle` / `ruined`. Leave empty for primary scenes.
-8. `parent_name`: ONLY fill this when `variant` is set. Use the exact name of the parent scene from the existing anchors list. Leave empty for primary scenes.
+7. `prompt_lock` (new anchors only): 6–10 compact English visual-lock tokens (comma-separated, no spaces after commas) that will be appended verbatim to EVERY shot prompt in this scene to enforce cross-shot consistency. Focus on the most distinctive and stable visual properties: color palette keywords, lighting condition, atmosphere, and material/texture tags. Examples: `"warm amber lighting,golden hour,muted earth tones,film grain,shallow depth of field,cinematic"` or `"cold blue moonlight,misty fog,dark stone,high contrast,dramatic shadows"`. Do NOT include character names, actions, or story elements.
+8. `variant`: ONLY fill this if the scene is a variant of an existing scene (e.g. "night" for a daytime scene's nighttime version). Valid values: `day` / `night` / `dawn` / `dusk` / `winter` / `summer` / `battle` / `ruined`. Leave empty for primary scenes.
+9. `parent_name`: ONLY fill this when `variant` is set. Use the exact name of the parent scene from the existing anchors list. Leave empty for primary scenes.
 {% else %}
 5. `name` (new anchors only): 2–8 Chinese characters, specific and memorable (e.g. 皇宫正殿, not 宫殿).
 6. `description` (new anchors only): Detailed Chinese visual description for AI image generation, **minimum 150 characters**. **重要：禁止出现任何人物、角色、人影、人体、轮廓等描写，只描述环境本身。** You MUST cover ALL of these dimensions — missing any dimension will degrade image quality:
@@ -59,8 +60,9 @@ Chapter content:
    - **空间比例感**: 通过建筑或物体本身表达尺度，禁止用人体做参照（如"门洞高达五米"，而非"人站在这里显得渺小"）
    - **动态特性**: 场景中的持续运动元素（流水/摆动树木/闪烁火炬/飘动香烟）
    - **时间/天气/季节**（若与场景主要表现相关）
-7. `variant`: 仅当该场景是已有场景的变体时填写（如某白天场景的夜晚版）。可选值：`day` / `night` / `dawn` / `dusk` / `winter` / `summer` / `battle` / `ruined`。主要场景留空。
-8. `parent_name`: 仅当 `variant` 有值时填写。使用已注册锚点列表中父级场景的精确名称。主要场景留空。
+7. `prompt_lock` (new anchors only): 6–10 个紧凑的英文视觉锁定词（逗号分隔，逗号后无空格），将逐字附加到该场景每个分镜的 prompt 末尾，强制跨镜头视觉一致性。聚焦最独特且稳定的视觉属性：色彩关键词、光照条件、氛围、材质/质感标签。示例：`"warm amber lighting,golden hour,muted earth tones,film grain,shallow depth of field,cinematic"` 或 `"cold blue moonlight,misty fog,dark stone,high contrast,dramatic shadows"`。禁止包含角色名、动作或剧情元素。
+8. `variant`: 仅当该场景是已有场景的变体时填写（如某白天场景的夜晚版）。可选值：`day` / `night` / `dawn` / `dusk` / `winter` / `summer` / `battle` / `ruined`。主要场景留空。
+9. `parent_name`: 仅当 `variant` 有值时填写。使用已注册锚点列表中父级场景的精确名称。主要场景留空。
 {% endif %}
 9. Output ONLY a valid JSON object — no markdown fences, no explanation text.
 
@@ -72,7 +74,8 @@ Chapter content:
     {
       "name": "Imperial Throne Hall",
       "type": "interior",
-      "description": "An immense imperial throne hall of overwhelming scale, roughly 60 meters long and 30 meters wide, with a 15-meter coffered ceiling supported by twelve massive vermillion-lacquered pillars carved with coiling golden dragons. The polished jade-green marble floor reflects the blaze of hundreds of white candles in iron chandeliers above. At the far end, a tiered black granite throne dais rises seven steps, flanked by two incense burners trailing white smoke. Walls are hung with heavy crimson silk banners embroidered with golden phoenixes. Daylight filters through narrow lattice windows high on the north wall, casting long diagonal bars of cold morning light (5500K) across the smoke-filled air. Color palette: dominant deep crimson and gold, jade-green floor, black granite accents; no bright white, no pastel tones. Depth layers: foreground — polished marble floor reflecting candle light; mid-ground — six pairs of vermillion pillars flanking a wide central aisle; background — the seven-step throne dais receding into semi-darkness. Scale sense: monumental, humans appear ant-like. Dynamic elements: white incense smoke drifting upward from two flanking burners, candle flames in iron chandeliers flickering at 2Hz. Atmosphere: absolute imperial authority and latent menace, smoke-filled air with suspended dust motes in window light shafts.",
+      "description": "An immense imperial throne hall of overwhelming scale, roughly 60 meters long and 30 meters wide, with a 15-meter coffered ceiling supported by twelve massive vermillion-lacquered pillars carved with coiling golden dragons. The polished jade-green marble floor reflects the blaze of hundreds of white candles in iron chandeliers above. At the far end, a tiered black granite throne dais rises seven steps, flanked by two incense burners trailing white smoke. Walls are hung with heavy crimson silk banners embroidered with golden phoenixes. Daylight filters through narrow lattice windows high on the north wall, casting long diagonal bars of cold morning light (5500K) across the smoke-filled air. Color palette: dominant deep crimson and gold, jade-green floor, black granite accents; no bright white, no pastel tones. Depth layers: foreground — polished marble floor reflecting candle light; mid-ground — six pairs of vermillion pillars flanking a wide central aisle; background — the seven-step throne dais receding into semi-darkness. Scale sense: monumental. Dynamic elements: white incense smoke drifting upward, candle flames flickering. Atmosphere: absolute imperial authority and latent menace, smoke-filled air with suspended dust motes.",
+      "prompt_lock": "deep crimson and gold palette,jade-green marble floor,cold morning light 5500K,incense smoke,iron chandeliers,high contrast,cinematic,grand interior",
       "variant": "",
       "parent_name": ""
     }
@@ -85,7 +88,8 @@ Chapter content:
     {
       "name": "皇宫正殿",
       "type": "interior",
-      "description": "气势磅礴的皇家朝堂，长约六十米、宽三十米，十五米高的藻井由十二根朱红雕龙巨柱支撑。翡翠色大理石地面映出铁制枝形吊灯上数百根白烛的光芒。殿尽头七级黑花岗岩台阶上矗立御座，两侧各置一口白烟袅袅的熏炉。大殿四壁悬挂绣金凤的猩红绸缎龙旗。北墙高处狭窄花格窗透入清晨斜阳（5500K冷白），穿过弥漫的香烟投下长长斜向光条。色彩调色板：主色调深朱红与金色、翡翠色地面、黑花岗岩点缀，禁止亮白色和粉色调。纵深层次：前景——抛光大理石地面反射烛光；中景——六对朱红巨柱夹持宽阔中央通道；背景——七级台阶御座消隐于半明半暗中。空间比例：纪念碑式宏大，人体在此显得如蚂蚁一般微小。动态特性：熏炉白烟袅袅向上漂移，铁质枝形灯架上烛焰以约2Hz频率轻微摇曳。氛围：至高皇权与暗藏杀机，烟雾弥漫中窗口光柱内有悬浮尘埃粒子。",
+      "description": "气势磅礴的皇家朝堂，长约六十米、宽三十米，十五米高的藻井由十二根朱红雕龙巨柱支撑。翡翠色大理石地面映出铁制枝形吊灯上数百根白烛的光芒。殿尽头七级黑花岗岩台阶上矗立御座，两侧各置一口白烟袅袅的熏炉。大殿四壁悬挂绣金凤的猩红绸缎龙旗。北墙高处狭窄花格窗透入清晨斜阳（5500K冷白），穿过弥漫的香烟投下长长斜向光条。色彩调色板：主色调深朱红与金色、翡翠色地面、黑花岗岩点缀，禁止亮白色和粉色调。纵深层次：前景——抛光大理石地面反射烛光；中景——六对朱红巨柱夹持宽阔中央通道；背景——七级台阶御座消隐于半明半暗中。动态特性：熏炉白烟袅袅向上漂移，铁质枝形灯架上烛焰轻微摇曳。氛围：至高皇权与暗藏杀机，烟雾弥漫中窗口光柱内有悬浮尘埃粒子。",
+      "prompt_lock": "deep crimson and gold palette,jade-green marble floor,cold morning light 5500K,incense smoke,iron chandeliers,high contrast,cinematic,grand interior",
       "variant": "",
       "parent_name": ""
     }

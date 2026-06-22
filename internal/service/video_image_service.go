@@ -653,18 +653,22 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// 参考图列表：仅包含角色三视图，不加入场景锚点图片。
+	// 参考图列表：角色三视图在前，场景锚点图排最后。
 	//
-	// 关键约束：selectImageModel 依赖 firstRef（第一张图）决定是否启用 DreamO（角色特征保持）。
-	// 若无角色参考图但场景锚点图非空，firstRef 将是场景背景图 → DreamO 错误地将背景作为"角色外观"
-	// 进行特征保持，导致生成图角色面目全非。
+	// 有角色时：[char1, char2, ..., sceneRef]
+	//   角色三视图排在前（Seedream 对靠前 token 注意力更高），场景图排最后作为视觉风格锚定。
+	//   场景图与角色图竞争时角色优先，保证角色出现；场景图锁定色调/光照，保证跨镜一致性。
+	// 无角色时：[sceneRef]
+	//   仅场景图，全力锁定视觉风格。
 	//
-	// Seedream（doubao）行为：将所有参考图视为"需要出现的主体"。若把大尺寸场景图（prairie cabin）
-	// 混入角色三视图，模型优先渲染场景主体，角色会被挤出画面。
-	// 场景锚点的视觉一致性已通过 promptText 中的文字描述片段（BuildPromptFragment）保障；
-	// 场景参考图只对 DreamO 的 IP-Adapter 有补充意义，对 Seedream 是噪声。
-	allRefImages := make([]string, 0, len(characterPortraits))
+	// DreamO 注意：selectImageModel 用 firstRef 判断是否启用 DreamO。
+	//   有角色时 firstRef 是角色三视图 → 正确触发 DreamO（角色特征保持）；
+	//   无角色时 firstRef 是场景图 → 正确触发 Text2ImgV3（纯文生图）。
+	allRefImages := make([]string, 0, len(characterPortraits)+1)
 	allRefImages = append(allRefImages, characterPortraits...)
+	if sceneRefImage != "" {
+		allRefImages = append(allRefImages, sceneRefImage)
+	}
 	logger.Printf("generateShotReferenceImage: shot %d allRefImages=%d (charPortraits=%d sceneRef=%v)",
 		shot.ShotNo, len(allRefImages), len(characterPortraits), sceneRefImage != "")
 
@@ -819,7 +823,11 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		// Text2ImgV3 scale 参数（默认2.5，范围1-10），用质量 CFG 映射到合理范围（draft:6→0.56, production:7.5→0.72, master:8→0.78）
 		imageConsistencyWeight = (qualityCFG - 1.0) / 9.0
 	}
-	imageURL, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, allRefImages, artStyle, negPrompt, imageSize, imageConsistencyWeight)
+	var sceneSeed int64
+	if shot.SceneAnchorID != nil {
+		sceneSeed = int64(*shot.SceneAnchorID) * 31337
+	}
+	imageURL, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, allRefImages, artStyle, negPrompt, imageSize, sceneSeed, imageConsistencyWeight)
 	if err != nil {
 		logger.Errorf("generateShotReferenceImage: image gen failed for shot %d: %v", shot.ShotNo, err)
 		return "", err

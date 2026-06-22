@@ -1869,7 +1869,7 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 // referenceImages：多张参考图 URL，直接传给支持多图的 API（如 DreamO image_urls[]），无需调用方拼接合图。
 // size：图片尺寸（"WxH" 格式，如 "1024x576"），覆盖提供者默认尺寸；为空时使用提供者默认值。
 // 若 referenceImages 为空，退化为纯文本生成。
-func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantID uint, providerName, prompt string, referenceImages []string, style, negativePrompt, size string, consistencyWeight ...float64) (string, error) {
+func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantID uint, providerName, prompt string, referenceImages []string, style, negativePrompt, size string, seed int64, consistencyWeight ...float64) (string, error) {
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
 	}
@@ -1947,6 +1947,7 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 			Prompt:            prompt,
 			NegativePrompt:    negativePrompt,
 			Size:              sz,
+			Seed:              seed,
 			ReferenceImage:    refFirst,
 			ReferenceImages:   refs,
 			CFGScale:          cfgScale,
