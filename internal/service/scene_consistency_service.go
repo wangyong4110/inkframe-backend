@@ -52,6 +52,7 @@ func (s *SceneConsistencyService) ScoreScene(
 	anchor *model.SceneAnchor,
 	generatedImageURL string,
 	attempt int,
+	tenantID uint,
 ) (*SceneConsistencyReport, error) {
 	// 无参考图时返回中性分并标记需人工审核（不给满分以免掩盖问题）
 	if anchor.RefImageURL == "" {
@@ -81,7 +82,7 @@ func (s *SceneConsistencyService) ScoreScene(
 		return nil, fmt.Errorf("render scene_consistency_score: %w", err)
 	}
 
-	raw, err := s.aiSvc.Generate(shot.VideoID, "scene_consistency", prompt)
+	raw, err := s.aiSvc.GenerateWithProvider(tenantID, 0, "scene_consistency", prompt, "")
 	if err != nil {
 		return nil, fmt.Errorf("LLM consistency score: %w", err)
 	}

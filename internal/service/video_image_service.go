@@ -1475,9 +1475,13 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 	// Async scene consistency scoring: compare generated image vs scene anchor reference image.
 	if s.sceneConsistencySvc != nil && s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
 		go func(sh *model.StoryboardShot, imgURL string) {
+			tenantID := uint(0)
+			if v, err := s.videoRepo.GetByID(sh.VideoID); err == nil {
+				tenantID = s.videoTenantID(v)
+			}
 			anchor, err := s.sceneAnchorSvc.Get(*sh.SceneAnchorID)
 			if err == nil {
-				if report, err := s.sceneConsistencySvc.ScoreScene(sh, anchor, imgURL, 1); err != nil {
+				if report, err := s.sceneConsistencySvc.ScoreScene(sh, anchor, imgURL, 1, tenantID); err != nil {
 					logger.Errorf("[VideoService] ScoreScene shot %d: %v", sh.ShotNo, err)
 				} else {
 					logger.Printf("[VideoService] ScoreScene shot %d: overall=%.2f passed=%v", sh.ShotNo, report.OverallScore, report.Passed)
