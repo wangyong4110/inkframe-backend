@@ -698,8 +698,8 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				if vc.CharConsistencyWeight > 0 {
 					charConsistencyWeight = vc.CharConsistencyWeight
 				}
-				// 降级：视频未设置画面风格/宽高比时使用项目设置
-				if artStyle == "" && novel.ImageStyle != "" {
+				// 项目设置的画面风格优先于视频级别的默认值
+				if novel.ImageStyle != "" {
 					artStyle = novel.ImageStyle
 				}
 				if imageAspectRatio == "" && vc.VideoAspectRatio != "" {
@@ -893,7 +893,10 @@ func (s *VideoService) RefineShotImage(shotID uint, suggestion string) (string, 
 	return newURL, nil
 }
 
-// resolveArtStyle 返回视频的画面风格：优先用 video.ArtStyle，降级到 novel.ImageStyle
+// resolveArtStyle 返回视频的画面风格。
+// 优先级：novel.ImageStyle（项目设置） > video.ArtStyle（视频级覆盖）。
+// novel.ImageStyle 代表用户在"项目设置-画面风格"中的明确意图，应始终优先；
+// video.ArtStyle 仅在 novel 未配置时作为降级。
 func (s *VideoService) resolveArtStyle(videoID uint) string {
 	if s.videoRepo == nil {
 		return ""
@@ -902,15 +905,14 @@ func (s *VideoService) resolveArtStyle(videoID uint) string {
 	if err != nil {
 		return ""
 	}
-	if video.ArtStyle != "" {
-		return video.ArtStyle
-	}
+	// 优先使用小说级画面风格（项目设置优先）
 	if video.NovelID > 0 && s.novelRepo != nil {
-		if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil {
+		if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil && novel.ImageStyle != "" {
 			return novel.ImageStyle
 		}
 	}
-	return ""
+	// 小说未设置时降级使用视频自带风格
+	return video.ArtStyle
 }
 
 // extractLastFrame 使用 FFmpeg 提取视频最后一帧，返回本地 jpeg 路径
