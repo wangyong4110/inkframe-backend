@@ -425,7 +425,7 @@ func refCompositeDrawScaled(dst draw.Image, dstRect image.Rectangle, src image.I
 }
 
 // getCharActiveLook 返回角色在指定章节的激活形象。
-// 优先按章节范围匹配；无匹配时回退到角色设置的默认形象（DefaultLookID）。
+// 优先按章节范围匹配；无匹配时回退到默认形象（DefaultLookID）；最终兜底取第一个有图的形象。
 func (s *VideoService) getCharActiveLook(char *model.Character, chapterNo int) *model.CharacterLook {
 	if s.lookRepo == nil {
 		return nil
@@ -439,6 +439,15 @@ func (s *VideoService) getCharActiveLook(char *model.Character, chapterNo int) *
 		if defaultLook, err := s.lookRepo.GetByID(char.DefaultLookID); err == nil && defaultLook != nil {
 			logger.Printf("[getCharActiveLook] charID=%d chapterNo=%d: no range match, using DefaultLookID=%d", char.ID, chapterNo, char.DefaultLookID)
 			return defaultLook
+		}
+	}
+	// 最终兜底：角色有形象但 DefaultLookID 未设置（如老数据），取第一个含三视图/面部图的形象
+	if looks, err := s.lookRepo.ListByCharacter(char.ID); err == nil {
+		for _, l := range looks {
+			if l.ThreeViewSheet != "" || l.FaceCloseup != "" || l.Portrait != "" {
+				logger.Printf("[getCharActiveLook] charID=%d chapterNo=%d: fallback to first look with images id=%d", char.ID, chapterNo, l.ID)
+				return l
+			}
 		}
 	}
 	return nil
@@ -484,7 +493,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				charNamesForPrompt = append(charNamesForPrompt, char.Name)
 				// 从形象管理获取当前章节的激活形象（FaceCloseup/ThreeViewSheet/VisualPrompt）
 				activeLook := s.getCharActiveLook(char, chapterNo)
-				faceRef := char.Portrait // 兜底：角色头像
+				var faceRef string
 				var bodyRef, vprompt string
 				if activeLook != nil {
 					if activeLook.FaceCloseup != "" {
@@ -607,7 +616,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 						if len(characterPortraits) >= maxCharRefs {
 							break
 						}
-						faceRef := ir.char.Portrait // 兜底
+						var faceRef string
 						if ir.look != nil {
 							if ir.look.FaceCloseup != "" {
 								faceRef = ir.look.FaceCloseup
@@ -624,7 +633,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 						if len(characterPortraits) >= maxCharRefs {
 							break
 						}
-						faceRef := ir.char.Portrait
+						var faceRef string
 						if ir.look != nil {
 							if ir.look.FaceCloseup != "" {
 								faceRef = ir.look.FaceCloseup
@@ -646,7 +655,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 						if len(characterPortraits) >= maxCharRefs {
 							break
 						}
-						faceRef := ir.char.Portrait
+						var faceRef string
 						if ir.look != nil {
 							if ir.look.FaceCloseup != "" {
 								faceRef = ir.look.FaceCloseup
@@ -815,7 +824,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		"oversaturated, overexposed, underexposed"
 	// 无角色参考图且分镜中确实没有任何角色时，加无人物排除词（纯环境镜头）。
 	// 若分镜有角色（即使是没有参考图的路人），不加此约束，让模型根据 image_prompt 自行生成角色形象。
-	shotHasAnyCharacter := len(characterPortraits) > 0 ||
+	shotHasAnyCharacter := len(characterPortraits) > 0 || len(shot.CharacterIDs) > 0 ||
 		(shot.Characters != "" && shot.Characters != "[]" && shot.Characters != "null")
 	noPersonNeg := "person, people, human, man, woman, figure, silhouette, character, face, body, limbs, hands, clothing, portrait"
 	if !shotHasAnyCharacter && (shot.NegativePrompt == "" || !strings.Contains(shot.NegativePrompt, "person")) {
@@ -1236,7 +1245,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 				}
 			}
 			for _, c := range chars {
-				// FaceCloseup(look) > Portrait(look) > ThreeViewSheet(look) > Portrait(char)
+				// FaceCloseup(look) > Portrait(look) > ThreeViewSheet(look)
 				var img string
 				if look, ok := defaultLooksMap[c.ID]; ok {
 					if look.FaceCloseup != "" {
@@ -1246,9 +1255,6 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 					} else {
 						img = look.ThreeViewSheet
 					}
-				}
-				if img == "" {
-					img = c.Portrait
 				}
 				if img != "" && img != referenceImage {
 					extraRefImages = append(extraRefImages, img)

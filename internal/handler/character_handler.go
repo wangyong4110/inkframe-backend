@@ -29,7 +29,6 @@ func characterToUpdateReq(c *model.Character) *model.UpdateCharacterRequest {
 		Description:   c.Description,
 		InnerConflict: c.InnerConflict,
 		CoreDesire:    c.CoreDesire,
-		Portrait:      c.Portrait,
 		VoiceID:       c.VoiceID,
 		VoiceSpeed:    &c.VoiceSpeed,
 		VoiceStyle:    c.VoiceStyle,
@@ -47,9 +46,8 @@ func characterResponse(c *model.Character) gin.H {
 		"gender":           c.Gender,
 		"age":              c.Age,
 		"description":        c.Description,
-		"default_three_view": c.DefaultThreeView,
-		"default_look_id":    c.DefaultLookID,
-		"portrait":           c.Portrait,
+		"default_look_id": c.DefaultLookID,
+		"default_look":    c.DefaultLook,
 		"voice_id":         c.VoiceID,
 		"voice_speed":      c.VoiceSpeed,
 		"voice_style":      c.VoiceStyle,
@@ -507,7 +505,7 @@ func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
 		// 从默认形象获取参考图和 VisualPrompt
 		defaultLook, _ := h.characterService.GetDefaultLook(charID)
 		faceAppearance := char.Description
-		referenceImage := char.Portrait
+		var referenceImage string
 		if defaultLook != nil {
 			if defaultLook.VisualPrompt != "" {
 				faceAppearance = defaultLook.VisualPrompt
@@ -542,11 +540,6 @@ func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
 			h.taskSvc.Fail(taskID, "save face closeup failed: "+err.Error()) //nolint:errcheck
 			return
 		}
-		// 同步更新 Character.Portrait 供列表头像显示
-		portraitReq := characterToUpdateReq(char)
-		portraitReq.Portrait = img.URL
-		h.characterService.UpdateCharacter(charID, tenantID, portraitReq) //nolint:errcheck
-
 		h.taskSvc.Complete(taskID, map[string]interface{}{ //nolint:errcheck
 			"look":      updatedLook,
 			"generated": map[string]string{"face_closeup": img.URL},
@@ -554,35 +547,6 @@ func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
 	}(task.TaskID, uint(id), character, faceStyle, req.Provider)
 
 	respondAccepted(c, task.TaskID, "面部特写生成任务已提交")
-}
-
-// UploadPortrait 上传角色肖像图片（远端 OSS 或本地存储兜底），用作三视图生成参考图
-// POST /api/v1/characters/:id/portrait/upload
-func (h *CharacterHandler) UploadPortrait(c *gin.Context) {
-	id, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-
-	portraitURL, ok := receiveAndUpload(c, "portraits", h.storageSvc, []string{".jpg", ".jpeg", ".png", ".webp"})
-	if !ok {
-		return
-	}
-
-	character, err := h.characterService.GetCharacter(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "character not found")
-		return
-	}
-	updateReq := characterToUpdateReq(character)
-	updateReq.Portrait = portraitURL
-	updated, err := h.characterService.UpdateCharacter(uint(id), getTenantID(c), updateReq)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to update portrait")
-		return
-	}
-
-	respondOK(c, gin.H{"url": portraitURL, "character": updated})
 }
 
 // UploadCharacterImage 上传角色图片到指定字段
@@ -629,22 +593,9 @@ func (h *CharacterHandler) UploadCharacterImage(c *gin.Context) {
 			respondErr(c, http.StatusInternalServerError, "failed to save image to look")
 			return
 		}
-		if imgType == "face_closeup" {
-			// 同步 Character.Portrait 供列表头像显示
-			updateReq := characterToUpdateReq(character)
-			updateReq.Portrait = imgURL
-			h.characterService.UpdateCharacter(uint(id), getTenantID(c), updateReq) //nolint:errcheck
-		}
 		respondOK(c, gin.H{"url": imgURL, "look": updatedLook})
-	default: // "portrait" or empty
-		updateReq := characterToUpdateReq(character)
-		updateReq.Portrait = imgURL
-		updated, err := h.characterService.UpdateCharacter(uint(id), getTenantID(c), updateReq)
-		if err != nil {
-			respondErr(c, http.StatusInternalServerError, "failed to save image")
-			return
-		}
-		respondOK(c, gin.H{"url": imgURL, "character": updated})
+	default:
+		respondErr(c, http.StatusBadRequest, "type must be 'three_view' or 'face_closeup'")
 	}
 }
 

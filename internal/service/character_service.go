@@ -628,7 +628,7 @@ func (s *CharacterService) GetNovelImageStyle(novelID uint) string {
 	return ""
 }
 
-// InjectDefaultLooks 批量查询一组角色的默认形象，将三视图 URL 注入 DefaultThreeView 字段。
+// InjectDefaultLooks 批量查询一组角色的默认形象，将完整 CharacterLook 对象注入 DefaultLook 字段。
 func (s *CharacterService) InjectDefaultLooks(characters []*model.Character) {
 	if s.lookRepo == nil || len(characters) == 0 {
 		return
@@ -651,13 +651,7 @@ func (s *CharacterService) InjectDefaultLooks(characters []*model.Character) {
 	}
 	for lookID, look := range lookMap {
 		if c, ok := charByLookID[lookID]; ok {
-			if look.ThreeViewSheet != "" {
-				c.DefaultThreeView = look.ThreeViewSheet
-			} else if look.FaceCloseup != "" {
-				c.DefaultThreeView = look.FaceCloseup
-			} else if look.Portrait != "" {
-				c.DefaultThreeView = look.Portrait
-			}
+			c.DefaultLook = look
 		}
 	}
 }
@@ -762,15 +756,6 @@ func (s *CharacterService) UpdateCharacter(id, tenantID uint, req *model.UpdateC
 	}
 	if req.CoreDesire != "" {
 		character.CoreDesire = req.CoreDesire
-	}
-	if req.ArcDesign != "" {
-		character.ArcDesign = req.ArcDesign
-	}
-	if req.CurrentArcStage != "" {
-		character.CurrentArcStage = req.CurrentArcStage
-	}
-	if req.Portrait != "" {
-		character.Portrait = req.Portrait
 	}
 	if req.VoiceID != "" {
 		character.VoiceID = req.VoiceID
@@ -1585,7 +1570,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 			var newFaceURL, newThreeURL string
 
 			// 1. 面部特写
-			faceRef := char.Portrait
+			var faceRef string
 			if look != nil && look.Portrait != "" {
 				faceRef = look.Portrait
 			}
@@ -1647,13 +1632,6 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 						} else {
 							_ = s.characterRepo.UpdateDefaultLookID(char.ID, newLook.ID)
 						}
-					}
-				}
-				// 同步更新 Character.Portrait 用于列表头像显示
-				if newFaceURL != "" {
-					portraitReq := &model.UpdateCharacterRequest{Name: char.Name, Portrait: newFaceURL}
-					if _, saveErr := s.UpdateCharacter(char.ID, tenantID, portraitReq); saveErr != nil {
-						logger.Errorf("[CharacterService] BatchGenerateImages: save portrait for char %d: %v", char.ID, saveErr)
 					}
 				}
 			}

@@ -393,7 +393,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			}
 			defaultLook, _ := svcs.CharacterService.GetDefaultLook(charID)
 			appearance := char.Description
-			ref := char.Portrait
+			var ref string
 			if defaultLook != nil {
 				if defaultLook.VisualPrompt != "" {
 					appearance = defaultLook.VisualPrompt
@@ -425,9 +425,6 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				svcs.TaskService.Fail(t.TaskID, "save face closeup failed: "+err.Error()) //nolint:errcheck
 				return
 			}
-			// 同步 Character.Portrait
-			portraitReq := &model.UpdateCharacterRequest{Name: char.Name, Portrait: img.URL}
-			svcs.CharacterService.UpdateCharacter(charID, t.TenantID, portraitReq) //nolint:errcheck
 			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{ //nolint:errcheck
 				"look":      updatedLook,
 				"generated": map[string]string{"face_closeup": img.URL},

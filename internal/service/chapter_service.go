@@ -3011,9 +3011,8 @@ func (s *ChapterService) buildPreviousReaderExpectations(novelID uint, chapterNo
 	return sb.String()
 }
 
-// buildCharacterArcContext formats the arc design + current stage of protagonist characters
-// into a compact prompt section. Uses Character.ArcDesign (planned arc) and CurrentArcStage.
-// Falls back to CoreDesire + InnerConflict when ArcDesign is empty (e.g. auto-extracted characters).
+// buildCharacterArcContext formats the core desire and inner conflict of protagonist/antagonist
+// characters into a compact prompt section.
 func (s *ChapterService) buildCharacterArcContext(novelID uint, chapterNo int) string {
 	if s.characterRepo == nil {
 		return ""
@@ -3029,37 +3028,10 @@ func (s *ChapterService) buildCharacterArcContext(novelID uint, chapterNo int) s
 		if role != "protagonist" && role != "antagonist" && role != "主角" && role != "反派" {
 			continue
 		}
-		// 有弧光设计时，按章节范围匹配当前阶段
-		if c.ArcDesign != "" {
-			var arcStages []struct {
-				Stage       string `json:"stage"`
-				Desc        string `json:"desc"`
-				TargetRange [2]int `json:"target_range"`
-			}
-			if err := json.Unmarshal([]byte(c.ArcDesign), &arcStages); err == nil {
-				for _, stage := range arcStages {
-					if len(stage.TargetRange) == 2 &&
-						chapterNo >= stage.TargetRange[0] && chapterNo <= stage.TargetRange[1] {
-						sb.WriteString(fmt.Sprintf("**%s**（%s）\n", c.Name, c.Role))
-						if c.CurrentArcStage != "" {
-							sb.WriteString(fmt.Sprintf("  当前弧光阶段：%s\n", c.CurrentArcStage))
-						}
-						sb.WriteString(fmt.Sprintf("  弧光设计（第%d-%d章阶段）：【%s】%s\n",
-							stage.TargetRange[0], stage.TargetRange[1], stage.Stage, stage.Desc))
-						break
-					}
-				}
-			}
-			continue
-		}
-		// 无弧光设计时，用 CurrentArcStage + CoreDesire + InnerConflict 构建降级版弧光上下文
-		if c.CurrentArcStage == "" && c.CoreDesire == "" && c.InnerConflict == "" {
+		if c.CoreDesire == "" && c.InnerConflict == "" {
 			continue
 		}
 		sb.WriteString(fmt.Sprintf("**%s**（%s）\n", c.Name, c.Role))
-		if c.CurrentArcStage != "" {
-			sb.WriteString(fmt.Sprintf("  当前弧光阶段：%s\n", c.CurrentArcStage))
-		}
 		if c.CoreDesire != "" {
 			sb.WriteString(fmt.Sprintf("  核心渴望：%s\n", c.CoreDesire))
 		}
@@ -3147,7 +3119,7 @@ func (s *ChapterService) buildFinalChapterContext(novelID uint, novel *model.Nov
 		}
 	}
 
-	// 3. 主要角色弧光收尾（主角/反派的弧光必须完成）
+	// 3. 主要角色内在成长收尾（主角/反派的核心渴望/内在矛盾必须得到回应）
 	if s.characterRepo != nil {
 		chars, err := s.characterRepo.ListByNovel(novelID)
 		if err == nil {
@@ -3158,30 +3130,22 @@ func (s *ChapterService) buildFinalChapterContext(novelID uint, novel *model.Nov
 				if role != "protagonist" && role != "antagonist" && role != "主角" && role != "反派" && role != "男主" && role != "女主" {
 					continue
 				}
-				if c.ArcDesign == "" && c.CurrentArcStage == "" {
+				if c.CoreDesire == "" && c.InnerConflict == "" {
 					continue
 				}
 				arcBuf.WriteString(fmt.Sprintf("- **%s**（%s）", c.Name, c.Role))
-				if c.CurrentArcStage != "" {
-					arcBuf.WriteString(fmt.Sprintf("：当前阶段「%s」", c.CurrentArcStage))
+				if c.CoreDesire != "" {
+					arcBuf.WriteString(fmt.Sprintf("：核心渴望「%s」", c.CoreDesire))
 				}
-				// 尝试提取弧光终态
-				if c.ArcDesign != "" {
-					var arcStages []struct {
-						Stage string `json:"stage"`
-						Desc  string `json:"desc"`
-					}
-					if jsonErr := json.Unmarshal([]byte(c.ArcDesign), &arcStages); jsonErr == nil && len(arcStages) > 0 {
-						last := arcStages[len(arcStages)-1]
-						arcBuf.WriteString(fmt.Sprintf(" → 弧光终态应为【%s】：%s", last.Stage, last.Desc))
-					}
+				if c.InnerConflict != "" {
+					arcBuf.WriteString(fmt.Sprintf(" / 内在矛盾「%s」", c.InnerConflict))
 				}
 				arcBuf.WriteString("\n")
 				arcCount++
 				itemCount++
 			}
 			if arcCount > 0 {
-				sb.WriteString("【角色弧光必须完成】\n")
+				sb.WriteString("【角色成长必须完成】\n")
 				sb.WriteString(arcBuf.String())
 				sb.WriteString("\n")
 			}

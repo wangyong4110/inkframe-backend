@@ -31,20 +31,11 @@ type Character struct {
 	// JSON格式: {"vocabulary_level":"...","speech_habits":[...],"emotional_expression":"...","forbidden_phrases":[...],"signature_expressions":[...],"overall_voice":"..."}
 	VoiceProfile string `json:"voice_profile,omitempty" gorm:"column:voice_profile;type:text"`
 
-	// 角色弧光设计（规划角色在全书中的心理成长阶段）
-	// JSON格式: [{"stage":"起点","desc":"...","target_range":[1,20]},{"stage":"考验","desc":"...","target_range":[21,60]},...]
-	// stage可选: 起点/考验/最低点/转折/终点
-	ArcDesign       string `json:"arc_design,omitempty" gorm:"type:text"`
-	CurrentArcStage string `json:"current_arc_stage,omitempty" gorm:"size:50"` // 当前所处弧光阶段（自动更新）
-
 	// 默认形象 ID（指向 ink_character_look 主键；0 表示未设置）
 	DefaultLookID uint `json:"default_look_id" gorm:"default:0"`
 
-	// 默认形象的三视图（虚字段，不存库，由服务层批量注入）
-	DefaultThreeView string `json:"default_three_view" gorm:"-"`
-
-	// 头像
-	Portrait string `json:"portrait" gorm:"size:1000"`
+	// 默认形象完整对象（虚字段，不存库，由服务层批量注入）
+	DefaultLook *CharacterLook `json:"default_look,omitempty" gorm:"-"`
 
 	// 配音设置
 	VoiceID       string  `json:"voice_id" gorm:"size:100"`                         // 声音ID（如 alloy/echo/nova 等）
@@ -236,11 +227,8 @@ type UpdateCharacterRequest struct {
 	Gender        string `json:"gender"`
 	Age           string `json:"age"`
 	Description   string `json:"description"`
-	InnerConflict   string `json:"inner_conflict"`    // 内在矛盾（如：渴望自由却害怕失去家人）
-	CoreDesire      string `json:"core_desire"`       // 核心渴望（如：被认可、复仇、保护所爱之人）
-	ArcDesign       string `json:"arc_design"`        // 弧光设计 JSON（各阶段描述+章节范围）
-	CurrentArcStage string `json:"current_arc_stage"` // 当前弧光阶段（起点/考验/最低点/转折/终点）
-	Portrait       string   `json:"portrait"`
+	InnerConflict string `json:"inner_conflict"` // 内在矛盾（如：渴望自由却害怕失去家人）
+	CoreDesire    string `json:"core_desire"`    // 核心渴望（如：被认可、复仇、保护所爱之人）
 	// 配音设置
 	VoiceID       string   `json:"voice_id"`
 	VoiceSpeed    *float64 `json:"voice_speed"`    // nil = absent (don't update)
