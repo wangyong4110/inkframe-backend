@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"path/filepath"
 	"strconv"
@@ -421,7 +422,8 @@ func (h *VideoHandler) ListShotSFXItems(c *gin.Context) {
 	dtos := make([]sfxItemDTO, len(items))
 	for i, item := range items {
 		audioURL := item.URL
-		if strings.HasPrefix(item.URL, "file://") {
+		if item.URL != "" {
+			// 统一走后端代理，避免 OSS/CDN CORS 问题
 			audioURL = fmt.Sprintf("/api/v1/sfx-items/%d/audio", item.ID)
 		}
 		dtos[i] = sfxItemDTO{ShotSFXItem: item, AudioURL: audioURL}
@@ -446,8 +448,12 @@ func (h *VideoHandler) ServeSFXItemAudio(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "sfx item not found")
 		return
 	}
+	if strings.HasPrefix(item.URL, "http://") || strings.HasPrefix(item.URL, "https://") {
+		// 服务端代理，避免浏览器直接访问 OSS/CDN 时的 CORS 问题
+		proxySFXAudio(c, item.URL)
+		return
+	}
 	if !strings.HasPrefix(item.URL, "file://") {
-		// https:// URL — redirect to it directly
 		c.Redirect(http.StatusFound, item.URL)
 		return
 	}
@@ -455,6 +461,47 @@ func (h *VideoHandler) ServeSFXItemAudio(c *gin.Context) {
 	c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
 	c.Header("Content-Type", "audio/mpeg")
 	c.File(filePath)
+}
+
+// proxySFXAudio 服务端代理远程音频，支持 Range 请求（拖动进度条），消除 CORS。
+func proxySFXAudio(c *gin.Context, remoteURL string) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, remoteURL, nil)
+	if err != nil {
+		c.Status(http.StatusBadGateway)
+		return
+	}
+	if rangeH := c.GetHeader("Range"); rangeH != "" {
+		req.Header.Set("Range", rangeH)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		logger.Errorf("[ServeSFXItemAudio] proxy fetch failed url=%s: %v", remoteURL, err)
+		c.Status(http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	// 透传关键响应头
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		c.Header("Content-Type", ct)
+	} else {
+		c.Header("Content-Type", "audio/mpeg")
+	}
+	if cl := resp.Header.Get("Content-Length"); cl != "" {
+		c.Header("Content-Length", cl)
+	}
+	if cr := resp.Header.Get("Content-Range"); cr != "" {
+		c.Header("Content-Range", cr)
+	}
+	c.Header("Accept-Ranges", "bytes")
+	c.Header("Cache-Control", "public, max-age=3600")
+
+	c.Status(resp.StatusCode)
+	_, _ = io.Copy(c.Writer, resp.Body)
 }
 
 // UpdateShotSFXItem PUT /videos/:id/shots/:shot_id/sfx-items/:item_id

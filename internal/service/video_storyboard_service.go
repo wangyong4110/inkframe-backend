@@ -499,16 +499,6 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		returnErr = fmt.Errorf("部分段落生成失败（%d/%d），已返回成功段落的分镜: %w", failedSegs, len(segments), firstErr)
 	}
 
-	// 分镜生成完成后，自动用 sfx_tags 触发音效搜索（后台执行，不阻塞接口返回）
-	if s.sfxService != nil {
-		sfxShots := make([]*model.StoryboardShot, len(shots))
-		copy(sfxShots, shots)
-		go func() {
-			success, fail, _ := s.sfxService.BatchAutoGenerateSFX(context.Background(), sfxShots, tenantID, "", "", nil)
-			logger.Printf("[Storyboard] auto-SFX done videoID=%d success=%d fail=%d", videoID, success, fail)
-		}()
-	}
-
 	return shots, returnErr
 }
 
