@@ -174,7 +174,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 
 	// 受保护路由（需要JWT）
 	v1 := r.Group("/api/v1")
-	v1.Use(middleware.RateLimitWithRedis(cfg.RedisClient, 60, 10))
+	v1.Use(middleware.RateLimitWithRedis(cfg.RedisClient, 120, 30))
 	v1.Use(middleware.NewAuth(cfg.JWTSecret, cfg.RedisClient))
 	v1.Use(middleware.CheckTenantSubscription(cfg.DB))
 	{
