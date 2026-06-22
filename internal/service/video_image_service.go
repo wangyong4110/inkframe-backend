@@ -1592,7 +1592,43 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 		logger.Errorf("[VideoService] GenerateSlideshowShotVideo: failed to update shot %d image URL: %v", shot.ShotNo, err)
 	}
 
-	// 图片生成完成，不自动合成 MP4（Ken Burns 由独立的 batch-clips 步骤触发）
+	// 2. 生成 Ken Burns 动效视频片段
+	logger.Printf("GenerateSlideshowShotVideo: shot %d starting Ken Burns encode", shot.ShotNo)
+	localImage, dlErr := downloadToTemp(shot.ImageURL, fmt.Sprintf("inkframe-img-%d-", shot.ID), ".jpg")
+	if dlErr != nil {
+		logger.Errorf("GenerateSlideshowShotVideo: shot %d download image failed: %v — skipping Ken Burns", shot.ShotNo, dlErr)
+		shot.Status = "completed"
+		shot.Progress = 100
+		return s.storyboardRepo.Update(shot)
+	}
+	defer os.Remove(localImage)
+
+	var clipPath string
+	var clipErr error
+	for attempt := 1; attempt <= maxClipRetries; attempt++ {
+		clipPath, clipErr = s.generateKenBurnsPureGo(context.Background(), shot, localImage, duration, aspectRatio)
+		if clipErr != nil {
+			clipPath, clipErr = s.generateStillFrameClip(localImage, duration, aspectRatio)
+		}
+		if clipErr == nil {
+			break
+		}
+		logger.Errorf("GenerateSlideshowShotVideo: shot %d Ken Burns attempt %d/%d: %v", shot.ShotNo, attempt, maxClipRetries, clipErr)
+		if attempt < maxClipRetries {
+			time.Sleep(time.Duration(attempt*5) * time.Second)
+		}
+	}
+	if clipErr != nil {
+		logger.Errorf("GenerateSlideshowShotVideo: shot %d Ken Burns failed: %v", shot.ShotNo, clipErr)
+	} else if ossURL := s.uploadClipToStorage(context.Background(), shot, clipPath); ossURL != "" {
+		shot.VideoURL = ossURL
+		os.Remove(clipPath) //nolint:errcheck
+		logger.Printf("GenerateSlideshowShotVideo: shot %d video → %s", shot.ShotNo, ossURL)
+	} else {
+		shot.VideoURL = "file://" + clipPath
+		logger.Printf("GenerateSlideshowShotVideo: shot %d video local → %s", shot.ShotNo, clipPath)
+	}
+
 	shot.Status = "completed"
 	shot.Progress = 100
 	return s.storyboardRepo.Update(shot)
