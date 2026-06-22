@@ -126,6 +126,13 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		r.GET("/api/v1/media/:id", cfg.MediaHandler.ServeMedia)
 	}
 
+	// 音频流端点（无需 JWT，供 <audio src="..."> 直接访问）
+	if cfg.VideoHandler != nil {
+		r.GET("/api/v1/sfx-items/:item_id/audio", cfg.VideoHandler.ServeSFXItemAudio)
+		r.GET("/api/v1/videos/:id/shots/:shot_id/segments/:seg_id/audio", cfg.VideoHandler.ServeSegmentAudio)
+		r.GET("/api/v1/videos/:id/storyboard/:shot_id/audio", cfg.VideoHandler.ServeAudio)
+	}
+
 	// 公开分享页（无需登录）
 	if cfg.AssetHandler != nil {
 		r.GET("/api/v1/share/:token", cfg.AssetHandler.PublicSharePage)
@@ -174,7 +181,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 
 	// 受保护路由（需要JWT）
 	v1 := r.Group("/api/v1")
-	v1.Use(middleware.RateLimitWithRedis(cfg.RedisClient, 120, 30))
+	v1.Use(middleware.RateLimitWithRedis(cfg.RedisClient, 240, 60))
 	v1.Use(middleware.NewAuth(cfg.JWTSecret, cfg.RedisClient))
 	v1.Use(middleware.CheckTenantSubscription(cfg.DB))
 	{
@@ -617,8 +624,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.PUT("/:id/shots/:shot_id/sfx-items/:item_id", cfg.VideoHandler.UpdateShotSFXItem)
 			videos.PATCH("/:id/shots/:shot_id/sfx-items/:item_id/disabled", cfg.VideoHandler.ToggleShotSFXItem)
 			videos.DELETE("/:id/shots/:shot_id/sfx-items/:item_id", cfg.VideoHandler.DeleteShotSFXItem)
-			// 音效文件代理（file:// 本地文件通过此端点供浏览器播放）
-			v1.GET("/sfx-items/:item_id/audio", cfg.VideoHandler.ServeSFXItemAudio)
+			// 音效文件代理路由已移至公开区域（/api/v1/sfx-items/:item_id/audio）
 			// 语音段落
 			videos.GET("/:id/shots/:shot_id/segments", cfg.VideoHandler.ListVoiceSegments)
 			videos.POST("/:id/shots/:shot_id/segments", cfg.VideoHandler.AppendVoiceSegment)
@@ -627,9 +633,9 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.DELETE("/:id/shots/:shot_id/segments/:seg_id", cfg.VideoHandler.DeleteVoiceSegment)
 			videos.POST("/:id/shots/:shot_id/segments/:seg_id/voice", cfg.VideoHandler.GenerateSegmentVoice)
 			videos.POST("/:id/shots/:shot_id/voice/merge", cfg.VideoHandler.MergeVoiceSegments)
-			videos.GET("/:id/shots/:shot_id/segments/:seg_id/audio", cfg.VideoHandler.ServeSegmentAudio)
+			// ServeSegmentAudio 已移至公开路由区域
 			videos.POST("/:id/storyboard/:shot_id/voice", cfg.VideoHandler.GenerateShotVoice)
-			videos.GET("/:id/storyboard/:shot_id/audio", cfg.VideoHandler.ServeAudio)
+			// ServeAudio 已移至公开路由区域
 			videos.POST("/:id/stitch", cfg.VideoHandler.StitchVideoHandler)
 			videos.GET("/:id/download", cfg.VideoHandler.DownloadVideo)
 			videos.GET("/:id/export/:format", cfg.VideoHandler.Export)
