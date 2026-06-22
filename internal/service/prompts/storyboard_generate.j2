@@ -50,7 +50,7 @@
     ⑤ Lighting setup: light source type (directional sunlight / diffused overcast / candlelight / magic glow),
        angle (top-front / upper-left rim / underlit), color temperature (warm golden 3200K / neutral 5500K /
        cool blue 8000K), shadow quality (hard-edged / soft diffused), where shadows fall and their length
-    ⑥ Characters (if present): for each character in the shot — position in frame, body posture/action, facial expression, spatial relationship to environment elements
+    ⑥ Characters (if present): for each character in the shot — use their exact name from 【角色信息】 (e.g. "Ling Yun"), then: position in frame, body posture/action, facial expression, spatial relationship to environment elements. Never use "figure", "young man", "woman", or appearance-based labels as substitutes for the character name.
   - Composition & optics: shot size matching shot_size, camera angle matching camera_angle,
     focal length feel (wide 24mm / standard 50mm / telephoto 85-135mm), depth-of-field character
   - Example (full-layers, ruined mountain courtyard at dusk):
@@ -86,7 +86,7 @@
     ④ 背景纵深与大气：远景元素、天空/顶部状态、大气粒子（尘埃浮粒/烟雾/薄雾/雨幕/火星）、
        纵深消散质感、远处轮廓或剪影（建筑/山/树线）
     ⑤ 光线设置：光源类型+方向+色温+阴影质量+阴影投向位置及长度
-    ⑥ 角色（若有）：每位出场角色——在画面中的位置、身体姿态/动作、面部表情、与环境元素的空间关系
+    ⑥ 角色（若有）：每位出场角色——使用【角色信息】中的精确名称（如"凌云"），然后描述：在画面中的位置、身体姿态/动作、面部表情、与环境元素的空间关系。禁止用"人影"、"少年"、"女子"或外貌词替代角色名称
   - 构图与镜头感：与 shot_size 呼应的景别感、与 camera_angle 呼应的机位感、焦距感、景深
   - 示例（五层全要素，黄昏废墟山庭院）：
     "庭院石板地面，石砖排列不规则，多处石板沿对角方向开裂，局部被入侵树根顶起约3-5厘米，阴暗角落
@@ -160,14 +160,16 @@
     — State density, drift direction, where they concentrate (in light shafts / near ground / etc.)
     — If no particles: state "clear air, no atmospheric haze" to prevent AI adding random effects
 
-  CHARACTERS BLOCK — describe each character present in the shot (omit entirely if no characters):
+  CHARACTERS BLOCK — describe each character present in the shot using their exact name from 【角色信息】 (omit entirely if no characters):
+    — Name: always start with the exact character name. Never use "figure", "young man", "woman", or any appearance-based label as a substitute.
     — Position: where in frame (foreground-center / mid-ground-left / background-right / etc.)
     — Body posture and action: what the character is doing, body orientation, limb positions
     — Facial expression: specific expression (determined gaze / furrowed brow / slight smile / etc.)
-    — Clothing silhouette: general clothing style and color palette (avoid overly specific details that conflict with reference images)
+    — Clothing silhouette: general style only; no overly specific details that conflict with reference images
     — Spatial relationship to environment: standing on / leaning against / emerging from / etc.
-    ✅ "foreground-center: figure in dark robes standing upright facing camera, arms at sides, head slightly bowed, expression solemn and still"
-    ✅ "mid-ground-left: figure crouching behind stone pillar, one hand pressed against pillar surface, body angled away from gateway, tense posture"
+    ✅ "foreground-center: Ling Yun standing upright facing camera, arms at sides, head slightly bowed, expression solemn and still"
+    ✅ "mid-ground-left: Bai Xue crouching behind stone pillar, one hand pressed against pillar surface, body angled away from gateway, tense posture"
+    ❌ "foreground-center: figure in dark robes..." → replace "figure" with the character's exact name
 
   OPTICS BLOCK — focal length matched to shot_size:
     extreme_close_up/close_up → "85-100mm f/1.8-2.8, subject razor-sharp, background fully blurred"
@@ -179,7 +181,7 @@
     Anime/illust: "masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
 
   PRE-SUBMIT CHECKLIST (verify each before writing the field):
-    □ Characters described (position, posture, expression) if present; omitted if no characters in shot
+    □ Characters described by exact name (not "figure"); position, posture, expression included if present; omitted if no characters in shot
     □ Word count ≥ 100 words
     □ Ground surface material and detail stated
     □ 1-3 foreground objects with exact position, material, dimensions stated
@@ -248,14 +250,16 @@
     — 说明密度、漂移方向、集中区域（光柱中/近地面/etc.）
     — 若无粒子：明确写"空气清透，无大气薄雾"，防止AI随机添加
 
-  角色区块——描述画面中出现的每位角色（若无角色则省略此区块）：
+  角色区块——描述画面中出现的每位角色，必须使用【角色信息】中的精确名称（若无角色则省略此区块）：
+    — 名称：必须以角色精确名称开头。禁止用"人影"、"他"/"她"、"少年"、"女子"等代替角色名
     — 画面位置：在画框中的位置（前景居中/中景偏左/背景右侧等）
     — 身体姿态与动作：角色正在做什么，身体朝向，肢体位置
     — 面部表情：具体表情（坚定的目光/微皱的眉头/淡淡的微笑等）
     — 服装轮廓：服装风格和色调（避免过于细节化，以免与参考图冲突）
     — 与环境的空间关系：站立于/倚靠在/从……中走出/蹲伏于等
-    ✅ "前景居中：身着深色长袍的人影直立面向镜头，双臂垂于身侧，头微微低垂，神情肃穆"
-    ✅ "中景偏左：人影蹲伏于石柱后方，一手按住柱面，身体背向门洞，姿态紧绷"
+    ✅ "前景居中：凌云直立面向镜头，双臂垂于身侧，头微微低垂，神情肃穆"
+    ✅ "中景偏左：白雪蹲伏于石柱后方，一手按住柱面，身体背向门洞，姿态紧绷"
+    ❌ "前景居中：身着深色长袍的人影直立..." → 用精确角色名，改为"凌云直立..."
 
   镜头参数——焦距必须与 shot_size 对应：
     extreme_close_up/close_up → "85-100mm，f/1.8-2.8，主体极清晰，背景完全虚化"
@@ -267,7 +271,7 @@
     动漫/插画："masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
 
   输出前自检清单（每条验证后再写字段）：
-    □ 若有角色出场：角色的位置、姿态、表情已描述；若无角色则省略角色区块
+    □ 若有角色出场：已使用精确角色名称（非"人影"）描述位置、姿态、表情；若无角色则省略角色区块
     □ 字数不少于100字
     □ 地面材质和细节已说明
     □ 1-3件前景物体的精确位置、材质、尺寸已说明
@@ -294,13 +298,14 @@
        pan    → "smooth leftward pan at 15°/sec, horizon line held steady throughout"
        pull   → "steady dolly-pull at 0.15x speed, environment expanding outward from center"
        crane_up → "slow vertical crane rise at 0.1m/sec, horizon line descending in frame"
-    A2. Character actions (required if characters appear in this shot): describe actions ONLY, no appearance
-       — Use action verbs to describe what characters do within the shot duration
-       ✅ "figure at frame center walks slowly toward the stone gate, each step deliberate and heavy, advancing roughly 30% across frame over shot duration"
-       ✅ "left figure turns upper body 60° rightward, arms falling naturally to sides"
-       ✅ "figure enters from right edge at urgent pace, halts at center, weight shifting backward"
-       ❌ "handsome young man swings sword" → strip appearance, write "figure swings sword"
-       ❌ "white-robed woman turns around" → strip appearance, write "figure turns slowly around"
+    A2. Character actions (required if characters appear in this shot): use exact character name from 【角色信息】; describe actions ONLY, no appearance
+       — Always lead with the character's exact name, then describe what they do within the shot duration
+       ✅ "Ling Yun walks slowly toward the stone gate at frame center, each step deliberate and heavy, advancing roughly 30% across frame over shot duration"
+       ✅ "Bai Xue on the left turns upper body 60° rightward, arms falling naturally to sides"
+       ✅ "Ling Yun enters from right edge at urgent pace, halts at center, weight shifting backward"
+       ❌ "handsome young man swings sword" → use character name, write "Ling Yun swings sword"
+       ❌ "white-robed woman turns around" → use character name, write "Bai Xue turns slowly around"
+       ❌ "figure at frame center walks..." → replace "figure" with the character's actual name
     B. Atmospheric particles: every particle type in the scene gets its own motion clause
        — dust motes: "fine dust motes suspended in [light shaft zone], drifting diagonally [direction] at
          0.4cm/sec, each mote spending 2-3 seconds in lit zone before exiting frame edge"
@@ -364,13 +369,14 @@
        pan    → "匀速向左摇镜，速率约每秒15度，地平线全程保持水平"
        pull   → "匀速向后拉镜，速率0.15x，环境向四周展开"
        crane_up → "缓慢垂直升镜，速率约每秒0.1米，画面中地平线持续下降"
-    A2. 角色动作（若镜头有角色出场则必填）：只描述动作，禁止描写外貌
-       — 使用动词短语描述角色在镜头内的具体运动和行为变化
-       ✅ "画面中心人影缓步向远处石门迈去，步伐沉重而坚定，约走出画面三分之一距离"
-       ✅ "左侧角色缓缓转身，上半身向右旋转约60度，双臂自然垂落"
-       ✅ "人影从右侧进入画面，步伐急促，走至中央后停步，重心后移如临大敌"
-       ❌ "英俊少年挥动长剑" → "少年"是外貌，改为"人影挥动长剑"
-       ❌ "白衣女子回头" → "白衣女子"是外貌，改为"人影缓缓回头"
+    A2. 角色动作（若镜头有角色出场则必填）：使用【角色信息】中的精确名称；只描述动作，禁止描写外貌
+       — 始终以角色精确名称开头，然后描述其在镜头时长内的具体运动和行为变化
+       ✅ "凌云缓步向远处石门迈去，步伐沉重而坚定，约走出画面三分之一距离"
+       ✅ "白雪缓缓转身，上半身向右旋转约60度，双臂自然垂落"
+       ✅ "凌云从右侧进入画面，步伐急促，走至中央后停步，重心后移如临大敌"
+       ❌ "英俊少年挥动长剑" → 用角色名，改为"凌云挥动长剑"
+       ❌ "白衣女子回头" → 用角色名，改为"白雪缓缓回头"
+       ❌ "人影缓步向石门迈去" → "人影"须替换为角色精确名称，改为"凌云缓步向石门迈去"
     B. 大气粒子动态：场景中每种粒子类型各自独立描述
        — 尘埃浮粒："细小尘埃粒子在[光柱区域]悬浮，以每秒0.4厘米速度向[方向]斜向漂移，每粒在
          光区停留2-3秒后出框，整体密度全程保持稳定"
@@ -629,7 +635,9 @@
 {% endif %}
 {% if Characters %}
 【角色信息】
-⚠️ 规则：每个分镜的 `characters` 数组中，`name` 字段必须使用以下列表中的精确名称（不得改写、缩写或使用"角色名"占位符）；该镜头无角色出场时填 `[]`。
+⚠️ 角色名称强制规则（全字段适用）：
+① `characters` 数组中的 `name` 字段必须使用以下列表中的精确名称，不得改写、缩写或使用"角色名"占位符；该镜头无角色出场时填 `[]`。
+② `description`、`image_prompt`、`video_prompt` 字段凡涉及角色处，必须使用以下精确名称。严禁用"人影"、"他"/"她"、"少年"、"女子"、"figure"或任何外貌词替代角色名称——无论出于简洁还是通用描述的目的。
 {% for c in Characters %}- {{ c.Name }}（{{ c.Role }}）{% if c.Description %}：{{ c.Description }}{% endif %}
 
   [台词语言]: {{ c.DialogueLang }}{% if c.VisualPrompt %}
