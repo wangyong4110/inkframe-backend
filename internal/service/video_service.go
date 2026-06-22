@@ -784,7 +784,7 @@ func (s *VideoService) ListVideoProviders() []VideoProvider {
 		return result
 	}
 	if s.aiService != nil {
-		for _, name := range []string{"kling", "seedance"} {
+		for _, name := range []string{"jimeng-video", "kling", "seedance"} {
 			if _, err := s.aiService.GetTenantVideoProvider(1, name); err == nil {
 				return []VideoProvider{{Name: name, DisplayName: capableProviderDisplayName(name, "")}}
 			}
@@ -794,11 +794,11 @@ func (s *VideoService) ListVideoProviders() []VideoProvider {
 }
 
 // resolveVideoProvider 选择视频生成提供商：优先静态 map，其次 DB 租户配置。
-// preferredName 为空时按 kling→seedance 顺序尝试。
+// preferredName 为空时按 jimeng-video→kling→seedance 顺序尝试。
 func (s *VideoService) resolveVideoProvider(tenantID uint, preferredName string) (ai.VideoProvider, string, error) {
-	names := []string{"kling", "seedance"}
+	names := []string{"jimeng-video", "kling", "seedance"}
 	if preferredName != "" {
-		names = []string{preferredName, "kling", "seedance"}
+		names = []string{preferredName, "jimeng-video", "kling", "seedance"}
 	}
 	// 先查静态 map
 	for _, name := range names {
