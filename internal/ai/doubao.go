@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -317,6 +318,21 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 		apiReq["image"] = allRefImages[0]
 	} else if len(allRefImages) > 1 {
 		apiReq["image"] = allRefImages
+	}
+
+	// 调试日志：确认参考图是否正确注入
+	{
+		imgTypes := make([]string, len(allRefImages))
+		for i, img := range allRefImages {
+			if strings.HasPrefix(img, "data:") {
+				imgTypes[i] = "base64"
+			} else if strings.HasPrefix(img, "http") {
+				imgTypes[i] = "url"
+			} else {
+				imgTypes[i] = "unknown"
+			}
+		}
+		log.Printf("[doubao] ImageGenerate model=%s refImages=%d types=%v prompt=%.80s", model, len(allRefImages), imgTypes, req.Prompt)
 	}
 
 	body, _ := json.Marshal(apiReq)

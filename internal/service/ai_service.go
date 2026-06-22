@@ -422,7 +422,8 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		provider = ai.NewAnthropicProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "google":
 		provider = ai.NewGoogleProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
-	case "doubao":
+	case "doubao", "volcengine-ark-img":
+		// "volcengine-ark-img" 是 DB 中 Seedream 图片模型的自定义名称，使用相同的 DoubaoProvider
 		provider = ai.NewDoubaoProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "doubao-speech":
 		// APIKey = X-Api-Key, APIVersion = resourceID（如 "seed-tts-2.0"）
@@ -1896,19 +1897,28 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		firstRef = referenceImages[0]
 	}
 
-	// 预先将相对路径参考图转换为 base64，供 non-volcengine-visual 提供商使用。
+	// 预先将参考图转换为 base64，供 non-volcengine-visual 提供商使用。
 	// volcengine-visual 自身在 setImageInput/setMultiImageInput 中处理相对路径；
-	// 其他提供商（doubao/kling-image 等）只能接受 https:// URL 或 base64 数据，
-	// 不能直接使用 /api/media/xxx 这类服务内部相对路径。
+	// 其他提供商（doubao/kling-image 等）使用官方 image 字段，必须提供 base64 data URI 或可公开访问的 URL。
+	// 注意：OSS 图片可能存储在私有桶或签名 URL 中，Seedream/Kling 服务器无法直接访问；
+	// 因此对所有参考图（包括 https:// 绝对 URL）均主动下载并转为 base64，确保提供商能访问图片数据。
 	resolveForExternal := func(url string) string {
-		if url == "" || strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+		if url == "" {
+			return ""
+		}
+		// 始终 fetch 转 base64：绝对 URL（OSS）可能不被第三方 AI 服务器访问；
+		// 相对路径由 fetchImageAsBase64 拼接 serverBaseURL 处理。
+		b64 := s.fetchImageAsBase64(ctx, url)
+		if b64 != "" {
+			return b64
+		}
+		// fetchImageAsBase64 失败时降级：绝对 URL 直接传入（最后手段）
+		if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+			logger.Printf("GenerateCharacterThreeViewMulti: base64 fetch failed for %q, falling back to URL", url)
 			return url
 		}
-		b64 := s.fetchImageAsBase64(ctx, url)
-		if b64 == "" {
-			logger.Printf("GenerateCharacterThreeViewMulti: cannot resolve relative ref %q (serverBaseURL=%q)", url, s.serverBaseURL)
-		}
-		return b64
+		logger.Printf("GenerateCharacterThreeViewMulti: cannot resolve ref %q (serverBaseURL=%q)", url, s.serverBaseURL)
+		return ""
 	}
 	extFirst := resolveForExternal(firstRef)
 	extRefs := make([]string, 0, len(referenceImages))
@@ -2179,9 +2189,10 @@ func (s *AIService) fetchImageAsBase64(ctx context.Context, imageURL string) str
 // 这些 provider 的 ImageGenerate 实现会将 ReferenceImage 实际传给 API 并由模型处理。
 // doubao（Seedream 4.0+）通过官方 "image" 字段支持单图/多图参考，格式为 URL 或 data URI。
 var referenceImageProviders = map[string]bool{
-	ai.ProviderNameVolcengineVisual: true, // DreamO（IP-Adapter 角色一致性）/ SeedEditV3
-	"kling-image":                   true, // 可灵图片，subject reference
-	"doubao":                        true, // Seedream 4.0/4.5/5.0，"image" 字段多图参考
+	ai.ProviderNameVolcengineVisual: true,              // DreamO（IP-Adapter 角色一致性）/ SeedEditV3
+	"kling-image":                   true,              // 可灵图片，subject reference
+	"doubao":                        true,              // Seedream 4.0/4.5/5.0，"image" 字段多图参考
+	"volcengine-ark-img":            true,              // 同 doubao，DB 中 Seedream 图片模型的自定义名称
 }
 
 // EditImageWithInstruction 使用支持参考图的文生图模型重新生成图片，将原图作为参考图保持视觉一致性。
