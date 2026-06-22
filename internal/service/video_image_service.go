@@ -51,9 +51,6 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 	aspectRatio := video.AspectRatio
 	if video.NovelID > 0 && s.novelRepo != nil {
 		if novel, nErr := s.novelRepo.GetByID(video.NovelID); nErr == nil {
-			if effectiveProvider == "" && novel.VideoModel != "" {
-				effectiveProvider = novel.VideoModel
-			}
 			if aspectRatio == "" && novel.VideoConf().VideoAspectRatio != "" {
 				aspectRatio = novel.VideoConf().VideoAspectRatio
 			}
@@ -108,10 +105,11 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 				}
 				logger.Printf("BatchGenerateShots: shot %d done (%d/%d)", sh.ShotNo, n, total)
 			}()
-			logger.Printf("BatchGenerateShots: shot %d start (mode=%s)", sh.ShotNo, mode)
+			hasProvider := s.hasVideoProvider(s.videoTenantID(video))
+			logger.Printf("BatchGenerateShots: shot %d start mode=%q hasVideoProvider=%v effectiveProvider=%q", sh.ShotNo, mode, hasProvider, effectiveProvider)
 			const maxRetries = 3
 			var genErr error
-			if video.Mode == "slideshow" || !s.hasVideoProvider(s.videoTenantID(video)) {
+			if !hasProvider {
 				// ── 两阶段异步模式 ──────────────────────────────────────────────────
 				// 阶段一（同步，占用 sem）：AI 图片生成 → 下载到本地
 				// 阶段二（异步，释放 sem 后后台执行）：Ken Burns 编码 → OSS 上传，支持自动重试
@@ -1715,8 +1713,12 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 		return err
 	}
 
-	// 图片解说模式：异步生成图片，完成后自动拼接
-	if video.Mode == "slideshow" {
+	tenantID := s.videoTenantID(video)
+	hasProvider := s.hasVideoProvider(tenantID)
+	logger.Printf("GenerateAllShotVideos: videoID=%d mode=%q tenantID=%d hasVideoProvider=%v", videoID, video.Mode, tenantID, hasProvider)
+
+	// 无视频提供商：降级为图片解说 + Ken Burns
+	if !hasProvider {
 		shots, err := s.storyboardRepo.ListByVideoAndStatus(videoID, "pending")
 		if err != nil || len(shots) == 0 {
 			return fmt.Errorf("no pending shots found for video %d (generate storyboard first)", videoID)
@@ -1726,6 +1728,7 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 		if err := s.videoRepo.Update(video); err != nil {
 			logger.Errorf("[VideoService] GenerateAllShotVideos: failed to update video %d status to generating: %v", videoID, err)
 		}
+		logger.Printf("GenerateAllShotVideos: videoID=%d → slideshow fallback (no video provider)", videoID)
 		go s.runSlideshowPipeline(videoID)
 		return nil
 	}

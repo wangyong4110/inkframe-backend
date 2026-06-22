@@ -855,9 +855,6 @@ func (s *VideoService) GenerateSingleShot(videoID, shotID uint, provider ...stri
 	aspectRatio := video.AspectRatio
 	if video.NovelID > 0 && s.novelRepo != nil {
 		if novel, nErr := s.novelRepo.GetByID(video.NovelID); nErr == nil {
-			if effectiveProvider == "" && novel.VideoModel != "" {
-				effectiveProvider = novel.VideoModel
-			}
 			if aspectRatio == "" && novel.VideoConf().VideoAspectRatio != "" {
 				aspectRatio = novel.VideoConf().VideoAspectRatio
 			}
@@ -868,15 +865,18 @@ func (s *VideoService) GenerateSingleShot(videoID, shotID uint, provider ...stri
 	if err := s.storyboardRepo.Update(shot); err != nil {
 		logger.Errorf("[VideoService] failed to update shot status to generating: %v", err)
 	}
-	if video.Mode == "slideshow" {
-		return shot, s.GenerateSlideshowShotVideo(shot, aspectRatio)
+	tenantID := s.videoTenantID(video)
+	hasProvider := s.hasVideoProvider(tenantID)
+	logger.Printf("GenerateSingleShot: shot %d videoID=%d mode=%q tenantID=%d hasVideoProvider=%v effectiveProvider=%q aspectRatio=%s",
+		shotID, videoID, video.Mode, tenantID, hasProvider, effectiveProvider, aspectRatio)
+	// 有视频提供商时优先调用 AI 视频模型，无论 video.Mode 如何
+	if hasProvider {
+		logger.Printf("GenerateSingleShot: shot %d → AI video mode (provider=%q, videoMode=%q)", shotID, effectiveProvider, video.Mode)
+		return shot, s.GenerateShotVideo(shot, aspectRatio, effectiveProvider)
 	}
-	// AI 视频模式：若没有可用的视频提供商，自动降级为图片解说模式
-	if !s.hasVideoProvider(s.videoTenantID(video)) {
-		logger.Printf("GenerateSingleShot: no video provider available, falling back to slideshow for shot %d (video %d)", shotID, videoID)
-		return shot, s.GenerateSlideshowShotVideo(shot, aspectRatio)
-	}
-	return shot, s.GenerateShotVideo(shot, aspectRatio, effectiveProvider)
+	// 无视频提供商：降级为图片解说 + Ken Burns
+	logger.Printf("GenerateSingleShot: shot %d → slideshow fallback (no video provider for tenantID=%d, videoMode=%q)", shotID, tenantID, video.Mode)
+	return shot, s.GenerateSlideshowShotVideo(shot, aspectRatio)
 }
 
 // BatchGenerateShotClips 批量为已有图片的分镜生成 Ken Burns 动效视频（幂等：已有 VideoURL 的分镜自动跳过）。
