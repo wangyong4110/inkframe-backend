@@ -58,10 +58,11 @@ func (p *DoubaoProvider) GetModels() []string {
 		"doubao-lite-4k",
 		"doubao-lite-32k",
 		"doubao-lite-128k",
-		// Seedream / SeedEdit 图像模型（火山方舟 Ark 平台）
-		"seedream-3-0-t2i-250415",
-		"seedream-xl-t2i-250415",
-		"seededit-3-0-t2i-250428",
+		// Seedream 图像模型（火山方舟 Ark 平台，支持主体一致性多图参考）
+		"doubao-seedream-5-0-260128",   // Seedream 5.0 lite，2K/3K/4K，支持流式/组图/联网搜索
+		"doubao-seedream-4-5-251128",   // Seedream 4.5，2K/4K
+		"doubao-seedream-4-0-250828",   // Seedream 4.0，1K/2K/4K（默认）
+		"seededit-3-0-t2i-250428",      // SeedEdit 3.0，指令式图像编辑
 	}
 }
 
@@ -279,34 +280,43 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 
 	model := req.Model
 	if model == "" {
-		model = "seedream-3-0-t2i-250415"
+		model = "doubao-seedream-4-0-250828"
 	}
 
 	size := seedreamSize(req.Size)
 
 	apiReq := map[string]interface{}{
-		"model":  model,
-		"prompt": req.Prompt,
-		"n":      1,
-		"size":   size,
+		"model":                       model,
+		"prompt":                      req.Prompt,
+		"size":                        size,
+		"watermark":                   false,
+		"sequential_image_generation": "disabled", // 单张输出，禁止自动组图
 	}
 	if req.NegativePrompt != "" {
 		apiReq["negative_prompt"] = req.NegativePrompt
 	}
-	// 参考图：Seedream 4.0 / Ark 通过 image_url（https URL）或 image_base64（原始 base64）传参考图。
-	// 优先用 ReferenceImages[0]（多图时取首张），其次用 ReferenceImage。
-	// 相对路径（/api/media/...）由上层 ai_service 预先 fetchImageAsBase64 转换为 base64 字符串。
-	refImg := req.ReferenceImage
-	if len(req.ReferenceImages) > 0 && req.ReferenceImages[0] != "" {
-		refImg = req.ReferenceImages[0]
-	}
-	if refImg != "" {
-		if strings.HasPrefix(refImg, "http://") || strings.HasPrefix(refImg, "https://") {
-			apiReq["image_url"] = refImg
-		} else if len(refImg) > 64 {
-			// 只有长度 >64 的字符串才认为是 base64 数据，避免把残留相对路径当 base64 发出
-			apiReq["image_base64"] = refImg
+	// 参考图：Seedream 4.0+ 官方 API 使用 "image" 字段，支持 URL 或 Base64 data URI。
+	// - URL：直接传入 https:// 地址
+	// - Base64：必须带 data URI 前缀，格式 "data:image/<格式>;base64,<数据>"
+	// - 多图（Seedream 4.0/4.5/5.0 最多支持 14 张）：传入 []string
+	// 相对路径（/api/media/...）由上层 ai_service 预先 fetchImageAsBase64 转换为裸 base64 字符串。
+	var allRefImages []string
+	// 优先使用 ReferenceImages（多图），其次 ReferenceImage（单图）
+	if len(req.ReferenceImages) > 0 {
+		for _, r := range req.ReferenceImages {
+			if formatted := seedreamFormatImage(r); formatted != "" {
+				allRefImages = append(allRefImages, formatted)
+			}
 		}
+	} else if req.ReferenceImage != "" {
+		if formatted := seedreamFormatImage(req.ReferenceImage); formatted != "" {
+			allRefImages = append(allRefImages, formatted)
+		}
+	}
+	if len(allRefImages) == 1 {
+		apiReq["image"] = allRefImages[0]
+	} else if len(allRefImages) > 1 {
+		apiReq["image"] = allRefImages
 	}
 
 	body, _ := json.Marshal(apiReq)
@@ -440,4 +450,46 @@ func seedreamSize(size string) string {
 		return fmt.Sprintf("%dx%d", base, base*rh/rw)
 	}
 	return "1024x1024"
+}
+
+// seedreamFormatImage 将图片输入格式化为 Seedream API 接受的 "image" 字段值。
+// - https:// URL：直接返回
+// - 裸 base64 数据（由 fetchImageAsBase64 返回）：自动检测格式并添加 data URI 前缀
+// - 相对路径或过短字符串（未被上层解析）：返回空字符串，跳过
+func seedreamFormatImage(img string) string {
+	if img == "" {
+		return ""
+	}
+	if strings.HasPrefix(img, "http://") || strings.HasPrefix(img, "https://") {
+		return img
+	}
+	if strings.HasPrefix(img, "data:") {
+		return img // 已有 data URI 前缀
+	}
+	if len(img) < 64 {
+		return "" // 太短，可能是残留相对路径，跳过
+	}
+	// 裸 base64：检测图片格式并添加 data URI 前缀
+	return "data:" + seedreamDetectMime(img) + ";base64," + img
+}
+
+// seedreamDetectMime 根据 base64 编码数据的前几个字符推断图片 MIME 类型。
+// base64 编码的前缀与原始字节魔数对应：
+//   - JPEG  FF D8 FF → /9j/
+//   - PNG   89 50 4E 47 → iVBOR
+//   - GIF   47 49 46 38 → R0lG
+//   - WebP  52 49 46 46 → UklG
+func seedreamDetectMime(b64 string) string {
+	switch {
+	case strings.HasPrefix(b64, "/9j/"):
+		return "image/jpeg"
+	case strings.HasPrefix(b64, "iVBOR"):
+		return "image/png"
+	case strings.HasPrefix(b64, "R0lG"):
+		return "image/gif"
+	case strings.HasPrefix(b64, "UklG"):
+		return "image/webp"
+	default:
+		return "image/jpeg"
+	}
 }

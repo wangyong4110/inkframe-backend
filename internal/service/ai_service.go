@@ -1536,7 +1536,7 @@ func (s *AIService) GenerateImage(prompt string, options *ImageGenerationOptions
 
 // knownImageCapableProviders 已知支持图像生成的提供者及其默认模型，用于 DB 动态加载的回退路径。
 var knownImageCapableProviders = []ai.ImageProviderEntry{
-	{ProviderName: "doubao", Model: "seedream-3-0-t2i-250415", Size: "2048x2048"},
+	{ProviderName: "doubao", Model: "doubao-seedream-4-0-250828", Size: "2048x2048"},
 	{ProviderName: "qianwen", Model: "wanx2.1-t2i-turbo", Size: "1024x1024"},
 	{ProviderName: "openai", Model: "dall-e-3", Size: "1792x1024"},
 	{ProviderName: "volcengine-visual", Model: ai.VolcModelText2ImgV3, Size: "2048x2048"},
@@ -2177,10 +2177,11 @@ func (s *AIService) fetchImageAsBase64(ctx context.Context, imageURL string) str
 
 // referenceImageProviders 是真正支持参考图引导生成的 provider 集合。
 // 这些 provider 的 ImageGenerate 实现会将 ReferenceImage 实际传给 API 并由模型处理。
-// doubao/qianwen 的 T2I 端点（/images/generations OpenAI 兼容格式）会静默忽略参考图字段，不能用于此场景。
+// doubao（Seedream 4.0+）通过官方 "image" 字段支持单图/多图参考，格式为 URL 或 data URI。
 var referenceImageProviders = map[string]bool{
-	ai.ProviderNameVolcengineVisual: true, // DreamO（角色一致性）/ SeedEditV3（指令编辑）
+	ai.ProviderNameVolcengineVisual: true, // DreamO（IP-Adapter 角色一致性）/ SeedEditV3
 	"kling-image":                   true, // 可灵图片，subject reference
+	"doubao":                        true, // Seedream 4.0/4.5/5.0，"image" 字段多图参考
 }
 
 // EditImageWithInstruction 使用支持参考图的文生图模型重新生成图片，将原图作为参考图保持视觉一致性。
