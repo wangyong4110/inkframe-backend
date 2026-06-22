@@ -1166,15 +1166,25 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			}
 			svcs.TaskService.SetRunning(t.TaskID)        //nolint:errcheck
 			svcs.TaskService.UpdateProgress(t.TaskID, 5) //nolint:errcheck
+
+			// Start polling concurrently — handles "generating" shots gracefully
+			pollDone := make(chan struct{})
+			if params.Mode != "slideshow" {
+				go func() {
+					defer close(pollDone)
+					svcs.VideoService.PollAndStitchVideo(params.VideoID)
+				}()
+			} else {
+				close(pollDone)
+			}
+
 			if err := svcs.VideoService.GenerateAllShotVideos(params.VideoID); err != nil {
 				logger.Errorf("TaskService resume video_gen %s: submit failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				return
 			}
 			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
-			if params.Mode != "slideshow" {
-				svcs.VideoService.PollAndStitchVideo(params.VideoID) // blocks until done or timeout
-			}
+			<-pollDone
 			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"video_id": params.VideoID}) //nolint:errcheck
 		})
 	}

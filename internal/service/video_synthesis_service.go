@@ -571,7 +571,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 			continue
 		}
 		var pending, processing []*model.StoryboardShot
-		completedCount, failedCount := 0, 0
+		completedCount, failedCount, generatingCount := 0, 0, 0
 		for _, shot := range allShots {
 			switch shot.Status {
 			case "pending":
@@ -582,6 +582,9 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 				completedCount++
 			case "failed":
 				failedCount++
+			case "generating":
+				// Shot is still being submitted (image gen in progress); treat as active
+				generatingCount++
 			}
 		}
 
@@ -655,8 +658,10 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 			return
 		}
 
-		// Stall detection: no active work after 5 ticks
-		if len(processing) == 0 && len(pending) == 0 {
+		// Stall detection: no active work after 5 ticks.
+		// generatingCount > 0 means shots are still being submitted (image gen in
+		// progress before video task submission) — count as active to avoid false stall.
+		if len(processing) == 0 && len(pending) == 0 && generatingCount == 0 {
 			noProgressCount++
 			if noProgressCount >= 5 {
 				logger.Printf("PollAndStitchVideo: videoID %d stalled (no active shots), stopping", videoID)

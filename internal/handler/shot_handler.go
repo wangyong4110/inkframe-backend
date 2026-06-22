@@ -112,7 +112,12 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+
+		// Start polling immediately — shots already submitted to the video provider
+		// will be picked up on the first tick; "generating" shots are treated as active.
+		go h.videoService.PollAndStitchVideo(uint(videoID)) //nolint:staticcheck
+
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		shots, genErr := h.videoService.BatchGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, progressFn, req.Provider)
 		if genErr != nil {
@@ -121,13 +126,6 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 			return
 		}
 		h.taskSvc.Complete(taskID, gin.H{"shot_count": len(shots)}) //nolint:errcheck
-		// AI 视频模式：任何镜头提交了视频任务则启动后台轮询取回结果
-		for _, sh := range shots {
-			if sh.Status == "processing" {
-				go h.videoService.PollAndStitchVideo(uint(videoID))
-				break
-			}
-		}
 	}(task.TaskID)
 
 	c.JSON(http.StatusAccepted, gin.H{

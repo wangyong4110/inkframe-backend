@@ -675,14 +675,12 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// 获取视频的 ArtStyle、TenantID、质量档位、宽高比、角色一致性权重和色彩调色
 	artStyle := ""
 	var tenantID uint
-	var novelID uint
 	charConsistencyWeight := 0.75  // 默认中等一致性：DreamO scale≈7.75，场景prompt与角色参考图均衡影响
 	qualityTier := "production"   // 默认质量档位（preview=768px 对视频参考帧质量不够）
 	var imageAspectRatio, colorGrade string
 	if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil {
 		artStyle = video.ArtStyle
 		tenantID = s.videoTenantID(video)
-		novelID = video.NovelID
 		imageAspectRatio = video.AspectRatio
 		if video.QualityTier != "" {
 			qualityTier = video.QualityTier
@@ -711,9 +709,6 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 			}
 		}
 	}
-
-	// 中文 image_prompt 自动翻译为英文再传给图片 AI（保留中文供用户编辑，生成时翻译）
-	promptText = s.translatePromptToEnglish(ctx, tenantID, novelID, promptText)
 
 	// allRefImages 直接传给 API，无需合图（所有图生图 API 均支持多张参考图）
 
@@ -1800,35 +1795,6 @@ func containsChinese(s string) bool {
 	return false
 }
 
-// translatePromptToEnglish 将中文图片提示词翻译为英文后返回。
-// 若文本不含中文字符则直接返回原文；翻译失败时记录日志并降级返回原文（非阻塞）。
-func (s *VideoService) translatePromptToEnglish(ctx context.Context, tenantID uint, novelID uint, text string) string {
-	if !containsChinese(text) {
-		return text
-	}
-	if s.aiService == nil {
-		return text
-	}
-
-	instruction := "Translate the following image generation prompt from Chinese to English.\n" +
-		"Output ONLY the translated English text — no explanation, no prefix, no quotes.\n" +
-		"Preserve all visual descriptors, art style terms, camera/lens parameters, lighting descriptions, and quality boosters exactly.\n\n" +
-		text
-
-	translated, err := s.aiService.GenerateWithProviderCtx(
-		ctx, tenantID, novelID, "chapter_review", instruction, "",
-	)
-	if err != nil {
-		logger.Warnf("[translatePromptToEnglish] translation failed, using original Chinese prompt: %v", err)
-		return text
-	}
-	translated = strings.TrimSpace(translated)
-	if translated == "" {
-		return text
-	}
-	logger.Printf("[translatePromptToEnglish] translated %d chars → %d chars", len([]rune(text)), len([]rune(translated)))
-	return translated
-}
 
 // normalizeMediaURL 修复 DB 存储时写入的畸形 /api/v1/media/ 路径：
 //   - "/ap1/media/N"   → "/api/v1/media/N"  (ap1 typo)
