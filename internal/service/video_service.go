@@ -261,43 +261,65 @@ func (s *VideoService) WithDBMediaReader(svc storage.Service) *VideoService {
 	return s
 }
 
-// resolveAbsURL 将相对路径（/api/v1/media/...）转换为第三方 API 可访问的绝对 URL。
-// 优先级：
-//  1. 已是 http(s):// → 原样返回
-//  2. dbMediaReader 已配置 → 从 DB 读出图片数据，再通过 storageSvc 上传 OSS 拿到公网 CDN URL
-//  3. 回退：backendBaseURL + 相对路径
-//  4. 以上均不满足 → 原样返回
-func (s *VideoService) resolveAbsURL(u string) string {
+// migrateLocalImageToPublic 将本地 DB 存储的图片（/api/v1/media/*）迁移到 OSS。
+// 若已是公网 URL 则直接返回原值。迁移失败时返回原值并打印错误日志，由调用方决定如何处理。
+func (s *VideoService) migrateLocalImageToPublic(u string) string {
 	if u == "" || strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
 		return u
 	}
-	// 读取 DB 存储中的旧图片数据，再上传到 OSS
-	if s.dbMediaReader != nil && strings.HasPrefix(u, "/api/v1/media/") {
-		data, err := s.dbMediaReader.Get(context.Background(), u)
-		if err != nil {
-			logger.Errorf("[resolveAbsURL] dbMediaReader.Get(%q) failed: %v", u, err)
-		} else if len(data) == 0 {
-			logger.Errorf("[resolveAbsURL] dbMediaReader.Get(%q) returned empty data", u)
-		} else if s.storageSvc == nil {
-			logger.Errorf("[resolveAbsURL] storageSvc is nil, cannot upload %q to OSS", u)
-		} else {
-			key := fmt.Sprintf("images/shot-ref-%s.jpg", uuid.New().String())
-			ossURL, uploadErr := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(data), int64(len(data)), "image/jpeg")
-			if uploadErr != nil {
-				logger.Errorf("[resolveAbsURL] OSS upload failed for %q: %v", u, uploadErr)
-			} else if strings.HasPrefix(ossURL, "http://") || strings.HasPrefix(ossURL, "https://") {
-				logger.Printf("[resolveAbsURL] %q → OSS %s", u, ossURL)
-				return ossURL
-			} else {
-				logger.Errorf("[resolveAbsURL] OSS upload returned non-absolute URL %q for %q", ossURL, u)
-			}
-		}
+	if !strings.HasPrefix(u, "/api/v1/media/") {
+		return u
 	}
-	// 回退：拼接后端公网 URL
+	if s.dbMediaReader == nil {
+		logger.Errorf("[migrateLocalImage] dbMediaReader is nil, cannot read %q", u)
+		return u
+	}
+	data, err := s.dbMediaReader.Get(context.Background(), u)
+	if err != nil {
+		logger.Errorf("[migrateLocalImage] read DB failed for %q: %v", u, err)
+		return u
+	}
+	if len(data) == 0 {
+		logger.Errorf("[migrateLocalImage] DB returned empty data for %q", u)
+		return u
+	}
+	if s.storageSvc == nil {
+		logger.Errorf("[migrateLocalImage] storageSvc is nil, cannot upload %q to OSS", u)
+		return u
+	}
+	key := fmt.Sprintf("images/migrated-%s.jpg", uuid.New().String())
+	ossURL, uploadErr := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(data), int64(len(data)), "image/jpeg")
+	if uploadErr != nil {
+		logger.Errorf("[migrateLocalImage] OSS upload failed for %q: %v", u, uploadErr)
+		return u
+	}
+	if !strings.HasPrefix(ossURL, "http://") && !strings.HasPrefix(ossURL, "https://") {
+		logger.Errorf("[migrateLocalImage] OSS returned non-public URL %q for %q (OSS not configured?)", ossURL, u)
+		return u
+	}
+	return ossURL
+}
+
+// resolveAbsURL 将相对路径转换为绝对 URL，供批量处理额外参考图使用。
+// 主参考图请使用 migrateLocalImageToPublic（带永久 DB 更新）。
+// 若迁移失败且未配置 PublicURL，返回空字符串（调用方应跳过该图，禁止使用 127.0.0.1）。
+func (s *VideoService) resolveAbsURL(u string) string {
+	if u == "" {
+		return ""
+	}
+	if strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
+		return u
+	}
+	migrated := s.migrateLocalImageToPublic(u)
+	if strings.HasPrefix(migrated, "http://") || strings.HasPrefix(migrated, "https://") {
+		return migrated
+	}
+	// 仅在明确配置了 PublicURL 时才拼接（严禁 127.0.0.1）
 	if s.backendBaseURL != "" {
 		return s.backendBaseURL + u
 	}
-	return u
+	logger.Errorf("[resolveAbsURL] cannot resolve %q to a public URL (OSS migration failed, no PublicURL configured)", u)
+	return ""
 }
 
 // CreateVideoFromChapter 从章节创建视频

@@ -1014,6 +1014,18 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		referenceImage = shot.ImageURL
 		shot.FrameImageURL = shot.ImageURL
 		logger.Printf("GenerateShotVideo: shot %d reusing existing ImageURL as reference: %s", shot.ShotNo, shot.ImageURL)
+		// 迁移旧的本地 DB 路径到 OSS，同时永久更新 DB（只做一次）
+		if migrated := s.migrateLocalImageToPublic(shot.ImageURL); migrated != shot.ImageURL {
+			logger.Printf("GenerateShotVideo: shot %d migrated ImageURL %s → %s", shot.ShotNo, shot.ImageURL, migrated)
+			referenceImage = migrated
+			shot.ImageURL = migrated
+			shot.FrameImageURL = migrated
+			if err := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{
+				"image_url": migrated, "frame_image_url": migrated,
+			}); err != nil {
+				logger.Errorf("GenerateShotVideo: shot %d persist migrated URL: %v", shot.ShotNo, err)
+			}
+		}
 	} else {
 		// 先生成图片：使用 shot.Prompt（image_prompt）+ 角色参考图 → 完整场景图
 		logger.Printf("GenerateShotVideo: shot %d ImageURL empty, generating image first (charIDs=%v)", shot.ShotNo, shot.CharacterIDs)
@@ -1166,9 +1178,11 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 
 	// 外部 API 不能访问相对路径，将 /api/v1/media/* 补全为绝对 URL
 	absRef := s.resolveAbsURL(referenceImage)
-	absExtras := make([]string, len(extraRefImages))
-	for i, u := range extraRefImages {
-		absExtras[i] = s.resolveAbsURL(u)
+	var absExtras []string
+	for _, u := range extraRefImages {
+		if resolved := s.resolveAbsURL(u); resolved != "" {
+			absExtras = append(absExtras, resolved)
+		}
 	}
 
 	req := &ai.VideoGenerateRequest{

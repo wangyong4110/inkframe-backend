@@ -3,10 +3,12 @@ package ai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -112,8 +114,32 @@ func (p *JimengVideoProvider) GenerateVideo(ctx context.Context, req *VideoGener
 	}
 
 	if len(allImages) > 0 {
-		// I2V 系列：图片用 image_urls 数组，无 aspect_ratio
-		params["image_urls"] = allImages
+		// I2V 系列：公网 URL → image_urls；file:// 本地路径 → binary_data_base64
+		var urls, b64s []string
+		for _, img := range allImages {
+			switch {
+			case strings.HasPrefix(img, "http://") || strings.HasPrefix(img, "https://"):
+				urls = append(urls, img)
+			case strings.HasPrefix(img, "file://"):
+				filePath := strings.TrimPrefix(img, "file://")
+				if data, err := os.ReadFile(filePath); err == nil && len(data) > 0 {
+					b64s = append(b64s, base64.StdEncoding.EncodeToString(data))
+				} else {
+					logger.Errorf("[jimeng-video] cannot read local file %q: %v", filePath, err)
+				}
+			default:
+				logger.Errorf("[jimeng-video] skipping non-public image URL %q", img)
+			}
+		}
+		if len(urls) > 0 {
+			params["image_urls"] = urls
+		}
+		if len(b64s) > 0 {
+			params["binary_data_base64"] = b64s
+		}
+		if len(urls) == 0 && len(b64s) == 0 {
+			logger.Errorf("[jimeng-video] all images were filtered out, falling back to T2V")
+		}
 	} else {
 		// T2V：支持 aspect_ratio
 		ar := req.AspectRatio

@@ -476,13 +476,11 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 	aiSvc := core.AI
 
 	// 视频服务（视频提供商从 DB 按租户加载，无需静态注册）
-	backendBaseURL := cfg.Server.PublicURL
-	if backendBaseURL == "" {
-		backendBaseURL = fmt.Sprintf("http://127.0.0.1:%d", cfg.Server.Port)
-	}
 	videoSvc := service.NewVideoService(repos.VideoRepo, repos.StoryboardRepo, repos.ChapterRepo, repos.CharacterRepo, repos.NovelRepo, repos.TenantRepo, aiSvc, nil).
-		WithRedis(redisClient).           // Fix: cross-instance video view dedup
-		WithBackendBaseURL(backendBaseURL) // Fix: resolve relative /api/v1/media/* for external APIs
+		WithRedis(redisClient)
+	if cfg.Server.PublicURL != "" {
+		videoSvc.WithBackendBaseURL(cfg.Server.PublicURL)
+	}
 
 	// 图像服务（内部，用于视频增强和一致性服务）
 	imageSvc := service.NewImageService(nil)

@@ -35,8 +35,9 @@ type AIService struct {
 	providerRepo  *repository.ModelProviderRepository
 	novelRepo     *repository.NovelRepository
 	storageSvc    storage.Service
+	dbMediaReader storage.Service // DB-backed reader for legacy /api/v1/media/* paths
 	taskRouting   TaskRouting
-	serverBaseURL string       // base URL for resolving relative media paths, e.g. "http://127.0.0.1:8080"
+	serverBaseURL string       // base URL for resolving relative media paths (fallback, prefer dbMediaReader)
 	providerCache sync.Map      // key: "tenantID:providerName" → providerCacheEntry
 	imageSem      chan struct{} // nil = unlimited; set via WithImageConcurrency
 	semMu         sync.RWMutex  // protects imageSem replacement
@@ -228,6 +229,12 @@ func (s *AIService) WithNovelRepo(repo *repository.NovelRepository) *AIService {
 // WithStorage 注入媒体存储服务，供图片生成后持久化使用
 func (s *AIService) WithStorage(svc storage.Service) *AIService {
 	s.storageSvc = svc
+	return s
+}
+
+// WithDBMediaReader 注入专用于读取 DB 存储（/api/v1/media/*）媒体数据的 storage.Service。
+func (s *AIService) WithDBMediaReader(svc storage.Service) *AIService {
+	s.dbMediaReader = svc
 	return s
 }
 
@@ -2143,35 +2150,43 @@ func (s *AIService) WithServerBaseURL(baseURL string) {
 }
 
 // fetchImageAsBase64 下载图片并返回 base64 编码的原始数据（不含 data URI 前缀）。
-// 支持绝对 URL（https://...）和相对路径（/api/v1/media/xxx，需已配置 serverBaseURL）。
+// 对 /api/v1/media/* 相对路径优先用 dbMediaReader 直接读 DB，避免依赖 serverBaseURL（127.0.0.1）。
 // 下载失败时返回空字符串，由调用方决定是否降级。
 func (s *AIService) fetchImageAsBase64(ctx context.Context, imageURL string) string {
 	if imageURL == "" {
 		return ""
 	}
-	fetchURL := imageURL
+	// 相对路径：优先直接读 DB，避免走 127.0.0.1 HTTP
 	if !strings.HasPrefix(imageURL, "http://") && !strings.HasPrefix(imageURL, "https://") {
+		if s.dbMediaReader != nil && strings.HasPrefix(imageURL, "/api/v1/media/") {
+			data, err := s.dbMediaReader.Get(ctx, imageURL)
+			if err == nil && len(data) > 0 {
+				return base64.StdEncoding.EncodeToString(data)
+			}
+			logger.Errorf("fetchImageAsBase64: dbMediaReader.Get(%q) failed: %v", imageURL, err)
+		}
+		// 回退：拼接 serverBaseURL（仅在明确配置了 public URL 时可用）
 		if s.serverBaseURL == "" {
-			logger.Printf("fetchImageAsBase64: relative URL %q but serverBaseURL not set", imageURL)
+			logger.Printf("fetchImageAsBase64: relative URL %q but no dbMediaReader or serverBaseURL", imageURL)
 			return ""
 		}
-		fetchURL = s.serverBaseURL + "/" + strings.TrimLeft(imageURL, "/")
+		imageURL = s.serverBaseURL + "/" + strings.TrimLeft(imageURL, "/")
 	}
 	dlCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, fetchURL, nil)
+	req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, imageURL, nil)
 	if err != nil {
-		logger.Errorf("fetchImageAsBase64: build request for %s: %v", fetchURL, err)
+		logger.Errorf("fetchImageAsBase64: build request for %s: %v", imageURL, err)
 		return ""
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		logger.Errorf("fetchImageAsBase64: download %s: %v", fetchURL, err)
+		logger.Errorf("fetchImageAsBase64: download %s: %v", imageURL, err)
 		return ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		logger.Printf("fetchImageAsBase64: HTTP %d for %s", resp.StatusCode, fetchURL)
+		logger.Printf("fetchImageAsBase64: HTTP %d for %s", resp.StatusCode, imageURL)
 		return ""
 	}
 	const maxFetchSize = 20 << 20 // 20 MB
@@ -2181,7 +2196,7 @@ func (s *AIService) fetchImageAsBase64(ctx context.Context, imageURL string) str
 		return ""
 	}
 	if len(data) > maxFetchSize {
-		logger.Printf("fetchImageAsBase64: image too large (>20MB) from %s", fetchURL)
+		logger.Printf("fetchImageAsBase64: image too large (>20MB) from %s", imageURL)
 		return ""
 	}
 	return base64.StdEncoding.EncodeToString(data)
@@ -2620,15 +2635,22 @@ func (s *AIService) UpscaleImage(ctx context.Context, tenantID, novelID uint, im
 }
 
 // downloadImageBytes 下载图片到内存，返回 (data, contentType, error)。
-// 支持绝对 URL 和相对路径（/api/v1/media/xxx），相对路径需已配置 serverBaseURL。
+// 支持绝对 URL 和相对路径（/api/v1/media/xxx）；相对路径优先用 dbMediaReader 直接读 DB。
 func (s *AIService) downloadImageBytes(ctx context.Context, imageURL string) ([]byte, string, error) {
-	fetchURL := imageURL
 	if !strings.HasPrefix(imageURL, "http://") && !strings.HasPrefix(imageURL, "https://") {
-		if s.serverBaseURL == "" {
-			return nil, "", fmt.Errorf("relative URL %q but serverBaseURL not configured", imageURL)
+		if s.dbMediaReader != nil && strings.HasPrefix(imageURL, "/api/v1/media/") {
+			data, err := s.dbMediaReader.Get(ctx, imageURL)
+			if err == nil && len(data) > 0 {
+				return data, "image/jpeg", nil
+			}
+			logger.Errorf("downloadImageBytes: dbMediaReader.Get(%q) failed: %v", imageURL, err)
 		}
-		fetchURL = s.serverBaseURL + "/" + strings.TrimLeft(imageURL, "/")
+		if s.serverBaseURL == "" {
+			return nil, "", fmt.Errorf("relative URL %q but no dbMediaReader or serverBaseURL configured", imageURL)
+		}
+		imageURL = s.serverBaseURL + "/" + strings.TrimLeft(imageURL, "/")
 	}
+	fetchURL := imageURL
 	dlCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, fetchURL, nil)

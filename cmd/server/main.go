@@ -155,12 +155,9 @@ func main() {
 	dbMediaReader := storage.New(storage.Config{}, db)
 	services.VideoService.WithDBMediaReader(dbMediaReader)
 	services.AIService.WithStorage(storageSvc)
-	{
-		serverHost := cfg.Server.Host
-		if serverHost == "" || serverHost == "0.0.0.0" {
-			serverHost = "127.0.0.1"
-		}
-		services.AIService.WithServerBaseURL(fmt.Sprintf("http://%s:%d", serverHost, cfg.Server.Port))
+	services.AIService.WithDBMediaReader(dbMediaReader)
+	if cfg.Server.PublicURL != "" {
+		services.AIService.WithServerBaseURL(cfg.Server.PublicURL)
 	}
 	services.BGMService.WithStorage(storageSvc)
 	services.AssetService.WithStorage(storageSvc)
