@@ -949,9 +949,9 @@ func (s *VideoService) BatchGenerateShotClips(videoID uint, shotIDs []uint, prog
 			if duration <= 0 {
 				duration = defaultShotDurationSecs
 			}
-			localImage, dlErr := downloadToTemp(sh.ImageURL, fmt.Sprintf("inkframe-img-%d-", sh.ID), ".jpg")
+			localImage, dlErr := s.resolveImageURLToLocalFile(sh.ImageURL, fmt.Sprintf("inkframe-img-%d-", sh.ID))
 			if dlErr != nil {
-				logger.Errorf("BatchGenerateShotClips: shot %d download failed: %v", sh.ShotNo, dlErr)
+				logger.Errorf("BatchGenerateShotClips: shot %d resolve image failed: %v", sh.ShotNo, dlErr)
 				return
 			}
 			defer os.Remove(localImage)

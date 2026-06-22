@@ -26,6 +26,11 @@ type Service interface {
 	Upload(ctx context.Context, key string, r io.Reader, size int64, contentType string) (url string, err error)
 	// Delete removes the object identified by the given key (best-effort, non-fatal on missing object).
 	Delete(ctx context.Context, key string) error
+	// Get retrieves the raw bytes for a stored URL previously returned by Upload.
+	// For DB-backed storage the url is "/api/v1/media/{id}".
+	// For local storage the url is a "/uploads/..." relative path.
+	// For OSS storage the url is a full https:// URL — data is downloaded.
+	Get(ctx context.Context, url string) ([]byte, error)
 }
 
 // Config maps to config.StorageConfig.
@@ -171,6 +176,23 @@ func (s *ossService) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
+func (s *ossService) Get(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("storage: build get request: %w", err)
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("storage: OSS GET: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("storage: OSS GET %s: HTTP %d", url, resp.StatusCode)
+	}
+	const maxSize = 500 << 20
+	return io.ReadAll(io.LimitReader(resp.Body, maxSize))
+}
+
 func (s *ossService) sign(stringToSign string) string {
 	mac := hmac.New(sha1.New, []byte(s.cfg.SecretKey))
 	mac.Write([]byte(stringToSign))
@@ -208,9 +230,33 @@ func (s *localService) Upload(_ context.Context, key string, r io.Reader, _ int6
 	return strings.TrimRight(s.base, "/") + "/" + key, nil
 }
 
+func (s *localService) Get(_ context.Context, url string) ([]byte, error) {
+	// url is e.g. "/uploads/novels/1/chapters/2/image/foo.jpg"
+	rel := strings.TrimPrefix(url, strings.TrimRight(s.base, "/"))
+	dest := filepath.Join(s.dir, filepath.FromSlash(rel))
+	return os.ReadFile(dest)
+}
+
 // ─── DB storage backend ──────────────────────────────────────────────────────
 
 type dbStorageService struct{ db *gorm.DB }
+
+func (s *dbStorageService) Get(_ context.Context, url string) ([]byte, error) {
+	// url is "/api/v1/media/{id}"
+	parts := strings.Split(strings.TrimPrefix(url, "/api/v1/media/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		return nil, fmt.Errorf("storage: invalid media URL %q", url)
+	}
+	id, err := strconv.ParseUint(parts[0], 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("storage: invalid media ID in URL %q: %w", url, err)
+	}
+	var asset model.MediaAsset
+	if err := s.db.Select("data").First(&asset, id).Error; err != nil {
+		return nil, fmt.Errorf("storage: media asset %d not found: %w", id, err)
+	}
+	return asset.Data, nil
+}
 
 func (s *dbStorageService) Delete(_ context.Context, key string) error {
 	// key for DB storage is the URL path "/api/v1/media/{id}" — extract id

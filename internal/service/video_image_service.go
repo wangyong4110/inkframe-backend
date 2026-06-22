@@ -1594,9 +1594,9 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 
 	// 2. 生成 Ken Burns 动效视频片段
 	logger.Printf("GenerateSlideshowShotVideo: shot %d starting Ken Burns encode", shot.ShotNo)
-	localImage, dlErr := downloadToTemp(shot.ImageURL, fmt.Sprintf("inkframe-img-%d-", shot.ID), ".jpg")
+	localImage, dlErr := s.resolveImageURLToLocalFile(shot.ImageURL, fmt.Sprintf("inkframe-img-%d-", shot.ID))
 	if dlErr != nil {
-		logger.Errorf("GenerateSlideshowShotVideo: shot %d download image failed: %v — skipping Ken Burns", shot.ShotNo, dlErr)
+		logger.Errorf("GenerateSlideshowShotVideo: shot %d resolve image failed: %v — skipping Ken Burns", shot.ShotNo, dlErr)
 		shot.Status = "completed"
 		shot.Progress = 100
 		return s.storyboardRepo.Update(shot)
@@ -1632,6 +1632,37 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	shot.Status = "completed"
 	shot.Progress = 100
 	return s.storyboardRepo.Update(shot)
+}
+
+// resolveImageURLToLocalFile 将图片 URL 解析为本地临时文件路径，支持三种来源：
+//  1. https:// 或 http:// — 直接下载
+//  2. /api/v1/media/{id}  — 从 DB storage 读取（storageSvc.Get）
+//  3. file:///path        — 直接返回本地路径（不复制）
+func (s *VideoService) resolveImageURLToLocalFile(imageURL, prefix string) (string, error) {
+	if strings.HasPrefix(imageURL, "file://") {
+		return strings.TrimPrefix(imageURL, "file://"), nil
+	}
+	if strings.HasPrefix(imageURL, "http://") || strings.HasPrefix(imageURL, "https://") {
+		return downloadToTemp(imageURL, prefix, ".jpg")
+	}
+	// DB / local storage 相对路径：通过 storageSvc.Get 读取二进制数据
+	if s.storageSvc == nil {
+		return "", fmt.Errorf("no storage service available to resolve %q", imageURL)
+	}
+	data, err := s.storageSvc.Get(context.Background(), imageURL)
+	if err != nil {
+		return "", fmt.Errorf("resolveImageURLToLocalFile %q: %w", imageURL, err)
+	}
+	f, err := os.CreateTemp(inkframeTempDir(), prefix+"*.jpg")
+	if err != nil {
+		return "", fmt.Errorf("resolveImageURLToLocalFile create temp: %w", err)
+	}
+	defer f.Close()
+	if _, err := f.Write(data); err != nil {
+		os.Remove(f.Name()) //nolint:errcheck
+		return "", fmt.Errorf("resolveImageURLToLocalFile write temp: %w", err)
+	}
+	return f.Name(), nil
 }
 
 // uploadClipToStorage 将本地 MP4 文件上传到持久存储（OSS），返回持久 URL。
