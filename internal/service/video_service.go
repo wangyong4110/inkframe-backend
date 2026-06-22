@@ -58,6 +58,7 @@ type VideoService struct {
 	activePoll            sync.Map     // videoID → struct{} (prevents duplicate PollAndStitchVideo goroutines)
 	generatingStoryboard  sync.Map     // videoID → context.CancelFunc (cancels in-progress GenerateStoryboard)
 	backendBaseURL        string       // e.g. "http://192.168.1.10:8080"; used to resolve relative /api/v1/media/* URLs
+	dbMediaReader         storage.Service // DB-backed storage for reading legacy /api/v1/media/* assets
 }
 
 // GetNovelByID 通过 novelRepo 加载小说（供 handler 传递给 CapCutService 等下游服务）
@@ -247,28 +248,41 @@ func (s *VideoService) WithStorage(svc storage.Service) *VideoService {
 
 // WithBackendBaseURL 设置后端对外可访问的根 URL（如 "http://192.168.1.10:8080"），
 // 用于将 /api/v1/media/* 相对路径解析为第三方 API 可访问的完整 URL。
+// 仅在既未配置 OSS 又无 dbMediaReader 时作为最后回退。
 func (s *VideoService) WithBackendBaseURL(baseURL string) *VideoService {
 	s.backendBaseURL = strings.TrimRight(baseURL, "/")
+	return s
+}
+
+// WithDBMediaReader 注入专门用于读取 DB 存储（/api/v1/media/*）媒体数据的 storage.Service。
+// 当主 storageSvc 为 OSS 时，OSS 的 Get() 无法处理相对路径，需要用此单独读取。
+func (s *VideoService) WithDBMediaReader(svc storage.Service) *VideoService {
+	s.dbMediaReader = svc
 	return s
 }
 
 // resolveAbsURL 将相对路径（/api/v1/media/...）转换为第三方 API 可访问的绝对 URL。
 // 优先级：
 //  1. 已是 http(s):// → 原样返回
-//  2. storageSvc 已配置 → 从 DB/本地存储读出图片数据，上传 OSS 拿到公网 CDN URL
+//  2. dbMediaReader 已配置 → 从 DB 读出图片数据，再通过 storageSvc 上传 OSS 拿到公网 CDN URL
 //  3. 回退：backendBaseURL + 相对路径
-//  4. 以上均不满足 → 原样返回（让调用方决定是否报错）
+//  4. 以上均不满足 → 原样返回
 func (s *VideoService) resolveAbsURL(u string) string {
 	if u == "" || strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
 		return u
 	}
-	// 尝试通过 storageSvc 读取并重新上传到 OSS
-	if s.storageSvc != nil && strings.HasPrefix(u, "/api/v1/media/") {
-		data, err := s.storageSvc.Get(context.Background(), u)
-		if err == nil && len(data) > 0 {
+	// 读取 DB 存储中的旧图片数据，再上传到 OSS
+	if s.dbMediaReader != nil && strings.HasPrefix(u, "/api/v1/media/") {
+		data, err := s.dbMediaReader.Get(context.Background(), u)
+		if err != nil {
+			logger.Errorf("[resolveAbsURL] dbMediaReader.Get(%q) failed: %v", u, err)
+		} else if len(data) > 0 && s.storageSvc != nil {
 			key := fmt.Sprintf("images/shot-ref-%s.jpg", uuid.New().String())
 			ossURL, uploadErr := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(data), int64(len(data)), "image/jpeg")
-			if uploadErr == nil && (strings.HasPrefix(ossURL, "http://") || strings.HasPrefix(ossURL, "https://")) {
+			if uploadErr != nil {
+				logger.Errorf("[resolveAbsURL] OSS upload failed for %q: %v", u, uploadErr)
+			} else if strings.HasPrefix(ossURL, "http://") || strings.HasPrefix(ossURL, "https://") {
+				logger.Printf("[resolveAbsURL] %q → OSS %s", u, ossURL)
 				return ossURL
 			}
 		}

@@ -150,6 +150,10 @@ func main() {
 
 	// 注入存储服务
 	services.VideoService.WithStorage(storageSvc)
+	// dbMediaReader 始终基于 DB，用于读取历史 /api/v1/media/* 资产并上传到 OSS
+	// 当 storageSvc 为 OSS 时，OSS.Get() 无法处理相对路径，需要单独的 DB reader
+	dbMediaReader := storage.New(storage.Config{}, db)
+	services.VideoService.WithDBMediaReader(dbMediaReader)
 	services.AIService.WithStorage(storageSvc)
 	{
 		serverHost := cfg.Server.Host
