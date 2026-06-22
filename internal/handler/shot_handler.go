@@ -62,6 +62,10 @@ func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 		}
 		h.taskSvc.UpdateProgress(taskID, 90)                                         //nolint:errcheck
 		h.taskSvc.Complete(taskID, gin.H{"shot_id": shot.ID, "status": shot.Status}) //nolint:errcheck
+		// AI 视频模式：任务提交成功后启动后台轮询，取回视频 URL
+		if shot.Status == "processing" {
+			go h.videoService.PollAndStitchVideo(uint(videoID))
+		}
 	}(task.TaskID)
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -117,6 +121,13 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 			return
 		}
 		h.taskSvc.Complete(taskID, gin.H{"shot_count": len(shots)}) //nolint:errcheck
+		// AI 视频模式：任何镜头提交了视频任务则启动后台轮询取回结果
+		for _, sh := range shots {
+			if sh.Status == "processing" {
+				go h.videoService.PollAndStitchVideo(uint(videoID))
+				break
+			}
+		}
 	}(task.TaskID)
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -614,6 +625,10 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 		}()
 		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
+
+		// 用户主动点击"生成配音"时强制重新生成，清空旧 AudioPath
+		// 使 GenerateShotAudio 内部的幂等性守卫失效，确保修改后的文本被重新合成。
+		shot.AudioPath = ""
 
 		const maxRetries = 3
 		var audioErr error

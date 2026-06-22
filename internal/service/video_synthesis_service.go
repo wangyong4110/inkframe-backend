@@ -38,6 +38,7 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 	}
 	provider, _, provErr := s.resolveVideoProvider(tenantID, shot.ShotProviderName)
 	if provErr != nil {
+		logger.Errorf("PollShotStatus: shot %d 找不到提供商 provider=%s: %v", shot.ShotNo, shot.ShotProviderName, provErr)
 		return fmt.Errorf("provider %s not found", shot.ShotProviderName)
 	}
 
@@ -46,17 +47,29 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 
 	status, err := provider.GetVideoStatus(ctx, shot.ShotTaskID)
 	if err != nil {
+		logger.Errorf("PollShotStatus: shot %d GetVideoStatus失败 taskID=%s: %v", shot.ShotNo, shot.ShotTaskID, err)
 		return fmt.Errorf("poll task %s: %w", shot.ShotTaskID, err)
 	}
 
+	logger.Printf("PollShotStatus: shot %d taskID=%s provider=%s status=%s progress=%d",
+		shot.ShotNo, shot.ShotTaskID, shot.ShotProviderName, status.Status, status.Progress)
+
 	switch status.Status {
 	case "completed", "succeed":
-		videoURL, _ := provider.GetVideoURL(ctx, shot.ShotTaskID)
+		videoURL, urlErr := provider.GetVideoURL(ctx, shot.ShotTaskID)
+		if urlErr != nil {
+			logger.Errorf("PollShotStatus: shot %d GetVideoURL失败 taskID=%s: %v", shot.ShotNo, shot.ShotTaskID, urlErr)
+		}
 		if videoURL == "" {
+			logger.Errorf("PollShotStatus: shot %d 任务完成但未返回video_url taskID=%s", shot.ShotNo, shot.ShotTaskID)
 			shot.Status = "failed"
 			shot.ErrorMessage = "task completed but no video URL returned"
+			if dbErr := s.storyboardRepo.Update(shot); dbErr != nil {
+				logger.Errorf("PollShotStatus: shot %d DB更新失败(failed): %v", shot.ShotNo, dbErr)
+			}
 			return s.storyboardRepo.Update(shot)
 		}
+		logger.Printf("PollShotStatus: shot %d 视频生成完成 url=%s", shot.ShotNo, videoURL)
 		// 下载视频到本地临时文件（供 StitchVideo 使用）
 		localPath := fmt.Sprintf("%s/inkframe-shot-%d-%d.mp4", inkframeTempDir(), shot.ID, time.Now().UnixNano())
 		dlCtx, dlCancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -64,23 +77,26 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 		dlCancel()
 		if dlErr != nil {
 			// 下载失败不致命：保留远程 URL，StitchVideo 会重试
-			logger.Errorf("PollShotStatus: download shot %d video failed (keeping URL): %v", shot.ShotNo, err)
+			logger.Errorf("PollShotStatus: shot %d 下载视频失败，保留远程URL: %v", shot.ShotNo, dlErr)
 			shot.VideoURL = videoURL
 			shot.ClipPath = ""
 		} else {
+			logger.Printf("PollShotStatus: shot %d 视频下载完成 path=%s", shot.ShotNo, localPath)
 			shot.ClipPath = "file://" + localPath
 		}
 		shot.Status = "completed"
 		shot.Progress = 100
 	case "failed", "error":
+		logger.Errorf("PollShotStatus: shot %d 生成失败 taskID=%s error=%s", shot.ShotNo, shot.ShotTaskID, status.Error)
 		shot.Status = "failed"
 		shot.ErrorMessage = status.Error
 		if shot.RetryCount < 3 {
 			shot.RetryCount++
 			shot.Status = "pending"
 			shot.ShotTaskID = ""
+			logger.Printf("PollShotStatus: shot %d 进入重试队列 retry=%d", shot.ShotNo, shot.RetryCount)
 		} else {
-			logger.Errorf("PollShotStatus: shot %d exceeded max retries (%d), marking as permanently failed", shot.ShotNo, shot.RetryCount)
+			logger.Errorf("PollShotStatus: shot %d 超过最大重试次数(%d)，永久失败", shot.ShotNo, shot.RetryCount)
 		}
 	case "processing", "running", "submitted":
 		shot.Status = "processing"
@@ -88,11 +104,15 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 			shot.Progress = status.Progress
 		}
 	default:
-		logger.Printf("PollShotStatus: shot %d unknown status %q", shot.ShotNo, status.Status)
+		logger.Printf("PollShotStatus: shot %d 未知状态 %q，继续等待", shot.ShotNo, status.Status)
 		shot.Status = "processing"
 	}
 
-	return s.storyboardRepo.Update(shot)
+	if dbErr := s.storyboardRepo.Update(shot); dbErr != nil {
+		logger.Errorf("PollShotStatus: shot %d DB更新失败 status=%s: %v", shot.ShotNo, shot.Status, dbErr)
+		return dbErr
+	}
+	return nil
 }
 
 // ─── Video Stitching ──────────────────────────────────────────────────────────

@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/inkframe/inkframe-backend/internal/logger"
 )
 
 // ProviderNameJimengVideo 即梦视频3.0提供者名称
@@ -99,6 +101,9 @@ func (p *JimengVideoProvider) GenerateVideo(ctx context.Context, req *VideoGener
 		frames = 241 // 10秒
 	}
 
+	logger.Printf("[jimeng-video] GenerateVideo: mode=%s images=%d frames=%d duration=%.1fs promptLen=%d",
+		reqKey, len(allImages), frames, req.Duration, len(req.Prompt))
+
 	params := map[string]interface{}{
 		"req_key": reqKey,
 		"prompt":  req.Prompt,
@@ -116,15 +121,18 @@ func (p *JimengVideoProvider) GenerateVideo(ctx context.Context, req *VideoGener
 			ar = "16:9"
 		}
 		params["aspect_ratio"] = ar
+		logger.Printf("[jimeng-video] GenerateVideo: T2V aspect_ratio=%s", ar)
 	}
 
 	body, err := json.Marshal(params)
 	if err != nil {
+		logger.Errorf("[jimeng-video] GenerateVideo: 序列化请求失败: %v", err)
 		return nil, fmt.Errorf("jimeng-video: 序列化请求失败: %w", err)
 	}
 
 	respBody, err := p.doRequest(ctx, volcengineActionSubmit, body)
 	if err != nil {
+		logger.Errorf("[jimeng-video] GenerateVideo: HTTP请求失败: %v", err)
 		return nil, err
 	}
 
@@ -136,17 +144,22 @@ func (p *JimengVideoProvider) GenerateVideo(ctx context.Context, req *VideoGener
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(respBody, &resp); err != nil {
+		logger.Errorf("[jimeng-video] GenerateVideo: 解析响应失败: %v, body=%s", err, string(respBody))
 		return nil, fmt.Errorf("jimeng-video: 解析提交响应失败: %w", err)
 	}
 	if resp.Code != 10000 {
+		logger.Errorf("[jimeng-video] GenerateVideo: API返回错误 code=%d message=%s", resp.Code, resp.Message)
 		return nil, fmt.Errorf("jimeng-video: 提交任务失败 code=%d: %s", resp.Code, resp.Message)
 	}
 	if resp.Data.TaskID == "" {
+		logger.Errorf("[jimeng-video] GenerateVideo: API成功但未返回task_id, body=%s", string(respBody))
 		return nil, fmt.Errorf("jimeng-video: 未返回 task_id")
 	}
 
+	taskID := prefix + resp.Data.TaskID
+	logger.Printf("[jimeng-video] GenerateVideo: 任务提交成功 taskID=%s mode=%s", taskID, reqKey)
 	return &VideoTask{
-		TaskID:   prefix + resp.Data.TaskID,
+		TaskID:   taskID,
 		Status:   "pending",
 		Provider: p.GetName(),
 	}, nil
@@ -156,6 +169,8 @@ func (p *JimengVideoProvider) GenerateVideo(ctx context.Context, req *VideoGener
 func (p *JimengVideoProvider) GetVideoStatus(ctx context.Context, taskID string) (*VideoTaskStatus, error) {
 	reqKey, rawID := jimengParseTaskID(taskID)
 
+	logger.Printf("[jimeng-video] GetVideoStatus: taskID=%s reqKey=%s", rawID, reqKey)
+
 	body, _ := json.Marshal(map[string]interface{}{
 		"req_key": reqKey,
 		"task_id": rawID,
@@ -163,6 +178,7 @@ func (p *JimengVideoProvider) GetVideoStatus(ctx context.Context, taskID string)
 
 	respBody, err := p.doRequest(ctx, volcengineActionGetResult, body)
 	if err != nil {
+		logger.Errorf("[jimeng-video] GetVideoStatus: HTTP请求失败 taskID=%s: %v", rawID, err)
 		return nil, err
 	}
 
@@ -175,9 +191,11 @@ func (p *JimengVideoProvider) GetVideoStatus(ctx context.Context, taskID string)
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(respBody, &resp); err != nil {
+		logger.Errorf("[jimeng-video] GetVideoStatus: 解析响应失败 taskID=%s: %v, body=%s", rawID, err, string(respBody))
 		return nil, fmt.Errorf("jimeng-video: 解析状态响应失败: %w", err)
 	}
 	if resp.Code != 10000 {
+		logger.Errorf("[jimeng-video] GetVideoStatus: API错误 taskID=%s code=%d message=%s", rawID, resp.Code, resp.Message)
 		return &VideoTaskStatus{
 			TaskID: rawID,
 			Status: "failed",
@@ -185,10 +203,13 @@ func (p *JimengVideoProvider) GetVideoStatus(ctx context.Context, taskID string)
 		}, nil
 	}
 	if resp.Data == nil {
+		logger.Errorf("[jimeng-video] GetVideoStatus: data为null taskID=%s", rawID)
 		return &VideoTaskStatus{TaskID: rawID, Status: "failed", Error: "data is null"}, nil
 	}
 
 	status := jimengMapStatus(resp.Data.Status)
+	logger.Printf("[jimeng-video] GetVideoStatus: taskID=%s rawStatus=%s mappedStatus=%s", rawID, resp.Data.Status, status)
+
 	ts := &VideoTaskStatus{
 		TaskID: rawID,
 		Status: status,
@@ -202,6 +223,7 @@ func (p *JimengVideoProvider) GetVideoStatus(ctx context.Context, taskID string)
 		ts.Progress = 100
 	case "not_found", "expired":
 		ts.Error = resp.Data.Status
+		logger.Errorf("[jimeng-video] GetVideoStatus: 任务异常 taskID=%s status=%s", rawID, resp.Data.Status)
 	}
 	return ts, nil
 }
@@ -210,6 +232,8 @@ func (p *JimengVideoProvider) GetVideoStatus(ctx context.Context, taskID string)
 func (p *JimengVideoProvider) GetVideoURL(ctx context.Context, taskID string) (string, error) {
 	reqKey, rawID := jimengParseTaskID(taskID)
 
+	logger.Printf("[jimeng-video] GetVideoURL: taskID=%s reqKey=%s", rawID, reqKey)
+
 	body, _ := json.Marshal(map[string]interface{}{
 		"req_key": reqKey,
 		"task_id": rawID,
@@ -217,6 +241,7 @@ func (p *JimengVideoProvider) GetVideoURL(ctx context.Context, taskID string) (s
 
 	respBody, err := p.doRequest(ctx, volcengineActionGetResult, body)
 	if err != nil {
+		logger.Errorf("[jimeng-video] GetVideoURL: HTTP请求失败 taskID=%s: %v", rawID, err)
 		return "", err
 	}
 
@@ -229,20 +254,26 @@ func (p *JimengVideoProvider) GetVideoURL(ctx context.Context, taskID string) (s
 		} `json:"data"`
 	}
 	if err := json.Unmarshal(respBody, &resp); err != nil {
+		logger.Errorf("[jimeng-video] GetVideoURL: 解析响应失败 taskID=%s: %v", rawID, err)
 		return "", fmt.Errorf("jimeng-video: 解析视频URL响应失败: %w", err)
 	}
 	if resp.Code != 10000 {
+		logger.Errorf("[jimeng-video] GetVideoURL: API错误 taskID=%s code=%d message=%s", rawID, resp.Code, resp.Message)
 		return "", fmt.Errorf("jimeng-video: 获取结果失败 code=%d: %s", resp.Code, resp.Message)
 	}
 	if resp.Data == nil {
+		logger.Errorf("[jimeng-video] GetVideoURL: data为null taskID=%s", rawID)
 		return "", fmt.Errorf("jimeng-video: data is null")
 	}
 	if resp.Data.Status != "done" {
+		logger.Errorf("[jimeng-video] GetVideoURL: 任务未完成 taskID=%s status=%s", rawID, resp.Data.Status)
 		return "", fmt.Errorf("jimeng-video: 任务未完成，status=%s", resp.Data.Status)
 	}
 	if resp.Data.VideoURL == "" {
+		logger.Errorf("[jimeng-video] GetVideoURL: done但video_url为空 taskID=%s", rawID)
 		return "", fmt.Errorf("jimeng-video: 任务完成但未返回 video_url")
 	}
+	logger.Printf("[jimeng-video] GetVideoURL: 成功获取URL taskID=%s url=%s", rawID, resp.Data.VideoURL)
 	return resp.Data.VideoURL, nil
 }
 
@@ -298,15 +329,22 @@ func (p *JimengVideoProvider) doRequest(ctx context.Context, action string, body
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
+		logger.Errorf("[jimeng-video] doRequest: action=%s 网络错误: %v", action, err)
 		return nil, fmt.Errorf("jimeng-video: HTTP 请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
+		logger.Errorf("[jimeng-video] doRequest: action=%s 读取响应体失败: %v", action, err)
 		return nil, fmt.Errorf("jimeng-video: 读取响应失败: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		snippet := string(respBody)
+		if len(snippet) > 300 {
+			snippet = snippet[:300]
+		}
+		logger.Errorf("[jimeng-video] doRequest: action=%s HTTP %d body=%s", action, resp.StatusCode, snippet)
 		return nil, fmt.Errorf("jimeng-video: HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 	return respBody, nil

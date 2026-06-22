@@ -998,6 +998,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	}
 	provider, providerName, provErr := s.resolveVideoProvider(tenantID, preferredProvider)
 	if provErr != nil {
+		logger.Errorf("GenerateShotVideo: shot %d 找不到视频提供商 preferred=%s tenantID=%d: %v", shot.ShotNo, preferredProvider, tenantID, provErr)
 		return fmt.Errorf("no video provider configured")
 	}
 

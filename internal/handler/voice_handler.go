@@ -670,6 +670,10 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 		if skipExisting && s.AudioPath != "" {
 			continue
 		}
+		// 强制重生时清空 AudioPath，使 GenerateShotAudio 内的幂等守卫失效
+		if !skipExisting {
+			s.AudioPath = ""
+		}
 		targets = append(targets, s)
 	}
 
