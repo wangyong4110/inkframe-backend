@@ -487,10 +487,25 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 		ok, err := s.cache.SetNX(context.Background(), redisKey, "1", 2*time.Hour).Result()
 		if err == nil {
 			if !ok {
-				logger.Printf("PollAndStitchVideo: videoID %d already polling on another instance, skip", videoID)
-				return
+				// Redis 锁被占用：若本地 activePoll 也无此 video，说明是上次服务重启遗留的 stale lock。
+				// 主动删除 stale lock 并重新抢锁，让轮询可以继续。
+				if _, localRunning := s.activePoll.Load(videoID); !localRunning {
+					logger.Printf("PollAndStitchVideo: videoID %d Redis lock stale (no local poll), reclaiming", videoID)
+					s.cache.Del(context.Background(), redisKey) //nolint:errcheck
+					// 重新抢锁：若此时另一实例刚好也在抢，让其中一个赢
+					ok2, err2 := s.cache.SetNX(context.Background(), redisKey, "1", 2*time.Hour).Result()
+					if err2 != nil || !ok2 {
+						logger.Printf("PollAndStitchVideo: videoID %d reclaim failed, another instance won", videoID)
+						return
+					}
+					defer s.cache.Del(context.Background(), redisKey) //nolint:errcheck
+				} else {
+					logger.Printf("PollAndStitchVideo: videoID %d already polling on another instance, skip", videoID)
+					return
+				}
+			} else {
+				defer s.cache.Del(context.Background(), redisKey) //nolint:errcheck
 			}
-			defer s.cache.Del(context.Background(), redisKey)
 		}
 		// err != nil: Redis unavailable, fall through to local check
 	}
