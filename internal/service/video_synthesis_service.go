@@ -634,16 +634,47 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 
 		if completedCount+failedCount == len(allShots) {
 			if completedCount > 0 {
-				if _, err := s.StitchVideoCtx(ctx, videoID); err != nil {
-					logger.Errorf("PollAndStitchVideo: stitch failed: %v", err)
+				stitchedPath, stitchErr := s.StitchVideoCtx(ctx, videoID)
+				if stitchErr != nil {
+					logger.Errorf("PollAndStitchVideo: stitch failed: %v", stitchErr)
 					video, _ := s.videoRepo.GetByID(videoID)
 					if video != nil {
 						video.Status = "failed"
-						video.ErrorMessage = err.Error()
+						video.ErrorMessage = stitchErr.Error()
 						if updErr := s.videoRepo.Update(video); updErr != nil {
 							logger.Errorf("[VideoService] PollAndStitchVideo: failed to update video %d status to failed (stitch error): %v", videoID, updErr)
 						}
 					}
+				} else if s.storageSvc != nil && stitchedPath != "" {
+					// 自动上传到 OSS，写入 FinalVideoURL，使前端可以直接预览/下载
+					videoKey := fmt.Sprintf("videos/%s.mp4", uuid.New().String())
+					uploadCtx, uploadCancel := context.WithTimeout(ctx, 30*time.Minute)
+					func() {
+						defer uploadCancel()
+						vf, err := os.Open(stitchedPath)
+						if err != nil {
+							logger.Errorf("[PollAndStitch] videoID=%d: open stitched file: %v", videoID, err)
+							return
+						}
+						defer vf.Close()
+						fi, err := vf.Stat()
+						if err != nil {
+							logger.Errorf("[PollAndStitch] videoID=%d: stat stitched file: %v", videoID, err)
+							return
+						}
+						ossURL, err := s.storageSvc.Upload(uploadCtx, videoKey, vf, fi.Size(), "video/mp4")
+						if err != nil {
+							logger.Errorf("[PollAndStitch] videoID=%d: auto-upload failed: %v", videoID, err)
+							return
+						}
+						logger.Printf("[PollAndStitch] videoID=%d: auto-upload OK → %s", videoID, ossURL)
+						if vid, err := s.videoRepo.GetByID(videoID); err == nil && vid != nil {
+							vid.FinalVideoURL = ossURL
+							if updErr := s.videoRepo.Update(vid); updErr != nil {
+								logger.Errorf("[PollAndStitch] videoID=%d: update FinalVideoURL failed: %v", videoID, updErr)
+							}
+						}
+					}()
 				}
 			} else {
 				video, _ := s.videoRepo.GetByID(videoID)
