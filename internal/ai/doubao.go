@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"net/http"
 	"os"
 	"strings"
@@ -284,7 +285,7 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 		model = "doubao-seedream-4-0-250828"
 	}
 
-	size := seedreamSize(req.Size)
+	size := seedreamEnforceMinSize(model, seedreamSize(req.Size))
 
 	apiReq := map[string]interface{}{
 		"model":                       model,
@@ -469,6 +470,32 @@ func seedreamSize(size string) string {
 		return fmt.Sprintf("%dx%d", base, base*rh/rw)
 	}
 	return "1024x1024"
+}
+
+// seedreamModelMinPixels 返回指定 Seedream 模型的最小像素数要求。
+//
+//	Seedream 4.0/4.5: 921600  (≈960×960)
+//	Seedream 5.0:    3686400  (≈1920×1920)
+func seedreamModelMinPixels(model string) int {
+	if strings.Contains(model, "5-0") || strings.Contains(model, "5.0") {
+		return 3686400
+	}
+	return 921600
+}
+
+// seedreamEnforceMinSize 若尺寸不满足模型最小像素要求，按比例放大并对齐到 8px。
+func seedreamEnforceMinSize(model, size string) string {
+	var w, h int
+	if _, err := fmt.Sscanf(size, "%dx%d", &w, &h); err != nil || w <= 0 || h <= 0 {
+		return size
+	}
+	minPx := seedreamModelMinPixels(model)
+	if w*h >= minPx {
+		return size
+	}
+	scale := math.Sqrt(float64(minPx) / float64(w*h))
+	r8 := func(n float64) int { return (int(math.Ceil(n))+4) / 8 * 8 }
+	return fmt.Sprintf("%dx%d", r8(float64(w)*scale), r8(float64(h)*scale))
 }
 
 // seedreamFormatImage 将图片输入格式化为 Seedream API 接受的 "image" 字段值。

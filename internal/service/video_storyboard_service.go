@@ -1233,7 +1233,8 @@ func qualityTierImageParams(tier string) (width, steps int, cfgScale float64) {
 
 // imageAspectRatioToSize 根据宽高比和质量档位计算 "WxH" 图片尺寸。
 // base 为较长边像素值，按 8 取整以兼容大多数图生图 API 的对齐要求。
-// 同时保证总像素数不低于 seedreamMinPixels（921600），满足 Seedream API 最低要求。
+// 同时保证总像素数不低于 seedreamMinPixels（921600 = 960×960），满足 Seedream 4.0 基础要求。
+// Seedream 5.0 更高的像素下限（3686400）由 doubao.go 的 seedreamEnforceMinSize 按模型版本动态处理。
 const seedreamMinPixels = 921600
 
 func imageAspectRatioToSize(aspectRatio, qualityTier string) string {
