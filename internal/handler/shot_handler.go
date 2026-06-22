@@ -60,12 +60,12 @@ func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
 			return
 		}
-		h.taskSvc.UpdateProgress(taskID, 90)                                         //nolint:errcheck
-		h.taskSvc.Complete(taskID, gin.H{"shot_id": shot.ID, "status": shot.Status}) //nolint:errcheck
-		// AI 视频模式：任务提交成功后启动后台轮询，取回视频 URL
+		h.taskSvc.UpdateProgress(taskID, 50) //nolint:errcheck
+		// AI 视频模式：阻塞等待轮询完成，任务完成后前端才能看到真实视频
 		if shot.Status == "processing" {
-			go h.videoService.PollAndStitchVideo(uint(videoID))
+			h.videoService.PollAndStitchVideo(uint(videoID))
 		}
+		h.taskSvc.Complete(taskID, gin.H{"shot_id": shot.ID, "status": shot.Status}) //nolint:errcheck
 	}(task.TaskID)
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -120,14 +120,14 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
 			return
 		}
-		h.taskSvc.Complete(taskID, gin.H{"shot_count": len(shots)}) //nolint:errcheck
-		// AI 视频模式：所有分镜提交完后，若有 processing 状态则启动后台轮询
+		// AI 视频模式：阻塞等待轮询完成，任务完成后前端才能看到真实视频
 		for _, sh := range shots {
 			if sh.Status == "processing" {
-				go h.videoService.PollAndStitchVideo(uint(videoID))
+				h.videoService.PollAndStitchVideo(uint(videoID))
 				break
 			}
 		}
+		h.taskSvc.Complete(taskID, gin.H{"shot_count": len(shots)}) //nolint:errcheck
 	}(task.TaskID)
 
 	c.JSON(http.StatusAccepted, gin.H{

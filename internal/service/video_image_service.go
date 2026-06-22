@@ -1762,7 +1762,12 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 			logger.Errorf("[VideoService] GenerateAllShotVideos: failed to update video %d status to generating: %v", videoID, err)
 		}
 		logger.Printf("GenerateAllShotVideos: videoID=%d → slideshow fallback (no video provider)", videoID)
-		go s.runSlideshowPipeline(videoID)
+		// 同步执行以确保调用方（handler goroutine）等待完成后再标记任务结束
+		s.runSlideshowPipeline(videoID)
+		// 拼接所有 completed 分镜
+		if _, stitchErr := s.StitchVideoCtx(context.Background(), videoID); stitchErr != nil {
+			logger.Errorf("GenerateAllShotVideos: slideshow stitch failed videoID=%d: %v", videoID, stitchErr)
+		}
 		return nil
 	}
 
