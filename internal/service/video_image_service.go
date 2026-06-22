@@ -490,8 +490,16 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 					refImage = activeLook.ThreeViewSheet
 					vprompt = activeLook.VisualPrompt
 				}
-				logger.Printf("[CharRef] shot#%d charID=%d name=%q chapterNo=%d activeLook=%v threeView=%q",
-					shot.ShotNo, char.ID, char.Name, chapterNo, activeLook != nil, refImage)
+				urlType := "empty"
+				if strings.HasPrefix(refImage, "https://") || strings.HasPrefix(refImage, "http://") {
+					urlType = "absolute-url"
+				} else if strings.HasPrefix(refImage, "/") {
+					urlType = "relative-path"
+				} else if refImage != "" {
+					urlType = "other"
+				}
+				logger.Printf("[CharRef] shot#%d charID=%d name=%q chapterNo=%d activeLook=%v threeView=%q urlType=%s",
+					shot.ShotNo, char.ID, char.Name, chapterNo, activeLook != nil, refImage, urlType)
 				if vprompt != "" {
 					characterVisualPrompts = append(characterVisualPrompts, vprompt)
 				} else {

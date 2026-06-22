@@ -424,6 +424,7 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		provider = ai.NewGoogleProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "doubao", "volcengine-ark-img":
 		// "volcengine-ark-img" 是 DB 中 Seedream 图片模型的自定义名称，使用相同的 DoubaoProvider
+		logger.Printf("getTenantProvider: provider %q → DoubaoProvider endpoint=%s model=%s", matched.Name, matched.APIEndpoint, matched.APIVersion)
 		provider = ai.NewDoubaoProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
 	case "doubao-speech":
 		// APIKey = X-Api-Key, APIVersion = resourceID（如 "seed-tts-2.0"）
@@ -1910,6 +1911,7 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		// 相对路径由 fetchImageAsBase64 拼接 serverBaseURL 处理。
 		b64 := s.fetchImageAsBase64(ctx, url)
 		if b64 != "" {
+			logger.Printf("GenerateCharacterThreeViewMulti: resolved ref %q → base64 len=%d", url, len(b64))
 			return b64
 		}
 		// fetchImageAsBase64 失败时降级：绝对 URL 直接传入（最后手段）
@@ -2033,7 +2035,20 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 			continue
 		}
 		model := selectImageModel(e, firstRef, style, weight)
-		logger.Printf("GenerateCharacterThreeViewMulti: trying provider=%s model=%s refs=%d extRefs=%d", e.ProviderName, model, len(referenceImages), len(extRefs))
+		{
+			// 日志：打印 extRefs 的类型分布（base64/url/unknown），方便确认参考图是否被正确预处理
+			extRefTypes := make([]string, len(extRefs))
+			for i, r := range extRefs {
+				if strings.HasPrefix(r, "data:") || (len(r) > 100 && !strings.HasPrefix(r, "http")) {
+					extRefTypes[i] = fmt.Sprintf("base64(%d)", len(r))
+				} else if strings.HasPrefix(r, "http") {
+					extRefTypes[i] = "url"
+				} else {
+					extRefTypes[i] = "unknown"
+				}
+			}
+			logger.Printf("GenerateCharacterThreeViewMulti: trying provider=%s model=%s refs=%d extRefs=%d types=%v", e.ProviderName, model, len(referenceImages), len(extRefs), extRefTypes)
+		}
 		resp, err := provider.ImageGenerate(ctx, buildReq(model, e.Size, e.ProviderName))
 		if err != nil {
 			logger.Errorf("GenerateCharacterThreeViewMulti: provider=%s failed: %v", e.ProviderName, err)

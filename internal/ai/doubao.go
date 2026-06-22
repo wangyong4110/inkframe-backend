@@ -367,9 +367,12 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 		return nil, err
 	}
 	if len(result.Data) == 0 {
+		// 打印完整响应帮助诊断：有时 Seedream 200 但 data 为空（参考图格式不被接受时）
+		log.Printf("[doubao] ImageGenerate: empty data in response body=%.500s", string(respBody))
 		return &ImageResponse{Error: "no image returned", LatencyMs: time.Since(start).Milliseconds()}, nil
 	}
 
+	log.Printf("[doubao] ImageGenerate: success url=%s latency=%dms", result.Data[0].URL, time.Since(start).Milliseconds())
 	return &ImageResponse{
 		URL:       result.Data[0].URL,
 		LatencyMs: time.Since(start).Milliseconds(),
