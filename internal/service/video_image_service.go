@@ -467,6 +467,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	const maxCharRefs = maxCompositeImages - 1
 	var characterPortraits []string // 可能包含多个角色的图
 	var characterVisualPrompts []string // 角色外观 token 串，用于注入 shot prompt（文本+图像双重约束）
+	var charNamesForPrompt []string  // 角色名列表，用于 DreamO 路径的"人物存在性"提示
 	var refSources []string
 	if len(shot.CharacterIDs) > 0 {
 		ids := []uint(shot.CharacterIDs)
@@ -480,6 +481,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 			}
 			collected := make([]charRef, 0, len(batchChars))
 			for _, char := range batchChars {
+				charNamesForPrompt = append(charNamesForPrompt, char.Name)
 				// 从形象管理获取当前章节的激活形象（FaceCloseup/ThreeViewSheet/VisualPrompt）
 				activeLook := s.getCharActiveLook(char, chapterNo)
 				faceRef := char.Portrait // 兜底：角色头像
@@ -685,29 +687,40 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		promptText = strings.Join(characterVisualPrompts, ", ") + ", " + promptText
 	}
 
-	// 角色动作/姿态注入：DreamO 负责外貌一致性，但需要动作提示才能正确摆姿势。
-	// 从 shot.Characters 提取每个角色的 pose 和 expression，拼接为动作描述词注入 prompt。
-	// 只注入动作/表情类词语（如 "standing", "walking", "determined expression"），
-	// 不注入外貌描述（外貌由 VisualPrompt 和参考图负责），避免与 DreamO 参考图冲突。
-	if shot.Characters != "" && len(characterPortraits) > 0 {
-		var shotCharsAction []struct {
-			Name       string `json:"name"`
-			Pose       string `json:"pose"`
-			Expression string `json:"expression"`
+	// DreamO 路径（有参考图）：
+	// 1. 注入角色名 — 让模型知道画面中应有该角色出现（IP-Adapter 负责外貌，prompt 负责存在性）；
+	// 2. 注入动作/姿态 — 指导角色摆姿势，避免外貌正确但动作僵硬。
+	// 外貌描述不再注入（由参考图保证），避免与 IP-Adapter 产生冲突稀释场景信息。
+	if len(characterPortraits) > 0 {
+		var presenceTokens []string // 人物存在性 + 动作/表情
+		if shot.Characters != "" {
+			var shotCharsAction []struct {
+				Name       string `json:"name"`
+				Pose       string `json:"pose"`
+				Expression string `json:"expression"`
+			}
+			if err := json.Unmarshal([]byte(shot.Characters), &shotCharsAction); err == nil && len(shotCharsAction) > 0 {
+				for _, c := range shotCharsAction {
+					if c.Name != "" {
+						presenceTokens = append(presenceTokens, c.Name)
+					}
+				}
+				for _, c := range shotCharsAction {
+					if c.Pose != "" {
+						presenceTokens = append(presenceTokens, c.Pose)
+					}
+					if c.Expression != "" {
+						presenceTokens = append(presenceTokens, c.Expression)
+					}
+				}
+			}
 		}
-		if err := json.Unmarshal([]byte(shot.Characters), &shotCharsAction); err == nil && len(shotCharsAction) > 0 {
-			var actionTokens []string
-			for _, c := range shotCharsAction {
-				if c.Pose != "" {
-					actionTokens = append(actionTokens, c.Pose)
-				}
-				if c.Expression != "" {
-					actionTokens = append(actionTokens, c.Expression)
-				}
-			}
-			if len(actionTokens) > 0 {
-				promptText += ", " + strings.Join(actionTokens, ", ")
-			}
+		// shot.Characters 为空时，从 DB 加载的角色名兜底
+		if len(presenceTokens) == 0 && len(charNamesForPrompt) > 0 {
+			presenceTokens = append(presenceTokens, charNamesForPrompt...)
+		}
+		if len(presenceTokens) > 0 {
+			promptText = strings.Join(presenceTokens, ", ") + ", " + promptText
 		}
 	}
 
