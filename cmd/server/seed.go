@@ -280,6 +280,7 @@ func seedAIModels(db *gorm.DB) {
 		{"volcengine-visual", "即梦AI（火山引擎）", "image", "", true,
 			[]string{"general_v3.0", "general_v3.0-I2V"}},
 		// 视频生成
+		{"jimeng-video", "即梦视频3.0（火山引擎）", "video", "", true, nil},
 		{"kling", "可灵（快手）", "video", "https://api-beijing.klingai.com", true,
 			[]string{"kling-v1-6", "kling-v1-5", "kling-v1"}},
 		{"seedance", "Seedance（字节跳动）", "video", "https://ark.volces.com/api/v3", false, nil},
@@ -413,6 +414,9 @@ func seedAIModels(db *gorm.DB) {
 		// 即梦AI
 		{"volcengine-visual", "general_v3.0", "即梦AI 文生图 V3", []string{"image_gen"}, 0.9, 0},
 		// 视频
+		{"jimeng-video", "jimeng_t2v_v30", "即梦视频3.0 文生视频", []string{"video_gen"}, 0.92, 0},
+		{"jimeng-video", "jimeng_i2v_first_v30", "即梦视频3.0 图生视频（首帧）", []string{"video_gen"}, 0.92, 0},
+		{"jimeng-video", "jimeng_i2v_first_tail_v30", "即梦视频3.0 图生视频（首尾帧）", []string{"video_gen"}, 0.92, 0},
 		{"kling", "kling-v1-6", "可灵 v1.6", []string{"video_gen"}, 0.9, 0},
 		{"seedance", "seedance-01-lite", "Seedance 01 Lite", []string{"video_gen"}, 0.88, 0},
 		// ── 豆包语音合成 V3（seed-tts-2.0 资源，X-Api-Key 鉴权）──────────────────────

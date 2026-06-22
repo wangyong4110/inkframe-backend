@@ -99,7 +99,8 @@ var providerDisplayNames = map[string]string{
 	"google":            "Gemini (Google)",
 	"kling":             "可灵 (Kling)",
 	"seedance":          "Seedance",
-	ai.ProviderNameVolcengineVisual: "火山引擎图像",
+	ai.ProviderNameVolcengineVisual:  "火山引擎图像",
+	ai.ProviderNameJimengVideo:       "即梦视频3.0（火山引擎）",
 }
 
 // providerHasCredentials reports whether p has all required credentials.
@@ -107,8 +108,8 @@ var providerDisplayNames = map[string]string{
 func providerHasCredentials(p *model.ModelProvider) bool {
 	// 需要双密钥的提供商：AK 和 SK 都必须有值
 	switch p.Name {
-	case ai.ProviderNameVolcengineVisual, "doubao-speech-v1",
-		"kling", "kling-sfx", "kling-tts", "kling-image":
+	case ai.ProviderNameVolcengineVisual, ai.ProviderNameJimengVideo,
+		"doubao-speech-v1", "kling", "kling-sfx", "kling-tts", "kling-image":
 		return strings.TrimSpace(p.APIKey) != "" && strings.TrimSpace(p.APISecretKey) != ""
 	}
 	return strings.TrimSpace(p.APIKey) != ""

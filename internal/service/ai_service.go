@@ -2550,8 +2550,8 @@ func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.Video
 	if err != nil {
 		return nil, err
 	}
-	// 按照 kling → seedance 顺序优先选择
-	preferOrder := []string{"kling", "seedance"}
+	// 按照 jimeng-video → kling → seedance 顺序优先选择
+	preferOrder := []string{"jimeng-video", "kling", "seedance"}
 	if name != "" {
 		preferOrder = []string{strings.ToLower(name)}
 	}
@@ -2588,6 +2588,8 @@ func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.Video
 			continue
 		}
 		switch pname {
+		case "jimeng-video":
+			return ai.NewJimengVideoProvider(apiKey, apiSecretKey), nil
 		case "kling":
 			return ai.NewKlingProvider(apiKey, apiSecretKey, p.APIEndpoint), nil
 		case "seedance":
