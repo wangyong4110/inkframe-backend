@@ -170,7 +170,9 @@ type consistencyLLMResponse struct {
 }
 
 func parseConsistencyResponse(raw string, shotID, anchorID uint) (*SceneConsistencyReport, error) {
-	jsonStr := extractJSON(raw)
+	// Use extractJSONObject to skip any leading reasoning text with [...] brackets
+	// that would cause extractJSON (which prefers arrays) to pick the wrong block.
+	jsonStr := extractJSONObject(raw)
 	var resp consistencyLLMResponse
 	if err := json.Unmarshal([]byte(jsonStr), &resp); err != nil {
 		return nil, err

@@ -741,30 +741,18 @@ func (h *VideoHandler) GenerateShotVideos(c *gin.Context) {
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID)        //nolint:errcheck
-		h.taskSvc.UpdateProgress(taskID, 5) //nolint:errcheck
-
-		// Start polling concurrently with shot submission so that shots already
-		// submitted to the video provider (e.g. jimeng) are queried immediately
-		// without waiting for all image-generation steps to finish first.
-		// PollAndStitchVideo treats "generating" shots as active (no stall).
-		pollDone := make(chan struct{})
-		if mode != "slideshow" {
-			go func() {
-				defer close(pollDone)
-				h.videoService.PollAndStitchVideo(videoID)
-			}()
-		} else {
-			close(pollDone)
-		}
-
+		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 5)  //nolint:errcheck
 		if err := h.videoService.GenerateAllShotVideos(videoID); err != nil {
 			logger.Errorf("[VideoHandler] GenerateShotVideos task %s: submit failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
-		<-pollDone                           // wait for polling + stitching to complete
+		// slideshow mode handles stitching internally; only poll for AI video mode
+		if mode != "slideshow" {
+			h.videoService.PollAndStitchVideo(videoID) // blocks until done or timeout
+		}
 		h.taskSvc.Complete(taskID, map[string]interface{}{"video_id": videoID}) //nolint:errcheck
 	}(task.TaskID, uint(id), video.Mode)
 
