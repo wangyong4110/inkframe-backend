@@ -1533,7 +1533,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 	var todo []*model.Character
 	for _, c := range chars {
 		look := defaultLookMap[c.ID]
-		if force || look == nil || look.FaceCloseup == "" || look.ThreeViewSheet == "" {
+		if force || look == nil || look.ThreeViewSheet == "" {
 			todo = append(todo, c)
 		}
 	}
@@ -1567,28 +1567,15 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 			}
 			gender := InferGenderTag(charAppearance, char.Description)
 
-			var newFaceURL, newThreeURL string
+			var newThreeURL string
 
-			// 1. 面部特写
+			// 使用 portrait 作为参考（如有）以锁定面部一致性
 			var faceRef string
 			if look != nil && look.Portrait != "" {
 				faceRef = look.Portrait
 			}
-			if force || look == nil || look.FaceCloseup == "" {
-				faceImg, faceErr := imgSvc.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, faceRef, provider)
-				if faceErr != nil {
-					logger.Errorf("[CharacterService] BatchGenerateImages: face closeup char %d (%s) failed: %v", char.ID, char.Name, faceErr)
-					charFailed = true
-				} else {
-					newFaceURL = faceImg.URL
-					faceRef = faceImg.URL
-				}
-			}
-			if faceRef == "" && look != nil {
-				faceRef = look.FaceCloseup
-			}
 
-			// 2. 三视图（使用面部特写作为参考以锁定面部一致性）
+			// 生成三视图
 			if force || look == nil || look.ThreeViewSheet == "" {
 				threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, faceRef, provider)
 				if threeErr != nil {
@@ -1599,17 +1586,11 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 				}
 			}
 
-			if newFaceURL != "" || newThreeURL != "" {
+			if newThreeURL != "" {
 				if s.lookRepo != nil {
 					if look != nil {
 						lookUpdateReq := &model.UpdateCharacterLookRequest{}
-						if newFaceURL != "" {
-							lookUpdateReq.FaceCloseup = &newFaceURL
-							lookUpdateReq.Portrait = &newFaceURL
-						}
-						if newThreeURL != "" {
-							lookUpdateReq.ThreeViewSheet = &newThreeURL
-						}
+						lookUpdateReq.ThreeViewSheet = &newThreeURL
 						if _, saveErr := s.UpdateLook(look.ID, lookUpdateReq); saveErr != nil {
 							logger.Errorf("[CharacterService] BatchGenerateImages: save look for char %d: %v", char.ID, saveErr)
 							charFailed = true
@@ -1622,8 +1603,6 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 							Label:          "默认形象",
 							ChapterFrom:    1,
 							VisualPrompt:   charAppearance,
-							FaceCloseup:    newFaceURL,
-							Portrait:       newFaceURL,
 							ThreeViewSheet: newThreeURL,
 						}
 						if createErr := s.lookRepo.Create(newLook); createErr != nil {
@@ -2087,72 +2066,6 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	return &GeneratedCharacterImage{URL: url, Description: name + " character sheet with face closeup"}, nil
 }
 
-// GenerateFaceCloseupImage 生成角色面部特写图片。
-// ctx 可携带 ImageStorageHint 用于 OSS 路径构建。
-func (s *ImageGenerationService) GenerateFaceCloseupImage(ctx context.Context, tenantID uint, name, appearance, style, gender, referenceImage, provider string) (*GeneratedCharacterImage, error) {
-	genderTag, genderNeg := resolveGenderInfo(gender)
-	qualityTokens := resolveStyleQualityTokens(style)
-	condensed := condenseVisualPrompt(appearance, 40)
-
-	var prompt string
-	if style == "realistic" || style == "real_person" {
-		genderPrefix := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": "androgynous person, "}[gender]
-		faceStyle := "natural studio lighting, sharp focus on face, high quality portrait"
-		if style == "real_person" {
-			faceStyle = "ultra-realistic skin texture, 85mm portrait lens, natural studio lighting, DSLR quality, 8k uhd"
-		}
-		prompt = genderPrefix +
-			"bust shot, face centered, front view, solo, " +
-			condensed + ", " +
-			"no makeup natural bare face, soft even lighting, " +
-			faceStyle + ", " +
-			qualityTokens + ", " +
-			"character only, pure white background, no text no watermarks"
-	} else {
-		styleDesc := resolveStyleIllustrationDesc(style)
-		genderPrefix := ""
-		if genderTag != "" {
-			genderPrefix = genderTag + ", "
-		}
-		prompt = genderPrefix +
-			"bust shot, face centered, front view, solo, " +
-			condensed + ", " +
-			"no makeup natural bare face, soft even lighting, sharp focus on face, " +
-			styleDesc + ", " +
-			qualityTokens + ", " +
-			"character only, white background, no text no watermarks"
-	}
-
-	aiRef := referenceImage
-	if !strings.HasPrefix(aiRef, "http://") && !strings.HasPrefix(aiRef, "https://") {
-		aiRef = ""
-	}
-	logger.Printf("GenerateFaceCloseupImage: %s ref=%v", name, aiRef != "")
-
-	baseNeg := "multiple people, group, 多人, nsfw, lowres, bad anatomy, " +
-		"full body, feet, legs below waist, body below chest, waist and below, " +
-		"turnaround, multiple views, front and side and back, three views, character sheet, model sheet, " +
-		"props, weapons, furniture, additional objects, background objects, scene elements, environment, " +
-		"makeup, eyeshadow, eye shadow, eyeliner, eye liner, mascara, lipstick, blush, rouge, cosmetics, " +
-		"text, labels, annotations, watermark, signature, caption, " +
-		"harsh shadows, dramatic lighting, complex background"
-	negativePrompt := baseNeg
-	if genderNeg != "" {
-		negativePrompt = baseNeg + ", " + genderNeg
-	}
-
-	// 面部特写使用 9:16（720x1280）竖版布局，适合头像/肖像
-	refs := []string{}
-	if aiRef != "" {
-		refs = []string{aiRef}
-	}
-	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, "720x1280")
-	if err != nil {
-		return nil, err
-	}
-	return &GeneratedCharacterImage{URL: url, Description: name + " face closeup"}, nil
-}
-
 // ─── CharacterLook methods ────────────────────────────────────────────────────
 
 func (s *CharacterService) CreateLook(characterID, novelID uint, req *model.CreateCharacterLookRequest) (*model.CharacterLook, error) {
@@ -2169,7 +2082,6 @@ func (s *CharacterService) CreateLook(characterID, novelID uint, req *model.Crea
 		Description:    req.Description,
 		VisualPrompt:   req.VisualPrompt,
 		ThreeViewSheet: req.ThreeViewSheet,
-		FaceCloseup:    req.FaceCloseup,
 		Portrait:       req.Portrait,
 	}
 	if look.ChapterFrom == 0 {
@@ -2289,9 +2201,6 @@ func (s *CharacterService) UpdateLook(id uint, req *model.UpdateCharacterLookReq
 	}
 	if req.ThreeViewSheet != nil {
 		look.ThreeViewSheet = *req.ThreeViewSheet
-	}
-	if req.FaceCloseup != nil {
-		look.FaceCloseup = *req.FaceCloseup
 	}
 	if req.Portrait != nil {
 		look.Portrait = *req.Portrait
@@ -2494,17 +2403,12 @@ func (s *CharacterService) GenerateChapterImages(
 							lookUpdateReq := &model.UpdateCharacterLookRequest{}
 							needUpdate := false
 
-							faceRef := ""
-							if faceImg, faceErr := imgSvc.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, appearance, imageStyle, gender, "", provider); faceErr == nil {
-								lookUpdateReq.FaceCloseup = &faceImg.URL
-								lookUpdateReq.Portrait = &faceImg.URL
-								faceRef = faceImg.URL
-								needUpdate = true
-							} else {
-								logger.Errorf("[CharacterService] GenerateChapterImages face char %d (%s): %v", char.ID, char.Name, faceErr)
+							// 使用现有 portrait 作为参考（如有）
+							existingPortrait := ""
+							if existingLook, _ := s.GetDefaultLook(char.ID); existingLook != nil && existingLook.Portrait != "" {
+								existingPortrait = existingLook.Portrait
 							}
-
-							if threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, appearance, imageStyle, gender, faceRef, provider); threeErr == nil {
+							if threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, appearance, imageStyle, gender, existingPortrait, provider); threeErr == nil {
 								lookUpdateReq.ThreeViewSheet = &threeImg.URL
 								needUpdate = true
 							} else {

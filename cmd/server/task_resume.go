@@ -365,73 +365,6 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		})
 	}
 
-	// face_closeup: re-generate face closeup for a single character
-	if svcs.CharacterService != nil && svcs.ImageGenerationService != nil {
-		svcs.TaskService.RegisterResumeHandler(service.TaskTypeFaceCloseup, func(t *model.AsyncTask) {
-			charID := t.EntityID
-			if charID == 0 {
-				return
-			}
-			var params struct {
-				Provider string `json:"provider"`
-				Style    string `json:"style"`
-			}
-			if t.ParamsJSON != "" {
-				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
-			}
-			char, err := svcs.CharacterService.GetCharacter(charID)
-			if err != nil {
-				svcs.TaskService.Fail(t.TaskID, "character not found: "+err.Error()) //nolint:errcheck
-				return
-			}
-			tenantID := t.TenantID
-			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			ctx := context.Background()
-			novelTitle := svcs.CharacterService.GetNovelTitle(char.NovelID)
-			if novelTitle != "" {
-				ctx = service.WithImageStorageHint(ctx, service.ImageStorageHint{NovelTitle: novelTitle})
-			}
-			defaultLook, _ := svcs.CharacterService.GetDefaultLook(charID)
-			appearance := char.Description
-			var ref string
-			if defaultLook != nil {
-				if defaultLook.VisualPrompt != "" {
-					appearance = defaultLook.VisualPrompt
-				}
-				if defaultLook.Portrait != "" {
-					ref = defaultLook.Portrait
-				} else if defaultLook.ThreeViewSheet != "" {
-					ref = defaultLook.ThreeViewSheet
-				}
-			}
-			gender := service.InferGenderTag(appearance, char.Description)
-			img, err := svcs.ImageGenerationService.GenerateFaceCloseupImage(ctx, tenantID, char.Name, appearance, params.Style, gender, ref, params.Provider)
-			if err != nil {
-				svcs.TaskService.Fail(t.TaskID, "generate face closeup failed: "+err.Error()) //nolint:errcheck
-				return
-			}
-			svcs.TaskService.UpdateProgress(t.TaskID, 99) //nolint:errcheck
-			faceURL := img.URL
-			lookReq := &model.UpdateCharacterLookRequest{FaceCloseup: &faceURL, Portrait: &faceURL}
-			var updatedLook *model.CharacterLook
-			if defaultLook != nil {
-				updatedLook, err = svcs.CharacterService.UpdateLook(defaultLook.ID, lookReq)
-			} else {
-				updatedLook, err = svcs.CharacterService.CreateLook(charID, char.NovelID, &model.CreateCharacterLookRequest{
-					Label: "默认形象", SetAsDefault: true, ChapterFrom: 1, FaceCloseup: faceURL, Portrait: faceURL,
-				})
-			}
-			if err != nil {
-				svcs.TaskService.Fail(t.TaskID, "save face closeup failed: "+err.Error()) //nolint:errcheck
-				return
-			}
-			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{ //nolint:errcheck
-				"look":      updatedLook,
-				"generated": map[string]string{"face_closeup": img.URL},
-			})
-		})
-	}
-
 	// voice_gen: batch voice (video entity) or single segment
 	if svcs.VideoService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeVoiceGen, func(t *model.AsyncTask) {
@@ -962,15 +895,15 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			tenantID := t.TenantID
 			var updatedLook *model.CharacterLook
 			switch params.Type {
-			case "face_closeup", "portrait", "":
-				img, err := svcs.ImageGenerationService.GenerateFaceCloseupImage(ctx, tenantID, char.Name, visualPrompt, style, "", look.Portrait, params.Provider)
+			case "portrait", "":
+				img, err := svcs.ImageGenerationService.GenerateThreeViewSheet(ctx, tenantID, char.Name, visualPrompt, style, "", look.Portrait, params.Provider)
 				if err != nil {
-					logger.Errorf("TaskService resume look_image_gen %s face_closeup failed: %v", t.TaskID, err)
+					logger.Errorf("TaskService resume look_image_gen %s portrait failed: %v", t.TaskID, err)
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 					return
 				}
 				imageURL := img.URL
-				updateReq := &model.UpdateCharacterLookRequest{FaceCloseup: &imageURL, Portrait: &imageURL}
+				updateReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &imageURL}
 				updatedLook, _ = svcs.CharacterService.UpdateLook(lookID, updateReq)
 			case "three_view":
 				img, err := svcs.ImageGenerationService.GenerateThreeViewSheet(ctx, tenantID, char.Name, visualPrompt, style, "", look.ThreeViewSheet, params.Provider)

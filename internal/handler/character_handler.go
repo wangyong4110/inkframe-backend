@@ -450,108 +450,9 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 	respondAccepted(c, task.TaskID, "三视图生成任务已提交")
 }
 
-// GenerateFaceCloseup AI生成角色面部特写图（异步任务）
-// POST /api/v1/characters/:id/face-closeup
-func (h *CharacterHandler) GenerateFaceCloseup(c *gin.Context) {
-	id, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-
-	var req struct {
-		Style    string `json:"style,omitempty"`
-		Provider string `json:"provider,omitempty"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
-		respondBadRequest(c, err.Error())
-		return
-	}
-
-	character, err := h.characterService.GetCharacter(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "character not found")
-		return
-	}
-
-	if !h.charBelongsToTenant(character, c) {
-		respondErr(c, http.StatusNotFound, "character not found")
-		return
-	}
-	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeFaceCloseup, "角色面部特写生成", "character", uint(id))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
-
-	novelTitle := h.characterService.GetNovelTitle(character.NovelID)
-	// 优先使用请求中的 style；未指定时降级到小说项目设置的 image_style
-	faceStyle := req.Style
-	if faceStyle == "" {
-		faceStyle = h.characterService.GetNovelImageStyle(character.NovelID)
-	}
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"provider": req.Provider,
-		"style":    faceStyle,
-	})
-
-	go func(taskID string, charID uint, char *model.Character, style, provider string) {
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-
-		genCtx := context.Background()
-		if novelTitle != "" {
-			genCtx = service.WithImageStorageHint(genCtx, service.ImageStorageHint{NovelTitle: novelTitle})
-		}
-		// 从默认形象获取参考图和 VisualPrompt
-		defaultLook, _ := h.characterService.GetDefaultLook(charID)
-		faceAppearance := char.Description
-		var referenceImage string
-		if defaultLook != nil {
-			if defaultLook.VisualPrompt != "" {
-				faceAppearance = defaultLook.VisualPrompt
-			}
-			if defaultLook.Portrait != "" {
-				referenceImage = defaultLook.Portrait
-			} else if defaultLook.ThreeViewSheet != "" {
-				referenceImage = defaultLook.ThreeViewSheet
-			}
-		}
-		faceGender := service.InferGenderTag(faceAppearance, char.Description)
-		img, err := h.imageGenService.GenerateFaceCloseupImage(genCtx, tenantID, char.Name, faceAppearance, style, faceGender, referenceImage, provider)
-		if err != nil {
-			logger.Errorf("[CharacterHandler] GenerateFaceCloseup task %s failed: %v", taskID, err)
-			h.taskSvc.Fail(taskID, "generate face closeup failed: "+err.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.UpdateProgress(taskID, 99) //nolint:errcheck
-
-		// 保存到默认形象
-		faceURL := img.URL
-		lookReq := &model.UpdateCharacterLookRequest{FaceCloseup: &faceURL, Portrait: &faceURL}
-		var updatedLook *model.CharacterLook
-		if defaultLook != nil {
-			updatedLook, err = h.characterService.UpdateLook(defaultLook.ID, lookReq)
-		} else {
-			updatedLook, err = h.characterService.CreateLook(charID, char.NovelID, &model.CreateCharacterLookRequest{
-				Label: "默认形象", SetAsDefault: true, ChapterFrom: 1, FaceCloseup: faceURL, Portrait: faceURL,
-			})
-		}
-		if err != nil {
-			h.taskSvc.Fail(taskID, "save face closeup failed: "+err.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.Complete(taskID, map[string]interface{}{ //nolint:errcheck
-			"look":      updatedLook,
-			"generated": map[string]string{"face_closeup": img.URL},
-		})
-	}(task.TaskID, uint(id), character, faceStyle, req.Provider)
-
-	respondAccepted(c, task.TaskID, "面部特写生成任务已提交")
-}
-
 // UploadCharacterImage 上传角色图片到指定字段
-// POST /api/v1/characters/:id/image/upload?type=portrait|three_view|face_closeup
-// three_view / face_closeup 会写入默认形象（CharacterLook），portrait 直接更新角色头像。
+// POST /api/v1/characters/:id/image/upload?type=three_view
+// three_view 会写入默认形象（CharacterLook）。
 func (h *CharacterHandler) UploadCharacterImage(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -568,16 +469,10 @@ func (h *CharacterHandler) UploadCharacterImage(c *gin.Context) {
 	}
 	imgType := c.Query("type")
 	switch imgType {
-	case "three_view", "face_closeup":
+	case "three_view":
 		// 写入默认形象（不存在时自动创建）
 		defaultLook, _ := h.characterService.GetDefaultLook(uint(id))
-		lookReq := &model.UpdateCharacterLookRequest{}
-		if imgType == "three_view" {
-			lookReq.ThreeViewSheet = &imgURL
-		} else {
-			lookReq.FaceCloseup = &imgURL
-			lookReq.Portrait = &imgURL
-		}
+		lookReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &imgURL}
 		var updatedLook *model.CharacterLook
 		if defaultLook != nil {
 			updatedLook, err = h.characterService.UpdateLook(defaultLook.ID, lookReq)
@@ -595,12 +490,12 @@ func (h *CharacterHandler) UploadCharacterImage(c *gin.Context) {
 		}
 		respondOK(c, gin.H{"url": imgURL, "look": updatedLook})
 	default:
-		respondErr(c, http.StatusBadRequest, "type must be 'three_view' or 'face_closeup'")
+		respondErr(c, http.StatusBadRequest, "type must be 'three_view'")
 	}
 }
 
 // UploadCharacterLookImage 上传角色形象图片到指定形象
-// POST /api/v1/characters/:id/looks/:look_id/upload?type=portrait|three_view|face_closeup
+// POST /api/v1/characters/:id/looks/:look_id/upload?type=portrait|three_view
 func (h *CharacterHandler) UploadCharacterLookImage(c *gin.Context) {
 	id, ok := parseID(c, "id")
 	if !ok {
@@ -624,12 +519,8 @@ func (h *CharacterHandler) UploadCharacterLookImage(c *gin.Context) {
 	switch imgType {
 	case "three_view":
 		updateReq.ThreeViewSheet = &imgURL
-	case "face_closeup":
-		updateReq.FaceCloseup = &imgURL
-		updateReq.Portrait = &imgURL
 	default: // "portrait" or empty
 		updateReq.Portrait = &imgURL
-		updateReq.FaceCloseup = &imgURL
 	}
 	look, err := h.characterService.UpdateLook(uint(lookID), updateReq)
 	if err != nil {
@@ -1461,7 +1352,7 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Type     string `json:"type"`     // "three_view" | "face_closeup" | "portrait"
+		Type     string `json:"type"`     // "three_view" | "portrait"
 		Provider string `json:"provider"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -1501,15 +1392,15 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 		ctx := context.Background()
 		var updatedLook *model.CharacterLook
 		switch req.Type {
-		case "face_closeup", "portrait", "":
-			img, err := h.imageGenService.GenerateFaceCloseupImage(ctx, tenantID, charName, visualPrompt, style, "", currentPortrait, req.Provider)
+		case "portrait", "":
+			img, err := h.imageGenService.GenerateThreeViewSheet(ctx, tenantID, charName, visualPrompt, style, "", currentPortrait, req.Provider)
 			if err != nil {
-				logger.Errorf("[CharacterHandler] GenerateLookImages task %s face_closeup failed: %v", taskID, err)
+				logger.Errorf("[CharacterHandler] GenerateLookImages task %s portrait/three_view failed: %v", taskID, err)
 				h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 				return
 			}
 			imageURL := img.URL
-			updateReq := &model.UpdateCharacterLookRequest{FaceCloseup: &imageURL, Portrait: &imageURL}
+			updateReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &imageURL}
 			updatedLook, _ = h.characterService.UpdateLook(uint(lookID), updateReq)
 		case "three_view":
 			img, err := h.imageGenService.GenerateThreeViewSheet(ctx, tenantID, charName, visualPrompt, style, "", currentThreeViewSheet, req.Provider)
@@ -1522,7 +1413,7 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 			updateReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &imageURL}
 			updatedLook, _ = h.characterService.UpdateLook(uint(lookID), updateReq)
 		default:
-			h.taskSvc.Fail(taskID, "type must be 'three_view', 'face_closeup', or 'portrait'") //nolint:errcheck
+			h.taskSvc.Fail(taskID, "type must be 'three_view' or 'portrait'") //nolint:errcheck
 			return
 		}
 		h.taskSvc.Complete(taskID, map[string]interface{}{"look": updatedLook}) //nolint:errcheck

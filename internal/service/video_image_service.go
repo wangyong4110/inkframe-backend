@@ -441,11 +441,11 @@ func (s *VideoService) getCharActiveLook(char *model.Character, chapterNo int) *
 			return defaultLook
 		}
 	}
-	// 最终兜底：角色有形象但 DefaultLookID 未设置（如老数据），取第一个含三视图/面部图的形象
+	// 最终兜底：角色有形象但 DefaultLookID 未设置（如老数据），取第一个含三视图的形象
 	if looks, err := s.lookRepo.ListByCharacter(char.ID); err == nil {
 		for _, l := range looks {
-			if l.ThreeViewSheet != "" || l.FaceCloseup != "" || l.Portrait != "" {
-				logger.Printf("[getCharActiveLook] charID=%d chapterNo=%d: fallback to first look with images id=%d", char.ID, chapterNo, l.ID)
+			if l.ThreeViewSheet != "" {
+				logger.Printf("[getCharActiveLook] charID=%d chapterNo=%d: fallback to first look with ThreeViewSheet id=%d", char.ID, chapterNo, l.ID)
 				return l
 			}
 		}
@@ -468,86 +468,38 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// 精准匹配：批量加载 shot.CharacterIDs 中的所有角色参考图（最多 maxCompositeImages-1 张，留槽给场景锚点）
-	// 两轮分配策略，最大化角色一致性：
-	//   轮次1：为每个角色分配 FaceCloseup（面部/身份锁定），确保每个出场角色都有面部参考
-	//   轮次2：用剩余槽位为各角色补充 ThreeViewSheet（服装/体型锁定），从主角开始分配
-	// 效果：1角色 → face+body；2角色 → face+face+(body if slot)；3角色 → face+face+face
+	// 精准匹配：批量加载 shot.CharacterIDs 中的所有角色三视图（ThreeViewSheet），最多 maxCharRefs 张
 	const maxCharRefs = maxCompositeImages - 1
-	var characterPortraits []string // 可能包含多个角色的图
-	var characterVisualPrompts []string // 角色外观 token 串，用于注入 shot prompt（文本+图像双重约束）
-	var charNamesForPrompt []string  // 角色名列表，用于 DreamO 路径的"人物存在性"提示
+	var characterPortraits []string
+	var characterVisualPrompts []string
+	var charNamesForPrompt []string
 	var refSources []string
 	if len(shot.CharacterIDs) > 0 {
 		ids := []uint(shot.CharacterIDs)
 		batchChars, batchErr := s.characterRepo.ListByIDs(ids)
-		if batchErr == nil {
-			type charRef struct {
-				id       uint
-				faceRef  string
-				bodyRef  string
-				vprompt  string
-			}
-			collected := make([]charRef, 0, len(batchChars))
+		if batchErr != nil {
+			logger.Errorf("[CharRef] shot#%d ListByIDs(%v) failed: %v", shot.ShotNo, ids, batchErr)
+		} else if len(batchChars) == 0 {
+			logger.Errorf("[CharRef] shot#%d ListByIDs(%v) returned empty — characters may have been deleted", shot.ShotNo, ids)
+		} else {
 			for _, char := range batchChars {
 				charNamesForPrompt = append(charNamesForPrompt, char.Name)
-				// 从形象管理获取当前章节的激活形象（FaceCloseup/ThreeViewSheet/VisualPrompt）
 				activeLook := s.getCharActiveLook(char, chapterNo)
-				var faceRef string
-				var bodyRef, vprompt string
+				var refImage, vprompt string
 				if activeLook != nil {
-					if activeLook.FaceCloseup != "" {
-						faceRef = activeLook.FaceCloseup
-					} else if activeLook.Portrait != "" {
-						faceRef = activeLook.Portrait
-					}
-					bodyRef = activeLook.ThreeViewSheet
+					refImage = activeLook.ThreeViewSheet
 					vprompt = activeLook.VisualPrompt
 				}
-				collected = append(collected, charRef{
-					id:      char.ID,
-					faceRef: faceRef,
-					bodyRef: bodyRef,
-					vprompt: vprompt,
-				})
+				logger.Printf("[CharRef] shot#%d charID=%d name=%q chapterNo=%d activeLook=%v threeView=%q",
+					shot.ShotNo, char.ID, char.Name, chapterNo, activeLook != nil, refImage)
 				if vprompt != "" {
 					characterVisualPrompts = append(characterVisualPrompts, vprompt)
 				} else {
-					// 无 VisualPrompt：用角色名+描述作为文本锚点，
-					// 确保 Text2ImgV3（无参考图路径）至少知道角色应出现在画面中。
-					// 若后续找到参考图（DreamO 路径），此文本不会被注入（line 665 的 guard 过滤）。
 					characterVisualPrompts = append(characterVisualPrompts, buildCharTextAnchor(char))
 				}
-			}
-			// 轮次1：每个角色分配一张面部参考图（FaceCloseup > Portrait）
-			for _, cr := range collected {
-				if len(characterPortraits) >= maxCharRefs {
-					break
-				}
-				if cr.faceRef != "" {
-					characterPortraits = append(characterPortraits, cr.faceRef)
-					refSources = append(refSources, fmt.Sprintf("charID=%d FaceCloseup/Portrait", cr.id))
-				}
-			}
-			// 轮次2：用剩余槽位为各角色补充三视图（ThreeViewSheet），服装/体型一致性
-			for _, cr := range collected {
-				if len(characterPortraits) >= maxCharRefs {
-					break
-				}
-				if cr.bodyRef != "" && cr.faceRef != "" {
-					// 已在轮次1分配了面部图，才补充三视图（避免重复）
-					characterPortraits = append(characterPortraits, cr.bodyRef)
-					refSources = append(refSources, fmt.Sprintf("charID=%d ThreeViewSheet", cr.id))
-				}
-			}
-			// 降级：face 为空但有三视图的角色（轮次1未加入），在有槽时补充三视图
-			for _, cr := range collected {
-				if len(characterPortraits) >= maxCharRefs {
-					break
-				}
-				if cr.faceRef == "" && cr.bodyRef != "" {
-					characterPortraits = append(characterPortraits, cr.bodyRef)
-					refSources = append(refSources, fmt.Sprintf("charID=%d ThreeViewSheet(no-face-fallback)", cr.id))
+				if refImage != "" && len(characterPortraits) < maxCharRefs {
+					characterPortraits = append(characterPortraits, refImage)
+					refSources = append(refSources, fmt.Sprintf("charID=%d ThreeViewSheet", char.ID))
 				}
 			}
 		}
@@ -611,65 +563,13 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 							}
 						}
 					}
-					// 同样采用两轮策略：先面部，再三视图
 					for _, ir := range inlineChars {
 						if len(characterPortraits) >= maxCharRefs {
 							break
 						}
-						var faceRef string
-						if ir.look != nil {
-							if ir.look.FaceCloseup != "" {
-								faceRef = ir.look.FaceCloseup
-							} else if ir.look.Portrait != "" {
-								faceRef = ir.look.Portrait
-							}
-						}
-						if faceRef != "" {
-							characterPortraits = append(characterPortraits, faceRef)
-							refSources = append(refSources, fmt.Sprintf("inline name=%q FaceCloseup/Portrait", ir.name))
-						}
-					}
-					for _, ir := range inlineChars {
-						if len(characterPortraits) >= maxCharRefs {
-							break
-						}
-						var faceRef string
-						if ir.look != nil {
-							if ir.look.FaceCloseup != "" {
-								faceRef = ir.look.FaceCloseup
-							} else if ir.look.Portrait != "" {
-								faceRef = ir.look.Portrait
-							}
-						}
-						bodyRef := ""
-						if ir.look != nil {
-							bodyRef = ir.look.ThreeViewSheet
-						}
-						if bodyRef != "" && faceRef != "" {
-							characterPortraits = append(characterPortraits, bodyRef)
+						if ir.look != nil && ir.look.ThreeViewSheet != "" {
+							characterPortraits = append(characterPortraits, ir.look.ThreeViewSheet)
 							refSources = append(refSources, fmt.Sprintf("inline name=%q ThreeViewSheet", ir.name))
-						}
-					}
-					// 降级：只有三视图无面部的角色
-					for _, ir := range inlineChars {
-						if len(characterPortraits) >= maxCharRefs {
-							break
-						}
-						var faceRef string
-						if ir.look != nil {
-							if ir.look.FaceCloseup != "" {
-								faceRef = ir.look.FaceCloseup
-							} else if ir.look.Portrait != "" {
-								faceRef = ir.look.Portrait
-							}
-						}
-						bodyRef := ""
-						if ir.look != nil {
-							bodyRef = ir.look.ThreeViewSheet
-						}
-						if bodyRef != "" && faceRef == "" {
-							characterPortraits = append(characterPortraits, bodyRef)
-							refSources = append(refSources, fmt.Sprintf("inline name=%q ThreeViewSheet(no-face-fallback)", ir.name))
 						}
 					}
 				}
@@ -851,7 +751,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		lensType = "standard lens 50mm"
 	}
 
-	// 将风格 ID 解析为图像模型可识别的中文描述词，与 GenerateThreeViewSheet / GenerateFaceCloseupImage 保持一致。
+	// 将风格 ID 解析为图像模型可识别的中文描述词，与 GenerateThreeViewSheet 保持一致。
 	// 无条件注入（不做 Contains 检查）：LLM 生成的分镜 prompt 可能使用旧风格词，以项目当前设置为最终权威。
 	styleDesc := ""
 	if artStyle != "" {
@@ -1245,16 +1145,9 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 				}
 			}
 			for _, c := range chars {
-				// FaceCloseup(look) > Portrait(look) > ThreeViewSheet(look)
 				var img string
 				if look, ok := defaultLooksMap[c.ID]; ok {
-					if look.FaceCloseup != "" {
-						img = look.FaceCloseup
-					} else if look.Portrait != "" {
-						img = look.Portrait
-					} else {
-						img = look.ThreeViewSheet
-					}
+					img = look.ThreeViewSheet
 				}
 				if img != "" && img != referenceImage {
 					extraRefImages = append(extraRefImages, img)

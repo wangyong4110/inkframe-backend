@@ -201,7 +201,6 @@ type CharacterLook struct {
 
 	// 该形象的参考图像
 	ThreeViewSheet string `json:"three_view_sheet" gorm:"size:1000"`
-	FaceCloseup    string `json:"face_closeup" gorm:"size:1000"`
 	Portrait       string `json:"portrait" gorm:"size:1000"`
 
 	CreatedAt time.Time      `json:"created_at"`
@@ -291,7 +290,6 @@ type CreateCharacterLookRequest struct {
 	Description    string `json:"description"`
 	VisualPrompt   string `json:"visual_prompt"`
 	ThreeViewSheet string `json:"three_view_sheet"`
-	FaceCloseup    string `json:"face_closeup"`
 	Portrait       string `json:"portrait"`
 }
 
@@ -305,6 +303,5 @@ type UpdateCharacterLookRequest struct {
 	Description    *string `json:"description"`
 	VisualPrompt   *string `json:"visual_prompt"`
 	ThreeViewSheet *string `json:"three_view_sheet"`
-	FaceCloseup    *string `json:"face_closeup"`
 	Portrait       *string `json:"portrait"`
 }

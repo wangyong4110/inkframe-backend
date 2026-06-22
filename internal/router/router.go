@@ -548,7 +548,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			characters.DELETE("/:id", cfg.CharacterHandler.DeleteCharacter)
 			characters.POST("/:id/images", cfg.CharacterHandler.GenerateCharacterImage)
 			characters.POST("/:id/three-view", cfg.CharacterHandler.GenerateThreeView)
-			characters.POST("/:id/face-closeup", cfg.CharacterHandler.GenerateFaceCloseup)
 			characters.POST("/:id/image/upload", cfg.CharacterHandler.UploadCharacterImage)
 			characters.POST("/:id/analyze-consistency", cfg.CharacterHandler.AnalyzeCharacterConsistency)
 			characters.POST("/:id/voice/preview", cfg.CharacterHandler.PreviewVoice)
