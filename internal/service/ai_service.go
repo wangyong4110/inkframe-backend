@@ -1896,18 +1896,47 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		firstRef = referenceImages[0]
 	}
 
-	buildReq := func(model, entrySize string) *ai.ImageGenerateRequest {
+	// 预先将相对路径参考图转换为 base64，供 non-volcengine-visual 提供商使用。
+	// volcengine-visual 自身在 setImageInput/setMultiImageInput 中处理相对路径；
+	// 其他提供商（doubao/kling-image 等）只能接受 https:// URL 或 base64 数据，
+	// 不能直接使用 /api/media/xxx 这类服务内部相对路径。
+	resolveForExternal := func(url string) string {
+		if url == "" || strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+			return url
+		}
+		b64 := s.fetchImageAsBase64(ctx, url)
+		if b64 == "" {
+			logger.Printf("GenerateCharacterThreeViewMulti: cannot resolve relative ref %q (serverBaseURL=%q)", url, s.serverBaseURL)
+		}
+		return b64
+	}
+	extFirst := resolveForExternal(firstRef)
+	extRefs := make([]string, 0, len(referenceImages))
+	for _, r := range referenceImages {
+		if res := resolveForExternal(r); res != "" {
+			extRefs = append(extRefs, res)
+		}
+	}
+
+	buildReq := func(model, entrySize, provName string) *ai.ImageGenerateRequest {
 		sz := size // 优先使用调用方传入的尺寸（基于 AspectRatio+QualityTier 计算）
 		if sz == "" {
 			sz = entrySize
+		}
+		// volcengine-visual 内部自行处理相对路径；其他提供商使用预解析的 base64/URL
+		refFirst := firstRef
+		refs := referenceImages
+		if provName != ai.ProviderNameVolcengineVisual {
+			refFirst = extFirst
+			refs = extRefs
 		}
 		return &ai.ImageGenerateRequest{
 			Model:             model,
 			Prompt:            prompt,
 			NegativePrompt:    negativePrompt,
 			Size:              sz,
-			ReferenceImage:    firstRef,
-			ReferenceImages:   referenceImages,
+			ReferenceImage:    refFirst,
+			ReferenceImages:   refs,
 			CFGScale:          cfgScale,
 			ConsistencyWeight: weight,
 		}
@@ -1956,7 +1985,7 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		if err != nil {
 			return "", fmt.Errorf("image provider %q not available: %w", providerName, err)
 		}
-		resp, err := provider.ImageGenerate(ctx, buildReq(selectImageModel(*entry, firstRef, style, weight), entry.Size))
+		resp, err := provider.ImageGenerate(ctx, buildReq(selectImageModel(*entry, firstRef, style, weight), entry.Size, entry.ProviderName))
 		if err != nil {
 			return "", err
 		}
@@ -1994,8 +2023,8 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 			continue
 		}
 		model := selectImageModel(e, firstRef, style, weight)
-		logger.Printf("GenerateCharacterThreeViewMulti: trying provider=%s model=%s refs=%d", e.ProviderName, model, len(referenceImages))
-		resp, err := provider.ImageGenerate(ctx, buildReq(model, e.Size))
+		logger.Printf("GenerateCharacterThreeViewMulti: trying provider=%s model=%s refs=%d extRefs=%d", e.ProviderName, model, len(referenceImages), len(extRefs))
+		resp, err := provider.ImageGenerate(ctx, buildReq(model, e.Size, e.ProviderName))
 		if err != nil {
 			logger.Errorf("GenerateCharacterThreeViewMulti: provider=%s failed: %v", e.ProviderName, err)
 			lastErr = err
@@ -2008,8 +2037,9 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 				if sanitized != prompt {
 					logger.Printf("GenerateCharacterThreeViewMulti: provider=%s sensitive content, retrying with sanitized prompt", e.ProviderName)
 					origBuildReq := buildReq
+					eProvName := e.ProviderName
 					buildReqSanitized := func(model, sz string) *ai.ImageGenerateRequest {
-						r := origBuildReq(model, sz)
+						r := origBuildReq(model, sz, eProvName)
 						r.Prompt = sanitized
 						return r
 					}

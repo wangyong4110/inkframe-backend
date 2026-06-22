@@ -293,13 +293,19 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 	if req.NegativePrompt != "" {
 		apiReq["negative_prompt"] = req.NegativePrompt
 	}
-	// 参考图：Seedream 4.0 / Ark 通过 image_url 传参考图（用于参考引导生成）
-	// base64 数据传 image_base64，URL 传 image_url
-	if req.ReferenceImage != "" {
-		if strings.HasPrefix(req.ReferenceImage, "http://") || strings.HasPrefix(req.ReferenceImage, "https://") {
-			apiReq["image_url"] = req.ReferenceImage
-		} else {
-			apiReq["image_base64"] = req.ReferenceImage
+	// 参考图：Seedream 4.0 / Ark 通过 image_url（https URL）或 image_base64（原始 base64）传参考图。
+	// 优先用 ReferenceImages[0]（多图时取首张），其次用 ReferenceImage。
+	// 相对路径（/api/media/...）由上层 ai_service 预先 fetchImageAsBase64 转换为 base64 字符串。
+	refImg := req.ReferenceImage
+	if len(req.ReferenceImages) > 0 && req.ReferenceImages[0] != "" {
+		refImg = req.ReferenceImages[0]
+	}
+	if refImg != "" {
+		if strings.HasPrefix(refImg, "http://") || strings.HasPrefix(refImg, "https://") {
+			apiReq["image_url"] = refImg
+		} else if len(refImg) > 64 {
+			// 只有长度 >64 的字符串才认为是 base64 数据，避免把残留相对路径当 base64 发出
+			apiReq["image_base64"] = refImg
 		}
 	}
 
