@@ -596,19 +596,30 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		promptText = shot.Description
 	}
 
-	// 角色外观 token 前置注入（始终注入）：
+	// 场景锚点：注入锁定词，并收集场景参考图。
+	// !! 必须在角色注入之前 prepend，这样角色信息最终排在场景描述前面。
+	// 对 Seedream 等非 IP-Adapter 模型，prompt 靠前的 token 权重更高；
+	// 若场景描述排在第一位，模型优先渲染场景而忽略角色。
+	var sceneRefImage string
+	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
+		if fragment, refURL, err := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); err == nil {
+			if fragment != "" {
+				promptText = fragment + ", " + promptText
+			}
+			sceneRefImage = refURL
+		}
+	}
+
+	// 角色外观 token 注入（prepend，排在场景锚点前）：
 	// - DreamO（有参考图）：IP-Adapter 负责外貌精准还原，文字描述提供存在性约束；
-	//   后续 600 字截断确保文字不过度稀释场景/动作信息。
-	// - Seedream/其他非 IP-Adapter 提供商（有参考图）：reference 仅作风格提示，
-	//   必须依赖文字描述让模型知晓角色外貌，否则画面中不会出现角色。
+	// - Seedream/其他：reference 仅作风格/主体提示；文字描述是让模型渲染角色的关键。
 	// - 无参考图（Text2ImgV3）：文字锚点是约束外貌的唯一手段。
 	if len(characterVisualPrompts) > 0 {
 		promptText = strings.Join(characterVisualPrompts, ", ") + ", " + promptText
 	}
 
-	// 有参考图路径（DreamO / Seedream）：
-	// 1. 注入角色名 — 让模型知道画面中应有该角色出现；
-	// 2. 注入动作/姿态 — 指导角色摆姿势，避免动作僵硬。
+	// 角色名 + 动作/姿态（最后 prepend → 最终排在 prompt 最前面）：
+	// 角色名排在 prompt 最前使 Seedream 将其识别为画面主体。
 	if len(characterPortraits) > 0 {
 		var presenceTokens []string // 人物存在性 + 动作/表情
 		if shot.Characters != "" {
@@ -642,30 +653,20 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// 场景锚点：注入锁定词，并收集场景参考图
-	var sceneRefImage string
-	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
-		if fragment, refURL, err := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); err == nil {
-			if fragment != "" {
-				promptText = fragment + ", " + promptText
-			}
-			sceneRefImage = refURL
-		}
-	}
-
-	// 合并参考图 URL：角色图优先，场景锚点图仅在有角色图时追加。
+	// 参考图列表：仅包含角色三视图，不加入场景锚点图片。
 	//
 	// 关键约束：selectImageModel 依赖 firstRef（第一张图）决定是否启用 DreamO（角色特征保持）。
 	// 若无角色参考图但场景锚点图非空，firstRef 将是场景背景图 → DreamO 错误地将背景作为"角色外观"
 	// 进行特征保持，导致生成图角色面目全非。
-	// 解决方案：无角色图时不把场景图加入 allRefImages，让模型回退到 Text2ImgV3（纯文生图）；
-	// 场景锚点的文字描述已通过 promptText 注入，仍能保障画面主题一致性。
-	allRefImages := make([]string, 0, len(characterPortraits)+1)
+	//
+	// Seedream（doubao）行为：将所有参考图视为"需要出现的主体"。若把大尺寸场景图（prairie cabin）
+	// 混入角色三视图，模型优先渲染场景主体，角色会被挤出画面。
+	// 场景锚点的视觉一致性已通过 promptText 中的文字描述片段（BuildPromptFragment）保障；
+	// 场景参考图只对 DreamO 的 IP-Adapter 有补充意义，对 Seedream 是噪声。
+	allRefImages := make([]string, 0, len(characterPortraits))
 	allRefImages = append(allRefImages, characterPortraits...)
-	if sceneRefImage != "" && len(characterPortraits) > 0 {
-		// 仅在有角色图时追加场景图（作为 DreamO 的补充上下文，而非主参考）
-		allRefImages = append(allRefImages, sceneRefImage)
-	}
+	logger.Printf("generateShotReferenceImage: shot %d allRefImages=%d (charPortraits=%d sceneRef=%v)",
+		shot.ShotNo, len(allRefImages), len(characterPortraits), sceneRefImage != "")
 
 	ctx := context.Background()
 
@@ -807,24 +808,8 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		promptText = truncated
 	}
 
-	// 二次读取场景锚点参考图（仅在有角色参考图时才追加）：
-	// 批量并发时本 goroutine 等待 imageSem 期间，前一个分镜可能已完成并锁定了锚点。
-	// 同样遵守"无角色图不追加场景图"的约束，防止 DreamO 误将场景图视为角色外观。
-	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil && len(characterPortraits) > 0 {
-		if _, latestRef, _ := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); latestRef != "" {
-			alreadyHaveRef := false
-			for _, r := range allRefImages {
-				if r == latestRef {
-					alreadyHaveRef = true
-					break
-				}
-			}
-			if !alreadyHaveRef {
-				allRefImages = append(allRefImages, latestRef)
-				logger.Printf("generateShotReferenceImage: shot %d late-read scene anchor ref (locked by earlier shot in batch)", shot.ShotNo)
-			}
-		}
-	}
+	// 场景锚点图片不加入 allRefImages：
+	// 见上方"参考图列表"注释。二次读取也同样跳过场景图，防止并发批次中后加进来。
 
 	logger.Printf("generateShotReferenceImage: shot %d prompt=%q negPrompt=%q", shot.ShotNo, promptText[:min(len(promptText), 120)], negPrompt[:min(len(negPrompt), 80)])
 	// 无角色参考图时（Text2ImgV3 纯文生图）：用质量档位 CFG 替代 consistencyWeight，让文生图遵从 prompt；

@@ -332,7 +332,7 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 				imgTypes[i] = "unknown"
 			}
 		}
-		log.Printf("[doubao] ImageGenerate model=%s refImages=%d types=%v prompt=%.80s", model, len(allRefImages), imgTypes, req.Prompt)
+		log.Printf("[doubao] ImageGenerate model=%s refImages=%d types=%v prompt=%.200s", model, len(allRefImages), imgTypes, req.Prompt)
 	}
 
 	body, _ := json.Marshal(apiReq)
