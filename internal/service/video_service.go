@@ -276,7 +276,11 @@ func (s *VideoService) resolveAbsURL(u string) string {
 		data, err := s.dbMediaReader.Get(context.Background(), u)
 		if err != nil {
 			logger.Errorf("[resolveAbsURL] dbMediaReader.Get(%q) failed: %v", u, err)
-		} else if len(data) > 0 && s.storageSvc != nil {
+		} else if len(data) == 0 {
+			logger.Errorf("[resolveAbsURL] dbMediaReader.Get(%q) returned empty data", u)
+		} else if s.storageSvc == nil {
+			logger.Errorf("[resolveAbsURL] storageSvc is nil, cannot upload %q to OSS", u)
+		} else {
 			key := fmt.Sprintf("images/shot-ref-%s.jpg", uuid.New().String())
 			ossURL, uploadErr := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(data), int64(len(data)), "image/jpeg")
 			if uploadErr != nil {
@@ -284,6 +288,8 @@ func (s *VideoService) resolveAbsURL(u string) string {
 			} else if strings.HasPrefix(ossURL, "http://") || strings.HasPrefix(ossURL, "https://") {
 				logger.Printf("[resolveAbsURL] %q → OSS %s", u, ossURL)
 				return ossURL
+			} else {
+				logger.Errorf("[resolveAbsURL] OSS upload returned non-absolute URL %q for %q", ossURL, u)
 			}
 		}
 	}
