@@ -593,14 +593,6 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 			if novel.MaxTokens > 0 {
 				config.MaxTokens = novel.MaxTokens
 			}
-			// 若小说配置了特定 AI 模型且调用方未指定 provider，
-			// 通过模型名反查对应 provider 并将模型名透传给 API
-			if providerName == "" && novel.AIModel != "" {
-				resolvedModel = novel.AIModel
-				if pName := s.resolveProviderFromModel(tenantID, novel.AIModel); pName != "" {
-					providerName = pName
-				}
-			}
 		}
 	}
 
@@ -761,12 +753,6 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 			}
 			if novel.MaxTokens > 0 {
 				config.MaxTokens = novel.MaxTokens
-			}
-			if providerName == "" && novel.AIModel != "" {
-				resolvedModel = novel.AIModel
-				if pName := s.resolveProviderFromModel(tenantID, novel.AIModel); pName != "" {
-					providerName = pName
-				}
 			}
 		}
 	}
