@@ -262,12 +262,18 @@ func (s *VideoService) WithDBMediaReader(svc storage.Service) *VideoService {
 }
 
 // migrateLocalImageToPublic 将本地 DB 存储的图片（/api/v1/media/*）迁移到 OSS。
-// 若已是公网 URL 则直接返回原值。迁移失败时返回原值并打印错误日志，由调用方决定如何处理。
+// 若已是公网 URL 则直接返回原值。
+// 若配置了 backendBaseURL，跳过 OSS 迁移（由 resolveAbsURL 直接拼接），避免重复上传。
+// 迁移失败时返回原值并打印错误日志，由调用方决定如何处理。
 func (s *VideoService) migrateLocalImageToPublic(u string) string {
 	if u == "" || strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
 		return u
 	}
 	if !strings.HasPrefix(u, "/api/v1/media/") {
+		return u
+	}
+	// backendBaseURL 已配置时无需迁移到 OSS，resolveAbsURL 会直接拼接
+	if s.backendBaseURL != "" {
 		return u
 	}
 	if s.dbMediaReader == nil {

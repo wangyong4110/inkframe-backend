@@ -1133,6 +1133,52 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		svcs.TaskService.Fail(t.TaskID, "服务重启，请重新提交") //nolint:errcheck
 	})
 
+	// video_synthesis: resume the stitch→subtitle→cover→upload pipeline
+	if svcs.VideoService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeVideoSynthesis, func(t *model.AsyncTask) {
+			var params struct {
+				VideoID uint `json:"video_id"`
+			}
+			if t.ParamsJSON != "" {
+				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
+			}
+			if params.VideoID == 0 {
+				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+				return
+			}
+			svcs.VideoService.RunSynthesisPipeline(t.TaskID, params.VideoID)
+		})
+	}
+
+	// video_gen: resume submit-all-shots + poll + stitch pipeline
+	if svcs.VideoService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeVideoGen, func(t *model.AsyncTask) {
+			var params struct {
+				VideoID uint   `json:"video_id"`
+				Mode    string `json:"mode"`
+			}
+			if t.ParamsJSON != "" {
+				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
+			}
+			if params.VideoID == 0 {
+				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+				return
+			}
+			svcs.TaskService.SetRunning(t.TaskID)        //nolint:errcheck
+			svcs.TaskService.UpdateProgress(t.TaskID, 5) //nolint:errcheck
+			if err := svcs.VideoService.GenerateAllShotVideos(params.VideoID); err != nil {
+				logger.Errorf("TaskService resume video_gen %s: submit failed: %v", t.TaskID, err)
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+				return
+			}
+			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
+			if params.Mode != "slideshow" {
+				svcs.VideoService.PollAndStitchVideo(params.VideoID) // blocks until done or timeout
+			}
+			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"video_id": params.VideoID}) //nolint:errcheck
+		})
+	}
+
 	// skill_gen: re-generate skills for a novel (idempotent — overwrites existing)
 	if svcs.SkillService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeSkillGen, func(t *model.AsyncTask) {

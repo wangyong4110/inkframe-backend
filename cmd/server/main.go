@@ -158,6 +158,7 @@ func main() {
 	services.AIService.WithDBMediaReader(dbMediaReader)
 	if cfg.Server.PublicURL != "" {
 		services.AIService.WithServerBaseURL(cfg.Server.PublicURL)
+		services.VideoService.WithBackendBaseURL(cfg.Server.PublicURL)
 	}
 	services.BGMService.WithStorage(storageSvc)
 	services.AssetService.WithStorage(storageSvc)

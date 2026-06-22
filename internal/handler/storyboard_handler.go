@@ -722,20 +722,43 @@ func (h *VideoHandler) GenerateShotVideos(c *gin.Context) {
 		return
 	}
 
-	if err := h.videoService.GenerateAllShotVideos(uint(id)); err != nil {
-		logger.Errorf("[VideoHandler] GenerateShotVideos: videoID=%d err=%v", id, err)
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeVideoGen, "视频生成", "video", uint(id))
+	if err != nil {
+		logger.Errorf("[VideoHandler] GenerateShotVideos: create task videoID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"video_id": uint(id),
+		"mode":     video.Mode,
+	})
 
-	// slideshow mode handles stitching internally; only poll for AI video mode
-	if video.Mode != "slideshow" {
-		go h.videoService.PollAndStitchVideo(uint(id))
-	}
+	go func(taskID string, videoID uint, mode string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[VideoHandler] GenerateShotVideos task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 5)  //nolint:errcheck
+		if err := h.videoService.GenerateAllShotVideos(videoID); err != nil {
+			logger.Errorf("[VideoHandler] GenerateShotVideos task %s: submit failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
+		// slideshow mode handles stitching internally; only poll for AI video mode
+		if mode != "slideshow" {
+			h.videoService.PollAndStitchVideo(videoID) // blocks until done or timeout
+		}
+		h.taskSvc.Complete(taskID, map[string]interface{}{"video_id": videoID}) //nolint:errcheck
+	}(task.TaskID, uint(id), video.Mode)
 
 	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "shot generation started",
+		"code": 0,
+		"data": gin.H{"task_id": task.TaskID},
 	})
 }
 

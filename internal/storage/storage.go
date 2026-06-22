@@ -145,6 +145,10 @@ func (s *ossService) Upload(ctx context.Context, key string, r io.Reader, size i
 	if base == "" {
 		base = fmt.Sprintf("https://%s.%s", s.cfg.Bucket, strings.TrimPrefix(s.cfg.Endpoint, "https://"))
 	}
+	// 补全协议头：防止 base_url 配置时遗漏 https://
+	if !strings.HasPrefix(base, "http://") && !strings.HasPrefix(base, "https://") {
+		base = "https://" + base
+	}
 	return base + "/" + key, nil
 }
 

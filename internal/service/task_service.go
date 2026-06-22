@@ -55,6 +55,8 @@ const (
 	TaskTypeImageEdit                = "image_edit"
 	TaskTypeImageUpscale             = "image_upscale"
 	TaskTypeChapterRewriteInstr      = "chapter_rewrite_instr"
+	TaskTypeVideoGen                 = "video_gen"      // submit all shots + poll + stitch
+	TaskTypeVideoSynthesis           = "video_synthesis" // final synthesis pipeline (stitch→subtitle→upload)
 )
 
 // TaskService manages persistent async tasks.

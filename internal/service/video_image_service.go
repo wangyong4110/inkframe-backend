@@ -485,7 +485,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				activeLook := s.getCharActiveLook(char, chapterNo)
 				var refImage, vprompt string
 				if activeLook != nil {
-					refImage = activeLook.ThreeViewSheet
+					refImage = normalizeMediaURL(activeLook.ThreeViewSheet)
 					vprompt = activeLook.VisualPrompt
 				}
 				urlType := "empty"
@@ -574,7 +574,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 							break
 						}
 						if ir.look != nil && ir.look.ThreeViewSheet != "" {
-							characterPortraits = append(characterPortraits, ir.look.ThreeViewSheet)
+							characterPortraits = append(characterPortraits, normalizeMediaURL(ir.look.ThreeViewSheet))
 							refSources = append(refSources, fmt.Sprintf("inline name=%q ThreeViewSheet", ir.name))
 						}
 					}
@@ -1004,7 +1004,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		videoAspectRatio = "16:9"
 	}
 
-	logger.Printf("GenerateShotVideo: shot %d provider=%s aspect=%s duration=%ds", shot.ShotNo, providerName, videoAspectRatio, shot.Duration)
+	logger.Printf("GenerateShotVideo: shot %d provider=%s aspect=%s duration=%.2fs", shot.ShotNo, providerName, videoAspectRatio, shot.Duration)
 
 	// 图片优先策略：先确保 shot.ImageURL 已有图片，再用其作为视频参考图（image-to-video）。
 	// 若 ImageURL 已存在则直接复用，否则先生成并持久化，保证前端可见且视频有参考帧。
@@ -1162,7 +1162,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 			for _, c := range chars {
 				var img string
 				if look, ok := defaultLooksMap[c.ID]; ok {
-					img = look.ThreeViewSheet
+					img = normalizeMediaURL(look.ThreeViewSheet)
 				}
 				if img != "" && img != referenceImage {
 					extraRefImages = append(extraRefImages, img)
@@ -1824,4 +1824,20 @@ func (s *VideoService) translatePromptToEnglish(ctx context.Context, tenantID ui
 	}
 	logger.Printf("[translatePromptToEnglish] translated %d chars → %d chars", len([]rune(text)), len([]rune(translated)))
 	return translated
+}
+
+// normalizeMediaURL 修复 DB 存储时写入的畸形 /api/v1/media/ 路径：
+//   - "/ap1/media/N"   → "/api/v1/media/N"  (ap1 typo)
+//   - "/api//media/N"  → "/api/v1/media/N"  (missing v1, double slash)
+//   - "/v1/media/N"    → "/api/v1/media/N"  (missing api/ prefix)
+func normalizeMediaURL(u string) string {
+	if u == "" || strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
+		return u
+	}
+	for _, bad := range []string{"/ap1/media/", "/api//media/", "/v1/media/"} {
+		if strings.HasPrefix(u, bad) {
+			return "/api/v1/media/" + u[len(bad):]
+		}
+	}
+	return u
 }
