@@ -24,3 +24,14 @@ func (h *UploadHandler) UploadImage(c *gin.Context) {
 	}
 	respondOK(c, gin.H{"url": url})
 }
+
+// UploadVideo 上传视频，返回可访问的公开 URL
+// POST /api/v1/upload/video
+// multipart/form-data: file (mp4/mov/webm/avi)
+func (h *UploadHandler) UploadVideo(c *gin.Context) {
+	url, ok := receiveAndUpload(c, "videos", h.storageSvc, []string{".mp4", ".mov", ".webm", ".avi"})
+	if !ok {
+		return
+	}
+	respondOK(c, gin.H{"url": url})
+}

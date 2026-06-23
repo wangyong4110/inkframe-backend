@@ -1,6 +1,6 @@
 你是专业影视分镜师，同时负责撰写旁白文案。请将以下章节内容{% if SegLabel %} {{ SegLabel }}{% endif %}转化为约{{ ExpectedShots }}个分镜，返回JSON数组。{% if AutoDuration %}（该数量由系统根据章节字数自动估算，应覆盖全部情节；若某些情节密度确实更高，可适当增减±20%，但必须以内容完整覆盖为首要目标）{% endif %}
 
-⚠️ 全局规则——所有视觉字段最低字数/词数不少于 100 字/词，过短将导致生成质量大幅下降。
+⚠️ 全局规则——image_prompt / video_prompt 字段最低字数/词数不少于 100 字/词，过短将导致生成质量大幅下降。description 字段为叙事摘要，不超过50字。
 ⚠️ 视觉内容安全规则：description / image_prompt / video_prompt 字段中，严禁出现暴力、血腥、伤亡、色情相关敏感词。
 {% if GenreVisualHints %}
 {{ GenreVisualHints }}
@@ -33,71 +33,16 @@
   可选值：extreme_wide | wide | full | medium | close_up | extreme_close_up
 
 {% if IsEn %}
-▸ description（English only — complete visual description of the scene including environment AND characters）
-  - Describe the full visual scene: environment AND any characters present (their position in frame, posture, action, expression). If no characters appear in this shot, describe environment only.
-  - MINIMUM LENGTH: At least 100 English words. Short descriptions will produce poor images.
-  - No violent, gory, death-related, or sexually explicit content.
-  - Must cover ALL five layers. Missing layers degrade image quality.
-    ① Ground layer: precise surface texture (cracked clay / wet cobblestone / polished marble / weathered wood),
-       ground-level objects, debris, shadow patterns cast on the ground surface, any pooled liquid or dust
-    ② Foreground objects/props: 1-3 named environment objects with exact position, material, and dimension detail
-       (e.g. "a weathered granite stele 1.8m tall, diagonal hairline cracks across face, moss creeping from base")
-    ③ Mid-ground architecture or nature: structural elements, spatial depth, light/shadow transitions,
-       openings (doorways, archways, gaps), secondary environmental details with material specifics
-    ④ Background depth and atmosphere: far-field elements, sky or ceiling state, atmospheric particles
-       (dust motes / smoke wisps / fog density / rain veils / ember sparks), distance fade quality,
-       distant silhouettes or outlines
-    ⑤ Lighting setup: light source type (directional sunlight / diffused overcast / candlelight / magic glow),
-       angle (top-front / upper-left rim / underlit), color temperature (warm golden 3200K / neutral 5500K /
-       cool blue 8000K), shadow quality (hard-edged / soft diffused), where shadows fall and their length
-    ⑥ Characters (if present): for each character in the shot — use their exact name from 【角色信息】 (e.g. "Ling Yun"), then: position in frame, body posture/action, facial expression, spatial relationship to environment elements. Never use "figure", "young man", "woman", or appearance-based labels as substitutes for the character name.
-  - Composition & optics: shot size matching shot_size, camera angle matching camera_angle,
-    focal length feel (wide 24mm / standard 50mm / telephoto 85-135mm), depth-of-field character
-  - Example (full-layers, ruined mountain courtyard at dusk):
-    "Crumbling stone courtyard floor with irregular slate tiles — multiple tiles cracked diagonally,
-    some displaced upward by encroaching tree roots 3-5cm above grade, thin moss film covering shaded
-    corners, fine powdered debris collecting in crevices. Foreground-left: a collapsed stone incense
-    burner lying on its side, 60cm diameter bowl half-buried in rubble, weathered bronze-green surface
-    with flaking patina, three unlit incense stubs protruding from accumulated grey ash. Center-foreground:
-    a 1.8m granite stone stele with face angled toward camera, chiseled inscription weathered to near-
-    illegibility, base encircled by dried flower offerings in various states of decay, dead petals
-    scattered on stone. Mid-ground: two stone pillars flanking a wide stone gateway — left pillar intact,
-    right pillar sheared at mid-height with jagged fracture edge, structural lintel partially collapsed
-    with one end resting on rubble. Background: dense pine forest starting at courtyard perimeter, canopy
-    at 8-10m height filtering amber late-afternoon light into scattered vertical shafts, distant mountain
-    ridge barely visible through soft golden haze at the treeline. Light: warm directional sunlight from
-    upper-right at 30° angle, 3200K amber cast, casting long hard shadows of standing pillar leftward
-    across stone tiles, deep blue-grey shadow pooling in collapsed rubble zones. Atmospheric: fine dust
-    motes suspended in each light shaft, thin ground-level mist at 10-15cm height in shadowed areas.
-    Medium shot, eye-level angle, 50mm f/4 feel, foreground tiles sharp, pine forest background soft."
+▸ description（narrative summary — brief scene summary for human reference only, NOT used for image generation）
+  - Write a concise Chinese summary of the scene in ≤50 Chinese characters (汉字).
+  - Cover: who is present, what is happening, where, and the emotional tone. Do NOT describe technical details.
+  - Example: "镇中央鹅卵石广场，小红帽与镇民们道别，晨光柔和，氛围温馨。"（29字）
 
 {% else %}
-▸ description（画面描述——完整视觉描述，包含环境和角色）
-  - 客观描述完整画面：环境场景 + 镜头中出现的角色（位置、姿态、动作、表情）。若该镜头无角色出场，描述环境即可。
-  - 最低字数：不少于100字，过短将导致生成图片质量大幅下降
-  - ⚠️ 严禁出现暴力、血腥、伤亡、色情相关敏感词
-  - 必须覆盖以下五层，任何一层缺失都会导致生成图片质量下降：
-    ① 地面层：精确地面材质（龟裂荒土/湿润石板/大理石地面/风化木板等）+ 地面级物件、碎片、
-       积尘、液体、地面投影图案
-    ② 前景物件：1-3个命名环境物体，标注精确位置、材质和尺寸细节
-       （如"一座约1.8米高花岗岩石碑，碑面斜向裂缝，底座苔藓蔓延"）
-    ③ 中景建筑/自然：建筑结构元素、空间纵深、明暗过渡、开口（门洞/拱道/缺口）、
-       次级环境细节，需说明材质
-    ④ 背景纵深与大气：远景元素、天空/顶部状态、大气粒子（尘埃浮粒/烟雾/薄雾/雨幕/火星）、
-       纵深消散质感、远处轮廓或剪影（建筑/山/树线）
-    ⑤ 光线设置：光源类型+方向+色温+阴影质量+阴影投向位置及长度
-    ⑥ 角色（若有）：每位出场角色——使用【角色信息】中的精确名称（如"凌云"），然后描述：在画面中的位置、身体姿态/动作、面部表情、与环境元素的空间关系。禁止用"人影"、"少年"、"女子"或外貌词替代角色名称
-  - 构图与镜头感：与 shot_size 呼应的景别感、与 camera_angle 呼应的机位感、焦距感、景深
-  - 示例（五层全要素，黄昏废墟山庭院）：
-    "庭院石板地面，石砖排列不规则，多处石板沿对角方向开裂，局部被入侵树根顶起约3-5厘米，阴暗角落
-    积有薄层苔藓，石缝间堆积细碎粉尘。前景偏左：一座倒卧石质香炉，直径约60厘米，炉碗半埋碎石中，
-    表面风化铜绿大面积剥落，三根残香斜插炉灰。前景居中：约1.8米花岗岩石碑，碑面斜向镜头，刻字因
-    风化几近漫漶，碑基四周摆放各色枯萎供花，枯叶散落石板。中景：两根石柱夹持宽阔石门洞——左侧完好，
-    右侧在中部被剪断，断口参差不齐，横架石梁一端坠落于碎石堆上。背景：庭院边缘以外松林密布，树冠层
-    约8-10米高，树间隙中投射出垂直琥珀色光柱，远处山脊轮廓在金色薄雾中隐约可见。光线：右上方约
-    30度暖向阳光，色温3200K琥珀调，将完好石柱硬边阴影向左下方投射至石板地面，倒塌区域碎石处积聚
-    深沉蓝灰色阴影。大气：光柱中细小尘埃粒子悬浮，阴暗区域地面10-15厘米高度有薄层地气流动。
-    中景，平视角，50mm焦距感，前景石板清晰，松林背景柔焦虚化。"
+▸ description（画面描述——叙事摘要，仅供人工参考，不用于AI生图）
+  - 简明描述场景：地点 + 在场角色 + 正在发生的事 + 情绪氛围，不超过50字。
+  - 不要描述技术参数、光线细节、材质细节，那些写在 image_prompt 里。
+  - 示例："镇中央鹅卵石广场，小红帽与镇民们道别，晨光柔和，气氛温馨。"（29字）
 
 {% endif %}
 {% if IsImageEn %}

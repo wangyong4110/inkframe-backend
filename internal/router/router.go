@@ -218,9 +218,10 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			}
 		}
 
-		// 通用图片上传
+		// 通用文件上传
 		if cfg.UploadHandler != nil {
 			v1.POST("/upload/image", cfg.UploadHandler.UploadImage)
+			v1.POST("/upload/video", cfg.UploadHandler.UploadVideo)
 		}
 
 		// AI 对话式小说创建
