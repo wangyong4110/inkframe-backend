@@ -475,9 +475,10 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		progressFn(99)
 	}
 
-	// 更新视频状态
+	// 更新视频状态；生成完成即视为已确认，无需手动确认步骤
 	video.TotalShots = len(shots)
 	video.Status = "storyboard"
+	video.ScriptStatus = "confirmed"
 	if err := s.videoRepo.Update(video); err != nil {
 		logger.Errorf("[VideoService] failed to update video %d status: %v", video.ID, err)
 	}
@@ -1002,9 +1003,13 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			Expression string `json:"expression"`
 			Pose       string `json:"pose"`
 		} `json:"characters"`
-		Transition    string   `json:"transition"`
-		SFXTags       []string `json:"sfx_tags"`
-		EmotionalTone string   `json:"emotional_tone"`
+		Transition string `json:"transition"`
+		SFXTags    []struct {
+			Tag     string `json:"tag"`
+			SFXType string `json:"type"`
+			Prompt  string `json:"prompt"`
+		} `json:"sfx_tags"`
+		EmotionalTone string `json:"emotional_tone"`
 	}
 
 	var rawShots []rawShotType
@@ -1091,10 +1096,18 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			})
 		}
 
-		// 将 sfx_tags 序列化为 JSON 字符串存储
+		// 将 sfx_tags 序列化为结构化 JSON
 		var sfxTagsJSON string
 		if len(r.SFXTags) > 0 {
-			if b, err := json.Marshal(r.SFXTags); err == nil {
+			tagItems := make([]sfxTagItem, 0, len(r.SFXTags))
+			for _, t := range r.SFXTags {
+				sfxType := t.SFXType
+				if sfxType == "" {
+					sfxType = guessSFXType(t.Tag)
+				}
+				tagItems = append(tagItems, sfxTagItem{Tag: t.Tag, SFXType: sfxType, Prompt: t.Prompt})
+			}
+			if b, err := json.Marshal(tagItems); err == nil {
 				sfxTagsJSON = string(b)
 			}
 		}

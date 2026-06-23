@@ -448,9 +448,6 @@ func (s *VideoService) UpdateVideo(id, tenantID uint, req *model.UpdateVideoRequ
 	if req.ArtStyle != "" {
 		video.ArtStyle = req.ArtStyle
 	}
-	if req.ScriptStatus != "" {
-		video.ScriptStatus = req.ScriptStatus
-	}
 	if req.Mode != "" {
 		video.Mode = req.Mode
 	}

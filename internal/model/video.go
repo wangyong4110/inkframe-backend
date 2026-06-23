@@ -472,7 +472,6 @@ type UpdateVideoRequest struct {
 	FrameRate    int    `json:"frame_rate"`
 	AspectRatio  string `json:"aspect_ratio"`
 	ArtStyle     string `json:"art_style"`
-	ScriptStatus string `json:"script_status"` // draft/confirmed
 	Mode         string `json:"mode"`           // video/slideshow
 	VisualMode   string `json:"visual_mode"`    // standard/hd/3d/hd_3d
 	ThreeDStyle  string `json:"three_d_style"`  // cg/pixar/anime3d/realistic3d
