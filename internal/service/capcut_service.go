@@ -1625,84 +1625,9 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		videoSegments = append(videoSegments, seg)
 
 		// ── 2. 配音音频素材 ───────────────────────────────────────
-		// 优先 shot.AudioPath（合成后的整段音频）；
-		// Bug-A修复：AudioPath 为空且有 VoiceSegments 时，逐段加入配音轨道（与 ExportBRollDraft 保持一致）。
-		if shot.AudioPath != "" {
-			audMatID := uuid.New().String()
-
-			// Bug3修复：用实际音频时长替代 shot.Duration。
-			// CapCut 根据 Material.Duration 和 SourceTimerange.Duration 解析音频播放范围；
-			// 若声称时长 > 文件实际时长，CapCut 可能拉伸音频，导致音画不同步。
-			actualAudioDur := durationMicros // fallback：读取失败时用视频段时长
-			audPath := fmt.Sprintf("voice/%03d_voice.mp3", shot.ShotNo)
-			if data, err := s.resolveMedia(shot.AudioPath); err == nil && len(data) > 0 {
-				ext := audioExtension(shot.AudioPath)
-				audPath = fmt.Sprintf("voice/%03d_voice%s", shot.ShotNo, ext)
-				if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
-					totalLoadedBytes += int64(len(data))
-					mediaFiles = append(mediaFiles, mediaFile{filename: audPath, data: data})
-				}
-				if dur := parseAudioDurationMicros(data, ext); dur > 0 {
-					actualAudioDur = dur
-				}
-			} else {
-				logger.Errorf("[ExportCapCutDraft] audio load failed shot %d url=%q: %v", shot.ShotNo, shot.AudioPath, err)
-			}
-			draftMatEntries = append(draftMatEntries, draftMatEntry{filename: audPath, metetype: "music", duration: actualAudioDur})
-			// SourceTimerange：告知剪映实际取用的音频长度，不超过视频段时长
-			srcDur := actualAudioDur
-			if srcDur > durationMicros {
-				srcDur = durationMicros // 超出镜头时长的部分截断，避免溢出到下一镜头
-			}
-
-			audioMaterials = append(audioMaterials, ccAudioMaterial{
-				CategoryName:       "local",
-				CheckFlag:          1,
-				CopyrightLimitType: "none",
-				Duration:           actualAudioDur,
-				ID:                 audMatID,
-				LocalMaterialID:    uuid.New().String(),
-				MusicID:            uuid.New().String(),
-				Name:               fmt.Sprintf("shot_%03d_audio", shot.ShotNo),
-				Path:               audPath,
-				SimilarMusicInfo:   ccSimilarMusicInfo{},
-				TTSBenefitInfo:     ccTTSBenefitInfo{BenefitType: "none", BenefitAmount: -1},
-				Type:               "extract_music",
-				WavePoints:         []interface{}{},
-			})
-
-			// Bug修复：TargetTimerange.Duration 必须等于 SourceTimerange.Duration（srcDur）。
-			// 若用 durationMicros（视频段时长）而 srcDur < durationMicros，
-			// 剪映会将音频拉伸以填满时间槽，导致音频变慢、音画严重不同步。
-			{
-				// 创建 audio segment 伴生素材（5 个）：speed, placeholder, beats, sound_channel, vocal_sep
-				audSpd := newSpeedMaterial()
-				audPh := newPlaceholderInfo()
-				audBts := newBeatsMaterial()
-				audSc := newSoundChannelMapping()
-				audVs := newVocalSeparation()
-				speedsSlice = append(speedsSlice, audSpd)
-				placeholderSlice = append(placeholderSlice, audPh)
-				beatsSlice = append(beatsSlice, audBts)
-				soundChannelSlice = append(soundChannelSlice, audSc)
-				vocalSepSlice = append(vocalSepSlice, audVs)
-				audSeg := ccSegment{
-					Clip:            nil, // 音频轨道必须为 null
-					ID:              uuid.New().String(),
-					MaterialID:      audMatID,
-					Speed:           1.0,
-					SourceTimerange: &ccTimeRange{Duration: srcDur, Start: 0},
-					TargetTimerange: ccTimeRange{Duration: srcDur, Start: startMicros},
-					Visible:         true,
-					Volume:          1.0,
-				}
-				applyAudioSegmentDefaults(&audSeg)
-				audSeg.ExtraMaterialRefs = append(audSeg.ExtraMaterialRefs, audSpd.ID, audPh.ID, audBts.ID, audSc.ID, audVs.ID)
-				audioSegments = append(audioSegments, audSeg)
-			}
-		} else if s.segmentRepo != nil {
-			// Bug-A：AudioPath 为空 → 回落到逐段 VoiceSegment，与 ExportBRollDraft 保持一致。
-			// 多段 TTS 场景下 shot.AudioPath 通常为空（各段未合并），若此处不处理则配音轨道完全缺失。
+		// 从 VoiceSegments 加载（已迁移到段落表）
+		if s.segmentRepo != nil {
+			// 逐段加入配音轨道
 			segs, segErr := s.segmentRepo.ListByShotID(shot.ID)
 			if segErr == nil && len(segs) > 0 {
 				segOffset := startMicros // 镜头内各段的时间轴起始偏移
@@ -1785,8 +1710,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		}
 
 		// ── 3. 音效素材（SFX）────────────────────────────────────
-		// 优先从 sfxItemRepo 读取多条 ShotSFXItem（含精确 StartOffset / DurationSecs / Volume）；
-		// 若 repo 未注入或该镜头无条目，回退到 shot.SFXURL 单字段（向后兼容）。
+		// 从 sfxItemRepo 读取多条 ShotSFXItem（含精确 StartOffset / DurationSecs / Volume）。
 		var sfxItems []*model.ShotSFXItem
 		if s.sfxItemRepo != nil {
 			if items, rerr := s.sfxItemRepo.ListByShotID(shot.ID); rerr == nil {
@@ -1796,10 +1720,6 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 					}
 				}
 			}
-		}
-		if len(sfxItems) == 0 && shot.SFXURL != "" {
-			// 向后兼容：没有 item 记录时用 shot.SFXURL 构造一条虚拟 item
-			sfxItems = []*model.ShotSFXItem{{URL: shot.SFXURL, Volume: shot.SFXVolume}}
 		}
 		for sfxIdx, sfxItem := range sfxItems {
 			sfxMatID := uuid.New().String()
@@ -1844,8 +1764,6 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				sfxVol = 0.4
 				if shot.Dialogue != "" {
 					sfxVol = 0.2
-				} else if shot.AudioPath != "" {
-					sfxVol = 0.3
 				}
 			}
 
@@ -2693,76 +2611,9 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		}
 
 		// ── 2. 配音音频素材 ────────────────────────────────────────────────
-		// 优先 shot.AudioPath（合成后的整段音频）；
-		// P2-3: 当 AudioPath 为空且有 VoiceSegments 时，逐段加入音频轨道并按 SeqNo 顺序排列，
-		// 确保多段 TTS 全部保留，不再仅取首段。
-		if shot.AudioPath != "" {
-			audMatID := uuid.New().String()
-			actualAudioDur := durationMicros
-			audPath := fmt.Sprintf("%03d_voice.mp3", shot.ShotNo)
-			if data, err := s.resolveMedia(shot.AudioPath); err == nil && len(data) > 0 {
-				ext := audioExtension(shot.AudioPath)
-				audPath = fmt.Sprintf("%03d_voice%s", shot.ShotNo, ext)
-				if totalLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
-					totalLoadedBytes += int64(len(data))
-					mediaFiles = append(mediaFiles, mediaFile{filename: audPath, data: data})
-				} else {
-					logger.Printf("[ExportBRollDraft] audio: total media exceeds 2GiB, skipping audio embed shot %d", shot.ShotNo)
-				}
-				if dur := parseAudioDurationMicros(data, ext); dur > 0 {
-					actualAudioDur = dur
-				}
-			} else {
-				logger.Errorf("[ExportBRollDraft] audio load failed shot %d url=%q: %v", shot.ShotNo, shot.AudioPath, err)
-			}
-			draftMatEntries = append(draftMatEntries, draftMatEntry{filename: audPath, metetype: "music", duration: actualAudioDur})
-			srcDur := actualAudioDur
-			if srcDur > durationMicros {
-				srcDur = durationMicros
-			}
-			audioMaterials = append(audioMaterials, ccAudioMaterial{
-				CategoryName:       "local",
-				CheckFlag:          1,
-				CopyrightLimitType: "none",
-				Duration:           actualAudioDur,
-				ID:                 audMatID,
-				LocalMaterialID:    uuid.New().String(),
-				MusicID:            uuid.New().String(),
-				Name:               fmt.Sprintf("shot_%03d_audio", shot.ShotNo),
-				Path:               audPath,
-				SimilarMusicInfo:   ccSimilarMusicInfo{},
-				TTSBenefitInfo:     ccTTSBenefitInfo{BenefitType: "none", BenefitAmount: -1},
-				Type:               "extract_music",
-				WavePoints:         []interface{}{},
-			})
-			{
-				// BRoll audio segment 伴生素材（5 个）
-				baSpd := newSpeedMaterial()
-				baPh := newPlaceholderInfo()
-				baBts := newBeatsMaterial()
-				baSc := newSoundChannelMapping()
-				baVs := newVocalSeparation()
-				brollSpeedsSlice = append(brollSpeedsSlice, baSpd)
-				brollPlaceholderSlice = append(brollPlaceholderSlice, baPh)
-				brollBeatsSlice = append(brollBeatsSlice, baBts)
-				brollSoundChannelSlice = append(brollSoundChannelSlice, baSc)
-				brollVocalSepSlice = append(brollVocalSepSlice, baVs)
-				baSeg := ccSegment{
-					Clip:            nil, // 音频轨道必须为 null
-					ID:              uuid.New().String(),
-					MaterialID:      audMatID,
-					Speed:           1.0,
-					SourceTimerange: &ccTimeRange{Duration: srcDur, Start: 0},
-					TargetTimerange: ccTimeRange{Duration: srcDur, Start: startMicros},
-					Visible:         true,
-					Volume:          1.0,
-				}
-				applyAudioSegmentDefaults(&baSeg)
-				baSeg.ExtraMaterialRefs = append(baSeg.ExtraMaterialRefs, baSpd.ID, baPh.ID, baBts.ID, baSc.ID, baVs.ID)
-				audioSegments = append(audioSegments, baSeg)
-			}
-		} else if s.segmentRepo != nil {
-			// P2-3: no merged audio — place each VoiceSegment individually at the correct timeline offset
+		// 从 VoiceSegments 加载（已迁移到段落表）
+		if s.segmentRepo != nil {
+			// 逐段加入音频轨道
 			segs, segErr := s.segmentRepo.ListByShotID(shot.ID)
 			if segErr == nil && len(segs) > 0 {
 				segOffset := startMicros // running offset within the shot
@@ -3480,16 +3331,7 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 			ai.localClip = vidSrc
 		}
 
-		if shot.AudioPath != "" {
-			audID := fmt.Sprintf("r%d", nextID)
-			nextID++
-			audExt := audioExtension(shot.AudioPath)
-			audFile := fmt.Sprintf("%03d_audio%s", shot.ShotNo, audExt)
-			ai.audioID = audID
-			ai.audioSrc = shot.AudioPath
-			ai.audioFile = audFile
-		} else if s.segmentRepo != nil {
-			// Bug-G: AudioPath 为空时回落到首个有效 VoiceSegment（FCPXML 单资产只引用一段音频）
+		if s.segmentRepo != nil {
 			segs, segErr := s.segmentRepo.ListByShotID(shot.ID)
 			if segErr == nil {
 				for _, seg := range segs {
@@ -3503,7 +3345,7 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 					ai.audioID = audID
 					ai.audioSrc = seg.AudioPath
 					ai.audioFile = audFile
-					break // 仅取首段
+					break
 				}
 			}
 		}
@@ -3763,22 +3605,8 @@ func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.Sto
 			}
 		}
 
-		// 音频：优先 shot.AudioPath，无则取 VoiceSegments（P1-2）
-		if shot.AudioPath != "" {
-			if data, err := s.resolveMedia(shot.AudioPath); err == nil && len(data) > 0 {
-				if zipLoadedBytes+int64(len(data)) <= maxExportMediaBytes {
-					zipLoadedBytes += int64(len(data))
-					ext := audioExtension(shot.AudioPath)
-					filename := fmt.Sprintf("%03d%s", shot.ShotNo, ext)
-					if e := writeZip("audio/"+filename, data); e != nil {
-						return nil, fmt.Errorf("write audio/%s: %w", filename, e)
-					}
-					meta.AudioFile = "audio/" + filename
-				} else {
-					logger.Printf("[ExportResourceZip] audio: total media exceeds 2GiB, skipping shot %d audio", shot.ShotNo)
-				}
-			}
-		} else if s.segmentRepo != nil {
+		// 音频：从 VoiceSegments 加载（已迁移到段落表）
+		if s.segmentRepo != nil {
 			segs, segErr := s.segmentRepo.ListByShotID(shot.ID)
 			if segErr == nil {
 				for _, seg := range segs {
@@ -4435,19 +4263,26 @@ func (s *CapCutService) ExportEDL(video *model.Video, shots []*model.StoryboardS
 		eventNo++
 
 		// 音频事件（单独 A 事件，与视频同时间线位置，引用独立音频素材）
-		if shot.AudioPath != "" {
-			audExt := audioExtension(shot.AudioPath)
-			audClipName := fmt.Sprintf("%03d_audio%s", shot.ShotNo, audExt)
-			sb.WriteString(fmt.Sprintf("%03d  AX       A     C        %s %s %s %s\n",
-				eventNo,
-				microsToEDLTimecode(0),
-				microsToEDLTimecode(dur),
-				microsToEDLTimecode(recordIn),
-				microsToEDLTimecode(recordOut),
-			))
-			sb.WriteString(fmt.Sprintf("* FROM CLIP NAME: %s\n", audClipName))
-			sb.WriteString("\n")
-			eventNo++
+		if s.segmentRepo != nil {
+			segs, _ := s.segmentRepo.ListByShotID(shot.ID)
+			for _, seg := range segs {
+				if seg.AudioPath == "" {
+					continue
+				}
+				audExt := audioExtension(seg.AudioPath)
+				audClipName := fmt.Sprintf("%03d_audio%s", shot.ShotNo, audExt)
+				sb.WriteString(fmt.Sprintf("%03d  AX       A     C        %s %s %s %s\n",
+					eventNo,
+					microsToEDLTimecode(0),
+					microsToEDLTimecode(dur),
+					microsToEDLTimecode(recordIn),
+					microsToEDLTimecode(recordOut),
+				))
+				sb.WriteString(fmt.Sprintf("* FROM CLIP NAME: %s\n", audClipName))
+				sb.WriteString("\n")
+				eventNo++
+				break // EDL references one audio clip per shot
+			}
 		}
 
 		recordIn = recordOut
@@ -4571,9 +4406,19 @@ func (s *CapCutService) ExportOTIO(video *model.Video, shots []*model.Storyboard
 		})
 
 		// 音频 clip（或 gap 占位）
-		if shot.AudioPath != "" {
+		var firstAudioURL string
+		if s.segmentRepo != nil {
+			segs, _ := s.segmentRepo.ListByShotID(shot.ID)
+			for _, seg := range segs {
+				if seg.AudioPath != "" {
+					firstAudioURL = seg.AudioPath
+					break
+				}
+			}
+		}
+		if firstAudioURL != "" {
 			hasAnyAudio = true
-			audExt := audioExtension(shot.AudioPath)
+			audExt := audioExtension(firstAudioURL)
 			audName := fmt.Sprintf("%03d_audio%s", shot.ShotNo, audExt)
 			audioClips = append(audioClips, otioClip{
 				OTIOSchema:  "Clip.2",
@@ -4582,7 +4427,7 @@ func (s *CapCutService) ExportOTIO(video *model.Video, shots []*model.Storyboard
 				MediaReferences: map[string]otioExternalReference{
 					"DEFAULT_MEDIA": {
 						OTIOSchema:     "ExternalReference.1",
-						TargetURL:      shot.AudioPath,
+						TargetURL:      firstAudioURL,
 						Name:           audName,
 						AvailableRange: srcRange,
 					},

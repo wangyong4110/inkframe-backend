@@ -590,28 +590,30 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 	}
 
 	type providerTemplate struct {
-		Name            string   `json:"name"`
-		DisplayName     string   `json:"display_name"`
-		Type            string   `json:"type"`
-		APIEndpoint     string   `json:"api_endpoint"`
-		NeedsSecretKey  bool     `json:"needs_secret_key"`
-		NoAPIKey        bool     `json:"no_api_key,omitempty"`        // 无需 API Key（如 Ollama）
-		NeedsAPIVersion bool     `json:"needs_api_version,omitempty"` // 需要填写 API 版本号（如 Azure）
-		DeploymentBased bool     `json:"deployment_based,omitempty"`  // 模型名 = 部署名（如 Azure）
-		APIVersionHint  string   `json:"api_version_hint,omitempty"`  // API 版本占位提示
-		ConfigHint      string   `json:"config_hint,omitempty"`       // 配置说明
-		StaticModels    []string `json:"static_models,omitempty"`
+		Name             string   `json:"name"`
+		DisplayName      string   `json:"display_name"`
+		APIEndpoint      string   `json:"api_endpoint"`
+		NeedsSecretKey   bool     `json:"needs_secret_key"`
+		NoAPIKey         bool     `json:"no_api_key,omitempty"`        // 无需 API Key（如 Ollama）
+		NeedsAPIVersion  bool     `json:"needs_api_version,omitempty"` // 需要填写 API 版本号（如 Azure）
+		DeploymentBased  bool     `json:"deployment_based,omitempty"`  // 模型名 = 部署名（如 Azure）
+		APIVersionHint   string   `json:"api_version_hint,omitempty"`  // API 版本占位提示
+		ConfigHint       string   `json:"config_hint,omitempty"`       // 配置说明
+		StaticModels     []string `json:"static_models,omitempty"`
+		GroupName        string   `json:"group_name,omitempty"`
+		IsGroupCanonical bool     `json:"is_group_canonical,omitempty"`
 	}
 
 	result := make([]providerTemplate, 0, len(templates))
 	for _, p := range templates {
 		t := providerTemplate{
-			Name:           p.Name,
-			DisplayName:    p.DisplayName,
-			Type:           p.Type,
-			APIEndpoint:    p.APIEndpoint,
-			NeedsSecretKey: p.NeedsSecretKey,
-			NoAPIKey:       p.Name == "ollama",
+			Name:             p.Name,
+			DisplayName:      p.DisplayName,
+			APIEndpoint:      p.APIEndpoint,
+			NeedsSecretKey:   p.NeedsSecretKey,
+			NoAPIKey:         p.Name == "ollama",
+			GroupName:        p.GroupName,
+			IsGroupCanonical: p.IsGroupCanonical,
 		}
 		if p.Name == "azure" {
 			t.NeedsAPIVersion = true
@@ -626,6 +628,35 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 	}
 
 	respondOK(c, result)
+}
+
+// SyncGroupProviders 批量同步同源分组供应商凭证（一次配置应用到组内所有子供应商）
+// POST /api/v1/model-providers/sync-group
+func (h *ModelHandler) SyncGroupProviders(c *gin.Context) {
+	if !isAdminOrOwner(c) {
+		respondErr(c, http.StatusForbidden, "admin or owner role required")
+		return
+	}
+	tenantID := getTenantID(c)
+
+	var req struct {
+		GroupName    string `json:"group_name" binding:"required"`
+		APIKey       string `json:"api_key"`
+		APISecretKey string `json:"api_secret_key"`
+		APIVersion   string `json:"api_version"`
+		IsActive     bool   `json:"is_active"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+
+	canonical, err := h.modelService.SyncGroupProviders(req.GroupName, tenantID, req.APIKey, req.APISecretKey, req.APIVersion, req.IsActive)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, canonical)
 }
 
 // TestModelPrompt 用指定提供商生成文本（前端「生成测试」功能）

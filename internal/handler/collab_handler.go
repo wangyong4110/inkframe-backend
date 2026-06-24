@@ -18,22 +18,13 @@ func NewCollabHandler(collabSvc *service.CollabService) *CollabHandler {
 	return &CollabHandler{collabSvc: collabSvc}
 }
 
-func getUserIDFromCtx(c *gin.Context) uint {
-	if v, ok := c.Get("user_id"); ok {
-		if id, ok := v.(uint); ok {
-			return id
-		}
-	}
-	return 0
-}
-
 // GET /novels/:id/members
 func (h *CollabHandler) ListMembers(c *gin.Context) {
 	novelID, ok := parseID(c, "id")
 	if !ok {
 		return
 	}
-	userID := getUserIDFromCtx(c)
+	userID := getUserID(c)
 	// 确保 owner 在成员表中
 	h.collabSvc.EnsureOwner(novelID, userID)
 	members, err := h.collabSvc.ListMembers(novelID)
@@ -58,7 +49,7 @@ func (h *CollabHandler) InviteMember(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	userID := getUserIDFromCtx(c)
+	userID := getUserID(c)
 
 	token, err := h.collabSvc.InviteMember(novelID, userID, req.Email, req.Role, req.TTLMinutes)
 	if err != nil {
@@ -79,7 +70,7 @@ func (h *CollabHandler) AcceptInvite(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	userID := getUserIDFromCtx(c)
+	userID := getUserID(c)
 	novelID, err := h.collabSvc.AcceptInvite(req.Token, userID)
 	if err != nil {
 		respondErr(c, http.StatusBadRequest, err.Error())
@@ -98,7 +89,7 @@ func (h *CollabHandler) RemoveMember(c *gin.Context) {
 	if !ok2 {
 		return
 	}
-	userID := getUserIDFromCtx(c)
+	userID := getUserID(c)
 	if err := h.collabSvc.RemoveMember(novelID, userID, targetUID); err != nil {
 		respondErr(c, http.StatusForbidden, err.Error())
 		return
@@ -122,7 +113,7 @@ func (h *CollabHandler) UpdateMemberRole(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	userID := getUserIDFromCtx(c)
+	userID := getUserID(c)
 	if err := h.collabSvc.UpdateMemberRole(novelID, userID, targetUID, req.Role); err != nil {
 		respondErr(c, http.StatusForbidden, err.Error())
 		return
@@ -136,7 +127,7 @@ func (h *CollabHandler) LeaveNovel(c *gin.Context) {
 	if !ok {
 		return
 	}
-	userID := getUserIDFromCtx(c)
+	userID := getUserID(c)
 	if err := h.collabSvc.LeaveNovel(novelID, userID); err != nil {
 		respondErr(c, http.StatusForbidden, err.Error())
 		return
@@ -154,7 +145,7 @@ func (h *CollabHandler) AcquireLock(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	userID := getUserIDFromCtx(c)
+	userID := getUserID(c)
 	lock, ok := h.collabSvc.AcquireLock(req.EntityType, req.EntityID, userID)
 	if !ok {
 		respondErr(c, http.StatusConflict, fmt.Sprintf("正在被 %s 编辑", lock.LockedByName))
@@ -173,7 +164,7 @@ func (h *CollabHandler) ReleaseLock(c *gin.Context) {
 	if !ok {
 		return
 	}
-	userID := getUserIDFromCtx(c)
+	userID := getUserID(c)
 	h.collabSvc.ReleaseLock(entityType, entityID, userID)
 	// broadcast unlock
 	if novelIDStr := c.Query("novel_id"); novelIDStr != "" {
@@ -193,7 +184,7 @@ func (h *CollabHandler) HeartbeatLock(c *gin.Context) {
 	if !ok {
 		return
 	}
-	userID := getUserIDFromCtx(c)
+	userID := getUserID(c)
 	h.collabSvc.RefreshLock(entityType, entityID, userID)
 	respondOK(c, gin.H{})
 }
@@ -219,7 +210,7 @@ func (h *CollabHandler) SSEStream(c *gin.Context) {
 	if !ok {
 		return
 	}
-	userID := getUserIDFromCtx(c)
+	userID := getUserID(c)
 
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")

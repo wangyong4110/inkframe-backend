@@ -60,7 +60,7 @@ func (h *SceneAnchorHandler) checkNovelTenant(c *gin.Context, novelID uint) bool
 	if h.novelSvc == nil {
 		return true // novelSvc 未注入时跳过检查（兼容测试）
 	}
-	if _, err := h.novelSvc.GetNovel(novelID, getTenantID(c), getUserIDFromCtx(c)); err != nil {
+	if _, err := h.novelSvc.GetNovel(novelID, getTenantID(c), getUserID(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return false
 	}

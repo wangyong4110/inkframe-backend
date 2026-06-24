@@ -183,7 +183,7 @@ func (r *QualityReport) IsAcceptable() bool {
 	return r.OverallScore >= MinAcceptableQualityScore
 }
 
-// SummarizeIssues returns a compact JSON string of all issues (for storage in Chapter.QualityIssues).
+// SummarizeIssues returns a compact JSON string of all issues in the report.
 func (r *QualityReport) SummarizeIssues() string {
 	if len(r.Issues) == 0 {
 		return ""

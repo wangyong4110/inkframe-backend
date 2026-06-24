@@ -119,20 +119,20 @@ func (r *CharacterRepository) BatchDeleteByNovel(novelID uint, ids []uint) error
 	return r.db.Where("novel_id = ? AND id IN ?", novelID, ids).Delete(&model.Character{}).Error
 }
 
-// GetActiveInChapter 获取章节中活跃的角色
-func (r *CharacterRepository) GetActiveInChapter(chapterID uint) ([]*model.CharacterAppearance, error) {
-	var appearances []*model.CharacterAppearance
+// GetActiveInChapter 获取章节中活跃的角色（从 ink_chapter_character 查询）
+func (r *CharacterRepository) GetActiveInChapter(chapterID uint) ([]*model.ChapterCharacter, error) {
+	var list []*model.ChapterCharacter
 	if err := r.db.Preload("Character").
 		Where("chapter_id = ? AND role_in_chapter != ?", chapterID, "mentioned").
-		Find(&appearances).Error; err != nil {
+		Find(&list).Error; err != nil {
 		return nil, err
 	}
-	return appearances, nil
+	return list, nil
 }
 
-// RecordAppearance 记录角色出场
-func (r *CharacterRepository) RecordAppearance(appearance *model.CharacterAppearance) error {
-	return r.db.Create(appearance).Error
+// RecordChapterCharacter 记录角色在章节中的出场信息（upsert）
+func (r *CharacterRepository) RecordChapterCharacter(cc *model.ChapterCharacter) error {
+	return r.db.Save(cc).Error
 }
 
 // CharacterStateSnapshotRepository 角色状态快照仓库

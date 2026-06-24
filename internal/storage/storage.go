@@ -10,9 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"path"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -245,21 +243,8 @@ func (s *localService) Get(_ context.Context, url string) ([]byte, error) {
 
 type dbStorageService struct{ db *gorm.DB }
 
-func (s *dbStorageService) Get(_ context.Context, url string) ([]byte, error) {
-	// url is "/api/v1/media/{id}"
-	parts := strings.Split(strings.TrimPrefix(url, "/api/v1/media/"), "/")
-	if len(parts) == 0 || parts[0] == "" {
-		return nil, fmt.Errorf("storage: invalid media URL %q", url)
-	}
-	id, err := strconv.ParseUint(parts[0], 10, 64)
-	if err != nil {
-		return nil, fmt.Errorf("storage: invalid media ID in URL %q: %w", url, err)
-	}
-	var asset model.MediaAsset
-	if err := s.db.Select("data").First(&asset, id).Error; err != nil {
-		return nil, fmt.Errorf("storage: media asset %d not found: %w", id, err)
-	}
-	return asset.Data, nil
+func (s *dbStorageService) Get(_ context.Context, _ string) ([]byte, error) {
+	return nil, fmt.Errorf("storage: DB media storage is disabled; configure OSS")
 }
 
 func (s *dbStorageService) Delete(_ context.Context, key string) error {
@@ -271,58 +256,6 @@ func (s *dbStorageService) Delete(_ context.Context, key string) error {
 	return s.db.Where("id = ?", parts[0]).Delete(&model.MediaAsset{}).Error
 }
 
-func (s *dbStorageService) Upload(_ context.Context, key string, r io.Reader, _ int64, contentType string) (string, error) {
-	data, err := io.ReadAll(r)
-	if err != nil {
-		return "", fmt.Errorf("storage: read body: %w", err)
-	}
-	mediaType := parseKeySegmentStr(key, 4) // novels/{id}/chapters/{id}/{type}/...
-	if mediaType == "" {
-		mediaType = mediaTypeFromContentType(contentType)
-	}
-	asset := &model.MediaAsset{
-		NovelID:     parseKeySegment(key, 1),
-		ChapterID:   parseKeySegment(key, 3),
-		MediaType:   mediaType,
-		Filename:    path.Base(key),
-		ContentType: contentType,
-		Size:        int64(len(data)),
-		Data:        data,
-	}
-	if err := s.db.Create(asset).Error; err != nil {
-		return "", fmt.Errorf("storage: db create: %w", err)
-	}
-	return fmt.Sprintf("/api/v1/media/%d", asset.ID), nil
-}
-
-func mediaTypeFromContentType(ct string) string {
-	switch {
-	case strings.HasPrefix(ct, "image/"):
-		return "image"
-	case strings.HasPrefix(ct, "audio/"):
-		return "audio"
-	case strings.HasPrefix(ct, "video/"):
-		return "video"
-	default:
-		return "file"
-	}
-}
-
-// parseKeySegment splits the storage key by "/" and parses the segment at idx as uint.
-// Key format: novels/{1}/chapters/{3}/{4:type}/{5:filename}
-func parseKeySegment(key string, idx int) uint {
-	parts := strings.Split(key, "/")
-	if idx >= len(parts) {
-		return 0
-	}
-	v, _ := strconv.ParseUint(parts[idx], 10, 64)
-	return uint(v)
-}
-
-func parseKeySegmentStr(key string, idx int) string {
-	parts := strings.Split(key, "/")
-	if idx >= len(parts) {
-		return ""
-	}
-	return parts[idx]
+func (s *dbStorageService) Upload(_ context.Context, _ string, _ io.Reader, _ int64, _ string) (string, error) {
+	return "", fmt.Errorf("storage: DB media storage is disabled; configure OSS")
 }

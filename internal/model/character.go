@@ -57,27 +57,6 @@ func (Character) TableName() string {
 	return "ink_character"
 }
 
-// CharacterAppearance 角色出现记录
-type CharacterAppearance struct {
-	ID          uint       `json:"id" gorm:"primaryKey"`
-	CharacterID uint       `json:"character_id" gorm:"uniqueIndex:idx_char_app_char_chapter,priority:1;not null"`
-	Character   *Character `json:"character,omitempty" gorm:"foreignKey:CharacterID"`
-	ChapterID   uint       `json:"chapter_id" gorm:"uniqueIndex:idx_char_app_char_chapter,priority:2;not null"`
-	Chapter     *Chapter   `json:"chapter,omitempty" gorm:"foreignKey:ChapterID"`
-
-	RoleInChapter string `json:"role_in_chapter" gorm:"size:50"`
-	// main=主要出场, supporting=辅助出场, mentioned=被提及
-
-	Action string `json:"action" gorm:"type:text"` // 本章动作
-	Change string `json:"change" gorm:"type:text"` // 本章变化
-
-	CreatedAt time.Time `json:"created_at"`
-}
-
-func (CharacterAppearance) TableName() string {
-	return "ink_character_appearance"
-}
-
 // CharacterStateSnapshot 角色状态快照
 type CharacterStateSnapshot struct {
 	ID          uint `json:"id" gorm:"primaryKey"`
@@ -174,6 +153,11 @@ type ChapterCharacter struct {
 	Status      string `json:"status" gorm:"size:50"`        // alive/dead/missing/injured/imprisoned
 	Location    string `json:"location" gorm:"size:200"`     // 本章所在位置
 	Notes       string `json:"notes" gorm:"type:text"`       // 本章备注
+
+	// 从 ink_character_appearance 迁入：出场信息
+	RoleInChapter string `json:"role_in_chapter" gorm:"size:50"` // main/supporting/mentioned
+	Action        string `json:"action" gorm:"type:text"`        // 本章动作
+	Change        string `json:"change" gorm:"type:text"`        // 本章变化
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`

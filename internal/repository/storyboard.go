@@ -78,20 +78,6 @@ func (r *StoryboardRepository) BatchGetByIDs(ids []uint) ([]*model.StoryboardSho
 	return shots, nil
 }
 
-// UpdateSFXTags 仅更新分镜的 sfx_tags 字段，不修改 sfx_url 和 sfx_volume
-func (r *StoryboardRepository) UpdateSFXTags(shotID uint, sfxTags string) error {
-	return r.db.Model(&model.StoryboardShot{}).Where("id = ?", shotID).Update("sfx_tags", sfxTags).Error
-}
-
-// UpdateSFX 更新单个分镜的音效字段（URL、标签、混音音量）
-func (r *StoryboardRepository) UpdateSFX(shotID uint, sfxURL, sfxTags string, sfxVolume float64) error {
-	return r.db.Model(&model.StoryboardShot{}).Where("id = ?", shotID).Updates(map[string]interface{}{
-		"sfx_url":    sfxURL,
-		"sfx_tags":   sfxTags,
-		"sfx_volume": sfxVolume,
-	}).Error
-}
-
 // DeleteByVideoID 硬删除视频的所有分镜（重新生成时使用）
 // 必须用 Unscoped() 物理删除，否则软删除的行仍触发 uk_video_shot 唯一键冲突。
 func (r *StoryboardRepository) DeleteByVideoID(videoID uint) error {
@@ -231,6 +217,23 @@ func (r *ShotVoiceSegmentRepository) CompactSeqNosAfter(shotID uint, deletedSeqN
 		"UPDATE ink_shot_voice_segment SET seq_no = seq_no - 1 WHERE shot_id = ? AND seq_no > ? AND deleted_at IS NULL",
 		shotID, deletedSeqNo,
 	).Error
+}
+
+// GetFirstAudioByShotIDs returns a map of shotID → first segment audio_path for a list of shots.
+func (r *ShotVoiceSegmentRepository) GetFirstAudioByShotIDs(shotIDs []uint) map[uint]string {
+	if len(shotIDs) == 0 {
+		return nil
+	}
+	var segs []*model.ShotVoiceSegment
+	r.db.Where("shot_id IN ? AND audio_path != '' AND deleted_at IS NULL", shotIDs).
+		Order("shot_id, seq_no").Find(&segs)
+	result := make(map[uint]string, len(shotIDs))
+	for _, seg := range segs {
+		if _, ok := result[seg.ShotID]; !ok {
+			result[seg.ShotID] = seg.AudioPath
+		}
+	}
+	return result
 }
 
 // ShotSFXItemRepository 分镜音效条目仓库

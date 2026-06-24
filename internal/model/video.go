@@ -61,8 +61,7 @@ type Video struct {
 	UUID     string `json:"uuid" gorm:"uniqueIndex;size:36"`
 	NovelID  uint   `json:"novel_id" gorm:"index;not null"`
 	Novel     *Novel   `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
-	ChapterID *uint    `json:"chapter_id,omitempty" gorm:"index"`
-	Chapter   *Chapter `json:"chapter,omitempty" gorm:"-"`
+	ChapterID *uint `json:"chapter_id,omitempty" gorm:"index"`
 
 	Title       string `json:"title" gorm:"size:255;not null"`
 	Description string `json:"description" gorm:"type:text"`
@@ -115,12 +114,13 @@ type Video struct {
 	CoverURL      string     `json:"cover_url" gorm:"size:2000"`
 	IsPublished   bool       `json:"is_published" gorm:"default:false;index"`
 	PublishedAt   *time.Time `json:"published_at"`
-	ViewCount     int        `json:"view_count" gorm:"default:0"`
-	Visibility    string     `json:"visibility" gorm:"size:20;default:'private'"` // private|unlisted|public
+	// 统计计数（不存 ink_video 主表，从 ink_content_stats 加载）
+	ViewCount    int `json:"view_count" gorm:"-"`
+	Visibility   string     `json:"visibility" gorm:"size:20;default:'private'"` // private|unlisted|public
 
 	// 广场社交字段
-	LikeCount    int     `json:"like_count" gorm:"default:0"`
-	CommentCount int     `json:"comment_count" gorm:"default:0"`
+	LikeCount    int     `json:"like_count" gorm:"-"`
+	CommentCount int     `json:"comment_count" gorm:"-"`
 	HotScore     float64 `json:"hot_score" gorm:"default:0;index"` // 热度分，定时计算
 	Tags         string  `json:"tags" gorm:"size:500"`             // JSON 数组，如 ["玄幻","古风"]
 
@@ -170,7 +170,6 @@ type StoryboardShot struct {
 	Prompt         string `json:"prompt" gorm:"type:text"`
 	NegativePrompt string `json:"negative_prompt" gorm:"type:text"`
 	MotionPrompt   string `json:"motion_prompt" gorm:"type:text"` // 视频运镜描述（供Kling/Seedance使用）
-	Frames         string `json:"frames" gorm:"type:text"` // JSON数组
 
 	// 状态
 	Status       string `json:"status" gorm:"size:20;index:idx_shot_video_status,priority:2;default:pending"`
@@ -206,9 +205,9 @@ type StoryboardShot struct {
 	CharacterIDs JSONUintSlice `json:"character_ids" gorm:"type:json"`
 
 	// 音效（SFX）
-	SFXURL    string  `json:"sfx_url" gorm:"size:1000"`    // 音效文件URL（本地/OSS/Freesound预览）
-	SFXTags   string  `json:"sfx_tags" gorm:"size:2000"`   // LLM提取的音效标签（JSON对象或数组字符串）
-	SFXVolume float64 `json:"sfx_volume" gorm:"type:decimal(4,2);default:0"` // 混音音量（0=自动，>0=覆盖）
+	SFXURL    string  `json:"sfx_url" gorm:"size:1000"`                           // 音效文件URL（本地/OSS/Freesound预览）
+	SFXTags   string  `json:"sfx_tags" gorm:"size:2000"`                          // LLM提取的音效标签（JSON对象或数组字符串）
+	SFXVolume float64 `json:"sfx_volume" gorm:"type:decimal(4,2);default:0"`      // 混音音量（0=自动，>0=覆盖）
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -225,9 +224,11 @@ type ShotVoiceSegment struct {
 	ShotID uint `json:"shot_id" gorm:"not null;index:idx_seg_shot_seq,unique,priority:1"`
 	SeqNo  int  `json:"seq_no" gorm:"not null;default:1;index:idx_seg_shot_seq,unique,priority:2"`
 
-	Text     string `json:"text" gorm:"type:text"`    // TTS 朗读文本（旁白或台词内容）
-	Speaker  string `json:"speaker" gorm:"size:100"`  // 空串=旁白，"角色名"=对白
-	VoiceID  string `json:"voice_id" gorm:"size:100"` // TTS 声音 ID（覆盖默认值）
+	Text     string `json:"text" gorm:"type:text"`      // TTS 朗读文本（旁白或台词内容）
+	Speaker  string `json:"speaker" gorm:"size:100"`    // 空串=旁白，"角色名"=对白
+	Emotion  string `json:"emotion" gorm:"size:50"`     // 情绪标签（平静/温馨/激动等）
+	Language string `json:"language" gorm:"size:20"`    // 方言/语言（空串=普通话；zh-yue=粤语；zh-scu=四川话；en=英语等）
+	VoiceID  string `json:"voice_id" gorm:"size:100"`   // TTS 声音 ID（覆盖默认值）
 
 	AudioPath    string  `json:"audio_path" gorm:"size:1000"`                   // 生成的音频文件路径/URL
 	DurationSecs float64 `json:"duration_secs" gorm:"type:decimal(8,3);default:0"` // 音频时长（秒）

@@ -30,7 +30,7 @@ func (h *KnowledgeHandler) checkNovelOwnership(c *gin.Context, novelID uint) boo
 	if h.novelSvc == nil {
 		return true
 	}
-	if _, err := h.novelSvc.GetNovel(novelID, getTenantID(c), getUserIDFromCtx(c)); err != nil {
+	if _, err := h.novelSvc.GetNovel(novelID, getTenantID(c), getUserID(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return false
 	}

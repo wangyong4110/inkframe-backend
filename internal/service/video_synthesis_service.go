@@ -1203,7 +1203,7 @@ func probeClipDuration(ctx context.Context, path string) float64 {
 }
 
 // buildShotAudio P0-2: 构建分镜音频轨道。
-// 优先级：VoiceSegments（多段拼接）→ SFX 叠加 → 旧版 AudioPath → 静音轨。
+// 优先级：VoiceSegments（多段拼接）→ SFX 叠加 → 静音轨。
 // 返回值：(audioPath, audioDurationSecs)。audioDurationSecs 从 VoiceSegment.DurationSecs 累加，
 // 0 表示未知；调用方应以 shot.Duration 作为兜底值。
 func (s *VideoService) buildShotAudio(ctx context.Context, shot *model.StoryboardShot, tmpDir string, idx int) (string, float64) {
@@ -1225,15 +1225,6 @@ func (s *VideoService) buildShotAudio(ctx context.Context, shot *model.Storyboar
 	var speechAudioPath string
 	var audioDur float64
 	switch len(voicePaths) {
-	case 0:
-		// 无 VoiceSegment，使用旧版 AudioPath
-		if shot.AudioPath != "" {
-			speechAudioPath = strings.TrimPrefix(shot.AudioPath, "file://")
-			// P1-1: probe duration once so tpad can trigger when audio exceeds video length
-			if d := probeClipDuration(ctx, speechAudioPath); d > 0 {
-				audioDur = d
-			}
-		}
 	case 1:
 		speechAudioPath = voicePaths[0]
 		audioDur = segsDurSecs

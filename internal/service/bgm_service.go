@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -622,7 +623,56 @@ func (s *BGMService) SearchBGMForSegment(ctx context.Context, tenantID uint, seg
 		logger.Printf("[BGMService] segment %d (%s) Pixabay miss for all queries", seg.SeqNo, seg.Mood)
 	}
 
+	// 4. Fun-Music AI 生成（最终兜底）
+	if funURL := s.generateFunMusic(ctx, tenantID, seg.Mood, seg.SearchQueries); funURL != "" {
+		seg.URL = funURL
+		seg.TrackName = "AI 生成音乐"
+		seg.TrackArtist = "Fun-Music"
+		seg.Source = "fun-music"
+		return nil
+	}
+
 	return nil
+}
+
+// generateFunMusic 调用阿里云 Fun-Music 生成一段 BGM，返回音频 URL。
+// 失败时静默返回空字符串（调用方作为兜底使用，不中断流程）。
+func (s *BGMService) generateFunMusic(ctx context.Context, tenantID uint, mood, searchQueriesJSON string) string {
+	if s.aiSvc == nil {
+		return ""
+	}
+	apiKey, _ := s.bgmProviderCreds(tenantID, "fun-music")
+	if apiKey == "" {
+		return ""
+	}
+
+	// 将 mood 和 searchQueries 合并为音乐描述 prompt
+	prompt := mood
+	var queries []string
+	if searchQueriesJSON != "" {
+		_ = json.Unmarshal([]byte(searchQueriesJSON), &queries)
+	}
+	if len(queries) > 0 {
+		prompt = queries[0]
+		if mood != "" && mood != queries[0] {
+			prompt = mood + "，" + queries[0]
+		}
+	}
+	if prompt == "" {
+		prompt = "轻柔背景音乐"
+	}
+
+	provider := ai.NewFunMusicProvider(apiKey)
+	resp, err := provider.AudioGenerate(ctx, &ai.AudioGenerateRequest{
+		Text:  prompt,
+		Voice: "female",
+		Model: "fun-music-v1",
+	})
+	if err != nil {
+		logger.Printf("[BGMService] fun-music generate failed (mood=%s): %v", mood, err)
+		return ""
+	}
+	return resp.URL
 }
 
 // JamendoTrack Jamendo 音轨信息（供前端搜索结果展示）

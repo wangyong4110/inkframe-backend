@@ -557,11 +557,6 @@ func (s *VideoService) ToggleVideoLike(videoID, userID uint) (liked bool, err er
 	if err != nil {
 		return false, err
 	}
-	delta := 1
-	if !liked {
-		delta = -1
-	}
-	_ = s.videoRepo.IncrLikeCount(videoID, delta)
 	return liked, nil
 }
 
@@ -627,12 +622,12 @@ func (s *VideoService) RecalcVideoHotScores() error {
 	offset := 0
 	now := time.Now()
 	for {
-		videos, err := s.videoRepo.ListPublicForHotCalcPaged(batchSize, offset)
-		if err != nil || len(videos) == 0 {
+		rows, err := s.videoRepo.ListPublicForHotCalcPaged(batchSize, offset)
+		if err != nil || len(rows) == 0 {
 			break
 		}
-		updates := make(map[uint]float64, len(videos))
-		for _, v := range videos {
+		updates := make(map[uint]float64, len(rows))
+		for _, v := range rows {
 			ageDays := 1.0
 			if v.PublishedAt != nil {
 				ageDays = now.Sub(*v.PublishedAt).Hours()/24 + 1
@@ -866,7 +861,7 @@ func (s *VideoService) ListVideoProviders() []VideoProvider {
 		return result
 	}
 	if s.aiService != nil {
-		for _, name := range []string{"jimeng-video", "kling", "seedance"} {
+		for _, name := range []string{"jimeng-video", "kling", "seedance", "happyhorse"} {
 			if _, err := s.aiService.GetTenantVideoProvider(1, name); err == nil {
 				return []VideoProvider{{Name: name, DisplayName: capableProviderDisplayName(name, "")}}
 			}
@@ -878,9 +873,9 @@ func (s *VideoService) ListVideoProviders() []VideoProvider {
 // resolveVideoProvider 选择视频生成提供商：优先静态 map，其次 DB 租户配置。
 // preferredName 为空时按 jimeng-video→kling→seedance 顺序尝试。
 func (s *VideoService) resolveVideoProvider(tenantID uint, preferredName string) (ai.VideoProvider, string, error) {
-	names := []string{"jimeng-video", "kling", "seedance"}
+	names := []string{"jimeng-video", "kling", "seedance", "happyhorse"}
 	if preferredName != "" {
-		names = []string{preferredName, "jimeng-video", "kling", "seedance"}
+		names = []string{preferredName, "jimeng-video", "kling", "seedance", "happyhorse"}
 	}
 	// 先查静态 map
 	for _, name := range names {

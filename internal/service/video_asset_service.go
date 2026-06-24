@@ -28,9 +28,11 @@ import (
 
 // VoiceSegmentInput 创建/更新语音段落时的输入
 type VoiceSegmentInput struct {
-	Text    string `json:"text"`
-	Speaker string `json:"speaker"`  // 空串=旁白，非空=角色名（对白）
-	VoiceID string `json:"voice_id"` // TTS 声音 ID，空串=自动
+	Text     string `json:"text"`
+	Speaker  string `json:"speaker"`  // 空串=旁白，非空=角色名（对白）
+	Emotion  string `json:"emotion"`  // 情绪标签（平静/温馨/激动等）
+	Language string `json:"language"` // 方言/语言（空串=普通话；zh-yue=粤语；zh-scu=四川话；en=英语等）
+	VoiceID  string `json:"voice_id"` // TTS 声音 ID，空串=自动
 }
 
 // ─── Voice Segment CRUD ───────────────────────────────────────────────────────
@@ -57,10 +59,12 @@ func (s *VideoService) AppendVoiceSegment(shotID uint, input VoiceSegmentInput) 
 		return nil, fmt.Errorf("segment repository not initialized")
 	}
 	seg := &model.ShotVoiceSegment{
-		ShotID:  shotID,
-		Text:    input.Text,
-		Speaker: input.Speaker,
-		VoiceID: input.VoiceID,
+		ShotID:   shotID,
+		Text:     input.Text,
+		Speaker:  input.Speaker,
+		Emotion:  input.Emotion,
+		Language: input.Language,
+		VoiceID:  input.VoiceID,
 	}
 	return seg, s.segmentRepo.AppendAtomic(seg)
 }
@@ -72,11 +76,13 @@ func (s *VideoService) InsertVoiceSegment(shotID uint, afterSeqNo int, input Voi
 	}
 	newSeqNo := afterSeqNo + 1
 	seg := &model.ShotVoiceSegment{
-		ShotID:  shotID,
-		SeqNo:   newSeqNo,
-		Text:    input.Text,
-		Speaker: input.Speaker,
-		VoiceID: input.VoiceID,
+		ShotID:   shotID,
+		SeqNo:    newSeqNo,
+		Text:     input.Text,
+		Speaker:  input.Speaker,
+		Emotion:  input.Emotion,
+		Language: input.Language,
+		VoiceID:  input.VoiceID,
 	}
 	// Shift + create must be atomic to avoid a corrupt seq_no sequence on partial failure.
 	// The shift runs first (before the insert) so the unique constraint on (shot_id, seq_no)
@@ -113,6 +119,8 @@ func (s *VideoService) UpdateVoiceSegment(segID uint, input VoiceSegmentInput) (
 	}
 	seg.Text = input.Text
 	seg.Speaker = input.Speaker
+	seg.Emotion = input.Emotion
+	seg.Language = input.Language
 	seg.VoiceID = input.VoiceID
 	return seg, s.segmentRepo.Update(seg)
 }
@@ -211,17 +219,17 @@ func mp3Duration(data []byte) float64 {
 }
 
 // alignShotDurationToTTS 检查分镜的 TTS 音频时长，若音频更长则延伸分镜时长以确保配音完整。
-// 返回调整后的时长（秒）；无法读取音频时返回原 shot.Duration。
+// 返回调整后的时长（秒）；无法读取音频时返回 currentDuration。
 // 注意：此函数仅用于当次生成，不持久化回数据库。
-func alignShotDurationToTTS(shot *model.StoryboardShot) float64 {
-	if shot.AudioPath == "" {
-		return shot.Duration
+func alignShotDurationToTTS(currentDuration float64, audioURL string) float64 {
+	if audioURL == "" {
+		return currentDuration
 	}
-	data, err := readLocalOrRemoteFile(shot.AudioPath)
+	data, err := readLocalOrRemoteFile(audioURL)
 	if err != nil || len(data) == 0 {
-		return shot.Duration
+		return currentDuration
 	}
-	ext := audioExtension(shot.AudioPath)
+	ext := audioExtension(audioURL)
 	var audioDur float64
 	if ext == ".mp3" {
 		audioDur = mp3Duration(data)
@@ -232,16 +240,14 @@ func alignShotDurationToTTS(shot *model.StoryboardShot) float64 {
 		}
 	}
 	if audioDur <= 0 {
-		return shot.Duration
+		return currentDuration
 	}
 	const buffer = 0.3
 	needed := audioDur + buffer
-	if needed > shot.Duration {
-		logger.Printf("[VideoService] alignShotDurationToTTS: shot %d duration %.1fs → %.1fs (TTS=%.1fs)",
-			shot.ShotNo, shot.Duration, needed, audioDur)
+	if needed > currentDuration {
 		return needed
 	}
-	return shot.Duration
+	return currentDuration
 }
 
 // GenerateSegmentAudio 为单条语音段落生成 TTS 音频
@@ -293,8 +299,10 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 			}
 		}
 	}
-	// 分镜情绪基调覆盖角色静态风格（动态优先级更高）
-	if shotEmotionalTone != "" {
+	// 情绪优先级：段落显式情绪（最高）> 分镜情绪基调映射 > 角色静态风格
+	if seg.Emotion != "" {
+		style = seg.Emotion
+	} else if shotEmotionalTone != "" {
 		if mapped := mapEmotionalToneToTTS(shotEmotionalTone); mapped != "" {
 			style = mapped
 		}
@@ -306,7 +314,7 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 		voice = "alloy"
 	}
 
-	audioURL, err := s.aiService.AudioGenerateWithOptions(context.Background(), tenantID, text, voice, speed, style)
+	audioURL, err := s.aiService.AudioGenerateWithOptions(context.Background(), tenantID, text, voice, speed, style, seg.Language)
 	if err != nil {
 		metrics.TTSGenerationTotal.WithLabelValues("error").Inc()
 		metrics.TTSGenerationDuration.Observe(time.Since(ttsStart).Seconds())
@@ -415,7 +423,7 @@ func (s *VideoService) syncShotDurationAfterVoice(shotID uint) {
 	}
 }
 
-// GenerateShotAudio 为单个分镜生成 TTS 音频（同步），生成后更新 shot.AudioPath
+// GenerateShotAudio 为单个分镜生成 TTS 音频（同步），生成后写入 ShotVoiceSegment 并更新 shot.Duration
 func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID uint, narrationVoice string) error {
 	// 阻塞等待信号量槽位：audioSem 用于限速（防 429），不应跳过。
 	// 注意：此函数始终在后台 goroutine 中调用，阻塞等待是正确行为。
@@ -424,15 +432,15 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 		defer func() { <-s.audioSem }()
 	}
 
-	// Skip if audio already generated (idempotency — prevents re-billing TTS on retry)
-	if shot.AudioPath != "" {
-		return nil
-	}
-
-	// If the shot has voice segments, delegate to segment-aware stitching logic.
+	// Check idempotency + delegate to segment-aware stitching if segments exist.
 	if s.segmentRepo != nil {
 		segs, err := s.segmentRepo.ListByShotID(shot.ID)
 		if err == nil && len(segs) > 0 {
+			for _, seg := range segs {
+				if seg.AudioPath != "" {
+					return nil // already generated
+				}
+			}
 			return s.generateShotAudioFromSegments(shot, segs, tenantID, narrationVoice)
 		}
 	}
@@ -469,9 +477,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 
 	audioURL := localAudioURL
 
-	// 在上传/删除本地文件之前先测量时长，保证能读到本地音频数据
-	shot.AudioPath = localAudioURL
-	shot.Duration = alignShotDurationToTTS(shot)
+	shot.Duration = alignShotDurationToTTS(shot.Duration, localAudioURL)
 
 	// 上传到持久存储（持久化音频避免本地 /tmp 文件重启后消失）
 	if s.storageSvc != nil {
@@ -481,16 +487,26 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 		} else {
 			audioURL = persistURL
 			logger.Printf("GenerateShotAudio: shot %d audio stored at %s", shot.ShotNo, audioURL)
-			// 删除本次新建的 /tmp 临时文件（时长已测量完毕，可以安全删除）
 			if strings.HasPrefix(localAudioURL, "file://") {
 				os.Remove(strings.TrimPrefix(localAudioURL, "file://")) //nolint:errcheck
 			}
 		}
 	}
 
-	shot.AudioPath = audioURL
-	if err := s.storyboardRepo.Update(shot); err != nil {
-		logger.Errorf("[VideoService] GenerateShotAudio: failed to update shot %d audio path: %v", shot.ShotNo, err)
+	// Persist audio as a voice segment (replaces the removed shot.AudioPath field).
+	if s.segmentRepo != nil {
+		seg := &model.ShotVoiceSegment{
+			ShotID:    shot.ID,
+			SeqNo:     1,
+			Text:      text,
+			AudioPath: audioURL,
+		}
+		if err := s.segmentRepo.Create(seg); err != nil {
+			logger.Errorf("[VideoService] GenerateShotAudio: failed to create voice segment for shot %d: %v", shot.ShotNo, err)
+		}
+	}
+	if err := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"duration": shot.Duration}); err != nil {
+		logger.Errorf("[VideoService] GenerateShotAudio: failed to update shot %d duration: %v", shot.ShotNo, err)
 	}
 	return nil
 }
@@ -558,7 +574,7 @@ func formatSRTTimecode(secs float64) string {
 
 // generateShotAudioFromSegments generates TTS for each segment that lacks audio,
 // then stitches all segment audio files into a single track using ffmpeg and
-// uploads the result to storage, finally updating shot.AudioPath.
+// uploads the result to storage, and updates shot.Duration.
 func (s *VideoService) generateShotAudioFromSegments(shot *model.StoryboardShot, segs []*model.ShotVoiceSegment, tenantID uint, defaultVoice string) error {
 	// 1. For each segment without audio, call GenerateSegmentAudio
 	for _, seg := range segs {
@@ -598,10 +614,8 @@ func (s *VideoService) generateShotAudioFromSegments(shot *model.StoryboardShot,
 		return nil
 	}
 	if len(localPaths) == 1 {
-		// Only one segment with audio — use it directly without ffmpeg
-		shot.AudioPath = freshSegs[0].AudioPath
-		shot.Duration = alignShotDurationToTTS(shot)
-		return s.storyboardRepo.Update(shot)
+		shot.Duration = alignShotDurationToTTS(shot.Duration, freshSegs[0].AudioPath)
+		return s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"duration": shot.Duration})
 	}
 
 	// 4. Stitch with ffmpeg concat
@@ -620,9 +634,8 @@ func (s *VideoService) generateShotAudioFromSegments(shot *model.StoryboardShot,
 	)
 	if ffmpegErr != nil {
 		logger.Errorf("generateShotAudioFromSegments: ffmpeg failed: %v\n%s", ffmpegErr, string(out))
-		// fallback: use first segment audio
-		shot.AudioPath = freshSegs[0].AudioPath
-		return s.storyboardRepo.Update(shot)
+		shot.Duration = alignShotDurationToTTS(shot.Duration, freshSegs[0].AudioPath)
+		return s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"duration": shot.Duration})
 	}
 
 	stitchedData, err := os.ReadFile(stitchedPath)
@@ -641,10 +654,9 @@ func (s *VideoService) generateShotAudioFromSegments(shot *model.StoryboardShot,
 		}
 	}
 
-	shot.AudioPath = audioURL
-	shot.Duration = alignShotDurationToTTS(shot)
-	if err := s.storyboardRepo.Update(shot); err != nil {
-		logger.Errorf("generateShotAudioFromSegments: update shot %d: %v", shot.ID, err)
+	shot.Duration = alignShotDurationToTTS(shot.Duration, audioURL)
+	if err := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"duration": shot.Duration}); err != nil {
+		logger.Errorf("generateShotAudioFromSegments: update shot %d duration: %v", shot.ID, err)
 	}
 	return nil
 }
@@ -656,8 +668,7 @@ func (s *VideoService) MergeVoiceSegments(ctx context.Context, shotID, tenantID 
 	if s.segmentRepo == nil || s.storyboardRepo == nil {
 		return "", fmt.Errorf("segment or storyboard repository not configured")
 	}
-	shot, err := s.storyboardRepo.GetByID(shotID)
-	if err != nil {
+	if _, err := s.storyboardRepo.GetByID(shotID); err != nil {
 		return "", fmt.Errorf("shot %d not found: %w", shotID, err)
 	}
 	segs, err := s.segmentRepo.ListByShotID(shotID)
@@ -675,11 +686,7 @@ func (s *VideoService) MergeVoiceSegments(ctx context.Context, shotID, tenantID 
 		return "", fmt.Errorf("no generated segment audio found for shot %d", shotID)
 	}
 	if len(ready) == 1 {
-		shot.AudioPath = ready[0].AudioPath
-		if err := s.storyboardRepo.Update(shot); err != nil {
-			logger.Errorf("[VideoService] MergeVoiceSegments: storyboardRepo.Update shot %d: %v", shot.ID, err)
-		}
-		return shot.AudioPath, nil
+		return ready[0].AudioPath, nil
 	}
 
 	tmpDir, err := os.MkdirTemp("", "inkframe_merge_*")
@@ -734,10 +741,6 @@ func (s *VideoService) MergeVoiceSegments(ctx context.Context, shotID, tenantID 
 		audioURL = "file://" + outPath
 	}
 
-	shot.AudioPath = audioURL
-	if err := s.storyboardRepo.Update(shot); err != nil {
-		logger.Errorf("[VideoService] MergeVoiceSegments: storyboardRepo.Update shot %d: %v", shot.ID, err)
-	}
 	return audioURL, nil
 }
 

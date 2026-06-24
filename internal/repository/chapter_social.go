@@ -17,38 +17,34 @@ func NewChapterLikeRepository(db *gorm.DB) *ChapterLikeRepository {
 	return &ChapterLikeRepository{db: db}
 }
 
-// Toggle 点赞/取消，返回最终状态及最新 like_count
-// like_count 在事务内读取（原子 UPDATE 之后），避免事务提交后 SELECT 读到其他并发写的值。
+// Toggle 点赞/取消，返回最终状态及最新 like_count，同时原子更新 ink_content_stats。
 func (r *ChapterLikeRepository) Toggle(chapterID, novelID, userID uint) (liked bool, likeCount int, err error) {
 	err = r.db.Transaction(func(tx *gorm.DB) error {
-		var existing model.ChapterLike
-		result := tx.Where("chapter_id = ? AND user_id = ?", chapterID, userID).First(&existing)
+		var existing model.EntityLike
+		result := tx.Where("entity_type = 'chapter' AND entity_id = ? AND user_id = ?", chapterID, userID).First(&existing)
 		if result.Error != nil {
-			// Not found → create
-			if err2 := tx.Create(&model.ChapterLike{ChapterID: chapterID, UserID: userID, NovelID: novelID}).Error; err2 != nil {
+			if err2 := tx.Create(&model.EntityLike{EntityType: "chapter", EntityID: chapterID, UserID: userID, NovelID: novelID}).Error; err2 != nil {
 				return err2
 			}
 			liked = true
-			if err2 := tx.Model(&model.Chapter{}).Where("id = ?", chapterID).
-				UpdateColumn("like_count", gorm.Expr("like_count + 1")).Error; err2 != nil {
+			if err2 := tx.Exec(`INSERT INTO ink_content_stats (entity_type, entity_id, view_count, like_count, comment_count, updated_at)
+				VALUES ('chapter', ?, 0, 1, 0, NOW())
+				ON DUPLICATE KEY UPDATE like_count = like_count + 1, updated_at = NOW()`, chapterID).Error; err2 != nil {
 				return err2
 			}
 		} else {
-			// Found → delete (unlike)
-			if err2 := tx.Delete(&model.ChapterLike{}, "chapter_id = ? AND user_id = ?", chapterID, userID).Error; err2 != nil {
+			if err2 := tx.Where("entity_type = 'chapter' AND entity_id = ? AND user_id = ?", chapterID, userID).Delete(&model.EntityLike{}).Error; err2 != nil {
 				return err2
 			}
 			liked = false
-			if err2 := tx.Model(&model.Chapter{}).Where("id = ?", chapterID).
-				UpdateColumn("like_count", gorm.Expr("GREATEST(0, like_count - 1)")).Error; err2 != nil {
+			if err2 := tx.Exec(`UPDATE ink_content_stats SET like_count = GREATEST(0, like_count - 1), updated_at = NOW()
+				WHERE entity_type = 'chapter' AND entity_id = ?`, chapterID).Error; err2 != nil {
 				return err2
 			}
 		}
-		// Read the updated value inside the transaction to avoid post-commit race.
-		var ch model.Chapter
-		if e := tx.Select("like_count").First(&ch, chapterID).Error; e == nil {
-			likeCount = ch.LikeCount
-		}
+		var cnt int64
+		tx.Model(&model.EntityLike{}).Where("entity_type = 'chapter' AND entity_id = ?", chapterID).Count(&cnt)
+		likeCount = int(cnt)
 		return nil
 	})
 	return
@@ -57,8 +53,8 @@ func (r *ChapterLikeRepository) Toggle(chapterID, novelID, userID uint) (liked b
 // Exists 是否已点赞
 func (r *ChapterLikeRepository) Exists(chapterID, userID uint) (bool, error) {
 	var count int64
-	err := r.db.Model(&model.ChapterLike{}).
-		Where("chapter_id = ? AND user_id = ?", chapterID, userID).Count(&count).Error
+	err := r.db.Model(&model.EntityLike{}).
+		Where("entity_type = 'chapter' AND entity_id = ? AND user_id = ?", chapterID, userID).Count(&count).Error
 	return count > 0, err
 }
 
@@ -71,29 +67,47 @@ func NewChapterCommentRepository(db *gorm.DB) *ChapterCommentRepository {
 }
 
 func (r *ChapterCommentRepository) Create(c *model.ChapterComment) error {
-	return r.db.Create(c).Error
+	ec := &model.EntityComment{
+		EntityType: "chapter", EntityID: c.ChapterID, NovelID: c.NovelID,
+		UserID: c.UserID, Content: c.Content, ParentID: c.ParentID,
+	}
+	if err := r.db.Create(ec).Error; err != nil {
+		return err
+	}
+	c.ID = ec.ID
+	c.CreatedAt = ec.CreatedAt
+	c.UpdatedAt = ec.UpdatedAt
+	return nil
 }
 
 func (r *ChapterCommentRepository) ListByChapter(chapterID uint, page, size int) ([]*model.ChapterComment, int64, error) {
-	var list []*model.ChapterComment
+	var list []*model.EntityComment
 	var total int64
-	base := r.db.Model(&model.ChapterComment{}).Where("chapter_id = ?", chapterID)
+	base := r.db.Model(&model.EntityComment{}).Where("entity_type = 'chapter' AND entity_id = ?", chapterID)
 	if err := base.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	offset := (page - 1) * size
-	err := base.Order("created_at ASC").Offset(offset).Limit(size).Find(&list).Error
-	return list, total, err
+	if err := base.Order("created_at ASC").Offset(offset).Limit(size).Find(&list).Error; err != nil {
+		return nil, 0, err
+	}
+	out := make([]*model.ChapterComment, len(list))
+	for i, ec := range list {
+		out[i] = &model.ChapterComment{ID: ec.ID, ChapterID: ec.EntityID, NovelID: ec.NovelID, UserID: ec.UserID, Content: ec.Content, ParentID: ec.ParentID, CreatedAt: ec.CreatedAt, UpdatedAt: ec.UpdatedAt}
+	}
+	return out, total, nil
 }
 
 func (r *ChapterCommentRepository) GetByID(id uint) (*model.ChapterComment, error) {
-	var c model.ChapterComment
-	err := r.db.First(&c, id).Error
-	return &c, err
+	var ec model.EntityComment
+	if err := r.db.Where("entity_type = 'chapter' AND id = ?", id).First(&ec).Error; err != nil {
+		return nil, err
+	}
+	return &model.ChapterComment{ID: ec.ID, ChapterID: ec.EntityID, NovelID: ec.NovelID, UserID: ec.UserID, Content: ec.Content, ParentID: ec.ParentID, CreatedAt: ec.CreatedAt, UpdatedAt: ec.UpdatedAt}, nil
 }
 
 func (r *ChapterCommentRepository) Delete(id uint) error {
-	return r.db.Delete(&model.ChapterComment{}, id).Error
+	return r.db.Where("entity_type = 'chapter' AND id = ?", id).Delete(&model.EntityComment{}).Error
 }
 
 // ─── ReadingProgressRepository ───────────────────────────────────────────────

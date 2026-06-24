@@ -1,10 +1,21 @@
 package model
 
 import (
+	"encoding/json"
 	"time"
 
 	"gorm.io/gorm"
 )
+
+// VoiceEntry 单条音色元数据，存储于 ModelProvider.VoicesJSON（JSON 数组）。
+// 模型-音色的支持关系（如 qwen-tts 哪些音色支持哪个 model 参数）硬编码在各 TTS Provider 实现里。
+type VoiceEntry struct {
+	ID       string  `json:"id"`                  // 调用 TTS API 时使用的音色 ID
+	Name     string  `json:"name"`                // 展示名称
+	Gender   string  `json:"gender,omitempty"`    // male / female / neutral
+	AgeGroup string  `json:"age_group,omitempty"` // child / teen / adult / elder
+	Quality  float64 `json:"quality,omitempty"`
+}
 
 // ModelProvider 模型提供商
 type ModelProvider struct {
@@ -12,25 +23,28 @@ type ModelProvider struct {
 	TenantID    uint   `json:"tenant_id" gorm:"index;default:0;comment:0=系统级,>0=租户私有;uniqueIndex:idx_provider_name_tenant"`
 	Name        string `json:"name" gorm:"size:50;not null;uniqueIndex:idx_provider_name_tenant"`
 	DisplayName string `json:"display_name" gorm:"size:100"`
-	Type        string `json:"type" gorm:"size:20"`
 	// cloud=云端, local=本地
 
 	// API配置
 	APIEndpoint  string `json:"api_endpoint" gorm:"size:500"`
 	APIKey       string `json:"api_key" gorm:"type:text"`
 	APISecretKey string `json:"api_secret_key" gorm:"type:text"` // AK/SK 鉴权的 SecretKey（如火山引擎即梦AI）
-	APIVersion   string `json:"api_version" gorm:"size:50"`      // 也用于存储默认模型名称
+	APIVersion   string `json:"api_version" gorm:"size:50"`      // 协议版本号（仅 Azure 使用）
+	DefaultModel string `json:"default_model" gorm:"size:200;default:''"`  // 默认模型名称（替代 APIVersion 的模型名用途）
 
 	// 限制
-	RateLimit   int     `json:"rate_limit"` // 请求/分钟
-	MaxTokens   int     `json:"max_tokens"`
-	CostPer1K   float64 `json:"cost_per_1k_tokens"`
-	Timeout     int     `json:"timeout" gorm:"default:0"`      // HTTP 请求超时（秒），0=使用默认值300s
-	Concurrency int     `json:"concurrency" gorm:"default:0"` // 最大并发调用数，0=不限制
+	RateLimit   int `json:"rate_limit"` // 请求/分钟
+	Timeout     int `json:"timeout" gorm:"default:0"`     // HTTP 请求超时（秒），0=使用默认值300s
+	Concurrency int `json:"concurrency" gorm:"default:0"` // 最大并发调用数，0=不限制
 
 	// 元数据（系统级模板字段，由 seedAIModels 写入，用户无需填写）
 	NeedsSecretKey bool   `json:"needs_secret_key" gorm:"default:false"` // 是否需要 AK/SK 双密钥鉴权
 	StaticModels   string `json:"static_models,omitempty" gorm:"type:text"` // JSON 字符串，不支持 /models 端点时的内置模型列表
+	VoicesJSON     string `json:"voices_json,omitempty" gorm:"type:text"`   // []VoiceEntry JSON，仅 TTS 类提供商
+
+	// 同源分组（如 "kling" 组含 kling/kling-sfx/kling-tts/kling-image/kling-i2i）
+	GroupName        string `json:"group_name" gorm:"size:100;index;default:''"`
+	IsGroupCanonical bool   `json:"is_group_canonical" gorm:"default:false"` // 是否为该组的 UI 代表
 
 	// 状态
 	IsActive    bool   `json:"is_active" gorm:"default:true"`
@@ -48,36 +62,44 @@ func (ModelProvider) TableName() string {
 	return "ink_model_provider"
 }
 
+// ParseVoices 解析 VoicesJSON 为 []VoiceEntry。
+func (p *ModelProvider) ParseVoices() []VoiceEntry {
+	if p.VoicesJSON == "" {
+		return nil
+	}
+	var voices []VoiceEntry
+	if err := json.Unmarshal([]byte(p.VoicesJSON), &voices); err != nil {
+		return nil
+	}
+	return voices
+}
+
 // AIModel AI模型
 type AIModel struct {
 	ID         uint           `json:"id" gorm:"primaryKey"`
-	ProviderID uint           `json:"provider_id" gorm:"index;not null"`
+	ProviderID uint           `json:"provider_id" gorm:"index;not null;uniqueIndex:uniq_provider_model,priority:1"`
 	Provider   *ModelProvider `json:"provider,omitempty" gorm:"foreignKey:ProviderID"`
 
-	Name        string `json:"name" gorm:"size:100;not null"`
+	Name        string `json:"name" gorm:"size:100;not null;uniqueIndex:uniq_provider_model,priority:2"`
 	DisplayName string `json:"display_name" gorm:"size:100"`
-	Version     string `json:"version" gorm:"size:50"`
-	Type        string `json:"type" gorm:"size:50;default:''"` // e.g. chat/image/voice/embedding
-
-	// 能力
-	Capabilities string `json:"capabilities" gorm:"type:text"` // JSON
+	Type        string `json:"type" gorm:"size:50;default:''"` // llm / image / img2img / voice / video / embedding / sfx / music
 
 	// 性能指标
-	MaxTokens     int     `json:"max_tokens"`
-	ContextWindow int     `json:"context_window"`
-	Speed         float64 `json:"speed"`   // tokens/秒
-	Quality       float64 `json:"quality"` // 0.0-1.0
-	CostPer1K     float64 `json:"cost_per_1k_tokens"`
+	MaxTokens int     `json:"max_tokens"`
+	Quality   float64 `json:"quality"`          // 0.0-1.0，用于模型选择策略
+	CostPer1K float64 `json:"cost_per_1k_tokens"` // 每千 token 费用，用于成本优先策略
 
-	// 适用任务
-	SuitableTasks string `json:"suitable_tasks" gorm:"type:text"`
+	// 调用限制（0=使用供应商默认值）
+	Timeout     int `json:"timeout" gorm:"default:0"`     // HTTP 超时秒数
+	Concurrency int `json:"concurrency" gorm:"default:0"` // 最大并发调用数
+	RateLimit   int `json:"rate_limit" gorm:"default:0"`  // 请求/分钟
 
-	// 默认参数
-	DefaultTemperature float64 `json:"default_temperature" gorm:"type:decimal(3,2)"`
+	// 音色专属元数据（仅 type='voice' 时有意义）
+	Gender   string `json:"gender" gorm:"size:20;default:''"` // male / female / neutral
+	AgeGroup string `json:"age_group" gorm:"size:20;default:''"` // child / teen / adult / elder
 
 	// 状态
-	IsActive    bool `json:"is_active" gorm:"default:true"`
-	IsAvailable bool `json:"is_available" gorm:"default:true"`
+	IsActive bool `json:"is_active" gorm:"default:true"`
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -257,49 +279,54 @@ func (ModelMcpBinding) TableName() string {
 type CreateModelProviderRequest struct {
 	Name         string `json:"name" binding:"required"`
 	DisplayName  string `json:"display_name"`
-	Type         string `json:"type" binding:"required"`
 	APIEndpoint  string `json:"api_endpoint"`
 	APIKey       string `json:"api_key"`
 	APISecretKey string `json:"api_secret_key"`
 	APIVersion   string `json:"api_version"`
 	IsActive     bool   `json:"is_active"`
-	Timeout      int    `json:"timeout"`      // HTTP 超时秒数，0=默认300s
-	Concurrency  int    `json:"concurrency"`  // 最大并发调用数，0=不限制
-	RateLimit    int    `json:"rate_limit"`   // 请求/分钟，0=不限制
-	MaxTokens    int    `json:"max_tokens"`   // 最大输出 token 数，0=不限制（使用模型默认值）
+	Timeout      int    `json:"timeout"`     // HTTP 超时秒数，0=默认300s
+	Concurrency  int    `json:"concurrency"` // 最大并发调用数，0=不限制
+	RateLimit    int    `json:"rate_limit"`  // 请求/分钟，0=不限制
 }
 
 type UpdateModelProviderRequest struct {
 	Name         string `json:"name"`
 	DisplayName  string `json:"display_name"`
-	Type         string `json:"type"`
 	APIEndpoint  string `json:"api_endpoint"`
 	APIKey       string `json:"api_key"`
 	APISecretKey string `json:"api_secret_key"`
 	APIVersion   string `json:"api_version"`
 	IsActive     *bool  `json:"is_active"`
-	Timeout      *int   `json:"timeout"`      // HTTP 超时秒数；nil=不修改
-	Concurrency  *int   `json:"concurrency"`  // 最大并发调用数；nil=不修改
-	RateLimit    *int   `json:"rate_limit"`   // 请求/分钟；nil=不修改
-	MaxTokens    *int   `json:"max_tokens"`   // 最大输出 token 数；nil=不修改
+	Timeout      *int   `json:"timeout"`     // HTTP 超时秒数；nil=不修改
+	Concurrency  *int   `json:"concurrency"` // 最大并发调用数；nil=不修改
+	RateLimit    *int   `json:"rate_limit"`  // 请求/分钟；nil=不修改
 }
 
 type CreateAIModelRequest struct {
-	ProviderID uint    `json:"provider_id" binding:"required"`
-	ModelID    string  `json:"model_id" binding:"required"`
-	Name       string  `json:"name" binding:"required"`
-	TaskTypes  string  `json:"task_types"`
-	MaxTokens  int     `json:"max_tokens"`
-	CostPer1K  float64 `json:"cost_per_1k"`
-	IsDefault  bool    `json:"is_default"`
+	ProviderID  uint    `json:"provider_id" binding:"required"`
+	ModelID     string  `json:"model_id" binding:"required"`
+	Name        string  `json:"name" binding:"required"`
+	Type        string  `json:"type"`
+	MaxTokens   int     `json:"max_tokens"`
+	Timeout     int     `json:"timeout"`
+	Concurrency int     `json:"concurrency"`
+	RateLimit   int     `json:"rate_limit"`
+	CostPer1K   float64 `json:"cost_per_1k"`
+	IsDefault   bool    `json:"is_default"`
 }
 
 type UpdateAIModelRequest struct {
-	Name      string  `json:"name"`
-	TaskTypes string  `json:"task_types"` // JSON 字符串，如 ["chapter"]
-	MaxTokens int     `json:"max_tokens"`
-	CostPer1K float64 `json:"cost_per_1k"`
-	IsDefault *bool   `json:"is_default"`
+	Name        string   `json:"name"`
+	DisplayName string   `json:"display_name"`
+	Type        string   `json:"type"` // llm / image / img2img / voice / video / embedding / sfx / music
+	MaxTokens   int      `json:"max_tokens"`
+	Quality     *float64 `json:"quality"` // 0.0–1.0; nil = no change
+	Timeout     *int     `json:"timeout"`
+	Concurrency *int     `json:"concurrency"`
+	RateLimit   *int     `json:"rate_limit"`
+	CostPer1K   float64  `json:"cost_per_1k"`
+	IsDefault   *bool    `json:"is_default"`
+	IsActive    *bool    `json:"is_active"`
 }
 
 type UpdateTaskConfigRequest struct {

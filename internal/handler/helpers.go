@@ -34,6 +34,22 @@ func bindJSON(c *gin.Context, v interface{}) bool {
 	return true
 }
 
+// getUserID extracts user_id injected by JWT middleware.
+// Returns 0 if not present or not authenticated.
+func getUserID(c *gin.Context) uint {
+	if v, exists := c.Get("user_id"); exists {
+		switch id := v.(type) {
+		case uint:
+			return id
+		case float64:
+			return uint(id)
+		case int:
+			return uint(id)
+		}
+	}
+	return 0
+}
+
 // getTenantID extracts tenant_id injected by JWT middleware.
 // Returns 0 if not present (falls back to system-level providers).
 func getTenantID(c *gin.Context) uint {
@@ -84,7 +100,7 @@ func requireNovelEditorRole(c *gin.Context, novelSvc *service.NovelService, nove
 	if novelSvc == nil {
 		return true
 	}
-	role := novelSvc.GetRoleForUser(novelID, getTenantID(c), getUserIDFromCtx(c))
+	role := novelSvc.GetRoleForUser(novelID, getTenantID(c), getUserID(c))
 	if role != "editor" && role != "owner" {
 		respondErr(c, http.StatusForbidden, "需要编辑权限")
 		return false

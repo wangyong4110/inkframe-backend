@@ -6,73 +6,89 @@ import (
 	"gorm.io/gorm"
 )
 
-// VideoLike 视频点赞（ink_video_like）
+// EntityLike 统一点赞表（ink_entity_like），替代 ink_novel_like / ink_chapter_like / ink_video_like。
+// entity_type: novel / chapter / video
+type EntityLike struct {
+	EntityType string    `gorm:"primaryKey;size:20"`
+	EntityID   uint      `gorm:"primaryKey"`
+	UserID     uint      `gorm:"primaryKey"`
+	NovelID    uint      `gorm:"index"` // 供小说级联删除（novel时=EntityID，chapter时=所属novel_id，video时=0）
+	CreatedAt  time.Time
+}
+
+func (EntityLike) TableName() string { return "ink_entity_like" }
+
+// EntityComment 统一评论表（ink_entity_comment），替代 ink_novel_comment / ink_chapter_comment / ink_video_comment。
+// entity_type: novel / chapter / video
+type EntityComment struct {
+	ID         uint      `json:"id" gorm:"primaryKey"`
+	EntityType string    `json:"entity_type" gorm:"size:20;index:idx_entity_comment,priority:1"`
+	EntityID   uint      `json:"entity_id" gorm:"index:idx_entity_comment,priority:2"`
+	NovelID    uint      `json:"novel_id" gorm:"index"` // 供小说级联删除
+	UserID     uint      `json:"user_id"`
+	Content    string    `json:"content" gorm:"size:2000"`
+	ParentID   *uint     `json:"parent_id,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+func (EntityComment) TableName() string { return "ink_entity_comment" }
+
+// VideoLike DTO（兼容旧代码，不再对应独立表）
 type VideoLike struct {
-	VideoID   uint      `gorm:"primaryKey"`
-	UserID    uint      `gorm:"primaryKey"`
-	CreatedAt time.Time
+	VideoID   uint      `json:"video_id"`
+	UserID    uint      `json:"user_id"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
-func (VideoLike) TableName() string { return "ink_video_like" }
-
-// VideoComment 视频评论（ink_video_comment）
+// VideoComment DTO（兼容旧代码，不再对应独立表）
 type VideoComment struct {
-	ID        uint      `json:"id" gorm:"primaryKey"`
-	VideoID   uint      `json:"video_id" gorm:"index"`
+	ID        uint      `json:"id"`
+	VideoID   uint      `json:"video_id"`
 	UserID    uint      `json:"user_id"`
-	Content   string    `json:"content" gorm:"size:2000"`
-	ParentID  *uint     `json:"parent_id"` // 二级回复
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-func (VideoComment) TableName() string { return "ink_video_comment" }
-
-// NovelLike 小说点赞（ink_novel_like）
-type NovelLike struct {
-	NovelID   uint      `gorm:"primaryKey"`
-	UserID    uint      `gorm:"primaryKey"`
-	CreatedAt time.Time
-}
-
-func (NovelLike) TableName() string { return "ink_novel_like" }
-
-// NovelComment 小说评论（ink_novel_comment）
-type NovelComment struct {
-	ID        uint      `json:"id" gorm:"primaryKey"`
-	NovelID   uint      `json:"novel_id" gorm:"index"`
-	UserID    uint      `json:"user_id"`
-	Content   string    `json:"content" gorm:"size:2000"`
-	ParentID  *uint     `json:"parent_id"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-func (NovelComment) TableName() string { return "ink_novel_comment" }
-
-// ChapterLike 章节点赞（ink_chapter_like）复合主键：ChapterID+UserID
-type ChapterLike struct {
-	ChapterID uint      `gorm:"primaryKey" json:"chapter_id"`
-	UserID    uint      `gorm:"primaryKey" json:"user_id"`
-	NovelID   uint      `gorm:"index" json:"novel_id"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-func (ChapterLike) TableName() string { return "ink_chapter_like" }
-
-// ChapterComment 章节评论（ink_chapter_comment）
-type ChapterComment struct {
-	ID        uint      `gorm:"primaryKey" json:"id"`
-	ChapterID uint      `gorm:"index:idx_chcomment_chapter" json:"chapter_id"`
-	NovelID   uint      `gorm:"index" json:"novel_id"`
-	UserID    uint      `json:"user_id"`
-	Content   string    `gorm:"size:2000" json:"content"`
+	Content   string    `json:"content"`
 	ParentID  *uint     `json:"parent_id,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
-func (ChapterComment) TableName() string { return "ink_chapter_comment" }
+// NovelLike DTO（兼容旧代码，不再对应独立表）
+type NovelLike struct {
+	NovelID   uint      `json:"novel_id"`
+	UserID    uint      `json:"user_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// NovelComment DTO（兼容旧代码，不再对应独立表）
+type NovelComment struct {
+	ID        uint      `json:"id"`
+	NovelID   uint      `json:"novel_id"`
+	UserID    uint      `json:"user_id"`
+	Content   string    `json:"content"`
+	ParentID  *uint     `json:"parent_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ChapterLike DTO（兼容旧代码，不再对应独立表）
+type ChapterLike struct {
+	ChapterID uint      `json:"chapter_id"`
+	UserID    uint      `json:"user_id"`
+	NovelID   uint      `json:"novel_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ChapterComment DTO（兼容旧代码，不再对应独立表）
+type ChapterComment struct {
+	ID        uint      `json:"id"`
+	ChapterID uint      `json:"chapter_id"`
+	NovelID   uint      `json:"novel_id"`
+	UserID    uint      `json:"user_id"`
+	Content   string    `json:"content"`
+	ParentID  *uint     `json:"parent_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
 
 // ReadingProgress 用户阅读进度（ink_reading_progress）每用户每小说一条
 type ReadingProgress struct {

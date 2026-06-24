@@ -667,12 +667,19 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 		if s.Narration == "" && s.Dialogue == "" && s.Description == "" {
 			continue
 		}
-		if skipExisting && s.AudioPath != "" {
-			continue
-		}
-		// 强制重生时清空 AudioPath，使 GenerateShotAudio 内的幂等守卫失效
-		if !skipExisting {
-			s.AudioPath = ""
+		if skipExisting {
+			// Skip shots that already have audio in their voice segments
+			segs, _ := h.videoService.ListVoiceSegments(s.ID)
+			hasAudio := false
+			for _, seg := range segs {
+				if seg.AudioPath != "" {
+					hasAudio = true
+					break
+				}
+			}
+			if hasAudio {
+				continue
+			}
 		}
 		targets = append(targets, s)
 	}
@@ -743,7 +750,15 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 			if !shotSet[s.ID] {
 				continue
 			}
-			if s.AudioPath != "" {
+			segs, _ := h.videoService.ListVoiceSegments(s.ID)
+			hasAudio := false
+			for _, seg := range segs {
+				if seg.AudioPath != "" {
+					hasAudio = true
+					break
+				}
+			}
+			if hasAudio {
 				success++
 			} else {
 				fail++

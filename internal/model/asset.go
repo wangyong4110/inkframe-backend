@@ -291,7 +291,7 @@ type AssetStorageQuota struct {
 
 func (AssetStorageQuota) TableName() string { return "ink_asset_storage_quota" }
 
-// MediaAsset 媒体素材（图片/音频/视频/字幕），OSS 未配置时存 DB
+// Deprecated: MediaAsset 已被 Asset（ink_asset）取代，仅保留向后兼容。新代码请使用 Asset。
 type MediaAsset struct {
 	ID          uint      `gorm:"primaryKey" json:"id"`
 	TenantID    uint      `gorm:"index" json:"tenant_id"`
@@ -301,7 +301,6 @@ type MediaAsset struct {
 	Filename    string    `gorm:"size:255" json:"filename"`
 	ContentType string    `gorm:"size:100" json:"content_type"`
 	Size        int64     `json:"size"`
-	Data        []byte    `gorm:"type:longblob" json:"-"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 

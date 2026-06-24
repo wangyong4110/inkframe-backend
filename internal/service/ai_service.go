@@ -325,7 +325,13 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 	}
 
 	// 从 DB 加载（租户私有 + 系统级）
-	providers, err := s.providerRepo.ListByTenant(tenantID)
+	var providers []*model.ModelProvider
+	var err error
+	if providerName == "" {
+		providers, err = s.providerRepo.ListByModelType(tenantID, "llm")
+	} else {
+		providers, err = s.providerRepo.ListByTenant(tenantID)
+	}
 	if err != nil {
 		return s.aiManager.GetProvider(providerName)
 	}
@@ -341,13 +347,6 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		if strings.EqualFold(p.HealthCheck, "down") {
 			logger.Printf("[AI] getTenantProvider: skipping provider %q (health=down)", p.Name)
 			continue
-		}
-		// 当未指定具体提供商时，跳过图像/视频/语音/嵌入/多能力类型（这些不做文本生成）
-		if providerName == "" {
-			t := strings.ToLower(p.Type)
-			if t == "image" || t == "video" || t == "voice" || t == "tts" || t == "embedding" || t == "sfx" || t == "music" {
-				continue
-			}
 		}
 		if providerName == "" || p.Name == providerName {
 			if p.TenantID == tenantID && tenantID != 0 {
@@ -411,6 +410,7 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 	// Instantiate the provider.
 	// 名称优先匹配已知 key；对自定义名称（如"豆包图片"）则根据 endpoint 推断构造器。
 	timeout := ai.ResolveTimeout(matched.Timeout)
+	modelName := effectiveModelName(matched)
 	var provider ai.AIProvider
 	switch matched.Name {
 	case ai.ProviderNameVolcengineVisual:
@@ -423,16 +423,22 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		provider = ai.NewKlingImageProvider(apiKey, apiSecretKey, matched.APIEndpoint)
 	case "elevenlabs-sfx":
 		provider = ai.NewElevenLabsSFXProvider(apiKey, matched.APIEndpoint)
-	case "openai":
-		provider = ai.NewOpenAIProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
+	case "aliyun-tts":
+		provider = ai.NewAliyunTTSProvider(apiKey, matched.APIEndpoint)
+	case "qwen-tts":
+		provider = ai.NewQwenTTSProvider(apiKey, matched.APIEndpoint)
+	case "fun-music":
+		provider = ai.NewFunMusicProvider(apiKey)
+	case "openai", "openai-image":
+		provider = ai.NewOpenAIProvider(apiKey, matched.APIEndpoint, modelName, timeout)
 	case "anthropic":
-		provider = ai.NewAnthropicProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
+		provider = ai.NewAnthropicProvider(apiKey, matched.APIEndpoint, modelName, timeout)
 	case "google":
-		provider = ai.NewGoogleProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
+		provider = ai.NewGoogleProvider(apiKey, matched.APIEndpoint, modelName, timeout)
 	case "doubao", "volcengine-ark-img":
 		// "volcengine-ark-img" 是 DB 中 Seedream 图片模型的自定义名称，使用相同的 DoubaoProvider
-		logger.Printf("getTenantProvider: provider %q → DoubaoProvider endpoint=%s model=%s", matched.Name, matched.APIEndpoint, matched.APIVersion)
-		provider = ai.NewDoubaoProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
+		logger.Printf("getTenantProvider: provider %q → DoubaoProvider endpoint=%s model=%s", matched.Name, matched.APIEndpoint, modelName)
+		provider = ai.NewDoubaoProvider(apiKey, matched.APIEndpoint, modelName, timeout)
 	case "doubao-speech":
 		// APIKey = X-Api-Key, APIVersion = resourceID（如 "seed-tts-2.0"）
 		provider = ai.NewDoubaoSpeechProvider(apiKey, matched.APIVersion)
@@ -440,25 +446,30 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		// APIKey = appID, APISecretKey = access_token, APIVersion = cluster（默认 volcano_tts）
 		provider = ai.NewDoubaoSpeechV1Provider(apiKey, apiSecretKey, matched.APIVersion)
 	case "deepseek":
-		provider = ai.NewDeepSeekProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
+		provider = ai.NewDeepSeekProvider(apiKey, matched.APIEndpoint, modelName, timeout)
 	case "qianwen":
-		provider = ai.NewQianwenProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
+		provider = ai.NewQianwenProvider(apiKey, matched.APIEndpoint, modelName, timeout)
 	case "azure":
 		// APIEndpoint = Azure resource endpoint; APIVersion = REST API version ("2025-01-01-preview")
 		// Deployment name is resolved at call time from req.Model (AIModel.Name).
 		provider = ai.NewAzureProvider(apiKey, matched.APIEndpoint, "", matched.APIVersion, timeout)
 	default:
-		// 自定义名称：按 endpoint + type 推断底层 API 格式
+		// 自定义名称：按 endpoint + model type 推断底层 API 格式
 		ep := strings.ToLower(matched.APIEndpoint)
-		provType := strings.ToLower(matched.Type)
+		provType := ""
+		if s.modelRepo != nil {
+			if mods, _ := s.modelRepo.List(&matched.ID, tenantID); len(mods) > 0 {
+				provType = strings.ToLower(mods[0].Type)
+			}
+		}
 		switch {
 		case strings.Contains(ep, "klingai.com"):
-			// 可灵系列：按 provider type 选择正确的构造器，避免误用 OpenAI 兼容构造器
+			// 可灵系列：按 model type 选择正确的构造器，避免误用 OpenAI 兼容构造器
 			switch provType {
 			case "sfx":
 				logger.Printf("getTenantProvider: provider %q mapped to KlingSFXProvider via endpoint+type", matched.Name)
 				provider = ai.NewKlingSFXProvider(apiKey, apiSecretKey, matched.APIEndpoint)
-			case "voice", "tts":
+			case "voice":
 				logger.Printf("getTenantProvider: provider %q mapped to KlingTTSProvider via endpoint+type", matched.Name)
 				provider = ai.NewKlingTTSProvider(apiKey, apiSecretKey, matched.APIEndpoint)
 			case "image":
@@ -469,13 +480,13 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 				logger.Printf("getTenantProvider: provider %q type=video — use GetTenantVideoProvider instead", matched.Name)
 				return nil, fmt.Errorf("provider %q is a video provider; use GetTenantVideoProvider", matched.Name)
 			default:
-				logger.Printf("getTenantProvider: provider %q (klingai endpoint, type=%q) — falling back to static aiManager", matched.Name, matched.Type)
+				logger.Printf("getTenantProvider: provider %q (klingai endpoint, type=%q) — falling back to static aiManager", matched.Name, provType)
 				return s.aiManager.GetProvider(providerName)
 			}
 		case strings.Contains(ep, "volces.com") || strings.Contains(ep, "volcengine"):
 			// 火山方舟 / 豆包系列（OpenAI 兼容格式）
 			logger.Printf("getTenantProvider: provider %q mapped to doubao constructor via endpoint", matched.Name)
-			provider = ai.NewDoubaoProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
+			provider = ai.NewDoubaoProvider(apiKey, matched.APIEndpoint, modelName, timeout)
 		case strings.Contains(ep, "azure.com") || strings.Contains(ep, "openai.azure"):
 			logger.Printf("getTenantProvider: provider %q mapped to azure constructor via endpoint", matched.Name)
 			// APIEndpoint = Azure resource endpoint; APIVersion = REST API version ("2025-01-01-preview")
@@ -483,11 +494,11 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		provider = ai.NewAzureProvider(apiKey, matched.APIEndpoint, "", matched.APIVersion, timeout)
 		case strings.Contains(ep, "anthropic.com"):
 			logger.Printf("getTenantProvider: provider %q mapped to anthropic constructor via endpoint", matched.Name)
-			provider = ai.NewAnthropicProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
+			provider = ai.NewAnthropicProvider(apiKey, matched.APIEndpoint, modelName, timeout)
 		case matched.APIEndpoint != "":
 			// 有自定义 endpoint → 按 OpenAI 兼容格式通用处理
 			logger.Printf("getTenantProvider: provider %q using OpenAI-compatible constructor for endpoint %s", matched.Name, matched.APIEndpoint)
-			provider = ai.NewOpenAIProvider(apiKey, matched.APIEndpoint, matched.APIVersion, timeout)
+			provider = ai.NewOpenAIProvider(apiKey, matched.APIEndpoint, modelName, timeout)
 		default:
 			logger.Printf("getTenantProvider: unrecognized provider %q with no endpoint — falling back to static aiManager", matched.Name)
 			return s.aiManager.GetProvider(providerName)
@@ -594,9 +605,6 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 			if novel.TopP > 0 {
 				config.TopP = novel.TopP
 			}
-			if novel.TopK > 0 {
-				config.TopK = novel.TopK
-			}
 			if novel.MaxTokens > 0 {
 				config.MaxTokens = novel.MaxTokens
 			}
@@ -672,20 +680,8 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 		}
 	}
 
-	// provider 级别 MaxTokens（兜底，优先级低于 AIModel 配置）
-	if config.MaxTokens == 0 && providerName != "" && s.providerRepo != nil {
-		if providers, err := s.providerRepo.ListByTenant(tenantID); err == nil {
-			for _, p := range providers {
-				if p.Name == providerName && p.MaxTokens > 0 {
-					config.MaxTokens = p.MaxTokens
-					break
-				}
-			}
-		}
-	}
-
 	// 任务类型兜底 MaxTokens：仅在配置链全部为 0 时生效，不覆盖任何已配置值。
-	// 生产环境请在「模型管理 → 编辑提供商 / 模型 → 最大 Tokens」处配置（优先级高于此处）。
+	// 生产环境请在「模型管理 → 编辑模型 → 最大 Tokens」处配置（优先级高于此处）。
 	if config.MaxTokens == 0 {
 		switch taskType {
 		case "storyboard":
@@ -754,9 +750,6 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 			}
 			if novel.TopP > 0 {
 				config.TopP = novel.TopP
-			}
-			if novel.TopK > 0 {
-				config.TopK = novel.TopK
 			}
 			if novel.MaxTokens > 0 {
 				config.MaxTokens = novel.MaxTokens
@@ -829,18 +822,6 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 		}
 	}
 
-	// provider 级别 MaxTokens（兜底，优先级低于 AIModel 配置）
-	if config.MaxTokens == 0 && providerName != "" && s.providerRepo != nil {
-		if providers, err := s.providerRepo.ListByTenant(tenantID); err == nil {
-			for _, p := range providers {
-				if p.Name == providerName && p.MaxTokens > 0 {
-					config.MaxTokens = p.MaxTokens
-					break
-				}
-			}
-		}
-	}
-
 	// 任务类型兜底 MaxTokens（同 GenerateWithProvider，仅在配置链全为 0 时生效）。
 	if config.MaxTokens == 0 {
 		switch taskType {
@@ -888,9 +869,6 @@ func (s *AIService) resolveTaskConfig(tenantID uint, novelID uint, taskType stri
 			}
 			if novel.TopP > 0 {
 				config.TopP = novel.TopP
-			}
-			if novel.TopK > 0 {
-				config.TopK = novel.TopK
 			}
 			if novel.MaxTokens > 0 {
 				config.MaxTokens = novel.MaxTokens
@@ -953,17 +931,6 @@ func (s *AIService) resolveTaskConfig(tenantID uint, novelID uint, taskType stri
 		}
 	}
 
-	if config.MaxTokens == 0 && providerName != "" && s.providerRepo != nil {
-		if providers, err := s.providerRepo.ListByTenant(tenantID); err == nil {
-			for _, p := range providers {
-				if p.Name == providerName && p.MaxTokens > 0 {
-					config.MaxTokens = p.MaxTokens
-					break
-				}
-			}
-		}
-	}
-
 	return config, providerName, resolvedModel
 }
 
@@ -996,17 +963,6 @@ func (s *AIService) GenerateWithMessagesCtx(ctx context.Context, tenantID uint, 
 	}
 	if provider.GetName() != "anthropic" {
 		req.TopK = config.TopK
-	}
-	if req.MaxTokens == 0 && s.providerRepo != nil {
-		if dbProviders, dbErr := s.providerRepo.ListByTenant(tenantID); dbErr == nil {
-			resolvedName := provider.GetName()
-			for _, p := range dbProviders {
-				if p.Name == resolvedName && p.MaxTokens > 0 && p.TenantID == tenantID {
-					req.MaxTokens = p.MaxTokens
-					break
-				}
-			}
-		}
 	}
 
 	timeoutDur := 5 * time.Minute
@@ -1069,17 +1025,6 @@ func (s *AIService) StreamWithMessagesCtx(ctx context.Context, tenantID uint, ta
 	}
 	if provider.GetName() != "anthropic" {
 		req.TopK = config.TopK
-	}
-	if req.MaxTokens == 0 && s.providerRepo != nil {
-		if dbProviders, dbErr := s.providerRepo.ListByTenant(tenantID); dbErr == nil {
-			resolvedName := provider.GetName()
-			for _, p := range dbProviders {
-				if p.Name == resolvedName && p.MaxTokens > 0 && p.TenantID == tenantID {
-					req.MaxTokens = p.MaxTokens
-					break
-				}
-			}
-		}
 	}
 
 	timeoutDur := 5 * time.Minute
@@ -1260,30 +1205,6 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 	}
 	if len(modelOverride) > 0 && modelOverride[0] != "" {
 		req.Model = modelOverride[0]
-	}
-	// 兜底：req.MaxTokens == 0 时从 DB provider 记录补充。
-	// 上层 GenerateWithProvider/Ctx 中 provider 级 MaxTokens 查找有 providerName!="" 前置条件，
-	// 当调用方传 providerName="" 时会被跳过。此处用已解析 provider 的名称精确匹配，覆盖所有路径。
-	if req.MaxTokens == 0 && s.providerRepo != nil {
-		if dbProviders, dbErr := s.providerRepo.ListByTenant(tenantID); dbErr == nil {
-			resolvedName := provider.GetName()
-			var sysMT int
-			for _, p := range dbProviders {
-				if p.Name != resolvedName || p.MaxTokens <= 0 {
-					continue
-				}
-				if p.TenantID == tenantID {
-					req.MaxTokens = p.MaxTokens
-					break
-				}
-				if sysMT == 0 {
-					sysMT = p.MaxTokens // 系统级兜底
-				}
-			}
-			if req.MaxTokens == 0 {
-				req.MaxTokens = sysMT
-			}
-		}
 	}
 	// Claude 不支持 top_k，仅在非 Anthropic provider 时传入
 	if provider.GetName() != "anthropic" {
@@ -1544,7 +1465,7 @@ func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProvider
 	if s.providerRepo == nil {
 		return nil
 	}
-	providers, err := s.providerRepo.ListByTenant(tenantID)
+	providers, err := s.providerRepo.ListByModelType(tenantID, "image")
 	if err != nil {
 		return nil
 	}
@@ -1561,10 +1482,6 @@ func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProvider
 			logger.Printf("loadDBImageProviderEntries: skip provider %q (inactive)", p.Name)
 			continue
 		}
-		pt := strings.ToLower(p.Type)
-		if pt != "image" {
-			continue // non-image providers are expected, no need to log
-		}
 		if !providerHasCredentials(p) {
 			logger.Printf("loadDBImageProviderEntries: skip IMAGE provider %q (missing credentials)", p.Name)
 			continue
@@ -1577,8 +1494,8 @@ func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProvider
 		if size == "" {
 			size = "1024x1024"
 		}
-		entry := ai.ImageProviderEntry{ProviderName: p.Name, Model: p.APIVersion, Size: size}
-		logger.Printf("loadDBImageProviderEntries: adding IMAGE provider %q model=%q size=%s (tenantID=%d)", p.Name, p.APIVersion, size, tenantID)
+		entry := ai.ImageProviderEntry{ProviderName: p.Name, Model: effectiveModelName(p), Size: size}
+		logger.Printf("loadDBImageProviderEntries: adding IMAGE provider %q model=%q size=%s (tenantID=%d)", p.Name, effectiveModelName(p), size, tenantID)
 		// volcengine-visual 依赖服务端下载参考图，排到最后作为兜底
 		if p.Name == ai.ProviderNameVolcengineVisual {
 			volcengine = append(volcengine, entry)
@@ -2324,7 +2241,7 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 
 	// 1. DB 模式：扫描 voice/tts 类型的 provider（与图像生成逻辑对称）
 	if s.providerRepo != nil {
-		if p, err := s.loadDBVoiceProvider(tenantID); err == nil && p != nil {
+		if p, err := s.loadDBProviderByType(tenantID, "voice"); err == nil && p != nil {
 			provider = p
 		}
 	}
@@ -2368,7 +2285,7 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 // GenerateSFX 使用 DB 中配置的 sfx 类型提供商生成音效，返回 CDN URL 和时长（秒）。
 // prompt: 音效描述，如 "春节烟花声"；duration: 期望时长（秒，3.0~10.0）。
 func (s *AIService) GenerateSFX(ctx context.Context, tenantID uint, prompt string, duration float64) (string, float64, error) {
-	provider, err := s.loadDBSFXProvider(tenantID)
+	provider, err := s.loadDBProviderByType(tenantID, "sfx")
 	if err != nil {
 		return "", 0, err
 	}
@@ -2384,7 +2301,7 @@ func (s *AIService) GenerateSFX(ctx context.Context, tenantID uint, prompt strin
 
 // HasSFXProvider 判断当前租户是否已配置可用的文生音效提供商。
 func (s *AIService) HasSFXProvider(tenantID uint) bool {
-	_, err := s.loadDBSFXProvider(tenantID)
+	_, err := s.loadDBProviderByType(tenantID, "sfx")
 	return err == nil
 }
 
@@ -2427,9 +2344,9 @@ func (s *AIService) loadDBProviderByName(tenantID uint, name string) (ai.AIProvi
 	return nil, fmt.Errorf("provider %q not found or not active in DB", name)
 }
 
-// loadDBSFXProvider 从 DB 中取第一个有效的 sfx 类型提供商（文生音效）。
-func (s *AIService) loadDBSFXProvider(tenantID uint) (ai.AIProvider, error) {
-	providers, err := s.providerRepo.ListByTenant(tenantID)
+// loadDBProviderByType 从 DB 中取第一个有效的指定类型提供商（如 "sfx"、"voice"）。
+func (s *AIService) loadDBProviderByType(tenantID uint, modelType string) (ai.AIProvider, error) {
+	providers, err := s.providerRepo.ListByModelType(tenantID, modelType)
 	if err != nil {
 		return nil, err
 	}
@@ -2437,51 +2354,19 @@ func (s *AIService) loadDBSFXProvider(tenantID uint) (ai.AIProvider, error) {
 		if !p.IsActive {
 			continue
 		}
-		if pt := strings.ToLower(p.Type); pt != "sfx" {
-			continue
-		}
 		if !providerHasCredentials(p) {
-			logger.Printf("loadDBSFXProvider: skip sfx provider %q (missing credentials)", p.Name)
+			logger.Printf("loadDBProviderByType: skip %s provider %q (missing credentials)", modelType, p.Name)
 			continue
 		}
 		provider, err := s.getTenantProvider(tenantID, p.Name)
 		if err != nil {
-			logger.Errorf("loadDBSFXProvider: failed to instantiate provider %q: %v", p.Name, err)
+			logger.Errorf("loadDBProviderByType: failed to instantiate %s provider %q: %v", modelType, p.Name, err)
 			continue
 		}
-		logger.Printf("loadDBSFXProvider: using sfx provider %q", p.Name)
+		logger.Printf("loadDBProviderByType: using %s provider %q model=%q", modelType, p.Name, effectiveModelName(p))
 		return provider, nil
 	}
-	return nil, fmt.Errorf("no sfx providers configured in DB")
-}
-
-// loadDBVoiceProvider 从 DB 中取第一个有效的 voice/tts 类型提供商。
-func (s *AIService) loadDBVoiceProvider(tenantID uint) (ai.AIProvider, error) {
-	providers, err := s.providerRepo.ListByTenant(tenantID)
-	if err != nil {
-		return nil, err
-	}
-	for _, p := range providers {
-		if !p.IsActive {
-			continue
-		}
-		t := strings.ToLower(p.Type)
-		if t != "voice" && t != "tts" {
-			continue
-		}
-		if !providerHasCredentials(p) {
-			logger.Printf("loadDBVoiceProvider: skip voice provider %q (missing credentials)", p.Name)
-			continue
-		}
-		provider, err := s.getTenantProvider(tenantID, p.Name)
-		if err != nil {
-			logger.Errorf("loadDBVoiceProvider: failed to instantiate provider %q: %v", p.Name, err)
-			continue
-		}
-		logger.Printf("loadDBVoiceProvider: using voice provider %q model=%q", p.Name, p.APIVersion)
-		return provider, nil
-	}
-	return nil, fmt.Errorf("no voice providers configured in DB")
+	return nil, fmt.Errorf("no %s providers configured in DB", modelType)
 }
 
 // GetBGMProviderCreds 从 DB 中取指定 music 类型提供商的凭据（apiKey, endpoint）。
@@ -2493,9 +2378,6 @@ func (s *AIService) GetBGMProviderCreds(tenantID uint, name string) (apiKey, end
 	}
 	for _, p := range providers {
 		if !p.IsActive {
-			continue
-		}
-		if strings.ToLower(p.Type) != "music" {
 			continue
 		}
 		if !strings.EqualFold(p.Name, name) {
@@ -2525,9 +2407,6 @@ func (s *AIService) GetSFXProviderCreds(tenantID uint, name string) (apiKey, end
 		if !p.IsActive {
 			continue
 		}
-		if strings.ToLower(p.Type) != "sfx" {
-			continue
-		}
 		if !strings.EqualFold(p.Name, name) {
 			continue
 		}
@@ -2547,21 +2426,18 @@ func (s *AIService) GetSFXProviderCreds(tenantID uint, name string) (apiKey, end
 // GetTenantVideoProvider 从 DB 中查找指定租户已配置的视频生成提供商。
 // name 为空时返回第一个可用的视频提供商（kling 优先）。
 func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.VideoProvider, error) {
-	providers, err := s.providerRepo.ListByTenant(tenantID)
+	providers, err := s.providerRepo.ListByModelType(tenantID, "video")
 	if err != nil {
 		return nil, err
 	}
-	// 按照 jimeng-video → kling → seedance 顺序优先选择
-	preferOrder := []string{"jimeng-video", "kling", "seedance"}
+	// 按照 jimeng-video → kling → seedance → happyhorse 顺序优先选择
+	preferOrder := []string{"jimeng-video", "kling", "seedance", "happyhorse"}
 	if name != "" {
 		preferOrder = []string{strings.ToLower(name)}
 	}
 	byName := make(map[string]*model.ModelProvider)
 	for _, p := range providers {
 		if !p.IsActive {
-			continue
-		}
-		if strings.ToLower(p.Type) != "video" {
 			continue
 		}
 		if !providerHasCredentials(p) {
@@ -2595,6 +2471,8 @@ func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.Video
 			return ai.NewKlingProvider(apiKey, apiSecretKey, p.APIEndpoint), nil
 		case "seedance":
 			return ai.NewSeedanceProvider(apiKey, p.APIEndpoint), nil
+		case "happyhorse":
+			return ai.NewHappyHorseProvider(apiKey, p.APIEndpoint), nil
 		}
 	}
 	if name != "" {

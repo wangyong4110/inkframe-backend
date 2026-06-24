@@ -2179,14 +2179,12 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 				}
 			}
 			if stillLow {
-				issues := report.SummarizeIssues()
 				if updateErr := s.chapterRepo.UpdateFields(chapter.ID, chapter.NovelID, map[string]interface{}{
-					"quality_status": "low", "quality_issues": issues,
+					"quality_status": "low",
 				}); updateErr != nil {
 					logger.Errorf("postProcessChapter: update chapter %d [quality-status]: %v", chapter.ID, updateErr)
 				} else {
 					chapter.QualityStatus = "low"
-					chapter.QualityIssues = issues
 					logger.Printf("[ChapterService] chapter %d saved with low quality status", chapter.ChapterNo)
 				}
 			}
@@ -3733,7 +3731,6 @@ func (s *ChapterService) ApproveChapter(id uint, comment string) error {
 	}
 	chapter.Status = "approved"
 	chapter.QualityStatus = "ok"
-	chapter.QualityIssues = ""
 	return s.chapterRepo.Update(chapter)
 }
 

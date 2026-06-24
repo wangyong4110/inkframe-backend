@@ -1084,7 +1084,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 
 	// TTS 对齐：若分镜有配音，确保视频时长不短于音频时长+缓冲。
 	// alignShotDurationToTTS 仅返回调整值，不持久化到 DB。
-	shotDuration := alignShotDurationToTTS(shot)
+	shotDuration := shot.Duration
 
 	// 动态 Kling 参数（根据情绪和摄像机类型选择最优配置）
 	klingMode, klingCFG, klingDefaultDur := emotionToKlingParams(shot.EmotionalTone, shot.CameraType)
@@ -1440,19 +1440,6 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 	if duration <= 0 {
 		duration = defaultShotDurationSecs
 	}
-	// 视频时长不能低于音频时长
-	if shot.AudioPath != "" {
-		if data, readErr := readLocalOrRemoteFile(shot.AudioPath); readErr == nil && len(data) > 0 {
-			ext := audioExtension(shot.AudioPath)
-			if micros := parseAudioDurationMicros(data, ext); micros > 0 {
-				if audioDur := float64(micros) / 1_000_000; audioDur > duration {
-					logger.Printf("generateShotImageOnly: shot %d extending duration %.2f→%.2fs to cover audio", shot.ShotNo, duration, audioDur)
-					duration = audioDur
-					shot.Duration = audioDur
-				}
-			}
-		}
-	}
 	shot.GenerationMode = "static"
 	shot.Status = "generating"
 	if err := s.storyboardRepo.Update(shot); err != nil {
@@ -1572,22 +1559,6 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	duration := shot.Duration
 	if duration <= 0 {
 		duration = defaultShotDurationSecs
-	}
-
-	// 视频时长不能低于音频时长：读取已生成的 TTS 音频，若音频更长则扩展 duration。
-	if shot.AudioPath != "" {
-		if data, err := readLocalOrRemoteFile(shot.AudioPath); err == nil && len(data) > 0 {
-			ext := audioExtension(shot.AudioPath)
-			if micros := parseAudioDurationMicros(data, ext); micros > 0 {
-				audioDur := float64(micros) / 1_000_000
-				if audioDur > duration {
-					logger.Printf("GenerateSlideshowShotVideo: shot %d extending duration %.2f→%.2fs to cover audio",
-						shot.ShotNo, duration, audioDur)
-					duration = audioDur
-					shot.Duration = audioDur
-				}
-			}
-		}
 	}
 
 	logger.Printf("GenerateSlideshowShotVideo: shot %d aspect=%s duration=%.1fs", shot.ShotNo, aspectRatio, duration)

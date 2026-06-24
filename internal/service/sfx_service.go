@@ -173,13 +173,32 @@ func (s *SFXService) UpdateShotSFXTagsPublic(shotID uint, tags []SFXTagItemPubli
 	return s.UpdateShotSFXTags(shotID, items)
 }
 
-// UpdateShotSFXTags 直接更新单个镜头的 sfx_tags 字段（用于前端手动插入/修改/删除标签）。
+// UpdateShotSFXTags 用新标签替换镜头的音效条目（前端手动插入/修改/删除标签时调用）。
+// 不覆盖已有 URL；仅更新分析标签（URL 留空等待后续 AutoGenerateSFX 填充）。
 func (s *SFXService) UpdateShotSFXTags(shotID uint, tags []sfxTagItem) error {
-	data, err := json.Marshal(tags)
-	if err != nil {
-		return fmt.Errorf("marshal tags: %w", err)
+	if s.sfxItemRepo == nil {
+		return nil
 	}
-	return s.storyboardRepo.UpdateSFXTags(shotID, string(data))
+	if err := s.sfxItemRepo.DeleteByShotID(shotID); err != nil {
+		return fmt.Errorf("clear sfx items: %w", err)
+	}
+	items := make([]*model.ShotSFXItem, 0, len(tags))
+	for i, t := range tags {
+		sfxType := t.SFXType
+		if sfxType == "" {
+			sfxType = guessSFXType(t.Tag)
+		}
+		items = append(items, &model.ShotSFXItem{
+			ShotID:  shotID,
+			SeqNo:   i + 1,
+			Tag:     t.Tag,
+			SFXType: sfxType,
+		})
+	}
+	if len(items) == 0 {
+		return nil
+	}
+	return s.sfxItemRepo.BatchCreate(items)
 }
 
 // sfxItemConfig 根据标签类型和镜头特征决定单条音效的播放参数。
@@ -235,21 +254,16 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 		}
 	}
 
-	// 1. 提取结构化标签
-	// 优先级：已存 sfx_tags（含 LLM 分析结果及 Prompt 字段）> 实时 LLM 分析 > 规则兜底
-	// 始终通过 LLM 分析填充结构化英文 tag 与中文 Prompt，确保 AI 文生音效和搜索库均能高质量命中
-	tagItems := parseSFXTags(shot.SFXTags)
-	if len(tagItems) == 0 {
-		logger.Printf("[SFXService] shot %d no cached tags, calling AI analyze", shot.ID)
-		if err := s.analyzeSingleShotSFX(ctx, shot, tenantID, "", ""); err != nil {
-			logger.Errorf("[SFXService] shot %d AI analyze failed (%v), using rule fallback", shot.ID, err)
-			// 规则兜底：英文搜索词 + 中文 AI 提示词
-			shotPrompt := buildShotAIPrompt(shot)
-			for _, t := range s.fallbackTags(shot) {
-				tagItems = append(tagItems, sfxTagItem{Tag: t, SFXType: guessSFXType(t), Prompt: shotPrompt})
-			}
-		} else {
-			tagItems = parseSFXTags(shot.SFXTags)
+	// 1. 提取结构化标签：始终通过 LLM 分析，规则兜底
+	logger.Printf("[SFXService] shot %d calling AI analyze", shot.ID)
+	tagItems, analyzeErr := s.analyzeSingleShotSFX(ctx, shot, tenantID, "", "")
+	if analyzeErr != nil || len(tagItems) == 0 {
+		if analyzeErr != nil {
+			logger.Errorf("[SFXService] shot %d AI analyze failed (%v), using rule fallback", shot.ID, analyzeErr)
+		}
+		shotPrompt := buildShotAIPrompt(shot)
+		for _, t := range s.fallbackTags(shot) {
+			tagItems = append(tagItems, sfxTagItem{Tag: t, SFXType: guessSFXType(t), Prompt: shotPrompt})
 		}
 	}
 	if len(tagItems) == 0 {
@@ -273,7 +287,7 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 		maxDur = 0
 	}
 	hasSpeech := shot.Dialogue != ""
-	hasNarration := shot.Narration != "" || shot.AudioPath != ""
+	hasNarration := shot.Narration != ""
 
 	// 2. 逐 tag 搜索
 	type sfxResult struct {
@@ -348,17 +362,6 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 		if len(permanentItems) > 0 {
 			go s.saveToAssetLibrary(context.Background(), shot, permanentItems, tenantID)
 		}
-	}
-	// 同步更新旧字段（向后兼容时间线播放）
-	allTagsJSON, _ := json.Marshal(func() []string {
-		ss := make([]string, len(results))
-		for i, r := range results {
-			ss[i] = r.item.Tag
-		}
-		return ss
-	}())
-	if err := s.storyboardRepo.UpdateSFX(shot.ID, results[0].hit.url, string(allTagsJSON), results[0].vol); err != nil {
-		logger.Errorf("[SFXService] shot %d UpdateSFX compat field failed: %v", shot.ID, err)
 	}
 	logger.Printf("[SFXService] shot %d AutoGenerateSFX done: %d items saved", shot.ID, len(results))
 	return nil

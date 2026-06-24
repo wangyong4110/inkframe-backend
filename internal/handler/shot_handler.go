@@ -492,12 +492,8 @@ func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
-		// 重新从 DB 加载 shot 以获取最新 sfx_url（AutoGenerateSFX 只更新 DB，不修改内存中的 s.SFXURL）
-		freshShot, err := h.videoService.GetShotByID(uint(videoID), s.ID)
-		if err != nil {
-			freshShot = s
-		}
-		h.taskSvc.Complete(taskID, gin.H{"shot_id": s.ID, "sfx_url": freshShot.SFXURL}) //nolint:errcheck
+		sfxItems, _ := h.sfxSvc.ListSFXItems(s.ID)
+		h.taskSvc.Complete(taskID, gin.H{"shot_id": s.ID, "sfx_count": len(sfxItems)}) //nolint:errcheck
 	}(task.TaskID, shot, shotSFXReq.Provider)
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -626,9 +622,12 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 
-		// 用户主动点击"生成配音"时强制重新生成，清空旧 AudioPath
-		// 使 GenerateShotAudio 内部的幂等性守卫失效，确保修改后的文本被重新合成。
-		shot.AudioPath = ""
+		// 删除已有语音段落，强制重新合成。
+		if segs, err := h.videoService.ListVoiceSegments(shot.ID); err == nil {
+			for _, seg := range segs {
+				h.videoService.DeleteVoiceSegment(seg.ID) //nolint:errcheck
+			}
+		}
 
 		const maxRetries = 3
 		var audioErr error

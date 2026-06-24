@@ -1,24 +1,66 @@
 package ai
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
 )
 
 // KlingProvider 快手可灵视频生成提供者
-// API: https://api-beijing.klingai.com/v1/videos/image2video
+// v1 API: https://api-beijing.klingai.com/v1/videos/image2video  (kling-v1/v1-5/v1-6)
+// 3.x API: https://api-beijing.klingai.com/text-to-video/{model} (kling-3.0-turbo 等)
 // 鉴权：HS256 JWT（accessKey + secretKey）
 type KlingProvider struct {
 	accessKey string
 	secretKey string
 	endpoint  string
 	client    *http.Client
+}
+
+// kling3Req 是 Kling 3.x 文生视频接口的请求体结构。
+type kling3Req struct {
+	Prompt   string      `json:"prompt"`
+	Options  kling3Opts  `json:"options,omitempty"`
+	Settings kling3Sets  `json:"settings"`
+}
+
+type kling3Opts struct {
+	ExternalTaskID string           `json:"external_task_id,omitempty"`
+	WatermarkInfo  *kling3Watermark `json:"watermark_info,omitempty"`
+}
+
+type kling3Watermark struct {
+	Enabled bool `json:"enabled"`
+}
+
+type kling3Sets struct {
+	Duration    int    `json:"duration"`
+	Resolution  string `json:"resolution,omitempty"`
+	AspectRatio string `json:"aspect_ratio,omitempty"`
+}
+
+// is3xModel 判断模型名是否属于 Kling 3.x 新 API（路径格式为 /text-to-video/{model}）。
+func is3xModel(model string) bool {
+	return strings.Contains(model, "3.0") || strings.Contains(model, "3.1") || strings.Contains(model, "3.5")
+}
+
+// kling3StatusToInternal 将 Kling 3.x 状态值映射为内部统一状态。
+func kling3StatusToInternal(s string) string {
+	switch s {
+	case "submitted":
+		return "pending"
+	case "processing":
+		return "processing"
+	case "succeeded":
+		return "completed"
+	case "failed":
+		return "failed"
+	default:
+		return s
+	}
 }
 
 // NewKlingProvider 创建 Kling 视频生成提供者
@@ -38,39 +80,76 @@ func (p *KlingProvider) GetName() string {
 }
 
 func (p *KlingProvider) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {
-	var reqBody io.Reader
-	if body != nil {
-		b, err := json.Marshal(body)
-		if err != nil {
-			return nil, 0, err
-		}
-		reqBody = bytes.NewReader(b)
-	}
-
-	url := p.endpoint + path
-	httpReq, err := http.NewRequestWithContext(ctx, method, url, reqBody)
-	if err != nil {
-		return nil, 0, err
-	}
-	token, err := klingJWT(p.accessKey, p.secretKey)
-	if err != nil {
-		return nil, 0, fmt.Errorf("kling: JWT generation failed: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := p.client.Do(httpReq)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(resp.Body)
-	return respBody, resp.StatusCode, err
+	return klingDoRequest(ctx, p.accessKey, p.secretKey, p.endpoint, p.client, method, path, body)
 }
 
-// GenerateVideo 提交图生视频任务
+// generate3xTurbo 使用 Kling 3.x 新 API 提交文生视频任务。
+// 生成唯一 external_task_id，提交时携带并存储为任务标识，查询时通过 /tasks?external_task_ids= 轮询。
+func (p *KlingProvider) generate3xTurbo(ctx context.Context, req *VideoGenerateRequest, model string) (*VideoTask, error) {
+	dur := int(req.Duration)
+	switch {
+	case dur <= 0:
+		dur = 5
+	case dur <= 4:
+		dur = 3
+	case dur <= 7:
+		dur = 5
+	default:
+		dur = 10
+	}
+
+	// 生成唯一外部任务 ID，用于后续查询（/tasks?external_task_ids=）
+	extID := fmt.Sprintf("ik3-%d", time.Now().UnixNano())
+
+	body := kling3Req{
+		Prompt: req.Prompt,
+		Options: kling3Opts{
+			ExternalTaskID: extID,
+			WatermarkInfo:  &kling3Watermark{Enabled: false},
+		},
+		Settings: kling3Sets{
+			Duration:    dur,
+			Resolution:  "720p",
+			AspectRatio: req.AspectRatio,
+		},
+	}
+
+	respBody, status, err := p.doRequest(ctx, "POST", "/text-to-video/"+model, body)
+	if err != nil {
+		return nil, fmt.Errorf("kling 3.x generate request failed: %w", err)
+	}
+	if status != http.StatusOK && status != http.StatusCreated && status != 202 {
+		return nil, fmt.Errorf("kling 3.x generate failed: status %d, body: %s", status, string(respBody))
+	}
+
+	var result struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Data    struct {
+			Status string `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		return nil, fmt.Errorf("kling 3.x parse response failed: %w", err)
+	}
+	if result.Code != 0 {
+		return nil, fmt.Errorf("kling 3.x API error: code=%d, message=%s", result.Code, result.Message)
+	}
+
+	return &VideoTask{
+		TaskID:   "t2v3:" + extID,
+		Status:   kling3StatusToInternal(result.Data.Status),
+		Provider: p.GetName(),
+	}, nil
+}
+
+// GenerateVideo 提交视频生成任务（文生/图生视频）
 func (p *KlingProvider) GenerateVideo(ctx context.Context, req *VideoGenerateRequest) (*VideoTask, error) {
+	// 3.x 模型（如 kling-3.0-turbo）使用新 API，仅支持文生视频
+	if is3xModel(req.Model) {
+		return p.generate3xTurbo(ctx, req, req.Model)
+	}
+
 	// 合并所有参考图：ImageURL（主参考图）置首位，ImageURLs 追加并去重
 	allImages := make([]string, 0, 1+len(req.ImageURLs))
 	if req.ImageURL != "" {
@@ -190,9 +269,14 @@ func (p *KlingProvider) GenerateVideo(ctx context.Context, req *VideoGenerateReq
 }
 
 // klingVideoTaskPath 根据 taskID 前缀返回正确的查询路径。
+// "t2v3:<id>"  → /text-to-video/query/<id>   (Kling 3.x 文生视频)
 // "multi:<id>" → /v1/videos/multi-image2video/<id>
 // "<id>"       → /v1/videos/image2video/<id>
 func klingVideoTaskPath(taskID string) (path string, rawID string) {
+	if strings.HasPrefix(taskID, "t2v3:") {
+		rawID = taskID[5:]
+		return "/tasks?external_task_ids=" + rawID, rawID
+	}
 	if strings.HasPrefix(taskID, "multi:") {
 		rawID = taskID[6:]
 		return "/v1/videos/multi-image2video/" + rawID, rawID
@@ -211,31 +295,55 @@ func (p *KlingProvider) GetVideoStatus(ctx context.Context, taskID string) (*Vid
 		return nil, fmt.Errorf("kling status failed: status %d", status)
 	}
 
-	var result struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-		Data    struct {
-			TaskID     string  `json:"task_id"`
-			Status     string  `json:"task_status"`
-			Progress   float64 `json:"progress"`
-			FailReason string  `json:"task_status_msg"`
-		} `json:"data"`
+	// 3.x API 与 v1 API 状态字段名不同，用 RawMessage 统一解析
+	var raw struct {
+		Code int             `json:"code"`
+		Data json.RawMessage `json:"data"`
 	}
-
-	if err := json.Unmarshal(respBody, &result); err != nil {
+	if err := json.Unmarshal(respBody, &raw); err != nil {
 		return nil, fmt.Errorf("kling parse status failed: %w", err)
 	}
 
-	taskStatus := &VideoTaskStatus{
-		TaskID:   result.Data.TaskID,
-		Status:   result.Data.Status,
-		Progress: result.Data.Progress,
-	}
-	if result.Data.FailReason != "" {
-		taskStatus.Error = result.Data.FailReason
+	if strings.HasPrefix(taskID, "t2v3:") {
+		// /tasks 响应：data 为数组，取第一个元素
+		var items []struct {
+			ID      string `json:"id"`
+			Status  string `json:"status"`
+			Message string `json:"message"` // 失败原因
+		}
+		if err := json.Unmarshal(raw.Data, &items); err != nil || len(items) == 0 {
+			return nil, fmt.Errorf("kling 3.x parse status data failed (empty or invalid): %w", err)
+		}
+		d := items[0]
+		ts := &VideoTaskStatus{
+			TaskID: d.ID,
+			Status: kling3StatusToInternal(d.Status),
+		}
+		if d.Message != "" && d.Status == "failed" {
+			ts.Error = d.Message
+		}
+		return ts, nil
 	}
 
-	return taskStatus, nil
+	// v1 响应：{ task_id, task_status, progress, task_status_msg }
+	var d struct {
+		TaskID     string  `json:"task_id"`
+		Status     string  `json:"task_status"`
+		Progress   float64 `json:"progress"`
+		FailReason string  `json:"task_status_msg"`
+	}
+	if err := json.Unmarshal(raw.Data, &d); err != nil {
+		return nil, fmt.Errorf("kling v1 parse status data failed: %w", err)
+	}
+	ts := &VideoTaskStatus{
+		TaskID:   d.TaskID,
+		Status:   d.Status,
+		Progress: d.Progress,
+	}
+	if d.FailReason != "" {
+		ts.Error = d.FailReason
+	}
+	return ts, nil
 }
 
 // GetVideoURL 获取已完成任务的视频 URL
@@ -249,25 +357,52 @@ func (p *KlingProvider) GetVideoURL(ctx context.Context, taskID string) (string,
 		return "", fmt.Errorf("kling get video failed: status %d", status)
 	}
 
-	// 用 RawMessage 兼容两种 task_result 结构：
-	//   image2video:       task_result 为数组 [{video:{url}}]
-	//   multi-image2video: task_result 为对象 {videos:[{url}]}
-	var envelope struct {
-		Code int `json:"code"`
-		Data struct {
-			TaskStatus string          `json:"task_status"`
-			TaskResult json.RawMessage `json:"task_result"`
-		} `json:"data"`
+	// 3.x API 与 v1 结果结构不同，按前缀分支解析
+	var raw struct {
+		Code int             `json:"code"`
+		Data json.RawMessage `json:"data"`
 	}
-
-	if err := json.Unmarshal(respBody, &envelope); err != nil {
+	if err := json.Unmarshal(respBody, &raw); err != nil {
 		return "", fmt.Errorf("kling parse video URL failed: %w", err)
 	}
 
-	switch envelope.Data.TaskStatus {
+	if strings.HasPrefix(taskID, "t2v3:") {
+		// /tasks 响应：data 为数组，outputs[] 按 type 区分不同产物
+		var items []struct {
+			Status  string `json:"status"`
+			Message string `json:"message"`
+			Outputs []struct {
+				Type string `json:"type"`
+				URL  string `json:"url"`
+			} `json:"outputs"`
+		}
+		if err := json.Unmarshal(raw.Data, &items); err != nil || len(items) == 0 {
+			return "", fmt.Errorf("kling 3.x parse video data failed: %w", err)
+		}
+		d := items[0]
+		if d.Status != "succeeded" {
+			return "", fmt.Errorf("kling 3.x task not completed: status=%s, message=%s", d.Status, d.Message)
+		}
+		for _, out := range d.Outputs {
+			if out.Type == "video" && out.URL != "" {
+				return out.URL, nil
+			}
+		}
+		return "", fmt.Errorf("kling 3.x: no video output in result")
+	}
+
+	// v1 API — 兼容 image2video 和 multi-image2video 两种 task_result 结构
+	var v1 struct {
+		TaskStatus string          `json:"task_status"`
+		TaskResult json.RawMessage `json:"task_result"`
+	}
+	if err := json.Unmarshal(raw.Data, &v1); err != nil {
+		return "", fmt.Errorf("kling v1 parse video data failed: %w", err)
+	}
+	switch v1.TaskStatus {
 	case "succeed", "success", "completed":
 	default:
-		return "", fmt.Errorf("kling task not completed: status=%s", envelope.Data.TaskStatus)
+		return "", fmt.Errorf("kling task not completed: status=%s", v1.TaskStatus)
 	}
 
 	var multiResult struct {
@@ -275,7 +410,7 @@ func (p *KlingProvider) GetVideoURL(ctx context.Context, taskID string) (string,
 			URL string `json:"url"`
 		} `json:"videos"`
 	}
-	if err := json.Unmarshal(envelope.Data.TaskResult, &multiResult); err == nil && len(multiResult.Videos) > 0 {
+	if err := json.Unmarshal(v1.TaskResult, &multiResult); err == nil && len(multiResult.Videos) > 0 {
 		if multiResult.Videos[0].URL != "" {
 			return multiResult.Videos[0].URL, nil
 		}
@@ -286,7 +421,7 @@ func (p *KlingProvider) GetVideoURL(ctx context.Context, taskID string) (string,
 			URL string `json:"url"`
 		} `json:"video"`
 	}
-	if err := json.Unmarshal(envelope.Data.TaskResult, &works); err == nil && len(works) > 0 {
+	if err := json.Unmarshal(v1.TaskResult, &works); err == nil && len(works) > 0 {
 		if works[0].Video.URL != "" {
 			return works[0].Video.URL, nil
 		}

@@ -12,17 +12,13 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
 
-// analyzeSingleShotSFX 为单个分镜调用 AI 生成结构化音效搜索词，更新 sfx_tags 字段。
+// analyzeSingleShotSFX 为单个分镜调用 AI 生成结构化音效搜索词，返回 tag 列表。
 // 输出格式：[{"tag":"...","type":"action|ambient|emotion","prompt":"..."}, ...]
 // tag 字段始终输出英文（最多 3 词），prompt 字段为中文自然语言（供 Kling SFX / AudioLDM 使用）。
-func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint, userContext string, promptLanguage string) error {
-	// 过渡闪切镜头（< 1s）直接跳过 AI 调用，存空数组
+func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.StoryboardShot, tenantID uint, userContext string, promptLanguage string) ([]sfxTagItem, error) {
+	// 过渡闪切镜头（< 1s）直接跳过 AI 调用
 	if shot.Duration < 1.0 {
-		if err := s.storyboardRepo.UpdateSFXTags(shot.ID, "[]"); err != nil {
-			return fmt.Errorf("update sfx_tags: %w", err)
-		}
-		shot.SFXTags = "[]"
-		return nil
+		return nil, nil
 	}
 
 	// 构建分镜上下文
@@ -116,19 +112,16 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 
 	// MaxTokens=3000：推理模型（如 DeepSeek-R1）会先输出思考过程再输出 JSON，
 	// 3000 token 足以容纳思考过程（~500-800 tok）+ JSON 输出（~100-200 tok）。
-	// jsonOnlySystemPrompt（由 ai_service 注入）会抑制大多数推理模型的思考输出。
-	// Timeout 由模型管理页面中 sfx_analyze 任务配置决定，不在此处硬编码。
 	callResult := func() (string, error) {
 		return s.aiSvc.GenerateWithProvider(tenantID, 0, "sfx_analyze", prompt, "")
 	}
 	result, err := callResult()
 	if err != nil {
-		return fmt.Errorf("AI call: %w", err)
+		return nil, fmt.Errorf("AI call: %w", err)
 	}
 
 	raw := extractJSON(result)
 	// DeepSeek-chat (V3) 有时在 content 里先输出推理过程再输出 JSON。
-	// 若 extractJSON 未能提取到有效数组（result 不以 [ 开头），尝试直接定位第一个 [ 字符。
 	if len(raw) == 0 || raw[0] != '[' {
 		if idx := strings.Index(result, "["); idx != -1 {
 			raw = extractJSON(result[idx:])
@@ -150,7 +143,7 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 		// 兼容旧版纯字符串输出
 		var strs []string
 		if err2 := json.Unmarshal([]byte(raw), &strs); err2 != nil {
-			return fmt.Errorf("parse JSON: %w (raw=%q)", err, raw)
+			return nil, fmt.Errorf("parse JSON: %w (raw=%q)", err, raw)
 		}
 		items = make([]sfxTagItem, 0, len(strs))
 		for _, s2 := range strs {
@@ -177,17 +170,11 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 		}
 	}
 
-	tagsJSON, _ := json.Marshal(filtered)
-	shot.SFXTags = string(tagsJSON)
-	if err := s.storyboardRepo.UpdateSFXTags(shot.ID, string(tagsJSON)); err != nil {
-		return fmt.Errorf("update sfx_tags: %w", err)
-	}
-	return nil
+	return filtered, nil
 }
 
-// AnalyzeSFXForVideo 并行为每个分镜单独调用 AI 生成结构化音效搜索词，写入 sfx_tags 字段。
-// promptLanguage：项目提示词语言（"zh"=中文，"en"=英文）；影响 AI 输出标签语言。
-// force=true 时强制重新分析所有镜头（用于用户主动触发），force=false 时跳过已有有效标签的镜头。
+// AnalyzeSFXForVideo 并行为每个分镜单独调用 AI 生成结构化音效搜索词。
+// force=true 时强制重新分析所有镜头；force=false 时跳过已有 SFX 条目的镜头。
 // 每个分镜独立分析，并发度最多 15，单个失败不影响其余镜头。
 func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.StoryboardShot, tenantID uint, userContext string, promptLanguage string, force bool) error {
 	if len(shots) == 0 {
@@ -205,9 +192,9 @@ func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.Stor
 		if ctx.Err() != nil {
 			break
 		}
-		// 非强制模式：已有有效结构化 tags（非空且含 tag 字段）则跳过，避免重复调用 AI
-		if !force {
-			if existing := parseSFXTags(shot.SFXTags); len(existing) > 0 && existing[0].Tag != "" {
+		// 非强制模式：已有 SFX 条目则跳过
+		if !force && s.sfxItemRepo != nil {
+			if count, _ := s.sfxItemRepo.CountByShotID(shot.ID); count > 0 {
 				skipped.Add(1)
 				continue
 			}
@@ -217,7 +204,7 @@ func (s *SFXService) AnalyzeSFXForVideo(ctx context.Context, shots []*model.Stor
 		go func(sh *model.StoryboardShot) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			err := s.analyzeSingleShotSFX(ctx, sh, tenantID, userContext, promptLanguage)
+			_, err := s.analyzeSingleShotSFX(ctx, sh, tenantID, userContext, promptLanguage)
 			if err != nil {
 				logger.Errorf("[SFXService] AnalyzeSFXForVideo: shot %d failed: %v", sh.ShotNo, err)
 				failed.Add(1)

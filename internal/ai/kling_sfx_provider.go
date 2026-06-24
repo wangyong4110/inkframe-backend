@@ -254,15 +254,8 @@ func (p *KlingSFXProvider) queryTask(ctx context.Context, taskID string) (*kling
 	return &result, nil
 }
 
-// doRequest 发送 HTTP 请求，返回响应体、状态码
 func (p *KlingSFXProvider) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {
-	kp := &KlingProvider{
-		accessKey: p.accessKey,
-		secretKey: p.secretKey,
-		endpoint:  p.endpoint,
-		client:    p.client,
-	}
-	return kp.doRequest(ctx, method, path, body)
+	return klingDoRequest(ctx, p.accessKey, p.secretKey, p.endpoint, p.client, method, path, body)
 }
 
 // Ensure interface compliance.

@@ -1,6 +1,12 @@
 package ai
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 
@@ -17,6 +23,37 @@ func normalizeKlingEndpoint(endpoint, defaultEndpoint string) string {
 	ep = strings.TrimSuffix(ep, "/v1")
 	ep = strings.TrimRight(ep, "/")
 	return ep
+}
+
+// klingDoRequest 是所有 Kling 系列 provider 共用的 HTTP 请求实现。
+// 使用 accessKey+secretKey 生成 HS256 JWT，发送 JSON 请求，返回响应体和状态码。
+func klingDoRequest(ctx context.Context, accessKey, secretKey, endpoint string, client *http.Client, method, path string, body interface{}) ([]byte, int, error) {
+	var reqBody io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return nil, 0, err
+		}
+		reqBody = bytes.NewReader(b)
+	}
+	url := endpoint + path
+	httpReq, err := http.NewRequestWithContext(ctx, method, url, reqBody)
+	if err != nil {
+		return nil, 0, err
+	}
+	token, err := klingJWT(accessKey, secretKey)
+	if err != nil {
+		return nil, 0, fmt.Errorf("kling: JWT generation failed: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+token)
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	return respBody, resp.StatusCode, err
 }
 
 // klingJWT 生成可灵 API 所需的 JWT Bearer 令牌。

@@ -97,6 +97,7 @@ func main() {
 	// 3b. 预置默认数据（INSERT IGNORE，幂等安全）
 	seedDefaultData(db)
 	seedAIModels(db)
+	seedProviderVoices(db)
 	initSystemAdmin(db, cfg)
 	seedWebSearchMcpTool(db, cfg)
 	seedWikiSearchMcpTool(db, cfg)

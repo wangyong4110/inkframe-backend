@@ -29,26 +29,6 @@ func NewAssetHandler(svc *service.AssetService) *AssetHandler {
 	return &AssetHandler{svc: svc}
 }
 
-// ─── helpers ─────────────────────────────────────────────────────────────────
-
-func callerID(c *gin.Context) uint {
-	if v, ok := c.Get("user_id"); ok {
-		if id, ok := v.(uint); ok {
-			return id
-		}
-	}
-	return 0
-}
-
-func tenantID(c *gin.Context) uint {
-	if v, ok := c.Get("tenant_id"); ok {
-		if id, ok := v.(uint); ok {
-			return id
-		}
-	}
-	return 0
-}
-
 // ─── Asset CRUD ───────────────────────────────────────────────────────────────
 
 const maxUploadSize = 100 * 1024 * 1024 // 100 MB
@@ -131,8 +111,8 @@ func (h *AssetHandler) Upload(c *gin.Context) {
 		mime = "application/octet-stream"
 	}
 
-	uid := callerID(c)
-	tid := tenantID(c)
+	uid := getUserID(c)
+	tid := getTenantID(c)
 
 	asset, err := h.svc.Upload(c.Request.Context(), f, header.Size, service.UploadAssetParams{
 		TenantID: tid, CreatorID: uid,
@@ -150,7 +130,7 @@ func (h *AssetHandler) Upload(c *gin.Context) {
 // GET /assets/:id
 func (h *AssetHandler) GetAsset(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	asset, err := h.svc.GetByID(uint(id), callerID(c))
+	asset, err := h.svc.GetByID(uint(id), getUserID(c))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, err.Error())
 		return
@@ -163,7 +143,7 @@ func (h *AssetHandler) SearchAssets(c *gin.Context) {
 	pg := parsePagination(c)
 	params := repository.AssetSearchParams{
 		Scope:    c.DefaultQuery("scope", "personal"),
-		CallerID: callerID(c), TenantID: tenantID(c),
+		CallerID: getUserID(c), TenantID: getTenantID(c),
 		Q: c.Query("q"), Type: c.Query("type"),
 		SubType: c.Query("sub_type"), Source: c.Query("source"),
 		License: c.Query("license"),
@@ -199,7 +179,7 @@ func (h *AssetHandler) UpdateAsset(c *gin.Context) {
 			fields[k] = v
 		}
 	}
-	if err := h.svc.Update(uint(id), callerID(c), fields); err != nil {
+	if err := h.svc.Update(uint(id), getUserID(c), fields); err != nil {
 		respondErr(c, http.StatusForbidden, err.Error())
 		return
 	}
@@ -209,7 +189,7 @@ func (h *AssetHandler) UpdateAsset(c *gin.Context) {
 // DELETE /assets/:id  (soft delete)
 func (h *AssetHandler) SoftDelete(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err := h.svc.SoftDelete(uint(id), callerID(c)); err != nil {
+	if err := h.svc.SoftDelete(uint(id), getUserID(c)); err != nil {
 		respondErr(c, http.StatusForbidden, err.Error())
 		return
 	}
@@ -219,7 +199,7 @@ func (h *AssetHandler) SoftDelete(c *gin.Context) {
 // POST /assets/:id/restore
 func (h *AssetHandler) Restore(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err := h.svc.RestoreFromTrash(uint(id), callerID(c)); err != nil {
+	if err := h.svc.RestoreFromTrash(uint(id), getUserID(c)); err != nil {
 		respondErr(c, http.StatusForbidden, err.Error())
 		return
 	}
@@ -229,7 +209,7 @@ func (h *AssetHandler) Restore(c *gin.Context) {
 // DELETE /assets/:id/purge
 func (h *AssetHandler) Purge(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err := h.svc.PurgeAsset(c.Request.Context(), uint(id), callerID(c)); err != nil {
+	if err := h.svc.PurgeAsset(c.Request.Context(), uint(id), getUserID(c)); err != nil {
 		respondErr(c, http.StatusForbidden, err.Error())
 		return
 	}
@@ -239,7 +219,7 @@ func (h *AssetHandler) Purge(c *gin.Context) {
 // GET /assets/trash
 func (h *AssetHandler) ListTrash(c *gin.Context) {
 	pg := parsePagination(c)
-	assets, total, err := h.svc.ListTrash(callerID(c), pg.Page, pg.PageSize)
+	assets, total, err := h.svc.ListTrash(getUserID(c), pg.Page, pg.PageSize)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -249,7 +229,7 @@ func (h *AssetHandler) ListTrash(c *gin.Context) {
 
 // DELETE /assets/trash  — permanently purge all trashed assets for the caller
 func (h *AssetHandler) EmptyTrash(c *gin.Context) {
-	count, err := h.svc.EmptyTrash(callerID(c))
+	count, err := h.svc.EmptyTrash(getUserID(c))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -259,7 +239,7 @@ func (h *AssetHandler) EmptyTrash(c *gin.Context) {
 
 // DELETE /assets/clear-personal  — soft-delete all active personal assets for the caller
 func (h *AssetHandler) ClearPersonalAssets(c *gin.Context) {
-	count, err := h.svc.ClearPersonalAssets(callerID(c))
+	count, err := h.svc.ClearPersonalAssets(getUserID(c))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -272,7 +252,7 @@ func (h *AssetHandler) ClearPersonalAssets(c *gin.Context) {
 // POST /assets/:id/share-request
 func (h *AssetHandler) RequestShare(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	req, err := h.svc.RequestShare(uint(id), callerID(c))
+	req, err := h.svc.RequestShare(uint(id), getUserID(c))
 	if err != nil {
 		respondErr(c, http.StatusBadRequest, err.Error())
 		return
@@ -283,7 +263,7 @@ func (h *AssetHandler) RequestShare(c *gin.Context) {
 // GET /assets/:id/share-request
 func (h *AssetHandler) GetShareRequest(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	req, err := h.svc.GetShareRequest(uint(id), callerID(c))
+	req, err := h.svc.GetShareRequest(uint(id), getUserID(c))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, err.Error())
 		return
@@ -294,7 +274,7 @@ func (h *AssetHandler) GetShareRequest(c *gin.Context) {
 // DELETE /assets/:id/share-request
 func (h *AssetHandler) CancelShareRequest(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err := h.svc.CancelShareRequest(uint(id), callerID(c)); err != nil {
+	if err := h.svc.CancelShareRequest(uint(id), getUserID(c)); err != nil {
 		respondErr(c, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -304,7 +284,7 @@ func (h *AssetHandler) CancelShareRequest(c *gin.Context) {
 // POST /assets/:id/withdraw
 func (h *AssetHandler) WithdrawShare(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err := h.svc.WithdrawShare(uint(id), callerID(c)); err != nil {
+	if err := h.svc.WithdrawShare(uint(id), getUserID(c)); err != nil {
 		respondErr(c, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -331,7 +311,7 @@ func (h *AssetHandler) ApproveShareRequest(c *gin.Context) {
 		Note string `json:"note"`
 	}
 	_ = c.ShouldBindJSON(&body)
-	if err := h.svc.AdminReview(uint(id), callerID(c), true, body.Note); err != nil {
+	if err := h.svc.AdminReview(uint(id), getUserID(c), true, body.Note); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -345,7 +325,7 @@ func (h *AssetHandler) RejectShareRequest(c *gin.Context) {
 		Note string `json:"note"`
 	}
 	_ = c.ShouldBindJSON(&body)
-	if err := h.svc.AdminReview(uint(id), callerID(c), false, body.Note); err != nil {
+	if err := h.svc.AdminReview(uint(id), getUserID(c), false, body.Note); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -359,7 +339,7 @@ func (h *AssetHandler) AdminRemoveAsset(c *gin.Context) {
 		Note string `json:"note"`
 	}
 	_ = c.ShouldBindJSON(&body)
-	if err := h.svc.AdminRemove(uint(id), callerID(c), body.Note); err != nil {
+	if err := h.svc.AdminRemove(uint(id), getUserID(c), body.Note); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -392,7 +372,7 @@ func (h *AssetHandler) CreateVersion(c *gin.Context) {
 	if mime == "" {
 		mime = "application/octet-stream"
 	}
-	v, err := h.svc.CreateVersion(c.Request.Context(), uint(id), callerID(c),
+	v, err := h.svc.CreateVersion(c.Request.Context(), uint(id), getUserID(c),
 		f, header.Size, mime, c.PostForm("note"))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
@@ -405,7 +385,7 @@ func (h *AssetHandler) CreateVersion(c *gin.Context) {
 func (h *AssetHandler) RestoreVersion(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
 	vNo, _ := strconv.Atoi(c.Param("v"))
-	if err := h.svc.RestoreVersion(c.Request.Context(), uint(id), vNo, callerID(c)); err != nil {
+	if err := h.svc.RestoreVersion(c.Request.Context(), uint(id), vNo, getUserID(c)); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -445,7 +425,7 @@ func (h *AssetHandler) AddTags(c *gin.Context) {
 		respondBadRequest(c, "tag_names required")
 		return
 	}
-	tags, err := h.svc.AddTags(uint(id), callerID(c), body.TagNames)
+	tags, err := h.svc.AddTags(uint(id), getUserID(c), body.TagNames)
 	if err != nil {
 		respondErr(c, http.StatusForbidden, err.Error())
 		return
@@ -457,7 +437,7 @@ func (h *AssetHandler) AddTags(c *gin.Context) {
 func (h *AssetHandler) RemoveTag(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
 	tid, _ := strconv.ParseUint(c.Param("tag_id"), 10, 64)
-	if err := h.svc.RemoveTag(uint(id), uint(tid), callerID(c)); err != nil {
+	if err := h.svc.RemoveTag(uint(id), uint(tid), getUserID(c)); err != nil {
 		respondErr(c, http.StatusForbidden, err.Error())
 		return
 	}
@@ -467,7 +447,7 @@ func (h *AssetHandler) RemoveTag(c *gin.Context) {
 // POST /assets/:id/auto-tag
 func (h *AssetHandler) TriggerAutoTag(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	if err := h.svc.TriggerAutoTag(uint(id), callerID(c)); err != nil {
+	if err := h.svc.TriggerAutoTag(uint(id), getUserID(c)); err != nil {
 		respondErr(c, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -479,7 +459,7 @@ func (h *AssetHandler) TriggerAutoTag(c *gin.Context) {
 // POST /assets/:id/like
 func (h *AssetHandler) ToggleLike(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	liked, err := h.svc.ToggleLike(uint(id), callerID(c))
+	liked, err := h.svc.ToggleLike(uint(id), getUserID(c))
 	if err != nil {
 		respondErr(c, http.StatusBadRequest, err.Error())
 		return
@@ -497,7 +477,7 @@ func (h *AssetHandler) UseAsset(c *gin.Context) {
 	_ = c.ShouldBindJSON(&body)
 	usage := model.AssetUsage{
 		UsedByType: body.UsedByType, UsedByID: body.UsedByID,
-		TenantID: tenantID(c), UserID: callerID(c),
+		TenantID: getTenantID(c), UserID: getUserID(c),
 	}
 	url, attribution, err := h.svc.UseAsset(uint(id), usage)
 	if err != nil {
@@ -518,7 +498,7 @@ func (h *AssetHandler) BatchDelete(c *gin.Context) {
 		respondBadRequest(c, "asset_ids required")
 		return
 	}
-	_ = h.svc.BatchDelete(callerID(c), body.AssetIDs)
+	_ = h.svc.BatchDelete(getUserID(c), body.AssetIDs)
 	respondOK(c, nil)
 }
 
@@ -531,7 +511,7 @@ func (h *AssetHandler) BatchShareRequest(c *gin.Context) {
 		respondBadRequest(c, "asset_ids required")
 		return
 	}
-	submitted, failed := h.svc.BatchShareRequest(callerID(c), body.AssetIDs)
+	submitted, failed := h.svc.BatchShareRequest(getUserID(c), body.AssetIDs)
 	respondOK(c, gin.H{"submitted": submitted, "failed": failed})
 }
 
@@ -539,7 +519,7 @@ func (h *AssetHandler) BatchShareRequest(c *gin.Context) {
 
 // GET /asset-collections
 func (h *AssetHandler) ListCollections(c *gin.Context) {
-	cols, err := h.svc.ListCollections(callerID(c))
+	cols, err := h.svc.ListCollections(getUserID(c))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -562,7 +542,7 @@ func (h *AssetHandler) CreateCollection(c *gin.Context) {
 	if scope == "" {
 		scope = "personal"
 	}
-	col, err := h.svc.CreateCollection(tenantID(c), callerID(c), body.Name, body.Description, scope)
+	col, err := h.svc.CreateCollection(getTenantID(c), getUserID(c), body.Name, body.Description, scope)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -580,7 +560,7 @@ func (h *AssetHandler) AddToCollection(c *gin.Context) {
 		respondBadRequest(c, "asset_ids required")
 		return
 	}
-	if err := h.svc.AddToCollection(uint(id), body.AssetIDs, callerID(c)); err != nil {
+	if err := h.svc.AddToCollection(uint(id), body.AssetIDs, getUserID(c)); err != nil {
 		respondErr(c, http.StatusForbidden, err.Error())
 		return
 	}
@@ -597,7 +577,7 @@ func (h *AssetHandler) RemoveFromCollection(c *gin.Context) {
 		respondBadRequest(c, "asset_ids required")
 		return
 	}
-	if err := h.svc.RemoveFromCollection(uint(id), body.AssetIDs, callerID(c)); err != nil {
+	if err := h.svc.RemoveFromCollection(uint(id), body.AssetIDs, getUserID(c)); err != nil {
 		respondErr(c, http.StatusForbidden, err.Error())
 		return
 	}
@@ -629,7 +609,7 @@ func (h *AssetHandler) CreateShareLink(c *gin.Context) {
 		respondBadRequest(c, "invalid body")
 		return
 	}
-	sl, err := h.svc.CreateShareLink(callerID(c), service.ShareLinkOptions{
+	sl, err := h.svc.CreateShareLink(getUserID(c), service.ShareLinkOptions{
 		AssetID: body.AssetID, CollectionID: body.CollectionID,
 		ExpiresIn: body.ExpiresIn, DownloadAllowed: body.DownloadAllowed,
 	})
@@ -642,7 +622,7 @@ func (h *AssetHandler) CreateShareLink(c *gin.Context) {
 
 // GET /share-links
 func (h *AssetHandler) ListShareLinks(c *gin.Context) {
-	sls, err := h.svc.ListShareLinks(callerID(c))
+	sls, err := h.svc.ListShareLinks(getUserID(c))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -653,7 +633,7 @@ func (h *AssetHandler) ListShareLinks(c *gin.Context) {
 // DELETE /share-links/:token
 func (h *AssetHandler) RevokeShareLink(c *gin.Context) {
 	token := c.Param("token")
-	if err := h.svc.RevokeShareLink(token, callerID(c)); err != nil {
+	if err := h.svc.RevokeShareLink(token, getUserID(c)); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -702,7 +682,7 @@ func (h *AssetHandler) AddComment(c *gin.Context) {
 		respondBadRequest(c, "content required")
 		return
 	}
-	comment, err := h.svc.AddComment(uint(id), callerID(c), body.Content, body.ParentID, body.XRatio, body.YRatio)
+	comment, err := h.svc.AddComment(uint(id), getUserID(c), body.Content, body.ParentID, body.XRatio, body.YRatio)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -713,7 +693,7 @@ func (h *AssetHandler) AddComment(c *gin.Context) {
 // DELETE /assets/:id/comments/:cid
 func (h *AssetHandler) DeleteComment(c *gin.Context) {
 	cid, _ := strconv.ParseUint(c.Param("cid"), 10, 64)
-	if err := h.svc.DeleteComment(uint(cid), callerID(c)); err != nil {
+	if err := h.svc.DeleteComment(uint(cid), getUserID(c)); err != nil {
 		respondErr(c, http.StatusForbidden, err.Error())
 		return
 	}
@@ -724,7 +704,7 @@ func (h *AssetHandler) DeleteComment(c *gin.Context) {
 
 // GET /account/quota
 func (h *AssetHandler) GetQuota(c *gin.Context) {
-	q, err := h.svc.GetQuota(tenantID(c))
+	q, err := h.svc.GetQuota(getTenantID(c))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -784,7 +764,7 @@ func (h *AssetHandler) CreateCrawlJob(c *gin.Context) {
 	if body.Limit == 0 {
 		body.Limit = 20
 	}
-	job, err := h.svc.CreateCrawlJob(tenantID(c), body.Source, body.Query, body.AssetType, body.License, body.Limit, body.CrawlDepth, body.URLPattern, callerID(c))
+	job, err := h.svc.CreateCrawlJob(getTenantID(c), body.Source, body.Query, body.AssetType, body.License, body.Limit, body.CrawlDepth, body.URLPattern, getUserID(c))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -833,7 +813,7 @@ func (h *AssetHandler) CancelCrawlJob(c *gin.Context) {
 //   - DB 存储（/api/v1/media/...）：302 重定向到 ServeMedia（该端点已支持 Range）。
 func (h *AssetHandler) Stream(c *gin.Context) {
 	id, _ := strconv.ParseUint(c.Param("id"), 10, 64)
-	asset, err := h.svc.GetByID(uint(id), callerID(c))
+	asset, err := h.svc.GetByID(uint(id), getUserID(c))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "asset not found")
 		return

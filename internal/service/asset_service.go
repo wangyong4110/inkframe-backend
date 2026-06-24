@@ -572,11 +572,6 @@ func (s *AssetService) ToggleLike(assetID, userID uint) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	delta := 1
-	if !liked {
-		delta = -1
-	}
-	_ = s.assetRepo.IncrLikeCount(assetID, delta)
 	return liked, nil
 }
 

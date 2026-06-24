@@ -112,18 +112,10 @@ type shotWithAudio struct {
 	AudioURL string `json:"audio_url"`
 }
 
-// resolveAudioURL 将 AudioPath 转换为前端可用的 URL：
-// - file:// → 指向后端 serve 端点（/api/v1/videos/:id/storyboard/:shot_id/audio）
-// - http(s):// → 原样返回
-// - 空 → 返回空字符串
+// resolveAudioURL returns the serve endpoint for a shot's voice audio.
+// The endpoint delegates to the first VoiceSegment with audio.
 func resolveAudioURL(videoID uint, shot *model.StoryboardShot) string {
-	if shot.AudioPath == "" {
-		return ""
-	}
-	if strings.HasPrefix(shot.AudioPath, "file://") {
-		return fmt.Sprintf("/api/v1/videos/%d/storyboard/%d/audio", videoID, shot.ID)
-	}
-	return shot.AudioPath
+	return fmt.Sprintf("/api/v1/videos/%d/storyboard/%d/audio", videoID, shot.ID)
 }
 
 // ReviewStoryboard 对分镜脚本进行 AI 专业审查（异步任务）
@@ -236,24 +228,30 @@ func (h *VideoHandler) ServeAudio(c *gin.Context) {
 		return
 	}
 
-	if shot.AudioPath == "" {
+	// Load first voice segment with audio
+	segs, _ := h.videoService.ListVoiceSegments(shot.ID)
+	var audioPath string
+	for _, seg := range segs {
+		if seg.AudioPath != "" {
+			audioPath = seg.AudioPath
+			break
+		}
+	}
+	if audioPath == "" {
 		respondErr(c, http.StatusNotFound, "no audio for this shot")
 		return
 	}
-	// HTTP/HTTPS URL（OSS 或 DB media endpoint）— 重定向
-	if strings.HasPrefix(shot.AudioPath, "http://") || strings.HasPrefix(shot.AudioPath, "https://") {
-		c.Redirect(http.StatusFound, shot.AudioPath)
+	if strings.HasPrefix(audioPath, "http://") || strings.HasPrefix(audioPath, "https://") {
+		c.Redirect(http.StatusFound, audioPath)
 		return
 	}
-	// file:// 本地路径（兼容未配置存储服务的情况）
-	if strings.HasPrefix(shot.AudioPath, "file://") {
-		filePath := strings.TrimPrefix(shot.AudioPath, "file://")
+	if strings.HasPrefix(audioPath, "file://") {
+		filePath := strings.TrimPrefix(audioPath, "file://")
 		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
 		c.File(filePath)
 		return
 	}
-	// /api/v1/media/:id 相对路径 — 重定向
-	c.Redirect(http.StatusFound, shot.AudioPath)
+	c.Redirect(http.StatusFound, audioPath)
 }
 
 // UpdateStoryboardShot 更新分镜（支持部分字段更新）

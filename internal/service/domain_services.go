@@ -99,6 +99,9 @@ var providerDisplayNames = map[string]string{
 	"google":            "Gemini (Google)",
 	"kling":             "可灵 (Kling)",
 	"seedance":          "Seedance",
+	"happyhorse":        "HappyHorse（阿里云百炼）",
+	"aliyun-tts":        "阿里云 CosyVoice",
+	"qwen-tts":          "千问 TTS（阿里云百炼）",
 	ai.ProviderNameVolcengineVisual:  "火山引擎图像",
 	ai.ProviderNameJimengVideo:       "即梦视频3.0（火山引擎）",
 }
@@ -113,6 +116,16 @@ func providerHasCredentials(p *model.ModelProvider) bool {
 		return strings.TrimSpace(p.APIKey) != "" && strings.TrimSpace(p.APISecretKey) != ""
 	}
 	return strings.TrimSpace(p.APIKey) != ""
+}
+
+// effectiveModelName returns the model name to use when constructing a provider.
+// DefaultModel takes precedence; falls back to APIVersion for backward compatibility.
+// Do NOT use for doubao-speech (APIVersion = resourceID) or doubao-speech-v1 (APIVersion = cluster).
+func effectiveModelName(p *model.ModelProvider) string {
+	if p.DefaultModel != "" {
+		return p.DefaultModel
+	}
+	return p.APIVersion
 }
 
 func capableProviderDisplayName(providerName, dbDisplayName string) string {
@@ -134,16 +147,16 @@ func normalizeProviderType(t string) string {
 	return strings.ToLower(t)
 }
 
-// listCapableProviders returns active, key-bearing providers whose Type field matches typeFilter.
+// listCapableProviders returns active, key-bearing providers that have models of the given type.
 func (s *ModelService) listCapableProviders(tenantID uint, typeFilter string) ([]CapableProvider, error) {
-	providers, err := s.providerRepo.ListByTenant(tenantID)
+	normalizedType := normalizeProviderType(typeFilter)
+	providers, err := s.providerRepo.ListByModelType(tenantID, normalizedType)
 	if err != nil {
 		return nil, err
 	}
-	want := normalizeProviderType(typeFilter)
 	var result []CapableProvider
 	for _, p := range providers {
-		if !p.IsActive || normalizeProviderType(p.Type) != want {
+		if !p.IsActive {
 			continue
 		}
 		if providerHasCredentials(p) {
@@ -165,23 +178,25 @@ func (s *ModelService) GetProvider(id uint, tenantID uint) (*model.ModelProvider
 	return s.providerRepo.GetByIDAndTenant(id, tenantID)
 }
 
-// suitableTasksForProviderType returns the suitable_tasks JSON string for a provider type.
-func suitableTasksForProviderType(providerType string) string {
+// typeForProviderType returns the model type string for a provider type.
+func typeForProviderType(providerType string) string {
 	switch strings.ToLower(providerType) {
 	case "image":
-		return `["image_gen"]`
+		return "image"
 	case "img2img":
-		return `["img2img_gen"]`
+		return "img2img"
 	case "video":
-		return `["video_gen"]`
+		return "video"
 	case "embedding":
-		return `["embedding"]`
+		return "embedding"
 	case "voice", "tts":
-		return `["voice_gen"]`
+		return "voice"
 	case "sfx":
-		return `["sfx_gen"]`
+		return "sfx"
+	case "music":
+		return "music"
 	default: // "llm" and anything unrecognised
-		return `["chapter"]`
+		return "llm"
 	}
 }
 
@@ -190,7 +205,7 @@ func (s *ModelService) seedProviderModel(provider *model.ModelProvider) {
 	if provider.APIVersion == "" {
 		return
 	}
-	tasks := suitableTasksForProviderType(provider.Type)
+	mtype := "llm"
 	existing, _ := s.modelRepo.List(&provider.ID, 0)
 	for _, m := range existing {
 		if m.Name == provider.APIVersion {
@@ -198,19 +213,17 @@ func (s *ModelService) seedProviderModel(provider *model.ModelProvider) {
 		}
 	}
 	m := &model.AIModel{
-		ProviderID:    provider.ID,
-		Name:          provider.APIVersion,
-		DisplayName:   provider.APIVersion,
-		SuitableTasks: tasks,
-		IsActive:      true,
-		IsAvailable:   true,
+		ProviderID:  provider.ID,
+		Name:        provider.APIVersion,
+		DisplayName: provider.APIVersion,
+		Type:        mtype,
+		IsActive:    true,
 	}
 	_ = s.modelRepo.Create(m)
 }
 
 // SeedAllProviders seeds AIModel rows for every existing provider that has an
-// api_version set but no matching model row yet. Also fixes existing rows that
-// were created with is_available=false due to a prior bug in CreateModel.
+// api_version set but no matching model row yet.
 // Call once at startup.
 func (s *ModelService) SeedAllProviders() {
 	providers, err := s.providerRepo.List()
@@ -219,21 +232,9 @@ func (s *ModelService) SeedAllProviders() {
 	}
 	for _, p := range providers {
 		s.seedProviderModel(p)
-		// 补全租户私有非 LLM 供应商的模型（可能是用户之前新建时漏复制的）
-		if p.TenantID != 0 && p.Type != "llm" && p.Type != "embedding" {
+		// 补全租户私有供应商的模型（可能是用户之前新建时漏复制的）
+		if p.TenantID != 0 {
 			s.copySystemModels(p)
-		}
-	}
-	// One-time fix: activate any manually-created models that have is_active=true
-	// but is_available=false (created before the bug was fixed).
-	all, err := s.modelRepo.List(nil, 0)
-	if err != nil {
-		return
-	}
-	for _, m := range all {
-		if m.IsActive && !m.IsAvailable {
-			m.IsAvailable = true
-			_ = s.modelRepo.Update(m)
 		}
 	}
 }
@@ -254,17 +255,16 @@ func (s *ModelService) copySystemModels(target *model.ModelProvider) {
 		return
 	}
 	for _, m := range sysModels {
-		if !m.IsActive || !m.IsAvailable {
+		if !m.IsActive {
 			continue
 		}
 		newM := &model.AIModel{
-			ProviderID:    target.ID,
-			Name:          m.Name,
-			DisplayName:   m.DisplayName,
-			SuitableTasks: m.SuitableTasks,
-			Quality:       m.Quality,
-			IsActive:      true,
-			IsAvailable:   true,
+			ProviderID:  target.ID,
+			Name:        m.Name,
+			DisplayName: m.DisplayName,
+			Type:        m.Type,
+			Quality:     m.Quality,
+			IsActive:    true,
 		}
 		_ = s.modelRepo.FirstOrCreate(newM)
 	}
@@ -275,7 +275,6 @@ func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, ten
 		TenantID:     tenantID,
 		Name:         req.Name,
 		DisplayName:  req.DisplayName,
-		Type:         req.Type,
 		APIEndpoint:  req.APIEndpoint,
 		APIKey:       req.APIKey,
 		APISecretKey: req.APISecretKey,
@@ -284,17 +283,13 @@ func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, ten
 		Timeout:      req.Timeout,
 		Concurrency:  req.Concurrency,
 		RateLimit:    req.RateLimit,
-		MaxTokens:    req.MaxTokens,
 	}
 	if err := s.providerRepo.Create(provider); err != nil {
 		return nil, err
 	}
 	s.seedProviderModel(provider)
-	// 非 LLM 供应商（语音/图像/视频/音效）：从同名系统供应商复制音色/模型记录，
-	// 确保租户私有供应商创建后立即可在角色配音等界面选到音色。
-	if provider.Type != "llm" && provider.Type != "embedding" {
-		s.copySystemModels(provider)
-	}
+	// 从同名系统供应商复制模型记录，确保租户私有供应商创建后立即可在配音等界面选到音色。
+	s.copySystemModels(provider)
 	return provider, nil
 }
 
@@ -308,9 +303,6 @@ func (s *ModelService) UpdateProvider(id uint, tenantID uint, req *model.UpdateM
 	}
 	if req.DisplayName != "" {
 		provider.DisplayName = req.DisplayName
-	}
-	if req.Type != "" {
-		provider.Type = req.Type
 	}
 	if req.APIEndpoint != "" {
 		provider.APIEndpoint = req.APIEndpoint
@@ -335,9 +327,6 @@ func (s *ModelService) UpdateProvider(id uint, tenantID uint, req *model.UpdateM
 	}
 	if req.RateLimit != nil {
 		provider.RateLimit = *req.RateLimit
-	}
-	if req.MaxTokens != nil {
-		provider.MaxTokens = *req.MaxTokens
 	}
 	if err := s.providerRepo.Update(provider); err != nil {
 		return nil, err
@@ -367,6 +356,64 @@ func (s *ModelService) DeleteProvider(id uint, tenantID uint) error {
 		s.aiService.InvalidateProviderCache(provider.Name)
 	}
 	return nil
+}
+
+// SyncGroupProviders 将同组所有系统供应商的凭证批量同步到租户层，返回 canonical 记录。
+func (s *ModelService) SyncGroupProviders(groupName string, tenantID uint, apiKey, apiSecretKey, apiVersion string, isActive bool) (*model.ModelProvider, error) {
+	sysList, err := s.providerRepo.ListSystemByGroup(groupName)
+	if err != nil {
+		return nil, fmt.Errorf("list system group: %w", err)
+	}
+	if len(sysList) == 0 {
+		return nil, fmt.Errorf("group %q not found", groupName)
+	}
+
+	var canonical *model.ModelProvider
+	for _, sys := range sysList {
+		existing, err := s.providerRepo.GetTenantProviderByName(tenantID, sys.Name)
+		if err != nil {
+			// 不存在则创建
+			req := &model.CreateModelProviderRequest{
+				Name:         sys.Name,
+				DisplayName:  sys.DisplayName,
+				APIEndpoint:  sys.APIEndpoint,
+				APIKey:       apiKey,
+				APISecretKey: apiSecretKey,
+				APIVersion:   apiVersion,
+				IsActive:     isActive,
+			}
+			created, err2 := s.CreateProvider(req, tenantID)
+			if err2 != nil {
+				return nil, fmt.Errorf("create provider %s: %w", sys.Name, err2)
+			}
+			if sys.IsGroupCanonical {
+				canonical = created
+			}
+		} else {
+			// 已存在则更新凭证
+			existing.APIKey = apiKey
+			existing.IsActive = isActive
+			if apiSecretKey != "" {
+				existing.APISecretKey = apiSecretKey
+			}
+			if apiVersion != "" {
+				existing.APIVersion = apiVersion
+			}
+			if err2 := s.providerRepo.Update(existing); err2 != nil {
+				return nil, fmt.Errorf("update provider %s: %w", sys.Name, err2)
+			}
+			if s.aiService != nil {
+				s.aiService.InvalidateProviderCache(sys.Name)
+			}
+			if sys.IsGroupCanonical {
+				canonical = existing
+			}
+		}
+	}
+	if canonical == nil {
+		return nil, fmt.Errorf("canonical provider not found in group %q", groupName)
+	}
+	return canonical, nil
 }
 
 func (s *ModelService) TestProvider(id uint, tenantID uint) (interface{}, error) {
@@ -417,13 +464,15 @@ func (s *ModelService) CreateModel(req *model.CreateAIModelRequest, tenantID uin
 		return nil, fmt.Errorf("provider does not belong to your tenant")
 	}
 	m := &model.AIModel{
-		ProviderID:    req.ProviderID,
-		Name:          req.Name,
-		SuitableTasks: req.TaskTypes,
-		MaxTokens:     req.MaxTokens,
-		CostPer1K:     req.CostPer1K,
-		IsActive:      true,
-		IsAvailable:   true,
+		ProviderID:  req.ProviderID,
+		Name:        req.Name,
+		Type:        req.Type,
+		MaxTokens:   req.MaxTokens,
+		Timeout:     req.Timeout,
+		Concurrency: req.Concurrency,
+		RateLimit:   req.RateLimit,
+		CostPer1K:   req.CostPer1K,
+		IsActive:    true,
 	}
 	return m, s.modelRepo.Create(m)
 }
@@ -440,14 +489,32 @@ func (s *ModelService) UpdateModel(id uint, tenantID uint, req *model.UpdateAIMo
 	if req.Name != "" {
 		m.Name = req.Name
 	}
-	if req.TaskTypes != "" {
-		m.SuitableTasks = req.TaskTypes
+	if req.DisplayName != "" {
+		m.DisplayName = req.DisplayName
+	}
+	if req.Type != "" {
+		m.Type = req.Type
 	}
 	if req.MaxTokens != 0 {
 		m.MaxTokens = req.MaxTokens
 	}
+	if req.Quality != nil {
+		m.Quality = *req.Quality
+	}
+	if req.Timeout != nil {
+		m.Timeout = *req.Timeout
+	}
+	if req.Concurrency != nil {
+		m.Concurrency = *req.Concurrency
+	}
+	if req.RateLimit != nil {
+		m.RateLimit = *req.RateLimit
+	}
 	if req.CostPer1K != 0 {
 		m.CostPer1K = req.CostPer1K
+	}
+	if req.IsActive != nil {
+		m.IsActive = *req.IsActive
 	}
 	return m, s.modelRepo.Update(m)
 }

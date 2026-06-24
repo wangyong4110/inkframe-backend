@@ -2,6 +2,7 @@ package repository
 
 import (
 	"errors"
+	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"gorm.io/gorm"
@@ -134,31 +135,28 @@ func (r *VideoRepository) GetPublicByID(id uint) (*model.Video, error) {
 	return &v, err
 }
 
-// IncrViewCount 视频播放量+1
+// IncrViewCount 视频播放量+1（写入 ink_content_stats）
 func (r *VideoRepository) IncrViewCount(id uint) error {
-	return r.db.Model(&model.Video{}).Where("id = ?", id).UpdateColumn("view_count", gorm.Expr("view_count + 1")).Error
+	r.db.Exec(`INSERT INTO ink_content_stats (entity_type, entity_id, view_count, like_count, comment_count, updated_at)
+		VALUES ('video', ?, 1, 0, 0, NOW())
+		ON DUPLICATE KEY UPDATE view_count = view_count + 1, updated_at = NOW()`, id)
+	return nil
 }
 
-// IncrLikeCount 点赞数 delta（+1 或 -1），递减时防止低于 0
+// IncrLikeCount 点赞数 delta（+1 或 -1，写入 ink_content_stats）
 func (r *VideoRepository) IncrLikeCount(id uint, delta int) error {
-	if delta >= 0 {
-		return r.db.Model(&model.Video{}).Where("id = ?", id).
-			UpdateColumn("like_count", gorm.Expr("like_count + ?", delta)).Error
-	}
-	// 递减：WHERE like_count > 0 防止下溢
-	return r.db.Model(&model.Video{}).Where("id = ? AND like_count > 0", id).
-		UpdateColumn("like_count", gorm.Expr("like_count + ?", delta)).Error
+	r.db.Exec(`INSERT INTO ink_content_stats (entity_type, entity_id, view_count, like_count, comment_count, updated_at)
+		VALUES ('video', ?, 0, ?, 0, NOW())
+		ON DUPLICATE KEY UPDATE like_count = GREATEST(0, like_count + ?), updated_at = NOW()`, id, delta, delta)
+	return nil
 }
 
-// IncrCommentCount 评论数 delta（+1 或 -1），递减时防止低于 0
+// IncrCommentCount 评论数 delta（写入 ink_content_stats）
 func (r *VideoRepository) IncrCommentCount(id uint, delta int) error {
-	if delta >= 0 {
-		return r.db.Model(&model.Video{}).Where("id = ?", id).
-			UpdateColumn("comment_count", gorm.Expr("comment_count + ?", delta)).Error
-	}
-	// 递减：WHERE comment_count > 0 防止下溢
-	return r.db.Model(&model.Video{}).Where("id = ? AND comment_count > 0", id).
-		UpdateColumn("comment_count", gorm.Expr("comment_count + ?", delta)).Error
+	r.db.Exec(`INSERT INTO ink_content_stats (entity_type, entity_id, view_count, like_count, comment_count, updated_at)
+		VALUES ('video', ?, 0, 0, ?, NOW())
+		ON DUPLICATE KEY UPDATE comment_count = GREATEST(0, comment_count + ?), updated_at = NOW()`, id, delta, delta)
+	return nil
 }
 
 // UpdateHotScore 更新热度分
@@ -192,21 +190,72 @@ func (r *VideoRepository) BatchUpdateHotScores(updates map[uint]float64) error {
 	return nil
 }
 
-// ListPublicForHotCalc 列出所有公开视频用于热度分批量计算
-func (r *VideoRepository) ListPublicForHotCalc() ([]*model.Video, error) {
-	var videos []*model.Video
-	err := r.db.Model(&model.Video{}).Where("is_published = ? AND visibility = ?", true, "public").
-		Select("id, view_count, like_count, comment_count, published_at").Find(&videos).Error
-	return videos, err
+// VideoHotCalcRow 热度分计算辅助行（JOIN content_stats 结果）
+type VideoHotCalcRow struct {
+	ID           uint
+	PublishedAt  *time.Time
+	ViewCount    int
+	LikeCount    int
+	CommentCount int
 }
 
-// ListPublicForHotCalcPaged 分页列出公开视频用于热度分批量计算（避免全量加载）
-func (r *VideoRepository) ListPublicForHotCalcPaged(limit, offset int) ([]*model.Video, error) {
-	var videos []*model.Video
-	err := r.db.Model(&model.Video{}).Where("is_published = ? AND visibility = ?", true, "public").
-		Select("id, view_count, like_count, comment_count, published_at").
-		Order("id ASC").Limit(limit).Offset(offset).Find(&videos).Error
-	return videos, err
+// ListPublicForHotCalc 列出所有公开视频用于热度分批量计算（JOIN ink_content_stats）
+func (r *VideoRepository) ListPublicForHotCalc() ([]VideoHotCalcRow, error) {
+	var rows []VideoHotCalcRow
+	err := r.db.Raw(`SELECT v.id, v.published_at,
+		COALESCE(cs.view_count, 0) AS view_count,
+		COALESCE(cs.like_count, 0) AS like_count,
+		COALESCE(cs.comment_count, 0) AS comment_count
+		FROM ink_video v
+		LEFT JOIN ink_content_stats cs ON cs.entity_type = 'video' AND cs.entity_id = v.id
+		WHERE v.is_published = 1 AND v.visibility = 'public' AND v.deleted_at IS NULL`).
+		Scan(&rows).Error
+	return rows, err
+}
+
+// ListPublicForHotCalcPaged 分页列出公开视频用于热度分批量计算（JOIN ink_content_stats，避免全量加载）
+func (r *VideoRepository) ListPublicForHotCalcPaged(limit, offset int) ([]VideoHotCalcRow, error) {
+	var rows []VideoHotCalcRow
+	err := r.db.Raw(`SELECT v.id, v.published_at,
+		COALESCE(cs.view_count, 0) AS view_count,
+		COALESCE(cs.like_count, 0) AS like_count,
+		COALESCE(cs.comment_count, 0) AS comment_count
+		FROM ink_video v
+		LEFT JOIN ink_content_stats cs ON cs.entity_type = 'video' AND cs.entity_id = v.id
+		WHERE v.is_published = 1 AND v.visibility = 'public' AND v.deleted_at IS NULL
+		ORDER BY v.id ASC LIMIT ? OFFSET ?`, limit, offset).
+		Scan(&rows).Error
+	return rows, err
+}
+
+// HydrateVideoStats 批量填充视频统计字段（ViewCount/LikeCount/CommentCount）
+func (r *VideoRepository) HydrateVideoStats(videos []*model.Video) {
+	if len(videos) == 0 {
+		return
+	}
+	ids := make([]uint, 0, len(videos))
+	for _, v := range videos {
+		ids = append(ids, v.ID)
+	}
+	var rows []struct {
+		EntityID     uint
+		ViewCount    int
+		LikeCount    int
+		CommentCount int
+	}
+	r.db.Raw(`SELECT entity_id, view_count, like_count, comment_count
+		FROM ink_content_stats WHERE entity_type = 'video' AND entity_id IN ?`, ids).Scan(&rows)
+	statsMap := make(map[uint]struct{ v, l, c int }, len(rows))
+	for _, row := range rows {
+		statsMap[row.EntityID] = struct{ v, l, c int }{row.ViewCount, row.LikeCount, row.CommentCount}
+	}
+	for _, vid := range videos {
+		if s, ok := statsMap[vid.ID]; ok {
+			vid.ViewCount = s.v
+			vid.LikeCount = s.l
+			vid.CommentCount = s.c
+		}
+	}
 }
 
 // ─── VideoLikeRepository ────────────────────────────────────────────────────
@@ -217,20 +266,29 @@ func NewVideoLikeRepository(db *gorm.DB) *VideoLikeRepository {
 	return &VideoLikeRepository{db: db}
 }
 
-// Toggle 点赞/取消，返回最终状态（事务内执行，防止并发竞态）
+// Toggle 点赞/取消，返回最终状态。
 func (r *VideoLikeRepository) Toggle(videoID, userID uint) (liked bool, err error) {
 	err = r.db.Transaction(func(tx *gorm.DB) error {
-		var like model.VideoLike
-		result := tx.Where("video_id = ? AND user_id = ?", videoID, userID).First(&like)
+		var like model.EntityLike
+		result := tx.Where("entity_type = 'video' AND entity_id = ? AND user_id = ?", videoID, userID).First(&like)
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			liked = true
-			return tx.Create(&model.VideoLike{VideoID: videoID, UserID: userID}).Error
+			if err2 := tx.Create(&model.EntityLike{EntityType: "video", EntityID: videoID, UserID: userID}).Error; err2 != nil {
+				return err2
+			}
+			return tx.Exec(`INSERT INTO ink_content_stats (entity_type, entity_id, view_count, like_count, comment_count, updated_at)
+				VALUES ('video', ?, 0, 1, 0, NOW())
+				ON DUPLICATE KEY UPDATE like_count = like_count + 1, updated_at = NOW()`, videoID).Error
 		}
 		if result.Error != nil {
 			return result.Error
 		}
 		liked = false
-		return tx.Delete(&like).Error
+		if err2 := tx.Delete(&like).Error; err2 != nil {
+			return err2
+		}
+		return tx.Exec(`UPDATE ink_content_stats SET like_count = GREATEST(0, like_count - 1), updated_at = NOW()
+			WHERE entity_type = 'video' AND entity_id = ?`, videoID).Error
 	})
 	return
 }
@@ -238,7 +296,7 @@ func (r *VideoLikeRepository) Toggle(videoID, userID uint) (liked bool, err erro
 // Exists 检查是否已点赞
 func (r *VideoLikeRepository) Exists(videoID, userID uint) (bool, error) {
 	var count int64
-	err := r.db.Model(&model.VideoLike{}).Where("video_id = ? AND user_id = ?", videoID, userID).Count(&count).Error
+	err := r.db.Model(&model.EntityLike{}).Where("entity_type = 'video' AND entity_id = ? AND user_id = ?", videoID, userID).Count(&count).Error
 	return count > 0, err
 }
 
@@ -251,13 +309,23 @@ func NewVideoCommentRepository(db *gorm.DB) *VideoCommentRepository {
 }
 
 func (r *VideoCommentRepository) Create(c *model.VideoComment) error {
-	return r.db.Create(c).Error
+	ec := &model.EntityComment{
+		EntityType: "video", EntityID: c.VideoID,
+		UserID: c.UserID, Content: c.Content, ParentID: c.ParentID,
+	}
+	if err := r.db.Create(ec).Error; err != nil {
+		return err
+	}
+	c.ID = ec.ID
+	c.CreatedAt = ec.CreatedAt
+	c.UpdatedAt = ec.UpdatedAt
+	return nil
 }
 
 func (r *VideoCommentRepository) ListByVideo(videoID uint, page, size int) ([]*model.VideoComment, int64, error) {
-	var list []*model.VideoComment
+	var list []*model.EntityComment
 	var total int64
-	base := r.db.Model(&model.VideoComment{}).Where("video_id = ?", videoID)
+	base := r.db.Model(&model.EntityComment{}).Where("entity_type = 'video' AND entity_id = ?", videoID)
 	if err := base.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
@@ -265,14 +333,21 @@ func (r *VideoCommentRepository) ListByVideo(videoID uint, page, size int) ([]*m
 	if err := base.Order("created_at DESC").Offset(offset).Limit(size).Find(&list).Error; err != nil {
 		return nil, 0, err
 	}
-	return list, total, nil
+	out := make([]*model.VideoComment, len(list))
+	for i, ec := range list {
+		out[i] = &model.VideoComment{ID: ec.ID, VideoID: ec.EntityID, UserID: ec.UserID, Content: ec.Content, ParentID: ec.ParentID, CreatedAt: ec.CreatedAt, UpdatedAt: ec.UpdatedAt}
+	}
+	return out, total, nil
 }
 
 func (r *VideoCommentRepository) GetByID(id uint) (*model.VideoComment, error) {
-	var c model.VideoComment
-	return &c, r.db.First(&c, id).Error
+	var ec model.EntityComment
+	if err := r.db.Where("entity_type = 'video' AND id = ?", id).First(&ec).Error; err != nil {
+		return nil, err
+	}
+	return &model.VideoComment{ID: ec.ID, VideoID: ec.EntityID, UserID: ec.UserID, Content: ec.Content, ParentID: ec.ParentID, CreatedAt: ec.CreatedAt, UpdatedAt: ec.UpdatedAt}, nil
 }
 
 func (r *VideoCommentRepository) Delete(id uint) error {
-	return r.db.Delete(&model.VideoComment{}, id).Error
+	return r.db.Where("entity_type = 'video' AND id = ?", id).Delete(&model.EntityComment{}).Error
 }

@@ -65,6 +65,42 @@ func (r *ModelProviderRepository) GetByIDAndTenant(id uint, tenantID uint) (*mod
 	return &provider, nil
 }
 
+// ListSystemByGroup 获取某个分组下的所有系统供应商
+func (r *ModelProviderRepository) ListSystemByGroup(groupName string) ([]*model.ModelProvider, error) {
+	var providers []*model.ModelProvider
+	if err := r.db.Where("tenant_id = 0 AND group_name = ?", groupName).Order("id").Find(&providers).Error; err != nil {
+		return nil, err
+	}
+	return providers, nil
+}
+
+// ListByModelType 获取拥有指定类型模型的提供商列表（含系统级 tenant_id=0）
+func (r *ModelProviderRepository) ListByModelType(tenantID uint, modelType string) ([]*model.ModelProvider, error) {
+	var providers []*model.ModelProvider
+	var err error
+	if modelType == "voice" {
+		err = r.db.Where(
+			"(tenant_id = ? OR tenant_id = 0) AND deleted_at IS NULL AND is_active = 1 AND voices_json != '' AND voices_json != '[]'",
+			tenantID,
+		).Find(&providers).Error
+	} else {
+		err = r.db.Where(
+			"(tenant_id = ? OR tenant_id = 0) AND deleted_at IS NULL AND id IN (SELECT DISTINCT provider_id FROM ink_ai_model WHERE type = ? AND is_active = 1 AND deleted_at IS NULL)",
+			tenantID, modelType,
+		).Find(&providers).Error
+	}
+	return providers, err
+}
+
+// GetTenantProviderByName 获取租户的指定名称供应商（不含系统级）
+func (r *ModelProviderRepository) GetTenantProviderByName(tenantID uint, name string) (*model.ModelProvider, error) {
+	var provider model.ModelProvider
+	if err := r.db.Where("tenant_id = ? AND name = ?", tenantID, name).First(&provider).Error; err != nil {
+		return nil, err
+	}
+	return &provider, nil
+}
+
 // GetSystemProvider 获取系统级提供商（tenant_id=0）
 func (r *ModelProviderRepository) GetSystemProvider(name string) (*model.ModelProvider, error) {
 	var provider model.ModelProvider
@@ -112,27 +148,46 @@ func NewAIModelRepository(db *gorm.DB) *AIModelRepository {
 	return &AIModelRepository{db: db}
 }
 
+// taskTypeToModelType maps the caller-facing task type string to ink_ai_model.type values.
+func taskTypeToModelType(taskType string) string {
+	switch taskType {
+	case "voice_gen":
+		return "voice"
+	case "image_gen":
+		return "image"
+	case "img2img_gen":
+		return "img2img"
+	case "video_gen":
+		return "video"
+	case "music_gen":
+		return "music"
+	case "sfx_gen", "sfx":
+		return "sfx"
+	case "embedding":
+		return "embedding"
+	default:
+		return "llm"
+	}
+}
+
 // GetAvailableByTaskType 获取任务可用的模型。
-// suitable_tasks 列存储 JSON 数组字符串（如 `["chapter","image"]`）；使用 LIKE 在 DB 层过滤，
-// 兼容 MySQL 和 SQLite，无需全量加载后在内存中遍历。
-// 仅返回已配置完整凭据的提供商下的模型：
-//   - needs_secret_key=true（如 doubao-speech-v1、kling 系列）：api_key 和 api_secret_key 均非空
-//   - needs_secret_key=false（如 doubao-speech、openai）：api_key 非空即可
-//
-// 与 providerHasCredentials（domain_services.go）保持一致，避免模型显示但实际调用失败。
-// GetAvailableByTaskType 获取指定任务类型的可用模型。
+// voice_gen 任务类型从 ink_model_provider.voices_json 读取音色列表，其余任务类型从 ink_ai_model 查询。
 // tenantID > 0 时只返回该租户自己的模型 + 系统模型（tenant_id=0）；
-// tenantID = 0 时仅返回系统模型（用于内部无租户上下文的场景）。
+// tenantID = 0 时仅返回系统模型。
 func (r *AIModelRepository) GetAvailableByTaskType(taskType string, tenantID uint) ([]*model.AIModel, error) {
+	modelType := taskTypeToModelType(taskType)
+	if modelType == "voice" {
+		return r.getVoicesFromProviders(tenantID)
+	}
+
 	var models []*model.AIModel
-	pattern := `%"` + taskType + `"%`
 	credCond := "(CASE WHEN p.needs_secret_key = 1 " +
 		"THEN (p.api_key != '' AND p.api_secret_key != '') " +
 		"ELSE p.api_key != '' END)"
 	query := r.db.Preload("Provider").
 		Joins("JOIN ink_model_provider p ON p.id = ink_ai_model.provider_id AND p.deleted_at IS NULL").
-		Where("ink_ai_model.is_active = ? AND ink_ai_model.is_available = ? AND ink_ai_model.suitable_tasks LIKE ?"+
-			" AND "+credCond, true, true, pattern)
+		Where("ink_ai_model.is_active = ? AND ink_ai_model.type = ?"+
+			" AND "+credCond, true, modelType)
 	if tenantID > 0 {
 		query = query.Where("p.tenant_id = 0 OR p.tenant_id = ?", tenantID)
 	} else {
@@ -142,6 +197,40 @@ func (r *AIModelRepository) GetAvailableByTaskType(taskType string, tenantID uin
 		return nil, err
 	}
 	return models, nil
+}
+
+// getVoicesFromProviders 从 ink_model_provider.voices_json 构造音色 AIModel 列表。
+func (r *AIModelRepository) getVoicesFromProviders(tenantID uint) ([]*model.AIModel, error) {
+	credCond := "(CASE WHEN needs_secret_key = 1 " +
+		"THEN (api_key != '' AND api_secret_key != '') " +
+		"ELSE api_key != '' END)"
+	q := r.db.Where("deleted_at IS NULL AND is_active = 1 AND voices_json != '' AND voices_json != '[]' AND " + credCond)
+	if tenantID > 0 {
+		q = q.Where("tenant_id = 0 OR tenant_id = ?", tenantID)
+	} else {
+		q = q.Where("tenant_id = 0")
+	}
+	var providers []*model.ModelProvider
+	if err := q.Find(&providers).Error; err != nil {
+		return nil, err
+	}
+	var result []*model.AIModel
+	for _, p := range providers {
+		for _, v := range p.ParseVoices() {
+			result = append(result, &model.AIModel{
+				ProviderID:  p.ID,
+				Provider:    p,
+				Name:        v.ID,
+				DisplayName: v.Name,
+				Type:        "voice",
+				Gender:      v.Gender,
+				AgeGroup:    v.AgeGroup,
+				Quality:     v.Quality,
+				IsActive:    true,
+			})
+		}
+	}
+	return result, nil
 }
 
 // GetByID 根据ID获取模型
@@ -167,7 +256,8 @@ func (r *AIModelRepository) GetByName(name string) (*model.AIModel, error) {
 func (r *AIModelRepository) List(providerID *uint, tenantID uint) ([]*model.AIModel, error) {
 	var models []*model.AIModel
 	query := r.db.Preload("Provider").
-		Joins("JOIN ink_model_provider p ON p.id = ink_ai_model.provider_id AND p.deleted_at IS NULL")
+		Joins("JOIN ink_model_provider p ON p.id = ink_ai_model.provider_id AND p.deleted_at IS NULL").
+		Where("ink_ai_model.is_active = 1")
 
 	if tenantID > 0 {
 		query = query.Where("p.tenant_id = 0 OR p.tenant_id = ?", tenantID)

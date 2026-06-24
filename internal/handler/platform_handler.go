@@ -932,18 +932,3 @@ func (h *PlatformHandler) GetChapterIsLiked(c *gin.Context) {
 	liked := h.readingService.IsChapterLiked(chapter.ID, uid)
 	respondOK(c, gin.H{"liked": liked})
 }
-
-// getUserID 从 JWT claims 提取用户 ID（未登录返回 0）
-func getUserID(c *gin.Context) uint {
-	if v, exists := c.Get("user_id"); exists {
-		switch id := v.(type) {
-		case uint:
-			return id
-		case float64:
-			return uint(id)
-		case int:
-			return uint(id)
-		}
-	}
-	return 0
-}

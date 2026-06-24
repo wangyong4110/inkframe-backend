@@ -130,14 +130,10 @@ type Novel struct {
 	Worldview   *Worldview `json:"worldview,omitempty" gorm:"foreignKey:WorldviewID"`
 	CoverImage  string     `json:"cover_image" gorm:"size:500"`
 
-	// AI配置（项目级，作为所有生成操作的默认参数）
-	AIModel     string  `json:"ai_model" gorm:"size:100"`    // LLM 模型（章节生成等文本任务）
-	ImageModel  string  `json:"image_model" gorm:"size:100"` // 图片生成模型
-	VideoModel  string  `json:"video_model" gorm:"size:100"` // 视频生成模型
-	TTSModel    string  `json:"tts_model" gorm:"size:100"`   // 语音合成模型
+	// AI配置（项目级，作为所有文本生成操作的默认参数）
+	AIModel     string  `json:"ai_model" gorm:"size:100"` // LLM 模型（章节生成等文本任务）；图片/视频/TTS 模型由 ink_task_model_config 按任务类型配置
 	Temperature    float64 `json:"temperature" gorm:"type:decimal(3,2);default:0.7"`
 	TopP           float64 `json:"top_p" gorm:"type:decimal(3,2);default:0.9"`
-	TopK           int     `json:"top_k" gorm:"default:40"`
 	MaxTokens      int     `json:"max_tokens" gorm:"default:0"` // 0=不限制，由模型自身决定
 	TimeoutSeconds int     `json:"timeout_seconds" gorm:"default:0"` // 0=使用系统默认(300s)
 	StylePrompt string `json:"style_prompt" gorm:"type:text"`
@@ -162,9 +158,10 @@ type Novel struct {
 	IsPublished  bool       `json:"is_published" gorm:"default:false;index"`
 	PublishedAt  *time.Time `json:"published_at"`
 	Visibility   string     `json:"visibility" gorm:"size:20;default:'private'"` // private|unlisted|public
-	ViewCount    int        `json:"view_count" gorm:"default:0"`
-	LikeCount    int        `json:"like_count" gorm:"default:0"`
-	CommentCount int        `json:"comment_count" gorm:"default:0"`
+	// 统计计数（不存 ink_novel 主表，从 ink_content_stats 加载）
+	ViewCount    int `json:"view_count" gorm:"-"`
+	LikeCount    int `json:"like_count" gorm:"-"`
+	CommentCount int `json:"comment_count" gorm:"-"`
 	HotScore     float64    `json:"hot_score" gorm:"default:0;index"`
 	PlazaTags    string     `json:"plaza_tags" gorm:"type:text"` // JSON 数组，如 ["玄幻","古风"]
 
@@ -300,8 +297,6 @@ type Chapter struct {
 
 	// QualityStatus 质量状态：经质检+精修后仍不达标时标记为 "low"，默认 "ok"
 	QualityStatus string `json:"quality_status" gorm:"size:20;default:'ok'"`
-	// QualityIssues 质量问题 JSON 摘要（仅在 QualityStatus="low" 时写入）
-	QualityIssues string `json:"quality_issues,omitempty" gorm:"type:text"`
 
 	// 读者期待状态（章末 AI 提炼的"读者最想在下章得到解答的问题"，供下一章生成时作为首要约束）
 	ReaderExpectations string `json:"reader_expectations,omitempty" gorm:"type:text"`
@@ -315,8 +310,8 @@ type Chapter struct {
 	IsPublished bool       `json:"is_published" gorm:"default:false;index"`
 	PublishedAt *time.Time `json:"published_at"`
 
-	// 广场社交数据
-	LikeCount int `json:"like_count" gorm:"default:0"`
+	// 广场社交数据（不存 ink_chapter，从 ink_chapter_like COUNT 实时聚合）
+	LikeCount int `json:"like_count" gorm:"-"`
 
 	// 乐观锁版本号（协作编辑冲突检测）
 	ContentVersion uint `json:"content_version" gorm:"default:1"`
@@ -392,32 +387,6 @@ type WorldviewEntity struct {
 
 func (WorldviewEntity) TableName() string {
 	return "ink_worldview_entity"
-}
-
-// QualityReport 质量报告
-type QualityReport struct {
-	ID   uint `json:"id" gorm:"primaryKey"`
-	UUID string `json:"uuid" gorm:"uniqueIndex;size:36"`
-	TargetType string `json:"target_type" gorm:"size:50;index:idx_quality_target,priority:1"`
-	// novel=小说, chapter=章节, video=视频
-
-	TargetID uint `json:"target_id" gorm:"index:idx_quality_target,priority:2;not null"`
-
-	// 整体评分
-	OverallScore     float64 `json:"overall_score" gorm:"type:decimal(5,4)"`
-	QualityScore     float64 `json:"quality_score" gorm:"type:decimal(5,4)"`
-	ConsistencyScore float64 `json:"consistency_score" gorm:"type:decimal(5,4)"`
-	CreativityScore  float64 `json:"creativity_score" gorm:"type:decimal(5,4)"`
-
-	// 详细报告（JSON）
-	Issues      string `json:"issues" gorm:"type:text"`
-	Suggestions string `json:"suggestions" gorm:"type:text"`
-
-	CreatedAt time.Time `json:"created_at"`
-}
-
-func (QualityReport) TableName() string {
-	return "ink_quality_report"
 }
 
 // ChapterVersion 章节版本
@@ -577,12 +546,8 @@ type UpdateNovelRequest struct {
 	WorldviewID *uint    `json:"worldview_id"`
 	CoverImage  string   `json:"cover_image"`
 	AIModel     string   `json:"ai_model"`
-	ImageModel  string   `json:"image_model"`
-	VideoModel  string   `json:"video_model"`
-	TTSModel    string   `json:"tts_model"`
 	Temperature *float64 `json:"temperature"`
 	TopP        *float64 `json:"top_p"`
-	TopK        *int     `json:"top_k"`
 	MaxTokens   *int     `json:"max_tokens"`
 	StylePrompt    string `json:"style_prompt"`
 	ImageStyle     string `json:"image_style"`
@@ -670,7 +635,8 @@ type Foreshadow struct {
 	// 生命周期增强字段
 	PlantedChapterNo     int    `json:"planted_chapter_no" gorm:"default:0"`          // 种下的章节序号
 	PayoffChapterNo      int    `json:"payoff_chapter_no" gorm:"default:0"`           // 预期回收章节序号（0=未规划）
-	ActualPayoffChapterNo int   `json:"actual_payoff_chapter_no" gorm:"default:0"`    // 实际兑现章节序号（0=未兑现）
+	ActualPayoffChapterNo int   `json:"actual_payoff_chapter_no" gorm:"default:0"`     // 实际兑现章节序号（0=未兑现）
+	ActualPayoffChapterID *uint `json:"actual_payoff_chapter_id,omitempty" gorm:"index"` // 实际兑现章节ID（与ActualPayoffChapterNo对称）
 	Importance           string `json:"importance" gorm:"size:20;default:'normal'"`   // critical/major/minor
 	Level                string `json:"level" gorm:"size:20;default:'sub'"`           // main/sub/detail 主线/支线/细节
 	ForeshadowType       string `json:"foreshadow_type" gorm:"size:30;default:''"`    // prop/dialogue/behavior/scene/prophecy

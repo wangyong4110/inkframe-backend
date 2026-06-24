@@ -290,12 +290,8 @@ func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequ
 	}
 	if req.CoverImage != ""     { fields["cover_image"] = req.CoverImage }
 	if req.AIModel != ""        { fields["ai_model"] = req.AIModel }
-	if req.ImageModel != ""     { fields["image_model"] = req.ImageModel }
-	if req.VideoModel != ""     { fields["video_model"] = req.VideoModel }
-	if req.TTSModel != ""       { fields["tts_model"] = req.TTSModel }
 	if req.Temperature != nil   { fields["temperature"] = *req.Temperature }
 	if req.TopP != nil          { fields["top_p"] = *req.TopP }
-	if req.TopK != nil          { fields["top_k"] = *req.TopK }
 	if req.MaxTokens != nil     { fields["max_tokens"] = *req.MaxTokens }
 	if req.StylePrompt != ""    { fields["style_prompt"] = req.StylePrompt }
 	if req.ImageStyle != ""     { fields["image_style"] = req.ImageStyle }
@@ -1523,13 +1519,6 @@ func (s *NovelService) ToggleNovelLike(novelID, userID uint) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	delta := 1
-	if !liked {
-		delta = -1
-	}
-	if err := s.novelRepo.IncrNovelLikeCount(novelID, delta); err != nil {
-		logger.Errorf("ToggleNovelLike: IncrNovelLikeCount novel=%d delta=%d: %v", novelID, delta, err)
-	}
 	return liked, nil
 }
 
@@ -1605,12 +1594,12 @@ func (s *NovelService) DeleteNovelComment(commentID, userID uint) error {
 // RecalcNovelHotScores 批量重算热度分（由后台定时任务调用）
 // hot_score = (view×0.5 + like×0.3 + comment×0.2) × (1 / (1 + ageDays×0.1))
 func (s *NovelService) RecalcNovelHotScores() error {
-	novels, err := s.novelRepo.ListPublicNovelsForHotCalc()
+	rows, err := s.novelRepo.ListPublicNovelsForHotCalc()
 	if err != nil {
 		return err
 	}
 	now := time.Now()
-	for _, n := range novels {
+	for _, n := range rows {
 		ageDays := 0.0
 		if n.PublishedAt != nil {
 			ageDays = now.Sub(*n.PublishedAt).Hours() / 24

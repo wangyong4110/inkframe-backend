@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"errors"
 	"strings"
 	"time"
 
@@ -661,17 +662,31 @@ func NewAssetLikeRepository(db *gorm.DB) *AssetLikeRepository {
 	return &AssetLikeRepository{db: db}
 }
 
+// Toggle 点赞/取消，返回最终状态。
+// like 记录写入与计数器更新在同一事务内，确保原子性。
 func (r *AssetLikeRepository) Toggle(assetID, userID uint) (liked bool, err error) {
-	var like model.AssetLike
-	err = r.db.Where("asset_id = ? AND user_id = ?", assetID, userID).First(&like).Error
-	if err == gorm.ErrRecordNotFound {
-		err = r.db.Create(&model.AssetLike{AssetID: assetID, UserID: userID, CreatedAt: time.Now()}).Error
-		return true, err
-	}
-	if err != nil {
-		return false, err
-	}
-	return false, r.db.Where("asset_id = ? AND user_id = ?", assetID, userID).Delete(&model.AssetLike{}).Error
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		var like model.AssetLike
+		result := tx.Where("asset_id = ? AND user_id = ?", assetID, userID).First(&like)
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+			if err2 := tx.Create(&model.AssetLike{AssetID: assetID, UserID: userID, CreatedAt: time.Now()}).Error; err2 != nil {
+				return err2
+			}
+			liked = true
+			return tx.Model(&model.Asset{}).Where("id = ?", assetID).
+				UpdateColumn("like_count", gorm.Expr("like_count + 1")).Error
+		}
+		if result.Error != nil {
+			return result.Error
+		}
+		if err2 := tx.Where("asset_id = ? AND user_id = ?", assetID, userID).Delete(&model.AssetLike{}).Error; err2 != nil {
+			return err2
+		}
+		liked = false
+		return tx.Model(&model.Asset{}).Where("id = ? AND like_count > 0", assetID).
+			UpdateColumn("like_count", gorm.Expr("like_count - 1")).Error
+	})
+	return
 }
 
 // ─── AssetCommentRepository ───────────────────────────────────────────────────

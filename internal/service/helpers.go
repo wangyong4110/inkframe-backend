@@ -31,6 +31,23 @@ func buildCrawlHTTPClient(proxyURL string, timeout time.Duration) *http.Client {
 	}
 }
 
+// stripMarkdownFences 剥除 AI 输出中的 ```json 或 ``` 代码围栏，返回纯内容。
+func stripMarkdownFences(s string) string {
+	s = strings.TrimSpace(s)
+	if idx := strings.Index(s, "```json"); idx != -1 {
+		s = s[idx+7:]
+		if end := strings.Index(s, "```"); end != -1 {
+			s = s[:end]
+		}
+	} else if idx := strings.Index(s, "```"); idx != -1 {
+		s = s[idx+3:]
+		if end := strings.Index(s, "```"); end != -1 {
+			s = s[:end]
+		}
+	}
+	return strings.TrimSpace(s)
+}
+
 // extractJSON extracts the first JSON object or array from text that may contain
 // markdown code fences or other surrounding content.
 // This is the single canonical implementation for the service package — do NOT
@@ -39,19 +56,7 @@ func buildCrawlHTTPClient(proxyURL string, timeout time.Duration) *http.Client {
 // 从 AI 输出中提取纯 JSON 字符串。
 // 优先提取数组（[...]）；若顶层是对象（{...}），尝试查找其内部的第一个数组。
 func extractJSON(content string) string {
-	content = strings.TrimSpace(content)
-	if idx := strings.Index(content, "```json"); idx != -1 {
-		content = content[idx+7:]
-		if end := strings.Index(content, "```"); end != -1 {
-			content = content[:end]
-		}
-	} else if idx := strings.Index(content, "```"); idx != -1 {
-		content = content[idx+3:]
-		if end := strings.Index(content, "```"); end != -1 {
-			content = content[:end]
-		}
-	}
-	content = strings.TrimSpace(content)
+	content = stripMarkdownFences(content)
 
 	// extractBracket extracts a balanced bracket expression starting at `start`.
 	extractBracket := func(s string, start int, open, close byte) string {
@@ -180,13 +185,6 @@ func sanitizeJSONStrings(s string) string {
 	return buf.String()
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // countChineseChars counts the number of CJK Unified Ideograph runes in text.
 func countChineseChars(text string) int {
 	count := 0
@@ -226,19 +224,7 @@ func sanitizeStorageName(s string) string {
 // return multi-key objects like {"new_anchors":[...],"appearing_anchors":[...]} need the
 // full object to survive.
 func extractJSONAuto(content string) string {
-	stripped := strings.TrimSpace(content)
-	if idx := strings.Index(stripped, "```json"); idx != -1 {
-		stripped = stripped[idx+7:]
-		if end := strings.Index(stripped, "```"); end != -1 {
-			stripped = stripped[:end]
-		}
-	} else if idx := strings.Index(stripped, "```"); idx != -1 {
-		stripped = stripped[idx+3:]
-		if end := strings.Index(stripped, "```"); end != -1 {
-			stripped = stripped[:end]
-		}
-	}
-	stripped = strings.TrimSpace(stripped)
+	stripped := stripMarkdownFences(content)
 	objIdx := strings.Index(stripped, "{")
 	arrIdx := strings.Index(stripped, "[")
 	if objIdx != -1 && (arrIdx == -1 || objIdx < arrIdx) {
@@ -251,19 +237,7 @@ func extractJSONAuto(content string) string {
 // without unwrapping any inner arrays. Use this when the expected result is an object,
 // not an array (contrast with extractJSON which prefers arrays for storyboard use).
 func extractJSONObject(content string) string {
-	content = strings.TrimSpace(content)
-	if idx := strings.Index(content, "```json"); idx != -1 {
-		content = content[idx+7:]
-		if end := strings.Index(content, "```"); end != -1 {
-			content = content[:end]
-		}
-	} else if idx := strings.Index(content, "```"); idx != -1 {
-		content = content[idx+3:]
-		if end := strings.Index(content, "```"); end != -1 {
-			content = content[:end]
-		}
-	}
-	content = strings.TrimSpace(content)
+	content = stripMarkdownFences(content)
 	objIdx := strings.Index(content, "{")
 	if objIdx == -1 {
 		return content

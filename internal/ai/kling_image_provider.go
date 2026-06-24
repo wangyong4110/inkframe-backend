@@ -267,15 +267,8 @@ func (p *KlingImageProvider) queryImageTask(ctx context.Context, taskID string) 
 	return &result, nil
 }
 
-// doRequest 发送 HTTP 请求（复用 KlingProvider 鉴权逻辑）
 func (p *KlingImageProvider) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {
-	kp := &KlingProvider{
-		accessKey: p.accessKey,
-		secretKey: p.secretKey,
-		endpoint:  p.endpoint,
-		client:    p.client,
-	}
-	return kp.doRequest(ctx, method, path, body)
+	return klingDoRequest(ctx, p.accessKey, p.secretKey, p.endpoint, p.client, method, path, body)
 }
 
 // parseKlingAspectRatio 将 Size 字符串解析为 Kling 支持的 aspect_ratio 枚举值。

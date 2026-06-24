@@ -1096,22 +1096,6 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			})
 		}
 
-		// 将 sfx_tags 序列化为结构化 JSON
-		var sfxTagsJSON string
-		if len(r.SFXTags) > 0 {
-			tagItems := make([]sfxTagItem, 0, len(r.SFXTags))
-			for _, t := range r.SFXTags {
-				sfxType := t.SFXType
-				if sfxType == "" {
-					sfxType = guessSFXType(t.Tag)
-				}
-				tagItems = append(tagItems, sfxTagItem{Tag: t.Tag, SFXType: sfxType, Prompt: t.Prompt})
-			}
-			if b, err := json.Marshal(tagItems); err == nil {
-				sfxTagsJSON = string(b)
-			}
-		}
-
 		shot := &model.StoryboardShot{
 			UUID:           uuid.New().String(),
 			VideoID:        videoID,
@@ -1130,7 +1114,6 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			Transition:     validTransition(r.Transition),
 			Characters:     charsJSON,
 			Scene:          sceneJSON,
-			SFXTags:        sfxTagsJSON,
 			EmotionalTone:  r.EmotionalTone,
 			Status:         "pending",
 		}

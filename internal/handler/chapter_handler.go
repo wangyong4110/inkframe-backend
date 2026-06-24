@@ -58,7 +58,7 @@ func (h *ChapterHandler) checkNovelOwnership(c *gin.Context, novelId uint) bool 
 	if h.novelService == nil {
 		return true // service not wired — skip check (backward-compat)
 	}
-	if _, err := h.novelService.GetNovel(novelId, getTenantID(c), getUserIDFromCtx(c)); err != nil {
+	if _, err := h.novelService.GetNovel(novelId, getTenantID(c), getUserID(c)); err != nil {
 		respondErr(c, http.StatusNotFound, "novel not found")
 		return false
 	}
