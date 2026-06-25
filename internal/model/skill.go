@@ -15,7 +15,7 @@ type Skill struct {
 	Level       int            `json:"level" gorm:"default:1"`
 	Description string         `json:"description" gorm:"type:text"`
 	Effect      string         `json:"effect" gorm:"type:text"`     // 效果描述
-	ImagePath   string         `json:"image_path" gorm:"size:500"`  // 效果图 URL
+	ImageURL    string         `json:"image_url" gorm:"size:500"`   // 效果图 URL
 	Tags        string         `json:"tags" gorm:"size:500"`        // JSON array of tags
 	ChapterNo   int            `json:"chapter_no" gorm:"default:0"` // 首次出现章节
 	CreatedAt   time.Time      `json:"created_at"`

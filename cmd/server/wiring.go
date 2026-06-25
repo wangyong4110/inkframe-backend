@@ -71,12 +71,12 @@ type Repositories struct {
 	TagRepo                 *repository.TagRepository
 	AssetVersionRepo        *repository.AssetVersionRepository
 	AssetCollectionRepo     *repository.AssetCollectionRepository
-	AssetShareRequestRepo   *repository.AssetShareRequestRepository
+	AssetPublishRequestRepo *repository.AssetPublishRequestRepository
 	AssetUsageRepo          *repository.AssetUsageRepository
 	AssetLikeRepo           *repository.AssetLikeRepository
 	AssetCommentRepo        *repository.AssetCommentRepository
 	CrawlJobRepo            *repository.CrawlJobRepository
-	ShareLinkRepo           *repository.ShareLinkRepository
+	ShareLinkRepo           *repository.AssetShareLinkRepository
 	SearchLogRepo           *repository.SearchLogRepository
 	TenantQuotaRepo         *repository.AssetStorageQuotaRepository
 	VideoLikeRepo           *repository.VideoLikeRepository
@@ -153,12 +153,12 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		TagRepo:               repository.NewTagRepository(db),
 		AssetVersionRepo:      repository.NewAssetVersionRepository(db),
 		AssetCollectionRepo:   repository.NewAssetCollectionRepository(db),
-		AssetShareRequestRepo: repository.NewAssetShareRequestRepository(db),
+		AssetPublishRequestRepo: repository.NewAssetPublishRequestRepository(db),
 		AssetUsageRepo:        repository.NewAssetUsageRepository(db),
 		AssetLikeRepo:         repository.NewAssetLikeRepository(db),
 		AssetCommentRepo:      repository.NewAssetCommentRepository(db),
 		CrawlJobRepo:          repository.NewCrawlJobRepository(db),
-		ShareLinkRepo:         repository.NewShareLinkRepository(db),
+		ShareLinkRepo:         repository.NewAssetShareLinkRepository(db),
 		SearchLogRepo:         repository.NewSearchLogRepository(db),
 		TenantQuotaRepo:       repository.NewAssetStorageQuotaRepository(db),
 		VideoLikeRepo:         repository.NewVideoLikeRepository(db),
@@ -672,7 +672,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 			repos.TagRepo,
 			repos.AssetVersionRepo,
 			repos.AssetCollectionRepo,
-			repos.AssetShareRequestRepo,
+			repos.AssetPublishRequestRepo,
 			repos.AssetUsageRepo,
 			repos.AssetLikeRepo,
 			repos.AssetCommentRepo,

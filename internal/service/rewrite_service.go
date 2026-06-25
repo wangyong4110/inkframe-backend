@@ -224,8 +224,7 @@ func formatPropsForPrompt(propsJSON string) string {
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-// parseForbiddenPhrases extracts []string from the new ForbiddenPhrases field,
-// with fallback to the legacy ForbiddenElems mixed-type array.
+// parseForbiddenPhrases extracts []string from the ForbiddenPhrases field.
 func parseForbiddenPhrases(bible *model.RewriteBible) []string {
 	if bible.ForbiddenPhrases != "" && bible.ForbiddenPhrases != "null" {
 		var phrases []string
@@ -233,36 +232,14 @@ func parseForbiddenPhrases(bible *model.RewriteBible) []string {
 			return phrases
 		}
 	}
-	// Fallback: try to parse legacy ForbiddenElems as a plain string array
-	if bible.ForbiddenElems != "" && bible.ForbiddenElems != "null" {
-		var phrases []string
-		if err := json.Unmarshal([]byte(bible.ForbiddenElems), &phrases); err == nil {
-			return phrases
-		}
-	}
 	return nil
 }
 
-// parseForbiddenDialogues extracts []ForbiddenDialogue from the new ForbiddenDialogues field,
-// with fallback to extracting objects from the legacy mixed-type ForbiddenElems array.
+// parseForbiddenDialogues extracts []ForbiddenDialogue from the ForbiddenDialogues field.
 func parseForbiddenDialogues(bible *model.RewriteBible) []ForbiddenDialogue {
 	if bible.ForbiddenDialogues != "" && bible.ForbiddenDialogues != "null" {
 		var dialogues []ForbiddenDialogue
 		if err := json.Unmarshal([]byte(bible.ForbiddenDialogues), &dialogues); err == nil {
-			return dialogues
-		}
-	}
-	// Fallback: parse mixed-type ForbiddenElems, keep only objects
-	if bible.ForbiddenElems != "" && bible.ForbiddenElems != "null" {
-		var mixed []json.RawMessage
-		if err := json.Unmarshal([]byte(bible.ForbiddenElems), &mixed); err == nil {
-			var dialogues []ForbiddenDialogue
-			for _, item := range mixed {
-				var d ForbiddenDialogue
-				if err := json.Unmarshal(item, &d); err == nil && d.Pattern != "" {
-					dialogues = append(dialogues, d)
-				}
-			}
 			return dialogues
 		}
 	}
@@ -1556,8 +1533,6 @@ type UpdateBibleRequest struct {
 	ForbiddenPhrases   *string `json:"forbidden_phrases,omitempty"`
 	ForbiddenDialogues *string `json:"forbidden_dialogues,omitempty"`
 	ImageryTransform   *string `json:"imagery_transform,omitempty"`
-	// Legacy field kept for backward compat
-	ForbiddenElems *string `json:"forbidden_elems,omitempty"`
 }
 
 func (s *RewriteService) UpdateBible(projectID uint, req UpdateBibleRequest) error {
@@ -1591,9 +1566,6 @@ func (s *RewriteService) UpdateBible(projectID uint, req UpdateBibleRequest) err
 	}
 	if req.ImageryTransform != nil {
 		fields["imagery_transform"] = *req.ImageryTransform
-	}
-	if req.ForbiddenElems != nil {
-		fields["forbidden_elems"] = *req.ForbiddenElems
 	}
 	if len(fields) == 0 {
 		return nil

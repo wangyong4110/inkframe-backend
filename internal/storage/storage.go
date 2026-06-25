@@ -14,7 +14,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/inkframe/inkframe-backend/internal/model"
 	"gorm.io/gorm"
 )
 
@@ -247,13 +246,9 @@ func (s *dbStorageService) Get(_ context.Context, _ string) ([]byte, error) {
 	return nil, fmt.Errorf("storage: DB media storage is disabled; configure OSS")
 }
 
-func (s *dbStorageService) Delete(_ context.Context, key string) error {
-	// key for DB storage is the URL path "/api/v1/media/{id}" — extract id
-	parts := strings.Split(strings.TrimPrefix(key, "/api/v1/media/"), "/")
-	if len(parts) == 0 || parts[0] == "" {
-		return nil
-	}
-	return s.db.Where("id = ?", parts[0]).Delete(&model.MediaAsset{}).Error
+func (s *dbStorageService) Delete(_ context.Context, _ string) error {
+	// DB media storage is disabled; ink_media_asset table has been dropped.
+	return nil
 }
 
 func (s *dbStorageService) Upload(_ context.Context, _ string, _ io.Reader, _ int64, _ string) (string, error) {

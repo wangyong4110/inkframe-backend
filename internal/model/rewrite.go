@@ -1,6 +1,10 @@
 package model
 
-import "time"
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
 
 // RewriteProject represents a novel rewriting project
 type RewriteProject struct {
@@ -10,12 +14,19 @@ type RewriteProject struct {
 	Name          string    `json:"name" gorm:"size:200"`
 	Level         int       `json:"level" gorm:"default:1"` // 1=字词润色 2=文学精炼 3=情节调整 4=结构重构 5=精神蒸馏
 	Status        string    `json:"status" gorm:"size:20;default:'pending'"` // pending, analyzing, bible_ready, rewriting, reviewing, completed, failed
-	Progress      int       `json:"progress" gorm:"default:0"` // 0-100
+	Progress      int       `json:"progress" gorm:"-"`       // computed: DoneChapters*100/TotalChapters; not stored in DB
 	TotalChapters int       `json:"total_chapters" gorm:"default:0"`
 	DoneChapters  int       `json:"done_chapters" gorm:"default:0"`
 	ErrorMsg      string    `json:"error_msg" gorm:"size:500"`
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+func (p *RewriteProject) AfterFind(_ *gorm.DB) error {
+	if p.TotalChapters > 0 {
+		p.Progress = p.DoneChapters * 100 / p.TotalChapters
+	}
+	return nil
 }
 
 func (RewriteProject) TableName() string { return "ink_rewrite_project" }
@@ -34,6 +45,7 @@ type LiteraryAnalysis struct {
 	ImagerySystem      string    `json:"imagery_system" gorm:"type:text"`      // JSON: core symbols and their recurrence pattern
 	InterChapterHooks  string    `json:"inter_chapter_hooks" gorm:"type:text"` // JSON: foreshadow style, avg reveal distance in chapters
 	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
 }
 
 func (LiteraryAnalysis) TableName() string { return "ink_literary_analysis" }
@@ -49,7 +61,6 @@ type RewriteBible struct {
 	PropsTransform     string    `json:"props_transform" gorm:"type:text"`      // JSON: map[originalProp]newProp for iconic items
 	VoiceStrategy      string    `json:"voice_strategy" gorm:"type:text"`       // JSON: narrator voice guidelines
 	StyleGuide         string    `json:"style_guide" gorm:"type:text"`          // JSON: sentence structure, vocabulary register, pacing rules
-	ForbiddenElems     string    `json:"forbidden_elems" gorm:"type:text"`      // JSON: legacy mixed-type array (kept for backward compat)
 	ForbiddenPhrases   string    `json:"forbidden_phrases" gorm:"type:text"`    // JSON: []string — phrases strictly forbidden in output
 	ForbiddenDialogues string    `json:"forbidden_dialogues" gorm:"type:text"`  // JSON: []ForbiddenDialogue — signature dialogues with rewrite guides
 	ImageryTransform   string    `json:"imagery_transform" gorm:"type:text"`    // JSON: map[originalSymbol]newSymbol for core imagery
@@ -74,7 +85,6 @@ type ChapterRewriteTask struct {
 	SemanticSim       float64   `json:"semantic_sim" gorm:"default:0"`
 	StructuralSim     float64   `json:"structural_sim" gorm:"default:0"`
 	Passed            bool      `json:"passed" gorm:"default:false"`
-	RetryCount        int       `json:"retry_count" gorm:"default:0"`
 	ErrorMsg          string    `json:"error_msg" gorm:"size:500"`
 	QualityScore      float64   `json:"quality_score" gorm:"default:0"`
 	DeaiApplied       bool      `json:"deai_applied" gorm:"default:false"`
@@ -109,6 +119,7 @@ type RewriteChapterSummary struct {
 	Summary       string    `json:"summary" gorm:"type:text"`      // 100-150 char semantic summary
 	CharStateSnap string    `json:"char_state_snap" gorm:"type:text"` // JSON map[charName]stateDesc at chapter end
 	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 func (RewriteChapterSummary) TableName() string { return "ink_rewrite_chapter_summary" }

@@ -14,7 +14,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-06-25-v16"
+const schemaVersion = "2026-06-25-v19"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -212,6 +212,12 @@ func ensureCriticalColumns(db *gorm.DB) {
 		// AI 模型管理优化（2026-06-25-v16）
 		{"ink_model_comparison_experiment", "tenant_id",  "INT UNSIGNED NOT NULL DEFAULT 0"},
 		{"ink_model_comparison_experiment", "deleted_at", "DATETIME(3) NULL"},
+		// 技能与仿写改编优化（2026-06-25-v17）
+		{"ink_literary_analysis",      "updated_at", "DATETIME(3) NULL"},
+		{"ink_rewrite_chapter_summary","updated_at", "DATETIME(3) NULL"},
+		{"ink_skill",                  "image_url",  "VARCHAR(500) NOT NULL DEFAULT ''"},
+		// 资产库设计优化（2026-06-25-v19）
+		{"ink_asset_storage_quota", "quota_month", "VARCHAR(7) NOT NULL DEFAULT ''"},
 	}
 	for _, a := range additions {
 		// 表不存在时跳过（AutoMigrate 会建表，建表时列也会随 struct 定义一同创建）
@@ -303,6 +309,29 @@ func dropLegacyCharacterColumns(db *gorm.DB) {
 	}
 }
 
+// ensureCriticalTableRenames 幂等地将旧表名改为新表名。
+// 仅当旧表存在且新表不存在时执行 RENAME TABLE，安全可重复运行。
+func ensureCriticalTableRenames(db *gorm.DB) {
+	type rename struct{ oldName, newName string }
+	renames := []rename{
+		// 资产库设计优化（2026-06-25-v19）：消除 share 语义歧义
+		{"ink_asset_share_request", "ink_asset_publish_request"},
+		{"ink_share_link", "ink_asset_share_link"},
+	}
+	for _, r := range renames {
+		var oldExists, newExists int64
+		db.Raw(`SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`, r.oldName).Scan(&oldExists)
+		db.Raw(`SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`, r.newName).Scan(&newExists)
+		if oldExists > 0 && newExists == 0 {
+			if err := db.Exec("RENAME TABLE `" + r.oldName + "` TO `" + r.newName + "`").Error; err != nil {
+				logger.Errorf("[ensureCriticalTableRenames] rename %s→%s: %v", r.oldName, r.newName, err)
+			} else {
+				logger.Infof("[ensureCriticalTableRenames] renamed %s → %s", r.oldName, r.newName)
+			}
+		}
+	}
+}
+
 // autoMigrate 自动迁移（带版本跳过优化 + MySQL Advisory Lock 防并发 DDL）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
 // 当模型变更时，请同时更新 schemaVersion 常量。
@@ -333,6 +362,8 @@ func autoMigrate(db *gorm.DB) error {
 
 	// 无条件补全关键列（防止版本跳过导致列缺失）
 	ensureCriticalColumns(db)
+	// 幂等表重命名（旧表名→新表名，AutoMigrate 之前执行以确保 GORM 操作新表）
+	ensureCriticalTableRenames(db)
 	// 升级列类型（text→mediumtext 等，幂等安全）
 	ensureColumnTypes(db)
 	// 删除遗留列（2026-05-15 模型简化后遗留在 DB 中的旧字段）
@@ -384,7 +415,6 @@ func autoMigrate(db *gorm.DB) error {
 		&model.ChapterItem{},
 		&model.ChapterCharacter{},
 		&model.AsyncTask{},
-		&model.MediaAsset{},
 		&model.HookChain{},
 		&model.SatisfactionPoint{},
 		&model.ConflictArc{},
@@ -409,7 +439,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.Asset{},
 		&model.Tag{},
 		&model.AssetTagMap{},
-		&model.AssetShareRequest{},
+		&model.AssetPublishRequest{},
 		&model.AssetVersion{},
 		&model.AssetCollection{},
 		&model.AssetCollectionItem{},
@@ -417,8 +447,7 @@ func autoMigrate(db *gorm.DB) error {
 		&model.AssetLike{},
 		&model.AssetUsage{},
 		&model.AssetComment{},
-		&model.ShareLink{},
-		&model.AssetRequest{},
+		&model.AssetShareLink{},
 		&model.SearchLog{},
 		&model.AssetStorageQuota{},
 		// 统一社交表（2026-06-25-v5：替代 ink_novel/chapter/video_like/comment 6张表）
@@ -686,6 +715,16 @@ func autoMigrate(db *gorm.DB) error {
 		}
 	}
 
+	// 数据迁移（2026-06-25-v17）：ink_skill.image_path → image_url（列重命名兼容迁移）
+	// 仅在旧列尚存在时执行；runSchemaCleanup 后旧列被删除，此段自动跳过。
+	var skillImgPathExists int64
+	db.Raw(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_skill' AND COLUMN_NAME = 'image_path'`).Scan(&skillImgPathExists)
+	if skillImgPathExists > 0 {
+		if err := db.Exec(`UPDATE ink_skill SET image_url = image_path WHERE (image_url = '' OR image_url IS NULL) AND image_path != '' AND deleted_at IS NULL`).Error; err != nil {
+			logger.Errorf("autoMigrate: ink_skill image_path→image_url migration failed: %v", err)
+		}
+	}
+
 	// 补全缺失索引（幂等，已存在则跳过）
 	ensureCriticalIndexes(db)
 
@@ -840,7 +879,6 @@ func runSchemaCleanup(db *gorm.DB) {
 		// 废弃字段删除（2026-06-25-v4）
 		{"ink_chapter", "quality_issues"}, // 已从 Chapter struct 移除，service 层不再读写
 		{"ink_chapter", "like_count"},     // 改为从 ink_chapter_like COUNT 实时聚合，gorm:"-"
-		{"ink_media_asset", "data"},       // 二进制数据已迁移至 OSS，DB 存储后端已废弃
 		// 废弃字段删除（2026-06-25-v8）
 		{"ink_arc_summary", "peak_tension"}, // 从未被写入（Upsert 不赋值），始终为 0
 		// 废弃的 ink_model_provider 分组字段（2026-06-25-v5 删除，group 机制已全面移除）
@@ -885,7 +923,49 @@ func runSchemaCleanup(db *gorm.DB) {
 		{"ink_experiment_result",          "user_comment"},      // 同上
 		{"ink_experiment_result",          "tokens_used"},       // GenerateWithProvider 不返回 token 数到 RunExperiment
 		{"ink_experiment_result",          "cost"},              // 同上
+		// 废弃字段删除（2026-06-25-v17）技能与仿写改编优化
+		{"ink_chapter_rewrite_task", "retry_count"},    // 重试循环使用本地 attempt 变量，从未写回 DB，始终为 0
+		{"ink_rewrite_bible",        "forbidden_elems"}, // 遗留混合类型数组；已拆分为 forbidden_phrases + forbidden_dialogues
+		{"ink_rewrite_project",      "progress"},        // 可由 done_chapters*100/total_chapters 实时计算，AfterFind 钩子自动填充
+		{"ink_skill",                "image_path"},      // 已重命名为 image_url（数据迁移见 autoMigrate v17）
+		// 废弃字段删除（2026-06-25-v19）资产库设计优化：ink_asset 主表冗余字段
+		{"ink_asset", "shared_at"},   // 审批时间已记录在 ink_asset_publish_request.reviewed_at，无需冗余
+		{"ink_asset", "shared_by"},   // 提交人已记录在 ink_asset_publish_request.requested_by，无需冗余
+		{"ink_asset", "review_note"}, // 审批备注已记录在 ink_asset_publish_request.review_note，无需冗余
 	}
+	// ── v18：废弃整表清理（2026-06-25-v18）资产库设计优化
+	// 幂等：DROP TABLE IF EXISTS
+	for _, tbl := range []string{"ink_media_asset", "ink_asset_request"} {
+		var tblExists int64
+		db.Raw(`SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`, tbl).Scan(&tblExists)
+		if tblExists > 0 {
+			if err := db.Exec("DROP TABLE IF EXISTS `" + tbl + "`").Error; err != nil {
+				logger.Errorf("[runSchemaCleanup] drop table %s: %v", tbl, err)
+			}
+		}
+	}
+	// v18/v19：删除 ink_asset_publish_request.asset_id 的 uniqueIndex，替换为普通 index（已在 AutoMigrate 中声明）
+	// GORM 不会自动删除旧 unique index，需手动处理。表在 v19 已由 ink_asset_share_request 重命名。
+	var shareReqUniIdx int64
+	db.Raw(`SELECT COUNT(*) FROM information_schema.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_asset_publish_request'
+		AND INDEX_NAME = 'uni_ink_asset_publish_request_asset_id' AND NON_UNIQUE = 0`).Scan(&shareReqUniIdx)
+	if shareReqUniIdx > 0 {
+		if err := db.Exec("ALTER TABLE `ink_asset_publish_request` DROP INDEX `uni_ink_asset_publish_request_asset_id`").Error; err != nil {
+			logger.Errorf("[runSchemaCleanup] drop unique index ink_asset_publish_request.asset_id: %v", err)
+		}
+	}
+	// v18 兼容：若旧表名仍存在（极罕见：v18 升级失败后手动回滚的情况），同样尝试清理旧 unique index
+	var oldShareReqUniIdx int64
+	db.Raw(`SELECT COUNT(*) FROM information_schema.STATISTICS
+		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_asset_share_request'
+		AND INDEX_NAME = 'uni_ink_asset_share_request_asset_id' AND NON_UNIQUE = 0`).Scan(&oldShareReqUniIdx)
+	if oldShareReqUniIdx > 0 {
+		if err := db.Exec("ALTER TABLE `ink_asset_share_request` DROP INDEX `uni_ink_asset_share_request_asset_id`").Error; err != nil {
+			logger.Errorf("[runSchemaCleanup] drop unique index ink_asset_share_request.asset_id (compat): %v", err)
+		}
+	}
+
 	// Allowlist of valid (table, col) pairs — any entry NOT in this list is skipped.
 	allowedDrops := map[string]bool{}
 	for _, d := range drops {

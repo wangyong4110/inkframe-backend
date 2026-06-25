@@ -53,14 +53,9 @@ func (r *RewriteProjectRepository) UpdateStatus(id uint, status, errMsg string) 
 	}).Error
 }
 
-func (r *RewriteProjectRepository) UpdateProgress(id uint, done, total int) error {
-	progress := 0
-	if total > 0 {
-		progress = done * 100 / total
-	}
-	return r.db.Model(&model.RewriteProject{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"done_chapters": done, "progress": progress,
-	}).Error
+func (r *RewriteProjectRepository) UpdateProgress(id uint, done, _ int) error {
+	return r.db.Model(&model.RewriteProject{}).Where("id = ?", id).
+		Update("done_chapters", done).Error
 }
 
 func (r *RewriteProjectRepository) UpdateTotalChapters(id uint, total int) error {

@@ -418,42 +418,48 @@ func (r *AssetCollectionRepository) ListItems(collectionID uint) ([]*model.Asset
 	return assets, err
 }
 
-// ─── AssetShareRequestRepository ─────────────────────────────────────────────
+// ─── AssetPublishRequestRepository ───────────────────────────────────────────
 
-type AssetShareRequestRepository struct{ db *gorm.DB }
+type AssetPublishRequestRepository struct{ db *gorm.DB }
 
-func NewAssetShareRequestRepository(db *gorm.DB) *AssetShareRequestRepository {
-	return &AssetShareRequestRepository{db: db}
+func NewAssetPublishRequestRepository(db *gorm.DB) *AssetPublishRequestRepository {
+	return &AssetPublishRequestRepository{db: db}
 }
 
-func (r *AssetShareRequestRepository) Create(req *model.AssetShareRequest) error {
+func (r *AssetPublishRequestRepository) Create(req *model.AssetPublishRequest) error {
 	return r.db.Create(req).Error
 }
 
-func (r *AssetShareRequestRepository) GetByAssetID(assetID uint) (*model.AssetShareRequest, error) {
-	var req model.AssetShareRequest
-	err := r.db.Where("asset_id = ?", assetID).First(&req).Error
+func (r *AssetPublishRequestRepository) GetByAssetID(assetID uint) (*model.AssetPublishRequest, error) {
+	var req model.AssetPublishRequest
+	err := r.db.Where("asset_id = ?", assetID).Order("created_at DESC").First(&req).Error
 	return &req, err
 }
 
-func (r *AssetShareRequestRepository) GetByID(id uint) (*model.AssetShareRequest, error) {
-	var req model.AssetShareRequest
+func (r *AssetPublishRequestRepository) GetPendingByAssetID(assetID uint) (*model.AssetPublishRequest, error) {
+	var req model.AssetPublishRequest
+	err := r.db.Where("asset_id = ? AND status = ?", assetID, "pending").First(&req).Error
+	return &req, err
+}
+
+func (r *AssetPublishRequestRepository) GetByID(id uint) (*model.AssetPublishRequest, error) {
+	var req model.AssetPublishRequest
 	err := r.db.First(&req, id).Error
 	return &req, err
 }
 
-func (r *AssetShareRequestRepository) Update(req *model.AssetShareRequest) error {
+func (r *AssetPublishRequestRepository) Update(req *model.AssetPublishRequest) error {
 	return r.db.Save(req).Error
 }
 
-func (r *AssetShareRequestRepository) Delete(id uint) error {
-	return r.db.Delete(&model.AssetShareRequest{}, id).Error
+func (r *AssetPublishRequestRepository) Delete(id uint) error {
+	return r.db.Delete(&model.AssetPublishRequest{}, id).Error
 }
 
-func (r *AssetShareRequestRepository) ListPending(page, size int) ([]*model.AssetShareRequest, int64, error) {
-	var reqs []*model.AssetShareRequest
+func (r *AssetPublishRequestRepository) ListPending(page, size int) ([]*model.AssetPublishRequest, int64, error) {
+	var reqs []*model.AssetPublishRequest
 	var total int64
-	q := r.db.Model(&model.AssetShareRequest{}).Where("status = ?", "pending")
+	q := r.db.Model(&model.AssetPublishRequest{}).Where("status = ?", "pending")
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err
 	}
@@ -471,9 +477,16 @@ func NewAssetUsageRepository(db *gorm.DB) *AssetUsageRepository {
 
 func (r *AssetUsageRepository) Create(u *model.AssetUsage) error { return r.db.Create(u).Error }
 
-func (r *AssetUsageRepository) ListByAsset(assetID uint) ([]*model.AssetUsage, error) {
+func (r *AssetUsageRepository) ListByAsset(assetID uint, page, pageSize int) ([]*model.AssetUsage, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 50
+	}
 	var us []*model.AssetUsage
-	err := r.db.Where("asset_id = ?", assetID).Order("used_at DESC").Limit(50).Find(&us).Error
+	err := r.db.Where("asset_id = ?", assetID).Order("used_at DESC").
+		Offset((page - 1) * pageSize).Limit(pageSize).Find(&us).Error
 	return us, err
 }
 
@@ -546,33 +559,35 @@ func (r *CrawlJobRepository) MarkRunningAsFailed() error {
 		Updates(map[string]interface{}{"status": "failed", "error_msg": "server restarted"}).Error
 }
 
-// ─── ShareLinkRepository ──────────────────────────────────────────────────────
+// ─── AssetShareLinkRepository ─────────────────────────────────────────────────
 
-type ShareLinkRepository struct{ db *gorm.DB }
+type AssetShareLinkRepository struct{ db *gorm.DB }
 
-func NewShareLinkRepository(db *gorm.DB) *ShareLinkRepository {
-	return &ShareLinkRepository{db: db}
+func NewAssetShareLinkRepository(db *gorm.DB) *AssetShareLinkRepository {
+	return &AssetShareLinkRepository{db: db}
 }
 
-func (r *ShareLinkRepository) Create(sl *model.ShareLink) error { return r.db.Create(sl).Error }
+func (r *AssetShareLinkRepository) Create(sl *model.AssetShareLink) error {
+	return r.db.Create(sl).Error
+}
 
-func (r *ShareLinkRepository) GetByToken(token string) (*model.ShareLink, error) {
-	var sl model.ShareLink
+func (r *AssetShareLinkRepository) GetByToken(token string) (*model.AssetShareLink, error) {
+	var sl model.AssetShareLink
 	return &sl, r.db.Where("token = ?", token).First(&sl).Error
 }
 
-func (r *ShareLinkRepository) ListByCreator(creatorID uint) ([]*model.ShareLink, error) {
-	var sls []*model.ShareLink
+func (r *AssetShareLinkRepository) ListByCreator(creatorID uint) ([]*model.AssetShareLink, error) {
+	var sls []*model.AssetShareLink
 	err := r.db.Where("created_by = ?", creatorID).Order("created_at DESC").Find(&sls).Error
 	return sls, err
 }
 
-func (r *ShareLinkRepository) Delete(token string) error {
-	return r.db.Where("token = ?", token).Delete(&model.ShareLink{}).Error
+func (r *AssetShareLinkRepository) Delete(token string) error {
+	return r.db.Where("token = ?", token).Delete(&model.AssetShareLink{}).Error
 }
 
-func (r *ShareLinkRepository) IncrViewCount(token string) error {
-	return r.db.Model(&model.ShareLink{}).Where("token = ?", token).
+func (r *AssetShareLinkRepository) IncrViewCount(token string) error {
+	return r.db.Model(&model.AssetShareLink{}).Where("token = ?", token).
 		UpdateColumn("view_count", gorm.Expr("view_count + 1")).Error
 }
 
@@ -650,8 +665,13 @@ func (r *AssetStorageQuotaRepository) SubStorage(tenantID uint, bytes int64) err
 }
 
 func (r *AssetStorageQuotaRepository) ResetMonthlyCrawl() error {
-	return r.db.Model(&model.AssetStorageQuota{}).Where("1=1").
-		UpdateColumn("crawl_used_this_month", 0).Error
+	currentMonth := time.Now().Format("2006-01")
+	return r.db.Model(&model.AssetStorageQuota{}).
+		Where("quota_month != ? OR quota_month = ''", currentMonth).
+		Updates(map[string]interface{}{
+			"crawl_used_this_month": 0,
+			"quota_month":           currentMonth,
+		}).Error
 }
 
 // ─── AssetLikeRepository ──────────────────────────────────────────────────────

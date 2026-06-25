@@ -277,7 +277,7 @@ func (s *SkillService) GenerateSkillEffect(tenantID, id uint, provider string) (
 	if err != nil {
 		return nil, fmt.Errorf("skill not found: %w", err)
 	}
-	if skill.ImagePath != "" {
+	if skill.ImageURL != "" {
 		return skill, nil // already generated, skip regeneration
 	}
 	visualPrompt := fmt.Sprintf("Magic skill effect for: %s. %s. Dynamic cinematic style, fantasy art", skill.Name, skill.Description)
@@ -286,7 +286,7 @@ func (s *SkillService) GenerateSkillEffect(tenantID, id uint, provider string) (
 		logger.Errorf("[SkillService] GenerateSkillEffect: image generation failed for skill %d: %v", skill.ID, imgErr)
 		// Continue without image — skill metadata is still updated
 	} else {
-		skill.ImagePath = imageURL
+		skill.ImageURL = imageURL
 	}
 	return skill, s.skillRepo.Update(skill)
 }

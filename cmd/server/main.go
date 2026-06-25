@@ -301,6 +301,34 @@ func main() {
 		return nil
 	})
 
+	// 后台定时任务：每月1日重置租户爬取配额（带 Redis 月度锁，多实例只执行一次）
+	go func() {
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				if time.Now().Day() != 1 {
+					continue
+				}
+				if redisClient != nil {
+					monthKey := "crawl-quota-reset:" + time.Now().Format("2006-01")
+					ok, _ := redisClient.SetNX(context.Background(), monthKey, "1", 35*24*time.Hour).Result()
+					if !ok {
+						continue // 本月已被其他实例重置
+					}
+				}
+				if err := repos.TenantQuotaRepo.ResetMonthlyCrawl(); err != nil {
+					logger.Errorf("[crawl-quota-monthly-reset] %v", err)
+				} else {
+					logger.Printf("[crawl-quota-monthly-reset] reset crawl_used_this_month for all tenants")
+				}
+			case <-hotScoreQuit:
+				return
+			}
+		}
+	}()
+
 	// 注册可续跑任务类型，然后启动任务恢复（必须在所有服务 wiring 完成后调用）
 	// Pass serverRootCtx so resumed goroutines can be cancelled on graceful shutdown.
 	if services.TaskService != nil {

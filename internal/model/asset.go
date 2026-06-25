@@ -69,11 +69,6 @@ type Asset struct {
 	LikeCount  int     `json:"like_count" gorm:"default:0"`
 	ValueScore float64 `json:"value_score" gorm:"default:0;index"`
 
-	// Share tracking
-	SharedAt   *time.Time `json:"shared_at"`
-	SharedBy   *uint      `json:"shared_by"`
-	ReviewNote string     `json:"review_note" gorm:"size:500"`
-
 	// Source tracing (platform-generated)
 	NovelID *uint `json:"novel_id,omitempty"`
 	VideoID *uint `json:"video_id,omitempty"`
@@ -116,10 +111,10 @@ type AssetTagMap struct {
 
 func (AssetTagMap) TableName() string { return "ink_asset_tag_map" }
 
-// AssetShareRequest tracks sharing workflow (ink_asset_share_request).
-type AssetShareRequest struct {
+// AssetPublishRequest tracks the workflow for publishing a personal asset into the public library (ink_asset_publish_request).
+type AssetPublishRequest struct {
 	ID          uint       `json:"id" gorm:"primaryKey"`
-	AssetID     uint       `json:"asset_id" gorm:"uniqueIndex"`
+	AssetID     uint       `json:"asset_id" gorm:"index"`
 	RequestedBy uint       `json:"requested_by"`
 	Status      string     `json:"status" gorm:"size:20;default:'pending'"` // pending|approved|rejected
 	AutoPassed  bool       `json:"auto_passed"`
@@ -129,7 +124,7 @@ type AssetShareRequest struct {
 	CreatedAt   time.Time  `json:"created_at"`
 }
 
-func (AssetShareRequest) TableName() string { return "ink_asset_share_request" }
+func (AssetPublishRequest) TableName() string { return "ink_asset_publish_request" }
 
 // AssetVersion tracks version history for personal-library assets (ink_asset_version).
 type AssetVersion struct {
@@ -236,8 +231,8 @@ type AssetComment struct {
 
 func (AssetComment) TableName() string { return "ink_asset_comment" }
 
-// ShareLink enables no-login external sharing of assets or collections (ink_share_link).
-type ShareLink struct {
+// AssetShareLink enables no-login external sharing of assets or collections (ink_asset_share_link).
+type AssetShareLink struct {
 	ID              uint       `json:"id" gorm:"primaryKey"`
 	Token           string     `json:"token" gorm:"size:64;uniqueIndex"`
 	AssetID         *uint      `json:"asset_id"`
@@ -250,24 +245,7 @@ type ShareLink struct {
 	CreatedAt       time.Time  `json:"created_at"`
 }
 
-func (ShareLink) TableName() string { return "ink_share_link" }
-
-// AssetRequest is a community asset request board (ink_asset_request).
-type AssetRequest struct {
-	ID                uint      `json:"id" gorm:"primaryKey"`
-	TenantID          uint      `json:"tenant_id" gorm:"index"`
-	RequestedBy       uint      `json:"requested_by"`
-	AssetType         string    `json:"asset_type" gorm:"size:20"`
-	Description       string    `json:"description" gorm:"size:2000"`
-	TagsWanted        string    `json:"tags_wanted" gorm:"size:500"` // JSON
-	Priority          string    `json:"priority" gorm:"size:20;default:'medium'"`
-	Status            string    `json:"status" gorm:"size:20;default:'open'"` // open|in_progress|fulfilled|closed
-	FulfilledAssetIDs string    `json:"fulfilled_asset_ids" gorm:"size:1000"` // JSON uint[]
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
-}
-
-func (AssetRequest) TableName() string { return "ink_asset_request" }
+func (AssetShareLink) TableName() string { return "ink_asset_share_link" }
 
 // SearchLog records search queries for gap analysis (ink_search_log).
 type SearchLog struct {
@@ -288,22 +266,11 @@ type AssetStorageQuota struct {
 	StorageLimitBytes  int64     `json:"storage_limit_bytes" gorm:"default:10737418240"` // 10 GB
 	CrawlUsedThisMonth int       `json:"crawl_used_this_month" gorm:"default:0"`
 	CrawlLimitPerMonth int       `json:"crawl_limit_per_month" gorm:"default:500"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	// QuotaMonth tracks which calendar month CrawlUsedThisMonth belongs to (format: "2006-01").
+	// ResetMonthlyCrawl checks this field and only resets counts when the stored month differs from the current month.
+	QuotaMonth string    `json:"quota_month" gorm:"size:7;default:''"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 func (AssetStorageQuota) TableName() string { return "ink_asset_storage_quota" }
 
-// Deprecated: MediaAsset 已被 Asset（ink_asset）取代，仅保留向后兼容。新代码请使用 Asset。
-type MediaAsset struct {
-	ID          uint      `gorm:"primaryKey" json:"id"`
-	TenantID    uint      `gorm:"index" json:"tenant_id"`
-	NovelID     uint      `gorm:"index" json:"novel_id"`
-	ChapterID   uint      `gorm:"index" json:"chapter_id"`
-	MediaType   string    `gorm:"size:20;index" json:"media_type"` // image/audio/video/subtitle
-	Filename    string    `gorm:"size:255" json:"filename"`
-	ContentType string    `gorm:"size:100" json:"content_type"`
-	Size        int64     `json:"size"`
-	CreatedAt   time.Time `json:"created_at"`
-}
-
-func (MediaAsset) TableName() string { return "ink_media_asset" }

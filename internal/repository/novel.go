@@ -357,7 +357,6 @@ func (r *NovelRepository) DeleteWithCascade(id uint) error {
 			`DELETE FROM ink_knowledge_base WHERE novel_id = ?`,
 			`DELETE FROM ink_foreshadow WHERE novel_id = ?`,
 			`DELETE FROM ink_novel_member WHERE novel_id = ?`,
-			`DELETE FROM ink_media_asset WHERE novel_id = ? AND CONCAT('/api/v1/media/', id) NOT IN (SELECT storage_url FROM ink_asset WHERE status != 'trash' AND deleted_at IS NULL)`,
 			`DELETE FROM ink_chapter_character WHERE novel_id = ?`,
 		}
 		for _, stmt := range extStmts {

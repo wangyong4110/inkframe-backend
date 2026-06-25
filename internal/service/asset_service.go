@@ -33,12 +33,12 @@ type AssetService struct {
 	tagRepo        *repository.TagRepository
 	versionRepo    *repository.AssetVersionRepository
 	collectionRepo *repository.AssetCollectionRepository
-	shareReqRepo   *repository.AssetShareRequestRepository
+	publishReqRepo *repository.AssetPublishRequestRepository
 	usageRepo      *repository.AssetUsageRepository
 	likeRepo       *repository.AssetLikeRepository
 	commentRepo    *repository.AssetCommentRepository
 	crawlRepo      *repository.CrawlJobRepository
-	shareLinkRepo  *repository.ShareLinkRepository
+	shareLinkRepo  *repository.AssetShareLinkRepository
 	searchLogRepo  *repository.SearchLogRepository
 	quotaRepo      *repository.AssetStorageQuotaRepository
 	storageSvc    storage.Service
@@ -98,12 +98,12 @@ func NewAssetService(
 	tagRepo *repository.TagRepository,
 	versionRepo *repository.AssetVersionRepository,
 	collectionRepo *repository.AssetCollectionRepository,
-	shareReqRepo *repository.AssetShareRequestRepository,
+	publishReqRepo *repository.AssetPublishRequestRepository,
 	usageRepo *repository.AssetUsageRepository,
 	likeRepo *repository.AssetLikeRepository,
 	commentRepo *repository.AssetCommentRepository,
 	crawlRepo *repository.CrawlJobRepository,
-	shareLinkRepo *repository.ShareLinkRepository,
+	shareLinkRepo *repository.AssetShareLinkRepository,
 	searchLogRepo *repository.SearchLogRepository,
 	quotaRepo *repository.AssetStorageQuotaRepository,
 
@@ -111,7 +111,7 @@ func NewAssetService(
 ) *AssetService {
 	return &AssetService{
 		assetRepo: assetRepo, tagRepo: tagRepo, versionRepo: versionRepo,
-		collectionRepo: collectionRepo, shareReqRepo: shareReqRepo,
+		collectionRepo: collectionRepo, publishReqRepo: publishReqRepo,
 		usageRepo: usageRepo, likeRepo: likeRepo, commentRepo: commentRepo,
 		crawlRepo: crawlRepo, shareLinkRepo: shareLinkRepo,
 		searchLogRepo: searchLogRepo, quotaRepo: quotaRepo,
@@ -348,7 +348,7 @@ func (s *AssetService) EmptyTrash(callerID uint) (int64, error) {
 
 // ─── Sharing Workflow ─────────────────────────────────────────────────────────
 
-func (s *AssetService) RequestShare(assetID, callerID uint) (*model.AssetShareRequest, error) {
+func (s *AssetService) RequestShare(assetID, callerID uint) (*model.AssetPublishRequest, error) {
 	a, err := s.assetRepo.GetByID(assetID)
 	if err != nil || a.CreatorID != callerID {
 		return nil, errors.New("not found or permission denied")
@@ -356,12 +356,16 @@ func (s *AssetService) RequestShare(assetID, callerID uint) (*model.AssetShareRe
 	if a.Scope == model.AssetScopePublic {
 		return nil, errors.New("asset is already in public library")
 	}
+	// Idempotent: return existing pending request if one already exists.
+	if existing, e := s.publishReqRepo.GetPendingByAssetID(assetID); e == nil {
+		return existing, nil
+	}
 	// Update status to pending_review
 	if err := s.assetRepo.UpdateFields(assetID, map[string]interface{}{"status": model.AssetStatusPendingReview}); err != nil {
 		return nil, err
 	}
-	req := &model.AssetShareRequest{AssetID: assetID, RequestedBy: callerID, Status: "pending"}
-	if err := s.shareReqRepo.Create(req); err != nil {
+	req := &model.AssetPublishRequest{AssetID: assetID, RequestedBy: callerID, Status: "pending"}
+	if err := s.publishReqRepo.Create(req); err != nil {
 		return nil, err
 	}
 	// Async quality + NSFW check
@@ -371,7 +375,7 @@ func (s *AssetService) RequestShare(assetID, callerID uint) (*model.AssetShareRe
 	return req, nil
 }
 
-func (s *AssetService) autoReviewShare(ctx context.Context, a *model.Asset, req *model.AssetShareRequest) error {
+func (s *AssetService) autoReviewShare(ctx context.Context, a *model.Asset, req *model.AssetPublishRequest) error {
 	// Simple auto-approve for platform-generated assets; stub for uploaded/crawled
 	qualityOK := a.QualityScore >= 6.0 || a.QualityScore == 0 // 0 means not yet checked
 	safetyOK := a.SafetyScore >= 0.9 || !a.SafetyChecked
@@ -381,45 +385,41 @@ func (s *AssetService) autoReviewShare(ctx context.Context, a *model.Asset, req 
 		req.Status = "approved"
 		req.AutoPassed = true
 		req.ReviewedAt = &now
-		_ = s.shareReqRepo.Update(req)
+		_ = s.publishReqRepo.Update(req)
 		_ = s.assetRepo.UpdateFields(a.ID, map[string]interface{}{
 			"scope": model.AssetScopePublic, "status": model.AssetStatusActive,
-			"shared_at": now, "shared_by": a.CreatorID,
 		})
 	} else {
 		note := "quality or safety check failed"
 		req.Status = "rejected"
 		req.ReviewNote = note
 		req.ReviewedAt = &now
-		_ = s.shareReqRepo.Update(req)
+		_ = s.publishReqRepo.Update(req)
 		_ = s.assetRepo.UpdateFields(a.ID, map[string]interface{}{
-			"status": model.AssetStatusRejected, "review_note": note,
+			"status": model.AssetStatusRejected,
 		})
 	}
 	return nil
 }
 
-func (s *AssetService) GetShareRequest(assetID, callerID uint) (*model.AssetShareRequest, error) {
+func (s *AssetService) GetShareRequest(assetID, callerID uint) (*model.AssetPublishRequest, error) {
 	a, err := s.assetRepo.GetByID(assetID)
 	if err != nil || a.CreatorID != callerID {
 		return nil, errors.New("not found or permission denied")
 	}
-	return s.shareReqRepo.GetByAssetID(assetID)
+	return s.publishReqRepo.GetByAssetID(assetID)
 }
 
 func (s *AssetService) CancelShareRequest(assetID, callerID uint) error {
-	req, err := s.shareReqRepo.GetByAssetID(assetID)
-	if err != nil {
-		return err
-	}
 	a, err := s.assetRepo.GetByID(assetID)
 	if err != nil || a.CreatorID != callerID {
 		return errors.New("permission denied")
 	}
-	if req.Status != "pending" {
-		return errors.New("cannot cancel non-pending request")
+	req, err := s.publishReqRepo.GetPendingByAssetID(assetID)
+	if err != nil {
+		return errors.New("no pending request to cancel")
 	}
-	_ = s.shareReqRepo.Delete(req.ID)
+	_ = s.publishReqRepo.Delete(req.ID)
 	return s.assetRepo.UpdateFields(assetID, map[string]interface{}{"status": model.AssetStatusActive})
 }
 
@@ -437,7 +437,7 @@ func (s *AssetService) WithdrawShare(assetID, callerID uint) error {
 }
 
 func (s *AssetService) AdminReview(shareReqID, reviewerID uint, approved bool, note string) error {
-	req, err := s.shareReqRepo.GetByID(shareReqID)
+	req, err := s.publishReqRepo.GetByID(shareReqID)
 	if err != nil {
 		return err
 	}
@@ -449,26 +449,25 @@ func (s *AssetService) AdminReview(shareReqID, reviewerID uint, approved bool, n
 		req.Status = "approved"
 		_ = s.assetRepo.UpdateFields(req.AssetID, map[string]interface{}{
 			"scope": model.AssetScopePublic, "status": model.AssetStatusActive,
-			"shared_at": now, "shared_by": req.RequestedBy,
 		})
 	} else {
 		req.Status = "rejected"
 		_ = s.assetRepo.UpdateFields(req.AssetID, map[string]interface{}{
-			"status": model.AssetStatusRejected, "review_note": note,
+			"status": model.AssetStatusRejected,
 		})
 	}
-	return s.shareReqRepo.Update(req)
+	return s.publishReqRepo.Update(req)
 }
 
 func (s *AssetService) AdminRemove(assetID, adminID uint, note string) error {
 	return s.assetRepo.UpdateFields(assetID, map[string]interface{}{
 		"scope": model.AssetScopePersonal, "status": model.AssetStatusWithdrawn,
-		"review_note": note, "deleted_by": adminID,
+		"deleted_by": adminID,
 	})
 }
 
-func (s *AssetService) ListPendingShareRequests(page, size int) ([]*model.AssetShareRequest, int64, error) {
-	return s.shareReqRepo.ListPending(page, size)
+func (s *AssetService) ListPendingShareRequests(page, size int) ([]*model.AssetPublishRequest, int64, error) {
+	return s.publishReqRepo.ListPending(page, size)
 }
 
 // ─── Version Control ──────────────────────────────────────────────────────────
@@ -641,12 +640,12 @@ type ShareLinkOptions struct {
 	Password        string // plain-text; will be bcrypt-hashed before storage
 }
 
-func (s *AssetService) CreateShareLink(callerID uint, opts ShareLinkOptions) (*model.ShareLink, error) {
+func (s *AssetService) CreateShareLink(callerID uint, opts ShareLinkOptions) (*model.AssetShareLink, error) {
 	if (opts.AssetID == nil) == (opts.CollectionID == nil) {
 		return nil, errors.New("exactly one of asset_id or collection_id must be set")
 	}
 	token := randomHex(32)
-	sl := &model.ShareLink{
+	sl := &model.AssetShareLink{
 		Token: token, CreatedBy: callerID,
 		AssetID: opts.AssetID, CollectionID: opts.CollectionID,
 		DownloadAllowed: opts.DownloadAllowed,
@@ -668,7 +667,7 @@ func (s *AssetService) CreateShareLink(callerID uint, opts ShareLinkOptions) (*m
 	return sl, nil
 }
 
-func (s *AssetService) ValidateShareLink(token, password string) (*model.ShareLink, error) {
+func (s *AssetService) ValidateShareLink(token, password string) (*model.AssetShareLink, error) {
 	sl, err := s.shareLinkRepo.GetByToken(token)
 	if err != nil {
 		return nil, errors.New("share link not found")
@@ -688,7 +687,7 @@ func (s *AssetService) ValidateShareLink(token, password string) (*model.ShareLi
 	return sl, nil
 }
 
-func (s *AssetService) ListShareLinks(callerID uint) ([]*model.ShareLink, error) {
+func (s *AssetService) ListShareLinks(callerID uint) ([]*model.AssetShareLink, error) {
 	return s.shareLinkRepo.ListByCreator(callerID)
 }
 
