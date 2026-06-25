@@ -27,10 +27,17 @@ var staticProviderModels = map[string][]string{
 // ModelHandler 模型管理处理器
 type ModelHandler struct {
 	modelService *service.ModelService
+	auditSvc     *service.AuditService
 }
 
 func NewModelHandler(modelService *service.ModelService) *ModelHandler {
 	return &ModelHandler{modelService: modelService}
+}
+
+// WithAuditService injects the audit service.
+func (h *ModelHandler) WithAuditService(svc *service.AuditService) *ModelHandler {
+	h.auditSvc = svc
+	return h
 }
 
 // ListProviders 获取提供商列表
@@ -116,6 +123,18 @@ func (h *ModelHandler) CreateProvider(c *gin.Context) {
 		return
 	}
 
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID:     getTenantID(c),
+			UserID:       getUserID(c),
+			Action:       "provider.create",
+			ResourceType: "provider",
+			ResourceID:   provider.ID,
+			ResourceName: provider.Name,
+			IP:           c.ClientIP(),
+		})
+	}
+
 	provider.APIKey = maskAPIKey(provider.APIKey)
 	respondCreated(c, provider)
 }
@@ -144,6 +163,18 @@ func (h *ModelHandler) UpdateProvider(c *gin.Context) {
 		return
 	}
 
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID:     getTenantID(c),
+			UserID:       getUserID(c),
+			Action:       "provider.update",
+			ResourceType: "provider",
+			ResourceID:   uint(id),
+			ResourceName: provider.Name,
+			IP:           c.ClientIP(),
+		})
+	}
+
 	provider.APIKey = maskAPIKey(provider.APIKey)
 	provider.APISecretKey = maskAPIKey(provider.APISecretKey)
 	respondOK(c, provider)
@@ -165,6 +196,17 @@ func (h *ModelHandler) DeleteProvider(c *gin.Context) {
 	if err := h.modelService.DeleteProvider(uint(id), getTenantID(c)); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID:     getTenantID(c),
+			UserID:       getUserID(c),
+			Action:       "provider.delete",
+			ResourceType: "provider",
+			ResourceID:   uint(id),
+			IP:           c.ClientIP(),
+		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -232,6 +274,18 @@ func (h *ModelHandler) CreateModel(c *gin.Context) {
 		return
 	}
 
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID:     getTenantID(c),
+			UserID:       getUserID(c),
+			Action:       "model.create",
+			ResourceType: "model",
+			ResourceID:   modelEntity.ID,
+			ResourceName: modelEntity.Name,
+			IP:           c.ClientIP(),
+		})
+	}
+
 	respondCreated(c, modelEntity)
 }
 
@@ -265,6 +319,18 @@ func (h *ModelHandler) UpdateModel(c *gin.Context) {
 		return
 	}
 
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID:     getTenantID(c),
+			UserID:       getUserID(c),
+			Action:       "model.update",
+			ResourceType: "model",
+			ResourceID:   uint(id),
+			ResourceName: modelEntity.Name,
+			IP:           c.ClientIP(),
+		})
+	}
+
 	respondOK(c, modelEntity)
 }
 
@@ -290,6 +356,17 @@ func (h *ModelHandler) DeleteModel(c *gin.Context) {
 	if err := h.modelService.DeleteModel(uint(id), getTenantID(c)); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID:     getTenantID(c),
+			UserID:       getUserID(c),
+			Action:       "model.delete",
+			ResourceType: "model",
+			ResourceID:   uint(id),
+			IP:           c.ClientIP(),
+		})
 	}
 
 	respondOK(c, nil)
@@ -395,7 +472,7 @@ func (h *ModelHandler) UpdateTaskConfig(c *gin.Context) {
 // ListExperiments 获取对比实验列表
 // GET /api/v1/experiments
 func (h *ModelHandler) ListExperiments(c *gin.Context) {
-	experiments, err := h.modelService.ListExperiments()
+	experiments, err := h.modelService.ListExperiments(getTenantID(c))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -412,7 +489,7 @@ func (h *ModelHandler) CreateExperiment(c *gin.Context) {
 		return
 	}
 
-	experiment, err := h.modelService.CreateExperiment(&req)
+	experiment, err := h.modelService.CreateExperiment(&req, getTenantID(c))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
@@ -600,8 +677,6 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 		APIVersionHint   string   `json:"api_version_hint,omitempty"`  // API 版本占位提示
 		ConfigHint       string   `json:"config_hint,omitempty"`       // 配置说明
 		StaticModels     []string `json:"static_models,omitempty"`
-		GroupName        string   `json:"group_name,omitempty"`
-		IsGroupCanonical bool     `json:"is_group_canonical,omitempty"`
 	}
 
 	result := make([]providerTemplate, 0, len(templates))
@@ -612,8 +687,6 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 			APIEndpoint:      p.APIEndpoint,
 			NeedsSecretKey:   p.NeedsSecretKey,
 			NoAPIKey:         p.Name == "ollama",
-			GroupName:        p.GroupName,
-			IsGroupCanonical: p.IsGroupCanonical,
 		}
 		if p.Name == "azure" {
 			t.NeedsAPIVersion = true
@@ -630,34 +703,6 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 	respondOK(c, result)
 }
 
-// SyncGroupProviders 批量同步同源分组供应商凭证（一次配置应用到组内所有子供应商）
-// POST /api/v1/model-providers/sync-group
-func (h *ModelHandler) SyncGroupProviders(c *gin.Context) {
-	if !isAdminOrOwner(c) {
-		respondErr(c, http.StatusForbidden, "admin or owner role required")
-		return
-	}
-	tenantID := getTenantID(c)
-
-	var req struct {
-		GroupName    string `json:"group_name" binding:"required"`
-		APIKey       string `json:"api_key"`
-		APISecretKey string `json:"api_secret_key"`
-		APIVersion   string `json:"api_version"`
-		IsActive     bool   `json:"is_active"`
-	}
-	if err := c.ShouldBindJSON(&req); err != nil {
-		respondBadRequest(c, err.Error())
-		return
-	}
-
-	canonical, err := h.modelService.SyncGroupProviders(req.GroupName, tenantID, req.APIKey, req.APISecretKey, req.APIVersion, req.IsActive)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondOK(c, canonical)
-}
 
 // TestModelPrompt 用指定提供商生成文本（前端「生成测试」功能）
 // POST /api/v1/models/test-prompt

@@ -70,6 +70,12 @@ type CharacterHandler struct {
 	aiService        *service.AIService
 	novelService     *service.NovelService
 	narrativeSvc     *service.NarrativeMemoryService
+	auditSvc         *service.AuditService
+}
+
+func (h *CharacterHandler) WithAuditService(svc *service.AuditService) *CharacterHandler {
+	h.auditSvc = svc
+	return h
 }
 
 func NewCharacterHandler(
@@ -262,6 +268,13 @@ func (h *CharacterHandler) DeleteCharacter(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c),
+			Action: "character.delete", ResourceType: "character", ResourceID: uint(id),
+			IP: c.ClientIP(),
+		})
+	}
 	respondOK(c, nil)
 }
 
@@ -284,6 +297,13 @@ func (h *CharacterHandler) BatchDeleteCharacters(c *gin.Context) {
 	if err := h.characterService.BatchDeleteCharacters(c.Request.Context(), uint(novelId), req.IDs); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c), NovelID: uint(novelId),
+			Action: "character.batch_delete", ResourceType: "novel", ResourceID: uint(novelId),
+			Details: map[string]any{"ids": req.IDs, "count": len(req.IDs)}, IP: c.ClientIP(),
+		})
 	}
 	respondOK(c, gin.H{"deleted": len(req.IDs)})
 }
@@ -542,6 +562,13 @@ func (h *CharacterHandler) AIBatchGenerate(c *gin.Context) {
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: tenantID, UserID: getUserID(c), NovelID: uint(novelID),
+			Action: "character.ai_batch_generate", ResourceType: "novel", ResourceID: uint(novelID),
+			IP: c.ClientIP(),
+		})
 	}
 	go func(taskID string) {
 		defer func() {

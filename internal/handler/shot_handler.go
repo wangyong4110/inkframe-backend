@@ -276,7 +276,7 @@ func (h *VideoHandler) RefineShotImage(c *gin.Context) {
 
 // BatchGenerateSFX POST /videos/:id/shots/sfx
 // 为视频所有分镜批量自动生成音效（异步任务）。
-// 已有 sfx_url 的分镜自动跳过（幂等）。
+// 已有音效条目的分镜自动跳过（幂等，通过 ink_shot_sfx_item 检查）。
 func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 	if h.sfxSvc == nil {
 		respondErr(c, http.StatusNotImplemented, "SFX service not configured")

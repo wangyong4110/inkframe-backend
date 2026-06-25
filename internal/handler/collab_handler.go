@@ -12,10 +12,16 @@ import (
 // CollabHandler 协作处理器
 type CollabHandler struct {
 	collabSvc *service.CollabService
+	auditSvc  *service.AuditService
 }
 
 func NewCollabHandler(collabSvc *service.CollabService) *CollabHandler {
 	return &CollabHandler{collabSvc: collabSvc}
+}
+
+func (h *CollabHandler) WithAuditService(svc *service.AuditService) *CollabHandler {
+	h.auditSvc = svc
+	return h
 }
 
 // GET /novels/:id/members
@@ -56,6 +62,13 @@ func (h *CollabHandler) InviteMember(c *gin.Context) {
 		respondErr(c, http.StatusBadRequest, err.Error())
 		return
 	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: userID, NovelID: uint(novelID),
+			Action: "collab.invite", ResourceType: "novel", ResourceID: uint(novelID),
+			Details: map[string]any{"email": req.Email, "role": req.Role}, IP: c.ClientIP(),
+		})
+	}
 	respondOK(c, gin.H{
 		"invite_token": token,
 		"invite_link":  fmt.Sprintf("/collab/accept?token=%s", token),
@@ -94,6 +107,13 @@ func (h *CollabHandler) RemoveMember(c *gin.Context) {
 		respondErr(c, http.StatusForbidden, err.Error())
 		return
 	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: userID, NovelID: uint(novelID),
+			Action: "collab.remove_member", ResourceType: "novel", ResourceID: uint(novelID),
+			Details: map[string]any{"target_user_id": targetUID}, IP: c.ClientIP(),
+		})
+	}
 	respondOK(c, gin.H{})
 }
 
@@ -117,6 +137,13 @@ func (h *CollabHandler) UpdateMemberRole(c *gin.Context) {
 	if err := h.collabSvc.UpdateMemberRole(novelID, userID, targetUID, req.Role); err != nil {
 		respondErr(c, http.StatusForbidden, err.Error())
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: userID, NovelID: uint(novelID),
+			Action: "collab.update_role", ResourceType: "novel", ResourceID: uint(novelID),
+			Details: map[string]any{"target_user_id": targetUID, "role": req.Role}, IP: c.ClientIP(),
+		})
 	}
 	respondOK(c, gin.H{})
 }

@@ -781,11 +781,11 @@ func (s *CharacterService) UpdateCharacter(id, tenantID uint, req *model.UpdateC
 	// Auto-snapshot when key characterization fields change (best-effort).
 	if s.snapshotRepo != nil && (req.Description != "" || req.InnerConflict != "" || req.CoreDesire != "") {
 		snap := &model.CharacterStateSnapshot{
-			CharacterID:  character.ID,
-			Motivation:   character.CoreDesire,
-			SnapshotTime: time.Now(),
+			NovelID:     character.NovelID,
+			CharacterID: character.ID,
+			Motivation:  character.CoreDesire,
 		}
-		_ = s.snapshotRepo.Create(snap) // ignore error
+		_ = s.snapshotRepo.Upsert(snap) // ignore error
 	}
 	return character, nil
 }
@@ -818,12 +818,11 @@ func (s *CharacterService) CreateCharacterSnapshot(characterID uint, motivation,
 		return nil, fmt.Errorf("snapshot repo not configured")
 	}
 	snap := &model.CharacterStateSnapshot{
-		CharacterID:  characterID,
-		Motivation:   motivation,
-		Mood:         mood,
-		SnapshotTime: time.Now(),
+		CharacterID: characterID,
+		Motivation:  motivation,
+		Mood:        mood,
 	}
-	if err := s.snapshotRepo.Create(snap); err != nil {
+	if err := s.snapshotRepo.Upsert(snap); err != nil {
 		return nil, err
 	}
 	return snap, nil
@@ -2083,7 +2082,6 @@ func (s *CharacterService) CreateLook(characterID, novelID uint, req *model.Crea
 		Label:          req.Label,
 		ChapterFrom:    req.ChapterFrom,
 		ChapterTo:      req.ChapterTo,
-		SortOrder:      req.SortOrder,
 		Description:    req.Description,
 		VisualPrompt:   req.VisualPrompt,
 		ThreeViewSheet: req.ThreeViewSheet,
@@ -2194,9 +2192,6 @@ func (s *CharacterService) UpdateLook(id uint, req *model.UpdateCharacterLookReq
 		if err := s.characterRepo.UpdateDefaultLookID(look.CharacterID, look.ID); err != nil {
 			return nil, fmt.Errorf("set default look: %w", err)
 		}
-	}
-	if req.SortOrder != nil {
-		look.SortOrder = *req.SortOrder
 	}
 	if req.Description != nil {
 		look.Description = *req.Description

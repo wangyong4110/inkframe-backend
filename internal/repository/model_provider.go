@@ -65,14 +65,6 @@ func (r *ModelProviderRepository) GetByIDAndTenant(id uint, tenantID uint) (*mod
 	return &provider, nil
 }
 
-// ListSystemByGroup 获取某个分组下的所有系统供应商
-func (r *ModelProviderRepository) ListSystemByGroup(groupName string) ([]*model.ModelProvider, error) {
-	var providers []*model.ModelProvider
-	if err := r.db.Where("tenant_id = 0 AND group_name = ?", groupName).Order("id").Find(&providers).Error; err != nil {
-		return nil, err
-	}
-	return providers, nil
-}
 
 // ListByModelType 获取拥有指定类型模型的提供商列表（含系统级 tenant_id=0）
 func (r *ModelProviderRepository) ListByModelType(tenantID uint, modelType string) ([]*model.ModelProvider, error) {
@@ -92,14 +84,6 @@ func (r *ModelProviderRepository) ListByModelType(tenantID uint, modelType strin
 	return providers, err
 }
 
-// GetTenantProviderByName 获取租户的指定名称供应商（不含系统级）
-func (r *ModelProviderRepository) GetTenantProviderByName(tenantID uint, name string) (*model.ModelProvider, error) {
-	var provider model.ModelProvider
-	if err := r.db.Where("tenant_id = ? AND name = ?", tenantID, name).First(&provider).Error; err != nil {
-		return nil, err
-	}
-	return &provider, nil
-}
 
 // GetSystemProvider 获取系统级提供商（tenant_id=0）
 func (r *ModelProviderRepository) GetSystemProvider(name string) (*model.ModelProvider, error) {
@@ -226,8 +210,6 @@ func (r *AIModelRepository) getVoicesFromProviders(tenantID uint) ([]*model.AIMo
 				Name:        v.ID,
 				DisplayName: v.Name,
 				Type:        "voice",
-				Gender:      v.Gender,
-				AgeGroup:    v.AgeGroup,
 				Quality:     v.Quality,
 				IsActive:    true,
 			})
@@ -420,10 +402,14 @@ func (r *ModelComparisonRepository) Update(exp *model.ModelComparisonExperiment)
 	return r.db.Save(exp).Error
 }
 
-// List 获取实验列表
-func (r *ModelComparisonRepository) List(limit int) ([]*model.ModelComparisonExperiment, error) {
+// List 获取实验列表（tenantID=0 表示系统管理员，返回全部；>0 返回本租户及系统级实验）
+func (r *ModelComparisonRepository) List(limit int, tenantID uint) ([]*model.ModelComparisonExperiment, error) {
 	var experiments []*model.ModelComparisonExperiment
-	if err := r.db.Order("created_at DESC").Limit(limit).Find(&experiments).Error; err != nil {
+	q := r.db.Order("created_at DESC").Limit(limit)
+	if tenantID > 0 {
+		q = q.Where("tenant_id = ? OR tenant_id = 0", tenantID)
+	}
+	if err := q.Find(&experiments).Error; err != nil {
 		return nil, err
 	}
 	return experiments, nil

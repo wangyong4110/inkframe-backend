@@ -300,8 +300,6 @@ func (s *OutlineReviewService) GetSynthesis(tenantID, novelID uint) (*model.Nove
 // ── 综合报告生成 ────────────────────────────────────────────────────────────
 
 func (s *OutlineReviewService) buildSynthesis(ctx context.Context, tenantID uint, novel *model.Novel, allChapters []*model.Chapter, reviews []*model.OutlineReview) *model.NovelOutlineSynthesis {
-	now := time.Now()
-
 	// 统计
 	reviewMap := make(map[int]*model.OutlineReview, len(reviews))
 	for _, r := range reviews {
@@ -366,7 +364,6 @@ func (s *OutlineReviewService) buildSynthesis(ctx context.Context, tenantID uint
 		AvgScore:         math.Round(avgScore*10) / 10,
 		TensionCurveJSON: string(tensionCurveJSON),
 		Status:           "partial",
-		SynthesizedAt:    now,
 	}
 
 	// ── AI 综合分析 ──────────────────────────────────────

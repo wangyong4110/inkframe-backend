@@ -853,6 +853,7 @@ func (s *NarrativeMemoryService) generateArcSummary(tenantID, novelID uint, arcN
 	now := time.Now()
 	// Upsert: ON DUPLICATE KEY UPDATE — 多实例并发时第二个写入直接覆盖而不会产生重复行。
 	if err := s.arcRepo.Upsert(&model.ArcSummary{
+		TenantID:         tenantID,
 		NovelID:          novelID,
 		ArcNo:            arcNo,
 		StartChapter:     startChapter,

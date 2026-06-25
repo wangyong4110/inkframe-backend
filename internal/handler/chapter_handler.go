@@ -24,6 +24,12 @@ type ChapterHandler struct {
 	taskSvc           *service.TaskService
 	novelService      *service.NovelService
 	continuityService *service.ContinuityService
+	auditSvc          *service.AuditService
+}
+
+func (h *ChapterHandler) WithAuditService(svc *service.AuditService) *ChapterHandler {
+	h.auditSvc = svc
+	return h
 }
 
 func NewChapterHandler(
@@ -97,7 +103,13 @@ func (h *ChapterHandler) CreateChapter(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c), NovelID: uint(novelId),
+			Action: "chapter.create", ResourceType: "chapter",
+			ResourceID: chapter.ID, ResourceName: chapter.Title, IP: c.ClientIP(),
+		})
+	}
 	respondCreated(c, chapter)
 }
 
@@ -269,7 +281,13 @@ func (h *ChapterHandler) DeleteChapter(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c),
+			Action: "chapter.delete", ResourceType: "chapter", ResourceID: uint(id),
+			IP: c.ClientIP(),
+		})
+	}
 	respondOK(c, nil)
 }
 
@@ -589,6 +607,13 @@ func (h *ChapterHandler) PublishChapter(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c), NovelID: uint(novelId),
+			Action: "chapter.publish", ResourceType: "chapter",
+			ResourceID: chapter.ID, ResourceName: chapter.Title, IP: c.ClientIP(),
+		})
+	}
 	respondOK(c, chapter)
 }
 
@@ -618,6 +643,13 @@ func (h *ChapterHandler) UnpublishChapter(c *gin.Context) {
 		logger.Errorf("[ChapterHandler] UnpublishChapter: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c), NovelID: uint(novelId),
+			Action: "chapter.unpublish", ResourceType: "chapter",
+			ResourceID: chapter.ID, ResourceName: chapter.Title, IP: c.ClientIP(),
+		})
 	}
 	respondOK(c, chapter)
 }

@@ -209,10 +209,10 @@ func (s *McpService) TestTool(id uint) (map[string]interface{}, error) {
 	return result, nil
 }
 
-// GetToolModels 获取绑定到某 MCP 工具的所有模型
+// GetToolModels 获取绑定到某 MCP 工具的所有模型（仅返回 enabled=true 的绑定）
 func (s *McpService) GetToolModels(toolID uint) ([]*model.AIModel, error) {
 	var bindings []model.ModelMcpBinding
-	if err := s.db.Where("mcp_tool_id = ?", toolID).Find(&bindings).Error; err != nil {
+	if err := s.db.Where("mcp_tool_id = ? AND enabled = ?", toolID, true).Find(&bindings).Error; err != nil {
 		return nil, err
 	}
 	if len(bindings) == 0 {
@@ -229,10 +229,10 @@ func (s *McpService) GetToolModels(toolID uint) ([]*model.AIModel, error) {
 	return models, nil
 }
 
-// GetModelTools 获取模型绑定的所有 MCP 工具
+// GetModelTools 获取模型绑定的所有 MCP 工具（仅返回 enabled=true 的绑定）
 func (s *McpService) GetModelTools(modelID uint) ([]*model.McpTool, error) {
 	var bindings []model.ModelMcpBinding
-	if err := s.db.Where("model_id = ?", modelID).Find(&bindings).Error; err != nil {
+	if err := s.db.Where("model_id = ? AND enabled = ?", modelID, true).Find(&bindings).Error; err != nil {
 		return nil, err
 	}
 	if len(bindings) == 0 {

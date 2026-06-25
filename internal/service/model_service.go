@@ -52,34 +52,14 @@ func selectByQuality(models []*model.AIModel) *model.AIModel {
 	return best
 }
 
+// selectByCost 原本按 cost_per_1k_tokens 选择，该字段已移除，回退为按质量选择。
 func selectByCost(models []*model.AIModel) *model.AIModel {
-	var best *model.AIModel
-	bestCost := 999999.0
-
-	for _, m := range models {
-		if m.CostPer1K < bestCost {
-			bestCost = m.CostPer1K
-			best = m
-		}
-	}
-
-	return best
+	return selectByQuality(models)
 }
 
+// selectBalanced 原本按质量/成本比选择，cost_per_1k_tokens 已移除，回退为按质量选择。
 func selectBalanced(models []*model.AIModel) *model.AIModel {
-	var best *model.AIModel
-	bestScore := 0.0
-
-	for _, m := range models {
-		// 质量/成本比
-		score := m.Quality / m.CostPer1K
-		if score > bestScore {
-			bestScore = score
-			best = m
-		}
-	}
-
-	return best
+	return selectByQuality(models)
 }
 
 // RunExperiment runs a model comparison experiment: generates output with every listed model

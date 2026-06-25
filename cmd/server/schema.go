@@ -14,7 +14,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-06-25-v6"
+const schemaVersion = "2026-06-25-v16"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -62,8 +62,6 @@ func ensureCriticalColumns(db *gorm.DB) {
 		// ink_character 人物深层动机（2026-05-30 新增）
 		{"ink_character", "inner_conflict", "TEXT NULL"},
 		{"ink_character", "core_desire", "TEXT NULL"},
-		// ink_model_provider 并发度（2026-05-30 新增）
-		{"ink_model_provider", "concurrency", "INT NOT NULL DEFAULT 0"},
 		// ink_task_model_config provider 显式绑定（2026-05-31 新增）
 		{"ink_task_model_config", "primary_provider_id", "INT UNSIGNED NOT NULL DEFAULT 0"},
 		// ink_novel 内容审核字段（2026-05-31 新增）
@@ -98,11 +96,9 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_novel", "source_file_hash", "VARCHAR(64)"},
 		// ink_chapter 质量状态（2026-06-01 Fix1 新增）
 		{"ink_chapter", "quality_status", "VARCHAR(20) NOT NULL DEFAULT 'ok'"},
-		// ink_storyboard_shot 音效/音频字段（sfx_service/capcut_service 使用；被 runSchemaCleanup 误删后恢复）
+		// ink_storyboard_shot 音效/音频字段（sfx_service/capcut_service 使用；audio_path/sfx_tags 保留；sfx_url/sfx_volume 已废弃由 runSchemaCleanup 删除）
 		{"ink_storyboard_shot", "audio_path", "VARCHAR(2000) NULL"},
-		{"ink_storyboard_shot", "sfx_url",    "VARCHAR(1000) NULL"},
 		{"ink_storyboard_shot", "sfx_tags",   "VARCHAR(2000) NULL"},
-		{"ink_storyboard_shot", "sfx_volume", "DECIMAL(4,2) NOT NULL DEFAULT 0"},
 		// ink_novel 自动审查配置（2026-06-01 新增）
 		{"ink_novel", "auto_review_rounds",    "INT NOT NULL DEFAULT 0"},
 		{"ink_novel", "auto_review_min_score", "DOUBLE NOT NULL DEFAULT 80"},
@@ -152,13 +148,22 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_storyboard_shot", "character_ids", "JSON NULL"},
 		// ink_shot_voice_segment 方言支持（2026-06-24 新增）
 		{"ink_shot_voice_segment", "language", "VARCHAR(20) NOT NULL DEFAULT ''"},
+		// 角色/道具/快照结构优化（2026-06-25-v12）
+		{"ink_character_state_snapshot", "novel_id",    "INT UNSIGNED NOT NULL DEFAULT 0"},
+		{"ink_character_state_snapshot", "deleted_at",  "DATETIME(3) NULL"},
+		{"ink_chapter_character",        "deleted_at",  "DATETIME(3) NULL"},
+		{"ink_chapter_item",             "deleted_at",  "DATETIME(3) NULL"},
+		// 情节结构与场景优化（2026-06-25-v13）
+		{"ink_plot_point",              "deleted_at",  "DATETIME(3) NULL"},
+		{"ink_scene_consistency_log",   "novel_id",    "INT UNSIGNED NOT NULL DEFAULT 0"},
+		// 大纲审查与质量控制优化（2026-06-25-v14）
+		{"ink_continuity_report",       "updated_at",  "DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)"},
+		{"ink_review_record",           "novel_id",    "INT UNSIGNED NOT NULL DEFAULT 0"},
+		{"ink_ignored_review_issue",    "novel_id",    "INT UNSIGNED NOT NULL DEFAULT 0"},
 		// ink_ai_model 调用限制字段（2026-06-24-v2 新增）
 		{"ink_ai_model", "timeout", "INT NOT NULL DEFAULT 0"},
 		{"ink_ai_model", "concurrency", "INT NOT NULL DEFAULT 0"},
 		{"ink_ai_model", "rate_limit", "INT NOT NULL DEFAULT 0"},
-		// ink_model_provider 同源分组字段（2026-06-24-v3 新增）
-		{"ink_model_provider", "group_name", "VARCHAR(100) NOT NULL DEFAULT ''"},
-		{"ink_model_provider", "is_group_canonical", "TINYINT(1) NOT NULL DEFAULT 0"},
 		// ink_model_provider 音色列表字段（2026-06-24-v7 新增）
 		{"ink_model_provider", "voices_json", "MEDIUMTEXT NOT NULL DEFAULT ''"},
 		// ink_model_provider 默认模型名称（2026-06-24-v7 新增，替代 APIVersion 的模型名用途）
@@ -176,6 +181,37 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_chapter_character", "change",          "TEXT NULL"},
 		// ink_notification 已读时间戳（2026-06-25-v6 新增，记录确切的已读时间）
 		{"ink_notification", "read_at", "DATETIME(3) NULL"},
+		// tenant_users 软删除（2026-06-25-v7 新增，支持成员历史审计）
+		{"tenant_users", "deleted_at", "DATETIME(3) NULL"},
+		// ink_audit_log 审计日志新字段（2026-06-25-v8 新增）
+		{"ink_audit_log", "novel_id",      "INT UNSIGNED NOT NULL DEFAULT 0"},
+		{"ink_audit_log", "resource_type", "VARCHAR(50) NOT NULL DEFAULT ''"},
+		{"ink_audit_log", "resource_id",   "INT UNSIGNED NOT NULL DEFAULT 0"},
+		{"ink_audit_log", "resource_name", "VARCHAR(200) NOT NULL DEFAULT ''"},
+		{"ink_audit_log", "details",       "TEXT NULL"},
+		{"ink_audit_log", "ip",            "VARCHAR(64) NOT NULL DEFAULT ''"},
+		{"ink_audit_log", "status",        "VARCHAR(20) NOT NULL DEFAULT 'ok'"},
+		// 结构优化（2026-06-25-v9）
+		{"ink_chapter",          "tenant_id",     "INT UNSIGNED NOT NULL DEFAULT 0"},
+		{"ink_chapter_version",  "novel_id",      "INT UNSIGNED NOT NULL DEFAULT 0"},
+		{"ink_arc_summary",      "tenant_id",     "INT UNSIGNED NOT NULL DEFAULT 0"},
+		{"ink_arc_summary",      "deleted_at",    "DATETIME(3) NULL"},
+		{"ink_novel_crawl_job",  "tenant_id",     "INT UNSIGNED NOT NULL DEFAULT 0"},
+		{"ink_novel_crawl_job",  "platform",      "VARCHAR(30) NOT NULL DEFAULT ''"},
+		{"ink_novel_crawl_job",  "source_url",    "VARCHAR(500) NOT NULL DEFAULT ''"},
+		{"ink_novel_crawl_job",  "error_message", "TEXT NULL"},
+		// 世界观/知识库/参考小说/章节结构优化（2026-06-25-v10）
+		{"ink_knowledge_base",    "tenant_id",       "INT UNSIGNED NOT NULL DEFAULT 0"},
+		{"ink_knowledge_base",    "embedded_at",     "DATETIME(3) NULL"},
+		{"ink_reference_novel",   "tenant_id",       "INT UNSIGNED NOT NULL DEFAULT 0"},
+		{"ink_reference_novel",   "error_message",   "TEXT NULL"},
+		{"ink_reference_novel",   "deleted_at",      "DATETIME(3) NULL"},
+		{"ink_reference_chapter", "tenant_id",       "INT UNSIGNED NOT NULL DEFAULT 0"},
+		{"ink_reference_chapter", "deleted_at",      "DATETIME(3) NULL"},
+		{"ink_reference_chapter", "updated_at",      "DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3)"},
+		// AI 模型管理优化（2026-06-25-v16）
+		{"ink_model_comparison_experiment", "tenant_id",  "INT UNSIGNED NOT NULL DEFAULT 0"},
+		{"ink_model_comparison_experiment", "deleted_at", "DATETIME(3) NULL"},
 	}
 	for _, a := range additions {
 		// 表不存在时跳过（AutoMigrate 会建表，建表时列也会随 struct 定义一同创建）
@@ -227,15 +263,15 @@ func dropLegacyCharacterColumns(db *gorm.DB) {
 		// ink_scene_anchor: RefImageShotID → 已删除
 		{"ink_scene_anchor", "ref_image_shot_id"},
 		// 2026-06-20: 删除冗余 tenant_id（通过 novel_id → novel.tenant_id 链校验）
+		// 注：ink_chapter.tenant_id 已在 v9 重新启用（struct 有字段），不再删除
+		// 注：ink_knowledge_base.tenant_id 已在 v10 重新启用（NovelID 可为 NULL，无其他隔离手段）
 		{"ink_plot_point",             "tenant_id"},
 		{"ink_scene_anchor",           "tenant_id"},
 		{"ink_skill",                  "tenant_id"},
 		{"ink_character",              "tenant_id"},
-		{"ink_chapter",                "tenant_id"},
 		{"ink_quality_report",         "tenant_id"},
 		{"ink_novel_outline_version",  "tenant_id"},
 		{"ink_continuity_report",      "tenant_id"},
-		{"ink_knowledge_base",         "tenant_id"},
 		{"ink_hook_chain",             "tenant_id"},
 		{"ink_satisfaction_point",     "tenant_id"},
 		{"ink_conflict_arc",           "tenant_id"},
@@ -297,6 +333,8 @@ func autoMigrate(db *gorm.DB) error {
 
 	// 无条件补全关键列（防止版本跳过导致列缺失）
 	ensureCriticalColumns(db)
+	// 升级列类型（text→mediumtext 等，幂等安全）
+	ensureColumnTypes(db)
 	// 删除遗留列（2026-05-15 模型简化后遗留在 DB 中的旧字段）
 	dropLegacyCharacterColumns(db)
 
@@ -561,29 +599,6 @@ func autoMigrate(db *gorm.DB) error {
 		logger.Errorf("autoMigrate: rewrite_project tenant_id backfill failed: %v", err)
 	}
 
-	// 数据迁移（2026-06-24-v3）：为已存在的系统供应商回填 group_name 和 is_group_canonical
-	groupMigrations := []struct {
-		groupName   string
-		canonical   string
-		members     []string
-	}{
-		{"kling", "kling", []string{"kling", "kling-sfx", "kling-tts", "kling-image", "kling-i2i"}},
-		{"volcengine", "volcengine-visual", []string{"volcengine-visual", "jimeng-video", "volcengine-i2i"}},
-		{"aliyun", "qianwen", []string{"qianwen", "qwen-tts", "aliyun-tts", "happyhorse"}},
-		{"pixabay", "pixabay-sfx", []string{"pixabay-sfx", "pixabay-bgm"}},
-	}
-	for _, g := range groupMigrations {
-		for _, name := range g.members {
-			isCanonical := name == g.canonical
-			if err := db.Exec(
-				`UPDATE ink_model_provider SET group_name = ?, is_group_canonical = ? WHERE name = ? AND tenant_id = 0 AND group_name = ''`,
-				g.groupName, isCanonical, name,
-			).Error; err != nil {
-				logger.Errorf("autoMigrate: group backfill %s: %v", name, err)
-			}
-		}
-	}
-
 	// 数据迁移（2026-06-25-v2）：将 StoryboardShot 旧音频字段迁移到新表
 	// SFX 字段 (sfx_url, sfx_tags, sfx_volume) → ink_shot_sfx_item
 	var sfxURLColExists int64
@@ -631,6 +646,43 @@ func autoMigrate(db *gorm.DB) error {
 			FROM ink_video WHERE deleted_at IS NULL
 			ON DUPLICATE KEY UPDATE view_count=VALUES(view_count), like_count=VALUES(like_count), comment_count=VALUES(comment_count)`).Error; err != nil {
 			logger.Errorf("autoMigrate: video stats migration failed: %v", err)
+		}
+	}
+
+	// 数据回填（2026-06-25-v9）：为新增冗余列补填历史数据，幂等（仅更新 DEFAULT 0/NULL 的行）
+	backfills := []string{
+		// ink_chapter.tenant_id 从 ink_novel 反查
+		`UPDATE ink_chapter c JOIN ink_novel n ON n.id = c.novel_id SET c.tenant_id = n.tenant_id WHERE c.tenant_id = 0 AND n.tenant_id > 0`,
+		// ink_chapter_version.novel_id 从 ink_chapter 反查
+		`UPDATE ink_chapter_version cv JOIN ink_chapter c ON c.id = cv.chapter_id SET cv.novel_id = c.novel_id WHERE cv.novel_id = 0`,
+		// ink_arc_summary.tenant_id 从 ink_novel 反查
+		`UPDATE ink_arc_summary a JOIN ink_novel n ON n.id = a.novel_id SET a.tenant_id = n.tenant_id WHERE a.tenant_id = 0 AND n.tenant_id > 0`,
+		// ink_novel_crawl_job.tenant_id 从 ink_novel 反查
+		`UPDATE ink_novel_crawl_job j JOIN ink_novel n ON n.id = j.novel_id SET j.tenant_id = n.tenant_id WHERE j.tenant_id = 0 AND n.tenant_id > 0`,
+		// 数据回填（2026-06-25-v10）
+		// ink_worldview_entity.tenant_id 从 ink_worldview 反查
+		`UPDATE ink_worldview_entity we JOIN ink_worldview w ON w.id = we.worldview_id SET we.tenant_id = w.tenant_id WHERE we.tenant_id = 0 AND w.tenant_id > 0`,
+		// ink_knowledge_base.tenant_id 从 ink_novel 反查（writing_technique 类型 novel_id=NULL，保持 0）
+		`UPDATE ink_knowledge_base kb JOIN ink_novel n ON n.id = kb.novel_id SET kb.tenant_id = n.tenant_id WHERE kb.tenant_id = 0 AND n.tenant_id > 0`,
+		// ink_reference_chapter.tenant_id 从 ink_reference_novel 反查
+		`UPDATE ink_reference_chapter rc JOIN ink_reference_novel rn ON rn.id = rc.novel_id SET rc.tenant_id = rn.tenant_id WHERE rc.tenant_id = 0 AND rn.tenant_id > 0`,
+		// 数据回填（2026-06-25-v12）
+		// ink_character_state_snapshot.novel_id 从 ink_character 反查
+		`UPDATE ink_character_state_snapshot s JOIN ink_character c ON c.id = s.character_id SET s.novel_id = c.novel_id WHERE s.novel_id = 0 AND c.novel_id > 0`,
+		// 数据回填（2026-06-25-v13）
+		// ink_scene_consistency_log.novel_id 从 ink_storyboard_shot→ink_video 反查
+		`UPDATE ink_scene_consistency_log l JOIN ink_storyboard_shot s ON s.id = l.shot_id JOIN ink_video v ON v.id = s.video_id SET l.novel_id = v.novel_id WHERE l.novel_id = 0 AND v.novel_id > 0`,
+		// 数据回填（2026-06-25-v14）
+		// ink_review_record.novel_id：章节审查从 ink_chapter 反查，分镜审查从 ink_video 反查
+		`UPDATE ink_review_record r JOIN ink_chapter c ON c.id = r.entity_id SET r.novel_id = c.novel_id WHERE r.entity_type = 'chapter' AND r.novel_id = 0 AND c.novel_id > 0`,
+		`UPDATE ink_review_record r JOIN ink_video v ON v.id = r.entity_id SET r.novel_id = v.novel_id WHERE r.entity_type = 'storyboard' AND r.novel_id = 0 AND v.novel_id > 0`,
+		// ink_ignored_review_issue.novel_id：同上
+		`UPDATE ink_ignored_review_issue i JOIN ink_chapter c ON c.id = i.entity_id SET i.novel_id = c.novel_id WHERE i.entity_type = 'chapter' AND i.novel_id = 0 AND c.novel_id > 0`,
+		`UPDATE ink_ignored_review_issue i JOIN ink_video v ON v.id = i.entity_id SET i.novel_id = v.novel_id WHERE i.entity_type = 'storyboard' AND i.novel_id = 0 AND v.novel_id > 0`,
+	}
+	for _, sql := range backfills {
+		if err := db.Exec(sql).Error; err != nil {
+			logger.Errorf("autoMigrate backfill: %v (sql: %s)", err, sql[:60])
 		}
 	}
 
@@ -789,7 +841,50 @@ func runSchemaCleanup(db *gorm.DB) {
 		{"ink_chapter", "quality_issues"}, // 已从 Chapter struct 移除，service 层不再读写
 		{"ink_chapter", "like_count"},     // 改为从 ink_chapter_like COUNT 实时聚合，gorm:"-"
 		{"ink_media_asset", "data"},       // 二进制数据已迁移至 OSS，DB 存储后端已废弃
-		// 注：ink_storyboard_shot.sfx_url/sfx_tags/sfx_volume/audio_path 仍由 sfx_service/capcut_service 使用，不删除
+		// 废弃字段删除（2026-06-25-v8）
+		{"ink_arc_summary", "peak_tension"}, // 从未被写入（Upsert 不赋值），始终为 0
+		// 废弃的 ink_model_provider 分组字段（2026-06-25-v5 删除，group 机制已全面移除）
+		{"ink_model_provider", "group_name"},
+		{"ink_model_provider", "is_group_canonical"},
+		// ink_model_provider 限流字段迁移到 ink_ai_model（2026-06-25-v6）
+		{"ink_model_provider", "timeout"},
+		{"ink_model_provider", "concurrency"},
+		{"ink_model_provider", "rate_limit"},
+		// 废弃字段删除（2026-06-25-v11）：从未被任何 service/handler 代码读写
+		{"ink_worldview_entity",  "attributes"},   // 从未被 handler/service 赋值，全部为 NULL
+		{"ink_worldview_entity",  "relations"},    // 同上
+		{"ink_knowledge_base",    "reference_id"}, // 从未被赋值，ReferenceNovel 分析管道未实现
+		{"ink_reference_novel",   "uuid"},         // 从未被赋值；uniqueIndex 导致第二次插入崩溃（已在 preMigrateCleanup 删索引）
+		{"ink_reference_novel",   "cover_image"},  // 从未被赋值
+		{"ink_reference_novel",   "crawled_at"},   // 从未被赋值
+		{"ink_reference_novel",   "total_words"},  // 从未被赋值（只有 total_chapters 被更新）
+		{"ink_reference_chapter", "uuid"},         // 从未被赋值；uniqueIndex 同上（已在 preMigrateCleanup 删索引）
+		{"ink_reference_chapter", "summary"},      // 从未被赋值
+		{"ink_reference_chapter", "word_count"},   // 从未被赋值
+		// 废弃字段删除（2026-06-25-v12）
+		{"ink_character_state_snapshot", "snapshot_time"}, // 与 created_at 完全重叠，从未单独赋值
+		{"ink_character_look",           "sort_order"},    // 与 chapter_from 语义重叠，从未用于查询排序
+		// 废弃字段删除（2026-06-25-v13）
+		{"ink_hook_chain", "foreshadow_id"}, // 与 ink_foreshadow.linked_hook_id 构成双向引用，保留 foreshadow 侧，删除 hook_chain 侧
+		// 废弃字段删除（2026-06-25-v14）
+		{"ink_outline_synthesis", "synthesized_at"}, // gorm.Model.updated_at 已代表最后一次综合分析时间，无需冗余字段
+		// 废弃字段删除（2026-06-25-v15）
+		{"ink_storyboard_shot",    "sfx_url"},         // 无任何 service 写入；ink_shot_sfx_item.url 为正式字段
+		{"ink_storyboard_shot",    "sfx_volume"},      // ink_shot_sfx_item.volume 已承接混音音量职责
+		{"ink_storyboard_shot",    "frame_image_url"}, // 始终等于 image_url，冗余；历史迁移已在 autoMigrate v2 完成
+		{"ink_novel_video_config", "asset_export_path"}, // 从未被任何 service 读取用于实际导出
+		{"ink_novel_video_config", "hd_enabled"},         // VisualMode ("hd"/"hd_3d") 已完整承接高清模式判断
+		// 废弃字段删除（2026-06-25-v16）AI 模型管理优化
+		{"ink_task_model_config",          "system_prompt"},     // 从未从 DB 读取注入 AI 请求，system prompt 由 ai_service 硬编码注入
+		{"ink_task_model_config",          "max_cost_per_task"}, // 无 cost_per_1k_tokens 数据源，该字段无法产生有效成本计算
+		{"ink_model_comparison_experiment","results"},           // 从未被 RunExperiment 写入，始终为 NULL
+		{"ink_experiment_result",          "relevance_score"},   // RunExperiment 从未写入，始终 0
+		{"ink_experiment_result",          "creativity_score"},  // 同上
+		{"ink_experiment_result",          "consistency_score"}, // 同上
+		{"ink_experiment_result",          "user_rating"},       // 无用户评分 API，从未写入
+		{"ink_experiment_result",          "user_comment"},      // 同上
+		{"ink_experiment_result",          "tokens_used"},       // GenerateWithProvider 不返回 token 数到 RunExperiment
+		{"ink_experiment_result",          "cost"},              // 同上
 	}
 	// Allowlist of valid (table, col) pairs — any entry NOT in this list is skipped.
 	allowedDrops := map[string]bool{}
@@ -946,18 +1041,216 @@ func preMigrateCleanup(db *gorm.DB) {
 			db.Exec("ALTER TABLE ink_task_model_config DROP INDEX task_type")
 		}
 	}
+
+	// ── v11: 删除废弃字段遗留的唯一索引（DROP COLUMN 会自动删单列索引，但显式删除更稳）
+	// ink_reference_novel.uuid uniqueIndex — uuid 字段从未被赋值，uniqueIndex 会导致第二次插入崩溃
+	for _, idxName := range []string{"idx_reference_novels_uuid", "uni_ink_reference_novel_uuid"} {
+		var cnt int64
+		db.Raw(`SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_reference_novel' AND INDEX_NAME = ?`, idxName).Scan(&cnt)
+		if cnt > 0 {
+			db.Exec("ALTER TABLE ink_reference_novel DROP INDEX `" + idxName + "`")
+		}
+	}
+	// 按列名查找 uuid 上的所有索引并删除（兜底，覆盖 GORM 不同版本的命名差异）
+	var refNovelUUIDIdxes []string
+	db.Raw(`SELECT DISTINCT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_reference_novel' AND COLUMN_NAME = 'uuid'`).Scan(&refNovelUUIDIdxes)
+	for _, idxName := range refNovelUUIDIdxes {
+		db.Exec("ALTER TABLE ink_reference_novel DROP INDEX `" + idxName + "`")
+	}
+	// ink_reference_chapter.uuid uniqueIndex — 同上
+	var refChapUUIDIdxes []string
+	db.Raw(`SELECT DISTINCT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_reference_chapter' AND COLUMN_NAME = 'uuid'`).Scan(&refChapUUIDIdxes)
+	for _, idxName := range refChapUUIDIdxes {
+		db.Exec("ALTER TABLE ink_reference_chapter DROP INDEX `" + idxName + "`")
+	}
+
+	// ── v10: 建唯一索引前去重（保留 id 最小的行，软删除其余重复行）
+	// ink_worldview_entity: (worldview_id, name, type) 唯一
+	if err := db.Exec(`UPDATE ink_worldview_entity e1
+		JOIN (
+			SELECT worldview_id, name, type, MIN(id) AS min_id
+			FROM ink_worldview_entity
+			WHERE deleted_at IS NULL
+			GROUP BY worldview_id, name, type
+			HAVING COUNT(*) > 1
+		) dups ON e1.worldview_id = dups.worldview_id AND e1.name = dups.name AND e1.type = dups.type AND e1.id != dups.min_id
+		SET e1.deleted_at = NOW()
+		WHERE e1.deleted_at IS NULL`).Error; err != nil {
+		logger.Errorf("[preMigrateCleanup] dedup ink_worldview_entity: %v", err)
+	}
+	// ink_reference_novel: (source_url, source_site) 唯一（仅对有 deleted_at 列的 DB 有效；新列由 ensureCriticalColumns 提前添加）
+	if err := db.Exec(`UPDATE ink_reference_novel r1
+		JOIN (
+			SELECT source_url, source_site, MIN(id) AS min_id
+			FROM ink_reference_novel
+			WHERE deleted_at IS NULL AND source_url != '' AND source_url IS NOT NULL
+			GROUP BY source_url, source_site
+			HAVING COUNT(*) > 1
+		) dups ON r1.source_url = dups.source_url AND r1.source_site = dups.source_site AND r1.id != dups.min_id
+		SET r1.deleted_at = NOW()
+		WHERE r1.deleted_at IS NULL`).Error; err != nil {
+		logger.Errorf("[preMigrateCleanup] dedup ink_reference_novel: %v", err)
+	}
+	// ink_reference_chapter: (novel_id, chapter_no) 唯一
+	if err := db.Exec(`UPDATE ink_reference_chapter c1
+		JOIN (
+			SELECT novel_id, chapter_no, MIN(id) AS min_id
+			FROM ink_reference_chapter
+			WHERE deleted_at IS NULL
+			GROUP BY novel_id, chapter_no
+			HAVING COUNT(*) > 1
+		) dups ON c1.novel_id = dups.novel_id AND c1.chapter_no = dups.chapter_no AND c1.id != dups.min_id
+		SET c1.deleted_at = NOW()
+		WHERE c1.deleted_at IS NULL`).Error; err != nil {
+		logger.Errorf("[preMigrateCleanup] dedup ink_reference_chapter: %v", err)
+	}
+
+	// ── v12: 建唯一索引前去重（角色/道具/快照）
+	// ink_character: (novel_id, name) 唯一 — 保留 id 最小的，软删除其余重复行
+	if err := db.Exec(`UPDATE ink_character c1
+		JOIN (
+			SELECT novel_id, name, MIN(id) AS min_id
+			FROM ink_character
+			WHERE deleted_at IS NULL
+			GROUP BY novel_id, name
+			HAVING COUNT(*) > 1
+		) dups ON c1.novel_id = dups.novel_id AND c1.name = dups.name AND c1.id != dups.min_id
+		SET c1.deleted_at = NOW()
+		WHERE c1.deleted_at IS NULL`).Error; err != nil {
+		logger.Errorf("[preMigrateCleanup] dedup ink_character: %v", err)
+	}
+	// ink_item: (novel_id, name) 唯一
+	if err := db.Exec(`UPDATE ink_item i1
+		JOIN (
+			SELECT novel_id, name, MIN(id) AS min_id
+			FROM ink_item
+			WHERE deleted_at IS NULL
+			GROUP BY novel_id, name
+			HAVING COUNT(*) > 1
+		) dups ON i1.novel_id = dups.novel_id AND i1.name = dups.name AND i1.id != dups.min_id
+		SET i1.deleted_at = NOW()
+		WHERE i1.deleted_at IS NULL`).Error; err != nil {
+		logger.Errorf("[preMigrateCleanup] dedup ink_item: %v", err)
+	}
+	// ink_character_state_snapshot: (character_id, chapter_id) 唯一 — 保留 id 最大（最新）的快照
+	// deleted_at 列由 ensureCriticalColumns 提前添加，此处可安全使用
+	if err := db.Exec(`UPDATE ink_character_state_snapshot s1
+		JOIN (
+			SELECT character_id, chapter_id, MAX(id) AS max_id
+			FROM ink_character_state_snapshot
+			WHERE deleted_at IS NULL
+			GROUP BY character_id, chapter_id
+			HAVING COUNT(*) > 1
+		) dups ON s1.character_id = dups.character_id AND s1.chapter_id = dups.chapter_id AND s1.id != dups.max_id
+		SET s1.deleted_at = NOW()
+		WHERE s1.deleted_at IS NULL`).Error; err != nil {
+		logger.Errorf("[preMigrateCleanup] dedup ink_character_state_snapshot: %v", err)
+	}
+	// ink_ignored_review_issue: (entity_type, entity_id, issue_hash) 唯一 — 保留 id 最大的记录（硬删除重复行）
+	// 2026-06-25-v14 新增唯一索引前清理历史重复数据
+	if err := db.Exec(`DELETE i1 FROM ink_ignored_review_issue i1
+		JOIN (
+			SELECT entity_type, entity_id, issue_hash, MAX(id) AS max_id
+			FROM ink_ignored_review_issue
+			WHERE deleted_at IS NULL
+			GROUP BY entity_type, entity_id, issue_hash
+			HAVING COUNT(*) > 1
+		) dups ON i1.entity_type = dups.entity_type AND i1.entity_id = dups.entity_id
+			AND i1.issue_hash = dups.issue_hash AND i1.id != dups.max_id
+		WHERE i1.deleted_at IS NULL`).Error; err != nil {
+		logger.Errorf("[preMigrateCleanup] dedup ink_ignored_review_issue: %v", err)
+	}
+}
+
+// ensureColumnTypes 将指定列的类型升级为更大的类型（如 text→mediumtext）。
+// 幂等安全：先检查 information_schema.COLUMNS 的 DATA_TYPE，已是目标类型则跳过。
+// 在 ensureCriticalColumns 之后调用，确保列存在后再判断类型。
+func ensureColumnTypes(db *gorm.DB) {
+	type colMod struct{ table, col string }
+	toMediumtext := []colMod{
+		// ink_worldview：世界观 7 个文本字段，玄幻/仙侠内容可能超过 text 64KB 上限
+		{"ink_worldview", "magic_system"},
+		{"ink_worldview", "geography"},
+		{"ink_worldview", "history"},
+		{"ink_worldview", "culture"},
+		{"ink_worldview", "rules"},
+		{"ink_worldview", "factions"},
+		{"ink_worldview", "glossary"},
+		// ink_knowledge_base：知识条目内容可能超过 64KB
+		{"ink_knowledge_base", "content"},
+		// ink_reference_chapter：爬取原文内容可能超过 64KB
+		{"ink_reference_chapter", "content"},
+	}
+	for _, m := range toMediumtext {
+		var colType string
+		db.Raw(
+			`SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+			m.table, m.col,
+		).Scan(&colType)
+		if colType == "" || colType == "mediumtext" || colType == "longtext" {
+			continue // 列不存在（AutoMigrate 会建）或已是更大类型，跳过
+		}
+		sql := "ALTER TABLE `" + m.table + "` MODIFY COLUMN `" + m.col + "` mediumtext"
+		if err := db.Exec(sql).Error; err != nil {
+			logger.Errorf("ensureColumnTypes: %s.%s text→mediumtext: %v", m.table, m.col, err)
+		} else {
+			logger.Infof("ensureColumnTypes: %s.%s promoted to mediumtext", m.table, m.col)
+		}
+	}
+
+	// varchar→text：确保短 varchar 列升级为 text（2026-06-25-v13）
+	toText := []colMod{
+		{"ink_foreshadow", "tags"}, // VARCHAR(500) → text（标签数量多时可能截断）
+		{"ink_video",      "tags"}, // VARCHAR(500) → text（2026-06-25-v15）
+	}
+	for _, m := range toText {
+		var colType string
+		db.Raw(
+			`SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?`,
+			m.table, m.col,
+		).Scan(&colType)
+		if colType == "" || colType == "text" || colType == "mediumtext" || colType == "longtext" {
+			continue
+		}
+		sql := "ALTER TABLE `" + m.table + "` MODIFY COLUMN `" + m.col + "` text"
+		if err := db.Exec(sql).Error; err != nil {
+			logger.Errorf("ensureColumnTypes: %s.%s varchar→text: %v", m.table, m.col, err)
+		} else {
+			logger.Infof("ensureColumnTypes: %s.%s promoted to text", m.table, m.col)
+		}
+	}
 }
 
 // ensureCriticalIndexes 幂等补全缺失索引（检查 information_schema.STATISTICS 后再 CREATE）。
 // 查询前先确认表存在，避免表尚未 AutoMigrate 时报错。
 func ensureCriticalIndexes(db *gorm.DB) {
-	type idxDef struct{ table, name, cols string }
+	type idxDef struct {
+		table  string
+		name   string
+		cols   string
+		unique bool
+	}
 	indexes := []idxDef{
-		{"ink_storyboard_shot", "idx_shot_video_shot_no", "(video_id, shot_no)"},
-		{"ink_chapter_read_record", "idx_read_user_novel", "(user_id, novel_id)"},
-		{"ink_asset", "idx_asset_creator", "(creator_id, type, status)"},
-		{"ink_chapter", "idx_chapter_novel_published", "(novel_id, is_published, chapter_no)"},
-		{"ink_entity_comment", "idx_comment_entity_created", "(entity_type, entity_id, created_at)"},
+		{"ink_storyboard_shot", "idx_shot_video_shot_no", "(video_id, shot_no)", false},
+		{"ink_chapter_read_record", "idx_read_user_novel", "(user_id, novel_id)", false},
+		{"ink_asset", "idx_asset_creator", "(creator_id, type, status)", false},
+		{"ink_chapter", "idx_chapter_novel_published", "(novel_id, is_published, chapter_no)", false},
+		{"ink_entity_comment", "idx_comment_entity_created", "(entity_type, entity_id, created_at)", false},
+		// 唯一约束：防止同一小说写入重复大纲版本号（2026-06-25-v9）
+		{"ink_novel_outline_version", "idx_outline_novel_ver", "(novel_id, version)", true},
+		// 唯一约束：防止重复实体/章节（2026-06-25-v10）
+		{"ink_worldview_entity",  "idx_we_name_type",         "(worldview_id, name, type)", true},
+		{"ink_reference_novel",   "idx_ref_novel_url_site",   "(source_url, source_site)", true},
+		{"ink_reference_chapter", "idx_ref_chapter_novel_no", "(novel_id, chapter_no)", true},
+		// 唯一约束：角色/道具/快照（2026-06-25-v12）
+		{"ink_character",                "uniq_char_novel_name",        "(novel_id, name)", true},
+		{"ink_item",                     "uniq_item_novel_name",        "(novel_id, name)", true},
+		{"ink_character_state_snapshot", "uniq_snapshot_char_chapter",  "(character_id, chapter_id)", true},
+		// 大纲审查与质量控制优化（2026-06-25-v14）
+		{"ink_continuity_report",    "idx_continuity_novel_chapter", "(novel_id, chapter_id)", false},
+		{"ink_review_record",        "idx_review_entity",            "(entity_type, entity_id)", false},
+		{"ink_ignored_review_issue", "idx_ignored_entity",           "(entity_type, entity_id)", false},
+		{"ink_ignored_review_issue", "uniq_ignored_issue",           "(entity_type, entity_id, issue_hash)", true},
 	}
 	for _, idx := range indexes {
 		// 先检查表是否存在，避免在 AutoMigrate 之前报错
@@ -978,7 +1271,11 @@ func ensureCriticalIndexes(db *gorm.DB) {
 		if cnt > 0 {
 			continue
 		}
-		sql := "ALTER TABLE `" + idx.table + "` ADD INDEX `" + idx.name + "` " + idx.cols
+		idxType := "INDEX"
+		if idx.unique {
+			idxType = "UNIQUE INDEX"
+		}
+		sql := "ALTER TABLE `" + idx.table + "` ADD " + idxType + " `" + idx.name + "` " + idx.cols
 		if err := db.Exec(sql).Error; err != nil {
 			logger.Errorf("ensureCriticalIndexes: %s.%s: %v", idx.table, idx.name, err)
 		} else {

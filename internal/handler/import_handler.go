@@ -109,6 +109,12 @@ type ImportHandler struct {
 	taskSvc             *service.TaskService
 	novelSvc            *service.NovelService
 	cache               *redis.Client // optional: cross-instance chunked-upload session storage
+	auditSvc            *service.AuditService
+}
+
+func (h *ImportHandler) WithAuditService(svc *service.AuditService) *ImportHandler {
+	h.auditSvc = svc
+	return h
 }
 
 // WithRedis injects a Redis client so chunked-upload sessions survive cross-instance routing.
@@ -202,6 +208,14 @@ func (h *ImportHandler) ImportNovel(c *gin.Context) {
 		return
 	}
 
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: tenantID, UserID: getUserID(c),
+			Action: "novel.import", ResourceType: "novel",
+			Details: map[string]any{"source": "text"}, IP: c.ClientIP(),
+		})
+	}
+
 	go func(taskID string, r service.ImportRequest) {
 		defer func() {
 			if rc := recover(); rc != nil {
@@ -291,6 +305,13 @@ func (h *ImportHandler) ImportFromFile(c *gin.Context) {
 	}
 	h.taskSvc.SetMeta(task.TaskID, map[string]interface{}{"step": "上传中..."}) //nolint:errcheck
 
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: tenantID, UserID: getUserID(c),
+			Action: "novel.import", ResourceType: "novel",
+			Details: map[string]any{"source": "file", "filename": header.Filename}, IP: c.ClientIP(),
+		})
+	}
 	go h.runImportAndAnalyze(task.TaskID, req, tenantID)
 
 	c.JSON(http.StatusAccepted, gin.H{
@@ -376,6 +397,13 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 		return
 	}
 	h.taskSvc.SetMeta(task.TaskID, map[string]interface{}{"step": "获取章节目录..."}) //nolint:errcheck
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: tenantID, UserID: getUserID(c),
+			Action: "novel.import", ResourceType: "novel",
+			Details: map[string]any{"source": "crawl", "url": req.URL}, IP: c.ClientIP(),
+		})
+	}
 
 	go func(taskID string, r *service.ImportRequest) {
 		defer func() {

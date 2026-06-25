@@ -10,12 +10,18 @@ import (
 
 // SysAdminHandler exposes system-admin REST endpoints.
 type SysAdminHandler struct {
-	svc *service.SysAdminService
+	svc      *service.SysAdminService
+	auditSvc *service.AuditService
 }
 
 // NewSysAdminHandler creates a new SysAdminHandler.
 func NewSysAdminHandler(svc *service.SysAdminService) *SysAdminHandler {
 	return &SysAdminHandler{svc: svc}
+}
+
+func (h *SysAdminHandler) WithAuditService(svc *service.AuditService) *SysAdminHandler {
+	h.auditSvc = svc
+	return h
 }
 
 // GetOverview returns platform-wide statistics.
@@ -65,6 +71,12 @@ func (h *SysAdminHandler) UpdateTenant(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			UserID: getUserID(c), Action: "sysadmin.tenant_update",
+			ResourceType: "tenant", ResourceID: uint(id), IP: c.ClientIP(),
+		})
+	}
 	respondOK(c, t)
 }
 
@@ -74,6 +86,12 @@ func (h *SysAdminHandler) DeleteTenant(c *gin.Context) {
 	if err := h.svc.DeleteTenant(uint(id)); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			UserID: getUserID(c), Action: "sysadmin.tenant_delete",
+			ResourceType: "tenant", ResourceID: uint(id), IP: c.ClientIP(),
+		})
 	}
 	respondOK(c, gin.H{"message": "deleted"})
 }
@@ -115,6 +133,12 @@ func (h *SysAdminHandler) UpdateUser(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			UserID: getUserID(c), Action: "sysadmin.user_update",
+			ResourceType: "user", ResourceID: uint(id), IP: c.ClientIP(),
+		})
+	}
 	respondOK(c, u)
 }
 
@@ -125,6 +149,12 @@ func (h *SysAdminHandler) ImpersonateUser(c *gin.Context) {
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			UserID: getUserID(c), Action: "sysadmin.impersonate",
+			ResourceType: "user", ResourceID: uint(id), IP: c.ClientIP(),
+		})
 	}
 	respondOK(c, gin.H{"token": token, "expires_in": "1h"})
 }
@@ -142,6 +172,12 @@ func (h *SysAdminHandler) ResetUserPassword(c *gin.Context) {
 	if err := h.svc.ResetUserPassword(uint(id), req.Password); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			UserID: getUserID(c), Action: "sysadmin.user_reset_password",
+			ResourceType: "user", ResourceID: uint(id), IP: c.ClientIP(),
+		})
 	}
 	respondOK(c, gin.H{"message": "password reset"})
 }
@@ -205,6 +241,12 @@ func (h *SysAdminHandler) UpdateSettings(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			UserID: getUserID(c), Action: "sysadmin.settings_update",
+			ResourceType: "system", IP: c.ClientIP(),
+		})
+	}
 	respondOK(c, gin.H{"message": "updated"})
 }
 
@@ -254,6 +296,12 @@ func (h *SysAdminHandler) BroadcastNotification(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			UserID: getUserID(c), Action: "sysadmin.broadcast",
+			ResourceType: "notification", ResourceName: req.Title, IP: c.ClientIP(),
+		})
+	}
 	respondOK(c, gin.H{"message": "broadcast sent"})
 }
 
@@ -300,6 +348,12 @@ func (h *SysAdminHandler) ChangePassword(c *gin.Context) {
 	if err := h.svc.ChangeAdminPassword(uid, req.Password); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			UserID: uid, Action: "sysadmin.change_password",
+			ResourceType: "user", ResourceID: uid, IP: c.ClientIP(),
+		})
 	}
 	respondOK(c, gin.H{"message": "password changed"})
 }

@@ -9,11 +9,11 @@ import (
 // Character 角色
 type Character struct {
 	ID      uint   `json:"id" gorm:"primaryKey"`
-	NovelID uint   `json:"novel_id" gorm:"index;not null"`
+	NovelID uint   `json:"novel_id" gorm:"index;not null;uniqueIndex:uniq_char_novel_name,priority:1"`
 	Novel   *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
 	UUID    string `json:"uuid" gorm:"uniqueIndex;size:36"`
 
-	Name string `json:"name" gorm:"size:100;not null"`
+	Name string `json:"name" gorm:"size:100;not null;uniqueIndex:uniq_char_novel_name,priority:2"`
 	Role string `json:"role" gorm:"size:50"` // protagonist/antagonist/supporting/minor
 
 	// 基本属性
@@ -60,14 +60,15 @@ func (Character) TableName() string {
 // CharacterStateSnapshot 角色状态快照
 type CharacterStateSnapshot struct {
 	ID          uint `json:"id" gorm:"primaryKey"`
-	CharacterID uint `json:"character_id" gorm:"index;not null"`
-	ChapterID   uint `json:"chapter_id" gorm:"index"`
+	NovelID     uint `json:"novel_id" gorm:"index;not null;default:0"`
+	CharacterID uint `json:"character_id" gorm:"index;not null;uniqueIndex:uniq_snapshot_char_chapter,priority:1"`
+	ChapterID   uint `json:"chapter_id" gorm:"index;uniqueIndex:uniq_snapshot_char_chapter,priority:2"`
 
 	// 物理状态
 	Age      float64 `json:"age"`
 	Height   float64 `json:"height"`                    // 单位：米
 	Weight   float64 `json:"weight"`                    // 单位：公斤
-	Health   string  `json:"health"`                    // healthy, injured, critical
+	Health   string  `json:"health" gorm:"size:50"`     // healthy, injured, critical
 	Injuries string  `json:"injuries" gorm:"type:text"` // JSON: [{part, severity, description}]
 
 	// 能力状态
@@ -76,22 +77,21 @@ type CharacterStateSnapshot struct {
 	Equipment  string `json:"equipment" gorm:"type:text"` // JSON
 
 	// 心理状态
-	Mood       string `json:"mood"`
-	Motivation string `json:"motivation"`
+	Mood       string `json:"mood" gorm:"size:50"`
+	Motivation string `json:"motivation" gorm:"size:200"`
 	Goals      string `json:"goals" gorm:"type:text"` // JSON
 	Fears      string `json:"fears" gorm:"type:text"` // JSON
 
 	// 位置状态
-	Location       string `json:"location"`
+	Location       string `json:"location" gorm:"size:200"`
 	KnownLocations string `json:"known_locations" gorm:"type:text"` // JSON
 
 	// 关系状态
 	Relations string `json:"relations" gorm:"type:text"` // JSON: [{character_id, attitude, recent_interaction}]
 
-	SnapshotTime time.Time `json:"snapshot_time"`
-
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (CharacterStateSnapshot) TableName() string {
@@ -101,10 +101,10 @@ func (CharacterStateSnapshot) TableName() string {
 // Item 物品（项目级别，贯穿整部小说）
 type Item struct {
 	ID      uint   `json:"id" gorm:"primaryKey"`
-	NovelID uint   `json:"novel_id" gorm:"index;not null"`
+	NovelID uint   `json:"novel_id" gorm:"index;not null;uniqueIndex:uniq_item_novel_name,priority:1"`
 	UUID    string `json:"uuid" gorm:"uniqueIndex;size:36"`
 
-	Name string `json:"name" gorm:"size:100;not null"`
+	Name string `json:"name" gorm:"size:100;not null;uniqueIndex:uniq_item_novel_name,priority:2"`
 
 	Description string `json:"description" gorm:"type:text"` // 统一描述（含类别、外观等所有描述性信息）
 	Location    string `json:"location" gorm:"size:200"`      // 当前/最后已知位置
@@ -135,8 +135,9 @@ type ChapterItem struct {
 	Condition string `json:"condition" gorm:"size:50"` // intact/damaged/broken/destroyed
 	Notes     string `json:"notes" gorm:"type:text"`   // 本章节备注
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 func (ChapterItem) TableName() string { return "ink_chapter_item" }
@@ -159,8 +160,9 @@ type ChapterCharacter struct {
 	Action        string `json:"action" gorm:"type:text"`        // 本章动作
 	Change        string `json:"change" gorm:"type:text"`        // 本章变化
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"-" gorm:"index"`
 }
 
 func (ChapterCharacter) TableName() string { return "ink_chapter_character" }
@@ -176,7 +178,6 @@ type CharacterLook struct {
 	Label       string `json:"label" gorm:"size:100"`         // 形象名称，如"少年时期""伪装成书生""觉醒后"
 	ChapterFrom int    `json:"chapter_from" gorm:"default:1"` // 起始章节（含）；0=从头
 	ChapterTo   int    `json:"chapter_to" gorm:"default:0"`   // 结束章节（含）；0=无限延伸
-	SortOrder   int    `json:"sort_order" gorm:"default:0"`
 
 	// 外观描述（中文，供用户阅读和编辑）
 	Description string `json:"description" gorm:"type:text"`
@@ -273,7 +274,6 @@ type CreateCharacterLookRequest struct {
 	ChapterFrom    int    `json:"chapter_from"`
 	ChapterTo      int    `json:"chapter_to"`
 	SetAsDefault   bool   `json:"set_as_default"` // 是否将此形象设为默认
-	SortOrder      int    `json:"sort_order"`
 	Description    string `json:"description"`
 	VisualPrompt   string `json:"visual_prompt"`
 	ThreeViewSheet string `json:"three_view_sheet"`
@@ -286,7 +286,6 @@ type UpdateCharacterLookRequest struct {
 	ChapterFrom    *int    `json:"chapter_from"`
 	ChapterTo      *int    `json:"chapter_to"`
 	SetAsDefault   *bool   `json:"set_as_default"` // 是否将此形象设为默认
-	SortOrder      *int    `json:"sort_order"`
 	Description    *string `json:"description"`
 	VisualPrompt   *string `json:"visual_prompt"`
 	ThreeViewSheet *string `json:"three_view_sheet"`

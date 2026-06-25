@@ -16,10 +16,16 @@ var tenantCodeRe = regexp.MustCompile(`^[a-zA-Z0-9_-]{2,32}$`)
 // TenantHandler 租户管理处理器
 type TenantHandler struct {
 	tenantService *service.TenantService
+	auditSvc      *service.AuditService
 }
 
 func NewTenantHandler(tenantService *service.TenantService) *TenantHandler {
 	return &TenantHandler{tenantService: tenantService}
+}
+
+func (h *TenantHandler) WithAuditService(svc *service.AuditService) *TenantHandler {
+	h.auditSvc = svc
+	return h
 }
 
 // ListTenants 获取租户列表（仅 admin 可查看所有租户）
@@ -118,7 +124,13 @@ func (h *TenantHandler) CreateTenant(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c),
+			Action: "tenant.create", ResourceType: "tenant",
+			ResourceID: tenant.ID, ResourceName: tenant.Name, IP: c.ClientIP(),
+		})
+	}
 	respondCreated(c, tenant)
 }
 
@@ -207,11 +219,14 @@ func (h *TenantHandler) DeleteTenant(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-	})
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c),
+			Action: "tenant.delete", ResourceType: "tenant", ResourceID: uint(id),
+			IP: c.ClientIP(),
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
 }
 
 // GetQuota 获取租户配额
@@ -349,11 +364,14 @@ func (h *TenantHandler) UpdateMemberRole(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-	})
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c),
+			Action: "tenant.member_role_update", ResourceType: "user", ResourceID: uint(userId),
+			Details: map[string]any{"role": req.Role}, IP: c.ClientIP(),
+		})
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
 }
 
 // isAdminOrOwnerOfTenant returns true if the requesting user is:

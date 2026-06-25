@@ -304,6 +304,21 @@ func (s *AIService) GetDefaultProviderName() string {
 	return p.GetName()
 }
 
+// wrapForModel 按 AIModel 的 concurrency/rateLimit 对 provider 进行包装。
+// 在已知具体模型时调用（如 callAIWithProviderSys），provider 本身已含 RetryProvider。
+func wrapForModel(provider ai.AIProvider, m *model.AIModel) ai.AIProvider {
+	if m == nil {
+		return provider
+	}
+	if m.Concurrency > 0 {
+		provider = ai.NewConcurrentProvider(provider, m.Concurrency)
+	}
+	if m.RateLimit > 0 {
+		provider = ai.NewRateLimitProvider(provider, m.RateLimit)
+	}
+	return provider
+}
+
 // getTenantProvider 按租户加载提供商（带缓存，TTL 5 分钟）。
 // targetType 为可选的模型类型提示（如 "voice"、"sfx"、"image"），用于合并型提供商（如 qianwen、kling）
 // 根据类型选择正确的底层构造器。
@@ -415,7 +430,7 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string, target
 
 	// Instantiate the provider.
 	// 名称优先匹配已知 key；对自定义名称（如"豆包图片"）则根据 endpoint 推断构造器。
-	timeout := ai.ResolveTimeout(matched.Timeout)
+	timeout := ai.ResolveTimeout(0) // timeout/concurrency/rateLimit 由 AIModel 级别控制，provider 使用默认值
 	modelName := effectiveModelName(matched)
 	var provider ai.AIProvider
 	switch matched.Name {
@@ -523,12 +538,6 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string, target
 	}
 
 	provider = ai.NewRetryProvider(provider, 3, 500*time.Millisecond)
-	if matched.Concurrency > 0 {
-		provider = ai.NewConcurrentProvider(provider, matched.Concurrency)
-	}
-	if matched.RateLimit > 0 {
-		provider = ai.NewRateLimitProvider(provider, matched.RateLimit)
-	}
 
 	// 写入缓存
 	s.providerCache.Store(cacheKey, providerCacheEntry{
@@ -1212,6 +1221,12 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 	if provider == nil {
 		return "", nil, fmt.Errorf("AI provider resolved to nil for %q", providerName)
 	}
+	// 按 AIModel 的 concurrency/rateLimit 包装 provider
+	if len(modelOverride) > 0 && modelOverride[0] != "" && s.modelRepo != nil {
+		if m, err2 := s.modelRepo.GetByName(modelOverride[0]); err2 == nil {
+			provider = wrapForModel(provider, m)
+		}
+	}
 
 	req := &ai.GenerateRequest{
 		Messages:     []ai.ChatMessage{{Role: "user", Content: prompt}},
@@ -1430,7 +1445,7 @@ func (s *AIService) logUsage(tenantID uint, config *model.TaskModelConfig, taskT
 		InputTokens:  resp.InputTokens,
 		OutputTokens: resp.Tokens,
 		TotalTokens:  resp.InputTokens + resp.Tokens,
-		Cost:         float64(resp.InputTokens+resp.Tokens) / 1000 * config.MaxCostPerTask,
+		Cost:         0, // 无 cost_per_1k_tokens 数据源，暂记 0，待后续在 AIModel 补充单价字段
 		Latency:      float64(latencyMs) / 1000,
 		Success:      true,
 	}
@@ -2448,9 +2463,9 @@ func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.Video
 	if err != nil {
 		return nil, err
 	}
-	// 按照 jimeng-video → kling → seedance/doubao → happyhorse/qianwen 顺序优先选择
-	// doubao 合并了 seedance；qianwen 合并了 happyhorse
-	preferOrder := []string{"jimeng-video", "kling", "seedance", "doubao", "happyhorse", "qianwen"}
+	// 按照 volcengine-visual/jimeng-video → kling → seedance/doubao → happyhorse/qianwen 顺序优先选择
+	// volcengine-visual 合并了 jimeng-video；doubao 合并了 seedance；qianwen 合并了 happyhorse
+	preferOrder := []string{"volcengine-visual", "jimeng-video", "kling", "seedance", "doubao", "happyhorse", "qianwen"}
 	if name != "" {
 		preferOrder = []string{strings.ToLower(name)}
 	}
@@ -2484,6 +2499,9 @@ func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.Video
 			continue
 		}
 		switch pname {
+		case "volcengine-visual":
+			// volcengine-visual 合并了 jimeng-video（即梦视频）
+			return ai.NewJimengVideoProvider(apiKey, apiSecretKey), nil
 		case "jimeng-video":
 			return ai.NewJimengVideoProvider(apiKey, apiSecretKey), nil
 		case "kling":

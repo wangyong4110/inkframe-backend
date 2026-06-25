@@ -686,7 +686,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			modelProviders.GET("", cfg.ModelHandler.ListProviders)
 			modelProviders.POST("", cfg.ModelHandler.CreateProvider)
 			modelProviders.GET("/templates", cfg.ModelHandler.ListProviderTemplates)
-			modelProviders.POST("/sync-group", cfg.ModelHandler.SyncGroupProviders)
 			modelProviders.GET("/capable", cfg.ModelHandler.ListCapableProviders)
 			modelProviders.POST("/fetch-models", cfg.ModelHandler.FetchProviderModels)
 			modelProviders.GET("/:id", cfg.ModelHandler.GetProvider)
@@ -999,6 +998,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		// 审计日志查询
 		if cfg.AuditHandler != nil {
 			v1.GET("/audit-logs", cfg.AuditHandler.List)
+			v1.GET("/novels/:id/audit-logs", cfg.AuditHandler.ListNovelLogs)
+			v1.GET("/users/me/audit-logs", cfg.AuditHandler.ListMyLogs)
 		}
 
 		// 协作

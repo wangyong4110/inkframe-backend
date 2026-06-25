@@ -10,12 +10,18 @@ import (
 
 // WebhookHandler handles webhook subscription management.
 type WebhookHandler struct {
-	svc *service.WebhookService
+	svc      *service.WebhookService
+	auditSvc *service.AuditService
 }
 
 // NewWebhookHandler creates a new WebhookHandler.
 func NewWebhookHandler(svc *service.WebhookService) *WebhookHandler {
 	return &WebhookHandler{svc: svc}
+}
+
+func (h *WebhookHandler) WithAuditService(svc *service.AuditService) *WebhookHandler {
+	h.auditSvc = svc
+	return h
 }
 
 // List GET /webhooks — list subscriptions for current tenant
@@ -52,6 +58,13 @@ func (h *WebhookHandler) Create(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: tenantID, UserID: getUserID(c),
+			Action: "webhook.create", ResourceType: "webhook",
+			ResourceID: sub.ID, ResourceName: req.URL, IP: c.ClientIP(),
+		})
+	}
 	respondCreated(c, sub)
 }
 
@@ -65,6 +78,13 @@ func (h *WebhookHandler) Delete(c *gin.Context) {
 	if err := h.svc.DeleteSubscription(id, tenantID); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: tenantID, UserID: getUserID(c),
+			Action: "webhook.delete", ResourceType: "webhook", ResourceID: uint(id),
+			IP: c.ClientIP(),
+		})
 	}
 	respondOK(c, nil)
 }

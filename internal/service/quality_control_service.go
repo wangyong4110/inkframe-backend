@@ -815,6 +815,7 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 		return nil, fmt.Errorf("marshal review result: %w", err)
 	}
 	rec := &model.ReviewRecord{
+		NovelID:      novel.ID,
 		EntityType:   model.ReviewEntityChapter,
 		EntityID:     chapterID,
 		OverallScore: review.OverallScore,
@@ -1055,7 +1056,12 @@ func (s *QualityControlService) IgnoreIssue(chapterID uint, issueText, note stri
 	}
 	h := sha256.Sum256([]byte(issueText))
 	hash := hex.EncodeToString(h[:])
+	var novelID uint
+	if ch, err := s.chapterRepo.GetByID(chapterID); err == nil {
+		novelID = ch.NovelID
+	}
 	item := &model.IgnoredReviewIssue{
+		NovelID:    novelID,
 		EntityType: model.ReviewEntityChapter,
 		EntityID:   chapterID,
 		IssueText:  issueText,

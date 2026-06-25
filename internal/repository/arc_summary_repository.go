@@ -33,7 +33,7 @@ func (r *ArcSummaryRepository) Upsert(arc *model.ArcSummary) error {
 		Columns: []clause.Column{{Name: "novel_id"}, {Name: "arc_no"}},
 		DoUpdates: clause.AssignmentColumns([]string{
 			"summary", "key_events", "character_changes", "open_foreshadows",
-			"start_chapter", "end_chapter", "peak_tension", "updated_at",
+			"start_chapter", "end_chapter", "updated_at",
 		}),
 	}).Create(arc).Error
 }

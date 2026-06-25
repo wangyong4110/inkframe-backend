@@ -1020,16 +1020,14 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	if shot.ImageURL != "" {
 		// 已有正式镜头图，直接复用，无需再次生成
 		referenceImage = shot.ImageURL
-		shot.FrameImageURL = shot.ImageURL
 		logger.Printf("GenerateShotVideo: shot %d reusing existing ImageURL as reference: %s", shot.ShotNo, shot.ImageURL)
 		// 迁移旧的本地 DB 路径到 OSS，同时永久更新 DB（只做一次）
 		if migrated := s.migrateLocalImageToPublic(shot.ImageURL); migrated != shot.ImageURL {
 			logger.Printf("GenerateShotVideo: shot %d migrated ImageURL %s → %s", shot.ShotNo, shot.ImageURL, migrated)
 			referenceImage = migrated
 			shot.ImageURL = migrated
-			shot.FrameImageURL = migrated
 			if err := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{
-				"image_url": migrated, "frame_image_url": migrated,
+				"image_url": migrated,
 			}); err != nil {
 				logger.Errorf("GenerateShotVideo: shot %d persist migrated URL: %v", shot.ShotNo, err)
 			}
@@ -1057,7 +1055,6 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 			return fmt.Errorf("shot %d: %s", shot.ShotNo, errMsg)
 		}
 		shot.ImageURL = frameURL
-		shot.FrameImageURL = frameURL
 		referenceImage = frameURL
 		// 立即持久化图片 URL，确保视频生成失败时图片不丢失
 		if updateErr := s.storyboardRepo.Update(shot); updateErr != nil {
@@ -1101,7 +1098,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 			if klingMode == "pro" && !vc.KlingProForAction {
 				klingMode = "std"
 			}
-			hdEnabled = vc.HDEnabled || strings.Contains(vid.VisualMode, "hd")
+			hdEnabled = strings.Contains(vid.VisualMode, "hd")
 			threeDEnabled = vc.ThreeDEnabled || strings.Contains(vid.VisualMode, "3d")
 			threeDStyle = vid.ThreeDStyle
 			klingModelOverride = vc.KlingModel
@@ -1471,12 +1468,14 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 	if s.sceneConsistencySvc != nil && s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
 		go func(sh *model.StoryboardShot, imgURL string) {
 			tenantID := uint(0)
+			novelID := uint(0)
 			if v, err := s.videoRepo.GetByID(sh.VideoID); err == nil {
 				tenantID = s.videoTenantID(v)
+				novelID = v.NovelID
 			}
 			anchor, err := s.sceneAnchorSvc.Get(*sh.SceneAnchorID)
 			if err == nil {
-				if report, err := s.sceneConsistencySvc.ScoreScene(sh, anchor, imgURL, 1, tenantID); err != nil {
+				if report, err := s.sceneConsistencySvc.ScoreScene(sh, anchor, imgURL, 1, tenantID, novelID); err != nil {
 					logger.Errorf("[VideoService] ScoreScene shot %d: %v", sh.ShotNo, err)
 				} else {
 					logger.Printf("[VideoService] ScoreScene shot %d: overall=%.2f passed=%v", sh.ShotNo, report.OverallScore, report.Passed)

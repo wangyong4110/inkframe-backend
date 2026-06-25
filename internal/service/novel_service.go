@@ -323,7 +323,7 @@ func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequ
 	// ── Step 2: VideoConfig lives in a separate table; read-modify-write is
 	// acceptable here because video settings races are non-critical. ──────────
 	hasVideoFields := req.VideoType != "" || req.VideoResolution != "" || req.VideoFPS != nil ||
-		req.VideoAspectRatio != "" || req.CharConsistencyWeight != nil || req.AssetExportPath != "" ||
+		req.VideoAspectRatio != "" || req.CharConsistencyWeight != nil ||
 		req.NarrationVoice != "" || req.SubtitleEnabled != nil || req.SubtitlePosition != "" ||
 		req.SubtitleFontSize != nil || req.SubtitleColor != "" || req.SubtitleBgStyle != "" ||
 		req.SubtitleFont != "" || req.ColorGrade != "" || req.ContrastLevel != nil ||
@@ -341,7 +341,6 @@ func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequ
 		if req.VideoFPS != nil             { vc.VideoFPS = *req.VideoFPS }
 		if req.VideoAspectRatio != ""      { vc.VideoAspectRatio = req.VideoAspectRatio }
 		if req.CharConsistencyWeight != nil { vc.CharConsistencyWeight = *req.CharConsistencyWeight }
-		if req.AssetExportPath != ""       { vc.AssetExportPath = req.AssetExportPath }
 		if req.NarrationVoice != ""        { vc.NarrationVoice = req.NarrationVoice }
 		if req.SubtitleEnabled != nil      { vc.SubtitleEnabled = *req.SubtitleEnabled }
 		if req.SubtitlePosition != ""      { vc.SubtitlePosition = req.SubtitlePosition }
@@ -1189,15 +1188,15 @@ func (s *NovelService) writeCharacterSnapshots(tenantID uint, chapter *model.Cha
 			continue
 		}
 		snapshot := &model.CharacterStateSnapshot{
-			CharacterID:  char.ID,
-			ChapterID:    chapter.ID,
-			Mood:         state.Mood,
-			Location:     state.Location,
-			Motivation:   state.Motivation,
-			PowerLevel:   state.PowerLevel,
-			SnapshotTime: chapter.CreatedAt,
+			NovelID:     chapter.NovelID,
+			CharacterID: char.ID,
+			ChapterID:   chapter.ID,
+			Mood:        state.Mood,
+			Location:    state.Location,
+			Motivation:  state.Motivation,
+			PowerLevel:  state.PowerLevel,
 		}
-		if err := s.snapshotRepo.Create(snapshot); err != nil {
+		if err := s.snapshotRepo.Upsert(snapshot); err != nil {
 			logger.Errorf("writeCharacterSnapshots: create snapshot failed for char %d: %v", char.ID, err)
 			metrics.CharacterSnapshotTotal.WithLabelValues("error").Inc()
 		} else {
@@ -1272,6 +1271,7 @@ func (s *NovelService) SyncCharacterSnapshots(
 				continue
 			}
 			snap := &model.CharacterStateSnapshot{
+				NovelID:        chapter.NovelID,
 				CharacterID:    char.ID,
 				ChapterID:      chapter.ID,
 				Age:            prevSnap.Age,
@@ -1289,9 +1289,8 @@ func (s *NovelService) SyncCharacterSnapshots(
 				Location:       prevSnap.Location,
 				KnownLocations: prevSnap.KnownLocations,
 				Relations:      prevSnap.Relations,
-				SnapshotTime:   chapter.CreatedAt,
 			}
-			if e := s.snapshotRepo.Create(snap); e != nil {
+			if e := s.snapshotRepo.Upsert(snap); e != nil {
 				logger.Errorf("SyncCharacterSnapshots: copy snapshot char %d: %v", char.ID, e)
 			}
 		}
@@ -1376,21 +1375,21 @@ func (s *NovelService) SyncCharacterSnapshots(
 		}
 
 		snap := &model.CharacterStateSnapshot{
-			CharacterID:  char.ID,
-			ChapterID:    chapter.ID,
-			Age:          age,
-			Height:       height,
-			Weight:       weight,
-			Health:       health,
-			PowerLevel:   state.PowerLevel,
-			Abilities:    abilities,
-			Equipment:    baseEquipment,
-			Mood:         state.Mood,
-			Motivation:   state.Motivation,
-			Location:     state.Location,
-			SnapshotTime: chapter.CreatedAt,
+			NovelID:     chapter.NovelID,
+			CharacterID: char.ID,
+			ChapterID:   chapter.ID,
+			Age:         age,
+			Height:      height,
+			Weight:      weight,
+			Health:      health,
+			PowerLevel:  state.PowerLevel,
+			Abilities:   abilities,
+			Equipment:   baseEquipment,
+			Mood:        state.Mood,
+			Motivation:  state.Motivation,
+			Location:    state.Location,
 		}
-		if e := s.snapshotRepo.Create(snap); e != nil {
+		if e := s.snapshotRepo.Upsert(snap); e != nil {
 			logger.Errorf("SyncCharacterSnapshots: create snapshot char %d: %v", char.ID, e)
 		}
 	}

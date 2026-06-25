@@ -341,6 +341,7 @@ func (s *NovelImportService) RecoverStaleCrawlJobs(ctx context.Context) {
 		}
 		// Mark the DB record as failed first; ResumeCrawl will create a new job record.
 		_ = s.crawlJobRepo.Finalize(job.ID, "failed", job.Progress, job.TotalChaps, job.FailedCount)
+		_ = s.crawlJobRepo.SetError(job.ID, "服务重启时发现未完成任务，已标记失败并重新提交")
 		if err := s.ResumeCrawl(job.NovelID); err != nil {
 			logger.Errorf("[CrawlRecover] novel %d resume failed: %v", job.NovelID, err)
 		} else {
@@ -422,16 +423,34 @@ func (s *NovelImportService) crawlChaptersBackground(
 	// 创建 DB 爬取任务记录，获取 jobID 用于后续进度持久化
 	var jobID uint
 	if s.crawlJobRepo != nil {
-		job := &model.NovelCrawlJob{
-			NovelID:    novelID,
-			Status:     "running",
-			Progress:   0,
-			TotalChaps: progress.Total,
-		}
-		if err := s.crawlJobRepo.Create(job); err != nil {
-			logger.Errorf("[Crawl] create novel crawl job failed: %v", err)
+		// 防并发：DB 层检查是否已有 running 任务（覆盖重启恢复等 in-memory 检查盲区）
+		if running, err := s.crawlJobRepo.HasRunningJob(novelID); err == nil && running {
+			logger.Warnf("[Crawl] novel %d already has a running job in DB, skip creating new one", novelID)
 		} else {
-			jobID = job.ID
+			// 从章节 stub 提取平台和来源 URL
+			var platform, sourceURL string
+			for _, ch := range chapters {
+				u := strings.TrimPrefix(ch.Outline, "crawl:")
+				if u != "" {
+					sourceURL = u
+					platform = s.detectSiteFromURL(u)
+					break
+				}
+			}
+			job := &model.NovelCrawlJob{
+				TenantID:   tenantID,
+				NovelID:    novelID,
+				Platform:   platform,
+				SourceURL:  sourceURL,
+				Status:     "running",
+				Progress:   0,
+				TotalChaps: progress.Total,
+			}
+			if err := s.crawlJobRepo.Create(job); err != nil {
+				logger.Errorf("[Crawl] create novel crawl job failed: %v", err)
+			} else {
+				jobID = job.ID
+			}
 		}
 	}
 	// Build fetch list from chapter stubs (those with a "crawl:" URL in Outline)
@@ -581,6 +600,9 @@ func (s *NovelImportService) crawlChaptersBackground(
 			dbStatus = "partial"
 		}
 		_ = s.crawlJobRepo.Finalize(jobID, dbStatus, finalDone, finalDone+finalFailed, finalFailed)
+		if finalStatus == "failed" {
+			_ = s.crawlJobRepo.SetError(jobID, fmt.Sprintf("爬取失败：成功 %d 章，失败 %d 章", finalDone, finalFailed))
+		}
 	}
 
 	// 将全本内容合并上传到 OSS 备份
@@ -805,8 +827,9 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 		result.OSSUrl = s.uploadRawToOSS(context.Background(), req.TenantID, novel.ID, req.FileName, req.FileData)
 	}
 
-	// 保存章节：先给所有章节填充 NovelID / ChapterNo / UUID
+	// 保存章节：先给所有章节填充 NovelID / TenantID / ChapterNo / UUID
 	for i, chapter := range chapters {
+		chapter.TenantID = novel.TenantID
 		chapter.NovelID = novel.ID
 		chapter.ChapterNo = chapterOffset + i + 1
 		if chapter.UUID == "" {
@@ -1027,6 +1050,7 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 	for i, info := range chapterInfos {
 		stubs = append(stubs, &model.Chapter{
 			UUID:      uuid.New().String(),
+			TenantID:  novel.TenantID,
 			NovelID:   novel.ID,
 			ChapterNo: chapterOffset + i + 1,
 			Title:     info.Title,

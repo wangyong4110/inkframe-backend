@@ -131,6 +131,9 @@ func main() {
 	// 8. 初始化服务层
 	services := initServices(db, repos, aiManager, vectorStore, cfg, redisClient)
 
+	// 补全已有租户供应商的新模型定义（幂等，服务器重启时自动同步）
+	services.ModelService.SeedAllProviders()
+
 	// 9. 初始化默认测试账户（仅开发模式）
 	if cfg.Server.Mode != "release" {
 		seedDefaultUser(services)

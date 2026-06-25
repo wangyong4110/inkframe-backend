@@ -44,7 +44,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				if err := svcs.SFXService.AutoGenerateSFX(context.Background(), shot, t.TenantID, params.Provider, true); err != nil {
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				} else {
-					svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"shot_id": shot.ID, "sfx_url": shot.SFXURL}) //nolint:errcheck
+					svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"shot_id": shot.ID}) //nolint:errcheck
 				}
 				return
 			}

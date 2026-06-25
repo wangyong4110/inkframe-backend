@@ -22,8 +22,9 @@ type PlotPoint struct {
 	IsResolved bool  `json:"is_resolved" gorm:"index:idx_plotpoint_novel_resolved,priority:2;default:false"`
 	ResolvedIn *uint `json:"resolved_in"` // 解决这一剧情点的章节ID
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (PlotPoint) TableName() string {
@@ -42,25 +43,25 @@ type UpdatePlotPointRequest struct {
 
 // KnowledgeBase 知识库
 type KnowledgeBase struct {
-	ID   uint   `json:"id" gorm:"primaryKey"`
-	Type string `json:"type" gorm:"size:50;index;index:idx_kb_novel_type,priority:2"`
+	ID       uint   `json:"id" gorm:"primaryKey"`
+	TenantID uint   `json:"tenant_id" gorm:"index;not null;default:0"` // 必须：NovelID 可为 NULL（写作技巧类），TenantID 是唯一隔离手段
+	Type     string `json:"type" gorm:"size:50;index;index:idx_kb_novel_type,priority:2"`
 	// character_fact=角色事实, lore=世界观知识, writing_technique=写作技巧
 
 	Title   string `json:"title" gorm:"size:255;not null"`
-	Content string `json:"content" gorm:"type:text"`
+	Content string `json:"content" gorm:"type:mediumtext"` // mediumtext：知识条目内容可能超过 64KB
 
 	Tags string `json:"tags" gorm:"type:text"` // JSON数组
 
 	// 关联
-	NovelID         *uint           `json:"novel_id,omitempty" gorm:"index;index:idx_kb_novel_type,priority:1"`
-	Novel           *Novel          `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
-	SourceChapterID *uint           `json:"source_chapter_id,omitempty" gorm:"index"`
-	ReferenceID     *uint           `json:"reference_id,omitempty" gorm:"index"`
-	Reference       *ReferenceNovel `json:"reference,omitempty" gorm:"foreignKey:ReferenceID"`
+	NovelID         *uint  `json:"novel_id,omitempty" gorm:"index;index:idx_kb_novel_type,priority:1"`
+	Novel           *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
+	SourceChapterID *uint  `json:"source_chapter_id,omitempty" gorm:"index"`
 
 	// 向量信息
-	VectorID   string `json:"vector_id" gorm:"size:100"`
-	VectorHash string `json:"vector_hash" gorm:"size:64"`
+	VectorID   string     `json:"vector_id" gorm:"size:200"` // 扩大至 200：兼容自定义哈希 ID
+	VectorHash string     `json:"vector_hash" gorm:"size:64"`
+	EmbeddedAt *time.Time `json:"embedded_at,omitempty"` // 最近一次向量化时间，用于过期刷新策略
 
 	// 统计
 	UsageCount int `json:"usage_count" gorm:"default:0"`
@@ -87,7 +88,6 @@ type HookChain struct {
 	ActualPayoffAt  int    `json:"actual_payoff_at" gorm:"default:0"`         // 实际兑现章节号
 	Intensity       int    `json:"intensity" gorm:"not null;default:5"`       // 1-10
 	IsFulfilled     bool   `json:"is_fulfilled" gorm:"index:idx_hook_novel_fulfilled,priority:2;default:false"`
-	ForeshadowID    *uint  `json:"foreshadow_id,omitempty" gorm:"index"`      // 关联伏笔 ID
 	Notes           string `json:"notes" gorm:"type:text"`
 	PayoffQuality   int    `json:"payoff_quality" gorm:"default:0"` // 1-5兑现质量评分
 	PayoffNotes     string `json:"payoff_notes" gorm:"type:text"`   // 兑现质量说明
@@ -185,9 +185,10 @@ func (ChapterSceneAnchor) TableName() string { return "ink_chapter_scene_anchor"
 
 // SceneConsistencyLog 场景一致性评分日志
 type SceneConsistencyLog struct {
-	ID           uint    `gorm:"primaryKey" json:"id"`
-	ShotID       uint    `gorm:"index;not null" json:"shot_id"`
-	AnchorID     uint    `gorm:"index;not null" json:"anchor_id"`
+	ID       uint `gorm:"primaryKey" json:"id"`
+	NovelID  uint `gorm:"index;not null;default:0" json:"novel_id"`
+	ShotID   uint `gorm:"index;not null" json:"shot_id"`
+	AnchorID uint `gorm:"index;not null" json:"anchor_id"`
 	Attempt      int     `json:"attempt"`
 	OverallScore float64 `gorm:"type:decimal(4,3)" json:"overall_score"`
 	ArchScore    float64 `gorm:"type:decimal(4,3)" json:"arch_score"`

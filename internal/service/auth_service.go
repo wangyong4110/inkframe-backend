@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,6 +19,12 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
+
+// hashToken 对原始 token 做 SHA-256，防止数据库泄露时 token 被直接利用。
+func hashToken(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
 
 // AuthService 认证服务
 type AuthService struct {
@@ -601,11 +609,12 @@ func (s *AuthService) RegisterWithPhone(phone, code, nickname, tenantName string
 	var tenantID uint
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		phoneVerifiedAt := time.Now()
+		phonePtr := phone
 		u := &model.User{
 			UUID:            uuid.New().String(),
 			Username:        username,
 			Email:           phone + "@phone.local",
-			Phone:           phone,
+			Phone:           &phonePtr,
 			Password:        string(hashed),
 			Nickname:        nickname,
 			Status:          "active",
@@ -729,7 +738,8 @@ func (s *AuthService) LoginWithOAuth(info *OAuthUserInfo) (*AuthResponse, error)
 		EmailVerifiedAt: &oauthVerifiedAt, // OAuth 身份已由第三方验证
 	}
 	if info.Phone != "" {
-		newUser.Phone = info.Phone
+		p := info.Phone
+		newUser.Phone = &p
 	}
 	if err := s.userRepo.Create(newUser); err != nil {
 		if isDuplicateKeyError(err) {
@@ -810,7 +820,7 @@ func (s *AuthService) RequestPasswordReset(email string) (token string, err erro
 	rawToken := uuid.New().String()
 	t := &model.UserToken{
 		UserID:    user.ID,
-		Token:     rawToken,
+		Token:     hashToken(rawToken), // 存哈希，原始 token 仅通过邮件链接传递
 		TokenType: "reset_password",
 		ExpiresAt: time.Now().Add(30 * time.Minute),
 	}
@@ -853,7 +863,7 @@ func (s *AuthService) ResetPassword(token, newPassword string) error {
 	if s.tokenRepo == nil {
 		return fmt.Errorf("token repository not configured")
 	}
-	t, err := s.tokenRepo.FindValid(token, "reset_password")
+	t, err := s.tokenRepo.FindValid(hashToken(token), "reset_password")
 	if err != nil {
 		return fmt.Errorf("invalid or expired reset token")
 	}
@@ -918,7 +928,7 @@ func (s *AuthService) SendEmailVerification(userID uint) (token string, err erro
 	ttl := s.verifyTTL()
 	t := &model.UserToken{
 		UserID:    userID,
-		Token:     rawToken,
+		Token:     hashToken(rawToken), // 存哈希，原始 token 仅通过邮件链接传递
 		TokenType: "verify_email",
 		ExpiresAt: time.Now().Add(ttl),
 	}
@@ -1005,7 +1015,7 @@ func (s *AuthService) VerifyEmail(token string) error {
 	if s.tokenRepo == nil {
 		return fmt.Errorf("token repository not configured")
 	}
-	t, err := s.tokenRepo.FindValid(token, "verify_email")
+	t, err := s.tokenRepo.FindValid(hashToken(token), "verify_email")
 	if err != nil {
 		return fmt.Errorf("invalid or expired verification token")
 	}

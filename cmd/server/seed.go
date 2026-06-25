@@ -238,174 +238,59 @@ func seedAIModels(db *gorm.DB) {
 	db.Exec("DELETE FROM `ink_ai_model` WHERE `type` = 'voice' AND `deleted_at` IS NULL")
 
 	type providerSeed struct {
-		name             string
-		displayName      string
-		endpoint         string
-		needsSecretKey   bool     // 是否需要 AK/SK 双密钥
-		staticModels     []string // 不支持 /models 端点时的内置模型列表
-		groupName        string   // 同源分组标识（空=独立供应商）
-		isGroupCanonical bool     // 是否为该组的 UI 代表
+		name           string
+		displayName    string
+		endpoint       string
+		needsSecretKey bool     // 是否需要 AK/SK 双密钥
+		staticModels   []string // 不支持 /models 端点时的内置模型列表
 	}
-	type modelSeed struct {
-		providerName string
-		name         string
-		displayName  string
-		modelType    string
-		quality      float64
-		maxTokens    int
-	}
-
 	providers := []providerSeed{
 		// LLM — 国际
 		// openai 同时承载 DALL-E 图像生成（openai-image 已合并）
-		{"openai", "OpenAI", "https://api.openai.com/v1", false, nil, "", false},
-		{"anthropic", "Anthropic", "https://api.anthropic.com/v1", false, nil, "", false},
+		{"openai", "OpenAI", "https://api.openai.com/v1", false, nil},
+		{"anthropic", "Anthropic", "https://api.anthropic.com/v1", false, nil},
 		// Azure OpenAI: endpoint = https://<resource>.openai.azure.com/openai
-		{"azure", "Azure OpenAI", "https://YOUR-RESOURCE.openai.azure.com/openai", false, nil, "", false},
-		{"google", "Google DeepMind", "https://generativelanguage.googleapis.com/v1", false, nil, "", false},
-		{"xai", "xAI (Grok)", "https://api.x.ai/v1", false, nil, "", false},
-		{"mistral", "Mistral AI", "https://api.mistral.ai/v1", false, nil, "", false},
-		{"meta", "Meta AI (Llama)", "https://api.llama.com/compat/v1", false, nil, "", false},
+		{"azure", "Azure OpenAI", "https://YOUR-RESOURCE.openai.azure.com/openai", false, nil},
+		{"google", "Google DeepMind", "https://generativelanguage.googleapis.com/v1", false, nil},
+		{"xai", "xAI (Grok)", "https://api.x.ai/v1", false, nil},
+		{"mistral", "Mistral AI", "https://api.mistral.ai/v1", false, nil},
+		{"meta", "Meta AI (Llama)", "https://api.llama.com/compat/v1", false, nil},
 		// LLM — 国内
 		// doubao 同时承载 Seedance 视频生成（seedance 已合并）
-		{"doubao", "豆包（火山引擎 Ark）", "https://ark.volces.com/api/v3", false, nil, "doubao", true},
-		{"deepseek", "DeepSeek", "https://api.deepseek.com/v1", false, nil, "", false},
+		{"doubao", "豆包（火山引擎 Ark）", "https://ark.volces.com/api/v3", false, nil},
+		{"deepseek", "DeepSeek", "https://api.deepseek.com/v1", false, nil},
 		// qianwen 同时承载 CosyVoice（aliyun-tts）、千问TTS（qwen-tts）、HappyHorse视频（均已合并）
-		{"qianwen", "通义千问（DashScope）", "https://dashscope.aliyuncs.com/compatible-mode/v1", false, nil, "aliyun", true},
-		{"zhipu", "智谱AI (GLM / Z.AI)", "https://open.bigmodel.cn/api/paas/v4", false, nil, "", false},
-		{"moonshot", "Moonshot AI (Kimi)", "https://api.moonshot.cn/v1", false, nil, "", false},
-		{"baidu", "百度文心一言 (ERNIE)", "https://qianfan.baidubce.com/v2", false, nil, "baidu", true},
-		{"tencent", "腾讯混元 (Hunyuan)", "https://api.hunyuan.cloud.tencent.com/v1", false, nil, "tencent", true},
-		{"yi", "零一万物 (Yi)", "https://api.lingyiwanwu.com/v1", false, nil, "", false},
-		// Ollama 本地 LLM
-		{"ollama", "Ollama（本地）", "http://localhost:11434/v1", false, nil, "", false},
-		// 即梦/火山引擎 组：volcengine-visual(图像) + jimeng-video(视频)
+		{"qianwen", "通义千问（DashScope）", "https://dashscope.aliyuncs.com/compatible-mode/v1", false, nil},
+		{"zhipu", "智谱AI (GLM / Z.AI)", "https://open.bigmodel.cn/api/paas/v4", false, nil},
+		{"moonshot", "Moonshot AI (Kimi)", "https://api.moonshot.cn/v1", false, nil},
+		{"baidu", "百度文心一言 (ERNIE)", "https://qianfan.baidubce.com/v2", false, nil},
+		{"tencent", "腾讯混元 (Hunyuan)", "https://api.hunyuan.cloud.tencent.com/v1", false, nil},
+		{"yi", "零一万物 (Yi)", "https://api.lingyiwanwu.com/v1", false, nil},
+		// 即梦AI（火山引擎）：volcengine-visual 同时承载图像生成和视频生成（jimeng-video 已合并）
 		{"volcengine-visual", "即梦AI（火山引擎）", "", true,
-			[]string{"general_v3.0", "general_v3.0-I2V"}, "volcengine", true},
-		{"jimeng-video", "即梦视频3.0（火山引擎）", "", true, nil, "volcengine", false},
+			[]string{"general_v3.0", "general_v3.0-I2V"}},
 		// 可灵：一个供应商承载视频/音效/语音/图像（AK/SK 共用，按模型 type 分发）
 		{"kling", "可灵（快手）", "https://api-beijing.klingai.com", true,
-			[]string{"kling-v1-6", "kling-v1-5", "kling-v1"}, "", false},
-		// 语音合成
-		{"doubao-speech", "豆包 V3", "https://openspeech.bytedance.com/api/v3", false,
-			[]string{"seed-tts-2.0", "seed-tts-1.0"}, "doubao", false},
-		{"doubao-speech-v1", "豆包 V1", "https://openspeech.bytedance.com/api/v1", true,
+			[]string{"kling-v1-6", "kling-v1-5", "kling-v1"}},
+		// 语音合成 — doubao-speech 与 doubao 使用不同端点和不同凭证，独立配置
+		{"doubao-speech", "豆包语音 V3（字节跳动）", "https://openspeech.bytedance.com/api/v3", false,
+			[]string{"seed-tts-2.0", "seed-tts-1.0"}},
+		{"doubao-speech-v1", "豆包语音 V1（字节跳动）", "https://openspeech.bytedance.com/api/v1", true,
 			[]string{
 				"zh_female_vv_uranus_bigtts", "zh_female_xiaohe_uranus_bigtts",
 				"zh_male_m191_uranus_bigtts", "zh_male_taocheng_uranus_bigtts",
-			}, "doubao", false},
+			}},
 		{"baidu-tts", "百度", "https://tsn.baidu.com", true,
-			[]string{"0", "1", "3", "4", "5", "103", "106", "110", "111"}, "baidu", false},
+			[]string{"0", "1", "3", "4", "5", "103", "106", "110", "111"}},
 		{"minimax-tts", "MiniMax", "https://api.minimax.chat/v1", true,
-			[]string{"female-shaonv", "female-yujie", "male-qn-qingse", "male-qn-jingying"}, "", false},
+			[]string{"female-shaonv", "female-yujie", "male-qn-qingse", "male-qn-jingying"}},
 		{"tencent-tts", "腾讯云", "https://tts.tencentcloudapi.com", true,
-			[]string{"101001", "101002", "101011", "101012"}, "tencent", false},
+			[]string{"101001", "101002", "101011", "101012"}},
 		// 音效
 		{"elevenlabs-sfx", "ElevenLabs", "https://api.elevenlabs.io", false,
-			[]string{"sound-generation"}, "", false},
+			[]string{"sound-generation"}},
 		// 背景音乐
-		{"fun-music", "Fun-Music AI（阿里云百炼）", "", false, nil, "", false},
-	}
-
-	models := []modelSeed{
-		// OpenAI
-		{"openai", "gpt-4o", "GPT-4o", "llm", 0.95, 16384},
-		{"openai", "gpt-4o-mini", "GPT-4o Mini", "llm", 0.85, 16384},
-		// OpenAI Image
-		// openai 图像生成（原 openai-image 已合并）
-		{"openai", "dall-e-3", "DALL-E 3", "image", 0.95, 0},
-		// Azure OpenAI — 模型名 = Azure portal 中的部署名（Deployment name）
-		// 若用户的部署名不同，可在模型管理界面修改或新增
-		{"azure", "gpt-4o", "GPT-4o（Azure）", "llm", 0.95, 16384},
-		{"azure", "gpt-4o-mini", "GPT-4o Mini（Azure）", "llm", 0.85, 16384},
-		{"azure", "gpt-4.1", "GPT-4.1（Azure）", "llm", 0.96, 32768},
-		{"azure", "gpt-4.1-mini", "GPT-4.1 Mini（Azure）", "llm", 0.88, 16384},
-		{"azure", "o3-mini", "o3-mini（Azure）", "llm", 0.94, 65536},
-		// Anthropic
-		{"anthropic", "claude-opus-4-5", "Claude Opus 4.5", "llm", 0.98, 8192},
-		{"anthropic", "claude-sonnet-4-5", "Claude Sonnet 4.5", "llm", 0.96, 8192},
-		{"anthropic", "claude-haiku-4-5-20251001", "Claude Haiku 4.5", "llm", 0.90, 4096},
-		// Google DeepMind
-		{"google", "gemini-2.5-pro", "Gemini 2.5 Pro", "llm", 0.95, 8192},
-		{"google", "gemini-2.5-flash", "Gemini 2.5 Flash", "llm", 0.91, 8192},
-		{"google", "gemini-2.0-flash", "Gemini 2.0 Flash", "llm", 0.90, 8192},
-		// xAI (Grok)
-		{"xai", "grok-4", "Grok 4", "llm", 0.96, 8192},
-		{"xai", "grok-4-0709", "Grok 4 0709", "llm", 0.95, 8192},
-		{"xai", "grok-3-mini", "Grok 3 Mini", "llm", 0.87, 4096},
-		{"xai", "grok-3-mini-fast", "Grok 3 Mini Fast", "llm", 0.85, 4096},
-		// Mistral AI
-		{"mistral", "mistral-large-latest", "Mistral Large", "llm", 0.93, 8192},
-		{"mistral", "mistral-medium-latest", "Mistral Medium", "llm", 0.88, 4096},
-		{"mistral", "mistral-small-latest", "Mistral Small", "llm", 0.82, 4096},
-		// Meta AI (Llama)
-		{"meta", "Llama-4-Scout-17B-16E-Instruct-FP8", "Llama 4 Scout", "llm", 0.88, 8192},
-		{"meta", "Llama-4-Maverick-17B-128E-Instruct-FP8", "Llama 4 Maverick", "llm", 0.92, 8192},
-		{"meta", "Llama-3.3-70B-Instruct", "Llama 3.3 70B", "llm", 0.87, 8192},
-		// 豆包
-		{"doubao", "doubao-pro-32k", "豆包 Pro 32K", "llm", 0.88, 16384},
-		{"doubao", "doubao-lite-32k", "豆包 Lite 32K", "llm", 0.75, 16384},
-		{"doubao", "seedream-3-0-t2i-250415", "Seedream 3.0 文生图", "image", 0.9, 0},
-		// DeepSeek
-		{"deepseek", "deepseek-chat", "DeepSeek V3", "llm", 0.90, 16384},
-		{"deepseek", "deepseek-reasoner", "DeepSeek R1", "llm", 0.94, 8192},
-		// 通义千问
-		{"qianwen", "qwen3-max", "Qwen3 Max", "llm", 0.93, 8192},
-		{"qianwen", "qwen3-plus", "Qwen3 Plus", "llm", 0.88, 4096},
-		{"qianwen", "qwen-max", "通义千问 Max", "llm", 0.92, 4096},
-		{"qianwen", "wanx2.1-t2i-turbo", "万象 2.1 文生图 Turbo", "image", 0.85, 0},
-		// 智谱AI (GLM / Z.AI)
-		{"zhipu", "glm-4-plus", "GLM-4 Plus", "llm", 0.90, 8192},
-		{"zhipu", "glm-4-flash", "GLM-4 Flash", "llm", 0.82, 4096},
-		{"zhipu", "glm-4-air", "GLM-4 Air", "llm", 0.84, 4096},
-		{"zhipu", "glm-z1-flash", "GLM-Z1 Flash", "llm", 0.85, 4096},
-		// Moonshot AI (Kimi)
-		{"moonshot", "kimi-k2-0711-preview", "Kimi K2", "llm", 0.93, 8192},
-		{"moonshot", "moonshot-v1-128k", "Kimi 128K", "llm", 0.88, 8192},
-		{"moonshot", "moonshot-v1-32k", "Kimi 32K", "llm", 0.86, 4096},
-		// 百度文心一言 (ERNIE)
-		{"baidu", "ernie-4.5-8k", "ERNIE 4.5", "llm", 0.89, 4096},
-		{"baidu", "ernie-4.5-128k", "ERNIE 4.5 128K", "llm", 0.89, 8192},
-		{"baidu", "ernie-3.5-8k", "ERNIE 3.5", "llm", 0.84, 4096},
-		{"baidu", "ernie-speed-128k", "ERNIE Speed 128K", "llm", 0.78, 4096},
-		// 腾讯混元 (Hunyuan)
-		{"tencent", "hunyuan-turbo", "混元 Turbo", "llm", 0.91, 8192},
-		{"tencent", "hunyuan-pro", "混元 Pro", "llm", 0.89, 4096},
-		{"tencent", "hunyuan-lite", "混元 Lite", "llm", 0.80, 4096},
-		// 零一万物 (Yi)
-		{"yi", "yi-lightning", "Yi Lightning", "llm", 0.88, 4096},
-		{"yi", "yi-large", "Yi Large", "llm", 0.87, 4096},
-		{"yi", "yi-large-turbo", "Yi Large Turbo", "llm", 0.85, 4096},
-		// Ollama: 不预置模型，由用户手动添加已安装的模型
-		// 即梦AI
-		{"volcengine-visual", "general_v3.0", "即梦AI 文生图 V3", "image", 0.9, 0},
-		// 视频
-		{"jimeng-video", "jimeng_t2v_v30", "即梦视频3.0 文生视频", "video", 0.92, 0},
-		{"jimeng-video", "jimeng_i2v_first_v30", "即梦视频3.0 图生视频（首帧）", "video", 0.92, 0},
-		{"jimeng-video", "jimeng_i2v_first_tail_v30", "即梦视频3.0 图生视频（首尾帧）", "video", 0.92, 0},
-		// 可灵视频
-		{"kling", "kling-3.0-turbo", "可灵 3.0 Turbo", "video", 0.97, 0},
-		{"kling", "kling-v1-6", "可灵 v1.6", "video", 0.9, 0},
-		// 可灵音效（原 kling-sfx 已合并）
-		{"kling", "3s", "可灵音效 3s", "sfx", 0.88, 0},
-		{"kling", "5s", "可灵音效 5s", "sfx", 0.90, 0},
-		{"kling", "7s", "可灵音效 7s", "sfx", 0.89, 0},
-		{"kling", "10s", "可灵音效 10s", "sfx", 0.88, 0},
-		// 可灵图像生成（原 kling-image 已合并）
-		{"kling", "kling-v1", "可灵图像 v1", "image", 0.88, 0},
-		{"kling", "kling-v1-5", "可灵图像 v1.5", "image", 0.90, 0},
-		{"kling", "kling-v2", "可灵图像 v2", "image", 0.92, 0},
-		{"kling", "kling-v2-1", "可灵图像 v2.1", "image", 0.93, 0},
-		{"kling", "kling-v3", "可灵图像 v3", "image", 0.95, 0},
-		// doubao 视频生成（原 seedance 已合并）
-		{"doubao", "seedance-01-lite", "Seedance 01 Lite", "video", 0.88, 0},
-		// qianwen 视频生成（原 happyhorse 已合并）
-		{"qianwen", "happyhorse-1.1-r2v", "HappyHorse 1.1 参考生视频（多图）", "video", 0.93, 0},
-		{"qianwen", "happyhorse-1.0-r2v", "HappyHorse 1.0 参考生视频（多图）", "video", 0.88, 0},
-		{"qianwen", "happyhorse-1.1-i2v", "HappyHorse 1.1 图生视频（首帧）", "video", 0.92, 0},
-		{"qianwen", "happyhorse-1.0-i2v", "HappyHorse 1.0 图生视频（首帧）", "video", 0.87, 0},
-		{"qianwen", "happyhorse-1.1-t2v", "HappyHorse 1.1 文生视频", "video", 0.9, 0},
-		{"qianwen", "happyhorse-1.0-t2v", "HappyHorse 1.0 文生视频", "video", 0.85, 0},
+		{"fun-music", "Fun-Music AI（阿里云百炼）", "", false, nil},
 	}
 
 	// 1. 确保 provider 记录存在（tenant_id=0 系统级）
@@ -426,15 +311,13 @@ func seedAIModels(db *gorm.DB) {
 			}
 			// 不存在则创建
 			prov = model.ModelProvider{
-				Name:            p.name,
-				DisplayName:     p.displayName,
-				APIEndpoint:     p.endpoint,
-				NeedsSecretKey:  p.needsSecretKey,
-				StaticModels:    staticModelsJSON,
-				TenantID:        0,
-				IsActive:        true,
-				GroupName:       p.groupName,
-				IsGroupCanonical: p.isGroupCanonical,
+				Name:           p.name,
+				DisplayName:    p.displayName,
+				APIEndpoint:    p.endpoint,
+				NeedsSecretKey: p.needsSecretKey,
+				StaticModels:   staticModelsJSON,
+				TenantID:       0,
+				IsActive:       true,
 			}
 			if err2 := db.Create(&prov).Error; err2 != nil {
 				// 并发创建时可能仍触发 1062，此时 fetch 已有记录
@@ -457,12 +340,6 @@ func seedAIModels(db *gorm.DB) {
 		if prov.StaticModels != staticModelsJSON {
 			updates["static_models"] = staticModelsJSON
 		}
-		if prov.GroupName != p.groupName {
-			updates["group_name"] = p.groupName
-		}
-		if prov.IsGroupCanonical != p.isGroupCanonical {
-			updates["is_group_canonical"] = p.isGroupCanonical
-		}
 		if prov.DisplayName != p.displayName {
 			updates["display_name"] = p.displayName
 		}
@@ -483,6 +360,7 @@ func seedAIModels(db *gorm.DB) {
 		{"kling-tts", "kling"},
 		{"kling-image", "kling"},
 		{"kling-i2i", "kling"},
+		{"jimeng-video", "volcengine-visual"},
 	}
 	for _, mm := range mergeMap {
 		toID, ok := providerIDs[mm.to]
@@ -499,24 +377,15 @@ func seedAIModels(db *gorm.DB) {
 		)
 	}
 
-	// 2. 确保 model 记录存在
-	for _, m := range models {
-		provID, ok := providerIDs[m.providerName]
-		if !ok {
-			continue
-		}
-		var aiModel model.AIModel
-		db.Where("provider_id = ? AND name = ?", provID, m.name).FirstOrCreate(&aiModel, model.AIModel{
-			ProviderID:  provID,
-			Name:        m.name,
-			DisplayName: m.displayName,
-			Type:        m.modelType,
-			Quality:     m.quality,
-			MaxTokens:   m.maxTokens,
-			IsActive:    true,
-		})
-	}
-	logger.Printf("seedAIModels: %d providers, %d models ready", len(providerIDs), len(models))
+	// 1e. 移除系统级 Ollama（已从 seed 删除，Ollama 由租户自行添加）
+	db.Exec(`UPDATE ink_model_provider SET deleted_at = NOW() WHERE name = 'ollama' AND tenant_id = 0 AND deleted_at IS NULL`)
+
+	// 1d. 删除系统级供应商（tenant_id=0）的模型记录。
+	// 模型定义已迁移到 internal/service/provider_model_defs.go（内存），
+	// 租户创建供应商时由 copySystemModels 按需生成，不再存 DB 系统层。
+	db.Exec(`DELETE FROM ink_ai_model WHERE deleted_at IS NULL AND provider_id IN (SELECT id FROM ink_model_provider WHERE tenant_id = 0)`)
+
+	logger.Printf("seedAIModels: %d system providers ready (models seeded on-demand per tenant)", len(providerIDs))
 }
 
 // seedProviderVoices 将音色数据写入 ink_model_provider.voices_json（幂等）。

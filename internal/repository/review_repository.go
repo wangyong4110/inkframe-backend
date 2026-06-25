@@ -65,7 +65,9 @@ func (r *IgnoredReviewIssueRepository) ListByEntity(entityType string, entityID 
 }
 
 func (r *IgnoredReviewIssueRepository) Delete(id uint) error {
-	return r.db.Delete(&model.IgnoredReviewIssue{}, id).Error
+	// 硬删除：避免 (entity_type, entity_id, issue_hash) 唯一索引与软删除残留行冲突，
+	// 导致用户取消忽略后无法再次忽略同一问题。
+	return r.db.Unscoped().Delete(&model.IgnoredReviewIssue{}, id).Error
 }
 
 func (r *IgnoredReviewIssueRepository) ExistsByHash(entityType string, entityID uint, hash string) bool {

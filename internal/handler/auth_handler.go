@@ -19,6 +19,7 @@ type AuthHandler struct {
 	authService  *service.AuthService
 	smsService   *service.SMSService
 	oauthService *service.OAuthService
+	auditSvc     *service.AuditService
 	frontendURL  string
 	userRepo     interface {
 		GetByID(id uint) (interface{}, error)
@@ -27,6 +28,12 @@ type AuthHandler struct {
 
 func NewAuthHandler(authService *service.AuthService) *AuthHandler {
 	return &AuthHandler{authService: authService, frontendURL: "http://localhost:3000"}
+}
+
+// WithAuditService injects the audit service.
+func (h *AuthHandler) WithAuditService(svc *service.AuditService) *AuthHandler {
+	h.auditSvc = svc
+	return h
 }
 
 // WithSMSService 注入短信服务
@@ -61,6 +68,20 @@ func (h *AuthHandler) Register(c *gin.Context) {
 		return
 	}
 
+	if h.auditSvc != nil {
+		entry := service.AuditEntry{
+			Action: "auth.register",
+			IP:     c.ClientIP(),
+			Status: "ok",
+		}
+		// Register returns *AuthResponse when verification not required
+		if authResp, ok := resp.(*service.AuthResponse); ok {
+			entry.TenantID = authResp.TenantID
+			entry.UserID = authResp.UserID
+		}
+		h.auditSvc.LogEntry(entry)
+	}
+
 	respondCreated(c, resp)
 }
 
@@ -74,8 +95,26 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	resp, err := h.authService.Login(&req)
 	if err != nil {
+		if h.auditSvc != nil {
+			h.auditSvc.LogEntry(service.AuditEntry{
+				Action: "auth.login",
+				IP:     c.ClientIP(),
+				Status: "fail",
+				Details: map[string]any{"email": req.Email, "error": err.Error()},
+			})
+		}
 		respondErr(c, http.StatusUnauthorized, err.Error())
 		return
+	}
+
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: resp.TenantID,
+			UserID:   resp.UserID,
+			Action:   "auth.login",
+			IP:       c.ClientIP(),
+			Status:   "ok",
+		})
 	}
 
 	respondOK(c, resp)
@@ -223,12 +262,18 @@ func (h *AuthHandler) ChangePassword(c *gin.Context) {
 
 	if err := h.authService.ChangePassword(userID, req.OldPassword, req.NewPassword); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			// Dev bypass mode: no actual user record in DB.
 			respondOK(c, gin.H{"changed": true})
 			return
 		}
 		respondErr(c, http.StatusBadRequest, err.Error())
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: userID,
+			Action: "auth.change_password", ResourceType: "user", ResourceID: userID,
+			IP: c.ClientIP(),
+		})
 	}
 	respondOK(c, gin.H{"changed": true})
 }
@@ -252,6 +297,13 @@ func (h *AuthHandler) DeleteAccount(c *gin.Context) {
 	if err := h.authService.DeleteAccount(userID, req.Password); err != nil {
 		respondErr(c, http.StatusBadRequest, err.Error())
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: userID,
+			Action: "auth.delete_account", ResourceType: "user", ResourceID: userID,
+			IP: c.ClientIP(),
+		})
 	}
 	respondOK(c, gin.H{"deleted": true})
 }
@@ -418,6 +470,13 @@ func (h *AuthHandler) ResetPassword(c *gin.Context) {
 	if err := h.authService.ResetPassword(req.Token, req.NewPassword); err != nil {
 		respondErr(c, http.StatusBadRequest, err.Error())
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c),
+			Action: "auth.reset_password", ResourceType: "user",
+			IP: c.ClientIP(),
+		})
 	}
 	respondOK(c, gin.H{"message": "password has been reset"})
 }

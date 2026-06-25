@@ -813,19 +813,22 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			services.TimelineService,
 			services.QualityControlService,
 		).WithTaskService(services.TaskService).WithModelService(services.ModelService).
-			WithNotificationService(services.NotificationService),
+			WithNotificationService(services.NotificationService).
+			WithAuditService(services.AuditService),
 		ChapterHandler: handler.NewChapterHandler(
 			services.ChapterService,
 			services.ChapterVersionService,
 			services.QualityControlService,
 			services.TaskService,
 		).WithNovelService(services.NovelService).
-			WithContinuityService(services.ContinuityService),
+			WithContinuityService(services.ContinuityService).
+			WithAuditService(services.AuditService),
 		CharacterHandler: handler.NewCharacterHandler(
 			services.CharacterService,
 			services.CharacterArcService,
 			services.ImageGenerationService,
-		).WithChapterService(services.ChapterService).WithStorage(storageSvc).WithTaskService(services.TaskService).WithAIService(services.AIService).WithNovelService(services.NovelService),
+		).WithChapterService(services.ChapterService).WithStorage(storageSvc).WithTaskService(services.TaskService).WithAIService(services.AIService).WithNovelService(services.NovelService).
+			WithAuditService(services.AuditService),
 		VideoHandler: handler.NewVideoHandler(
 			services.VideoService,
 			services.StoryboardService,
@@ -835,22 +838,25 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			WithBGMService(services.BGMService).WithBGMRepo(repos.VideoBGMSegmentRepo).
 			WithSubtitleService(service.NewSubtitleService()).WithStorage(storageSvc).WithAssetRepo(repos.AssetRepo).
 			WithCapCutSegmentRepo(repos.ShotVoiceSegmentRepo). // P1-2: VoiceSegment audio in CapCut exports
-			WithServerBaseURL(buildServerBaseURL(cfg)),         // 本地/DB 存储媒体 URL 解析
-		ModelHandler:   handler.NewModelHandler(services.ModelService),
-		McpHandler:     handler.NewMcpHandler(services.McpService),
+			WithServerBaseURL(buildServerBaseURL(cfg)).         // 本地/DB 存储媒体 URL 解析
+			WithAuditService(services.AuditService),
+		ModelHandler:   handler.NewModelHandler(services.ModelService).WithAuditService(services.AuditService),
+		McpHandler:     handler.NewMcpHandler(services.McpService).WithAuditService(services.AuditService),
 		StyleHandler:   handler.NewStyleHandler(services.StyleService),
 		ContextHandler: handler.NewContextHandler(services.GenerationContextService),
 		AuthHandler: handler.NewAuthHandler(services.AuthService).
 			WithSMSService(services.SMSService).
 			WithOAuthService(services.OAuthService).
-			WithFrontendURL(services.FrontendURL),
+			WithFrontendURL(services.FrontendURL).
+			WithAuditService(services.AuditService),
 		ImportHandler: handler.NewImportHandler(services.NovelImportService, services.NovelToVideoService).
 			SetAnalysisService(services.NovelAnalysisService).
 			WithTaskService(services.TaskService).
 			WithNovelService(services.NovelService).
-			WithRedis(redisClient), // Fix: cross-instance chunked upload session storage
-		WorldviewHandler:   handler.NewWorldviewHandler(services.WorldviewService),
-		TenantHandler:      handler.NewTenantHandler(services.TenantService),
+			WithRedis(redisClient). // Fix: cross-instance chunked upload session storage
+			WithAuditService(services.AuditService),
+		WorldviewHandler:   handler.NewWorldviewHandler(services.WorldviewService).WithAuditService(services.AuditService),
+		TenantHandler:      handler.NewTenantHandler(services.TenantService).WithAuditService(services.AuditService),
 		ItemHandler:        handler.NewItemHandler(services.ItemService, services.ChapterService).WithStorage(storageSvc).WithTaskService(services.TaskService).WithNovelService(services.NovelService),
 		SkillHandler:       handler.NewSkillHandler(services.SkillService).WithNovelService(services.NovelService).WithTaskService(services.TaskService),
 		UploadHandler:      handler.NewUploadHandler(storageSvc),
@@ -899,13 +905,13 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		),
 		DashboardHandler:  handler.NewDashboardHandler(db),
 		ForeshadowHandler: handler.NewForeshadowHandler(services.ForeshadowCRUDService),
-		WebhookHandler:       handler.NewWebhookHandler(services.WebhookService),
-		AuditHandler:         handler.NewAuditHandler(services.AuditService),
+		WebhookHandler:       handler.NewWebhookHandler(services.WebhookService).WithAuditService(services.AuditService),
+		AuditHandler:         handler.NewAuditHandler(services.AuditService).WithNovelRepo(repos.NovelRepo),
 		OutlineReviewHandler: handler.NewOutlineReviewHandler(services.OutlineReviewService, services.TaskService),
-		CollabHandler:        handler.NewCollabHandler(services.CollabService),
+		CollabHandler: handler.NewCollabHandler(services.CollabService).WithAuditService(services.AuditService),
 		SysAdminHandler: handler.NewSysAdminHandler(
 			service.NewSysAdminService(db, cfg.Server.JWTSecret, cfg.Server.JWTExpiry),
-		),
+		).WithAuditService(services.AuditService),
 		SensitiveWordHandler: handler.NewSensitiveWordHandler(repos.SensitiveWordRepo),
 	}
 }

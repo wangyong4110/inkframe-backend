@@ -222,48 +222,39 @@ func (s *ModelService) seedProviderModel(provider *model.ModelProvider) {
 	_ = s.modelRepo.Create(m)
 }
 
-// SeedAllProviders seeds AIModel rows for every existing provider that has an
-// api_version set but no matching model row yet.
-// Call once at startup.
+// SeedAllProviders 补全已有租户供应商的模型（启动时调用一次，幂等）。
 func (s *ModelService) SeedAllProviders() {
 	providers, err := s.providerRepo.List()
 	if err != nil {
 		return
 	}
 	for _, p := range providers {
-		s.seedProviderModel(p)
-		// 补全租户私有供应商的模型（可能是用户之前新建时漏复制的）
-		if p.TenantID != 0 {
-			s.copySystemModels(p)
+		if p.TenantID == 0 {
+			continue // 系统级供应商不持有模型记录
 		}
+		s.seedProviderModel(p)
+		s.copySystemModels(p)
 	}
 }
 
-// copySystemModels copies active system-level (tenant_id=0) models to a
-// tenant-specific provider of the same name. Called when a user creates a
-// non-LLM provider so that voice/image/video models are immediately available.
+// copySystemModels 根据内存中的 defaultProviderModels 定义为租户供应商初始化模型列表。
+// 系统级供应商（tenant_id=0）不再持有模型记录，因此不从 DB 读取。
 func (s *ModelService) copySystemModels(target *model.ModelProvider) {
 	if target.TenantID == 0 {
-		return // system provider; models are seeded globally
-	}
-	sysProv, err := s.providerRepo.GetSystemProvider(target.Name)
-	if err != nil {
-		return // no system provider with this name
-	}
-	sysModels, err := s.modelRepo.List(&sysProv.ID, 0)
-	if err != nil || len(sysModels) == 0 {
 		return
 	}
-	for _, m := range sysModels {
-		if !m.IsActive {
-			continue
-		}
+	defs, ok := defaultProviderModels[target.Name]
+	if !ok || len(defs) == 0 {
+		return
+	}
+	for _, d := range defs {
 		newM := &model.AIModel{
 			ProviderID:  target.ID,
-			Name:        m.Name,
-			DisplayName: m.DisplayName,
-			Type:        m.Type,
-			Quality:     m.Quality,
+			Name:        d.Name,
+			DisplayName: d.DisplayName,
+			Type:        d.Type,
+			Quality:     d.Quality,
+			MaxTokens:   d.MaxTokens,
 			IsActive:    true,
 		}
 		_ = s.modelRepo.FirstOrCreate(newM)
@@ -272,17 +263,14 @@ func (s *ModelService) copySystemModels(target *model.ModelProvider) {
 
 func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, tenantID uint) (*model.ModelProvider, error) {
 	provider := &model.ModelProvider{
-		TenantID:     tenantID,
-		Name:         req.Name,
-		DisplayName:  req.DisplayName,
-		APIEndpoint:  req.APIEndpoint,
-		APIKey:       req.APIKey,
+		TenantID:    tenantID,
+		Name:        req.Name,
+		DisplayName: req.DisplayName,
+		APIEndpoint: req.APIEndpoint,
+		APIKey:      req.APIKey,
 		APISecretKey: req.APISecretKey,
-		APIVersion:   req.APIVersion,
-		IsActive:     req.IsActive,
-		Timeout:      req.Timeout,
-		Concurrency:  req.Concurrency,
-		RateLimit:    req.RateLimit,
+		APIVersion:  req.APIVersion,
+		IsActive:    req.IsActive,
 	}
 	if err := s.providerRepo.Create(provider); err != nil {
 		return nil, err
@@ -319,15 +307,6 @@ func (s *ModelService) UpdateProvider(id uint, tenantID uint, req *model.UpdateM
 	if req.IsActive != nil {
 		provider.IsActive = *req.IsActive
 	}
-	if req.Timeout != nil {
-		provider.Timeout = *req.Timeout
-	}
-	if req.Concurrency != nil {
-		provider.Concurrency = *req.Concurrency
-	}
-	if req.RateLimit != nil {
-		provider.RateLimit = *req.RateLimit
-	}
 	if err := s.providerRepo.Update(provider); err != nil {
 		return nil, err
 	}
@@ -362,63 +341,6 @@ func (s *ModelService) DeleteProvider(id uint, tenantID uint) error {
 	return nil
 }
 
-// SyncGroupProviders 将同组所有系统供应商的凭证批量同步到租户层，返回 canonical 记录。
-func (s *ModelService) SyncGroupProviders(groupName string, tenantID uint, apiKey, apiSecretKey, apiVersion string, isActive bool) (*model.ModelProvider, error) {
-	sysList, err := s.providerRepo.ListSystemByGroup(groupName)
-	if err != nil {
-		return nil, fmt.Errorf("list system group: %w", err)
-	}
-	if len(sysList) == 0 {
-		return nil, fmt.Errorf("group %q not found", groupName)
-	}
-
-	var canonical *model.ModelProvider
-	for _, sys := range sysList {
-		existing, err := s.providerRepo.GetTenantProviderByName(tenantID, sys.Name)
-		if err != nil {
-			// 不存在则创建
-			req := &model.CreateModelProviderRequest{
-				Name:         sys.Name,
-				DisplayName:  sys.DisplayName,
-				APIEndpoint:  sys.APIEndpoint,
-				APIKey:       apiKey,
-				APISecretKey: apiSecretKey,
-				APIVersion:   apiVersion,
-				IsActive:     isActive,
-			}
-			created, err2 := s.CreateProvider(req, tenantID)
-			if err2 != nil {
-				return nil, fmt.Errorf("create provider %s: %w", sys.Name, err2)
-			}
-			if sys.IsGroupCanonical {
-				canonical = created
-			}
-		} else {
-			// 已存在则更新凭证
-			existing.APIKey = apiKey
-			existing.IsActive = isActive
-			if apiSecretKey != "" {
-				existing.APISecretKey = apiSecretKey
-			}
-			if apiVersion != "" {
-				existing.APIVersion = apiVersion
-			}
-			if err2 := s.providerRepo.Update(existing); err2 != nil {
-				return nil, fmt.Errorf("update provider %s: %w", sys.Name, err2)
-			}
-			if s.aiService != nil {
-				s.aiService.InvalidateProviderCache(sys.Name)
-			}
-			if sys.IsGroupCanonical {
-				canonical = existing
-			}
-		}
-	}
-	if canonical == nil {
-		return nil, fmt.Errorf("canonical provider not found in group %q", groupName)
-	}
-	return canonical, nil
-}
 
 func (s *ModelService) TestProvider(id uint, tenantID uint) (interface{}, error) {
 	provider, err := s.providerRepo.GetByIDAndTenant(id, tenantID)
@@ -471,11 +393,11 @@ func (s *ModelService) CreateModel(req *model.CreateAIModelRequest, tenantID uin
 		ProviderID:  req.ProviderID,
 		Name:        req.Name,
 		Type:        req.Type,
+		Quality:     req.Quality,
 		MaxTokens:   req.MaxTokens,
 		Timeout:     req.Timeout,
 		Concurrency: req.Concurrency,
 		RateLimit:   req.RateLimit,
-		CostPer1K:   req.CostPer1K,
 		IsActive:    true,
 	}
 	return m, s.modelRepo.Create(m)
@@ -513,9 +435,6 @@ func (s *ModelService) UpdateModel(id uint, tenantID uint, req *model.UpdateAIMo
 	}
 	if req.RateLimit != nil {
 		m.RateLimit = *req.RateLimit
-	}
-	if req.CostPer1K != 0 {
-		m.CostPer1K = req.CostPer1K
 	}
 	if req.IsActive != nil {
 		m.IsActive = *req.IsActive
@@ -577,12 +496,12 @@ func (s *ModelService) UpdateTaskConfig(taskType string, req *model.UpdateTaskCo
 	return cfg, s.taskRepo.Update(cfg)
 }
 
-func (s *ModelService) ListExperiments() (interface{}, error) {
-	experiments, err := s.experimentRepo.List(100)
+func (s *ModelService) ListExperiments(tenantID uint) (interface{}, error) {
+	experiments, err := s.experimentRepo.List(100, tenantID)
 	return experiments, err
 }
 
-func (s *ModelService) CreateExperiment(req *model.CreateModelComparisonRequest) (interface{}, error) {
+func (s *ModelService) CreateExperiment(req *model.CreateModelComparisonRequest, tenantID uint) (interface{}, error) {
 	modelIDsJSON := "[]"
 	if len(req.ModelIDs) > 0 {
 		if b, err := json.Marshal(req.ModelIDs); err == nil {
@@ -590,6 +509,7 @@ func (s *ModelService) CreateExperiment(req *model.CreateModelComparisonRequest)
 		}
 	}
 	experiment := &model.ModelComparisonExperiment{
+		TenantID: tenantID,
 		Name:     req.Name,
 		TaskType: req.TaskType,
 		ModelIDs: modelIDsJSON,
@@ -1014,7 +934,14 @@ func (s *TenantService) AddMember(tenantID, userID uint, role string) error {
 }
 
 func (s *TenantService) RemoveMember(tenantID, userID uint) error {
-	return s.tenantUserRepo.DeleteByTenantAndUser(tenantID, userID)
+	if err := s.tenantUserRepo.DeleteByTenantAndUser(tenantID, userID); err != nil {
+		return err
+	}
+	// 同步递减配额计数器（失败仅记录，不影响移除结果）
+	if err := s.tenantRepo.DecrUsedUsers(tenantID); err != nil {
+		logger.Errorf("[TenantService] RemoveMember: DecrUsedUsers tenantID=%d: %v", tenantID, err)
+	}
+	return nil
 }
 
 func (s *TenantService) UpdateMemberRole(tenantID, userID uint, role string) error {

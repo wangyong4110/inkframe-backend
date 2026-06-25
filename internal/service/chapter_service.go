@@ -225,8 +225,13 @@ func (s *ChapterService) CreateChapter(novelID uint, req *model.CreateChapterReq
 	if len(req.Content) > maxChapterContentBytes {
 		return nil, fmt.Errorf("chapter content too large (%d bytes, max 512KB)", len(req.Content))
 	}
+	var tenantID uint
+	if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+		tenantID = novel.TenantID
+	}
 	chapter := &model.Chapter{
 		UUID:      uuid.New().String(),
+		TenantID:  tenantID,
 		NovelID:   novelID,
 		ChapterNo: req.ChapterNo,
 		Title:     req.Title,
@@ -290,6 +295,7 @@ func (s *ChapterService) UpdateChapter(id, tenantID uint, req *model.UpdateChapt
 	// Snapshot current content before overwriting (best-effort, ignore errors).
 	if req.Content != "" && chapter.Content != "" && s.versionRepo != nil {
 		if err := s.versionRepo.CreateAtomic(&model.ChapterVersion{
+			NovelID:    chapter.NovelID,
 			ChapterID:  chapter.ID,
 			Content:    chapter.Content,
 			ChangeType: "manual_edit",
@@ -326,6 +332,12 @@ func (s *ChapterService) DeleteChapter(id, tenantID uint) error {
 			logger.Errorf("[ChapterService] DeleteChapter: delete snapshots for chapter %d: %v", id, delErr)
 		}
 	}
+	// Clean up chapter versions.
+	if s.versionRepo != nil {
+		if delErr := s.versionRepo.DeleteByChapter(id); delErr != nil {
+			logger.Errorf("[ChapterService] DeleteChapter: delete versions for chapter %d: %v", id, delErr)
+		}
+	}
 	// Clean up chapter-level character and item overrides.
 	if s.chapterCharacterRepo != nil {
 		if delErr := s.chapterCharacterRepo.DeleteByChapter(id); delErr != nil {
@@ -356,6 +368,11 @@ func (s *ChapterService) BatchDeleteChapters(ctx context.Context, novelID, tenan
 		}
 		if err := s.chapterRepo.DeleteAndRenumber(id, chapter.NovelID); err != nil {
 			return fmt.Errorf("failed to delete chapter %d: %w", id, err)
+		}
+		if s.versionRepo != nil {
+			if delErr := s.versionRepo.DeleteByChapter(id); delErr != nil {
+				logger.Errorf("[ChapterService] BatchDeleteChapters: delete versions for chapter %d: %v", id, delErr)
+			}
 		}
 		if s.chapterCharacterRepo != nil {
 			if delErr := s.chapterCharacterRepo.DeleteByChapter(id); delErr != nil {
@@ -528,6 +545,11 @@ func (s *ChapterService) DeleteChapterByNo(novelID uint, chapterNo int) error {
 	if err := s.chapterRepo.DeleteAndRenumber(chapter.ID, novelID); err != nil {
 		return err
 	}
+	if s.versionRepo != nil {
+		if delErr := s.versionRepo.DeleteByChapter(chapter.ID); delErr != nil {
+			logger.Errorf("[ChapterService] DeleteChapterByNo: delete versions for chapter %d: %v", chapter.ID, delErr)
+		}
+	}
 	if s.chapterCharacterRepo != nil {
 		if delErr := s.chapterCharacterRepo.DeleteByChapter(chapter.ID); delErr != nil {
 			logger.Errorf("[ChapterService] DeleteChapterByNo: delete chapter_characters for chapter %d: %v", chapter.ID, delErr)
@@ -570,8 +592,13 @@ func (s *ChapterService) InsertChapterAfter(novelID uint, afterChapterNo int) (*
 	if err := s.chapterRepo.ShiftUp(novelID, newNo); err != nil {
 		return nil, err
 	}
+	var tenantID uint
+	if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+		tenantID = novel.TenantID
+	}
 	chapter := &model.Chapter{
 		UUID:      uuid.New().String(),
+		TenantID:  tenantID,
 		NovelID:   novelID,
 		ChapterNo: newNo,
 		Title:     "",
@@ -914,6 +941,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	} else {
 		chapter = &model.Chapter{
 			UUID:          uuid.New().String(),
+			TenantID:      tenantID,
 			NovelID:       novelID,
 			ChapterNo:     req.ChapterNo,
 			Title:         title,
@@ -3742,6 +3770,7 @@ func (s *ChapterService) RegenerateChapter(tenantID uint, id uint, req *model.Ge
 	// Save current content as a version before overwriting
 	if s.versionRepo != nil && chapter.Content != "" {
 		if err := s.versionRepo.CreateAtomic(&model.ChapterVersion{
+			NovelID:           chapter.NovelID,
 			ChapterID:         chapter.ID,
 			Content:           chapter.Content,
 			ChangeType:        "generation",
@@ -3785,6 +3814,7 @@ func (s *ChapterService) ArchiveVersionBeforeRewrite(chapterID uint, instruction
 		}
 	}
 	if err := s.versionRepo.CreateAtomic(&model.ChapterVersion{
+		NovelID:           chapter.NovelID,
 		ChapterID:         chapter.ID,
 		Content:           chapter.Content,
 		ChangeType:        "rewrite",

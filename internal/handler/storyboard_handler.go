@@ -57,6 +57,13 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: tenantID, UserID: getUserID(c),
+			Action: "storyboard.generate", ResourceType: "video", ResourceID: uint(videoId),
+			IP: c.ClientIP(),
+		})
+	}
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"chapter_id":      req.ChapterID,
 		"characters":      req.Characters,

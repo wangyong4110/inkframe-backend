@@ -478,6 +478,11 @@ func (r *ChapterVersionRepository) GetNextVersionNo(chapterID uint) (int, error)
 	return *maxNo + 1, nil
 }
 
+// DeleteByChapter 删除指定章节的所有版本（章节删除时级联调用）
+func (r *ChapterVersionRepository) DeleteByChapter(chapterID uint) error {
+	return r.db.Where("chapter_id = ?", chapterID).Delete(&model.ChapterVersion{}).Error
+}
+
 // DeleteOlderThan 删除早于 cutoff 时间的历史版本，返回删除条数
 func (r *ChapterVersionRepository) DeleteOlderThan(cutoff time.Time) (int64, error) {
 	result := r.db.Where("created_at < ?", cutoff).Delete(&model.ChapterVersion{})

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
@@ -447,9 +446,8 @@ func (s *CharacterArcService) determineArcType(snapshots []*model.CharacterState
 func (s *CharacterArcService) CreateSnapshot(chapterID uint, characterID uint, content string) error {
 	// 简化实现
 	snapshot := &model.CharacterStateSnapshot{
-		CharacterID:  characterID,
-		ChapterID:    chapterID,
-		SnapshotTime: time.Now(),
+		CharacterID: characterID,
+		ChapterID:   chapterID,
 	}
 
 	return s.snapshotRepo.Create(snapshot)

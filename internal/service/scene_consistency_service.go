@@ -53,6 +53,7 @@ func (s *SceneConsistencyService) ScoreScene(
 	generatedImageURL string,
 	attempt int,
 	tenantID uint,
+	novelID uint,
 ) (*SceneConsistencyReport, error) {
 	// 无参考图时返回中性分并标记需人工审核（不给满分以免掩盖问题）
 	if anchor.RefImageURL == "" {
@@ -125,6 +126,7 @@ func (s *SceneConsistencyService) ScoreScene(
 	// 持久化评分日志（修复：同时写入 PropScore、TimeScore、Passed 和 SuggestedFix）
 	issuesJSON, _ := json.Marshal(report.Issues)
 	logEntry := &model.SceneConsistencyLog{
+		NovelID:      novelID,
 		ShotID:       shot.ID,
 		AnchorID:     anchor.ID,
 		Attempt:      attempt,

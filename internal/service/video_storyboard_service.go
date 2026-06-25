@@ -1388,7 +1388,7 @@ func (s *VideoService) UpdateShotPartial(id uint, fields map[string]interface{})
 		"description": true, "narration": true, "dialogue": true, "subtitle": true,
 		"camera_type": true, "camera_angle": true, "shot_size": true, "duration": true,
 		"emotional_tone": true, "transition": true, "status": true, "generation_mode": true,
-		"image_url": true, "sfx_volume": true,
+		"image_url": true,
 		"prompt": true, "motion_prompt": true,
 	}
 	safe := make(map[string]interface{}, len(fields))
@@ -1505,7 +1505,7 @@ func (s *VideoService) CopyShotAfter(sourceShotID uint, afterShotNo int) (*model
 		CharacterIDs:   src.CharacterIDs,
 		GenerationMode: src.GenerationMode,
 		SFXTags:        src.SFXTags,
-		// ImageURL / VideoURL / FrameImageURL intentionally NOT copied — copied shot starts fresh
+		// ImageURL / VideoURL intentionally NOT copied — copied shot starts fresh
 		Status: "pending",
 	}
 	err = s.storyboardRepo.DB().Transaction(func(tx *gorm.DB) error {
@@ -1646,6 +1646,7 @@ func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string,
 	if s.reviewRecordRepo != nil {
 		reviewJSON, _ := json.Marshal(review)
 		rec := &model.ReviewRecord{
+			NovelID:      novelID,
 			EntityType:   model.ReviewEntityStoryboard,
 			EntityID:     videoID,
 			OverallScore: review.OverallScore,
@@ -1991,6 +1992,7 @@ func (s *VideoService) OptimizeStoryboardFromReview(tenantID, videoID uint, revi
 	if s.reviewRecordRepo != nil {
 		snapshotData, _ := json.Marshal(shots)
 		snap := &model.ReviewRecord{
+			NovelID:      novelID,
 			EntityType:   model.ReviewEntityStoryboard,
 			EntityID:     videoID,
 			OverallScore: review.OverallScore,
@@ -2194,7 +2196,12 @@ func (s *VideoService) IgnoreSuggestion(tenantID, videoID uint, shotNo int, issu
 	if s.ignoredSuggestionRepo == nil {
 		return nil, fmt.Errorf("ignored suggestion repository not initialized")
 	}
+	var novelID uint
+	if v, err := s.videoRepo.GetByID(videoID); err == nil {
+		novelID = v.NovelID
+	}
 	item := &model.IgnoredReviewIssue{
+		NovelID:     novelID,
 		EntityType:  model.ReviewEntityStoryboard,
 		EntityID:    videoID,
 		IssueText:   issueText,

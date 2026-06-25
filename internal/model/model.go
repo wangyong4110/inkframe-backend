@@ -137,7 +137,7 @@ type Novel struct {
 	MaxTokens      int     `json:"max_tokens" gorm:"default:0"` // 0=不限制，由模型自身决定
 	TimeoutSeconds int     `json:"timeout_seconds" gorm:"default:0"` // 0=使用系统默认(300s)
 	StylePrompt string `json:"style_prompt" gorm:"type:text"`
-	Outline     string `json:"outline,omitempty" gorm:"type:text"` // 大纲 JSON（章节列表）
+	Outline     string `json:"outline,omitempty" gorm:"type:longtext"` // 大纲 JSON（章节列表）；300章时可超 64KB，必须用 longtext
 
 	// 风格配置
 	ImageStyle      string `json:"image_style" gorm:"size:50"`              // 视觉/图片风格，如 anime/realistic/ink_painting
@@ -239,7 +239,6 @@ func (n Novel) MarshalJSON() ([]byte, error) {
 		"video_fps":               vc.VideoFPS,
 		"video_aspect_ratio":      vc.VideoAspectRatio,
 		"char_consistency_weight": vc.CharConsistencyWeight,
-		"asset_export_path":       vc.AssetExportPath,
 		"narration_voice":         vc.NarrationVoice,
 		"subtitle_enabled":        vc.SubtitleEnabled,
 		"subtitle_position":       vc.SubtitlePosition,
@@ -265,6 +264,7 @@ func (n Novel) MarshalJSON() ([]byte, error) {
 // Chapter 章节
 type Chapter struct {
 	ID       uint   `json:"id" gorm:"primaryKey"`
+	TenantID uint   `json:"tenant_id" gorm:"index;not null;default:0"` // 冗余租户 ID，避免多租户查询 JOIN ink_novel
 	NovelID uint   `json:"novel_id" gorm:"index;uniqueIndex:idx_chapter_novel_no,priority:1;index:idx_chapter_novel_status,priority:1;not null"`
 	Novel   *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
 	UUID      string `json:"uuid" gorm:"uniqueIndex;size:36"`
@@ -272,7 +272,7 @@ type Chapter struct {
 	Title     string `json:"title" gorm:"size:255"`
 
 	// 内容
-	Content   string `json:"content" gorm:"type:text"`
+	Content   string `json:"content" gorm:"type:mediumtext"` // 章节正文，mediumtext 支持 16MB 防截断
 	Summary   string `json:"summary" gorm:"type:text"`
 	WordCount int    `json:"word_count" gorm:"default:0"`
 
@@ -310,9 +310,6 @@ type Chapter struct {
 	IsPublished bool       `json:"is_published" gorm:"default:false;index"`
 	PublishedAt *time.Time `json:"published_at"`
 
-	// 广场社交数据（不存 ink_chapter，从 ink_chapter_like COUNT 实时聚合）
-	LikeCount int `json:"like_count" gorm:"-"`
-
 	// 乐观锁版本号（协作编辑冲突检测）
 	ContentVersion uint `json:"content_version" gorm:"default:1"`
 
@@ -329,7 +326,7 @@ func (Chapter) TableName() string {
 // Worldview 世界观
 type Worldview struct {
 	ID       uint `json:"id" gorm:"primaryKey"`
-	TenantID uint `json:"tenant_id" gorm:"index;not null;default:1"`
+	TenantID uint `json:"tenant_id" gorm:"index;not null;default:0"`
 
 	UUID        string `json:"uuid" gorm:"uniqueIndex;size:36"`
 	Name        string `json:"name" gorm:"size:255;not null"`
@@ -339,18 +336,18 @@ type Worldview struct {
 	// 关联实体（用于 Preload，避免 N+1 查询）
 	Entities []*WorldviewEntity `json:"entities,omitempty" gorm:"foreignKey:WorldviewID"`
 
-	// 世界观元素
-	MagicSystem string `json:"magic_system" gorm:"type:text"`
-	Geography   string `json:"geography" gorm:"type:text"` // 地理格局，含文明发展水平
-	History     string `json:"history" gorm:"type:text"`
-	Culture     string `json:"culture" gorm:"type:text"` // 文化习俗，含宗教信仰
+	// 世界观元素（mediumtext：玄幻/仙侠题材内容可能超过 64KB）
+	MagicSystem string `json:"magic_system" gorm:"type:mediumtext"`
+	Geography   string `json:"geography" gorm:"type:mediumtext"` // 地理格局，含文明发展水平
+	History     string `json:"history" gorm:"type:mediumtext"`
+	Culture     string `json:"culture" gorm:"type:mediumtext"` // 文化习俗，含宗教信仰
 
 	// 约束规则
-	Rules string `json:"rules" gorm:"type:text"`
+	Rules string `json:"rules" gorm:"type:mediumtext"`
 
 	// 势力与术语
-	Factions string `json:"factions" gorm:"type:text"` // 主要势力格局
-	Glossary string `json:"glossary" gorm:"type:text"` // 世界专属术语表
+	Factions string `json:"factions" gorm:"type:mediumtext"` // 主要势力格局
+	Glossary string `json:"glossary" gorm:"type:mediumtext"` // 世界专属术语表
 
 	// 使用统计
 	UsedCount int `json:"used_count" gorm:"default:0"`
@@ -368,16 +365,15 @@ func (Worldview) TableName() string {
 // WorldviewEntity 世界观实体
 type WorldviewEntity struct {
 	ID          uint       `json:"id" gorm:"primaryKey"`
-	WorldviewID uint       `json:"worldview_id" gorm:"index;not null"`
+	TenantID    uint       `json:"tenant_id" gorm:"index;not null;default:0"` // 冗余租户 ID，避免跨租户查询 JOIN
+	WorldviewID uint       `json:"worldview_id" gorm:"index;not null;uniqueIndex:idx_we_name_type,priority:1"`
 	Worldview   *Worldview `json:"worldview,omitempty" gorm:"foreignKey:WorldviewID"`
 
-	Type string `json:"type" gorm:"size:50;index"`
+	Type string `json:"type" gorm:"size:50;index;uniqueIndex:idx_we_name_type,priority:3"`
 	// location=地点, organization=组织, artifact=神器, race=种族, creature=生物
 
-	Name        string `json:"name" gorm:"size:255;not null"`
+	Name        string `json:"name" gorm:"size:255;not null;uniqueIndex:idx_we_name_type,priority:2"`
 	Description string `json:"description" gorm:"type:text"`
-	Attributes  string `json:"attributes" gorm:"type:text"` // JSON
-	Relations   string `json:"relations" gorm:"type:text"`  // JSON
 	ImageURL    string `json:"image_url" gorm:"size:500"`
 
 	CreatedAt time.Time      `json:"created_at"`
@@ -392,11 +388,12 @@ func (WorldviewEntity) TableName() string {
 // ChapterVersion 章节版本
 type ChapterVersion struct {
 	ID        uint     `json:"id" gorm:"primaryKey"`
+	NovelID   uint     `json:"novel_id" gorm:"index;not null;default:0"` // 冗余，便于级联删除和小说维度查询
 	ChapterID uint     `json:"chapter_id" gorm:"uniqueIndex:idx_version_chapter,priority:1;not null"`
 	Chapter   *Chapter `json:"chapter,omitempty" gorm:"foreignKey:ChapterID"`
 	VersionNo int      `json:"version_no" gorm:"uniqueIndex:idx_version_chapter,priority:2;not null"`
 
-	Content string `json:"content" gorm:"type:text"`
+	Content string `json:"content" gorm:"type:mediumtext"` // 正文副本，mediumtext 防截断
 
 	ChangeType string `json:"change_type" gorm:"size:50"`
 	// generation=AI生成, manual_edit=手动编辑, ai_revision=AI修改, rollback=回滚
@@ -413,10 +410,11 @@ func (ChapterVersion) TableName() string {
 // ArcSummary 弧光摘要（每10章自动生成一次，用于长篇小说的层次化记忆）
 // arc 1 = chapters 1-10, arc 2 = chapters 11-20, ...
 type ArcSummary struct {
-	ID      uint   `json:"id" gorm:"primaryKey"`
-	NovelID uint   `json:"novel_id" gorm:"index;not null;uniqueIndex:idx_arc_novel_no"`
-	Novel   *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
-	ArcNo   int    `json:"arc_no" gorm:"not null;uniqueIndex:idx_arc_novel_no"` // 1, 2, 3...
+	ID       uint   `json:"id" gorm:"primaryKey"`
+	TenantID uint   `json:"tenant_id" gorm:"index;not null;default:0"` // 冗余租户 ID
+	NovelID  uint   `json:"novel_id" gorm:"index;not null;uniqueIndex:idx_arc_novel_no"`
+	Novel    *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
+	ArcNo    int    `json:"arc_no" gorm:"not null;uniqueIndex:idx_arc_novel_no"` // 1, 2, 3...
 
 	StartChapter int `json:"start_chapter" gorm:"not null"` // 起始章节号
 	EndChapter   int `json:"end_chapter" gorm:"not null"`   // 结束章节号
@@ -433,11 +431,9 @@ type ArcSummary struct {
 	// 未解决的伏笔 JSON: ["伏笔描述"]
 	OpenForeshadows string `json:"open_foreshadows" gorm:"type:text"`
 
-	// 张力曲线（本弧最高张力点）
-	PeakTension int `json:"peak_tension" gorm:"default:0"`
-
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"` // 软删除，随小说删除时同步清理
 }
 
 func (ArcSummary) TableName() string {
@@ -447,10 +443,10 @@ func (ArcSummary) TableName() string {
 // NovelOutlineVersion 小说大纲历史版本（每次重新生成大纲前自动快照）
 type NovelOutlineVersion struct {
 	gorm.Model
-	NovelID uint `json:"novel_id" gorm:"not null;index"`
-	Version  int    `json:"version" gorm:"not null"`
-	Outline  string `json:"outline" gorm:"type:longtext"`
-	Prompt   string `json:"prompt" gorm:"type:text"`
+	NovelID uint   `json:"novel_id" gorm:"not null;index;uniqueIndex:idx_outline_novel_ver,priority:1"`
+	Version int    `json:"version" gorm:"not null;uniqueIndex:idx_outline_novel_ver,priority:2"`
+	Outline string `json:"outline" gorm:"type:longtext"`
+	Prompt  string `json:"prompt" gorm:"type:text"`
 }
 
 func (NovelOutlineVersion) TableName() string {
@@ -459,32 +455,29 @@ func (NovelOutlineVersion) TableName() string {
 
 // ReferenceNovel 参考小说
 type ReferenceNovel struct {
-	ID     uint   `json:"id" gorm:"primaryKey"`
-	UUID   string `json:"uuid" gorm:"uniqueIndex;size:36"`
-	Title  string `json:"title" gorm:"size:255;not null"`
-	Author string `json:"author" gorm:"size:100"`
+	ID       uint   `json:"id" gorm:"primaryKey"`
+	TenantID uint   `json:"tenant_id" gorm:"index;not null;default:0"` // 0=全局共享，>0=租户私有
+	Title    string `json:"title" gorm:"size:255;not null"`
+	Author   string `json:"author" gorm:"size:100"`
 
-	SourceURL  string `json:"source_url" gorm:"size:500"`
-	SourceSite string `json:"source_site" gorm:"size:50"`
+	SourceURL  string `json:"source_url" gorm:"size:500;uniqueIndex:idx_ref_novel_url_site,priority:1"`
+	SourceSite string `json:"source_site" gorm:"size:50;uniqueIndex:idx_ref_novel_url_site,priority:2"`
 	// qidian=起点, jjwxc=晋江, zongheng=纵横
 
 	Genre string `json:"genre" gorm:"size:50;index"`
 
 	// 统计
 	TotalChapters int `json:"total_chapters" gorm:"default:0"`
-	TotalWords    int `json:"total_words" gorm:"default:0"`
 
 	// 状态
-	Status string `json:"status" gorm:"size:20;default:crawling"`
+	Status       string `json:"status" gorm:"size:20;default:crawling"`
+	ErrorMessage string `json:"error_message,omitempty" gorm:"type:text"` // 失败原因，status=failed 时记录
 	// crawling=爬取中, completed=已完成, failed=失败
 
-	// 封面
-	CoverImage string `json:"cover_image" gorm:"size:500"`
-
 	// 时间戳
-	CrawledAt *time.Time `json:"crawled_at"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (ReferenceNovel) TableName() string {
@@ -494,16 +487,16 @@ func (ReferenceNovel) TableName() string {
 // ReferenceChapter 参考小说章节
 type ReferenceChapter struct {
 	ID        uint            `json:"id" gorm:"primaryKey"`
-	NovelID   uint            `json:"novel_id" gorm:"index;not null"`
+	TenantID  uint            `json:"tenant_id" gorm:"index;not null;default:0"` // 与 ReferenceNovel.TenantID 一致
+	NovelID   uint            `json:"novel_id" gorm:"index;not null;uniqueIndex:idx_ref_chapter_novel_no,priority:1"`
 	Novel     *ReferenceNovel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
-	UUID      string          `json:"uuid" gorm:"uniqueIndex;size:36"`
-	ChapterNo int             `json:"chapter_no" gorm:"not null"`
+	ChapterNo int             `json:"chapter_no" gorm:"not null;uniqueIndex:idx_ref_chapter_novel_no,priority:2"`
 	Title     string          `json:"title" gorm:"size:255"`
-	Content   string          `json:"content" gorm:"type:text"`
-	Summary   string          `json:"summary" gorm:"type:text"`
-	WordCount int             `json:"word_count" gorm:"default:0"`
+	Content   string          `json:"content" gorm:"type:mediumtext"` // mediumtext 防爬取内容截断
 
-	CreatedAt time.Time `json:"created_at"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (ReferenceChapter) TableName() string {
@@ -566,7 +559,6 @@ type UpdateNovelRequest struct {
 	VideoFPS              *int     `json:"video_fps"`
 	VideoAspectRatio      string   `json:"video_aspect_ratio"`
 	CharConsistencyWeight *float64 `json:"char_consistency_weight"`
-	AssetExportPath       string   `json:"asset_export_path"`
 	NarrationVoice        string   `json:"narration_voice"`
 
 	// 字幕配置
@@ -594,28 +586,33 @@ type UpdateNovelRequest struct {
 
 // NovelCrawlJob 小说章节爬取任务（持久化进度，服务重启后可恢复）
 type NovelCrawlJob struct {
-	ID         uint       `json:"id" gorm:"primaryKey"`
-	NovelID    uint       `json:"novel_id" gorm:"index;not null"`
-	Status     string     `json:"status" gorm:"size:20;default:'running'"` // running|completed|partial|failed|paused
-	Progress   int        `json:"progress" gorm:"default:0"`              // 已成功爬取章节数
-	TotalChaps int        `json:"total_chaps" gorm:"default:0"`           // 总章节数
-	FailedCount int       `json:"failed_count" gorm:"default:0"`          // 失败章节数
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	ID          uint       `json:"id" gorm:"primaryKey"`
+	TenantID    uint       `json:"tenant_id" gorm:"index;not null;default:0"`
+	NovelID     uint       `json:"novel_id" gorm:"index;not null"`
+	Platform    string     `json:"platform" gorm:"size:30"`                 // qidian|jjwxc|zongheng
+	SourceURL   string     `json:"source_url" gorm:"size:500"`              // 爬取起始 URL
+	Status      string     `json:"status" gorm:"size:20;default:'running'"` // running|completed|partial|failed|paused
+	Progress    int        `json:"progress" gorm:"default:0"`              // 已成功爬取章节数
+	TotalChaps  int        `json:"total_chaps" gorm:"default:0"`           // 总章节数
+	FailedCount int        `json:"failed_count" gorm:"default:0"`          // 失败章节数
+	ErrorMessage string    `json:"error_message,omitempty" gorm:"type:text"` // 失败原因（status=failed 时记录）
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 }
 
 func (NovelCrawlJob) TableName() string { return "ink_novel_crawl_job" }
 
-// ContinuityReportRecord 连续性检查记录（持久化）
+// ContinuityReportRecord 连续性检查记录（持久化，保留历史记录）
 type ContinuityReportRecord struct {
 	ID         uint           `json:"id" gorm:"primaryKey"`
-	NovelID    uint           `json:"novel_id" gorm:"index;not null"`
-	ChapterID  uint           `json:"chapter_id" gorm:"index;not null"`
+	NovelID    uint           `json:"novel_id" gorm:"index:idx_continuity_novel_chapter,priority:1;index;not null"`
+	ChapterID  uint           `json:"chapter_id" gorm:"index:idx_continuity_novel_chapter,priority:2;index;not null"`
 	ReportJSON string         `json:"report_json" gorm:"type:text"` // JSON of ContinuityReport
 	IssueCount int            `json:"issue_count"`
 	Passed     bool           `json:"passed"`
 	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
 	DeletedAt  gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
@@ -630,7 +627,7 @@ type Foreshadow struct {
 	PlantedChapterID *uint  `json:"planted_chapter_id,omitempty" gorm:"index"`
 	PayoffChapterID  *uint  `json:"payoff_chapter_id,omitempty" gorm:"index"`
 	Status           string `json:"status" gorm:"size:20;default:'planted'"` // planted, ripening, paid_off, abandoned
-	Tags             string `json:"tags" gorm:"size:500"`
+	Tags             string `json:"tags" gorm:"type:text"`
 
 	// 生命周期增强字段
 	PlantedChapterNo     int    `json:"planted_chapter_no" gorm:"default:0"`          // 种下的章节序号
@@ -685,15 +682,23 @@ func (WebhookDelivery) TableName() string { return "ink_webhook_delivery" }
 // AuditLog 审计日志
 type AuditLog struct {
 	ID         uint      `json:"id" gorm:"primaryKey;autoIncrement"`
-	CreatedAt  time.Time `json:"created_at" gorm:"index"`
-	TenantID   uint      `json:"tenant_id" gorm:"index"`
-	UserID     uint      `json:"user_id" gorm:"index"`
-	Action     string    `json:"action" gorm:"size:100;not null"` // e.g. "novel.create", "chapter.delete"
-	EntityType string    `json:"entity_type" gorm:"size:50"`
-	EntityID   uint      `json:"entity_id"`
-	IPAddress  string    `json:"ip_address" gorm:"size:50"`
-	UserAgent  string    `json:"user_agent" gorm:"size:500"`
-	Detail     string    `json:"detail" gorm:"type:text"` // JSON extras
+	CreatedAt    time.Time `json:"created_at" gorm:"index"`
+	TenantID     uint      `json:"tenant_id" gorm:"index"`
+	UserID       uint      `json:"user_id" gorm:"index"`
+	NovelID      uint      `json:"novel_id" gorm:"index;default:0"` // 0=用户级，>0=项目级
+	Action       string    `json:"action" gorm:"size:60;not null"`  // e.g. "novel.create"
+	ResourceType string    `json:"resource_type" gorm:"size:50"`
+	ResourceID   uint      `json:"resource_id" gorm:"default:0"`
+	ResourceName string    `json:"resource_name" gorm:"size:200"`
+	Details      string    `json:"details,omitempty" gorm:"type:text"` // JSON
+	IP           string    `json:"ip" gorm:"size:64"`
+	Status       string    `json:"status" gorm:"size:20;default:'ok'"` // ok / fail
+	// Legacy fields kept for backward compat
+	EntityType string `json:"entity_type,omitempty" gorm:"size:50"`
+	EntityID   uint   `json:"entity_id,omitempty"`
+	IPAddress  string `json:"ip_address,omitempty" gorm:"size:50"`
+	UserAgent  string `json:"user_agent,omitempty" gorm:"size:500"`
+	Detail     string `json:"detail,omitempty" gorm:"type:text"`
 }
 
 func (AuditLog) TableName() string { return "ink_audit_log" }
@@ -721,22 +726,22 @@ type OutlineReview struct {
 func (OutlineReview) TableName() string { return "ink_outline_review" }
 
 // NovelOutlineSynthesis 小说整体大纲批量审查综合报告（每部小说一条，按 novel_id 唯一）
+// updated_at（来自 gorm.Model）即代表最后一次综合分析时间，无需单独 synthesized_at 字段。
 type NovelOutlineSynthesis struct {
 	gorm.Model
 	NovelID uint `json:"novel_id" gorm:"uniqueIndex"`
-	TotalChapters        int       `json:"total_chapters"`   // novel.Outline 中规划的总章数
-	ReviewedCount        int       `json:"reviewed_count"`   // 实际完成审查的章数
-	PassedCount          int       `json:"passed_count"`
-	WarningCount         int       `json:"warning_count"`
-	FailedCount          int       `json:"failed_count"`
-	AvgScore             float64   `json:"avg_score"`
-	ArcBalanceJSON       string    `json:"arc_balance_json" gorm:"type:text"`      // 三幕结构分析 JSON
-	TensionCurveJSON     string    `json:"tension_curve_json" gorm:"type:text"`    // 逐章张力曲线 [{chapter_no,tension,score}]
-	RecurringIssuesJSON  string    `json:"recurring_issues_json" gorm:"type:text"` // []OutlineIssue 高频共性问题
-	ChapterAdvicesJSON   string    `json:"chapter_advices_json" gorm:"type:text"`  // []ChapterAdvice 逐章改进建议
-	GlobalSuggestion     string    `json:"global_suggestion" gorm:"type:text"`
-	Status               string    `json:"status" gorm:"size:20"` // completed/partial
-	SynthesizedAt        time.Time `json:"synthesized_at"`
+	TotalChapters        int     `json:"total_chapters"`   // novel.Outline 中规划的总章数
+	ReviewedCount        int     `json:"reviewed_count"`   // 实际完成审查的章数
+	PassedCount          int     `json:"passed_count"`
+	WarningCount         int     `json:"warning_count"`
+	FailedCount          int     `json:"failed_count"`
+	AvgScore             float64 `json:"avg_score"`
+	ArcBalanceJSON       string  `json:"arc_balance_json" gorm:"type:text"`      // 三幕结构分析 JSON
+	TensionCurveJSON     string  `json:"tension_curve_json" gorm:"type:text"`    // 逐章张力曲线 [{chapter_no,tension,score}]
+	RecurringIssuesJSON  string  `json:"recurring_issues_json" gorm:"type:text"` // []OutlineIssue 高频共性问题
+	ChapterAdvicesJSON   string  `json:"chapter_advices_json" gorm:"type:text"`  // []ChapterAdvice 逐章改进建议
+	GlobalSuggestion     string  `json:"global_suggestion" gorm:"type:text"`
+	Status               string  `json:"status" gorm:"size:20"` // completed/partial
 }
 
 func (NovelOutlineSynthesis) TableName() string { return "ink_outline_synthesis" }

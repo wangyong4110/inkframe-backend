@@ -32,19 +32,10 @@ type ModelProvider struct {
 	APIVersion   string `json:"api_version" gorm:"size:50"`      // 协议版本号（仅 Azure 使用）
 	DefaultModel string `json:"default_model" gorm:"size:200;default:''"`  // 默认模型名称（替代 APIVersion 的模型名用途）
 
-	// 限制
-	RateLimit   int `json:"rate_limit"` // 请求/分钟
-	Timeout     int `json:"timeout" gorm:"default:0"`     // HTTP 请求超时（秒），0=使用默认值300s
-	Concurrency int `json:"concurrency" gorm:"default:0"` // 最大并发调用数，0=不限制
-
 	// 元数据（系统级模板字段，由 seedAIModels 写入，用户无需填写）
 	NeedsSecretKey bool   `json:"needs_secret_key" gorm:"default:false"` // 是否需要 AK/SK 双密钥鉴权
 	StaticModels   string `json:"static_models,omitempty" gorm:"type:text"` // JSON 字符串，不支持 /models 端点时的内置模型列表
 	VoicesJSON     string `json:"voices_json,omitempty" gorm:"type:text"`   // []VoiceEntry JSON，仅 TTS 类提供商
-
-	// 同源分组（如 "kling" 组含 kling/kling-sfx/kling-tts/kling-image/kling-i2i）
-	GroupName        string `json:"group_name" gorm:"size:100;index;default:''"`
-	IsGroupCanonical bool   `json:"is_group_canonical" gorm:"default:false"` // 是否为该组的 UI 代表
 
 	// 状态
 	IsActive    bool   `json:"is_active" gorm:"default:true"`
@@ -86,17 +77,12 @@ type AIModel struct {
 
 	// 性能指标
 	MaxTokens int     `json:"max_tokens"`
-	Quality   float64 `json:"quality"`          // 0.0-1.0，用于模型选择策略
-	CostPer1K float64 `json:"cost_per_1k_tokens"` // 每千 token 费用，用于成本优先策略
+	Quality   float64 `json:"quality"` // 0.0-1.0，用于模型选择策略
 
 	// 调用限制（0=使用供应商默认值）
 	Timeout     int `json:"timeout" gorm:"default:0"`     // HTTP 超时秒数
 	Concurrency int `json:"concurrency" gorm:"default:0"` // 最大并发调用数
 	RateLimit   int `json:"rate_limit" gorm:"default:0"`  // 请求/分钟
-
-	// 音色专属元数据（仅 type='voice' 时有意义）
-	Gender   string `json:"gender" gorm:"size:20;default:''"` // male / female / neutral
-	AgeGroup string `json:"age_group" gorm:"size:20;default:''"` // child / teen / adult / elder
 
 	// 状态
 	IsActive bool `json:"is_active" gorm:"default:true"`
@@ -127,10 +113,6 @@ type TaskModelConfig struct {
 	TopK           int     `json:"top_k"`
 	MaxTokens      int     `json:"max_tokens"`
 	TimeoutSeconds int     `json:"timeout_seconds" gorm:"default:0"` // 0=使用硬编码默认值(300s)
-	SystemPrompt   string  `json:"system_prompt" gorm:"type:text"`
-
-	// 限制
-	MaxCostPerTask float64 `json:"max_cost_per_task"`
 
 	// 策略
 	Strategy string `json:"strategy" gorm:"size:20;default:balanced"`
@@ -148,8 +130,9 @@ func (TaskModelConfig) TableName() string {
 
 // ModelComparisonExperiment 模型对比实验
 type ModelComparisonExperiment struct {
-	ID          uint   `json:"id" gorm:"primaryKey"`
-	UUID        string `json:"uuid" gorm:"uniqueIndex;size:36"`
+	ID       uint `json:"id" gorm:"primaryKey"`
+	TenantID uint `json:"tenant_id" gorm:"index;not null;default:0"` // 0=系统级, >0=租户私有
+	UUID     string `json:"uuid" gorm:"uniqueIndex;size:36"`
 	Name        string `json:"name" gorm:"size:255;not null"`
 	Description string `json:"description" gorm:"type:text"`
 
@@ -164,11 +147,11 @@ type ModelComparisonExperiment struct {
 	Progress float64 `json:"progress" gorm:"type:decimal(5,2);default:0"`
 
 	// 结果
-	Results       string `json:"results" gorm:"type:text"` // JSON
-	WinnerModelID *uint  `json:"winner_model_id"`
+	WinnerModelID *uint `json:"winner_model_id"`
 
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (ModelComparisonExperiment) TableName() string {
@@ -185,20 +168,10 @@ type ExperimentResult struct {
 
 	Output string `json:"output" gorm:"type:text"`
 
-	// 质量评分
-	QualityScore     float64 `json:"quality_score" gorm:"type:decimal(5,4)"`
-	RelevanceScore   float64 `json:"relevance_score" gorm:"type:decimal(5,4)"`
-	CreativityScore  float64 `json:"creativity_score" gorm:"type:decimal(5,4)"`
-	ConsistencyScore float64 `json:"consistency_score" gorm:"type:decimal(5,4)"`
+	// 质量评分（仅 QualityScore 被 RunExperiment 写入，其余评分维度待 AI 评审接入后启用）
+	QualityScore float64 `json:"quality_score" gorm:"type:decimal(5,4)"`
 
-	// 成本
-	TokensUsed int     `json:"tokens_used"`
-	Cost       float64 `json:"cost"`
-	Latency    float64 `json:"latency"` // 秒
-
-	// 用户评价
-	UserRating  *int   `json:"user_rating,omitempty"` // 1-5
-	UserComment string `json:"user_comment" gorm:"type:text"`
+	Latency float64 `json:"latency"` // 秒
 
 	Success bool   `json:"success" gorm:"default:true"`
 	Error   string `json:"error" gorm:"type:text"`
@@ -284,9 +257,6 @@ type CreateModelProviderRequest struct {
 	APISecretKey string `json:"api_secret_key"`
 	APIVersion   string `json:"api_version"`
 	IsActive     bool   `json:"is_active"`
-	Timeout      int    `json:"timeout"`     // HTTP 超时秒数，0=默认300s
-	Concurrency  int    `json:"concurrency"` // 最大并发调用数，0=不限制
-	RateLimit    int    `json:"rate_limit"`  // 请求/分钟，0=不限制
 }
 
 type UpdateModelProviderRequest struct {
@@ -297,9 +267,6 @@ type UpdateModelProviderRequest struct {
 	APISecretKey string `json:"api_secret_key"`
 	APIVersion   string `json:"api_version"`
 	IsActive     *bool  `json:"is_active"`
-	Timeout      *int   `json:"timeout"`     // HTTP 超时秒数；nil=不修改
-	Concurrency  *int   `json:"concurrency"` // 最大并发调用数；nil=不修改
-	RateLimit    *int   `json:"rate_limit"`  // 请求/分钟；nil=不修改
 }
 
 type CreateAIModelRequest struct {
@@ -307,11 +274,11 @@ type CreateAIModelRequest struct {
 	ModelID     string  `json:"model_id" binding:"required"`
 	Name        string  `json:"name" binding:"required"`
 	Type        string  `json:"type"`
+	Quality     float64 `json:"quality"`   // 0.0–1.0，0=不设置
 	MaxTokens   int     `json:"max_tokens"`
 	Timeout     int     `json:"timeout"`
 	Concurrency int     `json:"concurrency"`
 	RateLimit   int     `json:"rate_limit"`
-	CostPer1K   float64 `json:"cost_per_1k"`
 	IsDefault   bool    `json:"is_default"`
 }
 
@@ -324,7 +291,6 @@ type UpdateAIModelRequest struct {
 	Timeout     *int     `json:"timeout"`
 	Concurrency *int     `json:"concurrency"`
 	RateLimit   *int     `json:"rate_limit"`
-	CostPer1K   float64  `json:"cost_per_1k"`
 	IsDefault   *bool    `json:"is_default"`
 	IsActive    *bool    `json:"is_active"`
 }

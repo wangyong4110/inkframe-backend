@@ -148,6 +148,18 @@ func (r *CharacterStateSnapshotRepository) Create(snapshot *model.CharacterState
 	return r.db.Create(snapshot).Error
 }
 
+// Upsert 按 (character_id, chapter_id) 唯一键插入或覆盖更新，防止重复快照堆积。
+func (r *CharacterStateSnapshotRepository) Upsert(snapshot *model.CharacterStateSnapshot) error {
+	var existing model.CharacterStateSnapshot
+	err := r.db.Where("character_id = ? AND chapter_id = ?", snapshot.CharacterID, snapshot.ChapterID).First(&existing).Error
+	if err == nil {
+		snapshot.ID = existing.ID
+		snapshot.CreatedAt = existing.CreatedAt
+		return r.db.Save(snapshot).Error
+	}
+	return r.db.Create(snapshot).Error
+}
+
 func (r *CharacterStateSnapshotRepository) ListByCharacter(characterID uint) ([]*model.CharacterStateSnapshot, error) {
 	var snapshots []*model.CharacterStateSnapshot
 	err := r.db.Where("character_id = ?", characterID).Order("created_at DESC").Find(&snapshots).Error
@@ -216,7 +228,7 @@ func (r *CharacterLookRepository) GetByID(id uint) (*model.CharacterLook, error)
 func (r *CharacterLookRepository) ListByCharacter(characterID uint) ([]*model.CharacterLook, error) {
 	var looks []*model.CharacterLook
 	if err := r.db.Where("character_id = ?", characterID).
-		Order("sort_order ASC, chapter_from ASC").
+		Order("chapter_from ASC").
 		Find(&looks).Error; err != nil {
 		return nil, err
 	}

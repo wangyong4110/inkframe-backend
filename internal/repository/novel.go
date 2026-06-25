@@ -804,6 +804,15 @@ func (r *NovelCrawlJobRepository) ListRunning() ([]*model.NovelCrawlJob, error) 
 	return jobs, err
 }
 
+// HasRunningJob 检查指定小说是否已有处于 running 状态的爬取任务（防并发重复爬取）
+func (r *NovelCrawlJobRepository) HasRunningJob(novelID uint) (bool, error) {
+	var cnt int64
+	err := r.db.Model(&model.NovelCrawlJob{}).
+		Where("novel_id = ? AND status = 'running'", novelID).
+		Count(&cnt).Error
+	return cnt > 0, err
+}
+
 // Finalize 完成爬取任务（更新最终状态）
 func (r *NovelCrawlJobRepository) Finalize(id uint, status string, done, total, failed int) error {
 	now := time.Now()
@@ -815,6 +824,12 @@ func (r *NovelCrawlJobRepository) Finalize(id uint, status string, done, total, 
 			"failed_count": failed,
 			"completed_at": &now,
 		}).Error
+}
+
+// SetError 记录任务失败原因（status 已由 Finalize 更新，此方法仅补写 error_message）
+func (r *NovelCrawlJobRepository) SetError(id uint, errMsg string) error {
+	return r.db.Model(&model.NovelCrawlJob{}).Where("id = ?", id).
+		Update("error_message", errMsg).Error
 }
 
 // ──────────────────────────────────────────────

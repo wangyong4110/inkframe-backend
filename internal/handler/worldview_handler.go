@@ -12,10 +12,16 @@ import (
 // WorldviewHandler 世界观处理器
 type WorldviewHandler struct {
 	worldviewService *service.WorldviewService
+	auditSvc         *service.AuditService
 }
 
 func NewWorldviewHandler(worldviewService *service.WorldviewService) *WorldviewHandler {
 	return &WorldviewHandler{worldviewService: worldviewService}
+}
+
+func (h *WorldviewHandler) WithAuditService(svc *service.AuditService) *WorldviewHandler {
+	h.auditSvc = svc
+	return h
 }
 
 // ListWorldviews 获取世界观列表（仅返回当前租户的世界观）
@@ -94,7 +100,13 @@ func (h *WorldviewHandler) CreateWorldview(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c),
+			Action: "worldview.create", ResourceType: "worldview",
+			ResourceID: worldview.ID, ResourceName: worldview.Name, IP: c.ClientIP(),
+		})
+	}
 	respondCreated(c, worldview)
 }
 
@@ -185,7 +197,13 @@ func (h *WorldviewHandler) DeleteWorldview(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c),
+			Action: "worldview.delete", ResourceType: "worldview", ResourceID: uint(id),
+			IP: c.ClientIP(),
+		})
+	}
 	respondOK(c, nil)
 }
 
@@ -379,6 +397,14 @@ func (h *WorldviewHandler) DeleteEntity(c *gin.Context) {
 	if err := h.worldviewService.DeleteEntity(uint(entityID)); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.auditSvc != nil {
+		wvID, _ := parseID(c, "id")
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c),
+			Action: "worldview.entity_delete", ResourceType: "worldview_entity", ResourceID: uint(entityID),
+			Details: map[string]any{"worldview_id": wvID}, IP: c.ClientIP(),
+		})
 	}
 	respondOK(c, nil)
 }

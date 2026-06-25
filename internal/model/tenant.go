@@ -92,19 +92,20 @@ func (t *Tenant) SetProfile(p TenantProfile) {
 
 // TenantUser 租户用户关联
 type TenantUser struct {
-	ID        uint   `json:"id" gorm:"primaryKey"`
-	TenantID  uint   `json:"tenant_id" gorm:"index;not null"`
-	UserID    uint   `json:"user_id" gorm:"index;not null"`
-	Role      string `json:"role" gorm:"size:20;default:member;comment:角色 owner/admin/member/viewer"`
-	Nickname  string `json:"nickname" gorm:"size:50;comment:在租户内的昵称"`
-	Avatar    string `json:"avatar" gorm:"size:500;comment:头像"`
-	Status    string `json:"status" gorm:"size:20;default:active;comment:状态"`
-	
+	ID       uint   `json:"id" gorm:"primaryKey"`
+	TenantID uint   `json:"tenant_id" gorm:"uniqueIndex:uniq_tenant_user;not null"`
+	UserID   uint   `json:"user_id" gorm:"uniqueIndex:uniq_tenant_user;not null"`
+	Role     string `json:"role" gorm:"size:20;default:member;comment:角色 owner/admin/member/viewer"`
+	Nickname string `json:"nickname" gorm:"size:50;comment:在租户内的昵称"`
+	Avatar   string `json:"avatar" gorm:"size:500;comment:头像"`
+	Status   string `json:"status" gorm:"size:20;default:active;comment:状态"`
+
 	// 权限
 	Permissions string `json:"permissions" gorm:"type:text;comment:自定义权限JSON"`
-	
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+
+	CreatedAt time.Time      `json:"created_at"`
+	UpdatedAt time.Time      `json:"updated_at"`
+	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
 }
 
 func (TenantUser) TableName() string {
@@ -117,7 +118,7 @@ type User struct {
 	UUID      string    `json:"uuid" gorm:"size:36;uniqueIndex;not null"`
 	Username  string    `json:"username" gorm:"size:50;uniqueIndex;not null"`
 	Email     string    `json:"email" gorm:"size:100;uniqueIndex;not null"`
-	Phone     string    `json:"phone" gorm:"size:20;index"`
+	Phone     *string   `json:"phone,omitempty" gorm:"size:20;uniqueIndex"`
 	Password  string    `json:"-" gorm:"size:100;not null"`
 	Nickname  string    `json:"nickname" gorm:"size:50"`
 	Avatar    string    `json:"avatar" gorm:"size:500"`

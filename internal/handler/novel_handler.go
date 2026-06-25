@@ -56,8 +56,9 @@ type NovelHandler struct {
 	qualityControlService *service.QualityControlService
 	taskSvc               *service.TaskService
 	modelService          *service.ModelService
-	notifSvc              *service.NotificationService // 可选
+	notifSvc              *service.NotificationService  // 可选
 	analysisSvc           *service.NovelAnalysisService // 可选
+	auditSvc              *service.AuditService         // 可选
 }
 
 func NewNovelHandler(
@@ -98,6 +99,12 @@ func (h *NovelHandler) WithAnalysisService(svc *service.NovelAnalysisService) *N
 	return h
 }
 
+// WithAuditService 注入审计服务（可选）
+func (h *NovelHandler) WithAuditService(svc *service.AuditService) *NovelHandler {
+	h.auditSvc = svc
+	return h
+}
+
 // CreateNovel 创建小说
 // POST /api/v1/novels
 func (h *NovelHandler) CreateNovel(c *gin.Context) {
@@ -125,6 +132,19 @@ func (h *NovelHandler) CreateNovel(c *gin.Context) {
 		logger.Errorf("[NovelHandler] CreateNovel: tenantID=%d err=%v", tenantID, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID:     tenantID,
+			UserID:       req.UserID,
+			NovelID:      novel.ID,
+			Action:       "novel.create",
+			ResourceType: "novel",
+			ResourceID:   novel.ID,
+			ResourceName: novel.Title,
+			IP:           c.ClientIP(),
+		})
 	}
 
 	respondCreated(c, novel)
@@ -222,6 +242,19 @@ func (h *NovelHandler) UpdateNovel(c *gin.Context) {
 		return
 	}
 
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID:     getTenantID(c),
+			UserID:       getUserID(c),
+			NovelID:      uint(id),
+			Action:       "novel.update",
+			ResourceType: "novel",
+			ResourceID:   uint(id),
+			ResourceName: novel.Title,
+			IP:           c.ClientIP(),
+		})
+	}
+
 	respondOK(c, novel)
 }
 
@@ -241,6 +274,17 @@ func (h *NovelHandler) DeleteNovel(c *gin.Context) {
 		logger.Errorf("[NovelHandler] DeleteNovel: novelID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID:     getTenantID(c),
+			UserID:       getUserID(c),
+			Action:       "novel.delete",
+			ResourceType: "novel",
+			ResourceID:   uint(id),
+			IP:           c.ClientIP(),
+		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -337,6 +381,19 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 			}
 		}(chapter.ID)
 	}(task.TaskID)
+
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID:     tenantID,
+			UserID:       callerUserID,
+			NovelID:      uint(novelId),
+			Action:       "chapter.generate",
+			ResourceType: "novel",
+			ResourceID:   uint(novelId),
+			IP:           c.ClientIP(),
+			Details:      map[string]any{"task_id": task.TaskID, "chapter_no": req.ChapterNo},
+		})
+	}
 
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,

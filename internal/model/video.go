@@ -17,7 +17,6 @@ type NovelVideoConfig struct {
 	VideoFPS              int     `json:"video_fps" gorm:"default:30"`
 	VideoAspectRatio      string  `json:"video_aspect_ratio" gorm:"size:10;default:'16:9'"`
 	CharConsistencyWeight float64 `json:"char_consistency_weight" gorm:"type:decimal(3,2);default:1.0"`
-	AssetExportPath       string  `json:"asset_export_path" gorm:"size:500"`
 	NarrationVoice        string  `json:"narration_voice" gorm:"size:200"`
 
 	// 字幕配置
@@ -42,7 +41,6 @@ type NovelVideoConfig struct {
 
 	// 高清 & 3D 视频生成（项目全局）
 	KlingModel    string `json:"kling_model" gorm:"size:50;default:'kling-v1'"`    // kling-v1/kling-v1-6/kling-v2
-	HDEnabled     bool   `json:"hd_enabled" gorm:"default:false"`                  // 开启高清输出（自动升级为 kling-v1-6 + pro）
 	ThreeDEnabled bool   `json:"three_d_enabled" gorm:"default:false"`              // 开启 3D 动画风格（项目全局默认）
 
 	// 字幕样式
@@ -84,8 +82,8 @@ type Video struct {
 	Duration    float64 `json:"duration"` // 秒
 	TotalShots  int     `json:"total_shots" gorm:"default:0"`
 
-	// 文件
-	VideoPath string `json:"video_path" gorm:"size:500"`
+	// 文件（仅服务器内部使用，不暴露给 API）
+	VideoPath string `json:"-" gorm:"size:500"`
 	Thumbnail string `json:"thumbnail" gorm:"size:500"`
 
 	// 状态
@@ -196,7 +194,6 @@ type StoryboardShot struct {
 
 	// 时序连贯与参考帧
 	ReferenceImageURL string `json:"reference_image_url" gorm:"size:500"` // 前一镜头最后一帧URL，用于时序连贯
-	FrameImageURL     string `json:"frame_image_url" gorm:"size:500"`     // 本镜头AI图像生成结果URL，传给Kling image-to-video
 
 	// 场景锚点
 	SceneAnchorID *uint `json:"scene_anchor_id,omitempty" gorm:"index"`
@@ -205,9 +202,7 @@ type StoryboardShot struct {
 	CharacterIDs JSONUintSlice `json:"character_ids" gorm:"type:json"`
 
 	// 音效（SFX）
-	SFXURL    string  `json:"sfx_url" gorm:"size:1000"`                           // 音效文件URL（本地/OSS/Freesound预览）
-	SFXTags   string  `json:"sfx_tags" gorm:"size:2000"`                          // LLM提取的音效标签（JSON对象或数组字符串）
-	SFXVolume float64 `json:"sfx_volume" gorm:"type:decimal(4,2);default:0"`      // 混音音量（0=自动，>0=覆盖）
+	SFXTags string `json:"sfx_tags" gorm:"size:2000"` // LLM提取的音效标签（JSON对象或数组字符串）
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -320,14 +315,15 @@ const (
 // ReviewRecord 统一审查历史记录（章节/分镜共用同一张表）
 type ReviewRecord struct {
 	gorm.Model
-	EntityType       string     `json:"entity_type" gorm:"size:20;index"`           // "chapter" | "storyboard"
-	EntityID         uint       `json:"entity_id" gorm:"index"`                     // chapter_id 或 video_id
+	NovelID          uint       `json:"novel_id" gorm:"index;not null;default:0"`
+	EntityType       string     `json:"entity_type" gorm:"size:20;index:idx_review_entity,priority:1"` // "chapter" | "storyboard"
+	EntityID         uint       `json:"entity_id" gorm:"index:idx_review_entity,priority:2"`           // chapter_id 或 video_id
 	OverallScore     float64    `json:"overall_score"`
-	ReviewJSON       string     `json:"-" gorm:"column:review_json;type:text"`      // ChapterReview 或 StoryboardReview JSON
-	Status           string     `json:"status" gorm:"size:20;default:'pending'"`    // pending|applied|rolled_back
+	ReviewJSON       string     `json:"-" gorm:"column:review_json;type:text"`   // ChapterReview 或 StoryboardReview JSON
+	Status           string     `json:"status" gorm:"size:20;default:'pending'"` // pending|applied|rolled_back
 	AppliedAt        *time.Time `json:"applied_at,omitempty"`
-	AppliedDiffsJSON string     `json:"-" gorm:"column:applied_diffs;type:text"`    // 已应用变更 JSON
-	SnapshotJSON     string     `json:"-" gorm:"column:snapshot_json;type:text"`    // 回滚快照 JSON
+	AppliedDiffsJSON string     `json:"-" gorm:"column:applied_diffs;type:text"` // 已应用变更 JSON
+	SnapshotJSON     string     `json:"-" gorm:"column:snapshot_json;type:text"` // 回滚快照 JSON
 }
 
 func (ReviewRecord) TableName() string { return "ink_review_record" }
@@ -335,10 +331,11 @@ func (ReviewRecord) TableName() string { return "ink_review_record" }
 // IgnoredReviewIssue 统一已忽略的审查问题（章节/分镜共用同一张表）
 type IgnoredReviewIssue struct {
 	gorm.Model
-	EntityType  string `json:"entity_type" gorm:"size:20;index"`
-	EntityID    uint   `json:"entity_id" gorm:"index"`
+	NovelID     uint   `json:"novel_id" gorm:"index;not null;default:0"`
+	EntityType  string `json:"entity_type" gorm:"size:20;index:idx_ignored_entity,priority:1;uniqueIndex:uniq_ignored_issue,priority:1"`
+	EntityID    uint   `json:"entity_id" gorm:"index:idx_ignored_entity,priority:2;uniqueIndex:uniq_ignored_issue,priority:2"`
 	IssueText   string `json:"issue_text" gorm:"type:text"`
-	IssueHash   string `json:"issue_hash,omitempty" gorm:"size:64;index"`
+	IssueHash   string `json:"issue_hash,omitempty" gorm:"size:64;index;uniqueIndex:uniq_ignored_issue,priority:3"`
 	ContextJSON string `json:"-" gorm:"column:context_json;type:text"` // 分镜: {"shot_no":3}
 	Note        string `json:"note,omitempty" gorm:"type:text"`
 }

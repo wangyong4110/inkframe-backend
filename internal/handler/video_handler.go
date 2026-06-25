@@ -32,6 +32,12 @@ type VideoHandler struct {
 	subtitleSvc        *service.SubtitleService
 	storageSvc         storage.Service
 	assetRepo          *repository.AssetRepository
+	auditSvc           *service.AuditService
+}
+
+func (h *VideoHandler) WithAuditService(svc *service.AuditService) *VideoHandler {
+	h.auditSvc = svc
+	return h
 }
 
 func (h *VideoHandler) WithStorage(svc storage.Service) *VideoHandler {
@@ -180,7 +186,13 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: tenantID, UserID: getUserID(c), NovelID: uint(novelId),
+			Action: "video.create", ResourceType: "video",
+			ResourceID: video.ID, ResourceName: video.Title, IP: c.ClientIP(),
+		})
+	}
 	respondCreated(c, video)
 }
 
@@ -297,7 +309,13 @@ func (h *VideoHandler) DeleteVideo(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c),
+			Action: "video.delete", ResourceType: "video", ResourceID: uint(id),
+			IP: c.ClientIP(),
+		})
+	}
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
 		"message": "success",
@@ -359,6 +377,14 @@ func (h *VideoHandler) PublishVideo(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c),
+			Action: "video.publish", ResourceType: "video",
+			ResourceID: video.ID, ResourceName: video.Title,
+			Details: map[string]any{"visibility": req.Visibility}, IP: c.ClientIP(),
+		})
+	}
 	respondOK(c, video)
 }
 
@@ -380,6 +406,13 @@ func (h *VideoHandler) UnpublishVideo(c *gin.Context) {
 	}); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c),
+			Action: "video.unpublish", ResourceType: "video", ResourceID: uint(id),
+			IP: c.ClientIP(),
+		})
 	}
 	respondOK(c, gin.H{"unpublished": true})
 }

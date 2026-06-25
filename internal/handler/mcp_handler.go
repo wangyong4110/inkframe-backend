@@ -11,10 +11,16 @@ import (
 // McpHandler MCP 工具处理器
 type McpHandler struct {
 	mcpService *service.McpService
+	auditSvc   *service.AuditService
 }
 
 func NewMcpHandler(mcpService *service.McpService) *McpHandler {
 	return &McpHandler{mcpService: mcpService}
+}
+
+func (h *McpHandler) WithAuditService(svc *service.AuditService) *McpHandler {
+	h.auditSvc = svc
+	return h
 }
 
 // ListMcpTools 获取所有 MCP 工具（租户隔离）
@@ -39,6 +45,13 @@ func (h *McpHandler) CreateMcpTool(c *gin.Context) {
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c),
+			Action: "mcp.tool_create", ResourceType: "mcp_tool",
+			ResourceID: tool.ID, ResourceName: tool.Name, IP: c.ClientIP(),
+		})
 	}
 	respondCreated(c, tool)
 }
@@ -72,6 +85,13 @@ func (h *McpHandler) DeleteMcpTool(c *gin.Context) {
 	if err := h.mcpService.DeleteTool(uint(id)); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c),
+			Action: "mcp.tool_delete", ResourceType: "mcp_tool", ResourceID: uint(id),
+			IP: c.ClientIP(),
+		})
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "deleted"})
 }
@@ -138,6 +158,13 @@ func (h *McpHandler) BindMcpTool(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c),
+			Action: "mcp.tool_bind", ResourceType: "ai_model", ResourceID: uint(modelID),
+			Details: map[string]any{"tool_id": req.ToolID}, IP: c.ClientIP(),
+		})
+	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "bound"})
 }
 
@@ -155,6 +182,13 @@ func (h *McpHandler) UnbindMcpTool(c *gin.Context) {
 	if err := h.mcpService.UnbindTool(uint(modelID), uint(toolID)); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			TenantID: getTenantID(c), UserID: getUserID(c),
+			Action: "mcp.tool_unbind", ResourceType: "ai_model", ResourceID: uint(modelID),
+			Details: map[string]any{"tool_id": toolID}, IP: c.ClientIP(),
+		})
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "unbound"})
 }
