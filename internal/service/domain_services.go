@@ -348,6 +348,10 @@ func (s *ModelService) DeleteProvider(id uint, tenantID uint) error {
 	if provider.TenantID != tenantID {
 		return fmt.Errorf("cannot delete system-level provider")
 	}
+	// 级联删除关联模型
+	if err := s.modelRepo.DeleteByProvider(id); err != nil {
+		return fmt.Errorf("delete provider models: %w", err)
+	}
 	if err := s.providerRepo.Delete(id); err != nil {
 		return err
 	}

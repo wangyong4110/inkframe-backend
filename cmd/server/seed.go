@@ -257,6 +257,7 @@ func seedAIModels(db *gorm.DB) {
 
 	providers := []providerSeed{
 		// LLM — 国际
+		// openai 同时承载 DALL-E 图像生成（openai-image 已合并）
 		{"openai", "OpenAI", "https://api.openai.com/v1", false, nil, "", false},
 		{"anthropic", "Anthropic", "https://api.anthropic.com/v1", false, nil, "", false},
 		// Azure OpenAI: endpoint = https://<resource>.openai.azure.com/openai
@@ -266,9 +267,10 @@ func seedAIModels(db *gorm.DB) {
 		{"mistral", "Mistral AI", "https://api.mistral.ai/v1", false, nil, "", false},
 		{"meta", "Meta AI (Llama)", "https://api.llama.com/compat/v1", false, nil, "", false},
 		// LLM — 国内
+		// doubao 同时承载 Seedance 视频生成（seedance 已合并）
 		{"doubao", "豆包（火山引擎 Ark）", "https://ark.volces.com/api/v3", false, nil, "doubao", true},
 		{"deepseek", "DeepSeek", "https://api.deepseek.com/v1", false, nil, "", false},
-		// 阿里云 DashScope 组：qianwen(llm) + qwen-tts(语音) + aliyun-tts(语音) + happyhorse(视频)
+		// qianwen 同时承载 CosyVoice（aliyun-tts）、千问TTS（qwen-tts）、HappyHorse视频（均已合并）
 		{"qianwen", "通义千问（DashScope）", "https://dashscope.aliyuncs.com/compatible-mode/v1", false, nil, "aliyun", true},
 		{"zhipu", "智谱AI (GLM / Z.AI)", "https://open.bigmodel.cn/api/paas/v4", false, nil, "", false},
 		{"moonshot", "Moonshot AI (Kimi)", "https://api.moonshot.cn/v1", false, nil, "", false},
@@ -277,18 +279,13 @@ func seedAIModels(db *gorm.DB) {
 		{"yi", "零一万物 (Yi)", "https://api.lingyiwanwu.com/v1", false, nil, "", false},
 		// Ollama 本地 LLM
 		{"ollama", "Ollama（本地）", "http://localhost:11434/v1", false, nil, "", false},
-		// 图像生成
-		{"openai-image", "OpenAI Image (DALL-E)", "https://api.openai.com/v1", false, nil, "", false},
-		// 即梦/火山引擎 组：volcengine-visual(图像) + volcengine-i2i(图生图) + jimeng-video(视频)
+		// 即梦/火山引擎 组：volcengine-visual(图像) + jimeng-video(视频)
 		{"volcengine-visual", "即梦AI（火山引擎）", "", true,
 			[]string{"general_v3.0", "general_v3.0-I2V"}, "volcengine", true},
-		// 视频生成
 		{"jimeng-video", "即梦视频3.0（火山引擎）", "", true, nil, "volcengine", false},
-		// 可灵 组：kling(视频) + kling-sfx(音效) + kling-tts(语音) + kling-image(图像) + kling-i2i(图生图)
+		// 可灵：一个供应商承载视频/音效/语音/图像（AK/SK 共用，按模型 type 分发）
 		{"kling", "可灵（快手）", "https://api-beijing.klingai.com", true,
-			[]string{"kling-v1-6", "kling-v1-5", "kling-v1"}, "kling", true},
-		{"seedance", "Seedance（字节跳动）", "https://ark.volces.com/api/v3", false, nil, "", false},
-		{"happyhorse", "HappyHorse（阿里云百炼）", "https://dashscope.aliyuncs.com", false, nil, "aliyun", false},
+			[]string{"kling-v1-6", "kling-v1-5", "kling-v1"}, "", false},
 		// 语音合成
 		{"doubao-speech", "豆包 V3", "https://openspeech.bytedance.com/api/v3", false,
 			[]string{"seed-tts-2.0", "seed-tts-1.0"}, "doubao", false},
@@ -301,24 +298,13 @@ func seedAIModels(db *gorm.DB) {
 			[]string{"0", "1", "3", "4", "5", "103", "106", "110", "111"}, "baidu", false},
 		{"minimax-tts", "MiniMax", "https://api.minimax.chat/v1", true,
 			[]string{"female-shaonv", "female-yujie", "male-qn-qingse", "male-qn-jingying"}, "", false},
-		{"qwen-tts", "千问 TTS（阿里云百炼）", "https://dashscope.aliyuncs.com", false, nil, "aliyun", false},
-		{"aliyun-tts", "CosyVoice（阿里云）", "https://dashscope.aliyuncs.com", false,
-			[]string{"longxiaochun", "longxiaoxia", "longxiaobai", "longfei"}, "aliyun", false},
 		{"tencent-tts", "腾讯云", "https://tts.tencentcloudapi.com", true,
 			[]string{"101001", "101002", "101011", "101012"}, "tencent", false},
-		// 可灵语音（与视频生成共用 AK/SK）
-		{"kling-tts", "可灵 TTS", "https://api-beijing.klingai.com", true,
-			[]string{"zh_female_story", "zh_male_story", "oversea_male1", "oversea_female1"}, "kling", false},
 		// 音效
-		{"kling-sfx", "可灵 SFX", "https://api-beijing.klingai.com", true,
-			[]string{"3s", "5s", "7s", "10s"}, "kling", false},
 		{"elevenlabs-sfx", "ElevenLabs", "https://api.elevenlabs.io", false,
 			[]string{"sound-generation"}, "", false},
 		// 背景音乐
 		{"fun-music", "Fun-Music AI（阿里云百炼）", "", false, nil, "", false},
-		// 可灵图像（与视频生成共用 AK/SK）
-		{"kling-image", "可灵 Image", "https://api-beijing.klingai.com", true,
-			[]string{"kling-v1", "kling-v1-5", "kling-v2", "kling-v2-1", "kling-v3"}, "kling", false},
 	}
 
 	models := []modelSeed{
@@ -326,7 +312,8 @@ func seedAIModels(db *gorm.DB) {
 		{"openai", "gpt-4o", "GPT-4o", "llm", 0.95, 16384},
 		{"openai", "gpt-4o-mini", "GPT-4o Mini", "llm", 0.85, 16384},
 		// OpenAI Image
-		{"openai-image", "dall-e-3", "DALL-E 3", "image", 0.95, 0},
+		// openai 图像生成（原 openai-image 已合并）
+		{"openai", "dall-e-3", "DALL-E 3", "image", 0.95, 0},
 		// Azure OpenAI — 模型名 = Azure portal 中的部署名（Deployment name）
 		// 若用户的部署名不同，可在模型管理界面修改或新增
 		{"azure", "gpt-4o", "GPT-4o（Azure）", "llm", 0.95, 16384},
@@ -396,21 +383,29 @@ func seedAIModels(db *gorm.DB) {
 		{"jimeng-video", "jimeng_t2v_v30", "即梦视频3.0 文生视频", "video", 0.92, 0},
 		{"jimeng-video", "jimeng_i2v_first_v30", "即梦视频3.0 图生视频（首帧）", "video", 0.92, 0},
 		{"jimeng-video", "jimeng_i2v_first_tail_v30", "即梦视频3.0 图生视频（首尾帧）", "video", 0.92, 0},
+		// 可灵视频
 		{"kling", "kling-3.0-turbo", "可灵 3.0 Turbo", "video", 0.97, 0},
 		{"kling", "kling-v1-6", "可灵 v1.6", "video", 0.9, 0},
-		{"seedance", "seedance-01-lite", "Seedance 01 Lite", "video", 0.88, 0},
-		{"happyhorse", "happyhorse-1.1-r2v", "HappyHorse 1.1 参考生视频（多图）", "video", 0.93, 0},
-		{"happyhorse", "happyhorse-1.0-r2v", "HappyHorse 1.0 参考生视频（多图）", "video", 0.88, 0},
-		{"happyhorse", "happyhorse-1.1-i2v", "HappyHorse 1.1 图生视频（首帧）", "video", 0.92, 0},
-		{"happyhorse", "happyhorse-1.0-i2v", "HappyHorse 1.0 图生视频（首帧）", "video", 0.87, 0},
-		{"happyhorse", "happyhorse-1.1-t2v", "HappyHorse 1.1 文生视频", "video", 0.9, 0},
-		{"happyhorse", "happyhorse-1.0-t2v", "HappyHorse 1.0 文生视频", "video", 0.85, 0},
-		// ── 可灵图像生成 ─────────────────────────────────────────────────
-		{"kling-image", "kling-v1", "可灵 v1（标准）", "image", 0.88, 0},
-		{"kling-image", "kling-v1-5", "可灵 v1.5（图生图增强）", "image", 0.90, 0},
-		{"kling-image", "kling-v2", "可灵 v2", "image", 0.92, 0},
-		{"kling-image", "kling-v2-1", "可灵 v2.1", "image", 0.93, 0},
-		{"kling-image", "kling-v3", "可灵 v3（最新）", "image", 0.95, 0},
+		// 可灵音效（原 kling-sfx 已合并）
+		{"kling", "3s", "可灵音效 3s", "sfx", 0.88, 0},
+		{"kling", "5s", "可灵音效 5s", "sfx", 0.90, 0},
+		{"kling", "7s", "可灵音效 7s", "sfx", 0.89, 0},
+		{"kling", "10s", "可灵音效 10s", "sfx", 0.88, 0},
+		// 可灵图像生成（原 kling-image 已合并）
+		{"kling", "kling-v1", "可灵图像 v1", "image", 0.88, 0},
+		{"kling", "kling-v1-5", "可灵图像 v1.5", "image", 0.90, 0},
+		{"kling", "kling-v2", "可灵图像 v2", "image", 0.92, 0},
+		{"kling", "kling-v2-1", "可灵图像 v2.1", "image", 0.93, 0},
+		{"kling", "kling-v3", "可灵图像 v3", "image", 0.95, 0},
+		// doubao 视频生成（原 seedance 已合并）
+		{"doubao", "seedance-01-lite", "Seedance 01 Lite", "video", 0.88, 0},
+		// qianwen 视频生成（原 happyhorse 已合并）
+		{"qianwen", "happyhorse-1.1-r2v", "HappyHorse 1.1 参考生视频（多图）", "video", 0.93, 0},
+		{"qianwen", "happyhorse-1.0-r2v", "HappyHorse 1.0 参考生视频（多图）", "video", 0.88, 0},
+		{"qianwen", "happyhorse-1.1-i2v", "HappyHorse 1.1 图生视频（首帧）", "video", 0.92, 0},
+		{"qianwen", "happyhorse-1.0-i2v", "HappyHorse 1.0 图生视频（首帧）", "video", 0.87, 0},
+		{"qianwen", "happyhorse-1.1-t2v", "HappyHorse 1.1 文生视频", "video", 0.9, 0},
+		{"qianwen", "happyhorse-1.0-t2v", "HappyHorse 1.0 文生视频", "video", 0.85, 0},
 	}
 
 	// 1. 确保 provider 记录存在（tenant_id=0 系统级）
@@ -475,6 +470,33 @@ func seedAIModels(db *gorm.DB) {
 			db.Model(&prov).Updates(updates)
 		}
 		providerIDs[p.name] = prov.ID
+	}
+
+	// 1b. 迁移已合并的子供应商模型到规范供应商，并软删除旧供应商记录（幂等）
+	mergeMap := []struct{ from, to string }{
+		{"openai-image", "openai"},
+		{"seedance", "doubao"},
+		{"qwen-tts", "qianwen"},
+		{"aliyun-tts", "qianwen"},
+		{"happyhorse", "qianwen"},
+		{"kling-sfx", "kling"},
+		{"kling-tts", "kling"},
+		{"kling-image", "kling"},
+		{"kling-i2i", "kling"},
+	}
+	for _, mm := range mergeMap {
+		toID, ok := providerIDs[mm.to]
+		if !ok {
+			continue
+		}
+		db.Exec(
+			`UPDATE ink_ai_model SET provider_id = ? WHERE provider_id IN (SELECT id FROM ink_model_provider WHERE name = ? AND tenant_id = 0) AND deleted_at IS NULL`,
+			toID, mm.from,
+		)
+		db.Exec(
+			`UPDATE ink_model_provider SET deleted_at = NOW() WHERE name = ? AND tenant_id = 0 AND deleted_at IS NULL`,
+			mm.from,
+		)
 	}
 
 	// 2. 确保 model 记录存在
@@ -708,8 +730,9 @@ func seedProviderVoices(db *gorm.DB) {
 			{"male-story", "故事男声（儿童）", "male", "child", 0.90},
 			{"female-story", "故事女声（儿童）", "female", "child", 0.90},
 		}},
-		// ── 阿里云 CosyVoice ─────────────────────────────────────────────
-		{"aliyun-tts", []voiceData{
+		// ── 阿里云 CosyVoice + 千问 TTS（均已合并至 qianwen） ─────────────
+		// QianwenTTSRouter 按 voice ID 前缀分发：long*/loong* → CosyVoice，其余 → QwenTTS
+		{"qianwen", []voiceData{
 			{"longxiaochun", "龙小淳（女/知性温暖）", "female", "adult", 0.92},
 			{"longxiaoxia", "龙晓夏（女/活泼朝气）", "female", "adult", 0.91},
 			{"longxiaobai", "龙小白（男/年轻开朗）", "male", "adult", 0.91},
@@ -739,9 +762,7 @@ func seedProviderVoices(db *gorm.DB) {
 			{"longjiaxin_v3", "龙嘉欣（女/粤语优雅，v3）", "female", "adult", 0.92},
 			{"longlaotie_v3", "龙老铁（男/东北话，v3）", "male", "adult", 0.92},
 			{"loongbella_v3", "Bella 3.0（女/中英双语播报，v3）", "female", "adult", 0.93},
-		}},
-		// ── 千问 TTS ─────────────────────────────────────────────────────
-		{"qwen-tts", []voiceData{
+			// ── 千问 TTS 音色 ─────────────────────────────────────────────
 			{"Cherry", "Cherry 芊悦（女/阳光亲切）", "female", "adult", 0.92},
 			{"Serena", "Serena 苏瑶（女/温柔）", "female", "adult", 0.92},
 			{"Ethan", "Ethan 晨煦（男/阳光活力）", "male", "adult", 0.91},
@@ -812,8 +833,8 @@ func seedProviderVoices(db *gorm.DB) {
 			{"101050", "WeJack（英文男声）", "male", "adult", 0.90},
 			{"101051", "WeRose（英文女声）", "female", "adult", 0.90},
 		}},
-		// ── 可灵语音合成 ─────────────────────────────────────────────────
-		{"kling-tts", []voiceData{
+		// ── 可灵语音合成（已合并至 kling） ──────────────────────────────────
+		{"kling", []voiceData{
 			{"zh_female_story", "故事女声（中文）", "female", "adult", 0.92},
 			{"zh_female_qingxin", "清新女声（中文）", "female", "adult", 0.91},
 			{"zh_female_tianmei", "甜美女声（中文）", "female", "adult", 0.91},
@@ -890,6 +911,7 @@ func seedWebSearchMcpTool(db *gorm.DB, cfg *config.Config) {
 	if err != nil {
 		// Not found — create it
 		tool := model.McpTool{
+			TenantID:      0,
 			Name:          "web_search",
 			DisplayName:   "联网搜索",
 			Description:   "搜索相关故事片段作为章节生成灵感参考",
@@ -917,6 +939,7 @@ func seedMcpTool(db *gorm.DB, name, displayName, description, endpoint string) {
 	var existing model.McpTool
 	if err := db.Where("name = ?", name).First(&existing).Error; err != nil {
 		tool := model.McpTool{
+			TenantID:      0,
 			Name:          name,
 			DisplayName:   displayName,
 			Description:   description,

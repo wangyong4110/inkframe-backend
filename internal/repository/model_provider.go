@@ -296,6 +296,11 @@ func (r *AIModelRepository) Delete(id uint) error {
 	return r.db.Delete(&model.AIModel{}, id).Error
 }
 
+// DeleteByProvider 删除指定提供商的所有模型
+func (r *AIModelRepository) DeleteByProvider(providerID uint) error {
+	return r.db.Where("provider_id = ?", providerID).Delete(&model.AIModel{}).Error
+}
+
 // UpdateHealthStatus 更新健康状态
 func (r *AIModelRepository) UpdateHealthStatus(providerID uint, status string) error {
 	return r.db.Model(&model.ModelProvider{}).Where("id = ?", providerID).

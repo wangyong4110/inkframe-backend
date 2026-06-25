@@ -304,13 +304,19 @@ func (s *AIService) GetDefaultProviderName() string {
 	return p.GetName()
 }
 
-// getTenantProvider 按租户加载提供商（带缓存，TTL 5 分钟）
-func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AIProvider, error) {
+// getTenantProvider 按租户加载提供商（带缓存，TTL 5 分钟）。
+// targetType 为可选的模型类型提示（如 "voice"、"sfx"、"image"），用于合并型提供商（如 qianwen、kling）
+// 根据类型选择正确的底层构造器。
+func (s *AIService) getTenantProvider(tenantID uint, providerName string, targetType ...string) (ai.AIProvider, error) {
 	if s.providerRepo == nil {
 		return s.aiManager.GetProvider(providerName)
 	}
 
-	cacheKey := fmt.Sprintf("%d:%s", tenantID, providerName)
+	tType := ""
+	if len(targetType) > 0 {
+		tType = strings.ToLower(targetType[0])
+	}
+	cacheKey := fmt.Sprintf("%d:%s:%s", tenantID, providerName, tType)
 
 	// 检查缓存
 	if v, ok := s.providerCache.Load(cacheKey); ok {
@@ -448,7 +454,14 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 	case "deepseek":
 		provider = ai.NewDeepSeekProvider(apiKey, matched.APIEndpoint, modelName, timeout)
 	case "qianwen":
-		provider = ai.NewQianwenProvider(apiKey, matched.APIEndpoint, modelName, timeout)
+		switch tType {
+		case "voice":
+			provider = ai.NewQianwenTTSRouter(apiKey, matched.APIEndpoint)
+		case "video":
+			return nil, fmt.Errorf("provider %q is a video provider; use GetTenantVideoProvider", matched.Name)
+		default:
+			provider = ai.NewQianwenProvider(apiKey, matched.APIEndpoint, modelName, timeout)
+		}
 	case "azure":
 		// APIEndpoint = Azure resource endpoint; APIVersion = REST API version ("2025-01-01-preview")
 		// Deployment name is resolved at call time from req.Model (AIModel.Name).
@@ -464,15 +477,19 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 		}
 		switch {
 		case strings.Contains(ep, "klingai.com"):
-			// 可灵系列：按 model type 选择正确的构造器，避免误用 OpenAI 兼容构造器
-			switch provType {
+			// 可灵系列：按 model type 选择正确的构造器（tType 优先，其次 provType）
+			klingType := tType
+			if klingType == "" {
+				klingType = provType
+			}
+			switch klingType {
 			case "sfx":
 				logger.Printf("getTenantProvider: provider %q mapped to KlingSFXProvider via endpoint+type", matched.Name)
 				provider = ai.NewKlingSFXProvider(apiKey, apiSecretKey, matched.APIEndpoint)
 			case "voice":
 				logger.Printf("getTenantProvider: provider %q mapped to KlingTTSProvider via endpoint+type", matched.Name)
 				provider = ai.NewKlingTTSProvider(apiKey, apiSecretKey, matched.APIEndpoint)
-			case "image":
+			case "image", "img2img":
 				logger.Printf("getTenantProvider: provider %q mapped to KlingImageProvider via endpoint+type", matched.Name)
 				provider = ai.NewKlingImageProvider(apiKey, apiSecretKey, matched.APIEndpoint)
 			case "video":
@@ -480,7 +497,7 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string) (ai.AI
 				logger.Printf("getTenantProvider: provider %q type=video — use GetTenantVideoProvider instead", matched.Name)
 				return nil, fmt.Errorf("provider %q is a video provider; use GetTenantVideoProvider", matched.Name)
 			default:
-				logger.Printf("getTenantProvider: provider %q (klingai endpoint, type=%q) — falling back to static aiManager", matched.Name, provType)
+				logger.Printf("getTenantProvider: provider %q (klingai endpoint, type=%q) — falling back to static aiManager", matched.Name, klingType)
 				return s.aiManager.GetProvider(providerName)
 			}
 		case strings.Contains(ep, "volces.com") || strings.Contains(ep, "volcengine"):
@@ -2358,7 +2375,8 @@ func (s *AIService) loadDBProviderByType(tenantID uint, modelType string) (ai.AI
 			logger.Printf("loadDBProviderByType: skip %s provider %q (missing credentials)", modelType, p.Name)
 			continue
 		}
-		provider, err := s.getTenantProvider(tenantID, p.Name)
+		// 传递 modelType 作为 targetType，使合并型提供商（kling、qianwen）能选择正确的底层构造器
+		provider, err := s.getTenantProvider(tenantID, p.Name, modelType)
 		if err != nil {
 			logger.Errorf("loadDBProviderByType: failed to instantiate %s provider %q: %v", modelType, p.Name, err)
 			continue
@@ -2430,8 +2448,9 @@ func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.Video
 	if err != nil {
 		return nil, err
 	}
-	// 按照 jimeng-video → kling → seedance → happyhorse 顺序优先选择
-	preferOrder := []string{"jimeng-video", "kling", "seedance", "happyhorse"}
+	// 按照 jimeng-video → kling → seedance/doubao → happyhorse/qianwen 顺序优先选择
+	// doubao 合并了 seedance；qianwen 合并了 happyhorse
+	preferOrder := []string{"jimeng-video", "kling", "seedance", "doubao", "happyhorse", "qianwen"}
 	if name != "" {
 		preferOrder = []string{strings.ToLower(name)}
 	}
@@ -2471,7 +2490,13 @@ func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.Video
 			return ai.NewKlingProvider(apiKey, apiSecretKey, p.APIEndpoint), nil
 		case "seedance":
 			return ai.NewSeedanceProvider(apiKey, p.APIEndpoint), nil
+		case "doubao":
+			// doubao 合并了 seedance（Volcengine Ark 视频生成）
+			return ai.NewSeedanceProvider(apiKey, p.APIEndpoint), nil
 		case "happyhorse":
+			return ai.NewHappyHorseProvider(apiKey, p.APIEndpoint), nil
+		case "qianwen":
+			// qianwen 合并了 happyhorse（DashScope 视频生成）
 			return ai.NewHappyHorseProvider(apiKey, p.APIEndpoint), nil
 		}
 	}
