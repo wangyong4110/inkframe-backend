@@ -674,20 +674,14 @@ func (s *SceneAnchorService) EditRefImageWithInstruction(ctx context.Context, te
 	return s.repo.GetByID(id)
 }
 
-// UpdateStats 更新锚点使用统计（usage_count++，avg_cons_score 滚动平均）
-// 使用 UpdateFields 只写统计字段，不触碰 description 等内容字段。
+// UpdateStats 更新锚点使用统计（usage_count++，avg_cons_score 滚动平均）。
+// 使用原子 SQL 避免并发下的读-改-写竞态：avg = (avg*n + score) / (n+1)。
 func (s *SceneAnchorService) UpdateStats(id uint, score float64) error {
-	anchor, err := s.repo.GetByID(id)
-	if err != nil {
-		return err
-	}
-	n := float64(anchor.UsageCount)
-	newAvg := (anchor.AvgConsScore*n + score) / (n + 1)
-	newCount := anchor.UsageCount + 1
-	return s.repo.UpdateFields(id, map[string]interface{}{
-		"usage_count":    newCount,
-		"avg_cons_score": newAvg,
-	})
+	return s.repo.DB().Exec(`
+		UPDATE ink_scene_anchor
+		SET avg_cons_score = (avg_cons_score * usage_count + ?) / (usage_count + 1),
+		    usage_count = usage_count + 1
+		WHERE id = ?`, score, id).Error
 }
 
 // BatchGenerateRefImages 批量为小说的场景锚点生成参考图。

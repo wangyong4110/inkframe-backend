@@ -70,7 +70,9 @@ type ChapterService struct {
 	qualitySvc     *QualityControlService          // 可选：用于生成后质量评分与触发精修
 	knowledgeSvc   *KnowledgeService               // 可选：用于异步提取并存储剧情点
 	timelineSvc    *TimelineService                // 可选：时间线约束注入生成 prompt
-	foreshadowRepo *repository.ForeshadowRepository // 可选：伏笔生命周期注入生成 prompt
+	foreshadowRepo       *repository.ForeshadowRepository // 可选：伏笔生命周期注入生成 prompt
+	chapterCharacterRepo *repository.ChapterCharacterRepository // 可选：章节角色级联清理
+	chapterItemRepo      *repository.ChapterItemRepository      // 可选：章节道具级联清理
 
 	cache    *redis.Client // optional: cross-instance chapter generation lock
 
@@ -173,6 +175,16 @@ func (s *ChapterService) WithTimelineService(svc *TimelineService) *ChapterServi
 // WithForeshadowRepo 注入伏笔仓库（可选），用于伏笔生命周期注入生成 prompt
 func (s *ChapterService) WithForeshadowRepo(repo *repository.ForeshadowRepository) *ChapterService {
 	s.foreshadowRepo = repo
+	return s
+}
+
+func (s *ChapterService) WithChapterCharacterRepo(repo *repository.ChapterCharacterRepository) *ChapterService {
+	s.chapterCharacterRepo = repo
+	return s
+}
+
+func (s *ChapterService) WithChapterItemRepo(repo *repository.ChapterItemRepository) *ChapterService {
+	s.chapterItemRepo = repo
 	return s
 }
 
@@ -314,6 +326,17 @@ func (s *ChapterService) DeleteChapter(id, tenantID uint) error {
 			logger.Errorf("[ChapterService] DeleteChapter: delete snapshots for chapter %d: %v", id, delErr)
 		}
 	}
+	// Clean up chapter-level character and item overrides.
+	if s.chapterCharacterRepo != nil {
+		if delErr := s.chapterCharacterRepo.DeleteByChapter(id); delErr != nil {
+			logger.Errorf("[ChapterService] DeleteChapter: delete chapter_characters for chapter %d: %v", id, delErr)
+		}
+	}
+	if s.chapterItemRepo != nil {
+		if delErr := s.chapterItemRepo.DeleteByChapter(id); delErr != nil {
+			logger.Errorf("[ChapterService] DeleteChapter: delete chapter_items for chapter %d: %v", id, delErr)
+		}
+	}
 	s.syncNovelStats(chapter.NovelID)
 	return nil
 }
@@ -333,6 +356,16 @@ func (s *ChapterService) BatchDeleteChapters(ctx context.Context, novelID, tenan
 		}
 		if err := s.chapterRepo.DeleteAndRenumber(id, chapter.NovelID); err != nil {
 			return fmt.Errorf("failed to delete chapter %d: %w", id, err)
+		}
+		if s.chapterCharacterRepo != nil {
+			if delErr := s.chapterCharacterRepo.DeleteByChapter(id); delErr != nil {
+				logger.Errorf("[ChapterService] BatchDeleteChapters: delete chapter_characters for chapter %d: %v", id, delErr)
+			}
+		}
+		if s.chapterItemRepo != nil {
+			if delErr := s.chapterItemRepo.DeleteByChapter(id); delErr != nil {
+				logger.Errorf("[ChapterService] BatchDeleteChapters: delete chapter_items for chapter %d: %v", id, delErr)
+			}
 		}
 	}
 	s.syncNovelStats(novelID)
@@ -494,6 +527,16 @@ func (s *ChapterService) DeleteChapterByNo(novelID uint, chapterNo int) error {
 	}
 	if err := s.chapterRepo.DeleteAndRenumber(chapter.ID, novelID); err != nil {
 		return err
+	}
+	if s.chapterCharacterRepo != nil {
+		if delErr := s.chapterCharacterRepo.DeleteByChapter(chapter.ID); delErr != nil {
+			logger.Errorf("[ChapterService] DeleteChapterByNo: delete chapter_characters for chapter %d: %v", chapter.ID, delErr)
+		}
+	}
+	if s.chapterItemRepo != nil {
+		if delErr := s.chapterItemRepo.DeleteByChapter(chapter.ID); delErr != nil {
+			logger.Errorf("[ChapterService] DeleteChapterByNo: delete chapter_items for chapter %d: %v", chapter.ID, delErr)
+		}
 	}
 	s.syncNovelStats(novelID)
 	return nil
@@ -743,6 +786,49 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 			logger.Printf("[StoryPattern] chapter %d: genre=%q", req.ChapterNo, novel.Genre)
 		} else {
 			logger.Errorf("[StoryPattern] chapter %d: skipped: %v", req.ChapterNo, searchErr)
+		}
+	}
+
+	// ── Step 1e: 知识库语义搜索（可选）──────────────────────
+	if s.mcpService != nil && s.knowledgeSvc != nil {
+		kCtx, kCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer kCancel()
+		kOut, kErr := s.mcpService.InvokeTool(kCtx, tenantID, "knowledge_search", map[string]interface{}{
+			"novel_id": novel.ID,
+			"query":    chapterMeta.summary,
+			"limit":    3,
+		})
+		if kErr == nil {
+			if kText := parseKnowledgeSearchOutput(kOut); kText != "" {
+				if wikiContext != "" {
+					wikiContext += "\n\n" + kText
+				} else {
+					wikiContext = kText
+				}
+				logger.Printf("[KnowledgeSearch] chapter %d: appended knowledge context", req.ChapterNo)
+			}
+		} else {
+			logger.Errorf("[KnowledgeSearch] chapter %d: skipped: %v", req.ChapterNo, kErr)
+		}
+	}
+
+	// ── Step 1f: 角色档案查询（可选，仅日志增强，实际角色数据由 getCharactersForPrompt 提供）──
+	if s.mcpService != nil && s.characterRepo != nil {
+		characters, charListErr := s.characterRepo.ListByNovel(novelID)
+		if charListErr == nil {
+			limit := min(3, len(characters))
+			for i := 0; i < limit; i++ {
+				charName := characters[i].Name
+				cCtx, cCancel := context.WithTimeout(context.Background(), 8*time.Second)
+				defer cCancel()
+				_, cErr := s.mcpService.InvokeTool(cCtx, tenantID, "character_lookup", map[string]interface{}{
+					"novel_id":       novel.ID,
+					"character_name": charName,
+				})
+				if cErr != nil {
+					logger.Errorf("[CharacterLookup] chapter %d char %q: skipped: %v", req.ChapterNo, charName, cErr)
+				}
+			}
 		}
 	}
 
@@ -3863,6 +3949,41 @@ func (s *ChapterVersionService) RestoreVersion(chapterID uint, versionNo int) (*
 // ──────────────────────────────────────────────
 // WebSearch helpers
 // ──────────────────────────────────────────────
+
+// parseKnowledgeSearchOutput parses the output map from McpService.InvokeTool("knowledge_search", …)
+// into a human-readable prompt section that can be appended to WikiContext.
+func parseKnowledgeSearchOutput(output map[string]interface{}) string {
+	rawResults, ok := output["results"]
+	if !ok {
+		return ""
+	}
+	b, err := json.Marshal(rawResults)
+	if err != nil {
+		return ""
+	}
+	var items []struct {
+		Title   string `json:"title"`
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(b, &items); err != nil || len(items) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("【小说知识库参考】\n")
+	for _, item := range items {
+		sb.WriteString("• ")
+		sb.WriteString(item.Title)
+		sb.WriteString("：")
+		// truncate long content
+		content := item.Content
+		if len([]rune(content)) > 200 {
+			content = string([]rune(content)[:200]) + "…"
+		}
+		sb.WriteString(content)
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
 
 // parseWebSearchOutput parses the output map from McpService.InvokeTool("web_search", …)
 // into a human-readable prompt section.

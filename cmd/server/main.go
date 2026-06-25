@@ -104,6 +104,9 @@ func main() {
 	seedStoryPatternMcpTool(db, cfg)
 	seedImageRefSearchMcpTool(db, cfg)
 	seedColorPaletteMcpTool(db, cfg)
+	seedKnowledgeSearchMcpTool(db, cfg)
+	seedCharacterLookupMcpTool(db, cfg)
+	seedPromptEnhanceMcpTool(db, cfg)
 
 	// 4. 初始化Redis
 	redisClient := initRedis(cfg)
@@ -238,7 +241,10 @@ func main() {
 		ImageRefSearchHandler: handlers.ImageRefSearchHandler,
 		ColorPaletteHandler:   handlers.ColorPaletteHandler,
 		NotificationHandler:   handlers.NotificationHandler,
-		KnowledgeHandler:      handlers.KnowledgeHandler,
+		KnowledgeHandler:       handlers.KnowledgeHandler,
+		KnowledgeToolHandler:   handlers.KnowledgeToolHandler,
+		CharacterLookupHandler: handlers.CharacterLookupHandler,
+		PromptEnhanceHandler:   handlers.PromptEnhanceHandler,
 		DramaticHandler:       handlers.DramaticHandler,
 		DashboardHandler:      handlers.DashboardHandler,
 		ForeshadowHandler:     handlers.ForeshadowHandler,

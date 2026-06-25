@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"time"
+
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"gorm.io/gorm"
 )
@@ -49,18 +51,20 @@ func (r *NotificationRepository) UnreadCount(userID, tenantID uint) (int64, erro
 	return count, err
 }
 
-// MarkRead 标记单条已读
+// MarkRead 标记单条已读（同时记录已读时间戳）
 func (r *NotificationRepository) MarkRead(id, userID uint) error {
+	now := time.Now()
 	return r.db.Model(&model.Notification{}).
 		Where("id = ? AND user_id = ?", id, userID).
-		Update("is_read", true).Error
+		Updates(map[string]interface{}{"is_read": true, "read_at": now}).Error
 }
 
-// MarkAllRead 标记全部已读
+// MarkAllRead 标记全部已读（同时记录已读时间戳）
 func (r *NotificationRepository) MarkAllRead(userID, tenantID uint) error {
+	now := time.Now()
 	return r.db.Model(&model.Notification{}).
 		Where("user_id = ? AND is_read = ?", userID, false).
-		Update("is_read", true).Error
+		Updates(map[string]interface{}{"is_read": true, "read_at": now}).Error
 }
 
 // Delete 删除单条（软删除）

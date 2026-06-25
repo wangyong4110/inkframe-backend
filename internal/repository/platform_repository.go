@@ -90,8 +90,8 @@ func (r *VideoPublishRecordRepository) ListStaleUploading(before time.Time) ([]*
 
 func (r *VideoPublishRecordRepository) UpdateStatus(id uint, status, errMsg, externalID, externalURL string) error {
 	updates := map[string]interface{}{
-		"status":   status,
-		"err_msg":  errMsg,
+		"status":    status,
+		"error_msg": errMsg,
 	}
 	if externalID != "" {
 		updates["external_id"] = externalID

@@ -454,6 +454,7 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 	}
 	video.VideoPath = outputPath
 	video.Status = "completed"
+	video.TotalShots = len(shots)
 	if err := s.videoRepo.Update(video); err != nil {
 		logger.Errorf("[StitchVideo] videoID=%d: failed to update status to completed: %v", videoID, err)
 	}
@@ -885,10 +886,14 @@ func (s *VideoService) RunSynthesisPipeline(taskID string, videoID uint) {
 	coverURL := ""
 	// P1-3: 用视频时长 15% 位置提取封面，比固定 t=2s 更具代表性；失败时回退到 2s
 	coverOffset := 2.0
-	if totalDur := probeClipDuration(synthCtx, finalPath); totalDur > 4 {
-		coverOffset = totalDur * 0.15
-		if coverOffset < 1 {
-			coverOffset = 1
+	var actualDuration float64
+	if totalDur := probeClipDuration(synthCtx, finalPath); totalDur > 0 {
+		actualDuration = totalDur
+		if totalDur > 4 {
+			coverOffset = totalDur * 0.15
+			if coverOffset < 1 {
+				coverOffset = 1
+			}
 		}
 	}
 	if _, err := runFFmpegWithGoroutineTimeout(30*time.Second, "-y",
@@ -973,6 +978,9 @@ func (s *VideoService) RunSynthesisPipeline(taskID string, videoID uint) {
 	}
 	if coverURL != "" {
 		video.CoverURL = coverURL
+	}
+	if actualDuration > 0 {
+		video.Duration = actualDuration
 	}
 	// 仅当视频成功上传（有 URL）才标记 completed；否则标记 failed 以告知用户
 	if finalVideoURL != "" {

@@ -707,6 +707,8 @@ func (s *CharacterService) CreateCharacter(novelID uint, req *model.CreateCharac
 		NovelID:     novelID,
 		Name:        req.Name,
 		Role:        req.Role,
+		Gender:      req.Gender,
+		Age:         req.Age,
 		Description: req.Description,
 		Status:      "active",
 	}
@@ -915,14 +917,17 @@ func (s *CharacterService) UpsertChapterCharacter(novelID, chapterID, characterI
 		return nil, fmt.Errorf("chapter character repository not configured")
 	}
 	cc := &model.ChapterCharacter{
-		CharacterID: characterID,
-		ChapterID:   chapterID,
-		NovelID:     novelID,
-		Appearance:  req.Appearance,
-		Personality: req.Personality,
-		Status:      req.Status,
-		Location:    req.Location,
-		Notes:       req.Notes,
+		CharacterID:   characterID,
+		ChapterID:     chapterID,
+		NovelID:       novelID,
+		Appearance:    req.Appearance,
+		Personality:   req.Personality,
+		Status:        req.Status,
+		Location:      req.Location,
+		Notes:         req.Notes,
+		RoleInChapter: req.RoleInChapter,
+		Action:        req.Action,
+		Change:        req.Change,
 	}
 	if err := s.chapterCharacterRepo.Upsert(cc); err != nil {
 		return nil, err

@@ -558,6 +558,9 @@ func (s *ModelService) UpdateTaskConfig(taskType string, req *model.UpdateTaskCo
 	if req.PrimaryModelID != 0 {
 		cfg.PrimaryModelID = req.PrimaryModelID
 	}
+	if req.PrimaryProviderID != 0 {
+		cfg.PrimaryProviderID = req.PrimaryProviderID
+	}
 	if req.MaxTokens != 0 {
 		cfg.MaxTokens = req.MaxTokens
 	}

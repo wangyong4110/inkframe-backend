@@ -977,3 +977,33 @@ func seedColorPaletteMcpTool(db *gorm.DB, cfg *config.Config) {
 		"根据情绪/场景类型返回配色方案，为视频分镜图像生成提供一致的视觉色调",
 		fmt.Sprintf("http://localhost:%d/api/v1/tools/color-palette", port))
 }
+
+func seedKnowledgeSearchMcpTool(db *gorm.DB, cfg *config.Config) {
+	port := cfg.Server.Port
+	if port == 0 {
+		port = 8080
+	}
+	seedMcpTool(db, "knowledge_search", "知识库语义搜索",
+		"在当前小说的知识库中语义检索相关剧情点、角色事实和世界观条目，为章节生成提供精准上下文",
+		fmt.Sprintf("http://localhost:%d/api/v1/tools/knowledge-search", port))
+}
+
+func seedCharacterLookupMcpTool(db *gorm.DB, cfg *config.Config) {
+	port := cfg.Server.Port
+	if port == 0 {
+		port = 8080
+	}
+	seedMcpTool(db, "character_lookup", "角色档案查询",
+		"按名称查询角色的档案信息和最近章节状态快照，为角色一致性生成提供准确的角色状态数据",
+		fmt.Sprintf("http://localhost:%d/api/v1/tools/character-lookup", port))
+}
+
+func seedPromptEnhanceMcpTool(db *gorm.DB, cfg *config.Config) {
+	port := cfg.Server.Port
+	if port == 0 {
+		port = 8080
+	}
+	seedMcpTool(db, "prompt_enhance", "Prompt 增强",
+		"将中文场景描述翻译并增强为适合图像/视频生成的英文提示词，自动添加构图、光照、风格关键词",
+		fmt.Sprintf("http://localhost:%d/api/v1/tools/prompt-enhance", port))
+}

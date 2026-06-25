@@ -13,6 +13,8 @@ func NewSceneAnchorRepository(db *gorm.DB) *SceneAnchorRepository {
 	return &SceneAnchorRepository{db: db}
 }
 
+func (r *SceneAnchorRepository) DB() *gorm.DB { return r.db }
+
 func (r *SceneAnchorRepository) Create(a *model.SceneAnchor) error {
 	return r.db.Create(a).Error
 }

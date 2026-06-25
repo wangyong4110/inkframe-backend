@@ -136,7 +136,10 @@ func (r *ModelProviderRepository) Delete(id uint) error {
 // UpdateHealthStatus 更新健康状态
 func (r *ModelProviderRepository) UpdateHealthStatus(id uint, status string) error {
 	return r.db.Model(&model.ModelProvider{}).Where("id = ?", id).
-		Update("health_check", status).Error
+		Updates(map[string]interface{}{
+			"health_check": status,
+			"last_checked": time.Now(),
+		}).Error
 }
 
 // AIModelRepository AI模型仓库

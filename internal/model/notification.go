@@ -12,6 +12,7 @@ type Notification struct {
 	TenantID   uint           `json:"tenant_id" gorm:"not null"`
 	UserID     uint           `json:"user_id" gorm:"not null;index:idx_notif_user_read"`
 	IsRead     bool           `json:"is_read" gorm:"default:false;index:idx_notif_user_read"`
+	ReadAt     *time.Time     `json:"read_at,omitempty"`                  // 标记已读的时间戳（未读时为 NULL）
 	EventType  string         `json:"event_type" gorm:"size:50;not null"` // "chapter_done"|"novel_done"|"review_done"|"crawl_done"|"publish_done"
 	Title      string         `json:"title" gorm:"size:200;not null"`
 	Body       string         `json:"body" gorm:"type:text"`

@@ -149,7 +149,7 @@ func (s *ForeshadowCRUDService) AIExtractFromNovel(ctx context.Context, tenantID
 		}
 		if item.ActualPayoffChapterNo > 0 {
 			if chID, ok := chapterNoToID[item.ActualPayoffChapterNo]; ok {
-				f.PayoffChapterID = &chID
+				f.ActualPayoffChapterID = &chID
 			}
 		}
 		// 将角色名字作为 CharacterIDs 占位存储（前端可后续绑定真实 ID）
@@ -218,11 +218,27 @@ func (s *ForeshadowCRUDService) Update(ctx context.Context, id uint, updates map
 	if v, ok := updates["planted_chapter_no"].(float64); ok {
 		f.PlantedChapterNo = int(v)
 	}
+	if v, ok := updates["planted_chapter_id"].(float64); ok {
+		if v > 0 {
+			uid := uint(v)
+			f.PlantedChapterID = &uid
+		} else {
+			f.PlantedChapterID = nil
+		}
+	}
 	if v, ok := updates["payoff_chapter_no"].(float64); ok {
 		f.PayoffChapterNo = int(v)
 	}
 	if v, ok := updates["actual_payoff_chapter_no"].(float64); ok {
 		f.ActualPayoffChapterNo = int(v)
+	}
+	if v, ok := updates["actual_payoff_chapter_id"].(float64); ok {
+		if v > 0 {
+			uid := uint(v)
+			f.ActualPayoffChapterID = &uid
+		} else {
+			f.ActualPayoffChapterID = nil
+		}
 	}
 	if v, ok := updates["payoff_quality"].(float64); ok {
 		f.PayoffQuality = int(v)

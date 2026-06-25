@@ -257,11 +257,14 @@ type UpsertChapterItemRequest struct {
 }
 
 type UpsertChapterCharacterRequest struct {
-	Appearance  string `json:"appearance"`
-	Personality string `json:"personality"`
-	Status      string `json:"status"`
-	Location    string `json:"location"`
-	Notes       string `json:"notes"`
+	Appearance    string `json:"appearance"`
+	Personality   string `json:"personality"`
+	Status        string `json:"status"`
+	Location      string `json:"location"`
+	Notes         string `json:"notes"`
+	RoleInChapter string `json:"role_in_chapter"` // main/supporting/mentioned
+	Action        string `json:"action"`          // 本章动作
+	Change        string `json:"change"`          // 本章变化
 }
 
 // CreateCharacterLookRequest 创建角色形象请求

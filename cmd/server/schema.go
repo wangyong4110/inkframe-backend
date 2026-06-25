@@ -174,6 +174,8 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_chapter_character", "role_in_chapter", "VARCHAR(50) NOT NULL DEFAULT ''"},
 		{"ink_chapter_character", "action",          "TEXT NULL"},
 		{"ink_chapter_character", "change",          "TEXT NULL"},
+		// ink_notification 已读时间戳（2026-06-25-v6 新增，记录确切的已读时间）
+		{"ink_notification", "read_at", "DATETIME(3) NULL"},
 	}
 	for _, a := range additions {
 		// 表不存在时跳过（AutoMigrate 会建表，建表时列也会随 struct 定义一同创建）

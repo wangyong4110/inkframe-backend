@@ -551,6 +551,11 @@ func (r *ChapterItemRepository) Delete(chapterID, itemID uint) error {
 	return r.db.Where("chapter_id = ? AND item_id = ?", chapterID, itemID).Delete(&model.ChapterItem{}).Error
 }
 
+// DeleteByChapter 删除指定章节的所有道具覆盖记录（章节级联删除用）
+func (r *ChapterItemRepository) DeleteByChapter(chapterID uint) error {
+	return r.db.Where("chapter_id = ?", chapterID).Delete(&model.ChapterItem{}).Error
+}
+
 // ChapterCharacterRepository 章节角色覆盖仓库
 type ChapterCharacterRepository struct {
 	db *gorm.DB
@@ -564,17 +569,21 @@ func (r *ChapterCharacterRepository) Upsert(cc *model.ChapterCharacter) error {
 	// 使用 ON DUPLICATE KEY UPDATE 保证并发安全，避免 TOCTOU 竞争导致
 	// unique constraint violation（uniq_chapter_char: character_id + chapter_id）。
 	return r.db.Exec(`INSERT INTO ink_chapter_character
-		(character_id, chapter_id, novel_id, appearance, personality, status, location, notes, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+		(character_id, chapter_id, novel_id, appearance, personality, status, location, notes, role_in_chapter, action, `+"`change`"+`, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
 		ON DUPLICATE KEY UPDATE
-		  appearance   = VALUES(appearance),
-		  personality  = VALUES(personality),
-		  status       = VALUES(status),
-		  location     = VALUES(location),
-		  notes        = VALUES(notes),
-		  updated_at   = NOW()`,
+		  appearance      = VALUES(appearance),
+		  personality     = VALUES(personality),
+		  status          = VALUES(status),
+		  location        = VALUES(location),
+		  notes           = VALUES(notes),
+		  role_in_chapter = VALUES(role_in_chapter),
+		  action          = VALUES(action),
+		  `+"`change`"+`  = VALUES(`+"`change`"+`),
+		  updated_at      = NOW()`,
 		cc.CharacterID, cc.ChapterID, cc.NovelID,
 		cc.Appearance, cc.Personality, cc.Status, cc.Location, cc.Notes,
+		cc.RoleInChapter, cc.Action, cc.Change,
 	).Error
 }
 
@@ -601,4 +610,9 @@ func (r *ChapterCharacterRepository) Delete(chapterID, characterID uint) error {
 // DeleteByCharacter 删除指定角色的所有章节覆盖记录（级联清理用）
 func (r *ChapterCharacterRepository) DeleteByCharacter(characterID uint) error {
 	return r.db.Where("character_id = ?", characterID).Delete(&model.ChapterCharacter{}).Error
+}
+
+// DeleteByChapter 删除指定章节的所有角色覆盖记录（章节级联删除用）
+func (r *ChapterCharacterRepository) DeleteByChapter(chapterID uint) error {
+	return r.db.Where("chapter_id = ?", chapterID).Delete(&model.ChapterCharacter{}).Error
 }

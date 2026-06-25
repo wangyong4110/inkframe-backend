@@ -53,6 +53,9 @@ type Config struct {
 	ColorPaletteHandler    *handler.ColorPaletteHandler
 	NotificationHandler    *handler.NotificationHandler
 	KnowledgeHandler       *handler.KnowledgeHandler
+	KnowledgeToolHandler   *handler.KnowledgeToolHandler
+	CharacterLookupHandler *handler.CharacterLookupHandler
+	PromptEnhanceHandler   *handler.PromptEnhanceHandler
 	DramaticHandler        *handler.DramaticHandler
 	DashboardHandler       *handler.DashboardHandler
 	ForeshadowHandler      *handler.ForeshadowHandler
@@ -755,6 +758,15 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		if cfg.ColorPaletteHandler != nil {
 			toolsGroup.POST("/color-palette", cfg.ColorPaletteHandler.Get)
 			toolsGroup.GET("/color-palette/list", cfg.ColorPaletteHandler.ListAll)
+		}
+		if cfg.KnowledgeToolHandler != nil {
+			toolsGroup.POST("/knowledge-search", cfg.KnowledgeToolHandler.Search)
+		}
+		if cfg.CharacterLookupHandler != nil {
+			toolsGroup.POST("/character-lookup", cfg.CharacterLookupHandler.Lookup)
+		}
+		if cfg.PromptEnhanceHandler != nil {
+			toolsGroup.POST("/prompt-enhance", cfg.PromptEnhanceHandler.Enhance)
 		}
 
 		taskConfigs := v1.Group("/task-configs")

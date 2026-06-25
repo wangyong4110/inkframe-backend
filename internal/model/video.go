@@ -469,6 +469,8 @@ type CreateVideoRequest struct {
 
 type UpdateVideoRequest struct {
 	Title        string `json:"title"`
+	Description  string `json:"description"`
+	Tags         string `json:"tags"`
 	Resolution   string `json:"resolution"`
 	FrameRate    int    `json:"frame_rate"`
 	AspectRatio  string `json:"aspect_ratio"`
@@ -476,6 +478,7 @@ type UpdateVideoRequest struct {
 	Mode         string `json:"mode"`           // video/slideshow
 	VisualMode   string `json:"visual_mode"`    // standard/hd/3d/hd_3d
 	ThreeDStyle  string `json:"three_d_style"`  // cg/pixar/anime3d/realistic3d
+	QualityTier  string `json:"quality_tier"`   // draft/preview/final/production
 }
 
 type EnhancementConfig struct {

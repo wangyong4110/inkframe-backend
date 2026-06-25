@@ -457,6 +457,15 @@ func (s *VideoService) UpdateVideo(id, tenantID uint, req *model.UpdateVideoRequ
 	if req.ThreeDStyle != "" {
 		video.ThreeDStyle = req.ThreeDStyle
 	}
+	if req.QualityTier != "" {
+		video.QualityTier = req.QualityTier
+	}
+	if req.Description != "" {
+		video.Description = req.Description
+	}
+	if req.Tags != "" {
+		video.Tags = req.Tags
+	}
 	return video, s.videoRepo.Update(video)
 }
 
@@ -705,6 +714,20 @@ func (s *VideoService) DeleteVideo(id, tenantID uint) error {
 			if err := tx.Unscoped().Where("shot_id IN ?", shotIDs).
 				Delete(&model.ShotSFXItem{}).Error; err != nil {
 				return fmt.Errorf("DeleteVideo: delete sfx items: %w", err)
+			}
+			// 删除场景一致性日志
+			if err := tx.Unscoped().Where("shot_id IN ?", shotIDs).
+				Delete(&model.SceneConsistencyLog{}).Error; err != nil {
+				return fmt.Errorf("DeleteVideo: delete consistency logs: %w", err)
+			}
+			// 删除分镜级审查记录和忽略条目（entity_type="storyboard"）
+			if err := tx.Unscoped().Where("entity_type = ? AND entity_id IN ?", model.ReviewEntityStoryboard, shotIDs).
+				Delete(&model.ReviewRecord{}).Error; err != nil {
+				return fmt.Errorf("DeleteVideo: delete storyboard review records: %w", err)
+			}
+			if err := tx.Unscoped().Where("entity_type = ? AND entity_id IN ?", model.ReviewEntityStoryboard, shotIDs).
+				Delete(&model.IgnoredReviewIssue{}).Error; err != nil {
+				return fmt.Errorf("DeleteVideo: delete storyboard ignored issues: %w", err)
 			}
 		}
 		// 4. 删除 BGM 分段

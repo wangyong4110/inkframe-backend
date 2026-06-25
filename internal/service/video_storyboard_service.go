@@ -1096,6 +1096,14 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			})
 		}
 
+		// 将音效标签序列化存储
+		var sfxTagsJSON string
+		if len(r.SFXTags) > 0 {
+			if b, err := json.Marshal(r.SFXTags); err == nil {
+				sfxTagsJSON = string(b)
+			}
+		}
+
 		shot := &model.StoryboardShot{
 			UUID:           uuid.New().String(),
 			VideoID:        videoID,
@@ -1115,6 +1123,7 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			Characters:     charsJSON,
 			Scene:          sceneJSON,
 			EmotionalTone:  r.EmotionalTone,
+			SFXTags:        sfxTagsJSON,
 			Status:         "pending",
 		}
 		shots = append(shots, shot)
@@ -1490,11 +1499,13 @@ func (s *VideoService) CopyShotAfter(sourceShotID uint, afterShotNo int) (*model
 		Characters:     src.Characters,
 		Scene:          src.Scene,
 		Prompt:         src.Prompt,
+		MotionPrompt:   src.MotionPrompt,
 		NegativePrompt: src.NegativePrompt,
 		SceneAnchorID:  src.SceneAnchorID,
 		CharacterIDs:   src.CharacterIDs,
 		GenerationMode: src.GenerationMode,
-		// ImageURL and VideoURL intentionally NOT copied — copied shot starts fresh
+		SFXTags:        src.SFXTags,
+		// ImageURL / VideoURL / FrameImageURL intentionally NOT copied — copied shot starts fresh
 		Status: "pending",
 	}
 	err = s.storyboardRepo.DB().Transaction(func(tx *gorm.DB) error {
@@ -2080,6 +2091,15 @@ func (s *VideoService) ApplyStoryboardDiffs(videoID uint, diffs []ShotApplyDiff,
 			if err2 := s.reviewRecordRepo.Update(rec); err2 != nil {
 				logger.Errorf("ApplyStoryboardDiffs: update record %d status failed: %v", recordID, err2)
 			}
+		}
+	}
+
+	// 审查已应用 → 更新 video.review_status 为 reviewed
+	if s.videoRepo != nil {
+		if err := s.videoRepo.UpdateFields(videoID, map[string]interface{}{
+			"review_status": "reviewed",
+		}); err != nil {
+			logger.Errorf("ApplyStoryboardDiffs: update video review_status: %v", err)
 		}
 	}
 

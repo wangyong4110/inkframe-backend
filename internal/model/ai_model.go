@@ -330,11 +330,12 @@ type UpdateAIModelRequest struct {
 }
 
 type UpdateTaskConfigRequest struct {
-	PrimaryModelID   uint    `json:"primary_model_id"`
-	FallbackModelIDs string  `json:"fallback_model_ids"`
-	MaxTokens        int     `json:"max_tokens"`
-	Temperature      float64 `json:"temperature"`
-	TopP             float64 `json:"top_p"`
+	PrimaryModelID    uint    `json:"primary_model_id"`
+	PrimaryProviderID uint    `json:"primary_provider_id"` // 显式绑定 provider，消除同名模型歧义
+	FallbackModelIDs  string  `json:"fallback_model_ids"`
+	MaxTokens         int     `json:"max_tokens"`
+	Temperature       float64 `json:"temperature"`
+	TopP              float64 `json:"top_p"`
 }
 
 type CreateModelComparisonRequest struct {

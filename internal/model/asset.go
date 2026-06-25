@@ -6,9 +6,11 @@ const (
 	AssetScopePersonal = "personal"
 	AssetScopePublic   = "public"
 
+	AssetStatusProcessing    = "processing"    // 上传/处理中
 	AssetStatusActive        = "active"
 	AssetStatusPendingReview = "pending_review"
 	AssetStatusRejected      = "rejected"
+	AssetStatusFailed        = "failed"        // 上传/处理失败
 	AssetStatusTrash         = "trash"
 	AssetStatusWithdrawn     = "withdrawn"
 )

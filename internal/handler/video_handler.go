@@ -376,6 +376,7 @@ func (h *VideoHandler) UnpublishVideo(c *gin.Context) {
 	if err := h.videoService.UpdateVideoFields(uint(id), map[string]interface{}{
 		"is_published": false,
 		"visibility":   "private",
+		"published_at": nil,
 	}); err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
