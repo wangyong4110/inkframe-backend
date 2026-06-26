@@ -178,6 +178,10 @@ func (s *ModelService) GetProvider(id uint, tenantID uint) (*model.ModelProvider
 	return s.providerRepo.GetByIDAndTenant(id, tenantID)
 }
 
+func (s *ModelService) GetSystemProviderByName(name string) (*model.ModelProvider, error) {
+	return s.providerRepo.GetSystemProvider(name)
+}
+
 // typeForProviderType returns the model type string for a provider type.
 func typeForProviderType(providerType string) string {
 	switch strings.ToLower(providerType) {

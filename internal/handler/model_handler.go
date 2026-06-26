@@ -560,10 +560,17 @@ func (h *ModelHandler) FetchProviderModels(c *gin.Context) {
 			respondErr(c, http.StatusNotFound, "provider not found")
 			return
 		}
-		// 若 DB 中已配置静态模型列表（不支持 /models 端点的提供商），直接返回
-		if p.StaticModels != "" {
+		// 租户提供商无静态列表时，回退到同名系统提供商的静态列表
+		staticModels := p.StaticModels
+		if staticModels == "" {
+			if sysProv, sysErr := h.modelService.GetSystemProviderByName(p.Name); sysErr == nil {
+				staticModels = sysProv.StaticModels
+			}
+		}
+		// 若已有静态模型列表（不支持 /models 端点的提供商），直接返回
+		if staticModels != "" {
 			var staticList []string
-			if jsonErr := json.Unmarshal([]byte(p.StaticModels), &staticList); jsonErr == nil && len(staticList) > 0 {
+			if jsonErr := json.Unmarshal([]byte(staticModels), &staticList); jsonErr == nil && len(staticList) > 0 {
 				respondOK(c, gin.H{"models": staticList})
 				return
 			}
