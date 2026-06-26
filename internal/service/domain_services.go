@@ -573,16 +573,6 @@ func (s *ModelService) StartExperiment(id uint) error {
 }
 
 func (s *ModelService) GetAvailableModels(taskType string, tenantID uint) ([]*model.AIModel, error) {
-	// 音色只展示用户在任务配置里明确选定的 TTS provider 的音色，
-	// 避免把所有有凭证的 TTS provider 全部暴露给用户。
-	if taskType == "voice_gen" {
-		cfg, err := s.taskRepo.GetByTaskType("voice_gen")
-		if err == nil && cfg.PrimaryProviderID > 0 {
-			return s.modelRepo.GetVoicesFromProvider(tenantID, cfg.PrimaryProviderID)
-		}
-		// 未配置 voice_gen 任务提供商时返回空列表
-		return nil, nil
-	}
 	return s.modelRepo.GetAvailableByTaskType(taskType, tenantID)
 }
 
