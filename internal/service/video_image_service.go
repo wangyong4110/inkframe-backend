@@ -993,8 +993,8 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		defer func() { <-vsem }()
 	}
 
-	preferredProvider := "kling"
-	if len(providerOverride) > 0 && providerOverride[0] != "" {
+	preferredProvider := ""
+	if len(providerOverride) > 0 {
 		preferredProvider = providerOverride[0]
 	}
 	// Determine tenantID from associated video for DB provider lookup

@@ -896,22 +896,40 @@ func (s *VideoService) ListVideoProviders() []VideoProvider {
 // resolveVideoProvider 选择视频生成提供商：优先静态 map，其次 DB 租户配置。
 // preferredName 为空时按 jimeng-video→kling→seedance 顺序尝试。
 func (s *VideoService) resolveVideoProvider(tenantID uint, preferredName string) (ai.VideoProvider, string, error) {
-	names := []string{"jimeng-video", "kling", "seedance", "happyhorse"}
+	// 完整别名顺序，与 GetTenantVideoProvider 的 preferOrder 保持一致
+	allNames := []string{"volcengine-visual", "jimeng-video", "kling", "seedance", "doubao", "happyhorse", "qianwen"}
+
+	// 先查静态 map（preferred 优先）
 	if preferredName != "" {
-		names = []string{preferredName, "jimeng-video", "kling", "seedance", "happyhorse"}
+		if p, ok := s.videoProviders[preferredName]; ok {
+			return p, preferredName, nil
+		}
 	}
-	// 先查静态 map
-	for _, name := range names {
+	for _, name := range allNames {
+		if name == preferredName {
+			continue
+		}
 		if p, ok := s.videoProviders[name]; ok {
 			return p, name, nil
 		}
 	}
-	// 再查 DB
-	if s.aiService != nil {
-		for _, name := range names {
-			if p, err := s.aiService.GetTenantVideoProvider(tenantID, name); err == nil {
-				return p, name, nil
-			}
+
+	if s.aiService == nil {
+		return nil, "", fmt.Errorf("no video provider configured")
+	}
+
+	// 再查 DB：先试 preferred，再按 allNames 顺序兜底
+	if preferredName != "" {
+		if p, err := s.aiService.GetTenantVideoProvider(tenantID, preferredName); err == nil {
+			return p, preferredName, nil
+		}
+	}
+	for _, name := range allNames {
+		if name == preferredName {
+			continue
+		}
+		if p, err := s.aiService.GetTenantVideoProvider(tenantID, name); err == nil {
+			return p, name, nil
 		}
 	}
 	return nil, "", fmt.Errorf("no video provider configured")
