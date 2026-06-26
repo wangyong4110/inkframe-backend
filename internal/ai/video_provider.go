@@ -19,16 +19,22 @@ type VideoProvider interface {
 
 // VideoGenerateRequest 视频生成请求
 type VideoGenerateRequest struct {
-	ImageURL       string   `json:"image_url"`         // 主参考图（图生视频，Kling 等单图提供商使用）
-	ImageURLs      []string `json:"image_urls"`         // 多参考图（Seedance 等支持多图的提供商使用；ImageURL 若非空会自动插入首位）
-	Prompt         string   `json:"prompt"`            // 视频描述 Prompt
-	NegativePrompt string   `json:"negative_prompt"`   // 负向 Prompt
-	Duration       float64  `json:"duration"`          // 时长（秒），如 5.0
-	AspectRatio    string   `json:"aspect_ratio"`      // 16:9, 9:16, 1:1
-	CameraMovement string   `json:"camera_movement"`   // pan_left, zoom_in, zoom_out, static 等
-	Model          string   `json:"model,omitempty"`   // 可选指定模型
-	CFGScale       float64  `json:"cfg_scale"`         // 提示词引导强度 (0.0-1.0)，默认 0.5
-	Mode           string   `json:"mode,omitempty"`    // kling: std/pro
+	ImageURL       string   `json:"image_url"`        // 主参考图（首帧）；Kling 等单图提供商使用
+	ImageURLs      []string `json:"image_urls"`       // 多参考图；ImageURL 若非空会自动插入首位
+	VideoURLs      []string `json:"video_urls"`       // 参考视频 URL 列表（Seedance 2.0 多模态）
+	AudioURLs      []string `json:"audio_urls"`       // 参考音频 URL 列表（Seedance 2.0 多模态）
+	Prompt         string   `json:"prompt"`           // 视频描述 Prompt
+	NegativePrompt string   `json:"negative_prompt"`  // 负向 Prompt
+	Duration       float64  `json:"duration"`         // 时长（秒），如 5.0；-1 表示由模型自动选择（Seedance 2.0/1.5）
+	AspectRatio    string   `json:"aspect_ratio"`     // 16:9, 4:3, 1:1, 3:4, 9:16, 21:9, adaptive
+	Resolution     string   `json:"resolution"`       // 480p, 720p, 1080p, 4k（Doubao Seedance 系列）
+	CameraMovement string   `json:"camera_movement"`  // pan_left, zoom_in, zoom_out, static 等（Kling）
+	Model          string   `json:"model,omitempty"`  // 可选指定模型 / Endpoint ID
+	CFGScale       float64  `json:"cfg_scale"`        // 提示词引导强度 (0.0-1.0)，默认 0.5
+	Mode           string   `json:"mode,omitempty"`   // kling: std/pro
+	GenerateAudio  *bool    `json:"generate_audio"`   // Seedance 2.0/1.5：true=有声视频，false=无声；nil=使用默认值(true)
+	Watermark      bool     `json:"watermark"`        // 是否添加水印，默认 false
+	Seed           int      `json:"seed"`             // 随机种子，-1 或 0 表示随机（Seedance 1.x）
 }
 
 // VideoTask 已提交的视频任务

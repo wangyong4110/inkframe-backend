@@ -504,8 +504,15 @@ type OpenAIEmbedResponse struct {
 type DALLEResponse struct {
 	Created int `json:"created"`
 	Data    []struct {
-		URL        string `json:"url"`
-		RevvedURL string `json:"revised_prompt"`
+		URL       string `json:"url"`
+		B64JSON   string `json:"b64_json,omitempty"`
+		Size      string `json:"size,omitempty"` // Seedream 5.0/4.5/4.0：生成图片的宽高像素值，如 "2048x2048"
+		RevvedURL string `json:"revised_prompt,omitempty"`
+		// 组图场景下，单张图片生成失败时携带（非整体请求错误）
+		Error *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error,omitempty"`
 	} `json:"data"`
 }
 

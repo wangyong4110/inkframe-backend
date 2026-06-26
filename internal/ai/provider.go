@@ -90,16 +90,28 @@ type ImageGenerateRequest struct {
 	Model          string   `json:"model"`
 	Prompt         string   `json:"prompt"`
 	NegativePrompt string   `json:"negative_prompt,omitempty"`
-	Size           string   `json:"size"`  // 512x512, 1024x1024, etc.
+	Size           string   `json:"size"`  // 512x512, 1024x1024, 2K, 4K 等
 	Steps          int      `json:"steps"`
 	CFGScale       float64  `json:"cfg_scale"`
 	Seed           int64    `json:"seed"`
 	Style          string   `json:"style"` // realistic, anime, cartoon, etc.
 	ReferenceImage  string   `json:"reference_image,omitempty"`  // 单张参考图（向后兼容）
-	ReferenceImages []string `json:"reference_images,omitempty"` // 多张参考图（优先级高于 ReferenceImage）
+	ReferenceImages []string `json:"reference_images,omitempty"` // 多张参考图（最多14张，优先级高于 ReferenceImage）
 	ControlNets     []ControlNet `json:"control_nets,omitempty"`
 	ConsistencyWeight float64 `json:"consistency_weight,omitempty"` // 0-1，角色一致性强度（影响模型选择和scale）
 	Extra           map[string]interface{} `json:"extra,omitempty"` // 提供者特定扩展参数
+
+	// Seedream 5.0/4.5/4.0 扩展参数
+	// SequentialImageGeneration：组图模式，"auto"=模型自动判断，"disabled"=只生单张（默认）
+	SequentialImageGeneration        string `json:"sequential_image_generation,omitempty"`
+	// SequentialImageGenerationMaxImages：组图最多生成张数，范围 [1,15]，默认 15
+	SequentialImageGenerationMaxImages int    `json:"sequential_image_generation_max_images,omitempty"`
+	// OutputFormat：生成图片格式，"jpeg"（默认）或 "png"，仅 Seedream 5.0 lite 支持
+	OutputFormat   string `json:"output_format,omitempty"`
+	// Watermark：是否添加水印，nil=使用 provider 默认值（false），false=不加水印，true=加水印
+	Watermark      *bool  `json:"watermark,omitempty"`
+	// ResponseFormat：返回格式，"url"（默认）或 "b64_json"
+	ResponseFormat string `json:"response_format,omitempty"`
 }
 
 // ControlNet 控制网
@@ -111,7 +123,10 @@ type ControlNet struct {
 
 // ImageResponse 图像响应
 type ImageResponse struct {
-	URL       string   `json:"url"`
+	URL       string   `json:"url"`        // 主图 URL（第一张）
+	URLs      []string `json:"urls,omitempty"`  // 组图 URL 列表（Seedream 5.0/4.5/4.0 auto 模式）
+	Sizes     []string `json:"sizes,omitempty"` // 各图片宽高像素值，如 ["2048x2048", ...]
+	B64JSON   string   `json:"b64_json,omitempty"` // base64 格式（response_format=b64_json）
 	Width     int      `json:"width"`
 	Height    int      `json:"height"`
 	Seed      int64    `json:"seed"`
@@ -139,6 +154,64 @@ type AudioResponse struct {
 	Format    string `json:"format"`    // mp3, wav, etc.
 	LatencyMs int64  `json:"latency_ms"`
 	Error     string `json:"error,omitempty"`
+}
+
+// MultimodalEmbedItem 多模态 Embedding 输入元素
+type MultimodalEmbedItem struct {
+	Type     string `json:"type"`                // "text" | "image_url" | "video_url"
+	Text     string `json:"text,omitempty"`      // type=text
+	ImageURL string `json:"image_url,omitempty"` // type=image_url：HTTP URL 或 data URI
+	VideoURL string `json:"video_url,omitempty"` // type=video_url：HTTP URL
+
+	// video_url 专属可选参数（仅 doubao-embedding-vision-251215 及后续版本支持）
+	VideoFPS            *float64 `json:"fps,omitempty"`              // 0.2-5，采帧率
+	VideoMaxTokens      *int     `json:"max_video_tokens,omitempty"` // 10240-204800
+	VideoMinFrameTokens *int     `json:"min_frame_tokens,omitempty"` // 16-128
+	VideoMaxFrameTokens *int     `json:"max_frame_tokens,omitempty"` // 128-640
+	VideoMinFrames      *int     `json:"min_frames,omitempty"`       // 5-16
+}
+
+// MultimodalSparseEmbeddingConfig 稀疏向量开关配置（仅纯文本输入支持）
+type MultimodalSparseEmbeddingConfig struct {
+	Enabled bool `json:"enabled"` // true=enabled，false=disabled（默认）
+}
+
+// MultimodalMultiEmbeddingConfig 多向量（multi-vector）输出配置
+type MultimodalMultiEmbeddingConfig struct {
+	Enabled     bool   `json:"enabled"`               // true=enabled，false=disabled（默认）
+	Compression string `json:"compression,omitempty"` // "zstd" 或 "blosc2"；不传=不压缩
+}
+
+// MultimodalEmbedRequest 多模态 Embedding 请求
+type MultimodalEmbedRequest struct {
+	Model          string                          `json:"model"`
+	Input          []MultimodalEmbedItem           `json:"input"`
+	Dimensions     *int                            `json:"dimensions,omitempty"`    // 1024 或 2048，仅 vision-250615+ 支持
+	Instructions   string                          `json:"instructions,omitempty"`  // 推理提示词
+	SparseEmbedding *MultimodalSparseEmbeddingConfig `json:"sparse_embedding,omitempty"` // 稀疏向量开关
+	MultiEmbedding  *MultimodalMultiEmbeddingConfig  `json:"multi_embedding,omitempty"`  // 多向量输出配置
+}
+
+// SparseEmbedPoint 稀疏向量中的一个非零元素
+type SparseEmbedPoint struct {
+	Index int     `json:"index"`
+	Value float64 `json:"value"`
+}
+
+// MultimodalEmbedResponse 多模态 Embedding 响应
+type MultimodalEmbedResponse struct {
+	Embedding       []float32          `json:"embedding"`                 // 稠密向量
+	SparseEmbedding []SparseEmbedPoint `json:"sparse_embedding,omitempty"` // 稀疏向量（sparse_embedding.enabled 时返回）
+	MultiEmbedding  [][]float32        `json:"multi_embedding,omitempty"`  // 多向量（multi_embedding.enabled 时返回，解压后）
+	TokensUsed      int                `json:"tokens_used"`
+	TextTokens      int                `json:"text_tokens"`               // 输入中文本/时间轴 token 数
+	ImageTokens     int                `json:"image_tokens"`              // 输入中图片/视频帧 token 数
+	Model           string             `json:"model"`
+}
+
+// MultimodalEmbedder 多模态 Embedding 扩展接口（可选，按需类型断言）
+type MultimodalEmbedder interface {
+	EmbedMultimodal(ctx context.Context, req *MultimodalEmbedRequest) (*MultimodalEmbedResponse, error)
 }
 
 // ImageProviderEntry 图像生成提供者入口

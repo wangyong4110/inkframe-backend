@@ -2509,8 +2509,8 @@ func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.Video
 		case "seedance":
 			return ai.NewSeedanceProvider(apiKey, p.APIEndpoint), nil
 		case "doubao":
-			// doubao 合并了 seedance（Volcengine Ark 视频生成）
-			return ai.NewSeedanceProvider(apiKey, p.APIEndpoint), nil
+			// doubao 视频使用 DoubaoVideoProvider（内联标志格式，默认 cn-beijing 端点）
+			return ai.NewDoubaoVideoProvider(apiKey, p.APIEndpoint), nil
 		case "happyhorse":
 			return ai.NewHappyHorseProvider(apiKey, p.APIEndpoint), nil
 		case "qianwen":

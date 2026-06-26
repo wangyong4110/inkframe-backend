@@ -54,7 +54,12 @@ var defaultProviderModels = map[string][]providerModelDef{
 		{"doubao-pro-32k", "豆包 Pro 32K", "llm", 0.88, 16384},
 		{"doubao-lite-32k", "豆包 Lite 32K", "llm", 0.75, 16384},
 		{"seedream-3-0-t2i-250415", "Seedream 3.0 文生图", "image", 0.9, 0},
-		{"seedance-01-lite", "Seedance 01 Lite", "video", 0.88, 0},
+		// 视频模型：model 字段填写用户在火山引擎控制台创建的推理接入点（Endpoint）ID
+		{"doubao-seedvideo-pro-250428", "豆包视频 Pro（文生/图生视频）", "video", 0.92, 0},
+		{"doubao-seedvideo-lite-250428", "豆包视频 Lite（文生/图生视频）", "video", 0.87, 0},
+		// 多模态 Embedding 模型（EmbedMultimodal，支持文本+图片+视频混合输入）
+		{"doubao-embedding-vision-250328", "豆包多模态 Embedding", "embedding", 0.90, 0},
+		{"doubao-embedding-vision-250615", "豆包多模态 Embedding v2（支持维度选择）", "embedding", 0.92, 0},
 	},
 	"deepseek": {
 		{"deepseek-v4", "DeepSeek V4", "llm", 0.96, 32768},
@@ -102,10 +107,20 @@ var defaultProviderModels = map[string][]providerModelDef{
 		{"yi-large-turbo", "Yi Large Turbo", "llm", 0.85, 4096},
 	},
 	"volcengine-visual": {
+		{"jimeng_seedream46_cvtob", "即梦4.6 图像生成（人像写真/平面设计/风格化，支持多图输入输出）", "image", 0.97, 0},
+		{"jimeng_i2i_v30", "即梦图生图3.0智能参考（编辑指令/真实图像/海报设计）", "image", 0.94, 0},
+		{"jimeng_t2i_v31", "即梦文生图3.1（画面美感/风格精准/细节丰富）", "image", 0.94, 0},
+		{"jimeng_t2i_v30", "即梦文生图3.0（文字排版/人像质感/艺术字体）", "image", 0.93, 0},
+		{"jimeng_t2i_v40", "即梦4.0 图像生成（文生图/图像编辑，支持多图输入输出）", "image", 0.96, 0},
 		{"general_v3.0", "即梦AI 文生图 V3", "image", 0.9, 0},
+		{"jimeng_ti2v_v30_pro", "即梦视频3.0 Pro（文生视频+图生视频首帧，1080P高清）", "video", 0.95, 0},
 		{"jimeng_t2v_v30", "即梦视频3.0 文生视频", "video", 0.92, 0},
+		{"jimeng_t2v_v30_1080p", "即梦视频3.0 文生视频 1080P", "video", 0.93, 0},
 		{"jimeng_i2v_first_v30", "即梦视频3.0 图生视频（首帧）", "video", 0.92, 0},
+		{"jimeng_i2v_first_v30_1080", "即梦视频3.0 图生视频（首帧）1080P", "video", 0.93, 0},
 		{"jimeng_i2v_first_tail_v30", "即梦视频3.0 图生视频（首尾帧）", "video", 0.92, 0},
+		{"jimeng_i2v_first_tail_v30_1080", "即梦视频3.0 图生视频（首尾帧）1080P", "video", 0.93, 0},
+		{"jimeng_i2v_recamera_v30", "即梦视频3.0 图生视频-运镜（镜头运动控制）", "video", 0.93, 0},
 	},
 	"kling": {
 		{"kling-3.0-turbo", "可灵 3.0 Turbo", "video", 0.97, 0},

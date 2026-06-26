@@ -256,8 +256,8 @@ func seedAIModels(db *gorm.DB) {
 		{"mistral", "Mistral AI", "https://api.mistral.ai/v1", false, nil},
 		{"meta", "Meta AI (Llama)", "https://api.llama.com/compat/v1", false, nil},
 		// LLM — 国内
-		// doubao 同时承载 Seedance 视频生成（seedance 已合并）
-		{"doubao", "豆包（火山引擎 Ark）", "https://ark.volces.com/api/v3", false, nil},
+		// doubao 同时承载视频生成（豆包视频 API，内联标志格式）
+		{"doubao", "豆包（火山引擎 Ark）", "https://ark.cn-beijing.volces.com/api/v3", false, nil},
 		{"deepseek", "DeepSeek", "https://api.deepseek.com/v1", false, nil},
 		// qianwen 同时承载 CosyVoice（aliyun-tts）、千问TTS（qwen-tts）、HappyHorse视频（均已合并）
 		{"qianwen", "通义千问（DashScope）", "https://dashscope.aliyuncs.com/compatible-mode/v1", false, nil},

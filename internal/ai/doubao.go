@@ -61,10 +61,13 @@ func (p *DoubaoProvider) GetModels() []string {
 		"doubao-lite-32k",
 		"doubao-lite-128k",
 		// Seedream 图像模型（火山方舟 Ark 平台，支持主体一致性多图参考）
-		"doubao-seedream-5-0-260128",   // Seedream 5.0 lite，2K/3K/4K，支持流式/组图/联网搜索
-		"doubao-seedream-4-5-251128",   // Seedream 4.5，2K/4K
-		"doubao-seedream-4-0-250828",   // Seedream 4.0，1K/2K/4K（默认）
-		"seededit-3-0-t2i-250428",      // SeedEdit 3.0，指令式图像编辑
+		"doubao-seedream-5-0-260128", // Seedream 5.0 lite，2K/3K/4K，支持流式/组图/联网搜索
+		"doubao-seedream-4-5-251128", // Seedream 4.5，2K/4K
+		"doubao-seedream-4-0-250828", // Seedream 4.0，1K/2K/4K（默认）
+		"seededit-3-0-t2i-250428",   // SeedEdit 3.0，指令式图像编辑
+		// 多模态 Embedding 模型（EmbedMultimodal）
+		"doubao-embedding-vision-250328", // 多模态 Embedding（文本+图片+视频），维度 2048
+		"doubao-embedding-vision-250615", // 多模态 Embedding v2，支持可选维度（1024/2048）
 	}
 }
 
@@ -275,8 +278,14 @@ func (p *DoubaoProvider) Embed(ctx context.Context, text string) ([]float32, err
 }
 
 // ImageGenerate 使用 Seedream 模型生成图像
-// Seedream API 兼容 OpenAI images/generations 格式
-// 支持参考图：当 req.ReferenceImage 非空时，传入 image_url 字段（Seedream 3.5+/4.0 参考图生成）
+//
+// API: POST /images/generations（兼容 OpenAI images/generations 格式）
+// 支持模型：Seedream 3.0 / 4.0 / 4.5 / 5.0 lite（能力逐代增强）
+//
+// 注意：
+//   - guidance_scale 仅 Seedream 3.0 支持；Seedream 4.0/4.5/5.0 lite 明确不支持
+//   - sequential_image_generation（组图）仅 Seedream 4.0/4.5/5.0 lite 支持
+//   - output_format 仅 Seedream 5.0 lite 支持
 func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRequest) (*ImageResponse, error) {
 	start := time.Now()
 
@@ -285,40 +294,68 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 		model = "doubao-seedream-4-0-250828"
 	}
 
+	isNewGen := seedreamIsNewGen(model) // Seedream 4.0 / 4.5 / 5.0 lite
+
 	size := seedreamEnforceMinSize(model, seedreamSize(req.Size))
+
+	// sequential_image_generation：默认 disabled（单图），新生代模型支持 auto（组图）
+	seqMode := "disabled"
+	if req.SequentialImageGeneration == "auto" && isNewGen {
+		seqMode = "auto"
+	}
+
+	// watermark：默认 false（不加水印）；请求明确传 true 时才加
+	watermark := false
+	if req.Watermark != nil && *req.Watermark {
+		watermark = true
+	}
 
 	apiReq := map[string]interface{}{
 		"model":                       model,
 		"prompt":                      req.Prompt,
 		"size":                        size,
-		"watermark":                   false,
-		"sequential_image_generation": "disabled", // 单张输出，禁止自动组图
+		"watermark":                   watermark,
+		"sequential_image_generation": seqMode,
 	}
+
+	// 组图最大张数（仅 auto 模式生效，范围 1-15）
+	if seqMode == "auto" && req.SequentialImageGenerationMaxImages > 0 {
+		apiReq["sequential_image_generation_options"] = map[string]interface{}{
+			"max_images": req.SequentialImageGenerationMaxImages,
+		}
+	}
+
+	// output_format：仅 Seedream 5.0 lite 支持（jpeg/png），其余模型忽略
+	if req.OutputFormat != "" && seedreamIs5Lite(model) {
+		apiReq["output_format"] = req.OutputFormat
+	}
+
+	// response_format：url（默认）或 b64_json
+	if req.ResponseFormat != "" {
+		apiReq["response_format"] = req.ResponseFormat
+	}
+
 	if req.NegativePrompt != "" {
 		apiReq["negative_prompt"] = req.NegativePrompt
 	}
 	if req.Seed != 0 {
 		apiReq["seed"] = req.Seed
 	}
-	// guidance_scale（提示词遵从强度）：Seedream 4.0+ 支持，默认约 3.5，建议 4.5-6.5。
-	// 较高的 guidance_scale 使模型更严格遵从 prompt（包括面部锐化词），有助于改善面部模糊问题。
-	// 内部 CFGScale 范围 1-10（由 1.0+weight*9.0 计算），重映射为 Seedream 的 3.0-7.0 区间：
-	//   guidance_scale = 3.0 + (CFGScale-1.0)/9.0 * 4.0
-	// CFGScale=0（未设置）时默认使用 5.5（适合角色参考图场景，强调面部细节）。
-	if req.CFGScale > 0 {
-		gs := 3.0 + (math.Min(req.CFGScale, 10.0)-1.0)/9.0*4.0
-		apiReq["guidance_scale"] = gs
-	} else if len(req.ReferenceImages) > 0 || req.ReferenceImage != "" {
-		// 有参考图时默认 5.5，增强面部特征保持
-		apiReq["guidance_scale"] = 5.5
+
+	// guidance_scale：仅 Seedream 3.0（旧生代）支持；Seedream 4.0/4.5/5.0 lite 不支持
+	// 内部 CFGScale 范围 1-10，重映射为 Seedream 3.0 的 3.0-7.0 区间
+	if !isNewGen {
+		if req.CFGScale > 0 {
+			gs := 3.0 + (math.Min(req.CFGScale, 10.0)-1.0)/9.0*4.0
+			apiReq["guidance_scale"] = gs
+		} else if len(req.ReferenceImages) > 0 || req.ReferenceImage != "" {
+			apiReq["guidance_scale"] = 5.5
+		}
 	}
-	// 参考图：Seedream 4.0+ 官方 API 使用 "image" 字段，支持 URL 或 Base64 data URI。
-	// - URL：直接传入 https:// 地址
-	// - Base64：必须带 data URI 前缀，格式 "data:image/<格式>;base64,<数据>"
-	// - 多图（Seedream 4.0/4.5/5.0 最多支持 14 张）：传入 []string
-	// 相对路径（/api/media/...）由上层 ai_service 预先 fetchImageAsBase64 转换为裸 base64 字符串。
+
+	// 参考图（image 字段）：Seedream 4.0+ 支持单图或多图（最多14张）
+	// 路径处理：相对路径由上层 ai_service 预先 fetchImageAsBase64 转换为裸 base64 字符串。
 	var allRefImages []string
-	// 优先使用 ReferenceImages（多图），其次 ReferenceImage（单图）
 	if len(req.ReferenceImages) > 0 {
 		for _, r := range req.ReferenceImages {
 			if formatted := seedreamFormatImage(r); formatted != "" {
@@ -336,19 +373,21 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 		apiReq["image"] = allRefImages
 	}
 
-	// 调试日志：确认参考图是否正确注入
+	// 调试日志
 	{
 		imgTypes := make([]string, len(allRefImages))
 		for i, img := range allRefImages {
-			if strings.HasPrefix(img, "data:") {
+			switch {
+			case strings.HasPrefix(img, "data:"):
 				imgTypes[i] = "base64"
-			} else if strings.HasPrefix(img, "http") {
+			case strings.HasPrefix(img, "http"):
 				imgTypes[i] = "url"
-			} else {
+			default:
 				imgTypes[i] = "unknown"
 			}
 		}
-		log.Printf("[doubao] ImageGenerate model=%s refImages=%d types=%v prompt=%.200s", model, len(allRefImages), imgTypes, req.Prompt)
+		log.Printf("[doubao] ImageGenerate model=%s seqMode=%s refImages=%d types=%v prompt=%.200s",
+			model, seqMode, len(allRefImages), imgTypes, req.Prompt)
 	}
 
 	body, _ := json.Marshal(apiReq)
@@ -368,7 +407,6 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		errMsg := string(respBody)
-		// 标记内容审核拦截，方便上层检测并做提示词净化重试
 		if strings.Contains(errMsg, "InputTextSensitiveContentDetected") {
 			errMsg = ErrPrefixSensitiveContent + errMsg
 		}
@@ -382,17 +420,58 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, err
 	}
-	if len(result.Data) == 0 {
-		// 打印完整响应帮助诊断：有时 Seedream 200 但 data 为空（参考图格式不被接受时）
-		log.Printf("[doubao] ImageGenerate: empty data in response body=%.500s", string(respBody))
+
+	// 过滤出成功的图片（组图场景下部分图可能有 error）
+	var urls, sizes []string
+	for _, item := range result.Data {
+		if item.Error != nil {
+			log.Printf("[doubao] ImageGenerate: 单张图生成失败 code=%s message=%s", item.Error.Code, item.Error.Message)
+			continue
+		}
+		if item.URL != "" {
+			urls = append(urls, item.URL)
+		} else if item.B64JSON != "" {
+			urls = append(urls, item.B64JSON) // b64_json 模式暂用同一字段传递
+		}
+		if item.Size != "" {
+			sizes = append(sizes, item.Size)
+		}
+	}
+
+	if len(urls) == 0 {
+		log.Printf("[doubao] ImageGenerate: no image in response body=%.500s", string(respBody))
 		return &ImageResponse{Error: "no image returned", LatencyMs: time.Since(start).Milliseconds()}, nil
 	}
 
-	log.Printf("[doubao] ImageGenerate: success url=%s latency=%dms", result.Data[0].URL, time.Since(start).Milliseconds())
-	return &ImageResponse{
-		URL:       result.Data[0].URL,
+	log.Printf("[doubao] ImageGenerate: success count=%d url=%s latency=%dms", len(urls), urls[0], time.Since(start).Milliseconds())
+	out := &ImageResponse{
+		URL:       urls[0],
 		LatencyMs: time.Since(start).Milliseconds(),
-	}, nil
+	}
+	if len(urls) > 1 {
+		out.URLs = urls
+	}
+	if len(sizes) > 0 {
+		out.Sizes = sizes
+	}
+	if result.Data[0].B64JSON != "" {
+		out.B64JSON = result.Data[0].B64JSON
+	}
+	return out, nil
+}
+
+// seedreamIsNewGen 判断是否为 Seedream 4.0/4.5/5.0 lite（新生代）。
+// 新生代不支持 guidance_scale，但支持组图和更多高级参数。
+func seedreamIsNewGen(model string) bool {
+	return strings.Contains(model, "seedream-4") ||
+		strings.Contains(model, "seedream-5") ||
+		strings.Contains(model, "seedream_4") ||
+		strings.Contains(model, "seedream_5")
+}
+
+// seedreamIs5Lite 判断是否为 Seedream 5.0 lite（支持 output_format 等专属参数）。
+func seedreamIs5Lite(model string) bool {
+	return strings.Contains(model, "5-0") || strings.Contains(model, "5.0")
 }
 
 // AudioGenerate 使用火山方舟 TTS（音频合成）API，兼容 OpenAI /audio/speech 格式。
