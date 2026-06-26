@@ -560,17 +560,10 @@ func (h *ModelHandler) FetchProviderModels(c *gin.Context) {
 			respondErr(c, http.StatusNotFound, "provider not found")
 			return
 		}
-		// 租户提供商无静态列表时，回退到同名系统提供商的静态列表
-		staticModels := p.StaticModels
-		if staticModels == "" {
-			if sysProv, sysErr := h.modelService.GetSystemProviderByName(p.Name); sysErr == nil {
-				staticModels = sysProv.StaticModels
-			}
-		}
-		// 若已有静态模型列表（不支持 /models 端点的提供商），直接返回
-		if staticModels != "" {
+		// 若 DB 中已配置静态模型列表（不支持 /models 端点的提供商），直接返回
+		if p.StaticModels != "" {
 			var staticList []string
-			if jsonErr := json.Unmarshal([]byte(staticModels), &staticList); jsonErr == nil && len(staticList) > 0 {
+			if jsonErr := json.Unmarshal([]byte(p.StaticModels), &staticList); jsonErr == nil && len(staticList) > 0 {
 				respondOK(c, gin.H{"models": staticList})
 				return
 			}
@@ -674,26 +667,27 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 	}
 
 	type providerTemplate struct {
-		Name             string   `json:"name"`
-		DisplayName      string   `json:"display_name"`
-		APIEndpoint      string   `json:"api_endpoint"`
-		NeedsSecretKey   bool     `json:"needs_secret_key"`
-		NoAPIKey         bool     `json:"no_api_key,omitempty"`        // 无需 API Key（如 Ollama）
-		NeedsAPIVersion  bool     `json:"needs_api_version,omitempty"` // 需要填写 API 版本号（如 Azure）
-		DeploymentBased  bool     `json:"deployment_based,omitempty"`  // 模型名 = 部署名（如 Azure）
-		APIVersionHint   string   `json:"api_version_hint,omitempty"`  // API 版本占位提示
-		ConfigHint       string   `json:"config_hint,omitempty"`       // 配置说明
-		StaticModels     []string `json:"static_models,omitempty"`
+		Name                string              `json:"name"`
+		DisplayName         string              `json:"display_name"`
+		APIEndpoint         string              `json:"api_endpoint"`
+		NeedsSecretKey      bool                `json:"needs_secret_key"`
+		NoAPIKey            bool                `json:"no_api_key,omitempty"`
+		NeedsAPIVersion     bool                `json:"needs_api_version,omitempty"`
+		DeploymentBased     bool                `json:"deployment_based,omitempty"`
+		APIVersionHint      string              `json:"api_version_hint,omitempty"`
+		ConfigHint          string              `json:"config_hint,omitempty"`
+		StaticModels        []string            `json:"static_models,omitempty"`        // 所有模型展平列表（向后兼容）
+		StaticModelsByType  map[string][]string `json:"static_models_by_type,omitempty"` // 按类型分组
 	}
 
 	result := make([]providerTemplate, 0, len(templates))
 	for _, p := range templates {
 		t := providerTemplate{
-			Name:             p.Name,
-			DisplayName:      p.DisplayName,
-			APIEndpoint:      p.APIEndpoint,
-			NeedsSecretKey:   p.NeedsSecretKey,
-			NoAPIKey:         p.Name == "ollama",
+			Name:           p.Name,
+			DisplayName:    p.DisplayName,
+			APIEndpoint:    p.APIEndpoint,
+			NeedsSecretKey: p.NeedsSecretKey,
+			NoAPIKey:       p.Name == "ollama",
 		}
 		if p.Name == "azure" {
 			t.NeedsAPIVersion = true
@@ -702,7 +696,23 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 			t.ConfigHint = "Endpoint 格式：https://<resource>.openai.azure.com/openai；API Version 填写 Azure REST API 版本；模型名称填写 Azure 部署名（与 Azure 门户中创建的 Deployment name 一致）"
 		}
 		if p.StaticModels != "" {
-			json.Unmarshal([]byte(p.StaticModels), &t.StaticModels) //nolint:errcheck
+			// 新格式：map[string][]string；兼容旧格式 []string
+			var byType map[string][]string
+			if err := json.Unmarshal([]byte(p.StaticModels), &byType); err == nil && len(byType) > 0 {
+				t.StaticModelsByType = byType
+				// 展平，去重
+				seen := map[string]struct{}{}
+				for _, models := range byType {
+					for _, m := range models {
+						if _, ok := seen[m]; !ok {
+							seen[m] = struct{}{}
+							t.StaticModels = append(t.StaticModels, m)
+						}
+					}
+				}
+			} else {
+				json.Unmarshal([]byte(p.StaticModels), &t.StaticModels) //nolint:errcheck
+			}
 		}
 		result = append(result, t)
 	}

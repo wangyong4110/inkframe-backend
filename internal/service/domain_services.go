@@ -178,9 +178,6 @@ func (s *ModelService) GetProvider(id uint, tenantID uint) (*model.ModelProvider
 	return s.providerRepo.GetByIDAndTenant(id, tenantID)
 }
 
-func (s *ModelService) GetSystemProviderByName(name string) (*model.ModelProvider, error) {
-	return s.providerRepo.GetSystemProvider(name)
-}
 
 // typeForProviderType returns the model type string for a provider type.
 func typeForProviderType(providerType string) string {
@@ -239,7 +236,6 @@ func (s *ModelService) SeedAllProviders() {
 		s.seedProviderModel(p)
 		s.copySystemModels(p)
 		s.inheritVoicesJSON(p)
-		s.seedVoiceModels(p)
 	}
 }
 
@@ -272,31 +268,6 @@ func (s *ModelService) copySystemModels(target *model.ModelProvider) {
 	}
 }
 
-// seedVoiceModels 将 provider.VoicesJSON 里的音色同步为 ink_ai_model 记录（幂等）。
-// 音色条目以 voice.ID 作为模型 Name，type="voice"，IsActive=false，供用户按需启用。
-func (s *ModelService) seedVoiceModels(target *model.ModelProvider) {
-	if target.TenantID == 0 {
-		return
-	}
-	voices := target.ParseVoices()
-	for _, v := range voices {
-		m := &model.AIModel{
-			ProviderID:  target.ID,
-			Name:        v.ID,
-			DisplayName: v.Name,
-			Type:        "voice",
-			Quality:     v.Quality,
-			IsActive:    false,
-		}
-		_ = s.modelRepo.FirstOrCreate(m)
-		// 补填空 display_name（音色名称可能在后续 seed 更新中变化）
-		if m.DisplayName == "" && v.Name != "" {
-			m.DisplayName = v.Name
-			_ = s.modelRepo.Update(m)
-		}
-	}
-}
-
 func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, tenantID uint) (*model.ModelProvider, error) {
 	provider := &model.ModelProvider{
 		TenantID:    tenantID,
@@ -314,7 +285,6 @@ func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, ten
 	s.seedProviderModel(provider)
 	s.copySystemModels(provider)
 	s.inheritVoicesJSON(provider)
-	s.seedVoiceModels(provider)
 	return provider, nil
 }
 

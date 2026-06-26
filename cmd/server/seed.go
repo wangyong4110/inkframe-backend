@@ -238,57 +238,122 @@ func seedAIModels(db *gorm.DB) {
 	db.Exec("DELETE FROM `ink_ai_model` WHERE `type` = 'voice' AND `deleted_at` IS NULL")
 
 	type providerSeed struct {
-		name           string
-		displayName    string
-		endpoint       string
-		needsSecretKey bool     // 是否需要 AK/SK 双密钥
-		staticModels   []string // 不支持 /models 端点时的内置模型列表
+		name                string
+		displayName         string
+		endpoint            string
+		needsSecretKey      bool
+		staticModelsByType  map[string][]string // type -> model list; nil = 运行时拉取（如 OpenAI）
 	}
 	providers := []providerSeed{
 		// LLM — 国际
-		// openai 同时承载 DALL-E 图像生成（openai-image 已合并）
-		{"openai", "OpenAI", "https://api.openai.com/v1", false, nil},
-		{"anthropic", "Anthropic", "https://api.anthropic.com/v1", false, nil},
-		// Azure OpenAI: endpoint = https://<resource>.openai.azure.com/openai
+		// openai 支持标准 /models 端点，同时提供静态列表以便按类型过滤
+		{"openai", "OpenAI", "https://api.openai.com/v1", false, map[string][]string{
+			"llm":       {"gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o3", "o3-mini", "o1", "o1-mini"},
+			"image":     {"dall-e-3", "dall-e-2", "gpt-image-1"},
+			"embedding": {"text-embedding-3-large", "text-embedding-3-small", "text-embedding-ada-002"},
+			"voice":     {"tts-1", "tts-1-hd"},
+		}},
+		{"anthropic", "Anthropic", "https://api.anthropic.com/v1", false, map[string][]string{
+			"llm": {
+				"claude-opus-4-7", "claude-opus-4-5",
+				"claude-sonnet-4-6", "claude-sonnet-4-5",
+				"claude-haiku-4-5-20251001",
+				"claude-3-7-sonnet-20250219",
+				"claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022",
+				"claude-3-opus-20240229",
+			},
+		}},
+		// Azure OpenAI: 模型名 = 部署名，由用户填写，不设静态列表
 		{"azure", "Azure OpenAI", "https://YOUR-RESOURCE.openai.azure.com/openai", false, nil},
-		{"google", "Google DeepMind", "https://generativelanguage.googleapis.com/v1", false, nil},
-		{"xai", "xAI (Grok)", "https://api.x.ai/v1", false, nil},
-		{"mistral", "Mistral AI", "https://api.mistral.ai/v1", false, nil},
-		{"meta", "Meta AI (Llama)", "https://api.llama.com/compat/v1", false, nil},
+		{"google", "Google DeepMind", "https://generativelanguage.googleapis.com/v1", false, map[string][]string{
+			"llm": {
+				"gemini-2.5-pro", "gemini-2.5-flash",
+				"gemini-2.0-flash", "gemini-2.0-flash-lite",
+				"gemini-1.5-pro", "gemini-1.5-flash",
+			},
+		}},
+		{"xai", "xAI (Grok)", "https://api.x.ai/v1", false, map[string][]string{
+			"llm": {"grok-3", "grok-3-mini", "grok-3-fast", "grok-2", "grok-2-vision"},
+		}},
+		{"mistral", "Mistral AI", "https://api.mistral.ai/v1", false, map[string][]string{
+			"llm": {"mistral-large-latest", "mistral-small-latest", "codestral-latest", "open-mistral-nemo"},
+		}},
+		{"meta", "Meta AI (Llama)", "https://api.llama.com/compat/v1", false, map[string][]string{
+			"llm": {"Llama-4-Scout-17B-16E-Instruct", "Llama-4-Maverick-17B-128E-Instruct", "Llama-3.3-70B-Instruct"},
+		}},
 		// LLM — 国内
 		// doubao 同时承载视频生成（豆包视频 API，内联标志格式）
-		{"doubao", "豆包（火山引擎 Ark）", "https://ark.cn-beijing.volces.com/api/v3", false, nil},
-		{"deepseek", "DeepSeek", "https://api.deepseek.com/v1", false, nil},
-		// qianwen 同时承载 CosyVoice（aliyun-tts）、千问TTS（qwen-tts）、HappyHorse视频（均已合并）
-		{"qianwen", "通义千问（DashScope）", "https://dashscope.aliyuncs.com/compatible-mode/v1", false, nil},
-		{"zhipu", "智谱AI (GLM / Z.AI)", "https://open.bigmodel.cn/api/paas/v4", false, nil},
-		{"moonshot", "Moonshot AI (Kimi)", "https://api.moonshot.cn/v1", false, nil},
-		{"baidu", "百度文心一言 (ERNIE)", "https://qianfan.baidubce.com/v2", false, nil},
-		{"tencent", "腾讯混元 (Hunyuan)", "https://api.hunyuan.cloud.tencent.com/v1", false, nil},
-		{"yi", "零一万物 (Yi)", "https://api.lingyiwanwu.com/v1", false, nil},
+		{"doubao", "豆包（火山引擎 Ark）", "https://ark.cn-beijing.volces.com/api/v3", false, map[string][]string{
+			"llm": {
+				"doubao-pro-256k", "doubao-pro-128k", "doubao-pro-32k", "doubao-pro-4k",
+				"doubao-lite-128k", "doubao-lite-32k",
+				"doubao-seed-1-6", "doubao-seed-1-5",
+			},
+			"video": {"doubao-seaweed-241128", "doubao-seedance-1-0-lite-i2v-250528"},
+		}},
+		{"deepseek", "DeepSeek", "https://api.deepseek.com/v1", false, map[string][]string{
+			"llm": {"deepseek-chat", "deepseek-reasoner"},
+		}},
+		// qianwen 同时承载 CosyVoice（aliyun-tts）、千问TTS（qwen-tts）、即梦视频（均已合并）
+		{"qianwen", "通义千问（DashScope）", "https://dashscope.aliyuncs.com/compatible-mode/v1", false, map[string][]string{
+			"llm": {
+				"qwen-max", "qwen-plus", "qwen-turbo", "qwen-long",
+				"qwen3-235b-a22b", "qwen3-32b", "qwen3-14b", "qwen3-8b",
+				"qwen2.5-72b-instruct", "qwen2.5-32b-instruct",
+			},
+			"image": {"wanx2.1-t2i-plus", "wanx2.1-t2i-turbo", "wanx-x-v1"},
+			"video": {"wanx2.1-i2v-plus", "wanx2.1-i2v-turbo"},
+			"voice": {"cosyvoice-v2-0.5b", "cosyvoice-v1-5b"},
+		}},
+		{"zhipu", "智谱AI (GLM / Z.AI)", "https://open.bigmodel.cn/api/paas/v4", false, map[string][]string{
+			"llm": {"glm-4-plus", "glm-4-air", "glm-4-flash", "glm-z1-plus", "glm-z1-air"},
+		}},
+		{"moonshot", "Moonshot AI (Kimi)", "https://api.moonshot.cn/v1", false, map[string][]string{
+			"llm": {"kimi-k2-0711-preview", "moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k"},
+		}},
+		{"baidu", "百度文心一言 (ERNIE)", "https://qianfan.baidubce.com/v2", false, map[string][]string{
+			"llm": {"ernie-4.5-turbo-128k", "ernie-4.5-8k", "ernie-3.5-128k", "ernie-speed-128k"},
+		}},
+		{"tencent", "腾讯混元 (Hunyuan)", "https://api.hunyuan.cloud.tencent.com/v1", false, map[string][]string{
+			"llm": {"hunyuan-turbos-latest", "hunyuan-large", "hunyuan-standard-256k"},
+		}},
+		{"yi", "零一万物 (Yi)", "https://api.lingyiwanwu.com/v1", false, map[string][]string{
+			"llm": {"yi-lightning", "yi-large", "yi-medium"},
+		}},
 		// 即梦AI（火山引擎）：volcengine-visual 同时承载图像生成和视频生成（jimeng-video 已合并）
-		{"volcengine-visual", "即梦AI（火山引擎）", "https://visual.volcengineapi.com", true,
-			[]string{"general_v3.0", "general_v3.0-I2V"}},
-		// 可灵：一个供应商承载视频/音效/语音/图像（AK/SK 共用，按模型 type 分发）
-		{"kling", "可灵（快手）", "https://api-beijing.klingai.com", true,
-			[]string{"kling-v1-6", "kling-v1-5", "kling-v1"}},
+		{"volcengine-visual", "即梦AI（火山引擎）", "https://visual.volcengineapi.com", true, map[string][]string{
+			"image": {"general_v3.0", "general_v2.1", "general_v1.4"},
+			"video": {"general_v3.0-I2V"},
+		}},
+		// 可灵：一个供应商承载视频/音效/图像（AK/SK 共用，按模型 type 分发）
+		{"kling", "可灵（快手）", "https://api-beijing.klingai.com", true, map[string][]string{
+			"video": {"kling-v1-6", "kling-v1-5", "kling-v1"},
+			"image": {"kling-v1-6", "kling-v1-5", "kling-v1"},
+			"sfx":   {"kling-v1"},
+		}},
 		// 语音合成 — doubao-speech 与 doubao 使用不同端点和不同凭证，独立配置
-		{"doubao-speech", "豆包语音 V3（字节跳动）", "https://openspeech.bytedance.com/api/v3", false,
-			[]string{"seed-tts-2.0", "seed-tts-1.0"}},
-		{"doubao-speech-v1", "豆包语音 V1（字节跳动）", "https://openspeech.bytedance.com/api/v1", true,
-			[]string{
+		{"doubao-speech", "豆包语音 V3（字节跳动）", "https://openspeech.bytedance.com/api/v3", false, map[string][]string{
+			"voice": {"seed-tts-2.0", "seed-tts-1.0"},
+		}},
+		{"doubao-speech-v1", "豆包语音 V1（字节跳动）", "https://openspeech.bytedance.com/api/v1", true, map[string][]string{
+			"voice": {
 				"zh_female_vv_uranus_bigtts", "zh_female_xiaohe_uranus_bigtts",
 				"zh_male_m191_uranus_bigtts", "zh_male_taocheng_uranus_bigtts",
-			}},
-		{"baidu-tts", "百度", "https://tsn.baidu.com", true,
-			[]string{"0", "1", "3", "4", "5", "103", "106", "110", "111"}},
-		{"minimax-tts", "MiniMax", "https://api.minimax.chat/v1", true,
-			[]string{"female-shaonv", "female-yujie", "male-qn-qingse", "male-qn-jingying"}},
-		{"tencent-tts", "腾讯云", "https://tts.tencentcloudapi.com", true,
-			[]string{"101001", "101002", "101011", "101012"}},
+			},
+		}},
+		{"baidu-tts", "百度", "https://tsn.baidu.com", true, map[string][]string{
+			"voice": {"0", "1", "3", "4", "5", "103", "106", "110", "111"},
+		}},
+		{"minimax-tts", "MiniMax", "https://api.minimax.chat/v1", true, map[string][]string{
+			"voice": {"female-shaonv", "female-yujie", "male-qn-qingse", "male-qn-jingying"},
+		}},
+		{"tencent-tts", "腾讯云", "https://tts.tencentcloudapi.com", true, map[string][]string{
+			"voice": {"101001", "101002", "101011", "101012"},
+		}},
 		// 音效
-		{"elevenlabs-sfx", "ElevenLabs", "https://api.elevenlabs.io", false,
-			[]string{"sound-generation"}},
+		{"elevenlabs-sfx", "ElevenLabs", "https://api.elevenlabs.io", false, map[string][]string{
+			"sfx": {"sound-generation"},
+		}},
 		// 背景音乐
 		{"fun-music", "Fun-Music AI（阿里云百炼）", "https://dashscope.aliyuncs.com/api/v1", false, nil},
 	}
@@ -297,8 +362,8 @@ func seedAIModels(db *gorm.DB) {
 	providerIDs := map[string]uint{}
 	for _, p := range providers {
 		staticModelsJSON := ""
-		if len(p.staticModels) > 0 {
-			b, _ := json.Marshal(p.staticModels)
+		if len(p.staticModelsByType) > 0 {
+			b, _ := json.Marshal(p.staticModelsByType)
 			staticModelsJSON = string(b)
 		}
 
