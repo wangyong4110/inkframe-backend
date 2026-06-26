@@ -310,9 +310,7 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 	if voice == "" {
 		voice = defaultVoice
 	}
-	if voice == "" {
-		voice = "alloy"
-	}
+	// voice 仍为空串时，由 TTS Provider 使用自身默认音色（如 AliyunTTS → longxiaochun，QwenTTS → Cherry）
 
 	audioURL, err := s.aiService.AudioGenerateWithOptions(context.Background(), tenantID, text, voice, speed, style, seg.Language)
 	if err != nil {
@@ -771,13 +769,10 @@ func fetchAudioToLocal(dir, audioURL string, id int) (string, error) {
 }
 
 // resolveVoiceForShot 解析分镜对应角色的配音设置（voice, speed, style）。
-// 优先级：① 对话文本「角色名：」前缀 → ② shot.CharacterIDs 第一个角色 → ③ narrationVoice → ④ alloy。
+// 优先级：① 对话文本「角色名：」前缀 → ② shot.CharacterIDs 第一个角色 → ③ narrationVoice → ④ 空串（由 TTS Provider 自选默认音色）。
 // novelID 由调用方提供（避免此函数重复查询 video 记录）。
 func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narrationVoice string, novelID uint) (voice string, speed float64, style string) {
-	voice = "alloy"
-	if narrationVoice != "" {
-		voice = narrationVoice
-	}
+	voice = narrationVoice // 空串 = 由 TTS Provider 自选默认音色
 	speed = 1.0
 
 	if novelID != 0 && s.characterRepo != nil && shot.Narration == "" {

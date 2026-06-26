@@ -2291,9 +2291,6 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 		return "", fmt.Errorf("未配置语音合成提供商，请在「模型管理」中添加一个类型为 voice 或 tts 的 AI 提供商（如豆包语音、OpenAI TTS 等）并填写 API Key")
 	}
 
-	if voice == "" {
-		voice = "alloy"
-	}
 	if speed <= 0 {
 		speed = 1.0
 	}
