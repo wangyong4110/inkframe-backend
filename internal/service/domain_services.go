@@ -217,7 +217,7 @@ func (s *ModelService) seedProviderModel(provider *model.ModelProvider) {
 		Name:        provider.APIVersion,
 		DisplayName: provider.APIVersion,
 		Type:        mtype,
-		IsActive:    true,
+		IsActive:    false,
 	}
 	_ = s.modelRepo.Create(m)
 }
@@ -234,6 +234,7 @@ func (s *ModelService) SeedAllProviders() {
 		}
 		s.seedProviderModel(p)
 		s.copySystemModels(p)
+		s.inheritVoicesJSON(p)
 	}
 }
 
@@ -255,7 +256,7 @@ func (s *ModelService) copySystemModels(target *model.ModelProvider) {
 			Type:        d.Type,
 			Quality:     d.Quality,
 			MaxTokens:   d.MaxTokens,
-			IsActive:    true,
+			IsActive:    false,
 		}
 		_ = s.modelRepo.FirstOrCreate(newM)
 	}
@@ -276,9 +277,23 @@ func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, ten
 		return nil, err
 	}
 	s.seedProviderModel(provider)
-	// 从同名系统供应商复制模型记录，确保租户私有供应商创建后立即可在配音等界面选到音色。
 	s.copySystemModels(provider)
+	s.inheritVoicesJSON(provider)
 	return provider, nil
+}
+
+// inheritVoicesJSON 从同名系统级 provider 复制 voices_json 到租户级 provider。
+// 系统级 provider 无 API Key，租户级 provider 无 voices_json，两者都需要才能出现在音色列表中。
+func (s *ModelService) inheritVoicesJSON(target *model.ModelProvider) {
+	if target.TenantID == 0 || target.VoicesJSON != "" {
+		return
+	}
+	sys, err := s.providerRepo.GetSystemProvider(target.Name)
+	if err != nil || sys.VoicesJSON == "" {
+		return
+	}
+	target.VoicesJSON = sys.VoicesJSON
+	_ = s.providerRepo.Update(target)
 }
 
 func (s *ModelService) UpdateProvider(id uint, tenantID uint, req *model.UpdateModelProviderRequest) (*model.ModelProvider, error) {
