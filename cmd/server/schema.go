@@ -1039,6 +1039,9 @@ func preMigrateCleanup(db *gorm.DB) {
 	if err := db.Exec("DELETE FROM ink_task_model_config WHERE task_type = '' OR task_type IS NULL").Error; err != nil {
 		db.Exec("DELETE FROM ink_task_model_config")
 	}
+	// users.phone：旧版写入了空字符串 ''，AutoMigrate 添加 UNIQUE 时因重复 '' 报 1062。
+	// MySQL UNIQUE 允许多个 NULL，将历史空字符串统一改为 NULL。
+	db.Exec("UPDATE `users` SET phone = NULL WHERE phone = ''")
 	// ink_worldview.novel_id 是历史遗留列（旧版 auto-migrate 写入，当前 model 无此字段）
 	// 用 information_schema 判断列是否存在，兼容所有 MySQL 版本
 	var colCount int64
@@ -1110,16 +1113,15 @@ func preMigrateCleanup(db *gorm.DB) {
 	}
 	// ink_task_model_config.task_type 从 UNIQUE 改为普通 index（Fix 10）：
 	// 允许同类型多条配置共存（如不同 tenant 的配置）。先删旧唯一索引，AutoMigrate 再建普通索引。
-	var taskTypeIdxRows []struct{ NonUnique int }
-	db.Raw(`SELECT NON_UNIQUE FROM information_schema.STATISTICS
+	// 注意：NON_UNIQUE 由 MySQL 驱动返回 []uint8，用 COUNT(*) WHERE NON_UNIQUE=0 避免类型扫描问题。
+	var taskTypeUniqueCount int64
+	db.Raw(`SELECT COUNT(*) FROM information_schema.STATISTICS
 		WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ink_task_model_config'
-		AND COLUMN_NAME = 'task_type' AND INDEX_NAME != 'PRIMARY'`).Scan(&taskTypeIdxRows)
-	for _, row := range taskTypeIdxRows {
-		if row.NonUnique == 0 {
-			// unique index exists — drop it so AutoMigrate can create the non-unique one
-			db.Exec("ALTER TABLE ink_task_model_config DROP INDEX idx_task_model_configs_task_type")
-			db.Exec("ALTER TABLE ink_task_model_config DROP INDEX task_type")
-		}
+		AND COLUMN_NAME = 'task_type' AND INDEX_NAME != 'PRIMARY' AND NON_UNIQUE = 0`).Scan(&taskTypeUniqueCount)
+	if taskTypeUniqueCount > 0 {
+		// unique index exists — drop it so AutoMigrate can create the non-unique one
+		db.Exec("ALTER TABLE ink_task_model_config DROP INDEX idx_task_model_configs_task_type")
+		db.Exec("ALTER TABLE ink_task_model_config DROP INDEX task_type")
 	}
 
 	// ── v11: 删除废弃字段遗留的唯一索引（DROP COLUMN 会自动删单列索引，但显式删除更稳）
