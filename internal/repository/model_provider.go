@@ -71,8 +71,9 @@ func (r *ModelProviderRepository) ListByModelType(tenantID uint, modelType strin
 	var providers []*model.ModelProvider
 	var err error
 	if modelType == "voice" {
+		// 只查租户自己的 provider（tenant_id > 0），系统级是模板不直接暴露
 		err = r.db.Where(
-			"(tenant_id = ? OR tenant_id = 0) AND deleted_at IS NULL AND is_active = 1 AND voices_json != '' AND voices_json != '[]'",
+			"tenant_id = ? AND deleted_at IS NULL AND is_active = 1 AND voices_json != '' AND voices_json != '[]'",
 			tenantID,
 		).Find(&providers).Error
 	} else {
@@ -187,15 +188,16 @@ func (r *AIModelRepository) GetAvailableByTaskType(taskType string, tenantID uin
 }
 
 // getVoicesFromProviders 从 ink_model_provider.voices_json 构造音色 AIModel 列表。
+// 只查租户自己创建的 provider（tenant_id > 0），系统级 provider 是模板，不直接暴露音色。
 func (r *AIModelRepository) getVoicesFromProviders(tenantID uint) ([]*model.AIModel, error) {
 	credCond := "(CASE WHEN needs_secret_key = 1 " +
 		"THEN (api_key != '' AND api_secret_key != '') " +
 		"ELSE api_key != '' END)"
 	q := r.db.Where("deleted_at IS NULL AND is_active = 1 AND voices_json != '' AND voices_json != '[]' AND " + credCond)
 	if tenantID > 0 {
-		q = q.Where("tenant_id = 0 OR tenant_id = ?", tenantID)
+		q = q.Where("tenant_id = ?", tenantID)
 	} else {
-		q = q.Where("tenant_id = 0")
+		return nil, nil // 无租户上下文时不返回音色
 	}
 	var providers []*model.ModelProvider
 	if err := q.Find(&providers).Error; err != nil {
