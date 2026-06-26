@@ -398,7 +398,7 @@ func (s *ModelService) CreateModel(req *model.CreateAIModelRequest, tenantID uin
 		Timeout:     req.Timeout,
 		Concurrency: req.Concurrency,
 		RateLimit:   req.RateLimit,
-		IsActive:    true,
+		IsActive:    false,
 	}
 	return m, s.modelRepo.Create(m)
 }

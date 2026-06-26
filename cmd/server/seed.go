@@ -267,7 +267,7 @@ func seedAIModels(db *gorm.DB) {
 		{"tencent", "腾讯混元 (Hunyuan)", "https://api.hunyuan.cloud.tencent.com/v1", false, nil},
 		{"yi", "零一万物 (Yi)", "https://api.lingyiwanwu.com/v1", false, nil},
 		// 即梦AI（火山引擎）：volcengine-visual 同时承载图像生成和视频生成（jimeng-video 已合并）
-		{"volcengine-visual", "即梦AI（火山引擎）", "", true,
+		{"volcengine-visual", "即梦AI（火山引擎）", "https://visual.volcengineapi.com", true,
 			[]string{"general_v3.0", "general_v3.0-I2V"}},
 		// 可灵：一个供应商承载视频/音效/语音/图像（AK/SK 共用，按模型 type 分发）
 		{"kling", "可灵（快手）", "https://api-beijing.klingai.com", true,
@@ -290,7 +290,7 @@ func seedAIModels(db *gorm.DB) {
 		{"elevenlabs-sfx", "ElevenLabs", "https://api.elevenlabs.io", false,
 			[]string{"sound-generation"}},
 		// 背景音乐
-		{"fun-music", "Fun-Music AI（阿里云百炼）", "", false, nil},
+		{"fun-music", "Fun-Music AI（阿里云百炼）", "https://dashscope.aliyuncs.com/api/v1", false, nil},
 	}
 
 	// 1. 确保 provider 记录存在（tenant_id=0 系统级）
@@ -342,6 +342,10 @@ func seedAIModels(db *gorm.DB) {
 		}
 		if prov.DisplayName != p.displayName {
 			updates["display_name"] = p.displayName
+		}
+		// 补全空 endpoint（仅在 seed 有值而 DB 为空时回填，不覆盖用户自定义地址）
+		if p.endpoint != "" && prov.APIEndpoint == "" {
+			updates["api_endpoint"] = p.endpoint
 		}
 		if len(updates) > 0 {
 			db.Model(&prov).Updates(updates)

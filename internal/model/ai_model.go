@@ -85,7 +85,7 @@ type AIModel struct {
 	RateLimit   int `json:"rate_limit" gorm:"default:0"`  // 请求/分钟
 
 	// 状态
-	IsActive bool `json:"is_active" gorm:"default:true"`
+	IsActive bool `json:"is_active" gorm:"default:false"`
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
