@@ -187,8 +187,39 @@ func (r *AIModelRepository) GetAvailableByTaskType(taskType string, tenantID uin
 	return models, nil
 }
 
-// getVoicesFromProviders 从 ink_model_provider.voices_json 构造音色 AIModel 列表。
-// 只查租户自己创建的 provider（tenant_id > 0），系统级 provider 是模板，不直接暴露音色。
+// GetVoicesFromProvider 返回指定 provider 的音色列表（构造为虚拟 AIModel）。
+// 用于 voice_gen 任务：只展示用户在任务配置中明确选定的 TTS provider 的音色。
+func (r *AIModelRepository) GetVoicesFromProvider(tenantID, providerID uint) ([]*model.AIModel, error) {
+	credCond := "(CASE WHEN needs_secret_key = 1 " +
+		"THEN (api_key != '' AND api_secret_key != '') " +
+		"ELSE api_key != '' END)"
+	var providers []*model.ModelProvider
+	if err := r.db.Where(
+		"id = ? AND tenant_id = ? AND deleted_at IS NULL AND is_active = 1 AND voices_json != '' AND voices_json != '[]' AND "+credCond,
+		providerID, tenantID,
+	).Find(&providers).Error; err != nil {
+		return nil, err
+	}
+	var result []*model.AIModel
+	for _, p := range providers {
+		for _, v := range p.ParseVoices() {
+			result = append(result, &model.AIModel{
+				ProviderID:  p.ID,
+				Provider:    p,
+				Name:        v.ID,
+				DisplayName: v.Name,
+				Type:        "voice",
+				Gender:      v.Gender,
+				AgeGroup:    v.AgeGroup,
+				Quality:     v.Quality,
+				IsActive:    true,
+			})
+		}
+	}
+	return result, nil
+}
+
+// getVoicesFromProviders 已废弃，保留仅供内部回退，不再直接调用。
 func (r *AIModelRepository) getVoicesFromProviders(tenantID uint) ([]*model.AIModel, error) {
 	credCond := "(CASE WHEN needs_secret_key = 1 " +
 		"THEN (api_key != '' AND api_secret_key != '') " +
@@ -197,7 +228,7 @@ func (r *AIModelRepository) getVoicesFromProviders(tenantID uint) ([]*model.AIMo
 	if tenantID > 0 {
 		q = q.Where("tenant_id = ?", tenantID)
 	} else {
-		return nil, nil // 无租户上下文时不返回音色
+		return nil, nil
 	}
 	var providers []*model.ModelProvider
 	if err := q.Find(&providers).Error; err != nil {
