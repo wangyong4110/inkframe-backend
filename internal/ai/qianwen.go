@@ -284,8 +284,22 @@ func (p *QianwenProvider) Embed(ctx context.Context, text string) ([]float32, er
 	return embedResp.Data[0].Embedding, nil
 }
 
-// ImageGenerate 使用 Wan（万象）模型生成图像
-// 通过 DashScope OpenAI 兼容端点调用
+// dashscopeBaseURL 从 compatible-mode 端点反推 DashScope 根地址。
+// 例如 https://dashscope.aliyuncs.com/compatible-mode/v1 → https://dashscope.aliyuncs.com
+func (p *QianwenProvider) dashscopeBaseURL() string {
+	base := strings.TrimRight(p.endpoint, "/")
+	for _, suffix := range []string{"/compatible-mode/v1", "/compatible-mode"} {
+		if strings.HasSuffix(base, suffix) {
+			return strings.TrimSuffix(base, suffix)
+		}
+	}
+	return base
+}
+
+// ImageGenerate 使用通义万象（Wan）模型生成图像。
+//
+// wanx2.1-* 及以上版本使用 DashScope 原生异步任务 API（提交 → 轮询），
+// wanx-v1 等旧版模型回退到 OpenAI 兼容同步端点。
 func (p *QianwenProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRequest) (*ImageResponse, error) {
 	start := time.Now()
 
@@ -298,7 +312,138 @@ func (p *QianwenProvider) ImageGenerate(ctx context.Context, req *ImageGenerateR
 	if size == "" {
 		size = "1024*1024"
 	}
+	// DashScope 原生 API 使用 "*" 分隔符，兼容 "x" 写法
+	size = strings.ReplaceAll(size, "x", "*")
 
+	// wanx2.1 及以上使用原生异步 API；wanx-v1 走旧兼容端点
+	if strings.HasPrefix(model, "wanx2.") || strings.HasPrefix(model, "wanx3.") {
+		return p.wanxImageGenerateAsync(ctx, start, model, size, req)
+	}
+	return p.wanxImageGenerateCompat(ctx, start, model, size, req)
+}
+
+// wanxImageGenerateAsync 调用 DashScope 原生异步图像生成 API（wanx2.1+）。
+// 流程：POST 提交任务 → 轮询 GET 获取结果（最长等待 3 分钟）。
+func (p *QianwenProvider) wanxImageGenerateAsync(ctx context.Context, start time.Time, model, size string, req *ImageGenerateRequest) (*ImageResponse, error) {
+	baseURL := p.dashscopeBaseURL()
+
+	input := map[string]interface{}{"prompt": req.Prompt}
+	if req.NegativePrompt != "" {
+		input["negative_prompt"] = req.NegativePrompt
+	}
+	if req.ReferenceImage != "" {
+		input["ref_img"] = req.ReferenceImage
+	}
+	params := map[string]interface{}{"size": size, "n": 1}
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"model":      model,
+		"input":      input,
+		"parameters": params,
+	})
+
+	submitReq, err := http.NewRequestWithContext(ctx, "POST",
+		baseURL+"/api/v1/services/aigc/text2image/image-synthesis", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	submitReq.Header.Set("Content-Type", "application/json")
+	submitReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	submitReq.Header.Set("X-DashScope-Async", "enable")
+
+	resp, err := p.client.Do(submitReq)
+	if err != nil {
+		return nil, fmt.Errorf("Wan image submit: %w", err)
+	}
+	respBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return &ImageResponse{
+			Error:     fmt.Sprintf("Wan 图像提交失败 (HTTP %d): %s", resp.StatusCode, string(respBody)),
+			LatencyMs: time.Since(start).Milliseconds(),
+		}, nil
+	}
+
+	var submitOut struct {
+		Output  struct {
+			TaskID     string `json:"task_id"`
+			TaskStatus string `json:"task_status"`
+		} `json:"output"`
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(respBody, &submitOut); err != nil {
+		return nil, fmt.Errorf("Wan image: parse submit: %w", err)
+	}
+	if submitOut.Code != "" {
+		return &ImageResponse{
+			Error:     fmt.Sprintf("Wan 图像提交错误 %s: %s", submitOut.Code, submitOut.Message),
+			LatencyMs: time.Since(start).Milliseconds(),
+		}, nil
+	}
+
+	taskID := submitOut.Output.TaskID
+	// 轮询，最多 60 次 × 3s = 3 分钟
+	for range 60 {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(3 * time.Second):
+		}
+
+		pollReq, _ := http.NewRequestWithContext(ctx, "GET",
+			baseURL+"/api/v1/tasks/"+taskID, nil)
+		pollReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+		pollResp, err := p.client.Do(pollReq)
+		if err != nil {
+			continue
+		}
+		pollBody, _ := io.ReadAll(pollResp.Body)
+		pollResp.Body.Close()
+
+		var taskOut struct {
+			Output struct {
+				TaskStatus string `json:"task_status"`
+				Results    []struct {
+					URL  string `json:"url"`
+					Code string `json:"code"`
+				} `json:"results"`
+			} `json:"output"`
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(pollBody, &taskOut); err != nil {
+			continue
+		}
+		if taskOut.Code != "" {
+			return &ImageResponse{
+				Error:     fmt.Sprintf("Wan 图像任务错误 %s: %s", taskOut.Code, taskOut.Message),
+				LatencyMs: time.Since(start).Milliseconds(),
+			}, nil
+		}
+		switch taskOut.Output.TaskStatus {
+		case "SUCCEEDED":
+			if len(taskOut.Output.Results) == 0 {
+				return &ImageResponse{Error: "Wan: 任务成功但无图像结果", LatencyMs: time.Since(start).Milliseconds()}, nil
+			}
+			return &ImageResponse{URL: taskOut.Output.Results[0].URL, LatencyMs: time.Since(start).Milliseconds()}, nil
+		case "FAILED":
+			return &ImageResponse{
+				Error:     fmt.Sprintf("Wan 图像任务失败: task_id=%s", taskID),
+				LatencyMs: time.Since(start).Milliseconds(),
+			}, nil
+		}
+		// PENDING / RUNNING：继续轮询
+	}
+	return &ImageResponse{
+		Error:     fmt.Sprintf("Wan 图像生成超时（3min）: task_id=%s", taskID),
+		LatencyMs: time.Since(start).Milliseconds(),
+	}, nil
+}
+
+// wanxImageGenerateCompat 旧版 wanx-v1 走 OpenAI 兼容同步端点。
+func (p *QianwenProvider) wanxImageGenerateCompat(ctx context.Context, start time.Time, model, size string, req *ImageGenerateRequest) (*ImageResponse, error) {
 	apiReq := map[string]interface{}{
 		"model":  model,
 		"prompt": req.Prompt,
@@ -308,7 +453,6 @@ func (p *QianwenProvider) ImageGenerate(ctx context.Context, req *ImageGenerateR
 	if req.NegativePrompt != "" {
 		apiReq["negative_prompt"] = req.NegativePrompt
 	}
-	// 参考图：通义万象通过 ref_image_url 传参考图
 	if req.ReferenceImage != "" {
 		if strings.HasPrefix(req.ReferenceImage, "http://") || strings.HasPrefix(req.ReferenceImage, "https://") {
 			apiReq["ref_image_url"] = req.ReferenceImage
@@ -318,7 +462,8 @@ func (p *QianwenProvider) ImageGenerate(ctx context.Context, req *ImageGenerateR
 	}
 
 	body, _ := json.Marshal(apiReq)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint+"/images/generations", bytes.NewReader(body))
+	endpoint := strings.TrimRight(p.endpoint, "/")
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint+"/images/generations", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -334,7 +479,7 @@ func (p *QianwenProvider) ImageGenerate(ctx context.Context, req *ImageGenerateR
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK {
 		return &ImageResponse{
-			Error:     fmt.Sprintf("Wan 图像生成错误: %s", string(respBody)),
+			Error:     fmt.Sprintf("Wan 图像生成错误 (HTTP %d): %s", resp.StatusCode, string(respBody)),
 			LatencyMs: time.Since(start).Milliseconds(),
 		}, nil
 	}
@@ -346,11 +491,7 @@ func (p *QianwenProvider) ImageGenerate(ctx context.Context, req *ImageGenerateR
 	if len(result.Data) == 0 {
 		return &ImageResponse{Error: "no image returned", LatencyMs: time.Since(start).Milliseconds()}, nil
 	}
-
-	return &ImageResponse{
-		URL:       result.Data[0].URL,
-		LatencyMs: time.Since(start).Milliseconds(),
-	}, nil
+	return &ImageResponse{URL: result.Data[0].URL, LatencyMs: time.Since(start).Milliseconds()}, nil
 }
 
 // AudioGenerate 合成语音。

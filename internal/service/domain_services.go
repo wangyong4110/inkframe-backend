@@ -426,7 +426,7 @@ func (s *ModelService) CreateModel(req *model.CreateAIModelRequest, tenantID uin
 		Timeout:     req.Timeout,
 		Concurrency: req.Concurrency,
 		RateLimit:   req.RateLimit,
-		IsActive:    false,
+		IsActive:    true, // 用户主动添加的模型直接激活；copySystemModels 预填的才用 false
 	}
 	return m, s.modelRepo.Create(m)
 }
