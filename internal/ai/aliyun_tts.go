@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -35,7 +36,15 @@ type AliyunTTSProvider struct {
 	client   *http.Client
 }
 
-const aliyunTTSDefaultModel = "cosyvoice-v3-flash"
+// aliyunTTSModelForVoice 根据 voice ID 后缀选择正确的 CosyVoice 模型版本。
+// v3 音色（_v3 后缀）→ cosyvoice-v3-flash；v2 及 v1 音色 → cosyvoice-v2。
+// cosyvoice-v3-flash 不支持 v2 特色音色（如 longgaoseng），会返回 engine error 418。
+func aliyunTTSModelForVoice(voice string) string {
+	if strings.HasSuffix(voice, "_v3") {
+		return "cosyvoice-v3-flash"
+	}
+	return "cosyvoice-v2"
+}
 
 // NewAliyunTTSProvider 创建阿里云 CosyVoice 语音合成提供者
 // endpoint 为可选工作区专属域名，如 https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com
@@ -99,7 +108,7 @@ func (p *AliyunTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenerat
 	}
 	model := req.Model
 	if model == "" {
-		model = aliyunTTSDefaultModel
+		model = aliyunTTSModelForVoice(voice)
 	}
 
 	// input 字段：新版 API 将速率/音调等直接放在 input 里
