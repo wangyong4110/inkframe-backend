@@ -1141,6 +1141,41 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		videoPrompt = videoArtStyle + " style, " + videoPrompt
 	}
 
+	// 台词与音效：将旁白、角色台词、音效标签注入 prompt，帮助模型理解画面动作和声音氛围
+	{
+		var extras []string
+		if shot.Narration != "" {
+			n := shot.Narration
+			if len([]rune(n)) > 50 {
+				n = string([]rune(n)[:50]) + "…"
+			}
+			extras = append(extras, "narration: "+n)
+		}
+		if shot.Dialogue != "" {
+			d := shot.Dialogue
+			if len([]rune(d)) > 60 {
+				d = string([]rune(d)[:60]) + "…"
+			}
+			extras = append(extras, "dialogue: "+d)
+		}
+		if shot.SFXTags != "" {
+			if sfxItems := parseSFXTags(shot.SFXTags); len(sfxItems) > 0 {
+				tags := make([]string, 0, len(sfxItems))
+				for _, item := range sfxItems {
+					if item.Tag != "" {
+						tags = append(tags, item.Tag)
+					}
+				}
+				if len(tags) > 0 {
+					extras = append(extras, "sound effects: "+strings.Join(tags, " / "))
+				}
+			}
+		}
+		if len(extras) > 0 {
+			videoPrompt += ", " + strings.Join(extras, ", ")
+		}
+	}
+
 	// TTS 对齐：若分镜有配音，确保视频时长不短于音频时长+缓冲。
 	// alignShotDurationToTTS 仅返回调整值，不持久化到 DB。
 	shotDuration := shot.Duration
