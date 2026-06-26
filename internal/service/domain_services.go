@@ -283,14 +283,17 @@ func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, ten
 }
 
 // inheritVoicesJSON 从同名系统级 provider 复制 voices_json 到租户级 provider。
-// 系统级 provider 无 API Key，租户级 provider 无 voices_json，两者都需要才能出现在音色列表中。
+// 每次调用都强制刷新，确保 seed 更新的新音色能同步到租户 provider。
 func (s *ModelService) inheritVoicesJSON(target *model.ModelProvider) {
-	if target.TenantID == 0 || target.VoicesJSON != "" {
+	if target.TenantID == 0 {
 		return
 	}
 	sys, err := s.providerRepo.GetSystemProvider(target.Name)
 	if err != nil || sys.VoicesJSON == "" {
 		return
+	}
+	if target.VoicesJSON == sys.VoicesJSON {
+		return // 无变化，跳过 DB 写入
 	}
 	target.VoicesJSON = sys.VoicesJSON
 	_ = s.providerRepo.Update(target)

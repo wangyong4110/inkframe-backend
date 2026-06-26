@@ -75,6 +75,10 @@ type AIModel struct {
 	DisplayName string `json:"display_name" gorm:"size:100"`
 	Type        string `json:"type" gorm:"size:50;default:''"` // llm / image / img2img / voice / video / embedding / sfx / music
 
+	// 音色元数据（仅 voice 类型，从 VoiceEntry 填充，不存 DB）
+	Gender   string `json:"gender,omitempty" gorm:"-"`   // male / female / neutral
+	AgeGroup string `json:"age_group,omitempty" gorm:"-"` // child / teen / adult / elder
+
 	// 性能指标
 	MaxTokens int     `json:"max_tokens"`
 	Quality   float64 `json:"quality"` // 0.0-1.0，用于模型选择策略

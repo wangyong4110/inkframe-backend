@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 )
 
@@ -14,10 +15,24 @@ type QianwenTTSRouter struct {
 	qwen   *QwenTTSProvider
 }
 
+// ttsBaseURL 提取 scheme+host，丢弃路径部分（如 /compatible-mode/v1）。
+// qianwen provider 的 APIEndpoint 是 LLM 兼容路径，TTS 子 provider 需要纯 base URL。
+func ttsBaseURL(endpoint string) string {
+	if endpoint == "" {
+		return ""
+	}
+	u, err := url.Parse(endpoint)
+	if err != nil {
+		return endpoint
+	}
+	return u.Scheme + "://" + u.Host
+}
+
 func NewQianwenTTSRouter(apiKey, endpoint string) *QianwenTTSRouter {
+	base := ttsBaseURL(endpoint)
 	return &QianwenTTSRouter{
-		aliyun: NewAliyunTTSProvider(apiKey, endpoint),
-		qwen:   NewQwenTTSProvider(apiKey, endpoint),
+		aliyun: NewAliyunTTSProvider(apiKey, base),
+		qwen:   NewQwenTTSProvider(apiKey, base),
 	}
 }
 

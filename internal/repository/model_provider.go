@@ -210,6 +210,8 @@ func (r *AIModelRepository) getVoicesFromProviders(tenantID uint) ([]*model.AIMo
 				Name:        v.ID,
 				DisplayName: v.Name,
 				Type:        "voice",
+				Gender:      v.Gender,
+				AgeGroup:    v.AgeGroup,
 				Quality:     v.Quality,
 				IsActive:    true,
 			})
