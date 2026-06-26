@@ -65,6 +65,7 @@ type Config struct {
 	CollabHandler          *handler.CollabHandler
 	SysAdminHandler        *handler.SysAdminHandler
 	SensitiveWordHandler   *handler.SensitiveWordHandler
+	FeedbackHandler        *handler.FeedbackHandler
 }
 
 // SetupRouter 配置路由
@@ -712,6 +713,12 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			models.DELETE("/:id/mcp-tools/:tool_id", cfg.McpHandler.UnbindMcpTool)
 		}
 
+		// 用户反馈
+		if cfg.FeedbackHandler != nil {
+			v1.POST("/feedback", cfg.FeedbackHandler.Submit)
+			v1.GET("/feedback/my", cfg.FeedbackHandler.ListMyFeedback)
+		}
+
 		// 敏感词管理（管理员）
 		if cfg.SensitiveWordHandler != nil {
 			sw := v1.Group("/admin/sensitive-words")
@@ -1046,6 +1053,13 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			sa.POST("/notifications/tenant/:id", cfg.SysAdminHandler.NotifyTenant)
 			sa.GET("/experiments", cfg.SysAdminHandler.ListExperiments)
 			sa.POST("/change-password", cfg.SysAdminHandler.ChangePassword)
+			if cfg.FeedbackHandler != nil {
+				sa.GET("/feedback/stats", cfg.FeedbackHandler.AdminStats)
+				sa.GET("/feedback", cfg.FeedbackHandler.AdminList)
+				sa.GET("/feedback/:id", cfg.FeedbackHandler.AdminGet)
+				sa.PUT("/feedback/:id", cfg.FeedbackHandler.AdminUpdate)
+				sa.POST("/feedback/:id/reply", cfg.FeedbackHandler.AdminReply)
+			}
 		}
 	}
 

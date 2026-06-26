@@ -97,6 +97,7 @@ type Repositories struct {
 	NovelMemberRepo          *repository.NovelMemberRepository
 	EditingLockRepo          *repository.EditingLockRepository
 	SensitiveWordRepo        *repository.SensitiveWordRuleRepository
+	FeedbackRepo             *repository.FeedbackRepository
 }
 
 // initRepositories 初始化仓库层
@@ -179,6 +180,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		NovelMemberRepo:          repository.NewNovelMemberRepository(db),
 		EditingLockRepo:          repository.NewEditingLockRepository(db),
 		SensitiveWordRepo:        repository.NewSensitiveWordRuleRepository(db),
+		FeedbackRepo:             repository.NewFeedbackRepository(db),
 	}
 }
 
@@ -801,6 +803,7 @@ type Handlers struct {
 	CollabHandler         *handler.CollabHandler
 	SysAdminHandler       *handler.SysAdminHandler
 	SensitiveWordHandler  *handler.SensitiveWordHandler
+	FeedbackHandler       *handler.FeedbackHandler
 }
 
 // initHandlers 初始化处理器
@@ -913,6 +916,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			service.NewSysAdminService(db, cfg.Server.JWTSecret, cfg.Server.JWTExpiry),
 		).WithAuditService(services.AuditService),
 		SensitiveWordHandler: handler.NewSensitiveWordHandler(repos.SensitiveWordRepo),
+		FeedbackHandler: handler.NewFeedbackHandler(service.NewFeedbackService(repos.FeedbackRepo)),
 	}
 }
 

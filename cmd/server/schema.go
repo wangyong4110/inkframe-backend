@@ -14,7 +14,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-06-25-v19"
+const schemaVersion = "2026-06-27-v1"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -483,6 +483,8 @@ func autoMigrate(db *gorm.DB) error {
 		&model.SensitiveWordRule{},
 		// 内容统计独立表（2026-06-25-v3）
 		&model.ContentStats{},
+		// 用户反馈
+		&model.UserFeedback{},
 	); err != nil {
 		return err
 	}

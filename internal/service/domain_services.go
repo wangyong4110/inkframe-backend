@@ -390,7 +390,30 @@ func (s *ModelService) TestProvider(id uint, tenantID uint) (interface{}, error)
 
 func (s *ModelService) ListModels(providerID *uint, tenantID uint) (interface{}, error) {
 	models, err := s.modelRepo.List(providerID, tenantID)
-	return models, err
+	if err != nil {
+		return nil, err
+	}
+	// When filtering by a specific provider, also surface voice entries stored in VoicesJSON.
+	// These are returned as synthetic AIModel objects with ID=0 (read-only, not in DB).
+	if providerID != nil {
+		provider, pErr := s.providerRepo.GetByID(*providerID)
+		if pErr == nil {
+			for _, v := range provider.ParseVoices() {
+				models = append(models, &model.AIModel{
+					ProviderID:  provider.ID,
+					Provider:    provider,
+					Name:        v.ID,
+					DisplayName: v.Name,
+					Type:        "voice",
+					Gender:      v.Gender,
+					AgeGroup:    v.AgeGroup,
+					Quality:     v.Quality,
+					IsActive:    true,
+				})
+			}
+		}
+	}
+	return models, nil
 }
 
 // GetModel retrieves a single AIModel by ID (used for ownership pre-checks in handlers).
