@@ -784,11 +784,9 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 		applyCharVoice := func(c *model.Character) {
 			if c.VoiceID != "" {
 				voice = c.VoiceID
-			} else {
-				// 角色无显式 voice_id 时，按角色 ID 取模自动分配内置音色。
-				autoVoices := []string{"alloy", "echo", "fable", "nova", "onyx", "shimmer"}
-				voice = autoVoices[c.ID%uint(len(autoVoices))]
 			}
+			// 角色无显式 voice_id 时保持 narrationVoice（全局旁白音色），
+			// 不使用 OpenAI 专用内置音色名（alloy/echo 等），避免 qianwen/doubao 等 provider 返回 InvalidVoice 错误。
 			if c.VoiceSpeed > 0 {
 				speed = c.VoiceSpeed
 			}

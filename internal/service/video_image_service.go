@@ -1014,11 +1014,14 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 
 	logger.Printf("GenerateShotVideo: shot %d provider=%s aspect=%s duration=%.2fs", shot.ShotNo, providerName, videoAspectRatio, shot.Duration)
 
-	// 图片优先策略：先确保 shot.ImageURL 已有图片，再用其作为视频参考图（image-to-video）。
-	// 若 ImageURL 已存在则直接复用，否则先生成并持久化，保证前端可见且视频有参考帧。
+	// 参考图策略：
+	//   ① shot.ImageURL 已生成 → 直接复用（最优质量）
+	//   ② ImageURL 为空 + 角色三视图/场景锚点存在 → 直接用这些作参考图（跳过图片生成）
+	//   ③ ImageURL 为空 + 无任何参考图 → 先生成场景图再用
 	referenceImage := shot.ReferenceImageURL
+	var refLabel string // HappyHorse r2v: label for referenceImage ("角色名" or "")
 	if shot.ImageURL != "" {
-		// 已有正式镜头图，直接复用，无需再次生成
+		// ① 已有正式镜头图，直接复用，无需再次生成
 		referenceImage = shot.ImageURL
 		logger.Printf("GenerateShotVideo: shot %d reusing existing ImageURL as reference: %s", shot.ShotNo, shot.ImageURL)
 		// 迁移旧的本地 DB 路径到 OSS，同时永久更新 DB（只做一次）
@@ -1033,32 +1036,91 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 			}
 		}
 	} else {
-		// 先生成图片：使用 shot.Prompt（image_prompt）+ 角色参考图 → 完整场景图
-		logger.Printf("GenerateShotVideo: shot %d ImageURL empty, generating image first (charIDs=%v)", shot.ShotNo, shot.CharacterIDs)
-		frameURL, frameErr := s.generateShotReferenceImage(shot)
-		if frameErr != nil {
-			logger.Errorf("GenerateShotVideo: shot %d image generation failed: %v", shot.ShotNo, frameErr)
+		// ② 尝试从角色三视图 + 场景锚点收集参考图，若能凑齐则跳过图片生成步骤
+		var charRefImages []string // 按 CharacterIDs 顺序排列，严格一一对应
+		var charRefNames []string  // 与 charRefImages 并行：用于 r2v [Image N] 注解
+		var sceneRefImage string
+
+		if s.characterRepo != nil && len(shot.CharacterIDs) > 0 {
+			chapterNo := 0
+			if shot.ChapterID != nil && s.chapterRepo != nil {
+				if chapter, err := s.chapterRepo.GetByID(*shot.ChapterID); err == nil && chapter != nil {
+					chapterNo = chapter.ChapterNo
+				}
+			}
+			// 按 CharacterIDs 顺序逐个查找，保持与分镜角色的严格对应
+			chars, charErr := s.characterRepo.ListByIDs([]uint(shot.CharacterIDs))
+			if charErr == nil && len(chars) > 0 {
+				// 建立 ID→Character 映射，确保按 CharacterIDs 中的顺序输出（而非 DB 返回顺序）
+				charMap := make(map[uint]*model.Character, len(chars))
+				for _, c := range chars {
+					charMap[c.ID] = c
+				}
+				for _, cid := range shot.CharacterIDs {
+					c, ok := charMap[cid]
+					if !ok {
+						continue
+					}
+					look := s.getCharActiveLook(c, chapterNo)
+					if look != nil && look.ThreeViewSheet != "" {
+						img := normalizeMediaURL(look.ThreeViewSheet)
+						if img != "" {
+							charRefImages = append(charRefImages, img)
+							charRefNames = append(charRefNames, c.Name)
+							logger.Printf("GenerateShotVideo: shot %d charID=%d name=%q → threeView=%q", shot.ShotNo, c.ID, c.Name, img)
+						}
+					} else {
+						logger.Printf("GenerateShotVideo: shot %d charID=%d name=%q has no ThreeViewSheet", shot.ShotNo, c.ID, c.Name)
+					}
+				}
+			}
+		}
+		if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
+			if _, anchorURL, err := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); err == nil && anchorURL != "" {
+				sceneRefImage = anchorURL
+			}
+		}
+
+		if len(charRefImages) > 0 || sceneRefImage != "" {
+			// ② 有角色三视图或场景图，直接用，无需生成中间图片
+			if len(charRefImages) > 0 {
+				referenceImage = charRefImages[0] // 第一个角色三视图作主参考图
+				if len(charRefNames) > 0 {
+					refLabel = charRefNames[0]
+				}
+			} else {
+				referenceImage = sceneRefImage
+				sceneRefImage = ""
+			}
+			// 其余角色三视图 + 场景图暂存到 shot.ReferenceImageURL（仅内存，不持久化）
+			// 后面 extraRefImages 逻辑会统一读取
+			_ = sceneRefImage // 场景图在下方 extraRefImages 逻辑中通过 sceneAnchorSvc 再次获取
+			logger.Printf("GenerateShotVideo: shot %d no ImageURL — using char refs=%d scene=%v directly", shot.ShotNo, len(charRefImages), sceneRefImage != "")
 		} else {
-			logger.Printf("GenerateShotVideo: shot %d image generated: %s", shot.ShotNo, frameURL)
-		}
-		if frameURL == "" {
-			errMsg := "image generation failed: empty URL returned"
+			// ③ 无任何参考图 → 先生成场景图
+			logger.Printf("GenerateShotVideo: shot %d ImageURL empty and no char refs, generating image first", shot.ShotNo)
+			frameURL, frameErr := s.generateShotReferenceImage(shot)
 			if frameErr != nil {
-				errMsg = "image generation failed: " + frameErr.Error()
+				logger.Errorf("GenerateShotVideo: shot %d image generation failed: %v", shot.ShotNo, frameErr)
 			}
-			if e := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"status": "failed", "error_message": errMsg}); e != nil {
-				logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d status=failed: %v", shot.ID, e)
+			if frameURL == "" {
+				errMsg := "image generation failed: empty URL returned"
+				if frameErr != nil {
+					errMsg = "image generation failed: " + frameErr.Error()
+				}
+				if e := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"status": "failed", "error_message": errMsg}); e != nil {
+					logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d status=failed: %v", shot.ID, e)
+				}
+				if frameErr != nil {
+					return frameErr
+				}
+				return fmt.Errorf("shot %d: %s", shot.ShotNo, errMsg)
 			}
-			if frameErr != nil {
-				return frameErr
+			shot.ImageURL = frameURL
+			referenceImage = frameURL
+			if updateErr := s.storyboardRepo.Update(shot); updateErr != nil {
+				logger.Errorf("GenerateShotVideo: shot %d failed to persist ImageURL: %v", shot.ShotNo, updateErr)
 			}
-			return fmt.Errorf("shot %d: %s", shot.ShotNo, errMsg)
-		}
-		shot.ImageURL = frameURL
-		referenceImage = frameURL
-		// 立即持久化图片 URL，确保视频生成失败时图片不丢失
-		if updateErr := s.storyboardRepo.Update(shot); updateErr != nil {
-			logger.Errorf("GenerateShotVideo: shot %d failed to persist ImageURL: %v", shot.ShotNo, updateErr)
 		}
 	}
 
@@ -1139,38 +1201,38 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		negativePrompt = negativeBase + ", " + shot.NegativePrompt
 	}
 
-	// Seedance / Kling 均支持多张参考图：在主参考图（scene image）之外追加角色形象图和场景锚点图，
-	// 提升角色一致性和场景一致性。
+	// Seedance / Kling / HappyHorse 均支持多张参考图：在主参考图之外追加角色三视图和场景锚点图，
+	// 角色按 CharacterIDs 顺序严格排列，保持和分镜角色的一一对应关系。
 	var extraRefImages []string
-	multiImageProviders := map[string]bool{"seedance": true, "kling": true}
+	var extraRefLabels []string // HappyHorse r2v：与 extraRefImages 并行的标签（角色名 / "场景背景"）
+	multiImageProviders := map[string]bool{"seedance": true, "kling": true, "happyhorse": true}
 	if multiImageProviders[providerName] && s.characterRepo != nil && len(shot.CharacterIDs) > 0 {
-		if chars, charErr := s.characterRepo.ListByIDs([]uint(shot.CharacterIDs)); charErr == nil {
-			// 批量获取默认形象（通过 Character.DefaultLookID）
-			lookIDs := make([]uint, 0, len(chars))
-			charByLookID := make(map[uint]*model.Character, len(chars))
-			for _, c := range chars {
-				if c.DefaultLookID != 0 {
-					lookIDs = append(lookIDs, c.DefaultLookID)
-					charByLookID[c.DefaultLookID] = c
-				}
+		chapterNo := 0
+		if shot.ChapterID != nil && s.chapterRepo != nil {
+			if chapter, err := s.chapterRepo.GetByID(*shot.ChapterID); err == nil && chapter != nil {
+				chapterNo = chapter.ChapterNo
 			}
-			defaultLooksMap := map[uint]*model.CharacterLook{} // charID → look
-			if s.lookRepo != nil && len(lookIDs) > 0 {
-				if lm, lErr := s.lookRepo.BatchGetLooksByIDs(lookIDs); lErr == nil {
-					for lid, look := range lm {
-						if c, ok := charByLookID[lid]; ok {
-							defaultLooksMap[c.ID] = look
-						}
-					}
-				}
-			}
+		}
+		chars, charErr := s.characterRepo.ListByIDs([]uint(shot.CharacterIDs))
+		if charErr == nil && len(chars) > 0 {
+			charMap := make(map[uint]*model.Character, len(chars))
 			for _, c := range chars {
+				charMap[c.ID] = c
+			}
+			// 按 CharacterIDs 顺序遍历，严格对应角色顺序
+			for _, cid := range shot.CharacterIDs {
+				c, ok := charMap[cid]
+				if !ok {
+					continue
+				}
+				look := s.getCharActiveLook(c, chapterNo)
 				var img string
-				if look, ok := defaultLooksMap[c.ID]; ok {
+				if look != nil {
 					img = normalizeMediaURL(look.ThreeViewSheet)
 				}
 				if img != "" && img != referenceImage {
 					extraRefImages = append(extraRefImages, img)
+					extraRefLabels = append(extraRefLabels, c.Name)
 				}
 			}
 		}
@@ -1178,6 +1240,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	if multiImageProviders[providerName] && s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
 		if _, anchorRefURL, anchorErr := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); anchorErr == nil && anchorRefURL != "" && anchorRefURL != referenceImage {
 			extraRefImages = append(extraRefImages, anchorRefURL)
+			extraRefLabels = append(extraRefLabels, "场景背景")
 		}
 	}
 
@@ -1190,11 +1253,46 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		}
 	}
 
+	// HappyHorse r2v：在 prompt 前缀注入 [Image N] 角色引用，帮助模型区分多张参考图中的人物
+	// 官方文档：prompt 中使用 "[Image N]中的{名字}" 引用 media 数组第 N 张图（1-based）
+	if providerName == "happyhorse" && (absRef != "" || len(absExtras) > 0) {
+		totalImages := 0
+		if absRef != "" {
+			totalImages++
+		}
+		totalImages += len(absExtras)
+		if totalImages >= 2 {
+			allLabels := make([]string, 0, 1+len(extraRefLabels))
+			allLabels = append(allLabels, refLabel) // label for absRef ("角色名" or "")
+			allLabels = append(allLabels, extraRefLabels...)
+			var annotations []string
+			for i, label := range allLabels {
+				if i < totalImages && label != "" {
+					annotations = append(annotations, fmt.Sprintf("[Image %d]为%s", i+1, label))
+				}
+			}
+			if len(annotations) > 0 {
+				videoPromptFinal = strings.Join(annotations, "，") + "。" + videoPromptFinal
+			}
+		}
+	}
+
+	// HappyHorse 分辨率：HD 模式用 1080P，否则 720P
+	videoResolution := ""
+	if providerName == "happyhorse" {
+		if hdEnabled {
+			videoResolution = "1080p"
+		} else {
+			videoResolution = "720p"
+		}
+	}
+
 	req := &ai.VideoGenerateRequest{
 		Prompt:         videoPromptFinal,
 		NegativePrompt: negativePrompt,
 		Duration:       shotDuration,
 		AspectRatio:    videoAspectRatio,
+		Resolution:     videoResolution,
 		ImageURL:       absRef,     // 主参考图（生成的场景图），image-to-video；空时退化为 text-to-video
 		ImageURLs:      absExtras,  // 额外参考图（Seedance 多图支持）
 		CFGScale:       klingCFG,

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -149,6 +150,10 @@ func (p *HappyHorseProvider) GenerateVideo(ctx context.Context, req *VideoGenera
 	// ratio：t2v 和 r2v 支持；i2v 不支持（自动跟随输入图片比例）
 	if req.AspectRatio != "" && mode != "i2v" {
 		params["ratio"] = req.AspectRatio
+	}
+	// resolution：720P / 1080P；i2v 不支持（自动跟随输入图）
+	if req.Resolution != "" && mode != "i2v" {
+		params["resolution"] = strings.ToUpper(req.Resolution)
 	}
 
 	apiReq := map[string]interface{}{
