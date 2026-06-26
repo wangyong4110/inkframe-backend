@@ -235,6 +235,7 @@ func (s *ModelService) SeedAllProviders() {
 		s.seedProviderModel(p)
 		s.copySystemModels(p)
 		s.inheritVoicesJSON(p)
+		s.seedVoiceModels(p)
 	}
 }
 
@@ -259,6 +260,36 @@ func (s *ModelService) copySystemModels(target *model.ModelProvider) {
 			IsActive:    false,
 		}
 		_ = s.modelRepo.FirstOrCreate(newM)
+		// 若模型已存在但 display_name 为空（例如用户手动提前添加），则补填
+		if newM.DisplayName == "" && d.DisplayName != "" {
+			newM.DisplayName = d.DisplayName
+			_ = s.modelRepo.Update(newM)
+		}
+	}
+}
+
+// seedVoiceModels 将 provider.VoicesJSON 里的音色同步为 ink_ai_model 记录（幂等）。
+// 音色条目以 voice.ID 作为模型 Name，type="voice"，IsActive=false，供用户按需启用。
+func (s *ModelService) seedVoiceModels(target *model.ModelProvider) {
+	if target.TenantID == 0 {
+		return
+	}
+	voices := target.ParseVoices()
+	for _, v := range voices {
+		m := &model.AIModel{
+			ProviderID:  target.ID,
+			Name:        v.ID,
+			DisplayName: v.Name,
+			Type:        "voice",
+			Quality:     v.Quality,
+			IsActive:    false,
+		}
+		_ = s.modelRepo.FirstOrCreate(m)
+		// 补填空 display_name（音色名称可能在后续 seed 更新中变化）
+		if m.DisplayName == "" && v.Name != "" {
+			m.DisplayName = v.Name
+			_ = s.modelRepo.Update(m)
+		}
 	}
 }
 
@@ -279,6 +310,7 @@ func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, ten
 	s.seedProviderModel(provider)
 	s.copySystemModels(provider)
 	s.inheritVoicesJSON(provider)
+	s.seedVoiceModels(provider)
 	return provider, nil
 }
 
@@ -393,26 +425,6 @@ func (s *ModelService) ListModels(providerID *uint, tenantID uint) (interface{},
 	if err != nil {
 		return nil, err
 	}
-	// When filtering by a specific provider, also surface voice entries stored in VoicesJSON.
-	// These are returned as synthetic AIModel objects with ID=0 (read-only, not in DB).
-	if providerID != nil {
-		provider, pErr := s.providerRepo.GetByID(*providerID)
-		if pErr == nil {
-			for _, v := range provider.ParseVoices() {
-				models = append(models, &model.AIModel{
-					ProviderID:  provider.ID,
-					Provider:    provider,
-					Name:        v.ID,
-					DisplayName: v.Name,
-					Type:        "voice",
-					Gender:      v.Gender,
-					AgeGroup:    v.AgeGroup,
-					Quality:     v.Quality,
-					IsActive:    true,
-				})
-			}
-		}
-	}
 	return models, nil
 }
 
@@ -433,6 +445,7 @@ func (s *ModelService) CreateModel(req *model.CreateAIModelRequest, tenantID uin
 	m := &model.AIModel{
 		ProviderID:  req.ProviderID,
 		Name:        req.Name,
+		DisplayName: req.DisplayName,
 		Type:        req.Type,
 		Quality:     req.Quality,
 		MaxTokens:   req.MaxTokens,

@@ -277,6 +277,7 @@ type CreateAIModelRequest struct {
 	ProviderID  uint    `json:"provider_id" binding:"required"`
 	ModelID     string  `json:"model_id" binding:"required"`
 	Name        string  `json:"name" binding:"required"`
+	DisplayName string  `json:"display_name"`
 	Type        string  `json:"type"`
 	Quality     float64 `json:"quality"`   // 0.0–1.0，0=不设置
 	MaxTokens   int     `json:"max_tokens"`
