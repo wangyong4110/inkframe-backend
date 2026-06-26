@@ -64,30 +64,11 @@ type CharacterStateSnapshot struct {
 	CharacterID uint `json:"character_id" gorm:"index;not null;uniqueIndex:uniq_snapshot_char_chapter,priority:1"`
 	ChapterID   uint `json:"chapter_id" gorm:"index;uniqueIndex:uniq_snapshot_char_chapter,priority:2"`
 
-	// 物理状态
-	Age      float64 `json:"age"`
-	Height   float64 `json:"height"`                    // 单位：米
-	Weight   float64 `json:"weight"`                    // 单位：公斤
-	Health   string  `json:"health" gorm:"size:50"`     // healthy, injured, critical
-	Injuries string  `json:"injuries" gorm:"type:text"` // JSON: [{part, severity, description}]
-
-	// 能力状态
+	Health     string `json:"health" gorm:"size:50"` // healthy, injured, critical
 	PowerLevel int    `json:"power_level"`
-	Abilities  string `json:"abilities" gorm:"type:text"` // JSON
-	Equipment  string `json:"equipment" gorm:"type:text"` // JSON
-
-	// 心理状态
 	Mood       string `json:"mood" gorm:"size:50"`
 	Motivation string `json:"motivation" gorm:"size:200"`
-	Goals      string `json:"goals" gorm:"type:text"` // JSON
-	Fears      string `json:"fears" gorm:"type:text"` // JSON
-
-	// 位置状态
-	Location       string `json:"location" gorm:"size:200"`
-	KnownLocations string `json:"known_locations" gorm:"type:text"` // JSON
-
-	// 关系状态
-	Relations string `json:"relations" gorm:"type:text"` // JSON: [{character_id, attitude, recent_interaction}]
+	Location   string `json:"location" gorm:"size:200"`
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`

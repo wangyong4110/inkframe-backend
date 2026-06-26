@@ -410,11 +410,10 @@ func (s *CharacterArcService) GetCharacterArc(novelID, characterID uint) (*Chara
 
 	for i, snap := range snapshots {
 		stage := &CharacterArcStage{
-			ChapterNo:     len(snapshots) - i,
-			State:         snap.Motivation,
-			PowerLevel:    snap.PowerLevel,
-			Mood:          snap.Mood,
-			Relationships: snap.Relations,
+			ChapterNo:  len(snapshots) - i,
+			State:      snap.Motivation,
+			PowerLevel: snap.PowerLevel,
+			Mood:       snap.Mood,
 		}
 		arc.Stages = append(arc.Stages, stage)
 	}

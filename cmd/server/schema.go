@@ -935,7 +935,15 @@ func runSchemaCleanup(db *gorm.DB) {
 	}
 	// ── v18：废弃整表清理（2026-06-25-v18）资产库设计优化
 	// 幂等：DROP TABLE IF EXISTS
-	for _, tbl := range []string{"ink_media_asset", "ink_asset_request"} {
+	// ink_character_appearance：出场信息已于 2026-06-25-v5 迁入 ink_chapter_character，孤立表清理
+	// ink_chapter_like / ink_novel_like / ink_video_like：点赞数据已迁入 ink_entity_like，孤立表清理
+	// ink_novel_comment / ink_chapter_comment / ink_video_comment：评论数据已迁入 ink_entity_comment，孤立表清理
+	for _, tbl := range []string{
+		"ink_media_asset", "ink_asset_request",
+		"ink_character_appearance",
+		"ink_chapter_like", "ink_novel_like", "ink_video_like",
+		"ink_novel_comment", "ink_chapter_comment", "ink_video_comment",
+	} {
 		var tblExists int64
 		db.Raw(`SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?`, tbl).Scan(&tblExists)
 		if tblExists > 0 {

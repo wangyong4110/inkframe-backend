@@ -1271,24 +1271,14 @@ func (s *NovelService) SyncCharacterSnapshots(
 				continue
 			}
 			snap := &model.CharacterStateSnapshot{
-				NovelID:        chapter.NovelID,
-				CharacterID:    char.ID,
-				ChapterID:      chapter.ID,
-				Age:            prevSnap.Age,
-				Height:         prevSnap.Height,
-				Weight:         prevSnap.Weight,
-				Health:         prevSnap.Health,
-				Injuries:       prevSnap.Injuries,
-				PowerLevel:     prevSnap.PowerLevel,
-				Abilities:      prevSnap.Abilities,
-				Equipment:      prevSnap.Equipment,
-				Mood:           prevSnap.Mood,
-				Motivation:     prevSnap.Motivation,
-				Goals:          prevSnap.Goals,
-				Fears:          prevSnap.Fears,
-				Location:       prevSnap.Location,
-				KnownLocations: prevSnap.KnownLocations,
-				Relations:      prevSnap.Relations,
+				NovelID:     chapter.NovelID,
+				CharacterID: char.ID,
+				ChapterID:   chapter.ID,
+				Health:      prevSnap.Health,
+				PowerLevel:  prevSnap.PowerLevel,
+				Mood:        prevSnap.Mood,
+				Motivation:  prevSnap.Motivation,
+				Location:    prevSnap.Location,
 			}
 			if e := s.snapshotRepo.Upsert(snap); e != nil {
 				logger.Errorf("SyncCharacterSnapshots: copy snapshot char %d: %v", char.ID, e)
@@ -1358,17 +1348,6 @@ func (s *NovelService) SyncCharacterSnapshots(
 			continue
 		}
 
-		// 沿用上章快照中的静态字段（身高体重等，直接从预取 map 查找）
-		var baseAbilities, baseEquipment string
-		var age, height, weight float64
-		if ps := prevSnapMap[char.ID]; ps != nil {
-			age, height, weight = ps.Age, ps.Height, ps.Weight
-			baseEquipment = ps.Equipment
-		}
-		abilities := state.Abilities
-		if abilities == "" {
-			abilities = baseAbilities
-		}
 		health := state.Health
 		if health == "" {
 			health = "healthy"
@@ -1378,13 +1357,8 @@ func (s *NovelService) SyncCharacterSnapshots(
 			NovelID:     chapter.NovelID,
 			CharacterID: char.ID,
 			ChapterID:   chapter.ID,
-			Age:         age,
-			Height:      height,
-			Weight:      weight,
 			Health:      health,
 			PowerLevel:  state.PowerLevel,
-			Abilities:   abilities,
-			Equipment:   baseEquipment,
 			Mood:        state.Mood,
 			Motivation:  state.Motivation,
 			Location:    state.Location,
