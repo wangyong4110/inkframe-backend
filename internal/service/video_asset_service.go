@@ -353,10 +353,13 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 		logger.Errorf("warn: could not read audio for segment %d: %v", segID, err)
 	}
 
+	// 检测音频格式（通过 magic bytes），用于时长解析和 OSS 上传
+	audioFmt, audioContentType, audioExt := detectAudioFormat(audioData)
+
 	// 上传到持久存储（如果配置了 storageSvc）
 	if s.storageSvc != nil && len(audioData) > 0 {
-		key := fmt.Sprintf("audio/%s.mp3", uuid.New().String())
-		ossURL, e := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(audioData), int64(len(audioData)), "audio/mpeg")
+		key := fmt.Sprintf("audio/%s%s", uuid.New().String(), audioExt)
+		ossURL, e := s.storageSvc.Upload(context.Background(), key, bytes.NewReader(audioData), int64(len(audioData)), audioContentType)
 		if e != nil {
 			logger.Errorf("GenerateSegmentAudio: OSS upload failed for segment %d: %v", segID, e)
 			return e
@@ -369,7 +372,7 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 
 	// Persist audio path + measured duration
 	fields := map[string]interface{}{"audio_path": audioURL}
-	if d := mp3Duration(audioData); d > 0 {
+	if d := calcAudioDuration(audioData, audioFmt); d > 0 {
 		fields["duration_secs"] = d
 	}
 	if err := s.segmentRepo.UpdateFields(segID, fields); err != nil {
@@ -881,4 +884,24 @@ func mapEmotionalToneToTTS(tone string) string {
 	default:
 		return ""
 	}
+}
+
+// detectAudioFormat 通过 magic bytes 检测音频格式，返回 (format, contentType, fileExt)。
+// 支持 WAV（RIFF 头）和 MP3（默认）。
+func detectAudioFormat(data []byte) (format, contentType, ext string) {
+	if len(data) >= 4 && data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F' {
+		return "wav", "audio/wav", ".wav"
+	}
+	return "mp3", "audio/mpeg", ".mp3"
+}
+
+// calcAudioDuration 根据格式从原始字节计算音频时长（秒）。
+func calcAudioDuration(data []byte, format string) float64 {
+	if format == "wav" {
+		if micros := wavDurationMicros(data); micros > 0 {
+			return float64(micros) / 1_000_000.0
+		}
+		return 0
+	}
+	return mp3Duration(data)
 }

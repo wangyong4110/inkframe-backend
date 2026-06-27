@@ -284,7 +284,6 @@ type CreateAIModelRequest struct {
 	Timeout     int     `json:"timeout"`
 	Concurrency int     `json:"concurrency"`
 	RateLimit   int     `json:"rate_limit"`
-	IsDefault   bool    `json:"is_default"`
 }
 
 type UpdateAIModelRequest struct {
@@ -296,7 +295,6 @@ type UpdateAIModelRequest struct {
 	Timeout     *int     `json:"timeout"`
 	Concurrency *int     `json:"concurrency"`
 	RateLimit   *int     `json:"rate_limit"`
-	IsDefault   *bool    `json:"is_default"`
 	IsActive    *bool    `json:"is_active"`
 }
 
