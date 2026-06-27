@@ -178,6 +178,11 @@ func (s *ModelService) GetProvider(id uint, tenantID uint) (*model.ModelProvider
 	return s.providerRepo.GetByIDAndTenant(id, tenantID)
 }
 
+// FindProviderByName 按名称查找指定租户的提供商，用于重名冲突提示。
+func (s *ModelService) FindProviderByName(name string, tenantID uint) (*model.ModelProvider, error) {
+	return s.providerRepo.GetByNameAndTenant(name, tenantID)
+}
+
 
 // typeForProviderType returns the model type string for a provider type.
 func typeForProviderType(providerType string) string {

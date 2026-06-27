@@ -95,6 +95,15 @@ func (r *ModelProviderRepository) GetSystemProvider(name string) (*model.ModelPr
 	return &provider, nil
 }
 
+// GetByNameAndTenant 按名称和租户查找提供商（含软删除过滤）
+func (r *ModelProviderRepository) GetByNameAndTenant(name string, tenantID uint) (*model.ModelProvider, error) {
+	var provider model.ModelProvider
+	if err := r.db.Where("name = ? AND tenant_id = ?", name, tenantID).First(&provider).Error; err != nil {
+		return nil, err
+	}
+	return &provider, nil
+}
+
 // Create 创建提供商
 func (r *ModelProviderRepository) Create(provider *model.ModelProvider) error {
 	// 清理同 (tenant_id, name) 的历史软删除记录，避免唯一索引冲突。

@@ -113,19 +113,28 @@ func (h *ModelHandler) CreateProvider(c *gin.Context) {
 		return
 	}
 
-	provider, err := h.modelService.CreateProvider(&req, getTenantID(c))
+	tenantID := getTenantID(c)
+	provider, err := h.modelService.CreateProvider(&req, tenantID)
 	if err != nil {
 		if isDuplicateKeyError(err) {
-			respondErr(c, http.StatusConflict, "该名称的提供商已存在，请修改名称或直接编辑已有提供商")
+			// 查找已有 provider 的 ID，返回给前端便于直接跳转编辑页
+			existingID := uint(0)
+			if existing, e := h.modelService.FindProviderByName(req.Name, tenantID); e == nil {
+				existingID = existing.ID
+			}
+			c.JSON(http.StatusConflict, gin.H{
+				"code":        409,
+				"message":     "该名称的提供商已存在，请直接编辑已有提供商",
+				"existing_id": existingID,
+			})
 			return
 		}
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-
 	if h.auditSvc != nil {
 		h.auditSvc.LogEntry(service.AuditEntry{
-			TenantID:     getTenantID(c),
+			TenantID:     tenantID,
 			UserID:       getUserID(c),
 			Action:       "provider.create",
 			ResourceType: "provider",

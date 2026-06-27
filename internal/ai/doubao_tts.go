@@ -160,6 +160,7 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 	if err != nil {
 		// resource 级别错误（55000000 不匹配 或 403 未授权）→ 按顺序尝试备选 resource ID
 		if _, ok := err.(*doubaoResourceErr); ok && req.Model == "" {
+			triedResources := []string{resourceID}
 			for _, fallback := range doubaoSpeechResourceFallbacks {
 				if fallback == resourceID {
 					continue
@@ -168,6 +169,7 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 				if buildErr != nil {
 					continue
 				}
+				triedResources = append(triedResources, fallback)
 				audioData, totalTextWords, err = p.doDoubaoSpeechRequest(ctx, retryBody, fallback)
 				if err == nil {
 					break
@@ -177,12 +179,17 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 					break
 				}
 			}
+			// 所有 resource 均失败，用更清晰的错误提示替代"最后一个 resource ID 不匹配"
+			if err != nil {
+				if _, isResourceErr := err.(*doubaoResourceErr); isResourceErr {
+					return nil, fmt.Errorf(
+						"doubao-speech: 音色 %q 在所有接入点 %v 均未授权或不匹配，请在豆包语音 V3 控制台开通所需音色并确认已绑定对应接入点（Resource ID）：\nhttps://console.volcengine.com/speech/new/overview?projectName=default",
+						speaker, triedResources,
+					)
+				}
+			}
 		}
 		if err != nil {
-			// 所有 resource 均失败，给出控制台链接帮助用户排查
-			if _, isResourceErr := err.(*doubaoResourceErr); isResourceErr {
-				return nil, fmt.Errorf("%w\n\n请前往豆包语音 V3 控制台确认音色授权及接入点（Resource ID）配置：\nhttps://console.volcengine.com/speech/new/overview?projectName=default", err)
-			}
 			return nil, err
 		}
 	}
