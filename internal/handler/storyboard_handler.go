@@ -226,12 +226,10 @@ func (h *VideoHandler) GetStoryboard(c *gin.Context) {
 
 // ServeAudio 供前端播放配音文件
 // GET /api/v1/videos/:id/storyboard/:shot_id/audio
+// 该端点位于公开路由区域（无 JWT），用 shot.VideoID 校验归属关系。
 func (h *VideoHandler) ServeAudio(c *gin.Context) {
 	videoId, ok := parseID(c, "id")
 	if !ok {
-		return
-	}
-	if _, ok := h.getVideoForTenant(c, uint(videoId)); !ok {
 		return
 	}
 	shotID, ok := parseID(c, "shot_id")
@@ -241,6 +239,10 @@ func (h *VideoHandler) ServeAudio(c *gin.Context) {
 
 	shot, err := h.videoService.GetShot(uint(shotID))
 	if err != nil {
+		respondErr(c, http.StatusNotFound, "shot not found")
+		return
+	}
+	if shot.VideoID != uint(videoId) {
 		respondErr(c, http.StatusNotFound, "shot not found")
 		return
 	}
@@ -264,6 +266,7 @@ func (h *VideoHandler) ServeAudio(c *gin.Context) {
 	}
 	if strings.HasPrefix(audioPath, "file://") {
 		filePath := strings.TrimPrefix(audioPath, "file://")
+		c.Header("Content-Type", "audio/mpeg")
 		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
 		c.File(filePath)
 		return
