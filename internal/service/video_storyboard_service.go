@@ -1003,8 +1003,11 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			Expression string `json:"expression"`
 			Pose       string `json:"pose"`
 		} `json:"characters"`
-		Transition string `json:"transition"`
-		SFXTags    []struct {
+		Subtitle      string `json:"subtitle"`       // 画面叠字：时间词或关键字幕（非空时叠加在视频画面上）
+		Transition    string `json:"transition"`
+		TransitionOut string `json:"transition_out"` // 本镜头如何结束（画面状态/角色动作/镜头动势）
+		TransitionIn  string `json:"transition_in"`  // 本镜头如何开始（衔接上一镜头 TransitionOut）
+		SFXTags       []struct {
 			Tag     string `json:"tag"`
 			SFXType string `json:"type"`
 			Prompt  string `json:"prompt"`
@@ -1111,6 +1114,7 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			ShotNo:         shotNo,
 			Description:    r.Description,
 			Narration:      r.Narration,
+			Subtitle:       r.Subtitle,
 			Prompt:         imagePrompt,
 			MotionPrompt:   videoPrompt,
 			NegativePrompt: r.NegativePrompt,
@@ -1120,6 +1124,8 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			ShotSize:       shotSize,
 			Duration:       duration,
 			Transition:     validTransition(r.Transition),
+			TransitionOut:  r.TransitionOut,
+			TransitionIn:   r.TransitionIn,
 			Characters:     charsJSON,
 			Scene:          sceneJSON,
 			EmotionalTone:  r.EmotionalTone,
@@ -1390,6 +1396,7 @@ func (s *VideoService) UpdateShotPartial(id uint, fields map[string]interface{})
 		"emotional_tone": true, "transition": true, "status": true, "generation_mode": true,
 		"image_url": true,
 		"prompt": true, "motion_prompt": true,
+		"transition_out": true, "transition_in": true,
 	}
 	safe := make(map[string]interface{}, len(fields))
 	for k, v := range fields {
@@ -1878,6 +1885,8 @@ type shotOptimizeUpdate struct {
 	Duration      float64 `json:"duration"`
 	EmotionalTone string  `json:"emotional_tone"`
 	Transition    string  `json:"transition"`
+	TransitionOut string  `json:"transition_out"`
+	TransitionIn  string  `json:"transition_in"`
 }
 
 func (u shotOptimizeUpdate) toFieldMap() map[string]interface{} {
@@ -1908,6 +1917,12 @@ func (u shotOptimizeUpdate) toFieldMap() map[string]interface{} {
 	}
 	if u.Transition != "" {
 		m["transition"] = u.Transition
+	}
+	if u.TransitionOut != "" {
+		m["transition_out"] = u.TransitionOut
+	}
+	if u.TransitionIn != "" {
+		m["transition_in"] = u.TransitionIn
 	}
 	return m
 }

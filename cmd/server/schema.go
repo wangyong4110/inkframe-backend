@@ -218,6 +218,11 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_skill",                  "image_url",  "VARCHAR(500) NOT NULL DEFAULT ''"},
 		// 资产库设计优化（2026-06-25-v19）
 		{"ink_asset_storage_quota", "quota_month", "VARCHAR(7) NOT NULL DEFAULT ''"},
+		// 转场衔接语义字段（2026-06-27）
+		{"ink_storyboard_shot", "transition_out", "TEXT NULL"},
+		{"ink_storyboard_shot", "transition_in",  "TEXT NULL"},
+		// 时间转场画面叠字（2026-06-27）
+		{"ink_storyboard_shot", "subtitle", "TEXT NULL"},
 	}
 	for _, a := range additions {
 		// 表不存在时跳过（AutoMigrate 会建表，建表时列也会随 struct 定义一同创建）

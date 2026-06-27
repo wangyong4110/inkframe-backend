@@ -83,7 +83,17 @@ func (p *SeedanceProvider) GenerateVideo(ctx context.Context, req *VideoGenerate
 		}
 	}
 
-	content := make([]map[string]interface{}, 0, len(allImages)+1)
+	content := make([]map[string]interface{}, 0, len(req.VideoURLs)+len(allImages)+1)
+
+	// 参考视频（Seedance 2.0 多模态时序链接）：放在图片之前，让模型优先理解运动趋势
+	for _, vURL := range req.VideoURLs {
+		if vURL != "" {
+			content = append(content, map[string]interface{}{
+				"type":      "video_url",
+				"video_url": map[string]string{"url": vURL},
+			})
+		}
+	}
 
 	// 图生视频：将所有参考图依序放入 content（Seedance content 数组支持多个 image_url）
 	for _, imgURL := range allImages {

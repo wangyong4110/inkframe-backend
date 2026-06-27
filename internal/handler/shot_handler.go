@@ -114,13 +114,21 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 		}()
 		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
-		shots, genErr := h.videoService.BatchGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, progressFn, req.Provider)
+		var shots []*model.StoryboardShot
+		var genErr error
+		if req.Sequential {
+			// 顺序模式：每镜完成后同步 chain 最后一帧再提交下一镜，保证 I2V 链接
+			shots, genErr = h.videoService.SequentialGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, progressFn, req.Provider)
+		} else {
+			shots, genErr = h.videoService.BatchGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, progressFn, req.Provider)
+		}
 		if genErr != nil {
 			logger.Errorf("[VideoHandler] BatchGenerateShots task %s failed: %v", taskID, genErr)
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
 			return
 		}
-		// AI 视频模式：阻塞等待轮询完成，任务完成后前端才能看到真实视频
+		// 并发模式下：AI 视频任务仍在 processing，启动轮询等待所有镜头完成
+		// 顺序模式下：所有镜头已完成，PollAndStitchVideo 会快速完成
 		for _, sh := range shots {
 			if sh.Status == "processing" {
 				h.videoService.PollAndStitchVideo(uint(videoID))

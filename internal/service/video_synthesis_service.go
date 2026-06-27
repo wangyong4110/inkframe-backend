@@ -1468,3 +1468,42 @@ func (s *VideoService) uploadClipToStorage(ctx context.Context, shot *model.Stor
 	}
 	return ossURL
 }
+
+// ─── Sequential Generation Helpers ───────────────────────────────────────────
+
+// waitForShotCompletion 同步轮询单个分镜，直到其状态变为 completed 或 failed。
+// 用于顺序生成模式（SequentialGenerateShots），保证下一镜头提交前当前镜头已完全生成。
+// 完成后同步调用 chainLastFrameToNextShot，确保下一镜头的 ReferenceImageURL 已写入 DB。
+func (s *VideoService) waitForShotCompletion(shot *model.StoryboardShot, timeout time.Duration) (*model.StoryboardShot, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		current, err := s.storyboardRepo.GetByID(shot.ID)
+		if err != nil {
+			return nil, fmt.Errorf("shot %d: %w", shot.ShotNo, err)
+		}
+		switch current.Status {
+		case "completed":
+			// 同步 chain：下一镜头尚未提交，此处保证 reference_image_url 已写入
+			s.chainLastFrameToNextShot(current)
+			return current, nil
+		case "failed":
+			return nil, fmt.Errorf("shot %d failed: %s", shot.ShotNo, current.ErrorMessage)
+		}
+		// 仍在处理中 — 主动触发一次状态轮询
+		if current.ShotTaskID != "" {
+			if pollErr := s.PollShotStatus(current); pollErr != nil {
+				logger.Errorf("waitForShotCompletion: shot %d poll: %v", shot.ShotNo, pollErr)
+			}
+			// PollShotStatus 已修改 current.Status：避免多睡 5s
+			switch current.Status {
+			case "completed":
+				s.chainLastFrameToNextShot(current)
+				return current, nil
+			case "failed":
+				return nil, fmt.Errorf("shot %d failed: %s", shot.ShotNo, current.ErrorMessage)
+			}
+		}
+		time.Sleep(5 * time.Second)
+	}
+	return nil, fmt.Errorf("shot %d timed out after %v", shot.ShotNo, timeout)
+}

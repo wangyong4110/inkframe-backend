@@ -137,14 +137,19 @@ type ImageResponse struct {
 
 // AudioGenerateRequest 音频生成请求
 type AudioGenerateRequest struct {
-	Model      string  `json:"model"`
-	Text       string  `json:"text"`
-	Voice      string  `json:"voice"`    // 声音ID（TTS）
-	Speed      float64 `json:"speed"`    // 语速（TTS）
-	Pitch      float64 `json:"pitch"`    // 音调（TTS）
-	Emotion    string  `json:"emotion"`  // 情感（TTS）
-	Language   string  `json:"language"` // 语言（TTS）
-	Duration   float64 `json:"duration"` // 音效时长（秒，文生音效 API 使用，如 Kling SFX）
+	Model           string  `json:"model"`
+	Text            string  `json:"text"`
+	Voice           string  `json:"voice"`            // 声音ID（TTS）
+	Speed           float64 `json:"speed"`            // 语速（TTS）
+	Pitch           float64 `json:"pitch"`            // 音调（TTS）
+	Loudness        float64 `json:"loudness"`         // 音量倍率（V3 audio_params.loudness_rate，[-50,100]，1.0=0）
+	Emotion         string  `json:"emotion"`          // 情感（TTS）
+	Language        string  `json:"language"`         // 语言（explicit_language：zh-cn/en/ja/es-mx/id/pt-br/ko）
+	Dialect         string  `json:"dialect"`          // 方言（explicit_dialect，需配合支持方言的音色）
+	SectionID       string  `json:"section_id"`       // 段落标识，用于跨包语义保持（V3）
+	SilenceDuration int     `json:"silence_duration"` // 文末静音时长 ms，范围 [0,30000]（V3）
+	DisableMarkdown bool    `json:"disable_markdown"` // 开启 Markdown 过滤（true=过滤语法符号）
+	Duration        float64 `json:"duration"`         // 音效时长（秒，文生音效 API 使用，如 Kling SFX）
 }
 
 // AudioResponse 音频响应

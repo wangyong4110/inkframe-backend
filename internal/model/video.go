@@ -195,6 +195,10 @@ type StoryboardShot struct {
 	// 时序连贯与参考帧
 	ReferenceImageURL string `json:"reference_image_url" gorm:"size:500"` // 前一镜头最后一帧URL，用于时序连贯
 
+	// 转场衔接语义（由 AI 分镜师生成）
+	TransitionOut string `json:"transition_out" gorm:"type:text"` // 本镜头如何结束：画面状态、角色动作、镜头动势（供下一镜头 I2V 参考）
+	TransitionIn  string `json:"transition_in"  gorm:"type:text"` // 本镜头如何开始：必须衔接上一镜头 TransitionOut 的结束状态
+
 	// 场景锚点
 	SceneAnchorID *uint `json:"scene_anchor_id,omitempty" gorm:"index"`
 
@@ -489,4 +493,5 @@ type BatchGenerateShotsRequest struct {
 	QualityTier string `json:"quality_tier"` // override; empty = use video's quality_tier
 	Provider    string `json:"provider"`     // video provider override (e.g. "kling", "seedance")
 	Force       bool   `json:"force"`        // true = regenerate even if image already exists
+	Sequential  bool   `json:"sequential"`   // true = 顺序生成（I2V 链接保障），慢但连贯
 }

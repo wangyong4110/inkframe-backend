@@ -143,6 +143,16 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 		}
 		audioParams["speech_rate"] = sr
 	}
+	// loudness_rate: [-50,100]，从 Loudness 倍率线性映射（1.0=0, 2.0=+100, 0.5=-50）
+	if req.Loudness > 0 && req.Loudness != 1.0 {
+		lr := int((req.Loudness - 1.0) * 100)
+		if lr < -50 {
+			lr = -50
+		} else if lr > 100 {
+			lr = 100
+		}
+		audioParams["loudness_rate"] = lr
+	}
 
 	// ── req_params ────────────────────────────────────────────────
 	reqParams := map[string]interface{}{
@@ -171,6 +181,11 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 		}
 	}
 
+	// section_id：跨包语义保持
+	if req.SectionID != "" {
+		reqParams["section_id"] = req.SectionID
+	}
+
 	// pitch: post_process.pitch [-12,12]
 	if req.Pitch != 0 {
 		pitch := int(req.Pitch)
@@ -182,13 +197,25 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 		reqParams["post_process"] = map[string]interface{}{"pitch": pitch}
 	}
 
-	// additions：语言/方言、markdown 过滤等
-	additions := map[string]interface{}{}
+	// additions：API 规范要求为 JSON 序列化字符串
+	additionsMap := map[string]interface{}{}
 	if req.Language != "" {
-		additions["explicit_language"] = req.Language
+		additionsMap["explicit_language"] = req.Language
 	}
-	if len(additions) > 0 {
-		reqParams["additions"] = additions
+	if req.Dialect != "" {
+		additionsMap["explicit_dialect"] = req.Dialect
+	}
+	if req.SilenceDuration > 0 {
+		additionsMap["silence_duration"] = req.SilenceDuration
+	}
+	if req.DisableMarkdown {
+		additionsMap["disable_markdown_filter"] = true
+	}
+	if len(additionsMap) > 0 {
+		additionsJSON, marshalErr := json.Marshal(additionsMap)
+		if marshalErr == nil {
+			reqParams["additions"] = string(additionsJSON)
+		}
 	}
 
 	ttsBody := map[string]interface{}{
@@ -470,10 +497,10 @@ func (p *DoubaoSpeechV1Provider) AudioGenerate(ctx context.Context, req *AudioGe
 		audio.EnableEmotion = true
 	}
 
-	// _bigtts 和 _uranus_bigtts 等豆包 2.0 音色需要 volcano_mega 集群；
+	// _bigtts / _tob 等豆包 2.0 音色需要 volcano_mega 集群；
 	// 若用户仍配置了旧的 volcano_tts，自动升级避免返回空音频。
 	cluster := p.cluster
-	if cluster == "volcano_tts" && strings.HasSuffix(voiceType, "_bigtts") {
+	if cluster == "volcano_tts" && (strings.HasSuffix(voiceType, "_bigtts") || strings.HasSuffix(voiceType, "_tob")) {
 		cluster = "volcano_mega"
 	}
 

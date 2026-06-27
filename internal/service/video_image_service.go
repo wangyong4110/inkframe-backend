@@ -1241,19 +1241,30 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		}
 	}
 
-	// 上一镜头衔接描述：查询前一个分镜的 MotionPrompt，注入"从...继续"语义
-	prevShotDesc := ""
-	if shot.ShotNo > 1 && s.storyboardRepo != nil {
-		if prev, prevErr := s.storyboardRepo.GetByVideoAndShotNo(shot.VideoID, shot.ShotNo-1); prevErr == nil && prev != nil {
-			desc := prev.MotionPrompt
-			if desc == "" {
-				desc = prev.Description
-			}
-			if len([]rune(desc)) > 80 {
-				desc = string([]rune(desc)[:80]) + "..."
-			}
-			if desc != "" {
-				prevShotDesc = desc
+	// 衔接语义注入（优先级：TransitionIn > 前一镜头 TransitionOut > 前一镜头 MotionPrompt 截断）
+	// TransitionIn 由 AI 分镜师生成，精确描述本镜头应如何衔接上一镜头的结束状态。
+	// 仅在无 I2V 末帧时注入（有末帧时视频模型已能自动感知运动延续，文字引导可能干扰）。
+	continuityPrefix := ""
+	if shot.ShotNo > 1 && shot.ReferenceImageURL == "" && s.storyboardRepo != nil {
+		if shot.TransitionIn != "" {
+			// ① 使用本镜头自己的 transition_in（最精确）
+			continuityPrefix = shot.TransitionIn
+		} else if prev, prevErr := s.storyboardRepo.GetByVideoAndShotNo(shot.VideoID, shot.ShotNo-1); prevErr == nil && prev != nil {
+			if prev.TransitionOut != "" {
+				// ② 使用上一镜头的 transition_out（次精确）
+				continuityPrefix = "continuing from: " + prev.TransitionOut
+			} else {
+				// ③ 降级：截取上一镜头 MotionPrompt/Description 作粗粒度引导
+				desc := prev.MotionPrompt
+				if desc == "" {
+					desc = prev.Description
+				}
+				if len([]rune(desc)) > 80 {
+					desc = string([]rune(desc)[:80]) + "..."
+				}
+				if desc != "" {
+					continuityPrefix = "continuing from previous shot (" + desc + ")"
+				}
 			}
 		}
 	}
@@ -1264,9 +1275,8 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	if videoPrompt == "" {
 		videoPrompt = shot.Prompt
 	}
-	// 注入衔接上一镜头的延续描述（仅在无 I2V 末帧时补充文字引导；有末帧时模型已能自动延续）
-	if prevShotDesc != "" && shot.ReferenceImageURL == "" {
-		videoPrompt = "continuing from previous shot (" + prevShotDesc + "), " + videoPrompt
+	if continuityPrefix != "" {
+		videoPrompt = continuityPrefix + ", " + videoPrompt
 	}
 	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
 		if fragment, _, err := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); err == nil && fragment != "" {
@@ -1467,14 +1477,26 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		}
 	}
 
+	// Seedance 多模态时序链接：查找前一分镜的完成视频 URL 作为运动参考
+	var prevVideoURLs []string
+	if providerName == "seedance" && shot.ShotNo > 1 && s.storyboardRepo != nil {
+		if prev, prevErr := s.storyboardRepo.GetByVideoAndShotNo(shot.VideoID, shot.ShotNo-1); prevErr == nil && prev != nil {
+			if prev.VideoURL != "" && strings.HasPrefix(prev.VideoURL, "http") {
+				prevVideoURLs = []string{prev.VideoURL}
+				logger.Printf("GenerateShotVideo: shot %d Seedance video-chain: %s", shot.ShotNo, prev.VideoURL)
+			}
+		}
+	}
+
 	req := &ai.VideoGenerateRequest{
 		Prompt:         videoPromptFinal,
 		NegativePrompt: negativePrompt,
 		Duration:       shotDuration,
 		AspectRatio:    videoAspectRatio,
 		Resolution:     videoResolution,
-		ImageURL:       absRef,     // 主参考图（生成的场景图），image-to-video；空时退化为 text-to-video
-		ImageURLs:      absExtras,  // 额外参考图（Seedance 多图支持）
+		ImageURL:       absRef,        // 主参考图（生成的场景图），image-to-video；空时退化为 text-to-video
+		ImageURLs:      absExtras,     // 额外参考图（Seedance 多图支持）
+		VideoURLs:      prevVideoURLs, // 前一分镜视频（Seedance 多模态时序链接）
 		CFGScale:       klingCFG,
 		Mode:           klingMode,
 		Model:          klingModelOverride,
@@ -2076,4 +2098,99 @@ func normalizeMediaURL(u string) string {
 		}
 	}
 	return u
+}
+
+// ─── Sequential Generation ────────────────────────────────────────────────────
+
+// SequentialGenerateShots 顺序生成分镜（高质量衔接模式）：
+// 每个分镜提交后内联等待完成，再同步提取最后一帧写入下一分镜的 ReferenceImageURL，
+// 保证所有分镜均基于前一镜头真实最后一帧做 I2V，从根本上消除割裂感。
+// 代价：无并发，速度约为并发模式的 1/N，适合对连贯性要求极高的最终输出。
+func (s *VideoService) SequentialGenerateShots(videoID uint, shotIDs []uint, qualityTierOverride string, progressFn func(int), provider ...string) ([]*model.StoryboardShot, error) {
+	video, err := s.videoRepo.GetByID(videoID)
+	if err != nil {
+		return nil, err
+	}
+	if qualityTierOverride != "" {
+		video.QualityTier = qualityTierOverride
+	}
+	effectiveProvider := ""
+	if len(provider) > 0 {
+		effectiveProvider = provider[0]
+	}
+	aspectRatio := video.AspectRatio
+	if video.NovelID > 0 && s.novelRepo != nil {
+		if novel, nErr := s.novelRepo.GetByID(video.NovelID); nErr == nil {
+			if aspectRatio == "" && novel.VideoConf().VideoAspectRatio != "" {
+				aspectRatio = novel.VideoConf().VideoAspectRatio
+			}
+		}
+	}
+
+	allShots, batchErr := s.storyboardRepo.BatchGetByIDs(shotIDs)
+	if batchErr != nil {
+		return nil, batchErr
+	}
+	shotMap := make(map[uint]*model.StoryboardShot, len(allShots))
+	for _, sh := range allShots {
+		shotMap[sh.ID] = sh
+	}
+	var ordered []*model.StoryboardShot
+	for _, sid := range shotIDs {
+		if sh, ok := shotMap[sid]; ok && sh.VideoID == videoID {
+			ordered = append(ordered, sh)
+		}
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ShotNo < ordered[j].ShotNo })
+
+	total := len(ordered)
+	var completed []*model.StoryboardShot
+	logger.Printf("SequentialGenerateShots: videoID=%d total=%d provider=%s", videoID, total, effectiveProvider)
+
+	for idx, shot := range ordered {
+		shot.Status = "generating"
+		if e := s.storyboardRepo.Update(shot); e != nil {
+			logger.Errorf("SequentialGenerateShots: shot %d status update: %v", shot.ShotNo, e)
+		}
+
+		const maxRetries = 3
+		var genErr error
+		for attempt := 1; attempt <= maxRetries; attempt++ {
+			genErr = s.GenerateShotVideo(shot, aspectRatio, effectiveProvider)
+			if genErr == nil {
+				break
+			}
+			logger.Errorf("SequentialGenerateShots: shot %d attempt %d/%d: %v", shot.ShotNo, attempt, maxRetries, genErr)
+			if attempt < maxRetries {
+				time.Sleep(time.Duration(attempt*2) * time.Second)
+			}
+		}
+		if genErr != nil {
+			logger.Errorf("SequentialGenerateShots: shot %d failed after %d attempts: %v", shot.ShotNo, maxRetries, genErr)
+			if e := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"status": "failed"}); e != nil {
+				logger.Errorf("SequentialGenerateShots: UpdateFields shot %d: %v", shot.ID, e)
+			}
+			if progressFn != nil {
+				progressFn((idx + 1) * 99 / total)
+			}
+			continue
+		}
+		logger.Printf("SequentialGenerateShots: shot %d submitted, waiting for completion...", shot.ShotNo)
+
+		// 同步等待完成（最长 10 分钟/镜头）
+		// waitForShotCompletion 内部会调用 chainLastFrameToNextShot，
+		// 确保下一镜头的 reference_image_url 在提交前已写入 DB。
+		finishedShot, waitErr := s.waitForShotCompletion(shot, 10*time.Minute)
+		if waitErr != nil {
+			logger.Errorf("SequentialGenerateShots: shot %d wait: %v", shot.ShotNo, waitErr)
+		} else {
+			completed = append(completed, finishedShot)
+			logger.Printf("SequentialGenerateShots: shot %d completed, chained to next", shot.ShotNo)
+		}
+		if progressFn != nil {
+			progressFn((idx + 1) * 99 / total)
+		}
+	}
+	logger.Printf("SequentialGenerateShots: videoID=%d done %d/%d shots", videoID, len(completed), total)
+	return completed, nil
 }
