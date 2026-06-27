@@ -334,8 +334,8 @@ func (s *SceneAnchorService) ExtractFromChapter(ctx context.Context, tenantID, n
 	// 获取提示词语言配置
 	promptLanguage := "zh"
 	if s.novelRepo != nil {
-		if novel, nErr := s.novelRepo.GetByID(novelID); nErr == nil && novel.PromptLanguage != "" {
-			promptLanguage = novel.PromptLanguage
+		if novel, nErr := s.novelRepo.GetByID(novelID); nErr == nil && novel.AIConfig.PromptLanguage != "" {
+			promptLanguage = novel.AIConfig.PromptLanguage
 		}
 	}
 
@@ -496,10 +496,10 @@ func (s *SceneAnchorService) AIAnalyze(ctx context.Context, tenantID, id uint) (
 	if s.novelRepo != nil {
 		if novel, nErr := s.novelRepo.GetByID(anchor.NovelID); nErr == nil {
 			novelTitle = novel.Title
-			novelDesc = novel.Description
-			novelGenre = novel.Genre // 与 NovelDesc 合并传给模板
-			if novel.PromptLanguage != "" {
-				promptLanguage = novel.PromptLanguage
+			novelDesc = novel.Meta.Description
+			novelGenre = novel.Meta.Genre // 与 NovelDesc 合并传给模板
+			if novel.AIConfig.PromptLanguage != "" {
+				promptLanguage = novel.AIConfig.PromptLanguage
 			}
 		}
 	}
@@ -586,7 +586,7 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 		if novel, nErr := s.novelRepo.GetByID(anchor.NovelID); nErr != nil {
 			logger.Errorf("[SceneAnchorService] GenerateRefImage: fetch novel novelID=%d: %v (using defaults)", anchor.NovelID, nErr)
 		} else {
-			imageStyle = novel.ImageStyle
+			imageStyle = novel.AIConfig.ImageStyle
 			aspectRatio = novel.VideoConf().VideoAspectRatio
 			if novel.Title != "" {
 				ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title})
@@ -650,7 +650,7 @@ func (s *SceneAnchorService) EditRefImageWithInstruction(ctx context.Context, te
 	imageStyle := ""
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(anchor.NovelID); e == nil {
-			imageStyle = novel.ImageStyle
+			imageStyle = novel.AIConfig.ImageStyle
 		}
 	}
 

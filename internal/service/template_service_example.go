@@ -65,7 +65,7 @@ func (s *ChapterService) GenerateChapter(novelID uint, chapterNo int, userPrompt
 	data := &ChapterTemplateData{
 		Novel: NovelInfo{
 			Title: novel.Title,
-			Genre: novel.Genre,
+			Genre: novel.Meta.Genre,
 		},
 		Chapter: ChapterInfo{
 			ChapterNo: chapterNo,
@@ -74,7 +74,7 @@ func (s *ChapterService) GenerateChapter(novelID uint, chapterNo int, userPrompt
 		},
 		ChapterNo:   chapterNo,
 		WordCount:   3000,
-		Style:       novel.StylePrompt,
+		Style:       novel.AIConfig.StylePrompt,
 		UserPrompt:  userPrompt,
 		RecentChapters: convertToChapterInfo(recentChapters),
 	}
@@ -87,7 +87,7 @@ func (s *ChapterService) GenerateChapter(novelID uint, chapterNo int, userPrompt
 	// 调用 AI 生成章节内容
 	response, err := s.aiService.Generate(context.Background(), &ai.GenerateRequest{
 		Prompt: prompt,
-		Model:  novel.AIModel,
+		Model:  novel.AIConfig.AIModel,
 		MaxTokens: 4096,
 	})
 

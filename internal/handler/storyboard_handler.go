@@ -829,7 +829,7 @@ func (h *VideoHandler) DownloadVideo(c *gin.Context) {
 	}
 
 	// 如果已经有拼接好的文件，直接下载；否则先触发拼接
-	outputPath := video.VideoPath
+	outputPath := video.TaskMeta.VideoPath
 	if outputPath == "" {
 		var err error
 		outputPath, err = h.videoService.StitchVideo(uint(id))

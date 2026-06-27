@@ -83,7 +83,7 @@ func (s *VideoService) ComputeTimeManifest(videoID uint) (*SyncManifest, error) 
 	cursor := 0.0
 
 	for _, shot := range shots {
-		dur := shot.ActualVideoDuration
+		dur := shot.TaskMeta.ActualVideoDuration
 		if dur <= 0 {
 			dur = shot.Duration
 		}
@@ -96,8 +96,8 @@ func (s *VideoService) ComputeTimeManifest(videoID uint) (*SyncManifest, error) 
 			ShotNo:        shot.ShotNo,
 			TimelineStart: cursor,
 			VideoDuration: dur,
-			VoiceDelay:    shot.VoiceDelay,
-			VoiceStart:    cursor + shot.VoiceDelay,
+			VoiceDelay:    shot.TaskMeta.VoiceDelay,
+			VoiceStart:    cursor + shot.TaskMeta.VoiceDelay,
 		}
 
 		// 累加所有配音段落时长

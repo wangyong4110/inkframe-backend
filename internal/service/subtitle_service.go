@@ -76,9 +76,9 @@ func (s *SubtitleService) GenerateASS(shots []model.StoryboardShot, fontName str
 		start := formatASSTime(currentTime)
 		end := formatASSTime(subEnd)
 
-		// shot.Subtitle 为手动覆写优先级最高，与 GenerateShotSRT 保持一致
-		if shot.Subtitle != "" {
-			text := cleanSubtitleText(shot.Subtitle)
+		// shot.GenMeta.Subtitle 为手动覆写优先级最高，与 GenerateShotSRT 保持一致
+		if shot.GenMeta.Subtitle != "" {
+			text := cleanSubtitleText(shot.GenMeta.Subtitle)
 			if text != "" {
 				sb.WriteString(fmt.Sprintf("Dialogue: 0,%s,%s,Narration,,0,0,0,,%s\n", start, end, text))
 			}
@@ -88,9 +88,9 @@ func (s *SubtitleService) GenerateASS(shots []model.StoryboardShot, fontName str
 			if text != "" {
 				sb.WriteString(fmt.Sprintf("Dialogue: 0,%s,%s,Narration,,0,0,0,,%s\n", start, end, text))
 			}
-		} else if shot.Dialogue != "" {
+		} else if shot.GenMeta.Dialogue != "" {
 			// 对话字幕（黄色，带说话人名称）
-			speaker, line := parseDialogue(shot.Dialogue)
+			speaker, line := parseDialogue(shot.GenMeta.Dialogue)
 			if line != "" {
 				if speaker != "" {
 					// 说话人名称（青色，居中底部，比对话稍高）

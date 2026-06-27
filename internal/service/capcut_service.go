@@ -1241,17 +1241,17 @@ func newSubtitleConfig(novel *model.Novel) subtitleConfig {
 	}
 	// 保留小说级样式配置（位置/字号/颜色/背景），但不读取 enabled 字段
 	vc := novel.VideoConf()
-	if vc.SubtitlePosition != "" {
-		cfg.position = vc.SubtitlePosition
+	if vc.Config.SubtitlePosition != "" {
+		cfg.position = vc.Config.SubtitlePosition
 	}
-	if vc.SubtitleFontSize > 0 {
-		cfg.fontSize = vc.SubtitleFontSize
+	if vc.Config.SubtitleFontSize > 0 {
+		cfg.fontSize = vc.Config.SubtitleFontSize
 	}
-	if vc.SubtitleColor != "" {
-		cfg.color = vc.SubtitleColor
+	if vc.Config.SubtitleColor != "" {
+		cfg.color = vc.Config.SubtitleColor
 	}
-	if vc.SubtitleBgStyle != "" {
-		cfg.bgStyle = vc.SubtitleBgStyle
+	if vc.Config.SubtitleBgStyle != "" {
+		cfg.bgStyle = vc.Config.SubtitleBgStyle
 	}
 	return cfg
 }
@@ -1463,8 +1463,8 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 	// P1-1: 优先使用项目封面，回退到第一张分镜图作为草稿封面缩略图
 	var coverData []byte
-	if novel != nil && novel.CoverImage != "" {
-		coverData, _ = s.resolveMedia(novel.CoverImage)
+	if novel != nil && novel.Meta.CoverImage != "" {
+		coverData, _ = s.resolveMedia(novel.Meta.CoverImage)
 	}
 	if len(coverData) == 0 && len(shots) > 0 && shots[0].ImageURL != "" {
 		coverData, _ = s.resolveMedia(shots[0].ImageURL)
@@ -1762,7 +1762,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 			sfxVol := sfxItem.Volume
 			if sfxVol <= 0 {
 				sfxVol = 0.4
-				if shot.Dialogue != "" {
+				if shot.GenMeta.Dialogue != "" {
 					sfxVol = 0.2
 				}
 			}
@@ -1810,7 +1810,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 
 		// ── 4. 字幕文字素材 ───────────────────────────────────────
 		// 文本优先级：角色台词 > 旁白文案 > 英文画面描述（仅兼容旧分镜数据）
-		subtitleText := shot.Dialogue
+		subtitleText := shot.GenMeta.Dialogue
 		if subtitleText == "" {
 			subtitleText = shot.Narration // 旁白文案（中文，新数据首选）
 		}
@@ -2495,8 +2495,8 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 
 	// P1-1: 优先使用项目封面，回退到第一张分镜图作为草稿封面缩略图
 	var coverData []byte
-	if novel != nil && novel.CoverImage != "" {
-		coverData, _ = s.resolveMedia(novel.CoverImage)
+	if novel != nil && novel.Meta.CoverImage != "" {
+		coverData, _ = s.resolveMedia(novel.Meta.CoverImage)
 	}
 	if len(coverData) == 0 && len(shots) > 0 && shots[0].ImageURL != "" {
 		coverData, _ = s.resolveMedia(shots[0].ImageURL)
@@ -2696,7 +2696,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 		}
 
 		// ── 3. 字幕轨（底部旁白/台词） ────────────────────────────────────
-		subtitleText := shot.Dialogue
+		subtitleText := shot.GenMeta.Dialogue
 		if subtitleText == "" {
 			subtitleText = shot.Narration
 		}
@@ -3569,7 +3569,7 @@ func (s *CapCutService) ExportResourceZip(video *model.Video, shots []*model.Sto
 		meta := shotJSONMeta{
 			ShotNo:      shot.ShotNo,
 			Description: shot.Description,
-			Dialogue:    shot.Dialogue,
+			Dialogue:    shot.GenMeta.Dialogue,
 			Narration:   shot.Narration,
 			Duration:    shot.Duration,
 		}
@@ -3691,8 +3691,8 @@ func (s *CapCutService) ExportSRT(video *model.Video, shots []*model.StoryboardS
 // 优先级：ClipPath（本地 Ken Burns/静帧文件）> VideoURL（CDN）> ""（仅图片）
 // isLocal=true 表示返回的是本地文件路径（已去除 file:// 前缀）。
 func shotVideoSource(shot *model.StoryboardShot) (src string, isLocal bool) {
-	if shot.ClipPath != "" {
-		return strings.TrimPrefix(shot.ClipPath, "file://"), true
+	if shot.TaskMeta.ClipPath != "" {
+		return strings.TrimPrefix(shot.TaskMeta.ClipPath, "file://"), true
 	}
 	return shot.VideoURL, false
 }
@@ -4087,11 +4087,11 @@ func stripDialogueSpeakerPrefix(text string) string {
 // shotSubtitleText 返回镜头的有效字幕文本。
 // 优先级：Subtitle 覆盖 > Dialogue（去角色名前缀）> Narration > Description。
 func shotSubtitleText(shot *model.StoryboardShot) string {
-	if shot.Subtitle != "" {
-		return shot.Subtitle
+	if shot.GenMeta.Subtitle != "" {
+		return shot.GenMeta.Subtitle
 	}
-	if shot.Dialogue != "" {
-		return stripDialogueSpeakerPrefix(shot.Dialogue)
+	if shot.GenMeta.Dialogue != "" {
+		return stripDialogueSpeakerPrefix(shot.GenMeta.Dialogue)
 	}
 	if shot.Narration != "" {
 		return shot.Narration
@@ -4513,7 +4513,7 @@ func (s *CapCutService) ExportCSV(video *model.Video, shots []*model.StoryboardS
 		_ = w.Write([]string{
 			strconv.Itoa(shot.ShotNo),
 			shot.Description,
-			shot.Dialogue,
+			shot.GenMeta.Dialogue,
 			shot.Narration,
 			strconv.FormatFloat(shot.Duration, 'f', 2, 64),
 			shot.CamDir.CameraType,

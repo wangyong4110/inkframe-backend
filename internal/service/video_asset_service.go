@@ -447,7 +447,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 	// description is for image/video generation only — never read it aloud.
 	text := shot.Narration
 	if text == "" {
-		text = stripDialogueSpeakerPrefix(shot.Dialogue)
+		text = stripDialogueSpeakerPrefix(shot.GenMeta.Dialogue)
 	}
 	if text == "" {
 		return nil // no voice text; shot is silent
@@ -491,7 +491,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 		}
 	}
 
-	// Persist audio as a voice segment (replaces the removed shot.AudioPath field).
+	// Persist audio as a voice segment (replaces the removed shot.TaskMeta.AudioPath field).
 	if s.segmentRepo != nil {
 		seg := &model.ShotVoiceSegment{
 			ShotID:    shot.ID,
@@ -540,11 +540,11 @@ func (s *VideoService) uploadAudioToStorage(ctx context.Context, shot *model.Sto
 // 文本优先级：Dialogue > Narration > Description（兜底兼容旧数据）。
 func GenerateShotSRT(shot *model.StoryboardShot) string {
 	var text string
-	if shot.Subtitle != "" {
-		text = shot.Subtitle
-	} else if shot.Dialogue != "" {
+	if shot.GenMeta.Subtitle != "" {
+		text = shot.GenMeta.Subtitle
+	} else if shot.GenMeta.Dialogue != "" {
 		// 去除"角色名："前缀，字幕只显示台词内容
-		text = stripDialogueSpeakerPrefix(shot.Dialogue)
+		text = stripDialogueSpeakerPrefix(shot.GenMeta.Dialogue)
 	} else if shot.Narration != "" {
 		text = shot.Narration
 	} else {
@@ -796,8 +796,8 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 		// 步骤一：从对话中解析发言角色（格式：角色名：对话内容 或 角色名:对话内容）。
 		speakerName := ""
 		for _, sep := range []string{"：", ":"} {
-			if idx := strings.Index(shot.Dialogue, sep); idx > 0 && idx < 20 {
-				speakerName = strings.TrimSpace(shot.Dialogue[:idx])
+			if idx := strings.Index(shot.GenMeta.Dialogue, sep); idx > 0 && idx < 20 {
+				speakerName = strings.TrimSpace(shot.GenMeta.Dialogue[:idx])
 				break
 			}
 		}

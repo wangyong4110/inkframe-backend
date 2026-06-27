@@ -156,7 +156,7 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 						logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d status=failed: %v", sh.ID, e)
 					}
 				} else {
-					logger.Printf("BatchGenerateShots: shot %d submitted successfully (taskID=%s)", sh.ShotNo, sh.ShotTaskID)
+					logger.Printf("BatchGenerateShots: shot %d submitted successfully (taskID=%s)", sh.ShotNo, sh.TaskMeta.ShotTaskID)
 				}
 			}
 		}(shot)
@@ -693,17 +693,17 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 					tenantID = novel.TenantID
 				}
 				vc := novel.VideoConf()
-				if vc.CharConsistencyWeight > 0 {
-					charConsistencyWeight = vc.CharConsistencyWeight
+				if vc.Config.CharConsistencyWeight > 0 {
+					charConsistencyWeight = vc.Config.CharConsistencyWeight
 				}
 				// 项目设置的画面风格优先于视频级别的默认值
-				if novel.ImageStyle != "" {
-					artStyle = novel.ImageStyle
+				if novel.AIConfig.ImageStyle != "" {
+					artStyle = novel.AIConfig.ImageStyle
 				}
-				if imageAspectRatio == "" && vc.VideoAspectRatio != "" {
-					imageAspectRatio = vc.VideoAspectRatio
+				if imageAspectRatio == "" && vc.Config.VideoAspectRatio != "" {
+					imageAspectRatio = vc.Config.VideoAspectRatio
 				}
-				colorGrade = vc.ColorGrade
+				colorGrade = vc.Config.ColorGrade
 				// 注入 OSS 路径提示（项目名+章节序号）
 				if novel.Title != "" {
 					ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title, ChapterNo: chapterNo})
@@ -857,8 +857,8 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 // buildCharTextAnchor 从角色基本信息构建文本锚点，用于无 VisualPrompt 时的最低限度外貌约束。
 // 优先使用 AppearancePromptEN（AI 生成的时代准确形象提示词），兜底才用截断描述。
 func buildCharTextAnchor(char *model.Character) string {
-	if char.AppearancePrompt != "" {
-		return char.AppearancePrompt
+	if char.Meta.AppearancePrompt != "" {
+		return char.Meta.AppearancePrompt
 	}
 	anchor := char.Name
 	if char.Description != "" {
@@ -903,8 +903,8 @@ func (s *VideoService) RefineShotImage(shotID uint, suggestion string) (string, 
 }
 
 // resolveArtStyle 返回视频的画面风格。
-// 优先级：novel.ImageStyle（项目设置） > video.ArtStyle（视频级覆盖）。
-// novel.ImageStyle 代表用户在"项目设置-画面风格"中的明确意图，应始终优先；
+// 优先级：novel.AIConfig.ImageStyle（项目设置） > video.ArtStyle（视频级覆盖）。
+// novel.AIConfig.ImageStyle 代表用户在"项目设置-画面风格"中的明确意图，应始终优先；
 // video.ArtStyle 仅在 novel 未配置时作为降级。
 func (s *VideoService) resolveArtStyle(videoID uint) string {
 	if s.videoRepo == nil {
@@ -916,8 +916,8 @@ func (s *VideoService) resolveArtStyle(videoID uint) string {
 	}
 	// 优先使用小说级画面风格（项目设置优先）
 	if video.NovelID > 0 && s.novelRepo != nil {
-		if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil && novel.ImageStyle != "" {
-			return novel.ImageStyle
+		if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil && novel.AIConfig.ImageStyle != "" {
+			return novel.AIConfig.ImageStyle
 		}
 	}
 	// 小说未设置时降级使用视频自带风格
@@ -988,12 +988,12 @@ func (s *VideoService) chainLastFrameToNextShot(shot *model.StoryboardShot) {
 
 	// 2. 确定视频本地路径（优先 file:// 本地文件，其次从远程 URL 下载）
 	clipLocalPath := ""
-	if strings.HasPrefix(shot.ClipPath, "file://") {
-		clipLocalPath = strings.TrimPrefix(shot.ClipPath, "file://")
+	if strings.HasPrefix(shot.TaskMeta.ClipPath, "file://") {
+		clipLocalPath = strings.TrimPrefix(shot.TaskMeta.ClipPath, "file://")
 	} else {
 		videoURL := shot.VideoURL
-		if shot.ClipPath != "" && !strings.HasPrefix(shot.ClipPath, "file://") {
-			videoURL = shot.ClipPath
+		if shot.TaskMeta.ClipPath != "" && !strings.HasPrefix(shot.TaskMeta.ClipPath, "file://") {
+			videoURL = shot.TaskMeta.ClipPath
 		}
 		if videoURL == "" {
 			logger.Errorf("chainLastFrameToNextShot: shot %d has no video URL/path", shot.ShotNo)
@@ -1285,7 +1285,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		}
 	}
 
-	// 画面风格：注入视频 prompt（video.ArtStyle 优先，降级到 novel.ImageStyle）
+	// 画面风格：注入视频 prompt（video.ArtStyle 优先，降级到 novel.AIConfig.ImageStyle）
 	if videoArtStyle := s.resolveArtStyle(shot.VideoID); videoArtStyle != "" {
 		videoPrompt = videoArtStyle + " style, " + videoPrompt
 	}
@@ -1300,8 +1300,8 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 			}
 			extras = append(extras, "narration: "+n)
 		}
-		if shot.Dialogue != "" {
-			d := shot.Dialogue
+		if shot.GenMeta.Dialogue != "" {
+			d := shot.GenMeta.Dialogue
 			if len([]rune(d)) > 60 {
 				d = string([]rune(d)[:60]) + "…"
 			}
@@ -1341,14 +1341,14 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	if vid, vidErr := s.videoRepo.GetByID(shot.VideoID); vidErr == nil && vid.NovelID > 0 && s.novelRepo != nil {
 		if novel, novelErr := s.novelRepo.GetByID(vid.NovelID); novelErr == nil {
 			vc := novel.VideoConf()
-			if klingMode == "pro" && !vc.KlingProForAction {
+			if klingMode == "pro" && !vc.Config.KlingProForAction {
 				klingMode = "std"
 			}
 			hdEnabled = strings.Contains(vid.RenderConfig.VisualMode, "hd")
-			threeDEnabled = vc.ThreeDEnabled || strings.Contains(vid.RenderConfig.VisualMode, "3d")
+			threeDEnabled = vc.Config.ThreeDEnabled || strings.Contains(vid.RenderConfig.VisualMode, "3d")
 			threeDStyle = vid.RenderConfig.ThreeDStyle
-			klingModelOverride = vc.KlingModel
-			videoColorGrade = vc.ColorGrade
+			klingModelOverride = vc.Config.KlingModel
+			videoColorGrade = vc.Config.ColorGrade
 		}
 	}
 	if threeDStyle == "" {
@@ -1517,8 +1517,8 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 
 	metrics.ShotVideoSubmissionTotal.WithLabelValues(providerName, "success").Inc()
 	logger.Printf("GenerateShotVideo: shot %d submitted taskID=%s", shot.ShotNo, task.TaskID)
-	shot.ShotTaskID = task.TaskID
-	shot.ShotProviderName = providerName
+	shot.TaskMeta.ShotTaskID = task.TaskID
+	shot.TaskMeta.ShotProviderName = providerName
 	shot.Status = "processing"
 	return s.storyboardRepo.Update(shot)
 }
@@ -1751,7 +1751,7 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 			errMsg = imgErr.Error()
 		}
 		shot.Status = "failed"
-		shot.ErrorMessage = errMsg
+		shot.TaskMeta.ErrorMessage = errMsg
 		if err := s.storyboardRepo.Update(shot); err != nil {
 			logger.Errorf("[VideoService] generateShotImageOnly: failed to update shot %d status to failed: %v", shot.ShotNo, err)
 		}
@@ -1878,7 +1878,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 		}
 		logger.Errorf("GenerateSlideshowShotVideo: image gen failed for shot %d: %s", shot.ShotNo, errMsg)
 		shot.Status = "failed"
-		shot.ErrorMessage = errMsg
+		shot.TaskMeta.ErrorMessage = errMsg
 		if err := s.storyboardRepo.Update(shot); err != nil {
 			logger.Errorf("[VideoService] GenerateSlideshowShotVideo: failed to update shot %d status to failed: %v", shot.ShotNo, err)
 		}
@@ -1900,7 +1900,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	if dlErr != nil {
 		logger.Errorf("GenerateSlideshowShotVideo: shot %d resolve image failed: %v — skipping Ken Burns", shot.ShotNo, dlErr)
 		shot.Status = "completed"
-		shot.Progress = 100
+		shot.TaskMeta.Progress = 100
 		return s.storyboardRepo.Update(shot)
 	}
 	defer os.Remove(localImage)
@@ -1932,7 +1932,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 	}
 
 	shot.Status = "completed"
-	shot.Progress = 100
+	shot.TaskMeta.Progress = 100
 	return s.storyboardRepo.Update(shot)
 }
 
@@ -1990,7 +1990,7 @@ func (s *VideoService) runSlideshowPipeline(videoID uint) {
 	// 从小说视频配置读取旁白音色
 	narrationVoice := ""
 	if vc := s.GetNovelVideoConfig(video.NovelID); vc != nil {
-		narrationVoice = vc.NarrationVoice
+		narrationVoice = vc.Config.NarrationVoice
 	}
 
 	var audioWg sync.WaitGroup
@@ -2028,7 +2028,7 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 			return fmt.Errorf("no pending shots found for video %d (generate storyboard first)", videoID)
 		}
 		video.Status = "generating"
-		video.ErrorMessage = ""
+		video.TaskMeta.ErrorMessage = ""
 		if err := s.videoRepo.Update(video); err != nil {
 			logger.Errorf("[VideoService] GenerateAllShotVideos: failed to update video %d status to generating: %v", videoID, err)
 		}
@@ -2052,7 +2052,7 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 
 	// 更新状态，让用户可以通过 GetStatus 感知进度
 	video.Status = "generating"
-	video.ErrorMessage = ""
+	video.TaskMeta.ErrorMessage = ""
 	if err := s.videoRepo.Update(video); err != nil {
 		logger.Errorf("[VideoService] GenerateAllShotVideos: failed to update video %d status to generating: %v", videoID, err)
 	}
@@ -2060,7 +2060,7 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 	// 从小说视频配置读取旁白音色
 	narrationVoice := ""
 	if vc := s.GetNovelVideoConfig(video.NovelID); vc != nil {
-		narrationVoice = vc.NarrationVoice
+		narrationVoice = vc.Config.NarrationVoice
 	}
 
 	for _, shot := range shots {

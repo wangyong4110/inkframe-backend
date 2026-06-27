@@ -903,8 +903,8 @@ func (h *NovelHandler) ExportNovel(c *gin.Context) {
 	var buf strings.Builder
 	buf.WriteString(novel.Title + "\n")
 	buf.WriteString(strings.Repeat("=", len([]rune(novel.Title))) + "\n\n")
-	if novel.Description != "" {
-		buf.WriteString(novel.Description + "\n\n")
+	if novel.Meta.Description != "" {
+		buf.WriteString(novel.Meta.Description + "\n\n")
 	}
 
 	for _, ch := range chapters {

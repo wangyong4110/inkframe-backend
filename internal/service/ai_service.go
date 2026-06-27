@@ -625,14 +625,14 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 	var resolvedModel string
 	if novelID > 0 && s.novelRepo != nil {
 		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
-			if novel.Temperature > 0 {
-				config.Temperature = novel.Temperature
+			if novel.AIConfig.Temperature > 0 {
+				config.Temperature = novel.AIConfig.Temperature
 			}
-			if novel.TopP > 0 {
-				config.TopP = novel.TopP
+			if novel.AIConfig.TopP > 0 {
+				config.TopP = novel.AIConfig.TopP
 			}
-			if novel.MaxTokens > 0 {
-				config.MaxTokens = novel.MaxTokens
+			if novel.AIConfig.MaxTokens > 0 {
+				config.MaxTokens = novel.AIConfig.MaxTokens
 			}
 		}
 	}
@@ -699,7 +699,7 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 		}
 	}
 
-	// AIModel 级别 MaxTokens（novel.AIModel 路径：仅有 model name，需通过 DB 查找）
+	// AIModel 级别 MaxTokens（novel.AIConfig.AIModel 路径：仅有 model name，需通过 DB 查找）
 	if config.MaxTokens == 0 && resolvedModel != "" && s.modelRepo != nil {
 		if m, err := s.modelRepo.GetByName(resolvedModel); err == nil && m != nil && m.MaxTokens > 0 {
 			config.MaxTokens = m.MaxTokens
@@ -771,14 +771,14 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 	var resolvedModel string
 	if novelID > 0 && s.novelRepo != nil {
 		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
-			if novel.Temperature > 0 {
-				config.Temperature = novel.Temperature
+			if novel.AIConfig.Temperature > 0 {
+				config.Temperature = novel.AIConfig.Temperature
 			}
-			if novel.TopP > 0 {
-				config.TopP = novel.TopP
+			if novel.AIConfig.TopP > 0 {
+				config.TopP = novel.AIConfig.TopP
 			}
-			if novel.MaxTokens > 0 {
-				config.MaxTokens = novel.MaxTokens
+			if novel.AIConfig.MaxTokens > 0 {
+				config.MaxTokens = novel.AIConfig.MaxTokens
 			}
 		}
 	}
@@ -841,7 +841,7 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 		}
 	}
 
-	// AIModel 级别 MaxTokens（novel.AIModel 路径）
+	// AIModel 级别 MaxTokens（novel.AIConfig.AIModel 路径）
 	if config.MaxTokens == 0 && resolvedModel != "" && s.modelRepo != nil {
 		if m, err := s.modelRepo.GetByName(resolvedModel); err == nil && m != nil && m.MaxTokens > 0 {
 			config.MaxTokens = m.MaxTokens
@@ -890,18 +890,18 @@ func (s *AIService) resolveTaskConfig(tenantID uint, novelID uint, taskType stri
 
 	if novelID > 0 && s.novelRepo != nil {
 		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
-			if novel.Temperature > 0 {
-				config.Temperature = novel.Temperature
+			if novel.AIConfig.Temperature > 0 {
+				config.Temperature = novel.AIConfig.Temperature
 			}
-			if novel.TopP > 0 {
-				config.TopP = novel.TopP
+			if novel.AIConfig.TopP > 0 {
+				config.TopP = novel.AIConfig.TopP
 			}
-			if novel.MaxTokens > 0 {
-				config.MaxTokens = novel.MaxTokens
+			if novel.AIConfig.MaxTokens > 0 {
+				config.MaxTokens = novel.AIConfig.MaxTokens
 			}
-			if providerName == "" && novel.AIModel != "" {
-				resolvedModel = novel.AIModel
-				if pName := s.resolveProviderFromModel(tenantID, novel.AIModel); pName != "" {
+			if providerName == "" && novel.AIConfig.AIModel != "" {
+				resolvedModel = novel.AIConfig.AIModel
+				if pName := s.resolveProviderFromModel(tenantID, novel.AIConfig.AIModel); pName != "" {
 					providerName = pName
 				}
 			}
@@ -2271,9 +2271,9 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 
 	var provider ai.AIProvider
 
-	// 1. DB 模式：扫描 voice/tts 类型的 provider（与图像生成逻辑对称）
+	// 1. DB 模式：优先选取 voices_json 中包含请求 voice ID 的 provider
 	if s.providerRepo != nil {
-		if p, err := s.loadDBProviderByType(tenantID, "voice"); err == nil && p != nil {
+		if p, err := s.loadDBVoiceProvider(tenantID, "voice", voice); err == nil && p != nil {
 			provider = p
 		}
 	}
@@ -2375,26 +2375,58 @@ func (s *AIService) loadDBProviderByName(tenantID uint, name string) (ai.AIProvi
 
 // loadDBProviderByType 从 DB 中取第一个有效的指定类型提供商（如 "sfx"、"voice"）。
 func (s *AIService) loadDBProviderByType(tenantID uint, modelType string) (ai.AIProvider, error) {
+	return s.loadDBVoiceProvider(tenantID, modelType, "")
+}
+
+// loadDBVoiceProvider 按 voiceID 从 voices_json 优先匹配，未命中则取第一个有效 provider。
+// voiceID 为空时退化为 loadDBProviderByType 行为。
+func (s *AIService) loadDBVoiceProvider(tenantID uint, modelType, voiceID string) (ai.AIProvider, error) {
 	providers, err := s.providerRepo.ListByModelType(tenantID, modelType)
 	if err != nil {
 		return nil, err
 	}
+
+	// 过滤出有凭据的活跃 provider，同时按 voiceID 打优先级
+	type candidate struct {
+		p        *model.ModelProvider
+		priority int // 0=voice匹配, 1=无匹配/voiceID为空
+	}
+	var candidates []candidate
 	for _, p := range providers {
 		if !p.IsActive {
 			continue
 		}
 		if !providerHasCredentials(p) {
-			logger.Printf("loadDBProviderByType: skip %s provider %q (missing credentials)", modelType, p.Name)
+			logger.Printf("loadDBVoiceProvider: skip %s provider %q (missing credentials)", modelType, p.Name)
 			continue
 		}
-		// 传递 modelType 作为 targetType，使合并型提供商（kling、qianwen）能选择正确的底层构造器
-		provider, err := s.getTenantProvider(tenantID, p.Name, modelType)
-		if err != nil {
-			logger.Errorf("loadDBProviderByType: failed to instantiate %s provider %q: %v", modelType, p.Name, err)
-			continue
+		pri := 1
+		if voiceID != "" && p.VoicesJSON != "" {
+			voices := p.ParseVoices()
+			for _, v := range voices {
+				if v.ID == voiceID {
+					pri = 0
+					break
+				}
+			}
 		}
-		logger.Printf("loadDBProviderByType: using %s provider %q model=%q", modelType, p.Name, effectiveModelName(p))
-		return provider, nil
+		candidates = append(candidates, candidate{p, pri})
+	}
+
+	// 先取 priority=0（voice 匹配），再取 priority=1（兜底）
+	for _, pass := range []int{0, 1} {
+		for _, c := range candidates {
+			if c.priority != pass {
+				continue
+			}
+			provider, err := s.getTenantProvider(tenantID, c.p.Name, modelType)
+			if err != nil {
+				logger.Errorf("loadDBVoiceProvider: failed to instantiate %s provider %q: %v", modelType, c.p.Name, err)
+				continue
+			}
+			logger.Printf("loadDBVoiceProvider: using %s provider %q (voice=%q priority=%d)", modelType, c.p.Name, voiceID, pass)
+			return provider, nil
+		}
 	}
 	return nil, fmt.Errorf("no %s providers configured in DB", modelType)
 }

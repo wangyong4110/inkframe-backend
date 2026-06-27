@@ -1042,7 +1042,7 @@ func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
 	// Use request params if provided; fall back to saved character values
 	voice := req.VoiceID
 	if voice == "" {
-		voice = character.VoiceID
+		voice = character.VoiceConfig.VoiceID
 	}
 	if voice == "" {
 		voice = "alloy"
@@ -1050,16 +1050,16 @@ func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
 	speed := 1.0
 	if req.VoiceSpeed != nil {
 		speed = *req.VoiceSpeed
-	} else if character.VoiceSpeed > 0 {
-		speed = character.VoiceSpeed
+	} else if character.VoiceConfig.VoiceSpeed > 0 {
+		speed = character.VoiceConfig.VoiceSpeed
 	}
 	style := req.VoiceStyle
 	if style == "" {
-		style = character.VoiceStyle
+		style = character.VoiceConfig.VoiceStyle
 	}
 	lang := req.VoiceLanguage
 	if lang == "" {
-		lang = character.VoiceLanguage
+		lang = character.VoiceConfig.VoiceLanguage
 	}
 
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeVoicePreview, "语音试听生成", "character", uint(id))
@@ -1125,7 +1125,7 @@ func (h *CharacterHandler) ServeVoiceSample(c *gin.Context) {
 		return
 	}
 	character, err := h.characterService.GetCharacter(uint(id))
-	if err != nil || character.VoiceSample == "" {
+	if err != nil || character.VoiceConfig.VoiceSample == "" {
 		respondErr(c, http.StatusNotFound, "no voice sample available")
 		return
 	}
@@ -1133,7 +1133,7 @@ func (h *CharacterHandler) ServeVoiceSample(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "no voice sample available")
 		return
 	}
-	filePath := character.VoiceSample
+	filePath := character.VoiceConfig.VoiceSample
 	if len(filePath) > 7 && filePath[:7] == "file://" {
 		filePath = filePath[7:]
 	}

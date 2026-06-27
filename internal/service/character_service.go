@@ -623,7 +623,7 @@ func (s *CharacterService) GetNovelImageStyle(novelID uint) string {
 		return ""
 	}
 	if novel, err := s.novelRepo.GetByID(novelID); err == nil {
-		return novel.ImageStyle
+		return novel.AIConfig.ImageStyle
 	}
 	return ""
 }
@@ -744,36 +744,36 @@ func (s *CharacterService) UpdateCharacter(id, tenantID uint, req *model.UpdateC
 		character.Role = req.Role
 	}
 	if req.Gender != "" {
-		character.Gender = req.Gender
+		character.Meta.Gender = req.Gender
 	}
 	if req.Age != "" {
-		character.Age = req.Age
+		character.Meta.Age = req.Age
 	}
 	if req.Description != "" {
 		character.Description = req.Description
 	}
 	// 内在动机字段：空字符串也允许覆盖（支持清空）
 	if req.InnerConflict != "" {
-		character.InnerConflict = req.InnerConflict
+		character.Meta.InnerConflict = req.InnerConflict
 	}
 	if req.CoreDesire != "" {
-		character.CoreDesire = req.CoreDesire
+		character.Meta.CoreDesire = req.CoreDesire
 	}
 	if req.VoiceID != "" {
-		character.VoiceID = req.VoiceID
+		character.VoiceConfig.VoiceID = req.VoiceID
 		// When updating voice, also sync style (allow clearing to empty/default)
-		character.VoiceStyle = req.VoiceStyle
+		character.VoiceConfig.VoiceStyle = req.VoiceStyle
 	} else if req.VoiceStyle != "" {
-		character.VoiceStyle = req.VoiceStyle
+		character.VoiceConfig.VoiceStyle = req.VoiceStyle
 	}
 	if req.VoiceSpeed != nil {
-		character.VoiceSpeed = *req.VoiceSpeed
+		character.VoiceConfig.VoiceSpeed = *req.VoiceSpeed
 	}
 	if req.VoiceLanguage != "" {
-		character.VoiceLanguage = req.VoiceLanguage
+		character.VoiceConfig.VoiceLanguage = req.VoiceLanguage
 	}
 	if req.VoiceSample != "" {
-		character.VoiceSample = req.VoiceSample
+		character.VoiceConfig.VoiceSample = req.VoiceSample
 	}
 	if err := s.characterRepo.Update(character); err != nil {
 		return nil, err
@@ -783,7 +783,7 @@ func (s *CharacterService) UpdateCharacter(id, tenantID uint, req *model.UpdateC
 		snap := &model.CharacterStateSnapshot{
 			NovelID:     character.NovelID,
 			CharacterID: character.ID,
-			Motivation:  character.CoreDesire,
+			Motivation:  character.Meta.CoreDesire,
 		}
 		_ = s.snapshotRepo.Upsert(snap) // ignore error
 	}
@@ -1013,9 +1013,9 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 	if s.novelRepo != nil {
 		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
 			novelTitle = novel.Title
-			novelGenre = novel.Genre
-			if novel.PromptLanguage != "" {
-				novelPromptLanguage = novel.PromptLanguage
+			novelGenre = novel.Meta.Genre
+			if novel.AIConfig.PromptLanguage != "" {
+				novelPromptLanguage = novel.AIConfig.PromptLanguage
 			}
 		}
 	}
@@ -1176,9 +1176,9 @@ func (s *CharacterService) ReanalyzeCharacter(tenantID, characterID uint) (*mode
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(char.NovelID); e == nil {
 			novelTitle = novel.Title
-			novelGenre = novel.Genre
-			if novel.PromptLanguage != "" {
-				novelPromptLanguage = novel.PromptLanguage
+			novelGenre = novel.Meta.Genre
+			if novel.AIConfig.PromptLanguage != "" {
+				novelPromptLanguage = novel.AIConfig.PromptLanguage
 			}
 		}
 	}
@@ -1212,10 +1212,10 @@ func (s *CharacterService) ReanalyzeCharacter(tenantID, characterID uint) (*mode
 		char.Description = profile.Description
 	}
 	if profile.Gender != "" {
-		char.Gender = profile.Gender
+		char.Meta.Gender = profile.Gender
 	}
 	if profile.Age != "" {
-		char.Age = profile.Age
+		char.Meta.Age = profile.Age
 	}
 
 	// 根据最新 gender/age/role 重新推荐配音设置（仅在用户未手动配置时填充）
@@ -1223,12 +1223,12 @@ func (s *CharacterService) ReanalyzeCharacter(tenantID, characterID uint) (*mode
 	if s.modelRepo != nil {
 		voiceModels, _ = s.modelRepo.GetAvailableByTaskType("voice_gen", tenantID)
 	}
-	suggestedVoice := suggestVoiceForCharacter(char.Description, char.Gender, profile.PersonalityTags, char.Role, voiceModels)
-	suggestedStyle := suggestVoiceStyle(char.Gender, char.Age, char.Role, profile.PersonalityTags, char.Description)
+	suggestedVoice := suggestVoiceForCharacter(char.Description, char.Meta.Gender, profile.PersonalityTags, char.Role, voiceModels)
+	suggestedStyle := suggestVoiceStyle(char.Meta.Gender, char.Meta.Age, char.Role, profile.PersonalityTags, char.Description)
 	suggestedLang := suggestVoiceLanguage(novelPromptLanguage)
-	if v, ok := fillIfEmpty(char.VoiceID, suggestedVoice); ok { char.VoiceID = v }
-	if v, ok := fillIfEmpty(char.VoiceStyle, suggestedStyle); ok { char.VoiceStyle = v }
-	if v, ok := fillIfEmpty(char.VoiceLanguage, suggestedLang); ok { char.VoiceLanguage = v }
+	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceID, suggestedVoice); ok { char.VoiceConfig.VoiceID = v }
+	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceStyle, suggestedStyle); ok { char.VoiceConfig.VoiceStyle = v }
+	if v, ok := fillIfEmpty(char.VoiceConfig.VoiceLanguage, suggestedLang); ok { char.VoiceConfig.VoiceLanguage = v }
 
 	if err := s.characterRepo.Update(char); err != nil {
 		return nil, fmt.Errorf("save character: %w", err)
@@ -1291,8 +1291,8 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
 			novelTitle = novel.Title
-			novelGenre = novel.Genre
-			novelPromptLanguage = novel.PromptLanguage
+			novelGenre = novel.Meta.Genre
+			novelPromptLanguage = novel.AIConfig.PromptLanguage
 		}
 	}
 
@@ -1505,7 +1505,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 	var novelTitle string
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
-			imageStyle = novel.ImageStyle
+			imageStyle = novel.AIConfig.ImageStyle
 			novelTitle = novel.Title
 		}
 	}
@@ -2268,8 +2268,8 @@ func (s *CharacterService) GenerateLookVisualPrompt(tenantID, characterID uint, 
 	}
 	promptLanguage := "zh"
 	if s.novelRepo != nil {
-		if novel, e := s.novelRepo.GetByID(char.NovelID); e == nil && novel.PromptLanguage != "" {
-			promptLanguage = novel.PromptLanguage
+		if novel, e := s.novelRepo.GetByID(char.NovelID); e == nil && novel.AIConfig.PromptLanguage != "" {
+			promptLanguage = novel.AIConfig.PromptLanguage
 		}
 	}
 	basePrompt := char.Description
@@ -2338,10 +2338,10 @@ func (s *CharacterService) GenerateChapterImages(
 	var novelTitle string
 	if s.novelRepo != nil {
 		if novel, e2 := s.novelRepo.GetByID(novelID); e2 == nil {
-			if novel.PromptLanguage != "" {
-				promptLanguage = novel.PromptLanguage
+			if novel.AIConfig.PromptLanguage != "" {
+				promptLanguage = novel.AIConfig.PromptLanguage
 			}
-			imageStyle = novel.ImageStyle
+			imageStyle = novel.AIConfig.ImageStyle
 			novelTitle = novel.Title
 		}
 	}
@@ -2448,7 +2448,7 @@ func (s *CharacterService) GenerateChapterImages(
 }
 
 // GenerateCostumeDesign 基于角色描述和世界观背景，AI 生成符合时代背景的统一形象提示词。
-// 提示词语言跟随 novel.PromptLanguage（zh=中文，en=英文）。
+// 提示词语言跟随 novel.AIConfig.PromptLanguage（zh=中文，en=英文）。
 // 输出存入 Character.AppearancePrompt，并同步更新默认 CharacterLook.VisualPrompt。
 // 对于人类角色，提示词中必须明确标注人种。
 func (s *CharacterService) GenerateCostumeDesign(tenantID, characterID uint) (string, error) {
@@ -2465,10 +2465,10 @@ func (s *CharacterService) GenerateCostumeDesign(tenantID, characterID uint) (st
 	var worldContext string
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(char.NovelID); e == nil {
-			if novel.PromptLanguage != "" {
-				promptLanguage = novel.PromptLanguage
+			if novel.AIConfig.PromptLanguage != "" {
+				promptLanguage = novel.AIConfig.PromptLanguage
 			}
-			worldContext = fmt.Sprintf("%s（%s）：%s", novel.Title, novel.Genre, novel.Description)
+			worldContext = fmt.Sprintf("%s（%s）：%s", novel.Title, novel.Meta.Genre, novel.Meta.Description)
 			if novel.Worldview != nil {
 				if novel.Worldview.Description != "" {
 					worldContext += "\n世界设定：" + novel.Worldview.Description
@@ -2484,7 +2484,7 @@ func (s *CharacterService) GenerateCostumeDesign(tenantID, characterID uint) (st
 	}
 
 	genderAnchor := "1person"
-	switch char.Gender {
+	switch char.Meta.Gender {
 	case "male":
 		genderAnchor = "1boy"
 	case "female":
@@ -2512,7 +2512,7 @@ Description: %s
 5. HAIR & HEADWEAR: Era- and status-appropriate. No modern hairstyles.
 6. CONDITION: Note whether clothing is new / lightly worn / battle-worn / ceremonially clean.
 
-Output a single paragraph (150-250 words) starting with "%s". No JSON. No explanation. Only the visual prompt.`, worldContext, char.Name, char.Role, char.Age, char.Gender, char.Description, genderAnchor)
+Output a single paragraph (150-250 words) starting with "%s". No JSON. No explanation. Only the visual prompt.`, worldContext, char.Name, char.Role, char.Meta.Age, char.Meta.Gender, char.Description, genderAnchor)
 	} else {
 		sysPrompt = fmt.Sprintf(`你是专业的服装设计师、艺术指导和视觉造型师，擅长为历史/架空题材小说设计符合时代背景的角色造型。
 
@@ -2533,7 +2533,7 @@ Output a single paragraph (150-250 words) starting with "%s". No JSON. No explan
 5. 发型与头冠：须符合性别、年龄、身份、场合的时代规范，不得出现现代发型。
 6. 着装状态：注明服装新旧程度（崭新/轻微磨损/征战损伤/礼仪整洁/风尘仆仆）。
 
-输出一段150-250字的描述，以"%s"开头。不要输出 JSON，不要任何解释，只输出提示词本身。`, worldContext, char.Name, char.Role, char.Age, char.Gender, char.Description, genderAnchor)
+输出一段150-250字的描述，以"%s"开头。不要输出 JSON，不要任何解释，只输出提示词本身。`, worldContext, char.Name, char.Role, char.Meta.Age, char.Meta.Gender, char.Description, genderAnchor)
 	}
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, char.NovelID, "character_profile", sysPrompt, "",
@@ -2547,7 +2547,7 @@ Output a single paragraph (150-250 words) starting with "%s". No JSON. No explan
 	}
 
 	// 保存到 Character.AppearancePrompt
-	char.AppearancePrompt = prompt
+	char.Meta.AppearancePrompt = prompt
 	if err := s.characterRepo.Update(char); err != nil {
 		logger.Errorf("[GenerateCostumeDesign] update char %d AppearancePrompt: %v", characterID, err)
 	}

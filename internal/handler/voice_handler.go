@@ -335,12 +335,12 @@ func (h *VideoHandler) ImportShotSFXItem(c *gin.Context) {
 				respondErr(c, http.StatusNotFound, "asset not found")
 				return
 			}
-			if asset.StorageURL == "" {
+			if asset.MediaMeta.StorageURL == "" {
 				respondBadRequest(c, "asset has no audio URL")
 				return
 			}
-			audioURL = asset.StorageURL
-			durationSecs = asset.Duration
+			audioURL = asset.MediaMeta.StorageURL
+			durationSecs = asset.MediaMeta.Duration
 			if req.Tag != "" {
 				tag = req.Tag
 			} else {
@@ -656,7 +656,7 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 	if narrationVoice == "" {
 		if video, err := h.videoService.GetVideo(uint(videoID)); err == nil {
 			if vc := h.videoService.GetNovelVideoConfig(video.NovelID); vc != nil {
-				narrationVoice = vc.NarrationVoice
+				narrationVoice = vc.Config.NarrationVoice
 			}
 		}
 	}

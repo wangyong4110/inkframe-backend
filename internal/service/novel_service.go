@@ -336,25 +336,25 @@ func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequ
 		}
 		vc := fresh.EnsureVideoConfig()
 		vc.NovelID = id
-		if req.VideoType != ""             { vc.VideoType = req.VideoType }
-		if req.VideoResolution != ""       { vc.VideoResolution = req.VideoResolution }
-		if req.VideoFPS != nil             { vc.VideoFPS = *req.VideoFPS }
-		if req.VideoAspectRatio != ""      { vc.VideoAspectRatio = req.VideoAspectRatio }
-		if req.CharConsistencyWeight != nil { vc.CharConsistencyWeight = *req.CharConsistencyWeight }
-		if req.NarrationVoice != ""        { vc.NarrationVoice = req.NarrationVoice }
-		if req.SubtitleEnabled != nil      { vc.SubtitleEnabled = *req.SubtitleEnabled }
-		if req.SubtitlePosition != ""      { vc.SubtitlePosition = req.SubtitlePosition }
-		if req.SubtitleFontSize != nil     { vc.SubtitleFontSize = *req.SubtitleFontSize }
-		if req.SubtitleColor != ""         { vc.SubtitleColor = req.SubtitleColor }
-		if req.SubtitleBgStyle != ""       { vc.SubtitleBgStyle = req.SubtitleBgStyle }
-		if req.SubtitleFont != ""          { vc.SubtitleFont = req.SubtitleFont }
-		if req.ColorGrade != ""            { vc.ColorGrade = req.ColorGrade }
-		if req.ContrastLevel != nil        { vc.ContrastLevel = *req.ContrastLevel }
-		if req.Saturation != nil           { vc.Saturation = *req.Saturation }
-		if req.FilmGrain != nil            { vc.FilmGrain = *req.FilmGrain }
-		if req.Vignette != nil             { vc.Vignette = *req.Vignette }
-		if req.ChromaticAberration != nil  { vc.ChromaticAberration = *req.ChromaticAberration }
-		if req.KlingProForAction != nil    { vc.KlingProForAction = *req.KlingProForAction }
+		if req.VideoType != ""             { vc.Config.VideoType = req.VideoType }
+		if req.VideoResolution != ""       { vc.Config.VideoResolution = req.VideoResolution }
+		if req.VideoFPS != nil             { vc.Config.VideoFPS = *req.VideoFPS }
+		if req.VideoAspectRatio != ""      { vc.Config.VideoAspectRatio = req.VideoAspectRatio }
+		if req.CharConsistencyWeight != nil { vc.Config.CharConsistencyWeight = *req.CharConsistencyWeight }
+		if req.NarrationVoice != ""        { vc.Config.NarrationVoice = req.NarrationVoice }
+		if req.SubtitleEnabled != nil      { vc.Config.SubtitleEnabled = *req.SubtitleEnabled }
+		if req.SubtitlePosition != ""      { vc.Config.SubtitlePosition = req.SubtitlePosition }
+		if req.SubtitleFontSize != nil     { vc.Config.SubtitleFontSize = *req.SubtitleFontSize }
+		if req.SubtitleColor != ""         { vc.Config.SubtitleColor = req.SubtitleColor }
+		if req.SubtitleBgStyle != ""       { vc.Config.SubtitleBgStyle = req.SubtitleBgStyle }
+		if req.SubtitleFont != ""          { vc.Config.SubtitleFont = req.SubtitleFont }
+		if req.ColorGrade != ""            { vc.Config.ColorGrade = req.ColorGrade }
+		if req.ContrastLevel != nil        { vc.Config.ContrastLevel = *req.ContrastLevel }
+		if req.Saturation != nil           { vc.Config.Saturation = *req.Saturation }
+		if req.FilmGrain != nil            { vc.Config.FilmGrain = *req.FilmGrain }
+		if req.Vignette != nil             { vc.Config.Vignette = *req.Vignette }
+		if req.ChromaticAberration != nil  { vc.Config.ChromaticAberration = *req.ChromaticAberration }
+		if req.KlingProForAction != nil    { vc.Config.KlingProForAction = *req.KlingProForAction }
 		if err := s.novelRepo.SaveVideoConfig(vc); err != nil {
 			logger.Errorf("[NovelService] UpdateNovel SaveVideoConfig: %v", err)
 		}
@@ -392,11 +392,11 @@ func (s *NovelService) generateCoverBrief(novel *model.Novel) string {
 	sb.WriteString("- Output the English prompt ONLY — no explanation, no prefix, no quotes\n\n")
 
 	sb.WriteString(fmt.Sprintf("Novel title: %s\n", novel.Title))
-	sb.WriteString(fmt.Sprintf("Genre: %s\n", novel.Genre))
+	sb.WriteString(fmt.Sprintf("Genre: %s\n", novel.Meta.Genre))
 
 	// 简介（最多400字）
-	if novel.Description != "" {
-		desc := novel.Description
+	if novel.Meta.Description != "" {
+		desc := novel.Meta.Description
 		if len([]rune(desc)) > 400 {
 			desc = string([]rune(desc)[:400])
 		}
@@ -404,15 +404,15 @@ func (s *NovelService) generateCoverBrief(novel *model.Novel) string {
 	}
 
 	// 风格设定（style_prompt，如有）
-	if novel.StylePrompt != "" {
-		style := novel.StylePrompt
+	if novel.AIConfig.StylePrompt != "" {
+		style := novel.AIConfig.StylePrompt
 		if len([]rune(style)) > 150 {
 			style = string([]rune(style)[:150])
 		}
 		sb.WriteString(fmt.Sprintf("Visual style: %s\n", style))
 	}
-	if novel.ImageStyle != "" {
-		sb.WriteString(fmt.Sprintf("Art style preset: %s\n", novel.ImageStyle))
+	if novel.AIConfig.ImageStyle != "" {
+		sb.WriteString(fmt.Sprintf("Art style preset: %s\n", novel.AIConfig.ImageStyle))
 	}
 
 	// 角色（最多3个，主角优先，Description截前200字）
@@ -466,7 +466,7 @@ func (s *NovelService) generateCoverBrief(novel *model.Novel) string {
 
 	llmInput := sb.String()
 	logger.Infof("[coverBrief] novelID=%d inputLen=%d hasDesc=%v hasWorldview=%v",
-		novel.ID, len(llmInput), novel.Description != "", novel.Worldview != nil)
+		novel.ID, len(llmInput), novel.Meta.Description != "", novel.Worldview != nil)
 
 	brief, err := s.aiService.Generate(novel.ID, "cover_brief", llmInput)
 	if err != nil {
@@ -501,15 +501,15 @@ func buildFallbackCoverPrompt(novel *model.Novel, userSuggestion string) string 
 		"apocalypse": "post-apocalyptic wasteland, ruins, dramatic sky",
 		"rebirth":    "rebirth time travel, dual-era contrast, glowing light of second chance",
 	}
-	genreDesc := genreStyleMap[novel.Genre]
+	genreDesc := genreStyleMap[novel.Meta.Genre]
 	if genreDesc == "" {
-		genreDesc = novel.Genre
+		genreDesc = novel.Meta.Genre
 	}
 
 	// 尽量加入简介内容
 	synopsisPart := ""
-	if novel.Description != "" {
-		desc := novel.Description
+	if novel.Meta.Description != "" {
+		desc := novel.Meta.Description
 		if len([]rune(desc)) > 200 {
 			desc = string([]rune(desc)[:200])
 		}
@@ -542,9 +542,9 @@ func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID
 
 	// 判断是否有可用的旧封面作为参考图（图生图模式）
 	existingCover := ""
-	if suggestion != "" && novel.CoverImage != "" &&
-		(strings.HasPrefix(novel.CoverImage, "http://") || strings.HasPrefix(novel.CoverImage, "https://")) {
-		existingCover = novel.CoverImage
+	if suggestion != "" && novel.Meta.CoverImage != "" &&
+		(strings.HasPrefix(novel.Meta.CoverImage, "http://") || strings.HasPrefix(novel.Meta.CoverImage, "https://")) {
+		existingCover = novel.Meta.CoverImage
 	}
 
 	var prompt, promptSource string
@@ -569,19 +569,19 @@ func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID
 	}
 
 	logger.Infof("[GenerateCoverImage] novelID=%d imageStyle=%q source=%s promptLen=%d prompt=%.200s",
-		novel.ID, novel.ImageStyle, promptSource, len(prompt), prompt)
+		novel.ID, novel.AIConfig.ImageStyle, promptSource, len(prompt), prompt)
 
 	ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title})
 	sizeOverride := ""
 	if novel.VideoConfig != nil && novel.VideoConfig.VideoAspectRatio != "" {
 		sizeOverride = novel.VideoConfig.VideoAspectRatio // e.g. "16:9", "9:16", "1:1"
 	}
-	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", prompt, existingCover, novel.ImageStyle, negativePrompt, sizeOverride)
+	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", prompt, existingCover, novel.AIConfig.ImageStyle, negativePrompt, sizeOverride)
 	if err != nil {
 		return "", fmt.Errorf("generate cover image: %w", err)
 	}
 
-	novel.CoverImage = imageURL
+	novel.Meta.CoverImage = imageURL
 	if err := s.novelRepo.Update(novel); err != nil {
 		return imageURL, fmt.Errorf("persist cover image: %w", err)
 	}
@@ -601,11 +601,11 @@ func (s *NovelService) PublishNovel(id, tenantID uint, visibility string) (*mode
 		visibility = "public"
 	}
 	now := time.Now()
-	if novel.ReviewStatus == "approved" {
+	if novel.ReviewMeta.ReviewStatus == "approved" {
 		// 已审核通过，直接发布
 		novel.IsPublished = true
-		novel.PublishedAt = &now
-		novel.Visibility = visibility
+		novel.Meta.PublishedAt = &now
+		novel.Meta.Visibility = visibility
 		if err := s.novelRepo.UpdateFields(id, map[string]interface{}{
 			"is_published": true, "published_at": &now, "visibility": visibility,
 		}); err != nil {
@@ -613,8 +613,8 @@ func (s *NovelService) PublishNovel(id, tenantID uint, visibility string) (*mode
 		}
 	} else {
 		// 提交审核，不直接发布
-		novel.ReviewStatus = "pending_review"
-		novel.Visibility = visibility
+		novel.ReviewMeta.ReviewStatus = "pending_review"
+		novel.Meta.Visibility = visibility
 		if err := s.novelRepo.UpdateFields(id, map[string]interface{}{
 			"review_status": "pending_review", "visibility": visibility,
 		}); err != nil {
@@ -639,7 +639,7 @@ func (s *NovelService) ReviewNovel(id, reviewerID, tenantID uint, req ReviewNove
 	if novel.TenantID != tenantID {
 		return nil, fmt.Errorf("novel not found")
 	}
-	if novel.ReviewStatus != "pending_review" {
+	if novel.ReviewMeta.ReviewStatus != "pending_review" {
 		return nil, fmt.Errorf("novel is not pending review")
 	}
 	now := time.Now()
@@ -648,19 +648,19 @@ func (s *NovelService) ReviewNovel(id, reviewerID, tenantID uint, req ReviewNove
 		"reviewed_by": reviewerID,
 	}
 	if req.Approved {
-		novel.ReviewStatus = "approved"
+		novel.ReviewMeta.ReviewStatus = "approved"
 		novel.IsPublished = true
-		novel.PublishedAt = &now
-		novel.ReviewedAt = &now
-		novel.ReviewedBy = reviewerID
+		novel.Meta.PublishedAt = &now
+		novel.ReviewMeta.ReviewedAt = &now
+		novel.ReviewMeta.ReviewedBy = reviewerID
 		fields["review_status"] = "approved"
 		fields["is_published"] = true
 		fields["published_at"] = &now
 	} else {
-		novel.ReviewStatus = "rejected"
-		novel.ReviewNote = req.ReviewNote
-		novel.ReviewedAt = &now
-		novel.ReviewedBy = reviewerID
+		novel.ReviewMeta.ReviewStatus = "rejected"
+		novel.ReviewMeta.ReviewNote = req.ReviewNote
+		novel.ReviewMeta.ReviewedAt = &now
+		novel.ReviewMeta.ReviewedBy = reviewerID
 		fields["review_status"] = "rejected"
 		fields["review_note"] = req.ReviewNote
 	}
@@ -724,13 +724,13 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 		TimeoutSeconds: req.TimeoutSeconds,
 	}
 	if outlineOverrides.MaxTokens == 0 {
-		outlineOverrides.MaxTokens = novel.MaxTokens
+		outlineOverrides.MaxTokens = novel.AIConfig.MaxTokens
 	}
 	if outlineOverrides.Temperature == 0 {
-		outlineOverrides.Temperature = novel.Temperature
+		outlineOverrides.Temperature = novel.AIConfig.Temperature
 	}
 	if outlineOverrides.TimeoutSeconds == 0 {
-		outlineOverrides.TimeoutSeconds = novel.TimeoutSeconds
+		outlineOverrides.TimeoutSeconds = novel.AIConfig.TimeoutSeconds
 	}
 
 	// 调用AI生成（使用租户提供商）
@@ -835,17 +835,17 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 		existing, err := s.chapterRepo.GetByNovelAndChapterNo(novel.ID, chap.ChapterNo)
 		if err == nil && existing != nil {
 			// 已完成（有正文）的章节在连贯模式下不覆盖
-			if existing.Content != "" && novel.ChapterMode != "independent" {
+			if existing.Content != "" && novel.AIConfig.ChapterMode != "independent" {
 				continue
 			}
 			existing.Summary = chap.Summary
 			if chap.Title != "" {
 				existing.Title = chap.Title
 			}
-			existing.TensionLevel = chap.TensionLevel
+			existing.TensionLevel = chap.NarrativeMeta.TensionLevel
 			existing.ActNo = chap.Act
-			existing.EmotionalTone = chap.EmotionalTone
-			existing.HookType = chap.HookType
+			existing.EmotionalTone = chap.NarrativeMeta.EmotionalTone
+			existing.HookType = chap.NarrativeMeta.HookType
 			if err := s.chapterRepo.Update(existing); err != nil {
 				logger.Errorf("GenerateOutline: update chapter %d: %v", chap.ChapterNo, err)
 			}
@@ -857,10 +857,10 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 			ChapterNo: chap.ChapterNo,
 			Title:         chap.Title,
 			Summary:       chap.Summary,
-			TensionLevel:  chap.TensionLevel,
+			TensionLevel:  chap.NarrativeMeta.TensionLevel,
 			ActNo:         chap.Act,
-			EmotionalTone: chap.EmotionalTone,
-			HookType:      chap.HookType,
+			EmotionalTone: chap.NarrativeMeta.EmotionalTone,
+			HookType:      chap.NarrativeMeta.HookType,
 			Status:        "draft",
 		}
 		if err := s.chapterRepo.Create(placeholder); err != nil {
@@ -984,7 +984,7 @@ type ChapterOutline struct {
 
 // buildOutlinePrompt 构建大纲提示词
 func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutlineRequest) string {
-	independent := novel.ChapterMode == "independent"
+	independent := novel.AIConfig.ChapterMode == "independent"
 	var sb strings.Builder
 
 	if independent {
@@ -994,8 +994,8 @@ func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutli
 		sb.WriteString(fmt.Sprintf("请为小说《%s》生成一个详细的大纲。\n\n", novel.Title))
 	}
 
-	if novel.Description != "" {
-		sb.WriteString(fmt.Sprintf("故事简介：%s\n\n", novel.Description))
+	if novel.Meta.Description != "" {
+		sb.WriteString(fmt.Sprintf("故事简介：%s\n\n", novel.Meta.Description))
 	}
 
 	if len(req.Keywords) > 0 {

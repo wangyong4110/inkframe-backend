@@ -179,6 +179,10 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 			}
 		}
 		if err != nil {
+			// 所有 resource 均失败，给出控制台链接帮助用户排查
+			if _, isResourceErr := err.(*doubaoResourceErr); isResourceErr {
+				return nil, fmt.Errorf("%w\n\n请前往豆包语音 V3 控制台确认音色授权及接入点（Resource ID）配置：\nhttps://console.volcengine.com/speech/new/overview?projectName=default", err)
+			}
 			return nil, err
 		}
 	}
@@ -397,10 +401,12 @@ type DoubaoSpeechV1Provider struct {
 }
 
 const doubaoV1TTSEndpoint = "https://openspeech.bytedance.com/api/v1/tts"
+
 // doubaoV1DefaultCluster 默认集群。
-// volcano_tts  — 经典集群，支持 BV001_streaming 等老音色
-// volcano_mega — 大模型集群，支持 _uranus_bigtts / _tob 等豆包2.0音色（推荐）
-const doubaoV1DefaultCluster = "volcano_mega"
+// volcano_tts  — 经典集群，支持 BV001_streaming 等老音色（V1 标准场景）
+// volcano_mega — 大模型集群，支持 _moon_bigtts 月亮系列音色
+// 注意：_uranus_bigtts / _tob 系列（豆包2.0音色）不支持 V1 接口，需使用 V3
+const doubaoV1DefaultCluster = "volcano_tts"
 const doubaoV1SuccessCode = 3000
 
 // doubaoV1Request V1 请求体

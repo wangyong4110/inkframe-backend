@@ -42,9 +42,9 @@ func (s *ForeshadowCRUDService) AIExtractFromNovel(ctx context.Context, tenantID
 	}
 	summariesText := buildChapterSummariesText(chapters, 20, 8000)
 	if summariesText == "" {
-		fallback := novel.Description
+		fallback := novel.Meta.Description
 		if fallback == "" {
-			fallback = novel.StylePrompt
+			fallback = novel.AIConfig.StylePrompt
 		}
 		if fallback == "" {
 			return nil, fmt.Errorf("no chapter content available for extraction")
@@ -57,7 +57,7 @@ func (s *ForeshadowCRUDService) AIExtractFromNovel(ctx context.Context, tenantID
 	}
 	prompt, err := renderPrompt("extract_foreshadows", map[string]interface{}{
 		"NovelTitle": novel.Title,
-		"Genre":      novel.Genre,
+		"Genre":      novel.Meta.Genre,
 		"Summaries":  summariesText,
 	})
 	if err != nil {

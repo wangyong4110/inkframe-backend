@@ -30,41 +30,41 @@ import (
 
 // PollShotStatus 轮询单个分镜的视频生成状态
 func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
-	if shot.ShotTaskID == "" {
+	if shot.TaskMeta.ShotTaskID == "" {
 		return nil
 	}
 	var tenantID uint
 	if v, vErr := s.videoRepo.GetByID(shot.VideoID); vErr == nil {
 		tenantID = s.videoTenantID(v)
 	}
-	provider, _, provErr := s.resolveVideoProvider(tenantID, shot.ShotProviderName)
+	provider, _, provErr := s.resolveVideoProvider(tenantID, shot.TaskMeta.ShotProviderName)
 	if provErr != nil {
-		logger.Errorf("PollShotStatus: shot %d 找不到提供商 provider=%s: %v", shot.ShotNo, shot.ShotProviderName, provErr)
-		return fmt.Errorf("provider %s not found", shot.ShotProviderName)
+		logger.Errorf("PollShotStatus: shot %d 找不到提供商 provider=%s: %v", shot.ShotNo, shot.TaskMeta.ShotProviderName, provErr)
+		return fmt.Errorf("provider %s not found", shot.TaskMeta.ShotProviderName)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	status, err := provider.GetVideoStatus(ctx, shot.ShotTaskID)
+	status, err := provider.GetVideoStatus(ctx, shot.TaskMeta.ShotTaskID)
 	if err != nil {
-		logger.Errorf("PollShotStatus: shot %d GetVideoStatus失败 taskID=%s: %v", shot.ShotNo, shot.ShotTaskID, err)
-		return fmt.Errorf("poll task %s: %w", shot.ShotTaskID, err)
+		logger.Errorf("PollShotStatus: shot %d GetVideoStatus失败 taskID=%s: %v", shot.ShotNo, shot.TaskMeta.ShotTaskID, err)
+		return fmt.Errorf("poll task %s: %w", shot.TaskMeta.ShotTaskID, err)
 	}
 
 	logger.Printf("PollShotStatus: shot %d taskID=%s provider=%s status=%s progress=%d",
-		shot.ShotNo, shot.ShotTaskID, shot.ShotProviderName, status.Status, status.Progress)
+		shot.ShotNo, shot.TaskMeta.ShotTaskID, shot.TaskMeta.ShotProviderName, status.Status, status.Progress)
 
 	switch status.Status {
 	case "completed", "succeed":
-		videoURL, urlErr := provider.GetVideoURL(ctx, shot.ShotTaskID)
+		videoURL, urlErr := provider.GetVideoURL(ctx, shot.TaskMeta.ShotTaskID)
 		if urlErr != nil {
-			logger.Errorf("PollShotStatus: shot %d GetVideoURL失败 taskID=%s: %v", shot.ShotNo, shot.ShotTaskID, urlErr)
+			logger.Errorf("PollShotStatus: shot %d GetVideoURL失败 taskID=%s: %v", shot.ShotNo, shot.TaskMeta.ShotTaskID, urlErr)
 		}
 		if videoURL == "" {
-			logger.Errorf("PollShotStatus: shot %d 任务完成但未返回video_url taskID=%s", shot.ShotNo, shot.ShotTaskID)
+			logger.Errorf("PollShotStatus: shot %d 任务完成但未返回video_url taskID=%s", shot.ShotNo, shot.TaskMeta.ShotTaskID)
 			shot.Status = "failed"
-			shot.ErrorMessage = "task completed but no video URL returned"
+			shot.TaskMeta.ErrorMessage = "task completed but no video URL returned"
 			if dbErr := s.storyboardRepo.Update(shot); dbErr != nil {
 				logger.Errorf("PollShotStatus: shot %d DB更新失败(failed): %v", shot.ShotNo, dbErr)
 			}
@@ -80,44 +80,44 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 			// 下载失败不致命：保留远程 URL，StitchVideo 会重试
 			logger.Errorf("PollShotStatus: shot %d 下载视频失败，保留远程URL: %v", shot.ShotNo, dlErr)
 			shot.VideoURL = videoURL
-			shot.ClipPath = ""
+			shot.TaskMeta.ClipPath = ""
 		} else {
 			logger.Printf("PollShotStatus: shot %d 视频下载完成 path=%s", shot.ShotNo, localPath)
-			shot.ClipPath = "file://" + localPath
+			shot.TaskMeta.ClipPath = "file://" + localPath
 			// 上传到 OSS 持久化，用 OSS URL 替换临时本地路径
 			if ossURL := s.uploadClipToStorage(context.Background(), shot, localPath); ossURL != "" {
 				logger.Printf("PollShotStatus: shot %d 上传 OSS 成功 url=%s", shot.ShotNo, ossURL)
-				shot.ClipPath = ossURL
+				shot.TaskMeta.ClipPath = ossURL
 				shot.VideoURL = ossURL
 				os.Remove(localPath) //nolint:errcheck
 			}
 		}
 		shot.Status = "completed"
-		shot.Progress = 100
+		shot.TaskMeta.Progress = 100
 		// 测量实际视频时长（优先 ffprobe 本地文件；失败则信任 target Duration）
-		if dur := probeVideoDuration(shot.ClipPath, shot.Duration); dur > 0 {
-			shot.ActualVideoDuration = dur
+		if dur := probeVideoDuration(shot.TaskMeta.ClipPath, shot.Duration); dur > 0 {
+			shot.TaskMeta.ActualVideoDuration = dur
 		} else {
-			shot.ActualVideoDuration = shot.Duration
+			shot.TaskMeta.ActualVideoDuration = shot.Duration
 		}
 		// 提取上一帧并写入下一分镜的 reference_image_url（I2V 时序链接）
 		go s.chainLastFrameToNextShot(shot)
 	case "failed", "error":
-		logger.Errorf("PollShotStatus: shot %d 生成失败 taskID=%s error=%s", shot.ShotNo, shot.ShotTaskID, status.Error)
+		logger.Errorf("PollShotStatus: shot %d 生成失败 taskID=%s error=%s", shot.ShotNo, shot.TaskMeta.ShotTaskID, status.Error)
 		shot.Status = "failed"
-		shot.ErrorMessage = status.Error
-		if shot.RetryCount < 3 {
-			shot.RetryCount++
+		shot.TaskMeta.ErrorMessage = status.Error
+		if shot.TaskMeta.RetryCount < 3 {
+			shot.TaskMeta.RetryCount++
 			shot.Status = "pending"
-			shot.ShotTaskID = ""
-			logger.Printf("PollShotStatus: shot %d 进入重试队列 retry=%d", shot.ShotNo, shot.RetryCount)
+			shot.TaskMeta.ShotTaskID = ""
+			logger.Printf("PollShotStatus: shot %d 进入重试队列 retry=%d", shot.ShotNo, shot.TaskMeta.RetryCount)
 		} else {
-			logger.Errorf("PollShotStatus: shot %d 超过最大重试次数(%d)，永久失败", shot.ShotNo, shot.RetryCount)
+			logger.Errorf("PollShotStatus: shot %d 超过最大重试次数(%d)，永久失败", shot.ShotNo, shot.TaskMeta.RetryCount)
 		}
 	case "processing", "running", "submitted":
 		shot.Status = "processing"
 		if status.Progress > 0 {
-			shot.Progress = status.Progress
+			shot.TaskMeta.Progress = status.Progress
 		}
 	default:
 		logger.Printf("PollShotStatus: shot %d 未知状态 %q，继续等待", shot.ShotNo, status.Status)
@@ -199,7 +199,7 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 
 	for i, shot := range shots {
 		switch {
-		case shot.ClipPath == "" && shot.VideoURL == "":
+		case shot.TaskMeta.ClipPath == "" && shot.VideoURL == "":
 			// image-only：并发下载图片
 			if shot.ImageURL == "" {
 				continue // 无任何素材，跳过
@@ -218,14 +218,14 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 				}
 			}(i, shot)
 
-		case strings.HasPrefix(shot.ClipPath, "file://"):
+		case strings.HasPrefix(shot.TaskMeta.ClipPath, "file://"):
 			// 已是本地文件，无需下载
-			results[i].clipFile = strings.TrimPrefix(shot.ClipPath, "file://")
+			results[i].clipFile = strings.TrimPrefix(shot.TaskMeta.ClipPath, "file://")
 			results[i].isLocal = true
 
 		default:
 			// 远端视频：并发下载
-			remoteURL := shot.ClipPath
+			remoteURL := shot.TaskMeta.ClipPath
 			if remoteURL == "" {
 				remoteURL = shot.VideoURL
 			}
@@ -241,10 +241,10 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 				dlCancel()
 				if dlErr != nil {
 					// URL 可能已过期，尝试从 provider 重新获取
-					if sh.ShotTaskID != "" && sh.ShotProviderName != "" {
-						if p, _, rErr := s.resolveVideoProvider(videoTenantID, sh.ShotProviderName); rErr == nil {
+					if sh.TaskMeta.ShotTaskID != "" && sh.TaskMeta.ShotProviderName != "" {
+						if p, _, rErr := s.resolveVideoProvider(videoTenantID, sh.TaskMeta.ShotProviderName); rErr == nil {
 							rCtx, rCancel := context.WithTimeout(context.Background(), 15*time.Second)
-							freshURL, fErr := p.GetVideoURL(rCtx, sh.ShotTaskID)
+							freshURL, fErr := p.GetVideoURL(rCtx, sh.TaskMeta.ShotTaskID)
 							rCancel()
 							if fErr == nil {
 								logger.Printf("[StitchVideo] shot %d: got fresh URL, retrying download", sh.ShotNo)
@@ -403,7 +403,7 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 		logger.Errorf("[StitchVideo] videoID=%d: ffmpeg concat failed: %v\noutput: %s", videoID, concatErr, string(concatOut))
 		if vid, ferr := s.videoRepo.GetByID(videoID); ferr == nil && vid != nil {
 			vid.Status = "failed"
-			vid.ErrorMessage = fmt.Sprintf("ffmpeg stitch failed: %v", concatErr)
+			vid.TaskMeta.ErrorMessage = fmt.Sprintf("ffmpeg stitch failed: %v", concatErr)
 			if updErr := s.videoRepo.Update(vid); updErr != nil {
 				logger.Errorf("[StitchVideo] videoID=%d: failed to update status to failed: %v", videoID, updErr)
 			}
@@ -461,9 +461,9 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 		logger.Errorf("[StitchVideo] videoID=%d: video record not found after stitch, status NOT updated: %v", videoID, err)
 		return outputPath, fmt.Errorf("stitch succeeded but video record not found: %w", err)
 	}
-	video.VideoPath = outputPath
+	video.TaskMeta.VideoPath = outputPath
 	video.Status = "completed"
-	video.TotalShots = len(shots)
+	video.PublishMeta.TotalShots = len(shots)
 	if err := s.videoRepo.Update(video); err != nil {
 		logger.Errorf("[StitchVideo] videoID=%d: failed to update status to completed: %v", videoID, err)
 	}
@@ -553,7 +553,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 			video, _ := s.videoRepo.GetByID(videoID)
 			if video != nil && video.Status != "completed" {
 				video.Status = "failed"
-				video.ErrorMessage = "stitch pipeline timed out (>2h)"
+				video.TaskMeta.ErrorMessage = "stitch pipeline timed out (>2h)"
 				if err := s.videoRepo.Update(video); err != nil {
 					logger.Errorf("[VideoService] PollAndStitchVideo: failed to update video %d status to failed (timeout): %v", videoID, err)
 				}
@@ -613,7 +613,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 				aspectRatio = video.RenderConfig.AspectRatio
 			}
 			for _, shot := range pending {
-				if shot.ShotTaskID == "" {
+				if shot.TaskMeta.ShotTaskID == "" {
 					if err := s.GenerateShotVideo(shot, aspectRatio); err != nil {
 						logger.Errorf("[PollAndStitch] GenerateShotVideo shot %d failed: %v", shot.ID, err)
 						if e := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"status": "failed", "error_message": fmt.Sprintf("generation failed: %v", err)}); e != nil {
@@ -643,7 +643,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 				videoID, heartbeatStallDuration.Minutes())
 			if vid, err := s.videoRepo.GetByID(videoID); err == nil && vid != nil && vid.Status == "generating" {
 				vid.Status = "failed"
-				vid.ErrorMessage = fmt.Sprintf("video generation stalled: no progress for %.0f minutes", heartbeatStallDuration.Minutes())
+				vid.TaskMeta.ErrorMessage = fmt.Sprintf("video generation stalled: no progress for %.0f minutes", heartbeatStallDuration.Minutes())
 				if e := s.videoRepo.Update(vid); e != nil { logger.Errorf("[VideoService] videoRepo.Update videoID=%d: %v", vid.ID, e) }
 			}
 			return
@@ -657,7 +657,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 					video, _ := s.videoRepo.GetByID(videoID)
 					if video != nil {
 						video.Status = "failed"
-						video.ErrorMessage = stitchErr.Error()
+						video.TaskMeta.ErrorMessage = stitchErr.Error()
 						if updErr := s.videoRepo.Update(video); updErr != nil {
 							logger.Errorf("[VideoService] PollAndStitchVideo: failed to update video %d status to failed (stitch error): %v", videoID, updErr)
 						}
@@ -686,7 +686,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 						}
 						logger.Printf("[PollAndStitch] videoID=%d: auto-upload OK → %s", videoID, ossURL)
 						if vid, err := s.videoRepo.GetByID(videoID); err == nil && vid != nil {
-							vid.FinalVideoURL = ossURL
+							vid.PublishMeta.FinalVideoURL = ossURL
 							if updErr := s.videoRepo.Update(vid); updErr != nil {
 								logger.Errorf("[PollAndStitch] videoID=%d: update FinalVideoURL failed: %v", videoID, updErr)
 							}
@@ -697,7 +697,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 				video, _ := s.videoRepo.GetByID(videoID)
 				if video != nil {
 					video.Status = "failed"
-					video.ErrorMessage = "all shots failed"
+					video.TaskMeta.ErrorMessage = "all shots failed"
 					if updErr := s.videoRepo.Update(video); updErr != nil {
 						logger.Errorf("[VideoService] PollAndStitchVideo: failed to update video %d status to failed (all shots failed): %v", videoID, updErr)
 					}
@@ -715,7 +715,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 				logger.Printf("PollAndStitchVideo: videoID %d stalled (no active shots), stopping", videoID)
 				if vid, err := s.videoRepo.GetByID(videoID); err == nil && vid.Status == "generating" {
 					vid.Status = "failed"
-					vid.ErrorMessage = "generation stalled (no progress)"
+					vid.TaskMeta.ErrorMessage = "generation stalled (no progress)"
 					if e := s.videoRepo.Update(vid); e != nil { logger.Errorf("[VideoService] videoRepo.Update videoID=%d: %v", vid.ID, e) }
 				}
 				return
@@ -983,13 +983,13 @@ func (s *VideoService) RunSynthesisPipeline(taskID string, videoID uint) {
 		_ = s.taskSvc.UpdateProgress(taskID, 90)
 	}
 	if finalVideoURL != "" {
-		video.FinalVideoURL = finalVideoURL
+		video.PublishMeta.FinalVideoURL = finalVideoURL
 	}
 	if coverURL != "" {
-		video.CoverURL = coverURL
+		video.PublishMeta.CoverURL = coverURL
 	}
 	if actualDuration > 0 {
-		video.Duration = actualDuration
+		video.PublishMeta.Duration = actualDuration
 	}
 	// 仅当视频成功上传（有 URL）才标记 completed；否则标记 failed 以告知用户
 	if finalVideoURL != "" {
@@ -1048,12 +1048,12 @@ func (s *VideoService) GetStatus(id uint) (interface{}, error) {
 		ss := ShotStatus{
 			ShotNo:   shot.ShotNo,
 			Status:   shot.Status,
-			Progress: int(shot.Progress),
+			Progress: int(shot.TaskMeta.Progress),
 			ImageURL: shot.ImageURL,
 			VideoURL: shot.VideoURL,
-			ClipPath: shot.ClipPath,
+			ClipPath: shot.TaskMeta.ClipPath,
 			Duration: shot.Duration,
-			Error:    shot.ErrorMessage,
+			Error:    shot.TaskMeta.ErrorMessage,
 		}
 		shotStatuses = append(shotStatuses, ss)
 		if shot.Status == "completed" {
@@ -1071,12 +1071,12 @@ func (s *VideoService) GetStatus(id uint) (interface{}, error) {
 			"id":              video.ID,
 			"status":          video.Status,
 			"title":           video.Title,
-			"total_shots":     video.TotalShots,
+			"total_shots":     video.PublishMeta.TotalShots,
 			"completed_shots": completedCount,
 			"progress":        overallProgress,
-			"video_path":      video.VideoPath,
-			"final_video_url": video.FinalVideoURL,
-			"error_message":   video.ErrorMessage,
+			"video_path":      video.TaskMeta.VideoPath,
+			"final_video_url": video.PublishMeta.FinalVideoURL,
+			"error_message":   video.TaskMeta.ErrorMessage,
 		},
 		"shots": shotStatuses,
 	}, nil

@@ -1389,8 +1389,8 @@ func buildChapterChatSystemPrompt(chapter *model.Chapter) string {
 	var sb strings.Builder
 	sb.WriteString("你是一位专业小说编辑，正在协助作者修改章节内容。\n\n")
 	fmt.Fprintf(&sb, "当前章节：第 %d 章「%s」\n\n", chapter.ChapterNo, chapter.Title)
-	if chapter.Outline != "" {
-		fmt.Fprintf(&sb, "章节大纲：%s\n\n", chapter.Outline)
+	if chapter.NarrativeMeta.Outline != "" {
+		fmt.Fprintf(&sb, "章节大纲：%s\n\n", chapter.NarrativeMeta.Outline)
 	}
 	sb.WriteString("当前章节正文：\n---\n")
 	sb.WriteString(content)

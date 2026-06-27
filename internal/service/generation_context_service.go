@@ -29,13 +29,13 @@ func buildChapterOverrides(req *model.GenerateChapterRequest, novel *model.Novel
 		TimeoutSeconds: req.TimeoutSeconds,
 	}
 	if o.MaxTokens == 0 {
-		o.MaxTokens = novel.MaxTokens
+		o.MaxTokens = novel.AIConfig.MaxTokens
 	}
 	if o.Temperature == 0 {
-		o.Temperature = novel.Temperature
+		o.Temperature = novel.AIConfig.Temperature
 	}
 	if o.TimeoutSeconds == 0 {
-		o.TimeoutSeconds = novel.TimeoutSeconds
+		o.TimeoutSeconds = novel.AIConfig.TimeoutSeconds
 	}
 	return o
 }

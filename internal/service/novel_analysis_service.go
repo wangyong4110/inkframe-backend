@@ -474,7 +474,7 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 							text = ch.Summary
 						}
 						if text == "" {
-							text = truncateForPrompt(ch.Outline, 500)
+							text = truncateForPrompt(ch.NarrativeMeta.Outline, 500)
 						}
 						if text == "" || count >= 10 {
 							continue
@@ -731,7 +731,7 @@ func buildChapterSummariesText(chapters []*model.Chapter, maxChapters, maxLen in
 			summary = truncateForPrompt(ch.Content, 500)
 		}
 		if summary == "" {
-			summary = truncateForPrompt(ch.Outline, 200) // 章节大纲兜底（无正文时也能提取信息）
+			summary = truncateForPrompt(ch.NarrativeMeta.Outline, 200) // 章节大纲兜底（无正文时也能提取信息）
 		}
 		if summary != "" {
 			sb.WriteString(fmt.Sprintf("第%d章「%s」：%s\n", ch.ChapterNo, ch.Title, summary))
@@ -872,18 +872,18 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 	if len(chapters) > 0 {
 		summariesText = buildChapterSummariesText(chapters, 15, 8000)
 	} else {
-		summariesText = novel.Description
+		summariesText = novel.Meta.Description
 	}
 	if summariesText == "" {
-		summariesText = fmt.Sprintf("这是一部%s类型的小说《%s》，请根据类型惯例设计主要角色。", novel.Genre, novel.Title)
+		summariesText = fmt.Sprintf("这是一部%s类型的小说《%s》，请根据类型惯例设计主要角色。", novel.Meta.Genre, novel.Title)
 	}
 
 	extractCharsPrompt, err := renderPrompt("extract_characters", map[string]interface{}{
 		"NovelTitle":       novel.Title,
-		"Genre":            novel.Genre,
+		"Genre":            novel.Meta.Genre,
 		"Summaries":        summariesText,
-		"PromptLanguage":   novel.PromptLanguage,
-		"GenreVisualHints": genreVisualHints(novel.Genre),
+		"PromptLanguage":   novel.AIConfig.PromptLanguage,
+		"GenreVisualHints": genreVisualHints(novel.Meta.Genre),
 	})
 	if err != nil {
 		logger.Errorf("NovelAnalysis[%d]: stepExtractCharacters render prompt failed: %v", novel.ID, err)
@@ -961,7 +961,7 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 		// 自动推荐配音设置
 		suggestedVoice := suggestVoiceForCharacter(finalDesc, c.Gender, c.PersonalityTags, role, voiceModels)
 		suggestedStyle := suggestVoiceStyle(c.Gender, c.Age, role, c.PersonalityTags, finalDesc)
-		suggestedLang := suggestVoiceLanguage(novel.PromptLanguage)
+		suggestedLang := suggestVoiceLanguage(novel.AIConfig.PromptLanguage)
 		char := &model.Character{
 			NovelID: novel.ID,
 			UUID:    uuid.New().String(),
@@ -1017,16 +1017,16 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 	// 使用 buildChapterSummariesText 保证 Summary→Content→Outline 三级兜底
 	summariesText := buildChapterSummariesText(chapters, 20, 4000)
 	if summariesText == "" {
-		if novel.Description != "" {
-			summariesText = novel.Description
+		if novel.Meta.Description != "" {
+			summariesText = novel.Meta.Description
 		} else {
-			summariesText = fmt.Sprintf("这是一部%s类型的小说《%s》，请根据类型惯例设计世界观体系。", novel.Genre, novel.Title)
+			summariesText = fmt.Sprintf("这是一部%s类型的小说《%s》，请根据类型惯例设计世界观体系。", novel.Meta.Genre, novel.Title)
 		}
 	}
 
 	worldviewPrompt, err := renderPrompt("extract_worldview", map[string]interface{}{
 		"NovelTitle": novel.Title,
-		"Genre":      novel.Genre,
+		"Genre":      novel.Meta.Genre,
 		"Summaries":  summariesText,
 	})
 	if err != nil {
@@ -1100,7 +1100,7 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 			existing.TenantID = tenantID
 			existing.Name = wv.Name
 			existing.Description = wv.Description
-			existing.Genre = novel.Genre
+			existing.Genre = novel.Meta.Genre
 			existing.MagicSystem = wv.MagicSystem
 			existing.Geography = wv.Geography
 			existing.History = wv.History
@@ -1122,7 +1122,7 @@ func (s *NovelAnalysisService) stepExtractWorldview(
 		UUID:        uuid.New().String(),
 		Name:        wv.Name,
 		Description: wv.Description,
-		Genre:       novel.Genre,
+		Genre:       novel.Meta.Genre,
 		MagicSystem: wv.MagicSystem,
 		Geography:   wv.Geography,
 		History:     wv.History,
@@ -1160,7 +1160,7 @@ func (s *NovelAnalysisService) stepGenerateOutline(
 	// AI 创建模式：无章节时使用 TargetChapters；若为 0 则由 AI 自行决定章节数
 	chapterNum := int(chapterCount)
 	if chapterNum == 0 {
-		chapterNum = novel.TargetChapters // 0 表示让 AI 自决
+		chapterNum = novel.Meta.TargetChapters // 0 表示让 AI 自决
 	}
 
 	req := &GenerateOutlineRequest{
@@ -1181,11 +1181,11 @@ func (s *NovelAnalysisService) stepGenerateOutline(
 	} else {
 		logger.Errorf("NovelAnalysis[%d]: stepGenerateOutline marshal outline JSON failed: %v", novel.ID, err)
 	}
-	if novel.Description == "" && outline.Summary != "" {
+	if novel.Meta.Description == "" && outline.Summary != "" {
 		updateFields["description"] = outline.Summary
 	}
 	// 若用户未设置目标章节数，用 AI 生成的实际章节数回填
-	if novel.TargetChapters == 0 && len(outline.Chapters) > 0 {
+	if novel.Meta.TargetChapters == 0 && len(outline.Chapters) > 0 {
 		updateFields["target_chapters"] = len(outline.Chapters)
 	}
 	if len(updateFields) > 0 {
@@ -1414,7 +1414,7 @@ func (s *NovelAnalysisService) stepExtractSceneAnchors(
 			text = ch.Summary
 		}
 		if text == "" {
-			text = truncateForPrompt(ch.Outline, 500)
+			text = truncateForPrompt(ch.NarrativeMeta.Outline, 500)
 		}
 		if text != "" {
 			candidates = append(candidates, chapterText{ch: ch, text: text})
@@ -1576,12 +1576,12 @@ func (s *NovelAnalysisService) stepUpdateNovelSettings(
 		"悬疑推理": true, "武侠江湖": true, "灵异恐怖": true, "游戏竞技": true, "军事战争": true, "体育竞技": true,
 		"青春校园": true, "末世废土": true, "重生穿越": true, "宫斗宅斗": true, "系统流": true, "其他": true,
 	}
-	needStylePrompt := novel.StylePrompt == ""
-	needDescription := novel.Description == ""
-	needGenre := novel.Genre == "" || novel.Genre == "unknown" || !validGenreSet[novel.Genre]
-	needImageStyle := novel.ImageStyle == ""
-	needTargets := novel.TargetChapters == 0 || novel.TargetWordCount == 0
-	needChapterMode := novel.ChapterMode == "" || novel.ChapterMode == "sequential"
+	needStylePrompt := novel.AIConfig.StylePrompt == ""
+	needDescription := novel.Meta.Description == ""
+	needGenre := novel.Meta.Genre == "" || novel.Meta.Genre == "unknown" || !validGenreSet[novel.Meta.Genre]
+	needImageStyle := novel.AIConfig.ImageStyle == ""
+	needTargets := novel.Meta.TargetChapters == 0 || novel.Meta.TargetWordCount == 0
+	needChapterMode := novel.AIConfig.ChapterMode == "" || novel.AIConfig.ChapterMode == "sequential"
 
 	if !needStylePrompt && !needDescription && !needGenre && !needImageStyle && !needTargets && !needChapterMode {
 		return nil // 所有字段已填，无需更新
@@ -1604,7 +1604,7 @@ func (s *NovelAnalysisService) stepUpdateNovelSettings(
 		}
 	}
 	if sampleContent == "" {
-		sampleContent = novel.Description
+		sampleContent = novel.Meta.Description
 	}
 	if sampleContent == "" {
 		// 最后兜底：只用小说标题让 AI 推断基本设置
@@ -1657,7 +1657,7 @@ func (s *NovelAnalysisService) stepUpdateNovelSettings(
 				if needGenre && res.Genre != "" {
 					for _, vg := range validGenres {
 						if strings.Contains(res.Genre, vg) {
-							novel.Genre = vg
+							novel.Meta.Genre = vg
 							updates["genre"] = vg
 							break
 						}
@@ -1690,17 +1690,17 @@ func (s *NovelAnalysisService) stepUpdateNovelSettings(
 			"科幻未来": "cyberpunk",
 			"都市现代": "realistic", "言情爱情": "realistic", "军事战争": "realistic", "体育竞技": "realistic", "悬疑推理": "realistic", "青春校园": "realistic",
 		}
-		if style, ok := genreStyleMap[novel.Genre]; ok {
+		if style, ok := genreStyleMap[novel.Meta.Genre]; ok {
 			updates["image_style"] = style
 		}
 	}
 
 	// ── 4. 目标章节数 / 目标字数（从已有章节推断）──────────────────────────
 	if needTargets && len(chapters) > 0 {
-		if novel.TargetChapters == 0 {
+		if novel.Meta.TargetChapters == 0 {
 			updates["target_chapters"] = len(chapters)
 		}
-		if novel.TargetWordCount == 0 {
+		if novel.Meta.TargetWordCount == 0 {
 			totalWords := 0
 			for _, ch := range chapters {
 				totalWords += ch.WordCount

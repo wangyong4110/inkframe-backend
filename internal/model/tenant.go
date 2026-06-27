@@ -112,30 +112,36 @@ func (TenantUser) TableName() string {
 	return "tenant_users"
 }
 
+// UserSecurityMeta 安全与登录元数据（JSON存储）
+type UserSecurityMeta struct {
+	FailedLoginCount int        `json:"failed_login_count"`
+	LockUntil        *time.Time `json:"lock_until"`
+	LastLoginAt      *time.Time `json:"last_login_at"`
+	EmailVerifiedAt  *time.Time `json:"email_verified_at"`
+}
+
+// UserOAuthMeta OAuth登录元数据（JSON存储）
+type UserOAuthMeta struct {
+	OAuthProvider string `json:"oauth_provider"`
+	OAuthID       string `json:"oauth_id"`
+}
+
 // User 用户
 type User struct {
-	ID        uint      `json:"id" gorm:"primaryKey"`
-	UUID      string    `json:"uuid" gorm:"size:36;uniqueIndex;not null"`
-	Username  string    `json:"username" gorm:"size:50;uniqueIndex;not null"`
-	Email     string    `json:"email" gorm:"size:100;uniqueIndex;not null"`
-	Phone     *string   `json:"phone,omitempty" gorm:"size:20;uniqueIndex"`
-	Password  string    `json:"-" gorm:"size:100;not null"`
-	Nickname  string    `json:"nickname" gorm:"size:50"`
-	Avatar    string    `json:"avatar" gorm:"size:500"`
-	Status    string    `json:"status" gorm:"size:20;default:active"`
-	Role      string    `json:"role" gorm:"size:20;default:user;comment:系统角色 admin/user"`
-	
-	// OAuth
-	OAuthProvider string `json:"oauth_provider" gorm:"column:oauth_provider;size:20;comment:OAuth提供商"`
-	OAuthID       string `json:"oauth_id"       gorm:"column:oauth_id;size:100;comment:OAuth ID"`
-	
-	// 邮箱验证时间（nil = 未验证）
-	EmailVerifiedAt *time.Time `json:"email_verified_at,omitempty" gorm:"default:null"`
+	ID       uint    `json:"id" gorm:"primaryKey"`
+	UUID     string  `json:"uuid" gorm:"size:36;uniqueIndex;not null"`
+	Username string  `json:"username" gorm:"size:50;uniqueIndex;not null"`
+	Email    string  `json:"email" gorm:"size:100;uniqueIndex;not null"`
+	Phone    *string `json:"phone,omitempty" gorm:"size:20;uniqueIndex"`
+	Password string  `json:"-" gorm:"size:100;not null"`
+	Nickname string  `json:"nickname" gorm:"size:50"`
+	Avatar   string  `json:"avatar" gorm:"size:500"`
+	Status   string  `json:"status" gorm:"size:20;default:active"`
+	Role     string  `json:"role" gorm:"size:20;default:user;comment:系统角色 admin/user"`
 
-	// 登录安全（账号锁定）
-	FailedLoginCount int        `json:"-" gorm:"default:0"`
-	LockUntil        *time.Time `json:"-" gorm:"default:null"`
-	LastLoginAt      *time.Time `json:"last_login_at,omitempty" gorm:"default:null"`
+	// JSON 合并字段（减少列数）
+	SecurityMeta UserSecurityMeta `json:"-" gorm:"column:security_meta;serializer:json;type:text"`
+	OAuthMeta    UserOAuthMeta    `json:"-" gorm:"column:oauth_meta;serializer:json;type:text"`
 
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`

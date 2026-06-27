@@ -14,7 +14,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-06-27-v2"
+const schemaVersion = "2026-06-27-v3"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -233,6 +233,32 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_storyboard_shot", "cam_dir",        "TEXT NULL"},
 		{"ink_storyboard_shot", "gen_meta",       "TEXT NULL"},
 		{"ink_video",           "render_config",  "TEXT NULL"},
+		// 2026-06-27 JSON列合并 Round 2
+		{"ink_novel",               "novel_meta",          "TEXT NULL"},
+		{"ink_novel",               "ai_config",           "TEXT NULL"},
+		{"ink_novel",               "review_meta",         "TEXT NULL"},
+		{"ink_chapter",             "narrative_meta",      "TEXT NULL"},
+		{"ink_chapter",             "quality_meta",        "TEXT NULL"},
+		{"ink_video",               "publish_meta",        "TEXT NULL"},
+		{"ink_video",               "task_meta",           "TEXT NULL"},
+		{"ink_storyboard_shot",     "shot_task_meta",      "TEXT NULL"},
+		{"ink_shot_sfx_item",       "sfx_playback",        "TEXT NULL"},
+		{"ink_video_bgm_segment",   "bgm_track_meta",      "TEXT NULL"},
+		{"ink_video_bgm_segment",   "bgm_ducking",         "TEXT NULL"},
+		{"ink_novel_video_config",  "config",              "TEXT NULL"},
+		{"ink_character",           "voice_config",        "TEXT NULL"},
+		{"ink_character",           "character_meta",      "TEXT NULL"},
+		{"ink_asset",               "asset_media_meta",    "TEXT NULL"},
+		{"ink_asset",               "asset_quality_meta",  "TEXT NULL"},
+		{"ink_crawl_job",           "crawl_stats",         "TEXT NULL"},
+		{"ink_foreshadow",          "foreshadow_meta",     "TEXT NULL"},
+		{"ink_chapter_rewrite_task","rewrite_scores",      "TEXT NULL"},
+		{"ink_async_task",          "task_dlq",            "TEXT NULL"},
+		{"ink_outline_review",      "review_scores",       "TEXT NULL"},
+		{"ink_outline_review",      "review_content",      "TEXT NULL"},
+		{"users",                   "security_meta",       "TEXT NULL"},
+		{"users",                   "oauth_meta",          "TEXT NULL"},
+		{"ink_user_feedback",       "feedback_admin_meta", "TEXT NULL"},
 	}
 	for _, a := range additions {
 		// 表不存在时跳过（AutoMigrate 会建表，建表时列也会随 struct 定义一同创建）
@@ -506,6 +532,8 @@ func autoMigrate(db *gorm.DB) error {
 
 	// 数据迁移（2026-06-27）：回填 cam_dir / gen_meta / render_config JSON 列（从旧平铺列）
 	migrateJSONColumns(db)
+	// 数据迁移（2026-06-27 Round 2）：回填新的 JSON 合并列
+	migrateJSONColumnsRound2(db)
 
 	// 数据迁移（2026-06-25-v5）：将旧社交表数据迁移到统一表 ink_entity_like / ink_entity_comment
 	socialMigrations := []string{
@@ -812,6 +840,354 @@ func migrateJSONColumns(db *gorm.DB) {
 			)
 			WHERE deleted_at IS NULL AND (render_config IS NULL OR render_config = '' OR render_config = 'null')`).Error; err != nil {
 			logger.Errorf("migrateJSONColumns: render_config backfill failed: %v", err)
+		}
+	}
+}
+
+// migrateJSONColumnsRound2 回填 Round 2 的 JSON 合并列（2026-06-27 第二次合并）。
+// 与 migrateJSONColumns 类似：仅在旧平铺列仍存在时执行 JSON_OBJECT 合并；幂等安全。
+func migrateJSONColumnsRound2(db *gorm.DB) {
+	type mig struct {
+		table       string
+		guardColumn string // 旧列存在则迁移
+		jsonColumn  string
+		sql         string
+	}
+	migrations := []mig{
+		{
+			table: "ink_novel", guardColumn: "description", jsonColumn: "novel_meta",
+			sql: `UPDATE ink_novel SET novel_meta = JSON_OBJECT(
+				'description',       COALESCE(description,''),
+				'genre',             COALESCE(genre,''),
+				'channel',           COALESCE(channel,''),
+				'target_word_count', COALESCE(target_word_count,0),
+				'target_chapters',   COALESCE(target_chapters,0),
+				'cover_image',       COALESCE(cover_image,''),
+				'core_theme',        COALESCE(core_theme,''),
+				'plaza_tags',        COALESCE(plaza_tags,''),
+				'published_at',      published_at,
+				'visibility',        COALESCE(visibility,'private')
+			) WHERE deleted_at IS NULL AND (novel_meta IS NULL OR novel_meta = '' OR novel_meta = 'null')`,
+		},
+		{
+			table: "ink_novel", guardColumn: "ai_model", jsonColumn: "ai_config",
+			sql: `UPDATE ink_novel SET ai_config = JSON_OBJECT(
+				'ai_model',              COALESCE(ai_model,''),
+				'temperature',           COALESCE(temperature,0.7),
+				'top_p',                 COALESCE(top_p,0.9),
+				'max_tokens',            COALESCE(max_tokens,0),
+				'timeout_seconds',       COALESCE(timeout_seconds,0),
+				'style_prompt',          COALESCE(style_prompt,''),
+				'image_style',           COALESCE(image_style,''),
+				'prompt_language',       COALESCE(prompt_language,'zh'),
+				'chapter_mode',          COALESCE(chapter_mode,'sequential'),
+				'auto_review_rounds',    COALESCE(auto_review_rounds,0),
+				'auto_review_min_score', COALESCE(auto_review_min_score,80)
+			) WHERE deleted_at IS NULL AND (ai_config IS NULL OR ai_config = '' OR ai_config = 'null')`,
+		},
+		{
+			table: "ink_novel", guardColumn: "review_status", jsonColumn: "review_meta",
+			sql: `UPDATE ink_novel SET review_meta = JSON_OBJECT(
+				'review_status', COALESCE(review_status,'draft'),
+				'review_note',   COALESCE(review_note,''),
+				'reviewed_at',   reviewed_at,
+				'reviewed_by',   COALESCE(reviewed_by,0)
+			) WHERE deleted_at IS NULL AND (review_meta IS NULL OR review_meta = '' OR review_meta = 'null')`,
+		},
+		{
+			table: "ink_chapter", guardColumn: "outline", jsonColumn: "narrative_meta",
+			sql: `UPDATE ink_chapter SET narrative_meta = JSON_OBJECT(
+				'outline',             COALESCE(outline,''),
+				'scene_outline',       COALESCE(scene_outline,''),
+				'tension_level',       COALESCE(tension_level,0),
+				'act_no',              COALESCE(act_no,0),
+				'emotional_tone',      COALESCE(emotional_tone,''),
+				'hook_type',           COALESCE(hook_type,''),
+				'chapter_hook',        COALESCE(chapter_hook,''),
+				'reader_expectations', COALESCE(reader_expectations,''),
+				'chapter_end_state',   COALESCE(chapter_end_state,'')
+			) WHERE deleted_at IS NULL AND (narrative_meta IS NULL OR narrative_meta = '' OR narrative_meta = 'null')`,
+		},
+		{
+			table: "ink_chapter", guardColumn: "quality_status", jsonColumn: "quality_meta",
+			sql: `UPDATE ink_chapter SET quality_meta = JSON_OBJECT(
+				'published_at',       published_at,
+				'continuity_blocked', COALESCE(continuity_blocked,0),
+				'quality_status',     COALESCE(quality_status,'ok')
+			) WHERE deleted_at IS NULL AND (quality_meta IS NULL OR quality_meta = '' OR quality_meta = 'null')`,
+		},
+		{
+			table: "ink_video", guardColumn: "description", jsonColumn: "publish_meta",
+			sql: `UPDATE ink_video SET publish_meta = JSON_OBJECT(
+				'description',     COALESCE(description,''),
+				'published_at',    published_at,
+				'visibility',      COALESCE(visibility,'private'),
+				'hot_score',       COALESCE(hot_score,0),
+				'tags',            COALESCE(tags,''),
+				'thumbnail',       COALESCE(thumbnail,''),
+				'cover_url',       COALESCE(cover_url,''),
+				'final_video_url', COALESCE(final_video_url,''),
+				'total_shots',     COALESCE(total_shots,0),
+				'duration',        COALESCE(duration,0),
+				'review_status',   COALESCE(review_status,'none')
+			) WHERE deleted_at IS NULL AND (publish_meta IS NULL OR publish_meta = '' OR publish_meta = 'null')`,
+		},
+		{
+			table: "ink_video", guardColumn: "provider_name", jsonColumn: "task_meta",
+			sql: `UPDATE ink_video SET task_meta = JSON_OBJECT(
+				'provider_name', COALESCE(provider_name,''),
+				'task_id',       COALESCE(task_id,''),
+				'error_message', COALESCE(error_message,''),
+				'retry_count',   COALESCE(retry_count,0),
+				'progress',      COALESCE(progress,0),
+				'video_path',    COALESCE(video_path,''),
+				'script_status', COALESCE(script_status,'draft')
+			) WHERE deleted_at IS NULL AND (task_meta IS NULL OR task_meta = '' OR task_meta = 'null')`,
+		},
+		{
+			table: "ink_storyboard_shot", guardColumn: "progress", jsonColumn: "shot_task_meta",
+			sql: `UPDATE ink_storyboard_shot SET shot_task_meta = JSON_OBJECT(
+				'progress',             COALESCE(progress,0),
+				'error_message',        COALESCE(error_message,''),
+				'clip_path',            COALESCE(clip_path,''),
+				'audio_path',           COALESCE(audio_path,''),
+				'shot_task_id',         COALESCE(shot_task_id,''),
+				'shot_provider_name',   COALESCE(shot_provider_name,''),
+				'retry_count',          COALESCE(retry_count,0),
+				'actual_video_duration',COALESCE(actual_video_duration,0),
+				'timeline_start',       COALESCE(timeline_start,0),
+				'voice_delay',          COALESCE(voice_delay,0)
+			) WHERE deleted_at IS NULL AND (shot_task_meta IS NULL OR shot_task_meta = '' OR shot_task_meta = 'null')`,
+		},
+		{
+			table: "ink_shot_sfx_item", guardColumn: "fade_in_ms", jsonColumn: "sfx_playback",
+			sql: `UPDATE ink_shot_sfx_item SET sfx_playback = JSON_OBJECT(
+				'fade_in_ms',  COALESCE(fade_in_ms,0),
+				'fade_out_ms', COALESCE(fade_out_ms,200),
+				'play_count',  COALESCE(play_count,1)
+			) WHERE deleted_at IS NULL AND (sfx_playback IS NULL OR sfx_playback = '' OR sfx_playback = 'null')`,
+		},
+		{
+			table: "ink_video_bgm_segment", guardColumn: "search_queries", jsonColumn: "bgm_track_meta",
+			sql: `UPDATE ink_video_bgm_segment SET bgm_track_meta = JSON_OBJECT(
+				'search_queries', COALESCE(search_queries,''),
+				'track_name',     COALESCE(track_name,''),
+				'track_artist',   COALESCE(track_artist,''),
+				'source',         COALESCE(source,''),
+				'mood',           COALESCE(mood,''),
+				'tempo',          COALESCE(tempo,'')
+			) WHERE deleted_at IS NULL AND (bgm_track_meta IS NULL OR bgm_track_meta = '' OR bgm_track_meta = 'null')`,
+		},
+		{
+			table: "ink_video_bgm_segment", guardColumn: "ducking_enabled", jsonColumn: "bgm_ducking",
+			sql: `UPDATE ink_video_bgm_segment SET bgm_ducking = JSON_OBJECT(
+				'enabled', COALESCE(ducking_enabled,1),
+				'level',   COALESCE(ducking_level,0.15)
+			) WHERE deleted_at IS NULL AND (bgm_ducking IS NULL OR bgm_ducking = '' OR bgm_ducking = 'null')`,
+		},
+		{
+			table: "ink_novel_video_config", guardColumn: "video_type", jsonColumn: "config",
+			sql: `UPDATE ink_novel_video_config SET config = JSON_OBJECT(
+				'video_type',              COALESCE(video_type,'animation'),
+				'video_resolution',        COALESCE(video_resolution,'1080p'),
+				'video_fps',               COALESCE(video_fps,30),
+				'video_aspect_ratio',      COALESCE(video_aspect_ratio,'16:9'),
+				'char_consistency_weight', COALESCE(char_consistency_weight,1.0),
+				'narration_voice',         COALESCE(narration_voice,''),
+				'subtitle_enabled',        COALESCE(subtitle_enabled,1) = 1,
+				'subtitle_position',       COALESCE(subtitle_position,'bottom'),
+				'subtitle_font_size',      COALESCE(subtitle_font_size,48),
+				'subtitle_color',          COALESCE(subtitle_color,'#FFFFFF'),
+				'subtitle_bg_style',       COALESCE(subtitle_bg_style,'shadow'),
+				'color_grade',             COALESCE(color_grade,'none'),
+				'contrast_level',          COALESCE(contrast_level,0),
+				'saturation',              COALESCE(saturation,1.0),
+				'film_grain',              COALESCE(film_grain,0) = 1,
+				'vignette',                COALESCE(vignette,0) = 1,
+				'chromatic_aberration',    COALESCE(chromatic_aberration,0) = 1,
+				'kling_pro_for_action',    COALESCE(kling_pro_for_action,1) = 1,
+				'kling_model',             COALESCE(kling_model,'kling-v1'),
+				'three_d_enabled',         COALESCE(three_d_enabled,0) = 1,
+				'subtitle_style',          COALESCE(subtitle_style,'none'),
+				'subtitle_font',           COALESCE(subtitle_font,'Noto Sans CJK SC')
+			) WHERE (config IS NULL OR config = '' OR config = 'null')`,
+		},
+		{
+			table: "ink_character", guardColumn: "voice_id", jsonColumn: "voice_config",
+			sql: `UPDATE ink_character SET voice_config = JSON_OBJECT(
+				'voice_id',       COALESCE(voice_id,''),
+				'voice_speed',    COALESCE(voice_speed,1.0),
+				'voice_style',    COALESCE(voice_style,''),
+				'voice_language', COALESCE(voice_language,''),
+				'voice_sample',   COALESCE(voice_sample,''),
+				'voice_profile',  COALESCE(voice_profile,'')
+			) WHERE deleted_at IS NULL AND (voice_config IS NULL OR voice_config = '' OR voice_config = 'null')`,
+		},
+		{
+			table: "ink_character", guardColumn: "gender", jsonColumn: "character_meta",
+			sql: `UPDATE ink_character SET character_meta = JSON_OBJECT(
+				'gender',            COALESCE(gender,''),
+				'age',               COALESCE(age,''),
+				'inner_conflict',    COALESCE(inner_conflict,''),
+				'core_desire',       COALESCE(core_desire,''),
+				'appearance_prompt', COALESCE(appearance_prompt,'')
+			) WHERE deleted_at IS NULL AND (character_meta IS NULL OR character_meta = '' OR character_meta = 'null')`,
+		},
+		{
+			table: "ink_asset", guardColumn: "storage_url", jsonColumn: "asset_media_meta",
+			sql: `UPDATE ink_asset SET asset_media_meta = JSON_OBJECT(
+				'storage_url',    COALESCE(storage_url,''),
+				'thumbnail_url',  COALESCE(thumbnail_url,''),
+				'preview_url',    COALESCE(preview_url,''),
+				'source_url',     COALESCE(source_url,''),
+				'attribution',    COALESCE(attribution,''),
+				'width',          COALESCE(width,0),
+				'height',         COALESCE(height,0),
+				'duration',       COALESCE(duration,0),
+				'file_size',      COALESCE(file_size,0),
+				'mime_type',      COALESCE(mime_type,''),
+				'aspect_ratio',   COALESCE(aspect_ratio,''),
+				'dominant_color', COALESCE(dominant_color,''),
+				'color_palette',  COALESCE(color_palette,''),
+				'metadata',       COALESCE(metadata,''),
+				'description',    COALESCE(description,'')
+			) WHERE deleted_at IS NULL AND (asset_media_meta IS NULL OR asset_media_meta = '' OR asset_media_meta = 'null')`,
+		},
+		{
+			table: "ink_asset", guardColumn: "quality_score", jsonColumn: "asset_quality_meta",
+			sql: `UPDATE ink_asset SET asset_quality_meta = JSON_OBJECT(
+				'quality_score',  COALESCE(quality_score,0),
+				'quality_issues', COALESCE(quality_issues,''),
+				'safety_score',   COALESCE(safety_score,1),
+				'safety_checked', COALESCE(safety_checked,0) = 1,
+				'use_count',      COALESCE(use_count,0),
+				'like_count',     COALESCE(like_count,0),
+				'deleted_by',     deleted_by,
+				'novel_id',       novel_id,
+				'video_id',       video_id,
+				'shot_id',        shot_id
+			) WHERE deleted_at IS NULL AND (asset_quality_meta IS NULL OR asset_quality_meta = '' OR asset_quality_meta = 'null')`,
+		},
+		{
+			table: "ink_crawl_job", guardColumn: "total_found", jsonColumn: "crawl_stats",
+			sql: `UPDATE ink_crawl_job SET crawl_stats = JSON_OBJECT(
+				'total_found',  COALESCE(total_found,0),
+				'imported',     COALESCE(imported,0),
+				'skipped',      COALESCE(skipped,0),
+				'failed',       COALESCE(failed,0),
+				'error_msg',    COALESCE(error_msg,''),
+				'started_at',   started_at,
+				'completed_at', completed_at,
+				'crawl_depth',  COALESCE(crawl_depth,0),
+				'url_pattern',  COALESCE(url_pattern,'')
+			) WHERE (crawl_stats IS NULL OR crawl_stats = '' OR crawl_stats = 'null')`,
+		},
+		{
+			table: "ink_foreshadow", guardColumn: "description", jsonColumn: "foreshadow_meta",
+			sql: `UPDATE ink_foreshadow SET foreshadow_meta = JSON_OBJECT(
+				'foreshadow_type',         COALESCE(foreshadow_type,''),
+				'importance',              COALESCE(importance,'normal'),
+				'confidence',              COALESCE(confidence,'medium'),
+				'linked_hook_id',          linked_hook_id,
+				'linked_arc_id',           linked_arc_id,
+				'character_ids',           COALESCE(character_ids,''),
+				'reinforcement_chapters',  COALESCE(reinforcement_chapters,''),
+				'payoff_quality',          COALESCE(payoff_quality,0),
+				'payoff_notes',            COALESCE(payoff_notes,''),
+				'actual_payoff_chapter_id',actual_payoff_chapter_id,
+				'tags',                    COALESCE(tags,''),
+				'description',             COALESCE(description,'')
+			) WHERE deleted_at IS NULL AND (foreshadow_meta IS NULL OR foreshadow_meta = '' OR foreshadow_meta = 'null')`,
+		},
+		{
+			table: "ink_chapter_rewrite_task", guardColumn: "similarity_score", jsonColumn: "rewrite_scores",
+			sql: `UPDATE ink_chapter_rewrite_task SET rewrite_scores = JSON_OBJECT(
+				'similarity_score',    COALESCE(similarity_score,0),
+				'lexical_sim',         COALESCE(lexical_sim,0),
+				'semantic_sim',        COALESCE(semantic_sim,0),
+				'structural_sim',      COALESCE(structural_sim,0),
+				'quality_score',       COALESCE(quality_score,0),
+				'deai_applied',        COALESCE(deai_applied,0) = 1,
+				'consistency_issues',  COALESCE(consistency_issues,''),
+				'error_msg',           COALESCE(error_msg,''),
+				'attempt_content',     COALESCE(attempt_content,'')
+			) WHERE (rewrite_scores IS NULL OR rewrite_scores = '' OR rewrite_scores = 'null')`,
+		},
+		{
+			table: "ink_async_task", guardColumn: "max_retries", jsonColumn: "task_dlq",
+			sql: `UPDATE ink_async_task SET task_dlq = JSON_OBJECT(
+				'max_retries', COALESCE(max_retries,3),
+				'failure_log', COALESCE(failure_log,'')
+			) WHERE deleted_at IS NULL AND (task_dlq IS NULL OR task_dlq = '' OR task_dlq = 'null')`,
+		},
+		{
+			table: "ink_outline_review", guardColumn: "structure_score", jsonColumn: "review_scores",
+			sql: `UPDATE ink_outline_review SET review_scores = JSON_OBJECT(
+				'structure_score',  COALESCE(structure_score,0),
+				'pacing_score',     COALESCE(pacing_score,0),
+				'continuity_score', COALESCE(continuity_score,0),
+				'character_score',  COALESCE(character_score,0),
+				'conflict_score',   COALESCE(conflict_score,0),
+				'hook_score',       COALESCE(hook_score,0)
+			) WHERE deleted_at IS NULL AND (review_scores IS NULL OR review_scores = '' OR review_scores = 'null')`,
+		},
+		{
+			table: "ink_outline_review", guardColumn: "issues_json", jsonColumn: "review_content",
+			sql: `UPDATE ink_outline_review SET review_content = JSON_OBJECT(
+				'issues_json',     COALESCE(issues_json,''),
+				'highlights_json', COALESCE(highlights_json,''),
+				'suggestion',      COALESCE(suggestion,'')
+			) WHERE deleted_at IS NULL AND (review_content IS NULL OR review_content = '' OR review_content = 'null')`,
+		},
+		{
+			table: "users", guardColumn: "failed_login_count", jsonColumn: "security_meta",
+			sql: `UPDATE users SET security_meta = JSON_OBJECT(
+				'failed_login_count', COALESCE(failed_login_count,0),
+				'lock_until',         lock_until,
+				'last_login_at',      last_login_at,
+				'email_verified_at',  email_verified_at
+			) WHERE deleted_at IS NULL AND (security_meta IS NULL OR security_meta = '' OR security_meta = 'null')`,
+		},
+		{
+			table: "users", guardColumn: "oauth_provider", jsonColumn: "oauth_meta",
+			sql: `UPDATE users SET oauth_meta = JSON_OBJECT(
+				'oauth_provider', COALESCE(oauth_provider,''),
+				'oauth_id',       COALESCE(oauth_id,'')
+			) WHERE deleted_at IS NULL AND (oauth_meta IS NULL OR oauth_meta = '' OR oauth_meta = 'null')`,
+		},
+		{
+			table: "ink_user_feedback", guardColumn: "admin_note", jsonColumn: "feedback_admin_meta",
+			sql: `UPDATE ink_user_feedback SET feedback_admin_meta = JSON_OBJECT(
+				'admin_note',    COALESCE(admin_note,''),
+				'reply_content', COALESCE(reply_content,''),
+				'replied_at',    replied_at,
+				'resolved_at',   resolved_at,
+				'page_url',      COALESCE(page_url,''),
+				'user_agent',    COALESCE(user_agent,''),
+				'screenshots',   COALESCE(screenshots,''),
+				'contact_email', COALESCE(contact_email,'')
+			) WHERE deleted_at IS NULL AND (feedback_admin_meta IS NULL OR feedback_admin_meta = '' OR feedback_admin_meta = 'null')`,
+		},
+	}
+	for _, m := range migrations {
+		var guardExists int64
+		db.Raw(
+			`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?`,
+			m.table, m.guardColumn,
+		).Scan(&guardExists)
+		if guardExists == 0 {
+			continue
+		}
+		var jsonExists int64
+		db.Raw(
+			`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME=? AND COLUMN_NAME=?`,
+			m.table, m.jsonColumn,
+		).Scan(&jsonExists)
+		if jsonExists == 0 {
+			continue
+		}
+		if err := db.Exec(m.sql).Error; err != nil {
+			logger.Errorf("migrateJSONColumnsRound2: %s.%s backfill failed: %v", m.table, m.jsonColumn, err)
 		}
 	}
 }

@@ -15,69 +15,69 @@ const (
 	AssetStatusWithdrawn     = "withdrawn"
 )
 
+// AssetMediaMeta 媒体元数据（JSON存储）
+type AssetMediaMeta struct {
+	StorageURL    string  `json:"storage_url"`
+	ThumbnailURL  string  `json:"thumbnail_url"`
+	PreviewURL    string  `json:"preview_url"`
+	SourceURL     string  `json:"source_url"`
+	Attribution   string  `json:"attribution"`
+	Width         int     `json:"width"`
+	Height        int     `json:"height"`
+	Duration      float64 `json:"duration"`
+	FileSize      int64   `json:"file_size"`
+	MimeType      string  `json:"mime_type"`
+	AspectRatio   string  `json:"aspect_ratio"`
+	DominantColor string  `json:"dominant_color"`
+	ColorPalette  string  `json:"color_palette"`
+	Metadata      string  `json:"metadata"`
+	Description   string  `json:"description"`
+}
+
+// AssetQualityMeta 质量与来源元数据（JSON存储）
+type AssetQualityMeta struct {
+	QualityScore  float64 `json:"quality_score"`
+	QualityIssues string  `json:"quality_issues"`
+	SafetyScore   float64 `json:"safety_score"`
+	SafetyChecked bool    `json:"safety_checked"`
+	UseCount      int     `json:"use_count"`
+	LikeCount     int     `json:"like_count"`
+	DeletedBy     *uint   `json:"deleted_by"`
+	NovelID       *uint   `json:"novel_id"`
+	VideoID       *uint   `json:"video_id"`
+	ShotID        *uint   `json:"shot_id"`
+}
+
 // Asset is the central asset table (ink_asset).
 // scope='personal': belongs exclusively to creator_id.
 // scope='public': platform-shared (crawled assets use creator_id=0).
 type Asset struct {
-	ID          uint   `json:"id" gorm:"primaryKey"`
-	Scope       string `json:"scope" gorm:"size:20;default:'personal';index"`
-	TenantID    uint   `json:"tenant_id" gorm:"index"`
-	CreatorID   uint   `json:"creator_id" gorm:"index"`
-	Title       string `json:"title" gorm:"size:500;index"`
-	Description string `json:"description" gorm:"type:text"`
-	Type        string `json:"type" gorm:"size:20;index"`    // image|video|audio|text
-	SubType     string `json:"sub_type" gorm:"size:30;index"` // shot|character_ref|scene|bgm|sfx|voice|template|stock|cutout
-	Source      string `json:"source" gorm:"size:20;index"`  // platform|crawled|uploaded
-
-	// Storage
-	StorageURL   string `json:"storage_url" gorm:"type:text"`
-	ThumbnailURL string `json:"thumbnail_url" gorm:"type:text"`
-	PreviewURL   string `json:"preview_url" gorm:"type:text"`
+	ID        uint   `json:"id" gorm:"primaryKey"`
+	Scope     string `json:"scope" gorm:"size:20;default:'personal';index"`
+	TenantID  uint   `json:"tenant_id" gorm:"index"`
+	CreatorID uint   `json:"creator_id" gorm:"index"`
+	Title     string `json:"title" gorm:"size:500;index"`
+	Type      string `json:"type" gorm:"size:20;index"`     // image|video|audio|text
+	SubType   string `json:"sub_type" gorm:"size:30;index"` // shot|character_ref|scene|bgm|sfx|voice|template|stock|cutout
+	Source    string `json:"source" gorm:"size:20;index"`   // platform|crawled|uploaded
 
 	// Copyright
-	SourceURL   string `json:"source_url" gorm:"type:text"`
-	ExternalID  string `json:"external_id" gorm:"size:200;index:idx_external_id"`
-	License     string `json:"license" gorm:"size:100;index"` // CC0|CC-BY|CC-BY-SA|CC-BY-NC|PD|unsplash|pexels|pixabay|platform
-	Attribution string `json:"attribution" gorm:"type:text"`
-
-	// Media metadata
-	Width       int     `json:"width"`
-	Height      int     `json:"height"`
-	Duration    float64 `json:"duration"`
-	FileSize    int64   `json:"file_size"`
-	MimeType    string  `json:"mime_type" gorm:"size:100"`
-	AspectRatio string  `json:"aspect_ratio" gorm:"size:20"`
-
-	// Quality & Safety
-	QualityScore  float64 `json:"quality_score" gorm:"default:0"`
-	QualityIssues string  `json:"quality_issues" gorm:"size:500"` // JSON array
-	SafetyScore   float64 `json:"safety_score" gorm:"default:1"`
-	SafetyChecked bool    `json:"safety_checked" gorm:"default:false"`
+	ExternalID string `json:"external_id" gorm:"size:200;index:idx_external_id"`
+	License    string `json:"license" gorm:"size:100;index"`
 
 	// Perceptual hash (dedup)
 	PHash string `json:"phash" gorm:"size:64;index"`
 
-	// Color
-	DominantColor string `json:"dominant_color" gorm:"size:10"`
-	ColorPalette  string `json:"color_palette" gorm:"size:200"` // JSON array of hex strings
-
-	// Extended metadata (JSON blob, type-specific)
-	Metadata string `json:"metadata,omitempty" gorm:"type:text"`
-
-	// Public library stats
-	UseCount   int     `json:"use_count" gorm:"default:0"`
-	LikeCount  int     `json:"like_count" gorm:"default:0"`
+	// Public library stats (indexed for ranking; remaining stats moved to QualityMeta)
 	ValueScore float64 `json:"value_score" gorm:"default:0;index"`
 
-	// Source tracing (platform-generated)
-	NovelID *uint `json:"novel_id,omitempty"`
-	VideoID *uint `json:"video_id,omitempty"`
-	ShotID  *uint `json:"shot_id,omitempty"`
+	// JSON 合并字段（减少列数）
+	MediaMeta   AssetMediaMeta   `json:"media_meta" gorm:"column:asset_media_meta;serializer:json;type:text"`
+	QualityMeta AssetQualityMeta `json:"quality_meta" gorm:"column:asset_quality_meta;serializer:json;type:text"`
 
 	// Status & soft-delete
 	Status    string     `json:"status" gorm:"size:20;default:'active';index"`
 	DeletedAt *time.Time `json:"deleted_at,omitempty" gorm:"index"`
-	DeletedBy *uint      `json:"deleted_by,omitempty"`
 
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -167,28 +167,36 @@ type AssetCollectionItem struct {
 
 func (AssetCollectionItem) TableName() string { return "ink_asset_collection_item" }
 
-// CrawlJob tracks crawler runs that import assets directly into the public library (ink_crawl_job).
-type CrawlJob struct {
-	ID          uint       `json:"id" gorm:"primaryKey"`
-	TaskID      string     `json:"task_id" gorm:"size:50;index"`            // AsyncTask.TaskID for lifecycle management
-	TenantID    uint       `json:"tenant_id" gorm:"index"`
-	Source      string     `json:"source" gorm:"size:50"` // unsplash|pexels|pixabay|freesound|nasa|wikimedia|webpage
-	Query       string     `json:"query" gorm:"size:500"` // search keyword, or URL when source=webpage
-	AssetType   string     `json:"asset_type" gorm:"size:20"`
-	License     string     `json:"license" gorm:"size:100"`
-	Limit       int        `json:"limit"`
-	CrawlDepth  int        `json:"crawl_depth" gorm:"default:0"`  // webpage: 0=single page, 1=follow links
-	URLPattern  string     `json:"url_pattern" gorm:"size:500"`   // webpage: regex filter for followed links
-	Status      string     `json:"status" gorm:"size:20;default:'pending'"` // pending|running|completed|failed
+// CrawlJobStats 爬取统计（JSON存储）
+type CrawlJobStats struct {
 	TotalFound  int        `json:"total_found"`
 	Imported    int        `json:"imported"`
 	Skipped     int        `json:"skipped"`
 	Failed      int        `json:"failed"`
-	ErrorMsg    string     `json:"error_msg" gorm:"size:500"`
-	CreatedBy   uint       `json:"created_by"`
+	ErrorMsg    string     `json:"error_msg"`
 	StartedAt   *time.Time `json:"started_at"`
 	CompletedAt *time.Time `json:"completed_at"`
-	CreatedAt   time.Time  `json:"created_at"`
+	CrawlDepth  int        `json:"crawl_depth"`
+	URLPattern  string     `json:"url_pattern"`
+}
+
+// CrawlJob tracks crawler runs that import assets directly into the public library (ink_crawl_job).
+type CrawlJob struct {
+	ID        uint   `json:"id" gorm:"primaryKey"`
+	TaskID    string `json:"task_id" gorm:"size:50;index"` // AsyncTask.TaskID for lifecycle management
+	TenantID  uint   `json:"tenant_id" gorm:"index"`
+	Source    string `json:"source" gorm:"size:50"`
+	Query     string `json:"query" gorm:"size:500"`
+	AssetType string `json:"asset_type" gorm:"size:20"`
+	License   string `json:"license" gorm:"size:100"`
+	Limit     int    `json:"limit"`
+	Status    string `json:"status" gorm:"size:20;default:'pending'"`
+	CreatedBy uint   `json:"created_by"`
+
+	// JSON 合并字段（减少列数）
+	Stats CrawlJobStats `json:"stats" gorm:"column:crawl_stats;serializer:json;type:text"`
+
+	CreatedAt time.Time `json:"created_at"`
 }
 
 func (CrawlJob) TableName() string { return "ink_crawl_job" }

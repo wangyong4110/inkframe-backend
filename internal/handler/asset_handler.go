@@ -819,15 +819,15 @@ func (h *AssetHandler) Stream(c *gin.Context) {
 		return
 	}
 
-	rawURL := asset.StorageURL
+	rawURL := asset.MediaMeta.StorageURL
 	if rawURL == "" {
 		respondErr(c, http.StatusNotFound, "asset has no storage URL")
 		return
 	}
 
 	// 设置 MIME 类型（有助于浏览器正确初始化播放器）
-	if asset.MimeType != "" {
-		c.Header("Content-Type", asset.MimeType)
+	if asset.MediaMeta.MimeType != "" {
+		c.Header("Content-Type", asset.MediaMeta.MimeType)
 	}
 	c.Header("Accept-Ranges", "bytes")
 	c.Header("Cache-Control", "public, max-age=3600")

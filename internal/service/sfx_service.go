@@ -286,7 +286,7 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 	if maxDur <= 0 {
 		maxDur = 0
 	}
-	hasSpeech := shot.Dialogue != ""
+	hasSpeech := shot.GenMeta.Dialogue != ""
 	hasNarration := shot.Narration != ""
 
 	// 2. 逐 tag 搜索

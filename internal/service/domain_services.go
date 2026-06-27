@@ -827,14 +827,14 @@ func (s *WorldviewService) GenerateWorldview(tenantID uint, novelID uint, genre 
 		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
 			prompt = fmt.Sprintf("请根据以下小说信息，为该小说生成一个完整、详细且与之高度契合的世界观设定。\n")
 			prompt += fmt.Sprintf("【小说名称】%s\n", novel.Title)
-			prompt += fmt.Sprintf("【题材类型】%s\n", novel.Genre)
-			if novel.Description != "" {
-				prompt += fmt.Sprintf("【小说简介】%s\n", novel.Description)
+			prompt += fmt.Sprintf("【题材类型】%s\n", novel.Meta.Genre)
+			if novel.Meta.Description != "" {
+				prompt += fmt.Sprintf("【小说简介】%s\n", novel.Meta.Description)
 			}
-			if novel.StylePrompt != "" {
-				prompt += fmt.Sprintf("【写作风格】%s\n", novel.StylePrompt)
+			if novel.AIConfig.StylePrompt != "" {
+				prompt += fmt.Sprintf("【写作风格】%s\n", novel.AIConfig.StylePrompt)
 			}
-			genre = novel.Genre
+			genre = novel.Meta.Genre
 			// 附加前几章内容摘要作为上下文
 			if s.chapterRepo != nil {
 				if chapters, err := s.chapterRepo.ListByNovel(novelID); err == nil && len(chapters) > 0 {

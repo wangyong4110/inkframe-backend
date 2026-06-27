@@ -391,8 +391,8 @@ func (s *VideoService) CreateVideoFromReq(novelID uint, req *model.CreateVideoRe
 		return nil, fmt.Errorf("novel %d does not belong to tenant %d", novelID, callerTenantID)
 	}
 	// 默认画面风格：继承项目设置中的画面风格
-	if video.RenderConfig.ArtStyle == "" && novel.ImageStyle != "" {
-		video.RenderConfig.ArtStyle = novel.ImageStyle
+	if video.RenderConfig.ArtStyle == "" && novel.AIConfig.ImageStyle != "" {
+		video.RenderConfig.ArtStyle = novel.AIConfig.ImageStyle
 	}
 	if video.RenderConfig.FrameRate == 0 {
 		video.RenderConfig.FrameRate = 24
@@ -465,10 +465,10 @@ func (s *VideoService) UpdateVideo(id, tenantID uint, req *model.UpdateVideoRequ
 		video.RenderConfig.QualityTier = req.QualityTier
 	}
 	if req.Description != "" {
-		video.Description = req.Description
+		video.PublishMeta.Description = req.Description
 	}
 	if req.Tags != "" {
-		video.Tags = req.Tags
+		video.PublishMeta.Tags = req.Tags
 	}
 	return video, s.videoRepo.Update(video)
 }
@@ -681,11 +681,11 @@ func (s *VideoService) DeleteVideo(id, tenantID uint) error {
 	var urlsToDelete []string
 	var video model.Video
 	if err := s.videoRepo.DB().Unscoped().First(&video, id).Error; err == nil {
-		if video.FinalVideoURL != "" {
-			urlsToDelete = append(urlsToDelete, video.FinalVideoURL)
+		if video.PublishMeta.FinalVideoURL != "" {
+			urlsToDelete = append(urlsToDelete, video.PublishMeta.FinalVideoURL)
 		}
-		if video.CoverURL != "" {
-			urlsToDelete = append(urlsToDelete, video.CoverURL)
+		if video.PublishMeta.CoverURL != "" {
+			urlsToDelete = append(urlsToDelete, video.PublishMeta.CoverURL)
 		}
 	}
 	var shots []*model.StoryboardShot
@@ -697,8 +697,8 @@ func (s *VideoService) DeleteVideo(id, tenantID uint) error {
 			if shot.VideoURL != "" {
 				urlsToDelete = append(urlsToDelete, shot.VideoURL)
 			}
-			if shot.ClipPath != "" {
-				urlsToDelete = append(urlsToDelete, shot.ClipPath)
+			if shot.TaskMeta.ClipPath != "" {
+				urlsToDelete = append(urlsToDelete, shot.TaskMeta.ClipPath)
 			}
 		}
 	}
@@ -1009,7 +1009,7 @@ func (s *VideoService) GenerateSingleShot(videoID, shotID uint, provider ...stri
 					"error_message": genErr.Error(),
 				})
 				shot.Status = "failed"
-				shot.ErrorMessage = genErr.Error()
+				shot.TaskMeta.ErrorMessage = genErr.Error()
 			}
 		}
 		return shot, genErr
@@ -1023,7 +1023,7 @@ func (s *VideoService) GenerateSingleShot(videoID, shotID uint, provider ...stri
 				"error_message": genErr.Error(),
 			})
 			shot.Status = "failed"
-			shot.ErrorMessage = genErr.Error()
+			shot.TaskMeta.ErrorMessage = genErr.Error()
 		}
 		return shot, genErr
 	}

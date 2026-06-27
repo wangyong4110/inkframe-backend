@@ -136,21 +136,21 @@ func (s *OutlineReviewService) ReviewChapterOutline(ctx context.Context, tenantI
 		review = s.buildRuleOnlyReview(review, ruleIssues)
 	} else {
 		allIssues := append(ruleIssues, aiResult.Issues...)
-		review.StructureScore = aiResult.DimensionScores.Structure
-		review.PacingScore = aiResult.DimensionScores.Pacing
-		review.ContinuityScore = aiResult.DimensionScores.Continuity
-		review.CharacterScore = aiResult.DimensionScores.Character
-		review.ConflictScore = aiResult.DimensionScores.Conflict
-		review.HookScore = aiResult.DimensionScores.Hook
+		review.Scores.StructureScore = aiResult.DimensionScores.Structure
+		review.Scores.PacingScore = aiResult.DimensionScores.Pacing
+		review.Scores.ContinuityScore = aiResult.DimensionScores.Continuity
+		review.Scores.CharacterScore = aiResult.DimensionScores.Character
+		review.Scores.ConflictScore = aiResult.DimensionScores.Conflict
+		review.Scores.HookScore = aiResult.DimensionScores.Hook
 		// 用体裁权重重新计算综合分（覆盖 AI 的等权计算）
-		review.OverallScore = applyWeightedScore(*aiResult, novel.Genre)
-		review.Suggestion = aiResult.Suggestion
+		review.OverallScore = applyWeightedScore(*aiResult, novel.Meta.Genre)
+		review.Content.Suggestion = aiResult.Suggestion
 
 		if b, _ := json.Marshal(allIssues); b != nil {
-			review.IssuesJSON = string(b)
+			review.Content.IssuesJSON = string(b)
 		}
 		if b, _ := json.Marshal(aiResult.Highlights); b != nil {
-			review.HighlightsJSON = string(b)
+			review.Content.HighlightsJSON = string(b)
 		}
 	}
 
@@ -177,8 +177,8 @@ func (s *OutlineReviewService) BatchReviewNovel(ctx context.Context, tenantID, n
 	// 纳入有场景大纲、文字大纲或章节正文的章节
 	var reviewable []*model.Chapter
 	for _, ch := range chapters {
-		hasScene := strings.TrimSpace(ch.SceneOutline) != "" && strings.TrimSpace(ch.SceneOutline) != "{}"
-		hasOutline := strings.TrimSpace(ch.Outline) != ""
+		hasScene := strings.TrimSpace(ch.NarrativeMeta.SceneOutline) != "" && strings.TrimSpace(ch.NarrativeMeta.SceneOutline) != "{}"
+		hasOutline := strings.TrimSpace(ch.NarrativeMeta.Outline) != ""
 		hasContent := strings.TrimSpace(ch.Content) != ""
 		if hasScene || hasOutline || hasContent {
 			reviewable = append(reviewable, ch)
@@ -453,7 +453,7 @@ func countActChapters(planned []plannedChapter, chapters []*model.Chapter, revie
 		}
 	} else {
 		for _, ch := range chapters {
-			actNum := ch.ActNo
+			actNum := ch.NarrativeMeta.ActNo
 			if actNum == 0 {
 				actNum = actOf(ch.ChapterNo, totalActual)
 			}
@@ -542,7 +542,7 @@ func buildTensionCurve(planned []plannedChapter, chapters []*model.Chapter, revi
 		}
 		pts = append(pts, model.TensionPoint{
 			ChapterNo:    ch.ChapterNo,
-			PlannedLevel: ch.TensionLevel,
+			PlannedLevel: ch.NarrativeMeta.TensionLevel,
 			Score:        score,
 			Status:       status,
 		})
@@ -587,8 +587,8 @@ func (s *OutlineReviewService) runBatchSynthesisAI(ctx context.Context, tenantID
 
 	prompt, err := renderPrompt("outline_review_batch", map[string]interface{}{
 		"NovelTitle":        novel.Title,
-		"Genre":             novel.Genre,
-		"Style":             novel.StylePrompt,
+		"Genre":             novel.Meta.Genre,
+		"Style":             novel.AIConfig.StylePrompt,
 		"TotalChapters":     len(planned),
 		"Act1Count":         arcBalance.Act1Count,
 		"Act2Count":         arcBalance.Act2Count,
@@ -638,7 +638,7 @@ func buildChapterPlanTable(planned []plannedChapter, chapters []*model.Chapter) 
 		}
 	} else {
 		for _, ch := range chapters {
-			write(ch.ChapterNo, ch.Title, ch.ActNo, ch.TensionLevel, ch.EmotionalTone, ch.Summary)
+			write(ch.ChapterNo, ch.Title, ch.NarrativeMeta.ActNo, ch.NarrativeMeta.TensionLevel, ch.NarrativeMeta.EmotionalTone, ch.Summary)
 		}
 	}
 	return sb.String()
@@ -676,8 +676,8 @@ func buildRuleFallbackSuggestion(passed, warning, failed, total, reviewed int) s
 func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.OutlineIssue {
 	var issues []model.OutlineIssue
 
-	hasScene := strings.TrimSpace(chapter.SceneOutline) != "" && strings.TrimSpace(chapter.SceneOutline) != "{}"
-	hasOutline := strings.TrimSpace(chapter.Outline) != ""
+	hasScene := strings.TrimSpace(chapter.NarrativeMeta.SceneOutline) != "" && strings.TrimSpace(chapter.NarrativeMeta.SceneOutline) != "{}"
+	hasOutline := strings.TrimSpace(chapter.NarrativeMeta.Outline) != ""
 
 	if !hasScene && !hasOutline {
 		issues = append(issues, model.OutlineIssue{
@@ -703,10 +703,10 @@ func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.Out
 			POV          string `json:"pov"`
 		} `json:"scenes"`
 	}
-	if err := json.Unmarshal([]byte(chapter.SceneOutline), &outline); err == nil {
+	if err := json.Unmarshal([]byte(chapter.NarrativeMeta.SceneOutline), &outline); err == nil {
 		n := len(outline.Scenes)
 		// 单场景仅对中低张力章节报错；高张力章节（如决战/高潮）可以是一个完整长场景
-		if n < 2 && chapter.TensionLevel < 8 {
+		if n < 2 && chapter.NarrativeMeta.TensionLevel < 8 {
 			issues = append(issues, model.OutlineIssue{
 				Dimension:   "structure",
 				Severity:    "error",
@@ -747,7 +747,7 @@ func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.Out
 				}
 				// 全程高张力警告：只对章节目标张力本身不高的章节触发
 				// 如果章节规划张力就是 8+，全程高张力是预期行为（决战/高潮章）
-				if chapter.TensionLevel < 7 {
+				if chapter.NarrativeMeta.TensionLevel < 7 {
 					allHigh := true
 					for _, l := range levels {
 						if l < 7 {
@@ -783,7 +783,7 @@ func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.Out
 		}
 	}
 
-	if chapter.HookType == "" && chapter.ChapterHook == "" {
+	if chapter.NarrativeMeta.HookType == "" && chapter.NarrativeMeta.ChapterHook == "" {
 		issues = append(issues, model.OutlineIssue{
 			Dimension:   "hook",
 			Severity:    "info",
@@ -793,11 +793,11 @@ func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.Out
 	}
 
 	// 第一幕极高张力警告：排除章节号 <= 2 的情况（开场倒叙/in medias res 是经典手法）
-	if chapter.ActNo == 1 && chapter.TensionLevel >= 9 && chapter.ChapterNo > 2 {
+	if chapter.NarrativeMeta.ActNo == 1 && chapter.NarrativeMeta.TensionLevel >= 9 && chapter.ChapterNo > 2 {
 		issues = append(issues, model.OutlineIssue{
 			Dimension:   "pacing",
 			Severity:    "warning",
-			Description: fmt.Sprintf("第一幕第%d章出现极高张力（%d/10），可能透支后续叙事空间", chapter.ChapterNo, chapter.TensionLevel),
+			Description: fmt.Sprintf("第一幕第%d章出现极高张力（%d/10），可能透支后续叙事空间", chapter.ChapterNo, chapter.NarrativeMeta.TensionLevel),
 			Suggestion:  "第一幕中期建议以铺垫和人物塑造为主，将极高张力节点集中于幕末转折点，为第二幕留出对比空间",
 		})
 	}
@@ -850,29 +850,29 @@ func (s *OutlineReviewService) runAIReview(ctx context.Context, tenantID uint, c
 	}
 
 	// 优先使用场景大纲，降级到文字大纲
-	outlineContent := chapter.SceneOutline
+	outlineContent := chapter.NarrativeMeta.SceneOutline
 	if strings.TrimSpace(outlineContent) == "" || strings.TrimSpace(outlineContent) == "{}" {
-		outlineContent = chapter.Outline
+		outlineContent = chapter.NarrativeMeta.Outline
 	}
 
 	openForeshadows := s.buildOpenForeshadowsText(chapter.NovelID)
 
 	// 体裁权重摘要（告知 AI 本体裁的审查侧重，辅助其打分）
-	w := getGenreWeights(novel.Genre)
+	w := getGenreWeights(novel.Meta.Genre)
 	weightHint := fmt.Sprintf("结构%.0f%%·节奏%.0f%%·连贯%.0f%%·人物%.0f%%·冲突%.0f%%·钩子%.0f%%",
 		w.Structure*100, w.Pacing*100, w.Continuity*100,
 		w.Character*100, w.Conflict*100, w.Hook*100)
 
 	prompt, err := renderPrompt("outline_review", map[string]interface{}{
 		"NovelTitle":          novel.Title,
-		"Genre":               novel.Genre,
-		"Style":               novel.StylePrompt,
-		"TargetChapters":      novel.TargetChapters,
+		"Genre":               novel.Meta.Genre,
+		"Style":               novel.AIConfig.StylePrompt,
+		"TargetChapters":      novel.Meta.TargetChapters,
 		"ChapterNo":           chapter.ChapterNo,
-		"ActNo":               chapter.ActNo,
-		"EmotionalTone":       chapter.EmotionalTone,
-		"TensionLevel":        chapter.TensionLevel,
-		"HookType":            chapter.HookType,
+		"ActNo":               chapter.NarrativeMeta.ActNo,
+		"EmotionalTone":       chapter.NarrativeMeta.EmotionalTone,
+		"TensionLevel":        chapter.NarrativeMeta.TensionLevel,
+		"HookType":            chapter.NarrativeMeta.HookType,
 		"SceneOutlineJSON":    outlineContent,
 		"PrevChapterSummary":  prevSummary,
 		"NextChapterTitle":    nextTitle,
@@ -925,17 +925,17 @@ func (s *OutlineReviewService) buildRuleOnlyReview(review *model.OutlineReview, 
 	}
 	score := math.Max(0, 80-float64(errCount)*20-float64(warnCount)*8)
 	review.OverallScore = score
-	review.StructureScore = score
-	review.PacingScore = score
-	review.ContinuityScore = score
-	review.CharacterScore = score
-	review.ConflictScore = score
-	review.HookScore = score
+	review.Scores.StructureScore = score
+	review.Scores.PacingScore = score
+	review.Scores.ContinuityScore = score
+	review.Scores.CharacterScore = score
+	review.Scores.ConflictScore = score
+	review.Scores.HookScore = score
 
 	if b, _ := json.Marshal(issues); b != nil {
-		review.IssuesJSON = string(b)
+		review.Content.IssuesJSON = string(b)
 	}
-	review.Suggestion = "AI 审查暂不可用，已完成基础规则检查。建议配置 AI 服务后重新审查以获得专业建议。"
+	review.Content.Suggestion = "AI 审查暂不可用，已完成基础规则检查。建议配置 AI 服务后重新审查以获得专业建议。"
 	return review
 }
 

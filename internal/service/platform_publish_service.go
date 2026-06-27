@@ -132,7 +132,7 @@ func (s *PlatformPublishService) DisconnectAccount(id uint) error {
 
 // PublishToExternal 向外部平台发布视频（异步）
 func (s *PlatformPublishService) PublishToExternal(ctx context.Context, video *model.Video, accountIDs []uint, opts PublishOptions, tenantID uint) (string, error) {
-	if video.FinalVideoURL == "" {
+	if video.PublishMeta.FinalVideoURL == "" {
 		return "", fmt.Errorf("video not synthesized yet: final_video_url is empty")
 	}
 
@@ -201,7 +201,7 @@ func (s *PlatformPublishService) PublishToExternal(ctx context.Context, video *m
 			var pubErr error
 			pubStart := time.Now()
 			for attempt := 0; attempt < 3; attempt++ {
-				externalID, externalURL, pubErr = p.PublishVideo(bgCtx, account, video.FinalVideoURL, opts)
+				externalID, externalURL, pubErr = p.PublishVideo(bgCtx, account, video.PublishMeta.FinalVideoURL, opts)
 				if pubErr == nil {
 					break
 				}

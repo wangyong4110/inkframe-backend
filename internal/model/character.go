@@ -6,6 +6,25 @@ import (
 	"gorm.io/gorm"
 )
 
+// CharacterVoiceConfig 配音配置（JSON存储）
+type CharacterVoiceConfig struct {
+	VoiceID       string  `json:"voice_id"`
+	VoiceSpeed    float64 `json:"voice_speed"`
+	VoiceStyle    string  `json:"voice_style"`
+	VoiceLanguage string  `json:"voice_language"`
+	VoiceSample   string  `json:"voice_sample"`
+	VoiceProfile  string  `json:"voice_profile"`
+}
+
+// CharacterMeta 角色基本属性（JSON存储）
+type CharacterMeta struct {
+	Gender           string `json:"gender"`
+	Age              string `json:"age"`
+	InnerConflict    string `json:"inner_conflict"`
+	CoreDesire       string `json:"core_desire"`
+	AppearancePrompt string `json:"appearance_prompt"`
+}
+
 // Character 角色
 type Character struct {
 	ID      uint   `json:"id" gorm:"primaryKey"`
@@ -16,37 +35,18 @@ type Character struct {
 	Name string `json:"name" gorm:"size:100;not null;uniqueIndex:uniq_char_novel_name,priority:2"`
 	Role string `json:"role" gorm:"size:50"` // protagonist/antagonist/supporting/minor
 
-	// 基本属性
-	Gender string `json:"gender" gorm:"size:20"` // male/female/neutral
-	Age    string `json:"age" gorm:"size:50"`    // 如 "16" / "约25岁" / "少年"
-
 	// 统一描述字段（外貌、性格、背景、对话风格等所有描述性信息）
 	Description string `json:"description" gorm:"type:text"`
 
-	// 人物深层动机（驱动角色行为的内在逻辑，用于生成更立体的角色表现）
-	InnerConflict string `json:"inner_conflict,omitempty" gorm:"column:inner_conflict;type:text"` // 内在矛盾/恐惧（如：渴望自由却害怕失去家人）
-	CoreDesire    string `json:"core_desire,omitempty" gorm:"column:core_desire;type:text"`    // 核心渴望（如：被认可、复仇、保护所爱之人）
-
-	// 角色声音档案（由 character_voice.j2 提取，随章节积累自动更新）
-	// JSON格式: {"vocabulary_level":"...","speech_habits":[...],"emotional_expression":"...","forbidden_phrases":[...],"signature_expressions":[...],"overall_voice":"..."}
-	VoiceProfile string `json:"voice_profile,omitempty" gorm:"column:voice_profile;type:text"`
-
-	// AI 生成的统一形象提示词（含人种/时代/身份，语言跟随 novel.PromptLanguage）
-	// 由 GenerateCostumeDesign 生成，优先级低于 CharacterLook.VisualPrompt
-	AppearancePrompt string `json:"appearance_prompt,omitempty" gorm:"column:appearance_prompt;type:text"`
+	// JSON 合并字段（减少列数）
+	VoiceConfig CharacterVoiceConfig `json:"voice_config" gorm:"column:voice_config;serializer:json;type:text"`
+	Meta        CharacterMeta        `json:"meta" gorm:"column:character_meta;serializer:json;type:text"`
 
 	// 默认形象 ID（指向 ink_character_look 主键；0 表示未设置）
 	DefaultLookID uint `json:"default_look_id" gorm:"default:0"`
 
 	// 默认形象完整对象（虚字段，不存库，由服务层批量注入）
 	DefaultLook *CharacterLook `json:"default_look,omitempty" gorm:"-"`
-
-	// 配音设置
-	VoiceID       string  `json:"voice_id" gorm:"size:100"`                         // 声音ID（如 alloy/echo/nova 等）
-	VoiceSpeed    float64 `json:"voice_speed" gorm:"type:decimal(4,2);default:1.0"` // 语速 0.25–4.0
-	VoiceStyle    string  `json:"voice_style" gorm:"size:100"`                      // 语音风格（如 calm/excited/sad）
-	VoiceLanguage string  `json:"voice_language" gorm:"size:20"`                    // 语言+方言（如 zh / zh-yue / en / ja）
-	VoiceSample   string  `json:"voice_sample" gorm:"size:1000"`                    // 试听样本 URL
 
 	// 状态
 	Status string `json:"status" gorm:"size:20;default:active"`

@@ -392,8 +392,8 @@ func (s *NarrativeMemoryService) buildPlotTensionState(novelID uint, currentChap
 	var points []tensionPoint
 	for i := len(recent) - 1; i >= 0; i-- { // 升序排列
 		ch := recent[i]
-		if ch.TensionLevel > 0 {
-			points = append(points, tensionPoint{ch.ChapterNo, ch.TensionLevel, ch.ChapterHook})
+		if ch.NarrativeMeta.TensionLevel > 0 {
+			points = append(points, tensionPoint{ch.ChapterNo, ch.NarrativeMeta.TensionLevel, ch.NarrativeMeta.ChapterHook})
 		}
 	}
 	if len(points) == 0 {
@@ -465,7 +465,7 @@ func (s *NarrativeMemoryService) buildPlotTensionState(novelID uint, currentChap
 
 func (s *NarrativeMemoryService) buildGlobalSummary(novel *model.Novel) string {
 	var sb strings.Builder
-	sb.WriteString("【故事概要】\n" + novel.Description)
+	sb.WriteString("【故事概要】\n" + novel.Meta.Description)
 	if novel.Worldview != nil {
 		sb.WriteString("\n\n【世界观】\n")
 		if novel.Worldview.Description != "" {
@@ -760,7 +760,7 @@ func (s *NarrativeMemoryService) generateArcSummary(tenantID, novelID uint, arcN
 			ChapterNo: ch.ChapterNo,
 			Title:     ch.Title,
 			Summary:   ch.Summary,
-			Hook:      ch.ChapterHook,
+			Hook:      ch.NarrativeMeta.ChapterHook,
 		}
 		if ch.Content != "" {
 			r := []rune(ch.Content)

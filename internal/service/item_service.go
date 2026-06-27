@@ -189,9 +189,9 @@ func (s *ItemService) GenerateItemImage(tenantID, id uint, referenceImageURL, pr
 	if s.novelRepo != nil && item.NovelID > 0 {
 		if novel, e := s.novelRepo.GetByID(item.NovelID); e == nil {
 			novelTitle = novel.Title
-			imageStyle = novel.ImageStyle
+			imageStyle = novel.AIConfig.ImageStyle
 			aspectRatio = novel.VideoConf().VideoAspectRatio
-			promptLanguage = novel.PromptLanguage
+			promptLanguage = novel.AIConfig.PromptLanguage
 		}
 	}
 	url, err := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle, imageStyle, aspectRatio, promptLanguage)
@@ -224,9 +224,9 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
 			novelTitle = novel.Title
-			imageStyle = novel.ImageStyle
+			imageStyle = novel.AIConfig.ImageStyle
 			aspectRatio = novel.VideoConf().VideoAspectRatio
-			promptLanguage = novel.PromptLanguage
+			promptLanguage = novel.AIConfig.PromptLanguage
 		}
 	}
 
@@ -299,9 +299,9 @@ func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item,
 	if s.novelRepo != nil {
 		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
 			novelTitle = novel.Title
-			novelGenre = novel.Genre
-			if novel.PromptLanguage != "" {
-				promptLanguage = novel.PromptLanguage
+			novelGenre = novel.Meta.Genre
+			if novel.AIConfig.PromptLanguage != "" {
+				promptLanguage = novel.AIConfig.PromptLanguage
 			}
 		}
 	}
@@ -534,7 +534,7 @@ func (s *ItemService) AIExtractAllFromNovel(ctx context.Context, tenantID, novel
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
 			novelTitle = novel.Title
-			novelGenre = novel.Genre
+			novelGenre = novel.Meta.Genre
 		}
 	}
 
@@ -684,7 +684,7 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint, u
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
 			novelTitle = novel.Title
-			novelGenre = novel.Genre
+			novelGenre = novel.Meta.Genre
 		}
 	}
 

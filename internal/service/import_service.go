@@ -430,7 +430,7 @@ func (s *NovelImportService) crawlChaptersBackground(
 			// 从章节 stub 提取平台和来源 URL
 			var platform, sourceURL string
 			for _, ch := range chapters {
-				u := strings.TrimPrefix(ch.Outline, "crawl:")
+				u := strings.TrimPrefix(ch.NarrativeMeta.Outline, "crawl:")
 				if u != "" {
 					sourceURL = u
 					platform = s.detectSiteFromURL(u)
@@ -457,7 +457,7 @@ func (s *NovelImportService) crawlChaptersBackground(
 	var toFetch []*crawler.ChapterInfo
 	var modelChapters []*model.Chapter
 	for _, ch := range chapters {
-		chURL := strings.TrimPrefix(ch.Outline, "crawl:")
+		chURL := strings.TrimPrefix(ch.NarrativeMeta.Outline, "crawl:")
 		if chURL == "" {
 			progress.mu.Lock()
 			progress.Done++
@@ -478,7 +478,7 @@ func (s *NovelImportService) crawlChaptersBackground(
 		progress.mu.Unlock()
 
 		if r.Err != nil || r.Content == nil || r.Content.Content == "" {
-			chURL := strings.TrimPrefix(ch.Outline, "crawl:")
+			chURL := strings.TrimPrefix(ch.NarrativeMeta.Outline, "crawl:")
 			if r.Err != nil {
 				logger.Errorf("[Crawl] chapter %d fetch error: %v (url=%s)", ch.ChapterNo, r.Err, chURL)
 			} else {
@@ -1749,7 +1749,7 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 				ShotNo:      idx + 1,
 				ChapterID:   &chapter.ID,
 				Description: shot.Description,
-				Dialogue:    shot.Dialogue,
+				Dialogue:    shot.GenMeta.Dialogue,
 				Duration:    shot.Duration,
 				Status:      "pending",
 				CamDir: model.ShotCamDir{

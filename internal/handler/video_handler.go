@@ -106,8 +106,8 @@ func (h *VideoHandler) ExportSubtitles(c *gin.Context) {
 
 	// 获取字体配置
 	fontName := "Noto Sans CJK SC"
-	if vc := h.videoService.GetNovelVideoConfig(video.NovelID); vc != nil && vc.SubtitleFont != "" {
-		fontName = vc.SubtitleFont
+	if vc := h.videoService.GetNovelVideoConfig(video.NovelID); vc != nil && vc.Config.SubtitleFont != "" {
+		fontName = vc.Config.SubtitleFont
 	}
 
 	// 将 []*model.StoryboardShot 转换为 []model.StoryboardShot
@@ -367,8 +367,8 @@ func (h *VideoHandler) PublishVideo(c *gin.Context) {
 	}
 	now := timeNow()
 	video.IsPublished = true
-	video.PublishedAt = &now
-	video.Visibility = req.Visibility
+	video.PublishMeta.PublishedAt = &now
+	video.PublishMeta.Visibility = req.Visibility
 	if err := h.videoService.UpdateVideoFields(video.ID, map[string]interface{}{
 		"is_published": true,
 		"published_at": &now,

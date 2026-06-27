@@ -221,10 +221,10 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	genre := ""
 	if s.novelRepo != nil && video.NovelID > 0 {
 		if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil {
-			if novel.PromptLanguage != "" {
-				promptLanguage = novel.PromptLanguage
+			if novel.AIConfig.PromptLanguage != "" {
+				promptLanguage = novel.AIConfig.PromptLanguage
 			}
-			genre = novel.Genre
+			genre = novel.Meta.Genre
 		}
 	}
 
@@ -476,9 +476,9 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	}
 
 	// 更新视频状态；生成完成即视为已确认，无需手动确认步骤
-	video.TotalShots = len(shots)
+	video.PublishMeta.TotalShots = len(shots)
 	video.Status = "storyboard"
-	video.ScriptStatus = "confirmed"
+	video.TaskMeta.ScriptStatus = "confirmed"
 	if err := s.videoRepo.Update(video); err != nil {
 		logger.Errorf("[VideoService] failed to update video %d status: %v", video.ID, err)
 	}
@@ -577,7 +577,7 @@ func (s *VideoService) autoMatchShotAnchors(shots []*model.StoryboardShot, ancho
 }
 
 // autoMatchShotCharacters 按多来源匹配小说角色，写入 CharacterIDs。
-// 匹配优先级：① shot.Characters JSON → ② shot.Dialogue "角色名：台词" → ③ shot.Narration 关键词扫描。
+// 匹配优先级：① shot.Characters JSON → ② shot.GenMeta.Dialogue "角色名：台词" → ③ shot.Narration 关键词扫描。
 // 已有 CharacterIDs 时不覆盖（保留手动绑定结果）。
 func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, chars []*model.Character) {
 	if len(chars) == 0 {
@@ -639,10 +639,10 @@ func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, ch
 		}
 
 		// ② Dialogue: "角色名：台词" — 提取冒号前的角色名
-		if len(matched) == 0 && shot.Dialogue != "" {
+		if len(matched) == 0 && shot.GenMeta.Dialogue != "" {
 			for _, sep := range []string{"：", ":"} {
-				if idx := strings.Index(shot.Dialogue, sep); idx > 0 {
-					name := shot.Dialogue[:idx]
+				if idx := strings.Index(shot.GenMeta.Dialogue, sep); idx > 0 {
+					name := shot.GenMeta.Dialogue[:idx]
 					if len([]rune(name)) <= 10 { // 合理的角色名长度
 						tryMatch(name, seen, &matched)
 					}
@@ -821,7 +821,7 @@ func (s *VideoService) buildStoryboardPrompt(
 	pacing string,
 	arcPlan string,
 ) string {
-	// isEn / isImageEn 均由 novel.PromptLanguage 决定，与项目「AI 提示词的语言」设置保持一致。
+	// isEn / isImageEn 均由 novel.AIConfig.PromptLanguage 决定，与项目「AI 提示词的语言」设置保持一致。
 	// image_prompt 在生图前会经过自动翻译（translatePromptToEnglish），保持中文可供用户编辑。
 	isEn := promptLanguage == "en"
 	isImageEn := promptLanguage == "en"
@@ -1803,8 +1803,8 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent s
 		if narr := truncate(shot.Narration, 80); narr != "" {
 			sb.WriteString(fmt.Sprintf("\n      旁白: %s", narr))
 		}
-		if shot.Dialogue != "" {
-			sb.WriteString(fmt.Sprintf("\n      台词: %s", truncate(shot.Dialogue, 50)))
+		if shot.GenMeta.Dialogue != "" {
+			sb.WriteString(fmt.Sprintf("\n      台词: %s", truncate(shot.GenMeta.Dialogue, 50)))
 		}
 		sb.WriteString("\n")
 	}

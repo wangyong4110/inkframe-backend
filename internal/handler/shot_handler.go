@@ -319,8 +319,8 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 	// 获取项目提示词语言设置
 	promptLanguage := "zh"
 	if video, err2 := h.videoService.GetVideo(uint(videoID)); err2 == nil {
-		if novel, err3 := h.videoService.GetNovelByID(video.NovelID); err3 == nil && novel.PromptLanguage != "" {
-			promptLanguage = novel.PromptLanguage
+		if novel, err3 := h.videoService.GetNovelByID(video.NovelID); err3 == nil && novel.AIConfig.PromptLanguage != "" {
+			promptLanguage = novel.AIConfig.PromptLanguage
 		}
 	}
 
@@ -392,8 +392,8 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 	// 获取项目提示词语言设置
 	promptLang := "zh"
 	if video, err2 := h.videoService.GetVideo(uint(videoID)); err2 == nil {
-		if novel, err3 := h.videoService.GetNovelByID(video.NovelID); err3 == nil && novel.PromptLanguage != "" {
-			promptLang = novel.PromptLanguage
+		if novel, err3 := h.videoService.GetNovelByID(video.NovelID); err3 == nil && novel.AIConfig.PromptLanguage != "" {
+			promptLang = novel.AIConfig.PromptLanguage
 		}
 	}
 
@@ -588,7 +588,7 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, err.Error())
 		return
 	}
-	if shot.Narration == "" && shot.Dialogue == "" && shot.Description == "" {
+	if shot.Narration == "" && shot.GenMeta.Dialogue == "" && shot.Description == "" {
 		respondBadRequest(c, "shot has no text content")
 		return
 	}
@@ -611,7 +611,7 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 	if narrationVoice == "" {
 		if video, err := h.videoService.GetVideo(uint(videoID)); err == nil {
 			if vc := h.videoService.GetNovelVideoConfig(video.NovelID); vc != nil {
-				narrationVoice = vc.NarrationVoice
+				narrationVoice = vc.Config.NarrationVoice
 			}
 		}
 	}

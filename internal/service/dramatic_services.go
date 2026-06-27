@@ -453,9 +453,9 @@ func (s *PacingService) GetCurve(novelID uint) ([]*PacingPoint, error) {
 	for _, ch := range chapters {
 		points = append(points, &PacingPoint{
 			ChapterNo:     ch.ChapterNo,
-			TensionLevel:  ch.TensionLevel,
-			ActNo:         ch.ActNo,
-			EmotionalTone: ch.EmotionalTone,
+			TensionLevel:  ch.NarrativeMeta.TensionLevel,
+			ActNo:         ch.NarrativeMeta.ActNo,
+			EmotionalTone: ch.NarrativeMeta.EmotionalTone,
 			Title:         ch.Title,
 		})
 	}

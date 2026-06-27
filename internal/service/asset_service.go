@@ -78,7 +78,7 @@ func (s *AssetService) fireDeleteHooks(a *model.Asset) {
 		case "bgm":
 			if s.onDeleteBGMHook != nil {
 				// Derive filename from the OSS URL path (e.g. ".../bgm/local/happy.mp3" → "happy.mp3")
-				filename := path.Base(a.StorageURL)
+				filename := path.Base(a.MediaMeta.StorageURL)
 				if filename != "" && filename != "." {
 					s.onDeleteBGMHook(filename)
 				}
@@ -220,10 +220,16 @@ func (s *AssetService) Upload(ctx context.Context, r io.Reader, size int64, p Up
 	asset := &model.Asset{
 		Scope: model.AssetScopePersonal, TenantID: p.TenantID, CreatorID: p.CreatorID,
 		Title: p.Title, Type: p.Type, SubType: p.SubType,
-		Source: "uploaded", StorageURL: url,
-		MimeType: p.MimeType, FileSize: size,
-		Status:  model.AssetStatusActive,
-		NovelID: p.NovelID, VideoID: p.VideoID, ShotID: p.ShotID,
+		Source: "uploaded",
+		Status: model.AssetStatusActive,
+		MediaMeta: model.AssetMediaMeta{
+			StorageURL: url,
+			MimeType:   p.MimeType,
+			FileSize:   size,
+		},
+		QualityMeta: model.AssetQualityMeta{
+			NovelID: p.NovelID, VideoID: p.VideoID, ShotID: p.ShotID,
+		},
 	}
 	if err := s.assetRepo.Create(asset); err != nil {
 		return nil, err
@@ -246,9 +252,15 @@ func (s *AssetService) CreateFromGeneration(ctx context.Context, p UploadAssetPa
 	asset := &model.Asset{
 		Scope: model.AssetScopePersonal, TenantID: p.TenantID, CreatorID: p.CreatorID,
 		Title: p.Title, Type: p.Type, SubType: p.SubType,
-		Source: "platform", StorageURL: storageURL, ThumbnailURL: thumbnailURL,
-		License: "platform", Status: model.AssetStatusActive,
-		NovelID: p.NovelID, VideoID: p.VideoID, ShotID: p.ShotID,
+		Source: "platform", License: "platform",
+		Status: model.AssetStatusActive,
+		MediaMeta: model.AssetMediaMeta{
+			StorageURL:   storageURL,
+			ThumbnailURL: thumbnailURL,
+		},
+		QualityMeta: model.AssetQualityMeta{
+			NovelID: p.NovelID, VideoID: p.VideoID, ShotID: p.ShotID,
+		},
 	}
 	if err := s.assetRepo.Create(asset); err != nil {
 		return nil, err
@@ -318,13 +330,13 @@ func (s *AssetService) PurgeAsset(ctx context.Context, id, callerID uint) error 
 		return errors.New("not found or permission denied")
 	}
 	// Best-effort storage deletion; errors are non-fatal
-	if s.storageSvc != nil && a.StorageURL != "" {
-		_ = s.storageSvc.Delete(ctx, a.StorageURL)
+	if s.storageSvc != nil && a.MediaMeta.StorageURL != "" {
+		_ = s.storageSvc.Delete(ctx, a.MediaMeta.StorageURL)
 	}
-	if s.storageSvc != nil && a.ThumbnailURL != "" {
-		_ = s.storageSvc.Delete(ctx, a.ThumbnailURL)
+	if s.storageSvc != nil && a.MediaMeta.ThumbnailURL != "" {
+		_ = s.storageSvc.Delete(ctx, a.MediaMeta.ThumbnailURL)
 	}
-	_ = s.quotaRepo.SubStorage(a.TenantID, a.FileSize)
+	_ = s.quotaRepo.SubStorage(a.TenantID, a.MediaMeta.FileSize)
 	if err := s.assetRepo.HardDelete(id); err != nil {
 		return err
 	}
@@ -377,8 +389,8 @@ func (s *AssetService) RequestShare(assetID, callerID uint) (*model.AssetPublish
 
 func (s *AssetService) autoReviewShare(ctx context.Context, a *model.Asset, req *model.AssetPublishRequest) error {
 	// Simple auto-approve for platform-generated assets; stub for uploaded/crawled
-	qualityOK := a.QualityScore >= 6.0 || a.QualityScore == 0 // 0 means not yet checked
-	safetyOK := a.SafetyScore >= 0.9 || !a.SafetyChecked
+	qualityOK := a.QualityMeta.QualityScore >= 6.0 || a.QualityMeta.QualityScore == 0 // 0 means not yet checked
+	safetyOK := a.QualityMeta.SafetyScore >= 0.9 || !a.QualityMeta.SafetyChecked
 
 	now := time.Now()
 	if qualityOK && safetyOK {
@@ -585,9 +597,9 @@ func (s *AssetService) UseAsset(assetID uint, usage model.AssetUsage) (string, s
 	_ = s.assetRepo.IncrUseCount(assetID)
 	attribution := ""
 	if strings.Contains(a.License, "CC-BY") || a.License == "unsplash" {
-		attribution = a.Attribution
+		attribution = a.MediaMeta.Attribution
 	}
-	return a.StorageURL, attribution, nil
+	return a.MediaMeta.StorageURL, attribution, nil
 }
 
 // ─── Collections ─────────────────────────────────────────────────────────────
@@ -750,7 +762,7 @@ func (s *AssetService) RecalcValueScores() error {
 		return err
 	}
 	for _, a := range assets {
-		score := float64(a.UseCount)*0.3 + float64(a.LikeCount)*0.2
+		score := float64(a.QualityMeta.UseCount)*0.3 + float64(a.QualityMeta.LikeCount)*0.2
 		_ = s.assetRepo.UpdateValueScore(a.ID, score)
 	}
 	return nil
@@ -782,7 +794,9 @@ func (s *AssetService) BatchShareRequest(callerID uint, assetIDs []uint) (submit
 func (s *AssetService) CreateCrawlJob(tenantID uint, source, query, assetType, license string, limit, crawlDepth int, urlPattern string, createdBy uint) (*model.CrawlJob, error) {
 	job := &model.CrawlJob{
 		TenantID: tenantID, Source: source, Query: query, AssetType: assetType,
-		License: license, Limit: limit, CrawlDepth: crawlDepth, URLPattern: urlPattern,
+		License:   license,
+		Limit:     limit,
+		Stats:     model.CrawlJobStats{CrawlDepth: crawlDepth, URLPattern: urlPattern},
 		CreatedBy: createdBy, Status: "pending",
 	}
 	if err := s.crawlRepo.Create(job); err != nil {
@@ -813,9 +827,9 @@ func (s *AssetService) RetryCrawlJob(id uint) (*model.CrawlJob, error) {
 		return nil, err
 	}
 	job.Status = "pending"
-	job.Imported, job.Skipped, job.Failed, job.TotalFound = 0, 0, 0, 0
-	job.ErrorMsg = ""
-	job.StartedAt, job.CompletedAt = nil, nil
+	job.Stats.Imported, job.Stats.Skipped, job.Stats.Failed, job.Stats.TotalFound = 0, 0, 0, 0
+	job.Stats.ErrorMsg = ""
+	job.Stats.StartedAt, job.Stats.CompletedAt = nil, nil
 
 	task, err := s.taskSvc.Create(job.TenantID, TaskTypeCrawlJob, job.Source+": "+job.Query, "crawl_job", job.ID)
 	if err != nil {
@@ -1017,12 +1031,14 @@ func (s *AssetService) crawlBBCSFX(ctx context.Context, job *model.CrawlJob) (im
 				Type:       "audio",
 				SubType:    "sfx",
 				Source:     "crawled",
-				StorageURL: mp3,
-				SourceURL:  fmt.Sprintf("https://sound-effects.bbcrewind.co.uk/#%s", r.ID),
 				ExternalID: externalID,
 				License:    "bbc-remarc",
-				Duration:   r.Duration,
 				Status:     model.AssetStatusActive,
+				MediaMeta: model.AssetMediaMeta{
+					StorageURL: mp3,
+					SourceURL:  fmt.Sprintf("https://sound-effects.bbcrewind.co.uk/#%s", r.ID),
+					Duration:   r.Duration,
+				},
 			}
 			created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
 			if err != nil {
@@ -1164,12 +1180,14 @@ func (s *AssetService) crawlFreesound(ctx context.Context, job *model.CrawlJob) 
 				Type:       "audio",
 				SubType:    "sfx",
 				Source:     "crawled",
-				StorageURL: mp3,
-				SourceURL:  r.URL,
 				ExternalID: externalID,
 				License:    license,
-				Duration:   r.Duration,
 				Status:     model.AssetStatusActive,
+				MediaMeta: model.AssetMediaMeta{
+					StorageURL: mp3,
+					SourceURL:  r.URL,
+					Duration:   r.Duration,
+				},
 			}
 			created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
 			if err != nil {
@@ -1301,19 +1319,21 @@ func (s *AssetService) crawlPixabay(ctx context.Context, job *model.CrawlJob) (i
 					title = fmt.Sprintf("Pixabay video %d", h.ID)
 				}
 				asset := &model.Asset{
-					Scope:       model.AssetScopePublic,
-					Title:       title,
-					Type:        "video",
-					Source:      "crawled",
-					StorageURL:  videoURL,
-					SourceURL:   h.PageURL,
-					ExternalID:  externalID,
-					License:     "pixabay",
-					Duration:    float64(h.Duration),
-					Width:       w,
-					Height:      ht,
-					AspectRatio: calcAspectRatio(w, ht),
-					Status:      model.AssetStatusActive,
+					Scope:      model.AssetScopePublic,
+					Title:      title,
+					Type:       "video",
+					Source:     "crawled",
+					ExternalID: externalID,
+					License:    "pixabay",
+					Status:     model.AssetStatusActive,
+					MediaMeta: model.AssetMediaMeta{
+						StorageURL:  videoURL,
+						SourceURL:   h.PageURL,
+						Duration:    float64(h.Duration),
+						Width:       w,
+						Height:      ht,
+						AspectRatio: calcAspectRatio(w, ht),
+					},
 				}
 				created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
 				if err != nil {
@@ -1363,12 +1383,14 @@ func (s *AssetService) crawlPixabay(ctx context.Context, job *model.CrawlJob) (i
 					Type:       "audio",
 					SubType:    "sfx",
 					Source:     "crawled",
-					StorageURL: h.Audio,
-					SourceURL:  h.PageURL,
 					ExternalID: externalID,
 					License:    "pixabay",
-					Duration:   h.Duration,
 					Status:     model.AssetStatusActive,
+					MediaMeta: model.AssetMediaMeta{
+						StorageURL: h.Audio,
+						SourceURL:  h.PageURL,
+						Duration:   h.Duration,
+					},
 				}
 				created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
 				if err != nil {
@@ -1420,19 +1442,21 @@ func (s *AssetService) crawlPixabay(ctx context.Context, job *model.CrawlJob) (i
 					title = fmt.Sprintf("Pixabay image %d", h.ID)
 				}
 				asset := &model.Asset{
-					Scope:        model.AssetScopePublic,
-					Title:        title,
-					Type:         "image",
-					Source:       "crawled",
-					StorageURL:   imgURL,
-					ThumbnailURL: h.PreviewURL,
-					SourceURL:    h.PageURL,
-					ExternalID:   externalID,
-					License:      "pixabay",
-					Width:        h.ImageWidth,
-					Height:       h.ImageHeight,
-					AspectRatio:  calcAspectRatio(h.ImageWidth, h.ImageHeight),
-					Status:       model.AssetStatusActive,
+					Scope:      model.AssetScopePublic,
+					Title:      title,
+					Type:       "image",
+					Source:     "crawled",
+					ExternalID: externalID,
+					License:    "pixabay",
+					Status:     model.AssetStatusActive,
+					MediaMeta: model.AssetMediaMeta{
+						StorageURL:   imgURL,
+						ThumbnailURL: h.PreviewURL,
+						SourceURL:    h.PageURL,
+						Width:        h.ImageWidth,
+						Height:       h.ImageHeight,
+						AspectRatio:  calcAspectRatio(h.ImageWidth, h.ImageHeight),
+					},
 				}
 				created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
 				if err != nil {
@@ -2233,11 +2257,11 @@ func (s *AssetService) autoTagAsset(ctx context.Context, asset *model.Asset) err
 	var rawJSON string
 	var err error
 
-	if asset.Type == "image" && asset.StorageURL != "" {
+	if asset.Type == "image" && asset.MediaMeta.StorageURL != "" {
 		var prompt string
 		prompt, err = renderPrompt("asset_auto_tag", nil)
 		if err == nil {
-			rawJSON, err = s.aiSvc.GenerateWithVision(prompt, []string{asset.StorageURL})
+			rawJSON, err = s.aiSvc.GenerateWithVision(prompt, []string{asset.MediaMeta.StorageURL})
 		}
 	} else {
 		// Non-image: text-based tag generation from title + type

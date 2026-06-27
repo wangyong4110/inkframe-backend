@@ -219,7 +219,7 @@ func (s *AuthService) Register(req *RegisterRequest) (interface{}, error) {
 		// 不开启验证时，注册即标记为已验证
 		if !s.requireVerification {
 			now := time.Now()
-			u.EmailVerifiedAt = &now
+			u.SecurityMeta.EmailVerifiedAt = &now
 		}
 		if err := tx.Create(u).Error; err != nil {
 			return fmt.Errorf("failed to create user: %w", err)
@@ -285,18 +285,18 @@ func (s *AuthService) Login(req *LoginRequest) (*AuthResponse, error) {
 	}
 
 	// 账号锁定检查
-	if user.LockUntil != nil && time.Now().Before(*user.LockUntil) {
+	if user.SecurityMeta.LockUntil != nil && time.Now().Before(*user.SecurityMeta.LockUntil) {
 		return nil, fmt.Errorf("account locked due to too many failed attempts, try again after %s",
-			user.LockUntil.Format("15:04:05"))
+			user.SecurityMeta.LockUntil.Format("15:04:05"))
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
 		// 密码错误：记录失败次数
-		user.FailedLoginCount++
-		if user.FailedLoginCount >= maxFailedLoginAttempts {
+		user.SecurityMeta.FailedLoginCount++
+		if user.SecurityMeta.FailedLoginCount >= maxFailedLoginAttempts {
 			lockUntil := time.Now().Add(loginLockDuration)
-			user.LockUntil = &lockUntil
-			user.FailedLoginCount = 0
+			user.SecurityMeta.LockUntil = &lockUntil
+			user.SecurityMeta.FailedLoginCount = 0
 		}
 		_ = s.db.Model(user).Select("failed_login_count", "lock_until").Updates(user).Error
 		return nil, errors.New("invalid email or password")
@@ -307,7 +307,7 @@ func (s *AuthService) Login(req *LoginRequest) (*AuthResponse, error) {
 	}
 
 	// 登录成功：重置失败计数
-	if user.FailedLoginCount > 0 || user.LockUntil != nil {
+	if user.SecurityMeta.FailedLoginCount > 0 || user.SecurityMeta.LockUntil != nil {
 		_ = s.db.Model(user).Updates(map[string]interface{}{
 			"failed_login_count": 0,
 			"lock_until":         nil,
@@ -990,7 +990,7 @@ func (s *AuthService) ResendEmailVerification(email string) error {
 	if err != nil {
 		return nil // 邮箱不存在，静默返回
 	}
-	if user.EmailVerifiedAt != nil && !user.EmailVerifiedAt.IsZero() {
+	if user.SecurityMeta.EmailVerifiedAt != nil && !user.SecurityMeta.EmailVerifiedAt.IsZero() {
 		return nil // 已验证，静默返回
 	}
 	uid := user.ID

@@ -70,28 +70,36 @@ type RewriteBible struct {
 
 func (RewriteBible) TableName() string { return "ink_rewrite_bible" }
 
+// RewriteTaskScore 相似度与质量评分（JSON存储）
+type RewriteTaskScore struct {
+	SimilarityScore   float64 `json:"similarity_score"`
+	LexicalSim        float64 `json:"lexical_sim"`
+	SemanticSim       float64 `json:"semantic_sim"`
+	StructuralSim     float64 `json:"structural_sim"`
+	QualityScore      float64 `json:"quality_score"`
+	DeaiApplied       bool    `json:"deai_applied"`
+	ConsistencyIssues string  `json:"consistency_issues"`
+	ErrorMsg          string  `json:"error_msg"`
+	AttemptContent    string  `json:"attempt_content"`
+}
+
 // ChapterRewriteTask tracks rewriting progress per chapter
 type ChapterRewriteTask struct {
-	ID                uint      `json:"id" gorm:"primaryKey"`
-	ProjectID         uint      `json:"project_id" gorm:"index"`
-	ChapterID         uint      `json:"chapter_id" gorm:"index"`
-	ChapterNo         int       `json:"chapter_no"`
-	Status            string    `json:"status" gorm:"size:20;default:'pending'"` // pending, rewriting, reviewing, completed, failed
-	OriginalContent   string    `json:"original_content" gorm:"type:longtext"`
-	AttemptContent    string    `json:"attempt_content" gorm:"type:longtext"`  // in-flight result; not shown until accepted
-	RewrittenContent  string    `json:"rewritten_content" gorm:"type:longtext"` // accepted final result
-	SimilarityScore   float64   `json:"similarity_score" gorm:"default:0"`
-	LexicalSim        float64   `json:"lexical_sim" gorm:"default:0"`
-	SemanticSim       float64   `json:"semantic_sim" gorm:"default:0"`
-	StructuralSim     float64   `json:"structural_sim" gorm:"default:0"`
-	Passed            bool      `json:"passed" gorm:"default:false"`
-	ErrorMsg          string    `json:"error_msg" gorm:"size:500"`
-	QualityScore      float64   `json:"quality_score" gorm:"default:0"`
-	DeaiApplied       bool      `json:"deai_applied" gorm:"default:false"`
-	ConsistencyIssues string    `json:"consistency_issues" gorm:"size:1000"`
-	SummaryWritten    bool      `json:"summary_written" gorm:"default:false"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID               uint   `json:"id" gorm:"primaryKey"`
+	ProjectID        uint   `json:"project_id" gorm:"index"`
+	ChapterID        uint   `json:"chapter_id" gorm:"index"`
+	ChapterNo        int    `json:"chapter_no"`
+	Status           string `json:"status" gorm:"size:20;default:'pending'"`
+	OriginalContent  string `json:"original_content" gorm:"type:longtext"`
+	RewrittenContent string `json:"rewritten_content" gorm:"type:longtext"`
+	Passed           bool   `json:"passed" gorm:"default:false"`
+	SummaryWritten   bool   `json:"summary_written" gorm:"default:false"`
+
+	// JSON 合并字段（减少列数）
+	Scores RewriteTaskScore `json:"scores" gorm:"column:rewrite_scores;serializer:json;type:text"`
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 func (ChapterRewriteTask) TableName() string { return "ink_chapter_rewrite_task" }

@@ -124,7 +124,7 @@ func (s *QualityControlService) runAIQualityCheck(chapter *model.Chapter, novel 
 		return nil, fmt.Errorf("AI service not initialized")
 	}
 
-	novelInfo := fmt.Sprintf("小说：《%s》，类型：%s", novel.Title, novel.Genre)
+	novelInfo := fmt.Sprintf("小说：《%s》，类型：%s", novel.Title, novel.Meta.Genre)
 	contentPreview := chapter.Content
 	if len(contentPreview) > 3000 {
 		contentPreview = contentPreview[:3000] + "...(已截断)"
@@ -762,7 +762,7 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 	foreshadowContext := s.buildForeshadowContext(chapter.NovelID)
 
 	prompt, err := renderPrompt("chapter_review", map[string]interface{}{
-		"Genre":              novel.Genre,
+		"Genre":              novel.Meta.Genre,
 		"CharacterSummary":   charSummary,
 		"ChapterNo":          chapter.ChapterNo,
 		"ChapterTitle":       chapter.Title,
@@ -774,7 +774,7 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 		"HasPreviousScore":    previousScore > 0,
 		"PreviousScoreStr":    fmt.Sprintf("%.0f", previousScore),
 		"PreviousWeaknesses":  previousWeaknessesText,
-		"CoreTheme":           novel.CoreTheme,
+		"CoreTheme":           novel.Meta.CoreTheme,
 		"HasArcContext":      arcContext != "",
 		"ArcContext":         arcContext,
 		"HasForeshadows":     foreshadowContext != "",

@@ -182,7 +182,7 @@ func (s *SkillService) GenerateSkills(tenantID, novelID uint) (result []*model.S
 	if s.novelRepo != nil {
 		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
 			novelTitle = novel.Title
-			novelGenre = novel.Genre
+			novelGenre = novel.Meta.Genre
 		}
 	}
 

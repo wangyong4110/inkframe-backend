@@ -321,7 +321,7 @@ func MaxBodySize(maxBytes int64) gin.HandlerFunc {
 }
 
 // RequireEmailVerified rejects requests from users whose email is not verified.
-// Pass the DB so it can fetch user.EmailVerifiedAt.
+// Pass the DB so it can fetch user.SecurityMeta.EmailVerifiedAt.
 func RequireEmailVerified(db *gorm.DB) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		userID, exists := c.Get("user_id")
@@ -330,12 +330,12 @@ func RequireEmailVerified(db *gorm.DB) gin.HandlerFunc {
 			return
 		}
 		var user model.User
-		if err := db.Select("email_verified_at").First(&user, userID).Error; err != nil {
+		if err := db.Select("security_meta").First(&user, userID).Error; err != nil {
 			c.Next()
 			return
 		}
 		// Fix 8: Also reject zero-value timestamps (default time.Time{}).
-		if user.EmailVerifiedAt == nil || user.EmailVerifiedAt.IsZero() {
+		if user.SecurityMeta.EmailVerifiedAt == nil || user.SecurityMeta.EmailVerifiedAt.IsZero() {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"code": 403, "message": "email not verified",
 			})

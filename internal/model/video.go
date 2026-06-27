@@ -6,49 +6,40 @@ import (
 	"gorm.io/gorm"
 )
 
+// NovelVideoConfigData 视频配置数据（序列化为 JSON 存储）
+type NovelVideoConfigData struct {
+	VideoType             string  `json:"video_type"`
+	VideoResolution       string  `json:"video_resolution"`
+	VideoFPS              int     `json:"video_fps"`
+	VideoAspectRatio      string  `json:"video_aspect_ratio"`
+	CharConsistencyWeight float64 `json:"char_consistency_weight"`
+	NarrationVoice        string  `json:"narration_voice"`
+	SubtitleEnabled       bool    `json:"subtitle_enabled"`
+	SubtitlePosition      string  `json:"subtitle_position"`
+	SubtitleFontSize      int     `json:"subtitle_font_size"`
+	SubtitleColor         string  `json:"subtitle_color"`
+	SubtitleBgStyle       string  `json:"subtitle_bg_style"`
+	ColorGrade            string  `json:"color_grade"`
+	ContrastLevel         float64 `json:"contrast_level"`
+	Saturation            float64 `json:"saturation"`
+	FilmGrain             bool    `json:"film_grain"`
+	Vignette              bool    `json:"vignette"`
+	ChromaticAberration   bool    `json:"chromatic_aberration"`
+	KlingProForAction     bool    `json:"kling_pro_for_action"`
+	KlingModel            string  `json:"kling_model"`
+	ThreeDEnabled         bool    `json:"three_d_enabled"`
+	SubtitleStyle         string  `json:"subtitle_style"`
+	SubtitleFont          string  `json:"subtitle_font"`
+}
+
 // NovelVideoConfig 小说视频/字幕配置（1:1 with Novel，独立表）
+// 所有配置数据存储到 Config (JSON) 字段中以减少列数。
 type NovelVideoConfig struct {
-	ID      uint `json:"id" gorm:"primaryKey"`
-	NovelID uint `json:"novel_id" gorm:"uniqueIndex;not null"`
-
-	// 视频生成配置
-	VideoType             string  `json:"video_type" gorm:"size:20;default:'animation'"`
-	VideoResolution       string  `json:"video_resolution" gorm:"size:20;default:'1080p'"`
-	VideoFPS              int     `json:"video_fps" gorm:"default:30"`
-	VideoAspectRatio      string  `json:"video_aspect_ratio" gorm:"size:10;default:'16:9'"`
-	CharConsistencyWeight float64 `json:"char_consistency_weight" gorm:"type:decimal(3,2);default:1.0"`
-	NarrationVoice        string  `json:"narration_voice" gorm:"size:200"`
-
-	// 字幕配置
-	SubtitleEnabled  bool   `json:"subtitle_enabled" gorm:"default:true"`
-	SubtitlePosition string `json:"subtitle_position" gorm:"size:20;default:'bottom'"`
-	SubtitleFontSize int    `json:"subtitle_font_size" gorm:"default:48"`
-	SubtitleColor    string `json:"subtitle_color" gorm:"size:20;default:'#FFFFFF'"`
-	SubtitleBgStyle  string `json:"subtitle_bg_style" gorm:"size:20;default:'shadow'"`
-
-	// 色彩调色配置（Color Grading）
-	ColorGrade    string  `json:"color_grade" gorm:"size:50;default:'none'"`          // none/cinematic/warm/cool/teal_orange/vintage/noir
-	ContrastLevel float64 `json:"contrast_level" gorm:"type:decimal(3,2);default:0"`   // -1.0 to 1.0, 0=no change
-	Saturation    float64 `json:"saturation" gorm:"type:decimal(3,2);default:1.0"`     // 0.0=grayscale, 1.0=normal, 2.0=vivid
-
-	// 镜头特效（Lens FX）
-	FilmGrain           bool `json:"film_grain" gorm:"default:false"`            // 胶片颗粒
-	Vignette            bool `json:"vignette" gorm:"default:false"`              // 镜头暗角
-	ChromaticAberration bool `json:"chromatic_aberration" gorm:"default:false"` // 色差效果
-
-	// Kling 专业模式
-	KlingProForAction bool `json:"kling_pro_for_action" gorm:"default:true"` // 动作/史诗镜头自动使用 pro 模式
-
-	// 高清 & 3D 视频生成（项目全局）
-	KlingModel    string `json:"kling_model" gorm:"size:50;default:'kling-v1'"`    // kling-v1/kling-v1-6/kling-v2
-	ThreeDEnabled bool   `json:"three_d_enabled" gorm:"default:false"`              // 开启 3D 动画风格（项目全局默认）
-
-	// 字幕样式
-	SubtitleStyle string `json:"subtitle_style" gorm:"size:20;default:'none'"`                  // none/basic/cinematic/anime
-	SubtitleFont  string `json:"subtitle_font" gorm:"size:100;default:'Noto Sans CJK SC'"` // 字体名称
-
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        uint                 `json:"id" gorm:"primaryKey"`
+	NovelID   uint                 `json:"novel_id" gorm:"uniqueIndex;not null"`
+	Config    NovelVideoConfigData `json:"config" gorm:"column:config;serializer:json;type:text"`
+	CreatedAt time.Time            `json:"created_at"`
+	UpdatedAt time.Time            `json:"updated_at"`
 }
 
 func (NovelVideoConfig) TableName() string { return "ink_novel_video_config" }
@@ -67,58 +58,62 @@ type VideoRenderConfig struct {
 	ThreeDStyle    string `json:"three_d_style"`
 }
 
+// VideoPublishMeta 发布与展示元数据（JSON存储）
+type VideoPublishMeta struct {
+	Description   string     `json:"description"`
+	PublishedAt   *time.Time `json:"published_at"`
+	Visibility    string     `json:"visibility"`
+	HotScore      float64    `json:"hot_score"`
+	Tags          string     `json:"tags"`
+	Thumbnail     string     `json:"thumbnail"`
+	CoverURL      string     `json:"cover_url"`
+	FinalVideoURL string     `json:"final_video_url"`
+	TotalShots    int        `json:"total_shots"`
+	Duration      float64    `json:"duration"`
+	ReviewStatus  string     `json:"review_status"`
+}
+
+// VideoTaskMeta 异步任务状态（JSON存储）
+type VideoTaskMeta struct {
+	ProviderName string  `json:"provider_name"`
+	TaskID       string  `json:"task_id"`
+	ErrorMessage string  `json:"error_message"`
+	RetryCount   int     `json:"retry_count"`
+	Progress     float64 `json:"progress"`
+	VideoPath    string  `json:"video_path"`
+	ScriptStatus string  `json:"script_status"`
+}
+
 // Video 视频
 type Video struct {
-	ID       uint   `json:"id" gorm:"primaryKey"`
-	UUID     string `json:"uuid" gorm:"uniqueIndex;size:36"`
-	NovelID  uint   `json:"novel_id" gorm:"index;not null"`
-	Novel     *Novel   `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
-	ChapterID *uint `json:"chapter_id,omitempty" gorm:"index"`
+	ID        uint   `json:"id" gorm:"primaryKey"`
+	UUID      string `json:"uuid" gorm:"uniqueIndex;size:36"`
+	NovelID   uint   `json:"novel_id" gorm:"index;not null"`
+	Novel     *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
+	ChapterID *uint  `json:"chapter_id,omitempty" gorm:"index"`
 
-	Title       string `json:"title" gorm:"size:255;not null"`
-	Description string `json:"description" gorm:"type:text"`
+	Title string `json:"title" gorm:"size:255;not null"`
 
 	Mode string `json:"mode" gorm:"size:20;default:'video'"`
 	// video=AI视频生成（Kling/Seedance）, slideshow=图片解说（图片+Ken Burns效果）
 
-	// 统计
-	Duration    float64 `json:"duration"` // 秒
-	TotalShots  int     `json:"total_shots" gorm:"default:0"`
-
-	// 文件（仅服务器内部使用，不暴露给 API）
-	VideoPath string `json:"-" gorm:"size:500"`
-	Thumbnail string `json:"thumbnail" gorm:"size:500"`
-
 	// 状态
-	Status       string `json:"status" gorm:"size:20;default:planning"`
-	ScriptStatus string `json:"script_status" gorm:"size:20;default:draft"`
-	// draft=脚本草稿（可编辑），confirmed=脚本已确认（可生成素材）
-	Progress     float64 `json:"progress" gorm:"type:decimal(5,2);default:0"`
-	ReviewStatus string  `json:"review_status" gorm:"size:20;default:'none'"` // none/pending/reviewed
+	Status string `json:"status" gorm:"size:20;default:planning"`
 
-	// 异步任务追踪
-	ProviderName string `json:"provider_name" gorm:"size:50"`             // kling/seedance
-	TaskID       string `json:"task_id" gorm:"size:255;index"`            // 外部 API 任务 ID
-	ErrorMessage string `json:"error_message,omitempty" gorm:"type:text"` // 生成失败原因
-	RetryCount   int    `json:"retry_count" gorm:"default:0"`             // 已重试次数
+	// 发布状态
+	IsPublished bool `json:"is_published" gorm:"default:false;index"`
 
-	// 合成与发布
-	FinalVideoURL string     `json:"final_video_url" gorm:"size:2000"`
-	CoverURL      string     `json:"cover_url" gorm:"size:2000"`
-	IsPublished   bool       `json:"is_published" gorm:"default:false;index"`
-	PublishedAt   *time.Time `json:"published_at"`
 	// 统计计数（不存 ink_video 主表，从 ink_content_stats 加载）
 	ViewCount    int `json:"view_count" gorm:"-"`
-	Visibility   string     `json:"visibility" gorm:"size:20;default:'private'"` // private|unlisted|public
-
-	// 广场社交字段
-	LikeCount    int     `json:"like_count" gorm:"-"`
-	CommentCount int     `json:"comment_count" gorm:"-"`
-	HotScore     float64 `json:"hot_score" gorm:"default:0;index"` // 热度分，定时计算
-	Tags         string  `json:"tags" gorm:"size:500"`             // JSON 数组，如 ["玄幻","古风"]
+	LikeCount    int `json:"like_count" gorm:"-"`
+	CommentCount int `json:"comment_count" gorm:"-"`
 
 	// 渲染参数（JSON）
 	RenderConfig VideoRenderConfig `json:"render_config" gorm:"column:render_config;serializer:json;type:text"`
+
+	// JSON 合并字段（减少列数）
+	PublishMeta VideoPublishMeta `json:"publish_meta" gorm:"column:publish_meta;serializer:json;type:text"`
+	TaskMeta    VideoTaskMeta    `json:"task_meta" gorm:"column:task_meta;serializer:json;type:text"`
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -151,6 +146,22 @@ type ShotGenMeta struct {
 	ConsistencyScore  float64 `json:"consistency_score"`
 	ReferenceImageURL string  `json:"reference_image_url"`
 	SFXTags           string  `json:"sfx_tags"`
+	Dialogue          string  `json:"dialogue"`
+	Subtitle          string  `json:"subtitle"`
+}
+
+// ShotTaskMeta 任务状态与时间轴（JSON存储）
+type ShotTaskMeta struct {
+	Progress            float64 `json:"progress"`
+	ErrorMessage        string  `json:"error_message"`
+	ClipPath            string  `json:"clip_path"`
+	AudioPath           string  `json:"audio_path"`
+	ShotTaskID          string  `json:"shot_task_id"`
+	ShotProviderName    string  `json:"shot_provider_name"`
+	RetryCount          int     `json:"retry_count"`
+	ActualVideoDuration float64 `json:"actual_video_duration"`
+	TimelineStart       float64 `json:"timeline_start"`
+	VoiceDelay          float64 `json:"voice_delay"`
 }
 
 // StoryboardShot 分镜
@@ -165,24 +176,11 @@ type StoryboardShot struct {
 
 	Description string `json:"description" gorm:"type:text"` // 英文画面描述，供AI图片/视频生成使用
 	Narration   string `json:"narration" gorm:"type:text"`   // 中文旁白文案，供TTS朗读和字幕显示使用
-	Dialogue    string `json:"dialogue" gorm:"type:text"`    // 角色台词（格式："角色名：台词"），有对话时填写
-	Subtitle    string `json:"subtitle" gorm:"type:text"`    // 字幕覆盖文本，非空时优先用于SRT/VTT导出，不影响TTS朗读
 
 	Duration float64 `json:"duration" gorm:"type:decimal(5,2);default:5.0"`
 
 	// 状态
-	Status       string  `json:"status" gorm:"size:20;index:idx_shot_video_status,priority:2;default:pending"`
-	Progress     float64 `json:"progress" gorm:"type:decimal(5,2);default:0"`
-	ErrorMessage string  `json:"error_message,omitempty" gorm:"type:text"` // 失败原因（供前端展示）
-
-	// 文件
-	ClipPath string `json:"clip_path" gorm:"size:2000"`
-
-	// per-shot 视频生成
-	ShotTaskID       string `json:"shot_task_id" gorm:"size:255;index"`
-	ShotProviderName string `json:"shot_provider_name" gorm:"size:50"`
-	AudioPath        string `json:"audio_path" gorm:"size:2000"`
-	RetryCount       int    `json:"retry_count" gorm:"default:0"`
+	Status string `json:"status" gorm:"size:20;index:idx_shot_video_status,priority:2;default:pending"`
 
 	// AI 生成结果 URL（前端展示用）
 	ImageURL string `json:"image_url" gorm:"size:1000"` // AI生成图片URL
@@ -198,14 +196,8 @@ type StoryboardShot struct {
 	CamDir ShotCamDir `json:"cam_dir" gorm:"column:cam_dir;serializer:json;type:text"`
 	// AI生成元数据（JSON）
 	GenMeta ShotGenMeta `json:"gen_meta" gorm:"column:gen_meta;serializer:json;type:text"`
-
-	// ── 同步时间轴 ─────────────────────────────────────────────────────────────
-	// ActualVideoDuration：视频生成完成后实测的真实时长（秒）。0 表示未测量，回退到 Duration。
-	ActualVideoDuration float64 `json:"actual_video_duration" gorm:"type:decimal(8,3);default:0"`
-	// TimelineStart：本镜头在最终合成视频中的绝对开始时刻（秒）。由 ComputeTimeManifest 计算写入。
-	TimelineStart float64 `json:"timeline_start" gorm:"type:decimal(10,3);default:0"`
-	// VoiceDelay：配音相对镜头开始的偏移（秒）。负值=J-cut提前入声，正值=L-cut延后入声。
-	VoiceDelay float64 `json:"voice_delay" gorm:"type:decimal(6,3);default:0"`
+	// 任务状态与时间轴（JSON）
+	TaskMeta ShotTaskMeta `json:"task_meta" gorm:"column:shot_task_meta;serializer:json;type:text"`
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -238,26 +230,33 @@ type ShotVoiceSegment struct {
 
 func (ShotVoiceSegment) TableName() string { return "ink_shot_voice_segment" }
 
+// SFXPlayback 播放行为配置（JSON存储）
+type SFXPlayback struct {
+	FadeInMs  int `json:"fade_in_ms"`
+	FadeOutMs int `json:"fade_out_ms"`
+	PlayCount int `json:"play_count"`
+}
+
 // ShotSFXItem 分镜音效条目（一个分镜可包含多条独立音效）
 type ShotSFXItem struct {
 	ID     uint `json:"id" gorm:"primaryKey"`
 	ShotID uint `json:"shot_id" gorm:"not null;index:idx_sfx_shot_seq,priority:1"`
 	SeqNo  int  `json:"seq_no" gorm:"not null;default:1;index:idx_sfx_shot_seq,priority:2"`
 
-	Tag          string  `json:"tag" gorm:"size:200"`                          // 音效搜索词，如 "heavy rain bamboo forest"
-	URL          string  `json:"url" gorm:"size:1000"`                         // 音效文件 URL
-	Volume       float64 `json:"volume" gorm:"type:decimal(4,2);default:0.4"` // 混音音量（0.1–1.0）
-	Source       string  `json:"source" gorm:"size:20"`                        // local/freesound/elevenlabs
-	Disabled     bool    `json:"disabled" gorm:"default:false"`                // 禁用后不参与合成/预览
-	StartOffset  float64 `json:"start_offset" gorm:"type:decimal(8,3);default:0"`  // 在分镜中的开始时间（秒，0=分镜起始）
-	DurationSecs float64 `json:"duration_secs" gorm:"type:decimal(8,3);default:0"` // 音效时长（秒，0=未知）
+	Tag          string  `json:"tag" gorm:"size:200"`                              // 音效搜索词
+	URL          string  `json:"url" gorm:"size:1000"`                             // 音效文件 URL
+	Volume       float64 `json:"volume" gorm:"type:decimal(4,2);default:0.4"`     // 混音音量
+	Source       string  `json:"source" gorm:"size:20"`                            // local/freesound/elevenlabs
+	Disabled     bool    `json:"disabled" gorm:"default:false"`                    // 禁用后不参与合成/预览
+	StartOffset  float64 `json:"start_offset" gorm:"type:decimal(8,3);default:0"`  // 在分镜中的开始时间
+	DurationSecs float64 `json:"duration_secs" gorm:"type:decimal(8,3);default:0"` // 音效时长
 
-	// 音效分类与播放行为（v2）
-	SFXType     string `json:"sfx_type" gorm:"size:20;default:'action'"` // action / ambient / emotion
-	LoopEnabled bool   `json:"loop_enabled" gorm:"default:false"`         // true=循环播放直到镜头结束
-	FadeInMs    int    `json:"fade_in_ms" gorm:"default:0"`               // 淡入时长（毫秒）
-	FadeOutMs   int    `json:"fade_out_ms" gorm:"default:200"`            // 淡出时长（毫秒）
-	PlayCount   int    `json:"play_count" gorm:"not null;default:1"`      // 循环播放次数（1=播放一次，0=无限循环）
+	// 音效分类
+	SFXType     string `json:"sfx_type" gorm:"size:20;default:'action'"`
+	LoopEnabled bool   `json:"loop_enabled" gorm:"default:false"`
+
+	// 播放行为（JSON）
+	Playback SFXPlayback `json:"playback" gorm:"column:sfx_playback;serializer:json;type:text"`
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
@@ -266,27 +265,37 @@ type ShotSFXItem struct {
 
 func (ShotSFXItem) TableName() string { return "ink_shot_sfx_item" }
 
+// BGMTrackMeta 音轨元数据（JSON存储）
+type BGMTrackMeta struct {
+	SearchQueries string `json:"search_queries"`
+	TrackName     string `json:"track_name"`
+	TrackArtist   string `json:"track_artist"`
+	Source        string `json:"source"`
+	Mood          string `json:"mood"`
+	Tempo         string `json:"tempo"`
+}
+
+// BGMDucking 人声闪避配置（JSON存储）
+type BGMDucking struct {
+	Enabled bool    `json:"enabled"`
+	Level   float64 `json:"level"`
+}
+
 // VideoBGMSegment 视频背景音乐分段（一段BGM可跨越多个分镜，AI智能分组）
 type VideoBGMSegment struct {
-	ID      uint `json:"id" gorm:"primaryKey"`
-	VideoID uint `json:"video_id" gorm:"index;index:idx_bgm_video_seq,priority:1;not null"`
-	SeqNo   int  `json:"seq_no" gorm:"index:idx_bgm_video_seq,priority:2;not null;default:1"` // 分段顺序
-	StartShotNo int     `json:"start_shot_no" gorm:"not null;default:1"`
-	EndShotNo   int     `json:"end_shot_no" gorm:"not null;default:1"`
-	Mood        string  `json:"mood" gorm:"size:200"`         // 情绪/氛围描述，如 "史诗战斗""温情别离"
-	Tempo       string  `json:"tempo" gorm:"size:20"`         // fast/medium/slow
-	SearchQueries string `json:"search_queries" gorm:"type:text"` // JSON 字符串，自然语言搜索词列表
-	URL         string  `json:"url" gorm:"size:1000"`          // 匹配到的 BGM 音频 URL
-	Volume      float64 `json:"volume" gorm:"type:decimal(4,2);default:0.3"`
+	ID           uint    `json:"id" gorm:"primaryKey"`
+	VideoID      uint    `json:"video_id" gorm:"index;index:idx_bgm_video_seq,priority:1;not null"`
+	SeqNo        int     `json:"seq_no" gorm:"index:idx_bgm_video_seq,priority:2;not null;default:1"`
+	StartShotNo  int     `json:"start_shot_no" gorm:"not null;default:1"`
+	EndShotNo    int     `json:"end_shot_no" gorm:"not null;default:1"`
+	URL          string  `json:"url" gorm:"size:1000"`
+	Volume       float64 `json:"volume" gorm:"type:decimal(4,2);default:0.3"`
 	DurationSecs float64 `json:"duration_secs" gorm:"type:decimal(8,3)"`
-	TrackName   string  `json:"track_name" gorm:"size:255"`
-	TrackArtist string  `json:"track_artist" gorm:"size:255"`
-	Source      string  `json:"source" gorm:"size:20"`   // jamendo/pixabay/local/none
-	Disabled    bool    `json:"disabled" gorm:"default:false"` // 禁用后不参与合成/预览
+	Disabled     bool    `json:"disabled" gorm:"default:false"`
 
-	// 人声闪避（Audio Ducking）
-	DuckingEnabled bool    `json:"ducking_enabled" gorm:"default:true"`                    // true=检测到人声时自动压低BGM
-	DuckingLevel   float64 `json:"ducking_level" gorm:"type:decimal(3,2);default:0.15"`   // 闪避后的目标音量（0.1-0.5，默认0.15）
+	// JSON 合并字段（减少列数）
+	TrackMeta BGMTrackMeta `json:"track_meta" gorm:"column:bgm_track_meta;serializer:json;type:text"`
+	Ducking   BGMDucking   `json:"ducking" gorm:"column:bgm_ducking;serializer:json;type:text"`
 
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`

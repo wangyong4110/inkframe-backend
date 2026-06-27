@@ -24,8 +24,8 @@ func (s *PromptService) BuildOutlinePrompt(novel *model.Novel, req *GenerateOutl
 	// 用户需求
 	sb.WriteString(fmt.Sprintf("请为小说《%s》生成一个详细的大纲。\n\n", novel.Title))
 
-	if novel.Description != "" {
-		sb.WriteString(fmt.Sprintf("故事简介：%s\n\n", novel.Description))
+	if novel.Meta.Description != "" {
+		sb.WriteString(fmt.Sprintf("故事简介：%s\n\n", novel.Meta.Description))
 	}
 
 	if novel.Worldview != nil {
