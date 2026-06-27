@@ -659,7 +659,13 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 		}
 		h.taskSvc.UpdateProgress(taskID, 90) //nolint:errcheck
 
-		result := gin.H{"audio_url": resolveAudioURL(vID, shot), "shot_id": shot.ID}
+		audioURL := resolveAudioURL(vID, shot)
+		if m := h.videoService.GetShotAudioMap([]uint{shot.ID}); m != nil {
+			if ossURL, ok := m[shot.ID]; ok && ossURL != "" {
+				audioURL = ossURL
+			}
+		}
+		result := gin.H{"audio_url": audioURL, "shot_id": shot.ID}
 		if subtitleEnabled {
 			srt := service.GenerateShotSRT(shot)
 			if srt != "" {
