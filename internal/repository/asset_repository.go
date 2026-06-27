@@ -190,7 +190,9 @@ func (r *AssetRepository) resolveTagSlugs(names []string) []uint {
 		slugs[i] = strings.ToLower(strings.ReplaceAll(n, " ", "-"))
 	}
 	var tags []model.Tag
-	r.db.Where("slug IN ? OR name IN ?", slugs, names).Find(&tags)
+	if err := r.db.Where("slug IN ? OR name IN ?", slugs, names).Find(&tags).Error; err != nil {
+		return nil
+	}
 	ids := make([]uint, len(tags))
 	for i, t := range tags {
 		ids[i] = t.ID
@@ -266,7 +268,7 @@ func (r *TagRepository) FindOrCreate(name, category string) (*model.Tag, error) 
 	slug := strings.ToLower(strings.ReplaceAll(strings.TrimSpace(name), " ", "-"))
 	var tag model.Tag
 	err := r.db.Where("slug = ?", slug).First(&tag).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		tag = model.Tag{Name: name, Slug: slug, Category: category}
 		err = r.db.Create(&tag).Error
 	}
@@ -392,13 +394,18 @@ func (r *AssetCollectionRepository) ListByCreator(creatorID uint) ([]*model.Asse
 }
 
 func (r *AssetCollectionRepository) AddItem(collectionID, assetID uint) error {
-	item := model.AssetCollectionItem{CollectionID: collectionID, AssetID: assetID, AddedAt: time.Now()}
-	if err := r.db.Where("collection_id = ? AND asset_id = ?", collectionID, assetID).
-		FirstOrCreate(&item).Error; err != nil {
-		return err
-	}
-	return r.db.Model(&model.AssetCollection{}).Where("id = ?", collectionID).
-		UpdateColumn("asset_count", gorm.Expr("asset_count + 1")).Error
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		item := model.AssetCollectionItem{CollectionID: collectionID, AssetID: assetID, AddedAt: time.Now()}
+		result := tx.Where("collection_id = ? AND asset_id = ?", collectionID, assetID).FirstOrCreate(&item)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return nil
+		}
+		return tx.Model(&model.AssetCollection{}).Where("id = ?", collectionID).
+			UpdateColumn("asset_count", gorm.Expr("asset_count + 1")).Error
+	})
 }
 
 func (r *AssetCollectionRepository) RemoveItem(collectionID, assetID uint) error {
@@ -647,7 +654,7 @@ func NewAssetStorageQuotaRepository(db *gorm.DB) *AssetStorageQuotaRepository {
 func (r *AssetStorageQuotaRepository) Get(tenantID uint) (*model.AssetStorageQuota, error) {
 	var q model.AssetStorageQuota
 	err := r.db.Where("tenant_id = ?", tenantID).First(&q).Error
-	if err == gorm.ErrRecordNotFound {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		q = model.AssetStorageQuota{TenantID: tenantID}
 		err = r.db.Create(&q).Error
 	}

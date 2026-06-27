@@ -1,13 +1,14 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
@@ -108,16 +109,20 @@ func requireNovelEditorRole(c *gin.Context, novelSvc *service.NovelService, nove
 	return true
 }
 
-// taskFail 标记任务失败并记录日志；若 taskSvc.Fail 本身出错也打印。
-func taskFail(svc interface{ Fail(string, string) error }, taskID, reason string) {
-	if err := svc.Fail(taskID, reason); err != nil {
-		logger.Errorf("[task] Fail(%s) error: %v", taskID, err)
+// clampMaxResults returns defaultVal when n is out of the range (0, maxVal],
+// otherwise returns n as-is. Used to normalise max_results / limit fields on
+// tool endpoints where values outside the allowed range should fall back to the
+// safe default rather than being silently capped.
+func clampMaxResults(n, defaultVal, maxVal int) int {
+	if n <= 0 || n > maxVal {
+		return defaultVal
 	}
+	return n
 }
 
-// taskComplete 标记任务完成并记录日志；若 taskSvc.Complete 本身出错也打印。
-func taskComplete(svc interface{ Complete(string, interface{}) error }, taskID string, data interface{}) {
-	if err := svc.Complete(taskID, data); err != nil {
-		logger.Errorf("[task] Complete(%s) error: %v", taskID, err)
-	}
+// requestContext creates a context derived from the request context with the
+// given timeout. Callers must invoke the returned cancel function (typically
+// via defer) to release resources.
+func requestContext(c *gin.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(c.Request.Context(), timeout)
 }

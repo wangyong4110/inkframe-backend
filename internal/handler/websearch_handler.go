@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"net/http"
 	"time"
 
@@ -42,7 +41,7 @@ func (h *WebSearchHandler) Search(c *gin.Context) {
 		req.MaxResults = 10
 	}
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	ctx, cancel := requestContext(c, 15*time.Second)
 	defer cancel()
 
 	results, err := h.searcher.Search(ctx, req.Query, req.MaxResults)

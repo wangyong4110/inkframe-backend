@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"net/http"
 	"time"
 
@@ -30,7 +29,7 @@ func (h *PromptEnhanceHandler) Enhance(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	ctx, cancel := requestContext(c, 30*time.Second)
 	defer cancel()
 
 	result, err := h.svc.Enhance(ctx, req.SceneDescription, req.Style, req.Type)

@@ -23,7 +23,7 @@ func NewCharacterRepository(db *gorm.DB) *CharacterRepository {
 // 返回 nil, nil 表示不存在（区别于 gorm.ErrRecordNotFound 被归一化为 nil）。
 func (r *CharacterRepository) FindByNovelAndName(novelID uint, name string) (*model.Character, error) {
 	var c model.Character
-	err := r.db.Where("novel_id = ? AND name = ? AND deleted_at IS NULL", novelID, name).First(&c).Error
+	err := r.db.Where("novel_id = ? AND name = ?", novelID, name).First(&c).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
@@ -51,7 +51,7 @@ func (r *CharacterRepository) GetByID(id uint) (*model.Character, error) {
 // ListByNovel 获取小说的所有角色
 func (r *CharacterRepository) ListByNovel(novelID uint) ([]*model.Character, error) {
 	var characters []*model.Character
-	if err := r.db.Where("novel_id = ? AND deleted_at IS NULL", novelID).Find(&characters).Error; err != nil {
+	if err := r.db.Where("novel_id = ?", novelID).Find(&characters).Error; err != nil {
 		return nil, err
 	}
 	return characters, nil
@@ -65,7 +65,7 @@ func (r *CharacterRepository) ListByNovelFiltered(novelID uint, role string) ([]
 // ListByNovelFilteredCtx 获取小说的角色列表，可按 role 过滤，支持 context 传递（用于超时/取消传播）
 func (r *CharacterRepository) ListByNovelFilteredCtx(ctx context.Context, novelID uint, role string) ([]*model.Character, error) {
 	var characters []*model.Character
-	q := r.db.WithContext(ctx).Where("novel_id = ? AND deleted_at IS NULL", novelID)
+	q := r.db.WithContext(ctx).Where("novel_id = ?", novelID)
 	if role != "" {
 		q = q.Where("role = ?", role)
 	}
@@ -150,14 +150,19 @@ func (r *CharacterStateSnapshotRepository) Create(snapshot *model.CharacterState
 
 // Upsert 按 (character_id, chapter_id) 唯一键插入或覆盖更新，防止重复快照堆积。
 func (r *CharacterStateSnapshotRepository) Upsert(snapshot *model.CharacterStateSnapshot) error {
-	var existing model.CharacterStateSnapshot
-	err := r.db.Where("character_id = ? AND chapter_id = ?", snapshot.CharacterID, snapshot.ChapterID).First(&existing).Error
-	if err == nil {
-		snapshot.ID = existing.ID
-		snapshot.CreatedAt = existing.CreatedAt
-		return r.db.Save(snapshot).Error
-	}
-	return r.db.Create(snapshot).Error
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var existing model.CharacterStateSnapshot
+		err := tx.Where("character_id = ? AND chapter_id = ?", snapshot.CharacterID, snapshot.ChapterID).First(&existing).Error
+		if err == nil {
+			snapshot.ID = existing.ID
+			snapshot.CreatedAt = existing.CreatedAt
+			return tx.Save(snapshot).Error
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return tx.Create(snapshot).Error
+	})
 }
 
 func (r *CharacterStateSnapshotRepository) ListByCharacter(characterID uint) ([]*model.CharacterStateSnapshot, error) {

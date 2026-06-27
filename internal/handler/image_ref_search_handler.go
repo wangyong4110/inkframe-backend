@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"net/http"
 	"time"
 
@@ -34,11 +33,9 @@ func (h *ImageRefSearchHandler) Search(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "query is required"})
 		return
 	}
-	if req.MaxResults <= 0 || req.MaxResults > 5 {
-		req.MaxResults = 3
-	}
+	req.MaxResults = clampMaxResults(req.MaxResults, 3, 5)
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
+	ctx, cancel := requestContext(c, 15*time.Second)
 	defer cancel()
 
 	results, err := h.searcher.Search(ctx, req.Query, req.MaxResults)

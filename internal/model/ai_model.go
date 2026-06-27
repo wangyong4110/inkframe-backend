@@ -53,6 +53,42 @@ func (ModelProvider) TableName() string {
 	return "ink_model_provider"
 }
 
+// BeforeSave encrypts APIKey and APISecretKey before persisting to the database.
+func (p *ModelProvider) BeforeSave(tx *gorm.DB) error {
+	if p.APIKey != "" {
+		enc, err := EncryptField(p.APIKey)
+		if err != nil {
+			return err
+		}
+		p.APIKey = enc
+	}
+	if p.APISecretKey != "" {
+		enc, err := EncryptField(p.APISecretKey)
+		if err != nil {
+			return err
+		}
+		p.APISecretKey = enc
+	}
+	return nil
+}
+
+// AfterFind decrypts APIKey and APISecretKey after loading from the database.
+func (p *ModelProvider) AfterFind(tx *gorm.DB) error {
+	if p.APIKey != "" {
+		dec, err := DecryptField(p.APIKey)
+		if err == nil {
+			p.APIKey = dec
+		}
+	}
+	if p.APISecretKey != "" {
+		dec, err := DecryptField(p.APISecretKey)
+		if err == nil {
+			p.APISecretKey = dec
+		}
+	}
+	return nil
+}
+
 // ParseVoices 解析 VoicesJSON 为 []VoiceEntry。
 func (p *ModelProvider) ParseVoices() []VoiceEntry {
 	if p.VoicesJSON == "" {

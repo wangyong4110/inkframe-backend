@@ -379,11 +379,6 @@ func (s *TaskService) SetMeta(taskID string, meta interface{}) error {
 	return s.repo.UpdateFields(taskID, map[string]interface{}{"result": string(b)})
 }
 
-// Get returns a task by its task_id.
-func (s *TaskService) Get(taskID string) (*model.AsyncTask, error) {
-	return s.repo.GetByTaskID(taskID)
-}
-
 // Heartbeat updates the updated_at timestamp of a running task to signal it is still alive.
 // Long-running task goroutines should call this periodically to prevent the cleanup loop
 // from treating the task as a zombie and marking it failed.

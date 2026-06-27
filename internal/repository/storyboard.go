@@ -41,7 +41,7 @@ func (r *StoryboardRepository) GetByID(id uint) (*model.StoryboardShot, error) {
 // GetByVideoAndShotNo 根据视频ID和镜头序号精确查询单个分镜
 func (r *StoryboardRepository) GetByVideoAndShotNo(videoID uint, shotNo int) (*model.StoryboardShot, error) {
 	var shot model.StoryboardShot
-	err := r.db.Where("video_id = ? AND shot_no = ? AND deleted_at IS NULL", videoID, shotNo).First(&shot).Error
+	err := r.db.Where("video_id = ? AND shot_no = ?", videoID, shotNo).First(&shot).Error
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +103,7 @@ func (r *StoryboardRepository) Delete(shotID uint) error {
 func (r *StoryboardRepository) MaxShotNo(videoID uint) (int, error) {
 	var max int
 	err := r.db.Model(&model.StoryboardShot{}).
-		Where("video_id = ? AND deleted_at IS NULL", videoID).
+		Where("video_id = ?", videoID).
 		Select("COALESCE(MAX(shot_no), 0)").Scan(&max).Error
 	return max, err
 }
@@ -113,18 +113,13 @@ func (r *StoryboardRepository) MaxShotNo(videoID uint) (int, error) {
 func (r *StoryboardRepository) ShiftShotNos(videoID uint, fromShotNo, delta int) error {
 	const tempOffset = 100000
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		// Phase 1: move into a temporary collision-free range
-		if err := tx.Exec(
-			"UPDATE ink_storyboard_shot SET shot_no = shot_no + ? WHERE video_id = ? AND shot_no >= ? AND deleted_at IS NULL",
-			tempOffset, videoID, fromShotNo,
-		).Error; err != nil {
+		base := tx.Model(&model.StoryboardShot{}).Where("video_id = ?", videoID)
+		if err := base.Where("shot_no >= ?", fromShotNo).
+			UpdateColumn("shot_no", gorm.Expr("shot_no + ?", tempOffset)).Error; err != nil {
 			return err
 		}
-		// Phase 2: shift back to the intended final position
-		return tx.Exec(
-			"UPDATE ink_storyboard_shot SET shot_no = shot_no - ? + ? WHERE video_id = ? AND shot_no >= ? AND deleted_at IS NULL",
-			tempOffset, delta, videoID, fromShotNo+tempOffset,
-		).Error
+		return base.Where("shot_no >= ?", fromShotNo+tempOffset).
+			UpdateColumn("shot_no", gorm.Expr("shot_no - ? + ?", tempOffset, delta)).Error
 	})
 }
 
@@ -133,16 +128,13 @@ func (r *StoryboardRepository) ShiftShotNos(videoID uint, fromShotNo, delta int)
 func (r *StoryboardRepository) CompactShotNosAfter(videoID uint, deletedShotNo int) error {
 	const tempOffset = 100000
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Exec(
-			"UPDATE ink_storyboard_shot SET shot_no = shot_no + ? WHERE video_id = ? AND shot_no > ? AND deleted_at IS NULL",
-			tempOffset, videoID, deletedShotNo,
-		).Error; err != nil {
+		base := tx.Model(&model.StoryboardShot{}).Where("video_id = ?", videoID)
+		if err := base.Where("shot_no > ?", deletedShotNo).
+			UpdateColumn("shot_no", gorm.Expr("shot_no + ?", tempOffset)).Error; err != nil {
 			return err
 		}
-		return tx.Exec(
-			"UPDATE ink_storyboard_shot SET shot_no = shot_no - ? - 1 WHERE video_id = ? AND shot_no > ? AND deleted_at IS NULL",
-			tempOffset, videoID, deletedShotNo+tempOffset,
-		).Error
+		return base.Where("shot_no > ?", deletedShotNo+tempOffset).
+			UpdateColumn("shot_no", gorm.Expr("shot_no - ? - 1", tempOffset)).Error
 	})
 }
 
@@ -192,7 +184,7 @@ func (r *ShotVoiceSegmentRepository) Delete(id uint) error {
 func (r *ShotVoiceSegmentRepository) MaxSeqNo(shotID uint) (int, error) {
 	var max int
 	err := r.db.Model(&model.ShotVoiceSegment{}).
-		Where("shot_id = ? AND deleted_at IS NULL", shotID).
+		Where("shot_id = ?", shotID).
 		Select("COALESCE(MAX(seq_no), 0)").Scan(&max).Error
 	return max, err
 }
@@ -215,18 +207,16 @@ func (r *ShotVoiceSegmentRepository) AppendAtomic(seg *model.ShotVoiceSegment) e
 
 // ShiftSeqNos 将 shot_id 下所有 seq_no >= fromSeqNo 的段落的 seq_no 加 1（为插入腾出位置）
 func (r *ShotVoiceSegmentRepository) ShiftSeqNos(shotID uint, fromSeqNo int) error {
-	return r.db.Exec(
-		"UPDATE ink_shot_voice_segment SET seq_no = seq_no + 1 WHERE shot_id = ? AND seq_no >= ? AND deleted_at IS NULL",
-		shotID, fromSeqNo,
-	).Error
+	return r.db.Model(&model.ShotVoiceSegment{}).
+		Where("shot_id = ? AND seq_no >= ?", shotID, fromSeqNo).
+		UpdateColumn("seq_no", gorm.Expr("seq_no + 1")).Error
 }
 
 // CompactSeqNosAfter 将 shot_id 下 seq_no > deletedSeqNo 的段落 seq_no 减 1（删除后紧凑化）
 func (r *ShotVoiceSegmentRepository) CompactSeqNosAfter(shotID uint, deletedSeqNo int) error {
-	return r.db.Exec(
-		"UPDATE ink_shot_voice_segment SET seq_no = seq_no - 1 WHERE shot_id = ? AND seq_no > ? AND deleted_at IS NULL",
-		shotID, deletedSeqNo,
-	).Error
+	return r.db.Model(&model.ShotVoiceSegment{}).
+		Where("shot_id = ? AND seq_no > ?", shotID, deletedSeqNo).
+		UpdateColumn("seq_no", gorm.Expr("seq_no - 1")).Error
 }
 
 // GetFirstAudioByShotIDs returns a map of shotID → first segment audio_path for a list of shots.
@@ -235,7 +225,7 @@ func (r *ShotVoiceSegmentRepository) GetFirstAudioByShotIDs(shotIDs []uint) map[
 		return nil
 	}
 	var segs []*model.ShotVoiceSegment
-	r.db.Where("shot_id IN ? AND audio_path != '' AND deleted_at IS NULL", shotIDs).
+	r.db.Where("shot_id IN ? AND audio_path != ''", shotIDs).
 		Order("shot_id, seq_no").Find(&segs)
 	result := make(map[uint]string, len(shotIDs))
 	for _, seg := range segs {
@@ -279,7 +269,9 @@ func (r *ShotSFXItemRepository) Create(item *model.ShotSFXItem) error {
 func (r *ShotSFXItemRepository) AppendAtomic(item *model.ShotSFXItem) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		var maxSeq int
-		tx.Raw("SELECT COALESCE(MAX(seq_no), 0) FROM ink_shot_sfx_item WHERE shot_id = ? FOR UPDATE", item.ShotID).Scan(&maxSeq)
+		if err := tx.Raw("SELECT COALESCE(MAX(seq_no), 0) FROM ink_shot_sfx_item WHERE shot_id = ? FOR UPDATE", item.ShotID).Scan(&maxSeq).Error; err != nil {
+			return err
+		}
 		item.SeqNo = maxSeq + 1
 		return tx.Create(item).Error
 	})

@@ -147,8 +147,8 @@ func normalizeProviderType(t string) string {
 	return strings.ToLower(t)
 }
 
-// listCapableProviders returns active, key-bearing providers that have models of the given type.
-func (s *ModelService) listCapableProviders(tenantID uint, typeFilter string) ([]CapableProvider, error) {
+// ListCapableProviders returns active, credentialed providers matching the given type (e.g. "LLM", "IMAGE").
+func (s *ModelService) ListCapableProviders(tenantID uint, typeFilter string) ([]CapableProvider, error) {
 	normalizedType := normalizeProviderType(typeFilter)
 	providers, err := s.providerRepo.ListByModelType(tenantID, normalizedType)
 	if err != nil {
@@ -167,11 +167,6 @@ func (s *ModelService) listCapableProviders(tenantID uint, typeFilter string) ([
 		}
 	}
 	return result, nil
-}
-
-// ListCapableProviders returns active, credentialed providers matching the given type (e.g. "LLM", "IMAGE").
-func (s *ModelService) ListCapableProviders(tenantID uint, providerType string) ([]CapableProvider, error) {
-	return s.listCapableProviders(tenantID, providerType)
 }
 
 func (s *ModelService) GetProvider(id uint, tenantID uint) (*model.ModelProvider, error) {
@@ -673,10 +668,6 @@ func (s *ModelService) SetTaskProviderMapping(taskType string, providerID uint) 
 // ForeshadowService adapter methods
 // ============================================
 
-func (s *ForeshadowService) GetForeshadows(novelID uint, chapterNo int) ([]*ForeshadowItem, error) {
-	return s.CheckForeshadowStatus(novelID, chapterNo)
-}
-
 func (s *ForeshadowService) MarkFulfilledByID(novelID, foreshadowID, chapterID uint) error {
 	chapter := &model.Chapter{ID: chapterID}
 	return s.MarkFulfilled(novelID, foreshadowID, chapter)
@@ -685,10 +676,6 @@ func (s *ForeshadowService) MarkFulfilledByID(novelID, foreshadowID, chapterID u
 // ============================================
 // TimelineService adapter methods
 // ============================================
-
-func (s *TimelineService) GetTimeline(novelID uint) (*Timeline, error) {
-	return s.BuildTimeline(novelID)
-}
 
 // FormatTimelineForPrompt 将时间线格式化为 markdown 字符串，仅包含与 chapterNo 相近（±5章）的事件。
 // 返回空字符串表示无相关事件或 timeline 为空。

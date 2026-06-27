@@ -17,21 +17,21 @@ const (
 
 // AssetMediaMeta 媒体元数据（JSON存储）
 type AssetMediaMeta struct {
-	StorageURL    string  `json:"storage_url"`
-	ThumbnailURL  string  `json:"thumbnail_url"`
-	PreviewURL    string  `json:"preview_url"`
-	SourceURL     string  `json:"source_url"`
-	Attribution   string  `json:"attribution"`
-	Width         int     `json:"width"`
-	Height        int     `json:"height"`
-	Duration      float64 `json:"duration"`
-	FileSize      int64   `json:"file_size"`
-	MimeType      string  `json:"mime_type"`
-	AspectRatio   string  `json:"aspect_ratio"`
-	DominantColor string  `json:"dominant_color"`
-	ColorPalette  string  `json:"color_palette"`
-	Metadata      string  `json:"metadata"`
-	Description   string  `json:"description"`
+	StorageURL   string  `json:"storage_url"`
+	ThumbnailURL string  `json:"thumbnail_url"`
+	PreviewURL   string  `json:"preview_url"`
+	SourceURL    string  `json:"source_url"`
+	Attribution  string  `json:"attribution"`
+	Width        int     `json:"width"`
+	Height       int     `json:"height"`
+	Duration     float64 `json:"duration"`
+	FileSize     int64   `json:"file_size"`
+	MimeType     string  `json:"mime_type"`
+	AspectRatio  string  `json:"aspect_ratio"`
+	ColorPalette string  `json:"color_palette"`
+	Metadata     string  `json:"metadata"`
+	Description  string  `json:"description"`
+	// DominantColor 已迁移至 Asset.DominantColor 独立列（支持 WHERE 检索）
 }
 
 // AssetQualityMeta 质量与来源元数据（JSON存储）
@@ -40,12 +40,11 @@ type AssetQualityMeta struct {
 	QualityIssues string  `json:"quality_issues"`
 	SafetyScore   float64 `json:"safety_score"`
 	SafetyChecked bool    `json:"safety_checked"`
-	UseCount      int     `json:"use_count"`
-	LikeCount     int     `json:"like_count"`
 	DeletedBy     *uint   `json:"deleted_by"`
 	NovelID       *uint   `json:"novel_id"`
 	VideoID       *uint   `json:"video_id"`
 	ShotID        *uint   `json:"shot_id"`
+	// UseCount/LikeCount 已迁移至 Asset 独立列（支持 ORDER BY / WHERE 检索）
 }
 
 // Asset is the central asset table (ink_asset).
@@ -68,8 +67,11 @@ type Asset struct {
 	// Perceptual hash (dedup)
 	PHash string `json:"phash" gorm:"size:64;index"`
 
-	// Public library stats (indexed for ranking; remaining stats moved to QualityMeta)
-	ValueScore float64 `json:"value_score" gorm:"default:0;index"`
+	// Public library stats (indexed for ranking / ORDER BY / WHERE)
+	ValueScore    float64 `json:"value_score" gorm:"default:0;index"`
+	UseCount      int     `json:"use_count" gorm:"default:0;index"`
+	LikeCount     int     `json:"like_count" gorm:"default:0;index"`
+	DominantColor string  `json:"dominant_color" gorm:"size:20;index"`
 
 	// JSON 合并字段（减少列数）
 	MediaMeta   AssetMediaMeta   `json:"media_meta" gorm:"column:asset_media_meta;serializer:json;type:text"`

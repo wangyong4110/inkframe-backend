@@ -116,7 +116,6 @@ func (TenantUser) TableName() string {
 type UserSecurityMeta struct {
 	FailedLoginCount int        `json:"failed_login_count"`
 	LockUntil        *time.Time `json:"lock_until"`
-	LastLoginAt      *time.Time `json:"last_login_at"`
 	EmailVerifiedAt  *time.Time `json:"email_verified_at"`
 }
 
@@ -136,8 +135,9 @@ type User struct {
 	Password string  `json:"-" gorm:"size:100;not null"`
 	Nickname string  `json:"nickname" gorm:"size:50"`
 	Avatar   string  `json:"avatar" gorm:"size:500"`
-	Status   string  `json:"status" gorm:"size:20;default:active"`
-	Role     string  `json:"role" gorm:"size:20;default:user;comment:系统角色 admin/user"`
+	Status      string     `json:"status" gorm:"size:20;default:active"`
+	Role        string     `json:"role" gorm:"size:20;default:user;comment:系统角色 admin/user"`
+	LastLoginAt *time.Time `json:"last_login_at,omitempty" gorm:"column:last_login_at"`
 
 	// JSON 合并字段（减少列数）
 	SecurityMeta UserSecurityMeta `json:"-" gorm:"column:security_meta;serializer:json;type:text"`

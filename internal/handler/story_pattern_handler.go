@@ -33,9 +33,7 @@ func (h *StoryPatternHandler) Search(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
-	if req.MaxResults <= 0 || req.MaxResults > 4 {
-		req.MaxResults = 2
-	}
+	req.MaxResults = clampMaxResults(req.MaxResults, 2, 4)
 
 	patterns := h.svc.Search(req.Genre, req.Archetype, req.MaxResults)
 	if patterns == nil {
@@ -78,9 +76,7 @@ func (h *StoryPatternHandler) SuggestForNovel(c *gin.Context) {
 		MaxResults int    `json:"max_results"`
 	}
 	_ = c.ShouldBindJSON(&req)
-	if req.MaxResults <= 0 || req.MaxResults > 4 {
-		req.MaxResults = 3
-	}
+	req.MaxResults = clampMaxResults(req.MaxResults, 3, 4)
 	patterns := h.svc.Search(req.Genre, req.Archetype, req.MaxResults)
 	if patterns == nil {
 		patterns = []service.StoryPattern{}

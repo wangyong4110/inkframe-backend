@@ -42,7 +42,9 @@ func (r *RewriteProjectRepository) ListByTenant(tenantID uint, page, pageSize in
 		// Prefer direct tenant_id column; fall back to novel join for rows that predate the column.
 		q = q.Where("tenant_id = ? OR (tenant_id = 0 AND novel_id IN (SELECT id FROM ink_novel WHERE tenant_id = ? AND deleted_at IS NULL))", tenantID, tenantID)
 	}
-	q.Count(&total)
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 	err := q.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&projects).Error
 	return projects, total, err
 }
@@ -76,9 +78,12 @@ func NewLiteraryAnalysisRepository(db *gorm.DB) *LiteraryAnalysisRepository {
 }
 
 func (r *LiteraryAnalysisRepository) Create(a *model.LiteraryAnalysis) error {
-	// Delete any existing record first to handle re-analysis on the same project.
-	r.db.Where("project_id = ?", a.ProjectID).Delete(&model.LiteraryAnalysis{})
-	return r.db.Create(a).Error
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("project_id = ?", a.ProjectID).Delete(&model.LiteraryAnalysis{}).Error; err != nil {
+			return err
+		}
+		return tx.Create(a).Error
+	})
 }
 
 func (r *LiteraryAnalysisRepository) DeleteByProjectID(projectID uint) error {
@@ -103,9 +108,12 @@ func NewRewriteBibleRepository(db *gorm.DB) *RewriteBibleRepository {
 }
 
 func (r *RewriteBibleRepository) Create(b *model.RewriteBible) error {
-	// Delete any existing record first to handle re-analysis on the same project.
-	r.db.Where("project_id = ?", b.ProjectID).Delete(&model.RewriteBible{})
-	return r.db.Create(b).Error
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("project_id = ?", b.ProjectID).Delete(&model.RewriteBible{}).Error; err != nil {
+			return err
+		}
+		return tx.Create(b).Error
+	})
 }
 
 func (r *RewriteBibleRepository) GetByProjectID(projectID uint) (*model.RewriteBible, error) {
@@ -201,20 +209,6 @@ func (r *ChapterRewriteTaskRepository) AcceptAttempt(id uint, lexSim, structSim,
 		"lexical_sim":       lexSim,
 		"structural_sim":    structSim,
 		"semantic_sim":      semanticSim,
-		"similarity_score":  combined,
-		"passed":            passed,
-		"status":            "completed",
-	}).Error
-}
-
-// UpdateRewritten is the legacy method kept for backward compatibility.
-// New code should use SaveAttempt + AcceptAttempt instead.
-func (r *ChapterRewriteTaskRepository) UpdateRewritten(id uint, content string, lexSim, structSim float64, passed bool) error {
-	combined := (lexSim + structSim) / 2
-	return r.db.Model(&model.ChapterRewriteTask{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"rewritten_content": content,
-		"lexical_sim":       lexSim,
-		"structural_sim":    structSim,
 		"similarity_score":  combined,
 		"passed":            passed,
 		"status":            "completed",

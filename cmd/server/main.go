@@ -91,9 +91,6 @@ func main() {
 		logger.Fatalf("Failed to migrate database: %v", err)
 	}
 
-	// 3a. 执行幂等 schema 清理（回填租户ID、迁移视频配置、删除废弃列）
-	runSchemaCleanup(db)
-
 	// 3b. 预置默认数据（INSERT IGNORE，幂等安全）
 	seedDefaultData(db)
 	seedAIModels(db)
@@ -131,8 +128,7 @@ func main() {
 	// 8. 初始化服务层
 	services := initServices(db, repos, aiManager, vectorStore, cfg, redisClient)
 
-	// 补全已有租户供应商的新模型定义（幂等，服务器重启时自动同步）
-	services.ModelService.SeedAllProviders()
+	// SeedAllProviders 已在 initServices/wiring.go 中调用，此处不重复执行
 
 	// 9. 初始化默认测试账户（仅开发模式）
 	if cfg.Server.Mode != "release" {

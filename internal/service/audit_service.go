@@ -1,12 +1,9 @@
 package service
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"time"
 
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
 	"gorm.io/gorm"
@@ -68,33 +65,6 @@ func (s *AuditService) LogEntry(entry AuditEntry) {
 			IP:           entry.IP,
 			Status:       entry.Status,
 		})
-	}()
-}
-
-// Log records an audit event asynchronously (non-blocking).
-// Legacy API kept for backward compatibility with existing callers.
-func (s *AuditService) Log(tenantID, userID uint, action, entityType string, entityID uint, ip, ua string, detail interface{}) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		detailJSON, err := json.Marshal(detail)
-		if err != nil {
-			logger.Errorf("[AuditService] marshal detail: %v", err)
-			detailJSON = []byte("{}")
-		}
-		entry := &model.AuditLog{
-			TenantID:   tenantID,
-			UserID:     userID,
-			Action:     action,
-			EntityType: entityType,
-			EntityID:   entityID,
-			IPAddress:  ip,
-			UserAgent:  ua,
-			Detail:     string(detailJSON),
-		}
-		if err := s.db.WithContext(ctx).Create(entry).Error; err != nil {
-			logger.Errorf("[AuditService] create log: %v", err)
-		}
 	}()
 }
 

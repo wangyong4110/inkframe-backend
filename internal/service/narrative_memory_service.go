@@ -205,11 +205,6 @@ type CharacterBrief struct {
 // BuildHierarchicalContext
 // ──────────────────────────────────────────────
 
-// BuildPlotTensionStateText 返回当前剧情张力状态文本（供场景大纲模板使用）
-func (s *NarrativeMemoryService) BuildPlotTensionStateText(novelID uint, currentChapterNo int) string {
-	return s.buildPlotTensionState(novelID, currentChapterNo)
-}
-
 // BuildHierarchicalContext 返回供 prompt 注入的层次化上下文文本
 const maxHierarchicalContextBytes = 50 * 1024 // 50KB 上下文上限，防止超出 LLM 输入窗口
 
@@ -230,7 +225,7 @@ func (s *NarrativeMemoryService) BuildHierarchicalContext(novelID uint, currentC
 func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapterNo int) (*HierarchicalContext, error) {
 	ctx := &HierarchicalContext{
 		GlobalSummary:    s.buildGlobalSummary(novel),
-		PlotTensionState: s.buildPlotTensionState(novel.ID, currentChapterNo),
+		PlotTensionState: s.BuildPlotTensionStateText(novel.ID, currentChapterNo),
 	}
 
 	// 加载角色信息（含最新快照状态，供上下文渲染使用）
@@ -372,8 +367,8 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 	return ctx, nil
 }
 
-// buildPlotTensionState 分析近期章节张力走势，生成供场景大纲决策参考的状态描述
-func (s *NarrativeMemoryService) buildPlotTensionState(novelID uint, currentChapterNo int) string {
+// BuildPlotTensionStateText 分析近期章节张力走势，生成供场景大纲决策参考的状态描述
+func (s *NarrativeMemoryService) BuildPlotTensionStateText(novelID uint, currentChapterNo int) string {
 	if currentChapterNo <= 1 {
 		return ""
 	}

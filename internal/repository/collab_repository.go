@@ -6,6 +6,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
 
@@ -87,7 +88,7 @@ func (r *EditingLockRepository) Acquire(entityType string, entityID, userID uint
 	var resultLock model.EditingLock
 	acquired := false
 
-	_ = r.db.Transaction(func(tx *gorm.DB) error {
+	if err := r.db.Transaction(func(tx *gorm.DB) error {
 		var lock model.EditingLock
 		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("entity_type = ? AND entity_id = ?", entityType, entityID).
@@ -128,7 +129,9 @@ func (r *EditingLockRepository) Acquire(entityType string, entityID, userID uint
 		resultLock = lock
 		acquired = true
 		return nil
-	})
+	}); err != nil {
+		logger.Errorf("[EditingLockRepository] Acquire transaction: %v", err)
+	}
 
 	return &resultLock, acquired
 }
@@ -151,12 +154,14 @@ func (r *EditingLockRepository) Get(entityType string, entityID uint) (*model.Ed
 		return nil, err
 	}
 	if time.Now().After(lock.ExpiresAt) {
-		r.db.Delete(&lock)
+		if err := r.db.Delete(&lock).Error; err != nil {
+			logger.Warnf("[EditingLockRepository] Delete expired lock: %v", err)
+		}
 		return nil, gorm.ErrRecordNotFound
 	}
 	return &lock, nil
 }
 
-func (r *EditingLockRepository) CleanupExpired() {
-	r.db.Where("expires_at < ?", time.Now()).Delete(&model.EditingLock{})
+func (r *EditingLockRepository) CleanupExpired() error {
+	return r.db.Where("expires_at < ?", time.Now()).Delete(&model.EditingLock{}).Error
 }

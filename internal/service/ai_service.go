@@ -608,155 +608,8 @@ func (s *AIService) InvalidateProviderCache(providerName string) {
 }
 
 // GenerateWithProvider 使用指定 Provider 生成内容（providerName 为空则使用默认）
-// 参数优先级：小说项目配置 > 任务配置 > 内置默认值
 func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType string, prompt string, providerName string, overrides ...StoryboardOverrides) (string, error) {
-	// 获取任务配置（基础层）
-	base, err := s.taskRepo.GetByTaskType(taskType)
-	if err != nil {
-		base = &model.TaskModelConfig{
-			Temperature: 0.7,
-			MaxTokens:   0, // 0 = 不限制，由 AI provider 使用其模型默认值
-		}
-	}
-	// 复制一份避免污染缓存
-	config := *base
-
-	// 应用小说项目级 AI 配置（覆盖任务默认值）
-	var resolvedModel string
-	if novelID > 0 && s.novelRepo != nil {
-		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
-			if novel.AIConfig.Temperature > 0 {
-				config.Temperature = novel.AIConfig.Temperature
-			}
-			if novel.AIConfig.TopP > 0 {
-				config.TopP = novel.AIConfig.TopP
-			}
-			if novel.AIConfig.MaxTokens > 0 {
-				config.MaxTokens = novel.AIConfig.MaxTokens
-			}
-		}
-	}
-
-	// JSON 结构化输出任务降温：高温度会产生格式漂移（多余 markdown / 说明文字），触发 retry 更慢。
-	// MaxTokens 不设强制下限，由任务配置 / 小说配置 / 调用方覆盖自行决定。
-	switch taskType {
-	case "storyboard", "character", "worldview", "character_state", "scene_anchor_extract", "storyboard_review", "sfx_analyze":
-		if config.Temperature > 0.2 {
-			config.Temperature = 0.1
-		}
-	}
-
-	// 应用调用方传入的覆盖参数（优先级最高，覆盖任务配置和小说配置）
-	if len(overrides) > 0 {
-		o := overrides[0]
-		if o.MaxTokens > 0 {
-			config.MaxTokens = o.MaxTokens
-		}
-		if o.Temperature > 0 {
-			config.Temperature = o.Temperature
-		}
-		if o.TimeoutSeconds > 0 {
-			config.TimeoutSeconds = o.TimeoutSeconds
-		}
-	}
-
-	// Task#6: 若 TaskModelConfig 显式绑定了 provider，优先使用它（消除同名模型歧义）
-	if providerName == "" && config.PrimaryProviderID > 0 && s.providerRepo != nil {
-		if p, err := s.providerRepo.GetByID(config.PrimaryProviderID); err == nil && p != nil {
-			providerName = p.Name
-		}
-	}
-
-	// Task#4: 若仍未确定 model/provider，按 strategy 从候选模型中自动选择
-	if resolvedModel == "" && providerName == "" && config.Strategy != "" && s.modelRepo != nil {
-		if candidates, err := s.modelRepo.GetAvailableByTaskType(taskType, tenantID); err == nil && len(candidates) > 0 {
-			var selected *model.AIModel
-			switch config.Strategy {
-			case "quality_first":
-				selected = selectByQuality(candidates)
-			case "cost_first":
-				selected = selectByCost(candidates)
-			default: // "balanced" or unrecognised
-				selected = selectBalanced(candidates)
-			}
-			// Fix 4: Guard against nil selected — degrade to balanced selection before giving up.
-			if selected == nil {
-				selected = selectBalanced(candidates)
-				if selected == nil {
-					return "", fmt.Errorf("no suitable model available for strategy=%q taskType=%q", config.Strategy, taskType)
-				}
-				logger.Printf("[AI] strategy %q found no suitable model, falling back to balanced selection", config.Strategy)
-			}
-			if selected.Provider == nil {
-				return "", fmt.Errorf("model %d has no provider configured", selected.ID)
-			}
-			resolvedModel = selected.Name
-			providerName = selected.Provider.Name
-			// 策略选择路径：直接从已加载的 AIModel 取 MaxTokens，无需额外 DB 查询
-			if config.MaxTokens == 0 && selected.MaxTokens > 0 {
-				config.MaxTokens = selected.MaxTokens
-			}
-		}
-	}
-
-	// AIModel 级别 MaxTokens（novel.AIConfig.AIModel 路径：仅有 model name，需通过 DB 查找）
-	if config.MaxTokens == 0 && resolvedModel != "" && s.modelRepo != nil {
-		if m, err := s.modelRepo.GetByName(resolvedModel); err == nil && m != nil && m.MaxTokens > 0 {
-			config.MaxTokens = m.MaxTokens
-		}
-	}
-
-	// 任务类型兜底 MaxTokens：仅在配置链全部为 0 时生效，不覆盖任何已配置值。
-	// 生产环境请在「模型管理 → 编辑模型 → 最大 Tokens」处配置（优先级高于此处）。
-	if config.MaxTokens == 0 {
-		switch taskType {
-		case "storyboard":
-			config.MaxTokens = 16384 // 每段 ~12 镜 × 700 tokens = 8400 tokens
-		case "outline":
-			config.MaxTokens = 16384 // 100 章大纲 JSON 约 20K+ 字符
-		case "chapter_review", "storyboard_review":
-			config.MaxTokens = 8192 // 段落级反馈 JSON，单章不超过 8K tokens
-		case "storyboard_arc":
-			config.MaxTokens = 2048 // 短弧线骨架 JSON
-		}
-	}
-
-	// 注入 system prompt：章节写作类阻止元注释；JSON 输出类抑制推理模型的思考过程
-	sysPmt := ""
-	if chapterTaskTypes[taskType] {
-		sysPmt = novelWritingSystemPrompt
-	} else if jsonOnlyTaskTypes[taskType] {
-		sysPmt = jsonOnlySystemPrompt
-	}
-
-	// 调用真实AI API
-	effectiveProvider := providerName
-	if effectiveProvider == "" {
-		effectiveProvider = "default"
-	}
-	metrics.AIRequestsInFlight.WithLabelValues(taskType, effectiveProvider).Inc()
-	callStart := time.Now()
-	result, resp, err := s.callAIWithProviderSys(context.Background(), tenantID, prompt, sysPmt, &config, providerName, resolvedModel)
-	elapsed := time.Since(callStart).Seconds()
-	metrics.AIRequestsInFlight.WithLabelValues(taskType, effectiveProvider).Dec()
-
-	// Prometheus 指标：AI 调用结果
-	if err != nil {
-		metrics.AIRequestsTotal.WithLabelValues(taskType, effectiveProvider, "error").Inc()
-		return "", fmt.Errorf("AI generation failed: %w", err)
-	}
-	metrics.AIRequestsTotal.WithLabelValues(taskType, effectiveProvider, "success").Inc()
-	metrics.AIRequestDuration.WithLabelValues(taskType, effectiveProvider).Observe(elapsed)
-	if resp.InputTokens > 0 {
-		metrics.AITokensTotal.WithLabelValues(taskType, effectiveProvider, "prompt").Add(float64(resp.InputTokens))
-	}
-	if resp.Tokens > 0 {
-		metrics.AITokensTotal.WithLabelValues(taskType, effectiveProvider, "completion").Add(float64(resp.Tokens))
-	}
-
-	s.logUsage(tenantID, &config, taskType, resp, time.Since(callStart).Milliseconds())
-
-	return result, nil
+	return s.GenerateWithProviderCtx(context.Background(), tenantID, novelID, taskType, prompt, providerName, overrides...)
 }
 
 // GenerateWithProviderCtx is like GenerateWithProvider but respects an external context.
@@ -869,12 +722,29 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 		sysPmt = jsonOnlySystemPrompt
 	}
 
-	ctxStart := time.Now()
+	effectiveProvider := providerName
+	if effectiveProvider == "" {
+		effectiveProvider = "default"
+	}
+	metrics.AIRequestsInFlight.WithLabelValues(taskType, effectiveProvider).Inc()
+	callStart := time.Now()
 	result, resp, err := s.callAIWithProviderSys(ctx, tenantID, prompt, sysPmt, &config, providerName, resolvedModel)
+	elapsed := time.Since(callStart).Seconds()
+	metrics.AIRequestsInFlight.WithLabelValues(taskType, effectiveProvider).Dec()
+
 	if err != nil {
+		metrics.AIRequestsTotal.WithLabelValues(taskType, effectiveProvider, "error").Inc()
 		return "", fmt.Errorf("AI generation failed: %w", err)
 	}
-	s.logUsage(tenantID, &config, taskType, resp, time.Since(ctxStart).Milliseconds())
+	metrics.AIRequestsTotal.WithLabelValues(taskType, effectiveProvider, "success").Inc()
+	metrics.AIRequestDuration.WithLabelValues(taskType, effectiveProvider).Observe(elapsed)
+	if resp.InputTokens > 0 {
+		metrics.AITokensTotal.WithLabelValues(taskType, effectiveProvider, "prompt").Add(float64(resp.InputTokens))
+	}
+	if resp.Tokens > 0 {
+		metrics.AITokensTotal.WithLabelValues(taskType, effectiveProvider, "completion").Add(float64(resp.Tokens))
+	}
+	s.logUsage(tenantID, &config, taskType, resp, time.Since(callStart).Milliseconds())
 	return result, nil
 }
 

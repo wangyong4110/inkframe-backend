@@ -89,7 +89,9 @@ func NewCollabService(
 			case <-svc.stopCh:
 				return
 			case <-ticker.C:
-				lockRepo.CleanupExpired()
+				if err := lockRepo.CleanupExpired(); err != nil {
+					logger.Errorf("[Collab] CleanupExpired: %v", err)
+				}
 			}
 		}
 	}()

@@ -3,15 +3,16 @@ package repository
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // novelCall 用于 singleflight：持有一次 DB 查询的结果和同步通道
@@ -35,16 +36,46 @@ func NewNovelRepository(db *gorm.DB, cache *redis.Client) *NovelRepository {
 	return &NovelRepository{db: db, cache: cache}
 }
 
+// novelJSONOnlyFields maps logical field names that live ONLY in a JSON column.
+var novelJSONOnlyFields = map[string]string{
+	// novel_meta (non-queryable)
+	"description":        "novel_meta",
+	"target_word_count":  "novel_meta",
+	"target_chapters":    "novel_meta",
+	"cover_image":        "novel_meta",
+	"core_theme":         "novel_meta",
+	"plaza_tags":         "novel_meta",
+	// ai_config
+	"ai_model":              "ai_config",
+	"temperature":           "ai_config",
+	"top_p":                 "ai_config",
+	"max_tokens":            "ai_config",
+	"timeout_seconds":       "ai_config",
+	"style_prompt":          "ai_config",
+	"image_style":           "ai_config",
+	"prompt_language":       "ai_config",
+	"chapter_mode":          "ai_config",
+	"auto_review_rounds":    "ai_config",
+	"auto_review_min_score": "ai_config",
+	// review_meta
+	"review_status": "review_meta",
+	"review_note":   "review_meta",
+	"reviewed_at":   "review_meta",
+	"reviewed_by":   "review_meta",
+}
+
+// novelDualWriteFields maps fields that exist as BOTH standalone columns AND inside novel_meta JSON.
+// UpdateFields writes them to both to keep them in sync.
+var novelDualWriteFields = map[string]bool{
+	"genre":        true,
+	"channel":      true,
+	"visibility":   true,
+	"published_at": true,
+}
+
 // Create 创建小说
 func (r *NovelRepository) Create(novel *model.Novel) error {
-	err := r.db.Create(novel).Error
-	if err != nil && (isSchemaMissing(err)) {
-		// 广场社交列尚未迁移到 DB，降级：剔除这些列（它们均有 DB default，不影响业务）
-		logger.Errorf("NovelRepository.Create: social columns missing, retrying without them: %v", err)
-		err = r.db.Omit("hot_score",
-			"is_published", "published_at", "visibility", "plaza_tags").Create(novel).Error
-	}
-	if err != nil {
+	if err := r.db.Create(novel).Error; err != nil {
 		return err
 	}
 	r.invalidateCache(novel.ID)
@@ -117,7 +148,7 @@ func (r *NovelRepository) GetByUUID(uuid string) (*model.Novel, error) {
 // FindByTitle 按标题和 tenantID 查找小说（用于导入去重）
 func (r *NovelRepository) FindByTitle(title string, tenantID uint) (*model.Novel, error) {
 	var novel model.Novel
-	err := r.db.Where("title = ? AND tenant_id = ? AND deleted_at IS NULL", title, tenantID).First(&novel).Error
+	err := r.db.Where("title = ? AND tenant_id = ?", title, tenantID).First(&novel).Error
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +163,7 @@ func (r *NovelRepository) SearchByTitle(title string, tenantID uint, limit int) 
 	}
 	escaped := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(title)
 	pattern := "%" + escaped + "%"
-	err := r.db.Where("title LIKE ? AND tenant_id = ? AND deleted_at IS NULL", pattern, tenantID).
+	err := r.db.Where("title LIKE ? AND tenant_id = ?", pattern, tenantID).
 		Order("updated_at DESC").
 		Limit(limit).
 		Find(&novels).Error
@@ -207,7 +238,7 @@ func (r *NovelRepository) Update(novel *model.Novel) error {
 	if novel.VideoConfig != nil {
 		novel.VideoConfig.NovelID = novel.ID
 		if err := r.db.Select("*").Save(novel.VideoConfig).Error; err != nil {
-			logger.Errorf("[NovelRepository] Save VideoConfig: %v", err)
+			return err
 		}
 	}
 	r.invalidateCache(novel.ID)
@@ -224,13 +255,174 @@ func (r *NovelRepository) SaveVideoConfig(vc *model.NovelVideoConfig) error {
 	return nil
 }
 
-// UpdateFields 更新小说指定字段（避免 Save 写零值导致数据丢失）
+// UpdateFields 更新小说指定字段。
+// 支持三类 key：
+//  1. 双写字段（genre/channel/visibility/published_at）→ 写入独立列 AND novel_meta JSON
+//  2. JSON only 字段（如 "description", "style_prompt"）→ 加载对应 JSON 结构体后修改再保存
+//  3. 直接列（如 "outline", "status", "worldview_id"）→ GORM Updates
 func (r *NovelRepository) UpdateFields(id uint, fields map[string]interface{}) error {
-	if err := r.db.Model(&model.Novel{}).Where("id = ?", id).Updates(fields).Error; err != nil {
-		return err
+	if len(fields) == 0 {
+		return nil
 	}
-	r.invalidateCache(id)
-	return nil
+
+	direct := make(map[string]interface{})
+	needsMeta, needsAI, needsReview := false, false, false
+
+	for k, v := range fields {
+		if novelDualWriteFields[k] {
+			direct[k] = v   // 独立列
+			needsMeta = true // 同步写入 novel_meta JSON
+		} else if col := novelJSONOnlyFields[k]; col == "novel_meta" {
+			needsMeta = true
+		} else if col := novelJSONOnlyFields[k]; col == "ai_config" {
+			needsAI = true
+		} else if col := novelJSONOnlyFields[k]; col == "review_meta" {
+			needsReview = true
+		} else {
+			direct[k] = v
+		}
+	}
+
+	// 加载需要修改的 JSON 列
+	var novel model.Novel
+	if needsMeta || needsAI || needsReview {
+		cols := []string{"id"}
+		if needsMeta {
+			cols = append(cols, "novel_meta")
+		}
+		if needsAI {
+			cols = append(cols, "ai_config")
+		}
+		if needsReview {
+			cols = append(cols, "review_meta")
+		}
+		if err := r.db.Select(cols).First(&novel, id).Error; err != nil {
+			return err
+		}
+		for k, v := range fields {
+			applyNovelField(&novel, k, v)
+		}
+	}
+
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if len(direct) > 0 {
+			if err := tx.Model(&model.Novel{}).Where("id = ?", id).Updates(direct).Error; err != nil {
+				return err
+			}
+		}
+		if needsMeta {
+			if err := tx.Model(&novel).Select("novel_meta").Updates(&novel).Error; err != nil {
+				return err
+			}
+		}
+		if needsAI {
+			if err := tx.Model(&novel).Select("ai_config").Updates(&novel).Error; err != nil {
+				return err
+			}
+		}
+		if needsReview {
+			if err := tx.Model(&novel).Select("review_meta").Updates(&novel).Error; err != nil {
+				return err
+			}
+		}
+		r.invalidateCache(id)
+		return nil
+	})
+}
+
+// applyNovelField 将 UpdateFields 中的 key/value 写入对应的 novel 子结构体字段。
+func applyNovelField(novel *model.Novel, key string, value interface{}) {
+	str := func(v interface{}) string {
+		if s, ok := v.(string); ok {
+			return s
+		}
+		return fmt.Sprintf("%v", v)
+	}
+	toInt := func(v interface{}) int {
+		switch n := v.(type) {
+		case int:
+			return n
+		case int64:
+			return int(n)
+		case float64:
+			return int(n)
+		}
+		return 0
+	}
+	toFloat := func(v interface{}) float64 {
+		switch n := v.(type) {
+		case float64:
+			return n
+		case int:
+			return float64(n)
+		}
+		return 0
+	}
+	toTimePtr := func(v interface{}) *time.Time {
+		if t, ok := v.(*time.Time); ok {
+			return t
+		}
+		return nil
+	}
+
+	switch key {
+	// 双写字段：同时更新独立列对应的 Meta 字段（独立列由 direct 写入）
+	case "genre":
+		novel.Meta.Genre = str(value)
+	case "channel":
+		novel.Meta.Channel = str(value)
+	case "visibility":
+		novel.Meta.Visibility = str(value)
+	case "published_at":
+		novel.Meta.PublishedAt = toTimePtr(value)
+	// novel_meta only
+	case "description":
+		novel.Meta.Description = str(value)
+	case "target_word_count":
+		novel.Meta.TargetWordCount = toInt(value)
+	case "target_chapters":
+		novel.Meta.TargetChapters = toInt(value)
+	case "cover_image":
+		novel.Meta.CoverImage = str(value)
+	case "core_theme":
+		novel.Meta.CoreTheme = str(value)
+	case "plaza_tags":
+		novel.Meta.PlazaTags = str(value)
+	// ai_config
+	case "ai_model":
+		novel.AIConfig.AIModel = str(value)
+	case "temperature":
+		novel.AIConfig.Temperature = toFloat(value)
+	case "top_p":
+		novel.AIConfig.TopP = toFloat(value)
+	case "max_tokens":
+		novel.AIConfig.MaxTokens = toInt(value)
+	case "timeout_seconds":
+		novel.AIConfig.TimeoutSeconds = toInt(value)
+	case "style_prompt":
+		novel.AIConfig.StylePrompt = str(value)
+	case "image_style":
+		novel.AIConfig.ImageStyle = str(value)
+	case "prompt_language":
+		novel.AIConfig.PromptLanguage = str(value)
+	case "chapter_mode":
+		novel.AIConfig.ChapterMode = str(value)
+	case "auto_review_rounds":
+		novel.AIConfig.AutoReviewRounds = toInt(value)
+	case "auto_review_min_score":
+		novel.AIConfig.AutoReviewMinScore = toFloat(value)
+	// review_meta
+	case "review_status":
+		novel.ReviewMeta.ReviewStatus = str(value)
+	case "review_note":
+		novel.ReviewMeta.ReviewNote = str(value)
+	case "reviewed_at":
+		novel.ReviewMeta.ReviewedAt = toTimePtr(value)
+	case "reviewed_by":
+		if u, ok := value.(uint); ok {
+			novel.ReviewMeta.ReviewedBy = u
+		}
+	}
 }
 
 // Delete 软删除小说（不删关联数据）
@@ -243,19 +435,10 @@ func (r *NovelRepository) Delete(id uint) error {
 }
 
 // DeleteWithCascade 物理删除小说及其全部关联数据（在事务中按依赖顺序执行）
-// 对"列/表不存在"类错误（schema 尚未迁移）采用 skip 策略，不中断事务。
 func (r *NovelRepository) DeleteWithCascade(id uint) error {
 	err := r.db.Transaction(func(tx *gorm.DB) error {
-		// tryExec 执行 SQL；若因 schema 缺失（列/表不存在）失败则记录日志并跳过
 		tryExec := func(sql string, args ...interface{}) error {
-			if e := tx.Exec(sql, args...).Error; e != nil {
-				if isSchemaMissing(e) {
-					logger.Errorf("[DeleteNovel] skip (schema not ready): %v", e)
-					return nil
-				}
-				return e
-			}
-			return nil
+			return tx.Exec(sql, args...).Error
 		}
 
 		// ── 1. 间接关联：场景一致性日志（通过 anchor / storyboard_shot）
@@ -277,7 +460,7 @@ func (r *NovelRepository) DeleteWithCascade(id uint) error {
 		}
 
 		// ── 4. 角色间接数据（通过 character.novel_id）
-		if e := tryExec(`DELETE FROM ink_character_visual_design WHERE character_id IN (SELECT id FROM ink_character WHERE novel_id = ?)`, id); e != nil {
+		if e := tryExec(`DELETE FROM ink_character_look WHERE character_id IN (SELECT id FROM ink_character WHERE novel_id = ?)`, id); e != nil {
 			return e
 		}
 		if e := tryExec(`DELETE FROM ink_character_state_snapshot WHERE character_id IN (SELECT id FROM ink_character WHERE novel_id = ?)`, id); e != nil {
@@ -340,14 +523,12 @@ func (r *NovelRepository) DeleteWithCascade(id uint) error {
 			return e
 		}
 
-		// ── 6. 扩展表（novel_id 直接关联；部分表可能尚未迁移，tryExec 会跳过）
+		// ── 6. 扩展表（novel_id 直接关联）
 		extStmts := []string{
 			`DELETE FROM ink_rewrite_project WHERE novel_id = ?`,
 			`DELETE FROM ink_video WHERE novel_id = ?`,
 			`DELETE FROM ink_scene_anchor WHERE novel_id = ?`,
 			`DELETE FROM ink_arc_summary WHERE novel_id = ?`,
-			`DELETE FROM ink_review_task WHERE novel_id = ?`,
-			`DELETE FROM ink_feedback_record WHERE novel_id = ?`,
 			`DELETE FROM ink_plot_point WHERE novel_id = ?`,
 			`DELETE FROM ink_model_usage_log WHERE novel_id = ?`,
 			`DELETE FROM ink_async_task WHERE entity_id = ? AND entity_type = 'novel'`,
@@ -395,7 +576,7 @@ func (r *NovelRepository) SyncStats(novelID uint) error {
 		}
 		if err := tx.Model(&model.Chapter{}).
 			Select("COUNT(*) AS count, COALESCE(SUM(word_count),0) AS words").
-			Where("novel_id = ? AND deleted_at IS NULL", novelID).
+			Where("novel_id = ?", novelID).
 			Scan(&result).Error; err != nil {
 			return err
 		}
@@ -413,10 +594,11 @@ func (r *NovelRepository) SyncStats(novelID uint) error {
 
 // SyncPublishedCount 重新计算并更新已发布章节数（幂等，最终一致）。
 func (r *NovelRepository) SyncPublishedCount(novelID uint) error {
-	if err := r.db.Exec(
-		"UPDATE ink_novel SET published_count = (SELECT COUNT(*) FROM ink_chapter WHERE novel_id = ? AND is_published = TRUE AND deleted_at IS NULL) WHERE id = ?",
-		novelID, novelID,
-	).Error; err != nil {
+	sub := r.db.Model(&model.Chapter{}).
+		Select("COUNT(*)").
+		Where("novel_id = ? AND is_published = TRUE", novelID)
+	if err := r.db.Model(&model.Novel{}).Where("id = ?", novelID).
+		Update("published_count", sub).Error; err != nil {
 		return err
 	}
 	r.invalidateCache(novelID)
@@ -432,7 +614,7 @@ func (r *NovelRepository) SyncAllStats(novelID uint) error {
 		}
 		if err := tx.Model(&model.Chapter{}).
 			Select("COUNT(*) AS count, COALESCE(SUM(word_count),0) AS words").
-			Where("novel_id = ? AND deleted_at IS NULL", novelID).
+			Where("novel_id = ?", novelID).
 			Scan(&result).Error; err != nil {
 			return err
 		}
@@ -442,10 +624,11 @@ func (r *NovelRepository) SyncAllStats(novelID uint) error {
 		}).Error; err != nil {
 			return err
 		}
-		return tx.Exec(
-			"UPDATE ink_novel SET published_count = (SELECT COUNT(*) FROM ink_chapter WHERE novel_id = ? AND is_published = TRUE AND deleted_at IS NULL) WHERE id = ?",
-			novelID, novelID,
-		).Error
+		sub := tx.Model(&model.Chapter{}).
+			Select("COUNT(*)").
+			Where("novel_id = ? AND is_published = TRUE", novelID)
+		return tx.Model(&model.Novel{}).Where("id = ?", novelID).
+			Update("published_count", sub).Error
 	})
 	if err != nil {
 		return err
@@ -568,27 +751,32 @@ func (r *NovelRepository) GetPublicRanking(rankType, gender string, limit int) (
 	return novels, err
 }
 
+// incrStat 通用统计字段原子递增（ON DUPLICATE KEY UPDATE via GORM clause）
+func (r *NovelRepository) incrStat(id uint, field string, delta interface{}) {
+	r.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "entity_type"}, {Name: "entity_id"}},
+		DoUpdates: clause.Assignments(map[string]interface{}{
+			field:        delta,
+			"updated_at": gorm.Expr("NOW()"),
+		}),
+	}).Create(&model.ContentStats{EntityType: "novel", EntityID: id})
+}
+
 // IncrNovelViewCount 浏览量+1（写入 ink_content_stats）
 func (r *NovelRepository) IncrNovelViewCount(id uint) error {
-	r.db.Exec(`INSERT INTO ink_content_stats (entity_type, entity_id, view_count, like_count, comment_count, updated_at)
-		VALUES ('novel', ?, 1, 0, 0, NOW())
-		ON DUPLICATE KEY UPDATE view_count = view_count + 1, updated_at = NOW()`, id)
+	r.incrStat(id, "view_count", gorm.Expr("view_count + 1"))
 	return nil
 }
 
 // IncrNovelLikeCount 点赞数 delta（+1 或 -1，写入 ink_content_stats）
 func (r *NovelRepository) IncrNovelLikeCount(id uint, delta int) error {
-	r.db.Exec(`INSERT INTO ink_content_stats (entity_type, entity_id, view_count, like_count, comment_count, updated_at)
-		VALUES ('novel', ?, 0, ?, 0, NOW())
-		ON DUPLICATE KEY UPDATE like_count = GREATEST(0, like_count + ?), updated_at = NOW()`, id, delta, delta)
+	r.incrStat(id, "like_count", gorm.Expr("GREATEST(0, like_count + ?)", delta))
 	return nil
 }
 
 // IncrNovelCommentCount 评论数 delta（写入 ink_content_stats）
 func (r *NovelRepository) IncrNovelCommentCount(id uint, delta int) error {
-	r.db.Exec(`INSERT INTO ink_content_stats (entity_type, entity_id, view_count, like_count, comment_count, updated_at)
-		VALUES ('novel', ?, 0, 0, ?, NOW())
-		ON DUPLICATE KEY UPDATE comment_count = GREATEST(0, comment_count + ?), updated_at = NOW()`, id, delta, delta)
+	r.incrStat(id, "comment_count", gorm.Expr("GREATEST(0, comment_count + ?)", delta))
 	return nil
 }
 
@@ -613,13 +801,17 @@ type NovelHotCalcRow struct {
 // ListPublicNovelsForHotCalc 批量拉取公开小说用于热度分计算（JOIN ink_content_stats）
 func (r *NovelRepository) ListPublicNovelsForHotCalc() ([]NovelHotCalcRow, error) {
 	var rows []NovelHotCalcRow
-	err := r.db.Raw(`SELECT n.id, n.published_at,
+	err := r.db.Raw(`SELECT n.id,
+		n.published_at,
 		COALESCE(cs.view_count, 0) AS view_count,
 		COALESCE(cs.like_count, 0) AS like_count,
 		COALESCE(cs.comment_count, 0) AS comment_count
 		FROM ink_novel n
 		LEFT JOIN ink_content_stats cs ON cs.entity_type = 'novel' AND cs.entity_id = n.id
-		WHERE n.is_published = 1 AND n.visibility = 'public' AND n.deleted_at IS NULL`).
+		WHERE n.is_published = 1
+		  AND n.visibility = 'public'
+		  AND n.deleted_at IS NULL
+		LIMIT 10000`).
 		Scan(&rows).Error
 	return rows, err
 }
@@ -667,21 +859,31 @@ func (r *NovelLikeRepository) Toggle(novelID, userID uint) (liked bool, err erro
 	err = r.db.Transaction(func(tx *gorm.DB) error {
 		var like model.EntityLike
 		result := tx.Where("entity_type = 'novel' AND entity_id = ? AND user_id = ?", novelID, userID).First(&like)
-		if result.Error != nil {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			if err2 := tx.Create(&model.EntityLike{EntityType: "novel", EntityID: novelID, UserID: userID, NovelID: novelID}).Error; err2 != nil {
 				return err2
 			}
 			liked = true
-			return tx.Exec(`INSERT INTO ink_content_stats (entity_type, entity_id, view_count, like_count, comment_count, updated_at)
-				VALUES ('novel', ?, 0, 1, 0, NOW())
-				ON DUPLICATE KEY UPDATE like_count = like_count + 1, updated_at = NOW()`, novelID).Error
+			return tx.Clauses(clause.OnConflict{
+				Columns: []clause.Column{{Name: "entity_type"}, {Name: "entity_id"}},
+				DoUpdates: clause.Assignments(map[string]interface{}{
+					"like_count": gorm.Expr("like_count + 1"),
+					"updated_at": gorm.Expr("NOW()"),
+				}),
+			}).Create(&model.ContentStats{EntityType: "novel", EntityID: novelID}).Error
+		} else if result.Error != nil {
+			return result.Error
 		}
 		if err2 := tx.Delete(&like).Error; err2 != nil {
 			return err2
 		}
 		liked = false
-		return tx.Exec(`UPDATE ink_content_stats SET like_count = GREATEST(0, like_count - 1), updated_at = NOW()
-			WHERE entity_type = 'novel' AND entity_id = ?`, novelID).Error
+		return tx.Model(&model.ContentStats{}).
+			Where("entity_type = 'novel' AND entity_id = ?", novelID).
+			Updates(map[string]interface{}{
+				"like_count": gorm.Expr("GREATEST(0, like_count - 1)"),
+				"updated_at": gorm.Expr("NOW()"),
+			}).Error
 	})
 	return
 }

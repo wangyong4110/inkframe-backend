@@ -378,12 +378,6 @@ func checkParamsForSSRF(paramsJSON string) error {
 	return nil
 }
 
-// containsPrivateURL checks whether a JSON string contains references to private/internal URLs.
-// Kept for backward compatibility; new code should prefer checkParamsForSSRF.
-func containsPrivateURL(s string) bool {
-	return checkParamsForSSRF(s) != nil
-}
-
 // InvokeTool 调用指定名称的 MCP 工具（向其 Endpoint 发送 POST 请求）
 // params 以 JSON 形式作为请求体发送，响应 JSON 解析后作为 output 返回。
 // 若工具未启用（is_active=false）或不属于该租户则返回错误。

@@ -762,7 +762,7 @@ func (s *AssetService) RecalcValueScores() error {
 		return err
 	}
 	for _, a := range assets {
-		score := float64(a.QualityMeta.UseCount)*0.3 + float64(a.QualityMeta.LikeCount)*0.2
+		score := float64(a.UseCount)*0.3 + float64(a.LikeCount)*0.2
 		_ = s.assetRepo.UpdateValueScore(a.ID, score)
 	}
 	return nil

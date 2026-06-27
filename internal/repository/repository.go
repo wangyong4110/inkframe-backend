@@ -12,7 +12,7 @@
 //   - model_provider.go — ModelProviderRepository, AIModelRepository, TaskModelConfigRepository, ModelComparisonRepository
 //   - system.go      — SystemSettingRepository, HookChainRepository, SatisfactionPointRepository, ConflictArcRepository
 //   - rewrite.go     — RewriteProjectRepository, LiteraryAnalysisRepository, RewriteBibleRepository, ChapterRewriteTaskRepository
-//   - common.go      — shared helpers: isSchemaMissing, isForeignKeyError
+//   - common.go      — shared helpers: isForeignKeyError
 //
 // Pre-existing separate files:
 //   - arc_summary_repository.go  — ArcSummaryRepository

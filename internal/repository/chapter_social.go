@@ -22,23 +22,33 @@ func (r *ChapterLikeRepository) Toggle(chapterID, novelID, userID uint) (liked b
 	err = r.db.Transaction(func(tx *gorm.DB) error {
 		var existing model.EntityLike
 		result := tx.Where("entity_type = 'chapter' AND entity_id = ? AND user_id = ?", chapterID, userID).First(&existing)
-		if result.Error != nil {
+		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			if err2 := tx.Create(&model.EntityLike{EntityType: "chapter", EntityID: chapterID, UserID: userID, NovelID: novelID}).Error; err2 != nil {
 				return err2
 			}
 			liked = true
-			if err2 := tx.Exec(`INSERT INTO ink_content_stats (entity_type, entity_id, view_count, like_count, comment_count, updated_at)
-				VALUES ('chapter', ?, 0, 1, 0, NOW())
-				ON DUPLICATE KEY UPDATE like_count = like_count + 1, updated_at = NOW()`, chapterID).Error; err2 != nil {
+			if err2 := tx.Clauses(clause.OnConflict{
+				Columns: []clause.Column{{Name: "entity_type"}, {Name: "entity_id"}},
+				DoUpdates: clause.Assignments(map[string]interface{}{
+					"like_count": gorm.Expr("like_count + 1"),
+					"updated_at": gorm.Expr("NOW()"),
+				}),
+			}).Create(&model.ContentStats{EntityType: "chapter", EntityID: chapterID}).Error; err2 != nil {
 				return err2
 			}
+		} else if result.Error != nil {
+			return result.Error
 		} else {
 			if err2 := tx.Where("entity_type = 'chapter' AND entity_id = ? AND user_id = ?", chapterID, userID).Delete(&model.EntityLike{}).Error; err2 != nil {
 				return err2
 			}
 			liked = false
-			if err2 := tx.Exec(`UPDATE ink_content_stats SET like_count = GREATEST(0, like_count - 1), updated_at = NOW()
-				WHERE entity_type = 'chapter' AND entity_id = ?`, chapterID).Error; err2 != nil {
+			if err2 := tx.Model(&model.ContentStats{}).
+				Where("entity_type = 'chapter' AND entity_id = ?", chapterID).
+				Updates(map[string]interface{}{
+					"like_count": gorm.Expr("GREATEST(0, like_count - 1)"),
+					"updated_at": gorm.Expr("NOW()"),
+				}).Error; err2 != nil {
 				return err2
 			}
 		}

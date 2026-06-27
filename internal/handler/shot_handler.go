@@ -713,41 +713,6 @@ func (h *VideoHandler) CalculateConsistencyScore(c *gin.Context) {
 	respondOK(c, score)
 }
 
-// ExportCapCutDraft 导出剪映草稿 ZIP
-// GET /api/v1/videos/:id/export/capcut
-func (h *VideoHandler) ExportCapCutDraft(c *gin.Context) {
-	id, ok := parseID(c, "id")
-	if !ok {
-		return
-	}
-
-	video, ok := h.getVideoForTenant(c, uint(id))
-	if !ok {
-		return
-	}
-
-	shots, err := h.videoService.GetStoryboard(uint(id))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	novel, _ := h.videoService.GetNovelByID(video.NovelID) // 用于字幕样式配置，失败不阻断导出
-	var bgmSegs []*model.VideoBGMSegment
-	if h.bgmRepo != nil {
-		bgmSegs, _ = h.bgmRepo.ListByVideoID(uint(id))
-	}
-	result, err := h.capcutService.ExportCapCutDraft(video, shots, novel, bgmSegs)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, result.Filename))
-	c.Header("Content-Length", strconv.Itoa(len(result.Data)))
-	c.Data(http.StatusOK, result.ContentType, result.Data)
-}
-
 // Export 多格式导出
 // GET /api/v1/videos/:id/export/:format
 // format: capcut | fcpxml | zip | srt

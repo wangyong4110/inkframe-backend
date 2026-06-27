@@ -1774,7 +1774,7 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 				tenantID = s.videoTenantID(v)
 				novelID = v.NovelID
 			}
-			anchor, err := s.sceneAnchorSvc.Get(*sh.SceneAnchorID)
+			anchor, err := s.sceneAnchorSvc.GetByID(*sh.SceneAnchorID)
 			if err == nil {
 				if report, err := s.sceneConsistencySvc.ScoreScene(sh, anchor, imgURL, 1, tenantID, novelID); err != nil {
 					logger.Errorf("[VideoService] ScoreScene shot %d: %v", sh.ShotNo, err)

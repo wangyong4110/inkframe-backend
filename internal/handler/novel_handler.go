@@ -599,7 +599,7 @@ func (h *NovelHandler) GetForeshadows(c *gin.Context) {
 
 	chapterNo, _ := strconv.Atoi(c.Query("chapter_no"))
 
-	foreshadows, err := h.foreshadowService.GetForeshadows(uint(novelId), chapterNo)
+	foreshadows, err := h.foreshadowService.CheckForeshadowStatus(uint(novelId), chapterNo)
 	if err != nil {
 		logger.Errorf("[NovelHandler] GetForeshadows: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
@@ -658,7 +658,7 @@ func (h *NovelHandler) GetTimeline(c *gin.Context) {
 		return
 	}
 
-	timeline, err := h.timelineService.GetTimeline(uint(novelId))
+	timeline, err := h.timelineService.BuildTimeline(uint(novelId))
 	if err != nil {
 		logger.Errorf("[NovelHandler] GetTimeline: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())

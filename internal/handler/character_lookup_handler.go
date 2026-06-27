@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"net/http"
 	"time"
 
@@ -33,7 +32,7 @@ func (h *CharacterLookupHandler) Lookup(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+	ctx, cancel := requestContext(c, 8*time.Second)
 	defer cancel()
 
 	result, err := h.svc.Lookup(ctx, req.NovelID, req.CharacterName)

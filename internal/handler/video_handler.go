@@ -367,8 +367,8 @@ func (h *VideoHandler) PublishVideo(c *gin.Context) {
 	}
 	now := timeNow()
 	video.IsPublished = true
-	video.PublishMeta.PublishedAt = &now
-	video.PublishMeta.Visibility = req.Visibility
+	video.PublishedAt = &now
+	video.Visibility = req.Visibility
 	if err := h.videoService.UpdateVideoFields(video.ID, map[string]interface{}{
 		"is_published": true,
 		"published_at": &now,

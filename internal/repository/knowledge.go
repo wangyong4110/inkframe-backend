@@ -37,7 +37,7 @@ func (r *KnowledgeBaseRepository) Search(keyword string, limit int) ([]*model.Kn
 // GetByNovel 获取小说的所有知识
 func (r *KnowledgeBaseRepository) GetByNovel(novelID uint) ([]*model.KnowledgeBase, error) {
 	var results []*model.KnowledgeBase
-	if err := r.db.Where("novel_id = ? AND deleted_at IS NULL", novelID).Find(&results).Error; err != nil {
+	if err := r.db.Where("novel_id = ?", novelID).Find(&results).Error; err != nil {
 		return nil, err
 	}
 	return results, nil
@@ -51,7 +51,7 @@ func (r *KnowledgeBaseRepository) ListByNovelPaged(novelID uint, page, pageSize 
 	if pageSize < 1 {
 		pageSize = 20
 	}
-	q := r.db.Model(&model.KnowledgeBase{}).Where("novel_id = ? AND deleted_at IS NULL", novelID)
+	q := r.db.Model(&model.KnowledgeBase{}).Where("novel_id = ?", novelID)
 	var total int64
 	if err := q.Count(&total).Error; err != nil {
 		return nil, 0, err

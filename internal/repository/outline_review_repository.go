@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"errors"
+
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"gorm.io/gorm"
 )
@@ -16,14 +18,19 @@ func NewOutlineReviewRepository(db *gorm.DB) *OutlineReviewRepository {
 
 // Upsert 按章节 ID 更新（存在则覆盖，否则创建）
 func (r *OutlineReviewRepository) Upsert(review *model.OutlineReview) error {
-	var existing model.OutlineReview
-	err := r.db.Where("chapter_id = ?", review.ChapterID).First(&existing).Error
-	if err == nil {
-		review.ID = existing.ID
-		review.CreatedAt = existing.CreatedAt
-		return r.db.Save(review).Error
-	}
-	return r.db.Create(review).Error
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var existing model.OutlineReview
+		err := tx.Where("chapter_id = ?", review.ChapterID).First(&existing).Error
+		if err == nil {
+			review.ID = existing.ID
+			review.CreatedAt = existing.CreatedAt
+			return tx.Save(review).Error
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return tx.Create(review).Error
+	})
 }
 
 // GetByChapter 获取章节最新审查结果
@@ -54,14 +61,19 @@ func NewNovelOutlineSynthesisRepository(db *gorm.DB) *NovelOutlineSynthesisRepos
 
 // Upsert 按 novel_id 唯一，存在则全量覆盖，不存在则创建
 func (r *NovelOutlineSynthesisRepository) Upsert(s *model.NovelOutlineSynthesis) error {
-	var existing model.NovelOutlineSynthesis
-	err := r.db.Where("novel_id = ?", s.NovelID).First(&existing).Error
-	if err == nil {
-		s.ID = existing.ID
-		s.CreatedAt = existing.CreatedAt // 保留原始创建时间，避免 GORM Save 写入零时间
-		return r.db.Save(s).Error
-	}
-	return r.db.Create(s).Error
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var existing model.NovelOutlineSynthesis
+		err := tx.Where("novel_id = ?", s.NovelID).First(&existing).Error
+		if err == nil {
+			s.ID = existing.ID
+			s.CreatedAt = existing.CreatedAt
+			return tx.Save(s).Error
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+		return tx.Create(s).Error
+	})
 }
 
 // GetByNovel 获取小说最新综合报告

@@ -72,7 +72,7 @@ func (r *TaskRepository) ListDistinctActiveTenants() ([]uint, error) {
 func (r *TaskRepository) ListOrphaned(before time.Time, types []string) ([]*model.AsyncTask, error) {
 	var tasks []*model.AsyncTask
 	err := r.db.Where(
-		"status IN ? AND updated_at < ? AND type IN ? AND deleted_at IS NULL",
+		"status IN ? AND updated_at < ? AND type IN ?",
 		[]string{"pending", "running"}, before, types,
 	).Find(&tasks).Error
 	return tasks, err

@@ -1447,7 +1447,7 @@ func (s *ChapterService) generateSceneOutline(
 	// 获取时间线约束（仅注入与当前章节相近的事件）
 	var timelineContext string
 	if s.timelineSvc != nil {
-		if timeline, tlErr := s.timelineSvc.GetTimeline(novelID); tlErr == nil && timeline != nil {
+		if timeline, tlErr := s.timelineSvc.BuildTimeline(novelID); tlErr == nil && timeline != nil {
 			timelineContext = s.timelineSvc.FormatTimelineForPrompt(timeline, req.ChapterNo)
 		}
 	}
@@ -1899,7 +1899,7 @@ func (s *ChapterService) generateFromSceneOutline(
 	// 获取时间线约束（注入正文生成，与场景大纲保持一致）
 	var timelineCtx string
 	if s.timelineSvc != nil {
-		if tl, tlErr := s.timelineSvc.GetTimeline(novelID); tlErr == nil && tl != nil {
+		if tl, tlErr := s.timelineSvc.BuildTimeline(novelID); tlErr == nil && tl != nil {
 			timelineCtx = s.timelineSvc.FormatTimelineForPrompt(tl, req.ChapterNo)
 		}
 	}

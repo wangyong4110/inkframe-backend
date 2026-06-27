@@ -16,10 +16,14 @@ func NewFeedbackRepository(db *gorm.DB) *FeedbackRepository {
 }
 
 func (r *FeedbackRepository) Create(f *model.UserFeedback) error {
-	var maxSeqNo uint
-	r.db.Raw("SELECT COALESCE(MAX(seq_no), 0) + 1 FROM ink_user_feedback").Scan(&maxSeqNo)
-	f.SeqNo = maxSeqNo
-	return r.db.Create(f).Error
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var maxSeqNo uint
+		if err := tx.Raw("SELECT COALESCE(MAX(seq_no), 0) + 1 FROM ink_user_feedback").Scan(&maxSeqNo).Error; err != nil {
+			return err
+		}
+		f.SeqNo = maxSeqNo
+		return tx.Create(f).Error
+	})
 }
 
 func (r *FeedbackRepository) List(page, size int, status, typ, priority string) ([]*model.UserFeedback, int64, error) {
@@ -35,7 +39,9 @@ func (r *FeedbackRepository) List(page, size int, status, typ, priority string) 
 	if priority != "" {
 		q = q.Where("priority = ?", priority)
 	}
-	q.Count(&total)
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 	err := q.Order("id DESC").Offset((page - 1) * size).Limit(size).Find(&items).Error
 	return items, total, err
 }
@@ -44,7 +50,9 @@ func (r *FeedbackRepository) ListByUser(userID uint, page, size int) ([]*model.U
 	var items []*model.UserFeedback
 	var total int64
 	q := r.db.Model(&model.UserFeedback{}).Where("user_id = ?", userID)
-	q.Count(&total)
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 	err := q.Order("id DESC").Offset((page - 1) * size).Limit(size).Find(&items).Error
 	return items, total, err
 }
@@ -61,24 +69,36 @@ func (r *FeedbackRepository) Update(f *model.UserFeedback) error {
 
 func (r *FeedbackRepository) GetStats() (map[string]interface{}, error) {
 	var total, pending, reviewing, resolved int64
-	r.db.Model(&model.UserFeedback{}).Count(&total)
-	r.db.Model(&model.UserFeedback{}).Where("status = ?", "pending").Count(&pending)
-	r.db.Model(&model.UserFeedback{}).Where("status = ?", "reviewing").Count(&reviewing)
-	r.db.Model(&model.UserFeedback{}).Where("status = ?", "resolved").Count(&resolved)
+	if err := r.db.Model(&model.UserFeedback{}).Count(&total).Error; err != nil {
+		return nil, err
+	}
+	if err := r.db.Model(&model.UserFeedback{}).Where("status = ?", "pending").Count(&pending).Error; err != nil {
+		return nil, err
+	}
+	if err := r.db.Model(&model.UserFeedback{}).Where("status = ?", "reviewing").Count(&reviewing).Error; err != nil {
+		return nil, err
+	}
+	if err := r.db.Model(&model.UserFeedback{}).Where("status = ?", "resolved").Count(&resolved).Error; err != nil {
+		return nil, err
+	}
 
 	type typeCount struct {
 		Type  string
 		Count int64
 	}
 	var typeCounts []typeCount
-	r.db.Model(&model.UserFeedback{}).Select("type, COUNT(*) as count").Group("type").Scan(&typeCounts)
+	if err := r.db.Model(&model.UserFeedback{}).Select("type, COUNT(*) as count").Group("type").Scan(&typeCounts).Error; err != nil {
+		return nil, err
+	}
 	byType := make(map[string]int64)
 	for _, tc := range typeCounts {
 		byType[tc.Type] = tc.Count
 	}
 
 	var avgRating float64
-	r.db.Model(&model.UserFeedback{}).Where("rating > 0").Select("COALESCE(AVG(rating), 0)").Scan(&avgRating)
+	if err := r.db.Model(&model.UserFeedback{}).Where("rating > 0").Select("COALESCE(AVG(rating), 0)").Scan(&avgRating).Error; err != nil {
+		return nil, err
+	}
 
 	type dailyCount struct {
 		Date  string
@@ -86,12 +106,14 @@ func (r *FeedbackRepository) GetStats() (map[string]interface{}, error) {
 	}
 	var dailyCounts []dailyCount
 	since := time.Now().AddDate(0, 0, -6)
-	r.db.Model(&model.UserFeedback{}).
+	if err := r.db.Model(&model.UserFeedback{}).
 		Where("created_at >= ?", since).
 		Select("DATE(created_at) as date, COUNT(*) as count").
 		Group("DATE(created_at)").
 		Order("date ASC").
-		Scan(&dailyCounts)
+		Scan(&dailyCounts).Error; err != nil {
+		return nil, err
+	}
 
 	daily := make([]map[string]interface{}, len(dailyCounts))
 	for i, d := range dailyCounts {

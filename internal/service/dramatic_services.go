@@ -326,15 +326,6 @@ func (s *ConflictArcService) AdvancePhase(id uint) (*model.ConflictArc, error) {
 	if err != nil {
 		return nil, err
 	}
-	// 兼容旧数据：resolution 映射到 aftershock
-	if arc.CurrentPhase == "resolution" {
-		arc.CurrentPhase = "aftershock"
-		arc.IsResolved = true
-		if err := s.repo.Update(arc); err != nil {
-			return nil, err
-		}
-		return arc, nil
-	}
 	nextPhase := conflictPhases[0]
 	for i, p := range conflictPhases {
 		if p == arc.CurrentPhase && i+1 < len(conflictPhases) {

@@ -73,7 +73,7 @@ func (h *SceneAnchorHandler) GetSceneAnchor(c *gin.Context) {
 	if !ok {
 		return
 	}
-	anchor, err := h.svc.Get(uint(id))
+	anchor, err := h.svc.GetByID(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "scene anchor not found")
 		return
@@ -128,7 +128,7 @@ func (h *SceneAnchorHandler) UpdateSceneAnchor(c *gin.Context) {
 	if !ok {
 		return
 	}
-	existing, err := h.svc.Get(uint(id))
+	existing, err := h.svc.GetByID(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "scene anchor not found")
 		return
@@ -158,7 +158,7 @@ func (h *SceneAnchorHandler) DeleteSceneAnchor(c *gin.Context) {
 	if !ok {
 		return
 	}
-	existing, err := h.svc.Get(uint(id))
+	existing, err := h.svc.GetByID(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "scene anchor not found")
 		return
@@ -233,7 +233,7 @@ func (h *SceneAnchorHandler) LockRefImage(c *gin.Context) {
 	if !ok {
 		return
 	}
-	existing, err := h.svc.Get(uint(id))
+	existing, err := h.svc.GetByID(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "scene anchor not found")
 		return
@@ -264,7 +264,7 @@ func (h *SceneAnchorHandler) UploadRefImage(c *gin.Context) {
 	if !ok {
 		return
 	}
-	existing, err := h.svc.Get(uint(id))
+	existing, err := h.svc.GetByID(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "scene anchor not found")
 		return
@@ -282,7 +282,7 @@ func (h *SceneAnchorHandler) UploadRefImage(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to save ref image")
 		return
 	}
-	updated, _ := h.svc.Get(uint(id))
+	updated, _ := h.svc.GetByID(uint(id))
 	respondOK(c, gin.H{"url": imgURL, "anchor": updated})
 }
 
@@ -293,7 +293,7 @@ func (h *SceneAnchorHandler) AIAnalyzeSceneAnchor(c *gin.Context) {
 	if !ok {
 		return
 	}
-	existing, err := h.svc.Get(uint(id))
+	existing, err := h.svc.GetByID(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "scene anchor not found")
 		return
@@ -317,7 +317,7 @@ func (h *SceneAnchorHandler) GenerateRefImage(c *gin.Context) {
 	if !ok {
 		return
 	}
-	existing, err := h.svc.Get(uint(id))
+	existing, err := h.svc.GetByID(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "scene anchor not found")
 		return
@@ -345,7 +345,7 @@ func (h *SceneAnchorHandler) EditRefImage(c *gin.Context) {
 	if !ok {
 		return
 	}
-	existing, err := h.svc.Get(uint(id))
+	existing, err := h.svc.GetByID(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "scene anchor not found")
 		return
@@ -375,7 +375,7 @@ func (h *SceneAnchorHandler) GetConsistencyLogs(c *gin.Context) {
 	if !ok {
 		return
 	}
-	anchor, err := h.svc.Get(uint(id))
+	anchor, err := h.svc.GetByID(uint(id))
 	if err != nil {
 		respondErr(c, http.StatusNotFound, "scene anchor not found")
 		return

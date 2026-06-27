@@ -3,6 +3,7 @@ package repository
 import (
 	"time"
 
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"gorm.io/gorm"
 )
@@ -107,9 +108,11 @@ func (r *ModelProviderRepository) GetByNameAndTenant(name string, tenantID uint)
 // Create 创建提供商
 func (r *ModelProviderRepository) Create(provider *model.ModelProvider) error {
 	// 清理同 (tenant_id, name) 的历史软删除记录，避免唯一索引冲突。
-	r.db.Unscoped().
+	if err := r.db.Unscoped().
 		Where("tenant_id = ? AND name = ? AND deleted_at IS NOT NULL", provider.TenantID, provider.Name).
-		Delete(&model.ModelProvider{}) //nolint:errcheck
+		Delete(&model.ModelProvider{}).Error; err != nil {
+		logger.Warnf("[ModelProviderRepository] cleanup soft-deleted provider %q: %v", provider.Name, err)
+	}
 	return r.db.Create(provider).Error
 }
 

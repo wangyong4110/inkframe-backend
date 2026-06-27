@@ -61,17 +61,18 @@ func (r *ChapterRepository) GetByID(id uint) (*model.Chapter, error) {
 // GetByNovelAndChapterNo 根据小说ID和章节号获取
 func (r *ChapterRepository) GetByNovelAndChapterNo(novelID uint, chapterNo int) (*model.Chapter, error) {
 	var chapter model.Chapter
-	if err := r.db.Where("novel_id = ? AND chapter_no = ? AND deleted_at IS NULL", novelID, chapterNo).First(&chapter).Error; err != nil {
+	if err := r.db.Where("novel_id = ? AND chapter_no = ?", novelID, chapterNo).First(&chapter).Error; err != nil {
 		return nil, err
 	}
 	return &chapter, nil
 }
 
-// chapterListColumns 章节列表元数据字段。排除 content/scene_outline/plot_points/chapter_hook 等超大文本列。
-// outline/summary 较短（百字级），保留用于列表摘要展示。
+// chapterListColumns 章节列表元数据字段。排除 content 等大文本列。
+// tension_level/act_no/emotional_tone/hook_type/outline 已合并进 narrative_meta JSON 列；
+// continuity_blocked 已合并进 quality_meta JSON 列。
 const chapterListColumns = "id, novel_id, uuid, chapter_no, title, status, word_count, " +
-	"tension_level, act_no, emotional_tone, hook_type, " +
-	"outline, summary, continuity_blocked, " +
+	"narrative_meta, quality_meta, " +
+	"summary, " +
 	"created_at, updated_at, deleted_at"
 
 func (r *ChapterRepository) chapterListCacheKey(novelID uint) string {
@@ -136,7 +137,7 @@ func (r *ChapterRepository) ListByNovelPaged(novelID uint, page, pageSize int) (
 // 用于 AI 提取任务（角色/物品/技能等），不走缓存。最多返回 300 章，避免超大小说导致 OOM。
 func (r *ChapterRepository) ListByNovelWithContent(novelID uint) ([]*model.Chapter, error) {
 	var chapters []*model.Chapter
-	return chapters, r.db.Where("novel_id = ? AND deleted_at IS NULL", novelID).
+	return chapters, r.db.Where("novel_id = ?", novelID).
 		Order("chapter_no ASC").Limit(300).Find(&chapters).Error
 }
 
@@ -275,10 +276,9 @@ func (r *ChapterRepository) Delete(id, novelID uint) error {
 
 // ShiftUp 将 novelID 下 chapter_no >= fromChapterNo 的章节全部 +1，为插入腾出位置。
 func (r *ChapterRepository) ShiftUp(novelID uint, fromChapterNo int) error {
-	err := r.db.Exec(
-		"UPDATE ink_chapter SET chapter_no = chapter_no + 1 WHERE novel_id = ? AND chapter_no >= ? AND deleted_at IS NULL",
-		novelID, fromChapterNo,
-	).Error
+	err := r.db.Model(&model.Chapter{}).
+		Where("novel_id = ? AND chapter_no >= ?", novelID, fromChapterNo).
+		UpdateColumn("chapter_no", gorm.Expr("chapter_no + 1")).Error
 	if err != nil {
 		return err
 	}
@@ -296,18 +296,16 @@ type ChapterOrder struct {
 // 调用前应确保 orders 覆盖小说的全部章节且 chapter_no 连续无重复。
 func (r *ChapterRepository) BatchReorderChapters(novelID uint, orders []ChapterOrder) error {
 	err := r.db.Transaction(func(tx *gorm.DB) error {
-		// 先将所有章节的 chapter_no 设为负数，避免唯一约束冲突（如果有的话）
-		if err := tx.Exec(
-			"UPDATE ink_chapter SET chapter_no = -chapter_no WHERE novel_id = ? AND deleted_at IS NULL",
-			novelID,
-		).Error; err != nil {
+		// 先将所有章节的 chapter_no 设为负数，避免唯一约束冲突
+		if err := tx.Model(&model.Chapter{}).
+			Where("novel_id = ?", novelID).
+			UpdateColumn("chapter_no", gorm.Expr("-chapter_no")).Error; err != nil {
 			return err
 		}
 		for _, o := range orders {
-			if err := tx.Exec(
-				"UPDATE ink_chapter SET chapter_no = ? WHERE id = ? AND novel_id = ? AND deleted_at IS NULL",
-				o.ChapterNo, o.ID, novelID,
-			).Error; err != nil {
+			if err := tx.Model(&model.Chapter{}).
+				Where("id = ? AND novel_id = ?", o.ID, novelID).
+				UpdateColumn("chapter_no", o.ChapterNo).Error; err != nil {
 				return err
 			}
 		}
@@ -338,17 +336,18 @@ func (r *ChapterRepository) DeleteAndRenumber(id, novelID uint) error {
 		// Clear chapter_no on the soft-deleted record to avoid unique-key conflict when
 		// renumbering: uk_novel_chapter covers (novel_id, chapter_no) without a deleted_at
 		// partial index, so the deleted row still occupies the slot.
-		if err := tx.Exec(
-			"UPDATE ink_chapter SET chapter_no = 0 WHERE id = ? AND deleted_at IS NOT NULL",
-			id,
-		).Error; err != nil {
+		// Unscoped() is required here: GORM soft-delete adds AND deleted_at IS NULL by
+		// default, which would exclude the just-deleted record we need to update.
+		if err := tx.Unscoped().Model(&model.Chapter{}).
+			Where("id = ? AND deleted_at IS NOT NULL", id).
+			UpdateColumn("chapter_no", 0).Error; err != nil {
 			return err
 		}
-		// Decrement chapter_no for all subsequent chapters in this novel
-		return tx.Exec(
-			"UPDATE ink_chapter SET chapter_no = chapter_no - 1 WHERE novel_id = ? AND chapter_no > ? AND deleted_at IS NULL",
-			novelID, deletedNo,
-		).Error
+		// Decrement chapter_no for all subsequent chapters in this novel.
+		// No Unscoped needed: GORM adds AND deleted_at IS NULL automatically.
+		return tx.Model(&model.Chapter{}).
+			Where("novel_id = ? AND chapter_no > ?", novelID, deletedNo).
+			UpdateColumn("chapter_no", gorm.Expr("chapter_no - 1")).Error
 	})
 	if err != nil {
 		return err

@@ -2,7 +2,6 @@ package repository
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -50,13 +49,8 @@ func (r *UserRepository) GetByUsername(username string) (*model.User, error) {
 }
 
 func (r *UserRepository) UpdateLastLogin(id uint) error {
-	err := r.db.Model(&model.User{}).Where("id = ?", id).
+	return r.db.Model(&model.User{}).Where("id = ?", id).
 		Update("last_login_at", time.Now()).Error
-	// Ignore MySQL 1054 "Unknown column" — column will be added by ensureCriticalColumns on restart.
-	if err != nil && (strings.Contains(err.Error(), "1054") || strings.Contains(err.Error(), "Unknown column")) {
-		return nil
-	}
-	return err
 }
 
 func (r *UserRepository) UpdateProfile(id uint, updates map[string]interface{}) error {

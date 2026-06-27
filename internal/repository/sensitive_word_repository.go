@@ -25,7 +25,9 @@ func (r *SensitiveWordRuleRepository) List(tenantID uint, page, pageSize int) ([
 	var rules []model.SensitiveWordRule
 	var total int64
 	q := r.db.Model(&model.SensitiveWordRule{}).Where("tenant_id = ?", tenantID)
-	q.Count(&total)
+	if err := q.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
 	err := q.Offset((page - 1) * pageSize).Limit(pageSize).Order("id DESC").Find(&rules).Error
 	return rules, total, err
 }

@@ -59,18 +59,16 @@ type VideoRenderConfig struct {
 }
 
 // VideoPublishMeta 发布与展示元数据（JSON存储）
+// 注意：PublishedAt、Visibility、HotScore 已迁移为 Video 独立列，不再存此结构体。
 type VideoPublishMeta struct {
-	Description   string     `json:"description"`
-	PublishedAt   *time.Time `json:"published_at"`
-	Visibility    string     `json:"visibility"`
-	HotScore      float64    `json:"hot_score"`
-	Tags          string     `json:"tags"`
-	Thumbnail     string     `json:"thumbnail"`
-	CoverURL      string     `json:"cover_url"`
-	FinalVideoURL string     `json:"final_video_url"`
-	TotalShots    int        `json:"total_shots"`
-	Duration      float64    `json:"duration"`
-	ReviewStatus  string     `json:"review_status"`
+	Description   string  `json:"description"`
+	Tags          string  `json:"tags"`
+	Thumbnail     string  `json:"thumbnail"`
+	CoverURL      string  `json:"cover_url"`
+	FinalVideoURL string  `json:"final_video_url"`
+	TotalShots    int     `json:"total_shots"`
+	Duration      float64 `json:"duration"`
+	ReviewStatus  string  `json:"review_status"`
 }
 
 // VideoTaskMeta 异步任务状态（JSON存储）
@@ -102,6 +100,11 @@ type Video struct {
 
 	// 发布状态
 	IsPublished bool `json:"is_published" gorm:"default:false;index"`
+
+	// 独立列（用于 WHERE / ORDER BY 索引查询）
+	Visibility  string     `json:"visibility" gorm:"size:20;default:'private'"`
+	PublishedAt *time.Time `json:"published_at" gorm:"index"`
+	HotScore    float64    `json:"hot_score" gorm:"default:0;index"`
 
 	// 统计计数（不存 ink_video 主表，从 ink_content_stats 加载）
 	ViewCount    int `json:"view_count" gorm:"-"`

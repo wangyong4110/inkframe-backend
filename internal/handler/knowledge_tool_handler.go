@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -30,11 +29,9 @@ func (h *KnowledgeToolHandler) Search(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "query is required"})
 		return
 	}
-	if req.Limit <= 0 || req.Limit > 10 {
-		req.Limit = 5
-	}
+	req.Limit = clampMaxResults(req.Limit, 5, 10)
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	ctx, cancel := requestContext(c, 10*time.Second)
 	defer cancel()
 
 	var novelID *uint

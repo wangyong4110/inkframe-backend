@@ -177,6 +177,13 @@ type Novel struct {
 
 	// 广场社交字段
 	IsPublished bool `json:"is_published" gorm:"default:false;index"`
+
+	// 独立列（用于 WHERE / ORDER BY 索引查询，与 novel_meta JSON 保持同步）
+	Genre      string     `json:"genre" gorm:"size:50;index;default:''"`
+	Channel    string     `json:"channel" gorm:"size:20;default:''"`
+	Visibility string     `json:"visibility" gorm:"size:20;default:'private'"`
+	PublishedAt *time.Time `json:"published_at" gorm:"index"`
+
 	// 统计计数（不存 ink_novel 主表，从 ink_content_stats 加载）
 	ViewCount    int     `json:"view_count" gorm:"-"`
 	LikeCount    int     `json:"like_count" gorm:"-"`
@@ -197,6 +204,15 @@ type Novel struct {
 
 func (Novel) TableName() string {
 	return "ink_novel"
+}
+
+// BeforeSave 同步 novel_meta JSON 字段到独立查询列（保持双写一致性）
+func (n *Novel) BeforeSave(tx *gorm.DB) error {
+	n.Genre = n.Meta.Genre
+	n.Channel = n.Meta.Channel
+	n.Visibility = n.Meta.Visibility
+	n.PublishedAt = n.Meta.PublishedAt
+	return nil
 }
 
 // VideoConf returns video/subtitle config with safe nil handling.
@@ -241,17 +257,15 @@ func (n Novel) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	// Flatten Meta / AIConfig / ReviewMeta
+	// Note: genre, channel, visibility, published_at are standalone columns already
+	// present in the base alias JSON — do not duplicate them here.
 	metaFields := map[string]any{
 		"description":           n.Meta.Description,
-		"genre":                 n.Meta.Genre,
-		"channel":               n.Meta.Channel,
 		"target_word_count":     n.Meta.TargetWordCount,
 		"target_chapters":       n.Meta.TargetChapters,
 		"cover_image":           n.Meta.CoverImage,
 		"core_theme":            n.Meta.CoreTheme,
 		"plaza_tags":            n.Meta.PlazaTags,
-		"published_at":          n.Meta.PublishedAt,
-		"visibility":            n.Meta.Visibility,
 		"ai_model":              n.AIConfig.AIModel,
 		"temperature":           n.AIConfig.Temperature,
 		"top_p":                 n.AIConfig.TopP,
@@ -318,9 +332,8 @@ type ChapterNarrativeMeta struct {
 
 // ChapterQualityMeta 质量与发布元数据（JSON存储）
 type ChapterQualityMeta struct {
-	PublishedAt       *time.Time `json:"published_at"`
-	ContinuityBlocked bool       `json:"continuity_blocked"`
-	QualityStatus     string     `json:"quality_status"`
+	QualityStatus string `json:"quality_status"`
+	// PublishedAt/ContinuityBlocked 已提升为 Chapter 独立列，不再存于 JSON
 }
 
 // Chapter 章节
@@ -343,7 +356,10 @@ type Chapter struct {
 	// draft=草稿, generating=生成中, completed=已完成
 
 	// 广场发布状态（与内容状态解耦）
-	IsPublished bool `json:"is_published" gorm:"default:false;index"`
+	IsPublished bool       `json:"is_published" gorm:"default:false;index"`
+	PublishedAt *time.Time `json:"published_at" gorm:"index"`
+	// 连续性阻塞标记：true 时禁止继续生成（需独立列以支持直接 UPDATE 而不触发全字段保存）
+	ContinuityBlocked bool `json:"continuity_blocked" gorm:"default:false"`
 
 	// JSON 合并字段（减少列数）
 	NarrativeMeta ChapterNarrativeMeta `json:"narrative_meta" gorm:"column:narrative_meta;serializer:json;type:text"`
@@ -737,12 +753,6 @@ type AuditLog struct {
 	Details      string    `json:"details,omitempty" gorm:"type:text"` // JSON
 	IP           string    `json:"ip" gorm:"size:64"`
 	Status       string    `json:"status" gorm:"size:20;default:'ok'"` // ok / fail
-	// Legacy fields kept for backward compat
-	EntityType string `json:"entity_type,omitempty" gorm:"size:50"`
-	EntityID   uint   `json:"entity_id,omitempty"`
-	IPAddress  string `json:"ip_address,omitempty" gorm:"size:50"`
-	UserAgent  string `json:"user_agent,omitempty" gorm:"size:500"`
-	Detail     string `json:"detail,omitempty" gorm:"type:text"`
 }
 
 func (AuditLog) TableName() string { return "ink_audit_log" }
