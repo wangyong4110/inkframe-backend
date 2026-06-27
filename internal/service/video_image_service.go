@@ -982,7 +982,7 @@ func (s *VideoService) chainLastFrameToNextShot(shot *model.StoryboardShot) {
 	if err != nil || nextShot == nil {
 		return // 已是最后一镜或查询失败，无需链接
 	}
-	if nextShot.ReferenceImageURL != "" {
+	if nextShot.GenMeta.ReferenceImageURL != "" {
 		return // 已有末帧，跳过（避免重复提取）
 	}
 
@@ -1028,11 +1028,10 @@ func (s *VideoService) chainLastFrameToNextShot(shot *model.StoryboardShot) {
 		frameURL = "file://" + persistPath
 	}
 
-	// 5. 写入下一分镜的 reference_image_url
-	if dbErr := s.storyboardRepo.UpdateFields(nextShot.ID, map[string]interface{}{
-		"reference_image_url": frameURL,
-	}); dbErr != nil {
-		logger.Errorf("chainLastFrameToNextShot: shot %d → nextShot %d UpdateFields failed: %v", shot.ShotNo, nextShot.ShotNo, dbErr)
+	// 5. 写入下一分镜的 reference_image_url（GenMeta JSON 字段，需整体 Update）
+	nextShot.GenMeta.ReferenceImageURL = frameURL
+	if dbErr := s.storyboardRepo.Update(nextShot); dbErr != nil {
+		logger.Errorf("chainLastFrameToNextShot: shot %d → nextShot %d Update failed: %v", shot.ShotNo, nextShot.ShotNo, dbErr)
 		return
 	}
 	logger.Printf("chainLastFrameToNextShot: shot %d → nextShot %d reference_image_url=%s", shot.ShotNo, nextShot.ShotNo, frameURL)
@@ -1345,9 +1344,9 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 			if klingMode == "pro" && !vc.KlingProForAction {
 				klingMode = "std"
 			}
-			hdEnabled = strings.Contains(vid.VisualMode, "hd")
-			threeDEnabled = vc.ThreeDEnabled || strings.Contains(vid.VisualMode, "3d")
-			threeDStyle = vid.ThreeDStyle
+			hdEnabled = strings.Contains(vid.RenderConfig.VisualMode, "hd")
+			threeDEnabled = vc.ThreeDEnabled || strings.Contains(vid.RenderConfig.VisualMode, "3d")
+			threeDStyle = vid.RenderConfig.ThreeDStyle
 			klingModelOverride = vc.KlingModel
 			videoColorGrade = vc.ColorGrade
 		}
@@ -2065,7 +2064,7 @@ func (s *VideoService) GenerateAllShotVideos(videoID uint) error {
 	}
 
 	for _, shot := range shots {
-		if err := s.GenerateShotVideo(shot, video.AspectRatio); err != nil {
+		if err := s.GenerateShotVideo(shot, video.RenderConfig.AspectRatio); err != nil {
 			logger.Errorf("GenerateAllShotVideos: shot %d failed: %v", shot.ShotNo, err)
 			continue
 		}
@@ -2114,13 +2113,13 @@ func (s *VideoService) SequentialGenerateShots(videoID uint, shotIDs []uint, qua
 		return nil, err
 	}
 	if qualityTierOverride != "" {
-		video.QualityTier = qualityTierOverride
+		video.RenderConfig.QualityTier = qualityTierOverride
 	}
 	effectiveProvider := ""
 	if len(provider) > 0 {
 		effectiveProvider = provider[0]
 	}
-	aspectRatio := video.AspectRatio
+	aspectRatio := video.RenderConfig.AspectRatio
 	if video.NovelID > 0 && s.novelRepo != nil {
 		if novel, nErr := s.novelRepo.GetByID(video.NovelID); nErr == nil {
 			if aspectRatio == "" && novel.VideoConf().VideoAspectRatio != "" {

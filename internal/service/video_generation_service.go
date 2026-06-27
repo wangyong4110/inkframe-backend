@@ -554,7 +554,7 @@ func (s *VideoEnhancementService) GetRecommendedEnhancements(videoInfo *model.Vi
 	configs := s.GetDefaultEnhancements()
 
 	// 根据分辨率调整
-	switch videoInfo.Resolution {
+	switch videoInfo.RenderConfig.Resolution {
 	case "720p":
 		for _, cfg := range configs {
 			if cfg.Type == EnhanceSuperResolution {
@@ -570,7 +570,7 @@ func (s *VideoEnhancementService) GetRecommendedEnhancements(videoInfo *model.Vi
 	}
 
 	// 根据帧率调整
-	if videoInfo.FrameRate < 30 {
+	if videoInfo.RenderConfig.FrameRate < 30 {
 		for _, cfg := range configs {
 			if cfg.Type == EnhanceFrameInterpolation {
 				cfg.TargetFPS = 60

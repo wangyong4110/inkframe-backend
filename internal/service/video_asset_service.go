@@ -272,7 +272,7 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 	var shotEmotionalTone string
 	if s.storyboardRepo != nil && s.videoRepo != nil {
 		if shot, e := s.storyboardRepo.GetByID(seg.ShotID); e == nil {
-			shotEmotionalTone = shot.EmotionalTone
+			shotEmotionalTone = shot.CamDir.EmotionalTone
 			if video, e := s.videoRepo.GetByID(shot.VideoID); e == nil {
 				novelID = video.NovelID
 			}
@@ -821,12 +821,12 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 					}
 				}
 
-				// 降级：shot.Characters JSON 名称模糊匹配
-				if shot.Characters != "" {
+				// 降级：shot.GenMeta.Characters JSON 名称模糊匹配
+				if shot.GenMeta.Characters != "" {
 					var shotChars []struct {
 						Name string `json:"name"`
 					}
-					if err := json.Unmarshal([]byte(shot.Characters), &shotChars); err == nil && len(shotChars) > 0 {
+					if err := json.Unmarshal([]byte(shot.GenMeta.Characters), &shotChars); err == nil && len(shotChars) > 0 {
 						nameMap := make(map[string]*model.Character, len(characters))
 						for _, c := range characters {
 							nameMap[strings.ToLower(c.Name)] = c
@@ -846,8 +846,8 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 applyEmotion:
 	// 分镜情绪基调始终作为最终覆盖，优先级高于角色静态风格。
 	// 旁白和对白镜头均适用。
-	if shot.EmotionalTone != "" {
-		if mapped := mapEmotionalToneToTTS(shot.EmotionalTone); mapped != "" {
+	if shot.CamDir.EmotionalTone != "" {
+		if mapped := mapEmotionalToneToTTS(shot.CamDir.EmotionalTone); mapped != "" {
 			style = mapped
 		}
 	}

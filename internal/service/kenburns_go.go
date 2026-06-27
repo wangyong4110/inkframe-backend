@@ -93,7 +93,7 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 		logger.Errorf("generateKenBurnsPureGo: shot %d WARNING estimated frame disk usage ~%dMB (%d frames %dx%d)", shot.ShotNo, estFrameMB, totalFrames, outW, outH)
 	}
 	logger.Printf("generateKenBurnsPureGo: shot %d rendering %d frames (%dx%d) src=%dx%d camera=%s frameDir=%s",
-		shot.ShotNo, totalFrames, outW, outH, srcW, srcH, shot.CameraType, frameDir)
+		shot.ShotNo, totalFrames, outW, outH, srcW, srcH, shot.CamDir.CameraType, frameDir)
 
 	// Render one JPEG per frame.
 	for i := 0; i < totalFrames; i++ {
@@ -114,7 +114,7 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 		}
 
 		t := float64(i) / float64(fps)
-		cropX, cropY, cropW, cropH := kbCrop(shot.CameraType, srcW, srcH, t, duration)
+		cropX, cropY, cropW, cropH := kbCrop(shot.CamDir.CameraType, srcW, srcH, t, duration)
 
 		frame := kbCropScale(rgba, cropX, cropY, cropW, cropH, outW, outH)
 

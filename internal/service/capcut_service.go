@@ -1404,7 +1404,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 	}
 
 	subCfg := newSubtitleConfig(novel)
-	ratio := video.AspectRatio
+	ratio := video.RenderConfig.AspectRatio
 	if ratio == "" {
 		ratio = "16:9"
 	}
@@ -1603,14 +1603,14 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 		// P1-1: 仅对静态图片添加 Ken Burns 运镜关键帧。
 		// 视频素材由 Kling/Seedance 已生成摄像机运动，叠加缩放/平移关键帧会产生双重抖动。
 		if !isVideo {
-			kfGroups := buildPhotoMotionKeyframes(segID, shot.CameraType, durationMicros, shot.ShotNo)
+			kfGroups := buildPhotoMotionKeyframes(segID, shot.CamDir.CameraType, durationMicros, shot.ShotNo)
 			for _, g := range kfGroups {
 				seg.KeyframeRefs = append(seg.KeyframeRefs, g.ID)
 			}
 			allKFGroups = append(allKFGroups, kfGroups...)
 		}
 		// 转场特效：非直切时创建转场素材并挂载到当前 segment（追加到伴生素材引用末尾）
-		if effect := capCutTransitionEffect(shot.Transition); effect != "" {
+		if effect := capCutTransitionEffect(shot.CamDir.Transition); effect != "" {
 			transMatID := uuid.New().String()
 			transitionMaterials = append(transitionMaterials, ccTransitionMaterial{
 				Category: "transition",
@@ -2444,7 +2444,7 @@ func (s *CapCutService) ExportBRollDraft(video *model.Video, shots []*model.Stor
 	subCfg := newSubtitleConfig(novel)
 	annCfg := subtitleConfig{enabled: true, position: "top", fontSize: 32, color: "#AAAAAA", bgStyle: "none"}
 
-	ratio := video.AspectRatio
+	ratio := video.RenderConfig.AspectRatio
 	if ratio == "" {
 		ratio = "16:9"
 	}
@@ -3281,7 +3281,7 @@ func (s *CapCutService) ExportFCPXML(video *model.Video, shots []*model.Storyboa
 	if projectName == "" {
 		projectName = fmt.Sprintf("video_%d", video.ID)
 	}
-	ratio := video.AspectRatio
+	ratio := video.RenderConfig.AspectRatio
 	if ratio == "" {
 		ratio = "16:9"
 	}
@@ -4516,8 +4516,8 @@ func (s *CapCutService) ExportCSV(video *model.Video, shots []*model.StoryboardS
 			shot.Dialogue,
 			shot.Narration,
 			strconv.FormatFloat(shot.Duration, 'f', 2, 64),
-			shot.CameraType,
-			shot.ShotSize,
+			shot.CamDir.CameraType,
+			shot.CamDir.ShotSize,
 			shot.ImageURL,
 			shot.VideoURL,
 		})

@@ -25,20 +25,20 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 	var sceneCtx strings.Builder
 	fmt.Fprintf(&sceneCtx, "镜头编号：%d\n", shot.ShotNo)
 	fmt.Fprintf(&sceneCtx, "时长：%.1f 秒\n", shot.Duration)
-	if shot.ShotSize != "" {
-		fmt.Fprintf(&sceneCtx, "景别：%s\n", shot.ShotSize)
+	if shot.CamDir.ShotSize != "" {
+		fmt.Fprintf(&sceneCtx, "景别：%s\n", shot.CamDir.ShotSize)
 	}
-	if shot.CameraType != "" && shot.CameraType != "static" {
-		fmt.Fprintf(&sceneCtx, "运镜：%s\n", shot.CameraType)
+	if shot.CamDir.CameraType != "" && shot.CamDir.CameraType != "static" {
+		fmt.Fprintf(&sceneCtx, "运镜：%s\n", shot.CamDir.CameraType)
 	}
 	if shot.Description != "" {
 		fmt.Fprintf(&sceneCtx, "画面描述（视觉参考，仅推断声源，禁止把视觉词写进 tag）：%s\n", shot.Description)
 	}
-	if shot.Scene != "" {
-		fmt.Fprintf(&sceneCtx, "场景环境：%s\n", shot.Scene)
+	if shot.GenMeta.Scene != "" {
+		fmt.Fprintf(&sceneCtx, "场景环境：%s\n", shot.GenMeta.Scene)
 	}
-	if shot.EmotionalTone != "" {
-		fmt.Fprintf(&sceneCtx, "情绪基调：%s\n", shot.EmotionalTone)
+	if shot.CamDir.EmotionalTone != "" {
+		fmt.Fprintf(&sceneCtx, "情绪基调：%s\n", shot.CamDir.EmotionalTone)
 	}
 	if shot.Dialogue != "" {
 		fmt.Fprintf(&sceneCtx, "⚠️ 含对白：所有音效必须为 subtle，禁止任何冲击/爆发音，人声频段（300Hz–3kHz）绝对不可遮蔽\n")
@@ -49,8 +49,8 @@ func (s *SFXService) analyzeSingleShotSFX(ctx context.Context, shot *model.Story
 
 	// 时长策略 & 景别 & 运镜
 	durationStrategy := buildDurationStrategy(shot.Duration)
-	sizeGuide := shotSizeGuide(shot.ShotSize)
-	motionGuide := cameraMotionGuide(shot.CameraType)
+	sizeGuide := shotSizeGuide(shot.CamDir.ShotSize)
+	motionGuide := cameraMotionGuide(shot.CamDir.CameraType)
 	motionSection := ""
 	if motionGuide != "" {
 		motionSection = "\n**运镜**：" + motionGuide

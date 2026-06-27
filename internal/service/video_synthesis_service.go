@@ -156,8 +156,8 @@ func (s *VideoService) StitchVideoCtx(ctx context.Context, videoID uint) (string
 	aspectRatio := "16:9"
 	var videoTenantID uint
 	if video, verr := s.videoRepo.GetByID(videoID); verr == nil && video != nil {
-		if video.AspectRatio != "" {
-			aspectRatio = video.AspectRatio
+		if video.RenderConfig.AspectRatio != "" {
+			aspectRatio = video.RenderConfig.AspectRatio
 		}
 		videoTenantID = s.videoTenantID(video)
 	}
@@ -610,7 +610,7 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 			video, _ := s.videoRepo.GetByID(videoID)
 			aspectRatio := "16:9"
 			if video != nil {
-				aspectRatio = video.AspectRatio
+				aspectRatio = video.RenderConfig.AspectRatio
 			}
 			for _, shot := range pending {
 				if shot.ShotTaskID == "" {
@@ -1428,7 +1428,7 @@ func buildAudioMergeArgs(audioPath string, clipDur, audioDur float64) []string {
 func dominantEmotion(shots []*model.StoryboardShot) string {
 	counts := make(map[string]int)
 	for _, sh := range shots {
-		if t := strings.TrimSpace(sh.EmotionalTone); t != "" {
+		if t := strings.TrimSpace(sh.CamDir.EmotionalTone); t != "" {
 			counts[t]++
 		}
 	}

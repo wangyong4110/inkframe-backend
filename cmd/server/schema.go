@@ -14,7 +14,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-06-27-v1"
+const schemaVersion = "2026-06-27-v2"
 
 // ensureCriticalColumns 在版本检查之前无条件补全关键列（应对版本跳过导致列缺失的情况）。
 // 直接执行 ALTER TABLE ADD COLUMN，MySQL 1060 = 列已存在时静默忽略。
@@ -229,6 +229,10 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_storyboard_shot", "actual_video_duration", "DECIMAL(8,3) NOT NULL DEFAULT 0"},
 		{"ink_storyboard_shot", "timeline_start",        "DECIMAL(10,3) NOT NULL DEFAULT 0"},
 		{"ink_storyboard_shot", "voice_delay",           "DECIMAL(6,3) NOT NULL DEFAULT 0"},
+		// JSON 列合并（2026-06-27）：16个分镜列→cam_dir+gen_meta，10个视频列→render_config
+		{"ink_storyboard_shot", "cam_dir",        "TEXT NULL"},
+		{"ink_storyboard_shot", "gen_meta",       "TEXT NULL"},
+		{"ink_video",           "render_config",  "TEXT NULL"},
 	}
 	for _, a := range additions {
 		// 表不存在时跳过（AutoMigrate 会建表，建表时列也会随 struct 定义一同创建）
@@ -500,6 +504,9 @@ func autoMigrate(db *gorm.DB) error {
 		return err
 	}
 
+	// 数据迁移（2026-06-27）：回填 cam_dir / gen_meta / render_config JSON 列（从旧平铺列）
+	migrateJSONColumns(db)
+
 	// 数据迁移（2026-06-25-v5）：将旧社交表数据迁移到统一表 ink_entity_like / ink_entity_comment
 	socialMigrations := []string{
 		`INSERT IGNORE INTO ink_entity_like (entity_type, entity_id, novel_id, user_id, created_at) SELECT 'novel', novel_id, novel_id, user_id, created_at FROM ink_novel_like`,
@@ -744,6 +751,69 @@ func autoMigrate(db *gorm.DB) error {
 	// 迁移成功后写入新版本号（UPSERT）
 	return db.Exec("INSERT INTO ink_schema_version (id, ver) VALUES (1, ?) ON DUPLICATE KEY UPDATE ver = ?",
 		schemaVersion, schemaVersion).Error
+}
+
+// migrateJSONColumns 将分镜/视频旧平铺列回填到 JSON 列（cam_dir / gen_meta / render_config）。
+// 幂等：仅回填 JSON 列为 NULL 或空字符串（'{}'）且旧列有数据的行。
+// 旧列本次保留（由后续 runSchemaCleanup 删除），以便回滚。
+func migrateJSONColumns(db *gorm.DB) {
+	// 仅当旧列仍存在时执行（幂等守卫：旧列删除后此段自动跳过）
+	var camTypeExists int64
+	db.Raw(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ink_storyboard_shot' AND COLUMN_NAME='camera_type'`).Scan(&camTypeExists)
+	if camTypeExists > 0 {
+		if err := db.Exec(`UPDATE ink_storyboard_shot
+			SET cam_dir = JSON_OBJECT(
+				'camera_type',   COALESCE(camera_type,''),
+				'camera_angle',  COALESCE(camera_angle,''),
+				'shot_size',     COALESCE(shot_size,''),
+				'emotional_tone',COALESCE(emotional_tone,''),
+				'transition',    COALESCE(` + "`transition`" + `,''),
+				'transition_out',COALESCE(transition_out,''),
+				'transition_in', COALESCE(transition_in,'')
+			)
+			WHERE deleted_at IS NULL AND (cam_dir IS NULL OR cam_dir = '' OR cam_dir = 'null')`).Error; err != nil {
+			logger.Errorf("migrateJSONColumns: cam_dir backfill failed: %v", err)
+		}
+	}
+	var promptExists int64
+	db.Raw(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ink_storyboard_shot' AND COLUMN_NAME='prompt'`).Scan(&promptExists)
+	if promptExists > 0 {
+		if err := db.Exec(`UPDATE ink_storyboard_shot
+			SET gen_meta = JSON_OBJECT(
+				'prompt',              COALESCE(prompt,''),
+				'negative_prompt',     COALESCE(negative_prompt,''),
+				'motion_prompt',       COALESCE(motion_prompt,''),
+				'characters',         COALESCE(characters,''),
+				'scene',              COALESCE(scene,''),
+				'generation_mode',    COALESCE(generation_mode,''),
+				'consistency_score',  COALESCE(consistency_score,0),
+				'reference_image_url',COALESCE(reference_image_url,''),
+				'sfx_tags',           COALESCE(sfx_tags,'')
+			)
+			WHERE deleted_at IS NULL AND (gen_meta IS NULL OR gen_meta = '' OR gen_meta = 'null')`).Error; err != nil {
+			logger.Errorf("migrateJSONColumns: gen_meta backfill failed: %v", err)
+		}
+	}
+	var videoTypeExists int64
+	db.Raw(`SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='ink_video' AND COLUMN_NAME='type'`).Scan(&videoTypeExists)
+	if videoTypeExists > 0 {
+		if err := db.Exec(`UPDATE ink_video
+			SET render_config = JSON_OBJECT(
+				'type',            COALESCE(` + "`type`" + `,''),
+				'resolution',      COALESCE(resolution,''),
+				'frame_rate',      COALESCE(frame_rate,30),
+				'aspect_ratio',    COALESCE(aspect_ratio,'16:9'),
+				'art_style',       COALESCE(art_style,''),
+				'pacing',          COALESCE(pacing,'normal'),
+				'target_duration', COALESCE(target_duration,0),
+				'quality_tier',    COALESCE(quality_tier,''),
+				'visual_mode',     COALESCE(visual_mode,''),
+				'three_d_style',   COALESCE(three_d_style,'')
+			)
+			WHERE deleted_at IS NULL AND (render_config IS NULL OR render_config = '' OR render_config = 'null')`).Error; err != nil {
+			logger.Errorf("migrateJSONColumns: render_config backfill failed: %v", err)
+		}
+	}
 }
 
 // runSchemaCleanup 幂等数据迁移与废弃列清理（AutoMigrate 不删列，需手动执行）

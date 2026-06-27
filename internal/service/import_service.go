@@ -1707,12 +1707,14 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 		NovelID:     req.NovelID,
 		Title:       fmt.Sprintf("%s 视频", novel.Title),
 		Description: fmt.Sprintf("基于《%s》第%d-%d章生成的视频", novel.Title, startCh, startCh+len(chapters)-1),
-		Type:        "image_sequence",
-		Resolution:  req.Resolution,
-		FrameRate:   req.FrameRate,
-		AspectRatio: req.AspectRatio,
-		ArtStyle:    req.ArtStyle,
 		Status:      "planning",
+		RenderConfig: model.VideoRenderConfig{
+			Type:        "image_sequence",
+			Resolution:  req.Resolution,
+			FrameRate:   req.FrameRate,
+			AspectRatio: req.AspectRatio,
+			ArtStyle:    req.ArtStyle,
+		},
 	}
 
 	if err := s.videoRepo.Create(video); err != nil {
@@ -1748,12 +1750,16 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 				ChapterID:   &chapter.ID,
 				Description: shot.Description,
 				Dialogue:    shot.Dialogue,
-				CameraType:  string(shot.CameraMovement),
-				CameraAngle: string(shot.ShotAngle),
-				ShotSize:    string(shot.ShotSize),
 				Duration:    shot.Duration,
-				Prompt:      shot.Prompt,
 				Status:      "pending",
+				CamDir: model.ShotCamDir{
+					CameraType:  string(shot.CameraMovement),
+					CameraAngle: string(shot.ShotAngle),
+					ShotSize:    string(shot.ShotSize),
+				},
+				GenMeta: model.ShotGenMeta{
+					Prompt: shot.Prompt,
+				},
 			}
 			if s.storyboardRepo != nil {
 				if err := s.storyboardRepo.Create(dbShot); err != nil {

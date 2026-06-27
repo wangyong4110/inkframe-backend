@@ -661,9 +661,9 @@ func buildElevenLabsPrompt(item sfxTagItem, shot *model.StoryboardShot) string {
 		sb.WriteString(tag)
 		sb.WriteString(". Single occurrence, realistic and precise.")
 	}
-	if shot.EmotionalTone != "" {
+	if shot.CamDir.EmotionalTone != "" {
 		sb.WriteString(" Mood: ")
-		sb.WriteString(shot.EmotionalTone)
+		sb.WriteString(shot.CamDir.EmotionalTone)
 		sb.WriteString(".")
 	}
 	prompt := sb.String()

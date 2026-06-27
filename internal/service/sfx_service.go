@@ -706,7 +706,7 @@ func (s *SFXService) applySceneContinuity(ctx context.Context, shots []*model.St
 
 // sceneKeyOf 提取镜头的场景标识键（取 Scene 字段前64字符，忽略空格差异）。
 func sceneKeyOf(shot *model.StoryboardShot) string {
-	s := strings.TrimSpace(shot.Scene)
+	s := strings.TrimSpace(shot.GenMeta.Scene)
 	if s == "" {
 		return ""
 	}
@@ -723,8 +723,8 @@ func sceneKeyOf(shot *model.StoryboardShot) string {
 // 包含场景环境、画面描述和情绪基调，最多 200 个字符。
 func buildShotAIPrompt(shot *model.StoryboardShot) string {
 	var parts []string
-	if shot.Scene != "" {
-		parts = append(parts, shot.Scene)
+	if shot.GenMeta.Scene != "" {
+		parts = append(parts, shot.GenMeta.Scene)
 	}
 	if shot.Description != "" {
 		runes := []rune(shot.Description)
@@ -733,8 +733,8 @@ func buildShotAIPrompt(shot *model.StoryboardShot) string {
 		}
 		parts = append(parts, string(runes))
 	}
-	if shot.EmotionalTone != "" {
-		parts = append(parts, shot.EmotionalTone)
+	if shot.CamDir.EmotionalTone != "" {
+		parts = append(parts, shot.CamDir.EmotionalTone)
 	}
 	prompt := strings.Join(parts, "。")
 	if prompt == "" {
@@ -750,7 +750,7 @@ func buildShotAIPrompt(shot *model.StoryboardShot) string {
 // fallbackTags 基于规则从描述 / 情绪基调 / 镜头类型推断标签（LLM 不可用时的降级）。
 // 格式：[物体/声源] [动作/质感]，不含 loop / single 等描述符。
 func (s *SFXService) fallbackTags(shot *model.StoryboardShot) []string {
-	desc := strings.ToLower(shot.Description + " " + shot.EmotionalTone + " " + shot.Scene + " " + shot.Narration)
+	desc := strings.ToLower(shot.Description + " " + shot.CamDir.EmotionalTone + " " + shot.GenMeta.Scene + " " + shot.Narration)
 	// [中文关键词] → [Freesound 有效搜索词]
 	rules := [][2]string{
 		// 天气/自然环境

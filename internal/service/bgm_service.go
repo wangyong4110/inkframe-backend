@@ -370,7 +370,7 @@ func (s *BGMService) AnalyzeBGMForVideo(
 			ShotID:        sh.ID,
 			ShotNo:        sh.ShotNo,
 			Description:   desc,
-			EmotionalTone: sh.EmotionalTone,
+			EmotionalTone: sh.CamDir.EmotionalTone,
 			Narration:     narration,
 			Duration:      sh.Duration,
 		})
