@@ -1714,24 +1714,24 @@ func (s *RewriteService) GetComplianceReport(projectID uint) (*ComplianceReport,
 		if t.Passed {
 			passed++
 		}
-		sumLex += t.LexicalSim
-		sumStruct += t.StructuralSim
-		semComputed := t.SemanticSim > 0
+		sumLex += t.Scores.LexicalSim
+		sumStruct += t.Scores.StructuralSim
+		semComputed := t.Scores.SemanticSim > 0
 		if semComputed {
-			sumSemantic += t.SemanticSim
+			sumSemantic += t.Scores.SemanticSim
 			anySemanticComputed = true
 		}
-		sumQuality += t.QualityScore
+		sumQuality += t.Scores.QualityScore
 
-		rating := chapterComplianceRating(t.Passed, t.LexicalSim, project.Level)
+		rating := chapterComplianceRating(t.Passed, t.Scores.LexicalSim, project.Level)
 		report.Chapters = append(report.Chapters, ChapterComplianceItem{
 			ChapterNo:           t.ChapterNo,
 			Passed:              t.Passed,
-			LexicalSim:          t.LexicalSim,
-			StructuralSim:       t.StructuralSim,
-			SemanticSim:         t.SemanticSim,
+			LexicalSim:          t.Scores.LexicalSim,
+			StructuralSim:       t.Scores.StructuralSim,
+			SemanticSim:         t.Scores.SemanticSim,
 			SemanticSimComputed: semComputed,
-			QualityScore:        t.QualityScore,
+			QualityScore:        t.Scores.QualityScore,
 			Rating:              rating,
 		})
 	}

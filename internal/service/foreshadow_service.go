@@ -132,14 +132,16 @@ func (s *ForeshadowCRUDService) AIExtractFromNovel(ctx context.Context, tenantID
 		f := &model.Foreshadow{
 			NovelID:               novelID,
 			Title:                 item.Title,
-			Description:           item.Description,
 			Status:                status,
-			Tags:                  item.Tags,
 			PayoffChapterNo:       item.PayoffChapterNo,
 			ActualPayoffChapterNo: item.ActualPayoffChapterNo,
 			Level:                 level,
-			ForeshadowType:        fsType,
-			Confidence:            conf,
+			Meta: model.ForeshadowMeta{
+				Description:    item.Description,
+				Tags:           item.Tags,
+				ForeshadowType: fsType,
+				Confidence:     conf,
+			},
 		}
 		if item.PlantedChapterNo > 0 {
 			f.PlantedChapterNo = item.PlantedChapterNo
@@ -149,13 +151,13 @@ func (s *ForeshadowCRUDService) AIExtractFromNovel(ctx context.Context, tenantID
 		}
 		if item.ActualPayoffChapterNo > 0 {
 			if chID, ok := chapterNoToID[item.ActualPayoffChapterNo]; ok {
-				f.ActualPayoffChapterID = &chID
+				f.Meta.ActualPayoffChapterID = &chID
 			}
 		}
 		// 将角色名字作为 CharacterIDs 占位存储（前端可后续绑定真实 ID）
 		if item.CharacterNames != "" {
 			namesJSON, _ := json.Marshal([]string{item.CharacterNames})
-			f.CharacterIDs = string(namesJSON)
+			f.Meta.CharacterIDs = string(namesJSON)
 		}
 		if err := s.repo.Create(f); err != nil {
 			logger.Errorf("ForeshadowCRUDService.AIExtractFromNovel: create %q: %v", f.Title, err)
@@ -189,31 +191,31 @@ func (s *ForeshadowCRUDService) Update(ctx context.Context, id uint, updates map
 		f.Title = v
 	}
 	if v, ok := updates["description"].(string); ok {
-		f.Description = v
+		f.Meta.Description = v
 	}
 	if v, ok := updates["status"].(string); ok && v != "" {
 		f.Status = v
 	}
 	if v, ok := updates["tags"].(string); ok {
-		f.Tags = v
+		f.Meta.Tags = v
 	}
 	if v, ok := updates["level"].(string); ok && v != "" {
 		f.Level = v
 	}
 	if v, ok := updates["foreshadow_type"].(string); ok {
-		f.ForeshadowType = v
+		f.Meta.ForeshadowType = v
 	}
 	if v, ok := updates["importance"].(string); ok && v != "" {
-		f.Importance = v
+		f.Meta.Importance = v
 	}
 	if v, ok := updates["confidence"].(string); ok && v != "" {
-		f.Confidence = v
+		f.Meta.Confidence = v
 	}
 	if v, ok := updates["character_ids"].(string); ok {
-		f.CharacterIDs = v
+		f.Meta.CharacterIDs = v
 	}
 	if v, ok := updates["payoff_notes"].(string); ok {
-		f.PayoffNotes = v
+		f.Meta.PayoffNotes = v
 	}
 	if v, ok := updates["planted_chapter_no"].(float64); ok {
 		f.PlantedChapterNo = int(v)
@@ -235,13 +237,13 @@ func (s *ForeshadowCRUDService) Update(ctx context.Context, id uint, updates map
 	if v, ok := updates["actual_payoff_chapter_id"].(float64); ok {
 		if v > 0 {
 			uid := uint(v)
-			f.ActualPayoffChapterID = &uid
+			f.Meta.ActualPayoffChapterID = &uid
 		} else {
-			f.ActualPayoffChapterID = nil
+			f.Meta.ActualPayoffChapterID = nil
 		}
 	}
 	if v, ok := updates["payoff_quality"].(float64); ok {
-		f.PayoffQuality = int(v)
+		f.Meta.PayoffQuality = int(v)
 	}
 	if v, ok := updates["parent_id"].(float64); ok {
 		if v > 0 {
@@ -254,17 +256,17 @@ func (s *ForeshadowCRUDService) Update(ctx context.Context, id uint, updates map
 	if v, ok := updates["linked_hook_id"].(float64); ok {
 		if v > 0 {
 			uid := uint(v)
-			f.LinkedHookID = &uid
+			f.Meta.LinkedHookID = &uid
 		} else {
-			f.LinkedHookID = nil
+			f.Meta.LinkedHookID = nil
 		}
 	}
 	if v, ok := updates["linked_arc_id"].(float64); ok {
 		if v > 0 {
 			uid := uint(v)
-			f.LinkedArcID = &uid
+			f.Meta.LinkedArcID = &uid
 		} else {
-			f.LinkedArcID = nil
+			f.Meta.LinkedArcID = nil
 		}
 	}
 	return f, s.repo.Update(f)
@@ -287,8 +289,8 @@ func (s *ForeshadowCRUDService) AddReinforcement(ctx context.Context, id uint, c
 		return nil, err
 	}
 	var records []ReinforcementRecord
-	if f.ReinforcementChapters != "" {
-		_ = json.Unmarshal([]byte(f.ReinforcementChapters), &records)
+	if f.Meta.ReinforcementChapters != "" {
+		_ = json.Unmarshal([]byte(f.Meta.ReinforcementChapters), &records)
 	}
 	// 去重：同章节已有记录则更新 note
 	found := false
@@ -303,7 +305,7 @@ func (s *ForeshadowCRUDService) AddReinforcement(ctx context.Context, id uint, c
 		records = append(records, ReinforcementRecord{ChapterNo: chapterNo, Note: note})
 	}
 	data, _ := json.Marshal(records)
-	f.ReinforcementChapters = string(data)
+	f.Meta.ReinforcementChapters = string(data)
 	return f, s.repo.Update(f)
 }
 
@@ -375,10 +377,10 @@ func (s *ForeshadowCRUDService) GetStats(ctx context.Context, novelID uint, curr
 		if f.Level != "" {
 			stats.ByLevel[f.Level]++
 		}
-		if f.ForeshadowType != "" {
-			stats.ByType[f.ForeshadowType]++
+		if f.Meta.ForeshadowType != "" {
+			stats.ByType[f.Meta.ForeshadowType]++
 		}
-		conf := f.Confidence
+		conf := f.Meta.Confidence
 		if conf == "" {
 			conf = "medium"
 		}

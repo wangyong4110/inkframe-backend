@@ -25,18 +25,20 @@ func (s *FeedbackService) Create(req *model.CreateFeedbackRequest, userID, tenan
 		}
 	}
 	f := &model.UserFeedback{
-		TenantID:     tenantID,
-		UserID:       userID,
-		Type:         req.Type,
-		Title:        req.Title,
-		Content:      req.Content,
-		Rating:       req.Rating,
-		PageURL:      req.PageURL,
-		UserAgent:    req.UserAgent,
-		Screenshots:  screenshotsJSON,
-		ContactEmail: req.ContactEmail,
-		Status:       "pending",
-		Priority:     "medium",
+		TenantID: tenantID,
+		UserID:   userID,
+		Type:     req.Type,
+		Title:    req.Title,
+		Content:  req.Content,
+		Rating:   req.Rating,
+		AdminMeta: model.FeedbackAdminMeta{
+			PageURL:      req.PageURL,
+			UserAgent:    req.UserAgent,
+			Screenshots:  screenshotsJSON,
+			ContactEmail: req.ContactEmail,
+		},
+		Status:   "pending",
+		Priority: "medium",
 	}
 	if err := s.repo.Create(f); err != nil {
 		return nil, err
@@ -63,16 +65,16 @@ func (s *FeedbackService) UpdateStatus(id uint, req *model.UpdateFeedbackRequest
 	}
 	if req.Status != "" {
 		f.Status = req.Status
-		if req.Status == "resolved" && f.ResolvedAt == nil {
+		if req.Status == "resolved" && f.AdminMeta.ResolvedAt == nil {
 			now := time.Now()
-			f.ResolvedAt = &now
+			f.AdminMeta.ResolvedAt = &now
 		}
 	}
 	if req.Priority != "" {
 		f.Priority = req.Priority
 	}
 	if req.AdminNote != "" {
-		f.AdminNote = req.AdminNote
+		f.AdminMeta.AdminNote = req.AdminNote
 	}
 	if err := s.repo.Update(f); err != nil {
 		return nil, err
@@ -86,8 +88,8 @@ func (s *FeedbackService) Reply(id uint, req *model.ReplyFeedbackRequest) (*mode
 		return nil, err
 	}
 	now := time.Now()
-	f.ReplyContent = req.Content
-	f.RepliedAt = &now
+	f.AdminMeta.ReplyContent = req.Content
+	f.AdminMeta.RepliedAt = &now
 	if err := s.repo.Update(f); err != nil {
 		return nil, err
 	}

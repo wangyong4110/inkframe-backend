@@ -87,7 +87,7 @@ func (s *CharacterLookupService) Lookup(_ context.Context, novelID uint, charact
 			Name:        found.Name,
 			Role:        found.Role,
 			Description: found.Description,
-			Age:         found.Age,
+			Age:         found.Meta.Age,
 		},
 	}
 

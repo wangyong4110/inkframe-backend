@@ -926,12 +926,12 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		existing.Title = title
 		existing.Content = content
 		existing.WordCount = countChineseChars(content)
-		existing.SceneOutline = sceneOutlineJSON
-		existing.TensionLevel = chapterMeta.tensionLevel
-		existing.ActNo = chapterMeta.actNo
-		existing.EmotionalTone = chapterMeta.emotionalTone
-		existing.HookType = chapterMeta.hookType
-		existing.ChapterHook = chapterHook
+		existing.NarrativeMeta.SceneOutline = sceneOutlineJSON
+		existing.NarrativeMeta.TensionLevel = chapterMeta.tensionLevel
+		existing.NarrativeMeta.ActNo = chapterMeta.actNo
+		existing.NarrativeMeta.EmotionalTone = chapterMeta.emotionalTone
+		existing.NarrativeMeta.HookType = chapterMeta.hookType
+		existing.NarrativeMeta.ChapterHook = chapterHook
 		existing.Status = "generating"
 		if err := s.chapterRepo.Update(existing); err != nil {
 			recordChapterGen("error")
@@ -940,20 +940,22 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		chapter = existing
 	} else {
 		chapter = &model.Chapter{
-			UUID:          uuid.New().String(),
-			TenantID:      tenantID,
-			NovelID:       novelID,
-			ChapterNo:     req.ChapterNo,
-			Title:         title,
-			Content:       content,
-			WordCount:     countChineseChars(content),
-			SceneOutline:  sceneOutlineJSON,
-			TensionLevel:  chapterMeta.tensionLevel,
-			ActNo:         chapterMeta.actNo,
-			EmotionalTone: chapterMeta.emotionalTone,
-			HookType:      chapterMeta.hookType,
-			ChapterHook:   chapterHook,
-			Status:        "generating",
+			UUID:      uuid.New().String(),
+			TenantID:  tenantID,
+			NovelID:   novelID,
+			ChapterNo: req.ChapterNo,
+			Title:     title,
+			Content:   content,
+			WordCount: countChineseChars(content),
+			NarrativeMeta: model.ChapterNarrativeMeta{
+				SceneOutline:  sceneOutlineJSON,
+				TensionLevel:  chapterMeta.tensionLevel,
+				ActNo:         chapterMeta.actNo,
+				EmotionalTone: chapterMeta.emotionalTone,
+				HookType:      chapterMeta.hookType,
+				ChapterHook:   chapterHook,
+			},
+			Status: "generating",
 		}
 		if err := s.chapterRepo.Create(chapter); err != nil {
 			recordChapterGen("error")
@@ -1063,10 +1065,10 @@ func (s *ChapterService) extractChapterMeta(novelID uint, chapterNo int) chapter
 			for _, ch := range outline.Chapters {
 				if ch.ChapterNo == chapterNo {
 					found = true
-					meta.tensionLevel  = ch.NarrativeMeta.TensionLevel
+					meta.tensionLevel  = ch.TensionLevel
 					meta.actNo         = ch.Act
-					meta.emotionalTone = ch.NarrativeMeta.EmotionalTone
-					meta.hookType      = ch.NarrativeMeta.HookType
+					meta.emotionalTone = ch.EmotionalTone
+					meta.hookType      = ch.HookType
 					if meta.hookType == "" {
 						meta.hookType = ch.Hook
 					}
@@ -1098,12 +1100,12 @@ func (s *ChapterService) extractChapterMeta(novelID uint, chapterNo int) chapter
 		}
 		// chapter.NarrativeMeta.Outline（用户可见字段）优先于 novel.Outline JSON 的 summary
 		// 因为用户在 UI 上看到并编辑的是 chapter.NarrativeMeta.Outline，这才是他们期望 AI 遵循的大纲
-		if existing.Outline != "" {
-			if existing.Outline != meta.summary {
+		if existing.NarrativeMeta.Outline != "" {
+			if existing.NarrativeMeta.Outline != meta.summary {
 				logger.Printf("[extractChapterMeta] ch%d: chapter.NarrativeMeta.Outline overrides novel.Outline summary (chOutlineLen=%d, novelSummaryLen=%d)",
-					chapterNo, len(existing.Outline), len(meta.summary))
+					chapterNo, len(existing.NarrativeMeta.Outline), len(meta.summary))
 			}
-			meta.summary = existing.Outline
+			meta.summary = existing.NarrativeMeta.Outline
 		} else if meta.summary == "" {
 			meta.summary = existing.Summary
 			logger.Printf("[extractChapterMeta] ch%d: using chapter.Summary fallback (len=%d)", chapterNo, len(meta.summary))
@@ -2577,7 +2579,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 				if voiceJSON == "" {
 					continue
 				}
-				c.VoiceProfile = voiceJSON
+				c.VoiceConfig.VoiceProfile = voiceJSON
 				if updateErr := s.characterRepo.Update(c); updateErr != nil {
 					logger.Errorf("[ChapterService] save voice profile for %s: %v", c.Name, updateErr)
 				} else {
@@ -2719,9 +2721,9 @@ func (s *ChapterService) getCharactersForPrompt(novelID uint) []characterForProm
 			Role:          c.Role,
 			IsProtagonist: isProtagonistRole(c.Role),
 			Description:   c.Description,
-			InnerConflict: c.InnerConflict,
-			CoreDesire:    c.CoreDesire,
-			VoiceProfile:  formatVoiceProfile(c.VoiceProfile),
+			InnerConflict: c.Meta.InnerConflict,
+			CoreDesire:    c.Meta.CoreDesire,
+			VoiceProfile:  formatVoiceProfile(c.VoiceConfig.VoiceProfile),
 		}
 		// 加载最新状态快照，补充 CurrentState
 		if s.snapshotRepo != nil {
@@ -2843,7 +2845,7 @@ func (s *ChapterService) buildForeshadowHints(novelID uint, chapterNo int) strin
 		if err == nil {
 			// 按重要程度排序：critical > major > normal
 			urgency := func(f *model.Foreshadow) int {
-				switch f.Importance {
+				switch f.Meta.Importance {
 				case "critical":
 					return 3
 				case "major":
@@ -2917,7 +2919,7 @@ func (s *ChapterService) buildForeshadowHints(novelID uint, chapterNo int) strin
 					break
 				}
 				if !fs.IsFulfilled && chapterNo-fs.ChapterNo >= 3 {
-					r := []rune(fs.Meta.Description)
+					r := []rune(fs.Description)
 					end := 12
 					if len(r) < end {
 						end = len(r)
@@ -2927,7 +2929,7 @@ func (s *ChapterService) buildForeshadowHints(novelID uint, chapterNo int) strin
 						continue
 					}
 					seen[dedupKey] = true
-					hints.WriteString(fmt.Sprintf("- 请考虑回收伏笔：「%s」（第%d章埋设）\n", fs.Meta.Description, fs.ChapterNo))
+					hints.WriteString(fmt.Sprintf("- 请考虑回收伏笔：「%s」（第%d章埋设）\n", fs.Description, fs.ChapterNo))
 					count++
 				}
 			}
@@ -3000,10 +3002,10 @@ func (s *ChapterService) getPreviousChapterEnding(tenantID uint, novel *model.No
 
 	// 若上一章已有内容但尚无 ChapterEndState（在本功能上线前生成的章节），立即同步生成并持久化。
 	// 这样旧章节只需生成一次，此后每次读取都有结构化锚点。
-	if prev.ChapterEndState == "" && prev.Content != "" && s.aiService != nil {
+	if prev.NarrativeMeta.ChapterEndState == "" && prev.Content != "" && s.aiService != nil {
 		logger.Printf("[getPreviousChapterEnding] ch%d: ChapterEndState missing, generating on-demand", chapterNo-1)
 		if endState := s.generateChapterEndState(tenantID, prev, novel); endState != "" {
-			prev.ChapterEndState = endState
+			prev.NarrativeMeta.ChapterEndState = endState
 			_ = s.chapterRepo.Update(prev)
 			logger.Printf("[getPreviousChapterEnding] ch%d: ChapterEndState generated and saved", chapterNo-1)
 		}
@@ -3012,7 +3014,7 @@ func (s *ChapterService) getPreviousChapterEnding(tenantID uint, novel *model.No
 	var sb strings.Builder
 
 	// 1. 优先使用结构化章末状态快照（最精确的连续性锚点）
-	if prev.ChapterEndState != "" {
+	if prev.NarrativeMeta.ChapterEndState != "" {
 		var endState struct {
 			Characters []struct {
 				Name       string `json:"name"`
@@ -3024,7 +3026,7 @@ func (s *ChapterService) getPreviousChapterEnding(tenantID uint, novel *model.No
 			PendingAction string `json:"pending_action"`
 			OpeningHint   string `json:"opening_hint"`
 		}
-		if parseErr := json.Unmarshal([]byte(prev.ChapterEndState), &endState); parseErr == nil {
+		if parseErr := json.Unmarshal([]byte(prev.NarrativeMeta.ChapterEndState), &endState); parseErr == nil {
 			// 强制接续锚——openingHint 优先放在最顶部，作为本章第一段的硬约束
 			if endState.OpeningHint != "" {
 				sb.WriteString("━━ 本章第一段强制开头（不可跳过，不可替换为背景交代或心理独白）━━\n")
@@ -3044,11 +3046,11 @@ func (s *ChapterService) getPreviousChapterEnding(tenantID uint, novel *model.No
 			}
 		} else {
 			// JSON 解析失败，直接用原始内容
-			sb.WriteString("【章末状态】" + prev.ChapterEndState)
+			sb.WriteString("【章末状态】" + prev.NarrativeMeta.ChapterEndState)
 		}
-	} else if prev.ChapterHook != "" {
+	} else if prev.NarrativeMeta.ChapterHook != "" {
 		// 2. 次优：章末钩子（情感悬念点）
-		sb.WriteString("【章末悬念】" + prev.ChapterHook)
+		sb.WriteString("【章末悬念】" + prev.NarrativeMeta.ChapterHook)
 	} else if prev.Summary != "" {
 		// 3. 降级：摘要
 		sb.WriteString("【上章摘要】" + prev.Summary)
@@ -3062,7 +3064,7 @@ func (s *ChapterService) getPreviousChapterEnding(tenantID uint, novel *model.No
 	}
 
 	// 仅在无结构化状态时，才附加主角快照（结构化状态已包含角色位置信息）
-	if prev.ChapterEndState == "" && s.characterRepo != nil && s.snapshotRepo != nil {
+	if prev.NarrativeMeta.ChapterEndState == "" && s.characterRepo != nil && s.snapshotRepo != nil {
 		chars, charErr := s.characterRepo.ListByNovel(novelID)
 		if charErr == nil {
 			for _, c := range chars {
@@ -3106,12 +3108,12 @@ func (s *ChapterService) buildPreviousReaderExpectations(novelID uint, chapterNo
 		return ""
 	}
 	prev, err := s.chapterRepo.GetByNovelAndChapterNo(novelID, chapterNo-1)
-	if err != nil || prev == nil || prev.ReaderExpectations == "" {
+	if err != nil || prev == nil || prev.NarrativeMeta.ReaderExpectations == "" {
 		return ""
 	}
 	var expectations []string
-	if err := json.Unmarshal([]byte(prev.ReaderExpectations), &expectations); err != nil {
-		return prev.ReaderExpectations // fallback: return raw string
+	if err := json.Unmarshal([]byte(prev.NarrativeMeta.ReaderExpectations), &expectations); err != nil {
+		return prev.NarrativeMeta.ReaderExpectations // fallback: return raw string
 	}
 	if len(expectations) == 0 {
 		return ""
@@ -3140,15 +3142,15 @@ func (s *ChapterService) buildCharacterArcContext(novelID uint, chapterNo int) s
 		if role != "protagonist" && role != "antagonist" && role != "主角" && role != "反派" {
 			continue
 		}
-		if c.CoreDesire == "" && c.InnerConflict == "" {
+		if c.Meta.CoreDesire == "" && c.Meta.InnerConflict == "" {
 			continue
 		}
 		sb.WriteString(fmt.Sprintf("**%s**（%s）\n", c.Name, c.Role))
-		if c.CoreDesire != "" {
-			sb.WriteString(fmt.Sprintf("  核心渴望：%s\n", c.CoreDesire))
+		if c.Meta.CoreDesire != "" {
+			sb.WriteString(fmt.Sprintf("  核心渴望：%s\n", c.Meta.CoreDesire))
 		}
-		if c.InnerConflict != "" {
-			sb.WriteString(fmt.Sprintf("  内在矛盾：%s\n", c.InnerConflict))
+		if c.Meta.InnerConflict != "" {
+			sb.WriteString(fmt.Sprintf("  内在矛盾：%s\n", c.Meta.InnerConflict))
 		}
 	}
 	return sb.String()
@@ -3206,8 +3208,8 @@ func (s *ChapterService) buildFinalChapterContext(novelID uint, novel *model.Nov
 			sb.WriteString("【必须回收的伏笔】\n")
 			for _, f := range foreshadows {
 				line := fmt.Sprintf("❌ 「%s」（第%d章种下）", f.Title, f.PlantedChapterNo)
-				if f.Description != "" {
-					line += "：" + f.Description
+				if f.Meta.Description != "" {
+					line += "：" + f.Meta.Description
 				}
 				sb.WriteString(line + "\n")
 				itemCount++
@@ -3242,15 +3244,15 @@ func (s *ChapterService) buildFinalChapterContext(novelID uint, novel *model.Nov
 				if role != "protagonist" && role != "antagonist" && role != "主角" && role != "反派" && role != "男主" && role != "女主" {
 					continue
 				}
-				if c.CoreDesire == "" && c.InnerConflict == "" {
+				if c.Meta.CoreDesire == "" && c.Meta.InnerConflict == "" {
 					continue
 				}
 				arcBuf.WriteString(fmt.Sprintf("- **%s**（%s）", c.Name, c.Role))
-				if c.CoreDesire != "" {
-					arcBuf.WriteString(fmt.Sprintf("：核心渴望「%s」", c.CoreDesire))
+				if c.Meta.CoreDesire != "" {
+					arcBuf.WriteString(fmt.Sprintf("：核心渴望「%s」", c.Meta.CoreDesire))
 				}
-				if c.InnerConflict != "" {
-					arcBuf.WriteString(fmt.Sprintf(" / 内在矛盾「%s」", c.InnerConflict))
+				if c.Meta.InnerConflict != "" {
+					arcBuf.WriteString(fmt.Sprintf(" / 内在矛盾「%s」", c.Meta.InnerConflict))
 				}
 				arcBuf.WriteString("\n")
 				arcCount++
@@ -3327,7 +3329,7 @@ func (s *ChapterService) updateNextChapterPreview(tenantID uint, chapter *model.
 		"CurrentEnding":      endingCtx,
 		"NextChapterNo":      nextNo,
 		"NextChapterTitle":   next.Title,
-		"NextChapterOutline": next.Outline,
+		"NextChapterOutline": next.NarrativeMeta.Outline,
 	})
 	if renderErr != nil {
 		logger.Errorf("[ChapterService] updateNextChapterPreview: render failed: %v", renderErr)

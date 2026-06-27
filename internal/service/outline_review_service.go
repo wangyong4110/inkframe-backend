@@ -220,11 +220,13 @@ outerLoop:
 				logger.Errorf("[OutlineReview] batch review chapter %d failed: %v", ch.ChapterNo, err)
 				now := time.Now()
 				review = &model.OutlineReview{
-					NovelID: novelID,
-					ChapterID:  ch.ID,
-					ChapterNo:  ch.ChapterNo,
-					Status:     "failed",
-					Suggestion: err.Error(),
+					NovelID:   novelID,
+					ChapterID: ch.ID,
+					ChapterNo: ch.ChapterNo,
+					Status:    "failed",
+					Content: model.OutlineReviewContent{
+						Suggestion: err.Error(),
+					},
 					ReviewedAt: &now,
 				}
 				if saveErr := s.reviewRepo.Upsert(review); saveErr != nil {
@@ -656,8 +658,8 @@ func buildChapterScoreTable(reviews []*model.OutlineReview) string {
 		fmt.Fprintf(&sb, "第%d章 | %.0f | %.0f | %.0f | %.0f | %.0f | %.0f | %.0f | %s\n",
 			r.ChapterNo,
 			r.OverallScore,
-			r.StructureScore, r.PacingScore, r.ContinuityScore,
-			r.CharacterScore, r.ConflictScore, r.HookScore,
+			r.Scores.StructureScore, r.Scores.PacingScore, r.Scores.ContinuityScore,
+			r.Scores.CharacterScore, r.Scores.ConflictScore, r.Scores.HookScore,
 			r.Status,
 		)
 	}
@@ -1006,7 +1008,7 @@ func (s *OutlineReviewService) buildOpenForeshadowsText(novelID uint) string {
 	var lines []string
 	for _, f := range foreshadows {
 		if f.Status == "planted" {
-			desc := f.Description
+			desc := f.Meta.Description
 			if len([]rune(desc)) > 60 {
 				desc = string([]rune(desc)[:60]) + "…"
 			}

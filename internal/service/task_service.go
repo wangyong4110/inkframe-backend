@@ -291,7 +291,7 @@ func (s *TaskService) MarkTaskFailed(taskID string, err error) {
 	// Accumulate failure log (truncate to 8KB to avoid unbounded growth).
 	const maxLogBytes = 8192
 	entry := fmt.Sprintf("[%s] %v", time.Now().Format(time.RFC3339), err)
-	newLog := task.FailureLog
+	newLog := task.DLQ.FailureLog
 	if newLog != "" {
 		newLog += "\n"
 	}
@@ -301,9 +301,9 @@ func (s *TaskService) MarkTaskFailed(taskID string, err error) {
 	}
 
 	task.RetryCount++
-	task.FailureLog = newLog
+	task.DLQ.FailureLog = newLog
 
-	maxRetries := task.MaxRetries
+	maxRetries := task.DLQ.MaxRetries
 	if maxRetries <= 0 {
 		maxRetries = 3
 	}

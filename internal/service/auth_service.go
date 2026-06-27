@@ -183,7 +183,7 @@ func (s *AuthService) Register(req *RegisterRequest) (interface{}, error) {
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
 	if existingUser, err := s.userRepo.GetByEmail(req.Email); err == nil {
 		// 邮箱已存在：若开启验证且用户尚未验证，视为"重新发送验证邮件"而非报错
-		if s.requireVerification && existingUser.EmailVerifiedAt == nil {
+		if s.requireVerification && existingUser.SecurityMeta.EmailVerifiedAt == nil {
 			go func() {
 				if _, err := s.SendEmailVerification(existingUser.ID); err != nil {
 					logger.Errorf("[Register] resend verification for unverified user %d: %v", existingUser.ID, err)
@@ -612,14 +612,16 @@ func (s *AuthService) RegisterWithPhone(phone, code, nickname, tenantName string
 		phonePtr := phone
 		u := &model.User{
 			UUID:            uuid.New().String(),
-			Username:        username,
-			Email:           phone + "@phone.local",
-			Phone:           &phonePtr,
-			Password:        string(hashed),
-			Nickname:        nickname,
-			Status:          "active",
-			Role:            "user",
-			EmailVerifiedAt: &phoneVerifiedAt, // 手机验证码注册，视为已验证
+			Username: username,
+			Email:    phone + "@phone.local",
+			Phone:    &phonePtr,
+			Password: string(hashed),
+			Nickname: nickname,
+			Status:   "active",
+			Role:     "user",
+			SecurityMeta: model.UserSecurityMeta{
+				EmailVerifiedAt: &phoneVerifiedAt, // 手机验证码注册，视为已验证
+			},
 		}
 		if err := tx.Create(u).Error; err != nil {
 			return fmt.Errorf("failed to create user: %w", err)
@@ -725,17 +727,21 @@ func (s *AuthService) LoginWithOAuth(info *OAuthUserInfo) (*AuthResponse, error)
 
 	oauthVerifiedAt := time.Now()
 	newUser := &model.User{
-		UUID:            uuid.New().String(),
-		Username:        username,
-		Email:           username + "@oauth.local",
-		Password:        string(hashed),
-		Nickname:        nickname,
-		Avatar:          info.Avatar,
-		Status:          "active",
-		Role:            "user",
-		OAuthProvider:   info.Provider,
-		OAuthID:         info.OpenID,
-		EmailVerifiedAt: &oauthVerifiedAt, // OAuth 身份已由第三方验证
+		UUID:     uuid.New().String(),
+		Username: username,
+		Email:    username + "@oauth.local",
+		Password: string(hashed),
+		Nickname: nickname,
+		Avatar:   info.Avatar,
+		Status:   "active",
+		Role:     "user",
+		OAuthMeta: model.UserOAuthMeta{
+			OAuthProvider: info.Provider,
+			OAuthID:       info.OpenID,
+		},
+		SecurityMeta: model.UserSecurityMeta{
+			EmailVerifiedAt: &oauthVerifiedAt, // OAuth 身份已由第三方验证
+		},
 	}
 	if info.Phone != "" {
 		p := info.Phone

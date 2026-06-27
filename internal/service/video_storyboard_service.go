@@ -874,7 +874,7 @@ func (s *VideoService) buildStoryboardPrompt(
 				"Role":         c.Role,
 				"Description":  c.Description,
 				"VisualPrompt": "",
-				"DialogueLang": voiceLangToDialogueLang(c.VoiceLanguage),
+				"DialogueLang": voiceLangToDialogueLang(c.VoiceConfig.VoiceLanguage),
 			})
 		}
 	}
@@ -931,7 +931,7 @@ func (s *VideoService) buildStoryboardPrompt(
 		prevShotsData = append(prevShotsData, map[string]interface{}{
 			"ShotNo":        ps.ShotNo,
 			"NarrOrDesc":    narrOrDesc,
-			"Dialogue":      ps.Dialogue,
+			"Dialogue":      ps.GenMeta.Dialogue,
 			"EmotionalTone": ps.CamDir.EmotionalTone,
 			"ShotSize":      ps.CamDir.ShotSize,
 			"CameraType":    ps.CamDir.CameraType,
@@ -1116,8 +1116,6 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			ShotNo:      shotNo,
 			Description: r.Description,
 			Narration:   r.Narration,
-			Subtitle:    r.Subtitle,
-			Dialogue:    r.Dialogue,
 			Duration:    duration,
 			CamDir: model.ShotCamDir{
 				CameraType:    cameraType,
@@ -1135,6 +1133,8 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 				Characters:     charsJSON,
 				Scene:          sceneJSON,
 				SFXTags:        sfxTagsJSON,
+				Subtitle:       r.Subtitle,
+				Dialogue:       r.Dialogue,
 			},
 			Status: "pending",
 		}
@@ -1503,8 +1503,6 @@ func (s *VideoService) CopyShotAfter(sourceShotID uint, afterShotNo int) (*model
 		UUID:          uuid.New().String(),
 		Description:   src.Description,
 		Narration:     src.Narration,
-		Dialogue:      src.Dialogue,
-		Subtitle:      src.Subtitle,
 		Duration:      src.Duration,
 		CamDir:        src.CamDir,
 		GenMeta:       src.GenMeta,
@@ -2163,7 +2161,7 @@ func (s *VideoService) RollbackReview(tenantID, videoID, recordID uint) (int, er
 		fields := map[string]interface{}{
 			"description": snap.Description,
 			"narration":   snap.Narration,
-			"dialogue":    snap.Dialogue,
+			"dialogue":    snap.GenMeta.Dialogue,
 			"duration":    snap.Duration,
 			"cam_dir":     snap.CamDir,
 		}

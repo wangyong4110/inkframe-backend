@@ -1608,19 +1608,21 @@ func (s *AssetService) crawlWikimedia(ctx context.Context, job *model.CrawlJob) 
 			title = strings.ReplaceAll(title, "_", " ")
 
 			asset := &model.Asset{
-				Scope:        model.AssetScopePublic,
-				Title:        title,
-				Type:         assetType,
-				Source:       "crawled",
-				StorageURL:   info.URL,
-				ThumbnailURL: info.ThumbURL,
-				SourceURL:    fmt.Sprintf("https://commons.wikimedia.org/wiki/%s", url.PathEscape(page.Title)),
-				ExternalID:   externalID,
-				License:      license,
-				Width:        info.Width,
-				Height:       info.Height,
-				AspectRatio:  calcAspectRatio(info.Width, info.Height),
-				Status:       model.AssetStatusActive,
+				Scope:      model.AssetScopePublic,
+				Title:      title,
+				Type:       assetType,
+				Source:     "crawled",
+				ExternalID: externalID,
+				License:    license,
+				Status:     model.AssetStatusActive,
+				MediaMeta: model.AssetMediaMeta{
+					StorageURL:   info.URL,
+					ThumbnailURL: info.ThumbURL,
+					SourceURL:    fmt.Sprintf("https://commons.wikimedia.org/wiki/%s", url.PathEscape(page.Title)),
+					Width:        info.Width,
+					Height:       info.Height,
+					AspectRatio:  calcAspectRatio(info.Width, info.Height),
+				},
 			}
 			created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
 			if err != nil {
@@ -1782,20 +1784,22 @@ func (s *AssetService) crawlPexels(ctx context.Context, job *model.CrawlJob) (im
 				}
 				externalID := fmt.Sprintf("pexels-video:%d", v.ID)
 				asset := &model.Asset{
-					Scope:        model.AssetScopePublic,
-					Title:        fmt.Sprintf("Pexels video by %s", v.User.Name),
-					Type:         "video",
-					Source:       "crawled",
-					StorageURL:   bestURL,
-					ThumbnailURL: v.Image,
-					SourceURL:    v.URL,
-					ExternalID:   externalID,
-					License:      "pexels",
-					Attribution:  fmt.Sprintf("Video by %s on Pexels", v.User.Name),
-					Width:        bw,
-					Height:       bh,
-					AspectRatio:  calcAspectRatio(bw, bh),
-					Status:       model.AssetStatusActive,
+					Scope:      model.AssetScopePublic,
+					Title:      fmt.Sprintf("Pexels video by %s", v.User.Name),
+					Type:       "video",
+					Source:     "crawled",
+					ExternalID: externalID,
+					License:    "pexels",
+					Status:     model.AssetStatusActive,
+					MediaMeta: model.AssetMediaMeta{
+						StorageURL:   bestURL,
+						ThumbnailURL: v.Image,
+						SourceURL:    v.URL,
+						Attribution:  fmt.Sprintf("Video by %s on Pexels", v.User.Name),
+						Width:        bw,
+						Height:       bh,
+						AspectRatio:  calcAspectRatio(bw, bh),
+					},
 				}
 				created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
 				if err != nil {
@@ -1849,20 +1853,22 @@ func (s *AssetService) crawlPexels(ctx context.Context, job *model.CrawlJob) (im
 					title = fmt.Sprintf("Pexels photo by %s", p.Photographer)
 				}
 				asset := &model.Asset{
-					Scope:        model.AssetScopePublic,
-					Title:        title,
-					Type:         "image",
-					Source:       "crawled",
-					StorageURL:   imgURL,
-					ThumbnailURL: p.Src.Medium,
-					SourceURL:    p.URL,
-					ExternalID:   externalID,
-					License:      "pexels",
-					Attribution:  fmt.Sprintf("Photo by %s on Pexels", p.Photographer),
-					Width:        p.Width,
-					Height:       p.Height,
-					AspectRatio:  calcAspectRatio(p.Width, p.Height),
-					Status:       model.AssetStatusActive,
+					Scope:      model.AssetScopePublic,
+					Title:      title,
+					Type:       "image",
+					Source:     "crawled",
+					ExternalID: externalID,
+					License:    "pexels",
+					Status:     model.AssetStatusActive,
+					MediaMeta: model.AssetMediaMeta{
+						StorageURL:   imgURL,
+						ThumbnailURL: p.Src.Medium,
+						SourceURL:    p.URL,
+						Attribution:  fmt.Sprintf("Photo by %s on Pexels", p.Photographer),
+						Width:        p.Width,
+						Height:       p.Height,
+						AspectRatio:  calcAspectRatio(p.Width, p.Height),
+					},
 				}
 				created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
 				if err != nil {
@@ -2018,18 +2024,20 @@ func (s *AssetService) crawlNASA(ctx context.Context, job *model.CrawlJob) (impo
 			}
 
 			asset := &model.Asset{
-				Scope:        model.AssetScopePublic,
-				Title:        d.Title,
-				Description:  d.Description,
-				Type:         assetType,
-				Source:       "crawled",
-				StorageURL:   storageURL,
-				ThumbnailURL: thumbURL,
-				SourceURL:    fmt.Sprintf("https://images.nasa.gov/details/%s", url.PathEscape(d.NasaID)),
-				ExternalID:   externalID,
-				License:      "PD",
-				Attribution:  fmt.Sprintf("NASA/%s", d.Center),
-				Status:       model.AssetStatusActive,
+				Scope:      model.AssetScopePublic,
+				Title:      d.Title,
+				Type:       assetType,
+				Source:     "crawled",
+				ExternalID: externalID,
+				License:    "PD",
+				Status:     model.AssetStatusActive,
+				MediaMeta: model.AssetMediaMeta{
+					Description:  d.Description,
+					StorageURL:   storageURL,
+					ThumbnailURL: thumbURL,
+					SourceURL:    fmt.Sprintf("https://images.nasa.gov/details/%s", url.PathEscape(d.NasaID)),
+					Attribution:  fmt.Sprintf("NASA/%s", d.Center),
+				},
 			}
 			created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
 			if err != nil {
@@ -2173,20 +2181,22 @@ func (s *AssetService) crawlUnsplash(ctx context.Context, job *model.CrawlJob) (
 			}
 
 			asset := &model.Asset{
-				Scope:        model.AssetScopePublic,
-				Title:        title,
-				Type:         "image",
-				Source:       "crawled",
-				StorageURL:   imgURL,
-				ThumbnailURL: thumbURL,
-				SourceURL:    photo.Links.HTML,
-				ExternalID:   externalID,
-				License:      "unsplash",
-				Attribution:  fmt.Sprintf("Photo by %s (@%s) on Unsplash", photo.User.Name, photo.User.Username),
-				Width:        photo.Width,
-				Height:       photo.Height,
-				AspectRatio:  calcAspectRatio(photo.Width, photo.Height),
-				Status:       model.AssetStatusActive,
+				Scope:      model.AssetScopePublic,
+				Title:      title,
+				Type:       "image",
+				Source:     "crawled",
+				ExternalID: externalID,
+				License:    "unsplash",
+				Status:     model.AssetStatusActive,
+				MediaMeta: model.AssetMediaMeta{
+					StorageURL:   imgURL,
+					ThumbnailURL: thumbURL,
+					SourceURL:    photo.Links.HTML,
+					Attribution:  fmt.Sprintf("Photo by %s (@%s) on Unsplash", photo.User.Name, photo.User.Username),
+					Width:        photo.Width,
+					Height:       photo.Height,
+					AspectRatio:  calcAspectRatio(photo.Width, photo.Height),
+				},
 			}
 			created, err := s.crawlUpsert(externalID, func() error { return s.assetRepo.Create(asset) })
 			if err != nil {
@@ -2384,8 +2394,8 @@ func (s *AssetService) crawlWebpage(ctx context.Context, job *model.CrawlJob) (i
 	}
 
 	var urlRe *regexp.Regexp
-	if job.URLPattern != "" {
-		urlRe, err = regexp.Compile(job.URLPattern)
+	if job.Stats.URLPattern != "" {
+		urlRe, err = regexp.Compile(job.Stats.URLPattern)
 		if err != nil {
 			errMsg = "invalid url_pattern regexp: " + err.Error()
 			return
@@ -2434,7 +2444,7 @@ func (s *AssetService) crawlWebpage(ctx context.Context, job *model.CrawlJob) (i
 		}
 
 		// Follow links only when depth > 0
-		if job.CrawlDepth > 0 {
+		if job.Stats.CrawlDepth > 0 {
 			for _, lnk := range links {
 				if visited[lnk] {
 					continue
@@ -2515,11 +2525,13 @@ func (s *AssetService) extractPageAssets(ctx context.Context, client *http.Clien
 			Title:      title,
 			Type:       assetType,
 			Source:     "crawled",
-			StorageURL: abs,
-			SourceURL:  pageURL,
 			ExternalID: externalID,
 			License:    "unknown",
 			Status:     model.AssetStatusActive,
+			MediaMeta: model.AssetMediaMeta{
+				StorageURL: abs,
+				SourceURL:  pageURL,
+			},
 		})
 	}
 

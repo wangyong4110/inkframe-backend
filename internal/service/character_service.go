@@ -707,10 +707,12 @@ func (s *CharacterService) CreateCharacter(novelID uint, req *model.CreateCharac
 		NovelID:     novelID,
 		Name:        req.Name,
 		Role:        req.Role,
-		Gender:      req.Gender,
-		Age:         req.Age,
 		Description: req.Description,
-		Status:      "active",
+		Meta: model.CharacterMeta{
+			Gender: req.Gender,
+			Age:    req.Age,
+		},
+		Status: "active",
 	}
 	return character, s.characterRepo.Create(character)
 }
@@ -1110,13 +1112,13 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			logger.Printf("[CharacterService] AIBatchGenerate upsert(update) %q", p.Name)
 			// AI 生成字段直接覆盖（用户点击"AI 更新角色"语义就是刷新）
 			if description != "" { ch.Description = description }
-			if p.Gender != "" { ch.Gender = p.Gender }
-			if p.Age != "" { ch.Age = p.Age }
+			if p.Gender != "" { ch.Meta.Gender = p.Gender }
+			if p.Age != "" { ch.Meta.Age = p.Age }
 			// 用户手动配置字段仅在空时填充
 			if v, ok := fillIfEmpty(ch.Role, role); ok { ch.Role = v }
-			if v, ok := fillIfEmpty(ch.VoiceID, suggestedVoice); ok { ch.VoiceID = v }
-			if v, ok := fillIfEmpty(ch.VoiceStyle, suggestedStyle); ok { ch.VoiceStyle = v }
-			if v, ok := fillIfEmpty(ch.VoiceLanguage, suggestedLang); ok { ch.VoiceLanguage = v }
+			if v, ok := fillIfEmpty(ch.VoiceConfig.VoiceID, suggestedVoice); ok { ch.VoiceConfig.VoiceID = v }
+			if v, ok := fillIfEmpty(ch.VoiceConfig.VoiceStyle, suggestedStyle); ok { ch.VoiceConfig.VoiceStyle = v }
+			if v, ok := fillIfEmpty(ch.VoiceConfig.VoiceLanguage, suggestedLang); ok { ch.VoiceConfig.VoiceLanguage = v }
 			if err := s.characterRepo.Update(ch); err != nil {
 				logger.Errorf("CharacterService.AIBatchGenerate: update %s: %v", ch.Name, err)
 				continue
@@ -1128,17 +1130,21 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			upserted = append(upserted, ch)
 		} else {
 			character := &model.Character{
-				UUID:    uuid.New().String(),
-				NovelID: novelID,
-				Name:    p.Name,
-				Role:          role,
-				Gender:        p.Gender,
-				Age:           p.Age,
-				Description:   description,
-				VoiceID:       suggestedVoice,
-				VoiceStyle:    suggestedStyle,
-				VoiceLanguage: suggestedLang,
-				Status:        "active",
+				UUID:        uuid.New().String(),
+				NovelID:     novelID,
+				Name:        p.Name,
+				Role:        role,
+				Description: description,
+				Meta: model.CharacterMeta{
+					Gender: p.Gender,
+					Age:    p.Age,
+				},
+				VoiceConfig: model.CharacterVoiceConfig{
+					VoiceID:       suggestedVoice,
+					VoiceStyle:    suggestedStyle,
+					VoiceLanguage: suggestedLang,
+				},
+				Status: "active",
 			}
 			if err := s.characterRepo.Create(character); err != nil {
 				logger.Errorf("CharacterService.AIBatchGenerate: create %s: %v", p.Name, err)
@@ -1395,17 +1401,21 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 		suggestedLang := suggestVoiceLanguage(novelPromptLanguage)
 
 		char := &model.Character{
-			NovelID:       novelID,
-			UUID:          uuid.New().String(),
-			Name:          c.Name,
-			Role:          "minor",
-			Gender:        c.Gender,
-			Age:           c.Age,
-			Description:   finalDesc,
-			VoiceID:       suggestedVoice,
-			VoiceStyle:    suggestedStyle,
-			VoiceLanguage: suggestedLang,
-			Status:        "active",
+			NovelID:     novelID,
+			UUID:        uuid.New().String(),
+			Name:        c.Name,
+			Role:        "minor",
+			Description: finalDesc,
+			Meta: model.CharacterMeta{
+				Gender: c.Gender,
+				Age:    c.Age,
+			},
+			VoiceConfig: model.CharacterVoiceConfig{
+				VoiceID:       suggestedVoice,
+				VoiceStyle:    suggestedStyle,
+				VoiceLanguage: suggestedLang,
+			},
+			Status: "active",
 		}
 		// 插入前再次确认（mutex 内，但 reload 防止极端情况）
 		existingNameSet[strings.ToLower(c.Name)] = true // 先占位，防止同批次重复

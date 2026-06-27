@@ -848,16 +848,16 @@ func (s *VideoService) RunSynthesisPipeline(taskID string, videoID uint) {
 		_ = s.taskSvc.UpdateProgress(taskID, 40)
 	}
 	novelCfg := s.GetNovelVideoConfig(video.NovelID)
-	if novelCfg != nil && novelCfg.SubtitleStyle != "" && novelCfg.SubtitleStyle != "none" {
+	if novelCfg != nil && novelCfg.Config.SubtitleStyle != "" && novelCfg.Config.SubtitleStyle != "none" {
 		shots, err := s.storyboardRepo.ListByVideo(videoID)
 		if err == nil && len(shots) > 0 {
 			subtitleSvc := NewSubtitleService()
 			fontName := "Noto Sans CJK SC"
-			if novelCfg.SubtitleFont != "" {
-				fontName = novelCfg.SubtitleFont
+			if novelCfg.Config.SubtitleFont != "" {
+				fontName = novelCfg.Config.SubtitleFont
 			}
 			logger.Printf("[SynthesizeVideo] videoID=%d step=2/4: burning subtitles (style=%s font=%s shots=%d)",
-				videoID, novelCfg.SubtitleStyle, fontName, len(shots))
+				videoID, novelCfg.Config.SubtitleStyle, fontName, len(shots))
 			shotSlice := make([]model.StoryboardShot, len(shots))
 			for i, sh := range shots {
 				if sh != nil {
@@ -1494,10 +1494,10 @@ func (s *VideoService) waitForShotCompletion(shot *model.StoryboardShot, timeout
 			s.chainLastFrameToNextShot(current)
 			return current, nil
 		case "failed":
-			return nil, fmt.Errorf("shot %d failed: %s", shot.ShotNo, current.ErrorMessage)
+			return nil, fmt.Errorf("shot %d failed: %s", shot.ShotNo, current.TaskMeta.ErrorMessage)
 		}
 		// 仍在处理中 — 主动触发一次状态轮询
-		if current.ShotTaskID != "" {
+		if current.TaskMeta.ShotTaskID != "" {
 			if pollErr := s.PollShotStatus(current); pollErr != nil {
 				logger.Errorf("waitForShotCompletion: shot %d poll: %v", shot.ShotNo, pollErr)
 			}
@@ -1507,7 +1507,7 @@ func (s *VideoService) waitForShotCompletion(shot *model.StoryboardShot, timeout
 				s.chainLastFrameToNextShot(current)
 				return current, nil
 			case "failed":
-				return nil, fmt.Errorf("shot %d failed: %s", shot.ShotNo, current.ErrorMessage)
+				return nil, fmt.Errorf("shot %d failed: %s", shot.ShotNo, current.TaskMeta.ErrorMessage)
 			}
 		}
 		time.Sleep(5 * time.Second)

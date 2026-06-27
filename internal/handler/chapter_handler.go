@@ -593,7 +593,7 @@ func (h *ChapterHandler) PublishChapter(c *gin.Context) {
 		respondErr(c, http.StatusNotFound, "chapter not found")
 		return
 	}
-	if existing.ContinuityBlocked {
+	if existing.QualityMeta.ContinuityBlocked {
 		c.JSON(http.StatusConflict, gin.H{
 			"error": "chapter has unresolved continuity issues and cannot be published",
 			"code":  "continuity_blocked",

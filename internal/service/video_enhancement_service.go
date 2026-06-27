@@ -254,7 +254,7 @@ func (s *IntelligentStoryboardService) optimizeShotSequence(
 
 		// 添加对话
 		if len(dialogues) > i {
-			shot.GenMeta.Dialogue = dialogues[i]
+			shot.Dialogue = dialogues[i]
 		}
 
 		// 添加转场

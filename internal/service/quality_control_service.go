@@ -1169,7 +1169,7 @@ func (s *QualityControlService) buildCharacterVoiceSummary(novelID uint) string 
 	}
 	var lines []string
 	for _, c := range chars {
-		if c.VoiceProfile == "" && c.Description == "" {
+		if c.VoiceConfig.VoiceProfile == "" && c.Description == "" {
 			continue
 		}
 		// Only include protagonist/antagonist/supporting roles
@@ -1178,14 +1178,14 @@ func (s *QualityControlService) buildCharacterVoiceSummary(novelID uint) string 
 			continue
 		}
 		var voiceLine string
-		if c.VoiceProfile != "" {
+		if c.VoiceConfig.VoiceProfile != "" {
 			// Extract overall_voice field from JSON without full parse
 			var vp struct {
 				OverallVoice   string   `json:"overall_voice"`
 				SpeechHabits   []string `json:"speech_habits"`
 				VocabularyLevel string  `json:"vocabulary_level"`
 			}
-			if err2 := json.Unmarshal([]byte(c.VoiceProfile), &vp); err2 == nil && vp.OverallVoice != "" {
+			if err2 := json.Unmarshal([]byte(c.VoiceConfig.VoiceProfile), &vp); err2 == nil && vp.OverallVoice != "" {
 				voiceLine = vp.OverallVoice
 				if len(vp.SpeechHabits) > 0 {
 					habits := vp.SpeechHabits
@@ -1257,7 +1257,7 @@ func (s *QualityControlService) buildForeshadowContext(novelID uint) string {
 	}
 	var lines []string
 	for _, f := range foreshadows {
-		desc := f.Description
+		desc := f.Meta.Description
 		if len([]rune(desc)) > 60 {
 			desc = string([]rune(desc)[:60]) + "…"
 		}

@@ -288,12 +288,12 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 			autoVoices := []string{"alloy", "echo", "fable", "nova", "onyx", "shimmer"}
 			for _, c := range chars {
 				if strings.EqualFold(c.Name, seg.Speaker) {
-					if c.VoiceID != "" {
-						voice = c.VoiceID
+					if c.VoiceConfig.VoiceID != "" {
+						voice = c.VoiceConfig.VoiceID
 					} else {
 						voice = autoVoices[c.ID%uint(len(autoVoices))]
 					}
-					style = c.VoiceStyle // 角色静态风格作为基准情感
+					style = c.VoiceConfig.VoiceStyle // 角色静态风格作为基准情感
 					break
 				}
 			}
@@ -782,15 +782,15 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 		// 这些 CharacterIDs 仅用于图像生成，不应影响配音音色。
 
 		applyCharVoice := func(c *model.Character) {
-			if c.VoiceID != "" {
-				voice = c.VoiceID
+			if c.VoiceConfig.VoiceID != "" {
+				voice = c.VoiceConfig.VoiceID
 			}
 			// 角色无显式 voice_id 时保持 narrationVoice（全局旁白音色），
 			// 不使用 OpenAI 专用内置音色名（alloy/echo 等），避免 qianwen/doubao 等 provider 返回 InvalidVoice 错误。
-			if c.VoiceSpeed > 0 {
-				speed = c.VoiceSpeed
+			if c.VoiceConfig.VoiceSpeed > 0 {
+				speed = c.VoiceConfig.VoiceSpeed
 			}
-			style = c.VoiceStyle // 角色静态风格作为基准，后续被情感覆盖
+			style = c.VoiceConfig.VoiceStyle // 角色静态风格作为基准，后续被情感覆盖
 		}
 
 		// 步骤一：从对话中解析发言角色（格式：角色名：对话内容 或 角色名:对话内容）。

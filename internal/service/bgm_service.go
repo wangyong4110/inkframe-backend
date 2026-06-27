@@ -436,14 +436,16 @@ func (s *BGMService) AnalyzeBGMForVideo(
 	for i, a := range analyses {
 		qJSON, _ := json.Marshal(a.SearchQueries)
 		segments = append(segments, &model.VideoBGMSegment{
-			VideoID:       videoID,
-			SeqNo:         i + 1,
-			StartShotNo:   a.StartShotNo,
-			EndShotNo:     a.EndShotNo,
-			Mood:          a.Mood,
-			Tempo:         a.Tempo,
-			SearchQueries: string(qJSON),
-			Volume:        bgmSegmentVolume(a.Mood, a.Tempo),
+			VideoID:     videoID,
+			SeqNo:       i + 1,
+			StartShotNo: a.StartShotNo,
+			EndShotNo:   a.EndShotNo,
+			Volume:      bgmSegmentVolume(a.Mood, a.Tempo),
+			TrackMeta: model.BGMTrackMeta{
+				Mood:          a.Mood,
+				Tempo:         a.Tempo,
+				SearchQueries: string(qJSON),
+			},
 		})
 	}
 
@@ -516,12 +518,12 @@ func bgmSegmentVolume(mood, tempo string) float64 {
 // 优先级：素材库 → 本地目录 → Jamendo → Pixabay。
 func (s *BGMService) SearchBGMForSegment(ctx context.Context, tenantID uint, seg *model.VideoBGMSegment) error {
 	var queries []string
-	if seg.SearchQueries != "" {
-		_ = json.Unmarshal([]byte(seg.SearchQueries), &queries)
+	if seg.TrackMeta.SearchQueries != "" {
+		_ = json.Unmarshal([]byte(seg.TrackMeta.SearchQueries), &queries)
 	}
 	if len(queries) == 0 {
-		if seg.Mood != "" {
-			queries = []string{seg.Mood}
+		if seg.TrackMeta.Mood != "" {
+			queries = []string{seg.TrackMeta.Mood}
 		} else {
 			return nil
 		}
@@ -532,8 +534,8 @@ func (s *BGMService) SearchBGMForSegment(ctx context.Context, tenantID uint, seg
 	if s.assetRepo != nil {
 		// 0a. 标签匹配：以 mood 及 searchQueries 中各词作为 OR 标签搜索
 		tagCandidates := make([]string, 0, len(queries)+1)
-		if seg.Mood != "" {
-			tagCandidates = append(tagCandidates, seg.Mood)
+		if seg.TrackMeta.Mood != "" {
+			tagCandidates = append(tagCandidates, seg.TrackMeta.Mood)
 		}
 		tagCandidates = append(tagCandidates, queries...)
 		if len(tagCandidates) > 0 {
@@ -548,12 +550,12 @@ func (s *BGMService) SearchBGMForSegment(ctx context.Context, tenantID uint, seg
 			})
 			if err == nil {
 				for _, a := range assets {
-					if a.StorageURL != "" {
-						logger.Printf("[BGMService] segment %d (%s) asset-lib tag-hit tags=%v", seg.SeqNo, seg.Mood, tagCandidates)
+					if a.MediaMeta.StorageURL != "" {
+						logger.Printf("[BGMService] segment %d (%s) asset-lib tag-hit tags=%v", seg.SeqNo, seg.TrackMeta.Mood, tagCandidates)
 						_ = s.assetRepo.IncrUseCount(a.ID)
-						seg.URL = a.StorageURL
-						seg.TrackName = a.Title
-						seg.Source = "asset-lib"
+						seg.URL = a.MediaMeta.StorageURL
+						seg.TrackMeta.TrackName = a.Title
+						seg.TrackMeta.Source = "asset-lib"
 						return nil
 					}
 				}
@@ -572,12 +574,12 @@ func (s *BGMService) SearchBGMForSegment(ctx context.Context, tenantID uint, seg
 			})
 			if err == nil {
 				for _, a := range assets {
-					if a.StorageURL != "" {
-						logger.Printf("[BGMService] segment %d (%s) asset-lib q-hit q=%q", seg.SeqNo, seg.Mood, q)
+					if a.MediaMeta.StorageURL != "" {
+						logger.Printf("[BGMService] segment %d (%s) asset-lib q-hit q=%q", seg.SeqNo, seg.TrackMeta.Mood, q)
 						_ = s.assetRepo.IncrUseCount(a.ID)
-						seg.URL = a.StorageURL
-						seg.TrackName = a.Title
-						seg.Source = "asset-lib"
+						seg.URL = a.MediaMeta.StorageURL
+						seg.TrackMeta.TrackName = a.Title
+						seg.TrackMeta.Source = "asset-lib"
 						return nil
 					}
 				}
@@ -586,10 +588,10 @@ func (s *BGMService) SearchBGMForSegment(ctx context.Context, tenantID uint, seg
 	}
 
 	// 1. 本地文件（上传 OSS 得到可访问 URL）
-	if localPath := s.SelectBGM(seg.Mood); localPath != "" {
+	if localPath := s.SelectBGM(seg.TrackMeta.Mood); localPath != "" {
 		if publicURL, ok := s.resolveLocalBGMURL(ctx, localPath); ok {
 			seg.URL = publicURL
-			seg.Source = "local"
+			seg.TrackMeta.Source = "local"
 			return nil
 		}
 		// storageSvc 未配置：跳过本地，继续尝试 API
@@ -600,13 +602,13 @@ func (s *BGMService) SearchBGMForSegment(ctx context.Context, tenantID uint, seg
 		for _, q := range queries {
 			if trackURL, name, artist := s.jamendoSearch(ctx, tenantID, q); trackURL != "" {
 				seg.URL = trackURL
-				seg.TrackName = name
-				seg.TrackArtist = artist
-				seg.Source = "jamendo"
+				seg.TrackMeta.TrackName = name
+				seg.TrackMeta.TrackArtist = artist
+				seg.TrackMeta.Source = "jamendo"
 				return nil
 			}
 		}
-		logger.Printf("[BGMService] segment %d (%s) Jamendo miss for all queries", seg.SeqNo, seg.Mood)
+		logger.Printf("[BGMService] segment %d (%s) Jamendo miss for all queries", seg.SeqNo, seg.TrackMeta.Mood)
 	}
 
 	// 3. Pixabay 降级
@@ -614,21 +616,21 @@ func (s *BGMService) SearchBGMForSegment(ctx context.Context, tenantID uint, seg
 		for _, q := range queries {
 			if trackURL, name := s.pixabaySearchBGM(ctx, tenantID, q); trackURL != "" {
 				seg.URL = trackURL
-				seg.TrackName = name
-				seg.TrackArtist = "Pixabay"
-				seg.Source = "pixabay"
+				seg.TrackMeta.TrackName = name
+				seg.TrackMeta.TrackArtist = "Pixabay"
+				seg.TrackMeta.Source = "pixabay"
 				return nil
 			}
 		}
-		logger.Printf("[BGMService] segment %d (%s) Pixabay miss for all queries", seg.SeqNo, seg.Mood)
+		logger.Printf("[BGMService] segment %d (%s) Pixabay miss for all queries", seg.SeqNo, seg.TrackMeta.Mood)
 	}
 
 	// 4. Fun-Music AI 生成（最终兜底）
-	if funURL := s.generateFunMusic(ctx, tenantID, seg.Mood, seg.SearchQueries); funURL != "" {
+	if funURL := s.generateFunMusic(ctx, tenantID, seg.TrackMeta.Mood, seg.TrackMeta.SearchQueries); funURL != "" {
 		seg.URL = funURL
-		seg.TrackName = "AI 生成音乐"
-		seg.TrackArtist = "Fun-Music"
-		seg.Source = "fun-music"
+		seg.TrackMeta.TrackName = "AI 生成音乐"
+		seg.TrackMeta.TrackArtist = "Fun-Music"
+		seg.TrackMeta.Source = "fun-music"
 		return nil
 	}
 
@@ -1025,7 +1027,7 @@ func (s *BGMService) ValidateCoverageBeforeSynthesis(_ context.Context, videoID 
 		analyses = append(analyses, bgmSegmentAnalysis{
 			StartShotNo: seg.StartShotNo,
 			EndShotNo:   seg.EndShotNo,
-			Mood:        seg.Mood,
+			Mood:        seg.TrackMeta.Mood,
 		})
 	}
 	if len(analyses) == 0 {
@@ -1174,7 +1176,7 @@ func (s *BGMService) GenerateBGMSegments(
 			if err := s.SearchBGMForSegment(ctx, tenantID, sg); err != nil {
 				logger.Errorf("[BGMService] segment %d search error: %v", sg.SeqNo, err)
 			}
-			logger.Printf("[BGMService] segment %d (%s): url=%q source=%q", sg.SeqNo, sg.Mood, sg.URL, sg.Source)
+			logger.Printf("[BGMService] segment %d (%s): url=%q source=%q", sg.SeqNo, sg.TrackMeta.Mood, sg.URL, sg.TrackMeta.Source)
 			if bgmRepo != nil && sg.ID > 0 {
 				if err := bgmRepo.Update(sg); err != nil {
 					logger.Errorf("[BGMService] segment %d Update failed: %v", sg.SeqNo, err)
@@ -1285,7 +1287,7 @@ func (s *BGMService) MixBGMWithDucking(ctx context.Context, videoPath, bgmSource
 // saveBGMToAssetLibrary 将 BGM 分段发布到公共素材库，以 URL 去重。
 // 失败只记录日志，不影响主流程。
 func (s *BGMService) saveBGMToAssetLibrary(ctx context.Context, seg *model.VideoBGMSegment) {
-	if seg.URL == "" || seg.Source == "none" || seg.Source == "local" {
+	if seg.URL == "" || seg.TrackMeta.Source == "none" || seg.TrackMeta.Source == "local" {
 		return
 	}
 	if exists, err := s.assetRepo.ExistsByExternalID(seg.URL); err != nil {
@@ -1295,9 +1297,9 @@ func (s *BGMService) saveBGMToAssetLibrary(ctx context.Context, seg *model.Video
 		return
 	}
 
-	title := seg.TrackName
+	title := seg.TrackMeta.TrackName
 	if title == "" {
-		title = seg.Mood
+		title = seg.TrackMeta.Mood
 	}
 
 	asset := &model.Asset{
@@ -1307,11 +1309,13 @@ func (s *BGMService) saveBGMToAssetLibrary(ctx context.Context, seg *model.Video
 		Type:       "audio",
 		SubType:    "bgm",
 		Title:      title,
-		StorageURL: seg.URL,
 		ExternalID: seg.URL,
 		Source:     "crawled",
-		Duration:   seg.DurationSecs,
 		Status:     "active",
+		MediaMeta: model.AssetMediaMeta{
+			StorageURL: seg.URL,
+			Duration:   seg.DurationSecs,
+		},
 	}
 	if err := s.assetRepo.Create(asset); err != nil {
 		logger.Errorf("[BGMService] AssetLib: create asset failed (seg %d): %v", seg.SeqNo, err)
@@ -1328,12 +1332,12 @@ func (s *BGMService) saveBGMToAssetLibrary(ctx context.Context, seg *model.Video
 			tagNames = append(tagNames, s)
 		}
 	}
-	addTag(seg.Mood)
-	addTag(seg.Tempo)
-	addTag(seg.TrackArtist)
+	addTag(seg.TrackMeta.Mood)
+	addTag(seg.TrackMeta.Tempo)
+	addTag(seg.TrackMeta.TrackArtist)
 	var queries []string
-	if seg.SearchQueries != "" {
-		_ = json.Unmarshal([]byte(seg.SearchQueries), &queries)
+	if seg.TrackMeta.SearchQueries != "" {
+		_ = json.Unmarshal([]byte(seg.TrackMeta.SearchQueries), &queries)
 	}
 	for _, q := range queries {
 		for _, word := range strings.Fields(q) {
@@ -1353,5 +1357,5 @@ func (s *BGMService) saveBGMToAssetLibrary(ctx context.Context, seg *model.Video
 		}
 	}
 	_ = ctx
-	logger.Printf("[BGMService] AssetLib: published asset %d mood=%q source=%s", asset.ID, seg.Mood, seg.Source)
+	logger.Printf("[BGMService] AssetLib: published asset %d mood=%q source=%s", asset.ID, seg.TrackMeta.Mood, seg.TrackMeta.Source)
 }

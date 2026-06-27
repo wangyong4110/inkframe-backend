@@ -693,17 +693,17 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 					tenantID = novel.TenantID
 				}
 				vc := novel.VideoConf()
-				if vc.Config.CharConsistencyWeight > 0 {
-					charConsistencyWeight = vc.Config.CharConsistencyWeight
+				if vc.CharConsistencyWeight > 0 {
+					charConsistencyWeight = vc.CharConsistencyWeight
 				}
 				// 项目设置的画面风格优先于视频级别的默认值
 				if novel.AIConfig.ImageStyle != "" {
 					artStyle = novel.AIConfig.ImageStyle
 				}
-				if imageAspectRatio == "" && vc.Config.VideoAspectRatio != "" {
-					imageAspectRatio = vc.Config.VideoAspectRatio
+				if imageAspectRatio == "" && vc.VideoAspectRatio != "" {
+					imageAspectRatio = vc.VideoAspectRatio
 				}
-				colorGrade = vc.Config.ColorGrade
+				colorGrade = vc.ColorGrade
 				// 注入 OSS 路径提示（项目名+章节序号）
 				if novel.Title != "" {
 					ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title, ChapterNo: chapterNo})
@@ -1341,14 +1341,14 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	if vid, vidErr := s.videoRepo.GetByID(shot.VideoID); vidErr == nil && vid.NovelID > 0 && s.novelRepo != nil {
 		if novel, novelErr := s.novelRepo.GetByID(vid.NovelID); novelErr == nil {
 			vc := novel.VideoConf()
-			if klingMode == "pro" && !vc.Config.KlingProForAction {
+			if klingMode == "pro" && !vc.KlingProForAction {
 				klingMode = "std"
 			}
 			hdEnabled = strings.Contains(vid.RenderConfig.VisualMode, "hd")
-			threeDEnabled = vc.Config.ThreeDEnabled || strings.Contains(vid.RenderConfig.VisualMode, "3d")
+			threeDEnabled = vc.ThreeDEnabled || strings.Contains(vid.RenderConfig.VisualMode, "3d")
 			threeDStyle = vid.RenderConfig.ThreeDStyle
-			klingModelOverride = vc.Config.KlingModel
-			videoColorGrade = vc.Config.ColorGrade
+			klingModelOverride = vc.KlingModel
+			videoColorGrade = vc.ColorGrade
 		}
 	}
 	if threeDStyle == "" {

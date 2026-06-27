@@ -664,7 +664,7 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 	// 筛选需要生成配音的分镜（有文本，且未有配音或强制重生）
 	var targets []*model.StoryboardShot
 	for _, s := range allShots {
-		if s.Narration == "" && s.Dialogue == "" && s.Description == "" {
+		if s.Narration == "" && s.GenMeta.Dialogue == "" && s.Description == "" {
 			continue
 		}
 		if skipExisting {
@@ -905,10 +905,10 @@ func (h *VideoHandler) UpdateBGMSegment(c *gin.Context) {
 		seg.Volume = *req.Volume
 	}
 	if req.DuckingEnabled != nil {
-		seg.DuckingEnabled = *req.DuckingEnabled
+		seg.Ducking.Enabled = *req.DuckingEnabled
 	}
 	if req.DuckingLevel != nil {
-		seg.DuckingLevel = *req.DuckingLevel
+		seg.Ducking.Level = *req.DuckingLevel
 	}
 	if req.Disabled != nil {
 		seg.Disabled = *req.Disabled

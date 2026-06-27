@@ -95,7 +95,7 @@ func (s *ForeshadowService) ExtractForeshadows(chapter *model.Chapter, tenantID,
 			ChapterID:   chapter.ID,
 			ChapterNo:   chapter.ChapterNo,
 			Type:        fs.Type,
-			Description: fs.Meta.Description,
+			Description: fs.Description,
 			Hint:        fs.Hint,
 			IsFulfilled: false,
 		}
@@ -104,7 +104,7 @@ func (s *ForeshadowService) ExtractForeshadows(chapter *model.Chapter, tenantID,
 		kb := &model.KnowledgeBase{
 			NovelID: &novelID,
 			Type:    "foreshadow",
-			Title:   fmt.Sprintf("[%s] %s", strings.ToUpper(fs.Type), fs.Meta.Description),
+			Title:   fmt.Sprintf("[%s] %s", strings.ToUpper(fs.Type), fs.Description),
 			Content: fs.Hint,
 			Tags:    fmt.Sprintf(`["%s", "%d章"]`, fs.Type, chapter.ChapterNo),
 		}
@@ -179,7 +179,7 @@ func (s *ForeshadowService) AnalyzeFulfillmentOpportunity(novelID uint, currentC
 			opportunities = append(opportunities, fmt.Sprintf(
 				"建议在第%d章回收伏笔「%s」",
 				currentChapter.ChapterNo,
-				fs.Meta.Description,
+				fs.Description,
 			))
 		}
 	}
@@ -707,7 +707,7 @@ func (s *GenerationContextService) generateGlobalSummary(ctx *GenerationContext)
 	var sb strings.Builder
 
 	sb.WriteString("【故事概要】\n")
-	sb.WriteString(ctx.Novel.Description)
+	sb.WriteString(ctx.Novel.Meta.Description)
 	sb.WriteString("\n\n")
 
 	if ctx.Novel.Worldview != nil {
@@ -733,7 +733,7 @@ func (s *GenerationContextService) generateGlobalSummary(ctx *GenerationContext)
 		count := 0
 		for _, fs := range ctx.Foreshadows {
 			if !fs.IsFulfilled {
-				sb.WriteString(fmt.Sprintf("- %s\n", fs.Meta.Description))
+				sb.WriteString(fmt.Sprintf("- %s\n", fs.Description))
 				count++
 				if count >= 5 {
 					break
@@ -795,7 +795,7 @@ func (s *GenerationContextService) buildGenerationPrompt(ctx *GenerationContext,
 		count := 0
 		for _, fs := range ctx.Foreshadows {
 			if !fs.IsFulfilled && chapterNo-fs.ChapterNo >= 3 {
-				sb.WriteString(fmt.Sprintf("【伏笔提示】建议考虑回收伏笔「%s」\n", fs.Meta.Description))
+				sb.WriteString(fmt.Sprintf("【伏笔提示】建议考虑回收伏笔「%s」\n", fs.Description))
 				count++
 				if count >= 2 {
 					break

@@ -330,8 +330,10 @@ func (s *SFXService) AutoGenerateSFX(ctx context.Context, shot *model.Storyboard
 			DurationSecs: r.hit.durationSecs,
 			SFXType:      r.item.SFXType,
 			LoopEnabled:  r.loop,
-			FadeInMs:     r.fin,
-			FadeOutMs:    r.fout,
+			Playback: model.SFXPlayback{
+				FadeInMs:  r.fin,
+				FadeOutMs: r.fout,
+			},
 			// StartOffset 默认 0；action 音的精确帧偏移由前端手动调整
 		})
 	}
@@ -479,12 +481,12 @@ func (s *SFXService) searchOneTagUncached(ctx context.Context, tenantID uint, it
 			logger.Errorf("[SFXService] shot %d asset-lib search error tag=%q: %v", shot.ID, item.Tag, err)
 		} else {
 			for _, a := range assets {
-				if a.StorageURL == "" {
+				if a.MediaMeta.StorageURL == "" {
 					continue
 				}
-				logger.Printf("[SFXService] shot %d asset-lib hit tag=%q source=%s (%.1fs)", shot.ID, item.Tag, a.Source, a.Duration)
+				logger.Printf("[SFXService] shot %d asset-lib hit tag=%q source=%s (%.1fs)", shot.ID, item.Tag, a.Source, a.MediaMeta.Duration)
 				_ = s.assetRepo.IncrUseCount(a.ID)
-				return sfxHit{url: a.StorageURL, source: mapSFXSource(a.Source), durationSecs: a.Duration}
+				return sfxHit{url: a.MediaMeta.StorageURL, source: mapSFXSource(a.Source), durationSecs: a.MediaMeta.Duration}
 			}
 			logger.Printf("[SFXService] shot %d asset-lib miss tag=%q (found %d assets, none with URL)", shot.ID, item.Tag, len(assets))
 		}
@@ -922,11 +924,13 @@ func (s *SFXService) saveToAssetLibrary(ctx context.Context, shot *model.Storybo
 			Type:       "audio",
 			SubType:    "sfx",
 			Title:      item.Tag,
-			StorageURL: item.URL,
 			ExternalID: item.URL,
 			Source:     mapSFXSource(item.Source),
-			Duration:   item.DurationSecs,
 			Status:     "active",
+			MediaMeta: model.AssetMediaMeta{
+				StorageURL: item.URL,
+				Duration:   item.DurationSecs,
+			},
 		}
 		if err := s.assetRepo.Create(asset); err != nil {
 			logger.Errorf("[SFXService] AssetLib: create asset failed (shot %d tag=%q): %v", shotID, item.Tag, err)

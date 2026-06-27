@@ -1241,17 +1241,17 @@ func newSubtitleConfig(novel *model.Novel) subtitleConfig {
 	}
 	// 保留小说级样式配置（位置/字号/颜色/背景），但不读取 enabled 字段
 	vc := novel.VideoConf()
-	if vc.Config.SubtitlePosition != "" {
-		cfg.position = vc.Config.SubtitlePosition
+	if vc.SubtitlePosition != "" {
+		cfg.position = vc.SubtitlePosition
 	}
-	if vc.Config.SubtitleFontSize > 0 {
-		cfg.fontSize = vc.Config.SubtitleFontSize
+	if vc.SubtitleFontSize > 0 {
+		cfg.fontSize = vc.SubtitleFontSize
 	}
-	if vc.Config.SubtitleColor != "" {
-		cfg.color = vc.Config.SubtitleColor
+	if vc.SubtitleColor != "" {
+		cfg.color = vc.SubtitleColor
 	}
-	if vc.Config.SubtitleBgStyle != "" {
-		cfg.bgStyle = vc.Config.SubtitleBgStyle
+	if vc.SubtitleBgStyle != "" {
+		cfg.bgStyle = vc.SubtitleBgStyle
 	}
 	return cfg
 }
@@ -1976,7 +1976,7 @@ func (s *CapCutService) ExportCapCutDraft(video *model.Video, shots []*model.Sto
 				ID:                 bgmMatID,
 				LocalMaterialID:    uuid.New().String(),
 				MusicID:            uuid.New().String(),
-				Name:               bs.TrackName,
+				Name:               bs.TrackMeta.TrackName,
 				Path:               bgmPath,
 				SimilarMusicInfo:   ccSimilarMusicInfo{},
 				TTSBenefitInfo:     ccTTSBenefitInfo{BenefitType: "none", BenefitAmount: -1},

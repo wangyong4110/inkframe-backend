@@ -135,19 +135,23 @@ func (s *NovelService) Create(req *CreateNovelRequest) (*model.Novel, error) {
 		chapterMode = "sequential"
 	}
 	novel := &model.Novel{
-		UUID:            uuid.New().String(),
-		TenantID:        tenantID,
-		CreatedBy:       req.UserID,
-		Title:           req.Title,
-		Description:     req.Description,
-		Genre:           req.Genre,
-		Status:          "planning",
-		WorldviewID:     req.WorldviewID,
-		CoverImage:      req.CoverImage,
-		Channel:         req.Channel,
-		TargetWordCount: req.TargetWordCount,
-		TargetChapters:  req.TargetChapters,
-		ChapterMode:     chapterMode,
+		UUID:        uuid.New().String(),
+		TenantID:    tenantID,
+		CreatedBy:   req.UserID,
+		Title:       req.Title,
+		Status:      "planning",
+		WorldviewID: req.WorldviewID,
+		Meta: model.NovelMeta{
+			Description:     req.Description,
+			Genre:           req.Genre,
+			CoverImage:      req.CoverImage,
+			Channel:         req.Channel,
+			TargetWordCount: req.TargetWordCount,
+			TargetChapters:  req.TargetChapters,
+		},
+		AIConfig: model.NovelAIConfig{
+			ChapterMode: chapterMode,
+		},
 	}
 
 	if err := s.novelRepo.Create(novel); err != nil {
@@ -573,8 +577,8 @@ func (s *NovelService) GenerateCoverImage(ctx context.Context, tenantID, novelID
 
 	ctx = WithImageStorageHint(ctx, ImageStorageHint{NovelTitle: novel.Title})
 	sizeOverride := ""
-	if novel.VideoConfig != nil && novel.VideoConfig.VideoAspectRatio != "" {
-		sizeOverride = novel.VideoConfig.VideoAspectRatio // e.g. "16:9", "9:16", "1:1"
+	if novel.VideoConfig != nil && novel.VideoConfig.Config.VideoAspectRatio != "" {
+		sizeOverride = novel.VideoConfig.Config.VideoAspectRatio // e.g. "16:9", "9:16", "1:1"
 	}
 	imageURL, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, "", prompt, existingCover, novel.AIConfig.ImageStyle, negativePrompt, sizeOverride)
 	if err != nil {
@@ -842,10 +846,10 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 			if chap.Title != "" {
 				existing.Title = chap.Title
 			}
-			existing.TensionLevel = chap.NarrativeMeta.TensionLevel
-			existing.ActNo = chap.Act
-			existing.EmotionalTone = chap.NarrativeMeta.EmotionalTone
-			existing.HookType = chap.NarrativeMeta.HookType
+			existing.NarrativeMeta.TensionLevel = chap.TensionLevel
+			existing.NarrativeMeta.ActNo = chap.Act
+			existing.NarrativeMeta.EmotionalTone = chap.EmotionalTone
+			existing.NarrativeMeta.HookType = chap.HookType
 			if err := s.chapterRepo.Update(existing); err != nil {
 				logger.Errorf("GenerateOutline: update chapter %d: %v", chap.ChapterNo, err)
 			}
@@ -855,13 +859,15 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 			UUID:      uuid.New().String(),
 			NovelID:   novel.ID,
 			ChapterNo: chap.ChapterNo,
-			Title:         chap.Title,
-			Summary:       chap.Summary,
-			TensionLevel:  chap.NarrativeMeta.TensionLevel,
-			ActNo:         chap.Act,
-			EmotionalTone: chap.NarrativeMeta.EmotionalTone,
-			HookType:      chap.NarrativeMeta.HookType,
-			Status:        "draft",
+			Title:     chap.Title,
+			Summary:   chap.Summary,
+			NarrativeMeta: model.ChapterNarrativeMeta{
+				TensionLevel:  chap.TensionLevel,
+				ActNo:         chap.Act,
+				EmotionalTone: chap.EmotionalTone,
+				HookType:      chap.HookType,
+			},
+			Status: "draft",
 		}
 		if err := s.chapterRepo.Create(placeholder); err != nil {
 			logger.Errorf("GenerateOutline: create placeholder chapter %d: %v", chap.ChapterNo, err)

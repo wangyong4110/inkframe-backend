@@ -405,10 +405,10 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			}
 			var targets []*model.StoryboardShot
 			for _, s := range shots {
-				if s.Narration == "" && s.Dialogue == "" && s.Description == "" {
+				if s.Narration == "" && s.GenMeta.Dialogue == "" && s.Description == "" {
 					continue
 				}
-				if s.AudioPath != "" {
+				if s.TaskMeta.AudioPath != "" {
 					continue // skip already-voiced
 				}
 				targets = append(targets, s)

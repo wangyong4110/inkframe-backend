@@ -134,17 +134,17 @@ func (s *VideoService) generateKenBurnsPureGo(ctx context.Context, shot *model.S
 		if video, vErr := s.videoRepo.GetByID(shot.VideoID); vErr == nil && video.NovelID > 0 {
 			if novel, nErr := s.novelRepo.GetByID(video.NovelID); nErr == nil {
 				vc := novel.VideoConf()
-				if vc.Config.ColorGrade != "" && vc.Config.ColorGrade != "none" {
-					colorGrade = vc.Config.ColorGrade
-					colorContrast = vc.Config.ContrastLevel
-					colorSaturation = vc.Config.Saturation
+				if vc.ColorGrade != "" && vc.ColorGrade != "none" {
+					colorGrade = vc.ColorGrade
+					colorContrast = vc.ContrastLevel
+					colorSaturation = vc.Saturation
 					if colorSaturation == 0 {
 						colorSaturation = 1.0
 					}
 				}
-				filmGrain = vc.Config.FilmGrain
-				vignette = vc.Config.Vignette
-				chromaticAberration = vc.Config.ChromaticAberration
+				filmGrain = vc.FilmGrain
+				vignette = vc.Vignette
+				chromaticAberration = vc.ChromaticAberration
 			}
 		}
 	}

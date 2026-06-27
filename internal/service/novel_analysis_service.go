@@ -397,23 +397,23 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 		if freshErr != nil {
 			logger.Errorf("NovelAnalysis[%d]: Phase4.5 reload novel failed: %v", novel.ID, freshErr)
 		}
-		needSettings := freshNovel != nil && (freshNovel.Genre == "" || freshNovel.Genre == "unknown" ||
-			freshNovel.Description == "" || freshNovel.StylePrompt == "")
+		needSettings := freshNovel != nil && (freshNovel.Meta.Genre == "" || freshNovel.Meta.Genre == "unknown" ||
+			freshNovel.Meta.Description == "" || freshNovel.AIConfig.StylePrompt == "")
 		logger.Printf("NovelAnalysis[%d]: Phase4.5 [1/4] settings: needSettings=%v (genre=%q desc_empty=%v style_empty=%v)",
 			novel.ID, needSettings,
 			func() string {
 				if freshNovel != nil {
-					return freshNovel.Genre
+					return freshNovel.Meta.Genre
 				}
 				return "<nil>"
 			}(),
-			freshNovel != nil && freshNovel.Description == "",
-			freshNovel != nil && freshNovel.StylePrompt == "")
+			freshNovel != nil && freshNovel.Meta.Description == "",
+			freshNovel != nil && freshNovel.AIConfig.StylePrompt == "")
 		if needSettings {
 			task.setStep("正在补充生成设置...")
 			novelForSettings := *freshNovel
-			if novelForSettings.Description == "" && outline != nil && outline.Summary != "" {
-				novelForSettings.Description = outline.Summary
+			if novelForSettings.Meta.Description == "" && outline != nil && outline.Summary != "" {
+				novelForSettings.Meta.Description = outline.Summary
 			}
 			freshChaptersForSettings, chErr := s.chapterRepo.ListByNovelWithContent(novel.ID)
 			if chErr != nil {
@@ -540,10 +540,10 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 					if summariesText != "" {
 						extractPrompt, pErr := renderPrompt("extract_characters", map[string]interface{}{
 							"NovelTitle":       novelForChar.Title,
-							"Genre":            novelForChar.Genre,
+							"Genre":            novelForChar.Meta.Genre,
 							"Summaries":        summariesText,
-							"PromptLanguage":   novelForChar.PromptLanguage,
-							"GenreVisualHints": genreVisualHints(novelForChar.Genre),
+							"PromptLanguage":   novelForChar.AIConfig.PromptLanguage,
+							"GenreVisualHints": genreVisualHints(novelForChar.Meta.Genre),
 						})
 						if pErr != nil {
 							logger.Errorf("NovelAnalysis[%d]: Phase4.5 [4/4] char enrichment: render prompt failed: %v", novel.ID, pErr)
@@ -963,17 +963,21 @@ func (s *NovelAnalysisService) stepExtractCharacters(
 		suggestedStyle := suggestVoiceStyle(c.Gender, c.Age, role, c.PersonalityTags, finalDesc)
 		suggestedLang := suggestVoiceLanguage(novel.AIConfig.PromptLanguage)
 		char := &model.Character{
-			NovelID: novel.ID,
-			UUID:    uuid.New().String(),
-			Name:    c.Name,
-			Role:          role,
-			Gender:        c.Gender,
-			Age:           c.Age,
-			Description:   finalDesc,
-			VoiceID:       suggestedVoice,
-			VoiceStyle:    suggestedStyle,
-			VoiceLanguage: suggestedLang,
-			Status:        "active",
+			NovelID:     novel.ID,
+			UUID:        uuid.New().String(),
+			Name:        c.Name,
+			Role:        role,
+			Description: finalDesc,
+			Meta: model.CharacterMeta{
+				Gender: c.Gender,
+				Age:    c.Age,
+			},
+			VoiceConfig: model.CharacterVoiceConfig{
+				VoiceID:       suggestedVoice,
+				VoiceStyle:    suggestedStyle,
+				VoiceLanguage: suggestedLang,
+			},
+			Status: "active",
 		}
 		// DB 级兜底：AIExtractMinorChars 可能与本函数并发运行（两者持有不同的锁），
 		// 需在 Create 前最后确认 (novel_id, name) 确实不存在。

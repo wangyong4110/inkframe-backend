@@ -371,7 +371,7 @@ func (s *NovelImportService) ResumeCrawl(novelID uint) error {
 	}
 
 	// 从第一个待爬取章节的 URL 推断解析器
-	firstURL := strings.TrimPrefix(pending[0].Outline, "crawl:")
+	firstURL := strings.TrimPrefix(pending[0].NarrativeMeta.Outline, "crawl:")
 	parser, err := s.getParserForURL(firstURL, "")
 	if err != nil {
 		return fmt.Errorf("cannot identify site parser: %w", err)
@@ -1029,12 +1029,14 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 	}
 	if novel == nil {
 		novel = &model.Novel{
-			UUID:        uuid.New().String(),
-			TenantID:    req.TenantID,
-			Title:       detail.Title,
-			Description: detail.Description,
-			Genre:       detail.Genre,
-			Status:      "importing",
+			UUID:     uuid.New().String(),
+			TenantID: req.TenantID,
+			Title:    detail.Title,
+			Meta: model.NovelMeta{
+				Description: detail.Description,
+				Genre:       detail.Genre,
+			},
+			Status: "importing",
 		}
 		if err := s.novelRepo.Create(novel); err != nil {
 			return nil, fmt.Errorf("save novel failed: %w", err)
@@ -1055,8 +1057,10 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 			ChapterNo: chapterOffset + i + 1,
 			Title:     info.Title,
 			Content:   "",
-			Outline:   "crawl:" + info.URL,
-			Status:    "draft",
+			NarrativeMeta: model.ChapterNarrativeMeta{
+				Outline: "crawl:" + info.URL,
+			},
+			Status: "draft",
 		})
 	}
 	var pendingChapters []*model.Chapter
@@ -1184,7 +1188,7 @@ func (s *NovelImportService) parseTxtFile(data []byte, fileName string, tenantID
 
 	novel := &model.Novel{
 		Title:  title,
-		Genre:  "unknown",
+		Meta: model.NovelMeta{Genre: "unknown"},
 		Status: "completed",
 	}
 
@@ -1210,7 +1214,7 @@ func (s *NovelImportService) parseMarkdownFile(data []byte, fileName string, ten
 
 	novel := &model.Novel{
 		Title:  title,
-		Genre:  "unknown",
+		Meta: model.NovelMeta{Genre: "unknown"},
 		Status: "completed",
 	}
 
@@ -1242,7 +1246,7 @@ func (s *NovelImportService) parseJsonFile(data []byte, tenantID uint) (*model.N
 
 	novel := &model.Novel{
 		Title:  structured.Title,
-		Genre:  structured.Genre,
+		Meta: model.NovelMeta{Genre: structured.Genre},
 		Status: "completed",
 	}
 
@@ -1282,7 +1286,7 @@ func (s *NovelImportService) parseHtmlFile(data []byte, tenantID uint) (*model.N
 
 	novel := &model.Novel{
 		Title:  title,
-		Genre:  "unknown",
+		Meta: model.NovelMeta{Genre: "unknown"},
 		Status: "completed",
 	}
 
@@ -1704,10 +1708,12 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 
 	// 3. 创建视频项目
 	video := &model.Video{
-		NovelID:     req.NovelID,
-		Title:       fmt.Sprintf("%s 视频", novel.Title),
-		Description: fmt.Sprintf("基于《%s》第%d-%d章生成的视频", novel.Title, startCh, startCh+len(chapters)-1),
-		Status:      "planning",
+		NovelID: req.NovelID,
+		Title:   fmt.Sprintf("%s 视频", novel.Title),
+		PublishMeta: model.VideoPublishMeta{
+			Description: fmt.Sprintf("基于《%s》第%d-%d章生成的视频", novel.Title, startCh, startCh+len(chapters)-1),
+		},
+		Status: "planning",
 		RenderConfig: model.VideoRenderConfig{
 			Type:        "image_sequence",
 			Resolution:  req.Resolution,
@@ -1749,7 +1755,6 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 				ShotNo:      idx + 1,
 				ChapterID:   &chapter.ID,
 				Description: shot.Description,
-				Dialogue:    shot.GenMeta.Dialogue,
 				Duration:    shot.Duration,
 				Status:      "pending",
 				CamDir: model.ShotCamDir{
@@ -1758,7 +1763,8 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 					ShotSize:    string(shot.ShotSize),
 				},
 				GenMeta: model.ShotGenMeta{
-					Prompt: shot.Prompt,
+					Prompt:   shot.Prompt,
+					Dialogue: shot.Dialogue,
 				},
 			}
 			if s.storyboardRepo != nil {

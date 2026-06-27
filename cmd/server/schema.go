@@ -1483,14 +1483,16 @@ func initSystemAdmin(db *gorm.DB, cfg *config.Config) {
 
 	now := time.Now()
 	admin := &model.User{
-		UUID:            uuid.New().String(),
-		Username:        "sysadmin",
-		Email:           email,
-		Password:        string(hashed),
-		Nickname:        "System Admin",
-		Status:          "active",
-		Role:            model.RoleSystemAdmin,
-		EmailVerifiedAt: &now,
+		UUID:     uuid.New().String(),
+		Username: "sysadmin",
+		Email:    email,
+		Password: string(hashed),
+		Nickname: "System Admin",
+		Status:   "active",
+		Role:     model.RoleSystemAdmin,
+		SecurityMeta: model.UserSecurityMeta{
+			EmailVerifiedAt: &now,
+		},
 	}
 	if err := db.Create(admin).Error; err != nil {
 		logger.Errorf("[initSystemAdmin] create: %v", err)
