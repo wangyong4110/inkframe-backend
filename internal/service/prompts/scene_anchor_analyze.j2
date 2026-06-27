@@ -20,7 +20,7 @@ Current description (for reference, improve if needed):
 
 1. `type` must be one of: `interior` / `exterior` / `imaginary`
 {% if PromptLanguage == "en" %}
-2. `description`: Detailed English visual description for AI image generation, **minimum 150 words**. **CRITICAL: DO NOT mention any people, characters, figures, humans, silhouettes, or body parts — describe only the environment itself.** You MUST cover ALL of these dimensions — missing any dimension will degrade image quality:
+2. `description`: Detailed English visual description for AI image generation, **minimum 150 words**. **CRITICAL: DO NOT mention any people, characters, figures, humans, silhouettes, or body parts — describe only the environment itself. DO NOT include any violent, bloody, death/casualty, or sexually suggestive words.** You MUST cover ALL of these dimensions — missing any dimension will degrade image quality:
    - **Architecture / structure**: spatial scale, layout, ceiling height, key structural elements (pillars, arches, walls, windows, gates)
    - **Materials & textures**: stone, wood, metal, fabric — color and specific surface quality (weathered / polished / cracked / mossy)
    - **Color palette**: dominant colors, accent colors, forbidden colors (e.g. "no neon, no white walls") — this is the single most important dimension for cross-shot consistency
@@ -33,7 +33,7 @@ Current description (for reference, improve if needed):
    - **Time / weather / season** if relevant to the scene's primary representation
 3. `variant`: ONLY fill this if the scene is a variant of another scene (e.g. the nighttime version of a daytime scene). Valid values: `day` / `night` / `dawn` / `dusk` / `winter` / `summer` / `battle` / `ruined`. Leave empty for primary scenes.
 {% else %}
-2. `description`: 用于 AI 图像生成的详细中文视觉描述，**不少于150字**。**重要：禁止出现任何人物、角色、人影、人体、轮廓等描写，只描述环境本身。** 必须覆盖以下全部维度，缺少任何维度都会降低图像质量：
+2. `description`: 用于 AI 图像生成的详细中文视觉描述，**不少于150字**。**重要：禁止出现任何人物、角色、人影、人体、轮廓等描写，只描述环境本身；严禁出现暴力、血腥、伤亡、色情相关敏感词。** 必须覆盖以下全部维度，缺少任何维度都会降低图像质量：
    - **建筑结构**: 空间规模、格局、层高、主要结构元素（柱、拱、墙、窗、门）
    - **材质与质感**: 石、木、金属、织物的颜色与具体表面质地（风化/抛光/龟裂/苔藓覆盖）
    - **色彩调色板**: 主色调、辅助色、禁用色（如"禁止霓虹、禁止白墙"）——这是跨镜头视觉一致性最关键的维度
