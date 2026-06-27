@@ -990,11 +990,36 @@ func (s *VideoService) GenerateSingleShot(videoID, shotID uint, provider ...stri
 	// 有视频提供商时优先调用 AI 视频模型，无论 video.Mode 如何
 	if hasProvider {
 		logger.Printf("GenerateSingleShot: shot %d → AI video mode (provider=%q, videoMode=%q)", shotID, effectiveProvider, video.Mode)
-		return shot, s.GenerateShotVideo(shot, aspectRatio, effectiveProvider)
+		genErr := s.GenerateShotVideo(shot, aspectRatio, effectiveProvider)
+		if genErr != nil {
+			// GenerateShotVideo 在某些早期失败路径（如找不到 provider）不会自行更新 shot status，
+			// 导致 status 卡在 "generating"。此处回读 DB 状态，若仍是 "generating" 则重置为 "failed"，
+			// 保证用户看到错误后可以重试。
+			if latest, dbErr := s.storyboardRepo.GetByID(shotID); dbErr == nil && latest.Status == "generating" {
+				_ = s.storyboardRepo.UpdateFields(shotID, map[string]interface{}{
+					"status":        "failed",
+					"error_message": genErr.Error(),
+				})
+				shot.Status = "failed"
+				shot.ErrorMessage = genErr.Error()
+			}
+		}
+		return shot, genErr
 	}
 	// 无视频提供商：降级为图片解说 + Ken Burns
 	logger.Printf("GenerateSingleShot: shot %d → slideshow fallback (no video provider for tenantID=%d, videoMode=%q)", shotID, tenantID, video.Mode)
-	return shot, s.GenerateSlideshowShotVideo(shot, aspectRatio)
+	if genErr := s.GenerateSlideshowShotVideo(shot, aspectRatio); genErr != nil {
+		if latest, dbErr := s.storyboardRepo.GetByID(shotID); dbErr == nil && latest.Status == "generating" {
+			_ = s.storyboardRepo.UpdateFields(shotID, map[string]interface{}{
+				"status":        "failed",
+				"error_message": genErr.Error(),
+			})
+			shot.Status = "failed"
+			shot.ErrorMessage = genErr.Error()
+		}
+		return shot, genErr
+	}
+	return shot, nil
 }
 
 // BatchGenerateShotClips 批量为已有图片的分镜生成 Ken Burns 动效视频（幂等：已有 VideoURL 的分镜自动跳过）。

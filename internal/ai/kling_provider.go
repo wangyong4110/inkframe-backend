@@ -145,9 +145,14 @@ func (p *KlingProvider) generate3xTurbo(ctx context.Context, req *VideoGenerateR
 
 // GenerateVideo 提交视频生成任务（文生/图生视频）
 func (p *KlingProvider) GenerateVideo(ctx context.Context, req *VideoGenerateRequest) (*VideoTask, error) {
-	// 3.x 模型（如 kling-3.0-turbo）使用新 API，仅支持文生视频
+	// 3.x 模型（如 kling-3.0-turbo）仅支持文生视频（T2V），不接受参考图。
+	// 有参考图时（I2V 时序链接或场景锚点）自动降级到 kling-v1-6 以保持镜头连贯性。
 	if is3xModel(req.Model) {
-		return p.generate3xTurbo(ctx, req, req.Model)
+		if req.ImageURL == "" && len(req.ImageURLs) == 0 {
+			return p.generate3xTurbo(ctx, req, req.Model)
+		}
+		// 有参考图，退化到 v1.x I2V 端点
+		req.Model = "kling-v1-6"
 	}
 
 	// 合并所有参考图：ImageURL（主参考图）置首位，ImageURLs 追加并去重

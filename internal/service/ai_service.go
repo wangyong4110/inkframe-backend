@@ -2521,6 +2521,34 @@ func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.Video
 	return nil, fmt.Errorf("no video provider configured for tenant %d", tenantID)
 }
 
+// GetActiveVideoModelName 从数据库查询指定 provider 的第一个激活视频模型名。
+// 调用方在 VideoGenerateRequest.Model 为空时用此值，避免 provider 内部使用写死的默认模型。
+func (s *AIService) GetActiveVideoModelName(tenantID uint, providerName string) (string, error) {
+	if s.providerRepo == nil || s.modelRepo == nil {
+		return "", fmt.Errorf("repos not available")
+	}
+	providers, err := s.providerRepo.ListByModelType(tenantID, "video")
+	if err != nil {
+		return "", err
+	}
+	pnameLower := strings.ToLower(providerName)
+	for _, p := range providers {
+		if strings.ToLower(p.Name) != pnameLower {
+			continue
+		}
+		models, mErr := s.modelRepo.List(&p.ID, tenantID)
+		if mErr != nil {
+			return "", mErr
+		}
+		for _, m := range models {
+			if m.Type == "video" && m.IsActive {
+				return m.Name, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("no active video model for provider %q (tenant %d)", providerName, tenantID)
+}
+
 // UpscaleImage 放大图片。method 为 "ai" 时调用 AI 增强，否则使用 CatmullRom 双三次插值。
 // scale 为整数倍放大系数（建议 2 或 4，最大 8）。
 func (s *AIService) UpscaleImage(ctx context.Context, tenantID, novelID uint, imageURL string, scale int, method string) (string, error) {

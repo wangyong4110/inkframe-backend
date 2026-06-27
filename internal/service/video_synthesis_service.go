@@ -93,6 +93,8 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 		}
 		shot.Status = "completed"
 		shot.Progress = 100
+		// 提取上一帧并写入下一分镜的 reference_image_url（I2V 时序链接）
+		go s.chainLastFrameToNextShot(shot)
 	case "failed", "error":
 		logger.Errorf("PollShotStatus: shot %d 生成失败 taskID=%s error=%s", shot.ShotNo, shot.ShotTaskID, status.Error)
 		shot.Status = "failed"

@@ -38,6 +38,16 @@ func (r *StoryboardRepository) GetByID(id uint) (*model.StoryboardShot, error) {
 	return &shot, nil
 }
 
+// GetByVideoAndShotNo 根据视频ID和镜头序号精确查询单个分镜
+func (r *StoryboardRepository) GetByVideoAndShotNo(videoID uint, shotNo int) (*model.StoryboardShot, error) {
+	var shot model.StoryboardShot
+	err := r.db.Where("video_id = ? AND shot_no = ? AND deleted_at IS NULL", videoID, shotNo).First(&shot).Error
+	if err != nil {
+		return nil, err
+	}
+	return &shot, nil
+}
+
 // ListByVideo 获取视频的所有分镜
 func (r *StoryboardRepository) ListByVideo(videoID uint) ([]*model.StoryboardShot, error) {
 	var shots []*model.StoryboardShot

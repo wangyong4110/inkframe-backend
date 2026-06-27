@@ -10,6 +10,7 @@ import (
 	"image/draw"
 	"image/jpeg"
 	_ "image/png" // PNG 解码支持（合成参考图时可能遇到 PNG 格式）
+	"io"
 	"net/http"
 	"os"
 	"sort"
@@ -939,6 +940,118 @@ func (s *VideoService) extractLastFrame(clipPath string) (string, error) {
 	return tmpJpeg, nil
 }
 
+// uploadFrameToStorage 将本地 JPEG 帧图片上传到持久存储（OSS），返回持久 URL。
+// 复用 uploadClipToStorage 的 OSS key 规则，以 /frames/ 子路径区分。
+func (s *VideoService) uploadFrameToStorage(shot *model.StoryboardShot, localPath string) string {
+	if s.storageSvc == nil {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	f, err := os.Open(localPath)
+	if err != nil {
+		logger.Errorf("uploadFrameToStorage: open %s: %v", localPath, err)
+		return ""
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		logger.Errorf("uploadFrameToStorage: stat %s: %v", localPath, err)
+		return ""
+	}
+
+	filename := uuid.New().String() + ".jpg"
+	key := fmt.Sprintf("frames/%s", filename)
+
+	ossURL, err := s.storageSvc.Upload(ctx, key, f, fi.Size(), "image/jpeg")
+	if err != nil {
+		logger.Errorf("uploadFrameToStorage: upload failed for shot %d: %v", shot.ShotNo, err)
+		return ""
+	}
+	return ossURL
+}
+
+// chainLastFrameToNextShot 在分镜视频生成完成后提取最后一帧，写入下一个分镜的 reference_image_url。
+// 非阻塞：调用方应在 goroutine 中调用此函数。
+func (s *VideoService) chainLastFrameToNextShot(shot *model.StoryboardShot) {
+	// 1. 找下一个分镜
+	nextShot, err := s.storyboardRepo.GetByVideoAndShotNo(shot.VideoID, shot.ShotNo+1)
+	if err != nil || nextShot == nil {
+		return // 已是最后一镜或查询失败，无需链接
+	}
+	if nextShot.ReferenceImageURL != "" {
+		return // 已有末帧，跳过（避免重复提取）
+	}
+
+	// 2. 确定视频本地路径（优先 file:// 本地文件，其次从远程 URL 下载）
+	clipLocalPath := ""
+	if strings.HasPrefix(shot.ClipPath, "file://") {
+		clipLocalPath = strings.TrimPrefix(shot.ClipPath, "file://")
+	} else {
+		videoURL := shot.VideoURL
+		if shot.ClipPath != "" && !strings.HasPrefix(shot.ClipPath, "file://") {
+			videoURL = shot.ClipPath
+		}
+		if videoURL == "" {
+			logger.Errorf("chainLastFrameToNextShot: shot %d has no video URL/path", shot.ShotNo)
+			return
+		}
+		tmp, dlErr := downloadToTemp(videoURL, "inkframe-chain-", ".mp4")
+		if dlErr != nil {
+			logger.Errorf("chainLastFrameToNextShot: shot %d download failed: %v", shot.ShotNo, dlErr)
+			return
+		}
+		defer os.Remove(tmp)
+		clipLocalPath = tmp
+	}
+
+	// 3. 提取最后一帧
+	lastFramePath, err := s.extractLastFrame(clipLocalPath)
+	if err != nil {
+		logger.Errorf("chainLastFrameToNextShot: shot %d extractLastFrame failed: %v", shot.ShotNo, err)
+		return
+	}
+	defer os.Remove(lastFramePath)
+
+	// 4. 上传到 OSS（或保留本地路径）
+	frameURL := s.uploadFrameToStorage(shot, lastFramePath)
+	if frameURL == "" {
+		// OSS 未配置或上传失败：直接复制到持久临时文件
+		persistPath := fmt.Sprintf("%s/inkframe-lastframe-persist-%d.jpg", inkframeTempDir(), shot.ID)
+		if copyErr := copyFile(lastFramePath, persistPath); copyErr != nil {
+			logger.Errorf("chainLastFrameToNextShot: shot %d persist fallback failed: %v", shot.ShotNo, copyErr)
+			return
+		}
+		frameURL = "file://" + persistPath
+	}
+
+	// 5. 写入下一分镜的 reference_image_url
+	if dbErr := s.storyboardRepo.UpdateFields(nextShot.ID, map[string]interface{}{
+		"reference_image_url": frameURL,
+	}); dbErr != nil {
+		logger.Errorf("chainLastFrameToNextShot: shot %d → nextShot %d UpdateFields failed: %v", shot.ShotNo, nextShot.ShotNo, dbErr)
+		return
+	}
+	logger.Printf("chainLastFrameToNextShot: shot %d → nextShot %d reference_image_url=%s", shot.ShotNo, nextShot.ShotNo, frameURL)
+}
+
+// copyFile 将 src 文件复制到 dst（供 chainLastFrameToNextShot 在无 OSS 时持久化末帧）。
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
+}
+
 // emotionToKlingParams 根据情绪/摄像机类型映射最优的 Kling 生成参数。
 // 动作/史诗场景使用 pro 模式 + 10 秒时长，获得更高画质；
 // 风景/全景使用高 CFG + 10 秒；对话/温情使用 5 秒防止内容填充。
@@ -1014,14 +1127,22 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 
 	logger.Printf("GenerateShotVideo: shot %d provider=%s aspect=%s duration=%.2fs", shot.ShotNo, providerName, videoAspectRatio, shot.Duration)
 
-	// 参考图策略：
-	//   ① shot.ImageURL 已生成 → 直接复用（最优质量）
-	//   ② ImageURL 为空 + 角色三视图/场景锚点存在 → 直接用这些作参考图（跳过图片生成）
-	//   ③ ImageURL 为空 + 无任何参考图 → 先生成场景图再用
-	referenceImage := shot.ReferenceImageURL
+	// 参考图策略（优先级从高到低）：
+	//   ① shot.ReferenceImageURL 非空（上一镜最后一帧）→ I2V 时序链接，最高优先级
+	//   ② shot.ReferenceImageURL 空 + shot.ImageURL 已生成 → 复用场景图
+	//   ③ 两者均空 + 角色三视图/场景锚点存在 → 直接用这些作参考图
+	//   ④ 无任何参考图 → 先生成场景图
+	referenceImage := ""
 	var refLabel string // HappyHorse r2v: label for referenceImage ("角色名" or "")
-	if shot.ImageURL != "" {
-		// ① 已有正式镜头图，直接复用，无需再次生成
+
+	if shot.ReferenceImageURL != "" {
+		// ① 上一镜最后一帧（I2V 链接）：作为主参考图，保证时序连贯
+		referenceImage = shot.ReferenceImageURL
+		logger.Printf("GenerateShotVideo: shot %d using last-frame I2V reference: %s", shot.ShotNo, referenceImage)
+		// ImageURL（静态场景图）降级为附加参考图，维持外观一致性
+		// （extraRefImages 在下方逻辑中追加）
+	} else if shot.ImageURL != "" {
+		// ② 已有正式镜头图，直接复用，无需再次生成
 		referenceImage = shot.ImageURL
 		logger.Printf("GenerateShotVideo: shot %d reusing existing ImageURL as reference: %s", shot.ShotNo, shot.ImageURL)
 		// 迁移旧的本地 DB 路径到 OSS，同时永久更新 DB（只做一次）
@@ -1036,7 +1157,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 			}
 		}
 	} else {
-		// ② 尝试从角色三视图 + 场景锚点收集参考图，若能凑齐则跳过图片生成步骤
+		// ③④ 无正式场景图
 		var charRefImages []string // 按 CharacterIDs 顺序排列，严格一一对应
 		var charRefNames []string  // 与 charRefImages 并行：用于 r2v [Image N] 注解
 		var sceneRefImage string
@@ -1048,10 +1169,8 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 					chapterNo = chapter.ChapterNo
 				}
 			}
-			// 按 CharacterIDs 顺序逐个查找，保持与分镜角色的严格对应
 			chars, charErr := s.characterRepo.ListByIDs([]uint(shot.CharacterIDs))
 			if charErr == nil && len(chars) > 0 {
-				// 建立 ID→Character 映射，确保按 CharacterIDs 中的顺序输出（而非 DB 返回顺序）
 				charMap := make(map[uint]*model.Character, len(chars))
 				for _, c := range chars {
 					charMap[c.ID] = c
@@ -1082,9 +1201,9 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		}
 
 		if len(charRefImages) > 0 || sceneRefImage != "" {
-			// ② 有角色三视图或场景图，直接用，无需生成中间图片
+			// ③ 有角色三视图或场景图，直接用，无需生成中间图片
 			if len(charRefImages) > 0 {
-				referenceImage = charRefImages[0] // 第一个角色三视图作主参考图
+				referenceImage = charRefImages[0]
 				if len(charRefNames) > 0 {
 					refLabel = charRefNames[0]
 				}
@@ -1092,12 +1211,10 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 				referenceImage = sceneRefImage
 				sceneRefImage = ""
 			}
-			// 其余角色三视图 + 场景图暂存到 shot.ReferenceImageURL（仅内存，不持久化）
-			// 后面 extraRefImages 逻辑会统一读取
-			_ = sceneRefImage // 场景图在下方 extraRefImages 逻辑中通过 sceneAnchorSvc 再次获取
+			_ = sceneRefImage
 			logger.Printf("GenerateShotVideo: shot %d no ImageURL — using char refs=%d scene=%v directly", shot.ShotNo, len(charRefImages), sceneRefImage != "")
 		} else {
-			// ③ 无任何参考图 → 先生成场景图
+			// ④ 无任何参考图 → 先生成场景图
 			logger.Printf("GenerateShotVideo: shot %d ImageURL empty and no char refs, generating image first", shot.ShotNo)
 			frameURL, frameErr := s.generateShotReferenceImage(shot)
 			if frameErr != nil {
@@ -1124,11 +1241,32 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		}
 	}
 
+	// 上一镜头衔接描述：查询前一个分镜的 MotionPrompt，注入"从...继续"语义
+	prevShotDesc := ""
+	if shot.ShotNo > 1 && s.storyboardRepo != nil {
+		if prev, prevErr := s.storyboardRepo.GetByVideoAndShotNo(shot.VideoID, shot.ShotNo-1); prevErr == nil && prev != nil {
+			desc := prev.MotionPrompt
+			if desc == "" {
+				desc = prev.Description
+			}
+			if len([]rune(desc)) > 80 {
+				desc = string([]rune(desc)[:80]) + "..."
+			}
+			if desc != "" {
+				prevShotDesc = desc
+			}
+		}
+	}
+
 	// 场景锚点：将锁定词注入视频生成 prompt
 	// 优先使用运镜提示词（MotionPrompt），若为空则降级到静态画面描述（Prompt）
 	videoPrompt := shot.MotionPrompt
 	if videoPrompt == "" {
 		videoPrompt = shot.Prompt
+	}
+	// 注入衔接上一镜头的延续描述（仅在无 I2V 末帧时补充文字引导；有末帧时模型已能自动延续）
+	if prevShotDesc != "" && shot.ReferenceImageURL == "" {
+		videoPrompt = "continuing from previous shot (" + prevShotDesc + "), " + videoPrompt
 	}
 	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
 		if fragment, _, err := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); err == nil && fragment != "" {
@@ -1241,6 +1379,13 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	var extraRefImages []string
 	var extraRefLabels []string // HappyHorse r2v：与 extraRefImages 并行的标签（角色名 / "场景背景"）
 	multiImageProviders := map[string]bool{"seedance": true, "kling": true, "happyhorse": true}
+	// I2V 模式：shot.ImageURL（静态场景图）追加为第一额外参考图，维持外观一致性
+	if shot.ReferenceImageURL != "" && shot.ImageURL != "" && multiImageProviders[providerName] {
+		if absImg := s.resolveAbsURL(shot.ImageURL); absImg != "" && absImg != s.resolveAbsURL(referenceImage) {
+			extraRefImages = append(extraRefImages, absImg)
+			extraRefLabels = append(extraRefLabels, "场景参考")
+		}
+	}
 	if multiImageProviders[providerName] && s.characterRepo != nil && len(shot.CharacterIDs) > 0 {
 		chapterNo := 0
 		if shot.ChapterID != nil && s.chapterRepo != nil {
