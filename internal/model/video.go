@@ -208,6 +208,14 @@ type StoryboardShot struct {
 	// 音效（SFX）
 	SFXTags string `json:"sfx_tags" gorm:"size:2000"` // LLM提取的音效标签（JSON对象或数组字符串）
 
+	// ── 同步时间轴 ─────────────────────────────────────────────────────────────
+	// ActualVideoDuration：视频生成完成后实测的真实时长（秒）。0 表示未测量，回退到 Duration。
+	ActualVideoDuration float64 `json:"actual_video_duration" gorm:"type:decimal(8,3);default:0"`
+	// TimelineStart：本镜头在最终合成视频中的绝对开始时刻（秒）。由 ComputeTimeManifest 计算写入。
+	TimelineStart float64 `json:"timeline_start" gorm:"type:decimal(10,3);default:0"`
+	// VoiceDelay：配音相对镜头开始的偏移（秒）。负值=J-cut提前入声，正值=L-cut延后入声。
+	VoiceDelay float64 `json:"voice_delay" gorm:"type:decimal(6,3);default:0"`
+
 	CreatedAt time.Time      `json:"created_at"`
 	UpdatedAt time.Time      `json:"updated_at"`
 	DeletedAt gorm.DeletedAt `json:"deleted_at,omitempty" gorm:"index"`
@@ -494,4 +502,5 @@ type BatchGenerateShotsRequest struct {
 	Provider    string `json:"provider"`     // video provider override (e.g. "kling", "seedance")
 	Force       bool   `json:"force"`        // true = regenerate even if image already exists
 	Sequential  bool   `json:"sequential"`   // true = 顺序生成（I2V 链接保障），慢但连贯
+	VoiceFirst  bool   `json:"voice_first"`  // true = 先生成 TTS，以配音时长决定视频时长，保证声画同步
 }

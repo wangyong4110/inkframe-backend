@@ -607,6 +607,9 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.POST("/:id/shots/sfx", cfg.VideoHandler.BatchGenerateSFX)
 			videos.POST("/:id/shots/sfx-tags", cfg.VideoHandler.AnalyzeSFXTags)
 			videos.POST("/:id/shots/batch-voice", cfg.VideoHandler.BatchGenerateVoice)
+			// 声画同步时间轴
+			videos.POST("/:id/compute-timeline", cfg.VideoHandler.ComputeTimeline)
+			videos.GET("/:id/sync-manifest", cfg.VideoHandler.GetSyncManifest)
 			// BGM 背景音乐
 			videos.GET("/:id/bgm/segments", cfg.VideoHandler.ListBGMSegments)
 			videos.GET("/:id/bgm/search", cfg.VideoHandler.JamendoSearchBGM)

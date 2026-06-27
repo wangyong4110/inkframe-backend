@@ -116,10 +116,14 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		var shots []*model.StoryboardShot
 		var genErr error
-		if req.Sequential {
+		switch {
+		case req.VoiceFirst:
+			// 配音优先：先生成 TTS，以配音时长决定视频时长，保证声画同步
+			shots, genErr = h.videoService.VoiceFirstGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, progressFn, req.Provider)
+		case req.Sequential:
 			// 顺序模式：每镜完成后同步 chain 最后一帧再提交下一镜，保证 I2V 链接
 			shots, genErr = h.videoService.SequentialGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, progressFn, req.Provider)
-		} else {
+		default:
 			shots, genErr = h.videoService.BatchGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, progressFn, req.Provider)
 		}
 		if genErr != nil {
@@ -804,6 +808,46 @@ func (h *VideoHandler) Export(c *gin.Context) {
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, result.Filename))
 	c.Header("Content-Length", strconv.Itoa(len(result.Data)))
 	c.Data(http.StatusOK, result.ContentType, result.Data)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 声画同步时间轴
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ComputeTimeline POST /videos/:id/compute-timeline
+// 计算所有分镜的绝对时间轴（timeline_start），写入 DB，并返回同步清单和 FFmpeg 脚本。
+func (h *VideoHandler) ComputeTimeline(c *gin.Context) {
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
+	manifest, err := h.videoService.ComputeTimeManifest(uint(videoID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, manifest)
+}
+
+// GetSyncManifest GET /videos/:id/sync-manifest
+// 获取最新同步清单（只读，不重新计算时间轴）。
+func (h *VideoHandler) GetSyncManifest(c *gin.Context) {
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
+	manifest, err := h.videoService.ComputeTimeManifest(uint(videoID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, manifest)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

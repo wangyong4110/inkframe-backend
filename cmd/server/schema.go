@@ -225,6 +225,10 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_storyboard_shot", "subtitle", "TEXT NULL"},
 		// ink_character 统一形象提示词（含人种/时代/身份，语言跟随项目设置，2026-06-27）
 		{"ink_character", "appearance_prompt", "TEXT NULL"},
+		// ink_storyboard_shot 声画同步时间轴字段（2026-06-27）
+		{"ink_storyboard_shot", "actual_video_duration", "DECIMAL(8,3) NOT NULL DEFAULT 0"},
+		{"ink_storyboard_shot", "timeline_start",        "DECIMAL(10,3) NOT NULL DEFAULT 0"},
+		{"ink_storyboard_shot", "voice_delay",           "DECIMAL(6,3) NOT NULL DEFAULT 0"},
 	}
 	for _, a := range additions {
 		// 表不存在时跳过（AutoMigrate 会建表，建表时列也会随 struct 定义一同创建）

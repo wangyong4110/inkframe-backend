@@ -2196,3 +2196,84 @@ func (s *VideoService) SequentialGenerateShots(videoID uint, shotIDs []uint, qua
 	logger.Printf("SequentialGenerateShots: videoID=%d done %d/%d shots", videoID, len(completed), total)
 	return completed, nil
 }
+
+// VoiceFirstGenerateShots 配音优先模式：
+//  阶段1 - 并发为所有分镜生成 TTS，测量实际配音时长
+//  阶段2 - 将各分镜 Duration 更新为配音时长（保证视频不短于配音）
+//  阶段3 - 调用 BatchGenerateShots 正常生成视频
+// 这样视频生成时已知精确目标时长，从根本上消除配音溢出问题。
+func (s *VideoService) VoiceFirstGenerateShots(videoID uint, shotIDs []uint, qualityTierOverride string, progressFn func(int), provider ...string) ([]*model.StoryboardShot, error) {
+	logger.Printf("[VoiceFirst] videoID=%d shots=%d: Phase1 TTS start", videoID, len(shotIDs))
+
+	// ── Phase 1: 并发 TTS ────────────────────────────────────────────────────
+	video, err := s.videoRepo.GetByID(videoID)
+	if err != nil {
+		return nil, err
+	}
+	allShots, err := s.storyboardRepo.BatchGetByIDs(shotIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	// 确定旁白音色（复用 BatchGenerateShotAudio 的默认逻辑）
+	narrationVoice := ""
+	if video.NovelID > 0 && s.novelRepo != nil {
+		if novel, ne := s.novelRepo.GetByID(video.NovelID); ne == nil {
+			narrationVoice = novel.VideoConf().NarrationVoice
+		}
+	}
+
+	var wg sync.WaitGroup
+	const ttsConc = 4
+	ttssSem := make(chan struct{}, ttsConc)
+	for _, shot := range allShots {
+		if shot.VideoID != videoID {
+			continue
+		}
+		sh := shot
+		wg.Add(1)
+		ttssSem <- struct{}{}
+		go func() {
+			defer func() { <-ttssSem; wg.Done() }()
+			if genErr := s.GenerateShotAudio(sh, s.videoTenantID(video), narrationVoice); genErr != nil {
+				logger.Errorf("[VoiceFirst] shot %d TTS failed: %v", sh.ShotNo, genErr)
+			}
+		}()
+	}
+	wg.Wait()
+	logger.Printf("[VoiceFirst] videoID=%d: Phase1 TTS done", videoID)
+
+	// ── Phase 2: 用配音时长更新 shot.Duration ────────────────────────────────
+	for _, shot := range allShots {
+		if shot.VideoID != videoID || s.segmentRepo == nil {
+			continue
+		}
+		segs, e := s.segmentRepo.ListByShotID(shot.ID)
+		if e != nil || len(segs) == 0 {
+			continue
+		}
+		var totalVoice float64
+		for _, seg := range segs {
+			totalVoice += seg.DurationSecs
+		}
+		if totalVoice <= 0 {
+			continue
+		}
+		const buffer = 0.3
+		target := totalVoice + buffer
+		if target > shot.Duration {
+			if ue := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"duration": target}); ue != nil {
+				logger.Errorf("[VoiceFirst] update shot %d duration: %v", shot.ShotNo, ue)
+			} else {
+				logger.Printf("[VoiceFirst] shot %d duration %.1fs→%.1fs (voice=%.1fs)", shot.ShotNo, shot.Duration, target, totalVoice)
+			}
+		}
+	}
+
+	// ── Phase 3: 正常批量生成视频 ─────────────────────────────────────────────
+	logger.Printf("[VoiceFirst] videoID=%d: Phase3 video generation start", videoID)
+	if progressFn != nil {
+		progressFn(10) // TTS阶段已完成，标记10%进度
+	}
+	return s.BatchGenerateShots(videoID, shotIDs, qualityTierOverride, progressFn, provider...)
+}

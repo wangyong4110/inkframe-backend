@@ -12,6 +12,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -93,6 +94,12 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 		}
 		shot.Status = "completed"
 		shot.Progress = 100
+		// 测量实际视频时长（优先 ffprobe 本地文件；失败则信任 target Duration）
+		if dur := probeVideoDuration(shot.ClipPath, shot.Duration); dur > 0 {
+			shot.ActualVideoDuration = dur
+		} else {
+			shot.ActualVideoDuration = shot.Duration
+		}
 		// 提取上一帧并写入下一分镜的 reference_image_url（I2V 时序链接）
 		go s.chainLastFrameToNextShot(shot)
 	case "failed", "error":
@@ -1506,4 +1513,30 @@ func (s *VideoService) waitForShotCompletion(shot *model.StoryboardShot, timeout
 		time.Sleep(5 * time.Second)
 	}
 	return nil, fmt.Errorf("shot %d timed out after %v", shot.ShotNo, timeout)
+}
+
+// probeVideoDuration 用 ffprobe 测量本地视频文件的实际时长。
+// 若 ffprobe 不可用或文件不是本地路径，返回 fallback（即 shot.Duration）。
+func probeVideoDuration(clipPath string, fallback float64) float64 {
+	path := strings.TrimPrefix(clipPath, "file://")
+	if path == "" || strings.HasPrefix(clipPath, "http") {
+		return fallback
+	}
+	if _, err := os.Stat(path); err != nil {
+		return fallback
+	}
+	out, err := exec.Command("ffprobe",
+		"-v", "error",
+		"-show_entries", "format=duration",
+		"-of", "default=noprint_wrappers=1:nokey=1",
+		path,
+	).Output()
+	if err != nil {
+		return fallback
+	}
+	dur, err := strconv.ParseFloat(strings.TrimSpace(string(out)), 64)
+	if err != nil || dur <= 0 {
+		return fallback
+	}
+	return dur
 }
