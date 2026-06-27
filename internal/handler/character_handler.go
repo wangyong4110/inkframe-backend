@@ -1357,6 +1357,48 @@ func (h *CharacterHandler) GenerateLookVisualPrompt(c *gin.Context) {
 	respondAccepted(c, task.TaskID, "形象提示词生成任务已提交")
 }
 
+// GenerateAppearanceDesign POST /characters/:id/generate-appearance（异步任务）
+// AI 根据角色描述+世界观生成时代准确的统一英文形象提示词（含人种），存入 AppearancePromptEN 并更新默认 look。
+func (h *CharacterHandler) GenerateAppearanceDesign(c *gin.Context) {
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	tenantID := getTenantID(c)
+	char, err := h.characterService.GetCharacter(uint(id))
+	if err != nil || !h.charBelongsToTenant(char, c) {
+		respondErr(c, http.StatusNotFound, "character not found")
+		return
+	}
+	if char.Description == "" {
+		respondBadRequest(c, "角色描述为空，请先填写角色描述")
+		return
+	}
+
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeLookPromptGen, "形象设计生成", "character", uint(id))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[CharacterHandler] GenerateAppearanceDesign task %s panic: %v", taskID, r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		prompt, err := h.characterService.GenerateCostumeDesign(tenantID, uint(id))
+		if err != nil {
+			logger.Errorf("[CharacterHandler] GenerateAppearanceDesign task %s failed: %v", taskID, err)
+			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
+		} else {
+			h.taskSvc.Complete(taskID, map[string]interface{}{"appearance_prompt": prompt}) //nolint:errcheck
+		}
+	}(task.TaskID)
+	respondAccepted(c, task.TaskID, "形象设计生成任务已提交")
+}
+
 // GenerateLookImages POST /characters/:id/looks/:look_id/images（异步任务）
 func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 	id, ok := parseID(c, "id")

@@ -31,6 +31,10 @@ type Character struct {
 	// JSON格式: {"vocabulary_level":"...","speech_habits":[...],"emotional_expression":"...","forbidden_phrases":[...],"signature_expressions":[...],"overall_voice":"..."}
 	VoiceProfile string `json:"voice_profile,omitempty" gorm:"column:voice_profile;type:text"`
 
+	// AI 生成的统一形象提示词（含人种/时代/身份，语言跟随 novel.PromptLanguage）
+	// 由 GenerateCostumeDesign 生成，优先级低于 CharacterLook.VisualPrompt
+	AppearancePrompt string `json:"appearance_prompt,omitempty" gorm:"column:appearance_prompt;type:text"`
+
 	// 默认形象 ID（指向 ink_character_look 主键；0 表示未设置）
 	DefaultLookID uint `json:"default_look_id" gorm:"default:0"`
 

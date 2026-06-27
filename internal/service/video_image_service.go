@@ -855,9 +855,11 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 }
 
 // buildCharTextAnchor 从角色基本信息构建文本锚点，用于无 VisualPrompt 时的最低限度外貌约束。
-// 注入后图像模型至少知道此角色应出现在画面中，避免生成纯背景图。
-// 描述截断为 50 个 rune，防止大量文本稀释场景/动作信息。
+// 优先使用 AppearancePromptEN（AI 生成的时代准确形象提示词），兜底才用截断描述。
 func buildCharTextAnchor(char *model.Character) string {
+	if char.AppearancePrompt != "" {
+		return char.AppearancePrompt
+	}
 	anchor := char.Name
 	if char.Description != "" {
 		desc := char.Description

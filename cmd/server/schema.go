@@ -223,6 +223,8 @@ func ensureCriticalColumns(db *gorm.DB) {
 		{"ink_storyboard_shot", "transition_in",  "TEXT NULL"},
 		// 时间转场画面叠字（2026-06-27）
 		{"ink_storyboard_shot", "subtitle", "TEXT NULL"},
+		// ink_character 统一形象提示词（含人种/时代/身份，语言跟随项目设置，2026-06-27）
+		{"ink_character", "appearance_prompt", "TEXT NULL"},
 	}
 	for _, a := range additions {
 		// 表不存在时跳过（AutoMigrate 会建表，建表时列也会随 struct 定义一同创建）

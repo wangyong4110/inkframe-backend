@@ -566,6 +566,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			characters.POST("/:id/looks", cfg.CharacterHandler.CreateCharacterLook)
 			characters.GET("/:id/looks/active", cfg.CharacterHandler.GetActiveLook)
 			characters.POST("/:id/looks/generate-prompt", cfg.CharacterHandler.GenerateLookVisualPrompt)
+			characters.POST("/:id/generate-appearance", cfg.CharacterHandler.GenerateAppearanceDesign)
 			characters.PUT("/:id/looks/:look_id", cfg.CharacterHandler.UpdateCharacterLook)
 			characters.DELETE("/:id/looks/:look_id", cfg.CharacterHandler.DeleteCharacterLook)
 			characters.POST("/:id/looks/:look_id/images", cfg.CharacterHandler.GenerateLookImages)

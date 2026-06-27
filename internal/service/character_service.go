@@ -2446,3 +2446,124 @@ func (s *CharacterService) GenerateChapterImages(
 		novelID, chapter.ChapterNo, succeeded, failed)
 	return succeeded, failed, nil
 }
+
+// GenerateCostumeDesign 基于角色描述和世界观背景，AI 生成符合时代背景的统一形象提示词。
+// 提示词语言跟随 novel.PromptLanguage（zh=中文，en=英文）。
+// 输出存入 Character.AppearancePrompt，并同步更新默认 CharacterLook.VisualPrompt。
+// 对于人类角色，提示词中必须明确标注人种。
+func (s *CharacterService) GenerateCostumeDesign(tenantID, characterID uint) (string, error) {
+	char, err := s.characterRepo.GetByID(characterID)
+	if err != nil {
+		return "", fmt.Errorf("character not found: %w", err)
+	}
+	if char.Description == "" {
+		return "", fmt.Errorf("角色描述为空，请先填写角色描述")
+	}
+
+	// 获取小说/世界观上下文及语言设置
+	promptLanguage := "zh"
+	var worldContext string
+	if s.novelRepo != nil {
+		if novel, e := s.novelRepo.GetByID(char.NovelID); e == nil {
+			if novel.PromptLanguage != "" {
+				promptLanguage = novel.PromptLanguage
+			}
+			worldContext = fmt.Sprintf("%s（%s）：%s", novel.Title, novel.Genre, novel.Description)
+			if novel.Worldview != nil {
+				if novel.Worldview.Description != "" {
+					worldContext += "\n世界设定：" + novel.Worldview.Description
+				}
+				if novel.Worldview.Culture != "" {
+					worldContext += "\n文化习俗：" + truncateRunes(novel.Worldview.Culture, 400)
+				}
+				if novel.Worldview.Geography != "" {
+					worldContext += "\n地理文明：" + truncateRunes(novel.Worldview.Geography, 200)
+				}
+			}
+		}
+	}
+
+	genderAnchor := "1person"
+	switch char.Gender {
+	case "male":
+		genderAnchor = "1boy"
+	case "female":
+		genderAnchor = "1girl"
+	}
+
+	var sysPrompt string
+	if promptLanguage == "en" {
+		sysPrompt = fmt.Sprintf(`You are a professional costume designer, art director, and visual stylist specializing in period-accurate fiction illustration.
+
+Analyze the character and world background below, then produce a single English visual prompt paragraph for AI image generation.
+
+=== WORLD BACKGROUND ===
+%s
+
+=== CHARACTER ===
+Name: %s | Role: %s | Age: %s | Gender: %s
+Description: %s
+
+=== DESIGN RULES ===
+1. ETHNICITY (mandatory for human characters): Infer ethnicity from the world setting (East Asian / South Asian / Southeast Asian / Middle Eastern / Black African / White European / Latin American / Central Asian). State it explicitly. For non-human species, describe species-specific features.
+2. PERIOD ACCURACY: Materials, dye colors, and fastenings must match the world's technology era. No anachronistic elements.
+3. STATUS: Fabric quality, decoration density, and color saturation must reflect the character's rank/wealth.
+4. LAYERING: Describe inner layer → main robe/jacket → outer wrap → belt/sash.
+5. HAIR & HEADWEAR: Era- and status-appropriate. No modern hairstyles.
+6. CONDITION: Note whether clothing is new / lightly worn / battle-worn / ceremonially clean.
+
+Output a single paragraph (150-250 words) starting with "%s". No JSON. No explanation. Only the visual prompt.`, worldContext, char.Name, char.Role, char.Age, char.Gender, char.Description, genderAnchor)
+	} else {
+		sysPrompt = fmt.Sprintf(`你是专业的服装设计师、艺术指导和视觉造型师，擅长为历史/架空题材小说设计符合时代背景的角色造型。
+
+根据以下角色信息和世界观背景，生成一段适用于 AI 图像生成的角色外观描述提示词。
+
+=== 世界观背景 ===
+%s
+
+=== 角色信息 ===
+姓名：%s | 定位：%s | 年龄：%s | 性别：%s
+描述：%s
+
+=== 设计规则 ===
+1. 人种（人类角色必填）：根据世界观背景推断角色人种（东亚人、南亚人、东南亚人、中东人、黑人/非洲裔、白人/欧裔、拉丁裔、中亚人等），必须在提示词中明确注明。非人类种族（精灵、妖族等）则描述其种族特征。
+2. 时代准确性：服装材质、染色工艺、扣件方式必须符合该世界的技术水平，不能出现时代错误的元素。
+3. 身份地位：布料质感、装饰繁简、色彩饱和度须体现角色阶级/财富。贵族=细丝绸+繁复刺绣+浓郁色彩，平民=粗麻布+素色+磨损感。
+4. 分层叠穿：描述内层（领口/袖口可见）→ 主体服装 → 外罩/披风 → 腰带/组绶体系。
+5. 发型与头冠：须符合性别、年龄、身份、场合的时代规范，不得出现现代发型。
+6. 着装状态：注明服装新旧程度（崭新/轻微磨损/征战损伤/礼仪整洁/风尘仆仆）。
+
+输出一段150-250字的描述，以"%s"开头。不要输出 JSON，不要任何解释，只输出提示词本身。`, worldContext, char.Name, char.Role, char.Age, char.Gender, char.Description, genderAnchor)
+	}
+
+	result, err := s.aiService.GenerateWithProvider(tenantID, char.NovelID, "character_profile", sysPrompt, "",
+		StoryboardOverrides{MaxTokens: 1024})
+	if err != nil {
+		return "", fmt.Errorf("AI generation failed: %w", err)
+	}
+	prompt := strings.TrimSpace(result)
+	if prompt == "" {
+		return "", fmt.Errorf("AI returned empty result")
+	}
+
+	// 保存到 Character.AppearancePrompt
+	char.AppearancePrompt = prompt
+	if err := s.characterRepo.Update(char); err != nil {
+		logger.Errorf("[GenerateCostumeDesign] update char %d AppearancePrompt: %v", characterID, err)
+	}
+
+	// 同步更新默认 look 的 VisualPrompt（确保 look-based 生成路径也受益）
+	s.upsertDefaultLookVisualPrompt(characterID, char.NovelID, prompt)
+
+	logger.Printf("[GenerateCostumeDesign] charID=%d lang=%s generated %d chars", characterID, promptLanguage, len(prompt))
+	return prompt, nil
+}
+
+// truncateRunes 截断字符串到最多 n 个 rune，防止超长世界观内容稀释 prompt。
+func truncateRunes(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n]) + "..."
+}
