@@ -204,11 +204,21 @@ func (h *VideoHandler) GetStoryboard(c *gin.Context) {
 		return
 	}
 
+	shotIDs := make([]uint, len(shots))
+	for i, s := range shots {
+		shotIDs[i] = s.ID
+	}
+	audioMap := h.videoService.GetShotAudioMap(shotIDs)
+
 	result := make([]shotWithAudio, len(shots))
 	for i, s := range shots {
+		audioURL := ""
+		if _, hasAudio := audioMap[s.ID]; hasAudio {
+			audioURL = resolveAudioURL(uint(videoId), s)
+		}
 		result[i] = shotWithAudio{
 			StoryboardShot: s,
-			AudioURL:       resolveAudioURL(uint(videoId), s),
+			AudioURL:       audioURL,
 		}
 	}
 	respondOK(c, result)

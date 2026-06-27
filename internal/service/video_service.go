@@ -1136,3 +1136,12 @@ func (s *VideoService) BatchGenerateShotClips(videoID uint, shotIDs []uint, prog
 	logger.Printf("BatchGenerateShotClips: all %d shots done for videoID=%d", len(queued), videoID)
 	return queued, nil
 }
+
+// GetShotAudioMap returns a map of shot IDs that have at least one generated audio segment.
+// Only shot IDs present in the returned map have audio available for playback.
+func (s *VideoService) GetShotAudioMap(shotIDs []uint) map[uint]string {
+	if s.segmentRepo == nil {
+		return nil
+	}
+	return s.segmentRepo.GetFirstAudioByShotIDs(shotIDs)
+}
