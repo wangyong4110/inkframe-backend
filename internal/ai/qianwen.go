@@ -406,8 +406,9 @@ func (p *QianwenProvider) wanxImageGenerateAsync(ctx context.Context, start time
 			Output struct {
 				TaskStatus string `json:"task_status"`
 				Results    []struct {
-					URL  string `json:"url"`
-					Code string `json:"code"`
+					URL     string `json:"url"`
+					Code    string `json:"code"`
+					Message string `json:"message"`
 				} `json:"results"`
 			} `json:"output"`
 			Code    string `json:"code"`
@@ -429,8 +430,22 @@ func (p *QianwenProvider) wanxImageGenerateAsync(ctx context.Context, start time
 			}
 			return &ImageResponse{URL: taskOut.Output.Results[0].URL, LatencyMs: time.Since(start).Milliseconds()}, nil
 		case "FAILED":
+			// 优先取 results[0] 的具体原因，再取顶层 message
+			failReason := ""
+			if len(taskOut.Output.Results) > 0 && taskOut.Output.Results[0].Code != "" {
+				failReason = taskOut.Output.Results[0].Code
+				if taskOut.Output.Results[0].Message != "" {
+					failReason += ": " + taskOut.Output.Results[0].Message
+				}
+			} else if taskOut.Message != "" {
+				failReason = taskOut.Message
+			}
+			errMsg := fmt.Sprintf("Wan 图像任务失败: task_id=%s", taskID)
+			if failReason != "" {
+				errMsg += " reason=" + failReason
+			}
 			return &ImageResponse{
-				Error:     fmt.Sprintf("Wan 图像任务失败: task_id=%s", taskID),
+				Error:     errMsg,
 				LatencyMs: time.Since(start).Milliseconds(),
 			}, nil
 		}
