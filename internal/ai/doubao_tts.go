@@ -111,6 +111,21 @@ func (p *DoubaoSpeechProvider) ImageGenerate(ctx context.Context, req *ImageGene
 //   - req.Pitch    → req_params.post_process.pitch（-12~12）
 //   - req.Emotion  → req_params.context_texts[0]（"请用{emotion}的语气说话"）
 //   - req.Language → req_params.additions.explicit_language（zh-cn/en/ja/es-mx 等）
+// doubaoSpeechResourceMismatchCode 是 Doubao TTS 返回的 resource-speaker 不匹配错误码。
+const doubaoSpeechResourceMismatchCode = 55000000
+
+// doubaoResourceMismatchErr 用于标识 resource ID 不匹配错误，以便上层重试。
+type doubaoResourceMismatchErr struct{ msg string }
+
+func (e *doubaoResourceMismatchErr) Error() string { return e.msg }
+
+// doubaoSpeechResourceFallbacks 当 resource ID 与 speaker 不匹配时的备选顺序。
+var doubaoSpeechResourceFallbacks = []string{
+	doubaoSpeechDefaultResourceID, // seed-tts-2.0
+	"doubao-character-tts",
+	"seed-icl-2.0",
+}
+
 func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRequest) (*AudioResponse, error) {
 	start := time.Now()
 
@@ -128,12 +143,66 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 		resourceID = "doubao-character-tts"
 	}
 
-	// ── audio_params ──────────────────────────────────────────────
+	// 构建请求参数（resource-independent）
+	body, err := p.buildDoubaoSpeechBody(req, speaker, resourceID)
+	if err != nil {
+		return nil, err
+	}
+
+	// 首次尝试
+	audioData, totalTextWords, err := p.doDoubaoSpeechRequest(ctx, body, resourceID)
+	if err != nil {
+		// 55000000 = resource ID 与 speaker 不匹配 → 用备选 resource ID 重试一次
+		if _, ok := err.(*doubaoResourceMismatchErr); ok && req.Model == "" {
+			for _, fallback := range doubaoSpeechResourceFallbacks {
+				if fallback == resourceID {
+					continue
+				}
+				retryBody, buildErr := p.buildDoubaoSpeechBody(req, speaker, fallback)
+				if buildErr != nil {
+					continue
+				}
+				audioData, totalTextWords, err = p.doDoubaoSpeechRequest(ctx, retryBody, fallback)
+				if err == nil {
+					break
+				}
+				if _, stillMismatch := err.(*doubaoResourceMismatchErr); !stillMismatch {
+					break
+				}
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// 写入临时文件
+	tmpIDBytes := make([]byte, 8)
+	rand.Read(tmpIDBytes) //nolint:errcheck
+	tmpPath := fmt.Sprintf("/tmp/inkframe-tts-%s.mp3", hex.EncodeToString(tmpIDBytes))
+	if err := os.WriteFile(tmpPath, audioData, 0644); err != nil {
+		return nil, fmt.Errorf("doubao-speech: write temp file: %w", err)
+	}
+
+	durationSecs := float64(len(req.Text)) / 8.0
+	if totalTextWords > 0 {
+		durationSecs = float64(totalTextWords) / 5.0
+	}
+
+	return &AudioResponse{
+		URL:       "file://" + tmpPath,
+		Format:    "mp3",
+		Duration:  durationSecs,
+		LatencyMs: time.Since(start).Milliseconds(),
+	}, nil
+}
+
+// buildDoubaoSpeechBody 构建请求 JSON body，resource ID 影响 sub-model 字段。
+func (p *DoubaoSpeechProvider) buildDoubaoSpeechBody(req *AudioGenerateRequest, speaker, resourceID string) ([]byte, error) {
 	audioParams := map[string]interface{}{
 		"format":      "mp3",
 		"sample_rate": 24000,
 	}
-	// speech_rate: [-50,100]，从 Speed 倍率线性映射（1.0=0, 2.0=+100, 0.5=-50）
 	if req.Speed > 0 && req.Speed != 1.0 {
 		sr := int((req.Speed - 1.0) * 100)
 		if sr < -50 {
@@ -143,7 +212,6 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 		}
 		audioParams["speech_rate"] = sr
 	}
-	// loudness_rate: [-50,100]，从 Loudness 倍率线性映射（1.0=0, 2.0=+100, 0.5=-50）
 	if req.Loudness > 0 && req.Loudness != 1.0 {
 		lr := int((req.Loudness - 1.0) * 100)
 		if lr < -50 {
@@ -154,39 +222,27 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 		audioParams["loudness_rate"] = lr
 	}
 
-	// ── req_params ────────────────────────────────────────────────
 	reqParams := map[string]interface{}{
 		"text":         req.Text,
 		"speaker":      speaker,
 		"audio_params": audioParams,
 	}
 
-	// 子模型（seed-tts-2.0-standard / seed-tts-2.0-expressive）
-	// 有情感指令时需要 expressive；standard 时延更低
 	needsExpressive := req.Emotion != ""
 	subModel := "seed-tts-2.0-standard"
 	if needsExpressive {
 		subModel = "seed-tts-2.0-expressive"
 	}
-	// 仅 seed-tts-2.0 / seed-icl-2.0 需要子模型字段
 	if resourceID == "seed-tts-2.0" || resourceID == "seed-icl-2.0" {
 		reqParams["model"] = subModel
 	}
 
-	// 情感→语音指令（context_texts）
-	// expressive 模式支持语音指令，seed-tts-2.0 官方音色也可直接使用
 	if req.Emotion != "" {
-		reqParams["context_texts"] = []string{
-			fmt.Sprintf("请用%s的语气说话", req.Emotion),
-		}
+		reqParams["context_texts"] = []string{fmt.Sprintf("请用%s的语气说话", req.Emotion)}
 	}
-
-	// section_id：跨包语义保持
 	if req.SectionID != "" {
 		reqParams["section_id"] = req.SectionID
 	}
-
-	// pitch: post_process.pitch [-12,12]
 	if req.Pitch != 0 {
 		pitch := int(req.Pitch)
 		if pitch < -12 {
@@ -197,7 +253,6 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 		reqParams["post_process"] = map[string]interface{}{"pitch": pitch}
 	}
 
-	// additions：API 规范要求为 JSON 序列化字符串
 	additionsMap := map[string]interface{}{}
 	if req.Language != "" {
 		additionsMap["explicit_language"] = req.Language
@@ -212,27 +267,22 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 		additionsMap["disable_markdown_filter"] = true
 	}
 	if len(additionsMap) > 0 {
-		additionsJSON, marshalErr := json.Marshal(additionsMap)
-		if marshalErr == nil {
+		if additionsJSON, err := json.Marshal(additionsMap); err == nil {
 			reqParams["additions"] = string(additionsJSON)
 		}
 	}
 
-	ttsBody := map[string]interface{}{
-		"req_params": reqParams,
-	}
+	return json.Marshal(map[string]interface{}{"req_params": reqParams})
+}
 
-	body, err := json.Marshal(ttsBody)
-	if err != nil {
-		return nil, fmt.Errorf("doubao-speech: marshal request: %w", err)
-	}
-
+// doDoubaoSpeechRequest 执行一次 TTS HTTP 请求并收集流式音频数据。
+// 当 API 返回 55000000 时返回 *doubaoResourceMismatchErr 以便调用方重试。
+func (p *DoubaoSpeechProvider) doDoubaoSpeechRequest(ctx context.Context, body []byte, resourceID string) (audioData []byte, totalTextWords int, err error) {
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", doubaoSpeechTTSEndpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
-	// 生成 request ID（UUID 格式）
 	idBytes := make([]byte, 16)
 	rand.Read(idBytes) //nolint:errcheck
 	requestID := fmt.Sprintf("%s-%s-%s-%s-%s",
@@ -250,20 +300,14 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 
 	resp, err := p.client.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("doubao-speech: request failed: %w", err)
+		return nil, 0, fmt.Errorf("doubao-speech: request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		errBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("doubao-speech: API error %d: %s", resp.StatusCode, string(errBody))
+		return nil, 0, fmt.Errorf("doubao-speech: API error %d: %s", resp.StatusCode, string(errBody))
 	}
-
-	// 读取 chunked JSON 流：每行一个完整 JSON 对象
-	// 兼容 SSE 格式（行首可能带 "data:" 前缀）
-	// 最终分块 code = 20000000
-	var audioData []byte
-	var totalTextWords int
 
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024)
@@ -278,16 +322,21 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 			continue
 		}
 		var chunk doubaoSpeechChunk
-		if err := json.Unmarshal(line, &chunk); err != nil {
+		if jsonErr := json.Unmarshal(line, &chunk); jsonErr != nil {
 			continue
 		}
+		if chunk.Code == doubaoSpeechResourceMismatchCode {
+			return nil, 0, &doubaoResourceMismatchErr{
+				msg: fmt.Sprintf("doubao-speech: resource ID %q mismatched with speaker (code=%d): %s", resourceID, chunk.Code, chunk.Message),
+			}
+		}
 		if chunk.Code != 0 && chunk.Code != doubaoSpeechFinalCode {
-			return nil, fmt.Errorf("doubao-speech: chunk error (code=%d): %s", chunk.Code, chunk.Message)
+			return nil, 0, fmt.Errorf("doubao-speech: chunk error (code=%d): %s", chunk.Code, chunk.Message)
 		}
 		if chunk.Data != "" {
 			decoded, decErr := base64.StdEncoding.DecodeString(chunk.Data)
 			if decErr != nil {
-				return nil, fmt.Errorf("doubao-speech: base64 decode: %w", decErr)
+				return nil, 0, fmt.Errorf("doubao-speech: base64 decode: %w", decErr)
 			}
 			audioData = append(audioData, decoded...)
 		}
@@ -299,32 +348,12 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("doubao-speech: read response: %w", err)
+		return nil, 0, fmt.Errorf("doubao-speech: read response: %w", err)
 	}
 	if len(audioData) == 0 {
-		return nil, fmt.Errorf("doubao-speech: no audio data received")
+		return nil, 0, fmt.Errorf("doubao-speech: no audio data received")
 	}
-
-	// 写入临时文件
-	tmpIDBytes := make([]byte, 8)
-	rand.Read(tmpIDBytes) //nolint:errcheck
-	tmpPath := fmt.Sprintf("/tmp/inkframe-tts-%s.mp3", hex.EncodeToString(tmpIDBytes))
-	if err := os.WriteFile(tmpPath, audioData, 0644); err != nil {
-		return nil, fmt.Errorf("doubao-speech: write temp file: %w", err)
-	}
-
-	// 时长估算：使用计费字数（约 5 字/秒），fallback 为文本长度 / 8
-	durationSecs := float64(len(req.Text)) / 8.0
-	if totalTextWords > 0 {
-		durationSecs = float64(totalTextWords) / 5.0
-	}
-
-	return &AudioResponse{
-		URL:       "file://" + tmpPath,
-		Format:    "mp3",
-		Duration:  durationSecs,
-		LatencyMs: time.Since(start).Milliseconds(),
-	}, nil
+	return audioData, totalTextWords, nil
 }
 
 // ─────────────────────────────────────────────────────────────
