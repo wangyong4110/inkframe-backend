@@ -469,8 +469,8 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 		return err
 	}
 	if localAudioURL == "" {
-		logger.Printf("GenerateShotAudio: TTS returned empty URL for shot %d", shot.ShotNo)
-		return nil
+		logger.Errorf("GenerateShotAudio: TTS returned empty URL for shot %d", shot.ShotNo)
+		return fmt.Errorf("TTS returned empty audio for shot %d", shot.ShotNo)
 	}
 
 	audioURL := localAudioURL

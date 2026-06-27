@@ -235,7 +235,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	}
 
 	totalRunes := len([]rune(content))
-	totalShots := calcTotalShots(totalRunes, video.TargetDuration, video.Pacing)
+	totalShots := calcTotalShots(totalRunes, video.RenderConfig.TargetDuration, video.RenderConfig.Pacing)
 
 	// 动态分段：确保每段期望镜头数 ≤ maxShotsPerAICall，防止超出 AI 模型输出 token 上限。
 	// 大多数模型输出上限 8192-16384 tokens；每个镜头约 700 tokens；12 镜 × 700 = 8400 tokens。
@@ -317,7 +317,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			segIdx+1, len(segments), segRunes, segShotCount, len(prevTailShots))
 
 		prompt := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, len(segments), segShotCount,
-			characters, anchors, plotPoints, prevTailShots, overrides.VoiceMode, promptLanguage, genre, video.Pacing, arcPlan)
+			characters, anchors, plotPoints, prevTailShots, overrides.VoiceMode, promptLanguage, genre, video.RenderConfig.Pacing, arcPlan)
 
 		var aiResult string
 		var aiErr error
@@ -524,8 +524,8 @@ func (s *VideoService) autoMatchShotAnchors(shots []*model.StoryboardShot, ancho
 		if shot.SceneAnchorID != nil {
 			continue // 已手动绑定，不覆盖
 		}
-		// shot.Scene 是 JSON: {"location":"...","time_of_day":"..."}
-		loc := extractLocationFromScene(shot.Scene)
+		// shot.GenMeta.Scene 是 JSON: {"location":"...","time_of_day":"..."}
+		loc := extractLocationFromScene(shot.GenMeta.Scene)
 		if loc == "" {
 			// 降级：从 Description 中做关键词匹配
 			loc = shot.Description
@@ -625,16 +625,16 @@ func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, ch
 		seen := make(map[uint]bool)
 
 		// ① Characters JSON: [{"name":"..."}]
-		if shot.Characters != "" {
+		if shot.GenMeta.Characters != "" {
 			var shotChars []struct {
 				Name string `json:"name"`
 			}
-			if err := json.Unmarshal([]byte(shot.Characters), &shotChars); err == nil {
+			if err := json.Unmarshal([]byte(shot.GenMeta.Characters), &shotChars); err == nil {
 				for _, sc := range shotChars {
 					tryMatch(sc.Name, seen, &matched)
 				}
 			} else {
-				logger.Printf("[AutoMatch] char: shot#%d Characters JSON parse err: %v (raw=%q)", shot.ShotNo, err, shot.Characters)
+				logger.Printf("[AutoMatch] char: shot#%d Characters JSON parse err: %v (raw=%q)", shot.ShotNo, err, shot.GenMeta.Characters)
 			}
 		}
 
@@ -676,9 +676,9 @@ func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, ch
 		if len(matched) > 0 {
 			shot.CharacterIDs = matched
 			charMatchCount++
-			logger.Printf("[AutoMatch] char: shot#%d → charIDs=%v (chars_json=%q)", shot.ShotNo, []uint(matched), shot.Characters)
+			logger.Printf("[AutoMatch] char: shot#%d → charIDs=%v (chars_json=%q)", shot.ShotNo, []uint(matched), shot.GenMeta.Characters)
 		} else {
-			logger.Printf("[AutoMatch] char: shot#%d no match (chars_json=%q)", shot.ShotNo, shot.Characters)
+			logger.Printf("[AutoMatch] char: shot#%d no match (chars_json=%q)", shot.ShotNo, shot.GenMeta.Characters)
 		}
 	}
 	logger.Printf("[AutoMatch] char: matched %d/%d shots", charMatchCount, len(shots))
@@ -932,10 +932,10 @@ func (s *VideoService) buildStoryboardPrompt(
 			"ShotNo":        ps.ShotNo,
 			"NarrOrDesc":    narrOrDesc,
 			"Dialogue":      ps.Dialogue,
-			"EmotionalTone": ps.EmotionalTone,
-			"ShotSize":      ps.ShotSize,
-			"CameraType":    ps.CameraType,
-			"Location":      extractLocationFromScene(ps.Scene),
+			"EmotionalTone": ps.CamDir.EmotionalTone,
+			"ShotSize":      ps.CamDir.ShotSize,
+			"CameraType":    ps.CamDir.CameraType,
+			"Location":      extractLocationFromScene(ps.GenMeta.Scene),
 		})
 	}
 
@@ -958,7 +958,7 @@ func (s *VideoService) buildStoryboardPrompt(
 		"ExpectedShotsMinus2": expectedShotsMinus2,
 		"VoiceMode":           voiceMode,
 		"Pacing":              pacing,
-		"AutoDuration":        video.TargetDuration == 0,
+		"AutoDuration":        video.RenderConfig.TargetDuration == 0,
 		"PrevShots":           prevShotsData,
 		"Characters":          matchedChars,
 		"Anchors":             matchedAnchors,
@@ -1092,9 +1092,11 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 		videoPrompt := r.VideoPrompt
 		if videoPrompt == "" {
 			videoPrompt = buildMotionPrompt(&model.StoryboardShot{
-				CameraType:  cameraType,
-				CameraAngle: cameraAngle,
-				ShotSize:    shotSize,
+				CamDir: model.ShotCamDir{
+					CameraType:  cameraType,
+					CameraAngle: cameraAngle,
+					ShotSize:    shotSize,
+				},
 				Description: r.Description,
 			})
 		}
@@ -1108,29 +1110,33 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 		}
 
 		shot := &model.StoryboardShot{
-			UUID:           uuid.New().String(),
-			VideoID:        videoID,
-			ChapterID:      chapterID,
-			ShotNo:         shotNo,
-			Description:    r.Description,
-			Narration:      r.Narration,
-			Subtitle:       r.Subtitle,
-			Prompt:         imagePrompt,
-			MotionPrompt:   videoPrompt,
-			NegativePrompt: r.NegativePrompt,
-			Dialogue:       r.Dialogue,
-			CameraType:     cameraType,
-			CameraAngle:    cameraAngle,
-			ShotSize:       shotSize,
-			Duration:       duration,
-			Transition:     validTransition(r.Transition),
-			TransitionOut:  r.TransitionOut,
-			TransitionIn:   r.TransitionIn,
-			Characters:     charsJSON,
-			Scene:          sceneJSON,
-			EmotionalTone:  r.EmotionalTone,
-			SFXTags:        sfxTagsJSON,
-			Status:         "pending",
+			UUID:        uuid.New().String(),
+			VideoID:     videoID,
+			ChapterID:   chapterID,
+			ShotNo:      shotNo,
+			Description: r.Description,
+			Narration:   r.Narration,
+			Subtitle:    r.Subtitle,
+			Dialogue:    r.Dialogue,
+			Duration:    duration,
+			CamDir: model.ShotCamDir{
+				CameraType:    cameraType,
+				CameraAngle:   cameraAngle,
+				ShotSize:      shotSize,
+				Transition:    validTransition(r.Transition),
+				TransitionOut: r.TransitionOut,
+				TransitionIn:  r.TransitionIn,
+				EmotionalTone: r.EmotionalTone,
+			},
+			GenMeta: model.ShotGenMeta{
+				Prompt:         imagePrompt,
+				MotionPrompt:   videoPrompt,
+				NegativePrompt: r.NegativePrompt,
+				Characters:     charsJSON,
+				Scene:          sceneJSON,
+				SFXTags:        sfxTagsJSON,
+			},
+			Status: "pending",
 		}
 		shots = append(shots, shot)
 	}
@@ -1178,16 +1184,16 @@ func buildMotionPrompt(shot *model.StoryboardShot) string {
 		"whip_pan":   "fast whip pan transition sweeping frame left-to-right in 0.3s, motion blur trail visible during sweep, settling to stable frame",
 		"zoom":       "smooth optical zoom closing in on subject, focal length increasing gradually over shot duration, background compression effect visible",
 	}
-	motion := motionMap[shot.CameraType]
+	motion := motionMap[shot.CamDir.CameraType]
 	if motion == "" {
 		motion = "smooth camera movement with organic micro-stabilization, imperceptible breathing drift"
 	}
 
-	// 从 shot.Scene 中提取时间/天气用于大气描述
+	// 从 shot.GenMeta.Scene 中提取时间/天气用于大气描述
 	timeOfDay := "daytime"
-	if shot.Scene != "" {
+	if shot.GenMeta.Scene != "" {
 		var sceneData map[string]string
-		if err := json.Unmarshal([]byte(shot.Scene), &sceneData); err == nil {
+		if err := json.Unmarshal([]byte(shot.GenMeta.Scene), &sceneData); err == nil {
 			if tod := sceneData["time_of_day"]; tod != "" {
 				timeOfDay = tod
 			}
@@ -1207,7 +1213,7 @@ func buildMotionPrompt(shot *model.StoryboardShot) string {
 		"extreme_wide":     "extreme wide shot, vast environment with subject small in frame",
 		"full":             "full-body shot framing, subject visible head to toe",
 	}
-	framing := shotSizeDesc[shot.ShotSize]
+	framing := shotSizeDesc[shot.CamDir.ShotSize]
 	if framing == "" {
 		framing = "standard shot framing"
 	}
@@ -1365,14 +1371,14 @@ func (s *VideoService) UpdateShot(id uint, req *model.StoryboardShot) (*model.St
 	if err != nil {
 		return nil, err
 	}
-	if req.CameraType != "" {
-		shot.CameraType = req.CameraType
+	if req.CamDir.CameraType != "" {
+		shot.CamDir.CameraType = req.CamDir.CameraType
 	}
-	if req.CameraAngle != "" {
-		shot.CameraAngle = req.CameraAngle
+	if req.CamDir.CameraAngle != "" {
+		shot.CamDir.CameraAngle = req.CamDir.CameraAngle
 	}
-	if req.ShotSize != "" {
-		shot.ShotSize = req.ShotSize
+	if req.CamDir.ShotSize != "" {
+		shot.CamDir.ShotSize = req.CamDir.ShotSize
 	}
 	if req.Duration > 0 {
 		shot.Duration = req.Duration
@@ -1380,8 +1386,8 @@ func (s *VideoService) UpdateShot(id uint, req *model.StoryboardShot) (*model.St
 	if req.Status != "" {
 		shot.Status = req.Status
 	}
-	if req.GenerationMode != "" {
-		shot.GenerationMode = req.GenerationMode
+	if req.GenMeta.GenerationMode != "" {
+		shot.GenMeta.GenerationMode = req.GenMeta.GenerationMode
 	}
 	return shot, s.storyboardRepo.Update(shot)
 }
@@ -1435,11 +1441,13 @@ func (s *VideoService) InsertShot(videoID uint, afterShotNo int, narration, desc
 		Narration:   narration,
 		Description: description,
 		Duration:    duration,
-		CameraType:  "static",
-		CameraAngle: "eye_level",
-		ShotSize:    "medium",
-		Transition:  "cut",
-		Status:      "pending",
+		CamDir: model.ShotCamDir{
+			CameraType:  "static",
+			CameraAngle: "eye_level",
+			ShotSize:    "medium",
+			Transition:  "cut",
+		},
+		Status: "pending",
 	}
 	// Shift + create must be atomic to avoid a corrupt shot_no sequence on partial failure.
 	// Two-phase UPDATE: first shift all affected rows into a collision-free temp range
@@ -1490,28 +1498,18 @@ func (s *VideoService) CopyShotAfter(sourceShotID uint, afterShotNo int) (*model
 	}
 	appendToEnd := afterShotNo < 0
 	shot := &model.StoryboardShot{
-		VideoID:        src.VideoID,
-		ChapterID:      src.ChapterID,
-		UUID:           uuid.New().String(),
-		Description:    src.Description,
-		Narration:      src.Narration,
-		Dialogue:       src.Dialogue,
-		Subtitle:       src.Subtitle,
-		CameraType:     src.CameraType,
-		CameraAngle:    src.CameraAngle,
-		ShotSize:       src.ShotSize,
-		Duration:       src.Duration,
-		EmotionalTone:  src.EmotionalTone,
-		Transition:     src.Transition,
-		Characters:     src.Characters,
-		Scene:          src.Scene,
-		Prompt:         src.Prompt,
-		MotionPrompt:   src.MotionPrompt,
-		NegativePrompt: src.NegativePrompt,
-		SceneAnchorID:  src.SceneAnchorID,
-		CharacterIDs:   src.CharacterIDs,
-		GenerationMode: src.GenerationMode,
-		SFXTags:        src.SFXTags,
+		VideoID:       src.VideoID,
+		ChapterID:     src.ChapterID,
+		UUID:          uuid.New().String(),
+		Description:   src.Description,
+		Narration:     src.Narration,
+		Dialogue:      src.Dialogue,
+		Subtitle:      src.Subtitle,
+		Duration:      src.Duration,
+		CamDir:        src.CamDir,
+		GenMeta:       src.GenMeta,
+		SceneAnchorID: src.SceneAnchorID,
+		CharacterIDs:  src.CharacterIDs,
 		// ImageURL / VideoURL intentionally NOT copied — copied shot starts fresh
 		Status: "pending",
 	}
@@ -1795,9 +1793,9 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent s
 	}
 	for _, shot := range shots {
 		sb.WriteString(fmt.Sprintf("[镜%d] 景别:%-12s 时长:%4.1fs 运镜:%-8s 角度:%-10s",
-			shot.ShotNo, shot.ShotSize, shot.Duration, shot.CameraType, shot.CameraAngle))
-		if shot.EmotionalTone != "" {
-			sb.WriteString(fmt.Sprintf(" 情绪:%s", truncate(shot.EmotionalTone, 12)))
+			shot.ShotNo, shot.CamDir.ShotSize, shot.Duration, shot.CamDir.CameraType, shot.CamDir.CameraAngle))
+		if shot.CamDir.EmotionalTone != "" {
+			sb.WriteString(fmt.Sprintf(" 情绪:%s", truncate(shot.CamDir.EmotionalTone, 12)))
 		}
 		if desc := truncate(shot.Description, 50); desc != "" {
 			sb.WriteString(fmt.Sprintf("\n      描述: %s", desc))
@@ -1941,7 +1939,7 @@ func buildStoryboardOptimizePrompt(shots []*model.StoryboardShot, review *model.
 			desc = string([]rune(desc)[:60]) + "…"
 		}
 		sb.WriteString(fmt.Sprintf("[镜%d] 景别:%s 时长:%.0fs 镜头:%s/%s",
-			sh.ShotNo, sh.ShotSize, sh.Duration, sh.CameraType, sh.CameraAngle))
+			sh.ShotNo, sh.CamDir.ShotSize, sh.Duration, sh.CamDir.CameraType, sh.CamDir.CameraAngle))
 		if desc != "" {
 			sb.WriteString(fmt.Sprintf(" 描述:\"%s\"", desc))
 		}
@@ -2163,15 +2161,11 @@ func (s *VideoService) RollbackReview(tenantID, videoID, recordID uint) (int, er
 			continue
 		}
 		fields := map[string]interface{}{
-			"description":    snap.Description,
-			"narration":      snap.Narration,
-			"dialogue":       snap.Dialogue,
-			"camera_type":    snap.CameraType,
-			"camera_angle":   snap.CameraAngle,
-			"shot_size":      snap.ShotSize,
-			"duration":       snap.Duration,
-			"emotional_tone": snap.EmotionalTone,
-			"transition":     snap.Transition,
+			"description": snap.Description,
+			"narration":   snap.Narration,
+			"dialogue":    snap.Dialogue,
+			"duration":    snap.Duration,
+			"cam_dir":     snap.CamDir,
 		}
 		if err := s.storyboardRepo.UpdateFields(current.ID, fields); err != nil {
 			logger.Errorf("RollbackReview: update shot %d failed: %v", snap.ShotNo, err)

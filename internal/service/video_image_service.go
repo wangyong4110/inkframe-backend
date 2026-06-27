@@ -41,7 +41,7 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 		return nil, err
 	}
 	if qualityTierOverride != "" {
-		video.QualityTier = qualityTierOverride
+		video.RenderConfig.QualityTier = qualityTierOverride
 	}
 
 	// Resolve effective provider and aspect ratio from novel config
@@ -49,7 +49,7 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 	if len(provider) > 0 {
 		effectiveProvider = provider[0]
 	}
-	aspectRatio := video.AspectRatio
+	aspectRatio := video.RenderConfig.AspectRatio
 	if video.NovelID > 0 && s.novelRepo != nil {
 		if novel, nErr := s.novelRepo.GetByID(video.NovelID); nErr == nil {
 			if aspectRatio == "" && novel.VideoConf().VideoAspectRatio != "" {
@@ -173,7 +173,7 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, for
 	if err != nil {
 		return nil, err
 	}
-	aspectRatio := video.AspectRatio
+	aspectRatio := video.RenderConfig.AspectRatio
 	if video.NovelID > 0 && s.novelRepo != nil {
 		if novel, nErr := s.novelRepo.GetByID(video.NovelID); nErr == nil && novel.VideoConf().VideoAspectRatio != "" {
 			aspectRatio = novel.VideoConf().VideoAspectRatio
@@ -515,13 +515,13 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// cachedNovelChars 延迟加载：降级一名称匹配使用
 	var cachedNovelChars []*model.Character
 
-	// 降级一：若 CharacterIDs 未命中，从 shot.Characters JSON 内联名称匹配
+	// 降级一：若 CharacterIDs 未命中，从 shot.GenMeta.Characters JSON 内联名称匹配
 	// （CharacterIDs 由 autoMatchShotCharacters 在分镜生成时设置，若名称有偏差则可能为空）
-	if len(characterPortraits) == 0 && shot.Characters != "" {
+	if len(characterPortraits) == 0 && shot.GenMeta.Characters != "" {
 		var shotChars []struct {
 			Name string `json:"name"`
 		}
-		if err := json.Unmarshal([]byte(shot.Characters), &shotChars); err == nil && len(shotChars) > 0 {
+		if err := json.Unmarshal([]byte(shot.GenMeta.Characters), &shotChars); err == nil && len(shotChars) > 0 {
 			if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil && video.NovelID > 0 {
 				if cachedNovelChars == nil {
 					var e error
@@ -590,7 +590,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		logger.Errorf("[WARN] generateShotReferenceImage: shot %d has CharacterIDs=%v but no portrait/ThreeViewSheet found — characters may not have images generated yet", shot.ShotNo, shot.CharacterIDs)
 	}
 
-	promptText := shot.Prompt
+	promptText := shot.GenMeta.Prompt
 	if promptText == "" {
 		promptText = shot.Description
 	}
@@ -621,13 +621,13 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// 角色名排在 prompt 最前使 Seedream 将其识别为画面主体。
 	if len(characterPortraits) > 0 {
 		var presenceTokens []string // 人物存在性 + 动作/表情
-		if shot.Characters != "" {
+		if shot.GenMeta.Characters != "" {
 			var shotCharsAction []struct {
 				Name       string `json:"name"`
 				Pose       string `json:"pose"`
 				Expression string `json:"expression"`
 			}
-			if err := json.Unmarshal([]byte(shot.Characters), &shotCharsAction); err == nil && len(shotCharsAction) > 0 {
+			if err := json.Unmarshal([]byte(shot.GenMeta.Characters), &shotCharsAction); err == nil && len(shotCharsAction) > 0 {
 				for _, c := range shotCharsAction {
 					if c.Name != "" {
 						presenceTokens = append(presenceTokens, c.Name)
@@ -643,7 +643,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				}
 			}
 		}
-		// shot.Characters 为空时，从 DB 加载的角色名兜底
+		// shot.GenMeta.Characters 为空时，从 DB 加载的角色名兜底
 		if len(presenceTokens) == 0 && len(charNamesForPrompt) > 0 {
 			presenceTokens = append(presenceTokens, charNamesForPrompt...)
 		}
@@ -681,11 +681,11 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	qualityTier := "production"   // 默认质量档位（preview=768px 对视频参考帧质量不够）
 	var imageAspectRatio, colorGrade string
 	if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil {
-		artStyle = video.ArtStyle
+		artStyle = video.RenderConfig.ArtStyle
 		tenantID = s.videoTenantID(video)
-		imageAspectRatio = video.AspectRatio
-		if video.QualityTier != "" {
-			qualityTier = video.QualityTier
+		imageAspectRatio = video.RenderConfig.AspectRatio
+		if video.RenderConfig.QualityTier != "" {
+			qualityTier = video.RenderConfig.QualityTier
 		}
 		if video.NovelID > 0 && s.novelRepo != nil {
 			if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil {
@@ -734,9 +734,9 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// 无角色参考图且分镜中确实没有任何角色时，加无人物排除词（纯环境镜头）。
 	// 若分镜有角色（即使是没有参考图的路人），不加此约束，让模型根据 image_prompt 自行生成角色形象。
 	shotHasAnyCharacter := len(characterPortraits) > 0 || len(shot.CharacterIDs) > 0 ||
-		(shot.Characters != "" && shot.Characters != "[]" && shot.Characters != "null")
+		(shot.GenMeta.Characters != "" && shot.GenMeta.Characters != "[]" && shot.GenMeta.Characters != "null")
 	noPersonNeg := "person, people, human, man, woman, figure, silhouette, character, face, body, limbs, hands, clothing, portrait"
-	if !shotHasAnyCharacter && (shot.NegativePrompt == "" || !strings.Contains(shot.NegativePrompt, "person")) {
+	if !shotHasAnyCharacter && (shot.GenMeta.NegativePrompt == "" || !strings.Contains(shot.GenMeta.NegativePrompt, "person")) {
 		imgNegBase = noPersonNeg + ", " + imgNegBase
 	}
 	// 有角色时追加面部模糊专项负向词
@@ -747,14 +747,14 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		imgNegBase = imgNegBase + ", " + faceNeg
 	}
 	negPrompt := imgNegBase
-	if shot.NegativePrompt != "" {
-		negPrompt = imgNegBase + ", " + shot.NegativePrompt
+	if shot.GenMeta.NegativePrompt != "" {
+		negPrompt = imgNegBase + ", " + shot.GenMeta.NegativePrompt
 	}
 
 	// Prompt 前缀策略：
-	// - shot.Prompt（LLM 生成的 image_prompt）已包含画风/画质词/镜头参数，只补充项目级调色和风格词，
+	// - shot.GenMeta.Prompt（LLM 生成的 image_prompt）已包含画风/画质词/镜头参数，只补充项目级调色和风格词，
 	//   避免重复注入镜头参数（如 35mm vs 85mm）产生冲突，导致画面比例/构图异常。
-	// - shot.Prompt 为空时（降级用 description），注入完整电影级前缀补足画质词和镜头描述。
+	// - shot.GenMeta.Prompt 为空时（降级用 description），注入完整电影级前缀补足画质词和镜头描述。
 	lensTypeMap := map[string]string{
 		"extreme_close_up": "macro lens 100mm, extreme shallow DOF, bokeh",
 		"close_up":         "portrait lens 85mm, shallow depth of field, subject isolation",
@@ -762,7 +762,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		"wide":             "wide angle lens 24mm, deep focus, environmental context",
 		"extreme_wide":     "ultra wide lens 16mm, expansive environment, dramatic perspective",
 	}
-	lensType := lensTypeMap[shot.ShotSize]
+	lensType := lensTypeMap[shot.CamDir.ShotSize]
 	if lensType == "" {
 		lensType = "standard lens 50mm"
 	}
@@ -774,7 +774,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		styleDesc = resolveStyleDesc(artStyle) + "风格"
 	}
 
-	if shot.Prompt != "" {
+	if shot.GenMeta.Prompt != "" {
 		// LLM 生成的 image_prompt 已完整，只在最前端注入项目级画面风格和色调。
 		var prefix string
 		if styleDesc != "" {
@@ -880,14 +880,14 @@ func (s *VideoService) RefineShotImage(shotID uint, suggestion string) (string, 
 
 	// 构建含修改建议的提示词（操作副本，不改 DB 原始字段）
 	shotCopy := *shot
-	basePrompt := shot.Prompt
+	basePrompt := shot.GenMeta.Prompt
 	if basePrompt == "" {
 		basePrompt = shot.Description
 	}
 	if suggestion != "" {
-		shotCopy.Prompt = basePrompt + ". Modification: " + suggestion
+		shotCopy.GenMeta.Prompt = basePrompt + ". Modification: " + suggestion
 	} else {
-		shotCopy.Prompt = basePrompt
+		shotCopy.GenMeta.Prompt = basePrompt
 	}
 
 	newURL, err := s.generateShotReferenceImage(&shotCopy)
@@ -921,7 +921,7 @@ func (s *VideoService) resolveArtStyle(videoID uint) string {
 		}
 	}
 	// 小说未设置时降级使用视频自带风格
-	return video.ArtStyle
+	return video.RenderConfig.ArtStyle
 }
 
 // extractLastFrame 使用 FFmpeg 提取视频最后一帧，返回本地 jpeg 路径
@@ -1130,16 +1130,16 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	logger.Printf("GenerateShotVideo: shot %d provider=%s aspect=%s duration=%.2fs", shot.ShotNo, providerName, videoAspectRatio, shot.Duration)
 
 	// 参考图策略（优先级从高到低）：
-	//   ① shot.ReferenceImageURL 非空（上一镜最后一帧）→ I2V 时序链接，最高优先级
-	//   ② shot.ReferenceImageURL 空 + shot.ImageURL 已生成 → 复用场景图
+	//   ① shot.GenMeta.ReferenceImageURL 非空（上一镜最后一帧）→ I2V 时序链接，最高优先级
+	//   ② shot.GenMeta.ReferenceImageURL 空 + shot.ImageURL 已生成 → 复用场景图
 	//   ③ 两者均空 + 角色三视图/场景锚点存在 → 直接用这些作参考图
 	//   ④ 无任何参考图 → 先生成场景图
 	referenceImage := ""
 	var refLabel string // HappyHorse r2v: label for referenceImage ("角色名" or "")
 
-	if shot.ReferenceImageURL != "" {
+	if shot.GenMeta.ReferenceImageURL != "" {
 		// ① 上一镜最后一帧（I2V 链接）：作为主参考图，保证时序连贯
-		referenceImage = shot.ReferenceImageURL
+		referenceImage = shot.GenMeta.ReferenceImageURL
 		logger.Printf("GenerateShotVideo: shot %d using last-frame I2V reference: %s", shot.ShotNo, referenceImage)
 		// ImageURL（静态场景图）降级为附加参考图，维持外观一致性
 		// （extraRefImages 在下方逻辑中追加）
@@ -1247,17 +1247,17 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	// TransitionIn 由 AI 分镜师生成，精确描述本镜头应如何衔接上一镜头的结束状态。
 	// 仅在无 I2V 末帧时注入（有末帧时视频模型已能自动感知运动延续，文字引导可能干扰）。
 	continuityPrefix := ""
-	if shot.ShotNo > 1 && shot.ReferenceImageURL == "" && s.storyboardRepo != nil {
-		if shot.TransitionIn != "" {
+	if shot.ShotNo > 1 && shot.GenMeta.ReferenceImageURL == "" && s.storyboardRepo != nil {
+		if shot.CamDir.TransitionIn != "" {
 			// ① 使用本镜头自己的 transition_in（最精确）
-			continuityPrefix = shot.TransitionIn
+			continuityPrefix = shot.CamDir.TransitionIn
 		} else if prev, prevErr := s.storyboardRepo.GetByVideoAndShotNo(shot.VideoID, shot.ShotNo-1); prevErr == nil && prev != nil {
-			if prev.TransitionOut != "" {
+			if prev.CamDir.TransitionOut != "" {
 				// ② 使用上一镜头的 transition_out（次精确）
-				continuityPrefix = "continuing from: " + prev.TransitionOut
+				continuityPrefix = "continuing from: " + prev.CamDir.TransitionOut
 			} else {
 				// ③ 降级：截取上一镜头 MotionPrompt/Description 作粗粒度引导
-				desc := prev.MotionPrompt
+				desc := prev.GenMeta.MotionPrompt
 				if desc == "" {
 					desc = prev.Description
 				}
@@ -1273,9 +1273,9 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 
 	// 场景锚点：将锁定词注入视频生成 prompt
 	// 优先使用运镜提示词（MotionPrompt），若为空则降级到静态画面描述（Prompt）
-	videoPrompt := shot.MotionPrompt
+	videoPrompt := shot.GenMeta.MotionPrompt
 	if videoPrompt == "" {
-		videoPrompt = shot.Prompt
+		videoPrompt = shot.GenMeta.Prompt
 	}
 	if continuityPrefix != "" {
 		videoPrompt = continuityPrefix + ", " + videoPrompt
@@ -1308,8 +1308,8 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 			}
 			extras = append(extras, "dialogue: "+d)
 		}
-		if shot.SFXTags != "" {
-			if sfxItems := parseSFXTags(shot.SFXTags); len(sfxItems) > 0 {
+		if shot.GenMeta.SFXTags != "" {
+			if sfxItems := parseSFXTags(shot.GenMeta.SFXTags); len(sfxItems) > 0 {
 				tags := make([]string, 0, len(sfxItems))
 				for _, item := range sfxItems {
 					if item.Tag != "" {
@@ -1331,7 +1331,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	shotDuration := shot.Duration
 
 	// 动态 Kling 参数（根据情绪和摄像机类型选择最优配置）
-	klingMode, klingCFG, klingDefaultDur := emotionToKlingParams(shot.EmotionalTone, shot.CameraType)
+	klingMode, klingCFG, klingDefaultDur := emotionToKlingParams(shot.CamDir.EmotionalTone, shot.CamDir.CameraType)
 	if shotDuration <= 0 {
 		shotDuration = klingDefaultDur
 	}
@@ -1364,7 +1364,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	}
 
 	// 电影级动态前缀——注入运镜词+情绪氛围词，移除 "film still" 静态词避免抑制视频动态感
-	cinematicPrefix := buildCinematicPrefix(shot.CameraType, shot.EmotionalTone)
+	cinematicPrefix := buildCinematicPrefix(shot.CamDir.CameraType, shot.CamDir.EmotionalTone)
 	// 3D 风格前缀
 	if threeDEnabled {
 		cinematicPrefix = resolve3DStylePrefix(threeDStyle) + ", " + cinematicPrefix
@@ -1382,8 +1382,8 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		videoPromptFinal = kw + ", " + videoPromptFinal
 	}
 	negativePrompt := negativeBase
-	if shot.NegativePrompt != "" {
-		negativePrompt = negativeBase + ", " + shot.NegativePrompt
+	if shot.GenMeta.NegativePrompt != "" {
+		negativePrompt = negativeBase + ", " + shot.GenMeta.NegativePrompt
 	}
 
 	// Seedance / Kling / HappyHorse 均支持多张参考图：在主参考图之外追加角色三视图和场景锚点图，
@@ -1392,7 +1392,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	var extraRefLabels []string // HappyHorse r2v：与 extraRefImages 并行的标签（角色名 / "场景背景"）
 	multiImageProviders := map[string]bool{"seedance": true, "kling": true, "happyhorse": true}
 	// I2V 模式：shot.ImageURL（静态场景图）追加为第一额外参考图，维持外观一致性
-	if shot.ReferenceImageURL != "" && shot.ImageURL != "" && multiImageProviders[providerName] {
+	if shot.GenMeta.ReferenceImageURL != "" && shot.ImageURL != "" && multiImageProviders[providerName] {
 		if absImg := s.resolveAbsURL(shot.ImageURL); absImg != "" && absImg != s.resolveAbsURL(referenceImage) {
 			extraRefImages = append(extraRefImages, absImg)
 			extraRefLabels = append(extraRefLabels, "场景参考")
@@ -1679,7 +1679,7 @@ func (s *VideoService) generateKenBurnsClip(shot *model.StoryboardShot, imagePat
 
 	// 根据摄像机类型选择 zoompan 动效
 	var zoompan string
-	switch shot.CameraType {
+	switch shot.CamDir.CameraType {
 	case "zoom", "push":
 		// 推镜/变焦：明显放大，模拟向前推进
 		zoompan = fmt.Sprintf("zoompan=z='min(zoom+0.002,1.5)':d=%d:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'", totalFrames)
@@ -1739,7 +1739,7 @@ func (s *VideoService) generateShotImageOnly(shot *model.StoryboardShot, aspectR
 	if duration <= 0 {
 		duration = defaultShotDurationSecs
 	}
-	shot.GenerationMode = "static"
+	shot.GenMeta.GenerationMode = "static"
 	shot.Status = "generating"
 	if err := s.storyboardRepo.Update(shot); err != nil {
 		logger.Errorf("[VideoService] generateShotImageOnly: failed to update shot %d status to generating: %v", shot.ShotNo, err)
@@ -1864,7 +1864,7 @@ func (s *VideoService) GenerateSlideshowShotVideo(shot *model.StoryboardShot, as
 
 	logger.Printf("GenerateSlideshowShotVideo: shot %d aspect=%s duration=%.1fs", shot.ShotNo, aspectRatio, duration)
 
-	shot.GenerationMode = "static"
+	shot.GenMeta.GenerationMode = "static"
 	shot.Status = "generating"
 	if err := s.storyboardRepo.Update(shot); err != nil {
 		logger.Errorf("[VideoService] GenerateSlideshowShotVideo: failed to update shot %d status to generating: %v", shot.ShotNo, err)
@@ -1996,7 +1996,7 @@ func (s *VideoService) runSlideshowPipeline(videoID uint) {
 
 	var audioWg sync.WaitGroup
 	for _, shot := range shots {
-		if err := s.GenerateSlideshowShotVideo(shot, video.AspectRatio); err != nil {
+		if err := s.GenerateSlideshowShotVideo(shot, video.RenderConfig.AspectRatio); err != nil {
 			logger.Errorf("runSlideshowPipeline: shot %d failed: %v", shot.ShotNo, err)
 		}
 		audioWg.Add(1)

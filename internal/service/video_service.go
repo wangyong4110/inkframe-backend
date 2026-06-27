@@ -334,14 +334,16 @@ func (s *VideoService) CreateVideoFromChapter(novelID uint, chapterID *uint) (*m
 		chapterID = nil
 	}
 	video := &model.Video{
-		UUID:        uuid.New().String(),
-		NovelID:     novelID,
-		ChapterID:   chapterID,
-		Title:       "新视频",
-		Status:      "planning",
-		FrameRate:   24,
-		Resolution:  "1080p",
-		AspectRatio: "16:9",
+		UUID:      uuid.New().String(),
+		NovelID:   novelID,
+		ChapterID: chapterID,
+		Title:     "新视频",
+		Status:    "planning",
+		RenderConfig: model.VideoRenderConfig{
+			FrameRate:   24,
+			Resolution:  "1080p",
+			AspectRatio: "16:9",
+		},
 	}
 	if err := s.videoRepo.Create(video); err != nil {
 		return nil, err
@@ -364,19 +366,21 @@ func (s *VideoService) CreateVideoFromReq(novelID uint, req *model.CreateVideoRe
 		chapterID = nil
 	}
 	video := &model.Video{
-		UUID:        uuid.New().String(),
-		NovelID:     novelID,
-		ChapterID:   chapterID,
-		Title:       req.Title,
-		Resolution:  req.Resolution,
-		FrameRate:   req.FrameRate,
-		AspectRatio: req.AspectRatio,
-		ArtStyle:    req.ArtStyle,
-		QualityTier: req.QualityTier,
-		Mode:        req.Mode,
-		VisualMode:  req.VisualMode,
-		ThreeDStyle: req.ThreeDStyle,
-		Status:      "planning",
+		UUID:      uuid.New().String(),
+		NovelID:   novelID,
+		ChapterID: chapterID,
+		Title:     req.Title,
+		Mode:      req.Mode,
+		Status:    "planning",
+		RenderConfig: model.VideoRenderConfig{
+			Resolution:  req.Resolution,
+			FrameRate:   req.FrameRate,
+			AspectRatio: req.AspectRatio,
+			ArtStyle:    req.ArtStyle,
+			QualityTier: req.QualityTier,
+			VisualMode:  req.VisualMode,
+			ThreeDStyle: req.ThreeDStyle,
+		},
 	}
 	novel, err := s.novelRepo.GetByID(novelID)
 	if err != nil {
@@ -387,20 +391,20 @@ func (s *VideoService) CreateVideoFromReq(novelID uint, req *model.CreateVideoRe
 		return nil, fmt.Errorf("novel %d does not belong to tenant %d", novelID, callerTenantID)
 	}
 	// 默认画面风格：继承项目设置中的画面风格
-	if video.ArtStyle == "" && novel.ImageStyle != "" {
-		video.ArtStyle = novel.ImageStyle
+	if video.RenderConfig.ArtStyle == "" && novel.ImageStyle != "" {
+		video.RenderConfig.ArtStyle = novel.ImageStyle
 	}
-	if video.FrameRate == 0 {
-		video.FrameRate = 24
+	if video.RenderConfig.FrameRate == 0 {
+		video.RenderConfig.FrameRate = 24
 	}
-	if video.Resolution == "" {
-		video.Resolution = "1080p"
+	if video.RenderConfig.Resolution == "" {
+		video.RenderConfig.Resolution = "1080p"
 	}
-	if video.AspectRatio == "" {
-		video.AspectRatio = "16:9"
+	if video.RenderConfig.AspectRatio == "" {
+		video.RenderConfig.AspectRatio = "16:9"
 	}
-	if video.QualityTier == "" {
-		video.QualityTier = "preview"
+	if video.RenderConfig.QualityTier == "" {
+		video.RenderConfig.QualityTier = "preview"
 	}
 	if video.Mode == "" {
 		video.Mode = "slideshow"
@@ -437,28 +441,28 @@ func (s *VideoService) UpdateVideo(id, tenantID uint, req *model.UpdateVideoRequ
 		video.Title = req.Title
 	}
 	if req.Resolution != "" {
-		video.Resolution = req.Resolution
+		video.RenderConfig.Resolution = req.Resolution
 	}
 	if req.FrameRate != 0 {
-		video.FrameRate = req.FrameRate
+		video.RenderConfig.FrameRate = req.FrameRate
 	}
 	if req.AspectRatio != "" {
-		video.AspectRatio = req.AspectRatio
+		video.RenderConfig.AspectRatio = req.AspectRatio
 	}
 	if req.ArtStyle != "" {
-		video.ArtStyle = req.ArtStyle
+		video.RenderConfig.ArtStyle = req.ArtStyle
 	}
 	if req.Mode != "" {
 		video.Mode = req.Mode
 	}
 	if req.VisualMode != "" {
-		video.VisualMode = req.VisualMode
+		video.RenderConfig.VisualMode = req.VisualMode
 	}
 	if req.ThreeDStyle != "" {
-		video.ThreeDStyle = req.ThreeDStyle
+		video.RenderConfig.ThreeDStyle = req.ThreeDStyle
 	}
 	if req.QualityTier != "" {
-		video.QualityTier = req.QualityTier
+		video.RenderConfig.QualityTier = req.QualityTier
 	}
 	if req.Description != "" {
 		video.Description = req.Description
@@ -471,11 +475,15 @@ func (s *VideoService) UpdateVideo(id, tenantID uint, req *model.UpdateVideoRequ
 
 // UpdatePacingConfig 更新视频的节奏和目标时长配置（供分镜生成前调用）
 func (s *VideoService) UpdatePacingConfig(id uint, pacing string, targetDuration int) error {
-	fields := map[string]interface{}{"target_duration": targetDuration}
-	if pacing != "" {
-		fields["pacing"] = pacing
+	video, err := s.videoRepo.GetByID(id)
+	if err != nil {
+		return err
 	}
-	return s.videoRepo.UpdateFields(id, fields)
+	video.RenderConfig.TargetDuration = targetDuration
+	if pacing != "" {
+		video.RenderConfig.Pacing = pacing
+	}
+	return s.videoRepo.Update(video)
 }
 
 // UpdateVideoFields 更新视频任意字段（用于发布状态更新）
@@ -840,7 +848,7 @@ func (s *VideoService) StartGeneration(id uint) (string, error) {
 	// 构建生成请求
 	req := &ai.VideoGenerateRequest{
 		Prompt:      fmt.Sprintf("%s — cinematic, high quality", video.Title),
-		AspectRatio: video.AspectRatio,
+		AspectRatio: video.RenderConfig.AspectRatio,
 		Duration:    defaultShotDurationSecs,
 	}
 
@@ -970,7 +978,7 @@ func (s *VideoService) GenerateSingleShot(videoID, shotID uint, provider ...stri
 	if len(provider) > 0 {
 		effectiveProvider = provider[0]
 	}
-	aspectRatio := video.AspectRatio
+	aspectRatio := video.RenderConfig.AspectRatio
 	if video.NovelID > 0 && s.novelRepo != nil {
 		if novel, nErr := s.novelRepo.GetByID(video.NovelID); nErr == nil {
 			if aspectRatio == "" && novel.VideoConf().VideoAspectRatio != "" {
@@ -1030,7 +1038,7 @@ func (s *VideoService) BatchGenerateShotClips(videoID uint, shotIDs []uint, prog
 	if err != nil {
 		return nil, err
 	}
-	aspectRatio := video.AspectRatio
+	aspectRatio := video.RenderConfig.AspectRatio
 	if video.NovelID > 0 && s.novelRepo != nil {
 		if novel, nErr := s.novelRepo.GetByID(video.NovelID); nErr == nil && novel.VideoConf().VideoAspectRatio != "" {
 			aspectRatio = novel.VideoConf().VideoAspectRatio
