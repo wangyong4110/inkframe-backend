@@ -1508,7 +1508,10 @@ func sanitizeImagePrompt(prompt string) string {
 // isSensitiveContentError 判断图像生成错误是否为内容审核拦截。
 func isSensitiveContentError(errMsg string) bool {
 	return strings.Contains(errMsg, ai.ErrPrefixSensitiveContent) ||
-		strings.Contains(errMsg, "InputTextSensitiveContentDetected")
+		strings.Contains(errMsg, "InputTextSensitiveContentDetected") ||
+		strings.Contains(errMsg, "Risk Not Pass") ||
+		strings.Contains(errMsg, "ContentFiltered") ||
+		strings.Contains(errMsg, "content_filter")
 }
 
 // GenerateCharacterThreeView 使用图像生成 API 生成角色/场景视图图像。

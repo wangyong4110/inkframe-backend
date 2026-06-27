@@ -402,8 +402,13 @@ func (p *VolcengineVisualProvider) pollResult(ctx context.Context, reqKey, taskI
 			code, _ := resp["code"].(float64)
 			if int(code) != 10000 {
 				msg, _ := resp["message"].(string)
+				errMsg := fmt.Sprintf("即梦AI 获取结果失败 code=%d: %s", int(code), msg)
+				// 50511=图像后审核拦截，50400=文本预审核拦截，统一标记为内容审核错误以触发上层重试
+				if int(code) == 50511 || int(code) == 50400 {
+					errMsg = ErrPrefixSensitiveContent + errMsg
+				}
 				return &ImageResponse{
-					Error:     fmt.Sprintf("即梦AI 获取结果失败 code=%d: %s", int(code), msg),
+					Error:     errMsg,
 					LatencyMs: time.Since(start).Milliseconds(),
 				}, nil
 			}
