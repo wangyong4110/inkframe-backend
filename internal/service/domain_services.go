@@ -448,7 +448,7 @@ func (s *ModelService) CreateModel(req *model.CreateAIModelRequest, tenantID uin
 		RateLimit:   req.RateLimit,
 		IsActive:    true, // 用户主动添加的模型直接激活；copySystemModels 预填的才用 false
 	}
-	return m, s.modelRepo.Create(m)
+	return m, s.modelRepo.FirstOrCreate(m)
 }
 
 func (s *ModelService) UpdateModel(id uint, tenantID uint, req *model.UpdateAIModelRequest) (*model.AIModel, error) {

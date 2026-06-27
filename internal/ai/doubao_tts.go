@@ -111,13 +111,19 @@ func (p *DoubaoSpeechProvider) ImageGenerate(ctx context.Context, req *ImageGene
 //   - req.Pitch    → req_params.post_process.pitch（-12~12）
 //   - req.Emotion  → req_params.context_texts[0]（"请用{emotion}的语气说话"）
 //   - req.Language → req_params.additions.explicit_language（zh-cn/en/ja/es-mx 等）
-// doubaoSpeechResourceMismatchCode 是 Doubao TTS 返回的 resource-speaker 不匹配错误码。
+// doubaoSpeechResourceMismatchCode 是 Doubao TTS 返回的 resource-speaker 不匹配错误码（流式 chunk 级别）。
 const doubaoSpeechResourceMismatchCode = 55000000
 
-// doubaoResourceMismatchErr 用于标识 resource ID 不匹配错误，以便上层重试。
-type doubaoResourceMismatchErr struct{ msg string }
+// doubaoResourceNotGrantedCode 是 HTTP 403 时返回的"resource not granted"错误码。
+const doubaoResourceNotGrantedCode = 45000030
 
-func (e *doubaoResourceMismatchErr) Error() string { return e.msg }
+// doubaoResourceErr 标识 resource 级别的错误（不匹配或未授权），上层应尝试下一个 resource 重试。
+type doubaoResourceErr struct{ msg string }
+
+func (e *doubaoResourceErr) Error() string { return e.msg }
+
+// doubaoResourceMismatchErr 保持向后兼容（别名）
+type doubaoResourceMismatchErr = doubaoResourceErr
 
 // doubaoSpeechResourceFallbacks 当 resource ID 与 speaker 不匹配时的备选顺序。
 var doubaoSpeechResourceFallbacks = []string{
@@ -152,8 +158,8 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 	// 首次尝试
 	audioData, totalTextWords, err := p.doDoubaoSpeechRequest(ctx, body, resourceID)
 	if err != nil {
-		// 55000000 = resource ID 与 speaker 不匹配 → 用备选 resource ID 重试一次
-		if _, ok := err.(*doubaoResourceMismatchErr); ok && req.Model == "" {
+		// resource 级别错误（55000000 不匹配 或 403 未授权）→ 按顺序尝试备选 resource ID
+		if _, ok := err.(*doubaoResourceErr); ok && req.Model == "" {
 			for _, fallback := range doubaoSpeechResourceFallbacks {
 				if fallback == resourceID {
 					continue
@@ -166,7 +172,8 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 				if err == nil {
 					break
 				}
-				if _, stillMismatch := err.(*doubaoResourceMismatchErr); !stillMismatch {
+				// 若仍是 resource 级别错误，继续尝试下一个；否则停止
+				if _, isResourceErr := err.(*doubaoResourceErr); !isResourceErr {
 					break
 				}
 			}
@@ -306,6 +313,19 @@ func (p *DoubaoSpeechProvider) doDoubaoSpeechRequest(ctx context.Context, body [
 
 	if resp.StatusCode != http.StatusOK {
 		errBody, _ := io.ReadAll(resp.Body)
+		// HTTP 403 with code 45000030 = resource not granted for this account → retryable with another resource
+		if resp.StatusCode == http.StatusForbidden {
+			var hdr struct {
+				Header struct {
+					Code int `json:"code"`
+				} `json:"header"`
+			}
+			if json.Unmarshal(errBody, &hdr) == nil && hdr.Header.Code == doubaoResourceNotGrantedCode {
+				return nil, 0, &doubaoResourceErr{
+					msg: fmt.Sprintf("doubao-speech: resource %q not granted (code=%d): %s", resourceID, hdr.Header.Code, string(errBody)),
+				}
+			}
+		}
 		return nil, 0, fmt.Errorf("doubao-speech: API error %d: %s", resp.StatusCode, string(errBody))
 	}
 
@@ -326,7 +346,7 @@ func (p *DoubaoSpeechProvider) doDoubaoSpeechRequest(ctx context.Context, body [
 			continue
 		}
 		if chunk.Code == doubaoSpeechResourceMismatchCode {
-			return nil, 0, &doubaoResourceMismatchErr{
+			return nil, 0, &doubaoResourceErr{
 				msg: fmt.Sprintf("doubao-speech: resource ID %q mismatched with speaker (code=%d): %s", resourceID, chunk.Code, chunk.Message),
 			}
 		}
