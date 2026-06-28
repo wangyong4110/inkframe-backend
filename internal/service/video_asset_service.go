@@ -279,21 +279,27 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 		}
 	}
 
-	// 确定 TTS 声音：段落级 > 角色声音查找（带缓存）> 默认
+	// 确定 TTS 声音与基准风格：段落级 voice > 角色配置 > 默认
+	// style 查找与 voice 查找解耦：即使段落已有 VoiceID，也要读角色风格作为基准情感
 	voice := seg.VoiceID
 	speed := 1.0
 	style := ""
-	if voice == "" && seg.Speaker != "" && s.characterRepo != nil && novelID > 0 {
+	if seg.Speaker != "" && s.characterRepo != nil && novelID > 0 {
 		if chars, e := s.listCharsByNovelCached(novelID); e == nil {
 			autoVoices := []string{"alloy", "echo", "fable", "nova", "onyx", "shimmer"}
 			for _, c := range chars {
 				if strings.EqualFold(c.Name, seg.Speaker) {
-					if c.VoiceConfig.VoiceID != "" {
-						voice = c.VoiceConfig.VoiceID
-					} else {
-						voice = autoVoices[c.ID%uint(len(autoVoices))]
+					if voice == "" { // 只在段落未指定 VoiceID 时才从角色取音色
+						if c.VoiceConfig.VoiceID != "" {
+							voice = c.VoiceConfig.VoiceID
+						} else {
+							voice = autoVoices[c.ID%uint(len(autoVoices))]
+						}
+						if c.VoiceConfig.VoiceSpeed > 0 {
+							speed = c.VoiceConfig.VoiceSpeed
+						}
 					}
-					style = c.VoiceConfig.VoiceStyle // 角色静态风格作为基准情感
+					style = c.VoiceConfig.VoiceStyle // 角色静态风格始终作为基准情感
 					break
 				}
 			}

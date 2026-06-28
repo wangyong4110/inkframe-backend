@@ -2080,6 +2080,71 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	return &GeneratedCharacterImage{URL: url, Description: name + " character sheet with face closeup"}, nil
 }
 
+// GeneratePortrait 基于三视图（threeViewURL 作为 DreamO 参考图）生成单张角色正面半身像。
+// Portrait 比 4 格 ThreeViewSheet 更适合作为分镜生成时 DreamO 的 IP-Adapter 输入：
+//   - 单张图聚焦面部特征，避免模型在多视角间分散注意力
+//   - DreamO 对单人正面半身像提取 embedding 的效果最佳
+//
+// 生成后存入 CharacterLook.Portrait；分镜图片生成时优先使用 Portrait 作为参考。
+func (s *ImageGenerationService) GeneratePortrait(ctx context.Context, tenantID uint, name, appearance, style, gender, threeViewURL, provider string) (*GeneratedCharacterImage, error) {
+	genderTag, genderNeg := resolveGenderInfo(gender)
+	qualityTokens := resolveStyleQualityTokens(style)
+
+	aiRef := threeViewURL
+	if !strings.HasPrefix(aiRef, "http://") && !strings.HasPrefix(aiRef, "https://") {
+		aiRef = ""
+	}
+
+	condensedAppearance := condenseVisualPrompt(appearance, 60)
+
+	var prompt string
+	if style == "realistic" || style == "real_person" {
+		genderPrefix := map[string]string{
+			"male": "1man, male, ", "female": "1woman, female, ", "neutral": "androgynous person, ",
+		}[gender]
+		sheetStyle := "photorealistic portrait, natural even studio lighting, soft shadows"
+		if style == "real_person" {
+			sheetStyle = "ultra-realistic skin texture, natural studio lighting, DSLR quality, 8k uhd, sharp focus"
+		}
+		prompt = genderPrefix +
+			"single character portrait, half-body bust shot, front-facing, neutral expression, " +
+			condensedAppearance + ", " +
+			"pure white background, centered composition, " +
+			sheetStyle + ", " + qualityTokens + ", " +
+			"no text no labels no watermarks"
+	} else {
+		styleDesc := resolveStyleIllustrationDesc(style)
+		genderPrefix := ""
+		if genderTag != "" {
+			genderPrefix = genderTag + ", "
+		}
+		prompt = genderPrefix +
+			"single character portrait, half-body bust shot, front-facing, neutral expression, " +
+			condensedAppearance + ", " +
+			"pure white background, centered composition, " +
+			styleDesc + ", " + qualityTokens + ", " +
+			"no text no labels no watermarks"
+	}
+
+	negativePrompt := "text, labels, watermark, full body, legs, feet, dynamic pose, action pose, " +
+		"different face, inconsistent face, extra limbs, bad anatomy, nsfw, lowres, poorly drawn"
+	if genderNeg != "" {
+		negativePrompt += ", " + genderNeg
+	}
+
+	refs := []string{}
+	if aiRef != "" {
+		refs = []string{aiRef}
+	}
+
+	logger.Printf("GeneratePortrait: %s style=%s ref=%v", name, style, aiRef != "")
+	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, "768x1024", 0)
+	if err != nil {
+		return nil, err
+	}
+	return &GeneratedCharacterImage{URL: url, Description: name + " portrait"}, nil
+}
+
 // ─── CharacterLook methods ────────────────────────────────────────────────────
 
 func (s *CharacterService) CreateLook(characterID, novelID uint, req *model.CreateCharacterLookRequest) (*model.CharacterLook, error) {

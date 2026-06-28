@@ -839,6 +839,18 @@ func (s *VideoService) buildStoryboardPrompt(
 		segLabel = fmt.Sprintf("（第%d段，共%d段）", segNo, totalSegs)
 	}
 
+	// 预加载角色的默认形象 VisualPrompt（供 storyboard_generate.j2 中 [image_prompt 外貌关键词参考] 使用）
+	charVisualPrompts := make(map[uint]string) // charID → VisualPrompt
+	if s.lookRepo != nil && len(characters) > 0 {
+		for _, c := range characters {
+			if c.DefaultLookID != 0 {
+				if look, err := s.lookRepo.GetByID(c.DefaultLookID); err == nil && look != nil && look.VisualPrompt != "" {
+					charVisualPrompts[c.ID] = look.VisualPrompt
+				}
+			}
+		}
+	}
+
 	// 过滤角色：优先匹配内容中出现的角色，否则回退到主角
 	var matchedChars []map[string]interface{}
 	if len(characters) > 0 {
@@ -881,7 +893,7 @@ func (s *VideoService) buildStoryboardPrompt(
 				"Name":         c.Name,
 				"Role":         c.Role,
 				"Description":  c.Description,
-				"VisualPrompt": "",
+				"VisualPrompt": charVisualPrompts[c.ID], // 来自 CharacterLook.VisualPrompt（默认形象的英文视觉提示词）
 				"DialogueLang": voiceLangToDialogueLang(c.VoiceConfig.VoiceLanguage),
 			})
 		}

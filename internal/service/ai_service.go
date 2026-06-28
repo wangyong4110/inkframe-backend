@@ -2427,10 +2427,7 @@ func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.Video
 			return ai.NewJimengVideoProvider(apiKey, apiSecretKey), nil
 		case "kling":
 			return ai.NewKlingProvider(apiKey, apiSecretKey, p.APIEndpoint), nil
-		case "seedance":
-			return ai.NewSeedanceProvider(apiKey, p.APIEndpoint), nil
-		case "doubao":
-			// doubao 视频使用 DoubaoVideoProvider（内联标志格式，默认 cn-beijing 端点）
+		case "seedance", "doubao":
 			return ai.NewDoubaoVideoProvider(apiKey, p.APIEndpoint), nil
 		case "happyhorse":
 			return ai.NewHappyHorseProvider(apiKey, p.APIEndpoint), nil
