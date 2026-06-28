@@ -75,7 +75,11 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 	}
 
 	var queued []*model.StoryboardShot
-	sem := make(chan struct{}, maxConcurrentShots)
+	concurrencyLimit := maxConcurrentShots
+	if s.videoConcurrency > 0 {
+		concurrencyLimit = s.videoConcurrency
+	}
+	sem := make(chan struct{}, concurrencyLimit)
 	var wg sync.WaitGroup
 	total := len(shotIDs)
 	var done atomic.Int32
@@ -205,10 +209,8 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, for
 
 	var queued []*model.StoryboardShot
 	concurrency := maxConcurrentShots
-	if s.aiService != nil {
-		if c := s.aiService.ImageConcurrency(); c > 0 && c < concurrency {
-			concurrency = c
-		}
+	if s.videoConcurrency > 0 {
+		concurrency = s.videoConcurrency
 	}
 	sem := make(chan struct{}, concurrency)
 	var wg sync.WaitGroup
@@ -1142,15 +1144,6 @@ func emotionToKlingParams(emotion, cameraType string) (mode string, cfgScale flo
 
 // GenerateShotVideo 为单个分镜提交视频生成任务
 func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspectRatio string, providerOverride ...string) error {
-	// 并发限流：若配置了 video_concurrency，则在此处等待令牌
-	s.videoSemMu.RLock()
-	vsem := s.videoSem
-	s.videoSemMu.RUnlock()
-	if vsem != nil {
-		vsem <- struct{}{}
-		defer func() { <-vsem }()
-	}
-
 	preferredProvider := ""
 	if len(providerOverride) > 0 {
 		preferredProvider = providerOverride[0]
@@ -1164,6 +1157,14 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	if provErr != nil {
 		logger.Errorf("GenerateShotVideo: shot %d 找不到视频提供商 preferred=%s tenantID=%d: %v", shot.ShotNo, preferredProvider, tenantID, provErr)
 		return fmt.Errorf("no video provider configured")
+	}
+
+	if s.aiService != nil {
+		release, err := s.aiService.acquireProviderSlot(context.Background(), tenantID, providerName)
+		if err != nil {
+			return fmt.Errorf("GenerateShotVideo: acquire slot for %s: %w", providerName, err)
+		}
+		defer release()
 	}
 
 	if videoAspectRatio == "" {
@@ -1377,6 +1378,18 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	klingMode, klingCFG, klingDefaultDur := emotionToKlingParams(shot.CamDir.EmotionalTone, shot.CamDir.CameraType)
 	if shotDuration <= 0 {
 		shotDuration = klingDefaultDur
+	}
+	// 用配音总时长覆盖 shotDuration：确保 Kling 选到能容纳完整配音的档位（5s 或 10s）
+	if s.segmentRepo != nil {
+		if segs, segErr := s.segmentRepo.ListByShotID(shot.ID); segErr == nil {
+			var totalAudio float64
+			for _, seg := range segs {
+				totalAudio += seg.DurationSecs
+			}
+			if totalAudio > shotDuration {
+				shotDuration = totalAudio
+			}
+		}
 	}
 
 	// 检查项目配置：KlingProForAction、HD、3D、色彩调色
@@ -1853,6 +1866,10 @@ func (s *VideoService) generateClipAndUploadWithRetry(ctx context.Context, shotI
 	if err != nil {
 		logger.Errorf("generateClipAndUploadWithRetry: shot %d not found: %v", shotID, err)
 		return
+	}
+	// 用配音时长覆盖 duration，确保 Ken Burns 视频与配音等长
+	if audioDur := s.shotTotalAudioDuration(shot); audioDur > duration {
+		duration = audioDur
 	}
 
 	var clipPath string

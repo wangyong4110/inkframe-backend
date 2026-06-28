@@ -37,6 +37,7 @@ type KnowledgeService struct {
 	}
 	vectorStore *vector.StoreManager
 	aiClient    ai.AIProvider
+	aiSvc       *AIService   // optional: used for per-model concurrency-controlled embedding
 	cache       *redis.Client // optional: for cross-instance idempotency in ExtractAndStorePlotPoints
 }
 
@@ -66,6 +67,23 @@ func NewKnowledgeService(
 func (s *KnowledgeService) WithRedis(c *redis.Client) *KnowledgeService {
 	s.cache = c
 	return s
+}
+
+// WithAIService 注入 AIService，启用 per-provider 并发控制的向量嵌入。
+func (s *KnowledgeService) WithAIService(svc *AIService) *KnowledgeService {
+	s.aiSvc = svc
+	return s
+}
+
+// embed 统一嵌入入口：优先走 aiSvc（含并发限流），回退到裸 aiClient。
+func (s *KnowledgeService) embed(ctx context.Context, tenantID uint, text string) ([]float32, error) {
+	if s.aiSvc != nil {
+		return s.aiSvc.Embed(ctx, tenantID, text)
+	}
+	if s.aiClient != nil {
+		return s.aiClient.Embed(ctx, text)
+	}
+	return nil, fmt.Errorf("no embedding provider available")
 }
 
 // GetByNovel 获取小说的所有知识条目
@@ -113,9 +131,9 @@ func (s *KnowledgeService) StoreKnowledge(ctx context.Context, kb *model.Knowled
 	}
 
 	// 若向量库已配置，追加写向量（不影响主流程）
-	if s.vectorStore != nil && s.aiClient != nil {
+	if s.vectorStore != nil && (s.aiClient != nil || s.aiSvc != nil) {
 		text := kb.Title + " " + kb.Content
-		vec, embedErr := s.aiClient.Embed(ctx, text)
+		vec, embedErr := s.embed(ctx, kb.TenantID, text)
 		if embedErr != nil {
 			// 嵌入失败：返回实际错误，让调用方感知（DB 记录已存在，数据不丢失）
 			return fmt.Errorf("KnowledgeService.StoreKnowledge: embedding failed for kb %d: %w", kb.ID, embedErr)
@@ -148,8 +166,8 @@ func (s *KnowledgeService) StoreKnowledge(ctx context.Context, kb *model.Knowled
 // SearchKnowledge 搜索知识（优先向量语义搜索，降级到关键词）
 func (s *KnowledgeService) SearchKnowledge(ctx context.Context, query string, limit int, novelID *uint) ([]*model.KnowledgeBase, error) {
 	// 尝试向量语义搜索
-	if s.vectorStore != nil && s.aiClient != nil {
-		vec, err := s.aiClient.Embed(ctx, query)
+	if s.vectorStore != nil && (s.aiClient != nil || s.aiSvc != nil) {
+		vec, err := s.embed(ctx, 0, query)
 		if err == nil {
 			store := s.vectorStore.DefaultStore()
 			if store != nil {
@@ -321,15 +339,31 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 }
 章节内容：%s`, chapter.Content)
 
-	req := ai.NewGenerateRequestBuilder().
-		UserMessage(prompt).
-		Temperature(0.3).
-		Build()
-
-	resp, err := aiClient.Generate(ctx, req)
-	if err != nil {
-		extractStatus = "error"
-		return err
+	var llmContent string
+	if s.aiSvc != nil {
+		// 走统一限流队列
+		var genErr error
+		llmContent, genErr = s.aiSvc.GenerateWithProviderCtx(ctx, 0, chapter.NovelID, "analysis", prompt, "",
+			StoryboardOverrides{Temperature: 0.3})
+		if genErr != nil {
+			extractStatus = "error"
+			return genErr
+		}
+	} else {
+		// 降级：直接调用裸 provider（无限流）
+		if aiClient == nil {
+			aiClient = s.aiClient
+		}
+		req := ai.NewGenerateRequestBuilder().
+			UserMessage(prompt).
+			Temperature(0.3).
+			Build()
+		resp, genErr := aiClient.Generate(ctx, req)
+		if genErr != nil {
+			extractStatus = "error"
+			return genErr
+		}
+		llmContent = resp.Content
 	}
 
 	// 解析结果
@@ -342,7 +376,7 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 		} `json:"plot_points"`
 	}
 
-	if err := json.Unmarshal([]byte(resp.Content), &result); err != nil {
+	if err := json.Unmarshal([]byte(llmContent), &result); err != nil {
 		extractStatus = "error"
 		return err
 	}

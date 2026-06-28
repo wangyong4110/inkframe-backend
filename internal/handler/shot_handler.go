@@ -822,6 +822,94 @@ func (h *VideoHandler) GetSyncManifest(c *gin.Context) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 口型对齐 (LipSync)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// GenerateLipSync POST /videos/:id/shots/:shot_id/lipsync
+// 提交口型对齐任务：角色参考图 + TTS 音频 → 口型视频。
+// 请求体（均可选）：{ "audio_url": "...", "image_url": "...", "model": "kling-v1-6" }
+// 立即返回 task_id；前端可轮询 GET .../lipsync/status 或等待 shot.status 变为 done。
+func (h *VideoHandler) GenerateLipSync(c *gin.Context) {
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
+	shotID, ok := parseID(c, "shot_id")
+	if !ok {
+		return
+	}
+
+	var req service.LipSyncRequest
+	_ = c.ShouldBindJSON(&req)
+
+	task, err := h.taskSvc.Create(getTenantID(c), "lipsync",
+		fmt.Sprintf("口型对齐 shot #%d", shotID), "shot", uint(shotID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Errorf("[VideoHandler] GenerateLipSync panic: %v", r)
+				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+
+		result, genErr := h.videoService.GenerateLipSyncVideoWithReq(uint(videoID), uint(shotID), req)
+		if genErr != nil {
+			logger.Errorf("[VideoHandler] GenerateLipSync failed: %v", genErr)
+			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
+			return
+		}
+
+		h.taskSvc.UpdateProgress(taskID, 20) //nolint:errcheck
+
+		// 同步轮询直到完成（timeout 内部控制）
+		if pollErr := h.videoService.PollLipSyncUntilDone(uint(videoID), uint(shotID)); pollErr != nil {
+			logger.Errorf("[VideoHandler] PollLipSync failed: %v", pollErr)
+			h.taskSvc.Fail(taskID, pollErr.Error()) //nolint:errcheck
+			return
+		}
+		h.taskSvc.Complete(taskID, gin.H{"lip_sync_task_id": result.TaskID}) //nolint:errcheck
+	}(task.TaskID)
+
+	c.JSON(http.StatusAccepted, gin.H{
+		"code":    0,
+		"message": "口型对齐任务已提交",
+		"data":    gin.H{"task_id": task.TaskID},
+	})
+}
+
+// GetLipSyncStatus GET /videos/:id/shots/:shot_id/lipsync/status
+// 查询口型对齐任务状态（前端轮询）。
+func (h *VideoHandler) GetLipSyncStatus(c *gin.Context) {
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if _, ok := h.getVideoForTenant(c, uint(videoID)); !ok {
+		return
+	}
+	shotID, ok := parseID(c, "shot_id")
+	if !ok {
+		return
+	}
+
+	result, err := h.videoService.GetLipSyncStatus(uint(videoID), uint(shotID))
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, result)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 分镜语音段落 (VoiceSegment) 处理器
 // ─────────────────────────────────────────────────────────────────────────────
 

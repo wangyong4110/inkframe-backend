@@ -90,9 +90,9 @@ func (p *KlingProvider) generate3xTurbo(ctx context.Context, req *VideoGenerateR
 	switch {
 	case dur <= 0:
 		dur = 5
-	case dur <= 4:
+	case dur <= 3:
 		dur = 3
-	case dur <= 7:
+	case dur <= 5:
 		dur = 5
 	default:
 		dur = 10
@@ -189,9 +189,9 @@ func (p *KlingProvider) GenerateVideo(ctx context.Context, req *VideoGenerateReq
 		mode = "std"
 	}
 
-	// Kling only accepts 5 or 10 seconds
+	// Kling only accepts 5 or 10 seconds; snap at 5 so audio >5s always gets a 10s clip
 	duration := req.Duration
-	if duration <= 7 {
+	if duration <= 5 {
 		duration = 5
 	} else {
 		duration = 10

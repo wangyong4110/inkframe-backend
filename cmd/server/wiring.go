@@ -319,7 +319,6 @@ func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *
 	aiSvc := service.NewAIService(repos.AIModelRepo, aiManager, repos.ModelProviderRepo).
 		WithNovelRepo(repos.NovelRepo).
 		WithEncryptionKey(cfg.Server.EncryptionKey).
-		WithImageConcurrency(5).
 		WithRedis(redisClient). // Fix: cross-instance provider cache invalidation
 		WithPromptFilter(promptFilter)
 
@@ -392,7 +391,8 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 		logger.Errorf("Warning: no default AI provider available; knowledge base embedding disabled")
 	}
 	knowledgeSvc := service.NewKnowledgeService(repos.KnowledgeBaseRepo, vectorStore, defaultAIProvider).
-		WithRedis(redisClient) // Fix: cross-instance idempotency for plot point extraction
+		WithRedis(redisClient).  // Fix: cross-instance idempotency for plot point extraction
+		WithAIService(aiSvc)     // per-provider concurrency-controlled embedding
 
 	// 章节版本 / 伏笔 / 时间线 / 角色弧光 / 风格
 	chapterVersionSvc := service.NewChapterVersionService(repos.ChapterVersionRepo, repos.ChapterRepo)
@@ -511,8 +511,6 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 	videoSvc.WithChapterCharacterRepo(repos.ChapterCharacterRepo)
 	videoSvc.WithLookRepo(repos.CharacterLookRepo)
 	videoSvc.WithItemRepo(repos.ItemRepo)
-	videoSvc.WithVideoConcurrency(1)
-	videoSvc.WithAudioConcurrency(3)
 
 	// 帧生成 / 一致性验证 / 小说转视频
 	frameGenSvc := service.NewFrameGeneratorService(aiSvc)

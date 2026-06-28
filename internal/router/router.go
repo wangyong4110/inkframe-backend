@@ -624,6 +624,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.POST("/:id/shots/:shot_id/copy", cfg.VideoHandler.CopyShot)
 			videos.DELETE("/:id/shots/:shot_id", cfg.VideoHandler.DeleteShot)
 			videos.POST("/:id/shots/:shot_id/refine-image", cfg.VideoHandler.RefineShotImage)
+			videos.POST("/:id/shots/:shot_id/lipsync", cfg.VideoHandler.GenerateLipSync)
+			videos.GET("/:id/shots/:shot_id/lipsync/status", cfg.VideoHandler.GetLipSyncStatus)
 			videos.POST("/:id/shots/:shot_id/sfx", cfg.VideoHandler.GenerateShotSFX)
 			videos.PUT("/:id/shots/:shot_id/sfx-tags", cfg.VideoHandler.UpdateShotSFXTags)
 			// 音效条目（多条）

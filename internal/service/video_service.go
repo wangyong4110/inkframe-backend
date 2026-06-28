@@ -45,9 +45,6 @@ type VideoService struct {
 	lookRepo              *repository.CharacterLookRepository
 	itemRepo              *repository.ItemRepository
 	taskSvc            *TaskService
-	videoSem           chan struct{} // nil = unlimited; set via WithVideoConcurrency
-	videoSemMu         sync.RWMutex  // protects videoSem replacement
-	audioSem           chan struct{} // limits concurrent TTS calls; nil = unlimited
 	charListCache      sync.Map      // novelID → *charListEntry (short-lived cache for batch voice gen)
 	// 广场社交
 	videoLikeRepo    *repository.VideoLikeRepository
@@ -56,11 +53,22 @@ type VideoService struct {
 	cache            *redis.Client // optional: cross-instance view dedup
 	cleanupOnce      sync.Once
 	stopCh           chan struct{} // closed by Shutdown() to stop background goroutines
+	videoConcurrency int          // max parallel video generation calls (0 = use default)
+	audioConcurrency int          // max parallel audio generation calls (0 = use default)
 	activePoll            sync.Map     // videoID → struct{} (prevents duplicate PollAndStitchVideo goroutines)
 	generatingStoryboard  sync.Map     // videoID → context.CancelFunc (cancels in-progress GenerateStoryboard)
 	backendBaseURL        string       // e.g. "http://192.168.1.10:8080"; used to resolve relative /api/v1/media/* URLs
 	dbMediaReader         storage.Service // DB-backed storage for reading legacy /api/v1/media/* assets
 }
+
+// WithVideoConcurrency 设置视频生成最大并发数（用于 BatchGenerateShots）。
+func (s *VideoService) WithVideoConcurrency(n int) *VideoService { s.videoConcurrency = n; return s }
+
+// WithAudioConcurrency 设置音频生成最大并发数（用于批量配音）。
+func (s *VideoService) WithAudioConcurrency(n int) *VideoService { s.audioConcurrency = n; return s }
+
+// SetVideoConcurrency 动态更新视频生成并发数（供系统设置热更新使用）。
+func (s *VideoService) SetVideoConcurrency(n int) { s.videoConcurrency = n }
 
 // GetNovelByID 通过 novelRepo 加载小说（供 handler 传递给 CapCutService 等下游服务）
 func (s *VideoService) GetNovelByID(id uint) (*model.Novel, error) {
@@ -106,34 +114,6 @@ func (s *VideoService) GetNovelVideoConfig(novelID uint) *model.NovelVideoConfig
 func (s *VideoService) WithSystemSettingRepo(r *repository.SystemSettingRepository) *VideoService {
 	s.systemSettingRepo = r
 	return s
-}
-
-// WithVideoConcurrency 设置视频生成的最大并发数（启动时调用）。
-func (s *VideoService) WithVideoConcurrency(n int) *VideoService {
-	if n > 0 {
-		s.videoSem = make(chan struct{}, n)
-	}
-	return s
-}
-
-// WithAudioConcurrency 设置 TTS 音频生成的最大并发数。
-// 默认不限制；推荐设置为 3，防止批量生成时触发 API 限速（429）。
-func (s *VideoService) WithAudioConcurrency(n int) *VideoService {
-	if n > 0 {
-		s.audioSem = make(chan struct{}, n)
-	}
-	return s
-}
-
-// SetVideoConcurrency 运行时动态调整视频并发度（线程安全）。
-func (s *VideoService) SetVideoConcurrency(n int) {
-	s.videoSemMu.Lock()
-	defer s.videoSemMu.Unlock()
-	if n > 0 {
-		s.videoSem = make(chan struct{}, n)
-	} else {
-		s.videoSem = nil
-	}
 }
 
 func (s *VideoService) WithLookRepo(r *repository.CharacterLookRepository) *VideoService {
@@ -1105,6 +1085,10 @@ func (s *VideoService) BatchGenerateShotClips(videoID uint, shotIDs []uint, prog
 			duration := sh.Duration
 			if duration <= 0 {
 				duration = defaultShotDurationSecs
+			}
+			// 用配音时长覆盖 duration，确保 Ken Burns 视频与配音等长
+			if audioDur := s.shotTotalAudioDuration(sh); audioDur > duration {
+				duration = audioDur
 			}
 			localImage, dlErr := s.resolveImageURLToLocalFile(sh.ImageURL, fmt.Sprintf("inkframe-img-%d-", sh.ID))
 			if dlErr != nil {

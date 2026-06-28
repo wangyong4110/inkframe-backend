@@ -425,13 +425,6 @@ func (s *VideoService) syncShotDurationAfterVoice(shotID uint) {
 
 // GenerateShotAudio 为单个分镜生成 TTS 音频（同步），生成后写入 ShotVoiceSegment 并更新 shot.Duration
 func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID uint, narrationVoice string) error {
-	// 阻塞等待信号量槽位：audioSem 用于限速（防 429），不应跳过。
-	// 注意：此函数始终在后台 goroutine 中调用，阻塞等待是正确行为。
-	if s.audioSem != nil {
-		s.audioSem <- struct{}{}
-		defer func() { <-s.audioSem }()
-	}
-
 	// Check idempotency + delegate to segment-aware stitching if segments exist.
 	if s.segmentRepo != nil {
 		segs, err := s.segmentRepo.ListByShotID(shot.ID)
@@ -903,4 +896,22 @@ func calcAudioDuration(data []byte, format string) float64 {
 		return 0
 	}
 	return mp3Duration(data)
+}
+
+// shotTotalAudioDuration 返回分镜的配音总时长（秒）。
+// 优先累加 ShotVoiceSegment.DurationSecs；若无 segments，退化为 shot.Duration（已由
+// syncShotDurationAfterVoice 对齐到配音时长）。返回 0 表示尚未生成配音。
+func (s *VideoService) shotTotalAudioDuration(shot *model.StoryboardShot) float64 {
+	if s.segmentRepo != nil {
+		if segs, err := s.segmentRepo.ListByShotID(shot.ID); err == nil && len(segs) > 0 {
+			var total float64
+			for _, seg := range segs {
+				total += seg.DurationSecs
+			}
+			if total > 0 {
+				return total
+			}
+		}
+	}
+	return shot.Duration
 }

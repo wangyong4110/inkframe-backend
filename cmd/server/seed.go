@@ -4,13 +4,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 
 	"github.com/inkframe/inkframe-backend/internal/config"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
-	"github.com/inkframe/inkframe-backend/internal/repository"
 	"github.com/inkframe/inkframe-backend/internal/service"
 	"gorm.io/gorm"
 )
@@ -254,23 +252,6 @@ func seedAIModels(db *gorm.DB) {
 	db.Exec(`DELETE FROM ink_ai_model WHERE deleted_at IS NULL AND provider_id IN (SELECT id FROM ink_model_provider WHERE tenant_id = 0)`)
 
 	logger.Printf("seedAIModels: %d system providers ready (models seeded on-demand per tenant)", len(providerIDs))
-}
-
-
-// seedConcurrencySettings 将并发度配置种子写入 DB（首次启动），或从 DB 加载并应用到运行时服务。
-// 并发度通过"模型管理 → 系统设置"页面配置，默认值为 1。
-func seedConcurrencySettings(repo *repository.SystemSettingRepository, aiSvc *service.AIService, videoSvc *service.VideoService) {
-	seed := func(key, desc string, apply func(int)) {
-		if v, err := repo.Get(key); err == nil {
-			if n, err := strconv.Atoi(v); err == nil && n > 0 {
-				apply(n)
-			}
-		} else {
-			_ = repo.Set(key, "1", desc)
-		}
-	}
-	seed("image_concurrency", "图像生成最大并发数", aiSvc.SetImageConcurrency)
-	seed("video_concurrency", "视频生成最大并发数", videoSvc.SetVideoConcurrency)
 }
 
 // seedWebSearchMcpTool 幂等写入系统内置 web_search MCP 工具

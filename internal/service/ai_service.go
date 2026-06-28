@@ -48,10 +48,8 @@ type AIService struct {
 	dbMediaReader storage.Service // DB-backed reader for legacy /api/v1/media/* paths
 	taskRouting   TaskRouting
 	serverBaseURL string       // base URL for resolving relative media paths (fallback, prefer dbMediaReader)
-	providerCache sync.Map      // key: "tenantID:providerName" → providerCacheEntry
-	modelLimiters sync.Map      // key: "tenantID:modelName" → *modelCallLimiter (shared per-model concurrency+rate)
-	imageSem      chan struct{} // nil = unlimited; set via WithImageConcurrency
-	semMu         sync.RWMutex  // protects imageSem replacement
+	providerCache sync.Map // key: "tenantID:providerName" → providerCacheEntry
+	modelLimiters sync.Map // key: "tenantID:modelName" → *modelCallLimiter (shared per-model concurrency+rate)
 	stopCh        chan struct{} // closed by Shutdown() to stop background goroutines
 	encKey        string       // AES-256-GCM key for decrypting stored API credentials
 	cache         redisPublisher // optional: for cross-instance provider cache invalidation
@@ -259,47 +257,25 @@ func (s *AIService) WithTaskRouting(tr TaskRouting) *AIService {
 	return s
 }
 
-// WithImageConcurrency 设置图像生成的最大并发数。
-// n ≤ 0 时不限制并发（仅受 AI 提供商限速约束）。
-func (s *AIService) WithImageConcurrency(n int) *AIService {
-	if n > 0 {
-		s.imageSem = make(chan struct{}, n)
-	}
-	return s
-}
-
-// SetImageConcurrency 运行时动态调整图像并发度（线程安全）。
-// 替换 channel 前先排干旧 channel 中的令牌，避免新旧 channel 并发竞争导致
-// goroutine 持有旧 channel 令牌但向新 channel 归还的情况。
-func (s *AIService) SetImageConcurrency(n int) {
-	s.semMu.Lock()
-	defer s.semMu.Unlock()
-	// 排干旧 channel（非阻塞）
-	if s.imageSem != nil {
-	drainLoop:
-		for {
-			select {
-			case <-s.imageSem:
-			default:
-				break drainLoop
+// Embed 对文本执行向量嵌入，优先使用 DB 中配置的 embedding 类型提供商，
+// 未配置时回退到 aiManager 默认提供商。调用受 per-provider 并发队列约束。
+func (s *AIService) Embed(ctx context.Context, tenantID uint, text string) ([]float32, error) {
+	if s.providerRepo != nil {
+		if provider, provName, err := s.loadDBProviderByType(tenantID, "embedding"); err == nil && provider != nil {
+			release, acquireErr := s.acquireProviderSlot(ctx, tenantID, provName)
+			if acquireErr != nil {
+				return nil, acquireErr
 			}
+			defer release()
+			return provider.Embed(ctx, text)
 		}
 	}
-	if n > 0 {
-		s.imageSem = make(chan struct{}, n)
-	} else {
-		s.imageSem = nil
+	if s.aiManager != nil {
+		if p, err := s.aiManager.GetProvider(""); err == nil {
+			return p.Embed(ctx, text)
+		}
 	}
-}
-
-// ImageConcurrency 返回当前图像并发度上限（0 = 不限制）。
-func (s *AIService) ImageConcurrency() int {
-	s.semMu.RLock()
-	defer s.semMu.RUnlock()
-	if s.imageSem == nil {
-		return 0
-	}
-	return cap(s.imageSem)
+	return nil, fmt.Errorf("no embedding provider configured")
 }
 
 // Generate 生成内容（使用系统级提供商，tenantID=0）
@@ -406,6 +382,74 @@ func (s *AIService) getModelLimiter(tenantID uint, modelName string, concurrency
 	l := newModelCallLimiter(concurrency, ratePerMin)
 	actual, _ := s.modelLimiters.LoadOrStore(key, l)
 	return actual.(*modelCallLimiter)
+}
+
+// acquireModelSlotByName 按模型名从 DB 查找并发/限速配置，获取共享限制器令牌。
+// 返回 release 函数（必须调用以释放令牌）和错误。未配置限制时返回 no-op release。
+func (s *AIService) acquireModelSlotByName(ctx context.Context, tenantID uint, modelName string) (func(), error) {
+	if s.modelRepo == nil || modelName == "" {
+		return func() {}, nil
+	}
+	m, err := s.modelRepo.GetByName(modelName)
+	if err != nil || (m.Concurrency <= 0 && m.RateLimit <= 0) {
+		return func() {}, nil
+	}
+	lim := s.getModelLimiter(tenantID, modelName, m.Concurrency, m.RateLimit)
+	if lim == nil {
+		return func() {}, nil
+	}
+	if err := lim.Acquire(ctx); err != nil {
+		return func() {}, fmt.Errorf("model %s: %w", modelName, err)
+	}
+	return lim.Release, nil
+}
+
+// acquireProviderSlot 按提供商名查找并发/限速配置（适用于 TTS/SFX 等按 provider 而非 model 调度的场景）。
+// 从 DB 中找出该 provider 下第一个配置了并发/限速的 AIModel 记录；未配置时返回 no-op release。
+func (s *AIService) acquireProviderSlot(ctx context.Context, tenantID uint, providerName string) (func(), error) {
+	if s.modelRepo == nil || s.providerRepo == nil || providerName == "" {
+		return func() {}, nil
+	}
+	// 找到 provider 的 DB ID
+	providers, err := s.providerRepo.ListByTenant(tenantID)
+	if err != nil {
+		return func() {}, nil
+	}
+	var providerID uint
+	for _, p := range providers {
+		if p.IsActive && strings.EqualFold(p.Name, providerName) {
+			providerID = p.ID
+			break
+		}
+	}
+	if providerID == 0 {
+		return func() {}, nil
+	}
+	// 找到该 provider 下有限流配置的 AIModel
+	pid := providerID
+	models, err := s.modelRepo.List(&pid, tenantID)
+	if err != nil || len(models) == 0 {
+		return func() {}, nil
+	}
+	var concurrency, rateLimit int
+	for _, mm := range models {
+		if mm.Concurrency > 0 || mm.RateLimit > 0 {
+			concurrency = mm.Concurrency
+			rateLimit = mm.RateLimit
+			break
+		}
+	}
+	if concurrency <= 0 && rateLimit <= 0 {
+		return func() {}, nil
+	}
+	lim := s.getModelLimiter(tenantID, "provider:"+providerName, concurrency, rateLimit)
+	if lim == nil {
+		return func() {}, nil
+	}
+	if err := lim.Acquire(ctx); err != nil {
+		return func() {}, fmt.Errorf("provider %s: %w", providerName, err)
+	}
+	return lim.Release, nil
 }
 
 // getTenantProvider 按租户加载提供商（带缓存，TTL 5 分钟）。
@@ -1512,19 +1556,6 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 		return "", fmt.Errorf("AI manager not initialized")
 	}
 
-	// 并发限流：若配置了 image_concurrency，则在此处等待令牌
-	s.semMu.RLock()
-	sem := s.imageSem
-	s.semMu.RUnlock()
-	if sem != nil {
-		select {
-		case sem <- struct{}{}:
-			defer func() { <-sem }()
-		case <-ctx.Done():
-			return "", ctx.Err()
-		}
-	}
-
 	weight := 1.0
 	if len(consistencyWeight) > 0 && consistencyWeight[0] > 0 {
 		weight = consistencyWeight[0]
@@ -1566,8 +1597,14 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 		if sz == "" {
 			sz = entry.Size
 		}
+		modelName := selectImageModel(*entry, referenceImage, style, weight)
+		release, err := s.acquireModelSlotByName(ctx, tenantID, modelName)
+		if err != nil {
+			return "", err
+		}
+		defer release()
 		resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
-			Model:             selectImageModel(*entry, referenceImage, style, weight),
+			Model:             modelName,
 			Prompt:            prompt,
 			NegativePrompt:    negativePrompt,
 			Size:              sz,
@@ -1617,14 +1654,18 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 			lastErr = err
 			continue
 		}
-		model := selectImageModel(e, referenceImage, style, weight)
-		logger.Printf("GenerateCharacterThreeView: trying provider=%s model=%s refImage=%v", e.ProviderName, model, referenceImage != "")
+		modelName := selectImageModel(e, referenceImage, style, weight)
+		logger.Printf("GenerateCharacterThreeView: trying provider=%s model=%s refImage=%v", e.ProviderName, modelName, referenceImage != "")
 		eSz := sizeOverride
 		if eSz == "" {
 			eSz = e.Size
 		}
+		release, acquireErr := s.acquireModelSlotByName(ctx, tenantID, modelName)
+		if acquireErr != nil {
+			return "", acquireErr
+		}
 		resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
-			Model:             model,
+			Model:             modelName,
 			Prompt:            prompt,
 			NegativePrompt:    negativePrompt,
 			Size:              eSz,
@@ -1633,6 +1674,7 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 			ConsistencyWeight: weight,
 			Extra:             klingResolutionExtra(e.ProviderName, eSz),
 		})
+		release()
 		if err != nil {
 			logger.Errorf("GenerateCharacterThreeView: provider=%s failed: %v", e.ProviderName, err)
 			lastErr = err
@@ -1655,18 +1697,6 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantID uint, providerName, prompt string, referenceImages []string, style, negativePrompt, size string, seed int64, consistencyWeight ...float64) (string, error) {
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
-	}
-
-	s.semMu.RLock()
-	sem := s.imageSem
-	s.semMu.RUnlock()
-	if sem != nil {
-		select {
-		case sem <- struct{}{}:
-			defer func() { <-sem }()
-		case <-ctx.Done():
-			return "", ctx.Err()
-		}
 	}
 
 	weight := 1.0
@@ -1795,7 +1825,13 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		if err != nil {
 			return "", fmt.Errorf("image provider %q not available: %w", providerName, err)
 		}
-		resp, err := provider.ImageGenerate(ctx, buildReq(selectImageModel(*entry, firstRef, style, weight), entry.Size, entry.ProviderName))
+		modelName := selectImageModel(*entry, firstRef, style, weight)
+		release, err := s.acquireModelSlotByName(ctx, tenantID, modelName)
+		if err != nil {
+			return "", err
+		}
+		defer release()
+		resp, err := provider.ImageGenerate(ctx, buildReq(modelName, entry.Size, entry.ProviderName))
 		if err != nil {
 			return "", err
 		}
@@ -1832,7 +1868,7 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 			lastErr = err
 			continue
 		}
-		model := selectImageModel(e, firstRef, style, weight)
+		modelName := selectImageModel(e, firstRef, style, weight)
 		{
 			// 日志：打印 extRefs 的类型分布（base64/url/unknown），方便确认参考图是否被正确预处理
 			extRefTypes := make([]string, len(extRefs))
@@ -1845,9 +1881,14 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 					extRefTypes[i] = "unknown"
 				}
 			}
-			logger.Printf("GenerateCharacterThreeViewMulti: trying provider=%s model=%s refs=%d extRefs=%d types=%v", e.ProviderName, model, len(referenceImages), len(extRefs), extRefTypes)
+			logger.Printf("GenerateCharacterThreeViewMulti: trying provider=%s model=%s refs=%d extRefs=%d types=%v", e.ProviderName, modelName, len(referenceImages), len(extRefs), extRefTypes)
 		}
-		resp, err := provider.ImageGenerate(ctx, buildReq(model, e.Size, e.ProviderName))
+		release, acquireErr := s.acquireModelSlotByName(ctx, tenantID, modelName)
+		if acquireErr != nil {
+			return "", acquireErr
+		}
+		resp, err := provider.ImageGenerate(ctx, buildReq(modelName, e.Size, e.ProviderName))
+		release()
 		if err != nil {
 			logger.Errorf("GenerateCharacterThreeViewMulti: provider=%s failed: %v", e.ProviderName, err)
 			lastErr = err
@@ -2004,17 +2045,6 @@ func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint,
 	if s.aiManager == nil {
 		return "", fmt.Errorf("AI manager not initialized")
 	}
-	s.semMu.RLock()
-	sem := s.imageSem
-	s.semMu.RUnlock()
-	if sem != nil {
-		select {
-		case sem <- struct{}{}:
-			defer func() { <-sem }()
-		case <-ctx.Done():
-			return "", ctx.Err()
-		}
-	}
 
 	// 将图片转为 base64，确保图片提供商服务器能取到数据
 	imgInput := s.fetchImageAsBase64(ctx, imageURL)
@@ -2057,7 +2087,12 @@ func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint,
 			continue
 		}
 		req.Model = selectImageModel(e, imgInput, "")
+		release, acquireErr := s.acquireModelSlotByName(ctx, tenantID, req.Model)
+		if acquireErr != nil {
+			return "", acquireErr
+		}
 		resp, err := provider.ImageGenerate(ctx, req)
+		release()
 		if err != nil {
 			lastErr = err
 			continue
@@ -2107,11 +2142,13 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 	}
 
 	var provider ai.AIProvider
+	var provName string
 
 	// 1. DB 模式：优先选取内置音色表中包含请求 voice ID 的 provider
 	if s.providerRepo != nil {
-		if p, err := s.loadDBVoiceProvider(tenantID, "voice", voice); err == nil && p != nil {
+		if p, name, err := s.loadDBVoiceProvider(tenantID, "voice", voice); err == nil && p != nil {
 			provider = p
+			provName = name
 		}
 	}
 
@@ -2119,6 +2156,7 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 	if provider == nil && s.taskRouting.TTS != "" {
 		if p, err := s.aiManager.GetProvider(s.taskRouting.TTS); err == nil {
 			provider = p
+			provName = s.taskRouting.TTS
 		}
 	}
 	// 注意：不再兜底到默认 LLM provider，LLM 提供商通常不支持 /audio/speech 接口，
@@ -2127,6 +2165,12 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 	if provider == nil {
 		return "", fmt.Errorf("未配置语音合成提供商，请在「模型管理」中添加一个类型为 voice 或 tts 的 AI 提供商（如豆包语音、OpenAI TTS 等）并填写 API Key")
 	}
+
+	release, err := s.acquireProviderSlot(ctx, tenantID, provName)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 
 	if speed <= 0 {
 		speed = 1.0
@@ -2151,10 +2195,15 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 // GenerateSFX 使用 DB 中配置的 sfx 类型提供商生成音效，返回 CDN URL 和时长（秒）。
 // prompt: 音效描述，如 "春节烟花声"；duration: 期望时长（秒，3.0~10.0）。
 func (s *AIService) GenerateSFX(ctx context.Context, tenantID uint, prompt string, duration float64) (string, float64, error) {
-	provider, err := s.loadDBProviderByType(tenantID, "sfx")
+	provider, provName, err := s.loadDBProviderByType(tenantID, "sfx")
 	if err != nil {
 		return "", 0, err
 	}
+	release, err := s.acquireProviderSlot(ctx, tenantID, provName)
+	if err != nil {
+		return "", 0, err
+	}
+	defer release()
 	resp, err := provider.AudioGenerate(ctx, &ai.AudioGenerateRequest{
 		Text:     prompt,
 		Duration: duration,
@@ -2167,7 +2216,7 @@ func (s *AIService) GenerateSFX(ctx context.Context, tenantID uint, prompt strin
 
 // HasSFXProvider 判断当前租户是否已配置可用的文生音效提供商。
 func (s *AIService) HasSFXProvider(tenantID uint) bool {
-	_, err := s.loadDBProviderByType(tenantID, "sfx")
+	_, _, err := s.loadDBProviderByType(tenantID, "sfx")
 	return err == nil
 }
 
@@ -2178,6 +2227,11 @@ func (s *AIService) GenerateSFXWithProvider(ctx context.Context, tenantID uint, 
 	if err != nil {
 		return "", 0, err
 	}
+	release, err := s.acquireProviderSlot(ctx, tenantID, providerName)
+	if err != nil {
+		return "", 0, err
+	}
+	defer release()
 	resp, err := p.AudioGenerate(ctx, &ai.AudioGenerateRequest{Text: prompt, Duration: duration})
 	if err != nil {
 		return "", 0, err
@@ -2211,16 +2265,18 @@ func (s *AIService) loadDBProviderByName(tenantID uint, name string) (ai.AIProvi
 }
 
 // loadDBProviderByType 从 DB 中取第一个有效的指定类型提供商（如 "sfx"、"voice"）。
-func (s *AIService) loadDBProviderByType(tenantID uint, modelType string) (ai.AIProvider, error) {
+// 返回 provider、提供商名称和错误。
+func (s *AIService) loadDBProviderByType(tenantID uint, modelType string) (ai.AIProvider, string, error) {
 	return s.loadDBVoiceProvider(tenantID, modelType, "")
 }
 
 // loadDBVoiceProvider 按 voiceID 从内置音色表优先匹配，未命中则取第一个有效 provider。
 // voiceID 为空时退化为 loadDBProviderByType 行为。
-func (s *AIService) loadDBVoiceProvider(tenantID uint, modelType, voiceID string) (ai.AIProvider, error) {
+// 返回 provider、提供商名称和错误。
+func (s *AIService) loadDBVoiceProvider(tenantID uint, modelType, voiceID string) (ai.AIProvider, string, error) {
 	providers, err := s.providerRepo.ListByModelType(tenantID, modelType)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	// 过滤出有凭据的活跃 provider，同时按 voiceID 打优先级
@@ -2261,10 +2317,10 @@ func (s *AIService) loadDBVoiceProvider(tenantID uint, modelType, voiceID string
 				continue
 			}
 			logger.Printf("loadDBVoiceProvider: using %s provider %q (voice=%q priority=%d)", modelType, c.p.Name, voiceID, pass)
-			return provider, nil
+			return provider, c.p.Name, nil
 		}
 	}
-	return nil, fmt.Errorf("no %s providers configured in DB", modelType)
+	return nil, "", fmt.Errorf("no %s providers configured in DB", modelType)
 }
 
 // GetBGMProviderCreds 从 DB 中取指定 music 类型提供商的凭据（apiKey, endpoint）。
@@ -2387,6 +2443,36 @@ func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.Video
 		return nil, fmt.Errorf("video provider %q not configured for tenant %d", name, tenantID)
 	}
 	return nil, fmt.Errorf("no video provider configured for tenant %d", tenantID)
+}
+
+// GetTenantLipSyncProvider 查找租户已配置的口型对齐提供商。
+// 目前仅支持 kling（使用 kling provider 的 AK/SK 构造 KlingLipSyncProvider）。
+func (s *AIService) GetTenantLipSyncProvider(tenantID uint) (ai.LipSyncProvider, error) {
+	providers, err := s.providerRepo.ListByModelType(tenantID, "video")
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range providers {
+		if !p.IsActive {
+			continue
+		}
+		if !providerHasCredentials(p) {
+			continue
+		}
+		if strings.ToLower(p.Name) != "kling" {
+			continue
+		}
+		apiKey, err := crypto.Decrypt(p.APIKey, s.encKey)
+		if err != nil {
+			continue
+		}
+		apiSecretKey, err := crypto.Decrypt(p.APISecretKey, s.encKey)
+		if err != nil {
+			continue
+		}
+		return ai.NewKlingLipSyncProvider(apiKey, apiSecretKey, p.APIEndpoint), nil
+	}
+	return nil, fmt.Errorf("no lip sync provider configured for tenant %d (kling required)", tenantID)
 }
 
 // GetActiveVideoModelName 从数据库查询指定 provider 的第一个激活视频模型名。
