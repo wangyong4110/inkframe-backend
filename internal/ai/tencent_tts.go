@@ -21,27 +21,35 @@ import (
 // 官方文档：https://cloud.tencent.com/document/product/1073/94308
 // 鉴权：TC3-HMAC-SHA256（腾讯云 API 3.0 签名方式）
 //
-// 音色列表（VoiceType）：
+// 完整音色列表：https://cloud.tencent.com/document/product/1073/92668
 //
-//	101001 = 智言（男，标准）
-//	101002 = 智雅（女，标准）
-//	101003 = 智燕（女，温暖）
-//	101004 = 智晶（女，标准）
-//	101005 = 智嘉（男，专业）
-//	101006 = 智开（男，播音）
-//	101007 = 智凯（男，专业）
-//	101008 = 智浩（男，播音）
-//	101009 = 智莉（女，温暖）
-//	101010 = 智华（男，年轻）
-//	101011 = 智燃（男，活力）
-//	101012 = 智雪（女，温柔）
-//	101013 = 智希（女，活泼）
-//	101014 = 智宁（男，成熟）
-//	101015 = 智萌（童，活泼）
-//	101016 = 智甜（女，甜美）
-//	101017 = 智蓉（女，四川话）
-//	101050 = WeJack（英文男声）
-//	101051 = WeRose（英文女声）
+// 超自然大模型音色（50xxxx / 60xxxx）：
+//
+//	502001 = 智小柔（聊天女声）  502003 = 智小敏（聊天女声）  502004 = 智小满（营销女声）
+//	502005 = 智小解（解说男声）  502006 = 智小悟（聊天男声）  502007 = 智小虎（聊天童声）
+//	602003 = 爱小悠（聊天女声）  602004 = 暖心阿灿（聊天男声）  602005 = 专业梓欣（聊天女声）
+//	603000 = 懂事少年（特色男声）  603001 = 潇湘妹妹（特色女声）  603002 = 软萌心心（特色男童声）
+//	603003 = 随和老李（聊天男声）  603004 = 温柔小柠（聊天女声）  603005 = 知心大林（聊天男声）
+//	603006 = 沉稳青叔（聊天男声）  603007 = 邻家女孩（聊天女声）
+//
+// 大模型音色（50xxxx / 60xxxx）：
+//
+//	501000 = 智斌（阅读男声）  501001 = 智兰（资讯女声）  501002 = 智菊（阅读女声）
+//	501003 = 智宇（阅读男声）  501004 = 月华（聊天女声）  501005 = 飞镜（聊天男声）
+//	501006 = 千嶂（聊天男声）  501007 = 浅草（聊天男声）
+//	501008 = WeJames（英文男声）  501009 = WeWinny（英文女声）
+//	601008 = 爱小豪（聊天男声，多情感）  601009 = 爱小芊（聊天女声，多情感）  601010 = 爱小娇（聊天女声，多情感）
+//	601011 = 爱小川（聊天男声）  601012 = 爱小璟（特色女声）  601013 = 爱小伊（阅读女声）  601014 = 爱小简（聊天男声）
+//
+// 精品音色（10xxxx）：
+//
+//	101001 = 智瑜（情感女声）  101004 = 智云（通用男声）  101011 = 智燕（新闻女声）
+//	101013 = 智辉（新闻男声）  101015 = 智萌（男童声）    101016 = 智甜（女童声）
+//	101019 = 智彤（粤语女声）  101021 = 智瑞（新闻男声）  101026 = 智希（通用女声）
+//	101027 = 智梅（通用女声）  101030 = 智柯（通用男声）  101050 = WeJack（英文男声）
+//	101054 = 智友（通用男声）  101055 = 智付（通用女声）
+//
+// 一句话复刻：200000000（配合 FastVoiceType 使用）
 type TencentTTSProvider struct {
 	secretID  string // 腾讯云 SecretId
 	secretKey string // 腾讯云 SecretKey
@@ -59,26 +67,40 @@ const (
 
 // tencentTTSRequest 请求参数
 type tencentTTSRequest struct {
-	Text       string  `json:"Text"`
-	SessionId  string  `json:"SessionId"`
-	Volume     float64 `json:"Volume"`     // 0~10，默认 0
-	Speed      float64 `json:"Speed"`      // -2~6，默认 0
-	ProjectId  int     `json:"ProjectId"`  // 默认 0
-	ModelType  int     `json:"ModelType"`  // 1=基础版，2=精品版（默认 1）
-	VoiceType  int     `json:"VoiceType"`  // 音色 ID
-	PrimaryLanguage int `json:"PrimaryLanguage"` // 1=中文（默认）
-	SampleRate int     `json:"SampleRate"` // 采样率：8000/16000（默认 16000）
-	Codec      string  `json:"Codec"`      // mp3/pcm/ogg，默认 mp3
-	EmotionCategory string `json:"EmotionCategory,omitempty"` // 情感分类
-	EmotionIntensity int  `json:"EmotionIntensity,omitempty"` // 情感强度 50~200
+	Text            string  `json:"Text"`
+	SessionId       string  `json:"SessionId"`
+	Volume          float64 `json:"Volume"`          // [-10,10]，默认 0
+	Speed           float64 `json:"Speed"`           // [-2,6]，默认 0
+	ProjectId       int     `json:"ProjectId"`       // 默认 0
+	ModelType       int     `json:"ModelType"`       // 1=默认
+	VoiceType       int     `json:"VoiceType"`       // 音色 ID；一句话复刻固定填 200000000
+	FastVoiceType   string  `json:"FastVoiceType,omitempty"` // 一句话复刻音色 ID（VoiceType=200000000 时填入）
+	PrimaryLanguage int     `json:"PrimaryLanguage"` // 1=中文（默认），2=英文
+	SampleRate      int     `json:"SampleRate"`      // 8000/16000（默认）/24000
+	Codec           string  `json:"Codec"`           // mp3/wav/pcm，默认 mp3
+	EnableSubtitle  bool    `json:"EnableSubtitle,omitempty"`  // 是否返回时间戳
+	SegmentRate     int     `json:"SegmentRate,omitempty"`     // 断句敏感阈值 [0,1,2]
+	EmotionCategory string  `json:"EmotionCategory,omitempty"` // 情感分类
+	EmotionIntensity int    `json:"EmotionIntensity,omitempty"` // 情感强度 50~200
+}
+
+// tencentSubtitle 腾讯云 TTS 时间戳单元
+type tencentSubtitle struct {
+	BeginIndex int    `json:"BeginIndex"`
+	EndIndex   int    `json:"EndIndex"`
+	BeginTime  int    `json:"BeginTime"`
+	EndTime    int    `json:"EndTime"`
+	Phoneme    string `json:"Phoneme"`
+	Text       string `json:"Text"`
 }
 
 // tencentTTSResponse 响应
 type tencentTTSResponse struct {
 	Response struct {
-		Audio     string `json:"Audio"`     // base64 编码的 MP3
-		SessionId string `json:"SessionId"`
-		RequestId string `json:"RequestId"`
+		Audio     string            `json:"Audio"`     // base64 编码的音频
+		SessionId string            `json:"SessionId"`
+		Subtitles []tencentSubtitle `json:"Subtitles,omitempty"`
+		RequestId string            `json:"RequestId"`
 		Error     *struct {
 			Code    string `json:"Code"`
 			Message string `json:"Message"`
@@ -105,23 +127,59 @@ func (p *TencentTTSProvider) GetName() string { return "tencent-tts" }
 
 func (p *TencentTTSProvider) GetModels() []string {
 	return []string{
-		"101001", // 智言（男，标准）
-		"101002", // 智雅（女，标准）
-		"101003", // 智燕（女，温暖）
-		"101004", // 智晶（女，标准）
-		"101005", // 智嘉（男，专业）
-		"101006", // 智开（男，播音）
-		"101008", // 智浩（男，播音）
-		"101009", // 智莉（女，温暖）
-		"101010", // 智华（男，年轻）
-		"101011", // 智燃（男，活力）
-		"101012", // 智雪（女，温柔）
-		"101013", // 智希（女，活泼）
-		"101014", // 智宁（男，成熟）
-		"101015", // 智萌（童，活泼）
-		"101016", // 智甜（女，甜美）
+		// 超自然大模型音色
+		"502001", // 智小柔（聊天女声）
+		"502003", // 智小敏（聊天女声）
+		"502004", // 智小满（营销女声）
+		"502005", // 智小解（解说男声）
+		"502006", // 智小悟（聊天男声）
+		"502007", // 智小虎（聊天童声）
+		"602003", // 爱小悠（聊天女声）
+		"602004", // 暖心阿灿（聊天男声）
+		"602005", // 专业梓欣（聊天女声）
+		"603000", // 懂事少年（特色男声）
+		"603001", // 潇湘妹妹（特色女声）
+		"603002", // 软萌心心（特色男童声）
+		"603003", // 随和老李（聊天男声）
+		"603004", // 温柔小柠（聊天女声）
+		"603005", // 知心大林（聊天男声）
+		"603006", // 沉稳青叔（聊天男声）
+		"603007", // 邻家女孩（聊天女声）
+		// 大模型音色
+		"501000", // 智斌（阅读男声）
+		"501001", // 智兰（资讯女声）
+		"501002", // 智菊（阅读女声）
+		"501003", // 智宇（阅读男声）
+		"501004", // 月华（聊天女声）
+		"501005", // 飞镜（聊天男声）
+		"501006", // 千嶂（聊天男声）
+		"501007", // 浅草（聊天男声）
+		"501008", // WeJames（英文男声）
+		"501009", // WeWinny（英文女声）
+		"601008", // 爱小豪（聊天男声，多情感）
+		"601009", // 爱小芊（聊天女声，多情感）
+		"601010", // 爱小娇（聊天女声，多情感）
+		"601011", // 爱小川（聊天男声）
+		"601012", // 爱小璟（特色女声）
+		"601013", // 爱小伊（阅读女声）
+		"601014", // 爱小简（聊天男声）
+		// 精品音色
+		"101001", // 智瑜（情感女声）
+		"101004", // 智云（通用男声）
+		"101011", // 智燕（新闻女声）
+		"101013", // 智辉（新闻男声）
+		"101015", // 智萌（男童声）
+		"101016", // 智甜（女童声）
+		"101019", // 智彤（粤语女声）
+		"101021", // 智瑞（新闻男声）
+		"101026", // 智希（通用女声）
+		"101027", // 智梅（通用女声）
+		"101030", // 智柯（通用男声）
 		"101050", // WeJack（英文男声）
-		"101051", // WeRose（英文女声）
+		"101054", // 智友（通用男声）
+		"101055", // 智付（通用女声）
+		// 一句话复刻（需配合 FastVoiceType 使用）
+		"200000000",
 	}
 }
 
@@ -148,11 +206,17 @@ func (p *TencentTTSProvider) ImageGenerate(ctx context.Context, req *ImageGenera
 	return nil, fmt.Errorf("tencent-tts: image generation not supported")
 }
 
-// AudioGenerate 调用腾讯云语音合成，返回 MP3 文件路径。
+// AudioGenerate 调用腾讯云语音合成，返回音频临时文件路径。
 //
-// req.Voice:  音色 ID 字符串（如 "101001"），留空默认 "101002"（智雅，女）
-// req.Speed:  语速（-2~6，0=正常；req.Speed 0.5~2.0 映射到 -2~6）
-// req.Emotion: 情感分类（如 "arousal"=激动, "calm"=平静, "fear"=恐惧 etc.）
+// req.Voice:         音色 ID（如 "101002"）；一句话复刻填 "200000000"，同时设置 req.FastVoiceType
+// req.FastVoiceType: 一句话复刻音色 ID（如 "WCHN-766926cXXX"）；VoiceType=200000000 时生效
+// req.Speed:         语速（0.5~2.0，1.0=正常；映射到腾讯 -2~6）
+// req.Loudness:      音量（[-10,10]，直接传给腾讯 Volume；0=默认正常音量）
+// req.Codec:         音频格式（mp3/wav/pcm；默认 mp3）
+// req.SampleRate:    采样率（8000/16000/24000；默认 16000）
+// req.EnableSubtitle: 是否返回字级时间戳
+// req.SegmentRate:   断句阈值（[0,1,2]；默认 0）
+// req.Emotion:       情感分类（neutral/sad/happy/angry/fear/news/story/radio/poetry/call/sajiao 等）
 func (p *TencentTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRequest) (*AudioResponse, error) {
 	start := time.Now()
 
@@ -165,15 +229,32 @@ func (p *TencentTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenera
 		return nil, fmt.Errorf("tencent-tts: 无效的音色 ID %q（应为整数，如 101002）", voiceStr)
 	}
 
-	// Speed: req.Speed 0.5~2.0 → -2~6（1.0=正常=0）
+	// Speed: req.Speed 0.5~2.0 → [-2,6]（1.0=正常=0）
 	speed := 0.0
 	if req.Speed > 0 && req.Speed != 1.0 {
-		speed = (req.Speed - 1.0) * 4.0 // 0.5→-2, 2.0→+4
+		speed = (req.Speed - 1.0) * 4.0
 		if speed < -2 {
 			speed = -2
 		} else if speed > 6 {
 			speed = 6
 		}
+	}
+
+	// Loudness → Volume [-10,10]
+	volume := req.Loudness
+	if volume < -10 {
+		volume = -10
+	} else if volume > 10 {
+		volume = 10
+	}
+
+	codec := req.Codec
+	if codec == "" {
+		codec = "mp3"
+	}
+	sampleRate := req.SampleRate
+	if sampleRate == 0 {
+		sampleRate = 16000
 	}
 
 	idBytes := make([]byte, 8)
@@ -183,14 +264,23 @@ func (p *TencentTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenera
 	ttsReq := tencentTTSRequest{
 		Text:            req.Text,
 		SessionId:       sessionID,
-		Volume:          0,
+		Volume:          volume,
 		Speed:           speed,
 		ProjectId:       0,
 		ModelType:       1,
 		VoiceType:       voiceType,
 		PrimaryLanguage: 1,
-		SampleRate:      16000,
-		Codec:           "mp3",
+		SampleRate:      sampleRate,
+		Codec:           codec,
+	}
+	if req.FastVoiceType != "" {
+		ttsReq.FastVoiceType = req.FastVoiceType
+	}
+	if req.EnableSubtitle {
+		ttsReq.EnableSubtitle = true
+	}
+	if req.SegmentRate > 0 {
+		ttsReq.SegmentRate = req.SegmentRate
 	}
 	if req.Emotion != "" {
 		ttsReq.EmotionCategory = req.Emotion
@@ -248,16 +338,30 @@ func (p *TencentTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenera
 		return nil, fmt.Errorf("tencent-tts: base64 decode: %w", err)
 	}
 
-	tmpPath := fmt.Sprintf("/tmp/inkframe-tts-%s.mp3", sessionID)
+	tmpPath := fmt.Sprintf("/tmp/inkframe-tts-%s.%s", sessionID, codec)
 	if err := os.WriteFile(tmpPath, audioData, 0644); err != nil {
 		return nil, fmt.Errorf("tencent-tts: write temp file: %w", err)
 	}
 
+	// 转换时间戳
+	var subtitles []TTSSubtitle
+	for _, s := range result.Response.Subtitles {
+		subtitles = append(subtitles, TTSSubtitle{
+			BeginIndex: s.BeginIndex,
+			EndIndex:   s.EndIndex,
+			BeginTime:  s.BeginTime,
+			EndTime:    s.EndTime,
+			Phoneme:    s.Phoneme,
+			Text:       s.Text,
+		})
+	}
+
 	return &AudioResponse{
 		URL:       "file://" + tmpPath,
-		Format:    "mp3",
+		Format:    codec,
 		Duration:  float64(len(req.Text)) / 8.0,
 		LatencyMs: time.Since(start).Milliseconds(),
+		Subtitles: subtitles,
 	}, nil
 }
 

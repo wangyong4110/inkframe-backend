@@ -61,9 +61,9 @@ func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 			return
 		}
 		h.taskSvc.UpdateProgress(taskID, 50) //nolint:errcheck
-		// AI 视频模式：阻塞等待轮询完成，任务完成后前端才能看到真实视频
+		// AI 视频模式：只轮询当前分镜直到完成，避免触发其他分镜的生成
 		if shot.Status == "processing" {
-			h.videoService.PollAndStitchVideo(uint(videoID))
+			h.videoService.PollSingleShotUntilDone(uint(videoID), uint(shotID))
 		}
 		h.taskSvc.Complete(taskID, gin.H{"shot_id": shot.ID, "status": shot.Status}) //nolint:errcheck
 	}(task.TaskID)

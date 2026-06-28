@@ -20,7 +20,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"errors"
+
 	"github.com/google/uuid"
+	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/metrics"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -129,6 +132,49 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 		return dbErr
 	}
 	return nil
+}
+
+// PollSingleShotUntilDone 只轮询指定的单个分镜，直到完成/失败/超时。
+// 不触发其他分镜的生成，专为单分镜生成场景使用。
+func (s *VideoService) PollSingleShotUntilDone(videoID, shotID uint) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
+	defer cancel()
+
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			logger.Printf("PollSingleShotUntilDone: shot %d timed out after 15 minutes", shotID)
+			return
+		case <-s.stopCh:
+			return
+		case <-ticker.C:
+		}
+
+		shot, err := s.storyboardRepo.GetByID(shotID)
+		if err != nil {
+			logger.Errorf("PollSingleShotUntilDone: shot %d GetByID failed: %v", shotID, err)
+			continue
+		}
+		if shot.VideoID != videoID {
+			logger.Errorf("PollSingleShotUntilDone: shot %d does not belong to video %d", shotID, videoID)
+			return
+		}
+
+		switch shot.Status {
+		case "completed", "failed":
+			logger.Printf("PollSingleShotUntilDone: shot %d done status=%s", shotID, shot.Status)
+			return
+		case "processing":
+			if err := s.PollShotStatus(shot); err != nil {
+				logger.Errorf("PollSingleShotUntilDone: shot %d PollShotStatus error: %v", shotID, err)
+			}
+		default:
+			logger.Printf("PollSingleShotUntilDone: shot %d status=%s, waiting", shotID, shot.Status)
+		}
+	}
 }
 
 // ─── Video Stitching ──────────────────────────────────────────────────────────
@@ -612,15 +658,29 @@ func (s *VideoService) PollAndStitchVideo(videoID uint) {
 			if video != nil {
 				aspectRatio = video.RenderConfig.AspectRatio
 			}
+			concurrentLimitHit := false
 			for _, shot := range pending {
 				if shot.TaskMeta.ShotTaskID == "" {
 					if err := s.GenerateShotVideo(shot, aspectRatio); err != nil {
+						if errors.Is(err, ai.ErrVideoConcurrentLimit) {
+							// API 并发限制：停止本轮提交，保持 pending，下一轮 tick 自动重试
+							logger.Printf("[PollAndStitch] shot %d: concurrent limit — stopping submissions this tick, will retry", shot.ShotNo)
+							concurrentLimitHit = true
+							break
+						}
 						logger.Errorf("[PollAndStitch] GenerateShotVideo shot %d failed: %v", shot.ID, err)
 						if e := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"status": "failed", "error_message": fmt.Sprintf("generation failed: %v", err)}); e != nil {
 							logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d: %v", shot.ID, e)
 						}
+					} else {
+						// 成功提交后稍作间隔，避免连续提交打满 API 并发配额
+						time.Sleep(2 * time.Second)
 					}
 				}
+			}
+			// 触发了并发限制时，本轮暂停提交，等下次 tick 间隔（15s）后再继续
+			if concurrentLimitHit {
+				logger.Printf("[PollAndStitch] videoID %d: concurrent limit hit, skipping remaining pending shots this tick", videoID)
 			}
 		}
 

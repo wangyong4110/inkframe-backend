@@ -49,6 +49,7 @@ type AIService struct {
 	taskRouting   TaskRouting
 	serverBaseURL string       // base URL for resolving relative media paths (fallback, prefer dbMediaReader)
 	providerCache sync.Map      // key: "tenantID:providerName" → providerCacheEntry
+	modelLimiters sync.Map      // key: "tenantID:modelName" → *modelCallLimiter (shared per-model concurrency+rate)
 	imageSem      chan struct{} // nil = unlimited; set via WithImageConcurrency
 	semMu         sync.RWMutex  // protects imageSem replacement
 	stopCh        chan struct{} // closed by Shutdown() to stop background goroutines
@@ -318,19 +319,93 @@ func (s *AIService) GetDefaultProviderName() string {
 	return p.GetName()
 }
 
-// wrapForModel 按 AIModel 的 concurrency/rateLimit 对 provider 进行包装。
-// 在已知具体模型时调用（如 callAIWithProviderSys），provider 本身已含 RetryProvider。
-func wrapForModel(provider ai.AIProvider, m *model.AIModel) ai.AIProvider {
-	if m == nil {
-		return provider
+// modelCallLimiter 为 (tenantID, modelName) 提供共享的并发控制和速率限制。
+// 与 ConcurrentProvider / RateLimitProvider 不同，这里的状态是跨调用共享的：
+//   - sem：容量 = AIModel.Concurrency，所有调用同一模型的 goroutine 共用同一个 channel
+//   - token bucket：基于时间滑动，全局共享，不在每次调用时重置
+type modelCallLimiter struct {
+	// concurrency semaphore (nil = unlimited)
+	sem chan struct{}
+
+	// token-bucket for rate limiting (refill=0 means disabled)
+	rlMu    sync.Mutex
+	rlTok   float64
+	rlMax   float64
+	rlRefNs float64 // tokens per nanosecond
+	rlLast  time.Time
+}
+
+func newModelCallLimiter(concurrency, ratePerMin int) *modelCallLimiter {
+	l := &modelCallLimiter{}
+	if concurrency > 0 {
+		l.sem = make(chan struct{}, concurrency)
 	}
-	if m.Concurrency > 0 {
-		provider = ai.NewConcurrentProvider(provider, m.Concurrency)
+	if ratePerMin > 0 {
+		l.rlMax = float64(ratePerMin)
+		l.rlTok = float64(ratePerMin)
+		l.rlRefNs = float64(ratePerMin) / float64(time.Minute)
+		l.rlLast = time.Now()
 	}
-	if m.RateLimit > 0 {
-		provider = ai.NewRateLimitProvider(provider, m.RateLimit)
+	return l
+}
+
+// Acquire 先等速率令牌，再获取并发槽。ctx 超时/取消时立即返回错误。
+func (l *modelCallLimiter) Acquire(ctx context.Context) error {
+	// 1. 速率限制（token bucket）
+	if l.rlRefNs > 0 {
+		for {
+			l.rlMu.Lock()
+			now := time.Now()
+			l.rlTok += float64(now.Sub(l.rlLast)) * l.rlRefNs
+			if l.rlTok > l.rlMax {
+				l.rlTok = l.rlMax
+			}
+			l.rlLast = now
+			if l.rlTok >= 1 {
+				l.rlTok--
+				l.rlMu.Unlock()
+				break
+			}
+			wait := time.Duration((1-l.rlTok)/l.rlRefNs) + time.Millisecond
+			l.rlMu.Unlock()
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("rate limit wait cancelled: %w", ctx.Err())
+			case <-time.After(wait):
+			}
+		}
 	}
-	return provider
+	// 2. 并发槽
+	if l.sem != nil {
+		select {
+		case l.sem <- struct{}{}:
+		case <-ctx.Done():
+			return fmt.Errorf("concurrency slot wait cancelled: %w", ctx.Err())
+		}
+	}
+	return nil
+}
+
+// Release 释放并发槽（速率令牌无需归还）。
+func (l *modelCallLimiter) Release() {
+	if l.sem != nil {
+		<-l.sem
+	}
+}
+
+// getModelLimiter 返回 (tenantID, modelName) 对应的共享限流器；concurrency 和 ratePerMin 均为 0 时返回 nil。
+// 限流器在首次调用时创建并缓存，进程生命周期内复用（修改 AI 模型配置后需重启生效）。
+func (s *AIService) getModelLimiter(tenantID uint, modelName string, concurrency, ratePerMin int) *modelCallLimiter {
+	if concurrency <= 0 && ratePerMin <= 0 {
+		return nil
+	}
+	key := fmt.Sprintf("%d:%s", tenantID, modelName)
+	if v, ok := s.modelLimiters.Load(key); ok {
+		return v.(*modelCallLimiter)
+	}
+	l := newModelCallLimiter(concurrency, ratePerMin)
+	actual, _ := s.modelLimiters.LoadOrStore(key, l)
+	return actual.(*modelCallLimiter)
 }
 
 // getTenantProvider 按租户加载提供商（带缓存，TTL 5 分钟）。
@@ -496,6 +571,13 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string, target
 			return nil, fmt.Errorf("provider %q is a video provider; use GetTenantVideoProvider", matched.Name)
 		default:
 			provider = ai.NewQianwenProvider(apiKey, matched.APIEndpoint, modelName, timeout)
+		}
+	case "hunyuan":
+		// TokenHub 新一代混元 API：LLM 用 OpenAI 兼容接口，图像用专属接口
+		if tType == "image" {
+			provider = ai.NewHunyuanImageProvider(apiKey, matched.APIEndpoint)
+		} else {
+			provider = ai.NewHunyuanProvider(apiKey, matched.APIEndpoint, modelName, timeout)
 		}
 	case "azure":
 		// APIEndpoint = Azure resource endpoint; APIVersion = REST API version ("2025-01-01-preview")
@@ -1088,11 +1170,28 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 	if provider == nil {
 		return "", nil, fmt.Errorf("AI provider resolved to nil for %q", providerName)
 	}
-	// 按 AIModel 的 concurrency/rateLimit 包装 provider；同时用模型的 MaxTokens 作上限。
-	if len(modelOverride) > 0 && modelOverride[0] != "" && s.modelRepo != nil {
-		if m, err2 := s.modelRepo.GetByName(modelOverride[0]); err2 == nil {
-			provider = wrapForModel(provider, m)
-			// 防止调用方传入超过模型限制的 max_tokens（如客户端手动填了过大值）
+	// 超时：先建 context，让 Acquire 等待时也受超时约束。
+	timeoutDur := 5 * time.Minute
+	if config.TimeoutSeconds > 0 {
+		timeoutDur = time.Duration(config.TimeoutSeconds) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, timeoutDur)
+	defer cancel()
+
+	// 按 (tenantID, modelName) 进行共享并发控制 + 速率限制，同时限制 MaxTokens。
+	modelName := ""
+	if len(modelOverride) > 0 {
+		modelName = modelOverride[0]
+	}
+	if modelName != "" && s.modelRepo != nil {
+		if m, err2 := s.modelRepo.GetByName(modelName); err2 == nil {
+			if lim := s.getModelLimiter(tenantID, modelName, m.Concurrency, m.RateLimit); lim != nil {
+				if acquireErr := lim.Acquire(ctx); acquireErr != nil {
+					return "", nil, fmt.Errorf("model %s: %w", modelName, acquireErr)
+				}
+				defer lim.Release()
+			}
+			// 防止调用方传入超过模型限制的 max_tokens
 			if m.MaxTokens > 0 && config.MaxTokens > m.MaxTokens {
 				config.MaxTokens = m.MaxTokens
 			}
@@ -1106,21 +1205,13 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 		Temperature:  config.Temperature,
 		TopP:         config.TopP,
 	}
-	if len(modelOverride) > 0 && modelOverride[0] != "" {
-		req.Model = modelOverride[0]
+	if modelName != "" {
+		req.Model = modelName
 	}
 	// Claude 不支持 top_k，仅在非 Anthropic provider 时传入
 	if provider.GetName() != "anthropic" {
 		req.TopK = config.TopK
 	}
-
-	// 超时：优先使用 config.TimeoutSeconds（由调用方注入），否则默认 5 分钟。
-	timeoutDur := 5 * time.Minute
-	if config.TimeoutSeconds > 0 {
-		timeoutDur = time.Duration(config.TimeoutSeconds) * time.Second
-	}
-	ctx, cancel := context.WithTimeout(parentCtx, timeoutDur)
-	defer cancel()
 
 	logger.Printf("[AI] provider=%s maxTokens=%d temperature=%.2f calling...", provider.GetName(), req.MaxTokens, req.Temperature)
 	callStart := time.Now()
@@ -1622,6 +1713,18 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		}
 	}
 
+	// 提取原始 HTTP URL，供支持 URL 的接口优先使用（避免 base64 大小限制）
+	refURLFirst := ""
+	if strings.HasPrefix(firstRef, "http://") || strings.HasPrefix(firstRef, "https://") {
+		refURLFirst = firstRef
+	}
+	var refURLSlice []string
+	for _, r := range referenceImages {
+		if strings.HasPrefix(r, "http://") || strings.HasPrefix(r, "https://") {
+			refURLSlice = append(refURLSlice, r)
+		}
+	}
+
 	buildReq := func(model, entrySize, provName string) *ai.ImageGenerateRequest {
 		sz := size // 优先使用调用方传入的尺寸（基于 AspectRatio+QualityTier 计算）
 		if sz == "" {
@@ -1642,6 +1745,8 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 			Seed:              seed,
 			ReferenceImage:    refFirst,
 			ReferenceImages:   refs,
+			ReferenceURL:      refURLFirst,  // 原始 HTTP URL，支持 URL 的接口优先使用
+			ReferenceURLs:     refURLSlice,
 			CFGScale:          cfgScale,
 			ConsistencyWeight: weight,
 		}

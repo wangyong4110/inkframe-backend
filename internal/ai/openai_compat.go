@@ -87,6 +87,10 @@ func (p *OpenAICompatProvider) Generate(ctx context.Context, req *GenerateReques
 	if req.TopP > 0 {
 		apiReq["top_p"] = req.TopP
 	}
+	// 透传 Extra 字段（如 thinking/reasoning_effort/enable_thinking 等模型扩展参数）
+	for k, v := range req.Extra {
+		apiReq[k] = v
+	}
 
 	body, err := json.Marshal(apiReq)
 	if err != nil {
@@ -171,6 +175,10 @@ func (p *OpenAICompatProvider) GenerateStream(ctx context.Context, req *Generate
 		if req.MaxTokens > 0 {
 			apiReq["max_tokens"] = req.MaxTokens
 		}
+		// 透传 Extra 字段（如 thinking/reasoning_effort 等模型扩展参数）
+		for k, v := range req.Extra {
+			apiReq[k] = v
+		}
 
 		body, _ := json.Marshal(apiReq)
 		httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint+"/chat/completions", bytes.NewReader(body))
@@ -205,7 +213,14 @@ func (p *OpenAICompatProvider) GenerateStream(ctx context.Context, req *Generate
 				continue
 			}
 			if len(chunk.Choices) > 0 {
-				ch <- &GenerateResponse{Content: chunk.Choices[0].Delta.Content}
+				content := chunk.Choices[0].Delta.Content
+				// 思考模型（如混元 Hy3、DeepSeek-R1）流式思考阶段 content 为空，回退到 reasoning_content
+				if content == "" {
+					content = chunk.Choices[0].Delta.ReasoningContent
+				}
+				if content != "" {
+					ch <- &GenerateResponse{Content: content}
+				}
 			}
 		}
 	}()
@@ -340,5 +355,24 @@ func NewYiProvider(apiKey, endpoint, model string, timeout time.Duration) *OpenA
 	}
 	return NewOpenAICompatProvider("yi", apiKey, endpoint, model,
 		[]string{"yi-lightning", "yi-large", "yi-medium", "yi-large-turbo"},
+		timeout)
+}
+
+// NewHunyuanProvider 创建腾讯混元 TokenHub provider（新一代，兼容 OpenAI Chat Completions API）。
+// API: https://tokenhub.tencentmaas.com/v1
+// 鉴权: Bearer YOUR_API_KEY（TokenHub 控制台创建）
+// 支持深度思考：在 GenerateRequest.Extra 中传入 thinking/reasoning_effort 参数：
+//
+//	extra["thinking"] = map[string]string{"type": "enabled"}  // 开启思考模式
+//	extra["reasoning_effort"] = "high"                        // 推理深度：low/medium/high
+func NewHunyuanProvider(apiKey, endpoint, model string, timeout time.Duration) *OpenAICompatProvider {
+	if endpoint == "" {
+		endpoint = "https://tokenhub.tencentmaas.com/v1"
+	}
+	if model == "" {
+		model = "hy3-preview"
+	}
+	return NewOpenAICompatProvider("hunyuan", apiKey, endpoint, model,
+		[]string{"hy3-preview"},
 		timeout)
 }

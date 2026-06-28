@@ -179,6 +179,7 @@ func seedAIModels(db *gorm.DB) {
 		{"moonshot", "Moonshot AI (Kimi)", "https://api.moonshot.cn/v1", false},
 		{"baidu", "百度文心一言 (ERNIE)", "https://qianfan.baidubce.com/v2", false},
 		{"tencent", "腾讯混元 (Hunyuan)", "https://api.hunyuan.cloud.tencent.com/v1", false},
+		{"hunyuan", "腾讯混元 TokenHub (Hy3)", "https://tokenhub.tencentmaas.com/v1", false},
 		{"yi", "零一万物 (Yi)", "https://api.lingyiwanwu.com/v1", false},
 		// 即梦AI（火山引擎）：volcengine-visual 同时承载图像生成和视频生成（jimeng-video 已合并）
 		{"volcengine-visual", "即梦AI（火山引擎）", "https://visual.volcengineapi.com", true},

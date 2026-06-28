@@ -331,7 +331,12 @@ func (p *QianwenProvider) wanxImageGenerateAsync(ctx context.Context, start time
 	if req.NegativePrompt != "" {
 		input["negative_prompt"] = req.NegativePrompt
 	}
-	if req.ReferenceImage != "" {
+	if req.ReferenceURL != "" {
+		input["ref_img"] = req.ReferenceURL
+	} else if req.ReferenceImage != "" {
+		if len(req.ReferenceImage) > 61440 {
+			return nil, fmt.Errorf("qianwen-wanx: ref_img 超出 DashScope 输入长度限制（61440 字符），请使用 URL 而非 base64")
+		}
 		input["ref_img"] = req.ReferenceImage
 	}
 	params := map[string]interface{}{"size": size, "n": 1}
@@ -468,7 +473,9 @@ func (p *QianwenProvider) wanxImageGenerateCompat(ctx context.Context, start tim
 	if req.NegativePrompt != "" {
 		apiReq["negative_prompt"] = req.NegativePrompt
 	}
-	if req.ReferenceImage != "" {
+	if req.ReferenceURL != "" {
+		apiReq["ref_image_url"] = req.ReferenceURL
+	} else if req.ReferenceImage != "" {
 		if strings.HasPrefix(req.ReferenceImage, "http://") || strings.HasPrefix(req.ReferenceImage, "https://") {
 			apiReq["ref_image_url"] = req.ReferenceImage
 		} else {

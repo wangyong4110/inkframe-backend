@@ -96,9 +96,11 @@ type CrawlConfig struct {
 
 // WebSearchConfig 联网搜索配置
 type WebSearchConfig struct {
-	Provider string `mapstructure:"provider"` // "bing"|"searxng"|"tavily"|""
-	APIKey   string `mapstructure:"api_key"`  // Bing/Tavily key（也可用 WEB_SEARCH_API_KEY 环境变量）
-	Endpoint string `mapstructure:"endpoint"` // SearXNG: http://your-host
+	Provider  string `mapstructure:"provider"`   // "bing"|"searxng"|"tavily"|"tencent-wsa"|""
+	APIKey    string `mapstructure:"api_key"`    // Bing/Tavily key（也可用 WEB_SEARCH_API_KEY 环境变量）
+	Endpoint  string `mapstructure:"endpoint"`   // SearXNG: http://your-host
+	SecretID  string `mapstructure:"secret_id"`  // 腾讯云 SecretId（tencent-wsa 使用）
+	SecretKey string `mapstructure:"secret_key"` // 腾讯云 SecretKey（tencent-wsa 使用）
 }
 
 // ServerConfig 服务器配置

@@ -187,7 +187,8 @@ type StoryboardShot struct {
 	Duration float64 `json:"duration" gorm:"type:decimal(5,2);default:5.0"`
 
 	// 状态
-	Status string `json:"status" gorm:"size:20;index:idx_shot_video_status,priority:2;default:pending"`
+	Status       string `json:"status" gorm:"size:20;index:idx_shot_video_status,priority:2;default:pending"`
+	ErrorMessage string `json:"error_message" gorm:"size:1000"` // 最后一次失败原因，供前端展示
 
 	// AI 生成结果 URL（前端展示用）
 	ImageURL string `json:"image_url" gorm:"size:1000"` // AI生成图片URL

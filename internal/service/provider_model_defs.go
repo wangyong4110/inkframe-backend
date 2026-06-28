@@ -57,6 +57,10 @@ var ProviderStaticModelsByType = map[string]map[string][]string{
 	"tencent": {
 		"llm": {"hunyuan-turbos-latest", "hunyuan-large", "hunyuan-standard-256k"},
 	},
+	"hunyuan": {
+		"llm":   {"hy3-preview"},
+		"image": {"hy-image-lite", "hy-image-v3.0"},
+	},
 	"yi": {
 		"llm": {"yi-lightning", "yi-large", "yi-medium"},
 	},
@@ -205,6 +209,14 @@ var defaultProviderModels = map[string][]providerModelDef{
 		{"hunyuan-turbo", "混元 Turbo", "llm", 0.91, 8192},
 		{"hunyuan-pro", "混元 Pro", "llm", 0.89, 4096},
 		{"hunyuan-lite", "混元 Lite", "llm", 0.80, 4096},
+	},
+	"hunyuan": {
+		// Hy3 Preview：MoE 架构，256k 上下文，支持深度思考（thinking/reasoning_effort）
+		{"hy3-preview", "混元 Hy3 Preview", "llm", 0.95, 32768},
+		// 混元生图极速版：同步，快速出图
+		{"hy-image-lite", "混元生图（极速版）", "image", 0.88, 0},
+		// 混元生图 3.0：异步高质量，支持参考图，中文理解强
+		{"hy-image-v3.0", "混元生图（3.0）", "image", 0.93, 0},
 	},
 	"yi": {
 		{"yi-lightning", "Yi Lightning", "llm", 0.88, 4096},

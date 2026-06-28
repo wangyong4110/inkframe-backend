@@ -762,6 +762,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		toolsGroup := v1.Group("/tools")
 		if cfg.WebSearchHandler != nil {
 			toolsGroup.POST("/web-search", cfg.WebSearchHandler.Search)
+			toolsGroup.POST("/web-search/pro", cfg.WebSearchHandler.SearchPro)
 		}
 		if cfg.WikiSearchHandler != nil {
 			toolsGroup.POST("/wiki-search", cfg.WikiSearchHandler.Search)

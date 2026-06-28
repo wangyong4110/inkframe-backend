@@ -12,6 +12,11 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/logger"
 )
 
+// ErrVideoConcurrentLimit is returned by video providers when the API rejects
+// the request due to concurrent task limits (e.g. jimeng-video code=50430).
+// Callers should treat this as a transient error and retry after a delay.
+var ErrVideoConcurrentLimit = fmt.Errorf("video API concurrent limit reached")
+
 // ProviderNameJimengVideo 即梦视频3.0提供者名称
 const ProviderNameJimengVideo = "jimeng-video"
 
@@ -211,7 +216,11 @@ func (p *JimengVideoProvider) GenerateVideo(ctx context.Context, req *VideoGener
 	msg, _ := resp["message"].(string)
 	if int(code) != 10000 {
 		logger.Errorf("[jimeng-video] GenerateVideo: API返回错误 code=%d message=%s", int(code), msg)
-		return nil, fmt.Errorf("jimeng-video: 提交任务失败 code=%d: %s", int(code), msg)
+		apiErr := fmt.Errorf("jimeng-video: 提交任务失败 code=%d: %s", int(code), msg)
+		if int(code) == 50430 {
+			return nil, fmt.Errorf("%w: %w", ErrVideoConcurrentLimit, apiErr)
+		}
+		return nil, apiErr
 	}
 
 	data, _ := resp["data"].(map[string]interface{})

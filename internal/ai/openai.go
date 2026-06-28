@@ -481,8 +481,9 @@ type OpenAIStreamChunk struct {
 	Choices []struct {
 		Index        int `json:"index"`
 		Delta        struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+			Role             string `json:"role"`
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"` // 混元 Hy3 / DeepSeek-R1 流式思考过程
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`

@@ -96,8 +96,10 @@ type ImageGenerateRequest struct {
 	CFGScale       float64  `json:"cfg_scale"`
 	Seed           int64    `json:"seed"`
 	Style          string   `json:"style"` // realistic, anime, cartoon, etc.
-	ReferenceImage  string   `json:"reference_image,omitempty"`  // 单张参考图（向后兼容）
-	ReferenceImages []string `json:"reference_images,omitempty"` // 多张参考图（最多14张，优先级高于 ReferenceImage）
+	ReferenceImage  string   `json:"reference_image,omitempty"`  // 单张参考图 base64（向后兼容）
+	ReferenceImages []string `json:"reference_images,omitempty"` // 多张参考图 base64（最多14张，优先级高于 ReferenceImage）
+	ReferenceURL    string   `json:"reference_url,omitempty"`    // 单张参考图原始 HTTP URL（支持 URL 的接口优先使用）
+	ReferenceURLs   []string `json:"reference_urls,omitempty"`   // 多张参考图原始 HTTP URL
 	ControlNets     []ControlNet `json:"control_nets,omitempty"`
 	ConsistencyWeight float64 `json:"consistency_weight,omitempty"` // 0-1，角色一致性强度（影响模型选择和scale）
 	Extra           map[string]interface{} `json:"extra,omitempty"` // 提供者特定扩展参数
@@ -143,7 +145,7 @@ type AudioGenerateRequest struct {
 	Voice           string  `json:"voice"`            // 声音ID（TTS）
 	Speed           float64 `json:"speed"`            // 语速（TTS）
 	Pitch           float64 `json:"pitch"`            // 音调（TTS）
-	Loudness        float64 `json:"loudness"`         // 音量倍率（V3 audio_params.loudness_rate，[-50,100]，1.0=0）
+	Loudness        float64 `json:"loudness"`         // 音量，[-10,10]；腾讯TTS直接映射；Doubao V3 映射 loudness_rate
 	Emotion         string  `json:"emotion"`          // 情感（TTS）
 	Language        string  `json:"language"`         // 语言（explicit_language：zh-cn/en/ja/es-mx/id/pt-br/ko）
 	Dialect         string  `json:"dialect"`          // 方言（explicit_dialect，需配合支持方言的音色）
@@ -151,15 +153,32 @@ type AudioGenerateRequest struct {
 	SilenceDuration int     `json:"silence_duration"` // 文末静音时长 ms，范围 [0,30000]（V3）
 	DisableMarkdown bool    `json:"disable_markdown"` // 开启 Markdown 过滤（true=过滤语法符号）
 	Duration        float64 `json:"duration"`         // 音效时长（秒，文生音效 API 使用，如 Kling SFX）
+	// 腾讯云 TTS 扩展参数
+	FastVoiceType  string `json:"fast_voice_type,omitempty"`  // 一句话复刻音色ID（VoiceType=200000000 时填入）
+	EnableSubtitle bool   `json:"enable_subtitle,omitempty"`  // 是否返回字/词级时间戳
+	Codec          string `json:"codec,omitempty"`            // 音频格式：mp3（默认）/ wav / pcm
+	SampleRate     int    `json:"sample_rate,omitempty"`      // 采样率：8000 / 16000（默认）/ 24000
+	SegmentRate    int    `json:"segment_rate,omitempty"`     // 断句敏感阈值 [0,1,2]，越大越不断句
+}
+
+// TTSSubtitle 语音合成时间戳（字/词级）
+type TTSSubtitle struct {
+	BeginIndex int    `json:"begin_index"` // 文本起始字符索引（含）
+	EndIndex   int    `json:"end_index"`   // 文本结束字符索引（不含）
+	BeginTime  int    `json:"begin_time"`  // 起始时间 ms
+	EndTime    int    `json:"end_time"`    // 结束时间 ms
+	Phoneme    string `json:"phoneme"`     // 拼音（如 ni2）
+	Text       string `json:"text"`        // 对应文字
 }
 
 // AudioResponse 音频响应
 type AudioResponse struct {
-	URL       string `json:"url"`
-	Duration  float64 `json:"duration"` // 秒
-	Format    string `json:"format"`    // mp3, wav, etc.
-	LatencyMs int64  `json:"latency_ms"`
-	Error     string `json:"error,omitempty"`
+	URL       string        `json:"url"`
+	Duration  float64       `json:"duration"`            // 秒
+	Format    string        `json:"format"`              // mp3, wav, etc.
+	LatencyMs int64         `json:"latency_ms"`
+	Subtitles []TTSSubtitle `json:"subtitles,omitempty"` // 时间戳（EnableSubtitle=true 时填充）
+	Error     string        `json:"error,omitempty"`
 }
 
 // MultimodalEmbedItem 多模态 Embedding 输入元素

@@ -354,9 +354,14 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 	}
 
 	// 参考图（image 字段）：Seedream 4.0+ 支持单图或多图（最多14张）
-	// 路径处理：相对路径由上层 ai_service 预先 fetchImageAsBase64 转换为裸 base64 字符串。
+	// 优先使用 ReferenceURLs/ReferenceURL（原始 HTTP URL），避免 base64 体积开销；
+	// 无 URL 时降级到 ReferenceImages/ReferenceImage（base64）。
 	var allRefImages []string
-	if len(req.ReferenceImages) > 0 {
+	if len(req.ReferenceURLs) > 0 {
+		allRefImages = append(allRefImages, req.ReferenceURLs...)
+	} else if req.ReferenceURL != "" {
+		allRefImages = append(allRefImages, req.ReferenceURL)
+	} else if len(req.ReferenceImages) > 0 {
 		for _, r := range req.ReferenceImages {
 			if formatted := seedreamFormatImage(r); formatted != "" {
 				allRefImages = append(allRefImages, formatted)
