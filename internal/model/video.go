@@ -196,9 +196,6 @@ type StoryboardShot struct {
 	// 场景锚点
 	SceneAnchorID *uint `json:"scene_anchor_id,omitempty" gorm:"index"`
 
-	// 情绪与节奏标注（短剧爆款优化）
-	EmotionTag string `json:"emotion_tag" gorm:"size:30;default:''"` // tension/joy/heartbreak/shock/romance/comedy
-	PaceTag    string `json:"pace_tag" gorm:"size:20;default:''"`    // slow/normal/fast/cut
 	EpisodeNo  int    `json:"episode_no" gorm:"default:0"`           // 所属集数（0=未分集，1=第1集…）
 
 	// 角色绑定（序列化为 JSON 数组，前端直接收到 [1,2,3]）
