@@ -309,7 +309,10 @@ func (r *AIModelRepository) Create(model *model.AIModel) error {
 }
 
 // FirstOrCreate 幂等创建：若 (provider_id, name) 已存在则不重复插入。
+// 先清理同名软删除残留（历史数据），避免唯一索引冲突。
 func (r *AIModelRepository) FirstOrCreate(m *model.AIModel) error {
+	r.db.Unscoped().Where("provider_id = ? AND name = ? AND deleted_at IS NOT NULL", m.ProviderID, m.Name).
+		Delete(&model.AIModel{})
 	return r.db.Where("provider_id = ? AND name = ?", m.ProviderID, m.Name).
 		FirstOrCreate(m).Error
 }

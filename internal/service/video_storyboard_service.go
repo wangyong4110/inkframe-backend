@@ -49,6 +49,10 @@ func (s *VideoService) CancelStoryboardGeneration(videoID uint) {
 			cancelFn()
 		}
 	}
+	// 同步释放 Redis 分布式锁，防止旧 goroutine 的 defer Del 尚未执行时新任务被拦截
+	if s.cache != nil {
+		s.cache.Del(context.Background(), fmt.Sprintf("lock:storyboard:gen:%d", videoID))
+	}
 }
 
 func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt string, progressFn func(int), overrides StoryboardOverrides, chapterIDOverride ...*uint) ([]*model.StoryboardShot, error) {
