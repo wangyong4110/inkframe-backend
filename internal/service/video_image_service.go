@@ -685,14 +685,36 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// DreamO 注意：selectImageModel 用 firstRef 判断是否启用 DreamO。
 	//   有角色时 firstRef 是角色三视图 → 正确触发 DreamO（角色特征保持）；
 	//   无角色时 firstRef 是场景图 → 正确触发 Text2ImgV3（纯文生图）。
+	// 物品参考图：当分镜 prompt 中提及某个物品名称时，将其 ReferenceImageURL 加入参考列表。
+	// 顺序：角色图 → 物品图 → 场景图（让物品外观有所参考，同时不影响角色主体 embedding 优先级）
+	var itemRefImages []string
+	if s.itemRepo != nil {
+		if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil && video.NovelID > 0 {
+			if items, err := s.itemRepo.ListByNovel(video.NovelID); err == nil {
+				promptLower := strings.ToLower(promptText)
+				for _, item := range items {
+					if item.ReferenceImageURL == "" {
+						continue
+					}
+					nameLower := strings.ToLower(item.Name)
+					if nameLower != "" && strings.Contains(promptLower, nameLower) {
+						itemRefImages = append(itemRefImages, normalizeMediaURL(item.ReferenceImageURL))
+						logger.Printf("[ItemRef] shot#%d item=%q refURL=%q", shot.ShotNo, item.Name, item.ReferenceImageURL)
+					}
+				}
+			}
+		}
+	}
+
 	cappedPortraits := characterPortraits
-	allRefImages := make([]string, 0, len(cappedPortraits)+1)
+	allRefImages := make([]string, 0, len(cappedPortraits)+len(itemRefImages)+1)
 	allRefImages = append(allRefImages, cappedPortraits...)
+	allRefImages = append(allRefImages, itemRefImages...)
 	if sceneRefImage != "" {
 		allRefImages = append(allRefImages, sceneRefImage)
 	}
-	logger.Printf("generateShotReferenceImage: shot %d allRefImages=%d (charPortraits=%d sceneRef=%v)",
-		shot.ShotNo, len(allRefImages), len(cappedPortraits), sceneRefImage != "")
+	logger.Printf("generateShotReferenceImage: shot %d allRefImages=%d (charPortraits=%d itemRefs=%d sceneRef=%v)",
+		shot.ShotNo, len(allRefImages), len(cappedPortraits), len(itemRefImages), sceneRefImage != "")
 
 	ctx := context.Background()
 

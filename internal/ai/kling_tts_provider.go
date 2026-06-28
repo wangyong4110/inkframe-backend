@@ -126,7 +126,7 @@ func (p *KlingTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenerate
 	// 音色
 	voiceID := req.Voice
 	if voiceID == "" {
-		voiceID = klingTTSDefaultVoiceID
+		return nil, fmt.Errorf("kling-tts: 未指定音色，请先在小说设置或角色配置中选择音色")
 	}
 
 	// 语言

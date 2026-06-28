@@ -150,7 +150,7 @@ func (p *MinimaxTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenera
 
 	voiceID := req.Voice
 	if voiceID == "" {
-		voiceID = "female-shaonv"
+		return nil, fmt.Errorf("minimax-tts: 未指定音色，请先在小说设置或角色配置中选择音色")
 	}
 
 	speed := req.Speed

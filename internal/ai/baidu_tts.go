@@ -114,7 +114,7 @@ func (p *BaiduTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenerate
 		per = req.Model
 	}
 	if per == "" {
-		per = "0" // 默认度小美
+		return nil, fmt.Errorf("baidu-tts: 未指定音色，请先在小说设置或角色配置中选择音色")
 	}
 
 	// spd: 语速 0-9，5 为正常速度。Speed 1.0 → 5

@@ -510,6 +510,7 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 	videoSvc.WithSystemSettingRepo(repos.SystemSettingRepo)
 	videoSvc.WithChapterCharacterRepo(repos.ChapterCharacterRepo)
 	videoSvc.WithLookRepo(repos.CharacterLookRepo)
+	videoSvc.WithItemRepo(repos.ItemRepo)
 	videoSvc.WithVideoConcurrency(1)
 	videoSvc.WithAudioConcurrency(3)
 

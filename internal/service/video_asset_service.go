@@ -310,7 +310,6 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 	if voice == "" {
 		voice = defaultVoice
 	}
-	// voice 仍为空串时，由 TTS Provider 使用自身默认音色（如 AliyunTTS → longxiaochun，QwenTTS → Cherry）
 
 	audioURL, err := s.aiService.AudioGenerateWithOptions(context.Background(), tenantID, text, voice, speed, style, seg.Language)
 	if err != nil {

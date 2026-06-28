@@ -158,11 +158,11 @@ func (p *TencentTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenera
 
 	voiceStr := req.Voice
 	if voiceStr == "" {
-		voiceStr = "101002" // 默认智雅（女，标准）
+		return nil, fmt.Errorf("tencent-tts: 未指定音色，请先在小说设置或角色配置中选择音色")
 	}
 	voiceType, err := strconv.Atoi(voiceStr)
 	if err != nil {
-		voiceType = 101002
+		return nil, fmt.Errorf("tencent-tts: 无效的音色 ID %q（应为整数，如 101002）", voiceStr)
 	}
 
 	// Speed: req.Speed 0.5~2.0 → -2~6（1.0=正常=0）

@@ -77,7 +77,7 @@ func (p *QwenTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenerateR
 
 	voice := req.Voice
 	if voice == "" {
-		voice = "Cherry"
+		return nil, fmt.Errorf("qwen-tts: 未指定音色，请先在小说设置或角色配置中选择音色")
 	}
 	model := req.Model
 	if model == "" {

@@ -137,7 +137,7 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 
 	speaker := req.Voice
 	if speaker == "" {
-		speaker = "zh_female_shuangkuaisisi_moon_bigtts"
+		return nil, fmt.Errorf("doubao-speech: 未指定音色，请先在小说设置或角色配置中选择音色")
 	}
 
 	// X-Api-Resource-Id：显式 model 字段 > provider 默认值；_tob 角色扮演系列自动推断
@@ -540,7 +540,7 @@ func (p *DoubaoSpeechV1Provider) AudioGenerate(ctx context.Context, req *AudioGe
 
 	voiceType := req.Voice
 	if voiceType == "" {
-		voiceType = "BV001_streaming"
+		return nil, fmt.Errorf("doubao-speech-v1: 未指定音色，请先在小说设置或角色配置中选择音色")
 	}
 
 	speedRatio := req.Speed

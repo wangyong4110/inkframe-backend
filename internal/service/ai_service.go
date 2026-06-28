@@ -1611,7 +1611,7 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 			logger.Printf("GenerateCharacterThreeViewMulti: base64 fetch failed for %q, falling back to URL", url)
 			return url
 		}
-		logger.Printf("GenerateCharacterThreeViewMulti: cannot resolve ref %q (serverBaseURL=%q)", url, s.serverBaseURL)
+		logger.Errorf("GenerateCharacterThreeViewMulti: cannot resolve ref %q — relative path with no dbMediaReader and no serverBaseURL configured; ref image will be skipped", url)
 		return ""
 	}
 	extFirst := resolveForExternal(firstRef)
@@ -1848,7 +1848,7 @@ func (s *AIService) fetchImageAsBase64(ctx context.Context, imageURL string) str
 		}
 		// 回退：拼接 serverBaseURL（仅在明确配置了 public URL 时可用）
 		if s.serverBaseURL == "" {
-			logger.Printf("fetchImageAsBase64: relative URL %q but no dbMediaReader or serverBaseURL", imageURL)
+			logger.Errorf("fetchImageAsBase64: relative URL %q cannot be resolved — dbMediaReader is nil and serverBaseURL is not configured; configure server.public_url in config.yaml", imageURL)
 			return ""
 		}
 		imageURL = s.serverBaseURL + "/" + strings.TrimLeft(imageURL, "/")

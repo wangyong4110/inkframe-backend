@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/inkframe/inkframe-backend/internal/logger"
 )
 
 // KlingImageProvider 可灵图像生成提供者
@@ -138,6 +140,9 @@ func (p *KlingImageProvider) ImageGenerate(ctx context.Context, req *ImageGenera
 	if req.ReferenceImage != "" {
 		body["image"] = req.ReferenceImage
 	} else if len(req.ReferenceImages) > 0 {
+		if len(req.ReferenceImages) > 1 {
+			logger.Printf("kling-image: API only supports one reference image; using first of %d (rest ignored)", len(req.ReferenceImages))
+		}
 		body["image"] = req.ReferenceImages[0]
 	}
 
@@ -154,6 +159,16 @@ func (p *KlingImageProvider) ImageGenerate(ctx context.Context, req *ImageGenera
 		}
 		if v, ok := extra["image_fidelity"].(float64); ok {
 			body["image_fidelity"] = v
+		}
+	}
+
+	// 有参考图时自动补全 image_reference / image_fidelity 默认值
+	if _, hasImage := body["image"]; hasImage {
+		if _, ok := body["image_reference"]; !ok {
+			body["image_reference"] = "subject"
+		}
+		if _, ok := body["image_fidelity"]; !ok {
+			body["image_fidelity"] = 0.7
 		}
 	}
 

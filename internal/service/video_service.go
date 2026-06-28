@@ -43,6 +43,7 @@ type VideoService struct {
 	reviewRecordRepo      *repository.ReviewRecordRepository
 	ignoredSuggestionRepo *repository.IgnoredReviewIssueRepository
 	lookRepo              *repository.CharacterLookRepository
+	itemRepo              *repository.ItemRepository
 	taskSvc            *TaskService
 	videoSem           chan struct{} // nil = unlimited; set via WithVideoConcurrency
 	videoSemMu         sync.RWMutex  // protects videoSem replacement
@@ -137,6 +138,11 @@ func (s *VideoService) SetVideoConcurrency(n int) {
 
 func (s *VideoService) WithLookRepo(r *repository.CharacterLookRepository) *VideoService {
 	s.lookRepo = r
+	return s
+}
+
+func (s *VideoService) WithItemRepo(r *repository.ItemRepository) *VideoService {
+	s.itemRepo = r
 	return s
 }
 

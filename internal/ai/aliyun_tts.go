@@ -104,7 +104,7 @@ func (p *AliyunTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenerat
 
 	voice := req.Voice
 	if voice == "" {
-		voice = "longxiaochun"
+		return nil, fmt.Errorf("aliyun-tts: 未指定音色，请先在小说设置或角色配置中选择音色")
 	}
 	model := req.Model
 	if model == "" {
