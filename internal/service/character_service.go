@@ -2096,6 +2096,7 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	// 文字层面无法传递实际面部特征，故不使用文字前缀锚定。
 	condensedAppearance := condenseVisualPrompt(appearance, 50)
 
+	// 风格词和质量词放在 prompt 最前：扩散模型对早期 token 注意力更高，style 后置会被100+词的布局/外貌淹没。
 	var prompt string
 	if style == "realistic" || style == "real_person" {
 		genderPrefix := map[string]string{
@@ -2105,12 +2106,11 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 		if style == "real_person" {
 			sheetStyle = "ultra-realistic skin texture, natural studio lighting, DSLR quality, 8k uhd, sharp focus"
 		}
-		prompt = genderPrefix + layoutFrame + ", " +
+		prompt = sheetStyle + ", " + qualityTokens + ", " +
+			genderPrefix + layoutFrame + ", " +
 			condensedAppearance + ", " +
 			"no makeup natural bare face, " +
 			"orthographic projection, character only pure white background, " +
-			sheetStyle + ", " +
-			qualityTokens + ", " +
 			"no text no labels no watermarks"
 	} else {
 		styleDesc := resolveStyleIllustrationDesc(style)
@@ -2118,12 +2118,11 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 		if genderTag != "" {
 			genderPrefix = genderTag + ", "
 		}
-		prompt = genderPrefix + layoutFrame + ", " +
+		prompt = styleDesc + ", " + qualityTokens + ", " +
+			genderPrefix + layoutFrame + ", " +
 			condensedAppearance + ", " +
 			"no makeup natural bare face, " +
 			"orthographic projection, character only white background, " +
-			styleDesc + ", " +
-			qualityTokens + ", " +
 			"no text no labels no watermarks"
 	}
 
@@ -2175,6 +2174,7 @@ func (s *ImageGenerationService) GeneratePortrait(ctx context.Context, tenantID 
 
 	condensedAppearance := condenseVisualPrompt(appearance, 60)
 
+	// 风格词前置：同 GenerateThreeViewSheet，style 必须在 prompt 最前才能被模型充分响应。
 	var prompt string
 	if style == "realistic" || style == "real_person" {
 		genderPrefix := map[string]string{
@@ -2184,11 +2184,11 @@ func (s *ImageGenerationService) GeneratePortrait(ctx context.Context, tenantID 
 		if style == "real_person" {
 			sheetStyle = "ultra-realistic skin texture, natural studio lighting, DSLR quality, 8k uhd, sharp focus"
 		}
-		prompt = genderPrefix +
+		prompt = sheetStyle + ", " + qualityTokens + ", " +
+			genderPrefix +
 			"single character portrait, half-body bust shot, front-facing, neutral expression, " +
 			condensedAppearance + ", " +
 			"pure white background, centered composition, " +
-			sheetStyle + ", " + qualityTokens + ", " +
 			"no text no labels no watermarks"
 	} else {
 		styleDesc := resolveStyleIllustrationDesc(style)
@@ -2196,11 +2196,11 @@ func (s *ImageGenerationService) GeneratePortrait(ctx context.Context, tenantID 
 		if genderTag != "" {
 			genderPrefix = genderTag + ", "
 		}
-		prompt = genderPrefix +
+		prompt = styleDesc + ", " + qualityTokens + ", " +
+			genderPrefix +
 			"single character portrait, half-body bust shot, front-facing, neutral expression, " +
 			condensedAppearance + ", " +
 			"pure white background, centered composition, " +
-			styleDesc + ", " + qualityTokens + ", " +
 			"no text no labels no watermarks"
 	}
 
