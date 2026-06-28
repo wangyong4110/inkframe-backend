@@ -779,12 +779,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			toolsGroup.POST("/prompt-enhance", cfg.PromptEnhanceHandler.Enhance)
 		}
 
-		taskConfigs := v1.Group("/task-configs")
-		{
-			taskConfigs.GET("/:task", cfg.ModelHandler.GetTaskConfig)
-			taskConfigs.PUT("/:task", cfg.ModelHandler.UpdateTaskConfig)
-		}
-
 		experiments := v1.Group("/experiments")
 		{
 			experiments.GET("", cfg.ModelHandler.ListExperiments)

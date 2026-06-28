@@ -141,6 +141,13 @@ func (r *ChapterRepository) ListByNovelWithContent(novelID uint) ([]*model.Chapt
 		Order("chapter_no ASC").Limit(300).Find(&chapters).Error
 }
 
+// ListByNovelWithContentUnlimited 获取全部章节含正文，无数量上限，专用于导出。
+func (r *ChapterRepository) ListByNovelWithContentUnlimited(novelID uint) ([]*model.Chapter, error) {
+	var chapters []*model.Chapter
+	return chapters, r.db.Where("novel_id = ?", novelID).
+		Order("chapter_no ASC").Find(&chapters).Error
+}
+
 // GetByNovelAndChapterRange 批量获取章节范围（含首尾，一次 SQL 代替循环 GetByNovelAndChapterNo）
 func (r *ChapterRepository) GetByNovelAndChapterRange(novelID uint, start, end int) ([]*model.Chapter, error) {
 	var chapters []*model.Chapter

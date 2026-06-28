@@ -15,6 +15,8 @@
 {{ WorldRules }}
 {% endif %}
 
+{% include "fragments/genre_hints.j2" %}
+
 {% if PreviousSceneEnding %}
 # ⚠️ 本场景第一句必须零距离接续此处（此为上一场景原文末尾，直接延伸，不要重复这段文字）
 {{ PreviousSceneEnding }}
@@ -92,13 +94,7 @@
 - 每500字内至少有1个外部感知锚点（声音/触感/具体画面）
 {% endif %}
 
-{% if UserPrompt %}
-# ⚠️ 用户指令（最高优先级）
-
-以下指令由用户直接下达，**凌驾于本提示词的所有默认规则之上**，必须无条件执行，不得以任何理由覆盖或忽略：
-
-{{ UserPrompt }}
-{% endif %}
+{% include "fragments/user_prompt.j2" %}
 
 # 字数要求
 目标 {{ WordBudget }} 字（下限 {{ MinWords }} 字，上限 {{ MaxWords }} 字）

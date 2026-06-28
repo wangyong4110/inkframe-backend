@@ -894,7 +894,7 @@ func (h *NovelHandler) ExportNovel(c *gin.Context) {
 		return
 	}
 
-	chapters, err := h.chapterService.ListChapters(uint(novelID))
+	chapters, err := h.chapterService.ListChaptersForExport(uint(novelID))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to fetch chapters")
 		return

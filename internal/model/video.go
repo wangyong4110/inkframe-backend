@@ -106,6 +106,10 @@ type Video struct {
 	PublishedAt *time.Time `json:"published_at" gorm:"index"`
 	HotScore    float64    `json:"hot_score" gorm:"default:0;index"`
 
+	// 短剧分集参数（0=不启用）
+	EpisodeCount       int `json:"episode_count" gorm:"default:0"`        // 总集数
+	EpisodeDurationSec int `json:"episode_duration_sec" gorm:"default:0"` // 每集目标时长（秒）
+
 	// 统计计数（不存 ink_video 主表，从 ink_content_stats 加载）
 	ViewCount    int `json:"view_count" gorm:"-"`
 	LikeCount    int `json:"like_count" gorm:"-"`
@@ -191,6 +195,11 @@ type StoryboardShot struct {
 
 	// 场景锚点
 	SceneAnchorID *uint `json:"scene_anchor_id,omitempty" gorm:"index"`
+
+	// 情绪与节奏标注（短剧爆款优化）
+	EmotionTag string `json:"emotion_tag" gorm:"size:30;default:''"` // tension/joy/heartbreak/shock/romance/comedy
+	PaceTag    string `json:"pace_tag" gorm:"size:20;default:''"`    // slow/normal/fast/cut
+	EpisodeNo  int    `json:"episode_no" gorm:"default:0"`           // 所属集数（0=未分集，1=第1集…）
 
 	// 角色绑定（序列化为 JSON 数组，前端直接收到 [1,2,3]）
 	CharacterIDs JSONUintSlice `json:"character_ids" gorm:"type:json"`

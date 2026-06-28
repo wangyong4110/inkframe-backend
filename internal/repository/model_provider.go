@@ -390,36 +390,6 @@ type UsageStats struct {
 	SuccessRate    float64
 }
 
-// TaskModelConfigRepository 任务模型配置仓库
-type TaskModelConfigRepository struct {
-	db *gorm.DB
-}
-
-func NewTaskModelConfigRepository(db *gorm.DB) *TaskModelConfigRepository {
-	return &TaskModelConfigRepository{db: db}
-}
-
-// GetByTaskType 获取任务配置
-func (r *TaskModelConfigRepository) GetByTaskType(taskType string) (*model.TaskModelConfig, error) {
-	var config model.TaskModelConfig
-	if err := r.db.Preload("PrimaryModel").
-		Where("task_type = ? AND is_active = ?", taskType, true).
-		First(&config).Error; err != nil {
-		return nil, err
-	}
-	return &config, nil
-}
-
-// Create 创建配置
-func (r *TaskModelConfigRepository) Create(config *model.TaskModelConfig) error {
-	return r.db.Create(config).Error
-}
-
-// Update 更新配置
-func (r *TaskModelConfigRepository) Update(config *model.TaskModelConfig) error {
-	return r.db.Save(config).Error
-}
-
 // ModelComparisonRepository 模型对比仓库
 type ModelComparisonRepository struct {
 	db *gorm.DB

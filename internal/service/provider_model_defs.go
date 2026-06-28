@@ -1,5 +1,113 @@
 package service
 
+// ProviderStaticModelsByType 按提供商名称 → 模型类型 → 模型 ID 列表的静态映射。
+// 这是 static_models 字段数据的唯一来源；DB 列已废弃并将被删除。
+var ProviderStaticModelsByType = map[string]map[string][]string{
+	"openai": {
+		"llm":       {"gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "o3", "o3-mini", "o1", "o1-mini"},
+		"image":     {"dall-e-3", "dall-e-2", "gpt-image-1"},
+		"embedding": {"text-embedding-3-large", "text-embedding-3-small", "text-embedding-ada-002"},
+		"voice":     {"tts-1", "tts-1-hd"},
+	},
+	"anthropic": {
+		"llm": {"claude-opus-4-7", "claude-opus-4-5", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5-20251001", "claude-3-7-sonnet-20250219", "claude-3-5-sonnet-20241022", "claude-3-5-haiku-20241022", "claude-3-opus-20240229"},
+	},
+	"google": {
+		"llm": {"gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-pro", "gemini-1.5-flash"},
+	},
+	"xai": {
+		"llm": {"grok-3", "grok-3-mini", "grok-3-fast", "grok-2", "grok-2-vision"},
+	},
+	"mistral": {
+		"llm": {"mistral-large-latest", "mistral-small-latest", "codestral-latest", "open-mistral-nemo"},
+	},
+	"meta": {
+		"llm": {"Llama-4-Scout-17B-16E-Instruct", "Llama-4-Maverick-17B-128E-Instruct", "Llama-3.3-70B-Instruct"},
+	},
+	"doubao": {
+		"llm": {
+			"doubao-pro-256k", "doubao-pro-128k", "doubao-pro-32k", "doubao-pro-4k",
+			"doubao-lite-128k", "doubao-lite-32k",
+			"doubao-seed-1-6", "doubao-seed-1-5",
+		},
+		"video": {"doubao-seaweed-241128", "doubao-seedance-1-0-lite-i2v-250528"},
+	},
+	"deepseek": {
+		"llm": {"deepseek-chat", "deepseek-reasoner"},
+	},
+	"qianwen": {
+		"llm": {
+			"qwen-max", "qwen-plus", "qwen-turbo", "qwen-long",
+			"qwen3-235b-a22b", "qwen3-32b", "qwen3-14b", "qwen3-8b",
+			"qwen2.5-72b-instruct", "qwen2.5-32b-instruct",
+		},
+		"image": {"wanx2.1-t2i-plus", "wanx2.1-t2i-turbo", "wanx-x-v1"},
+		"video": {"wanx2.1-i2v-plus", "wanx2.1-i2v-turbo"},
+		"voice": {"cosyvoice-v2-0.5b", "cosyvoice-v1-5b"},
+	},
+	"zhipu": {
+		"llm": {"glm-4-plus", "glm-4-air", "glm-4-flash", "glm-z1-plus", "glm-z1-air"},
+	},
+	"moonshot": {
+		"llm": {"kimi-k2-0711-preview", "moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k"},
+	},
+	"baidu": {
+		"llm": {"ernie-4.5-turbo-128k", "ernie-4.5-8k", "ernie-3.5-128k", "ernie-speed-128k"},
+	},
+	"tencent": {
+		"llm": {"hunyuan-turbos-latest", "hunyuan-large", "hunyuan-standard-256k"},
+	},
+	"yi": {
+		"llm": {"yi-lightning", "yi-large", "yi-medium"},
+	},
+	"volcengine-visual": {
+		"image": {"general_v3.0", "general_v2.1", "general_v1.4"},
+		"video": {"general_v3.0-I2V"},
+	},
+	"kling": {
+		"video": {"kling-v1-6", "kling-v1-5", "kling-v1"},
+		"image": {"kling-v1-6", "kling-v1-5", "kling-v1"},
+		"sfx":   {"kling-v1"},
+	},
+	"doubao-speech": {
+		"voice": {"seed-tts-2.0", "seed-tts-1.0"},
+	},
+	"doubao-speech-v1": {
+		"voice": {"BV001_streaming", "BV002_streaming"},
+	},
+	"baidu-tts": {
+		"voice": {"0", "1", "3", "4", "5", "103", "106", "110", "111"},
+	},
+	"minimax-tts": {
+		"voice": {"female-shaonv", "female-yujie", "male-qn-qingse", "male-qn-jingying"},
+	},
+	"tencent-tts": {
+		"voice": {"101001", "101002", "101011", "101012"},
+	},
+	"elevenlabs-sfx": {
+		"sfx": {"sound-generation"},
+	},
+}
+
+// FlattenStaticModels returns a deduplicated flat list of all models for the given provider.
+func FlattenStaticModels(providerName string) []string {
+	byType, ok := ProviderStaticModelsByType[providerName]
+	if !ok {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var result []string
+	for _, models := range byType {
+		for _, m := range models {
+			if _, ok := seen[m]; !ok {
+				seen[m] = struct{}{}
+				result = append(result, m)
+			}
+		}
+	}
+	return result
+}
+
 // providerModelDef 内置的提供商模型定义，用于租户创建供应商时自动初始化模型列表。
 // 这是单一数据来源 — seed.go 不再为 tenant_id=0 的系统供应商写入 ink_ai_model 记录。
 type providerModelDef struct {
@@ -17,13 +125,10 @@ var defaultProviderModels = map[string][]providerModelDef{
 		{"gpt-4o-mini", "GPT-4o Mini", "llm", 0.85, 16384},
 		{"dall-e-3", "DALL-E 3", "image", 0.95, 0},
 	},
-	"azure": {
-		{"gpt-4o", "GPT-4o（Azure）", "llm", 0.95, 16384},
-		{"gpt-4o-mini", "GPT-4o Mini（Azure）", "llm", 0.85, 16384},
-		{"gpt-4.1", "GPT-4.1（Azure）", "llm", 0.96, 32768},
-		{"gpt-4.1-mini", "GPT-4.1 Mini（Azure）", "llm", 0.88, 16384},
-		{"o3-mini", "o3-mini（Azure）", "llm", 0.94, 65536},
-	},
+	// Azure uses deployment-based naming — model names are account-specific deployment names
+	// configured in Azure Portal; no generic defaults can be pre-seeded here.
+	// Users must add models manually via the "添加模型" button.
+	"azure": {},
 	"anthropic": {
 		{"claude-opus-4-5", "Claude Opus 4.5", "llm", 0.98, 8192},
 		{"claude-sonnet-4-5", "Claude Sonnet 4.5", "llm", 0.96, 8192},

@@ -251,6 +251,7 @@ func (s *QualityControlService) CheckChapterQuality(ctx context.Context, chapter
 		report.Issues = append(report.Issues, s.checkQuality(chapter)...)
 		report.Issues = append(report.Issues, s.checkStyle(chapter)...)
 		report.Issues = append(report.Issues, s.checkDramatic(chapter)...)
+		report.Issues = append(report.Issues, s.checkEmotionCurve(chapter)...)
 	}
 
 	// safeScore 保护每个维度分值，防止 NaN/Inf/-Inf 污染加权平均结果
@@ -501,6 +502,109 @@ func (s *QualityControlService) checkDramatic(chapter *model.Chapter) []QualityI
 			Description: fmt.Sprintf("顺序叙述过多：「然后/于是/接着」出现%d次，情节推进缺乏波折", sequentialCount),
 			Suggestion:  "建议将部分线性段落改写为因果冲突或内心挣扎",
 		})
+	}
+
+	return issues
+}
+
+// checkEmotionCurve 从场景大纲 JSON 中提取 emotion_peak 值，检测情绪曲线平坦问题。
+// SceneOutline 存储格式为 chapter_scene_outline 生成的 JSON 字符串。
+func (s *QualityControlService) checkEmotionCurve(chapter *model.Chapter) []QualityIssue {
+	if chapter.NarrativeMeta.SceneOutline == "" {
+		return nil
+	}
+
+	type scene struct {
+		EmotionPeak float64 `json:"emotion_peak"`
+		Tension     float64 `json:"tension"`
+	}
+	type outline struct {
+		Scenes []scene `json:"scenes"`
+	}
+
+	var out outline
+	raw := chapter.NarrativeMeta.SceneOutline
+	// SceneOutline may be a JSON object with "scenes" key
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil
+	}
+	if len(out.Scenes) < 2 {
+		return nil
+	}
+
+	// Collect emotion_peak values (fall back to tension if emotion_peak=0)
+	peaks := make([]float64, 0, len(out.Scenes))
+	for _, sc := range out.Scenes {
+		p := sc.EmotionPeak
+		if p == 0 {
+			p = sc.Tension // backward compat
+		}
+		peaks = append(peaks, p)
+	}
+
+	var issues []QualityIssue
+
+	// 1. 情绪曲线平坦检测
+	maxP, minP := peaks[0], peaks[0]
+	for _, p := range peaks {
+		if p > maxP {
+			maxP = p
+		}
+		if p < minP {
+			minP = p
+		}
+	}
+	if maxP-minP < 3 {
+		issues = append(issues, QualityIssue{
+			Type:        "dramatic",
+			Severity:    "high",
+			Description: fmt.Sprintf("情绪曲线过平：各场景情绪强度差值仅%.0f，缺乏高潮与低谷对比（建议差值≥4）", maxP-minP),
+			Suggestion:  "调整场景设计：至少有一个情绪≥8的高峰场景，以及至少一个情绪≤4的缓冲场景",
+		})
+	}
+
+	// 2. 开篇钩子强度
+	if peaks[0] < 5 {
+		issues = append(issues, QualityIssue{
+			Type:        "dramatic",
+			Severity:    "medium",
+			Description: fmt.Sprintf("开篇钩子不足：第一场景情绪强度仅%.0f（建议≥6），难以在前5秒抓住观众", peaks[0]),
+			Suggestion:  "开篇场景应立即制造冲突或悬念，emotion_peak建议≥6",
+		})
+	}
+
+	// 3. 末尾收尾强度（非独立章）
+	last := peaks[len(peaks)-1]
+	if last < 6 {
+		issues = append(issues, QualityIssue{
+			Type:        "dramatic",
+			Severity:    "medium",
+			Description: fmt.Sprintf("章末悬念不足：末场景情绪强度仅%.0f（建议≥7），读者下集诱因弱", last),
+			Suggestion:  "末尾场景应以悬念、冲突或情绪爆发收尾，emotion_peak建议≥7",
+		})
+	}
+
+	// 4. 连续平坦检测（连续3个场景差值<2）
+	for i := 2; i < len(peaks); i++ {
+		window := peaks[i-2 : i+1]
+		wMax, wMin := window[0], window[0]
+		for _, v := range window {
+			if v > wMax {
+				wMax = v
+			}
+			if v < wMin {
+				wMin = v
+			}
+		}
+		if wMax-wMin < 2 {
+			issues = append(issues, QualityIssue{
+				Type:        "dramatic",
+				Severity:    "low",
+				Description: fmt.Sprintf("第%d-%d场景情绪连续平坦（差值%.0f），节奏缺乏波动", i-1, i+1, wMax-wMin),
+				Suggestion:  "连续场景间应有情绪起伏，避免节奏单调",
+			})
+			break // only report once
+		}
 	}
 
 	return issues

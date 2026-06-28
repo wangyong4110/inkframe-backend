@@ -38,6 +38,7 @@ type NovelService struct {
 	cache            *redis.Client // optional: cross-instance view dedup
 	stopCh           chan struct{} // closed by Shutdown() to stop background goroutines
 	onDeleteHook     func(novelID uint) // fired after a novel is deleted
+	dramaSvc         *DramaTemplateService // 可选，短剧模板注入大纲
 }
 
 // OnDeleteNovel registers a callback fired after a novel is successfully deleted.
@@ -77,6 +78,12 @@ func (s *NovelService) WithCharacterRepos(characterRepo *repository.CharacterRep
 // WithPlotPointService 注入剧情点服务（用于AI提取后保存）
 func (s *NovelService) WithPlotPointService(svc *PlotPointService) *NovelService {
 	s.plotPointService = svc
+	return s
+}
+
+// WithDramaTemplateService 注入短剧模板服务（用于大纲生成时注入三幕骨架）
+func (s *NovelService) WithDramaTemplateService(svc *DramaTemplateService) *NovelService {
+	s.dramaSvc = svc
 	return s
 }
 
@@ -691,13 +698,14 @@ func (s *NovelService) UnpublishNovel(id, tenantID uint) error {
 
 // GenerateOutlineRequest 生成大纲请求
 type GenerateOutlineRequest struct {
-	NovelID        uint     `json:"novel_id" binding:"required"`
-	Prompt         string   `json:"prompt"`
-	ChapterNum     int      `json:"chapter_num"` // 0 = AI 自决章节数
-	Keywords       []string `json:"keywords"`
-	MaxTokens      int      `json:"max_tokens,omitempty"`
-	Temperature    float64  `json:"temperature,omitempty"`
-	TimeoutSeconds int      `json:"timeout_seconds,omitempty"`
+	NovelID         uint     `json:"novel_id" binding:"required"`
+	Prompt          string   `json:"prompt"`
+	ChapterNum      int      `json:"chapter_num"` // 0 = AI 自决章节数
+	Keywords        []string `json:"keywords"`
+	MaxTokens       int      `json:"max_tokens,omitempty"`
+	Temperature     float64  `json:"temperature,omitempty"`
+	TimeoutSeconds  int      `json:"timeout_seconds,omitempty"`
+	DramaTemplateID uint     `json:"drama_template_id,omitempty"` // 0=不使用模板
 }
 
 // GenerateOutline 生成大纲
@@ -1053,6 +1061,15 @@ func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutli
 				}
 				sb.WriteString("\n")
 			}
+		}
+	}
+
+	// 注入短剧模板骨架（爆款结构强化）
+	if req.DramaTemplateID > 0 && s.dramaSvc != nil {
+		if injection, err := s.dramaSvc.BuildOutlineInjection(req.DramaTemplateID); err == nil && injection != "" {
+			sb.WriteString("\n\n")
+			sb.WriteString(injection)
+			sb.WriteString("\n")
 		}
 	}
 

@@ -86,9 +86,12 @@ func (p *AzureProvider) deploymentOf(model string) (string, error) {
 	return dep, nil
 }
 
-func (p *AzureProvider) chatURL(deployment string) string {
+func (p *AzureProvider) chatURL(deployment, apiVersion string) string {
+	if apiVersion == "" {
+		apiVersion = p.apiVersion
+	}
 	return fmt.Sprintf("%s/deployments/%s/chat/completions?api-version=%s",
-		p.endpoint, deployment, p.apiVersion)
+		p.endpoint, deployment, apiVersion)
 }
 
 func (p *AzureProvider) HealthCheck(ctx context.Context) error {
@@ -154,7 +157,7 @@ func (p *AzureProvider) Generate(ctx context.Context, req *GenerateRequest) (*Ge
 		return nil, err
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.chatURL(dep), bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.chatURL(dep, req.APIVersion), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +219,7 @@ func (p *AzureProvider) GenerateStream(ctx context.Context, req *GenerateRequest
 			return
 		}
 
-		httpReq, err := http.NewRequestWithContext(ctx, "POST", p.chatURL(dep), bytes.NewReader(body))
+		httpReq, err := http.NewRequestWithContext(ctx, "POST", p.chatURL(dep, req.APIVersion), bytes.NewReader(body))
 		if err != nil {
 			ch <- &GenerateResponse{Error: err.Error()}
 			return

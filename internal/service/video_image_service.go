@@ -486,7 +486,13 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				activeLook := s.getCharActiveLook(char, chapterNo)
 				var refImage, vprompt string
 				if activeLook != nil {
-					refImage = normalizeMediaURL(activeLook.ThreeViewSheet)
+					// Portrait（用户从三视图裁剪的单张正面像）面部 embedding 更干净，优先使用；
+					// 无 Portrait 时降级到 ThreeViewSheet。
+					if activeLook.Portrait != "" {
+						refImage = normalizeMediaURL(activeLook.Portrait)
+					} else {
+						refImage = normalizeMediaURL(activeLook.ThreeViewSheet)
+					}
 					vprompt = activeLook.VisualPrompt
 				}
 				urlType := "empty"
@@ -497,8 +503,12 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				} else if refImage != "" {
 					urlType = "other"
 				}
-				logger.Printf("[CharRef] shot#%d charID=%d name=%q chapterNo=%d activeLook=%v threeView=%q urlType=%s",
-					shot.ShotNo, char.ID, char.Name, chapterNo, activeLook != nil, refImage, urlType)
+				refType := "ThreeViewSheet"
+				if activeLook != nil && activeLook.Portrait != "" {
+					refType = "Portrait"
+				}
+				logger.Printf("[CharRef] shot#%d charID=%d name=%q chapterNo=%d activeLook=%v refType=%s ref=%q urlType=%s",
+					shot.ShotNo, char.ID, char.Name, chapterNo, activeLook != nil, refType, refImage, urlType)
 				if vprompt != "" {
 					characterVisualPrompts = append(characterVisualPrompts, vprompt)
 				} else {
@@ -574,10 +584,22 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 						if len(characterPortraits) >= maxCharRefs {
 							break
 						}
-						if ir.look != nil && ir.look.ThreeViewSheet != "" {
-							characterPortraits = append(characterPortraits, normalizeMediaURL(ir.look.ThreeViewSheet))
-							refSources = append(refSources, fmt.Sprintf("inline name=%q ThreeViewSheet", ir.name))
+						if ir.look != nil {
+						var refURL string
+						if ir.look.Portrait != "" {
+							refURL = normalizeMediaURL(ir.look.Portrait)
+						} else if ir.look.ThreeViewSheet != "" {
+							refURL = normalizeMediaURL(ir.look.ThreeViewSheet)
 						}
+						if refURL != "" {
+							characterPortraits = append(characterPortraits, refURL)
+							refKind := "ThreeViewSheet"
+							if ir.look.Portrait != "" {
+								refKind = "Portrait"
+							}
+							refSources = append(refSources, fmt.Sprintf("inline name=%q %s", ir.name, refKind))
+						}
+					}
 					}
 				}
 			}

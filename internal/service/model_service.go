@@ -13,7 +13,6 @@ import (
 type ModelService struct {
 	modelRepo      *repository.AIModelRepository
 	providerRepo   *repository.ModelProviderRepository
-	taskRepo       *repository.TaskModelConfigRepository
 	experimentRepo *repository.ModelComparisonRepository
 	aiService      *AIService
 }
@@ -21,14 +20,12 @@ type ModelService struct {
 func NewModelService(
 	modelRepo *repository.AIModelRepository,
 	providerRepo *repository.ModelProviderRepository,
-	taskRepo *repository.TaskModelConfigRepository,
 	experimentRepo *repository.ModelComparisonRepository,
 	aiService ...*AIService,
 ) *ModelService {
 	svc := &ModelService{
 		modelRepo:      modelRepo,
 		providerRepo:   providerRepo,
-		taskRepo:       taskRepo,
 		experimentRepo: experimentRepo,
 	}
 	if len(aiService) > 0 {
@@ -37,30 +34,24 @@ func NewModelService(
 	return svc
 }
 
+// selectByQuality 按 Quality 降序选模；Quality 相等时以 ID 升序（插入顺序）作为 tiebreaker，
+// 保证全部 Quality=0 时仍能确定性地选出第一个添加的模型。
 func selectByQuality(models []*model.AIModel) *model.AIModel {
 	var best *model.AIModel
-	bestScore := 0.0
-
 	for _, m := range models {
-		score := m.Quality
-		if score > bestScore {
-			bestScore = score
+		if best == nil {
+			best = m
+			continue
+		}
+		if m.Quality > best.Quality || (m.Quality == best.Quality && m.ID < best.ID) {
 			best = m
 		}
 	}
-
 	return best
 }
 
-// selectByCost 原本按 cost_per_1k_tokens 选择，该字段已移除，回退为按质量选择。
-func selectByCost(models []*model.AIModel) *model.AIModel {
-	return selectByQuality(models)
-}
-
-// selectBalanced 原本按质量/成本比选择，cost_per_1k_tokens 已移除，回退为按质量选择。
-func selectBalanced(models []*model.AIModel) *model.AIModel {
-	return selectByQuality(models)
-}
+func selectByCost(models []*model.AIModel) *model.AIModel    { return selectByQuality(models) }
+func selectBalanced(models []*model.AIModel) *model.AIModel  { return selectByQuality(models) }
 
 // RunExperiment runs a model comparison experiment: generates output with every listed model
 // in parallel, stores ExperimentResult rows, and marks the winner by quality score.
@@ -107,12 +98,7 @@ func (s *ModelService) RunExperiment(id uint) error {
 					return
 				}
 				start := time.Now()
-				cfg := &model.TaskModelConfig{
-					PrimaryModelID: mid,
-					Temperature:    0.7,
-					MaxTokens:      2048,
-				}
-				content, err := s.aiService.GenerateWithProvider(0, 0, exp.TaskType, exp.InputData, m.Provider.Name, StoryboardOverrides{MaxTokens: cfg.MaxTokens})
+				content, err := s.aiService.GenerateWithProvider(0, 0, exp.TaskType, exp.InputData, m.Provider.Name, StoryboardOverrides{MaxTokens: 2048})
 				elapsed := time.Since(start)
 				res := &model.ExperimentResult{
 					ExperimentID: exp.ID,

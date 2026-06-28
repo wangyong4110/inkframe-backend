@@ -5,34 +5,53 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
+	"path"
 	"strings"
-	"sync"
 
 	"github.com/flosch/pongo2/v4"
 )
 
-//go:embed prompts/*
+//go:embed prompts
 var promptTemplates embed.FS
 
-// templateCache holds compiled pongo2 templates keyed by name (without extension).
-var templateCache sync.Map
+// embedFSLoader implements pongo2.TemplateLoader so that {% include %} tags
+// can resolve paths relative to the including template inside the embedded FS.
+type embedFSLoader struct {
+	fs embed.FS
+}
+
+func (l *embedFSLoader) Abs(base, name string) string {
+	if base == "" {
+		// name is already the full path supplied to FromFile()
+		return name
+	}
+	return path.Join(path.Dir(base), name)
+}
+
+func (l *embedFSLoader) Get(p string) (io.Reader, error) {
+	data, err := l.fs.ReadFile(p)
+	if err != nil {
+		return nil, err
+	}
+	return bytes.NewReader(data), nil
+}
+
+// templateSet is the global pongo2 TemplateSet backed by the embedded FS.
+// Using a TemplateSet (instead of pongo2.FromString) enables {% include %} resolution
+// and provides built-in template caching per path.
+var templateSet *pongo2.TemplateSet
+
+func init() {
+	templateSet = pongo2.NewSet("inkframe", &embedFSLoader{fs: promptTemplates})
+}
 
 // renderPrompt renders a Jinja2 prompt template by name (without extension).
 // ctx is a map[string]interface{} of template variables.
 func renderPrompt(name string, ctx map[string]interface{}) (string, error) {
-	var tpl *pongo2.Template
-	if cached, ok := templateCache.Load(name); ok {
-		tpl = cached.(*pongo2.Template)
-	} else {
-		data, err := promptTemplates.ReadFile("prompts/" + name + ".j2")
-		if err != nil {
-			return "", fmt.Errorf("load template %s: %w", name, err)
-		}
-		tpl, err = pongo2.FromString(string(data))
-		if err != nil {
-			return "", fmt.Errorf("parse template %s: %w", name, err)
-		}
-		templateCache.Store(name, tpl)
+	tpl, err := templateSet.FromFile("prompts/" + name + ".j2")
+	if err != nil {
+		return "", fmt.Errorf("load template %s: %w", name, err)
 	}
 	if ctx == nil {
 		ctx = map[string]interface{}{}
@@ -82,7 +101,7 @@ func toContext(data interface{}) (pongo2.Context, error) {
 // TemplateService 模板服务（保留向后兼容 API）
 type TemplateService struct{}
 
-// NewTemplateService 创建模板服务，预验证所有 .j2 模板语法
+// NewTemplateService 创建模板服务，预验证所有顶层 .j2 模板语法（fragment 由 include 时惰性验证）
 func NewTemplateService() (*TemplateService, error) {
 	entries, err := promptTemplates.ReadDir("prompts")
 	if err != nil {
@@ -92,16 +111,9 @@ func NewTemplateService() (*TemplateService, error) {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".j2") {
 			continue
 		}
-		data, err := promptTemplates.ReadFile("prompts/" + entry.Name())
-		if err != nil {
-			return nil, fmt.Errorf("read template %s: %w", entry.Name(), err)
-		}
-		name := strings.TrimSuffix(entry.Name(), ".j2")
-		tpl, err := pongo2.FromString(string(data))
-		if err != nil {
+		if _, err := templateSet.FromFile("prompts/" + entry.Name()); err != nil {
 			return nil, fmt.Errorf("parse template %s: %w", entry.Name(), err)
 		}
-		templateCache.Store(name, tpl)
 	}
 	return &TemplateService{}, nil
 }
@@ -112,19 +124,9 @@ func (s *TemplateService) Render(name string, data interface{}) (string, error) 
 	if err != nil {
 		return "", err
 	}
-	var tpl *pongo2.Template
-	if cached, ok := templateCache.Load(name); ok {
-		tpl = cached.(*pongo2.Template)
-	} else {
-		raw, err := promptTemplates.ReadFile("prompts/" + name + ".j2")
-		if err != nil {
-			return "", fmt.Errorf("template not found: %s", name)
-		}
-		tpl, err = pongo2.FromString(string(raw))
-		if err != nil {
-			return "", fmt.Errorf("parse template %s: %w", name, err)
-		}
-		templateCache.Store(name, tpl)
+	tpl, err := templateSet.FromFile("prompts/" + name + ".j2")
+	if err != nil {
+		return "", fmt.Errorf("template not found: %s", name)
 	}
 	out, err := tpl.Execute(ctx)
 	if err != nil {

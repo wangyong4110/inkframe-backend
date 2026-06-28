@@ -11,6 +11,8 @@
 {{ WorldRules }}
 {% endif %}
 
+{% include "fragments/genre_hints.j2" %}
+
 {% if ChapterSummary %}
 # ⚠️ 本章大纲规定剧情（最高优先级 — 所有场景必须忠实还原以下大纲，不得偏离）
 {{ ChapterSummary }}
@@ -121,9 +123,10 @@
 # 本章必须涉及的角色（主角身份和状态不可改变）
 {% for char in Characters %}{% if char.IsProtagonist %}- ⚠️【主角】{{ char.Name }}（{{ char.Role }}）：当前状态「{{ char.CurrentState }}」
   人物设定：{{ char.Description }}
+{% if char.Archetype %}  角色原型：{{ char.Archetype }}{% endif %}
 {% if char.InnerConflict %}  内在矛盾：{{ char.InnerConflict }}{% endif %}
 {% if char.CoreDesire %}  核心渴望：{{ char.CoreDesire }}{% endif %}
-{% else %}- {{ char.Name }}（{{ char.Role }}）：当前状态「{{ char.CurrentState }}」
+{% else %}- {{ char.Name }}（{{ char.Role }}）：当前状态「{{ char.CurrentState }}」{% if char.Archetype %} [{{ char.Archetype }}]{% endif %}
 {% endif %}{% endfor %}
 
 {% if TimelineContext %}
@@ -145,13 +148,7 @@
 {{ ForeshadowHints }}
 {% endif %}
 
-{% if UserPrompt %}
-# ⚠️ 用户指令（最高优先级）
-
-以下指令由用户直接下达，**凌驾于本提示词的所有默认规则之上**，必须无条件执行，不得以任何理由覆盖或忽略：
-
-{{ UserPrompt }}
-{% endif %}
+{% include "fragments/user_prompt.j2" %}
 
 {% if ChapterBudget %}
 # 本章叙事预算约束（强制执行，违反则输出无效）
@@ -161,15 +158,16 @@
 # 张力设计规则（强制执行）
 1. **张力不得单调**：各场景 tension 值必须有变化，不允许所有场景值相同或差值<2
 2. **反转要求**：至少1个场景的 tension_direction 为 "reversal"（期待被打破/局势骤变）
+3. **情绪曲线要求**：各场景 emotion_peak 最大值与最小值之差必须 ≥ 4（即必须有情绪高点和低谷）；开篇第一场景 emotion_peak ≥ 6（钩子要求）；末尾最后一场景 emotion_peak ≥ 7（悬念/爆发收尾）
 {% if ChapterMode == "independent" %}
-3. **弧光完整**：独立成篇模式——故事弧必须在本章内完整，冲突必须有明确结果（解决/牺牲/转变），不可开放式悬置
-4. **信息不对称**：至少1个场景中某角色拥有其他人不知道的关键信息，制造潜在冲突
-5. **起伏落地**：张力曲线须完整（铺垫→升级→高潮→落幕），最后一个场景 tension_direction 为 "falling" 或情感收束，给读者完整的故事体验
+4. **弧光完整**：独立成篇模式——故事弧必须在本章内完整，冲突必须有明确结果（解决/牺牲/转变），不可开放式悬置
+5. **信息不对称**：至少1个场景中某角色拥有其他人不知道的关键信息，制造潜在冲突
+6. **起伏落地**：张力曲线须完整（铺垫→升级→高潮→落幕），最后一个场景 tension_direction 为 "falling" 或情感收束，给读者完整的故事体验
 {% else %}
-3. **舒适区禁令**：主角不得在本章内顺利完成核心目标，至少出现一次意外阻碍或代价
-4. **信息不对称**：至少1个场景中某角色拥有其他人不知道的关键信息，制造潜在冲突
-5. **章末必须更危险**：最后一个场景的张力值必须 ≥ 第一个场景，读者读完后处境更紧迫
-6. **胜利代价法则**：若本章有解决冲突/达成目标的场景，该场景的 key_beats 中必须包含至少一条"代价节拍"——主角或重要角色必须失去、改变或付出某物（可以是：身体受伤、关系裂痕、信仰动摇、某物永久损毁、获得胜利却发现为时已晚）。❌ 禁止设计"零代价胜利"场景
+4. **舒适区禁令**：主角不得在本章内顺利完成核心目标，至少出现一次意外阻碍或代价
+5. **信息不对称**：至少1个场景中某角色拥有其他人不知道的关键信息，制造潜在冲突
+6. **章末必须更危险**：最后一个场景的张力值必须 ≥ 第一个场景，读者读完后处境更紧迫
+7. **胜利代价法则**：若本章有解决冲突/达成目标的场景，该场景的 key_beats 中必须包含至少一条"代价节拍"——主角或重要角色必须失去、改变或付出某物（可以是：身体受伤、关系裂痕、信仰动摇、某物永久损毁、获得胜利却发现为时已晚）。❌ 禁止设计"零代价胜利"场景
 {% endif %}
 
 # 场景大纲输出要求
@@ -192,6 +190,7 @@
 - theme_echo: 本场景如何呼应全书核心主题（具体行为/对话/细节，不写"无关"——每个场景都应有）
 - pov_character: 视角人物
 - tension: 本场景张力值（1-10）
+- emotion_peak: 本场景情绪强度峰值（0-10）——0=平淡无波，10=极致情绪爆发；高潮场景应≥8，缓冲场景应≤4
 
 {% if ChapterMode == "independent" %}
 ⚠️ 本章是**独立完整的故事**：必须包含完整的起承转合，核心冲突在本章内完全解决，人物弧光落地，给读者完整的故事体验。最后一个场景必须是**终结性场景**，**不能**以悬念、开放式冲突或钩子结尾。本章与其他章节无剧情关联，无需承接或预设后续情节。
@@ -240,6 +239,7 @@
       "closing_beat": "收场/过渡描述",
       "emotional_shift": "情绪变化",
       "tension_direction": "rising/peak/falling/reversal",
+      "emotion_peak": 5,
       "dialogue_subtext": "对话潜台词（角色不会直说的意图）",
       "dialogue_mode": "信息战/说服战/遮掩战/情感博弈/无",
       "micro_pacing": "密集短句/中等节奏/舒缓长句",

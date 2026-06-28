@@ -123,38 +123,6 @@ func (AIModel) TableName() string {
 	return "ink_ai_model"
 }
 
-// TaskModelConfig 任务模型配置
-type TaskModelConfig struct {
-	ID       uint   `json:"id" gorm:"primaryKey"`
-	TaskType string `json:"task_type" gorm:"size:50;index;not null"`
-
-	PrimaryModelID    uint           `json:"primary_model_id"`
-	PrimaryModel      *AIModel       `json:"primary_model,omitempty" gorm:"foreignKey:PrimaryModelID"`
-	PrimaryProviderID uint           `json:"primary_provider_id" gorm:"default:0"` // 显式绑定 provider，消除同名模型歧义
-	PrimaryProvider   *ModelProvider `json:"primary_provider,omitempty" gorm:"foreignKey:PrimaryProviderID"`
-	FallbackModelIDs  string         `json:"fallback_model_ids" gorm:"type:text"` // JSON数组
-
-	// 参数
-	Temperature    float64 `json:"temperature" gorm:"type:decimal(3,2)"`
-	TopP           float64 `json:"top_p" gorm:"type:decimal(3,2)"`
-	TopK           int     `json:"top_k"`
-	MaxTokens      int     `json:"max_tokens"`
-	TimeoutSeconds int     `json:"timeout_seconds" gorm:"default:0"` // 0=使用硬编码默认值(300s)
-
-	// 策略
-	Strategy string `json:"strategy" gorm:"size:20;default:balanced"`
-	// quality_first=质量优先, cost_first=成本优先, balanced=平衡, custom=自定义
-
-	IsActive bool `json:"is_active" gorm:"default:true"`
-
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-}
-
-func (TaskModelConfig) TableName() string {
-	return "ink_task_model_config"
-}
-
 // ModelComparisonExperiment 模型对比实验
 type ModelComparisonExperiment struct {
 	ID       uint `json:"id" gorm:"primaryKey"`
@@ -319,15 +287,6 @@ type UpdateAIModelRequest struct {
 	Concurrency *int     `json:"concurrency"`
 	RateLimit   *int     `json:"rate_limit"`
 	IsActive    *bool    `json:"is_active"`
-}
-
-type UpdateTaskConfigRequest struct {
-	PrimaryModelID    uint    `json:"primary_model_id"`
-	PrimaryProviderID uint    `json:"primary_provider_id"` // 显式绑定 provider，消除同名模型歧义
-	FallbackModelIDs  string  `json:"fallback_model_ids"`
-	MaxTokens         int     `json:"max_tokens"`
-	Temperature       float64 `json:"temperature"`
-	TopP              float64 `json:"top_p"`
 }
 
 type CreateModelComparisonRequest struct {

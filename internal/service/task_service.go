@@ -64,6 +64,8 @@ type TaskService struct {
 	repo             *repository.TaskRepository
 	db               *gorm.DB        // optional: used for cross-table cleanup (e.g. WebhookDelivery)
 	cache            *redis.Client   // optional: for cross-instance task cancel broadcast
+	notifSvc         *NotificationService                   // optional: sends in-app notifications on task failure
+	tenantUserRepo   *repository.TenantUserRepository       // optional: resolves tenant → user IDs for notifications
 	stopCh           chan struct{}    // closed by Shutdown() to stop background goroutines
 	cancelFns        sync.Map        // taskID string → context.CancelFunc
 	resumeFns        sync.Map        // taskType string → func(*model.AsyncTask)
@@ -85,6 +87,18 @@ func NewTaskService(repo *repository.TaskRepository) *TaskService {
 // (e.g. purging old WebhookDelivery records). Call before Boot().
 func (s *TaskService) WithDB(db *gorm.DB) *TaskService {
 	s.db = db
+	return s
+}
+
+// WithNotificationService enables in-app notifications when tasks fail.
+func (s *TaskService) WithNotificationService(svc *NotificationService) *TaskService {
+	s.notifSvc = svc
+	return s
+}
+
+// WithTenantUserRepo allows resolving tenant → user IDs for failure notifications.
+func (s *TaskService) WithTenantUserRepo(r *repository.TenantUserRepository) *TaskService {
+	s.tenantUserRepo = r
 	return s
 }
 
@@ -265,6 +279,16 @@ func (s *TaskService) Fail(taskID string, errMsg string) error {
 	}
 	taskType := taskTypeFromID(taskID)
 	metrics.TaskCompletedTotal.WithLabelValues(taskType, "error").Inc()
+	// Send in-app failure notification asynchronously (best-effort).
+	if s.notifSvc != nil && s.tenantUserRepo != nil {
+		go func() {
+			task, err2 := s.repo.GetByTaskID(taskID)
+			if err2 != nil {
+				return
+			}
+			s.sendFailureNotification(task, errMsg)
+		}()
+	}
 	return nil
 }
 
@@ -322,6 +346,66 @@ func (s *TaskService) MarkTaskFailed(taskID string, err error) {
 	if saveErr := s.repo.Update(task); saveErr != nil {
 		logger.Errorf("[TaskService] MarkTaskFailed: save task %s failed: %v", taskID, saveErr)
 	}
+	// Send notification when task finally dies (not on retries).
+	if task.Status == "dead" && s.notifSvc != nil && s.tenantUserRepo != nil {
+		go s.sendFailureNotification(task, task.Error)
+	}
+}
+
+// sendFailureNotification sends a failure in-app notification to all users in the task's tenant.
+func (s *TaskService) sendFailureNotification(task *model.AsyncTask, errMsg string) {
+	users, err := s.tenantUserRepo.ListByTenant(task.TenantID)
+	if err != nil || len(users) == 0 {
+		return
+	}
+	typeLabel := taskTypeLabelForNotif(task.Type)
+	title := fmt.Sprintf("任务失败：%s", task.Title)
+	body := fmt.Sprintf("类型：%s\n错误：%s", typeLabel, errMsg)
+	for _, tu := range users {
+		_ = s.notifSvc.Send(task.TenantID, tu.UserID, "task_failed", title, body, task.EntityType, task.EntityID, "")
+	}
+}
+
+// taskTypeLabelForNotif returns a human-readable Chinese label for a task type.
+func taskTypeLabelForNotif(t string) string {
+	labels := map[string]string{
+		TaskTypeStoryboardGen:        "分镜生成",
+		TaskTypeChapterGen:           "章节生成",
+		TaskTypeVoiceGen:             "配音",
+		TaskTypeImageGen:             "图像",
+		TaskTypeThreeView:            "三视图",
+		TaskTypeCharGen:              "角色生成",
+		TaskTypeItemExtract:          "物品提取",
+		TaskTypePlotExtract:          "情节提取",
+		TaskTypeAssetGen:             "素材",
+		TaskTypeSceneAnchorExtract:   "场景提取",
+		TaskTypeChapterSummaryBatch:  "批量摘要",
+		TaskTypeSFXGen:               "音效",
+		TaskTypeChapterReview:        "章节审查",
+		TaskTypeChapterReviewBatch:   "批量审查",
+		TaskTypeStoryboardReview:     "分镜审查",
+		TaskTypeStoryboardOptimize:   "分镜优化",
+		TaskTypeImport:               "导入",
+		TaskTypeNovelAnalysis:        "小说分析",
+		TaskTypeRewriteAnalysis:      "改写分析",
+		TaskTypeRewriteChapters:      "改写章节",
+		TaskTypeCrawlJob:             "爬取任务",
+		TaskTypeSkillGen:             "技能生成",
+		TaskTypeBatchChapterGen:      "批量生成",
+		TaskTypeCharReanalyze:        "角色重分析",
+		TaskTypeNovelOutlineGen:      "生成大纲",
+		TaskTypeCharImageGen:         "角色图像",
+		TaskTypeCharProfileGen:       "角色档案",
+		TaskTypeCoverImageGen:        "封面生成",
+		TaskTypeImageEdit:            "图像编辑",
+		TaskTypeImageUpscale:         "图像放大",
+		TaskTypeVideoGen:             "视频生成",
+		TaskTypeVideoSynthesis:       "视频合成",
+	}
+	if l, ok := labels[t]; ok {
+		return l
+	}
+	return t
 }
 
 // Get returns a task by its task_id (no tenant check — use GetForTenant for API responses).

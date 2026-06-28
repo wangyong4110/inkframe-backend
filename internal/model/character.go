@@ -34,6 +34,7 @@ type Character struct {
 
 	Name string `json:"name" gorm:"size:100;not null;uniqueIndex:uniq_char_novel_name,priority:2"`
 	Role string `json:"role" gorm:"size:50"` // protagonist/antagonist/supporting/minor
+	Archetype string `json:"archetype" gorm:"size:50;default:''"` // dominant_ceo/reborn_villain/pure_heroine/scheming_rival/loyal_friend/comic_relief
 
 	// 统一描述字段（外貌、性格、背景、对话风格等所有描述性信息）
 	Description string `json:"description" gorm:"type:text"`

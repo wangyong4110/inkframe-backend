@@ -124,6 +124,9 @@ func main() {
 	// 7. 初始化仓库层
 	repos := initRepositories(db, redisClient)
 
+	// 7b. 预置内置短剧模板（幂等，按名称 upsert）
+	service.SeedBuiltinTemplates(repos.DramaTemplateRepo)
+
 	// 8. 初始化服务层
 	services := initServices(db, repos, aiManager, vectorStore, cfg, redisClient)
 
@@ -252,6 +255,7 @@ func main() {
 		SysAdminHandler:       handlers.SysAdminHandler,
 		SensitiveWordHandler:  handlers.SensitiveWordHandler,
 		FeedbackHandler:       handlers.FeedbackHandler,
+		DramaTemplateHandler:  handlers.DramaTemplateHandler,
 	})
 
 	// 12. 创建服务器

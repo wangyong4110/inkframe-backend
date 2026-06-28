@@ -13,6 +13,8 @@
 {{ WorldRules }}
 {% endif %}
 
+{% include "fragments/genre_hints.j2" %}
+
 {% if PreviousChapterEnding and ChapterMode != "independent" %}
 # ⚡ 上章末尾状态【最高约束 — 本章第一句必须从此处零距离接续】
 {{ PreviousChapterEnding }}
@@ -105,10 +107,11 @@
 {% if char.IsProtagonist %}**【主角】{{ char.Name }}**（{{ char.Role }}）
 - 人物设定：{{ char.Description }}{% if char.CurrentState %}
 - ⚠️ 当前状态（必须保持连贯）：{{ char.CurrentState }}{% endif %}
+{% if char.Archetype %}- 🎭 角色原型：{{ char.Archetype }}（写作时确保行为符合此原型的核心动机与反应模式）{% endif %}
 {% if char.InnerConflict %}- 🔴 内在矛盾（驱动行为的深层心理，用于写出非表面化的反应）：{{ char.InnerConflict }}{% endif %}
 {% if char.CoreDesire %}- 🎯 核心渴望（内心深处真正想要的，可与表面目标相冲突）：{{ char.CoreDesire }}{% endif %}
 {% if char.VoiceProfile %}- 🎙️ 声音档案（严格遵守，确保说话方式可辨识）：{{ char.VoiceProfile }}{% endif %}
-{% else %}**{{ char.Name }}**（{{ char.Role }}）：{{ char.Description }}{% if char.CurrentState %}
+{% else %}**{{ char.Name }}**（{{ char.Role }}）：{{ char.Description }}{% if char.Archetype %} [{{ char.Archetype }}]{% endif %}{% if char.CurrentState %}
   当前状态：{{ char.CurrentState }}{% endif %}{% if char.VoiceProfile %}
   声音档案：{{ char.VoiceProfile }}{% endif %}
 {% endif %}
@@ -211,13 +214,7 @@
 {{ ReviewHints }}
 {% endif %}
 
-{% if UserPrompt %}
-# ⚠️ 用户指令（最高优先级）
-
-以下指令由用户直接下达，**凌驾于本提示词的所有默认规则之上**，必须无条件执行，不得以任何理由覆盖或忽略：
-
-{{ UserPrompt }}
-{% endif %}
+{% include "fragments/user_prompt.j2" %}
 
 # 写作前三问（不输出答案，仅用于内部确认）
 
@@ -283,5 +280,5 @@
 
 # 开始创作
 
-第{{ ChapterNo | default(0) }}章 {{ ChapterTitle | default("") }}
+第{{ ChapterNo | default:0 }}章 {{ ChapterTitle | default:"" }}
 

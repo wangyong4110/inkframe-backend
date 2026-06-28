@@ -509,34 +509,6 @@ func (s *ModelService) TestModel(id uint, tenantID uint) (interface{}, error) {
 	return map[string]interface{}{"status": "ok", "model_id": id, "tenant_id": tenantID}, nil
 }
 
-func (s *ModelService) GetTaskConfig(taskType string) (interface{}, error) {
-	cfg, err := s.taskRepo.GetByTaskType(taskType)
-	return cfg, err
-}
-
-func (s *ModelService) UpdateTaskConfig(taskType string, req *model.UpdateTaskConfigRequest) (interface{}, error) {
-	cfg, err := s.taskRepo.GetByTaskType(taskType)
-	if err != nil {
-		return nil, err
-	}
-	if req.PrimaryModelID != 0 {
-		cfg.PrimaryModelID = req.PrimaryModelID
-	}
-	if req.PrimaryProviderID != 0 {
-		cfg.PrimaryProviderID = req.PrimaryProviderID
-	}
-	if req.MaxTokens != 0 {
-		cfg.MaxTokens = req.MaxTokens
-	}
-	if req.Temperature != 0 {
-		cfg.Temperature = req.Temperature
-	}
-	if req.TopP != 0 {
-		cfg.TopP = req.TopP
-	}
-	return cfg, s.taskRepo.Update(cfg)
-}
-
 func (s *ModelService) ListExperiments(tenantID uint) (interface{}, error) {
 	experiments, err := s.experimentRepo.List(100, tenantID)
 	return experiments, err
@@ -622,39 +594,14 @@ func (s *ModelService) TestGeneratePrompt(ctx context.Context, tenantID uint, pr
 	return content, 0, err
 }
 
-// GetTaskProviderMappings 返回各任务类型当前绑定的 ProviderID（0 = 未绑定/使用默认）
+// GetTaskProviderMappings 返回各任务类型当前绑定的 ProviderID（已简化：不再读取 TaskModelConfig 表，始终返回空映射）
 func (s *ModelService) GetTaskProviderMappings() map[string]uint {
-	taskTypes := []string{
-		"chapter_generation", "character_extraction", "storyboard_generation",
-		"image_generation", "tts", "translation",
-	}
-	result := make(map[string]uint, len(taskTypes))
-	for _, tt := range taskTypes {
-		cfg, cfgErr := s.taskRepo.GetByTaskType(tt)
-		if cfgErr == nil {
-			result[tt] = cfg.PrimaryProviderID
-		} else {
-			result[tt] = 0
-		}
-	}
-	return result
+	return map[string]uint{}
 }
 
-// SetTaskProviderMapping 更新指定任务类型的 Provider 绑定（providerID=0 表示清除绑定）
+// SetTaskProviderMapping 更新指定任务类型的 Provider 绑定（TaskModelConfig 已移除，此方法为空操作）
 func (s *ModelService) SetTaskProviderMapping(taskType string, providerID uint) error {
-	cfg, err := s.taskRepo.GetByTaskType(taskType)
-	if err != nil {
-		// 不存在则创建
-		cfg = &model.TaskModelConfig{
-			TaskType:          taskType,
-			PrimaryProviderID: providerID,
-			Temperature:       0.7,
-			IsActive:          true,
-		}
-		return s.taskRepo.Create(cfg)
-	}
-	cfg.PrimaryProviderID = providerID
-	return s.taskRepo.Update(cfg)
+	return nil
 }
 
 // ============================================

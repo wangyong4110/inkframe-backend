@@ -52,16 +52,17 @@ type AIProvider interface {
 
 // GenerateRequest 生成请求
 type GenerateRequest struct {
-	Model       string            `json:"model"`
-	Messages    []ChatMessage     `json:"messages"`
-	SystemPrompt string           `json:"system_prompt"`
-	Temperature float64           `json:"temperature"`
-	MaxTokens   int               `json:"max_tokens"`
-	TopP        float64           `json:"top_p"`
-	TopK        int               `json:"top_k"`
-	Stop        []string          `json:"stop"`
-	Stream      bool              `json:"stream"`
-	Extra       map[string]interface{} `json:"extra"`
+	Model        string                 `json:"model"`
+	APIVersion   string                 `json:"api_version,omitempty"` // 模型级 API 版本覆盖（目前仅 Azure 使用）
+	Messages     []ChatMessage          `json:"messages"`
+	SystemPrompt string                 `json:"system_prompt"`
+	Temperature  float64                `json:"temperature"`
+	MaxTokens    int                    `json:"max_tokens"`
+	TopP         float64                `json:"top_p"`
+	TopK         int                    `json:"top_k"`
+	Stop         []string               `json:"stop"`
+	Stream       bool                   `json:"stream"`
+	Extra        map[string]interface{} `json:"extra"`
 }
 
 // ChatMessage 聊天消息

@@ -74,7 +74,6 @@ func autoMigrate(db *gorm.DB) error {
 		&model.KnowledgeBase{},
 		&model.AIModel{},
 		&model.ModelProvider{},
-		&model.TaskModelConfig{},
 		&model.ModelComparisonExperiment{},
 		&model.ExperimentResult{},
 		&model.ModelUsageLog{},

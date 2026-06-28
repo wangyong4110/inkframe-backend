@@ -28,9 +28,19 @@ import (
 	"golang.org/x/image/draw"
 )
 
+// taskConfig holds per-call AI generation parameters (replaces the removed TaskModelConfig DB model).
+type taskConfig struct {
+	Temperature    float64
+	TopP           float64
+	TopK           int
+	MaxTokens      int
+	TimeoutSeconds int
+	// PrimaryModelID is used only for usage logging; 0 is acceptable.
+	PrimaryModelID uint
+}
+
 type AIService struct {
 	modelRepo     *repository.AIModelRepository
-	taskRepo      *repository.TaskModelConfigRepository
 	aiManager     *ai.ModelManager
 	providerRepo  *repository.ModelProviderRepository
 	novelRepo     *repository.NovelRepository
@@ -55,13 +65,11 @@ type redisPublisher interface {
 
 func NewAIService(
 	modelRepo *repository.AIModelRepository,
-	taskRepo *repository.TaskModelConfigRepository,
 	aiManager *ai.ModelManager,
 	providerRepo ...*repository.ModelProviderRepository,
 ) *AIService {
 	svc := &AIService{
 		modelRepo: modelRepo,
-		taskRepo:  taskRepo,
 		aiManager: aiManager,
 		stopCh:    make(chan struct{}),
 	}
@@ -646,11 +654,7 @@ func (s *AIService) GenerateWithProvider(tenantID uint, novelID uint, taskType s
 // GenerateWithProviderCtx is like GenerateWithProvider but respects an external context.
 // Use this when the caller holds a cancellable context (e.g. async task with cancel support).
 func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, novelID uint, taskType string, prompt string, providerName string, overrides ...StoryboardOverrides) (string, error) {
-	base, err := s.taskRepo.GetByTaskType(taskType)
-	if err != nil {
-		base = &model.TaskModelConfig{Temperature: 0.7, MaxTokens: 0}
-	}
-	config := *base
+	config := taskConfig{Temperature: 0.7, MaxTokens: 0}
 
 	var resolvedModel string
 	if novelID > 0 && s.novelRepo != nil {
@@ -663,6 +667,12 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 			}
 			if novel.AIConfig.MaxTokens > 0 {
 				config.MaxTokens = novel.AIConfig.MaxTokens
+			}
+			if providerName == "" && novel.AIConfig.AIModel != "" {
+				resolvedModel = novel.AIConfig.AIModel
+				if pName := s.resolveProviderFromModel(tenantID, novel.AIConfig.AIModel); pName != "" {
+					providerName = pName
+				}
 			}
 		}
 	}
@@ -687,40 +697,16 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 		}
 	}
 
-	// Task#6: 显式绑定的 provider 优先于自动选择
-	if providerName == "" && config.PrimaryProviderID > 0 && s.providerRepo != nil {
-		if p, err := s.providerRepo.GetByID(config.PrimaryProviderID); err == nil && p != nil {
-			providerName = p.Name
-		}
-	}
-
-	// Task#4: strategy-based 自动选模
-	if resolvedModel == "" && providerName == "" && config.Strategy != "" && s.modelRepo != nil {
+	// Auto-select from active models when no provider is explicitly requested.
+	if resolvedModel == "" && providerName == "" && s.modelRepo != nil {
 		if candidates, err := s.modelRepo.GetAvailableByTaskType(taskType, tenantID); err == nil && len(candidates) > 0 {
-			var selected *model.AIModel
-			switch config.Strategy {
-			case "quality_first":
-				selected = selectByQuality(candidates)
-			case "cost_first":
-				selected = selectByCost(candidates)
-			default:
-				selected = selectBalanced(candidates)
-			}
-			// Fix 4: Guard against nil selected — degrade to balanced selection before giving up.
-			if selected == nil {
-				selected = selectBalanced(candidates)
-				if selected == nil {
-					return "", fmt.Errorf("no suitable model available for strategy=%q taskType=%q", config.Strategy, taskType)
+			selected := selectBalanced(candidates)
+			if selected != nil && selected.Provider != nil {
+				resolvedModel = selected.Name
+				providerName = selected.Provider.Name
+				if config.MaxTokens == 0 && selected.MaxTokens > 0 {
+					config.MaxTokens = selected.MaxTokens
 				}
-				logger.Printf("[AI] strategy %q found no suitable model, falling back to balanced selection", config.Strategy)
-			}
-			if selected.Provider == nil {
-				return "", fmt.Errorf("model %d has no provider configured", selected.ID)
-			}
-			resolvedModel = selected.Name
-			providerName = selected.Provider.Name
-			if config.MaxTokens == 0 && selected.MaxTokens > 0 {
-				config.MaxTokens = selected.MaxTokens
 			}
 		}
 	}
@@ -732,7 +718,7 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 		}
 	}
 
-	// 任务类型兜底 MaxTokens（同 GenerateWithProvider，仅在配置链全为 0 时生效）。
+	// 任务类型兜底 MaxTokens（仅在配置链全为 0 时生效）。
 	if config.MaxTokens == 0 {
 		switch taskType {
 		case "storyboard":
@@ -781,12 +767,8 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 
 // resolveTaskConfig 提取 GenerateWithProviderCtx 中的配置解析逻辑，供多轮/流式方法复用。
 // 返回已填充好参数的 config、最终 providerName、resolvedModel。
-func (s *AIService) resolveTaskConfig(tenantID uint, novelID uint, taskType string, providerName string, overrides []StoryboardOverrides) (model.TaskModelConfig, string, string) {
-	base, err := s.taskRepo.GetByTaskType(taskType)
-	if err != nil {
-		base = &model.TaskModelConfig{Temperature: 0.7, MaxTokens: 0}
-	}
-	config := *base
+func (s *AIService) resolveTaskConfig(tenantID uint, novelID uint, taskType string, providerName string, overrides []StoryboardOverrides) (taskConfig, string, string) {
+	config := taskConfig{Temperature: 0.7, MaxTokens: 0}
 	resolvedModel := ""
 
 	if novelID > 0 && s.novelRepo != nil {
@@ -822,26 +804,10 @@ func (s *AIService) resolveTaskConfig(tenantID uint, novelID uint, taskType stri
 		}
 	}
 
-	if providerName == "" && config.PrimaryProviderID > 0 && s.providerRepo != nil {
-		if p, err := s.providerRepo.GetByID(config.PrimaryProviderID); err == nil && p != nil {
-			providerName = p.Name
-		}
-	}
-
-	if resolvedModel == "" && providerName == "" && config.Strategy != "" && s.modelRepo != nil {
+	// Auto-select from active models when no provider is explicitly requested.
+	if resolvedModel == "" && providerName == "" && s.modelRepo != nil {
 		if candidates, err := s.modelRepo.GetAvailableByTaskType(taskType, tenantID); err == nil && len(candidates) > 0 {
-			var selected *model.AIModel
-			switch config.Strategy {
-			case "quality_first":
-				selected = selectByQuality(candidates)
-			case "cost_first":
-				selected = selectByCost(candidates)
-			default:
-				selected = selectBalanced(candidates)
-			}
-			if selected == nil {
-				selected = selectBalanced(candidates)
-			}
+			selected := selectBalanced(candidates)
 			if selected != nil && selected.Provider != nil {
 				resolvedModel = selected.Name
 				providerName = selected.Provider.Name
@@ -1006,7 +972,7 @@ func (s *AIService) resolveProviderFromModel(tenantID uint, modelName string) st
 }
 
 // callAI 调用AI接口（使用系统级 provider）
-func (s *AIService) callAI(prompt string, config *model.TaskModelConfig) (string, error) {
+func (s *AIService) callAI(prompt string, config *taskConfig) (string, error) {
 	return s.callAIWithProvider(context.Background(), 0, prompt, config, "")
 }
 
@@ -1104,12 +1070,12 @@ var jsonOnlyTaskTypes = map[string]bool{
 	"extract_foreshadows":      true,
 }
 
-func (s *AIService) callAIWithProvider(parentCtx context.Context, tenantID uint, prompt string, config *model.TaskModelConfig, providerName string, modelOverride ...string) (string, error) {
+func (s *AIService) callAIWithProvider(parentCtx context.Context, tenantID uint, prompt string, config *taskConfig, providerName string, modelOverride ...string) (string, error) {
 	content, _, err := s.callAIWithProviderSys(parentCtx, tenantID, prompt, "", config, providerName, modelOverride...)
 	return content, err
 }
 
-func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID uint, prompt string, systemPrompt string, config *model.TaskModelConfig, providerName string, modelOverride ...string) (string, *ai.GenerateResponse, error) {
+func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID uint, prompt string, systemPrompt string, config *taskConfig, providerName string, modelOverride ...string) (string, *ai.GenerateResponse, error) {
 	if s.aiManager == nil {
 		return "", nil, fmt.Errorf("AI manager not initialized")
 	}
@@ -1122,10 +1088,14 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 	if provider == nil {
 		return "", nil, fmt.Errorf("AI provider resolved to nil for %q", providerName)
 	}
-	// 按 AIModel 的 concurrency/rateLimit 包装 provider
+	// 按 AIModel 的 concurrency/rateLimit 包装 provider；同时用模型的 MaxTokens 作上限。
 	if len(modelOverride) > 0 && modelOverride[0] != "" && s.modelRepo != nil {
 		if m, err2 := s.modelRepo.GetByName(modelOverride[0]); err2 == nil {
 			provider = wrapForModel(provider, m)
+			// 防止调用方传入超过模型限制的 max_tokens（如客户端手动填了过大值）
+			if m.MaxTokens > 0 && config.MaxTokens > m.MaxTokens {
+				config.MaxTokens = m.MaxTokens
+			}
 		}
 	}
 
@@ -1158,10 +1128,6 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 	elapsed := time.Since(callStart)
 	if err != nil {
 		logger.Errorf("[AI] provider=%s elapsed=%s err=%v", provider.GetName(), elapsed.Round(time.Millisecond), err)
-		// Fallback chain: try models listed in config.FallbackModelIDs
-		if fbContent, fbResp, fbErr := s.tryFallbackModels(ctx, tenantID, req, config, elapsed); fbErr == nil {
-			return fbContent, fbResp, nil
-		}
 		return "", nil, err
 	}
 	if resp.Error != "" {
@@ -1177,64 +1143,6 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 		return "", nil, fmt.Errorf("provider returned empty content (stop_reason=%s)", resp.StopReason)
 	}
 	return resp.Content, resp, nil
-}
-
-// tryFallbackModels iterates config.FallbackModelIDs and attempts generation on each.
-// Fix 3: Added circular-reference detection (visitedIDs) and aggregated error reporting.
-func (s *AIService) tryFallbackModels(ctx context.Context, tenantID uint, origReq *ai.GenerateRequest, config *model.TaskModelConfig, _ time.Duration) (string, *ai.GenerateResponse, error) {
-	if config.FallbackModelIDs == "" || s.modelRepo == nil {
-		return "", nil, fmt.Errorf("no fallback")
-	}
-	var ids []uint
-	if err := json.Unmarshal([]byte(config.FallbackModelIDs), &ids); err != nil || len(ids) == 0 {
-		return "", nil, fmt.Errorf("no fallback")
-	}
-	const maxFallbackDepth = 5
-	if len(ids) > maxFallbackDepth {
-		ids = ids[:maxFallbackDepth]
-		logger.Printf("[AI] fallback chain truncated to %d levels", maxFallbackDepth)
-	}
-	visitedIDs := make(map[uint]bool)
-	var errs []string
-	for _, id := range ids {
-		if visitedIDs[id] {
-			return "", nil, fmt.Errorf("circular fallback chain detected at model %d", id)
-		}
-		visitedIDs[id] = true
-		m, err := s.modelRepo.GetByID(id)
-		if err != nil || m == nil || m.Provider == nil {
-			errs = append(errs, fmt.Sprintf("model_%d: not found or no provider", id))
-			continue
-		}
-		fbProvider, err := s.getTenantProvider(tenantID, m.Provider.Name)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("model_%d: provider load error: %v", id, err))
-			continue
-		}
-		fbReq := *origReq
-		fbReq.Model = m.Name
-		start := time.Now()
-		fbResp, err := fbProvider.Generate(ctx, &fbReq)
-		elapsed := time.Since(start)
-		if err == nil && fbResp.Error == "" {
-			fbResp.FinishTime = elapsed.Milliseconds()
-			// Fix 4: 记录实际执行的模型 DB ID，供 logUsage 精确写入 usage log
-			fbResp.ActualModelID = m.ID
-			logger.Printf("[AI fallback] provider=%s model=%s elapsed=%s", m.Provider.Name, m.Name, elapsed.Round(time.Millisecond))
-			return fbResp.Content, fbResp, nil
-		}
-		fbErr := err
-		if fbErr == nil && fbResp.Error != "" {
-			fbErr = fmt.Errorf("%s", fbResp.Error)
-		}
-		// 认证失败（401/403）不值得继续尝试其他 fallback，立即返回
-		if fbErr != nil && isAuthError(fbErr) {
-			return "", nil, fmt.Errorf("fallback provider %q authentication failed (not retrying): %w", m.Provider.Name, fbErr)
-		}
-		errs = append(errs, fmt.Sprintf("model_%d: %v", id, fbErr))
-		logger.Errorf("[AI fallback] provider=%s model=%s err=%v", m.Provider.Name, m.Name, fbErr)
-	}
-	return "", nil, fmt.Errorf("all fallbacks exhausted: %s", strings.Join(errs, "; "))
 }
 
 // isAuthError returns true when the error clearly indicates an authentication
@@ -1331,7 +1239,7 @@ func (s *AIService) generateWithRetry(novelID uint, taskType, prompt string, max
 
 // logUsage records a ModelUsageLog entry using token counts and latency from the response.
 // Fix 1: accepts tenantID and uses resp.ActualModelID when available (Fix 4).
-func (s *AIService) logUsage(tenantID uint, config *model.TaskModelConfig, taskType string, resp *ai.GenerateResponse, latencyMs int64) {
+func (s *AIService) logUsage(tenantID uint, config *taskConfig, taskType string, resp *ai.GenerateResponse, latencyMs int64) {
 	if s.modelRepo == nil || resp == nil {
 		return
 	}

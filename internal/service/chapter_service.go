@@ -261,6 +261,11 @@ func (s *ChapterService) ListChapters(novelID uint) ([]*model.Chapter, error) {
 	return s.chapterRepo.ListByNovel(novelID)
 }
 
+// ListChaptersForExport 获取全部章节含正文，专用于导出。
+func (s *ChapterService) ListChaptersForExport(novelID uint) ([]*model.Chapter, error) {
+	return s.chapterRepo.ListByNovelWithContentUnlimited(novelID)
+}
+
 // ListChaptersPaged returns a page of chapter metadata for a novel.
 func (s *ChapterService) ListChaptersPaged(novelID uint, page, pageSize int) ([]*model.Chapter, int64, error) {
 	return s.chapterRepo.ListByNovelPaged(novelID, page, pageSize)
@@ -1493,6 +1498,7 @@ func (s *ChapterService) generateSceneOutline(
 		"CharacterArcContext":   characterArcContext,
 		"TensionBudget":         tensionBudget,
 		"WorldRules":            worldviewRules,
+		"GenreHints":            genreSceneHints(novel.Genre),
 		"UserPrompt":            req.Prompt,
 	})
 	if err != nil {
@@ -1581,6 +1587,7 @@ func (s *ChapterService) generateSceneOutline(
 				"CharacterArcContext":   characterArcContext,
 				"TensionBudget":         tensionBudget,
 				"WorldRules":            worldviewRules,
+				"GenreHints":            genreSceneHints(novel.Genre),
 				"UserPrompt":            req.Prompt,
 			})
 			if renderErr == nil {
@@ -2029,6 +2036,7 @@ func (s *ChapterService) generateFromSceneOutline(
 				"CoreTheme":           novel.Meta.CoreTheme,      // 全书核心主题
 				"FinalChapterContext": finalChapterCtx,      // P0-2: 最终章未关闭悬线清单
 				"WorldRules":          worldviewRulesFromOutline,
+				"GenreHints":          genreWritingHints(novel.Genre),
 				"UserPrompt":          req.Prompt,
 			})
 			if promptErr != nil {
@@ -2156,6 +2164,7 @@ func (s *ChapterService) generateFromSceneOutline(
 		"ReaderExpectations":    prevReaderExpectations,
 		"FinalChapterContext":   finalChapterCtx,
 		"WorldRules":            worldviewRulesFromOutline,
+		"GenreHints":            genreWritingHints(novel.Genre),
 	})
 	if renderErr != nil {
 		logger.Errorf("[generateFromSceneOutline] ch%d: one-shot render failed: %v; using simple fallback", req.ChapterNo, renderErr)
@@ -2697,6 +2706,7 @@ type characterForPrompt struct {
 	InnerConflict string // 人物内在矛盾（如：渴望自由却害怕失去家人）
 	CoreDesire    string // 核心渴望（如：被认可、复仇、保护所爱之人）
 	VoiceProfile  string // 声音档案摘要：说话风格/口癖/禁忌用语（来自 character_voice.j2 提取）
+	Archetype     string // 角色原型（dominant_ceo/reborn_villain/pure_heroine等）
 }
 
 func (s *ChapterService) getCharactersForPrompt(novelID uint) []characterForPrompt {
@@ -2724,6 +2734,7 @@ func (s *ChapterService) getCharactersForPrompt(novelID uint) []characterForProm
 			InnerConflict: c.Meta.InnerConflict,
 			CoreDesire:    c.Meta.CoreDesire,
 			VoiceProfile:  formatVoiceProfile(c.VoiceConfig.VoiceProfile),
+			Archetype:     c.Archetype,
 		}
 		// 加载最新状态快照，补充 CurrentState
 		if s.snapshotRepo != nil {

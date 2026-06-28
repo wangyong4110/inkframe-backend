@@ -25,7 +25,6 @@ type Repositories struct {
 	CharacterRepo           *repository.CharacterRepository
 	WorldviewRepo           *repository.WorldviewRepository
 	AIModelRepo             *repository.AIModelRepository
-	TaskModelConfigRepo     *repository.TaskModelConfigRepository
 	VideoRepo               *repository.VideoRepository
 	StoryboardRepo          *repository.StoryboardRepository
 	KnowledgeBaseRepo       *repository.KnowledgeBaseRepository
@@ -108,7 +107,6 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		CharacterRepo:           repository.NewCharacterRepository(db),
 		WorldviewRepo:           repository.NewWorldviewRepository(db),
 		AIModelRepo:             repository.NewAIModelRepository(db),
-		TaskModelConfigRepo:     repository.NewTaskModelConfigRepository(db),
 		VideoRepo:               repository.NewVideoRepository(db),
 		StoryboardRepo:          repository.NewStoryboardRepository(db),
 		KnowledgeBaseRepo:       repository.NewKnowledgeBaseRepository(db),
@@ -314,7 +312,7 @@ func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *
 	// WithTaskRouting: configure via config.yaml ai.tasks section (no AI.Tasks config key exists yet).
 	promptFilter := service.NewPromptFilter(repos.SensitiveWordRepo)
 
-	aiSvc := service.NewAIService(repos.AIModelRepo, repos.TaskModelConfigRepo, aiManager, repos.ModelProviderRepo).
+	aiSvc := service.NewAIService(repos.AIModelRepo, aiManager, repos.ModelProviderRepo).
 		WithNovelRepo(repos.NovelRepo).
 		WithEncryptionKey(cfg.Server.EncryptionKey).
 		WithImageConcurrency(5).
@@ -322,7 +320,7 @@ func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *
 		WithPromptFilter(promptFilter)
 
 	// 模型服务（注入 aiService 以支持 TestProvider 实例化验证）
-	modelSvc := service.NewModelService(repos.AIModelRepo, repos.ModelProviderRepo, repos.TaskModelConfigRepo, repos.ModelComparisonRepo, aiSvc)
+	modelSvc := service.NewModelService(repos.AIModelRepo, repos.ModelProviderRepo, repos.ModelComparisonRepo, aiSvc)
 	// Fix 11: Assert AIService is non-nil before seeding providers.
 	if aiSvc == nil {
 		panic("FATAL: AIService is nil before SeedAllProviders")
@@ -608,6 +606,9 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	// 后置注入：将通知服务与技能仓库注入章节生成管道
 	content.Novel.WithNotificationService(notifSvc)
 	content.Chapter.WithNotificationService(notifSvc).WithSkillRepo(repos.SkillRepo)
+
+	// 后置注入：将通知服务注入任务服务，以便任务失败时发送站内信
+	core.Task.WithNotificationService(notifSvc).WithTenantUserRepo(repos.TenantUserRepo)
 	// NOTE: WithStorage/WithDB/WithAnalysisService/WithAIService/WithNotificationService/WithCrawlJobRepo
 	// are injected in main.go after storageSvc and db are available.
 

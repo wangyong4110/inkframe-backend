@@ -1,0 +1,138 @@
+{% if IsImageEn %}
+▸ video_prompt（English only — motion description for Kling/Seedance video AI）
+  - Describe camera motion, environmental/scene dynamics, AND character movement actions.
+  - NO visual appearance descriptions (no face, hair color, eye color, clothing, body features — these are handled by reference images). ONLY describe what characters DO and HOW they move.
+  - CONTINUITY OPENING (required for shot_no ≥ 2): The first sentence of video_prompt MUST begin with a continuity clause referencing the previous shot's ending state: camera angle handoff, character position, or scene momentum. Example: "Continuing from the wide establishing shot, camera pushes in slowly as [character name] turns..." or "Picking up where the previous close-up ended, pulling back to reveal..."
+  - MINIMUM LENGTH: At least 100 English words.
+  - Core principle: describe EVERY element's motion individually and specifically. Keyword lists forbidden.
+    Generic phrases like "fluid motion" or "dynamic atmosphere" add nothing — describe actual physics.
+  - Required motion layers (all applicable layers must be present):
+    A. Camera: exact movement type matching camera_type + speed qualifier
+       static → "locked-off with organic micro-stabilization, imperceptible ±0.3px breathing drift"
+       push   → "slow cinematic dolly-push at 0.2x speed, closing distance by ~30% over shot duration"
+       pan    → "smooth leftward pan at 15°/sec, horizon line held steady throughout"
+       pull   → "steady dolly-pull at 0.15x speed, environment expanding outward from center"
+       crane_up → "slow vertical crane rise at 0.1m/sec, horizon line descending in frame"
+    A2. Character actions (required if characters appear in this shot): use exact character name from 【角色信息】; describe actions ONLY, no appearance
+       — Always lead with the character's exact name, then describe what they do within the shot duration
+       ✅ "Ling Yun walks slowly toward the stone gate at frame center, each step deliberate and heavy, advancing roughly 30% across frame over shot duration"
+       ✅ "Bai Xue on the left turns upper body 60° rightward, arms falling naturally to sides"
+       ✅ "Ling Yun enters from right edge at urgent pace, halts at center, weight shifting backward"
+       ❌ "handsome young man swings sword" → use character name, write "Ling Yun swings sword"
+       ❌ "white-robed woman turns around" → use character name, write "Bai Xue turns slowly around"
+       ❌ "figure at frame center walks..." → replace "figure" with the character's actual name
+    B. Atmospheric particles: every particle type in the scene gets its own motion clause
+       — dust motes: "fine dust motes suspended in [light shaft zone], drifting diagonally [direction] at
+         0.4cm/sec, each mote spending 2-3 seconds in lit zone before exiting frame edge"
+       — smoke/fog: "thin ground-level mist at 10-20cm height drifting [direction] at 0.2cm/sec, density
+         [thickening/thinning] 15% over shot duration, thickest at [location]"
+       — embers/sparks: "embers rising from [source] at 0.6m/sec with slight rightward drift, each spark
+         brightening 30% at peak then fading over 0.4s as it cools"
+       — rain: "rain falling diagonally at 70° from upper-right, 4m/sec, fine density, impacting [surface]
+         with 2-3mm splash rings spreading outward and dissipating in 0.3s"
+    C. Foliage, fabric, and flexible objects:
+       — each named plant/object: "oscillating [amplitude in degrees] at [frequency Hz] from [wind/air source],
+         returning with slight overshoot oscillation of [decay duration]s"
+       — fabric on surfaces (banners, canopies, cloth): direction of billow, amplitude, frequency
+    D. Liquid and fire dynamics (if present):
+       — water: flow direction, speed, surface disturbance frequency, reflection change
+       — fire/torches: flicker rhythm (Hz), intensity variance (%), color shift at base vs. tip
+       — steam/mist: rise rate, dispersion radius, opacity change per second
+    E. Structural and ground settling (subtle environment physics):
+       — dust particles displaced from surfaces: dislodgment trigger, roll distance, settling location
+       — loose debris: vibration amplitude, caused by what (wind / ground tremor / distant impact)
+       — shadow edge migration if light source is moving or flickering
+    F. Lighting dynamics: how light changes within the shot duration
+       — intensity ramp: "[brightening/dimming] ~[X]% over shot duration"
+       — color temperature shift: "warming [from X to Y]K over shot duration"
+       — shadow edge movement: "shadow boundary migrates [direction] at [rate]cm/sec"
+    G. Temporal arc: how the shot's emotional energy evolves through environment alone
+       — describe what changes from first frame to last that conveys emotional shift
+       — ✅ "opens on static stillness — only the light dimming and shadow deepening signal time's passage,
+           each falling dust mote amplifying the weight of the emptied space"
+       — ❌ "tense atmosphere" → vague, AI invents arbitrary motion
+  - Example (locked-off, empty ruined courtyard after battle):
+    "Locked-off camera with subtle organic stabilization, imperceptible breathing drift of ±0.3px;
+    foreground cracked flagstone surface: three small pebble fragments vibrate ±1mm from low-frequency
+    distant rumble, fine grit rolling 1-2cm into nearby crevices over the shot duration; mid-ground
+    stone pillar fracture edge: thin trickle of mortar dust falls in a 15cm stream from the break point
+    at irregular 2-4 second intervals, each stream lasting 0.3s then ceasing; background pine canopy:
+    branches oscillating 6° at 0.4Hz from residual wind, recovering with 0.8s damped overshoot; torch
+    bracket flame left-of-center: flickering at 3Hz with 20% intensity variance, tip color cycling
+    between orange-yellow and cooler amber, casting a 1.5Hz shadow-edge oscillation across the adjacent
+    stone wall; suspended torch smoke rising vertically at 0.3cm/sec, bending 8° rightward at 1.5m
+    height where corridor draft catches it, dispersing into haze above 2m; ambient dust motes in torch
+    light shaft drift diagonally downward at 0.5cm/sec, each visible for 2-3 seconds; overcast sky
+    layer holds motionless; cold grey diffuse top-light dims ~12% over shot duration, shadows
+    deepening without directional shift; emotional arc: opens on suspended aftermath stillness, the
+    only motion being the relentless physical decay — dust falling, flame guttering, shadow thickening —
+    until silence itself becomes suffocating by frame-close"
+
+{% else %}
+▸ video_prompt（中文——供 Kling/Seedance 视频 AI 使用的运动描述）
+  - 描述镜头运动、环境/场景动态，以及角色的行为动作
+  - ⚠️ 严禁描写外貌特征（脸、发色、眼睛、服装细节、体型——这些由参考图负责）。只描述角色在做什么、如何运动
+  - 衔接开场语（第2镜起必填）：video_prompt 的第一句话必须是衔接上一镜头结束状态的延续句，描述镜头角度交接、角色位置延续或场景动势继承。示例："接续上一特写镜头，镜头缓缓拉远，揭示[角色名]站立于……"或"从前一镜头的推镜结尾处继续，镜头横摇至……"
+  - 正确：「缓步走向石门，转身回望」「跪倒在地，双手撑地」「举剑指向对方」
+  - 错误：「长发少年」「白衣女子」「英俊的面容」（这些是外貌，不是动作）
+  - 最低字数：不少于100字
+  - 核心原则：对每一个画面元素的动态单独描述，禁止只写关键词列表
+    "流畅运动""动感氛围"等空泛词语无效——必须描述真实的物理运动过程
+  - 必须包含以下运动层次（适用的层次均需展开描述）：
+    A. 镜头运动：与 camera_type 对应的精确运动方式 + 速度修饰语
+       static → "固定机位，带有机械有机感微稳定，呼吸感漂移幅度±0.3px"
+       push   → "慢速电影推镜以0.2x速度向主体推近，镜头整体前进约画面30%距离"
+       pan    → "匀速向左摇镜，速率约每秒15度，地平线全程保持水平"
+       pull   → "匀速向后拉镜，速率0.15x，环境向四周展开"
+       crane_up → "缓慢垂直升镜，速率约每秒0.1米，画面中地平线持续下降"
+    A2. 角色动作（若镜头有角色出场则必填）：使用【角色信息】中的精确名称；只描述动作，禁止描写外貌
+       — 始终以角色精确名称开头，然后描述其在镜头时长内的具体运动和行为变化
+       ✅ "凌云缓步向远处石门迈去，步伐沉重而坚定，约走出画面三分之一距离"
+       ✅ "白雪缓缓转身，上半身向右旋转约60度，双臂自然垂落"
+       ✅ "凌云从右侧进入画面，步伐急促，走至中央后停步，重心后移如临大敌"
+       ❌ "英俊少年挥动长剑" → 用角色名，改为"凌云挥动长剑"
+       ❌ "白衣女子回头" → 用角色名，改为"白雪缓缓回头"
+       ❌ "人影缓步向石门迈去" → "人影"须替换为角色精确名称，改为"凌云缓步向石门迈去"
+    B. 大气粒子动态：场景中每种粒子类型各自独立描述
+       — 尘埃浮粒："细小尘埃粒子在[光柱区域]悬浮，以每秒0.4厘米速度向[方向]斜向漂移，每粒在
+         光区停留2-3秒后出框，整体密度全程保持稳定"
+       — 烟雾/地气："地面10-20厘米高度薄雾向[方向]以每秒0.2厘米速度漂移，整体密度在镜头时长内
+         [增厚/减薄]约15%，[位置]处浓度最高"
+       — 火星/余烬："余烬从[来源]以每秒0.6米速度上升，带轻微向右漂移，每粒在峰值时亮度提升
+         30%，随后在0.4秒内冷却消散"
+       — 降雨："雨丝从右上方以70度角以每秒4米速度斜向下落，细密程度，落至[地面材质]产生
+         2-3毫米水花晕圈，向外扩散后在0.3秒内消散"
+    C. 植被、织物及柔性物体：
+       — 每株命名植物/每件柔性物体："以[Hz]频率摆动[度数]幅度，受[风源/气流]驱动，
+         经[时长]秒带轻微过冲阻尼摆动后复位"
+       — 织物表面（旗帜/帷幔/幔布）：膨鼓方向、幅度、频率
+    D. 液体与火焰动态（如有）：
+       — 水体：流动方向、速度、水面扰动频率、倒影变化
+       — 火焰/火炬：闪烁节律（Hz）、强度变化幅度（百分比）、焰心与焰尖色温差异
+       — 蒸汽/水雾：上升速率、扩散半径、透明度每秒变化
+    E. 结构物与地面细微物理（环境稳定性暗示）：
+       — 从表面脱落的粉尘：脱落触发因素、滚落距离、沉落位置
+       — 松散碎片：振动幅度，由什么引起（风/地面颤动/远处冲击）
+       — 光源运动或闪烁时阴影边缘的移动方向和速率
+    F. 光线动态：镜头持续时间内光线如何变化
+       — 强度渐变："在镜头时长内[增亮/减暗]约[X]%"
+       — 色温偏移："暖色调从[X]K向[Y]K过渡"
+       — 阴影边缘移动："阴影边界向[方向]以每秒[X]厘米速率迁移"
+    G. 情绪弧线：仅通过环境变化传递镜头情绪演变
+       — 描述从第一帧到最后一帧，哪些环境变化传达了情绪转移
+       — ✅ "镜头以静止的肃穆开场——只有光线渐暗和阴影加深标志时间流逝，每一颗下落的尘埃粒子
+           都在强化这片空间被抽空后的沉重"
+       — ❌ "紧张的氛围" → 空泛，AI会随机发明动作
+  - 示例（固定机位，战后空旷废墟庭院）：
+    "固定机位，带有轻微有机感微稳定，呼吸感漂移幅度±0.3px；前景龟裂石板地面：三块小石片因低频
+    远处隆隆声以±1毫米幅度颤动，细碎砂砾在镜头时长内向周边裂缝滚落1-2厘米；中景石柱断口边缘：
+    薄层灰泥粉尘从断裂点以15厘米长的细流不规律下落，间隔2-4秒出现一次，每次持续0.3秒后停止；
+    背景松林树枝受余风影响以0.4Hz频率摆动6度，经0.8秒阻尼复位；左侧火炬支架火焰以3Hz频率闪烁，
+    强度变化幅度20%，焰尖色温在橙黄色与冷琥珀色间循环，在相邻石墙面投射1.5Hz频率的阴影边缘摆动；
+    火炬烟柱以每秒0.3厘米垂直上升，在1.5米高度遇到走廊过堂风后向右偏折8度，2米以上弥散入薄雾；
+    火炬光柱中悬浮尘埃粒子以每秒0.5厘米速度斜向下方漂移，每粒可见2-3秒；天幕云层完全静止；冷灰
+    色顶部散射光在镜头时长内亮度降低约12%，阴影加深无方向性位移；情绪弧线：以悬停的事后静止开场，
+    唯一的运动是不间断的物理衰减——粉尘下落、火焰摇曳、阴影加深——直至镜头结束时沉默本身变得
+    令人窒息"
+
+{% endif %}

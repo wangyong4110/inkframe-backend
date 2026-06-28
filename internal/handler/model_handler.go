@@ -440,44 +440,6 @@ func (h *ModelHandler) SelectModel(c *gin.Context) {
 	respondOK(c, selected)
 }
 
-// GetTaskConfig 获取任务配置
-// GET /api/v1/task-configs/:task
-func (h *ModelHandler) GetTaskConfig(c *gin.Context) {
-	task := c.Param("task")
-
-	config, err := h.modelService.GetTaskConfig(task)
-	if err != nil {
-		respondErr(c, http.StatusNotFound, "task config not found")
-		return
-	}
-
-	respondOK(c, config)
-}
-
-// UpdateTaskConfig 更新任务配置
-// PUT /api/v1/task-configs/:task
-func (h *ModelHandler) UpdateTaskConfig(c *gin.Context) {
-	if !isAdminOrOwner(c) {
-		respondErr(c, http.StatusForbidden, "admin or owner role required")
-		return
-	}
-
-	task := c.Param("task")
-
-	var req model.UpdateTaskConfigRequest
-	if !bindJSON(c, &req) {
-		return
-	}
-
-	config, err := h.modelService.UpdateTaskConfig(task, &req)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-
-	respondOK(c, config)
-}
-
 // ListExperiments 获取对比实验列表
 // GET /api/v1/experiments
 func (h *ModelHandler) ListExperiments(c *gin.Context) {
