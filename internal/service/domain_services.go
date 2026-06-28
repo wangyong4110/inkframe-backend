@@ -239,8 +239,7 @@ func (s *ModelService) SeedAllProviders() {
 }
 
 // copySystemModels 根据内存中的 defaultProviderModels 定义为租户供应商初始化模型列表。
-// 系统级供应商（tenant_id=0）不再持有模型记录，因此不从 DB 读取。
-// 每种 type 的第一个（质量最高）模型默认激活，确保提供商开箱即用。
+// 只为每种 type 创建第一个（质量最高的）模型并激活，其余模型由用户通过"添加模型"按钮按需添加。
 func (s *ModelService) copySystemModels(target *model.ModelProvider) {
 	if target.TenantID == 0 {
 		return
@@ -250,20 +249,20 @@ func (s *ModelService) copySystemModels(target *model.ModelProvider) {
 		return
 	}
 	// 记录每种 type 是否已有激活模型（包括 DB 中已存在的）
-	activeByType := make(map[string]bool)
+	seenType := make(map[string]bool)
 	if existing, err := s.modelRepo.List(&target.ID, target.TenantID); err == nil {
 		for _, m := range existing {
 			if m.IsActive {
-				activeByType[m.Type] = true
+				seenType[m.Type] = true
 			}
 		}
 	}
 	for _, d := range defs {
-		// 若此 type 尚无激活模型，则将第一个（排在前面的质量最高的）设为激活
-		shouldActivate := !activeByType[d.Type]
-		if shouldActivate {
-			activeByType[d.Type] = true
+		// 每种 type 只预填第一个（最高质量）模型；已有激活模型的 type 跳过
+		if seenType[d.Type] {
+			continue
 		}
+		seenType[d.Type] = true
 		newM := &model.AIModel{
 			ProviderID:  target.ID,
 			Name:        d.Name,
@@ -271,17 +270,17 @@ func (s *ModelService) copySystemModels(target *model.ModelProvider) {
 			Type:        d.Type,
 			Quality:     d.Quality,
 			MaxTokens:   d.MaxTokens,
-			IsActive:    shouldActivate,
+			IsActive:    true,
 		}
 		_ = s.modelRepo.FirstOrCreate(newM)
-		// 若模型已存在但 display_name 为空（例如用户手动提前添加），则补填
-		if newM.DisplayName == "" && d.DisplayName != "" {
-			newM.DisplayName = d.DisplayName
+		// 若模型已存在但未激活（用户手动提前添加过），则激活它
+		if !newM.IsActive {
+			newM.IsActive = true
 			_ = s.modelRepo.Update(newM)
 		}
-		// 若模型已存在但未激活，且此 type 尚无任何激活模型，则激活它
-		if !newM.IsActive && shouldActivate {
-			newM.IsActive = true
+		// 若模型已存在但 display_name 为空，则补填
+		if newM.DisplayName == "" && d.DisplayName != "" {
+			newM.DisplayName = d.DisplayName
 			_ = s.modelRepo.Update(newM)
 		}
 	}
