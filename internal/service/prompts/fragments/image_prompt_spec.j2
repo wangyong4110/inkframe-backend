@@ -74,9 +74,11 @@
     medium                     → "50mm f/4, moderate depth-of-field, background soft but readable"
     wide/extreme_wide          → "24mm f/8, deep focus, sharp from foreground to background"
 
-  QUALITY BOOSTERS — always last, choose by art style:
-    Realistic:    "masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting"
-    Anime/illust: "masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
+  QUALITY BOOSTERS — always last; match to the project's established art style:
+{% if ImageStyleHint %}    Project art style: {{ ImageStyleHint }}
+    Use the booster that matches this style:
+{% endif %}    Realistic/cinematic: "masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting"
+    Anime/illustration:  "masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
 
   PRE-SUBMIT CHECKLIST (verify each before writing the field):
     □ Characters described by exact name (not "figure"); position, posture, expression included if present; omitted if no characters in shot
@@ -164,9 +166,11 @@
     medium                     → "50mm，f/4，适中景深，背景柔焦可辨"
     wide/extreme_wide          → "24mm，f/8，全域清晰，前景到背景均锐利"
 
-  画质词——附在最末尾，根据画风选一：
-    写实风：  "masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting"
-    动漫/插画："masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
+  画质词——附在最末尾，必须与本项目风格一致：
+{% if ImageStyleHint %}    本项目风格：{{ ImageStyleHint }}
+    选择与该风格匹配的画质词：
+{% endif %}    写实/电影风："masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting"
+    动漫/插画风："masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
 
   输出前自检清单（每条验证后再写字段）：
     □ 若有角色出场：已使用精确角色名称（非"人影"）描述位置、姿态、表情；若无角色则省略角色区块

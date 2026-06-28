@@ -183,7 +183,7 @@ func (p *MinimaxTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenera
 			Speed:   speed,
 			Pitch:   pitch,
 			Vol:     1.0,
-			Emotion: req.Emotion,
+			Emotion: normalizeMinimaxEmotion(req.Emotion),
 		},
 		AudioSetting: minimaxAudioSetting{
 			SampleRate: 32000,
@@ -301,6 +301,27 @@ func parseMinimaxSSE(body io.Reader) (string, error) {
 		return "", err
 	}
 	return hexBuf.String(), nil
+}
+
+// normalizeMinimaxEmotion maps generic emotion labels to Minimax's accepted set.
+// Minimax T2A V2 only accepts: happy / sad / angry / fearful / surprised / neutral.
+func normalizeMinimaxEmotion(e string) string {
+	switch strings.ToLower(e) {
+	case "happy", "cheerful", "excited":
+		return "happy"
+	case "sad":
+		return "sad"
+	case "angry":
+		return "angry"
+	case "fear", "fearful":
+		return "fearful"
+	case "surprised":
+		return "surprised"
+	case "calm", "neutral", "serious":
+		return "neutral"
+	default:
+		return ""
+	}
 }
 
 // Ensure interface compliance.

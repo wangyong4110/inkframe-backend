@@ -256,7 +256,7 @@ func (p *DoubaoSpeechProvider) buildDoubaoSpeechBody(req *AudioGenerateRequest, 
 	}
 
 	if req.Emotion != "" {
-		reqParams["context_texts"] = []string{fmt.Sprintf("请用%s的语气说话", req.Emotion)}
+		reqParams["context_texts"] = []string{fmt.Sprintf("请用%s的语气说话", emotionToChineseLabel(req.Emotion))}
 	}
 	if req.SectionID != "" {
 		reqParams["section_id"] = req.SectionID
@@ -554,8 +554,8 @@ func (p *DoubaoSpeechV1Provider) AudioGenerate(ctx context.Context, req *AudioGe
 		SpeedRatio: speedRatio,
 		Language:   req.Language,
 	}
-	if req.Emotion != "" {
-		audio.Emotion = req.Emotion
+	if e := normalizeDoubaoV1Emotion(req.Emotion); e != "" {
+		audio.Emotion = e
 		audio.EnableEmotion = true
 	}
 
@@ -651,4 +651,45 @@ func (p *DoubaoSpeechV1Provider) AudioGenerate(ctx context.Context, req *AudioGe
 		Duration:  duration,
 		LatencyMs: time.Since(start).Milliseconds(),
 	}, nil
+}
+
+// normalizeDoubaoV1Emotion maps frontend style IDs and generic emotion labels to the
+// values accepted by the Doubao V1 TTS API emotion field: happy / sad / angry / fear / neutral.
+func normalizeDoubaoV1Emotion(e string) string {
+	switch strings.ToLower(e) {
+	case "happy", "cheerful", "excited":
+		return "happy"
+	case "sad":
+		return "sad"
+	case "angry":
+		return "angry"
+	case "fear", "fearful":
+		return "fear"
+	case "calm", "neutral", "serious":
+		return "neutral"
+	default:
+		return ""
+	}
+}
+
+// emotionToChineseLabel converts a generic English emotion label to a Chinese equivalent
+// suitable for embedding in natural-language prompts like "请用%s的语气说话".
+func emotionToChineseLabel(emotion string) string {
+	m := map[string]string{
+		"happy":     "快乐",
+		"cheerful":  "欢快",
+		"excited":   "兴奋",
+		"sad":       "悲伤",
+		"angry":     "愤怒",
+		"fear":      "恐惧",
+		"fearful":   "恐惧",
+		"calm":      "平静",
+		"neutral":   "平静",
+		"serious":   "严肃",
+		"surprised": "惊讶",
+	}
+	if v, ok := m[strings.ToLower(emotion)]; ok {
+		return v
+	}
+	return emotion // already Chinese
 }

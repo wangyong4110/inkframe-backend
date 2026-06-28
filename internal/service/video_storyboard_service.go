@@ -216,16 +216,22 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		}
 	}
 
-	// 获取小说的 PromptLanguage 和 Genre（决定 description/image_prompt/video_prompt 使用中文还是英文，以及类型视觉风格）
+	// 获取小说的 PromptLanguage、Genre 和 ImageStyle（影响分镜 image_prompt 的风格基调）
 	promptLanguage := "zh"
 	genre := ""
+	imageStyle := ""
 	if s.novelRepo != nil && video.NovelID > 0 {
 		if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil {
 			if novel.AIConfig.PromptLanguage != "" {
 				promptLanguage = novel.AIConfig.PromptLanguage
 			}
 			genre = novel.Meta.Genre
+			imageStyle = novel.AIConfig.ImageStyle
 		}
+	}
+	// video 级别的 ArtStyle 作为兜底（novel 未设置时使用）
+	if imageStyle == "" {
+		imageStyle = video.RenderConfig.ArtStyle
 	}
 
 	// 前置：生成情感弧线骨架（轻量调用，用于指导每个分段的叙事节奏）
@@ -317,7 +323,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			segIdx+1, len(segments), segRunes, segShotCount, len(prevTailShots))
 
 		prompt := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, len(segments), segShotCount,
-			characters, anchors, plotPoints, prevTailShots, overrides.VoiceMode, promptLanguage, genre, video.RenderConfig.Pacing, arcPlan)
+			characters, anchors, plotPoints, prevTailShots, overrides.VoiceMode, promptLanguage, genre, video.RenderConfig.Pacing, arcPlan, imageStyle)
 
 		var aiResult string
 		var aiErr error
@@ -821,6 +827,7 @@ func (s *VideoService) buildStoryboardPrompt(
 	genre string,
 	pacing string,
 	arcPlan string,
+	imageStyle string,
 ) string {
 	// isEn / isImageEn 均由 novel.AIConfig.PromptLanguage 决定，与项目「AI 提示词的语言」设置保持一致。
 	// image_prompt 在生图前会经过自动翻译（translatePromptToEnglish），保持中文可供用户编辑。
@@ -968,6 +975,10 @@ func (s *VideoService) buildStoryboardPrompt(
 		"UserPrompt":          userPrompt,
 		"ArcPlan":             arcPlan,
 		"GenreVisualHints":    genreVisualHints(genre),
+		// ImageStyleHint: 画面风格的英文提示词，告知 LLM 生成 image_prompt 时必须使用的风格基调。
+		// 不传原始 imageStyle ID（如 "anime"），而是传对 LLM 最有指导意义的英文描述词。
+		"ImageStyleHint": resolveStyleIllustrationDesc(imageStyle),
+		"ImageStyleID":   imageStyle,
 	}
 	result, err := renderPrompt("storyboard_generate", ctx)
 	if err != nil {

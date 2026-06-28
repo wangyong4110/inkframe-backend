@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -282,8 +283,8 @@ func (p *TencentTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenera
 	if req.SegmentRate > 0 {
 		ttsReq.SegmentRate = req.SegmentRate
 	}
-	if req.Emotion != "" {
-		ttsReq.EmotionCategory = req.Emotion
+	if e := normalizeTencentEmotion(req.Emotion); e != "" {
+		ttsReq.EmotionCategory = e
 		ttsReq.EmotionIntensity = 100
 	}
 
@@ -405,6 +406,26 @@ func tc3HMACSHA256(key, data []byte) []byte {
 	mac := hmac.New(sha256.New, key)
 	mac.Write(data)
 	return mac.Sum(nil)
+}
+
+// normalizeTencentEmotion maps generic emotion labels to Tencent's accepted EmotionCategory values.
+// Tencent supports: neutral / sad / happy / angry / fear.
+// "calm" maps to "neutral"; "fearful" maps to "fear"; "surprised" is not supported (omitted).
+func normalizeTencentEmotion(e string) string {
+	switch strings.ToLower(e) {
+	case "happy", "cheerful", "excited":
+		return "happy"
+	case "sad":
+		return "sad"
+	case "angry":
+		return "angry"
+	case "fear", "fearful":
+		return "fear"
+	case "calm", "neutral", "serious":
+		return "neutral"
+	default:
+		return ""
+	}
 }
 
 // Ensure interface compliance.

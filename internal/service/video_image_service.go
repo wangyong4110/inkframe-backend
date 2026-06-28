@@ -813,11 +813,13 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		lensType = "standard lens 50mm"
 	}
 
-	// 将风格 ID 解析为图像模型可识别的中文描述词，与 GenerateThreeViewSheet 保持一致。
-	// 无条件注入（不做 Contains 检查）：LLM 生成的分镜 prompt 可能使用旧风格词，以项目当前设置为最终权威。
+	// 将风格 ID 解析为英文风格描述词（与 GenerateThreeViewSheet 保持一致）。
+	// 使用 resolveStyleIllustrationDesc（英文）而非 resolveStyleDesc（中文），
+	// 因为 image_prompt 本身是英文，中文 token 在扩散模型中信号弱且可能被忽略。
+	// 无条件注入：LLM 生成的分镜 prompt 可能残留旧风格词，以项目当前设置覆盖为准。
 	styleDesc := ""
 	if artStyle != "" {
-		styleDesc = resolveStyleDesc(artStyle) + "风格"
+		styleDesc = resolveStyleIllustrationDesc(artStyle)
 	}
 
 	if shot.GenMeta.Prompt != "" {

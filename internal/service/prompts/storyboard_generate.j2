@@ -5,6 +5,13 @@
 {% if GenreVisualHints %}
 {{ GenreVisualHints }}
 {% endif %}
+{% if ImageStyleHint %}
+【画面风格强制规则——所有 image_prompt 必须遵守，违反将导致整个输出被拒绝】
+本项目画面风格设定为：**{{ ImageStyleHint }}**
+① 所有分镜的 image_prompt 第一个区块 [ArtStyle/画风] 必须以此风格的关键词开头，不得使用与之相悖的风格词。
+② 严禁在 image_prompt 中混用与本风格矛盾的描述（例如：风格含 anime/illustration 时禁止出现 photorealistic/photography/DSLR 等写实摄影词汇；风格含 realistic/photorealistic 时禁止出现 anime/illustration/cel shading 等动漫插画词汇）。
+③ negative_prompt 中必须包含与本风格相悖的排除词（写实风必须排除 cartoon, anime, illustration, cel shading；动漫/插画风必须排除 photorealistic, photo, realistic skin texture, 3d render, cgi）。
+{% endif %}
 【故事连贯性与镜头过渡——顶级强制规则，违反将导致整个输出被拒绝】
 ① **叙事链完整**：所有分镜必须构成一条前后贯通的故事链。每个镜头须与相邻镜头在场景、人物动作、情绪上保持逻辑衔接，严禁无铺垫的画面跳跃或情节断层。
 ② **场景切换必须有过渡**：若前后镜头发生地点变换（室内→室外、A地→B地），必须插入过渡镜头（角色起身/走出门/奔跑途中/环境空镜转场），禁止同一人物在相邻两镜中无缘由地出现在不同地点。

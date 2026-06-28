@@ -125,7 +125,7 @@ func (p *AliyunTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenerat
 		input["pitch"] = clampFloat(req.Pitch, 0.5, 2.0)
 	}
 	if req.Emotion != "" {
-		input["instruction"] = req.Emotion
+		input["instruction"] = emotionToAliyunInstruction(req.Emotion)
 	}
 
 	body, err := json.Marshal(map[string]interface{}{
@@ -203,6 +203,29 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n]
+}
+
+// emotionToAliyunInstruction converts a generic emotion label (English or Chinese)
+// to a natural-language Chinese instruction accepted by Aliyun CosyVoice's instruction field.
+func emotionToAliyunInstruction(emotion string) string {
+	m := map[string]string{
+		"happy":     "请用开心愉快的语气朗读",
+		"cheerful":  "请用欢快活泼的语气朗读",
+		"excited":   "请用兴奋激动的语气朗读",
+		"sad":       "请用悲伤低沉的语气朗读",
+		"angry":     "请用愤怒激动的语气朗读",
+		"fear":      "请用紧张害怕的语气朗读",
+		"fearful":   "请用紧张害怕的语气朗读",
+		"calm":      "请用平静舒缓的语气朗读",
+		"neutral":   "请用平稳中性的语气朗读",
+		"serious":   "请用严肃认真的语气朗读",
+		"surprised": "请用惊讶的语气朗读",
+	}
+	if v, ok := m[strings.ToLower(emotion)]; ok {
+		return v
+	}
+	// Already a Chinese instruction — pass through as-is.
+	return emotion
 }
 
 var _ AIProvider = (*AliyunTTSProvider)(nil)
