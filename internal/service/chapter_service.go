@@ -2706,7 +2706,6 @@ type characterForPrompt struct {
 	InnerConflict string // 人物内在矛盾（如：渴望自由却害怕失去家人）
 	CoreDesire    string // 核心渴望（如：被认可、复仇、保护所爱之人）
 	VoiceProfile  string // 声音档案摘要：说话风格/口癖/禁忌用语（来自 character_voice.j2 提取）
-	Archetype     string // 角色原型（dominant_ceo/reborn_villain/pure_heroine等）
 }
 
 func (s *ChapterService) getCharactersForPrompt(novelID uint) []characterForPrompt {
@@ -2734,7 +2733,6 @@ func (s *ChapterService) getCharactersForPrompt(novelID uint) []characterForProm
 			InnerConflict: c.Meta.InnerConflict,
 			CoreDesire:    c.Meta.CoreDesire,
 			VoiceProfile:  formatVoiceProfile(c.VoiceConfig.VoiceProfile),
-			Archetype:     c.Archetype,
 		}
 		// 加载最新状态快照，补充 CurrentState
 		if s.snapshotRepo != nil {
