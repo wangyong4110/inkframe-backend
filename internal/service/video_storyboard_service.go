@@ -357,7 +357,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			if strings.TrimSpace(aiResult) == "" {
 				continue
 			}
-			parsed, parseErr := s.parseStoryboardResult(videoID, chapterID, aiResult)
+			parsed, parseErr := s.parseStoryboardResult(videoID, chapterID, aiResult, imageStyle)
 			if parseErr != nil {
 				logger.Errorf("[Storyboard] seg %d/%d attempt=%d parse failed: %v", segIdx+1, len(segments), attempt, parseErr)
 				continue
@@ -993,8 +993,9 @@ func (s *VideoService) buildStoryboardPrompt(
 		"GenreVisualHints":    genreVisualHints(genre),
 		// ImageStyleHint: 画面风格的英文提示词，告知 LLM 生成 image_prompt 时必须使用的风格基调。
 		// 不传原始 imageStyle ID（如 "anime"），而是传对 LLM 最有指导意义的英文描述词。
-		"ImageStyleHint": resolveStyleIllustrationDesc(imageStyle),
-		"ImageStyleID":   imageStyle,
+		"ImageStyleHint":      resolveStyleIllustrationDesc(imageStyle),
+		"ImageStyleID":        imageStyle,
+		"StyleQualityTokens": resolveStyleQualityTokens(imageStyle),
 	}
 	result, err := renderPrompt("storyboard_generate", ctx)
 	if err != nil {
@@ -1006,7 +1007,7 @@ func (s *VideoService) buildStoryboardPrompt(
 
 
 // parseStoryboardResult 解析AI分镜响应。解析失败时返回 error（不生成空占位）。
-func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, result string) ([]*model.StoryboardShot, error) {
+func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, result string, imageStyle string) ([]*model.StoryboardShot, error) {
 	// 提取 JSON 数组
 	cleaned := extractJSON(result)
 
@@ -1108,9 +1109,10 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 				imagePrompt += ", " + r.Lighting + " lighting"
 			}
 		}
-		// LLM 有时会漏掉质量词，在存储前统一补齐，确保 UI 展示和生图时均包含画质词
+		// LLM 有时会漏掉质量词，在存储前统一补齐，确保 UI 展示和生图时均包含画质词。
+		// 使用风格匹配的质量词（不硬编码 photorealistic，避免与动漫/水彩/国画等风格冲突）。
 		if !strings.Contains(strings.ToLower(imagePrompt), "masterpiece") {
-			imagePrompt += ", masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting"
+			imagePrompt += ", " + resolveStyleQualityTokens(imageStyle)
 		}
 
 		// video_prompt: 优先使用 LLM 生成的专业视频提示词，兜底用 buildMotionPrompt 生成

@@ -634,11 +634,24 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	}
 
 	// 角色外观 token 注入（prepend，排在场景锚点前）：
-	// - DreamO（有参考图）：IP-Adapter 负责外貌精准还原，文字描述提供存在性约束；
-	// - Seedream/其他：reference 仅作风格/主体提示；文字描述是让模型渲染角色的关键。
-	// - 无参考图（Text2ImgV3）：文字锚点是约束外貌的唯一手段。
+	// - DreamO（有参考图）：IP-Adapter 负责外貌精准还原；只注入英文 VisualPrompt，中文描述被扩散模型忽略。
+	// - Text2ImgV3（无参考图）：文字锚点是约束外貌的唯一手段，注入所有可用描述。
 	if len(characterVisualPrompts) > 0 {
-		promptText = strings.Join(characterVisualPrompts, ", ") + ", " + promptText
+		if len(characterPortraits) > 0 {
+			// DreamO 模式：外貌由参考图负责，只注入英文 VisualPrompt；中文描述权重极低跳过，避免占用 prompt 空间
+			var enPrompts []string
+			for _, vp := range characterVisualPrompts {
+				if isEnglishPrompt(vp) {
+					enPrompts = append(enPrompts, vp)
+				}
+			}
+			if len(enPrompts) > 0 {
+				promptText = strings.Join(enPrompts, ", ") + ", " + promptText
+			}
+		} else {
+			// Text2ImgV3 模式：无参考图，文字是唯一外貌约束
+			promptText = strings.Join(characterVisualPrompts, ", ") + ", " + promptText
+		}
 	}
 
 	// 角色名 + 动作/姿态（最后 prepend → 最终排在 prompt 最前面）：
@@ -676,19 +689,9 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// 参考图列表：角色三视图在前，场景锚点图排最后。
-	//
-	// 有角色时：[char1, char2, ..., sceneRef]
-	//   角色三视图排在前（Seedream 对靠前 token 注意力更高），场景图排最后作为视觉风格锚定。
-	//   场景图与角色图竞争时角色优先，保证角色出现；场景图锁定色调/光照，保证跨镜一致性。
-	// 无角色时：[sceneRef]
-	//   仅场景图，全力锁定视觉风格。
-	//
-	// DreamO 注意：selectImageModel 用 firstRef 判断是否启用 DreamO。
-	//   有角色时 firstRef 是角色三视图 → 正确触发 DreamO（角色特征保持）；
-	//   无角色时 firstRef 是场景图 → 正确触发 Text2ImgV3（纯文生图）。
-	// 物品参考图：当分镜 prompt 中提及某个物品名称时，将其 ReferenceImageURL 加入参考列表。
-	// 顺序：角色图 → 物品图 → 场景图（让物品外观有所参考，同时不影响角色主体 embedding 优先级）
+	// 物品参考图：当分镜 prompt 中提及某个物品名称时，收集其 ReferenceImageURL。
+	// 有角色时（DreamO 模式）：物品图不加入参考图列表（防止污染 IP embedding），仅通过 prompt 文字传达。
+	// 无角色时（Text2ImgV3 模式）：可加入物品图作为视觉参考。
 	var itemRefImages []string
 	if s.itemRepo != nil {
 		if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil && video.NovelID > 0 {
@@ -708,15 +711,37 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
+	// DreamO（seed3l_single_ip）是"单 IP 角色特征保持"模型，参考图列表构建规则：
+	//
+	// 有角色参考图时 → DreamO 模式：
+	//   - 只传角色参考图，场景图和物品图排除在外
+	//   - 原因：DreamO 对所有 image_urls 提取 IP embedding；场景/物品图会污染角色特征 → 生成结果与三视图不一致
+	//   - seed3l_single_ip 是"单 IP"模型，多角色场景只取主角色（第一个）作为参考
+	//   - 场景/物品信息通过 prompt 文字（sceneAnchorSvc.BuildPromptFragment 已注入场景描述）传达
+	//
+	// 无角色参考图时 → Text2ImgV3 纯文生图模式：
+	//   - 可加物品图和场景图作为视觉风格锚定
 	cappedPortraits := characterPortraits
-	allRefImages := make([]string, 0, len(cappedPortraits)+len(itemRefImages)+1)
-	allRefImages = append(allRefImages, cappedPortraits...)
-	allRefImages = append(allRefImages, itemRefImages...)
-	if sceneRefImage != "" {
-		allRefImages = append(allRefImages, sceneRefImage)
+	// seed3l_single_ip 是单 IP 模型，多角色参考图会导致特征混合；只取第一张（主角色）
+	if len(cappedPortraits) > 1 {
+		logger.Printf("[CharRef] shot#%d multi-char(%d) — DreamO single_ip only uses first portrait to avoid IP blending", shot.ShotNo, len(cappedPortraits))
+		cappedPortraits = cappedPortraits[:1]
 	}
-	logger.Printf("generateShotReferenceImage: shot %d allRefImages=%d (charPortraits=%d itemRefs=%d sceneRef=%v)",
-		shot.ShotNo, len(allRefImages), len(cappedPortraits), len(itemRefImages), sceneRefImage != "")
+	var allRefImages []string
+	if len(cappedPortraits) > 0 {
+		// DreamO 模式：只传角色参考图，不传场景图/物品图（防止污染 IP embedding）
+		allRefImages = make([]string, len(cappedPortraits))
+		copy(allRefImages, cappedPortraits)
+	} else {
+		// Text2ImgV3 模式：无角色，加物品图和场景图作为视觉风格/主体参考
+		allRefImages = make([]string, 0, len(itemRefImages)+1)
+		allRefImages = append(allRefImages, itemRefImages...)
+		if sceneRefImage != "" {
+			allRefImages = append(allRefImages, sceneRefImage)
+		}
+	}
+	logger.Printf("generateShotReferenceImage: shot %d allRefImages=%d (charPortraits=%d→capped=%d itemRefs=%d sceneRef=%v)",
+		shot.ShotNo, len(allRefImages), len(characterPortraits), len(cappedPortraits), len(itemRefImages), sceneRefImage != "")
 
 	ctx := context.Background()
 
@@ -846,8 +871,9 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		promptText = cinematicImgPrefix + promptText
 	}
 
-	// 画质词兜底：旧格式分镜或 description 降级路径不含画质词，统一补齐。
-	// 使用 resolveStyleQualityTokens 按风格 ID 分类，覆盖全部 15 种预设风格。
+	// 画质词强制注入：先移除与当前风格冲突的 realistic 质量词（防止旧分镜或 LLM 示例遗留的
+	// "photorealistic, cinematic lighting" 污染动漫/水彩/国画等风格），再追加风格匹配的质量词。
+	promptText = removeConflictingQualityTokens(promptText, artStyle)
 	if !strings.Contains(strings.ToLower(promptText), "masterpiece") {
 		promptText += ", " + resolveStyleQualityTokens(artStyle)
 	}
@@ -900,6 +926,25 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	}
 
 	return imageURL, nil
+}
+
+// isEnglishPrompt 判断字符串是否以英文为主（英文字母占比 > 40%）。
+// 用于过滤中文 VisualPrompt：即梦AI 扩散模型对中文 token 权重极低，中文描述注入 prompt 无效。
+func isEnglishPrompt(s string) bool {
+	if s == "" {
+		return false
+	}
+	var englishChars, totalChars int
+	for _, r := range s {
+		totalChars++
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
+			englishChars++
+		}
+	}
+	if totalChars == 0 {
+		return false
+	}
+	return float64(englishChars)/float64(totalChars) > 0.40
 }
 
 // buildCharTextAnchor 从角色基本信息构建文本锚点，用于无 VisualPrompt 时的最低限度外貌约束。

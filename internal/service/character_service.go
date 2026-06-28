@@ -1850,6 +1850,55 @@ func resolveStyleQualityTokens(styleID string) string {
 }
 
 
+// removeConflictingQualityTokens strips realistic-only quality tokens (photorealistic, cinematic lighting,
+// 3D render, etc.) from a prompt when the active style is non-realistic.
+// This prevents old storyboard data or LLM template examples from contaminating anime/watercolor/ink styles.
+func removeConflictingQualityTokens(prompt, styleID string) string {
+	cat := resolveStyleCategory(styleID)
+	if cat == "realistic" || cat == "render_3d" || styleID == "" {
+		return prompt // realistic/3D: keep all tokens as-is
+	}
+	// For non-realistic styles: remove tokens that belong exclusively to realistic photography.
+	conflicts := []string{
+		"photorealistic, cinematic lighting, 8k uhd",
+		"photorealistic, cinematic lighting",
+		"photorealistic",
+		"cinematic lighting",
+		"cinematic film photography",
+		"realistic skin texture",
+	}
+	result := prompt
+	for _, tok := range conflicts {
+		// Case-insensitive removal: replace ", TOKEN" or "TOKEN, " or standalone
+		lower := strings.ToLower(result)
+		lowerTok := strings.ToLower(tok)
+		for {
+			idx := strings.Index(lower, lowerTok)
+			if idx < 0 {
+				break
+			}
+			// Determine the full token span including surrounding commas/spaces
+			start := idx
+			end := idx + len(tok)
+			// Absorb leading ", " or ", "
+			if start >= 2 && result[start-2:start] == ", " {
+				start -= 2
+			} else if start >= 1 && (result[start-1] == ',' || result[start-1] == ' ') {
+				start--
+			}
+			// Absorb trailing ", " or ", "
+			if end+2 <= len(result) && result[end:end+2] == ", " {
+				end += 2
+			} else if end < len(result) && (result[end] == ',' || result[end] == ' ') {
+				end++
+			}
+			result = result[:start] + result[end:]
+			lower = strings.ToLower(result)
+		}
+	}
+	return strings.TrimRight(strings.TrimLeft(result, ", "), ", ")
+}
+
 // resolveStyleIllustrationDesc returns English-language style descriptor tokens for non-realistic styles.
 // Replaces the Chinese-language style names that were previously embedded in English prompts,
 // improving tokenizer coverage and semantic precision.
@@ -1985,8 +2034,7 @@ func (s *ImageGenerationService) GenerateThreeViewImage(ctx context.Context, ten
 	return &GeneratedCharacterImage{URL: url, Description: fmt.Sprintf("%s %s", name, viewType)}, nil
 }
 
-// GenerateThreeViewSheet 生成三合一角色参考图（正视/侧视/背视放在同一张图中）。
-// 与 GenerateThreeViewImage 的区别：使用 turnaround sheet 提示词，期望 AI 在单张图内展示三个视角。
+// GenerateThreeViewSheet 生成标准三视图角色参考图（正面/侧面/背面，3格横版布局，1200x720）。
 // ctx 可携带 ImageStorageHint 用于 OSS 路径构建。
 func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, tenantID uint, name, appearance, style, gender, referenceImage, provider string) (*GeneratedCharacterImage, error) {
 	genderTag, genderNeg := resolveGenderInfo(gender)
@@ -1998,21 +2046,19 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	}
 
 	// 结构控制词置于提示词最前段，确保在 cross-attention 中获得最高权重。
-	// 4 格布局：前三格为全身三视图，第四格为面部特写，合并在同一张横版图中。
+	// 3 格布局：正面/侧面/背面全身视图，合并在同一张横版图中（标准三视图格式）。
 	// 关键实践：
-	//   - "equal-width 4-panel" 约束四格等宽
-	//   - panel 4 明确为 bust/face closeup，与全身格区分
+	//   - "equal-width 3-panel" 约束三格等宽
 	//   - "A-pose arms 30-45 degrees" 量化手臂角度，避免 T-pose
-	//   - "same ground baseline" 对齐全身三格脚底基线
-	//   - "horizontal wide format" 强化横版构图，匹配 1600×720 输出尺寸
+	//   - "same ground baseline" 对齐三格脚底基线
+	//   - "horizontal wide format" 强化横版构图，匹配 1200×720 输出尺寸
 	layoutFrame :=
-		"character model sheet, equal-width 4-panel reference sheet, horizontal wide format: " +
-			"[panel 1] face closeup bust shot front view, neutral expression, " +
-			"[panel 2] 0-degree front-facing full body, " +
-			"[panel 3] 90-degree right side profile full body, " +
-			"[panel 4] 180-degree back view full body, " +
-			"A-pose arms 30-45 degrees from sides on full-body panels, " +
-			"same ground baseline for full-body panels, identical appearance across all panels"
+		"character turnaround sheet, equal-width 3-panel reference sheet, horizontal wide format: " +
+			"[panel 1] 0-degree front-facing full body, neutral expression, " +
+			"[panel 2] 90-degree right side profile full body, " +
+			"[panel 3] 180-degree back view full body, " +
+			"A-pose arms 30-45 degrees from sides, " +
+			"same ground baseline across all panels, identical appearance across all panels"
 
 	// appearance 截断至 50 词，与结构词（~38）、修饰词（~35）合计控制在 100-150 词范围内。
 	// 参考图通过图像编码通道（IP-Adapter）处理面部一致性；
@@ -2060,7 +2106,8 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 		"different face, inconsistent face, face change, different person, face inconsistency, " +
 		"different hairstyle, hair color change, costume mismatch, " +
 		"merged panels, overlapping panels, panels bleeding into each other, " +
-		"cut off feet on full-body panels, missing feet, missing legs on body panels, " +
+		"cut off feet, missing feet, missing legs, " +
+		"4 panels, four panels, face closeup panel, bust shot panel, portrait panel, " +
 		"makeup, eyeshadow, eyeliner, mascara, lipstick, blush, rouge, cosmetics, " +
 		"extra limbs, bad anatomy, nsfw, lowres, poorly drawn"
 	negativePrompt := baseNeg
@@ -2068,16 +2115,16 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 		negativePrompt = baseNeg + ", " + genderNeg
 	}
 
-	// 4 格参考图使用 1600x720 横版布局（比三视图 1280x720 更宽，为第 4 格面部特写留出空间）
+	// 3 格三视图使用 1200x720 横版布局（正面/侧面/背面各占 400px）
 	refs := []string{}
 	if aiRef != "" {
 		refs = []string{aiRef}
 	}
-	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, "1600x720", 0)
+	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, "1200x720", 0)
 	if err != nil {
 		return nil, err
 	}
-	return &GeneratedCharacterImage{URL: url, Description: name + " character sheet with face closeup"}, nil
+	return &GeneratedCharacterImage{URL: url, Description: name + " character turnaround sheet (front/side/back)"}, nil
 }
 
 // GeneratePortrait 基于三视图（threeViewURL 作为 DreamO 参考图）生成单张角色正面半身像。
