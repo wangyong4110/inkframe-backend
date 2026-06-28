@@ -1223,6 +1223,9 @@ func (h *ChapterHandler) RewriteChapterByInstruction(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task: "+err.Error())
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"instruction": req.Instruction,
+	})
 
 	instruction := req.Instruction
 	go func(taskID string) {

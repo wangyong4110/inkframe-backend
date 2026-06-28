@@ -1251,4 +1251,96 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			})
 		})
 	}
+
+	// chapter_review_batch: 批量章节审查（novelID 存在 EntityID，无需额外参数）
+	if svcs.QualityControlService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterReviewBatch, func(t *model.AsyncTask) {
+			novelID := t.EntityID
+			if novelID == 0 {
+				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+				return
+			}
+			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
+			progressFn := func(done, total int) {
+				if total > 0 {
+					svcs.TaskService.UpdateProgress(t.TaskID, done*100/total) //nolint:errcheck
+				}
+			}
+			if err := svcs.QualityControlService.BatchReviewNovelChapters(context.Background(), t.TenantID, novelID, progressFn); err != nil {
+				logger.Errorf("TaskService resume chapter_review_batch %s failed: %v", t.TaskID, err)
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+				return
+			}
+			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"novel_id": novelID}) //nolint:errcheck
+		})
+	}
+
+	// chapter_rewrite_instr: 按指令修改章节（需从 ParamsJSON 读 instruction）
+	if svcs.QualityControlService != nil && svcs.ChapterService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterRewriteInstr, func(t *model.AsyncTask) {
+			chapterID := t.EntityID
+			var params struct {
+				Instruction string `json:"instruction"`
+			}
+			if t.ParamsJSON != "" {
+				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
+			}
+			if chapterID == 0 || params.Instruction == "" {
+				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+				return
+			}
+			svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
+			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
+			newContent, err := svcs.QualityControlService.RewriteByInstruction(context.Background(), chapterID, params.Instruction)
+			if err != nil {
+				logger.Errorf("TaskService resume chapter_rewrite_instr %s failed: %v", t.TaskID, err)
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+				return
+			}
+			svcs.TaskService.UpdateProgress(t.TaskID, 80) //nolint:errcheck
+			if err2 := svcs.ChapterService.ArchiveVersionBeforeRewrite(chapterID, params.Instruction); err2 != nil {
+				logger.Errorf("TaskService resume chapter_rewrite_instr %s archive failed: %v", t.TaskID, err2)
+			}
+			updated, applyErr := svcs.ChapterService.ApplyRewrittenContent(chapterID, newContent)
+			if applyErr != nil {
+				logger.Errorf("TaskService resume chapter_rewrite_instr %s apply failed: %v", t.TaskID, applyErr)
+				svcs.TaskService.Fail(t.TaskID, "保存修改内容失败: "+applyErr.Error()) //nolint:errcheck
+				return
+			}
+			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"chapter": updated}) //nolint:errcheck
+		})
+	}
+
+	// image_upscale: 高清放大（需从 ParamsJSON 读 image_url/scale/method）
+	if svcs.AIService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeImageUpscale, func(t *model.AsyncTask) {
+			var params struct {
+				ImageURL string `json:"image_url"`
+				Scale    int    `json:"scale"`
+				Method   string `json:"method"`
+				NovelID  uint   `json:"novel_id"`
+			}
+			if t.ParamsJSON != "" {
+				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
+			}
+			if params.ImageURL == "" {
+				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+				return
+			}
+			if params.Scale <= 0 {
+				params.Scale = 2
+			}
+			if params.Method == "" {
+				params.Method = "bicubic"
+			}
+			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
+			newURL, err := svcs.AIService.UpscaleImage(context.Background(), t.TenantID, params.NovelID, params.ImageURL, params.Scale, params.Method)
+			if err != nil {
+				logger.Errorf("TaskService resume image_upscale %s failed: %v", t.TaskID, err)
+				svcs.TaskService.Fail(t.TaskID, "高清处理失败: "+err.Error()) //nolint:errcheck
+				return
+			}
+			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"image_url": newURL}) //nolint:errcheck
+		})
+	}
 }

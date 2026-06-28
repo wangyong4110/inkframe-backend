@@ -248,8 +248,8 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	totalShots := calcTotalShots(totalRunes, video.RenderConfig.TargetDuration, video.RenderConfig.Pacing)
 
 	// 动态分段：确保每段期望镜头数 ≤ maxShotsPerAICall，防止超出 AI 模型输出 token 上限。
-	// 大多数模型输出上限 8192-16384 tokens；每个镜头约 700 tokens；12 镜 × 700 = 8400 tokens。
-	const maxShotsPerAICall = 12
+	// segOverrides.MaxTokens 已强制 ≥ 16384；每个镜头约 700 tokens；20 镜 × 700 = 14000 tokens。
+	const maxShotsPerAICall = 20
 	dynSegRunes := maxSegmentRunes
 	if totalShots > maxShotsPerAICall && totalRunes > 0 {
 		// 使每段镜头数 ≤ maxShotsPerAICall：segRunes = totalRunes * maxShotsPerAICall / totalShots

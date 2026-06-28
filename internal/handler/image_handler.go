@@ -105,6 +105,12 @@ func (h *ImageHandler) UpscaleImage(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"image_url": body.ImageURL,
+		"scale":     body.Scale,
+		"method":    body.Method,
+		"novel_id":  body.NovelID,
+	})
 
 	imageURL := body.ImageURL
 	scale := body.Scale

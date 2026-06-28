@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"time"
 
 	"gorm.io/gorm"
@@ -217,6 +218,46 @@ type StoryboardShot struct {
 
 func (StoryboardShot) TableName() string {
 	return "ink_storyboard_shot"
+}
+
+// MarshalJSON flattens CamDir and GenMeta fields to the top level so the frontend
+// can access shot.camera_type / shot.sfx_tags / shot.dialogue etc. directly.
+// The nested cam_dir / gen_meta objects are still included for tooling that needs them.
+func (s StoryboardShot) MarshalJSON() ([]byte, error) {
+	type Alias StoryboardShot // break MarshalJSON recursion
+	return json.Marshal(&struct {
+		Alias
+		// flatten CamDir
+		CameraType    string `json:"camera_type,omitempty"`
+		CameraAngle   string `json:"camera_angle,omitempty"`
+		ShotSize      string `json:"shot_size,omitempty"`
+		EmotionalTone string `json:"emotional_tone,omitempty"`
+		Transition    string `json:"transition,omitempty"`
+		TransitionOut string `json:"transition_out,omitempty"`
+		TransitionIn  string `json:"transition_in,omitempty"`
+		// flatten GenMeta
+		Prompt         string `json:"prompt,omitempty"`
+		NegativePrompt string `json:"negative_prompt,omitempty"`
+		MotionPrompt   string `json:"motion_prompt,omitempty"`
+		SFXTags        string `json:"sfx_tags,omitempty"`
+		Dialogue       string `json:"dialogue,omitempty"`
+		Subtitle       string `json:"subtitle,omitempty"`
+	}{
+		Alias:          (Alias)(s),
+		CameraType:     s.CamDir.CameraType,
+		CameraAngle:    s.CamDir.CameraAngle,
+		ShotSize:       s.CamDir.ShotSize,
+		EmotionalTone:  s.CamDir.EmotionalTone,
+		Transition:     s.CamDir.Transition,
+		TransitionOut:  s.CamDir.TransitionOut,
+		TransitionIn:   s.CamDir.TransitionIn,
+		Prompt:         s.GenMeta.Prompt,
+		NegativePrompt: s.GenMeta.NegativePrompt,
+		MotionPrompt:   s.GenMeta.MotionPrompt,
+		SFXTags:        s.GenMeta.SFXTags,
+		Dialogue:       s.GenMeta.Dialogue,
+		Subtitle:       s.GenMeta.Subtitle,
+	})
 }
 
 // ShotVoiceSegment 分镜语音段落（一个分镜可包含多条语音/字幕段落）
