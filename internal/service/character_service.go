@@ -1543,11 +1543,11 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 		defaultLookMap = map[uint]*model.CharacterLook{}
 	}
 
-	// force=true 全量重新生成；否则仅处理缺图的角色
+	// force=true 全量重新生成；否则仅处理缺图的角色（三视图或 Portrait 缺一则需处理）
 	var todo []*model.Character
 	for _, c := range chars {
 		look := defaultLookMap[c.ID]
-		if force || look == nil || look.ThreeViewSheet == "" {
+		if force || look == nil || look.ThreeViewSheet == "" || look.Portrait == "" {
 			todo = append(todo, c)
 		}
 	}
@@ -1589,7 +1589,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 				faceRef = look.Portrait
 			}
 
-			// 生成三视图
+			// 生成三视图（仅在缺失或 force 时）
 			if force || look == nil || look.ThreeViewSheet == "" {
 				threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, faceRef, provider)
 				if threeErr != nil {
@@ -1600,6 +1600,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 				}
 			}
 
+			var savedLookID uint
 			if newThreeURL != "" {
 				if s.lookRepo != nil {
 					if look != nil {
@@ -1608,6 +1609,8 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 						if _, saveErr := s.UpdateLook(look.ID, lookUpdateReq); saveErr != nil {
 							logger.Errorf("[CharacterService] BatchGenerateImages: save look for char %d: %v", char.ID, saveErr)
 							charFailed = true
+						} else {
+							savedLookID = look.ID
 						}
 					} else {
 						// 角色尚无默认形象，自动创建
@@ -1624,6 +1627,34 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 							charFailed = true
 						} else {
 							_ = s.characterRepo.UpdateDefaultLookID(char.ID, newLook.ID)
+							savedLookID = newLook.ID
+						}
+					}
+				}
+			} else if look != nil {
+				// 三视图已存在（未重新生成），look 记录已存在
+				savedLookID = look.ID
+			}
+
+			// 生成 Portrait（DreamO IP-Adapter 需要单张正面半身像，三视图全身小图提取效果差）
+			// 条件：force=true、或无 Portrait、或刚生成了新三视图
+			needPortrait := !charFailed && savedLookID != 0 && (force || (look != nil && look.Portrait == "") || newThreeURL != "")
+			if needPortrait {
+				// 使用新生成的三视图，或已有三视图作为 DreamO 参考
+				threeRef := newThreeURL
+				if threeRef == "" && look != nil {
+					threeRef = look.ThreeViewSheet
+				}
+				if threeRef != "" {
+					portraitImg, portraitErr := imgSvc.GeneratePortrait(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, threeRef, provider)
+					if portraitErr != nil {
+						logger.Errorf("[CharacterService] BatchGenerateImages: portrait gen for char %d (%s) failed: %v", char.ID, char.Name, portraitErr)
+					} else {
+						portraitURL := portraitImg.URL
+						if _, saveErr := s.UpdateLook(savedLookID, &model.UpdateCharacterLookRequest{Portrait: &portraitURL}); saveErr != nil {
+							logger.Errorf("[CharacterService] BatchGenerateImages: save portrait for char %d: %v", char.ID, saveErr)
+						} else {
+							logger.Printf("[CharacterService] BatchGenerateImages: portrait auto-generated for char %d (%s)", char.ID, char.Name)
 						}
 					}
 				}
@@ -2533,6 +2564,12 @@ func (s *CharacterService) GenerateChapterImages(
 							if threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, appearance, imageStyle, gender, existingPortrait, provider); threeErr == nil {
 								lookUpdateReq.ThreeViewSheet = &threeImg.URL
 								needUpdate = true
+								// 三视图生成后自动生成 Portrait（DreamO 单人正面像效果最好）
+								if portraitImg, portraitErr := imgSvc.GeneratePortrait(genCtx, tenantID, char.Name, appearance, imageStyle, gender, threeImg.URL, provider); portraitErr == nil {
+									lookUpdateReq.Portrait = &portraitImg.URL
+								} else {
+									logger.Errorf("[CharacterService] GenerateChapterImages portrait for char %d (%s): %v", char.ID, char.Name, portraitErr)
+								}
 							} else {
 								logger.Errorf("[CharacterService] GenerateChapterImages three-view char %d (%s): %v", char.ID, char.Name, threeErr)
 							}

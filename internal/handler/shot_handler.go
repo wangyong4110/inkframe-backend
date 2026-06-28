@@ -659,10 +659,10 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 		}
 		h.taskSvc.UpdateProgress(taskID, 90) //nolint:errcheck
 
-		audioURL := resolveAudioURL(vID, shot)
+		audioURL := ""
 		if m := h.videoService.GetShotAudioMap([]uint{shot.ID}); m != nil {
-			if ossURL, ok := m[shot.ID]; ok && ossURL != "" {
-				audioURL = ossURL
+			if _, ok := m[shot.ID]; ok {
+				audioURL = resolveAudioURL(vID, shot)
 			}
 		}
 		result := gin.H{"audio_url": audioURL, "shot_id": shot.ID}
