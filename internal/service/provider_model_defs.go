@@ -16,13 +16,13 @@ var ProviderStaticModelsByType = map[string]map[string][]string{
 		"llm": {"gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-pro", "gemini-1.5-flash"},
 	},
 	"xai": {
-		"llm": {"grok-3", "grok-3-mini", "grok-3-fast", "grok-2", "grok-2-vision"},
+		"llm": {"grok-4", "grok-4-0709", "grok-3", "grok-3-mini", "grok-3-mini-fast", "grok-3-fast", "grok-2", "grok-2-vision"},
 	},
 	"mistral": {
-		"llm": {"mistral-large-latest", "mistral-small-latest", "codestral-latest", "open-mistral-nemo"},
+		"llm": {"mistral-large-latest", "mistral-medium-latest", "mistral-small-latest", "codestral-latest", "open-mistral-nemo"},
 	},
 	"meta": {
-		"llm": {"Llama-4-Scout-17B-16E-Instruct", "Llama-4-Maverick-17B-128E-Instruct", "Llama-3.3-70B-Instruct"},
+		"llm": {"Llama-4-Scout-17B-16E-Instruct-FP8", "Llama-4-Maverick-17B-128E-Instruct-FP8", "Llama-4-Scout-17B-16E-Instruct", "Llama-4-Maverick-17B-128E-Instruct", "Llama-3.3-70B-Instruct"},
 	},
 	"doubao": {
 		"llm": {
@@ -30,6 +30,7 @@ var ProviderStaticModelsByType = map[string]map[string][]string{
 			"doubao-lite-128k", "doubao-lite-32k",
 			"doubao-seed-1-6", "doubao-seed-1-5",
 		},
+		"image": {"seedream-3-0-t2i-250415"},
 		"video": {
 			"doubao-seedance-2-0-260128",
 			"doubao-seedance-2-0-fast-260128",
@@ -38,53 +39,76 @@ var ProviderStaticModelsByType = map[string]map[string][]string{
 			"doubao-seedance-1-0-pro-250528",
 			"doubao-seedance-1-0-pro-fast-251015",
 		},
+		"embedding": {"doubao-embedding-vision-250615", "doubao-embedding-vision-250328"},
 	},
 	"deepseek": {
-		"llm": {"deepseek-chat", "deepseek-reasoner"},
+		"llm": {"deepseek-v4-pro", "deepseek-v4-flash", "deepseek-chat", "deepseek-reasoner"},
 	},
 	"qianwen": {
 		"llm": {
+			"qwen3-max", "qwen3-plus",
 			"qwen-max", "qwen-plus", "qwen-turbo", "qwen-long",
 			"qwen3-235b-a22b", "qwen3-32b", "qwen3-14b", "qwen3-8b",
 			"qwen2.5-72b-instruct", "qwen2.5-32b-instruct",
 		},
 		"image": {"wanx2.1-t2i-plus", "wanx2.1-t2i-turbo", "wanx-x-v1"},
-		"video": {"wanx2.1-i2v-plus", "wanx2.1-i2v-turbo"},
+		"video": {
+			"happyhorse-1.1-r2v", "happyhorse-1.0-r2v",
+			"happyhorse-1.1-i2v", "happyhorse-1.0-i2v",
+			"happyhorse-1.1-t2v", "happyhorse-1.0-t2v",
+			"wanx2.1-i2v-plus", "wanx2.1-i2v-turbo",
+		},
 		"voice": {"cosyvoice-v2-0.5b", "cosyvoice-v1-5b"},
 	},
 	"zhipu": {
-		"llm": {"glm-4-plus", "glm-4-air", "glm-4-flash", "glm-z1-plus", "glm-z1-air"},
+		"llm": {"glm-4-plus", "glm-4-air", "glm-4-flash", "glm-z1-plus", "glm-z1-air", "glm-z1-flash"},
 	},
 	"moonshot": {
 		"llm": {"kimi-k2-0711-preview", "moonshot-v1-128k", "moonshot-v1-32k", "moonshot-v1-8k"},
 	},
 	"baidu": {
-		"llm": {"ernie-4.5-turbo-128k", "ernie-4.5-8k", "ernie-3.5-128k", "ernie-speed-128k"},
+		"llm": {"ernie-4.5-turbo-128k", "ernie-4.5-128k", "ernie-4.5-8k", "ernie-3.5-128k", "ernie-3.5-8k", "ernie-speed-128k"},
 	},
 	"tencent": {
-		"llm": {"hunyuan-turbos-latest", "hunyuan-large", "hunyuan-standard-256k"},
+		"llm": {"hunyuan-turbos-latest", "hunyuan-turbo", "hunyuan-pro", "hunyuan-large", "hunyuan-lite", "hunyuan-standard-256k"},
 	},
 	"hunyuan": {
 		"llm":   {"hy3-preview"},
 		"image": {"hy-image-lite", "hy-image-v3.0"},
 	},
 	"yi": {
-		"llm": {"yi-lightning", "yi-large", "yi-medium"},
+		"llm": {"yi-lightning", "yi-large", "yi-large-turbo", "yi-medium"},
 	},
 	"volcengine-visual": {
-		"image": {"general_v3.0", "general_v2.1", "general_v1.4"},
-		"video": {"general_v3.0-I2V"},
+		"image": {
+			"jimeng_seedream46_cvtob",
+			"jimeng_t2i_v40", "jimeng_t2i_v31", "jimeng_t2i_v30",
+			"jimeng_i2i_v30",
+			"general_v3.0", "general_v2.1", "general_v1.4",
+		},
+		"video": {
+			"jimeng_ti2v_v30_pro",
+			"jimeng_t2v_v30_1080p", "jimeng_t2v_v30",
+			"jimeng_i2v_first_v30_1080", "jimeng_i2v_first_v30",
+			"jimeng_i2v_first_tail_v30_1080", "jimeng_i2v_first_tail_v30",
+			"jimeng_i2v_recamera_v30",
+			"general_v3.0-I2V",
+		},
 	},
 	"kling": {
-		"video": {"kling-v1-6", "kling-v1-5", "kling-v1"},
-		"image": {"kling-v1-6", "kling-v1-5", "kling-v1"},
-		"sfx":   {"kling-v1"},
+		"video": {"kling-3.0-turbo", "kling-v1-6", "kling-v1-5", "kling-v1"},
+		"image": {"kling-v3", "kling-v2-1", "kling-v2", "kling-v1-6", "kling-v1-5", "kling-v1"},
+		"sfx":   {"10s", "7s", "5s", "3s", "kling-v1"},
 	},
 	"doubao-speech": {
 		"voice": {"seed-tts-2.0", "seed-tts-1.0"},
 	},
 	"doubao-speech-v1": {
-		"voice": {"BV001_streaming", "BV002_streaming"},
+		"voice": {
+			"zh_female_vv_uranus_bigtts", "zh_female_xiaohe_uranus_bigtts",
+			"zh_male_m191_uranus_bigtts", "zh_male_taocheng_uranus_bigtts",
+			"BV001_streaming", "BV002_streaming",
+		},
 	},
 	"baidu-tts": {
 		"voice": {"0", "1", "3", "4", "5", "103", "106", "110", "111"},
