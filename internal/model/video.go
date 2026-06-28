@@ -196,8 +196,6 @@ type StoryboardShot struct {
 	// 场景锚点
 	SceneAnchorID *uint `json:"scene_anchor_id,omitempty" gorm:"index"`
 
-	EpisodeNo  int    `json:"episode_no" gorm:"default:0"`           // 所属集数（0=未分集，1=第1集…）
-
 	// 角色绑定（序列化为 JSON 数组，前端直接收到 [1,2,3]）
 	CharacterIDs JSONUintSlice `json:"character_ids" gorm:"type:json"`
 

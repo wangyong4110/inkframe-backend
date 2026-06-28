@@ -445,8 +445,6 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	}
 	// 角色自动关联：按 shot.Characters JSON 中的名称匹配小说角色
 	s.autoMatchShotCharacters(shots, characters)
-	// 集数标注：按 video.EpisodeCount 均匀分配每个分镜的所属集数
-	s.tagEpisodesInMemory(shots, video.EpisodeCount)
 	if progressFn != nil {
 		progressFn(95)
 	}
@@ -686,39 +684,6 @@ func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, ch
 	logger.Printf("[AutoMatch] char: matched %d/%d shots", charMatchCount, len(shots))
 }
 
-// tagEpisodesInMemory 在内存中按集数均匀分配分镜编号（仅设置 EpisodeNo 字段，不写 DB）。
-// 在批量插入之前调用，确保 EpisodeNo 随分镜一起写入。
-func (s *VideoService) tagEpisodesInMemory(shots []*model.StoryboardShot, episodeCount int) {
-	if episodeCount <= 0 || len(shots) == 0 {
-		return
-	}
-	total := len(shots)
-	for i, shot := range shots {
-		// 第 i 个分镜（0-indexed）属于第几集（1-indexed）
-		shot.EpisodeNo = i*episodeCount/total + 1
-	}
-	logger.Printf("[tagEpisodes] tagged %d shots across %d episodes", total, episodeCount)
-}
-
-// tagEpisodes 按集数均匀分配分镜编号（幂等，可重复调用）。
-// 仅当 episodeCount > 0 时执行；按顺序将 totalShots 均分为 episodeCount 集。
-// 适用于已落库的分镜的集数重算（例如用户修改集数后重新标注）。
-func (s *VideoService) tagEpisodes(videoID uint, shots []*model.StoryboardShot, episodeCount int) {
-	if episodeCount <= 0 || len(shots) == 0 {
-		return
-	}
-	total := len(shots)
-	for i, shot := range shots {
-		epNo := i*episodeCount/total + 1
-		if shot.EpisodeNo == epNo {
-			continue // 未变化，跳过
-		}
-		shot.EpisodeNo = epNo
-		if err := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"episode_no": epNo}); err != nil {
-			logger.Errorf("[tagEpisodes] videoID=%d shotID=%d: %v", videoID, shot.ID, err)
-		}
-	}
-}
 
 // charRuneOverlap 返回两个字符串的汉字级重叠比例（以较短串为分母）。
 // 用于模糊角色名匹配，如"萧炎"vs"炎少"（"炎"重叠 → 0.5，超过阈值即视为同一角色）。
