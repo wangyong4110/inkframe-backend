@@ -158,6 +158,8 @@ func autoMigrate(db *gorm.DB) error {
 		&model.ContentStats{},
 		// 用户反馈
 		&model.UserFeedback{},
+		// 短剧模板
+		&model.DramaTemplate{},
 	); err != nil {
 		return err
 	}

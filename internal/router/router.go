@@ -66,6 +66,7 @@ type Config struct {
 	SysAdminHandler        *handler.SysAdminHandler
 	SensitiveWordHandler   *handler.SensitiveWordHandler
 	FeedbackHandler        *handler.FeedbackHandler
+	DramaTemplateHandler   *handler.DramaTemplateHandler
 }
 
 // SetupRouter 配置路由
@@ -721,6 +722,18 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		if cfg.FeedbackHandler != nil {
 			v1.POST("/feedback", cfg.FeedbackHandler.Submit)
 			v1.GET("/feedback/my", cfg.FeedbackHandler.ListMyFeedback)
+		}
+
+		// 短剧模板
+		if cfg.DramaTemplateHandler != nil {
+			dt := v1.Group("/drama-templates")
+			{
+				dt.GET("", cfg.DramaTemplateHandler.ListTemplates)
+				dt.GET("/:id", cfg.DramaTemplateHandler.GetTemplate)
+				dt.POST("", cfg.DramaTemplateHandler.CreateTemplate)
+				dt.PUT("/:id", cfg.DramaTemplateHandler.UpdateTemplate)
+				dt.DELETE("/:id", cfg.DramaTemplateHandler.DeleteTemplate)
+			}
 		}
 
 		// 敏感词管理（管理员）

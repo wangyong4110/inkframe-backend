@@ -97,6 +97,7 @@ type Repositories struct {
 	EditingLockRepo          *repository.EditingLockRepository
 	SensitiveWordRepo        *repository.SensitiveWordRuleRepository
 	FeedbackRepo             *repository.FeedbackRepository
+	DramaTemplateRepo        *repository.DramaTemplateRepository
 }
 
 // initRepositories 初始化仓库层
@@ -179,6 +180,7 @@ func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 		EditingLockRepo:          repository.NewEditingLockRepository(db),
 		SensitiveWordRepo:        repository.NewSensitiveWordRuleRepository(db),
 		FeedbackRepo:             repository.NewFeedbackRepository(db),
+		DramaTemplateRepo:        repository.NewDramaTemplateRepository(db),
 	}
 }
 
@@ -246,6 +248,8 @@ type Services struct {
 	OutlineReviewService        *service.OutlineReviewService
 	// ── Collab ──
 	CollabService               *service.CollabService
+	// ── Drama Template ──
+	DramaTemplateService        *service.DramaTemplateService
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -604,7 +608,7 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 	notifSvc := service.NewNotificationService(repos.NotificationRepo)
 
 	// 后置注入：将通知服务与技能仓库注入章节生成管道
-	content.Novel.WithNotificationService(notifSvc)
+	content.Novel.WithNotificationService(notifSvc).WithDramaTemplateService(service.NewDramaTemplateService(repos.DramaTemplateRepo))
 	content.Chapter.WithNotificationService(notifSvc).WithSkillRepo(repos.SkillRepo)
 
 	// 后置注入：将通知服务注入任务服务，以便任务失败时发送站内信
@@ -721,6 +725,8 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		).WithTenantUserRepo(repos.TenantUserRepo).
 			WithNotificationService(notifSvc).
 			WithRedis(redisClient), // Fix: cross-instance SSE broadcast
+		// ── Drama Template ──
+		DramaTemplateService: service.NewDramaTemplateService(repos.DramaTemplateRepo),
 	}
 
 	// 素材删除后清理 SFX 查询缓存（防止已删除音效继续被复用）
@@ -805,6 +811,7 @@ type Handlers struct {
 	SysAdminHandler       *handler.SysAdminHandler
 	SensitiveWordHandler  *handler.SensitiveWordHandler
 	FeedbackHandler       *handler.FeedbackHandler
+	DramaTemplateHandler  *handler.DramaTemplateHandler
 }
 
 // initHandlers 初始化处理器
@@ -917,7 +924,8 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			service.NewSysAdminService(db, cfg.Server.JWTSecret, cfg.Server.JWTExpiry),
 		).WithAuditService(services.AuditService),
 		SensitiveWordHandler: handler.NewSensitiveWordHandler(repos.SensitiveWordRepo),
-		FeedbackHandler: handler.NewFeedbackHandler(service.NewFeedbackService(repos.FeedbackRepo)),
+		FeedbackHandler:      handler.NewFeedbackHandler(service.NewFeedbackService(repos.FeedbackRepo)),
+		DramaTemplateHandler: handler.NewDramaTemplateHandler(services.DramaTemplateService),
 	}
 }
 
