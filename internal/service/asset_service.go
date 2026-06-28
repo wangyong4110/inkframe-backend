@@ -856,10 +856,27 @@ func (s *AssetService) CancelCrawlJob(id uint) error {
 	return s.crawlRepo.UpdateFinal(id, "cancelled", 0, "manually cancelled", nil)
 }
 
-// RecoverOrphanedCrawlJobs marks jobs stuck in running/pending as failed.
-// Should be called once at server startup.
-func (s *AssetService) RecoverOrphanedCrawlJobs() {
-	_ = s.crawlRepo.MarkRunningAsFailed()
+// ResumeCrawlJob is called by TaskService.Boot() to re-run a crawl job interrupted by a server
+// restart. It resets per-run stats and executes the crawl synchronously; the caller (recoverOrphaned)
+// is already running in a dedicated goroutine.
+func (s *AssetService) ResumeCrawlJob(task *model.AsyncTask) {
+	job, err := s.crawlRepo.GetByID(task.EntityID)
+	if err != nil {
+		_ = s.taskSvc.Fail(task.TaskID, "load crawl job: "+err.Error())
+		return
+	}
+	if err := s.crawlRepo.Reset(job.ID); err != nil {
+		_ = s.taskSvc.Fail(task.TaskID, "reset crawl job: "+err.Error())
+		return
+	}
+	job.Stats.Imported, job.Stats.Skipped, job.Stats.Failed, job.Stats.TotalFound = 0, 0, 0, 0
+	job.Stats.ErrorMsg = ""
+	job.Stats.StartedAt, job.Stats.CompletedAt = nil, nil
+	job.TaskID = task.TaskID
+
+	ctx, cancel := context.WithCancel(context.Background())
+	s.taskSvc.RegisterCancel(task.TaskID, cancel)
+	s.runCrawlJob(ctx, job)
 }
 
 func (s *AssetService) runCrawlJob(ctx context.Context, job *model.CrawlJob) {

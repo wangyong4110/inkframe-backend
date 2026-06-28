@@ -94,7 +94,6 @@ func main() {
 	// 3b. 预置默认数据（INSERT IGNORE，幂等安全）
 	seedDefaultData(db)
 	seedAIModels(db)
-	seedProviderVoices(db)
 	initSystemAdmin(db, cfg)
 	seedWebSearchMcpTool(db, cfg)
 	seedWikiSearchMcpTool(db, cfg)
@@ -181,7 +180,6 @@ func main() {
 	services.AssetService.WithFreesoundKey(getEnv("FREESOUND_API_KEY", ""))
 	services.AssetService.WithPixabayKey(getEnv("PIXABAY_API_KEY", ""))
 	services.AssetService.WithPexelsKey(getEnv("PEXELS_API_KEY", cfg.Crawl.PexelsKey))
-	services.AssetService.RecoverOrphanedCrawlJobs()
 
 	sfxService := service.NewSFXService(services.AIService, storageSvc, repos.StoryboardRepo, service.SFXServiceConfig{
 		SFXDir:   getEnv("SFX_DIR", ""),

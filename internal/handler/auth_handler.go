@@ -64,6 +64,14 @@ func (h *AuthHandler) Register(c *gin.Context) {
 
 	resp, err := h.authService.Register(&req)
 	if err != nil {
+		var usernameErr *service.UsernameTakenError
+		if errors.As(err, &usernameErr) {
+			c.JSON(http.StatusConflict, gin.H{
+				"error":       err.Error(),
+				"suggestions": usernameErr.Suggestions,
+			})
+			return
+		}
 		respondBadRequest(c, err.Error())
 		return
 	}

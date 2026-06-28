@@ -2,11 +2,15 @@ package metrics
 
 import (
 	"database/sql"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/redis/go-redis/v9"
 )
+
+// ServerStartTime records when the process started, used to compute uptime.
+var ServerStartTime = time.Now()
 
 // ─── HTTP 请求指标 ────────────────────────────────────────────────────────────
 

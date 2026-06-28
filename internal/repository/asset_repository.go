@@ -558,13 +558,6 @@ func (r *CrawlJobRepository) SetTaskID(id uint, taskID string) error {
 	return r.db.Model(&model.CrawlJob{}).Where("id = ?", id).Update("task_id", taskID).Error
 }
 
-// MarkRunningAsFailed marks jobs stuck in "running" or "pending" as "failed".
-// Called on server startup to recover from unclean shutdowns.
-func (r *CrawlJobRepository) MarkRunningAsFailed() error {
-	return r.db.Model(&model.CrawlJob{}).
-		Where("status IN ?", []string{"running", "pending"}).
-		Updates(map[string]interface{}{"status": "failed", "error_msg": "server restarted"}).Error
-}
 
 // ─── AssetShareLinkRepository ─────────────────────────────────────────────────
 

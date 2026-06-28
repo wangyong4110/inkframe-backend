@@ -1,13 +1,12 @@
 package model
 
 import (
-	"encoding/json"
 	"time"
 
 	"gorm.io/gorm"
 )
 
-// VoiceEntry 单条音色元数据，存储于 ModelProvider.VoicesJSON（JSON 数组）。
+// VoiceEntry 单条音色元数据（见 builtin_voices.go）。
 // 模型-音色的支持关系（如 qwen-tts 哪些音色支持哪个 model 参数）硬编码在各 TTS Provider 实现里。
 type VoiceEntry struct {
 	ID       string  `json:"id"`                  // 调用 TTS API 时使用的音色 ID
@@ -35,7 +34,6 @@ type ModelProvider struct {
 	// 元数据（系统级模板字段，由 seedAIModels 写入，用户无需填写）
 	NeedsSecretKey bool   `json:"needs_secret_key" gorm:"default:false"` // 是否需要 AK/SK 双密钥鉴权
 	StaticModels   string `json:"static_models,omitempty" gorm:"type:text"` // JSON 字符串，不支持 /models 端点时的内置模型列表
-	VoicesJSON     string `json:"voices_json,omitempty" gorm:"type:text"`   // []VoiceEntry JSON，仅 TTS 类提供商
 
 	// 状态
 	IsActive    bool   `json:"is_active" gorm:"default:true"`
@@ -89,17 +87,6 @@ func (p *ModelProvider) AfterFind(tx *gorm.DB) error {
 	return nil
 }
 
-// ParseVoices 解析 VoicesJSON 为 []VoiceEntry。
-func (p *ModelProvider) ParseVoices() []VoiceEntry {
-	if p.VoicesJSON == "" {
-		return nil
-	}
-	var voices []VoiceEntry
-	if err := json.Unmarshal([]byte(p.VoicesJSON), &voices); err != nil {
-		return nil
-	}
-	return voices
-}
 
 // AIModel AI模型
 type AIModel struct {

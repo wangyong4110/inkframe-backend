@@ -611,7 +611,7 @@ func NewRetryProvider(provider AIProvider, maxRetries int, baseDelay time.Durati
 		provider:   provider,
 		maxRetries: maxRetries,
 		baseDelay:  baseDelay,
-		cb:         NewCircuitBreaker(5, 30*time.Second),
+		cb:         NewCircuitBreaker(provider.GetName(), 5, 30*time.Second),
 	}
 }
 
@@ -647,6 +647,24 @@ func isRetryable(err error) bool {
 	return false
 }
 
+// shouldPenalizeCB reports whether an error should count toward the circuit breaker threshold.
+// Timeouts and rate limits indicate request-level slowness or throttling — the provider is
+// still reachable. Only connection failures and server errors indicate true unavailability.
+func shouldPenalizeCB(err error) bool {
+	if err == nil {
+		return false
+	}
+	if IsTimeoutError(err) {
+		return false // slow request, not a downed provider
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "429") || strings.Contains(msg, "rate limit") ||
+		strings.Contains(msg, "context canceled") {
+		return false // throttled or caller-canceled, not a provider fault
+	}
+	return true
+}
+
 // isRetryableStatus 判断 HTTP 状态码是否值得重试
 func isRetryableStatus(statusCode int) bool {
 	return statusCode == http.StatusTooManyRequests ||
@@ -675,25 +693,30 @@ func (p *RetryProvider) Generate(ctx context.Context, req *GenerateRequest) (*Ge
 		}
 		resp, err := p.provider.Generate(ctx, req)
 		if err != nil {
-			p.cb.RecordFailure()
 			if isRetryable(err) {
 				lastErr = err
-				continue
+				continue // 可重试：不计入 CB，等所有重试耗尽再计一次
+			}
+			if shouldPenalizeCB(err) {
+				logger.Errorf("[RetryProvider] provider=%s penalizing circuit breaker: %v", p.provider.GetName(), err)
+				p.cb.RecordFailure()
 			}
 			return nil, err
 		}
-		// 检查响应中是否包含可重试错误
 		if resp != nil && resp.Error != "" {
 			if isRetryable(fmt.Errorf(resp.Error)) {
-				p.cb.RecordFailure()
 				lastErr = fmt.Errorf(resp.Error)
 				continue
 			}
-			p.cb.RecordSuccess()
+			// Non-retryable provider-level error (e.g. 400 bad request): don't count as success or failure.
 			return resp, nil
 		}
 		p.cb.RecordSuccess()
 		return resp, nil
+	}
+	if shouldPenalizeCB(lastErr) {
+		logger.Errorf("[RetryProvider] provider=%s penalizing circuit breaker after %d attempts: %v", p.provider.GetName(), p.maxRetries, lastErr)
+		p.cb.RecordFailure()
 	}
 	return nil, fmt.Errorf("RetryProvider.Generate failed after %d attempts: %w", p.maxRetries, lastErr)
 }
@@ -717,15 +740,22 @@ func (p *RetryProvider) GenerateStream(ctx context.Context, req *GenerateRequest
 		}
 		ch, err := p.provider.GenerateStream(ctx, req)
 		if err != nil {
-			p.cb.RecordFailure()
 			if isRetryable(err) {
 				lastErr = err
 				continue
+			}
+			if shouldPenalizeCB(err) {
+				logger.Errorf("[RetryProvider] provider=%s penalizing circuit breaker (stream): %v", p.provider.GetName(), err)
+				p.cb.RecordFailure()
 			}
 			return nil, err
 		}
 		p.cb.RecordSuccess()
 		return ch, nil
+	}
+	if shouldPenalizeCB(lastErr) {
+		logger.Errorf("[RetryProvider] provider=%s penalizing circuit breaker (stream) after %d attempts: %v", p.provider.GetName(), p.maxRetries, lastErr)
+		p.cb.RecordFailure()
 	}
 	return nil, fmt.Errorf("RetryProvider.GenerateStream failed after %d attempts: %w", p.maxRetries, lastErr)
 }
@@ -749,15 +779,20 @@ func (p *RetryProvider) Embed(ctx context.Context, text string) ([]float32, erro
 		}
 		result, err := p.provider.Embed(ctx, text)
 		if err != nil {
-			p.cb.RecordFailure()
 			if isRetryable(err) {
 				lastErr = err
 				continue
+			}
+			if shouldPenalizeCB(err) {
+				p.cb.RecordFailure()
 			}
 			return nil, err
 		}
 		p.cb.RecordSuccess()
 		return result, nil
+	}
+	if shouldPenalizeCB(lastErr) {
+		p.cb.RecordFailure()
 	}
 	return nil, fmt.Errorf("RetryProvider.Embed failed after %d attempts: %w", p.maxRetries, lastErr)
 }
@@ -782,16 +817,17 @@ func (p *RetryProvider) ImageGenerate(ctx context.Context, req *ImageGenerateReq
 		}
 		resp, err := p.provider.ImageGenerate(ctx, req)
 		if err != nil {
-			p.cb.RecordFailure()
 			if isRetryable(err) {
 				lastErr = err
 				continue
+			}
+			if shouldPenalizeCB(err) {
+				p.cb.RecordFailure()
 			}
 			return nil, err
 		}
 		if resp != nil && resp.Error != "" {
 			if isRetryable(fmt.Errorf(resp.Error)) {
-				p.cb.RecordFailure()
 				lastErr = fmt.Errorf(resp.Error)
 				continue
 			}
@@ -800,6 +836,9 @@ func (p *RetryProvider) ImageGenerate(ctx context.Context, req *ImageGenerateReq
 		}
 		p.cb.RecordSuccess()
 		return resp, nil
+	}
+	if shouldPenalizeCB(lastErr) {
+		p.cb.RecordFailure()
 	}
 	return nil, fmt.Errorf("RetryProvider.ImageGenerate failed after %d attempts: %w", p.maxRetries, lastErr)
 }
@@ -824,16 +863,17 @@ func (p *RetryProvider) AudioGenerate(ctx context.Context, req *AudioGenerateReq
 		}
 		resp, err := p.provider.AudioGenerate(ctx, req)
 		if err != nil {
-			p.cb.RecordFailure()
 			if isRetryable(err) {
 				lastErr = err
 				continue
+			}
+			if shouldPenalizeCB(err) {
+				p.cb.RecordFailure()
 			}
 			return nil, err
 		}
 		if resp != nil && resp.Error != "" {
 			if isRetryable(fmt.Errorf(resp.Error)) {
-				p.cb.RecordFailure()
 				lastErr = fmt.Errorf(resp.Error)
 				continue
 			}
@@ -843,12 +883,19 @@ func (p *RetryProvider) AudioGenerate(ctx context.Context, req *AudioGenerateReq
 		p.cb.RecordSuccess()
 		return resp, nil
 	}
+	if shouldPenalizeCB(lastErr) {
+		p.cb.RecordFailure()
+	}
 	return nil, fmt.Errorf("RetryProvider.AudioGenerate failed after %d attempts: %w", p.maxRetries, lastErr)
 }
 
 func (p *RetryProvider) GetName() string      { return p.provider.GetName() }
 func (p *RetryProvider) GetModels() []string  { return p.provider.GetModels() }
 func (p *RetryProvider) HealthCheck(ctx context.Context) error { return p.provider.HealthCheck(ctx) }
+
+// ResetCircuit force-closes the circuit breaker. Call after a successful health check to
+// immediately unblock requests that were stalled by a previously open circuit.
+func (p *RetryProvider) ResetCircuit() { p.cb.Reset() }
 
 // SwitchProvider 在 ModelManager 中动态切换某个任务类型的默认 Provider
 func (m *ModelManager) SwitchProvider(providerName string) error {

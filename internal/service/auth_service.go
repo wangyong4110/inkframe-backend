@@ -20,6 +20,33 @@ import (
 	"gorm.io/gorm"
 )
 
+// UsernameTakenError is returned when the requested username is already registered.
+// Suggestions holds up to 3 available alternatives.
+type UsernameTakenError struct {
+	Suggestions []string
+}
+
+func (e *UsernameTakenError) Error() string { return "username already taken" }
+
+// suggestUsernames returns up to 3 available username alternatives for the given base.
+// It first tries base+N (N=1..99), then base_<4-char random> as fallback.
+func suggestUsernames(base string, exists func(string) bool) []string {
+	var out []string
+	for i := 1; len(out) < 3 && i <= 99; i++ {
+		c := fmt.Sprintf("%s%d", base, i)
+		if !exists(c) {
+			out = append(out, c)
+		}
+	}
+	for attempt := 0; len(out) < 3 && attempt < 10; attempt++ {
+		c := base + "_" + strings.ToLower(uuid.New().String()[:4])
+		if !exists(c) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // hashToken 对原始 token 做 SHA-256，防止数据库泄露时 token 被直接利用。
 func hashToken(raw string) string {
 	sum := sha256.Sum256([]byte(raw))
@@ -181,6 +208,15 @@ func (s *AuthService) Register(req *RegisterRequest) (interface{}, error) {
 		req.TenantName = req.Username
 	}
 	req.Email = strings.ToLower(strings.TrimSpace(req.Email))
+	// Check username uniqueness
+	if _, err := s.userRepo.GetByUsername(req.Username); err == nil {
+		suggestions := suggestUsernames(req.Username, func(u string) bool {
+			_, err := s.userRepo.GetByUsername(u)
+			return err == nil
+		})
+		return nil, &UsernameTakenError{Suggestions: suggestions}
+	}
+
 	if existingUser, err := s.userRepo.GetByEmail(req.Email); err == nil {
 		// 邮箱已存在：若开启验证且用户尚未验证，视为"重新发送验证邮件"而非报错
 		if s.requireVerification && existingUser.SecurityMeta.EmailVerifiedAt == nil {

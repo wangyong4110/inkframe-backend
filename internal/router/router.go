@@ -1036,6 +1036,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		sa.Use(middleware.RequireSystemAdmin())
 		{
 			sa.GET("/overview", cfg.SysAdminHandler.GetOverview)
+			sa.GET("/metrics", cfg.SysAdminHandler.GetMetrics)
 			sa.GET("/tenants", cfg.SysAdminHandler.ListTenants)
 			sa.GET("/tenants/:id", cfg.SysAdminHandler.GetTenant)
 			sa.PUT("/tenants/:id", cfg.SysAdminHandler.UpdateTenant)
@@ -1057,6 +1058,10 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			sa.POST("/notifications/tenant/:id", cfg.SysAdminHandler.NotifyTenant)
 			sa.GET("/experiments", cfg.SysAdminHandler.ListExperiments)
 			sa.POST("/change-password", cfg.SysAdminHandler.ChangePassword)
+			sa.GET("/tasks/failure-stats", cfg.SysAdminHandler.GetTaskFailureStats)
+			sa.GET("/users/registration-trend", cfg.SysAdminHandler.GetUserRegistrationTrend)
+			sa.GET("/content/overview", cfg.SysAdminHandler.GetContentOverview)
+			sa.GET("/ai-usage/stats", cfg.SysAdminHandler.GetModelUsageStats)
 			if cfg.FeedbackHandler != nil {
 				sa.GET("/feedback/stats", cfg.FeedbackHandler.AdminStats)
 				sa.GET("/feedback", cfg.FeedbackHandler.AdminList)

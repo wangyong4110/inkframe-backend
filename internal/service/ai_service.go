@@ -176,6 +176,12 @@ func (s *AIService) runProviderHealthChecks() {
 			} else if hErr := provider.HealthCheck(ctx); hErr != nil {
 				status = "degraded"
 				logger.Errorf("[health] provider=%s err=%v", p.Name, hErr)
+			} else {
+				// Health check passed: reset any open circuit breaker on the cached provider
+				// so requests are unblocked immediately without waiting for the CB timeout.
+				if rp, ok := provider.(*ai.RetryProvider); ok {
+					rp.ResetCircuit()
+				}
 			}
 			if upErr := s.providerRepo.UpdateHealthStatus(p.ID, status); upErr != nil {
 				logger.Errorf("[health] UpdateHealthStatus provider=%s: %v", p.Name, upErr)
@@ -428,6 +434,12 @@ func (s *AIService) getTenantProvider(tenantID uint, providerName string, target
 		return nil, fmt.Errorf("failed to decrypt API secret key for provider %q (verify encryption key configuration)", matched.Name)
 	}
 
+	// Trim whitespace from credentials/endpoint — users sometimes paste values with
+	// leading/trailing spaces which cause URL-parse failures at health check time.
+	apiKey = strings.TrimSpace(apiKey)
+	apiSecretKey = strings.TrimSpace(apiSecretKey)
+	matched.APIEndpoint = strings.TrimSpace(matched.APIEndpoint)
+
 	// Instantiate the provider.
 	// 名称优先匹配已知 key；对自定义名称（如"豆包图片"）则根据 endpoint 推断构造器。
 	timeout := ai.ResolveTimeout(0) // timeout/concurrency/rateLimit 由 AIModel 级别控制，provider 使用默认值
@@ -593,6 +605,25 @@ func (s *AIService) invalidateLocalProviderCache(providerName string) {
 		if ok && strings.HasSuffix(key, ":"+providerName) {
 			s.providerCache.Delete(k)
 		}
+		return true
+	})
+}
+
+// ResetProviderCircuit resets the circuit breaker on all cached provider instances whose
+// key ends with providerName, then evicts them from the cache so the next request creates
+// a fresh instance. Use this via the sysadmin API to recover from a stuck-open circuit.
+func (s *AIService) ResetProviderCircuit(providerName string) {
+	s.providerCache.Range(func(k, v any) bool {
+		key, _ := k.(string)
+		if !strings.HasSuffix(key, ":"+providerName) && providerName != "" {
+			return true
+		}
+		if entry, ok := v.(providerCacheEntry); ok {
+			if rp, ok := entry.provider.(*ai.RetryProvider); ok {
+				rp.ResetCircuit()
+			}
+		}
+		s.providerCache.Delete(k)
 		return true
 	})
 }
@@ -2064,7 +2095,7 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 
 	var provider ai.AIProvider
 
-	// 1. DB 模式：优先选取 voices_json 中包含请求 voice ID 的 provider
+	// 1. DB 模式：优先选取内置音色表中包含请求 voice ID 的 provider
 	if s.providerRepo != nil {
 		if p, err := s.loadDBVoiceProvider(tenantID, "voice", voice); err == nil && p != nil {
 			provider = p
@@ -2171,7 +2202,7 @@ func (s *AIService) loadDBProviderByType(tenantID uint, modelType string) (ai.AI
 	return s.loadDBVoiceProvider(tenantID, modelType, "")
 }
 
-// loadDBVoiceProvider 按 voiceID 从 voices_json 优先匹配，未命中则取第一个有效 provider。
+// loadDBVoiceProvider 按 voiceID 从内置音色表优先匹配，未命中则取第一个有效 provider。
 // voiceID 为空时退化为 loadDBProviderByType 行为。
 func (s *AIService) loadDBVoiceProvider(tenantID uint, modelType, voiceID string) (ai.AIProvider, error) {
 	providers, err := s.providerRepo.ListByModelType(tenantID, modelType)
@@ -2194,9 +2225,8 @@ func (s *AIService) loadDBVoiceProvider(tenantID uint, modelType, voiceID string
 			continue
 		}
 		pri := 1
-		if voiceID != "" && p.VoicesJSON != "" {
-			voices := p.ParseVoices()
-			for _, v := range voices {
+		if voiceID != "" {
+			for _, v := range model.BuiltinVoices(p.Name) {
 				if v.ID == voiceID {
 					pri = 0
 					break

@@ -204,6 +204,16 @@ func (h *SysAdminHandler) CancelTask(c *gin.Context) {
 	respondOK(c, gin.H{"message": "cancelled"})
 }
 
+// GetMetrics returns a runtime/business metrics snapshot for the admin dashboard.
+func (h *SysAdminHandler) GetMetrics(c *gin.Context) {
+	snap, err := h.svc.GetMetrics()
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, snap)
+}
+
 // ListAuditLogs returns a paginated list of audit log entries.
 func (h *SysAdminHandler) ListAuditLogs(c *gin.Context) {
 	p := parsePagination(c)
@@ -332,6 +342,48 @@ func (h *SysAdminHandler) ListExperiments(c *gin.Context) {
 		return
 	}
 	respondOK(c, gin.H{"items": data, "total": total, "page": p.Page, "size": p.PageSize})
+}
+
+// GetTaskFailureStats returns failure statistics grouped by task type.
+func (h *SysAdminHandler) GetTaskFailureStats(c *gin.Context) {
+	data, err := h.svc.GetTaskFailureStats()
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, data)
+}
+
+// GetUserRegistrationTrend returns daily user registration counts.
+func (h *SysAdminHandler) GetUserRegistrationTrend(c *gin.Context) {
+	days, _ := strconv.Atoi(c.DefaultQuery("days", "30"))
+	data, err := h.svc.GetUserRegistrationTrend(days)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, data)
+}
+
+// GetContentOverview returns platform-wide content engagement statistics.
+func (h *SysAdminHandler) GetContentOverview(c *gin.Context) {
+	data, err := h.svc.GetContentOverview()
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, data)
+}
+
+// GetModelUsageStats returns aggregated AI model usage statistics.
+func (h *SysAdminHandler) GetModelUsageStats(c *gin.Context) {
+	days, _ := strconv.Atoi(c.DefaultQuery("days", "30"))
+	data, err := h.svc.GetModelUsageStats(days)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, data)
 }
 
 // ChangePassword changes the currently authenticated system admin's password.

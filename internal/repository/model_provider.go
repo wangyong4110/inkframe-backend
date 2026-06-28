@@ -72,10 +72,10 @@ func (r *ModelProviderRepository) ListByModelType(tenantID uint, modelType strin
 	var providers []*model.ModelProvider
 	var err error
 	if modelType == "voice" {
-		// 只查租户自己的 provider（tenant_id > 0），系统级是模板不直接暴露
+		// 只查租户自己的 provider（tenant_id > 0），按内置音色表过滤 TTS 提供商
 		err = r.db.Where(
-			"tenant_id = ? AND deleted_at IS NULL AND is_active = 1 AND voices_json != '' AND voices_json != '[]'",
-			tenantID,
+			"tenant_id = ? AND deleted_at IS NULL AND is_active = 1 AND name IN ?",
+			tenantID, model.TTSProviderNames(),
 		).Find(&providers).Error
 	} else {
 		err = r.db.Where(
@@ -171,7 +171,7 @@ func taskTypeToModelType(taskType string) string {
 }
 
 // GetAvailableByTaskType 获取任务可用的模型。
-// voice_gen 任务类型从 ink_model_provider.voices_json 读取音色列表，其余任务类型从 ink_ai_model 查询。
+// voice_gen 任务类型从内置音色表（model.BuiltinVoices）构造虚拟 AIModel 列表，其余任务类型从 ink_ai_model 查询。
 // tenantID > 0 时只返回该租户自己的模型 + 系统模型（tenant_id=0）；
 // tenantID = 0 时仅返回系统模型。
 func (r *AIModelRepository) GetAvailableByTaskType(taskType string, tenantID uint) ([]*model.AIModel, error) {
@@ -207,14 +207,14 @@ func (r *AIModelRepository) GetVoicesFromProvider(tenantID, providerID uint) ([]
 		"ELSE api_key != '' END)"
 	var providers []*model.ModelProvider
 	if err := r.db.Where(
-		"id = ? AND tenant_id = ? AND deleted_at IS NULL AND is_active = 1 AND voices_json != '' AND voices_json != '[]' AND "+credCond,
-		providerID, tenantID,
+		"id = ? AND tenant_id = ? AND deleted_at IS NULL AND is_active = 1 AND name IN ? AND "+credCond,
+		providerID, tenantID, model.TTSProviderNames(),
 	).Find(&providers).Error; err != nil {
 		return nil, err
 	}
 	var result []*model.AIModel
 	for _, p := range providers {
-		for _, v := range p.ParseVoices() {
+		for _, v := range model.BuiltinVoices(p.Name) {
 			result = append(result, &model.AIModel{
 				ProviderID:  p.ID,
 				Provider:    p,
@@ -231,12 +231,11 @@ func (r *AIModelRepository) GetVoicesFromProvider(tenantID, providerID uint) ([]
 	return result, nil
 }
 
-// getVoicesFromProviders 已废弃，保留仅供内部回退，不再直接调用。
 func (r *AIModelRepository) getVoicesFromProviders(tenantID uint) ([]*model.AIModel, error) {
 	credCond := "(CASE WHEN needs_secret_key = 1 " +
 		"THEN (api_key != '' AND api_secret_key != '') " +
 		"ELSE api_key != '' END)"
-	q := r.db.Where("deleted_at IS NULL AND is_active = 1 AND voices_json != '' AND voices_json != '[]' AND " + credCond)
+	q := r.db.Where("deleted_at IS NULL AND is_active = 1 AND name IN ? AND "+credCond, model.TTSProviderNames())
 	if tenantID > 0 {
 		q = q.Where("tenant_id = ?", tenantID)
 	} else {
@@ -248,7 +247,7 @@ func (r *AIModelRepository) getVoicesFromProviders(tenantID uint) ([]*model.AIMo
 	}
 	var result []*model.AIModel
 	for _, p := range providers {
-		for _, v := range p.ParseVoices() {
+		for _, v := range model.BuiltinVoices(p.Name) {
 			result = append(result, &model.AIModel{
 				ProviderID:  p.ID,
 				Provider:    p,

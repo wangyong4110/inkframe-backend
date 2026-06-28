@@ -14,7 +14,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-06-27-v5"
+const schemaVersion = "2026-06-28-v1"
 
 // autoMigrate 自动迁移（带版本跳过优化 + MySQL Advisory Lock 防并发 DDL）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -163,6 +163,9 @@ func autoMigrate(db *gorm.DB) error {
 		return err
 	}
 
+	// 删除已废弃列（voices_json 已迁移至代码内置表 model.BuiltinVoices）
+	db.Exec("ALTER TABLE ink_model_provider DROP COLUMN IF EXISTS voices_json")
+
 	// 补全缺失索引（幂等，已存在则跳过）
 	ensureCriticalIndexes(db)
 
@@ -172,15 +175,14 @@ func autoMigrate(db *gorm.DB) error {
 }
 
 // initSystemAdmin creates the system admin user if it doesn't exist.
+// Only runs when admin.email and admin.password are explicitly set in config.yaml.
 // Call this from main.go after DB is ready.
 func initSystemAdmin(db *gorm.DB, cfg *config.Config) {
 	email := cfg.Admin.Email
-	if email == "" {
-		email = "admin@inkframe.io"
-	}
 	password := cfg.Admin.Password
-	if password == "" {
-		password = "Admin@123456"
+	if email == "" || password == "" {
+		logger.Printf("[initSystemAdmin] skipped: admin.email/password not configured in config.yaml")
+		return
 	}
 
 	var user model.User

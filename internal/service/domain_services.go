@@ -235,7 +235,6 @@ func (s *ModelService) SeedAllProviders() {
 		}
 		s.seedProviderModel(p)
 		s.copySystemModels(p)
-		s.inheritVoicesJSON(p)
 	}
 }
 
@@ -304,26 +303,9 @@ func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, ten
 	}
 	s.seedProviderModel(provider)
 	s.copySystemModels(provider)
-	s.inheritVoicesJSON(provider)
 	return provider, nil
 }
 
-// inheritVoicesJSON 从同名系统级 provider 复制 voices_json 到租户级 provider。
-// 每次调用都强制刷新，确保 seed 更新的新音色能同步到租户 provider。
-func (s *ModelService) inheritVoicesJSON(target *model.ModelProvider) {
-	if target.TenantID == 0 {
-		return
-	}
-	sys, err := s.providerRepo.GetSystemProvider(target.Name)
-	if err != nil || sys.VoicesJSON == "" {
-		return
-	}
-	if target.VoicesJSON == sys.VoicesJSON {
-		return // 无变化，跳过 DB 写入
-	}
-	target.VoicesJSON = sys.VoicesJSON
-	_ = s.providerRepo.Update(target)
-}
 
 func (s *ModelService) UpdateProvider(id uint, tenantID uint, req *model.UpdateModelProviderRequest) (*model.ModelProvider, error) {
 	provider, err := s.providerRepo.GetByIDAndTenant(id, tenantID)
@@ -448,7 +430,18 @@ func (s *ModelService) CreateModel(req *model.CreateAIModelRequest, tenantID uin
 		RateLimit:   req.RateLimit,
 		IsActive:    true, // 用户主动添加的模型直接激活；copySystemModels 预填的才用 false
 	}
-	return m, s.modelRepo.FirstOrCreate(m)
+	if err := s.modelRepo.FirstOrCreate(m); err != nil {
+		return nil, err
+	}
+	// FirstOrCreate finds the existing row without modifying it when (provider_id, name) already
+	// exists. If the seed data pre-populated the row with is_active=false, we must activate it now.
+	if !m.IsActive {
+		m.IsActive = true
+		if err := s.modelRepo.Update(m); err != nil {
+			return nil, err
+		}
+	}
+	return m, nil
 }
 
 func (s *ModelService) UpdateModel(id uint, tenantID uint, req *model.UpdateAIModelRequest) (*model.AIModel, error) {

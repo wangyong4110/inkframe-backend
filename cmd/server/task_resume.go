@@ -1125,13 +1125,15 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		})
 	}
 
-	// import / crawl_job: cannot safely re-run after restart (would create duplicates)
+	// import: cannot safely re-run after restart (would create duplicates)
 	svcs.TaskService.RegisterResumeHandler(service.TaskTypeImport, func(t *model.AsyncTask) {
 		svcs.TaskService.Fail(t.TaskID, "服务重启，请重新提交") //nolint:errcheck
 	})
-	svcs.TaskService.RegisterResumeHandler(service.TaskTypeCrawlJob, func(t *model.AsyncTask) {
-		svcs.TaskService.Fail(t.TaskID, "服务重启，请重新提交") //nolint:errcheck
-	})
+	if svcs.AssetService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeCrawlJob, func(t *model.AsyncTask) {
+			svcs.AssetService.ResumeCrawlJob(t)
+		})
+	}
 
 	// video_synthesis: resume the stitch→subtitle→cover→upload pipeline
 	if svcs.VideoService != nil {

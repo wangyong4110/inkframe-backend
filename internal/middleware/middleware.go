@@ -101,10 +101,19 @@ func Logger() gin.HandlerFunc {
 		start := time.Now()
 		method := c.Request.Method
 
+		metrics.HTTPRequestsInFlight.Inc()
 		c.Next()
+		metrics.HTTPRequestsInFlight.Dec()
 
 		latency := time.Since(start)
 		status := c.Writer.Status()
+		routePath := c.FullPath()
+		if routePath == "" {
+			routePath = "unknown"
+		}
+		statusStr := strconv.Itoa(status)
+		metrics.HTTPRequestsTotal.WithLabelValues(method, routePath, statusStr).Inc()
+		metrics.HTTPRequestDuration.WithLabelValues(method, routePath, statusStr).Observe(latency.Seconds())
 
 		msg := fmt.Sprintf("[%s] %s %s %d %v",
 			time.Now().Format("2006-01-02 15:04:05"),
