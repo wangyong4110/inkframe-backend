@@ -118,17 +118,18 @@ func (s *NovelService) GetAIService() *AIService {
 
 // CreateNovelRequest 创建小说请求
 type CreateNovelRequest struct {
-	Title           string `json:"title" binding:"required"`
-	Description     string `json:"description"`
-	Genre           string `json:"genre" binding:"required"`
-	WorldviewID     *uint  `json:"worldview_id"`
-	CoverImage      string `json:"cover_image"`
-	Channel         string `json:"channel"`
-	TargetWordCount int    `json:"target_word_count"`
-	TargetChapters  int    `json:"target_chapters"`
-	ChapterMode     string `json:"chapter_mode"`
-	TenantID        uint
-	UserID          uint
+	Title            string `json:"title" binding:"required"`
+	Description      string `json:"description"`
+	Genre            string `json:"genre" binding:"required"`
+	WorldviewID      *uint  `json:"worldview_id"`
+	CoverImage       string `json:"cover_image"`
+	Channel          string `json:"channel"`
+	TargetWordCount  int    `json:"target_word_count"`
+	TargetChapters   int    `json:"target_chapters"`
+	ChapterMode      string `json:"chapter_mode"`
+	DramaTemplateID  uint
+	TenantID         uint
+	UserID           uint
 }
 
 // Create 创建小说
@@ -157,7 +158,8 @@ func (s *NovelService) Create(req *CreateNovelRequest) (*model.Novel, error) {
 			TargetChapters:  req.TargetChapters,
 		},
 		AIConfig: model.NovelAIConfig{
-			ChapterMode: chapterMode,
+			ChapterMode:     chapterMode,
+			DramaTemplateID: req.DramaTemplateID,
 		},
 	}
 
@@ -265,6 +267,7 @@ func (s *NovelService) CreateNovel(req *model.CreateNovelRequest) (*model.Novel,
 		TargetWordCount: req.TargetWordCount,
 		TargetChapters:  req.TargetChapters,
 		ChapterMode:     req.ChapterMode,
+		DramaTemplateID: req.DramaTemplateID,
 		TenantID:        req.TenantID,
 		UserID:          req.UserID,
 	})
@@ -1065,8 +1068,13 @@ func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutli
 	}
 
 	// 注入短剧模板骨架（爆款结构强化）
-	if req.DramaTemplateID > 0 && s.dramaSvc != nil {
-		if injection, err := s.dramaSvc.BuildOutlineInjection(req.DramaTemplateID); err == nil && injection != "" {
+	// 优先使用请求中显式指定的模板，若无则回退到小说创建时选择的模板
+	dramaTemplateID := req.DramaTemplateID
+	if dramaTemplateID == 0 {
+		dramaTemplateID = novel.AIConfig.DramaTemplateID
+	}
+	if dramaTemplateID > 0 && s.dramaSvc != nil {
+		if injection, err := s.dramaSvc.BuildOutlineInjection(dramaTemplateID); err == nil && injection != "" {
 			sb.WriteString("\n\n")
 			sb.WriteString(injection)
 			sb.WriteString("\n")

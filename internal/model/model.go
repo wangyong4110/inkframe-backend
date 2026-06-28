@@ -135,6 +135,7 @@ type NovelAIConfig struct {
 	ChapterMode        string  `json:"chapter_mode"`
 	AutoReviewRounds   int     `json:"auto_review_rounds"`
 	AutoReviewMinScore float64 `json:"auto_review_min_score"`
+	DramaTemplateID    uint    `json:"drama_template_id,omitempty"`
 }
 
 // NovelReviewMeta 内容审核元数据（JSON存储）
@@ -277,6 +278,7 @@ func (n Novel) MarshalJSON() ([]byte, error) {
 		"chapter_mode":          n.AIConfig.ChapterMode,
 		"auto_review_rounds":    n.AIConfig.AutoReviewRounds,
 		"auto_review_min_score": n.AIConfig.AutoReviewMinScore,
+		"drama_template_id":     n.AIConfig.DramaTemplateID,
 		"review_status":         n.ReviewMeta.ReviewStatus,
 		"review_note":           n.ReviewMeta.ReviewNote,
 		"reviewed_at":           n.ReviewMeta.ReviewedAt,
@@ -573,17 +575,18 @@ func (SystemSetting) TableName() string { return "ink_system_setting" }
 // ============================================
 
 type CreateNovelRequest struct {
-	Title           string `json:"title" binding:"required"`
-	Description     string `json:"description"`
-	Genre           string `json:"genre" binding:"required"`
-	WorldviewID     *uint  `json:"worldview_id"`
-	CoverImage      string `json:"cover_image"`
-	Channel         string `json:"channel"`
-	TargetWordCount int    `json:"target_word_count"`
-	TargetChapters  int    `json:"target_chapters"`
-	ChapterMode     string `json:"chapter_mode"` // sequential / independent
-	TenantID        uint   `json:"-"`
-	UserID          uint   `json:"-"`
+	Title            string `json:"title" binding:"required"`
+	Description      string `json:"description"`
+	Genre            string `json:"genre" binding:"required"`
+	WorldviewID      *uint  `json:"worldview_id"`
+	CoverImage       string `json:"cover_image"`
+	Channel          string `json:"channel"`
+	TargetWordCount  int    `json:"target_word_count"`
+	TargetChapters   int    `json:"target_chapters"`
+	ChapterMode      string `json:"chapter_mode"` // sequential / independent
+	DramaTemplateID  uint   `json:"drama_template_id,omitempty"`
+	TenantID         uint   `json:"-"`
+	UserID           uint   `json:"-"`
 }
 
 type UpdateNovelRequest struct {
