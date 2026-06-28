@@ -60,6 +60,10 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 
 	switch status.Status {
 	case "completed", "succeed":
+		// 如果 API 直接返回了末帧 URL（Seedance return_last_frame），先保存
+		if status.LastFrameURL != "" {
+			shot.TaskMeta.LastFrameURL = status.LastFrameURL
+		}
 		videoURL, urlErr := provider.GetVideoURL(ctx, shot.TaskMeta.ShotTaskID)
 		if urlErr != nil {
 			logger.Errorf("PollShotStatus: shot %d GetVideoURL失败 taskID=%s: %v", shot.ShotNo, shot.TaskMeta.ShotTaskID, urlErr)

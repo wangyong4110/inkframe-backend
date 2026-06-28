@@ -26,6 +26,7 @@ type VideoGenerateRequest struct {
 	Prompt         string   `json:"prompt"`           // 视频描述 Prompt
 	NegativePrompt string   `json:"negative_prompt"`  // 负向 Prompt
 	Duration       float64  `json:"duration"`         // 时长（秒），如 5.0；-1 表示由模型自动选择（Seedance 2.0/1.5）
+	Frames         int      `json:"frames,omitempty"` // 帧数（Seedance 1.0 系列，与 duration 二选一）
 	AspectRatio    string   `json:"aspect_ratio"`     // 16:9, 4:3, 1:1, 3:4, 9:16, 21:9, adaptive
 	Resolution     string   `json:"resolution"`       // 480p, 720p, 1080p, 4k（Doubao Seedance 系列）
 	CameraMovement string   `json:"camera_movement"`  // pan_left, zoom_in, zoom_out, static 等（Kling）
@@ -35,6 +36,14 @@ type VideoGenerateRequest struct {
 	GenerateAudio  *bool    `json:"generate_audio"`   // Seedance 2.0/1.5：true=有声视频，false=无声；nil=使用默认值(true)
 	Watermark      bool     `json:"watermark"`        // 是否添加水印，默认 false
 	Seed           int      `json:"seed"`             // 随机种子，-1 或 0 表示随机（Seedance 1.x）
+
+	// Seedance 扩展参数
+	ReturnLastFrame       bool   `json:"return_last_frame"`        // 是否在响应中返回最后一帧 URL（用于视频续接）
+	Draft                 bool   `json:"draft"`                    // 草稿/预览模式（仅 Seedance 1.5 Pro，快速低质预览）
+	DraftTaskID           string `json:"draft_task_id,omitempty"`  // 续接草稿任务 ID（二步式：草稿→正式）
+	ServiceTier           string `json:"service_tier,omitempty"`   // "default"（在线）/"flex"（离线，价格减半，小时级延迟）
+	ExecutionExpiresAfter int64  `json:"execution_expires_after"`  // flex 离线推理超时（秒）；0 表示不限
+	CallbackURL           string `json:"callback_url,omitempty"`   // Webhook 回调地址；任务完成/失败时推送
 }
 
 // VideoTask 已提交的视频任务
@@ -46,8 +55,9 @@ type VideoTask struct {
 
 // VideoTaskStatus 视频任务状态
 type VideoTaskStatus struct {
-	TaskID   string  `json:"task_id"`
-	Status   string  `json:"status"`   // pending, processing, completed, failed
-	Progress float64 `json:"progress"` // 0-100
-	Error    string  `json:"error,omitempty"`
+	TaskID       string  `json:"task_id"`
+	Status       string  `json:"status"`                  // pending, processing, completed, failed
+	Progress     float64 `json:"progress"`                // 0-100
+	Error        string  `json:"error,omitempty"`
+	LastFrameURL string  `json:"last_frame_url,omitempty"` // 最后一帧 URL（需请求时设置 ReturnLastFrame=true）
 }

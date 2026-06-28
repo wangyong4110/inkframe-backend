@@ -1034,6 +1034,17 @@ func (s *VideoService) chainLastFrameToNextShot(shot *model.StoryboardShot) {
 		return // 已有末帧，跳过（避免重复提取）
 	}
 
+	// 快捷路径：Seedance return_last_frame 已返回末帧 URL，无需下载视频
+	if shot.TaskMeta.LastFrameURL != "" {
+		nextShot.GenMeta.ReferenceImageURL = shot.TaskMeta.LastFrameURL
+		if dbErr := s.storyboardRepo.Update(nextShot); dbErr != nil {
+			logger.Errorf("chainLastFrameToNextShot: shot %d → nextShot %d Update failed: %v", shot.ShotNo, nextShot.ShotNo, dbErr)
+			return
+		}
+		logger.Printf("chainLastFrameToNextShot: shot %d → nextShot %d last_frame_url (API直返) = %s", shot.ShotNo, nextShot.ShotNo, shot.TaskMeta.LastFrameURL)
+		return
+	}
+
 	// 2. 确定视频本地路径（优先 file:// 本地文件，其次从远程 URL 下载）
 	clipLocalPath := ""
 	if strings.HasPrefix(shot.TaskMeta.ClipPath, "file://") {
@@ -1394,20 +1405,26 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		}
 	}
 
-	// 检查项目配置：KlingProForAction、HD、3D、色彩调色
+	// 检查项目配置：KlingProForAction、HD、3D、色彩调色、Seedance 分辨率/音频
 	var hdEnabled, threeDEnabled bool
 	var threeDStyle, klingModelOverride, videoColorGrade string
-	if vid, vidErr := s.videoRepo.GetByID(shot.VideoID); vidErr == nil && vid.NovelID > 0 && s.novelRepo != nil {
-		if novel, novelErr := s.novelRepo.GetByID(vid.NovelID); novelErr == nil {
-			vc := novel.VideoConf()
-			if klingMode == "pro" && !vc.KlingProForAction {
-				klingMode = "std"
+	var vidResolution string
+	var vidGenerateAudio *bool
+	if vid, vidErr := s.videoRepo.GetByID(shot.VideoID); vidErr == nil {
+		vidResolution = vid.RenderConfig.Resolution
+		vidGenerateAudio = vid.RenderConfig.GenerateAudio
+		if vid.NovelID > 0 && s.novelRepo != nil {
+			if novel, novelErr := s.novelRepo.GetByID(vid.NovelID); novelErr == nil {
+				vc := novel.VideoConf()
+				if klingMode == "pro" && !vc.KlingProForAction {
+					klingMode = "std"
+				}
+				hdEnabled = strings.Contains(vid.RenderConfig.VisualMode, "hd")
+				threeDEnabled = vc.ThreeDEnabled || strings.Contains(vid.RenderConfig.VisualMode, "3d")
+				threeDStyle = vid.RenderConfig.ThreeDStyle
+				klingModelOverride = vc.KlingModel
+				videoColorGrade = vc.ColorGrade
 			}
-			hdEnabled = strings.Contains(vid.RenderConfig.VisualMode, "hd")
-			threeDEnabled = vc.ThreeDEnabled || strings.Contains(vid.RenderConfig.VisualMode, "3d")
-			threeDStyle = vid.RenderConfig.ThreeDStyle
-			klingModelOverride = vc.KlingModel
-			videoColorGrade = vc.ColorGrade
 		}
 	}
 	if threeDStyle == "" {
@@ -1448,7 +1465,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	// 角色按 CharacterIDs 顺序严格排列，保持和分镜角色的一一对应关系。
 	var extraRefImages []string
 	var extraRefLabels []string // HappyHorse r2v：与 extraRefImages 并行的标签（角色名 / "场景背景"）
-	multiImageProviders := map[string]bool{"seedance": true, "kling": true, "happyhorse": true}
+	multiImageProviders := map[string]bool{"seedance": true, "doubao": true, "kling": true, "happyhorse": true}
 	// I2V 模式：shot.ImageURL（静态场景图）追加为第一额外参考图，维持外观一致性
 	if shot.GenMeta.ReferenceImageURL != "" && shot.ImageURL != "" && multiImageProviders[providerName] {
 		if absImg := s.resolveAbsURL(shot.ImageURL); absImg != "" && absImg != s.resolveAbsURL(referenceImage) {
@@ -1535,15 +1552,20 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		} else {
 			videoResolution = "720p"
 		}
+	} else if providerName == "seedance" || providerName == "doubao" {
+		videoResolution = vidResolution
+		if videoResolution == "" {
+			videoResolution = "1080p"
+		}
 	}
 
 	// Seedance 多模态时序链接：查找前一分镜的完成视频 URL 作为运动参考
 	var prevVideoURLs []string
-	if providerName == "seedance" && shot.ShotNo > 1 && s.storyboardRepo != nil {
+	if (providerName == "seedance" || providerName == "doubao") && shot.ShotNo > 1 && s.storyboardRepo != nil {
 		if prev, prevErr := s.storyboardRepo.GetByVideoAndShotNo(shot.VideoID, shot.ShotNo-1); prevErr == nil && prev != nil {
 			if prev.VideoURL != "" && strings.HasPrefix(prev.VideoURL, "http") {
 				prevVideoURLs = []string{prev.VideoURL}
-				logger.Printf("GenerateShotVideo: shot %d Seedance video-chain: %s", shot.ShotNo, prev.VideoURL)
+				logger.Printf("GenerateShotVideo: shot %d Seedance/Doubao video-chain: %s", shot.ShotNo, prev.VideoURL)
 			}
 		}
 	}
@@ -1560,6 +1582,11 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		CFGScale:       klingCFG,
 		Mode:           klingMode,
 		Model:          klingModelOverride,
+	}
+	// Seedance/豆包 专属参数
+	if providerName == "seedance" || providerName == "doubao" {
+		req.ReturnLastFrame = true           // 让 API 直接返回末帧 URL，避免下载+ffprobe
+		req.GenerateAudio = vidGenerateAudio // nil=API 默认(true)，false=静音
 	}
 
 	logger.Printf("GenerateShotVideo: shot %d submitting to %s (hasRef=%v extraRefs=%d mode=%s cfg=%.2f prompt=%q)", shot.ShotNo, providerName, referenceImage != "", len(extraRefImages), klingMode, klingCFG, videoPromptFinal)

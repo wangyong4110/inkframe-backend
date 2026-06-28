@@ -30,7 +30,14 @@ var ProviderStaticModelsByType = map[string]map[string][]string{
 			"doubao-lite-128k", "doubao-lite-32k",
 			"doubao-seed-1-6", "doubao-seed-1-5",
 		},
-		"video": {"doubao-seaweed-241128", "doubao-seedance-1-0-lite-i2v-250528"},
+		"video": {
+			"doubao-seedance-2-0-260128",
+			"doubao-seedance-2-0-fast-260128",
+			"doubao-seedance-2-0-mini-260615",
+			"doubao-seedance-1-5-pro-251215",
+			"doubao-seedance-1-0-pro-250528",
+			"doubao-seedance-1-0-pro-fast-251015",
+		},
 	},
 	"deepseek": {
 		"llm": {"deepseek-chat", "deepseek-reasoner"},
@@ -163,15 +170,19 @@ var defaultProviderModels = map[string][]providerModelDef{
 		{"doubao-pro-32k", "豆包 Pro 32K", "llm", 0.88, 16384},
 		{"doubao-lite-32k", "豆包 Lite 32K", "llm", 0.75, 16384},
 		{"seedream-3-0-t2i-250415", "Seedream 3.0 文生图", "image", 0.9, 0},
-		// 视频模型：model 字段填写用户在火山引擎控制台创建的推理接入点（Endpoint）ID
-		{"doubao-seedvideo-pro-250428", "豆包视频 Pro（文生/图生视频）", "video", 0.92, 0},
-		{"doubao-seedvideo-lite-250428", "豆包视频 Lite（文生/图生视频）", "video", 0.87, 0},
+		// 视频模型（Seedance 系列）：model 字段填写 Model ID 或火山引擎控制台的推理接入点 Endpoint ID
+		{"doubao-seedance-2-0-260128", "Seedance 2.0（多模态 T2V/I2V）", "video", 0.95, 0},
+		{"doubao-seedance-2-0-fast-260128", "Seedance 2.0 Fast", "video", 0.90, 0},
+		{"doubao-seedance-2-0-mini-260615", "Seedance 2.0 Mini", "video", 0.85, 0},
+		{"doubao-seedance-1-5-pro-251215", "Seedance 1.5 Pro（支持草稿模式）", "video", 0.92, 0},
+		{"doubao-seedance-1-0-pro-250528", "Seedance 1.0 Pro", "video", 0.88, 0},
+		{"doubao-seedance-1-0-pro-fast-251015", "Seedance 1.0 Pro Fast", "video", 0.85, 0},
 		// 多模态 Embedding 模型（EmbedMultimodal，支持文本+图片+视频混合输入）
 		{"doubao-embedding-vision-250328", "豆包多模态 Embedding", "embedding", 0.90, 0},
 		{"doubao-embedding-vision-250615", "豆包多模态 Embedding v2（支持维度选择）", "embedding", 0.92, 0},
 	},
 	"deepseek": {
-		{"deepseek-v4", "DeepSeek V4", "llm", 0.96, 32768},
+		{"deepseek-v4-pro", "DeepSeek V4 Pro", "llm", 0.96, 32768},
 		{"deepseek-v4-flash", "DeepSeek V4 Flash", "llm", 0.90, 32768},
 		{"deepseek-chat", "DeepSeek V3", "llm", 0.90, 16384},
 		{"deepseek-reasoner", "DeepSeek R1", "llm", 0.94, 8192},

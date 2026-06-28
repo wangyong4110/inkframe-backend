@@ -99,7 +99,13 @@ func (p *DoubaoVideoProvider) GenerateVideo(ctx context.Context, req *VideoGener
 	allImages := doubaoCollectImages(req.ImageURL, req.ImageURLs)
 
 	// 构建 content 数组
-	content := doubaoMakeContent(allImages, req.VideoURLs, req.AudioURLs, req.Prompt)
+	// 若提供了草稿任务 ID（draft_task_id），则使用草稿续接模式（第二步）
+	var content []map[string]interface{}
+	if req.DraftTaskID != "" {
+		content = doubaoMakeDraftContent(req.DraftTaskID, req.Prompt)
+	} else {
+		content = doubaoMakeContent(allImages, req.VideoURLs, req.AudioURLs, req.Prompt)
+	}
 
 	// 构建请求体（顶层参数，新方式）
 	apiReq := map[string]interface{}{
@@ -144,6 +150,35 @@ func (p *DoubaoVideoProvider) GenerateVideo(ctx context.Context, req *VideoGener
 	// generate_audio（仅 Seedance 2.0/1.5 Pro 支持）
 	if req.GenerateAudio != nil {
 		apiReq["generate_audio"] = *req.GenerateAudio
+	}
+
+	// frames（Seedance 1.0 系列，与 duration 二选一；提供时忽略 duration）
+	if req.Frames > 0 {
+		apiReq["frames"] = req.Frames
+		delete(apiReq, "duration")
+	}
+
+	// return_last_frame：请求在响应中附带最后一帧 URL
+	if req.ReturnLastFrame {
+		apiReq["return_last_frame"] = true
+	}
+
+	// draft：草稿/预览模式（仅 Seedance 1.5 Pro，快速低质预览）
+	if req.Draft {
+		apiReq["draft"] = true
+	}
+
+	// service_tier："flex" 为离线推理（价格减半，小时级延迟；Seedance 2.0 不支持）
+	if req.ServiceTier != "" {
+		apiReq["service_tier"] = req.ServiceTier
+		if req.ExecutionExpiresAfter > 0 {
+			apiReq["execution_expires_after"] = req.ExecutionExpiresAfter
+		}
+	}
+
+	// callback_url：Webhook 回调地址
+	if req.CallbackURL != "" {
+		apiReq["callback_url"] = req.CallbackURL
 	}
 
 	respBody, status, err := p.doRequest(ctx, "POST", "/contents/generations/tasks", apiReq)
@@ -246,6 +281,9 @@ func (p *DoubaoVideoProvider) GetVideoStatus(ctx context.Context, taskID string)
 		ts.Progress = 50
 	case "succeeded":
 		ts.Progress = 100
+		if result.Content != nil && result.Content.LastFrameURL != "" {
+			ts.LastFrameURL = result.Content.LastFrameURL
+		}
 	case "failed", "cancelled", "expired":
 		ts.Progress = 0
 	}
@@ -359,6 +397,26 @@ func doubaoMakeContent(images, videos, audios []string, prompt string) []map[str
 		})
 	}
 
+	return content
+}
+
+// doubaoMakeDraftContent 构建草稿续接模式（Draft 第二步）的 content 数组。
+//
+// 使用 draft_task 类型引用已有草稿任务 ID；可附加文本 prompt 修改最终效果。
+// 仅 Seedance 1.5 Pro 支持草稿模式。
+func doubaoMakeDraftContent(draftTaskID, prompt string) []map[string]interface{} {
+	content := []map[string]interface{}{
+		{
+			"type":       "draft_task",
+			"draft_task": map[string]string{"id": draftTaskID},
+		},
+	}
+	if prompt != "" {
+		content = append(content, map[string]interface{}{
+			"type": "text",
+			"text": prompt,
+		})
+	}
 	return content
 }
 

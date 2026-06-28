@@ -56,6 +56,7 @@ type VideoRenderConfig struct {
 	QualityTier    string `json:"quality_tier"`
 	VisualMode     string `json:"visual_mode"`
 	ThreeDStyle    string `json:"three_d_style"`
+	GenerateAudio  *bool  `json:"generate_audio"` // Seedance 2.0/1.5：nil=API 默认(true)，false=无声视频
 }
 
 // VideoPublishMeta 发布与展示元数据（JSON存储）
@@ -167,6 +168,7 @@ type ShotTaskMeta struct {
 	ShotProviderName    string  `json:"shot_provider_name"`
 	RetryCount          int     `json:"retry_count"`
 	ActualVideoDuration float64 `json:"actual_video_duration"`
+	LastFrameURL        string  `json:"last_frame_url"` // Seedance return_last_frame 返回的末帧 URL（跳过本地 ffprobe）
 	TimelineStart       float64 `json:"timeline_start"`
 	VoiceDelay          float64 `json:"voice_delay"`
 }
