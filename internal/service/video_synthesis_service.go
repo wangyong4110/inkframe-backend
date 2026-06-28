@@ -1337,7 +1337,13 @@ func (s *VideoService) buildShotAudio(ctx context.Context, shot *model.Storyboar
 		return speechAudioPath, audioDur
 	}
 
-	// 4. 降级：生成静音轨
+	// 4. Seedance 内嵌环境音：视频已有音轨，无 TTS 时直接保留，不用静音轨覆盖
+	if shot.TaskMeta.HasEmbeddedAudio {
+		logger.Printf("[buildShotAudio] shot %d: has embedded audio (Seedance) — preserving video audio track", shot.ShotNo)
+		return "", 0
+	}
+
+	// 5. 降级：生成静音轨
 	silentPath := generateSilentAudio(tmpDir, shot.ShotNo, shot.Duration)
 	if silentPath != "" {
 		logger.Printf("[buildShotAudio] shot %d: no audio — using generated silent track", shot.ShotNo)

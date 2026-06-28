@@ -450,6 +450,9 @@ func (s *VideoService) UpdateVideo(id, tenantID uint, req *model.UpdateVideoRequ
 	if req.QualityTier != "" {
 		video.RenderConfig.QualityTier = req.QualityTier
 	}
+	if req.GenerateAudio != nil {
+		video.RenderConfig.GenerateAudio = req.GenerateAudio
+	}
 	if req.Description != "" {
 		video.PublishMeta.Description = req.Description
 	}

@@ -168,7 +168,8 @@ type ShotTaskMeta struct {
 	ShotProviderName    string  `json:"shot_provider_name"`
 	RetryCount          int     `json:"retry_count"`
 	ActualVideoDuration float64 `json:"actual_video_duration"`
-	LastFrameURL        string  `json:"last_frame_url"` // Seedance return_last_frame 返回的末帧 URL（跳过本地 ffprobe）
+	LastFrameURL        string  `json:"last_frame_url"`      // Seedance return_last_frame 返回的末帧 URL（跳过本地 ffprobe）
+	HasEmbeddedAudio    bool    `json:"has_embedded_audio"`  // Seedance generate_audio=true 时视频已内嵌环境音，合成时无 TTS 则保留原始音轨
 	TimelineStart       float64 `json:"timeline_start"`
 	VoiceDelay          float64 `json:"voice_delay"`
 }
@@ -487,17 +488,18 @@ type CreateVideoRequest struct {
 }
 
 type UpdateVideoRequest struct {
-	Title        string `json:"title"`
-	Description  string `json:"description"`
-	Tags         string `json:"tags"`
-	Resolution   string `json:"resolution"`
-	FrameRate    int    `json:"frame_rate"`
-	AspectRatio  string `json:"aspect_ratio"`
-	ArtStyle     string `json:"art_style"`
-	Mode         string `json:"mode"`           // video/slideshow
-	VisualMode   string `json:"visual_mode"`    // standard/hd/3d/hd_3d
-	ThreeDStyle  string `json:"three_d_style"`  // cg/pixar/anime3d/realistic3d
-	QualityTier  string `json:"quality_tier"`   // draft/preview/final/production
+	Title         string `json:"title"`
+	Description   string `json:"description"`
+	Tags          string `json:"tags"`
+	Resolution    string `json:"resolution"`
+	FrameRate     int    `json:"frame_rate"`
+	AspectRatio   string `json:"aspect_ratio"`
+	ArtStyle      string `json:"art_style"`
+	Mode          string `json:"mode"`           // video/slideshow
+	VisualMode    string `json:"visual_mode"`    // standard/hd/3d/hd_3d
+	ThreeDStyle   string `json:"three_d_style"`  // cg/pixar/anime3d/realistic3d
+	QualityTier   string `json:"quality_tier"`   // draft/preview/final/production
+	GenerateAudio *bool  `json:"generate_audio"` // Seedance 2.0/1.5：nil=不变，true=有声，false=静音
 }
 
 type EnhancementConfig struct {

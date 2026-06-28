@@ -1587,6 +1587,11 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	if providerName == "seedance" || providerName == "doubao" {
 		req.ReturnLastFrame = true           // 让 API 直接返回末帧 URL，避免下载+ffprobe
 		req.GenerateAudio = vidGenerateAudio // nil=API 默认(true)，false=静音
+		// 标记视频将内嵌环境音：nil(API 默认 true) 或显式 true 时置位，
+		// 告知合成阶段无 TTS 时保留原始音轨，不用静音轨覆盖
+		if vidGenerateAudio == nil || *vidGenerateAudio {
+			shot.TaskMeta.HasEmbeddedAudio = true
+		}
 	}
 
 	logger.Printf("GenerateShotVideo: shot %d submitting to %s (hasRef=%v extraRefs=%d mode=%s cfg=%.2f prompt=%q)", shot.ShotNo, providerName, referenceImage != "", len(extraRefImages), klingMode, klingCFG, videoPromptFinal)
