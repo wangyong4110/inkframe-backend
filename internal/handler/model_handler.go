@@ -666,37 +666,27 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 			t.APIVersionHint = "2025-01-01-preview"
 			t.ConfigHint = "Endpoint 格式：https://<resource>.openai.azure.com/openai；API Version 填写 Azure REST API 版本；模型名称填写 Azure 部署名（与 Azure 门户中创建的 Deployment name 一致）"
 		}
-		if p.StaticModels != "" {
-			// 新格式：map[string][]string；兼容旧格式 []string
-			var byType map[string][]string
-			if err := json.Unmarshal([]byte(p.StaticModels), &byType); err == nil && len(byType) > 0 {
-				t.StaticModelsByType = byType
-				seen := map[string]struct{}{}
-				for _, models := range byType {
-					for _, m := range models {
-						if _, ok := seen[m]; !ok {
-							seen[m] = struct{}{}
-							t.StaticModels = append(t.StaticModels, m)
-						}
+		// 内存定义优先（DB static_models 列已废弃）；仅对无内存定义的自定义供应商回退读 DB
+		fillStaticModels := func(byType map[string][]string) {
+			t.StaticModelsByType = byType
+			seen := map[string]struct{}{}
+			for _, models := range byType {
+				for _, m := range models {
+					if _, ok := seen[m]; !ok {
+						seen[m] = struct{}{}
+						t.StaticModels = append(t.StaticModels, m)
 					}
 				}
-			} else {
-				json.Unmarshal([]byte(p.StaticModels), &t.StaticModels) //nolint:errcheck
 			}
 		}
-		// DB 字段为空时，从内存静态定义兜底填充（系统级提供商 static_models 列未入库）
-		if t.StaticModelsByType == nil {
-			if byType, ok := service.ProviderStaticModelsByType[p.Name]; ok && len(byType) > 0 {
-				t.StaticModelsByType = byType
-				seen := map[string]struct{}{}
-				for _, models := range byType {
-					for _, m := range models {
-						if _, ok := seen[m]; !ok {
-							seen[m] = struct{}{}
-							t.StaticModels = append(t.StaticModels, m)
-						}
-					}
-				}
+		if byType, ok := service.ProviderStaticModelsByType[p.Name]; ok && len(byType) > 0 {
+			fillStaticModels(byType)
+		} else if p.StaticModels != "" {
+			var byType map[string][]string
+			if err := json.Unmarshal([]byte(p.StaticModels), &byType); err == nil && len(byType) > 0 {
+				fillStaticModels(byType)
+			} else {
+				json.Unmarshal([]byte(p.StaticModels), &t.StaticModels) //nolint:errcheck
 			}
 		}
 		result = append(result, t)
