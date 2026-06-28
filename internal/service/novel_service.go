@@ -361,6 +361,7 @@ func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequ
 		if req.KlingProForAction != nil    { vc.Config.KlingProForAction = *req.KlingProForAction }
 		if err := s.novelRepo.SaveVideoConfig(vc); err != nil {
 			logger.Errorf("[NovelService] UpdateNovel SaveVideoConfig: %v", err)
+			return nil, fmt.Errorf("save video config: %w", err)
 		}
 	}
 
