@@ -319,14 +319,14 @@ func (r *AIModelRepository) Update(model *model.AIModel) error {
 	return r.db.Save(model).Error
 }
 
-// Delete 删除AI模型
+// Delete 硬删除AI模型（彻底移除，删除后可从静态列表重新添加）
 func (r *AIModelRepository) Delete(id uint) error {
-	return r.db.Delete(&model.AIModel{}, id).Error
+	return r.db.Unscoped().Delete(&model.AIModel{}, id).Error
 }
 
-// DeleteByProvider 删除指定提供商的所有模型
+// DeleteByProvider 硬删除指定提供商的所有模型
 func (r *AIModelRepository) DeleteByProvider(providerID uint) error {
-	return r.db.Where("provider_id = ?", providerID).Delete(&model.AIModel{}).Error
+	return r.db.Unscoped().Where("provider_id = ?", providerID).Delete(&model.AIModel{}).Error
 }
 
 // UpdateHealthStatus 更新健康状态

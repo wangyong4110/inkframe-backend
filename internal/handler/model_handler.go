@@ -671,7 +671,6 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 			var byType map[string][]string
 			if err := json.Unmarshal([]byte(p.StaticModels), &byType); err == nil && len(byType) > 0 {
 				t.StaticModelsByType = byType
-				// 展平，去重
 				seen := map[string]struct{}{}
 				for _, models := range byType {
 					for _, m := range models {
@@ -683,6 +682,21 @@ func (h *ModelHandler) ListProviderTemplates(c *gin.Context) {
 				}
 			} else {
 				json.Unmarshal([]byte(p.StaticModels), &t.StaticModels) //nolint:errcheck
+			}
+		}
+		// DB 字段为空时，从内存静态定义兜底填充（系统级提供商 static_models 列未入库）
+		if t.StaticModelsByType == nil {
+			if byType, ok := service.ProviderStaticModelsByType[p.Name]; ok && len(byType) > 0 {
+				t.StaticModelsByType = byType
+				seen := map[string]struct{}{}
+				for _, models := range byType {
+					for _, m := range models {
+						if _, ok := seen[m]; !ok {
+							seen[m] = struct{}{}
+							t.StaticModels = append(t.StaticModels, m)
+						}
+					}
+				}
 			}
 		}
 		result = append(result, t)
