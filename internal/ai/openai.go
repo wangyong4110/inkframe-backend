@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -353,12 +351,17 @@ func (p *OpenAIProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRe
 		return nil, fmt.Errorf("TTS read body error: %w", err)
 	}
 
-	idBytes := make([]byte, 8)
-	rand.Read(idBytes) //nolint:errcheck
-	tmpPath := fmt.Sprintf("/tmp/inkframe-tts-%s.mp3", hex.EncodeToString(idBytes))
-	if err := os.WriteFile(tmpPath, audioData, 0644); err != nil {
+	tmpFile, err := os.CreateTemp("", "inkframe-tts-*.mp3")
+	if err != nil {
 		return nil, fmt.Errorf("TTS write file error: %w", err)
 	}
+	tmpPath := tmpFile.Name()
+	if _, err := tmpFile.Write(audioData); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath) //nolint:errcheck
+		return nil, fmt.Errorf("TTS write file error: %w", err)
+	}
+	tmpFile.Close()
 
 	return &AudioResponse{
 		URL:       "file://" + tmpPath,

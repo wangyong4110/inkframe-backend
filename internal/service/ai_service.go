@@ -299,9 +299,15 @@ func (s *AIService) GetDefaultProviderName() string {
 // 与 ConcurrentProvider / RateLimitProvider 不同，这里的状态是跨调用共享的：
 //   - sem：容量 = AIModel.Concurrency，所有调用同一模型的 goroutine 共用同一个 channel
 //   - token bucket：基于时间滑动，全局共享，不在每次调用时重置
+// defaultMaxQueueWait 是并发槽排队等待的默认上限。
+// 排队等待使用独立计时器，不受调用方执行超时（ctx）影响，确保后续请求能正常入队
+// 而不是在执行超时耗尽时直接报错。30 分钟足以覆盖大多数批量生成场景。
+const defaultMaxQueueWait = 30 * time.Minute
+
 type modelCallLimiter struct {
 	// concurrency semaphore (nil = unlimited)
-	sem chan struct{}
+	sem          chan struct{}
+	maxQueueWait time.Duration // 并发槽最大排队等待时间（独立于执行 ctx）
 
 	// token-bucket for rate limiting (refill=0 means disabled)
 	rlMu    sync.Mutex
@@ -312,7 +318,7 @@ type modelCallLimiter struct {
 }
 
 func newModelCallLimiter(concurrency, ratePerMin int) *modelCallLimiter {
-	l := &modelCallLimiter{}
+	l := &modelCallLimiter{maxQueueWait: defaultMaxQueueWait}
 	if concurrency > 0 {
 		l.sem = make(chan struct{}, concurrency)
 	}
@@ -325,9 +331,14 @@ func newModelCallLimiter(concurrency, ratePerMin int) *modelCallLimiter {
 	return l
 }
 
-// Acquire 先等速率令牌，再获取并发槽。ctx 超时/取消时立即返回错误。
+// Acquire 先等速率令牌，再获取并发槽。
+//
+// 速率限制阶段：受 ctx 约束（ctx 取消即放弃）。
+// 并发槽等待阶段：使用独立的 maxQueueWait 计时器，不受调用方执行超时影响。
+// 这样可以确保"队满时排队等待"而不是"执行超时到期时直接报错"，
+// 调用方应在获取槽后再创建执行超时 ctx（参见 callAIWithProviderSys）。
 func (l *modelCallLimiter) Acquire(ctx context.Context) error {
-	// 1. 速率限制（token bucket）
+	// 1. 速率限制（token bucket）：受 ctx 控制
 	if l.rlRefNs > 0 {
 		for {
 			l.rlMu.Lock()
@@ -351,12 +362,29 @@ func (l *modelCallLimiter) Acquire(ctx context.Context) error {
 			}
 		}
 	}
-	// 2. 并发槽
+	// 2. 并发槽：用独立 timer，不依赖调用方 ctx 的执行超时
 	if l.sem != nil {
+		// 快速路径：无需等待直接获取
 		select {
 		case l.sem <- struct{}{}:
+			return nil
+		default:
+		}
+		// 慢速路径：入队等待
+		var queueDeadline <-chan time.Time
+		if l.maxQueueWait > 0 {
+			t := time.NewTimer(l.maxQueueWait)
+			defer t.Stop()
+			queueDeadline = t.C
+		}
+		logger.Printf("[ModelLimiter] concurrency full (cap=%d), queuing request (maxWait=%v)", cap(l.sem), l.maxQueueWait)
+		select {
+		case l.sem <- struct{}{}:
+			logger.Printf("[ModelLimiter] concurrency slot acquired from queue (cap=%d)", cap(l.sem))
 		case <-ctx.Done():
 			return fmt.Errorf("concurrency slot wait cancelled: %w", ctx.Err())
+		case <-queueDeadline:
+			return fmt.Errorf("concurrency slot queue wait exceeded %v", l.maxQueueWait)
 		}
 	}
 	return nil
@@ -1214,15 +1242,9 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 	if provider == nil {
 		return "", nil, fmt.Errorf("AI provider resolved to nil for %q", providerName)
 	}
-	// 超时：先建 context，让 Acquire 等待时也受超时约束。
-	timeoutDur := 5 * time.Minute
-	if config.TimeoutSeconds > 0 {
-		timeoutDur = time.Duration(config.TimeoutSeconds) * time.Second
-	}
-	ctx, cancel := context.WithTimeout(parentCtx, timeoutDur)
-	defer cancel()
-
 	// 按 (tenantID, modelName) 进行共享并发控制 + 速率限制，同时限制 MaxTokens。
+	// 注意：槽位获取必须在创建执行超时 ctx 之前，避免排队等待消耗执行超时配额。
+	// Acquire 内部使用独立的 maxQueueWait 计时器（默认30分钟），不受下方执行超时影响。
 	modelName := ""
 	if len(modelOverride) > 0 {
 		modelName = modelOverride[0]
@@ -1230,7 +1252,7 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 	if modelName != "" && s.modelRepo != nil {
 		if m, err2 := s.modelRepo.GetByName(modelName); err2 == nil {
 			if lim := s.getModelLimiter(tenantID, modelName, m.Concurrency, m.RateLimit); lim != nil {
-				if acquireErr := lim.Acquire(ctx); acquireErr != nil {
+				if acquireErr := lim.Acquire(parentCtx); acquireErr != nil {
 					return "", nil, fmt.Errorf("model %s: %w", modelName, acquireErr)
 				}
 				defer lim.Release()
@@ -1241,6 +1263,14 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 			}
 		}
 	}
+
+	// 执行超时：在获取并发槽之后创建，确保超时只计算实际 API 调用时间。
+	timeoutDur := 5 * time.Minute
+	if config.TimeoutSeconds > 0 {
+		timeoutDur = time.Duration(config.TimeoutSeconds) * time.Second
+	}
+	ctx, cancel := context.WithTimeout(parentCtx, timeoutDur)
+	defer cancel()
 
 	req := &ai.GenerateRequest{
 		Messages:     []ai.ChatMessage{{Role: "user", Content: prompt}},

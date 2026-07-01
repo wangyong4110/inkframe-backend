@@ -659,7 +659,12 @@ func isRetryable(err error) bool {
 		return false
 	}
 	msg := strings.ToLower(err.Error())
-	retryKeywords := []string{"connection refused", "temporary", "429", "502", "503", "rate limit", "overloaded"}
+	// 包含并发/限速信号的错误均值得重试：429（Too Many Requests）、上游 concurrent limit、
+	// 即梦AI code=50430（视频并发限制）、或 code=429 等。
+	retryKeywords := []string{
+		"connection refused", "temporary", "429", "502", "503",
+		"rate limit", "overloaded", "concurrent limit", "50430", "too many",
+	}
 	for _, kw := range retryKeywords {
 		if strings.Contains(msg, kw) {
 			return true

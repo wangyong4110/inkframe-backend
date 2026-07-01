@@ -4,9 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/rand"
 	"encoding/base64"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -758,14 +756,19 @@ func (p *QianwenProvider) generateQwenTTS(ctx context.Context, text, model, voic
 	return saveTTSToTemp(audioData, text, start)
 }
 
-// saveTTSToTemp 将音频字节写入 /tmp 临时文件并返回 AudioResponse。
+// saveTTSToTemp 将音频字节写入临时文件并返回 AudioResponse。
 func saveTTSToTemp(audioData []byte, text string, start time.Time) (*AudioResponse, error) {
-	idBytes := make([]byte, 8)
-	rand.Read(idBytes) //nolint:errcheck
-	tmpPath := fmt.Sprintf("/tmp/inkframe-tts-%s.mp3", hex.EncodeToString(idBytes))
-	if err := os.WriteFile(tmpPath, audioData, 0644); err != nil {
+	tmpFile, err := os.CreateTemp("", "inkframe-tts-*.mp3")
+	if err != nil {
 		return nil, fmt.Errorf("TTS 写入临时文件失败: %w", err)
 	}
+	tmpPath := tmpFile.Name()
+	if _, err := tmpFile.Write(audioData); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath) //nolint:errcheck
+		return nil, fmt.Errorf("TTS 写入临时文件失败: %w", err)
+	}
+	tmpFile.Close()
 	return &AudioResponse{
 		URL:       "file://" + tmpPath,
 		Format:    "mp3",

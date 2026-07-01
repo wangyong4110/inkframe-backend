@@ -339,10 +339,17 @@ func (p *TencentTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenera
 		return nil, fmt.Errorf("tencent-tts: base64 decode: %w", err)
 	}
 
-	tmpPath := fmt.Sprintf("/tmp/inkframe-tts-%s.%s", sessionID, codec)
-	if err := os.WriteFile(tmpPath, audioData, 0644); err != nil {
+	tmpFile, err := os.CreateTemp("", "inkframe-tts-*."+codec)
+	if err != nil {
 		return nil, fmt.Errorf("tencent-tts: write temp file: %w", err)
 	}
+	tmpPath := tmpFile.Name()
+	if _, err := tmpFile.Write(audioData); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath) //nolint:errcheck
+		return nil, fmt.Errorf("tencent-tts: write temp file: %w", err)
+	}
+	tmpFile.Close()
 
 	// 转换时间戳
 	var subtitles []TTSSubtitle

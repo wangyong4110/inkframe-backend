@@ -708,7 +708,7 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint, u
 	}
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "extract_chapter_items", chItemsPrompt2, "",
-		StoryboardOverrides{})
+		StoryboardOverrides{MaxTokens: 8192})
 	if err != nil {
 		return nil, fmt.Errorf("AI extract chapter items: %w", err)
 	}
@@ -724,9 +724,11 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint, u
 	}
 	var items []itemJSON
 	cleaned := extractJSON(strings.TrimSpace(result))
-	if err := json.Unmarshal([]byte(cleaned), &items); err != nil {
-		return nil, fmt.Errorf("parse items JSON: %w", err)
+	if parseErr := json.Unmarshal([]byte(cleaned), &items); parseErr != nil {
+		logger.Errorf("[ItemService] AIExtractChapterItems: parse error: %v, raw: %.300s", parseErr, result)
+		return nil, fmt.Errorf("parse items JSON: %w", parseErr)
 	}
+	logger.Printf("[ItemService] AIExtractChapterItems: chapterID=%d AI returned %d items, raw len=%d", chapterID, len(items), len(result))
 
 	var created []*model.Item
 	for _, it := range items {

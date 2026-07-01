@@ -195,12 +195,17 @@ func (p *DoubaoSpeechProvider) AudioGenerate(ctx context.Context, req *AudioGene
 	}
 
 	// 写入临时文件
-	tmpIDBytes := make([]byte, 8)
-	rand.Read(tmpIDBytes) //nolint:errcheck
-	tmpPath := fmt.Sprintf("/tmp/inkframe-tts-%s.mp3", hex.EncodeToString(tmpIDBytes))
-	if err := os.WriteFile(tmpPath, audioData, 0644); err != nil {
+	tmpFile, err := os.CreateTemp("", "inkframe-tts-*.mp3")
+	if err != nil {
 		return nil, fmt.Errorf("doubao-speech: write temp file: %w", err)
 	}
+	tmpPath := tmpFile.Name()
+	if _, err := tmpFile.Write(audioData); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath) //nolint:errcheck
+		return nil, fmt.Errorf("doubao-speech: write temp file: %w", err)
+	}
+	tmpFile.Close()
 
 	durationSecs := float64(len(req.Text)) / 8.0
 	if totalTextWords > 0 {
@@ -637,12 +642,17 @@ func (p *DoubaoSpeechV1Provider) AudioGenerate(ctx context.Context, req *AudioGe
 		return nil, fmt.Errorf("doubao-speech-v1: base64 decode: %w", err)
 	}
 
-	idBytes := make([]byte, 8)
-	rand.Read(idBytes) //nolint:errcheck
-	tmpPath := fmt.Sprintf("/tmp/inkframe-tts-%s.mp3", hex.EncodeToString(idBytes))
-	if err := os.WriteFile(tmpPath, audioData, 0644); err != nil {
+	tmpFile, err := os.CreateTemp("", "inkframe-tts-*.mp3")
+	if err != nil {
 		return nil, fmt.Errorf("doubao-speech-v1: write temp file: %w", err)
 	}
+	tmpPath := tmpFile.Name()
+	if _, err := tmpFile.Write(audioData); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath) //nolint:errcheck
+		return nil, fmt.Errorf("doubao-speech-v1: write temp file: %w", err)
+	}
+	tmpFile.Close()
 
 	duration := float64(len(req.Text)) / 8.0 // 粗略估算
 	return &AudioResponse{
