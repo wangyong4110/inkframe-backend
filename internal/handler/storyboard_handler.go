@@ -119,6 +119,33 @@ type shotWithAudio struct {
 	AudioURL string `json:"audio_url"`
 }
 
+// MarshalJSON 必须显式定义，否则 *model.StoryboardShot.MarshalJSON() 通过方法提升成为
+// shotWithAudio 的 MarshalJSON，导致 AudioURL 字段被完全忽略。
+// 此处先调用嵌入 shot 的序列化，再将 audio_url 拼接进 JSON 对象。
+func (s shotWithAudio) MarshalJSON() ([]byte, error) {
+	shotJSON, err := s.StoryboardShot.MarshalJSON()
+	if err != nil {
+		return nil, err
+	}
+	if s.AudioURL == "" {
+		return shotJSON, nil
+	}
+	// 将 audio_url 注入到 JSON 对象末尾（在最后一个 } 之前）
+	audioVal, err := json.Marshal(s.AudioURL)
+	if err != nil {
+		return nil, err
+	}
+	if len(shotJSON) < 2 || shotJSON[len(shotJSON)-1] != '}' {
+		return shotJSON, nil
+	}
+	result := make([]byte, 0, len(shotJSON)+len(audioVal)+14)
+	result = append(result, shotJSON[:len(shotJSON)-1]...)
+	result = append(result, []byte(`,"audio_url":`)...)
+	result = append(result, audioVal...)
+	result = append(result, '}')
+	return result, nil
+}
+
 // resolveAudioURL returns the serve endpoint for a shot's voice audio.
 // The endpoint delegates to the first VoiceSegment with audio.
 func resolveAudioURL(videoID uint, shot *model.StoryboardShot) string {

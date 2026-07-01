@@ -708,6 +708,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			models.POST("", cfg.ModelHandler.CreateModel)
 			models.GET("/available/:task_type", cfg.ModelHandler.GetAvailableModels)
 			models.POST("/select", cfg.ModelHandler.SelectModel)
+			models.POST("/voice-preview", cfg.ModelHandler.VoicePreview)
 			models.POST("/test-prompt", cfg.ModelHandler.TestModelPrompt)
 			models.GET("/task-mappings", cfg.ModelHandler.GetTaskMappings)
 			models.PUT("/task-mappings", cfg.ModelHandler.UpdateTaskMapping)

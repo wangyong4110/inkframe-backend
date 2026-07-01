@@ -225,12 +225,13 @@ type SparseEmbedPoint struct {
 
 // MultimodalEmbedResponse 多模态 Embedding 响应
 type MultimodalEmbedResponse struct {
-	Embedding       []float32          `json:"embedding"`                 // 稠密向量
+	Embedding       []float32          `json:"embedding"`                  // 稠密向量
 	SparseEmbedding []SparseEmbedPoint `json:"sparse_embedding,omitempty"` // 稀疏向量（sparse_embedding.enabled 时返回）
 	MultiEmbedding  [][]float32        `json:"multi_embedding,omitempty"`  // 多向量（multi_embedding.enabled 时返回，解压后）
 	TokensUsed      int                `json:"tokens_used"`
-	TextTokens      int                `json:"text_tokens"`               // 输入中文本/时间轴 token 数
-	ImageTokens     int                `json:"image_tokens"`              // 输入中图片/视频帧 token 数
+	TextTokens      int                `json:"text_tokens"`  // 文本/时间轴 token 数
+	ImageTokens     int                `json:"image_tokens"` // 图片/视频帧 token 数
+	VideoTokens     int                `json:"video_tokens"` // 视频 token 数（SDK ≥ v1.2.38 起填充）
 	Model           string             `json:"model"`
 }
 

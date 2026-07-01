@@ -2079,18 +2079,21 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	// 结构控制词置于提示词最前段，确保在 cross-attention 中获得最高权重。
 	// 3 格布局：正面/侧面/背面全身视图，合并在同一张横版图中（标准三视图格式）。
 	// 关键实践：
-	//   - "same character in all panels" 置于最前段，权重最高
-	//   - "equal-width 3-panel" 约束三格等宽
+	//   - LEFT/CENTER/RIGHT PANEL 空间方位词比 [panel N] 对扩散模型更有约束力
+	//   - 侧面："only one ear visible, nose tip in profile" 强制纯侧面，排除四分之三脸
+	//   - 背面："back of head visible, no face visible" 强制纯背视角
+	//   - 正面："facing camera directly, symmetrical" 强制完全正面
 	//   - "A-pose arms 30-45 degrees" 量化手臂角度，避免 T-pose
 	//   - "same ground baseline" 对齐三格脚底基线
-	//   - "horizontal wide format" 强化横版构图，匹配 1200×720 输出尺寸
 	layoutFrame :=
-		"same character in all panels, character design turnaround reference sheet, " +
-			"equal-width 3-panel orthographic reference sheet, horizontal wide format: " +
-			"[panel 1] 0-degree front-facing full body, neutral expression, " +
-			"[panel 2] 90-degree right side profile full body, " +
-			"[panel 3] 180-degree back view full body, " +
-			"A-pose arms 30-45 degrees from sides, " +
+		"character design turnaround reference sheet, orthographic model sheet, " +
+			"three equal-width panels side by side, horizontal wide format, " +
+			"LEFT PANEL front view: character facing camera directly, fully symmetrical body, neutral expression, full body head to toe, " +
+			"CENTER PANEL exact side view: character rotated exactly 90 degrees, pure flat profile, " +
+			"only one ear visible, nose tip visible in profile, facing left, full body head to toe, " +
+			"RIGHT PANEL back view: character completely turned away from camera, " +
+			"back of head and hair visible, no face visible at all, full body head to toe, " +
+			"A-pose arms 30-45 degrees from sides in all panels, " +
 			"same ground baseline across all panels, identical face hair costume in every panel"
 
 	// appearance 截断至 80 词（原 50 词易截断关键外观细节如发色、眼色、服装特征，
@@ -2132,8 +2135,10 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	baseNeg := "text, labels, annotations, watermark, signature, caption, speech bubble, " +
 		"background objects, scene elements, environment, complex background, " +
 		"T-pose, arms straight horizontal, arms glued to body, " +
-		"three-quarter view, 45-degree angle, diagonal angle, oblique angle, " +
+		"three-quarter view, 45-degree angle, diagonal angle, oblique angle, semi-profile, slight angle, angled view, " +
 		"perspective distortion, foreshortening, dynamic pose, action pose, " +
+		"face visible in back panel, face showing in right panel, front-facing in side panel, " +
+		"both ears visible in side panel, two ears, full face in profile panel, " +
 		"different face, inconsistent face, face change, different person, face inconsistency, " +
 		"different hairstyle, hair color change, costume mismatch, outfit change, different outfit, " +
 		"each panel different character, different character per panel, multiple characters, " +
@@ -2147,12 +2152,15 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 		negativePrompt = baseNeg + ", " + genderNeg
 	}
 
-	// 3 格三视图使用 1200x720 横版布局（正面/侧面/背面各占 400px）
+	// 3 格三视图使用 1200x720 横版布局（正面/侧面/背面各占 400px）。
+	// 一致性权重设为 0.4（低权重）：三视图合图需要 prompt 主导布局结构，
+	// DreamO（weight>=0.7）以参考图为主会压制多面板布局 prompt 导致所有格都生成正面图。
+	// 0.4 → selectImageModel 选 SeedEditV3（volcengine-visual 路径），prompt 主导效果更好。
 	refs := []string{}
 	if aiRef != "" {
 		refs = []string{aiRef}
 	}
-	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, "1200x720", 0)
+	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, "1200x720", 0, 0.4)
 	if err != nil {
 		return nil, err
 	}

@@ -97,6 +97,11 @@ func (s *VideoService) PollShotStatus(shot *model.StoryboardShot) error {
 				shot.TaskMeta.ClipPath = ossURL
 				shot.VideoURL = ossURL
 				os.Remove(localPath) //nolint:errcheck
+			} else {
+				// OSS 上传失败：回退到 CDN 原始 URL，确保前端可以预览
+				// （本地文件为临时路径，重启后消失；CDN URL 有时效但优于空值）
+				logger.Warnf("PollShotStatus: shot %d OSS 上传失败，回退到 CDN URL: %s", shot.ShotNo, videoURL)
+				shot.VideoURL = videoURL
 			}
 		}
 		shot.Status = "completed"

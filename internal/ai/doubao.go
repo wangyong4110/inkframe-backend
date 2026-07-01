@@ -68,22 +68,33 @@ func (p *DoubaoProvider) GetModels() []string {
 		// 多模态 Embedding 模型（EmbedMultimodal）
 		"doubao-embedding-vision-250328", // 多模态 Embedding（文本+图片+视频），维度 2048
 		"doubao-embedding-vision-250615", // 多模态 Embedding v2，支持可选维度（1024/2048）
+		"doubao-embedding-vision-251215", // 多模态 Embedding v3，视频专属 FPS/帧参数控制
 	}
 }
 
 func (p *DoubaoProvider) HealthCheck(ctx context.Context) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", p.endpoint+"/models", nil)
+	body := map[string]interface{}{
+		"model":      p.model,
+		"max_tokens": 1,
+		"messages":   []map[string]string{{"role": "user", "content": "hi"}},
+	}
+	b, _ := json.Marshal(body)
+	req, err := http.NewRequestWithContext(ctx, "POST", p.endpoint+"/chat/completions", bytes.NewReader(b))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+p.apiKey)
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := p.client.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("health check failed: status %d", resp.StatusCode)
+	if resp.StatusCode == http.StatusUnauthorized {
+		return fmt.Errorf("health check failed: invalid API key (401)")
+	}
+	if resp.StatusCode >= 500 {
+		return fmt.Errorf("health check failed: server error %d", resp.StatusCode)
 	}
 	return nil
 }

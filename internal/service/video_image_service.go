@@ -1261,87 +1261,31 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 			}
 		}
 	} else {
-		// ③④ 无正式场景图
-		var charRefImages []string // 按 CharacterIDs 顺序排列，严格一一对应
-		var charRefNames []string  // 与 charRefImages 并行：用于 r2v [Image N] 注解
-		var sceneRefImage string
-
-		if s.characterRepo != nil && len(shot.CharacterIDs) > 0 {
-			chapterNo := 0
-			if shot.ChapterID != nil && s.chapterRepo != nil {
-				if chapter, err := s.chapterRepo.GetByID(*shot.ChapterID); err == nil && chapter != nil {
-					chapterNo = chapter.ChapterNo
-				}
-			}
-			chars, charErr := s.characterRepo.ListByIDs([]uint(shot.CharacterIDs))
-			if charErr == nil && len(chars) > 0 {
-				charMap := make(map[uint]*model.Character, len(chars))
-				for _, c := range chars {
-					charMap[c.ID] = c
-				}
-				for _, cid := range shot.CharacterIDs {
-					c, ok := charMap[cid]
-					if !ok {
-						continue
-					}
-					look := s.getCharActiveLook(c, chapterNo)
-					if look != nil && look.ThreeViewSheet != "" {
-						img := normalizeMediaURL(look.ThreeViewSheet)
-						if img != "" {
-							charRefImages = append(charRefImages, img)
-							charRefNames = append(charRefNames, c.Name)
-							logger.Printf("GenerateShotVideo: shot %d charID=%d name=%q → threeView=%q", shot.ShotNo, c.ID, c.Name, img)
-						}
-					} else {
-						logger.Printf("GenerateShotVideo: shot %d charID=%d name=%q has no ThreeViewSheet", shot.ShotNo, c.ID, c.Name)
-					}
-				}
-			}
+		// ③④ 无正式场景图：统一先生成分镜首帧图，再用于 I2V
+		// generateShotReferenceImage 内部已处理角色三视图/场景锚点参考，
+		// 确保 shot.ImageURL（分镜图）与视频首帧严格一致。
+		logger.Printf("GenerateShotVideo: shot %d ImageURL empty, generating storyboard first frame before video", shot.ShotNo)
+		frameURL, frameErr := s.generateShotReferenceImage(shot)
+		if frameErr != nil {
+			logger.Errorf("GenerateShotVideo: shot %d image generation failed: %v", shot.ShotNo, frameErr)
 		}
-		if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
-			if _, anchorURL, err := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); err == nil && anchorURL != "" {
-				sceneRefImage = anchorURL
-			}
-		}
-
-		if len(charRefImages) > 0 || sceneRefImage != "" {
-			// ③ 有角色三视图或场景图，直接用，无需生成中间图片
-			if len(charRefImages) > 0 {
-				referenceImage = charRefImages[0]
-				if len(charRefNames) > 0 {
-					refLabel = charRefNames[0]
-				}
-			} else {
-				referenceImage = sceneRefImage
-				sceneRefImage = ""
-			}
-			_ = sceneRefImage
-			logger.Printf("GenerateShotVideo: shot %d no ImageURL — using char refs=%d scene=%v directly", shot.ShotNo, len(charRefImages), sceneRefImage != "")
-		} else {
-			// ④ 无任何参考图 → 先生成场景图
-			logger.Printf("GenerateShotVideo: shot %d ImageURL empty and no char refs, generating image first", shot.ShotNo)
-			frameURL, frameErr := s.generateShotReferenceImage(shot)
+		if frameURL == "" {
+			errMsg := "image generation failed: empty URL returned"
 			if frameErr != nil {
-				logger.Errorf("GenerateShotVideo: shot %d image generation failed: %v", shot.ShotNo, frameErr)
+				errMsg = "image generation failed: " + frameErr.Error()
 			}
-			if frameURL == "" {
-				errMsg := "image generation failed: empty URL returned"
-				if frameErr != nil {
-					errMsg = "image generation failed: " + frameErr.Error()
-				}
-				if e := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"status": "failed", "error_message": errMsg}); e != nil {
-					logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d status=failed: %v", shot.ID, e)
-				}
-				if frameErr != nil {
-					return frameErr
-				}
-				return fmt.Errorf("shot %d: %s", shot.ShotNo, errMsg)
+			if e := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"status": "failed", "error_message": errMsg}); e != nil {
+				logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d status=failed: %v", shot.ID, e)
 			}
-			shot.ImageURL = frameURL
-			referenceImage = frameURL
-			if updateErr := s.storyboardRepo.Update(shot); updateErr != nil {
-				logger.Errorf("GenerateShotVideo: shot %d failed to persist ImageURL: %v", shot.ShotNo, updateErr)
+			if frameErr != nil {
+				return frameErr
 			}
+			return fmt.Errorf("shot %d: %s", shot.ShotNo, errMsg)
+		}
+		shot.ImageURL = frameURL
+		referenceImage = frameURL
+		if updateErr := s.storyboardRepo.Update(shot); updateErr != nil {
+			logger.Errorf("GenerateShotVideo: shot %d failed to persist ImageURL: %v", shot.ShotNo, updateErr)
 		}
 	}
 

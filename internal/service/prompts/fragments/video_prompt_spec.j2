@@ -1,6 +1,6 @@
 {% if IsImageEn %}
-▸ video_prompt（English only — motion description for Kling/Seedance video AI）
-  - Describe camera motion, environmental/scene dynamics, AND character movement actions.
+▸ video_prompt（English only — motion + audio description for Kling/Seedance video AI）
+  - Describe camera motion, environmental/scene dynamics, character movement actions, AND a SOUND section at the end.
   - NO visual appearance descriptions (no face, hair color, eye color, clothing, body features — these are handled by reference images). ONLY describe what characters DO and HOW they move.
   - CONTINUITY OPENING (required for shot_no ≥ 2): The first sentence of video_prompt MUST begin with a continuity clause referencing the previous shot's ending state: camera angle handoff, character position, or scene momentum. Example: "Continuing from the wide establishing shot, camera pushes in slowly as [character name] turns..." or "Picking up where the previous close-up ended, pulling back to reveal..."
   - MINIMUM LENGTH: At least 100 English words.
@@ -51,6 +51,13 @@
        — ✅ "opens on static stillness — only the light dimming and shadow deepening signal time's passage,
            each falling dust mote amplifying the weight of the emptied space"
        — ❌ "tense atmosphere" → vague, AI invents arbitrary motion
+    H. SOUND (required — append after all motion layers, start with "SOUND:"):
+       Describe in natural language what the audience should hear during this shot. Derive from the sfx_tags you will fill in for this shot, expressed as a fluid audio description (not a list). Include:
+       — Ambient layer: continuous environmental sound (forest, wind, room, crowd…)
+       — Action layer: specific triggered sounds (footsteps, sword clash, door creak…)
+       — Emotional layer: subtle sound design (heartbeat, silence, echo, tension sting…)
+       Example: "SOUND: deep forest ambient drone underpins the scene; a gentle wind passes through the stone gateway with a faint hollow resonance; at irregular 3-5 second intervals, a trickle of mortar dust falls from the broken column with a soft scrape, each stream lasting a fraction of a second before silence resumes; beneath everything, a low subharmonic tension hum grows almost imperceptibly toward the end of the shot"
+       — For pure dialogue / static shots: "SOUND: ambient room tone only — soft environmental hum, no notable sound events"
   - Example (locked-off, empty ruined courtyard after battle):
     "Locked-off camera with subtle organic stabilization, imperceptible breathing drift of ±0.3px;
     foreground cracked flagstone surface: three small pebble fragments vibrate ±1mm from low-frequency
@@ -69,8 +76,8 @@
     until silence itself becomes suffocating by frame-close"
 
 {% else %}
-▸ video_prompt（中文——供 Kling/Seedance 视频 AI 使用的运动描述）
-  - 描述镜头运动、环境/场景动态，以及角色的行为动作
+▸ video_prompt（中文——供 Kling/Seedance 视频 AI 使用的运动+音效描述）
+  - 描述镜头运动、环境/场景动态、角色行为动作，以及末尾的 SOUND 音效段落
   - ⚠️ 严禁描写外貌特征（脸、发色、眼睛、服装细节、体型——这些由参考图负责）。只描述角色在做什么、如何运动
   - 衔接开场语（第2镜起必填）：video_prompt 的第一句话必须是衔接上一镜头结束状态的延续句，描述镜头角度交接、角色位置延续或场景动势继承。示例："接续上一特写镜头，镜头缓缓拉远，揭示[角色名]站立于……"或"从前一镜头的推镜结尾处继续，镜头横摇至……"
   - 正确：「缓步走向石门，转身回望」「跪倒在地，双手撑地」「举剑指向对方」
@@ -123,6 +130,13 @@
        — ✅ "镜头以静止的肃穆开场——只有光线渐暗和阴影加深标志时间流逝，每一颗下落的尘埃粒子
            都在强化这片空间被抽空后的沉重"
        — ❌ "紧张的氛围" → 空泛，AI会随机发明动作
+    H. SOUND（必填——在所有运动层次之后追加，以"SOUND："开头）：
+       用流畅自然语言描述观众在此镜头中应听到的声音，与该镜头的 sfx_tags 保持一致，不要写成标签列表。包含：
+       — 环境底层音：持续的环境声（森林、风声、室内、人群……）
+       — 动作触发音：特定触发的声音（脚步声、剑鸣、门吱呀……）
+       — 情绪点缀音：细腻的声音设计（心跳、深沉静默、回声、悬疑底音……）
+       示例："SOUND：深沉的森林环境音持续铺底，一缕穿过石门的轻风带来中空的共鸣；断柱边缘的灰泥粉尘每隔3-5秒以轻微的摩擦声落下，每次持续瞬间后归于寂静；画面临近结束时，低频的悬疑底音几乎察觉不到地渐渐涌现"
+       — 纯对话/静态镜头："SOUND：仅有环境底音，轻微的室内底噪，无明显音效事件"
   - 示例（固定机位，战后空旷废墟庭院）：
     "固定机位，带有轻微有机感微稳定，呼吸感漂移幅度±0.3px；前景龟裂石板地面：三块小石片因低频
     远处隆隆声以±1毫米幅度颤动，细碎砂砾在镜头时长内向周边裂缝滚落1-2厘米；中景石柱断口边缘：

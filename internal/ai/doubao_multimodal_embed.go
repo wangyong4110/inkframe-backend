@@ -121,7 +121,8 @@ func (p *DoubaoProvider) EmbedMultimodal(ctx context.Context, req *MultimodalEmb
 		TokensUsed:  resp.Usage.TotalTokens,
 		TextTokens:  resp.Usage.PromptTokensDetails.TextTokens,
 		ImageTokens: resp.Usage.PromptTokensDetails.ImageTokens,
-		Model:       resp.Model,
+		// VideoTokens: SDK v1.2.37 的 PromptTokensDetails 尚无此字段；升级 SDK 后在此填充
+		Model: resp.Model,
 	}
 
 	// 稀疏向量：转换为内部类型
@@ -147,10 +148,10 @@ func (p *DoubaoProvider) EmbedMultimodal(ctx context.Context, req *MultimodalEmb
 		}
 	}
 
-	log.Printf("[doubao] EmbedMultimodal model=%s inputs=%d tokens=%d(text=%d img=%d) latency=%dms",
+	log.Printf("[doubao] EmbedMultimodal model=%s inputs=%d tokens=%d(text=%d img=%d vid=%d) latency=%dms",
 		model, len(req.Input), resp.Usage.TotalTokens,
 		resp.Usage.PromptTokensDetails.TextTokens, resp.Usage.PromptTokensDetails.ImageTokens,
-		time.Since(start).Milliseconds())
+		out.VideoTokens, time.Since(start).Milliseconds())
 
 	return out, nil
 }

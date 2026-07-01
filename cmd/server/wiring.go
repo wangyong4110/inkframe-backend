@@ -850,7 +850,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			WithCapCutSegmentRepo(repos.ShotVoiceSegmentRepo). // P1-2: VoiceSegment audio in CapCut exports
 			WithServerBaseURL(buildServerBaseURL(cfg)).         // 本地/DB 存储媒体 URL 解析
 			WithAuditService(services.AuditService),
-		ModelHandler:   handler.NewModelHandler(services.ModelService).WithAuditService(services.AuditService),
+		ModelHandler:   handler.NewModelHandler(services.ModelService).WithAuditService(services.AuditService).WithAIService(services.AIService).WithTaskService(services.TaskService),
 		McpHandler:     handler.NewMcpHandler(services.McpService).WithAuditService(services.AuditService),
 		StyleHandler:   handler.NewStyleHandler(services.StyleService),
 		ContextHandler: handler.NewContextHandler(services.GenerationContextService),

@@ -1139,6 +1139,19 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			}
 		}
 
+		// 若 video_prompt 中不含 SOUND 段落，将 sfx_tags.prompt 追加为兜底（确保 UI 展示音效描述）
+		if len(r.SFXTags) > 0 && !strings.Contains(videoPrompt, "SOUND:") && !strings.Contains(videoPrompt, "SOUND：") {
+			soundParts := make([]string, 0, len(r.SFXTags))
+			for _, tag := range r.SFXTags {
+				if tag.Prompt != "" {
+					soundParts = append(soundParts, tag.Prompt)
+				}
+			}
+			if len(soundParts) > 0 {
+				videoPrompt += "。SOUND：" + strings.Join(soundParts, "；")
+			}
+		}
+
 		shot := &model.StoryboardShot{
 			UUID:        uuid.New().String(),
 			VideoID:     videoID,

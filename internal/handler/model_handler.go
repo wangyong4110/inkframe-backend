@@ -2,12 +2,14 @@ package handler
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -28,6 +30,8 @@ var staticProviderModels = map[string][]string{
 type ModelHandler struct {
 	modelService *service.ModelService
 	auditSvc     *service.AuditService
+	aiSvc        *service.AIService
+	taskSvc      *service.TaskService
 }
 
 func NewModelHandler(modelService *service.ModelService) *ModelHandler {
@@ -37,6 +41,18 @@ func NewModelHandler(modelService *service.ModelService) *ModelHandler {
 // WithAuditService injects the audit service.
 func (h *ModelHandler) WithAuditService(svc *service.AuditService) *ModelHandler {
 	h.auditSvc = svc
+	return h
+}
+
+// WithAIService injects the AI service (required for voice preview).
+func (h *ModelHandler) WithAIService(svc *service.AIService) *ModelHandler {
+	h.aiSvc = svc
+	return h
+}
+
+// WithTaskService injects the task service (required for voice preview).
+func (h *ModelHandler) WithTaskService(svc *service.TaskService) *ModelHandler {
+	h.taskSvc = svc
 	return h
 }
 
@@ -800,6 +816,66 @@ func providerNameFromEndpoint(endpoint string) string {
 }
 
 // fetchOllamaModels 从 Ollama /api/tags 获取已安装模型名称列表
+// VoicePreview 试听指定音色（不依赖角色，适用于旁白音色试听）
+// POST /api/v1/voice/preview
+// Body: {"voice_id":"xxx","text":"..."}（text 可省略，使用默认句子）
+func (h *ModelHandler) VoicePreview(c *gin.Context) {
+	if h.aiSvc == nil || h.taskSvc == nil {
+		respondErr(c, http.StatusServiceUnavailable, "voice preview service not available")
+		return
+	}
+	tenantID := getTenantID(c)
+
+	var req struct {
+		VoiceID string `json:"voice_id"`
+		Text    string `json:"text"`
+	}
+	_ = c.ShouldBindJSON(&req)
+	if req.VoiceID == "" {
+		req.VoiceID = "alloy"
+	}
+	if req.Text == "" {
+		req.Text = "晨光在花纹地毯上铺开，温暖像奶奶的手掌一样环绕着小红帽。"
+	}
+
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeVoicePreview, "旁白音色试听", "voice", 0)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"voice_id": req.VoiceID,
+		"text":     req.Text,
+	})
+
+	go func(taskID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				h.taskSvc.Fail(taskID, "内部错误") //nolint:errcheck
+			}
+		}()
+		h.taskSvc.SetRunning(taskID) //nolint:errcheck
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		rawURL, genErr := h.aiSvc.AudioGenerateWithOptions(ctx, tenantID, req.Text, req.VoiceID, 1.0, "")
+		if genErr != nil {
+			h.taskSvc.Fail(taskID, "语音生成失败: "+genErr.Error()) //nolint:errcheck
+			return
+		}
+		playURL := rawURL
+		if len(rawURL) > 7 && rawURL[:7] == "file://" {
+			filePath := rawURL[7:]
+			if data, readErr := os.ReadFile(filePath); readErr == nil && len(data) > 0 {
+				playURL = "data:audio/mpeg;base64," + base64.StdEncoding.EncodeToString(data)
+			}
+		}
+		h.taskSvc.Complete(taskID, map[string]interface{}{"audio_url": playURL, "voice_id": req.VoiceID}) //nolint:errcheck
+	}(task.TaskID)
+
+	respondAccepted(c, task.TaskID, "旁白音色试听任务已提交")
+}
+
 func fetchOllamaModels(ctx context.Context, endpoint string) ([]string, error) {
 	// endpoint 可能是 http://localhost:11434/v1，需要去掉 /v1 部分
 	baseURL := strings.TrimSuffix(strings.TrimRight(endpoint, "/"), "/v1")
