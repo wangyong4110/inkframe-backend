@@ -1862,21 +1862,28 @@ const universalQualityTags = "masterpiece, best quality, ultra-detailed, sharp f
 
 // resolveStyleQualityTokens 返回与风格匹配的英文质量提升词串，末尾不加逗号。
 // 场景图和角色图共用同一套质量词，保证输出基准一致。
+// 重要：写实/3D 风格才使用 "8K, ultra high resolution" 等摄影写实信号；
+// 动漫/插画等风格禁止使用这些词，否则模型会偏向写实输出。
 func resolveStyleQualityTokens(styleID string) string {
-	base := universalQualityTags
+	// 写实/3D 专用基础词（含 8K/UHD 摄影信号）
+	realisticBase := universalQualityTags
+	// 插画/动漫基础词（不含 8K/UHD，避免推向写实）
+	illustrationBase := "masterpiece, best quality, ultra-detailed, sharp focus, professional"
 	switch resolveStyleCategory(styleID) {
 	case "realistic":
-		return base + ", photorealistic, cinematic lighting, 8k uhd"
+		return realisticBase + ", photorealistic, cinematic lighting, 8k uhd"
 	case "render_3d":
-		return base + ", 3D render, ray tracing, volumetric lighting, high-fidelity 3D"
+		return realisticBase + ", 3D render, ray tracing, volumetric lighting, high-fidelity 3D"
+	case "anime":
+		return illustrationBase + ", vibrant colors, clean linework, professional anime illustration"
 	case "pixel":
-		return base + ", crisp pixel art, clean sharp pixels, retro game aesthetic"
+		return illustrationBase + ", crisp pixel art, clean sharp pixels, retro game aesthetic"
 	case "classic_illustration":
-		return base + ", exquisite brushwork, vibrant colors, professional illustration"
+		return illustrationBase + ", exquisite brushwork, vibrant colors, professional illustration"
 	case "dark_stylized":
-		return base + ", dramatic atmosphere, vibrant colors, professional digital art"
-	default: // anime, unknown
-		return base + ", vibrant colors, clean linework, professional illustration"
+		return illustrationBase + ", dramatic atmosphere, vibrant colors, professional digital art"
+	default: // unknown
+		return illustrationBase + ", vibrant colors, clean linework, professional illustration"
 	}
 }
 

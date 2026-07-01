@@ -1544,8 +1544,13 @@ func selectImageModel(entry ai.ImageProviderEntry, referenceImage, style string,
 			}
 			return ai.VolcModelSeedEditV3
 		}
-		// 无参考图时：PortraitPhoto 是 I2I 模型，必须有 image_input 才能正常工作；
-		// 无论什么风格都使用 Text2ImgV3（文生图），这样 prompt/negative_prompt 才能完整生效。
+		// 无参考图时：PortraitPhoto 是 I2I 模型，必须有 image_input 才能正常工作。
+		// 非写实风格（动漫/插画/仙侠等）使用 JimengT2Iv31（"风格精准"升级，对 anime/illustration 关键词的
+		// 理解和执行显著优于通用 Text2ImgV3，且 Text2ImgV3 的 high_aes 调教偏向写实高美学，动漫提示词几乎无效）。
+		// 写实或未设置风格仍用 Text2ImgV3（通用文生图，negative_prompt 完整生效）。
+		if !isRealisticStyle(style) && style != "" {
+			return ai.VolcModelJimengT2Iv31
+		}
 		return ai.VolcModelText2ImgV3
 	}
 	return entry.Model

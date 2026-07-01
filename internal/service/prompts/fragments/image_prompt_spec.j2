@@ -74,11 +74,64 @@
     medium                     → "50mm f/4, moderate depth-of-field, background soft but readable"
     wide/extreme_wide          → "24mm f/8, deep focus, sharp from foreground to background"
 
-  QUALITY BOOSTERS — always last; match to the project's established art style:
-{% if ImageStyleHint %}    Project art style: {{ ImageStyleHint }}
-    Use the booster that matches this style:
-{% endif %}    Realistic/cinematic: "masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting"
-    Anime/illustration:  "masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
+  QUALITY BOOSTERS — always last; use ONLY the booster that matches the project art style:
+{% if ImageStyleID == "realistic" or ImageStyleID == "real_person" %}
+    Project art style: {{ ImageStyleHint }}
+    ✅ USE: "masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting, realistic skin texture"
+    ❌ FORBIDDEN: cartoon, anime, illustration, cel shading, linework
+{% elif ImageStyleID == "render_3d" or ImageStyleID == "game_concept" %}
+    Project art style: {{ ImageStyleHint }}
+    ✅ USE: "masterpiece, best quality, ultra-detailed, 3D render, ray tracing, volumetric lighting, high-fidelity 3D, sharp focus"
+    ❌ FORBIDDEN: photorealistic photography, anime, flat color, cel shading
+{% elif ImageStyleID == "anime" or ImageStyleID == "chinese_animation" %}
+    Project art style: {{ ImageStyleHint }}
+    ✅ USE: "masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional anime illustration, cel shading"
+    ❌ FORBIDDEN: photorealistic, cinematic lighting, 8k uhd, realistic skin texture, photography
+{% elif ImageStyleID == "ink_painting" or ImageStyleID == "xianxia_style" %}
+    Project art style: {{ ImageStyleHint }}
+    ✅ USE: "masterpiece, best quality, ultra-detailed, exquisite brushwork, ink wash texture, traditional Chinese painting quality, elegant composition"
+    ❌ FORBIDDEN: photorealistic, neon, cyberpunk, cel shading, flat color
+{% elif ImageStyleID == "watercolor" %}
+    Project art style: {{ ImageStyleHint }}
+    ✅ USE: "masterpiece, best quality, ultra-detailed, soft watercolor wash, translucent layered pigment, gentle color bleeding, professional illustration"
+    ❌ FORBIDDEN: photorealistic, hard edges, cel shading, neon
+{% elif ImageStyleID == "oil_painting" %}
+    Project art style: {{ ImageStyleHint }}
+    ✅ USE: "masterpiece, best quality, ultra-detailed, rich impasto texture, visible brushstrokes, classical oil painting quality, museum-grade artwork"
+    ❌ FORBIDDEN: flat color, cel shading, photorealistic photography
+{% elif ImageStyleID == "cyberpunk" %}
+    Project art style: {{ ImageStyleHint }}
+    ✅ USE: "masterpiece, best quality, ultra-detailed, vibrant neon colors, high contrast digital art, cinematic sci-fi atmosphere, professional concept art"
+    ❌ FORBIDDEN: watercolor, ink wash, anime cel shading, natural daylight
+{% elif ImageStyleID == "steampunk" %}
+    Project art style: {{ ImageStyleHint }}
+    ✅ USE: "masterpiece, best quality, ultra-detailed, warm brass tones, intricate mechanical detail, Victorian illustration quality, professional concept art"
+    ❌ FORBIDDEN: neon colors, modern sci-fi, anime cel shading
+{% elif ImageStyleID == "gothic_dark" %}
+    Project art style: {{ ImageStyleHint }}
+    ✅ USE: "masterpiece, best quality, ultra-detailed, dramatic chiaroscuro, deep jewel tones, dark fantasy illustration, professional digital art"
+    ❌ FORBIDDEN: bright pastel colors, anime cel shading, photorealistic photography
+{% elif ImageStyleID == "pixel_art" %}
+    Project art style: {{ ImageStyleHint }}
+    ✅ USE: "masterpiece, best quality, crisp pixel art, clean sharp pixels, retro game aesthetic, limited palette, 16-bit style"
+    ❌ FORBIDDEN: smooth gradients, photorealistic, blurry, high resolution anti-aliasing
+{% elif ImageStyleID == "sketch" %}
+    Project art style: {{ ImageStyleHint }}
+    ✅ USE: "masterpiece, best quality, ultra-detailed, graphite pencil sketch, fine cross-hatching, monochrome drawing, professional illustration"
+    ❌ FORBIDDEN: color, photorealistic, cel shading
+{% elif ImageStyleID == "ukiyo_e" %}
+    Project art style: {{ ImageStyleHint }}
+    ✅ USE: "masterpiece, best quality, ultra-detailed, ukiyo-e woodblock print quality, flat bold color areas, strong black outlines, traditional Edo period art"
+    ❌ FORBIDDEN: photorealistic, 3D render, soft gradients, modern aesthetics
+{% elif ImageStyleHint %}
+    Project art style: {{ ImageStyleHint }}
+    ✅ USE: "masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
+    ❌ FORBIDDEN: photorealistic, cinematic lighting, 8k uhd
+{% else %}
+    No style set — choose the booster that fits the scene:
+    Realistic/cinematic: "masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting"
+    Illustration/anime:  "masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
+{% endif %}
 
   PRE-SUBMIT CHECKLIST (verify each before writing the field):
     □ Characters described by exact name (not "figure"); position, posture, expression included if present; omitted if no characters in shot
@@ -166,11 +219,64 @@
     medium                     → "50mm，f/4，适中景深，背景柔焦可辨"
     wide/extreme_wide          → "24mm，f/8，全域清晰，前景到背景均锐利"
 
-  画质词——附在最末尾，必须与本项目风格一致：
-{% if ImageStyleHint %}    本项目风格：{{ ImageStyleHint }}
-    选择与该风格匹配的画质词：
-{% endif %}    写实/电影风："masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting"
+  画质词——附在最末尾，必须与本项目风格严格一致，只写对应风格的一条，严禁混用：
+{% if ImageStyleID == "realistic" or ImageStyleID == "real_person" %}
+    本项目风格：{{ ImageStyleHint }}（写实/真人画风）
+    ✅ 必须使用："masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting, realistic skin texture"
+    ❌ 严禁混入：cartoon, anime, illustration, cel shading, linework
+{% elif ImageStyleID == "render_3d" or ImageStyleID == "game_concept" %}
+    本项目风格：{{ ImageStyleHint }}（3D渲染/游戏原画）
+    ✅ 必须使用："masterpiece, best quality, ultra-detailed, 3D render, ray tracing, volumetric lighting, high-fidelity 3D, sharp focus"
+    ❌ 严禁混入：photorealistic photography, anime, flat color, cel shading
+{% elif ImageStyleID == "anime" or ImageStyleID == "chinese_animation" %}
+    本项目风格：{{ ImageStyleHint }}（动漫/国漫风格）
+    ✅ 必须使用："masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional anime illustration, cel shading"
+    ❌ 严禁混入：photorealistic, cinematic lighting, 8k uhd, realistic skin texture, photography
+{% elif ImageStyleID == "ink_painting" or ImageStyleID == "xianxia_style" %}
+    本项目风格：{{ ImageStyleHint }}（水墨中国风/古典仙侠）
+    ✅ 必须使用："masterpiece, best quality, ultra-detailed, exquisite brushwork, ink wash texture, traditional Chinese painting quality, elegant composition"
+    ❌ 严禁混入：photorealistic, neon, cyberpunk, cel shading, flat color
+{% elif ImageStyleID == "watercolor" %}
+    本项目风格：{{ ImageStyleHint }}（水彩插画）
+    ✅ 必须使用："masterpiece, best quality, ultra-detailed, soft watercolor wash, translucent layered pigment, gentle color bleeding, professional illustration"
+    ❌ 严禁混入：photorealistic, hard edges, cel shading, neon
+{% elif ImageStyleID == "oil_painting" %}
+    本项目风格：{{ ImageStyleHint }}（油画风格）
+    ✅ 必须使用："masterpiece, best quality, ultra-detailed, rich impasto texture, visible brushstrokes, classical oil painting quality, museum-grade artwork"
+    ❌ 严禁混入：flat color, cel shading, photorealistic photography
+{% elif ImageStyleID == "cyberpunk" %}
+    本项目风格：{{ ImageStyleHint }}（赛博朋克）
+    ✅ 必须使用："masterpiece, best quality, ultra-detailed, vibrant neon colors, high contrast digital art, cinematic sci-fi atmosphere, professional concept art"
+    ❌ 严禁混入：watercolor, ink wash, anime cel shading, natural daylight
+{% elif ImageStyleID == "steampunk" %}
+    本项目风格：{{ ImageStyleHint }}（蒸汽朋克）
+    ✅ 必须使用："masterpiece, best quality, ultra-detailed, warm brass tones, intricate mechanical detail, Victorian illustration quality, professional concept art"
+    ❌ 严禁混入：neon colors, modern sci-fi, anime cel shading
+{% elif ImageStyleID == "gothic_dark" %}
+    本项目风格：{{ ImageStyleHint }}（哥特暗黑）
+    ✅ 必须使用："masterpiece, best quality, ultra-detailed, dramatic chiaroscuro, deep jewel tones, dark fantasy illustration, professional digital art"
+    ❌ 严禁混入：bright pastel colors, anime cel shading, photorealistic photography
+{% elif ImageStyleID == "pixel_art" %}
+    本项目风格：{{ ImageStyleHint }}（像素风格）
+    ✅ 必须使用："masterpiece, best quality, crisp pixel art, clean sharp pixels, retro game aesthetic, limited palette, 16-bit style"
+    ❌ 严禁混入：smooth gradients, photorealistic, blurry, anti-aliasing
+{% elif ImageStyleID == "sketch" %}
+    本项目风格：{{ ImageStyleHint }}（黑白素描）
+    ✅ 必须使用："masterpiece, best quality, ultra-detailed, graphite pencil sketch, fine cross-hatching, monochrome drawing, professional illustration"
+    ❌ 严禁混入：color, photorealistic, cel shading
+{% elif ImageStyleID == "ukiyo_e" %}
+    本项目风格：{{ ImageStyleHint }}（浮世绘）
+    ✅ 必须使用："masterpiece, best quality, ultra-detailed, ukiyo-e woodblock print quality, flat bold color areas, strong black outlines, traditional Edo period art"
+    ❌ 严禁混入：photorealistic, 3D render, soft gradients, modern aesthetics
+{% elif ImageStyleHint %}
+    本项目风格：{{ ImageStyleHint }}
+    ✅ 必须使用："masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
+    ❌ 严禁混入：photorealistic, cinematic lighting, 8k uhd
+{% else %}
+    未设置风格时，根据场景选择：
+    写实/电影风："masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting"
     动漫/插画风："masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
+{% endif %}
 
   输出前自检清单（每条验证后再写字段）：
     □ 若有角色出场：已使用精确角色名称（非"人影"）描述位置、姿态、表情；若无角色则省略角色区块

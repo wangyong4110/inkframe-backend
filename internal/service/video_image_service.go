@@ -783,6 +783,14 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
+	// 非写实风格（动漫/插画/仙侠等）：降低角色一致性权重（0.85→0.55），
+	// 使 selectImageModel 选择 SeedEditV3 而非 DreamO（IP-Adapter）。
+	// DreamO 以参考图外观为优先，文字风格词汇几乎无效；SeedEditV3 为指令编辑模式，
+	// 在保留角色特征的同时更好地执行"anime illustration style"等风格指令。
+	if artStyle != "" && !isRealisticStyle(artStyle) {
+		charConsistencyWeight = 0.55
+	}
+
 	// allRefImages 直接传给 API，无需合图（所有图生图 API 均支持多张参考图）
 
 	// 根据宽高比+质量档位计算实际图片尺寸（WxH），直接传给 API
