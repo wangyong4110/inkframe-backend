@@ -57,7 +57,9 @@ type VideoRenderConfig struct {
 	QualityTier    string `json:"quality_tier"`
 	VisualMode     string `json:"visual_mode"`
 	ThreeDStyle    string `json:"three_d_style"`
-	GenerateAudio  *bool  `json:"generate_audio"` // Seedance 2.0/1.5：nil=API 默认(true)，false=无声视频
+	GenerateAudio   *bool `json:"generate_audio"`    // Seedance 2.0/1.5：nil=API 默认(true)，false=无声视频
+	Priority        int   `json:"priority"`          // Seedance 2.0 请求优先级 0-9（0=默认FIFO，>0插队）
+	WebSearchEnabled bool `json:"web_search_enabled"` // Seedance 2.0：允许模型联网搜索（提升时效性）
 }
 
 // VideoPublishMeta 发布与展示元数据（JSON存储）
@@ -540,7 +542,9 @@ type UpdateVideoRequest struct {
 	VisualMode    string `json:"visual_mode"`    // standard/hd/3d/hd_3d
 	ThreeDStyle   string `json:"three_d_style"`  // cg/pixar/anime3d/realistic3d
 	QualityTier   string `json:"quality_tier"`   // draft/preview/final/production
-	GenerateAudio *bool  `json:"generate_audio"` // Seedance 2.0/1.5：nil=不变，true=有声，false=静音
+	GenerateAudio   *bool `json:"generate_audio"`    // Seedance 2.0/1.5：nil=不变，true=有声，false=静音
+	Priority        *int  `json:"priority"`          // Seedance 2.0 请求优先级 0-9；nil=不修改
+	WebSearchEnabled *bool `json:"web_search_enabled"` // Seedance 2.0 联网搜索；nil=不修改
 }
 
 type EnhancementConfig struct {

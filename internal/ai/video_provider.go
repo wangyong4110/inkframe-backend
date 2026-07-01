@@ -44,6 +44,11 @@ type VideoGenerateRequest struct {
 	ServiceTier           string `json:"service_tier,omitempty"`   // "default"（在线）/"flex"（离线，价格减半，小时级延迟）
 	ExecutionExpiresAfter int64  `json:"execution_expires_after"`  // flex 离线推理超时（秒）；0 表示不限
 	CallbackURL           string `json:"callback_url,omitempty"`   // Webhook 回调地址；任务完成/失败时推送
+
+	// Seedance 2.0 新增参数
+	Priority         int    `json:"priority,omitempty"`           // 请求优先级 0-9（仅 Seedance 2.0，0=默认FIFO，>0插队到低优先级前）
+	SafetyIdentifier string `json:"safety_identifier,omitempty"`  // 终端用户唯一标识（<=64字符），用于合规审计；推荐哈希后传入
+	WebSearchEnabled bool   `json:"web_search_enabled,omitempty"` // 开启联网搜索工具（仅 Seedance 2.0，模型自主判断是否搜索）
 }
 
 // VideoTask 已提交的视频任务

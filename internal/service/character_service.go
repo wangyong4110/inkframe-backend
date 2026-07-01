@@ -2079,22 +2079,23 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	// 结构控制词置于提示词最前段，确保在 cross-attention 中获得最高权重。
 	// 3 格布局：正面/侧面/背面全身视图，合并在同一张横版图中（标准三视图格式）。
 	// 关键实践：
+	//   - "same character in all panels" 置于最前段，权重最高
 	//   - "equal-width 3-panel" 约束三格等宽
 	//   - "A-pose arms 30-45 degrees" 量化手臂角度，避免 T-pose
 	//   - "same ground baseline" 对齐三格脚底基线
 	//   - "horizontal wide format" 强化横版构图，匹配 1200×720 输出尺寸
 	layoutFrame :=
-		"character turnaround sheet, equal-width 3-panel reference sheet, horizontal wide format: " +
+		"same character in all panels, character design turnaround reference sheet, " +
+			"equal-width 3-panel orthographic reference sheet, horizontal wide format: " +
 			"[panel 1] 0-degree front-facing full body, neutral expression, " +
 			"[panel 2] 90-degree right side profile full body, " +
 			"[panel 3] 180-degree back view full body, " +
 			"A-pose arms 30-45 degrees from sides, " +
-			"same ground baseline across all panels, identical appearance across all panels"
+			"same ground baseline across all panels, identical face hair costume in every panel"
 
-	// appearance 截断至 50 词，与结构词（~38）、修饰词（~35）合计控制在 100-150 词范围内。
-	// 参考图通过图像编码通道（IP-Adapter）处理面部一致性；
-	// 文字层面无法传递实际面部特征，故不使用文字前缀锚定。
-	condensedAppearance := condenseVisualPrompt(appearance, 50)
+	// appearance 截断至 80 词（原 50 词易截断关键外观细节如发色、眼色、服装特征，
+	// 这些细节是模型在无参考图时保持三格一致性的唯一文字锚点）。
+	condensedAppearance := condenseVisualPrompt(appearance, 80)
 
 	// 风格词和质量词放在 prompt 最前：扩散模型对早期 token 注意力更高，style 后置会被100+词的布局/外貌淹没。
 	var prompt string
@@ -2134,7 +2135,8 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 		"three-quarter view, 45-degree angle, diagonal angle, oblique angle, " +
 		"perspective distortion, foreshortening, dynamic pose, action pose, " +
 		"different face, inconsistent face, face change, different person, face inconsistency, " +
-		"different hairstyle, hair color change, costume mismatch, " +
+		"different hairstyle, hair color change, costume mismatch, outfit change, different outfit, " +
+		"each panel different character, different character per panel, multiple characters, " +
 		"merged panels, overlapping panels, panels bleeding into each other, " +
 		"cut off feet, missing feet, missing legs, " +
 		"4 panels, four panels, face closeup panel, bust shot panel, portrait panel, " +

@@ -453,6 +453,12 @@ func (s *VideoService) UpdateVideo(id, tenantID uint, req *model.UpdateVideoRequ
 	if req.GenerateAudio != nil {
 		video.RenderConfig.GenerateAudio = req.GenerateAudio
 	}
+	if req.Priority != nil {
+		video.RenderConfig.Priority = *req.Priority
+	}
+	if req.WebSearchEnabled != nil {
+		video.RenderConfig.WebSearchEnabled = *req.WebSearchEnabled
+	}
 	if req.Description != "" {
 		video.PublishMeta.Description = req.Description
 	}

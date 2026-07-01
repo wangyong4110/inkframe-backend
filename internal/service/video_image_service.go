@@ -1389,8 +1389,9 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	}
 
 	// 画面风格：注入视频 prompt（video.ArtStyle 优先，降级到 novel.AIConfig.ImageStyle）
-	if videoArtStyle := s.resolveArtStyle(shot.VideoID); videoArtStyle != "" {
-		videoPrompt = videoArtStyle + " style, " + videoPrompt
+	videoArtStyle := s.resolveArtStyle(shot.VideoID)
+	if videoArtStyle != "" {
+		videoPrompt = resolveVideoStylePrefix(videoArtStyle) + videoPrompt
 	}
 
 	// 台词与音效：将旁白、角色台词、音效标签注入 prompt，帮助模型理解画面动作和声音氛围
@@ -1455,9 +1456,14 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	var threeDStyle, klingModelOverride, videoColorGrade string
 	var vidResolution string
 	var vidGenerateAudio *bool
+	var vidPriority int
+	var vidWebSearch bool
+	var vidSafetyID string
 	if vid, vidErr := s.videoRepo.GetByID(shot.VideoID); vidErr == nil {
 		vidResolution = vid.RenderConfig.Resolution
 		vidGenerateAudio = vid.RenderConfig.GenerateAudio
+		vidPriority = vid.RenderConfig.Priority
+		vidWebSearch = vid.RenderConfig.WebSearchEnabled
 		if vid.NovelID > 0 && s.novelRepo != nil {
 			if novel, novelErr := s.novelRepo.GetByID(vid.NovelID); novelErr == nil {
 				vc := novel.VideoConf()
@@ -1469,6 +1475,9 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 				threeDStyle = vid.RenderConfig.ThreeDStyle
 				klingModelOverride = vc.KlingModel
 				videoColorGrade = vc.ColorGrade
+				if novel.TenantID > 0 {
+					vidSafetyID = fmt.Sprintf("tenant-%d", novel.TenantID)
+				}
 			}
 		}
 	}
@@ -1483,8 +1492,8 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		klingMode = "pro"
 	}
 
-	// 电影级动态前缀——注入运镜词+情绪氛围词，移除 "film still" 静态词避免抑制视频动态感
-	cinematicPrefix := buildCinematicPrefix(shot.CamDir.CameraType, shot.CamDir.EmotionalTone)
+	// 电影级动态前缀——注入运镜词+情绪氛围词，风格自适应前缀（赛博朋克等特殊风格替换 film 词汇）
+	cinematicPrefix := buildCinematicPrefix(shot.CamDir.CameraType, shot.CamDir.EmotionalTone, videoArtStyle)
 	// 3D 风格前缀
 	if threeDEnabled {
 		cinematicPrefix = resolve3DStylePrefix(threeDStyle) + ", " + cinematicPrefix
@@ -1637,6 +1646,12 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		if vidGenerateAudio == nil || *vidGenerateAudio {
 			shot.TaskMeta.HasEmbeddedAudio = true
 		}
+		// Seedance 2.0 新增参数
+		req.Priority = vidPriority
+		req.WebSearchEnabled = vidWebSearch
+		if vidSafetyID != "" {
+			req.SafetyIdentifier = vidSafetyID
+		}
 	}
 
 	logger.Printf("GenerateShotVideo: shot %d submitting to %s (hasRef=%v extraRefs=%d mode=%s cfg=%.2f prompt=%q)", shot.ShotNo, providerName, referenceImage != "", len(extraRefImages), klingMode, klingCFG, videoPromptFinal)
@@ -1661,10 +1676,32 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 
 // buildCinematicPrefix 根据摄像机类型和情绪生成动态电影级 prompt 前缀。
 // 刻意移除了 "film still"（静帧含义），改用 "cinematic sequence" 强化动态感。
-func buildCinematicPrefix(cameraType, emotionalTone string) string {
+func buildCinematicPrefix(cameraType, emotionalTone, artStyle string) string {
 	motion := cameraMotionToken(cameraType)
 	atmos := emotionAtmosphereToken(emotionalTone)
-	base := "cinematic sequence, professional cinematography, anamorphic lens, natural film grain, high dynamic range"
+
+	var base string
+	switch artStyle {
+	case "cyberpunk":
+		base = "cyberpunk cinematic sequence, neon-lit rainy cityscape, holographic display glow, synthetic digital atmosphere, high-contrast dark shadows"
+	case "steampunk":
+		base = "steampunk cinematic sequence, brass machinery atmosphere, Victorian industrial fog, warm amber gaslight"
+	case "gothic_dark":
+		base = "gothic dark cinematic sequence, dramatic chiaroscuro lighting, ominous supernatural atmosphere, deep shadow volumes"
+	case "anime", "chinese_animation":
+		base = "anime cinematic sequence, dynamic visual style, vibrant color energy, expressive motion"
+	case "ink_painting":
+		base = "Chinese ink wash cinematic sequence, flowing brush atmosphere, monochromatic elegance, misty negative space"
+	case "xianxia_style":
+		base = "xianxia fantasy cinematic sequence, ethereal spiritual mist, celestial energy visualization, flowing robes"
+	case "pixel_art":
+		base = "pixel art cinematic sequence, crisp retro aesthetic, limited palette, 16-bit visual style"
+	case "ukiyo_e":
+		base = "ukiyo-e cinematic sequence, flat bold color blocks, strong contour lines, traditional Japanese aesthetic"
+	default:
+		base = "cinematic sequence, professional cinematography, anamorphic lens, natural film grain, high dynamic range"
+	}
+
 	if motion != "" {
 		base = motion + ", " + base
 	}
@@ -1672,6 +1709,44 @@ func buildCinematicPrefix(cameraType, emotionalTone string) string {
 		base += ", " + atmos
 	}
 	return base + ", "
+}
+
+// resolveVideoStylePrefix 返回视频 prompt 专用的风格描述前缀（带末尾逗号+空格）。
+// 比纯粹的 "cyberpunk style, " 更精确，为视频模型提供具体的视觉场景基调。
+func resolveVideoStylePrefix(style string) string {
+	switch style {
+	case "cyberpunk":
+		return "cyberpunk neon-lit city, rain-soaked reflective streets, holographic advertisements, synthetic digital glow, dark near-future dystopia, "
+	case "steampunk":
+		return "steampunk industrial scene, brass gears and steam pipes, Victorian mechanical aesthetic, amber gaslight, "
+	case "gothic_dark":
+		return "gothic dark fantasy scene, dramatic shadows, macabre atmosphere, deep jewel tones, "
+	case "anime", "chinese_animation":
+		return "anime visual style, vibrant cel-shaded colors, clean dynamic linework, "
+	case "ink_painting":
+		return "Chinese ink wash painting style, flowing brush strokes, monochrome ink atmosphere, "
+	case "xianxia_style":
+		return "Chinese xianxia fantasy style, ethereal mist and spiritual energy, flowing silk robes, "
+	case "oil_painting":
+		return "oil painting visual style, rich painterly brushwork, impasto texture, "
+	case "watercolor":
+		return "watercolor visual style, soft translucent washes, wet-on-wet color blending, "
+	case "pixel_art":
+		return "pixel art style, crisp retro 16-bit aesthetic, limited color palette, "
+	case "ukiyo_e":
+		return "ukiyo-e woodblock print style, flat bold color areas, strong black outlines, traditional Japanese Edo period aesthetic, "
+	case "game_concept":
+		return "game concept art style, professional fantasy character design, detailed rendering, "
+	case "sketch":
+		return "pencil sketch style, graphite linework, monochrome drawing aesthetic, "
+	case "realistic", "real_person":
+		return "" // 写实风格：视频模型默认即为写实，无需额外前缀
+	default:
+		if style != "" {
+			return style + " style, "
+		}
+		return ""
+	}
 }
 
 // cameraMotionToken 把 CameraType 映射为视频 prompt 运镜描述词。
@@ -1728,6 +1803,9 @@ func emotionAtmosphereToken(emotion string) string {
 		return "serene tranquil atmosphere, soft diffused light, gentle motion"
 	case strings.Contains(e, "funny") || strings.Contains(e, "humorous") || strings.Contains(e, "幽默"):
 		return "lively energetic atmosphere, bright warm tones"
+	case strings.Contains(e, "cyberpunk") || strings.Contains(e, "sci-fi") ||
+		strings.Contains(e, "科幻") || strings.Contains(e, "赛博") || strings.Contains(e, "neon"):
+		return "neon-lit cyberpunk atmosphere, synthetic digital glow, rain-soaked futuristic dystopia, holographic interference"
 	default:
 		return ""
 	}

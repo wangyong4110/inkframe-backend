@@ -181,6 +181,21 @@ func (p *DoubaoVideoProvider) GenerateVideo(ctx context.Context, req *VideoGener
 		apiReq["callback_url"] = req.CallbackURL
 	}
 
+	// priority：请求队列优先级 0-9（仅 Seedance 2.0；离线推理 flex 模式不支持）
+	if req.Priority > 0 {
+		apiReq["priority"] = req.Priority
+	}
+
+	// safety_identifier：终端用户唯一标识，用于平台合规审计
+	if req.SafetyIdentifier != "" {
+		apiReq["safety_identifier"] = req.SafetyIdentifier
+	}
+
+	// tools.web_search：联网搜索工具（仅 Seedance 2.0，模型自主判断是否搜索）
+	if req.WebSearchEnabled {
+		apiReq["tools"] = []map[string]string{{"type": "web_search"}}
+	}
+
 	respBody, status, err := p.doRequest(ctx, "POST", "/contents/generations/tasks", apiReq)
 	if err != nil {
 		return nil, fmt.Errorf("doubao-video 提交任务失败: %w", err)

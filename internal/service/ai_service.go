@@ -1522,7 +1522,14 @@ func klingResolutionExtra(providerName, size string) map[string]interface{} {
 
 func selectImageModel(entry ai.ImageProviderEntry, referenceImage, style string, consistencyWeight ...float64) string {
 	if entry.ProviderName == ai.ProviderNameVolcengineVisual {
-		// volcengine-visual 始终用内置 req_key，不依赖用户填写的 APIVersion
+		// 新一代即梦模型（4.0/4.6/3.0/3.1/智能参考）由用户显式配置，保留原始选择，不做自动覆盖。
+		// 这些模型对多格布局、角色设计参考图的理解显著优于旧版 DreamO/Text2ImgV3。
+		switch entry.Model {
+		case ai.VolcModelJimengSeedream46, ai.VolcModelJimengT2Iv40,
+			ai.VolcModelJimengT2Iv31, ai.VolcModelJimengT2Iv30, ai.VolcModelJimengI2Iv30:
+			return entry.Model
+		}
+		// 旧版模型（DreamO/SeedEditV3/PortraitPhoto/Text2ImgV3）：根据参考图和风格自动选择
 		if referenceImage != "" {
 			// 写实风格：即使有参考图也使用 PortraitPhoto，保证生成真实感肖像
 			if isRealisticStyle(style) {
@@ -1760,10 +1767,15 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		if sz == "" {
 			sz = entrySize
 		}
-		// volcengine-visual 内部自行处理相对路径；其他提供商使用预解析的 base64/URL
+		// 默认：volcengine-visual 传原始 URL（由 SDK 内部处理），其他提供商传 base64。
+		// 例外：DreamO/SeedEditV3 支持 binary_data_base64 字段，预转 base64 可解决 OSS 私有桶 URL
+		// 不被 volcengine API 服务器访问的问题，确保参考图 IP 锚点真实生效。
 		refFirst := firstRef
 		refs := referenceImages
 		if provName != ai.ProviderNameVolcengineVisual {
+			refFirst = extFirst
+			refs = extRefs
+		} else if model == ai.VolcModelDreamO || model == ai.VolcModelSeedEditV3 {
 			refFirst = extFirst
 			refs = extRefs
 		}
@@ -1775,7 +1787,7 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 			Seed:              seed,
 			ReferenceImage:    refFirst,
 			ReferenceImages:   refs,
-			ReferenceURL:      refURLFirst,  // 原始 HTTP URL，支持 URL 的接口优先使用
+			ReferenceURL:      refURLFirst,
 			ReferenceURLs:     refURLSlice,
 			CFGScale:          cfgScale,
 			ConsistencyWeight: weight,
