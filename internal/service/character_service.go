@@ -2184,11 +2184,6 @@ func (s *ImageGenerationService) GeneratePortrait(ctx context.Context, tenantID 
 	genderTag, genderNeg := resolveGenderInfo(gender)
 	qualityTokens := resolveStyleQualityTokens(style)
 
-	aiRef := threeViewURL
-	if !strings.HasPrefix(aiRef, "http://") && !strings.HasPrefix(aiRef, "https://") {
-		aiRef = ""
-	}
-
 	condensedAppearance := condenseVisualPrompt(appearance, 60)
 
 	// 风格词前置：同 GenerateThreeViewSheet，style 必须在 prompt 最前才能被模型充分响应。
@@ -2227,12 +2222,14 @@ func (s *ImageGenerationService) GeneratePortrait(ctx context.Context, tenantID 
 		negativePrompt += ", " + genderNeg
 	}
 
+	// 直接传 threeViewURL（包括相对路径），GenerateCharacterThreeViewMulti 内部会通过
+	// dbMediaReader 或 serverBaseURL 将相对路径转 base64，不在这里提前过滤。
 	refs := []string{}
-	if aiRef != "" {
-		refs = []string{aiRef}
+	if threeViewURL != "" {
+		refs = []string{threeViewURL}
 	}
 
-	logger.Printf("GeneratePortrait: %s style=%s ref=%v", name, style, aiRef != "")
+	logger.Printf("GeneratePortrait: %s style=%s ref=%v", name, style, threeViewURL != "")
 	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, "768x1024", 0)
 	if err != nil {
 		return nil, err

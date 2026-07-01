@@ -483,13 +483,23 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		} else if len(batchChars) == 0 {
 			logger.Errorf("[CharRef] shot#%d ListByIDs(%v) returned empty — characters may have been deleted", shot.ShotNo, ids)
 		} else {
-			for _, char := range batchChars {
+			// 按 shot.CharacterIDs 顺序处理，确保主角色（首位）的 Portrait 作为 DreamO 主参考图。
+			// ListByIDs 使用 WHERE IN 不保证顺序，必须手动按 CharacterIDs 重排。
+			charMap := make(map[uint]*model.Character, len(batchChars))
+			for _, c := range batchChars {
+				charMap[c.ID] = c
+			}
+			for _, cid := range shot.CharacterIDs {
+				char, ok := charMap[cid]
+				if !ok {
+					continue
+				}
 				charNamesForPrompt = append(charNamesForPrompt, char.Name)
 				activeLook := s.getCharActiveLook(char, chapterNo)
 				var refImage, vprompt string
 				if activeLook != nil {
-					// Portrait（用户从三视图裁剪的单张正面像）面部 embedding 更干净，优先使用；
-					// 无 Portrait 时降级到 ThreeViewSheet。
+					// Portrait（单张正面半身像，专为 DreamO IP-Adapter 生成，embedding 最干净）优先使用；
+					// 无 Portrait 时降级到 ThreeViewSheet（三视图三联画面，对 DreamO 效果略差）。
 					if activeLook.Portrait != "" {
 						refImage = normalizeMediaURL(activeLook.Portrait)
 					} else {
@@ -518,7 +528,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				}
 				if refImage != "" && len(characterPortraits) < maxCharRefs {
 					characterPortraits = append(characterPortraits, refImage)
-					refSources = append(refSources, fmt.Sprintf("charID=%d ThreeViewSheet", char.ID))
+					refSources = append(refSources, fmt.Sprintf("charID=%d %s", char.ID, refType))
 				}
 			}
 		}
@@ -781,14 +791,6 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				}
 			}
 		}
-	}
-
-	// 非写实风格（动漫/插画/仙侠等）：降低角色一致性权重（0.85→0.55），
-	// 使 selectImageModel 选择 SeedEditV3 而非 DreamO（IP-Adapter）。
-	// DreamO 以参考图外观为优先，文字风格词汇几乎无效；SeedEditV3 为指令编辑模式，
-	// 在保留角色特征的同时更好地执行"anime illustration style"等风格指令。
-	if artStyle != "" && !isRealisticStyle(artStyle) {
-		charConsistencyWeight = 0.55
 	}
 
 	// allRefImages 直接传给 API，无需合图（所有图生图 API 均支持多张参考图）
