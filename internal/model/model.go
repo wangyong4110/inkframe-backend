@@ -744,7 +744,7 @@ func (WebhookDelivery) TableName() string { return "ink_webhook_delivery" }
 
 // AuditLog 审计日志
 type AuditLog struct {
-	ID         uint      `json:"id" gorm:"primaryKey;autoIncrement"`
+	ID           uint      `json:"id" gorm:"primaryKey;autoIncrement"`
 	CreatedAt    time.Time `json:"created_at" gorm:"index"`
 	TenantID     uint      `json:"tenant_id" gorm:"index"`
 	UserID       uint      `json:"user_id" gorm:"index"`
@@ -756,6 +756,9 @@ type AuditLog struct {
 	Details      string    `json:"details,omitempty" gorm:"type:text"` // JSON
 	IP           string    `json:"ip" gorm:"size:64"`
 	Status       string    `json:"status" gorm:"size:20;default:'ok'"` // ok / fail
+	// Populated at query time via JOIN, not stored in DB.
+	Username string `json:"username" gorm:"-"`
+	Nickname string `json:"nickname" gorm:"-"`
 }
 
 func (AuditLog) TableName() string { return "ink_audit_log" }

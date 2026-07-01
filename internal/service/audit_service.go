@@ -2,7 +2,6 @@ package service
 
 import (
 	"encoding/json"
-	"fmt"
 
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -70,40 +69,16 @@ func (s *AuditService) LogEntry(entry AuditEntry) {
 
 // List returns audit logs for a tenant, paginated, optionally filtered by action.
 // Legacy method for the existing audit handler.
-func (s *AuditService) List(tenantID uint, action string, page, pageSize int) ([]*model.AuditLog, int64, error) {
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 {
-		pageSize = 20
-	} else if pageSize > 100 {
-		pageSize = 100
-	}
-
-	query := s.db.Model(&model.AuditLog{}).Where("tenant_id = ?", tenantID)
-	if action != "" {
-		query = query.Where("action = ?", action)
-	}
-
-	var total int64
-	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, fmt.Errorf("count audit logs: %w", err)
-	}
-
-	var logs []*model.AuditLog
-	offset := (page - 1) * pageSize
-	if err := query.Order("created_at DESC").Offset(offset).Limit(pageSize).Find(&logs).Error; err != nil {
-		return nil, 0, fmt.Errorf("list audit logs: %w", err)
-	}
-	return logs, total, nil
+func (s *AuditService) List(tenantID uint, action string, page, pageSize int) ([]*repository.AuditLogItem, int64, error) {
+	return s.repo.ListByTenant(tenantID, action, page, pageSize)
 }
 
 // ListByNovel returns project-level audit logs for a specific novel.
-func (s *AuditService) ListByNovel(novelID uint, tenantID uint, page, pageSize int) ([]*model.AuditLog, int64, error) {
+func (s *AuditService) ListByNovel(novelID uint, tenantID uint, page, pageSize int) ([]*repository.AuditLogItem, int64, error) {
 	return s.repo.ListByNovel(novelID, tenantID, page, pageSize)
 }
 
 // ListByUser returns user-level audit logs (novel_id=0) for a specific user.
-func (s *AuditService) ListByUser(userID uint, tenantID uint, page, pageSize int) ([]*model.AuditLog, int64, error) {
+func (s *AuditService) ListByUser(userID uint, tenantID uint, page, pageSize int) ([]*repository.AuditLogItem, int64, error) {
 	return s.repo.ListByUser(userID, tenantID, page, pageSize)
 }

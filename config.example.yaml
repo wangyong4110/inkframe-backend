@@ -91,10 +91,9 @@ logger:
 #   docker run -d --name searxng -p 8888:8080 -e SEARXNG_SECRET_KEY=mysecret searxng/searxng
 web_search:
   provider: ""             # "tencent-wsa" | "searxng" | "bing" | "tavily" | ""
-  api_key: ""              # Bing/Tavily API Key（或 WEB_SEARCH_API_KEY 环境变量）
+  api_key: ""              # Bing/Tavily API Key；tencent-wsa 时填腾讯云 SecretId（或 WEB_SEARCH_API_KEY 环境变量）
   endpoint: ""             # SearXNG: http://localhost:8888（其他 provider 留空）
-  secret_id: ""            # 腾讯云 SecretId（或 TENCENT_WSA_SECRET_ID 环境变量）
-  secret_key: ""           # 腾讯云 SecretKey（或 TENCENT_WSA_SECRET_KEY 环境变量）
+  secret_key: ""           # 腾讯云 SecretKey（tencent-wsa 专用，或 TENCENT_WSA_SECRET_KEY 环境变量）
 
 # ─────────────────────────────────────────────
 # 以下为可选功能模块，不配置时相关功能优雅降级

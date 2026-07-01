@@ -887,7 +887,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 				cfg.WebSearch.Provider,
 				getEnv("WEB_SEARCH_API_KEY", cfg.WebSearch.APIKey),
 				cfg.WebSearch.Endpoint,
-				getEnv("TENCENT_WSA_SECRET_ID", cfg.WebSearch.SecretID),
+				getEnv("WEB_SEARCH_API_KEY", cfg.WebSearch.APIKey),
 				getEnv("TENCENT_WSA_SECRET_KEY", cfg.WebSearch.SecretKey),
 			),
 		),
