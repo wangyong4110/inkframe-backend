@@ -111,26 +111,32 @@ func (p *AliyunTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenerat
 		model = aliyunTTSModelForVoice(voice)
 	}
 
-	// input 字段：新版 API 将速率/音调等直接放在 input 里
+	// DashScope TTS API：text/voice 放 input，format/sample_rate/rate/pitch 放 parameters。
+	// cosyvoice-v3-flash 对 input 字段做严格校验，extra fields 会触发 engine error 428；
+	// cosyvoice-v2 较宽松可能忽略 extra fields，但统一放 parameters 更规范。
 	input := map[string]interface{}{
-		"text":        req.Text,
-		"voice":       voice,
-		"format":      "mp3",
-		"sample_rate": 24000,
-	}
-	if req.Speed > 0 && req.Speed != 1.0 {
-		input["rate"] = clampFloat(req.Speed, 0.5, 2.0)
-	}
-	if req.Pitch > 0 && req.Pitch != 1.0 {
-		input["pitch"] = clampFloat(req.Pitch, 0.5, 2.0)
+		"text":  req.Text,
+		"voice": voice,
 	}
 	if req.Emotion != "" {
 		input["instruction"] = emotionToAliyunInstruction(req.Emotion)
 	}
 
+	parameters := map[string]interface{}{
+		"format":      "mp3",
+		"sample_rate": 24000,
+	}
+	if req.Speed > 0 && req.Speed != 1.0 {
+		parameters["rate"] = clampFloat(req.Speed, 0.5, 2.0)
+	}
+	if req.Pitch > 0 && req.Pitch != 1.0 {
+		parameters["pitch"] = clampFloat(req.Pitch, 0.5, 2.0)
+	}
+
 	body, err := json.Marshal(map[string]interface{}{
-		"model": model,
-		"input": input,
+		"model":      model,
+		"input":      input,
+		"parameters": parameters,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("aliyun-tts: marshal request: %w", err)
