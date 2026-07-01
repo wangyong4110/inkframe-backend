@@ -255,19 +255,19 @@ func seedAIModels(db *gorm.DB) {
 }
 
 // seedWebSearchMcpTool 幂等写入系统内置 web_search MCP 工具
-// is_active 默认 false（需用户在 MCP 工具管理页手动启用）
-// 仅更新端点，不覆盖用户已修改的 is_active
+// 若 config.yaml 配置了 web_search.provider，is_active 跟随配置自动启停，无需用户手动操作。
 func seedWebSearchMcpTool(db *gorm.DB, cfg *config.Config) {
 	port := cfg.Server.Port
 	if port == 0 {
 		port = 8080
 	}
 	endpoint := fmt.Sprintf("http://localhost:%d/api/v1/tools/web-search", port)
+	configured := cfg.WebSearch.Provider != ""
 
 	var existing model.McpTool
 	err := db.Where("name = ?", "web_search").First(&existing).Error
 	if err != nil {
-		// Not found — create it
+		// Not found — create it; is_active mirrors whether provider is configured
 		tool := model.McpTool{
 			TenantID:      0,
 			Name:          "web_search",
@@ -276,18 +276,19 @@ func seedWebSearchMcpTool(db *gorm.DB, cfg *config.Config) {
 			TransportType: "http",
 			Endpoint:      endpoint,
 			Timeout:       15,
-			IsActive:      false,
+			IsActive:      configured,
 			IsSystem:      true,
 		}
 		if createErr := db.Create(&tool).Error; createErr != nil {
 			logger.Errorf("[Seed] web_search MCP tool create failed: %v", createErr)
 			return
 		}
-		logger.Printf("[Seed] web_search MCP tool registered (is_active=false, endpoint=%s)", endpoint)
+		logger.Printf("[Seed] web_search MCP tool registered (is_active=%v, endpoint=%s)", configured, endpoint)
 	} else {
-		// Already exists — only update endpoint (preserve user's is_active setting)
-		if updateErr := db.Model(&existing).Update("endpoint", endpoint).Error; updateErr != nil {
-			logger.Errorf("[Seed] web_search MCP tool update endpoint failed: %v", updateErr)
+		// Already exists — sync endpoint and is_active with current config
+		updates := map[string]interface{}{"endpoint": endpoint, "is_active": configured}
+		if updateErr := db.Model(&existing).Updates(updates).Error; updateErr != nil {
+			logger.Errorf("[Seed] web_search MCP tool update failed: %v", updateErr)
 		}
 	}
 }
