@@ -133,11 +133,12 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			len([]rune(content)), minChapterLength)
 	}
 
-	// 并行预取角色、场景锚点、情节点（避免多次串行 DB 查询）
+	// 并行预取角色、场景锚点、情节点、物品（避免多次串行 DB 查询）
 	tenantID := s.videoTenantID(video)
 	var characters []*model.Character
 	var anchors []*model.SceneAnchor
 	var plotPoints []*model.PlotPoint
+	var effectiveItems []*EffectiveItem
 	{
 		var wgPre sync.WaitGroup
 		novelID := video.NovelID
@@ -207,6 +208,41 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 				if e != nil {
 					logger.Errorf("[Storyboard] plotPointRepo.ListByChapter chapterID=%d: %v", *chapterID, e)
 				}
+			}()
+		}
+		// 并行预取有效物品（合并项目级+章节级覆盖）
+		if s.itemRepo != nil && novelID > 0 {
+			wgPre.Add(1)
+			go func() {
+				defer wgPre.Done()
+				allItems, err := s.itemRepo.ListByNovel(novelID)
+				if err != nil || len(allItems) == 0 {
+					return
+				}
+				overrideMap := make(map[uint]*model.ChapterItem)
+				if chapterID != nil && s.chapterItemRepo != nil {
+					if overrides, e := s.chapterItemRepo.ListByChapter(*chapterID); e == nil {
+						for _, ci := range overrides {
+							overrideMap[ci.ItemID] = ci
+						}
+					}
+				}
+				eis := make([]*EffectiveItem, 0, len(allItems))
+				for _, item := range allItems {
+					ei := &EffectiveItem{Item: *item, EffectiveLocation: item.Location, EffectiveOwner: item.Owner}
+					if ov, ok := overrideMap[item.ID]; ok {
+						ei.ChapterOverride = ov
+						if ov.Location != "" {
+							ei.EffectiveLocation = ov.Location
+						}
+						if ov.Owner != "" {
+							ei.EffectiveOwner = ov.Owner
+						}
+					}
+					eis = append(eis, ei)
+				}
+				effectiveItems = eis
+				logger.Printf("[Storyboard] pre-fetched effectiveItems count=%d", len(effectiveItems))
 			}()
 		}
 		wgPre.Wait()
@@ -327,7 +363,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			segIdx+1, len(segments), segRunes, segShotCount, len(prevTailShots))
 
 		prompt := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, len(segments), segShotCount,
-			characters, anchors, plotPoints, prevTailShots, overrides.VoiceMode, promptLanguage, genre, video.RenderConfig.Pacing, arcPlan, imageStyle)
+			characters, anchors, plotPoints, effectiveItems, prevTailShots, overrides.VoiceMode, promptLanguage, genre, video.RenderConfig.Pacing, arcPlan, imageStyle)
 
 		var aiResult string
 		var aiErr error
@@ -455,6 +491,8 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	}
 	// 角色自动关联：按 shot.Characters JSON 中的名称匹配小说角色
 	s.autoMatchShotCharacters(shots, characters)
+	// 物品自动关联：按 shot.GenMeta.Items JSON 中的名称匹配小说物品
+	s.autoMatchShotItems(shots, effectiveItems)
 	if progressFn != nil {
 		progressFn(95)
 	}
@@ -694,6 +732,77 @@ func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, ch
 	logger.Printf("[AutoMatch] char: matched %d/%d shots", charMatchCount, len(shots))
 }
 
+// autoMatchShotItems 按多来源匹配小说物品，写入 ItemIDs。
+// 优先级：① shot.GenMeta.Items JSON → ② shot.Description/Narration 关键词扫描。
+// 已有 ItemIDs 时不覆盖（保留手动绑定结果）。
+func (s *VideoService) autoMatchShotItems(shots []*model.StoryboardShot, items []*EffectiveItem) {
+	if len(items) == 0 {
+		return
+	}
+	nameMap := make(map[string]uint, len(items))
+	for _, ei := range items {
+		nameMap[strings.ToLower(ei.Name)] = ei.ID
+	}
+
+	tryMatch := func(rawName string, seen map[uint]bool, matched *model.JSONUintSlice) {
+		nameLower := strings.ToLower(strings.TrimSpace(rawName))
+		if nameLower == "" {
+			return
+		}
+		if id, ok := nameMap[nameLower]; ok && !seen[id] {
+			*matched = append(*matched, id)
+			seen[id] = true
+			return
+		}
+		for name, id := range nameMap {
+			if strings.Contains(nameLower, name) || strings.Contains(name, nameLower) {
+				if !seen[id] {
+					*matched = append(*matched, id)
+					seen[id] = true
+				}
+				return
+			}
+		}
+	}
+
+	matchCount := 0
+	for _, shot := range shots {
+		if len(shot.ItemIDs) > 0 {
+			continue // 已手动绑定，不覆盖
+		}
+		var matched model.JSONUintSlice
+		seen := make(map[uint]bool)
+
+		// ① Items JSON: [{"name":"..."}]
+		if shot.GenMeta.Items != "" {
+			var shotItems []struct {
+				Name string `json:"name"`
+			}
+			if err := json.Unmarshal([]byte(shot.GenMeta.Items), &shotItems); err == nil {
+				for _, si := range shotItems {
+					tryMatch(si.Name, seen, &matched)
+				}
+			}
+		}
+
+		// ② Description/Narration 关键词扫描（兜底）
+		if len(matched) == 0 {
+			text := strings.ToLower(shot.Description + " " + shot.Narration)
+			for name, id := range nameMap {
+				if strings.Contains(text, name) && !seen[id] {
+					matched = append(matched, id)
+					seen[id] = true
+				}
+			}
+		}
+
+		if len(matched) > 0 {
+			shot.ItemIDs = matched
+			matchCount++
+		}
+	}
+	logger.Printf("[AutoMatch] items: matched %d/%d shots", matchCount, len(shots))
+}
 
 // charRuneOverlap 返回两个字符串的汉字级重叠比例（以较短串为分母）。
 // 用于模糊角色名匹配，如"萧炎"vs"炎少"（"炎"重叠 → 0.5，超过阈值即视为同一角色）。
@@ -825,6 +934,7 @@ func (s *VideoService) buildStoryboardPrompt(
 	video *model.Video, content, userPrompt string,
 	segNo, totalSegs, expectedShots int,
 	characters []*model.Character, anchors []*model.SceneAnchor, plotPoints []*model.PlotPoint,
+	items []*EffectiveItem,
 	prevShots []*model.StoryboardShot,
 	voiceMode string,
 	promptLanguage string,
@@ -963,6 +1073,38 @@ func (s *VideoService) buildStoryboardPrompt(
 		})
 	}
 
+	// 物品（最多 10 个，优先匹配内容中出现的物品）
+	itemsData := make([]map[string]interface{}, 0, 10)
+	if len(items) > 0 {
+		contentLower := strings.ToLower(content)
+		type scoredItem struct {
+			ei    *EffectiveItem
+			score int
+		}
+		scoredItems := make([]scoredItem, 0, len(items))
+		for _, ei := range items {
+			sc := 0
+			if strings.Contains(contentLower, strings.ToLower(ei.Name)) {
+				sc += 2
+			}
+			scoredItems = append(scoredItems, scoredItem{ei, sc})
+		}
+		sort.SliceStable(scoredItems, func(i, j int) bool { return scoredItems[i].score > scoredItems[j].score })
+		limit := len(scoredItems)
+		if limit > 10 {
+			limit = 10
+		}
+		for _, si := range scoredItems[:limit] {
+			m := map[string]interface{}{
+				"Name":        si.ei.Name,
+				"Description": si.ei.Description,
+				"Location":    si.ei.EffectiveLocation,
+				"Owner":       si.ei.EffectiveOwner,
+			}
+			itemsData = append(itemsData, m)
+		}
+	}
+
 	// 截断内容（rune 级别，避免 byte-level slice 截断 UTF-8 汉字）
 	// 3500 rune × 3 bytes = 10500 bytes；原 [:10000] 会漏掉末尾约 167 字
 	if cr := []rune(content); len(cr) > 3200 {
@@ -987,6 +1129,7 @@ func (s *VideoService) buildStoryboardPrompt(
 		"Characters":          matchedChars,
 		"Anchors":             matchedAnchors,
 		"PlotPoints":          ppData,
+		"Items":               itemsData,
 		"Content":             content,
 		"UserPrompt":          userPrompt,
 		"ArcPlan":             arcPlan,
@@ -1032,6 +1175,11 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 			Expression string `json:"expression"`
 			Pose       string `json:"pose"`
 		} `json:"characters"`
+		Items []struct {
+			Name     string `json:"name"`
+			Holder   string `json:"holder"`
+			Location string `json:"location"`
+		} `json:"items"`
 		Subtitle      string `json:"subtitle"`       // 画面叠字：时间词或关键字幕（非空时叠加在视频画面上）
 		Transition    string `json:"transition"`
 		TransitionOut string `json:"transition_out"` // 本镜头如何结束（画面状态/角色动作/镜头动势）
@@ -1083,6 +1231,14 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 		if len(r.Characters) > 0 {
 			if b, err := json.Marshal(r.Characters); err == nil {
 				charsJSON = string(b)
+			}
+		}
+
+		// 将物品信息序列化为 JSON 存储
+		var itemsJSON string
+		if len(r.Items) > 0 {
+			if b, err := json.Marshal(r.Items); err == nil {
+				itemsJSON = string(b)
 			}
 		}
 
@@ -1174,6 +1330,7 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 				MotionPrompt:   videoPrompt,
 				NegativePrompt: r.NegativePrompt,
 				Characters:     charsJSON,
+				Items:          itemsJSON,
 				Scene:          sceneJSON,
 				SFXTags:        sfxTagsJSON,
 				Subtitle:       r.Subtitle,
@@ -1469,6 +1626,15 @@ func (s *VideoService) SetShotCharacters(shotID uint, ids []uint) error {
 		return err
 	}
 	shot.CharacterIDs = model.JSONUintSlice(ids)
+	return s.storyboardRepo.Update(shot)
+}
+
+func (s *VideoService) SetShotItems(shotID uint, ids []uint) error {
+	shot, err := s.storyboardRepo.GetByID(shotID)
+	if err != nil {
+		return err
+	}
+	shot.ItemIDs = model.JSONUintSlice(ids)
 	return s.storyboardRepo.Update(shot)
 }
 

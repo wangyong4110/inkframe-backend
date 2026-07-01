@@ -152,6 +152,7 @@ type ShotGenMeta struct {
 	NegativePrompt    string  `json:"negative_prompt"`
 	MotionPrompt      string  `json:"motion_prompt"`
 	Characters        string  `json:"characters"`
+	Items             string  `json:"items"` // AI-generated item list JSON: [{"name":"...","holder":"...","location":"..."}]
 	Scene             string  `json:"scene"`
 	GenerationMode    string  `json:"generation_mode"`
 	ConsistencyScore  float64 `json:"consistency_score"`
@@ -205,6 +206,9 @@ type StoryboardShot struct {
 
 	// 角色绑定（序列化为 JSON 数组，前端直接收到 [1,2,3]）
 	CharacterIDs JSONUintSlice `json:"character_ids" gorm:"type:json"`
+
+	// 物品绑定（序列化为 JSON 数组）
+	ItemIDs JSONUintSlice `json:"item_ids" gorm:"type:json"`
 
 	// 摄像机方向与风格（JSON）
 	CamDir ShotCamDir `json:"cam_dir" gorm:"column:cam_dir;serializer:json;type:text"`

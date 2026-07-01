@@ -345,6 +345,27 @@ func (h *VideoHandler) SetShotCharacters(c *gin.Context) {
 	respondOK(c, nil)
 }
 
+// SetShotItems 手动绑定分镜物品
+// PUT /api/v1/videos/:id/shots/:shot_id/items
+func (h *VideoHandler) SetShotItems(c *gin.Context) {
+	shotID, ok := parseID(c, "shot_id")
+	if !ok {
+		return
+	}
+	var body struct {
+		ItemIDs []uint `json:"item_ids"`
+	}
+	if !bindJSON(c, &body) {
+		return
+	}
+	if err := h.videoService.SetShotItems(uint(shotID), body.ItemIDs); err != nil {
+		logger.Errorf("[VideoHandler] SetShotItems: shotID=%d err=%v", shotID, err)
+		respondErr(c, http.StatusInternalServerError, "failed to set shot items")
+		return
+	}
+	respondOK(c, nil)
+}
+
 // OptimizeStoryboardFromReview 根据 AI 审查报告一键优化分镜（异步任务）
 // POST /api/v1/videos/:id/storyboard/optimize-from-review
 // Body: StoryboardReview JSON（由 review 任务结果直接透传）+ 可选 provider

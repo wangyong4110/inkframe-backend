@@ -699,6 +699,34 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
+	// 物品信息注入：从 GenMeta.Items 提取物品名+持有者+位置，注入 image_prompt 前缀
+	if shot.GenMeta.Items != "" {
+		var shotItems []struct {
+			Name     string `json:"name"`
+			Holder   string `json:"holder"`
+			Location string `json:"location"`
+		}
+		if err := json.Unmarshal([]byte(shot.GenMeta.Items), &shotItems); err == nil && len(shotItems) > 0 {
+			var itemTokens []string
+			for _, si := range shotItems {
+				if si.Name == "" {
+					continue
+				}
+				tok := si.Name
+				if si.Holder != "" {
+					tok += " held by " + si.Holder
+				} else if si.Location != "" {
+					tok += " at " + si.Location
+				}
+				itemTokens = append(itemTokens, tok)
+			}
+			if len(itemTokens) > 0 {
+				promptText = strings.Join(itemTokens, ", ") + ", " + promptText
+				logger.Printf("[ItemInject] shot#%d injected %d item tokens into prompt", shot.ShotNo, len(itemTokens))
+			}
+		}
+	}
+
 	// 物品参考图：当分镜 prompt 中提及某个物品名称时，收集其 ReferenceImageURL。
 	// 有角色时（DreamO 模式）：物品图不加入参考图列表（防止污染 IP embedding），仅通过 prompt 文字传达。
 	// 无角色时（Text2ImgV3 模式）：可加入物品图作为视觉参考。

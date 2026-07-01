@@ -415,6 +415,7 @@ func (h *ItemHandler) AIExtractChapterItems(c *gin.Context) {
 		UserPrompt string `json:"user_prompt"`
 	}
 	_ = c.ShouldBindJSON(&body)
+	logger.Printf("[ItemHandler] AIExtractChapterItems: novelID=%d chapterNo=%d userPromptLen=%d", novelID, chapterNo, len(body.UserPrompt))
 	items, err := h.itemService.AIExtractChapterItems(getTenantID(c), uint(novelID), chapter.ID, body.UserPrompt)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to extract chapter items: "+err.Error())

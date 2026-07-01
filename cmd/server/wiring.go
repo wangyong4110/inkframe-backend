@@ -511,6 +511,7 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 	videoSvc.WithChapterCharacterRepo(repos.ChapterCharacterRepo)
 	videoSvc.WithLookRepo(repos.CharacterLookRepo)
 	videoSvc.WithItemRepo(repos.ItemRepo)
+	videoSvc.WithChapterItemRepo(repos.ChapterItemRepo)
 
 	// 帧生成 / 一致性验证 / 小说转视频
 	frameGenSvc := service.NewFrameGeneratorService(aiSvc)

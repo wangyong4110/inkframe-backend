@@ -663,6 +663,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			}
 			// 分镜绑定角色
 			videos.PUT("/:id/shots/:shot_id/characters", cfg.VideoHandler.SetShotCharacters)
+			// 分镜绑定物品
+			videos.PUT("/:id/shots/:shot_id/items", cfg.VideoHandler.SetShotItems)
 		}
 
 		// 分镜
