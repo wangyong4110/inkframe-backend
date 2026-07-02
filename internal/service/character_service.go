@@ -1903,7 +1903,15 @@ func removeConflictingQualityTokens(prompt, styleID string) string {
 		"photorealistic",
 		"cinematic lighting",
 		"cinematic film photography",
+		"cinematic photography",
+		"film photography",
 		"realistic skin texture",
+		"8k uhd",
+		"8K uhd",
+		"shot on DSLR",
+		"DSLR photography",
+		"hyperrealistic",
+		"ultra realistic",
 	}
 	result := prompt
 	for _, tok := range conflicts {

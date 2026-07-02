@@ -1621,11 +1621,18 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	}
 	// Seedance/豆包 专属参数
 	if providerName == "seedance" || providerName == "doubao" {
-		req.ReturnLastFrame = true           // 让 API 直接返回末帧 URL，避免下载+ffprobe
-		req.GenerateAudio = vidGenerateAudio // nil=API 默认(true)，false=静音
-		// 标记视频将内嵌环境音：nil(API 默认 true) 或显式 true 时置位，
-		// 告知合成阶段无 TTS 时保留原始音轨，不用静音轨覆盖
-		if vidGenerateAudio == nil || *vidGenerateAudio {
+		req.ReturnLastFrame = true // 让 API 直接返回末帧 URL，避免下载+ffprobe
+		// generate_audio：必须显式传 true，API 默认值为 false（无声）。
+		// 用户明确设为 false 时（静音模式）才跳过。
+		if vidGenerateAudio != nil && !*vidGenerateAudio {
+			// 用户显式关闭音频
+			falseVal := false
+			req.GenerateAudio = &falseVal
+			shot.TaskMeta.HasEmbeddedAudio = false
+		} else {
+			// nil（未配置）或 true → 显式开启，确保 API 生成音效
+			trueVal := true
+			req.GenerateAudio = &trueVal
 			shot.TaskMeta.HasEmbeddedAudio = true
 		}
 		// Seedance 2.0 新增参数

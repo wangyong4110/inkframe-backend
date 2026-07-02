@@ -1342,9 +1342,35 @@ func (s *VideoService) buildShotAudio(ctx context.Context, shot *model.Storyboar
 		return speechAudioPath, audioDur
 	}
 
-	// 4. Seedance 内嵌环境音：视频已有音轨，无 TTS 时直接保留，不用静音轨覆盖
+	// 4. Seedance 内嵌环境音：视频已有音轨，无 TTS 时直接保留，不用静音轨覆盖。
+	// 若同时有 SFX 条目，先提取视频音轨再叠加 SFX。
 	if shot.TaskMeta.HasEmbeddedAudio {
-		logger.Printf("[buildShotAudio] shot %d: has embedded audio (Seedance) — preserving video audio track", shot.ShotNo)
+		clipPath := strings.TrimPrefix(shot.TaskMeta.ClipPath, "file://")
+		if clipPath == "" {
+			clipPath = shot.VideoURL
+		}
+		// 如果有 SFX 且能提取到视频音轨，将 SFX 叠加到内嵌音轨上
+		if s.sfxService != nil && clipPath != "" {
+			sfxItems, sfxErr := s.sfxService.ListSFXItems(shot.ID)
+			if sfxErr == nil && len(sfxItems) > 0 {
+				extractedPath := fmt.Sprintf("%s/embedded_audio_%d.aac", tmpDir, idx)
+				extractCtx, extractCancel := context.WithTimeout(ctx, 30*time.Second)
+				_, extractErr := runFFmpegCtx(extractCtx,
+					"-y", "-i", clipPath,
+					"-vn", "-c:a", "aac", "-b:a", "128k",
+					extractedPath,
+				)
+				extractCancel()
+				if extractErr == nil {
+					if mixedPath, mixErr := mixSFXLayers(ctx, extractedPath, sfxItems, shot.Duration, tmpDir, idx); mixErr == nil {
+						logger.Printf("[buildShotAudio] shot %d: embedded audio + SFX mixed", shot.ShotNo)
+						return mixedPath, 0
+					}
+					logger.Errorf("[buildShotAudio] shot %d: SFX mix on embedded audio failed: %v", shot.ShotNo, extractErr)
+				}
+			}
+		}
+		logger.Printf("[buildShotAudio] shot %d: has embedded audio — preserving video audio track", shot.ShotNo)
 		return "", 0
 	}
 
