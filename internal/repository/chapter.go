@@ -67,13 +67,10 @@ func (r *ChapterRepository) GetByNovelAndChapterNo(novelID uint, chapterNo int) 
 	return &chapter, nil
 }
 
-// chapterListColumns 章节列表元数据字段。排除 content 等大文本列。
-// tension_level/act_no/emotional_tone/hook_type/outline 已合并进 narrative_meta JSON 列；
-// continuity_blocked 已合并进 quality_meta JSON 列。
-const chapterListColumns = "id, novel_id, uuid, chapter_no, title, status, word_count, " +
-	"narrative_meta, quality_meta, " +
-	"summary, " +
-	"created_at, updated_at, deleted_at"
+// chapterListColumns 章节列表元数据字段。排除 content/scene_outline 等大文本列。
+const chapterListColumns = "id, novel_id, chapter_no, title, status, quality_status, word_count, " +
+	"outline, tension_level, emotional_tone, chapter_hook, chapter_end_state, reader_expectations, " +
+	"crawl_url, summary, created_at, updated_at, deleted_at"
 
 func (r *ChapterRepository) chapterListCacheKey(novelID uint) string {
 	return fmt.Sprintf("chapters:novel:%d", novelID)
@@ -379,10 +376,10 @@ func (r *ChapterRepository) CountByNovel(novelID uint) (int64, error) {
 	return count, nil
 }
 
-// ListPendingCrawl 获取待爬取章节（outline 以 "crawl:" 开头且 content 为空）
+// ListPendingCrawl 获取待爬取章节（crawl_url 非空且 content 为空）
 func (r *ChapterRepository) ListPendingCrawl(novelID uint) ([]*model.Chapter, error) {
 	var chapters []*model.Chapter
-	err := r.db.Where("novel_id = ? AND outline LIKE 'crawl:%' AND (content = '' OR content IS NULL)", novelID).
+	err := r.db.Where("novel_id = ? AND crawl_url != '' AND (content = '' OR content IS NULL)", novelID).
 		Order("chapter_no ASC").Find(&chapters).Error
 	return chapters, err
 }
@@ -393,12 +390,12 @@ func (r *ChapterRepository) UpdateContent(id uint, content string) error {
 		UpdateColumn("content", content).Error
 }
 
-// UpdateCrawledContent 将爬取完成的内容写回章节（状态置为 completed，发布状态独立管理）
+// UpdateCrawledContent 将爬取完成的内容写回章节（清空 crawl_url，状态置为 completed）
 func (r *ChapterRepository) UpdateCrawledContent(id uint, title, content string, wordCount int) error {
 	return r.db.Model(&model.Chapter{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"title":      title,
 		"content":    content,
-		"outline":    "",
+		"crawl_url":  "",
 		"word_count": wordCount,
 		"status":     "completed",
 	}).Error

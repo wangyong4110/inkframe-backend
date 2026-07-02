@@ -371,7 +371,7 @@ func (s *NovelImportService) ResumeCrawl(novelID uint) error {
 	}
 
 	// 从第一个待爬取章节的 URL 推断解析器
-	firstURL := strings.TrimPrefix(pending[0].NarrativeMeta.Outline, "crawl:")
+	firstURL := pending[0].CrawlURL
 	parser, err := s.getParserForURL(firstURL, "")
 	if err != nil {
 		return fmt.Errorf("cannot identify site parser: %w", err)
@@ -430,7 +430,7 @@ func (s *NovelImportService) crawlChaptersBackground(
 			// 从章节 stub 提取平台和来源 URL
 			var platform, sourceURL string
 			for _, ch := range chapters {
-				u := strings.TrimPrefix(ch.NarrativeMeta.Outline, "crawl:")
+				u := ch.CrawlURL
 				if u != "" {
 					sourceURL = u
 					platform = s.detectSiteFromURL(u)
@@ -457,7 +457,7 @@ func (s *NovelImportService) crawlChaptersBackground(
 	var toFetch []*crawler.ChapterInfo
 	var modelChapters []*model.Chapter
 	for _, ch := range chapters {
-		chURL := strings.TrimPrefix(ch.NarrativeMeta.Outline, "crawl:")
+		chURL := ch.CrawlURL
 		if chURL == "" {
 			progress.mu.Lock()
 			progress.Done++
@@ -478,7 +478,7 @@ func (s *NovelImportService) crawlChaptersBackground(
 		progress.mu.Unlock()
 
 		if r.Err != nil || r.Content == nil || r.Content.Content == "" {
-			chURL := strings.TrimPrefix(ch.NarrativeMeta.Outline, "crawl:")
+			chURL := ch.CrawlURL
 			if r.Err != nil {
 				logger.Errorf("[Crawl] chapter %d fetch error: %v (url=%s)", ch.ChapterNo, r.Err, chURL)
 			} else {
@@ -793,9 +793,6 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 					for i, chapter := range chapters {
 						chapter.NovelID = novel.ID
 						chapter.ChapterNo = i + 1
-						if chapter.UUID == "" {
-							chapter.UUID = uuid.New().String()
-						}
 					}
 					if err := tx.CreateInBatches(chapters, 100).Error; err != nil {
 						return fmt.Errorf("batch create chapters failed: %w", err)
@@ -827,14 +824,11 @@ func (s *NovelImportService) importFromFile(req *ImportRequest) (*ImportResult, 
 		result.OSSUrl = s.uploadRawToOSS(context.Background(), req.TenantID, novel.ID, req.FileName, req.FileData)
 	}
 
-	// 保存章节：先给所有章节填充 NovelID / TenantID / ChapterNo / UUID
+	// 保存章节：先给所有章节填充 NovelID / TenantID / ChapterNo
 	for i, chapter := range chapters {
 		chapter.TenantID = novel.TenantID
 		chapter.NovelID = novel.ID
 		chapter.ChapterNo = chapterOffset + i + 1
-		if chapter.UUID == "" {
-			chapter.UUID = uuid.New().String()
-		}
 	}
 	result.TotalChapters = len(chapters)
 
@@ -1051,15 +1045,12 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 	stubs := make([]*model.Chapter, 0, len(chapterInfos))
 	for i, info := range chapterInfos {
 		stubs = append(stubs, &model.Chapter{
-			UUID:      uuid.New().String(),
 			TenantID:  novel.TenantID,
 			NovelID:   novel.ID,
 			ChapterNo: chapterOffset + i + 1,
 			Title:     info.Title,
 			Content:   "",
-			NarrativeMeta: model.ChapterNarrativeMeta{
-				Outline: "crawl:" + info.URL,
-			},
+			CrawlURL: info.URL,
 			Status: "draft",
 		})
 	}
@@ -1406,7 +1397,6 @@ func (s *NovelImportService) splitByChapters(content, novelTitle string, tenantI
 				continue
 			}
 			chapters = append(chapters, &model.Chapter{
-				UUID:      uuid.New().String(),
 				ChapterNo: chapterNo,
 				Title:     fmt.Sprintf("第%d章", chapterNo),
 				Content:   chunkContent,
@@ -1420,7 +1410,6 @@ func (s *NovelImportService) splitByChapters(content, novelTitle string, tenantI
 	logger.Printf("[Import] splitByChapters: no chapter markers found, treating entire content as 1 chapter")
 	return []*model.Chapter{
 		{
-			UUID:      uuid.New().String(),
 			ChapterNo: 1,
 			Title:     novelTitle,
 			Content:   strings.TrimSpace(content),
@@ -1446,7 +1435,6 @@ func (s *NovelImportService) buildChaptersFromSplits(content string, splits []in
 		}
 		chNo++
 		chapters = append(chapters, &model.Chapter{
-			UUID:      uuid.New().String(),
 			ChapterNo: chNo,
 			Title:     titles[i],
 			Content:   chapterContent,
@@ -1555,7 +1543,6 @@ func (s *NovelImportService) splitByLength(content, title string, chunkSize int)
 		chapterNo := i/chunkSize + 1
 
 		chapter := &model.Chapter{
-			UUID:      uuid.New().String(),
 			ChapterNo: chapterNo,
 			Title:     fmt.Sprintf("第%d章", chapterNo),
 			Content:   chapterContent,

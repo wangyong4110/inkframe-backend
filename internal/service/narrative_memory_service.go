@@ -387,8 +387,8 @@ func (s *NarrativeMemoryService) BuildPlotTensionStateText(novelID uint, current
 	var points []tensionPoint
 	for i := len(recent) - 1; i >= 0; i-- { // 升序排列
 		ch := recent[i]
-		if ch.NarrativeMeta.TensionLevel > 0 {
-			points = append(points, tensionPoint{ch.ChapterNo, ch.NarrativeMeta.TensionLevel, ch.NarrativeMeta.ChapterHook})
+		if ch.TensionLevel > 0 {
+			points = append(points, tensionPoint{ch.ChapterNo, ch.TensionLevel, ch.ChapterHook})
 		}
 	}
 	if len(points) == 0 {
@@ -755,7 +755,7 @@ func (s *NarrativeMemoryService) generateArcSummary(tenantID, novelID uint, arcN
 			ChapterNo: ch.ChapterNo,
 			Title:     ch.Title,
 			Summary:   ch.Summary,
-			Hook:      ch.NarrativeMeta.ChapterHook,
+			Hook:      ch.ChapterHook,
 		}
 		if ch.Content != "" {
 			r := []rune(ch.Content)

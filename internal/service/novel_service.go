@@ -858,27 +858,20 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 			if chap.Title != "" {
 				existing.Title = chap.Title
 			}
-			existing.NarrativeMeta.TensionLevel = chap.TensionLevel
-			existing.NarrativeMeta.ActNo = chap.Act
-			existing.NarrativeMeta.EmotionalTone = chap.EmotionalTone
-			existing.NarrativeMeta.HookType = chap.HookType
+			existing.TensionLevel = chap.TensionLevel
+			existing.EmotionalTone = chap.EmotionalTone
 			if err := s.chapterRepo.Update(existing); err != nil {
 				logger.Errorf("GenerateOutline: update chapter %d: %v", chap.ChapterNo, err)
 			}
 			continue
 		}
 		placeholder := &model.Chapter{
-			UUID:      uuid.New().String(),
 			NovelID:   novel.ID,
 			ChapterNo: chap.ChapterNo,
 			Title:     chap.Title,
 			Summary:   chap.Summary,
-			NarrativeMeta: model.ChapterNarrativeMeta{
-				TensionLevel:  chap.TensionLevel,
-				ActNo:         chap.Act,
-				EmotionalTone: chap.EmotionalTone,
-				HookType:      chap.HookType,
-			},
+			TensionLevel:  chap.TensionLevel,
+			EmotionalTone: chap.EmotionalTone,
 			Status: "draft",
 		}
 		if err := s.chapterRepo.Create(placeholder); err != nil {
@@ -995,7 +988,6 @@ type ChapterOutline struct {
 	EmotionalTone string   `json:"emotional_tone,omitempty"`
 	TensionLevel  int      `json:"tension_level,omitempty"`
 	Hook          string   `json:"hook,omitempty"`
-	HookType      string   `json:"hook_type,omitempty"`
 	ConflictType  string   `json:"conflict_type,omitempty"`
 	Act           int      `json:"act,omitempty"`
 }
@@ -1097,14 +1089,13 @@ func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutli
       "emotional_tone": "紧张",
       "tension_level": 7,
       "hook": "",
-      "hook_type": "",
       "conflict_type": "人与人",
       "act": 1
     }
   ]
 }
 字段类型说明：chapter_no/word_count/tension_level/act 必须是整数，其余为字符串或字符串数组。
-hook 和 hook_type 在独立成篇模式下必须为空字符串。
+hook 在独立成篇模式下必须为空字符串。
 最外层必须是 {} 对象，chapters 是其中的数组字段，禁止直接返回 [] 数组。
 重要：每章 summary 字段不得少于150字，且必须描述完整的故事弧光（含结局），这是硬性要求。`)
 	} else {
@@ -1123,7 +1114,6 @@ hook 和 hook_type 在独立成篇模式下必须为空字符串。
       "emotional_tone": "紧张",
       "tension_level": 7,
       "hook": "章末悬念钩子（具体描述悬念内容，20字内）",
-      "hook_type": "cliffhanger",
       "conflict_type": "人与人",
       "act": 1
     }

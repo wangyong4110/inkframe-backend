@@ -510,7 +510,7 @@ func (s *QualityControlService) checkDramatic(chapter *model.Chapter) []QualityI
 // checkEmotionCurve 从场景大纲 JSON 中提取 emotion_peak 值，检测情绪曲线平坦问题。
 // SceneOutline 存储格式为 chapter_scene_outline 生成的 JSON 字符串。
 func (s *QualityControlService) checkEmotionCurve(chapter *model.Chapter) []QualityIssue {
-	if chapter.NarrativeMeta.SceneOutline == "" {
+	if chapter.SceneOutline == "" {
 		return nil
 	}
 
@@ -523,7 +523,7 @@ func (s *QualityControlService) checkEmotionCurve(chapter *model.Chapter) []Qual
 	}
 
 	var out outline
-	raw := chapter.NarrativeMeta.SceneOutline
+	raw := chapter.SceneOutline
 	// SceneOutline may be a JSON object with "scenes" key
 	if err := json.Unmarshal([]byte(raw), &out); err != nil {
 		return nil

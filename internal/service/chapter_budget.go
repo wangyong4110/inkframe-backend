@@ -34,12 +34,11 @@ type ChapterBudget struct {
 	PacingGuidance    string // 节奏建议："缓慢建立" | "稳步推进" | "快节奏冲突" | "高潮爆发" | "收尾沉淀"
 }
 
-// computeChapterBudget 根据章节号、全书目标章节数和幕次，计算本章的叙事预算。
+// computeChapterBudget 根据章节号和全书目标章节数，计算本章的叙事预算。
 //
 //   - chapterNo:      当前章节号（从1开始）
 //   - targetChapters: 全书目标章节数（0表示未知，退化为宽松限制）
-//   - actNo:          当前幕次（1/2/3，0表示未知）
-func computeChapterBudget(chapterNo, targetChapters, actNo int) ChapterBudget {
+func computeChapterBudget(chapterNo, targetChapters int) ChapterBudget {
 	b := ChapterBudget{}
 
 	// 计算相对位置（无法确定时按宽松处理）
@@ -51,9 +50,9 @@ func computeChapterBudget(chapterNo, targetChapters, actNo int) ChapterBudget {
 		b.PositionRatio = 1.0
 	}
 
-	// 优先用 actNo 判断阶段，actNo 为0时退化为位置比例
+	// 根据位置比例判断幕次阶段
 	switch {
-	case actNo == 1 || (actNo == 0 && b.PositionRatio < 0.25):
+	case b.PositionRatio < 0.25:
 		// ── 第一幕：建立期（前25%）──────────────────────────────
 		b.StoryPhase = "setup"
 		b.ActLabel = "第一幕"
@@ -75,7 +74,7 @@ func computeChapterBudget(chapterNo, targetChapters, actNo int) ChapterBudget {
 			b.AllowBigRevelation = false
 		}
 
-	case actNo == 2 || (actNo == 0 && b.PositionRatio < 0.75):
+	case b.PositionRatio < 0.75:
 		// ── 第二幕：发展期（25%–75%）────────────────────────────
 		if b.PositionRatio < 0.5 {
 			b.StoryPhase = "rising"

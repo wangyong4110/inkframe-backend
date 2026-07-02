@@ -474,7 +474,7 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 							text = ch.Summary
 						}
 						if text == "" {
-							text = truncateForPrompt(ch.NarrativeMeta.Outline, 500)
+							text = truncateForPrompt(ch.Outline, 500)
 						}
 						if text == "" || count >= 10 {
 							continue
@@ -731,7 +731,7 @@ func buildChapterSummariesText(chapters []*model.Chapter, maxChapters, maxLen in
 			summary = truncateForPrompt(ch.Content, 500)
 		}
 		if summary == "" {
-			summary = truncateForPrompt(ch.NarrativeMeta.Outline, 200) // 章节大纲兜底（无正文时也能提取信息）
+			summary = truncateForPrompt(ch.Outline, 200) // 章节大纲兜底（无正文时也能提取信息）
 		}
 		if summary != "" {
 			sb.WriteString(fmt.Sprintf("第%d章「%s」：%s\n", ch.ChapterNo, ch.Title, summary))
@@ -1219,7 +1219,6 @@ func (s *NovelAnalysisService) stepCreateChapterOutlines(
 			continue // 已存在，跳过
 		}
 		ch := &model.Chapter{
-			UUID:      uuid.New().String(),
 			NovelID:   novel.ID,
 			ChapterNo: co.ChapterNo,
 			Title:     co.Title,
@@ -1418,7 +1417,7 @@ func (s *NovelAnalysisService) stepExtractSceneAnchors(
 			text = ch.Summary
 		}
 		if text == "" {
-			text = truncateForPrompt(ch.NarrativeMeta.Outline, 500)
+			text = truncateForPrompt(ch.Outline, 500)
 		}
 		if text != "" {
 			candidates = append(candidates, chapterText{ch: ch, text: text})

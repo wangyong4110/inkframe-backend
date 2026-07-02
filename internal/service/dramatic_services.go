@@ -407,7 +407,6 @@ func (s *ConflictArcService) GetInjectionContext(novelID uint, currentChapter in
 type PacingPoint struct {
 	ChapterNo     int    `json:"chapter_no"`
 	TensionLevel  int    `json:"tension_level"`
-	ActNo         int    `json:"act_no"`
 	EmotionalTone string `json:"emotional_tone"`
 	Title         string `json:"title"`
 }
@@ -444,9 +443,8 @@ func (s *PacingService) GetCurve(novelID uint) ([]*PacingPoint, error) {
 	for _, ch := range chapters {
 		points = append(points, &PacingPoint{
 			ChapterNo:     ch.ChapterNo,
-			TensionLevel:  ch.NarrativeMeta.TensionLevel,
-			ActNo:         ch.NarrativeMeta.ActNo,
-			EmotionalTone: ch.NarrativeMeta.EmotionalTone,
+			TensionLevel:  ch.TensionLevel,
+			EmotionalTone: ch.EmotionalTone,
 			Title:         ch.Title,
 		})
 	}

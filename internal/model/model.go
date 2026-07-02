@@ -319,56 +319,41 @@ func (n Novel) MarshalJSON() ([]byte, error) {
 	return json.Marshal(m)
 }
 
-// ChapterNarrativeMeta 叙事元数据（JSON存储）
-type ChapterNarrativeMeta struct {
-	Outline            string `json:"outline"`
-	SceneOutline       string `json:"scene_outline"`
-	TensionLevel       int    `json:"tension_level"`
-	ActNo              int    `json:"act_no"`
-	EmotionalTone      string `json:"emotional_tone"`
-	HookType           string `json:"hook_type"`
-	ChapterHook        string `json:"chapter_hook"`
-	ReaderExpectations string `json:"reader_expectations"`
-	ChapterEndState    string `json:"chapter_end_state"`
-}
-
-// ChapterQualityMeta 质量与发布元数据（JSON存储）
-type ChapterQualityMeta struct {
-	QualityStatus string `json:"quality_status"`
-	// PublishedAt/ContinuityBlocked 已提升为 Chapter 独立列，不再存于 JSON
-}
-
 // Chapter 章节
 type Chapter struct {
 	ID        uint   `json:"id" gorm:"primaryKey"`
-	TenantID  uint   `json:"tenant_id" gorm:"index;not null;default:0"` // 冗余租户 ID，避免多租户查询 JOIN ink_novel
+	TenantID  uint   `json:"tenant_id" gorm:"index;not null;default:0"`
 	NovelID   uint   `json:"novel_id" gorm:"index;uniqueIndex:idx_chapter_novel_no,priority:1;index:idx_chapter_novel_status,priority:1;not null"`
 	Novel     *Novel `json:"novel,omitempty" gorm:"foreignKey:NovelID"`
-	UUID      string `json:"uuid" gorm:"uniqueIndex;size:36"`
 	ChapterNo int    `json:"chapter_no" gorm:"uniqueIndex:idx_chapter_novel_no,priority:2;not null"`
 	Title     string `json:"title" gorm:"size:255"`
 
 	// 内容
-	Content   string `json:"content" gorm:"type:mediumtext"` // 章节正文，mediumtext 支持 16MB 防截断
-	Summary   string `json:"summary" gorm:"type:text"`
-	WordCount int    `json:"word_count" gorm:"default:0"`
+	Content        string `json:"content" gorm:"type:mediumtext"`
+	Summary        string `json:"summary" gorm:"type:text"`
+	WordCount      int    `json:"word_count" gorm:"default:0"`
+	ContentVersion uint   `json:"content_version" gorm:"default:1"`
 
-	// 内容状态（不含发布状态）
-	Status string `json:"status" gorm:"size:20;index:idx_chapter_novel_status,priority:2;default:draft"`
-	// draft=草稿, generating=生成中, completed=已完成
+	// 状态
+	Status            string     `json:"status" gorm:"size:20;index:idx_chapter_novel_status,priority:2;default:draft"`
+	QualityStatus     string     `json:"quality_status" gorm:"size:10;default:''"`
+	IsPublished       bool       `json:"is_published" gorm:"default:false;index"`
+	PublishedAt       *time.Time `json:"published_at" gorm:"index"`
+	ContinuityBlocked bool       `json:"continuity_blocked" gorm:"default:false"`
 
-	// 广场发布状态（与内容状态解耦）
-	IsPublished bool       `json:"is_published" gorm:"default:false;index"`
-	PublishedAt *time.Time `json:"published_at" gorm:"index"`
-	// 连续性阻塞标记：true 时禁止继续生成（需独立列以支持直接 UPDATE 而不触发全字段保存）
-	ContinuityBlocked bool `json:"continuity_blocked" gorm:"default:false"`
+	// 爬取（独立关注点，与叙事内容分离）
+	CrawlURL string `json:"crawl_url,omitempty" gorm:"size:1024;default:''"`
 
-	// JSON 合并字段（减少列数）
-	NarrativeMeta ChapterNarrativeMeta `json:"narrative_meta" gorm:"column:narrative_meta;serializer:json;type:text"`
-	QualityMeta   ChapterQualityMeta   `json:"quality_meta" gorm:"column:quality_meta;serializer:json;type:text"`
+	// 叙事元数据（直接列，支持索引）
+	Outline            string `json:"outline,omitempty" gorm:"type:text"`
+	TensionLevel       int    `json:"tension_level,omitempty" gorm:"default:0"`
+	EmotionalTone      string `json:"emotional_tone,omitempty" gorm:"size:50;default:''"`
+	ChapterHook        string `json:"chapter_hook,omitempty" gorm:"type:text"`
+	ChapterEndState    string `json:"chapter_end_state,omitempty" gorm:"type:text"`
+	ReaderExpectations string `json:"reader_expectations,omitempty" gorm:"type:text"`
 
-	// 乐观锁版本号（协作编辑冲突检测）
-	ContentVersion uint `json:"content_version" gorm:"default:1"`
+	// 大型嵌套 JSON（保留 text 存储）
+	SceneOutline string `json:"scene_outline,omitempty" gorm:"type:mediumtext"`
 
 	// 时间戳
 	CreatedAt time.Time      `json:"created_at"`

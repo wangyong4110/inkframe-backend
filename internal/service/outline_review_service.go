@@ -177,8 +177,8 @@ func (s *OutlineReviewService) BatchReviewNovel(ctx context.Context, tenantID, n
 	// 纳入有场景大纲、文字大纲或章节正文的章节
 	var reviewable []*model.Chapter
 	for _, ch := range chapters {
-		hasScene := strings.TrimSpace(ch.NarrativeMeta.SceneOutline) != "" && strings.TrimSpace(ch.NarrativeMeta.SceneOutline) != "{}"
-		hasOutline := strings.TrimSpace(ch.NarrativeMeta.Outline) != ""
+		hasScene := strings.TrimSpace(ch.SceneOutline) != "" && strings.TrimSpace(ch.SceneOutline) != "{}"
+		hasOutline := strings.TrimSpace(ch.Outline) != ""
 		hasContent := strings.TrimSpace(ch.Content) != ""
 		if hasScene || hasOutline || hasContent {
 			reviewable = append(reviewable, ch)
@@ -455,10 +455,7 @@ func countActChapters(planned []plannedChapter, chapters []*model.Chapter, revie
 		}
 	} else {
 		for _, ch := range chapters {
-			actNum := ch.NarrativeMeta.ActNo
-			if actNum == 0 {
-				actNum = actOf(ch.ChapterNo, totalActual)
-			}
+			actNum := actOf(ch.ChapterNo, totalActual)
 			countScore(actNum, ch.ChapterNo)
 		}
 	}
@@ -544,7 +541,7 @@ func buildTensionCurve(planned []plannedChapter, chapters []*model.Chapter, revi
 		}
 		pts = append(pts, model.TensionPoint{
 			ChapterNo:    ch.ChapterNo,
-			PlannedLevel: ch.NarrativeMeta.TensionLevel,
+			PlannedLevel: ch.TensionLevel,
 			Score:        score,
 			Status:       status,
 		})
@@ -619,28 +616,24 @@ func (s *OutlineReviewService) runBatchSynthesisAI(ctx context.Context, tenantID
 
 func buildChapterPlanTable(planned []plannedChapter, chapters []*model.Chapter) string {
 	var sb strings.Builder
-	sb.WriteString("章节 | 标题 | 幕次 | 规划张力 | 情感基调 | 情节摘要\n")
-	sb.WriteString("---|---|---|---|---|---\n")
+	sb.WriteString("章节 | 标题 | 规划张力 | 情感基调 | 情节摘要\n")
+	sb.WriteString("---|---|---|---|---\n")
 
-	write := func(no int, title string, act, tension int, tone, summary string) {
+	write := func(no int, title string, tension int, tone, summary string) {
 		if len([]rune(summary)) > 80 {
 			summary = string([]rune(summary)[:80]) + "…"
 		}
-		actStr := fmt.Sprintf("第%d幕", act)
-		if act == 0 {
-			actStr = "-"
-		}
-		fmt.Fprintf(&sb, "第%d章 | %s | %s | %d/10 | %s | %s\n",
-			no, title, actStr, tension, tone, summary)
+		fmt.Fprintf(&sb, "第%d章 | %s | %d/10 | %s | %s\n",
+			no, title, tension, tone, summary)
 	}
 
 	if len(planned) > 0 {
 		for _, p := range planned {
-			write(p.ChapterNo, p.Title, p.Act, p.TensionLevel, p.EmotionalTone, p.Summary)
+			write(p.ChapterNo, p.Title, p.TensionLevel, p.EmotionalTone, p.Summary)
 		}
 	} else {
 		for _, ch := range chapters {
-			write(ch.ChapterNo, ch.Title, ch.NarrativeMeta.ActNo, ch.NarrativeMeta.TensionLevel, ch.NarrativeMeta.EmotionalTone, ch.Summary)
+			write(ch.ChapterNo, ch.Title, ch.TensionLevel, ch.EmotionalTone, ch.Summary)
 		}
 	}
 	return sb.String()
@@ -678,8 +671,8 @@ func buildRuleFallbackSuggestion(passed, warning, failed, total, reviewed int) s
 func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.OutlineIssue {
 	var issues []model.OutlineIssue
 
-	hasScene := strings.TrimSpace(chapter.NarrativeMeta.SceneOutline) != "" && strings.TrimSpace(chapter.NarrativeMeta.SceneOutline) != "{}"
-	hasOutline := strings.TrimSpace(chapter.NarrativeMeta.Outline) != ""
+	hasScene := strings.TrimSpace(chapter.SceneOutline) != "" && strings.TrimSpace(chapter.SceneOutline) != "{}"
+	hasOutline := strings.TrimSpace(chapter.Outline) != ""
 
 	if !hasScene && !hasOutline {
 		issues = append(issues, model.OutlineIssue{
@@ -705,10 +698,10 @@ func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.Out
 			POV          string `json:"pov"`
 		} `json:"scenes"`
 	}
-	if err := json.Unmarshal([]byte(chapter.NarrativeMeta.SceneOutline), &outline); err == nil {
+	if err := json.Unmarshal([]byte(chapter.SceneOutline), &outline); err == nil {
 		n := len(outline.Scenes)
 		// 单场景仅对中低张力章节报错；高张力章节（如决战/高潮）可以是一个完整长场景
-		if n < 2 && chapter.NarrativeMeta.TensionLevel < 8 {
+		if n < 2 && chapter.TensionLevel < 8 {
 			issues = append(issues, model.OutlineIssue{
 				Dimension:   "structure",
 				Severity:    "error",
@@ -749,7 +742,7 @@ func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.Out
 				}
 				// 全程高张力警告：只对章节目标张力本身不高的章节触发
 				// 如果章节规划张力就是 8+，全程高张力是预期行为（决战/高潮章）
-				if chapter.NarrativeMeta.TensionLevel < 7 {
+				if chapter.TensionLevel < 7 {
 					allHigh := true
 					for _, l := range levels {
 						if l < 7 {
@@ -785,7 +778,7 @@ func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.Out
 		}
 	}
 
-	if chapter.NarrativeMeta.HookType == "" && chapter.NarrativeMeta.ChapterHook == "" {
+	if chapter.ChapterHook == "" {
 		issues = append(issues, model.OutlineIssue{
 			Dimension:   "hook",
 			Severity:    "info",
@@ -794,13 +787,13 @@ func (s *OutlineReviewService) runRuleChecks(chapter *model.Chapter) []model.Out
 		})
 	}
 
-	// 第一幕极高张力警告：排除章节号 <= 2 的情况（开场倒叙/in medias res 是经典手法）
-	if chapter.NarrativeMeta.ActNo == 1 && chapter.NarrativeMeta.TensionLevel >= 9 && chapter.ChapterNo > 2 {
+	// 极高张力警告：排除章节号 <= 2 的情况（开场倒叙/in medias res 是经典手法）
+	if chapter.TensionLevel >= 9 && chapter.ChapterNo > 2 {
 		issues = append(issues, model.OutlineIssue{
 			Dimension:   "pacing",
 			Severity:    "warning",
-			Description: fmt.Sprintf("第一幕第%d章出现极高张力（%d/10），可能透支后续叙事空间", chapter.ChapterNo, chapter.NarrativeMeta.TensionLevel),
-			Suggestion:  "第一幕中期建议以铺垫和人物塑造为主，将极高张力节点集中于幕末转折点，为第二幕留出对比空间",
+			Description: fmt.Sprintf("第%d章出现极高张力（%d/10），可能透支后续叙事空间", chapter.ChapterNo, chapter.TensionLevel),
+			Suggestion:  "建议以铺垫和人物塑造为主，将极高张力节点集中于幕末转折点，为后续留出对比空间",
 		})
 	}
 
@@ -852,9 +845,9 @@ func (s *OutlineReviewService) runAIReview(ctx context.Context, tenantID uint, c
 	}
 
 	// 优先使用场景大纲，降级到文字大纲
-	outlineContent := chapter.NarrativeMeta.SceneOutline
+	outlineContent := chapter.SceneOutline
 	if strings.TrimSpace(outlineContent) == "" || strings.TrimSpace(outlineContent) == "{}" {
-		outlineContent = chapter.NarrativeMeta.Outline
+		outlineContent = chapter.Outline
 	}
 
 	openForeshadows := s.buildOpenForeshadowsText(chapter.NovelID)
@@ -871,10 +864,8 @@ func (s *OutlineReviewService) runAIReview(ctx context.Context, tenantID uint, c
 		"Style":               novel.AIConfig.StylePrompt,
 		"TargetChapters":      novel.Meta.TargetChapters,
 		"ChapterNo":           chapter.ChapterNo,
-		"ActNo":               chapter.NarrativeMeta.ActNo,
-		"EmotionalTone":       chapter.NarrativeMeta.EmotionalTone,
-		"TensionLevel":        chapter.NarrativeMeta.TensionLevel,
-		"HookType":            chapter.NarrativeMeta.HookType,
+		"EmotionalTone":       chapter.EmotionalTone,
+		"TensionLevel":        chapter.TensionLevel,
 		"SceneOutlineJSON":    outlineContent,
 		"PrevChapterSummary":  prevSummary,
 		"NextChapterTitle":    nextTitle,
