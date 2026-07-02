@@ -284,11 +284,11 @@ func (r *AIModelRepository) GetByName(name string) (*model.AIModel, error) {
 
 // List 获取模型列表，支持按提供商和租户过滤。
 // tenantID=0 时不进行租户过滤（仅限内部调用）。
+// List 管理页使用：返回所有模型（含禁用），不过滤 is_active。
 func (r *AIModelRepository) List(providerID *uint, tenantID uint) ([]*model.AIModel, error) {
 	var models []*model.AIModel
 	query := r.db.Preload("Provider").
-		Joins("JOIN ink_model_provider p ON p.id = ink_ai_model.provider_id AND p.deleted_at IS NULL").
-		Where("ink_ai_model.is_active = 1")
+		Joins("JOIN ink_model_provider p ON p.id = ink_ai_model.provider_id AND p.deleted_at IS NULL")
 
 	if tenantID > 0 {
 		query = query.Where("p.tenant_id = 0 OR p.tenant_id = ?", tenantID)
@@ -297,7 +297,7 @@ func (r *AIModelRepository) List(providerID *uint, tenantID uint) ([]*model.AIMo
 		query = query.Where("ink_ai_model.provider_id = ?", *providerID)
 	}
 
-	if err := query.Find(&models).Error; err != nil {
+	if err := query.Order("ink_ai_model.created_at ASC").Find(&models).Error; err != nil {
 		return nil, err
 	}
 	return models, nil

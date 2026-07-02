@@ -273,12 +273,9 @@ func (s *ModelService) copySystemModels(target *model.ModelProvider) {
 			IsActive:    true,
 		}
 		_ = s.modelRepo.FirstOrCreate(newM)
-		// 若模型已存在但未激活（用户手动提前添加过），则激活它
-		if !newM.IsActive {
-			newM.IsActive = true
-			_ = s.modelRepo.Update(newM)
-		}
-		// 若模型已存在但 display_name 为空，则补填
+		// 注意：不强制重新激活已存在记录，尊重用户的 IsActive 设置。
+		// FirstOrCreate 创建新记录时已默认 IsActive=true。
+		// 若模型已存在但 display_name 为空，则补填（不影响 IsActive）
 		if newM.DisplayName == "" && d.DisplayName != "" {
 			newM.DisplayName = d.DisplayName
 			_ = s.modelRepo.Update(newM)
@@ -300,8 +297,6 @@ func (s *ModelService) CreateProvider(req *model.CreateModelProviderRequest, ten
 	if err := s.providerRepo.Create(provider); err != nil {
 		return nil, err
 	}
-	s.seedProviderModel(provider)
-	s.copySystemModels(provider)
 	return provider, nil
 }
 

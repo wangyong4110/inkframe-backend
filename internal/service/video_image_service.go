@@ -472,9 +472,13 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// 精准匹配：批量加载 shot.CharacterIDs 中的所有角色三视图（ThreeViewSheet），最多 maxCharRefs 张
 	const maxCharRefs = maxCompositeImages - 1
 	var characterPortraits []string
-	var characterVisualPrompts []string
-	var charNamesForPrompt []string
 	var refSources []string
+	// portraitOwners 与 characterPortraits 严格并行：记录有参考图角色的名字和视觉描述。
+	// 用于单参考图提供商降级策略：主角用参考图，次要角色用文字描述。
+	type portraitOwner struct{ name, vp string }
+	var portraitOwners []portraitOwner
+	// noPortraitVPs：无参考图角色的视觉描述，所有提供商都只能靠文字约束。
+	var noPortraitVPs []string
 	if len(shot.CharacterIDs) > 0 {
 		ids := []uint(shot.CharacterIDs)
 		batchChars, batchErr := s.characterRepo.ListByIDs(ids)
@@ -494,7 +498,6 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				if !ok {
 					continue
 				}
-				charNamesForPrompt = append(charNamesForPrompt, char.Name)
 				activeLook := s.getCharActiveLook(char, chapterNo)
 				var refImage, vprompt string
 				if activeLook != nil {
@@ -520,14 +523,16 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				}
 				logger.Printf("[CharRef] shot#%d charID=%d name=%q chapterNo=%d activeLook=%v refType=%s ref=%q urlType=%s",
 					shot.ShotNo, char.ID, char.Name, chapterNo, activeLook != nil, refType, refImage, urlType)
-				if vprompt != "" {
-					characterVisualPrompts = append(characterVisualPrompts, vprompt)
-				} else {
-					characterVisualPrompts = append(characterVisualPrompts, buildCharTextAnchor(char))
+				charVP := vprompt
+				if charVP == "" {
+					charVP = buildCharTextAnchor(char)
 				}
 				if refImage != "" && len(characterPortraits) < maxCharRefs {
 					characterPortraits = append(characterPortraits, refImage)
 					refSources = append(refSources, fmt.Sprintf("charID=%d %s", char.ID, refType))
+					portraitOwners = append(portraitOwners, portraitOwner{name: char.Name, vp: charVP})
+				} else {
+					noPortraitVPs = append(noPortraitVPs, charVP)
 				}
 			}
 		}
@@ -583,34 +588,33 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 							seenIDs[char.ID] = true
 							activeLook := s.getCharActiveLook(char, chapterNo)
 							inlineChars = append(inlineChars, inlineRef{name: sc.Name, char: char, look: activeLook})
-							if activeLook != nil && activeLook.VisualPrompt != "" {
-								characterVisualPrompts = append(characterVisualPrompts, activeLook.VisualPrompt)
-							} else {
-								// 无 VisualPrompt：用角色名+描述作为文本锚点（兜底同上）
-								characterVisualPrompts = append(characterVisualPrompts, buildCharTextAnchor(char))
-							}
 						}
 					}
 					for _, ir := range inlineChars {
-						if len(characterPortraits) >= maxCharRefs {
-							break
+						irVP := buildCharTextAnchor(ir.char)
+						if ir.look != nil && ir.look.VisualPrompt != "" {
+							irVP = ir.look.VisualPrompt
 						}
-						if ir.look != nil {
 						var refURL string
-						if ir.look.Portrait != "" {
-							refURL = normalizeMediaURL(ir.look.Portrait)
-						} else if ir.look.ThreeViewSheet != "" {
-							refURL = normalizeMediaURL(ir.look.ThreeViewSheet)
+						if ir.look != nil && len(characterPortraits) < maxCharRefs {
+							// 三视图优先，无三视图降级到 Portrait
+							if ir.look.ThreeViewSheet != "" {
+								refURL = normalizeMediaURL(ir.look.ThreeViewSheet)
+							} else {
+								refURL = normalizeMediaURL(ir.look.Portrait)
+							}
 						}
 						if refURL != "" {
 							characterPortraits = append(characterPortraits, refURL)
-							refKind := "ThreeViewSheet"
-							if ir.look.Portrait != "" {
-								refKind = "Portrait"
+							refKind := "Portrait"
+							if ir.look != nil && ir.look.ThreeViewSheet != "" {
+								refKind = "ThreeViewSheet"
 							}
 							refSources = append(refSources, fmt.Sprintf("inline name=%q %s", ir.name, refKind))
+							portraitOwners = append(portraitOwners, portraitOwner{name: ir.name, vp: irVP})
+						} else {
+							noPortraitVPs = append(noPortraitVPs, irVP)
 						}
-					}
 					}
 				}
 			}
@@ -642,24 +646,45 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// 角色外观 token 注入（prepend，排在场景锚点前）：
-	// - DreamO（有参考图）：IP-Adapter 负责外貌精准还原；只注入英文 VisualPrompt，中文描述被扩散模型忽略。
-	// - Text2ImgV3（无参考图）：文字锚点是约束外貌的唯一手段，注入所有可用描述。
-	if len(characterVisualPrompts) > 0 {
+	// 角色外观描述注入（prepend，排在场景锚点前）：
+	// - 主角（portraitOwners[0]）：参考图处理外貌，只注入英文 VP 辅助约束
+	// - 次要角色（portraitOwners[1+]）：单参考图提供商会丢弃其参考图，
+	//   注入 "角色名: VP" 格式的完整描述（不限语言）作为外貌唯一约束
+	// - 无参考图角色（noPortraitVPs）：文字是唯一约束，直接注入
+	if len(portraitOwners) > 0 || len(noPortraitVPs) > 0 {
 		if len(characterPortraits) > 0 {
-			// DreamO 模式：外貌由参考图负责，只注入英文 VisualPrompt；中文描述权重极低跳过，避免占用 prompt 空间
-			var enPrompts []string
-			for _, vp := range characterVisualPrompts {
-				if isEnglishPrompt(vp) {
-					enPrompts = append(enPrompts, vp)
+			var descFrags []string
+			// 主角：只注入英文 VP（IP-Adapter 已负责外貌，过多文字反而干扰）
+			if isEnglishPrompt(portraitOwners[0].vp) {
+				descFrags = append(descFrags, portraitOwners[0].vp)
+			}
+			// 次要角色：带角色名前缀，不限语言，让模型知道描述属于哪个角色
+			for i := 1; i < len(portraitOwners); i++ {
+				po := portraitOwners[i]
+				if po.vp == "" {
+					continue
+				}
+				if po.name != "" {
+					descFrags = append(descFrags, po.name+": "+po.vp)
+				} else {
+					descFrags = append(descFrags, po.vp)
 				}
 			}
-			if len(enPrompts) > 0 {
-				promptText = strings.Join(enPrompts, ", ") + ", " + promptText
+			// 无参考图角色：直接注入
+			descFrags = append(descFrags, noPortraitVPs...)
+			if len(descFrags) > 0 {
+				promptText = strings.Join(descFrags, "; ") + ", " + promptText
 			}
 		} else {
-			// Text2ImgV3 模式：无参考图，文字是唯一外貌约束
-			promptText = strings.Join(characterVisualPrompts, ", ") + ", " + promptText
+			// 无参考图（Text2ImgV3）：文字是唯一外貌约束
+			var allVPs []string
+			for _, po := range portraitOwners {
+				allVPs = append(allVPs, po.vp)
+			}
+			allVPs = append(allVPs, noPortraitVPs...)
+			if len(allVPs) > 0 {
+				promptText = strings.Join(allVPs, ", ") + ", " + promptText
+			}
 		}
 	}
 
@@ -689,9 +714,13 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				}
 			}
 		}
-		// shot.GenMeta.Characters 为空时，从 DB 加载的角色名兜底
-		if len(presenceTokens) == 0 && len(charNamesForPrompt) > 0 {
-			presenceTokens = append(presenceTokens, charNamesForPrompt...)
+		// shot.GenMeta.Characters 为空时，从 portraitOwners 加载的角色名兜底
+		if len(presenceTokens) == 0 && len(portraitOwners) > 0 {
+			for _, po := range portraitOwners {
+				if po.name != "" {
+					presenceTokens = append(presenceTokens, po.name)
+				}
+			}
 		}
 		if len(presenceTokens) > 0 {
 			promptText = strings.Join(presenceTokens, ", ") + ", " + promptText
