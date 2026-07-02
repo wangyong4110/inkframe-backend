@@ -1495,6 +1495,14 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		klingMode = "pro"
 	}
 
+	// Doubao/Seedance：Model 字段必须是 Endpoint ID，不是 Kling 专用的 klingModelOverride。
+	// 当 klingModelOverride 为空（或被 HD 逻辑跳过），从 DB 中查询该 provider 的活跃模型名称。
+	if (providerName == "seedance" || providerName == "doubao") && s.aiService != nil {
+		if dbModel, dbErr := s.aiService.GetActiveVideoModelName(tenantID, providerName); dbErr == nil && dbModel != "" {
+			klingModelOverride = dbModel
+		}
+	}
+
 	// 电影级动态前缀——注入运镜词+情绪氛围词，风格自适应前缀（赛博朋克等特殊风格替换 film 词汇）
 	cinematicPrefix := buildCinematicPrefix(shot.CamDir.CameraType, shot.CamDir.EmotionalTone, videoArtStyle)
 	// 3D 风格前缀
