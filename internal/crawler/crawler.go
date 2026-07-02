@@ -383,9 +383,18 @@ func (nc *NovelCrawler) FetchChapterStream(ctx context.Context, chapters []*Chap
 				return
 			}
 			if content == nil || content.Content == "" {
-				// 页面已加载但正文为空：记录页面大小帮助诊断（JS 渲染 / 反爬 / 选择器不匹配）
-				log.Printf("[Crawler] WARN idx=%d url=%s pageBytes=%d: content empty after parse (possible JS-rendered or anti-bot page)",
-					idx, e.Request.URL.String(), len(e.Response.Body))
+				// 正文为空：打印页面大小 + body 前 600 字符，帮助判断是反爬页/JS渲染/选择器失效
+				snippet := ""
+				if bodyNode := e.DOM.Find("body"); bodyNode.Length() > 0 {
+					raw, _ := bodyNode.Html()
+					runes := []rune(raw)
+					if len(runes) > 600 {
+						runes = runes[:600]
+					}
+					snippet = string(runes)
+				}
+				log.Printf("[Crawler] WARN idx=%d url=%s pageBytes=%d bodySnippet=%q",
+					idx, e.Request.URL.String(), len(e.Response.Body), snippet)
 			}
 			nc.stats.recordSuccess()
 			select {
@@ -735,16 +744,22 @@ func (p *QidianParser) ParseChapter(root *goquery.Selection) (*ChapterContent, e
 		}
 	}
 	var paragraphs []string
-	contentSel := root.Find("#j_readContent p, .read-content p, .chapter-content p, #j_chapterBox p")
-	if contentSel.Length() > 0 {
-		contentSel.Each(func(_ int, s *goquery.Selection) {
-			if t := strings.TrimSpace(s.Text()); t != "" {
-				paragraphs = append(paragraphs, t)
-			}
-		})
+	contentSel := root.Find("#j_readContent p, .read-content p, .chapter-content p, #j_chapterBox p, .ql-editor p, [class*='read'] p, [class*='chapter'] p")
+	contentSel.Each(func(_ int, s *goquery.Selection) {
+		if t := strings.TrimSpace(s.Text()); t != "" {
+			paragraphs = append(paragraphs, t)
+		}
+	})
+	if len(paragraphs) > 0 {
 		content.Content = strings.Join(paragraphs, "\n\n")
 	} else {
-		content.Content = cleanText(root.Find("#j_readContent, .read-content, .chapter-content, #j_chapterBox").First().Text())
+		// 降级：容器整块文本
+		for _, sel := range []string{"#j_readContent", ".read-content", ".chapter-content", "#j_chapterBox", ".ql-editor"} {
+			if t := cleanText(root.Find(sel).First().Text()); t != "" {
+				content.Content = t
+				break
+			}
+		}
 	}
 	return content, nil
 }
@@ -910,14 +925,24 @@ func (p *JjwxcParser) ParseChapter(root *goquery.Selection) (*ChapterContent, er
 		content.Title = t
 	}
 
-	// Content: div#novelcontent paragraphs
+	// Content: div#novelcontent paragraphs（优先 <p> 子元素；无 <p> 时降级到整块文本）
 	var paragraphs []string
 	root.Find("div#novelcontent p").Each(func(_ int, s *goquery.Selection) {
 		if t := strings.TrimSpace(s.Text()); t != "" {
 			paragraphs = append(paragraphs, t)
 		}
 	})
-	content.Content = strings.Join(paragraphs, "\n\n")
+	if len(paragraphs) > 0 {
+		content.Content = strings.Join(paragraphs, "\n\n")
+	} else {
+		// 降级一：整个 #novelcontent 文本（兼容 <div>/<span> 非 <p> 格式）
+		if t := cleanText(root.Find("div#novelcontent").First().Text()); t != "" {
+			content.Content = t
+		} else {
+			// 降级二：.readContent 容器（晋江部分页面结构）
+			content.Content = cleanText(root.Find(".readContent").First().Text())
+		}
+	}
 
 	return content, nil
 }
@@ -976,14 +1001,23 @@ func (p *ZonghengParser) ParseChapter(root *goquery.Selection) (*ChapterContent,
 	// Title
 	content.Title = strings.TrimSpace(root.Find("h1.ctitle, .chapter-title h1").First().Text())
 
-	// Content
+	// Content：多选择器兜底，最后降级到容器整块文本
 	var paragraphs []string
-	root.Find(".readerList p, #content p").Each(func(_ int, s *goquery.Selection) {
+	root.Find(".readerList p, #content p, .chapter-content p, .novel-content p, .bookContent p").Each(func(_ int, s *goquery.Selection) {
 		if t := strings.TrimSpace(s.Text()); t != "" {
 			paragraphs = append(paragraphs, t)
 		}
 	})
-	content.Content = strings.Join(paragraphs, "\n\n")
+	if len(paragraphs) > 0 {
+		content.Content = strings.Join(paragraphs, "\n\n")
+	} else {
+		for _, sel := range []string{".readerList", "#content", ".chapter-content", ".novel-content", ".bookContent"} {
+			if t := cleanText(root.Find(sel).First().Text()); t != "" {
+				content.Content = t
+				break
+			}
+		}
+	}
 
 	return content, nil
 }
@@ -1637,7 +1671,8 @@ var noisePatterns = []*regexp.Regexp{
 	// 版权/防盗水印类
 	regexp.MustCompile(`(?i)(本章.{0,10}(完|结束)|最新章节|全文免费|点击下载|下载.*?app)`),
 	regexp.MustCompile(`(?i)(一秒记住|快速导航|返回目录|上一章|下一章|章节错误.{0,20}举报)`),
-	regexp.MustCompile(`(?i)(笔趣阁|顶点小说|起点中文|纵横中文|晋江文学|飞卢小说|书客居|七猫.{0,5}小说)`),
+	// 仅匹配以站点名+行动词收尾的水印行，避免误杀故事正文中提及的网站名
+	regexp.MustCompile(`(?i)(笔趣阁|顶点小说|起点中文|纵横中文|晋江文学|飞卢小说|书客居|七猫.{0,5}小说).{0,20}(阅读|下载|更新|首发|转载|小说网|书友)`),
 }
 
 // cleanReadabilityText 清理 readability 返回的 TextContent（去多余空行、广告注入行）。
