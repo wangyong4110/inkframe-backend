@@ -231,8 +231,8 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, for
 			advanceProgress()
 			continue
 		}
-		if shot.Status == "generating" {
-			// Currently generating in another goroutine — skip.
+		if shot.Status == "generating" && !force {
+			// Currently generating in another goroutine — skip (unless forced by user).
 			advanceProgress()
 			continue
 		}
@@ -498,12 +498,11 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				activeLook := s.getCharActiveLook(char, chapterNo)
 				var refImage, vprompt string
 				if activeLook != nil {
-					// Portrait（单张正面半身像，专为 DreamO IP-Adapter 生成，embedding 最干净）优先使用；
-					// 无 Portrait 时降级到 ThreeViewSheet（三视图三联画面，对 DreamO 效果略差）。
-					if activeLook.Portrait != "" {
-						refImage = normalizeMediaURL(activeLook.Portrait)
-					} else {
+					// 三视图（ThreeViewSheet）优先，无三视图时降级到 Portrait。
+					if activeLook.ThreeViewSheet != "" {
 						refImage = normalizeMediaURL(activeLook.ThreeViewSheet)
+					} else {
+						refImage = normalizeMediaURL(activeLook.Portrait)
 					}
 					vprompt = activeLook.VisualPrompt
 				}
@@ -515,9 +514,9 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				} else if refImage != "" {
 					urlType = "other"
 				}
-				refType := "ThreeViewSheet"
-				if activeLook != nil && activeLook.Portrait != "" {
-					refType = "Portrait"
+				refType := "Portrait"
+				if activeLook != nil && activeLook.ThreeViewSheet != "" {
+					refType = "ThreeViewSheet"
 				}
 				logger.Printf("[CharRef] shot#%d charID=%d name=%q chapterNo=%d activeLook=%v refType=%s ref=%q urlType=%s",
 					shot.ShotNo, char.ID, char.Name, chapterNo, activeLook != nil, refType, refImage, urlType)
@@ -749,22 +748,15 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// DreamO（seed3l_single_ip）是"单 IP 角色特征保持"模型，参考图列表构建规则：
-	//
 	// 有角色参考图时 → DreamO 模式：
-	//   - 只传角色参考图，场景图和物品图排除在外
-	//   - 原因：DreamO 对所有 image_urls 提取 IP embedding；场景/物品图会污染角色特征 → 生成结果与三视图不一致
-	//   - seed3l_single_ip 是"单 IP"模型，多角色场景只取主角色（第一个）作为参考
-	//   - 场景/物品信息通过 prompt 文字（sceneAnchorSvc.BuildPromptFragment 已注入场景描述）传达
+	//   - 只传角色参考图，场景图和物品图排除在外（防止污染 IP embedding）
+	//   - 多角色时所有角色参考图均传入（DreamO API 支持多张）
+	//   - 场景/物品信息通过 prompt 文字传达
 	//
 	// 无角色参考图时 → Text2ImgV3 纯文生图模式：
 	//   - 可加物品图和场景图作为视觉风格锚定
 	cappedPortraits := characterPortraits
-	// seed3l_single_ip 是单 IP 模型，多角色参考图会导致特征混合；只取第一张（主角色）
-	if len(cappedPortraits) > 1 {
-		logger.Printf("[CharRef] shot#%d multi-char(%d) — DreamO single_ip only uses first portrait to avoid IP blending", shot.ShotNo, len(cappedPortraits))
-		cappedPortraits = cappedPortraits[:1]
-	}
+	logger.Printf("[CharRef] shot#%d using %d character portrait(s) as reference", shot.ShotNo, len(cappedPortraits))
 	var allRefImages []string
 	if len(cappedPortraits) > 0 {
 		// DreamO 模式：只传角色参考图，不传场景图/物品图（防止污染 IP embedding）
@@ -778,8 +770,8 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 			allRefImages = append(allRefImages, sceneRefImage)
 		}
 	}
-	logger.Printf("generateShotReferenceImage: shot %d allRefImages=%d (charPortraits=%d→capped=%d itemRefs=%d sceneRef=%v)",
-		shot.ShotNo, len(allRefImages), len(characterPortraits), len(cappedPortraits), len(itemRefImages), sceneRefImage != "")
+	logger.Printf("generateShotReferenceImage: shot %d allRefImages=%d (charPortraits=%d itemRefs=%d sceneRef=%v)",
+		shot.ShotNo, len(allRefImages), len(characterPortraits), len(itemRefImages), sceneRefImage != "")
 
 	ctx := context.Background()
 
@@ -1531,7 +1523,11 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 				look := s.getCharActiveLook(c, chapterNo)
 				var img string
 				if look != nil {
-					img = normalizeMediaURL(look.ThreeViewSheet)
+					if look.ThreeViewSheet != "" {
+						img = normalizeMediaURL(look.ThreeViewSheet)
+					} else {
+						img = normalizeMediaURL(look.Portrait)
+					}
 				}
 				if img != "" && img != referenceImage {
 					extraRefImages = append(extraRefImages, img)
