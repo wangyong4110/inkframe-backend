@@ -625,7 +625,7 @@ func (s *VideoService) autoMatchShotAnchors(shots []*model.StoryboardShot, ancho
 }
 
 // autoMatchShotCharacters 按多来源匹配小说角色，写入 CharacterIDs。
-// 匹配优先级：① shot.Characters JSON → ② shot.GenMeta.Dialogue "角色名：台词" → ③ shot.Narration 关键词扫描。
+// 匹配优先级：① shot.Characters JSON（LLM明确列出的视觉在场角色）→ ② shot.GenMeta.Dialogue "角色名：台词"。
 // 已有 CharacterIDs 时不覆盖（保留手动绑定结果）。
 func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, chars []*model.Character) {
 	if len(chars) == 0 {
@@ -699,27 +699,10 @@ func (s *VideoService) autoMatchShotCharacters(shots []*model.StoryboardShot, ch
 			}
 		}
 
-		// ③ Narration: 全文扫描角色名关键词
-		if len(matched) == 0 && shot.Narration != "" {
-			narrLower := strings.ToLower(shot.Narration)
-			for name, id := range nameMap {
-				if strings.Contains(narrLower, name) && !seen[id] {
-					matched = append(matched, id)
-					seen[id] = true
-				}
-			}
-		}
-
-		// ④ Description: 全文扫描角色名关键词（兜底）
-		if len(matched) == 0 && shot.Description != "" {
-			descLower := strings.ToLower(shot.Description)
-			for name, id := range nameMap {
-				if strings.Contains(descLower, name) && !seen[id] {
-					matched = append(matched, id)
-					seen[id] = true
-				}
-			}
-		}
+		// ③ Narration 和 Description 扫描已移除：
+		// 旁白/描述中提到角色名（"三年前他来过这里"）≠ 该角色在画面中出现。
+		// 用旁白扫描匹配会导致角色参考图被错误地注入到空景/环境镜头，产生"幽灵角色"。
+		// CharacterIDs 只应来源于 LLM 明确填写的 characters[] 字段（①）和对白说话角色（②）。
 
 		if len(matched) > 0 {
 			shot.CharacterIDs = matched

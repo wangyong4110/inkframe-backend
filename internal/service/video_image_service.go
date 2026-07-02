@@ -647,36 +647,19 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	}
 
 	// 角色外观描述注入（prepend，排在场景锚点前）：
-	// - 主角（portraitOwners[0]）：参考图处理外貌，只注入英文 VP 辅助约束
-	// - 次要角色（portraitOwners[1+]）：单参考图提供商会丢弃其参考图，
-	//   注入 "角色名: VP" 格式的完整描述（不限语言）作为外貌唯一约束
-	// - 无参考图角色（noPortraitVPs）：文字是唯一约束，直接注入
-	if len(portraitOwners) > 0 || len(noPortraitVPs) > 0 {
+	// DreamO 模式（有参考图）：IP-Adapter 通过参考图保证角色外貌，注入冗长 VP 会：
+	//   ① 将场景描述（LLM image_prompt）推到 600 字截断线后被丢弃
+	//   ② 与参考图的外貌信号产生矛盾干扰
+	//   因此 DreamO 模式只注入无参考图角色的 VP（这些角色外貌无其他约束），有参考图角色跳过。
+	// Text2ImgV3 模式（无参考图）：文字是唯一外貌约束，注入全部 VP。
+	if len(noPortraitVPs) > 0 || (len(portraitOwners) > 0 && len(characterPortraits) == 0) {
 		if len(characterPortraits) > 0 {
-			var descFrags []string
-			// 主角：只注入英文 VP（IP-Adapter 已负责外貌，过多文字反而干扰）
-			if isEnglishPrompt(portraitOwners[0].vp) {
-				descFrags = append(descFrags, portraitOwners[0].vp)
-			}
-			// 次要角色：带角色名前缀，不限语言，让模型知道描述属于哪个角色
-			for i := 1; i < len(portraitOwners); i++ {
-				po := portraitOwners[i]
-				if po.vp == "" {
-					continue
-				}
-				if po.name != "" {
-					descFrags = append(descFrags, po.name+": "+po.vp)
-				} else {
-					descFrags = append(descFrags, po.vp)
-				}
-			}
-			// 无参考图角色：直接注入
-			descFrags = append(descFrags, noPortraitVPs...)
-			if len(descFrags) > 0 {
-				promptText = strings.Join(descFrags, "; ") + ", " + promptText
+			// DreamO 模式：只注入无参考图角色的 VP
+			if len(noPortraitVPs) > 0 {
+				promptText = strings.Join(noPortraitVPs, ", ") + ", " + promptText
 			}
 		} else {
-			// 无参考图（Text2ImgV3）：文字是唯一外貌约束
+			// Text2ImgV3 模式（无参考图）：文字是唯一外貌约束，注入全部 VP
 			var allVPs []string
 			for _, po := range portraitOwners {
 				allVPs = append(allVPs, po.vp)
@@ -944,9 +927,11 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 
 	// DreamO 模式（有角色参考图）：IP-Adapter 已保证角色外貌，过长的 prompt 会分散注意力。
 	// 截断至 600 字符，优先保留前段（场景/构图/动作），最多保留到最近一个逗号边界。
-	if len(cappedPortraits) > 0 && len(promptText) > 600 {
-		truncated := promptText[:600]
-		if idx := strings.LastIndex(truncated, ","); idx > 300 {
+	// DreamO 模式截断：去掉角色 VP 注入后，prompt 的大部分是 style+presenceTokens+LLM场景描述+质量词。
+	// 放宽至 1200 字符，保留完整 LLM 场景描述；超出才截断，优先截在逗号边界。
+	if len(cappedPortraits) > 0 && len(promptText) > 1200 {
+		truncated := promptText[:1200]
+		if idx := strings.LastIndex(truncated, ","); idx > 600 {
 			truncated = truncated[:idx]
 		}
 		promptText = truncated
@@ -1451,6 +1436,16 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 			if totalAudio > shotDuration {
 				shotDuration = totalAudio
 			}
+		}
+	}
+
+	// Seedance / Doubao：duration 只接受 5 或 10（整数秒）；其他值一律 snap 到最近档位。
+	// Kling 由 emotionToKlingParams 保证返回 5/10，无需额外处理。
+	if providerName == "seedance" || providerName == "doubao" {
+		if shotDuration < 7.5 {
+			shotDuration = 5
+		} else {
+			shotDuration = 10
 		}
 	}
 

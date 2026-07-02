@@ -25,25 +25,29 @@ import (
 	gormlogger "gorm.io/gorm/logger"
 )
 
-// startRecalcLoop runs fn every hour in a background goroutine; panics are recovered.
-// If rdb is non-nil, a Redis SETNX lock (TTL 55min) ensures only one instance executes
+// startRecalcLoop runs fn at the given interval in a background goroutine; panics are recovered.
+// If rdb is non-nil, a Redis SETNX lock (TTL = interval-5min) ensures only one instance executes
 // per cycle — preventing duplicate DB writes in multi-instance deployments.
 // The goroutine exits when quit is closed.
-func startRecalcLoop(tag string, quit <-chan struct{}, rdb *redis.Client, fn func() error) {
+func startRecalcLoop(tag string, interval time.Duration, quit <-chan struct{}, rdb *redis.Client, fn func() error) {
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				logger.Errorf("[%s] goroutine panic: %v", tag, r)
 			}
 		}()
-		ticker := time.NewTicker(time.Hour)
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+		lockTTL := interval - 5*time.Minute
+		if lockTTL <= 0 {
+			lockTTL = interval * 9 / 10
+		}
 		for {
 			select {
 			case <-ticker.C:
 				if rdb != nil {
 					lockKey := "recalc:lock:" + tag
-					ok, err := rdb.SetNX(context.Background(), lockKey, "1", 55*time.Minute).Result()
+					ok, err := rdb.SetNX(context.Background(), lockKey, "1", lockTTL).Result()
 					if err != nil || !ok {
 						continue // another instance is already running this cycle
 					}
@@ -281,14 +285,17 @@ func main() {
 
 	// 后台定时任务：每小时重新计算热度分（带优雅退出）
 	hotScoreQuit := make(chan struct{})
-	startRecalcLoop("hot-score", hotScoreQuit, redisClient, services.VideoService.RecalcVideoHotScores)
-	startRecalcLoop("novel-hot-score", hotScoreQuit, redisClient, services.NovelService.RecalcNovelHotScores)
+	startRecalcLoop("hot-score", time.Hour, hotScoreQuit, redisClient, services.VideoService.RecalcVideoHotScores)
+	startRecalcLoop("novel-hot-score", time.Hour, hotScoreQuit, redisClient, services.NovelService.RecalcNovelHotScores)
+
+	// 后台定时任务：每 10 分钟对所有 AI 提供商执行健康检查
+	startRecalcLoop("provider-health-check", 10*time.Minute, hotScoreQuit, redisClient, services.ModelService.RunHealthChecks)
 
 	// 后台定时任务：每 30 分钟清理超时的分片上传会话（防内存泄漏）
 	safeGo("chunk-cleanup", handler.CleanupChunkStore)
 
 	// 后台定时任务：每 24 小时清理 7 天前的章节历史版本
-	startRecalcLoop("chapter-version-cleanup", hotScoreQuit, redisClient, func() error {
+	startRecalcLoop("chapter-version-cleanup", 24*time.Hour, hotScoreQuit, redisClient, func() error {
 		cutoff := time.Now().AddDate(0, 0, -7)
 		n, err := repos.ChapterVersionRepo.DeleteOlderThan(cutoff)
 		if err != nil {

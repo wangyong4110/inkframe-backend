@@ -368,6 +368,9 @@ func (s *ModelService) TestProvider(id uint, tenantID uint) (interface{}, error)
 		return nil, err
 	}
 
+	dbStatus := "ok"
+	var testErr error
+
 	// 即梦AI Visual API（AK/SK 鉴权）：直接构造 provider 进行健康检查
 	if provider.Name == "volcengine-visual" {
 		if provider.APIKey == "" || provider.APISecretKey == "" {
@@ -376,18 +379,79 @@ func (s *ModelService) TestProvider(id uint, tenantID uint) (interface{}, error)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		vp := ai.NewVolcengineVisualProvider(provider.APIKey, provider.APISecretKey)
-		if checkErr := vp.HealthCheck(ctx); checkErr != nil {
-			return map[string]interface{}{"status": "error", "error": checkErr.Error(), "provider_id": id}, nil
+		if testErr = vp.HealthCheck(ctx); testErr != nil {
+			dbStatus = "down"
 		}
-		return map[string]interface{}{"status": "ok", "provider_id": id}, nil
+	} else if s.aiService != nil {
+		if _, loadErr := s.aiService.getTenantProvider(tenantID, provider.Name); loadErr != nil {
+			if !strings.Contains(loadErr.Error(), "use GetTenantVideoProvider") {
+				dbStatus = "down"
+				testErr = loadErr
+			}
+		}
 	}
 
-	if s.aiService != nil {
-		if _, loadErr := s.aiService.getTenantProvider(tenantID, provider.Name); loadErr != nil {
-			return map[string]interface{}{"status": "error", "error": loadErr.Error(), "provider_id": id}, nil
-		}
+	// 将测试结果持久化到 health_check 和 last_checked
+	_ = s.providerRepo.UpdateHealthStatus(id, dbStatus)
+
+	if testErr != nil {
+		return map[string]interface{}{"status": "error", "error": testErr.Error(), "provider_id": id}, nil
 	}
 	return map[string]interface{}{"status": "ok", "provider_id": id}, nil
+}
+
+// RunHealthChecks 对所有活跃且有凭证的 AI 提供商执行健康检查，将结果写入 health_check 和 last_checked。
+// 被 startRecalcLoop 每 10 分钟调用一次。
+func (s *ModelService) RunHealthChecks() error {
+	providers, err := s.providerRepo.List()
+	if err != nil {
+		return fmt.Errorf("RunHealthChecks: list providers: %w", err)
+	}
+	for _, p := range providers {
+		if !p.IsActive || !providerHasCredentials(p) {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		status, checkErr := s.checkProviderHealth(ctx, p)
+		cancel()
+		if status == "" {
+			continue // 视频专用 provider 无法通过 AIProvider 接口检查，跳过
+		}
+		if checkErr != nil {
+			logger.Warnf("[health-check] provider %q (id=%d): %v", p.Name, p.ID, checkErr)
+		}
+		if dbErr := s.providerRepo.UpdateHealthStatus(p.ID, status); dbErr != nil {
+			logger.Warnf("[health-check] provider %q update status: %v", p.Name, dbErr)
+		}
+	}
+	return nil
+}
+
+// checkProviderHealth 对单个提供商执行健康检查。
+// 返回 ("ok"|"down", error) 或 ("", nil) 表示跳过（视频专用 provider）。
+func (s *ModelService) checkProviderHealth(ctx context.Context, p *model.ModelProvider) (string, error) {
+	// AK/SK 双密钥的图像/视频提供商：用 VolcengineVisualProvider.HealthCheck（轻量级 GET 验证）
+	if p.Name == ai.ProviderNameVolcengineVisual || p.Name == ai.ProviderNameJimengVideo {
+		vp := ai.NewVolcengineVisualProvider(p.APIKey, p.APISecretKey)
+		if err := vp.HealthCheck(ctx); err != nil {
+			return "down", err
+		}
+		return "ok", nil
+	}
+	if s.aiService == nil {
+		return "ok", nil
+	}
+	prov, err := s.aiService.getTenantProvider(p.TenantID, p.Name)
+	if err != nil {
+		if strings.Contains(err.Error(), "use GetTenantVideoProvider") {
+			return "", nil // 视频专用 provider，跳过
+		}
+		return "down", err
+	}
+	if err := prov.HealthCheck(ctx); err != nil {
+		return "down", err
+	}
+	return "ok", nil
 }
 
 func (s *ModelService) ListModels(providerID *uint, tenantID uint) (interface{}, error) {

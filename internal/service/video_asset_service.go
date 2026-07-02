@@ -8,7 +8,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -286,15 +285,14 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 	style := ""
 	if seg.Speaker != "" && s.characterRepo != nil && novelID > 0 {
 		if chars, e := s.listCharsByNovelCached(novelID); e == nil {
-			autoVoices := []string{"alloy", "echo", "fable", "nova", "onyx", "shimmer"}
 			for _, c := range chars {
 				if strings.EqualFold(c.Name, seg.Speaker) {
 					if voice == "" { // 只在段落未指定 VoiceID 时才从角色取音色
 						if c.VoiceConfig.VoiceID != "" {
 							voice = c.VoiceConfig.VoiceID
-						} else {
-							voice = autoVoices[c.ID%uint(len(autoVoices))]
 						}
+						// 角色无 VoiceID 时不分配 OpenAI 专属音色名（alloy/echo 等），
+						// 直接 fallthrough 到 defaultVoice，确保所有分镜走同一 TTS provider。
 						if c.VoiceConfig.VoiceSpeed > 0 {
 							speed = c.VoiceConfig.VoiceSpeed
 						}
@@ -498,6 +496,7 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 			ShotID:    shot.ID,
 			SeqNo:     1,
 			Text:      text,
+			VoiceID:   voice, // 存储已解析的音色ID，确保重新生成时走相同的 TTS provider
 			AudioPath: audioURL,
 		}
 		if err := s.segmentRepo.Create(seg); err != nil {
@@ -770,7 +769,8 @@ func fetchAudioToLocal(dir, audioURL string, id int) (string, error) {
 }
 
 // resolveVoiceForShot 解析分镜对应角色的配音设置（voice, speed, style）。
-// 优先级：① 对话文本「角色名：」前缀 → ② shot.CharacterIDs 第一个角色 → ③ narrationVoice → ④ 空串（由 TTS Provider 自选默认音色）。
+// 优先级：① 对话文本「角色名：」前缀精确匹配 → ② narrationVoice（全局旁白音色或空串）。
+// 不按 CharacterIDs 兜底：画面在场角色 ≠ 说话角色，兜底会导致音色混乱。
 // novelID 由调用方提供（避免此函数重复查询 video 记录）。
 func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narrationVoice string, novelID uint) (voice string, speed float64, style string) {
 	voice = narrationVoice // 空串 = 由 TTS Provider 自选默认音色
@@ -813,33 +813,8 @@ func (s *VideoService) resolveVoiceForShot(shot *model.StoryboardShot, narration
 						goto applyEmotion
 					}
 				}
-
-				// 降级：CharacterIDs 第一个角色兜底
-				if len(shot.CharacterIDs) > 0 {
-					if char, err := s.characterRepo.GetByID(shot.CharacterIDs[0]); err == nil && char != nil {
-						applyCharVoice(char)
-						goto applyEmotion
-					}
-				}
-
-				// 降级：shot.GenMeta.Characters JSON 名称模糊匹配
-				if shot.GenMeta.Characters != "" {
-					var shotChars []struct {
-						Name string `json:"name"`
-					}
-					if err := json.Unmarshal([]byte(shot.GenMeta.Characters), &shotChars); err == nil && len(shotChars) > 0 {
-						nameMap := make(map[string]*model.Character, len(characters))
-						for _, c := range characters {
-							nameMap[strings.ToLower(c.Name)] = c
-						}
-						for _, sc := range shotChars {
-							if char, ok := nameMap[strings.ToLower(sc.Name)]; ok {
-								applyCharVoice(char)
-								goto applyEmotion
-							}
-						}
-					}
-				}
+				// 发言角色名无法匹配：保持 narrationVoice，不按 CharacterIDs 兜底。
+				// CharacterIDs[0] 是画面在场角色，不一定是说话角色，用其音色会导致音色错乱。
 			}
 		}
 	}

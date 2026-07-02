@@ -1888,30 +1888,58 @@ func resolveStyleQualityTokens(styleID string) string {
 }
 
 
-// removeConflictingQualityTokens strips realistic-only quality tokens (photorealistic, cinematic lighting,
-// 3D render, etc.) from a prompt when the active style is non-realistic.
-// This prevents old storyboard data or LLM template examples from contaminating anime/watercolor/ink styles.
+// removeConflictingQualityTokens strips style-conflicting quality tokens from a prompt.
+// Non-realistic styles: removes realistic/photography tokens from character VPs or old storyboard data.
+// Realistic/3D styles: removes anime/illustration tokens that may come from character VPs generated
+// under a different style setting.
 func removeConflictingQualityTokens(prompt, styleID string) string {
 	cat := resolveStyleCategory(styleID)
-	if cat == "realistic" || cat == "render_3d" || styleID == "" {
-		return prompt // realistic/3D: keep all tokens as-is
-	}
-	// For non-realistic styles: remove tokens that belong exclusively to realistic photography.
-	conflicts := []string{
-		"photorealistic, cinematic lighting, 8k uhd",
-		"photorealistic, cinematic lighting",
-		"photorealistic",
-		"cinematic lighting",
-		"cinematic film photography",
-		"cinematic photography",
-		"film photography",
-		"realistic skin texture",
-		"8k uhd",
-		"8K uhd",
-		"shot on DSLR",
-		"DSLR photography",
-		"hyperrealistic",
-		"ultra realistic",
+	var conflicts []string
+	switch cat {
+	case "realistic", "render_3d":
+		// Remove anime/illustration tokens that contaminate realistic/3D prompts
+		conflicts = []string{
+			"anime illustration style",
+			"anime illustration",
+			"clean lineart, flat color cel shading",
+			"flat color cel shading",
+			"cel shading",
+			"clean lineart",
+			"vibrant colors, clean linework, professional anime illustration",
+			"professional anime illustration",
+			"Chinese donghua animation style",
+			"donghua animation style",
+			"ink wash painting style",
+			"brush stroke texture, monochrome ink wash",
+			"xuan paper aesthetic",
+			"xianxia fantasy illustration",
+			"watercolor illustration style",
+			"soft color washes, wet-on-wet blending",
+			"pixel art style",
+			"crisp retro pixels",
+			"pencil sketch illustration",
+			"graphite line work",
+		}
+	case "":
+		return prompt // unknown style: keep all tokens
+	default:
+		// For non-realistic styles: remove tokens that belong exclusively to realistic photography.
+		conflicts = []string{
+			"photorealistic, cinematic lighting, 8k uhd",
+			"photorealistic, cinematic lighting",
+			"photorealistic",
+			"cinematic lighting",
+			"cinematic film photography",
+			"cinematic photography",
+			"film photography",
+			"realistic skin texture",
+			"8k uhd",
+			"8K uhd",
+			"shot on DSLR",
+			"DSLR photography",
+			"hyperrealistic",
+			"ultra realistic",
+		}
 	}
 	result := prompt
 	for _, tok := range conflicts {
