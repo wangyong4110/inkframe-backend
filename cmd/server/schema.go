@@ -14,7 +14,7 @@ import (
 
 // schemaVersion must be bumped whenever any model struct is added or changed.
 // Format: YYYY-MM-DD-vN. This allows autoMigrate to be skipped on unchanged restarts.
-const schemaVersion = "2026-07-02-v2"
+const schemaVersion = "2026-07-03-v1"
 
 // autoMigrate 自动迁移（带版本跳过优化 + MySQL Advisory Lock 防并发 DDL）
 // 如果 DB 中记录的 schema 版本与 schemaVersion 一致，跳过迁移直接返回，大幅加速启动。
@@ -166,6 +166,14 @@ func autoMigrate(db *gorm.DB) error {
 
 	// 删除已废弃列（voices_json 已迁移至代码内置表 model.BuiltinVoices）
 	db.Exec("ALTER TABLE ink_model_provider DROP COLUMN IF EXISTS voices_json")
+
+	// ink_chapter 表结构重设计（2026-07-03-v1）：
+	// 将 narrative_meta/quality_meta JSON blob 拆平为直接列，移除 uuid/act_no/hook_type
+	db.Exec("ALTER TABLE ink_chapter DROP COLUMN IF EXISTS narrative_meta")
+	db.Exec("ALTER TABLE ink_chapter DROP COLUMN IF EXISTS quality_meta")
+	db.Exec("ALTER TABLE ink_chapter DROP COLUMN IF EXISTS uuid")
+	db.Exec("ALTER TABLE ink_chapter DROP COLUMN IF EXISTS act_no")
+	db.Exec("ALTER TABLE ink_chapter DROP COLUMN IF EXISTS hook_type")
 
 	// 修正 deepseek-v4 → deepseek-v4-pro（API 已更名，旧记录需要同步）
 	db.Exec("UPDATE ink_ai_model SET model_id = 'deepseek-v4-pro', name = 'DeepSeek V4 Pro' WHERE model_id = 'deepseek-v4'")
