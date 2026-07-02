@@ -263,7 +263,7 @@ func parseExtractAnchorResponse(raw string) (extractAnchorResponse, error) {
 
 	// 1. 尝试新对象格式
 	var resp extractAnchorResponse
-	if err := json.Unmarshal([]byte(cleaned), &resp); err == nil && (len(resp.NewAnchors) > 0 || len(resp.AppearingAnchors) > 0) {
+	if err := json.Unmarshal([]byte(cleaned), &resp); err == nil && strings.HasPrefix(strings.TrimSpace(cleaned), "{") {
 		return resp, nil
 	}
 
