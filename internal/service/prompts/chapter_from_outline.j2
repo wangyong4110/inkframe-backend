@@ -113,7 +113,8 @@
 {% if char.VoiceProfile %}- 🎙️ 声音档案（严格遵守，确保说话方式可辨识）：{{ char.VoiceProfile }}{% endif %}
 {% else %}**{{ char.Name }}**（{{ char.Role }}）：{{ char.Description }}{% if char.Archetype %} [{{ char.Archetype }}]{% endif %}{% if char.CurrentState %}
   当前状态：{{ char.CurrentState }}{% endif %}{% if char.VoiceProfile %}
-  声音档案：{{ char.VoiceProfile }}{% endif %}
+  声音档案：{{ char.VoiceProfile }}{% else %}
+  ⚠️ 无声音档案——请根据身份「{{ char.Role }}」和描述「{{ char.Description }}」，在正文中为此角色设计可辨识的说话特征（句长/词汇层级/口头习惯），确保读者无需看名字即可辨别。{% endif %}
 {% endif %}
 {% endfor %}
 
@@ -127,7 +128,15 @@
 {{ WikiContext }}
 {% endif %}
 
-# 写作规范
+# 写作规范（按优先级三层执行：① 结构性强制约束必须全部满足 → ② 质量标准尽力满足 → ③ 风格建议能做则做）
+
+## ① 结构性强制约束（违反=输出无效）
+- narration/dialogue 互斥：不可同时出现
+- 角色名/位置/状态不可与上章末尾状态矛盾
+- 严禁重复前章已发生的场景或对话
+- 严禁任何元文本（开场白、章节说明、字数声明、续写提示）
+
+## ② 质量标准（主要遵守项）
 1. **视角一致**：每个场景固定视角人物，不随意切换；写内心活动时用间接自由式（不用"他想"，直接写想法）
 2. **对话要求**：
    - 每段对话后有动作/表情/环境描写（避免"说"字连篇）
