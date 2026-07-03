@@ -183,7 +183,15 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 	case VolcModelSeedEditV3:
 		params["prompt"] = req.Prompt
 		if req.CFGScale > 0 {
-			params["scale"] = req.CFGScale
+			// scale 范围 [0,1]（文本描述影响程度）。
+			// CFGScale 由调用方以 1+weight*9 编码为 [1,10]，此处逆映射回 [0,1]。
+			s := (req.CFGScale - 1.0) / 9.0
+			if s < 0 {
+				s = 0
+			} else if s > 1 {
+				s = 1
+			}
+			params["scale"] = s
 		}
 		if len(req.ReferenceImages) > 0 {
 			p.setMultiImageInput(params, req.ReferenceImages, "image_urls", "binary_data_base64")
@@ -196,7 +204,14 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 		params["width"] = width
 		params["height"] = height
 		if req.CFGScale > 0 {
-			params["scale"] = req.CFGScale
+			// scale 范围 [0,1]（IP 一致性强度）。逆映射同 SeedEditV3。
+			s := (req.CFGScale - 1.0) / 9.0
+			if s < 0 {
+				s = 0
+			} else if s > 1 {
+				s = 1
+			}
+			params["scale"] = s
 		}
 		if len(req.ReferenceImages) > 0 {
 			p.setMultiImageInput(params, req.ReferenceImages, "image_urls", "binary_data_base64")

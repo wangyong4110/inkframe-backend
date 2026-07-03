@@ -1602,7 +1602,7 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 	if len(consistencyWeight) > 0 && consistencyWeight[0] > 0 {
 		weight = consistencyWeight[0]
 	}
-	// SeedEditV3 的 scale 参数范围 1-10；以 weight 线性映射
+	// cfgScale 以 [1,10] 编码 weight（volcengine_visual.go 中各 case 负责按 API 范围还原）
 	cfgScale := 1.0 + weight*9.0
 
 	// 指定提供者时：直接加载并调用，不走遍历逻辑
