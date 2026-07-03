@@ -673,6 +673,16 @@ func isRetryable(err error) bool {
 	return false
 }
 
+// isConcurrentLimitError 判断是否为 API 并发名额耗尽错误（即梦AI code=50430）。
+// 此类错误需要比普通限速更长的等待时间，才能等到服务端释放并发槽位。
+func isConcurrentLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "50430") || strings.Contains(msg, "concurrent limit")
+}
+
 // shouldPenalizeCB reports whether an error should count toward the circuit breaker threshold.
 // Timeouts and rate limits indicate request-level slowness or throttling — the provider is
 // still reachable. Only connection failures and server errors indicate true unavailability.
@@ -685,8 +695,8 @@ func shouldPenalizeCB(err error) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	if strings.Contains(msg, "429") || strings.Contains(msg, "rate limit") ||
-		strings.Contains(msg, "context canceled") {
-		return false // throttled or caller-canceled, not a provider fault
+		strings.Contains(msg, "context canceled") || isConcurrentLimitError(err) {
+		return false // throttled, concurrent-limit, or caller-canceled — not a provider fault
 	}
 	return true
 }
@@ -831,6 +841,14 @@ func (p *RetryProvider) ImageGenerate(ctx context.Context, req *ImageGenerateReq
 	for attempt := 0; attempt < p.maxRetries; attempt++ {
 		if attempt > 0 {
 			delay := p.baseDelay * time.Duration(1<<uint(attempt-1))
+			// 即梦AI 并发限制（50430）需要等服务端释放并发槽位，通常需要 5-10s；
+			// 普通指数退避不够，对此类错误强制使用更长的基础延迟。
+			if isConcurrentLimitError(lastErr) {
+				concurrentLimitDelay := 6 * time.Second * time.Duration(attempt)
+				if concurrentLimitDelay > delay {
+					delay = concurrentLimitDelay
+				}
+			}
 			if delay > 32*time.Second {
 				delay = 32 * time.Second
 			}

@@ -9,6 +9,11 @@
 {% endif %}
 
 【评分维度 — 每项满分 100 分，overall_score 为六项加权均值】
+{% if VoiceMode == "narration" %}
+⚡ VoiceMode=narration 权重调整：dialogue_score 由 10%→0%，voiceover_score 由 15%→25%（本集以旁白叙事为主，台词为辅助元素）
+{% elif VoiceMode == "dialogue" %}
+⚡ VoiceMode=dialogue 权重调整：voiceover_score 由 15%→5%，dialogue_score 由 10%→20%（本集以角色对话为主，旁白为辅助元素）
+{% endif %}
 
 ① narrative_score（叙事连贯性，权重 30%）
   锚定标准：
@@ -24,7 +29,7 @@
   70-89  景别有变化，偶有无动机的连续相同景别（≤4），运动方式局部重复
   50-69  多次出现无动机的连续相同景别（5+），或全片以 static 为主且无叙事理由
   0-49   景别严重单一，镜头构成雷同，视觉疲劳感强，无叙事动机支撑
-  检查项：连续相同景别是否有叙事动机 / static 镜头占比是否超过 50% 且缺乏风格理由 / 是否有纵深感变化
+  检查项：连续相同景别是否有叙事动机 / static 镜头占比是否超过 50% 且缺乏风格理由 / 是否有纵深感变化 / 单个镜头的画面描述中是否出现同一角色重复存在（AI图像生成时的角色克隆问题）
 
 ③ pacing_score（节奏控制，权重 15%）
   锚定标准：
@@ -190,7 +195,7 @@
   ✅ 单角色对白：suggested_narration="" suggested_dialogue="狼：你要去哪里，小红帽？"
   ✅ 多角色拆分：suggested_narration="" + suggested_inserts=[{dialogue:"狼：你好，小红帽。",...},{dialogue:"小红帽：谢谢你，狼先生。",...}]
   ❌ 禁止：suggested_narration="狼：你好，小红帽。小红帽：谢谢你。"（台词塞进旁白字段）
-- suggested_inserts：仅在有充分原文依据时才输出；reason 字段必须引用原文具体内容；无需插入时输出空数组 []
+- suggested_inserts：仅在有充分原文依据时才输出；reason 字段必须直接引用原文原句（用「」引号标出原文，禁止转述）；新增镜头总数不得超过现有镜头数的 20%（{{ ShotCount }} 镜 × 20% = 最多新增 {{ (ShotCount * 0.2) | round | int }} 个）；无需插入时输出空数组 []
 - suggested_deletes：仅在镜头与原文明显冲突或高度冗余时才输出；无需删除时输出空数组 []
 - summary 控制在50字以内，概括本组分镜的核心优缺点
 - strengths 和 weaknesses 各1-3条，聚焦最重要的点

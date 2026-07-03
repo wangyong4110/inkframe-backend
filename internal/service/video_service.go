@@ -54,22 +54,14 @@ type VideoService struct {
 	cache            *redis.Client // optional: cross-instance view dedup
 	cleanupOnce      sync.Once
 	stopCh           chan struct{} // closed by Shutdown() to stop background goroutines
-	videoConcurrency int          // max parallel video generation calls (0 = use default)
-	audioConcurrency int          // max parallel audio generation calls (0 = use default)
 	activePoll            sync.Map     // videoID → struct{} (prevents duplicate PollAndStitchVideo goroutines)
 	generatingStoryboard  sync.Map     // videoID → context.CancelFunc (cancels in-progress GenerateStoryboard)
 	backendBaseURL        string       // e.g. "http://192.168.1.10:8080"; used to resolve relative /api/v1/media/* URLs
 	dbMediaReader         storage.Service // DB-backed storage for reading legacy /api/v1/media/* assets
 }
 
-// WithVideoConcurrency 设置视频生成最大并发数（用于 BatchGenerateShots）。
-func (s *VideoService) WithVideoConcurrency(n int) *VideoService { s.videoConcurrency = n; return s }
-
-// WithAudioConcurrency 设置音频生成最大并发数（用于批量配音）。
-func (s *VideoService) WithAudioConcurrency(n int) *VideoService { s.audioConcurrency = n; return s }
-
-// SetVideoConcurrency 动态更新视频生成并发数（供系统设置热更新使用）。
-func (s *VideoService) SetVideoConcurrency(n int) { s.videoConcurrency = n }
+// maxLocalClipConcurrency 限制 BatchGenerateShotClips 的本地 FFmpeg 并发数（CPU 密集型，与 API 并发无关）。
+const maxLocalClipConcurrency = 4
 
 // GetNovelByID 通过 novelRepo 加载小说（供 handler 传递给 CapCutService 等下游服务）
 func (s *VideoService) GetNovelByID(id uint) (*model.Novel, error) {
@@ -1059,7 +1051,7 @@ func (s *VideoService) BatchGenerateShotClips(videoID uint, shotIDs []uint, prog
 	}
 
 	var queued []*model.StoryboardShot
-	sem := make(chan struct{}, maxConcurrentShots)
+	sem := make(chan struct{}, maxLocalClipConcurrency)
 	var wg sync.WaitGroup
 	total := len(shotIDs)
 	var done atomic.Int32

@@ -26,9 +26,6 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
 
-// maxConcurrentShots 限制同时提交给视频提供商的并发数，防止触发 API 429
-const maxConcurrentShots = 3
-
 // downloadHTTPClient 用于下载生成的图片/视频文件。
 // 设置 5 分钟超时，防止 CDN 接受连接后挂起导致 goroutine 永久阻塞（批量生成卡在 99% 的根本原因）。
 var downloadHTTPClient = &http.Client{Timeout: 5 * time.Minute}
@@ -74,22 +71,54 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 		shotMap[sh.ID] = sh
 	}
 
-	var queued []*model.StoryboardShot
-	concurrencyLimit := maxConcurrentShots
-	if s.videoConcurrency > 0 {
-		concurrencyLimit = s.videoConcurrency
+	// 确定是否有视频提供商（对整批分镜一致）
+	hasProvider := s.hasVideoProvider(s.videoTenantID(video))
+	logger.Printf("BatchGenerateShots: hasVideoProvider=%v effectiveProvider=%q", hasProvider, effectiveProvider)
+
+	// 并发数和队列键均从 DB 模型配置中统一获取
+	tenantID := s.videoTenantID(video)
+	providerType := "image"
+	if hasProvider {
+		providerType = "video"
 	}
-	sem := make(chan struct{}, concurrencyLimit)
-	var wg sync.WaitGroup
+	concurrency := 1
+	if s.aiService != nil {
+		concurrency = s.aiService.GetProviderConcurrency(tenantID, providerType)
+	}
+	queueKey := fmt.Sprintf("%d:%s-gen", tenantID, providerType)
+
+	var taskQueue *ModelTaskQueue
+	if s.aiService != nil {
+		taskQueue = s.aiService.ImageQueue
+	} else {
+		taskQueue = newModelTaskQueue()
+	}
+
 	total := len(shotIDs)
 	var done atomic.Int32
+	advanceProgress := func() {
+		n := int(done.Add(1))
+		if progressFn != nil && total > 0 {
+			progressFn(n * 99 / total)
+		}
+	}
+
+	// ── 第一阶段：过滤 + 更新状态 + 提交任务到队列 ─────────────────────────
+	// 所有分镜任务提交后立即返回；Worker 严格按并发限制执行，超出部分在 channel 中排队，
+	// 不会因为并发限制触发 API 429。
+	type shotFuturePair struct {
+		shot   *model.StoryboardShot
+		future *TaskFuture
+	}
+	var pairs []shotFuturePair
+	var queued []*model.StoryboardShot
+	bgCtx := context.Background()
+	const maxRetries = 3
+
 	for _, sid := range shotIDs {
 		shot, ok := shotMap[sid]
 		if !ok || shot.VideoID != videoID {
-			if progressFn != nil && total > 0 {
-				pct := int(done.Add(1)) * 99 / total
-				progressFn(pct)
-			}
+			advanceProgress()
 			continue
 		}
 		shot.Status = "generating"
@@ -97,30 +126,18 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 			logger.Errorf("[VideoService] BatchGenerateShots: failed to update shot %d status: %v", shot.ShotNo, err)
 		}
 		queued = append(queued, shot)
-		sem <- struct{}{}
-		wg.Add(1)
-		go func(sh *model.StoryboardShot) {
-			defer func() {
-				<-sem
-				wg.Done()
-				n := int(done.Add(1))
-				if progressFn != nil && total > 0 {
-					pct := n * 99 / total
-					progressFn(pct)
-				}
-				logger.Printf("BatchGenerateShots: shot %d done (%d/%d)", sh.ShotNo, n, total)
-			}()
-			hasProvider := s.hasVideoProvider(s.videoTenantID(video))
-			logger.Printf("BatchGenerateShots: shot %d start mode=%q hasVideoProvider=%v effectiveProvider=%q", sh.ShotNo, mode, hasProvider, effectiveProvider)
-			const maxRetries = 3
-			var genErr error
-			if !hasProvider {
-				// ── 两阶段异步模式 ──────────────────────────────────────────────────
-				// 阶段一（同步，占用 sem）：AI 图片生成 → 下载到本地
-				// 阶段二（异步，释放 sem 后后台执行）：Ken Burns 编码 → OSS 上传，支持自动重试
-				// 只生成图片，不自动合成 MP4（Ken Burns 由独立的 batch-clips 步骤触发）
+
+		sh := shot
+		ar := aspectRatio
+		ep := effectiveProvider
+
+		var future *TaskFuture
+		if !hasProvider {
+			// 图片模式：generateShotImageOnly → DB 更新（全在 Worker goroutine 中完成）
+			future = taskQueue.Submit(queueKey, concurrency, bgCtx, func(ctx context.Context) (string, error) {
+				var genErr error
 				for attempt := 1; attempt <= maxRetries; attempt++ {
-					_, _, genErr = s.generateShotImageOnly(sh, aspectRatio)
+					_, _, genErr = s.generateShotImageOnly(sh, ar)
 					if genErr == nil {
 						break
 					}
@@ -130,10 +147,8 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 					}
 				}
 				if genErr == nil {
-					if err := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
-						"status": "completed",
-					}); err != nil {
-						logger.Errorf("[VideoService] BatchGenerateShots: failed to update shot %d status: %v", sh.ShotNo, err)
+					if e := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{"status": "completed"}); e != nil {
+						logger.Errorf("[VideoService] BatchGenerateShots: failed to update shot %d status: %v", sh.ShotNo, e)
 					}
 					logger.Printf("BatchGenerateShots: shot %d image ready", sh.ShotNo)
 				} else {
@@ -142,10 +157,14 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 						logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d status=failed: %v", sh.ID, e)
 					}
 				}
-			} else {
-				// ── AI 视频模式：原有同步逻辑（提交 → provider 轮询）──────────────
+				return "", genErr
+			})
+		} else {
+			// 视频模式：GenerateShotVideo（提交给 provider，内部轮询直到完成）
+			future = taskQueue.Submit(queueKey, concurrency, bgCtx, func(ctx context.Context) (string, error) {
+				var genErr error
 				for attempt := 1; attempt <= maxRetries; attempt++ {
-					genErr = s.GenerateShotVideo(sh, aspectRatio, effectiveProvider)
+					genErr = s.GenerateShotVideo(sh, ar, ep)
 					if genErr == nil {
 						break
 					}
@@ -162,8 +181,26 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 				} else {
 					logger.Printf("BatchGenerateShots: shot %d submitted successfully (taskID=%s)", sh.ShotNo, sh.TaskMeta.ShotTaskID)
 				}
-			}
-		}(shot)
+				return "", genErr
+			})
+		}
+		pairs = append(pairs, shotFuturePair{shot: sh, future: future})
+	}
+
+	// ── 第二阶段：并发 Await，推进进度 ────────────────────────────────────
+	// 每个 future 起一个轻量 goroutine（只阻塞在 channel receive，不做 I/O），
+	// 等待 Worker 写入结果后推进进度计数器。
+	var wg sync.WaitGroup
+	for _, p := range pairs {
+		wg.Add(1)
+		go func(sf shotFuturePair) {
+			defer func() {
+				wg.Done()
+				advanceProgress()
+				logger.Printf("BatchGenerateShots: shot %d done", sf.shot.ShotNo)
+			}()
+			sf.future.Await(bgCtx) //nolint:errcheck // 错误已在 worker 内部处理并写入 DB
+		}(p)
 	}
 	wg.Wait()
 	logger.Printf("BatchGenerateShots: all %d shots done for videoID=%d", len(queued), videoID)
@@ -207,23 +244,36 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, for
 		return si.ShotNo < sj.ShotNo
 	})
 
-	var queued []*model.StoryboardShot
-	concurrency := maxConcurrentShots
-	if s.videoConcurrency > 0 {
-		concurrency = s.videoConcurrency
+	// 并发数统一从图片提供商的 AIModel.Concurrency（DB 配置）读取
+	tenantIDImg := s.videoTenantID(video)
+	concurrency := 1
+	if s.aiService != nil {
+		concurrency = s.aiService.GetProviderConcurrency(tenantIDImg, "image")
 	}
-	sem := make(chan struct{}, concurrency)
-	var wg sync.WaitGroup
+	queueKey := fmt.Sprintf("%d:image-gen", tenantIDImg)
+	var imageQueue *ModelTaskQueue
+	if s.aiService != nil {
+		imageQueue = s.aiService.ImageQueue
+	} else {
+		imageQueue = newModelTaskQueue()
+	}
+
 	total := len(shotIDs)
 	var done atomic.Int32
-	var goroutineIdx atomic.Int32
-
 	advanceProgress := func() {
 		n := int(done.Add(1))
 		if progressFn != nil && total > 0 {
 			progressFn(n * 99 / total)
 		}
 	}
+
+	// ── 第一阶段：过滤 + 提交任务到队列 ──────────────────────────────────
+	type shotFuturePair struct {
+		shot   *model.StoryboardShot
+		future *TaskFuture
+	}
+	var pairs []shotFuturePair
+	bgCtx := context.Background() // 使用后台 ctx：即使 HTTP 请求断开，已提交的任务仍会执行
 
 	for _, sid := range shotIDs {
 		shot, ok := shotMapImg[sid]
@@ -232,38 +282,25 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, for
 			continue
 		}
 		if shot.Status == "generating" && !force {
-			// Currently generating in another goroutine — skip (unless forced by user).
 			advanceProgress()
 			continue
 		}
 		if shot.ImageURL != "" && shot.Status != "failed" && !force {
-			// Already has a successfully generated image — skip (idempotent).
-			// "failed" shots keep their ImageURL from a partial run but should be retried.
 			advanceProgress()
 			continue
 		}
-		queued = append(queued, shot)
-		gIdx := goroutineIdx.Add(1) - 1
-		sem <- struct{}{}
-		wg.Add(1)
-		go func(sh *model.StoryboardShot, idx int32) {
-			// 前几个并发 goroutine 错开 800ms 启动，避免 API 侧同时收到多个请求导致质量下降
-			if idx > 0 && idx < int32(concurrency) {
-				time.Sleep(time.Duration(idx) * 800 * time.Millisecond)
-			}
+		sh := shot
+		ar := aspectRatio
+		future := imageQueue.Submit(queueKey, concurrency, bgCtx, func(ctx context.Context) (string, error) {
+			// Worker 内部：重试逻辑 + DB 更新，完全隔离在 Worker goroutine 中执行
 			metrics.ShotImageGenerationInFlight.Inc()
-			defer func() {
-				metrics.ShotImageGenerationInFlight.Dec()
-				<-sem
-				wg.Done()
-				advanceProgress()
-				logger.Printf("BatchGenerateShotImages: shot %d done", sh.ShotNo)
-			}()
+			defer metrics.ShotImageGenerationInFlight.Dec()
+
 			const maxRetries = 3
 			var localImage string
 			var genErr error
 			for attempt := 1; attempt <= maxRetries; attempt++ {
-				localImage, _, genErr = s.generateShotImageOnly(sh, aspectRatio)
+				localImage, _, genErr = s.generateShotImageOnly(sh, ar)
 				if genErr == nil {
 					break
 				}
@@ -273,14 +310,12 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, for
 				}
 			}
 			if localImage != "" {
-				os.Remove(localImage) //nolint:errcheck  // temp file not needed; ImageURL is in DB
+				os.Remove(localImage) //nolint:errcheck
 			}
 			if genErr == nil {
 				metrics.ShotImageGenerationTotal.WithLabelValues("success").Inc()
-				if err := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
-					"status": "completed",
-				}); err != nil {
-					logger.Errorf("[VideoService] BatchGenerateShotImages: failed to update shot %d status: %v", sh.ShotNo, err)
+				if e := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{"status": "completed"}); e != nil {
+					logger.Errorf("[VideoService] BatchGenerateShotImages: update shot %d status: %v", sh.ShotNo, e)
 				}
 				logger.Printf("BatchGenerateShotImages: shot %d image ready", sh.ShotNo)
 			} else {
@@ -290,7 +325,27 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, for
 					logger.Errorf("[VideoService] storyboardRepo.UpdateFields shot %d status=failed: %v", sh.ID, e)
 				}
 			}
-		}(shot, gIdx)
+			return "", genErr // URL 已写入 DB，此处仅返回 err 供进度统计
+		})
+		pairs = append(pairs, shotFuturePair{shot: sh, future: future})
+	}
+
+	// ── 第二阶段：并发 Await，收集结果并推进进度 ──────────────────────────
+	// 每个 future 起一个轻量 goroutine 等待结果（这些 goroutine 只阻塞在 channel receive，
+	// 不做任何 I/O，内存占用远低于原来阻塞在信号量上的 goroutine）。
+	var wg sync.WaitGroup
+	var queued []*model.StoryboardShot
+	for _, p := range pairs {
+		queued = append(queued, p.shot)
+		wg.Add(1)
+		go func(sf shotFuturePair) {
+			defer func() {
+				wg.Done()
+				advanceProgress()
+				logger.Printf("BatchGenerateShotImages: shot %d done", sf.shot.ShotNo)
+			}()
+			sf.future.Await(bgCtx) //nolint:errcheck // 错误已在 worker 内部处理并写入 DB
+		}(p)
 	}
 	wg.Wait()
 	logger.Printf("BatchGenerateShotImages: all %d shots done for videoID=%d", len(queued), videoID)

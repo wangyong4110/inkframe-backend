@@ -54,6 +54,11 @@ type AIService struct {
 	encKey        string       // AES-256-GCM key for decrypting stored API credentials
 	cache         redisPublisher // optional: for cross-instance provider cache invalidation
 	promptFilter  *PromptFilter  // optional: proactive sensitive-word filtering for image prompts
+	// ImageQueue 是按模型隔离的图片生成任务队列。
+	// Worker 数量 = AIModel.Concurrency（DB 配置），确保不超出 API 并发限额。
+	// 替代"goroutine+信号量"模式：调用方提交任务后立即返回 TaskFuture，
+	// 只有 concurrency 个 Worker goroutine 真正执行 API 调用。
+	ImageQueue *ModelTaskQueue
 }
 
 // redisPublisher is the subset of redis.Client used by AIService (allows nil-safe injection).
@@ -68,9 +73,10 @@ func NewAIService(
 	providerRepo ...*repository.ModelProviderRepository,
 ) *AIService {
 	svc := &AIService{
-		modelRepo: modelRepo,
-		aiManager: aiManager,
-		stopCh:    make(chan struct{}),
+		modelRepo:  modelRepo,
+		aiManager:  aiManager,
+		stopCh:     make(chan struct{}),
+		ImageQueue: newModelTaskQueue(),
 	}
 	if len(providerRepo) > 0 {
 		svc.providerRepo = providerRepo[0]
@@ -78,6 +84,66 @@ func NewAIService(
 	svc.startProviderCacheCleanup()
 	svc.startProviderHealthCheck()
 	return svc
+}
+
+// EnqueueImageTask 将一次图片生成函数提交到按模型隔离的 Worker 池，返回 TaskFuture。
+//
+// Worker 数量由 AIModel.Concurrency（DB 配置）决定，默认 1（串行）。
+// 若 DB 中未配置该模型，或 Concurrency=0，则退回为单 Worker（不丢任务，仅降速）。
+//
+// 用法示例：
+//
+//	future := svc.EnqueueImageTask(ctx, tenantID, "seededit_v3.0", func(ctx context.Context) (string, error) {
+//	    return svc.GenerateCharacterThreeViewMulti(ctx, ...)
+//	})
+//	url, err := future.Await(ctx)
+func (s *AIService) EnqueueImageTask(ctx context.Context, tenantID uint, modelName string, fn func(ctx context.Context) (string, error)) *TaskFuture {
+	concurrency := 1
+	if s.modelRepo != nil {
+		if m, err := s.modelRepo.GetByName(modelName); err == nil && m.Concurrency > 0 {
+			concurrency = m.Concurrency
+		}
+	}
+	key := fmt.Sprintf("%d:%s", tenantID, modelName)
+	return s.ImageQueue.Submit(key, concurrency, ctx, fn)
+}
+
+// EnqueueImageTaskByProvider 与 EnqueueImageTask 类似，但以 providerName 为队列 key。
+// 适用于调用方知道提供者但不知道具体模型名称的场景（如 BatchGenerateShotImages）。
+// concurrency 直接指定（调用方负责从 DB 或配置读取）。
+func (s *AIService) EnqueueImageTaskByProvider(ctx context.Context, tenantID uint, providerName string, concurrency int, fn func(ctx context.Context) (string, error)) *TaskFuture {
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	key := fmt.Sprintf("%d:provider:%s", tenantID, providerName)
+	return s.ImageQueue.Submit(key, concurrency, ctx, fn)
+}
+
+// GetProviderConcurrency 从 DB 中查找指定类型（"image"/"video"/"voice"/"sfx"）的第一个活跃提供商，
+// 返回其关联 AIModel 的 Concurrency 配置值（默认 1，表示串行执行）。
+// 调用方无需关心具体模型名称，统一由此方法从 DB 配置中解析。
+func (s *AIService) GetProviderConcurrency(tenantID uint, providerType string) int {
+	if s.providerRepo == nil || s.modelRepo == nil {
+		return 1
+	}
+	providers, err := s.providerRepo.ListByModelType(tenantID, providerType)
+	if err != nil || len(providers) == 0 {
+		return 1
+	}
+	for _, p := range providers {
+		if !p.IsActive || !providerHasCredentials(p) {
+			continue
+		}
+		modelName := effectiveModelName(p)
+		if modelName == "" {
+			continue
+		}
+		if m, err := s.modelRepo.GetByName(modelName); err == nil && m.Concurrency > 0 {
+			return m.Concurrency
+		}
+		return 1 // 找到提供商但未配置并发度 → 保守默认值
+	}
+	return 1
 }
 
 // WithEncryptionKey sets the AES-256-GCM key used to decrypt API credentials stored in the DB.

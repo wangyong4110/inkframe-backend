@@ -57,6 +57,7 @@
        — Emotional layer: subtle sound design (heartbeat, silence, echo, tension sting…)
        Example: "SOUND: deep forest ambient drone underpins the scene; a gentle wind passes through the stone gateway with a faint hollow resonance; at irregular 3-5 second intervals, a trickle of mortar dust falls from the broken column with a soft scrape, each stream lasting a fraction of a second before silence resumes; beneath everything, a low subharmonic tension hum grows almost imperceptibly toward the end of the shot"
        — For pure dialogue / static shots: "SOUND: ambient room tone only — soft environmental hum, no notable sound events"
+  ⚠️ SOUND vs sfx_tags: These two fields record the same audio information in different formats. SOUND (in video_prompt) uses natural language for the video AI to understand atmosphere. sfx_tags (separate JSON field) uses structured tags for the audio pipeline. When they conflict, sfx_tags takes priority for audio generation; SOUND takes priority for video AI atmosphere rendering. Always keep them consistent.
   SIMPLIFIED TEMPLATE for dialogue / static shots (when dialogue field is non-empty OR shot is a simple character close-up):
   For these shots, layers B/C/D/E are usually absent — do NOT write "no particles", "no foliage" etc. (negative descriptions can trigger unwanted generation). Use this condensed format instead:
     A. Camera motion (1 sentence) + A2. Character action (1-2 sentences) + G. Emotional arc (1 sentence) + H. SOUND (1-2 sentences)
@@ -141,6 +142,13 @@
        — 情绪点缀音：细腻的声音设计（心跳、深沉静默、回声、悬疑底音……）
        示例："SOUND：深沉的森林环境音持续铺底，一缕穿过石门的轻风带来中空的共鸣；断柱边缘的灰泥粉尘每隔3-5秒以轻微的摩擦声落下，每次持续瞬间后归于寂静；画面临近结束时，低频的悬疑底音几乎察觉不到地渐渐涌现"
        — 纯对话/静态镜头："SOUND：仅有环境底音，轻微的室内底噪，无明显音效事件"
+  ⚠️ SOUND 与 sfx_tags 的关系：两个字段描述同一份音效，格式不同。SOUND（在 video_prompt 内）用自然语言让视频 AI 感知音效氛围；sfx_tags（独立字段）用结构化标签供音效生成 API 使用。当两者描述不一致时：sfx_tags 优先用于音效生成；SOUND 优先用于视频 AI 氛围渲染。请保持两者一致。
+  【简化模板——对话镜头/静态镜头（dialogue 字段非空，或纯角色近景）】
+  此类镜头中 B/C/D/E 层通常不存在——不要写"无大气粒子""无植被""无液体"等否定描述（否定描述可能触发模型生成对立元素）。改用以下精简格式：
+    A. 镜头运动（1句）+ A2. 角色动作（1-2句）+ G. 情绪弧线（1句）+ H. SOUND（1-2句）
+  总字数不低于60字。示例："固定机位，±0.2px有机微稳定。凌云保持静止，颌骨几乎察觉不到地轻微收紧，缓慢吐出一口气是唯一动作。情绪弧线：以压抑紧绷开场，在行动前一刻收束。SOUND：室内静默底音，远处石廊中偶尔传来风声，镜头末段低频心跳底音轻微涌现。"
+  ❌ 禁止写：「无大气粒子」「无植被元素」「无液体火焰」「结构物理：无」——这些无效否定描述增加噪音。
+
   - 示例（固定机位，战后空旷废墟庭院）：
     "固定机位，带有轻微有机感微稳定，呼吸感漂移幅度±0.3px；前景龟裂石板地面：三块小石片因低频
     远处隆隆声以±1毫米幅度颤动，细碎砂砾在镜头时长内向周边裂缝滚落1-2厘米；中景石柱断口边缘：

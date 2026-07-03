@@ -69,7 +69,7 @@
   50-69  节奏拖沓（连续3+段内心独白无外部动作），或高潮缺失
   0-49   节奏失控，整章如流水账，无情绪起伏
 
-⑤ dramatic_score（戏剧张力，权重 20%）
+{% if CoreTheme %}⑤ dramatic_score（戏剧张力，权重 15%）{% else %}⑤ dramatic_score（戏剧张力，权重 20%）{% endif %}
   冲突密度、情感高潮、悬念钩子——这是影视改编最核心的指标
   **重点检查：对话潜台词密度** — 对话中有多少比例含有表层以外的意图/冲突/欲盖弥彰；角色是否在说一件事时暗示另一件事
   90-100 冲突明确，情感高潮有力，反转/悬念精巧；对话富含潜台词，一语双关自然；权力关系通过说话方式可见
@@ -102,7 +102,7 @@
   50-69  章节与主题无关，像是孤立事件；或者通过旁白说教主题而非展示
   0-49   完全背离主题，甚至传递相反价值观
 
-⑨ visual_potential（画面感/可视化潜力，权重 0%，保留供参考）
+⑨ visual_potential（画面感/可视化潜力，权重 5%）
 {% else %}
 ⑧ visual_potential（画面感/可视化潜力，权重 10%）
 {% endif %}
@@ -111,6 +111,13 @@
   70-89  大部分内容可视化，少量内心独白需改编处理
   50-69  内心独白过多（超过50%），缺乏可拍摄的外部动作
   0-49   几乎全为内心描写，影视改编难度极高
+
+【overall_score 加权计算公式 — 必须严格按此公式计算，不得自行估算】
+{% if CoreTheme %}
+overall_score = narrative_score×0.15 + character_score×0.15 + writing_score×0.10 + pacing_score×0.10 + dramatic_score×0.15 + narrative_necessity×0.10 + emotional_resonance×0.10 + theme_resonance×0.10 + visual_potential×0.05，结果四舍五入取整数
+{% else %}
+overall_score = narrative_score×0.15 + character_score×0.15 + writing_score×0.10 + pacing_score×0.10 + dramatic_score×0.20 + narrative_necessity×0.10 + emotional_resonance×0.10 + visual_potential×0.10，结果四舍五入取整数
+{% endif %}
 
 【场景层分析（scene_analysis）— 必填】
 识别本章中的 2-5 个场景（以地点变换/时间跳跃/主要人物切换为切割点），对每个场景进行 3C 结构评估：
