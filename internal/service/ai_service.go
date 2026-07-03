@@ -1843,12 +1843,16 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		logger.Errorf("GenerateCharacterThreeViewMulti: cannot resolve ref %q — relative path with no dbMediaReader and no serverBaseURL configured; ref image will be skipped", url)
 		return ""
 	}
-	extFirst := resolveForExternal(firstRef)
+	// 统一 resolve 整个列表，不单独 resolve firstRef——避免对 referenceImages[0] 下载两次。
 	extRefs := make([]string, 0, len(referenceImages))
 	for _, r := range referenceImages {
 		if res := resolveForExternal(r); res != "" {
 			extRefs = append(extRefs, res)
 		}
+	}
+	extFirst := ""
+	if len(extRefs) > 0 {
+		extFirst = extRefs[0]
 	}
 
 	// 提取原始 HTTP URL，供支持 URL 的接口优先使用（避免 base64 大小限制）

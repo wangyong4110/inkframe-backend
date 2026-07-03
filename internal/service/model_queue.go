@@ -2,12 +2,23 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
 )
+
+// ErrQueueStopped 在 pool 已停止时提交任务会立即收到此错误（而非阻塞）。
+var ErrQueueStopped = errors.New("task queue stopped")
+
+// ErrQueueFull 在 pool 的缓冲 channel 已满时提交任务会立即收到此错误。
+var ErrQueueFull = errors.New("task queue full")
+
+// workerPoolQueueCap 是每个 workerPool 的任务缓冲容量。
+// 达到上限时 submit() 立即返回 ErrQueueFull（不阻塞调用方）。
+const workerPoolQueueCap = 100_000
 
 // TaskResult 是 TaskFuture 携带的结果。
 type TaskResult struct {
@@ -22,7 +33,7 @@ type TaskFuture struct {
 }
 
 // Await 阻塞直到任务完成或 ctx 取消。
-// 若 ctx 先超时，任务仍会继续执行并将结果写入 channel（不泄漏 worker）。
+// 若 ctx 先超时，Worker 仍会继续执行并将结果写入 channel（不泄漏 worker）。
 func (f *TaskFuture) Await(ctx context.Context) (string, error) {
 	select {
 	case r := <-f.ch:
@@ -35,18 +46,21 @@ func (f *TaskFuture) Await(ctx context.Context) (string, error) {
 // workerPool 是 ModelTaskQueue 内部每个 key 对应的有界 Worker 池。
 //
 // 设计要点：
-//   - ch 是大容量 buffered channel，Submit 在 channel 未满时即时返回（非阻塞）。
-//   - 固定 concurrency 个 Worker goroutine 从 ch 消费任务，严格限制并行度。
-//   - 与信号量方案不同：调用方 goroutine 不会因等待 slot 而阻塞，只有 Worker 数量的
-//     goroutine 真正在做 I/O，其余任务安静地排在 channel 里。
+//   - submitMu 使"stopped 检查 + ch 写入/关闭"成为不可分割的原子对，
+//     消除 stop() 与 submit() 之间的竞态（send-on-closed-channel panic）。
+//   - Worker 通过 "for range ch" 消费任务：close(ch) 后 Worker 自动排空剩余任务再退出，
+//     实现"先排空，再停止"的 graceful drain 语义（而非立即丢弃）。
+//   - pending 仅在任务成功入队后才递增，确保监控数值准确。
+//   - Worker 内置 panic recovery，防止单次任务崩溃导致 goroutine 泄漏。
 type workerPool struct {
 	key         string
 	concurrency int
 	ch          chan poolTask
+	submitMu    sync.Mutex // 保护 stopped-check + ch-send/close 的原子性
+	stopped     bool       // 由 submitMu 保护
 	stopOnce    sync.Once
-	stopCh      chan struct{}
 	wg          sync.WaitGroup
-	pending     atomic.Int64 // 队列中 + 正在执行的任务数
+	pending     atomic.Int64 // 队列中 + 正在执行的任务数（成功入队后才计）
 }
 
 type poolTask struct {
@@ -62,9 +76,7 @@ func newWorkerPool(key string, concurrency int) *workerPool {
 	p := &workerPool{
 		key:         key,
 		concurrency: concurrency,
-		// 10 万容量：每个任务仅占 ~80 字节（3 个指针），约 8 MB；实际队列远小于此上限。
-		ch:     make(chan poolTask, 100_000),
-		stopCh: make(chan struct{}),
+		ch:          make(chan poolTask, workerPoolQueueCap),
 	}
 	for i := 0; i < concurrency; i++ {
 		p.wg.Add(1)
@@ -74,51 +86,74 @@ func newWorkerPool(key string, concurrency int) *workerPool {
 	return p
 }
 
+// run 是 Worker goroutine 的主循环。
+// "for range ch" 确保 close(ch) 后 Worker 排空所有已排队任务再退出，
+// 而非立即中止（"drain then stop" 语义）。
 func (p *workerPool) run() {
 	defer p.wg.Done()
-	for {
-		select {
-		case t, ok := <-p.ch:
-			if !ok {
-				return
-			}
-			url, err := t.fn(t.ctx)
-			t.out <- TaskResult{Value: url, Err: err}
-			p.pending.Add(-1)
-		case <-p.stopCh:
-			// 排空剩余任务，通知调用方
-			for {
-				select {
-				case t := <-p.ch:
-					t.out <- TaskResult{Err: fmt.Errorf("model task queue stopped")}
-					p.pending.Add(-1)
-				default:
-					return
-				}
-			}
-		}
+	for t := range p.ch {
+		p.execTask(t)
 	}
 }
 
+// execTask 执行单个任务，含 panic recovery，防止任务崩溃导致 Worker 退出和 Await 永久阻塞。
+func (p *workerPool) execTask(t poolTask) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Errorf("[ModelTaskQueue] pool %q: task panic: %v", p.key, r)
+			t.out <- TaskResult{Err: fmt.Errorf("task panicked: %v", r)}
+			p.pending.Add(-1)
+		}
+	}()
+	url, err := t.fn(t.ctx)
+	t.out <- TaskResult{Value: url, Err: err}
+	p.pending.Add(-1)
+}
+
 // submit 向 pool 提交一个任务，返回 TaskFuture。
-// 若 ch 已满（超过 100_000 条待处理任务），此调用会短暂阻塞直到有空间。
+// 若 pool 已停止或 channel 已满，future 立即携带错误（不阻塞调用方）。
 func (p *workerPool) submit(ctx context.Context, fn func(ctx context.Context) (string, error)) *TaskFuture {
 	out := make(chan TaskResult, 1)
-	p.pending.Add(1)
-	p.ch <- poolTask{ctx: ctx, fn: fn, out: out}
+
+	p.submitMu.Lock()
+	if p.stopped {
+		// pool 已停止：立即返回错误，不阻塞
+		p.submitMu.Unlock()
+		out <- TaskResult{Err: ErrQueueStopped}
+		return &TaskFuture{ch: out}
+	}
+	select {
+	case p.ch <- poolTask{ctx: ctx, fn: fn, out: out}:
+		// 任务成功入队后再递增 pending，确保监控数值不多计
+		p.pending.Add(1)
+		p.submitMu.Unlock()
+	default:
+		// channel 满：立即返回错误，不阻塞
+		p.submitMu.Unlock()
+		logger.Errorf("[ModelTaskQueue] pool %q at capacity (%d), task rejected", p.key, workerPoolQueueCap)
+		out <- TaskResult{Err: ErrQueueFull}
+	}
 	return &TaskFuture{ch: out}
 }
 
+// stop 标记 pool 为 stopped（后续 submit 立即返回 ErrQueueStopped），
+// 然后等待所有已排队任务被处理完毕后 Worker 退出。
+// 可并发调用、多次调用（幂等）。
 func (p *workerPool) stop() {
-	p.stopOnce.Do(func() { close(p.stopCh) })
+	p.stopOnce.Do(func() {
+		p.submitMu.Lock()
+		p.stopped = true
+		close(p.ch) // 触发 Worker 排空剩余任务后退出
+		p.submitMu.Unlock()
+	})
 	p.wg.Wait()
 }
 
 // ModelTaskQueue 管理多个 workerPool，每个 key 独立。
 //
-// key 通常为 "{tenantID}:{modelName}" 或 "{tenantID}:{providerName}"。
-// concurrency 仅在 key 首次创建时生效；后续 Submit 使用已有 pool，忽略传入的 concurrency。
-// 若需更新 concurrency，重启服务即可（pool 随进程生命周期存在）。
+// key 通常为 "{tenantID}:image-gen" 或 "{tenantID}:video-gen"。
+// 当传入的 concurrency 与现有 pool 不同时，自动创建新 pool 并在后台排空旧 pool，
+// 实现并发度的热更新（无需重启服务）。
 type ModelTaskQueue struct {
 	mu    sync.Mutex
 	pools map[string]*workerPool
@@ -128,23 +163,34 @@ func newModelTaskQueue() *ModelTaskQueue {
 	return &ModelTaskQueue{pools: make(map[string]*workerPool)}
 }
 
+// getOrCreate 返回 key 对应的 pool。
+// 若 concurrency 与已有 pool 不同，则替换为新 pool 并在后台排空旧 pool。
 func (q *ModelTaskQueue) getOrCreate(key string, concurrency int) *workerPool {
 	q.mu.Lock()
-	defer q.mu.Unlock()
 	if p, ok := q.pools[key]; ok {
-		return p
+		if p.concurrency == concurrency {
+			q.mu.Unlock()
+			return p
+		}
+		// 并发度已更新：创建新 pool，异步排空旧 pool（旧 pool 中已排队的任务会继续执行完毕）
+		newPool := newWorkerPool(key, concurrency)
+		q.pools[key] = newPool
+		q.mu.Unlock()
+		logger.Infof("[ModelTaskQueue] pool resized key=%q %d→%d, draining old pool in background", key, p.concurrency, concurrency)
+		go p.stop()
+		return newPool
 	}
 	p := newWorkerPool(key, concurrency)
 	q.pools[key] = p
+	q.mu.Unlock()
 	return p
 }
 
-// Submit 提交一个任务到 key 对应的 worker pool（不存在则以 concurrency 创建）。
-// fn 接收 ctx，应将超时控制交给 fn 内部。
-// 返回的 TaskFuture 在 fn 完成后写入结果。
+// Submit 提交一个任务到 key 对应的 worker pool（不存在或并发度变更时自动重建）。
+// fn 接收 ctx，应将超时控制交给 fn 内部（Submit 传入的 ctx 仅在 Await 超时时使用）。
+// 返回的 TaskFuture 在 fn 完成后写入结果；若 pool 已停止或满载，future 立即携带错误。
 func (q *ModelTaskQueue) Submit(key string, concurrency int, ctx context.Context, fn func(ctx context.Context) (string, error)) *TaskFuture {
-	pool := q.getOrCreate(key, concurrency)
-	return pool.submit(ctx, fn)
+	return q.getOrCreate(key, concurrency).submit(ctx, fn)
 }
 
 // PendingCount 返回指定 key 的 pool 中待处理（队列中 + 正在执行）的任务数，不存在时返回 0。
@@ -169,7 +215,7 @@ func (q *ModelTaskQueue) Stats() map[string]int64 {
 	return snapshot
 }
 
-// Stop 关闭所有 pool 并等待 Worker 退出（服务器 graceful shutdown 时调用）。
+// Stop 关闭所有 pool 并等待已排队任务全部处理完毕后 Worker 退出（服务器 graceful shutdown 时调用）。
 func (q *ModelTaskQueue) Stop() {
 	q.mu.Lock()
 	pools := make([]*workerPool, 0, len(q.pools))

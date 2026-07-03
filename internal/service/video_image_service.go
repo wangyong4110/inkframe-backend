@@ -141,6 +141,10 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 					if genErr == nil {
 						break
 					}
+					if isContentSafetyError(genErr) {
+						logger.Warnf("BatchGenerateShots: shot %d safety rejection, skipping retries", sh.ShotNo)
+						break
+					}
 					logger.Errorf("BatchGenerateShots: shot %d image attempt %d/%d failed: %v", sh.ShotNo, attempt, maxRetries, genErr)
 					if attempt < maxRetries {
 						time.Sleep(time.Duration(attempt*2) * time.Second)
@@ -302,6 +306,12 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, for
 			for attempt := 1; attempt <= maxRetries; attempt++ {
 				localImage, _, genErr = s.generateShotImageOnly(sh, ar)
 				if genErr == nil {
+					break
+				}
+				// 内容安全拦截是确定性失败（50511），重试相同输入没有意义；
+				// generateShotReferenceImage 内部已降级为纯文生图，此处仍失败则直接放弃。
+				if isContentSafetyError(genErr) {
+					logger.Warnf("BatchGenerateShotImages: shot %d safety rejection, skipping retries", sh.ShotNo)
 					break
 				}
 				logger.Errorf("BatchGenerateShotImages: shot %d attempt %d/%d failed: %v", sh.ShotNo, attempt, maxRetries, genErr)
@@ -1037,6 +1047,13 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		sceneSeed = int64(*shot.SceneAnchorID) * 31337
 	}
 	imageURL, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, allRefImages, artStyle, negPrompt, imageSize, sceneSeed, imageConsistencyWeight)
+	if err != nil && isContentSafetyError(err) && len(allRefImages) > 0 {
+		// 参考图被内容安全系统拦截（50511 Post Img Risk Not Pass）：
+		// 此类错误是确定性失败，重试相同参考图无意义。
+		// 降级为纯文生图（无参考图），保证分镜至少能生成一张图片。
+		logger.Warnf("generateShotReferenceImage: shot %d ref image blocked by safety filter, falling back to text-only", shot.ShotNo)
+		imageURL, err = s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, nil, artStyle, negPrompt, imageSize, sceneSeed)
+	}
 	if err != nil {
 		logger.Errorf("generateShotReferenceImage: image gen failed for shot %d: %v", shot.ShotNo, err)
 		return "", err
@@ -1054,6 +1071,17 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	}
 
 	return imageURL, nil
+}
+
+// isContentSafetyError 判断错误是否由 Volcengine 内容安全系统触发。
+// code=50511 (Post Img Risk Not Pass) 表示提交的参考图被拦截，属于确定性失败，
+// 重试相同输入不会改变结果，应立即降级而非重试。
+func isContentSafetyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "50511") || strings.Contains(s, "Risk Not Pass") || strings.Contains(s, "Img Risk")
 }
 
 // isEnglishPrompt 判断字符串是否以英文为主（英文字母占比 > 40%）。
