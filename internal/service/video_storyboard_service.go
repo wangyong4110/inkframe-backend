@@ -1155,8 +1155,10 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 		Lighting       string  `json:"lighting"`
 		Characters     []struct {
 			Name       string `json:"name"`
-			Expression string `json:"expression"`
+			Position   string `json:"position"`
 			Pose       string `json:"pose"`
+			Action     string `json:"action"`
+			Expression string `json:"expression"`
 		} `json:"characters"`
 		Items []struct {
 			Name     string `json:"name"`

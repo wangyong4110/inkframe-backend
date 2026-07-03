@@ -501,11 +501,14 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				activeLook := s.getCharActiveLook(char, chapterNo)
 				var refImage, vprompt string
 				if activeLook != nil {
-					// 三视图（ThreeViewSheet）优先，无三视图时降级到 Portrait。
-					if activeLook.ThreeViewSheet != "" {
-						refImage = normalizeMediaURL(activeLook.ThreeViewSheet)
-					} else {
+					// 分镜参考图优先用单张 Portrait，不用 ThreeViewSheet（三格合图）。
+					// ThreeViewSheet 含正/侧/背三个视图，DreamO（seed3l_single_ip）会将其视为
+					// 三个角色实例，导致同一角色在生成画面中出现三次。
+					// Portrait 只有单一正视图，不会引发重复。
+					if activeLook.Portrait != "" {
 						refImage = normalizeMediaURL(activeLook.Portrait)
+					} else if activeLook.ThreeViewSheet != "" {
+						refImage = normalizeMediaURL(activeLook.ThreeViewSheet)
 					}
 					vprompt = activeLook.VisualPrompt
 				}
@@ -597,20 +600,16 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 						}
 						var refURL string
 						if ir.look != nil && len(characterPortraits) < maxCharRefs {
-							// 三视图优先，无三视图降级到 Portrait
-							if ir.look.ThreeViewSheet != "" {
-								refURL = normalizeMediaURL(ir.look.ThreeViewSheet)
-							} else {
+							// Portrait 优先（同主流程），不用 ThreeViewSheet 避免角色重复
+							if ir.look.Portrait != "" {
 								refURL = normalizeMediaURL(ir.look.Portrait)
+							} else if ir.look.ThreeViewSheet != "" {
+								refURL = normalizeMediaURL(ir.look.ThreeViewSheet)
 							}
 						}
 						if refURL != "" {
 							characterPortraits = append(characterPortraits, refURL)
-							refKind := "Portrait"
-							if ir.look != nil && ir.look.ThreeViewSheet != "" {
-								refKind = "ThreeViewSheet"
-							}
-							refSources = append(refSources, fmt.Sprintf("inline name=%q %s", ir.name, refKind))
+							refSources = append(refSources, fmt.Sprintf("inline name=%q Portrait", ir.name))
 							portraitOwners = append(portraitOwners, portraitOwner{name: ir.name, vp: irVP})
 						} else {
 							noPortraitVPs = append(noPortraitVPs, irVP)
@@ -673,32 +672,46 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 
 	// 角色名 + 动作/姿态（最后 prepend → 最终排在 prompt 最前面）：
 	// 角色名排在 prompt 最前使 Seedream 将其识别为画面主体。
-	if len(characterPortraits) > 0 {
-		var presenceTokens []string // 人物存在性 + 动作/表情
+	// DreamO 模式（有参考图）和 Text2ImgV3 模式（无参考图）均注入，确保模型知道角色在做什么。
+	hasAnyShotChars := len(characterPortraits) > 0 || len(noPortraitVPs) > 0 || len(portraitOwners) > 0
+	if hasAnyShotChars || shot.GenMeta.Characters != "" {
+		var presenceTokens []string // 人物存在性 + 位置/动作/表情
 		if shot.GenMeta.Characters != "" {
 			var shotCharsAction []struct {
 				Name       string `json:"name"`
+				Position   string `json:"position"`
 				Pose       string `json:"pose"`
+				Action     string `json:"action"`
 				Expression string `json:"expression"`
 			}
 			if err := json.Unmarshal([]byte(shot.GenMeta.Characters), &shotCharsAction); err == nil && len(shotCharsAction) > 0 {
 				for _, c := range shotCharsAction {
-					if c.Name != "" {
-						presenceTokens = append(presenceTokens, c.Name)
+					if c.Name == "" {
+						continue
 					}
-				}
-				for _, c := range shotCharsAction {
-					if c.Pose != "" {
-						presenceTokens = append(presenceTokens, c.Pose)
+					// 构建结构化描述：name position, pose/action, expression
+					tok := c.Name
+					if c.Position != "" {
+						tok += " " + c.Position
+					}
+					var details []string
+					if c.Action != "" {
+						details = append(details, c.Action)
+					} else if c.Pose != "" {
+						details = append(details, c.Pose)
 					}
 					if c.Expression != "" {
-						presenceTokens = append(presenceTokens, c.Expression)
+						details = append(details, c.Expression)
 					}
+					if len(details) > 0 {
+						tok += ", " + strings.Join(details, ", ")
+					}
+					presenceTokens = append(presenceTokens, tok)
 				}
 			}
 		}
-		// shot.GenMeta.Characters 为空时，从 portraitOwners 加载的角色名兜底
-		if len(presenceTokens) == 0 && len(portraitOwners) > 0 {
+		// GenMeta.Characters 为空或解析失败时，从 portraitOwners 加载的角色名兜底
+		if len(presenceTokens) == 0 {
 			for _, po := range portraitOwners {
 				if po.name != "" {
 					presenceTokens = append(presenceTokens, po.name)
@@ -706,7 +719,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 			}
 		}
 		if len(presenceTokens) > 0 {
-			promptText = strings.Join(presenceTokens, ", ") + ", " + promptText
+			promptText = strings.Join(presenceTokens, "; ") + ", " + promptText
 		}
 	}
 
@@ -767,7 +780,20 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	//
 	// 无角色参考图时 → Text2ImgV3 纯文生图模式：
 	//   - 可加物品图和场景图作为视觉风格锚定
+	// DreamO（seed3l_single_ip）是单 IP 模型，只支持一个角色的参考图。
+	// 传入多个不同角色的参考图时，模型会将它们误认为同一角色的多视角，
+	// 导致画面中同一角色出现多次（重复角色 bug）。
+	// 限制为 1 张参考图：主角色走 IP-Adapter；其余角色转为文字 VP 描述注入 prompt。
 	cappedPortraits := characterPortraits
+	if len(cappedPortraits) > 1 {
+		cappedPortraits = characterPortraits[:1]
+		// 超出部分的角色转为无参考图模式：VP 注入 noPortraitVPs，由文字约束外貌
+		for _, po := range portraitOwners[1:] {
+			noPortraitVPs = append(noPortraitVPs, po.vp)
+		}
+		logger.Printf("[CharRef] shot#%d capped references: %d→1 (moved %d extra char VPs to text injection)",
+			shot.ShotNo, len(characterPortraits), len(characterPortraits)-1)
+	}
 	logger.Printf("[CharRef] shot#%d using %d character portrait(s) as reference", shot.ShotNo, len(cappedPortraits))
 	var allRefImages []string
 	if len(cappedPortraits) > 0 {
@@ -852,12 +878,15 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	if !shotHasAnyCharacter && (shot.GenMeta.NegativePrompt == "" || !strings.Contains(shot.GenMeta.NegativePrompt, "person")) {
 		imgNegBase = noPersonNeg + ", " + imgNegBase
 	}
-	// 有角色时追加面部模糊专项负向词
+	// 有角色时追加面部模糊专项负向词 + 重复角色专项负向词
+	// 重复角色负向词：防止 DreamO（seed3l_single_ip）将参考图的多视角误判为多个角色实例
 	faceNeg := "blurry face, out of focus face, soft focus face, unfocused face, " +
 		"pixelated face, low res face, motion blur on face, smeared face, smudged face, " +
 		"faceless, featureless face, undefined face, indistinct face"
+	dupCharNeg := "duplicate character, cloned character, multiple copies of same person, " +
+		"same character appearing twice, character repeated, split character, mirrored figure"
 	if shotHasAnyCharacter {
-		imgNegBase = imgNegBase + ", " + faceNeg
+		imgNegBase = imgNegBase + ", " + faceNeg + ", " + dupCharNeg
 	}
 	negPrompt := imgNegBase
 	if shot.GenMeta.NegativePrompt != "" {
@@ -1380,6 +1409,43 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	videoArtStyle := s.resolveArtStyle(shot.VideoID)
 	if videoArtStyle != "" {
 		videoPrompt = resolveVideoStylePrefix(videoArtStyle) + videoPrompt
+	}
+
+	// 角色动作注入（视频层）：从 GenMeta.Characters 提取 name+action/pose 注入 video_prompt。
+	// 仅在 video_prompt 尚未包含该角色名时才注入，避免与 LLM 已写好的角色动作描述重复。
+	if shot.GenMeta.Characters != "" {
+		var shotCharsV []struct {
+			Name     string `json:"name"`
+			Position string `json:"position"`
+			Pose     string `json:"pose"`
+			Action   string `json:"action"`
+		}
+		if err := json.Unmarshal([]byte(shot.GenMeta.Characters), &shotCharsV); err == nil && len(shotCharsV) > 0 {
+			var charActionTokens []string
+			promptLowerV := strings.ToLower(videoPrompt)
+			for _, c := range shotCharsV {
+				if c.Name == "" {
+					continue
+				}
+				// 若 video_prompt 已包含角色名（LLM 已写了动作描述），跳过注入
+				if strings.Contains(promptLowerV, strings.ToLower(c.Name)) {
+					continue
+				}
+				tok := c.Name
+				if c.Action != "" {
+					tok += " " + c.Action
+				} else if c.Pose != "" {
+					tok += " " + c.Pose
+				}
+				if c.Position != "" {
+					tok += " at " + c.Position
+				}
+				charActionTokens = append(charActionTokens, tok)
+			}
+			if len(charActionTokens) > 0 {
+				videoPrompt = strings.Join(charActionTokens, "; ") + ", " + videoPrompt
+			}
+		}
 	}
 
 	// 台词与音效：将旁白、角色台词、音效标签注入 prompt，帮助模型理解画面动作和声音氛围

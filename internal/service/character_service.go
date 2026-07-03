@@ -2015,6 +2015,54 @@ func resolveGenderInfo(gender string) (tag string, neg string) {
 	}
 }
 
+// animalKeywords 用于检测纯动物（非人形）角色的关键词。
+// 拟人化（如"狐女""兽人"）不在此列，它们依然使用性别 token。
+var animalKeywords = []string{
+	// 英文常见动物
+	"tiger", "lion", "wolf", "fox", "bear", "dragon", "snake", "horse", "deer", "rabbit",
+	"eagle", "hawk", "crow", "cat", "dog", "puppy", "kitten", "leopard", "panther", "cheetah",
+	"elephant", "monkey", "ape", "gorilla", "shark", "whale", "dolphin", "phoenix", "griffin",
+	"qilin", "pig", "cow", "bull", "sheep", "goat", "chicken", "duck", "goose", "parrot",
+	"panda", "raccoon", "squirrel", "hamster", "frog", "turtle", "crocodile", "alligator",
+	// 中文常见动物（之前缺失的核心词）
+	"狗", "小狗", "大狗", "狗狗", "猎狗", "猎犬", "犬", "幼犬",
+	"猫", "小猫", "猫咪", "猫猫", "猫儿", "幼猫",
+	"鸟", "小鸟", "鸡", "公鸡", "母鸡", "鸭", "鹅", "鹦鹉",
+	"猪", "小猪", "牛", "耕牛", "羊", "绵羊", "山羊",
+	"熊猫", "浣熊", "松鼠", "仓鼠", "青蛙", "乌龟", "鳄鱼",
+	// 中文原有词
+	"老虎", "狮子", "狼", "狐狸", "熊", "龙", "蛇", "马", "鹿", "兔子", "兔",
+	"鹰", "鸦", "乌鸦", "豹", "猎豹", "大象", "猴子", "猩猩", "鲨鱼", "鲸鱼",
+	"海豚", "凤凰", "麒麟", "玄武", "神兽", "灵兽", "圣兽",
+	// 形态描述
+	"quadruped", "four-legged", "feral", "beast form", "animal form",
+	"四足", "兽形", "兽态", "动物形态",
+}
+
+// anthropomorphicKeywords 表示"人形+动物特征"的词，出现则不视为纯动物。
+var anthropomorphicKeywords = []string{
+	"anthropomorphic", "anthro", "furry", "kemono",
+	"beastman", "beast man", "half-beast",
+	"兽人", "人兽", "拟人", "兽耳", "兽娘", "狐女", "猫娘", "猫耳",
+	"半兽", "人形", "bipedal", "upright", "stands on two legs",
+}
+
+// isAnimalCharacter 返回 true 表示角色是纯动物（非人形），应跳过人类性别 token。
+func isAnimalCharacter(appearance string) bool {
+	lower := strings.ToLower(appearance)
+	for _, kw := range anthropomorphicKeywords {
+		if strings.Contains(lower, strings.ToLower(kw)) {
+			return false // 拟人化，仍按人形处理
+		}
+	}
+	for _, kw := range animalKeywords {
+		if strings.Contains(lower, strings.ToLower(kw)) {
+			return true
+		}
+	}
+	return false
+}
+
 // condenseVisualPrompt trims s to at most maxWords space-separated tokens,
 // preferring to break at a comma boundary (within the last 10 words of the budget)
 // to avoid cutting mid-phrase.
@@ -2119,80 +2167,101 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 		aiRef = ""
 	}
 
-	// 结构控制词置于提示词最前段，确保在 cross-attention 中获得最高权重。
-	// 3 格布局：正面/侧面/背面全身视图，合并在同一张横版图中（标准三视图格式）。
-	// 关键实践：
-	//   - LEFT/CENTER/RIGHT PANEL 空间方位词比 [panel N] 对扩散模型更有约束力
-	//   - 侧面："only one ear visible, nose tip in profile" 强制纯侧面，排除四分之三脸
-	//   - 背面："back of head visible, no face visible" 强制纯背视角
-	//   - 正面："facing camera directly, symmetrical" 强制完全正面
-	//   - "A-pose arms 30-45 degrees" 量化手臂角度，避免 T-pose
-	//   - "same ground baseline" 对齐三格脚底基线
-	layoutFrame :=
-		"character design turnaround reference sheet, orthographic model sheet, " +
-			"three equal-width panels side by side, horizontal wide format, " +
-			"LEFT PANEL front view: character facing camera directly, fully symmetrical body, neutral expression, full body head to toe, " +
-			"CENTER PANEL exact side view: character rotated exactly 90 degrees, pure flat profile, " +
-			"only one ear visible, nose tip visible in profile, facing left, full body head to toe, " +
-			"RIGHT PANEL back view: character completely turned away from camera, " +
-			"back of head and hair visible, no face visible at all, full body head to toe, " +
-			"A-pose arms 30-45 degrees from sides in all panels, " +
-			"same ground baseline across all panels, identical face hair costume in every panel"
+	// Prompt 结构设计原则（扩散模型 cross-attention 权重随 token 位置递减）：
+	//   1. 任务类型 + 跨格一致性  ← 最高权重，奠定模型理解基础
+	//   2. 风格 + 质量            ← 全局属性，影响整体渲染
+	//   3. 白色背景               ← 全局约束
+	//   4. 性别 / 物种            ← 角色类型锚点
+	//   5. 外貌描述               ← 角色特征（需要足够权重，放在布局细节之前）
+	//   6. 布局细节（分格描述）   ← 结构约束，模型已知是三视图后补充细节即可
 
-	// appearance 截断至 80 词（原 50 词易截断关键外观细节如发色、眼色、服装特征，
-	// 这些细节是模型在无参考图时保持三格一致性的唯一文字锚点）。
+	// 人形角色布局：A-pose + 侧面解剖约束
+	layoutDetails :=
+		"three equal-width panels side by side, horizontal wide format, " +
+			"LEFT PANEL front view: facing camera directly, symmetrical, neutral expression, full body head to toe, " +
+			"CENTER PANEL 90-degree side profile: pure side view facing left, full body head to toe, " +
+			"RIGHT PANEL back view: facing away from camera, back of head visible, no face visible, full body head to toe, " +
+			"A-pose arms 30-45 degrees from sides, same ground baseline, same character height in all panels"
+
+	// 动物角色布局：去掉 A-pose 手臂指令，改用通用姿态
+	animalLayoutDetails :=
+		"three equal-width panels side by side, horizontal wide format, " +
+			"LEFT PANEL front view: facing camera directly, full body, neutral pose, " +
+			"CENTER PANEL 90-degree side profile: pure side view, full body, " +
+			"RIGHT PANEL back view: facing away from camera, full body, " +
+			"same ground baseline, same character scale in all panels"
+
+	// appearance 截断至 80 词（外貌细节是无参考图时跨格一致性的唯一文字锚点）
 	condensedAppearance := condenseVisualPrompt(appearance, 80)
 
-	// 风格词和质量词放在 prompt 最前：扩散模型对早期 token 注意力更高，style 后置会被100+词的布局/外貌淹没。
+	// 动物角色跳过人类性别 token（1boy/1girl 会强制生成人形体型）
+	animal := isAnimalCharacter(appearance)
+	if animal {
+		genderTag = ""
+		genderNeg = "human body, human figure, humanoid, bipedal human, human silhouette, human proportions"
+	}
+
+	activeLayoutDetails := layoutDetails
+	if animal {
+		activeLayoutDetails = animalLayoutDetails
+	}
+
+	// 跨格一致性标识（最高权重，放最前）
+	consistencyHead := "character design turnaround sheet, front view side view back view, " +
+		"identical character in all panels: same face same hairstyle same outfit same body proportions, "
+
 	var prompt string
 	if style == "realistic" || style == "real_person" {
-		genderPrefix := map[string]string{
-			"male": "1man, male, ", "female": "1woman, female, ", "neutral": "androgynous person, ",
-		}[gender]
-		sheetStyle := "photorealistic character design reference, natural even studio lighting"
+		var genderPrefix string
+		if !animal {
+			genderPrefix = map[string]string{
+				"male": "1man, male, ", "female": "1woman, female, ", "neutral": "androgynous person, ",
+			}[gender]
+		}
+		sheetStyle := "photorealistic character design reference, even studio lighting"
 		if style == "real_person" {
 			sheetStyle = "ultra-realistic skin texture, natural studio lighting, DSLR quality, 8k uhd, sharp focus"
 		}
-		prompt = sheetStyle + ", " + qualityTokens + ", " +
-			genderPrefix + layoutFrame + ", " +
+		prompt = consistencyHead +
+			sheetStyle + ", " + qualityTokens + ", " +
+			"simple white background, " +
+			genderPrefix +
 			condensedAppearance + ", " +
-			"no makeup natural bare face, " +
-			"orthographic projection, character only pure white background, " +
-			"no text no labels no watermarks"
+			activeLayoutDetails
 	} else {
 		styleDesc := resolveStyleIllustrationDesc(style)
 		genderPrefix := ""
 		if genderTag != "" {
 			genderPrefix = genderTag + ", "
 		}
-		prompt = styleDesc + ", " + qualityTokens + ", " +
-			genderPrefix + layoutFrame + ", " +
+		prompt = consistencyHead +
+			styleDesc + ", " + qualityTokens + ", " +
+			"simple white background, " +
+			genderPrefix +
 			condensedAppearance + ", " +
-			"no makeup natural bare face, " +
-			"orthographic projection, character only white background, " +
-			"no text no labels no watermarks"
+			activeLayoutDetails
 	}
 
 	logger.Printf("GenerateThreeViewSheet: %s style=%s ref=%v", name, style, aiRef != "")
 
-	baseNeg := "text, labels, annotations, watermark, signature, caption, speech bubble, " +
-		"background objects, scene elements, environment, complex background, " +
-		"T-pose, arms straight horizontal, arms glued to body, " +
-		"three-quarter view, 45-degree angle, diagonal angle, oblique angle, semi-profile, slight angle, angled view, " +
-		"perspective distortion, foreshortening, dynamic pose, action pose, " +
-		"face visible in back panel, face showing in right panel, front-facing in side panel, " +
-		"both ears visible in side panel, two ears, full face in profile panel, " +
-		"different face, inconsistent face, face change, different person, face inconsistency, " +
-		"different hairstyle, hair color change, costume mismatch, outfit change, different outfit, " +
-		"each panel different character, different character per panel, multiple characters, " +
-		"merged panels, overlapping panels, panels bleeding into each other, " +
-		"cut off feet, missing feet, missing legs, " +
-		"4 panels, four panels, face closeup panel, bust shot panel, portrait panel, " +
-		"makeup, eyeshadow, eyeliner, mascara, lipstick, blush, rouge, cosmetics, " +
-		"extra limbs, bad anatomy, nsfw, lowres, poorly drawn"
+	baseNeg := "colored background, gradient background, dark background, busy background, " +
+		"text, labels, watermark, speech bubble, annotations, " +
+		"T-pose, dynamic pose, action pose, " +
+		"three-quarter view, 45-degree angle, oblique angle, angled view, " +
+		"different face in panels, inconsistent character, costume mismatch, different outfit per panel, " +
+		"face visible in back panel, both ears visible in side panel, " +
+		"different character scale per panel, size inconsistency, " +
+		"merged panels, overlapping panels, " +
+		"cut off feet, missing legs, cropped body, " +
+		"4 panels, five panels, portrait panel, bust shot panel, " +
+		"extra limbs, bad anatomy, nsfw, lowres, blurry, poorly drawn"
 	negativePrompt := baseNeg
 	if genderNeg != "" {
 		negativePrompt = baseNeg + ", " + genderNeg
+	}
+	if animal {
+		negativePrompt += ", human hands, human feet, human skin, human face, human body shape, " +
+			"anthropomorphic, humanoid body, standing human pose, human clothing"
 	}
 
 	// 3 格三视图使用 1200x720 横版布局（正面/侧面/背面各占 400px）。

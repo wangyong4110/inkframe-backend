@@ -282,6 +282,10 @@
 ⚠️ 角色名称强制规则（全字段适用）：
 ① `characters` 数组中的 `name` 字段必须使用以下列表中的精确名称，不得改写、缩写或使用"角色名"占位符；该镜头无角色出场时填 `[]`。
 ② `description`、`image_prompt`、`video_prompt` 字段凡涉及角色处，必须使用以下精确名称。严禁用"人影"、"他"/"她"、"少年"、"女子"、"figure"或任何外貌词替代角色名称——无论出于简洁还是通用描述的目的。
+⚠️ 【角色在提示词中的强制要求——违反将导致图像/视频生成失败】
+- 若该镜头有角色出场（characters[] 非空），`image_prompt` 中必须包含完整的【角色区块】：角色精确名称 + 画框位置（前景/中景/背景+方位）+ 身体姿态与动作 + 面部表情 + 与环境的空间关系
+- 若该镜头有角色出场，`video_prompt` 中必须包含【角色动作层】：以角色精确名称开头，描述其在镜头时长内的具体运动/动作变化（动作须具体，禁止写"站着"等静止状态词）
+- characters[] 中的 position/pose/action/expression 与 image_prompt/video_prompt 中的对应描述必须一致，不得只填 characters[] 而在 prompt 文本中省略
 {% for c in Characters %}- {{ c.Name }}（{{ c.Role }}）{% if c.Description %}：{{ c.Description }}{% endif %}
 
   [台词语言]: {{ c.DialogueLang }}{% if c.VisualPrompt %}
@@ -405,6 +409,16 @@
 请将章节内容分解为**{{ ExpectedShots }}个**分镜（每个重大动作、对话轮次、场景切换须单独成镜）。
 ⚠️ 注意：必须输出全部{{ ExpectedShots }}个分镜，不得省略。只返回JSON数组，不要任何额外说明或markdown代码块。
 
+▸ characters（角色列表）——该镜头画面中可见的角色
+  - 格式：[{"name":"<精确名称>","position":"<画框位置>","pose":"<身体姿态>","action":"<正在做的动作>","expression":"<面部表情>"}]
+  - name：必须使用【角色信息】列表中的精确名称
+  - position：角色在画框中的位置，从以下选项中选择：前景居中 / 前景偏左 / 前景偏右 / 中景居中 / 中景偏左 / 中景偏右 / 背景左侧 / 背景右侧 / 背景居中
+  - pose：角色的静态身体姿态（直立/半蹲/回头/俯身/侧身等）
+  - action：角色当前帧正在进行的具体动作（缓步向前走/举剑指向对方/双手握拳/低头沉思等）；纯静止pose时可填""
+  - expression：面部表情（坚定/悲伤/愤怒/惊讶/茫然/微笑/痛苦等）
+  - 无角色时填 []
+  ⚠️ 强制要求：characters[] 中每个角色的 position/pose/action/expression 必须与 image_prompt 中 [角色区块] 的描述完全一致——这两处是同一信息的结构化与文本化双重记录，不得矛盾或遗漏。
+
 ▸ items（物品列表）——该镜头画面中出现的物品
   - 格式：[{"name":"<物品列表中的精确名称>","holder":"<持有者角色名，无则留空>","location":"<物品在此镜头的位置，无则留空>"}]
   - 无物品时填 []
@@ -488,7 +502,7 @@ sfx_tags 是该镜头的结构化音效标签列表，每个元素含三个字�
     "time_of_day": "afternoon",
     "weather": "clear",
     "lighting": "natural",
-    "characters": [{"name":"<角色信息中的精确名称>","expression":"<当前表情>","pose":"<动作姿势>"}],
+    "characters": [],
     "items": [],
     "transition": "cut",
     "transition_out": "Pan reaches leftward endpoint; stone gateway now fills right half of frame; incense burner has exited left edge; camera holds still; dust motes drifting in light shafts; no characters present",
@@ -513,13 +527,38 @@ sfx_tags 是该镜头的结构化音效标签列表，每个元素含三个字�
     "time_of_day": "afternoon",
     "weather": "clear",
     "lighting": "diffuse",
-    "characters": [{"name":"<角色信息中的精确名称>","expression":"<当前表情>","pose":"<动作姿势>"}],
-    "items": [{"name":"<物品列表中的精确名称>","holder":"<持有者角色名，无则留空>","location":"<物品在画面中的位置>"}],
+    "characters": [],
+    "items": [{"name":"jade pendant","holder":"","location":"resting in horizontal crack groove left-of-center"}],
     "transition": "cut",
     "transition_out": "Locked-off extreme close-up holds; jade chain link completes its 8° rotation and settles; stone granule rests in crack shadow; frame holds in deep stillness",
     "transition_in": "Continuing from the gateway pan's final hold, camera cuts abruptly downward to extreme close-up of cracked flagstone at ground level — no movement, the closeness itself is the transition",
     "sfx_tags": [{"tag":"wind_gentle","type":"ambient","prompt":"极近景石板缝隙间隐约可感的轻微气流，几近无声却带出空旷的孤寂感"},{"tag":"silence_deep","type":"emotion","prompt":"压倒一切的深沉静默，只余远处偶尔传来的微弱回音"}],
     "emotional_tone": "悲伤"
+  },
+  {
+    "shot_no": 3,
+    "description": "Ling Yun stands before the stone gateway, right hand holding a sword at his side, gazing into the dark passage with a determined expression.",
+    "image_prompt": "{{ ImageStyleHint }}, medium shot, eye-level angle — GROUND LAYER: smooth flagstone paving before the gateway, narrow moss-filled joints between stones, a few small scattered pebble fragments at foreground-left — FOREGROUND OBJECTS: stone threshold beam at ground level, 15cm height, worn granite surface with light weathering along upper edge — MIDGROUND: stone gateway arch 3m wide and 4m tall, dark interior corridor receding beyond the threshold, faint interior wall texture visible at 2m depth, thin mist drifting outward from corridor interior — BACKGROUND: shadowed stone corridor interior, far end barely lit, wall surfaces showing moss patches and hairline cracks — LIGHTING: natural side-light from upper-left at 45°, 4500K neutral-warm, casting a hard-edged shadow of the right doorframe diagonally across the ground 1.5m rightward; recessed corridor interior in cool blue-grey shadow — ATMOSPHERE: low-density mist drifting outward from corridor mouth, thinning to invisible at 1.2m from threshold — CHARACTERS BLOCK: Ling Yun standing foreground-center, body facing camera with 15° rightward offset, right arm hanging naturally at side gripping sword hilt with blade tip pointing downward, left hand in loose fist at side, head tilted 10° upward directed at corridor interior, feet shoulder-width apart, posture upright and rigid, expression solemn and determined, brow slightly furrowed — COLOR PALETTE: stone grey, muted amber sunlight, cool shadow interior contrast — 50mm f/4, moderate depth-of-field, Ling Yun razor-sharp, corridor background softly readable — {{ StyleQualityTokens }}",
+    "video_prompt": "Continuing from the extreme close-up of cracked flagstone, camera tilts upward slowly over 0.8 seconds transitioning to eye-level, Ling Yun's figure rising into frame center — camera locks off with subtle organic micro-stabilization, imperceptible ±0.2px breathing drift — CHARACTER ACTIONS: Ling Yun stands still at frame center, right hand gripping sword at side unmoving; in the first 1.5 seconds, a single slow deep breath causes subtle chest expansion of ~5mm amplitude; in the final 1.5 seconds, Ling Yun's left hand fingers curl inward incrementally, knuckles tightening, tendons on back of hand becoming faintly visible — ATMOSPHERIC PARTICLES: low-density mist drifts outward from gateway corridor at 0.3cm/sec, expanding at ground level near threshold, density stable — LIGHTING: ambient natural side-light holds stable; Ling Yun left-side illuminated, right side and sword arm in soft shadow extending diagonally to ground — emotional arc: opens on Ling Yun's static gaze into the gateway — only the breath and the tightening hand betray the tension within — closes as he remains utterly still, the decision already made. SOUND: faint hollow wind resonance drifting from the stone corridor; low suspense undertone emerges imperceptibly in the final second",
+    "negative_prompt": "blurry, low quality, watermark, text, cartoon, anime, flat colors, cel shading, floating objects, impossible physics, overexposed, extra figures, blurred character",
+    "narration": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}{% else %}门洞的冷气漫过脚背，他就这样站着，像是在等一个迟到了三年的答案。{% endif %}",
+    "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}凌云：三年了，你在里面，我却找不到你。{% else %}{% endif %}",
+    "subtitle": "",
+    "camera_type": "static",
+    "camera_angle": "eye_level",
+    "shot_size": "medium",
+    "duration": 5.0,
+    "location": "<exact name from named scene list, or natural-language description>",
+    "time_of_day": "afternoon",
+    "weather": "clear",
+    "lighting": "natural",
+    "characters": [{"name":"Ling Yun","position":"foreground-center","pose":"upright, feet shoulder-width, spine straight","action":"right hand grips sword at side, left hand fingers curl inward slowly","expression":"solemn and determined, brow furrowed"}],
+    "items": [],
+    "transition": "dissolve",
+    "transition_out": "Locked-off camera holds; Ling Yun standing center, left hand grip fully tightened, gaze fixed on corridor — frame freezes in this moment of arrested motion",
+    "transition_in": "Continuing from extreme close-up of flagstone, camera tilts upward 0.8s until eye-level with Ling Yun entering frame center from above",
+    "sfx_tags": [{"tag":"wind_gentle","type":"ambient","prompt":"从石门洞深处吹出的穿堂风，带有石廊独特的低沉共鸣"},{"tag":"suspense_low","type":"emotion","prompt":"低频悬疑底音在镜头末段极轻微涌现，传递角色内心的紧绷与决意"}],
+    "emotional_tone": "紧张"
   }
   ... （继续输出剩余 {{ ExpectedShotsMinus2 }} 个分镜，格式与上述完全相同）
 ]
@@ -543,7 +582,7 @@ sfx_tags 是该镜头的结构化音效标签列表，每个元素含三个字�
     "time_of_day": "afternoon",
     "weather": "clear",
     "lighting": "natural",
-    "characters": [{"name":"<角色信息中的精确名称>","expression":"<当前表情>","pose":"<动作姿势>"}],
+    "characters": [],
     "items": [],
     "transition": "cut",
     "transition_out": "摇镜到达左方终点，石门洞占据画面右半部，香炉已退出左缘，镜头静止保持，光柱中尘埃漂浮，无角色在场",
@@ -568,13 +607,38 @@ sfx_tags 是该镜头的结构化音效标签列表，每个元素含三个字�
     "time_of_day": "afternoon",
     "weather": "clear",
     "lighting": "diffuse",
-    "characters": [{"name":"<角色信息中的精确名称>","expression":"<动作姿势>","pose":"<动作姿势>"}],
+    "characters": [],
     "items": [{"name":"<物品列表中的精确名称>","holder":"<持有者角色名，无则留空>","location":"<物品在画面中的位置>"}],
     "transition": "cut",
     "transition_out": "固定机位极近景保持静止；链环完成8度顺时针旋转后复位；石粉细粒落入裂缝阴影；画面凝滞在深沉静默中",
     "transition_in": "接续摇镜终点的静止保持，镜头硬切俯冲至地面极近景，石板裂缝从下方充满画框——切换本身即是过渡",
     "sfx_tags": [{"tag":"wind_gentle","type":"ambient","prompt":"极近景石板缝隙间隐约可感的轻微气流，几近无声却带出空旷的孤寂感"},{"tag":"silence_deep","type":"emotion","prompt":"压倒一切的深沉静默，只余远处偶尔传来的微弱回音"}],
     "emotional_tone": "悲伤"
+  },
+  {
+    "shot_no": 3,
+    "description": "凌云站在石门前，右手持剑，抬头直视门洞深处，表情坚毅。",
+    "image_prompt": "{{ ImageStyleHint }}，中景，平视角度——地面层：石门前平整的青石地面，缝隙间有少量苔藓，前景散落数枚碎石——前景物件：石门门槛约15厘米高，花岗岩材质，上沿轻微风化——中景：石门洞口约3米宽、4米高，门洞内幽深，隐约可见内部石壁和壁缝渗出的薄雾——背景：门洞后方幽暗石廊，远端光线微弱，墙面有苔藓和裂痕——光线：从左上方约45度角的自然光照射，形成门洞右侧门框的硬质阴影延伸至地面——大气：门洞内有缓缓飘出的薄雾，浓度低，在门口1米范围内明显——角色区块：凌云站立于前景居中，面向门洞方向，身体正面朝向镜头偏斜约15度，右手自然垂握长剑使剑尖向下，左手微微握拳置于身侧，头部微微上扬凝视门洞深处，脊背挺直，双脚分开与肩同宽，神情肃穆坚毅，微蹙的双眉透出紧绷——{{ StyleQualityTokens }}",
+    "video_prompt": "接续前一极近景石板特写，镜头缓慢上摇（tilt up）从地面石板切换为平视角，在约0.8秒内完成角度交接——镜头固定后保持静止，带有机械有机感微稳定，呼吸感漂移幅度±0.2px——角色动作层：凌云保持直立姿态站于画面中央，右手持剑不动，在镜头时长前半段（约1.5秒）缓慢深呼吸一次（胸部轻微起伏可见，幅度约5mm）；后半段（约1.5秒）左手五指轻微收紧，手背肌腱略微凸起——大气粒子：门洞内薄雾以每秒约0.3厘米速度向前（朝镜头方向）渗出，在门槛附近地面缓慢扩散，整体密度极低——光线与阴影：凌云身上受左上方光照，左侧面形成柔和亮区，右侧沿着持剑手臂形成细长阴影延伸至地面；光线强度全程稳定——情绪弧线：画面以凌云的静止凝视开场，唯有胸部呼吸和手指收紧的细微动作传递内心的紧张与决意，镜头在他凝视门洞深处的凝固状态中结束。SOUND：微弱的穿堂风从门洞深处吹出，带有石廊回响；地面薄雾流动的极轻微气流声；悬疑底音以极低音量渐渐涌现，在镜头末段达到轻微高点",
+    "negative_prompt": "模糊，低质量，水印，文字，卡通，动漫，平涂，赛璐璐渲染，悬浮物体，违反物理，过曝，多余人物，人影模糊",
+    "narration": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}{% else %}门洞的冷气漫过脚背，他就这样站着，像是在等一个迟到了三年的答案。{% endif %}",
+    "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}凌云：三年了，你在里面，我却找不到你。{% else %}{% endif %}",
+    "subtitle": "",
+    "camera_type": "static",
+    "camera_angle": "eye_level",
+    "shot_size": "medium",
+    "duration": 5.0,
+    "location": "<已命名场景中的精确名称，或自然语言描述>",
+    "time_of_day": "afternoon",
+    "weather": "clear",
+    "lighting": "natural",
+    "characters": [{"name":"凌云","position":"前景居中","pose":"直立，双脚与肩同宽，脊背挺直","action":"右手持剑自然垂放，左手握拳，深呼吸后左手五指缓慢收紧","expression":"肃穆坚毅，眉头微蹙"}],
+    "items": [],
+    "transition": "dissolve",
+    "transition_out": "固定机位保持，凌云直立于画框中央凝视门洞，手指收紧动作完成，画面在静止凝视中定格",
+    "transition_in": "接续石板极近景，镜头上摇0.8秒完成角度交接，凌云全身从地面上方进入画面中央",
+    "sfx_tags": [{"tag":"wind_gentle","type":"ambient","prompt":"从石门洞深处吹出的穿堂风，带有石廊独特的低沉共鸣"},{"tag":"suspense_low","type":"emotion","prompt":"低频悬疑底音在镜头末段极轻微涌现，传递角色内心的紧绷与决意"}],
+    "emotional_tone": "紧张"
   }
   ... （继续输出剩余 {{ ExpectedShotsMinus2 }} 个分镜，格式与上述完全相同）
 ]
