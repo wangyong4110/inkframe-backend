@@ -131,7 +131,7 @@ func (s *VideoService) BatchGenerateShots(videoID uint, shotIDs []uint, qualityT
 				}
 				if genErr == nil {
 					if err := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
-						"status": "completed", "progress": 100,
+						"status": "completed",
 					}); err != nil {
 						logger.Errorf("[VideoService] BatchGenerateShots: failed to update shot %d status: %v", sh.ShotNo, err)
 					}
@@ -278,7 +278,7 @@ func (s *VideoService) BatchGenerateShotImages(videoID uint, shotIDs []uint, for
 			if genErr == nil {
 				metrics.ShotImageGenerationTotal.WithLabelValues("success").Inc()
 				if err := s.storyboardRepo.UpdateFields(sh.ID, map[string]interface{}{
-					"status": "completed", "progress": 50,
+					"status": "completed",
 				}); err != nil {
 					logger.Errorf("[VideoService] BatchGenerateShotImages: failed to update shot %d status: %v", sh.ShotNo, err)
 				}
@@ -2136,7 +2136,7 @@ func (s *VideoService) generateClipAndUploadWithRetry(ctx context.Context, shotI
 		}
 	}
 
-	fields := map[string]interface{}{"progress": 100}
+	fields := map[string]interface{}{}
 	if lastErr != nil {
 		logger.Errorf("generateClipAndUploadWithRetry: shot %d clip failed after %d attempts, keeping image-only: %v", shot.ShotNo, maxClipRetries, lastErr)
 	} else if ossURL := s.uploadClipToStorage(context.Background(), shot, clipPath); ossURL != "" {

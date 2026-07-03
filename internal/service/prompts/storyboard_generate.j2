@@ -194,7 +194,8 @@
 
 ▸ emotional_tone（配音情感基调——必填，不得为空）
   - 根据该镜头的 narration（旁白）或 dialogue（台词）的情绪内容，分析并填写最贴切的情感标签
-  - 可选值（选其中一个）：平静 | 悲伤 | 紧张 | 愤怒 | 喜悦 | 浪漫 | 惊恐 | 压抑 | 释怀 | 悬疑 | 振奋 | 哀愁
+  - 可选值（选其中一个）：平静 | 悲伤 | 紧张 | 愤怒 | 喜悦 | 浪漫 | 惊恐 | 压抑 | 释怀 | 悬疑 | 振奋 | 恐惧 | 得意 | 讽刺 | 留白
+  说明：「留白」用于 narration 和 dialogue 均为空的纯视觉/音效镜头；「讽刺」用于反差感强的黑色幽默或命运嘲弄场景；「恐惧」区别于「惊恐」（恐惧=持续的沉重感，惊恐=突发的瞬间反应）
   - 判断依据：
     ① 旁白镜头：根据旁白的情绪渲染方向判断（如描写分离→悲伤，描写危机→紧张，描写重逢→喜悦）
     ② 对白镜头：根据角色台词的情绪基调判断（如质问/控诉→紧张或愤怒，道别→悲伤或压抑，告白→浪漫）
@@ -406,8 +407,8 @@
    - 长跨度：确认插入了2个镜头（A镜subtitle=时间词+大景，B镜subtitle=""特写）
 以上任何一项未通过，须先修正再输出。
 
-请将章节内容分解为**{{ ExpectedShots }}个**分镜（每个重大动作、对话轮次、场景切换须单独成镜）。
-⚠️ 注意：必须输出全部{{ ExpectedShots }}个分镜，不得省略。只返回JSON数组，不要任何额外说明或markdown代码块。
+请将章节内容分解为**约{{ ExpectedShots }}个**分镜（每个重大动作、对话轮次、场景切换须单独成镜）。
+⚠️ 注意：以内容完整覆盖为首要目标，实际分镜数应达到约 {{ ExpectedShots }} 个；时间转场镜头（按四级规则插入）可使总数在此基础上超出，以叙事完整性为准。只返回JSON数组，不要任何额外说明或markdown代码块。
 
 ▸ characters（角色列表）——该镜头画面中可见的角色
   - 格式：[{"name":"<精确名称>","position":"<画框位置>","pose":"<身体姿态>","action":"<正在做的动作>","expression":"<面部表情>"}]
@@ -492,7 +493,7 @@ sfx_tags 是该镜头的结构化音效标签列表，每个元素含三个字�
     "video_prompt": "Smooth leftward pan at 12°/sec, horizon line held steady throughout; as camera pans, stone gateway progressively fills right portion of frame while incense burner foreground-left exits left edge — ATMOSPHERIC PARTICLES: fine dust motes suspended in each of the 4 vertical light shafts drift diagonally downward at 0.4cm/sec, each mote visible for 2-3 seconds in lit zone, overall density stable; ground-level haze in shadowed corners drifts imperceptibly leftward at 0.1cm/sec — FOLIAGE: pine branches background visible through gateway oscillate 5° at 0.3Hz from residual wind, recovering with 1s damped overshoot — STRUCTURAL: thin mortar dust trickles from right column fracture point in a 12cm stream at 3-5 second irregular intervals, each fall lasting 0.2s then ceasing; two small pebble fragments near rubble pile vibrate ±0.8mm — LIGHT AND SHADOW: amber torchlight intensity in gateway interior stable throughout; as pan advances, shadow of intact column sweeps slowly leftward across foreground tiles at 2cm/sec matching pan rate; dust motes in rightward light shaft enter frame at right edge and remain visible for full 2-3 second span before exiting left — LIGHTING DYNAMICS: ambient diffuse top-light dims ~8% over shot duration as afternoon advances, shadows imperceptibly deepening — emotional arc: opens on quiet desolation — empty stone courtyard holding its ancient silence — and closes as the gateway's darkness beyond dominates frame, deepening the weight of what lies beyond",
     "negative_prompt": "blurry, low quality, watermark, text, cartoon, anime, flat colors, cel shading, modern clothes, western armor, gun, car, neon sign, sci-fi elements, floating objects, impossible physics, overexposed, harsh sunlight",
     "narration": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}{% else %}苔痕浸透了每一块石板，废墟用沉默记录着无人问津的岁月。{% endif %}",
-    "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}角色A：三年了，你连一句解释都不打算给我吗？{% else %}{% endif %}",
+    "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}凌云：三年了，你连一句解释都不打算给我吗？{% else %}{% endif %}",
     "subtitle": "",
     "camera_type": "pan",
     "camera_angle": "eye_level",
@@ -517,7 +518,7 @@ sfx_tags 是该镜头的结构化音效标签列表，每个元素含三个字�
     "video_prompt": "Locked-off camera with subtle organic stabilization, imperceptible breathing drift of ±0.2px; ATMOSPHERIC: clear air, no particle motion — STRUCTURAL MICRO-DYNAMICS: fine powdered stone residue along horizontal crack ridge: three granules vibrate ±0.3mm from low-frequency distant rumble at 2-3 second intervals, one granule rolling 2mm rightward into deeper crack shadow during second interval; jade pendant chain on stone: entire chain segment rests motionless except for one link at chain midpoint which rotates 8° clockwise over 3 seconds from imperceptible air current, then settles back over 1.5s — FOLIAGE: no foliage in frame — LIGHT AND SHADOW: cold diffuse ambient light holds completely stable throughout; specular highlights on jade chain links remain fixed; crack groove shadows hold depth without change — LIGHTING DYNAMICS: no perceptible change over shot duration — emotional arc: opens on the intimacy of small, abandoned things — the chain resting in the crack, the dying petals — and holds that stillness until the scale of loss contained in these centimeters becomes suffocating",
     "negative_prompt": "blurry, low quality, watermark, text, cartoon, anime, flat colors, cel shading, modern clothes, western armor, gun, car, neon sign, sci-fi elements, floating objects, overexposed, wide shot, landscape, crowd",
     "narration": "{% if VoiceMode == 'dialogue' or VoiceMode == 'narration_primary' %}{% else %}玉坠冷卧于石缝，像一个没有人来收取的答案。{% endif %}",
-    "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'narration_primary' %}角色B：我找了你三年，你却把自己埋在这里。{% else %}{% endif %}",
+    "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'narration_primary' %}白雪：我找了你三年，你却把自己埋在这里。{% else %}{% endif %}",
     "subtitle": "",
     "camera_type": "static",
     "camera_angle": "overhead",
@@ -572,7 +573,7 @@ sfx_tags 是该镜头的结构化音效标签列表，每个元素含三个字�
     "video_prompt": "匀速向左摇镜，速率约每秒12度，地平线全程保持水平；随摇镜推进，石门洞逐步从右侧进入画面右半部，香炉前景偏左从画面左缘退出——大气粒子：4道垂直光柱中细小尘埃浮粒以每秒0.4厘米速度斜向下方漂移，每粒在光区停留约2-3秒后出框，整体密度全程保持稳定；阴暗角落地面薄雾以每秒0.1厘米速度向左漂移，浓度无变化——植被：门洞背景可见的松树枝条以0.3Hz频率摆动约5度，经1秒阻尼复位；落在石板上的枯叶在摇镜气流影响下轻微滑动约5毫米后静止——结构细节：右侧断柱断口边缘薄层灰泥粉尘以约12厘米长细流不规律落下，间隔3-5秒出现一次，每次持续0.2秒后停止；碎石堆中两块小石片受低频振动以±0.8毫米幅度颤动——光线与阴影：完好石柱投射的阴影边界随摇镜以每秒约2厘米速度向左扫过前景石板，摇镜停止时阴影稳定——光线动态：环境散射顶光在镜头时长内亮度降低约8%，阴影深度随之加深——情绪弧线：以空旷荒败的寂静开场，随摇镜推进门洞的幽暗逐渐占据画面右侧。SOUND：古旧石庭院四周松林中低沉连绵的森林环境音持续铺底，透出荒废已久的寂静；一缕轻柔穿堂风穿过石门洞带来幽凉气息；断柱边缘的灰泥粉尘每隔3-5秒以极轻微的摩擦声落下，每次持续约0.2秒后归于寂静",
     "negative_prompt": "模糊，低质量，水印，文字，卡通，动漫，平涂，赛璐璐渲染，现代服装，西式铠甲，枪，汽车，霓虹灯，科幻元素，悬浮物体，违反物理，过曝，刺眼阳光",
     "narration": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}{% else %}苔痕浸透了每一块石板，废墟用沉默记录着无人问津的岁月。{% endif %}",
-    "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}角色A：三年了，你连一句解释都不打算给我吗？{% else %}{% endif %}",
+    "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}凌云：三年了，你连一句解释都不打算给我吗？{% else %}{% endif %}",
     "subtitle": "",
     "camera_type": "pan",
     "camera_angle": "eye_level",
@@ -597,7 +598,7 @@ sfx_tags 是该镜头的结构化音效标签列表，每个元素含三个字�
     "video_prompt": "固定机位，带有轻微有机感微稳定，呼吸感漂移幅度±0.2px——大气：画框内空气清透，无粒子运动——结构微动：水平裂缝棱边上的石粉细粒：3粒细粒因低频远处隆隆声以±0.3毫米幅度振动，间隔2-3秒，第二次振动时一粒向右滚落2毫米进入深裂缝阴影中；石板表面翡翠链条：整段链条静止不动，唯有链段中部一枚链环因极轻微气流在3秒内顺时针旋转约8度，随后在1.5秒内缓慢复位——光线与阴影：冷白漫射光全程完全稳定，链环高光保持固定——情绪弧线：以对细小遗弃之物的亲密注视开场，画面在静止中凝滞，让沉默本身成为叙事。SOUND：石板缝隙间隐约可感的极轻微气流，几近无声却带出空旷的孤寂感；压倒一切的深沉静默占据主导，只余远处偶尔传来的微弱回音",
     "negative_prompt": "模糊，低质量，水印，文字，卡通，动漫，平涂，赛璐璐渲染，现代服装，西式铠甲，枪，汽车，霓虹灯，科幻元素，悬浮物体，过曝，宽镜头，风景，人群",
     "narration": "{% if VoiceMode == 'dialogue' or VoiceMode == 'narration_primary' %}{% else %}玉坠冷卧于石缝，像一个没有人来收取的答案。{% endif %}",
-    "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'narration_primary' %}角色B：我找了你三年，你却把自己埋在这里。{% else %}{% endif %}",
+    "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'narration_primary' %}白雪：我找了你三年，你却把自己埋在这里。{% else %}{% endif %}",
     "subtitle": "",
     "camera_type": "static",
     "camera_angle": "overhead",

@@ -6,13 +6,16 @@
   MANDATORY STRUCTURE (all sections in order, none may be skipped):
     [ArtStyle] → [Composition] → [GroundLayer] → [ForegroundObjectsBlock] → [MidgroundBlock] → [BackgroundBlock] → [LightingBlock] → [AtmosphereBlock] → [CharactersBlock] → [ColorPalette] → [OpticsBlock] → [QualityBoosters]
 
+  ⚠️ EARLY CHARACTER MENTION RULE: When characters are present in this shot, their exact name(s) MUST appear within the first 80 words of the prompt — immediately after [ArtStyle], write a brief character anchor: "— [CharacterName] [frame-position]," before proceeding with the environment blocks. Then provide full character detail in [CharactersBlock]. This ensures the model treats the character as the primary subject, not an afterthought.
+  Example anchor: "— Ling Yun foreground-center, standing facing camera," (then continue with ground layer...)
+
   COMPOSITION — must match shot_size exactly:
     extreme_close_up → extreme detail of a single object or surface; no wide environment
     close_up          → one primary object or architectural detail fills frame
     medium            → 2-3 environment elements with spatial relationship visible
     wide/extreme_wide → broad landscape or architectural scene, environment dominates frame
 
-  GROUND LAYER — always required, even for interior shots:
+  GROUND LAYER — required for most shots; exception: skip for overhead shots where the ground IS the subject, or for extreme_close_up face/object shots where ground is not visible (write "Ground layer: not visible in this shot" instead):
     — State the precise ground surface material: cracked clay / polished marble / weathered wood planks /
       wet cobblestone / packed dirt / snow-dusted stone / submerged stone steps / etc.
     — Describe ground-level details: debris scatter, puddle reflections, fallen objects, shadow patterns
@@ -63,7 +66,7 @@
     — Position: where in frame (foreground-center / mid-ground-left / background-right / etc.)
     — Body posture and action: what the character is doing, body orientation, limb positions
     — Facial expression: specific expression (determined gaze / furrowed brow / slight smile / etc.)
-    — Clothing silhouette: general style only; no overly specific details that conflict with reference images
+    — Clothing: If this character has a reference image (IP-Adapter mode), write clothing style only (color + general silhouette, no fabric micro-details that could conflict with the reference). If this character has NO reference image (text-only), describe clothing fully: material, color, cut, distinctive details — this text is the only appearance constraint.
     — Spatial relationship to environment: standing on / leaning against / emerging from / etc.
     ✅ "foreground-center: Ling Yun standing upright facing camera, arms at sides, head slightly bowed, expression solemn and still"
     ✅ "mid-ground-left: Bai Xue crouching behind stone pillar, one hand pressed against pillar surface, body angled away from gateway, tense posture"
@@ -75,6 +78,7 @@
     wide/extreme_wide          → "24mm f/8, deep focus, sharp from foreground to background"
 
   QUALITY BOOSTERS — always last; use ONLY the booster that matches the project art style:
+  ⚠️ Provider note: The boosters below follow Stable Diffusion/CIVITAI conventions. For Volcengine Jimeng (即梦AI) models, scene-descriptive quality terms like "細腻的光影层次, 清晰的轮廓线条" often outperform generic "masterpiece, 8k uhd" tags. When in doubt, append both.
 {% if ImageStyleID == "realistic" or ImageStyleID == "real_person" %}
     Project art style: {{ ImageStyleHint }}
     ✅ USE: "masterpiece, best quality, ultra-detailed, 8k uhd, sharp focus, photorealistic, cinematic lighting, realistic skin texture"
@@ -153,13 +157,16 @@
   强制结构（所有区块按顺序拼接，不得跳过任何一个）：
     [画风] → [构图] → [地面层] → [前景物件区块] → [中景区块] → [背景区块] → [光线区块] → [大气区块] → [角色区块] → [色调] → [镜头参数] → [画质词]
 
+  ⚠️ 早期角色提及规则：若该镜头有角色出场，角色精确名称必须在 prompt 前 80 字内出现——紧接 [画风] 之后，先写一句简短的角色定位锚点（如"——凌云前景居中，面向镜头，"），然后继续按顺序展开环境区块，最后在 [角色区块] 完整描述角色细节。这样可确保扩散模型将角色作为画面主体而非背景点缀。
+  示例锚点："——凌云前景居中，直立，右手持剑，" （写完后继续写地面层...）
+
   构图——必须与 shot_size 字段精确对应：
     extreme_close_up → 单件物体或单一表面极致细节特写
     close_up          → 一个主体物件或建筑细节占满画框
     medium            → 2-3个环境元素，空间关系清晰可见
     wide/extreme_wide → 广阔景观或建筑场景，环境主导画面
 
-  地面层——必填，室内室外均适用：
+  地面层——大多数镜头必填；例外：① overhead/俯拍角度中地面本身即为主体时跳过此区块；② extreme_close_up 人脸或物体特写中地面不在画面内时，写"地面层：本镜头不含地面"后跳过——切勿硬凑地面描述（错误描述会污染 prompt）：
     — 精确描述地面材质：龟裂荒土/大理石抛光/风化木板/湿润石板/压实泥土/积雪石面/水下石阶等
     — 地面级细节：碎片散布、水坑反射、倒伏物体、投影图案
     ✅ "前景灰色不规则碎石板地面，多处石板错位移动，石缝积尘，右前景散落破碎陶器碎片"
@@ -208,7 +215,7 @@
     — 画面位置：在画框中的位置（前景居中/中景偏左/背景右侧等）
     — 身体姿态与动作：角色正在做什么，身体朝向，肢体位置
     — 面部表情：具体表情（坚定的目光/微皱的眉头/淡淡的微笑等）
-    — 服装轮廓：服装风格和色调（避免过于细节化，以免与参考图冲突）
+    — 服装描述：若该角色有参考图（IP-Adapter 模式），仅写服装风格和主色调（避免与参考图冲突的细节）；若该角色无参考图（纯文本模式），必须完整描述服装材质/颜色/款式/标志性细节——此时文字是外貌约束的唯一来源，不得省略
     — 与环境的空间关系：站立于/倚靠在/从……中走出/蹲伏于等
     ✅ "前景居中：凌云直立面向镜头，双臂垂于身侧，头微微低垂，神情肃穆"
     ✅ "中景偏左：白雪蹲伏于石柱后方，一手按住柱面，身体背向门洞，姿态紧绷"
