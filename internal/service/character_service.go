@@ -2227,7 +2227,9 @@ func (s *ImageGenerationService) GenerateThreeViewImage(ctx context.Context, ten
 		logger.Printf("GenerateThreeViewImage: %s/%s no valid reference image", name, viewType)
 	}
 
-	baseNeg := "multiple people, two people, duo, couple, group, 多人, nsfw, lowres, bad anatomy, " +
+	baseNeg := "grey background, gray background, colored background, gradient background, dark background, " +
+		"textured background, busy background, background elements, shadow on background, " +
+		"multiple people, two people, duo, couple, group, 多人, nsfw, lowres, bad anatomy, " +
 		"cropped body, cut off at legs, missing feet, bottom cut off, partial body, floating figure, " +
 		"different character, inconsistent appearance, " +
 		"makeup, eyeshadow, eye shadow, eyeliner, eye liner, mascara, lipstick, blush, rouge, cosmetics, " +
@@ -2311,7 +2313,7 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 		}
 		prompt = consistencyHead +
 			sheetStyle + ", " + qualityTokens + ", " +
-			"simple white background, " +
+			"pure white background, solid white background, white studio backdrop, " +
 			genderPrefix +
 			condensedAppearance + ", " +
 			activeLayoutDetails
@@ -2323,7 +2325,7 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 		}
 		prompt = consistencyHead +
 			styleDesc + ", " + qualityTokens + ", " +
-			"simple white background, " +
+			"pure white background, solid white background, white studio backdrop, " +
 			genderPrefix +
 			condensedAppearance + ", " +
 			activeLayoutDetails
@@ -2331,7 +2333,9 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 
 	logger.Printf("GenerateThreeViewSheet: %s style=%s ref=%v", name, style, aiRef != "")
 
-	baseNeg := "colored background, gradient background, dark background, busy background, " +
+	baseNeg := "grey background, gray background, beige background, cream background, off-white background, " +
+		"colored background, gradient background, dark background, busy background, textured background, " +
+		"shadow on background, floor shadow, cast shadow, background elements, background props, " +
 		"text, labels, watermark, speech bubble, annotations, " +
 		"T-pose, dynamic pose, action pose, " +
 		"three-quarter view, 45-degree angle, oblique angle, angled view, " +
