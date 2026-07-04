@@ -88,6 +88,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 	r.Use(middleware.PrometheusMiddleware()) // 最前注册，覆盖所有路由
 	r.Use(middleware.SecurityHeaders())
 	r.Use(middleware.CORSMiddleware(cfg.AllowedOrigins))
+	r.Use(middleware.RequestID())       // 读取/生成 X-Request-ID，注入 gin.Context 及 Go context
+	r.Use(middleware.ResponseEnricher()) // 向所有 JSON 响应体注入 request_id
 	r.Use(middleware.Logger())
 	r.Use(middleware.Recovery())
 	r.Use(middleware.MaxBodySize(1 * 1024 * 1024)) // 1MB for JSON; multipart/upload routes are excluded by middleware

@@ -5,7 +5,6 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
@@ -27,7 +26,7 @@ func (h *ForeshadowHandler) ListForeshadows(c *gin.Context) {
 	}
 	list, err := h.svc.ListByNovel(c.Request.Context(), novelID)
 	if err != nil {
-		logger.Errorf("[ForeshadowHandler] ListForeshadows: novelID=%d err=%v", novelID, err)
+		reqLogger(c).Errorf("[ForeshadowHandler] ListForeshadows: novelID=%d err=%v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to list foreshadows")
 		return
 	}
@@ -56,7 +55,7 @@ func (h *ForeshadowHandler) CreateForeshadow(c *gin.Context) {
 		f.Level = "sub"
 	}
 	if err := h.svc.Create(c.Request.Context(), &f); err != nil {
-		logger.Errorf("[ForeshadowHandler] CreateForeshadow: novelID=%d err=%v", novelID, err)
+		reqLogger(c).Errorf("[ForeshadowHandler] CreateForeshadow: novelID=%d err=%v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to create foreshadow")
 		return
 	}
@@ -71,7 +70,7 @@ func (h *ForeshadowHandler) ListUnfulfilledForeshadows(c *gin.Context) {
 	}
 	list, err := h.svc.ListUnfulfilled(c.Request.Context(), novelID)
 	if err != nil {
-		logger.Errorf("[ForeshadowHandler] ListUnfulfilled: novelID=%d err=%v", novelID, err)
+		reqLogger(c).Errorf("[ForeshadowHandler] ListUnfulfilled: novelID=%d err=%v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to list unfulfilled foreshadows")
 		return
 	}
@@ -94,7 +93,7 @@ func (h *ForeshadowHandler) UpdateForeshadow(c *gin.Context) {
 	}
 	f, err := h.svc.Update(c.Request.Context(), foreshadowID, updates)
 	if err != nil {
-		logger.Errorf("[ForeshadowHandler] UpdateForeshadow: id=%d err=%v", foreshadowID, err)
+		reqLogger(c).Errorf("[ForeshadowHandler] UpdateForeshadow: id=%d err=%v", foreshadowID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to update foreshadow")
 		return
 	}
@@ -110,7 +109,7 @@ func (h *ForeshadowHandler) AIExtractForeshadows(c *gin.Context) {
 	tenantID := getTenantID(c)
 	list, err := h.svc.AIExtractFromNovel(c.Request.Context(), tenantID, novelID)
 	if err != nil {
-		logger.Errorf("[ForeshadowHandler] AIExtract: novelID=%d err=%v", novelID, err)
+		reqLogger(c).Errorf("[ForeshadowHandler] AIExtract: novelID=%d err=%v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "AI extraction failed: "+err.Error())
 		return
 	}
@@ -131,7 +130,7 @@ func (h *ForeshadowHandler) GetForeshadowStats(c *gin.Context) {
 	}
 	stats, err := h.svc.GetStats(c.Request.Context(), novelID, currentChapterNo)
 	if err != nil {
-		logger.Errorf("[ForeshadowHandler] GetStats: novelID=%d err=%v", novelID, err)
+		reqLogger(c).Errorf("[ForeshadowHandler] GetStats: novelID=%d err=%v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to get foreshadow stats")
 		return
 	}
@@ -149,7 +148,7 @@ func (h *ForeshadowHandler) DeleteForeshadow(c *gin.Context) {
 		return
 	}
 	if err := h.svc.Delete(c.Request.Context(), foreshadowID); err != nil {
-		logger.Errorf("[ForeshadowHandler] DeleteForeshadow: id=%d err=%v", foreshadowID, err)
+		reqLogger(c).Errorf("[ForeshadowHandler] DeleteForeshadow: id=%d err=%v", foreshadowID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to delete foreshadow")
 		return
 	}
@@ -175,7 +174,7 @@ func (h *ForeshadowHandler) AddReinforcement(c *gin.Context) {
 	}
 	f, err := h.svc.AddReinforcement(c.Request.Context(), foreshadowID, body.ChapterNo, body.Note)
 	if err != nil {
-		logger.Errorf("[ForeshadowHandler] AddReinforcement: id=%d err=%v", foreshadowID, err)
+		reqLogger(c).Errorf("[ForeshadowHandler] AddReinforcement: id=%d err=%v", foreshadowID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to add reinforcement")
 		return
 	}
@@ -190,7 +189,7 @@ func (h *ForeshadowHandler) GetForeshadowTree(c *gin.Context) {
 	}
 	tree, err := h.svc.GetTree(c.Request.Context(), novelID)
 	if err != nil {
-		logger.Errorf("[ForeshadowHandler] GetTree: novelID=%d err=%v", novelID, err)
+		reqLogger(c).Errorf("[ForeshadowHandler] GetTree: novelID=%d err=%v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to get foreshadow tree")
 		return
 	}

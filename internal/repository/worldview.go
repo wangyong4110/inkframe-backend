@@ -164,6 +164,17 @@ func (r *ItemRepository) ListByNovel(novelID uint) ([]*model.Item, error) {
 	return items, nil
 }
 
+func (r *ItemRepository) ListByIDs(ids []uint) ([]*model.Item, error) {
+	if len(ids) == 0 {
+		return []*model.Item{}, nil
+	}
+	var items []*model.Item
+	if err := r.db.Where("id IN ?", ids).Order("created_at ASC").Find(&items).Error; err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 // ListByNovelPaged returns a paginated slice and total count.
 func (r *ItemRepository) ListByNovelPaged(novelID uint, page, pageSize int) ([]*model.Item, int64, error) {
 	var items []*model.Item

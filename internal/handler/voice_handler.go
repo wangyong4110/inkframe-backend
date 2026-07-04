@@ -126,10 +126,12 @@ func (h *VideoHandler) GenerateSegmentVoice(c *gin.Context) {
 		"narration_voice": req.NarrationVoice,
 	})
 
+	reqID := c.GetString("request_id")
 	go func(taskID string, sID uint, narrationVoice string) {
+		log := logger.WithID(reqID)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[VideoHandler] GenerateSegmentVoice task %s panic: %v", taskID, r)
+				log.Errorf("[VideoHandler] GenerateSegmentVoice task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -143,7 +145,7 @@ func (h *VideoHandler) GenerateSegmentVoice(c *gin.Context) {
 			if audioErr == nil {
 				break
 			}
-			logger.Printf("[VideoHandler] GenerateSegmentVoice task %s seg %d attempt %d/%d: %v",
+			log.Printf("[VideoHandler] GenerateSegmentVoice task %s seg %d attempt %d/%d: %v",
 				taskID, sID, attempt, maxRetries, audioErr)
 			if attempt < maxRetries {
 				time.Sleep(time.Duration(attempt*2) * time.Second)
@@ -158,11 +160,7 @@ func (h *VideoHandler) GenerateSegmentVoice(c *gin.Context) {
 		h.taskSvc.Complete(taskID, seg) //nolint:errcheck
 	}(task.TaskID, uint(segID), req.NarrationVoice)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "片段配音任务已提交",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "片段配音任务已提交")
 }
 
 // ServeSegmentAudio GET /videos/:id/shots/:shot_id/segments/:seg_id/audio
@@ -483,7 +481,7 @@ func proxySFXAudio(c *gin.Context, remoteURL string) {
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		logger.Errorf("[ServeSFXItemAudio] proxy fetch failed url=%s: %v", remoteURL, err)
+		reqLogger(c).Errorf("[ServeSFXItemAudio] proxy fetch failed url=%s: %v", remoteURL, err)
 		c.Status(http.StatusBadGateway)
 		return
 	}
@@ -700,10 +698,12 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 		"narration_voice": narrationVoice,
 	})
 
+	reqID2 := c.GetString("request_id")
 	go func(taskID string, shots []*model.StoryboardShot, narrationVoice string, subtitleEnabled bool) {
+		log := logger.WithID(reqID2)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[VideoHandler] BatchGenerateVoice task %s panic: %v", taskID, r)
+				log.Errorf("[VideoHandler] BatchGenerateVoice task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -725,7 +725,7 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 				go func(s *model.StoryboardShot) {
 					defer wg.Done()
 					if err := h.videoService.GenerateShotAudio(s, tenantID, narrationVoice); err != nil {
-						logger.Errorf("[VideoHandler] BatchGenerateVoice task %s shot %d failed: %v", taskID, s.ShotNo, err)
+						log.Errorf("[VideoHandler] BatchGenerateVoice task %s shot %d failed: %v", taskID, s.ShotNo, err)
 					}
 					done := int(doneCount.Add(1))
 					h.taskSvc.UpdateProgress(taskID, done*100/total) //nolint:errcheck
@@ -766,9 +766,10 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 		}
 
 		h.taskSvc.Complete(taskID, gin.H{"success": success, "fail": fail, "total": total}) //nolint:errcheck
-		logger.Printf("[VideoHandler] BatchGenerateVoice task %s done: success=%d fail=%d", taskID, success, fail)
+		log.Printf("[VideoHandler] BatchGenerateVoice task %s done: success=%d fail=%d", taskID, success, fail)
 	}(task.TaskID, targets, narrationVoice, req.SubtitleEnabled)
 
+	reqLogger(c).Printf("[async] task created: task_id=%s", task.TaskID)
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
 		"message": fmt.Sprintf("批量配音任务已提交（共 %d 个分镜，每批 %d 个并发）", len(targets), batchSize),
@@ -981,7 +982,7 @@ func (h *VideoHandler) ProxyBGMAudio(c *gin.Context) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
-		logger.Errorf("[BGMProxy] fetch %s failed: %v", rawURL, err)
+		reqLogger(c).Errorf("[BGMProxy] fetch %s failed: %v", rawURL, err)
 		respondErr(c, http.StatusBadGateway, "failed to fetch audio")
 		return
 	}
@@ -1039,10 +1040,12 @@ func (h *VideoHandler) AnalyzeBGMSegments(c *gin.Context) {
 		"user_prompt": bgmReq.UserPrompt,
 	})
 
+	reqID3 := c.GetString("request_id")
 	go func(taskID string, userPrompt string) {
+		log := logger.WithID(reqID3)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[VideoHandler] AnalyzeBGMSegments task %s panic: %v", taskID, r)
+				log.Errorf("[VideoHandler] AnalyzeBGMSegments task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -1050,18 +1053,14 @@ func (h *VideoHandler) AnalyzeBGMSegments(c *gin.Context) {
 		ctx := context.Background()
 		segs, err := h.bgmSvc.AnalyzeBGMForVideo(ctx, shots, h.bgmRepo, uint(videoID), tenantID, userPrompt)
 		if err != nil {
-			logger.Errorf("[VideoHandler] AnalyzeBGMSegments task %s failed: %v", taskID, err)
+			log.Errorf("[VideoHandler] AnalyzeBGMSegments task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
 		h.taskSvc.Complete(taskID, gin.H{"count": len(segs)}) //nolint:errcheck
 	}(task.TaskID, bgmReq.UserPrompt)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "BGM分段分析任务已提交",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "BGM分段分析任务已提交")
 }
 
 // GenerateBGM POST /videos/:id/bgm/generate
@@ -1102,19 +1101,21 @@ func (h *VideoHandler) GenerateBGM(c *gin.Context) {
 		"user_prompt": bgmGenReq.UserPrompt,
 	})
 
+	reqID4 := c.GetString("request_id")
 	go func(taskID string, userPrompt string) {
+		log := logger.WithID(reqID4)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[VideoHandler] GenerateBGM task %s panic: %v", taskID, r)
+				log.Errorf("[VideoHandler] GenerateBGM task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)                                           //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		ctx := context.Background()
 		segs, err := h.bgmSvc.GenerateBGMSegments(ctx, shots, h.bgmRepo, uint(videoID), tenantID, userPrompt, progressFn)
 		if err != nil {
-			logger.Errorf("[VideoHandler] GenerateBGM task %s failed: %v", taskID, err)
+			log.Errorf("[VideoHandler] GenerateBGM task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -1125,14 +1126,10 @@ func (h *VideoHandler) GenerateBGM(c *gin.Context) {
 			}
 		}
 		h.taskSvc.Complete(taskID, gin.H{"total": len(segs), "matched": matched}) //nolint:errcheck
-		logger.Printf("[VideoHandler] GenerateBGM task %s done: total=%d matched=%d", taskID, len(segs), matched)
+		log.Printf("[VideoHandler] GenerateBGM task %s done: total=%d matched=%d", taskID, len(segs), matched)
 	}(task.TaskID, bgmGenReq.UserPrompt)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "BGM生成任务已提交",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "BGM生成任务已提交")
 }
 
 // MergeVoiceSegments POST /videos/:id/shots/:shot_id/voice/merge

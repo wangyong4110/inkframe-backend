@@ -43,7 +43,7 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 	// 若请求携带节奏/时长配置，持久化到 Video 记录，后续 GenerateStoryboard 读取
 	if req.Pacing != "" || req.TargetDuration != 0 {
 		if err := h.videoService.UpdatePacingConfig(uint(videoId), req.Pacing, req.TargetDuration); err != nil {
-			logger.Errorf("[VideoHandler] UpdatePacingConfig failed (non-fatal): %v", err)
+			reqLogger(c).Errorf("[VideoHandler] UpdatePacingConfig failed (non-fatal): %v", err)
 		}
 	}
 
@@ -76,10 +76,12 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 		"voice_mode":      req.VoiceMode,
 	})
 
+	reqID := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[VideoHandler] GenerateStoryboard task %s panic: %v", taskID, r)
+				log.Errorf("[VideoHandler] GenerateStoryboard task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -95,7 +97,7 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 		result, err := h.storyboardService.GenerateStoryboard(uint(videoId), req.ChapterID, req.Characters, req.Style, req.Provider, req.UserPrompt, progressFn, overrides)
 		if err != nil {
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-			logger.Errorf("[VideoHandler] GenerateStoryboard task %s failed: %v", taskID, err)
+			log.Errorf("[VideoHandler] GenerateStoryboard task %s failed: %v", taskID, err)
 			return
 		}
 		// 只存 shot_count，不把完整分镜数组写入 result 列（JSON 可能超出 TEXT 65KB 限制导致 Update 失败，任务永远卡在 99%）
@@ -106,11 +108,7 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 		h.taskSvc.Complete(taskID, gin.H{"shot_count": shotCount}) //nolint:errcheck
 	}(task.TaskID)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "分镜生成任务已提交",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "分镜生成任务已提交")
 }
 
 // shotWithAudio 在分镜基础上增加可直接播放的 audio_url 字段
@@ -181,10 +179,12 @@ func (h *VideoHandler) ReviewStoryboard(c *gin.Context) {
 		"previous_score": req.PreviousScore,
 	})
 
+	reqID2 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID2)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[VideoHandler] ReviewStoryboard task %s panic: %v", taskID, r)
+				log.Errorf("[VideoHandler] ReviewStoryboard task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -193,7 +193,7 @@ func (h *VideoHandler) ReviewStoryboard(c *gin.Context) {
 
 		review, recordID, reviewErr := h.storyboardService.ReviewStoryboard(tenantID, uint(videoId), req.Provider, req.PreviousScore)
 		if reviewErr != nil {
-			logger.Errorf("[VideoHandler] ReviewStoryboard task %s failed: videoID=%d err=%v", taskID, videoId, reviewErr)
+			log.Errorf("[VideoHandler] ReviewStoryboard task %s failed: videoID=%d err=%v", taskID, videoId, reviewErr)
 			h.taskSvc.Fail(taskID, reviewErr.Error()) //nolint:errcheck
 			return
 		}
@@ -206,11 +206,7 @@ func (h *VideoHandler) ReviewStoryboard(c *gin.Context) {
 		h.taskSvc.Complete(taskID, &reviewResult{StoryboardReview: review, RecordID: recordID}) //nolint:errcheck
 	}(task.TaskID)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "分镜审查任务已提交",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "分镜审查任务已提交")
 }
 
 // GetStoryboard 获取分镜列表
@@ -226,7 +222,7 @@ func (h *VideoHandler) GetStoryboard(c *gin.Context) {
 
 	shots, err := h.videoService.GetStoryboard(uint(videoId))
 	if err != nil {
-		logger.Errorf("[VideoHandler] GetStoryboard: videoID=%d err=%v", videoId, err)
+		reqLogger(c).Errorf("[VideoHandler] GetStoryboard: videoID=%d err=%v", videoId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -316,7 +312,7 @@ func (h *VideoHandler) UpdateStoryboardShot(c *gin.Context) {
 
 	shot, err := h.videoService.UpdateShotPartial(uint(shotId), fields)
 	if err != nil {
-		logger.Errorf("[VideoHandler] UpdateStoryboardShot: shotID=%d err=%v", shotId, err)
+		reqLogger(c).Errorf("[VideoHandler] UpdateStoryboardShot: shotID=%d err=%v", shotId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -338,7 +334,7 @@ func (h *VideoHandler) SetShotCharacters(c *gin.Context) {
 		return
 	}
 	if err := h.videoService.SetShotCharacters(uint(shotID), body.CharacterIDs); err != nil {
-		logger.Errorf("[VideoHandler] SetShotCharacters: shotID=%d err=%v", shotID, err)
+		reqLogger(c).Errorf("[VideoHandler] SetShotCharacters: shotID=%d err=%v", shotID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to set shot characters")
 		return
 	}
@@ -359,7 +355,7 @@ func (h *VideoHandler) SetShotItems(c *gin.Context) {
 		return
 	}
 	if err := h.videoService.SetShotItems(uint(shotID), body.ItemIDs); err != nil {
-		logger.Errorf("[VideoHandler] SetShotItems: shotID=%d err=%v", shotID, err)
+		reqLogger(c).Errorf("[VideoHandler] SetShotItems: shotID=%d err=%v", shotID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to set shot items")
 		return
 	}
@@ -405,10 +401,12 @@ func (h *VideoHandler) OptimizeStoryboardFromReview(c *gin.Context) {
 
 	review := req.StoryboardReview
 	provider := req.Provider
+	reqID3 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID3)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[VideoHandler] OptimizeStoryboardFromReview task %s panic: %v", taskID, r)
+				log.Errorf("[VideoHandler] OptimizeStoryboardFromReview task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -417,7 +415,7 @@ func (h *VideoHandler) OptimizeStoryboardFromReview(c *gin.Context) {
 
 		count, optErr := h.storyboardService.OptimizeStoryboardFromReview(tenantID, uint(videoID), &review, provider)
 		if optErr != nil {
-			logger.Errorf("[VideoHandler] OptimizeStoryboardFromReview task %s failed: %v", taskID, optErr)
+			log.Errorf("[VideoHandler] OptimizeStoryboardFromReview task %s failed: %v", taskID, optErr)
 			h.taskSvc.Fail(taskID, optErr.Error()) //nolint:errcheck
 			return
 		}
@@ -425,11 +423,7 @@ func (h *VideoHandler) OptimizeStoryboardFromReview(c *gin.Context) {
 		h.taskSvc.Complete(taskID, gin.H{"updated_shots": count}) //nolint:errcheck
 	}(task.TaskID)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "分镜优化任务已提交",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "分镜优化任务已提交")
 }
 
 // ApplyStoryboardDiffs 将用户选中的差异直接写入 DB（同步，无 AI 调用）。
@@ -476,7 +470,7 @@ func (h *VideoHandler) ListReviewRecords(c *gin.Context) {
 
 	records, err := h.storyboardService.ListReviewRecords(uint(videoID))
 	if err != nil {
-		logger.Errorf("[VideoHandler] ListReviewRecords videoID=%d err=%v", videoID, err)
+		reqLogger(c).Errorf("[VideoHandler] ListReviewRecords videoID=%d err=%v", videoID, err)
 		// 表可能尚未迁移（服务首次启动），返回空列表而不是 500
 		respondOK(c, []struct{}{})
 		return
@@ -675,7 +669,7 @@ func (h *VideoHandler) AnalyzeEmotions(c *gin.Context) {
 
 	result, err := h.storyboardService.AnalyzeEmotions(req.Content)
 	if err != nil {
-		logger.Errorf("[VideoHandler] AnalyzeEmotions: err=%v", err)
+		reqLogger(c).Errorf("[VideoHandler] AnalyzeEmotions: err=%v", err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -742,7 +736,7 @@ func (h *VideoHandler) StartVideoGeneration(c *gin.Context) {
 
 	taskId, err := h.videoService.StartGeneration(uint(id))
 	if err != nil {
-		logger.Errorf("[VideoHandler] StartVideoGeneration: videoID=%d err=%v", id, err)
+		reqLogger(c).Errorf("[VideoHandler] StartVideoGeneration: videoID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -767,7 +761,7 @@ func (h *VideoHandler) GetVideoStatus(c *gin.Context) {
 
 	status, err := h.videoService.GetStatus(uint(id))
 	if err != nil {
-		logger.Errorf("[VideoHandler] GetVideoStatus: videoID=%d err=%v", id, err)
+		reqLogger(c).Errorf("[VideoHandler] GetVideoStatus: videoID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -791,7 +785,7 @@ func (h *VideoHandler) GenerateShotVideos(c *gin.Context) {
 	tenantID := getTenantID(c)
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeVideoGen, "视频生成", "video", uint(id))
 	if err != nil {
-		logger.Errorf("[VideoHandler] GenerateShotVideos: create task videoID=%d err=%v", id, err)
+		reqLogger(c).Errorf("[VideoHandler] GenerateShotVideos: create task videoID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -800,17 +794,19 @@ func (h *VideoHandler) GenerateShotVideos(c *gin.Context) {
 		"mode":     video.Mode,
 	})
 
+	reqID4 := c.GetString("request_id")
 	go func(taskID string, videoID uint, mode string) {
+		log := logger.WithID(reqID4)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[VideoHandler] GenerateShotVideos task %s panic: %v", taskID, r)
+				log.Errorf("[VideoHandler] GenerateShotVideos task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
 		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
 		h.taskSvc.UpdateProgress(taskID, 5)  //nolint:errcheck
 		if err := h.videoService.GenerateAllShotVideos(videoID); err != nil {
-			logger.Errorf("[VideoHandler] GenerateShotVideos task %s: submit failed: %v", taskID, err)
+			log.Errorf("[VideoHandler] GenerateShotVideos task %s: submit failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -822,10 +818,7 @@ func (h *VideoHandler) GenerateShotVideos(c *gin.Context) {
 		h.taskSvc.Complete(taskID, map[string]interface{}{"video_id": videoID}) //nolint:errcheck
 	}(task.TaskID, uint(id), video.Mode)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code": 0,
-		"data": gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "视频生成任务已提交")
 }
 
 // ListShots 获取所有分镜状态
@@ -838,7 +831,7 @@ func (h *VideoHandler) ListShots(c *gin.Context) {
 
 	shots, err := h.videoService.GetStoryboard(uint(id))
 	if err != nil {
-		logger.Errorf("[VideoHandler] ListShots: videoID=%d err=%v", id, err)
+		reqLogger(c).Errorf("[VideoHandler] ListShots: videoID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -856,7 +849,7 @@ func (h *VideoHandler) StitchVideoHandler(c *gin.Context) {
 
 	outputPath, err := h.videoService.StitchVideo(uint(id))
 	if err != nil {
-		logger.Errorf("[VideoHandler] StitchVideo: videoID=%d err=%v", id, err)
+		reqLogger(c).Errorf("[VideoHandler] StitchVideo: videoID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -885,7 +878,7 @@ func (h *VideoHandler) DownloadVideo(c *gin.Context) {
 		var err error
 		outputPath, err = h.videoService.StitchVideo(uint(id))
 		if err != nil {
-			logger.Errorf("[VideoHandler] DownloadVideo stitch: videoID=%d err=%v", id, err)
+			reqLogger(c).Errorf("[VideoHandler] DownloadVideo stitch: videoID=%d err=%v", id, err)
 			respondErr(c, http.StatusInternalServerError, "视频拼接失败")
 			return
 		}

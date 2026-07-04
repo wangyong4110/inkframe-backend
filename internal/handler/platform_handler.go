@@ -587,7 +587,7 @@ func (h *PlatformHandler) PublishToExternal(c *gin.Context) {
 		respondErr(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	c.JSON(http.StatusAccepted, gin.H{"code": 0, "data": gin.H{"task_id": taskID}})
+	respondAccepted(c, taskID, "发布任务已提交")
 }
 
 // ListPublishRecords 列出视频发布记录

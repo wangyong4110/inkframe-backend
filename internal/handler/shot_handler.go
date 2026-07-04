@@ -45,10 +45,12 @@ func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 		"provider": req.Provider,
 	})
 
+	reqID := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[VideoHandler] GenerateSingleShot task %s panic: %v", taskID, r)
+				log.Errorf("[VideoHandler] GenerateSingleShot task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -56,7 +58,7 @@ func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		shot, genErr := h.videoService.GenerateSingleShot(uint(videoID), uint(shotID), req.Provider)
 		if genErr != nil {
-			logger.Errorf("[VideoHandler] GenerateSingleShot task %s failed: %v", taskID, genErr)
+			log.Errorf("[VideoHandler] GenerateSingleShot task %s failed: %v", taskID, genErr)
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
 			return
 		}
@@ -68,11 +70,7 @@ func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 		h.taskSvc.Complete(taskID, gin.H{"shot_id": shot.ID, "status": shot.Status}) //nolint:errcheck
 	}(task.TaskID)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "素材生成任务已提交",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "素材生成任务已提交")
 }
 
 // BatchGenerateShots 批量生成分镜素材（异步任务模式，立即返回 task_id）
@@ -105,10 +103,12 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 		"provider":     req.Provider,
 	})
 
+	reqID2 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID2)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[VideoHandler] BatchGenerateShots task %s panic: %v", taskID, r)
+				log.Errorf("[VideoHandler] BatchGenerateShots task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -127,7 +127,7 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 			shots, genErr = h.videoService.BatchGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, progressFn, req.Provider)
 		}
 		if genErr != nil {
-			logger.Errorf("[VideoHandler] BatchGenerateShots task %s failed: %v", taskID, genErr)
+			log.Errorf("[VideoHandler] BatchGenerateShots task %s failed: %v", taskID, genErr)
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
 			return
 		}
@@ -142,11 +142,7 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 		h.taskSvc.Complete(taskID, gin.H{"shot_count": len(shots)}) //nolint:errcheck
 	}(task.TaskID)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "批量素材生成任务已提交",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "批量素材生成任务已提交")
 }
 
 // BatchGenerateShotImages POST /videos/:id/shots/batch-images
@@ -177,10 +173,12 @@ func (h *VideoHandler) BatchGenerateShotImages(c *gin.Context) {
 		"shot_ids": req.ShotIDs,
 	})
 
+	reqID3 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID3)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[VideoHandler] BatchGenerateShotImages task %s panic: %v", taskID, r)
+				log.Errorf("[VideoHandler] BatchGenerateShotImages task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -188,18 +186,14 @@ func (h *VideoHandler) BatchGenerateShotImages(c *gin.Context) {
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		shots, genErr := h.videoService.BatchGenerateShotImages(uint(videoID), req.ShotIDs, req.Force, progressFn)
 		if genErr != nil {
-			logger.Errorf("[VideoHandler] BatchGenerateShotImages task %s failed: %v", taskID, genErr)
+			log.Errorf("[VideoHandler] BatchGenerateShotImages task %s failed: %v", taskID, genErr)
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
 			return
 		}
 		h.taskSvc.Complete(taskID, gin.H{"shot_count": len(shots)}) //nolint:errcheck
 	}(task.TaskID)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "批量图片生成任务已提交",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "批量图片生成任务已提交")
 }
 
 // BatchGenerateShotClips POST /videos/:id/shots/batch-clips
@@ -230,10 +224,12 @@ func (h *VideoHandler) BatchGenerateShotClips(c *gin.Context) {
 		"shot_ids": req.ShotIDs,
 	})
 
+	reqID4 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID4)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[VideoHandler] BatchGenerateShotClips task %s panic: %v", taskID, r)
+				log.Errorf("[VideoHandler] BatchGenerateShotClips task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -241,18 +237,14 @@ func (h *VideoHandler) BatchGenerateShotClips(c *gin.Context) {
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		shots, genErr := h.videoService.BatchGenerateShotClips(uint(videoID), req.ShotIDs, progressFn)
 		if genErr != nil {
-			logger.Errorf("[VideoHandler] BatchGenerateShotClips task %s failed: %v", taskID, genErr)
+			log.Errorf("[VideoHandler] BatchGenerateShotClips task %s failed: %v", taskID, genErr)
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
 			return
 		}
 		h.taskSvc.Complete(taskID, gin.H{"shot_count": len(shots)}) //nolint:errcheck
 	}(task.TaskID)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "批量视频生成任务已提交",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "批量视频生成任务已提交")
 }
 
 // RefineShotImage POST /videos/:id/shots/:shot_id/refine-image
@@ -279,7 +271,7 @@ func (h *VideoHandler) RefineShotImage(c *gin.Context) {
 
 	newURL, err := h.videoService.RefineShotImage(uint(shotID), req.Suggestion)
 	if err != nil {
-		logger.Errorf("[VideoHandler] RefineShotImage shot %d failed: %v", shotID, err)
+		reqLogger(c).Errorf("[VideoHandler] RefineShotImage shot %d failed: %v", shotID, err)
 		respondErr(c, http.StatusInternalServerError, "图片重新生成失败，请重试")
 		return
 	}
@@ -330,10 +322,12 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 		return
 	}
 
+	reqID5 := c.GetString("request_id")
 	go func(taskID string, userContext string, lang string, sfxProvider string) {
+		log := logger.WithID(reqID5)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[VideoHandler] BatchGenerateSFX task %s panic: %v", taskID, r)
+				log.Errorf("[VideoHandler] BatchGenerateSFX task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -342,21 +336,17 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 		ctx := context.Background()
 		// Step 1: AI 批量分析所有分镜，生成精准的自然语言音效搜索词（非强制，已有标签的跳过）
 		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID, userContext, lang, false); err != nil {
-			logger.Errorf("[VideoHandler] BatchGenerateSFX task %s: AI analyze failed (proceeding): %v", taskID, err)
+			log.Errorf("[VideoHandler] BatchGenerateSFX task %s: AI analyze failed (proceeding): %v", taskID, err)
 		}
 		h.taskSvc.UpdateProgress(taskID, 20) //nolint:errcheck
 		// Step 2: 用更新后的 sfx_tags 搜索/生成实际音效文件
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, 20+pct*80/100) } //nolint:errcheck
 		success, fail, failedIDs := h.sfxSvc.BatchAutoGenerateSFX(ctx, shots, tenantID, userContext, sfxProvider, progressFn)
 		h.taskSvc.Complete(taskID, gin.H{"success": success, "fail": fail, "failed_shot_ids": failedIDs}) //nolint:errcheck
-		logger.Printf("[VideoHandler] BatchGenerateSFX task %s done: success=%d fail=%d", taskID, success, fail)
+		log.Printf("[VideoHandler] BatchGenerateSFX task %s done: success=%d fail=%d", taskID, success, fail)
 	}(task.TaskID, sfxReq.UserContext, promptLanguage, sfxReq.Provider)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "音效生成任务已提交",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "音效生成任务已提交")
 }
 
 // AnalyzeSFXTags POST /videos/:id/shots/sfx-tags
@@ -407,10 +397,12 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 		"lang":         promptLang,
 	})
 
+	reqID6 := c.GetString("request_id")
 	go func(taskID string, userContext string, lang string, sfxProvider string) {
+		log := logger.WithID(reqID6)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[VideoHandler] AnalyzeSFXTags task %s panic: %v", taskID, r)
+				log.Errorf("[VideoHandler] AnalyzeSFXTags task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -420,7 +412,7 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 		// 阶段一：AI 分析标签（进度 0→50%，force=true 强制重新分析所有镜头）
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID, userContext, lang, true); err != nil {
-			logger.Errorf("[VideoHandler] AnalyzeSFXTags task %s phase1 failed: %v", taskID, err)
+			log.Errorf("[VideoHandler] AnalyzeSFXTags task %s phase1 failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -434,16 +426,12 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 			h.taskSvc.UpdateProgress(taskID, overall) //nolint:errcheck
 		}
 		success, fail, failedIDs := h.sfxSvc.BatchAutoGenerateSFX(ctx, shots, tenantID, userContext, sfxProvider, progressFn)
-		logger.Printf("[VideoHandler] AnalyzeSFXTags task %s done: tags=%d sfx_success=%d sfx_fail=%d",
+		log.Printf("[VideoHandler] AnalyzeSFXTags task %s done: tags=%d sfx_success=%d sfx_fail=%d",
 			taskID, total, success, fail)
 		h.taskSvc.Complete(taskID, gin.H{"count": total, "sfx_success": success, "sfx_fail": fail, "failed_shot_ids": failedIDs}) //nolint:errcheck
 	}(task.TaskID, sfxTagsReq.UserContext, promptLang, sfxTagsReq.Provider)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "AI 音效分析任务已提交",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "AI 音效分析任务已提交")
 }
 
 // GenerateShotSFX POST /videos/:id/shots/:shot_id/sfx
@@ -490,17 +478,19 @@ func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
 		"provider": shotSFXReq.Provider,
 	})
 
+	reqID7 := c.GetString("request_id")
 	go func(taskID string, s *model.StoryboardShot, sfxProvider string) {
+		log := logger.WithID(reqID7)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[VideoHandler] GenerateShotSFX task %s panic: %v", taskID, r)
+				log.Errorf("[VideoHandler] GenerateShotSFX task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		ctx := context.Background()
 		if err := h.sfxSvc.AutoGenerateSFX(ctx, s, tenantID, sfxProvider, true); err != nil {
-			logger.Errorf("[VideoHandler] GenerateShotSFX task %s failed: %v", taskID, err)
+			log.Errorf("[VideoHandler] GenerateShotSFX task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -508,11 +498,7 @@ func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
 		h.taskSvc.Complete(taskID, gin.H{"shot_id": s.ID, "sfx_count": len(sfxItems)}) //nolint:errcheck
 	}(task.TaskID, shot, shotSFXReq.Provider)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "音效生成任务已提交",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "音效生成任务已提交")
 }
 
 // UpdateShotSFXTags PUT /api/v1/videos/:id/shots/:shot_id/sfx-tags
@@ -624,10 +610,12 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 		return
 	}
 
+	reqID8 := c.GetString("request_id")
 	go func(taskID string, shot *model.StoryboardShot, narrationVoice string, subtitleEnabled bool, vID uint) {
+		log := logger.WithID(reqID8)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[VideoHandler] GenerateShotVoice task %s panic: %v", taskID, r)
+				log.Errorf("[VideoHandler] GenerateShotVoice task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -648,7 +636,7 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 			if audioErr == nil {
 				break
 			}
-			logger.Errorf("[VideoHandler] GenerateShotVoice task %s shot %d attempt %d/%d failed: %v", taskID, shot.ShotNo, attempt, maxRetries, audioErr)
+			log.Errorf("[VideoHandler] GenerateShotVoice task %s shot %d attempt %d/%d failed: %v", taskID, shot.ShotNo, attempt, maxRetries, audioErr)
 			if attempt < maxRetries {
 				time.Sleep(time.Duration(attempt*2) * time.Second)
 			}
@@ -675,11 +663,7 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 		h.taskSvc.Complete(taskID, result) //nolint:errcheck
 	}(task.TaskID, shot, narrationVoice, req.SubtitleEnabled, uint(videoID))
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "配音生成任务已提交",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "配音生成任务已提交")
 }
 
 // GetDefaultConsistencyConfig 获取默认一致性配置
@@ -711,7 +695,7 @@ func (h *VideoHandler) CalculateConsistencyScore(c *gin.Context) {
 
 	score, err := h.consistencyService.CalculateConsistencyScore(req.ReferenceImage, req.GeneratedImages)
 	if err != nil {
-		logger.Errorf("[VideoHandler] CalculateConsistencyScore: err=%v", err)
+		reqLogger(c).Errorf("[VideoHandler] CalculateConsistencyScore: err=%v", err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -736,7 +720,7 @@ func (h *VideoHandler) Export(c *gin.Context) {
 
 	shots, err := h.videoService.GetStoryboard(uint(id))
 	if err != nil {
-		logger.Errorf("[VideoHandler] Export: videoID=%d get storyboard err=%v", id, err)
+		reqLogger(c).Errorf("[VideoHandler] Export: videoID=%d get storyboard err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -770,12 +754,12 @@ func (h *VideoHandler) Export(c *gin.Context) {
 	}
 
 	if err != nil {
-		logger.Errorf("[VideoHandler] Export: videoID=%d format=%s err=%v", id, format, err)
+		reqLogger(c).Errorf("[VideoHandler] Export: videoID=%d format=%s err=%v", id, format, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	logger.Printf("[VideoHandler] Export: videoID=%d format=%s filename=%s size=%d", id, format, result.Filename, len(result.Data))
+	reqLogger(c).Printf("[VideoHandler] Export: videoID=%d format=%s filename=%s size=%d", id, format, result.Filename, len(result.Data))
 	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, result.Filename))
 	c.Header("Content-Length", strconv.Itoa(len(result.Data)))
 	c.Data(http.StatusOK, result.ContentType, result.Data)
@@ -852,10 +836,12 @@ func (h *VideoHandler) GenerateLipSync(c *gin.Context) {
 		return
 	}
 
+	reqID9 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID9)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[VideoHandler] GenerateLipSync panic: %v", r)
+				log.Errorf("[VideoHandler] GenerateLipSync panic: %v", r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -863,7 +849,7 @@ func (h *VideoHandler) GenerateLipSync(c *gin.Context) {
 
 		result, genErr := h.videoService.GenerateLipSyncVideoWithReq(uint(videoID), uint(shotID), req)
 		if genErr != nil {
-			logger.Errorf("[VideoHandler] GenerateLipSync failed: %v", genErr)
+			log.Errorf("[VideoHandler] GenerateLipSync failed: %v", genErr)
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
 			return
 		}
@@ -872,18 +858,14 @@ func (h *VideoHandler) GenerateLipSync(c *gin.Context) {
 
 		// 同步轮询直到完成（timeout 内部控制）
 		if pollErr := h.videoService.PollLipSyncUntilDone(uint(videoID), uint(shotID)); pollErr != nil {
-			logger.Errorf("[VideoHandler] PollLipSync failed: %v", pollErr)
+			log.Errorf("[VideoHandler] PollLipSync failed: %v", pollErr)
 			h.taskSvc.Fail(taskID, pollErr.Error()) //nolint:errcheck
 			return
 		}
 		h.taskSvc.Complete(taskID, gin.H{"lip_sync_task_id": result.TaskID}) //nolint:errcheck
 	}(task.TaskID)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "口型对齐任务已提交",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "口型对齐任务已提交")
 }
 
 // GetLipSyncStatus GET /videos/:id/shots/:shot_id/lipsync/status

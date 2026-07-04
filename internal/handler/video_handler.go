@@ -6,8 +6,6 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/inkframe/inkframe-backend/internal/logger"
-
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/repository"
@@ -182,7 +180,7 @@ func (h *VideoHandler) CreateVideo(c *gin.Context) {
 	tenantID := getTenantID(c)
 	video, err := h.videoService.CreateVideo(uint(novelId), &req, tenantID)
 	if err != nil {
-		logger.Errorf("[VideoHandler] CreateVideo: novelID=%d err=%v", novelId, err)
+		reqLogger(c).Errorf("[VideoHandler] CreateVideo: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -251,7 +249,7 @@ func (h *VideoHandler) ListVideos(c *gin.Context) {
 
 	videos, total, err := h.videoService.ListVideos(novelId, chapterID, status, getTenantID(c), p.Page, p.PageSize)
 	if err != nil {
-		logger.Errorf("[VideoHandler] ListVideos: err=%v", err)
+		reqLogger(c).Errorf("[VideoHandler] ListVideos: err=%v", err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -284,7 +282,7 @@ func (h *VideoHandler) UpdateVideo(c *gin.Context) {
 
 	video, err := h.videoService.UpdateVideo(uint(id), getTenantID(c), &req)
 	if err != nil {
-		logger.Errorf("[VideoHandler] UpdateVideo: id=%d err=%v", id, err)
+		reqLogger(c).Errorf("[VideoHandler] UpdateVideo: id=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -305,7 +303,7 @@ func (h *VideoHandler) DeleteVideo(c *gin.Context) {
 	}
 
 	if err := h.videoService.DeleteVideo(uint(id), getTenantID(c)); err != nil {
-		logger.Errorf("[VideoHandler] DeleteVideo: id=%d err=%v", id, err)
+		reqLogger(c).Errorf("[VideoHandler] DeleteVideo: id=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -338,7 +336,7 @@ func (h *VideoHandler) SynthesizeVideo(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	c.JSON(http.StatusAccepted, gin.H{"code": 0, "data": gin.H{"task_id": taskID}})
+	respondAccepted(c, taskID, "视频合成任务已提交")
 }
 
 // PublishVideo 站内发布（设置可见性）

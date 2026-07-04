@@ -9,8 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/inkframe/inkframe-backend/internal/logger"
-
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/storage"
@@ -59,7 +57,7 @@ func respondBadRequest(c *gin.Context, msg string) {
 
 func respondErr(c *gin.Context, status int, msg string) {
 	if status >= 500 {
-		logger.Printf("[HTTP] %s %s -> %d: %s", c.Request.Method, c.Request.URL.Path, status, msg)
+		reqLogger(c).Printf("[HTTP] %s %s -> %d: %s", c.Request.Method, c.Request.URL.Path, status, msg)
 	}
 	c.JSON(status, gin.H{"code": status, "message": sanitizeError(errors.New(msg)), "data": nil})
 }
@@ -67,6 +65,7 @@ func respondErr(c *gin.Context, status int, msg string) {
 // respondAccepted writes a 202 Accepted response with a task_id payload.
 // Used by all async AI endpoints that submit background tasks.
 func respondAccepted(c *gin.Context, taskID, message string) {
+	reqLogger(c).Printf("[async] task created: task_id=%s", taskID)
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
 		"message": message,

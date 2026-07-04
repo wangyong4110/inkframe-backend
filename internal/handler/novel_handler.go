@@ -129,7 +129,7 @@ func (h *NovelHandler) CreateNovel(c *gin.Context) {
 
 	novel, err := h.novelService.CreateNovel(&req)
 	if err != nil {
-		logger.Errorf("[NovelHandler] CreateNovel: tenantID=%d err=%v", tenantID, err)
+		reqLogger(c).Errorf("[NovelHandler] CreateNovel: tenantID=%d err=%v", tenantID, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -204,7 +204,7 @@ func (h *NovelHandler) ListNovels(c *gin.Context) {
 
 	novels, total, err := h.novelService.ListNovelsFiltered(p.Page, p.PageSize, filters)
 	if err != nil {
-		logger.Errorf("[NovelHandler] ListNovels: err=%v", err)
+		reqLogger(c).Errorf("[NovelHandler] ListNovels: err=%v", err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -237,7 +237,7 @@ func (h *NovelHandler) UpdateNovel(c *gin.Context) {
 			respondErr(c, http.StatusNotFound, "novel not found")
 			return
 		}
-		logger.Errorf("[NovelHandler] UpdateNovel: novelID=%d err=%v", id, err)
+		reqLogger(c).Errorf("[NovelHandler] UpdateNovel: novelID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -271,7 +271,7 @@ func (h *NovelHandler) DeleteNovel(c *gin.Context) {
 			respondErr(c, http.StatusNotFound, "novel not found")
 			return
 		}
-		logger.Errorf("[NovelHandler] DeleteNovel: novelID=%d err=%v", id, err)
+		reqLogger(c).Errorf("[NovelHandler] DeleteNovel: novelID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -333,10 +333,12 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 		"req":      &req,
 	})
 
+	reqID := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[NovelHandler] GenerateChapter task %s panic: %v", taskID, r)
+				log.Errorf("[NovelHandler] GenerateChapter task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -346,7 +348,7 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 		chapter, err := h.chapterService.GenerateChapter(tenantID, uint(novelId), &req)
 		if err != nil {
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-			logger.Errorf("[NovelHandler] GenerateChapter task %s failed: %v", taskID, err)
+			log.Errorf("[NovelHandler] GenerateChapter task %s failed: %v", taskID, err)
 			return
 		}
 		h.taskSvc.UpdateProgress(taskID, 90) //nolint:errcheck
@@ -372,12 +374,12 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 		// 后处理：伏笔提取 + 质量检查（非阻塞）
 		go func(ch *model.Chapter, tid uint) {
 			if _, err := h.foreshadowService.ExtractForeshadows(ch, tid, ch.NovelID); err != nil {
-				logger.Errorf("[NovelHandler] GenerateChapter: foreshadow extraction failed (ch %d): %v", ch.ID, err)
+				log.Errorf("[NovelHandler] GenerateChapter: foreshadow extraction failed (ch %d): %v", ch.ID, err)
 			}
 		}(chapter, tenantID)
 		go func(chID uint) {
 			if _, err := h.qualityControlService.CheckChapter(chID); err != nil {
-				logger.Errorf("[NovelHandler] GenerateChapter: quality check failed (ch %d): %v", chID, err)
+				log.Errorf("[NovelHandler] GenerateChapter: quality check failed (ch %d): %v", chID, err)
 			}
 		}(chapter.ID)
 	}(task.TaskID)
@@ -395,11 +397,7 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 		})
 	}
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "章节生成任务已提交",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "章节生成任务已提交")
 }
 
 // BatchGenerateChapters 批量生成小说所有章节正文（顺序执行，保证叙事连贯性）
@@ -462,10 +460,12 @@ func (h *NovelHandler) BatchGenerateChapters(c *gin.Context) {
 		return
 	}
 
+	reqID2 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID2)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[BatchGenerate] task %s panic: %v", taskID, r)
+				log.Errorf("[BatchGenerate] task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -485,7 +485,7 @@ func (h *NovelHandler) BatchGenerateChapters(c *gin.Context) {
 				ModelOverride: req.ModelOverride,
 			}
 			if _, genErr := h.chapterService.GenerateChapter(tenantID, uint(novelId), genReq); genErr != nil {
-				logger.Errorf("[BatchGenerate] chapter %d failed: %v", ch.ChapterNo, genErr)
+				log.Errorf("[BatchGenerate] chapter %d failed: %v", ch.ChapterNo, genErr)
 				failed++
 				failedChapters = append(failedChapters, ch.ChapterNo)
 			} else {
@@ -505,6 +505,7 @@ func (h *NovelHandler) BatchGenerateChapters(c *gin.Context) {
 		})
 	}(task.TaskID)
 
+	reqLogger(c).Printf("[async] task created: task_id=%s", task.TaskID)
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
 		"message": fmt.Sprintf("批量生成任务已提交，共%d章", len(toGenerate)),
@@ -551,11 +552,13 @@ func (h *NovelHandler) GenerateOutline(c *gin.Context) {
 	}
 	h.taskSvc.SetParams(task.TaskID, outlineReq) //nolint:errcheck
 
+	reqID3 := c.GetString("request_id")
 	go func(taskID string, tID uint, r *service.GenerateOutlineRequest) {
+		log := logger.WithID(reqID3)
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		result, err := h.novelService.GenerateOutline(tID, r)
 		if err != nil {
-			logger.Errorf("[NovelHandler] GenerateOutline task %s: novelID=%d err=%v", taskID, r.NovelID, err)
+			log.Errorf("[NovelHandler] GenerateOutline task %s: novelID=%d err=%v", taskID, r.NovelID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -601,7 +604,7 @@ func (h *NovelHandler) GetForeshadows(c *gin.Context) {
 
 	foreshadows, err := h.foreshadowService.CheckForeshadowStatus(uint(novelId), chapterNo)
 	if err != nil {
-		logger.Errorf("[NovelHandler] GetForeshadows: novelID=%d err=%v", novelId, err)
+		reqLogger(c).Errorf("[NovelHandler] GetForeshadows: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -635,7 +638,7 @@ func (h *NovelHandler) MarkForeshadowFulfilled(c *gin.Context) {
 	}
 
 	if err := h.foreshadowService.MarkFulfilledByID(uint(novelId), uint(foreshadowId), req.ChapterID); err != nil {
-		logger.Errorf("[NovelHandler] MarkForeshadowFulfilled: novelID=%d foreshadowID=%d err=%v", novelId, foreshadowId, err)
+		reqLogger(c).Errorf("[NovelHandler] MarkForeshadowFulfilled: novelID=%d foreshadowID=%d err=%v", novelId, foreshadowId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -660,7 +663,7 @@ func (h *NovelHandler) GetTimeline(c *gin.Context) {
 
 	timeline, err := h.timelineService.BuildTimeline(uint(novelId))
 	if err != nil {
-		logger.Errorf("[NovelHandler] GetTimeline: novelID=%d err=%v", novelId, err)
+		reqLogger(c).Errorf("[NovelHandler] GetTimeline: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -682,7 +685,7 @@ func (h *NovelHandler) BuildTimeline(c *gin.Context) {
 
 	timeline, err := h.timelineService.BuildTimeline(uint(novelId))
 	if err != nil {
-		logger.Errorf("[NovelHandler] BuildTimeline: novelID=%d err=%v", novelId, err)
+		reqLogger(c).Errorf("[NovelHandler] BuildTimeline: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -788,10 +791,12 @@ func (h *NovelHandler) GenerateCoverImage(c *gin.Context) {
 
 	novelID := uint(id)
 	suggestion := req.Suggestion
+	reqID4 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID4)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[NovelHandler] GenerateCoverImage task %s panic: %v", taskID, r)
+				log.Errorf("[NovelHandler] GenerateCoverImage task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -801,7 +806,7 @@ func (h *NovelHandler) GenerateCoverImage(c *gin.Context) {
 		defer cancel()
 		url, err := h.novelService.GenerateCoverImage(genCtx, tenantID, novelID, suggestion)
 		if err != nil {
-			logger.Errorf("[NovelHandler] GenerateCoverImage task %s: novelID=%d err=%v", taskID, novelID, err)
+			log.Errorf("[NovelHandler] GenerateCoverImage task %s: novelID=%d err=%v", taskID, novelID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -840,7 +845,7 @@ func (h *NovelHandler) SyncCharacterSnapshots(c *gin.Context) {
 	if err := h.novelService.SyncCharacterSnapshots(
 		getTenantID(c), chapter, req.CharacterIDs, req.ReusePrevious,
 	); err != nil {
-		logger.Errorf("[NovelHandler] SyncCharacterSnapshots: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
+		reqLogger(c).Errorf("[NovelHandler] SyncCharacterSnapshots: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -867,7 +872,7 @@ func (h *NovelHandler) GetAnalysisStatus(c *gin.Context) {
 	}
 	status, err := h.analysisSvc.GetAnalysisStatus(uint(id))
 	if err != nil {
-		logger.Errorf("[NovelHandler] GetAnalysisStatus: novelID=%d err=%v", id, err)
+		reqLogger(c).Errorf("[NovelHandler] GetAnalysisStatus: novelID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -981,7 +986,7 @@ func isCreationTrigger(messages []ai.ChatMessage) bool {
 // forcedExtractNovelParams is a fallback used when the main streaming response
 // did not include a NOVEL_PARAMS block. It makes a focused extraction-only AI
 // call that just outputs a JSON object.
-func forcedExtractNovelParams(ctx context.Context, aiSvc *service.AIService, tenantID uint, history []ai.ChatMessage) *novelChatNovelParams {
+func forcedExtractNovelParams(ctx context.Context, aiSvc *service.AIService, tenantID uint, history []ai.ChatMessage, reqID string) *novelChatNovelParams {
 	// Only pass the last 10 messages to avoid huge context and model hallucination.
 	start := 0
 	if len(history) > 10 {
@@ -996,7 +1001,7 @@ func forcedExtractNovelParams(ctx context.Context, aiSvc *service.AIService, ten
 
 	result, err := aiSvc.GenerateWithMessagesCtx(ctx, tenantID, "novel_chat", msgs, getNovelChatExtractPrompt())
 	if err != nil {
-		logger.Printf("[NovelChatStream] forced extraction AI error: %v", err)
+		logger.WithID(reqID).Printf("[NovelChatStream] forced extraction AI error: %v", err)
 		return nil
 	}
 	result = strings.TrimSpace(result)
@@ -1022,7 +1027,7 @@ func forcedExtractNovelParams(ctx context.Context, aiSvc *service.AIService, ten
 		TargetChapters int             `json:"target_chapters"`
 	}
 	if err := json.Unmarshal([]byte(result), &raw); err != nil || raw.Title == "" {
-		logger.Printf("[NovelChatStream] forced extraction parse failed: %v raw=%q", err, result)
+		logger.WithID(reqID).Printf("[NovelChatStream] forced extraction parse failed: %v raw=%q", err, result)
 		return nil
 	}
 	p := &novelChatNovelParams{
@@ -1042,7 +1047,7 @@ func forcedExtractNovelParams(ctx context.Context, aiSvc *service.AIService, ten
 	if p.Genre == "" {
 		p.Genre = "其他"
 	}
-	logger.Printf("[NovelChatStream] forced extraction success: title=%q genre=%q", p.Title, p.Genre)
+	logger.WithID(reqID).Printf("[NovelChatStream] forced extraction success: title=%q genre=%q", p.Title, p.Genre)
 	return p
 }
 
@@ -1086,7 +1091,7 @@ func (h *NovelHandler) NovelChat(c *gin.Context) {
 	result, err := aiSvc.GenerateWithMessagesCtx(c.Request.Context(), tenantID, "novel_chat", messages,
 		getNovelChatSystemPrompt())
 	if err != nil {
-		logger.Errorf("[NovelChat] generate error: %v", err)
+		reqLogger(c).Errorf("[NovelChat] generate error: %v", err)
 		respondErr(c, http.StatusInternalServerError, "AI 响应失败: "+err.Error())
 		return
 	}
@@ -1122,7 +1127,7 @@ func (h *NovelHandler) NovelChatStream(c *gin.Context) {
 	ch, err := aiSvc.StreamWithMessagesCtx(c.Request.Context(), tenantID, "novel_chat", messages,
 		getNovelChatSystemPrompt())
 	if err != nil {
-		logger.Errorf("[NovelChatStream] stream init error: %v", err)
+		reqLogger(c).Errorf("[NovelChatStream] stream init error: %v", err)
 		respondErr(c, http.StatusInternalServerError, "AI 流式响应失败: "+err.Error())
 		return
 	}
@@ -1157,8 +1162,8 @@ func (h *NovelHandler) NovelChatStream(c *gin.Context) {
 	// Fallback: if no params in the stream but the user triggered creation, attempt
 	// a focused extraction-only call so the frontend can still proceed.
 	if extracted == nil && isCreationTrigger(messages) {
-		logger.Printf("[NovelChatStream] no NOVEL_PARAMS in stream, attempting forced extraction")
-		if fp := forcedExtractNovelParams(c.Request.Context(), aiSvc, tenantID, messages); fp != nil {
+		reqLogger(c).Printf("[NovelChatStream] no NOVEL_PARAMS in stream, attempting forced extraction")
+		if fp := forcedExtractNovelParams(c.Request.Context(), aiSvc, tenantID, messages, c.GetString("request_id")); fp != nil {
 			extracted = fp
 		}
 	}

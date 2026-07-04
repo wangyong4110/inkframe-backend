@@ -96,7 +96,7 @@ func (h *SceneAnchorHandler) ListSceneAnchors(c *gin.Context) {
 	}
 	anchors, err := h.svc.ListByNovel(uint(novelID))
 	if err != nil {
-		logger.Errorf("[SceneAnchorHandler] ListSceneAnchors novelID=%d: %v", novelID, err)
+		reqLogger(c).Errorf("[SceneAnchorHandler] ListSceneAnchors novelID=%d: %v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to list scene anchors")
 		return
 	}
@@ -115,7 +115,7 @@ func (h *SceneAnchorHandler) CreateSceneAnchor(c *gin.Context) {
 	}
 	anchor, err := h.svc.Create(getTenantID(c), uint(novelID), req)
 	if err != nil {
-		logger.Errorf("[SceneAnchorHandler] CreateSceneAnchor novelID=%d name=%q: %v", novelID, req.Name, err)
+		reqLogger(c).Errorf("[SceneAnchorHandler] CreateSceneAnchor novelID=%d name=%q: %v", novelID, req.Name, err)
 		respondErr(c, http.StatusInternalServerError, "failed to create scene anchor")
 		return
 	}
@@ -141,14 +141,14 @@ func (h *SceneAnchorHandler) UpdateSceneAnchor(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	logger.Printf("[SceneAnchorHandler] UpdateSceneAnchor id=%d: HTTP body parsed: description_len=%d description_preview=%.120q", id, len(req.Description), req.Description)
+	reqLogger(c).Printf("[SceneAnchorHandler] UpdateSceneAnchor id=%d: HTTP body parsed: description_len=%d description_preview=%.120q", id, len(req.Description), req.Description)
 	anchor, err := h.svc.Update(uint(id), req)
 	if err != nil {
-		logger.Errorf("[SceneAnchorHandler] UpdateSceneAnchor id=%d: %v", id, err)
+		reqLogger(c).Errorf("[SceneAnchorHandler] UpdateSceneAnchor id=%d: %v", id, err)
 		respondErr(c, http.StatusInternalServerError, "failed to update scene anchor")
 		return
 	}
-	logger.Printf("[SceneAnchorHandler] UpdateSceneAnchor id=%d: response description_len=%d", id, len(anchor.Description))
+	reqLogger(c).Printf("[SceneAnchorHandler] UpdateSceneAnchor id=%d: response description_len=%d", id, len(anchor.Description))
 	respondOK(c, anchor)
 }
 
@@ -168,7 +168,7 @@ func (h *SceneAnchorHandler) DeleteSceneAnchor(c *gin.Context) {
 		return
 	}
 	if err := h.svc.Delete(uint(id)); err != nil {
-		logger.Errorf("[SceneAnchorHandler] DeleteSceneAnchor id=%d: %v", id, err)
+		reqLogger(c).Errorf("[SceneAnchorHandler] DeleteSceneAnchor id=%d: %v", id, err)
 		respondErr(c, http.StatusInternalServerError, "failed to delete scene anchor")
 		return
 	}
@@ -198,7 +198,7 @@ func (h *SceneAnchorHandler) SetShotAnchor(c *gin.Context) {
 		return
 	}
 	if err := h.svc.SetShotAnchor(uint(shotID), body.AnchorID); err != nil {
-		logger.Errorf("[SceneAnchorHandler] SetShotAnchor shotID=%d anchorID=%v: %v", shotID, body.AnchorID, err)
+		reqLogger(c).Errorf("[SceneAnchorHandler] SetShotAnchor shotID=%d anchorID=%v: %v", shotID, body.AnchorID, err)
 		respondErr(c, http.StatusInternalServerError, "failed to set shot anchor")
 		return
 	}
@@ -220,7 +220,7 @@ func (h *SceneAnchorHandler) ExtractSceneAnchors(c *gin.Context) {
 	}
 	anchors, err := h.svc.ExtractFromChapter(c.Request.Context(), getTenantID(c), uint(novelID), body.NovelTitle, body.ChapterContent, 0, "")
 	if err != nil {
-		logger.Errorf("[SceneAnchorHandler] ExtractSceneAnchors error: %v", err)
+		reqLogger(c).Errorf("[SceneAnchorHandler] ExtractSceneAnchors error: %v", err)
 		respondErr(c, http.StatusInternalServerError, "failed to extract scene anchors")
 		return
 	}
@@ -250,7 +250,7 @@ func (h *SceneAnchorHandler) LockRefImage(c *gin.Context) {
 		return
 	}
 	if err := h.svc.SetRefImage(uint(id), body.ImageURL, body.ShotID); err != nil {
-		logger.Errorf("[SceneAnchorHandler] LockRefImage id=%d: %v", id, err)
+		reqLogger(c).Errorf("[SceneAnchorHandler] LockRefImage id=%d: %v", id, err)
 		respondErr(c, http.StatusInternalServerError, "failed to lock ref image")
 		return
 	}
@@ -278,7 +278,7 @@ func (h *SceneAnchorHandler) UploadRefImage(c *gin.Context) {
 		return
 	}
 	if err := h.svc.SetRefImage(uint(id), imgURL, nil); err != nil {
-		logger.Errorf("[SceneAnchorHandler] UploadRefImage id=%d: %v", id, err)
+		reqLogger(c).Errorf("[SceneAnchorHandler] UploadRefImage id=%d: %v", id, err)
 		respondErr(c, http.StatusInternalServerError, "failed to save ref image")
 		return
 	}
@@ -304,7 +304,7 @@ func (h *SceneAnchorHandler) AIAnalyzeSceneAnchor(c *gin.Context) {
 	}
 	result, err := h.svc.AIAnalyze(c.Request.Context(), getTenantID(c), uint(id))
 	if err != nil {
-		logger.Errorf("[SceneAnchorHandler] AIAnalyzeSceneAnchor id=%d: %v", id, err)
+		reqLogger(c).Errorf("[SceneAnchorHandler] AIAnalyzeSceneAnchor id=%d: %v", id, err)
 		respondErr(c, http.StatusInternalServerError, "AI分析失败："+err.Error())
 		return
 	}
@@ -332,7 +332,7 @@ func (h *SceneAnchorHandler) GenerateRefImage(c *gin.Context) {
 	_ = c.ShouldBindJSON(&body) // optional body
 	anchor, err := h.svc.GenerateRefImage(c.Request.Context(), getTenantID(c), uint(id), body.Provider)
 	if err != nil {
-		logger.Errorf("[SceneAnchorHandler] GenerateRefImage error: %v", err)
+		reqLogger(c).Errorf("[SceneAnchorHandler] GenerateRefImage error: %v", err)
 		respondErr(c, http.StatusInternalServerError, "failed to generate ref image")
 		return
 	}
@@ -362,7 +362,7 @@ func (h *SceneAnchorHandler) EditRefImage(c *gin.Context) {
 	}
 	anchor, err := h.svc.EditRefImageWithInstruction(c.Request.Context(), getTenantID(c), uint(id), body.Instruction)
 	if err != nil {
-		logger.Errorf("[SceneAnchorHandler] EditRefImage error: %v", err)
+		reqLogger(c).Errorf("[SceneAnchorHandler] EditRefImage error: %v", err)
 		respondErr(c, http.StatusInternalServerError, "failed to edit ref image")
 		return
 	}
@@ -386,7 +386,7 @@ func (h *SceneAnchorHandler) GetConsistencyLogs(c *gin.Context) {
 	}
 	logs, err := h.consistencySvc.GetLogsByAnchorID(uint(id))
 	if err != nil {
-		logger.Errorf("[SceneAnchorHandler] GetConsistencyLogs anchorID=%d: %v", id, err)
+		reqLogger(c).Errorf("[SceneAnchorHandler] GetConsistencyLogs anchorID=%d: %v", id, err)
 		respondErr(c, http.StatusInternalServerError, "failed to get consistency logs")
 		return
 	}
@@ -430,7 +430,7 @@ func (h *SceneAnchorHandler) AIExtractChapterAnchors(c *gin.Context) {
 	tenantID := getTenantID(c)
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterSceneExtract, "场景分析", "chapter", chapter.ID)
 	if err != nil {
-		logger.Errorf("[SceneAnchorHandler] AIExtractChapterAnchors create task novelID=%d chapterNo=%d: %v", novelID, chapterNo, err)
+		reqLogger(c).Errorf("[SceneAnchorHandler] AIExtractChapterAnchors create task novelID=%d chapterNo=%d: %v", novelID, chapterNo, err)
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
@@ -440,24 +440,26 @@ func (h *SceneAnchorHandler) AIExtractChapterAnchors(c *gin.Context) {
 		"content":    content,
 	})
 
+	reqID := c.GetString("request_id")
 	go func(taskID string, tID, nID, chapID uint, chContent, userPrompt string) {
+		log := logger.WithID(reqID)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[SceneAnchorHandler] AIExtractChapterAnchors task %s panic: %v", taskID, r)
+				log.Errorf("[SceneAnchorHandler] AIExtractChapterAnchors task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 		defer cancel()
-		logger.Printf("[SceneAnchorHandler] AIExtractChapterAnchors task %s started: novelID=%d chapterID=%d contentLen=%d", taskID, nID, chapID, len(chContent))
+		log.Printf("[SceneAnchorHandler] AIExtractChapterAnchors task %s started: novelID=%d chapterID=%d contentLen=%d", taskID, nID, chapID, len(chContent))
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		anchors, err := h.svc.ExtractFromChapter(ctx, tID, nID, "", chContent, chapID, userPrompt)
 		if err != nil {
-			logger.Errorf("[SceneAnchorHandler] AIExtractChapterAnchors task %s failed: novelID=%d chapterID=%d err=%v", taskID, nID, chapID, err)
+			log.Errorf("[SceneAnchorHandler] AIExtractChapterAnchors task %s failed: novelID=%d chapterID=%d err=%v", taskID, nID, chapID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
-		logger.Printf("[SceneAnchorHandler] AIExtractChapterAnchors task %s completed: novelID=%d chapterID=%d newAnchors=%d", taskID, nID, chapID, len(anchors))
+		log.Printf("[SceneAnchorHandler] AIExtractChapterAnchors task %s completed: novelID=%d chapterID=%d newAnchors=%d", taskID, nID, chapID, len(anchors))
 		h.taskSvc.Complete(taskID, map[string]interface{}{"new_count": len(anchors)}) //nolint:errcheck
 	}(task.TaskID, tenantID, uint(novelID), chapter.ID, content, body.UserPrompt)
 
@@ -482,7 +484,7 @@ func (h *SceneAnchorHandler) ListChapterAnchors(c *gin.Context) {
 	}
 	anchors, err := h.svc.ListChapterAnchors(uint(novelID), chapter.ID)
 	if err != nil {
-		logger.Errorf("[SceneAnchorHandler] ListChapterAnchors novelID=%d chapterNo=%d: %v", novelID, chapterNo, err)
+		reqLogger(c).Errorf("[SceneAnchorHandler] ListChapterAnchors novelID=%d chapterNo=%d: %v", novelID, chapterNo, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -510,7 +512,7 @@ func (h *SceneAnchorHandler) BindChapterAnchor(c *gin.Context) {
 		return
 	}
 	if err := h.svc.BindChapterAnchor(chapter.ID, uint(novelID), uint(anchorID)); err != nil {
-		logger.Errorf("[SceneAnchorHandler] BindChapterAnchor chapterID=%d novelID=%d anchorID=%d: %v", chapter.ID, novelID, anchorID, err)
+		reqLogger(c).Errorf("[SceneAnchorHandler] BindChapterAnchor chapterID=%d novelID=%d anchorID=%d: %v", chapter.ID, novelID, anchorID, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -538,7 +540,7 @@ func (h *SceneAnchorHandler) UnbindChapterAnchor(c *gin.Context) {
 		return
 	}
 	if err := h.svc.UnbindChapterAnchor(chapter.ID, uint(anchorID)); err != nil {
-		logger.Errorf("[SceneAnchorHandler] UnbindChapterAnchor chapterID=%d anchorID=%d: %v", chapter.ID, anchorID, err)
+		reqLogger(c).Errorf("[SceneAnchorHandler] UnbindChapterAnchor chapterID=%d anchorID=%d: %v", chapter.ID, anchorID, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -572,10 +574,12 @@ func (h *SceneAnchorHandler) BatchGenerateRefImages(c *gin.Context) {
 		"provider": body.Provider,
 		"force":    body.Force,
 	})
+	reqID2 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID2)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[SceneAnchorHandler] BatchGenerateRefImages task %s panic: %v", taskID, r)
+				log.Errorf("[SceneAnchorHandler] BatchGenerateRefImages task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -583,7 +587,7 @@ func (h *SceneAnchorHandler) BatchGenerateRefImages(c *gin.Context) {
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		succ, fail, err := h.svc.BatchGenerateRefImages(context.Background(), tenantID, uint(novelID), body.Provider, body.Force, progressFn)
 		if err != nil {
-			logger.Errorf("[SceneAnchorHandler] BatchGenerateRefImages task %s failed: %v", taskID, err)
+			log.Errorf("[SceneAnchorHandler] BatchGenerateRefImages task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"succeeded": succ, "failed": fail}) //nolint:errcheck
@@ -609,18 +613,20 @@ func (h *SceneAnchorHandler) AIExtractFromNovel(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	reqID3 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID3)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[SceneAnchorHandler] AIExtractFromNovel task %s panic: %v", taskID, r)
+				log.Errorf("[SceneAnchorHandler] AIExtractFromNovel task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)                                           //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		anchors, err := h.svc.AIExtractAllFromNovel(context.Background(), tenantID, uint(novelID), progressFn)
 		if err != nil {
-			logger.Errorf("[SceneAnchorHandler] AIExtractFromNovel: %v", err)
+			log.Errorf("[SceneAnchorHandler] AIExtractFromNovel: %v", err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"scene_anchors": anchors, "count": len(anchors)}) //nolint:errcheck

@@ -361,17 +361,19 @@ func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 		Action:      req.Action,
 		Style:       req.Style,
 	}
+	reqID := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[CharacterHandler] GenerateCharacterImage task %s panic: %v", taskID, r)
+				log.Errorf("[CharacterHandler] GenerateCharacterImage task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		image, err := h.imageGenService.GenerateCharacterImage(imgReq)
 		if err != nil {
-			logger.Errorf("[CharacterHandler] GenerateCharacterImage task %s failed: %v", taskID, err)
+			log.Errorf("[CharacterHandler] GenerateCharacterImage task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"image": image}) //nolint:errcheck
@@ -426,7 +428,9 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 		"style":    resolvedStyle,
 	})
 
+	reqID2 := c.GetString("request_id")
 	go func(taskID string, charID uint, char *model.Character, style, provider string) {
+		log := logger.WithID(reqID2)
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 
 		genCtx := context.Background()
@@ -443,7 +447,7 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 		sheetGender := service.InferGenderTag(sheetAppearance, char.Description)
 		img, err := h.imageGenService.GenerateThreeViewSheet(genCtx, tenantID, char.Name, sheetAppearance, style, sheetGender, "", provider)
 		if err != nil {
-			logger.Errorf("[CharacterHandler] GenerateThreeView task %s failed: %v", taskID, err)
+			log.Errorf("[CharacterHandler] GenerateThreeView task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, "generate three-view sheet failed: "+err.Error()) //nolint:errcheck
 			return
 		}
@@ -574,10 +578,12 @@ func (h *CharacterHandler) AIBatchGenerate(c *gin.Context) {
 			IP: c.ClientIP(),
 		})
 	}
+	reqID3 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID3)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[CharacterHandler] AIBatchGenerate task %s panic: %v", taskID, r)
+				log.Errorf("[CharacterHandler] AIBatchGenerate task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -585,7 +591,7 @@ func (h *CharacterHandler) AIBatchGenerate(c *gin.Context) {
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		chars, err := h.characterService.AIBatchGenerate(tenantID, uint(novelID))
 		if err != nil {
-			logger.Errorf("[CharacterHandler] AIBatchGenerate task %s failed: %v", taskID, err)
+			log.Errorf("[CharacterHandler] AIBatchGenerate task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"characters": chars, "count": len(chars)}) //nolint:errcheck
@@ -619,10 +625,12 @@ func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
 		"provider": req.Provider,
 		"force":    req.Force,
 	})
+	reqID4 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID4)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[CharacterHandler] BatchGenerateImages task %s panic: %v", taskID, r)
+				log.Errorf("[CharacterHandler] BatchGenerateImages task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -630,7 +638,7 @@ func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		succ, fail, err := h.characterService.BatchGenerateImages(tenantID, uint(novelID), req.Provider, req.Force, progressFn)
 		if err != nil {
-			logger.Errorf("[CharacterHandler] BatchGenerateImages task %s failed: %v", taskID, err)
+			log.Errorf("[CharacterHandler] BatchGenerateImages task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"succeeded": succ, "failed": fail}) //nolint:errcheck
@@ -666,17 +674,19 @@ func (h *CharacterHandler) GenerateCharacterProfile(c *gin.Context) {
 
 	description := req.Description
 	novelID := uint(novelId)
+	reqID5 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID5)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[CharacterHandler] GenerateCharacterProfile task %s panic: %v", taskID, r)
+				log.Errorf("[CharacterHandler] GenerateCharacterProfile task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		character, err := h.characterService.GenerateProfile(tenantID, novelID, description)
 		if err != nil {
-			logger.Errorf("[CharacterHandler] GenerateCharacterProfile task %s failed: %v", taskID, err)
+			log.Errorf("[CharacterHandler] GenerateCharacterProfile task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"character": character}) //nolint:errcheck
@@ -916,11 +926,13 @@ func (h *CharacterHandler) AIExtractMinorCharacters(c *gin.Context) {
 		"chapter_no": chapterNo,
 	})
 
+	reqID6 := c.GetString("request_id")
 	go func(taskID string, tID, nID, chapID uint, userPrompt string) {
+		log := logger.WithID(reqID6)
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		chars, err := h.characterService.AIExtractMinorChars(tID, nID, chapID, userPrompt)
 		if err != nil {
-			logger.Errorf("[CharacterHandler] AIExtractMinorCharacters task %s failed: %v", taskID, err)
+			log.Errorf("[CharacterHandler] AIExtractMinorCharacters task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -944,11 +956,13 @@ func (h *CharacterHandler) ReanalyzeCharacter(c *gin.Context) {
 		return
 	}
 
+	reqID7 := c.GetString("request_id")
 	go func(taskID string, charID uint) {
+		log := logger.WithID(reqID7)
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		char, err := h.characterService.ReanalyzeCharacter(tenantID, charID)
 		if err != nil {
-			logger.Errorf("[CharacterHandler] ReanalyzeCharacter task %s failed: %v", taskID, err)
+			log.Errorf("[CharacterHandler] ReanalyzeCharacter task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -999,7 +1013,7 @@ func (h *CharacterHandler) ExtractCharacterVoice(c *gin.Context) {
 	updateReq.VoiceStyle = voiceStyle
 	updated, err := h.characterService.UpdateCharacter(uint(id), getTenantID(c), updateReq)
 	if err != nil {
-		logger.Errorf("[CharacterHandler] ExtractCharacterVoice: save voice style for char %d: %v", id, err)
+		reqLogger(c).Errorf("[CharacterHandler] ExtractCharacterVoice: save voice style for char %d: %v", id, err)
 		// Non-fatal: return the extracted style even if persisting failed.
 		respondOK(c, gin.H{"voice_style": voiceStyle, "character_id": id, "saved": false})
 		return
@@ -1081,10 +1095,12 @@ func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
 		"char_id_path": c.Param("id"),
 	})
 
+	reqID8 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID8)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[CharacterHandler] PreviewVoice task %s panic: %v", taskID, r)
+				log.Errorf("[CharacterHandler] PreviewVoice task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -1094,7 +1110,7 @@ func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
 
 		rawURL, err := h.aiService.AudioGenerateWithOptions(ctx, tenantID, req.Text, voice, speed, style, lang)
 		if err != nil {
-			logger.Errorf("PreviewVoice: TTS generation failed for character %d voice=%q: %v", id, voice, err)
+			log.Errorf("PreviewVoice: TTS generation failed for character %d voice=%q: %v", id, voice, err)
 			h.taskSvc.Fail(taskID, "voice generation failed: "+err.Error()) //nolint:errcheck
 			return
 		}
@@ -1342,17 +1358,19 @@ func (h *CharacterHandler) GenerateLookVisualPrompt(c *gin.Context) {
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"description": description,
 	})
+	reqID9 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID9)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[CharacterHandler] GenerateLookVisualPrompt task %s panic: %v", taskID, r)
+				log.Errorf("[CharacterHandler] GenerateLookVisualPrompt task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		prompt, err := h.characterService.GenerateLookVisualPrompt(tenantID, uint(id), description)
 		if err != nil {
-			logger.Errorf("[CharacterHandler] GenerateLookVisualPrompt task %s failed: %v", taskID, err)
+			log.Errorf("[CharacterHandler] GenerateLookVisualPrompt task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"visual_prompt": prompt}) //nolint:errcheck
@@ -1384,17 +1402,19 @@ func (h *CharacterHandler) GenerateAppearanceDesign(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	reqID10 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID10)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[CharacterHandler] GenerateAppearanceDesign task %s panic: %v", taskID, r)
+				log.Errorf("[CharacterHandler] GenerateAppearanceDesign task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		prompt, err := h.characterService.GenerateCostumeDesign(tenantID, uint(id))
 		if err != nil {
-			logger.Errorf("[CharacterHandler] GenerateAppearanceDesign task %s failed: %v", taskID, err)
+			log.Errorf("[CharacterHandler] GenerateAppearanceDesign task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"appearance_prompt": prompt}) //nolint:errcheck
@@ -1454,10 +1474,12 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 		"provider": req.Provider,
 	})
 
+	reqID11 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID11)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[CharacterHandler] GenerateLookImages task %s panic: %v", taskID, r)
+				log.Errorf("[CharacterHandler] GenerateLookImages task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -1468,7 +1490,7 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 		case "portrait", "":
 			img, err := h.imageGenService.GenerateThreeViewSheet(ctx, tenantID, charName, visualPrompt, style, "", currentPortrait, req.Provider)
 			if err != nil {
-				logger.Errorf("[CharacterHandler] GenerateLookImages task %s portrait/three_view failed: %v", taskID, err)
+				log.Errorf("[CharacterHandler] GenerateLookImages task %s portrait/three_view failed: %v", taskID, err)
 				h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 				return
 			}
@@ -1478,7 +1500,7 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 		case "three_view":
 			img, err := h.imageGenService.GenerateThreeViewSheet(ctx, tenantID, charName, visualPrompt, style, "", currentThreeViewSheet, req.Provider)
 			if err != nil {
-				logger.Errorf("[CharacterHandler] GenerateLookImages task %s three_view failed: %v", taskID, err)
+				log.Errorf("[CharacterHandler] GenerateLookImages task %s three_view failed: %v", taskID, err)
 				h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 				return
 			}

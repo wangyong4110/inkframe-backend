@@ -239,10 +239,12 @@ func (h *PlotPointHandler) AIExtractFromNovel(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	reqID := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[PlotPointHandler] AIExtractFromNovel task %s panic: %v", taskID, r)
+				log.Errorf("[PlotPointHandler] AIExtractFromNovel task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -250,7 +252,7 @@ func (h *PlotPointHandler) AIExtractFromNovel(c *gin.Context) {
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		pps, err := h.svc.AIExtractFromNovel(context.Background(), tenantID, uint(novelID))
 		if err != nil {
-			logger.Errorf("[PlotPointHandler] AIExtractFromNovel task %s failed: %v", taskID, err)
+			log.Errorf("[PlotPointHandler] AIExtractFromNovel task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"plot_points": pps, "count": len(pps)}) //nolint:errcheck

@@ -865,27 +865,33 @@ func (s *CharacterService) DeleteCharacter(id, tenantID uint) error {
 	return nil
 }
 
-// ListEffectiveCharacters 获取章节绑定的角色列表（仅返回已绑定到本章节的角色，章节级覆盖优先）
+// ListEffectiveCharacters 获取章节有效角色列表：
+//   - 非 minor 角色（protagonist/antagonist/supporting）默认在每章出现，不受绑定过滤
+//   - minor 角色只在明确绑定到本章节时才显示
 func (s *CharacterService) ListEffectiveCharacters(novelID, chapterID uint) ([]*EffectiveCharacter, error) {
 	overrideMap := make(map[uint]*model.ChapterCharacter)
 	boundIDs := make(map[uint]bool)
 	if s.chapterCharacterRepo != nil {
-		overrides, _ := s.chapterCharacterRepo.ListByChapter(chapterID)
+		overrides, err := s.chapterCharacterRepo.ListByChapter(chapterID)
+		if err != nil {
+			logger.Errorf("[CharacterService] ListEffectiveCharacters: ListByChapter chapterID=%d err=%v", chapterID, err)
+		}
 		for _, o := range overrides {
 			overrideMap[o.CharacterID] = o
 			boundIDs[o.CharacterID] = true
 		}
+		logger.Printf("[CharacterService] ListEffectiveCharacters: novelID=%d chapterID=%d boundCount=%d", novelID, chapterID, len(boundIDs))
 	}
 	chars, err := s.characterRepo.ListByNovel(novelID)
 	if err != nil {
 		return nil, err
 	}
-	// No chapter-specific bindings: show all novel characters (protagonist/supporting appear on every chapter by default).
-	// When bindings exist, only show explicitly bound characters (supports chapter-specific overrides).
-	hasBindings := len(boundIDs) > 0
+	// 非 minor 角色（protagonist/antagonist/supporting）无论是否绑定都出现；
+	// minor 角色仅在明确绑定到本章节时显示。
+	// 这样绑定次要角色不会导致"活跃角色"区域变空。
 	result := make([]*EffectiveCharacter, 0)
 	for _, ch := range chars {
-		if hasBindings && !boundIDs[ch.ID] {
+		if ch.Role == "minor" && !boundIDs[ch.ID] {
 			continue
 		}
 		ec := &EffectiveCharacter{Character: *ch}
@@ -912,6 +918,7 @@ func (s *CharacterService) ListEffectiveCharacters(novelID, chapterID uint) ([]*
 		}
 		result = append(result, ec)
 	}
+	logger.Printf("[CharacterService] ListEffectiveCharacters: novelID=%d chapterID=%d totalChars=%d resultCount=%d", novelID, chapterID, len(chars), len(result))
 	return result, nil
 }
 

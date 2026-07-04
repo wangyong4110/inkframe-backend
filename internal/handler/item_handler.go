@@ -193,10 +193,12 @@ func (h *ItemHandler) AIExtractFromNovel(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	reqID := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[ItemHandler] AIExtractFromNovel task %s panic: %v", taskID, r)
+				log.Errorf("[ItemHandler] AIExtractFromNovel task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -204,7 +206,7 @@ func (h *ItemHandler) AIExtractFromNovel(c *gin.Context) {
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		items, err := h.itemService.AIExtractFromNovel(tenantID, uint(novelID))
 		if err != nil {
-			logger.Errorf("[ItemHandler] AIExtractFromNovel task %s failed: %v", taskID, err)
+			log.Errorf("[ItemHandler] AIExtractFromNovel task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"items": items, "count": len(items)}) //nolint:errcheck
@@ -236,10 +238,12 @@ func (h *ItemHandler) BatchGenerateImages(c *gin.Context) {
 		"provider": req.Provider,
 		"force":    req.Force,
 	})
+	reqID2 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID2)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[ItemHandler] BatchGenerateImages task %s panic: %v", taskID, r)
+				log.Errorf("[ItemHandler] BatchGenerateImages task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -247,7 +251,7 @@ func (h *ItemHandler) BatchGenerateImages(c *gin.Context) {
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		succ, fail, err := h.itemService.BatchGenerateImages(tenantID, uint(novelID), req.Provider, req.Force, progressFn)
 		if err != nil {
-			logger.Errorf("[ItemHandler] BatchGenerateImages task %s failed: %v", taskID, err)
+			log.Errorf("[ItemHandler] BatchGenerateImages task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"succeeded": succ, "failed": fail}) //nolint:errcheck
@@ -286,10 +290,12 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 		"provider": provider,
 	})
 
+	reqID3 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID3)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[ItemHandler] GenerateItemImage task %s panic: %v", taskID, r)
+				log.Errorf("[ItemHandler] GenerateItemImage task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -297,7 +303,7 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
 		item, err := h.itemService.GenerateItemImage(tenantID, itemID, refURL, provider)
 		if err != nil {
-			logger.Errorf("[ItemHandler] GenerateItemImage task %s failed: %v", taskID, err)
+			log.Errorf("[ItemHandler] GenerateItemImage task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.UpdateProgress(taskID, 90) //nolint:errcheck
@@ -305,11 +311,7 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 		}
 	}(task.TaskID)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "图像生成任务已提交",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "图像生成任务已提交")
 }
 
 // ListEffectiveItems GET /novels/:id/chapters/:chapter_no/items
@@ -415,7 +417,7 @@ func (h *ItemHandler) AIExtractChapterItems(c *gin.Context) {
 		UserPrompt string `json:"user_prompt"`
 	}
 	_ = c.ShouldBindJSON(&body)
-	logger.Printf("[ItemHandler] AIExtractChapterItems: novelID=%d chapterNo=%d userPromptLen=%d", novelID, chapterNo, len(body.UserPrompt))
+	reqLogger(c).Printf("[ItemHandler] AIExtractChapterItems: novelID=%d chapterNo=%d userPromptLen=%d", novelID, chapterNo, len(body.UserPrompt))
 	items, err := h.itemService.AIExtractChapterItems(getTenantID(c), uint(novelID), chapter.ID, body.UserPrompt)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to extract chapter items: "+err.Error())

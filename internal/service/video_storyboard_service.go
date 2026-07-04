@@ -112,6 +112,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	}
 
 	var content string
+	chapterNo := 0
 	if chapterID != nil {
 		chapter, chErr := s.chapterRepo.GetByID(*chapterID)
 		if chErr != nil {
@@ -119,6 +120,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		}
 		if chapter != nil {
 			content = chapter.Content
+			chapterNo = chapter.ChapterNo
 		}
 	}
 	if strings.TrimSpace(content) == "" {
@@ -256,10 +258,12 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		}
 	}
 
-	// 获取小说的 PromptLanguage、Genre 和 ImageStyle（影响分镜 image_prompt 的风格基调）
+	// 获取小说的 PromptLanguage、Genre、ImageStyle、标题、世界观摘要
 	promptLanguage := "zh"
 	genre := ""
 	imageStyle := ""
+	novelTitle := ""
+	worldviewDesc := ""
 	if s.novelRepo != nil && video.NovelID > 0 {
 		if novel, err := s.novelRepo.GetByID(video.NovelID); err == nil {
 			if novel.AIConfig.PromptLanguage != "" {
@@ -267,6 +271,18 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			}
 			genre = novel.Meta.Genre
 			imageStyle = novel.AIConfig.ImageStyle
+			novelTitle = novel.Title
+			// 加载世界观摘要（仅第一章需要，但预取开销很小）
+			if s.worldviewRepo != nil && novel.WorldviewID != nil {
+				if wv, wvErr := s.worldviewRepo.GetByID(*novel.WorldviewID); wvErr == nil && wv != nil {
+					desc := wv.Description
+					// 截断至 300 字，避免撑大 prompt token
+					if runes := []rune(desc); len(runes) > 300 {
+						desc = string(runes[:300]) + "…"
+					}
+					worldviewDesc = desc
+				}
+			}
 		}
 	}
 	// video 级别的 ArtStyle 作为兜底（novel 未设置时使用）
@@ -363,7 +379,8 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			segIdx+1, len(segments), segRunes, segShotCount, len(prevTailShots))
 
 		prompt := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, len(segments), segShotCount,
-			characters, anchors, plotPoints, effectiveItems, prevTailShots, overrides.VoiceMode, promptLanguage, genre, video.RenderConfig.Pacing, arcPlan, imageStyle)
+			characters, anchors, plotPoints, effectiveItems, prevTailShots, overrides.VoiceMode, promptLanguage, genre, video.RenderConfig.Pacing, arcPlan, imageStyle,
+			chapterNo, novelTitle, worldviewDesc)
 
 		var aiResult string
 		var aiErr error
@@ -925,6 +942,9 @@ func (s *VideoService) buildStoryboardPrompt(
 	pacing string,
 	arcPlan string,
 	imageStyle string,
+	chapterNo int,
+	novelTitle string,
+	worldviewDesc string,
 ) string {
 	// isEn / isImageEn 均由 novel.AIConfig.PromptLanguage 决定，与项目「AI 提示词的语言」设置保持一致。
 	// image_prompt 在生图前会经过自动翻译（translatePromptToEnglish），保持中文可供用户编辑。
@@ -1123,7 +1143,12 @@ func (s *VideoService) buildStoryboardPrompt(
 		// 不传原始 imageStyle ID（如 "anime"），而是传对 LLM 最有指导意义的英文描述词。
 		"ImageStyleHint":      resolveStyleIllustrationDesc(imageStyle),
 		"ImageStyleID":        imageStyle,
-		"StyleQualityTokens": resolveStyleQualityTokens(imageStyle),
+		"StyleQualityTokens":  resolveStyleQualityTokens(imageStyle),
+		"ChapterNo":           chapterNo,
+		"IsFirstChapter":      chapterNo == 1,
+		"IsFirstSegment":      segNo == 1,
+		"NovelTitle":          novelTitle,
+		"WorldviewDesc":       worldviewDesc,
 	}
 	result, err := renderPrompt("storyboard_generate", ctx)
 	if err != nil {

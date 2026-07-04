@@ -164,14 +164,14 @@ func (h *ImportHandler) WithTaskService(svc *service.TaskService) *ImportHandler
 }
 
 // runImportAndAnalyze 通用导入+分析流程（在 goroutine 中调用）
-func (h *ImportHandler) runImportAndAnalyze(taskID string, req *service.ImportRequest, tenantID uint) {
+func (h *ImportHandler) runImportAndAnalyze(taskID string, req *service.ImportRequest, tenantID uint, reqID string) {
 	h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
 	h.taskSvc.UpdateProgress(taskID, 20)                                  //nolint:errcheck
 	h.taskSvc.SetMeta(taskID, map[string]interface{}{"step": "解析导入中..."}) //nolint:errcheck
 
 	result, err := h.importService.Import(req)
 	if err != nil {
-		logger.Errorf("[ImportHandler] runImportAndAnalyze task %s failed: %v", taskID, err)
+		logger.WithID(reqID).Errorf("[ImportHandler] runImportAndAnalyze task %s failed: %v", taskID, err)
 		h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		return
 	}
@@ -216,17 +216,19 @@ func (h *ImportHandler) ImportNovel(c *gin.Context) {
 		})
 	}
 
+	reqID := c.GetString("request_id")
 	go func(taskID string, r service.ImportRequest) {
+		log := logger.WithID(reqID)
 		defer func() {
 			if rc := recover(); rc != nil {
-				logger.Errorf("[ImportHandler] ImportNovel task %s panic: %v", taskID, rc)
+				log.Errorf("[ImportHandler] ImportNovel task %s panic: %v", taskID, rc)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		result, err := h.importService.Import(&r)
 		if err != nil {
-			logger.Errorf("[ImportHandler] ImportNovel task %s failed: %v", taskID, err)
+			log.Errorf("[ImportHandler] ImportNovel task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -237,11 +239,7 @@ func (h *ImportHandler) ImportNovel(c *gin.Context) {
 		})
 	}(task.TaskID, req)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "import started",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "import started")
 }
 
 // ImportFromFile 上传文件导入小说
@@ -312,13 +310,9 @@ func (h *ImportHandler) ImportFromFile(c *gin.Context) {
 			Details: map[string]any{"source": "file", "filename": header.Filename}, IP: c.ClientIP(),
 		})
 	}
-	go h.runImportAndAnalyze(task.TaskID, req, tenantID)
+	go h.runImportAndAnalyze(task.TaskID, req, tenantID, c.GetString("request_id"))
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "import started",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "import started")
 }
 
 // ImportFromURL URL导入小说（异步）
@@ -348,21 +342,19 @@ func (h *ImportHandler) ImportFromURL(c *gin.Context) {
 		return
 	}
 
+	reqID2 := c.GetString("request_id")
 	go func(taskID string, r *service.ImportRequest) {
+		log := logger.WithID(reqID2)
 		defer func() {
 			if rc := recover(); rc != nil {
-				logger.Errorf("[ImportHandler] ImportFromURL task %s panic: %v", taskID, rc)
+				log.Errorf("[ImportHandler] ImportFromURL task %s panic: %v", taskID, rc)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.runImportAndAnalyze(taskID, r, tenantID)
+		h.runImportAndAnalyze(taskID, r, tenantID, reqID2)
 	}(task.TaskID, importReq)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "import started",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "import started")
 }
 
 // ImportFromCrawl 爬取导入小说（异步）
@@ -405,10 +397,12 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 		})
 	}
 
+	reqID3 := c.GetString("request_id")
 	go func(taskID string, r *service.ImportRequest) {
+		log := logger.WithID(reqID3)
 		defer func() {
 			if rc := recover(); rc != nil {
-				logger.Errorf("[ImportHandler] ImportFromCrawl task %s panic: %v", taskID, rc)
+				log.Errorf("[ImportHandler] ImportFromCrawl task %s panic: %v", taskID, rc)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -417,7 +411,7 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 		// 1. 创建章节存根，启动后台爬取
 		result, err := h.importService.Import(r)
 		if err != nil {
-			logger.Errorf("[ImportHandler] Crawl import task %s failed: %v", taskID, err)
+			log.Errorf("[ImportHandler] Crawl import task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -449,7 +443,7 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 			if progress == nil {
 				noProgressCount++
 				if noProgressCount >= maxNoProgress {
-					logger.Printf("[ImportHandler] crawl progress lost for novel %d, aborting poll", novelID)
+					log.Printf("[ImportHandler] crawl progress lost for novel %d, aborting poll", novelID)
 					break
 				}
 			} else {
@@ -490,11 +484,7 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 		})
 	}(task.TaskID, importReq)
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "crawl started",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "crawl started")
 }
 
 // ImportAndGenerate 导入小说并生成视频
@@ -736,7 +726,7 @@ func (h *ImportHandler) UploadChunk(c *gin.Context) {
 		pipe.SAdd(context.Background(), chunkReceivedKey(uploadID), strconv.Itoa(chunkNo))
 		pipe.Expire(context.Background(), chunkReceivedKey(uploadID), chunkRedisTTL)
 		if _, err := pipe.Exec(context.Background()); err != nil {
-			logger.Errorf("[UploadChunk] Redis pipeline failed for %s chunk %d: %v", uploadID, chunkNo, err)
+			reqLogger(c).Errorf("[UploadChunk] Redis pipeline failed for %s chunk %d: %v", uploadID, chunkNo, err)
 		}
 		// Get cross-instance received count from Redis Set.
 		n, _ := h.cache.SCard(context.Background(), chunkReceivedKey(uploadID)).Result()
@@ -883,8 +873,9 @@ func (h *ImportHandler) CompleteChunkedUpload(c *gin.Context) {
 	h.taskSvc.UpdateProgress(task.TaskID, 5)                                   //nolint:errcheck
 	h.taskSvc.SetMeta(task.TaskID, map[string]interface{}{"step": "解析导入中..."}) //nolint:errcheck
 
-	go h.runImportAndAnalyze(task.TaskID, req, tenantID)
+	go h.runImportAndAnalyze(task.TaskID, req, tenantID, c.GetString("request_id"))
 
+	reqLogger(c).Printf("[async] task created: task_id=%s", task.TaskID)
 	c.JSON(http.StatusAccepted, gin.H{
 		"code":    0,
 		"message": "import started",
@@ -921,11 +912,7 @@ func (h *ImportHandler) StartAnalysis(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "analysis started",
-		"data":    gin.H{"task_id": taskID},
-	})
+	respondAccepted(c, taskID, "analysis started")
 }
 
 // GetCrawlStatus 查询爬取进度
@@ -974,10 +961,12 @@ func (h *ImportHandler) ResumeCrawl(c *gin.Context) {
 		return
 	}
 
+	reqID4 := c.GetString("request_id")
 	go func(taskID string, nid uint) {
+		log := logger.WithID(reqID4)
 		defer func() {
 			if rc := recover(); rc != nil {
-				logger.Errorf("[ImportHandler] ResumeCrawl task %s panic: %v", taskID, rc)
+				log.Errorf("[ImportHandler] ResumeCrawl task %s panic: %v", taskID, rc)
 				h.taskSvc.Fail(taskID, "内部错误") //nolint:errcheck
 			}
 		}()
@@ -1008,11 +997,7 @@ func (h *ImportHandler) ResumeCrawl(c *gin.Context) {
 		h.taskSvc.Complete(taskID, map[string]interface{}{"novel_id": nid, "message": "续爬完成"}) //nolint:errcheck
 	}(task.TaskID, uint(novelID))
 
-	c.JSON(http.StatusAccepted, gin.H{
-		"code":    0,
-		"message": "crawl resumed",
-		"data":    gin.H{"task_id": task.TaskID},
-	})
+	respondAccepted(c, task.TaskID, "crawl resumed")
 }
 
 // 检测文件格式

@@ -434,21 +434,31 @@ func (s *ItemService) DeleteChapterItem(chapterID, itemID uint) error {
 	return s.chapterItemRepo.Delete(chapterID, itemID)
 }
 
-// ListEffectiveItems 获取章节的有效物品列表（章节级覆盖优先，不存在则用项目级）
+// ListEffectiveItems 获取章节的有效物品列表。
+// 只返回已通过 AI 提取或手动绑定（ink_chapter_item 有记录）的物品，
+// 章节级覆盖字段（location/owner）优先于项目级默认值。
 func (s *ItemService) ListEffectiveItems(novelID uint, chapterID uint) ([]*EffectiveItem, error) {
-	// 获取所有项目级物品
-	items, err := s.itemRepo.ListByNovel(novelID)
+	// 只取本章绑定的 ChapterItem 记录
+	chapterItems, err := s.chapterItemRepo.ListByChapter(chapterID)
 	if err != nil {
 		return nil, err
 	}
-	// 获取本章节的所有覆盖
-	chapterItems, err := s.chapterItemRepo.ListByChapter(chapterID)
-	if err != nil {
-		chapterItems = nil // non-fatal
+	if len(chapterItems) == 0 {
+		return []*EffectiveItem{}, nil
 	}
-	overrideMap := make(map[uint]*model.ChapterItem, len(chapterItems))
+
+	// 收集需要查询的 item ID
+	itemIDs := make([]uint, 0, len(chapterItems))
+	ciMap := make(map[uint]*model.ChapterItem, len(chapterItems))
 	for _, ci := range chapterItems {
-		overrideMap[ci.ItemID] = ci
+		itemIDs = append(itemIDs, ci.ItemID)
+		ciMap[ci.ItemID] = ci
+	}
+
+	// 批量获取项目级物品
+	items, err := s.itemRepo.ListByIDs(itemIDs)
+	if err != nil {
+		return nil, err
 	}
 
 	result := make([]*EffectiveItem, 0, len(items))
@@ -458,13 +468,13 @@ func (s *ItemService) ListEffectiveItems(novelID uint, chapterID uint) ([]*Effec
 			EffectiveLocation: item.Location,
 			EffectiveOwner:    item.Owner,
 		}
-		if override, ok := overrideMap[item.ID]; ok {
-			ei.ChapterOverride = override
-			if override.Location != "" {
-				ei.EffectiveLocation = override.Location
+		if ci, ok := ciMap[item.ID]; ok {
+			ei.ChapterOverride = ci
+			if ci.Location != "" {
+				ei.EffectiveLocation = ci.Location
 			}
-			if override.Owner != "" {
-				ei.EffectiveOwner = override.Owner
+			if ci.Owner != "" {
+				ei.EffectiveOwner = ci.Owner
 			}
 		}
 		result = append(result, ei)
@@ -681,10 +691,14 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint, u
 
 	novelTitle := "本小说"
 	novelGenre := ""
+	promptLanguage := "zh"
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
 			novelTitle = novel.Title
 			novelGenre = novel.Meta.Genre
+			if novel.AIConfig.PromptLanguage != "" {
+				promptLanguage = novel.AIConfig.PromptLanguage
+			}
 		}
 	}
 
@@ -697,11 +711,12 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint, u
 	}
 
 	chItemsPrompt2, err := renderPrompt("extract_chapter_items", map[string]interface{}{
-		"NovelTitle":    novelTitle,
-		"Genre":         novelGenre,
-		"ExistingNames": existingNames,
-		"Content":       content,
-		"UserPrompt":    userPrompt,
+		"NovelTitle":     novelTitle,
+		"Genre":          novelGenre,
+		"ExistingNames":  existingNames,
+		"Content":        content,
+		"UserPrompt":     userPrompt,
+		"PromptLanguage": promptLanguage,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render extract_chapter_items: %w", err)

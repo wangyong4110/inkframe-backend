@@ -1,7 +1,11 @@
 package middleware
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -88,6 +92,100 @@ func getBucket(ip string, capacity, rate float64) *tokenBucket {
 	return actual.(*tokenBucket)
 }
 
+// jsonBodyWriter 拦截 Write 调用，将 JSON 响应体缓冲起来，
+// 非 JSON 内容（SSE / 二进制 / 文本）直接透传给原始 ResponseWriter。
+type jsonBodyWriter struct {
+	gin.ResponseWriter
+	buf     bytes.Buffer
+	flushed bool // Flush() 被调用后标记为已透传，不再缓冲
+}
+
+func (w *jsonBodyWriter) Write(b []byte) (int, error) {
+	if w.flushed {
+		return w.ResponseWriter.Write(b)
+	}
+	ct := w.Header().Get("Content-Type")
+	if !strings.Contains(ct, "application/json") {
+		// 非 JSON 响应：标记透传，直接写入底层
+		w.flushed = true
+		return w.ResponseWriter.Write(b)
+	}
+	return w.buf.Write(b)
+}
+
+func (w *jsonBodyWriter) WriteString(s string) (int, error) {
+	return w.Write([]byte(s))
+}
+
+// Flush 用于 SSE / 流式响应。调用后将缓冲内容直接输出，后续不再缓冲。
+func (w *jsonBodyWriter) Flush() {
+	if !w.flushed {
+		if w.buf.Len() > 0 {
+			w.ResponseWriter.Write(w.buf.Bytes()) //nolint:errcheck
+			w.buf.Reset()
+		}
+		w.flushed = true
+	}
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// finalize 将缓冲的 JSON 响应注入 request_id 后写出。
+func (w *jsonBodyWriter) finalize(reqID string) {
+	if w.flushed || w.buf.Len() == 0 {
+		return
+	}
+	body := w.buf.Bytes()
+	if reqID != "" {
+		var m map[string]interface{}
+		if err := json.Unmarshal(body, &m); err == nil {
+			m["request_id"] = reqID
+			if enriched, err := json.Marshal(m); err == nil {
+				body = enriched
+			}
+		}
+	}
+	w.ResponseWriter.Write(body) //nolint:errcheck
+}
+
+// ResponseEnricher 是一个 Gin 中间件，自动向所有 JSON 响应体中注入 request_id 字段，
+// 与请求头 X-Request-ID 保持一致。非 JSON 响应（SSE、二进制、流式等）直接透传，不受影响。
+// 必须注册在 RequestID() 之后。
+func ResponseEnricher() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		bw := &jsonBodyWriter{ResponseWriter: c.Writer}
+		c.Writer = bw
+		c.Next()
+		bw.finalize(c.GetString("request_id"))
+	}
+}
+
+// generateReqID 生成 8 字节随机十六进制字符串作为请求 ID 兜底值（前端未传时使用）。
+func generateReqID() string {
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// RequestID 读取请求头 X-Request-ID（由前端生成）或在缺失时生成兜底值，
+// 将 request ID 写入 gin.Context（"request_id"）、回写响应头，
+// 并注入 Go context（供 service 层通过 logger.Ctx(ctx) 使用）。
+// 必须注册在 Logger() 之前。
+func RequestID() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		reqID := c.GetHeader("X-Request-ID")
+		if reqID == "" {
+			reqID = generateReqID()
+		}
+		c.Set("request_id", reqID)
+		c.Header("X-Request-ID", reqID)
+		ctx := logger.WithReqID(c.Request.Context(), reqID)
+		c.Request = c.Request.WithContext(ctx)
+		c.Next()
+	}
+}
+
 // Logger 日志中间件（跳过健康检查及任务轮询路径）
 func Logger() gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -115,12 +213,14 @@ func Logger() gin.HandlerFunc {
 		metrics.HTTPRequestsTotal.WithLabelValues(method, routePath, statusStr).Inc()
 		metrics.HTTPRequestDuration.WithLabelValues(method, routePath, statusStr).Observe(latency.Seconds())
 
-		msg := fmt.Sprintf("[%s] %s %s %d %v",
+		reqID := c.GetString("request_id")
+		msg := fmt.Sprintf("[%s] %s %s %d %v rid=%s",
 			time.Now().Format("2006-01-02 15:04:05"),
 			method,
 			path,
 			status,
 			latency,
+			reqID,
 		)
 		if method == "GET" {
 			logger.Debugf("%s", msg)
@@ -186,8 +286,8 @@ func CORSMiddleware(allowedOrigins []string) gin.HandlerFunc {
 			c.Header("Access-Control-Allow-Origin", origin)
 		}
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization, X-Requested-With")
-		c.Header("Access-Control-Expose-Headers", "Content-Length, Access-Control-Allow-Origin, Access-Control-Allow-Headers")
+		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization, X-Requested-With, X-Request-ID")
+		c.Header("Access-Control-Expose-Headers", "Content-Length, Access-Control-Allow-Origin, Access-Control-Allow-Headers, X-Request-ID")
 		c.Header("Access-Control-Max-Age", "172800")
 
 		if c.Request.Method == "OPTIONS" {

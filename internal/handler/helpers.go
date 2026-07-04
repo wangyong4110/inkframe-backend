@@ -9,9 +9,16 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
+
+// reqLogger 返回携带本次请求 X-Request-ID 的 logger，供 handler 方法调用。
+// 用法：reqLogger(c).Printf("doing %s", something)
+func reqLogger(c *gin.Context) *logger.ReqLogger {
+	return logger.Ctx(c.Request.Context())
+}
 
 // parseID parses a uint route parameter, writing a 400 response on failure.
 // Returns (id, true) on success; (0, false) on failure.

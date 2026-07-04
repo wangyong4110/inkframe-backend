@@ -99,7 +99,7 @@ func (h *ChapterHandler) CreateChapter(c *gin.Context) {
 
 	chapter, err := h.chapterService.CreateChapter(uint(novelId), &req)
 	if err != nil {
-		logger.Errorf("[ChapterHandler] CreateChapter: novelID=%d err=%v", novelId, err)
+		reqLogger(c).Errorf("[ChapterHandler] CreateChapter: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -137,7 +137,7 @@ func (h *ChapterHandler) ReorderChapters(c *gin.Context) {
 		orders = append(orders, repository.ChapterOrder{ID: uint(o.ChapterID), ChapterNo: o.ChapterNo})
 	}
 	if err := h.chapterService.ReorderChapters(uint(novelId), orders); err != nil {
-		logger.Errorf("[ChapterHandler] ReorderChapters: novelID=%d err=%v", novelId, err)
+		reqLogger(c).Errorf("[ChapterHandler] ReorderChapters: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -162,7 +162,7 @@ func (h *ChapterHandler) InsertChapter(c *gin.Context) {
 	}
 	chapter, err := h.chapterService.InsertChapterAfter(uint(novelId), req.AfterChapterNo)
 	if err != nil {
-		logger.Errorf("[ChapterHandler] InsertChapter: novelID=%d err=%v", novelId, err)
+		reqLogger(c).Errorf("[ChapterHandler] InsertChapter: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -204,7 +204,7 @@ func (h *ChapterHandler) ListChapters(c *gin.Context) {
 		p := parsePagination(c)
 		chapters, total, err := h.chapterService.ListChaptersPaged(uint(novelId), p.Page, p.PageSize)
 		if err != nil {
-			logger.Errorf("[ChapterHandler] ListChapters: novelID=%d err=%v", novelId, err)
+			reqLogger(c).Errorf("[ChapterHandler] ListChapters: novelID=%d err=%v", novelId, err)
 			respondErr(c, http.StatusInternalServerError, err.Error())
 			return
 		}
@@ -220,7 +220,7 @@ func (h *ChapterHandler) ListChapters(c *gin.Context) {
 
 	chapters, err := h.chapterService.ListChapters(uint(novelId))
 	if err != nil {
-		logger.Errorf("[ChapterHandler] ListChapters: novelID=%d err=%v", novelId, err)
+		reqLogger(c).Errorf("[ChapterHandler] ListChapters: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -256,7 +256,7 @@ func (h *ChapterHandler) UpdateChapter(c *gin.Context) {
 			respondErr(c, http.StatusNotFound, "chapter not found")
 			return
 		}
-		logger.Errorf("[ChapterHandler] UpdateChapter: chapterID=%d err=%v", id, err)
+		reqLogger(c).Errorf("[ChapterHandler] UpdateChapter: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -277,7 +277,7 @@ func (h *ChapterHandler) DeleteChapter(c *gin.Context) {
 			respondErr(c, http.StatusNotFound, "chapter not found")
 			return
 		}
-		logger.Errorf("[ChapterHandler] DeleteChapter: chapterID=%d err=%v", id, err)
+		reqLogger(c).Errorf("[ChapterHandler] DeleteChapter: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -300,7 +300,7 @@ func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 	if !bindJSON(c, &req) {
 		return
 	}
-	logger.Printf("[ChapterHandler] GenerateChapter: novelID=%d chapterNo=%d", req.NovelID, req.ChapterNo)
+	reqLogger(c).Printf("[ChapterHandler] GenerateChapter: novelID=%d chapterNo=%d", req.NovelID, req.ChapterNo)
 
 	if !requireNovelEditorRole(c, h.novelService, req.NovelID) {
 		return
@@ -329,10 +329,12 @@ func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 		"req":      req,
 	})
 
+	reqID := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[ChapterHandler] GenerateChapter task %s panic: %v", taskID, r)
+				log.Errorf("[ChapterHandler] GenerateChapter task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -341,7 +343,7 @@ func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 
 		chapter, genErr := h.chapterService.GenerateChapter(tenantID, req.NovelID, &req)
 		if genErr != nil {
-			logger.Errorf("[ChapterHandler] GenerateChapter task %s failed: novelID=%d err=%v", taskID, req.NovelID, genErr)
+			log.Errorf("[ChapterHandler] GenerateChapter task %s failed: novelID=%d err=%v", taskID, req.NovelID, genErr)
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
 			return
 		}
@@ -374,10 +376,12 @@ func (h *ChapterHandler) RegenerateChapter(c *gin.Context) {
 		return
 	}
 
+	reqID2 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID2)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[ChapterHandler] RegenerateChapter task %s panic: %v", taskID, r)
+				log.Errorf("[ChapterHandler] RegenerateChapter task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -386,7 +390,7 @@ func (h *ChapterHandler) RegenerateChapter(c *gin.Context) {
 
 		chapter, genErr := h.chapterService.RegenerateChapter(tenantID, uint(id), &req)
 		if genErr != nil {
-			logger.Errorf("[ChapterHandler] RegenerateChapter task %s failed: chapterID=%d err=%v", taskID, id, genErr)
+			log.Errorf("[ChapterHandler] RegenerateChapter task %s failed: chapterID=%d err=%v", taskID, id, genErr)
 			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
 			return
 		}
@@ -413,7 +417,7 @@ func (h *ChapterHandler) GetVersions(c *gin.Context) {
 
 	versions, err := h.versionService.GetVersions(uint(id))
 	if err != nil {
-		logger.Errorf("[ChapterHandler] GetVersions: chapterID=%d err=%v", id, err)
+		reqLogger(c).Errorf("[ChapterHandler] GetVersions: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -436,7 +440,7 @@ func (h *ChapterHandler) RestoreVersion(c *gin.Context) {
 
 	chapter, err := h.versionService.RestoreVersion(uint(id), versionNo)
 	if err != nil {
-		logger.Errorf("[ChapterHandler] RestoreVersion: chapterID=%d versionNo=%d err=%v", id, versionNo, err)
+		reqLogger(c).Errorf("[ChapterHandler] RestoreVersion: chapterID=%d versionNo=%d err=%v", id, versionNo, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -528,7 +532,7 @@ func (h *ChapterHandler) UpdateChapterByNo(c *gin.Context) {
 
 	chapter, err := h.chapterService.UpdateChapterByNo(uint(novelId), chapterNo, &req)
 	if err != nil {
-		logger.Errorf("[ChapterHandler] UpdateChapterByNo: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
+		reqLogger(c).Errorf("[ChapterHandler] UpdateChapterByNo: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -558,7 +562,7 @@ func (h *ChapterHandler) DeleteChapterByNo(c *gin.Context) {
 	}
 
 	if err := h.chapterService.DeleteChapterByNo(uint(novelId), chapterNo); err != nil {
-		logger.Errorf("[ChapterHandler] DeleteChapterByNo: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
+		reqLogger(c).Errorf("[ChapterHandler] DeleteChapterByNo: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -603,7 +607,7 @@ func (h *ChapterHandler) PublishChapter(c *gin.Context) {
 
 	chapter, err := h.chapterService.PublishChapter(uint(novelId), chapterNo)
 	if err != nil {
-		logger.Errorf("[ChapterHandler] PublishChapter: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
+		reqLogger(c).Errorf("[ChapterHandler] PublishChapter: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -640,7 +644,7 @@ func (h *ChapterHandler) UnpublishChapter(c *gin.Context) {
 
 	chapter, err := h.chapterService.UnpublishChapter(uint(novelId), chapterNo)
 	if err != nil {
-		logger.Errorf("[ChapterHandler] UnpublishChapter: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
+		reqLogger(c).Errorf("[ChapterHandler] UnpublishChapter: novelID=%d chapterNo=%d err=%v", novelId, chapterNo, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -663,7 +667,7 @@ func (h *ChapterHandler) BatchPublishChapters(c *gin.Context) {
 	}
 	count, err := h.chapterService.BatchPublishChapters(uint(novelId))
 	if err != nil {
-		logger.Errorf("[ChapterHandler] BatchPublishChapters: novelID=%d err=%v", novelId, err)
+		reqLogger(c).Errorf("[ChapterHandler] BatchPublishChapters: novelID=%d err=%v", novelId, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -697,7 +701,7 @@ func (h *ChapterHandler) GenerateChapterOutline(c *gin.Context) {
 
 	chapter, err := h.chapterService.GenerateChapterOutline(getTenantID(c), uint(novelID), chapterNo, req.Prompt)
 	if err != nil {
-		logger.Errorf("[ChapterHandler] GenerateChapterOutline: novelID=%d chapterNo=%d err=%v", novelID, chapterNo, err)
+		reqLogger(c).Errorf("[ChapterHandler] GenerateChapterOutline: novelID=%d chapterNo=%d err=%v", novelID, chapterNo, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -714,7 +718,7 @@ func (h *ChapterHandler) GetQualityReport(c *gin.Context) {
 
 	report, err := h.qualityService.CheckChapter(uint(id))
 	if err != nil {
-		logger.Errorf("[ChapterHandler] GetQualityReport: chapterID=%d err=%v", id, err)
+		reqLogger(c).Errorf("[ChapterHandler] GetQualityReport: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -732,7 +736,7 @@ func (h *ChapterHandler) QualityCheck(c *gin.Context) {
 
 	report, err := h.qualityService.CheckChapter(uint(id))
 	if err != nil {
-		logger.Errorf("[ChapterHandler] QualityCheck: chapterID=%d err=%v", id, err)
+		reqLogger(c).Errorf("[ChapterHandler] QualityCheck: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -761,7 +765,7 @@ func (h *ChapterHandler) RefineChapter(c *gin.Context) {
 
 	content, err := h.qualityService.RefineWithSuggestions(uint(id), req.Suggestions)
 	if err != nil {
-		logger.Errorf("[ChapterHandler] RefineChapter: chapterID=%d err=%v", id, err)
+		reqLogger(c).Errorf("[ChapterHandler] RefineChapter: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -783,7 +787,7 @@ func (h *ChapterHandler) ApproveChapter(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req) // comment is optional; ignore bind errors
 
 	if err := h.chapterService.ApproveChapter(uint(id), req.Comment); err != nil {
-		logger.Errorf("[ChapterHandler] ApproveChapter: chapterID=%d err=%v", id, err)
+		reqLogger(c).Errorf("[ChapterHandler] ApproveChapter: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -807,7 +811,7 @@ func (h *ChapterHandler) RejectChapter(c *gin.Context) {
 	}
 
 	if err := h.chapterService.RejectChapter(uint(id), req.Reason); err != nil {
-		logger.Errorf("[ChapterHandler] RejectChapter: chapterID=%d err=%v", id, err)
+		reqLogger(c).Errorf("[ChapterHandler] RejectChapter: chapterID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -828,19 +832,21 @@ func (h *ChapterHandler) BatchSummarizeChapters(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	logger.Printf("[ChapterHandler] BatchSummarizeChapters: tenantID=%d novelID=%d taskID=%s", tenantID, novelID, task.TaskID)
+	reqLogger(c).Printf("[ChapterHandler] BatchSummarizeChapters: tenantID=%d novelID=%d taskID=%s", tenantID, novelID, task.TaskID)
+	reqID3 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID3)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[ChapterHandler] BatchSummarizeChapters task %s panic: %v", taskID, r)
+				log.Errorf("[ChapterHandler] BatchSummarizeChapters task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
-		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
+		h.taskSvc.SetRunning(taskID)                                           //nolint:errcheck
 		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
 		count, err := h.chapterService.BatchGenerateSummaries(tenantID, uint(novelID), progressFn)
 		if err != nil {
-			logger.Errorf("[ChapterHandler] BatchGenerateSummaries task %s failed: %v", taskID, err)
+			log.Errorf("[ChapterHandler] BatchGenerateSummaries task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 		} else {
 			h.taskSvc.Complete(taskID, map[string]interface{}{"count": count}) //nolint:errcheck
@@ -864,10 +870,12 @@ func (h *ChapterHandler) BatchReviewChapters(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	reqID4 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID4)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[ChapterHandler] BatchReviewChapters task %s panic: %v", taskID, r)
+				log.Errorf("[ChapterHandler] BatchReviewChapters task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -878,7 +886,7 @@ func (h *ChapterHandler) BatchReviewChapters(c *gin.Context) {
 			}
 		}
 		if err := h.qualityService.BatchReviewNovelChapters(context.Background(), tenantID, uint(novelID), progressFn); err != nil {
-			logger.Errorf("[ChapterHandler] BatchReviewChapters task %s failed: %v", taskID, err)
+			log.Errorf("[ChapterHandler] BatchReviewChapters task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -910,10 +918,12 @@ func (h *ChapterHandler) ReviewChapter(c *gin.Context) {
 		"provider": req.Provider,
 	})
 
+	reqID5 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID5)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[ChapterHandler] ReviewChapter task %s panic: %v", taskID, r)
+				log.Errorf("[ChapterHandler] ReviewChapter task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -925,12 +935,12 @@ func (h *ChapterHandler) ReviewChapter(c *gin.Context) {
 		// which would abort the long-running AI review call.
 		review, reviewErr := h.qualityService.ReviewChapter(context.Background(), uint(id), req.Provider)
 		if reviewErr != nil {
-			logger.Errorf("[ChapterHandler] ReviewChapter task %s failed: chapterID=%d err=%v", taskID, id, reviewErr)
+			log.Errorf("[ChapterHandler] ReviewChapter task %s failed: chapterID=%d err=%v", taskID, id, reviewErr)
 			h.taskSvc.Fail(taskID, reviewErr.Error()) //nolint:errcheck
 			return
 		}
-		h.taskSvc.UpdateProgress(taskID, 90)           //nolint:errcheck
-		h.taskSvc.Complete(taskID, review)              //nolint:errcheck
+		h.taskSvc.UpdateProgress(taskID, 90) //nolint:errcheck
+		h.taskSvc.Complete(taskID, review)   //nolint:errcheck
 	}(task.TaskID)
 
 	respondAccepted(c, task.TaskID, "章节审查任务已提交")
@@ -1180,7 +1190,7 @@ func (h *ChapterHandler) BatchDeleteChapters(c *gin.Context) {
 
 	tenantID := getTenantID(c)
 	if err := h.chapterService.BatchDeleteChapters(c.Request.Context(), novelID, tenantID, req.ChapterIDs); err != nil {
-		logger.Errorf("[ChapterHandler] BatchDeleteChapters: novelID=%d err=%v", novelID, err)
+		reqLogger(c).Errorf("[ChapterHandler] BatchDeleteChapters: novelID=%d err=%v", novelID, err)
 		respondErr(c, http.StatusInternalServerError, "delete failed")
 		return
 	}
@@ -1228,10 +1238,12 @@ func (h *ChapterHandler) RewriteChapterByInstruction(c *gin.Context) {
 	})
 
 	instruction := req.Instruction
+	reqID6 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID6)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[ChapterHandler] RewriteByInstruction task %s panic: %v", taskID, r)
+				log.Errorf("[ChapterHandler] RewriteByInstruction task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -1240,7 +1252,7 @@ func (h *ChapterHandler) RewriteChapterByInstruction(c *gin.Context) {
 
 		newContent, rewriteErr := h.qualityService.RewriteByInstruction(context.Background(), uint(id), instruction)
 		if rewriteErr != nil {
-			logger.Errorf("[ChapterHandler] RewriteByInstruction task %s failed: chapterID=%d err=%v", taskID, id, rewriteErr)
+			log.Errorf("[ChapterHandler] RewriteByInstruction task %s failed: chapterID=%d err=%v", taskID, id, rewriteErr)
 			h.taskSvc.Fail(taskID, rewriteErr.Error()) //nolint:errcheck
 			return
 		}
@@ -1248,13 +1260,13 @@ func (h *ChapterHandler) RewriteChapterByInstruction(c *gin.Context) {
 
 		// Save current content as a version before overwriting
 		if err2 := h.chapterService.ArchiveVersionBeforeRewrite(uint(id), instruction); err2 != nil {
-			logger.Errorf("[ChapterHandler] RewriteByInstruction archive version failed: %v", err2)
+			log.Errorf("[ChapterHandler] RewriteByInstruction archive version failed: %v", err2)
 		}
 
 		// Apply new content
 		updated, applyErr := h.chapterService.ApplyRewrittenContent(uint(id), newContent)
 		if applyErr != nil {
-			logger.Errorf("[ChapterHandler] RewriteByInstruction apply content failed: %v", applyErr)
+			log.Errorf("[ChapterHandler] RewriteByInstruction apply content failed: %v", applyErr)
 			h.taskSvc.Fail(taskID, "保存修改内容失败: "+applyErr.Error()) //nolint:errcheck
 			return
 		}
@@ -1344,7 +1356,7 @@ func (h *ChapterHandler) ChapterChatStream(c *gin.Context) {
 	aiSvc := h.novelService.GetAIService()
 	ch, streamErr := aiSvc.StreamWithMessagesCtx(c.Request.Context(), tenantID, "novel_chat", msgs, systemPrompt)
 	if streamErr != nil {
-		logger.Errorf("[ChapterChatStream] chapterID=%d err=%v", id, streamErr)
+		reqLogger(c).Errorf("[ChapterChatStream] chapterID=%d err=%v", id, streamErr)
 		respondErr(c, http.StatusInternalServerError, "AI 响应失败: "+streamErr.Error())
 		return
 	}

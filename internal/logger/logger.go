@@ -3,6 +3,7 @@
 package logger
 
 import (
+	"context"
 	"os"
 
 	"go.uber.org/zap"
@@ -74,3 +75,51 @@ func Debug(args ...interface{})                 { sugar.Debug(args...) }
 func Info(args ...interface{})                  { sugar.Info(args...) }
 func Warn(args ...interface{})                  { sugar.Warn(args...) }
 func Error(args ...interface{})                 { sugar.Error(args...) }
+
+// ── Request-scoped logger（带 request ID 前缀）────────────────────────────────
+
+type ctxKey int
+
+const reqIDKey ctxKey = iota
+
+// WithReqID 将 request ID 存入 context，供跨层传递。
+func WithReqID(ctx context.Context, reqID string) context.Context {
+	return context.WithValue(ctx, reqIDKey, reqID)
+}
+
+// ReqIDFromCtx 从 context 中读取 request ID，不存在时返回空串。
+func ReqIDFromCtx(ctx context.Context) string {
+	if v, ok := ctx.Value(reqIDKey).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// ReqLogger 是携带 request ID 的请求级别 logger，所有方法均在日志消息前追加 [rid=xxx]。
+type ReqLogger struct{ id string }
+
+// Ctx 从 context 中提取 request ID 并返回对应的 ReqLogger。
+func Ctx(ctx context.Context) *ReqLogger { return &ReqLogger{id: ReqIDFromCtx(ctx)} }
+
+// WithID 直接用字符串创建 ReqLogger，用于 goroutine 等无法访问 context 的场景。
+func WithID(id string) *ReqLogger { return &ReqLogger{id: id} }
+
+func (l *ReqLogger) pfx() string {
+	if l.id == "" {
+		return ""
+	}
+	return "[rid=" + l.id + "] "
+}
+
+// AddCallerSkip=1 已在 sugar 上设置（跳过 logger 包本身）；
+// ReqLogger 的方法再多一层调用，需额外 skip=1，故用 sugar.WithOptions。
+func (l *ReqLogger) s() *zap.SugaredLogger {
+	return sugar.WithOptions(zap.AddCallerSkip(1))
+}
+
+func (l *ReqLogger) Printf(format string, args ...interface{})  { l.s().Infof(l.pfx()+format, args...) }
+func (l *ReqLogger) Errorf(format string, args ...interface{})  { l.s().Errorf(l.pfx()+format, args...) }
+func (l *ReqLogger) Warnf(format string, args ...interface{})   { l.s().Warnf(l.pfx()+format, args...) }
+func (l *ReqLogger) Infof(format string, args ...interface{})   { l.s().Infof(l.pfx()+format, args...) }
+func (l *ReqLogger) Debugf(format string, args ...interface{})  { l.s().Debugf(l.pfx()+format, args...) }
+func (l *ReqLogger) Fatalf(format string, args ...interface{})  { l.s().Fatalf(l.pfx()+format, args...) }

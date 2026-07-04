@@ -52,10 +52,12 @@ func (h *ImageHandler) EditImage(c *gin.Context) {
 
 	imageURL := body.ImageURL
 	instruction := body.Instruction
+	reqID := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[ImageHandler] EditImage task %s panic: %v", taskID, r)
+				log.Errorf("[ImageHandler] EditImage task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
@@ -64,7 +66,7 @@ func (h *ImageHandler) EditImage(c *gin.Context) {
 			context.Background(), tenantID, imageURL, instruction,
 		)
 		if err != nil {
-			logger.Errorf("[ImageHandler] EditImage task %s failed: %v", taskID, err)
+			log.Errorf("[ImageHandler] EditImage task %s failed: %v", taskID, err)
 			h.taskSvc.Fail(taskID, "failed to edit image: "+err.Error()) //nolint:errcheck
 			return
 		}
@@ -116,17 +118,19 @@ func (h *ImageHandler) UpscaleImage(c *gin.Context) {
 	scale := body.Scale
 	method := body.Method
 	novelID := body.NovelID
+	reqID2 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID2)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[ImageHandler] UpscaleImage task %s panic: %v", taskID, r)
+				log.Errorf("[ImageHandler] UpscaleImage task %s panic: %v", taskID, r)
 				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
 			}
 		}()
 		h.taskSvc.SetRunning(taskID) //nolint:errcheck
 		newURL, err := h.aiSvc.UpscaleImage(context.Background(), tenantID, novelID, imageURL, scale, method)
 		if err != nil {
-			logger.Errorf("[ImageHandler] UpscaleImage task %s method=%s failed: %v", taskID, method, err)
+			log.Errorf("[ImageHandler] UpscaleImage task %s method=%s failed: %v", taskID, method, err)
 			h.taskSvc.Fail(taskID, "高清处理失败: "+err.Error()) //nolint:errcheck
 			return
 		}

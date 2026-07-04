@@ -45,6 +45,7 @@ type VideoService struct {
 	lookRepo              *repository.CharacterLookRepository
 	itemRepo              *repository.ItemRepository
 	chapterItemRepo       *repository.ChapterItemRepository
+	worldviewRepo         *repository.WorldviewRepository
 	taskSvc            *TaskService
 	charListCache      sync.Map      // novelID → *charListEntry (short-lived cache for batch voice gen)
 	// 广场社交
@@ -121,6 +122,11 @@ func (s *VideoService) WithItemRepo(r *repository.ItemRepository) *VideoService 
 
 func (s *VideoService) WithChapterItemRepo(r *repository.ChapterItemRepository) *VideoService {
 	s.chapterItemRepo = r
+	return s
+}
+
+func (s *VideoService) WithWorldviewRepo(r *repository.WorldviewRepository) *VideoService {
+	s.worldviewRepo = r
 	return s
 }
 

@@ -34,10 +34,12 @@ func (h *OutlineReviewHandler) ReviewChapter(c *gin.Context) {
 		return
 	}
 
+	reqID := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[OutlineReviewHandler] ReviewChapter panic: %v", r)
+				log.Errorf("[OutlineReviewHandler] ReviewChapter panic: %v", r)
 				h.taskSvc.Fail(taskID, "内部错误") //nolint:errcheck
 			}
 		}()
@@ -45,7 +47,7 @@ func (h *OutlineReviewHandler) ReviewChapter(c *gin.Context) {
 		ctx := context.Background()
 		review, err := h.reviewSvc.ReviewChapterOutline(ctx, tenantID, id)
 		if err != nil {
-			logger.Errorf("[OutlineReviewHandler] ReviewChapter failed: chapterID=%d err=%v", id, err)
+			log.Errorf("[OutlineReviewHandler] ReviewChapter failed: chapterID=%d err=%v", id, err)
 			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 			return
 		}
@@ -86,10 +88,12 @@ func (h *OutlineReviewHandler) BatchReviewNovel(c *gin.Context) {
 		return
 	}
 
+	reqID2 := c.GetString("request_id")
 	go func(taskID string) {
+		log := logger.WithID(reqID2)
 		defer func() {
 			if r := recover(); r != nil {
-				logger.Errorf("[OutlineReviewHandler] BatchReview panic: %v", r)
+				log.Errorf("[OutlineReviewHandler] BatchReview panic: %v", r)
 				h.taskSvc.Fail(taskID, "内部错误") //nolint:errcheck
 			}
 		}()

@@ -1,4 +1,4 @@
-请从以下章节内容中提取本章出现的物品/道具，生成简要的物品档案。
+请从以下章节内容中提取本章出现的物品/道具，生成物品档案。
 
 # 小说信息
 - 标题：《{{ NovelTitle }}》
@@ -17,9 +17,23 @@
 3. 不要重复已有物品列表中的物品
 4. 不超过8个；若本章确实无符合条件的物品，输出空数组 []
 5. category 只能是：weapon / treasure / tool / document / artifact / other
-6. description：物品的详细说明，包含其在故事中的重要性、作用和特殊能力（1-2句）
-7. visual_prompt 用简短英文描述外观，不超过60词
-8. 严格输出 JSON 数组，不含任何说明文字
+{% if PromptLanguage == "en" %}
+6. appearance (English): visual description — material and texture, primary color, form and dimensions, surface details; used for image generation
+7. description (English): item function and significance in the story (1-2 sentences)
+{% else %}
+6. appearance：外观描述，包含材质与质感、主色调、形态尺寸、表面特征；此字段会用于图像生成
+7. description：物品在故事中的作用与意义（1-2句）
+{% endif %}
+8. visual_prompt：英文图像生成提示词，词数80-150词，必须包含：
+   - 物品类型与名称（如 ancient iron scissors, magical jade pendant）
+   - 材质：精确描述（如 "forged from old iron, slightly rusted surface"）
+   - 颜色：主色调 + 光效（如 "dull grey-black with faint metallic sheen"）
+   - 形态：尺寸感与形状细节（如 "palm-sized, curved blades, ring handles"）
+   - 表面细节：纹路/雕花/磨损痕迹等
+   - 特殊视觉效果（如有）：发光/气场/元素效果
+   - 陈设背景：展示方式（如 "placed on dark stone surface, soft side lighting, dark background"）
+   - 风格标签：fantasy concept art / realistic illustration，以及质量词（masterpiece, ultra-detailed）
+9. 严格输出 JSON 数组，不含任何说明文字
 
 {% include "fragments/user_prompt.j2" %}
 # 输出格式（JSON 数组）
@@ -31,6 +45,6 @@
     "description": "主角的传家宝剑，能斩断任何束缚，是本章突破境界的关键道具",
     "location": "主角腰间",
     "owner": "主角名",
-    "visual_prompt": "ancient longsword with carved runes on blade, glowing faint blue, ornate hilt"
+    "visual_prompt": "ancient cultivation longsword, forged from matte black cold iron with faint silver-grey grain visible at angles. Blade: straight double-edged, three feet long, slight taper toward tip. Surface: ancient rune engravings etched along both flats of the blade, runes emit a faint pale-blue cold luminescence. Guard: cast bronze crossguard shaped as spread dragon wings, single deep crimson ruby set in each dragon eye. Grip: dark charcoal silk cord over bone-white ray skin, slightly worn. Special effect: thin wisps of frost mist drifting along blade edge. Displayed upright on weathered dark stone pedestal, dramatic cold side lighting, deep void black background. Style: Chinese fantasy concept art, masterpiece, ultra-detailed, 8k, cinematic lighting"
   }
 ]
