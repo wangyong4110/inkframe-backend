@@ -566,14 +566,12 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				activeLook := s.getCharActiveLook(char, chapterNo)
 				var refImage, vprompt string
 				if activeLook != nil {
-					// 分镜参考图优先用单张 Portrait，不用 ThreeViewSheet（三格合图）。
-					// ThreeViewSheet 含正/侧/背三个视图，DreamO（seed3l_single_ip）会将其视为
-					// 三个角色实例，导致同一角色在生成画面中出现三次。
-					// Portrait 只有单一正视图，不会引发重复。
-					if activeLook.Portrait != "" {
-						refImage = normalizeMediaURL(activeLook.Portrait)
-					} else if activeLook.ThreeViewSheet != "" {
+					// 分镜参考图优先用三视图（ThreeViewSheet），包含正/侧/背多角度信息，
+					// 有助于多视角场景下的角色一致性；不存在时降级为单张 Portrait。
+					if activeLook.ThreeViewSheet != "" {
 						refImage = normalizeMediaURL(activeLook.ThreeViewSheet)
+					} else if activeLook.Portrait != "" {
+						refImage = normalizeMediaURL(activeLook.Portrait)
 					}
 					vprompt = activeLook.VisualPrompt
 				}
@@ -665,11 +663,11 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 						}
 						var refURL string
 						if ir.look != nil && len(characterPortraits) < maxCharRefs {
-							// Portrait 优先（同主流程），不用 ThreeViewSheet 避免角色重复
-							if ir.look.Portrait != "" {
-								refURL = normalizeMediaURL(ir.look.Portrait)
-							} else if ir.look.ThreeViewSheet != "" {
+							// 三视图优先（同主流程），降级用 Portrait
+							if ir.look.ThreeViewSheet != "" {
 								refURL = normalizeMediaURL(ir.look.ThreeViewSheet)
+							} else if ir.look.Portrait != "" {
+								refURL = normalizeMediaURL(ir.look.Portrait)
 							}
 						}
 						if refURL != "" {
@@ -838,13 +836,6 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// 有角色参考图时 → DreamO 模式：
-	//   - 只传角色参考图，场景图和物品图排除在外（防止污染 IP embedding）
-	//   - 多角色时所有角色参考图均传入（DreamO API 支持多张）
-	//   - 场景/物品信息通过 prompt 文字传达
-	//
-	// 无角色参考图时 → Text2ImgV3 纯文生图模式：
-	//   - 可加物品图和场景图作为视觉风格锚定
 	// DreamO（seed3l_single_ip）是单 IP 模型，只支持一个角色的参考图。
 	// 传入多个不同角色的参考图时，模型会将它们误认为同一角色的多视角，
 	// 导致画面中同一角色出现多次（重复角色 bug）。
@@ -860,18 +851,15 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 			shot.ShotNo, len(characterPortraits), len(characterPortraits)-1)
 	}
 	logger.Printf("[CharRef] shot#%d using %d character portrait(s) as reference", shot.ShotNo, len(cappedPortraits))
+	// allRefImages 组装：角色图（最多1张）+ 物品图 + 场景锚定图。
+	// 各 provider 按自身能力取用：
+	//   - 多图 API（jimeng4.0/4.6、doubao-seedream 等）可全部使用；
+	//   - 单图 API（Wanx、DreamO 等）只取第一张（角色图优先）。
 	var allRefImages []string
-	if len(cappedPortraits) > 0 {
-		// DreamO 模式：只传角色参考图，不传场景图/物品图（防止污染 IP embedding）
-		allRefImages = make([]string, len(cappedPortraits))
-		copy(allRefImages, cappedPortraits)
-	} else {
-		// Text2ImgV3 模式：无角色，加物品图和场景图作为视觉风格/主体参考
-		allRefImages = make([]string, 0, len(itemRefImages)+1)
-		allRefImages = append(allRefImages, itemRefImages...)
-		if sceneRefImage != "" {
-			allRefImages = append(allRefImages, sceneRefImage)
-		}
+	allRefImages = append(allRefImages, cappedPortraits...)
+	allRefImages = append(allRefImages, itemRefImages...)
+	if sceneRefImage != "" {
+		allRefImages = append(allRefImages, sceneRefImage)
 	}
 	logger.Printf("generateShotReferenceImage: shot %d allRefImages=%d (charPortraits=%d itemRefs=%d sceneRef=%v)",
 		shot.ShotNo, len(allRefImages), len(characterPortraits), len(itemRefImages), sceneRefImage != "")

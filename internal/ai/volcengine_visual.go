@@ -228,18 +228,25 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 	case VolcModelJimengT2Iv40:
 		params["prompt"] = req.Prompt
 		// 输入图（0~10张，仅支持 HTTP/HTTPS URL）
+		// 优先使用 buildReq 预筛的 ReferenceURLs（纯 HTTP URL 列表），避免 ReferenceImages 中
+		// 夹杂本地相对路径（/api/v1/media/...）时被 HTTP 检查过滤、导致后续参考图全部丢失。
 		var imgURLs []string
-		collect := func(u string) {
-			if u != "" && (strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")) && len(imgURLs) < 10 {
+		seen40 := make(map[string]bool)
+		addURL40 := func(u string) {
+			if u != "" && (strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")) && !seen40[u] && len(imgURLs) < 10 {
+				seen40[u] = true
 				imgURLs = append(imgURLs, u)
 			}
 		}
-		if req.ReferenceImage != "" {
-			collect(req.ReferenceImage)
-		}
-		for _, u := range req.ReferenceImages {
-			if u != req.ReferenceImage {
-				collect(u)
+		if len(req.ReferenceURLs) > 0 {
+			for _, u := range req.ReferenceURLs {
+				addURL40(u)
+			}
+		} else {
+			addURL40(req.ReferenceURL)
+			addURL40(req.ReferenceImage)
+			for _, u := range req.ReferenceImages {
+				addURL40(u)
 			}
 		}
 		if len(imgURLs) > 0 {
