@@ -1050,9 +1050,22 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	if err != nil && isContentSafetyError(err) && len(allRefImages) > 0 {
 		// 参考图被内容安全系统拦截（50511 Post Img Risk Not Pass）：
 		// 此类错误是确定性失败，重试相同参考图无意义。
-		// 降级为纯文生图（无参考图），保证分镜至少能生成一张图片。
-		logger.Warnf("generateShotReferenceImage: shot %d ref image blocked by safety filter, falling back to text-only", shot.ShotNo)
-		imageURL, err = s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", promptText, nil, artStyle, negPrompt, imageSize, sceneSeed)
+		// 降级为纯文生图（无参考图），但需补注入参考图角色的 VisualPrompt（原 DreamO 模式下这些 VP 被跳过，
+		// 因为参考图承担了外貌约束；纯文生图时文字是唯一外貌依据，必须补回）。
+		logger.Warnf("generateShotReferenceImage: shot %d ref image blocked by safety filter, falling back to text-only with injected char VPs", shot.ShotNo)
+		textOnlyPrompt := promptText
+		if len(cappedPortraits) > 0 {
+			var fallbackVPs []string
+			for i := range cappedPortraits {
+				if i < len(portraitOwners) && portraitOwners[i].vp != "" {
+					fallbackVPs = append(fallbackVPs, portraitOwners[i].vp)
+				}
+			}
+			if len(fallbackVPs) > 0 {
+				textOnlyPrompt = strings.Join(fallbackVPs, ", ") + ", " + textOnlyPrompt
+			}
+		}
+		imageURL, err = s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, "", textOnlyPrompt, nil, artStyle, negPrompt, imageSize, sceneSeed)
 	}
 	if err != nil {
 		logger.Errorf("generateShotReferenceImage: image gen failed for shot %d: %v", shot.ShotNo, err)
