@@ -1099,8 +1099,10 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// 无角色参考图时（Text2ImgV3 纯文生图）：用质量档位 CFG 替代 consistencyWeight，让文生图遵从 prompt；
 	// 有参考图时（DreamO）：consistencyWeight 控制 IP-Adapter 强度（0.75 → scale≈7.75）。
 	imageConsistencyWeight := charConsistencyWeight
-	if len(allRefImages) == 0 {
-		// Text2ImgV3 scale 参数（默认2.5，范围1-10），用质量 CFG 映射到合理范围（draft:6→0.56, production:7.5→0.72, master:8→0.78）
+	if len(cappedPortraits) == 0 {
+		// 无角色参考图时（含仅有场景锚点/物品参考图的情况）：
+		// 场景/物品图不适合 DreamO 角色 IP-Adapter 嵌入，降级为文生图 CFG 权重（< 0.7 → SeedEditV3；无参考图 → Text2ImgV3）。
+		// Text2ImgV3 scale 参数（默认2.5，范围1-10），用质量 CFG 映射到合理范围（draft:6→0.56, production:7.5→0.72, master:8→0.78）。
 		imageConsistencyWeight = (qualityCFG - 1.0) / 9.0
 	}
 	var sceneSeed int64
