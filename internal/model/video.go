@@ -59,7 +59,8 @@ type VideoRenderConfig struct {
 	ThreeDStyle    string `json:"three_d_style"`
 	GenerateAudio   *bool `json:"generate_audio"`    // Seedance 2.0/1.5：nil=API 默认(true)，false=无声视频
 	Priority        int   `json:"priority"`          // Seedance 2.0 请求优先级 0-9（0=默认FIFO，>0插队）
-	WebSearchEnabled bool `json:"web_search_enabled"` // Seedance 2.0：允许模型联网搜索（提升时效性）
+	WebSearchEnabled bool   `json:"web_search_enabled"` // Seedance 2.0：允许模型联网搜索（提升时效性）
+	VoiceMode        string `json:"voice_mode"`         // 配音模式，生成分镜时写入，供审查使用
 }
 
 // VideoPublishMeta 发布与展示元数据（JSON存储）

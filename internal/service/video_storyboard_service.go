@@ -111,6 +111,11 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		}
 	}
 
+	// 持久化 VoiceMode，供后续 ReviewStoryboard 读取正确的评分权重
+	if overrides.VoiceMode != "" {
+		video.RenderConfig.VoiceMode = overrides.VoiceMode
+	}
+
 	var content string
 	chapterNo := 0
 	if chapterID != nil {
@@ -378,9 +383,13 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		logger.Printf("[Storyboard] seg %d/%d start runes=%d expectedShots=%d prevTail=%d",
 			segIdx+1, len(segments), segRunes, segShotCount, len(prevTailShots))
 
+		// 计算本段在全章的百分比区间，用于在弧线骨架中定位当前段落的情感阶段
+		segStartPct := (runesProcessed - segRunes) * 100 / max(totalRunes, 1)
+		segEndPct := runesProcessed * 100 / max(totalRunes, 1)
+
 		prompt := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, len(segments), segShotCount,
 			characters, anchors, plotPoints, effectiveItems, prevTailShots, overrides.VoiceMode, promptLanguage, genre, video.RenderConfig.Pacing, arcPlan, imageStyle,
-			chapterNo, novelTitle, worldviewDesc)
+			chapterNo, novelTitle, worldviewDesc, segStartPct, segEndPct)
 
 		var aiResult string
 		var aiErr error
@@ -609,7 +618,7 @@ func (s *VideoService) autoMatchShotAnchors(shots []*model.StoryboardShot, ancho
 				return true
 			}
 			for name, id := range anchorMap {
-				if strings.Contains(text, name) || strings.Contains(name, text) {
+				if strings.Contains(text, name) {
 					id := id
 					shot.SceneAnchorID = &id
 					return true
@@ -945,6 +954,7 @@ func (s *VideoService) buildStoryboardPrompt(
 	chapterNo int,
 	novelTitle string,
 	worldviewDesc string,
+	segStartPct, segEndPct int,
 ) string {
 	// isEn / isImageEn 均由 novel.AIConfig.PromptLanguage 决定，与项目「AI 提示词的语言」设置保持一致。
 	// image_prompt 在生图前会经过自动翻译（translatePromptToEnglish），保持中文可供用户编辑。
@@ -1075,6 +1085,7 @@ func (s *VideoService) buildStoryboardPrompt(
 			"ShotSize":      ps.CamDir.ShotSize,
 			"CameraType":    ps.CamDir.CameraType,
 			"Location":      extractLocationFromScene(ps.GenMeta.Scene),
+			"TransitionOut": ps.CamDir.TransitionOut,
 		})
 	}
 
@@ -1110,10 +1121,11 @@ func (s *VideoService) buildStoryboardPrompt(
 		}
 	}
 
-	// 截断内容（rune 级别，避免 byte-level slice 截断 UTF-8 汉字）
-	// 3500 rune × 3 bytes = 10500 bytes；原 [:10000] 会漏掉末尾约 167 字
-	if cr := []rune(content); len(cr) > 3200 {
-		content = string(cr[:3200]) + "…（已截断）"
+	// 截断内容：上限对齐 maxSegmentRunes，消除分段长度与截断限制的不一致
+	// splitContentSegments 已将每段限制在 dynSegRunes（≤maxSegmentRunes）内，
+	// 此处截断仅作最后防护，不应再裁掉段内末尾内容。
+	if cr := []rune(content); len(cr) > maxSegmentRunes {
+		content = string(cr[:maxSegmentRunes]) + "…（已截断）"
 	}
 
 	expectedShotsMinus2 := expectedShots - 2
@@ -1149,6 +1161,8 @@ func (s *VideoService) buildStoryboardPrompt(
 		"IsFirstSegment":      segNo == 1,
 		"NovelTitle":          novelTitle,
 		"WorldviewDesc":       worldviewDesc,
+		"SegStartPct":         segStartPct,
+		"SegEndPct":           segEndPct,
 	}
 	result, err := renderPrompt("storyboard_generate", ctx)
 	if err != nil {
@@ -1827,8 +1841,10 @@ func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string,
 	// 取 Video.NovelID / ChapterID 以便选择 provider 并注入章节原文
 	var novelID uint
 	var chapterContent string
+	var voiceMode string
 	if video, err := s.videoRepo.GetByID(videoID); err == nil {
 		novelID = video.NovelID
+		voiceMode = video.RenderConfig.VoiceMode
 		if video.ChapterID != nil && s.chapterRepo != nil {
 			if ch, err := s.chapterRepo.GetByID(*video.ChapterID); err == nil && ch != nil {
 				chapterContent = ch.Content
@@ -1853,7 +1869,7 @@ func (s *VideoService) ReviewStoryboard(tenantID, videoID uint, provider string,
 		ignoredItems, _ = s.ignoredSuggestionRepo.ListByEntity(model.ReviewEntityStoryboard, videoID)
 	}
 
-	prompt := buildStoryboardReviewPrompt(shots, chapterContent, previousScore, previousFeedback, ignoredItems)
+	prompt := buildStoryboardReviewPrompt(shots, chapterContent, previousScore, previousFeedback, ignoredItems, voiceMode)
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, novelID, "storyboard_review", prompt, provider)
 	if err != nil {
@@ -2000,7 +2016,7 @@ func (s *VideoService) ApplyReviewDeletes(videoID uint, shotNos []int) (int, err
 // buildStoryboardReviewPrompt 构建分镜审查提示词
 // chapterContent 非空时注入小说章节原文（用于对比覆盖率、建议插入/删除）。
 // previousScore > 0 时注入上次评分上下文；previousFeedback 非空时注入已修正问题；ignoredItems 非空时注入永久忽略列表。
-func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent string, previousScore float64, previousFeedback []model.ShotReviewFeedback, ignoredItems []*model.IgnoredReviewIssue) string {
+func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent string, previousScore float64, previousFeedback []model.ShotReviewFeedback, ignoredItems []*model.IgnoredReviewIssue, voiceMode string) string {
 	// 预格式化分镜数据（带截断保护）
 	var sb strings.Builder
 	truncate := func(s string, max int) string {
@@ -2048,10 +2064,10 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent s
 		ignoredLines = append(ignoredLines, fmt.Sprintf("镜%d: %s", ctx.ShotNo, item.IssueText))
 	}
 
-	// 截断章节原文（防止过长撑爆上下文，保留前 3000 字）
+	// 截断章节原文（防止过长撑爆上下文，保留前 5000 字）
 	truncatedChapter := chapterContent
-	if runes := []rune(truncatedChapter); len(runes) > 3000 {
-		truncatedChapter = string(runes[:3000]) + "…（已截断）"
+	if runes := []rune(truncatedChapter); len(runes) > 5000 {
+		truncatedChapter = string(runes[:5000]) + "…（已截断）"
 	}
 
 	ctx := map[string]interface{}{
@@ -2065,6 +2081,7 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent s
 		"PreviousFixedText":  strings.Join(prevFixedLines, "\n"),
 		"HasIgnored":         len(ignoredLines) > 0,
 		"IgnoredText":        strings.Join(ignoredLines, "\n"),
+		"VoiceMode":          voiceMode,
 	}
 	result, err := renderPrompt("storyboard_review", ctx)
 	if err != nil {

@@ -19,7 +19,7 @@
 【强制规则 — 优化时必须遵守（违反将导致输出无效）】
 ① 旁白/对白互斥：同一镜头 narration 和 dialogue 不能同时非空；旁白镜头 dialogue=""，对白镜头 narration=""
 ② 角色名精确：角色名必须使用原始分镜中的完整角色名，禁止用"主角""角色A""男主""女主"等占位符
-③ sfx_tags 格式：若修改音效字段，格式必须为 JSON 数组 [{"prompt": "...", "duration": 秒数}]，禁止纯文本字符串
+③ sfx_tags 格式：若修改音效字段，格式必须为 JSON 数组 [{"tag": "英文搜索词", "type": "ambient|action|emotion", "prompt": "中文音效描述15-40字"}]，禁止纯文本字符串
 ④ 转场字段对称：若修改 transition_out，对应下一镜头的 transition_in 也必须同步修改（取值：cut/fade/dissolve/wipe）
 ⑤ 不创造新信息：禁止在 description/image_prompt/video_prompt 中引入原始分镜未提及的人物、道具或场景元素
 ⑥ 敏感词过滤：description / image_prompt / video_prompt 严禁出现暴力、血腥、伤亡、色情相关敏感词
