@@ -1873,16 +1873,24 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 			sz = entrySize
 		}
 		// 默认：volcengine-visual 传原始 URL（由 SDK 内部处理），其他提供商传 base64。
-		// 例外：DreamO/SeedEditV3 支持 binary_data_base64 字段，预转 base64 可解决 OSS 私有桶 URL
-		// 不被 volcengine API 服务器访问的问题，确保参考图 IP 锚点真实生效。
+		// DreamO/SeedEditV3：优先传原始 HTTP URL（image_urls 字段），由 Volcengine 服务端拉取图片。
+		// 这样可绕过 binary_data_base64 内联安全扫描的严格审核（50511 Post Img Risk Not Pass）。
+		// 仅当所有参考图均无可公开访问的 URL（纯 base64 来源）时，才退回 binary_data_base64。
 		refFirst := firstRef
 		refs := referenceImages
 		if provName != ai.ProviderNameVolcengineVisual {
 			refFirst = extFirst
 			refs = extRefs
 		} else if model == ai.VolcModelDreamO || model == ai.VolcModelSeedEditV3 {
-			refFirst = extFirst
-			refs = extRefs
+			if refURLFirst != "" {
+				// 原始 URL 可访问：优先走 image_urls，避免 binary_data_base64 内联安全拦截
+				refFirst = refURLFirst
+				refs = refURLSlice
+			} else {
+				// 无可用 HTTP URL（如私有桶）：退回 base64
+				refFirst = extFirst
+				refs = extRefs
+			}
 		}
 		return &ai.ImageGenerateRequest{
 			Model:             model,

@@ -1827,6 +1827,16 @@ func resolveStyleDesc(style string) string {
 		"render_3d":         "三维立体渲染风格",
 		"ukiyo_e":           "日本浮世绘风格",
 		"gothic_dark":       "哥特暗黑风格插画",
+		"manhwa":            "韩漫风格插画",
+		"modern_urban":      "都市现代风格插画",
+		"fantasy_fairy":     "奇幻童话插画",
+		"wuxia_jianghu":     "武侠江湖水墨插画",
+		"shinkai":           "光影写实动漫插画",
+		"apocalypse":        "末日废土概念插画",
+		"retro_hk_comic":    "复古港漫风格插画",
+		"gongbi":            "工笔重彩国画风格",
+		"neon_dream":        "霓虹梦幻赛博插画",
+		"vintage_film":      "怀旧胶片摄影风格",
 	}
 	if d, ok := m[style]; ok {
 		return d
@@ -1841,13 +1851,13 @@ func resolveStyleDesc(style string) string {
 // 返回值："realistic" / "anime" / "classic_illustration" / "dark_stylized" / "pixel" / "render_3d" / "" (未知)
 func resolveStyleCategory(styleID string) string {
 	switch styleID {
-	case "realistic", "real_person", "game_concept":
+	case "realistic", "real_person", "game_concept", "modern_urban", "vintage_film":
 		return "realistic"
-	case "anime", "chinese_animation", "ukiyo_e":
+	case "anime", "chinese_animation", "ukiyo_e", "manhwa", "shinkai", "retro_hk_comic":
 		return "anime"
-	case "ink_painting", "xianxia_style", "watercolor", "oil_painting":
+	case "ink_painting", "xianxia_style", "watercolor", "oil_painting", "fantasy_fairy", "wuxia_jianghu", "gongbi":
 		return "classic_illustration"
-	case "cyberpunk", "steampunk", "gothic_dark":
+	case "cyberpunk", "steampunk", "gothic_dark", "apocalypse", "neon_dream":
 		return "dark_stylized"
 	case "pixel_art", "sketch":
 		return "pixel"
@@ -1992,6 +2002,16 @@ func resolveStyleIllustrationDesc(style string) string {
 		"render_3d":         "3D rendered character, subsurface scattering skin, physically-based rendering, high-fidelity 3D model",
 		"ukiyo_e":           "ukiyo-e woodblock print style, flat bold color areas, strong black outlines, traditional Japanese Edo period art",
 		"game_concept":      "game concept art illustration, professional character design, detailed rendering, RPG fantasy style",
+		"manhwa":            "Korean manhwa comic style, bold clean linework, expressive character design, webtoon aesthetic",
+		"modern_urban":      "modern urban realism illustration, contemporary fashion, city lifestyle, clean detailed rendering",
+		"fantasy_fairy":     "fantasy fairy tale illustration, enchanted magical atmosphere, soft luminous colors, storybook art style",
+		"wuxia_jianghu":     "Chinese wuxia martial arts illustration, flowing robes, dynamic action poses, traditional ink-inspired style",
+		"shinkai":           "Makoto Shinkai inspired anime, spectacular light rays and lens flares, photorealistic backgrounds, painterly sky",
+		"apocalypse":        "post-apocalyptic concept art, gritty wasteland aesthetic, desaturated earthy tones, dramatic survival atmosphere",
+		"retro_hk_comic":    "retro Hong Kong manhua comic style, bold dynamic lines, dramatic action poses, vintage print aesthetic",
+		"gongbi":            "Chinese gongbi meticulous brushwork, rich mineral pigments, intricate fine-line detail, traditional Chinese court painting",
+		"neon_dream":        "neon dream illustration, vibrant glowing neon accents, dreamy surreal atmosphere, synthwave aesthetic",
+		"vintage_film":      "vintage film photography aesthetic, warm film grain, faded nostalgic color grading, analog photography look",
 	}
 	if d, ok := m[style]; ok {
 		return d
