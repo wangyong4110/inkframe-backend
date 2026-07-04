@@ -274,18 +274,27 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 	case VolcModelJimengSeedream46:
 		params["prompt"] = req.Prompt
 		// 输入图（0~14张，仅支持 HTTP/HTTPS URL）
+		// 优先使用 buildReq 预筛的 ReferenceURLs（纯 HTTP URL 列表），避免 ReferenceImages 中
+		// 夹杂本地相对路径（/api/v1/media/...）时被 HTTP 检查过滤、导致后续参考图全部丢失。
 		var imgURLs46 []string
-		collect46 := func(u string) {
-			if u != "" && (strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")) && len(imgURLs46) < 14 {
+		seen46 := make(map[string]bool)
+		addURL46 := func(u string) {
+			if u != "" && (strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://")) && !seen46[u] && len(imgURLs46) < 14 {
+				seen46[u] = true
 				imgURLs46 = append(imgURLs46, u)
 			}
 		}
-		if req.ReferenceImage != "" {
-			collect46(req.ReferenceImage)
-		}
-		for _, u := range req.ReferenceImages {
-			if u != req.ReferenceImage {
-				collect46(u)
+		if len(req.ReferenceURLs) > 0 {
+			// ReferenceURLs 已由 ai_service.go buildReq 过滤为纯 HTTP URL，直接使用
+			for _, u := range req.ReferenceURLs {
+				addURL46(u)
+			}
+		} else {
+			// fallback：从单张字段逐一提取
+			addURL46(req.ReferenceURL)
+			addURL46(req.ReferenceImage)
+			for _, u := range req.ReferenceImages {
+				addURL46(u)
 			}
 		}
 		if len(imgURLs46) > 0 {

@@ -329,15 +329,28 @@ func (p *QianwenProvider) wanxImageGenerateAsync(ctx context.Context, start time
 	if req.NegativePrompt != "" {
 		input["negative_prompt"] = req.NegativePrompt
 	}
+	hasRef := false
 	if req.ReferenceURL != "" {
 		input["ref_img"] = req.ReferenceURL
+		hasRef = true
 	} else if req.ReferenceImage != "" {
 		if len(req.ReferenceImage) > 61440 {
 			return nil, fmt.Errorf("qianwen-wanx: ref_img 超出 DashScope 输入长度限制（61440 字符），请使用 URL 而非 base64")
 		}
 		input["ref_img"] = req.ReferenceImage
+		hasRef = true
 	}
 	params := map[string]interface{}{"size": size, "n": 1}
+	if hasRef {
+		// ref_mode="refonly": 以参考图为主体/角色锚定（而非默认 "repaint" 风格迁移），
+		// 可显著提升生成图像与角色参考图的一致性。
+		// ref_strength [0,1]: 控制参考图对生成结果的影响强度；0.8 在保留角色特征的同时给 prompt 留有创作空间。
+		params["ref_mode"] = "refonly"
+		params["ref_strength"] = 0.8
+	}
+	if req.Seed != 0 {
+		params["seed"] = req.Seed
+	}
 
 	body, _ := json.Marshal(map[string]interface{}{
 		"model":      model,
