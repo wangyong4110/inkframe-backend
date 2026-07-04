@@ -855,6 +855,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 			shot.ShotNo, len(characterPortraits), len(characterPortraits)-1)
 	}
 	logger.Printf("[CharRef] shot#%d using %d character portrait(s) as reference", shot.ShotNo, len(cappedPortraits))
+
 	// allRefImages 组装：角色图（最多1张）+ 物品图 + 场景锚定图。
 	// 各 provider 按自身能力取用：
 	//   - 多图 API（jimeng4.0/4.6、doubao-seedream 等）可全部使用；
@@ -1046,7 +1047,48 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		if len(nameToRefIdx) > 0 {
 			isEn := isEnglishPrompt(shot.GenMeta.Prompt)
 			promptText = replaceNamesWithRefIndex(promptText, nameToRefIdx, isEn)
-			logger.Printf("[RefIdx] shot#%d refMap=%v isEn=%v", shot.ShotNo, nameToRefIdx, isEn)
+
+			// 参考图映射声明：在 prompt 最前面明确列出每张参考图对应的角色/物品/场景，
+			// 并声明"每张参考图是不同的独立角色，每个角色只出现一次"。
+			// 解决模型将多张参考图误认为同一角色多视角，导致画面中角色重复出现的问题。
+			type refEntry struct {
+				idx  int
+				name string
+			}
+			entries := make([]refEntry, 0, len(nameToRefIdx))
+			for name, idx := range nameToRefIdx {
+				entries = append(entries, refEntry{idx, name})
+			}
+			sort.Slice(entries, func(i, j int) bool { return entries[i].idx < entries[j].idx })
+
+			var mappings []string
+			for _, e := range entries {
+				var tag string
+				if isEn {
+					tag = fmt.Sprintf("[Image-%d]", e.idx)
+				} else {
+					cn := fmt.Sprintf("%d", e.idx)
+					if e.idx >= 1 && e.idx <= len(chineseNumerals) {
+						cn = chineseNumerals[e.idx-1]
+					}
+					tag = fmt.Sprintf("[图%s]", cn)
+				}
+				if isEn {
+					mappings = append(mappings, tag+"="+e.name)
+				} else {
+					mappings = append(mappings, tag+"为"+e.name)
+				}
+			}
+			var refAnnotation string
+			if isEn {
+				refAnnotation = "Reference images: " + strings.Join(mappings, ", ") +
+					". Each reference image is a DIFFERENT unique individual/object. Do NOT duplicate any character — each appears exactly once in the scene."
+			} else {
+				refAnnotation = "参考图说明：" + strings.Join(mappings, "，") +
+					"。每张参考图各对应不同的独立角色/物品，场景中每个角色只出现一次，不得重复。"
+			}
+			promptText = refAnnotation + " " + promptText
+			logger.Printf("[RefIdx] shot#%d refMap=%v isEn=%v annotation=%q", shot.ShotNo, nameToRefIdx, isEn, refAnnotation)
 		}
 	}
 
@@ -1093,13 +1135,6 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	if imageURL == "" {
 		logger.Printf("generateShotReferenceImage: image gen returned empty URL for shot %d", shot.ShotNo)
 		return "", fmt.Errorf("image provider returned empty URL")
-	}
-
-	// 首图锁定：场景锚点无参考图时，将本次生成结果存为参考图
-	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
-		if err := s.sceneAnchorSvc.AutoSetRefImage(*shot.SceneAnchorID, imageURL); err != nil {
-			logger.Errorf("[VideoService] AutoSetRefImage: %v", err)
-		}
 	}
 
 	return imageURL, nil
@@ -1823,7 +1858,45 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		if len(nameToRefIdx) > 0 {
 			isEn := isEnglishPrompt(shot.GenMeta.MotionPrompt + shot.GenMeta.Prompt)
 			videoPromptFinal = replaceNamesWithRefIndex(videoPromptFinal, nameToRefIdx, isEn)
-			logger.Printf("[RefIdx] video shot#%d refMap=%v isEn=%v", shot.ShotNo, nameToRefIdx, isEn)
+
+			type refEntryV struct {
+				idx  int
+				name string
+			}
+			entriesV := make([]refEntryV, 0, len(nameToRefIdx))
+			for name, idx := range nameToRefIdx {
+				entriesV = append(entriesV, refEntryV{idx, name})
+			}
+			sort.Slice(entriesV, func(i, j int) bool { return entriesV[i].idx < entriesV[j].idx })
+
+			var mappingsV []string
+			for _, e := range entriesV {
+				var tag string
+				if isEn {
+					tag = fmt.Sprintf("[Image-%d]", e.idx)
+				} else {
+					cn := fmt.Sprintf("%d", e.idx)
+					if e.idx >= 1 && e.idx <= len(chineseNumerals) {
+						cn = chineseNumerals[e.idx-1]
+					}
+					tag = fmt.Sprintf("[图%s]", cn)
+				}
+				if isEn {
+					mappingsV = append(mappingsV, tag+"="+e.name)
+				} else {
+					mappingsV = append(mappingsV, tag+"为"+e.name)
+				}
+			}
+			var refAnnotationV string
+			if isEn {
+				refAnnotationV = "Reference images: " + strings.Join(mappingsV, ", ") +
+					". Each reference image is a DIFFERENT unique individual/object. Do NOT duplicate any character — each appears exactly once."
+			} else {
+				refAnnotationV = "参考图说明：" + strings.Join(mappingsV, "，") +
+					"。每张参考图各对应不同的独立角色/物品，每个角色只出现一次，不得重复。"
+			}
+			videoPromptFinal = refAnnotationV + " " + videoPromptFinal
+			logger.Printf("[RefIdx] video shot#%d refMap=%v isEn=%v annotation=%q", shot.ShotNo, nameToRefIdx, isEn, refAnnotationV)
 		}
 	}
 
