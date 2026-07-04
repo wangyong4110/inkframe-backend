@@ -3765,6 +3765,19 @@ func (s *ChapterService) RegenerateChapter(tenantID uint, id uint, req *model.Ge
 	// A completed/generating chapter would otherwise be blocked by the optimistic-lock guard.
 	_ = s.chapterRepo.UpdateStatus(chapter.ID, chapter.NovelID, "draft")
 
+	// 强制清除 Redis 生成锁（根本原因修复）：
+	// GenerateChapter 依赖 Redis SETNX 防并发，defer 释放锁。但以下场景导致锁残留：
+	//   1. 服务进程崩溃/重启 — defer 不执行，Redis 锁以 30 min TTL 存续
+	//   2. 同一章节的上次生成仍在运行 — 锁被上个 goroutine 持有
+	// 结果：每次"重新生成"点击必定失败 → 用户体验为"100% 触发限流"。
+	// RegenerateChapter 是用户明确的"强制重新生成"意图，允许抢占孤儿锁。
+	// 并发安全：DB 层 AtomicSetGenerating (status != 'generating') 仍保护真正并发冲突。
+	if s.cache != nil {
+		redisStaleLockKey := fmt.Sprintf("lock:chgen:%d-%d", chapter.NovelID, req.ChapterNo)
+		_ = s.cache.Del(context.Background(), redisStaleLockKey).Err()
+		s.genLocks.Delete(fmt.Sprintf("%d-%d", chapter.NovelID, req.ChapterNo))
+	}
+
 	// Delegate to the full generation pipeline (scene outline → full chapter → refinement → post-processing)
 	return s.GenerateChapter(tenantID, chapter.NovelID, req)
 }

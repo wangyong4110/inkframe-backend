@@ -322,7 +322,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	// 顺序处理各段落：每段将上一段末尾 3 个镜头作为 prevShots 传入，
 	// 确保跨段落的情节、场景、情绪连贯性（storyboard_generate.j2 中的【上一段末尾分镜】规则生效）。
 	// 牺牲并发换取叙事连贯——对于用户可感知的质量提升，这是必要的权衡。
-	const prevTailN = 3 // 传递上一段末尾多少个镜头
+	const prevTailN = 5 // 传递上一段末尾多少个镜头（更多上下文 → 跨段衔接更自然）
 	type segResult struct {
 		shots []*model.StoryboardShot
 		err   error
@@ -419,8 +419,8 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			if len(parsed) > len(bestShots) {
 				bestShots = parsed
 			}
-			if len(parsed) < segShotCount*4/5 && attempt < 2 {
-				logger.Printf("[Storyboard] seg %d/%d attempt=%d too few shots got=%d expected=%d (threshold 80%%), retrying", segIdx+1, len(segments), attempt, len(parsed), segShotCount)
+			if len(parsed) < (segShotCount*9+9)/10 && attempt < 2 {
+				logger.Printf("[Storyboard] seg %d/%d attempt=%d too few shots got=%d expected=%d (threshold 90%%), retrying", segIdx+1, len(segments), attempt, len(parsed), segShotCount)
 				continue
 			}
 			shots = bestShots

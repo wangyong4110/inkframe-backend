@@ -898,9 +898,15 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 	}
 
 	switch taskType {
-	case "storyboard", "character", "worldview", "character_state", "scene_anchor_extract", "storyboard_review", "sfx_analyze":
+	// 结构化提取/审查任务：需要严格 JSON 输出，用低温度
+	case "character_state", "scene_anchor_extract", "storyboard_review", "sfx_analyze":
 		if config.Temperature > 0.2 {
 			config.Temperature = 0.1
+		}
+	// 创意生成任务：需要多样性和表达力，温度不低于 0.5
+	case "storyboard", "character", "worldview":
+		if config.Temperature < 0.5 {
+			config.Temperature = 0.5
 		}
 	}
 
