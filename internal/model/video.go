@@ -438,6 +438,15 @@ type ShotDeleteSuggestion struct {
 	Reason string `json:"reason"` // 删除原因
 }
 
+// SensitiveIssue 敏感内容检测结果（不计入质量评分，单独展示）
+type SensitiveIssue struct {
+	ShotNo   int      `json:"shot_no"`  // 0 = 全局/非镜头级别
+	Field    string   `json:"field"`    // "description" / "narration" / "dialogue"
+	Words    []string `json:"words"`    // 命中的敏感词或短语
+	Category string   `json:"category"` // "gore" / "violence" / "sexual" / "political" / "other"
+	Quote    string   `json:"quote"`    // 原文引用（含敏感词的上下文，不超过60字）
+}
+
 // StoryboardReview AI 分镜脚本审查报告
 type StoryboardReview struct {
 	OverallScore      float64                `json:"overall_score"`       // 综合得分 0-100
@@ -454,6 +463,8 @@ type StoryboardReview struct {
 	ShotFeedback      []ShotReviewFeedback   `json:"shot_feedback"`       // 逐镜反馈（仅有问题的镜头）
 	SuggestedInserts  []ShotInsertSuggestion `json:"suggested_inserts,omitempty"` // 建议插入的新镜头
 	SuggestedDeletes  []ShotDeleteSuggestion `json:"suggested_deletes,omitempty"` // 建议删除的镜头
+	HasSensitive      bool                   `json:"has_sensitive"`                // 是否含敏感内容
+	SensitiveIssues   []SensitiveIssue       `json:"sensitive_issues,omitempty"`   // 敏感内容列表（不计入评分）
 }
 
 // ─── 章节 AI 审查 ──────────────────────────────────────────────────────────────

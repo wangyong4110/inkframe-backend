@@ -2545,23 +2545,62 @@ func (s *CharacterService) GenerateLookVisualPrompt(tenantID, characterID uint, 
 		}
 	}
 	basePrompt := char.Description
+	// 如果 lookDesc 和 basePrompt 完全相同（前端传空、后端 fallback），只保留一份避免重复
+	if lookDesc == basePrompt {
+		lookDesc = ""
+	}
 	var sysPrompt string
 	if promptLanguage == "en" {
-		sysPrompt = fmt.Sprintf(`You are a professional visual designer for novels. Given a character's base description and a specific appearance change description, generate a concise English visual prompt suitable for AI image generation. The prompt should describe physical appearance only (clothing, hair, accessories, body features). Keep it under 200 words. Output only the prompt, no explanation.
+		extraSection := ""
+		if lookDesc != "" {
+			extraSection = fmt.Sprintf("\n\nAppearance variant notes: %s", lookDesc)
+		}
+		sysPrompt = fmt.Sprintf(`You are a professional AI image-generation prompt engineer for character design. Your task is to convert a character description into a richly detailed English visual prompt optimized for AI image generation (Midjourney / Stable Diffusion / DreamO style).
 
-Base character: %s
+The prompt MUST cover ALL of the following sections in order:
+1. [Identity] — gender, age range, ethnicity/skin tone, body type, height impression
+2. [Face] — face shape, eye color/shape, eyebrows, nose, lips, jawline, any distinctive marks
+3. [Hair] — color, length, texture, style (e.g. loose waves, high bun, braids)
+4. [Clothing] — top, bottom or dress, fabric/texture, color, patterns, fit
+5. [Accessories & Props] — jewelry, bags, hats, weapons, tools, anything carried
+6. [Pose & Expression] — body posture, facial expression, hand position
+7. [Art style hint] — photography realism / anime / oil painting (infer from genre if possible)
 
-Appearance change: %s
+Rules:
+- Minimum 150 words, no hard upper limit — detail is the goal
+- Use comma-separated descriptive phrases, NOT sentences
+- Do NOT include scene/background descriptions
+- Output ONLY the prompt, no headings, no explanations
 
-English visual prompt:`, basePrompt, lookDesc)
+Character description:
+%s%s
+
+Visual prompt:`, basePrompt, extraSection)
 	} else {
-		sysPrompt = fmt.Sprintf(`你是专业的小说视觉设计师。根据角色基础描述和形象描述，生成适合 AI 图像生成的简洁中文视觉提示词。提示词只描述外貌（服装、发型、配饰、体型特征），不超过200字。只输出提示词，不要任何解释。
+		extraSection := ""
+		if lookDesc != "" {
+			extraSection = fmt.Sprintf("\n\n形象补充说明：%s", lookDesc)
+		}
+		sysPrompt = fmt.Sprintf(`你是专业的 AI 图像生成提示词工程师，专注角色设定。你的任务是将角色描述转化为适合即梦AI / Stable Diffusion / DreamO 的高质量详细中文视觉提示词。
 
-角色基础描述：%s
+提示词必须按顺序覆盖以下所有维度：
+①身份基础：性别、年龄段、人种/肤色（奶白/小麦/古铜等）、体型（纤细/健壮等）、身高印象
+②面部细节：脸型（鹅蛋脸/方脸等）、眼睛（颜色+形状+神韵）、眉型、鼻型、唇型、下颌线、任何面部特征
+③发型发色：颜色（金色/黑色等）、长度（及腰/齐肩等）、发质（顺滑/蓬松/卷曲）、造型（自然披散/麻花辫/丸子头等）
+④服装：上衣/裙装/外套的款式、颜色、面料质感、图案、剪裁风格
+⑤配饰道具：首饰、包袋、帽子、武器、随身物品等，标注佩戴位置
+⑥姿态表情：身体姿势、表情、手部动作
 
-形象描述：%s
+规则：
+- 最少150字，不限上限——细节越丰富越好
+- 用顿号或逗号分隔的描述短语，不要写完整句子
+- 不要描述场景/背景
+- 只输出提示词本身，不要标题、不要解释、不要分段
 
-中文视觉提示词：`, basePrompt, lookDesc)
+角色描述：
+%s%s
+
+图像提示词：`, basePrompt, extraSection)
 	}
 	result, err := s.aiService.GenerateWithProvider(tenantID, char.NovelID, "character_profile", sysPrompt, "",
 		StoryboardOverrides{})

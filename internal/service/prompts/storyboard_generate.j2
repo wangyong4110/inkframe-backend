@@ -230,11 +230,12 @@
 
 {% else %}
 【配音模式：自动】
-每个分镜必须在 narration 与 dialogue 中至少填写一个（二者不可同时为空字符串）：
+每个分镜按以下规则选择旁白或台词：
 - 角色开口说话 → 使用 dialogue，格式："角色名：台词内容"；narration 留 ""
 - 其他所有镜头（动作、场景、心理、普通过渡）→ 必须填写 narration，语言凝练生动；dialogue 留 ""
 - 时间跳跃转场镜头 → 遵循下方【时间跳跃转场镜头】规则，narration 只写时间词（≤10字）
-严禁 narration 与 dialogue 同时为空。
+- 纯视觉/音效镜头（emotional_tone 设为「留白」）→ narration 和 dialogue 均可为 ""，让画面和音效独立承担情绪；此类镜头全片不超过 15%
+非「留白」镜头中严禁同时将 narration 与 dialogue 留为空字符串。
 
 {% endif %}
 {% if Pacing == "slow" %}
@@ -295,9 +296,12 @@
 - characters[] 中的 position/pose/action/expression 与 image_prompt/video_prompt 中的对应描述必须一致，不得只填 characters[] 而在 prompt 文本中省略
 {% for c in Characters %}- {{ c.Name }}（{{ c.Role }}）{% if c.Description %}：{{ c.Description }}{% endif %}
 
-  [台词语言]: {{ c.DialogueLang }}{% if c.VisualPrompt %}
+  [台词语言]: {{ c.DialogueLang }}{% if c.InnerConflict %}
+  [内在矛盾]: {{ c.InnerConflict }}（台词潜台词的根源，角色说话时内心的撕裂与压制）{% endif %}{% if c.CoreDesire %}
+  [核心渴望]: {{ c.CoreDesire }}（驱动该角色一切行动与台词的最深动机）{% endif %}{% if c.VisualPrompt %}
   [image_prompt 外貌关键词参考]: {{ c.VisualPrompt }}{% endif %}
 {% endfor %}
+⚠️ 台词生成强制规则：每句台词必须与该角色的内在矛盾/核心渴望相一致，体现角色独特的说话方式和潜台词——禁止生成任何角色都能说的通用台词。
 {% endif %}
 {% if Anchors %}
 【已命名场景】

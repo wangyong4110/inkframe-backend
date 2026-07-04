@@ -101,6 +101,21 @@
 {{ IgnoredText }}
 {% endif %}
 
+【敏感内容合规检测】（独立于评分维度，不计入 overall_score）
+逐字检查所有镜头的画面描述（description）、旁白（narration）、台词（dialogue）字段，识别以下类别的敏感内容：
+- gore（血腥）：血腥暴力画面描写，如血流成河、断肢、内脏外露、尸体腐烂等
+- violence（暴力）：残忍折磨、虐待、酷刑、行刑等极端暴力行为
+- sexual（色情/性暗示）：露骨性描写、裸露描写、明确的性暗示词汇
+- political（政治敏感）：涉及政治敏感人物、事件、口号等
+- other（其他违规）：严重辱骂、歧视性语言、毒品相关明确描写等
+
+检测要求：
+- 仅报告确定存在的敏感词汇，不得过度敏感（如"战斗""打斗""受伤"等一般动作描写不属于敏感内容）
+- words 列出命中的具体词语或短语
+- quote 引用含敏感词的原文片段（不超过60字，用于定位上下文）
+- has_sensitive：任一镜头存在敏感内容则为 true，否则为 false
+- sensitive_issues：无敏感内容时输出空数组 []
+
 【输出格式】
 直接返回 JSON 对象，不含 markdown 代码块或任何额外说明：
 {
@@ -172,6 +187,16 @@
       "shot_no": 7,
       "reason": "该镜头内容与镜头6高度重复（同一场景、同一角色状态），原文中此段无对应情节，属冗余镜头。"
     }
+  ],
+  "has_sensitive": true,
+  "sensitive_issues": [
+    {
+      "shot_no": 3,
+      "field": "description",
+      "words": ["血流成河", "断臂横陈"],
+      "category": "gore",
+      "quote": "战场上血流成河，断臂横陈于荒野之中，尸骸遍地。"
+    }
   ]
 }
 
@@ -197,5 +222,6 @@
   ❌ 禁止：suggested_narration="狼：你好，小红帽。小红帽：谢谢你。"（台词塞进旁白字段）
 - suggested_inserts：仅在有充分原文依据时才输出；reason 字段必须直接引用原文原句（用「」引号标出原文，禁止转述）；新增镜头总数不得超过现有镜头数的 20%（{{ ShotCount }} 镜 × 20% = 最多新增 {{ (ShotCount * 0.2) | round | int }} 个）；无需插入时输出空数组 []
 - suggested_deletes：仅在镜头与原文明显冲突或高度冗余时才输出；无需删除时输出空数组 []
+- sensitive_issues：category 只能取 "gore" / "violence" / "sexual" / "political" / "other"；field 只能取 "description" / "narration" / "dialogue"；shot_no=0 表示无法定位到具体镜头；无敏感内容时输出 has_sensitive=false 和空数组 []
 - summary 控制在50字以内，概括本组分镜的核心优缺点
 - strengths 和 weaknesses 各1-3条，聚焦最重要的点

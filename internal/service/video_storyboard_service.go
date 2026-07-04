@@ -275,7 +275,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	}
 
 	// 前置：生成情感弧线骨架（轻量调用，用于指导每个分段的叙事节奏）
-	arcPlan := s.generateStoryboardArc(content, tenantID, video.NovelID, provider)
+	arcPlan := s.generateStoryboardArc(content, characters, tenantID, video.NovelID, provider)
 	if arcPlan != "" {
 		logger.Printf("[Storyboard] arc plan generated (%d chars)", len(arcPlan))
 	}
@@ -987,11 +987,13 @@ func (s *VideoService) buildStoryboardPrompt(
 		for _, sc := range scored[:limit] {
 			c := sc.c
 			matchedChars = append(matchedChars, map[string]interface{}{
-				"Name":         c.Name,
-				"Role":         c.Role,
-				"Description":  c.Description,
-				"VisualPrompt": charVisualPrompts[c.ID], // 来自 CharacterLook.VisualPrompt（默认形象的英文视觉提示词）
-				"DialogueLang": voiceLangToDialogueLang(c.VoiceConfig.VoiceLanguage),
+				"Name":          c.Name,
+				"Role":          c.Role,
+				"Description":   c.Description,
+				"VisualPrompt":  charVisualPrompts[c.ID], // 来自 CharacterLook.VisualPrompt（默认形象的英文视觉提示词）
+				"DialogueLang":  voiceLangToDialogueLang(c.VoiceConfig.VoiceLanguage),
+				"InnerConflict": c.Meta.InnerConflict,
+				"CoreDesire":    c.Meta.CoreDesire,
 			})
 		}
 	}
@@ -2440,7 +2442,7 @@ func (s *VideoService) ListIgnoredSuggestions(videoID uint) ([]*model.IgnoredRev
 
 // generateStoryboardArc 在分段生成前调用 AI，从完整章节内容中提取情感弧线骨架。
 // 返回 JSON 字符串（storyboard_arc.j2 格式），失败时返回空字符串（不阻塞主流程）。
-func (s *VideoService) generateStoryboardArc(content string, tenantID, novelID uint, provider string) string {
+func (s *VideoService) generateStoryboardArc(content string, characters []*model.Character, tenantID, novelID uint, provider string) string {
 	if s.aiService == nil {
 		return ""
 	}
@@ -2450,7 +2452,31 @@ func (s *VideoService) generateStoryboardArc(content string, tenantID, novelID u
 	if len([]rune(arcContent)) > maxArcRunes {
 		arcContent = string([]rune(arcContent)[:maxArcRunes]) + "…（已截断，请基于前段内容推断全章情感弧线）"
 	}
-	ctx := map[string]interface{}{"Content": arcContent}
+	// 整理角色摘要（只传名称+身份+内在矛盾+核心渴望，供弧线分析生成角色化的 dialogue_guide）
+	type arcChar struct {
+		Name          string
+		Role          string
+		InnerConflict string
+		CoreDesire    string
+	}
+	var arcChars []arcChar
+	for _, c := range characters {
+		if c.Meta.InnerConflict != "" || c.Meta.CoreDesire != "" || c.Role == "protagonist" || c.Role == "antagonist" {
+			arcChars = append(arcChars, arcChar{
+				Name:          c.Name,
+				Role:          c.Role,
+				InnerConflict: c.Meta.InnerConflict,
+				CoreDesire:    c.Meta.CoreDesire,
+			})
+		}
+		if len(arcChars) >= 5 {
+			break
+		}
+	}
+	ctx := map[string]interface{}{
+		"Content":    arcContent,
+		"Characters": arcChars,
+	}
 	prompt, err := renderPrompt("storyboard_arc", ctx)
 	if err != nil {
 		logger.Errorf("[Storyboard] generateStoryboardArc renderPrompt: %v", err)
