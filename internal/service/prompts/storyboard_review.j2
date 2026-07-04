@@ -220,7 +220,7 @@
   ✅ 单角色对白：suggested_narration="" suggested_dialogue="狼：你要去哪里，小红帽？"
   ✅ 多角色拆分：suggested_narration="" + suggested_inserts=[{dialogue:"狼：你好，小红帽。",...},{dialogue:"小红帽：谢谢你，狼先生。",...}]
   ❌ 禁止：suggested_narration="狼：你好，小红帽。小红帽：谢谢你。"（台词塞进旁白字段）
-- suggested_inserts：仅在有充分原文依据时才输出；reason 字段必须直接引用原文原句（用「」引号标出原文，禁止转述）；新增镜头总数不得超过现有镜头数的 20%（{{ ShotCount }} 镜 × 20% = 最多新增 {{ (ShotCount * 0.2) | round | int }} 个）；无需插入时输出空数组 []
+- suggested_inserts：仅在有充分原文依据时才输出；reason 字段必须直接引用原文原句（用「」引号标出原文，禁止转述）；新增镜头总数不得超过现有镜头数的 20%（{{ ShotCount }} 镜 × 20% = 最多新增 {{ (ShotCount * 0.2) | round }} 个）；无需插入时输出空数组 []
 - suggested_deletes：仅在镜头与原文明显冲突或高度冗余时才输出；无需删除时输出空数组 []
 - sensitive_issues：category 只能取 "gore" / "violence" / "sexual" / "political" / "other"；field 只能取 "description" / "narration" / "dialogue"；shot_no=0 表示无法定位到具体镜头；无敏感内容时输出 has_sensitive=false 和空数组 []
 - summary 控制在50字以内，概括本组分镜的核心优缺点

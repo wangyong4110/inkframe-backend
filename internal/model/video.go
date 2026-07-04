@@ -102,6 +102,9 @@ type Video struct {
 	// 状态
 	Status string `json:"status" gorm:"size:20;default:planning"`
 
+	// 分镜审查状态（pending/reviewed/skipped）
+	ReviewStatus string `json:"review_status" gorm:"size:20;default:''"`
+
 	// 发布状态
 	IsPublished bool `json:"is_published" gorm:"default:false;index"`
 

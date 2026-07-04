@@ -866,8 +866,8 @@ func (s *CharacterService) DeleteCharacter(id, tenantID uint) error {
 }
 
 // ListEffectiveCharacters 获取章节有效角色列表：
-//   - 非 minor 角色（protagonist/antagonist/supporting）默认在每章出现，不受绑定过滤
-//   - minor 角色只在明确绑定到本章节时才显示
+// 仅返回明确绑定到本章节的角色（与物品/场景行为一致）。
+// 未绑定任何角色时返回空列表；分镜生成等下游服务已内置"无绑定则退回小说全量"的降级逻辑。
 func (s *CharacterService) ListEffectiveCharacters(novelID, chapterID uint) ([]*EffectiveCharacter, error) {
 	overrideMap := make(map[uint]*model.ChapterCharacter)
 	boundIDs := make(map[uint]bool)
@@ -882,16 +882,16 @@ func (s *CharacterService) ListEffectiveCharacters(novelID, chapterID uint) ([]*
 		}
 		logger.Printf("[CharacterService] ListEffectiveCharacters: novelID=%d chapterID=%d boundCount=%d", novelID, chapterID, len(boundIDs))
 	}
+	if len(boundIDs) == 0 {
+		return []*EffectiveCharacter{}, nil
+	}
 	chars, err := s.characterRepo.ListByNovel(novelID)
 	if err != nil {
 		return nil, err
 	}
-	// 非 minor 角色（protagonist/antagonist/supporting）无论是否绑定都出现；
-	// minor 角色仅在明确绑定到本章节时显示。
-	// 这样绑定次要角色不会导致"活跃角色"区域变空。
 	result := make([]*EffectiveCharacter, 0)
 	for _, ch := range chars {
-		if ch.Role == "minor" && !boundIDs[ch.ID] {
+		if !boundIDs[ch.ID] {
 			continue
 		}
 		ec := &EffectiveCharacter{Character: *ch}
@@ -2191,9 +2191,9 @@ func condenseVisualPrompt(s string, maxWords int) string {
 func (s *ImageGenerationService) GenerateThreeViewImage(ctx context.Context, tenantID uint, name, appearance, viewType, style, gender, referenceImage, provider string) (*GeneratedCharacterImage, error) {
 	// Use precise orthographic angle descriptions to avoid the model interpreting "side view" as a 3/4 angle.
 	viewDesc := map[string]string{
-		"front": "front view, facing camera directly, full body from head to toe",
-		"side":  "pure right side view, 90-degree profile, looking right, full body from head to toe",
-		"back":  "back view, facing away from camera, full body from head to toe",
+		"front": "front view, facing camera directly, full body from head to toe, entire legs visible, feet shown, standing full figure",
+		"side":  "pure right side view, 90-degree profile, looking right, full body from head to toe, entire legs visible, feet shown, standing full figure",
+		"back":  "back view, facing away from camera, full body from head to toe, entire legs visible, feet shown, standing full figure",
 	}
 	angleDesc, ok := viewDesc[viewType]
 	if !ok {
@@ -2245,7 +2245,8 @@ func (s *ImageGenerationService) GenerateThreeViewImage(ctx context.Context, ten
 	baseNeg := "grey background, gray background, colored background, gradient background, dark background, " +
 		"textured background, busy background, background elements, shadow on background, " +
 		"multiple people, two people, duo, couple, group, 多人, nsfw, lowres, bad anatomy, " +
-		"cropped body, cut off at legs, missing feet, bottom cut off, partial body, floating figure, " +
+		"bust shot, half body, waist up, upper body only, portrait shot, headshot, close-up, face only, " +
+		"cropped body, cut off at legs, cut off at waist, missing feet, missing legs, bottom cut off, partial body, floating figure, " +
 		"different character, inconsistent appearance, " +
 		"makeup, eyeshadow, eye shadow, eyeliner, eye liner, mascara, lipstick, blush, rouge, cosmetics, " +
 		"text, labels, watermark, signature"
@@ -2282,18 +2283,18 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 	// 人形角色布局：A-pose + 侧面解剖约束
 	layoutDetails :=
 		"three equal-width panels side by side, horizontal wide format, " +
-			"LEFT PANEL front view: facing camera directly, symmetrical, neutral expression, full body head to toe, " +
-			"CENTER PANEL 90-degree side profile: pure side view facing left, full body head to toe, " +
-			"RIGHT PANEL back view: facing away from camera, back of head visible, no face visible, full body head to toe, " +
-			"A-pose arms 30-45 degrees from sides, same ground baseline, same character height in all panels"
+			"LEFT PANEL front view: facing camera directly, symmetrical, neutral expression, full body from head to toe, entire legs and feet fully visible, standing pose, " +
+			"CENTER PANEL 90-degree side profile: pure side view facing left, full body from head to toe, entire legs and feet fully visible, standing pose, " +
+			"RIGHT PANEL back view: facing away from camera, back of head visible, no face visible, full body from head to toe, entire legs and feet fully visible, standing pose, " +
+			"A-pose arms 30-45 degrees from sides, same ground baseline, same character height in all panels, no cropping"
 
 	// 动物角色布局：去掉 A-pose 手臂指令，改用通用姿态
 	animalLayoutDetails :=
 		"three equal-width panels side by side, horizontal wide format, " +
-			"LEFT PANEL front view: facing camera directly, full body, neutral pose, " +
-			"CENTER PANEL 90-degree side profile: pure side view, full body, " +
-			"RIGHT PANEL back view: facing away from camera, full body, " +
-			"same ground baseline, same character scale in all panels"
+			"LEFT PANEL front view: facing camera directly, full body from head to toe, entire figure visible, neutral pose, " +
+			"CENTER PANEL 90-degree side profile: pure side view, full body from head to toe, entire figure visible, " +
+			"RIGHT PANEL back view: facing away from camera, full body from head to toe, entire figure visible, " +
+			"same ground baseline, same character scale in all panels, no cropping"
 
 	// appearance 截断至 80 词（外貌细节是无参考图时跨格一致性的唯一文字锚点）
 	condensedAppearance := condenseVisualPrompt(appearance, 80)
@@ -2358,7 +2359,8 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 		"face visible in back panel, both ears visible in side panel, " +
 		"different character scale per panel, size inconsistency, " +
 		"merged panels, overlapping panels, " +
-		"cut off feet, missing legs, cropped body, " +
+		"bust shot, half body, waist up, upper body only, portrait only, headshot, close-up, " +
+		"cut off feet, cut off at waist, cut off at knees, missing feet, missing legs, cropped body, partial figure, " +
 		"4 panels, five panels, portrait panel, bust shot panel, " +
 		"extra limbs, bad anatomy, nsfw, lowres, blurry, poorly drawn"
 	negativePrompt := baseNeg
