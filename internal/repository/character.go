@@ -33,6 +33,27 @@ func (r *CharacterRepository) FindByNovelAndName(novelID uint, name string) (*mo
 	return &c, nil
 }
 
+// FindByNovelAndNameUnscoped 包含软删除记录的查找（用于判断唯一索引是否被软删除记录占用）。
+// 返回 nil, nil 表示完全不存在。
+func (r *CharacterRepository) FindByNovelAndNameUnscoped(novelID uint, name string) (*model.Character, error) {
+	var c model.Character
+	err := r.db.Unscoped().Where("novel_id = ? AND name = ?", novelID, name).First(&c).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &c, nil
+}
+
+// RestoreByID 恢复软删除的角色（清空 deleted_at）。
+func (r *CharacterRepository) RestoreByID(id uint) error {
+	return r.db.Unscoped().Model(&model.Character{}).
+		Where("id = ?", id).
+		Update("deleted_at", nil).Error
+}
+
 // Create 创建角色
 func (r *CharacterRepository) Create(character *model.Character) error {
 	return r.db.Create(character).Error

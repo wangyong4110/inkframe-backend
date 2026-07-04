@@ -778,6 +778,9 @@ func (s *CharacterService) UpdateCharacter(id, tenantID uint, req *model.UpdateC
 		character.VoiceConfig.VoiceSample = req.VoiceSample
 	}
 	if err := s.characterRepo.Update(character); err != nil {
+		if isDuplicateKeyError(err) {
+			return nil, fmt.Errorf("角色名 %q 在本小说中已存在，请先删除重名角色再修改: %w", character.Name, err)
+		}
 		return nil, err
 	}
 	// Auto-snapshot when key characterization fields change (best-effort).
@@ -1129,6 +1132,56 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			}
 			upserted = append(upserted, ch)
 		} else {
+			// DB 级二次兜底：byName 快照可能在并发/重试间过期。
+			// 同时检查软删除记录，避免触发唯一索引冲突。
+			if existing, _ := s.characterRepo.FindByNovelAndNameUnscoped(novelID, p.Name); existing != nil {
+				if existing.DeletedAt.Valid {
+					// 软删除记录：恢复并更新字段
+					logger.Printf("[CharacterService] AIBatchGenerate: restoring soft-deleted character %q (id=%d)", p.Name, existing.ID)
+					if err := s.characterRepo.RestoreByID(existing.ID); err != nil {
+						logger.Errorf("CharacterService.AIBatchGenerate: restore %s: %v", p.Name, err)
+						continue
+					}
+					existing.DeletedAt.Valid = false
+					if description != "" {
+						existing.Description = description
+					}
+					if p.Gender != "" {
+						existing.Meta.Gender = p.Gender
+					}
+					if p.Age != "" {
+						existing.Meta.Age = p.Age
+					}
+					existing.Status = "active"
+					if err := s.characterRepo.Update(existing); err != nil {
+						logger.Errorf("CharacterService.AIBatchGenerate: update restored %s: %v", p.Name, err)
+					}
+					if p.VisualPrompt != "" {
+						s.upsertDefaultLookVisualPrompt(existing.ID, existing.NovelID, p.VisualPrompt)
+					}
+					upserted = append(upserted, existing)
+				} else {
+					// 活跃记录（race condition / 并发写入）：按更新逻辑处理
+					logger.Printf("[CharacterService] AIBatchGenerate: DB dedup (active) %q (id=%d)", p.Name, existing.ID)
+					if description != "" {
+						existing.Description = description
+					}
+					if p.Gender != "" {
+						existing.Meta.Gender = p.Gender
+					}
+					if p.Age != "" {
+						existing.Meta.Age = p.Age
+					}
+					if err := s.characterRepo.Update(existing); err != nil {
+						logger.Errorf("CharacterService.AIBatchGenerate: update dedup %s: %v", p.Name, err)
+					}
+					if p.VisualPrompt != "" {
+						s.upsertDefaultLookVisualPrompt(existing.ID, existing.NovelID, p.VisualPrompt)
+					}
+					upserted = append(upserted, existing)
+				}
+				continue
+			}
 			character := &model.Character{
 				UUID:        uuid.New().String(),
 				NovelID:     novelID,
@@ -1419,16 +1472,30 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 		}
 		// 插入前再次确认（mutex 内，但 reload 防止极端情况）
 		existingNameSet[strings.ToLower(c.Name)] = true // 先占位，防止同批次重复
-		// DB 级二次兜底：mutex 内仍有极小窗口让 NovelAnalysisService 同时创建相同角色。
-		// 找到已存在记录时，仍需将其绑定到本章节（角色是真实出场的）。
-		if dup, _ := s.characterRepo.FindByNovelAndName(novelID, c.Name); dup != nil {
-			logger.Printf("[CharacterService] AIExtractMinorChars: DB dedup: %q already exists (id=%d), binding to chapter instead", c.Name, dup.ID)
-			if s.chapterCharacterRepo != nil {
-				_ = s.chapterCharacterRepo.Upsert(&model.ChapterCharacter{
-					CharacterID: dup.ID,
-					ChapterID:   chapterID,
-					NovelID:     novelID,
-				})
+		// DB 级二次兜底（含软删除）：避免唯一索引冲突。
+		if dup, _ := s.characterRepo.FindByNovelAndNameUnscoped(novelID, c.Name); dup != nil {
+			if dup.DeletedAt.Valid {
+				// 软删除记录：恢复并绑定到本章节
+				logger.Printf("[CharacterService] AIExtractMinorChars: restoring soft-deleted %q (id=%d)", c.Name, dup.ID)
+				if e := s.characterRepo.RestoreByID(dup.ID); e != nil {
+					logger.Errorf("[CharacterService] AIExtractMinorChars: restore %q: %v", c.Name, e)
+				}
+				if s.chapterCharacterRepo != nil {
+					_ = s.chapterCharacterRepo.Upsert(&model.ChapterCharacter{
+						CharacterID: dup.ID,
+						ChapterID:   chapterID,
+						NovelID:     novelID,
+					})
+				}
+			} else {
+				logger.Printf("[CharacterService] AIExtractMinorChars: DB dedup: %q already exists (id=%d), binding to chapter instead", c.Name, dup.ID)
+				if s.chapterCharacterRepo != nil {
+					_ = s.chapterCharacterRepo.Upsert(&model.ChapterCharacter{
+						CharacterID: dup.ID,
+						ChapterID:   chapterID,
+						NovelID:     novelID,
+					})
+				}
 			}
 			continue
 		}

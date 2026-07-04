@@ -245,6 +245,10 @@ func (h *CharacterHandler) UpdateCharacter(c *gin.Context) {
 			respondErr(c, http.StatusNotFound, "character not found")
 			return
 		}
+		if isDuplicateKeyError(err) {
+			respondErr(c, http.StatusConflict, err.Error())
+			return
+		}
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
