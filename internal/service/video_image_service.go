@@ -699,12 +699,14 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// 对 Seedream 等非 IP-Adapter 模型，prompt 靠前的 token 权重更高；
 	// 若场景描述排在第一位，模型优先渲染场景而忽略角色。
 	var sceneRefImage string
+	var sceneAnchorName string
 	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
-		if fragment, refURL, err := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); err == nil {
+		if fragment, refURL, aName, err := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); err == nil {
 			if fragment != "" {
 				promptText = fragment + ", " + promptText
 			}
 			sceneRefImage = refURL
+			sceneAnchorName = aName
 		}
 	}
 
@@ -818,6 +820,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 	// 有角色时（DreamO 模式）：物品图不加入参考图列表（防止污染 IP embedding），仅通过 prompt 文字传达。
 	// 无角色时（Text2ImgV3 模式）：可加入物品图作为视觉参考。
 	var itemRefImages []string
+	var itemRefNames []string // 与 itemRefImages 严格并行，用于参考图编号替换
 	if s.itemRepo != nil {
 		if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil && video.NovelID > 0 {
 			if items, err := s.itemRepo.ListByNovel(video.NovelID); err == nil {
@@ -829,6 +832,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 					nameLower := strings.ToLower(item.Name)
 					if nameLower != "" && strings.Contains(promptLower, nameLower) {
 						itemRefImages = append(itemRefImages, normalizeMediaURL(item.ReferenceImageURL))
+						itemRefNames = append(itemRefNames, item.Name)
 						logger.Printf("[ItemRef] shot#%d item=%q refURL=%q", shot.ShotNo, item.Name, item.ReferenceImageURL)
 					}
 				}
@@ -1019,6 +1023,33 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		promptText = truncated
 	}
 
+	// 参考图编号替换：将 prompt 中的角色/物品/场景名替换为 [图N]/[Image-N]，
+	// 使模型能将名称与传入的参考图位置一一对应，提升角色/物品/场景一致性。
+	// promptForFallback 保留替换前版本，用于无参考图降级（文字是唯一外貌约束，不应出现 [图N]）。
+	promptForFallback := promptText
+	if len(allRefImages) > 0 {
+		nameToRefIdx := make(map[string]int)
+		for i, po := range portraitOwners {
+			if i < len(cappedPortraits) && po.name != "" {
+				nameToRefIdx[po.name] = i + 1
+			}
+		}
+		offset := len(cappedPortraits)
+		for i, name := range itemRefNames {
+			if name != "" {
+				nameToRefIdx[name] = offset + i + 1
+			}
+		}
+		if sceneRefImage != "" && sceneAnchorName != "" {
+			nameToRefIdx[sceneAnchorName] = offset + len(itemRefImages) + 1
+		}
+		if len(nameToRefIdx) > 0 {
+			isEn := isEnglishPrompt(shot.GenMeta.Prompt)
+			promptText = replaceNamesWithRefIndex(promptText, nameToRefIdx, isEn)
+			logger.Printf("[RefIdx] shot#%d refMap=%v isEn=%v", shot.ShotNo, nameToRefIdx, isEn)
+		}
+	}
+
 	// 场景锚点图片不加入 allRefImages：
 	// 见上方"参考图列表"注释。二次读取也同样跳过场景图，防止并发批次中后加进来。
 
@@ -1041,7 +1072,7 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		// 降级为纯文生图（无参考图），但需补注入参考图角色的 VisualPrompt（原 DreamO 模式下这些 VP 被跳过，
 		// 因为参考图承担了外貌约束；纯文生图时文字是唯一外貌依据，必须补回）。
 		logger.Warnf("generateShotReferenceImage: shot %d ref image blocked by safety filter, falling back to text-only with injected char VPs", shot.ShotNo)
-		textOnlyPrompt := promptText
+		textOnlyPrompt := promptForFallback // 使用替换前版本，[图N] 在无参考图时无意义
 		if len(cappedPortraits) > 0 {
 			var fallbackVPs []string
 			for i := range cappedPortraits {
@@ -1083,6 +1114,40 @@ func isContentSafetyError(err error) bool {
 	}
 	s := err.Error()
 	return strings.Contains(s, "50511") || strings.Contains(s, "Risk Not Pass") || strings.Contains(s, "Img Risk")
+}
+
+// chineseNumerals 中文数字序列，用于参考图编号替换（[图一]、[图二]…）
+var chineseNumerals = []string{
+	"一", "二", "三", "四", "五", "六", "七", "八", "九", "十",
+	"十一", "十二", "十三", "十四", "十五",
+}
+
+// replaceNamesWithRefIndex 将 prompt 中出现的 nameToIdx 键替换为参考图编号标签。
+// isEn=true → [Image-N]；isEn=false → [图N]（中文数字，超出 15 退化为阿拉伯数字）。
+// 按名称字符数从长到短替换，防止短名截断长名（如"白"截断"李白"）。
+func replaceNamesWithRefIndex(prompt string, nameToIdx map[string]int, isEn bool) string {
+	names := make([]string, 0, len(nameToIdx))
+	for n := range nameToIdx {
+		names = append(names, n)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		return len([]rune(names[i])) > len([]rune(names[j]))
+	})
+	for _, name := range names {
+		idx := nameToIdx[name]
+		var tag string
+		if isEn {
+			tag = fmt.Sprintf("[Image-%d]", idx)
+		} else {
+			cn := fmt.Sprintf("%d", idx)
+			if idx >= 1 && idx <= len(chineseNumerals) {
+				cn = chineseNumerals[idx-1]
+			}
+			tag = fmt.Sprintf("[图%s]", cn)
+		}
+		prompt = strings.ReplaceAll(prompt, name, tag)
+	}
+	return prompt
 }
 
 // isEnglishPrompt 判断字符串是否以英文为主（英文字母占比 > 40%）。
@@ -1484,7 +1549,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		videoPrompt = continuityPrefix + ", " + videoPrompt
 	}
 	if s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
-		if fragment, _, err := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); err == nil && fragment != "" {
+		if fragment, _, _, err := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); err == nil && fragment != "" {
 			videoPrompt = fragment + ", " + videoPrompt
 		}
 	}
@@ -1719,9 +1784,12 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		}
 	}
 	if multiImageProviders[providerName] && s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
-		if _, anchorRefURL, anchorErr := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); anchorErr == nil && anchorRefURL != "" && anchorRefURL != referenceImage {
+		if _, anchorRefURL, anchorLabel, anchorErr := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); anchorErr == nil && anchorRefURL != "" && anchorRefURL != referenceImage {
 			extraRefImages = append(extraRefImages, anchorRefURL)
-			extraRefLabels = append(extraRefLabels, "场景背景")
+			if anchorLabel == "" {
+				anchorLabel = "场景背景"
+			}
+			extraRefLabels = append(extraRefLabels, anchorLabel)
 		}
 	}
 
@@ -1731,6 +1799,31 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	for _, u := range extraRefImages {
 		if resolved := s.resolveAbsURL(u); resolved != "" {
 			absExtras = append(absExtras, resolved)
+		}
+	}
+
+	// 参考图编号替换：将 videoPromptFinal 中的角色/物品/场景名替换为 [图N]/[Image-N]，
+	// 使模型能将名称与传入的参考图位置对应。
+	// 参考图顺序：absRef(index 1) → absExtras[0](index 2) → absExtras[1](index 3) …
+	// "场景参考"（前一镜末帧）无对应名称，跳过不替换；角色名和场景锚点名参与替换。
+	{
+		nameToRefIdx := make(map[string]int)
+		baseIdx := 1
+		if absRef != "" {
+			if refLabel != "" {
+				nameToRefIdx[refLabel] = baseIdx
+			}
+			baseIdx++
+		}
+		for i, label := range extraRefLabels {
+			if label != "" && label != "场景参考" {
+				nameToRefIdx[label] = baseIdx + i
+			}
+		}
+		if len(nameToRefIdx) > 0 {
+			isEn := isEnglishPrompt(shot.GenMeta.MotionPrompt + shot.GenMeta.Prompt)
+			videoPromptFinal = replaceNamesWithRefIndex(videoPromptFinal, nameToRefIdx, isEn)
+			logger.Printf("[RefIdx] video shot#%d refMap=%v isEn=%v", shot.ShotNo, nameToRefIdx, isEn)
 		}
 	}
 

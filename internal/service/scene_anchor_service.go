@@ -198,13 +198,14 @@ func (s *SceneAnchorService) AutoSetRefImage(id uint, imageURL string) error {
 	return nil
 }
 
-// BuildPromptFragment 返回拼接好的 prompt 片段和参考图URL
-// 供分镜图像生成时注入 ImagePromptConfig
-func (s *SceneAnchorService) BuildPromptFragment(id uint) (promptFragment string, refImageURL string, err error) {
+// BuildPromptFragment 返回拼接好的 prompt 片段、参考图URL 和锚点名称。
+// 供分镜图像/视频生成时注入 prompt 并做参考图编号替换。
+func (s *SceneAnchorService) BuildPromptFragment(id uint) (promptFragment string, refImageURL string, anchorName string, err error) {
 	anchor, err := s.repo.GetByID(id)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
+	anchorName = anchor.Name
 	fragment := anchor.Description
 	if anchor.Name != "" && fragment != "" {
 		fragment = fmt.Sprintf("[scene: %s] %s", anchor.Name, fragment)
@@ -213,7 +214,7 @@ func (s *SceneAnchorService) BuildPromptFragment(id uint) (promptFragment string
 	if anchor.PromptLock != "" {
 		fragment = fragment + ", " + anchor.PromptLock
 	}
-	return fragment, anchor.RefImageURL, nil
+	return fragment, anchor.RefImageURL, anchorName, nil
 }
 
 // SetShotAnchor 绑定分镜到场景锚点
