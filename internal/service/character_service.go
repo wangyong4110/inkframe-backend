@@ -1481,20 +1481,28 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 					logger.Errorf("[CharacterService] AIExtractMinorChars: restore %q: %v", c.Name, e)
 				}
 				if s.chapterCharacterRepo != nil {
-					_ = s.chapterCharacterRepo.Upsert(&model.ChapterCharacter{
+					if e := s.chapterCharacterRepo.Upsert(&model.ChapterCharacter{
 						CharacterID: dup.ID,
 						ChapterID:   chapterID,
 						NovelID:     novelID,
-					})
+					}); e != nil {
+						logger.Errorf("[CharacterService] AIExtractMinorChars: bind restored char %q (id=%d) to chapterID=%d: %v", c.Name, dup.ID, chapterID, e)
+					} else {
+						logger.Printf("[CharacterService] AIExtractMinorChars: bound restored char %q (id=%d) to chapterID=%d", c.Name, dup.ID, chapterID)
+					}
 				}
 			} else {
 				logger.Printf("[CharacterService] AIExtractMinorChars: DB dedup: %q already exists (id=%d), binding to chapter instead", c.Name, dup.ID)
 				if s.chapterCharacterRepo != nil {
-					_ = s.chapterCharacterRepo.Upsert(&model.ChapterCharacter{
+					if e := s.chapterCharacterRepo.Upsert(&model.ChapterCharacter{
 						CharacterID: dup.ID,
 						ChapterID:   chapterID,
 						NovelID:     novelID,
-					})
+					}); e != nil {
+						logger.Errorf("[CharacterService] AIExtractMinorChars: bind dedup char %q (id=%d) to chapterID=%d: %v", c.Name, dup.ID, chapterID, e)
+					} else {
+						logger.Printf("[CharacterService] AIExtractMinorChars: bound dedup char %q (id=%d) to chapterID=%d", c.Name, dup.ID, chapterID)
+					}
 				}
 			}
 			continue
@@ -1545,8 +1553,8 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 	}
 	if s.chapterCharacterRepo != nil {
 		for _, name := range aiResp.AppearingCharacters {
-			charID, ok := existingNameToID[strings.ToLower(name)]
-			if !ok {
+			charID, matched := existingNameToID[strings.ToLower(name)]
+			if !matched {
 				logger.Printf("[CharacterService] AIExtractMinorChars: appearing char %q not found in existing list, skipping", name)
 				continue
 			}

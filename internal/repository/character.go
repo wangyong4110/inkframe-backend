@@ -177,6 +177,7 @@ func (r *CharacterStateSnapshotRepository) Upsert(snapshot *model.CharacterState
 		if err == nil {
 			snapshot.ID = existing.ID
 			snapshot.CreatedAt = existing.CreatedAt
+			snapshot.DeletedAt = gorm.DeletedAt{} // 清除软删除，防止 Save 保留已有的 deleted_at
 			return tx.Save(snapshot).Error
 		}
 		if !errors.Is(err, gorm.ErrRecordNotFound) {

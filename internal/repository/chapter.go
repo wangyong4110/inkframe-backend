@@ -525,18 +525,20 @@ func NewChapterItemRepository(db *gorm.DB) *ChapterItemRepository {
 }
 
 func (r *ChapterItemRepository) Upsert(ci *model.ChapterItem) error {
-	var existing model.ChapterItem
-	result := r.db.Where("chapter_id = ? AND item_id = ?", ci.ChapterID, ci.ItemID).
-		Attrs(model.ChapterItem{ChapterID: ci.ChapterID, ItemID: ci.ItemID}).
-		FirstOrCreate(&existing)
-	if result.Error != nil {
-		return result.Error
-	}
-	existing.Location = ci.Location
-	existing.Owner = ci.Owner
-	existing.Condition = ci.Condition
-	existing.Notes = ci.Notes
-	return r.db.Save(&existing).Error
+	// deleted_at = NULL：与 ChapterCharacter.Upsert 同理，确保命中软删除记录时一并恢复可见性。
+	return r.db.Exec(`INSERT INTO ink_chapter_item
+		(item_id, chapter_id, novel_id, location, owner, `+"`condition`"+`, notes, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+		ON DUPLICATE KEY UPDATE
+		  location   = VALUES(location),
+		  owner      = VALUES(owner),
+		  `+"`condition`"+` = VALUES(`+"`condition`"+`),
+		  notes      = VALUES(notes),
+		  deleted_at = NULL,
+		  updated_at = NOW()`,
+		ci.ItemID, ci.ChapterID, ci.NovelID,
+		ci.Location, ci.Owner, ci.Condition, ci.Notes,
+	).Error
 }
 
 func (r *ChapterItemRepository) GetByChapterAndItem(chapterID, itemID uint) (*model.ChapterItem, error) {
@@ -576,6 +578,8 @@ func NewChapterCharacterRepository(db *gorm.DB) *ChapterCharacterRepository {
 func (r *ChapterCharacterRepository) Upsert(cc *model.ChapterCharacter) error {
 	// 使用 ON DUPLICATE KEY UPDATE 保证并发安全，避免 TOCTOU 竞争导致
 	// unique constraint violation（uniq_chapter_char: character_id + chapter_id）。
+	// deleted_at = NULL：当 (character_id, chapter_id) 对应的记录是软删除状态时（角色先被删除再恢复），
+	// UPDATE 必须清除 deleted_at，否则 ListByChapter 的 WHERE deleted_at IS NULL 查不到该记录。
 	return r.db.Exec(`INSERT INTO ink_chapter_character
 		(character_id, chapter_id, novel_id, appearance, personality, status, location, notes, role_in_chapter, action, `+"`change`"+`, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
@@ -588,6 +592,7 @@ func (r *ChapterCharacterRepository) Upsert(cc *model.ChapterCharacter) error {
 		  role_in_chapter = VALUES(role_in_chapter),
 		  action          = VALUES(action),
 		  `+"`change`"+`  = VALUES(`+"`change`"+`),
+		  deleted_at      = NULL,
 		  updated_at      = NOW()`,
 		cc.CharacterID, cc.ChapterID, cc.NovelID,
 		cc.Appearance, cc.Personality, cc.Status, cc.Location, cc.Notes,
