@@ -764,7 +764,7 @@ func (s *VideoService) autoMatchShotItems(shots []*model.StoryboardShot, items [
 			return
 		}
 		for name, id := range nameMap {
-			if strings.Contains(nameLower, name) || strings.Contains(name, nameLower) {
+			if strings.Contains(nameLower, name) {
 				if !seen[id] {
 					*matched = append(*matched, id)
 					seen[id] = true
@@ -1386,7 +1386,7 @@ func validateShotSequence(shots []*model.StoryboardShot) error {
 func validTransition(t string) string {
 	valid := map[string]bool{
 		"cut": true, "fade": true, "dissolve": true,
-		"wipe": true, "push": true, "slide": true,
+		"wipe": true, "push": true, "j-cut": true, "l-cut": true,
 	}
 	if valid[t] {
 		return t
@@ -2128,10 +2128,10 @@ func (u shotOptimizeUpdate) toFieldMap() map[string]interface{} {
 	if u.Description != "" {
 		m["description"] = u.Description
 	}
-	if u.Narration != "" {
+	// narration/dialogue 允许空字符串（支持清空操作，例如修复旁白/台词同镜共存违规）
+	if u.Narration != "" || u.Dialogue != "" {
+		// 互斥约束：AI 显式填写了其中一个字段时，两个字段都写入，保证清空操作生效
 		m["narration"] = u.Narration
-	}
-	if u.Dialogue != "" {
 		m["dialogue"] = u.Dialogue
 	}
 	if u.CameraType != "" {
@@ -2182,16 +2182,38 @@ func buildStoryboardOptimizePrompt(shots []*model.StoryboardShot, review *model.
 		if narr != "" {
 			sb.WriteString(fmt.Sprintf(" 旁白:\"%s\"", narr))
 		}
+		if sh.GenMeta.Dialogue != "" {
+			dial := sh.GenMeta.Dialogue
+			if len([]rune(dial)) > 60 {
+				dial = string([]rune(dial)[:60]) + "…"
+			}
+			sb.WriteString(fmt.Sprintf(" 对白:\"%s\"", dial))
+		}
+		if sh.CamDir.EmotionalTone != "" {
+			sb.WriteString(fmt.Sprintf(" 情绪:%s", sh.CamDir.EmotionalTone))
+		}
+		if sh.CamDir.TransitionOut != "" {
+			tout := sh.CamDir.TransitionOut
+			if len([]rune(tout)) > 40 {
+				tout = string([]rune(tout)[:40]) + "…"
+			}
+			sb.WriteString(fmt.Sprintf(" 结尾状态:\"%s\"", tout))
+		}
 		sb.WriteString("\n")
 	}
 
 	feedbackData := make([]map[string]interface{}, 0, len(review.ShotFeedback))
 	for _, fb := range review.ShotFeedback {
 		feedbackData = append(feedbackData, map[string]interface{}{
-			"ShotNo":     fb.ShotNo,
-			"Severity":   fb.Severity,
-			"Issues":     fb.Issues,
-			"Suggestion": fb.Suggestion,
+			"ShotNo":                 fb.ShotNo,
+			"Severity":               fb.Severity,
+			"Issues":                 fb.Issues,
+			"Suggestion":             fb.Suggestion,
+			"SuggestedNarration":     fb.SuggestedNarration,
+			"SuggestedDialogue":      fb.SuggestedDialogue,
+			"SuggestedDescription":   fb.SuggestedDescription,
+			"SuggestedTransitionOut": fb.SuggestedTransitionOut,
+			"SuggestedTransitionIn":  fb.SuggestedTransitionIn,
 		})
 	}
 
@@ -2211,7 +2233,7 @@ func buildStoryboardOptimizePrompt(shots []*model.StoryboardShot, review *model.
 
 // parseOptimizedShots 解析 AI 返回的优化镜头列表
 func parseOptimizedShots(result string) ([]shotOptimizeUpdate, error) {
-	cleaned := extractJSON(result)
+	cleaned := extractJSONObject(result) // optimize 模板返回 {"optimized_shots":[...]} 对象，不能用 extractJSON（会剥离外层对象只保留内部数组）
 	var resp struct {
 		OptimizedShots []shotOptimizeUpdate `json:"optimized_shots"`
 	}
@@ -2396,12 +2418,13 @@ func (s *VideoService) RollbackReview(tenantID, videoID, recordID uint) (int, er
 		if !ok {
 			continue
 		}
+		camDirJSON, _ := json.Marshal(snap.CamDir)
 		fields := map[string]interface{}{
 			"description": snap.Description,
 			"narration":   snap.Narration,
 			"dialogue":    snap.GenMeta.Dialogue,
 			"duration":    snap.Duration,
-			"cam_dir":     snap.CamDir,
+			"cam_dir":     string(camDirJSON), // GORM map updates 不走 serializer，必须手动序列化
 		}
 		if err := s.storyboardRepo.UpdateFields(current.ID, fields); err != nil {
 			logger.Errorf("RollbackReview: update shot %d failed: %v", snap.ShotNo, err)

@@ -7,12 +7,13 @@
 ④ image_prompt / video_prompt 最低 100 字/词，短于此将导致生成质量大幅下降
 ⑤ 叙事链完整：禁止无铺垫的场景/地点/情绪跳跃
 
-⚠️ 视觉内容安全规则：description / image_prompt / video_prompt 字段中，严禁出现血腥、色情相关敏感词。（注：战斗/武侠场景中"倒下""受伤"等属于正常叙事描写，不在禁止范围内。）
+⚠️ 视觉内容安全规则：description / image_prompt / video_prompt 字段中，严禁出现血腥、色情、政治相关敏感词。（注：战斗/武侠场景中"倒下""受伤"等属于正常叙事描写，不在禁止范围内。）
 {% if GenreVisualHints %}
+【类型视觉风格建议——优先级低于下方"画面风格强制规则"，两者冲突时以画面风格规则为准】
 {{ GenreVisualHints }}
 {% endif %}
 {% if ImageStyleHint %}
-【画面风格强制规则——所有 image_prompt 必须遵守，违反将导致整个输出被拒绝】
+【画面风格强制规则——所有 image_prompt 必须遵守，违反将导致整个输出被拒绝；此规则优先级高于上方类型视觉建议】
 本项目画面风格设定为：**{{ ImageStyleHint }}**
 ① 所有分镜的 image_prompt 第一个区块 [ArtStyle/画风] 必须以此风格的关键词开头，不得使用与之相悖的风格词。
 ② 严禁在 image_prompt 中混用与本风格矛盾的描述（例如：风格含 anime/illustration 时禁止出现 photorealistic/photography/DSLR 等写实摄影词汇；风格含 realistic/photorealistic 时禁止出现 anime/illustration/cel shading 等动漫插画词汇）。
@@ -34,15 +35,9 @@
 ⑤ **情绪弧线连贯**：emotional_tone 必须呈现铺垫→积累→高潮→消化的演进节奏；高潮前须有铺垫镜头，强情绪后须有缓冲镜头，不得从"平静"无过渡地直接切到"极度紧张"。
 ⑥ **人物状态前后一致**：同一角色在相邻镜头中的服装、伤势、持物、位置须保持连续性；若人物状态发生变化（如受伤、换装），须在前序镜头中有对应动作铺垫。
 
-{% if VoiceMode == "dialogue" %}
-🚫🚫🚫 【最高强制规则：配音模式 = 仅对白】🚫🚫🚫
-本次生成的所有分镜，narration 字段必须为空字符串 ""，没有任何例外。
-无论该镜头是对话、动作、场景过渡还是情绪渲染，narration 一律为 ""。
-下文中"旁白镜头必填"等描述在此模式下完全无效，请忽略并以本规则为准。
-违反此规则（在任意分镜中写入非空 narration）将导致整个输出被拒绝。
-{% endif %}
-
 【输出字段规范——严格遵守，违反规范将导致输出无法使用】
+【字数上限速查】description ≤50字 | narration ≤45字 | dialogue ≤35字 | sfx_tags.prompt 15-40字 | image_prompt/video_prompt ≥100字/词
+
 ▸ camera_type（运镜方式）——必须体现多样性，禁止全部使用 static
   可选值（选其中一个填入）：static | push | pull | pan | track | crane_up | crane_down | follow | arc | tilt | whip_pan | zoom
   含义：static=固定机位，push=推镜头(向前推进)，pull=拉镜头(向后拉远)，pan=摇镜头(水平旋转)，track=移镜头(横向平移)，crane_up=升镜头，crane_down=降镜头，follow=跟镜头(跟随主体)，arc=环绕镜头(围绕主体环绕)，tilt=俯仰镜头(垂直俯仰)，whip_pan=甩镜头(快速甩动)，zoom=变焦镜头(焦距变化)
@@ -107,17 +102,11 @@
 - narration（旁白）：必须使用简体中文，严禁混入任何英文单词或其他外语，无论角色或场景设定如何。
 - dialogue（台词）：语言须与角色在【角色信息】中标注的"台词语言"保持一致；未标注则默认简体中文。
 - image_prompt / video_prompt / negative_prompt / description 字段才允许使用英文。
-【旁白-画面对位原则——核心创作理念】
-画面（image_prompt）负责：场景气氛、时间感、空间关系、情绪底色
-旁白（narration）负责：人物内心、主题意义、时间信息、因果关系、画面无法传达的信息
-
-⚠️ 严禁旁白重复画面已传达的内容：
-  - 如果画面是"破败的庭院"，旁白写"废墟沉默如故"→ 双重叙事，浪费旁白配额
-  - 正确做法：画面说环境，旁白说情感维度
+【旁白-画面对位原则】画面说环境/气氛，旁白说情感/时间/因果——严禁旁白重复画面已传达的内容：
   - ✅ 画面：古老庭院 → 旁白："三年前他也是这样进来的，只是那次，身边还有人。"（时间/情感维度）
   - ✅ 画面：夜深的房间 → 旁白："她数过三百六十个这样的夜晚，每一个都比上一个更难熬。"（人物内心）
   - ✅ 画面：空旷的战场 → 旁白："没有人知道那场仗到底是谁赢了。"（主题/因果）
-  - ❌ 画面：破败庭院 → 旁白："废墟沉默，岁月蹉跎。"（画面说了，旁白只是同义重复）
+  - ❌ 画面：破败庭院 → 旁白："废墟沉默，岁月蹉跎。"（同义重复，作废）
 
 ▸ narration 与 dialogue 互斥规则——核心约束，必须严格遵守
   ① 旁白镜头（narration 非空）：dialogue 必须为空字符串 ""，二者不能同时出现在同一个分镜中
@@ -127,26 +116,13 @@
   ⑤ 旁白镜头用于叙述动作、场景过渡、心理刻画；对白镜头专用于角色开口说话
 
 ▸ narration（中文旁白文案）——{% if VoiceMode == "dialogue" %}**🚫 仅对白模式：每个分镜此字段必须为 ""，不得填写任何内容**{% else %}旁白镜头必填，对白镜头必须为空 ""{% endif %}
-  - 观众"听到"的旁白内容，第三人称叙事视角，追求文学性与画面感
+  - 观众"听到"的旁白内容，第三人称叙事视角，追求画面感
   - ⚠️ 字数限制：**不超过45字**，一句话或由逗号连接的一个完整意群，不得分句，不加省略号或破折号结尾
   - 严禁出现以下词汇：镜头、画面、特写、推进、切换、转场、画外音、摄影机、定格
   - 严禁以角色名称开头，如"妈妈说："、"凌云道："、"角色名：" 等格式——旁白是旁白，不是台词引用
-  - **⚠️ 语法完整性——最高强制要求，违反此规则的输出直接作废**：
-    每个旁白句子必须是语法完整的中文句子，清晰包含主语（或可省略主语的无主句）+ 谓语动词 + 必要宾语或补语。
-    严禁用名词短语、形容词短语或词语堆砌代替完整句子：
-    ❌ "三年的等待，一道伤疤。"（两个名词短语，无谓语——作废）
-    ❌ "月光，寒意，沉默。"（名词罗列，无谓语——作废）
-    ❌ "漫长的夜，破碎的心。"（形容词+名词短语堆砌，无谓语——作废）
-    ❌ "风起，云涌。"（孤立动词短语，主语缺失且语义残缺——作废）
-    ✅ "三年的等待在这一刻化作无言的伤疤。"（主谓宾完整）
-    ✅ "月光将寒意从石板一寸寸压入她的脚底。"（主谓宾完整，有感官细节）
-    ✅ "风卷起庭院里最后一片枯叶，随即归于寂灭。"（主谓完整，动词有力）
-    ⚠️ 追求文学性不是写残句的理由——意象和情感必须通过完整句子承载，而非词语碎片。
-  - ✅ 示例（语法完整即可）：
-    - "凌云走进大殿，殿内烛火摇曳。"（主谓宾完整，描述清晰）
-    - "三年过去了，这里的一切都没有变。"（完整句，交代情境）
-  - ❌ 示例（语法不完整，作废）：
-    - "黑暗，孤独，绝望。"（名词堆砌，无谓语，语法不完整——直接作废）
+  - **⚠️ 语法完整性（违反直接作废）**：每句必须是包含谓语动词的完整句，严禁名词/形容词短语堆砌：
+    ❌ "三年的等待，一道伤疤。" / "月光，寒意，沉默。" / "风起，云涌。"（无谓语——作废）
+    ✅ "三年的等待在这一刻化作无言的伤疤。" / "月光将寒意从石板一寸寸压入她的脚底。"
 
 ▸ dialogue（角色台词）——对白镜头必填，旁白镜头必须为空 ""
   - 格式固定："角色名：台词内容"（如"凌云：你敢再说一遍！"）
@@ -169,6 +145,12 @@
   - 每个分镜只能包含一个角色的一句台词，多角色对话必须拆分为多个分镜
   - 避免完全无意义的泛用台词（任何场景任何角色都能说的话）：
     ❌ "我知道了" / "你说得对" / "好的" / "没关系" / "走吧" / "我明白了"
+
+▸ subtitle（画面叠字——非时间转场镜头填 ""）
+  - 仅用于时间跳跃转场镜头（参见下方【时间跳跃转场镜头】规则）
+  - 内容与 narration 中的时间词完全相同，不加句号（如"三日后"）
+  - 此字段将以字幕形式叠加在画面上显示，让观众零歧义感知时间跨度
+  - 非时间转场的所有其他镜头均填 `""`，不得自行在画面上叠加文字
 
 ▸ emotional_tone（配音情感基调——必填，不得为空）
   - 根据该镜头的 narration（旁白）或 dialogue（台词）的情绪内容，分析并填写最贴切的情感标签
@@ -201,13 +183,10 @@
 台词（dialogue）优先：尽量将叙事转化为角色对话或内心独白。场景过渡、纯动作镜头等无法对话化的内容可使用简短旁白（narration），但全片对白镜头数量须多于旁白镜头数量。旁白与台词不可在同一镜头中同时出现（互斥）。
 
 {% else %}
-【配音模式：自动】
-每个分镜按以下规则选择旁白或台词：
-- 角色开口说话 → 使用 dialogue，格式："角色名：台词内容"；narration 留 ""
-- 其他所有镜头（动作、场景、心理、普通过渡）→ 必须填写 narration，语言凝练生动；dialogue 留 ""
+【配音模式：自动】遵循前述 narration/dialogue 互斥规则，角色开口用 dialogue，其余镜头用 narration；以下为本模式专属补充：
 - 时间跳跃转场镜头 → 遵循下方【时间跳跃转场镜头】规则，narration 只写时间词（≤10字）
-- 纯视觉/音效镜头（emotional_tone 设为「留白」）→ narration 和 dialogue 均可为 ""，让画面和音效独立承担情绪；此类镜头全片不超过 15%
-非「留白」镜头中严禁同时将 narration 与 dialogue 留为空字符串。
+- 纯视觉/音效镜头（emotional_tone 设为「留白」）→ narration 和 dialogue 均可为 ""；此类镜头全片不超过 15%
+- 非「留白」镜头严禁同时将 narration 与 dialogue 留为空字符串。
 
 {% endif %}
 {% if Pacing == "slow" %}
@@ -283,9 +262,8 @@
 {% endif %}
 {% if Characters %}
 【角色信息】
-⚠️ 角色名称强制规则（全字段适用）：
-① `characters` 数组中的 `name` 字段必须使用以下列表中的精确名称，不得改写、缩写或使用"角色名"占位符；该镜头无角色出场时填 `[]`。
-② `description`、`image_prompt`、`video_prompt` 字段凡涉及角色处，必须使用以下精确名称。严禁用"人影"、"他"/"她"、"少年"、"女子"、"figure"或任何外貌词替代角色名称——无论出于简洁还是通用描述的目的。
+⚠️ 角色名称强制规则（与核心规则③一致，全字段适用）：
+`characters[].name`、`description`、`image_prompt`、`video_prompt` 凡涉及角色处，必须使用以下列表的精确名称；该镜头无角色出场时 `characters` 填 `[]`。
 ⚠️ 【角色在提示词中的强制要求——违反将导致图像/视频生成失败】
 - 若该镜头有角色出场（characters[] 非空），`image_prompt` 中必须包含完整的【角色区块】：角色精确名称 + 画框位置（前景/中景/背景+方位）+ 身体姿态与动作 + 面部表情 + 与环境的空间关系
 - 若该镜头有角色出场，`video_prompt` 中必须包含【角色动作层】：以角色精确名称开头，描述其在镜头时长内的具体运动/动作变化（动作须具体，禁止写"站着"等静止状态词）
@@ -343,7 +321,7 @@
 - transition：dissolve
 - characters：[]
 - description/image_prompt/video_prompt：光线变化画面（日出橙红晨光/黄昏金红暮色/月升银白夜空），无角色
-- sfx_tags：birdsong（日出）/ crickets_night（入夜）/ wind_night（子夜）/ wind_gentle
+- sfx_tags：完整 JSON 数组格式，例如 [{"tag":"birdsong","type":"ambient","prompt":"清晨第一缕鸟鸣，空旷山林中远近交错的啁啾声，清新宁静"}]；可选 tag：birdsong（日出）/ crickets_night（入夜）/ wind_night（子夜）/ wind_gentle（清风）
 
 ━━ 第三级：中跨度（数日~数月级）━━
 识别词：三日后、数日后、五日后、七日后、半月后、十日后、一月后、月余、数月后、三月后、半年后
@@ -361,7 +339,7 @@
   ▸ 悲剧/压抑基调 → 花朵凋谢/树叶枯落/青苔爬墙/积尘加厚
   ▸ 励志/成长基调 → 新芽萌发/枝条繁茂/路面被踩出深痕
   ▸ 中性基调 → 季节交替（绿→黄→白→绿）/月亮盈亏/灯火从明到灭
-- sfx_tags：bell_ring / wind_gentle / silence_deep / echo_distant
+- sfx_tags：完整 JSON 数组格式，例如 [{"tag":"bell_ring","type":"ambient","prompt":"远处钟声低沉回响，悠长余韵在空旷山谷中慢慢消散"}]；可选 tag：bell_ring / wind_gentle / silence_deep / echo_distant（各选1~2个）
 
 ━━ 第四级：长跨度（一年及以上）━━
 识别词：一年后、两年后、三年后、数年后、多年后、五年后、十年后、数十年后、百年后
@@ -395,7 +373,7 @@
   ▸ 同一把椅子：木材从新到开裂发灰
   ▸ 同一棵树：从细幼苗到粗壮树干，某处树皮上的刻字已被生长撑开变形
   ▸ 同一把剑：刃面从光亮到锈迹斑斑（若剑象征主角状态）
-- sfx_tags：wind_gentle / silence_deep / echo_distant / bell_ring（各选1~2个）
+- sfx_tags：完整 JSON 数组格式，从以下 tag 中选1~2个：wind_gentle / silence_deep / echo_distant / bell_ring，例如 [{"tag":"wind_gentle","type":"ambient","prompt":"岁月悠悠，风声轻拂旧地，带着无声流逝的沧桑感"}]
 
 此类转场镜头的 shot_no 连续编号（不跳号）。第四级（长跨度）的2镜序列可使总分镜数超过 {{ ExpectedShots }}，最多额外增加10镜（含前三级的单镜转场）。
 
@@ -535,8 +513,8 @@ sfx_tags 是该镜头的结构化音效标签列表，每个元素含三个字�
     "image_prompt": "{{ ImageStyleHint }}, extreme close-up, overhead slight tilt angle — GROUND LAYER: single weathered grey flagstone tile filling 80% of frame, surface texture showing micro-erosion pitting every 3-5cm, two intersecting diagonal fractures crossing at frame center — horizontal fracture 0.8cm wide, vertical fracture 0.5cm wide — fine white powdered stone residue along all crack edges, crack interior shadow deep grey — FOREGROUND OBJECTS: resting in horizontal crack groove left-of-center: a jade pendant chain, individual links each 3mm, chain segment 8cm visible, cool green jade bead 1cm diameter at terminus, chain disappearing into crack shadow at right end; foreground-right corner: three dried flower petals overlapping, outermost 100% brown-shriveled and curled, middle 70% faded with tan edges, innermost retaining faint crimson pigment at center — MIDGROUND: stone tile edge at frame bottom showing 1cm thickness reveal, adjacent tile surface 30% visible showing similar erosion texture — BACKGROUND: blurred stone courtyard surface, 15-20% visible at frame top, soft grey-green out of focus — LIGHTING: cold diffuse ambient light from upper-left at 15° shallow angle, 6500K cool white, casting micro-shadows along each crack ridge 1-2mm height, highlight on jade pendant chain links creating specular point reflections, deep shadows in crack grooves — ATMOSPHERE: clear air within frame, no haze — cool grey and jade green palette, amber accent from dried petal pigment — 85-100mm f/1.8, extreme close-up, crack surface razor-sharp, stone beyond 5cm fully blurred — {{ StyleQualityTokens }}, macro photography",
     "video_prompt": "Locked-off camera with subtle organic stabilization, imperceptible breathing drift of ±0.2px; ATMOSPHERIC: clear air, no particle motion — STRUCTURAL MICRO-DYNAMICS: fine powdered stone residue along horizontal crack ridge: three granules vibrate ±0.3mm from low-frequency distant rumble at 2-3 second intervals, one granule rolling 2mm rightward into deeper crack shadow during second interval; jade pendant chain on stone: entire chain segment rests motionless except for one link at chain midpoint which rotates 8° clockwise over 3 seconds from imperceptible air current, then settles back over 1.5s — FOLIAGE: no foliage in frame — LIGHT AND SHADOW: cold diffuse ambient light holds completely stable throughout; specular highlights on jade chain links remain fixed; crack groove shadows hold depth without change — LIGHTING DYNAMICS: no perceptible change over shot duration — emotional arc: opens on the intimacy of small, abandoned things — the chain resting in the crack, the dying petals — and holds that stillness until the scale of loss contained in these centimeters becomes suffocating",
     "negative_prompt": "blurry, low quality, watermark, text, cartoon, anime, flat colors, cel shading, modern clothes, western armor, gun, car, neon sign, sci-fi elements, floating objects, overexposed, wide shot, landscape, crowd",
-    "narration": "{% if VoiceMode == 'dialogue' or VoiceMode == 'narration_primary' %}{% else %}玉坠冷卧于石缝，像一个没有人来收取的答案。{% endif %}",
-    "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'narration_primary' %}白雪：我找了你三年，你却把自己埋在这里。{% else %}{% endif %}",
+    "narration": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}{% else %}玉坠冷卧于石缝，像一个没有人来收取的答案。{% endif %}",
+    "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}白雪：我找了你三年，你却把自己埋在这里。{% else %}{% endif %}",
     "subtitle": "",
     "camera_type": "static",
     "camera_angle": "overhead",
@@ -615,8 +593,8 @@ sfx_tags 是该镜头的结构化音效标签列表，每个元素含三个字�
     "image_prompt": "{{ ImageStyleHint }}，极近景，俯视略倾角度——地面层：单块风化灰色石板占画框约80%，表面微侵蚀凹坑每3-5厘米分布，两道交叉的对角裂缝在画框中央交汇——水平裂缝约0.8厘米宽，垂直裂缝约0.5厘米宽——裂缝边缘沿线均有细白石粉残留，裂缝内部阴影深灰——前景物件：在水平裂缝槽内偏左处平铺一段翡翠玉坠链条，每枚链环约3毫米，链段约8厘米可见，末端1厘米直径冷绿翠玉珠，链条右端没入裂缝阴影中；画框右下角：三片干枯花瓣叠压，最外一片百分百褐化蜷曲边缘，中间一片边缘枯黄中央仍有淡棕色，最内一片中心保留淡淡绛红色素——中景：石板边缘在画框底部可见约1厘米厚度截面，相邻石板约30%进入画面，显示相似侵蚀质感——背景：模糊的庭院石板地面，约15-20%可见于画框顶部，柔灰绿色虚化——光线：左上方约15度浅角冷白漫射光，色温6500K，沿每条裂缝棱边投出1-2毫米高微阴影，链环上有镜面高光反射点，裂缝槽内深阴影——大气：画框内空气清透，无薄雾——冷灰与翡翠绿为主调，枯花瓣绛红为点缀——85-100mm，f/1.8，极近景，裂缝表面极清晰，5厘米外石板完全虚化——{{ StyleQualityTokens }}, macro photography",
     "video_prompt": "固定机位，带有轻微有机感微稳定，呼吸感漂移幅度±0.2px——大气：画框内空气清透，无粒子运动——结构微动：水平裂缝棱边上的石粉细粒：3粒细粒因低频远处隆隆声以±0.3毫米幅度振动，间隔2-3秒，第二次振动时一粒向右滚落2毫米进入深裂缝阴影中；石板表面翡翠链条：整段链条静止不动，唯有链段中部一枚链环因极轻微气流在3秒内顺时针旋转约8度，随后在1.5秒内缓慢复位——光线与阴影：冷白漫射光全程完全稳定，链环高光保持固定——情绪弧线：以对细小遗弃之物的亲密注视开场，画面在静止中凝滞，让沉默本身成为叙事。SOUND：石板缝隙间隐约可感的极轻微气流，几近无声却带出空旷的孤寂感；压倒一切的深沉静默占据主导，只余远处偶尔传来的微弱回音",
     "negative_prompt": "模糊，低质量，水印，文字，卡通，动漫，平涂，赛璐璐渲染，现代服装，西式铠甲，枪，汽车，霓虹灯，科幻元素，悬浮物体，过曝，宽镜头，风景，人群",
-    "narration": "{% if VoiceMode == 'dialogue' or VoiceMode == 'narration_primary' %}{% else %}玉坠冷卧于石缝，像一个没有人来收取的答案。{% endif %}",
-    "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'narration_primary' %}白雪：我找了你三年，你却把自己埋在这里。{% else %}{% endif %}",
+    "narration": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}{% else %}玉坠冷卧于石缝，像一个没有人来收取的答案。{% endif %}",
+    "dialogue": "{% if VoiceMode == 'dialogue' or VoiceMode == 'dialogue_primary' %}白雪：我找了你三年，你却把自己埋在这里。{% else %}{% endif %}",
     "subtitle": "",
     "camera_type": "static",
     "camera_angle": "overhead",

@@ -12,6 +12,11 @@
 {% for fb in ShotFeedback %}[镜{{ fb.ShotNo }}] 严重度:{{ fb.Severity }}
 {% for issue in fb.Issues %}  问题: {{ issue }}
 {% endfor %}{% if fb.Suggestion %}  建议: {{ fb.Suggestion }}
+{% endif %}{% if fb.SuggestedNarration %}  建议旁白（直接采用）: {{ fb.SuggestedNarration }}
+{% endif %}{% if fb.SuggestedDialogue %}  建议台词（直接采用）: {{ fb.SuggestedDialogue }}
+{% endif %}{% if fb.SuggestedDescription %}  建议描述（直接采用）: {{ fb.SuggestedDescription }}
+{% endif %}{% if fb.SuggestedTransitionOut %}  建议结尾衔接（直接采用为 transition_out）: {{ fb.SuggestedTransitionOut }}
+{% endif %}{% if fb.SuggestedTransitionIn %}  建议开场衔接（直接采用为 transition_in）: {{ fb.SuggestedTransitionIn }}
 {% endif %}
 {% endfor %}
 {% endif %}
@@ -20,19 +25,18 @@
 ① 旁白/对白互斥：同一镜头 narration 和 dialogue 不能同时非空；旁白镜头 dialogue=""，对白镜头 narration=""
 ② 角色名精确：角色名必须使用原始分镜中的完整角色名，禁止用"主角""角色A""男主""女主"等占位符
 ③ sfx_tags 格式：若修改音效字段，格式必须为 JSON 数组 [{"tag": "英文搜索词", "type": "ambient|action|emotion", "prompt": "中文音效描述15-40字"}]，禁止纯文本字符串
-④ 转场字段对称：若修改 transition_out，对应下一镜头的 transition_in 也必须同步修改（取值：cut/fade/dissolve/wipe）
+④ 转场字段对称：若修改 transition_out，对应下一镜头的 transition_in 也必须同步修改（取值：cut/fade/dissolve/wipe/j-cut/l-cut/push）
 ⑤ 不创造新信息：禁止在 description/image_prompt/video_prompt 中引入原始分镜未提及的人物、道具或场景元素
 ⑥ 敏感词过滤：description / image_prompt / video_prompt 严禁出现暴力、血腥、伤亡、色情相关敏感词
 
 【输出要求】
-- description / image_prompt / video_prompt 字段严禁出现暴力、血腥、伤亡、色情相关敏感词
 - 只输出需要修改的镜头，无需修改的镜头不要输出
 - 每个字段只有在有实质性改动时才输出，不改的字段不要输出
 - description、image_prompt、video_prompt 语言与原始分镜保持一致（原始为英文则用英文，原始为中文则用中文）；narration、dialogue 等叙事字段始终用中文
 - camera_type 取值: static/push/pull/pan/track/crane_up/crane_down/follow/arc/tilt/whip_pan/zoom
-- camera_angle 取值: eye_level/low/high/dutch
+- camera_angle 取值: eye_level/low/high/dutch/overhead/POV
 - shot_size 取值: extreme_wide/wide/full/medium/close_up/extreme_close_up
-- transition 取值: cut/fade/dissolve/wipe
+- transition 取值: cut/fade/dissolve/wipe/j-cut/l-cut/push
 - duration 单位为秒（数字）
 
 返回 JSON，不包含 markdown 代码块：
@@ -40,8 +44,12 @@
   "optimized_shots": [
     {
       "shot_no": 3,
-      "narration": "改进后的旁白",
-      "camera_type": "pan"
+      "narration": "改进后的旁白（或空字符串清空）",
+      "dialogue": "角色名：改进后台词（或空字符串清空）",
+      "camera_type": "pan",
+      "transition_out": "改进后的结尾状态描述（仅在改进衔接时填写）",
+      "transition_in": "改进后的开场状态描述（仅在改进衔接时填写）"
     }
   ]
 }
+注：每个字段只有在有实质性改动时才输出；narration 与 dialogue 互斥（同镜头中一个非空则另一个必须为空字符串 ""）。

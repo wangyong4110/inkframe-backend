@@ -374,9 +374,11 @@ type ShotReviewFeedback struct {
 	Issues               []string `json:"issues"`
 	Suggestion           string   `json:"suggestion"`
 	Severity             string   `json:"severity"` // info / warning / error
-	SuggestedNarration   string   `json:"suggested_narration,omitempty"`
-	SuggestedDialogue    string   `json:"suggested_dialogue,omitempty"`    // 建议对白（替换 dialogue 字段，同时清空 narration）
-	SuggestedDescription string   `json:"suggested_description,omitempty"`
+	SuggestedNarration    string `json:"suggested_narration,omitempty"`
+	SuggestedDialogue     string `json:"suggested_dialogue,omitempty"`     // 建议对白（替换 dialogue 字段，同时清空 narration）
+	SuggestedDescription  string `json:"suggested_description,omitempty"`
+	SuggestedTransitionOut string `json:"suggested_transition_out,omitempty"`
+	SuggestedTransitionIn  string `json:"suggested_transition_in,omitempty"`
 }
 
 // ─── 统一审查记录（章节/分镜共用）────────────────────────────────────────────────
