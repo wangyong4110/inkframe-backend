@@ -3,47 +3,68 @@ from aliyunsdkcore.client import AcsClient
 from aliyunsdkecs.request.v20140526 import (
     StartInstanceRequest,
     StopInstanceRequest,
+    DescribeInstancesRequest,
 )
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# 从环境变量读取（FC 控制台配置）
 ACCESS_KEY     = os.environ["ALIBABA_ACCESS_KEY"]
 ACCESS_SECRET  = os.environ["ALIBABA_ACCESS_SECRET"]
 REGION_ID      = os.environ.get("REGION_ID", "cn-hangzhou")
 INSTANCE_ID    = os.environ["ECS_INSTANCE_ID"]
-ECS_PRIVATE_IP = os.environ["ECS_PRIVATE_IP"]   # VPC 内网 IP
+ECS_PRIVATE_IP = os.environ["ECS_PRIVATE_IP"]
 INFER_PORT     = os.environ.get("INFER_PORT", "8000")
 INFER_BASE     = f"http://{ECS_PRIVATE_IP}:{INFER_PORT}"
-TIMEOUT_START  = int(os.environ.get("TIMEOUT_START", "180"))  # 秒
+TIMEOUT_START  = int(os.environ.get("TIMEOUT_START", "180"))
+TIMEOUT_INFER  = int(os.environ.get("TIMEOUT_INFER", "120"))
+AUTO_STOP      = os.environ.get("AUTO_STOP", "true").lower() == "true"
 
 acs_client = AcsClient(ACCESS_KEY, ACCESS_SECRET, REGION_ID)
 
 
+def get_instance_status() -> str:
+    req = DescribeInstancesRequest.DescribeInstancesRequest()
+    req.set_InstanceIds(json.dumps([INSTANCE_ID]))
+    resp = json.loads(acs_client.do_action_with_exception(req))
+    instances = resp.get("Instances", {}).get("Instance", [])
+    if not instances:
+        raise RuntimeError(f"Instance {INSTANCE_ID} not found")
+    return instances[0]["Status"]
+
+
 def start_instance():
+    status = get_instance_status()
+    if status == "Running":
+        logger.info("Instance already Running, skip start")
+        return
+    logger.info(f"Starting instance (current: {status})")
     req = StartInstanceRequest.StartInstanceRequest()
     req.set_InstanceId(INSTANCE_ID)
     acs_client.do_action_with_exception(req)
-    logger.info(f"Instance {INSTANCE_ID} start requested")
 
 
 def stop_instance():
-    req = StopInstanceRequest.StopInstanceRequest()
-    req.set_InstanceId(INSTANCE_ID)
-    req.set_StoppedMode("KeepCharging")  # 停机不释放，保留磁盘
-    acs_client.do_action_with_exception(req)
-    logger.info(f"Instance {INSTANCE_ID} stop requested")
+    if not AUTO_STOP:
+        return
+    try:
+        req = StopInstanceRequest.StopInstanceRequest()
+        req.set_InstanceId(INSTANCE_ID)
+        req.set_StoppedMode("KeepCharging")
+        acs_client.do_action_with_exception(req)
+        logger.info("Instance stop requested")
+    except Exception as e:
+        logger.warning(f"Stop instance warning: {e}")
 
 
 def wait_for_service(timeout: int = TIMEOUT_START) -> bool:
-    """轮询健康检查，等待推理服务就绪"""
+    logger.info(f"Waiting for service at {INFER_BASE}/health (timeout={timeout}s)")
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
-            r = requests.get(f"{INFER_BASE}/health", timeout=3)
+            r = requests.get(f"{INFER_BASE}/health", timeout=5)
             if r.status_code == 200:
-                logger.info("Service is ready ✓")
+                logger.info(f"Service ready ✓  {r.json()}")
                 return True
         except requests.exceptions.RequestException:
             pass
@@ -52,38 +73,36 @@ def wait_for_service(timeout: int = TIMEOUT_START) -> bool:
 
 
 def handler(event, context):
-    """FC 函数入口"""
-    evt = json.loads(event)
-    body = evt.get("body", evt)  # 兼容 HTTP 触发器
+    evt = json.loads(event if isinstance(event, (str, bytes)) else event)
+    body = evt.get("body", evt)
     if isinstance(body, str):
-        body = json.loads(body)
+        try:
+            body = json.loads(body)
+        except Exception:
+            pass
 
-    logger.info(f"Request: {body}")
+    logger.info(f"Request body: {body}")
 
-    # 1. 启动 ECS 实例
     try:
+        # 1. 启动实例
         start_instance()
-    except Exception as e:
-        # 实例已在运行时会报错，忽略
-        logger.warning(f"Start instance warning (may already be running): {e}")
 
-    # 2. 等待服务就绪
-    if not wait_for_service():
-        stop_instance()
-        return json.dumps({"error": "Service startup timeout"}, ensure_ascii=False)
+        # 2. 等待服务就绪
+        if not wait_for_service():
+            return json.dumps({"error": "Service startup timeout"}, ensure_ascii=False)
 
-    # 3. 转发推理请求
-    try:
+        # 3. 转发推理请求
         resp = requests.post(
             f"{INFER_BASE}/generate",
             json=body,
-            timeout=120,
+            timeout=TIMEOUT_INFER,
         )
-        result = resp.json()
-    except Exception as e:
-        result = {"error": str(e)}
-    finally:
-        # 4. 无论成功失败都关机
-        stop_instance()
+        return json.dumps(resp.json(), ensure_ascii=False)
 
-    return json.dumps(result, ensure_ascii=False)
+    except requests.exceptions.Timeout:
+        return json.dumps({"error": "Inference timeout"}, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+    finally:
+        stop_instance()

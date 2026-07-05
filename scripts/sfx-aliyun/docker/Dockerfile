@@ -1,5 +1,4 @@
-# ── 推理服务（模型通过 ECS 磁盘挂载，不烘焙进镜像）──────
-FROM registry.cn-hangzhou.aliyuncs.com/docker_hub_mirror/pytorch/pytorch:2.3.0-cuda11.8-cudnn8-runtime
+FROM pytorch/pytorch:2.3.0-cuda11.8-cudnn8-runtime
 
 WORKDIR /app
 
@@ -27,7 +26,6 @@ EXPOSE 8000
 HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
-# MODEL_PATH 默认指向挂载目录，可通过环境变量覆盖
 ENV MODEL_PATH=/data/models/TangoFlux
 
 CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]

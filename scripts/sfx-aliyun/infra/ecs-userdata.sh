@@ -1,14 +1,11 @@
 #!/bin/bash
-# ECS 开机自动执行：拉取镜像并挂载模型目录启动容器
 exec >> /var/log/sfx-startup.log 2>&1
 echo "=== SFX Startup: $(date) ==="
 
 until docker info &>/dev/null; do sleep 3; done
 
-# 检查模型是否已下载
 if [ ! -f "/data/models/TangoFlux/config.json" ]; then
-    echo "ERROR: Model not found at /data/models/TangoFlux"
-    echo "Please run: bash /opt/setup-model.sh"
+    echo "ERROR: Model not found. Run: bash /opt/setup-model.sh"
     exit 1
 fi
 

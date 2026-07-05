@@ -1,9 +1,6 @@
-# torch 已内置于 pai-dlc 基础镜像，无需重复安装
-# 安装顺序：先装无 CUDA 依赖的包，再装 tangoflux
 soundfile==0.12.1
 oss2==2.18.5
 fastapi==0.111.0
 uvicorn[standard]==0.30.0
 python-multipart==0.0.9
-# tangoflux 最后安装，它会复用已有的 torch
 tangoflux
