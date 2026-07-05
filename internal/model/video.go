@@ -185,10 +185,10 @@ type ShotTaskMeta struct {
 // StoryboardShot 分镜
 type StoryboardShot struct {
 	ID        uint     `json:"id" gorm:"primaryKey"`
-	VideoID   uint     `json:"video_id" gorm:"index;index:idx_shot_video_status,priority:1;index:idx_shot_video_no,priority:1;not null"`
+	VideoID   uint     `json:"video_id" gorm:"index;index:idx_shot_video_status,priority:1;index:idx_shot_video_no,priority:1;uniqueIndex:uk_video_shot,priority:1;not null"`
 	Video     *Video   `json:"video,omitempty" gorm:"foreignKey:VideoID"`
 	UUID      string   `json:"uuid" gorm:"uniqueIndex;size:36"`
-	ShotNo    int      `json:"shot_no" gorm:"not null;index:idx_shot_video_no,priority:2"`
+	ShotNo    int      `json:"shot_no" gorm:"not null;index:idx_shot_video_no,priority:2;uniqueIndex:uk_video_shot,priority:2"`
 	ChapterID *uint    `json:"chapter_id,omitempty" gorm:"index"`
 	Chapter   *Chapter `json:"chapter,omitempty" gorm:"foreignKey:ChapterID"`
 

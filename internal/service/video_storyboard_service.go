@@ -1273,6 +1273,17 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 		return nil, fmt.Errorf("AI返回了空的分镜列表，请检查章节内容或重试")
 	}
 
+	// 按 shot_no 升序排列：保证 AI 以非顺序输出时仍能还原正确叙事顺序。
+	// 先补全 shot_no=0 的条目（用数组下标），再统一排序。
+	for i := range rawShots {
+		if rawShots[i].ShotNo == 0 {
+			rawShots[i].ShotNo = i + 1
+		}
+	}
+	sort.SliceStable(rawShots, func(i, j int) bool {
+		return rawShots[i].ShotNo < rawShots[j].ShotNo
+	})
+
 	shots := make([]*model.StoryboardShot, 0, len(rawShots))
 	for i, r := range rawShots {
 		shotNo := r.ShotNo

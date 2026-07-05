@@ -76,13 +76,13 @@ func (r *StoryboardRepository) UpdateFields(id uint, fields map[string]interface
 	return r.db.Model(&model.StoryboardShot{}).Where("id = ?", id).Updates(fields).Error
 }
 
-// BatchGetByIDs 批量获取分镜（单次 IN 查询）
+// BatchGetByIDs 批量获取分镜（单次 IN 查询），按 shot_no 升序返回。
 func (r *StoryboardRepository) BatchGetByIDs(ids []uint) ([]*model.StoryboardShot, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
 	var shots []*model.StoryboardShot
-	if err := r.db.Where("id IN ?", ids).Find(&shots).Error; err != nil {
+	if err := r.db.Where("id IN ?", ids).Order("shot_no ASC").Find(&shots).Error; err != nil {
 		return nil, err
 	}
 	return shots, nil
