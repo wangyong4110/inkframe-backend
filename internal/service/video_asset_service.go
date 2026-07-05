@@ -251,18 +251,24 @@ func alignShotDurationToTTS(currentDuration float64, audioURL string) float64 {
 
 // GenerateSegmentAudio 为单条语音段落生成 TTS 音频
 func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVoice string) error {
+	logger.Printf("[TTS] GenerateSegmentAudio: start segID=%d tenantID=%d defaultVoice=%q", segID, tenantID, defaultVoice)
 	if s.segmentRepo == nil {
+		logger.Errorf("[TTS] GenerateSegmentAudio: segID=%d ERROR segment repository not initialized", segID)
 		return fmt.Errorf("segment repository not initialized")
 	}
 	seg, err := s.segmentRepo.GetByID(segID)
 	if err != nil {
+		logger.Errorf("[TTS] GenerateSegmentAudio: segID=%d ERROR get segment failed: %v", segID, err)
 		return fmt.Errorf("segment %d not found: %w", segID, err)
 	}
 	text := stripDialogueSpeakerPrefix(seg.Text)
 	if text == "" {
+		logger.Printf("[TTS] GenerateSegmentAudio: segID=%d text is empty after stripping speaker prefix, skipping", segID)
 		metrics.TTSGenerationTotal.WithLabelValues("skipped").Inc()
 		return nil
 	}
+	logger.Printf("[TTS] GenerateSegmentAudio: segID=%d shotID=%d speaker=%q emotion=%q language=%q existingAudio=%q textLen=%d text=%q",
+		segID, seg.ShotID, seg.Speaker, seg.Emotion, seg.Language, seg.AudioPath, len([]rune(text)), truncate(text, 60))
 
 	ttsStart := time.Now()
 
@@ -298,9 +304,13 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 						}
 					}
 					style = c.VoiceConfig.VoiceStyle // 角色静态风格始终作为基准情感
+					logger.Printf("[TTS] GenerateSegmentAudio: segID=%d matched character %q voiceID=%q speed=%.2f style=%q",
+						segID, c.Name, voice, speed, style)
 					break
 				}
 			}
+		} else {
+			logger.Errorf("[TTS] GenerateSegmentAudio: segID=%d ERROR list characters for novelID=%d: %v", segID, novelID, e)
 		}
 	}
 	// 情绪优先级：段落显式情绪（最高）> 分镜情绪基调映射 > 角色静态风格
@@ -313,16 +323,20 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 	}
 	if voice == "" {
 		voice = defaultVoice
+		logger.Printf("[TTS] GenerateSegmentAudio: segID=%d no character/segment voice, falling back to defaultVoice=%q", segID, defaultVoice)
 	}
+	logger.Printf("[TTS] GenerateSegmentAudio: segID=%d calling TTS voice=%q speed=%.2f style=%q language=%q", segID, voice, speed, style, seg.Language)
 
 	audioURL, err := s.aiService.AudioGenerateWithOptions(context.Background(), tenantID, text, voice, speed, style, seg.Language)
 	if err != nil {
 		metrics.TTSGenerationTotal.WithLabelValues("error").Inc()
 		metrics.TTSGenerationDuration.Observe(time.Since(ttsStart).Seconds())
+		logger.Errorf("[TTS] GenerateSegmentAudio: segID=%d ERROR TTS FAILED voice=%q textLen=%d elapsed=%s error: %v",
+			segID, voice, len([]rune(text)), time.Since(ttsStart).Round(time.Millisecond), err)
 		// Clear stale audio_path so the UI shows generation failed rather than showing an old path.
 		if seg.AudioPath != "" {
 			if clearErr := s.segmentRepo.UpdateFields(segID, map[string]interface{}{"audio_path": ""}); clearErr != nil {
-				logger.Errorf("[VideoService] GenerateSegmentAudio: clear audio_path for segment %d: %v", segID, clearErr)
+				logger.Errorf("[TTS] GenerateSegmentAudio: segID=%d clear audio_path failed: %v", segID, clearErr)
 			}
 		}
 		return fmt.Errorf("TTS failed for segment %d: %w", segID, err)
@@ -330,13 +344,17 @@ func (s *VideoService) GenerateSegmentAudio(segID uint, tenantID uint, defaultVo
 	if audioURL == "" {
 		metrics.TTSGenerationTotal.WithLabelValues("error").Inc()
 		metrics.TTSGenerationDuration.Observe(time.Since(ttsStart).Seconds())
+		logger.Errorf("[TTS] GenerateSegmentAudio: segID=%d ERROR TTS returned EMPTY URL voice=%q elapsed=%s",
+			segID, voice, time.Since(ttsStart).Round(time.Millisecond))
 		if seg.AudioPath != "" {
 			if clearErr := s.segmentRepo.UpdateFields(segID, map[string]interface{}{"audio_path": ""}); clearErr != nil {
-				logger.Errorf("[VideoService] GenerateSegmentAudio: clear audio_path for segment %d: %v", segID, clearErr)
+				logger.Errorf("[TTS] GenerateSegmentAudio: segID=%d clear audio_path failed: %v", segID, clearErr)
 			}
 		}
 		return fmt.Errorf("TTS returned empty URL for segment %d", segID)
 	}
+	logger.Printf("[TTS] GenerateSegmentAudio: segID=%d TTS success elapsed=%s audioURL=%q",
+		segID, time.Since(ttsStart).Round(time.Millisecond), audioURL)
 	metrics.TTSGenerationTotal.WithLabelValues("success").Inc()
 	metrics.TTSGenerationDuration.Observe(time.Since(ttsStart).Seconds())
 
@@ -429,15 +447,22 @@ func (s *VideoService) syncShotDurationAfterVoice(shotID uint) {
 
 // GenerateShotAudio 为单个分镜生成 TTS 音频（同步），生成后写入 ShotVoiceSegment 并更新 shot.Duration
 func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID uint, narrationVoice string) error {
+	logger.Printf("[TTS] GenerateShotAudio: start shotID=%d shotNo=%d videoID=%d tenantID=%d narrationVoice=%q",
+		shot.ID, shot.ShotNo, shot.VideoID, tenantID, narrationVoice)
+
 	// Check idempotency + delegate to segment-aware stitching if segments exist.
 	if s.segmentRepo != nil {
 		segs, err := s.segmentRepo.ListByShotID(shot.ID)
-		if err == nil && len(segs) > 0 {
+		if err != nil {
+			logger.Errorf("[TTS] GenerateShotAudio: shotID=%d list segments failed: %v", shot.ID, err)
+		} else if len(segs) > 0 {
 			for _, seg := range segs {
 				if seg.AudioPath != "" {
-					return nil // already generated
+					logger.Printf("[TTS] GenerateShotAudio: shotID=%d already has audio (segID=%d), skipping", shot.ID, seg.ID)
+					return nil
 				}
 			}
+			logger.Printf("[TTS] GenerateShotAudio: shotID=%d has %d segments without audio, delegating to generateShotAudioFromSegments", shot.ID, len(segs))
 			return s.generateShotAudioFromSegments(shot, segs, tenantID, narrationVoice)
 		}
 	}
@@ -445,32 +470,42 @@ func (s *VideoService) GenerateShotAudio(shot *model.StoryboardShot, tenantID ui
 	// Determine the text to synthesize: narration > dialogue.
 	// description is for image/video generation only — never read it aloud.
 	text := shot.Narration
+	textSource := "narration"
 	if text == "" {
 		text = stripDialogueSpeakerPrefix(shot.GenMeta.Dialogue)
+		textSource = "dialogue"
 	}
 	if text == "" {
-		return nil // no voice text; shot is silent
+		logger.Printf("[TTS] GenerateShotAudio: shotID=%d has no narration or dialogue text, shot is silent", shot.ID)
+		return nil
 	}
+	logger.Printf("[TTS] GenerateShotAudio: shotID=%d textSource=%s textLen=%d text=%q",
+		shot.ID, textSource, len([]rune(text)), truncate(text, 60))
 
 	// 需要 novelID 以便角色声音查询
 	var novelID uint
 	if s.videoRepo != nil {
 		if video, err := s.videoRepo.GetByID(shot.VideoID); err == nil {
 			novelID = video.NovelID
+		} else {
+			logger.Errorf("[TTS] GenerateShotAudio: shotID=%d get video failed: %v", shot.ID, err)
 		}
 	}
 
 	voice, speed, style := s.resolveVoiceForShot(shot, narrationVoice, novelID)
+	logger.Printf("[TTS] GenerateShotAudio: shotID=%d resolved voice=%q speed=%.2f style=%q", shot.ID, voice, speed, style)
 
 	localAudioURL, err := s.aiService.AudioGenerateWithOptions(context.Background(), tenantID, text, voice, speed, style)
 	if err != nil {
-		logger.Errorf("GenerateShotAudio: TTS failed for shot %d: %v", shot.ShotNo, err)
+		logger.Errorf("[TTS] GenerateShotAudio: shotID=%d TTS FAILED voice=%q textLen=%d error: %v",
+			shot.ID, voice, len([]rune(text)), err)
 		return err
 	}
 	if localAudioURL == "" {
-		logger.Errorf("GenerateShotAudio: TTS returned empty URL for shot %d", shot.ShotNo)
+		logger.Errorf("[TTS] GenerateShotAudio: shotID=%d TTS returned EMPTY URL voice=%q", shot.ID, voice)
 		return fmt.Errorf("TTS returned empty audio for shot %d", shot.ShotNo)
 	}
+	logger.Printf("[TTS] GenerateShotAudio: shotID=%d TTS success url=%q", shot.ID, localAudioURL)
 
 	audioURL := localAudioURL
 
@@ -574,20 +609,44 @@ func formatSRTTimecode(secs float64) string {
 // then stitches all segment audio files into a single track using ffmpeg and
 // uploads the result to storage, and updates shot.Duration.
 func (s *VideoService) generateShotAudioFromSegments(shot *model.StoryboardShot, segs []*model.ShotVoiceSegment, tenantID uint, defaultVoice string) error {
+	logger.Printf("[TTS] generateShotAudioFromSegments: start shotID=%d shotNo=%d segCount=%d tenantID=%d defaultVoice=%q",
+		shot.ID, shot.ShotNo, len(segs), tenantID, defaultVoice)
+
 	// 1. For each segment without audio, call GenerateSegmentAudio
+	pending, skipped := 0, 0
 	for _, seg := range segs {
 		if seg.AudioPath == "" && seg.Text != "" {
+			pending++
+			logger.Printf("[TTS] generateShotAudioFromSegments: shotID=%d generating segID=%d seqNo=%d speaker=%q textLen=%d",
+				shot.ID, seg.ID, seg.SeqNo, seg.Speaker, len([]rune(seg.Text)))
 			if err := s.GenerateSegmentAudio(seg.ID, tenantID, defaultVoice); err != nil {
-				logger.Errorf("generateShotAudioFromSegments: segment %d TTS failed: %v", seg.ID, err)
+				logger.Errorf("[TTS] generateShotAudioFromSegments: shotID=%d ERROR segID=%d TTS failed: %v", shot.ID, seg.ID, err)
 			}
+		} else {
+			skipped++
+			logger.Printf("[TTS] generateShotAudioFromSegments: shotID=%d skip segID=%d seqNo=%d (audioPath=%q textEmpty=%v)",
+				shot.ID, seg.ID, seg.SeqNo, seg.AudioPath, seg.Text == "")
 		}
 	}
+	logger.Printf("[TTS] generateShotAudioFromSegments: shotID=%d TTS phase done pending=%d skipped=%d", shot.ID, pending, skipped)
 
 	// 2. Reload segments to get updated AudioPath values
 	freshSegs, err := s.segmentRepo.ListByShotID(shot.ID)
 	if err != nil || len(freshSegs) == 0 {
+		logger.Errorf("[TTS] generateShotAudioFromSegments: shotID=%d ERROR reload segments failed (err=%v freshCount=%d)", shot.ID, err, len(freshSegs))
 		return nil
 	}
+	withAudio, withoutAudio := 0, 0
+	for _, seg := range freshSegs {
+		if seg.AudioPath != "" {
+			withAudio++
+		} else {
+			withoutAudio++
+			logger.Errorf("[TTS] generateShotAudioFromSegments: shotID=%d segID=%d seqNo=%d still has NO audio after generation (speaker=%q text=%q)",
+				shot.ID, seg.ID, seg.SeqNo, seg.Speaker, truncate(seg.Text, 40))
+		}
+	}
+	logger.Printf("[TTS] generateShotAudioFromSegments: shotID=%d reload done withAudio=%d withoutAudio=%d", shot.ID, withAudio, withoutAudio)
 
 	// 3. Collect local audio paths (download http URLs to temp files)
 	tmpDir, err := os.MkdirTemp("", "inkframe_seg_stitch_*")
@@ -603,20 +662,23 @@ func (s *VideoService) generateShotAudioFromSegments(shot *model.StoryboardShot,
 		}
 		localPath, err := fetchAudioToLocal(tmpDir, seg.AudioPath, int(seg.ID))
 		if err != nil {
-			logger.Errorf("generateShotAudioFromSegments: fetch segment %d audio: %v", seg.ID, err)
+			logger.Errorf("[TTS] generateShotAudioFromSegments: shotID=%d ERROR fetch segID=%d audio: %v", shot.ID, seg.ID, err)
 			continue
 		}
 		localPaths = append(localPaths, localPath)
 	}
 	if len(localPaths) == 0 {
+		logger.Errorf("[TTS] generateShotAudioFromSegments: shotID=%d ERROR no local audio paths available after fetch, aborting stitch", shot.ID)
 		return nil
 	}
 	if len(localPaths) == 1 {
+		logger.Printf("[TTS] generateShotAudioFromSegments: shotID=%d single segment, no stitch needed", shot.ID)
 		shot.Duration = alignShotDurationToTTS(shot.Duration, freshSegs[0].AudioPath)
 		return s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"duration": shot.Duration})
 	}
 
 	// 4. Stitch with ffmpeg concat
+	logger.Printf("[TTS] generateShotAudioFromSegments: shotID=%d stitching %d segments with ffmpeg", shot.ID, len(localPaths))
 	listFile := filepath.Join(tmpDir, "concat.txt")
 	var lines []string
 	for _, p := range localPaths {
@@ -631,10 +693,11 @@ func (s *VideoService) generateShotAudioFromSegments(shot *model.StoryboardShot,
 		"-c", "copy", stitchedPath,
 	)
 	if ffmpegErr != nil {
-		logger.Errorf("generateShotAudioFromSegments: ffmpeg failed: %v\n%s", ffmpegErr, string(out))
+		logger.Errorf("[TTS] generateShotAudioFromSegments: shotID=%d ERROR ffmpeg stitch failed: %v\n%s", shot.ID, ffmpegErr, string(out))
 		shot.Duration = alignShotDurationToTTS(shot.Duration, freshSegs[0].AudioPath)
 		return s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{"duration": shot.Duration})
 	}
+	logger.Printf("[TTS] generateShotAudioFromSegments: shotID=%d ffmpeg stitch success", shot.ID)
 
 	stitchedData, err := os.ReadFile(stitchedPath)
 	if err != nil {

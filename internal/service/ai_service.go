@@ -2310,7 +2310,15 @@ func (s *AIService) AudioGenerate(ctx context.Context, text, voice string) (stri
 //  2. config.yaml ai.tasks.tts 指定的 provider（静态模式兜底）
 //  3. env-var 注册的默认 provider（静态模式兜底）
 func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint, text, voice string, speed float64, style string, language ...string) (string, error) {
+	lang := ""
+	if len(language) > 0 {
+		lang = language[0]
+	}
+	logger.Printf("[TTS] AudioGenerateWithOptions: tenantID=%d voice=%q speed=%.2f style=%q language=%q textLen=%d text=%q",
+		tenantID, voice, speed, style, lang, len([]rune(text)), truncate(text, 60))
+
 	if s.aiManager == nil {
+		logger.Errorf("[TTS] AudioGenerateWithOptions: ERROR AI manager not initialized")
 		return "", fmt.Errorf("AI manager not initialized")
 	}
 
@@ -2322,6 +2330,9 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 		if p, name, err := s.loadDBVoiceProvider(tenantID, "voice", voice); err == nil && p != nil {
 			provider = p
 			provName = name
+			logger.Printf("[TTS] AudioGenerateWithOptions: selected DB provider=%q for voice=%q", name, voice)
+		} else if err != nil {
+			logger.Errorf("[TTS] AudioGenerateWithOptions: loadDBVoiceProvider ERROR: %v (will try static fallback)", err)
 		}
 	}
 
@@ -2330,17 +2341,22 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 		if p, err := s.aiManager.GetProvider(s.taskRouting.TTS); err == nil {
 			provider = p
 			provName = s.taskRouting.TTS
+			logger.Printf("[TTS] AudioGenerateWithOptions: selected static provider=%q (taskRouting.TTS)", s.taskRouting.TTS)
+		} else {
+			logger.Errorf("[TTS] AudioGenerateWithOptions: static provider %q not available: %v", s.taskRouting.TTS, err)
 		}
 	}
 	// 注意：不再兜底到默认 LLM provider，LLM 提供商通常不支持 /audio/speech 接口，
 	// 兜底只会产生 404 错误，不如直接给用户明确的配置提示。
 
 	if provider == nil {
+		logger.Errorf("[TTS] AudioGenerateWithOptions: ERROR no voice provider found (tenantID=%d voice=%q) — 请在「模型管理」中配置 voice/tts 类型提供商", tenantID, voice)
 		return "", fmt.Errorf("未配置语音合成提供商，请在「模型管理」中添加一个类型为 voice 或 tts 的 AI 提供商（如豆包语音、OpenAI TTS 等）并填写 API Key")
 	}
 
 	release, err := s.acquireProviderSlot(ctx, tenantID, provName)
 	if err != nil {
+		logger.Errorf("[TTS] AudioGenerateWithOptions: acquireProviderSlot ERROR provider=%q: %v", provName, err)
 		return "", err
 	}
 	defer release()
@@ -2348,10 +2364,7 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 	if speed <= 0 {
 		speed = 1.0
 	}
-	lang := ""
-	if len(language) > 0 {
-		lang = language[0]
-	}
+	ttsStart := time.Now()
 	resp, err := provider.AudioGenerate(ctx, &ai.AudioGenerateRequest{
 		Text:     text,
 		Voice:    voice,
@@ -2360,7 +2373,14 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 		Language: lang,
 	})
 	if err != nil {
+		logger.Errorf("[TTS] AudioGenerateWithOptions: ERROR provider=%q AudioGenerate failed elapsed=%s: %v",
+			provName, time.Since(ttsStart).Round(time.Millisecond), err)
 		return "", err
+	}
+	if resp.URL == "" {
+		logger.Errorf("[TTS] AudioGenerateWithOptions: ERROR provider=%q returned empty URL elapsed=%s", provName, time.Since(ttsStart).Round(time.Millisecond))
+	} else {
+		logger.Printf("[TTS] AudioGenerateWithOptions: provider=%q success elapsed=%s url=%q", provName, time.Since(ttsStart).Round(time.Millisecond), resp.URL)
 	}
 	return resp.URL, nil
 }
@@ -2447,10 +2467,13 @@ func (s *AIService) loadDBProviderByType(tenantID uint, modelType string) (ai.AI
 // voiceID 为空时退化为 loadDBProviderByType 行为。
 // 返回 provider、提供商名称和错误。
 func (s *AIService) loadDBVoiceProvider(tenantID uint, modelType, voiceID string) (ai.AIProvider, string, error) {
+	logger.Printf("[TTS] loadDBVoiceProvider: tenantID=%d modelType=%q voiceID=%q", tenantID, modelType, voiceID)
 	providers, err := s.providerRepo.ListByModelType(tenantID, modelType)
 	if err != nil {
+		logger.Errorf("[TTS] loadDBVoiceProvider: ERROR ListByModelType tenantID=%d modelType=%q: %v", tenantID, modelType, err)
 		return nil, "", err
 	}
+	logger.Printf("[TTS] loadDBVoiceProvider: found %d providers of type %q for tenantID=%d", len(providers), modelType, tenantID)
 
 	// 过滤出有凭据的活跃 provider，同时按 voiceID 打优先级
 	type candidate struct {
@@ -2460,10 +2483,11 @@ func (s *AIService) loadDBVoiceProvider(tenantID uint, modelType, voiceID string
 	var candidates []candidate
 	for _, p := range providers {
 		if !p.IsActive {
+			logger.Printf("[TTS] loadDBVoiceProvider: skip provider %q (inactive)", p.Name)
 			continue
 		}
 		if !providerHasCredentials(p) {
-			logger.Printf("loadDBVoiceProvider: skip %s provider %q (missing credentials)", modelType, p.Name)
+			logger.Printf("[TTS] loadDBVoiceProvider: skip %s provider %q (missing credentials)", modelType, p.Name)
 			continue
 		}
 		pri := 1
@@ -2475,7 +2499,19 @@ func (s *AIService) loadDBVoiceProvider(tenantID uint, modelType, voiceID string
 				}
 			}
 		}
+		if voiceID != "" {
+			if pri == 0 {
+				logger.Printf("[TTS] loadDBVoiceProvider: provider %q has builtin voice %q (priority=0/voice-match)", p.Name, voiceID)
+			} else {
+				logger.Printf("[TTS] loadDBVoiceProvider: provider %q does NOT have builtin voice %q (priority=1/fallback)", p.Name, voiceID)
+			}
+		}
 		candidates = append(candidates, candidate{p, pri})
+	}
+
+	if len(candidates) == 0 {
+		logger.Errorf("[TTS] loadDBVoiceProvider: ERROR no active credentialed %s providers found for tenantID=%d", modelType, tenantID)
+		return nil, "", fmt.Errorf("no %s providers configured in DB", modelType)
 	}
 
 	// 先取 priority=0（voice 匹配），再取 priority=1（兜底）
@@ -2486,13 +2522,14 @@ func (s *AIService) loadDBVoiceProvider(tenantID uint, modelType, voiceID string
 			}
 			provider, err := s.getTenantProvider(tenantID, c.p.Name, modelType)
 			if err != nil {
-				logger.Errorf("loadDBVoiceProvider: failed to instantiate %s provider %q: %v", modelType, c.p.Name, err)
+				logger.Errorf("[TTS] loadDBVoiceProvider: ERROR instantiate %s provider %q: %v", modelType, c.p.Name, err)
 				continue
 			}
-			logger.Printf("loadDBVoiceProvider: using %s provider %q (voice=%q priority=%d)", modelType, c.p.Name, voiceID, pass)
+			logger.Printf("[TTS] loadDBVoiceProvider: selected %s provider %q (voice=%q priority=%d)", modelType, c.p.Name, voiceID, pass)
 			return provider, c.p.Name, nil
 		}
 	}
+	logger.Errorf("[TTS] loadDBVoiceProvider: ERROR all %d candidates failed to instantiate for modelType=%q voiceID=%q", len(candidates), modelType, voiceID)
 	return nil, "", fmt.Errorf("no %s providers configured in DB", modelType)
 }
 
