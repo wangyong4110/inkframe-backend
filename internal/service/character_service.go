@@ -2404,7 +2404,8 @@ func (s *ImageGenerationService) GeneratePortrait(ctx context.Context, tenantID 
 		}
 		prompt = sheetStyle + ", " + qualityTokens + ", " +
 			genderPrefix +
-			"single character portrait, half-body bust shot, front-facing, neutral expression, " +
+			"upper body portrait, bust shot, waist-up, chest-up, torso visible, head and shoulders and chest, " +
+			"front-facing, neutral expression, " +
 			condensedAppearance + ", " +
 			"pure white background, solid white background, isolated on white, white studio background, centered composition, " +
 			"no text no labels no watermarks"
@@ -2416,14 +2417,17 @@ func (s *ImageGenerationService) GeneratePortrait(ctx context.Context, tenantID 
 		}
 		prompt = styleDesc + ", " + qualityTokens + ", " +
 			genderPrefix +
-			"single character portrait, half-body bust shot, front-facing, neutral expression, " +
+			"upper body portrait, bust shot, waist-up, chest-up, torso visible, head and shoulders and chest, " +
+			"front-facing, neutral expression, " +
 			condensedAppearance + ", " +
 			"pure white background, solid white background, isolated on white, white studio background, centered composition, " +
 			"no text no labels no watermarks"
 	}
 
-	negativePrompt := "text, labels, watermark, full body, legs, feet, dynamic pose, action pose, " +
-		"different face, inconsistent face, extra limbs, bad anatomy, nsfw, lowres, poorly drawn, " +
+	negativePrompt := "text, labels, watermark, " +
+		"full body, full-length, whole body, entire body, standing full figure, " +
+		"legs, feet, thighs, knees, ankles, lower body, waist down, hips, " +
+		"dynamic pose, action pose, different face, inconsistent face, extra limbs, bad anatomy, nsfw, lowres, poorly drawn, " +
 		"colored background, gradient background, complex background, outdoor background, indoor background, " +
 		"scenery, environment, background elements, dark background, grey background, colored backdrop"
 	if genderNeg != "" {
