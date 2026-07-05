@@ -134,7 +134,11 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 			params["width"] = width
 			params["height"] = height
 		}
-		// use_pre_llm 默认 true，仅在 Extra 中明确设为 false 时关闭
+		// use_pre_llm：API 侧默认 true（内置 LLM 二次改写 prompt，额外增加 10-30s 延迟）。
+		// 分镜 prompt 已由系统 LLM 精心构造（100+ 词结构化描述），内置 LLM 改写反而会
+		// 将详细描述缩减为通用短句，降低构图/光线/角色描述的精确度。
+		// 默认禁用；调用方可通过 Extra["use_pre_llm"]=true 显式开启。
+		params["use_pre_llm"] = false
 		if v, ok := req.Extra["use_pre_llm"].(bool); ok {
 			params["use_pre_llm"] = v
 		}
@@ -167,10 +171,13 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 		params["prompt"] = req.Prompt
 		// 输入图（恰好1张，支持 URL 或 base64）
 		p.setImageInput(params, req.ReferenceImage, "image_urls", "binary_data_base64")
-		// scale：文本描述影响程度 float [0,1]，默认 0.5
+		// scale：文本描述影响程度 float [0,1]，默认 0.5。
+		// CFGScale 由调用方以 1+weight*9 编码为 [1,10]，此处逆映射回 [0,1]。
 		if req.CFGScale > 0 {
-			s := req.CFGScale
-			if s > 1 {
+			s := (req.CFGScale - 1.0) / 9.0
+			if s < 0 {
+				s = 0
+			} else if s > 1 {
 				s = 1
 			}
 			params["scale"] = s
@@ -257,10 +264,13 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 			params["width"] = width
 			params["height"] = height
 		}
-		// scale：文本描述影响程度 float [0,1]，默认 0.5
+		// scale：文本描述影响程度 float [0,1]，默认 0.5。
+		// CFGScale 由调用方以 1+weight*9 编码为 [1,10]，此处逆映射回 [0,1]。
 		if req.CFGScale > 0 {
-			s := req.CFGScale
-			if s > 1 {
+			s := (req.CFGScale - 1.0) / 9.0
+			if s < 0 {
+				s = 0
+			} else if s > 1 {
 				s = 1
 			}
 			params["scale"] = s
@@ -311,15 +321,12 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 			params["width"] = width
 			params["height"] = height
 		}
-		// scale：文本描述影响程度 int [1,100]，默认 50
-		// CFGScale [0,1] → 乘以100；CFGScale (1,100] → 直接取整
+		// scale：文本描述影响程度 int [1,100]，默认 50。
+		// CFGScale 由调用方以 1+weight*9 编码为 [1,10]，此处逆映射为 [1,100]：
+		//   scaleInt = round((cfgScale-1)/9 * 99) + 1
+		// 示例：production cfgScale=7.5 → (6.5/9)*99+1 ≈ 72（合理中强度）
 		if req.CFGScale > 0 {
-			var scaleInt int
-			if req.CFGScale <= 1 {
-				scaleInt = int(req.CFGScale * 100)
-			} else {
-				scaleInt = int(req.CFGScale)
-			}
+			scaleInt := int((req.CFGScale-1.0)/9.0*99.0) + 1
 			if scaleInt < 1 {
 				scaleInt = 1
 			} else if scaleInt > 100 {

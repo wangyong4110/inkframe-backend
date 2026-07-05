@@ -989,15 +989,25 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 			promptText = prefix + promptText
 		}
 	} else {
-		// 降级：description 无画质词，注入完整电影级前缀
-		cinematicImgPrefix := "cinematic film photography, 35mm anamorphic lens, professional lighting setup, " + lensType + ", "
+		// 降级：description 无画质词，注入风格匹配的前缀。
+		// 写实/3D/游戏原画：使用电影摄影级前缀（焦段+光线设置）
+		// 动漫/插画/水墨等非写实风格：仅注入风格词，禁止使用 cinematic film photography 等摄影词，
+		// 否则扩散模型会被引导向写实摄影输出，与风格冲突且加剧光照过曝。
+		var fallbackPrefix string
+		styleCategory := resolveStyleCategory(artStyle)
+		if styleCategory == "realistic" || styleCategory == "render_3d" {
+			fallbackPrefix = "cinematic film photography, 35mm anamorphic lens, professional lighting setup, " + lensType
+		} else {
+			// 插画/动漫/水墨：用镜头描述词替代摄影词，不引入写实信号
+			fallbackPrefix = "detailed digital illustration, " + lensType
+		}
 		if kw := colorGradeToPromptKeyword(colorGrade); kw != "" {
-			cinematicImgPrefix = kw + ", " + cinematicImgPrefix
+			fallbackPrefix = kw + ", " + fallbackPrefix
 		}
 		if styleDesc != "" {
-			cinematicImgPrefix = styleDesc + ", " + cinematicImgPrefix
+			fallbackPrefix = styleDesc + ", " + fallbackPrefix
 		}
-		promptText = cinematicImgPrefix + promptText
+		promptText = fallbackPrefix + ", " + promptText
 	}
 
 	// 画质词强制注入：先移除与当前风格冲突的 realistic 质量词（防止旧分镜或 LLM 示例遗留的

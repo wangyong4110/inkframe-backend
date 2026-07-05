@@ -1849,19 +1849,8 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		logger.Errorf("GenerateCharacterThreeViewMulti: cannot resolve ref %q — relative path with no dbMediaReader and no serverBaseURL configured; ref image will be skipped", url)
 		return ""
 	}
-	// 统一 resolve 整个列表，不单独 resolve firstRef——避免对 referenceImages[0] 下载两次。
-	extRefs := make([]string, 0, len(referenceImages))
-	for _, r := range referenceImages {
-		if res := resolveForExternal(r); res != "" {
-			extRefs = append(extRefs, res)
-		}
-	}
-	extFirst := ""
-	if len(extRefs) > 0 {
-		extFirst = extRefs[0]
-	}
-
-	// 提取原始 HTTP URL，供支持 URL 的接口优先使用（避免 base64 大小限制）
+	// 提取原始 HTTP URL（同步、零延迟），供支持 URL 的接口优先使用（避免 base64 大小限制）。
+	// 必须在 resolveForExternal 之前完成，因为 buildReq 中 DreamO 优先判断 refURLFirst。
 	refURLFirst := ""
 	if strings.HasPrefix(firstRef, "http://") || strings.HasPrefix(firstRef, "https://") {
 		refURLFirst = firstRef
@@ -1871,6 +1860,59 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		if strings.HasPrefix(r, "http://") || strings.HasPrefix(r, "https://") {
 			refURLSlice = append(refURLSlice, r)
 		}
+	}
+
+	// 判断是否需要 base64：
+	// - volcengine-visual 的新一代 Jimeng 模型（T2Iv40/Seedream46/T2Iv31/T2Iv30/I2Iv30）仅使用 image_urls（HTTP URL），base64 无效
+	// - volcengine-visual 的 DreamO/SeedEditV3：有 HTTP URL 时优先走 URL 分支（buildReq 中已判断）
+	// - 非 volcengine-visual 提供商（doubao/kling-image 等）：必须 base64（OSS 私有 URL 无法被第三方服务器访问）
+	// 只有当"所有参考图都有 HTTP URL + 所有提供商都是 volcengine-visual"时，才可完全跳过 base64 下载。
+	allRefsAreHTTP := len(refURLSlice) == len(referenceImages) && len(referenceImages) > 0
+	// preCheckEntries 仅用于 needsBase64 判断，与后续 provider 循环中的 entries 变量隔离。
+	var preCheckEntries []ai.ImageProviderEntry
+	if providerName == "" {
+		preCheckEntries = s.loadDBImageProviderEntries(tenantID)
+	}
+	allEntriesAreVolcengine := providerName == ai.ProviderNameVolcengineVisual
+	if !allEntriesAreVolcengine && len(preCheckEntries) > 0 {
+		allEntriesAreVolcengine = true
+		for _, e := range preCheckEntries {
+			if e.ProviderName != ai.ProviderNameVolcengineVisual {
+				allEntriesAreVolcengine = false
+				break
+			}
+		}
+	}
+	needsBase64 := !(allRefsAreHTTP && allEntriesAreVolcengine)
+
+	// 并行下载参考图转 base64（仅在需要时执行；保持原始顺序）。
+	// 旧实现串行下载：N 张图 × 最多 30s/张 = 潜在数分钟阻塞。
+	// 并行后：总耗时 ≈ 最慢的单张图下载时间。
+	extRefs := make([]string, len(referenceImages))
+	if needsBase64 && len(referenceImages) > 0 {
+		var wg sync.WaitGroup
+		for i, r := range referenceImages {
+			wg.Add(1)
+			go func(idx int, url string) {
+				defer wg.Done()
+				extRefs[idx] = resolveForExternal(url)
+			}(i, r)
+		}
+		wg.Wait()
+		// 压缩掉空槽（下载失败的项），保持非空项有序
+		compact := extRefs[:0]
+		for _, v := range extRefs {
+			if v != "" {
+				compact = append(compact, v)
+			}
+		}
+		extRefs = compact
+	} else {
+		extRefs = extRefs[:0]
+	}
+	extFirst := ""
+	if len(extRefs) > 0 {
+		extFirst = extRefs[0]
 	}
 
 	buildReq := func(model, entrySize, provName string) *ai.ImageGenerateRequest {
