@@ -1664,21 +1664,102 @@ func (s *VideoService) UpdateShot(id uint, req *model.StoryboardShot) (*model.St
 // UpdateShotPartial 按字段 map 部分更新分镜，仅更新请求中明确提供的字段。
 // 允许的字段：description, narration, dialogue, subtitle, camera_type, camera_angle,
 // shot_size, duration, emotional_tone, transition, status, generation_mode.
+//
+// 注意：dialogue/subtitle/prompt/motion_prompt/generation_mode 存储在 gen_meta JSON 列；
+// camera_type/camera_angle/shot_size/emotional_tone/transition* 存储在 cam_dir JSON 列。
+// GORM map Updates 不走 serializer，必须手动将这些字段合并到对应 JSON 列后再写入。
 func (s *VideoService) UpdateShotPartial(id uint, fields map[string]interface{}) (*model.StoryboardShot, error) {
-	allowed := map[string]bool{
-		"description": true, "narration": true, "dialogue": true, "subtitle": true,
-		"camera_type": true, "camera_angle": true, "shot_size": true, "duration": true,
-		"emotional_tone": true, "transition": true, "status": true, "generation_mode": true,
-		"image_url": true,
-		"prompt": true, "motion_prompt": true,
-		"transition_out": true, "transition_in": true,
+	// gen_meta JSON 列中的字段
+	genMetaKeys := map[string]bool{
+		"dialogue": true, "subtitle": true, "prompt": true, "motion_prompt": true, "generation_mode": true,
 	}
+	// cam_dir JSON 列中的字段
+	camDirKeys := map[string]bool{
+		"camera_type": true, "camera_angle": true, "shot_size": true,
+		"emotional_tone": true, "transition": true, "transition_out": true, "transition_in": true,
+	}
+	// 直接列
+	directKeys := map[string]bool{
+		"description": true, "narration": true, "duration": true,
+		"status": true, "image_url": true,
+	}
+
+	needsLoad := false
+	for k := range fields {
+		if genMetaKeys[k] || camDirKeys[k] {
+			needsLoad = true
+			break
+		}
+	}
+
 	safe := make(map[string]interface{}, len(fields))
+
+	if needsLoad {
+		// 先读取当前值，再在结构体上应用变更，最后序列化整列写入
+		shot, err := s.storyboardRepo.GetByID(id)
+		if err != nil {
+			return nil, err
+		}
+		updatedGenMeta := false
+		updatedCamDir := false
+		for k, v := range fields {
+			sv, _ := v.(string)
+			switch k {
+			case "dialogue":
+				shot.GenMeta.Dialogue = sv
+				updatedGenMeta = true
+			case "subtitle":
+				shot.GenMeta.Subtitle = sv
+				updatedGenMeta = true
+			case "prompt":
+				shot.GenMeta.Prompt = sv
+				updatedGenMeta = true
+			case "motion_prompt":
+				shot.GenMeta.MotionPrompt = sv
+				updatedGenMeta = true
+			case "generation_mode":
+				shot.GenMeta.GenerationMode = sv
+				updatedGenMeta = true
+			case "camera_type":
+				shot.CamDir.CameraType = sv
+				updatedCamDir = true
+			case "camera_angle":
+				shot.CamDir.CameraAngle = sv
+				updatedCamDir = true
+			case "shot_size":
+				shot.CamDir.ShotSize = sv
+				updatedCamDir = true
+			case "emotional_tone":
+				shot.CamDir.EmotionalTone = sv
+				updatedCamDir = true
+			case "transition":
+				shot.CamDir.Transition = sv
+				updatedCamDir = true
+			case "transition_out":
+				shot.CamDir.TransitionOut = sv
+				updatedCamDir = true
+			case "transition_in":
+				shot.CamDir.TransitionIn = sv
+				updatedCamDir = true
+			}
+		}
+		if updatedGenMeta {
+			genMetaJSON, _ := json.Marshal(shot.GenMeta)
+			safe["gen_meta"] = string(genMetaJSON)
+		}
+		if updatedCamDir {
+			camDirJSON, _ := json.Marshal(shot.CamDir)
+			safe["cam_dir"] = string(camDirJSON)
+		}
+	}
+
+	// 直接列直接放入 safe map
 	for k, v := range fields {
-		if allowed[k] {
+		if directKeys[k] {
 			safe[k] = v
 		}
 	}
+
 	if len(safe) == 0 {
 		return s.storyboardRepo.GetByID(id)
 	}
@@ -2464,12 +2545,13 @@ func (s *VideoService) RollbackReview(tenantID, videoID, recordID uint) (int, er
 			continue
 		}
 		camDirJSON, _ := json.Marshal(snap.CamDir)
+		genMetaJSON, _ := json.Marshal(snap.GenMeta)
 		fields := map[string]interface{}{
 			"description": snap.Description,
 			"narration":   snap.Narration,
-			"dialogue":    snap.GenMeta.Dialogue,
+			"gen_meta":    string(genMetaJSON), // GORM map updates 不走 serializer，必须手动序列化
 			"duration":    snap.Duration,
-			"cam_dir":     string(camDirJSON), // GORM map updates 不走 serializer，必须手动序列化
+			"cam_dir":     string(camDirJSON),
 		}
 		if err := s.storyboardRepo.UpdateFields(current.ID, fields); err != nil {
 			logger.Errorf("RollbackReview: update shot %d failed: %v", snap.ShotNo, err)
