@@ -1,7 +1,9 @@
 # ── Stage 1: 下载模型权重 ──────────────────────────────────
-FROM python:3.10-slim AS model-downloader
+FROM registry.cn-hangzhou.aliyuncs.com/docker_hub_mirror/python:3.10-slim AS model-downloader
 
-RUN pip install --no-cache-dir huggingface_hub
+RUN pip install --no-cache-dir \
+    -i https://mirrors.aliyun.com/pypi/simple/ \
+    huggingface_hub
 
 # 构建时下载模型权重，烘焙进镜像（约 2GB）
 RUN python -c "\
@@ -13,7 +15,7 @@ snapshot_download(\
 )"
 
 # ── Stage 2: 推理服务 ──────────────────────────────────────
-FROM pytorch/pytorch:2.3.0-cuda11.8-cudnn8-runtime
+FROM registry.cn-shanghai.aliyuncs.com/pai-dlc/pytorch-training:2.3.0-gpu-py310-cu121-ubuntu22.04
 
 WORKDIR /app
 
@@ -24,7 +26,9 @@ RUN apt-get update && apt-get install -y \
 
 # 安装 Python 依赖
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir \
+    -i https://mirrors.aliyun.com/pypi/simple/ \
+    -r requirements.txt
 
 # 从 Stage 1 复制模型权重
 COPY --from=model-downloader /model-cache /app/model
