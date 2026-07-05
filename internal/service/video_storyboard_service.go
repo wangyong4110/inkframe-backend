@@ -1503,17 +1503,22 @@ func buildMotionPrompt(shot *model.StoryboardShot) string {
 func qualityTierImageParams(tier string) (width, steps int, cfgScale float64) {
 	switch tier {
 	case "draft":
-		return 512, 20, 6.0
+		// 1280px 长边 → 16:9 = 1280×720，9:16 = 720×1280。
+		// 避免 seedreamMinPixels 强制上采样导致实际分辨率不可预测。
+		return 1280, 20, 6.0
 	case "preview":
-		return 768, 25, 7.0
+		return 1280, 25, 7.0
 	case "production":
-		return 1024, 35, 7.5
+		// 1920px 长边 → 16:9 = 1920×1080，9:16 = 1080×1920，1:1 = 1920×1920。
+		// 与 generateKenBurnsPureGo/generateStillFrameClip 的输出分辨率一致，
+		// 避免静止帧 1.5× 上采样 + Ken Burns zoom 时最高 2.25× 上采样导致的画面模糊。
+		return 1920, 35, 7.5
 	case "master":
-		return 2048, 50, 8.0
+		return 2560, 50, 8.0
 	case "ultra": // alias for master; reserved for future upscaling pipeline
-		return 2048, 50, 8.5
+		return 2560, 50, 8.5
 	default:
-		return 1024, 30, 7.5
+		return 1920, 30, 7.5
 	}
 }
 

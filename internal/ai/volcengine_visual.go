@@ -134,6 +134,11 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 			params["width"] = width
 			params["height"] = height
 		}
+		// negative_prompt：即梦3.0/3.1 支持负向提示词，明确排除低质量/解剖异常/模糊面部等词，
+		// 显著提升生成质量。不传时模型无任何约束，极易出现模糊、变形、水印等问题。
+		if req.NegativePrompt != "" {
+			params["negative_prompt"] = req.NegativePrompt
+		}
 		// use_pre_llm：API 侧默认 true（内置 LLM 二次改写 prompt，额外增加 10-30s 延迟）。
 		// 分镜 prompt 已由系统 LLM 精心构造（100+ 词结构化描述），内置 LLM 改写反而会
 		// 将详细描述缩减为通用短句，降低构图/光线/角色描述的精确度。

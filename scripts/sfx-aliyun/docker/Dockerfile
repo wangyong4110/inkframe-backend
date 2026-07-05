@@ -1,5 +1,5 @@
 # ── Stage 1: 下载模型权重 ──────────────────────────────────
-FROM registry.cn-hangzhou.aliyuncs.com/docker_hub_mirror/python:3.10-slim AS model-downloader
+FROM python:3.10-slim AS model-downloader
 
 RUN pip install --no-cache-dir \
     -i https://mirrors.aliyun.com/pypi/simple/ \
@@ -14,7 +14,7 @@ snapshot_download(\
 )"
 
 # ── Stage 2: 推理服务 ──────────────────────────────────────
-FROM registry.cn-hangzhou.aliyuncs.com/docker_hub_mirror/pytorch/pytorch:2.3.0-cuda11.8-cudnn8-runtime
+FROM pytorch/pytorch:2.3.0-cuda11.8-cudnn8-runtime
 
 WORKDIR /app
 

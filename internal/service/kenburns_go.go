@@ -455,12 +455,14 @@ func min2(a, b int) int {
 	return b
 }
 
-// kbWriteJPEG encodes an RGBA image as JPEG quality 85 to the given path.
+// kbWriteJPEG encodes an RGBA image as JPEG quality 92 to the given path.
+// Quality 92 保留足够细节避免中间帧 JPEG 块状伪影叠加 H.264 编码损耗（85 在高对比
+// 边缘/细线/文字处产生可见振铃，经 x264 ultrafast 二次压缩后尤其明显）。
 func kbWriteJPEG(img image.Image, path string) error {
 	f, err := os.Create(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	return jpeg.Encode(f, img, &jpeg.Options{Quality: 85})
+	return jpeg.Encode(f, img, &jpeg.Options{Quality: 92})
 }
