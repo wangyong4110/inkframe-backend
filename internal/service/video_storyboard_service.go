@@ -2102,8 +2102,10 @@ func buildStoryboardReviewPrompt(shots []*model.StoryboardShot, chapterContent s
 		truncatedChapter = string(runes[:5000]) + "…（已截断）"
 	}
 
+	shotCount30Pct := int(math.Round(float64(len(shots)) * 0.3))
 	ctx := map[string]interface{}{
 		"ShotCount":          len(shots),
+		"ShotCount30Pct":     shotCount30Pct,
 		"ShotsText":          sb.String(),
 		"HasChapterContent":  truncatedChapter != "",
 		"ChapterContent":     truncatedChapter,
