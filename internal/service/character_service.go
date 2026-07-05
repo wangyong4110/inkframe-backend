@@ -1663,15 +1663,29 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 			}
 			gender := InferGenderTag(charAppearance, char.Description)
 
-			var newThreeURL string
+			// ── Step 1: 生成面部参考图（Portrait）────────────────────────────────
+			// 先生成 Portrait，作为三视图的面部一致性锚点。
+			// 条件：force=true 或尚无 Portrait。
+			var newPortraitURL string
+			if force || look == nil || look.Portrait == "" {
+				portraitImg, portraitErr := imgSvc.GeneratePortrait(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, "", provider)
+				if portraitErr != nil {
+					logger.Errorf("[CharacterService] BatchGenerateImages: portrait gen for char %d (%s) failed: %v", char.ID, char.Name, portraitErr)
+					// Portrait 失败不阻断三视图，降级无参考图生成
+				} else {
+					newPortraitURL = portraitImg.URL
+					logger.Printf("[CharacterService] BatchGenerateImages: portrait generated for char %d (%s)", char.ID, char.Name)
+				}
+			}
 
-			// 使用 portrait 作为参考（如有）以锁定面部一致性
-			var faceRef string
-			if look != nil && look.Portrait != "" {
+			// ── Step 2: 生成三视图（以 Portrait 为面部参考）──────────────────────
+			// 优先使用刚生成的 Portrait；若 Portrait 生成失败，则用已有的作为降级参考。
+			faceRef := newPortraitURL
+			if faceRef == "" && look != nil {
 				faceRef = look.Portrait
 			}
 
-			// 生成三视图（仅在缺失或 force 时）
+			var newThreeURL string
 			if force || look == nil || look.ThreeViewSheet == "" {
 				threeImg, threeErr := imgSvc.GenerateThreeViewSheet(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, faceRef, provider)
 				if threeErr != nil {
@@ -1682,65 +1696,44 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 				}
 			}
 
+			// ── Step 3: 保存结果到 Look 记录 ────────────────────────────────────
 			var savedLookID uint
-			if newThreeURL != "" {
-				if s.lookRepo != nil {
-					if look != nil {
-						lookUpdateReq := &model.UpdateCharacterLookRequest{}
-						lookUpdateReq.ThreeViewSheet = &newThreeURL
-						if _, saveErr := s.UpdateLook(look.ID, lookUpdateReq); saveErr != nil {
-							logger.Errorf("[CharacterService] BatchGenerateImages: save look for char %d: %v", char.ID, saveErr)
-							charFailed = true
-						} else {
-							savedLookID = look.ID
-						}
-					} else {
-						// 角色尚无默认形象，自动创建
-						newLook := &model.CharacterLook{
-							CharacterID:    char.ID,
-							NovelID:        char.NovelID,
-							Label:          "默认形象",
-							ChapterFrom:    1,
-							VisualPrompt:   charAppearance,
-							ThreeViewSheet: newThreeURL,
-						}
-						if createErr := s.lookRepo.Create(newLook); createErr != nil {
-							logger.Errorf("[CharacterService] BatchGenerateImages: create default look for char %d: %v", char.ID, createErr)
-							charFailed = true
-						} else {
-							_ = s.characterRepo.UpdateDefaultLookID(char.ID, newLook.ID)
-							savedLookID = newLook.ID
-						}
+			if look != nil {
+				// 更新已有 Look
+				updateReq := &model.UpdateCharacterLookRequest{}
+				if newThreeURL != "" {
+					updateReq.ThreeViewSheet = &newThreeURL
+				}
+				if newPortraitURL != "" {
+					updateReq.Portrait = &newPortraitURL
+				}
+				if newThreeURL != "" || newPortraitURL != "" {
+					if _, saveErr := s.UpdateLook(look.ID, updateReq); saveErr != nil {
+						logger.Errorf("[CharacterService] BatchGenerateImages: save look for char %d: %v", char.ID, saveErr)
+						charFailed = true
 					}
 				}
-			} else if look != nil {
-				// 三视图已存在（未重新生成），look 记录已存在
 				savedLookID = look.ID
-			}
-
-			// 生成 Portrait（DreamO IP-Adapter 需要单张正面半身像，三视图全身小图提取效果差）
-			// 条件：force=true、或无 Portrait、或刚生成了新三视图
-			needPortrait := !charFailed && savedLookID != 0 && (force || (look != nil && look.Portrait == "") || newThreeURL != "")
-			if needPortrait {
-				// 使用新生成的三视图，或已有三视图作为 DreamO 参考
-				threeRef := newThreeURL
-				if threeRef == "" && look != nil {
-					threeRef = look.ThreeViewSheet
+			} else if newThreeURL != "" {
+				// 角色尚无默认形象，自动创建
+				newLook := &model.CharacterLook{
+					CharacterID:    char.ID,
+					NovelID:        char.NovelID,
+					Label:          "默认形象",
+					ChapterFrom:    1,
+					VisualPrompt:   charAppearance,
+					ThreeViewSheet: newThreeURL,
+					Portrait:       newPortraitURL,
 				}
-				if threeRef != "" {
-					portraitImg, portraitErr := imgSvc.GeneratePortrait(genCtx, tenantID, char.Name, charAppearance, imageStyle, gender, threeRef, provider)
-					if portraitErr != nil {
-						logger.Errorf("[CharacterService] BatchGenerateImages: portrait gen for char %d (%s) failed: %v", char.ID, char.Name, portraitErr)
-					} else {
-						portraitURL := portraitImg.URL
-						if _, saveErr := s.UpdateLook(savedLookID, &model.UpdateCharacterLookRequest{Portrait: &portraitURL}); saveErr != nil {
-							logger.Errorf("[CharacterService] BatchGenerateImages: save portrait for char %d: %v", char.ID, saveErr)
-						} else {
-							logger.Printf("[CharacterService] BatchGenerateImages: portrait auto-generated for char %d (%s)", char.ID, char.Name)
-						}
-					}
+				if createErr := s.lookRepo.Create(newLook); createErr != nil {
+					logger.Errorf("[CharacterService] BatchGenerateImages: create default look for char %d: %v", char.ID, createErr)
+					charFailed = true
+				} else {
+					_ = s.characterRepo.UpdateDefaultLookID(char.ID, newLook.ID)
+					savedLookID = newLook.ID
 				}
 			}
+			_ = savedLookID
 
 			mu.Lock()
 			if charFailed {
@@ -2413,7 +2406,7 @@ func (s *ImageGenerationService) GeneratePortrait(ctx context.Context, tenantID 
 			genderPrefix +
 			"single character portrait, half-body bust shot, front-facing, neutral expression, " +
 			condensedAppearance + ", " +
-			"pure white background, centered composition, " +
+			"pure white background, solid white background, isolated on white, white studio background, centered composition, " +
 			"no text no labels no watermarks"
 	} else {
 		styleDesc := resolveStyleIllustrationDesc(style)
@@ -2425,12 +2418,14 @@ func (s *ImageGenerationService) GeneratePortrait(ctx context.Context, tenantID 
 			genderPrefix +
 			"single character portrait, half-body bust shot, front-facing, neutral expression, " +
 			condensedAppearance + ", " +
-			"pure white background, centered composition, " +
+			"pure white background, solid white background, isolated on white, white studio background, centered composition, " +
 			"no text no labels no watermarks"
 	}
 
 	negativePrompt := "text, labels, watermark, full body, legs, feet, dynamic pose, action pose, " +
-		"different face, inconsistent face, extra limbs, bad anatomy, nsfw, lowres, poorly drawn"
+		"different face, inconsistent face, extra limbs, bad anatomy, nsfw, lowres, poorly drawn, " +
+		"colored background, gradient background, complex background, outdoor background, indoor background, " +
+		"scenery, environment, background elements, dark background, grey background, colored backdrop"
 	if genderNeg != "" {
 		negativePrompt += ", " + genderNeg
 	}

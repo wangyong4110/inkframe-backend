@@ -48,6 +48,7 @@ type VideoService struct {
 	worldviewRepo         *repository.WorldviewRepository
 	taskSvc            *TaskService
 	charListCache      sync.Map      // novelID → *charListEntry (short-lived cache for batch voice gen)
+	lookRefCache       sync.Map      // lookID → composite URL (portrait+three-view merged, batch-lifetime cache)
 	// 广场社交
 	videoLikeRepo    *repository.VideoLikeRepository
 	videoCommentRepo *repository.VideoCommentRepository

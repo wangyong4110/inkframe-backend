@@ -519,6 +519,41 @@ func (s *VideoService) getCharActiveLook(char *model.Character, chapterNo int) *
 	return nil
 }
 
+// charLookRefImage 返回角色形象的最优参考图 URL：
+// 若同时有面部特写图（Portrait）和三视图（ThreeViewSheet），将两者横向合并为单张；
+// 合并结果按 lookID 缓存，同一批次内重复使用同一形象时不再重新合并。
+// 若只有其中一张，则直接返回该张；都无则返回空字符串。
+func (s *VideoService) charLookRefImage(look *model.CharacterLook) string {
+	if look == nil {
+		return ""
+	}
+	portrait := normalizeMediaURL(look.Portrait)
+	threeView := normalizeMediaURL(look.ThreeViewSheet)
+
+	if portrait == "" {
+		return threeView
+	}
+	if threeView == "" {
+		return portrait
+	}
+
+	// 检查缓存（key = lookID）
+	cacheKey := look.ID
+	if cached, ok := s.lookRefCache.Load(cacheKey); ok {
+		return cached.(string)
+	}
+
+	// 将面部特写（左）+ 三视图（右）横向拼接
+	composite, err := s.compositeRefImages(context.Background(), []string{portrait, threeView}, 0)
+	if err != nil {
+		logger.Errorf("[charLookRefImage] lookID=%d composite failed: %v, falling back to three-view", look.ID, err)
+		return threeView
+	}
+	s.lookRefCache.Store(cacheKey, composite)
+	logger.Printf("[charLookRefImage] lookID=%d composite portrait+three-view → %s", look.ID, composite)
+	return composite
+}
+
 // ─── 分镜参考图生成 ──────────────────────────────────────────────────────────
 
 func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (string, error) {
@@ -566,13 +601,9 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 				activeLook := s.getCharActiveLook(char, chapterNo)
 				var refImage, vprompt string
 				if activeLook != nil {
-					// 分镜参考图优先用三视图（ThreeViewSheet），包含正/侧/背多角度信息，
-					// 有助于多视角场景下的角色一致性；不存在时降级为单张 Portrait。
-					if activeLook.ThreeViewSheet != "" {
-						refImage = normalizeMediaURL(activeLook.ThreeViewSheet)
-					} else if activeLook.Portrait != "" {
-						refImage = normalizeMediaURL(activeLook.Portrait)
-					}
+					// 两张图都有时合并为一张（面部特写+三视图），提供更丰富的面部+多角度信息；
+					// 只有其中一张时直接使用；合并结果按 lookID 缓存，同批次内不重复合并。
+					refImage = s.charLookRefImage(activeLook)
 					vprompt = activeLook.VisualPrompt
 				}
 				urlType := "empty"
@@ -663,12 +694,8 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 						}
 						var refURL string
 						if ir.look != nil && len(characterPortraits) < maxCharRefs {
-							// 三视图优先（同主流程），降级用 Portrait
-							if ir.look.ThreeViewSheet != "" {
-								refURL = normalizeMediaURL(ir.look.ThreeViewSheet)
-							} else if ir.look.Portrait != "" {
-								refURL = normalizeMediaURL(ir.look.Portrait)
-							}
+							// 同主流程：两图都有时合并，只有一图时直接用
+							refURL = s.charLookRefImage(ir.look)
 						}
 						if refURL != "" {
 							characterPortraits = append(characterPortraits, refURL)
@@ -1017,8 +1044,10 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		promptText += ", " + resolveStyleQualityTokens(artStyle)
 	}
 
-	// 有角色时追加面部锐化词，解决 DreamO 多参考图下面部模糊问题
-	if len(cappedPortraits) > 0 {
+	// 有角色时追加面部锐化词——无论是否有参考图。
+	// 原仅在 cappedPortraits>0 时触发，导致无参考图的角色（如 Seedream 3.0 不支持 image 字段的情况）
+	// 缺少面部正向约束，生成面部模糊。
+	if shotHasAnyCharacter {
 		promptText += ", sharp face, detailed face, crisp facial features, high facial detail, perfect face"
 	}
 
@@ -1815,14 +1844,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 					continue
 				}
 				look := s.getCharActiveLook(c, chapterNo)
-				var img string
-				if look != nil {
-					if look.ThreeViewSheet != "" {
-						img = normalizeMediaURL(look.ThreeViewSheet)
-					} else {
-						img = normalizeMediaURL(look.Portrait)
-					}
-				}
+				img := s.charLookRefImage(look)
 				if img != "" && img != referenceImage {
 					extraRefImages = append(extraRefImages, img)
 					extraRefLabels = append(extraRefLabels, c.Name)

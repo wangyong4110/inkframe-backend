@@ -1461,7 +1461,6 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 	style := h.characterService.GetNovelImageStyle(char.NovelID)
 	charName := char.Name
 	currentPortrait := look.Portrait
-	currentThreeViewSheet := look.ThreeViewSheet
 
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeLookImageGen, "形象图片生成", "look", uint(lookID))
 	if err != nil {
@@ -1487,18 +1486,20 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 		ctx := context.Background()
 		var updatedLook *model.CharacterLook
 		switch req.Type {
-		case "portrait", "":
-			img, err := h.imageGenService.GenerateThreeViewSheet(ctx, tenantID, charName, visualPrompt, style, "", currentPortrait, req.Provider)
+		case "portrait":
+			// Step 1: generate face portrait from visual prompt (no reference needed)
+			img, err := h.imageGenService.GeneratePortrait(ctx, tenantID, charName, visualPrompt, style, "", "", req.Provider)
 			if err != nil {
-				log.Errorf("[CharacterHandler] GenerateLookImages task %s portrait/three_view failed: %v", taskID, err)
+				log.Errorf("[CharacterHandler] GenerateLookImages task %s portrait failed: %v", taskID, err)
 				h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
 				return
 			}
 			imageURL := img.URL
-			updateReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &imageURL}
+			updateReq := &model.UpdateCharacterLookRequest{Portrait: &imageURL}
 			updatedLook, _ = h.characterService.UpdateLook(uint(lookID), updateReq)
-		case "three_view":
-			img, err := h.imageGenService.GenerateThreeViewSheet(ctx, tenantID, charName, visualPrompt, style, "", currentThreeViewSheet, req.Provider)
+		case "three_view", "":
+			// Step 2: generate three-view sheet using portrait as face reference
+			img, err := h.imageGenService.GenerateThreeViewSheet(ctx, tenantID, charName, visualPrompt, style, "", currentPortrait, req.Provider)
 			if err != nil {
 				log.Errorf("[CharacterHandler] GenerateLookImages task %s three_view failed: %v", taskID, err)
 				h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
