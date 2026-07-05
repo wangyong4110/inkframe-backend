@@ -1,0 +1,7 @@
+tangoflux
+fastapi==0.111.0
+uvicorn[standard]==0.30.0
+soundfile==0.12.1
+oss2==2.18.5
+python-multipart==0.0.9
+torch>=2.1.0
