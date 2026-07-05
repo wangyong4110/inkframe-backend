@@ -308,6 +308,15 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 	isNewGen := seedreamIsNewGen(model) // Seedream 4.0 / 4.5 / 5.0 lite
 
 	size := seedreamEnforceMinSize(model, seedreamSize(req.Size))
+	// 旧生代 Seedream 3.0：最大支持约 1K（1024×1024），超过后 API 静默降分辨率。
+	// 新生代 Seedream 4.0/4.5/5.0：无上限（最大像素函数返回 0，跳过）。
+	if maxPx := seedreamModelMaxPixels(model); maxPx > 0 {
+		capped := seedreamEnforceMaxSize(size, maxPx)
+		if capped != size {
+			log.Printf("[doubao] ImageGenerate: model=%s size %s → %s (capped to %d px limit for old-gen model)", model, size, capped, maxPx)
+		}
+		size = capped
+	}
 
 	// sequential_image_generation：默认 disabled（单图），新生代模型支持 auto（组图）
 	seqMode := "disabled"
@@ -402,8 +411,8 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 				imgTypes[i] = "unknown"
 			}
 		}
-		log.Printf("[doubao] ImageGenerate model=%s seqMode=%s refImages=%d types=%v prompt=%.200s",
-			model, seqMode, len(allRefImages), imgTypes, req.Prompt)
+		log.Printf("[doubao] ImageGenerate model=%s seqMode=%s size=%s refImages=%d types=%v prompt=%.200s",
+			model, seqMode, size, len(allRefImages), imgTypes, req.Prompt)
 	}
 
 	body, _ := json.Marshal(apiReq)
@@ -459,7 +468,7 @@ func (p *DoubaoProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 		return &ImageResponse{Error: "no image returned", LatencyMs: time.Since(start).Milliseconds()}, nil
 	}
 
-	log.Printf("[doubao] ImageGenerate: success count=%d url=%s latency=%dms", len(urls), urls[0], time.Since(start).Milliseconds())
+	log.Printf("[doubao] ImageGenerate: success count=%d sizes=%v url=%s latency=%dms", len(urls), sizes, urls[0], time.Since(start).Milliseconds())
 	out := &ImageResponse{
 		URL:       urls[0],
 		LatencyMs: time.Since(start).Milliseconds(),
@@ -584,28 +593,68 @@ func seedreamSize(size string) string {
 
 // seedreamModelMinPixels 返回指定 Seedream 模型的最小像素数要求。
 //
-//	Seedream 4.0/4.5: 921600  (≈960×960)
-//	Seedream 5.0:    3686400  (≈1920×1920)
+//	Seedream 3.0（旧生代）：0（无最小要求）
+//	Seedream 4.0/4.5：921600  (≈960×960)
+//	Seedream 5.0：   3686400  (≈1920×1920)
 func seedreamModelMinPixels(model string) int {
 	if strings.Contains(model, "5-0") || strings.Contains(model, "5.0") {
 		return 3686400
 	}
-	return 921600
+	if seedreamIsNewGen(model) {
+		return 921600 // Seedream 4.0/4.5
+	}
+	return 0 // Seedream 3.0 旧生代：无最小像素要求
 }
 
-// seedreamEnforceMinSize 若尺寸不满足模型最小像素要求，按比例放大并对齐到 8px。
+// seedreamModelMaxPixels 返回指定 Seedream 模型的最大像素数上限。0 表示无上限（新生代由 API 验证）。
+//
+//	Seedream 3.0（旧生代）：1048576（≈1024×1024，1K 级别上限）
+//	Seedream 4.0/4.5/5.0（新生代）：0（支持 1K/2K/4K，无需额外限制）
+func seedreamModelMaxPixels(model string) int {
+	if seedreamIsNewGen(model) {
+		return 0
+	}
+	// Seedream 3.0 最大约 1K：超过后 API 会静默降分辨率，导致"图片像素低"
+	return 1048576
+}
+
+// seedreamEnforceMinSize 若尺寸不满足模型最小像素要求，按比例放大并对齐到 8px（向上取整）。
 func seedreamEnforceMinSize(model, size string) string {
 	var w, h int
 	if _, err := fmt.Sscanf(size, "%dx%d", &w, &h); err != nil || w <= 0 || h <= 0 {
 		return size
 	}
 	minPx := seedreamModelMinPixels(model)
-	if w*h >= minPx {
+	if minPx == 0 || w*h >= minPx {
 		return size
 	}
 	scale := math.Sqrt(float64(minPx) / float64(w*h))
 	r8 := func(n float64) int { return (int(math.Ceil(n))+4) / 8 * 8 }
 	return fmt.Sprintf("%dx%d", r8(float64(w)*scale), r8(float64(h)*scale))
+}
+
+// seedreamEnforceMaxSize 若尺寸超过模型最大像素上限，按比例缩小并向下对齐到 8px，确保结果 ≤ maxPx。
+func seedreamEnforceMaxSize(size string, maxPx int) string {
+	if maxPx <= 0 {
+		return size
+	}
+	var w, h int
+	if _, err := fmt.Sscanf(size, "%dx%d", &w, &h); err != nil || w <= 0 || h <= 0 {
+		return size
+	}
+	if w*h <= maxPx {
+		return size
+	}
+	scale := math.Sqrt(float64(maxPx) / float64(w*h))
+	// 向下对齐到 8px，确保结果像素数 ≤ maxPx
+	r8floor := func(n float64) int {
+		v := (int(n) / 8) * 8
+		if v < 8 {
+			v = 8
+		}
+		return v
+	}
+	return fmt.Sprintf("%dx%d", r8floor(float64(w)*scale), r8floor(float64(h)*scale))
 }
 
 // seedreamFormatImage 将图片输入格式化为 Seedream API 接受的 "image" 字段值。
