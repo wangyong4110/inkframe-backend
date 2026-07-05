@@ -263,6 +263,30 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		}
 	}
 
+	// 批量预加载角色默认形象 VisualPrompt（单次 IN 查询，替代 buildStoryboardPrompt 内 N_char×N_seg 次串行 GetByID）
+	charVisualPrompts := make(map[uint]string)
+	if s.lookRepo != nil && len(characters) > 0 {
+		lookIDs := make([]uint, 0, len(characters))
+		charToLook := make(map[uint]uint) // charID → lookID
+		for _, c := range characters {
+			if c.DefaultLookID != 0 {
+				lookIDs = append(lookIDs, c.DefaultLookID)
+				charToLook[c.ID] = c.DefaultLookID
+			}
+		}
+		if len(lookIDs) > 0 {
+			if looksMap, err := s.lookRepo.BatchGetLooksByIDs(lookIDs); err == nil {
+				for charID, lookID := range charToLook {
+					if look, ok := looksMap[lookID]; ok && look != nil && look.VisualPrompt != "" {
+						charVisualPrompts[charID] = look.VisualPrompt
+					}
+				}
+			} else {
+				logger.Errorf("[Storyboard] BatchGetLooksByIDs failed: %v", err)
+			}
+		}
+	}
+
 	// 获取小说的 PromptLanguage、Genre、ImageStyle、标题、世界观摘要
 	promptLanguage := "zh"
 	genre := ""
@@ -295,11 +319,13 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		imageStyle = video.RenderConfig.ArtStyle
 	}
 
-	// 前置：生成情感弧线骨架（轻量调用，用于指导每个分段的叙事节奏）
-	arcPlan := s.generateStoryboardArc(content, characters, tenantID, video.NovelID, provider)
-	if arcPlan != "" {
-		logger.Printf("[Storyboard] arc plan generated (%d chars)", len(arcPlan))
-	}
+	// 后台并行生成情感弧线骨架，与第1段 AI 调用（15-40s）重叠，节省 8-15s 串行等待。
+	// arcCh 带缓冲（容量 1）：goroutine 写入后无论是否被读取都不会泄漏。
+	arcCh := make(chan string, 1)
+	go func() {
+		arcCh <- s.generateStoryboardArc(content, characters, tenantID, video.NovelID, provider)
+	}()
+	arcPlan := "" // 在分段循环中惰性读取
 
 	totalRunes := len([]rune(content))
 	totalShots := calcTotalShots(totalRunes, video.RenderConfig.TargetDuration, video.RenderConfig.Pacing)
@@ -387,9 +413,26 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		segStartPct := (runesProcessed - segRunes) * 100 / max(totalRunes, 1)
 		segEndPct := runesProcessed * 100 / max(totalRunes, 1)
 
+		// 惰性获取弧线计划：
+		// - seg0：非阻塞尝试（弧线与 seg0 并行生成，此时通常尚未就绪，接受无弧线降级）
+		// - seg1+：阻塞等待（seg0 的 AI 调用耗时 15-40s 已远超弧线的 8-15s，必然就绪）
+		if arcPlan == "" {
+			if segIdx == 0 {
+				select {
+				case arcPlan = <-arcCh:
+					logger.Printf("[Storyboard] arc ready before seg1 (%d chars)", len(arcPlan))
+				default:
+					// 弧线尚未就绪，seg1 以空 arcPlan 继续；seg2+ 会在下一次迭代阻塞等待
+				}
+			} else {
+				arcPlan = <-arcCh // 阻塞：seg0 已耗时 15-40s，弧线（8-15s）必然已完成
+				logger.Printf("[Storyboard] arc ready at seg%d (%d chars)", segIdx+1, len(arcPlan))
+			}
+		}
+
 		prompt := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, len(segments), segShotCount,
 			characters, anchors, plotPoints, effectiveItems, prevTailShots, overrides.VoiceMode, promptLanguage, genre, video.RenderConfig.Pacing, arcPlan, imageStyle,
-			chapterNo, novelTitle, worldviewDesc, segStartPct, segEndPct)
+			chapterNo, novelTitle, worldviewDesc, segStartPct, segEndPct, charVisualPrompts)
 
 		var aiResult string
 		var aiErr error
@@ -428,8 +471,8 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			if len(parsed) > len(bestShots) {
 				bestShots = parsed
 			}
-			if len(parsed) < (segShotCount*9+9)/10 && attempt < 2 {
-				logger.Printf("[Storyboard] seg %d/%d attempt=%d too few shots got=%d expected=%d (threshold 90%%), retrying", segIdx+1, len(segments), attempt, len(parsed), segShotCount)
+			if len(parsed) < (segShotCount*3+3)/4 && attempt < 2 {
+				logger.Printf("[Storyboard] seg %d/%d attempt=%d too few shots got=%d expected=%d (threshold 75%%), retrying", segIdx+1, len(segments), attempt, len(parsed), segShotCount)
 				continue
 			}
 			shots = bestShots
@@ -955,6 +998,7 @@ func (s *VideoService) buildStoryboardPrompt(
 	novelTitle string,
 	worldviewDesc string,
 	segStartPct, segEndPct int,
+	charVisualPrompts map[uint]string,
 ) string {
 	// isEn / isImageEn 均由 novel.AIConfig.PromptLanguage 决定，与项目「AI 提示词的语言」设置保持一致。
 	// image_prompt 在生图前会经过自动翻译（translatePromptToEnglish），保持中文可供用户编辑。
@@ -964,18 +1008,6 @@ func (s *VideoService) buildStoryboardPrompt(
 	segLabel := ""
 	if totalSegs > 1 {
 		segLabel = fmt.Sprintf("（第%d段，共%d段）", segNo, totalSegs)
-	}
-
-	// 预加载角色的默认形象 VisualPrompt（供 storyboard_generate.j2 中 [image_prompt 外貌关键词参考] 使用）
-	charVisualPrompts := make(map[uint]string) // charID → VisualPrompt
-	if s.lookRepo != nil && len(characters) > 0 {
-		for _, c := range characters {
-			if c.DefaultLookID != 0 {
-				if look, err := s.lookRepo.GetByID(c.DefaultLookID); err == nil && look != nil && look.VisualPrompt != "" {
-					charVisualPrompts[c.ID] = look.VisualPrompt
-				}
-			}
-		}
 	}
 
 	// 过滤角色：优先匹配内容中出现的角色，否则回退到主角
