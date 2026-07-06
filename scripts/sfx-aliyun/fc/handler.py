@@ -16,7 +16,9 @@ INSTANCE_ID    = os.environ["ECS_INSTANCE_ID"]
 ECS_PRIVATE_IP = os.environ["ECS_PRIVATE_IP"]
 INFER_PORT     = os.environ.get("INFER_PORT", "8000")
 INFER_BASE     = f"http://{ECS_PRIVATE_IP}:{INFER_PORT}"
-TIMEOUT_START  = int(os.environ.get("TIMEOUT_START", "180"))
+# 首次启动需下载模型（约 10-15 分钟），设 1200 秒兜底
+# 模型已存在时实际只需约 60-90 秒
+TIMEOUT_START  = int(os.environ.get("TIMEOUT_START", "1200"))
 TIMEOUT_INFER  = int(os.environ.get("TIMEOUT_INFER", "120"))
 AUTO_STOP      = os.environ.get("AUTO_STOP", "true").lower() == "true"
 
@@ -58,16 +60,28 @@ def stop_instance():
 
 
 def wait_for_service(timeout: int = TIMEOUT_START) -> bool:
+    """
+    轮询 /health 直到服务就绪。
+    首次启动含模型下载，可能需要 10-15 分钟；
+    后续启动模型已在磁盘，约 60-90 秒。
+    """
     logger.info(f"Waiting for service at {INFER_BASE}/health (timeout={timeout}s)")
     deadline = time.time() + timeout
+    last_log = time.time()
     while time.time() < deadline:
         try:
             r = requests.get(f"{INFER_BASE}/health", timeout=5)
             if r.status_code == 200:
-                logger.info(f"Service ready ✓  {r.json()}")
+                data = r.json()
+                logger.info(f"Service ready ✓  {data}")
                 return True
         except requests.exceptions.RequestException:
             pass
+        # 每 30 秒打一次等待日志，避免日志刷屏
+        if time.time() - last_log >= 30:
+            elapsed = int(time.time() - (deadline - timeout))
+            logger.info(f"Still waiting... ({elapsed}s elapsed, timeout={timeout}s)")
+            last_log = time.time()
         time.sleep(5)
     return False
 
@@ -81,17 +95,14 @@ def handler(event, context):
         except Exception:
             pass
 
-    logger.info(f"Request body: {body}")
+    logger.info(f"Request: {body}")
 
     try:
-        # 1. 启动实例
         start_instance()
 
-        # 2. 等待服务就绪
         if not wait_for_service():
             return json.dumps({"error": "Service startup timeout"}, ensure_ascii=False)
 
-        # 3. 转发推理请求
         resp = requests.post(
             f"{INFER_BASE}/generate",
             json=body,

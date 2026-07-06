@@ -2,13 +2,31 @@
 exec >> /var/log/sfx-startup.log 2>&1
 echo "=== SFX Startup: $(date) ==="
 
+# ── 等待 Docker 就绪 ──────────────────────────────────────
 until docker info &>/dev/null; do sleep 3; done
 
-if [ ! -f "/data/models/TangoFlux/config.json" ]; then
-    echo "ERROR: Model not found. Run: bash /opt/setup-model.sh"
-    exit 1
+# ── 自动下载模型（已存在则跳过）──────────────────────────
+MODEL_DIR="/data/models/TangoFlux"
+if [ ! -f "${MODEL_DIR}/config.json" ]; then
+    echo "Model not found, downloading from hf-mirror.com ..."
+    mkdir -p "${MODEL_DIR}"
+    pip install -q huggingface_hub
+    HF_ENDPOINT=https://hf-mirror.com python3 -c "
+from huggingface_hub import snapshot_download
+snapshot_download(
+    repo_id='declare-lab/TangoFlux',
+    local_dir='${MODEL_DIR}',
+    ignore_patterns=['*.md', '*.txt'],
+    endpoint='https://hf-mirror.com',
+)
+print('Model download complete!')
+"
+    echo "Model ready: $(date)"
+else
+    echo "Model already exists at ${MODEL_DIR}, skip download."
 fi
 
+# ── 拉取并启动容器 ────────────────────────────────────────
 docker login __ACR_REGISTRY__ -u __ACCESS_KEY__ -p __ACCESS_SECRET__
 docker pull __IMAGE__ || echo "Using cached image"
 
