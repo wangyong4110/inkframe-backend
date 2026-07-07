@@ -1,0 +1,11 @@
+bin/
+tmp/
+*.db
+*.log
+config.yaml
+uploads/
+.git/
+.gitignore
+docs/
+examples/
+README.md
