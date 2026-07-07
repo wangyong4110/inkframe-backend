@@ -1841,10 +1841,12 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 			logger.Printf("GenerateCharacterThreeViewMulti: resolved ref %q → base64 len=%d", url, len(b64))
 			return b64
 		}
-		// fetchImageAsBase64 失败时降级：绝对 URL 直接传入（最后手段）
+		// fetchImageAsBase64 失败（403/404/网络错误）：说明 URL 已失效（如 Volcengine TOS 签名 URL 过期）。
+		// 不再 fallback 到原始 URL：若连本服务器都 403，Seedream 服务器下载同样会 403，
+		// 传入无效 URL 只会让 API 返回 InvalidParameter，不如直接丢弃（返回空串跳过此参考图）。
 		if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
-			logger.Printf("GenerateCharacterThreeViewMulti: base64 fetch failed for %q, falling back to URL", url)
-			return url
+			logger.Warnf("GenerateCharacterThreeViewMulti: ref %q inaccessible (base64 fetch failed), dropping from reference images", url)
+			return ""
 		}
 		logger.Errorf("GenerateCharacterThreeViewMulti: cannot resolve ref %q — relative path with no dbMediaReader and no serverBaseURL configured; ref image will be skipped", url)
 		return ""
@@ -1899,6 +1901,23 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 			}(i, r)
 		}
 		wg.Wait()
+		// extRefs 仍与 referenceImages 下标对齐（未压缩）。
+		// 过滤 refURLSlice / refURLFirst：只保留 base64 下载成功的对应 URL。
+		// 过期签名 URL（如 Volcengine TOS 24h 有效期）会让 extRefs[i] 为空；
+		// 若不过滤，这些 URL 仍会以 ReferenceURLs 优先通道传给 Seedream，
+		// Seedream 服务端下载时同样 403 → InvalidParameter 生成失败。
+		var filteredURLs []string
+		for i, r := range referenceImages {
+			if extRefs[i] != "" && (strings.HasPrefix(r, "http://") || strings.HasPrefix(r, "https://")) {
+				filteredURLs = append(filteredURLs, r)
+			}
+		}
+		refURLSlice = filteredURLs
+		if len(refURLSlice) > 0 {
+			refURLFirst = refURLSlice[0]
+		} else {
+			refURLFirst = ""
+		}
 		// 压缩掉空槽（下载失败的项），保持非空项有序
 		compact := extRefs[:0]
 		for _, v := range extRefs {
@@ -2141,6 +2160,13 @@ func (s *AIService) uploadImageToStorage(ctx context.Context, tenantID uint, img
 	}
 	logger.Printf("uploadImageToStorage: persisted %s → %s", imgURL, persistURL)
 	return persistURL
+}
+
+// PersistExternalImage 下载外部图片 URL 并上传到持久存储（OSS），返回永久 URL。
+// 用于将 AI 服务商返回的临时签名 URL（如 Volcengine TOS 24h 过期 URL）转存为永久可访问 URL。
+// storageSvc 为 nil 或上传失败时降级返回原 URL（非致命）。
+func (s *AIService) PersistExternalImage(ctx context.Context, tenantID uint, imgURL string) string {
+	return s.uploadImageToStorage(ctx, tenantID, imgURL)
 }
 
 // WithServerBaseURL 设置本地服务器基础 URL（如 "http://127.0.0.1:8080"），用于将相对媒体路径

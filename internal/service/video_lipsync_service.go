@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/ai"
@@ -165,6 +166,18 @@ func (s *VideoService) PollLipSyncUntilDone(videoID, shotID uint) error {
 			if err != nil {
 				s.markShotFailed(shot.ID, "lipsync: get URL: "+err.Error())
 				return fmt.Errorf("lipsync poll: get URL: %w", err)
+			}
+			// Persist CDN video to OSS so it survives expiry.
+			localPath := fmt.Sprintf("%s/inkframe-lipsync-%d-%d.mp4", inkframeTempDir(), shot.ID, time.Now().UnixMilli())
+			if dlErr := downloadFileCtx(context.Background(), videoURL, localPath); dlErr != nil {
+				logger.Warnf("PollLipSyncUntilDone: download shot %d failed (%v), storing CDN URL", shotID, dlErr)
+			} else {
+				if ossURL := s.uploadClipToStorage(context.Background(), shot, localPath); ossURL != "" {
+					videoURL = ossURL
+				} else {
+					logger.Warnf("PollLipSyncUntilDone: OSS upload shot %d failed, storing CDN URL", shotID)
+				}
+				_ = os.Remove(localPath)
 			}
 			if err := s.storyboardRepo.UpdateFields(shot.ID, map[string]interface{}{
 				"video_url": videoURL,

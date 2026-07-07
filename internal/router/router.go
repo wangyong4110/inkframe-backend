@@ -714,8 +714,6 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			models.POST("/select", cfg.ModelHandler.SelectModel)
 			models.POST("/voice-preview", cfg.ModelHandler.VoicePreview)
 			models.POST("/test-prompt", cfg.ModelHandler.TestModelPrompt)
-			models.GET("/task-mappings", cfg.ModelHandler.GetTaskMappings)
-			models.PUT("/task-mappings", cfg.ModelHandler.UpdateTaskMapping)
 			models.PUT("/:id", cfg.ModelHandler.UpdateModel)
 			models.DELETE("/:id", cfg.ModelHandler.DeleteModel)
 			models.POST("/:id/test", cfg.ModelHandler.TestModel)

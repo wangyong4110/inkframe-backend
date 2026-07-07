@@ -742,39 +742,6 @@ func (h *ModelHandler) TestModelPrompt(c *gin.Context) {
 	})
 }
 
-// GetTaskMappings 返回任务-提供商映射表
-// GET /api/v1/models/task-mappings
-func (h *ModelHandler) GetTaskMappings(c *gin.Context) {
-	mappings := h.modelService.GetTaskProviderMappings()
-	respondOK(c, mappings)
-}
-
-// UpdateTaskMapping 更新任务-提供商映射
-// PUT /api/v1/models/task-mappings
-func (h *ModelHandler) UpdateTaskMapping(c *gin.Context) {
-	if !isAdminOrOwner(c) {
-		respondErr(c, http.StatusForbidden, "admin or owner role required")
-		return
-	}
-
-	var req struct {
-		TaskType   string `json:"task_type" binding:"required"`
-		ProviderID *uint  `json:"provider_id"`
-	}
-	if !bindJSON(c, &req) {
-		return
-	}
-	var pid uint
-	if req.ProviderID != nil {
-		pid = *req.ProviderID
-	}
-	if err := h.modelService.SetTaskProviderMapping(req.TaskType, pid); err != nil {
-		respondErr(c, http.StatusInternalServerError, err.Error())
-		return
-	}
-	respondOK(c, gin.H{"ok": true})
-}
-
 // validateEndpointURL 验证 endpoint URL 防止 SSRF 攻击。
 // 仅允许 http/https scheme，拒绝私有 IP 和 localhost。
 func validateEndpointURL(rawURL string) error {

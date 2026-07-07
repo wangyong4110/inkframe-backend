@@ -652,16 +652,6 @@ func (s *ModelService) TestGeneratePrompt(ctx context.Context, tenantID uint, pr
 	return content, 0, err
 }
 
-// GetTaskProviderMappings 返回各任务类型当前绑定的 ProviderID（已简化：不再读取 TaskModelConfig 表，始终返回空映射）
-func (s *ModelService) GetTaskProviderMappings() map[string]uint {
-	return map[string]uint{}
-}
-
-// SetTaskProviderMapping 更新指定任务类型的 Provider 绑定（TaskModelConfig 已移除，此方法为空操作）
-func (s *ModelService) SetTaskProviderMapping(taskType string, providerID uint) error {
-	return nil
-}
-
 // ============================================
 // ForeshadowService adapter methods
 // ============================================

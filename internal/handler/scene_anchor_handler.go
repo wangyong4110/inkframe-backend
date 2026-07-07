@@ -249,7 +249,7 @@ func (h *SceneAnchorHandler) LockRefImage(c *gin.Context) {
 	if !bindJSON(c, &body) {
 		return
 	}
-	if err := h.svc.SetRefImage(uint(id), body.ImageURL, body.ShotID); err != nil {
+	if err := h.svc.SetRefImage(c.Request.Context(), getTenantID(c), uint(id), body.ImageURL, body.ShotID); err != nil {
 		reqLogger(c).Errorf("[SceneAnchorHandler] LockRefImage id=%d: %v", id, err)
 		respondErr(c, http.StatusInternalServerError, "failed to lock ref image")
 		return
@@ -277,7 +277,7 @@ func (h *SceneAnchorHandler) UploadRefImage(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := h.svc.SetRefImage(uint(id), imgURL, nil); err != nil {
+	if err := h.svc.SetRefImage(c.Request.Context(), getTenantID(c), uint(id), imgURL, nil); err != nil {
 		reqLogger(c).Errorf("[SceneAnchorHandler] UploadRefImage id=%d: %v", id, err)
 		respondErr(c, http.StatusInternalServerError, "failed to save ref image")
 		return

@@ -165,7 +165,9 @@ func (s *SceneAnchorService) Delete(id uint) error {
 
 // SetRefImage 锁定参考图（强制覆盖）。
 // 使用 UpdateFields 只写 ref_image_url/ref_image_locked_at，避免全量 Save 覆盖其他字段（如 description）。
-func (s *SceneAnchorService) SetRefImage(id uint, imageURL string, shotID *uint) error {
+// 若传入的 imageURL 是临时签名 URL（如 Volcengine TOS），自动转存到永久存储（OSS）后再写库。
+func (s *SceneAnchorService) SetRefImage(ctx context.Context, tenantID uint, id uint, imageURL string, shotID *uint) error {
+	imageURL = s.persistIfEphemeral(ctx, tenantID, imageURL)
 	now := time.Now()
 	if err := s.repo.UpdateFields(id, map[string]interface{}{
 		"ref_image_url":       imageURL,
@@ -177,8 +179,9 @@ func (s *SceneAnchorService) SetRefImage(id uint, imageURL string, shotID *uint)
 	return nil
 }
 
-// AutoSetRefImage 首次自动锁定参考图（仅当 RefImageURL 为空时更新）
-func (s *SceneAnchorService) AutoSetRefImage(id uint, imageURL string) error {
+// AutoSetRefImage 首次自动锁定参考图（仅当 RefImageURL 为空时更新）。
+// 同 SetRefImage，若 imageURL 是临时签名 URL 则先转存 OSS。
+func (s *SceneAnchorService) AutoSetRefImage(ctx context.Context, tenantID uint, id uint, imageURL string) error {
 	anchor, err := s.repo.GetByID(id)
 	if err != nil {
 		logger.Errorf("[SceneAnchorService] AutoSetRefImage: getByID id=%d: %v", id, err)
@@ -187,6 +190,7 @@ func (s *SceneAnchorService) AutoSetRefImage(id uint, imageURL string) error {
 	if anchor.RefImageURL != "" {
 		return nil // already locked
 	}
+	imageURL = s.persistIfEphemeral(ctx, tenantID, imageURL)
 	now := time.Now()
 	if err := s.repo.UpdateFields(id, map[string]interface{}{
 		"ref_image_url":       imageURL,
@@ -196,6 +200,25 @@ func (s *SceneAnchorService) AutoSetRefImage(id uint, imageURL string) error {
 		return err
 	}
 	return nil
+}
+
+// persistIfEphemeral 检测临时签名 URL（Volcengine TOS 等），若匹配则通过 AIService 转存到 OSS 并返回永久 URL。
+// 非临时 URL（OSS、本地路径等）直接原样返回，避免重复下载/上传开销。
+func (s *SceneAnchorService) persistIfEphemeral(ctx context.Context, tenantID uint, imageURL string) string {
+	if s.aiSvc == nil || imageURL == "" {
+		return imageURL
+	}
+	// Volcengine TOS 签名 URL 特征：包含 X-Tos-Algorithm 或 X-Tos-Expires 查询参数
+	if strings.Contains(imageURL, "X-Tos-Algorithm") || strings.Contains(imageURL, "X-Tos-Expires") {
+		persisted := s.aiSvc.PersistExternalImage(ctx, tenantID, imageURL)
+		if persisted != imageURL {
+			logger.Printf("[SceneAnchorService] persistIfEphemeral: TOS URL → OSS %s", persisted)
+		} else {
+			logger.Warnf("[SceneAnchorService] persistIfEphemeral: TOS URL persist failed, stored original (may expire): %s", imageURL)
+		}
+		return persisted
+	}
+	return imageURL
 }
 
 // BuildPromptFragment 返回拼接好的 prompt 片段、参考图URL 和锚点名称。
@@ -620,7 +643,7 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 		return nil, fmt.Errorf("generate ref image: %w", err)
 	}
 
-	if err := s.SetRefImage(id, imageURL, nil); err != nil {
+	if err := s.SetRefImage(ctx, tenantID, id, imageURL, nil); err != nil {
 		logger.Errorf("[SceneAnchorService] GenerateRefImage: save ref image anchorID=%d url=%s: %v", id, imageURL, err)
 		return nil, fmt.Errorf("save ref image: %w", err)
 	}
@@ -662,7 +685,7 @@ func (s *SceneAnchorService) EditRefImageWithInstruction(ctx context.Context, te
 		return nil, fmt.Errorf("edit ref image: %w", err)
 	}
 
-	if err := s.SetRefImage(id, imageURL, nil); err != nil {
+	if err := s.SetRefImage(ctx, tenantID, id, imageURL, nil); err != nil {
 		logger.Errorf("[SceneAnchorService] EditRefImageWithInstruction: save edited ref image anchorID=%d: %v", id, err)
 		return nil, fmt.Errorf("save edited ref image: %w", err)
 	}

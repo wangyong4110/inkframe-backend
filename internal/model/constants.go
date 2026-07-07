@@ -22,14 +22,6 @@ const (
 	RoleMember = "member"
 	RoleViewer = "viewer"
 
-	// AI task types (TaskModelConfig.TaskType)
-	TaskTypeChapterGen  = "chapter_generation"
-	TaskTypeOutlineGen  = "outline_generation"
-	TaskTypeStoryboard  = "storyboard"
-	TaskTypeCharProfile = "character_profile"
-	TaskTypeQuality     = "quality_check"
-	TaskTypeSummary     = "summary"
-
 	// Default AI parameters
 	DefaultTemperature = 0.7
 	DefaultJSONTemp    = 0.1
