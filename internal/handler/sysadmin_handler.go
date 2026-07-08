@@ -5,12 +5,14 @@ import (
 	"strconv"
 
 	"github.com/gin-gonic/gin"
+	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
 
 // SysAdminHandler exposes system-admin REST endpoints.
 type SysAdminHandler struct {
 	svc      *service.SysAdminService
+	mcpSvc   *service.McpService
 	auditSvc *service.AuditService
 }
 
@@ -21,6 +23,11 @@ func NewSysAdminHandler(svc *service.SysAdminService) *SysAdminHandler {
 
 func (h *SysAdminHandler) WithAuditService(svc *service.AuditService) *SysAdminHandler {
 	h.auditSvc = svc
+	return h
+}
+
+func (h *SysAdminHandler) WithMcpService(svc *service.McpService) *SysAdminHandler {
+	h.mcpSvc = svc
 	return h
 }
 
@@ -409,3 +416,200 @@ func (h *SysAdminHandler) ChangePassword(c *gin.Context) {
 	}
 	respondOK(c, gin.H{"message": "password changed"})
 }
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Sysadmin MCP Tool Management
+// ──────────────────────────────────────────────────────────────────────────────
+
+func (h *SysAdminHandler) mcpGuard(c *gin.Context) bool {
+	if h.mcpSvc == nil {
+		respondErr(c, http.StatusServiceUnavailable, "MCP service not available")
+		return false
+	}
+	return true
+}
+
+// AdminListMcpTools GET /sysadmin/mcp/tools
+func (h *SysAdminHandler) AdminListMcpTools(c *gin.Context) {
+	if !h.mcpGuard(c) {
+		return
+	}
+	tools, err := h.mcpSvc.AdminListTools()
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, tools)
+}
+
+// AdminGetMcpTool GET /sysadmin/mcp/tools/:id
+func (h *SysAdminHandler) AdminGetMcpTool(c *gin.Context) {
+	if !h.mcpGuard(c) {
+		return
+	}
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	tool, err := h.mcpSvc.AdminGetTool(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusNotFound, err.Error())
+		return
+	}
+	respondOK(c, tool)
+}
+
+// AdminCreateMcpTool POST /sysadmin/mcp/tools
+func (h *SysAdminHandler) AdminCreateMcpTool(c *gin.Context) {
+	if !h.mcpGuard(c) {
+		return
+	}
+	var req model.AdminCreateMcpToolRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	tool, err := h.mcpSvc.AdminCreateTool(&req)
+	if err != nil {
+		respondErr(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			UserID: getUserID(c), Action: "sysadmin.mcp_tool_create",
+			ResourceType: "mcp_tool", ResourceID: tool.ID, IP: c.ClientIP(),
+		})
+	}
+	c.JSON(http.StatusCreated, gin.H{"code": 0, "data": tool})
+}
+
+// AdminUpdateMcpTool PUT /sysadmin/mcp/tools/:id
+func (h *SysAdminHandler) AdminUpdateMcpTool(c *gin.Context) {
+	if !h.mcpGuard(c) {
+		return
+	}
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	var req model.AdminUpdateMcpToolRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	tool, err := h.mcpSvc.AdminUpdateTool(uint(id), &req)
+	if err != nil {
+		respondErr(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			UserID: getUserID(c), Action: "sysadmin.mcp_tool_update",
+			ResourceType: "mcp_tool", ResourceID: uint(id), IP: c.ClientIP(),
+		})
+	}
+	respondOK(c, tool)
+}
+
+// AdminDeleteMcpTool DELETE /sysadmin/mcp/tools/:id
+func (h *SysAdminHandler) AdminDeleteMcpTool(c *gin.Context) {
+	if !h.mcpGuard(c) {
+		return
+	}
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if err := h.mcpSvc.AdminDeleteTool(uint(id)); err != nil {
+		respondErr(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			UserID: getUserID(c), Action: "sysadmin.mcp_tool_delete",
+			ResourceType: "mcp_tool", ResourceID: uint(id), IP: c.ClientIP(),
+		})
+	}
+	respondOK(c, gin.H{"message": "deleted"})
+}
+
+// AdminTestMcpTool POST /sysadmin/mcp/tools/:id/test
+func (h *SysAdminHandler) AdminTestMcpTool(c *gin.Context) {
+	if !h.mcpGuard(c) {
+		return
+	}
+	id, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	result, err := h.mcpSvc.TestTool(uint(id))
+	if err != nil {
+		respondErr(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondOK(c, result)
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Sysadmin MCP Feature Binding
+// ──────────────────────────────────────────────────────────────────────────────
+
+// AdminListFeatureBindings GET /sysadmin/mcp/features
+func (h *SysAdminHandler) AdminListFeatureBindings(c *gin.Context) {
+	if !h.mcpGuard(c) {
+		return
+	}
+	list, err := h.mcpSvc.ListFeatureBindings()
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	respondOK(c, list)
+}
+
+// AdminUpsertFeatureBinding PUT /sysadmin/mcp/features/:key
+func (h *SysAdminHandler) AdminUpsertFeatureBinding(c *gin.Context) {
+	if !h.mcpGuard(c) {
+		return
+	}
+	featureKey := c.Param("key")
+	var req model.UpdateFeatureBindingRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	dto, err := h.mcpSvc.UpsertFeatureBinding(featureKey, &req)
+	if err != nil {
+		respondErr(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	if h.auditSvc != nil {
+		h.auditSvc.LogEntry(service.AuditEntry{
+			UserID: getUserID(c), Action: "sysadmin.mcp_feature_bind",
+			ResourceType: "mcp_feature", IP: c.ClientIP(),
+		})
+	}
+	respondOK(c, dto)
+}
+
+// AdminDeleteFeatureBinding DELETE /sysadmin/mcp/features/:key
+func (h *SysAdminHandler) AdminDeleteFeatureBinding(c *gin.Context) {
+	if !h.mcpGuard(c) {
+		return
+	}
+	featureKey := c.Param("key")
+	// 删除绑定 = 恢复内置默认（直接删除记录）
+	req := &model.UpdateFeatureBindingRequest{McpToolID: nil, Enabled: true}
+	dto, err := h.mcpSvc.UpsertFeatureBinding(featureKey, req)
+	if err != nil {
+		respondErr(c, http.StatusBadRequest, err.Error())
+		return
+	}
+	respondOK(c, dto)
+}
+
+// AdminListSystemFeatures GET /sysadmin/mcp/system-features
+func (h *SysAdminHandler) AdminListSystemFeatures(c *gin.Context) {
+	respondOK(c, service.SystemFeatures)
+}
+

@@ -137,6 +137,12 @@
     Illustration/anime:  "masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
 {% endif %}
 
+  SUPPLEMENTARY QUALITY TECHNIQUES (apply as applicable):
+  — Character shots: after the style boosters, append "anatomically correct hands, natural facial features, detailed skin texture, no deformation" to constrain common AI failure modes.
+  — API RAW file trick (realistic / photographic styles only): append "IMG_2094.CR2" at the very end of the prompt. CR2 is Canon's RAW format — training data associates this filename pattern with high-quality optical photography, biasing generation toward sharper, more photorealistic output. Do NOT add this for anime, illustration, ink-wash, or pixel art styles.
+  — In-image text: if this shot needs readable text in frame (signs, banners, posters, book covers), wrap the exact text in English double quotes: "example text" — this significantly improves spelling accuracy and placement.
+  — Intended use (optional): briefly stating the output purpose helps Seedream auto-optimize ratio and style, e.g. "for product hero shot", "for book cover design", "for editorial magazine spread", "for mobile wallpaper".
+
   PRE-SUBMIT CHECKLIST (verify each before writing the field):
     □ Characters described by exact name (not "figure"); position, posture, expression included if present; omitted if no characters in shot
     □ Word count ≥ 100 words
@@ -148,6 +154,8 @@
     □ Atmospheric particles described (or explicitly stated as absent)
     □ Focal length stated and matches shot_size
     □ Quality boosters at the very end
+    □ No contradictory instructions (e.g., "bright sunlight" + "starry night", "photorealistic" + "anime style")
+    □ In-image text (if any) wrapped in double quotes within the prompt
 
 {% else %}
 ▸ image_prompt（图片生成专用提示词——描述环境场景和角色）
@@ -286,6 +294,13 @@
     动漫/插画风："masterpiece, best quality, ultra-detailed, vibrant colors, clean linework, professional illustration"
 {% endif %}
 
+  补充质量技巧（按需应用）：
+  — 有角色出场时：在风格画质词之后追加"解剖学准确的手部，五官自然，皮肤质感细腻，无形变"，防止常见 AI 生图缺陷
+  — API 专属 RAW 文件技巧（仅写实/摄影风格）：在提示词最末尾加入"IMG_2094.CR2"。CR2 是佳能相机的 RAW 格式文件名，训练数据中与"高画质/真实光学特征"强关联，可显著提升细节质感和真实感。动漫/插画/水墨/像素风格不要使用
+  — 画面内需要文字时：将文字内容放在英文双引号中（如 "AI Future" / "到此一游"），可显著提升文字准确率和拼写正确性
+  — 明确用途（可选）：写明图片用途有助于 Seedream 自动优化比例和风格，如"用于电商主图""用于杂志封面""用于PPT背景""用于手机壁纸"
+  — 中英混排建议：内容用中文自然语言叙述，专业光影/材质/构图词用英文（rim light / bokeh / cinematic color grading / subsurface scattering / Rembrandt lighting），两种语言叠加权重最高
+
   输出前自检清单（每条验证后再写字段）：
     □ 若有角色出场：已使用精确角色名称（非"人影"）描述位置、姿态、表情；若无角色则省略角色区块
     □ 字数不少于100字
@@ -297,5 +312,7 @@
     □ 大气粒子已描述（或明确标注为无）
     □ 焦距已标注且与景别对应
     □ 画质词在最末尾
+    □ 提示词内无互相矛盾的指令（如"白天阳光"+"夜晚星空"，"写实摄影"+"动漫卡通"）
+    □ 若画面需要渲染文字，已将文字内容放在英文双引号中
 
 {% endif %}

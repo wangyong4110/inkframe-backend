@@ -242,6 +242,24 @@ func (ModelMcpBinding) TableName() string {
 	return "ink_model_mcp_binding"
 }
 
+// McpFeatureBinding 系统功能 <-> MCP 工具绑定：管理员可为每个内置功能指定具体的工具实现。
+// feature_key 对应章节生成/图片生成等功能中的工具调用名称（如 web_search、wiki_search）。
+// McpToolID = nil 表示使用系统内置默认实现；非 nil 则路由到指定工具。
+type McpFeatureBinding struct {
+	ID          uint   `json:"id" gorm:"primaryKey"`
+	FeatureKey  string `json:"feature_key" gorm:"size:100;uniqueIndex;not null"` // web_search / wiki_search / ...
+	McpToolID   *uint  `json:"mcp_tool_id,omitempty" gorm:"index"`               // nil = 内置默认
+	Enabled     bool   `json:"enabled" gorm:"default:true"`
+	Note        string `json:"note" gorm:"size:500"` // 管理员备注
+
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (McpFeatureBinding) TableName() string {
+	return "ink_mcp_feature_binding"
+}
+
 // ─── AI Model / Provider / MCP DTOs ───────────────────────────────────────────
 
 type CreateModelProviderRequest struct {
@@ -318,4 +336,38 @@ type UpdateMcpToolRequest struct {
 	Env           map[string]string `json:"env"`
 	Timeout       int               `json:"timeout"`
 	IsActive      *bool             `json:"is_active"`
+}
+
+// AdminCreateMcpToolRequest 管理员创建 MCP 工具（可设置 is_system）
+type AdminCreateMcpToolRequest struct {
+	Name          string            `json:"name" binding:"required"`
+	DisplayName   string            `json:"display_name"`
+	Description   string            `json:"description"`
+	TransportType string            `json:"transport_type" binding:"required"`
+	Endpoint      string            `json:"endpoint" binding:"required"`
+	Headers       map[string]string `json:"headers"`
+	Env           map[string]string `json:"env"`
+	Timeout       int               `json:"timeout"`
+	IsActive      bool              `json:"is_active"`
+	IsSystem      bool              `json:"is_system"`
+}
+
+// AdminUpdateMcpToolRequest 管理员更新 MCP 工具（可修改系统工具）
+type AdminUpdateMcpToolRequest struct {
+	DisplayName   string            `json:"display_name"`
+	Description   string            `json:"description"`
+	TransportType string            `json:"transport_type"`
+	Endpoint      string            `json:"endpoint"`
+	Headers       map[string]string `json:"headers"`
+	Env           map[string]string `json:"env"`
+	Timeout       int               `json:"timeout"`
+	IsActive      *bool             `json:"is_active"`
+	IsSystem      *bool             `json:"is_system"`
+}
+
+// UpdateFeatureBindingRequest 更新功能绑定
+type UpdateFeatureBindingRequest struct {
+	McpToolID *uint  `json:"mcp_tool_id"` // nil = 恢复内置默认
+	Enabled   bool   `json:"enabled"`
+	Note      string `json:"note"`
 }

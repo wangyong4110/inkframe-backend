@@ -1075,6 +1075,18 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			sa.GET("/users/registration-trend", cfg.SysAdminHandler.GetUserRegistrationTrend)
 			sa.GET("/content/overview", cfg.SysAdminHandler.GetContentOverview)
 			sa.GET("/ai-usage/stats", cfg.SysAdminHandler.GetModelUsageStats)
+			// ── MCP 工具管理（管理员可操作系统工具）──────────────────────
+			sa.GET("/mcp/tools", cfg.SysAdminHandler.AdminListMcpTools)
+			sa.POST("/mcp/tools", cfg.SysAdminHandler.AdminCreateMcpTool)
+			sa.GET("/mcp/tools/:id", cfg.SysAdminHandler.AdminGetMcpTool)
+			sa.PUT("/mcp/tools/:id", cfg.SysAdminHandler.AdminUpdateMcpTool)
+			sa.DELETE("/mcp/tools/:id", cfg.SysAdminHandler.AdminDeleteMcpTool)
+			sa.POST("/mcp/tools/:id/test", cfg.SysAdminHandler.AdminTestMcpTool)
+			// ── 功能绑定管理 ──────────────────────────────────────────────
+			sa.GET("/mcp/system-features", cfg.SysAdminHandler.AdminListSystemFeatures)
+			sa.GET("/mcp/features", cfg.SysAdminHandler.AdminListFeatureBindings)
+			sa.PUT("/mcp/features/:key", cfg.SysAdminHandler.AdminUpsertFeatureBinding)
+			sa.DELETE("/mcp/features/:key", cfg.SysAdminHandler.AdminDeleteFeatureBinding)
 			if cfg.FeedbackHandler != nil {
 				sa.GET("/feedback/stats", cfg.FeedbackHandler.AdminStats)
 				sa.GET("/feedback", cfg.FeedbackHandler.AdminList)

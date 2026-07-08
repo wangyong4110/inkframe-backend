@@ -50,7 +50,7 @@
   重点检查——旁白与画面对位性：
   ❌ 画面是"破败庭院" → 旁白是"废墟沉默如故"（同义重复）
   ✅ 画面是"破败庭院" → 旁白是"三年前他也是这样进来的，那次身边还有人"（补充时间/情感维度）
-  检查项：是否以角色名冒号开头（如"凌云："）/ 旁白与台词是否同镜出现 / 是否与画面同义重复
+  检查项：是否以角色名冒号开头（如"凌云："）/ 是否与画面同义重复
 
 ⑤ dialogue_score（台词质量，权重 10%）
   锚定标准：
@@ -220,15 +220,15 @@
 - suggested_narration / suggested_dialogue / suggested_description 至少其中一项非空，否则该镜头不应出现在 shot_feedback 中
 - suggested_transition_out / suggested_transition_in：当 issues 中涉及镜头衔接问题时，提供修改后的完整 transition_out 或 transition_in 描述文本；无需修改时填空字符串 ""。两者若只需改其中一个，另一个填 ""
 
-- 【台词与旁白严格分离规则——违反将导致建议无法应用】
+- 【旁白与台词字段规范——违反将导致建议无法应用】
   ① suggested_narration：纯第三人称叙事，不超过45字，严禁任何台词格式（"角色名：内容"），严禁镜头操作词；必须与画面形成对位关系，不得重复画面内容
-  ② suggested_dialogue：单个角色的一句台词，格式固定为"角色名：台词"，不超过35字，旁白镜头时留空""；台词必须有戏剧功能和潜台词，禁止泛用台词
-  ③ 当原镜头的旁白字段（narration）包含角色台词时，处理规则如下：
+  ② suggested_dialogue：单个角色的一句台词，格式固定为"角色名：台词"，不超过35字；台词必须有戏剧功能和潜台词，禁止泛用台词；无台词时填 ""
+  ③ 当原镜头的旁白字段（narration）包含角色台词格式（"角色名："）时，处理规则如下：
      - 若只有一个角色说话 → suggested_narration="" 清空旁白，suggested_dialogue="角色名：台词内容"
      - 若有多个角色说话 → suggested_narration="" 清空旁白，在 suggested_inserts 中为每个角色分别插入一个对白镜头
-  ④ suggested_inserts 中的对白镜头：narration 留空""，dialogue 填写"角色名：台词"（单角色单镜头）
-  ✅ 旁白示例：suggested_narration="狼与小红帽在林间相遇，笑容下暗藏算计。" suggested_dialogue=""
-  ✅ 单角色对白：suggested_narration="" suggested_dialogue="狼：你要去哪里，小红帽？"
+  ④ suggested_inserts 中的每个镜头只允许一个角色的台词（单角色单镜头）
+  ✅ 旁白+台词同镜：suggested_narration="夜深人静，他终于开了口。" suggested_dialogue="凌云：我一直知道是你。"
+  ✅ 纯旁白：suggested_narration="狼与小红帽在林间相遇，笑容下暗藏算计。" suggested_dialogue=""
   ✅ 多角色拆分：suggested_narration="" + suggested_inserts=[{dialogue:"狼：你好，小红帽。",...},{dialogue:"小红帽：谢谢你，狼先生。",...}]
   ❌ 禁止：suggested_narration="狼：你好，小红帽。小红帽：谢谢你。"（台词塞进旁白字段）
 - suggested_inserts：仅在有充分原文依据时才输出；reason 字段必须直接引用原文原句（用「」引号标出原文，禁止转述）；新增镜头总数常规上限为现有镜头数的 30%（{{ ShotCount }} 镜 × 30% ≈ {{ ShotCount30Pct }} 个），但对话拆分专项（每句台词独立成镜）不受此限制，可按实际原文对白数量补全；无需插入时输出空数组 []

@@ -3,6 +3,12 @@
   - Describe camera motion, environmental/scene dynamics, character movement actions, AND a SOUND section at the end.
   - NO visual appearance descriptions (no face, hair color, eye color, clothing, body features — these are handled by reference images). ONLY describe what characters DO and HOW they move.
   - MINIMUM LENGTH: At least 100 English words.
+  - SINGLE CAMERA MOTION: Each video_prompt describes exactly ONE camera movement type. Never combine motions in the text (e.g., "pushing forward while simultaneously panning right" is invalid — mixed camera movements produce unstable, uncontrollable output).
+  - SLOW ACTION PREFERENCE: Frame interpolation quality degrades with motion amplitude. High-speed or large-amplitude actions cause character deformation.
+    ✅ Safe descriptors: "slowly", "gently", "slightly", "imperceptibly", "gradually", "eases into", "deliberate"
+    ❌ Risky descriptors: "rapidly", "suddenly", "large sweeping arc", "violently", "sprinting", "fast spinning"
+    Heuristic: if a phone slow-motion camera captures it cleanly → the model handles it well. If a high-speed sports camera would be needed → high deformation risk.
+  - NO RESOLUTION IN PROMPT: Do not write "4K", "1080p", "9:16", "16:9" or any resolution/ratio specs in video_prompt — these are API parameters, not prompt content.
   - Core principle: describe EVERY element's motion individually and specifically. Keyword lists forbidden.
     Generic phrases like "fluid motion" or "dynamic atmosphere" add nothing — describe actual physics.
   - Required motion layers (all applicable layers must be present):
@@ -50,6 +56,8 @@
        — ✅ "opens on static stillness — only the light dimming and shadow deepening signal time's passage,
            each falling dust mote amplifying the weight of the emptied space"
        — ❌ "tense atmosphere" → vague, AI invents arbitrary motion
+    G2. Quality lock (required — insert between temporal arc and SOUND): append this exact clause to constrain common AI video failure modes:
+       "facial features stable and clear, natural limb proportions, frame stable with no unwanted shake, no deformation"
     H. SOUND (required — append after all motion layers, start with "SOUND:"):
        Describe in natural language what the audience should hear during this shot. Derive from the sfx_tags you will fill in for this shot, expressed as a fluid audio description (not a list). Include:
        — Ambient layer: continuous environmental sound (forest, wind, room, crowd…)
@@ -88,6 +96,12 @@
   - 正确：「缓步走向石门，转身回望」「跪倒在地，双手撑地」「举剑指向对方」
   - 错误：「长发少年」「白衣女子」「英俊的面容」（这些是外貌，不是动作）
   - 最低字数：不少于100字
+  - 单一运镜规则：每段 video_prompt 只能描述一种运镜方式，严禁组合运镜（如"一边推镜一边向右摇镜"），组合运镜会导致画面不稳定、结果失控
+  - 慢动作优先：动作幅度直接影响帧间插值质量，幅度越大插值误差越大，肢体变形概率越高
+    ✅ 安全词库：缓慢、轻柔、微微、顺势、连贯、缓缓、沉稳
+    ❌ 危险词库：飞速、猛地、大幅、剧烈翻滚、快速冲刺
+    判断标准：手机慢镜头能拍清楚的动作 → 模型可以做好；需要高帧率运动相机的动作 → 高概率肢体变形
+  - 禁止写分辨率规格：不得在 video_prompt 中写"4K""1080p""9:16""16:9"等规格词——这些通过 API 参数传入，写入提示词会浪费有效空间
   - 核心原则：对每一个画面元素的动态单独描述，禁止只写关键词列表
     "流畅运动""动感氛围"等空泛词语无效——必须描述真实的物理运动过程
   - 必须包含以下运动层次（适用的层次均需展开描述）：
@@ -135,6 +149,8 @@
        — ✅ "镜头以静止的肃穆开场——只有光线渐暗和阴影加深标志时间流逝，每一颗下落的尘埃粒子
            都在强化这片空间被抽空后的沉重"
        — ❌ "紧张的氛围" → 空泛，AI会随机发明动作
+    G2. 质量锁定词（必填——在情绪弧线之后、SOUND 之前追加）：固定追加以下约束词，防止常见 AI 视频缺陷：
+       "五官清晰稳定，肢体比例自然，画面稳定无抖动，无形变"
     H. SOUND（必填——在所有运动层次之后追加，以"SOUND："开头）：
        用流畅自然语言描述观众在此镜头中应听到的声音，与该镜头的 sfx_tags 保持一致，不要写成标签列表。包含：
        — 环境底层音：持续的环境声（森林、风声、室内、人群……）

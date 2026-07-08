@@ -21,7 +21,7 @@ const (
 	recentFullCount  = 3           // 最近N章注入详细摘要
 	recentShortCount = 7           // 再往前N章注入简短摘要（30字）
 
-	shortSummaryMaxRunes        = 300 // 简短摘要截断字符数
+	shortSummaryMaxRunes        = 800 // 简短摘要截断字符数（提升上下文保真度）
 	repeatWordThreshold         = 5  // 重复词出现 N 次触发精修建议
 	consecutivePronounThreshold = 4  // 连续以他/她开头的段落数阈值
 	clichePhraseThreshold       = 2  // 长套话短语出现 N 次即触发精修（阈值低于单字）
@@ -90,6 +90,7 @@ type characterLister interface {
 
 type snapshotLatestGetter interface {
 	GetLatestForCharacter(characterID uint) (*model.CharacterStateSnapshot, error)
+	GetEarliestForCharacter(characterID uint) (*model.CharacterStateSnapshot, error)
 }
 
 type outlineVersionCreator interface {
@@ -195,10 +196,11 @@ type ArcBrief struct {
 }
 
 type CharacterBrief struct {
-	Name         string
-	Role         string
-	Description  string
-	CurrentState string // 最新快照状态，为空表示无快照
+	Name             string
+	Role             string
+	Description      string
+	CurrentState     string // 最新快照状态，为空表示无快照
+	GrowthTrajectory string // 成长轨迹：从初始状态到当前状态的变化描述
 }
 
 // ──────────────────────────────────────────────
@@ -228,7 +230,7 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 		PlotTensionState: s.BuildPlotTensionStateText(novel.ID, currentChapterNo),
 	}
 
-	// 加载角色信息（含最新快照状态，供上下文渲染使用）
+	// 加载角色信息（含最新快照状态和成长轨迹，供上下文渲染使用）
 	if chars, err := s.characterRepo.ListByNovel(novel.ID); err == nil {
 		for _, c := range chars {
 			brief := CharacterBrief{
@@ -237,8 +239,15 @@ func (s *NarrativeMemoryService) gatherContext(novel *model.Novel, currentChapte
 				Description: c.Description,
 			}
 			if s.snapshotRepo != nil {
-				if snap, snapErr := s.snapshotRepo.GetLatestForCharacter(c.ID); snapErr == nil && snap != nil {
-					brief.CurrentState = formatCharacterState(snap)
+				if latest, snapErr := s.snapshotRepo.GetLatestForCharacter(c.ID); snapErr == nil && latest != nil {
+					brief.CurrentState = formatCharacterState(latest)
+					// 构建成长轨迹：仅当有足够早的快照时（避免与当前状态重复）
+					if earliest, earlyErr := s.snapshotRepo.GetEarliestForCharacter(c.ID); earlyErr == nil && earliest != nil && earliest.ID != latest.ID {
+						earlyState := formatCharacterState(earliest)
+						if earlyState != brief.CurrentState {
+							brief.GrowthTrajectory = fmt.Sprintf("初始状态：%s → 当前状态：%s", earlyState, brief.CurrentState)
+						}
+					}
 				}
 			}
 			ctx.Characters = append(ctx.Characters, brief)
@@ -462,12 +471,9 @@ func (s *NarrativeMemoryService) buildGlobalSummary(novel *model.Novel) string {
 	var sb strings.Builder
 	sb.WriteString("【故事概要】\n" + novel.Meta.Description)
 	if novel.Worldview != nil {
-		sb.WriteString("\n\n【世界观】\n")
+		sb.WriteString("\n\n【世界观背景】\n")
 		if novel.Worldview.Description != "" {
 			sb.WriteString("概述：" + novel.Worldview.Description + "\n")
-		}
-		if novel.Worldview.MagicSystem != "" {
-			sb.WriteString("修炼体系：" + novel.Worldview.MagicSystem + "\n")
 		}
 		if novel.Worldview.Geography != "" {
 			sb.WriteString("关键地点：" + novel.Worldview.Geography + "\n")
@@ -475,9 +481,11 @@ func (s *NarrativeMemoryService) buildGlobalSummary(novel *model.Novel) string {
 		if novel.Worldview.History != "" {
 			sb.WriteString("背景矛盾：" + novel.Worldview.History + "\n")
 		}
-		if novel.Worldview.Rules != "" {
-			sb.WriteString("【⚠️世界规则（必须严格遵守）】\n" + novel.Worldview.Rules + "\n")
+		if novel.Worldview.Culture != "" {
+			sb.WriteString("文化习俗：" + novel.Worldview.Culture + "\n")
 		}
+		// 注意：Rules/MagicSystem/Factions/Glossary 等约束性字段通过
+		// WorldRules 模板变量注入，此处不重复以避免信息冗余。
 	}
 	return sb.String()
 }
@@ -622,7 +630,7 @@ func renderHierarchicalContext(ctx *HierarchicalContext) string {
 
 	if len(ctx.RecentDetailed) > 0 {
 		sb.WriteString("\n【近三章详情（直接前情）】\n")
-		for _, ch := range ctx.RecentDetailed {
+		for i, ch := range ctx.RecentDetailed {
 			sum := ch.Summary
 			if sum == "" {
 				// 摘要尚未生成时，使用章末内容作为临时上下文
@@ -631,6 +639,9 @@ func renderHierarchicalContext(ctx *HierarchicalContext) string {
 				} else {
 					sum = "（摘要待生成）"
 				}
+			} else if i == len(ctx.RecentDetailed)-1 && ch.ContentTail != "" {
+				// 最新章：摘要后附章末原文片段，确保 AI 知道故事的精确接续点
+				sum = sum + "\n  ↳【接续锚点-章末原文】…" + ch.ContentTail
 			}
 			sb.WriteString(fmt.Sprintf("第%d章「%s」：%s\n", ch.ChapterNo, ch.Title, sum))
 		}

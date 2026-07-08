@@ -748,6 +748,21 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 	if outlineOverrides.TimeoutSeconds == 0 {
 		outlineOverrides.TimeoutSeconds = novel.AIConfig.TimeoutSeconds
 	}
+	// 大纲输出量由章节数决定，不受全局 MaxTokens 限制
+	// 每章约 600 token（summary≥150字 + plot_points + 其他字段），加 1500 固定开销
+	{
+		chapterCount := req.ChapterNum
+		if chapterCount <= 0 {
+			chapterCount = 100
+		}
+		requiredTokens := chapterCount*600 + 1500
+		if requiredTokens < 16384 {
+			requiredTokens = 16384
+		}
+		if outlineOverrides.MaxTokens < requiredTokens {
+			outlineOverrides.MaxTokens = requiredTokens
+		}
+	}
 
 	// 调用AI生成（使用租户提供商）
 	result, err := s.aiService.GenerateWithProvider(tenantID, req.NovelID, "outline", prompt, "", outlineOverrides)

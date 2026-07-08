@@ -280,6 +280,267 @@ func (s *McpService) GetByName(name string) (*model.McpTool, error) {
 	return &tool, nil
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Admin-level MCP management（可操作系统内置工具）
+// ──────────────────────────────────────────────────────────────────────────────
+
+// AdminListTools 管理员列出所有工具（包括系统工具和所有租户工具）
+func (s *McpService) AdminListTools() ([]*model.McpTool, error) {
+	var tools []*model.McpTool
+	if err := s.db.Order("is_system desc, id asc").Find(&tools).Error; err != nil {
+		return nil, err
+	}
+	return tools, nil
+}
+
+// AdminGetTool 管理员获取单个工具（含完整凭据）
+func (s *McpService) AdminGetTool(id uint) (*model.McpTool, error) {
+	var tool model.McpTool
+	if err := s.db.First(&tool, id).Error; err != nil {
+		return nil, err
+	}
+	return &tool, nil
+}
+
+// AdminCreateTool 管理员创建工具（可创建系统工具）
+func (s *McpService) AdminCreateTool(req *model.AdminCreateMcpToolRequest) (*model.McpTool, error) {
+	if req.TransportType == "stdio" {
+		if err := validateStdioCommand(req.Endpoint); err != nil {
+			return nil, fmt.Errorf("stdio command validation failed: %w", err)
+		}
+	} else {
+		if err := validateMcpEndpoint(req.Endpoint); err != nil {
+			return nil, fmt.Errorf("endpoint validation failed: %w", err)
+		}
+	}
+	headersJSON, _ := marshalJSON(req.Headers)
+	envJSON, _ := marshalJSON(req.Env)
+	timeout := req.Timeout
+	if timeout <= 0 {
+		timeout = 30
+	}
+	displayName := req.DisplayName
+	if displayName == "" {
+		displayName = req.Name
+	}
+	tool := &model.McpTool{
+		Name:          req.Name,
+		DisplayName:   displayName,
+		Description:   req.Description,
+		TransportType: req.TransportType,
+		Endpoint:      req.Endpoint,
+		Headers:       headersJSON,
+		Env:           envJSON,
+		Timeout:       timeout,
+		IsActive:      req.IsActive,
+		IsSystem:      req.IsSystem,
+	}
+	if err := s.db.Create(tool).Error; err != nil {
+		return nil, err
+	}
+	return tool, nil
+}
+
+// AdminUpdateTool 管理员更新工具（可修改系统工具；endpoint 变更仍走 SSRF 校验）
+func (s *McpService) AdminUpdateTool(id uint, req *model.AdminUpdateMcpToolRequest) (*model.McpTool, error) {
+	var tool model.McpTool
+	if err := s.db.First(&tool, id).Error; err != nil {
+		return nil, err
+	}
+	if req.Endpoint != "" && req.Endpoint != tool.Endpoint {
+		if tool.TransportType == "stdio" || req.TransportType == "stdio" {
+			if err := validateStdioCommand(req.Endpoint); err != nil {
+				return nil, fmt.Errorf("stdio command validation failed: %w", err)
+			}
+		} else {
+			if err := validateMcpEndpoint(req.Endpoint); err != nil {
+				return nil, fmt.Errorf("endpoint validation failed: %w", err)
+			}
+		}
+	}
+	if req.DisplayName != "" {
+		tool.DisplayName = req.DisplayName
+	}
+	if req.Description != "" {
+		tool.Description = req.Description
+	}
+	if req.TransportType != "" {
+		tool.TransportType = req.TransportType
+	}
+	if req.Endpoint != "" {
+		tool.Endpoint = req.Endpoint
+	}
+	if req.Headers != nil {
+		if h, err := marshalJSON(req.Headers); err == nil {
+			tool.Headers = h
+		}
+	}
+	if req.Env != nil {
+		if e, err := marshalJSON(req.Env); err == nil {
+			tool.Env = e
+		}
+	}
+	if req.Timeout > 0 {
+		tool.Timeout = req.Timeout
+	}
+	if req.IsActive != nil {
+		tool.IsActive = *req.IsActive
+	}
+	if req.IsSystem != nil {
+		tool.IsSystem = *req.IsSystem
+	}
+	if err := s.db.Save(&tool).Error; err != nil {
+		return nil, err
+	}
+	return &tool, nil
+}
+
+// AdminDeleteTool 管理员删除工具（包括系统工具）
+func (s *McpService) AdminDeleteTool(id uint) error {
+	var tool model.McpTool
+	if err := s.db.First(&tool, id).Error; err != nil {
+		return err
+	}
+	if err := s.db.Where("mcp_tool_id = ?", id).Delete(&model.ModelMcpBinding{}).Error; err != nil {
+		return fmt.Errorf("failed to remove tool bindings: %w", err)
+	}
+	return s.db.Delete(&tool).Error
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Feature Binding（功能 <-> 工具绑定管理）
+// ──────────────────────────────────────────────────────────────────────────────
+
+// SystemFeature 预定义系统功能描述
+type SystemFeature struct {
+	Key         string `json:"key"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Category    string `json:"category"` // chapter / image / video / other
+}
+
+// SystemFeatures 所有内置功能列表（不存 DB，由代码定义）
+var SystemFeatures = []SystemFeature{
+	{Key: "web_search",       Name: "联网搜索",     Description: "章节生成时搜索相关故事片段注入 prompt", Category: "chapter"},
+	{Key: "wiki_search",      Name: "百科知识",     Description: "查询世界观、地名、历史等背景信息",      Category: "chapter"},
+	{Key: "story_pattern",    Name: "情节模板",     Description: "注入类型化叙事结构参考",               Category: "chapter"},
+	{Key: "knowledge_search", Name: "知识库检索",   Description: "检索本小说已积累的剧情知识",           Category: "chapter"},
+	{Key: "character_lookup", Name: "角色档案",     Description: "角色一致性日志增强",                  Category: "chapter"},
+	{Key: "image_ref_search", Name: "参考图搜索",   Description: "图片生成参考图查询",                  Category: "image"},
+	{Key: "color_palette",    Name: "配色方案",     Description: "图片风格配色参考",                    Category: "image"},
+	{Key: "prompt_enhance",   Name: "Prompt 增强", Description: "图片生成 prompt 优化",               Category: "image"},
+}
+
+// FeatureBindingDTO 功能绑定完整视图（含工具详情）
+type FeatureBindingDTO struct {
+	SystemFeature
+	Binding *model.McpFeatureBinding `json:"binding,omitempty"`
+	Tool    *model.McpTool           `json:"tool,omitempty"` // nil 表示使用内置默认
+}
+
+// ListFeatureBindings 获取所有功能的绑定状态
+func (s *McpService) ListFeatureBindings() ([]FeatureBindingDTO, error) {
+	// 查询所有已配置的绑定
+	var bindings []model.McpFeatureBinding
+	if err := s.db.Find(&bindings).Error; err != nil {
+		return nil, err
+	}
+	bindMap := make(map[string]*model.McpFeatureBinding, len(bindings))
+	for i := range bindings {
+		bindMap[bindings[i].FeatureKey] = &bindings[i]
+	}
+
+	// 预加载工具
+	toolIDs := make([]uint, 0)
+	for _, b := range bindings {
+		if b.McpToolID != nil {
+			toolIDs = append(toolIDs, *b.McpToolID)
+		}
+	}
+	toolMap := make(map[uint]*model.McpTool)
+	if len(toolIDs) > 0 {
+		var tools []model.McpTool
+		if err := s.db.Where("id IN ?", toolIDs).Find(&tools).Error; err == nil {
+			for i := range tools {
+				toolMap[tools[i].ID] = &tools[i]
+			}
+		}
+	}
+
+	result := make([]FeatureBindingDTO, 0, len(SystemFeatures))
+	for _, f := range SystemFeatures {
+		dto := FeatureBindingDTO{SystemFeature: f}
+		if b, ok := bindMap[f.Key]; ok {
+			dto.Binding = b
+			if b.McpToolID != nil {
+				dto.Tool = toolMap[*b.McpToolID]
+			}
+		}
+		result = append(result, dto)
+	}
+	return result, nil
+}
+
+// UpsertFeatureBinding 创建或更新功能绑定
+func (s *McpService) UpsertFeatureBinding(featureKey string, req *model.UpdateFeatureBindingRequest) (*FeatureBindingDTO, error) {
+	// 校验 feature_key 合法
+	var found bool
+	for _, f := range SystemFeatures {
+		if f.Key == featureKey {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("unknown feature key: %s", featureKey)
+	}
+	// 校验 tool 存在
+	if req.McpToolID != nil {
+		var tool model.McpTool
+		if err := s.db.First(&tool, *req.McpToolID).Error; err != nil {
+			return nil, fmt.Errorf("mcp tool %d not found", *req.McpToolID)
+		}
+	}
+
+	var binding model.McpFeatureBinding
+	err := s.db.Where("feature_key = ?", featureKey).First(&binding).Error
+	if err != nil {
+		// 不存在则创建
+		binding = model.McpFeatureBinding{
+			FeatureKey: featureKey,
+			McpToolID:  req.McpToolID,
+			Enabled:    req.Enabled,
+			Note:       req.Note,
+		}
+		if err2 := s.db.Create(&binding).Error; err2 != nil {
+			return nil, err2
+		}
+	} else {
+		binding.McpToolID = req.McpToolID
+		binding.Enabled = req.Enabled
+		binding.Note = req.Note
+		if err2 := s.db.Save(&binding).Error; err2 != nil {
+			return nil, err2
+		}
+	}
+
+	dto := FeatureBindingDTO{}
+	for _, f := range SystemFeatures {
+		if f.Key == featureKey {
+			dto.SystemFeature = f
+			break
+		}
+	}
+	dto.Binding = &binding
+	if req.McpToolID != nil {
+		var tool model.McpTool
+		if s.db.First(&tool, *req.McpToolID).Error == nil {
+			dto.Tool = &tool
+		}
+	}
+	return &dto, nil
+}
+
 // isPrivateIP returns true if the IP is loopback, private, or link-local.
 // Uses net.IP methods rather than string prefix matching to prevent bypass via
 // alternate representations (e.g., decimal encoding, IPv6 mapped addresses).

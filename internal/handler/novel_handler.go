@@ -483,6 +483,7 @@ func (h *NovelHandler) BatchGenerateChapters(c *gin.Context) {
 				WordCount:     req.WordCount,
 				MaxTokens:     req.MaxTokens,
 				ModelOverride: req.ModelOverride,
+				EnabledTools:  req.EnabledTools,
 			}
 			if _, genErr := h.chapterService.GenerateChapter(tenantID, uint(novelId), genReq); genErr != nil {
 				log.Errorf("[BatchGenerate] chapter %d failed: %v", ch.ChapterNo, genErr)

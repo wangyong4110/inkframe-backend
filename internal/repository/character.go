@@ -222,6 +222,16 @@ func (r *CharacterStateSnapshotRepository) GetLatestForCharacter(characterID uin
 	return &s, nil
 }
 
+// GetEarliestForCharacter 获取某角色最早的状态快照（用于构建成长轨迹）
+func (r *CharacterStateSnapshotRepository) GetEarliestForCharacter(characterID uint) (*model.CharacterStateSnapshot, error) {
+	var s model.CharacterStateSnapshot
+	err := r.db.Where("character_id = ?", characterID).Order("created_at ASC").First(&s).Error
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
 // DeleteByCharacter 删除指定角色的所有状态快照（级联清理用）
 func (r *CharacterStateSnapshotRepository) DeleteByCharacter(characterID uint) error {
 	return r.db.Where("character_id = ?", characterID).Delete(&model.CharacterStateSnapshot{}).Error

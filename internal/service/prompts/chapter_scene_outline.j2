@@ -122,7 +122,8 @@
 
 # 本章必须涉及的角色（主角身份和状态不可改变）
 {% for char in Characters %}{% if char.IsProtagonist %}- ⚠️【主角】{{ char.Name }}（{{ char.Role }}）：当前状态「{{ char.CurrentState }}」
-  人物设定：{{ char.Description }}
+  人物设定：{{ char.Description }}{% if char.GrowthTrajectory %}
+  📈 成长轨迹：{{ char.GrowthTrajectory }}{% endif %}
 {% if char.Archetype %}  角色原型：{{ char.Archetype }}{% endif %}
 {% if char.InnerConflict %}  内在矛盾：{{ char.InnerConflict }}{% endif %}
 {% if char.CoreDesire %}  核心渴望：{{ char.CoreDesire }}{% endif %}

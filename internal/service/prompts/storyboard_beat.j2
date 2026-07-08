@@ -1,0 +1,56 @@
+你是专业影视编剧，擅长情节结构分析。请阅读以下章节内容，提取**情节节拍表（Beat Sheet）**——即章节中每一个可视化的叙事单元（动作/对话/场景切换/情绪转折），形成一份供分镜师使用的叙事地图。
+
+【提取规则】
+1. 按原文出现顺序排列，编号从 1 开始
+2. 每一个明确的对话轮次单独成一个 beat（一人说一句）
+3. 每一次地点转换单独成一个 beat
+4. 每一个重大动作节点单独成一个 beat（出招、受伤、逃跑、追击等）
+5. 情绪突变/心理描写段落单独成一个 beat
+6. content_summary：原文对应段落的核心内容（15-30字，尽量引用原文措辞）
+7. beat_type：action / dialogue / scene_change / emotional / internal（内心独白）
+8. location：发生地点（与已命名场景对应，或简短描述，无则留空）
+9. characters：该节拍的主要在场角色名（从给定角色列表中选择，无则留空数组）
+10. suggested_shots：建议拍摄该节拍需要的镜头数（1-3）
+
+【覆盖率要求】
+- 禁止跳过任何明确的原文情节
+- 总节拍数应与章节内容密度匹配（约每 200-300 字提取 3-5 个节拍）
+- 目标范围：{{ MinBeats }}-{{ MaxBeats }} 个节拍
+
+{% if Characters %}
+【角色列表（characters 字段只能使用这些名字）】
+{% for c in Characters %}- {{ c.Name }}（{{ c.Role }}）
+{% endfor %}
+{% endif %}
+{% if Anchors %}
+【已命名场景（location 字段优先使用这些名称）】
+{% for a in Anchors %}- {{ a.Name }}
+{% endfor %}
+{% endif %}
+
+【输出格式】
+直接返回 JSON，不含任何 markdown 代码块或说明文字：
+{
+  "total_beats": 12,
+  "beats": [
+    {
+      "no": 1,
+      "beat_type": "scene_change",
+      "content_summary": "黄昏时分，主角步入破败石庭废墟，四周一片死寂",
+      "location": "石庭废墟",
+      "characters": ["凌云"],
+      "suggested_shots": 2
+    },
+    {
+      "no": 2,
+      "beat_type": "emotional",
+      "content_summary": "凌云看见地上的玉坠，认出三年前白雪所戴，心中一震",
+      "location": "石庭废墟",
+      "characters": ["凌云"],
+      "suggested_shots": 1
+    }
+  ]
+}
+
+【章节内容】
+{{ Content }}

@@ -230,6 +230,38 @@ func genreWritingHints(genre string) string {
 	}
 }
 
+// genreSystemLabel returns a short one-sentence writing identity suffix for the system prompt,
+// anchoring the model's creative voice to the specific genre.
+func genreSystemLabel(genre string) string {
+	g := strings.ToLower(strings.TrimSpace(genre))
+	switch {
+	case contains(g, "修仙", "仙侠", "xianxia"):
+		return "你擅长修仙仙侠小说，文字兼具出尘意境与境界对比的张力感。"
+	case contains(g, "玄幻", "奇幻", "fantasy", "magic"):
+		return "你擅长玄幻奇幻小说，追求史诗格局感与道途理念碰撞的深度。"
+	case contains(g, "武侠", "wuxia"):
+		return "你擅长武侠小说，文风兼具江湖气韵与侠义情怀的骨气。"
+	case contains(g, "历史", "古代", "宫廷", "historical"):
+		return "你擅长历史古代小说，以礼制规范和权谋叙事见长，注重细节与时代质感。"
+	case contains(g, "都市", "现代", "contemporary", "urban", "modern"):
+		return "你擅长都市现代小说，善于捕捉当代人物的真实心理与现实冲突。"
+	case contains(g, "言情", "romance", "爱情"):
+		return "你擅长言情小说，以细腻的情感层次和暗流涌动的人物关系见长。"
+	case contains(g, "科幻", "sci-fi", "science fiction", "未来", "赛博", "cyberpunk"):
+		return "你擅长科幻赛博朋克小说，善于将冷硬技术背景与人类情感的细腻对比相融合。"
+	case contains(g, "末世", "末日", "apocalyptic", "灾难"):
+		return "你擅长末世灾难小说，以极限处境中的人性抉择和生存张力见长。"
+	case contains(g, "悬疑", "推理", "犯罪", "惊悚", "mystery", "thriller"):
+		return "你擅长悬疑推理小说，以信息不对称和节奏精准的悬念构建见长。"
+	case contains(g, "游戏", "电竞", "网游", "game"):
+		return "你擅长游戏/网游小说，善于将策略博弈和游戏沉浸感融入叙事。"
+	case contains(g, "童话", "寓言", "fairy", "fable"):
+		return "你擅长童话寓言，语言简洁有力，善于在奇幻故事中承载真实的情感重量。"
+	default:
+		return ""
+	}
+}
+
 func contains(s string, keywords ...string) bool {
 	for _, k := range keywords {
 		if strings.Contains(s, k) {

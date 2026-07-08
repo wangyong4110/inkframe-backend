@@ -125,10 +125,8 @@ func (s *QualityControlService) runAIQualityCheck(chapter *model.Chapter, novel 
 	}
 
 	novelInfo := fmt.Sprintf("小说：《%s》，类型：%s", novel.Title, novel.Meta.Genre)
-	contentPreview := chapter.Content
-	if len(contentPreview) > 3000 {
-		contentPreview = contentPreview[:3000] + "...(已截断)"
-	}
+	// 用头尾截取保留章节的开头与结局两端，比前3000字截断更能反映真实质量
+	contentPreview, _ := truncateForRefinement(chapter.Content, 8000)
 
 	prompt, err := renderPrompt("quality_check", map[string]interface{}{
 		"NovelInfo":      novelInfo,
@@ -658,8 +656,10 @@ func (s *QualityControlService) RefineWithSuggestions(chapterID uint, suggestion
 
 	// Resolve tenant ID from the chapter's novel.
 	var tenantID uint
+	novelTitle := ""
 	if novel, err := s.novelRepo.GetByID(chapter.NovelID); err == nil {
 		tenantID = novel.TenantID
+		novelTitle = novel.Title
 	}
 
 	var sb strings.Builder
@@ -668,8 +668,11 @@ func (s *QualityControlService) RefineWithSuggestions(chapterID uint, suggestion
 	}
 
 	prompt, err := renderPrompt("quality_refine", map[string]interface{}{
-		"Suggestions": sb.String(),
-		"Content":     chapter.Content,
+		"NovelTitle":   novelTitle,
+		"ChapterNo":    chapter.ChapterNo,
+		"ChapterTitle": chapter.Title,
+		"Suggestions":  sb.String(),
+		"Content":      chapter.Content,
 	})
 	if err != nil {
 		return "", fmt.Errorf("render quality_refine: %w", err)

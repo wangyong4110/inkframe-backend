@@ -925,7 +925,8 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		CollabHandler: handler.NewCollabHandler(services.CollabService).WithAuditService(services.AuditService),
 		SysAdminHandler: handler.NewSysAdminHandler(
 			service.NewSysAdminService(db, cfg.Server.JWTSecret, cfg.Server.JWTExpiry),
-		).WithAuditService(services.AuditService),
+		).WithAuditService(services.AuditService).
+			WithMcpService(services.McpService),
 		SensitiveWordHandler: handler.NewSensitiveWordHandler(repos.SensitiveWordRepo),
 		FeedbackHandler:      handler.NewFeedbackHandler(service.NewFeedbackService(repos.FeedbackRepo)),
 		DramaTemplateHandler: handler.NewDramaTemplateHandler(services.DramaTemplateService),

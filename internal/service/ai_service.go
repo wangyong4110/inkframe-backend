@@ -877,8 +877,10 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 	config := taskConfig{Temperature: 0.7, MaxTokens: 0}
 
 	var resolvedModel string
+	var novelGenre string
 	if novelID > 0 && s.novelRepo != nil {
 		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
+			novelGenre = novel.Meta.Genre
 			if novel.AIConfig.Temperature > 0 {
 				config.Temperature = novel.AIConfig.Temperature
 			}
@@ -899,11 +901,21 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 
 	switch taskType {
 	// 结构化提取/审查任务：需要严格 JSON 输出，用低温度
-	case "character_state", "scene_anchor_extract", "storyboard_review", "sfx_analyze":
+	case "character_state", "scene_anchor_extract", "storyboard_review", "sfx_analyze", "chapter_end_state":
 		if config.Temperature > 0.2 {
 			config.Temperature = 0.1
 		}
-	// 创意生成任务：需要多样性和表达力，温度不低于 0.5
+	// 小说正文创作任务：需要充足的创意探索空间，温度不低于 0.8
+	case "chapter", "scene_outline", "chapter_outline":
+		if config.Temperature < 0.8 {
+			config.Temperature = 0.8
+		}
+	// 编辑/精修任务：精确替换词语、统一风格，不需要高创意多样性，温度上限 0.4
+	case "refinement":
+		if config.Temperature > 0.4 {
+			config.Temperature = 0.4
+		}
+	// 其他创意生成任务：需要多样性和表达力，温度不低于 0.5
 	case "storyboard", "character", "worldview":
 		if config.Temperature < 0.5 {
 			config.Temperature = 0.5
@@ -950,17 +962,19 @@ func (s *AIService) GenerateWithProviderCtx(ctx context.Context, tenantID uint, 
 		case "storyboard":
 			config.MaxTokens = 16384
 		case "outline":
-			config.MaxTokens = 16384
+			config.MaxTokens = 32768
 		case "chapter_review", "storyboard_review":
 			config.MaxTokens = 8192
-		case "storyboard_arc":
+		case "chapter_end_state":
 			config.MaxTokens = 2048
+		case "storyboard_arc":
+			config.MaxTokens = 6000
 		}
 	}
 
 	sysPmt := ""
 	if chapterTaskTypes[taskType] {
-		sysPmt = novelWritingSystemPrompt
+		sysPmt = buildNovelWritingSystemPrompt(novelGenre)
 	} else if jsonOnlyTaskTypes[taskType] {
 		sysPmt = jsonOnlySystemPrompt
 	}
@@ -1248,17 +1262,29 @@ func (s *AIService) GenerateWithVision(prompt string, imageURLs []string) (strin
 // callAIWithProvider 调用指定 Provider 的 AI 接口
 // parentCtx 作为父 context；timeout 会在其上叠加（不会超出父 context 的 deadline）。
 // modelOverride 可选，非空时会覆盖 provider 的默认模型（用于小说项目级 ai_model 配置）
-// novelWritingSystemPrompt is injected as the system role for all chapter/scene writing tasks.
-// It prevents the model from adding preambles, outlines, or meta-commentary.
-const novelWritingSystemPrompt = `你是一个小说正文生成引擎，只负责按指令输出小说正文内容。
+// buildNovelWritingSystemPrompt returns the system prompt for novel prose generation tasks.
+// It injects a brief genre-specific writing identity so the model anchors its creative voice.
+func buildNovelWritingSystemPrompt(genre string) string {
+	genreLabel := genreSystemLabel(genre)
+	base := "你是一位专业的中文小说作家，以卓越的叙事技艺创作高质量长篇小说。"
+	if genreLabel != "" {
+		base += genreLabel
+	}
+	return base + `
 
-严格规则（任何情况下不得违反）：
-- 输出内容只能是小说正文，从章节标题行开始，到正文自然结束为止
-- 禁止任何开场白，如"好的""当然可以""非常抱歉""由于篇幅限制"等
+你的创作核心原则：
+- 让角色通过行动、细节、对话潜台词表达情绪，而非直接陈述内心状态
+- 通过人物独特的内在矛盾驱动情节，每个选择都源自角色深层动机
+- 每个场景既完成当下叙事目标，又为后续埋下有机伏笔
+
+输出规则（任何情况下不得违反）：
+- 只输出小说正文，从章节标题行开始，到正文自然结束为止
+- 禁止任何开场白（"好的""当然可以""非常抱歉""由于篇幅限制"等）
 - 禁止在正文外输出大纲、章节摘要、写作建议或元注释
 - 禁止声明字数/篇幅限制，禁止请求用户确认续写
 - 禁止在正文结束后追加任何说明文字
 - 字数不足时直接写到章末钩子，不得截断并附注"待续"类说明`
+}
 
 // jsonOnlySystemPrompt is injected for structured JSON output tasks.
 // It suppresses chain-of-thought reasoning that reasoning models (e.g. DeepSeek-R1) emit by default.
@@ -1284,6 +1310,7 @@ var jsonOnlyTaskTypes = map[string]bool{
 	"character_state": true, "scene_anchor_extract": true,
 	"storyboard_review": true, "sfx_analyze": true,
 	"chapter_review": true, "extract_items": true,
+	"chapter_end_state": true, // 章末状态快照：纯 JSON，抑制推理模型思维链
 	"outline": true, // 大纲生成：强制纯 JSON，防止 DeepSeek 输出思考过程或缺失冒号
 	// 角色/物品/世界观提取——均输出 JSON，需抑制推理模型的思维链输出
 	"extract_characters":       true,

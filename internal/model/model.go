@@ -857,12 +857,13 @@ type UpdateChapterRequest struct {
 
 // BatchGenerateChaptersRequest 批量生成章节正文请求
 type BatchGenerateChaptersRequest struct {
-	SkipExisting   bool   `json:"skip_existing"`    // true=跳过已有正文的章节（默认 true）
-	WordCount      int    `json:"word_count"`       // 每章目标字数，0=自动推算
-	MaxTokens      int    `json:"max_tokens"`       // LLM max tokens，0=自动
-	StartChapterNo int    `json:"start_chapter_no"` // 从第几章开始，0=全部
-	EndChapterNo   int    `json:"end_chapter_no"`   // 到第几章结束，0=全部
-	ModelOverride  string `json:"model"`            // 可选：指定 AI 模型/provider
+	SkipExisting   bool     `json:"skip_existing"`    // true=跳过已有正文的章节（默认 true）
+	WordCount      int      `json:"word_count"`       // 每章目标字数，0=自动推算
+	MaxTokens      int      `json:"max_tokens"`       // LLM max tokens，0=自动
+	StartChapterNo int      `json:"start_chapter_no"` // 从第几章开始，0=全部
+	EndChapterNo   int      `json:"end_chapter_no"`   // 到第几章结束，0=全部
+	ModelOverride  string   `json:"model"`            // 可选：指定 AI 模型/provider
+	EnabledTools   []string `json:"enabled_tools"`    // 可选：运行时启用的工具列表（空=沿用各布尔值默认）
 }
 
 type GenerateChapterRequest struct {
@@ -878,6 +879,7 @@ type GenerateChapterRequest struct {
 	WebSearch       bool     `json:"web_search"`       // true=启用联网参考，搜索相关故事片段注入 prompt
 	WikiSearch      bool     `json:"wiki_search"`      // true=启用百科知识查询，注入世界观准确信息
 	UseStoryPattern bool     `json:"use_story_pattern"` // true=启用情节模板，注入叙事结构参考
+	EnabledTools    []string `json:"enabled_tools,omitempty"` // 运行时工具白名单；非空时覆盖上面三个布尔值
 	ReviewHints     *ReviewHintsPayload `json:"review_hints,omitempty"` // AI审查反馈，重生成时注入
 }
 

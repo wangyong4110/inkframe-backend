@@ -765,9 +765,34 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	// 从小说大纲获取本章元数据（张力值、幕次、情感基调等）
 	chapterMeta := s.extractChapterMeta(novelID, req.ChapterNo)
 
+	// toolEnabled 判断某工具是否被启用：
+	// - EnabledTools 非空时作为白名单（覆盖单独布尔值）
+	// - EnabledTools 为空时回退到各布尔字段（knowledge/character 默认开启）
+	toolEnabled := func(name string) bool {
+		if len(req.EnabledTools) > 0 {
+			for _, t := range req.EnabledTools {
+				if t == name {
+					return true
+				}
+			}
+			return false
+		}
+		switch name {
+		case "web_search":
+			return req.WebSearch
+		case "wiki_search":
+			return req.WikiSearch
+		case "story_pattern":
+			return req.UseStoryPattern
+		case "knowledge_search", "character_lookup":
+			return true
+		}
+		return false
+	}
+
 	// ── Step 1b: 联网参考搜索（可选）─────────────────────
 	var refStories string
-	if req.WebSearch && s.mcpService != nil {
+	if toolEnabled("web_search") && s.mcpService != nil {
 		query := buildStorySearchQuery(novel.Meta.Genre, chapterMeta.summary)
 		webCtx, webCancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer webCancel()
@@ -785,7 +810,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 
 	// ── Step 1c: 百科知识查询（可选）─────────────────────
 	var wikiContext string
-	if req.WikiSearch && s.mcpService != nil {
+	if toolEnabled("wiki_search") && s.mcpService != nil {
 		query := buildWikiSearchQuery(novel.Meta.Genre, chapterMeta.summary)
 		wikiCtx, wikiCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer wikiCancel()
@@ -803,7 +828,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 
 	// ── Step 1d: 情节模板查询（可选）─────────────────────
 	var storyPatternRef string
-	if req.UseStoryPattern && s.mcpService != nil {
+	if toolEnabled("story_pattern") && s.mcpService != nil {
 		patternCtx, patternCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer patternCancel()
 		out, searchErr := s.mcpService.InvokeTool(patternCtx, tenantID, "story_pattern", map[string]interface{}{
@@ -820,7 +845,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	}
 
 	// ── Step 1e: 知识库语义搜索（可选）──────────────────────
-	if s.mcpService != nil && s.knowledgeSvc != nil {
+	if toolEnabled("knowledge_search") && s.mcpService != nil && s.knowledgeSvc != nil {
 		kCtx, kCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer kCancel()
 		kOut, kErr := s.mcpService.InvokeTool(kCtx, tenantID, "knowledge_search", map[string]interface{}{
@@ -843,7 +868,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	}
 
 	// ── Step 1f: 角色档案查询（可选，仅日志增强，实际角色数据由 getCharactersForPrompt 提供）──
-	if s.mcpService != nil && s.characterRepo != nil {
+	if toolEnabled("character_lookup") && s.mcpService != nil && s.characterRepo != nil {
 		characters, charListErr := s.characterRepo.ListByNovel(novelID)
 		if charListErr == nil {
 			limit := min(3, len(characters))
@@ -1019,6 +1044,8 @@ type chapterOutlineMeta struct {
 	summary       string   // 大纲中的章节概述
 	chapterTitle  string   // 大纲中的章节标题建议
 	plotPoints    []string // 大纲中的章节剧情点
+	act           int      // 所属幕次（1/2/3），用于 ActNo 注入
+	hookType      string   // 章末钩子类型（question/cliffhanger/revelation/threat）
 }
 
 func (s *ChapterService) extractChapterMeta(novelID uint, chapterNo int) chapterOutlineMeta {
@@ -1046,6 +1073,8 @@ func (s *ChapterService) extractChapterMeta(novelID uint, chapterNo int) chapter
 				EmotionalTone string   `json:"emotional_tone"`
 				Summary       string   `json:"summary"`
 				PlotPoints    []string `json:"plot_points"`
+				Act           int      `json:"act"`
+				HookType      string   `json:"hook_type"`
 			} `json:"chapters"`
 		}
 		if parseErr := json.Unmarshal([]byte(outlineJSON), &outline); parseErr != nil {
@@ -1061,6 +1090,8 @@ func (s *ChapterService) extractChapterMeta(novelID uint, chapterNo int) chapter
 					meta.summary       = ch.Summary
 					meta.chapterTitle  = ch.Title
 					meta.plotPoints    = ch.PlotPoints
+					meta.act           = ch.Act
+					meta.hookType      = ch.HookType
 					logger.Printf("[extractChapterMeta] ch%d found: title=%q summaryLen=%d plotPoints=%d",
 						chapterNo, meta.chapterTitle, len(meta.summary), len(meta.plotPoints))
 					break
@@ -1344,10 +1375,7 @@ func (s *ChapterService) generateSceneOutline(
 	// 构建伏笔提示
 	foreshadowHints := s.buildForeshadowHints(novelID, req.ChapterNo)
 
-	worldviewRules := ""
-	if novel.Worldview != nil {
-		worldviewRules = novel.Worldview.Rules
-	}
+	worldviewRules := buildWorldRulesText(novel.Worldview)
 
 	// 获取角色列表（含快照状态 + 内在动机）
 	characters := s.getCharactersForPrompt(novelID)
@@ -1435,6 +1463,27 @@ func (s *ChapterService) generateSceneOutline(
 	// 张力预算（近几章若全为高张力，提醒插入缓冲章）
 	tensionBudget := s.buildTensionBudget(novelID, req.ChapterNo, tensionLevel)
 
+	// ActNo: 优先取大纲中的 act 字段，其次按张力值从三幕结构推算默认幕次
+	actNo := meta.act
+	if actNo == 0 {
+		totalChapters := novel.Meta.TargetChapters
+		if totalChapters <= 0 {
+			totalChapters = 100
+		}
+		switch {
+		case req.ChapterNo <= totalChapters/4:
+			actNo = 1
+		case req.ChapterNo <= totalChapters*3/4:
+			actNo = 2
+		default:
+			actNo = 3
+		}
+	}
+	hookType := meta.hookType
+	if hookType == "" {
+		hookType = "cliffhanger" // 默认钩子类型
+	}
+
 	outlinePrompt, err := renderPrompt("chapter_scene_outline", map[string]interface{}{
 		"NovelTitle":            novel.Title,
 		"ChapterNo":             req.ChapterNo,
@@ -1444,6 +1493,9 @@ func (s *ChapterService) generateSceneOutline(
 		"PlotPoints":            plotPointsText,
 		"TensionLevel":          tensionLevel,
 		"EmotionalTone":         emotionalTone,
+		"ChapterType":           computeChapterType(tensionLevel),
+		"ActNo":                 actNo,
+		"HookType":              hookType,
 		"IsStandalone":          req.IsStandalone,
 		"ChapterMode":           novel.AIConfig.ChapterMode,
 		"FinalChapterContext":   finalChapterCtx, // 最终章专用：全部未关闭悬线收尾清单
@@ -1531,6 +1583,9 @@ func (s *ChapterService) generateSceneOutline(
 				"MissingPlotPoints":     missingText.String(), // ← 缺失剧情点
 				"TensionLevel":          tensionLevel,
 				"EmotionalTone":         emotionalTone,
+				"ChapterType":           computeChapterType(tensionLevel),
+				"ActNo":                 actNo,
+				"HookType":              hookType,
 				"IsStandalone":          req.IsStandalone,
 				"ChapterMode":           novel.AIConfig.ChapterMode,
 				"FinalChapterContext":   finalChapterCtx, // ← 重试也需要最终章约束
@@ -1777,10 +1832,7 @@ func (s *ChapterService) generateFromSceneOutline(
 	// 未解决剧情线（伏笔/冲突）
 	foreshadowHints := s.buildForeshadowHints(novelID, req.ChapterNo)
 
-	worldviewRulesFromOutline := ""
-	if novel.Worldview != nil {
-		worldviewRulesFromOutline = novel.Worldview.Rules
-	}
+	worldviewRulesFromOutline := buildWorldRulesText(novel.Worldview)
 
 	// 章节叙事预算（防信息过载、防过早化解矛盾）
 	budget := computeChapterBudget(req.ChapterNo, novel.Meta.TargetChapters)
@@ -1923,6 +1975,10 @@ func (s *ChapterService) generateFromSceneOutline(
 			}
 			if sceneOverrides.Temperature == 0 {
 				sceneOverrides.Temperature = novel.AIConfig.Temperature
+			}
+			// 按场景张力动态调整温度：高张力场景需要更高创意探索
+			if sceneTmp := chapterTemperatureByTension(sc.Tension); sceneTmp > sceneOverrides.Temperature {
+				sceneOverrides.Temperature = sceneTmp
 			}
 			if ts := req.TimeoutSeconds; ts > 0 {
 				sceneOverrides.TimeoutSeconds = ts
@@ -2660,14 +2716,15 @@ func (s *ChapterService) checkAndAutoResolvePlotPoints(tenantID uint, chapter *m
 // ──────────────────────────────────────────────
 
 type characterForPrompt struct {
-	Name          string
-	Role          string
-	IsProtagonist bool
-	CurrentState  string // 来自最新状态快照：位置、健康、心情等
-	Description   string
-	InnerConflict string // 人物内在矛盾（如：渴望自由却害怕失去家人）
-	CoreDesire    string // 核心渴望（如：被认可、复仇、保护所爱之人）
-	VoiceProfile  string // 声音档案摘要：说话风格/口癖/禁忌用语（来自 character_voice.j2 提取）
+	Name             string
+	Role             string
+	IsProtagonist    bool
+	CurrentState     string // 来自最新状态快照：位置、健康、心情等
+	GrowthTrajectory string // 成长轨迹：从初始状态到当前状态的变化描述
+	Description      string
+	InnerConflict    string // 人物内在矛盾（如：渴望自由却害怕失去家人）
+	CoreDesire       string // 核心渴望（如：被认可、复仇、保护所爱之人）
+	VoiceProfile     string // 声音档案摘要：说话风格/口癖/禁忌用语（来自 character_voice.j2 提取）
 }
 
 func (s *ChapterService) getCharactersForPrompt(novelID uint) []characterForPrompt {
@@ -2696,10 +2753,16 @@ func (s *ChapterService) getCharactersForPrompt(novelID uint) []characterForProm
 			CoreDesire:    c.Meta.CoreDesire,
 			VoiceProfile:  formatVoiceProfile(c.VoiceConfig.VoiceProfile),
 		}
-		// 加载最新状态快照，补充 CurrentState
+		// 加载最新状态快照，补充 CurrentState 和 GrowthTrajectory
 		if s.snapshotRepo != nil {
-			if snap, snapErr := s.snapshotRepo.GetLatestForCharacter(c.ID); snapErr == nil && snap != nil {
-				cp.CurrentState = formatCharacterState(snap)
+			if latest, snapErr := s.snapshotRepo.GetLatestForCharacter(c.ID); snapErr == nil && latest != nil {
+				cp.CurrentState = formatCharacterState(latest)
+				if earliest, earlyErr := s.snapshotRepo.GetEarliestForCharacter(c.ID); earlyErr == nil && earliest != nil && earliest.ID != latest.ID {
+					earlyState := formatCharacterState(earliest)
+					if earlyState != cp.CurrentState {
+						cp.GrowthTrajectory = fmt.Sprintf("初始→当前：%s → %s", earlyState, cp.CurrentState)
+					}
+				}
 			}
 		}
 		result = append(result, cp)
@@ -2941,6 +3004,37 @@ func (s *ChapterService) buildForeshadowHints(novelID uint, chapterNo int) strin
 	return hints.String()
 }
 
+// buildWorldRulesText 将世界观所有约束性字段组合为统一的规则文本注入 prompt。
+// 只取约束类字段（Rules/MagicSystem/Glossary/Factions）；
+// 背景类字段（Geography/History/Culture）已由 buildGlobalSummary 经 GlobalContext 注入，不重复。
+func buildWorldRulesText(wv *model.Worldview) string {
+	if wv == nil {
+		return ""
+	}
+	var sb strings.Builder
+	if wv.Rules != "" {
+		sb.WriteString("⚠️ 世界强制规则（必须严格遵守，违反即为写作错误）：\n")
+		sb.WriteString(wv.Rules)
+		sb.WriteString("\n")
+	}
+	if wv.MagicSystem != "" {
+		sb.WriteString("修炼/魔法体系（功法/境界/能力必须与此一致）：\n")
+		sb.WriteString(wv.MagicSystem)
+		sb.WriteString("\n")
+	}
+	if wv.Factions != "" {
+		sb.WriteString("主要势力格局（人物所属/立场/阵营必须与此一致）：\n")
+		sb.WriteString(wv.Factions)
+		sb.WriteString("\n")
+	}
+	if wv.Glossary != "" {
+		sb.WriteString("世界专属术语（必须使用这些术语，禁止自创同义词）：\n")
+		sb.WriteString(wv.Glossary)
+		sb.WriteString("\n")
+	}
+	return strings.TrimSpace(sb.String())
+}
+
 // buildCharacterRegistry 构建已注册角色名称列表，注入 prompt 以防止命名混淆与角色分裂。
 // AI 生成新角色时必须避免与表中已有名称重复或混淆。
 func (s *ChapterService) buildCharacterRegistry(novelID uint) string {
@@ -2977,7 +3071,12 @@ func (s *ChapterService) getPreviousChapterEnding(tenantID uint, novel *model.No
 		logger.Printf("[getPreviousChapterEnding] ch%d: ChapterEndState missing, generating on-demand", chapterNo-1)
 		if endState := s.generateChapterEndState(tenantID, prev, novel); endState != "" {
 			prev.ChapterEndState = endState
-			_ = s.chapterRepo.Update(prev)
+			// 必须用 UpdateFields 而非 Update(prev)：
+			// postProcessChapter 可能正在异步精修此章节的 content，
+			// 全字段 Save 会把草稿 content 覆盖回 DB，抹掉精修成果。
+			_ = s.chapterRepo.UpdateFields(prev.ID, prev.NovelID, map[string]interface{}{
+				"chapter_end_state": endState,
+			})
 			logger.Printf("[getPreviousChapterEnding] ch%d: ChapterEndState generated and saved", chapterNo-1)
 		}
 	}
@@ -3558,6 +3657,21 @@ func (s *ChapterService) checkAndPatchMissingPlotPoints(tenantID uint, chapter *
 		return true
 	}
 	return false
+}
+
+// chapterTemperatureByTension returns the recommended AI temperature for a chapter
+// based on its tension level. Higher tension = more creative energy needed.
+func chapterTemperatureByTension(tensionLevel int) float64 {
+	switch {
+	case tensionLevel >= 8: // 高潮章：需要最大创意探索
+		return 0.92
+	case tensionLevel >= 6: // 事件章：较高创意
+		return 0.85
+	case tensionLevel <= 3: // 反思章/铺垫章：适度表达
+		return 0.78
+	default: // 关系章/过渡章
+		return 0.82
+	}
 }
 
 // computeChapterType classifies the chapter as one of four narrative types based on

@@ -267,7 +267,7 @@ func seedWebSearchMcpTool(db *gorm.DB, cfg *config.Config) {
 	var existing model.McpTool
 	err := db.Where("name = ?", "web_search").First(&existing).Error
 	if err != nil {
-		// Not found — create it; is_active mirrors whether provider is configured
+		// Not found — create disabled by default; admin must explicitly enable
 		tool := model.McpTool{
 			TenantID:      0,
 			Name:          "web_search",
@@ -276,19 +276,18 @@ func seedWebSearchMcpTool(db *gorm.DB, cfg *config.Config) {
 			TransportType: "http",
 			Endpoint:      endpoint,
 			Timeout:       15,
-			IsActive:      configured,
+			IsActive:      false,
 			IsSystem:      true,
 		}
 		if createErr := db.Create(&tool).Error; createErr != nil {
 			logger.Errorf("[Seed] web_search MCP tool create failed: %v", createErr)
 			return
 		}
-		logger.Printf("[Seed] web_search MCP tool registered (is_active=%v, endpoint=%s)", configured, endpoint)
+		logger.Printf("[Seed] web_search MCP tool registered (is_active=false, configured=%v, endpoint=%s)", configured, endpoint)
 	} else {
-		// Already exists — sync endpoint and is_active with current config
-		updates := map[string]interface{}{"endpoint": endpoint, "is_active": configured}
-		if updateErr := db.Model(&existing).Updates(updates).Error; updateErr != nil {
-			logger.Errorf("[Seed] web_search MCP tool update failed: %v", updateErr)
+		// Already exists — only sync endpoint, preserve admin-set is_active
+		if updateErr := db.Model(&existing).Update("endpoint", endpoint).Error; updateErr != nil {
+			logger.Errorf("[Seed] web_search MCP tool update endpoint failed: %v", updateErr)
 		}
 	}
 }
