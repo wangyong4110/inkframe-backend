@@ -49,21 +49,12 @@ func NewStoryboardService(videoService *VideoService, aiService *AIService) *Sto
 	return &StoryboardService{videoService: videoService, aiService: aiService}
 }
 
-func (s *StoryboardService) GenerateStoryboard(videoID, chapterID uint, characters []string, style, provider, userPrompt string, progressFn func(int), overrides StoryboardOverrides) (interface{}, error) {
+func (s *StoryboardService) GenerateStoryboardCtx(ctx context.Context, videoID, chapterID uint, characters []string, style, provider, userPrompt string, progressFn func(int), overrides StoryboardOverrides) (*StoryboardGenResult, error) {
 	var chapterIDPtr *uint
 	if chapterID != 0 {
 		chapterIDPtr = &chapterID
 	}
-	shots, err := s.videoService.GenerateStoryboard(videoID, provider, userPrompt, progressFn, overrides, chapterIDPtr)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]interface{}{
-		"video_id":   videoID,
-		"chapter_id": chapterID,
-		"shots":      shots,
-		"total":      len(shots),
-	}, nil
+	return s.videoService.GenerateStoryboardCtx(ctx, videoID, provider, userPrompt, progressFn, overrides, chapterIDPtr)
 }
 
 // ReviewStoryboard 调用 AI 对分镜脚本进行专业审查

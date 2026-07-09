@@ -75,6 +75,7 @@ type ChapterService struct {
 	chapterItemRepo      *repository.ChapterItemRepository      // 可选：章节道具级联清理
 
 	cache    *redis.Client // optional: cross-instance chapter generation lock
+	taskSvc  *TaskService  // optional: tracks postProcessChapter as a persisted, resumable task
 
 	// genLocks 进程内去重（无 Redis 或 Redis 出错时的兜底）
 	genLocks sync.Map
@@ -193,6 +194,13 @@ func (s *ChapterService) WithDramaticServices(hookSvc *HookChainService, spSvc *
 	s.hookSvc = hookSvc
 	s.spSvc = spSvc
 	s.arcSvc = arcSvc
+	return s
+}
+
+// WithTaskService 注入 TaskService（可选），使 postProcessChapter 能作为持久化、可恢复的
+// "安静"任务运行，而不是完全脱离追踪的裸 goroutine。未注入时行为保持原样（裸 goroutine）。
+func (s *ChapterService) WithTaskService(svc *TaskService) *ChapterService {
+	s.taskSvc = svc
 	return s
 }
 
@@ -1030,7 +1038,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	}
 
 	// ── Step 6: 异步后处理（标题/精修/弧摘要，不再包含角色快照）────────────────────────────────
-	go s.postProcessChapter(tenantID, chapter, novel)
+	s.runPostProcessChapter(tenantID, chapter, novel)
 
 	recordChapterGen("success")
 	logger.Printf("[ChapterService] GenerateChapter done: chapterID=%d wordCount=%d", chapter.ID, chapter.WordCount)
@@ -2242,10 +2250,15 @@ func (s *ChapterService) generateFallbackChapter(tenantID, novelID uint, req *mo
 }
 
 // postProcessChapter 异步后处理：生成摘要→生成标题→精修→提取角色状态→触发弧摘要
-func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapter, novel *model.Novel) {
+// 每一步失败仍遵循"记录日志、继续下一步"的既有设计（不因单步失败中断整条流水线）；
+// 返回值收集哪些步骤最终未能产出预期结果，供调用方通过 CompletePartial 让用户看到
+// "后处理部分完成"，而不是像过去一样完全静默。空字符串表示全部步骤正常完成。
+func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapter, novel *model.Novel) (warning string) {
+	var warnings []string
 	defer func() {
 		if r := recover(); r != nil {
 			logger.Errorf("[ChapterService] postProcessChapter panic recovered: %v\n%s", r, debug.Stack())
+			warning = fmt.Sprintf("后处理内部错误：%v", r)
 		}
 	}()
 	logger.Printf("[ChapterService] postProcessChapter start: chapterID=%d no=%d", chapter.ID, chapter.ChapterNo)
@@ -2253,7 +2266,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 	// Fetch a fresh copy from DB to avoid mutating the caller's pointer concurrently.
 	if fresh, err := s.chapterRepo.GetByID(chapter.ID); err != nil {
 		logger.Errorf("[ChapterService] postProcessChapter: fetch fresh chapter %d failed: %v", chapter.ID, err)
-		return
+		return fmt.Sprintf("加载章节失败：%v", err)
 	} else {
 		chapter = fresh
 	}
@@ -2329,6 +2342,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 				} else {
 					chapter.QualityStatus = "low"
 					logger.Printf("[ChapterService] chapter %d saved with low quality status", chapter.ChapterNo)
+					warnings = append(warnings, "内容质量分低于阈值")
 				}
 			}
 		} else if qErr != nil {
@@ -2359,6 +2373,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 			}
 		} else {
 			logger.Errorf("[ChapterService] WARNING: chapter %d has no summary after 3 attempts", chapter.ChapterNo)
+			warnings = append(warnings, "摘要生成失败(3次重试)")
 		}
 	}
 
@@ -2492,6 +2507,7 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 			}
 		} else {
 			logger.Errorf("[ChapterService] WARNING: reader_expectations ch%d failed after 3 attempts", chapter.ChapterNo)
+			warnings = append(warnings, "读者预期生成失败(3次重试)")
 		}
 	}
 
@@ -2631,6 +2647,60 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 	}()
 
 	logger.Printf("[ChapterService] postProcessChapter done: chapterID=%d", chapter.ID)
+	return strings.Join(warnings, "；")
+}
+
+// runPostProcessChapter 用 TaskService 持久化并跟踪 postProcessChapter（TaskTypeChapterPostProcess，
+// 安静型任务：不进任务面板，但可被孤儿恢复机制在服务重启后重新捡起）。未注入 taskSvc 时
+// （例如部分测试场景）退回原来的裸 goroutine，行为不变。
+func (s *ChapterService) runPostProcessChapter(tenantID uint, chapter *model.Chapter, novel *model.Novel) {
+	if s.taskSvc == nil {
+		go s.postProcessChapter(tenantID, chapter, novel)
+		return
+	}
+	task, err := s.taskSvc.Create(tenantID, TaskTypeChapterPostProcess, "章节后处理", "chapter", chapter.ID)
+	if err != nil {
+		logger.Errorf("[ChapterService] failed to create chapter_post_process task for chapter %d: %v", chapter.ID, err)
+		go s.postProcessChapter(tenantID, chapter, novel) // 建任务失败也不能把这段工作直接丢掉
+		return
+	}
+	s.taskSvc.RunTracked(context.Background(), task, func(ctx context.Context, t *model.AsyncTask) (*TrackedResult, error) {
+		warning := s.postProcessChapter(tenantID, chapter, novel)
+		return &TrackedResult{Warning: warning}, nil
+	})
+}
+
+// ResumePostProcessChapter 重新执行一个在进程重启前被中断的 chapter_post_process 任务
+// （由 cmd/server 通过 TaskService.RegisterResumeHandler 注册后触发）。postProcessChapter
+// 各步骤本身按"已存在就跳过"（标题/读者预期）或"总是基于最新内容重新生成"（精修/摘要/章末状态）
+// 设计，重复执行是安全的，代价只是多花一次 AI 调用，不会产生内容不一致。
+func (s *ChapterService) ResumePostProcessChapter(t *model.AsyncTask) {
+	chapter, err := s.chapterRepo.GetByID(t.EntityID)
+	if err != nil {
+		if s.taskSvc != nil {
+			_ = s.taskSvc.Fail(t.TaskID, fmt.Sprintf("加载章节失败：%v", err))
+		}
+		return
+	}
+	novel, err := s.novelRepo.GetByIDFromDB(chapter.NovelID)
+	if err != nil {
+		if s.taskSvc != nil {
+			_ = s.taskSvc.Fail(t.TaskID, fmt.Sprintf("加载小说失败：%v", err))
+		}
+		return
+	}
+	if s.taskSvc != nil {
+		_ = s.taskSvc.SetRunning(t.TaskID)
+	}
+	warning := s.postProcessChapter(t.TenantID, chapter, novel)
+	if s.taskSvc == nil {
+		return
+	}
+	if warning != "" {
+		_ = s.taskSvc.CompletePartial(t.TaskID, nil, warning)
+		return
+	}
+	_ = s.taskSvc.Complete(t.TaskID, nil)
 }
 
 // checkAndAutoResolvePlotPoints 用单次 AI 调用判断本章是否解决了悬而未决的剧情线，自动更新 is_resolved

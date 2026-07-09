@@ -917,6 +917,12 @@ func mapEmotionalToneToTTS(tone string) string {
 		return "calm"
 	case strings.Contains(tone, "惊讶") || strings.Contains(tone, "惊"):
 		return "surprised"
+	case strings.Contains(tone, "得意"):
+		return "happy"
+	case strings.Contains(tone, "讽刺"):
+		return "surprised"
+	case strings.Contains(tone, "留白"):
+		return "calm"
 	default:
 		return ""
 	}

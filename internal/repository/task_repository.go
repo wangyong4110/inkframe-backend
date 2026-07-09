@@ -30,10 +30,13 @@ func (r *TaskRepository) GetByTaskID(taskID string) (*model.AsyncTask, error) {
 	return &task, err
 }
 
-func (r *TaskRepository) ListByTenant(tenantID uint, taskType, status string, page, pageSize int) ([]*model.AsyncTask, int64, error) {
+// excludeTypes is only applied when taskType is empty — an explicit type filter always wins.
+func (r *TaskRepository) ListByTenant(tenantID uint, taskType, status string, excludeTypes []string, page, pageSize int) ([]*model.AsyncTask, int64, error) {
 	q := r.db.Model(&model.AsyncTask{}).Where("tenant_id = ?", tenantID)
 	if taskType != "" {
 		q = q.Where("type = ?", taskType)
+	} else if len(excludeTypes) > 0 {
+		q = q.Where("type NOT IN ?", excludeTypes)
 	}
 	if status != "" {
 		q = q.Where("status = ?", status)
@@ -103,6 +106,19 @@ func (r *TaskRepository) CancelActiveByEntity(entityType string, entityID uint, 
 		}).Error
 }
 
+// ListActiveTaskIDsByEntity returns task_ids matching the same filter as CancelActiveByEntity,
+// for callers that need to invoke in-process cancel functions after the bulk status update.
+// Must be called BEFORE CancelActiveByEntity's UPDATE so the WHERE clause still matches
+// (rows are pending/running at query time).
+func (r *TaskRepository) ListActiveTaskIDsByEntity(entityType string, entityID uint, taskType string) ([]string, error) {
+	var ids []string
+	err := r.db.Model(&model.AsyncTask{}).
+		Where("entity_type = ? AND entity_id = ? AND type = ? AND status IN ?",
+			entityType, entityID, taskType, []string{"pending", "running"}).
+		Pluck("task_id", &ids).Error
+	return ids, err
+}
+
 // UpdateFields 仅更新指定字段（避免 GetByTaskID + Update 两次 DB 操作）
 func (r *TaskRepository) UpdateFields(taskID string, fields map[string]interface{}) error {
 	return r.db.Model(&model.AsyncTask{}).Where("task_id = ?", taskID).Updates(fields).Error
@@ -117,6 +133,21 @@ func (r *TaskRepository) CompleteIfNotCancelled(taskID string, resultJSON string
 			"status":   "completed",
 			"progress": 100,
 			"result":   resultJSON,
+		}).Error
+}
+
+// CompletePartialIfNotCancelled atomically completes a task with a non-fatal warning message,
+// distinct from FailIfNotCancelled (status stays "completed", not "failed"). The warning is
+// stored in the same `error` column as hard failures; callers/UI distinguish "partial success"
+// from "hard failure" by checking status alongside error, not by a separate status value.
+func (r *TaskRepository) CompletePartialIfNotCancelled(taskID string, resultJSON, warning string) error {
+	return r.db.Model(&model.AsyncTask{}).
+		Where("task_id = ? AND status != ?", taskID, "cancelled").
+		Updates(map[string]interface{}{
+			"status":   "completed",
+			"progress": 100,
+			"result":   resultJSON,
+			"error":    warning,
 		}).Error
 }
 

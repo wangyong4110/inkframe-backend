@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -638,16 +639,18 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				TimeoutSeconds: params.TimeoutSeconds,
 				VoiceMode:      params.VoiceMode,
 			}
-			result, err := svcs.StoryboardService.GenerateStoryboard(videoID, params.ChapterID, params.Characters, params.Style, params.Provider, params.UserPrompt, progressFn, overrides)
+			result, err := svcs.StoryboardService.GenerateStoryboardCtx(context.Background(), videoID, params.ChapterID, params.Characters, params.Style, params.Provider, params.UserPrompt, progressFn, overrides)
 			if err != nil {
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				return
 			}
-			var shotCount int
-			if shots, ok := result.([]*model.StoryboardShot); ok {
-				shotCount = len(shots)
+			if result.FailedSegments > 0 {
+				svcs.TaskService.CompletePartial(t.TaskID, map[string]interface{}{"shot_count": len(result.Shots)}, //nolint:errcheck
+					fmt.Sprintf("预计生成约 %d 个镜头，但 %d/%d 个分段生成失败，实际生成 %d 个镜头，建议检查后重新生成缺失部分",
+						result.RequestedShots, result.FailedSegments, result.TotalSegments, len(result.Shots)))
+				return
 			}
-			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"shot_count": shotCount}) //nolint:errcheck
+			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"shot_count": len(result.Shots)}) //nolint:errcheck
 		})
 	}
 
@@ -1004,6 +1007,14 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		})
 	}
 
+	// chapter_post_process: re-run the summary/title/refine/arc-summary tail after a restart
+	// interrupted it mid-flight. Safe to re-run — see ResumePostProcessChapter's doc comment.
+	if svcs.ChapterService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterPostProcess, func(t *model.AsyncTask) {
+			svcs.ChapterService.ResumePostProcessChapter(t)
+		})
+	}
+
 	// asset_gen: routed by source param
 	if svcs.VideoService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeAssetGen, func(t *model.AsyncTask) {
@@ -1148,7 +1159,12 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
 				return
 			}
-			svcs.VideoService.RunSynthesisPipeline(t.TaskID, params.VideoID)
+			// 补上取消注册——之前这里直接裸调 RunSynthesisPipeline，恢复的任务完全绕过了取消体系。
+			ctx, cancel := context.WithCancel(context.Background())
+			svcs.TaskService.RegisterCancel(t.TaskID, cancel)
+			defer svcs.TaskService.DeregisterCancel(t.TaskID)
+			defer cancel()
+			svcs.VideoService.RunSynthesisPipelineCtx(ctx, t.TaskID, params.VideoID)
 		})
 	}
 

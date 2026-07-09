@@ -827,14 +827,25 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 	}
 	logger.Printf("[SynthesizeVideo] videoID=%d: taskID=%s", videoID, taskID)
 
-	go s.RunSynthesisPipeline(taskID, videoID)
+	pipelineCtx, pipelineCancel := context.WithCancel(context.Background())
+	if s.taskSvc != nil {
+		s.taskSvc.RegisterCancel(taskID, pipelineCancel)
+	}
+	go func() {
+		if s.taskSvc != nil {
+			defer s.taskSvc.DeregisterCancel(taskID)
+		}
+		defer pipelineCancel()
+		s.RunSynthesisPipelineCtx(pipelineCtx, taskID, videoID)
+	}()
 	return taskID, nil
 }
 
-// RunSynthesisPipeline 执行合成流水线核心逻辑（由 SynthesizeVideo 和 resume handler 共享）。
-// 该方法阻塞直到流水线完成，应在独立 goroutine 中调用。
-func (s *VideoService) RunSynthesisPipeline(taskID string, videoID uint) {
-	synthCtx, synthCancel := context.WithTimeout(context.Background(), 2*time.Hour)
+// RunSynthesisPipelineCtx 执行合成流水线核心逻辑（由 SynthesizeVideo 和 resume handler 共享）。
+// 该方法阻塞直到流水线完成，应在独立 goroutine 中调用。ctx 承载取消信号——调用方通过
+// TaskService.RegisterCancel 注册的 cancel 函数最终会 Done() 这个 ctx。
+func (s *VideoService) RunSynthesisPipelineCtx(ctx context.Context, taskID string, videoID uint) {
+	synthCtx, synthCancel := context.WithTimeout(ctx, 2*time.Hour)
 	defer synthCancel()
 
 	defer func() {

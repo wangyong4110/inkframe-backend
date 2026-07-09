@@ -244,6 +244,17 @@ var (
 		Name: "inkframe_storyboard_generation_in_flight",
 		Help: "当前正在生成中的分镜脚本数",
 	})
+
+	StoryboardSegmentDuration = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "inkframe_storyboard_segment_duration_seconds",
+		Help:    "分镜脚本单段（单次 AI 调用尝试）耗时分布（秒）",
+		Buckets: []float64{5, 10, 20, 30, 60, 90, 120, 180, 240, 300},
+	})
+
+	StoryboardSegmentTimeoutTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "inkframe_storyboard_segment_timeout_total",
+		Help: "分镜脚本单段生成因 provider 超时失败的总次数",
+	})
 )
 
 // ─── 业务指标：视频合成 ──────────────────────────────────────────────────────

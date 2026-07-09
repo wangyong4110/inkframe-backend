@@ -430,6 +430,7 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 		WithForeshadowRepo(repos.ForeshadowRepo).
 		WithChapterCharacterRepo(repos.ChapterCharacterRepo).
 		WithChapterItemRepo(repos.ChapterItemRepo).
+		WithTaskService(core.Task).
 		WithRedis(redisClient) // Fix: cross-instance chapter generation dedup
 
 	// 图像生成服务

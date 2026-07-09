@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -48,9 +49,9 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	// 取消正在运行的旧 goroutine（通知其 context 取消），再标记旧任务为 cancelled。
-	h.videoService.CancelStoryboardGeneration(uint(videoId))
-	h.taskSvc.CancelActiveByEntity("video", uint(videoId), service.TaskTypeStoryboardGen)
+	// 取代同一视频上正在运行的旧任务：不仅把 DB 行标记为 cancelled，还真正调用旧任务注册的
+	// cancel 函数，让旧 goroutine 里的 AI 请求收到取消信号（而不是标记完就不管，继续跑到底）。
+	h.taskSvc.CancelActiveByEntityAndInvoke("video", uint(videoId), service.TaskTypeStoryboardGen)
 
 	task, err := h.taskSvc.Create(tenantID, service.TaskTypeStoryboardGen, "分镜脚本生成", "video", uint(videoId))
 	if err != nil {
@@ -76,37 +77,29 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 		"voice_mode":      req.VoiceMode,
 	})
 
-	reqID := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[VideoHandler] GenerateStoryboard task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
-		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
-
+	h.taskSvc.RunTracked(context.Background(), task, func(ctx context.Context, t *model.AsyncTask) (*service.TrackedResult, error) {
+		progressFn := func(pct int) { h.taskSvc.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
 		overrides := service.StoryboardOverrides{
 			MaxTokens:      req.MaxTokens,
 			Temperature:    req.Temperature,
 			TimeoutSeconds: req.TimeoutSeconds,
 			VoiceMode:      req.VoiceMode,
 		}
-		result, err := h.storyboardService.GenerateStoryboard(uint(videoId), req.ChapterID, req.Characters, req.Style, req.Provider, req.UserPrompt, progressFn, overrides)
+		result, err := h.storyboardService.GenerateStoryboardCtx(ctx, uint(videoId), req.ChapterID, req.Characters, req.Style, req.Provider, req.UserPrompt, progressFn, overrides)
 		if err != nil {
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-			log.Errorf("[VideoHandler] GenerateStoryboard task %s failed: %v", taskID, err)
-			return
+			return nil, err
 		}
 		// 只存 shot_count，不把完整分镜数组写入 result 列（JSON 可能超出 TEXT 65KB 限制导致 Update 失败，任务永远卡在 99%）
-		var shotCount int
-		if shots, ok := result.([]*model.StoryboardShot); ok {
-			shotCount = len(shots)
+		data := gin.H{"shot_count": len(result.Shots)}
+		if result.FailedSegments > 0 {
+			return &service.TrackedResult{
+				Data: data,
+				Warning: fmt.Sprintf("预计生成约 %d 个镜头，但 %d/%d 个分段生成失败，实际生成 %d 个镜头，建议检查后重新生成缺失部分",
+					result.RequestedShots, result.FailedSegments, result.TotalSegments, len(result.Shots)),
+			}, nil
 		}
-		h.taskSvc.Complete(taskID, gin.H{"shot_count": shotCount}) //nolint:errcheck
-	}(task.TaskID)
+		return &service.TrackedResult{Data: data}, nil
+	})
 
 	respondAccepted(c, task.TaskID, "分镜生成任务已提交")
 }

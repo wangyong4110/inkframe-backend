@@ -256,7 +256,10 @@ func (p *DoubaoSpeechProvider) buildDoubaoSpeechBody(req *AudioGenerateRequest, 
 	if needsExpressive {
 		subModel = "seed-tts-2.0-expressive"
 	}
-	if resourceID == "seed-tts-2.0" || resourceID == "seed-icl-2.0" {
+	// model（-expressive/-standard）只在 doubao-character-tts 接入点上跳过——该接入点走独立的情感机制。
+	// 其余接入点（包括用户在火山引擎控制台自建的自定义接入点 ID，不一定字面等于 "seed-tts-2.0"）
+	// 都需要显式声明 -expressive 子模型，否则情绪提示词 context_texts 不会真正生效。
+	if resourceID != "doubao-character-tts" {
 		reqParams["model"] = subModel
 	}
 

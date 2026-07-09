@@ -56,29 +56,28 @@ type beatSheetItem struct {
 
 // ─── Storyboard Generation ────────────────────────────────────────────────────
 
-// GenerateStoryboard 生成分镜
-// userPrompt: 用户自定义提示词（可选），将追加到系统 prompt 之后
-// progressFn: 可选的进度回调（0-99），供调用方更新任务进度（传 nil 则跳过）
-// CancelStoryboardGeneration 取消正在进行的分镜生成（若有）。
-// handler 在提交新任务前调用，让旧 goroutine 尽快退出，避免 "already in progress" 错误。
-func (s *VideoService) CancelStoryboardGeneration(videoID uint) {
-	if val, ok := s.generatingStoryboard.LoadAndDelete(videoID); ok {
-		if cancelFn, ok := val.(context.CancelFunc); ok {
-			cancelFn()
-		}
-	}
-	// 同步释放 Redis 分布式锁，防止旧 goroutine 的 defer Del 尚未执行时新任务被拦截
-	if s.cache != nil {
-		s.cache.Del(context.Background(), fmt.Sprintf("lock:storyboard:gen:%d", videoID))
-	}
+// StoryboardGenResult carries the generated shots plus enough metadata for the caller to
+// detect degraded/partial generation (some segments exhausted retries and produced nothing)
+// instead of treating any non-empty result as a full success.
+type StoryboardGenResult struct {
+	Shots          []*model.StoryboardShot
+	RequestedShots int // total shots calcTotalShots() aimed for
+	FailedSegments int // number of content segments that produced zero shots after all retries
+	TotalSegments  int
 }
 
-func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt string, progressFn func(int), overrides StoryboardOverrides, chapterIDOverride ...*uint) ([]*model.StoryboardShot, error) {
+// GenerateStoryboardCtx 生成分镜
+// ctx: 取消信号来源——调用方（handler）通过 TaskService.RegisterCancel 注册的 cancel 函数最终
+// 会 Done() 这个 ctx，用来真正打断正在进行的 AI 调用，而不仅仅是跳过下一个分段。
+// userPrompt: 用户自定义提示词（可选），将追加到系统 prompt 之后
+// progressFn: 可选的进度回调（0-99），供调用方更新任务进度（传 nil 则跳过）
+func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, provider, userPrompt string, progressFn func(int), overrides StoryboardOverrides, chapterIDOverride ...*uint) (*StoryboardGenResult, error) {
 	metrics.StoryboardGenerationInFlight.Inc()
 	defer metrics.StoryboardGenerationInFlight.Dec()
 	sbStart := time.Now()
 
 	// Prevent concurrent storyboard generation for the same video — across instances via Redis SETNX.
+	// This is a mutual-exclusion lock (a different concern from cancellation, which now flows through ctx).
 	if s.cache != nil {
 		redisKey := fmt.Sprintf("lock:storyboard:gen:%d", videoID)
 		ok, err := s.cache.SetNX(context.Background(), redisKey, "1", 30*time.Minute).Result()
@@ -89,20 +88,8 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 			}
 			defer s.cache.Del(context.Background(), redisKey)
 		}
-		// err != nil: Redis unavailable, fall through to local sync.Map check
+		// err != nil: Redis unavailable, fall through without the distributed lock
 	}
-
-	// Store the cancel function so that CancelStoryboardGeneration can interrupt this goroutine.
-	genCtxInner, cancelInner := context.WithCancel(context.Background())
-	if _, loaded := s.generatingStoryboard.LoadOrStore(videoID, cancelInner); loaded {
-		cancelInner() // discard the context we just created
-		metrics.StoryboardGenerationTotal.WithLabelValues("conflict").Inc()
-		return nil, fmt.Errorf("storyboard generation already in progress for video %d", videoID)
-	}
-	defer func() {
-		s.generatingStoryboard.Delete(videoID)
-		cancelInner()
-	}()
 
 	totalStart := time.Now()
 
@@ -350,9 +337,11 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	beatSheetItems := s.generateBeatSheet(content, characters, anchors, tenantID, video.NovelID, provider, totalShots)
 	logger.Printf("[Storyboard] beatSheet ready: %d beats", len(beatSheetItems))
 
-	// 动态分段：确保每段期望镜头数 ≤ maxShotsPerAICall，防止超出 AI 模型输出 token 上限。
-	// segOverrides.MaxTokens 已强制 ≥ 16384；每个镜头约 700 tokens；20 镜 × 700 = 14000 tokens。
-	const maxShotsPerAICall = 20
+	// 动态分段：确保每段期望镜头数 ≤ maxShotsPerAICall，防止超出 AI 模型输出 token 上限，
+	// 同时降低单次 AI 调用逼近 provider 默认超时（300s）的概率。
+	// P0 优化：20 → 14，单段输出 token 从约 14000 降到约 9800（≈30%），单段更快完成、超时概率更低；
+	// 段数会相应增加，但配合下方窗口化并发（P1）不会拖慢整体耗时。
+	const maxShotsPerAICall = 14
 	dynSegRunes := maxSegmentRunes
 	if totalShots > maxShotsPerAICall && totalRunes > 0 {
 		// 使每段镜头数 ≤ maxShotsPerAICall：segRunes = totalRunes * maxShotsPerAICall / totalShots
@@ -370,22 +359,20 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	logger.Printf("[Storyboard] start videoID=%d chapterID=%s provider=%q voiceMode=%q totalRunes=%d totalShots=%d dynSegRunes=%d segments=%d chars=%d anchors=%d plotPoints=%d",
 		videoID, chIDStr, provider, overrides.VoiceMode, totalRunes, totalShots, dynSegRunes, len(segments), len(characters), len(anchors), len(plotPoints))
 
-	// 顺序处理各段落：每段将上一段末尾 3 个镜头作为 prevShots 传入，
-	// 确保跨段落的情节、场景、情绪连贯性（storyboard_generate.j2 中的【上一段末尾分镜】规则生效）。
-	// 牺牲并发换取叙事连贯——对于用户可感知的质量提升，这是必要的权衡。
-	const prevTailN = 5 // 传递上一段末尾多少个镜头（更多上下文 → 跨段衔接更自然）
+	// P1 优化：按窗口并发生成段落，而不是严格逐段串行等待。
+	// 窗口内的段落共享同一份"上一窗口末尾镜头"快照作为上文（并发执行，无法互相等待对方产出），
+	// 窗口之间仍严格传递真实的 prevTailShots，保留大部分跨段连贯性——
+	// 这是"牺牲窗口内部分衔接精度换并发提速"的折中：比完全并发（零上下文）质量更好，
+	// 比严格串行（零并发）速度更快。窗口越大提速越明显，但也更依赖 provider 并发配额。
+	const storyboardConcurrentWindow = 3
+	const prevTailN = 5 // 传递上一窗口末尾多少个镜头（更多上下文 → 跨段衔接更自然）
 	type segResult struct {
 		shots []*model.StoryboardShot
 		err   error
 	}
 	results := make([]segResult, len(segments))
 
-	genCtx := genCtxInner
-	var prevTailShots []*model.StoryboardShot // 上一段末尾镜头，首段为 nil
-	// 累积已分配镜头数和已处理字数，避免逐段整除截断导致总数偏少
-	shotsAllocated := 0
-	runesProcessed := 0
-
+	genCtx := ctx
 	// Each segment produces 8–15K chars of JSON. A 4096-token limit truncates it.
 	// The AI API silently caps max_tokens at the model's own maximum when it exceeds it,
 	// so requesting 16384 on a model that only supports 4096 is safe (no API error).
@@ -394,150 +381,119 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		segOverrides.MaxTokens = 16384
 	}
 
-	for segIdx, seg := range segments {
-		// 检查是否已取消
+	// 预计算各段的镜头分配、百分比区间、节拍子集——纯本地计算，不涉及 AI 调用。
+	// 从"逐段串行时顺带算"的写法中拆出来，使下面的窗口化并发成为可能。
+	type segPlan struct {
+		segShotCount int
+		segStartPct  int
+		segEndPct    int
+		segBeatSheet []map[string]interface{}
+	}
+	plans := make([]segPlan, len(segments))
+	{
+		shotsAllocated := 0
+		runesProcessed := 0
+		for segIdx, seg := range segments {
+			segRunes := len([]rune(seg))
+			runesProcessed += segRunes
+			// 累积分配：用"到目前为止应分配的总镜头数 - 已分配数"计算本段，
+			// 最后一段直接取剩余全部，保证各段加总恰好等于 totalShots。
+			var segShotCount int
+			if segIdx == len(segments)-1 {
+				segShotCount = totalShots - shotsAllocated
+			} else {
+				cumTarget := totalShots * runesProcessed / max(totalRunes, 1)
+				segShotCount = cumTarget - shotsAllocated
+			}
+			if segShotCount < 3 {
+				segShotCount = 3
+			}
+			shotsAllocated += segShotCount
+
+			// 计算本段在全章的百分比区间，用于在弧线骨架中定位当前段落的情感阶段
+			segStartPct := (runesProcessed - segRunes) * 100 / max(totalRunes, 1)
+			segEndPct := runesProcessed * 100 / max(totalRunes, 1)
+
+			// P1a: 按内容百分比比例切出本段对应的情节节拍子集
+			var segBeatSheet []map[string]interface{}
+			if len(beatSheetItems) > 0 {
+				startIdx := segStartPct * len(beatSheetItems) / 100
+				endIdx := (segEndPct*len(beatSheetItems) + 99) / 100 // ceil，确保末段不遗漏
+				if endIdx > len(beatSheetItems) {
+					endIdx = len(beatSheetItems)
+				}
+				if startIdx >= endIdx && endIdx > 0 {
+					startIdx = endIdx - 1
+				}
+				for _, item := range beatSheetItems[startIdx:endIdx] {
+					segBeatSheet = append(segBeatSheet, map[string]interface{}{
+						"No":             item.No,
+						"BeatType":       item.BeatType,
+						"ContentSummary": item.ContentSummary,
+						"Location":       item.Location,
+						"Characters":     strings.Join(item.Characters, "、"),
+						"SuggestedShots": item.SuggestedShots,
+					})
+				}
+			}
+			plans[segIdx] = segPlan{segShotCount: segShotCount, segStartPct: segStartPct, segEndPct: segEndPct, segBeatSheet: segBeatSheet}
+		}
+	}
+
+	var prevTailShots []*model.StoryboardShot // 上一窗口末尾镜头，首窗口为 nil
+	cancelled := false
+	for winStart := 0; winStart < len(segments) && !cancelled; winStart += storyboardConcurrentWindow {
 		select {
 		case <-genCtx.Done():
-			results[segIdx] = segResult{err: genCtx.Err()}
-			// 后续段落也标记取消
-			for i := segIdx + 1; i < len(segments); i++ {
+			for i := winStart; i < len(segments); i++ {
 				results[i] = segResult{err: genCtx.Err()}
 			}
-			break
+			cancelled = true
+			continue
 		default:
 		}
-		if results[segIdx].err != nil {
-			break
+
+		winEnd := winStart + storyboardConcurrentWindow
+		if winEnd > len(segments) {
+			winEnd = len(segments)
 		}
+		winPrevTail := prevTailShots // 窗口内所有段共享同一份上文快照
+		logger.Printf("[Storyboard] window segs=[%d,%d) start prevTail=%d", winStart+1, winEnd, len(winPrevTail))
 
-		segStart := time.Now()
-		segRunes := len([]rune(seg))
-		runesProcessed += segRunes
-		// 累积分配：用"到目前为止应分配的总镜头数 - 已分配数"计算本段，
-		// 最后一段直接取剩余全部，保证各段加总恰好等于 totalShots。
-		var segShotCount int
-		if segIdx == len(segments)-1 {
-			segShotCount = totalShots - shotsAllocated
-		} else {
-			cumTarget := totalShots * runesProcessed / max(totalRunes, 1)
-			segShotCount = cumTarget - shotsAllocated
+		var wg sync.WaitGroup
+		for segIdx := winStart; segIdx < winEnd; segIdx++ {
+			wg.Add(1)
+			go func(segIdx int) {
+				defer wg.Done()
+				p := plans[segIdx]
+				shots, err := s.generateStoryboardSegment(genCtx, video, segments[segIdx], userPrompt, segIdx, len(segments),
+					p.segShotCount, characters, anchors, plotPoints, effectiveItems, winPrevTail,
+					overrides.VoiceMode, promptLanguage, genre, arcPlan, imageStyle,
+					chapterNo, novelTitle, worldviewDesc, p.segStartPct, p.segEndPct, charVisualPrompts,
+					p.segBeatSheet, tenantID, provider, segOverrides, videoID, chapterID)
+				results[segIdx] = segResult{shots: shots, err: err}
+			}(segIdx)
 		}
-		if segShotCount < 3 {
-			segShotCount = 3
-		}
-		shotsAllocated += segShotCount
-		logger.Printf("[Storyboard] seg %d/%d start runes=%d expectedShots=%d prevTail=%d",
-			segIdx+1, len(segments), segRunes, segShotCount, len(prevTailShots))
+		wg.Wait()
 
-		// 计算本段在全章的百分比区间，用于在弧线骨架中定位当前段落的情感阶段
-		segStartPct := (runesProcessed - segRunes) * 100 / max(totalRunes, 1)
-		segEndPct := runesProcessed * 100 / max(totalRunes, 1)
-
-		// P1a: 按内容百分比比例切出本段对应的情节节拍子集
-		var segBeatSheet []map[string]interface{}
-		if len(beatSheetItems) > 0 {
-			startIdx := segStartPct * len(beatSheetItems) / 100
-			endIdx := (segEndPct*len(beatSheetItems) + 99) / 100 // ceil，确保末段不遗漏
-			if endIdx > len(beatSheetItems) {
-				endIdx = len(beatSheetItems)
-			}
-			if startIdx >= endIdx && endIdx > 0 {
-				startIdx = endIdx - 1
-			}
-			for _, item := range beatSheetItems[startIdx:endIdx] {
-				segBeatSheet = append(segBeatSheet, map[string]interface{}{
-					"No":             item.No,
-					"BeatType":       item.BeatType,
-					"ContentSummary": item.ContentSummary,
-					"Location":       item.Location,
-					"Characters":     strings.Join(item.Characters, "、"),
-					"SuggestedShots": item.SuggestedShots,
-				})
-			}
-		}
-
-		// P1b: 从上一段末尾镜头提取跨段世界状态快照（场景/时间/天气/在场角色）
-		var segWorldState map[string]interface{}
-		if len(prevTailShots) > 0 {
-			segWorldState = extractWorldStateFromShots(prevTailShots)
-		}
-
-		prompt := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, len(segments), segShotCount,
-			characters, anchors, plotPoints, effectiveItems, prevTailShots, overrides.VoiceMode, promptLanguage, genre, video.RenderConfig.Pacing, arcPlan, imageStyle,
-			chapterNo, novelTitle, worldviewDesc, segStartPct, segEndPct, charVisualPrompts,
-			segBeatSheet, segWorldState)
-
-		var aiResult string
-		var aiErr error
-		var shots []*model.StoryboardShot
-		var bestShots []*model.StoryboardShot // 历次尝试中镜头数最多的结果
-		for attempt := 0; attempt < 3; attempt++ {
-			p := prompt
-			switch attempt {
-			case 1:
-				p = prompt + "\n\n⚠️ 重要提示：请只返回纯 JSON 数组，不要包含任何 markdown 代码块（```）或说明文字。"
-				logger.Printf("[Storyboard] seg %d/%d retry attempt=%d (format hint)", segIdx+1, len(segments), attempt)
-			case 2:
-				p = prompt + fmt.Sprintf("\n\n⚠️ 极重要：上一次你只返回了很少的分镜，请务必生成全部%d个分镜，只返回JSON数组不要截断。", segShotCount)
-				logger.Printf("[Storyboard] seg %d/%d retry attempt=%d (shot count hint)", segIdx+1, len(segments), attempt)
-			}
-			aiStart := time.Now()
-			aiResult, aiErr = s.aiService.GenerateWithProvider(tenantID, video.NovelID, "storyboard", p, provider, segOverrides)
-			aiElapsed := time.Since(aiStart).Round(time.Millisecond)
-			if aiErr != nil {
-				logger.Errorf("[Storyboard] seg %d/%d attempt=%d AI error elapsed=%s err=%v", segIdx+1, len(segments), attempt, aiElapsed, aiErr)
-				if ai.IsTimeoutError(aiErr) {
-					break
+		// 取窗口内最后一个成功段落的尾部镜头，作为下一窗口的 prevTail；
+		// 若整窗口都失败，prevTail 置空（下一窗口退化为缺少上文，但不中止整体生成）。
+		var winTail []*model.StoryboardShot
+		for i := winEnd - 1; i >= winStart; i-- {
+			if results[i].err == nil && len(results[i].shots) > 0 {
+				shots := results[i].shots
+				if len(shots) > prevTailN {
+					winTail = shots[len(shots)-prevTailN:]
+				} else {
+					winTail = shots
 				}
-				continue
+				break
 			}
-			logger.Printf("[Storyboard] seg %d/%d attempt=%d AI ok elapsed=%s responseLen=%d", segIdx+1, len(segments), attempt, aiElapsed, len(aiResult))
-			if strings.TrimSpace(aiResult) == "" {
-				continue
-			}
-			parsed, parseErr := s.parseStoryboardResult(videoID, chapterID, aiResult, imageStyle)
-			if parseErr != nil {
-				logger.Errorf("[Storyboard] seg %d/%d attempt=%d parse failed: %v", segIdx+1, len(segments), attempt, parseErr)
-				continue
-			}
-			// 始终保留历次中镜头数最多的结果
-			if len(parsed) > len(bestShots) {
-				bestShots = parsed
-			}
-			if len(parsed) < (segShotCount*3+3)/4 && attempt < 2 {
-				logger.Printf("[Storyboard] seg %d/%d attempt=%d too few shots got=%d expected=%d (threshold 75%%), retrying", segIdx+1, len(segments), attempt, len(parsed), segShotCount)
-				continue
-			}
-			shots = bestShots
-			break
 		}
-		if shots == nil && len(bestShots) > 0 {
-			shots = bestShots // 全部 attempt 均未达标时，仍用最佳部分结果
-		}
-		if aiErr != nil && shots == nil {
-			results[segIdx] = segResult{err: aiErr}
-			// 非首段失败不终止，后续段落继续（会缺少 prevTail 但比完全失败好）
-			prevTailShots = nil
-			continue
-		}
-		if shots == nil {
-			logger.Printf("[Storyboard] seg %d/%d fatal: AI returned empty or unparseable response after all retries", segIdx+1, len(segments))
-			results[segIdx] = segResult{err: fmt.Errorf("AI返回空响应，请检查模型配置或更换提供商")}
-			prevTailShots = nil
-			continue
-		}
-		logger.Printf("[Storyboard] seg %d/%d done shots=%d elapsed=%s", segIdx+1, len(segments), len(shots), time.Since(segStart).Round(time.Millisecond))
-		results[segIdx] = segResult{shots: shots}
-
-		// 取本段末尾 prevTailN 个镜头，传给下一段
-		if len(shots) > prevTailN {
-			prevTailShots = shots[len(shots)-prevTailN:]
-		} else {
-			prevTailShots = shots
-		}
+		prevTailShots = winTail
 
 		if progressFn != nil {
-			progressFn((segIdx + 1) * 90 / len(segments))
+			progressFn(winEnd * 90 / len(segments))
 		}
 	}
 
@@ -644,13 +600,117 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 	metrics.StoryboardGenerationDuration.Observe(time.Since(sbStart).Seconds())
 	metrics.StoryboardShotsGenerated.Observe(float64(len(shots)))
 
-	// 若存在失败段落，返回包含失败信息的 error（不阻止已成功段落的结果）
-	var returnErr error
-	if failedSegs > 0 && firstErr != nil {
-		returnErr = fmt.Errorf("部分段落生成失败（%d/%d），已返回成功段落的分镜: %w", failedSegs, len(segments), firstErr)
+	// 段落失败不再当作 error 返回——只要有任何分镜产出就是可用结果；FailedSegments 让调用方
+	// （handler）决定报告 Complete 还是 CompletePartial，而不是在这里合成一个容易被忽略的 error。
+	return &StoryboardGenResult{
+		Shots:          shots,
+		RequestedShots: totalShots,
+		FailedSegments: failedSegs,
+		TotalSegments:  len(segments),
+	}, nil
+}
+
+// generateStoryboardSegment 为单个内容分段生成分镜，含最多 3 次重试。
+// P0 优化：重试因超时触发时（ai.IsTimeoutError）会同步下调期望镜头数，用更小的输出体量
+// 换取在 provider 超时窗口内完成的概率；因空响应/解析失败/镜头数不足触发的重试维持原目标，
+// 只追加提示词。可在多个 goroutine 中并发调用——只读取入参，不修改任何共享状态。
+func (s *VideoService) generateStoryboardSegment(
+	ctx context.Context, video *model.Video, seg, userPrompt string,
+	segIdx, totalSegments, segShotCount int,
+	characters []*model.Character, anchors []*model.SceneAnchor, plotPoints []*model.PlotPoint,
+	items []*EffectiveItem, prevTailShots []*model.StoryboardShot,
+	voiceMode, promptLanguage, genre, arcPlan, imageStyle string,
+	chapterNo int, novelTitle, worldviewDesc string,
+	segStartPct, segEndPct int, charVisualPrompts map[uint]string,
+	segBeatSheet []map[string]interface{},
+	tenantID uint, provider string, segOverrides StoryboardOverrides,
+	videoID uint, chapterID *uint,
+) ([]*model.StoryboardShot, error) {
+	segStart := time.Now()
+	logger.Printf("[Storyboard] seg %d/%d start runes=%d expectedShots=%d prevTail=%d",
+		segIdx+1, totalSegments, len([]rune(seg)), segShotCount, len(prevTailShots))
+
+	// P1b: 从上一窗口末尾镜头提取跨段世界状态快照（场景/时间/天气/在场角色）
+	var segWorldState map[string]interface{}
+	if len(prevTailShots) > 0 {
+		segWorldState = extractWorldStateFromShots(prevTailShots)
 	}
 
-	return shots, returnErr
+	var aiResult string
+	var aiErr error
+	var shots []*model.StoryboardShot
+	var bestShots []*model.StoryboardShot // 历次尝试中镜头数最多的结果
+	attemptShotCount := segShotCount
+	for attempt := 0; attempt < 3; attempt++ {
+		p := s.buildStoryboardPrompt(video, seg, userPrompt, segIdx+1, totalSegments, attemptShotCount,
+			characters, anchors, plotPoints, items, prevTailShots, voiceMode, promptLanguage, genre, video.RenderConfig.Pacing, arcPlan, imageStyle,
+			chapterNo, novelTitle, worldviewDesc, segStartPct, segEndPct, charVisualPrompts,
+			segBeatSheet, segWorldState)
+		switch attempt {
+		case 1:
+			p += "\n\n⚠️ 重要提示：请只返回纯 JSON 数组，不要包含任何 markdown 代码块（```）或说明文字。"
+			logger.Printf("[Storyboard] seg %d/%d retry attempt=%d (format hint) shotTarget=%d", segIdx+1, totalSegments, attempt, attemptShotCount)
+		case 2:
+			p += fmt.Sprintf("\n\n⚠️ 极重要：上一次你只返回了很少的分镜，请务必生成全部%d个分镜，只返回JSON数组不要截断。", attemptShotCount)
+			logger.Printf("[Storyboard] seg %d/%d retry attempt=%d (shot count hint) shotTarget=%d", segIdx+1, totalSegments, attempt, attemptShotCount)
+		}
+		aiStart := time.Now()
+		aiResult, aiErr = s.aiService.GenerateWithProviderCtx(ctx, tenantID, video.NovelID, "storyboard", p, provider, segOverrides)
+		aiElapsed := time.Since(aiStart)
+		metrics.StoryboardSegmentDuration.Observe(aiElapsed.Seconds())
+		if aiErr != nil {
+			logger.Errorf("[Storyboard] seg %d/%d attempt=%d AI error elapsed=%s err=%v", segIdx+1, totalSegments, attempt, aiElapsed.Round(time.Millisecond), aiErr)
+			if ai.IsTimeoutError(aiErr) {
+				metrics.StoryboardSegmentTimeoutTotal.Inc()
+				// P0：超时后不原样重试（大概率再次超时），而是把目标镜头数下调约 1/3 再重试，
+				// 缩小单次输出体量以提高在超时窗口内完成的概率。
+				if attempt < 2 && attemptShotCount > 6 {
+					newTarget := attemptShotCount * 2 / 3
+					if newTarget < 6 {
+						newTarget = 6
+					}
+					logger.Printf("[Storyboard] seg %d/%d attempt=%d timed out, shrinking shot target %d -> %d and retrying",
+						segIdx+1, totalSegments, attempt, attemptShotCount, newTarget)
+					attemptShotCount = newTarget
+					continue
+				}
+				break
+			}
+			continue
+		}
+		logger.Printf("[Storyboard] seg %d/%d attempt=%d AI ok elapsed=%s responseLen=%d", segIdx+1, totalSegments, attempt, aiElapsed.Round(time.Millisecond), len(aiResult))
+		if strings.TrimSpace(aiResult) == "" {
+			continue
+		}
+		parsed, parseErr := s.parseStoryboardResult(videoID, chapterID, aiResult, imageStyle)
+		if parseErr != nil {
+			logger.Errorf("[Storyboard] seg %d/%d attempt=%d parse failed: %v", segIdx+1, totalSegments, attempt, parseErr)
+			continue
+		}
+		// 始终保留历次中镜头数最多的结果
+		if len(parsed) > len(bestShots) {
+			bestShots = parsed
+		}
+		if len(parsed) < (attemptShotCount*3+3)/4 && attempt < 2 {
+			logger.Printf("[Storyboard] seg %d/%d attempt=%d too few shots got=%d expected=%d (threshold 75%%), retrying",
+				segIdx+1, totalSegments, attempt, len(parsed), attemptShotCount)
+			continue
+		}
+		shots = bestShots
+		break
+	}
+	if shots == nil && len(bestShots) > 0 {
+		shots = bestShots // 全部 attempt 均未达标时，仍用最佳部分结果
+	}
+	if aiErr != nil && shots == nil {
+		return nil, aiErr
+	}
+	if shots == nil {
+		logger.Printf("[Storyboard] seg %d/%d fatal: AI returned empty or unparseable response after all retries", segIdx+1, totalSegments)
+		return nil, fmt.Errorf("AI返回空响应，请检查模型配置或更换提供商")
+	}
+	logger.Printf("[Storyboard] seg %d/%d done shots=%d elapsed=%s", segIdx+1, totalSegments, len(shots), time.Since(segStart).Round(time.Millisecond))
+	return shots, nil
 }
 
 // autoMatchShotAnchors 按场景名称自动将分镜绑定到场景锚点（模糊匹配 scene.location）
@@ -1633,6 +1693,8 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 		if !validEmotionalTones[emotionalTone] {
 			if emotionalTone != "" {
 				logger.Printf("[Storyboard][B1] shot_no=%d: invalid emotional_tone %q, defaulting to 平静", shotNo, emotionalTone)
+			} else {
+				logger.Printf("[Storyboard][B1] shot_no=%d: emotional_tone missing from AI response, defaulting to 平静", shotNo)
 			}
 			emotionalTone = "平静"
 		}

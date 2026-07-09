@@ -279,10 +279,21 @@ func (r *ChapterRepository) Delete(id, novelID uint) error {
 }
 
 // ShiftUp 将 novelID 下 chapter_no >= fromChapterNo 的章节全部 +1，为插入腾出位置。
+// 不能用单条 UPDATE ... chapter_no+1 直接完成：MySQL 按索引顺序逐行提交更新，
+// 处理到较小 chapter_no 的行时，目标值（+1 后）往往还被尚未处理的行占用，
+// 立即触发 idx_chapter_novel_no 唯一键冲突。先统一取负再还原，避开这个自冲突窗口
+// （与本文件 BatchReorderChapters 的处理方式一致）。
 func (r *ChapterRepository) ShiftUp(novelID uint, fromChapterNo int) error {
-	err := r.db.Model(&model.Chapter{}).
-		Where("novel_id = ? AND chapter_no >= ?", novelID, fromChapterNo).
-		UpdateColumn("chapter_no", gorm.Expr("chapter_no + 1")).Error
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&model.Chapter{}).
+			Where("novel_id = ? AND chapter_no >= ?", novelID, fromChapterNo).
+			UpdateColumn("chapter_no", gorm.Expr("-chapter_no")).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.Chapter{}).
+			Where("novel_id = ? AND chapter_no <= ?", novelID, -fromChapterNo).
+			UpdateColumn("chapter_no", gorm.Expr("-chapter_no + 1")).Error
+	})
 	if err != nil {
 		return err
 	}

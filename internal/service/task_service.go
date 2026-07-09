@@ -57,7 +57,15 @@ const (
 	TaskTypeChapterRewriteInstr      = "chapter_rewrite_instr"
 	TaskTypeVideoGen                 = "video_gen"      // submit all shots + poll + stitch
 	TaskTypeVideoSynthesis           = "video_synthesis" // final synthesis pipeline (stitch→subtitle→upload)
+	TaskTypeChapterPostProcess       = "chapter_post_process" // quiet task: summary/title/refine/arc-summary tail after chapter_gen completes
 )
+
+// quietTaskTypes are tracked (persisted, resumable, failure-notified) like any other task,
+// but are excluded from the default task list/panel query — they represent background
+// continuation work the user already saw a different task type "complete" for, and
+// resurfacing a second progress entry for the same user action would be confusing.
+// An explicit `type=` filter still returns them (useful for future debugging UIs).
+var quietTaskTypes = []string{TaskTypeChapterPostProcess}
 
 // TaskService manages persistent async tasks.
 type TaskService struct {
@@ -69,6 +77,7 @@ type TaskService struct {
 	stopCh           chan struct{}    // closed by Shutdown() to stop background goroutines
 	cancelFns        sync.Map        // taskID string → context.CancelFunc
 	resumeFns        sync.Map        // taskType string → func(*model.AsyncTask)
+	semaphores       sync.Map        // semaphore key string → chan struct{} (RunTracked MaxConcurrency backstop)
 	cleanupCallbacks []func()        // optional hooks called during the hourly cleanup cycle
 	rootCtx          context.Context // server root context; cancelled on graceful shutdown
 }
@@ -292,6 +301,26 @@ func (s *TaskService) Fail(taskID string, errMsg string) error {
 	return nil
 }
 
+// CompletePartial marks a task completed but attaches a non-fatal warning distinct from Fail().
+// Use when a task produced a usable-but-degraded result (e.g. storyboard generation that only
+// produced some of the requested shots after exhausting retries on some segments, or a
+// multi-step pipeline where some steps failed but the overall result is still usable).
+func (s *TaskService) CompletePartial(taskID string, result interface{}, warning string) error {
+	resultJSON := ""
+	if result != nil {
+		if b, err := json.Marshal(result); err == nil {
+			resultJSON = string(b)
+		}
+	}
+	if err := s.repo.CompletePartialIfNotCancelled(taskID, resultJSON, warning); err != nil {
+		logger.Errorf("[TaskService] CompletePartial(%s): %v", taskID, err)
+		return err
+	}
+	taskType := taskTypeFromID(taskID)
+	metrics.TaskCompletedTotal.WithLabelValues(taskType, "partial").Inc()
+	return nil
+}
+
 // taskTypeFromID extracts the task type prefix from a task ID (e.g. "st-abc12345" → "st").
 func taskTypeFromID(taskID string) string {
 	if i := strings.Index(taskID, "-"); i > 0 {
@@ -401,6 +430,7 @@ func taskTypeLabelForNotif(t string) string {
 		TaskTypeImageUpscale:         "图像放大",
 		TaskTypeVideoGen:             "视频生成",
 		TaskTypeVideoSynthesis:       "视频合成",
+		TaskTypeChapterPostProcess:   "章节后处理",
 	}
 	if l, ok := labels[t]; ok {
 		return l
@@ -475,7 +505,10 @@ func (s *TaskService) GetLatestAnalysisTask(novelID uint) (*model.AsyncTask, err
 	return s.repo.GetLatestByTypeAndEntity(TaskTypeNovelAnalysis, "novel", novelID)
 }
 
-// List returns paginated tasks for a tenant.
+// List returns paginated tasks for a tenant. When taskType is empty, quietTaskTypes are
+// excluded so the default task list/panel doesn't surface background continuation work the
+// user never explicitly asked to track (see quietTaskTypes doc comment). Pass an explicit
+// taskType to query a quiet type directly (e.g. a future debugging UI).
 func (s *TaskService) List(tenantID uint, taskType, status string, page, pageSize int) ([]*model.AsyncTask, int64, error) {
 	if page < 1 {
 		page = 1
@@ -483,7 +516,7 @@ func (s *TaskService) List(tenantID uint, taskType, status string, page, pageSiz
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 20
 	}
-	return s.repo.ListByTenant(tenantID, taskType, status, page, pageSize)
+	return s.repo.ListByTenant(tenantID, taskType, status, quietTaskTypes, page, pageSize)
 }
 
 // CancelActiveByEntity cancels all pending/running tasks of the given type for an entity.
@@ -491,6 +524,26 @@ func (s *TaskService) List(tenantID uint, taskType, status string, page, pageSiz
 func (s *TaskService) CancelActiveByEntity(entityType string, entityID uint, taskType string) {
 	if err := s.repo.CancelActiveByEntity(entityType, entityID, taskType); err != nil {
 		logger.Errorf("TaskService: CancelActiveByEntity %s/%d/%s: %v", entityType, entityID, taskType, err)
+	}
+}
+
+// CancelActiveByEntityAndInvoke does everything CancelActiveByEntity does (bulk-marks matching
+// pending/running tasks as cancelled), and additionally invokes each matching task's registered
+// cancel function (if any), so in-flight goroutines actually stop instead of just having their
+// DB row marked "cancelled" while the underlying work (e.g. an AI call) keeps running to
+// completion. Prefer this over CancelActiveByEntity whenever the caller wants a genuine
+// "stop the old one" semantics (e.g. superseding an in-progress generation with a new request).
+func (s *TaskService) CancelActiveByEntityAndInvoke(entityType string, entityID uint, taskType string) {
+	ids, err := s.repo.ListActiveTaskIDsByEntity(entityType, entityID, taskType)
+	if err != nil {
+		logger.Errorf("TaskService: CancelActiveByEntityAndInvoke list %s/%d/%s: %v", entityType, entityID, taskType, err)
+	}
+	s.CancelActiveByEntity(entityType, entityID, taskType)
+	for _, id := range ids {
+		s.cancelLocalTask(id)
+		if s.cache != nil {
+			_ = s.cache.Publish(context.Background(), redisChanTaskCancel, id).Err()
+		}
 	}
 }
 
