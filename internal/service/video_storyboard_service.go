@@ -633,7 +633,7 @@ func (s *VideoService) GenerateStoryboard(videoID uint, provider, userPrompt str
 		logger.Errorf("[VideoService] failed to update video %d status: %v", video.ID, err)
 	}
 
-	logger.Errorf("[Storyboard] finished videoID=%d totalShots=%d segments=%d failedSegs=%d elapsed=%s",
+	logger.Infof("[Storyboard] finished videoID=%d totalShots=%d segments=%d failedSegs=%d elapsed=%s",
 		videoID, len(shots), len(segments), failedSegs, time.Since(totalStart).Round(time.Millisecond))
 
 	sbStatus := "success"
