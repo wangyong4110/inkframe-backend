@@ -687,6 +687,9 @@ func (s *VideoService) generateStoryboardSegment(
 			logger.Errorf("[Storyboard] seg %d/%d attempt=%d parse failed: %v", segIdx+1, totalSegments, attempt, parseErr)
 			continue
 		}
+		// 代码层兜底：严格模式（仅对白/仅旁白）下 prompt 指令是概率性的，AI 偶尔会在无法转化的
+		// 动作/过渡镜头上违反指令，这里强制清理，保证下游（配音、审查）不会看到相悖内容。
+		enforceVoiceMode(parsed, voiceMode, segIdx+1)
 		// 始终保留历次中镜头数最多的结果
 		if len(parsed) > len(bestShots) {
 			bestShots = parsed
@@ -1745,6 +1748,33 @@ func (s *VideoService) parseStoryboardResult(videoID uint, chapterID *uint, resu
 		shots = append(shots, shot)
 	}
 	return shots, nil
+}
+
+// enforceVoiceMode 是 storyboard_generate.j2 里"仅对白"/"仅旁白"强制规则的代码层兜底。
+// prompt 指令是概率性的——AI 在动作/过渡等难以转化的镜头上偶尔会违反指令，这里做最后一道强制清理，
+// 保证下游（配音生成、审查评分）拿到的数据始终符合用户选择的 VoiceMode，不依赖 AI 是否严格遵守。
+// segNo 仅用于日志定位，传 0 表示不区分段落（如单镜头重生成场景）。
+func enforceVoiceMode(shots []*model.StoryboardShot, voiceMode string, segNo int) {
+	switch voiceMode {
+	case "dialogue":
+		for _, shot := range shots {
+			if shot.Narration != "" {
+				logger.Printf("[Storyboard] seg %d shot_no=%d VoiceMode=dialogue violation: narration=%q non-empty, clearing",
+					segNo, shot.ShotNo, truncate(shot.Narration, 30))
+				shot.Narration = ""
+				metrics.StoryboardVoiceModeViolationTotal.WithLabelValues("dialogue").Inc()
+			}
+		}
+	case "narration":
+		for _, shot := range shots {
+			if shot.GenMeta.Dialogue != "" {
+				logger.Printf("[Storyboard] seg %d shot_no=%d VoiceMode=narration violation: dialogue=%q non-empty, clearing",
+					segNo, shot.ShotNo, truncate(shot.GenMeta.Dialogue, 30))
+				shot.GenMeta.Dialogue = ""
+				metrics.StoryboardVoiceModeViolationTotal.WithLabelValues("narration").Inc()
+			}
+		}
+	}
 }
 
 // validateShotSequence 验证分镜列表序号是否从 1 开始连续递增（无跳空）。
