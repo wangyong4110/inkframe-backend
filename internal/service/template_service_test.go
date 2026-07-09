@@ -113,16 +113,17 @@ func TestTemplateService(t *testing.T) {
 
 	t.Logf("Scene prompt length: %d chars", len(scenePrompt))
 
-	// 测试分镜头脚本模板
-	storyboardData := &StoryboardTemplateData{
-		NovelTitle:     "我的小说",
-		ChapterNo:      1,
-		ChapterContent: "第一章的内容...",
-	}
-
-	storyboardPrompt, err := svc.RenderStoryboardPrompt(storyboardData)
+	// 测试分镜头脚本模板（使用 renderPrompt 而非旧 RenderStoryboardPrompt）
+	storyboardPrompt, err := renderPrompt("storyboard_generate", map[string]interface{}{
+		"ExpectedShots": 8,
+		"Content":       "第一章的内容，主角踏上了冒险之旅。",
+		"NovelTitle":    "我的小说",
+		"ChapterNo":     1,
+		"IsEn":          false,
+		"IsImageEn":     false,
+	})
 	if err != nil {
-		t.Fatalf("Failed to render storyboard prompt: %v", err)
+		t.Fatalf("Failed to render storyboard_generate prompt: %v", err)
 	}
 
 	if storyboardPrompt == "" {

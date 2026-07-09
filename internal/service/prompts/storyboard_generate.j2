@@ -253,12 +253,12 @@
 【跨段世界状态——本段承接上一段结束时的场景状态，必须维持一致直至原文明确说明变化】
 - 当前位置：{{ WorldState.Location }}{% if WorldState.TimeOfDay %} ｜时段：{{ WorldState.TimeOfDay }}{% endif %}{% if WorldState.Weather %} ｜天气：{{ WorldState.Weather }}{% endif %}
 
-{% if WorldState.Characters %}- 上段末尾在场角色：{{ WorldState.Characters | join("、") }}
+{% if WorldState.Characters %}- 上段末尾在场角色：{{ WorldState.Characters | join:"、" }}
 {% endif %}
-{% if WorldState.CharStates %}- 角色最新状态（必须延续，除非原文有明确变化）：{% for cs in WorldState.CharStates %}{{ cs.Name }}{% if cs.Action %}正在「{{ cs.Action }}」{% endif %}{% if cs.Expression %}，表情{{ cs.Expression }}{% endif %}{% if not loop.last %}；{% endif %}{% endfor %}
+{% if WorldState.CharStates %}- 角色最新状态（必须延续，除非原文有明确变化）：{% for cs in WorldState.CharStates %}{{ cs.Name }}{% if cs.Action %}正在「{{ cs.Action }}」{% endif %}{% if cs.Expression %}，表情{{ cs.Expression }}{% endif %}{% if not forloop.Last %}；{% endif %}{% endfor %}
 
 {% endif %}
-{% if WorldState.ItemStates %}- 物品持有状态（必须延续，角色不得无故失去或获得物品）：{% for it in WorldState.ItemStates %}{{ it.Name }}{% if it.Holder %}（持有人：{{ it.Holder }}）{% endif %}{% if not loop.last %}；{% endif %}{% endfor %}
+{% if WorldState.ItemStates %}- 物品持有状态（必须延续，角色不得无故失去或获得物品）：{% for it in WorldState.ItemStates %}{{ it.Name }}{% if it.Holder %}（持有人：{{ it.Holder }}）{% endif %}{% if not forloop.Last %}；{% endif %}{% endfor %}
 
 {% endif %}
 ⚠️ 强制要求：本段开篇须延续以上状态，不得无故改变地点、时段、天气、角色状态或物品持有关系；若原文有明确的地点/时间切换，必须按四级时间转场规则插入过渡镜头。

@@ -53,7 +53,7 @@
 
 ## 关键节拍（必须按序体现在正文中）
 {% for beat in KeyBeats %}
-{{ loop.index }}. {{ beat }}
+{{ forloop.Counter }}. {{ beat }}
 {% endfor %}
 
 {% if PreviousSceneEnding or PreviousChapterEnding %}
