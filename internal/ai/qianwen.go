@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -459,6 +460,9 @@ func (p *QianwenProvider) wanxImageGenerateAsync(ctx context.Context, start time
 			errMsg := fmt.Sprintf("Wan 图像任务失败: task_id=%s", taskID)
 			if failReason != "" {
 				errMsg += " reason=" + failReason
+			} else {
+				// failReason 为空时记录原始响应 body，方便排查内容安全拦截等无说明的失败
+				log.Printf("[qianwen] wanxImageGenerateAsync FAILED raw_body=%.500s", string(pollBody))
 			}
 			return &ImageResponse{
 				Error:     errMsg,

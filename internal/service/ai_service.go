@@ -2143,11 +2143,13 @@ func WithImageStorageHint(ctx context.Context, hint ImageStorageHint) context.Co
 //   - 有小说+章节信息：novels/{title}/chapters/{no}/images/{uuid}.ext
 //   - 有小说信息：     novels/{title}/images/{uuid}.ext
 //   - 无信息（降级）：  images/{tenantID}/{uuid}.ext
-func (s *AIService) uploadImageToStorage(ctx context.Context, tenantID uint, imgURL string) string {
+func (s *AIService) uploadImageToStorage(_ context.Context, tenantID uint, imgURL string) string {
 	if s.storageSvc == nil || imgURL == "" {
 		return imgURL
 	}
-	dlCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	// 下载→上传使用独立 background context，避免被 HTTP 请求 context 取消
+	// （客户端断开连接会取消请求 context，但转存操作应当完成以防临时 URL 过期）
+	dlCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, imgURL, nil)
 	if err != nil {
@@ -2180,7 +2182,9 @@ func (s *AIService) uploadImageToStorage(ctx context.Context, tenantID uint, img
 
 	key := fmt.Sprintf("images/%s", filename)
 
-	persistURL, uploadErr := s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), ct)
+	uploadCtx, uploadCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer uploadCancel()
+	persistURL, uploadErr := s.storageSvc.Upload(uploadCtx, key, bytes.NewReader(data), int64(len(data)), ct)
 	if uploadErr != nil {
 		logger.Errorf("uploadImageToStorage: upload failed (falling back to original URL): %v", uploadErr)
 		return imgURL

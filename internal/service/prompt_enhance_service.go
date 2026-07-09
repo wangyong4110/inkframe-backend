@@ -9,23 +9,6 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/logger"
 )
 
-const promptEnhanceSystemPrompt = `You are an expert image/video generation prompt engineer specializing in Chinese web-novel visual adaptation.
-
-Given a scene description (possibly in Chinese), you will:
-1. Translate and expand it into vivid, detailed English visual language.
-2. Add appropriate composition, lighting, atmosphere, and style keywords.
-3. Avoid any NSFW content.
-4. Return ONLY valid JSON in this exact format:
-{
-  "enhanced_prompt": "...",
-  "negative_prompt": "...",
-  "style_tags": ["tag1", "tag2", ...]
-}
-
-The enhanced_prompt should be a comma-separated list of English descriptors suitable for Stable Diffusion or similar models.
-The negative_prompt should list elements to avoid.
-The style_tags should be 3-8 short style keywords.`
-
 // PromptEnhanceResult 增强后的 prompt 结果
 type PromptEnhanceResult struct {
 	EnhancedPrompt string   `json:"enhanced_prompt"`

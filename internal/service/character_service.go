@@ -2158,6 +2158,35 @@ func isAnimalCharacter(appearance string) bool {
 	return false
 }
 
+// condensePortraitAppearance 从 visual_prompt 中提取面部特写所需描述：
+// 保留面部/发型/五官相关词，去掉鞋履/体态/全身/服装下半段等会导致模型生成全身图的词。
+func condensePortraitAppearance(s string, maxWords int) string {
+	// 过滤掉会触发全身生成的关键词（词根匹配）
+	blocklist := []string{
+		"standing", "full body", "full-body", "full figure", "whole body",
+		"shoes", "boots", "sneakers", "sandals", "footwear", "feet", "foot",
+		"legs", "thighs", "knees", "ankles", "calves",
+		"hips", "waist", "lower body", "pelvis",
+		"posture", "pose", "stance",
+	}
+	words := strings.Fields(s)
+	filtered := words[:0]
+	for i := 0; i < len(words); i++ {
+		w := strings.ToLower(strings.Trim(words[i], ",.:;"))
+		skip := false
+		for _, bl := range blocklist {
+			if strings.Contains(w, strings.ToLower(bl)) || strings.Contains(strings.ToLower(strings.Join(words[max(0, i-1):min(len(words), i+2)], " ")), strings.ToLower(bl)) {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			filtered = append(filtered, words[i])
+		}
+	}
+	return condenseVisualPrompt(strings.Join(filtered, " "), maxWords)
+}
+
 // condenseVisualPrompt trims s to at most maxWords space-separated tokens,
 // preferring to break at a comma boundary (within the last 10 words of the budget)
 // to avoid cutting mid-phrase.
@@ -2195,35 +2224,6 @@ func (s *ImageGenerationService) GenerateThreeViewImage(ctx context.Context, ten
 	styleStr := resolveStyleDesc(style)
 	genderTag, genderNeg := resolveGenderInfo(gender)
 
-	var prompt string
-	if style == "realistic" || style == "real_person" {
-		realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
-		photoQuality := universalQualityTags + ", realistic photography style, pure white background, detailed features, clean composition"
-		if style == "real_person" {
-			photoQuality = universalQualityTags + ", photorealistic portrait photography, ultra-realistic skin texture, natural lighting, DSLR quality, 8k uhd, pure white background"
-		}
-		prompt = fmt.Sprintf(
-			"%ssolo, full body, %s, %s, "+
-				"%s, "+
-				"no props, no background elements, no text, no watermarks",
-			realisticGender, appearance, angleDesc, photoQuality)
-	} else if genderTag != "" {
-		// 英文 booru 标签（1boy/1girl）对插画模型权重最高，置于最前
-		prompt = fmt.Sprintf(
-			"%s, solo, full body, %s, %s, "+
-				"%s风格, flat color illustration, clean lineart, character design, "+
-				"white background, %s, "+
-				"no props, no background elements, no text, no watermarks",
-			genderTag, appearance, angleDesc, styleStr, universalQualityTags)
-	} else {
-		prompt = fmt.Sprintf(
-			"solo, full body, %s, %s, "+
-				"%s风格, flat color illustration, clean lineart, character design, "+
-				"white background, %s, "+
-				"no props, no background elements, no text, no watermarks",
-			appearance, angleDesc, styleStr, universalQualityTags)
-	}
-
 	// Only pass an absolute HTTP(S) URL — local/relative paths cannot be fetched by remote APIs.
 	aiRef := referenceImage
 	if !strings.HasPrefix(aiRef, "http://") && !strings.HasPrefix(aiRef, "https://") {
@@ -2235,18 +2235,31 @@ func (s *ImageGenerationService) GenerateThreeViewImage(ctx context.Context, ten
 		logger.Printf("GenerateThreeViewImage: %s/%s no valid reference image", name, viewType)
 	}
 
-	baseNeg := "grey background, gray background, colored background, gradient background, dark background, " +
-		"textured background, busy background, background elements, shadow on background, " +
-		"multiple people, two people, duo, couple, group, 多人, nsfw, lowres, bad anatomy, " +
-		"bust shot, half body, waist up, upper body only, portrait shot, headshot, close-up, face only, " +
-		"cropped body, cut off at legs, cut off at waist, missing feet, missing legs, bottom cut off, partial body, floating figure, " +
-		"different character, inconsistent appearance, " +
-		"makeup, eyeshadow, eye shadow, eyeliner, eye liner, mascara, lipstick, blush, rouge, cosmetics, " +
-		"text, labels, watermark, signature"
-	negativePrompt := baseNeg
-	if genderNeg != "" {
-		negativePrompt = baseNeg + ", " + genderNeg
+	styleType := "other"
+	if style == "realistic" || style == "real_person" {
+		styleType = style
 	}
+	photoQuality := universalQualityTags + ", realistic photography style, pure white background, detailed features, clean composition"
+	if style == "real_person" {
+		photoQuality = universalQualityTags + ", photorealistic portrait photography, ultra-realistic skin texture, natural lighting, DSLR quality, 8k uhd, pure white background"
+	}
+	realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
+
+	rendered, tplErr := renderPrompt("image_three_view_single", map[string]interface{}{
+		"StyleType":      styleType,
+		"StyleStr":       styleStr,
+		"QualityTokens":  universalQualityTags,
+		"GenderTag":      genderTag,
+		"GenderNeg":      genderNeg,
+		"RealisticGender": realisticGender,
+		"PhotoQuality":   photoQuality,
+		"Appearance":     appearance,
+		"AngleDesc":      angleDesc,
+	})
+	if tplErr != nil {
+		return nil, fmt.Errorf("render image_three_view_single: %w", tplErr)
+	}
+	prompt, negativePrompt := splitImagePrompt(rendered)
 	url, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt, aiRef, style, negativePrompt, "")
 	if err != nil {
 		return nil, err
@@ -2342,28 +2355,35 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 
 	logger.Printf("GenerateThreeViewSheet: %s style=%s ref=%v", name, style, aiRef != "")
 
-	baseNeg := "grey background, gray background, beige background, cream background, off-white background, " +
-		"colored background, gradient background, dark background, busy background, textured background, " +
-		"shadow on background, floor shadow, cast shadow, background elements, background props, " +
-		"text, labels, watermark, speech bubble, annotations, " +
-		"T-pose, dynamic pose, action pose, " +
-		"three-quarter view, 45-degree angle, oblique angle, angled view, " +
-		"different face in panels, inconsistent character, costume mismatch, different outfit per panel, " +
-		"face visible in back panel, both ears visible in side panel, " +
-		"different character scale per panel, size inconsistency, " +
-		"merged panels, overlapping panels, " +
-		"bust shot, half body, waist up, upper body only, portrait only, headshot, close-up, " +
-		"cut off feet, cut off at waist, cut off at knees, missing feet, missing legs, cropped body, partial figure, " +
-		"4 panels, five panels, portrait panel, bust shot panel, " +
-		"extra limbs, bad anatomy, nsfw, lowres, blurry, poorly drawn"
-	negativePrompt := baseNeg
-	if genderNeg != "" {
-		negativePrompt = baseNeg + ", " + genderNeg
+	styleType := "other"
+	if style == "realistic" || style == "real_person" {
+		styleType = style
 	}
-	if animal {
-		negativePrompt += ", human hands, human feet, human skin, human face, human body shape, " +
-			"anthropomorphic, humanoid body, standing human pose, human clothing"
+	genderPrefix := ""
+	if !animal {
+		if style == "realistic" || style == "real_person" {
+			genderPrefix = map[string]string{
+				"male": "1man, male, ", "female": "1woman, female, ", "neutral": "androgynous person, ",
+			}[gender]
+		} else if genderTag != "" {
+			genderPrefix = genderTag + ", "
+		}
 	}
+
+	rendered, tplErr := renderPrompt("image_three_view_sheet", map[string]interface{}{
+		"StyleType":          styleType,
+		"StyleDesc":          resolveStyleIllustrationDesc(style),
+		"QualityTokens":      qualityTokens,
+		"GenderPrefix":       genderPrefix,
+		"GenderNeg":          genderNeg,
+		"CondensedAppearance": condensedAppearance,
+		"LayoutDetails":      activeLayoutDetails,
+		"IsAnimal":           animal,
+	})
+	if tplErr != nil {
+		return nil, fmt.Errorf("render image_three_view_sheet: %w", tplErr)
+	}
+	prompt, negativePrompt := splitImagePrompt(rendered)
 
 	// 3 格三视图使用 1200x720 横版布局（正面/侧面/背面各占 400px）。
 	// 一致性权重设为 0.4（低权重）：三视图合图需要 prompt 主导布局结构，
@@ -2389,50 +2409,33 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 func (s *ImageGenerationService) GeneratePortrait(ctx context.Context, tenantID uint, name, appearance, style, gender, threeViewURL, provider string) (*GeneratedCharacterImage, error) {
 	genderTag, genderNeg := resolveGenderInfo(gender)
 	qualityTokens := resolveStyleQualityTokens(style)
+	condensedFace := condensePortraitAppearance(appearance, 40)
 
-	condensedAppearance := condenseVisualPrompt(appearance, 60)
-
-	// 风格词前置：同 GenerateThreeViewSheet，style 必须在 prompt 最前才能被模型充分响应。
-	var prompt string
+	styleType := "other"
 	if style == "realistic" || style == "real_person" {
-		genderPrefix := map[string]string{
+		styleType = style
+	}
+	genderPrefix := ""
+	if style == "realistic" || style == "real_person" {
+		genderPrefix = map[string]string{
 			"male": "1man, male, ", "female": "1woman, female, ", "neutral": "androgynous person, ",
 		}[gender]
-		sheetStyle := "photorealistic portrait, natural even studio lighting, soft shadows"
-		if style == "real_person" {
-			sheetStyle = "ultra-realistic skin texture, natural studio lighting, DSLR quality, 8k uhd, sharp focus"
-		}
-		prompt = sheetStyle + ", " + qualityTokens + ", " +
-			genderPrefix +
-			"upper body portrait, bust shot, waist-up, chest-up, torso visible, head and shoulders and chest, " +
-			"front-facing, neutral expression, " +
-			condensedAppearance + ", " +
-			"pure white background, solid white background, isolated on white, white studio background, centered composition, " +
-			"no text no labels no watermarks"
-	} else {
-		styleDesc := resolveStyleIllustrationDesc(style)
-		genderPrefix := ""
-		if genderTag != "" {
-			genderPrefix = genderTag + ", "
-		}
-		prompt = styleDesc + ", " + qualityTokens + ", " +
-			genderPrefix +
-			"upper body portrait, bust shot, waist-up, chest-up, torso visible, head and shoulders and chest, " +
-			"front-facing, neutral expression, " +
-			condensedAppearance + ", " +
-			"pure white background, solid white background, isolated on white, white studio background, centered composition, " +
-			"no text no labels no watermarks"
+	} else if genderTag != "" {
+		genderPrefix = genderTag + ", "
 	}
 
-	negativePrompt := "text, labels, watermark, " +
-		"full body, full-length, whole body, entire body, standing full figure, " +
-		"legs, feet, thighs, knees, ankles, lower body, waist down, hips, " +
-		"dynamic pose, action pose, different face, inconsistent face, extra limbs, bad anatomy, nsfw, lowres, poorly drawn, " +
-		"colored background, gradient background, complex background, outdoor background, indoor background, " +
-		"scenery, environment, background elements, dark background, grey background, colored backdrop"
-	if genderNeg != "" {
-		negativePrompt += ", " + genderNeg
+	rendered, tplErr := renderPrompt("image_portrait", map[string]interface{}{
+		"StyleType":     styleType,
+		"StyleDesc":     resolveStyleIllustrationDesc(style),
+		"QualityTokens": qualityTokens,
+		"GenderPrefix":  genderPrefix,
+		"GenderNeg":     genderNeg,
+		"CondensedFace": condensedFace,
+	})
+	if tplErr != nil {
+		return nil, fmt.Errorf("render image_portrait: %w", tplErr)
 	}
+	prompt, negativePrompt := splitImagePrompt(rendered)
 
 	// 直接传 threeViewURL（包括相对路径），GenerateCharacterThreeViewMulti 内部会通过
 	// dbMediaReader 或 serverBaseURL 将相对路径转 base64，不在这里提前过滤。
@@ -2442,7 +2445,8 @@ func (s *ImageGenerationService) GeneratePortrait(ctx context.Context, tenantID 
 	}
 
 	logger.Printf("GeneratePortrait: %s style=%s ref=%v", name, style, threeViewURL != "")
-	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, "768x1024", 0)
+	// 1024x1024 正方形：规避 768x1024（3:4 竖版）触发模型生成全身站立图像的偏差
+	url, err := s.aiService.GenerateCharacterThreeViewMulti(ctx, tenantID, provider, prompt, refs, style, negativePrompt, "1024x1024", 0)
 	if err != nil {
 		return nil, err
 	}
@@ -2656,58 +2660,17 @@ func (s *CharacterService) GenerateLookVisualPrompt(tenantID, characterID uint, 
 	if lookDesc == basePrompt {
 		lookDesc = ""
 	}
-	var sysPrompt string
-	if promptLanguage == "en" {
-		extraSection := ""
-		if lookDesc != "" {
-			extraSection = fmt.Sprintf("\n\nAppearance variant notes: %s", lookDesc)
-		}
-		sysPrompt = fmt.Sprintf(`You are a professional AI image-generation prompt engineer for character design. Your task is to convert a character description into a richly detailed English visual prompt optimized for AI image generation (Midjourney / Stable Diffusion / DreamO style).
-
-The prompt MUST cover ALL of the following sections in order:
-1. [Identity] — gender, age range, ethnicity/skin tone, body type, height impression
-2. [Face] — face shape, eye color/shape, eyebrows, nose, lips, jawline, any distinctive marks
-3. [Hair] — color, length, texture, style (e.g. loose waves, high bun, braids)
-4. [Clothing] — top, bottom or dress, fabric/texture, color, patterns, fit
-5. [Accessories & Props] — jewelry, bags, hats, weapons, tools, anything carried
-6. [Pose & Expression] — body posture, facial expression, hand position
-7. [Art style hint] — photography realism / anime / oil painting (infer from genre if possible)
-
-Rules:
-- Minimum 150 words, no hard upper limit — detail is the goal
-- Use comma-separated descriptive phrases, NOT sentences
-- Do NOT include scene/background descriptions
-- Output ONLY the prompt, no headings, no explanations
-
-Character description:
-%s%s
-
-Visual prompt:`, basePrompt, extraSection)
-	} else {
-		extraSection := ""
-		if lookDesc != "" {
-			extraSection = fmt.Sprintf("\n\n形象补充说明：%s", lookDesc)
-		}
-		sysPrompt = fmt.Sprintf(`你是专业的 AI 图像生成提示词工程师，专注角色设定。你的任务是将角色描述转化为适合即梦AI / Stable Diffusion / DreamO 的高质量详细中文视觉提示词。
-
-提示词必须按顺序覆盖以下所有维度：
-①身份基础：性别、年龄段、人种/肤色（奶白/小麦/古铜等）、体型（纤细/健壮等）、身高印象
-②面部细节：脸型（鹅蛋脸/方脸等）、眼睛（颜色+形状+神韵）、眉型、鼻型、唇型、下颌线、任何面部特征
-③发型发色：颜色（金色/黑色等）、长度（及腰/齐肩等）、发质（顺滑/蓬松/卷曲）、造型（自然披散/麻花辫/丸子头等）
-④服装：上衣/裙装/外套的款式、颜色、面料质感、图案、剪裁风格
-⑤配饰道具：首饰、包袋、帽子、武器、随身物品等，标注佩戴位置
-⑥姿态表情：身体姿势、表情、手部动作
-
-规则：
-- 最少150字，不限上限——细节越丰富越好
-- 用顿号或逗号分隔的描述短语，不要写完整句子
-- 不要描述场景/背景
-- 只输出提示词本身，不要标题、不要解释、不要分段
-
-角色描述：
-%s%s
-
-图像提示词：`, basePrompt, extraSection)
+	extraSection := ""
+	if lookDesc != "" {
+		extraSection = lookDesc
+	}
+	sysPrompt, err := renderPrompt("character_visual_prompt", map[string]interface{}{
+		"PromptLanguage": promptLanguage,
+		"BasePrompt":     basePrompt,
+		"ExtraSection":   extraSection,
+	})
+	if err != nil {
+		return "", fmt.Errorf("render character_visual_prompt: %w", err)
 	}
 	result, err := s.aiService.GenerateWithProvider(tenantID, char.NovelID, "character_profile", sysPrompt, "",
 		StoryboardOverrides{})
@@ -2915,49 +2878,18 @@ func (s *CharacterService) GenerateCostumeDesign(tenantID, characterID uint) (st
 		genderAnchor = "1girl"
 	}
 
-	var sysPrompt string
-	if promptLanguage == "en" {
-		sysPrompt = fmt.Sprintf(`You are a professional costume designer, art director, and visual stylist specializing in period-accurate fiction illustration.
-
-Analyze the character and world background below, then produce a single English visual prompt paragraph for AI image generation.
-
-=== WORLD BACKGROUND ===
-%s
-
-=== CHARACTER ===
-Name: %s | Role: %s | Age: %s | Gender: %s
-Description: %s
-
-=== DESIGN RULES ===
-1. ETHNICITY (mandatory for human characters): Infer ethnicity from the world setting (East Asian / South Asian / Southeast Asian / Middle Eastern / Black African / White European / Latin American / Central Asian). State it explicitly. For non-human species, describe species-specific features.
-2. PERIOD ACCURACY: Materials, dye colors, and fastenings must match the world's technology era. No anachronistic elements.
-3. STATUS: Fabric quality, decoration density, and color saturation must reflect the character's rank/wealth.
-4. LAYERING: Describe inner layer → main robe/jacket → outer wrap → belt/sash.
-5. HAIR & HEADWEAR: Era- and status-appropriate. No modern hairstyles.
-6. CONDITION: Note whether clothing is new / lightly worn / battle-worn / ceremonially clean.
-
-Output a single paragraph (150-250 words) starting with "%s". No JSON. No explanation. Only the visual prompt.`, worldContext, char.Name, char.Role, char.Meta.Age, char.Meta.Gender, char.Description, genderAnchor)
-	} else {
-		sysPrompt = fmt.Sprintf(`你是专业的服装设计师、艺术指导和视觉造型师，擅长为历史/架空题材小说设计符合时代背景的角色造型。
-
-根据以下角色信息和世界观背景，生成一段适用于 AI 图像生成的角色外观描述提示词。
-
-=== 世界观背景 ===
-%s
-
-=== 角色信息 ===
-姓名：%s | 定位：%s | 年龄：%s | 性别：%s
-描述：%s
-
-=== 设计规则 ===
-1. 人种（人类角色必填）：根据世界观背景推断角色人种（东亚人、南亚人、东南亚人、中东人、黑人/非洲裔、白人/欧裔、拉丁裔、中亚人等），必须在提示词中明确注明。非人类种族（精灵、妖族等）则描述其种族特征。
-2. 时代准确性：服装材质、染色工艺、扣件方式必须符合该世界的技术水平，不能出现时代错误的元素。
-3. 身份地位：布料质感、装饰繁简、色彩饱和度须体现角色阶级/财富。贵族=细丝绸+繁复刺绣+浓郁色彩，平民=粗麻布+素色+磨损感。
-4. 分层叠穿：描述内层（领口/袖口可见）→ 主体服装 → 外罩/披风 → 腰带/组绶体系。
-5. 发型与头冠：须符合性别、年龄、身份、场合的时代规范，不得出现现代发型。
-6. 着装状态：注明服装新旧程度（崭新/轻微磨损/征战损伤/礼仪整洁/风尘仆仆）。
-
-输出一段150-250字的描述，以"%s"开头。不要输出 JSON，不要任何解释，只输出提示词本身。`, worldContext, char.Name, char.Role, char.Meta.Age, char.Meta.Gender, char.Description, genderAnchor)
+	sysPrompt, err := renderPrompt("character_costume_design", map[string]interface{}{
+		"PromptLanguage":  promptLanguage,
+		"WorldContext":    worldContext,
+		"CharName":        char.Name,
+		"CharRole":        char.Role,
+		"CharAge":         char.Meta.Age,
+		"CharGender":      char.Meta.Gender,
+		"CharDescription": char.Description,
+		"GenderAnchor":    genderAnchor,
+	})
+	if err != nil {
+		return "", fmt.Errorf("render character_costume_design: %w", err)
 	}
 
 	result, err := s.aiService.GenerateWithProvider(tenantID, char.NovelID, "character_profile", sysPrompt, "",

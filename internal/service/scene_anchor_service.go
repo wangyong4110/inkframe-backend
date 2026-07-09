@@ -613,28 +613,21 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 		}
 	}
 
-	// 组装图像生成 prompt（注入场景描述 + PromptLock + 标准化场景生成词）
 	logger.Printf("[SceneAnchorService] GenerateRefImage: anchorID=%d description_len=%d description=%.200q promptLock=%.80q", id, len(anchor.Description), anchor.Description, anchor.PromptLock)
-	prompt := anchor.Description
-	if anchor.PromptLock != "" {
-		prompt += ", " + anchor.PromptLock
-	}
 	sceneType := anchor.Type
 	if sceneType == "" {
 		sceneType = "exterior"
 	}
-	sceneSuffix := "establishing shot, " + sceneType + " scene, no humans, no people, no figures, " +
-		"cinematic composition, three depth layers foreground midground background, " +
-		"architectural detail, atmospheric lighting, photorealistic, " +
-		universalQualityTags
-	if prompt != "" {
-		prompt += ", " + sceneSuffix
-	} else {
-		prompt = sceneSuffix
+	rendered, tplErr := renderPrompt("image_scene_ref", map[string]interface{}{
+		"Description":  anchor.Description,
+		"PromptLock":   anchor.PromptLock,
+		"SceneType":    sceneType,
+		"QualityTokens": universalQualityTags,
+	})
+	if tplErr != nil {
+		return nil, fmt.Errorf("render image_scene_ref: %w", tplErr)
 	}
-	sceneNegative := "person, people, human, man, woman, boy, girl, figure, silhouette, character, body, face, hands, " +
-		"crowd, group, portrait, anime character, cartoon character, " +
-		"blurry, low quality, watermark, text, floating objects, modern elements"
+	prompt, sceneNegative := splitImagePrompt(rendered)
 
 	sizeOverride := imageAspectRatioToSize(aspectRatio, "master")
 	imageURL, err := s.aiSvc.GenerateCharacterThreeView(ctx, tenantID, providerName, prompt, "", imageStyle, sceneNegative, sizeOverride)
