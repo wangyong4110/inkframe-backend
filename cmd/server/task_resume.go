@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/inkframe/inkframe-backend/internal/handler"
 	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
@@ -50,7 +52,9 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 
-			// Video-level batch SFX: entity_type == "video"
+			// Video-level batch SFX: entity_type == "video". Two handler flows share this:
+			//   - BatchGenerateSFX: force=false (skip shots that already have tags)
+			//   - AnalyzeSFXTags: force=true (force re-analyze all shots' tags)
 			videoID := t.EntityID
 			if videoID == 0 {
 				return
@@ -59,6 +63,8 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			var params struct {
 				UserContext string `json:"user_context"`
 				Lang        string `json:"lang"`
+				Provider    string `json:"provider"`
+				Force       bool   `json:"force"`
 			}
 			if t.ParamsJSON != "" {
 				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
@@ -78,7 +84,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			svcs.TaskService.UpdateProgress(t.TaskID, 5) //nolint:errcheck
 
 			ctx := context.Background()
-			if err := svcs.SFXService.AnalyzeSFXForVideo(ctx, shots, tenantID, params.UserContext, params.Lang, false); err != nil {
+			if err := svcs.SFXService.AnalyzeSFXForVideo(ctx, shots, tenantID, params.UserContext, params.Lang, params.Force); err != nil {
 				logger.Errorf("TaskService resume sfx_gen %s: analyze failed: %v", t.TaskID, err)
 			}
 			svcs.TaskService.UpdateProgress(t.TaskID, 50) //nolint:errcheck
@@ -87,9 +93,16 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				overall := 50 + pct*45/100
 				svcs.TaskService.UpdateProgress(t.TaskID, overall) //nolint:errcheck
 			}
-			success, fail, failedIDs := svcs.SFXService.BatchAutoGenerateSFX(ctx, shots, tenantID, params.UserContext, "", progressFn)
+			success, fail, failedIDs := svcs.SFXService.BatchAutoGenerateSFX(ctx, shots, tenantID, params.UserContext, params.Provider, progressFn)
 			logger.Printf("TaskService resume sfx_gen %s done: sfx_success=%d sfx_fail=%d", t.TaskID, success, fail)
-			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"sfx_success": success, "sfx_fail": fail, "failed_shot_ids": failedIDs}) //nolint:errcheck
+			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{ //nolint:errcheck
+				"count":           len(shots),
+				"success":         success,
+				"fail":            fail,
+				"sfx_success":     success,
+				"sfx_fail":        fail,
+				"failed_shot_ids": failedIDs,
+			})
 		})
 	}
 
@@ -110,8 +123,8 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				if t.ParamsJSON != "" {
 					_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
 				}
-				svcs.TaskService.SetRunning(t.TaskID)                                                           //nolint:errcheck
-				progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) }                 //nolint:errcheck
+				svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
+				progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
 				succ, fail, err := svcs.CharacterService.BatchGenerateImages(tenantID, novelID, params.Provider, params.Force, progressFn)
 				if err != nil {
 					logger.Errorf("TaskService resume three_view %s failed: %v", t.TaskID, err)
@@ -191,13 +204,14 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			var params struct {
-				NovelID uint `json:"novel_id"`
+				NovelID    uint   `json:"novel_id"`
+				UserPrompt string `json:"user_prompt"`
 			}
 			if t.ParamsJSON != "" {
 				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			chars, err := svcs.CharacterService.AIExtractMinorChars(t.TenantID, params.NovelID, chapterID, "")
+			chars, err := svcs.CharacterService.AIExtractMinorChars(t.TenantID, params.NovelID, chapterID, params.UserPrompt)
 			if err != nil {
 				logger.Errorf("TaskService resume chapter_char_extract %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -221,7 +235,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				logger.Errorf("TaskService resume char_reanalyze %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 			} else {
-				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"character_id": char.ID}) //nolint:errcheck
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"character": handler.CharacterResponse(char)}) //nolint:errcheck
 			}
 		})
 	}
@@ -241,12 +255,16 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				logger.Errorf("TaskService resume char_gen %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 			} else {
-				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"count": len(chars)}) //nolint:errcheck
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"characters": chars, "count": len(chars)}) //nolint:errcheck
 			}
 		})
 	}
 
-	// item_extract: AI extract items from novel (idempotent — overwrites existing)
+	// item_extract: AI extract items from novel (idempotent — overwrites existing).
+	// Uses ItemService.AIExtractFromNovel to match what ItemHandler.AIExtractFromNovel has
+	// always actually called in production — NOT AIExtractAllFromNovel (a separate, newer
+	// implementation with existing-item dedup that was never wired to the live handler).
+	// Switching to it would be a real behavior change, not just a migration.
 	if svcs.ItemService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeItemExtract, func(t *model.AsyncTask) {
 			novelID := t.EntityID
@@ -256,12 +274,12 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			tenantID := t.TenantID
 			svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
 			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
-			items, err := svcs.ItemService.AIExtractAllFromNovel(context.Background(), tenantID, novelID)
+			items, err := svcs.ItemService.AIExtractFromNovel(tenantID, novelID)
 			if err != nil {
 				logger.Errorf("TaskService resume item_extract %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 			} else {
-				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"count": len(items)}) //nolint:errcheck
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"items": items, "count": len(items)}) //nolint:errcheck
 			}
 		})
 	}
@@ -271,6 +289,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypePlotExtract, func(t *model.AsyncTask) {
 			novelID := t.EntityID
 			if novelID == 0 {
+				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
 				return
 			}
 			tenantID := t.TenantID
@@ -281,7 +300,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				logger.Errorf("TaskService resume plot_extract %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 			} else {
-				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"count": len(points)}) //nolint:errcheck
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"plot_points": points, "count": len(points)}) //nolint:errcheck
 			}
 		})
 	}
@@ -294,8 +313,8 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			tenantID := t.TenantID
-			svcs.TaskService.SetRunning(t.TaskID)                                               //nolint:errcheck
-			progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) }     //nolint:errcheck
+			svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
+			progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
 			count, err := svcs.ChapterService.BatchGenerateSummaries(tenantID, novelID, progressFn)
 			if err != nil {
 				logger.Errorf("TaskService resume chapter_summary_batch %s failed: %v", t.TaskID, err)
@@ -333,7 +352,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				*model.StoryboardReview
 				RecordID uint `json:"record_id,omitempty"`
 			}
-			svcs.TaskService.UpdateProgress(t.TaskID, 90)                                                          //nolint:errcheck
+			svcs.TaskService.UpdateProgress(t.TaskID, 90)                                                    //nolint:errcheck
 			svcs.TaskService.Complete(t.TaskID, &reviewResult{StoryboardReview: review, RecordID: recordID}) //nolint:errcheck
 		})
 	}
@@ -354,7 +373,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			tenantID := t.TenantID
 			svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
 			svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
-			_ = tenantID // QualityControlService.ReviewChapter does not take tenantID
+			_ = tenantID                                  // QualityControlService.ReviewChapter does not take tenantID
 			review, err := svcs.QualityControlService.ReviewChapter(context.Background(), chapterID, params.Provider)
 			if err != nil {
 				logger.Errorf("TaskService resume chapter_review %s failed: %v", t.TaskID, err)
@@ -362,20 +381,96 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			svcs.TaskService.UpdateProgress(t.TaskID, 90) //nolint:errcheck
-			svcs.TaskService.Complete(t.TaskID, review)    //nolint:errcheck
+			svcs.TaskService.Complete(t.TaskID, review)   //nolint:errcheck
 		})
 	}
 
-	// voice_gen: batch voice (video entity) or single segment
+	// chapter_outline_review: AI review a chapter's outline (OutlineReviewHandler.ReviewChapter).
+	// Was previously misfiled under the same task type as chapter_review (chapter content
+	// review) — split into its own type since they call different service methods.
+	if svcs.OutlineReviewService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterOutlineReview, func(t *model.AsyncTask) {
+			chapterID := t.EntityID
+			if chapterID == 0 {
+				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+				return
+			}
+			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
+			review, err := svcs.OutlineReviewService.ReviewChapterOutline(context.Background(), t.TenantID, chapterID)
+			if err != nil {
+				logger.Errorf("TaskService resume chapter_outline_review %s failed: %v", t.TaskID, err)
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+				return
+			}
+			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"review": review}) //nolint:errcheck
+		})
+	}
+
+	// voice_gen: batch voice (video entity), single segment, or single shot
 	if svcs.VideoService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeVoiceGen, func(t *model.AsyncTask) {
 			var params struct {
-				NarrationVoice string `json:"narration_voice"`
+				NarrationVoice  string `json:"narration_voice"`
+				SubtitleEnabled bool   `json:"subtitle_enabled"`
+				VideoID         uint   `json:"video_id"`
+				SkipExisting    bool   `json:"skip_existing"`
 			}
 			if t.ParamsJSON != "" {
 				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
 			}
 			tenantID := t.TenantID
+
+			if t.EntityType == "shot" {
+				shotID := t.EntityID
+				if shotID == 0 || params.VideoID == 0 {
+					svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+					return
+				}
+				shot, err := svcs.VideoService.GetShotByID(params.VideoID, shotID)
+				if err != nil {
+					svcs.TaskService.Fail(t.TaskID, "shot not found: "+err.Error()) //nolint:errcheck
+					return
+				}
+				svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
+				svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
+				// 删除已有语音段落，强制重新合成。
+				if segs, err := svcs.VideoService.ListVoiceSegments(shot.ID); err == nil {
+					for _, seg := range segs {
+						svcs.VideoService.DeleteVoiceSegment(seg.ID) //nolint:errcheck
+					}
+				}
+				const maxRetries = 3
+				var audioErr error
+				for attempt := 1; attempt <= maxRetries; attempt++ {
+					audioErr = svcs.VideoService.GenerateShotAudio(shot, tenantID, params.NarrationVoice)
+					if audioErr == nil {
+						break
+					}
+					logger.Errorf("TaskService resume voice_gen(shot) %s shot %d attempt %d/%d failed: %v", t.TaskID, shot.ShotNo, attempt, maxRetries, audioErr)
+					if attempt < maxRetries {
+						time.Sleep(time.Duration(attempt*2) * time.Second)
+					}
+				}
+				if audioErr != nil {
+					svcs.TaskService.Fail(t.TaskID, audioErr.Error()) //nolint:errcheck
+					return
+				}
+				svcs.TaskService.UpdateProgress(t.TaskID, 90) //nolint:errcheck
+				audioURL := ""
+				if m := svcs.VideoService.GetShotAudioMap([]uint{shot.ID}); m != nil {
+					if _, ok := m[shot.ID]; ok {
+						audioURL = handler.ResolveAudioURL(params.VideoID, shot)
+					}
+				}
+				result := map[string]interface{}{"audio_url": audioURL, "shot_id": shot.ID}
+				if params.SubtitleEnabled {
+					if srt := service.GenerateShotSRT(shot); srt != "" {
+						result["subtitle_srt"] = srt
+					}
+				}
+				svcs.TaskService.Complete(t.TaskID, result) //nolint:errcheck
+				return
+			}
 
 			if t.EntityType == "segment" {
 				segID := t.EntityID
@@ -385,15 +480,32 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				}
 				svcs.TaskService.SetRunning(t.TaskID)         //nolint:errcheck
 				svcs.TaskService.UpdateProgress(t.TaskID, 10) //nolint:errcheck
-				if err := svcs.VideoService.GenerateSegmentAudio(segID, tenantID, params.NarrationVoice); err != nil {
-					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
-				} else {
-					svcs.TaskService.Complete(t.TaskID, nil) //nolint:errcheck
+				const maxRetries = 3
+				var audioErr error
+				for attempt := 1; attempt <= maxRetries; attempt++ {
+					audioErr = svcs.VideoService.GenerateSegmentAudio(segID, tenantID, params.NarrationVoice)
+					if audioErr == nil {
+						break
+					}
+					logger.Printf("TaskService resume voice_gen(segment) %s seg %d attempt %d/%d: %v", t.TaskID, segID, attempt, maxRetries, audioErr)
+					if attempt < maxRetries {
+						time.Sleep(time.Duration(attempt*2) * time.Second)
+					}
 				}
+				if audioErr != nil {
+					svcs.TaskService.Fail(t.TaskID, audioErr.Error()) //nolint:errcheck
+					return
+				}
+				seg, _ := svcs.VideoService.GetVoiceSegment(segID)
+				svcs.TaskService.UpdateProgress(t.TaskID, 90) //nolint:errcheck
+				svcs.TaskService.Complete(t.TaskID, seg)      //nolint:errcheck
 				return
 			}
 
-			// Video batch: re-run, skip shots that already have audio
+			// Video batch (BatchGenerateVoice): re-run, skip shots that already have voice-segment
+			// audio unless skip_existing=false (hasAudio is determined via ListVoiceSegments,
+			// the current source of truth — not the legacy shot.TaskMeta.AudioPath field, which
+			// multi-segment voice storage no longer writes to).
 			videoID := t.EntityID
 			if videoID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
@@ -404,13 +516,22 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				svcs.TaskService.Fail(t.TaskID, "storyboard not found on resume") //nolint:errcheck
 				return
 			}
+			hasAudio := func(shotID uint) bool {
+				segs, _ := svcs.VideoService.ListVoiceSegments(shotID)
+				for _, seg := range segs {
+					if seg.AudioPath != "" {
+						return true
+					}
+				}
+				return false
+			}
 			var targets []*model.StoryboardShot
 			for _, s := range shots {
 				if s.Narration == "" && s.GenMeta.Dialogue == "" && s.Description == "" {
 					continue
 				}
-				if s.TaskMeta.AudioPath != "" {
-					continue // skip already-voiced
+				if params.SkipExisting && hasAudio(s.ID) {
+					continue
 				}
 				targets = append(targets, s)
 			}
@@ -444,7 +565,20 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					time.Sleep(1 * time.Second)
 				}
 			}
-			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"total": total}) //nolint:errcheck
+			// 统计最终结果（与原 handler 一致：按 targets 集合重新核对是否配音成功）
+			targetSet := make(map[uint]bool, len(targets))
+			for _, s := range targets {
+				targetSet[s.ID] = true
+			}
+			success, fail := 0, 0
+			for shotID := range targetSet {
+				if hasAudio(shotID) {
+					success++
+				} else {
+					fail++
+				}
+			}
+			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"success": success, "fail": fail, "total": total}) //nolint:errcheck
 		})
 	}
 
@@ -468,7 +602,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
 					return
 				}
-				svcs.TaskService.SetRunning(t.TaskID)                                           //nolint:errcheck
+				svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
 				progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
 				succ, fail, err := svcs.ItemService.BatchGenerateImages(tenantID, novelID, params.Provider, params.Force, progressFn)
 				if err != nil {
@@ -489,7 +623,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				} else {
 					svcs.TaskService.UpdateProgress(t.TaskID, 90) //nolint:errcheck
-					svcs.TaskService.Complete(t.TaskID, item)      //nolint:errcheck
+					svcs.TaskService.Complete(t.TaskID, item)     //nolint:errcheck
 				}
 			case "scene_anchor_batch":
 				novelID := t.EntityID
@@ -497,7 +631,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
 					return
 				}
-				svcs.TaskService.SetRunning(t.TaskID)                                           //nolint:errcheck
+				svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
 				progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
 				succ, fail, err := svcs.SceneAnchorService.BatchGenerateRefImages(context.Background(), tenantID, novelID, params.Provider, params.Force, progressFn)
 				if err != nil {
@@ -520,8 +654,9 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			var params struct {
-				NovelID  uint   `json:"novel_id"`
-				Content  string `json:"content"`
+				NovelID    uint   `json:"novel_id"`
+				Content    string `json:"content"`
+				UserPrompt string `json:"user_prompt"`
 			}
 			if t.ParamsJSON != "" {
 				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
@@ -531,7 +666,9 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			anchors, err := svcs.SceneAnchorService.ExtractFromChapter(context.Background(), t.TenantID, params.NovelID, "", params.Content, chapterID, "")
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
+			defer cancel()
+			anchors, err := svcs.SceneAnchorService.ExtractFromChapter(ctx, t.TenantID, params.NovelID, "", params.Content, chapterID, params.UserPrompt)
 			if err != nil {
 				logger.Errorf("TaskService resume chapter_scene_extract %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -549,13 +686,13 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			tenantID := t.TenantID
-			svcs.TaskService.SetRunning(t.TaskID)                                             //nolint:errcheck
-			progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) }   //nolint:errcheck
+			svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
+			progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
 			anchors, err := svcs.SceneAnchorService.AIExtractAllFromNovel(context.Background(), tenantID, novelID, progressFn)
 			if err != nil {
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 			} else {
-				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"count": len(anchors)}) //nolint:errcheck
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"scene_anchors": anchors, "count": len(anchors)}) //nolint:errcheck
 			}
 		})
 	}
@@ -631,8 +768,8 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			if t.ParamsJSON != "" {
 				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
 			}
-			svcs.TaskService.SetRunning(t.TaskID)                                             //nolint:errcheck
-			progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) }   //nolint:errcheck
+			svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
+			progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
 			overrides := service.StoryboardOverrides{
 				MaxTokens:      params.MaxTokens,
 				Temperature:    params.Temperature,
@@ -717,9 +854,52 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		})
 	}
 
-	// char_image_gen: re-generate character image
+	// char_image_gen: two entity_types share this task type:
+	//   - "character": re-generate a single character's portrait/expression/pose
+	//   - "chapter": batch-generate images for selected characters mentioned in a chapter
+	//     (GenerateChapterCharacterImages) — needs novel_id/character_ids/provider from params
+	//     since chapter_id alone (t.EntityID) isn't enough to know which characters to generate.
 	if svcs.ImageGenerationService != nil && svcs.CharacterService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeCharImageGen, func(t *model.AsyncTask) {
+			if t.EntityType == "chapter" && svcs.ChapterService != nil {
+				chapterID := t.EntityID
+				if chapterID == 0 {
+					svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+					return
+				}
+				var params struct {
+					NovelID      uint   `json:"novel_id"`
+					CharacterIDs []uint `json:"character_ids"`
+					Provider     string `json:"provider"`
+				}
+				if t.ParamsJSON != "" {
+					_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
+				}
+				if len(params.CharacterIDs) == 0 {
+					svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+					return
+				}
+				chapter, err := svcs.ChapterService.GetChapter(chapterID, t.TenantID)
+				if err != nil {
+					svcs.TaskService.Fail(t.TaskID, "chapter not found: "+err.Error()) //nolint:errcheck
+					return
+				}
+				svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
+				progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
+				succeeded, failed, genErr := svcs.CharacterService.GenerateChapterImages(
+					context.Background(), t.TenantID, params.NovelID, chapter, params.CharacterIDs, params.Provider, progressFn,
+				)
+				if genErr != nil {
+					svcs.TaskService.Fail(t.TaskID, genErr.Error()) //nolint:errcheck
+					return
+				}
+				if failed > 0 && succeeded == 0 {
+					svcs.TaskService.Fail(t.TaskID, fmt.Sprintf("all %d character image generations failed", failed)) //nolint:errcheck
+					return
+				}
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"succeeded": succeeded, "failed": failed}) //nolint:errcheck
+				return
+			}
 			charID := t.EntityID
 			if charID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
@@ -786,17 +966,51 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		})
 	}
 
-	// voice_preview: re-generate voice preview audio
+	// voice_preview: two entity_types share this task type:
+	//   - "voice" (entity_id=0): narration-only voice preview, not tied to any character
+	//     (ModelHandler.VoicePreview) — just voice_id/text, no character side effects.
+	//   - "character": preview a character's configured voice, also writes the result back
+	//     to the character's VoiceSample field (CharacterHandler.PreviewVoice).
 	if svcs.AIService != nil && svcs.CharacterService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeVoicePreview, func(t *model.AsyncTask) {
+			if t.EntityType == "voice" {
+				var vparams struct {
+					Text    string `json:"text"`
+					VoiceID string `json:"voice_id"`
+				}
+				if t.ParamsJSON != "" {
+					_ = json.Unmarshal([]byte(t.ParamsJSON), &vparams)
+				}
+				if vparams.Text == "" || vparams.VoiceID == "" {
+					svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+					return
+				}
+				svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
+				ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+				defer cancel()
+				rawURL, err := svcs.AIService.AudioGenerateWithOptions(ctx, t.TenantID, vparams.Text, vparams.VoiceID, 1.0, "")
+				if err != nil {
+					logger.Errorf("TaskService resume voice_preview(voice) %s failed: %v", t.TaskID, err)
+					svcs.TaskService.Fail(t.TaskID, "语音生成失败: "+err.Error()) //nolint:errcheck
+					return
+				}
+				playURL := rawURL
+				if len(rawURL) > 7 && rawURL[:7] == "file://" {
+					if data, readErr := os.ReadFile(rawURL[7:]); readErr == nil && len(data) > 0 {
+						playURL = "data:audio/mpeg;base64," + base64.StdEncoding.EncodeToString(data)
+					}
+				}
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"audio_url": playURL, "voice_id": vparams.VoiceID}) //nolint:errcheck
+				return
+			}
 			charID := t.EntityID
 			if charID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
 				return
 			}
 			var params struct {
-				Text      string  `json:"text"`
-				VoiceID   string  `json:"voice_id"`
+				Text       string  `json:"text"`
+				VoiceID    string  `json:"voice_id"`
 				VoiceSpeed float64 `json:"voice_speed"`
 				VoiceStyle string  `json:"voice_style"`
 				VoiceLang  string  `json:"voice_lang"`
@@ -823,6 +1037,9 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				filePath := rawURL[7:]
 				if data, readErr := os.ReadFile(filePath); readErr == nil && len(data) > 0 {
 					playURL = "data:audio/mpeg;base64," + base64.StdEncoding.EncodeToString(data)
+				} else {
+					// Fallback to sample endpoint if the temp file cannot be read.
+					playURL = "/api/v1/characters/" + strconv.FormatUint(uint64(charID), 10) + "/voice/sample?t=" + strconv.FormatInt(time.Now().UnixMilli(), 10)
 				}
 			}
 			svcs.CharacterService.UpdateCharacter(charID, t.TenantID, &model.UpdateCharacterRequest{ //nolint:errcheck
@@ -833,7 +1050,11 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		})
 	}
 
-	// look_prompt_gen: re-generate look visual prompt
+	// look_prompt_gen: two distinct handler flows share this task type (discriminated by
+	// params.Kind, mirroring the source-field routing convention used by asset_gen/image_gen):
+	//   - "" or "prompt": re-generate look visual prompt from a description (GenerateLookVisualPrompt)
+	//   - "design": AI-generate a costume/appearance design purely from the character's own
+	//     Description field already in the DB (GenerateCostumeDesign) — no extra params needed.
 	if svcs.CharacterService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeLookPromptGen, func(t *model.AsyncTask) {
 			charID := t.EntityID
@@ -842,10 +1063,22 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			var params struct {
+				Kind        string `json:"kind"`
 				Description string `json:"description"`
 			}
 			if t.ParamsJSON != "" {
 				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
+			}
+			if params.Kind == "design" {
+				svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
+				prompt, err := svcs.CharacterService.GenerateCostumeDesign(t.TenantID, charID)
+				if err != nil {
+					logger.Errorf("TaskService resume look_prompt_gen(design) %s failed: %v", t.TaskID, err)
+					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+				} else {
+					svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"appearance_prompt": prompt}) //nolint:errcheck
+				}
+				return
 			}
 			if params.Description == "" {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
@@ -898,18 +1131,20 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			tenantID := t.TenantID
 			var updatedLook *model.CharacterLook
 			switch params.Type {
-			case "portrait", "":
-				img, err := svcs.ImageGenerationService.GenerateThreeViewSheet(ctx, tenantID, char.Name, visualPrompt, style, "", look.Portrait, params.Provider)
+			case "portrait":
+				// Step 1: generate face portrait from visual prompt (no reference needed)
+				img, err := svcs.ImageGenerationService.GeneratePortrait(ctx, tenantID, char.Name, visualPrompt, style, "", "", params.Provider)
 				if err != nil {
 					logger.Errorf("TaskService resume look_image_gen %s portrait failed: %v", t.TaskID, err)
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 					return
 				}
 				imageURL := img.URL
-				updateReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &imageURL}
+				updateReq := &model.UpdateCharacterLookRequest{Portrait: &imageURL}
 				updatedLook, _ = svcs.CharacterService.UpdateLook(lookID, updateReq)
-			case "three_view":
-				img, err := svcs.ImageGenerationService.GenerateThreeViewSheet(ctx, tenantID, char.Name, visualPrompt, style, "", look.ThreeViewSheet, params.Provider)
+			case "three_view", "":
+				// Step 2: generate three-view sheet using portrait as face reference
+				img, err := svcs.ImageGenerationService.GenerateThreeViewSheet(ctx, tenantID, char.Name, visualPrompt, style, "", look.Portrait, params.Provider)
 				if err != nil {
 					logger.Errorf("TaskService resume look_image_gen %s three_view failed: %v", t.TaskID, err)
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
@@ -919,7 +1154,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				updateReq := &model.UpdateCharacterLookRequest{ThreeViewSheet: &imageURL}
 				updatedLook, _ = svcs.CharacterService.UpdateLook(lookID, updateReq)
 			default:
-				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+				svcs.TaskService.Fail(t.TaskID, "type must be 'three_view' or 'portrait'") //nolint:errcheck
 				return
 			}
 			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"look": updatedLook}) //nolint:errcheck
@@ -978,9 +1213,92 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		})
 	}
 
-	// chapter_gen: re-run chapter generation with saved request
+	// chapter_gen: three flows share this task type, disambiguated by entity_type and,
+	// for "chapter", by whether an entity_id is set:
+	//   - "novel": generate the next new chapter (ChapterHandler.GenerateChapter)
+	//   - "chapter" with entity_id>0: regenerate an existing chapter's content
+	//     (ChapterHandler.RegenerateChapter)
+	//   - "chapter" with entity_id==0: also generates the next new chapter, but from
+	//     NovelHandler.GenerateChapter — a second, slightly different entry point for the same
+	//     underlying operation that additionally sends a completion notification and chains two
+	//     best-effort, fire-and-forget post-processing steps (foreshadow extraction, quality
+	//     check) whose errors are only logged, never fail the task — kept as detached goroutines
+	//     here to match that "don't block/don't fail on these" intent exactly.
 	if svcs.ChapterService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeChapterGen, func(t *model.AsyncTask) {
+			if t.EntityType == "chapter" && t.EntityID > 0 {
+				chapterID := t.EntityID
+				var req model.GenerateChapterRequest
+				if t.ParamsJSON != "" {
+					_ = json.Unmarshal([]byte(t.ParamsJSON), &req)
+				}
+				svcs.TaskService.SetRunning(t.TaskID)        //nolint:errcheck
+				svcs.TaskService.UpdateProgress(t.TaskID, 5) //nolint:errcheck
+				chapter, err := svcs.ChapterService.RegenerateChapter(t.TenantID, chapterID, &req)
+				if err != nil {
+					logger.Errorf("TaskService resume chapter_gen(chapter) %s failed: %v", t.TaskID, err)
+					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+					return
+				}
+				svcs.TaskService.UpdateProgress(t.TaskID, 90)                                   //nolint:errcheck
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"chapter": chapter}) //nolint:errcheck
+				return
+			}
+			if t.EntityType == "chapter" && t.EntityID == 0 {
+				var params struct {
+					NovelID      uint                         `json:"novel_id"`
+					Req          model.GenerateChapterRequest `json:"req"`
+					CallerUserID uint                         `json:"caller_user_id"`
+				}
+				if t.ParamsJSON != "" {
+					_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
+				}
+				if params.NovelID == 0 {
+					svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+					return
+				}
+				tenantID := t.TenantID
+				svcs.TaskService.SetRunning(t.TaskID)        //nolint:errcheck
+				svcs.TaskService.UpdateProgress(t.TaskID, 5) //nolint:errcheck
+				chapter, err := svcs.ChapterService.GenerateChapter(tenantID, params.NovelID, &params.Req)
+				if err != nil {
+					logger.Errorf("TaskService resume chapter_gen(chapter,new) %s failed: %v", t.TaskID, err)
+					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+					return
+				}
+				svcs.TaskService.UpdateProgress(t.TaskID, 90) //nolint:errcheck
+				modelUsed := params.Req.ModelOverride
+				if modelUsed == "" && svcs.NovelService != nil {
+					modelUsed = svcs.NovelService.GetAIService().GetDefaultProviderName()
+				}
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"chapter": chapter, "model_used": modelUsed}) //nolint:errcheck
+
+				if svcs.NotificationService != nil && params.CallerUserID > 0 {
+					_ = svcs.NotificationService.Send(
+						tenantID, params.CallerUserID,
+						"chapter_done",
+						fmt.Sprintf("第%d章生成完成", chapter.ChapterNo),
+						chapter.Title,
+						"chapter", chapter.ID,
+						fmt.Sprintf("/novel/%d/chapter/%d", chapter.NovelID, chapter.ChapterNo),
+					)
+				}
+				if svcs.ForeshadowService != nil {
+					go func(ch *model.Chapter, tid uint) {
+						if _, err := svcs.ForeshadowService.ExtractForeshadows(ch, tid, ch.NovelID); err != nil {
+							logger.Errorf("TaskService resume chapter_gen(chapter,new) %s: foreshadow extraction failed (ch %d): %v", t.TaskID, ch.ID, err)
+						}
+					}(chapter, tenantID)
+				}
+				if svcs.QualityControlService != nil {
+					go func(chID uint) {
+						if _, err := svcs.QualityControlService.CheckChapter(chID); err != nil {
+							logger.Errorf("TaskService resume chapter_gen(chapter,new) %s: quality check failed (ch %d): %v", t.TaskID, chID, err)
+						}
+					}(chapter.ID)
+				}
+				return
+			}
 			if t.ParamsJSON == "" {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
 				return
@@ -1002,7 +1320,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				return
 			}
-			svcs.TaskService.UpdateProgress(t.TaskID, 90)                                               //nolint:errcheck
+			svcs.TaskService.UpdateProgress(t.TaskID, 90)                                   //nolint:errcheck
 			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"chapter": chapter}) //nolint:errcheck
 		})
 	}
@@ -1019,12 +1337,11 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 	if svcs.VideoService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeAssetGen, func(t *model.AsyncTask) {
 			var params struct {
-				Source      string `json:"source"`
-				VideoID     uint   `json:"video_id"`
-				ShotID      uint   `json:"shot_id"`
-				ShotIDs     []uint `json:"shot_ids"`
-				QualityTier string `json:"quality_tier"`
-				Provider    string `json:"provider"`
+				Source   string                          `json:"source"`
+				VideoID  uint                            `json:"video_id"`
+				ShotID   uint                            `json:"shot_id"`
+				Provider string                          `json:"provider"`
+				Req      model.BatchGenerateShotsRequest `json:"req"`
 			}
 			if t.ParamsJSON != "" {
 				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
@@ -1043,31 +1360,54 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				shot, err := svcs.VideoService.GenerateSingleShot(videoID, shotID, params.Provider)
 				if err != nil {
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
-				} else {
-					svcs.TaskService.UpdateProgress(t.TaskID, 90)                                                          //nolint:errcheck
-					svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"shot_id": shot.ID, "status": shot.Status}) //nolint:errcheck
+					return
 				}
+				svcs.TaskService.UpdateProgress(t.TaskID, 50) //nolint:errcheck
+				// AI 视频模式：只轮询当前分镜直到完成，避免触发其他分镜的生成
+				if shot.Status == "processing" {
+					svcs.VideoService.PollSingleShotUntilDone(videoID, shotID)
+				}
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"shot_id": shot.ID, "status": shot.Status}) //nolint:errcheck
 			case "batch_shots":
 				videoID := t.EntityID
-				if videoID == 0 || len(params.ShotIDs) == 0 {
+				if videoID == 0 || len(params.Req.ShotIDs) == 0 {
 					svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
 					return
 				}
 				svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-				shots, err := svcs.VideoService.BatchGenerateShots(videoID, params.ShotIDs, params.QualityTier, progressFn, params.Provider)
+				var shots []*model.StoryboardShot
+				var err error
+				switch {
+				case params.Req.VoiceFirst:
+					// 配音优先：先生成 TTS，以配音时长决定视频时长，保证声画同步
+					shots, err = svcs.VideoService.VoiceFirstGenerateShots(videoID, params.Req.ShotIDs, params.Req.QualityTier, progressFn, params.Req.Provider)
+				case params.Req.Sequential:
+					// 顺序模式：每镜完成后同步 chain 最后一帧再提交下一镜，保证 I2V 链接
+					shots, err = svcs.VideoService.SequentialGenerateShots(videoID, params.Req.ShotIDs, params.Req.QualityTier, progressFn, params.Req.Provider)
+				default:
+					shots, err = svcs.VideoService.BatchGenerateShots(videoID, params.Req.ShotIDs, params.Req.QualityTier, progressFn, params.Req.Provider)
+				}
 				if err != nil {
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
-				} else {
-					svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"shot_count": len(shots)}) //nolint:errcheck
+					return
 				}
+				// 并发模式下：AI 视频任务仍在 processing，启动轮询等待所有镜头完成
+				// 顺序模式下：所有镜头已完成，PollAndStitchVideo 会快速完成
+				for _, sh := range shots {
+					if sh.Status == "processing" {
+						svcs.VideoService.PollAndStitchVideo(videoID)
+						break
+					}
+				}
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"shot_count": len(shots)}) //nolint:errcheck
 			case "batch_images":
 				videoID := t.EntityID
-				if videoID == 0 || len(params.ShotIDs) == 0 {
+				if videoID == 0 || len(params.Req.ShotIDs) == 0 {
 					svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
 					return
 				}
 				svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-				shots, err := svcs.VideoService.BatchGenerateShotImages(videoID, params.ShotIDs, false, progressFn)
+				shots, err := svcs.VideoService.BatchGenerateShotImages(videoID, params.Req.ShotIDs, params.Req.Force, progressFn)
 				if err != nil {
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				} else {
@@ -1075,12 +1415,12 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				}
 			case "batch_clips":
 				videoID := t.EntityID
-				if videoID == 0 || len(params.ShotIDs) == 0 {
+				if videoID == 0 || len(params.Req.ShotIDs) == 0 {
 					svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
 					return
 				}
 				svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-				shots, err := svcs.VideoService.BatchGenerateShotClips(videoID, params.ShotIDs, progressFn)
+				shots, err := svcs.VideoService.BatchGenerateShotClips(videoID, params.Req.ShotIDs, progressFn)
 				if err != nil {
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				} else {
@@ -1136,10 +1476,75 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 		})
 	}
 
-	// import: cannot safely re-run after restart (would create duplicates)
-	svcs.TaskService.RegisterResumeHandler(service.TaskTypeImport, func(t *model.AsyncTask) {
-		svcs.TaskService.Fail(t.TaskID, "服务重启，请重新提交") //nolint:errcheck
-	})
+	// import: two shapes share this task type, disambiguated by entity_id:
+	//   - entity_id > 0: ResumeCrawl — continue an already-running crawl job for an existing
+	//     novel (ImportHandler.ResumeCrawl). Kicks off importService.ResumeCrawl then polls.
+	//   - entity_id == 0: fresh import (ImportNovel/ImportFromFile/ImportFromURL/
+	//     ImportFromCrawl/CompleteChunkedUpload), params carry the full ImportRequest
+	//     (minus FileData, which is staged in storage — see file_url) discriminated by
+	//     req.Source.
+	// Not safe to blindly re-run after a crash mid-import (could create a duplicate novel),
+	// so params-less/incomplete tasks fail out with a resubmit message rather than guessing.
+	if svcs.NovelImportService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeImport, func(t *model.AsyncTask) {
+			if t.EntityID > 0 {
+				resumeImportCrawl(svcs, t, t.EntityID)
+				return
+			}
+
+			var params struct {
+				Req     service.ImportRequest `json:"req"`
+				FileURL string                `json:"file_url,omitempty"`
+			}
+			if t.ParamsJSON != "" {
+				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
+			}
+			if params.Req.Source == "" {
+				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+				return
+			}
+			if params.FileURL != "" {
+				data, err := svcs.NovelImportService.DownloadStagedFile(context.Background(), params.FileURL)
+				if err != nil {
+					logger.Errorf("TaskService resume import %s: failed to download staged file: %v", t.TaskID, err)
+					svcs.TaskService.Fail(t.TaskID, "读取暂存文件失败: "+err.Error()) //nolint:errcheck
+					return
+				}
+				params.Req.FileData = data
+			}
+
+			if params.Req.Source == service.SourceCrawl {
+				resumeImportCrawlFresh(svcs, t, &params.Req)
+				return
+			}
+
+			svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
+			svcs.TaskService.UpdateProgress(t.TaskID, 20)                                  //nolint:errcheck
+			svcs.TaskService.SetMeta(t.TaskID, map[string]interface{}{"step": "解析导入中..."}) //nolint:errcheck
+
+			result, err := svcs.NovelImportService.Import(&params.Req)
+			if err != nil {
+				logger.Errorf("TaskService resume import %s failed: %v", t.TaskID, err)
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+				return
+			}
+
+			analysisTaskID := ""
+			if svcs.NovelAnalysisService != nil {
+				if id, aErr := svcs.NovelAnalysisService.StartAnalysis(t.TenantID, result.NovelID, false); aErr == nil {
+					analysisTaskID = id
+				}
+			}
+
+			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{ //nolint:errcheck
+				"novel_id":          result.NovelID,
+				"imported_chapters": result.ImportedChapters,
+				"oss_url":           result.OSSUrl,
+				"analysis_task_id":  analysisTaskID,
+				"message":           fmt.Sprintf("导入完成，共 %d 章", result.ImportedChapters),
+			})
+		})
+	}
 	if svcs.AssetService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeCrawlJob, func(t *model.AsyncTask) {
 			svcs.AssetService.ResumeCrawlJob(t)
@@ -1212,18 +1617,23 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				logger.Errorf("TaskService resume skill_gen %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 			} else {
-				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"count": len(skills)}) //nolint:errcheck
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"skills": skills, "count": len(skills)}) //nolint:errcheck
 			}
 		})
 	}
 
-	// batch_chapter_gen: re-run batch chapter generation, skipping chapters that already have content
+	// batch_chapter_gen: re-run batch chapter generation, respecting the same
+	// start/end/skip_existing filters and per-chapter overrides as the original request.
 	if svcs.ChapterService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeBatchChapterGen, func(t *model.AsyncTask) {
 			novelID := t.EntityID
 			if novelID == 0 {
 				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
 				return
+			}
+			var req model.BatchGenerateChaptersRequest
+			if t.ParamsJSON != "" {
+				_ = json.Unmarshal([]byte(t.ParamsJSON), &req)
 			}
 			chapters, err := svcs.ChapterService.ListChapters(novelID)
 			if err != nil {
@@ -1232,9 +1642,16 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			}
 			var toGenerate []*model.Chapter
 			for _, ch := range chapters {
-				if strings.TrimSpace(ch.Content) == "" {
-					toGenerate = append(toGenerate, ch)
+				if req.StartChapterNo > 0 && ch.ChapterNo < req.StartChapterNo {
+					continue
 				}
+				if req.EndChapterNo > 0 && ch.ChapterNo > req.EndChapterNo {
+					continue
+				}
+				if req.SkipExisting && strings.TrimSpace(ch.Content) != "" {
+					continue
+				}
+				toGenerate = append(toGenerate, ch)
 			}
 			if len(toGenerate) == 0 {
 				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"total": 0, "generated": 0, "failed": 0}) //nolint:errcheck
@@ -1246,10 +1663,15 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			var failedChapters []int
 			for i, ch := range toGenerate {
 				progress := (i*90)/total + 5
-				svcs.TaskService.UpdateProgress(t.TaskID, progress) //nolint:errcheck
+				svcs.TaskService.UpdateProgressAndTitle(t.TaskID, progress, //nolint:errcheck
+					fmt.Sprintf("正在生成第%d章《%s》（%d/%d）", ch.ChapterNo, ch.Title, i+1, total))
 				genReq := &model.GenerateChapterRequest{
-					NovelID:   novelID,
-					ChapterNo: ch.ChapterNo,
+					NovelID:       novelID,
+					ChapterNo:     ch.ChapterNo,
+					WordCount:     req.WordCount,
+					MaxTokens:     req.MaxTokens,
+					ModelOverride: req.ModelOverride,
+					EnabledTools:  req.EnabledTools,
 				}
 				if _, genErr := svcs.ChapterService.GenerateChapter(t.TenantID, novelID, genReq); genErr != nil {
 					logger.Errorf("TaskService resume batch_chapter_gen %s chapter %d failed: %v", t.TaskID, ch.ChapterNo, genErr)
@@ -1259,7 +1681,12 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					generated++
 				}
 			}
-			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{ //nolint:errcheck
+			resultTitle := fmt.Sprintf("批量生成完成：成功%d章", generated)
+			if failed > 0 {
+				resultTitle += fmt.Sprintf("，失败%d章", failed)
+			}
+			svcs.TaskService.UpdateProgressAndTitle(t.TaskID, 99, resultTitle) //nolint:errcheck
+			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{        //nolint:errcheck
 				"total":           total,
 				"generated":       generated,
 				"failed":          failed,
@@ -1359,4 +1786,154 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"image_url": newURL}) //nolint:errcheck
 		})
 	}
+
+	// lipsync: shot-level lip-sync video generation (VideoHandler.GenerateLipSync)
+	if svcs.VideoService != nil {
+		svcs.TaskService.RegisterResumeHandler(service.TaskTypeLipSync, func(t *model.AsyncTask) {
+			shotID := t.EntityID
+			if shotID == 0 {
+				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+				return
+			}
+			var params struct {
+				VideoID uint                   `json:"video_id"`
+				Req     service.LipSyncRequest `json:"req"`
+			}
+			if t.ParamsJSON != "" {
+				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
+			}
+			if params.VideoID == 0 {
+				svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+				return
+			}
+			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
+			result, err := svcs.VideoService.GenerateLipSyncVideoWithReq(params.VideoID, shotID, params.Req)
+			if err != nil {
+				logger.Errorf("TaskService resume lipsync %s failed: %v", t.TaskID, err)
+				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+				return
+			}
+			svcs.TaskService.UpdateProgress(t.TaskID, 20) //nolint:errcheck
+			// 同步轮询直到完成（timeout 内部控制）
+			if pollErr := svcs.VideoService.PollLipSyncUntilDone(params.VideoID, shotID); pollErr != nil {
+				logger.Errorf("TaskService resume lipsync(poll) %s failed: %v", t.TaskID, pollErr)
+				svcs.TaskService.Fail(t.TaskID, pollErr.Error()) //nolint:errcheck
+				return
+			}
+			svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"lip_sync_task_id": result.TaskID}) //nolint:errcheck
+		})
+	}
+}
+
+// resumeImportCrawl continues an already-running crawl job for an existing novel
+// (ImportHandler.ResumeCrawl): kicks off NovelImportService.ResumeCrawl, then polls progress
+// until it settles, mirroring the goroutine body ResumeCrawl used to run inline.
+func resumeImportCrawl(svcs *Services, t *model.AsyncTask, novelID uint) {
+	svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
+	if err := svcs.NovelImportService.ResumeCrawl(novelID); err != nil {
+		svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+		return
+	}
+	for {
+		progress, _ := svcs.NovelImportService.GetCrawlProgress(novelID)
+		if progress == nil {
+			svcs.TaskService.Fail(t.TaskID, "crawl job not found") //nolint:errcheck
+			return
+		}
+		if progress.Status == "completed" || progress.Status == "failed" || progress.Status == "paused" {
+			break
+		}
+		pct := 0
+		if progress.Total > 0 {
+			pct = int(float64(progress.Done) / float64(progress.Total) * 100)
+		}
+		svcs.TaskService.UpdateProgress(t.TaskID, pct)             //nolint:errcheck
+		svcs.TaskService.SetMeta(t.TaskID, map[string]interface{}{ //nolint:errcheck
+			"novel_id":      novelID,
+			"crawl_done":    progress.Done,
+			"crawl_total":   progress.Total,
+			"crawl_current": progress.Current,
+		})
+		time.Sleep(2 * time.Second)
+	}
+	svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"novel_id": novelID, "message": "续爬完成"}) //nolint:errcheck
+}
+
+// resumeImportCrawlFresh runs a brand-new crawl import (ImportHandler.ImportFromCrawl):
+// creates the novel + chapter stubs via Import (which kicks off background crawling),
+// registers a completion callback that triggers analysis, then polls progress until it
+// settles, mirroring the goroutine body ImportFromCrawl used to run inline.
+func resumeImportCrawlFresh(svcs *Services, t *model.AsyncTask, req *service.ImportRequest) {
+	svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
+
+	result, err := svcs.NovelImportService.Import(req)
+	if err != nil {
+		logger.Errorf("TaskService resume import(crawl) %s failed: %v", t.TaskID, err)
+		svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+		return
+	}
+	novelID := result.NovelID
+	svcs.TaskService.UpdateProgress(t.TaskID, 5)               //nolint:errcheck
+	svcs.TaskService.SetMeta(t.TaskID, map[string]interface{}{ //nolint:errcheck
+		"step":        "爬取章节内容中...",
+		"novel_id":    novelID,
+		"crawl_total": result.TotalChapters,
+	})
+
+	analysisDone := make(chan string, 1)
+	svcs.NovelImportService.RegisterCrawlDoneCallback(novelID, func() {
+		id := ""
+		if svcs.NovelAnalysisService != nil {
+			if aid, aErr := svcs.NovelAnalysisService.StartAnalysis(t.TenantID, novelID, false); aErr == nil {
+				id = aid
+			}
+		}
+		analysisDone <- id
+	})
+
+	noProgressCount := 0
+	const maxNoProgress = 20 // 最多等 40 秒无变化
+	for {
+		progress, _ := svcs.NovelImportService.GetCrawlProgress(novelID)
+		if progress == nil {
+			noProgressCount++
+			if noProgressCount >= maxNoProgress {
+				logger.Printf("TaskService resume import(crawl) %s: crawl progress lost for novel %d, aborting poll", t.TaskID, novelID)
+				break
+			}
+		} else {
+			noProgressCount = 0
+			if progress.Status == "completed" || progress.Status == "failed" || progress.Status == "paused" {
+				break
+			}
+			pct := 5
+			if progress.Total > 0 {
+				pct = 5 + int(float64(progress.Done)/float64(progress.Total)*55)
+			}
+			svcs.TaskService.UpdateProgress(t.TaskID, pct)             //nolint:errcheck
+			svcs.TaskService.SetMeta(t.TaskID, map[string]interface{}{ //nolint:errcheck
+				"step":          "爬取章节内容中...",
+				"novel_id":      novelID,
+				"crawl_done":    progress.Done,
+				"crawl_total":   progress.Total,
+				"crawl_current": progress.Current,
+			})
+		}
+		time.Sleep(2 * time.Second)
+	}
+
+	analysisTaskID := ""
+	select {
+	case id := <-analysisDone:
+		analysisTaskID = id
+	case <-time.After(10 * time.Second):
+		// 回调可能已在爬取完成前触发，直接继续
+	}
+
+	svcs.TaskService.Complete(t.TaskID, map[string]interface{}{ //nolint:errcheck
+		"novel_id":          novelID,
+		"imported_chapters": result.ImportedChapters,
+		"analysis_task_id":  analysisTaskID,
+		"message":           fmt.Sprintf("爬取完成，共 %d 章", result.ImportedChapters),
+	})
 }

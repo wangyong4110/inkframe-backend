@@ -2,10 +2,8 @@ package service
 
 import (
 	"context"
-	"runtime/debug"
 	"time"
 
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 )
 
@@ -75,16 +73,7 @@ func (s *TaskService) RunTracked(
 	go func() {
 		defer cancel()
 		defer s.DeregisterCancel(task.TaskID)
-		defer func() {
-			if r := recover(); r != nil {
-				msg := o.OnPanicMessage
-				if msg == "" {
-					msg = "内部错误，请重试"
-				}
-				logger.Errorf("[TaskService] RunTracked task %s panic: %v\n%s", task.TaskID, r, debug.Stack())
-				_ = s.Fail(task.TaskID, msg)
-			}
-		}()
+		defer s.recoverTaskPanic(task.TaskID, o.OnPanicMessage)
 
 		if o.MaxConcurrency > 0 {
 			key := o.SemaphoreKey
@@ -126,6 +115,22 @@ func (s *TaskService) acquireSlot(ctx context.Context, key string, max int) bool
 	case sem <- struct{}{}:
 		return true
 	case <-ctx.Done():
+		return false
+	}
+}
+
+// tryAcquireSlot is the non-blocking counterpart to acquireSlot, used by the task engine's
+// dispatch loop (task_engine.go): dispatch must never block waiting for a slot to free up for
+// one (tenant, taskType) key while other keys have work ready to go. Returns false immediately
+// if no slot is free; the caller leaves the task in "pending" and it will be retried on the
+// next dispatch cycle.
+func (s *TaskService) tryAcquireSlot(key string, max int) bool {
+	v, _ := s.semaphores.LoadOrStore(key, make(chan struct{}, max))
+	sem := v.(chan struct{})
+	select {
+	case sem <- struct{}{}:
+		return true
+	default:
 		return false
 	}
 }

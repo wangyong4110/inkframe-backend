@@ -1,12 +1,9 @@
 package handler
 
 import (
-	"context"
 	"net/http"
 	"strconv"
-	"time"
 
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/storage"
 
 	"github.com/gin-gonic/gin"
@@ -434,34 +431,15 @@ func (h *SceneAnchorHandler) AIExtractChapterAnchors(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterSceneExtract
+	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的字段调用同一个
+	// h.svc.ExtractFromChapter，8分钟超时同样在执行函数内设置）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"novel_id":   novelID,
-		"chapter_no": chapterNo,
-		"content":    content,
+		"novel_id":    novelID,
+		"chapter_no":  chapterNo,
+		"content":     content,
+		"user_prompt": body.UserPrompt,
 	})
-
-	reqID := c.GetString("request_id")
-	go func(taskID string, tID, nID, chapID uint, chContent, userPrompt string) {
-		log := logger.WithID(reqID)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[SceneAnchorHandler] AIExtractChapterAnchors task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
-		defer cancel()
-		log.Printf("[SceneAnchorHandler] AIExtractChapterAnchors task %s started: novelID=%d chapterID=%d contentLen=%d", taskID, nID, chapID, len(chContent))
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		anchors, err := h.svc.ExtractFromChapter(ctx, tID, nID, "", chContent, chapID, userPrompt)
-		if err != nil {
-			log.Errorf("[SceneAnchorHandler] AIExtractChapterAnchors task %s failed: novelID=%d chapterID=%d err=%v", taskID, nID, chapID, err)
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-			return
-		}
-		log.Printf("[SceneAnchorHandler] AIExtractChapterAnchors task %s completed: novelID=%d chapterID=%d newAnchors=%d", taskID, nID, chapID, len(anchors))
-		h.taskSvc.Complete(taskID, map[string]interface{}{"new_count": len(anchors)}) //nolint:errcheck
-	}(task.TaskID, tenantID, uint(novelID), chapter.ID, content, body.UserPrompt)
 
 	respondAccepted(c, task.TaskID, "场景分析任务已提交")
 }
@@ -569,30 +547,14 @@ func (h *SceneAnchorHandler) BatchGenerateRefImages(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeImageGen 的
+	// 执行函数在 cmd/server/task_resume.go，source="scene_anchor_batch" 分支反序列化下面存的
+	// 字段调用同一个 h.svc.BatchGenerateRefImages）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"source":   "scene_anchor_batch",
 		"provider": body.Provider,
 		"force":    body.Force,
 	})
-	reqID2 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID2)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[SceneAnchorHandler] BatchGenerateRefImages task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)                                           //nolint:errcheck
-		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
-		succ, fail, err := h.svc.BatchGenerateRefImages(context.Background(), tenantID, uint(novelID), body.Provider, body.Force, progressFn)
-		if err != nil {
-			log.Errorf("[SceneAnchorHandler] BatchGenerateRefImages task %s failed: %v", taskID, err)
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-		} else {
-			h.taskSvc.Complete(taskID, map[string]interface{}{"succeeded": succ, "failed": fail}) //nolint:errcheck
-		}
-	}(task.TaskID)
 	respondAccepted(c, task.TaskID, "场景参考图批量生成任务已提交")
 }
 
@@ -613,24 +575,7 @@ func (h *SceneAnchorHandler) AIExtractFromNovel(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	reqID3 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID3)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[SceneAnchorHandler] AIExtractFromNovel task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)                                           //nolint:errcheck
-		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
-		anchors, err := h.svc.AIExtractAllFromNovel(context.Background(), tenantID, uint(novelID), progressFn)
-		if err != nil {
-			log.Errorf("[SceneAnchorHandler] AIExtractFromNovel: %v", err)
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-		} else {
-			h.taskSvc.Complete(taskID, map[string]interface{}{"scene_anchors": anchors, "count": len(anchors)}) //nolint:errcheck
-		}
-	}(task.TaskID)
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeSceneAnchorExtract
+	// 的执行函数在 cmd/server/task_resume.go，只依赖 t.TenantID/t.EntityID，无需额外 SetParams）。
 	respondAccepted(c, task.TaskID, "场景锚点提取任务已提交")
 }

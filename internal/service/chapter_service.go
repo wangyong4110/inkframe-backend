@@ -19,7 +19,6 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-
 // flexString 兼容 AI 偶发将字段返回为数字的情况（如 key_beat: 25 而非 "25%"）
 type flexString string
 
@@ -51,31 +50,31 @@ type plotCoverageEntry struct {
 // ============================================
 
 type ChapterService struct {
-	chapterRepo    *repository.ChapterRepository
-	novelRepo      *repository.NovelRepository
-	characterRepo  *repository.CharacterRepository                       // 注入角色数据到生成 prompt
-	snapshotRepo   *repository.CharacterStateSnapshotRepository          // 角色状态快照（注入连贯状态）
-	versionRepo    *repository.ChapterVersionRepository                  // 章节版本（手动编辑自动存档）
-	aiService      *AIService
-	contextSvc     *GenerationContextService
-	narrativeSvc   *NarrativeMemoryService // 层次化记忆 + 摘要 + 标题 + 精修
-	continuitySvc  *ContinuityService      // 可选：章节连贯性检查
-	hookSvc        *HookChainService
-	spSvc          *SatisfactionPointService
-	arcSvc         *ConflictArcService
-	plotPointRepo  *repository.PlotPointRepository // 未解决剧情点注入
-	mcpService     *McpService                     // 可选：用于联网搜索 MCP 工具
-	notifSvc       *NotificationService            // 可选：用于章节生成完成通知
-	skillRepo      *repository.SkillRepository     // 可选：用于将技能体系注入生成上下文
-	qualitySvc     *QualityControlService          // 可选：用于生成后质量评分与触发精修
-	knowledgeSvc   *KnowledgeService               // 可选：用于异步提取并存储剧情点
-	timelineSvc    *TimelineService                // 可选：时间线约束注入生成 prompt
-	foreshadowRepo       *repository.ForeshadowRepository // 可选：伏笔生命周期注入生成 prompt
+	chapterRepo          *repository.ChapterRepository
+	novelRepo            *repository.NovelRepository
+	characterRepo        *repository.CharacterRepository              // 注入角色数据到生成 prompt
+	snapshotRepo         *repository.CharacterStateSnapshotRepository // 角色状态快照（注入连贯状态）
+	versionRepo          *repository.ChapterVersionRepository         // 章节版本（手动编辑自动存档）
+	aiService            *AIService
+	contextSvc           *GenerationContextService
+	narrativeSvc         *NarrativeMemoryService // 层次化记忆 + 摘要 + 标题 + 精修
+	continuitySvc        *ContinuityService      // 可选：章节连贯性检查
+	hookSvc              *HookChainService
+	spSvc                *SatisfactionPointService
+	arcSvc               *ConflictArcService
+	plotPointRepo        *repository.PlotPointRepository        // 未解决剧情点注入
+	mcpService           *McpService                            // 可选：用于联网搜索 MCP 工具
+	notifSvc             *NotificationService                   // 可选：用于章节生成完成通知
+	skillRepo            *repository.SkillRepository            // 可选：用于将技能体系注入生成上下文
+	qualitySvc           *QualityControlService                 // 可选：用于生成后质量评分与触发精修
+	knowledgeSvc         *KnowledgeService                      // 可选：用于异步提取并存储剧情点
+	timelineSvc          *TimelineService                       // 可选：时间线约束注入生成 prompt
+	foreshadowRepo       *repository.ForeshadowRepository       // 可选：伏笔生命周期注入生成 prompt
 	chapterCharacterRepo *repository.ChapterCharacterRepository // 可选：章节角色级联清理
 	chapterItemRepo      *repository.ChapterItemRepository      // 可选：章节道具级联清理
 
-	cache    *redis.Client // optional: cross-instance chapter generation lock
-	taskSvc  *TaskService  // optional: tracks postProcessChapter as a persisted, resumable task
+	cache   *redis.Client // optional: cross-instance chapter generation lock
+	taskSvc *TaskService  // optional: tracks postProcessChapter as a persisted, resumable task
 
 	// genLocks 进程内去重（无 Redis 或 Redis 出错时的兜底）
 	genLocks sync.Map
@@ -666,11 +665,11 @@ func (s *ChapterService) ListPublishedChapters(novelID uint) ([]*model.Chapter, 
 
 // GenerateChapter 专业级章节生成流水线：
 //
-//  Step 1  构建层次化上下文（近章详摘 + 弧摘要 + 全局概述）
-//  Step 2  生成场景大纲（3-5 个场景，含节拍、情绪、钩子）
-//  Step 3  按场景大纲生成完整章节内容
-//  Step 4  存储章节（包含场景大纲、叙事元数据）
-//  Step 5  异步后处理：摘要生成、标题生成、精修、角色状态提取、弧摘要触发
+//	Step 1  构建层次化上下文（近章详摘 + 弧摘要 + 全局概述）
+//	Step 2  生成场景大纲（3-5 个场景，含节拍、情绪、钩子）
+//	Step 3  按场景大纲生成完整章节内容
+//	Step 4  存储章节（包含场景大纲、叙事元数据）
+//	Step 5  异步后处理：摘要生成、标题生成、精修、角色状态提取、弧摘要触发
 func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model.GenerateChapterRequest) (*model.Chapter, error) {
 	logger.Printf("[ChapterService] GenerateChapter: tenantID=%d novelID=%d chapterNo=%d", tenantID, novelID, req.ChapterNo)
 
@@ -974,12 +973,12 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		chapter = existing
 	} else {
 		chapter = &model.Chapter{
-			TenantID:  tenantID,
-			NovelID:   novelID,
-			ChapterNo: req.ChapterNo,
-			Title:     title,
-			Content:   content,
-			WordCount: countChineseChars(content),
+			TenantID:      tenantID,
+			NovelID:       novelID,
+			ChapterNo:     req.ChapterNo,
+			Title:         title,
+			Content:       content,
+			WordCount:     countChineseChars(content),
 			SceneOutline:  sceneOutlineJSON,
 			TensionLevel:  chapterMeta.tensionLevel,
 			EmotionalTone: chapterMeta.emotionalTone,
@@ -1093,13 +1092,13 @@ func (s *ChapterService) extractChapterMeta(novelID uint, chapterNo int) chapter
 			for _, ch := range outline.Chapters {
 				if ch.ChapterNo == chapterNo {
 					found = true
-					meta.tensionLevel  = ch.TensionLevel
+					meta.tensionLevel = ch.TensionLevel
 					meta.emotionalTone = ch.EmotionalTone
-					meta.summary       = ch.Summary
-					meta.chapterTitle  = ch.Title
-					meta.plotPoints    = ch.PlotPoints
-					meta.act           = ch.Act
-					meta.hookType      = ch.HookType
+					meta.summary = ch.Summary
+					meta.chapterTitle = ch.Title
+					meta.plotPoints = ch.PlotPoints
+					meta.act = ch.Act
+					meta.hookType = ch.HookType
 					logger.Printf("[extractChapterMeta] ch%d found: title=%q summaryLen=%d plotPoints=%d",
 						chapterNo, meta.chapterTitle, len(meta.summary), len(meta.plotPoints))
 					break
@@ -1109,7 +1108,9 @@ func (s *ChapterService) extractChapterMeta(novelID uint, chapterNo int) chapter
 				logger.Printf("[extractChapterMeta] ch%d NOT found in outline (outline has ch_nos: %v)",
 					chapterNo, func() []int {
 						nos := make([]int, 0, len(outline.Chapters))
-						for _, c := range outline.Chapters { nos = append(nos, c.ChapterNo) }
+						for _, c := range outline.Chapters {
+							nos = append(nos, c.ChapterNo)
+						}
 						return nos
 					}())
 			}
@@ -1518,7 +1519,7 @@ func (s *ChapterService) generateSceneOutline(
 		"StoryPatternRef":       storyPatternRef,
 		"ChapterBudget":         budgetText,
 		"CharacterRegistry":     characterRegistry,
-		"TimelineContext":        timelineContext,
+		"TimelineContext":       timelineContext,
 		"CoreTheme":             novel.Meta.CoreTheme,
 		"ReaderExpectations":    prevReaderExpectations,
 		"CharacterArcContext":   characterArcContext,
@@ -1760,8 +1761,8 @@ func (s *ChapterService) generateFromSceneOutline(
 			SceneWeight      string   `json:"scene_weight"`      // 核心场景/过渡场景/衔接场景
 			ThemeEcho        string   `json:"theme_echo"`        // 本场景如何呼应核心主题
 			TensionDirection string   `json:"tension_direction"` // rising/peak/falling/reversal
-			WordBudget       int      `json:"-"` // computed in Go, not from JSON
-			RequiredEvent    string   `json:"-"` // plot point that MUST happen in this scene (from plot_coverage cross-ref)
+			WordBudget       int      `json:"-"`                 // computed in Go, not from JSON
+			RequiredEvent    string   `json:"-"`                 // plot point that MUST happen in this scene (from plot_coverage cross-ref)
 			POVCharacter     string   `json:"pov_character"`
 			Tension          int      `json:"tension"`
 		} `json:"scenes"`
@@ -2044,7 +2045,7 @@ func (s *ChapterService) generateFromSceneOutline(
 				"EmotionalShift":        sc.EmotionalShift,
 				"MicroPacing":           sc.MicroPacing,
 				"DialogueSubtext":       sc.DialogueSubtext,
-				"DialogueMode":          sc.DialogueMode,    // P1-1: 对话模式（之前被丢弃）
+				"DialogueMode":          sc.DialogueMode, // P1-1: 对话模式（之前被丢弃）
 				"KeyBeats":              sc.KeyBeats,
 				"OpeningBeat":           sc.OpeningBeat,
 				"ClosingBeat":           sc.ClosingBeat,
@@ -2053,13 +2054,13 @@ func (s *ChapterService) generateFromSceneOutline(
 				"MaxWords":              maxWordsScene,
 				"CharacterVoices":       filteredVoices,
 				"IsLastScene":           isLastScene,
-				"IsStandalone":          req.IsStandalone,   // P0-2: 最终章标记
+				"IsStandalone":          req.IsStandalone, // P0-2: 最终章标记
 				"ChapterMode":           novel.AIConfig.ChapterMode,
 				// 场景大纲生成的重要字段
 				"TensionDirection":    sc.TensionDirection,  // rising/peak/falling/reversal
 				"SceneWeight":         sc.SceneWeight,       // 核心场景/过渡场景/衔接场景
 				"ThemeEcho":           sc.ThemeEcho,         // 本场景如何呼应核心主题
-				"CoreTheme":           novel.Meta.CoreTheme,      // 全书核心主题
+				"CoreTheme":           novel.Meta.CoreTheme, // 全书核心主题
 				"FinalChapterContext": finalChapterCtx,      // P0-2: 最终章未关闭悬线清单
 				"WorldRules":          worldviewRulesFromOutline,
 				"GenreHints":          genreWritingHints(novel.Genre),
@@ -2650,24 +2651,18 @@ func (s *ChapterService) postProcessChapter(tenantID uint, chapter *model.Chapte
 	return strings.Join(warnings, "；")
 }
 
-// runPostProcessChapter 用 TaskService 持久化并跟踪 postProcessChapter（TaskTypeChapterPostProcess，
-// 安静型任务：不进任务面板，但可被孤儿恢复机制在服务重启后重新捡起）。未注入 taskSvc 时
-// （例如部分测试场景）退回原来的裸 goroutine，行为不变。
+// runPostProcessChapter 通过 TaskService 持久化 chapter_post_process 任务（安静型任务：不进任务
+// 面板），交由任务引擎调度执行（executor 见 cmd/server/task_resume.go 里注册的
+// ResumePostProcessChapter）。未注入 taskSvc 时（例如部分测试场景）退回原来的裸 goroutine，行为不变。
 func (s *ChapterService) runPostProcessChapter(tenantID uint, chapter *model.Chapter, novel *model.Novel) {
 	if s.taskSvc == nil {
 		go s.postProcessChapter(tenantID, chapter, novel)
 		return
 	}
-	task, err := s.taskSvc.Create(tenantID, TaskTypeChapterPostProcess, "章节后处理", "chapter", chapter.ID)
-	if err != nil {
+	if _, err := s.taskSvc.Create(tenantID, TaskTypeChapterPostProcess, "章节后处理", "chapter", chapter.ID); err != nil {
 		logger.Errorf("[ChapterService] failed to create chapter_post_process task for chapter %d: %v", chapter.ID, err)
 		go s.postProcessChapter(tenantID, chapter, novel) // 建任务失败也不能把这段工作直接丢掉
-		return
 	}
-	s.taskSvc.RunTracked(context.Background(), task, func(ctx context.Context, t *model.AsyncTask) (*TrackedResult, error) {
-		warning := s.postProcessChapter(tenantID, chapter, novel)
-		return &TrackedResult{Warning: warning}, nil
-	})
 }
 
 // ResumePostProcessChapter 重新执行一个在进程重启前被中断的 chapter_post_process 任务
@@ -2882,12 +2877,12 @@ func formatVoiceProfile(voiceJSON string) string {
 		return ""
 	}
 	var vp struct {
-		VocabularyLevel     string   `json:"vocabulary_level"`
-		SpeechHabits        []string `json:"speech_habits"`
-		EmotionalExpression string   `json:"emotional_expression"`
-		ForbiddenPhrases    []string `json:"forbidden_phrases"`
+		VocabularyLevel      string   `json:"vocabulary_level"`
+		SpeechHabits         []string `json:"speech_habits"`
+		EmotionalExpression  string   `json:"emotional_expression"`
+		ForbiddenPhrases     []string `json:"forbidden_phrases"`
 		SignatureExpressions []string `json:"signature_expressions"`
-		OverallVoice        string   `json:"overall_voice"`
+		OverallVoice         string   `json:"overall_voice"`
 	}
 	if err := json.Unmarshal([]byte(voiceJSON), &vp); err != nil {
 		return ""
@@ -3439,7 +3434,8 @@ func (s *ChapterService) buildFinalChapterContext(novelID uint, novel *model.Nov
 //     使 N+2 的生成在叙事上更自然地承接 N+1 的预期走向。
 //
 // 条件：下一章必须已存在（大纲占位章节）且尚无正文；
-//       下一章已有真实摘要时跳过（避免覆盖）。
+//
+//	下一章已有真实摘要时跳过（避免覆盖）。
 func (s *ChapterService) updateNextChapterPreview(tenantID uint, chapter *model.Chapter, novel *model.Novel) {
 	nextNo := chapter.ChapterNo + 1
 	next, err := s.chapterRepo.GetByNovelAndChapterNo(chapter.NovelID, nextNo)
@@ -4248,4 +4244,3 @@ func buildReviewHintsText(hints *model.ReviewHintsPayload) string {
 	}
 	return sb.String()
 }
-

@@ -93,6 +93,35 @@ func (r *TaskRepository) MarkStaleRunning(before time.Time) (int64, error) {
 	return result.RowsAffected, result.Error
 }
 
+// ListPending returns up to `limit` pending tasks of the given types, oldest first.
+// Used by the task engine's dispatch loop — deliberately NOT filtered by tenant or age
+// (unlike ListOrphaned), since the engine dispatches all currently-pending work regardless
+// of how recently it was created. Callers must still go through ClaimForResume before
+// executing, since a row returned here may already be claimed by another dispatch cycle
+// or another instance by the time the caller acts on it.
+func (r *TaskRepository) ListPending(types []string, limit int) ([]*model.AsyncTask, error) {
+	var tasks []*model.AsyncTask
+	err := r.db.Where("status = ? AND type IN ?", "pending", types).
+		Order("created_at ASC").
+		Limit(limit).
+		Find(&tasks).Error
+	return tasks, err
+}
+
+// ResetRunningToPending resets every task still marked "running" back to "pending".
+// Called once at Boot() — any row still "running" at process start is a leftover from a
+// previous instance that died mid-task; resetting to pending lets the task engine's normal
+// dispatch/ClaimForResume path pick it back up rather than needing separate recovery logic.
+func (r *TaskRepository) ResetRunningToPending() (int64, error) {
+	result := r.db.Model(&model.AsyncTask{}).
+		Where("status = ?", "running").
+		Updates(map[string]interface{}{
+			"status": "pending",
+			"error":  "",
+		})
+	return result.RowsAffected, result.Error
+}
+
 // CancelActiveByEntity cancels all pending/running tasks of the given type for a specific
 // entity. Used before creating a replacement task to let zombie goroutines exit gracefully
 // (Complete/Fail are no-ops once status is "cancelled").
@@ -171,7 +200,9 @@ func (r *TaskRepository) CancelIfActive(taskID string) error {
 // ClaimForResume atomically transitions a task from pending → running.
 // Returns (true, nil) only when this instance wins the claim (rowsAffected==1).
 // Returns (false, nil) when another instance already claimed it.
-// Used by recoverOrphaned to prevent two instances from executing the same task.
+// Used by the task engine's dispatch loop (task_engine.go) to guarantee that a task is only
+// ever executed once, even if the engine's wake signal and poll tick race to dispatch it, or
+// two instances both try to.
 func (r *TaskRepository) ClaimForResume(taskID string) (bool, error) {
 	result := r.db.Model(&model.AsyncTask{}).
 		Where("task_id = ? AND status = ?", taskID, "pending").

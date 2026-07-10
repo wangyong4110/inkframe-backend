@@ -1,11 +1,9 @@
 package handler
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
 
@@ -28,31 +26,11 @@ func (h *OutlineReviewHandler) ReviewChapter(c *gin.Context) {
 	}
 	tenantID := getTenantID(c)
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterReview, "大纲审查", "chapter", id)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterOutlineReview, "大纲审查", "chapter", id)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task: "+err.Error())
 		return
 	}
-
-	reqID := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[OutlineReviewHandler] ReviewChapter panic: %v", r)
-				h.taskSvc.Fail(taskID, "内部错误") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		ctx := context.Background()
-		review, err := h.reviewSvc.ReviewChapterOutline(ctx, tenantID, id)
-		if err != nil {
-			log.Errorf("[OutlineReviewHandler] ReviewChapter failed: chapterID=%d err=%v", id, err)
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.Complete(taskID, map[string]interface{}{"review": review}) //nolint:errcheck
-	}(task.TaskID)
 
 	respondAccepted(c, task.TaskID, "大纲审查任务已提交")
 }
@@ -87,30 +65,6 @@ func (h *OutlineReviewHandler) BatchReviewNovel(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task: "+err.Error())
 		return
 	}
-
-	reqID2 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID2)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[OutlineReviewHandler] BatchReview panic: %v", r)
-				h.taskSvc.Fail(taskID, "内部错误") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		ctx := context.Background()
-		result, err := h.reviewSvc.BatchReviewNovel(ctx, tenantID, novelID, func(done, total int) {
-			h.taskSvc.UpdateProgress(taskID, done) //nolint:errcheck
-		})
-		if err != nil {
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.Complete(taskID, map[string]interface{}{ //nolint:errcheck
-			"count":     len(result.Reviews),
-			"synthesis": result.Synthesis,
-		})
-	}(task.TaskID)
 
 	respondAccepted(c, task.TaskID, "大纲批量审查任务已提交")
 }

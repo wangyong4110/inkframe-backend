@@ -136,29 +136,7 @@ func (s *PlatformPublishService) PublishToExternal(ctx context.Context, video *m
 		return "", fmt.Errorf("video not synthesized yet: final_video_url is empty")
 	}
 
-	var taskID string
-	if s.taskSvc != nil {
-		task, err := s.taskSvc.Create(tenantID, "platform_publish", "外部平台发布", "video", video.ID)
-		if err != nil {
-			return "", fmt.Errorf("create task: %w", err)
-		}
-		taskID = task.TaskID
-	}
-
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				logger.Errorf("[PlatformPublish] panic recovered: %v", r)
-				if s.taskSvc != nil {
-					_ = s.taskSvc.Fail(taskID, fmt.Sprintf("panic: %v", r))
-				}
-			}
-		}()
-		bgCtx := context.Background()
-		if s.taskSvc != nil {
-			_ = s.taskSvc.SetRunning(taskID)
-		}
-
+	publish := func(bgCtx context.Context, progressFn func(pct int)) {
 		for i, accountID := range accountIDs {
 			account, err := s.accountRepo.GetByID(accountID)
 			if err != nil {
@@ -227,20 +205,31 @@ func (s *PlatformPublishService) PublishToExternal(ctx context.Context, video *m
 			}
 
 			// 更新进度
-			if s.taskSvc != nil {
-				progress := (i + 1) * 100 / len(accountIDs)
-				if err := s.taskSvc.UpdateProgress(taskID, progress); err != nil {
-					logger.Errorf("[PlatformPublish] task=%s: update progress: %v", taskID, err)
-				}
+			if progressFn != nil {
+				progressFn((i + 1) * 100 / len(accountIDs))
 			}
 		}
+	}
 
-		if s.taskSvc != nil {
-			_ = s.taskSvc.Complete(taskID, map[string]string{"status": "done"})
-		}
-	}()
+	if s.taskSvc == nil {
+		go publish(context.Background(), nil)
+		return "", nil
+	}
 
-	return taskID, nil
+	task, err := s.taskSvc.Create(tenantID, "platform_publish", "外部平台发布", "video", video.ID)
+	if err != nil {
+		return "", fmt.Errorf("create task: %w", err)
+	}
+	// context.Background(), not the request ctx: publishing must outlive the HTTP request.
+	s.taskSvc.RunTracked(context.Background(), task, func(runCtx context.Context, t *model.AsyncTask) (*TrackedResult, error) {
+		publish(runCtx, func(pct int) {
+			if err := s.taskSvc.UpdateProgress(t.TaskID, pct); err != nil {
+				logger.Errorf("[PlatformPublish] task=%s: update progress: %v", t.TaskID, err)
+			}
+		})
+		return &TrackedResult{Data: map[string]string{"status": "done"}}, nil
+	})
+	return task.TaskID, nil
 }
 
 // ListPublishRecords 返回视频的所有发布记录

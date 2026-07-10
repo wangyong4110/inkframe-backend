@@ -4,8 +4,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/inkframe/inkframe-backend/internal/logger"
-
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
@@ -193,25 +191,8 @@ func (h *ItemHandler) AIExtractFromNovel(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	reqID := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[ItemHandler] AIExtractFromNovel task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
-		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
-		items, err := h.itemService.AIExtractFromNovel(tenantID, uint(novelID))
-		if err != nil {
-			log.Errorf("[ItemHandler] AIExtractFromNovel task %s failed: %v", taskID, err)
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-		} else {
-			h.taskSvc.Complete(taskID, map[string]interface{}{"items": items, "count": len(items)}) //nolint:errcheck
-		}
-	}(task.TaskID)
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeItemExtract 的
+	// 执行函数在 cmd/server/task_resume.go，只依赖 t.TenantID/t.EntityID，无需额外 SetParams）。
 	respondAccepted(c, task.TaskID, "物品提取任务已提交")
 }
 
@@ -233,30 +214,14 @@ func (h *ItemHandler) BatchGenerateImages(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeImageGen 的
+	// 执行函数在 cmd/server/task_resume.go，source="item_batch" 分支反序列化下面存的字段
+	// 调用同一个 h.itemService.BatchGenerateImages）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"source":   "item_batch",
 		"provider": req.Provider,
 		"force":    req.Force,
 	})
-	reqID2 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID2)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[ItemHandler] BatchGenerateImages task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)                                           //nolint:errcheck
-		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
-		succ, fail, err := h.itemService.BatchGenerateImages(tenantID, uint(novelID), req.Provider, req.Force, progressFn)
-		if err != nil {
-			log.Errorf("[ItemHandler] BatchGenerateImages task %s failed: %v", taskID, err)
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-		} else {
-			h.taskSvc.Complete(taskID, map[string]interface{}{"succeeded": succ, "failed": fail}) //nolint:errcheck
-		}
-	}(task.TaskID)
 	respondAccepted(c, task.TaskID, "物品图片批量生成任务已提交")
 }
 
@@ -284,33 +249,14 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeImageGen 的
+	// 执行函数在 cmd/server/task_resume.go，source="item_single" 分支反序列化下面存的字段
+	// 调用同一个 h.itemService.GenerateItemImage）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"source":   "item_single",
 		"ref_url":  refURL,
 		"provider": provider,
 	})
-
-	reqID3 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID3)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[ItemHandler] GenerateItemImage task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
-		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
-		item, err := h.itemService.GenerateItemImage(tenantID, itemID, refURL, provider)
-		if err != nil {
-			log.Errorf("[ItemHandler] GenerateItemImage task %s failed: %v", taskID, err)
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-		} else {
-			h.taskSvc.UpdateProgress(taskID, 90) //nolint:errcheck
-			h.taskSvc.Complete(taskID, item)     //nolint:errcheck
-		}
-	}(task.TaskID)
-
 	respondAccepted(c, task.TaskID, "图像生成任务已提交")
 }
 

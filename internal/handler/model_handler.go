@@ -2,14 +2,12 @@ package handler
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -810,36 +808,13 @@ func (h *ModelHandler) VoicePreview(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeVoicePreview
+	// 的执行函数在 cmd/server/task_resume.go，entity_type=="voice" 分支反序列化下面存的
+	// voice_id/text 调用同一个 h.aiSvc.AudioGenerateWithOptions）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"voice_id": req.VoiceID,
 		"text":     req.Text,
 	})
-
-	go func(taskID string) {
-		defer func() {
-			if r := recover(); r != nil {
-				h.taskSvc.Fail(taskID, "内部错误") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		defer cancel()
-
-		rawURL, genErr := h.aiSvc.AudioGenerateWithOptions(ctx, tenantID, req.Text, req.VoiceID, 1.0, "")
-		if genErr != nil {
-			h.taskSvc.Fail(taskID, "语音生成失败: "+genErr.Error()) //nolint:errcheck
-			return
-		}
-		playURL := rawURL
-		if len(rawURL) > 7 && rawURL[:7] == "file://" {
-			filePath := rawURL[7:]
-			if data, readErr := os.ReadFile(filePath); readErr == nil && len(data) > 0 {
-				playURL = "data:audio/mpeg;base64," + base64.StdEncoding.EncodeToString(data)
-			}
-		}
-		h.taskSvc.Complete(taskID, map[string]interface{}{"audio_url": playURL, "voice_id": req.VoiceID}) //nolint:errcheck
-	}(task.TaskID)
-
 	respondAccepted(c, task.TaskID, "旁白音色试听任务已提交")
 }
 

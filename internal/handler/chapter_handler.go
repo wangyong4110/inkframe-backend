@@ -1,14 +1,11 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
-
-	"github.com/inkframe/inkframe-backend/internal/logger"
 
 	"github.com/gin-gonic/gin"
 	"github.com/inkframe/inkframe-backend/internal/model"
@@ -323,34 +320,13 @@ func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 		return
 	}
 
-	// Persist request parameters so the task can be resumed after a server restart.
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterGen 的
+	// 执行函数在 cmd/server/task_resume.go，反序列化下面存的整个 req 调用同一个
+	// h.chapterService.GenerateChapter）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"novel_id": req.NovelID,
 		"req":      req,
 	})
-
-	reqID := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[ChapterHandler] GenerateChapter task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)        //nolint:errcheck
-		h.taskSvc.UpdateProgress(taskID, 5) //nolint:errcheck
-
-		chapter, genErr := h.chapterService.GenerateChapter(tenantID, req.NovelID, &req)
-		if genErr != nil {
-			log.Errorf("[ChapterHandler] GenerateChapter task %s failed: novelID=%d err=%v", taskID, req.NovelID, genErr)
-			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.UpdateProgress(taskID, 90)                                                      //nolint:errcheck
-		h.taskSvc.Complete(taskID, map[string]interface{}{"chapter": chapter}) //nolint:errcheck
-	}(task.TaskID)
-
 	respondAccepted(c, task.TaskID, "章节生成任务已提交")
 }
 
@@ -375,29 +351,10 @@ func (h *ChapterHandler) RegenerateChapter(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task: "+err.Error())
 		return
 	}
-
-	reqID2 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID2)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[ChapterHandler] RegenerateChapter task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)        //nolint:errcheck
-		h.taskSvc.UpdateProgress(taskID, 5) //nolint:errcheck
-
-		chapter, genErr := h.chapterService.RegenerateChapter(tenantID, uint(id), &req)
-		if genErr != nil {
-			log.Errorf("[ChapterHandler] RegenerateChapter task %s failed: chapterID=%d err=%v", taskID, id, genErr)
-			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.UpdateProgress(taskID, 90)                                                      //nolint:errcheck
-		h.taskSvc.Complete(taskID, map[string]interface{}{"chapter": chapter}) //nolint:errcheck
-	}(task.TaskID)
-
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterGen 的
+	// 执行函数在 cmd/server/task_resume.go，entity_type=="chapter" 分支反序列化下面存的 req
+	// 调用同一个 h.chapterService.RegenerateChapter）。
+	_ = h.taskSvc.SetParams(task.TaskID, req)
 	respondAccepted(c, task.TaskID, "章节重新生成任务已提交")
 }
 
@@ -833,25 +790,8 @@ func (h *ChapterHandler) BatchSummarizeChapters(c *gin.Context) {
 		return
 	}
 	reqLogger(c).Printf("[ChapterHandler] BatchSummarizeChapters: tenantID=%d novelID=%d taskID=%s", tenantID, novelID, task.TaskID)
-	reqID3 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID3)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[ChapterHandler] BatchSummarizeChapters task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)                                           //nolint:errcheck
-		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
-		count, err := h.chapterService.BatchGenerateSummaries(tenantID, uint(novelID), progressFn)
-		if err != nil {
-			log.Errorf("[ChapterHandler] BatchGenerateSummaries task %s failed: %v", taskID, err)
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-		} else {
-			h.taskSvc.Complete(taskID, map[string]interface{}{"count": count}) //nolint:errcheck
-		}
-	}(task.TaskID)
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterSummaryBatch
+	// 的执行函数在 cmd/server/task_resume.go，只依赖 t.TenantID/t.EntityID，无需额外 SetParams）。
 	respondAccepted(c, task.TaskID, "章节摘要批量生成任务已提交")
 }
 
@@ -870,28 +810,8 @@ func (h *ChapterHandler) BatchReviewChapters(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	reqID4 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID4)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[ChapterHandler] BatchReviewChapters task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		progressFn := func(done, total int) {
-			if total > 0 {
-				h.taskSvc.UpdateProgress(taskID, done*100/total) //nolint:errcheck
-			}
-		}
-		if err := h.qualityService.BatchReviewNovelChapters(context.Background(), tenantID, uint(novelID), progressFn); err != nil {
-			log.Errorf("[ChapterHandler] BatchReviewChapters task %s failed: %v", taskID, err)
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.Complete(taskID, map[string]interface{}{"novel_id": novelID}) //nolint:errcheck
-	}(task.TaskID)
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterReviewBatch
+	// 的执行函数在 cmd/server/task_resume.go，只依赖 t.TenantID/t.EntityID，无需额外 SetParams）。
 	respondAccepted(c, task.TaskID, "章节正文批量审查任务已提交")
 }
 
@@ -914,35 +834,12 @@ func (h *ChapterHandler) ReviewChapter(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterReview 的
+	// 执行函数在 cmd/server/task_resume.go，反序列化下面存的 provider 调用同一个
+	// h.qualityService.ReviewChapter）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"provider": req.Provider,
 	})
-
-	reqID5 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID5)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[ChapterHandler] ReviewChapter task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
-		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
-
-		// Intentionally use context.Background(): this goroutine runs after respondAccepted
-		// returns the HTTP response. c.Request.Context() would be cancelled at that point,
-		// which would abort the long-running AI review call.
-		review, reviewErr := h.qualityService.ReviewChapter(context.Background(), uint(id), req.Provider)
-		if reviewErr != nil {
-			log.Errorf("[ChapterHandler] ReviewChapter task %s failed: chapterID=%d err=%v", taskID, id, reviewErr)
-			h.taskSvc.Fail(taskID, reviewErr.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.UpdateProgress(taskID, 90) //nolint:errcheck
-		h.taskSvc.Complete(taskID, review)   //nolint:errcheck
-	}(task.TaskID)
-
 	respondAccepted(c, task.TaskID, "章节审查任务已提交")
 }
 
@@ -1233,47 +1130,12 @@ func (h *ChapterHandler) RewriteChapterByInstruction(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task: "+err.Error())
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterRewriteInstr
+	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的 instruction 调用同一套
+	// RewriteByInstruction → ArchiveVersionBeforeRewrite → ApplyRewrittenContent）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"instruction": req.Instruction,
 	})
-
-	instruction := req.Instruction
-	reqID6 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID6)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[ChapterHandler] RewriteByInstruction task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
-		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
-
-		newContent, rewriteErr := h.qualityService.RewriteByInstruction(context.Background(), uint(id), instruction)
-		if rewriteErr != nil {
-			log.Errorf("[ChapterHandler] RewriteByInstruction task %s failed: chapterID=%d err=%v", taskID, id, rewriteErr)
-			h.taskSvc.Fail(taskID, rewriteErr.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.UpdateProgress(taskID, 80) //nolint:errcheck
-
-		// Save current content as a version before overwriting
-		if err2 := h.chapterService.ArchiveVersionBeforeRewrite(uint(id), instruction); err2 != nil {
-			log.Errorf("[ChapterHandler] RewriteByInstruction archive version failed: %v", err2)
-		}
-
-		// Apply new content
-		updated, applyErr := h.chapterService.ApplyRewrittenContent(uint(id), newContent)
-		if applyErr != nil {
-			log.Errorf("[ChapterHandler] RewriteByInstruction apply content failed: %v", applyErr)
-			h.taskSvc.Fail(taskID, "保存修改内容失败: "+applyErr.Error()) //nolint:errcheck
-			return
-		}
-
-		h.taskSvc.Complete(taskID, map[string]interface{}{"chapter": updated}) //nolint:errcheck
-	}(task.TaskID)
-
 	respondAccepted(c, task.TaskID, "按指令修改任务已提交")
 }
 

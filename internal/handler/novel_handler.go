@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/logger"
 
@@ -328,61 +327,14 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterGen 的
+	// 执行函数在 cmd/server/task_resume.go，entity_type=="chapter" 且 entity_id==0 分支反序列化
+	// 下面存的字段，调用同一套 GenerateChapter → 通知 → 伏笔提取/质量检查 的完整流程）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"novel_id": uint(novelId),
-		"req":      &req,
+		"novel_id":       uint(novelId),
+		"req":            &req,
+		"caller_user_id": callerUserID,
 	})
-
-	reqID := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[NovelHandler] GenerateChapter task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)        //nolint:errcheck
-		h.taskSvc.UpdateProgress(taskID, 5) //nolint:errcheck
-
-		chapter, err := h.chapterService.GenerateChapter(tenantID, uint(novelId), &req)
-		if err != nil {
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-			log.Errorf("[NovelHandler] GenerateChapter task %s failed: %v", taskID, err)
-			return
-		}
-		h.taskSvc.UpdateProgress(taskID, 90) //nolint:errcheck
-
-		modelUsed := req.ModelOverride
-		if modelUsed == "" {
-			modelUsed = h.novelService.GetAIService().GetDefaultProviderName()
-		}
-		h.taskSvc.Complete(taskID, map[string]interface{}{"chapter": chapter, "model_used": modelUsed}) //nolint:errcheck
-
-		// 站内通知：章节生成完成
-		if h.notifSvc != nil && callerUserID > 0 {
-			_ = h.notifSvc.Send(
-				tenantID, callerUserID,
-				"chapter_done",
-				fmt.Sprintf("第%d章生成完成", chapter.ChapterNo),
-				chapter.Title,
-				"chapter", chapter.ID,
-				fmt.Sprintf("/novel/%d/chapter/%d", chapter.NovelID, chapter.ChapterNo),
-			)
-		}
-
-		// 后处理：伏笔提取 + 质量检查（非阻塞）
-		go func(ch *model.Chapter, tid uint) {
-			if _, err := h.foreshadowService.ExtractForeshadows(ch, tid, ch.NovelID); err != nil {
-				log.Errorf("[NovelHandler] GenerateChapter: foreshadow extraction failed (ch %d): %v", ch.ID, err)
-			}
-		}(chapter, tenantID)
-		go func(chID uint) {
-			if _, err := h.qualityControlService.CheckChapter(chID); err != nil {
-				log.Errorf("[NovelHandler] GenerateChapter: quality check failed (ch %d): %v", chID, err)
-			}
-		}(chapter.ID)
-	}(task.TaskID)
 
 	if h.auditSvc != nil {
 		h.auditSvc.LogEntry(service.AuditEntry{
@@ -460,51 +412,10 @@ func (h *NovelHandler) BatchGenerateChapters(c *gin.Context) {
 		return
 	}
 
-	reqID2 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID2)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[BatchGenerate] task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		total := len(toGenerate)
-		var generated, failed int
-		var failedChapters []int
-		for i, ch := range toGenerate {
-			progress := (i*90)/total + 5
-			h.taskSvc.UpdateProgressAndTitle(taskID, progress, //nolint:errcheck
-				fmt.Sprintf("正在生成第%d章《%s》（%d/%d）", ch.ChapterNo, ch.Title, i+1, total))
-			genReq := &model.GenerateChapterRequest{
-				NovelID:       uint(novelId),
-				ChapterNo:     ch.ChapterNo,
-				WordCount:     req.WordCount,
-				MaxTokens:     req.MaxTokens,
-				ModelOverride: req.ModelOverride,
-				EnabledTools:  req.EnabledTools,
-			}
-			if _, genErr := h.chapterService.GenerateChapter(tenantID, uint(novelId), genReq); genErr != nil {
-				log.Errorf("[BatchGenerate] chapter %d failed: %v", ch.ChapterNo, genErr)
-				failed++
-				failedChapters = append(failedChapters, ch.ChapterNo)
-			} else {
-				generated++
-			}
-		}
-		resultTitle := fmt.Sprintf("批量生成完成：成功%d章", generated)
-		if failed > 0 {
-			resultTitle += fmt.Sprintf("，失败%d章", failed)
-		}
-		h.taskSvc.UpdateProgressAndTitle(taskID, 99, resultTitle) //nolint:errcheck
-		h.taskSvc.Complete(taskID, map[string]interface{}{        //nolint:errcheck
-			"total":           total,
-			"generated":       generated,
-			"failed":          failed,
-			"failed_chapters": failedChapters,
-		})
-	}(task.TaskID)
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeBatchChapterGen
+	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的整个 req 重新按
+	// start/end/skip_existing 过滤章节列表，调用同一套 GenerateChapter 循环）。
+	_ = h.taskSvc.SetParams(task.TaskID, req)
 
 	reqLogger(c).Printf("[async] task created: task_id=%s", task.TaskID)
 	c.JSON(http.StatusAccepted, gin.H{
@@ -551,21 +462,10 @@ func (h *NovelHandler) GenerateOutline(c *gin.Context) {
 		Temperature:    req.Temperature,
 		TimeoutSeconds: req.TimeoutSeconds,
 	}
-	h.taskSvc.SetParams(task.TaskID, outlineReq) //nolint:errcheck
-
-	reqID3 := c.GetString("request_id")
-	go func(taskID string, tID uint, r *service.GenerateOutlineRequest) {
-		log := logger.WithID(reqID3)
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		result, err := h.novelService.GenerateOutline(tID, r)
-		if err != nil {
-			log.Errorf("[NovelHandler] GenerateOutline task %s: novelID=%d err=%v", taskID, r.NovelID, err)
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.Complete(taskID, map[string]interface{}{"outline": result}) //nolint:errcheck
-	}(task.TaskID, tenantID, outlineReq)
-
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeNovelOutlineGen
+	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的整个 outlineReq 调用同一个
+	// h.novelService.GenerateOutline）。
+	_ = h.taskSvc.SetParams(task.TaskID, outlineReq)
 	respondAccepted(c, task.TaskID, "大纲生成任务已提交")
 }
 
@@ -786,33 +686,12 @@ func (h *NovelHandler) GenerateCoverImage(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeCoverImageGen
+	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的 suggestion 调用同一个
+	// h.novelService.GenerateCoverImage，5分钟超时同样在执行函数内设置）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"suggestion": req.Suggestion,
 	})
-
-	novelID := uint(id)
-	suggestion := req.Suggestion
-	reqID4 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID4)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[NovelHandler] GenerateCoverImage task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		// 封面生成是长耗时操作（30-120s），使用独立 context 避免受 HTTP WriteTimeout 影响
-		genCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		defer cancel()
-		url, err := h.novelService.GenerateCoverImage(genCtx, tenantID, novelID, suggestion)
-		if err != nil {
-			log.Errorf("[NovelHandler] GenerateCoverImage task %s: novelID=%d err=%v", taskID, novelID, err)
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.Complete(taskID, map[string]interface{}{"url": url}) //nolint:errcheck
-	}(task.TaskID)
 	respondAccepted(c, task.TaskID, "封面图生成任务已提交")
 }
 

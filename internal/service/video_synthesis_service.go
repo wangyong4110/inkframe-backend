@@ -811,34 +811,25 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 		return "", fmt.Errorf("access denied: video %d does not belong to tenant %d", videoID, tenantID)
 	}
 
-	// 创建异步任务
-	var taskID string
-	if s.taskSvc != nil {
-		task, err := s.taskSvc.Create(tenantID, TaskTypeVideoSynthesis, "视频合成", "video", videoID)
-		if err != nil {
-			return "", fmt.Errorf("create task: %w", err)
-		}
-		taskID = task.TaskID
-		_ = s.taskSvc.SetParams(taskID, map[string]interface{}{
-			"video_id": videoID,
-		})
-	} else {
-		taskID = fmt.Sprintf("synth-%d", videoID)
+	// 创建异步任务，执行权交给任务引擎（见 cmd/server/task_resume.go 里 TaskTypeVideoSynthesis
+	// 注册的 resume handler，与本函数共享 RunSynthesisPipelineCtx）。未注入 taskSvc 时
+	// （例如部分测试场景）退回原来的裸 goroutine 立即执行，行为不变。
+	if s.taskSvc == nil {
+		taskID := fmt.Sprintf("synth-%d", videoID)
+		logger.Printf("[SynthesizeVideo] videoID=%d: taskID=%s", videoID, taskID)
+		go s.RunSynthesisPipelineCtx(context.Background(), taskID, videoID)
+		return taskID, nil
 	}
-	logger.Printf("[SynthesizeVideo] videoID=%d: taskID=%s", videoID, taskID)
 
-	pipelineCtx, pipelineCancel := context.WithCancel(context.Background())
-	if s.taskSvc != nil {
-		s.taskSvc.RegisterCancel(taskID, pipelineCancel)
+	task, err := s.taskSvc.Create(tenantID, TaskTypeVideoSynthesis, "视频合成", "video", videoID)
+	if err != nil {
+		return "", fmt.Errorf("create task: %w", err)
 	}
-	go func() {
-		if s.taskSvc != nil {
-			defer s.taskSvc.DeregisterCancel(taskID)
-		}
-		defer pipelineCancel()
-		s.RunSynthesisPipelineCtx(pipelineCtx, taskID, videoID)
-	}()
-	return taskID, nil
+	_ = s.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"video_id": videoID,
+	})
+	logger.Printf("[SynthesizeVideo] videoID=%d: taskID=%s", videoID, task.TaskID)
+	return task.TaskID, nil
 }
 
 // RunSynthesisPipelineCtx 执行合成流水线核心逻辑（由 SynthesizeVideo 和 resume handler 共享）。

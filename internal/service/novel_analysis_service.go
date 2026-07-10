@@ -155,19 +155,21 @@ func (s *NovelAnalysisService) StartAnalysis(tenantID, novelID uint, createOutli
 		return "", fmt.Errorf("novel not found: %w", err)
 	}
 
-	// 优先使用 TaskService（持久化）；若未注入则降级为随机 UUID
-	externalTaskID := uuid.New().String()
+	// 优先使用 TaskService（持久化，执行权交给任务引擎——见 cmd/server/task_resume.go 里
+	// TaskTypeNovelAnalysis 注册的 ResumeAnalysis）；若未注入则降级为随机 UUID + 立即本地执行。
 	if s.taskSvc != nil {
-		if dbTask, err := s.taskSvc.Create(tenantID, TaskTypeNovelAnalysis, "小说分析", "novel", novelID); err == nil {
-			externalTaskID = dbTask.TaskID
-			_ = s.taskSvc.SetParams(externalTaskID, map[string]interface{}{
-				"create_outlines": createOutlines,
-			})
-		} else {
-			logger.Errorf("[NovelAnalysis] StartAnalysis: create async task failed (novelID=%d): %v; falling back to UUID taskID", novelID, err)
+		dbTask, err := s.taskSvc.Create(tenantID, TaskTypeNovelAnalysis, "小说分析", "novel", novelID)
+		if err != nil {
+			logger.Errorf("[NovelAnalysis] StartAnalysis: create async task failed (novelID=%d): %v", novelID, err)
+			return "", err
 		}
+		_ = s.taskSvc.SetParams(dbTask.TaskID, map[string]interface{}{
+			"create_outlines": createOutlines,
+		})
+		return dbTask.TaskID, nil
 	}
 
+	externalTaskID := uuid.New().String()
 	ctx, cancel := context.WithCancel(context.Background())
 	task := &AnalysisTask{
 		NovelID:        novelID,

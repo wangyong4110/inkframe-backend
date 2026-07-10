@@ -808,10 +808,6 @@ func (s *AssetService) CreateCrawlJob(tenantID uint, source, query, assetType, l
 	}
 	job.TaskID = task.TaskID
 	_ = s.crawlRepo.SetTaskID(job.ID, task.TaskID)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	s.taskSvc.RegisterCancel(task.TaskID, cancel)
-	go s.runCrawlJob(ctx, job)
 	return job, nil
 }
 
@@ -837,10 +833,6 @@ func (s *AssetService) RetryCrawlJob(id uint) (*model.CrawlJob, error) {
 	}
 	job.TaskID = task.TaskID
 	_ = s.crawlRepo.SetTaskID(job.ID, task.TaskID)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	s.taskSvc.RegisterCancel(task.TaskID, cancel)
-	go s.runCrawlJob(ctx, job)
 	return job, nil
 }
 

@@ -8,13 +8,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
@@ -122,44 +119,12 @@ func (h *VideoHandler) GenerateSegmentVoice(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeVoiceGen 的
+	// 执行函数在 cmd/server/task_resume.go，entity_type=="segment" 分支反序列化下面存的
+	// narration_voice 调用同一套 GenerateSegmentAudio 重试逻辑）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"narration_voice": req.NarrationVoice,
 	})
-
-	reqID := c.GetString("request_id")
-	go func(taskID string, sID uint, narrationVoice string) {
-		log := logger.WithID(reqID)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[VideoHandler] GenerateSegmentVoice task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
-		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
-
-		const maxRetries = 3
-		var audioErr error
-		for attempt := 1; attempt <= maxRetries; attempt++ {
-			audioErr = h.videoService.GenerateSegmentAudio(sID, tenantID, narrationVoice)
-			if audioErr == nil {
-				break
-			}
-			log.Printf("[VideoHandler] GenerateSegmentVoice task %s seg %d attempt %d/%d: %v",
-				taskID, sID, attempt, maxRetries, audioErr)
-			if attempt < maxRetries {
-				time.Sleep(time.Duration(attempt*2) * time.Second)
-			}
-		}
-		if audioErr != nil {
-			h.taskSvc.Fail(taskID, audioErr.Error()) //nolint:errcheck
-			return
-		}
-		seg, _ := h.videoService.GetVoiceSegment(sID)
-		h.taskSvc.UpdateProgress(taskID, 90)    //nolint:errcheck
-		h.taskSvc.Complete(taskID, seg) //nolint:errcheck
-	}(task.TaskID, uint(segID), req.NarrationVoice)
-
 	respondAccepted(c, task.TaskID, "片段配音任务已提交")
 }
 
@@ -694,80 +659,13 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeVoiceGen 的
+	// 执行函数在 cmd/server/task_resume.go，entity_type=="video" 分支重新拉取分镜、按
+	// skip_existing 过滤，用同样的分批并发 worker-pool 调用 GenerateShotAudio）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"narration_voice": narrationVoice,
+		"skip_existing":   skipExisting,
 	})
-
-	reqID2 := c.GetString("request_id")
-	go func(taskID string, shots []*model.StoryboardShot, narrationVoice string, subtitleEnabled bool) {
-		log := logger.WithID(reqID2)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[VideoHandler] BatchGenerateVoice task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-
-		total := len(shots)
-		var doneCount atomic.Int32
-
-		for i := 0; i < total; i += batchSize {
-			end := i + batchSize
-			if end > total {
-				end = total
-			}
-			batch := shots[i:end]
-
-			var wg sync.WaitGroup
-			for _, shot := range batch {
-				wg.Add(1)
-				go func(s *model.StoryboardShot) {
-					defer wg.Done()
-					if err := h.videoService.GenerateShotAudio(s, tenantID, narrationVoice); err != nil {
-						log.Errorf("[VideoHandler] BatchGenerateVoice task %s shot %d failed: %v", taskID, s.ShotNo, err)
-					}
-					done := int(doneCount.Add(1))
-					h.taskSvc.UpdateProgress(taskID, done*100/total) //nolint:errcheck
-				}(shot)
-			}
-			wg.Wait()
-
-			// 批次间隔 1s，避免触发 TTS API 限流
-			if end < total {
-				time.Sleep(1 * time.Second)
-			}
-		}
-
-		// 统计最终结果
-		finalShots, _ := h.videoService.GetStoryboard(uint(videoID))
-		shotSet := make(map[uint]bool, len(shots))
-		for _, s := range shots {
-			shotSet[s.ID] = true
-		}
-		success, fail := 0, 0
-		for _, s := range finalShots {
-			if !shotSet[s.ID] {
-				continue
-			}
-			segs, _ := h.videoService.ListVoiceSegments(s.ID)
-			hasAudio := false
-			for _, seg := range segs {
-				if seg.AudioPath != "" {
-					hasAudio = true
-					break
-				}
-			}
-			if hasAudio {
-				success++
-			} else {
-				fail++
-			}
-		}
-
-		h.taskSvc.Complete(taskID, gin.H{"success": success, "fail": fail, "total": total}) //nolint:errcheck
-		log.Printf("[VideoHandler] BatchGenerateVoice task %s done: success=%d fail=%d", taskID, success, fail)
-	}(task.TaskID, targets, narrationVoice, req.SubtitleEnabled)
 
 	reqLogger(c).Printf("[async] task created: task_id=%s", task.TaskID)
 	c.JSON(http.StatusAccepted, gin.H{
@@ -1036,30 +934,12 @@ func (h *VideoHandler) AnalyzeBGMSegments(c *gin.Context) {
 		UserPrompt string `json:"user_prompt"`
 	}
 	_ = c.ShouldBindJSON(&bgmReq)
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（"bgm_analyze" 的执行函数在
+	// cmd/server/task_resume.go 的 bgmResume(false)，反序列化下面存的 user_prompt 调用同一个
+	// h.bgmSvc.AnalyzeBGMForVideo）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"user_prompt": bgmReq.UserPrompt,
 	})
-
-	reqID3 := c.GetString("request_id")
-	go func(taskID string, userPrompt string) {
-		log := logger.WithID(reqID3)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[VideoHandler] AnalyzeBGMSegments task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		ctx := context.Background()
-		segs, err := h.bgmSvc.AnalyzeBGMForVideo(ctx, shots, h.bgmRepo, uint(videoID), tenantID, userPrompt)
-		if err != nil {
-			log.Errorf("[VideoHandler] AnalyzeBGMSegments task %s failed: %v", taskID, err)
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.Complete(taskID, gin.H{"count": len(segs)}) //nolint:errcheck
-	}(task.TaskID, bgmReq.UserPrompt)
-
 	respondAccepted(c, task.TaskID, "BGM分段分析任务已提交")
 }
 
@@ -1097,38 +977,12 @@ func (h *VideoHandler) GenerateBGM(c *gin.Context) {
 		UserPrompt string `json:"user_prompt"`
 	}
 	_ = c.ShouldBindJSON(&bgmGenReq)
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（"bgm_generate" 的执行函数在
+	// cmd/server/task_resume.go 的 bgmResume(true)，反序列化下面存的 user_prompt 调用同一个
+	// h.bgmSvc.GenerateBGMSegments）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"user_prompt": bgmGenReq.UserPrompt,
 	})
-
-	reqID4 := c.GetString("request_id")
-	go func(taskID string, userPrompt string) {
-		log := logger.WithID(reqID4)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[VideoHandler] GenerateBGM task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)                                           //nolint:errcheck
-		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
-		ctx := context.Background()
-		segs, err := h.bgmSvc.GenerateBGMSegments(ctx, shots, h.bgmRepo, uint(videoID), tenantID, userPrompt, progressFn)
-		if err != nil {
-			log.Errorf("[VideoHandler] GenerateBGM task %s failed: %v", taskID, err)
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-			return
-		}
-		matched := 0
-		for _, s := range segs {
-			if s.URL != "" {
-				matched++
-			}
-		}
-		h.taskSvc.Complete(taskID, gin.H{"total": len(segs), "matched": matched}) //nolint:errcheck
-		log.Printf("[VideoHandler] GenerateBGM task %s done: total=%d matched=%d", taskID, len(segs), matched)
-	}(task.TaskID, bgmGenReq.UserPrompt)
-
 	respondAccepted(c, task.TaskID, "BGM生成任务已提交")
 }
 

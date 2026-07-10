@@ -6,11 +6,11 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"github.com/inkframe/inkframe-backend/internal/logger"
 	"io"
 	"net"
-	"net/url"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -60,16 +60,16 @@ const (
 
 // ImportRequest 导入请求
 type ImportRequest struct {
-	Source      ImportSource        `json:"source"`
-	URL         string              `json:"url,omitempty"`       // 导入URL
-	FileData    []byte              `json:"file_data,omitempty"` // 文件数据
-	FileName    string              `json:"file_name,omitempty"` // 文件名
-	Format      ImportFormat        `json:"format,omitempty"`    // 文件格式
-	SiteName    string              `json:"site_name,omitempty"` // 站点名称（爬取时）
-	NovelID     uint                `json:"novel_id,omitempty"`  // 已有小说ID（追加时）
-	TenantID    uint                `json:"tenant_id,omitempty"` // 租户ID（用于去重）
-	UserID      uint                `json:"user_id,omitempty"`   // 发起导入的用户ID（用于站内通知）
-	CrawlConfig *crawler.CrawlConfig `json:"-"`                  // optional per-crawl settings
+	Source      ImportSource         `json:"source"`
+	URL         string               `json:"url,omitempty"`          // 导入URL
+	FileData    []byte               `json:"file_data,omitempty"`    // 文件数据
+	FileName    string               `json:"file_name,omitempty"`    // 文件名
+	Format      ImportFormat         `json:"format,omitempty"`       // 文件格式
+	SiteName    string               `json:"site_name,omitempty"`    // 站点名称（爬取时）
+	NovelID     uint                 `json:"novel_id,omitempty"`     // 已有小说ID（追加时）
+	TenantID    uint                 `json:"tenant_id,omitempty"`    // 租户ID（用于去重）
+	UserID      uint                 `json:"user_id,omitempty"`      // 发起导入的用户ID（用于站内通知）
+	CrawlConfig *crawler.CrawlConfig `json:"crawl_config,omitempty"` // optional per-crawl settings
 }
 
 // ImportResult 导入结果
@@ -81,7 +81,7 @@ type ImportResult struct {
 	FailedChapters   int      `json:"failed_chapters"`
 	Duration         float64  `json:"duration"` // 秒
 	Errors           []string `json:"errors,omitempty"`
-	OSSUrl           string   `json:"oss_url,omitempty"` // 原始文件 OSS 备份地址
+	OSSUrl           string   `json:"oss_url,omitempty"`   // 原始文件 OSS 备份地址
 	Duplicate        bool     `json:"duplicate,omitempty"` // 是否为重复导入（内容哈希匹配）
 	Message          string   `json:"message,omitempty"`   // 附加说明（如重复导入提示）
 }
@@ -90,7 +90,7 @@ type ImportResult struct {
 type CrawlProgress struct {
 	mu      sync.RWMutex
 	NovelID uint   `json:"novel_id"`
-	Status  string `json:"status"`   // running / paused / completed / failed
+	Status  string `json:"status"` // running / paused / completed / failed
 	Total   int    `json:"total"`
 	Done    int    `json:"done"`
 	Failed  int    `json:"failed"`
@@ -114,9 +114,9 @@ type NovelImportService struct {
 	notifSvc           *NotificationService // 可选，用于爬取完成通知
 	crawlJobRepo       *repository.NovelCrawlJobRepository
 	cache              *redis.Client // optional: cross-instance crawl progress sharing
-	crawlProgress      sync.Map // novelID(uint) → *CrawlProgress
-	crawlDoneCallbacks sync.Map // novelID(uint) → func()
-	db                 *gorm.DB // optional: used for transactional novel+chapter creation
+	crawlProgress      sync.Map      // novelID(uint) → *CrawlProgress
+	crawlDoneCallbacks sync.Map      // novelID(uint) → func()
+	db                 *gorm.DB      // optional: used for transactional novel+chapter creation
 }
 
 // NewNovelImportService 创建小说导入服务
@@ -234,6 +234,27 @@ func (s *NovelImportService) StartCrawlDoneSubscriber(ctx context.Context) {
 // RegisterCrawlDoneCallback 注册爬取完成回调（一次性，触发后自动移除）
 func (s *NovelImportService) RegisterCrawlDoneCallback(novelID uint, fn func()) {
 	s.crawlDoneCallbacks.Store(novelID, fn)
+}
+
+// StageFileForImport 把待导入文件的原始字节上传到 OSS/本地存储，返回可用于后续下载的 URL。
+// 用于 ImportHandler 在 HTTP 请求内把大文件（几十~几百 MB）落地，避免把整段字节塞进
+// 异步任务的 params 列（mediumtext，且不适合承载大 blob）；引擎调度执行时通过
+// DownloadStagedFile 取回字节。err 非 nil 时不应继续创建任务。
+func (s *NovelImportService) StageFileForImport(ctx context.Context, tenantID uint, filename string, data []byte) (string, error) {
+	if s.storageSvc == nil {
+		return "", fmt.Errorf("storage service not configured")
+	}
+	key := fmt.Sprintf("imports/staging/%d/%s_%s",
+		tenantID, time.Now().Format("20060102150405"), filepath.Base(filename))
+	return s.storageSvc.Upload(ctx, key, bytes.NewReader(data), int64(len(data)), contentTypeFromFilename(filename))
+}
+
+// DownloadStagedFile 取回 StageFileForImport 暂存的文件字节，供任务引擎执行器在实际执行导入时使用。
+func (s *NovelImportService) DownloadStagedFile(ctx context.Context, url string) ([]byte, error) {
+	if s.storageSvc == nil {
+		return nil, fmt.Errorf("storage service not configured")
+	}
+	return s.storageSvc.Get(ctx, url)
 }
 
 // uploadRawToOSS 将原始字节上传到 OSS（失败为 best-effort，不阻断主流程）
@@ -1050,8 +1071,8 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 			ChapterNo: chapterOffset + i + 1,
 			Title:     info.Title,
 			Content:   "",
-			CrawlURL: info.URL,
-			Status: "draft",
+			CrawlURL:  info.URL,
+			Status:    "draft",
 		})
 	}
 	var pendingChapters []*model.Chapter
@@ -1179,7 +1200,7 @@ func (s *NovelImportService) parseTxtFile(data []byte, fileName string, tenantID
 
 	novel := &model.Novel{
 		Title:  title,
-		Meta: model.NovelMeta{Genre: "unknown"},
+		Meta:   model.NovelMeta{Genre: "unknown"},
 		Status: "completed",
 	}
 
@@ -1205,7 +1226,7 @@ func (s *NovelImportService) parseMarkdownFile(data []byte, fileName string, ten
 
 	novel := &model.Novel{
 		Title:  title,
-		Meta: model.NovelMeta{Genre: "unknown"},
+		Meta:   model.NovelMeta{Genre: "unknown"},
 		Status: "completed",
 	}
 
@@ -1237,7 +1258,7 @@ func (s *NovelImportService) parseJsonFile(data []byte, tenantID uint) (*model.N
 
 	novel := &model.Novel{
 		Title:  structured.Title,
-		Meta: model.NovelMeta{Genre: structured.Genre},
+		Meta:   model.NovelMeta{Genre: structured.Genre},
 		Status: "completed",
 	}
 
@@ -1277,7 +1298,7 @@ func (s *NovelImportService) parseHtmlFile(data []byte, tenantID uint) (*model.N
 
 	novel := &model.Novel{
 		Title:  title,
-		Meta: model.NovelMeta{Genre: "unknown"},
+		Meta:   model.NovelMeta{Genre: "unknown"},
 		Status: "completed",
 	}
 
@@ -1339,15 +1360,15 @@ func (s *NovelImportService) splitByChapters(content, novelTitle string, tenantI
 	}
 	// 尝试多种章节分割模式（取命中数最多的一种）
 	patterns := []string{
-		`(?m)^第[一二三四五六七八九十百千零〇\d]+章[^\n]*`,  // 中文章节（行首）
-		`(?m)^第[0-9]+章[^\n]*`,                        // 纯数字章（行首）
-		`(?m)^卷[一二三四五六七八九十百千零〇\d]+[^\n]*`,    // 卷（行首）
-		`(?m)^第[一二三四五六七八九十百千零〇\d]+节[^\n]*`,  // 节（行首）
-		`(?m)^番外[一二三四五六七八九十\d]*[^\n]*`,         // 番外章（行首）
-		`Chapter\s+[0-9]+[^\n]*`,                       // English chapter
-		`ch\.\s*[0-9]+[^\n]*`,                          // ch.1
-		`(?m)^\[第[0-9]+章\][^\n]*`,                    // [第1章]（行首）
-		`(?m)^【[^】]{1,30}】[^\n]*`,                   // 【标题】（行首）
+		`(?m)^第[一二三四五六七八九十百千零〇\d]+章[^\n]*`, // 中文章节（行首）
+		`(?m)^第[0-9]+章[^\n]*`, // 纯数字章（行首）
+		`(?m)^卷[一二三四五六七八九十百千零〇\d]+[^\n]*`,  // 卷（行首）
+		`(?m)^第[一二三四五六七八九十百千零〇\d]+节[^\n]*`, // 节（行首）
+		`(?m)^番外[一二三四五六七八九十\d]*[^\n]*`,     // 番外章（行首）
+		`Chapter\s+[0-9]+[^\n]*`,  // English chapter
+		`ch\.\s*[0-9]+[^\n]*`,     // ch.1
+		`(?m)^\[第[0-9]+章\][^\n]*`, // [第1章]（行首）
+		`(?m)^【[^】]{1,30}】[^\n]*`, // 【标题】（行首）
 	}
 
 	var splits []int
@@ -1781,4 +1802,3 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 
 	return result, nil
 }
-

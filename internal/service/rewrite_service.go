@@ -774,30 +774,6 @@ func (s *RewriteService) StartAnalysis(tenantID, projectID uint) (string, error)
 		return "", fmt.Errorf("create task: %w", err)
 	}
 
-	go func(taskID string) {
-		ctx, cancel := context.WithCancel(context.Background())
-		s.taskSvc.RegisterCancel(taskID, cancel)
-		defer s.taskSvc.DeregisterCancel(taskID)
-		defer cancel()
-		defer func() {
-			if r := recover(); r != nil {
-				msg := fmt.Sprintf("内部错误: %v", r)
-				s.taskSvc.Fail(taskID, msg)
-				s.projectRepo.UpdateStatus(projectID, "failed", msg)
-			}
-		}()
-		s.taskSvc.SetRunning(taskID)
-		if err := s.runAnalysis(ctx, taskID, project); err != nil {
-			s.taskSvc.Fail(taskID, err.Error())
-			s.projectRepo.UpdateStatus(projectID, "failed", err.Error())
-			return
-		}
-		s.taskSvc.Complete(taskID, map[string]interface{}{
-			"project_id": projectID,
-			"status":     "bible_ready",
-		})
-	}(task.TaskID)
-
 	return task.TaskID, nil
 }
 
@@ -1033,38 +1009,11 @@ func (s *RewriteService) StartRewriting(tenantID, projectID uint) (string, error
 		s.taskSvc.CancelActiveByEntity("rewrite_project", projectID, TaskTypeRewriteChapters)
 	}
 
-	// P0 fix: reset any chapters stuck in "rewriting" state from a previous interrupted run
-	s.chapterTaskRepo.ResetStaleRewriting(projectID)
-
 	task, err := s.taskSvc.Create(tenantID, TaskTypeRewriteChapters,
 		"章节改写", "rewrite_project", projectID)
 	if err != nil {
 		return "", fmt.Errorf("create task: %w", err)
 	}
-
-	go func(taskID string) {
-		ctx, cancel := context.WithCancel(context.Background())
-		s.taskSvc.RegisterCancel(taskID, cancel)
-		defer s.taskSvc.DeregisterCancel(taskID)
-		defer cancel()
-		defer func() {
-			if r := recover(); r != nil {
-				msg := fmt.Sprintf("内部错误: %v", r)
-				s.taskSvc.Fail(taskID, msg)
-				s.projectRepo.UpdateStatus(projectID, "failed", msg)
-			}
-		}()
-		s.taskSvc.SetRunning(taskID)
-		if err := s.runRewriting(ctx, taskID, project); err != nil {
-			s.taskSvc.Fail(taskID, err.Error())
-			s.projectRepo.UpdateStatus(projectID, "failed", err.Error())
-			return
-		}
-		s.taskSvc.Complete(taskID, map[string]interface{}{
-			"project_id": projectID,
-			"status":     "completed",
-		})
-	}(task.TaskID)
 
 	return task.TaskID, nil
 }

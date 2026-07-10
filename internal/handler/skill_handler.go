@@ -4,7 +4,6 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
@@ -183,25 +182,6 @@ func (h *SkillHandler) GenerateSkills(c *gin.Context) {
 			respondErr(c, http.StatusInternalServerError, "failed to create task")
 			return
 		}
-		reqID := c.GetString("request_id")
-		go func(taskID string) {
-			log := logger.WithID(reqID)
-			defer func() {
-				if r := recover(); r != nil {
-					log.Errorf("[SkillHandler] GenerateSkills task %s panic: %v", taskID, r)
-					h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-				}
-			}()
-			h.taskSvc.SetRunning(taskID)         //nolint:errcheck
-			h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
-			skills, err := h.skillSvc.GenerateSkills(tenantID, novelID)
-			if err != nil {
-				log.Errorf("[SkillHandler] GenerateSkills task %s failed: %v", taskID, err)
-				h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-			} else {
-				h.taskSvc.Complete(taskID, map[string]interface{}{"skills": skills, "count": len(skills)}) //nolint:errcheck
-			}
-		}(task.TaskID)
 		respondAccepted(c, task.TaskID, "技能生成任务已提交")
 		return
 	}

@@ -20,51 +20,51 @@ import (
 
 // Repositories 仓库层
 type Repositories struct {
-	NovelRepo               *repository.NovelRepository
-	ChapterRepo             *repository.ChapterRepository
-	CharacterRepo           *repository.CharacterRepository
-	WorldviewRepo           *repository.WorldviewRepository
-	AIModelRepo             *repository.AIModelRepository
-	VideoRepo               *repository.VideoRepository
-	StoryboardRepo          *repository.StoryboardRepository
-	KnowledgeBaseRepo       *repository.KnowledgeBaseRepository
-	ModelProviderRepo       *repository.ModelProviderRepository
-	ModelComparisonRepo     *repository.ModelComparisonRepository
-	TaskRepo                *repository.TaskRepository
+	NovelRepo           *repository.NovelRepository
+	ChapterRepo         *repository.ChapterRepository
+	CharacterRepo       *repository.CharacterRepository
+	WorldviewRepo       *repository.WorldviewRepository
+	AIModelRepo         *repository.AIModelRepository
+	VideoRepo           *repository.VideoRepository
+	StoryboardRepo      *repository.StoryboardRepository
+	KnowledgeBaseRepo   *repository.KnowledgeBaseRepository
+	ModelProviderRepo   *repository.ModelProviderRepository
+	ModelComparisonRepo *repository.ModelComparisonRepository
+	TaskRepo            *repository.TaskRepository
 
-	ChapterVersionRepo      *repository.ChapterVersionRepository
-	SnapshotRepo            *repository.CharacterStateSnapshotRepository
-	CharacterLookRepo       *repository.CharacterLookRepository
-	UserRepo                *repository.UserRepository
-	TenantRepo              *repository.TenantRepository
-	TenantUserRepo          *repository.TenantUserRepository
-	ArcSummaryRepo          *repository.ArcSummaryRepository
-	ItemRepo                *repository.ItemRepository
-	SkillRepo               *repository.SkillRepository
-	ChapterItemRepo         *repository.ChapterItemRepository
-	ChapterCharacterRepo    *repository.ChapterCharacterRepository
-	PlotPointRepo           *repository.PlotPointRepository
-	HookChainRepo           *repository.HookChainRepository
-	SatisfactionPointRepo   *repository.SatisfactionPointRepository
-	ConflictArcRepo         *repository.ConflictArcRepository
+	ChapterVersionRepo         *repository.ChapterVersionRepository
+	SnapshotRepo               *repository.CharacterStateSnapshotRepository
+	CharacterLookRepo          *repository.CharacterLookRepository
+	UserRepo                   *repository.UserRepository
+	TenantRepo                 *repository.TenantRepository
+	TenantUserRepo             *repository.TenantUserRepository
+	ArcSummaryRepo             *repository.ArcSummaryRepository
+	ItemRepo                   *repository.ItemRepository
+	SkillRepo                  *repository.SkillRepository
+	ChapterItemRepo            *repository.ChapterItemRepository
+	ChapterCharacterRepo       *repository.ChapterCharacterRepository
+	PlotPointRepo              *repository.PlotPointRepository
+	HookChainRepo              *repository.HookChainRepository
+	SatisfactionPointRepo      *repository.SatisfactionPointRepository
+	ConflictArcRepo            *repository.ConflictArcRepository
 	SceneAnchorRepo            *repository.SceneAnchorRepository
 	ChapterSceneAnchorRepo     *repository.ChapterSceneAnchorRepository
 	SceneConsistencyLogRepo    *repository.SceneConsistencyLogRepository
-	SystemSettingRepo       *repository.SystemSettingRepository
+	SystemSettingRepo          *repository.SystemSettingRepository
 	ShotVoiceSegmentRepo       *repository.ShotVoiceSegmentRepository
-	ReviewRecordRepo            *repository.ReviewRecordRepository
-	IgnoredReviewIssueRepo      *repository.IgnoredReviewIssueRepository
-	ShotSFXItemRepo         *repository.ShotSFXItemRepository
-	VideoBGMSegmentRepo     *repository.VideoBGMSegmentRepository
-	RewriteProjectRepo           *repository.RewriteProjectRepository
-	LiteraryAnalysisRepo         *repository.LiteraryAnalysisRepository
-	RewriteBibleRepo             *repository.RewriteBibleRepository
-	ChapterRewriteTaskRepo       *repository.ChapterRewriteTaskRepository
-	RewriteContinuityIndexRepo   *repository.RewriteContinuityIndexRepository
-	RewriteChapterSummaryRepo    *repository.RewriteChapterSummaryRepository
-	PlatformAccountRepo      *repository.PlatformAccountRepository
-	VideoPublishRecordRepo   *repository.VideoPublishRecordRepository
-	ContinuityReportRepo     *repository.ContinuityReportRepository
+	ReviewRecordRepo           *repository.ReviewRecordRepository
+	IgnoredReviewIssueRepo     *repository.IgnoredReviewIssueRepository
+	ShotSFXItemRepo            *repository.ShotSFXItemRepository
+	VideoBGMSegmentRepo        *repository.VideoBGMSegmentRepository
+	RewriteProjectRepo         *repository.RewriteProjectRepository
+	LiteraryAnalysisRepo       *repository.LiteraryAnalysisRepository
+	RewriteBibleRepo           *repository.RewriteBibleRepository
+	ChapterRewriteTaskRepo     *repository.ChapterRewriteTaskRepository
+	RewriteContinuityIndexRepo *repository.RewriteContinuityIndexRepository
+	RewriteChapterSummaryRepo  *repository.RewriteChapterSummaryRepository
+	PlatformAccountRepo        *repository.PlatformAccountRepository
+	VideoPublishRecordRepo     *repository.VideoPublishRecordRepository
+	ContinuityReportRepo       *repository.ContinuityReportRepository
 	// Asset Library
 	AssetRepo               *repository.AssetRepository
 	TagRepo                 *repository.TagRepository
@@ -87,117 +87,117 @@ type Repositories struct {
 	ReadingProgressRepo     *repository.ReadingProgressRepository
 	ChapterReadRecordRepo   *repository.ChapterReadRecordRepository
 	UserTokenRepo           *repository.UserTokenRepository
-	NovelCrawlJobRepo        *repository.NovelCrawlJobRepository
-	NotificationRepo         *repository.NotificationRepository
-	ForeshadowRepo           *repository.ForeshadowRepository
-	NovelOutlineVersionRepo  *repository.NovelOutlineVersionRepository
-	OutlineReviewRepo        *repository.OutlineReviewRepository
-	OutlineSynthesisRepo     *repository.NovelOutlineSynthesisRepository
-	NovelMemberRepo          *repository.NovelMemberRepository
-	EditingLockRepo          *repository.EditingLockRepository
-	SensitiveWordRepo        *repository.SensitiveWordRuleRepository
-	FeedbackRepo             *repository.FeedbackRepository
-	DramaTemplateRepo        *repository.DramaTemplateRepository
+	NovelCrawlJobRepo       *repository.NovelCrawlJobRepository
+	NotificationRepo        *repository.NotificationRepository
+	ForeshadowRepo          *repository.ForeshadowRepository
+	NovelOutlineVersionRepo *repository.NovelOutlineVersionRepository
+	OutlineReviewRepo       *repository.OutlineReviewRepository
+	OutlineSynthesisRepo    *repository.NovelOutlineSynthesisRepository
+	NovelMemberRepo         *repository.NovelMemberRepository
+	EditingLockRepo         *repository.EditingLockRepository
+	SensitiveWordRepo       *repository.SensitiveWordRuleRepository
+	FeedbackRepo            *repository.FeedbackRepository
+	DramaTemplateRepo       *repository.DramaTemplateRepository
 }
 
 // initRepositories 初始化仓库层
 func initRepositories(db *gorm.DB, redis *redis.Client) *Repositories {
 	return &Repositories{
-		NovelRepo:               repository.NewNovelRepository(db, redis),
-		ChapterRepo:             repository.NewChapterRepository(db, redis),
-		CharacterRepo:           repository.NewCharacterRepository(db),
-		WorldviewRepo:           repository.NewWorldviewRepository(db),
-		AIModelRepo:             repository.NewAIModelRepository(db),
-		VideoRepo:               repository.NewVideoRepository(db),
-		StoryboardRepo:          repository.NewStoryboardRepository(db),
-		KnowledgeBaseRepo:       repository.NewKnowledgeBaseRepository(db),
-		ModelProviderRepo:       repository.NewModelProviderRepository(db),
-		ModelComparisonRepo:     repository.NewModelComparisonRepository(db),
-		TaskRepo:                repository.NewTaskRepository(db),
+		NovelRepo:           repository.NewNovelRepository(db, redis),
+		ChapterRepo:         repository.NewChapterRepository(db, redis),
+		CharacterRepo:       repository.NewCharacterRepository(db),
+		WorldviewRepo:       repository.NewWorldviewRepository(db),
+		AIModelRepo:         repository.NewAIModelRepository(db),
+		VideoRepo:           repository.NewVideoRepository(db),
+		StoryboardRepo:      repository.NewStoryboardRepository(db),
+		KnowledgeBaseRepo:   repository.NewKnowledgeBaseRepository(db),
+		ModelProviderRepo:   repository.NewModelProviderRepository(db),
+		ModelComparisonRepo: repository.NewModelComparisonRepository(db),
+		TaskRepo:            repository.NewTaskRepository(db),
 
-		ChapterVersionRepo:      repository.NewChapterVersionRepository(db),
-		SnapshotRepo:            repository.NewCharacterStateSnapshotRepository(db),
-		CharacterLookRepo:       repository.NewCharacterLookRepository(db),
-		UserRepo:                repository.NewUserRepository(db),
-		TenantRepo:              repository.NewTenantRepository(db),
-		TenantUserRepo:          repository.NewTenantUserRepository(db),
-		ArcSummaryRepo:          repository.NewArcSummaryRepository(db),
-		ItemRepo:                repository.NewItemRepository(db),
-		SkillRepo:               repository.NewSkillRepository(db),
-		ChapterItemRepo:         repository.NewChapterItemRepository(db),
-		ChapterCharacterRepo:    repository.NewChapterCharacterRepository(db),
-		PlotPointRepo:           repository.NewPlotPointRepository(db),
-		HookChainRepo:           repository.NewHookChainRepository(db),
-		SatisfactionPointRepo:   repository.NewSatisfactionPointRepository(db),
-		ConflictArcRepo:         repository.NewConflictArcRepository(db),
-		SceneAnchorRepo:         repository.NewSceneAnchorRepository(db),
-		ChapterSceneAnchorRepo:  repository.NewChapterSceneAnchorRepository(db),
-		SceneConsistencyLogRepo: repository.NewSceneConsistencyLogRepository(db),
-		SystemSettingRepo:       repository.NewSystemSettingRepository(db),
+		ChapterVersionRepo:         repository.NewChapterVersionRepository(db),
+		SnapshotRepo:               repository.NewCharacterStateSnapshotRepository(db),
+		CharacterLookRepo:          repository.NewCharacterLookRepository(db),
+		UserRepo:                   repository.NewUserRepository(db),
+		TenantRepo:                 repository.NewTenantRepository(db),
+		TenantUserRepo:             repository.NewTenantUserRepository(db),
+		ArcSummaryRepo:             repository.NewArcSummaryRepository(db),
+		ItemRepo:                   repository.NewItemRepository(db),
+		SkillRepo:                  repository.NewSkillRepository(db),
+		ChapterItemRepo:            repository.NewChapterItemRepository(db),
+		ChapterCharacterRepo:       repository.NewChapterCharacterRepository(db),
+		PlotPointRepo:              repository.NewPlotPointRepository(db),
+		HookChainRepo:              repository.NewHookChainRepository(db),
+		SatisfactionPointRepo:      repository.NewSatisfactionPointRepository(db),
+		ConflictArcRepo:            repository.NewConflictArcRepository(db),
+		SceneAnchorRepo:            repository.NewSceneAnchorRepository(db),
+		ChapterSceneAnchorRepo:     repository.NewChapterSceneAnchorRepository(db),
+		SceneConsistencyLogRepo:    repository.NewSceneConsistencyLogRepository(db),
+		SystemSettingRepo:          repository.NewSystemSettingRepository(db),
 		ShotVoiceSegmentRepo:       repository.NewShotVoiceSegmentRepository(db),
-		ReviewRecordRepo:       repository.NewReviewRecordRepository(db),
-		IgnoredReviewIssueRepo: repository.NewIgnoredReviewIssueRepository(db),
-		ShotSFXItemRepo:         repository.NewShotSFXItemRepository(db),
-		VideoBGMSegmentRepo:     repository.NewVideoBGMSegmentRepository(db),
-		RewriteProjectRepo:           repository.NewRewriteProjectRepository(db, redis),
-		LiteraryAnalysisRepo:         repository.NewLiteraryAnalysisRepository(db),
-		RewriteBibleRepo:             repository.NewRewriteBibleRepository(db),
-		ChapterRewriteTaskRepo:       repository.NewChapterRewriteTaskRepository(db),
-		RewriteContinuityIndexRepo:   repository.NewRewriteContinuityIndexRepository(db),
-		RewriteChapterSummaryRepo:    repository.NewRewriteChapterSummaryRepository(db),
-		PlatformAccountRepo:      repository.NewPlatformAccountRepository(db),
-		VideoPublishRecordRepo:   repository.NewVideoPublishRecordRepository(db),
-		ContinuityReportRepo:     repository.NewContinuityReportRepository(db),
+		ReviewRecordRepo:           repository.NewReviewRecordRepository(db),
+		IgnoredReviewIssueRepo:     repository.NewIgnoredReviewIssueRepository(db),
+		ShotSFXItemRepo:            repository.NewShotSFXItemRepository(db),
+		VideoBGMSegmentRepo:        repository.NewVideoBGMSegmentRepository(db),
+		RewriteProjectRepo:         repository.NewRewriteProjectRepository(db, redis),
+		LiteraryAnalysisRepo:       repository.NewLiteraryAnalysisRepository(db),
+		RewriteBibleRepo:           repository.NewRewriteBibleRepository(db),
+		ChapterRewriteTaskRepo:     repository.NewChapterRewriteTaskRepository(db),
+		RewriteContinuityIndexRepo: repository.NewRewriteContinuityIndexRepository(db),
+		RewriteChapterSummaryRepo:  repository.NewRewriteChapterSummaryRepository(db),
+		PlatformAccountRepo:        repository.NewPlatformAccountRepository(db),
+		VideoPublishRecordRepo:     repository.NewVideoPublishRecordRepository(db),
+		ContinuityReportRepo:       repository.NewContinuityReportRepository(db),
 		// Asset Library
-		AssetRepo:             repository.NewAssetRepository(db),
-		TagRepo:               repository.NewTagRepository(db),
-		AssetVersionRepo:      repository.NewAssetVersionRepository(db),
-		AssetCollectionRepo:   repository.NewAssetCollectionRepository(db),
+		AssetRepo:               repository.NewAssetRepository(db),
+		TagRepo:                 repository.NewTagRepository(db),
+		AssetVersionRepo:        repository.NewAssetVersionRepository(db),
+		AssetCollectionRepo:     repository.NewAssetCollectionRepository(db),
 		AssetPublishRequestRepo: repository.NewAssetPublishRequestRepository(db),
-		AssetUsageRepo:        repository.NewAssetUsageRepository(db),
-		AssetLikeRepo:         repository.NewAssetLikeRepository(db),
-		AssetCommentRepo:      repository.NewAssetCommentRepository(db),
-		CrawlJobRepo:          repository.NewCrawlJobRepository(db),
-		ShareLinkRepo:         repository.NewAssetShareLinkRepository(db),
-		SearchLogRepo:         repository.NewSearchLogRepository(db),
-		TenantQuotaRepo:       repository.NewAssetStorageQuotaRepository(db),
-		VideoLikeRepo:         repository.NewVideoLikeRepository(db),
-		VideoCommentRepo:      repository.NewVideoCommentRepository(db),
-		NovelLikeRepo:         repository.NewNovelLikeRepository(db),
-		NovelCommentRepo:      repository.NewNovelCommentRepository(db),
-		ChapterLikeRepo:       repository.NewChapterLikeRepository(db),
-		ChapterCommentRepo:    repository.NewChapterCommentRepository(db),
-		ReadingProgressRepo:   repository.NewReadingProgressRepository(db),
-		ChapterReadRecordRepo: repository.NewChapterReadRecordRepository(db),
-		UserTokenRepo:         repository.NewUserTokenRepository(db),
-		NovelCrawlJobRepo:        repository.NewNovelCrawlJobRepository(db),
-		NotificationRepo:         repository.NewNotificationRepository(db),
-		ForeshadowRepo:           repository.NewForeshadowRepository(db),
-		NovelOutlineVersionRepo:  repository.NewNovelOutlineVersionRepository(db),
-		OutlineReviewRepo:        repository.NewOutlineReviewRepository(db),
-		OutlineSynthesisRepo:     repository.NewNovelOutlineSynthesisRepository(db),
-		NovelMemberRepo:          repository.NewNovelMemberRepository(db),
-		EditingLockRepo:          repository.NewEditingLockRepository(db),
-		SensitiveWordRepo:        repository.NewSensitiveWordRuleRepository(db),
-		FeedbackRepo:             repository.NewFeedbackRepository(db),
-		DramaTemplateRepo:        repository.NewDramaTemplateRepository(db),
+		AssetUsageRepo:          repository.NewAssetUsageRepository(db),
+		AssetLikeRepo:           repository.NewAssetLikeRepository(db),
+		AssetCommentRepo:        repository.NewAssetCommentRepository(db),
+		CrawlJobRepo:            repository.NewCrawlJobRepository(db),
+		ShareLinkRepo:           repository.NewAssetShareLinkRepository(db),
+		SearchLogRepo:           repository.NewSearchLogRepository(db),
+		TenantQuotaRepo:         repository.NewAssetStorageQuotaRepository(db),
+		VideoLikeRepo:           repository.NewVideoLikeRepository(db),
+		VideoCommentRepo:        repository.NewVideoCommentRepository(db),
+		NovelLikeRepo:           repository.NewNovelLikeRepository(db),
+		NovelCommentRepo:        repository.NewNovelCommentRepository(db),
+		ChapterLikeRepo:         repository.NewChapterLikeRepository(db),
+		ChapterCommentRepo:      repository.NewChapterCommentRepository(db),
+		ReadingProgressRepo:     repository.NewReadingProgressRepository(db),
+		ChapterReadRecordRepo:   repository.NewChapterReadRecordRepository(db),
+		UserTokenRepo:           repository.NewUserTokenRepository(db),
+		NovelCrawlJobRepo:       repository.NewNovelCrawlJobRepository(db),
+		NotificationRepo:        repository.NewNotificationRepository(db),
+		ForeshadowRepo:          repository.NewForeshadowRepository(db),
+		NovelOutlineVersionRepo: repository.NewNovelOutlineVersionRepository(db),
+		OutlineReviewRepo:       repository.NewOutlineReviewRepository(db),
+		OutlineSynthesisRepo:    repository.NewNovelOutlineSynthesisRepository(db),
+		NovelMemberRepo:         repository.NewNovelMemberRepository(db),
+		EditingLockRepo:         repository.NewEditingLockRepository(db),
+		SensitiveWordRepo:       repository.NewSensitiveWordRuleRepository(db),
+		FeedbackRepo:            repository.NewFeedbackRepository(db),
+		DramaTemplateRepo:       repository.NewDramaTemplateRepository(db),
 	}
 }
 
 // Services 服务层
 type Services struct {
-	NovelAnalysisService        *service.NovelAnalysisService
-	McpService                  *service.McpService
-	NovelService                *service.NovelService
-	ChapterService              *service.ChapterService
-	CharacterService            *service.CharacterService
-	WorldviewService            *service.WorldviewService
-	QualityControlService       *service.QualityControlService
-	VideoService                *service.VideoService
-	ModelService                *service.ModelService
-	PromptService               *service.PromptService
-	ContinuityService           *service.ContinuityService
-	KnowledgeService            *service.KnowledgeService
+	NovelAnalysisService  *service.NovelAnalysisService
+	McpService            *service.McpService
+	NovelService          *service.NovelService
+	ChapterService        *service.ChapterService
+	CharacterService      *service.CharacterService
+	WorldviewService      *service.WorldviewService
+	QualityControlService *service.QualityControlService
+	VideoService          *service.VideoService
+	ModelService          *service.ModelService
+	PromptService         *service.PromptService
+	ContinuityService     *service.ContinuityService
+	KnowledgeService      *service.KnowledgeService
 
 	ChapterVersionService       *service.ChapterVersionService
 	ForeshadowService           *service.ForeshadowService
@@ -239,17 +239,17 @@ type Services struct {
 	NotificationService         *service.NotificationService
 	ForeshadowCRUDService       *service.ForeshadowCRUDService
 	// ── Webhook ──
-	WebhookService              *service.WebhookService
+	WebhookService *service.WebhookService
 	// ── Audit ──
-	AuditService                *service.AuditService
+	AuditService *service.AuditService
 	// ── Email notification ──
-	EmailNotificationService    *service.EmailNotificationService
+	EmailNotificationService *service.EmailNotificationService
 	// ── Outline Review ──
-	OutlineReviewService        *service.OutlineReviewService
+	OutlineReviewService *service.OutlineReviewService
 	// ── Collab ──
-	CollabService               *service.CollabService
+	CollabService *service.CollabService
 	// ── Drama Template ──
-	DramaTemplateService        *service.DramaTemplateService
+	DramaTemplateService *service.DramaTemplateService
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -391,8 +391,8 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 		logger.Errorf("Warning: no default AI provider available; knowledge base embedding disabled")
 	}
 	knowledgeSvc := service.NewKnowledgeService(repos.KnowledgeBaseRepo, vectorStore, defaultAIProvider).
-		WithRedis(redisClient).  // Fix: cross-instance idempotency for plot point extraction
-		WithAIService(aiSvc)     // per-provider concurrency-controlled embedding
+		WithRedis(redisClient). // Fix: cross-instance idempotency for plot point extraction
+		WithAIService(aiSvc)    // per-provider concurrency-controlled embedding
 
 	// 章节版本 / 伏笔 / 时间线 / 角色弧光 / 风格
 	chapterVersionSvc := service.NewChapterVersionService(repos.ChapterVersionRepo, repos.ChapterRepo)
@@ -537,17 +537,16 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 		Video: videoSvc, Storyboard: storyboardSvc, Enhancement: enhancementSvc,
 		CharConsistency: charConsistencySvc, BGM: bgmSvc, FrameGenerator: frameGenSvc,
 		ConsistencyValidator: consistencyValidatorSvc,
-		NovelToVideo: novelToVideoSvc, SceneConsistency: sceneConsistencySvc,
+		NovelToVideo:         novelToVideoSvc, SceneConsistency: sceneConsistencySvc,
 	}
 }
 
-
 // initServices 初始化服务层
 func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, vectorStore *vector.StoreManager, cfg *config.Config, redisClient *redis.Client) *Services {
-	core    := initCoreServiceGroup(repos, aiManager, cfg, redisClient)
+	core := initCoreServiceGroup(repos, aiManager, cfg, redisClient)
 	core.Task.WithDB(db)
 	content := initContentServiceGroup(db, repos, core, aiManager, vectorStore, redisClient)
-	video   := initVideoServiceGroup(repos, core, content, cfg, redisClient)
+	video := initVideoServiceGroup(repos, core, content, cfg, redisClient)
 
 	// Cross-instance tenant subscription cache invalidation via Redis Pub/Sub.
 	middleware.SetTenantSubRedis(redisClient)
@@ -603,8 +602,8 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		WithEmailVerifyTTL(cfg.Email.EmailVerifyTTL).
 		WithRequireVerification(cfg.Email.RequireVerification)
 	tenantSvc := service.NewTenantService(repos.TenantRepo, repos.TenantUserRepo)
-	oauthSvc  := service.NewOAuthService(cfg.OAuth)
-	mcpSvc    := service.NewMcpService(db)
+	oauthSvc := service.NewOAuthService(cfg.OAuth)
+	mcpSvc := service.NewMcpService(db)
 
 	// 通知服务（先于内容服务后置注入步骤创建）
 	notifSvc := service.NewNotificationService(repos.NotificationRepo)
@@ -626,18 +625,18 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		PlotPointService:      core.PlotPoint,
 		QualityControlService: core.Quality,
 		// ── Content ──
-		NovelService:          content.Novel,
-		ChapterService:        content.Chapter,
-		CharacterService:      content.Character,
-		WorldviewService:      content.Worldview,
-		KnowledgeService:      content.Knowledge,
-		ContinuityService:     content.Continuity,
-		PromptService:         content.Prompt,
-		ChapterVersionService: content.ChapterVersion,
-		ForeshadowService:     content.Foreshadow,
-		TimelineService:       content.Timeline,
-		CharacterArcService:   content.CharacterArc,
-		StyleService:          content.Style,
+		NovelService:             content.Novel,
+		ChapterService:           content.Chapter,
+		CharacterService:         content.Character,
+		WorldviewService:         content.Worldview,
+		KnowledgeService:         content.Knowledge,
+		ContinuityService:        content.Continuity,
+		PromptService:            content.Prompt,
+		ChapterVersionService:    content.ChapterVersion,
+		ForeshadowService:        content.Foreshadow,
+		TimelineService:          content.Timeline,
+		CharacterArcService:      content.CharacterArc,
+		StyleService:             content.Style,
 		GenerationContextService: content.GenContext,
 		ImageGenerationService:   content.ImageGen,
 		HookChainService:         content.HookChain,
@@ -768,52 +767,52 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 
 // Handlers 处理器
 type Handlers struct {
-	NovelHandler       *handler.NovelHandler
-	ChapterHandler     *handler.ChapterHandler
-	CharacterHandler   *handler.CharacterHandler
-	VideoHandler       *handler.VideoHandler
-	ModelHandler       *handler.ModelHandler
-	McpHandler         *handler.McpHandler
-	StyleHandler       *handler.StyleHandler
-	ContextHandler     *handler.ContextHandler
-	AuthHandler        *handler.AuthHandler
-	ImportHandler      *handler.ImportHandler
-	WorldviewHandler   *handler.WorldviewHandler
-	TenantHandler      *handler.TenantHandler
-	ItemHandler        *handler.ItemHandler
-	SkillHandler       *handler.SkillHandler
-	UploadHandler      *handler.UploadHandler
-	PlotPointHandler   *handler.PlotPointHandler
-	TaskHandler        *handler.TaskHandler
-	MediaHandler       *handler.MediaHandler
-	SceneAnchorHandler *handler.SceneAnchorHandler
-	SystemHandler      *handler.SystemHandler
-	FsHandler          *handler.FsHandler
-	RewriteHandler     *handler.RewriteHandler
-	PlatformHandler    *handler.PlatformHandler
-	AssetHandler       *handler.AssetHandler
-	ImageHandler       *handler.ImageHandler
-	WebSearchHandler      *handler.WebSearchHandler
-	WikiSearchHandler     *handler.WikiSearchHandler
-	StoryPatternHandler   *handler.StoryPatternHandler
-	ImageRefSearchHandler *handler.ImageRefSearchHandler
-	ColorPaletteHandler   *handler.ColorPaletteHandler
-	NotificationHandler   *handler.NotificationHandler
-	KnowledgeHandler      *handler.KnowledgeHandler
-	KnowledgeToolHandler  *handler.KnowledgeToolHandler
+	NovelHandler           *handler.NovelHandler
+	ChapterHandler         *handler.ChapterHandler
+	CharacterHandler       *handler.CharacterHandler
+	VideoHandler           *handler.VideoHandler
+	ModelHandler           *handler.ModelHandler
+	McpHandler             *handler.McpHandler
+	StyleHandler           *handler.StyleHandler
+	ContextHandler         *handler.ContextHandler
+	AuthHandler            *handler.AuthHandler
+	ImportHandler          *handler.ImportHandler
+	WorldviewHandler       *handler.WorldviewHandler
+	TenantHandler          *handler.TenantHandler
+	ItemHandler            *handler.ItemHandler
+	SkillHandler           *handler.SkillHandler
+	UploadHandler          *handler.UploadHandler
+	PlotPointHandler       *handler.PlotPointHandler
+	TaskHandler            *handler.TaskHandler
+	MediaHandler           *handler.MediaHandler
+	SceneAnchorHandler     *handler.SceneAnchorHandler
+	SystemHandler          *handler.SystemHandler
+	FsHandler              *handler.FsHandler
+	RewriteHandler         *handler.RewriteHandler
+	PlatformHandler        *handler.PlatformHandler
+	AssetHandler           *handler.AssetHandler
+	ImageHandler           *handler.ImageHandler
+	WebSearchHandler       *handler.WebSearchHandler
+	WikiSearchHandler      *handler.WikiSearchHandler
+	StoryPatternHandler    *handler.StoryPatternHandler
+	ImageRefSearchHandler  *handler.ImageRefSearchHandler
+	ColorPaletteHandler    *handler.ColorPaletteHandler
+	NotificationHandler    *handler.NotificationHandler
+	KnowledgeHandler       *handler.KnowledgeHandler
+	KnowledgeToolHandler   *handler.KnowledgeToolHandler
 	CharacterLookupHandler *handler.CharacterLookupHandler
-	PromptEnhanceHandler  *handler.PromptEnhanceHandler
-	DramaticHandler       *handler.DramaticHandler
-	DashboardHandler      *handler.DashboardHandler
-	ForeshadowHandler     *handler.ForeshadowHandler
-	WebhookHandler        *handler.WebhookHandler
-	AuditHandler          *handler.AuditHandler
-	OutlineReviewHandler  *handler.OutlineReviewHandler
-	CollabHandler         *handler.CollabHandler
-	SysAdminHandler       *handler.SysAdminHandler
-	SensitiveWordHandler  *handler.SensitiveWordHandler
-	FeedbackHandler       *handler.FeedbackHandler
-	DramaTemplateHandler  *handler.DramaTemplateHandler
+	PromptEnhanceHandler   *handler.PromptEnhanceHandler
+	DramaticHandler        *handler.DramaticHandler
+	DashboardHandler       *handler.DashboardHandler
+	ForeshadowHandler      *handler.ForeshadowHandler
+	WebhookHandler         *handler.WebhookHandler
+	AuditHandler           *handler.AuditHandler
+	OutlineReviewHandler   *handler.OutlineReviewHandler
+	CollabHandler          *handler.CollabHandler
+	SysAdminHandler        *handler.SysAdminHandler
+	SensitiveWordHandler   *handler.SensitiveWordHandler
+	FeedbackHandler        *handler.FeedbackHandler
+	DramaTemplateHandler   *handler.DramaTemplateHandler
 }
 
 // initHandlers 初始化处理器
@@ -851,7 +850,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			WithBGMService(services.BGMService).WithBGMRepo(repos.VideoBGMSegmentRepo).
 			WithSubtitleService(service.NewSubtitleService()).WithStorage(storageSvc).WithAssetRepo(repos.AssetRepo).
 			WithCapCutSegmentRepo(repos.ShotVoiceSegmentRepo). // P1-2: VoiceSegment audio in CapCut exports
-			WithServerBaseURL(buildServerBaseURL(cfg)).         // 本地/DB 存储媒体 URL 解析
+			WithServerBaseURL(buildServerBaseURL(cfg)).        // 本地/DB 存储媒体 URL 解析
 			WithAuditService(services.AuditService),
 		ModelHandler:   handler.NewModelHandler(services.ModelService).WithAuditService(services.AuditService).WithAIService(services.AIService).WithTaskService(services.TaskService),
 		McpHandler:     handler.NewMcpHandler(services.McpService).WithAuditService(services.AuditService),
@@ -877,14 +876,14 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		TaskHandler:        handler.NewTaskHandler(services.TaskService),
 		MediaHandler:       handler.NewMediaHandler(db),
 		SceneAnchorHandler: handler.NewSceneAnchorHandler(services.SceneAnchorService, services.SceneConsistencyService).WithTaskService(services.TaskService).WithChapterService(services.ChapterService).WithVideoService(services.VideoService).WithNovelService(services.NovelService).WithStorageService(storageSvc),
-		SystemHandler: handler.NewSystemHandler(repos.SystemSettingRepo),
-		FsHandler:     handler.NewFsHandler(getEnv("BGM_DIR", "")),
-		RewriteHandler: handler.NewRewriteHandler(services.RewriteService),
+		SystemHandler:      handler.NewSystemHandler(repos.SystemSettingRepo),
+		FsHandler:          handler.NewFsHandler(getEnv("BGM_DIR", "")),
+		RewriteHandler:     handler.NewRewriteHandler(services.RewriteService),
 		PlatformHandler: handler.NewPlatformHandler(services.NovelService, services.VideoService, services.PlatformPublishService).
 			WithChapterService(services.ChapterService).
 			WithReadingService(services.ReadingService),
-		AssetHandler:    handler.NewAssetHandler(services.AssetService),
-		ImageHandler:    handler.NewImageHandler(services.AIService).WithTaskService(services.TaskService),
+		AssetHandler: handler.NewAssetHandler(services.AssetService),
+		ImageHandler: handler.NewImageHandler(services.AIService).WithTaskService(services.TaskService),
 		WebSearchHandler: handler.NewWebSearchHandler(
 			service.NewWebSearcher(
 				cfg.WebSearch.Provider,
@@ -902,9 +901,9 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 				getEnv("PIXABAY_API_KEY", ""),
 			),
 		),
-		ColorPaletteHandler: handler.NewColorPaletteHandler(service.NewColorPaletteService()),
-		NotificationHandler: handler.NewNotificationHandler(services.NotificationService),
-		KnowledgeHandler:    handler.NewKnowledgeHandler(services.KnowledgeService).WithNovelService(services.NovelService),
+		ColorPaletteHandler:  handler.NewColorPaletteHandler(service.NewColorPaletteService()),
+		NotificationHandler:  handler.NewNotificationHandler(services.NotificationService),
+		KnowledgeHandler:     handler.NewKnowledgeHandler(services.KnowledgeService).WithNovelService(services.NovelService),
 		KnowledgeToolHandler: handler.NewKnowledgeToolHandler(services.KnowledgeService),
 		CharacterLookupHandler: handler.NewCharacterLookupHandler(
 			service.NewCharacterLookupService(repos.CharacterRepo, repos.SnapshotRepo),
@@ -918,12 +917,12 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 			services.ConflictArcService,
 			services.PacingService,
 		),
-		DashboardHandler:  handler.NewDashboardHandler(db),
-		ForeshadowHandler: handler.NewForeshadowHandler(services.ForeshadowCRUDService),
+		DashboardHandler:     handler.NewDashboardHandler(db),
+		ForeshadowHandler:    handler.NewForeshadowHandler(services.ForeshadowCRUDService),
 		WebhookHandler:       handler.NewWebhookHandler(services.WebhookService).WithAuditService(services.AuditService),
 		AuditHandler:         handler.NewAuditHandler(services.AuditService).WithNovelRepo(repos.NovelRepo),
 		OutlineReviewHandler: handler.NewOutlineReviewHandler(services.OutlineReviewService, services.TaskService),
-		CollabHandler: handler.NewCollabHandler(services.CollabService).WithAuditService(services.AuditService),
+		CollabHandler:        handler.NewCollabHandler(services.CollabService).WithAuditService(services.AuditService),
 		SysAdminHandler: handler.NewSysAdminHandler(
 			service.NewSysAdminService(db, cfg.Server.JWTSecret, cfg.Server.JWTExpiry),
 		).WithAuditService(services.AuditService).

@@ -32,6 +32,13 @@ const (
 	TaskTypeChapterSummaryBatch      = "chapter_summary_batch"
 	TaskTypeSFXGen                   = "sfx_gen"
 	TaskTypeChapterReview            = "chapter_review"
+	// TaskTypeChapterOutlineReview is distinct from TaskTypeChapterReview: OutlineReviewHandler's
+	// "chapter_review" originally aliased the SAME string as ChapterHandler's chapter-content
+	// review (both used "chapter_review" for entity_type="chapter"), even though they call
+	// entirely different service methods (OutlineReviewService.ReviewChapterOutline vs
+	// QualityControlService.ReviewChapter). Split out so the engine can route each to its own
+	// executor unambiguously.
+	TaskTypeChapterOutlineReview     = "chapter_outline_review"
 	TaskTypeChapterReviewBatch       = "chapter_review_batch"
 	TaskTypeStoryboardReview         = "storyboard_review"
 	TaskTypeStoryboardOptimize       = "storyboard_optimize"
@@ -54,6 +61,7 @@ const (
 	TaskTypeCoverImageGen            = "cover_image_gen"
 	TaskTypeImageEdit                = "image_edit"
 	TaskTypeImageUpscale             = "image_upscale"
+	TaskTypeLipSync                  = "lipsync" // shot-level lip-sync video generation (was an untyped string literal)
 	TaskTypeChapterRewriteInstr      = "chapter_rewrite_instr"
 	TaskTypeVideoGen                 = "video_gen"      // submit all shots + poll + stitch
 	TaskTypeVideoSynthesis           = "video_synthesis" // final synthesis pipeline (stitch→subtitle→upload)
@@ -70,16 +78,29 @@ var quietTaskTypes = []string{TaskTypeChapterPostProcess}
 // TaskService manages persistent async tasks.
 type TaskService struct {
 	repo             *repository.TaskRepository
-	db               *gorm.DB        // optional: used for cross-table cleanup (e.g. WebhookDelivery)
-	cache            *redis.Client   // optional: for cross-instance task cancel broadcast
-	notifSvc         *NotificationService                   // optional: sends in-app notifications on task failure
-	tenantUserRepo   *repository.TenantUserRepository       // optional: resolves tenant → user IDs for notifications
-	stopCh           chan struct{}    // closed by Shutdown() to stop background goroutines
-	cancelFns        sync.Map        // taskID string → context.CancelFunc
-	resumeFns        sync.Map        // taskType string → func(*model.AsyncTask)
-	semaphores       sync.Map        // semaphore key string → chan struct{} (RunTracked MaxConcurrency backstop)
-	cleanupCallbacks []func()        // optional hooks called during the hourly cleanup cycle
-	rootCtx          context.Context // server root context; cancelled on graceful shutdown
+	db               *gorm.DB          // optional: used for cross-table cleanup (e.g. WebhookDelivery)
+	cache            *redis.Client     // optional: for cross-instance task cancel broadcast
+	notifSvc         *NotificationService              // optional: sends in-app notifications on task failure
+	tenantUserRepo   *repository.TenantUserRepository  // optional: resolves tenant → user IDs for notifications
+	stopCh           chan struct{}     // closed by Shutdown() to stop background goroutines
+	cancelFns        sync.Map          // taskID string → context.CancelFunc
+	resumeFns        sync.Map          // taskType string → func(*model.AsyncTask) — doubles as both the
+	// crash-recovery registry and (since the task engine's introduction, see task_engine.go) the
+	// canonical "how do I execute a task of this type" registry used for first dispatch too.
+	semaphores       sync.Map          // semaphore key string → chan struct{} (RunTracked MaxConcurrency / task engine per-(tenant,type) backstop)
+	cleanupCallbacks []func()          // optional hooks called during the hourly cleanup cycle
+	rootCtx          context.Context   // server root context; cancelled on graceful shutdown
+
+	// Task engine (task_engine.go): wakeCh is signalled by Create() so the engine's dispatch
+	// loop reacts near-instantly instead of waiting for the next poll tick; engineOnce ensures
+	// StartEngine only spawns one loop goroutine even if called more than once.
+	wakeCh     chan struct{}
+	engineOnce sync.Once
+	// engineExcluded holds taskTypes the engine should NOT dispatch — a rollout safety valve
+	// (see ExcludeAllRegisteredExcept) used while migrating handlers off direct execution
+	// (raw goroutines / RunTracked) one at a time. Empty set = engine dispatches everything
+	// registered in resumeFns, which is the end state once migration is complete.
+	engineExcluded sync.Map // taskType string → struct{}
 }
 
 func NewTaskService(repo *repository.TaskRepository) *TaskService {
@@ -87,6 +108,7 @@ func NewTaskService(repo *repository.TaskRepository) *TaskService {
 		repo:    repo,
 		stopCh:  make(chan struct{}),
 		rootCtx: context.Background(), // default; overridden by Boot(ctx)
+		wakeCh:  make(chan struct{}, 1),
 	}
 	go svc.runCleanup()
 	return svc
@@ -151,23 +173,60 @@ func (s *TaskService) cancelLocalTask(taskID string) {
 	}
 }
 
-// Boot recovers orphaned tasks from a previous session. Must be called after all
-// RegisterResumeHandler calls so that resumable task types are already registered.
-// The provided ctx is stored as the service root context so that resumed goroutines
-// inherit it (and are cancelled when the server shuts down).
+// Boot prepares the service for a fresh process start. Must be called after all
+// RegisterResumeHandler calls so that resumable task types are already registered, and before
+// StartEngine (see task_engine.go) so the engine's first dispatch cycle sees the reset rows.
+// The provided ctx is stored as the service root context so that engine-dispatched task
+// goroutines inherit it (and are cancelled when the server shuts down).
+//
+// Dispatch/execution of pending work is no longer done here — that is StartEngine's job.
+// Boot's only remaining responsibility is state repair: any task still marked "running" is a
+// leftover from a previous instance that died mid-task (this process just started, so nothing
+// in it could have set that status), so it's reset to "pending" and picked up by the engine's
+// normal ClaimForResume-gated dispatch path like any other pending task.
 func (s *TaskService) Boot(ctx context.Context) {
 	s.rootCtx = ctx
-	// Use 0 age so ALL pending/running tasks from the previous session are recovered,
-	// regardless of how recently they were last updated. Boot is called once at startup
-	// before any goroutines in the current process can create tasks, so every
-	// pending/running record in the DB is an orphan from a previous instance.
-	s.recoverOrphaned(0)
+	if n, err := s.repo.ResetRunningToPending(); err != nil {
+		logger.Errorf("[TaskService] Boot: ResetRunningToPending: %v", err)
+	} else if n > 0 {
+		logger.Printf("[TaskService] Boot: reset %d orphaned running task(s) to pending", n)
+	}
 }
 
-// RegisterResumeHandler registers a function that can resume a task of the given type
-// after server restart. The function receives the full AsyncTask (including ParamsJSON).
+// RegisterResumeHandler registers the function used to execute a task of the given type.
+// Despite the name, this is now the single executor registry used for both first dispatch
+// (by the task engine, see task_engine.go) and crash recovery — a resumed task and a freshly
+// created one are dispatched through the exact same path, so there is only one function to
+// register and only one place that needs to stay correct. fn receives the full AsyncTask
+// (including ParamsJSON) and must not assume any HTTP request context is available.
 func (s *TaskService) RegisterResumeHandler(taskType string, fn func(*model.AsyncTask)) {
 	s.resumeFns.Store(taskType, fn)
+}
+
+// ExcludeAllRegisteredExcept is a rollout safety valve for the task engine migration: it marks
+// every currently-registered task type as excluded from engine dispatch except the ones listed
+// in allow. Call once at startup, after all RegisterResumeHandler calls, before StartEngine.
+// As each task type's handlers are migrated off direct execution (raw goroutines / RunTracked)
+// onto "Create-only", call IncludeInEngine for that type to let the engine take over dispatching
+// it. Once every type has been migrated, this call (and the exclusion mechanism) can be deleted.
+func (s *TaskService) ExcludeAllRegisteredExcept(allow ...string) {
+	allowSet := make(map[string]bool, len(allow))
+	for _, t := range allow {
+		allowSet[t] = true
+	}
+	s.resumeFns.Range(func(k, _ interface{}) bool {
+		t := k.(string)
+		if !allowSet[t] {
+			s.engineExcluded.Store(t, struct{}{})
+		}
+		return true
+	})
+}
+
+// IncludeInEngine removes a task type from the engine's exclusion set (see
+// ExcludeAllRegisteredExcept), letting the engine start dispatching it.
+func (s *TaskService) IncludeInEngine(taskType string) {
+	s.engineExcluded.Delete(taskType)
 }
 
 // SetParams persists arbitrary resume parameters for a task as JSON.
@@ -220,6 +279,7 @@ func (s *TaskService) Create(tenantID uint, taskType, title, entityType string, 
 		return nil, err
 	}
 	metrics.TaskCreatedTotal.WithLabelValues(taskType).Inc()
+	s.wake() // nudge the task engine so it dispatches this task without waiting for the next poll tick
 	return task, nil
 }
 
@@ -564,82 +624,24 @@ func (s *TaskService) ListDistinctActiveTenants() ([]uint, error) {
 	return s.repo.ListDistinctActiveTenants()
 }
 
-// recoverOrphaned first resumes tasks whose type has a registered resume handler,
-// then marks remaining stale pending/running tasks as failed.
-func (s *TaskService) recoverOrphaned(age time.Duration) {
+// failStaleTasks marks pending/running tasks not updated since `before` as failed.
+// Dispatch of pending work is handled exclusively by the task engine's continuous
+// wake+poll loop now (task_engine.go) — this only does cleanup: a task that is still
+// "pending"/"running" and hasn't been touched in `age` is either stuck behind a bug, was
+// dropped by a crashed instance with no other instance around to claim it, or exceeded its
+// own hard timeout without reporting back. Formerly named recoverOrphaned; it also used to
+// re-dispatch tasks itself (duplicating what the engine now does continuously) — that part
+// was removed to avoid two dispatch paths racing/disagreeing about who owns a task.
+func (s *TaskService) failStaleTasks(age time.Duration) {
 	before := time.Now().Add(-age)
-
-	// 1. Collect resumable task types.
-	var resumableTypes []string
-	s.resumeFns.Range(func(k, _ interface{}) bool {
-		resumableTypes = append(resumableTypes, k.(string))
-		return true
-	})
-
-	// 2. Resume matching orphaned tasks (reset to pending so MarkStaleRunning skips them).
-	// Each resumed goroutine inherits rootCtx so that server shutdown propagates to all
-	// in-flight resumed tasks (rather than running forever on context.Background()).
-	// A per-task 30-minute hard timeout is layered on top of the server root context.
-	const maxRecoveryConcurrency = 20
-	resumed := 0
-	if len(resumableTypes) > 0 {
-		if tasks, err := s.repo.ListOrphaned(before, resumableTypes); err == nil {
-			sem := make(chan struct{}, maxRecoveryConcurrency)
-			var wg sync.WaitGroup
-			for _, t := range tasks {
-				if fn, ok := s.resumeFns.Load(t.Type); ok {
-					// Reset to pending so ClaimForResume can use a deterministic pending→running
-					// transition. Both instances may do this — it's idempotent.
-					_ = s.repo.UpdateFields(t.TaskID, map[string]interface{}{
-						"status": "pending",
-						"error":  "",
-					})
-					t.Status = "pending"
-					wg.Add(1)
-					sem <- struct{}{}
-					// Capture loop variables before goroutine.
-					task := t
-					resumeFn := fn
-					taskCtx, taskCancel := context.WithTimeout(s.rootCtx, 30*time.Minute)
-					go func() {
-						defer wg.Done()
-						defer func() { <-sem }()
-						defer taskCancel()
-						// Atomic claim: exactly one instance wins per task_id.
-						// ClaimForResume does UPDATE ... WHERE status='pending' — MySQL row lock
-						// guarantees only one caller gets rowsAffected==1.
-						if ok, claimErr := s.repo.ClaimForResume(task.TaskID); !ok || claimErr != nil {
-							if claimErr != nil {
-								logger.Errorf("[TaskService] ClaimForResume(%s): %v", task.TaskID, claimErr)
-							} else {
-								logger.Printf("[TaskService] task %s claimed by another instance, skipping", task.TaskID)
-							}
-							return
-						}
-						s.cancelFns.Store(task.TaskID, taskCancel)
-						defer s.cancelFns.Delete(task.TaskID)
-						_ = taskCtx
-						resumeFn.(func(*model.AsyncTask))(task)
-					}()
-					resumed++
-				}
-			}
-			wg.Wait()
-		}
-	}
-
-	// 3. Mark remaining stale tasks as failed.
 	// Heartbeat all tasks currently running on this instance first so they are not
 	// falsely considered stale by MarkStaleRunning (cross-instance safety).
 	s.heartbeatRunning()
 	n, err := s.repo.MarkStaleRunning(before)
 	if err != nil {
-		logger.Errorf("TaskService: recoverOrphaned error: %v", err)
+		logger.Errorf("TaskService: failStaleTasks error: %v", err)
 	} else if n > 0 {
-		logger.Errorf("TaskService: recovered %d orphaned task(s) → failed", n)
-	}
-	if resumed > 0 {
-		logger.Printf("TaskService: resumed %d task(s) from previous session", resumed)
+		logger.Errorf("TaskService: marked %d stale task(s) as failed", n)
 	}
 }
 
@@ -664,7 +666,7 @@ func (s *TaskService) heartbeatRunning() {
 	}
 }
 
-// runCleanup deletes completed/failed tasks older than 7 days, recovers stale
+// runCleanup deletes completed/failed tasks older than 7 days, fails stale
 // running tasks (not updated in >2h), expires pending tasks queued for >1h,
 // and runs any registered cleanup callbacks, once per hour.
 // Exits when Shutdown() is called.
@@ -679,8 +681,8 @@ func (s *TaskService) runCleanup() {
 			if err := s.repo.DeleteOldCompleted(cutoff); err != nil {
 				logger.Errorf("TaskService: cleanup error: %v", err)
 			}
-			// Recover tasks stuck in "running" for more than 2h (no heartbeat).
-			s.recoverOrphaned(2 * time.Hour)
+			// Fail tasks stuck in "running" for more than 2h (no heartbeat).
+			s.failStaleTasks(2 * time.Hour)
 			// Expire tasks stuck in "pending" for more than 1h (never picked up).
 			pendingCutoff := time.Now().Add(-1 * time.Hour)
 			if n, err := s.repo.MarkStalePending(pendingCutoff); err != nil {

@@ -1,14 +1,11 @@
 package handler
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
@@ -38,38 +35,15 @@ func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeAssetGen 的
+	// 执行函数在 cmd/server/task_resume.go，source="single_shot" 分支反序列化下面存的字段
+	// 调用同一套 GenerateSingleShot + PollSingleShotUntilDone）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"source":   "single_shot",
 		"video_id": uint(videoID),
 		"shot_id":  uint(shotID),
 		"provider": req.Provider,
 	})
-
-	reqID := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[VideoHandler] GenerateSingleShot task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
-		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
-		shot, genErr := h.videoService.GenerateSingleShot(uint(videoID), uint(shotID), req.Provider)
-		if genErr != nil {
-			log.Errorf("[VideoHandler] GenerateSingleShot task %s failed: %v", taskID, genErr)
-			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.UpdateProgress(taskID, 50) //nolint:errcheck
-		// AI 视频模式：只轮询当前分镜直到完成，避免触发其他分镜的生成
-		if shot.Status == "processing" {
-			h.videoService.PollSingleShotUntilDone(uint(videoID), uint(shotID))
-		}
-		h.taskSvc.Complete(taskID, gin.H{"shot_id": shot.ID, "status": shot.Status}) //nolint:errcheck
-	}(task.TaskID)
-
 	respondAccepted(c, task.TaskID, "素材生成任务已提交")
 }
 
@@ -96,52 +70,14 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeAssetGen 的
+	// 执行函数在 cmd/server/task_resume.go，source="batch_shots" 分支反序列化下面存的整个
+	// req 结构体，按 VoiceFirst/Sequential/默认三种模式调用同一套 service 方法 +
+	// PollAndStitchVideo 后续轮询）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"source":       "batch_shots",
-		"shot_ids":     req.ShotIDs,
-		"quality_tier": req.QualityTier,
-		"provider":     req.Provider,
+		"source": "batch_shots",
+		"req":    req,
 	})
-
-	reqID2 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID2)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[VideoHandler] BatchGenerateShots task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
-		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
-		var shots []*model.StoryboardShot
-		var genErr error
-		switch {
-		case req.VoiceFirst:
-			// 配音优先：先生成 TTS，以配音时长决定视频时长，保证声画同步
-			shots, genErr = h.videoService.VoiceFirstGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, progressFn, req.Provider)
-		case req.Sequential:
-			// 顺序模式：每镜完成后同步 chain 最后一帧再提交下一镜，保证 I2V 链接
-			shots, genErr = h.videoService.SequentialGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, progressFn, req.Provider)
-		default:
-			shots, genErr = h.videoService.BatchGenerateShots(uint(videoID), req.ShotIDs, req.QualityTier, progressFn, req.Provider)
-		}
-		if genErr != nil {
-			log.Errorf("[VideoHandler] BatchGenerateShots task %s failed: %v", taskID, genErr)
-			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
-			return
-		}
-		// 并发模式下：AI 视频任务仍在 processing，启动轮询等待所有镜头完成
-		// 顺序模式下：所有镜头已完成，PollAndStitchVideo 会快速完成
-		for _, sh := range shots {
-			if sh.Status == "processing" {
-				h.videoService.PollAndStitchVideo(uint(videoID))
-				break
-			}
-		}
-		h.taskSvc.Complete(taskID, gin.H{"shot_count": len(shots)}) //nolint:errcheck
-	}(task.TaskID)
-
 	respondAccepted(c, task.TaskID, "批量素材生成任务已提交")
 }
 
@@ -168,31 +104,13 @@ func (h *VideoHandler) BatchGenerateShotImages(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeAssetGen 的
+	// 执行函数在 cmd/server/task_resume.go，source="batch_images" 分支反序列化下面存的整个
+	// req 结构体，调用同一个 h.videoService.BatchGenerateShotImages，包括 req.Force）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"source":   "batch_images",
-		"shot_ids": req.ShotIDs,
+		"source": "batch_images",
+		"req":    req,
 	})
-
-	reqID3 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID3)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[VideoHandler] BatchGenerateShotImages task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
-		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
-		shots, genErr := h.videoService.BatchGenerateShotImages(uint(videoID), req.ShotIDs, req.Force, progressFn)
-		if genErr != nil {
-			log.Errorf("[VideoHandler] BatchGenerateShotImages task %s failed: %v", taskID, genErr)
-			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.Complete(taskID, gin.H{"shot_count": len(shots)}) //nolint:errcheck
-	}(task.TaskID)
-
 	respondAccepted(c, task.TaskID, "批量图片生成任务已提交")
 }
 
@@ -219,31 +137,13 @@ func (h *VideoHandler) BatchGenerateShotClips(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeAssetGen 的
+	// 执行函数在 cmd/server/task_resume.go，source="batch_clips" 分支反序列化下面存的整个
+	// req 结构体，调用同一个 h.videoService.BatchGenerateShotClips）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"source":   "batch_clips",
-		"shot_ids": req.ShotIDs,
+		"source": "batch_clips",
+		"req":    req,
 	})
-
-	reqID4 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID4)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[VideoHandler] BatchGenerateShotClips task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)                                          //nolint:errcheck
-		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
-		shots, genErr := h.videoService.BatchGenerateShotClips(uint(videoID), req.ShotIDs, progressFn)
-		if genErr != nil {
-			log.Errorf("[VideoHandler] BatchGenerateShotClips task %s failed: %v", taskID, genErr)
-			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.Complete(taskID, gin.H{"shot_count": len(shots)}) //nolint:errcheck
-	}(task.TaskID)
-
 	respondAccepted(c, task.TaskID, "批量视频生成任务已提交")
 }
 
@@ -321,31 +221,15 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "create task failed")
 		return
 	}
-
-	reqID5 := c.GetString("request_id")
-	go func(taskID string, userContext string, lang string, sfxProvider string) {
-		log := logger.WithID(reqID5)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[VideoHandler] BatchGenerateSFX task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)        //nolint:errcheck
-		h.taskSvc.UpdateProgress(taskID, 5) //nolint:errcheck
-		ctx := context.Background()
-		// Step 1: AI 批量分析所有分镜，生成精准的自然语言音效搜索词（非强制，已有标签的跳过）
-		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID, userContext, lang, false); err != nil {
-			log.Errorf("[VideoHandler] BatchGenerateSFX task %s: AI analyze failed (proceeding): %v", taskID, err)
-		}
-		h.taskSvc.UpdateProgress(taskID, 20) //nolint:errcheck
-		// Step 2: 用更新后的 sfx_tags 搜索/生成实际音效文件
-		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, 20+pct*80/100) } //nolint:errcheck
-		success, fail, failedIDs := h.sfxSvc.BatchAutoGenerateSFX(ctx, shots, tenantID, userContext, sfxProvider, progressFn)
-		h.taskSvc.Complete(taskID, gin.H{"success": success, "fail": fail, "failed_shot_ids": failedIDs}) //nolint:errcheck
-		log.Printf("[VideoHandler] BatchGenerateSFX task %s done: success=%d fail=%d", taskID, success, fail)
-	}(task.TaskID, sfxReq.UserContext, promptLanguage, sfxReq.Provider)
-
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeSFXGen 的执行
+	// 函数在 cmd/server/task_resume.go，entity_type=="video" 分支反序列化下面存的字段，
+	// force=false 表示跳过已有标签的镜头，与 AnalyzeSFXTags 共用同一分支但 force=true）。
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"user_context": sfxReq.UserContext,
+		"lang":         promptLanguage,
+		"provider":     sfxReq.Provider,
+		"force":        false,
+	})
 	respondAccepted(c, task.TaskID, "音效生成任务已提交")
 }
 
@@ -392,45 +276,15 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "create task failed")
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeSFXGen 的执行
+	// 函数在 cmd/server/task_resume.go，entity_type=="video" 分支，force=true 强制重新
+	// 分析所有镜头标签，与 BatchGenerateSFX 共用同一分支但 force=false）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"user_context": sfxTagsReq.UserContext,
 		"lang":         promptLang,
+		"provider":     sfxTagsReq.Provider,
+		"force":        true,
 	})
-
-	reqID6 := c.GetString("request_id")
-	go func(taskID string, userContext string, lang string, sfxProvider string) {
-		log := logger.WithID(reqID6)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[VideoHandler] AnalyzeSFXTags task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		ctx := context.Background()
-
-		// 阶段一：AI 分析标签（进度 0→50%，force=true 强制重新分析所有镜头）
-		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
-		if err := h.sfxSvc.AnalyzeSFXForVideo(ctx, shots, tenantID, userContext, lang, true); err != nil {
-			log.Errorf("[VideoHandler] AnalyzeSFXTags task %s phase1 failed: %v", taskID, err)
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.UpdateProgress(taskID, 50) //nolint:errcheck
-
-		// 阶段二：批量搜索/生成音频文件（进度 50→100%）
-		total := len(shots)
-		progressFn := func(pct int) {
-			// pct 是 BatchAutoGenerateSFX 内部 0-100，映射到整体 50-95
-			overall := 50 + pct*45/100
-			h.taskSvc.UpdateProgress(taskID, overall) //nolint:errcheck
-		}
-		success, fail, failedIDs := h.sfxSvc.BatchAutoGenerateSFX(ctx, shots, tenantID, userContext, sfxProvider, progressFn)
-		log.Printf("[VideoHandler] AnalyzeSFXTags task %s done: tags=%d sfx_success=%d sfx_fail=%d",
-			taskID, total, success, fail)
-		h.taskSvc.Complete(taskID, gin.H{"count": total, "sfx_success": success, "sfx_fail": fail, "failed_shot_ids": failedIDs}) //nolint:errcheck
-	}(task.TaskID, sfxTagsReq.UserContext, promptLang, sfxTagsReq.Provider)
-
 	respondAccepted(c, task.TaskID, "AI 音效分析任务已提交")
 }
 
@@ -456,8 +310,7 @@ func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
 	}
 	tenantID := getTenantID(c)
 
-	shot, err := h.videoService.GetShotByID(uint(videoID), uint(shotID))
-	if err != nil {
+	if _, err := h.videoService.GetShotByID(uint(videoID), uint(shotID)); err != nil {
 		respondErr(c, http.StatusNotFound, "shot not found")
 		return
 	}
@@ -472,32 +325,14 @@ func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "create task failed")
 		return
 	}
-	h.taskSvc.SetParams(task.TaskID, map[string]interface{}{ //nolint:errcheck
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeSFXGen 的执行
+	// 函数在 cmd/server/task_resume.go，entity_type=="shot" 分支用 t.EntityID/video_id 重新
+	// 查分镜，反序列化 provider 调用同一个 h.sfxSvc.AutoGenerateSFX）。
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"shot_id":  uint(shotID),
 		"video_id": uint(videoID),
 		"provider": shotSFXReq.Provider,
 	})
-
-	reqID7 := c.GetString("request_id")
-	go func(taskID string, s *model.StoryboardShot, sfxProvider string) {
-		log := logger.WithID(reqID7)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[VideoHandler] GenerateShotSFX task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-		ctx := context.Background()
-		if err := h.sfxSvc.AutoGenerateSFX(ctx, s, tenantID, sfxProvider, true); err != nil {
-			log.Errorf("[VideoHandler] GenerateShotSFX task %s failed: %v", taskID, err)
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-			return
-		}
-		sfxItems, _ := h.sfxSvc.ListSFXItems(s.ID)
-		h.taskSvc.Complete(taskID, gin.H{"shot_id": s.ID, "sfx_count": len(sfxItems)}) //nolint:errcheck
-	}(task.TaskID, shot, shotSFXReq.Provider)
-
 	respondAccepted(c, task.TaskID, "音效生成任务已提交")
 }
 
@@ -609,60 +444,14 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-
-	reqID8 := c.GetString("request_id")
-	go func(taskID string, shot *model.StoryboardShot, narrationVoice string, subtitleEnabled bool, vID uint) {
-		log := logger.WithID(reqID8)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[VideoHandler] GenerateShotVoice task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
-		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
-
-		// 删除已有语音段落，强制重新合成。
-		if segs, err := h.videoService.ListVoiceSegments(shot.ID); err == nil {
-			for _, seg := range segs {
-				h.videoService.DeleteVoiceSegment(seg.ID) //nolint:errcheck
-			}
-		}
-
-		const maxRetries = 3
-		var audioErr error
-		for attempt := 1; attempt <= maxRetries; attempt++ {
-			audioErr = h.videoService.GenerateShotAudio(shot, tenantID, narrationVoice)
-			if audioErr == nil {
-				break
-			}
-			log.Errorf("[VideoHandler] GenerateShotVoice task %s shot %d attempt %d/%d failed: %v", taskID, shot.ShotNo, attempt, maxRetries, audioErr)
-			if attempt < maxRetries {
-				time.Sleep(time.Duration(attempt*2) * time.Second)
-			}
-		}
-		if audioErr != nil {
-			h.taskSvc.Fail(taskID, audioErr.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.UpdateProgress(taskID, 90) //nolint:errcheck
-
-		audioURL := ""
-		if m := h.videoService.GetShotAudioMap([]uint{shot.ID}); m != nil {
-			if _, ok := m[shot.ID]; ok {
-				audioURL = resolveAudioURL(vID, shot)
-			}
-		}
-		result := gin.H{"audio_url": audioURL, "shot_id": shot.ID}
-		if subtitleEnabled {
-			srt := service.GenerateShotSRT(shot)
-			if srt != "" {
-				result["subtitle_srt"] = srt
-			}
-		}
-		h.taskSvc.Complete(taskID, result) //nolint:errcheck
-	}(task.TaskID, shot, narrationVoice, req.SubtitleEnabled, uint(videoID))
-
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeVoiceGen 的
+	// 执行函数在 cmd/server/task_resume.go，entity_type=="shot" 分支用 t.EntityID/video_id
+	// 重新查分镜，反序列化下面存的字段调用同一套 GenerateShotAudio 重试 + 字幕生成逻辑）。
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"narration_voice":  narrationVoice,
+		"subtitle_enabled": req.SubtitleEnabled,
+		"video_id":         uint(videoID),
+	})
 	respondAccepted(c, task.TaskID, "配音生成任务已提交")
 }
 
@@ -829,42 +618,19 @@ func (h *VideoHandler) GenerateLipSync(c *gin.Context) {
 	var req service.LipSyncRequest
 	_ = c.ShouldBindJSON(&req)
 
-	task, err := h.taskSvc.Create(getTenantID(c), "lipsync",
+	task, err := h.taskSvc.Create(getTenantID(c), service.TaskTypeLipSync,
 		fmt.Sprintf("口型对齐 shot #%d", shotID), "shot", uint(shotID))
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-
-	reqID9 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID9)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[VideoHandler] GenerateLipSync panic: %v", r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID) //nolint:errcheck
-
-		result, genErr := h.videoService.GenerateLipSyncVideoWithReq(uint(videoID), uint(shotID), req)
-		if genErr != nil {
-			log.Errorf("[VideoHandler] GenerateLipSync failed: %v", genErr)
-			h.taskSvc.Fail(taskID, genErr.Error()) //nolint:errcheck
-			return
-		}
-
-		h.taskSvc.UpdateProgress(taskID, 20) //nolint:errcheck
-
-		// 同步轮询直到完成（timeout 内部控制）
-		if pollErr := h.videoService.PollLipSyncUntilDone(uint(videoID), uint(shotID)); pollErr != nil {
-			log.Errorf("[VideoHandler] PollLipSync failed: %v", pollErr)
-			h.taskSvc.Fail(taskID, pollErr.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.Complete(taskID, gin.H{"lip_sync_task_id": result.TaskID}) //nolint:errcheck
-	}(task.TaskID)
-
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeLipSync 的执行
+	// 函数在 cmd/server/task_resume.go，用 t.EntityID 作为 shotID，反序列化下面存的
+	// video_id/req 调用同一套 GenerateLipSyncVideoWithReq + PollLipSyncUntilDone）。
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"video_id": uint(videoID),
+		"req":      req,
+	})
 	respondAccepted(c, task.TaskID, "口型对齐任务已提交")
 }
 

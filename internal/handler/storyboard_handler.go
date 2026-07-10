@@ -1,14 +1,12 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/inkframe/inkframe-backend/internal/logger"
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"github.com/inkframe/inkframe-backend/internal/service"
 )
@@ -65,6 +63,9 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 			IP: c.ClientIP(),
 		})
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeStoryboardGen
+	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的字段调用同一个
+	// h.storyboardService.GenerateStoryboardCtx）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"chapter_id":      req.ChapterID,
 		"characters":      req.Characters,
@@ -75,30 +76,6 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 		"temperature":     req.Temperature,
 		"timeout_seconds": req.TimeoutSeconds,
 		"voice_mode":      req.VoiceMode,
-	})
-
-	h.taskSvc.RunTracked(context.Background(), task, func(ctx context.Context, t *model.AsyncTask) (*service.TrackedResult, error) {
-		progressFn := func(pct int) { h.taskSvc.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
-		overrides := service.StoryboardOverrides{
-			MaxTokens:      req.MaxTokens,
-			Temperature:    req.Temperature,
-			TimeoutSeconds: req.TimeoutSeconds,
-			VoiceMode:      req.VoiceMode,
-		}
-		result, err := h.storyboardService.GenerateStoryboardCtx(ctx, uint(videoId), req.ChapterID, req.Characters, req.Style, req.Provider, req.UserPrompt, progressFn, overrides)
-		if err != nil {
-			return nil, err
-		}
-		// 只存 shot_count，不把完整分镜数组写入 result 列（JSON 可能超出 TEXT 65KB 限制导致 Update 失败，任务永远卡在 99%）
-		data := gin.H{"shot_count": len(result.Shots)}
-		if result.FailedSegments > 0 {
-			return &service.TrackedResult{
-				Data: data,
-				Warning: fmt.Sprintf("预计生成约 %d 个镜头，但 %d/%d 个分段生成失败，实际生成 %d 个镜头，建议检查后重新生成缺失部分",
-					result.RequestedShots, result.FailedSegments, result.TotalSegments, len(result.Shots)),
-			}, nil
-		}
-		return &service.TrackedResult{Data: data}, nil
 	})
 
 	respondAccepted(c, task.TaskID, "分镜生成任务已提交")
@@ -137,9 +114,10 @@ func (s shotWithAudio) MarshalJSON() ([]byte, error) {
 	return result, nil
 }
 
-// resolveAudioURL returns the serve endpoint for a shot's voice audio.
-// The endpoint delegates to the first VoiceSegment with audio.
-func resolveAudioURL(videoID uint, shot *model.StoryboardShot) string {
+// ResolveAudioURL returns the serve endpoint for a shot's voice audio.
+// The endpoint delegates to the first VoiceSegment with audio. Exported so
+// cmd/server/task_resume.go can build the same URL when completing a voice_gen task.
+func ResolveAudioURL(videoID uint, shot *model.StoryboardShot) string {
 	return fmt.Sprintf("/api/v1/videos/%d/storyboard/%d/audio", videoID, shot.ID)
 }
 
@@ -167,38 +145,13 @@ func (h *VideoHandler) ReviewStoryboard(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeStoryboardReview
+	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的字段调用同一个
+	// h.storyboardService.ReviewStoryboard）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"provider":       req.Provider,
 		"previous_score": req.PreviousScore,
 	})
-
-	reqID2 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID2)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[VideoHandler] ReviewStoryboard task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
-		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
-
-		review, recordID, reviewErr := h.storyboardService.ReviewStoryboard(tenantID, uint(videoId), req.Provider, req.PreviousScore)
-		if reviewErr != nil {
-			log.Errorf("[VideoHandler] ReviewStoryboard task %s failed: videoID=%d err=%v", taskID, videoId, reviewErr)
-			h.taskSvc.Fail(taskID, reviewErr.Error()) //nolint:errcheck
-			return
-		}
-		// 将 record_id 附在 task data 中，前端可用于关联后续 apply/rollback
-		type reviewResult struct {
-			*model.StoryboardReview
-			RecordID uint `json:"record_id,omitempty"`
-		}
-		h.taskSvc.UpdateProgress(taskID, 90)                                                      //nolint:errcheck
-		h.taskSvc.Complete(taskID, &reviewResult{StoryboardReview: review, RecordID: recordID}) //nolint:errcheck
-	}(task.TaskID)
-
 	respondAccepted(c, task.TaskID, "分镜审查任务已提交")
 }
 
@@ -230,7 +183,7 @@ func (h *VideoHandler) GetStoryboard(c *gin.Context) {
 	for i, s := range shots {
 		audioURL := ""
 		if _, hasAudio := audioMap[s.ID]; hasAudio {
-			audioURL = resolveAudioURL(uint(videoId), s)
+			audioURL = ResolveAudioURL(uint(videoId), s)
 		}
 		result[i] = shotWithAudio{
 			StoryboardShot: s,
@@ -387,35 +340,13 @@ func (h *VideoHandler) OptimizeStoryboardFromReview(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeStoryboardOptimize
+	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的 review/provider 调用同一个
+	// h.storyboardService.OptimizeStoryboardFromReview）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"review":   req.StoryboardReview,
 		"provider": req.Provider,
 	})
-
-	review := req.StoryboardReview
-	provider := req.Provider
-	reqID3 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID3)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[VideoHandler] OptimizeStoryboardFromReview task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
-		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
-
-		count, optErr := h.storyboardService.OptimizeStoryboardFromReview(tenantID, uint(videoID), &review, provider)
-		if optErr != nil {
-			log.Errorf("[VideoHandler] OptimizeStoryboardFromReview task %s failed: %v", taskID, optErr)
-			h.taskSvc.Fail(taskID, optErr.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.UpdateProgress(taskID, 90)                              //nolint:errcheck
-		h.taskSvc.Complete(taskID, gin.H{"updated_shots": count}) //nolint:errcheck
-	}(task.TaskID)
-
 	respondAccepted(c, task.TaskID, "分镜优化任务已提交")
 }
 
@@ -782,35 +713,13 @@ func (h *VideoHandler) GenerateShotVideos(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeVideoGen 的
+	// 执行函数在 cmd/server/task_resume.go，反序列化下面存的 video_id/mode 调用同一套
+	// GenerateAllShotVideos + PollAndStitchVideo）。
 	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
 		"video_id": uint(id),
 		"mode":     video.Mode,
 	})
-
-	reqID4 := c.GetString("request_id")
-	go func(taskID string, videoID uint, mode string) {
-		log := logger.WithID(reqID4)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[VideoHandler] GenerateShotVideos task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)         //nolint:errcheck
-		h.taskSvc.UpdateProgress(taskID, 5)  //nolint:errcheck
-		if err := h.videoService.GenerateAllShotVideos(videoID); err != nil {
-			log.Errorf("[VideoHandler] GenerateShotVideos task %s: submit failed: %v", taskID, err)
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-			return
-		}
-		h.taskSvc.UpdateProgress(taskID, 10) //nolint:errcheck
-		// slideshow mode handles stitching internally; only poll for AI video mode
-		if mode != "slideshow" {
-			h.videoService.PollAndStitchVideo(videoID) // blocks until done or timeout
-		}
-		h.taskSvc.Complete(taskID, map[string]interface{}{"video_id": videoID}) //nolint:errcheck
-	}(task.TaskID, uint(id), video.Mode)
-
 	respondAccepted(c, task.TaskID, "视频生成任务已提交")
 }
 
