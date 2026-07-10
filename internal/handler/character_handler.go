@@ -625,26 +625,25 @@ func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
 		"provider": req.Provider,
 		"force":    req.Force,
 	})
-	reqID4 := c.GetString("request_id")
-	go func(taskID string) {
-		log := logger.WithID(reqID4)
-		defer func() {
-			if r := recover(); r != nil {
-				log.Errorf("[CharacterHandler] BatchGenerateImages task %s panic: %v", taskID, r)
-				h.taskSvc.Fail(taskID, "内部错误，请重试") //nolint:errcheck
-			}
-		}()
-		h.taskSvc.SetRunning(taskID)                                           //nolint:errcheck
-		progressFn := func(pct int) { h.taskSvc.UpdateProgress(taskID, pct) } //nolint:errcheck
-		succ, fail, err := h.characterService.BatchGenerateImages(tenantID, uint(novelID), req.Provider, req.Force, progressFn)
-		if err != nil {
-			log.Errorf("[CharacterHandler] BatchGenerateImages task %s failed: %v", taskID, err)
-			h.taskSvc.Fail(taskID, err.Error()) //nolint:errcheck
-		} else {
-			h.taskSvc.Complete(taskID, map[string]interface{}{"succeeded": succ, "failed": fail}) //nolint:errcheck
-		}
-	}(task.TaskID)
+	h.taskSvc.RunTracked(context.Background(), task, func(ctx context.Context, t *model.AsyncTask) (*service.TrackedResult, error) {
+		return h.runBatchGenerateImagesTask(t, tenantID, uint(novelID), req.Provider, req.Force)
+	})
 	respondAccepted(c, task.TaskID, "角色图片批量生成任务已提交")
+}
+
+// runBatchGenerateImagesTask 执行角色图片批量生成任务的实际工作（task type: service.TaskTypeThreeView，
+// entity_type=="novel"）。被 BatchGenerateImages 首次派发调用；服务重启后由
+// cmd/server/task_resume.go 中为同一 task type 注册的 resume handler 复用同一套调用（
+// h.characterService.BatchGenerateImages）以幂等恢复未完成的任务。
+// 由 TaskService.RunTracked 在其内部统一管理的 goroutine 中调用，不在本函数内自行启动 goroutine
+// 或处理 panic/状态落库——SetRunning/Complete/Fail 及 panic 恢复均由 RunTracked 统一完成。
+func (h *CharacterHandler) runBatchGenerateImagesTask(t *model.AsyncTask, tenantID, novelID uint, provider string, force bool) (*service.TrackedResult, error) {
+	progressFn := func(pct int) { h.taskSvc.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
+	succ, fail, err := h.characterService.BatchGenerateImages(tenantID, novelID, provider, force, progressFn)
+	if err != nil {
+		return nil, err
+	}
+	return &service.TrackedResult{Data: map[string]interface{}{"succeeded": succ, "failed": fail}}, nil
 }
 
 // GenerateCharacterProfile AI生成角色档案（异步任务）

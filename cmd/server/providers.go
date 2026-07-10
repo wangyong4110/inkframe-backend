@@ -29,7 +29,7 @@ func initVectorStore(cfg *config.Config) *vector.StoreManager {
 		logger.Printf("VectorStore: DashVector @ %s", cfg.VectorDB.Endpoint)
 
 	case "chroma":
-		chromaStore := vector.NewChromaStore(cfg.VectorDB.Endpoint)
+		chromaStore := vector.NewChromaStore(cfg.VectorDB.Endpoint, cfg.VectorDB.APIKey)
 		manager.RegisterStore("chroma", chromaStore)
 		logger.Printf("VectorStore: Chroma @ %s", cfg.VectorDB.Endpoint)
 
