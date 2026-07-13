@@ -30,7 +30,7 @@ type TenantProfile struct {
 type Tenant struct {
 	ID     uint   `json:"id" gorm:"primaryKey"`
 	Name   string `json:"name" gorm:"size:100;not null;comment:租户名称"`
-	Code   string `json:"code" gorm:"size:50;uniqueIndex;not null;comment:租户代码"`
+	Code   string `json:"code" gorm:"size:50;uniqueIndex:idx_tenants_code;not null;comment:租户代码"`
 	Status string `json:"status" gorm:"size:20;default:active;comment:状态 active/suspended/banned"`
 	Plan   string `json:"plan" gorm:"size:20;default:free;comment:套餐 free/pro/enterprise"`
 
