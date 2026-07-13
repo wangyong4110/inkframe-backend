@@ -340,6 +340,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				novels.POST("/:id/chapters/:chapter_no/items/:item_id", cfg.ItemHandler.UpsertChapterItem)
 				novels.DELETE("/:id/chapters/:chapter_no/items/:item_id", cfg.ItemHandler.DeleteChapterItem)
 				novels.POST("/:id/chapters/:chapter_no/items/ai-extract", cfg.ItemHandler.AIExtractChapterItems)
+				novels.POST("/:id/chapters/:chapter_no/items/generate-images", cfg.ItemHandler.GenerateChapterItemImages)
 			}
 
 			// 技能体系
@@ -401,6 +402,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				novels.GET("/:id/chapters/:chapter_no/scene-anchors", cfg.SceneAnchorHandler.ListChapterAnchors)
 				novels.PUT("/:id/chapters/:chapter_no/scene-anchors/:anchor_id", cfg.SceneAnchorHandler.BindChapterAnchor)
 				novels.DELETE("/:id/chapters/:chapter_no/scene-anchors/:anchor_id", cfg.SceneAnchorHandler.UnbindChapterAnchor)
+				novels.POST("/:id/chapters/:chapter_no/scene-anchors/generate-images", cfg.SceneAnchorHandler.GenerateChapterRefImages)
 			}
 
 			// 大纲审查（小说级别）

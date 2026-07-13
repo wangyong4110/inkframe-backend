@@ -586,10 +586,13 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 	if svcs.ItemService != nil && svcs.SceneAnchorService != nil {
 		svcs.TaskService.RegisterResumeHandler(service.TaskTypeImageGen, func(t *model.AsyncTask) {
 			var params struct {
-				Source   string `json:"source"`
-				Provider string `json:"provider"`
-				Force    bool   `json:"force"`
-				RefURL   string `json:"ref_url"`
+				Source    string `json:"source"`
+				Provider  string `json:"provider"`
+				Force     bool   `json:"force"`
+				RefURL    string `json:"ref_url"`
+				NovelID   uint   `json:"novel_id"`
+				ItemIDs   []uint `json:"item_ids"`
+				AnchorIDs []uint `json:"anchor_ids"`
 			}
 			if t.ParamsJSON != "" {
 				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
@@ -625,6 +628,19 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 					svcs.TaskService.UpdateProgress(t.TaskID, 90) //nolint:errcheck
 					svcs.TaskService.Complete(t.TaskID, item)     //nolint:errcheck
 				}
+			case "item_chapter":
+				if len(params.ItemIDs) == 0 {
+					svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+					return
+				}
+				svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
+				progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
+				succ, fail, err := svcs.ItemService.GenerateChapterImages(tenantID, params.NovelID, params.ItemIDs, params.Provider, progressFn)
+				if err != nil {
+					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+				} else {
+					svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"succeeded": succ, "failed": fail}) //nolint:errcheck
+				}
 			case "scene_anchor_batch":
 				novelID := t.EntityID
 				if novelID == 0 {
@@ -634,6 +650,19 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
 				progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
 				succ, fail, err := svcs.SceneAnchorService.BatchGenerateRefImages(context.Background(), tenantID, novelID, params.Provider, params.Force, progressFn)
+				if err != nil {
+					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
+				} else {
+					svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"succeeded": succ, "failed": fail}) //nolint:errcheck
+				}
+			case "scene_anchor_chapter":
+				if len(params.AnchorIDs) == 0 {
+					svcs.TaskService.Fail(t.TaskID, "任务超时或服务重启，请重新提交") //nolint:errcheck
+					return
+				}
+				svcs.TaskService.SetRunning(t.TaskID)                                          //nolint:errcheck
+				progressFn := func(pct int) { svcs.TaskService.UpdateProgress(t.TaskID, pct) } //nolint:errcheck
+				succ, fail, err := svcs.SceneAnchorService.GenerateChapterRefImages(context.Background(), tenantID, params.NovelID, params.AnchorIDs, params.Provider, progressFn)
 				if err != nil {
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 				} else {

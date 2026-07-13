@@ -260,6 +260,56 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 	respondAccepted(c, task.TaskID, "图像生成任务已提交")
 }
 
+// GenerateChapterItemImages 仅为本章绑定的选定物品生成图像（异步任务），不影响该小说的其他物品。
+// POST /api/v1/novels/:id/chapters/:chapter_no/items/generate-images
+func (h *ItemHandler) GenerateChapterItemImages(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+
+	var req struct {
+		ItemIDs  []uint `json:"item_ids"`
+		Provider string `json:"provider,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	if len(req.ItemIDs) == 0 {
+		respondBadRequest(c, "item_ids is required")
+		return
+	}
+
+	chapter, err := h.chapterSvc.GetChapterByNo(uint(novelID), chapterNo)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImageGen, "章节物品图片生成", "chapter", chapter.ID)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeImageGen 的
+	// 执行函数在 cmd/server/task_resume.go，source="item_chapter" 分支反序列化下面存的
+	// novel_id/item_ids/provider 调用同一个 h.itemService.GenerateChapterImages）。
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"source":   "item_chapter",
+		"novel_id": novelID,
+		"item_ids": req.ItemIDs,
+		"provider": req.Provider,
+	})
+	respondAccepted(c, task.TaskID, "物品图片生成任务已提交")
+}
+
 // ListEffectiveItems GET /novels/:id/chapters/:chapter_no/items
 func (h *ItemHandler) ListEffectiveItems(c *gin.Context) {
 	novelID, ok := parseID(c, "id")

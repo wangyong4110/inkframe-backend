@@ -280,6 +280,74 @@ func (s *ItemService) BatchGenerateImages(tenantID, novelID uint, provider strin
 	return succeeded, failed, nil
 }
 
+// GenerateChapterImages 仅为本章绑定的选定物品生成图像，不影响该小说的其他物品。
+// itemIDs 与 novelID 做交集校验，避免跨小说/租户的越权生成。
+func (s *ItemService) GenerateChapterImages(tenantID, novelID uint, itemIDs []uint, provider string, progressFn func(int)) (succeeded, failed int, err error) {
+	all, e := s.itemRepo.ListByNovel(novelID)
+	if e != nil {
+		return 0, 0, fmt.Errorf("list items: %w", e)
+	}
+	idSet := make(map[uint]bool, len(itemIDs))
+	for _, id := range itemIDs {
+		idSet[id] = true
+	}
+	var items []*model.Item
+	for _, it := range all {
+		if idSet[it.ID] {
+			items = append(items, it)
+		}
+	}
+	if len(items) == 0 {
+		return 0, 0, nil
+	}
+	total := len(items)
+
+	var novelTitle, imageStyle, aspectRatio, promptLanguage string
+	if s.novelRepo != nil {
+		if novel, e2 := s.novelRepo.GetByID(novelID); e2 == nil {
+			novelTitle = novel.Title
+			imageStyle = novel.AIConfig.ImageStyle
+			aspectRatio = novel.VideoConf().VideoAspectRatio
+			promptLanguage = novel.AIConfig.PromptLanguage
+		}
+	}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var done int
+
+	for _, item := range items {
+		item := item
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			url, genErr := s.generateItemImageCore(context.Background(), tenantID, item, provider, novelTitle, imageStyle, aspectRatio, promptLanguage)
+			mu.Lock()
+			done++
+			cur := done
+			if genErr != nil {
+				logger.Errorf("[ItemService] GenerateChapterImages: item %d (%s) failed: %v", item.ID, item.Name, genErr)
+				failed++
+			} else {
+				item.ImageURL = url
+				if saveErr := s.itemRepo.Update(item); saveErr != nil {
+					logger.Errorf("[ItemService] GenerateChapterImages: save item %d: %v", item.ID, saveErr)
+					failed++
+				} else {
+					succeeded++
+				}
+			}
+			mu.Unlock()
+			if progressFn != nil && total > 0 {
+				progressFn(cur * 99 / total)
+			}
+		}()
+	}
+	wg.Wait()
+	logger.Printf("[ItemService] GenerateChapterImages: novelID=%d succeeded=%d failed=%d", novelID, succeeded, failed)
+	return succeeded, failed, nil
+}
+
 func (s *ItemService) AIExtractFromNovel(tenantID, novelID uint) ([]*model.Item, error) {
 	chapters, err := s.chapterRepo.ListByNovelWithContent(novelID)
 	if err != nil {

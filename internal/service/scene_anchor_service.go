@@ -752,6 +752,67 @@ func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantI
 	return succeeded, failed, nil
 }
 
+// GenerateChapterRefImages 仅为本章绑定的选定场景锚点生成参考图，不影响该小说的其他场景。
+// anchorIDs 与 novelID 做交集校验，避免跨小说/租户的越权生成。
+func (s *SceneAnchorService) GenerateChapterRefImages(ctx context.Context, tenantID, novelID uint, anchorIDs []uint, provider string, progressFn func(int)) (succeeded, failed int, err error) {
+	all, e := s.repo.ListByNovel(novelID)
+	if e != nil {
+		return 0, 0, fmt.Errorf("list anchors: %w", e)
+	}
+	idSet := make(map[uint]bool, len(anchorIDs))
+	for _, id := range anchorIDs {
+		idSet[id] = true
+	}
+	var todo []*model.SceneAnchor
+	for _, a := range all {
+		if idSet[a.ID] {
+			todo = append(todo, a)
+		}
+	}
+	total := len(todo)
+	if total == 0 {
+		return 0, 0, nil
+	}
+
+	const outerConcurrency = 3
+	sem := make(chan struct{}, outerConcurrency)
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var done int
+
+	for _, anchor := range todo {
+		anchor := anchor
+		sem <- struct{}{}
+		wg.Add(1)
+		go func() {
+			defer func() { <-sem; wg.Done() }()
+			if _, genErr := s.GenerateRefImage(ctx, tenantID, anchor.ID, provider); genErr != nil {
+				logger.Errorf("[SceneAnchorService] GenerateChapterRefImages: anchor %d (%s) failed: %v", anchor.ID, anchor.Name, genErr)
+				mu.Lock()
+				failed++
+				done++
+				cur := done
+				mu.Unlock()
+				if progressFn != nil && total > 0 {
+					progressFn(cur * 99 / total)
+				}
+				return
+			}
+			mu.Lock()
+			succeeded++
+			done++
+			cur := done
+			mu.Unlock()
+			if progressFn != nil && total > 0 {
+				progressFn(cur * 99 / total)
+			}
+		}()
+	}
+	wg.Wait()
+	logger.Printf("[SceneAnchorService] GenerateChapterRefImages: novelID=%d succeeded=%d failed=%d", novelID, succeeded, failed)
+	return succeeded, failed, nil
+}
+
 // AIExtractAllFromNovel 批量从小说所有章节中提取场景锚点（并发 3 goroutine）。
 // 无章节数量上限，支持增量提取（已有同名锚点自动跳过）。
 func (s *SceneAnchorService) AIExtractAllFromNovel(ctx context.Context, tenantID, novelID uint, progressFn func(int)) ([]*model.SceneAnchor, error) {

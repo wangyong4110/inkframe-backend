@@ -558,6 +558,56 @@ func (h *SceneAnchorHandler) BatchGenerateRefImages(c *gin.Context) {
 	respondAccepted(c, task.TaskID, "场景参考图批量生成任务已提交")
 }
 
+// GenerateChapterRefImages 仅为本章绑定的选定场景锚点生成参考图（异步任务），不影响该小说的其他场景。
+// POST /api/v1/novels/:id/chapters/:chapter_no/scene-anchors/generate-images
+func (h *SceneAnchorHandler) GenerateChapterRefImages(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	chapterNo, err := strconv.Atoi(c.Param("chapter_no"))
+	if err != nil {
+		respondBadRequest(c, "invalid chapter_no")
+		return
+	}
+
+	var req struct {
+		AnchorIDs []uint `json:"anchor_ids"`
+		Provider  string `json:"provider,omitempty"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil && err.Error() != "EOF" {
+		respondBadRequest(c, err.Error())
+		return
+	}
+	if len(req.AnchorIDs) == 0 {
+		respondBadRequest(c, "anchor_ids is required")
+		return
+	}
+
+	chapter, err := h.chapterSvc.GetChapterByNo(uint(novelID), chapterNo)
+	if err != nil {
+		respondErr(c, http.StatusNotFound, "chapter not found")
+		return
+	}
+
+	tenantID := getTenantID(c)
+	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImageGen, "章节场景参考图生成", "chapter", chapter.ID)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeImageGen 的
+	// 执行函数在 cmd/server/task_resume.go，source="scene_anchor_chapter" 分支反序列化下面存的
+	// novel_id/anchor_ids/provider 调用同一个 h.svc.GenerateChapterRefImages）。
+	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+		"source":     "scene_anchor_chapter",
+		"novel_id":   novelID,
+		"anchor_ids": req.AnchorIDs,
+		"provider":   req.Provider,
+	})
+	respondAccepted(c, task.TaskID, "场景参考图生成任务已提交")
+}
+
 // AIExtractFromNovel POST /novels/:id/scene-anchors/ai-extract
 // 异步批量提取小说所有章节的场景锚点
 func (h *SceneAnchorHandler) AIExtractFromNovel(c *gin.Context) {
