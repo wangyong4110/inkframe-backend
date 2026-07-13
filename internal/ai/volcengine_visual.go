@@ -161,8 +161,8 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 		}
 
 	case VolcModelPortraitPhoto:
-		if req.ReferenceImage != "" {
-			params["image_input"] = req.ReferenceImage
+		if img := pickSingleRef(req.ReferenceURL, req.ReferenceImage); img != "" {
+			params["image_input"] = img
 		}
 		if req.Prompt != "" {
 			params["prompt"] = req.Prompt
@@ -175,8 +175,10 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 
 	case VolcModelJimengI2Iv30:
 		params["prompt"] = req.Prompt
-		// 输入图（恰好1张，支持 URL 或 base64）
-		p.setImageInput(params, req.ReferenceImage, "image_urls", "binary_data_base64")
+		// 输入图（恰好1张，支持 URL 或 base64）。ReferenceURL 优先：调用方在判断所有参考图
+		// 均为可直接访问的 HTTP URL 时会跳过 base64 转换，此时 ReferenceImage 为空，
+		// 必须回退读取 ReferenceURL，否则参考图会被静默丢弃（image_input 缺失）。
+		p.setImageInput(params, pickSingleRef(req.ReferenceURL, req.ReferenceImage), "image_urls", "binary_data_base64")
 		// scale：文本描述影响程度 float [0,1]，默认 0.5。
 		// CFGScale 由调用方以 1+weight*9 编码为 [1,10]，此处逆映射回 [0,1]。
 		if req.CFGScale > 0 {
@@ -206,10 +208,10 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 			}
 			params["scale"] = s
 		}
-		if len(req.ReferenceImages) > 0 {
-			p.setMultiImageInput(params, req.ReferenceImages, "image_urls", "binary_data_base64")
+		if imgs := pickMultiRef(req.ReferenceURLs, req.ReferenceImages); len(imgs) > 0 {
+			p.setMultiImageInput(params, imgs, "image_urls", "binary_data_base64")
 		} else {
-			p.setImageInput(params, req.ReferenceImage, "image_urls", "binary_data_base64")
+			p.setImageInput(params, pickSingleRef(req.ReferenceURL, req.ReferenceImage), "image_urls", "binary_data_base64")
 		}
 
 	case VolcModelDreamO:
@@ -226,14 +228,14 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 			}
 			params["scale"] = s
 		}
-		if len(req.ReferenceImages) > 0 {
-			p.setMultiImageInput(params, req.ReferenceImages, "image_urls", "binary_data_base64")
+		if imgs := pickMultiRef(req.ReferenceURLs, req.ReferenceImages); len(imgs) > 0 {
+			p.setMultiImageInput(params, imgs, "image_urls", "binary_data_base64")
 		} else {
-			p.setImageInput(params, req.ReferenceImage, "image_urls", "binary_data_base64")
+			p.setImageInput(params, pickSingleRef(req.ReferenceURL, req.ReferenceImage), "image_urls", "binary_data_base64")
 		}
 
 	case VolcModelImageEffect:
-		params["image_input1"] = req.ReferenceImage
+		params["image_input1"] = pickSingleRef(req.ReferenceURL, req.ReferenceImage)
 		params["template_id"] = req.Style
 		params["width"] = width
 		params["height"] = height
@@ -354,6 +356,24 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 	}
 
 	return params
+}
+
+// pickSingleRef 优先返回 ReferenceURL（调用方在所有参考图均为公网可访问 HTTP URL 时会跳过
+// base64 转换，此时 ReferenceImage 为空）；为空时回退到 ReferenceImage（base64 或 URL，
+// 由 setImageInput 按前缀自动判断）。避免参考图在 URL-only 场景下被静默丢弃。
+func pickSingleRef(url, image string) string {
+	if url != "" {
+		return url
+	}
+	return image
+}
+
+// pickMultiRef 同 pickSingleRef，适用于多张参考图场景。
+func pickMultiRef(urls, images []string) []string {
+	if len(urls) > 0 {
+		return urls
+	}
+	return images
 }
 
 func (p *VolcengineVisualProvider) setImageInput(params map[string]interface{}, image, urlField, b64Field string) {

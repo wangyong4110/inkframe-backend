@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -272,6 +273,9 @@ func (p *OpenAIProvider) ImageGenerate(ctx context.Context, req *ImageGenerateRe
 
 		body, _ := json.Marshal(imageReq)
 
+		log.Printf("[openai] ImageGenerate model=%s size=%s promptLen=%d prompt=%.200q",
+			req.Model, req.Size, len(req.Prompt), req.Prompt)
+
 		httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint+"/images/generations", bytes.NewReader(body))
 		if err != nil {
 			return nil, err
@@ -332,6 +336,9 @@ func (p *OpenAIProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRe
 	}
 
 	body, _ := json.Marshal(ttsReq)
+
+	log.Printf("[openai] AudioGenerate model=tts-1 voice=%s speed=%v textLen=%d text=%.200q",
+		req.Voice, req.Speed, len(req.Text), req.Text)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint+"/audio/speech", bytes.NewReader(body))
 	if err != nil {

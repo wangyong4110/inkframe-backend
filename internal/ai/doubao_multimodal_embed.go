@@ -111,6 +111,20 @@ func (p *DoubaoProvider) EmbedMultimodal(ctx context.Context, req *MultimodalEmb
 		arkReq.MultiEmbedding = cfg
 	}
 
+	var textCount, imageCount, videoCount int
+	for _, item := range req.Input {
+		switch item.Type {
+		case "text":
+			textCount++
+		case "image_url":
+			imageCount++
+		case "video_url":
+			videoCount++
+		}
+	}
+	log.Printf("[doubao] EmbedMultimodal model=%s inputs=%d(text=%d img=%d vid=%d) dimensions=%v instructionsLen=%d",
+		model, len(req.Input), textCount, imageCount, videoCount, req.Dimensions, len(req.Instructions))
+
 	resp, err := client.CreateMultiModalEmbeddings(ctx, arkReq)
 	if err != nil {
 		return nil, fmt.Errorf("豆包多模态 Embedding 错误: %w", err)
