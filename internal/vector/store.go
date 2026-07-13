@@ -31,14 +31,20 @@ type VectorStore interface {
 
 	// HealthCheck 健康检查
 	HealthCheck(ctx context.Context) error
+
+	// EnsureCollection 确保指定 collection 存在（不存在则以给定维度创建），已存在则是 no-op。
+	// 幂等；调用方（见 KnowledgeService）应缓存"已确认存在"的结果，避免每次写入都发一次请求。
+	// 不保证纠正维度不匹配——如果 collection 已存在但维度与调用方期望的不同，后续 Store 调用
+	// 会在向量库层面报错，调用方需要据此判断是否是维度冲突（例如租户切换了不同的 embedding 模型）。
+	EnsureCollection(ctx context.Context, name string, dimension int) error
 }
 
 // StoreRequest 存储请求
 type StoreRequest struct {
 	Collection string                 `json:"collection"`
-	ID        string                 `json:"id"`
-	Vector    []float32              `json:"vector"`
-	Payload   map[string]interface{} `json:"payload"`
+	ID         string                 `json:"id"`
+	Vector     []float32              `json:"vector"`
+	Payload    map[string]interface{} `json:"payload"`
 }
 
 // StoreResponse 存储响应
@@ -50,25 +56,25 @@ type StoreResponse struct {
 // SearchRequest 搜索请求
 type SearchRequest struct {
 	Collection string                 `json:"collection"`
-	Query      string                 `json:"query"`       // 文本查询（会自动向量化）
-	Vector     []float32              `json:"vector"`      // 向量查询
-	Limit      int                    `json:"limit"`       // 返回数量
-	Filters    map[string]interface{} `json:"filters"`     // 过滤条件
-	MinScore   float32                `json:"min_score"`   // 最小相似度
+	Query      string                 `json:"query"`     // 文本查询（会自动向量化）
+	Vector     []float32              `json:"vector"`    // 向量查询
+	Limit      int                    `json:"limit"`     // 返回数量
+	Filters    map[string]interface{} `json:"filters"`   // 过滤条件
+	MinScore   float32                `json:"min_score"` // 最小相似度
 }
 
 // SearchResult 搜索结果
 type SearchResult struct {
-	ID     string                 `json:"id"`
-	Score  float32                `json:"score"`
+	ID      string                 `json:"id"`
+	Score   float32                `json:"score"`
 	Payload map[string]interface{} `json:"payload"`
 }
 
 // VectorItem 向量项
 type VectorItem struct {
-	ID      string                  `json:"id"`
-	Vector  []float32               `json:"vector"`
-	Payload map[string]interface{}  `json:"payload"`
+	ID      string                 `json:"id"`
+	Vector  []float32              `json:"vector"`
+	Payload map[string]interface{} `json:"payload"`
 }
 
 // Embedder 向量化器接口
@@ -160,7 +166,6 @@ func (m *StoreManager) StoreAndSearch(ctx context.Context, collection string, te
 	})
 }
 
-
 // QdrantStore Qdrant 向量数据库实现（真实 HTTP API）
 type QdrantStore struct {
 	endpoint string
@@ -220,6 +225,35 @@ func (s *QdrantStore) HealthCheck(ctx context.Context) error {
 	return nil
 }
 
+// EnsureCollection checks GET /collections/{name}; if it 404s, creates it via
+// PUT /collections/{name} with the given vector size (cosine distance).
+func (s *QdrantStore) EnsureCollection(ctx context.Context, name string, dimension int) error {
+	_, status, err := s.doRequest(ctx, "GET", "/collections/"+name, nil)
+	if err != nil {
+		return fmt.Errorf("qdrant collection check failed: %w", err)
+	}
+	if status == http.StatusOK {
+		return nil
+	}
+	if status != http.StatusNotFound {
+		return fmt.Errorf("qdrant collection check failed: status %d", status)
+	}
+	body := map[string]interface{}{
+		"vectors": map[string]interface{}{
+			"size":     dimension,
+			"distance": "Cosine",
+		},
+	}
+	_, createStatus, err := s.doRequest(ctx, "PUT", "/collections/"+name, body)
+	if err != nil {
+		return fmt.Errorf("qdrant collection create failed: %w", err)
+	}
+	if createStatus != http.StatusOK {
+		return fmt.Errorf("qdrant collection create failed: status %d", createStatus)
+	}
+	return nil
+}
+
 // Store 通过 Qdrant PUT /collections/{collection}/points 存储向量
 func (s *QdrantStore) Store(ctx context.Context, req *StoreRequest) (*StoreResponse, error) {
 	point := map[string]interface{}{
@@ -249,9 +283,9 @@ func (s *QdrantStore) Store(ctx context.Context, req *StoreRequest) (*StoreRespo
 // Search 通过 Qdrant POST /collections/{collection}/points/search 语义搜索
 func (s *QdrantStore) Search(ctx context.Context, req *SearchRequest) ([]*SearchResult, error) {
 	body := map[string]interface{}{
-		"vector":      req.Vector,
-		"limit":       req.Limit,
-		"with_payload": true,
+		"vector":          req.Vector,
+		"limit":           req.Limit,
+		"with_payload":    true,
 		"score_threshold": req.MinScore,
 	}
 
@@ -421,6 +455,14 @@ func (s *ChromaStore) HealthCheck(ctx context.Context) error {
 		return fmt.Errorf("chroma health check failed: status %d", status)
 	}
 	return nil
+}
+
+// EnsureCollection is effectively a no-op: Store/Search/Delete already resolve (get-or-create)
+// the collection lazily via resolveCollectionID. dimension is accepted for interface parity
+// but unused — Chroma infers dimension from the first vector it receives, not upfront.
+func (s *ChromaStore) EnsureCollection(ctx context.Context, name string, dimension int) error {
+	_, err := s.resolveCollectionID(ctx, name)
+	return err
 }
 
 // resolveCollectionID 按名称 get-or-create 一个 collection，返回其 UUID（内存缓存，避免重复往返）。
@@ -677,9 +719,9 @@ func (h *KnowledgeBaseVector) StoreKnowledge(ctx context.Context, kb *model.Know
 
 	_, err := h.store.Store(ctx, &StoreRequest{
 		Collection: "knowledge_base",
-		ID:        fmt.Sprintf("%d", kb.ID),
-		Vector:    vector,
-		Payload:   payload,
+		ID:         fmt.Sprintf("%d", kb.ID),
+		Vector:     vector,
+		Payload:    payload,
 	})
 
 	return err

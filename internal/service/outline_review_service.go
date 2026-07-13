@@ -223,7 +223,7 @@ outerLoop:
 					NovelID:   novelID,
 					ChapterID: ch.ID,
 					ChapterNo: ch.ChapterNo,
-					Status:    "failed",
+					Status:    model.StatusFailed,
 					Content: model.OutlineReviewContent{
 						Suggestion: err.Error(),
 					},
@@ -312,7 +312,7 @@ func (s *OutlineReviewService) buildSynthesis(ctx context.Context, tenantID uint
 	var scoreSum float64
 	var reviewedCount int
 	for _, r := range reviews {
-		if r.Status == "failed" && r.OverallScore == 0 {
+		if r.Status == model.StatusFailed && r.OverallScore == 0 {
 			failed++
 			continue
 		}
@@ -392,7 +392,7 @@ func (s *OutlineReviewService) buildSynthesis(ctx context.Context, tenantID uint
 			syn.ChapterAdvicesJSON = string(b)
 		}
 		syn.GlobalSuggestion = aiSynResult.GlobalSuggestion
-		syn.Status = "completed"
+		syn.Status = model.StatusCompleted
 	}
 
 	if syn.ArcBalanceJSON == "" {
@@ -644,7 +644,7 @@ func buildChapterScoreTable(reviews []*model.OutlineReview) string {
 	sb.WriteString("章节 | 综合评分 | 结构 | 节奏 | 连贯 | 人物 | 冲突 | 钩子 | 状态\n")
 	sb.WriteString("---|---|---|---|---|---|---|---|---\n")
 	for _, r := range reviews {
-		if r.OverallScore == 0 && r.Status == "failed" {
+		if r.OverallScore == 0 && r.Status == model.StatusFailed {
 			fmt.Fprintf(&sb, "第%d章 | 审查失败 | - | - | - | - | - | - | failed\n", r.ChapterNo)
 			continue
 		}

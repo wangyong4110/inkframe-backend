@@ -15,8 +15,30 @@ import (
 // ProviderNameDoubaoVideo 豆包视频提供者名称
 const ProviderNameDoubaoVideo = "doubao-video"
 
+// ProviderNameSeedance 是部分租户 DB 中配置的视频 provider 别名，指向和
+// ProviderNameDoubao 相同的 Seedance 视频引擎（同一套时长/分辨率/参数规则）。
+const ProviderNameSeedance = "seedance"
+
 // doubaoVideoDefaultEndpoint 豆包视频 API 默认端点（火山引擎 Ark，华北2/北京）
 const doubaoVideoDefaultEndpoint = "https://ark.cn-beijing.volces.com/api/v3"
+
+func init() {
+	traits := VideoEngineTraits{
+		SnapsFixedDuration:          true,
+		ResolvesModelFromDB:         true,
+		SupportsMultiImageReference: true,
+		SupportsTemporalLinking:     true,
+		SupportsExtendedVideoParams: true,
+		DefaultResolution: func(_ bool, configuredResolution string) string {
+			if configuredResolution != "" {
+				return configuredResolution
+			}
+			return "1080p"
+		},
+	}
+	RegisterVideoEngineTraits(ProviderNameDoubao, traits)
+	RegisterVideoEngineTraits(ProviderNameSeedance, traits)
+}
 
 // DoubaoVideoProvider 豆包 Seedance 视频生成提供者（火山引擎 Ark 平台）
 //

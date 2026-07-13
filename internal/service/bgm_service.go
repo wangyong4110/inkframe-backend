@@ -170,8 +170,8 @@ func (s *BGMService) resolveLocalBGMURL(ctx context.Context, localPath string) (
 	}
 	// 3. Upload to OSS — use a distributed lock so only one instance uploads.
 	if s.cache != nil {
-		lockKey := fmt.Sprintf("lock:bgm:upload:%s", filename)
-		lock, acquired, lockErr := acquireDistLock(s.cache, lockKey, 30*time.Second)
+		bgmLockKey := lockKey("bgm", "upload", filename)
+		lock, acquired, lockErr := acquireDistLock(s.cache, bgmLockKey, 30*time.Second)
 		if lockErr != nil {
 			logger.Errorf("[BGMService] distlock error for %s: %v, proceeding without lock", filename, lockErr)
 		} else if !acquired {

@@ -37,7 +37,7 @@ func (s *FeedbackService) Create(req *model.CreateFeedbackRequest, userID, tenan
 			Screenshots:  screenshotsJSON,
 			ContactEmail: req.ContactEmail,
 		},
-		Status:   "pending",
+		Status:   model.StatusPending,
 		Priority: "medium",
 	}
 	if err := s.repo.Create(f); err != nil {

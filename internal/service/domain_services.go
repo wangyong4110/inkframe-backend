@@ -584,7 +584,7 @@ func (s *ModelService) CreateExperiment(req *model.CreateModelComparisonRequest,
 		Name:     req.Name,
 		TaskType: req.TaskType,
 		ModelIDs: modelIDsJSON,
-		Status:   "pending",
+		Status:   model.StatusPending,
 	}
 	return experiment, s.experimentRepo.Create(experiment)
 }

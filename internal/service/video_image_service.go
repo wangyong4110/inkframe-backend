@@ -1732,7 +1732,8 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 
 	// Seedance / Doubao：duration 只接受 5 或 10（整数秒）；其他值一律 snap 到最近档位。
 	// Kling 由 emotionToKlingParams 保证返回 5/10，无需额外处理。
-	if providerName == "seedance" || providerName == "doubao" {
+	videoTraits := ai.VideoEngineTraitsFor(providerName)
+	if videoTraits.SnapsFixedDuration {
 		if shotDuration < 7.5 {
 			shotDuration = 5
 		} else {
@@ -1783,7 +1784,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 
 	// Doubao/Seedance：Model 字段必须是 Endpoint ID，不是 Kling 专用的 klingModelOverride。
 	// 当 klingModelOverride 为空（或被 HD 逻辑跳过），从 DB 中查询该 provider 的活跃模型名称。
-	if (providerName == "seedance" || providerName == "doubao") && s.aiService != nil {
+	if videoTraits.ResolvesModelFromDB && s.aiService != nil {
 		if dbModel, dbErr := s.aiService.GetActiveVideoModelName(tenantID, providerName); dbErr == nil && dbModel != "" {
 			klingModelOverride = dbModel
 		}
@@ -1816,15 +1817,14 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 	// 角色按 CharacterIDs 顺序严格排列，保持和分镜角色的一一对应关系。
 	var extraRefImages []string
 	var extraRefLabels []string // HappyHorse r2v：与 extraRefImages 并行的标签（角色名 / "场景背景"）
-	multiImageProviders := map[string]bool{"seedance": true, "doubao": true, "kling": true, "happyhorse": true}
 	// I2V 模式：shot.ImageURL（静态场景图）追加为第一额外参考图，维持外观一致性
-	if shot.GenMeta.ReferenceImageURL != "" && shot.ImageURL != "" && multiImageProviders[providerName] {
+	if shot.GenMeta.ReferenceImageURL != "" && shot.ImageURL != "" && videoTraits.SupportsMultiImageReference {
 		if absImg := s.resolveAbsURL(shot.ImageURL); absImg != "" && absImg != s.resolveAbsURL(referenceImage) {
 			extraRefImages = append(extraRefImages, absImg)
 			extraRefLabels = append(extraRefLabels, "场景参考")
 		}
 	}
-	if multiImageProviders[providerName] && s.characterRepo != nil && len(shot.CharacterIDs) > 0 {
+	if videoTraits.SupportsMultiImageReference && s.characterRepo != nil && len(shot.CharacterIDs) > 0 {
 		chapterNo := 0
 		if shot.ChapterID != nil && s.chapterRepo != nil {
 			if chapter, err := s.chapterRepo.GetByID(*shot.ChapterID); err == nil && chapter != nil {
@@ -1852,7 +1852,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 			}
 		}
 	}
-	if multiImageProviders[providerName] && s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
+	if videoTraits.SupportsMultiImageReference && s.sceneAnchorSvc != nil && shot.SceneAnchorID != nil {
 		if _, anchorRefURL, anchorLabel, anchorErr := s.sceneAnchorSvc.BuildPromptFragment(*shot.SceneAnchorID); anchorErr == nil && anchorRefURL != "" && anchorRefURL != referenceImage {
 			extraRefImages = append(extraRefImages, anchorRefURL)
 			if anchorLabel == "" {
@@ -1936,7 +1936,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 
 	// HappyHorse r2v：在 prompt 前缀注入 [Image N] 角色引用，帮助模型区分多张参考图中的人物
 	// 官方文档：prompt 中使用 "[Image N]中的{名字}" 引用 media 数组第 N 张图（1-based）
-	if providerName == "happyhorse" && (absRef != "" || len(absExtras) > 0) {
+	if videoTraits.NeedsPerImageAnnotation && (absRef != "" || len(absExtras) > 0) {
 		totalImages := 0
 		if absRef != "" {
 			totalImages++
@@ -1958,24 +1958,15 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		}
 	}
 
-	// HappyHorse 分辨率：HD 模式用 1080P，否则 720P
+	// HappyHorse 分辨率：HD 模式用 1080P，否则 720P；Seedance/Doubao：使用 vidResolution 设置
 	videoResolution := ""
-	if providerName == "happyhorse" {
-		if hdEnabled {
-			videoResolution = "1080p"
-		} else {
-			videoResolution = "720p"
-		}
-	} else if providerName == "seedance" || providerName == "doubao" {
-		videoResolution = vidResolution
-		if videoResolution == "" {
-			videoResolution = "1080p"
-		}
+	if videoTraits.DefaultResolution != nil {
+		videoResolution = videoTraits.DefaultResolution(hdEnabled, vidResolution)
 	}
 
 	// Seedance 多模态时序链接：查找前一分镜的完成视频 URL 作为运动参考
 	var prevVideoURLs []string
-	if (providerName == "seedance" || providerName == "doubao") && shot.ShotNo > 1 && s.storyboardRepo != nil {
+	if videoTraits.SupportsTemporalLinking && shot.ShotNo > 1 && s.storyboardRepo != nil {
 		if prev, prevErr := s.storyboardRepo.GetByVideoAndShotNo(shot.VideoID, shot.ShotNo-1); prevErr == nil && prev != nil {
 			if prev.VideoURL != "" && strings.HasPrefix(prev.VideoURL, "http") {
 				prevVideoURLs = []string{prev.VideoURL}
@@ -1998,7 +1989,7 @@ func (s *VideoService) GenerateShotVideo(shot *model.StoryboardShot, videoAspect
 		Model:          klingModelOverride,
 	}
 	// Seedance/豆包 专属参数
-	if providerName == "seedance" || providerName == "doubao" {
+	if videoTraits.SupportsExtendedVideoParams {
 		req.ReturnLastFrame = true // 让 API 直接返回末帧 URL，避免下载+ffprobe
 		// generate_audio：必须显式传 true，API 默认值为 false（无声）。
 		// 用户明确设为 false 时（静音模式）才跳过。

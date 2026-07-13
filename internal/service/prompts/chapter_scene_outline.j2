@@ -83,6 +83,11 @@
 {{ WikiContext }}
 {% endif %}
 
+{% if KnowledgeContext %}
+# 本书知识库设定（必须遵守——这是本书已确立的事实，与下方任何内容冲突时以此为准，不可篡改或忽略）
+{{ KnowledgeContext }}
+{% endif %}
+
 {% if StoryPatternRef %}
 # 情节结构参考（可借鉴叙事节拍与情感弧线，不必机械照搬）
 {{ StoryPatternRef }}

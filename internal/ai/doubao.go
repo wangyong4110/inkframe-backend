@@ -49,7 +49,20 @@ func NewDoubaoProvider(apiKey, endpoint, model string, timeout time.Duration) *D
 	}
 }
 
-func (p *DoubaoProvider) GetName() string { return "doubao" }
+// ProviderNameDoubao is the canonical name for the Doubao (豆包) text/image provider.
+const ProviderNameDoubao = "doubao"
+
+// ProviderNameVolcengineArkImage 是 DB 中 Seedream 图片模型的自定义名称，
+// 复用与 ProviderNameDoubao 相同的 DoubaoProvider 实现和能力。
+const ProviderNameVolcengineArkImage = "volcengine-ark-img"
+
+func (p *DoubaoProvider) GetName() string { return ProviderNameDoubao }
+
+func init() {
+	traits := ImageEngineTraits{SupportsReferenceImage: true} // Seedream 4.0+ "image" 字段支持单图/多图参考
+	RegisterImageEngineTraits(ProviderNameDoubao, traits)
+	RegisterImageEngineTraits(ProviderNameVolcengineArkImage, traits)
+}
 
 func (p *DoubaoProvider) GetModels() []string {
 	return []string{
@@ -64,7 +77,7 @@ func (p *DoubaoProvider) GetModels() []string {
 		"doubao-seedream-5-0-260128", // Seedream 5.0 lite，2K/3K/4K，支持流式/组图/联网搜索
 		"doubao-seedream-4-5-251128", // Seedream 4.5，2K/4K
 		"doubao-seedream-4-0-250828", // Seedream 4.0，1K/2K/4K（默认）
-		"seededit-3-0-t2i-250428",   // SeedEdit 3.0，指令式图像编辑
+		"seededit-3-0-t2i-250428",    // SeedEdit 3.0，指令式图像编辑
 		// 多模态 Embedding 模型（EmbedMultimodal）
 		"doubao-embedding-vision-250328", // 多模态 Embedding（文本+图片+视频），维度 2048
 		"doubao-embedding-vision-250615", // 多模态 Embedding v2，支持可选维度（1024/2048）
@@ -254,8 +267,17 @@ func (p *DoubaoProvider) GenerateStream(ctx context.Context, req *GenerateReques
 }
 
 func (p *DoubaoProvider) Embed(ctx context.Context, text string) ([]float32, error) {
+	// Volcengine Ark is endpoint-based: the "model" value must be the specific embedding
+	// endpoint ID the user deployed and configured in Model Management (effectiveModelName
+	// in getTenantProvider), not a generic model family name. "doubao-embedding" below is
+	// almost certainly not a real endpoint ID; it only remains as a last-resort default for
+	// the (misconfigured) case where p.model is empty.
+	model := p.model
+	if model == "" {
+		model = "doubao-embedding"
+	}
 	apiReq := map[string]interface{}{
-		"model": "doubao-embedding",
+		"model": model,
 		"input": text,
 	}
 	body, _ := json.Marshal(apiReq)
@@ -629,7 +651,7 @@ func seedreamEnforceMinSize(model, size string) string {
 		return size
 	}
 	scale := math.Sqrt(float64(minPx) / float64(w*h))
-	r8 := func(n float64) int { return (int(math.Ceil(n))+4) / 8 * 8 }
+	r8 := func(n float64) int { return (int(math.Ceil(n)) + 4) / 8 * 8 }
 	return fmt.Sprintf("%dx%d", r8(float64(w)*scale), r8(float64(h)*scale))
 }
 

@@ -543,7 +543,7 @@ func (nc *NovelCrawler) crawlChaptersAsync(ctx context.Context, novelID uint, si
 	// Fetch chapter list — prefer Ajax API if available, fall back to HTML parse
 	chapters, err := nc.fetchChapterList(ctx, parser, domain, baseURL)
 	if err != nil || len(chapters) == 0 {
-		nc.updateNovelStatus(novelID, "failed")
+		nc.updateNovelStatus(novelID, model.StatusFailed)
 		return
 	}
 
@@ -580,7 +580,7 @@ func (nc *NovelCrawler) crawlChaptersAsync(ctx context.Context, novelID uint, si
 		}
 	}
 
-	nc.updateNovelStatus(novelID, "completed")
+	nc.updateNovelStatus(novelID, model.StatusCompleted)
 	nc.analyzeNovel(novelID)
 }
 

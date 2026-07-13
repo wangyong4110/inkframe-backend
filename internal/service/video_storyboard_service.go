@@ -79,7 +79,7 @@ func (s *VideoService) GenerateStoryboardCtx(ctx context.Context, videoID uint, 
 	// Prevent concurrent storyboard generation for the same video — across instances via Redis SETNX.
 	// This is a mutual-exclusion lock (a different concern from cancellation, which now flows through ctx).
 	if s.cache != nil {
-		redisKey := fmt.Sprintf("lock:storyboard:gen:%d", videoID)
+		redisKey := lockKey("storyboard", "gen", videoID)
 		ok, err := s.cache.SetNX(context.Background(), redisKey, "1", 30*time.Minute).Result()
 		if err == nil {
 			if !ok {

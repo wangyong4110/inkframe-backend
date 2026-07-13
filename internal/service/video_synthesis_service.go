@@ -555,7 +555,7 @@ func (s *VideoService) RecoverActivePollTasks() {
 func (s *VideoService) PollAndStitchVideo(videoID uint) {
 	// Cross-instance dedup via Redis SETNX; fallback to local sync.Map.
 	if s.cache != nil {
-		redisKey := fmt.Sprintf("lock:video:poll:%d", videoID)
+		redisKey := lockKey("video", "poll", videoID)
 		ok, err := s.cache.SetNX(context.Background(), redisKey, "1", 2*time.Hour).Result()
 		if err == nil {
 			if !ok {

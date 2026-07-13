@@ -62,7 +62,17 @@ func NewKlingImageProvider(accessKey, secretKey, endpoint string) *KlingImagePro
 	}
 }
 
-func (p *KlingImageProvider) GetName() string { return "kling-image" }
+// ProviderNameKlingImage is the canonical name for the Kling (可灵) image provider.
+const ProviderNameKlingImage = "kling-image"
+
+func (p *KlingImageProvider) GetName() string { return ProviderNameKlingImage }
+
+func init() {
+	RegisterImageEngineTraits(ProviderNameKlingImage, ImageEngineTraits{
+		Supports2KResolution:   true,
+		SupportsReferenceImage: true,
+	})
+}
 
 func (p *KlingImageProvider) GetModels() []string {
 	return []string{"kling-v1", "kling-v1-5", "kling-v2", "kling-v2-new", "kling-v2-1", "kling-v3"}

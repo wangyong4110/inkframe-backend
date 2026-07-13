@@ -66,6 +66,11 @@ vector_db:
   api_key: ""              # dashvector 建议留空，改用 $DASHVECTOR_API_KEY 环境变量
   index_name: "inkframe"
 
+# 知识库检索配置（不填则使用代码内置默认值：search_limit=3, min_score=0.6）
+knowledge_base:
+  search_limit: 3          # 每次检索（章节生成时自动触发 / 手动搜索）返回的知识条目数
+  min_score: 0.6           # 语义搜索的最小相似度阈值；阈值偏高时会更频繁退化到关键词搜索
+
 # 日志配置
 logger:
   level: "info"            # debug | info | warn | error

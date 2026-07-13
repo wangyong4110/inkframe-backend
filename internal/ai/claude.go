@@ -120,9 +120,9 @@ func (p *AnthropicProvider) Generate(ctx context.Context, req *GenerateRequest) 
 			}
 			return p.model
 		}(),
-		"messages":     messages,
-		"temperature":  req.Temperature,
-		"max_tokens":   maxTok,
+		"messages":    messages,
+		"temperature": req.Temperature,
+		"max_tokens":  maxTok,
 	}
 
 	if req.SystemPrompt != "" {
@@ -311,10 +311,10 @@ func (p *AnthropicProvider) AudioGenerate(ctx context.Context, req *AudioGenerat
 
 // Claude API 响应结构
 type ClaudeResponse struct {
-	ID        string `json:"id"`
-	Type      string `json:"type"`
-	Role      string `json:"role"`
-	Content   []struct {
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Role    string `json:"role"`
+	Content []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content"`
@@ -328,17 +328,17 @@ type ClaudeResponse struct {
 }
 
 type ClaudeStreamChunk struct {
-	Type          string `json:"type"`
-	Index         int    `json:"index"`
-	ContentBlock  *struct {
+	Type         string `json:"type"`
+	Index        int    `json:"index"`
+	ContentBlock *struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"content_block,omitempty"`
-	Delta         *struct {
+	Delta *struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"delta,omitempty"`
-	Usage         *struct {
+	Usage *struct {
 		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
 	} `json:"usage,omitempty"`
@@ -469,7 +469,7 @@ func (p *GoogleProvider) Generate(ctx context.Context, req *GenerateRequest) (*G
 
 	if resp.StatusCode != http.StatusOK {
 		return &GenerateResponse{
-			Error:     fmt.Sprintf("Gemini API error: %s", string(respBody)),
+			Error:      fmt.Sprintf("Gemini API error: %s", string(respBody)),
 			FinishTime: time.Since(start).Milliseconds(),
 		}, nil
 	}
@@ -481,7 +481,7 @@ func (p *GoogleProvider) Generate(ctx context.Context, req *GenerateRequest) (*G
 
 	if len(geminiResp.Candidates) == 0 || len(geminiResp.Candidates[0].Content.Parts) == 0 {
 		return &GenerateResponse{
-			Error:     "no content returned",
+			Error:      "no content returned",
 			FinishTime: time.Since(start).Milliseconds(),
 		}, nil
 	}
@@ -608,8 +608,16 @@ type GeminiStreamChunk struct {
 }
 
 func (p *GoogleProvider) Embed(ctx context.Context, text string) ([]float32, error) {
+	// See OpenAIProvider.Embed: use the configured embedding model instead of a hardcoded
+	// one. Gemini's resource name requires a "models/" prefix in both the body and the URL.
+	model := p.model
+	if model == "" {
+		model = "embedding-001"
+	}
+	modelPath := "models/" + strings.TrimPrefix(model, "models/")
+
 	embedReq := map[string]interface{}{
-		"model": "models/embedding-001",
+		"model": modelPath,
 		"content": map[string]interface{}{
 			"parts": []map[string]string{
 				{"text": text},
@@ -619,7 +627,7 @@ func (p *GoogleProvider) Embed(ctx context.Context, text string) ([]float32, err
 
 	body, _ := json.Marshal(embedReq)
 
-	url := fmt.Sprintf("%s/models/embedding-001:embedContent?key=%s", p.endpoint, p.apiKey)
+	url := fmt.Sprintf("%s/%s:embedContent?key=%s", p.endpoint, modelPath, p.apiKey)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(body))
 	if err != nil {

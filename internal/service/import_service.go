@@ -361,7 +361,7 @@ func (s *NovelImportService) RecoverStaleCrawlJobs(ctx context.Context) {
 			return
 		}
 		// Mark the DB record as failed first; ResumeCrawl will create a new job record.
-		_ = s.crawlJobRepo.Finalize(job.ID, "failed", job.Progress, job.TotalChaps, job.FailedCount)
+		_ = s.crawlJobRepo.Finalize(job.ID, model.StatusFailed, job.Progress, job.TotalChaps, job.FailedCount)
 		_ = s.crawlJobRepo.SetError(job.ID, "服务重启时发现未完成任务，已标记失败并重新提交")
 		if err := s.ResumeCrawl(job.NovelID); err != nil {
 			logger.Errorf("[CrawlRecover] novel %d resume failed: %v", job.NovelID, err)
@@ -591,12 +591,12 @@ func (s *NovelImportService) crawlChaptersBackground(
 	// 收尾
 	progress.mu.Lock()
 	if progress.Failed == 0 {
-		progress.Status = "completed"
+		progress.Status = model.StatusCompleted
 		s.novelRepo.UpdateFields(novelID, map[string]interface{}{"status": "writing"}) //nolint:errcheck
 	} else if progress.Done == 0 {
-		progress.Status = "failed"
+		progress.Status = model.StatusFailed
 	} else {
-		progress.Status = "completed"
+		progress.Status = model.StatusCompleted
 		s.novelRepo.UpdateFields(novelID, map[string]interface{}{"status": "writing"}) //nolint:errcheck
 	}
 	progress.Current = ""
@@ -609,7 +609,7 @@ func (s *NovelImportService) crawlChaptersBackground(
 	s.storeCrawlProgressToRedis(progress)
 
 	jobMetricStatus := finalStatus
-	if finalStatus == "completed" && finalFailed > 0 {
+	if finalStatus == model.StatusCompleted && finalFailed > 0 {
 		jobMetricStatus = "partial"
 	}
 	metrics.CrawlJobsTotal.WithLabelValues(jobMetricStatus).Inc()
@@ -617,17 +617,17 @@ func (s *NovelImportService) crawlChaptersBackground(
 	// 持久化最终状态到 DB
 	if jobID > 0 && s.crawlJobRepo != nil {
 		dbStatus := finalStatus
-		if finalStatus == "completed" && finalFailed > 0 {
+		if finalStatus == model.StatusCompleted && finalFailed > 0 {
 			dbStatus = "partial"
 		}
 		_ = s.crawlJobRepo.Finalize(jobID, dbStatus, finalDone, finalDone+finalFailed, finalFailed)
-		if finalStatus == "failed" {
+		if finalStatus == model.StatusFailed {
 			_ = s.crawlJobRepo.SetError(jobID, fmt.Sprintf("爬取失败：成功 %d 章，失败 %d 章", finalDone, finalFailed))
 		}
 	}
 
 	// 将全本内容合并上传到 OSS 备份
-	if s.storageSvc != nil && finalStatus == "completed" {
+	if s.storageSvc != nil && finalStatus == model.StatusCompleted {
 		go func() {
 			allChapters, err := s.chapterRepo.ListByNovel(novelID)
 			if err != nil || len(allChapters) == 0 {
@@ -1072,7 +1072,7 @@ func (s *NovelImportService) importFromCrawl(req *ImportRequest) (*ImportResult,
 			Title:     info.Title,
 			Content:   "",
 			CrawlURL:  info.URL,
-			Status:    "draft",
+			Status:    model.StatusDraft,
 		})
 	}
 	var pendingChapters []*model.Chapter
@@ -1201,7 +1201,7 @@ func (s *NovelImportService) parseTxtFile(data []byte, fileName string, tenantID
 	novel := &model.Novel{
 		Title:  title,
 		Meta:   model.NovelMeta{Genre: "unknown"},
-		Status: "completed",
+		Status: model.StatusCompleted,
 	}
 
 	// 按章节分割
@@ -1227,7 +1227,7 @@ func (s *NovelImportService) parseMarkdownFile(data []byte, fileName string, ten
 	novel := &model.Novel{
 		Title:  title,
 		Meta:   model.NovelMeta{Genre: "unknown"},
-		Status: "completed",
+		Status: model.StatusCompleted,
 	}
 
 	// 合并内容并按章节分割
@@ -1259,7 +1259,7 @@ func (s *NovelImportService) parseJsonFile(data []byte, tenantID uint) (*model.N
 	novel := &model.Novel{
 		Title:  structured.Title,
 		Meta:   model.NovelMeta{Genre: structured.Genre},
-		Status: "completed",
+		Status: model.StatusCompleted,
 	}
 
 	var chapters []*model.Chapter
@@ -1270,7 +1270,7 @@ func (s *NovelImportService) parseJsonFile(data []byte, tenantID uint) (*model.N
 				Title:     ch.Title,
 				Content:   ch.Content,
 				WordCount: len([]rune(ch.Content)),
-				Status:    "completed",
+				Status:    model.StatusCompleted,
 			})
 		}
 	} else if structured.Content != "" {
@@ -1299,7 +1299,7 @@ func (s *NovelImportService) parseHtmlFile(data []byte, tenantID uint) (*model.N
 	novel := &model.Novel{
 		Title:  title,
 		Meta:   model.NovelMeta{Genre: "unknown"},
-		Status: "completed",
+		Status: model.StatusCompleted,
 	}
 
 	chapters := s.splitByChapters(cleanContent, title, tenantID)
@@ -1422,7 +1422,7 @@ func (s *NovelImportService) splitByChapters(content, novelTitle string, tenantI
 				Title:     fmt.Sprintf("第%d章", chapterNo),
 				Content:   chunkContent,
 				WordCount: len([]rune(chunkContent)),
-				Status:    "completed",
+				Status:    model.StatusCompleted,
 			})
 			chapterNo++
 		}
@@ -1435,7 +1435,7 @@ func (s *NovelImportService) splitByChapters(content, novelTitle string, tenantI
 			Title:     novelTitle,
 			Content:   strings.TrimSpace(content),
 			WordCount: contentRunes,
-			Status:    "completed",
+			Status:    model.StatusCompleted,
 		},
 	}
 }
@@ -1460,7 +1460,7 @@ func (s *NovelImportService) buildChaptersFromSplits(content string, splits []in
 			Title:     titles[i],
 			Content:   chapterContent,
 			WordCount: len([]rune(chapterContent)),
-			Status:    "completed",
+			Status:    model.StatusCompleted,
 		})
 	}
 	return chapters
@@ -1568,7 +1568,7 @@ func (s *NovelImportService) splitByLength(content, title string, chunkSize int)
 			Title:     fmt.Sprintf("第%d章", chapterNo),
 			Content:   chapterContent,
 			WordCount: len(runes[i:end]),
-			Status:    "completed",
+			Status:    model.StatusCompleted,
 		}
 		chapters = append(chapters, chapter)
 	}
@@ -1680,7 +1680,7 @@ func (s *NovelToVideoService) ImportAndGenerate(req *ImportRequest, videoReq *No
 func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToVideoResult, error) {
 	result := &NovelToVideoResult{
 		NovelID: req.NovelID,
-		Status:  "processing",
+		Status:  model.StatusProcessing,
 	}
 
 	// 1. 获取小说信息
@@ -1721,7 +1721,7 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 		PublishMeta: model.VideoPublishMeta{
 			Description: fmt.Sprintf("基于《%s》第%d-%d章生成的视频", novel.Title, startCh, startCh+len(chapters)-1),
 		},
-		Status: "planning",
+		Status: model.StatusPlanning,
 		RenderConfig: model.VideoRenderConfig{
 			Type:        "image_sequence",
 			Resolution:  req.Resolution,
@@ -1764,7 +1764,7 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 				ChapterID:   &chapter.ID,
 				Description: shot.Description,
 				Duration:    shot.Duration,
-				Status:      "pending",
+				Status:      model.StatusPending,
 				CamDir: model.ShotCamDir{
 					CameraType:  string(shot.CameraMovement),
 					CameraAngle: string(shot.ShotAngle),
@@ -1798,7 +1798,7 @@ func (s *NovelToVideoService) GenerateVideo(req *NovelToVideoRequest) (*NovelToV
 		}
 	}
 
-	result.Status = "completed"
+	result.Status = model.StatusCompleted
 
 	return result, nil
 }

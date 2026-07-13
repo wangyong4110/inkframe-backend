@@ -2,8 +2,11 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,37 +27,90 @@ type KnowledgeImportItem struct {
 	Tags    string `json:"tags,omitempty"`
 }
 
+const (
+	// knowledgeVectorCollection is the single shared vector-store collection all knowledge base
+	// entries (across every tenant/novel) are stored in. Isolation between tenants/novels relies
+	// entirely on the novel_id payload filter applied in syncVector/SearchKnowledge, not on
+	// separate collections — see the EnsureCollection call in syncVector for the multi-tenant
+	// dimension caveat this implies (different tenants configuring different embedding models
+	// would produce different vector dimensions in the same collection).
+	knowledgeVectorCollection = "knowledge_base"
+
+	// maxEmbedInputRunes caps the text sent to embed() as a defensive guard against embedding
+	// API token limits (commonly ~8K tokens). This is a rune-count heuristic, not an exact
+	// token count — most CJK tokenizers spend close to or more than 1 token per character, so
+	// erring conservative here is safer than trying to match a specific tokenizer's math.
+	// Content (mediumtext, up to 16MB) is truncated to fit; Title is always kept in full since
+	// the DB schema already caps it at 255 chars.
+	maxEmbedInputRunes = 4000
+)
+
+// buildEmbedText assembles the text passed to embed(), truncating Content (not Title) so the
+// combined rune count stays within maxEmbedInputRunes. Without this, a long manually-imported
+// worldview document or a verbose plot-point description would either get silently truncated
+// server-side by the embedding provider (only the first N tokens actually influence the
+// resulting vector) or rejected outright with a provider-specific "input too long" error that
+// StoreKnowledge/UpdateKnowledge would surface verbatim, giving no hint that length is the issue.
+func buildEmbedText(title, content string) string {
+	budget := maxEmbedInputRunes - len([]rune(title)) - 1 // -1 for the joining space
+	if budget < 0 {
+		budget = 0
+	}
+	contentRunes := []rune(content)
+	if len(contentRunes) > budget {
+		content = string(contentRunes[:budget])
+	}
+	return title + " " + content
+}
+
+// knowledgeBaseRepo is the subset of *repository.KnowledgeBaseRepository that KnowledgeService
+// depends on. Named (rather than duplicated as an anonymous interface literal in both the
+// struct field and NewKnowledgeService's parameter, as this used to be) so adding a method
+// only requires editing one place.
+type knowledgeBaseRepo interface {
+	Create(kb *model.KnowledgeBase) error
+	Search(keyword string, limit int) ([]*model.KnowledgeBase, error)
+	GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
+	ListByNovelPaged(novelID uint, page, pageSize int) ([]*model.KnowledgeBase, int64, error)
+	GetByID(id uint) (*model.KnowledgeBase, error)
+	Update(kb *model.KnowledgeBase) error
+	Delete(id uint) error
+	ListBySourceChapter(novelID, chapterID uint) ([]*model.KnowledgeBase, error)
+	DeleteBySourceChapter(novelID, chapterID uint) error
+	IncrementUsageCount(id uint) error
+}
+
 // KnowledgeService 知识库服务
 type KnowledgeService struct {
-	kbRepo interface {
-		Create(kb *model.KnowledgeBase) error
-		Search(keyword string, limit int) ([]*model.KnowledgeBase, error)
-		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
-		ListByNovelPaged(novelID uint, page, pageSize int) ([]*model.KnowledgeBase, int64, error)
-		GetByID(id uint) (*model.KnowledgeBase, error)
-		Update(kb *model.KnowledgeBase) error
-		Delete(id uint) error
-		ListBySourceChapter(novelID, chapterID uint) ([]*model.KnowledgeBase, error)
-		DeleteBySourceChapter(novelID, chapterID uint) error
-	}
+	kbRepo      knowledgeBaseRepo
 	vectorStore *vector.StoreManager
 	aiClient    ai.AIProvider
 	aiSvc       *AIService    // optional: used for per-model concurrency-controlled embedding
 	cache       *redis.Client // optional: for cross-instance idempotency in ExtractAndStorePlotPoints
+
+	// ensureCollectionOnce/ensureCollectionErr memoize the one-time "does knowledge_base exist,
+	// create it if not" check (see ensureCollection) so we don't round-trip to the vector store
+	// on every single write — a missing/misconfigured collection is a deploy-time problem, not
+	// a per-request one.
+	ensureCollectionOnce sync.Once
+	ensureCollectionErr  error
+
+	// searchLimit/minScore are configurable (see config.KnowledgeBaseConfig) instead of the
+	// hardcoded limit=3/MinScore=0.6 this used to have; 0 means "not configured, use the
+	// built-in default" (see defaultSearchLimit/defaultMinScore constants below).
+	searchLimit int
+	minScore    float32
 }
 
+// Built-in defaults used when KnowledgeBaseConfig.SearchLimit/MinScore are left at zero
+// (i.e. not set in config.yaml).
+const (
+	defaultSearchLimit = 3
+	defaultMinScore    = 0.6
+)
+
 func NewKnowledgeService(
-	kbRepo interface {
-		Create(kb *model.KnowledgeBase) error
-		Search(keyword string, limit int) ([]*model.KnowledgeBase, error)
-		GetByNovel(novelID uint) ([]*model.KnowledgeBase, error)
-		ListByNovelPaged(novelID uint, page, pageSize int) ([]*model.KnowledgeBase, int64, error)
-		GetByID(id uint) (*model.KnowledgeBase, error)
-		Update(kb *model.KnowledgeBase) error
-		Delete(id uint) error
-		ListBySourceChapter(novelID, chapterID uint) ([]*model.KnowledgeBase, error)
-		DeleteBySourceChapter(novelID, chapterID uint) error
-	},
+	kbRepo knowledgeBaseRepo,
 	vectorStore *vector.StoreManager,
 	aiClient ai.AIProvider,
 ) *KnowledgeService {
@@ -75,6 +131,30 @@ func (s *KnowledgeService) WithRedis(c *redis.Client) *KnowledgeService {
 func (s *KnowledgeService) WithAIService(svc *AIService) *KnowledgeService {
 	s.aiSvc = svc
 	return s
+}
+
+// WithSearchConfig 设置检索的返回条数上限和语义搜索最小相似度阈值。
+// 传 0 表示"使用内置默认值"（defaultSearchLimit/defaultMinScore），不会覆盖已有设置为 0。
+func (s *KnowledgeService) WithSearchConfig(limit int, minScore float32) *KnowledgeService {
+	s.searchLimit = limit
+	s.minScore = minScore
+	return s
+}
+
+// DefaultSearchLimit 返回配置的检索条数上限（未配置时回退到 defaultSearchLimit）。
+// 供 ChapterService 等调用方在触发 knowledge_search 工具时使用，避免各处重复硬编码同一个值。
+func (s *KnowledgeService) DefaultSearchLimit() int {
+	if s.searchLimit > 0 {
+		return s.searchLimit
+	}
+	return defaultSearchLimit
+}
+
+func (s *KnowledgeService) effectiveMinScore() float32 {
+	if s.minScore > 0 {
+		return s.minScore
+	}
+	return defaultMinScore
 }
 
 // embed 统一嵌入入口：优先走 aiSvc（含并发限流），回退到裸 aiClient。
@@ -168,11 +248,25 @@ func (s *KnowledgeService) syncVector(ctx context.Context, kb *model.KnowledgeBa
 		return nil
 	}
 
-	text := kb.Title + " " + kb.Content
+	text := buildEmbedText(kb.Title, kb.Content)
 	vec, embedErr := s.embed(ctx, kb.TenantID, text)
 	if embedErr != nil {
 		return fmt.Errorf("KnowledgeService: embedding failed for kb %d: %w", kb.ID, embedErr)
 	}
+
+	// One-time-per-process check: does the collection exist? Create it if not. Failure here
+	// is logged loudly but non-fatal — Store() below is the authoritative attempt, and its own
+	// error (if any) already carries the vector store's specific reason (e.g. dimension
+	// mismatch from a tenant using a different embedding model than whichever call happened
+	// to create the collection first — see knowledgeVectorCollection's doc comment).
+	s.ensureCollectionOnce.Do(func() {
+		s.ensureCollectionErr = store.EnsureCollection(ctx, knowledgeVectorCollection, len(vec))
+		if s.ensureCollectionErr != nil {
+			logger.Errorf("KnowledgeService: collection %q missing and auto-create failed: %v — "+
+				"检查向量库连接，或手动创建该 collection（维度需与当前 embedding 模型输出一致，本次为 %d 维）",
+				knowledgeVectorCollection, s.ensureCollectionErr, len(vec))
+		}
+	})
 
 	idStr := fmt.Sprintf("%d", kb.ID)
 	if delErr := store.Delete(ctx, idStr); delErr != nil {
@@ -187,93 +281,197 @@ func (s *KnowledgeService) syncVector(ctx context.Context, kb *model.KnowledgeBa
 		"novel_id": kb.NovelID,
 	}
 	if _, storeErr := store.Store(ctx, &vector.StoreRequest{
-		Collection: "knowledge_base",
+		Collection: knowledgeVectorCollection,
 		ID:         idStr,
 		Vector:     vec,
 		Payload:    payload,
 	}); storeErr != nil {
 		// 向量写入失败：仅记录警告，DB 记录已成功，返回 nil
 		logger.Errorf("KnowledgeService: vector store error for kb %d: %v", kb.ID, storeErr)
+		return nil
+	}
+
+	// 向量写入成功：记录本次嵌入内容的哈希和时间。目前没有代码读取这两个字段做决策——它们是为
+	// 将来的维护任务预留的信号：例如批量扫描 VectorHash 是否与当前 Title+Content 的哈希一致，
+	// 找出"DB 改了但因为某种原因向量没跟上"的条目并重新同步，或者按 EmbeddedAt 做定期刷新。
+	hash := contentHash(text)
+	if hash != kb.VectorHash || kb.EmbeddedAt == nil {
+		now := time.Now()
+		kb.VectorHash = hash
+		kb.EmbeddedAt = &now
+		if updErr := s.kbRepo.Update(kb); updErr != nil {
+			logger.Errorf("KnowledgeService: failed to persist VectorHash/EmbeddedAt for kb %d: %v", kb.ID, updErr)
+		}
 	}
 	return nil
 }
 
-// SearchKnowledge 搜索知识（优先向量语义搜索，降级到关键词）
+// contentHash returns the hex-encoded SHA-256 of text — used only as a change-detection
+// fingerprint (VectorHash), not for anything security-sensitive.
+func contentHash(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
+}
+
+// SearchKnowledge 搜索知识：语义（向量）和关键词两路并行召回，再用 RRF（Reciprocal Rank
+// Fusion）融合排序去重，而不是"语义搜索有结果就用语义，否则才做关键词"的二选一 fallback。
+// 二选一的问题：语义相关但关键词没对上（或反过来）的条目，只要另一条路"恰好有结果"就会被
+// 完全漏掉；混合检索能同时吃到两边的召回，同时命中两条路的条目会自然排到更靠前。
+// 任一路失败（embed 出错、向量库不可用等）不影响另一路正常工作，只有两路都失败才报错。
 func (s *KnowledgeService) SearchKnowledge(ctx context.Context, query string, limit int, novelID *uint) ([]*model.KnowledgeBase, error) {
-	// 尝试向量语义搜索
+	// 每路都多取一些候选（limit*2），融合排序后再截断到 limit，避免两路召回的条目重叠度低时
+	// 结果凑不够 limit 条。
+	overfetch := limit * 2
+	if overfetch < limit {
+		overfetch = limit // 防御 limit*2 溢出（limit 极大时），退化为不 overfetch
+	}
+
+	var vectorRanked []*model.KnowledgeBase // 按相似度从高到低排列
 	if s.vectorStore != nil && (s.aiClient != nil || s.aiSvc != nil) {
-		vec, err := s.embed(ctx, 0, query)
-		if err == nil {
-			store := s.vectorStore.DefaultStore()
-			if store != nil {
-				filters := map[string]interface{}{}
-				if novelID != nil {
-					filters["novel_id"] = *novelID
-				}
-				vectorResults, searchErr := store.Search(ctx, &vector.SearchRequest{
-					Collection: "knowledge_base",
-					Vector:     vec,
-					Limit:      limit,
-					Filters:    filters,
-					MinScore:   0.6,
-				})
-				if searchErr == nil && len(vectorResults) > 0 {
-					// 从向量结果中获取 KB 对象
-					kbs := make([]*model.KnowledgeBase, 0, len(vectorResults))
-					for _, vr := range vectorResults {
-						if idVal, ok := vr.Payload["id"]; ok {
-							var id uint
-							switch v := idVal.(type) {
-							case float64:
-								id = uint(v)
-							case uint:
-								id = v
-							}
-							if id > 0 {
-								kb, kbErr := s.kbRepo.GetByID(id)
-								if kbErr == nil {
-									// 3b: 过滤掉不属于目标小说的结果
-									if kb.NovelID != nil && novelID != nil && *kb.NovelID != *novelID {
-										continue
-									}
-									kbs = append(kbs, kb)
-								}
-							}
-						}
-					}
-					if len(kbs) > 0 {
-						metrics.KnowledgeSearchTotal.WithLabelValues("vector").Inc()
-						return kbs, nil
-					}
-				}
-			}
-		}
-		// 3a: 区分 embed 失败 vs 向量搜索无结果
+		vec, err := s.embed(ctx, 0, buildEmbedText("", query))
 		if err != nil {
-			logger.Errorf("KnowledgeService.SearchKnowledge: embed failed, fallback to keyword: %v", err)
-		} else {
-			logger.Printf("KnowledgeService.SearchKnowledge: vector search returned no results, fallback to keyword")
-		}
-	}
-
-	// 关键词搜索降级
-	metrics.KnowledgeSearchTotal.WithLabelValues("keyword").Inc()
-	results, err := s.kbRepo.Search(query, limit)
-	if err != nil {
-		return nil, err
-	}
-
-	if novelID != nil {
-		var filtered []*model.KnowledgeBase
-		for _, kb := range results {
-			if kb.NovelID != nil && *kb.NovelID == *novelID {
-				filtered = append(filtered, kb)
+			logger.Errorf("KnowledgeService.SearchKnowledge: embed failed, continuing with keyword-only: %v", err)
+		} else if store := s.vectorStore.DefaultStore(); store != nil {
+			filters := map[string]interface{}{}
+			if novelID != nil {
+				filters["novel_id"] = *novelID
+			}
+			vectorResults, searchErr := store.Search(ctx, &vector.SearchRequest{
+				Collection: knowledgeVectorCollection,
+				Vector:     vec,
+				Limit:      overfetch,
+				Filters:    filters,
+				MinScore:   s.effectiveMinScore(),
+			})
+			if searchErr != nil {
+				logger.Errorf("KnowledgeService.SearchKnowledge: vector search failed, continuing with keyword-only: %v", searchErr)
+			}
+			for _, vr := range vectorResults {
+				id, ok := kbIDFromPayload(vr.Payload)
+				if !ok {
+					continue
+				}
+				kb, kbErr := s.kbRepo.GetByID(id)
+				if kbErr != nil {
+					continue
+				}
+				// 过滤掉不属于目标小说的结果
+				if kb.NovelID != nil && novelID != nil && *kb.NovelID != *novelID {
+					continue
+				}
+				vectorRanked = append(vectorRanked, kb)
+			}
+			if len(vectorRanked) > 0 {
+				metrics.KnowledgeSearchTotal.WithLabelValues("vector").Inc()
 			}
 		}
-		results = filtered
 	}
 
-	return results, nil
+	// 关键词检索始终执行（不再是"仅在语义那路完全失败/零结果时才做"），用于混合排序召回。
+	keywordResults, kwErr := s.kbRepo.Search(query, overfetch)
+	if kwErr != nil {
+		if len(vectorRanked) == 0 {
+			// 两路都不可用（向量路要么没配置要么本次失败，关键词路直接报错）才真正报错。
+			return nil, kwErr
+		}
+		logger.Errorf("KnowledgeService.SearchKnowledge: keyword search failed, returning vector-only results: %v", kwErr)
+	}
+	var keywordRanked []*model.KnowledgeBase
+	for _, kb := range keywordResults {
+		if novelID != nil && (kb.NovelID == nil || *kb.NovelID != *novelID) {
+			continue
+		}
+		keywordRanked = append(keywordRanked, kb)
+	}
+	if len(keywordRanked) > 0 {
+		metrics.KnowledgeSearchTotal.WithLabelValues("keyword").Inc()
+	}
+
+	merged := rrfMerge(vectorRanked, keywordRanked, limit)
+	s.bumpUsageCount(merged)
+	return merged, nil
+}
+
+// bumpUsageCount increments UsageCount for every entry actually returned to a caller, so
+// usage_count reflects real retrieval hits instead of staying permanently at 0 (it was defined
+// on the model and had a repo method to increment it, but nothing ever called that method).
+// Fire-and-forget in the background: this is bookkeeping, not something the caller should wait
+// on or fail the search over.
+func (s *KnowledgeService) bumpUsageCount(results []*model.KnowledgeBase) {
+	if len(results) == 0 {
+		return
+	}
+	ids := make([]uint, len(results))
+	for i, kb := range results {
+		ids[i] = kb.ID
+	}
+	go func() {
+		for _, id := range ids {
+			if err := s.kbRepo.IncrementUsageCount(id); err != nil {
+				logger.Errorf("KnowledgeService: IncrementUsageCount(%d) failed: %v", id, err)
+			}
+		}
+	}()
+}
+
+// kbIDFromPayload extracts the "id" field from a vector search result payload. JSON-decoded
+// numbers surface as float64; some backends may already give us a uint. Returns ok=false for
+// anything else (missing/zero/wrong-typed id).
+func kbIDFromPayload(payload map[string]interface{}) (uint, bool) {
+	idVal, ok := payload["id"]
+	if !ok {
+		return 0, false
+	}
+	var id uint
+	switch v := idVal.(type) {
+	case float64:
+		id = uint(v)
+	case uint:
+		id = v
+	default:
+		return 0, false
+	}
+	return id, id > 0
+}
+
+// rrfMerge combines two best-first-ranked result lists via Reciprocal Rank Fusion:
+// score(doc) = Σ 1/(k + rank) over every list the doc appears in (rank is 0-based position in
+// that list). k=60 is the constant used in the original RRF paper/TREC usage — it dampens how
+// much a single list's rank swings the fused score, so a doc ranked #1 by keyword but absent
+// from vector results doesn't automatically dominate. Docs present in BOTH lists accumulate
+// score from both terms and naturally float to the top, which is the point of hybrid retrieval:
+// reward agreement between semantic and lexical relevance without requiring it.
+func rrfMerge(vectorRanked, keywordRanked []*model.KnowledgeBase, limit int) []*model.KnowledgeBase {
+	const k = 60.0
+	scores := make(map[uint]float64)
+	items := make(map[uint]*model.KnowledgeBase)
+	accumulate := func(ranked []*model.KnowledgeBase) {
+		for rank, kb := range ranked {
+			scores[kb.ID] += 1.0 / (k + float64(rank))
+			items[kb.ID] = kb
+		}
+	}
+	accumulate(vectorRanked)
+	accumulate(keywordRanked)
+
+	ids := make([]uint, 0, len(items))
+	for id := range items {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		if scores[ids[i]] != scores[ids[j]] {
+			return scores[ids[i]] > scores[ids[j]]
+		}
+		return ids[i] < ids[j] // 分数相同时按 ID 稳定排序，避免 map 遍历顺序导致结果抖动
+	})
+	if limit > 0 && len(ids) > limit {
+		ids = ids[:limit]
+	}
+	result := make([]*model.KnowledgeBase, 0, len(ids))
+	for _, id := range ids {
+		result = append(result, items[id])
+	}
+	return result
 }
 
 // UpdateKnowledge 更新知识条目（标题/内容/标签）
@@ -331,8 +529,8 @@ func (s *KnowledgeService) ExtractAndStorePlotPoints(ctx context.Context, chapte
 	defer func() { metrics.KnowledgeExtractTotal.WithLabelValues(extractStatus).Inc() }()
 	// 跨实例幂等性：心跳锁（60s base TTL）防止重复写入；实例崩溃后60s内自动释放。
 	if s.cache != nil {
-		lockKey := fmt.Sprintf("lock:kv:pp:%d", chapter.ID)
-		lock, ok, lockErr := acquireDistLock(s.cache, lockKey, 60*time.Second)
+		kvLockKey := lockKey("kv", "pp", chapter.ID)
+		lock, ok, lockErr := acquireDistLock(s.cache, kvLockKey, 60*time.Second)
 		if lockErr != nil {
 			logger.Errorf("KnowledgeService.ExtractAndStorePlotPoints: Redis lock error: %v", lockErr)
 			// 非致命：继续执行（最多重复写入，不会丢数据）

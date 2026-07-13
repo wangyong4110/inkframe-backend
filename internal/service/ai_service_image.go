@@ -1,0 +1,825 @@
+package service
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/inkframe/inkframe-backend/internal/ai"
+	"github.com/inkframe/inkframe-backend/internal/logger"
+)
+
+// GenerateImage 调用AI生成图像。DB 是唯一权威来源（同 GenerateCharacterThreeView 的 auto 分支）：
+// 按 tenantID 加载已配置的 IMAGE 类型 provider，依次尝试直到成功；无 providerRepo 时退回静态
+// aiManager（config.yaml/env 静态注册场景）。
+func (s *AIService) GenerateImage(tenantID uint, prompt string, options *ImageGenerationOptions) (*GeneratedImage, error) {
+	ctx := context.Background()
+
+	var entries []ai.ImageProviderEntry
+	useDB := s.providerRepo != nil
+	if useDB {
+		entries = s.loadDBImageProviderEntries(tenantID)
+	} else if s.aiManager != nil {
+		entries = s.aiManager.GetImageProviders()
+		if len(entries) == 0 {
+			entries = knownImageCapableProviders
+		}
+	}
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("no image providers configured")
+	}
+
+	var lastErr error
+	for _, e := range entries {
+		var provider ai.AIProvider
+		var err error
+		if useDB {
+			provider, err = s.getTenantProvider(tenantID, e.ProviderName)
+		} else {
+			provider, err = s.aiManager.GetProvider(e.ProviderName)
+		}
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		modelName := selectImageModel(e, "", "")
+		release, slotErr := s.acquireModelSlotByName(ctx, tenantID, modelName)
+		if slotErr != nil {
+			lastErr = slotErr
+			continue
+		}
+		size := options.Size
+		if size == "" {
+			size = e.Size
+		}
+		resp, genErr := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
+			Model:          modelName,
+			Prompt:         prompt,
+			NegativePrompt: options.NegativePrompt,
+			Size:           size,
+			Steps:          options.Steps,
+			CFGScale:       options.CFGScale,
+		})
+		release()
+		if genErr != nil {
+			lastErr = genErr
+			continue
+		}
+		if resp.Error != "" {
+			lastErr = fmt.Errorf("image generation failed: %s", resp.Error)
+			continue
+		}
+		persistURL := s.uploadImageToStorage(ctx, tenantID, resp.URL)
+		return &GeneratedImage{
+			URL:    persistURL,
+			Width:  resp.Width,
+			Height: resp.Height,
+		}, nil
+	}
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	return nil, fmt.Errorf("no image providers available")
+}
+
+// knownImageCapableProviders 已知支持图像生成的提供者及其默认模型，用于 DB 动态加载的回退路径。
+var knownImageCapableProviders = []ai.ImageProviderEntry{
+	{ProviderName: "doubao", Model: "doubao-seedream-4-0-250828", Size: "2048x2048"},
+	{ProviderName: "qianwen", Model: "wanx2.1-t2i-turbo", Size: "1024x1024"},
+	{ProviderName: "openai", Model: "dall-e-3", Size: "1792x1024"},
+	{ProviderName: "volcengine-visual", Model: ai.VolcModelText2ImgV3, Size: "2048x2048"},
+}
+
+// loadDBImageProviderEntries 从 DB 加载 IMAGE 类型的提供者列表，使用实际配置的模型名称（APIVersion）。
+// 避免 knownImageCapableProviders 硬编码模型与用户实际配置不匹配的问题。
+// volcengine-visual 排在末尾：它需要服务端下载参考图，私有 OSS URL 会导致 403 失败。
+func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProviderEntry {
+	if s.providerRepo == nil {
+		return nil
+	}
+	providers, err := s.providerRepo.ListByModelType(tenantID, "image")
+	if err != nil {
+		return nil
+	}
+	defaultSizeMap := map[string]string{
+		"doubao":                        "2048x2048",
+		"qianwen":                       "1024x1024",
+		"openai":                        "1792x1024",
+		ai.ProviderNameVolcengineVisual: "2048x2048",
+	}
+	var primary, volcengine []ai.ImageProviderEntry
+	seen := map[string]bool{}
+	for _, p := range providers {
+		if !p.IsActive {
+			logger.Printf("loadDBImageProviderEntries: skip provider %q (inactive)", p.Name)
+			continue
+		}
+		if !providerHasCredentials(p) {
+			logger.Printf("loadDBImageProviderEntries: skip IMAGE provider %q (missing credentials)", p.Name)
+			continue
+		}
+		if seen[p.Name] {
+			continue
+		}
+		seen[p.Name] = true
+		size := defaultSizeMap[p.Name]
+		if size == "" {
+			size = "1024x1024"
+		}
+		entry := ai.ImageProviderEntry{ProviderName: p.Name, Model: effectiveModelName(p), Size: size}
+		logger.Printf("loadDBImageProviderEntries: adding IMAGE provider %q model=%q size=%s (tenantID=%d)", p.Name, effectiveModelName(p), size, tenantID)
+		// volcengine-visual 依赖服务端下载参考图，排到最后作为兜底
+		if p.Name == ai.ProviderNameVolcengineVisual {
+			volcengine = append(volcengine, entry)
+		} else {
+			primary = append(primary, entry)
+		}
+	}
+	result := append(primary, volcengine...)
+	if len(result) == 0 {
+		logger.Printf("loadDBImageProviderEntries: no IMAGE providers found for tenantID=%d (total providers checked: %d)", tenantID, len(providers))
+	}
+	return result
+}
+
+// selectImageModel returns the model to use for the given entry, dispatching
+// to the provider's own model-selection logic (registered via
+// ai.RegisterImageEngineTraits) when one exists; otherwise it keeps
+// entry.Model unchanged. consistencyWeight defaults to 1.0 when unset or <= 0.
+func selectImageModel(entry ai.ImageProviderEntry, referenceImage, style string, consistencyWeight ...float64) string {
+	weight := 1.0
+	if len(consistencyWeight) > 0 && consistencyWeight[0] > 0 {
+		weight = consistencyWeight[0]
+	}
+	if sel := ai.ImageEngineTraitsFor(entry.ProviderName).SelectModel; sel != nil {
+		return sel(entry, referenceImage, style, weight)
+	}
+	return entry.Model
+}
+
+// klingResolutionExtra 当 provider 支持 2K 高清模式（如 kling-image）且目标尺寸 ≥ 2K
+// （较长边 ≥ 1536px）时，自动返回 Extra{"resolution": "2k"} 以启用该模式。
+// 对其他 provider 返回 nil（Volcengine 等直接通过 width/height 控制分辨率）。
+func klingResolutionExtra(providerName, size string) map[string]interface{} {
+	if !ai.ImageEngineTraitsFor(providerName).Supports2KResolution {
+		return nil
+	}
+	var w, h int
+	fmt.Sscanf(size, "%dx%d", &w, &h)
+	maxSide := w
+	if h > maxSide {
+		maxSide = h
+	}
+	if maxSide >= 1536 {
+		return map[string]interface{}{"resolution": "2k"}
+	}
+	return nil
+}
+
+// GenerateCharacterThreeView 使用图像生成 API 生成角色/场景视图图像。
+// style: 图片风格（"realistic"/"anime"/"ink_painting" 等），影响 Volcengine 模型选择。
+// 空字符串表示使用提供者默认模型。
+// consistencyWeight（可选）: 0-1，角色一致性强度；默认 1.0（严格）。
+//
+//	≥0.7 → DreamO（角色特征保持），<0.7 → SeedEditV3（指令编辑，scale 线性映射 1-10）
+func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uint, providerName, prompt, referenceImage, style, negativePrompt, sizeOverride string, consistencyWeight ...float64) (string, error) {
+	if s.aiManager == nil {
+		return "", fmt.Errorf("AI manager not initialized")
+	}
+
+	weight := 1.0
+	if len(consistencyWeight) > 0 && consistencyWeight[0] > 0 {
+		weight = consistencyWeight[0]
+	}
+	// cfgScale 以 [1,10] 编码 weight（volcengine_visual.go 中各 case 负责按 API 范围还原）
+	cfgScale := 1.0 + weight*9.0
+
+	// 指定提供者时：直接加载并调用，不走遍历逻辑
+	if providerName != "" {
+		// 找到对应的 entry（model/size）
+		var entry *ai.ImageProviderEntry
+		for _, e := range knownImageCapableProviders {
+			if e.ProviderName == providerName {
+				entry = &e
+				break
+			}
+		}
+		// 也在静态注册列表里找
+		if entry == nil {
+			for _, e := range s.aiManager.GetImageProviders() {
+				if e.ProviderName == providerName {
+					entry = &e
+					break
+				}
+			}
+		}
+		if entry == nil {
+			return "", fmt.Errorf("unknown image provider: %s", providerName)
+		}
+		provider, err := s.aiManager.GetProvider(providerName)
+		if err != nil {
+			// 静态 manager 无此 provider，尝试 DB
+			provider, err = s.getTenantProvider(tenantID, providerName)
+			if err != nil {
+				return "", fmt.Errorf("image provider %q not available: %w", providerName, err)
+			}
+		}
+		sz := sizeOverride
+		if sz == "" {
+			sz = entry.Size
+		}
+		modelName := selectImageModel(*entry, referenceImage, style, weight)
+		release, err := s.acquireModelSlotByName(ctx, tenantID, modelName)
+		if err != nil {
+			return "", err
+		}
+		defer release()
+		resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
+			Model:             modelName,
+			Prompt:            prompt,
+			NegativePrompt:    negativePrompt,
+			Size:              sz,
+			ReferenceImage:    referenceImage,
+			CFGScale:          cfgScale,
+			ConsistencyWeight: weight,
+			Extra:             klingResolutionExtra(entry.ProviderName, sz),
+		})
+		if err != nil {
+			return "", err
+		}
+		if resp.Error != "" {
+			return "", fmt.Errorf("image generation failed: %s", resp.Error)
+		}
+		return s.uploadImageToStorage(ctx, tenantID, resp.URL), nil
+	}
+
+	// DB 模式（providerRepo 存在）时：DB 是唯一权威来源，完全忽略静态 aiManager 的图像提供者。
+	// 这样删除/更改 DB 中的提供者可以立即生效，不受 env/config.yaml 中通用 AI key 的干扰。
+	// 纯静态模式（无 DB）：读 aiManager 静态列表，为空时回退硬编码表。
+	var entries []ai.ImageProviderEntry
+	useDB := s.providerRepo != nil
+	if useDB {
+		entries = s.loadDBImageProviderEntries(tenantID)
+	} else {
+		entries = s.aiManager.GetImageProviders()
+		if len(entries) == 0 {
+			entries = knownImageCapableProviders
+		}
+	}
+
+	if len(entries) == 0 {
+		return "", fmt.Errorf("no image providers configured")
+	}
+
+	var lastErr error
+	for _, e := range entries {
+		var provider ai.AIProvider
+		var err error
+		if useDB {
+			// 从 DB 动态加载提供者（带租户感知和缓存）
+			provider, err = s.getTenantProvider(tenantID, e.ProviderName)
+		} else {
+			provider, err = s.aiManager.GetProvider(e.ProviderName)
+		}
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		modelName := selectImageModel(e, referenceImage, style, weight)
+		logger.Printf("GenerateCharacterThreeView: trying provider=%s model=%s refImage=%v", e.ProviderName, modelName, referenceImage != "")
+		eSz := sizeOverride
+		if eSz == "" {
+			eSz = e.Size
+		}
+		release, acquireErr := s.acquireModelSlotByName(ctx, tenantID, modelName)
+		if acquireErr != nil {
+			return "", acquireErr
+		}
+		resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
+			Model:             modelName,
+			Prompt:            prompt,
+			NegativePrompt:    negativePrompt,
+			Size:              eSz,
+			ReferenceImage:    referenceImage,
+			CFGScale:          cfgScale,
+			ConsistencyWeight: weight,
+			Extra:             klingResolutionExtra(e.ProviderName, eSz),
+		})
+		release()
+		if err != nil {
+			logger.Errorf("GenerateCharacterThreeView: provider=%s failed: %v", e.ProviderName, err)
+			lastErr = err
+			continue
+		}
+		if resp.Error != "" {
+			logger.Errorf("GenerateCharacterThreeView: provider=%s error: %s", e.ProviderName, resp.Error)
+			lastErr = fmt.Errorf("image generation failed: %s", resp.Error)
+			continue
+		}
+		return s.uploadImageToStorage(ctx, tenantID, resp.URL), nil
+	}
+	return "", fmt.Errorf("no image provider available: %w", lastErr)
+}
+
+// GenerateCharacterThreeViewMulti 与 GenerateCharacterThreeView 相同，但支持传入多张参考图和自定义尺寸。
+// referenceImages：多张参考图 URL，直接传给支持多图的 API（如 DreamO image_urls[]），无需调用方拼接合图。
+// size：图片尺寸（"WxH" 格式，如 "1024x576"），覆盖提供者默认尺寸；为空时使用提供者默认值。
+// 若 referenceImages 为空，退化为纯文本生成。
+func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantID uint, providerName, prompt string, referenceImages []string, style, negativePrompt, size string, seed int64, consistencyWeight ...float64) (string, error) {
+	if s.aiManager == nil {
+		return "", fmt.Errorf("AI manager not initialized")
+	}
+
+	weight := 1.0
+	if len(consistencyWeight) > 0 && consistencyWeight[0] > 0 {
+		weight = consistencyWeight[0]
+	}
+	cfgScale := 1.0 + weight*9.0
+
+	// 取第一张图作为 selectImageModel 的存在性判断
+	firstRef := ""
+	if len(referenceImages) > 0 {
+		firstRef = referenceImages[0]
+	}
+
+	// 预先将参考图转换为 base64，供 non-volcengine-visual 提供商使用。
+	// volcengine-visual 自身在 setImageInput/setMultiImageInput 中处理相对路径；
+	// 其他提供商（doubao/kling-image 等）使用官方 image 字段，必须提供 base64 data URI 或可公开访问的 URL。
+	// 注意：OSS 图片可能存储在私有桶或签名 URL 中，Seedream/Kling 服务器无法直接访问；
+	// 因此对所有参考图（包括 https:// 绝对 URL）均主动下载并转为 base64，确保提供商能访问图片数据。
+	resolveForExternal := func(url string) string {
+		if url == "" {
+			return ""
+		}
+		// 始终 fetch 转 base64：绝对 URL（OSS）可能不被第三方 AI 服务器访问；
+		// 相对路径由 fetchImageAsBase64 拼接 serverBaseURL 处理。
+		b64 := s.fetchImageAsBase64(ctx, url)
+		if b64 != "" {
+			logger.Printf("GenerateCharacterThreeViewMulti: resolved ref %q → base64 len=%d", url, len(b64))
+			return b64
+		}
+		// fetchImageAsBase64 失败（403/404/网络错误）：说明 URL 已失效（如 Volcengine TOS 签名 URL 过期）。
+		// 不再 fallback 到原始 URL：若连本服务器都 403，Seedream 服务器下载同样会 403，
+		// 传入无效 URL 只会让 API 返回 InvalidParameter，不如直接丢弃（返回空串跳过此参考图）。
+		if strings.HasPrefix(url, "http://") || strings.HasPrefix(url, "https://") {
+			logger.Warnf("GenerateCharacterThreeViewMulti: ref %q inaccessible (base64 fetch failed), dropping from reference images", url)
+			return ""
+		}
+		logger.Errorf("GenerateCharacterThreeViewMulti: cannot resolve ref %q — relative path with no dbMediaReader and no serverBaseURL configured; ref image will be skipped", url)
+		return ""
+	}
+	// 提取原始 HTTP URL（同步、零延迟），供支持 URL 的接口优先使用（避免 base64 大小限制）。
+	// 必须在 resolveForExternal 之前完成，因为 buildReq 中 DreamO 优先判断 refURLFirst。
+	refURLFirst := ""
+	if strings.HasPrefix(firstRef, "http://") || strings.HasPrefix(firstRef, "https://") {
+		refURLFirst = firstRef
+	}
+	var refURLSlice []string
+	for _, r := range referenceImages {
+		if strings.HasPrefix(r, "http://") || strings.HasPrefix(r, "https://") {
+			refURLSlice = append(refURLSlice, r)
+		}
+	}
+
+	// 判断是否需要 base64：
+	// - volcengine-visual 的新一代 Jimeng 模型（T2Iv40/Seedream46/T2Iv31/T2Iv30/I2Iv30）仅使用 image_urls（HTTP URL），base64 无效
+	// - volcengine-visual 的 DreamO/SeedEditV3：有 HTTP URL 时优先走 URL 分支（buildReq 中已判断）
+	// - 非 volcengine-visual 提供商（doubao/kling-image 等）：必须 base64（OSS 私有 URL 无法被第三方服务器访问）
+	// 只有当"所有参考图都有 HTTP URL + 所有提供商都是 volcengine-visual"时，才可完全跳过 base64 下载。
+	allRefsAreHTTP := len(refURLSlice) == len(referenceImages) && len(referenceImages) > 0
+	// preCheckEntries 仅用于 needsBase64 判断，与后续 provider 循环中的 entries 变量隔离。
+	var preCheckEntries []ai.ImageProviderEntry
+	if providerName == "" {
+		preCheckEntries = s.loadDBImageProviderEntries(tenantID)
+	}
+	allEntriesAcceptURL := ai.ImageRefModeFor(providerName, "") != ai.ImageRefModeBase64Only
+	if !allEntriesAcceptURL && len(preCheckEntries) > 0 {
+		allEntriesAcceptURL = true
+		for _, e := range preCheckEntries {
+			if ai.ImageRefModeFor(e.ProviderName, e.Model) == ai.ImageRefModeBase64Only {
+				allEntriesAcceptURL = false
+				break
+			}
+		}
+	}
+	needsBase64 := !(allRefsAreHTTP && allEntriesAcceptURL)
+
+	// 并行下载参考图转 base64（仅在需要时执行；保持原始顺序）。
+	// 旧实现串行下载：N 张图 × 最多 30s/张 = 潜在数分钟阻塞。
+	// 并行后：总耗时 ≈ 最慢的单张图下载时间。
+	extRefs := make([]string, len(referenceImages))
+	if needsBase64 && len(referenceImages) > 0 {
+		var wg sync.WaitGroup
+		for i, r := range referenceImages {
+			wg.Add(1)
+			go func(idx int, url string) {
+				defer wg.Done()
+				extRefs[idx] = resolveForExternal(url)
+			}(i, r)
+		}
+		wg.Wait()
+		// extRefs 仍与 referenceImages 下标对齐（未压缩）。
+		// 过滤 refURLSlice / refURLFirst：只保留 base64 下载成功的对应 URL。
+		// 过期签名 URL（如 Volcengine TOS 24h 有效期）会让 extRefs[i] 为空；
+		// 若不过滤，这些 URL 仍会以 ReferenceURLs 优先通道传给 Seedream，
+		// Seedream 服务端下载时同样 403 → InvalidParameter 生成失败。
+		var filteredURLs []string
+		for i, r := range referenceImages {
+			if extRefs[i] != "" && (strings.HasPrefix(r, "http://") || strings.HasPrefix(r, "https://")) {
+				filteredURLs = append(filteredURLs, r)
+			}
+		}
+		refURLSlice = filteredURLs
+		if len(refURLSlice) > 0 {
+			refURLFirst = refURLSlice[0]
+		} else {
+			refURLFirst = ""
+		}
+		// 压缩掉空槽（下载失败的项），保持非空项有序
+		compact := extRefs[:0]
+		for _, v := range extRefs {
+			if v != "" {
+				compact = append(compact, v)
+			}
+		}
+		extRefs = compact
+	} else {
+		extRefs = extRefs[:0]
+	}
+	extFirst := ""
+	if len(extRefs) > 0 {
+		extFirst = extRefs[0]
+	}
+
+	buildReq := func(model, entrySize, provName string) *ai.ImageGenerateRequest {
+		sz := size // 优先使用调用方传入的尺寸（基于 AspectRatio+QualityTier 计算）
+		if sz == "" {
+			sz = entrySize
+		}
+		// 默认：volcengine-visual 传原始 URL（由 SDK 内部处理），其他提供商传 base64。
+		// DreamO/SeedEditV3：优先传原始 HTTP URL（image_urls 字段），由 Volcengine 服务端拉取图片。
+		// 这样可绕过 binary_data_base64 内联安全扫描的严格审核（50511 Post Img Risk Not Pass）。
+		// 仅当所有参考图均无可公开访问的 URL（纯 base64 来源）时，才退回 binary_data_base64。
+
+		return &ai.ImageGenerateRequest{
+			Model:             model,
+			Prompt:            prompt,
+			NegativePrompt:    negativePrompt,
+			Size:              sz,
+			Seed:              seed,
+			ReferenceImage:    extFirst,
+			ReferenceImages:   extRefs,
+			ReferenceURL:      refURLFirst,
+			ReferenceURLs:     refURLSlice,
+			CFGScale:          cfgScale,
+			ConsistencyWeight: weight,
+		}
+	}
+
+	if providerName != "" {
+		var entry *ai.ImageProviderEntry
+		// DB 模式优先：使用 DB 中实际配置的模型名称
+		if s.providerRepo != nil {
+			for _, e := range s.loadDBImageProviderEntries(tenantID) {
+				if e.ProviderName == providerName {
+					entry = &e
+					break
+				}
+			}
+		}
+		if entry == nil {
+			for _, e := range knownImageCapableProviders {
+				if e.ProviderName == providerName {
+					entry = &e
+					break
+				}
+			}
+		}
+		if entry == nil {
+			for _, e := range s.aiManager.GetImageProviders() {
+				if e.ProviderName == providerName {
+					entry = &e
+					break
+				}
+			}
+		}
+		if entry == nil {
+			return "", fmt.Errorf("unknown image provider: %s", providerName)
+		}
+		var provider ai.AIProvider
+		var err error
+		if s.providerRepo != nil {
+			provider, err = s.getTenantProvider(tenantID, providerName)
+		} else {
+			provider, err = s.aiManager.GetProvider(providerName)
+			if err != nil {
+				provider, err = s.getTenantProvider(tenantID, providerName)
+			}
+		}
+		if err != nil {
+			return "", fmt.Errorf("image provider %q not available: %w", providerName, err)
+		}
+		modelName := selectImageModel(*entry, firstRef, style, weight)
+		release, err := s.acquireModelSlotByName(ctx, tenantID, modelName)
+		if err != nil {
+			return "", err
+		}
+		defer release()
+		resp, err := provider.ImageGenerate(ctx, buildReq(modelName, entry.Size, entry.ProviderName))
+		if err != nil {
+			return "", err
+		}
+		if resp.Error != "" {
+			return "", fmt.Errorf("image generation failed: %s", resp.Error)
+		}
+		return s.uploadImageToStorage(ctx, tenantID, resp.URL), nil
+	}
+
+	var entries []ai.ImageProviderEntry
+	useDB := s.providerRepo != nil
+	if useDB {
+		entries = s.loadDBImageProviderEntries(tenantID)
+	} else {
+		entries = s.aiManager.GetImageProviders()
+		if len(entries) == 0 {
+			entries = knownImageCapableProviders
+		}
+	}
+	if len(entries) == 0 {
+		return "", fmt.Errorf("no image providers configured")
+	}
+
+	var lastErr error
+	for _, e := range entries {
+		var provider ai.AIProvider
+		var err error
+		if useDB {
+			provider, err = s.getTenantProvider(tenantID, e.ProviderName)
+		} else {
+			provider, err = s.aiManager.GetProvider(e.ProviderName)
+		}
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		modelName := selectImageModel(e, firstRef, style, weight)
+		{
+			// 日志：打印 extRefs 的类型分布（base64/url/unknown），方便确认参考图是否被正确预处理
+			extRefTypes := make([]string, len(extRefs))
+			for i, r := range extRefs {
+				if strings.HasPrefix(r, "data:") || (len(r) > 100 && !strings.HasPrefix(r, "http")) {
+					extRefTypes[i] = fmt.Sprintf("base64(%d)", len(r))
+				} else if strings.HasPrefix(r, "http") {
+					extRefTypes[i] = "url"
+				} else {
+					extRefTypes[i] = "unknown"
+				}
+			}
+			logger.Printf("GenerateCharacterThreeViewMulti: trying provider=%s model=%s refs=%d extRefs=%d types=%v", e.ProviderName, modelName, len(referenceImages), len(extRefs), extRefTypes)
+		}
+		release, acquireErr := s.acquireModelSlotByName(ctx, tenantID, modelName)
+		if acquireErr != nil {
+			return "", acquireErr
+		}
+		resp, err := provider.ImageGenerate(ctx, buildReq(modelName, e.Size, e.ProviderName))
+		release()
+		if err != nil {
+			logger.Errorf("GenerateCharacterThreeViewMulti: provider=%s failed: %v", e.ProviderName, err)
+			lastErr = err
+			continue
+		}
+		if resp.Error != "" {
+			logger.Errorf("GenerateCharacterThreeViewMulti: provider=%s error: %s", e.ProviderName, resp.Error)
+			lastErr = fmt.Errorf("image generation failed: %s", resp.Error)
+			continue
+		}
+		return s.uploadImageToStorage(ctx, tenantID, resp.URL), nil
+	}
+	return "", fmt.Errorf("no image provider available: %w", lastErr)
+}
+
+// imageStorageHintKey is the context key for ImageStorageHint.
+type imageStorageHintKey struct{}
+
+// ImageStorageHint carries novel/chapter metadata for OSS key building.
+type ImageStorageHint struct {
+	NovelTitle string
+	ChapterNo  int // 0 = novel-level, non-zero = chapter-level
+}
+
+// WithImageStorageHint enriches a context with novel/chapter metadata for OSS key building.
+func WithImageStorageHint(ctx context.Context, hint ImageStorageHint) context.Context {
+	return context.WithValue(ctx, imageStorageHintKey{}, hint)
+}
+
+// uploadImageToStorage 下载 AI 模型返回的临时图片 URL 并上传到持久存储（OSS/本地/DB）。
+// storageSvc 为 nil 或上传失败时降级返回原 imgURL（非致命）。
+// OSS key 格式：
+//   - 有小说+章节信息：novels/{title}/chapters/{no}/images/{uuid}.ext
+//   - 有小说信息：     novels/{title}/images/{uuid}.ext
+//   - 无信息（降级）：  images/{tenantID}/{uuid}.ext
+func (s *AIService) uploadImageToStorage(_ context.Context, tenantID uint, imgURL string) string {
+	if s.storageSvc == nil || imgURL == "" {
+		return imgURL
+	}
+	// 下载→上传使用独立 background context，避免被 HTTP 请求 context 取消
+	// （客户端断开连接会取消请求 context，但转存操作应当完成以防临时 URL 过期）
+	dlCtx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, imgURL, nil)
+	if err != nil {
+		logger.Errorf("uploadImageToStorage: build request: %v", err)
+		return imgURL
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		logger.Errorf("uploadImageToStorage: download %s: %v", imgURL, err)
+		return imgURL
+	}
+	defer resp.Body.Close()
+	const maxImageSize = 50 << 20 // 50 MB
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxImageSize+1))
+	if err != nil {
+		logger.Errorf("uploadImageToStorage: read body: %v", err)
+		return imgURL
+	}
+	if len(data) > maxImageSize {
+		logger.Printf("uploadImageToStorage: image too large (>50MB) from %s", imgURL)
+		return imgURL
+	}
+	ct := resp.Header.Get("Content-Type")
+	if ct == "" || !strings.HasPrefix(ct, "image/") {
+		ct = "image/jpeg"
+	}
+	ext := imageExtFromContentType(ct)
+	filename := uuid.New().String() + ext
+	logger.Printf("uploadImageToStorage: generated filename=%q from imgURL=%q", filename, imgURL)
+
+	key := fmt.Sprintf("images/%s", filename)
+
+	uploadCtx, uploadCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer uploadCancel()
+	persistURL, uploadErr := s.storageSvc.Upload(uploadCtx, key, bytes.NewReader(data), int64(len(data)), ct)
+	if uploadErr != nil {
+		logger.Errorf("uploadImageToStorage: upload failed (falling back to original URL): %v", uploadErr)
+		return imgURL
+	}
+	logger.Printf("uploadImageToStorage: persisted %s → %s", imgURL, persistURL)
+	return persistURL
+}
+
+// PersistExternalImage 下载外部图片 URL 并上传到持久存储（OSS），返回永久 URL。
+// 用于将 AI 服务商返回的临时签名 URL（如 Volcengine TOS 24h 过期 URL）转存为永久可访问 URL。
+// storageSvc 为 nil 或上传失败时降级返回原 URL（非致命）。
+func (s *AIService) PersistExternalImage(ctx context.Context, tenantID uint, imgURL string) string {
+	return s.uploadImageToStorage(ctx, tenantID, imgURL)
+}
+
+// fetchImageAsBase64 下载图片并返回 base64 编码的原始数据（不含 data URI 前缀）。
+// 对 /api/v1/media/* 相对路径优先用 dbMediaReader 直接读 DB，避免依赖 serverBaseURL（127.0.0.1）。
+// 下载失败时返回空字符串，由调用方决定是否降级。
+func (s *AIService) fetchImageAsBase64(ctx context.Context, imageURL string) string {
+	if imageURL == "" {
+		return ""
+	}
+	// 相对路径：优先直接读 DB，避免走 127.0.0.1 HTTP
+	if !strings.HasPrefix(imageURL, "http://") && !strings.HasPrefix(imageURL, "https://") {
+		if s.dbMediaReader != nil && strings.HasPrefix(imageURL, "/api/v1/media/") {
+			data, err := s.dbMediaReader.Get(ctx, imageURL)
+			if err == nil && len(data) > 0 {
+				return base64.StdEncoding.EncodeToString(data)
+			}
+			logger.Errorf("fetchImageAsBase64: dbMediaReader.Get(%q) failed: %v", imageURL, err)
+		}
+		// 回退：拼接 serverBaseURL（仅在明确配置了 public URL 时可用）
+		if s.serverBaseURL == "" {
+			logger.Errorf("fetchImageAsBase64: relative URL %q cannot be resolved — dbMediaReader is nil and serverBaseURL is not configured; configure server.public_url in config.yaml", imageURL)
+			return ""
+		}
+		imageURL = s.serverBaseURL + "/" + strings.TrimLeft(imageURL, "/")
+	}
+	dlCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(dlCtx, http.MethodGet, imageURL, nil)
+	if err != nil {
+		logger.Errorf("fetchImageAsBase64: build request for %s: %v", imageURL, err)
+		return ""
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		logger.Errorf("fetchImageAsBase64: download %s: %v", imageURL, err)
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		logger.Printf("fetchImageAsBase64: HTTP %d for %s", resp.StatusCode, imageURL)
+		return ""
+	}
+	const maxFetchSize = 20 << 20 // 20 MB
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxFetchSize+1))
+	if err != nil {
+		logger.Errorf("fetchImageAsBase64: read body: %v", err)
+		return ""
+	}
+	if len(data) > maxFetchSize {
+		logger.Printf("fetchImageAsBase64: image too large (>20MB) from %s", imageURL)
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(data)
+}
+
+// EditImageWithInstruction 使用支持参考图的文生图模型重新生成图片，将原图作为参考图保持视觉一致性。
+// 只使用 ai.ImageEngineTraitsFor(...).SupportsReferenceImage 为 true 的 provider
+// （doubao/qianwen T2I 端点不支持参考图，会静默忽略）。
+func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint, imageURL, instruction string) (string, error) {
+	if s.aiManager == nil {
+		return "", fmt.Errorf("AI manager not initialized")
+	}
+
+	// 将图片转为 base64，确保图片提供商服务器能取到数据
+	imgInput := s.fetchImageAsBase64(ctx, imageURL)
+	if imgInput == "" {
+		imgInput = imageURL
+		logger.Errorf("EditImageWithInstruction: base64 fetch failed, falling back to URL: %s", imageURL)
+	}
+
+	req := &ai.ImageGenerateRequest{
+		Prompt:         instruction,
+		ReferenceImage: imgInput,
+	}
+
+	var entries []ai.ImageProviderEntry
+	if s.providerRepo != nil {
+		entries = s.loadDBImageProviderEntries(tenantID)
+	} else {
+		entries = s.aiManager.GetImageProviders()
+		if len(entries) == 0 {
+			entries = knownImageCapableProviders
+		}
+	}
+
+	var lastErr error
+	var skipped []string
+	for _, e := range entries {
+		if !ai.ImageEngineTraitsFor(e.ProviderName).SupportsReferenceImage {
+			skipped = append(skipped, e.ProviderName)
+			continue
+		}
+		var provider ai.AIProvider
+		var err error
+		if s.providerRepo != nil {
+			provider, err = s.getTenantProvider(tenantID, e.ProviderName)
+		} else {
+			provider, err = s.aiManager.GetProvider(e.ProviderName)
+		}
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req.Model = selectImageModel(e, imgInput, "")
+		release, acquireErr := s.acquireModelSlotByName(ctx, tenantID, req.Model)
+		if acquireErr != nil {
+			return "", acquireErr
+		}
+		resp, err := provider.ImageGenerate(ctx, req)
+		release()
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if resp.Error != "" {
+			lastErr = fmt.Errorf("%s", resp.Error)
+			continue
+		}
+		return s.uploadImageToStorage(ctx, tenantID, resp.URL), nil
+	}
+	if lastErr != nil {
+		return "", lastErr
+	}
+	if len(skipped) > 0 {
+		return "", fmt.Errorf("已配置的图片提供商（%s）不支持参考图编辑，请配置 volcengine-visual 或 kling-image 提供商", strings.Join(skipped, ", "))
+	}
+	return "", fmt.Errorf("未配置支持参考图编辑的图片提供商，请配置 volcengine-visual（即梦AI）或 kling-image（可灵）")
+}
+
+// imageExtFromContentType 根据 Content-Type 返回图片文件扩展名。
+func imageExtFromContentType(ct string) string {
+	switch {
+	case strings.Contains(ct, "jpeg"), strings.Contains(ct, "jpg"):
+		return ".jpg"
+	case strings.Contains(ct, "png"):
+		return ".png"
+	case strings.Contains(ct, "webp"):
+		return ".webp"
+	default:
+		return ".jpg"
+	}
+}

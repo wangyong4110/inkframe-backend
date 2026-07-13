@@ -96,6 +96,25 @@ func (s *DashVectorStore) HealthCheck(ctx context.Context) error {
 	return err
 }
 
+// EnsureCollection checks GET /collections/{name}; if that errors (DashVector returns a
+// non-zero business code for an unknown collection, which doRequest surfaces as an error),
+// attempts to create it via POST /collections with the given dimension (cosine metric).
+func (s *DashVectorStore) EnsureCollection(ctx context.Context, name string, dimension int) error {
+	if _, err := s.doRequest(ctx, "GET", "/collections/"+name, nil); err == nil {
+		return nil
+	}
+	body := map[string]interface{}{
+		"name":      name,
+		"dimension": dimension,
+		"dtype":     "FLOAT",
+		"metric":    "cosine",
+	}
+	if _, err := s.doRequest(ctx, "POST", "/collections", body); err != nil {
+		return fmt.Errorf("dashvector collection create failed: %w", err)
+	}
+	return nil
+}
+
 // Store 插入/更新向量 (upsert)
 // POST /v1/collections/{collection}/docs
 func (s *DashVectorStore) Store(ctx context.Context, req *StoreRequest) (*StoreResponse, error) {

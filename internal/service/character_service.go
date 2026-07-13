@@ -1313,7 +1313,7 @@ func (s *CharacterService) AIExtractMinorChars(tenantID, novelID, chapterID uint
 
 	// 序列化同一 novel 的并发提取，防止两个任务同时读到空的 existingNames 而重复创建角色。
 	// Redis SETNX 提供跨实例互斥；本地 mutex 作为 fallback（Redis 不可用时）及进程内二次防护。
-	redisLockKey := fmt.Sprintf("lock:char:extract:%d", novelID)
+	redisLockKey := lockKey("char", "extract", novelID)
 	redisLocked := false
 	if s.cache != nil {
 		ok, err := s.cache.SetNX(context.Background(), redisLockKey, "1", 10*time.Minute).Result()

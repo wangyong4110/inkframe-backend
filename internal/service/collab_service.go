@@ -257,7 +257,7 @@ func (s *CollabService) InviteMember(novelID, inviterUserID uint, email, role st
 		existing.InviteToken = token
 		existing.InviteExpiresAt = &expiresAt
 		existing.Role = role
-		existing.Status = "pending"
+		existing.Status = model.StatusPending
 		existing.InvitedBy = inviterUserID
 		if err := s.memberRepo.Update(existing); err != nil {
 			return "", err
@@ -267,7 +267,7 @@ func (s *CollabService) InviteMember(novelID, inviterUserID uint, email, role st
 			NovelID:         novelID,
 			UserID:          target.ID,
 			Role:            role,
-			Status:          "pending",
+			Status:          model.StatusPending,
 			InvitedBy:       inviterUserID,
 			InviteToken:     token,
 			InviteExpiresAt: &expiresAt,

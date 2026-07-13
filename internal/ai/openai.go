@@ -122,7 +122,7 @@ func (p *OpenAIProvider) Generate(ctx context.Context, req *GenerateRequest) (*G
 
 	if len(openaiResp.Choices) == 0 {
 		return &GenerateResponse{
-			Error:     "no choices returned",
+			Error:      "no choices returned",
 			FinishTime: time.Since(start).Milliseconds(),
 		}, nil
 	}
@@ -204,8 +204,15 @@ func (p *OpenAIProvider) GenerateStream(ctx context.Context, req *GenerateReques
 }
 
 func (p *OpenAIProvider) Embed(ctx context.Context, text string) ([]float32, error) {
+	// p.model carries whatever the caller configured for this provider instance (e.g. the
+	// embedding model chosen in Model Management, via effectiveModelName in getTenantProvider).
+	// Previously this was hardcoded to text-embedding-ada-002, silently ignoring that config.
+	model := p.model
+	if model == "" {
+		model = "text-embedding-ada-002"
+	}
 	req := map[string]interface{}{
-		"model": "text-embedding-ada-002",
+		"model": model,
 		"input": text,
 	}
 
@@ -482,8 +489,8 @@ type OpenAIStreamChunk struct {
 	Created int64  `json:"created"`
 	Model   string `json:"model"`
 	Choices []struct {
-		Index        int `json:"index"`
-		Delta        struct {
+		Index int `json:"index"`
+		Delta struct {
 			Role             string `json:"role"`
 			Content          string `json:"content"`
 			ReasoningContent string `json:"reasoning_content"` // 混元 Hy3 / DeepSeek-R1 流式思考过程

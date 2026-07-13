@@ -172,7 +172,7 @@ func (s *NovelAnalysisService) StartAnalysis(tenantID, novelID uint, createOutli
 	ctx, cancel := context.WithCancel(context.Background())
 	task := &AnalysisTask{
 		NovelID:        novelID,
-		Status:         "pending",
+		Status:         model.StatusPending,
 		Progress:       0,
 		Step:           "准备中",
 		CreateOutlines: createOutlines,
@@ -202,7 +202,7 @@ func (s *NovelAnalysisService) ResumeAnalysis(t *model.AsyncTask, createOutlines
 	}
 	task := &AnalysisTask{
 		NovelID:        t.EntityID,
-		Status:         "pending",
+		Status:         model.StatusPending,
 		Progress:       0,
 		Step:           "恢复中...",
 		CreateOutlines: createOutlines,
@@ -656,7 +656,7 @@ func (s *NovelAnalysisService) runPipeline(ctx context.Context, task *AnalysisTa
 
 	task.setProgress(100)
 	task.setStep("分析完成")
-	task.setStatus("completed")
+	task.setStatus(model.StatusCompleted)
 	if task.taskSvc != nil && task.externalTaskID != "" {
 		task.mu.RLock()
 		ws := make([]string, len(task.Warnings))
@@ -1224,7 +1224,7 @@ func (s *NovelAnalysisService) stepCreateChapterOutlines(
 			ChapterNo: co.ChapterNo,
 			Title:     co.Title,
 			Summary:   co.Summary,
-			Status:    "draft",
+			Status:    model.StatusDraft,
 			Content:   "",
 		}
 		if err := s.chapterRepo.Create(ch); err != nil {
@@ -1254,7 +1254,7 @@ func (s *NovelAnalysisService) stepFinalize(task *AnalysisTask, novel *model.Nov
 }
 
 func (s *NovelAnalysisService) fail(task *AnalysisTask, msg string) {
-	task.setStatus("failed")
+	task.setStatus(model.StatusFailed)
 	task.setError(msg)
 	task.setStep("失败")
 	if task.taskSvc != nil && task.externalTaskID != "" {

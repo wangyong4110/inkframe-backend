@@ -348,7 +348,7 @@ func initCoreServiceGroup(repos *Repositories, aiManager *ai.ModelManager, cfg *
 	return &coreSvcs{AI: aiSvc, Model: modelSvc, Task: taskSvc, PlotPoint: plotPointSvc, Quality: qualitySvc}
 }
 
-func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, aiManager *ai.ModelManager, vectorStore *vector.StoreManager, redisClient *redis.Client) *contentSvcs {
+func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, aiManager *ai.ModelManager, vectorStore *vector.StoreManager, cfg *config.Config, redisClient *redis.Client) *contentSvcs {
 	aiSvc := core.AI
 
 	// 小说服务
@@ -383,8 +383,9 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 	// aiManager.GetProvider("") 必然失败，之前在这里查它只会在每次启动时打印一条误导性的
 	// "embedding disabled" 错误日志，而实际向量化功能完全不受影响（走的是 aiSvc）。
 	knowledgeSvc := service.NewKnowledgeService(repos.KnowledgeBaseRepo, vectorStore, nil).
-		WithRedis(redisClient). // Fix: cross-instance idempotency for plot point extraction
-		WithAIService(aiSvc)    // per-provider concurrency-controlled embedding
+		WithRedis(redisClient).                                                     // Fix: cross-instance idempotency for plot point extraction
+		WithAIService(aiSvc).                                                       // per-provider concurrency-controlled embedding
+		WithSearchConfig(cfg.KnowledgeBase.SearchLimit, cfg.KnowledgeBase.MinScore) // 0 → 内置默认值
 
 	// 章节版本 / 伏笔 / 时间线 / 角色弧光 / 风格
 	chapterVersionSvc := service.NewChapterVersionService(repos.ChapterVersionRepo, repos.ChapterRepo)
@@ -537,7 +538,7 @@ func initVideoServiceGroup(repos *Repositories, core *coreSvcs, content *content
 func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, vectorStore *vector.StoreManager, cfg *config.Config, redisClient *redis.Client) *Services {
 	core := initCoreServiceGroup(repos, aiManager, cfg, redisClient)
 	core.Task.WithDB(db)
-	content := initContentServiceGroup(db, repos, core, aiManager, vectorStore, redisClient)
+	content := initContentServiceGroup(db, repos, core, aiManager, vectorStore, cfg, redisClient)
 	video := initVideoServiceGroup(repos, core, content, cfg, redisClient)
 
 	// Cross-instance tenant subscription cache invalidation via Redis Pub/Sub.

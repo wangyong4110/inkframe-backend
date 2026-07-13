@@ -9,6 +9,9 @@ import (
 	"time"
 )
 
+// ProviderNameKling is the canonical name for the Kling (可灵) video provider.
+const ProviderNameKling = "kling"
+
 // KlingProvider 快手可灵视频生成提供者
 // v1 API: https://api-beijing.klingai.com/v1/videos/image2video  (kling-v1/v1-5/v1-6)
 // 3.x API: https://api-beijing.klingai.com/text-to-video/{model} (kling-3.0-turbo 等)
@@ -76,7 +79,13 @@ func NewKlingProvider(accessKey, secretKey, endpoint string) *KlingProvider {
 }
 
 func (p *KlingProvider) GetName() string {
-	return "kling"
+	return ProviderNameKling
+}
+
+func init() {
+	RegisterVideoEngineTraits(ProviderNameKling, VideoEngineTraits{
+		SupportsMultiImageReference: true,
+	})
 }
 
 func (p *KlingProvider) doRequest(ctx context.Context, method, path string, body interface{}) ([]byte, int, error) {

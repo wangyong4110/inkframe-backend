@@ -147,7 +147,7 @@ func (s *NovelService) Create(req *CreateNovelRequest) (*model.Novel, error) {
 		TenantID:    tenantID,
 		CreatedBy:   req.UserID,
 		Title:       req.Title,
-		Status:      "planning",
+		Status:      model.StatusPlanning,
 		WorldviewID: req.WorldviewID,
 		Meta: model.NovelMeta{
 			Description:     req.Description,
@@ -887,7 +887,7 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 			Summary:   chap.Summary,
 			TensionLevel:  chap.TensionLevel,
 			EmotionalTone: chap.EmotionalTone,
-			Status: "draft",
+			Status: model.StatusDraft,
 		}
 		if err := s.chapterRepo.Create(placeholder); err != nil {
 			logger.Errorf("GenerateOutline: create placeholder chapter %d: %v", chap.ChapterNo, err)
@@ -1150,8 +1150,8 @@ func (s *NovelService) writeCharacterSnapshots(tenantID uint, chapter *model.Cha
 	}
 	// 分布式心跳锁：30 s base TTL（每10s续期），实例崩溃后最多30s自动释放。
 	if s.cache != nil {
-		lockKey := fmt.Sprintf("lock:char:snap:%d", chapter.ID)
-		lock, ok, lockErr := acquireDistLock(s.cache, lockKey, 30*time.Second)
+		charSnapLockKey := lockKey("char", "snap", chapter.ID)
+		lock, ok, lockErr := acquireDistLock(s.cache, charSnapLockKey, 30*time.Second)
 		if lockErr != nil {
 			logger.Errorf("writeCharacterSnapshots: Redis lock error ch%d: %v, continuing without lock", chapter.ID, lockErr)
 		} else if !ok {

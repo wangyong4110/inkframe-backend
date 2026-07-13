@@ -538,3 +538,52 @@ func (p *VolcengineVisualProvider) Embed(_ context.Context, _ string) ([]float32
 func (p *VolcengineVisualProvider) AudioGenerate(_ context.Context, _ *AudioGenerateRequest) (*AudioResponse, error) {
 	return nil, fmt.Errorf("volcengine-visual 不支持音频生成")
 }
+
+func init() {
+	RegisterImageEngineTraits(ProviderNameVolcengineVisual, ImageEngineTraits{
+		SupportsReferenceImage: true,
+		SelectModel:            selectVolcengineImageModel,
+	})
+}
+
+// isRealisticStyle 判断给定风格字符串是否属于写实/摄影类风格。
+// 支持中英文：realistic / photorealistic / photography / 写实 / 真实 / 摄影
+func isRealisticStyle(style string) bool {
+	s := strings.ToLower(style)
+	return s == "realistic" || s == "real_person" ||
+		strings.Contains(s, "realistic") ||
+		strings.Contains(s, "photorealistic") || strings.Contains(s, "photography") ||
+		strings.Contains(s, "写实") || strings.Contains(s, "真实") || strings.Contains(s, "摄影") ||
+		strings.Contains(s, "真人")
+}
+
+// selectVolcengineImageModel 根据参考图、风格和一致性权重选择合适的即梦AI模型。
+// 新一代即梦模型（4.0/4.6/3.0/3.1/智能参考）由用户显式配置，保留原始选择，不做自动覆盖：
+// 这些模型对多格布局、角色设计参考图的理解显著优于旧版 DreamO/Text2ImgV3。
+// consistencyWeight：0-1，≥0.7 使用 DreamO（角色特征保持），<0.7 使用 SeedEditV3（指令编辑）。
+func selectVolcengineImageModel(entry ImageProviderEntry, referenceImage, style string, consistencyWeight float64) string {
+	switch entry.Model {
+	case VolcModelJimengSeedream46, VolcModelJimengT2Iv40,
+		VolcModelJimengT2Iv31, VolcModelJimengT2Iv30, VolcModelJimengI2Iv30:
+		return entry.Model
+	}
+	// 旧版模型（DreamO/SeedEditV3/PortraitPhoto/Text2ImgV3）：根据参考图和风格自动选择
+	if referenceImage != "" {
+		// 写实风格：即使有参考图也使用 PortraitPhoto，保证生成真实感肖像
+		if isRealisticStyle(style) {
+			return VolcModelPortraitPhoto
+		}
+		if consistencyWeight >= 0.7 {
+			return VolcModelDreamO
+		}
+		return VolcModelSeedEditV3
+	}
+	// 无参考图时：PortraitPhoto 是 I2I 模型，必须有 image_input 才能正常工作。
+	// 非写实风格（动漫/插画/仙侠等）使用 JimengT2Iv31（"风格精准"升级，对 anime/illustration 关键词的
+	// 理解和执行显著优于通用 Text2ImgV3，且 Text2ImgV3 的 high_aes 调教偏向写实高美学，动漫提示词几乎无效）。
+	// 写实或未设置风格仍用 Text2ImgV3（通用文生图，negative_prompt 完整生效）。
+	if !isRealisticStyle(style) && style != "" {
+		return VolcModelJimengT2Iv31
+	}
+	return VolcModelText2ImgV3
+}

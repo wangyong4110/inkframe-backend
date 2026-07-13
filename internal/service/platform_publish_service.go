@@ -55,8 +55,8 @@ func (s *PlatformPublishService) RecoverStalePublishRecords(ctx context.Context)
 	}
 	for _, rec := range stale {
 		if s.cache != nil {
-			lockKey := fmt.Sprintf("lock:pub:recover:%d", rec.ID)
-			ok, lockErr := s.cache.SetNX(ctx, lockKey, "1", 5*time.Minute).Result()
+			pubLockKey := lockKey("pub", "recover", rec.ID)
+			ok, lockErr := s.cache.SetNX(ctx, pubLockKey, "1", 5*time.Minute).Result()
 			if lockErr != nil || !ok {
 				continue // 另一实例正在处理
 			}

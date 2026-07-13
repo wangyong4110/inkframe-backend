@@ -288,7 +288,7 @@ func (s *TaskService) CreateWithParams(tenantID uint, taskType, title, entityTyp
 		TaskID:     prefix + "-" + uuid.New().String()[:8],
 		TenantID:   tenantID,
 		Type:       taskType,
-		Status:     "pending",
+		Status:     model.StatusPending,
 		Title:      title,
 		EntityType: entityType,
 		EntityID:   entityID,
@@ -442,7 +442,7 @@ func (s *TaskService) MarkTaskFailed(taskID string, err error) {
 	if task.RetryCount < maxRetries {
 		// Retry: reset to pending so the next cleanup cycle can resume it.
 		// Backoff is implicit: cleanup runs hourly and Boot runs on next restart.
-		task.Status = "pending"
+		task.Status = model.StatusPending
 		task.Error = fmt.Sprintf("retry %d/%d: %v", task.RetryCount, maxRetries, err)
 		logger.Printf("[TaskService] task %s moved back to pending for retry %d/%d", taskID, task.RetryCount, maxRetries)
 	} else {

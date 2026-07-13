@@ -926,7 +926,7 @@ func (s *QualityControlService) ReviewChapter(ctx context.Context, chapterID uin
 		EntityType:   model.ReviewEntityChapter,
 		EntityID:     chapterID,
 		OverallScore: review.OverallScore,
-		Status:       "pending",
+		Status:       model.StatusPending,
 		ReviewJSON:   string(reviewBytes),
 		SnapshotJSON: chapter.Content,
 	}

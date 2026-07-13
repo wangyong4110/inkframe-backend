@@ -700,7 +700,7 @@ func (s *RewriteService) CreateProject(tenantID, novelID uint, name string, leve
 		NovelID:  novelID,
 		Name:     name,
 		Level:    level,
-		Status:   "pending",
+		Status:   model.StatusPending,
 	}
 	if err := s.projectRepo.Create(project); err != nil {
 		return nil, err
@@ -760,7 +760,7 @@ func (s *RewriteService) StartAnalysis(tenantID, projectID uint) (string, error)
 	// Guard: refuse to re-run analysis on a project that already has chapter rewrite data,
 	// since generateBible deletes all ChapterRewriteTask rows before recreating them.
 	switch project.Status {
-	case "pending", "failed":
+	case model.StatusPending, model.StatusFailed:
 		// allowed: either no prior run or prior run failed before chapter data existed
 	default:
 		return "", fmt.Errorf("cannot re-run analysis on a project in status %q; delete and recreate the project to start fresh", project.Status)
@@ -793,13 +793,13 @@ func (s *RewriteService) ResumeAnalysis(t *model.AsyncTask) {
 			if r := recover(); r != nil {
 				msg := fmt.Sprintf("内部错误: %v", r)
 				s.taskSvc.Fail(taskID, msg)
-				s.projectRepo.UpdateStatus(project.ID, "failed", msg)
+				s.projectRepo.UpdateStatus(project.ID, model.StatusFailed, msg)
 			}
 		}()
 		s.taskSvc.SetRunning(taskID)
 		if err := s.runAnalysis(ctx, taskID, project); err != nil {
 			s.taskSvc.Fail(taskID, err.Error())
-			s.projectRepo.UpdateStatus(project.ID, "failed", err.Error())
+			s.projectRepo.UpdateStatus(project.ID, model.StatusFailed, err.Error())
 			return
 		}
 		s.taskSvc.Complete(taskID, map[string]interface{}{
@@ -978,7 +978,7 @@ func (s *RewriteService) generateBible(ctx context.Context, taskID string, proje
 			ProjectID:       project.ID,
 			ChapterID:       ch.ID,
 			ChapterNo:       ch.ChapterNo,
-			Status:          "pending",
+			Status:          model.StatusPending,
 			OriginalContent: ch.Content,
 		}
 		if err := s.chapterTaskRepo.Create(task); err != nil {
@@ -996,7 +996,7 @@ func (s *RewriteService) StartRewriting(tenantID, projectID uint) (string, error
 	if err != nil {
 		return "", err
 	}
-	if project.Status == "failed" {
+	if project.Status == model.StatusFailed {
 		// Allow retry only when the bible already exists (analysis completed before failure)
 		if _, err := s.bibleRepo.GetByProjectID(projectID); err != nil {
 			return "", fmt.Errorf("bible not found, please re-run analysis first: %w", err)
@@ -1036,18 +1036,18 @@ func (s *RewriteService) ResumeRewriting(t *model.AsyncTask) {
 			if r := recover(); r != nil {
 				msg := fmt.Sprintf("内部错误: %v", r)
 				s.taskSvc.Fail(taskID, msg)
-				s.projectRepo.UpdateStatus(project.ID, "failed", msg)
+				s.projectRepo.UpdateStatus(project.ID, model.StatusFailed, msg)
 			}
 		}()
 		s.taskSvc.SetRunning(taskID)
 		if err := s.runRewriting(ctx, taskID, project); err != nil {
 			s.taskSvc.Fail(taskID, err.Error())
-			s.projectRepo.UpdateStatus(project.ID, "failed", err.Error())
+			s.projectRepo.UpdateStatus(project.ID, model.StatusFailed, err.Error())
 			return
 		}
 		s.taskSvc.Complete(taskID, map[string]interface{}{
 			"project_id": t.EntityID,
-			"status":     "completed",
+			"status":     model.StatusCompleted,
 		})
 	}(t.TaskID)
 }
@@ -1075,7 +1075,7 @@ func (s *RewriteService) runRewriting(ctx context.Context, taskID string, projec
 		if ctx.Err() != nil {
 			return fmt.Errorf("task cancelled")
 		}
-		if task.Status == "completed" {
+		if task.Status == model.StatusCompleted {
 			done++
 			s.updateRewriteProgress(taskID, project.ID, total)
 			continue
@@ -1162,13 +1162,13 @@ func (s *RewriteService) runRewriting(ctx context.Context, taskID string, projec
 	}
 
 	if done == 0 && total > 0 {
-		return s.projectRepo.UpdateStatus(project.ID, "failed", "所有章节改写均失败")
+		return s.projectRepo.UpdateStatus(project.ID, model.StatusFailed, "所有章节改写均失败")
 	}
 	if failed > 0 {
 		msg := fmt.Sprintf("%d/%d 章节改写失败，其余章节已完成", failed, total)
 		return s.projectRepo.UpdateStatus(project.ID, "partial_failed", msg)
 	}
-	return s.projectRepo.UpdateStatus(project.ID, "completed", "")
+	return s.projectRepo.UpdateStatus(project.ID, model.StatusCompleted, "")
 }
 
 // rewriteChapterWithRetry manages the full retry loop for a single chapter.
@@ -1212,7 +1212,7 @@ func (s *RewriteService) rewriteChapterWithRetry(
 			logger.Errorf("[Rewrite] chapter %d attempt %d/%d AI error: %v",
 				task.ChapterNo, attempt+1, maxChapterRetries+1, err)
 			if attempt < maxChapterRetries {
-				s.chapterTaskRepo.UpdateStatus(task.ID, "pending", "")
+				s.chapterTaskRepo.UpdateStatus(task.ID, model.StatusPending, "")
 			}
 			continue
 		}
@@ -1228,7 +1228,7 @@ func (s *RewriteService) rewriteChapterWithRetry(
 		if att.TooSimilar && attempt < maxChapterRetries {
 			logger.Printf("[Rewrite] chapter %d attempt %d/%d 改写不足 lexSim=%.3f > %.2f",
 				task.ChapterNo, attempt+1, maxChapterRetries+1, att.LexSim, cfg.TargetLexSimHigh)
-			s.chapterTaskRepo.UpdateStatus(task.ID, "pending", "")
+			s.chapterTaskRepo.UpdateStatus(task.ID, model.StatusPending, "")
 			continue
 		}
 
@@ -1254,7 +1254,7 @@ func (s *RewriteService) rewriteChapterWithRetry(
 	if lastAIErr != nil {
 		errMsg = lastAIErr.Error()
 	}
-	s.chapterTaskRepo.UpdateStatus(task.ID, "failed", errMsg)
+	s.chapterTaskRepo.UpdateStatus(task.ID, model.StatusFailed, errMsg)
 	return nil, fmt.Errorf("chapter %d: %s", task.ChapterNo, errMsg)
 }
 
@@ -1453,7 +1453,7 @@ func (s *RewriteService) deAIPass(ctx context.Context, project *model.RewritePro
 func (s *RewriteService) updateRewriteProgress(taskID string, projectID uint, total int) {
 	// Query DB for actual completed count — more accurate than an in-memory counter
 	// that can drift if the task is resumed or chapters are skipped.
-	done, err := s.chapterTaskRepo.CountByProjectAndStatus(projectID, "completed")
+	done, err := s.chapterTaskRepo.CountByProjectAndStatus(projectID, model.StatusCompleted)
 	if err != nil {
 		logger.Errorf("[Rewrite] updateRewriteProgress: count failed: %v", err)
 		return
@@ -1554,7 +1554,7 @@ func (s *RewriteService) GetChapterTask(taskID uint) (*model.ChapterRewriteTask,
 }
 
 func (s *RewriteService) ApproveChapter(taskID uint) error {
-	return s.chapterTaskRepo.UpdateStatus(taskID, "completed", "")
+	return s.chapterTaskRepo.UpdateStatus(taskID, model.StatusCompleted, "")
 }
 
 // ApplyRewriteToChapter copies RewrittenContent back to the source chapter.
@@ -1656,7 +1656,7 @@ func (s *RewriteService) GetComplianceReport(projectID uint) (*ComplianceReport,
 	anySemanticComputed := false
 
 	for _, t := range tasks {
-		if t.Status != "completed" {
+		if t.Status != model.StatusCompleted {
 			continue
 		}
 		done++

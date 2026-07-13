@@ -135,7 +135,7 @@ func (s *ModelService) RunExperiment(id uint) error {
 			}
 		}
 
-		exp.Status = "completed"
+		exp.Status = model.StatusCompleted
 		exp.Progress = 100
 		if winner != nil {
 			exp.WinnerModelID = &winner.ModelID

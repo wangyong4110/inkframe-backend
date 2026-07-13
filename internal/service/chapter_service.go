@@ -243,7 +243,7 @@ func (s *ChapterService) CreateChapter(novelID uint, req *model.CreateChapterReq
 		Title:     req.Title,
 		Content:   req.Content,
 		WordCount: countChineseChars(req.Content),
-		Status:    "completed",
+		Status:    model.StatusCompleted,
 	}
 	if err := s.chapterRepo.Create(chapter); err != nil {
 		return nil, err
@@ -612,7 +612,7 @@ func (s *ChapterService) InsertChapterAfter(novelID uint, afterChapterNo int) (*
 		NovelID:   novelID,
 		ChapterNo: newNo,
 		Title:     "",
-		Status:    "draft",
+		Status:    model.StatusDraft,
 	}
 	if err := s.chapterRepo.Create(chapter); err != nil {
 		return nil, err
@@ -852,22 +852,24 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	}
 
 	// ── Step 1e: 知识库语义搜索（可选）──────────────────────
+	// 单独存进 knowledgeContext，不并入 wikiContext：知识库条目是本书已确立的 canon 设定
+	// （必须遵守），跟 wiki_search 查回来的网络百科资料（仅供参考、可能与本书设定无关）权威
+	// 等级完全不同，混进同一个变量会让模型没法区分"这条必须守住"和"这条随便参考"。
+	// 两者在模板里对应不同的 prompt 小节（见 chapter_scene_outline.j2 / chapter_from_outline.j2
+	// 的 WikiContext vs KnowledgeContext）。
+	var knowledgeContext string
 	if toolEnabled("knowledge_search") && s.mcpService != nil && s.knowledgeSvc != nil {
 		kCtx, kCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer kCancel()
 		kOut, kErr := s.mcpService.InvokeTool(kCtx, tenantID, "knowledge_search", map[string]interface{}{
 			"novel_id": novel.ID,
 			"query":    chapterMeta.summary,
-			"limit":    3,
+			"limit":    s.knowledgeSvc.DefaultSearchLimit(),
 		})
 		if kErr == nil {
 			if kText := parseKnowledgeSearchOutput(kOut); kText != "" {
-				if wikiContext != "" {
-					wikiContext += "\n\n" + kText
-				} else {
-					wikiContext = kText
-				}
-				logger.Printf("[KnowledgeSearch] chapter %d: appended knowledge context", req.ChapterNo)
+				knowledgeContext = kText
+				logger.Printf("[KnowledgeSearch] chapter %d: attached knowledge context", req.ChapterNo)
 			}
 		} else {
 			logger.Errorf("[KnowledgeSearch] chapter %d: skipped: %v", req.ChapterNo, kErr)
@@ -907,12 +909,12 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	}
 
 	sceneOutlineJSON, suggestedTitle, outlineErr := s.generateSceneOutline(
-		tenantID, novelID, req, novel, globalCtx, chapterMeta, refStories, wikiContext, storyPatternRef, prevEnding, finalChapterCtx,
+		tenantID, novelID, req, novel, globalCtx, chapterMeta, refStories, wikiContext, knowledgeContext, storyPatternRef, prevEnding, finalChapterCtx,
 	)
 	if outlineErr != nil {
 		// Fix 1+2: 将预置占位章节（如存在）标记为 failed，避免状态卡在 "generating"
-		if existing, _ := s.chapterRepo.GetByNovelAndChapterNo(novelID, req.ChapterNo); existing != nil && existing.Status == "generating" {
-			existing.Status = "failed"
+		if existing, _ := s.chapterRepo.GetByNovelAndChapterNo(novelID, req.ChapterNo); existing != nil && existing.Status == model.StatusGenerating {
+			existing.Status = model.StatusFailed
 			if updateErr := s.chapterRepo.Update(existing); updateErr != nil {
 				logger.Errorf("[ChapterService] failed to set chapter %d status=failed: %v", existing.ID, updateErr)
 			}
@@ -923,12 +925,12 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 
 	// ── Step 3: 按场景大纲生成章节内容 ───────────────────
 	content, chapterHook, err := s.generateFromSceneOutline(
-		tenantID, novelID, req, novel, sceneOutlineJSON, globalCtx, chapterMeta, refStories, wikiContext, prevEnding, finalChapterCtx,
+		tenantID, novelID, req, novel, sceneOutlineJSON, globalCtx, chapterMeta, refStories, wikiContext, knowledgeContext, prevEnding, finalChapterCtx,
 	)
 	if err != nil {
 		// Fix 1: 将预置占位章节（如存在）标记为 failed，避免状态卡在 "generating"
-		if existing, _ := s.chapterRepo.GetByNovelAndChapterNo(novelID, req.ChapterNo); existing != nil && existing.Status == "generating" {
-			existing.Status = "failed"
+		if existing, _ := s.chapterRepo.GetByNovelAndChapterNo(novelID, req.ChapterNo); existing != nil && existing.Status == model.StatusGenerating {
+			existing.Status = model.StatusFailed
 			if updateErr := s.chapterRepo.Update(existing); updateErr != nil {
 				logger.Errorf("[ChapterService] failed to set chapter %d status=failed: %v", existing.ID, updateErr)
 			}
@@ -939,8 +941,8 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 
 	// ── Content length validation ──────────────────────────────────────────────
 	if len([]rune(content)) < 100 {
-		if existing, _ := s.chapterRepo.GetByNovelAndChapterNo(novelID, req.ChapterNo); existing != nil && existing.Status == "generating" {
-			existing.Status = "failed"
+		if existing, _ := s.chapterRepo.GetByNovelAndChapterNo(novelID, req.ChapterNo); existing != nil && existing.Status == model.StatusGenerating {
+			existing.Status = model.StatusFailed
 			_ = s.chapterRepo.Update(existing)
 		}
 		recordChapterGen("error")
@@ -965,7 +967,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 		existing.TensionLevel = chapterMeta.tensionLevel
 		existing.EmotionalTone = chapterMeta.emotionalTone
 		existing.ChapterHook = chapterHook
-		existing.Status = "generating"
+		existing.Status = model.StatusGenerating
 		if err := s.chapterRepo.Update(existing); err != nil {
 			recordChapterGen("error")
 			return nil, err
@@ -983,7 +985,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 			TensionLevel:  chapterMeta.tensionLevel,
 			EmotionalTone: chapterMeta.emotionalTone,
 			ChapterHook:   chapterHook,
-			Status:        "generating",
+			Status:        model.StatusGenerating,
 		}
 		if err := s.chapterRepo.Create(chapter); err != nil {
 			recordChapterGen("error")
@@ -1031,7 +1033,7 @@ func (s *ChapterService) GenerateChapter(tenantID uint, novelID uint, req *model
 	}
 
 	// Mark chapter as completed now that all synchronous steps are done.
-	chapter.Status = "completed"
+	chapter.Status = model.StatusCompleted
 	if updateErr := s.chapterRepo.Update(chapter); updateErr != nil {
 		logger.Errorf("[ChapterService] GenerateChapter: update chapter %d [status=completed]: %v", chapter.ID, updateErr)
 	}
@@ -1376,6 +1378,7 @@ func (s *ChapterService) generateSceneOutline(
 	meta chapterOutlineMeta,
 	refStories string,
 	wikiContext string,
+	knowledgeContext string,
 	storyPatternRef string,
 	prevEnding string,
 	finalChapterCtx string,
@@ -1516,6 +1519,7 @@ func (s *ChapterService) generateSceneOutline(
 		"PlotTensionState":      plotTensionState,
 		"RefStories":            refStories,
 		"WikiContext":           wikiContext,
+		"KnowledgeContext":      knowledgeContext,
 		"StoryPatternRef":       storyPatternRef,
 		"ChapterBudget":         budgetText,
 		"CharacterRegistry":     characterRegistry,
@@ -1605,6 +1609,7 @@ func (s *ChapterService) generateSceneOutline(
 				"PlotTensionState":      plotTensionState,
 				"RefStories":            refStories,
 				"WikiContext":           wikiContext,
+				"KnowledgeContext":      knowledgeContext,
 				"StoryPatternRef":       storyPatternRef,
 				"ChapterBudget":         budgetText,
 				"CharacterRegistry":     characterRegistry,
@@ -1688,6 +1693,7 @@ func (s *ChapterService) generateFromSceneOutline(
 	meta chapterOutlineMeta,
 	refStories string,
 	wikiContext string,
+	knowledgeContext string,
 	prevEnding string,
 	finalChapterCtx string,
 ) (string, string, error) {
@@ -2182,6 +2188,7 @@ func (s *ChapterService) generateFromSceneOutline(
 		"ChapterMode":           novel.AIConfig.ChapterMode,
 		"RefStories":            refStories,
 		"WikiContext":           wikiContext,
+		"KnowledgeContext":      knowledgeContext,
 		"ChapterBudget":         budgetText,
 		"CharacterRegistry":     characterRegistry,
 		"TimelineContext":       timelineCtx,
@@ -3943,7 +3950,7 @@ func (s *ChapterService) RegenerateChapter(tenantID uint, id uint, req *model.Ge
 
 	// Reset status to "draft" so AtomicSetGenerating in GenerateChapter can acquire the lock.
 	// A completed/generating chapter would otherwise be blocked by the optimistic-lock guard.
-	_ = s.chapterRepo.UpdateStatus(chapter.ID, chapter.NovelID, "draft")
+	_ = s.chapterRepo.UpdateStatus(chapter.ID, chapter.NovelID, model.StatusDraft)
 
 	// 强制清除 Redis 生成锁（根本原因修复）：
 	// GenerateChapter 依赖 Redis SETNX 防并发，defer 释放锁。但以下场景导致锁残留：
@@ -3953,7 +3960,7 @@ func (s *ChapterService) RegenerateChapter(tenantID uint, id uint, req *model.Ge
 	// RegenerateChapter 是用户明确的"强制重新生成"意图，允许抢占孤儿锁。
 	// 并发安全：DB 层 AtomicSetGenerating (status != 'generating') 仍保护真正并发冲突。
 	if s.cache != nil {
-		redisStaleLockKey := fmt.Sprintf("lock:chgen:%d-%d", chapter.NovelID, req.ChapterNo)
+		redisStaleLockKey := lockKey("chgen", fmt.Sprintf("%d-%d", chapter.NovelID, req.ChapterNo))
 		_ = s.cache.Del(context.Background(), redisStaleLockKey).Err()
 		s.genLocks.Delete(fmt.Sprintf("%d-%d", chapter.NovelID, req.ChapterNo))
 	}
@@ -3998,7 +4005,7 @@ func (s *ChapterService) ApplyRewrittenContent(chapterID uint, newContent string
 	}
 	chapter.Content = newContent
 	chapter.WordCount = len([]rune(newContent))
-	chapter.Status = "completed"
+	chapter.Status = model.StatusCompleted
 	if err := s.chapterRepo.Update(chapter); err != nil {
 		return nil, fmt.Errorf("update chapter: %w", err)
 	}
@@ -4146,7 +4153,9 @@ func (s *ChapterVersionService) RestoreVersion(chapterID uint, versionNo int) (*
 // ──────────────────────────────────────────────
 
 // parseKnowledgeSearchOutput parses the output map from McpService.InvokeTool("knowledge_search", …)
-// into a human-readable prompt section that can be appended to WikiContext.
+// into a human-readable prompt section fed into the KnowledgeContext template variable (see
+// chapter_scene_outline.j2/chapter_from_outline.j2's "本书知识库设定" section, which already
+// supplies its own header — no need to prepend one here too).
 func parseKnowledgeSearchOutput(output map[string]interface{}) string {
 	rawResults, ok := output["results"]
 	if !ok {
@@ -4164,7 +4173,6 @@ func parseKnowledgeSearchOutput(output map[string]interface{}) string {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("【小说知识库参考】\n")
 	for _, item := range items {
 		sb.WriteString("• ")
 		sb.WriteString(item.Title)

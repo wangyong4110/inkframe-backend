@@ -693,9 +693,9 @@ func (r *NovelRepository) ListPublicSorted(f NovelPublicFilter) ([]*model.Novel,
 		base = base.Where("updated_at >= ?", cutoff)
 	}
 	if f.IsCompleted == "1" {
-		base = base.Where("status = ?", "completed")
+		base = base.Where("status = ?", model.StatusCompleted)
 	} else if f.IsCompleted == "0" {
-		base = base.Where("status IN ?", []string{"planning", "writing", "paused"})
+		base = base.Where("status IN ?", []string{model.StatusPlanning, "writing", "paused"})
 	}
 	if err := base.Session(&gorm.Session{}).Count(&total).Error; err != nil {
 		return nil, 0, err
@@ -737,7 +737,7 @@ func (r *NovelRepository) GetPublicRanking(rankType, gender string, limit int) (
 		cutoff := time.Now().AddDate(0, -1, 0)
 		base = base.Where("published_at >= ?", cutoff).Order("published_at DESC")
 	case "completed":
-		base = base.Where("status = ?", "completed").Order("hot_score DESC")
+		base = base.Where("status = ?", model.StatusCompleted).Order("hot_score DESC")
 	case "favorites":
 		base = base.Order("hot_score DESC, published_at DESC")
 	case "updated":

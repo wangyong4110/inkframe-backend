@@ -249,8 +249,13 @@ func (p *QianwenProvider) GenerateStream(ctx context.Context, req *GenerateReque
 }
 
 func (p *QianwenProvider) Embed(ctx context.Context, text string) ([]float32, error) {
+	// See OpenAIProvider.Embed: use the configured embedding model instead of a hardcoded one.
+	model := p.model
+	if model == "" {
+		model = "text-embedding-v3"
+	}
 	apiReq := map[string]interface{}{
-		"model": "text-embedding-v3",
+		"model": model,
 		"input": text,
 	}
 	body, _ := json.Marshal(apiReq)
@@ -383,7 +388,7 @@ func (p *QianwenProvider) wanxImageGenerateAsync(ctx context.Context, start time
 	}
 
 	var submitOut struct {
-		Output  struct {
+		Output struct {
 			TaskID     string `json:"task_id"`
 			TaskStatus string `json:"task_status"`
 		} `json:"output"`

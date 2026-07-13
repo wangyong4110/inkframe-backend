@@ -39,7 +39,23 @@ func NewHappyHorseProvider(apiKey, endpoint string) *HappyHorseProvider {
 	}
 }
 
-func (p *HappyHorseProvider) GetName() string { return "happyhorse" }
+// ProviderNameHappyHorse is the canonical name for the Aliyun HappyHorse video provider.
+const ProviderNameHappyHorse = "happyhorse"
+
+func (p *HappyHorseProvider) GetName() string { return ProviderNameHappyHorse }
+
+func init() {
+	RegisterVideoEngineTraits(ProviderNameHappyHorse, VideoEngineTraits{
+		SupportsMultiImageReference: true,
+		NeedsPerImageAnnotation:     true,
+		DefaultResolution: func(hdEnabled bool, _ string) string {
+			if hdEnabled {
+				return "1080p"
+			}
+			return "720p"
+		},
+	})
+}
 
 func (p *HappyHorseProvider) doRequest(ctx context.Context, method, path string, body interface{}, async bool) ([]byte, int, error) {
 	var reqBody io.Reader

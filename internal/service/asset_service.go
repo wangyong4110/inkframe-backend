@@ -376,7 +376,7 @@ func (s *AssetService) RequestShare(assetID, callerID uint) (*model.AssetPublish
 	if err := s.assetRepo.UpdateFields(assetID, map[string]interface{}{"status": model.AssetStatusPendingReview}); err != nil {
 		return nil, err
 	}
-	req := &model.AssetPublishRequest{AssetID: assetID, RequestedBy: callerID, Status: "pending"}
+	req := &model.AssetPublishRequest{AssetID: assetID, RequestedBy: callerID, Status: model.StatusPending}
 	if err := s.publishReqRepo.Create(req); err != nil {
 		return nil, err
 	}
@@ -797,7 +797,7 @@ func (s *AssetService) CreateCrawlJob(tenantID uint, source, query, assetType, l
 		License:   license,
 		Limit:     limit,
 		Stats:     model.CrawlJobStats{CrawlDepth: crawlDepth, URLPattern: urlPattern},
-		CreatedBy: createdBy, Status: "pending",
+		CreatedBy: createdBy, Status: model.StatusPending,
 	}
 	if err := s.crawlRepo.Create(job); err != nil {
 		return nil, err
@@ -816,13 +816,13 @@ func (s *AssetService) RetryCrawlJob(id uint) (*model.CrawlJob, error) {
 	if err != nil {
 		return nil, err
 	}
-	if job.Status != "failed" && job.Status != "cancelled" {
+	if job.Status != model.StatusFailed && job.Status != "cancelled" {
 		return nil, errors.New("only failed or cancelled jobs can be retried")
 	}
 	if err := s.crawlRepo.Reset(id); err != nil {
 		return nil, err
 	}
-	job.Status = "pending"
+	job.Status = model.StatusPending
 	job.Stats.Imported, job.Stats.Skipped, job.Stats.Failed, job.Stats.TotalFound = 0, 0, 0, 0
 	job.Stats.ErrorMsg = ""
 	job.Stats.StartedAt, job.Stats.CompletedAt = nil, nil
@@ -903,21 +903,21 @@ func (s *AssetService) runCrawlJob(ctx context.Context, job *model.CrawlJob) {
 	}
 
 	completed := time.Now()
-	status := "completed"
+	status := model.StatusCompleted
 	if ctx.Err() != nil {
 		status = "cancelled"
 		errMsg = ""
 	} else if errMsg != "" && imported == 0 {
-		status = "failed"
+		status = model.StatusFailed
 	}
 	_ = s.crawlRepo.UpdateProgress(job.ID, imported, skipped, failed)
 	_ = s.crawlRepo.UpdateFinal(job.ID, status, totalFound, errMsg, &completed)
 
 	result := map[string]int{"imported": imported, "skipped": skipped, "failed": failed, "total_found": totalFound}
 	switch status {
-	case "completed":
+	case model.StatusCompleted:
 		_ = s.taskSvc.Complete(job.TaskID, result)
-	case "failed":
+	case model.StatusFailed:
 		_ = s.taskSvc.Fail(job.TaskID, errMsg)
 	}
 }
