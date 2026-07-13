@@ -14,10 +14,7 @@ Character description:
 {{ BasePrompt }}{% if ExtraSection %}
 
 Appearance variant notes: {{ ExtraSection }}{% endif %}
-{% if WorldviewContext %}
-Novel worldview (setting/era — visual_prompt's clothing, fabric, accessories, and craftsmanship level MUST match this; face_prompt is unaffected since it never mentions clothing):
-{{ WorldviewContext }}
-{% endif %}
+{% include "fragments/worldview_visual_context.j2" %}{% if WorldviewContext %}(applies to visual_prompt only — face_prompt is unaffected since it never mentions clothing){% endif %}
 JSON output:{% else %}你是专业的 AI 图像生成提示词工程师，专注角色设定。你的任务是将角色描述转化为两份适合即梦AI / Stable Diffusion / DreamO 的高质量详细中文视觉提示词。
 
 需要输出两份独立、各自完整的提示词：
@@ -34,8 +31,5 @@ JSON output:{% else %}你是专业的 AI 图像生成提示词工程师，专注
 {{ BasePrompt }}{% if ExtraSection %}
 
 形象补充说明：{{ ExtraSection }}{% endif %}
-{% if WorldviewContext %}
-小说世界观设定（visual_prompt 里的服装、面料、配饰、工艺水平必须与此一致；face_prompt 不受影响，因为它从不涉及服装）：
-{{ WorldviewContext }}
-{% endif %}
+{% include "fragments/worldview_visual_context.j2" %}{% if WorldviewContext %}（仅影响 visual_prompt；face_prompt 不受影响，因为它从不涉及服装）{% endif %}
 JSON 输出：{% endif %}

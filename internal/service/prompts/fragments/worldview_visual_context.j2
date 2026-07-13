@@ -1,0 +1,9 @@
+{% if WorldviewContext %}
+{% if PromptLanguage == "en" %}
+Novel worldview (setting/era — character clothing, materials, accessories, and craftsmanship/technology level must stay consistent with this):
+{{ WorldviewContext }}
+{% else %}
+小说世界观设定（角色服装、面料、配饰、工艺/科技水平必须与此保持一致）：
+{{ WorldviewContext }}
+{% endif %}
+{% endif %}
