@@ -2280,7 +2280,7 @@ func (s *AssetService) autoTagAsset(ctx context.Context, asset *model.Asset) err
 		var prompt string
 		prompt, err = renderPrompt("asset_auto_tag", nil)
 		if err == nil {
-			rawJSON, err = s.aiSvc.GenerateWithVision(prompt, []string{asset.MediaMeta.StorageURL})
+			rawJSON, err = s.aiSvc.GenerateWithVision(asset.TenantID, prompt, []string{asset.MediaMeta.StorageURL})
 		}
 	} else {
 		// Non-image: text-based tag generation from title + type

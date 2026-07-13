@@ -1218,21 +1218,17 @@ func (s *AIService) callAI(prompt string, config *taskConfig) (string, error) {
 
 // GenerateWithVision 使用 Vision AI 分析图像内容
 // 优先使用 anthropic（claude-3），其次 openai（gpt-4o），都失败则用默认 provider
-func (s *AIService) GenerateWithVision(prompt string, imageURLs []string) (string, error) {
-	if s.aiManager == nil {
-		return "", fmt.Errorf("AI manager not initialized")
-	}
-
+func (s *AIService) GenerateWithVision(tenantID uint, prompt string, imageURLs []string) (string, error) {
 	var provider ai.AIProvider
 	var err error
 	for _, name := range []string{"anthropic", "openai"} {
-		provider, err = s.aiManager.GetProvider(name)
+		provider, err = s.getTenantProvider(tenantID, name)
 		if err == nil {
 			break
 		}
 	}
 	if err != nil {
-		provider, err = s.aiManager.GetProvider("")
+		provider, err = s.getTenantProvider(tenantID, "")
 		if err != nil {
 			return "", fmt.Errorf("failed to get AI provider for vision: %w", err)
 		}
@@ -1527,32 +1523,78 @@ func (s *AIService) logUsage(tenantID uint, config *taskConfig, taskType string,
 	}
 }
 
-// GenerateImage 调用AI生成图像
-func (s *AIService) GenerateImage(prompt string, options *ImageGenerationOptions) (*GeneratedImage, error) {
-	if s.aiManager == nil {
-		return nil, fmt.Errorf("AI manager not initialized")
+// GenerateImage 调用AI生成图像。DB 是唯一权威来源（同 GenerateCharacterThreeView 的 auto 分支）：
+// 按 tenantID 加载已配置的 IMAGE 类型 provider，依次尝试直到成功；无 providerRepo 时退回静态
+// aiManager（config.yaml/env 静态注册场景）。
+func (s *AIService) GenerateImage(tenantID uint, prompt string, options *ImageGenerationOptions) (*GeneratedImage, error) {
+	ctx := context.Background()
+
+	var entries []ai.ImageProviderEntry
+	useDB := s.providerRepo != nil
+	if useDB {
+		entries = s.loadDBImageProviderEntries(tenantID)
+	} else if s.aiManager != nil {
+		entries = s.aiManager.GetImageProviders()
+		if len(entries) == 0 {
+			entries = knownImageCapableProviders
+		}
 	}
-	provider, err := s.aiManager.GetProvider("")
-	if err != nil {
-		return nil, fmt.Errorf("get AI provider failed: %w", err)
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("no image providers configured")
 	}
-	req := &ai.ImageGenerateRequest{
-		Prompt:         prompt,
-		NegativePrompt: options.NegativePrompt,
-		Size:           options.Size,
-		Steps:          options.Steps,
-		CFGScale:       options.CFGScale,
+
+	var lastErr error
+	for _, e := range entries {
+		var provider ai.AIProvider
+		var err error
+		if useDB {
+			provider, err = s.getTenantProvider(tenantID, e.ProviderName)
+		} else {
+			provider, err = s.aiManager.GetProvider(e.ProviderName)
+		}
+		if err != nil {
+			lastErr = err
+			continue
+		}
+
+		modelName := selectImageModel(e, "", "")
+		release, slotErr := s.acquireModelSlotByName(ctx, tenantID, modelName)
+		if slotErr != nil {
+			lastErr = slotErr
+			continue
+		}
+		size := options.Size
+		if size == "" {
+			size = e.Size
+		}
+		resp, genErr := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
+			Model:          modelName,
+			Prompt:         prompt,
+			NegativePrompt: options.NegativePrompt,
+			Size:           size,
+			Steps:          options.Steps,
+			CFGScale:       options.CFGScale,
+		})
+		release()
+		if genErr != nil {
+			lastErr = genErr
+			continue
+		}
+		if resp.Error != "" {
+			lastErr = fmt.Errorf("image generation failed: %s", resp.Error)
+			continue
+		}
+		persistURL := s.uploadImageToStorage(ctx, tenantID, resp.URL)
+		return &GeneratedImage{
+			URL:    persistURL,
+			Width:  resp.Width,
+			Height: resp.Height,
+		}, nil
 	}
-	resp, err := provider.ImageGenerate(context.Background(), req)
-	if err != nil {
-		return nil, err
+	if lastErr != nil {
+		return nil, lastErr
 	}
-	persistURL := s.uploadImageToStorage(context.Background(), 0, resp.URL)
-	return &GeneratedImage{
-		URL:    persistURL,
-		Width:  resp.Width,
-		Height: resp.Height,
-	}, nil
+	return nil, fmt.Errorf("no image providers available")
 }
 
 // knownImageCapableProviders 已知支持图像生成的提供者及其默认模型，用于 DB 动态加载的回退路径。

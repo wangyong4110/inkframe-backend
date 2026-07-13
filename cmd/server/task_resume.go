@@ -949,7 +949,7 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			image, err := svcs.ImageGenerationService.GenerateCharacterImage(&model.GenerateImageRequest{
+			image, err := svcs.ImageGenerationService.GenerateCharacterImage(t.TenantID, &model.GenerateImageRequest{
 				Subject:     char.Name,
 				Description: char.Description,
 				Type:        params.Type,

@@ -378,19 +378,11 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 	continuitySvc := service.NewContinuityService(repos.CharacterRepo, repos.ChapterRepo).
 		WithReportRepo(repos.ContinuityReportRepo)
 
-	// 知识库服务（传入 AI provider 用于向量化）
-	var defaultAIProvider ai.AIProvider
-	if aiManager != nil {
-		if p, err := aiManager.GetProvider(""); err == nil {
-			defaultAIProvider = p
-		} else {
-			logger.Errorf("Warning: could not load default AI provider: %v — knowledge base embedding will be unavailable", err)
-		}
-	}
-	if defaultAIProvider == nil {
-		logger.Errorf("Warning: no default AI provider available; knowledge base embedding disabled")
-	}
-	knowledgeSvc := service.NewKnowledgeService(repos.KnowledgeBaseRepo, vectorStore, defaultAIProvider).
+	// 知识库服务：向量化走 WithAIService(aiSvc)（DB 里配置的 provider，按 tenant/类型加载）。
+	// legacy aiClient 参数传 nil——aiManager 从未被 RegisterProvider/SetDefault 过，
+	// aiManager.GetProvider("") 必然失败，之前在这里查它只会在每次启动时打印一条误导性的
+	// "embedding disabled" 错误日志，而实际向量化功能完全不受影响（走的是 aiSvc）。
+	knowledgeSvc := service.NewKnowledgeService(repos.KnowledgeBaseRepo, vectorStore, nil).
 		WithRedis(redisClient). // Fix: cross-instance idempotency for plot point extraction
 		WithAIService(aiSvc)    // per-provider concurrency-controlled embedding
 

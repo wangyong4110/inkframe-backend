@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/inkframe/inkframe-backend/internal/ai"
@@ -37,7 +39,7 @@ type KnowledgeService struct {
 	}
 	vectorStore *vector.StoreManager
 	aiClient    ai.AIProvider
-	aiSvc       *AIService   // optional: used for per-model concurrency-controlled embedding
+	aiSvc       *AIService    // optional: used for per-model concurrency-controlled embedding
 	cache       *redis.Client // optional: for cross-instance idempotency in ExtractAndStorePlotPoints
 }
 
@@ -96,27 +98,45 @@ func (s *KnowledgeService) GetByNovelPaged(ctx context.Context, novelID uint, pa
 	return s.kbRepo.ListByNovelPaged(novelID, page, pageSize)
 }
 
-// BulkImport 批量导入知识条目，跳过 title/content 为空的条目，返回成功入库数量
+// bulkImportConcurrency bounds how many items embed/store concurrently. StoreKnowledge's
+// embedding call already goes through AIService's per-provider rate-limited slot queue (see
+// acquireProviderSlot in ai_service.go), so firing this many at once just keeps that queue fed
+// instead of paying embedding-API round-trip latency one item at a time.
+const bulkImportConcurrency = 8
+
+// BulkImport 批量导入知识条目，跳过 title/content 为空的条目，返回成功入库数量。
+// 每条的 embedding + 向量写入是网络调用，逐条同步执行时延迟会随条目数线性叠加；这里用有界
+// 并发（bulkImportConcurrency）把它们摊开跑，DB 写入和向量写入仍然是每条各自独立完成。
 func (s *KnowledgeService) BulkImport(ctx context.Context, novelID uint, items []KnowledgeImportItem) (int, error) {
-	imported := 0
+	var imported atomic.Int32
+	sem := make(chan struct{}, bulkImportConcurrency)
+	var wg sync.WaitGroup
+
 	for _, item := range items {
 		if item.Title == "" || item.Content == "" {
 			continue
 		}
-		kb := &model.KnowledgeBase{
-			Type:    item.Type,
-			Title:   item.Title,
-			Content: item.Content,
-			Tags:    item.Tags,
-			NovelID: &novelID,
-		}
-		if err := s.StoreKnowledge(ctx, kb); err != nil {
-			logger.Errorf("KnowledgeService.BulkImport: failed to store item %q: %v", item.Title, err)
-			continue
-		}
-		imported++
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(item KnowledgeImportItem) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			kb := &model.KnowledgeBase{
+				Type:    item.Type,
+				Title:   item.Title,
+				Content: item.Content,
+				Tags:    item.Tags,
+				NovelID: &novelID,
+			}
+			if err := s.StoreKnowledge(ctx, kb); err != nil {
+				logger.Errorf("KnowledgeService.BulkImport: failed to store item %q: %v", item.Title, err)
+				return
+			}
+			imported.Add(1)
+		}(item)
 	}
-	return imported, nil
+	wg.Wait()
+	return int(imported.Load()), nil
 }
 
 // StoreKnowledge 存储知识（含向量化）
@@ -129,36 +149,51 @@ func (s *KnowledgeService) StoreKnowledge(ctx context.Context, kb *model.Knowled
 	if err := s.kbRepo.Create(kb); err != nil {
 		return err
 	}
+	return s.syncVector(ctx, kb)
+}
 
-	// 若向量库已配置，追加写向量（不影响主流程）
-	if s.vectorStore != nil && (s.aiClient != nil || s.aiSvc != nil) {
-		text := kb.Title + " " + kb.Content
-		vec, embedErr := s.embed(ctx, kb.TenantID, text)
-		if embedErr != nil {
-			// 嵌入失败：返回实际错误，让调用方感知（DB 记录已存在，数据不丢失）
-			return fmt.Errorf("KnowledgeService.StoreKnowledge: embedding failed for kb %d: %w", kb.ID, embedErr)
-		}
+// syncVector (重新)嵌入 kb.Title+kb.Content 并写入向量库，ID 与 kb.ID 一致。
+// 写入前先尝试删除同 ID 的旧向量点：Qdrant 的 PUT /points 本身是 upsert，删不删都一样；
+// 但 Chroma 的 /add 端点在 ID 已存在时会报错而不是覆盖，所以统一先删再写，三种后端下都能
+// 得到"覆盖旧向量"的效果——和 ExtractAndStorePlotPoints 里 replace-on-rerun 用的是同一套手法。
+// 调用方共用此方法，保证 create 和 update 路径的向量写入语义完全一致：
+//   - 嵌入失败：返回错误（DB 记录已落地，数据不丢，但调用方能感知向量没同步）。
+//   - 删除/写入向量失败：仅记录警告，不影响返回值。
+func (s *KnowledgeService) syncVector(ctx context.Context, kb *model.KnowledgeBase) error {
+	if s.vectorStore == nil || (s.aiClient == nil && s.aiSvc == nil) {
+		return nil
+	}
+	store := s.vectorStore.DefaultStore()
+	if store == nil {
+		return nil
+	}
 
-		store := s.vectorStore.DefaultStore()
-		if store != nil {
-			payload := map[string]interface{}{
-				"id":       kb.ID,
-				"type":     kb.Type,
-				"title":    kb.Title,
-				"content":  kb.Content,
-				"novel_id": kb.NovelID,
-			}
-			_, storeErr := store.Store(ctx, &vector.StoreRequest{
-				Collection: "knowledge_base",
-				ID:         fmt.Sprintf("%d", kb.ID),
-				Vector:     vec,
-				Payload:    payload,
-			})
-			if storeErr != nil {
-				// 向量写入失败：仅记录警告，DB 记录已成功，返回 nil
-				logger.Errorf("KnowledgeService.StoreKnowledge: vector store error for kb %d: %v", kb.ID, storeErr)
-			}
-		}
+	text := kb.Title + " " + kb.Content
+	vec, embedErr := s.embed(ctx, kb.TenantID, text)
+	if embedErr != nil {
+		return fmt.Errorf("KnowledgeService: embedding failed for kb %d: %w", kb.ID, embedErr)
+	}
+
+	idStr := fmt.Sprintf("%d", kb.ID)
+	if delErr := store.Delete(ctx, idStr); delErr != nil {
+		logger.Errorf("KnowledgeService: vector delete kb %d failed (continuing to store): %v", kb.ID, delErr)
+	}
+
+	payload := map[string]interface{}{
+		"id":       kb.ID,
+		"type":     kb.Type,
+		"title":    kb.Title,
+		"content":  kb.Content,
+		"novel_id": kb.NovelID,
+	}
+	if _, storeErr := store.Store(ctx, &vector.StoreRequest{
+		Collection: "knowledge_base",
+		ID:         idStr,
+		Vector:     vec,
+		Payload:    payload,
+	}); storeErr != nil {
+		// 向量写入失败：仅记录警告，DB 记录已成功，返回 nil
+		logger.Errorf("KnowledgeService: vector store error for kb %d: %v", kb.ID, storeErr)
 	}
 	return nil
 }
@@ -251,6 +286,7 @@ func (s *KnowledgeService) UpdateKnowledge(ctx context.Context, id uint, novelID
 	if novelID != nil && (kb.NovelID == nil || *kb.NovelID != *novelID) {
 		return nil, fmt.Errorf("knowledge entry does not belong to the specified novel")
 	}
+	textChanged := (title != "" && title != kb.Title) || (content != "" && content != kb.Content)
 	if title != "" {
 		kb.Title = title
 	}
@@ -262,6 +298,15 @@ func (s *KnowledgeService) UpdateKnowledge(ctx context.Context, id uint, novelID
 	}
 	if err := s.kbRepo.Update(kb); err != nil {
 		return nil, err
+	}
+	// 嵌入文本是 Title+Content 拼接的，只有它们变了才需要重新向量化；仅改 tags 不必重新嵌入。
+	// 这里只记警告、不把 syncVector 的错误当成本次更新失败：DB 已经改好了（编辑的核心目的已达成），
+	// 向量暂时没跟上只是搜索结果会短暂陈旧，不该让调用方以为这次编辑没生效（handler 层目前把
+	// UpdateKnowledge 的任何错误都映射成 404，若在这里返回错误会让一次成功的编辑显示为"未找到"）。
+	if textChanged {
+		if err := s.syncVector(ctx, kb); err != nil {
+			logger.Errorf("KnowledgeService.UpdateKnowledge: vector sync failed for kb %d: %v", kb.ID, err)
+		}
 	}
 	return kb, nil
 }

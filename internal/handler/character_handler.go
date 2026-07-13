@@ -674,7 +674,7 @@ func (h *CharacterHandler) AnalyzeCharacterConsistency(c *gin.Context) {
 		return
 	}
 
-	result, err := h.characterService.AnalyzeConsistency(uint(id), req.Images)
+	result, err := h.characterService.AnalyzeConsistency(getTenantID(c), uint(id), req.Images)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return

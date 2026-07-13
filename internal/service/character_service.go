@@ -1756,7 +1756,7 @@ func (s *CharacterService) BatchGenerateImages(tenantID, novelID uint, provider 
 	return succeeded, failed, nil
 }
 
-func (s *CharacterService) AnalyzeConsistency(id uint, images []string) (interface{}, error) {
+func (s *CharacterService) AnalyzeConsistency(tenantID, id uint, images []string) (interface{}, error) {
 	if len(images) == 0 {
 		return map[string]interface{}{
 			"character_id":      id,
@@ -1789,7 +1789,7 @@ Rate consistency from 0.0 (completely inconsistent) to 1.0 (perfectly consistent
 Respond with ONLY a JSON object in this exact format:
 {"score": 0.85, "notes": "brief explanation"}`, len(images), char.Name)
 
-	response, err := s.aiService.GenerateWithVision(prompt, images)
+	response, err := s.aiService.GenerateWithVision(tenantID, prompt, images)
 	if err != nil {
 		logger.Errorf("[CharacterService] AnalyzeConsistency: vision call failed for char %d: %v", id, err)
 		return map[string]interface{}{
@@ -1841,14 +1841,14 @@ type GeneratedCharacterImage struct {
 	Description string `json:"description"`
 }
 
-func (s *ImageGenerationService) GenerateCharacterImage(req *model.GenerateImageRequest) (*GeneratedCharacterImage, error) {
+func (s *ImageGenerationService) GenerateCharacterImage(tenantID uint, req *model.GenerateImageRequest) (*GeneratedCharacterImage, error) {
 	options := &ImageGenerationOptions{
 		Prompt:   fmt.Sprintf("%s, %s, %s style", req.Subject, req.Description, req.Style),
 		Size:     "1024x1024",
 		Steps:    50,
 		CFGScale: 7.5,
 	}
-	image, err := s.aiService.GenerateImage(options.Prompt, options)
+	image, err := s.aiService.GenerateImage(tenantID, options.Prompt, options)
 	if err != nil {
 		return nil, err
 	}

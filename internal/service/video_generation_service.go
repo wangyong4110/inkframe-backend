@@ -635,7 +635,7 @@ func NewFrameGeneratorService(aiService *AIService) *FrameGeneratorService {
 }
 
 // GenerateFrame 生成单帧
-func (s *FrameGeneratorService) GenerateFrame(req *FrameGenerationRequest) (*GeneratedFrame, error) {
+func (s *FrameGeneratorService) GenerateFrame(tenantID uint, req *FrameGenerationRequest) (*GeneratedFrame, error) {
 	frame := &GeneratedFrame{}
 
 	// 1. 构建提示词
@@ -677,7 +677,7 @@ func (s *FrameGeneratorService) GenerateFrame(req *FrameGenerationRequest) (*Gen
 	}
 
 	// 4. 生成图像
-	image, err := s.aiService.GenerateImage(prompt, options)
+	image, err := s.aiService.GenerateImage(tenantID, prompt, options)
 	if err != nil {
 		return nil, err
 	}
@@ -778,6 +778,7 @@ func NewConsistencyValidatorService(aiService *AIService) *ConsistencyValidatorS
 
 // ValidateConsistency 验证一致性
 func (s *ConsistencyValidatorService) ValidateConsistency(
+	tenantID uint,
 	frameURL string,
 	characters []*CharacterVisual,
 	scene *SceneVisual,
@@ -789,7 +790,7 @@ func (s *ConsistencyValidatorService) ValidateConsistency(
 
 	// 1. 验证角色一致性
 	for _, char := range characters {
-		score := s.validateCharacterConsistency(frameURL, char)
+		score := s.validateCharacterConsistency(tenantID, frameURL, char)
 		result.CharacterScores[char.CharacterID] = score
 
 		if score < 0.8 {
@@ -804,7 +805,7 @@ func (s *ConsistencyValidatorService) ValidateConsistency(
 
 	// 2. 验证场景一致性
 	if scene != nil {
-		result.SceneScore = s.validateSceneConsistency(frameURL, scene)
+		result.SceneScore = s.validateSceneConsistency(tenantID, frameURL, scene)
 
 		if result.SceneScore < 0.7 {
 			result.Issues = append(result.Issues, ConsistencyIssue{
@@ -832,7 +833,7 @@ func (s *ConsistencyValidatorService) ValidateConsistency(
 }
 
 // 验证角色一致性（Vision AI）
-func (s *ConsistencyValidatorService) validateCharacterConsistency(frameURL string, char *CharacterVisual) float64 {
+func (s *ConsistencyValidatorService) validateCharacterConsistency(tenantID uint, frameURL string, char *CharacterVisual) float64 {
 	if s.aiService == nil || char.BaseImageURL == "" || frameURL == "" {
 		return 0.85
 	}
@@ -844,7 +845,7 @@ func (s *ConsistencyValidatorService) validateCharacterConsistency(frameURL stri
 			"Return ONLY a single decimal number between 0.0 and 1.0. No explanation.",
 		char.Name,
 	)
-	result, err := s.aiService.GenerateWithVision(prompt, []string{char.BaseImageURL, frameURL})
+	result, err := s.aiService.GenerateWithVision(tenantID, prompt, []string{char.BaseImageURL, frameURL})
 	if err != nil {
 		return 0.85
 	}
@@ -852,7 +853,7 @@ func (s *ConsistencyValidatorService) validateCharacterConsistency(frameURL stri
 }
 
 // 验证场景一致性（Vision AI）
-func (s *ConsistencyValidatorService) validateSceneConsistency(frameURL string, scene *SceneVisual) float64 {
+func (s *ConsistencyValidatorService) validateSceneConsistency(tenantID uint, frameURL string, scene *SceneVisual) float64 {
 	if s.aiService == nil || frameURL == "" || scene.Name == "" {
 		return 0.85
 	}
@@ -863,7 +864,7 @@ func (s *ConsistencyValidatorService) validateSceneConsistency(frameURL string, 
 			"Return ONLY a single decimal number between 0.0 and 1.0. No explanation.",
 		scene.Name,
 	)
-	result, err := s.aiService.GenerateWithVision(prompt, []string{frameURL})
+	result, err := s.aiService.GenerateWithVision(tenantID, prompt, []string{frameURL})
 	if err != nil {
 		return 0.85
 	}
