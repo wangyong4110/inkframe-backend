@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"time"
@@ -111,6 +112,9 @@ func (p *ElevenLabsSFXProvider) AudioGenerate(ctx context.Context, req *AudioGen
 		"prompt_influence": elevenLabsSFXDefaultInfluence,
 	}
 	bodyBytes, _ := json.Marshal(reqBody)
+
+	log.Printf("[elevenlabs-sfx] AudioGenerate duration=%.2f promptInfluence=%.2f textLen=%d text=%.200q",
+		duration, elevenLabsSFXDefaultInfluence, len(text), text)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST",
 		p.endpoint+"/v1/sound-generation", bytes.NewReader(bodyBytes))

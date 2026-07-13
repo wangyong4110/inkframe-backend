@@ -546,6 +546,9 @@ func (p *DoubaoProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRe
 		ttsReq["voice"] = req.Voice
 	}
 
+	log.Printf("[doubao] AudioGenerate model=%s voice=%s speed=%.2f textLen=%d text=%.200q",
+		model, req.Voice, speed, len(req.Text), req.Text)
+
 	body, _ := json.Marshal(ttsReq)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint+"/audio/speech", bytes.NewReader(body))
 	if err != nil {

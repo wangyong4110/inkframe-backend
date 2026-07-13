@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -177,6 +178,9 @@ func (p *KlingTTSProvider) submitTask(ctx context.Context, text, voiceID, lang s
 		"voice_language": lang,
 		"voice_speed":    speed,
 	}
+
+	log.Printf("[kling-tts] submitTask voiceID=%s language=%s speed=%.2f textLen=%d text=%.200q",
+		voiceID, lang, speed, len(text), text)
 
 	respBody, status, err := p.doRequest(ctx, "POST", "/v1/audio/tts", body)
 	if err != nil {

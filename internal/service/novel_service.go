@@ -22,22 +22,22 @@ import (
 var ErrPermissionDenied = errors.New("permission denied")
 
 type NovelService struct {
-	novelRepo           *repository.NovelRepository
-	chapterRepo         *repository.ChapterRepository
-	aiService           *AIService
-	characterRepo       *repository.CharacterRepository
-	snapshotRepo        *repository.CharacterStateSnapshotRepository
-	plotPointService    *PlotPointService
-	notifSvc            *NotificationService // 可选，用于章节生成完成通知
-	outlineVersionRepo  *repository.NovelOutlineVersionRepository // 可选，大纲历史版本快照
-	memberRepo          *repository.NovelMemberRepository // 可选，用于协作成员访问校验
+	novelRepo          *repository.NovelRepository
+	chapterRepo        *repository.ChapterRepository
+	aiService          *AIService
+	characterRepo      *repository.CharacterRepository
+	snapshotRepo       *repository.CharacterStateSnapshotRepository
+	plotPointService   *PlotPointService
+	notifSvc           *NotificationService                      // 可选，用于章节生成完成通知
+	outlineVersionRepo *repository.NovelOutlineVersionRepository // 可选，大纲历史版本快照
+	memberRepo         *repository.NovelMemberRepository         // 可选，用于协作成员访问校验
 	// 广场社交
 	novelLikeRepo    *repository.NovelLikeRepository
 	novelCommentRepo *repository.NovelCommentRepository
-	novelViewDedup   sync.Map     // fallback in-process dedup when Redis unavailable
-	cache            *redis.Client // optional: cross-instance view dedup
-	stopCh           chan struct{} // closed by Shutdown() to stop background goroutines
-	onDeleteHook     func(novelID uint) // fired after a novel is deleted
+	novelViewDedup   sync.Map              // fallback in-process dedup when Redis unavailable
+	cache            *redis.Client         // optional: cross-instance view dedup
+	stopCh           chan struct{}         // closed by Shutdown() to stop background goroutines
+	onDeleteHook     func(novelID uint)    // fired after a novel is deleted
 	dramaSvc         *DramaTemplateService // 可选，短剧模板注入大纲
 }
 
@@ -118,18 +118,18 @@ func (s *NovelService) GetAIService() *AIService {
 
 // CreateNovelRequest 创建小说请求
 type CreateNovelRequest struct {
-	Title            string `json:"title" binding:"required"`
-	Description      string `json:"description"`
-	Genre            string `json:"genre" binding:"required"`
-	WorldviewID      *uint  `json:"worldview_id"`
-	CoverImage       string `json:"cover_image"`
-	Channel          string `json:"channel"`
-	TargetWordCount  int    `json:"target_word_count"`
-	TargetChapters   int    `json:"target_chapters"`
-	ChapterMode      string `json:"chapter_mode"`
-	DramaTemplateID  uint
-	TenantID         uint
-	UserID           uint
+	Title           string `json:"title" binding:"required"`
+	Description     string `json:"description"`
+	Genre           string `json:"genre" binding:"required"`
+	WorldviewID     *uint  `json:"worldview_id"`
+	CoverImage      string `json:"cover_image"`
+	Channel         string `json:"channel"`
+	TargetWordCount int    `json:"target_word_count"`
+	TargetChapters  int    `json:"target_chapters"`
+	ChapterMode     string `json:"chapter_mode"`
+	DramaTemplateID uint
+	TenantID        uint
+	UserID          uint
 }
 
 // Create 创建小说
@@ -291,10 +291,18 @@ func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequ
 
 	// ── Step 1: build the set of ink_novel columns to update atomically ──────
 	fields := map[string]interface{}{}
-	if req.Title != ""        { fields["title"] = req.Title }
-	if req.Description != ""  { fields["description"] = req.Description }
-	if req.Genre != ""        { fields["genre"] = req.Genre }
-	if req.Status != ""       { fields["status"] = req.Status }
+	if req.Title != "" {
+		fields["title"] = req.Title
+	}
+	if req.Description != "" {
+		fields["description"] = req.Description
+	}
+	if req.Genre != "" {
+		fields["genre"] = req.Genre
+	}
+	if req.Status != "" {
+		fields["status"] = req.Status
+	}
 	if req.WorldviewID != nil {
 		if *req.WorldviewID == 0 {
 			fields["worldview_id"] = nil
@@ -302,31 +310,65 @@ func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequ
 			fields["worldview_id"] = *req.WorldviewID
 		}
 	}
-	if req.CoverImage != ""     { fields["cover_image"] = req.CoverImage }
-	if req.AIModel != ""        { fields["ai_model"] = req.AIModel }
-	if req.Temperature != nil   { fields["temperature"] = *req.Temperature }
-	if req.TopP != nil          { fields["top_p"] = *req.TopP }
-	if req.MaxTokens != nil     { fields["max_tokens"] = *req.MaxTokens }
-	if req.StylePrompt != ""    { fields["style_prompt"] = req.StylePrompt }
-	if req.ImageStyle != ""     { fields["image_style"] = req.ImageStyle }
-	if req.PromptLanguage != "" { fields["prompt_language"] = req.PromptLanguage }
-	if req.ChapterMode != ""    { fields["chapter_mode"] = req.ChapterMode }
-	if req.CoreTheme != ""      { fields["core_theme"] = req.CoreTheme }
+	if req.CoverImage != "" {
+		fields["cover_image"] = req.CoverImage
+	}
+	if req.AIModel != "" {
+		fields["ai_model"] = req.AIModel
+	}
+	if req.Temperature != nil {
+		fields["temperature"] = *req.Temperature
+	}
+	if req.TopP != nil {
+		fields["top_p"] = *req.TopP
+	}
+	if req.MaxTokens != nil {
+		fields["max_tokens"] = *req.MaxTokens
+	}
+	if req.StylePrompt != "" {
+		fields["style_prompt"] = req.StylePrompt
+	}
+	if req.ImageStyle != "" {
+		fields["image_style"] = req.ImageStyle
+	}
+	if req.PromptLanguage != "" {
+		fields["prompt_language"] = req.PromptLanguage
+	}
+	if req.ChapterMode != "" {
+		fields["chapter_mode"] = req.ChapterMode
+	}
+	if req.CoreTheme != "" {
+		fields["core_theme"] = req.CoreTheme
+	}
 	if req.AutoReviewRounds != nil {
 		rounds := *req.AutoReviewRounds
-		if rounds < 0 { rounds = 0 }
-		if rounds > 5 { rounds = 5 }
+		if rounds < 0 {
+			rounds = 0
+		}
+		if rounds > 5 {
+			rounds = 5
+		}
 		fields["auto_review_rounds"] = rounds
 	}
 	if req.AutoReviewMinScore != nil {
 		score := *req.AutoReviewMinScore
-		if score < 0 { score = 0 }
-		if score > 100 { score = 100 }
+		if score < 0 {
+			score = 0
+		}
+		if score > 100 {
+			score = 100
+		}
 		fields["auto_review_min_score"] = score
 	}
-	if req.TargetWordCount != nil { fields["target_word_count"] = *req.TargetWordCount }
-	if req.TargetChapters != nil  { fields["target_chapters"] = *req.TargetChapters }
-	if req.TimeoutSeconds != nil  { fields["timeout_seconds"] = *req.TimeoutSeconds }
+	if req.TargetWordCount != nil {
+		fields["target_word_count"] = *req.TargetWordCount
+	}
+	if req.TargetChapters != nil {
+		fields["target_chapters"] = *req.TargetChapters
+	}
+	if req.TimeoutSeconds != nil {
+		fields["timeout_seconds"] = *req.TimeoutSeconds
+	}
 
 	if len(fields) > 0 {
 		if err := s.novelRepo.UpdateFields(id, fields); err != nil {
@@ -350,25 +392,63 @@ func (s *NovelService) UpdateNovel(id, tenantID uint, req *model.UpdateNovelRequ
 		}
 		vc := fresh.EnsureVideoConfig()
 		vc.NovelID = id
-		if req.VideoType != ""             { vc.Config.VideoType = req.VideoType }
-		if req.VideoResolution != ""       { vc.Config.VideoResolution = req.VideoResolution }
-		if req.VideoFPS != nil             { vc.Config.VideoFPS = *req.VideoFPS }
-		if req.VideoAspectRatio != ""      { vc.Config.VideoAspectRatio = req.VideoAspectRatio }
-		if req.CharConsistencyWeight != nil { vc.Config.CharConsistencyWeight = *req.CharConsistencyWeight }
-		if req.NarrationVoice != ""        { vc.Config.NarrationVoice = req.NarrationVoice }
-		if req.SubtitleEnabled != nil      { vc.Config.SubtitleEnabled = *req.SubtitleEnabled }
-		if req.SubtitlePosition != ""      { vc.Config.SubtitlePosition = req.SubtitlePosition }
-		if req.SubtitleFontSize != nil     { vc.Config.SubtitleFontSize = *req.SubtitleFontSize }
-		if req.SubtitleColor != ""         { vc.Config.SubtitleColor = req.SubtitleColor }
-		if req.SubtitleBgStyle != ""       { vc.Config.SubtitleBgStyle = req.SubtitleBgStyle }
-		if req.SubtitleFont != ""          { vc.Config.SubtitleFont = req.SubtitleFont }
-		if req.ColorGrade != ""            { vc.Config.ColorGrade = req.ColorGrade }
-		if req.ContrastLevel != nil        { vc.Config.ContrastLevel = *req.ContrastLevel }
-		if req.Saturation != nil           { vc.Config.Saturation = *req.Saturation }
-		if req.FilmGrain != nil            { vc.Config.FilmGrain = *req.FilmGrain }
-		if req.Vignette != nil             { vc.Config.Vignette = *req.Vignette }
-		if req.ChromaticAberration != nil  { vc.Config.ChromaticAberration = *req.ChromaticAberration }
-		if req.KlingProForAction != nil    { vc.Config.KlingProForAction = *req.KlingProForAction }
+		if req.VideoType != "" {
+			vc.Config.VideoType = req.VideoType
+		}
+		if req.VideoResolution != "" {
+			vc.Config.VideoResolution = req.VideoResolution
+		}
+		if req.VideoFPS != nil {
+			vc.Config.VideoFPS = *req.VideoFPS
+		}
+		if req.VideoAspectRatio != "" {
+			vc.Config.VideoAspectRatio = req.VideoAspectRatio
+		}
+		if req.CharConsistencyWeight != nil {
+			vc.Config.CharConsistencyWeight = *req.CharConsistencyWeight
+		}
+		if req.NarrationVoice != "" {
+			vc.Config.NarrationVoice = req.NarrationVoice
+		}
+		if req.SubtitleEnabled != nil {
+			vc.Config.SubtitleEnabled = *req.SubtitleEnabled
+		}
+		if req.SubtitlePosition != "" {
+			vc.Config.SubtitlePosition = req.SubtitlePosition
+		}
+		if req.SubtitleFontSize != nil {
+			vc.Config.SubtitleFontSize = *req.SubtitleFontSize
+		}
+		if req.SubtitleColor != "" {
+			vc.Config.SubtitleColor = req.SubtitleColor
+		}
+		if req.SubtitleBgStyle != "" {
+			vc.Config.SubtitleBgStyle = req.SubtitleBgStyle
+		}
+		if req.SubtitleFont != "" {
+			vc.Config.SubtitleFont = req.SubtitleFont
+		}
+		if req.ColorGrade != "" {
+			vc.Config.ColorGrade = req.ColorGrade
+		}
+		if req.ContrastLevel != nil {
+			vc.Config.ContrastLevel = *req.ContrastLevel
+		}
+		if req.Saturation != nil {
+			vc.Config.Saturation = *req.Saturation
+		}
+		if req.FilmGrain != nil {
+			vc.Config.FilmGrain = *req.FilmGrain
+		}
+		if req.Vignette != nil {
+			vc.Config.Vignette = *req.Vignette
+		}
+		if req.ChromaticAberration != nil {
+			vc.Config.ChromaticAberration = *req.ChromaticAberration
+		}
+		if req.KlingProForAction != nil {
+			vc.Config.KlingProForAction = *req.KlingProForAction
+		}
 		if err := s.novelRepo.SaveVideoConfig(vc); err != nil {
 			logger.Errorf("[NovelService] UpdateNovel SaveVideoConfig: %v", err)
 			return nil, fmt.Errorf("save video config: %w", err)
@@ -731,7 +811,11 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 	}
 
 	// 构建提示词
-	prompt := s.buildOutlinePrompt(novel, req)
+	prompt, err := renderPrompt("novel_outline", s.buildOutlineContext(novel, req))
+	if err != nil {
+		recordOutline("error")
+		return nil, fmt.Errorf("render outline prompt: %w", err)
+	}
 
 	// 构建 AI 参数覆盖：优先请求参数，其次项目配置
 	outlineOverrides := StoryboardOverrides{
@@ -881,13 +965,13 @@ func (s *NovelService) GenerateOutline(tenantID uint, req *GenerateOutlineReques
 			continue
 		}
 		placeholder := &model.Chapter{
-			NovelID:   novel.ID,
-			ChapterNo: chap.ChapterNo,
-			Title:     chap.Title,
-			Summary:   chap.Summary,
+			NovelID:       novel.ID,
+			ChapterNo:     chap.ChapterNo,
+			Title:         chap.Title,
+			Summary:       chap.Summary,
 			TensionLevel:  chap.TensionLevel,
 			EmotionalTone: chap.EmotionalTone,
-			Status: model.StatusDraft,
+			Status:        model.StatusDraft,
 		}
 		if err := s.chapterRepo.Create(placeholder); err != nil {
 			logger.Errorf("GenerateOutline: create placeholder chapter %d: %v", chap.ChapterNo, err)
@@ -995,82 +1079,46 @@ type OutlineResult struct {
 
 // ChapterOutline 章节大纲
 type ChapterOutline struct {
-	ChapterNo     int      `json:"chapter_no"`
-	Title         string   `json:"title"`
-	Summary       string   `json:"summary"`
-	WordCount     int      `json:"word_count"`
-	PlotPoints    []string `json:"plot_points"`
-	EmotionalTone string   `json:"emotional_tone,omitempty"`
-	TensionLevel  int      `json:"tension_level,omitempty"`
-	Hook          string   `json:"hook,omitempty"`
-	ConflictType  string   `json:"conflict_type,omitempty"`
-	Act           int      `json:"act,omitempty"`
+	ChapterNo       int      `json:"chapter_no"`
+	Title           string   `json:"title"`
+	Summary         string   `json:"summary"`
+	WordCount       int      `json:"word_count"`
+	PlotPoints      []string `json:"plot_points"`
+	EmotionalTone   string   `json:"emotional_tone,omitempty"`
+	TensionLevel    int      `json:"tension_level,omitempty"`
+	Hook            string   `json:"hook,omitempty"`
+	HookType        string   `json:"hook_type,omitempty"`
+	ConflictType    string   `json:"conflict_type,omitempty"`
+	Act             int      `json:"act,omitempty"`
+	VisualPotential string   `json:"visual_potential,omitempty"`
 }
 
-// buildOutlinePrompt 构建大纲提示词
-func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutlineRequest) string {
+// outlinePlotPointCtx 是 prompts/novel_outline.j2 中「未解决的剧情线」列表的单条数据。
+type outlinePlotPointCtx struct {
+	Type        string
+	Description string
+}
+
+// buildOutlineContext 组装大纲提示词模板（prompts/novel_outline.j2）所需的上下文变量。
+func (s *NovelService) buildOutlineContext(novel *model.Novel, req *GenerateOutlineRequest) map[string]interface{} {
 	independent := novel.AIConfig.ChapterMode == "independent"
-	var sb strings.Builder
 
-	if independent {
-		sb.WriteString(fmt.Sprintf("请为小说集《%s》生成一个详细的章节大纲。\n\n", novel.Title))
-		sb.WriteString("⚠️ 章节模式：**独立成篇**——每一章都是一个完整独立的故事，有自己的起承转合与结局，章节之间无剧情关联、无悬念延续、无跨章伏笔。\n\n")
-	} else {
-		sb.WriteString(fmt.Sprintf("请为小说《%s》生成一个详细的大纲。\n\n", novel.Title))
+	keywords := req.Keywords
+	if len(keywords) > 10 {
+		logger.Printf("[NovelService] buildOutlineContext: truncating keywords from %d to 10", len(keywords))
+		keywords = keywords[:10]
 	}
 
-	if novel.Meta.Description != "" {
-		sb.WriteString(fmt.Sprintf("故事简介：%s\n\n", novel.Meta.Description))
-	}
-
-	if len(req.Keywords) > 0 {
-		keywords := req.Keywords
-		if len(keywords) > 10 {
-			logger.Printf("[NovelService] buildOutlinePrompt: truncating keywords from %d to 10", len(keywords))
-			keywords = keywords[:10]
+	// 注入未解决剧情点（仅连贯模式需要跨章推进）
+	var plotPoints []outlinePlotPointCtx
+	if !independent && s.plotPointService != nil {
+		pps, _ := s.plotPointService.ListByNovel(novel.ID, "", true)
+		max := 8
+		if len(pps) < max {
+			max = len(pps)
 		}
-		sb.WriteString(fmt.Sprintf("关键词：%s\n\n", strings.Join(keywords, ", ")))
-	}
-
-	if req.Prompt != "" {
-		sb.WriteString(fmt.Sprintf("创作要求：%s\n\n", req.Prompt))
-	}
-
-	if independent {
-		if req.ChapterNum > 0 {
-			sb.WriteString(fmt.Sprintf("请生成 %d 个独立故事的大纲，每个故事（即每章）必须包含：标题、完整的故事概述（不少于150字，含开场/冲突/高潮/结局）、预计字数（2000-3000字）、主要剧情点。\n", req.ChapterNum))
-		} else {
-			sb.WriteString("请根据题材自行决定合适的故事数量（通常10-50个），每个故事（即每章）必须包含：标题、完整的故事概述（不少于150字，含开场/冲突/高潮/结局）、预计字数（2000-3000字）、主要剧情点。\n")
-		}
-		sb.WriteString(`
-## 每章（每个独立故事）的创作要求
-- **完整性**：必须包含清晰的开场（建立人物/处境）、核心冲突（矛盾激化）、高潮（关键对决/转折）、结局（冲突解决，情感落地）
-- **独立性**：不引用其他章节的人物、事件或伏笔；读者无需阅读其他章节即可完全理解本章
-- **禁止**：章末悬念钩子、"待续"式结尾、跨章伏笔、依赖外部背景的开头
-- **summary 必须描述完整的故事弧光**：从开场到结局，让读者知道这个故事讲了什么、如何结尾
-
-`)
-	} else {
-		if req.ChapterNum > 0 {
-			sb.WriteString(fmt.Sprintf("请生成%d章的大纲，每章包括：标题、详细剧情概述（不少于150字）、预计字数（2000-3000字）、主要剧情点。\n", req.ChapterNum))
-		} else {
-			sb.WriteString("请根据故事规模自行决定合适的章节数（通常30-200章之间），每章包括：标题、详细剧情概述（不少于150字）、预计字数（2000-3000字）、主要剧情点。\n")
-		}
-
-		// 注入未解决剧情点（仅连贯模式需要跨章推进）
-		if s.plotPointService != nil {
-			pps, _ := s.plotPointService.ListByNovel(novel.ID, "", true)
-			if len(pps) > 0 {
-				sb.WriteString("\n【未解决的剧情线（大纲需在后续章节中推进解决）】\n")
-				max := 8
-				if len(pps) < max {
-					max = len(pps)
-				}
-				for i := 0; i < max; i++ {
-					sb.WriteString(fmt.Sprintf("- [%s] %s\n", pps[i].Type, pps[i].Description))
-				}
-				sb.WriteString("\n")
-			}
+		for i := 0; i < max; i++ {
+			plotPoints = append(plotPoints, outlinePlotPointCtx{Type: pps[i].Type, Description: pps[i].Description})
 		}
 	}
 
@@ -1080,68 +1128,26 @@ func (s *NovelService) buildOutlinePrompt(novel *model.Novel, req *GenerateOutli
 	if dramaTemplateID == 0 {
 		dramaTemplateID = novel.AIConfig.DramaTemplateID
 	}
+	var dramaInjection string
 	if dramaTemplateID > 0 && s.dramaSvc != nil {
-		if injection, err := s.dramaSvc.BuildOutlineInjection(dramaTemplateID); err == nil && injection != "" {
-			sb.WriteString("\n\n")
-			sb.WriteString(injection)
-			sb.WriteString("\n")
+		if injection, err := s.dramaSvc.BuildOutlineInjection(dramaTemplateID); err == nil {
+			dramaInjection = injection
 		}
 	}
 
-	if independent {
-		sb.WriteString(`
-## 输出格式（严格遵守）
-仅输出如下 JSON 对象，禁止任何说明文字、markdown 代码块、注释或 schema 以外的额外字段：
-{
-  "title": "小说集标题",
-  "chapters": [
-    {
-      "chapter_no": 1,
-      "title": "故事标题",
-      "summary": "完整故事概述，不少于150字。必须涵盖：①开场（人物处境/矛盾引入）②核心冲突（矛盾激化过程）③高潮（关键转折或对决）④结局（冲突如何解决，情感如何落地）。禁止以悬念或"待续"结尾。",
-      "word_count": 2500,
-      "plot_points": ["剧情点1（含人物+动作+结果，20字内）", "剧情点2", "剧情点3"],
-      "emotional_tone": "紧张",
-      "tension_level": 7,
-      "hook": "",
-      "conflict_type": "人与人",
-      "act": 1
-    }
-  ]
-}
-字段类型说明：chapter_no/word_count/tension_level/act 必须是整数，其余为字符串或字符串数组。
-hook 在独立成篇模式下必须为空字符串。
-最外层必须是 {} 对象，chapters 是其中的数组字段，禁止直接返回 [] 数组。
-重要：每章 summary 字段不得少于150字，且必须描述完整的故事弧光（含结局），这是硬性要求。`)
-	} else {
-		sb.WriteString(`
-## 输出格式（严格遵守）
-仅输出如下 JSON 对象，禁止任何说明文字、markdown 代码块、注释或 schema 以外的额外字段：
-{
-  "title": "小说标题",
-  "chapters": [
-    {
-      "chapter_no": 1,
-      "title": "章节标题",
-      "summary": "章节剧情详细概述，不少于150字。必须涵盖：①场景与开场氛围（人物在哪、在做什么）②本章核心事件的起因、经过、结果③主角的关键决策或行动及其动机④与其他角色的重要互动或冲突⑤本章结尾的情绪落点与对下一章的引导。禁止用空泛语言敷衍，每章概述须有实质内容。",
-      "word_count": 2500,
-      "plot_points": ["剧情点1（含人物+动作+结果，20字内）", "剧情点2", "剧情点3"],
-      "emotional_tone": "紧张",
-      "tension_level": 7,
-      "hook": "章末悬念钩子（具体描述悬念内容，20字内）",
-      "conflict_type": "人与人",
-      "act": 1
-    }
-  ]
-}
-字段类型说明：chapter_no/word_count/tension_level/act 必须是整数，其余为字符串或字符串数组。
-最外层必须是 {} 对象，chapters 是其中的数组字段，禁止直接返回 [] 数组。
-重要：每章 summary 字段不得少于150字，这是硬性要求，AI 不得缩减。`)
+	return map[string]interface{}{
+		"Title":          novel.Title,
+		"Genre":          novel.Meta.Genre,
+		"Theme":          novel.Meta.CoreTheme,
+		"Description":    novel.Meta.Description,
+		"Independent":    independent,
+		"Keywords":       keywords,
+		"UserPrompt":     req.Prompt,
+		"ChapterNum":     req.ChapterNum,
+		"PlotPoints":     plotPoints,
+		"DramaInjection": dramaInjection,
 	}
-
-	return sb.String()
 }
-
 
 // writeCharacterSnapshots 从章节内容中提取角色状态并写入快照
 func (s *NovelService) writeCharacterSnapshots(tenantID uint, chapter *model.Chapter) {

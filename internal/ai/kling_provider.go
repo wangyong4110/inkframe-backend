@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -122,6 +123,9 @@ func (p *KlingProvider) generate3xTurbo(ctx context.Context, req *VideoGenerateR
 			AspectRatio: req.AspectRatio,
 		},
 	}
+
+	log.Printf("[kling] generate3xTurbo model=%s duration=%d resolution=%s aspectRatio=%s promptLen=%d prompt=%.200q",
+		model, dur, body.Settings.Resolution, req.AspectRatio, len(req.Prompt), req.Prompt)
 
 	respBody, status, err := p.doRequest(ctx, "POST", "/text-to-video/"+model, body)
 	if err != nil {
@@ -244,6 +248,9 @@ func (p *KlingProvider) GenerateVideo(ctx context.Context, req *VideoGenerateReq
 			"type": req.CameraMovement,
 		}
 	}
+
+	log.Printf("[kling] GenerateVideo path=%s model=%s mode=%s duration=%d cfgScale=%.2f aspectRatio=%s images=%d promptLen=%d prompt=%.200q",
+		submitPath, model, mode, int(duration), cfgScale, req.AspectRatio, len(allImages), len(req.Prompt), req.Prompt)
 
 	respBody, status, err := p.doRequest(ctx, "POST", submitPath, klingReq)
 	if err != nil {

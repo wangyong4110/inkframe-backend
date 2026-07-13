@@ -80,7 +80,7 @@ inkframe-backend/
 │   ├── repository/          # 数据访问层（含 Redis 缓存）
 │   ├── router/              # 所有路由注册
 │   ├── service/             # 业务逻辑层
-│   │   └── prompts/         # AI Prompt 模板（.j2 / .tmpl）
+│   │   └── prompts/         # AI Prompt 模板（.j2，pongo2 语法）
 │   ├── vector/              # 向量存储抽象（Qdrant / Chroma）
 │   └── oss/                 # 阿里云 OSS 客户端
 ├── config.example.yaml

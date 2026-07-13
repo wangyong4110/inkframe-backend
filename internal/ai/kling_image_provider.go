@@ -182,6 +182,13 @@ func (p *KlingImageProvider) ImageGenerate(ctx context.Context, req *ImageGenera
 		}
 	}
 
+	imageType := ""
+	if img, ok := body["image"].(string); ok && img != "" {
+		imageType = imgRefTypeLabel(img)
+	}
+	logger.Printf("kling-image: ImageGenerate model=%s aspectRatio=%s hasImage=%t imageType=%s promptLen=%d prompt=%.200q",
+		model, aspectRatio, imageType != "", imageType, len(req.Prompt), req.Prompt)
+
 	// Step 1: 提交任务
 	taskID, err := p.submitImageTask(ctx, body)
 	if err != nil {

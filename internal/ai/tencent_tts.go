@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strconv"
@@ -292,6 +293,9 @@ func (p *TencentTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenera
 	if err != nil {
 		return nil, fmt.Errorf("tencent-tts: marshal request: %w", err)
 	}
+
+	log.Printf("[tencent-tts] AudioGenerate voiceType=%d fastVoiceType=%s speed=%.2f volume=%.2f codec=%s sampleRate=%d emotion=%s textLen=%d text=%.200q",
+		voiceType, req.FastVoiceType, speed, volume, codec, sampleRate, ttsReq.EmotionCategory, len(req.Text), req.Text)
 
 	timestamp := time.Now().Unix()
 	authHeader, err := p.buildAuthHeader(timestamp, bodyBytes)

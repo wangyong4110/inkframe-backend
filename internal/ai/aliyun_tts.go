@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -141,6 +142,9 @@ func (p *AliyunTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenerat
 	if err != nil {
 		return nil, fmt.Errorf("aliyun-tts: marshal request: %w", err)
 	}
+
+	log.Printf("[aliyun-tts] AudioGenerate model=%s voice=%s emotion=%s rate=%v pitch=%v textLen=%d text=%.200q",
+		model, voice, req.Emotion, parameters["rate"], parameters["pitch"], len(req.Text), req.Text)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST",
 		p.endpoint+"/api/v1/services/audio/tts/SpeechSynthesizer", bytes.NewReader(body))

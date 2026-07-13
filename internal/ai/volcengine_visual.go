@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -388,6 +389,8 @@ func (p *VolcengineVisualProvider) setMultiImageInput(params map[string]interfac
 
 // submitTask 通过 SDK 提交异步任务，返回 task_id
 func (p *VolcengineVisualProvider) submitTask(params map[string]interface{}) (string, error) {
+	log.Printf("[volcengine-visual] submitTask params=%v", redactBase64Fields(params, "binary_data_base64"))
+
 	resp, _, err := p.svc.CVSync2AsyncSubmitTask(params)
 	if err != nil {
 		return "", fmt.Errorf("即梦AI 提交任务失败: %w", err)

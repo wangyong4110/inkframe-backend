@@ -109,6 +109,8 @@ func (p *HunyuanImageProvider) generateLite(ctx context.Context, req *ImageGener
 		body[k] = v
 	}
 
+	logger.Printf("hunyuan-image(lite): ImageGenerate resolution=%v promptLen=%d prompt=%.200q", body["resolution"], len(req.Prompt), req.Prompt)
+
 	respBytes, err := p.post(ctx, p.baseURL+hunyuanImageLitePath, body)
 	if err != nil {
 		return nil, err
@@ -158,6 +160,13 @@ func (p *HunyuanImageProvider) generateV3(ctx context.Context, req *ImageGenerat
 	for k, v := range req.Extra {
 		submitBody[k] = v
 	}
+
+	imgTypes := make([]string, len(images))
+	for i, img := range images {
+		imgTypes[i] = imgRefTypeLabel(img)
+	}
+	logger.Printf("hunyuan-image(v3.0): ImageGenerate resolution=%v images=%d types=%v promptLen=%d prompt=%.200q",
+		submitBody["resolution"], len(images), imgTypes, len(req.Prompt), req.Prompt)
 
 	respBytes, err := p.post(ctx, p.baseURL+hunyuanImageSubmitPath, submitBody)
 	if err != nil {

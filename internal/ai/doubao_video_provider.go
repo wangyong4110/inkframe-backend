@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -217,6 +218,9 @@ func (p *DoubaoVideoProvider) GenerateVideo(ctx context.Context, req *VideoGener
 	if req.WebSearchEnabled {
 		apiReq["tools"] = []map[string]string{{"type": "web_search"}}
 	}
+
+	log.Printf("[doubao-video] GenerateVideo model=%s ratio=%v resolution=%v duration=%v images=%d videos=%d audios=%d promptLen=%d prompt=%.200q",
+		model, apiReq["ratio"], apiReq["resolution"], apiReq["duration"], len(allImages), len(req.VideoURLs), len(req.AudioURLs), len(req.Prompt), req.Prompt)
 
 	respBody, status, err := p.doRequest(ctx, "POST", "/contents/generations/tasks", apiReq)
 	if err != nil {

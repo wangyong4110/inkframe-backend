@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -177,6 +178,9 @@ func (p *HappyHorseProvider) GenerateVideo(ctx context.Context, req *VideoGenera
 		"input":      input,
 		"parameters": params,
 	}
+
+	log.Printf("[happyhorse] GenerateVideo mode=%s model=%s ratio=%v resolution=%v duration=%v images=%d promptLen=%d prompt=%.200q",
+		mode, model, params["ratio"], params["resolution"], params["duration"], len(allImages), len(req.Prompt), req.Prompt)
 
 	respBody, status, err := p.doRequest(ctx, "POST",
 		"/api/v1/services/aigc/video-generation/video-synthesis",

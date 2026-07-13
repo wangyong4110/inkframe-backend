@@ -364,6 +364,13 @@ func (p *QianwenProvider) wanxImageGenerateAsync(ctx context.Context, start time
 		"parameters": params,
 	})
 
+	refType := ""
+	if hasRef {
+		refType = imgRefTypeLabel(input["ref_img"].(string))
+	}
+	log.Printf("[qianwen] wanxImageGenerateAsync model=%s size=%s hasRef=%t refType=%s promptLen=%d prompt=%.200q",
+		model, size, hasRef, refType, len(req.Prompt), req.Prompt)
+
 	submitReq, err := http.NewRequestWithContext(ctx, "POST",
 		baseURL+"/api/v1/services/aigc/text2image/image-synthesis", bytes.NewReader(body))
 	if err != nil {
@@ -505,6 +512,16 @@ func (p *QianwenProvider) wanxImageGenerateCompat(ctx context.Context, start tim
 
 	body, _ := json.Marshal(apiReq)
 	endpoint := strings.TrimRight(p.endpoint, "/")
+
+	refType := ""
+	if v, ok := apiReq["ref_image_url"]; ok {
+		refType = imgRefTypeLabel(v.(string))
+	} else if _, ok := apiReq["ref_image_base64"]; ok {
+		refType = "base64"
+	}
+	log.Printf("[qianwen] wanxImageGenerateCompat model=%s size=%s refType=%s promptLen=%d prompt=%.200q",
+		model, size, refType, len(req.Prompt), req.Prompt)
+
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint+"/images/generations", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -585,6 +602,9 @@ func (p *QianwenProvider) generateCosyVoice(ctx context.Context, text, model, vo
 	}
 	body, _ := json.Marshal(ttsReq)
 
+	log.Printf("[qianwen] generateCosyVoice model=%s voice=%s speed=%.2f textLen=%d text=%.200q",
+		model, voice, speed, len(text), text)
+
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint+"/audio/speech", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -655,6 +675,9 @@ func (p *QianwenProvider) generateQwenTTS(ctx context.Context, text, model, voic
 	}
 
 	body, _ := json.Marshal(reqBody)
+
+	log.Printf("[qianwen] generateQwenTTS model=%s voice=%s speed=%.2f textLen=%d text=%.200q",
+		model, voice, speed, len(text), text)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -72,6 +73,8 @@ func (p *KlingLipSyncProvider) GenerateLipSync(ctx context.Context, req *LipSync
 		"model_name":  model,
 		"mode":        mode,
 	}
+
+	log.Printf("[kling-lipsync] GenerateLipSync model=%s mode=%s imageURL=%s audioURL=%s", model, mode, req.ImageURL, req.AudioURL)
 
 	respBody, status, err := p.doRequest(ctx, "POST", "/v1/videos/virtual-human", body)
 	if err != nil {

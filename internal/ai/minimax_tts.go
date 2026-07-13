@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -195,6 +196,9 @@ func (p *MinimaxTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenera
 	if err != nil {
 		return nil, fmt.Errorf("minimax-tts: marshal request: %w", err)
 	}
+
+	log.Printf("[minimax-tts] AudioGenerate model=%s voiceID=%s speed=%.2f pitch=%d emotion=%s textLen=%d text=%.200q",
+		ttsReq.Model, voiceID, speed, pitch, ttsReq.VoiceSetting.Emotion, len(req.Text), req.Text)
 
 	endpoint := minimaxTTSEndpoint
 	if p.groupID != "" {

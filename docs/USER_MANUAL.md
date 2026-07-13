@@ -369,7 +369,7 @@ POST /api/v1/novels/{id}/outline
 ┌─────────────────┐    ┌──────────────────┐    ┌──────────────────┐
 │ 1. 场景大纲生成  │ →  │ 2. 正文生成       │ →  │ 3. 细节润色       │
 │ chapter_scene_  │    │ chapter_from_    │    │ refinement_pass  │
-│ outline.tmpl    │    │ outline.tmpl     │    │ .tmpl            │
+│ outline.j2      │    │ outline.j2       │    │ .j2              │
 │ 3-5个场景分解    │    │ 2000-3000字正文  │    │ 质量问题修复      │
 └─────────────────┘    └──────────────────┘    └──────────────────┘
 ```

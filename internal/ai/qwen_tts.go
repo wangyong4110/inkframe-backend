@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 )
@@ -101,6 +102,9 @@ func (p *QwenTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenerateR
 	if err != nil {
 		return nil, fmt.Errorf("qwen-tts: marshal request: %w", err)
 	}
+
+	log.Printf("[qwen-tts] AudioGenerate model=%s voice=%s emotion=%s textLen=%d text=%.200q",
+		model, voice, req.Emotion, len(req.Text), req.Text)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST",
 		p.endpoint+"/api/v1/services/aigc/multimodal-generation/generation",

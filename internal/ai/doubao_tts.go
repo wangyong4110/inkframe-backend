@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -297,6 +298,9 @@ func (p *DoubaoSpeechProvider) buildDoubaoSpeechBody(req *AudioGenerateRequest, 
 			reqParams["additions"] = string(additionsJSON)
 		}
 	}
+
+	log.Printf("[doubao-speech] AudioGenerate resourceID=%s speaker=%s subModel=%v emotion=%s language=%s dialect=%s textLen=%d text=%.200q",
+		resourceID, speaker, reqParams["model"], req.Emotion, req.Language, req.Dialect, len(req.Text), req.Text)
 
 	return json.Marshal(map[string]interface{}{"req_params": reqParams})
 }
@@ -593,6 +597,9 @@ func (p *DoubaoSpeechV1Provider) AudioGenerate(ctx context.Context, req *AudioGe
 	if err != nil {
 		return nil, fmt.Errorf("doubao-speech-v1: marshal request: %w", err)
 	}
+
+	log.Printf("[doubao-speech-v1] AudioGenerate voiceType=%s cluster=%s speedRatio=%.2f emotion=%s language=%s textLen=%d text=%.200q",
+		voiceType, cluster, speedRatio, audio.Emotion, req.Language, len(req.Text), req.Text)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", doubaoV1TTSEndpoint, bytes.NewReader(body))
 	if err != nil {

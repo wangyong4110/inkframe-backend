@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -161,6 +162,8 @@ func (p *KlingSFXProvider) submitTask(ctx context.Context, prompt string, durati
 		"prompt":   prompt,
 		"duration": duration,
 	}
+
+	log.Printf("[kling-sfx] submitTask duration=%.2f promptLen=%d prompt=%.200q", duration, len(prompt), prompt)
 
 	respBody, status, err := p.doRequest(ctx, "POST", "/v1/audio/text-to-audio", body)
 	if err != nil {

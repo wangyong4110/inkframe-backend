@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"time"
 )
@@ -93,6 +94,9 @@ func (p *FunMusicProvider) AudioGenerate(ctx context.Context, req *AudioGenerate
 	if err != nil {
 		return nil, fmt.Errorf("fun-music: marshal request: %w", err)
 	}
+
+	log.Printf("[fun-music] AudioGenerate model=%s gender=%s promptLen=%d prompt=%.200q",
+		model, gender, len(req.Text), req.Text)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", funMusicEndpoint, bytes.NewReader(body))
 	if err != nil {

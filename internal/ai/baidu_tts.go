@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -148,6 +149,9 @@ func (p *BaiduTTSProvider) AudioGenerate(ctx context.Context, req *AudioGenerate
 	params.Set("pit", fmt.Sprintf("%d", pit))
 	params.Set("vol", "5")
 	params.Set("aue", "3") // 3 = mp3
+
+	log.Printf("[baidu-tts] AudioGenerate per=%s spd=%d pit=%d aue=3 textLen=%d text=%.200q",
+		per, spd, pit, len(req.Text), req.Text)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", baiduTTSURL,
 		strings.NewReader(params.Encode()))
