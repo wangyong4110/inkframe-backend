@@ -336,21 +336,20 @@ func (h *CharacterHandler) GenerateCharacterImage(c *gin.Context) {
 	}
 	tenantID := getTenantID(c)
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeCharImageGen, "角色图片生成", "character", uint(id))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎。
 	// cmd/server/task_resume.go 里 service.TaskTypeCharImageGen 的执行函数会用 t.EntityID 重新
 	// 查一次角色拿 Name/Description（这两个字段不进 params，因为它们是角色数据不是请求参数），
 	// 再反序列化下面存的 type/emotion/action/style 调用同一个 h.imageGenService.GenerateCharacterImage。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeCharImageGen, "角色图片生成", "character", uint(id), map[string]interface{}{
 		"type":    req.Type,
 		"emotion": req.Emotion,
 		"action":  req.Action,
 		"style":   req.Style,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 	respondAccepted(c, task.TaskID, "角色图片生成任务已提交")
 }
 
@@ -383,11 +382,6 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 		return
 	}
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeThreeView, "角色三视图生成", "character", uint(id))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 
 	// 优先使用请求中的 style；未指定时降级到小说项目设置的 image_style。这个降级必须在这里做
 	// （而不是留给执行函数），因为 image_style 是"生成这一刻"小说项目设置的快照，存进 params 后
@@ -400,10 +394,14 @@ func (h *CharacterHandler) GenerateThreeView(c *gin.Context) {
 	// service.TaskTypeThreeView 的执行函数（entity_type=="character" 分支）逻辑与本函数曾经
 	// 内联的调用完全一致：用 t.EntityID 重新查角色/默认形象，反序列化 provider/style 调用
 	// GenerateThreeViewSheet。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeThreeView, "角色三视图生成", "character", uint(id), map[string]interface{}{
 		"provider": req.Provider,
 		"style":    resolvedStyle,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 
 	respondAccepted(c, task.TaskID, "三视图生成任务已提交")
 }
@@ -529,19 +527,18 @@ func (h *CharacterHandler) BatchGenerateImages(c *gin.Context) {
 		return
 	}
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeThreeView, "批量生成角色图片", "novel", uint(novelID))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 	// 执行逻辑不在这里——只创建任务记录，执行权完全交给任务引擎（internal/service/task_engine.go）。
 	// 引擎会调用 cmd/server/task_resume.go 里为 service.TaskTypeThreeView 注册的执行函数
 	// （entity_type=="novel" 分支），其逻辑与本函数曾经内联的调用完全一致：反序列化下面存的
 	// provider/force，调用 h.characterService.BatchGenerateImages。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeThreeView, "批量生成角色图片", "novel", uint(novelID), map[string]interface{}{
 		"provider": req.Provider,
 		"force":    req.Force,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 	respondAccepted(c, task.TaskID, "角色图片批量生成任务已提交")
 }
 
@@ -561,17 +558,16 @@ func (h *CharacterHandler) GenerateCharacterProfile(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeCharProfileGen, "角色档案生成", "novel", uint(novelId))
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeCharProfileGen
+	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的 description 调用同一个
+	// h.characterService.GenerateProfile）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeCharProfileGen, "角色档案生成", "novel", uint(novelId), map[string]interface{}{
+		"description": req.Description,
+	})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeCharProfileGen
-	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的 description 调用同一个
-	// h.characterService.GenerateProfile）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"description": req.Description,
-	})
 	respondAccepted(c, task.TaskID, "角色档案生成任务已提交")
 }
 
@@ -796,19 +792,18 @@ func (h *CharacterHandler) AIExtractMinorCharacters(c *gin.Context) {
 	_ = c.ShouldBindJSON(&body)
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterCharExtract, "角色分析", "chapter", chapter.ID)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterCharExtract
 	// 的执行函数在 cmd/server/task_resume.go，chapter_id 从 t.EntityID 取，novel_id/user_prompt
 	// 反序列化下面存的字段）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeChapterCharExtract, "角色分析", "chapter", chapter.ID, map[string]interface{}{
 		"novel_id":    novelID,
 		"chapter_no":  chapterNo,
 		"user_prompt": body.UserPrompt,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 	respondAccepted(c, task.TaskID, "角色分析任务已提交")
 }
 
@@ -938,15 +933,10 @@ func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
 		lang = character.VoiceConfig.VoiceLanguage
 	}
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeVoicePreview, "语音试听生成", "character", uint(id))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeVoicePreview
 	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的字段调用同一个
 	// h.aiService.AudioGenerateWithOptions + h.characterService.UpdateCharacter）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeVoicePreview, "语音试听生成", "character", uint(id), map[string]interface{}{
 		"text":        req.Text,
 		"voice_id":    voice,
 		"voice_speed": speed,
@@ -954,6 +944,10 @@ func (h *CharacterHandler) PreviewVoice(c *gin.Context) {
 		"voice_lang":  lang,
 		"char_name":   character.Name,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 	respondAccepted(c, task.TaskID, "语音试听生成任务已提交")
 }
 
@@ -1170,19 +1164,18 @@ func (h *CharacterHandler) GenerateLookVisualPrompt(c *gin.Context) {
 		return
 	}
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeLookPromptGen, "形象提示词生成", "character", uint(id))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeLookPromptGen
 	// 的执行函数在 cmd/server/task_resume.go，kind="prompt"（默认）分支反序列化下面存的
 	// description 调用同一个 h.characterService.GenerateLookVisualPrompt；GenerateAppearanceDesign
 	// 用的是 kind="design" 分支）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeLookPromptGen, "形象提示词生成", "character", uint(id), map[string]interface{}{
 		"kind":        "prompt",
 		"description": description,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 	respondAccepted(c, task.TaskID, "形象提示词生成任务已提交")
 }
 
@@ -1204,17 +1197,16 @@ func (h *CharacterHandler) GenerateAppearanceDesign(c *gin.Context) {
 		return
 	}
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeLookPromptGen, "形象设计生成", "character", uint(id))
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎。GenerateCostumeDesign 只需要
+	// charID（已是 t.EntityID），不依赖请求体，但仍需 kind="design" 区分于同 taskType 下的
+	// GenerateLookVisualPrompt 分支（见 cmd/server/task_resume.go）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeLookPromptGen, "形象设计生成", "character", uint(id), map[string]interface{}{
+		"kind": "design",
+	})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎。GenerateCostumeDesign 只需要
-	// charID（已是 t.EntityID），不依赖请求体，但仍需 kind="design" 区分于同 taskType 下的
-	// GenerateLookVisualPrompt 分支（见 cmd/server/task_resume.go）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"kind": "design",
-	})
 	respondAccepted(c, task.TaskID, "形象设计生成任务已提交")
 }
 
@@ -1247,20 +1239,19 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 		return
 	}
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeLookImageGen, "形象图片生成", "look", uint(lookID))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeLookImageGen
 	// 的执行函数在 cmd/server/task_resume.go，用 t.EntityID(=lookID) + char_id 重新查
 	// look/character 拿 visualPrompt/style/charName/currentPortrait，反序列化 type/provider
 	// 调用同一套 GeneratePortrait/GenerateThreeViewSheet）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeLookImageGen, "形象图片生成", "look", uint(lookID), map[string]interface{}{
 		"type":     req.Type,
 		"char_id":  id,
 		"provider": req.Provider,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 	respondAccepted(c, task.TaskID, "形象图片生成任务已提交")
 }
 
@@ -1298,19 +1289,18 @@ func (h *CharacterHandler) GenerateChapterCharacterImages(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeCharImageGen, "章节角色形象生成", "chapter", chapter.ID)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeCharImageGen
 	// 的执行函数在 cmd/server/task_resume.go，entity_type=="chapter" 分支用 t.EntityID
 	// 重新查章节，反序列化下面存的 novel_id/character_ids/provider 调用同一个
 	// h.characterService.GenerateChapterImages）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeCharImageGen, "章节角色形象生成", "chapter", chapter.ID, map[string]interface{}{
 		"novel_id":      novelID,
 		"character_ids": req.CharacterIDs,
 		"provider":      req.Provider,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 	respondAccepted(c, task.TaskID, "角色形象生成任务已提交")
 }

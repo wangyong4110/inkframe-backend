@@ -821,13 +821,12 @@ func (s *VideoService) SynthesizeVideo(ctx context.Context, videoID uint, tenant
 		return taskID, nil
 	}
 
-	task, err := s.taskSvc.Create(tenantID, TaskTypeVideoSynthesis, "视频合成", "video", videoID)
+	task, err := s.taskSvc.CreateWithParams(tenantID, TaskTypeVideoSynthesis, "视频合成", "video", videoID, map[string]interface{}{
+		"video_id": videoID,
+	})
 	if err != nil {
 		return "", fmt.Errorf("create task: %w", err)
 	}
-	_ = s.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"video_id": videoID,
-	})
 	logger.Printf("[SynthesizeVideo] videoID=%d: taskID=%s", videoID, task.TaskID)
 	return task.TaskID, nil
 }

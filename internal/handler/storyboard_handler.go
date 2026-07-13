@@ -51,7 +51,20 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 	// cancel 函数，让旧 goroutine 里的 AI 请求收到取消信号（而不是标记完就不管，继续跑到底）。
 	h.taskSvc.CancelActiveByEntityAndInvoke("video", uint(videoId), service.TaskTypeStoryboardGen)
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeStoryboardGen, "分镜脚本生成", "video", uint(videoId))
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeStoryboardGen
+	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的字段调用同一个
+	// h.storyboardService.GenerateStoryboardCtx）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeStoryboardGen, "分镜脚本生成", "video", uint(videoId), map[string]interface{}{
+		"chapter_id":      req.ChapterID,
+		"characters":      req.Characters,
+		"style":           req.Style,
+		"provider":        req.Provider,
+		"user_prompt":     req.UserPrompt,
+		"max_tokens":      req.MaxTokens,
+		"temperature":     req.Temperature,
+		"timeout_seconds": req.TimeoutSeconds,
+		"voice_mode":      req.VoiceMode,
+	})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
@@ -63,20 +76,6 @@ func (h *VideoHandler) GenerateStoryboard(c *gin.Context) {
 			IP: c.ClientIP(),
 		})
 	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeStoryboardGen
-	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的字段调用同一个
-	// h.storyboardService.GenerateStoryboardCtx）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"chapter_id":      req.ChapterID,
-		"characters":      req.Characters,
-		"style":           req.Style,
-		"provider":        req.Provider,
-		"user_prompt":     req.UserPrompt,
-		"max_tokens":      req.MaxTokens,
-		"temperature":     req.Temperature,
-		"timeout_seconds": req.TimeoutSeconds,
-		"voice_mode":      req.VoiceMode,
-	})
 
 	respondAccepted(c, task.TaskID, "分镜生成任务已提交")
 }
@@ -140,18 +139,17 @@ func (h *VideoHandler) ReviewStoryboard(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req) // 可选 body
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeStoryboardReview, "分镜 AI 审查", "video", uint(videoId))
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeStoryboardReview
+	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的字段调用同一个
+	// h.storyboardService.ReviewStoryboard）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeStoryboardReview, "分镜 AI 审查", "video", uint(videoId), map[string]interface{}{
+		"provider":       req.Provider,
+		"previous_score": req.PreviousScore,
+	})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeStoryboardReview
-	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的字段调用同一个
-	// h.storyboardService.ReviewStoryboard）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"provider":       req.Provider,
-		"previous_score": req.PreviousScore,
-	})
 	respondAccepted(c, task.TaskID, "分镜审查任务已提交")
 }
 
@@ -335,18 +333,17 @@ func (h *VideoHandler) OptimizeStoryboardFromReview(c *gin.Context) {
 
 	tenantID := getTenantID(c)
 	h.taskSvc.CancelActiveByEntity("video", uint(videoID), service.TaskTypeStoryboardOptimize)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeStoryboardOptimize, "分镜一键优化", "video", uint(videoID))
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeStoryboardOptimize
+	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的 review/provider 调用同一个
+	// h.storyboardService.OptimizeStoryboardFromReview）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeStoryboardOptimize, "分镜一键优化", "video", uint(videoID), map[string]interface{}{
+		"review":   req.StoryboardReview,
+		"provider": req.Provider,
+	})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeStoryboardOptimize
-	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的 review/provider 调用同一个
-	// h.storyboardService.OptimizeStoryboardFromReview）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"review":   req.StoryboardReview,
-		"provider": req.Provider,
-	})
 	respondAccepted(c, task.TaskID, "分镜优化任务已提交")
 }
 
@@ -707,19 +704,18 @@ func (h *VideoHandler) GenerateShotVideos(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeVideoGen, "视频生成", "video", uint(id))
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeVideoGen 的
+	// 执行函数在 cmd/server/task_resume.go，反序列化下面存的 video_id/mode 调用同一套
+	// GenerateAllShotVideos + PollAndStitchVideo）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeVideoGen, "视频生成", "video", uint(id), map[string]interface{}{
+		"video_id": uint(id),
+		"mode":     video.Mode,
+	})
 	if err != nil {
 		reqLogger(c).Errorf("[VideoHandler] GenerateShotVideos: create task videoID=%d err=%v", id, err)
 		respondErr(c, http.StatusInternalServerError, err.Error())
 		return
 	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeVideoGen 的
-	// 执行函数在 cmd/server/task_resume.go，反序列化下面存的 video_id/mode 调用同一套
-	// GenerateAllShotVideos + PollAndStitchVideo）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"video_id": uint(id),
-		"mode":     video.Mode,
-	})
 	respondAccepted(c, task.TaskID, "视频生成任务已提交")
 }
 

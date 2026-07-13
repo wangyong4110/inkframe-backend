@@ -29,21 +29,20 @@ func (h *VideoHandler) GenerateSingleShot(c *gin.Context) {
 	c.ShouldBindJSON(&req) //nolint:errcheck — optional body
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeAssetGen,
-		fmt.Sprintf("镜头 #%d 素材生成", shotID), "shot", uint(shotID))
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeAssetGen 的
+	// 执行函数在 cmd/server/task_resume.go，source="single_shot" 分支反序列化下面存的字段
+	// 调用同一套 GenerateSingleShot + PollSingleShotUntilDone）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeAssetGen,
+		fmt.Sprintf("镜头 #%d 素材生成", shotID), "shot", uint(shotID), map[string]interface{}{
+			"source":   "single_shot",
+			"video_id": uint(videoID),
+			"shot_id":  uint(shotID),
+			"provider": req.Provider,
+		})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeAssetGen 的
-	// 执行函数在 cmd/server/task_resume.go，source="single_shot" 分支反序列化下面存的字段
-	// 调用同一套 GenerateSingleShot + PollSingleShotUntilDone）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"source":   "single_shot",
-		"video_id": uint(videoID),
-		"shot_id":  uint(shotID),
-		"provider": req.Provider,
-	})
 	respondAccepted(c, task.TaskID, "素材生成任务已提交")
 }
 
@@ -64,20 +63,19 @@ func (h *VideoHandler) BatchGenerateShots(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeAssetGen,
-		fmt.Sprintf("批量生成 %d 个镜头素材", len(req.ShotIDs)), "video", uint(videoID))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeAssetGen 的
 	// 执行函数在 cmd/server/task_resume.go，source="batch_shots" 分支反序列化下面存的整个
 	// req 结构体，按 VoiceFirst/Sequential/默认三种模式调用同一套 service 方法 +
 	// PollAndStitchVideo 后续轮询）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"source": "batch_shots",
-		"req":    req,
-	})
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeAssetGen,
+		fmt.Sprintf("批量生成 %d 个镜头素材", len(req.ShotIDs)), "video", uint(videoID), map[string]interface{}{
+			"source": "batch_shots",
+			"req":    req,
+		})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 	respondAccepted(c, task.TaskID, "批量素材生成任务已提交")
 }
 
@@ -98,19 +96,18 @@ func (h *VideoHandler) BatchGenerateShotImages(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeAssetGen,
-		fmt.Sprintf("批量生成 %d 个镜头图片", len(req.ShotIDs)), "video", uint(videoID))
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeAssetGen 的
+	// 执行函数在 cmd/server/task_resume.go，source="batch_images" 分支反序列化下面存的整个
+	// req 结构体，调用同一个 h.videoService.BatchGenerateShotImages，包括 req.Force）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeAssetGen,
+		fmt.Sprintf("批量生成 %d 个镜头图片", len(req.ShotIDs)), "video", uint(videoID), map[string]interface{}{
+			"source": "batch_images",
+			"req":    req,
+		})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeAssetGen 的
-	// 执行函数在 cmd/server/task_resume.go，source="batch_images" 分支反序列化下面存的整个
-	// req 结构体，调用同一个 h.videoService.BatchGenerateShotImages，包括 req.Force）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"source": "batch_images",
-		"req":    req,
-	})
 	respondAccepted(c, task.TaskID, "批量图片生成任务已提交")
 }
 
@@ -131,19 +128,18 @@ func (h *VideoHandler) BatchGenerateShotClips(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeAssetGen,
-		fmt.Sprintf("批量生成 %d 个镜头视频", len(req.ShotIDs)), "video", uint(videoID))
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeAssetGen 的
+	// 执行函数在 cmd/server/task_resume.go，source="batch_clips" 分支反序列化下面存的整个
+	// req 结构体，调用同一个 h.videoService.BatchGenerateShotClips）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeAssetGen,
+		fmt.Sprintf("批量生成 %d 个镜头视频", len(req.ShotIDs)), "video", uint(videoID), map[string]interface{}{
+			"source": "batch_clips",
+			"req":    req,
+		})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeAssetGen 的
-	// 执行函数在 cmd/server/task_resume.go，source="batch_clips" 分支反序列化下面存的整个
-	// req 结构体，调用同一个 h.videoService.BatchGenerateShotClips）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"source": "batch_clips",
-		"req":    req,
-	})
 	respondAccepted(c, task.TaskID, "批量视频生成任务已提交")
 }
 
@@ -216,20 +212,19 @@ func (h *VideoHandler) BatchGenerateSFX(c *gin.Context) {
 		}
 	}
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeSFXGen, "自动音效生成", "video", uint(videoID))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "create task failed")
-		return
-	}
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeSFXGen 的执行
 	// 函数在 cmd/server/task_resume.go，entity_type=="video" 分支反序列化下面存的字段，
 	// force=false 表示跳过已有标签的镜头，与 AnalyzeSFXTags 共用同一分支但 force=true）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeSFXGen, "自动音效生成", "video", uint(videoID), map[string]interface{}{
 		"user_context": sfxReq.UserContext,
 		"lang":         promptLanguage,
 		"provider":     sfxReq.Provider,
 		"force":        false,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "create task failed")
+		return
+	}
 	respondAccepted(c, task.TaskID, "音效生成任务已提交")
 }
 
@@ -271,20 +266,19 @@ func (h *VideoHandler) AnalyzeSFXTags(c *gin.Context) {
 		}
 	}
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeSFXGen, "AI 音效标签分析", "video", uint(videoID))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "create task failed")
-		return
-	}
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeSFXGen 的执行
 	// 函数在 cmd/server/task_resume.go，entity_type=="video" 分支，force=true 强制重新
 	// 分析所有镜头标签，与 BatchGenerateSFX 共用同一分支但 force=false）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeSFXGen, "AI 音效标签分析", "video", uint(videoID), map[string]interface{}{
 		"user_context": sfxTagsReq.UserContext,
 		"lang":         promptLang,
 		"provider":     sfxTagsReq.Provider,
 		"force":        true,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "create task failed")
+		return
+	}
 	respondAccepted(c, task.TaskID, "AI 音效分析任务已提交")
 }
 
@@ -320,19 +314,18 @@ func (h *VideoHandler) GenerateShotSFX(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&shotSFXReq)
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeSFXGen, "单镜头音效生成", "shot", uint(shotID))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "create task failed")
-		return
-	}
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeSFXGen 的执行
 	// 函数在 cmd/server/task_resume.go，entity_type=="shot" 分支用 t.EntityID/video_id 重新
 	// 查分镜，反序列化 provider 调用同一个 h.sfxSvc.AutoGenerateSFX）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeSFXGen, "单镜头音效生成", "shot", uint(shotID), map[string]interface{}{
 		"shot_id":  uint(shotID),
 		"video_id": uint(videoID),
 		"provider": shotSFXReq.Provider,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "create task failed")
+		return
+	}
 	respondAccepted(c, task.TaskID, "音效生成任务已提交")
 }
 
@@ -438,20 +431,19 @@ func (h *VideoHandler) GenerateShotVoice(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeVoiceGen,
-		fmt.Sprintf("镜头 #%d 配音生成", shot.ShotNo), "shot", uint(shotID))
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeVoiceGen 的
+	// 执行函数在 cmd/server/task_resume.go，entity_type=="shot" 分支用 t.EntityID/video_id
+	// 重新查分镜，反序列化下面存的字段调用同一套 GenerateShotAudio 重试 + 字幕生成逻辑）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeVoiceGen,
+		fmt.Sprintf("镜头 #%d 配音生成", shot.ShotNo), "shot", uint(shotID), map[string]interface{}{
+			"narration_voice":  narrationVoice,
+			"subtitle_enabled": req.SubtitleEnabled,
+			"video_id":         uint(videoID),
+		})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeVoiceGen 的
-	// 执行函数在 cmd/server/task_resume.go，entity_type=="shot" 分支用 t.EntityID/video_id
-	// 重新查分镜，反序列化下面存的字段调用同一套 GenerateShotAudio 重试 + 字幕生成逻辑）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"narration_voice":  narrationVoice,
-		"subtitle_enabled": req.SubtitleEnabled,
-		"video_id":         uint(videoID),
-	})
 	respondAccepted(c, task.TaskID, "配音生成任务已提交")
 }
 
@@ -618,19 +610,18 @@ func (h *VideoHandler) GenerateLipSync(c *gin.Context) {
 	var req service.LipSyncRequest
 	_ = c.ShouldBindJSON(&req)
 
-	task, err := h.taskSvc.Create(getTenantID(c), service.TaskTypeLipSync,
-		fmt.Sprintf("口型对齐 shot #%d", shotID), "shot", uint(shotID))
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeLipSync 的执行
+	// 函数在 cmd/server/task_resume.go，用 t.EntityID 作为 shotID，反序列化下面存的
+	// video_id/req 调用同一套 GenerateLipSyncVideoWithReq + PollLipSyncUntilDone）。
+	task, err := h.taskSvc.CreateWithParams(getTenantID(c), service.TaskTypeLipSync,
+		fmt.Sprintf("口型对齐 shot #%d", shotID), "shot", uint(shotID), map[string]interface{}{
+			"video_id": uint(videoID),
+			"req":      req,
+		})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeLipSync 的执行
-	// 函数在 cmd/server/task_resume.go，用 t.EntityID 作为 shotID，反序列化下面存的
-	// video_id/req 调用同一套 GenerateLipSyncVideoWithReq + PollLipSyncUntilDone）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"video_id": uint(videoID),
-		"req":      req,
-	})
 	respondAccepted(c, task.TaskID, "口型对齐任务已提交")
 }
 

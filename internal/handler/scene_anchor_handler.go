@@ -425,21 +425,20 @@ func (h *SceneAnchorHandler) AIExtractChapterAnchors(c *gin.Context) {
 	_ = c.ShouldBindJSON(&body)
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterSceneExtract, "场景分析", "chapter", chapter.ID)
-	if err != nil {
-		reqLogger(c).Errorf("[SceneAnchorHandler] AIExtractChapterAnchors create task novelID=%d chapterNo=%d: %v", novelID, chapterNo, err)
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterSceneExtract
 	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的字段调用同一个
 	// h.svc.ExtractFromChapter，8分钟超时同样在执行函数内设置）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeChapterSceneExtract, "场景分析", "chapter", chapter.ID, map[string]interface{}{
 		"novel_id":    novelID,
 		"chapter_no":  chapterNo,
 		"content":     content,
 		"user_prompt": body.UserPrompt,
 	})
+	if err != nil {
+		reqLogger(c).Errorf("[SceneAnchorHandler] AIExtractChapterAnchors create task novelID=%d chapterNo=%d: %v", novelID, chapterNo, err)
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 
 	respondAccepted(c, task.TaskID, "场景分析任务已提交")
 }
@@ -542,19 +541,18 @@ func (h *SceneAnchorHandler) BatchGenerateRefImages(c *gin.Context) {
 		respondErr(c, http.StatusInternalServerError, "task service not configured")
 		return
 	}
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImageGen, "批量生成场景参考图", "novel", uint(novelID))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeImageGen 的
 	// 执行函数在 cmd/server/task_resume.go，source="scene_anchor_batch" 分支反序列化下面存的
 	// 字段调用同一个 h.svc.BatchGenerateRefImages）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImageGen, "批量生成场景参考图", "novel", uint(novelID), map[string]interface{}{
 		"source":   "scene_anchor_batch",
 		"provider": body.Provider,
 		"force":    body.Force,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 	respondAccepted(c, task.TaskID, "场景参考图批量生成任务已提交")
 }
 
@@ -591,20 +589,19 @@ func (h *SceneAnchorHandler) GenerateChapterRefImages(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImageGen, "章节场景参考图生成", "chapter", chapter.ID)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeImageGen 的
 	// 执行函数在 cmd/server/task_resume.go，source="scene_anchor_chapter" 分支反序列化下面存的
 	// novel_id/anchor_ids/provider 调用同一个 h.svc.GenerateChapterRefImages）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImageGen, "章节场景参考图生成", "chapter", chapter.ID, map[string]interface{}{
 		"source":     "scene_anchor_chapter",
 		"novel_id":   novelID,
 		"anchor_ids": req.AnchorIDs,
 		"provider":   req.Provider,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 	respondAccepted(c, task.TaskID, "场景参考图生成任务已提交")
 }
 

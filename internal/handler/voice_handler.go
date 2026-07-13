@@ -113,18 +113,17 @@ func (h *VideoHandler) GenerateSegmentVoice(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeVoiceGen,
-		fmt.Sprintf("片段 #%d 配音生成", segID), "segment", uint(segID))
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeVoiceGen 的
+	// 执行函数在 cmd/server/task_resume.go，entity_type=="segment" 分支反序列化下面存的
+	// narration_voice 调用同一套 GenerateSegmentAudio 重试逻辑）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeVoiceGen,
+		fmt.Sprintf("片段 #%d 配音生成", segID), "segment", uint(segID), map[string]interface{}{
+			"narration_voice": req.NarrationVoice,
+		})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeVoiceGen 的
-	// 执行函数在 cmd/server/task_resume.go，entity_type=="segment" 分支反序列化下面存的
-	// narration_voice 调用同一套 GenerateSegmentAudio 重试逻辑）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"narration_voice": req.NarrationVoice,
-	})
 	respondAccepted(c, task.TaskID, "片段配音任务已提交")
 }
 
@@ -653,19 +652,18 @@ func (h *VideoHandler) BatchGenerateVoice(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeVoiceGen,
-		fmt.Sprintf("批量配音（%d 个分镜）", len(targets)), "video", uint(videoID))
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeVoiceGen 的
+	// 执行函数在 cmd/server/task_resume.go，entity_type=="video" 分支重新拉取分镜、按
+	// skip_existing 过滤，用同样的分批并发 worker-pool 调用 GenerateShotAudio）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeVoiceGen,
+		fmt.Sprintf("批量配音（%d 个分镜）", len(targets)), "video", uint(videoID), map[string]interface{}{
+			"narration_voice": narrationVoice,
+			"skip_existing":   skipExisting,
+		})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeVoiceGen 的
-	// 执行函数在 cmd/server/task_resume.go，entity_type=="video" 分支重新拉取分镜、按
-	// skip_existing 过滤，用同样的分批并发 worker-pool 调用 GenerateShotAudio）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"narration_voice": narrationVoice,
-		"skip_existing":   skipExisting,
-	})
 
 	reqLogger(c).Printf("[async] task created: task_id=%s", task.TaskID)
 	c.JSON(http.StatusAccepted, gin.H{
@@ -923,12 +921,6 @@ func (h *VideoHandler) AnalyzeBGMSegments(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, "bgm_analyze",
-		"BGM分段分析", "video", uint(videoID))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 
 	var bgmReq struct {
 		UserPrompt string `json:"user_prompt"`
@@ -937,9 +929,14 @@ func (h *VideoHandler) AnalyzeBGMSegments(c *gin.Context) {
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（"bgm_analyze" 的执行函数在
 	// cmd/server/task_resume.go 的 bgmResume(false)，反序列化下面存的 user_prompt 调用同一个
 	// h.bgmSvc.AnalyzeBGMForVideo）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"user_prompt": bgmReq.UserPrompt,
-	})
+	task, err := h.taskSvc.CreateWithParams(tenantID, "bgm_analyze",
+		"BGM分段分析", "video", uint(videoID), map[string]interface{}{
+			"user_prompt": bgmReq.UserPrompt,
+		})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 	respondAccepted(c, task.TaskID, "BGM分段分析任务已提交")
 }
 
@@ -966,12 +963,6 @@ func (h *VideoHandler) GenerateBGM(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, "bgm_generate",
-		"BGM背景音乐生成", "video", uint(videoID))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 
 	var bgmGenReq struct {
 		UserPrompt string `json:"user_prompt"`
@@ -980,9 +971,14 @@ func (h *VideoHandler) GenerateBGM(c *gin.Context) {
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（"bgm_generate" 的执行函数在
 	// cmd/server/task_resume.go 的 bgmResume(true)，反序列化下面存的 user_prompt 调用同一个
 	// h.bgmSvc.GenerateBGMSegments）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"user_prompt": bgmGenReq.UserPrompt,
-	})
+	task, err := h.taskSvc.CreateWithParams(tenantID, "bgm_generate",
+		"BGM背景音乐生成", "video", uint(videoID), map[string]interface{}{
+			"user_prompt": bgmGenReq.UserPrompt,
+		})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 	respondAccepted(c, task.TaskID, "BGM生成任务已提交")
 }
 

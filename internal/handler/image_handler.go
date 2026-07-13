@@ -37,16 +37,15 @@ func (h *ImageHandler) EditImage(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImageEdit, "图片编辑", "novel", body.NovelID)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImageEdit, "图片编辑", "novel", body.NovelID, map[string]interface{}{
 		"image_url":   body.ImageURL,
 		"instruction": body.Instruction,
 		"novel_id":    body.NovelID,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 
 	respondAccepted(c, task.TaskID, "图片编辑任务已提交")
 }
@@ -78,17 +77,16 @@ func (h *ImageHandler) UpscaleImage(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImageUpscale, taskName, "novel", body.NovelID)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImageUpscale, taskName, "novel", body.NovelID, map[string]interface{}{
 		"image_url": body.ImageURL,
 		"scale":     body.Scale,
 		"method":    body.Method,
 		"novel_id":  body.NovelID,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 
 	respondAccepted(c, task.TaskID, "高清处理任务已提交")
 }

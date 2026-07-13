@@ -209,19 +209,18 @@ func (h *ItemHandler) BatchGenerateImages(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req)
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImageGen, "批量生成物品图片", "novel", uint(novelID))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeImageGen 的
 	// 执行函数在 cmd/server/task_resume.go，source="item_batch" 分支反序列化下面存的字段
 	// 调用同一个 h.itemService.BatchGenerateImages）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImageGen, "批量生成物品图片", "novel", uint(novelID), map[string]interface{}{
 		"source":   "item_batch",
 		"provider": req.Provider,
 		"force":    req.Force,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 	respondAccepted(c, task.TaskID, "物品图片批量生成任务已提交")
 }
 
@@ -244,19 +243,18 @@ func (h *ItemHandler) GenerateItemImage(c *gin.Context) {
 	refURL, provider := req.ReferenceImageURL, req.Provider
 	tenantID := getTenantID(c)
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImageGen, "物品图像生成", "item", itemID)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeImageGen 的
 	// 执行函数在 cmd/server/task_resume.go，source="item_single" 分支反序列化下面存的字段
 	// 调用同一个 h.itemService.GenerateItemImage）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImageGen, "物品图像生成", "item", itemID, map[string]interface{}{
 		"source":   "item_single",
 		"ref_url":  refURL,
 		"provider": provider,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 	respondAccepted(c, task.TaskID, "图像生成任务已提交")
 }
 
@@ -293,20 +291,19 @@ func (h *ItemHandler) GenerateChapterItemImages(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImageGen, "章节物品图片生成", "chapter", chapter.ID)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeImageGen 的
 	// 执行函数在 cmd/server/task_resume.go，source="item_chapter" 分支反序列化下面存的
 	// novel_id/item_ids/provider 调用同一个 h.itemService.GenerateChapterImages）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImageGen, "章节物品图片生成", "chapter", chapter.ID, map[string]interface{}{
 		"source":   "item_chapter",
 		"novel_id": novelID,
 		"item_ids": req.ItemIDs,
 		"provider": req.Provider,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 	respondAccepted(c, task.TaskID, "物品图片生成任务已提交")
 }
 

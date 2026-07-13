@@ -314,19 +314,18 @@ func (h *ChapterHandler) GenerateChapter(c *gin.Context) {
 	h.taskSvc.CancelActiveByEntity("novel", req.NovelID, service.TaskTypeChapterGen)
 
 	// Create an async task and return immediately (HTTP 202).
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterGen, "章节生成", "novel", req.NovelID)
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterGen 的
+	// 执行函数在 cmd/server/task_resume.go，反序列化下面存的整个 req 调用同一个
+	// h.chapterService.GenerateChapter）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeChapterGen, "章节生成", "novel", req.NovelID, map[string]interface{}{
+		"novel_id": req.NovelID,
+		"req":      req,
+	})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task: "+err.Error())
 		return
 	}
 
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterGen 的
-	// 执行函数在 cmd/server/task_resume.go，反序列化下面存的整个 req 调用同一个
-	// h.chapterService.GenerateChapter）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"novel_id": req.NovelID,
-		"req":      req,
-	})
 	respondAccepted(c, task.TaskID, "章节生成任务已提交")
 }
 
@@ -346,15 +345,14 @@ func (h *ChapterHandler) RegenerateChapter(c *gin.Context) {
 
 	tenantID := getTenantID(c)
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterGen, "章节重新生成", "chapter", uint(id))
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterGen 的
+	// 执行函数在 cmd/server/task_resume.go，entity_type=="chapter" 分支反序列化下面存的 req
+	// 调用同一个 h.chapterService.RegenerateChapter）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeChapterGen, "章节重新生成", "chapter", uint(id), req)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task: "+err.Error())
 		return
 	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterGen 的
-	// 执行函数在 cmd/server/task_resume.go，entity_type=="chapter" 分支反序列化下面存的 req
-	// 调用同一个 h.chapterService.RegenerateChapter）。
-	_ = h.taskSvc.SetParams(task.TaskID, req)
 	respondAccepted(c, task.TaskID, "章节重新生成任务已提交")
 }
 
@@ -829,17 +827,16 @@ func (h *ChapterHandler) ReviewChapter(c *gin.Context) {
 	_ = c.ShouldBindJSON(&req)
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterReview, "章节 AI 审查", "chapter", uint(id))
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterReview 的
+	// 执行函数在 cmd/server/task_resume.go，反序列化下面存的 provider 调用同一个
+	// h.qualityService.ReviewChapter）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeChapterReview, "章节 AI 审查", "chapter", uint(id), map[string]interface{}{
+		"provider": req.Provider,
+	})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterReview 的
-	// 执行函数在 cmd/server/task_resume.go，反序列化下面存的 provider 调用同一个
-	// h.qualityService.ReviewChapter）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"provider": req.Provider,
-	})
 	respondAccepted(c, task.TaskID, "章节审查任务已提交")
 }
 
@@ -1125,17 +1122,16 @@ func (h *ChapterHandler) RewriteChapterByInstruction(c *gin.Context) {
 		return
 	}
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterRewriteInstr, "按指令修改章节", "chapter", uint(id))
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterRewriteInstr
+	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的 instruction 调用同一套
+	// RewriteByInstruction → ArchiveVersionBeforeRewrite → ApplyRewrittenContent）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeChapterRewriteInstr, "按指令修改章节", "chapter", uint(id), map[string]interface{}{
+		"instruction": req.Instruction,
+	})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task: "+err.Error())
 		return
 	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterRewriteInstr
-	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的 instruction 调用同一套
-	// RewriteByInstruction → ArchiveVersionBeforeRewrite → ApplyRewrittenContent）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"instruction": req.Instruction,
-	})
 	respondAccepted(c, task.TaskID, "按指令修改任务已提交")
 }
 

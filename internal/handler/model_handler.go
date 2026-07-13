@@ -803,18 +803,17 @@ func (h *ModelHandler) VoicePreview(c *gin.Context) {
 		req.Text = "晨光在花纹地毯上铺开，温暖像奶奶的手掌一样环绕着小红帽。"
 	}
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeVoicePreview, "旁白音色试听", "voice", 0)
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeVoicePreview
+	// 的执行函数在 cmd/server/task_resume.go，entity_type=="voice" 分支反序列化下面存的
+	// voice_id/text 调用同一个 h.aiSvc.AudioGenerateWithOptions）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeVoicePreview, "旁白音色试听", "voice", 0, map[string]interface{}{
+		"voice_id": req.VoiceID,
+		"text":     req.Text,
+	})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeVoicePreview
-	// 的执行函数在 cmd/server/task_resume.go，entity_type=="voice" 分支反序列化下面存的
-	// voice_id/text 调用同一个 h.aiSvc.AudioGenerateWithOptions）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"voice_id": req.VoiceID,
-		"text":     req.Text,
-	})
 	respondAccepted(c, task.TaskID, "旁白音色试听任务已提交")
 }
 

@@ -255,6 +255,16 @@ const maxQueuedTasksPerTenant = 10000
 
 // Create inserts a new pending task and returns it.
 func (s *TaskService) Create(tenantID uint, taskType, title, entityType string, entityID uint) (*model.AsyncTask, error) {
+	return s.CreateWithParams(tenantID, taskType, title, entityType, entityID, nil)
+}
+
+// CreateWithParams inserts a new pending task with its resume params already populated in the
+// same INSERT, then wakes the task engine. Callers whose executor (see task_resume.go) reads
+// params (e.g. video_id) MUST use this instead of Create()+SetParams(): Create() wakes the
+// engine immediately, and the engine can claim and execute the task before a subsequent
+// SetParams() call has committed, reading a still-empty ParamsJSON and failing the task on a
+// missing-param check. Passing params here means the engine never sees the row without them.
+func (s *TaskService) CreateWithParams(tenantID uint, taskType, title, entityType string, entityID uint, params interface{}) (*model.AsyncTask, error) {
 	// Enforce per-tenant queue size limit to prevent resource exhaustion.
 	if count, err := s.repo.CountActive(tenantID); err != nil {
 		logger.Errorf("[TaskService] queue size check failed for tenant %d: %v", tenantID, err)
@@ -266,6 +276,14 @@ func (s *TaskService) Create(tenantID uint, taskType, title, entityType string, 
 	if len(taskType) >= 2 {
 		prefix = taskType[:2]
 	}
+	paramsJSON := ""
+	if params != nil {
+		if b, err := json.Marshal(params); err != nil {
+			logger.Errorf("[TaskService] CreateWithParams: marshal params for %s: %v", taskType, err)
+		} else {
+			paramsJSON = string(b)
+		}
+	}
 	task := &model.AsyncTask{
 		TaskID:     prefix + "-" + uuid.New().String()[:8],
 		TenantID:   tenantID,
@@ -274,6 +292,7 @@ func (s *TaskService) Create(tenantID uint, taskType, title, entityType string, 
 		Title:      title,
 		EntityType: entityType,
 		EntityID:   entityID,
+		ParamsJSON: paramsJSON,
 	}
 	if err := s.repo.Create(task); err != nil {
 		return nil, err

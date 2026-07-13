@@ -158,14 +158,13 @@ func (s *NovelAnalysisService) StartAnalysis(tenantID, novelID uint, createOutli
 	// 优先使用 TaskService（持久化，执行权交给任务引擎——见 cmd/server/task_resume.go 里
 	// TaskTypeNovelAnalysis 注册的 ResumeAnalysis）；若未注入则降级为随机 UUID + 立即本地执行。
 	if s.taskSvc != nil {
-		dbTask, err := s.taskSvc.Create(tenantID, TaskTypeNovelAnalysis, "小说分析", "novel", novelID)
+		dbTask, err := s.taskSvc.CreateWithParams(tenantID, TaskTypeNovelAnalysis, "小说分析", "novel", novelID, map[string]interface{}{
+			"create_outlines": createOutlines,
+		})
 		if err != nil {
 			logger.Errorf("[NovelAnalysis] StartAnalysis: create async task failed (novelID=%d): %v", novelID, err)
 			return "", err
 		}
-		_ = s.taskSvc.SetParams(dbTask.TaskID, map[string]interface{}{
-			"create_outlines": createOutlines,
-		})
 		return dbTask.TaskID, nil
 	}
 

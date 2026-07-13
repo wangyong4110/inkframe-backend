@@ -322,19 +322,18 @@ func (h *NovelHandler) GenerateChapter(c *gin.Context) {
 	userID, _ := c.Get("user_id")
 	callerUserID, _ := userID.(uint)
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeChapterGen, "章节生成", "chapter", 0)
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeChapterGen 的
 	// 执行函数在 cmd/server/task_resume.go，entity_type=="chapter" 且 entity_id==0 分支反序列化
 	// 下面存的字段，调用同一套 GenerateChapter → 通知 → 伏笔提取/质量检查 的完整流程）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeChapterGen, "章节生成", "chapter", 0, map[string]interface{}{
 		"novel_id":       uint(novelId),
 		"req":            &req,
 		"caller_user_id": callerUserID,
 	})
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 
 	if h.auditSvc != nil {
 		h.auditSvc.LogEntry(service.AuditEntry{
@@ -405,17 +404,15 @@ func (h *NovelHandler) BatchGenerateChapters(c *gin.Context) {
 		return
 	}
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeBatchChapterGen,
-		fmt.Sprintf("批量生成章节内容（共%d章）", len(toGenerate)), "novel", uint(novelId))
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeBatchChapterGen
+	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的整个 req 重新按
+	// start/end/skip_existing 过滤章节列表，调用同一套 GenerateChapter 循环）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeBatchChapterGen,
+		fmt.Sprintf("批量生成章节内容（共%d章）", len(toGenerate)), "novel", uint(novelId), req)
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeBatchChapterGen
-	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的整个 req 重新按
-	// start/end/skip_existing 过滤章节列表，调用同一套 GenerateChapter 循环）。
-	_ = h.taskSvc.SetParams(task.TaskID, req)
 
 	reqLogger(c).Printf("[async] task created: task_id=%s", task.TaskID)
 	c.JSON(http.StatusAccepted, gin.H{
@@ -447,11 +444,6 @@ func (h *NovelHandler) GenerateOutline(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeNovelOutlineGen, "生成大纲", "novel", uint(novelId))
-	if err != nil {
-		respondErr(c, http.StatusInternalServerError, "failed to create task")
-		return
-	}
 
 	outlineReq := &service.GenerateOutlineRequest{
 		NovelID:        uint(novelId),
@@ -465,7 +457,11 @@ func (h *NovelHandler) GenerateOutline(c *gin.Context) {
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeNovelOutlineGen
 	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的整个 outlineReq 调用同一个
 	// h.novelService.GenerateOutline）。
-	_ = h.taskSvc.SetParams(task.TaskID, outlineReq)
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeNovelOutlineGen, "生成大纲", "novel", uint(novelId), outlineReq)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to create task")
+		return
+	}
 	respondAccepted(c, task.TaskID, "大纲生成任务已提交")
 }
 
@@ -681,17 +677,16 @@ func (h *NovelHandler) GenerateCoverImage(c *gin.Context) {
 	}
 	_ = c.ShouldBindJSON(&req) // 可选 body，忽略解析错误
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeCoverImageGen, "封面图生成", "novel", uint(id))
+	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeCoverImageGen
+	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的 suggestion 调用同一个
+	// h.novelService.GenerateCoverImage，5分钟超时同样在执行函数内设置）。
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeCoverImageGen, "封面图生成", "novel", uint(id), map[string]interface{}{
+		"suggestion": req.Suggestion,
+	})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeCoverImageGen
-	// 的执行函数在 cmd/server/task_resume.go，反序列化下面存的 suggestion 调用同一个
-	// h.novelService.GenerateCoverImage，5分钟超时同样在执行函数内设置）。
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{
-		"suggestion": req.Suggestion,
-	})
 	respondAccepted(c, task.TaskID, "封面图生成任务已提交")
 }
 

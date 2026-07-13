@@ -171,12 +171,11 @@ func (h *ImportHandler) ImportNovel(c *gin.Context) {
 	}
 
 	tenantID := getTenantID(c)
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImport, "小说导入", "novel", 0)
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImport, "小说导入", "novel", 0, map[string]interface{}{"req": req})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{"req": req})
 
 	if h.auditSvc != nil {
 		h.auditSvc.LogEntry(service.AuditEntry{
@@ -248,12 +247,11 @@ func (h *ImportHandler) ImportFromFile(c *gin.Context) {
 		return
 	}
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImport, "文件导入", "novel", 0)
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImport, "文件导入", "novel", 0, map[string]interface{}{"req": req, "file_url": fileURL})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{"req": req, "file_url": fileURL})
 	h.taskSvc.SetMeta(task.TaskID, map[string]interface{}{"step": "上传中..."}) //nolint:errcheck
 
 	if h.auditSvc != nil {
@@ -288,12 +286,11 @@ func (h *ImportHandler) ImportFromURL(c *gin.Context) {
 		TenantID: tenantID,
 	}
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImport, "URL导入", "novel", 0)
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImport, "URL导入", "novel", 0, map[string]interface{}{"req": importReq})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{"req": importReq})
 
 	respondAccepted(c, task.TaskID, "import started")
 }
@@ -324,12 +321,11 @@ func (h *ImportHandler) ImportFromCrawl(c *gin.Context) {
 		CrawlConfig: req.Config,
 	}
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImport, "爬取导入", "novel", 0)
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImport, "爬取导入", "novel", 0, map[string]interface{}{"req": importReq})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{"req": importReq})
 	h.taskSvc.SetMeta(task.TaskID, map[string]interface{}{"step": "获取章节目录..."}) //nolint:errcheck
 	if h.auditSvc != nil {
 		h.auditSvc.LogEntry(service.AuditEntry{
@@ -726,12 +722,11 @@ func (h *ImportHandler) CompleteChunkedUpload(c *gin.Context) {
 		return
 	}
 
-	task, err := h.taskSvc.Create(tenantID, service.TaskTypeImport, "分片文件导入", "novel", 0)
+	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeImport, "分片文件导入", "novel", 0, map[string]interface{}{"req": req, "file_url": fileURL})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")
 		return
 	}
-	_ = h.taskSvc.SetParams(task.TaskID, map[string]interface{}{"req": req, "file_url": fileURL})
 	h.taskSvc.UpdateProgress(task.TaskID, 5)                                   //nolint:errcheck
 	h.taskSvc.SetMeta(task.TaskID, map[string]interface{}{"step": "解析导入中..."}) //nolint:errcheck
 
