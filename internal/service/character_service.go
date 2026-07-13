@@ -301,7 +301,7 @@ func (s *CharacterService) extractCharacterNameList(
 // generateOneCharacterProfile 阶段二：为单个角色生成完整档案
 func (s *CharacterService) generateOneCharacterProfile(
 	tenantID, novelID uint,
-	novelTitle, genre, promptLanguage string,
+	novelTitle, genre, promptLanguage, worldviewContext string,
 	entry charNameEntry,
 	shortSummaries string,
 ) (*analysisCharJSON, error) {
@@ -314,6 +314,7 @@ func (s *CharacterService) generateOneCharacterProfile(
 		"Summaries":        shortSummaries,
 		"PromptLanguage":   promptLanguage,
 		"GenreVisualHints": genreVisualHints(genre),
+		"WorldviewContext": worldviewContext,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render generate_character_profile: %w", err)
@@ -1022,6 +1023,7 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 	novelTitle := "本小说"
 	novelGenre := ""
 	novelPromptLanguage := "zh"
+	worldviewContext := ""
 	if s.novelRepo != nil {
 		if novel, err := s.novelRepo.GetByID(novelID); err == nil {
 			novelTitle = novel.Title
@@ -1029,6 +1031,7 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			if novel.AIConfig.PromptLanguage != "" {
 				novelPromptLanguage = novel.AIConfig.PromptLanguage
 			}
+			worldviewContext = buildWorldviewVisualContext(novel.Worldview)
 		}
 	}
 
@@ -1068,7 +1071,7 @@ func (s *CharacterService) AIBatchGenerate(tenantID, novelID uint) ([]*model.Cha
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			p, err := s.generateOneCharacterProfile(tenantID, novelID, novelTitle, novelGenre, novelPromptLanguage, e, shortSummaries)
+			p, err := s.generateOneCharacterProfile(tenantID, novelID, novelTitle, novelGenre, novelPromptLanguage, worldviewContext, e, shortSummaries)
 			results[idx] = profileResult{p, err}
 		}(i, entry)
 	}
@@ -1239,6 +1242,7 @@ func (s *CharacterService) ReanalyzeCharacter(tenantID, characterID uint) (*mode
 	novelTitle := "本小说"
 	novelGenre := ""
 	novelPromptLanguage := "zh"
+	worldviewContext := ""
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(char.NovelID); e == nil {
 			novelTitle = novel.Title
@@ -1246,6 +1250,7 @@ func (s *CharacterService) ReanalyzeCharacter(tenantID, characterID uint) (*mode
 			if novel.AIConfig.PromptLanguage != "" {
 				novelPromptLanguage = novel.AIConfig.PromptLanguage
 			}
+			worldviewContext = buildWorldviewVisualContext(novel.Worldview)
 		}
 	}
 
@@ -1269,7 +1274,7 @@ func (s *CharacterService) ReanalyzeCharacter(tenantID, characterID uint) (*mode
 		Brief: char.Description,
 	}
 
-	profile, err := s.generateOneCharacterProfile(tenantID, char.NovelID, novelTitle, novelGenre, novelPromptLanguage, entry, shortSummaries)
+	profile, err := s.generateOneCharacterProfile(tenantID, char.NovelID, novelTitle, novelGenre, novelPromptLanguage, worldviewContext, entry, shortSummaries)
 	if err != nil {
 		return nil, fmt.Errorf("AI reanalyze: %w", err)
 	}
@@ -2158,35 +2163,6 @@ func isAnimalCharacter(appearance string) bool {
 	return false
 }
 
-// condensePortraitAppearance 从 visual_prompt 中提取面部特写所需描述：
-// 保留面部/发型/五官相关词，去掉鞋履/体态/全身/服装下半段等会导致模型生成全身图的词。
-func condensePortraitAppearance(s string, maxWords int) string {
-	// 过滤掉会触发全身生成的关键词（词根匹配）
-	blocklist := []string{
-		"standing", "full body", "full-body", "full figure", "whole body",
-		"shoes", "boots", "sneakers", "sandals", "footwear", "feet", "foot",
-		"legs", "thighs", "knees", "ankles", "calves",
-		"hips", "waist", "lower body", "pelvis",
-		"posture", "pose", "stance",
-	}
-	words := strings.Fields(s)
-	filtered := words[:0]
-	for i := 0; i < len(words); i++ {
-		w := strings.ToLower(strings.Trim(words[i], ",.:;"))
-		skip := false
-		for _, bl := range blocklist {
-			if strings.Contains(w, strings.ToLower(bl)) || strings.Contains(strings.ToLower(strings.Join(words[max(0, i-1):min(len(words), i+2)], " ")), strings.ToLower(bl)) {
-				skip = true
-				break
-			}
-		}
-		if !skip {
-			filtered = append(filtered, words[i])
-		}
-	}
-	return condenseVisualPrompt(strings.Join(filtered, " "), maxWords)
-}
-
 // condenseVisualPrompt trims s to at most maxWords space-separated tokens,
 // preferring to break at a comma boundary (within the last 10 words of the budget)
 // to avoid cutting mid-phrase.
@@ -2302,7 +2278,9 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 			"RIGHT PANEL back view: facing away from camera, full body from head to toe, entire figure visible, " +
 			"same ground baseline, same character scale in all panels, no cropping"
 
-	// appearance 截断至 80 词（外貌细节是无参考图时跨格一致性的唯一文字锚点）
+	// appearance 截断至 80 词（外貌细节是无参考图时跨格一致性的唯一文字锚点）。
+	// appearance 此处已是完整外观描述（含服装/鞋履/配饰），由 GenerateLookVisualPrompt
+	// 与面部提示词同一次 AI 调用独立产出，不需要再从中提取/剥离任何内容。
 	condensedAppearance := condenseVisualPrompt(appearance, 80)
 
 	// 动物角色跳过人类性别 token（1boy/1girl 会强制生成人形体型）
@@ -2405,11 +2383,15 @@ func (s *ImageGenerationService) GenerateThreeViewSheet(ctx context.Context, ten
 //   - 单张图聚焦面部特征，避免模型在多视角间分散注意力
 //   - DreamO 对单人正面半身像提取 embedding 的效果最佳
 //
+// facePrompt 应为面部特写专用提示词（CharacterLook.FacePrompt，与完整外观提示词由
+// GenerateLookVisualPrompt 同一次 AI 调用独立产出，只含身份+面部+发型）；调用方在其为空
+// 时（尚未用新流程重新生成过形象）应传入完整外观提示词兜底。
+//
 // 生成后存入 CharacterLook.Portrait；分镜图片生成时优先使用 Portrait 作为参考。
-func (s *ImageGenerationService) GeneratePortrait(ctx context.Context, tenantID uint, name, appearance, style, gender, threeViewURL, provider string) (*GeneratedCharacterImage, error) {
+func (s *ImageGenerationService) GeneratePortrait(ctx context.Context, tenantID uint, name, facePrompt, style, gender, threeViewURL, provider string) (*GeneratedCharacterImage, error) {
 	genderTag, genderNeg := resolveGenderInfo(gender)
 	qualityTokens := resolveStyleQualityTokens(style)
-	condensedFace := condensePortraitAppearance(appearance, 40)
+	condensedFace := condenseVisualPrompt(facePrompt, 40)
 
 	styleType := "other"
 	if style == "realistic" || style == "real_person" {
@@ -2467,6 +2449,7 @@ func (s *CharacterService) CreateLook(characterID, novelID uint, req *model.Crea
 		ChapterTo:      req.ChapterTo,
 		Description:    req.Description,
 		VisualPrompt:   req.VisualPrompt,
+		FacePrompt:     req.FacePrompt,
 		ThreeViewSheet: req.ThreeViewSheet,
 		Portrait:       req.Portrait,
 	}
@@ -2582,6 +2565,9 @@ func (s *CharacterService) UpdateLook(id uint, req *model.UpdateCharacterLookReq
 	if req.VisualPrompt != nil {
 		look.VisualPrompt = *req.VisualPrompt
 	}
+	if req.FacePrompt != nil {
+		look.FacePrompt = *req.FacePrompt
+	}
 	if req.ThreeViewSheet != nil {
 		look.ThreeViewSheet = *req.ThreeViewSheet
 	}
@@ -2642,17 +2628,56 @@ func (s *CharacterService) GetActiveLook(characterID uint, chapterNo int) (*mode
 	return s.GetDefaultLook(characterID)
 }
 
+// buildWorldviewVisualContext 从世界观中提取与角色外观强相关的字段（地理格局/文明发展
+// 水平、历史时代脉络、文化习俗与服饰传统），供图像提示词生成时保持服装/时代背景与世界观
+// 一致。与 chapter_service.go 的 buildWorldRulesText 不同——那个面向写作叙事约束
+// （强制规则/修炼体系/势力/术语），这里只取视觉外观相关的字段，避免无关内容稀释 prompt。
+func buildWorldviewVisualContext(wv *model.Worldview) string {
+	if wv == nil {
+		return ""
+	}
+	var sb strings.Builder
+	if wv.History != "" {
+		sb.WriteString("时代背景（服装、发型、器物工艺水平必须与此时代相符）：\n")
+		sb.WriteString(wv.History)
+		sb.WriteString("\n")
+	}
+	if wv.Geography != "" {
+		sb.WriteString("地理格局与文明发展水平（影响服饰材质、建筑风格、器物外观）：\n")
+		sb.WriteString(wv.Geography)
+		sb.WriteString("\n")
+	}
+	if wv.Culture != "" {
+		sb.WriteString("文化习俗与宗教信仰（影响服饰规范、配饰、礼仪姿态）：\n")
+		sb.WriteString(wv.Culture)
+		sb.WriteString("\n")
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+// LookVisualPromptResult 是 GenerateLookVisualPrompt 的结构化返回值：同一次 AI 调用
+// 直接产出两份提示词，FacePrompt 仅含身份+面部+发型，VisualPrompt 含完整外观
+// （服装/鞋履/配饰/姿态等）。两者独立自洽，不互相派生。
+type LookVisualPromptResult struct {
+	VisualPrompt string `json:"visual_prompt"`
+	FacePrompt   string `json:"face_prompt"`
+}
+
 // GenerateLookVisualPrompt 根据角色基础描述和形象描述生成 AI 图像 Prompt。
 // 语言跟随小说 PromptLanguage 设置：zh 输出中文，en 输出英文。
-func (s *CharacterService) GenerateLookVisualPrompt(tenantID, characterID uint, lookDesc string) (string, error) {
+func (s *CharacterService) GenerateLookVisualPrompt(tenantID, characterID uint, lookDesc string) (*LookVisualPromptResult, error) {
 	char, err := s.characterRepo.GetByID(characterID)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	promptLanguage := "zh"
+	worldviewContext := ""
 	if s.novelRepo != nil {
-		if novel, e := s.novelRepo.GetByID(char.NovelID); e == nil && novel.AIConfig.PromptLanguage != "" {
-			promptLanguage = novel.AIConfig.PromptLanguage
+		if novel, e := s.novelRepo.GetByID(char.NovelID); e == nil {
+			if novel.AIConfig.PromptLanguage != "" {
+				promptLanguage = novel.AIConfig.PromptLanguage
+			}
+			worldviewContext = buildWorldviewVisualContext(novel.Worldview)
 		}
 	}
 	basePrompt := char.Description
@@ -2665,19 +2690,30 @@ func (s *CharacterService) GenerateLookVisualPrompt(tenantID, characterID uint, 
 		extraSection = lookDesc
 	}
 	sysPrompt, err := renderPrompt("character_visual_prompt", map[string]interface{}{
-		"PromptLanguage": promptLanguage,
-		"BasePrompt":     basePrompt,
-		"ExtraSection":   extraSection,
+		"PromptLanguage":   promptLanguage,
+		"WorldviewContext": worldviewContext,
+		"BasePrompt":       basePrompt,
+		"ExtraSection":     extraSection,
 	})
 	if err != nil {
-		return "", fmt.Errorf("render character_visual_prompt: %w", err)
+		return nil, fmt.Errorf("render character_visual_prompt: %w", err)
 	}
 	result, err := s.aiService.GenerateWithProvider(tenantID, char.NovelID, "character_profile", sysPrompt, "",
 		StoryboardOverrides{})
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return strings.TrimSpace(result), nil
+	var parsed LookVisualPromptResult
+	cleaned := extractJSONObject(strings.TrimSpace(result))
+	if err := json.Unmarshal([]byte(cleaned), &parsed); err != nil {
+		return nil, fmt.Errorf("parse character_visual_prompt JSON: %w", err)
+	}
+	parsed.VisualPrompt = strings.TrimSpace(parsed.VisualPrompt)
+	parsed.FacePrompt = strings.TrimSpace(parsed.FacePrompt)
+	if parsed.VisualPrompt == "" {
+		return nil, fmt.Errorf("character_visual_prompt: empty visual_prompt in AI response")
+	}
+	return &parsed, nil
 }
 
 // chapterAppearanceResult AI 返回的角色形象更新结果
@@ -2716,6 +2752,7 @@ func (s *CharacterService) GenerateChapterImages(
 
 	promptLanguage := "zh"
 	imageStyle := ""
+	worldviewContext := ""
 	var novelTitle string
 	if s.novelRepo != nil {
 		if novel, e2 := s.novelRepo.GetByID(novelID); e2 == nil {
@@ -2724,6 +2761,7 @@ func (s *CharacterService) GenerateChapterImages(
 			}
 			imageStyle = novel.AIConfig.ImageStyle
 			novelTitle = novel.Title
+			worldviewContext = buildWorldviewVisualContext(novel.Worldview)
 		}
 	}
 
@@ -2746,6 +2784,7 @@ func (s *CharacterService) GenerateChapterImages(
 				"CharacterDescription": baseDesc,
 				"ChapterContent":       truncateForPrompt(chapter.Content, 4000),
 				"PromptLanguage":       promptLanguage,
+				"WorldviewContext":     worldviewContext,
 			})
 			if renderErr != nil {
 				logger.Errorf("[CharacterService] GenerateChapterImages render char %d: %v", char.ID, renderErr)

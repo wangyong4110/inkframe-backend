@@ -1114,12 +1114,15 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			svcs.TaskService.SetRunning(t.TaskID) //nolint:errcheck
-			prompt, err := svcs.CharacterService.GenerateLookVisualPrompt(t.TenantID, charID, params.Description)
+			result, err := svcs.CharacterService.GenerateLookVisualPrompt(t.TenantID, charID, params.Description)
 			if err != nil {
 				logger.Errorf("TaskService resume look_prompt_gen %s failed: %v", t.TaskID, err)
 				svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck
 			} else {
-				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{"visual_prompt": prompt}) //nolint:errcheck
+				svcs.TaskService.Complete(t.TaskID, map[string]interface{}{ //nolint:errcheck
+					"visual_prompt": result.VisualPrompt,
+					"face_prompt":   result.FacePrompt,
+				})
 			}
 		})
 	}
@@ -1161,8 +1164,15 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 			var updatedLook *model.CharacterLook
 			switch params.Type {
 			case "portrait":
-				// Step 1: generate face portrait from visual prompt (no reference needed)
-				img, err := svcs.ImageGenerationService.GeneratePortrait(ctx, tenantID, char.Name, visualPrompt, style, "", "", params.Provider)
+				// FacePrompt 与 visualPrompt 由 GenerateLookVisualPrompt 同一次 AI 调用独立产出
+				// （只含身份+面部+发型），不从 visualPrompt 派生/兜底——为空说明该形象还没有
+				// 用新流程生成过文案，需要用户先点"AI 更新"。
+				if look.FacePrompt == "" {
+					svcs.TaskService.Fail(t.TaskID, "该形象还没有面部专用提示词，请先点击「AI 更新」生成形象文案") //nolint:errcheck
+					return
+				}
+				// Step 1: generate face portrait from the dedicated face prompt (no reference needed)
+				img, err := svcs.ImageGenerationService.GeneratePortrait(ctx, tenantID, char.Name, look.FacePrompt, style, "", "", params.Provider)
 				if err != nil {
 					logger.Errorf("TaskService resume look_image_gen %s portrait failed: %v", t.TaskID, err)
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck

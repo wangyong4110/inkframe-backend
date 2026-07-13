@@ -5,7 +5,10 @@
 - 类型：{{ Genre }}
 - 角色定位：{{ CharacterRole }}
 - 角色简介：{{ CharacterBrief }}
-
+{% if WorldviewContext %}
+# 世界观设定（visual_prompt 里的服装/配饰/工艺水平必须与此一致，禁止出现与世界观时代/文明背景冲突的元素）
+{{ WorldviewContext }}
+{% endif %}
 # 相关章节摘要
 {{ Summaries }}
 

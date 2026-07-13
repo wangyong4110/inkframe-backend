@@ -3,7 +3,10 @@ You are a character designer analyzing how a character appears in a specific nov
 Character: {{ CharacterName }}
 Current visual profile:
 {{ CharacterDescription }}
-
+{% if WorldviewContext %}
+Novel worldview (setting/era — the updated visual_prompt's clothing, materials, accessories, and technology level MUST stay consistent with this, even when reflecting new chapter details):
+{{ WorldviewContext }}
+{% endif %}
 Chapter content:
 ---
 {{ ChapterContent }}

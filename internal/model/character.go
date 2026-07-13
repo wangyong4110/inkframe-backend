@@ -166,8 +166,12 @@ type CharacterLook struct {
 
 	// 外观描述（中文，供用户阅读和编辑）
 	Description string `json:"description" gorm:"type:text"`
-	// AI 图像生成英文提示词（基于外观描述生成/编辑）
+	// AI 图像生成提示词：完整外观（含服装/鞋履/配饰/姿态），用于三视图生成
 	VisualPrompt string `json:"visual_prompt" gorm:"type:text"`
+	// 面部特写专用提示词（仅身份+面部+发型），用于面部参考图生成。
+	// 与 VisualPrompt 由同一次 AI 调用（GenerateLookVisualPrompt）结构化输出、一并产出，
+	// 不从 VisualPrompt 解析派生——避免维护额外的文本分类逻辑。
+	FacePrompt string `json:"face_prompt,omitempty" gorm:"type:text"`
 
 	// 该形象的参考图像
 	ThreeViewSheet string `json:"three_view_sheet" gorm:"size:1000"`
@@ -261,6 +265,7 @@ type CreateCharacterLookRequest struct {
 	SetAsDefault   bool   `json:"set_as_default"` // 是否将此形象设为默认
 	Description    string `json:"description"`
 	VisualPrompt   string `json:"visual_prompt"`
+	FacePrompt     string `json:"face_prompt"` // 面部特写专用提示词，与 VisualPrompt 同一次 AI 调用产出
 	ThreeViewSheet string `json:"three_view_sheet"`
 	Portrait       string `json:"portrait"`
 }
@@ -273,6 +278,7 @@ type UpdateCharacterLookRequest struct {
 	SetAsDefault   *bool   `json:"set_as_default"` // 是否将此形象设为默认
 	Description    *string `json:"description"`
 	VisualPrompt   *string `json:"visual_prompt"`
+	FacePrompt     *string `json:"face_prompt"` // 面部特写专用提示词，与 VisualPrompt 同一次 AI 调用产出
 	ThreeViewSheet *string `json:"three_view_sheet"`
 	Portrait       *string `json:"portrait"`
 }
