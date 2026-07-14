@@ -580,20 +580,24 @@ func isRealisticStyle(style string) bool {
 		strings.Contains(s, "真人")
 }
 
-// selectVolcengineImageModel 根据参考图、风格和一致性权重选择合适的即梦AI模型。
+// selectVolcengineImageModel 根据参考图数量、风格和一致性权重选择合适的即梦AI模型。
 // 新一代即梦模型（4.0/4.6/3.0/3.1/智能参考）由用户显式配置，保留原始选择，不做自动覆盖：
 // 这些模型对多格布局、角色设计参考图的理解显著优于旧版 DreamO/Text2ImgV3。
 // consistencyWeight：0-1，≥0.7 使用 DreamO（角色特征保持），<0.7 使用 SeedEditV3（指令编辑）。
-func selectVolcengineImageModel(entry ImageProviderEntry, referenceImage, style string, consistencyWeight float64) string {
+func selectVolcengineImageModel(entry ImageProviderEntry, referenceImageCount int, style string, consistencyWeight float64) string {
 	switch entry.Model {
 	case VolcModelJimengSeedream46, VolcModelJimengT2Iv40,
 		VolcModelJimengT2Iv31, VolcModelJimengT2Iv30, VolcModelJimengI2Iv30:
 		return entry.Model
 	}
-	// 旧版模型（DreamO/SeedEditV3/PortraitPhoto/Text2ImgV3）：根据参考图和风格自动选择
-	if referenceImage != "" {
-		// 写实风格：即使有参考图也使用 PortraitPhoto，保证生成真实感肖像
-		if isRealisticStyle(style) {
+	// 旧版模型（DreamO/SeedEditV3/PortraitPhoto/Text2ImgV3）：根据参考图数量和风格自动选择
+	if referenceImageCount > 0 {
+		// 写实风格 + 恰好 1 张参考图：使用 PortraitPhoto，保证生成真实感肖像。
+		// PortraitPhoto 是单图 I2I 模型（buildSubmitParams 里只接受一张 image_input），
+		// 若参考图有 2 张以上（如"角色+场景"分镜合成），必须落到下面 DreamO/SeedEditV3
+		// 分支——那两个模型才支持多张参考图（setMultiImageInput）。否则第 2 张及以后的
+		// 参考图会被静默丢弃，且模型本身也不是为多图合成设计的。
+		if isRealisticStyle(style) && referenceImageCount == 1 {
 			return VolcModelPortraitPhoto
 		}
 		if consistencyWeight >= 0.7 {

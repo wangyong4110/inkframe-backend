@@ -590,12 +590,17 @@ func (s *SceneAnchorService) AIAnalyze(ctx context.Context, tenantID, id uint) (
 }
 
 // GenerateRefImage 使用 AI 图像生成为锚点生成参考图并锁定
-func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id uint, providerName string) (*model.SceneAnchor, error) {
+// descriptionOverride 非空时优先于数据库中的 anchor.Description（用于编辑框尚未保存的最新内容），为空则回退查库。
+func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id uint, providerName, descriptionOverride string) (*model.SceneAnchor, error) {
 	logger.Printf("[SceneAnchorService] GenerateRefImage: tenantID=%d anchorID=%d provider=%s", tenantID, id, providerName)
 	anchor, err := s.repo.GetByID(id)
 	if err != nil {
 		logger.Errorf("[SceneAnchorService] GenerateRefImage: getByID id=%d: %v", id, err)
 		return nil, fmt.Errorf("anchor not found: %w", err)
+	}
+	description := descriptionOverride
+	if description == "" {
+		description = anchor.Description
 	}
 
 	// 查询小说的图片风格（用于模型选择）和标题（用于 OSS 路径）
@@ -613,15 +618,15 @@ func (s *SceneAnchorService) GenerateRefImage(ctx context.Context, tenantID, id 
 		}
 	}
 
-	logger.Printf("[SceneAnchorService] GenerateRefImage: anchorID=%d description_len=%d description=%.200q promptLock=%.80q", id, len(anchor.Description), anchor.Description, anchor.PromptLock)
+	logger.Printf("[SceneAnchorService] GenerateRefImage: anchorID=%d description_len=%d description=%.200q promptLock=%.80q", id, len(description), description, anchor.PromptLock)
 	sceneType := anchor.Type
 	if sceneType == "" {
 		sceneType = "exterior"
 	}
 	rendered, tplErr := renderPrompt("image_scene_ref", map[string]interface{}{
-		"Description":  anchor.Description,
-		"PromptLock":   anchor.PromptLock,
-		"SceneType":    sceneType,
+		"Description":   description,
+		"PromptLock":    anchor.PromptLock,
+		"SceneType":     sceneType,
 		"QualityTokens": universalQualityTags,
 	})
 	if tplErr != nil {
@@ -725,7 +730,7 @@ func (s *SceneAnchorService) BatchGenerateRefImages(ctx context.Context, tenantI
 		wg.Add(1)
 		go func() {
 			defer func() { <-sem; wg.Done() }()
-			if _, genErr := s.GenerateRefImage(ctx, tenantID, anchor.ID, provider); genErr != nil {
+			if _, genErr := s.GenerateRefImage(ctx, tenantID, anchor.ID, provider, ""); genErr != nil {
 				logger.Errorf("[SceneAnchorService] BatchGenerateRefImages: anchor %d (%s) failed: %v", anchor.ID, anchor.Name, genErr)
 				mu.Lock()
 				failed++
@@ -786,7 +791,7 @@ func (s *SceneAnchorService) GenerateChapterRefImages(ctx context.Context, tenan
 		wg.Add(1)
 		go func() {
 			defer func() { <-sem; wg.Done() }()
-			if _, genErr := s.GenerateRefImage(ctx, tenantID, anchor.ID, provider); genErr != nil {
+			if _, genErr := s.GenerateRefImage(ctx, tenantID, anchor.ID, provider, ""); genErr != nil {
 				logger.Errorf("[SceneAnchorService] GenerateChapterRefImages: anchor %d (%s) failed: %v", anchor.ID, anchor.Name, genErr)
 				mu.Lock()
 				failed++

@@ -1136,9 +1136,11 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				return
 			}
 			var params struct {
-				Type     string `json:"type"`
-				CharID   uint   `json:"char_id"`
-				Provider string `json:"provider"`
+				Type         string `json:"type"`
+				CharID       uint   `json:"char_id"`
+				Provider     string `json:"provider"`
+				FacePrompt   string `json:"face_prompt"`
+				VisualPrompt string `json:"visual_prompt"`
 			}
 			if t.ParamsJSON != "" {
 				_ = json.Unmarshal([]byte(t.ParamsJSON), &params)
@@ -1153,7 +1155,16 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				svcs.TaskService.Fail(t.TaskID, "character not found: "+err.Error()) //nolint:errcheck
 				return
 			}
-			visualPrompt := look.VisualPrompt
+			// 优先使用请求时传入的表单内容（可能尚未保存到数据库），为空才回退到 look 的数据库存值
+			// ——兼容章节批量生成等没有编辑表单、只能走数据库存值的调用场景。
+			facePrompt := params.FacePrompt
+			if facePrompt == "" {
+				facePrompt = look.FacePrompt
+			}
+			visualPrompt := params.VisualPrompt
+			if visualPrompt == "" {
+				visualPrompt = look.VisualPrompt
+			}
 			if visualPrompt == "" {
 				visualPrompt = char.Description
 			}
@@ -1167,12 +1178,12 @@ func registerTaskResumeHandlers(svcs *Services, repos *Repositories) {
 				// FacePrompt 与 visualPrompt 由 GenerateLookVisualPrompt 同一次 AI 调用独立产出
 				// （只含身份+面部+发型），不从 visualPrompt 派生/兜底——为空说明该形象还没有
 				// 用新流程生成过文案，需要用户先点"AI 更新"。
-				if look.FacePrompt == "" {
+				if facePrompt == "" {
 					svcs.TaskService.Fail(t.TaskID, "该形象还没有面部专用提示词，请先点击「AI 更新」生成形象文案") //nolint:errcheck
 					return
 				}
 				// Step 1: generate face portrait from the dedicated face prompt (no reference needed)
-				img, err := svcs.ImageGenerationService.GeneratePortrait(ctx, tenantID, char.Name, look.FacePrompt, style, "", "", params.Provider)
+				img, err := svcs.ImageGenerationService.GeneratePortrait(ctx, tenantID, char.Name, facePrompt, style, "", "", params.Provider)
 				if err != nil {
 					logger.Errorf("TaskService resume look_image_gen %s portrait failed: %v", t.TaskID, err)
 					svcs.TaskService.Fail(t.TaskID, err.Error()) //nolint:errcheck

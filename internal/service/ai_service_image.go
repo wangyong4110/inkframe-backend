@@ -50,7 +50,7 @@ func (s *AIService) GenerateImage(tenantID uint, prompt string, options *ImageGe
 			continue
 		}
 
-		modelName := selectImageModel(e, "", "")
+		modelName := selectImageModel(e, 0, "")
 		release, slotErr := s.acquireModelSlotByName(ctx, tenantID, modelName)
 		if slotErr != nil {
 			lastErr = slotErr
@@ -154,13 +154,18 @@ func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProvider
 // to the provider's own model-selection logic (registered via
 // ai.RegisterImageEngineTraits) when one exists; otherwise it keeps
 // entry.Model unchanged. consistencyWeight defaults to 1.0 when unset or <= 0.
-func selectImageModel(entry ai.ImageProviderEntry, referenceImage, style string, consistencyWeight ...float64) string {
+//
+// referenceImageCount must be the ACTUAL number of reference images supplied,
+// not just a presence flag — a single reference image and multiple reference
+// images (e.g. character + separate scene image) often need different model
+// variants (see ai.ImageEngineTraits.SelectModel's doc comment).
+func selectImageModel(entry ai.ImageProviderEntry, referenceImageCount int, style string, consistencyWeight ...float64) string {
 	weight := 1.0
 	if len(consistencyWeight) > 0 && consistencyWeight[0] > 0 {
 		weight = consistencyWeight[0]
 	}
 	if sel := ai.ImageEngineTraitsFor(entry.ProviderName).SelectModel; sel != nil {
-		return sel(entry, referenceImage, style, weight)
+		return sel(entry, referenceImageCount, style, weight)
 	}
 	return entry.Model
 }
@@ -199,6 +204,10 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 	if len(consistencyWeight) > 0 && consistencyWeight[0] > 0 {
 		weight = consistencyWeight[0]
 	}
+	refCount := 0
+	if referenceImage != "" {
+		refCount = 1
+	}
 	// cfgScale 以 [1,10] 编码 weight（volcengine_visual.go 中各 case 负责按 API 范围还原）
 	cfgScale := 1.0 + weight*9.0
 
@@ -236,7 +245,7 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 		if sz == "" {
 			sz = entry.Size
 		}
-		modelName := selectImageModel(*entry, referenceImage, style, weight)
+		modelName := selectImageModel(*entry, refCount, style, weight)
 		release, err := s.acquireModelSlotByName(ctx, tenantID, modelName)
 		if err != nil {
 			return "", err
@@ -293,7 +302,7 @@ func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uin
 			lastErr = err
 			continue
 		}
-		modelName := selectImageModel(e, referenceImage, style, weight)
+		modelName := selectImageModel(e, refCount, style, weight)
 		logger.Printf("GenerateCharacterThreeView: trying provider=%s model=%s refImage=%v", e.ProviderName, modelName, referenceImage != "")
 		eSz := sizeOverride
 		if eSz == "" {
@@ -527,7 +536,7 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		if err != nil {
 			return "", fmt.Errorf("image provider %q not available: %w", providerName, err)
 		}
-		modelName := selectImageModel(*entry, firstRef, style, weight)
+		modelName := selectImageModel(*entry, len(referenceImages), style, weight)
 		release, err := s.acquireModelSlotByName(ctx, tenantID, modelName)
 		if err != nil {
 			return "", err
@@ -570,7 +579,7 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 			lastErr = err
 			continue
 		}
-		modelName := selectImageModel(e, firstRef, style, weight)
+		modelName := selectImageModel(e, len(referenceImages), style, weight)
 		{
 			// 日志：打印 extRefs 的类型分布（base64/url/unknown），方便确认参考图是否被正确预处理
 			extRefTypes := make([]string, len(extRefs))
@@ -784,7 +793,7 @@ func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint,
 			lastErr = err
 			continue
 		}
-		req.Model = selectImageModel(e, imgInput, "")
+		req.Model = selectImageModel(e, 1, "")
 		release, acquireErr := s.acquireModelSlotByName(ctx, tenantID, req.Model)
 		if acquireErr != nil {
 			return "", acquireErr

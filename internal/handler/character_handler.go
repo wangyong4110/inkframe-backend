@@ -1231,8 +1231,10 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 		return
 	}
 	var req struct {
-		Type     string `json:"type"`     // "three_view" | "portrait"
-		Provider string `json:"provider"`
+		Type         string `json:"type"` // "three_view" | "portrait"
+		Provider     string `json:"provider"`
+		FacePrompt   string `json:"face_prompt"`   // 可选：编辑框中未保存的最新面部提示词，优先于数据库存值
+		VisualPrompt string `json:"visual_prompt"` // 可选：编辑框中未保存的最新图像提示词，优先于数据库存值
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		respondBadRequest(c, err.Error())
@@ -1241,12 +1243,15 @@ func (h *CharacterHandler) GenerateLookImages(c *gin.Context) {
 
 	// 执行逻辑不在这里——只创建任务记录，执行权交给任务引擎（service.TaskTypeLookImageGen
 	// 的执行函数在 cmd/server/task_resume.go，用 t.EntityID(=lookID) + char_id 重新查
-	// look/character 拿 visualPrompt/style/charName/currentPortrait，反序列化 type/provider
-	// 调用同一套 GeneratePortrait/GenerateThreeViewSheet）。
+	// look/character 拿 style/charName/currentPortrait，反序列化 type/provider/face_prompt/
+	// visual_prompt 调用同一套 GeneratePortrait/GenerateThreeViewSheet；face_prompt/visual_prompt
+	// 非空时优先于 look 的数据库存值，为空则回退查库，兼容章节批量生成等无表单场景）。
 	task, err := h.taskSvc.CreateWithParams(tenantID, service.TaskTypeLookImageGen, "形象图片生成", "look", uint(lookID), map[string]interface{}{
-		"type":     req.Type,
-		"char_id":  id,
-		"provider": req.Provider,
+		"type":          req.Type,
+		"char_id":       id,
+		"provider":      req.Provider,
+		"face_prompt":   req.FacePrompt,
+		"visual_prompt": req.VisualPrompt,
 	})
 	if err != nil {
 		respondErr(c, http.StatusInternalServerError, "failed to create task")

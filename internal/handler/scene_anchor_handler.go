@@ -324,10 +324,11 @@ func (h *SceneAnchorHandler) GenerateRefImage(c *gin.Context) {
 		return
 	}
 	var body struct {
-		Provider string `json:"provider"`
+		Provider    string `json:"provider"`
+		Description string `json:"description"` // 可选：编辑框中未保存的最新描述，优先于数据库存值
 	}
 	_ = c.ShouldBindJSON(&body) // optional body
-	anchor, err := h.svc.GenerateRefImage(c.Request.Context(), getTenantID(c), uint(id), body.Provider)
+	anchor, err := h.svc.GenerateRefImage(c.Request.Context(), getTenantID(c), uint(id), body.Provider, body.Description)
 	if err != nil {
 		reqLogger(c).Errorf("[SceneAnchorHandler] GenerateRefImage error: %v", err)
 		respondErr(c, http.StatusInternalServerError, "failed to generate ref image")
