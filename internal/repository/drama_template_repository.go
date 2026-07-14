@@ -41,6 +41,7 @@ func (r *DramaTemplateRepository) Upsert(t *model.DramaTemplate) error {
 	var existing model.DramaTemplate
 	if err := r.db.Where("name = ?", t.Name).First(&existing).Error; err == nil {
 		t.ID = existing.ID
+		t.CreatedAt = existing.CreatedAt
 		return r.db.Save(t).Error
 	}
 	return r.db.Create(t).Error

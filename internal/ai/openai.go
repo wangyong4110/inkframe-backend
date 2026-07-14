@@ -386,15 +386,6 @@ func (p *OpenAIProvider) AudioGenerate(ctx context.Context, req *AudioGenerateRe
 }
 
 func (p *OpenAIProvider) buildRequest(req *GenerateRequest) map[string]interface{} {
-	// 判断是否有 Vision 消息
-	hasVision := false
-	for _, msg := range req.Messages {
-		if len(msg.ImageURLs) > 0 {
-			hasVision = true
-			break
-		}
-	}
-
 	// 构建消息列表（支持 Vision 多模态）
 	messages := []map[string]interface{}{}
 
@@ -435,13 +426,14 @@ func (p *OpenAIProvider) buildRequest(req *GenerateRequest) map[string]interface
 		}
 	}
 
-	// Vision 请求自动升级到支持视觉的模型
+	// 用户配置了哪个模型就用哪个模型，不替用户静默切换——即使这是一条 Vision 请求而配置的模型
+	// 可能不支持图片输入。维护一份"哪些模型支持 Vision"的白名单容易过时（漏掉 gpt-4o-mini 等
+	// 实际支持视觉的新模型，导致被误判为不支持而白白升级），且没有可靠的能力来源。如果配置的
+	// 模型确实不支持图片输入，让 OpenAI 官方 API 直接报错，比我们自己猜测并静默换模型更准确、
+	// 也让用户能看到真实的失败原因。
 	model := req.Model
 	if model == "" {
 		model = p.model
-	}
-	if hasVision && model != "gpt-4o" && model != "gpt-4-vision-preview" && model != "gpt-4-turbo" {
-		model = "gpt-4o"
 	}
 
 	openaiReq := map[string]interface{}{
