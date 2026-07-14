@@ -56,8 +56,14 @@ func autoMigrate(db *gorm.DB) error {
 	// 禁用外键约束创建：避免手动加列类型不匹配、循环依赖等问题
 	// AutoMigrate 只负责同步列定义，外键由应用层保证一致性
 	db.DisableForeignKeyConstraintWhenMigrating = true
+	// 注意：&model.Tenant{} 暂时从此列表移除。表结构已稳定、与 model 定义一致，
+	// 但 gorm.io/driver/mysql v1.5.2 在协调 tenants.code 列时会尝试
+	// ALTER TABLE tenants DROP FOREIGN KEY uni_tenants_code —— 这个名字是驱动内部
+	// 默认命名规则算出来的，忽略了 Code 字段 gorm tag 里显式指定的 uniqueIndex:idx_tenants_code，
+	// 导致该约束根本不存在而报错 42000/1091，FATAL 阻断启动。
+	// 若日后需要变更 Tenant 字段，请先解决这个驱动问题（如升级 gorm/mysql driver 版本），
+	// 再把 &model.Tenant{} 加回来，不要直接加回去否则会复现此问题。
 	if err := db.AutoMigrate(
-		&model.Tenant{},
 		&model.User{},
 		&model.TenantUser{},
 		&model.Novel{},
