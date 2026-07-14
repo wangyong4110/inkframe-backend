@@ -296,6 +296,33 @@ func (s *AIService) loadDBProviderByName(tenantID uint, name string) (ai.AIProvi
 	return nil, fmt.Errorf("provider %q not found or not active in DB", name)
 }
 
+// eligibleProviders 从 DB 加载指定类型（"image"/"video"/"voice"/"sfx"/...）的提供者，
+// 过滤掉未激活或缺少凭据的。这是 loadDBImageProviderEntries/loadDBVoiceProvider/
+// GetTenantVideoProvider/GetTenantLipSyncProvider/ListCapableProviders 共用的第一步——
+// 过滤之后"怎么从候选里选一个"（按 voiceID 匹配、按 provider 名称偏好排序等）由各自的
+// 调用方决定，不同类型的选择规则差异较大，不适合也塞进这个共享函数里。
+// 注意：getTenantProvider 不复用这个函数——它对"没有凭据"的处理是降级容忍而非硬性跳过
+// （租户级/系统级都找不到有凭据的才退而求其次接受无凭据的），语义上不是同一个过滤条件。
+func (s *AIService) eligibleProviders(tenantID uint, modelType string) ([]*model.ModelProvider, error) {
+	providers, err := s.providerRepo.ListByModelType(tenantID, modelType)
+	if err != nil {
+		return nil, err
+	}
+	var result []*model.ModelProvider
+	for _, p := range providers {
+		if !p.IsActive {
+			logger.Printf("eligibleProviders: skip %s provider %q (inactive)", modelType, p.Name)
+			continue
+		}
+		if !providerHasCredentials(p) {
+			logger.Printf("eligibleProviders: skip %s provider %q (missing credentials)", modelType, p.Name)
+			continue
+		}
+		result = append(result, p)
+	}
+	return result, nil
+}
+
 // loadDBProviderByType 从 DB 中取第一个有效的指定类型提供商（如 "sfx"、"voice"）。
 // 返回 provider、提供商名称和错误。
 func (s *AIService) loadDBProviderByType(tenantID uint, modelType string) (ai.AIProvider, string, error) {
@@ -307,28 +334,20 @@ func (s *AIService) loadDBProviderByType(tenantID uint, modelType string) (ai.AI
 // 返回 provider、提供商名称和错误。
 func (s *AIService) loadDBVoiceProvider(tenantID uint, modelType, voiceID string) (ai.AIProvider, string, error) {
 	logger.Printf("[TTS] loadDBVoiceProvider: tenantID=%d modelType=%q voiceID=%q", tenantID, modelType, voiceID)
-	providers, err := s.providerRepo.ListByModelType(tenantID, modelType)
+	providers, err := s.eligibleProviders(tenantID, modelType)
 	if err != nil {
 		logger.Errorf("[TTS] loadDBVoiceProvider: ERROR ListByModelType tenantID=%d modelType=%q: %v", tenantID, modelType, err)
 		return nil, "", err
 	}
-	logger.Printf("[TTS] loadDBVoiceProvider: found %d providers of type %q for tenantID=%d", len(providers), modelType, tenantID)
+	logger.Printf("[TTS] loadDBVoiceProvider: %d eligible providers of type %q for tenantID=%d", len(providers), modelType, tenantID)
 
-	// 过滤出有凭据的活跃 provider，同时按 voiceID 打优先级
+	// 按 voiceID 打优先级
 	type candidate struct {
 		p        *model.ModelProvider
 		priority int // 0=voice匹配, 1=无匹配/voiceID为空
 	}
 	var candidates []candidate
 	for _, p := range providers {
-		if !p.IsActive {
-			logger.Printf("[TTS] loadDBVoiceProvider: skip provider %q (inactive)", p.Name)
-			continue
-		}
-		if !providerHasCredentials(p) {
-			logger.Printf("[TTS] loadDBVoiceProvider: skip %s provider %q (missing credentials)", modelType, p.Name)
-			continue
-		}
 		pri := 1
 		if voiceID != "" {
 			for _, v := range model.BuiltinVoices(p.Name) {
@@ -424,7 +443,7 @@ func (s *AIService) GetSFXProviderCreds(tenantID uint, name string) (apiKey, end
 // GetTenantVideoProvider 从 DB 中查找指定租户已配置的视频生成提供商。
 // name 为空时返回第一个可用的视频提供商（kling 优先）。
 func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.VideoProvider, error) {
-	providers, err := s.providerRepo.ListByModelType(tenantID, "video")
+	providers, err := s.eligibleProviders(tenantID, "video")
 	if err != nil {
 		return nil, err
 	}
@@ -436,12 +455,6 @@ func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.Video
 	}
 	byName := make(map[string]*model.ModelProvider)
 	for _, p := range providers {
-		if !p.IsActive {
-			continue
-		}
-		if !providerHasCredentials(p) {
-			continue
-		}
 		pname := strings.ToLower(p.Name)
 		if _, exists := byName[pname]; !exists {
 			byName[pname] = p
@@ -489,17 +502,11 @@ func (s *AIService) GetTenantVideoProvider(tenantID uint, name string) (ai.Video
 // GetTenantLipSyncProvider 查找租户已配置的口型对齐提供商。
 // 目前仅支持 kling（使用 kling provider 的 AK/SK 构造 KlingLipSyncProvider）。
 func (s *AIService) GetTenantLipSyncProvider(tenantID uint) (ai.LipSyncProvider, error) {
-	providers, err := s.providerRepo.ListByModelType(tenantID, "video")
+	providers, err := s.eligibleProviders(tenantID, "video")
 	if err != nil {
 		return nil, err
 	}
 	for _, p := range providers {
-		if !p.IsActive {
-			continue
-		}
-		if !providerHasCredentials(p) {
-			continue
-		}
 		if strings.ToLower(p.Name) != "kling" {
 			continue
 		}

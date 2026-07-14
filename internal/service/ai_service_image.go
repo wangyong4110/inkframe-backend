@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/logger"
+	"github.com/inkframe/inkframe-backend/internal/model"
 )
 
 // GenerateImage 调用AI生成图像。DB 是唯一权威来源（同 GenerateCharacterThreeView 的 auto 分支）：
@@ -60,14 +61,32 @@ var knownImageCapableProviders = []ai.ImageProviderEntry{
 	{ProviderName: "volcengine-visual", Model: ai.VolcModelText2ImgV3, Size: "2048x2048"},
 }
 
-// loadDBImageProviderEntries 从 DB 加载 IMAGE 类型的提供者列表，使用实际配置的模型名称（APIVersion）。
+// activeModelNameFor 从 ink_ai_model 查询指定 provider 在某个模型类型下的第一个激活模型名——
+// 这是用户在模型管理里为该类型实际选择的模型。同一个 provider 可能同时配置多种类型的模型
+// （如 doubao 既是 LLM 也是图像提供商），provider 级别的 effectiveModelName(DefaultModel/
+// APIVersion) 并不区分类型，不能代表"该类型下选的是哪个模型"，只能用作查不到时的兜底。
+// 与 GetActiveVideoModelName（ai_service_provider_resolve.go）对 video 类型的查法一致。
+func (s *AIService) activeModelNameFor(p *model.ModelProvider, tenantID uint, modelType string) string {
+	if s.modelRepo != nil {
+		if models, err := s.modelRepo.List(&p.ID, tenantID); err == nil {
+			for _, m := range models {
+				if m.Type == modelType && m.IsActive {
+					return m.Name
+				}
+			}
+		}
+	}
+	return effectiveModelName(p)
+}
+
+// loadDBImageProviderEntries 从 DB 加载 IMAGE 类型的提供者列表，使用实际配置的模型名称。
 // 避免 knownImageCapableProviders 硬编码模型与用户实际配置不匹配的问题。
 // volcengine-visual 排在末尾：它需要服务端下载参考图，私有 OSS URL 会导致 403 失败。
 func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProviderEntry {
 	if s.providerRepo == nil {
 		return nil
 	}
-	providers, err := s.providerRepo.ListByModelType(tenantID, "image")
+	providers, err := s.eligibleProviders(tenantID, "image")
 	if err != nil {
 		return nil
 	}
@@ -80,14 +99,6 @@ func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProvider
 	var primary, volcengine []ai.ImageProviderEntry
 	seen := map[string]bool{}
 	for _, p := range providers {
-		if !p.IsActive {
-			logger.Printf("loadDBImageProviderEntries: skip provider %q (inactive)", p.Name)
-			continue
-		}
-		if !providerHasCredentials(p) {
-			logger.Printf("loadDBImageProviderEntries: skip IMAGE provider %q (missing credentials)", p.Name)
-			continue
-		}
 		if seen[p.Name] {
 			continue
 		}
@@ -96,8 +107,9 @@ func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProvider
 		if size == "" {
 			size = "1024x1024"
 		}
-		entry := ai.ImageProviderEntry{ProviderName: p.Name, Model: effectiveModelName(p), Size: size}
-		logger.Printf("loadDBImageProviderEntries: adding IMAGE provider %q model=%q size=%s (tenantID=%d)", p.Name, effectiveModelName(p), size, tenantID)
+		modelName := s.activeModelNameFor(p, tenantID, "image")
+		entry := ai.ImageProviderEntry{ProviderName: p.Name, Model: modelName, Size: size}
+		logger.Printf("loadDBImageProviderEntries: adding IMAGE provider %q model=%q size=%s (tenantID=%d)", p.Name, modelName, size, tenantID)
 		// volcengine-visual 依赖服务端下载参考图，排到最后作为兜底
 		if p.Name == ai.ProviderNameVolcengineVisual {
 			volcengine = append(volcengine, entry)
@@ -107,7 +119,7 @@ func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProvider
 	}
 	result := append(primary, volcengine...)
 	if len(result) == 0 {
-		logger.Printf("loadDBImageProviderEntries: no IMAGE providers found for tenantID=%d (total providers checked: %d)", tenantID, len(providers))
+		logger.Printf("loadDBImageProviderEntries: no eligible IMAGE providers for tenantID=%d", tenantID)
 	}
 	return result
 }

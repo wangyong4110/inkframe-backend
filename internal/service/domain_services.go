@@ -150,21 +150,32 @@ func normalizeProviderType(t string) string {
 // ListCapableProviders returns active, credentialed providers matching the given type (e.g. "LLM", "IMAGE").
 func (s *ModelService) ListCapableProviders(tenantID uint, typeFilter string) ([]CapableProvider, error) {
 	normalizedType := normalizeProviderType(typeFilter)
-	providers, err := s.providerRepo.ListByModelType(tenantID, normalizedType)
+	var providers []*model.ModelProvider
+	var err error
+	if s.aiService != nil {
+		providers, err = s.aiService.eligibleProviders(tenantID, normalizedType)
+	} else {
+		// aiService 未注入（可选依赖）时退回直接过滤，行为与 eligibleProviders 一致。
+		providers, err = s.providerRepo.ListByModelType(tenantID, normalizedType)
+		if err == nil {
+			var filtered []*model.ModelProvider
+			for _, p := range providers {
+				if p.IsActive && providerHasCredentials(p) {
+					filtered = append(filtered, p)
+				}
+			}
+			providers = filtered
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
 	var result []CapableProvider
 	for _, p := range providers {
-		if !p.IsActive {
-			continue
-		}
-		if providerHasCredentials(p) {
-			result = append(result, CapableProvider{
-				Name:        p.Name,
-				DisplayName: capableProviderDisplayName(p.Name, p.DisplayName),
-			})
-		}
+		result = append(result, CapableProvider{
+			Name:        p.Name,
+			DisplayName: capableProviderDisplayName(p.Name, p.DisplayName),
+		})
 	}
 	return result, nil
 }

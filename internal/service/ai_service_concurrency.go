@@ -50,15 +50,12 @@ func (s *AIService) GetProviderConcurrency(tenantID uint, providerType string) i
 	if s.providerRepo == nil || s.modelRepo == nil {
 		return 1
 	}
-	providers, err := s.providerRepo.ListByModelType(tenantID, providerType)
+	providers, err := s.eligibleProviders(tenantID, providerType)
 	if err != nil || len(providers) == 0 {
 		return 1
 	}
 	for _, p := range providers {
-		if !p.IsActive || !providerHasCredentials(p) {
-			continue
-		}
-		modelName := effectiveModelName(p)
+		modelName := s.activeModelNameFor(p, tenantID, providerType)
 		if modelName == "" {
 			continue
 		}
