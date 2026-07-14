@@ -56,117 +56,24 @@ func autoMigrate(db *gorm.DB) error {
 	// 禁用外键约束创建：避免手动加列类型不匹配、循环依赖等问题
 	// AutoMigrate 只负责同步列定义，外键由应用层保证一致性
 	db.DisableForeignKeyConstraintWhenMigrating = true
-	// 注意：&model.Tenant{} 暂时从此列表移除。表结构已稳定、与 model 定义一致，
-	// 但 gorm.io/driver/mysql v1.5.2 在协调 tenants.code 列时会尝试
-	// ALTER TABLE tenants DROP FOREIGN KEY uni_tenants_code —— 这个名字是驱动内部
-	// 默认命名规则算出来的，忽略了 Code 字段 gorm tag 里显式指定的 uniqueIndex:idx_tenants_code，
-	// 导致该约束根本不存在而报错 42000/1091，FATAL 阻断启动。
-	// 若日后需要变更 Tenant 字段，请先解决这个驱动问题（如升级 gorm/mysql driver 版本），
-	// 再把 &model.Tenant{} 加回来，不要直接加回去否则会复现此问题。
+	// 注意（2026-07-14）：本次版本升级只是为了给 &model.CharacterLook{} 加 face_prompt 列，
+	// 因此本轮 AutoMigrate 暂时只传这一个 model，不再传完整的模型列表。
+	//
+	// 原因：完整列表里几乎每张带唯一索引（uniqueIndex）的表都会触发 gorm.io/driver/mysql
+	// v1.5.2 的一个协调 bug——协调该表时会尝试 ALTER TABLE ... DROP FOREIGN KEY <驱动按自身
+	// 默认命名规则算出的约束名>，而这个名字往往并不对应任何真实存在的外键（唯一索引本来就
+	// 不是外键，MySQL 的 DROP FOREIGN KEY 语法对它必然报 42000/1091），导致 FATAL 阻断启动。
+	// 已实测在 &model.Tenant{}（uni_tenants_code）、&model.User{}（uni_users_uuid）上复现，
+	// 全列表里还有十余处同类 uniqueIndex 字段，大概率会逐个复现同样的问题。
+	//
+	// 这个 bug 与本次要新增的列本身无关，只是"整表全量协调"这个动作本身就会触发它。
+	// 因此暂时只精确迁移 CharacterLook，避免连带触碰其它完全不需要变更的表。
+	//
+	// 后续如果要恢复完整列表（比如升级 gorm/driver/mysql 到修复该问题的版本之后），
+	// 完整模型列表可以从 git 历史里找回（git log -p 本文件，本次改动之前的版本），
+	// 恢复前请逐个验证受影响的表（参考上面两个已知案例的排查方法）。
 	if err := db.AutoMigrate(
-		&model.User{},
-		&model.TenantUser{},
-		&model.Novel{},
-		&model.NovelVideoConfig{},
-		&model.Chapter{},
-		&model.PlotPoint{},
-		&model.Character{},
-		&model.CharacterStateSnapshot{},
 		&model.CharacterLook{},
-		&model.Worldview{},
-		&model.WorldviewEntity{},
-		&model.ReferenceNovel{},
-		&model.ReferenceChapter{},
-		&model.KnowledgeBase{},
-		&model.AIModel{},
-		&model.ModelProvider{},
-		&model.ModelComparisonExperiment{},
-		&model.ExperimentResult{},
-		&model.ModelUsageLog{},
-		&model.Video{},
-		&model.StoryboardShot{},
-		&model.ChapterVersion{},
-		&model.McpTool{},
-		&model.ModelMcpBinding{},
-		&model.McpFeatureBinding{},
-		&model.ArcSummary{},
-		&model.Item{},
-		&model.Skill{},
-		&model.ChapterItem{},
-		&model.ChapterCharacter{},
-		&model.AsyncTask{},
-		&model.HookChain{},
-		&model.SatisfactionPoint{},
-		&model.ConflictArc{},
-		&model.SceneAnchor{},
-		&model.ChapterSceneAnchor{},
-		&model.SceneConsistencyLog{},
-		&model.SystemSetting{},
-		&model.ShotVoiceSegment{},
-		&model.ReviewRecord{},
-		&model.IgnoredReviewIssue{},
-		&model.ShotSFXItem{},
-		&model.VideoBGMSegment{},
-		&model.RewriteProject{},
-		&model.LiteraryAnalysis{},
-		&model.RewriteBible{},
-		&model.ChapterRewriteTask{},
-		&model.RewriteContinuityIndex{},
-		&model.RewriteChapterSummary{},
-		&model.PlatformAccount{},
-		&model.VideoPublishRecord{},
-		// Asset Library (Phase 3)
-		&model.Asset{},
-		&model.Tag{},
-		&model.AssetTagMap{},
-		&model.AssetPublishRequest{},
-		&model.AssetVersion{},
-		&model.AssetCollection{},
-		&model.AssetCollectionItem{},
-		&model.CrawlJob{},
-		&model.AssetLike{},
-		&model.AssetUsage{},
-		&model.AssetComment{},
-		&model.AssetShareLink{},
-		&model.SearchLog{},
-		&model.AssetStorageQuota{},
-		// 统一社交表（2026-06-25-v5：替代 ink_novel/chapter/video_like/comment 6张表）
-		&model.EntityLike{},
-		&model.EntityComment{},
-		// 阅读进度
-		&model.ReadingProgress{},
-		&model.ChapterReadRecord{},
-		// 用户 token（密码重置 & 邮箱验证）
-		&model.UserToken{},
-		// 小说章节爬取任务（进度持久化）
-		&model.NovelCrawlJob{},
-		// 站内通知
-		&model.Notification{},
-		// 连续性检查报告
-		&model.ContinuityReportRecord{},
-		// 专用伏笔表
-		&model.Foreshadow{},
-		// Webhook 订阅与投递记录
-		&model.WebhookSubscription{},
-		&model.WebhookDelivery{},
-		// 审计日志
-		&model.AuditLog{},
-		// 小说大纲历史版本
-		&model.NovelOutlineVersion{},
-		// 章节大纲审查
-		&model.OutlineReview{},
-		&model.NovelOutlineSynthesis{},
-		// 多人协作
-		&model.NovelMember{},
-		&model.EditingLock{},
-		// 敏感词规则
-		&model.SensitiveWordRule{},
-		// 内容统计独立表（2026-06-25-v3）
-		&model.ContentStats{},
-		// 用户反馈
-		&model.UserFeedback{},
-		// 短剧模板
-		&model.DramaTemplate{},
 	); err != nil {
 		return err
 	}
