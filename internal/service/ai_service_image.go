@@ -401,43 +401,42 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 
 	if providerName != "" {
 		var entry *ai.ImageProviderEntry
-		// DB 模式优先：使用 DB 中实际配置的模型名称
+		var provider ai.AIProvider
+		var err error
 		if s.providerRepo != nil {
+			// DB 是唯一权威来源：显式指定的 provider 在 DB 里没查到（未配置/未激活/缺凭据/
+			// 不是 image 类型），直接报错，不能退化去用 knownImageCapableProviders/aiManager
+			// 的硬编码默认模型——那样会让请求偷偷换成用户根本没在这个租户下配置过的模型。
 			for _, e := range s.loadDBImageProviderEntries(tenantID) {
 				if e.ProviderName == providerName {
 					entry = &e
 					break
 				}
 			}
-		}
-		if entry == nil {
+			if entry == nil {
+				return "", fmt.Errorf("image provider %q not configured (or inactive/missing credentials) for this tenant", providerName)
+			}
+			provider, err = s.getTenantProvider(tenantID, providerName)
+		} else {
+			// 纯静态模式（无 DB，即 providerRepo 为 nil）：走 config.yaml/env 静态注册列表。
 			for _, e := range knownImageCapableProviders {
 				if e.ProviderName == providerName {
 					entry = &e
 					break
 				}
 			}
-		}
-		if entry == nil {
-			for _, e := range s.aiManager.GetImageProviders() {
-				if e.ProviderName == providerName {
-					entry = &e
-					break
+			if entry == nil {
+				for _, e := range s.aiManager.GetImageProviders() {
+					if e.ProviderName == providerName {
+						entry = &e
+						break
+					}
 				}
 			}
-		}
-		if entry == nil {
-			return "", fmt.Errorf("unknown image provider: %s", providerName)
-		}
-		var provider ai.AIProvider
-		var err error
-		if s.providerRepo != nil {
-			provider, err = s.getTenantProvider(tenantID, providerName)
-		} else {
-			provider, err = s.aiManager.GetProvider(providerName)
-			if err != nil {
-				provider, err = s.getTenantProvider(tenantID, providerName)
+			if entry == nil {
+				return "", fmt.Errorf("unknown image provider: %s", providerName)
 			}
+			provider, err = s.aiManager.GetProvider(providerName)
 		}
 		if err != nil {
 			return "", fmt.Errorf("image provider %q not available: %w", providerName, err)
