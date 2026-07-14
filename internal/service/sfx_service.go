@@ -116,12 +116,14 @@ func NewSFXService(
 	}
 }
 
-// sfxProviderCreds 从 DB 取指定 sfx 供应商的凭据；aiSvc 为 nil 时返回空。
+// sfxProviderCreds 从 DB 取指定 sfx 供应商的凭据；aiSvc 为 nil 时返回空。错误已经在
+// AIService.GetSFXProviderCreds 里用 logger.Errorf 打出来了，这里不重复处理。
 func (s *SFXService) sfxProviderCreds(tenantID uint, name string) (apiKey, endpoint string) {
 	if s.aiSvc == nil {
 		return "", ""
 	}
-	return s.aiSvc.GetSFXProviderCreds(tenantID, name)
+	apiKey, endpoint, _ = s.aiSvc.GetSFXProviderCreds(tenantID, name)
+	return apiKey, endpoint
 }
 
 // buildDefaultSFXLib 内置音效标签 → 文件名映射表。

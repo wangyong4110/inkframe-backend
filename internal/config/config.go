@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -241,6 +242,15 @@ func Load(configPath string) (*Config, error) {
 	}
 
 	return &cfg, nil
+}
+
+// IsConfigNotFoundError 报告 err 是否表示"配置文件不存在"（可以安全回退到默认值的唯一情况）。
+// 其他任何错误（YAML 语法错误、字段类型不匹配、无读取权限等）都说明用户确实放了一份配置文件
+// 但内容有问题——这种情况不能静默换成默认配置继续跑（默认配置里 admin.password/jwt_secret
+// 等都是众所周知的弱默认值），调用方应该直接终止启动，让用户先修好配置文件。
+func IsConfigNotFoundError(err error) bool {
+	var notFoundErr viper.ConfigFileNotFoundError
+	return errors.As(err, &notFoundErr)
 }
 
 // setDefaults 设置默认值

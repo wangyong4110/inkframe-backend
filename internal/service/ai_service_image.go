@@ -27,52 +27,29 @@ func (s *AIService) GenerateImage(tenantID uint, prompt string, options *ImageGe
 		return nil, fmt.Errorf("no image providers configured")
 	}
 
-	var lastErr error
-	for _, e := range entries {
-		provider, err := s.resolveImageProvider(tenantID, e.ProviderName)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-
-		modelName := selectImageModel(e, 0, "")
-		release, slotErr := s.acquireModelSlotByName(ctx, tenantID, modelName)
-		if slotErr != nil {
-			lastErr = slotErr
-			continue
-		}
-		size := options.Size
-		if size == "" {
-			size = e.Size
-		}
-		resp, genErr := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
-			Model:          modelName,
-			Prompt:         prompt,
-			NegativePrompt: options.NegativePrompt,
-			Size:           size,
-			Steps:          options.Steps,
-			CFGScale:       options.CFGScale,
+	resp, _, err := s.tryImageProviders(ctx, tenantID, entries, 0, "", nil,
+		func(e ai.ImageProviderEntry, modelName string) *ai.ImageGenerateRequest {
+			size := options.Size
+			if size == "" {
+				size = e.Size
+			}
+			return &ai.ImageGenerateRequest{
+				Model:          modelName,
+				Prompt:         prompt,
+				NegativePrompt: options.NegativePrompt,
+				Size:           size,
+				Steps:          options.Steps,
+				CFGScale:       options.CFGScale,
+			}
 		})
-		release()
-		if genErr != nil {
-			lastErr = genErr
-			continue
-		}
-		if resp.Error != "" {
-			lastErr = fmt.Errorf("image generation failed: %s", resp.Error)
-			continue
-		}
-		persistURL := s.uploadImageToStorage(ctx, tenantID, resp.URL)
-		return &GeneratedImage{
-			URL:    persistURL,
-			Width:  resp.Width,
-			Height: resp.Height,
-		}, nil
+	if err != nil {
+		return nil, err
 	}
-	if lastErr != nil {
-		return nil, lastErr
-	}
-	return nil, fmt.Errorf("no image providers available")
+	return &GeneratedImage{
+		URL:    s.uploadImageToStorage(ctx, tenantID, resp.URL),
+		Width:  resp.Width,
+		Height: resp.Height,
+	}, nil
 }
 
 // knownImageCapableProviders 已知支持图像生成的提供者及其默认模型，用于 DB 动态加载的回退路径。
@@ -164,6 +141,51 @@ func (s *AIService) resolveImageProvider(tenantID uint, providerName string) (ai
 		return s.getTenantProvider(tenantID, providerName)
 	}
 	return s.aiManager.GetProvider(providerName)
+}
+
+// tryImageProviders iterates entries in order, skipping any entry for which skip
+// returns true, resolving a provider and acquiring a model-concurrency slot for each,
+// and calling buildReq to construct the request to send. A model-slot-acquire failure
+// is treated as a per-provider soft failure (try the next entry) just like any other
+// provider error, since concurrency limits are model-specific — one saturated model
+// shouldn't abort the whole fallback chain.
+// Returns the response from the first entry that succeeds, the provider names skip
+// rejected (for callers that want a more specific final error message), and the last
+// error encountered if none succeeded (resp is nil in that case).
+func (s *AIService) tryImageProviders(
+	ctx context.Context, tenantID uint, entries []ai.ImageProviderEntry, refCount int, style string,
+	skip func(ai.ImageProviderEntry) bool,
+	buildReq func(entry ai.ImageProviderEntry, modelName string) *ai.ImageGenerateRequest,
+) (resp *ai.ImageResponse, skipped []string, lastErr error) {
+	for _, e := range entries {
+		if skip != nil && skip(e) {
+			skipped = append(skipped, e.ProviderName)
+			continue
+		}
+		provider, err := s.resolveImageProvider(tenantID, e.ProviderName)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		modelName := selectImageModel(e, refCount, style)
+		release, acquireErr := s.acquireModelSlotByName(ctx, tenantID, modelName)
+		if acquireErr != nil {
+			lastErr = acquireErr
+			continue
+		}
+		r, genErr := provider.ImageGenerate(ctx, buildReq(e, modelName))
+		release()
+		if genErr != nil {
+			lastErr = genErr
+			continue
+		}
+		if r.Error != "" {
+			lastErr = fmt.Errorf("image generation failed: %s", r.Error)
+			continue
+		}
+		return r, skipped, nil
+	}
+	return nil, skipped, lastErr
 }
 
 // selectImageModel returns the model to use for the given entry, dispatching
@@ -465,7 +487,10 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		}
 		release, acquireErr := s.acquireModelSlotByName(ctx, tenantID, modelName)
 		if acquireErr != nil {
-			return "", acquireErr
+			// 槽位耗尽是具体模型的临时限流，不代表这条 fallback 链已经走到头——换下一个 provider
+			// 再试（与 tryImageProviders/GenerateImage/EditImageWithInstruction 的处理方式保持一致）。
+			lastErr = acquireErr
+			continue
 		}
 		resp, err := provider.ImageGenerate(ctx, buildReq(modelName, e.Size, e.ProviderName))
 		release()
@@ -629,44 +654,20 @@ func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint,
 		logger.Errorf("EditImageWithInstruction: base64 fetch failed, falling back to URL: %s", imageURL)
 	}
 
-	req := &ai.ImageGenerateRequest{
-		Prompt:         instruction,
-		ReferenceImage: imgInput,
-	}
-
 	entries := s.loadImageProviderEntries(tenantID)
 
-	var lastErr error
-	var skipped []string
-	for _, e := range entries {
-		if !ai.ImageEngineTraitsFor(e.ProviderName).SupportsReferenceImage {
-			skipped = append(skipped, e.ProviderName)
-			continue
-		}
-		provider, err := s.resolveImageProvider(tenantID, e.ProviderName)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		req.Model = selectImageModel(e, 1, "")
-		release, acquireErr := s.acquireModelSlotByName(ctx, tenantID, req.Model)
-		if acquireErr != nil {
-			return "", acquireErr
-		}
-		resp, err := provider.ImageGenerate(ctx, req)
-		release()
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		if resp.Error != "" {
-			lastErr = fmt.Errorf("%s", resp.Error)
-			continue
-		}
+	resp, skipped, err := s.tryImageProviders(ctx, tenantID, entries, 1, "",
+		func(e ai.ImageProviderEntry) bool {
+			return !ai.ImageEngineTraitsFor(e.ProviderName).SupportsReferenceImage
+		},
+		func(e ai.ImageProviderEntry, modelName string) *ai.ImageGenerateRequest {
+			return &ai.ImageGenerateRequest{Model: modelName, Prompt: instruction, ReferenceImage: imgInput}
+		})
+	if resp != nil {
 		return s.uploadImageToStorage(ctx, tenantID, resp.URL), nil
 	}
-	if lastErr != nil {
-		return "", lastErr
+	if err != nil {
+		return "", err
 	}
 	if len(skipped) > 0 {
 		return "", fmt.Errorf("已配置的图片提供商（%s）不支持参考图编辑，请配置 volcengine-visual 或 kling-image 提供商", strings.Join(skipped, ", "))

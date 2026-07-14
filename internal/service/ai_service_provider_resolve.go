@@ -372,12 +372,15 @@ func (s *AIService) loadDBVoiceProvider(tenantID uint, modelType, voiceID string
 	return nil, "", fmt.Errorf("no %s providers configured in DB", modelType)
 }
 
-// GetBGMProviderCreds 从 DB 中取指定 music 类型提供商的凭据（apiKey, endpoint）。
-// 找不到返回空字符串；调用方负责判断空值。
-func (s *AIService) GetBGMProviderCreds(tenantID uint, name string) (apiKey, endpoint string) {
+// getProviderCreds 从 DB 中取指定 tenantID 下、名称匹配 name 的 provider 凭据（apiKey, endpoint）。
+// err 非 nil 表示真实故障（ListByTenant 查询失败、APIKey 解密失败——比如加密密钥换了或密文损坏）；
+// err 为 nil 但 apiKey 为空，才表示这个 provider 确实未配置/未激活/未填凭据。调用方必须能区分
+// 这两种情况——不能像过去那样把"解密失败"和"没配置"统一返回成一样的空字符串，那样会让一个
+// 真实的基础设施故障被永久掩盖成"用户没打开这个可选功能"。
+func (s *AIService) getProviderCreds(tenantID uint, name string) (apiKey, endpoint string, err error) {
 	providers, err := s.providerRepo.ListByTenant(tenantID)
 	if err != nil {
-		return "", ""
+		return "", "", err
 	}
 	for _, p := range providers {
 		if !p.IsActive {
@@ -391,39 +394,31 @@ func (s *AIService) GetBGMProviderCreds(tenantID uint, name string) (apiKey, end
 		}
 		key, decErr := crypto.Decrypt(p.APIKey, s.encKey)
 		if decErr != nil {
-			logger.Errorf("GetBGMProviderCreds: decrypt APIKey for %q: %v", p.Name, decErr)
-			return "", ""
+			return "", "", fmt.Errorf("decrypt APIKey for provider %q: %w", p.Name, decErr)
 		}
-		return key, p.APIEndpoint
+		return key, p.APIEndpoint, nil
 	}
-	return "", ""
+	return "", "", nil
+}
+
+// GetBGMProviderCreds 从 DB 中取指定 music 类型提供商的凭据（apiKey, endpoint）。
+// err 非 nil 表示真实故障（见 getProviderCreds），调用方不应把它当成"未配置"静默忽略。
+func (s *AIService) GetBGMProviderCreds(tenantID uint, name string) (apiKey, endpoint string, err error) {
+	apiKey, endpoint, err = s.getProviderCreds(tenantID, name)
+	if err != nil {
+		logger.Errorf("GetBGMProviderCreds: provider %q: %v", name, err)
+	}
+	return apiKey, endpoint, err
 }
 
 // GetSFXProviderCreds 从 DB 中取指定 sfx 类型提供商的凭据（apiKey, endpoint）。
-// 找不到返回空字符串；调用方负责判断空值。
-func (s *AIService) GetSFXProviderCreds(tenantID uint, name string) (apiKey, endpoint string) {
-	providers, err := s.providerRepo.ListByTenant(tenantID)
+// err 非 nil 表示真实故障（见 getProviderCreds），调用方不应把它当成"未配置"静默忽略。
+func (s *AIService) GetSFXProviderCreds(tenantID uint, name string) (apiKey, endpoint string, err error) {
+	apiKey, endpoint, err = s.getProviderCreds(tenantID, name)
 	if err != nil {
-		return "", ""
+		logger.Errorf("GetSFXProviderCreds: provider %q: %v", name, err)
 	}
-	for _, p := range providers {
-		if !p.IsActive {
-			continue
-		}
-		if !strings.EqualFold(p.Name, name) {
-			continue
-		}
-		if !providerHasCredentials(p) {
-			continue
-		}
-		key, decErr := crypto.Decrypt(p.APIKey, s.encKey)
-		if decErr != nil {
-			logger.Errorf("GetSFXProviderCreds: decrypt APIKey for %q: %v", p.Name, decErr)
-			return "", ""
-		}
-		return key, p.APIEndpoint
-	}
-	return "", ""
+	return apiKey, endpoint, err
 }
 
 // GetTenantVideoProvider 从 DB 中查找指定租户已配置的视频生成提供商。

@@ -70,6 +70,13 @@ func main() {
 	// 1. 加载配置
 	cfg, err := config.Load("config.yaml")
 	if err != nil {
+		// 只有"文件不存在"才能安全回退到默认值（比如全新部署还没来得及放 config.yaml）。
+		// 文件存在但读取/解析失败（YAML 语法错误、字段类型不对、权限问题等）说明用户已经写了
+		// 一份配置却是坏的——这种情况绝不能静默换成默认配置继续启动（默认值里的
+		// admin.password/jwt_secret 都是公开可查的弱默认值），必须直接终止，让用户先修好。
+		if !config.IsConfigNotFoundError(err) {
+			log.Fatalf("FATAL: config.yaml exists but failed to load: %v", err)
+		}
 		logger.Printf("Config file not found, using defaults")
 		cfg = config.DefaultConfig()
 	}

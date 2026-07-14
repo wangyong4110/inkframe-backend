@@ -15,10 +15,11 @@ func (s *AIService) AudioGenerate(ctx context.Context, text, voice string) (stri
 }
 
 // AudioGenerateWithOptions 支持语速、风格和语言/方言的 TTS 生成。
-// Provider 选取顺序（DB 模式优先，与图像生成保持一致）：
-//  1. DB 中租户配置的 voice/tts 类型 provider
-//  2. config.yaml ai.tasks.tts 指定的 provider（静态模式兜底）
-//  3. env-var 注册的默认 provider（静态模式兜底）
+// Provider 选取顺序（与图像生成 loadDBImageProviderEntries 的约定一致）：
+//  1. DB 模式（providerRepo 存在）：DB 是唯一权威来源。loadDBVoiceProvider 失败就直接把错误
+//     返回给调用方，绝不静默退化到下面的静态 provider——否则用户以为自己在 DB 里配置的
+//     provider 生效了，实际上请求偷偷换成了另一个完全不同的 provider，故障也被日志吞掉。
+//  2. 纯静态模式（无 DB，即 providerRepo 为 nil）：走 config.yaml ai.tasks.tts 指定的 provider。
 func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint, text, voice string, speed float64, style string, language ...string) (string, error) {
 	lang := ""
 	if len(language) > 0 {
@@ -35,26 +36,24 @@ func (s *AIService) AudioGenerateWithOptions(ctx context.Context, tenantID uint,
 	var provider ai.AIProvider
 	var provName string
 
-	// 1. DB 模式：优先选取内置音色表中包含请求 voice ID 的 provider
 	if s.providerRepo != nil {
-		if p, name, err := s.loadDBVoiceProvider(tenantID, "voice", voice); err == nil && p != nil {
-			provider = p
-			provName = name
-			logger.Printf("[TTS] AudioGenerateWithOptions: selected DB provider=%q for voice=%q", name, voice)
-		} else if err != nil {
-			logger.Errorf("[TTS] AudioGenerateWithOptions: loadDBVoiceProvider ERROR: %v (will try static fallback)", err)
+		p, name, err := s.loadDBVoiceProvider(tenantID, "voice", voice)
+		if err != nil {
+			logger.Errorf("[TTS] AudioGenerateWithOptions: loadDBVoiceProvider ERROR: %v", err)
+			return "", err
 		}
-	}
-
-	// 2. 静态模式：config.yaml task routing
-	if provider == nil && s.taskRouting.TTS != "" {
-		if p, err := s.aiManager.GetProvider(s.taskRouting.TTS); err == nil {
-			provider = p
-			provName = s.taskRouting.TTS
-			logger.Printf("[TTS] AudioGenerateWithOptions: selected static provider=%q (taskRouting.TTS)", s.taskRouting.TTS)
-		} else {
+		provider = p
+		provName = name
+		logger.Printf("[TTS] AudioGenerateWithOptions: selected DB provider=%q for voice=%q", name, voice)
+	} else if s.taskRouting.TTS != "" {
+		p, err := s.aiManager.GetProvider(s.taskRouting.TTS)
+		if err != nil {
 			logger.Errorf("[TTS] AudioGenerateWithOptions: static provider %q not available: %v", s.taskRouting.TTS, err)
+			return "", err
 		}
+		provider = p
+		provName = s.taskRouting.TTS
+		logger.Printf("[TTS] AudioGenerateWithOptions: selected static provider=%q (taskRouting.TTS)", s.taskRouting.TTS)
 	}
 	// 注意：不再兜底到默认 LLM provider，LLM 提供商通常不支持 /audio/speech 接口，
 	// 兜底只会产生 404 错误，不如直接给用户明确的配置提示。

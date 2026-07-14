@@ -475,91 +475,6 @@ func TestVolcengineVisualProvider_UnsupportedMethods(t *testing.T) {
 	}
 }
 
-// ─── Pure function tests: isRealisticStyle ─────────────────────────────────
-
-func TestIsRealisticStyle(t *testing.T) {
-	cases := []struct {
-		name  string
-		style string
-		want  bool
-	}{
-		{"empty", "", false},
-		{"realistic", "realistic", true},
-		{"real_person", "real_person", true},
-		{"photorealistic", "photorealistic", true},
-		{"photography substring", "fashion photography", true},
-		{"chinese 写实", "写实风格", true},
-		{"chinese 真实", "真实感", true},
-		{"chinese 摄影", "人像摄影", true},
-		{"chinese 真人", "真人风格", true},
-		{"anime", "anime", false},
-		{"illustration", "illustration", false},
-		{"case-insensitive", "REALISTIC", true},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			if got := isRealisticStyle(c.style); got != c.want {
-				t.Errorf("isRealisticStyle(%q) = %v, want %v", c.style, got, c.want)
-			}
-		})
-	}
-}
-
-// ─── Pure function tests: selectVolcengineImageModel ───────────────────────
-
-func TestSelectVolcengineImageModel_SingleRealisticRef_UsesPortraitPhoto(t *testing.T) {
-	entry := ImageProviderEntry{ProviderName: ProviderNameVolcengineVisual, Model: ""}
-	got := selectVolcengineImageModel(entry, 1, "realistic", 0.5)
-	if got != VolcModelPortraitPhoto {
-		t.Errorf("expected VolcModelPortraitPhoto for single realistic ref, got %s", got)
-	}
-}
-
-func TestSelectVolcengineImageModel_MultiRealisticRef_AvoidsPortraitPhoto(t *testing.T) {
-	// 两张参考图（如"角色+场景"分镜合成）+ 写实风格：PortraitPhoto 是单图模型，
-	// 不能再选它（会静默丢弃第二张参考图），必须落到支持多图的 DreamO/SeedEditV3。
-	entry := ImageProviderEntry{ProviderName: ProviderNameVolcengineVisual, Model: ""}
-
-	gotHighWeight := selectVolcengineImageModel(entry, 2, "realistic", 0.8)
-	if gotHighWeight != VolcModelDreamO {
-		t.Errorf("expected VolcModelDreamO for 2 refs + high consistency weight, got %s", gotHighWeight)
-	}
-
-	gotLowWeight := selectVolcengineImageModel(entry, 2, "realistic", 0.4)
-	if gotLowWeight != VolcModelSeedEditV3 {
-		t.Errorf("expected VolcModelSeedEditV3 for 2 refs + low consistency weight, got %s", gotLowWeight)
-	}
-
-	if gotHighWeight == VolcModelPortraitPhoto || gotLowWeight == VolcModelPortraitPhoto {
-		t.Fatal("multi-reference realistic-style call must never resolve to the single-image PortraitPhoto model")
-	}
-}
-
-func TestSelectVolcengineImageModel_NoRef_Unaffected(t *testing.T) {
-	entry := ImageProviderEntry{ProviderName: ProviderNameVolcengineVisual, Model: ""}
-	got := selectVolcengineImageModel(entry, 0, "realistic", 0.5)
-	if got != VolcModelText2ImgV3 {
-		t.Errorf("expected VolcModelText2ImgV3 for no-reference realistic call, got %s", got)
-	}
-}
-
-func TestSelectVolcengineImageModel_NoRef_NonRealisticStyle(t *testing.T) {
-	entry := ImageProviderEntry{ProviderName: ProviderNameVolcengineVisual, Model: ""}
-	got := selectVolcengineImageModel(entry, 0, "anime", 0.5)
-	if got != VolcModelJimengT2Iv31 {
-		t.Errorf("expected VolcModelJimengT2Iv31 for no-reference non-realistic call, got %s", got)
-	}
-}
-
-func TestSelectVolcengineImageModel_NewGenModelUnchanged(t *testing.T) {
-	// 新一代即梦模型（4.0/4.6等）由用户显式配置，任何参考图数量下都不应被覆盖。
-	entry := ImageProviderEntry{ProviderName: ProviderNameVolcengineVisual, Model: VolcModelJimengSeedream46}
-	got := selectVolcengineImageModel(entry, 2, "realistic", 0.5)
-	if got != VolcModelJimengSeedream46 {
-		t.Errorf("expected new-gen model to remain unchanged regardless of ref count, got %s", got)
-	}
-}
-
 // ─── ImageEngineTraits registration ────────────────────────────────────────
 
 func TestVolcengineVisual_ImageEngineTraitsRegistered(t *testing.T) {
@@ -567,15 +482,12 @@ func TestVolcengineVisual_ImageEngineTraitsRegistered(t *testing.T) {
 	if !traits.SupportsReferenceImage {
 		t.Error("expected SupportsReferenceImage=true for volcengine-visual")
 	}
-	// SelectModel must be registered: without it, a model tuned for single-image editing
-	// (e.g. PortraitPhoto) could be selected for a multi-reference-image call and silently
-	// drop every reference image past the first — this was a confirmed production bug.
-	if traits.SelectModel == nil {
-		t.Fatal("expected SelectModel to be registered for volcengine-visual")
-	}
-	got := traits.SelectModel(ImageProviderEntry{ProviderName: ProviderNameVolcengineVisual}, 2, "realistic", 0.8)
-	if got != VolcModelDreamO {
-		t.Errorf("traits.SelectModel(2 refs, realistic, 0.8) = %s, want %s", got, VolcModelDreamO)
+	// SelectModel must NOT be registered: the model configured by the user (entry.Model)
+	// must always be used as-is. Auto-switching to a different model based on reference
+	// count/style/consistency weight was a confirmed production bug (e.g. silently using
+	// DreamO instead of the user's configured model), not something to reintroduce.
+	if traits.SelectModel != nil {
+		t.Error("expected SelectModel to be nil for volcengine-visual — the configured model must never be overridden")
 	}
 }
 

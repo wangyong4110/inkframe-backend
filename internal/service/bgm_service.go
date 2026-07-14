@@ -83,12 +83,16 @@ func (s *BGMService) WithAssetRepo(assetRepo *repository.AssetRepository, tagRep
 	return s
 }
 
-// bgmProviderCreds 从 DB 取 music 类型供应商凭据。
+// bgmProviderCreds 从 DB 取 music 类型供应商凭据。这里只把凭据传给多源搜索链（本地→Jamendo→
+// Pixabay，本身就是合法的多候选 fallback，某一路没配置就换下一路），错误已经在
+// AIService.GetBGMProviderCreds 里用 logger.Errorf 打出来了——不在这里重复处理，也不能把
+// "解密失败"这种真实故障悄悄跟"没配置"混为一谈返回给上层。
 func (s *BGMService) bgmProviderCreds(tenantID uint, name string) (apiKey, endpoint string) {
 	if s.aiSvc == nil {
 		return "", ""
 	}
-	return s.aiSvc.GetBGMProviderCreds(tenantID, name)
+	apiKey, endpoint, _ = s.aiSvc.GetBGMProviderCreds(tenantID, name)
+	return apiKey, endpoint
 }
 
 // localDirFiles 返回目录内的文件名列表（不含路径），结果缓存在 localFileCache 中。
