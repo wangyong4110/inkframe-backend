@@ -850,6 +850,43 @@ func (s *ItemService) AIExtractChapterItems(tenantID, novelID, chapterID uint, u
 	return created, nil
 }
 
+// GenerateItemInfo 根据物品名称（及用户可选的草稿描述提示）AI 生成完整的物品档案。
+// 用于"添加物品"弹窗的一键填充：仅返回生成结果，不落库，由前端展示后随用户确认的表单一起走 CreateItem 创建。
+func (s *ItemService) GenerateItemInfo(tenantID, novelID uint, name, userHint string) (description, visualPrompt string, err error) {
+	novelTitle, novelGenre, promptLanguage := novelPromptContext(s.novelRepo, novelID)
+
+	rendered, tplErr := renderPrompt("generate_item_info", map[string]interface{}{
+		"NovelTitle":     novelTitle,
+		"Genre":          novelGenre,
+		"ItemName":       name,
+		"UserHint":       userHint,
+		"PromptLanguage": promptLanguage,
+	})
+	if tplErr != nil {
+		return "", "", fmt.Errorf("render generate_item_info: %w", tplErr)
+	}
+
+	result, genErr := s.aiService.GenerateWithProvider(tenantID, novelID, "generate_item_info", rendered, "")
+	if genErr != nil {
+		return "", "", fmt.Errorf("AI generate item info: %w", genErr)
+	}
+
+	type itemInfoJSON struct {
+		Category     string `json:"category"`
+		Appearance   string `json:"appearance"`
+		Description  string `json:"description"`
+		VisualPrompt string `json:"visual_prompt"`
+	}
+	var info itemInfoJSON
+	cleaned := extractJSON(strings.TrimSpace(result))
+	if parseErr := json.Unmarshal([]byte(cleaned), &info); parseErr != nil {
+		logger.Errorf("[ItemService] GenerateItemInfo: parse error: %v, raw: %.300s", parseErr, result)
+		return "", "", fmt.Errorf("parse item info JSON: %w", parseErr)
+	}
+
+	return buildItemDescription(info.Category, info.Appearance, info.Description), s.aiService.FilterPrompt(info.VisualPrompt), nil
+}
+
 // buildItemDescription 将外观和叙事说明合并为统一描述字段。
 // appearance 始终置于首段，description 紧随其后。
 func buildItemDescription(category, appearance, description string) string {

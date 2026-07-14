@@ -128,6 +128,43 @@ func (s *SceneAnchorService) Create(tenantID, novelID uint, req CreateSceneAncho
 	return anchor, nil
 }
 
+// GenerateSceneAnchorInfo 根据场景名称、类型、变体（及用户可选的草稿描述提示）AI 生成场景的视觉描述。
+// 用于"新建场景"弹窗的一键填充：不依赖章节内容，仅返回生成结果，不落库，由前端展示后随用户确认的表单一起走 Create 创建。
+// 生成的 description 会直接作为 image_scene_ref 模板生成参考图时的核心视觉约束注入 prompt（见 GenerateRefImage），
+// 因此要求覆盖建筑/材质/色彩/光线等视觉维度，而非叙事性文字。
+func (s *SceneAnchorService) GenerateSceneAnchorInfo(tenantID, novelID uint, name, sceneType, variant, userHint string) (string, error) {
+	novelTitle, novelGenre, promptLanguage := novelPromptContext(s.novelRepo, novelID)
+
+	rendered, tplErr := renderPrompt("generate_scene_anchor_info", map[string]interface{}{
+		"NovelTitle":     novelTitle,
+		"Genre":          novelGenre,
+		"AnchorName":     name,
+		"SceneType":      sceneType,
+		"Variant":        variant,
+		"UserHint":       userHint,
+		"PromptLanguage": promptLanguage,
+	})
+	if tplErr != nil {
+		return "", fmt.Errorf("render generate_scene_anchor_info: %w", tplErr)
+	}
+
+	result, genErr := s.aiSvc.GenerateWithProvider(tenantID, novelID, "generate_scene_anchor_info", rendered, "")
+	if genErr != nil {
+		return "", fmt.Errorf("AI generate scene anchor info: %w", genErr)
+	}
+
+	type sceneInfoJSON struct {
+		Description string `json:"description"`
+	}
+	var info sceneInfoJSON
+	cleaned := extractJSON(strings.TrimSpace(result))
+	if parseErr := json.Unmarshal([]byte(cleaned), &info); parseErr != nil {
+		logger.Errorf("[SceneAnchorService] GenerateSceneAnchorInfo: parse error: %v, raw: %.300s", parseErr, result)
+		return "", fmt.Errorf("parse scene anchor info JSON: %w", parseErr)
+	}
+	return info.Description, nil
+}
+
 func (s *SceneAnchorService) Update(id uint, req UpdateSceneAnchorReq) (*model.SceneAnchor, error) {
 	anchor, err := s.repo.GetByID(id)
 	if err != nil {

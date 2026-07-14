@@ -119,6 +119,37 @@ func (h *SceneAnchorHandler) CreateSceneAnchor(c *gin.Context) {
 	respondCreated(c, anchor)
 }
 
+// GenerateSceneAnchorInfo AI 根据场景名称+类型+变体生成视觉描述，供"新建场景"弹窗一键填充。
+// 同步执行，不落库、不依赖章节内容。
+// POST /novels/:id/scene-anchors/ai-generate
+func (h *SceneAnchorHandler) GenerateSceneAnchorInfo(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if !h.checkNovelTenant(c, uint(novelID)) {
+		return
+	}
+
+	var req struct {
+		Name    string `json:"name" binding:"required"`
+		Type    string `json:"type"`
+		Variant string `json:"variant"`
+		Hint    string `json:"hint"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+
+	description, err := h.svc.GenerateSceneAnchorInfo(getTenantID(c), uint(novelID), req.Name, req.Type, req.Variant, req.Hint)
+	if err != nil {
+		reqLogger(c).Errorf("[SceneAnchorHandler] GenerateSceneAnchorInfo novelID=%d name=%q: %v", novelID, req.Name, err)
+		respondErr(c, http.StatusInternalServerError, "failed to generate scene anchor info: "+err.Error())
+		return
+	}
+	respondOK(c, gin.H{"description": description})
+}
+
 // UpdateSceneAnchor PUT /scene-anchors/:id
 func (h *SceneAnchorHandler) UpdateSceneAnchor(c *gin.Context) {
 	id, ok := parseID(c, "id")

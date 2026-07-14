@@ -8,7 +8,29 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/inkframe/inkframe-backend/internal/repository"
 )
+
+// novelPromptContext 取小说标题/类型/AI提示词语言，供各类"从名称/简介 AI 生成详细信息"
+// 场景的 prompt 组装使用（item/character/scene anchor 等的单条目 AI 生成均需要这三项）。
+// novelRepo 为 nil 或查询失败时返回默认值（本小说/空类型/中文）。
+func novelPromptContext(novelRepo *repository.NovelRepository, novelID uint) (title, genre, promptLanguage string) {
+	title, promptLanguage = "本小说", "zh"
+	if novelRepo == nil {
+		return
+	}
+	novel, err := novelRepo.GetByID(novelID)
+	if err != nil {
+		return
+	}
+	title = novel.Title
+	genre = novel.Meta.Genre
+	if novel.AIConfig.PromptLanguage != "" {
+		promptLanguage = novel.AIConfig.PromptLanguage
+	}
+	return
+}
 
 // buildCrawlHTTPClient returns an HTTP client for crawling external sites.
 // proxyURL may be empty (falls back to HTTPS_PROXY / HTTP_PROXY env vars via

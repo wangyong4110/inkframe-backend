@@ -74,6 +74,32 @@ func (h *ItemHandler) CreateItem(c *gin.Context) {
 	respondCreated(c, item)
 }
 
+// GenerateItemInfo POST /novels/:id/items/ai-generate
+// body: {name(required), hint(optional，作者已填写的初步描述)}
+// 根据物品名称 AI 生成完整档案，仅返回结果供"添加物品"弹窗一键填充，不落库。
+func (h *ItemHandler) GenerateItemInfo(c *gin.Context) {
+	novelID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if !h.checkItemTenant(c, uint(novelID)) {
+		return
+	}
+	var body struct {
+		Name string `json:"name" binding:"required"`
+		Hint string `json:"hint"`
+	}
+	if !bindJSON(c, &body) {
+		return
+	}
+	description, visualPrompt, err := h.itemService.GenerateItemInfo(getTenantID(c), uint(novelID), body.Name, body.Hint)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to generate item info: "+err.Error())
+		return
+	}
+	respondOK(c, gin.H{"description": description, "visual_prompt": visualPrompt})
+}
+
 // checkItemTenant 校验物品归属当前租户（通过关联小说）。
 // 返回 false 时已写入错误响应。
 func (h *ItemHandler) checkItemTenant(c *gin.Context, novelID uint) bool {

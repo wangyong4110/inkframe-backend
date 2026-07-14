@@ -153,6 +153,35 @@ func (h *CharacterHandler) CreateCharacter(c *gin.Context) {
 	respondCreated(c, CharacterResponse(character))
 }
 
+// GenerateCharacterInfo AI 根据角色名称+类型生成简介（外貌、性格、背景），供"新建角色"弹窗一键填充。
+// 同步执行，不落库、不依赖章节内容。
+// POST /api/v1/novels/:novel_id/characters/ai-generate
+func (h *CharacterHandler) GenerateCharacterInfo(c *gin.Context) {
+	novelId, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	if !h.checkNovelAccess(c, uint(novelId)) {
+		return
+	}
+
+	var req struct {
+		Name string `json:"name" binding:"required"`
+		Role string `json:"role"`
+		Hint string `json:"hint"`
+	}
+	if !bindJSON(c, &req) {
+		return
+	}
+
+	description, err := h.characterService.GenerateCharacterInfo(getTenantID(c), uint(novelId), req.Name, req.Role, req.Hint)
+	if err != nil {
+		respondErr(c, http.StatusInternalServerError, "failed to generate character info: "+err.Error())
+		return
+	}
+	respondOK(c, gin.H{"description": description})
+}
+
 // charBelongsToTenant verifies character ownership via novel (char → novel → tenant).
 // Falls back to allow when novelService is not wired (internal/batch calls).
 func (h *CharacterHandler) charBelongsToTenant(char *model.Character, c *gin.Context) bool {

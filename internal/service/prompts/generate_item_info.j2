@@ -1,0 +1,38 @@
+请为以下小说中的一件物品/道具生成详细档案。
+
+# 小说信息
+- 标题：《{{ NovelTitle }}》
+- 类型：{{ Genre }}
+
+# 物品名称
+{{ ItemName }}
+{% if UserHint %}
+# 作者已填写的初步描述（请在此基础上扩展、保持一致，不要矛盾）
+{{ UserHint }}
+{% endif %}
+
+# 要求
+1. category 只能是：weapon（武器）/ treasure（宝物）/ tool（道具）/ document（典籍/文书）/ artifact（神器/法宝）/ other（其他）
+{% if PromptLanguage == "en" %}2. appearance (English): detailed visual description — material and texture, primary color and luminescence, form and dimensions, surface details (engravings, runes, gem inlays), aura or special effects; used directly for image generation
+3. description (English): item function and significance — usage, special abilities (conditions, effects, limitations), plot role, symbolic meaning or legendary background{% else %}2. appearance：详细外观描述，必须包含：材质与质感（金属/玉石/布料/骨骸等）、主色调与光泽（颜色、是否发光/流光）、形态与尺寸（长宽高、刃长、形状）、表面特征（纹路、铭文、符文、雕刻、宝石镶嵌）、散发的气息或特殊效果（寒气/火焰/灵光等）；这部分会直接用于图像生成
+3. description：物品的功能与意义，包含：用途或使用方式、特殊能力（详细描述每项能力的条件、效果和限制）、可能的情节推动作用、象征意义或传说背景{% endif %}
+4. visual_prompt：详细的英文图像生成提示词，用于 AI 绘图。必须包含以下维度，词数 150-250 词：
+   - 物品类型与名称
+   - 材质：精确描述材质
+   - 颜色：主色调 + 次色调 + 光效
+   - 形态：尺寸感、比例、形状细节
+   - 表面细节：纹路/符文/雕花/宝石
+   - 装饰配件：护手/剑格/剑鞘/底座/配件等（视物品类型而定）
+   - 特殊视觉效果：发光/流光/气场/元素效果
+   - 陈设/背景：展示方式
+   - 风格标签：画风、质量词（masterpiece, ultra-detailed, 8k）
+5. 结合小说类型和物品名称合理推断，不要留空，不要输出"未知"之类的占位内容
+6. 严格输出单个 JSON 对象，不含任何说明文字、不含 markdown 代码块标记
+
+# 输出格式（JSON 对象）
+{
+  "category": "weapon",
+  "appearance": "……",
+  "description": "……",
+  "visual_prompt": "……"
+}

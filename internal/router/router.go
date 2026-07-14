@@ -309,6 +309,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			novels.POST("/:id/characters", cfg.CharacterHandler.CreateCharacter)
 			novels.DELETE("/:id/characters", cfg.CharacterHandler.BatchDeleteCharacters)
 			novels.POST("/:id/characters/generate", cfg.CharacterHandler.GenerateCharacterProfile)
+			novels.POST("/:id/characters/ai-generate", cfg.CharacterHandler.GenerateCharacterInfo)
 			novels.POST("/:id/characters/ai-batch", cfg.CharacterHandler.AIBatchGenerate)
 			novels.POST("/:id/characters/batch-images", cfg.CharacterHandler.BatchGenerateImages)
 
@@ -339,6 +340,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 				novels.POST("/:id/items", cfg.ItemHandler.CreateItem)
 				novels.DELETE("/:id/items", cfg.ItemHandler.BatchDeleteItems)
 				novels.POST("/:id/items/ai-extract", cfg.ItemHandler.AIExtractFromNovel)
+				novels.POST("/:id/items/ai-generate", cfg.ItemHandler.GenerateItemInfo)
 				novels.POST("/:id/items/batch-images", cfg.ItemHandler.BatchGenerateImages)
 				// 章节级物品（有效列表 + 覆盖 + AI提取）
 				novels.GET("/:id/chapters/:chapter_no/items", cfg.ItemHandler.ListEffectiveItems)
@@ -400,6 +402,7 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			if cfg.SceneAnchorHandler != nil {
 				novels.GET("/:id/scene-anchors", cfg.SceneAnchorHandler.ListSceneAnchors)
 				novels.POST("/:id/scene-anchors", cfg.SceneAnchorHandler.CreateSceneAnchor)
+				novels.POST("/:id/scene-anchors/ai-generate", cfg.SceneAnchorHandler.GenerateSceneAnchorInfo)
 				novels.POST("/:id/scene-anchors/extract", cfg.SceneAnchorHandler.ExtractSceneAnchors)
 				novels.POST("/:id/scene-anchors/ai-extract", cfg.SceneAnchorHandler.AIExtractFromNovel)
 				novels.POST("/:id/scene-anchors/batch-ref-images", cfg.SceneAnchorHandler.BatchGenerateRefImages)

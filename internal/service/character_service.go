@@ -358,6 +358,41 @@ func (s *CharacterService) generateOneCharacterProfile(
 	return &profile, nil
 }
 
+// GenerateCharacterInfo 根据角色名称、类型（及用户可选的草稿描述提示）AI 生成角色描述（外貌、性格、背景）。
+// 用于"新建角色"弹窗的一键填充：不依赖章节内容，仅返回生成结果，不落库，由前端展示后随用户确认的表单一起走 CreateCharacter 创建。
+// 与 generateOneCharacterProfile 不同——那个函数专用于从真实章节摘要重新分析已有角色，必须有 Summaries 才不会生成空泛内容。
+func (s *CharacterService) GenerateCharacterInfo(tenantID, novelID uint, name, role, userHint string) (string, error) {
+	novelTitle, novelGenre, promptLanguage := novelPromptContext(s.novelRepo, novelID)
+
+	rendered, tplErr := renderPrompt("generate_character_info", map[string]interface{}{
+		"NovelTitle":     novelTitle,
+		"Genre":          novelGenre,
+		"CharacterName":  name,
+		"CharacterRole":  role,
+		"UserHint":       userHint,
+		"PromptLanguage": promptLanguage,
+	})
+	if tplErr != nil {
+		return "", fmt.Errorf("render generate_character_info: %w", tplErr)
+	}
+
+	result, genErr := s.aiService.GenerateWithProvider(tenantID, novelID, "generate_character_info", rendered, "")
+	if genErr != nil {
+		return "", fmt.Errorf("AI generate character info: %w", genErr)
+	}
+
+	type charInfoJSON struct {
+		Description string `json:"description"`
+	}
+	var info charInfoJSON
+	cleaned := extractJSON(strings.TrimSpace(result))
+	if parseErr := json.Unmarshal([]byte(cleaned), &info); parseErr != nil {
+		logger.Errorf("[CharacterService] GenerateCharacterInfo: parse error: %v, raw: %.300s", parseErr, result)
+		return "", fmt.Errorf("parse character info JSON: %w", parseErr)
+	}
+	return info.Description, nil
+}
+
 // parseCharacterJSONResult 从 AI 响应中解析 []analysisCharJSON。
 // 兼容以下几种常见输出形式：
 //  1. 裸数组:        [{"name":"xxx",...}]
