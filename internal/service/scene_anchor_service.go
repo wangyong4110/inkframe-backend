@@ -167,7 +167,11 @@ func (s *SceneAnchorService) Delete(id uint) error {
 // 使用 UpdateFields 只写 ref_image_url/ref_image_locked_at，避免全量 Save 覆盖其他字段（如 description）。
 // 若传入的 imageURL 是临时签名 URL（如 Volcengine TOS），自动转存到永久存储（OSS）后再写库。
 func (s *SceneAnchorService) SetRefImage(ctx context.Context, tenantID uint, id uint, imageURL string, shotID *uint) error {
-	imageURL = s.persistIfEphemeral(ctx, tenantID, imageURL)
+	imageURL, err := s.persistIfEphemeral(ctx, tenantID, imageURL)
+	if err != nil {
+		logger.Errorf("[SceneAnchorService] SetRefImage: id=%d: %v", id, err)
+		return err
+	}
 	now := time.Now()
 	if err := s.repo.UpdateFields(id, map[string]interface{}{
 		"ref_image_url":       imageURL,
@@ -190,7 +194,11 @@ func (s *SceneAnchorService) AutoSetRefImage(ctx context.Context, tenantID uint,
 	if anchor.RefImageURL != "" {
 		return nil // already locked
 	}
-	imageURL = s.persistIfEphemeral(ctx, tenantID, imageURL)
+	imageURL, err = s.persistIfEphemeral(ctx, tenantID, imageURL)
+	if err != nil {
+		logger.Errorf("[SceneAnchorService] AutoSetRefImage: id=%d: %v", id, err)
+		return err
+	}
 	now := time.Now()
 	if err := s.repo.UpdateFields(id, map[string]interface{}{
 		"ref_image_url":       imageURL,
@@ -204,21 +212,24 @@ func (s *SceneAnchorService) AutoSetRefImage(ctx context.Context, tenantID uint,
 
 // persistIfEphemeral 检测临时签名 URL（Volcengine TOS 等），若匹配则通过 AIService 转存到 OSS 并返回永久 URL。
 // 非临时 URL（OSS、本地路径等）直接原样返回，避免重复下载/上传开销。
-func (s *SceneAnchorService) persistIfEphemeral(ctx context.Context, tenantID uint, imageURL string) string {
+//
+// 转存失败时必须返回 error 而不是静默回退到原始临时 URL：ref_image_url 会被长期锁定复用，
+// 若在此处放行一个仍带 X-Tos-Expires 的签名 URL，几小时后签名过期，后续所有引用该锚点的分镜生成
+// 都会以 403 Download Url Error 失败——比在写入前直接报错更难排查、影响面也更大。
+func (s *SceneAnchorService) persistIfEphemeral(ctx context.Context, tenantID uint, imageURL string) (string, error) {
 	if s.aiSvc == nil || imageURL == "" {
-		return imageURL
+		return imageURL, nil
 	}
 	// Volcengine TOS 签名 URL 特征：包含 X-Tos-Algorithm 或 X-Tos-Expires 查询参数
 	if strings.Contains(imageURL, "X-Tos-Algorithm") || strings.Contains(imageURL, "X-Tos-Expires") {
 		persisted := s.aiSvc.PersistExternalImage(ctx, tenantID, imageURL)
-		if persisted != imageURL {
-			logger.Printf("[SceneAnchorService] persistIfEphemeral: TOS URL → OSS %s", persisted)
-		} else {
-			logger.Warnf("[SceneAnchorService] persistIfEphemeral: TOS URL persist failed, stored original (may expire): %s", imageURL)
+		if persisted == imageURL || strings.Contains(persisted, "X-Tos-Algorithm") || strings.Contains(persisted, "X-Tos-Expires") {
+			return "", fmt.Errorf("转存参考图到永久存储失败，图片链接为临时签名 URL，过期后将无法访问：%s", imageURL)
 		}
-		return persisted
+		logger.Printf("[SceneAnchorService] persistIfEphemeral: TOS URL → OSS %s", persisted)
+		return persisted, nil
 	}
-	return imageURL
+	return imageURL, nil
 }
 
 // BuildPromptFragment 返回拼接好的 prompt 片段、参考图URL 和锚点名称。

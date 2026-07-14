@@ -1893,12 +1893,20 @@ func qualityTierImageParams(tier string) (width, steps int, cfgScale float64) {
 // Seedream 5.0 更高的像素下限（3686400）由 doubao.go 的 seedreamEnforceMinSize 按模型版本动态处理。
 const seedreamMinPixels = 921600
 
+// volcengineMaxPixels 即梦AI（Volcengine视觉）通用文生图模型（high_aes_general_v30l 等 req_key）的
+// 分辨率上限为"必须严格小于 2048×2048"；超出会被网关直接拒绝（gateway_code=21000），需要在算尺寸时
+// 就裁掉，而不是等 API 报错后才发现（"master" 档位 base=2560，配合 1:1 或未知宽高比会算出 2560×2560，
+// 超限）。这里用 2040×2040 而非精确的 2048×2048 作为目标上限，留出取整余量，避免等比缩放后刚好卡在
+// 2048×2048 这个边界值上（"严格小于"意味着恰好相等也会被拒绝）。
+const volcengineMaxPixels = 2040 * 2040
+
 func imageAspectRatioToSize(aspectRatio, qualityTier string) string {
 	base, _, _ := qualityTierImageParams(qualityTier)
 	if base == 0 {
 		base = 1024
 	}
 	r8 := func(n int) int { return (n + 4) / 8 * 8 }
+	floor8 := func(n int) int { return n / 8 * 8 }
 	var w, h int
 	switch aspectRatio {
 	case "16:9":
@@ -1919,6 +1927,12 @@ func imageAspectRatioToSize(aspectRatio, qualityTier string) string {
 		scale := math.Sqrt(float64(seedreamMinPixels) / float64(w*h))
 		w = r8(int(math.Ceil(float64(w) * scale)))
 		h = r8(int(math.Ceil(float64(h) * scale)))
+	}
+	// Enforce Volcengine max pixel count by scaling down proportionally (floor to stay under the cap).
+	if w*h > volcengineMaxPixels {
+		scale := math.Sqrt(float64(volcengineMaxPixels) / float64(w*h))
+		w = floor8(int(float64(w) * scale))
+		h = floor8(int(float64(h) * scale))
 	}
 	return fmt.Sprintf("%dx%d", w, h)
 }
