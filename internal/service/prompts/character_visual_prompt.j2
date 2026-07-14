@@ -2,12 +2,13 @@
 
 Produce TWO independent, self-contained prompts:
 1. face_prompt — covers ONLY: identity (gender, age range, ethnicity/skin tone, body type, height impression), face (face shape, eye color/shape, eyebrows, nose, lips, jawline, distinctive marks), and hair (color, length, texture, style). Do NOT mention clothing, footwear, accessories, posture, or anything below the neck.
-2. visual_prompt — the FULL character appearance: identity + face + hair (same content as face_prompt) PLUS clothing (top, bottom or dress, fabric/texture, color, patterns, fit), accessories & props (jewelry, bags, hats, weapons, tools, anything carried), pose & expression (body posture, facial expression, hand position), and an art style hint (photography realism / anime / oil painting, inferred from genre if possible).
+2. visual_prompt — the FULL character appearance: identity + face + hair (same content as face_prompt) PLUS clothing (top, bottom or dress, fabric/texture, color, patterns, fit), accessories & props (jewelry, bags, hats, weapons, tools, anything carried), and an art style hint (photography realism / anime / oil painting, inferred from genre if possible). Pose & expression MUST be a single neutral static reference pose only: standing upright, facing forward, arms relaxed at sides (or a simple A-pose), calm/neutral facial expression.
 
 Rules:
 - Each prompt: minimum 100 words, no hard upper limit — detail is the goal
 - Use comma-separated descriptive phrases, NOT sentences
 - Do NOT include scene/background descriptions
+- Do NOT describe dynamic action, mid-motion poses, transitional/changing emotions, or hand gestures/prop interactions tied to a specific narrative moment — this prompt drives a character turnaround sheet (front/side/back) and a portrait, both requiring one static, reproducible pose
 - Output ONLY a single JSON object with exactly two string keys: "face_prompt" and "visual_prompt". No markdown code fences, no explanations, no other keys.
 
 Character description:
@@ -19,12 +20,13 @@ JSON output:{% else %}你是专业的 AI 图像生成提示词工程师，专注
 
 需要输出两份独立、各自完整的提示词：
 1. face_prompt —— 只覆盖：身份基础（性别、年龄段、人种/肤色、体型、身高印象）、面部细节（脸型、眼睛颜色+形状+神韵、眉型、鼻型、唇型、下颌线、任何面部特征）、发型发色（颜色、长度、发质、造型）。绝对不要提及服装、鞋履、配饰、姿态，或颈部以下的任何内容。
-2. visual_prompt —— 完整外观：身份+面部+发型（内容与 face_prompt 一致），再加上服装（上衣/裙装/外套的款式、颜色、面料质感、图案、剪裁风格，含鞋履）、配饰道具（首饰、包袋、帽子、武器、随身物品，标注佩戴位置）、姿态表情（身体姿势、表情、手部动作），以及风格提示（写实摄影/动漫/油画等，可结合题材推断）。
+2. visual_prompt —— 完整外观：身份+面部+发型（内容与 face_prompt 一致），再加上服装（上衣/裙装/外套的款式、颜色、面料质感、图案、剪裁风格，含鞋履）、配饰道具（首饰、包袋、帽子、武器、随身物品，标注佩戴位置），以及风格提示（写实摄影/动漫/油画等，可结合题材推断）。姿态与表情只能是单一的中性静态参考姿势：正面站立、双臂自然下垂（或简单的A字站姿）、表情平静自然。
 
 规则：
 - 每份提示词最少100字，不限上限——细节越丰富越好
 - 用顿号或逗号分隔的描述短语，不要写完整句子
 - 不要描述场景/背景
+- 不要描写动态动作、进行中的动作瞬间、情绪转变过程，或与特定叙事场景绑定的手部动作/道具互动——这份提示词要同时驱动角色三视图（正/侧/背）和肖像图生成，两者都需要单一、可稳定复现的静态姿势
 - 只输出一个 JSON 对象，且只包含两个字符串字段："face_prompt" 和 "visual_prompt"。不要 markdown 代码块、不要解释、不要其他字段。
 
 角色描述：

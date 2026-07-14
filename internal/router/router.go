@@ -203,6 +203,11 @@ func SetupRouter(cfg *Config) *gin.Engine {
 		// 管理员解锁账号
 		v1.POST("/auth/users/:id/unlock", cfg.AuthHandler.UnlockUser)
 
+		// 图片服务端代理（把跨域 OSS 图片转成同源二进制，供 canvas 读取像素，如角色形象裁剪）
+		if cfg.MediaHandler != nil {
+			v1.GET("/media/proxy", cfg.MediaHandler.ProxyImage)
+		}
+
 		// 统一异步任务
 		if cfg.TaskHandler != nil {
 			tasks := v1.Group("/tasks")

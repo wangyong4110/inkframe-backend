@@ -15,10 +15,13 @@ Based on the chapter, update {{ CharacterName }}'s visual profile to reflect how
 Output a JSON object with these fields:
 - `visual_prompt`: Updated AI image generation prompt (English). Must follow the 12-dimension format:
   gender tag (1girl/1boy/etc.), age appearance, hair (color+style+length), eyes (color+shape), face shape, skin tone,
-  body build, outfit (all clothing+accessories described in detail), current emotional expression,
-  any chapter-specific details (wounds, special items, altered appearance),
-  art style tokens (anime/realistic/etc.), quality tokens (masterpiece, best quality, etc.)
+  body build, outfit (all clothing+accessories described in detail), current facial expression as a single static
+  descriptor (e.g. calm, tense, smiling — NOT an in-progress action or an emotion transition),
+  any chapter-specific static appearance details (wounds, special items, altered appearance — describe the resulting
+  look, not the action that caused it), art style tokens (anime/realistic/etc.), quality tokens (masterpiece, best quality, etc.)
   Minimum 80 words. If nothing changed from the current profile, keep it mostly the same but ensure completeness.
+  This prompt still drives a static character turnaround sheet and portrait — do NOT include body pose, in-progress
+  action, or scene/background elements; describe only the character's current static appearance.
 - `description`: Updated character description in English (2-3 sentences covering personality, role, and current chapter context). Max 200 words.
 
 Output ONLY valid JSON — no markdown fences, no explanation.
@@ -30,10 +33,13 @@ Example:
 输出包含以下字段的 JSON 对象：
 - `visual_prompt`：更新后的 AI 图像生成提示词（英文）。必须包含12个维度：
   性别标签（1girl/1boy等）、年龄外观、发型（颜色+款式+长度）、眼睛（颜色+形状）、脸型、肤色、
-  体型身材、服装（详细描述所有服装与配饰）、当前情绪/表情状态、
-  本章特有细节（伤痕、特殊道具、外形变化等），
+  体型身材、服装（详细描述所有服装与配饰）、当前面部表情（用单一静态状态描述，如平静、紧张、微笑——
+  不要写正在进行的动作或情绪转变过程）、
+  本章特有的静态外观细节（伤痕、特殊道具、外形变化等最终呈现效果，而非导致该效果的动作过程），
   画风标签（anime/realistic等）、质量标签（masterpiece, best quality等）。
   至少80词。若本章与当前档案无变化，保持主体不变但确保完整度。
+  此提示词仍用于驱动静态的角色三视图与肖像图生成——不要包含身体姿态、进行中的动作，或场景/背景元素，
+  只描述角色当前的静态外观。
 - `description`：更新后的中文角色描述（2-3句，涵盖性格、定位、本章状态）。最多200字。
 
 只输出有效 JSON——不要 markdown 代码块，不要解释。

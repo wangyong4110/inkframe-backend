@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/url"
 
 	"github.com/inkframe/inkframe-backend/internal/ai"
 	"github.com/inkframe/inkframe-backend/internal/config"
@@ -808,6 +809,23 @@ type Handlers struct {
 	DramaTemplateHandler   *handler.DramaTemplateHandler
 }
 
+// mediaProxyAllowedHosts 构建 MediaHandler.ProxyImage 的目标域名白名单：
+// 固定允许阿里云 OSS 自身域名（所有区域/加速节点都是 *.aliyuncs.com 的子域名，
+// 由阿里云自己解析/路由，不受攻击者控制)；此外若配置了自定义 CDN 域名（BaseURL），
+// 额外精确允许该域名。
+func mediaProxyAllowedHosts(cfg *config.Config) []string {
+	hosts := []string{".aliyuncs.com"}
+	for _, raw := range []string{cfg.Storage.BaseURL, cfg.Storage.Endpoint} {
+		if raw == "" {
+			continue
+		}
+		if u, err := url.Parse(raw); err == nil && u.Hostname() != "" {
+			hosts = append(hosts, u.Hostname())
+		}
+	}
+	return hosts
+}
+
 // initHandlers 初始化处理器
 func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, repos *Repositories, cfg *config.Config, redisClient *redis.Client) *Handlers {
 	return &Handlers{
@@ -867,7 +885,7 @@ func initHandlers(services *Services, storageSvc storage.Service, db *gorm.DB, r
 		UploadHandler:      handler.NewUploadHandler(storageSvc),
 		PlotPointHandler:   handler.NewPlotPointHandler(services.PlotPointService).WithChapterService(services.ChapterService).WithTaskService(services.TaskService).WithNovelService(services.NovelService),
 		TaskHandler:        handler.NewTaskHandler(services.TaskService),
-		MediaHandler:       handler.NewMediaHandler(db),
+		MediaHandler:       handler.NewMediaHandler(db).WithProxyAllowedHosts(mediaProxyAllowedHosts(cfg)...),
 		SceneAnchorHandler: handler.NewSceneAnchorHandler(services.SceneAnchorService, services.SceneConsistencyService).WithTaskService(services.TaskService).WithChapterService(services.ChapterService).WithVideoService(services.VideoService).WithNovelService(services.NovelService).WithStorageService(storageSvc),
 		SystemHandler:      handler.NewSystemHandler(repos.SystemSettingRepo),
 		FsHandler:          handler.NewFsHandler(getEnv("BGM_DIR", "")),
