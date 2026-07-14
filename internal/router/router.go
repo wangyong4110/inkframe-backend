@@ -677,6 +677,8 @@ func SetupRouter(cfg *Config) *gin.Engine {
 			videos.PUT("/:id/shots/:shot_id/characters", cfg.VideoHandler.SetShotCharacters)
 			// 分镜绑定物品
 			videos.PUT("/:id/shots/:shot_id/items", cfg.VideoHandler.SetShotItems)
+			// 绑定变化后手动同步提示词
+			videos.POST("/:id/shots/:shot_id/regenerate-prompt", cfg.VideoHandler.RegenerateShotPrompt)
 		}
 
 		// 分镜

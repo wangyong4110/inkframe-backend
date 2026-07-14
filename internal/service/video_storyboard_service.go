@@ -2172,6 +2172,107 @@ func (s *VideoService) SetShotItems(shotID uint, ids []uint) error {
 	return s.storyboardRepo.Update(shot)
 }
 
+// RegenerateShotPrompt 根据分镜当前绑定的角色/物品/场景，重新生成 image_prompt 和 video_prompt。
+// 背景：绑定/解绑角色、物品、场景锚点只更新结构化字段（CharacterIDs/ItemIDs/SceneAnchorID），
+// GenMeta.Prompt/MotionPrompt 是分镜脚本生成时 LLM 一次性写死的叙事文本，不会随绑定变化自动
+// 重写——导致"改了绑定但生成结果没变"。这个方法把旧提示词连同当前绑定一起喂给 LLM 重新改写，
+// 而不是简单的关键词替换（中文语法下增删人名很容易改出病句），由调用方（前端在用户手动点击
+// "重新生成提示词"时）显式触发，不在绑定变化时自动执行。
+func (s *VideoService) RegenerateShotPrompt(ctx context.Context, tenantID, videoID, shotID uint) (*model.StoryboardShot, error) {
+	shot, err := s.GetShotByID(videoID, shotID)
+	if err != nil {
+		return nil, fmt.Errorf("shot not found: %w", err)
+	}
+	video, err := s.videoRepo.GetByID(videoID)
+	if err != nil {
+		return nil, fmt.Errorf("video not found: %w", err)
+	}
+
+	var charNames []string
+	if len(shot.CharacterIDs) > 0 && s.characterRepo != nil {
+		if chars, e := s.characterRepo.ListByIDs([]uint(shot.CharacterIDs)); e == nil {
+			for _, c := range chars {
+				charNames = append(charNames, c.Name)
+			}
+		}
+	}
+	var itemNames []string
+	if len(shot.ItemIDs) > 0 && s.itemRepo != nil {
+		if items, e := s.itemRepo.ListByIDs([]uint(shot.ItemIDs)); e == nil {
+			for _, it := range items {
+				itemNames = append(itemNames, it.Name)
+			}
+		}
+	}
+	sceneDesc := ""
+	if shot.SceneAnchorID != nil && s.sceneAnchorSvc != nil {
+		if anchor, e := s.sceneAnchorSvc.GetByID(*shot.SceneAnchorID); e == nil {
+			sceneDesc = anchor.Description
+			if sceneDesc == "" {
+				sceneDesc = anchor.Name
+			}
+		}
+	}
+
+	novelTitle, genre, promptLanguage := novelPromptContext(s.novelRepo, video.NovelID)
+
+	characterList := "无绑定角色"
+	if len(charNames) > 0 {
+		characterList = strings.Join(charNames, "、")
+	}
+	itemList := "无绑定物品"
+	if len(itemNames) > 0 {
+		itemList = strings.Join(itemNames, "、")
+	}
+	sceneText := "未绑定场景，沿用原提示词中的场景设定"
+	if sceneDesc != "" {
+		sceneText = sceneDesc
+	}
+
+	rendered, tplErr := renderPrompt("regenerate_shot_prompt", map[string]interface{}{
+		"NovelTitle":      novelTitle,
+		"Genre":           genre,
+		"PromptLanguage":  promptLanguage,
+		"ShotDescription": shot.Description,
+		"CharacterList":   characterList,
+		"ItemList":        itemList,
+		"SceneText":       sceneText,
+		"OldImagePrompt":  shot.GenMeta.Prompt,
+		"OldMotionPrompt": shot.GenMeta.MotionPrompt,
+	})
+	if tplErr != nil {
+		return nil, fmt.Errorf("render regenerate_shot_prompt: %w", tplErr)
+	}
+
+	result, genErr := s.aiService.GenerateWithProviderCtx(ctx, tenantID, video.NovelID, "regenerate_shot_prompt", rendered, "")
+	if genErr != nil {
+		return nil, fmt.Errorf("AI regenerate shot prompt: %w", genErr)
+	}
+
+	type regenResult struct {
+		ImagePrompt string `json:"image_prompt"`
+		VideoPrompt string `json:"video_prompt"`
+	}
+	var parsed regenResult
+	cleaned := extractJSON(strings.TrimSpace(result))
+	if parseErr := json.Unmarshal([]byte(cleaned), &parsed); parseErr != nil {
+		logger.Errorf("[VideoService] RegenerateShotPrompt: parse error: %v, raw: %.300s", parseErr, result)
+		return nil, fmt.Errorf("parse regenerated prompt JSON: %w", parseErr)
+	}
+	if parsed.ImagePrompt == "" {
+		return nil, fmt.Errorf("AI 返回的图像提示词为空")
+	}
+
+	shot.GenMeta.Prompt = parsed.ImagePrompt
+	if parsed.VideoPrompt != "" {
+		shot.GenMeta.MotionPrompt = parsed.VideoPrompt
+	}
+	if err := s.storyboardRepo.Update(shot); err != nil {
+		return nil, fmt.Errorf("save regenerated prompt: %w", err)
+	}
+	return shot, nil
+}
+
 // InsertShot 在 afterShotNo 之后插入一个空分镜（afterShotNo=0 表示插入到最前；afterShotNo<0 表示追加到末尾）
 func (s *VideoService) InsertShot(videoID uint, afterShotNo int, narration, description string, duration float64) (*model.StoryboardShot, error) {
 	appendToEnd := afterShotNo < 0

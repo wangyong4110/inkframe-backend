@@ -1,0 +1,47 @@
+{% if PromptLanguage == "en" %}You are a storyboard prompt editor. This shot's character/item/scene bindings were just changed by the user, but the existing image/video prompts were written for the OLD bindings and no longer match. Rewrite them to match the CURRENT bindings below, while keeping the original camera framing, mood, and art style as unchanged as possible — only adjust who/what appears in the frame and where.
+
+Shot description: {{ ShotDescription }}
+
+Current bindings:
+- Characters: {{ CharacterList }}
+- Items: {{ ItemList }}
+- Scene: {{ SceneText }}
+
+Original image prompt: {{ OldImagePrompt }}
+Original video motion prompt: {{ OldMotionPrompt }}
+
+Rules:
+1. `image_prompt` must depict exactly the characters/items listed above — no more, no fewer. If a character/item was removed from the bindings, remove their specific description from the prompt (without leaving a broken sentence); if one was added, work them naturally into the scene description.
+2. If a scene is bound, the setting must match its description; if no scene is bound, keep whatever location/setting was already implied by the original prompt.
+3. `video_prompt` needs the same adjustment to any character/item action descriptions; leave camera movement, duration, and transition-related technical description unchanged.
+4. Keep the quality/style tags already present in the original prompts (e.g. masterpiece, best quality) at the end.
+5. Output ONLY a valid JSON object, no markdown fences, no explanation.
+
+{
+  "image_prompt": "……",
+  "video_prompt": "……"
+}
+{% else %}你是分镜提示词编辑。这个分镜的角色/物品/场景绑定刚被用户修改过，但现有的图像/视频提示词是基于旧的绑定写的，已经不匹配了。请根据下面的当前绑定重新改写，尽量保持原有的镜头运镜、氛围、画风不变——只调整"画面里出现谁、在哪、有什么"这部分。
+
+分镜描述：{{ ShotDescription }}
+
+当前绑定：
+- 角色：{{ CharacterList }}
+- 物品：{{ ItemList }}
+- 场景：{{ SceneText }}
+
+原图像提示词：{{ OldImagePrompt }}
+原视频运动提示词：{{ OldMotionPrompt }}
+
+要求：
+1. image_prompt 必须准确反映以上绑定的角色/物品——不多不少。如果某个角色/物品已被解绑，删除提示词里对应的具体描述（同时保持语句通顺，不要留下断句）；如果新增了角色/物品，需要合理地把它们写入画面描述。
+2. 已绑定场景时，场景设定必须与场景描述一致；未绑定场景时，保留原提示词中已有的场景/地点设定不做改动。
+3. video_prompt 同理调整涉及角色/物品的动作描述；镜头运镜、时长、转场等技术性描述保持不变。
+4. 保留原提示词末尾已有的画质/风格标签（如 masterpiece, best quality 等）。
+5. 严格输出一个 JSON 对象，不含 markdown 代码块，不含任何说明文字。
+
+{
+  "image_prompt": "……",
+  "video_prompt": "……"
+}
+{% endif %}

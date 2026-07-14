@@ -124,6 +124,18 @@ func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProvider
 	return result
 }
 
+// activeImageModelIsSingleIP 判断租户当前实际会尝试的首选图片提供商模型是否为 DreamO
+// （ai.VolcModelDreamO / "seed3l_single_ip"）。DreamO 是单 IP 一致性模型，传入多个不同
+// 角色的参考图会被误判为同一角色的多视角，导致画面中角色重复；其余多图 API
+// （jimeng4.0/4.6、doubao-seedream 等）原生支持多角色参考图，不受此限制，无需截断。
+func (s *AIService) activeImageModelIsSingleIP(tenantID uint) bool {
+	entries := s.loadImageProviderEntries(tenantID)
+	if len(entries) == 0 {
+		return false
+	}
+	return entries[0].Model == ai.VolcModelDreamO
+}
+
 // loadImageProviderEntries returns the candidate image provider entries to try for
 // tenantID, in priority order. DB is the sole source of truth when providerRepo is
 // wired — this makes deleting/changing a DB provider take effect immediately, without

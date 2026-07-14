@@ -306,6 +306,27 @@ func (h *VideoHandler) SetShotItems(c *gin.Context) {
 	respondOK(c, nil)
 }
 
+// RegenerateShotPrompt 根据分镜当前绑定的角色/物品/场景重新生成图像/视频提示词。
+// 用于绑定/解绑角色、物品、场景锚点后手动同步——绑定操作本身不会自动重写叙事文本提示词。
+// POST /api/v1/videos/:id/shots/:shot_id/regenerate-prompt
+func (h *VideoHandler) RegenerateShotPrompt(c *gin.Context) {
+	videoID, ok := parseID(c, "id")
+	if !ok {
+		return
+	}
+	shotID, ok := parseID(c, "shot_id")
+	if !ok {
+		return
+	}
+	shot, err := h.videoService.RegenerateShotPrompt(c.Request.Context(), getTenantID(c), uint(videoID), uint(shotID))
+	if err != nil {
+		reqLogger(c).Errorf("[VideoHandler] RegenerateShotPrompt: videoID=%d shotID=%d err=%v", videoID, shotID, err)
+		respondErr(c, http.StatusInternalServerError, "failed to regenerate shot prompt: "+err.Error())
+		return
+	}
+	respondOK(c, shot)
+}
+
 // OptimizeStoryboardFromReview 根据 AI 审查报告一键优化分镜（异步任务）
 // POST /api/v1/videos/:id/storyboard/optimize-from-review
 // Body: StoryboardReview JSON（由 review 任务结果直接透传）+ 可选 provider

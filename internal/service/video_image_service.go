@@ -867,38 +867,10 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 		}
 	}
 
-	// DreamO（seed3l_single_ip）是单 IP 模型，只支持一个角色的参考图。
-	// 传入多个不同角色的参考图时，模型会将它们误认为同一角色的多视角，
-	// 导致画面中同一角色出现多次（重复角色 bug）。
-	// 限制为 1 张参考图：主角色走 IP-Adapter；其余角色转为文字 VP 描述注入 prompt。
-	cappedPortraits := characterPortraits
-	if len(cappedPortraits) > 1 {
-		cappedPortraits = characterPortraits[:1]
-		// 超出部分的角色转为无参考图模式：VP 注入 noPortraitVPs，由文字约束外貌
-		for _, po := range portraitOwners[1:] {
-			noPortraitVPs = append(noPortraitVPs, po.vp)
-		}
-		logger.Printf("[CharRef] shot#%d capped references: %d→1 (moved %d extra char VPs to text injection)",
-			shot.ShotNo, len(characterPortraits), len(characterPortraits)-1)
-	}
-	logger.Printf("[CharRef] shot#%d using %d character portrait(s) as reference", shot.ShotNo, len(cappedPortraits))
-
-	// allRefImages 组装：角色图（最多1张）+ 物品图 + 场景锚定图。
-	// 各 provider 按自身能力取用：
-	//   - 多图 API（jimeng4.0/4.6、doubao-seedream 等）可全部使用；
-	//   - 单图 API（Wanx、DreamO 等）只取第一张（角色图优先）。
-	var allRefImages []string
-	allRefImages = append(allRefImages, cappedPortraits...)
-	allRefImages = append(allRefImages, itemRefImages...)
-	if sceneRefImage != "" {
-		allRefImages = append(allRefImages, sceneRefImage)
-	}
-	logger.Printf("generateShotReferenceImage: shot %d allRefImages=%d (charPortraits=%d itemRefs=%d sceneRef=%v)",
-		shot.ShotNo, len(allRefImages), len(characterPortraits), len(itemRefImages), sceneRefImage != "")
-
 	ctx := context.Background()
 
 	// 获取视频的 ArtStyle、TenantID、质量档位、宽高比、角色一致性权重和色彩调色
+	// （提前到角色参考图截断逻辑之前，因为截断与否需要按 tenantID 判断实际生效的图片模型）
 	artStyle := ""
 	var tenantID uint
 	charConsistencyWeight := 0.85  // 较高一致性：DreamO scale≈8.65，优先保持角色面部特征清晰
@@ -935,6 +907,36 @@ func (s *VideoService) generateShotReferenceImage(shot *model.StoryboardShot) (s
 			}
 		}
 	}
+
+	// DreamO（seed3l_single_ip）是单 IP 模型，只支持一个角色的参考图。
+	// 传入多个不同角色的参考图时，模型会将它们误认为同一角色的多视角，
+	// 导致画面中同一角色出现多次（重复角色 bug）。仅在租户实际生效的图片模型为 DreamO 时
+	// 才限制为 1 张参考图（主角色走 IP-Adapter，其余角色转为文字 VP 描述注入 prompt）；
+	// 其余多图 API（jimeng4.0/4.6、doubao-seedream 等）原生支持多角色参考图，不做截断。
+	cappedPortraits := characterPortraits
+	if len(cappedPortraits) > 1 && s.aiService.activeImageModelIsSingleIP(tenantID) {
+		cappedPortraits = characterPortraits[:1]
+		// 超出部分的角色转为无参考图模式：VP 注入 noPortraitVPs，由文字约束外貌
+		for _, po := range portraitOwners[1:] {
+			noPortraitVPs = append(noPortraitVPs, po.vp)
+		}
+		logger.Printf("[CharRef] shot#%d capped references: %d→1 (moved %d extra char VPs to text injection)",
+			shot.ShotNo, len(characterPortraits), len(characterPortraits)-1)
+	}
+	logger.Printf("[CharRef] shot#%d using %d character portrait(s) as reference", shot.ShotNo, len(cappedPortraits))
+
+	// allRefImages 组装：角色图 + 物品图 + 场景锚定图。
+	// 各 provider 按自身能力取用：
+	//   - 多图 API（jimeng4.0/4.6、doubao-seedream 等）可全部使用；
+	//   - 单图 API（Wanx、kling-image 等）由 provider 自身实现只取第一张（角色图优先）。
+	var allRefImages []string
+	allRefImages = append(allRefImages, cappedPortraits...)
+	allRefImages = append(allRefImages, itemRefImages...)
+	if sceneRefImage != "" {
+		allRefImages = append(allRefImages, sceneRefImage)
+	}
+	logger.Printf("generateShotReferenceImage: shot %d allRefImages=%d (charPortraits=%d itemRefs=%d sceneRef=%v)",
+		shot.ShotNo, len(allRefImages), len(characterPortraits), len(itemRefImages), sceneRefImage != "")
 
 	// allRefImages 直接传给 API，无需合图（所有图生图 API 均支持多张参考图）
 
