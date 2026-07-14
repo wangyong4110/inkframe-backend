@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 	"time"
 
@@ -268,9 +269,11 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 			params["image_urls"] = imgURLs
 		}
 		// 宽高（优先使用 size 字符串解析结果，未传 size 则由模型智能判断）
+		// 即梦4.0 要求 width*height ∈ [1024*1024, 4096*4096]，draft 档位的 1280x720 低于下限。
 		if req.Size != "" {
-			params["width"] = width
-			params["height"] = height
+			w40, h40 := ensureMinPixelArea(width, height, 1024*1024)
+			params["width"] = w40
+			params["height"] = h40
 		}
 		// scale：文本描述影响程度 float [0,1]，默认 0.5。
 		// CFGScale 由调用方以 1+weight*9 编码为 [1,10]，此处逆映射回 [0,1]。
@@ -325,9 +328,12 @@ func (p *VolcengineVisualProvider) buildSubmitParams(reqKey string, req *ImageGe
 		if len(imgURLs46) > 0 {
 			params["image_urls"] = imgURLs46
 		}
+		// 即梦4.6 要求 width*height ∈ [1024*1024, 4096*4096]，draft 档位的 1280x720（921,600px）
+		// 低于下限，会被 API 拒绝（code=50200 "width*height must in [1024 * 1024, 4096 * 4096]"）。
 		if req.Size != "" {
-			params["width"] = width
-			params["height"] = height
+			w46, h46 := ensureMinPixelArea(width, height, 1024*1024)
+			params["width"] = w46
+			params["height"] = h46
 		}
 		// scale：文本描述影响程度 int [1,100]，默认 50。
 		// CFGScale 由调用方以 1+weight*9 编码为 [1,10]，此处逆映射为 [1,100]：
@@ -545,6 +551,19 @@ func parseSizeWH(size string) (int, int) {
 		return base * rw / rh, base
 	}
 	return base, base
+}
+
+// ensureMinPixelArea 按比例放大 width/height（保持长宽比），使 width*height >= minArea。
+// 即梦4.0/4.6 家族（jimeng_t2i_v40/jimeng_seedream46_cvtob）要求 width*height 落在
+// [1024*1024, 4096*4096] 区间内；draft 质量档位常用的 1280x720（=921,600px）低于下限，
+// 直接提交会被 API 拒绝（code=50200 "width*height must in [1024 * 1024, 4096 * 4096]"）。
+// 已经满足下限时原样返回，不影响其他档位/模型。
+func ensureMinPixelArea(width, height, minArea int) (int, int) {
+	if width <= 0 || height <= 0 || width*height >= minArea {
+		return width, height
+	}
+	scale := math.Sqrt(float64(minArea) / float64(width*height))
+	return int(math.Ceil(float64(width) * scale)), int(math.Ceil(float64(height) * scale))
 }
 
 // ─── AIProvider 接口的剩余方法（不支持）─────────────────────────────────────

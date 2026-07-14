@@ -35,6 +35,47 @@ func TestParseSizeWH(t *testing.T) {
 	}
 }
 
+// ─── Pure function tests: ensureMinPixelArea ───────────────────────────────
+
+func TestEnsureMinPixelArea(t *testing.T) {
+	const minArea = 1024 * 1024
+	cases := []struct {
+		name   string
+		w, h   int
+		minA   int
+		wantOK bool // area(want) >= minA and aspect ratio preserved within rounding
+	}{
+		{"already above minimum returns unchanged", 2048, 2048, minArea, true},
+		{"draft 1280x720 (below minimum) gets scaled up", 1280, 720, minArea, true},
+		{"exactly at minimum returns unchanged", 1024, 1024, minArea, true},
+		{"zero width is a no-op", 0, 720, minArea, true},
+		{"zero height is a no-op", 1280, 0, minArea, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w, h := ensureMinPixelArea(c.w, c.h, c.minA)
+			if c.w <= 0 || c.h <= 0 {
+				if w != c.w || h != c.h {
+					t.Errorf("ensureMinPixelArea(%d,%d,%d) = (%d,%d), want unchanged (%d,%d)", c.w, c.h, c.minA, w, h, c.w, c.h)
+				}
+				return
+			}
+			if w*h < c.minA {
+				t.Errorf("ensureMinPixelArea(%d,%d,%d) = (%d,%d), area %d still below minimum %d", c.w, c.h, c.minA, w, h, w*h, c.minA)
+			}
+			if c.w*c.h >= c.minA && (w != c.w || h != c.h) {
+				t.Errorf("ensureMinPixelArea(%d,%d,%d) = (%d,%d), want unchanged since already >= minimum", c.w, c.h, c.minA, w, h)
+			}
+			// Aspect ratio should be preserved within a small rounding tolerance.
+			origRatio := float64(c.w) / float64(c.h)
+			gotRatio := float64(w) / float64(h)
+			if diff := origRatio - gotRatio; diff > 0.01 || diff < -0.01 {
+				t.Errorf("ensureMinPixelArea(%d,%d,%d) = (%d,%d), aspect ratio %.4f drifted from original %.4f", c.w, c.h, c.minA, w, h, gotRatio, origRatio)
+			}
+		})
+	}
+}
+
 // ─── Pure function tests: pickSingleRef / pickMultiRef ─────────────────────
 
 func TestPickSingleRef(t *testing.T) {
