@@ -395,11 +395,6 @@ func (s *AIService) resolveProviderFromModel(tenantID uint, modelName string) st
 	return providerName
 }
 
-// callAI 调用AI接口（使用系统级 provider）
-func (s *AIService) callAI(prompt string, config *taskConfig) (string, error) {
-	return s.callAIWithProvider(context.Background(), 0, prompt, config, "")
-}
-
 // GenerateWithVision 使用 Vision AI 分析图像内容
 // 优先使用 anthropic（claude-3），其次 openai（gpt-4o），都失败则用默认 provider
 func (s *AIService) GenerateWithVision(tenantID uint, prompt string, imageURLs []string) (string, error) {
@@ -589,30 +584,7 @@ func (s *AIService) callAIWithProviderSys(parentCtx context.Context, tenantID ui
 	return resp.Content, resp, nil
 }
 
-// isAuthError returns true when the error clearly indicates an authentication
-// or authorisation failure (HTTP 401/403, invalid API key, etc.).
-// These errors are non-retryable and should short-circuit any fallback chain.
-func isAuthError(err error) bool {
-	if err == nil {
-		return false
-	}
-	s := err.Error()
-	return strings.Contains(s, "401") ||
-		strings.Contains(s, "403") ||
-		strings.Contains(s, "authentication") ||
-		strings.Contains(s, "unauthorized") ||
-		strings.Contains(s, "Unauthorized") ||
-		strings.Contains(s, "invalid_api_key") ||
-		strings.Contains(s, "invalid api key") ||
-		strings.Contains(s, "Forbidden")
-}
-
-// generateJSONForTenant 带 tenantID 的 JSON 生成重试（最多重试 maxRetries 次）
-func (s *AIService) generateJSONForTenant(tenantID, novelID uint, taskType, prompt string, maxRetries int) (string, error) {
-	return s.generateJSONForTenantCtx(context.Background(), tenantID, novelID, taskType, prompt, maxRetries)
-}
-
-// generateJSONForTenantCtx 与 generateJSONForTenant 相同，但支持 context 取消/超时。
+// generateJSONForTenantCtx 带 tenantID 的 JSON 生成重试（最多重试 maxRetries 次），支持 context 取消/超时。
 func (s *AIService) generateJSONForTenantCtx(ctx context.Context, tenantID, novelID uint, taskType, prompt string, maxRetries int) (string, error) {
 	if maxRetries <= 0 {
 		maxRetries = 2
@@ -649,36 +621,6 @@ func (s *AIService) generateJSONForTenantCtx(ctx context.Context, tenantID, nove
 		logger.Errorf("generateJSONForTenantCtx: %v", lastErr)
 	}
 	return "", fmt.Errorf("generateJSONForTenantCtx failed after %d attempts: %w", maxRetries+1, lastErr)
-}
-
-// generateWithRetry 带容错重试的 JSON 生成（最多重试 2 次）
-func (s *AIService) generateWithRetry(novelID uint, taskType, prompt string, maxRetries int) (string, error) {
-	if maxRetries <= 0 {
-		maxRetries = 2
-	}
-	var lastErr error
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		p := prompt
-		if attempt > 0 {
-			p = prompt + "\n\n⚠️ 重要提示：请只返回纯 JSON，不要包含任何 markdown 代码块（```）或说明文字。"
-			logger.Printf("generateWithRetry: attempt %d for taskType=%s, novelID=%d", attempt+1, taskType, novelID)
-		}
-		result, err := s.Generate(novelID, taskType, p)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		// 尝试提取 JSON
-		cleaned := extractJSON(result)
-		// 验证是否为有效 JSON
-		var v interface{}
-		if jsonErr := json.Unmarshal([]byte(cleaned), &v); jsonErr == nil {
-			return cleaned, nil
-		}
-		lastErr = fmt.Errorf("invalid JSON on attempt %d: %s", attempt+1, cleaned[:min(100, len(cleaned))])
-		logger.Errorf("generateWithRetry: %v", lastErr)
-	}
-	return "", fmt.Errorf("generateWithRetry failed after %d attempts: %w", maxRetries+1, lastErr)
 }
 
 // logUsage records a ModelUsageLog entry using token counts and latency from the response.

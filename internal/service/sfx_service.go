@@ -46,7 +46,7 @@ type sfxCacheEntryJSON struct {
 const sfxCacheTTL = 24 * time.Hour
 
 // SFXService 自动音效生成服务。
-// 降级链：AI 文生音效 → 本地库 → AudioLDM（本地模型）→ Freesound API → Pixabay Audio → BBC Sound Effects（爬取） → ElevenLabs（AI生成）。
+// 降级链：AI 文生音效 → 本地库 → AudioLDM（本地模型）→ Freesound API → Pixabay Audio。
 type SFXService struct {
 	aiSvc            *AIService
 	storageSvc       storage.Service
@@ -397,7 +397,7 @@ func deduplicateAndLimit(items []sfxTagItem, limit int) []sfxTagItem {
 }
 
 // searchOneTag 对单个结构化标签执行多层降级搜索。
-// 优先级：素材库 → AI 文生音效 → 本地库 → AudioLDM（本地模型）→ Freesound → Pixabay → BBC Sound Effects → ElevenLabs。
+// 优先级：素材库 → AI 文生音效 → 本地库 → AudioLDM（本地模型）→ Freesound → Pixabay。
 // 同一 tag 的结果在进程内按 24h TTL 缓存，批量生成时相同 tag 的分镜共享同一条音效。
 // provider 非空时强制使用指定提供商，并在 cacheKey 中区分，避免跨提供商的缓存污染。
 // force=true 跳过内存/Redis 缓存且跳过素材库（步骤 0），强制重新生成全新音效文件。

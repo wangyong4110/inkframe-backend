@@ -196,7 +196,6 @@ type Services struct {
 	QualityControlService *service.QualityControlService
 	VideoService          *service.VideoService
 	ModelService          *service.ModelService
-	PromptService         *service.PromptService
 	ContinuityService     *service.ContinuityService
 	KnowledgeService      *service.KnowledgeService
 
@@ -274,7 +273,6 @@ type contentSvcs struct {
 	Worldview         *service.WorldviewService
 	Knowledge         *service.KnowledgeService
 	Continuity        *service.ContinuityService
-	Prompt            *service.PromptService
 	ChapterVersion    *service.ChapterVersionService
 	Foreshadow        *service.ForeshadowService
 	Timeline          *service.TimelineService
@@ -374,8 +372,7 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 	worldviewSvc := service.NewWorldviewService(repos.WorldviewRepo, aiSvc).
 		WithNovelRepos(repos.NovelRepo, repos.ChapterRepo)
 
-	// 提示词 / 连续性
-	promptSvc := service.NewPromptService(nil)
+	// 连续性
 	continuitySvc := service.NewContinuityService(repos.CharacterRepo, repos.ChapterRepo).
 		WithReportRepo(repos.ContinuityReportRepo)
 
@@ -462,7 +459,7 @@ func initContentServiceGroup(db *gorm.DB, repos *Repositories, core *coreSvcs, a
 
 	return &contentSvcs{
 		Novel: novelSvc, Chapter: chapterSvc, Character: characterSvc, Worldview: worldviewSvc,
-		Knowledge: knowledgeSvc, Continuity: continuitySvc, Prompt: promptSvc,
+		Knowledge: knowledgeSvc, Continuity: continuitySvc,
 		ChapterVersion: chapterVersionSvc, Foreshadow: foreshadowSvc, Timeline: timelineSvc,
 		CharacterArc: characterArcSvc, Style: styleSvc, GenContext: genCtxSvc,
 		ImageGen: imageGenSvc, HookChain: hookChainSvc, SatisfactionPoint: satisfactionSvc,
@@ -625,7 +622,6 @@ func initServices(db *gorm.DB, repos *Repositories, aiManager *ai.ModelManager, 
 		WorldviewService:         content.Worldview,
 		KnowledgeService:         content.Knowledge,
 		ContinuityService:        content.Continuity,
-		PromptService:            content.Prompt,
 		ChapterVersionService:    content.ChapterVersion,
 		ForeshadowService:        content.Foreshadow,
 		TimelineService:          content.Timeline,

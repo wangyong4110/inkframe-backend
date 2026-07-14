@@ -52,8 +52,35 @@ func (s *ItemService) WithNovelRepo(r *repository.NovelRepository) *ItemService 
 	return s
 }
 
-// CreateItem 创建项目级物品
+// CreateItem 创建项目级物品。
+// novel_id+name 有唯一索引（uniq_item_novel_name），而删除物品是软删除（deleted_at 置位，
+// 行仍占用这个唯一索引）——如果不检查就直接 Create，删除后用同名重新创建会撞唯一索引报
+// MySQL 1062 错误。这里先查一次（含软删除记录）：命中软删除记录就恢复并用新请求覆盖字段，
+// 命中活跃记录则返回明确的重名错误，而不是让原始 SQL 错误往上抛。
 func (s *ItemService) CreateItem(novelID uint, req *model.CreateItemRequest) (*model.Item, error) {
+	if existing, err := s.itemRepo.FindByNovelAndNameUnscoped(novelID, req.Name); err == nil && existing != nil {
+		if !existing.DeletedAt.Valid {
+			return nil, fmt.Errorf("物品「%s」已存在", req.Name)
+		}
+		if err := s.itemRepo.RestoreByID(existing.ID); err != nil {
+			return nil, fmt.Errorf("restore soft-deleted item: %w", err)
+		}
+		existing.DeletedAt.Valid = false
+		existing.Description = req.Description
+		existing.Location = req.Location
+		existing.Owner = req.Owner
+		existing.VisualPrompt = req.VisualPrompt
+		existing.Status = req.Status
+		if existing.Status == "" {
+			existing.Status = "active"
+		}
+		// 清空旧的图片字段：用户是在创建一个"新"物品（只是复用了同名的旧行），不应该带着
+		// 已删除物品残留的参考图/生成图，否则画面和新填的描述对不上。
+		existing.ImageURL = ""
+		existing.ReferenceImageURL = ""
+		return existing, s.itemRepo.Update(existing)
+	}
+
 	item := &model.Item{
 		NovelID:      novelID,
 		UUID:         uuid.New().String(),

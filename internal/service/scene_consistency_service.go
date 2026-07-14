@@ -147,11 +147,6 @@ func (s *SceneConsistencyService) ScoreScene(
 	return report, nil
 }
 
-// GetLogsByShotID 查询某 shot 的所有评分历史
-func (s *SceneConsistencyService) GetLogsByShotID(shotID uint) ([]*model.SceneConsistencyLog, error) {
-	return s.logRepo.ListByShotID(shotID)
-}
-
 // GetLogsByAnchorID 查询某锚点的所有评分历史
 func (s *SceneConsistencyService) GetLogsByAnchorID(anchorID uint) ([]*model.SceneConsistencyLog, error) {
 	return s.logRepo.ListByAnchorID(anchorID)

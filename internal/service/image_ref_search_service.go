@@ -180,22 +180,3 @@ func NewImageRefSearcher(provider, apiKey string) ImageRefSearcher {
 	}
 	return &NoopImageRefSearcher{}
 }
-
-// formatImageRefResults formats image results as readable prompt hints (URL list).
-func formatImageRefResults(results []ImageRefResult) string {
-	if len(results) == 0 {
-		return ""
-	}
-	var sb strings.Builder
-	for i, r := range results {
-		if i >= 3 {
-			break
-		}
-		sb.WriteString(fmt.Sprintf("- %s", r.URL))
-		if r.Tags != "" {
-			sb.WriteString(fmt.Sprintf("（tags: %s）", r.Tags))
-		}
-		sb.WriteString("\n")
-	}
-	return strings.TrimSpace(sb.String())
-}

@@ -10,39 +10,6 @@ import (
 	"github.com/inkframe/inkframe-backend/internal/logger"
 )
 
-// EnqueueImageTask 将一次图片生成函数提交到按模型隔离的 Worker 池，返回 TaskFuture。
-//
-// Worker 数量由 AIModel.Concurrency（DB 配置）决定，默认 1（串行）。
-// 若 DB 中未配置该模型，或 Concurrency=0，则退回为单 Worker（不丢任务，仅降速）。
-//
-// 用法示例：
-//
-//	future := svc.EnqueueImageTask(ctx, tenantID, "seededit_v3.0", func(ctx context.Context) (string, error) {
-//	    return svc.GenerateCharacterThreeViewMulti(ctx, ...)
-//	})
-//	url, err := future.Await(ctx)
-func (s *AIService) EnqueueImageTask(ctx context.Context, tenantID uint, modelName string, fn func(ctx context.Context) (string, error)) *TaskFuture {
-	concurrency := 1
-	if s.modelRepo != nil {
-		if m, err := s.modelRepo.GetByName(modelName); err == nil && m.Concurrency > 0 {
-			concurrency = m.Concurrency
-		}
-	}
-	key := fmt.Sprintf("%d:%s", tenantID, modelName)
-	return s.ImageQueue.Submit(key, concurrency, ctx, fn)
-}
-
-// EnqueueImageTaskByProvider 与 EnqueueImageTask 类似，但以 providerName 为队列 key。
-// 适用于调用方知道提供者但不知道具体模型名称的场景（如 BatchGenerateShotImages）。
-// concurrency 直接指定（调用方负责从 DB 或配置读取）。
-func (s *AIService) EnqueueImageTaskByProvider(ctx context.Context, tenantID uint, providerName string, concurrency int, fn func(ctx context.Context) (string, error)) *TaskFuture {
-	if concurrency <= 0 {
-		concurrency = 1
-	}
-	key := fmt.Sprintf("%d:provider:%s", tenantID, providerName)
-	return s.ImageQueue.Submit(key, concurrency, ctx, fn)
-}
-
 // GetProviderConcurrency 从 DB 中查找指定类型（"image"/"video"/"voice"/"sfx"）的第一个活跃提供商，
 // 返回其关联 AIModel 的 Concurrency 配置值（默认 1，表示串行执行）。
 // 调用方无需关心具体模型名称，统一由此方法从 DB 配置中解析。

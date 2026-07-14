@@ -1413,23 +1413,6 @@ func (s *NovelService) SyncCharacterSnapshots(
 	return nil
 }
 
-// updateNovelStats 更新小说统计（使用 DB 聚合避免并发竞态）
-func (s *NovelService) updateNovelStats(novelID uint) {
-	if err := s.novelRepo.SyncStats(novelID); err != nil {
-		logger.Errorf("updateNovelStats: sync novel %d: %v", novelID, err)
-	}
-}
-
-// extractPlotPoints 提取剧情点并保存到数据库
-func (s *NovelService) extractPlotPoints(chapter *model.Chapter) {
-	if s.plotPointService == nil {
-		return
-	}
-	if _, err := s.plotPointService.ExtractFromChapter(context.Background(), 0, chapter); err != nil {
-		logger.Errorf("extractPlotPoints chapter %d: %v", chapter.ID, err)
-	}
-}
-
 // providerCacheEntry 提供商缓存条目
 type providerCacheEntry struct {
 	provider  ai.AIProvider

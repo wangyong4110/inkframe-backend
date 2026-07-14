@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"errors"
+
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"gorm.io/gorm"
 )
@@ -17,6 +19,27 @@ func (r *SceneAnchorRepository) DB() *gorm.DB { return r.db }
 
 func (r *SceneAnchorRepository) Create(a *model.SceneAnchor) error {
 	return r.db.Create(a).Error
+}
+
+// FindByNovelAndNameUnscoped 包含软删除记录的查找（用于判断 idx_scene_anchor_novel_name
+// 唯一索引是否被软删除记录占用）。返回 nil, nil 表示完全不存在。
+func (r *SceneAnchorRepository) FindByNovelAndNameUnscoped(novelID uint, name string) (*model.SceneAnchor, error) {
+	var a model.SceneAnchor
+	err := r.db.Unscoped().Where("novel_id = ? AND name = ?", novelID, name).First(&a).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &a, nil
+}
+
+// RestoreByID 恢复软删除的场景锚点（清空 deleted_at）。
+func (r *SceneAnchorRepository) RestoreByID(id uint) error {
+	return r.db.Unscoped().Model(&model.SceneAnchor{}).
+		Where("id = ?", id).
+		Update("deleted_at", nil).Error
 }
 
 func (r *SceneAnchorRepository) GetByID(id uint) (*model.SceneAnchor, error) {

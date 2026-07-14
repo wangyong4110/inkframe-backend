@@ -32,7 +32,7 @@ type LipSyncResult struct {
 	VideoURL string `json:"video_url,omitempty"`
 }
 
-// GenerateLipSyncVideo 为指定分镜生成口型对齐视频。
+// GenerateLipSyncVideoWithReq 为指定分镜生成口型对齐视频。
 //
 // 音频来源（优先级从高到低）：
 //  1. req.AudioURL（请求体显式指定）
@@ -44,10 +44,6 @@ type LipSyncResult struct {
 //  2. 分镜 ImageURL
 //
 // 结果视频 URL 写回 shot.VideoURL；任务 ID 写到 shot.TaskMeta.ShotTaskID（"lipsync:" 前缀）。
-func (s *VideoService) GenerateLipSyncVideo(videoID, shotID uint) (*LipSyncResult, error) {
-	return s.GenerateLipSyncVideoWithReq(videoID, shotID, LipSyncRequest{})
-}
-
 func (s *VideoService) GenerateLipSyncVideoWithReq(videoID, shotID uint, req LipSyncRequest) (*LipSyncResult, error) {
 	shot, err := s.storyboardRepo.GetByID(shotID)
 	if err != nil {

@@ -72,9 +72,6 @@ type novelGetterUpdater interface {
 	UpdateFields(id uint, fields map[string]interface{}) error
 }
 
-// novelGetter 保留向后兼容（其他服务使用此接口名）
-type novelGetter = novelGetterUpdater
-
 type chapterMemoryRepo interface {
 	GetByID(id uint) (*model.Chapter, error)
 	GetRecent(novelID uint, chapterNo int, count int) ([]*model.Chapter, error)

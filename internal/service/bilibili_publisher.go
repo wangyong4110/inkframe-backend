@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -248,17 +247,4 @@ func joinTags(tags []string) string {
 		result += t
 	}
 	return result
-}
-
-// bilibiliDownloadToReader streams a video URL as a reader (used for chunked upload if needed).
-func bilibiliDownloadToReader(ctx context.Context, videoURL string) (io.ReadCloser, int64, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, videoURL, nil)
-	if err != nil {
-		return nil, 0, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, 0, err
-	}
-	return resp.Body, resp.ContentLength, nil
 }

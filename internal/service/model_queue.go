@@ -193,17 +193,6 @@ func (q *ModelTaskQueue) Submit(key string, concurrency int, ctx context.Context
 	return q.getOrCreate(key, concurrency).submit(ctx, fn)
 }
 
-// PendingCount 返回指定 key 的 pool 中待处理（队列中 + 正在执行）的任务数，不存在时返回 0。
-func (q *ModelTaskQueue) PendingCount(key string) int64 {
-	q.mu.Lock()
-	p, ok := q.pools[key]
-	q.mu.Unlock()
-	if !ok {
-		return 0
-	}
-	return p.pending.Load()
-}
-
 // Stats 返回所有 pool 的待处理任务数快照（用于监控/日志）。
 func (q *ModelTaskQueue) Stats() map[string]int64 {
 	q.mu.Lock()

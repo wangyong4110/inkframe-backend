@@ -1,6 +1,8 @@
 package repository
 
 import (
+	"errors"
+
 	"github.com/inkframe/inkframe-backend/internal/model"
 	"gorm.io/gorm"
 )
@@ -120,6 +122,27 @@ func (r *WorldviewRepository) CreateEntity(entity *model.WorldviewEntity) error 
 	return r.db.Create(entity).Error
 }
 
+// FindEntityByWorldviewTypeNameUnscoped 包含软删除记录的查找（用于判断 idx_we_name_type
+// 唯一索引是否被软删除记录占用）。返回 nil, nil 表示完全不存在。
+func (r *WorldviewRepository) FindEntityByWorldviewTypeNameUnscoped(worldviewID uint, entityType, name string) (*model.WorldviewEntity, error) {
+	var e model.WorldviewEntity
+	err := r.db.Unscoped().Where("worldview_id = ? AND type = ? AND name = ?", worldviewID, entityType, name).First(&e).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &e, nil
+}
+
+// RestoreEntityByID 恢复软删除的世界观实体（清空 deleted_at）。
+func (r *WorldviewRepository) RestoreEntityByID(id uint) error {
+	return r.db.Unscoped().Model(&model.WorldviewEntity{}).
+		Where("id = ?", id).
+		Update("deleted_at", nil).Error
+}
+
 // UpdateEntity 更新世界观实体
 func (r *WorldviewRepository) UpdateEntity(entity *model.WorldviewEntity) error {
 	return r.db.Save(entity).Error
@@ -146,6 +169,27 @@ func NewItemRepository(db *gorm.DB) *ItemRepository {
 
 func (r *ItemRepository) Create(item *model.Item) error {
 	return r.db.Create(item).Error
+}
+
+// FindByNovelAndNameUnscoped 包含软删除记录的查找（用于判断 uniq_item_novel_name 唯一索引
+// 是否被软删除记录占用）。返回 nil, nil 表示完全不存在。
+func (r *ItemRepository) FindByNovelAndNameUnscoped(novelID uint, name string) (*model.Item, error) {
+	var item model.Item
+	err := r.db.Unscoped().Where("novel_id = ? AND name = ?", novelID, name).First(&item).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &item, nil
+}
+
+// RestoreByID 恢复软删除的物品（清空 deleted_at）。
+func (r *ItemRepository) RestoreByID(id uint) error {
+	return r.db.Unscoped().Model(&model.Item{}).
+		Where("id = ?", id).
+		Update("deleted_at", nil).Error
 }
 
 func (r *ItemRepository) GetByID(id uint) (*model.Item, error) {

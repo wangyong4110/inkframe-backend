@@ -124,25 +124,6 @@ var ProviderStaticModelsByType = map[string]map[string][]string{
 	},
 }
 
-// FlattenStaticModels returns a deduplicated flat list of all models for the given provider.
-func FlattenStaticModels(providerName string) []string {
-	byType, ok := ProviderStaticModelsByType[providerName]
-	if !ok {
-		return nil
-	}
-	seen := map[string]struct{}{}
-	var result []string
-	for _, models := range byType {
-		for _, m := range models {
-			if _, ok := seen[m]; !ok {
-				seen[m] = struct{}{}
-				result = append(result, m)
-			}
-		}
-	}
-	return result
-}
-
 // providerModelDef 内置的提供商模型定义，用于租户创建供应商时自动初始化模型列表。
 // 这是单一数据来源 — seed.go 不再为 tenant_id=0 的系统供应商写入 ink_ai_model 记录。
 type providerModelDef struct {

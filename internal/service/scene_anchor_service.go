@@ -113,7 +113,34 @@ func (s *SceneAnchorService) ListByNovel(novelID uint) ([]*model.SceneAnchor, er
 	return s.repo.ListByNovel(novelID)
 }
 
+// Create 创建场景锚点。
+// novel_id+name 有唯一索引（idx_scene_anchor_novel_name），而删除锚点是软删除（deleted_at
+// 置位，行仍占用这个唯一索引）——删除后用同名重新创建会撞唯一索引报 MySQL 1062 错误。这里
+// 先查一次（含软删除记录）：命中软删除记录就恢复并用新请求覆盖字段，命中活跃记录则返回明确
+// 的重名错误，而不是让原始 SQL 错误往上抛。
 func (s *SceneAnchorService) Create(tenantID, novelID uint, req CreateSceneAnchorReq) (*model.SceneAnchor, error) {
+	if existing, err := s.repo.FindByNovelAndNameUnscoped(novelID, req.Name); err == nil && existing != nil {
+		if !existing.DeletedAt.Valid {
+			return nil, fmt.Errorf("场景「%s」已存在", req.Name)
+		}
+		if err := s.repo.RestoreByID(existing.ID); err != nil {
+			return nil, fmt.Errorf("restore soft-deleted scene anchor: %w", err)
+		}
+		existing.DeletedAt.Valid = false
+		existing.Type = req.Type
+		existing.Description = req.Description
+		existing.Variant = req.Variant
+		existing.ParentAnchorID = req.ParentAnchorID
+		// 清空旧的参考图：用户是在创建一个"新"场景（只是复用了同名的旧行），不应该带着
+		// 已删除锚点残留的参考图，否则画面和新填的描述对不上。
+		existing.RefImageURL = ""
+		existing.RefImageLockedAt = nil
+		if err := s.repo.Update(existing); err != nil {
+			return nil, err
+		}
+		return existing, nil
+	}
+
 	anchor := &model.SceneAnchor{
 		NovelID:        novelID,
 		Name:           req.Name,

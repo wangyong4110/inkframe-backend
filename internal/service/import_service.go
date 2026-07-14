@@ -13,7 +13,6 @@ import (
 	"net/url"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1463,116 +1462,6 @@ func (s *NovelImportService) buildChaptersFromSplits(content string, splits []in
 			Status:    model.StatusCompleted,
 		})
 	}
-	return chapters
-}
-
-// splitByChaptersWithAI 让 AI 从文本中识别章节标题，用于正则无法匹配的非标准格式
-func (s *NovelImportService) splitByChaptersWithAI(content string, tenantID uint) []*model.Chapter {
-	const maxSampleRunes = 10000
-	runes := []rune(content)
-	sample := content
-	if len(runes) > maxSampleRunes {
-		sample = string(runes[:maxSampleRunes])
-	}
-
-	prompt := `请从以下小说文本中找出所有章节的起始标题行，并以JSON数组格式返回章节标题列表。
-格式要求：["第一章 xxx", "第二章 yyy", ...]
-要求：
-1. 标题必须与原文完全一致（字符相同）
-2. 只返回JSON数组，不含其他内容
-3. 若文本没有明显章节，则按每约3000字一章分章，标题使用"第N章"格式（N为数字）
-
-小说文本（前10000字）：
-` + sample
-
-	resp, err := s.aiService.GenerateWithProvider(tenantID, 0, "chapter", prompt, "")
-	if err != nil || strings.TrimSpace(resp) == "" {
-		logger.Errorf("[Import] AI chapter split error: %v", err)
-		return nil
-	}
-
-	// 提取 JSON 数组
-	raw := resp
-	if i := strings.Index(raw, "["); i >= 0 {
-		if j := strings.LastIndex(raw, "]"); j > i {
-			raw = raw[i : j+1]
-		}
-	}
-	var titles []string
-	if err := json.Unmarshal([]byte(raw), &titles); err != nil || len(titles) == 0 {
-		logger.Errorf("[Import] AI chapter split JSON parse error: %v, raw=%q", err, raw)
-		return nil
-	}
-
-	// 在全文中定位每个标题
-	type entry struct {
-		pos   int
-		title string
-	}
-	var entries []entry
-	searchFrom := 0
-	for _, title := range titles {
-		title = strings.TrimSpace(title)
-		if title == "" {
-			continue
-		}
-		idx := strings.Index(content[searchFrom:], title)
-		if idx < 0 {
-			// 宽松搜索（忽略之前的偏移）
-			idx = strings.Index(content, title)
-			if idx < 0 {
-				continue
-			}
-		} else {
-			idx += searchFrom
-		}
-		entries = append(entries, entry{pos: idx, title: title})
-		searchFrom = idx + len(title)
-	}
-
-	if len(entries) < 2 {
-		return nil
-	}
-
-	// 确保升序（防止 AI 乱序返回）
-	sort.Slice(entries, func(i, j int) bool { return entries[i].pos < entries[j].pos })
-
-	splits := make([]int, len(entries))
-	titleStrs := make([]string, len(entries))
-	for i, e := range entries {
-		splits[i] = e.pos
-		titleStrs[i] = e.title
-	}
-	chapters := s.buildChaptersFromSplits(content, splits, titleStrs)
-	logger.Printf("[Import] AI chapter split: %d chapters detected", len(chapters))
-	return chapters
-}
-
-// 按字数分割
-func (s *NovelImportService) splitByLength(content, title string, chunkSize int) []*model.Chapter {
-	var chapters []*model.Chapter
-	runes := []rune(content)
-	totalLen := len(runes)
-
-	for i := 0; i < totalLen; i += chunkSize {
-		end := i + chunkSize
-		if end > totalLen {
-			end = totalLen
-		}
-
-		chapterContent := string(runes[i:end])
-		chapterNo := i/chunkSize + 1
-
-		chapter := &model.Chapter{
-			ChapterNo: chapterNo,
-			Title:     fmt.Sprintf("第%d章", chapterNo),
-			Content:   chapterContent,
-			WordCount: len(runes[i:end]),
-			Status:    model.StatusCompleted,
-		}
-		chapters = append(chapters, chapter)
-	}
-
 	return chapters
 }
 

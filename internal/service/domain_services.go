@@ -763,7 +763,29 @@ func (s *WorldviewService) GetEntity(id uint, worldviewID uint) (*model.Worldvie
 	return &entity, nil
 }
 
+// CreateEntity 创建世界观实体。
+// worldview_id+type+name 有唯一索引（idx_we_name_type），而删除实体是软删除（deleted_at
+// 置位，行仍占用这个唯一索引）——删除后用同名同类型重新创建会撞唯一索引报 MySQL 1062 错误。
+// 这里先查一次（含软删除记录）：命中软删除记录就恢复并用新请求覆盖字段（同时把恢复后的
+// 状态写回调用方传入的 entity 指针，让 handler 拿到正确的 ID），命中活跃记录则返回明确的
+// 重名错误，而不是让原始 SQL 错误往上抛。
 func (s *WorldviewService) CreateEntity(entity *model.WorldviewEntity) error {
+	if existing, err := s.worldviewRepo.FindEntityByWorldviewTypeNameUnscoped(entity.WorldviewID, entity.Type, entity.Name); err == nil && existing != nil {
+		if !existing.DeletedAt.Valid {
+			return fmt.Errorf("世界观实体「%s」已存在", entity.Name)
+		}
+		if err := s.worldviewRepo.RestoreEntityByID(existing.ID); err != nil {
+			return fmt.Errorf("restore soft-deleted worldview entity: %w", err)
+		}
+		existing.DeletedAt.Valid = false
+		existing.Description = entity.Description
+		existing.ImageURL = entity.ImageURL
+		if err := s.worldviewRepo.UpdateEntity(existing); err != nil {
+			return err
+		}
+		*entity = *existing
+		return nil
+	}
 	return s.worldviewRepo.CreateEntity(entity)
 }
 

@@ -737,7 +737,28 @@ func (s *CharacterService) WithModelRepo(r *repository.AIModelRepository) *Chara
 	return s
 }
 
+// CreateCharacter 创建角色。
+// novel_id+name 有唯一索引（uniq_char_novel_name），而删除角色是软删除（deleted_at 置位，
+// 行仍占用这个唯一索引）——删除后用同名重新创建会撞唯一索引报 MySQL 1062 错误。这里先查一次
+// （含软删除记录，AIBatchGenerate 里已经用同一套方法处理过这个问题，这里补齐单个手动创建的
+// 入口）：命中软删除记录就恢复并用新请求覆盖字段，命中活跃记录则返回明确的重名错误。
 func (s *CharacterService) CreateCharacter(novelID uint, req *model.CreateCharacterRequest) (*model.Character, error) {
+	if existing, err := s.characterRepo.FindByNovelAndNameUnscoped(novelID, req.Name); err == nil && existing != nil {
+		if !existing.DeletedAt.Valid {
+			return nil, fmt.Errorf("角色「%s」已存在", req.Name)
+		}
+		if err := s.characterRepo.RestoreByID(existing.ID); err != nil {
+			return nil, fmt.Errorf("restore soft-deleted character: %w", err)
+		}
+		existing.DeletedAt.Valid = false
+		existing.Role = req.Role
+		existing.Description = req.Description
+		existing.Meta.Gender = req.Gender
+		existing.Meta.Age = req.Age
+		existing.Status = "active"
+		return existing, s.characterRepo.Update(existing)
+	}
+
 	character := &model.Character{
 		UUID:        uuid.New().String(),
 		NovelID:     novelID,
@@ -2214,68 +2235,6 @@ func condenseVisualPrompt(s string, maxWords int) string {
 		}
 	}
 	return strings.TrimRight(strings.Join(words[:cutIdx], " "), ", ")
-}
-
-// GenerateThreeViewImage 生成单个视角的角色三视图
-// viewType: "front" | "side" | "back"
-// gender: "male" | "female" | "neutral" | ""（空时不注入性别词）
-// referenceImage: 肖像参考图 URL（可为空）
-// provider: 指定图像生成提供者（可为空，空时自动选择）
-func (s *ImageGenerationService) GenerateThreeViewImage(ctx context.Context, tenantID uint, name, appearance, viewType, style, gender, referenceImage, provider string) (*GeneratedCharacterImage, error) {
-	// Use precise orthographic angle descriptions to avoid the model interpreting "side view" as a 3/4 angle.
-	viewDesc := map[string]string{
-		"front": "front view, facing camera directly, full body from head to toe, entire legs visible, feet shown, standing full figure",
-		"side":  "pure right side view, 90-degree profile, looking right, full body from head to toe, entire legs visible, feet shown, standing full figure",
-		"back":  "back view, facing away from camera, full body from head to toe, entire legs visible, feet shown, standing full figure",
-	}
-	angleDesc, ok := viewDesc[viewType]
-	if !ok {
-		return nil, fmt.Errorf("invalid view type: %s", viewType)
-	}
-	styleStr := resolveStyleDesc(style)
-	genderTag, genderNeg := resolveGenderInfo(gender)
-
-	// Only pass an absolute HTTP(S) URL — local/relative paths cannot be fetched by remote APIs.
-	aiRef := referenceImage
-	if !strings.HasPrefix(aiRef, "http://") && !strings.HasPrefix(aiRef, "https://") {
-		aiRef = ""
-	}
-	if aiRef != "" {
-		logger.Printf("GenerateThreeViewImage: %s/%s using reference image %s", name, viewType, aiRef)
-	} else {
-		logger.Printf("GenerateThreeViewImage: %s/%s no valid reference image", name, viewType)
-	}
-
-	styleType := "other"
-	if style == "realistic" || style == "real_person" {
-		styleType = style
-	}
-	photoQuality := universalQualityTags + ", realistic photography style, pure white background, detailed features, clean composition"
-	if style == "real_person" {
-		photoQuality = universalQualityTags + ", photorealistic portrait photography, ultra-realistic skin texture, natural lighting, DSLR quality, 8k uhd, pure white background"
-	}
-	realisticGender := map[string]string{"male": "1man, male, ", "female": "1woman, female, ", "neutral": ""}[gender]
-
-	rendered, tplErr := renderPrompt("image_three_view_single", map[string]interface{}{
-		"StyleType":      styleType,
-		"StyleStr":       styleStr,
-		"QualityTokens":  universalQualityTags,
-		"GenderTag":      genderTag,
-		"GenderNeg":      genderNeg,
-		"RealisticGender": realisticGender,
-		"PhotoQuality":   photoQuality,
-		"Appearance":     appearance,
-		"AngleDesc":      angleDesc,
-	})
-	if tplErr != nil {
-		return nil, fmt.Errorf("render image_three_view_single: %w", tplErr)
-	}
-	prompt, negativePrompt := splitImagePrompt(rendered)
-	url, err := s.aiService.GenerateCharacterThreeView(ctx, tenantID, provider, prompt, aiRef, style, negativePrompt, "")
-	if err != nil {
-		return nil, err
-	}
-	return &GeneratedCharacterImage{URL: url, Description: fmt.Sprintf("%s %s", name, viewType)}, nil
 }
 
 // GenerateThreeViewSheet 生成标准三视图角色参考图（正面/侧面/背面，3格横版布局，1200x720）。

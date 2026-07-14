@@ -2935,9 +2935,6 @@ func formatCharacterStates(chars []characterForPrompt) string {
 	return sb.String()
 }
 
-// buildCharacterStateString 生成主角当前状态的结构化描述，优先注入场景大纲 prompt
-// 这是防止主角漂移最重要的上下文
-
 func (s *ChapterService) buildForeshadowHints(novelID uint, chapterNo int) string {
 	var hints strings.Builder
 	count := 0

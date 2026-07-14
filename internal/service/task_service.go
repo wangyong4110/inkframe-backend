@@ -223,12 +223,6 @@ func (s *TaskService) ExcludeAllRegisteredExcept(allow ...string) {
 	})
 }
 
-// IncludeInEngine removes a task type from the engine's exclusion set (see
-// ExcludeAllRegisteredExcept), letting the engine start dispatching it.
-func (s *TaskService) IncludeInEngine(taskType string) {
-	s.engineExcluded.Delete(taskType)
-}
-
 // SetParams persists arbitrary resume parameters for a task as JSON.
 func (s *TaskService) SetParams(taskID string, params interface{}) error {
 	b, err := json.Marshal(params)
