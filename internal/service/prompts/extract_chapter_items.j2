@@ -24,7 +24,7 @@
 6. appearance：外观描述，包含材质与质感、主色调、形态尺寸、表面特征；此字段会用于图像生成
 7. description：物品在故事中的作用与意义（1-2句）
 {% endif %}
-8. visual_prompt：英文图像生成提示词，词数80-150词，必须包含：
+8. visual_prompt：英文图像生成提示词，词数80-150词，且严格不超过700个字符（部分图像模型会直接拒绝过长的提示词），必须包含：
    - 物品类型与名称（如 ancient iron scissors, magical jade pendant）
    - 材质：精确描述（如 "forged from old iron, slightly rusted surface"）
    - 颜色：主色调 + 光效（如 "dull grey-black with faint metallic sheen"）

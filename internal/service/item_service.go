@@ -581,14 +581,15 @@ func (s *ItemService) ListEffectiveItems(novelID uint, chapterID uint) ([]*Effec
 func (s *ItemService) extractItemsFromContent(
 	ctx context.Context,
 	tenantID, novelID uint,
-	novelTitle, genre, content string,
+	novelTitle, genre, promptLanguage, content string,
 	existingNames []string,
 ) ([]analysisItemJSON, error) {
 	chItemsPrompt, err := renderPrompt("extract_chapter_items", map[string]interface{}{
-		"NovelTitle":    novelTitle,
-		"Genre":         genre,
-		"ExistingNames": existingNames,
-		"Content":       content,
+		"NovelTitle":     novelTitle,
+		"Genre":          genre,
+		"ExistingNames":  existingNames,
+		"Content":        content,
+		"PromptLanguage": promptLanguage,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("render extract_chapter_items: %w", err)
@@ -636,10 +637,14 @@ func (s *ItemService) AIExtractAllFromNovel(ctx context.Context, tenantID, novel
 
 	novelTitle := "本小说"
 	novelGenre := ""
+	promptLanguage := "zh"
 	if s.novelRepo != nil {
 		if novel, e := s.novelRepo.GetByID(novelID); e == nil {
 			novelTitle = novel.Title
 			novelGenre = novel.Meta.Genre
+			if novel.AIConfig.PromptLanguage != "" {
+				promptLanguage = novel.AIConfig.PromptLanguage
+			}
 		}
 	}
 
@@ -692,7 +697,7 @@ func (s *ItemService) AIExtractAllFromNovel(ctx context.Context, tenantID, novel
 			if content == "" {
 				content = c.Summary
 			}
-			items, err := s.extractItemsFromContent(ctx, tenantID, novelID, novelTitle, novelGenre, content, existingNames)
+			items, err := s.extractItemsFromContent(ctx, tenantID, novelID, novelTitle, novelGenre, promptLanguage, content, existingNames)
 			results[idx] = chResult{items, err}
 		}(i, ch)
 	}

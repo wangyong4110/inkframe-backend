@@ -5,7 +5,7 @@ Produce TWO independent, self-contained prompts:
 2. visual_prompt — the FULL character appearance: identity + face + hair (same content as face_prompt) PLUS clothing (top, bottom or dress, fabric/texture, color, patterns, fit), accessories & props (jewelry, bags, hats, weapons, tools, anything carried), and an art style hint (photography realism / anime / oil painting, inferred from genre if possible). Pose & expression MUST be a single neutral static reference pose only: standing upright, facing forward, arms relaxed at sides (or a simple A-pose), calm/neutral facial expression.
 
 Rules:
-- Each prompt: minimum 100 words, no hard upper limit — detail is the goal
+- Each prompt: minimum 100 words, but strictly no more than 700 characters total (some image models hard-reject longer prompts) — if you need to cut length, drop quality/rendering tags before dropping appearance detail
 - Use comma-separated descriptive phrases, NOT sentences
 - Do NOT include scene/background descriptions
 - Do NOT describe dynamic action, mid-motion poses, transitional/changing emotions, or hand gestures/prop interactions tied to a specific narrative moment — this prompt drives a character turnaround sheet (front/side/back) and a portrait, both requiring one static, reproducible pose
@@ -23,7 +23,8 @@ JSON output:{% else %}你是专业的 AI 图像生成提示词工程师，专注
 2. visual_prompt —— 完整外观：身份+面部+发型（内容与 face_prompt 一致），再加上服装（上衣/裙装/外套的款式、颜色、面料质感、图案、剪裁风格，含鞋履）、配饰道具（首饰、包袋、帽子、武器、随身物品，标注佩戴位置），以及风格提示（写实摄影/动漫/油画等，可结合题材推断）。姿态与表情只能是单一的中性静态参考姿势：正面站立、双臂自然下垂（或简单的A字站姿）、表情平静自然。
 
 规则：
-- 每份提示词最少100字，不限上限——细节越丰富越好
+- 每份提示词最少100字，但严格不超过700个字符（部分图像模型会直接拒绝过长的提示词）——如需精简，
+  优先省略质量/渲染标签，而不是外观细节
 - 用顿号或逗号分隔的描述短语，不要写完整句子
 - 不要描述场景/背景
 - 不要描写动态动作、进行中的动作瞬间、情绪转变过程，或与特定叙事场景绑定的手部动作/道具互动——这份提示词要同时驱动角色三视图（正/侧/背）和肖像图生成，两者都需要单一、可稳定复现的静态姿势

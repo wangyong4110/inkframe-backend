@@ -16,7 +16,7 @@
 {% if PromptLanguage == "en" %}2. appearance (English): detailed visual description — material and texture, primary color and luminescence, form and dimensions, surface details (engravings, runes, gem inlays), aura or special effects; used directly for image generation
 3. description (English): item function and significance — usage, special abilities (conditions, effects, limitations), plot role, symbolic meaning or legendary background{% else %}2. appearance：详细外观描述，必须包含：材质与质感（金属/玉石/布料/骨骸等）、主色调与光泽（颜色、是否发光/流光）、形态与尺寸（长宽高、刃长、形状）、表面特征（纹路、铭文、符文、雕刻、宝石镶嵌）、散发的气息或特殊效果（寒气/火焰/灵光等）；这部分会直接用于图像生成
 3. description：物品的功能与意义，包含：用途或使用方式、特殊能力（详细描述每项能力的条件、效果和限制）、可能的情节推动作用、象征意义或传说背景{% endif %}
-4. visual_prompt：详细的英文图像生成提示词，用于 AI 绘图。必须包含以下维度，词数 150-250 词：
+4. visual_prompt：详细的英文图像生成提示词，用于 AI 绘图。必须包含以下维度，词数 150-250 词，且严格不超过700个字符（部分图像模型会直接拒绝过长的提示词，如需精简优先省略质量/渲染标签）：
    - 物品类型与名称
    - 材质：精确描述材质
    - 颜色：主色调 + 次色调 + 光效

@@ -19,7 +19,9 @@ Output a JSON object with these fields:
   descriptor (e.g. calm, tense, smiling — NOT an in-progress action or an emotion transition),
   any chapter-specific static appearance details (wounds, special items, altered appearance — describe the resulting
   look, not the action that caused it), art style tokens (anime/realistic/etc.), quality tokens (masterpiece, best quality, etc.)
-  Minimum 80 words. If nothing changed from the current profile, keep it mostly the same but ensure completeness.
+  Minimum 80 words, but strictly no more than 700 characters total (some image models hard-reject longer prompts) —
+  prioritize the outfit/face/hair dimensions over quality tokens if you need to cut length.
+  If nothing changed from the current profile, keep it mostly the same but ensure completeness.
   This prompt still drives a static character turnaround sheet and portrait — do NOT include body pose, in-progress
   action, or scene/background elements; describe only the character's current static appearance.
 - `description`: Updated character description in English (2-3 sentences covering personality, role, and current chapter context). Max 200 words.
@@ -37,7 +39,9 @@ Example:
   不要写正在进行的动作或情绪转变过程）、
   本章特有的静态外观细节（伤痕、特殊道具、外形变化等最终呈现效果，而非导致该效果的动作过程），
   画风标签（anime/realistic等）、质量标签（masterpiece, best quality等）。
-  至少80词。若本章与当前档案无变化，保持主体不变但确保完整度。
+  至少80词，但严格不超过700个字符（部分图像模型会直接拒绝过长的提示词）——如需精简，
+  优先保留服装/面部/发型这几个维度，质量标签可以先省略。
+  若本章与当前档案无变化，保持主体不变但确保完整度。
   此提示词仍用于驱动静态的角色三视图与肖像图生成——不要包含身体姿态、进行中的动作，或场景/背景元素，
   只描述角色当前的静态外观。
 - `description`：更新后的中文角色描述（2-3句，涵盖性格、定位、本章状态）。最多200字。
