@@ -22,29 +22,14 @@ import (
 func (s *AIService) GenerateImage(tenantID uint, prompt string, options *ImageGenerationOptions) (*GeneratedImage, error) {
 	ctx := context.Background()
 
-	var entries []ai.ImageProviderEntry
-	useDB := s.providerRepo != nil
-	if useDB {
-		entries = s.loadDBImageProviderEntries(tenantID)
-	} else if s.aiManager != nil {
-		entries = s.aiManager.GetImageProviders()
-		if len(entries) == 0 {
-			entries = knownImageCapableProviders
-		}
-	}
+	entries := s.loadImageProviderEntries(tenantID)
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("no image providers configured")
 	}
 
 	var lastErr error
 	for _, e := range entries {
-		var provider ai.AIProvider
-		var err error
-		if useDB {
-			provider, err = s.getTenantProvider(tenantID, e.ProviderName)
-		} else {
-			provider, err = s.aiManager.GetProvider(e.ProviderName)
-		}
+		provider, err := s.resolveImageProvider(tenantID, e.ProviderName)
 		if err != nil {
 			lastErr = err
 			continue
@@ -150,6 +135,37 @@ func (s *AIService) loadDBImageProviderEntries(tenantID uint) []ai.ImageProvider
 	return result
 }
 
+// loadImageProviderEntries returns the candidate image provider entries to try for
+// tenantID, in priority order. DB is the sole source of truth when providerRepo is
+// wired — this makes deleting/changing a DB provider take effect immediately, without
+// env/config.yaml providers interfering. Falls back to the static aiManager list, then
+// the hardcoded knownImageCapableProviders, only when there is no DB at all.
+// Shared by GenerateImage / GenerateCharacterThreeViewMulti / EditImageWithInstruction —
+// all three try providers in exactly this order.
+func (s *AIService) loadImageProviderEntries(tenantID uint) []ai.ImageProviderEntry {
+	if s.providerRepo != nil {
+		return s.loadDBImageProviderEntries(tenantID)
+	}
+	if s.aiManager == nil {
+		return nil
+	}
+	entries := s.aiManager.GetImageProviders()
+	if len(entries) == 0 {
+		entries = knownImageCapableProviders
+	}
+	return entries
+}
+
+// resolveImageProvider returns the AI provider instance for providerName, preferring the
+// tenant's DB-configured credentials when providerRepo is wired, else the static aiManager
+// registration. Shared by the same three callers as loadImageProviderEntries above.
+func (s *AIService) resolveImageProvider(tenantID uint, providerName string) (ai.AIProvider, error) {
+	if s.providerRepo != nil {
+		return s.getTenantProvider(tenantID, providerName)
+	}
+	return s.aiManager.GetProvider(providerName)
+}
+
 // selectImageModel returns the model to use for the given entry, dispatching
 // to the provider's own model-selection logic (registered via
 // ai.RegisterImageEngineTraits) when one exists; otherwise it keeps
@@ -189,153 +205,20 @@ func klingResolutionExtra(providerName, size string) map[string]interface{} {
 	return nil
 }
 
-// GenerateCharacterThreeView 使用图像生成 API 生成角色/场景视图图像。
+// GenerateCharacterThreeView 使用图像生成 API 生成角色/场景视图图像。单张参考图的便捷封装，
+// 委托给 GenerateCharacterThreeViewMulti（0 或 1 个元素的 slice，seed=0）——两者原来是几乎
+// 逐行重复的三段式逻辑（指定 provider / DB 自动遍历 / 静态列表兜底），只是参考图数量不同。
 // style: 图片风格（"realistic"/"anime"/"ink_painting" 等），影响 Volcengine 模型选择。
 // 空字符串表示使用提供者默认模型。
 // consistencyWeight（可选）: 0-1，角色一致性强度；默认 1.0（严格）。
 //
 //	≥0.7 → DreamO（角色特征保持），<0.7 → SeedEditV3（指令编辑，scale 线性映射 1-10）
 func (s *AIService) GenerateCharacterThreeView(ctx context.Context, tenantID uint, providerName, prompt, referenceImage, style, negativePrompt, sizeOverride string, consistencyWeight ...float64) (string, error) {
-	if s.aiManager == nil {
-		return "", fmt.Errorf("AI manager not initialized")
-	}
-
-	weight := 1.0
-	if len(consistencyWeight) > 0 && consistencyWeight[0] > 0 {
-		weight = consistencyWeight[0]
-	}
-	refCount := 0
+	var refs []string
 	if referenceImage != "" {
-		refCount = 1
+		refs = []string{referenceImage}
 	}
-	// cfgScale 以 [1,10] 编码 weight（volcengine_visual.go 中各 case 负责按 API 范围还原）
-	cfgScale := 1.0 + weight*9.0
-
-	// 指定提供者时：直接加载并调用，不走遍历逻辑
-	if providerName != "" {
-		// 找到对应的 entry（model/size）
-		var entry *ai.ImageProviderEntry
-		for _, e := range knownImageCapableProviders {
-			if e.ProviderName == providerName {
-				entry = &e
-				break
-			}
-		}
-		// 也在静态注册列表里找
-		if entry == nil {
-			for _, e := range s.aiManager.GetImageProviders() {
-				if e.ProviderName == providerName {
-					entry = &e
-					break
-				}
-			}
-		}
-		if entry == nil {
-			return "", fmt.Errorf("unknown image provider: %s", providerName)
-		}
-		provider, err := s.aiManager.GetProvider(providerName)
-		if err != nil {
-			// 静态 manager 无此 provider，尝试 DB
-			provider, err = s.getTenantProvider(tenantID, providerName)
-			if err != nil {
-				return "", fmt.Errorf("image provider %q not available: %w", providerName, err)
-			}
-		}
-		sz := sizeOverride
-		if sz == "" {
-			sz = entry.Size
-		}
-		modelName := selectImageModel(*entry, refCount, style, weight)
-		release, err := s.acquireModelSlotByName(ctx, tenantID, modelName)
-		if err != nil {
-			return "", err
-		}
-		defer release()
-		resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
-			Model:             modelName,
-			Prompt:            prompt,
-			NegativePrompt:    negativePrompt,
-			Size:              sz,
-			ReferenceImage:    referenceImage,
-			CFGScale:          cfgScale,
-			ConsistencyWeight: weight,
-			Extra:             klingResolutionExtra(entry.ProviderName, sz),
-		})
-		if err != nil {
-			return "", err
-		}
-		if resp.Error != "" {
-			return "", fmt.Errorf("image generation failed: %s", resp.Error)
-		}
-		return s.uploadImageToStorage(ctx, tenantID, resp.URL), nil
-	}
-
-	// DB 模式（providerRepo 存在）时：DB 是唯一权威来源，完全忽略静态 aiManager 的图像提供者。
-	// 这样删除/更改 DB 中的提供者可以立即生效，不受 env/config.yaml 中通用 AI key 的干扰。
-	// 纯静态模式（无 DB）：读 aiManager 静态列表，为空时回退硬编码表。
-	var entries []ai.ImageProviderEntry
-	useDB := s.providerRepo != nil
-	if useDB {
-		entries = s.loadDBImageProviderEntries(tenantID)
-	} else {
-		entries = s.aiManager.GetImageProviders()
-		if len(entries) == 0 {
-			entries = knownImageCapableProviders
-		}
-	}
-
-	if len(entries) == 0 {
-		return "", fmt.Errorf("no image providers configured")
-	}
-
-	var lastErr error
-	for _, e := range entries {
-		var provider ai.AIProvider
-		var err error
-		if useDB {
-			// 从 DB 动态加载提供者（带租户感知和缓存）
-			provider, err = s.getTenantProvider(tenantID, e.ProviderName)
-		} else {
-			provider, err = s.aiManager.GetProvider(e.ProviderName)
-		}
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		modelName := selectImageModel(e, refCount, style, weight)
-		logger.Printf("GenerateCharacterThreeView: trying provider=%s model=%s refImage=%v", e.ProviderName, modelName, referenceImage != "")
-		eSz := sizeOverride
-		if eSz == "" {
-			eSz = e.Size
-		}
-		release, acquireErr := s.acquireModelSlotByName(ctx, tenantID, modelName)
-		if acquireErr != nil {
-			return "", acquireErr
-		}
-		resp, err := provider.ImageGenerate(ctx, &ai.ImageGenerateRequest{
-			Model:             modelName,
-			Prompt:            prompt,
-			NegativePrompt:    negativePrompt,
-			Size:              eSz,
-			ReferenceImage:    referenceImage,
-			CFGScale:          cfgScale,
-			ConsistencyWeight: weight,
-			Extra:             klingResolutionExtra(e.ProviderName, eSz),
-		})
-		release()
-		if err != nil {
-			logger.Errorf("GenerateCharacterThreeView: provider=%s failed: %v", e.ProviderName, err)
-			lastErr = err
-			continue
-		}
-		if resp.Error != "" {
-			logger.Errorf("GenerateCharacterThreeView: provider=%s error: %s", e.ProviderName, resp.Error)
-			lastErr = fmt.Errorf("image generation failed: %s", resp.Error)
-			continue
-		}
-		return s.uploadImageToStorage(ctx, tenantID, resp.URL), nil
-	}
-	return "", fmt.Errorf("no image provider available: %w", lastErr)
+	return s.GenerateCharacterThreeViewMulti(ctx, tenantID, providerName, prompt, refs, style, negativePrompt, sizeOverride, 0, consistencyWeight...)
 }
 
 // GenerateCharacterThreeViewMulti 与 GenerateCharacterThreeView 相同，但支持传入多张参考图和自定义尺寸。
@@ -490,6 +373,7 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 			ReferenceURLs:     refURLSlice,
 			CFGScale:          cfgScale,
 			ConsistencyWeight: weight,
+			Extra:             klingResolutionExtra(provName, sz),
 		}
 	}
 
@@ -552,29 +436,14 @@ func (s *AIService) GenerateCharacterThreeViewMulti(ctx context.Context, tenantI
 		return s.uploadImageToStorage(ctx, tenantID, resp.URL), nil
 	}
 
-	var entries []ai.ImageProviderEntry
-	useDB := s.providerRepo != nil
-	if useDB {
-		entries = s.loadDBImageProviderEntries(tenantID)
-	} else {
-		entries = s.aiManager.GetImageProviders()
-		if len(entries) == 0 {
-			entries = knownImageCapableProviders
-		}
-	}
+	entries := s.loadImageProviderEntries(tenantID)
 	if len(entries) == 0 {
 		return "", fmt.Errorf("no image providers configured")
 	}
 
 	var lastErr error
 	for _, e := range entries {
-		var provider ai.AIProvider
-		var err error
-		if useDB {
-			provider, err = s.getTenantProvider(tenantID, e.ProviderName)
-		} else {
-			provider, err = s.aiManager.GetProvider(e.ProviderName)
-		}
+		provider, err := s.resolveImageProvider(tenantID, e.ProviderName)
 		if err != nil {
 			lastErr = err
 			continue
@@ -765,15 +634,7 @@ func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint,
 		ReferenceImage: imgInput,
 	}
 
-	var entries []ai.ImageProviderEntry
-	if s.providerRepo != nil {
-		entries = s.loadDBImageProviderEntries(tenantID)
-	} else {
-		entries = s.aiManager.GetImageProviders()
-		if len(entries) == 0 {
-			entries = knownImageCapableProviders
-		}
-	}
+	entries := s.loadImageProviderEntries(tenantID)
 
 	var lastErr error
 	var skipped []string
@@ -782,13 +643,7 @@ func (s *AIService) EditImageWithInstruction(ctx context.Context, tenantID uint,
 			skipped = append(skipped, e.ProviderName)
 			continue
 		}
-		var provider ai.AIProvider
-		var err error
-		if s.providerRepo != nil {
-			provider, err = s.getTenantProvider(tenantID, e.ProviderName)
-		} else {
-			provider, err = s.aiManager.GetProvider(e.ProviderName)
-		}
+		provider, err := s.resolveImageProvider(tenantID, e.ProviderName)
 		if err != nil {
 			lastErr = err
 			continue

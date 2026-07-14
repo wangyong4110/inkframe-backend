@@ -173,12 +173,10 @@ func TestOpenAIProvider_Generate_VisionMessageUsesArrayContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Generate() error: %v", err)
 	}
-	// The configured model must be used as-is, even for a vision request — no silent
-	// auto-upgrade. If the configured model can't actually handle images, that's a
-	// failure for the OpenAI API itself to report, not something this provider should
-	// paper over by guessing a different model.
-	if gotBody["model"] != "gpt-3.5-turbo" {
-		t.Errorf("model = %v, want gpt-3.5-turbo (configured model kept unchanged)", gotBody["model"])
+	// Vision messages auto-upgrade to a vision-capable model when the configured model
+	// isn't already one of gpt-4o/gpt-4-vision-preview/gpt-4-turbo.
+	if gotBody["model"] != "gpt-4o" {
+		t.Errorf("model = %v, want gpt-4o (auto-upgraded for vision request)", gotBody["model"])
 	}
 	msgs := gotBody["messages"].([]interface{})
 	last := msgs[len(msgs)-1].(map[string]interface{})
